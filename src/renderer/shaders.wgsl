@@ -4,7 +4,7 @@ struct Uniforms {
     screenSize: vec2<f32>,
     cellSize: vec2<f32>,
     pixelRange: f32,
-    _pad1: f32,
+    scale: f32,
     _pad2: f32,
     _pad3: f32,
 };
@@ -37,6 +37,10 @@ struct VertexOutput {
 fn vs_main(input: VertexInput) -> VertexOutput {
     var output: VertexOutput;
 
+    // Apply scale to glyph metrics
+    let scaledGlyphSize = input.glyphSize * uniforms.scale;
+    let scaledBearing = input.glyphBearing * uniforms.scale;
+
     // Calculate cell position in pixels
     let cellPixelPos = input.cellPos * uniforms.cellSize;
 
@@ -46,16 +50,16 @@ fn vs_main(input: VertexInput) -> VertexOutput {
 
     // glyphBearing.y is the top of the glyph relative to baseline (positive = above baseline)
     // In screen coords (Y down), top of glyph = baseline - bearing.y
-    let glyphTop = baseline - input.glyphBearing.y;
+    let glyphTop = baseline - scaledBearing.y;
 
     let glyphOffset = vec2<f32>(
-        (uniforms.cellSize.x - input.glyphSize.x) * 0.5 + input.glyphBearing.x,
+        (uniforms.cellSize.x - scaledGlyphSize.x) * 0.5 + scaledBearing.x,
         glyphTop
     );
 
     // Calculate vertex position
     // input.position: (0,0)=top-left, (1,1)=bottom-right of quad
-    let localPos = input.position * input.glyphSize;
+    let localPos = input.position * scaledGlyphSize;
     let pixelPos = cellPixelPos + glyphOffset + localPos;
 
     // Transform to clip space

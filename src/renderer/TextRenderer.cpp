@@ -277,6 +277,7 @@ void TextRenderer::updateUniformBuffer(WGPUQueue queue) {
     uniforms_.screenSize = {static_cast<float>(screenWidth_), static_cast<float>(screenHeight_)};
     uniforms_.cellSize = cellSize_;
     uniforms_.pixelRange = font_ ? font_->getPixelRange() : 2.0f;
+    uniforms_.scale = scale_;
 
     wgpuQueueWriteBuffer(queue, uniformBuffer_, 0, &uniforms_, sizeof(Uniforms));
 }

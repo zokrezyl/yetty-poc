@@ -18,7 +18,9 @@ public:
     void render(WebGPUContext& ctx, const Grid& grid);
 
     void setCellSize(float width, float height);
+    void setScale(float scale) { scale_ = scale; }
     glm::vec2 getCellSize() const { return cellSize_; }
+    float getScale() const { return scale_; }
 
 private:
     bool createShaderModule(WGPUDevice device);
@@ -34,7 +36,7 @@ private:
         glm::vec2 screenSize;     // 8 bytes, offset 64
         glm::vec2 cellSize;       // 8 bytes, offset 72
         float pixelRange;         // 4 bytes, offset 80
-        float _pad1;              // 4 bytes, offset 84
+        float scale;              // 4 bytes, offset 84 - zoom scale factor
         float _pad2;              // 4 bytes, offset 88
         float _pad3;              // 4 bytes, offset 92
     };  // Total: 96 bytes
@@ -71,6 +73,7 @@ private:
 
     Uniforms uniforms_;
     glm::vec2 cellSize_ = {10.0f, 20.0f};
+    float scale_ = 1.0f;
     uint32_t screenWidth_ = 800;
     uint32_t screenHeight_ = 600;
 

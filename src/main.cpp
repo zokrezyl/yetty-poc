@@ -9,6 +9,34 @@
 
 using namespace yetty;
 
+// Application state for callbacks
+struct AppState {
+    WebGPUContext* ctx = nullptr;
+    TextRenderer* renderer = nullptr;
+    float zoomLevel = 1.0f;
+    float baseCellWidth = 0.0f;
+    float baseCellHeight = 0.0f;
+};
+
+// Scroll callback for zooming
+void scrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
+    auto* state = static_cast<AppState*>(glfwGetWindowUserPointer(window));
+    if (!state || !state->renderer) return;
+
+    // Adjust zoom level
+    state->zoomLevel += static_cast<float>(yoffset) * 0.1f;
+    state->zoomLevel = glm::clamp(state->zoomLevel, 0.2f, 5.0f);
+
+    // Update cell size and scale
+    float newCellWidth = state->baseCellWidth * state->zoomLevel;
+    float newCellHeight = state->baseCellHeight * state->zoomLevel;
+    state->renderer->setCellSize(newCellWidth, newCellHeight);
+    state->renderer->setScale(state->zoomLevel);
+
+    std::cout << "Zoom: " << (state->zoomLevel * 100.0f) << "% (cell: "
+              << newCellWidth << "x" << newCellHeight << ")" << std::endl;
+}
+
 // Default font path - adjust as needed for your system
 #if defined(_WIN32)
 const char* DEFAULT_FONT = "C:/Windows/Fonts/consola.ttf";
@@ -129,15 +157,29 @@ int main(int argc, char* argv[]) {
         grid.writeString(0, static_cast<uint32_t>(i), lines[i], color);
     }
 
+    // Set up application state for callbacks
+    AppState appState;
+    appState.ctx = &ctx;
+    appState.renderer = &renderer;
+    appState.baseCellWidth = cellWidth;
+    appState.baseCellHeight = cellHeight;
+    appState.zoomLevel = 1.0f;
+
+    glfwSetWindowUserPointer(window, &appState);
+
     // Window resize callback
-    glfwSetWindowUserPointer(window, &ctx);
     glfwSetFramebufferSizeCallback(window, [](GLFWwindow* w, int newWidth, int newHeight) {
         if (newWidth == 0 || newHeight == 0) return;
-        auto* context = static_cast<WebGPUContext*>(glfwGetWindowUserPointer(w));
-        context->resize(static_cast<uint32_t>(newWidth), static_cast<uint32_t>(newHeight));
+        auto* state = static_cast<AppState*>(glfwGetWindowUserPointer(w));
+        if (state && state->ctx) {
+            state->ctx->resize(static_cast<uint32_t>(newWidth), static_cast<uint32_t>(newHeight));
+        }
     });
 
-    std::cout << "Starting render loop..." << std::endl;
+    // Scroll callback for zooming
+    glfwSetScrollCallback(window, scrollCallback);
+
+    std::cout << "Starting render loop... (use mouse scroll to zoom)" << std::endl;
 
     // Main loop
     double lastTime = glfwGetTime();
