@@ -81,4 +81,21 @@ void Grid::writeString(uint32_t col, uint32_t row, const char* str, const glm::v
     }
 }
 
+void Grid::scrollUp() {
+    if (rows_ <= 1) return;
+
+    // Move all rows up by one (row 1 → row 0, row 2 → row 1, etc.)
+    for (uint32_t row = 0; row < rows_ - 1; ++row) {
+        for (uint32_t col = 0; col < cols_; ++col) {
+            cells_[row * cols_ + col] = cells_[(row + 1) * cols_ + col];
+        }
+    }
+
+    // Clear bottom row
+    Cell defaultCell;
+    for (uint32_t col = 0; col < cols_; ++col) {
+        cells_[(rows_ - 1) * cols_ + col] = defaultCell;
+    }
+}
+
 } // namespace yetty
