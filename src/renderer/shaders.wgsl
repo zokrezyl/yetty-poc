@@ -82,8 +82,18 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let fgColor = textureLoad(cellFgColorTexture, cellCoord, 0);
     let bgColor = textureLoad(cellBgColorTexture, cellCoord, 0);
 
-    // If no glyph (index 0), just output background
+    // Check if cursor should be rendered on this cell
+    let cursorCol = i32(uniforms.cursorPos.x);
+    let cursorRow = i32(uniforms.cursorPos.y);
+    let isCursor = uniforms.cursorVisible > 0.5 &&
+                   cellCoord.x == cursorCol &&
+                   cellCoord.y == cursorRow;
+
+    // If no glyph (index 0), output background (possibly inverted for cursor)
     if (glyphIndex == 0u) {
+        if (isCursor) {
+            return vec4<f32>(vec3<f32>(1.0, 1.0, 1.0) - bgColor.rgb, 1.0);
+        }
         return bgColor;
     }
 
@@ -130,10 +140,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     var finalColor = mix(bgColor.rgb, fgColor.rgb, alpha);
 
     // Cursor rendering: invert colors at cursor position
-    if (uniforms.cursorVisible > 0.5 &&
-        cellCol == uniforms.cursorPos.x &&
-        cellRow == uniforms.cursorPos.y) {
-        // Invert colors for cursor visibility
+    if (isCursor) {
         finalColor = vec3<f32>(1.0, 1.0, 1.0) - finalColor;
     }
 

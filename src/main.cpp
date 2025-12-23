@@ -95,6 +95,14 @@ void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods
     if (mods & GLFW_MOD_ALT) vtermMod = (VTermModifier)(vtermMod | VTERM_MOD_ALT);
     if (mods & GLFW_MOD_SHIFT) vtermMod = (VTermModifier)(vtermMod | VTERM_MOD_SHIFT);
 
+    // Handle Ctrl+letter combinations (Ctrl+A = 0x01, Ctrl+C = 0x03, etc.)
+    if ((mods & GLFW_MOD_CONTROL) && key >= GLFW_KEY_A && key <= GLFW_KEY_Z) {
+        // Convert to control character (Ctrl+A = 1, Ctrl+B = 2, etc.)
+        uint32_t ctrlChar = key - GLFW_KEY_A + 1;
+        state->terminal->sendKey(ctrlChar);
+        return;
+    }
+
     // Map GLFW keys to VTerm keys
     switch (key) {
         case GLFW_KEY_ENTER:
@@ -107,11 +115,7 @@ void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods
             state->terminal->sendSpecialKey(VTERM_KEY_TAB, vtermMod);
             break;
         case GLFW_KEY_ESCAPE:
-            if (vtermMod == VTERM_MOD_NONE) {
-                glfwSetWindowShouldClose(window, GLFW_TRUE);
-            } else {
-                state->terminal->sendSpecialKey(VTERM_KEY_ESCAPE, vtermMod);
-            }
+            state->terminal->sendSpecialKey(VTERM_KEY_ESCAPE, vtermMod);
             break;
         case GLFW_KEY_UP:
             state->terminal->sendSpecialKey(VTERM_KEY_UP, vtermMod);
@@ -439,18 +443,48 @@ int main(int argc, char* argv[]) {
     }
     fontSize = font.getFontSize();
 #else
-    // Native build: generate or load
+    // Native build: try cache first, then generate
+    // Cache in ~/.cache/yetty/
+    std::string cacheDir;
+    const char* homeDir = getenv("HOME");
+    if (homeDir) {
+        cacheDir = std::string(homeDir) + "/.cache/yetty";
+    } else {
+        cacheDir = "/tmp/yetty-cache";
+    }
+    std::string cachedAtlas = cacheDir + "/atlas.png";
+    std::string cachedMetrics = cacheDir + "/atlas.json";
+
+    bool loadedFromCache = false;
+
     if (usePrebuiltAtlas) {
+        // Try explicit pre-built atlas path
         std::cout << "Loading pre-built atlas..." << std::endl;
-        if (!font.loadAtlas(DEFAULT_ATLAS, DEFAULT_METRICS)) {
-            std::cerr << "Failed to load atlas, falling back to generation" << std::endl;
-            usePrebuiltAtlas = false;
-        } else {
+        if (font.loadAtlas(DEFAULT_ATLAS, DEFAULT_METRICS)) {
             fontSize = font.getFontSize();
+            loadedFromCache = true;
+        } else {
+            std::cerr << "Failed to load atlas, falling back to cache/generation" << std::endl;
         }
     }
 
-    if (!usePrebuiltAtlas) {
+    if (!loadedFromCache) {
+        // Try loading from cache
+        std::ifstream cacheTest(cachedAtlas);
+        if (cacheTest.good()) {
+            cacheTest.close();
+            std::cout << "Loading cached atlas from: " << cachedAtlas << std::endl;
+            if (font.loadAtlas(cachedAtlas, cachedMetrics)) {
+                fontSize = font.getFontSize();
+                loadedFromCache = true;
+            } else {
+                std::cout << "Cache invalid, regenerating..." << std::endl;
+            }
+        }
+    }
+
+    if (!loadedFromCache) {
+        // Generate atlas
         std::cout << "Generating font atlas from: " << fontPath << std::endl;
         if (!font.generate(fontPath, fontSize)) {
             std::cerr << "Failed to generate font atlas from: " << fontPath << std::endl;
@@ -458,6 +492,16 @@ int main(int argc, char* argv[]) {
             glfwDestroyWindow(window);
             glfwTerminate();
             return 1;
+        }
+
+        // Save to cache
+        // Create cache directory
+        std::string mkdirCmd = "mkdir -p \"" + cacheDir + "\"";
+        system(mkdirCmd.c_str());
+
+        std::cout << "Caching atlas to: " << cachedAtlas << std::endl;
+        if (!font.saveAtlas(cachedAtlas, cachedMetrics)) {
+            std::cerr << "Warning: Failed to cache atlas" << std::endl;
         }
     }
 #endif
