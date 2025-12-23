@@ -169,6 +169,7 @@ static void mainLoopIteration() {
     // Terminal mode: update terminal and render its grid
     if (!state.demoMode && state.terminal) {
         state.terminal->update();
+        state.terminal->updateCursorBlink(glfwGetTime());
 
         if (!state.terminal->isRunning()) {
             glfwSetWindowShouldClose(state.window, GLFW_TRUE);
@@ -263,8 +264,30 @@ void scrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
     state->renderer->setCellSize(newCellWidth, newCellHeight);
     state->renderer->setScale(state->zoomLevel);
 
-    std::cout << "Zoom: " << (state->zoomLevel * 100.0f) << "% (cell: "
-              << newCellWidth << "x" << newCellHeight << ")" << std::endl;
+    // Get current window size
+    int w, h;
+    glfwGetFramebufferSize(window, &w, &h);
+
+    // Recalculate grid size based on new cell size
+    uint32_t newCols = static_cast<uint32_t>(w / newCellWidth);
+    uint32_t newRows = static_cast<uint32_t>(h / newCellHeight);
+
+    if (newCols != state->cols || newRows != state->rows) {
+        state->cols = newCols;
+        state->rows = newRows;
+
+#if !YETTY_WEB
+        if (state->terminal) {
+            state->terminal->resize(newCols, newRows);
+        }
+#endif
+        if (state->demoGrid) {
+            state->demoGrid->resize(newCols, newRows);
+        }
+
+        std::cout << "Zoom: " << (state->zoomLevel * 100.0f) << "% -> Grid "
+                  << newCols << "x" << newRows << std::endl;
+    }
 }
 
 // Default paths
@@ -564,8 +587,33 @@ int main(int argc, char* argv[]) {
     glfwSetFramebufferSizeCallback(window, [](GLFWwindow* w, int newWidth, int newHeight) {
         if (newWidth == 0 || newHeight == 0) return;
         auto* state = static_cast<AppState*>(glfwGetWindowUserPointer(w));
-        if (state && state->ctx) {
+        if (!state) return;
+
+        // Resize WebGPU context
+        if (state->ctx) {
             state->ctx->resize(static_cast<uint32_t>(newWidth), static_cast<uint32_t>(newHeight));
+        }
+
+        // Recalculate grid size based on current cell size
+        float cellWidth = state->baseCellWidth * state->zoomLevel;
+        float cellHeight = state->baseCellHeight * state->zoomLevel;
+        uint32_t newCols = static_cast<uint32_t>(newWidth / cellWidth);
+        uint32_t newRows = static_cast<uint32_t>(newHeight / cellHeight);
+
+        if (newCols != state->cols || newRows != state->rows) {
+            state->cols = newCols;
+            state->rows = newRows;
+
+#if !YETTY_WEB
+            if (state->terminal) {
+                state->terminal->resize(newCols, newRows);
+            }
+#endif
+            if (state->demoGrid) {
+                state->demoGrid->resize(newCols, newRows);
+            }
+
+            std::cout << "Window resize -> Grid " << newCols << "x" << newRows << std::endl;
         }
     });
 

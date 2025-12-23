@@ -37,7 +37,7 @@ public:
 
 #if !YETTY_USE_PREBUILT_ATLAS
     // Generate MSDF atlas from a TTF font file (native only)
-    bool generate(const std::string& fontPath, float fontSize, uint32_t atlasSize = 512);
+    bool generate(const std::string& fontPath, float fontSize, uint32_t atlasSize = 2048);
 
     // Save atlas to PNG and metrics to JSON
     bool saveAtlas(const std::string& atlasPath, const std::string& metricsPath) const;

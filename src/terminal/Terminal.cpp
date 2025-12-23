@@ -320,9 +320,20 @@ int Terminal::onMoveCursor(VTermPos pos, VTermPos oldpos, int visible, void* use
     Terminal* term = static_cast<Terminal*>(user);
     term->cursorRow_ = pos.row;
     term->cursorCol_ = pos.col;
-    term->cursorVisible_ = visible;
+    // visible=1 means cursor is visible, visible=0 means hidden by escape sequence
+    // We default to visible if not explicitly hidden
+    if (visible >= 0) {
+        term->cursorVisible_ = (visible != 0);
+    }
     (void)oldpos;
     return 0;
+}
+
+void Terminal::updateCursorBlink(double currentTime) {
+    if (currentTime - lastBlinkTime_ >= blinkInterval_) {
+        cursorBlink_ = !cursorBlink_;
+        lastBlinkTime_ = currentTime;
+    }
 }
 
 int Terminal::onResize(int rows, int cols, void* user) {

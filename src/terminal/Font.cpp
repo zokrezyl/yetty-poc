@@ -51,17 +51,80 @@ bool Font::generate(const std::string& fontPath, float fontSize, uint32_t atlasS
         return false;
     }
 
-    // Define character set (ASCII printable range)
+    // Define character set
     std::vector<msdf_atlas::GlyphGeometry> glyphGeometries;
     msdf_atlas::FontGeometry fontGeometry(&glyphGeometries);
 
-    // Load ASCII glyphs (32-126)
     msdf_atlas::Charset charset;
+
+    // ASCII printable (32-126)
     for (uint32_t c = 32; c <= 126; ++c) {
         charset.add(c);
     }
 
+    // Latin Extended-A (0x0100-0x017F) - accented chars
+    for (uint32_t c = 0x0100; c <= 0x017F; ++c) {
+        charset.add(c);
+    }
+
+    // Latin Extended-B subset (0x0180-0x024F)
+    for (uint32_t c = 0x0180; c <= 0x024F; ++c) {
+        charset.add(c);
+    }
+
+    // General Punctuation (0x2000-0x206F) - various dashes, spaces
+    for (uint32_t c = 0x2000; c <= 0x206F; ++c) {
+        charset.add(c);
+    }
+
+    // Arrows (0x2190-0x21FF)
+    for (uint32_t c = 0x2190; c <= 0x21FF; ++c) {
+        charset.add(c);
+    }
+
+    // Mathematical Operators (0x2200-0x22FF)
+    for (uint32_t c = 0x2200; c <= 0x22FF; ++c) {
+        charset.add(c);
+    }
+
+    // Box Drawing (0x2500-0x257F) - essential for TUI apps
+    for (uint32_t c = 0x2500; c <= 0x257F; ++c) {
+        charset.add(c);
+    }
+
+    // Block Elements (0x2580-0x259F)
+    for (uint32_t c = 0x2580; c <= 0x259F; ++c) {
+        charset.add(c);
+    }
+
+    // Geometric Shapes (0x25A0-0x25FF)
+    for (uint32_t c = 0x25A0; c <= 0x25FF; ++c) {
+        charset.add(c);
+    }
+
+    // Miscellaneous Symbols subset (0x2600-0x26FF)
+    for (uint32_t c = 0x2600; c <= 0x26FF; ++c) {
+        charset.add(c);
+    }
+
+    // Dingbats (0x2700-0x27BF)
+    for (uint32_t c = 0x2700; c <= 0x27BF; ++c) {
+        charset.add(c);
+    }
+
+    // Braille Patterns (0x2800-0x28FF) - used by some TUI apps
+    for (uint32_t c = 0x2800; c <= 0x28FF; ++c) {
+        charset.add(c);
+    }
+
+    // Private Use Area - Powerline symbols (0xE0A0-0xE0D4)
+    for (uint32_t c = 0xE0A0; c <= 0xE0D4; ++c) {
+        charset.add(c);
+    }
+
     fontGeometry.loadCharset(font, 1.0, charset);
+
+    std::cout << "Loaded " << glyphGeometries.size() << " glyphs from font" << std::endl;
 
     // Apply MSDF edge coloring
     const double maxCornerAngle = 3.0;

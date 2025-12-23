@@ -47,7 +47,10 @@ public:
     // Get cursor position
     int getCursorRow() const { return cursorRow_; }
     int getCursorCol() const { return cursorCol_; }
-    bool isCursorVisible() const { return cursorVisible_; }
+    bool isCursorVisible() const { return cursorVisible_ && cursorBlink_; }
+
+    // Update cursor blink state (call each frame with current time)
+    void updateCursorBlink(double currentTime);
 
     // Damage tracking
     const std::vector<DamageRect>& getDamageRects() const { return damageRects_; }
@@ -85,7 +88,10 @@ private:
 
     int cursorRow_ = 0;
     int cursorCol_ = 0;
-    bool cursorVisible_ = true;
+    bool cursorVisible_ = true;   // From libvterm (cursor shown/hidden by escape codes)
+    bool cursorBlink_ = true;     // Blink state (toggled by timer)
+    double lastBlinkTime_ = 0.0;
+    double blinkInterval_ = 0.5;  // 500ms blink interval
 
     uint32_t cols_;
     uint32_t rows_;
