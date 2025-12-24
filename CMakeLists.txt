@@ -29,7 +29,7 @@
 cmake_minimum_required(VERSION 3.20)
 project(yetty-poc VERSION 0.1.0 LANGUAGES C CXX)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
@@ -147,14 +147,14 @@ endif()
 #-----------------------------------------------------------------------------
 add_executable(yetty
     src/main.cpp
-    src/renderer/WebGPUContext.cpp
-    src/renderer/TextRenderer.cpp
-    src/terminal/Grid.cpp
-    src/terminal/Font.cpp
-    $<$<NOT:$<BOOL:${EMSCRIPTEN}>>:src/terminal/Terminal.cpp>
-    $<$<NOT:$<BOOL:${EMSCRIPTEN}>>:src/decorator/Decorator.cpp>
-    $<$<NOT:$<BOOL:${EMSCRIPTEN}>>:src/decorator/DecoratorManager.cpp>
-    $<$<NOT:$<BOOL:${EMSCRIPTEN}>>:src/decorator/ShaderToyPlugin.cpp>
+    src/yetty/renderer/WebGPUContext.cpp
+    src/yetty/renderer/TextRenderer.cpp
+    src/yetty/terminal/Grid.cpp
+    src/yetty/terminal/Font.cpp
+    $<$<NOT:$<BOOL:${EMSCRIPTEN}>>:src/yetty/terminal/Terminal.cpp>
+    $<$<NOT:$<BOOL:${EMSCRIPTEN}>>:src/yetty/PluginManager.cpp>
+    $<$<NOT:$<BOOL:${EMSCRIPTEN}>>:src/yetty/plugins/ShaderToy.cpp>
+    $<$<NOT:$<BOOL:${EMSCRIPTEN}>>:src/yetty/plugins/Image.cpp>
 )
 
 target_include_directories(yetty PRIVATE
@@ -179,7 +179,7 @@ if(EMSCRIPTEN)
         -sUSE_WEBGPU
         -sASYNCIFY
         -sALLOW_MEMORY_GROWTH
-        "--preload-file=${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/shaders.wgsl@/shaders.wgsl"
+        "--preload-file=${CMAKE_CURRENT_SOURCE_DIR}/src/yetty/renderer/shaders.wgsl@/shaders.wgsl"
         "--preload-file=${CMAKE_CURRENT_SOURCE_DIR}/assets@/assets"
         "--shell-file=${CMAKE_CURRENT_SOURCE_DIR}/web/shell.html"
     )
@@ -215,7 +215,7 @@ else()
 
     file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/assets DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
     configure_file(
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/shaders.wgsl
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/yetty/renderer/shaders.wgsl
         ${CMAKE_CURRENT_BINARY_DIR}/shaders.wgsl
         COPYONLY
     )

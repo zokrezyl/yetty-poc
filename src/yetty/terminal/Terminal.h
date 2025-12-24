@@ -3,6 +3,7 @@
 #include "Grid.h"
 #include "Font.h"
 #include "../Config.h"
+#include "../result.hpp"
 
 extern "C" {
 #include <vterm.h>
@@ -14,7 +15,7 @@ extern "C" {
 namespace yetty {
 
 // Forward declaration
-class DecoratorManager;
+class PluginManager;
 
 // Rectangle representing damaged (changed) cells
 struct DamageRect {
@@ -29,7 +30,7 @@ public:
     ~Terminal();
 
     // Start the terminal with a shell
-    bool start(const std::string& shell = "");
+    Result<void> start(const std::string& shell = "");
 
     // Process input from PTY (call regularly)
     void update();
@@ -76,9 +77,9 @@ public:
     static int onOSC(int command, VTermStringFragment frag, void* user);
     static int onSbPushline(int cols, const VTermScreenCell* cells, void* user);
 
-    // Decorator support
-    void setDecoratorManager(DecoratorManager* mgr) { decoratorManager_ = mgr; }
-    DecoratorManager* getDecoratorManager() const { return decoratorManager_; }
+    // Plugin support
+    void setPluginManager(PluginManager* mgr) { pluginManager_ = mgr; }
+    PluginManager* getPluginManager() const { return pluginManager_; }
     void setCellSize(uint32_t width, uint32_t height) {
         cellWidth_ = width;
         cellHeight_ = height;
@@ -86,7 +87,7 @@ public:
     uint32_t getCellWidth() const { return cellWidth_; }
     uint32_t getCellHeight() const { return cellHeight_; }
 
-    // Get mutable grid for decorator cell marking
+    // Get mutable grid for plugin cell marking
     Grid& getGridMutable() { return grid_; }
 
 private:
@@ -123,8 +124,8 @@ private:
 
     const Config* config_ = nullptr;
 
-    // Decorator support
-    DecoratorManager* decoratorManager_ = nullptr;
+    // Plugin support
+    PluginManager* pluginManager_ = nullptr;
     uint32_t cellWidth_ = 10;   // Default, will be set by renderer
     uint32_t cellHeight_ = 20;
 

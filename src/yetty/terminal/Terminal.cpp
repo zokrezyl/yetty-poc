@@ -1,5 +1,5 @@
 #include "Terminal.h"
-#include "../decorator/DecoratorManager.h"
+#include "../PluginManager.h"
 
 #include <iostream>
 #include <cstring>
@@ -26,7 +26,7 @@ static VTermScreenCallbacks screenCallbacks = {
     .sb_clear = nullptr,
 };
 
-// Static fallback callbacks for unrecognized sequences (OSC for decorators)
+// Static fallback callbacks for unrecognized sequences (OSC for plugins)
 static VTermStateFallbacks stateFallbacks = {
     .control = nullptr,
     .csi = nullptr,
@@ -49,7 +49,7 @@ Terminal::Terminal(uint32_t cols, uint32_t rows, Font* font)
     vterm_screen_set_callbacks(vtermScreen_, &screenCallbacks, this);
     vterm_screen_reset(vtermScreen_, 1);
 
-    // Set up fallback callbacks for unrecognized OSC sequences (decorators)
+    // Set up fallback callbacks for unrecognized OSC sequences (plugins)
     VTermState* state = vterm_obtain_state(vterm_);
     vterm_state_set_unrecognised_fallbacks(state, &stateFallbacks, this);
 }
@@ -69,7 +69,7 @@ Terminal::~Terminal() {
     }
 }
 
-bool Terminal::start(const std::string& shell) {
+Result<void> Terminal::start(const std::string& shell) {
     // Get shell from environment if not specified
     std::string shellPath = shell;
     if (shellPath.empty()) {
@@ -87,8 +87,7 @@ bool Terminal::start(const std::string& shell) {
     childPid_ = forkpty(&ptyMaster_, nullptr, nullptr, &ws);
 
     if (childPid_ < 0) {
-        std::cerr << "forkpty failed: " << strerror(errno) << std::endl;
-        return false;
+        return Err<void>(std::string("forkpty failed: ") + strerror(errno));
     }
 
     if (childPid_ == 0) {
@@ -113,7 +112,7 @@ bool Terminal::start(const std::string& shell) {
     std::cout << "Terminal started with shell: " << shellPath << std::endl;
     std::cout << "PTY master fd: " << ptyMaster_ << ", child PID: " << childPid_ << std::endl;
 
-    return true;
+    return Ok();
 }
 
 void Terminal::update() {
@@ -411,9 +410,9 @@ int Terminal::onSbPushline(int cols, const VTermScreenCell* cells, void* user) {
     (void)cells;
     Terminal* term = static_cast<Terminal*>(user);
 
-    // Notify decorator manager that content scrolled up by 1 line
-    if (term->decoratorManager_) {
-        term->decoratorManager_->onScroll(1);
+    // Notify plugin manager that content scrolled up by 1 line
+    if (term->pluginManager_) {
+        term->pluginManager_->onScroll(1);
     }
 
     return 0;  // We don't store scrollback, just track the scroll event
@@ -433,7 +432,7 @@ int Terminal::onOSC(int command, VTermStringFragment frag, void* user) {
         return 0;  // Not our sequence, let someone else handle it
     }
 
-    std::cerr << "  -> Yetty decorator sequence!" << std::endl;
+    std::cerr << "  -> Yetty plugin sequence!" << std::endl;
 
     // Handle multi-fragment sequences
     if (frag.initial) {
@@ -450,11 +449,11 @@ int Terminal::onOSC(int command, VTermStringFragment frag, void* user) {
     if (frag.final) {
         std::cerr << "  -> Complete! Buffer: " << term->oscBuffer_.substr(0, 100) << "..." << std::endl;
 
-        if (term->decoratorManager_) {
+        if (term->pluginManager_) {
             // Build full sequence: command;rest
             std::string fullSeq = std::to_string(command) + ";" + term->oscBuffer_;
 
-            bool handled = term->decoratorManager_->handleOSCSequence(
+            bool handled = term->pluginManager_->handleOSCSequence(
                 fullSeq,
                 &term->grid_,
                 term->cursorCol_,

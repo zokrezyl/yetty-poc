@@ -1,13 +1,14 @@
-#include "renderer/WebGPUContext.h"
-#include "renderer/TextRenderer.h"
-#include "terminal/Grid.h"
-#include "terminal/Font.h"
-#include "Config.h"
+#include "yetty/renderer/WebGPUContext.h"
+#include "yetty/renderer/TextRenderer.h"
+#include "yetty/terminal/Grid.h"
+#include "yetty/terminal/Font.h"
+#include "yetty/Config.h"
 
 #if !YETTY_WEB
-#include "terminal/Terminal.h"
-#include "decorator/DecoratorManager.h"
-#include "decorator/ShaderToyPlugin.h"
+#include "yetty/terminal/Terminal.h"
+#include "yetty/PluginManager.h"
+#include "yetty/plugins/ShaderToy.h"
+#include "yetty/plugins/Image.h"
 #include <termios.h>
 #include <unistd.h>
 #endif
@@ -42,7 +43,7 @@ struct AppState {
 
 #if !YETTY_WEB
     Terminal* terminal = nullptr;
-    DecoratorManager* decoratorManager = nullptr;
+    PluginManager* pluginManager = nullptr;
     struct termios originalTermios;
     bool termiosSet = false;
 #endif
@@ -193,8 +194,8 @@ static void mainLoopIteration() {
         double deltaTime = currentTime - lastTime;
         lastTime = currentTime;
 
-        if (state.decoratorManager) {
-            state.decoratorManager->update(deltaTime);
+        if (state.pluginManager) {
+            state.pluginManager->update(deltaTime);
         }
 
         if (!state.terminal->isRunning()) {
@@ -227,13 +228,13 @@ static void mainLoopIteration() {
                                    state.terminal->isCursorVisible());
         }
 
-        // Render decorator overlays (after terminal, before present)
-        if (state.decoratorManager && !state.decoratorManager->getDecorators().empty()) {
-            WGPUTextureView targetView = state.ctx->getCurrentTextureView();
-            if (targetView) {
+        // Render plugin overlays (after terminal, before present)
+        if (state.pluginManager && !state.pluginManager->getInstances().empty()) {
+            auto targetViewResult = state.ctx->getCurrentTextureView();
+            if (targetViewResult) {
                 float cellWidth = state.baseCellWidth * state.zoomLevel;
                 float cellHeight = state.baseCellHeight * state.zoomLevel;
-                state.decoratorManager->render(*state.ctx, targetView,
+                state.pluginManager->render(*state.ctx, *targetViewResult,
                     static_cast<uint32_t>(w), static_cast<uint32_t>(h),
                     cellWidth, cellHeight);
             }
@@ -457,8 +458,8 @@ int main(int argc, char* argv[]) {
 
     // Initialize WebGPU
     WebGPUContext ctx;
-    if (!ctx.init(window, width, height)) {
-        std::cerr << "Failed to initialize WebGPU" << std::endl;
+    if (auto result = ctx.init(window, width, height); !result) {
+        std::cerr << "Failed to initialize WebGPU: " << error_msg(result) << std::endl;
         glfwDestroyWindow(window);
         glfwTerminate();
         return 1;
@@ -564,8 +565,8 @@ int main(int argc, char* argv[]) {
     renderer.resize(width, height);
     renderer.setConfig(&config);
 
-    if (!renderer.init(ctx, font)) {
-        std::cerr << "Failed to initialize text renderer" << std::endl;
+    if (auto result = renderer.init(ctx, font); !result) {
+        std::cerr << "Failed to initialize text renderer: " << error_msg(result) << std::endl;
         glfwDestroyWindow(window);
         glfwTerminate();
         return 1;
@@ -644,26 +645,27 @@ int main(int argc, char* argv[]) {
         terminal->setConfig(&config);
         appState.terminal = terminal;
 
-        // Create and configure DecoratorManager
-        DecoratorManager* decoratorMgr = new DecoratorManager();
-        appState.decoratorManager = decoratorMgr;
+        // Create and configure PluginManager
+        PluginManager* pluginMgr = new PluginManager();
+        appState.pluginManager = pluginMgr;
 
         // Register built-in plugins
-        decoratorMgr->registerPlugin(std::make_unique<ShaderToyPlugin>());
+        pluginMgr->registerPlugin("shader", ShaderToy::create);
+        pluginMgr->registerPlugin("image", Image::create);
 
         // Load external plugins from directory (if exists)
         const char* pluginDir = getenv("YETTY_PLUGINS_DIR");
         if (pluginDir) {
-            decoratorMgr->loadPluginsFromDirectory(pluginDir);
+            pluginMgr->loadPluginsFromDirectory(pluginDir);
         }
 
-        // Wire up decorator manager to terminal
-        terminal->setDecoratorManager(decoratorMgr);
+        // Wire up plugin manager to terminal
+        terminal->setPluginManager(pluginMgr);
         terminal->setCellSize(static_cast<uint32_t>(cellWidth), static_cast<uint32_t>(cellHeight));
 
-        if (!terminal->start()) {
-            std::cerr << "Failed to start terminal" << std::endl;
-            delete decoratorMgr;
+        if (auto result = terminal->start(); !result) {
+            std::cerr << "Failed to start terminal: " << error_msg(result) << std::endl;
+            delete pluginMgr;
             delete terminal;
             glfwDestroyWindow(window);
             glfwTerminate();
@@ -733,7 +735,7 @@ int main(int argc, char* argv[]) {
 
     std::cout << "Shutting down..." << std::endl;
 
-    delete appState.decoratorManager;
+    delete appState.pluginManager;
     delete terminal;
     delete demoGrid;
 

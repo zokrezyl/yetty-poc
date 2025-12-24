@@ -22,7 +22,7 @@ WebGPUContext::~WebGPUContext() {
     if (instance_) wgpuInstanceRelease(instance_);
 }
 
-bool WebGPUContext::init(GLFWwindow* window, uint32_t width, uint32_t height) {
+Result<void> WebGPUContext::init(GLFWwindow* window, uint32_t width, uint32_t height) {
     width_ = width;
     height_ = height;
 
@@ -34,8 +34,7 @@ bool WebGPUContext::init(GLFWwindow* window, uint32_t width, uint32_t height) {
     instance_ = wgpuCreateInstance(&instanceDesc);
 #endif
     if (!instance_) {
-        std::cerr << "Failed to create WebGPU instance" << std::endl;
-        return false;
+        return Err<void>("Failed to create WebGPU instance");
     }
 
     // Create surface from GLFW window
@@ -52,8 +51,7 @@ bool WebGPUContext::init(GLFWwindow* window, uint32_t width, uint32_t height) {
     surface_ = glfwGetWGPUSurface(instance_, window);
 #endif
     if (!surface_) {
-        std::cerr << "Failed to create WebGPU surface" << std::endl;
-        return false;
+        return Err<void>("Failed to create WebGPU surface");
     }
 
     // Request adapter
@@ -63,7 +61,6 @@ bool WebGPUContext::init(GLFWwindow* window, uint32_t width, uint32_t height) {
     adapterOpts.powerPreference = WGPUPowerPreference_HighPerformance;
 #endif
 
-    bool adapterReceived = false;
     wgpuInstanceRequestAdapter(
         instance_,
         &adapterOpts,
@@ -78,8 +75,7 @@ bool WebGPUContext::init(GLFWwindow* window, uint32_t width, uint32_t height) {
     );
 
     if (!adapter_) {
-        std::cerr << "Failed to get WebGPU adapter" << std::endl;
-        return false;
+        return Err<void>("Failed to get WebGPU adapter");
     }
 
     // Request device
@@ -105,8 +101,7 @@ bool WebGPUContext::init(GLFWwindow* window, uint32_t width, uint32_t height) {
     );
 
     if (!device_) {
-        std::cerr << "Failed to get WebGPU device" << std::endl;
-        return false;
+        return Err<void>("Failed to get WebGPU device");
     }
 
     // Set error callback
@@ -139,7 +134,7 @@ bool WebGPUContext::init(GLFWwindow* window, uint32_t width, uint32_t height) {
 #endif
 
     std::cout << "WebGPU initialized successfully" << std::endl;
-    return true;
+    return Ok();
 }
 
 #if YETTY_WEB
@@ -183,22 +178,25 @@ void WebGPUContext::resize(uint32_t width, uint32_t height) {
 #endif
 }
 
-WGPUTextureView WebGPUContext::getCurrentTextureView() {
+Result<WGPUTextureView> WebGPUContext::getCurrentTextureView() {
     // Return cached view if already acquired this frame
     if (currentTextureView_) {
-        return currentTextureView_;
+        return Ok(currentTextureView_);
     }
 
 #if YETTY_WEB
     // Emscripten: get texture view from swapchain
     currentTextureView_ = wgpuSwapChainGetCurrentTextureView(swapChain_);
-    return currentTextureView_;
+    if (!currentTextureView_) {
+        return Err<WGPUTextureView>("Failed to get swapchain texture view");
+    }
+    return Ok(currentTextureView_);
 #else
     WGPUSurfaceTexture surfaceTexture;
     wgpuSurfaceGetCurrentTexture(surface_, &surfaceTexture);
 
     if (surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_Success) {
-        return nullptr;
+        return Err<WGPUTextureView>("Failed to get surface texture");
     }
 
     currentTexture_ = surfaceTexture.texture;
@@ -213,7 +211,10 @@ WGPUTextureView WebGPUContext::getCurrentTextureView() {
     viewDesc.aspect = WGPUTextureAspect_All;
 
     currentTextureView_ = wgpuTextureCreateView(surfaceTexture.texture, &viewDesc);
-    return currentTextureView_;
+    if (!currentTextureView_) {
+        return Err<WGPUTextureView>("Failed to create texture view");
+    }
+    return Ok(currentTextureView_);
 #endif
 }
 

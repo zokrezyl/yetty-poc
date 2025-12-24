@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../result.hpp"
 #include <webgpu/webgpu.h>
 #include <GLFW/glfw3.h>
 #include <functional>
@@ -12,7 +13,7 @@ public:
     WebGPUContext();
     ~WebGPUContext();
 
-    bool init(GLFWwindow* window, uint32_t width, uint32_t height);
+    Result<void> init(GLFWwindow* window, uint32_t width, uint32_t height);
     void resize(uint32_t width, uint32_t height);
 
     WGPUDevice getDevice() const { return device_; }
@@ -20,7 +21,7 @@ public:
     WGPUSurface getSurface() const { return surface_; }
     WGPUTextureFormat getSurfaceFormat() const { return surfaceFormat_; }
 
-    WGPUTextureView getCurrentTextureView();
+    Result<WGPUTextureView> getCurrentTextureView();
     void present();
 
 private:

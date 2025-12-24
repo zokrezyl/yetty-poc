@@ -1,68 +1,76 @@
-#include "ShaderToyPlugin.h"
-#include "Decorator.h"
+#include "ShaderToy.h"
 #include "../renderer/WebGPUContext.h"
 #include <iostream>
 #include <sstream>
 
 namespace yetty {
 
-ShaderToyPlugin::ShaderToyPlugin() {
+ShaderToy::ShaderToy() {
 }
 
-ShaderToyPlugin::~ShaderToyPlugin() {
+ShaderToy::~ShaderToy() {
+    dispose();
 }
 
-bool ShaderToyPlugin::initialize(Decorator* decorator, const std::string& payload) {
+Result<PluginPtr> ShaderToy::create() {
+    return Ok<PluginPtr>(std::make_shared<ShaderToy>());
+}
+
+Result<void> ShaderToy::init(const std::string& payload) {
     if (payload.empty()) {
-        std::cerr << "ShaderToy: empty payload" << std::endl;
-        return false;
+        return Err<void>("ShaderToy: empty payload");
     }
 
-    decorator->setPluginData(ShaderToyData{});
+    // Reset state for re-initialization
+    compiled_ = false;
+    failed_ = false;
+    time_ = 0.0f;
+
     std::cout << "ShaderToy: initialized with " << payload.size() << " bytes of shader code" << std::endl;
     std::cout << "ShaderToy: payload content:\n---\n" << payload << "\n---" << std::endl;
-    return true;
+    return Ok();
 }
 
-void ShaderToyPlugin::update(Decorator* decorator, double deltaTime) {
-    auto* data = decorator->getPluginData<ShaderToyData>();
-    if (data) {
-        data->time += static_cast<float>(deltaTime);
+void ShaderToy::dispose() {
+    if (bindGroup_) {
+        wgpuBindGroupRelease(bindGroup_);
+        bindGroup_ = nullptr;
     }
+    if (pipeline_) {
+        wgpuRenderPipelineRelease(pipeline_);
+        pipeline_ = nullptr;
+    }
+    if (uniformBuffer_) {
+        wgpuBufferRelease(uniformBuffer_);
+        uniformBuffer_ = nullptr;
+    }
+    compiled_ = false;
 }
 
-void ShaderToyPlugin::render(Decorator* decorator, WebGPUContext& ctx,
-                            WGPUTextureView targetView, WGPUTextureFormat targetFormat,
-                            uint32_t screenWidth, uint32_t screenHeight,
-                            float pixelX, float pixelY, float pixelW, float pixelH) {
-    auto* data = decorator->getPluginData<ShaderToyData>();
-    if (!data) return;
+void ShaderToy::update(double deltaTime) {
+    time_ += static_cast<float>(deltaTime);
+}
 
+void ShaderToy::render(WebGPUContext& ctx,
+                       WGPUTextureView targetView, WGPUTextureFormat targetFormat,
+                       uint32_t screenWidth, uint32_t screenHeight,
+                       float pixelX, float pixelY, float pixelW, float pixelH) {
     // Skip if previously failed
-    if (data->failed) return;
+    if (failed_) return;
 
     // First time: compile shader
-    if (!data->compiled) {
-        try {
-            if (!compileShader(decorator, ctx, targetFormat, decorator->getPayload())) {
-                std::cerr << "ShaderToy: failed to compile shader, disabling decorator" << std::endl;
-                data->failed = true;
-                return;
-            }
-        } catch (const std::exception& e) {
-            std::cerr << "ShaderToy: exception during compilation: " << e.what() << std::endl;
-            data->failed = true;
-            return;
-        } catch (...) {
-            std::cerr << "ShaderToy: unknown exception during compilation" << std::endl;
-            data->failed = true;
+    if (!compiled_) {
+        auto result = compileShader(ctx, targetFormat, payload_);
+        if (!result) {
+            std::cerr << "ShaderToy: " << error_msg(result) << std::endl;
+            failed_ = true;
             return;
         }
-        data->compiled = true;
+        compiled_ = true;
     }
 
-    if (!data->pipeline || !data->uniformBuffer || !data->bindGroup) {
-        data->failed = true;
+    if (!pipeline_ || !uniformBuffer_ || !bindGroup_) {
+        failed_ = true;
         return;
     }
 
@@ -82,7 +90,7 @@ void ShaderToyPlugin::render(Decorator* decorator, WebGPUContext& ctx,
         float rect[4];  // x, y, w, h in NDC
     } uniforms;
 
-    uniforms.time = data->time;
+    uniforms.time = time_;
     uniforms.resolution[0] = pixelW;
     uniforms.resolution[1] = pixelH;
     uniforms.rect[0] = ndcX;
@@ -90,7 +98,7 @@ void ShaderToyPlugin::render(Decorator* decorator, WebGPUContext& ctx,
     uniforms.rect[2] = ndcW;
     uniforms.rect[3] = ndcH;
 
-    wgpuQueueWriteBuffer(ctx.getQueue(), data->uniformBuffer, 0, &uniforms, sizeof(uniforms));
+    wgpuQueueWriteBuffer(ctx.getQueue(), uniformBuffer_, 0, &uniforms, sizeof(uniforms));
 
     // Create command encoder
     WGPUCommandEncoderDescriptor encoderDesc = {};
@@ -117,8 +125,8 @@ void ShaderToyPlugin::render(Decorator* decorator, WebGPUContext& ctx,
         return;
     }
 
-    wgpuRenderPassEncoderSetPipeline(pass, data->pipeline);
-    wgpuRenderPassEncoderSetBindGroup(pass, 0, data->bindGroup, 0, nullptr);
+    wgpuRenderPassEncoderSetPipeline(pass, pipeline_);
+    wgpuRenderPassEncoderSetBindGroup(pass, 0, bindGroup_, 0, nullptr);
     wgpuRenderPassEncoderDraw(pass, 6, 1, 0, 0);  // Quad (2 triangles)
     wgpuRenderPassEncoderEnd(pass);
     wgpuRenderPassEncoderRelease(pass);
@@ -132,22 +140,12 @@ void ShaderToyPlugin::render(Decorator* decorator, WebGPUContext& ctx,
     wgpuCommandEncoderRelease(encoder);
 }
 
-void ShaderToyPlugin::cleanup(Decorator* decorator) {
-    auto* data = decorator->getPluginData<ShaderToyData>();
-    if (data) {
-        if (data->bindGroup) wgpuBindGroupRelease(data->bindGroup);
-        if (data->pipeline) wgpuRenderPipelineRelease(data->pipeline);
-        if (data->uniformBuffer) wgpuBufferRelease(data->uniformBuffer);
-    }
+void ShaderToy::onResize(uint32_t newWidth, uint32_t newHeight) {
+    Plugin::onResize(newWidth, newHeight);
+    // Could trigger re-render if needed
 }
 
-void ShaderToyPlugin::onResize(Decorator* decorator, uint32_t newWidth, uint32_t newHeight) {
-    (void)decorator;
-    (void)newWidth;
-    (void)newHeight;
-}
-
-const char* ShaderToyPlugin::getVertexShader() {
+const char* ShaderToy::getVertexShader() {
     return R"(
 struct Uniforms {
     time: f32,
@@ -192,7 +190,7 @@ fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
 )";
 }
 
-std::string ShaderToyPlugin::wrapFragmentShader(const std::string& userCode) {
+std::string ShaderToy::wrapFragmentShader(const std::string& userCode) {
     std::ostringstream ss;
     ss << R"(
 struct Uniforms {
@@ -219,17 +217,17 @@ fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
     return ss.str();
 }
 
-bool ShaderToyPlugin::compileShader(Decorator* decorator, WebGPUContext& ctx,
-                                    WGPUTextureFormat targetFormat,
-                                    const std::string& fragmentCode) {
-    auto* data = decorator->getPluginData<ShaderToyData>();
-    if (!data) return false;
-
+Result<void> ShaderToy::compileShader(WebGPUContext& ctx,
+                                       WGPUTextureFormat targetFormat,
+                                       const std::string& fragmentCode) {
     // Create uniform buffer (48 bytes: time, pad, resolution, pad, rect)
     WGPUBufferDescriptor bufDesc = {};
     bufDesc.size = 48;
     bufDesc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
-    data->uniformBuffer = wgpuDeviceCreateBuffer(ctx.getDevice(), &bufDesc);
+    uniformBuffer_ = wgpuDeviceCreateBuffer(ctx.getDevice(), &bufDesc);
+    if (!uniformBuffer_) {
+        return Err<void>("Failed to create uniform buffer");
+    }
 
     // Compile vertex shader
     std::string vertCode = getVertexShader();
@@ -254,10 +252,9 @@ bool ShaderToyPlugin::compileShader(Decorator* decorator, WebGPUContext& ctx,
     WGPUShaderModule fragModule = wgpuDeviceCreateShaderModule(ctx.getDevice(), &shaderDescFrag);
 
     if (!vertModule || !fragModule) {
-        std::cerr << "ShaderToy: failed to create shader modules" << std::endl;
         if (vertModule) wgpuShaderModuleRelease(vertModule);
         if (fragModule) wgpuShaderModuleRelease(fragModule);
-        return false;
+        return Err<void>("Failed to create shader modules");
     }
 
     // Bind group layout
@@ -270,24 +267,42 @@ bool ShaderToyPlugin::compileShader(Decorator* decorator, WebGPUContext& ctx,
     bglDesc.entryCount = 1;
     bglDesc.entries = &bindingEntry;
     WGPUBindGroupLayout bgl = wgpuDeviceCreateBindGroupLayout(ctx.getDevice(), &bglDesc);
+    if (!bgl) {
+        wgpuShaderModuleRelease(vertModule);
+        wgpuShaderModuleRelease(fragModule);
+        return Err<void>("Failed to create bind group layout");
+    }
 
     // Pipeline layout
     WGPUPipelineLayoutDescriptor plDesc = {};
     plDesc.bindGroupLayoutCount = 1;
     plDesc.bindGroupLayouts = &bgl;
     WGPUPipelineLayout pipelineLayout = wgpuDeviceCreatePipelineLayout(ctx.getDevice(), &plDesc);
+    if (!pipelineLayout) {
+        wgpuShaderModuleRelease(vertModule);
+        wgpuShaderModuleRelease(fragModule);
+        wgpuBindGroupLayoutRelease(bgl);
+        return Err<void>("Failed to create pipeline layout");
+    }
 
     // Bind group
     WGPUBindGroupEntry bgEntry = {};
     bgEntry.binding = 0;
-    bgEntry.buffer = data->uniformBuffer;
+    bgEntry.buffer = uniformBuffer_;
     bgEntry.size = 48;
 
     WGPUBindGroupDescriptor bgDesc = {};
     bgDesc.layout = bgl;
     bgDesc.entryCount = 1;
     bgDesc.entries = &bgEntry;
-    data->bindGroup = wgpuDeviceCreateBindGroup(ctx.getDevice(), &bgDesc);
+    bindGroup_ = wgpuDeviceCreateBindGroup(ctx.getDevice(), &bgDesc);
+    if (!bindGroup_) {
+        wgpuShaderModuleRelease(vertModule);
+        wgpuShaderModuleRelease(fragModule);
+        wgpuBindGroupLayoutRelease(bgl);
+        wgpuPipelineLayoutRelease(pipelineLayout);
+        return Err<void>("Failed to create bind group");
+    }
 
     // Render pipeline
     WGPURenderPipelineDescriptor pipelineDesc = {};
@@ -325,16 +340,26 @@ bool ShaderToyPlugin::compileShader(Decorator* decorator, WebGPUContext& ctx,
     pipelineDesc.multisample.count = 1;
     pipelineDesc.multisample.mask = ~0u;
 
-    data->pipeline = wgpuDeviceCreateRenderPipeline(ctx.getDevice(), &pipelineDesc);
+    pipeline_ = wgpuDeviceCreateRenderPipeline(ctx.getDevice(), &pipelineDesc);
 
-    // Cleanup
+    // Cleanup shader modules
     wgpuShaderModuleRelease(vertModule);
     wgpuShaderModuleRelease(fragModule);
     wgpuBindGroupLayoutRelease(bgl);
     wgpuPipelineLayoutRelease(pipelineLayout);
 
+    if (!pipeline_) {
+        return Err<void>("Failed to create render pipeline");
+    }
+
     std::cout << "ShaderToy: pipeline created successfully" << std::endl;
-    return data->pipeline != nullptr;
+    return Ok();
 }
 
 } // namespace yetty
+
+// C exports for dynamic loading (when compiled as separate .so)
+extern "C" {
+    const char* shader_plugin_name() { return "shader"; }
+    yetty::Result<yetty::PluginPtr> shader_plugin_create() { return yetty::ShaderToy::create(); }
+}

@@ -1,9 +1,10 @@
 #pragma once
 
 #include "WebGPUContext.h"
-#include "terminal/Grid.h"
-#include "terminal/Font.h"
-#include "Config.h"
+#include "../result.hpp"
+#include "../terminal/Grid.h"
+#include "../terminal/Font.h"
+#include "../Config.h"
 #include <glm/glm.hpp>
 #include <vector>
 
@@ -16,7 +17,7 @@ public:
     TextRenderer();
     ~TextRenderer();
 
-    bool init(WebGPUContext& ctx, Font& font);
+    Result<void> init(WebGPUContext& ctx, Font& font);
     void resize(uint32_t width, uint32_t height);
     void render(WebGPUContext& ctx, const Grid& grid,
                 int cursorCol = -1, int cursorRow = -1, bool cursorVisible = false);
@@ -34,12 +35,12 @@ public:
                 int cursorCol = -1, int cursorRow = -1, bool cursorVisible = false);
 
 private:
-    bool createShaderModule(WGPUDevice device);
-    bool createPipeline(WGPUDevice device, WGPUTextureFormat format);
-    bool createBuffers(WGPUDevice device);
-    bool createCellTextures(WGPUDevice device, uint32_t cols, uint32_t rows);
-    bool createBindGroupLayout(WGPUDevice device);
-    bool createBindGroup(WGPUDevice device, Font& font);
+    Result<void> createShaderModule(WGPUDevice device);
+    Result<void> createPipeline(WGPUDevice device, WGPUTextureFormat format);
+    Result<void> createBuffers(WGPUDevice device);
+    Result<void> createCellTextures(WGPUDevice device, uint32_t cols, uint32_t rows);
+    Result<void> createBindGroupLayout(WGPUDevice device);
+    Result<void> createBindGroup(WGPUDevice device, Font& font);
 
     void updateUniformBuffer(WGPUQueue queue, const Grid& grid,
                              int cursorCol, int cursorRow, bool cursorVisible);

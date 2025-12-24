@@ -1,5 +1,5 @@
 #include "TextRenderer.h"
-#include "terminal/Terminal.h"  // For DamageRect
+#include "../terminal/Terminal.h"  // For DamageRect
 #include <glm/gtc/matrix_transform.hpp>
 #include <fstream>
 #include <sstream>
@@ -26,35 +26,41 @@ TextRenderer::~TextRenderer() {
     if (shaderModule_) wgpuShaderModuleRelease(shaderModule_);
 }
 
-bool TextRenderer::init(WebGPUContext& ctx, Font& font) {
+Result<void> TextRenderer::init(WebGPUContext& ctx, Font& font) {
     font_ = &font;
     device_ = ctx.getDevice();
 
     // Create glyph metadata buffer in Font
     if (!font.createGlyphMetadataBuffer(device_)) {
-        std::cerr << "Failed to create glyph metadata buffer" << std::endl;
-        return false;
+        return Err<void>("Failed to create glyph metadata buffer");
     }
 
-    if (!createShaderModule(device_)) return false;
-    if (!createBuffers(device_)) return false;
-    if (!createBindGroupLayout(device_)) return false;
-    if (!createPipeline(device_, ctx.getSurfaceFormat())) return false;
+    if (auto res = createShaderModule(device_); !res) {
+        return Err<void>("Failed to create shader module", res);
+    }
+    if (auto res = createBuffers(device_); !res) {
+        return Err<void>("Failed to create buffers", res);
+    }
+    if (auto res = createBindGroupLayout(device_); !res) {
+        return Err<void>("Failed to create bind group layout", res);
+    }
+    if (auto res = createPipeline(device_, ctx.getSurfaceFormat()); !res) {
+        return Err<void>("Failed to create pipeline", res);
+    }
 
-    return true;
+    return Ok();
 }
 
-bool TextRenderer::createShaderModule(WGPUDevice device) {
+Result<void> TextRenderer::createShaderModule(WGPUDevice device) {
 #if YETTY_WEB
     const char* shaderPath = "/shaders.wgsl";
 #else
-    const char* shaderPath = CMAKE_SOURCE_DIR "/src/renderer/shaders.wgsl";
+    const char* shaderPath = CMAKE_SOURCE_DIR "/src/yetty/renderer/shaders.wgsl";
 #endif
 
     std::ifstream file(shaderPath);
     if (!file.is_open()) {
-        std::cerr << "Failed to open shader: " << shaderPath << std::endl;
-        return false;
+        return Err<void>(std::string("Failed to open shader: ") + shaderPath);
     }
 
     std::stringstream buffer;
@@ -75,20 +81,22 @@ bool TextRenderer::createShaderModule(WGPUDevice device) {
 
     shaderModule_ = wgpuDeviceCreateShaderModule(device, &moduleDesc);
     if (!shaderModule_) {
-        std::cerr << "Failed to create shader module" << std::endl;
-        return false;
+        return Err<void>("Failed to create shader module");
     }
 
-    return true;
+    return Ok();
 }
 
-bool TextRenderer::createBuffers(WGPUDevice device) {
+Result<void> TextRenderer::createBuffers(WGPUDevice device) {
     // Uniform buffer
     WGPUBufferDescriptor uniformDesc = {};
     uniformDesc.label = "uniforms";
     uniformDesc.size = sizeof(Uniforms);
     uniformDesc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
     uniformBuffer_ = wgpuDeviceCreateBuffer(device, &uniformDesc);
+    if (!uniformBuffer_) {
+        return Err<void>("Failed to create uniform buffer");
+    }
 
     // Fullscreen quad vertices (2 triangles, 6 vertices)
     float quadVertices[] = {
@@ -106,14 +114,17 @@ bool TextRenderer::createBuffers(WGPUDevice device) {
     quadDesc.usage = WGPUBufferUsage_Vertex;
     quadDesc.mappedAtCreation = true;
     quadVertexBuffer_ = wgpuDeviceCreateBuffer(device, &quadDesc);
+    if (!quadVertexBuffer_) {
+        return Err<void>("Failed to create quad vertex buffer");
+    }
     void* mapped = wgpuBufferGetMappedRange(quadVertexBuffer_, 0, sizeof(quadVertices));
     memcpy(mapped, quadVertices, sizeof(quadVertices));
     wgpuBufferUnmap(quadVertexBuffer_);
 
-    return true;
+    return Ok();
 }
 
-bool TextRenderer::createCellTextures(WGPUDevice device, uint32_t cols, uint32_t rows) {
+Result<void> TextRenderer::createCellTextures(WGPUDevice device, uint32_t cols, uint32_t rows) {
     // Release old textures if they exist
     if (cellGlyphView_) { wgpuTextureViewRelease(cellGlyphView_); cellGlyphView_ = nullptr; }
     if (cellGlyphTexture_) { wgpuTextureRelease(cellGlyphTexture_); cellGlyphTexture_ = nullptr; }
@@ -135,6 +146,9 @@ bool TextRenderer::createCellTextures(WGPUDevice device, uint32_t cols, uint32_t
     glyphTexDesc.format = WGPUTextureFormat_R16Uint;
     glyphTexDesc.usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst;
     cellGlyphTexture_ = wgpuDeviceCreateTexture(device, &glyphTexDesc);
+    if (!cellGlyphTexture_) {
+        return Err<void>("Failed to create glyph texture");
+    }
 
     WGPUTextureViewDescriptor glyphViewDesc = {};
     glyphViewDesc.format = WGPUTextureFormat_R16Uint;
@@ -142,6 +156,9 @@ bool TextRenderer::createCellTextures(WGPUDevice device, uint32_t cols, uint32_t
     glyphViewDesc.mipLevelCount = 1;
     glyphViewDesc.arrayLayerCount = 1;
     cellGlyphView_ = wgpuTextureCreateView(cellGlyphTexture_, &glyphViewDesc);
+    if (!cellGlyphView_) {
+        return Err<void>("Failed to create glyph texture view");
+    }
 
     // FG color texture: RGBA8Unorm
     WGPUTextureDescriptor fgTexDesc = {};
@@ -153,6 +170,9 @@ bool TextRenderer::createCellTextures(WGPUDevice device, uint32_t cols, uint32_t
     fgTexDesc.format = WGPUTextureFormat_RGBA8Unorm;
     fgTexDesc.usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst;
     cellFgColorTexture_ = wgpuDeviceCreateTexture(device, &fgTexDesc);
+    if (!cellFgColorTexture_) {
+        return Err<void>("Failed to create foreground color texture");
+    }
 
     WGPUTextureViewDescriptor fgViewDesc = {};
     fgViewDesc.format = WGPUTextureFormat_RGBA8Unorm;
@@ -160,6 +180,9 @@ bool TextRenderer::createCellTextures(WGPUDevice device, uint32_t cols, uint32_t
     fgViewDesc.mipLevelCount = 1;
     fgViewDesc.arrayLayerCount = 1;
     cellFgColorView_ = wgpuTextureCreateView(cellFgColorTexture_, &fgViewDesc);
+    if (!cellFgColorView_) {
+        return Err<void>("Failed to create foreground color texture view");
+    }
 
     // BG color texture: RGBA8Unorm
     WGPUTextureDescriptor bgTexDesc = {};
@@ -171,6 +194,9 @@ bool TextRenderer::createCellTextures(WGPUDevice device, uint32_t cols, uint32_t
     bgTexDesc.format = WGPUTextureFormat_RGBA8Unorm;
     bgTexDesc.usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst;
     cellBgColorTexture_ = wgpuDeviceCreateTexture(device, &bgTexDesc);
+    if (!cellBgColorTexture_) {
+        return Err<void>("Failed to create background color texture");
+    }
 
     WGPUTextureViewDescriptor bgViewDesc = {};
     bgViewDesc.format = WGPUTextureFormat_RGBA8Unorm;
@@ -178,11 +204,14 @@ bool TextRenderer::createCellTextures(WGPUDevice device, uint32_t cols, uint32_t
     bgViewDesc.mipLevelCount = 1;
     bgViewDesc.arrayLayerCount = 1;
     cellBgColorView_ = wgpuTextureCreateView(cellBgColorTexture_, &bgViewDesc);
+    if (!cellBgColorView_) {
+        return Err<void>("Failed to create background color texture view");
+    }
 
-    return cellGlyphTexture_ && cellFgColorTexture_ && cellBgColorTexture_;
+    return Ok();
 }
 
-bool TextRenderer::createBindGroupLayout(WGPUDevice device) {
+Result<void> TextRenderer::createBindGroupLayout(WGPUDevice device) {
     // Bind group layout: 7 bindings
     WGPUBindGroupLayoutEntry entries[7] = {};
 
@@ -231,17 +260,23 @@ bool TextRenderer::createBindGroupLayout(WGPUDevice device) {
     layoutDesc.entryCount = 7;
     layoutDesc.entries = entries;
     bindGroupLayout_ = wgpuDeviceCreateBindGroupLayout(device, &layoutDesc);
+    if (!bindGroupLayout_) {
+        return Err<void>("Failed to create bind group layout");
+    }
 
     // Pipeline layout
     WGPUPipelineLayoutDescriptor pipelineLayoutDesc = {};
     pipelineLayoutDesc.bindGroupLayoutCount = 1;
     pipelineLayoutDesc.bindGroupLayouts = &bindGroupLayout_;
     pipelineLayout_ = wgpuDeviceCreatePipelineLayout(device, &pipelineLayoutDesc);
+    if (!pipelineLayout_) {
+        return Err<void>("Failed to create pipeline layout");
+    }
 
-    return bindGroupLayout_ && pipelineLayout_;
+    return Ok();
 }
 
-bool TextRenderer::createBindGroup(WGPUDevice device, Font& font) {
+Result<void> TextRenderer::createBindGroup(WGPUDevice device, Font& font) {
     // Release old bind group if it exists (for recreation when textures change)
     if (bindGroup_) { wgpuBindGroupRelease(bindGroup_); bindGroup_ = nullptr; }
 
@@ -276,11 +311,14 @@ bool TextRenderer::createBindGroup(WGPUDevice device, Font& font) {
     bindGroupDesc.entryCount = 7;
     bindGroupDesc.entries = bgEntries;
     bindGroup_ = wgpuDeviceCreateBindGroup(device, &bindGroupDesc);
+    if (!bindGroup_) {
+        return Err<void>("Failed to create bind group");
+    }
 
-    return bindGroup_ != nullptr;
+    return Ok();
 }
 
-bool TextRenderer::createPipeline(WGPUDevice device, WGPUTextureFormat format) {
+Result<void> TextRenderer::createPipeline(WGPUDevice device, WGPUTextureFormat format) {
     // Vertex attributes: just position (vec2)
     WGPUVertexAttribute posAttr = {};
     posAttr.format = WGPUVertexFormat_Float32x2;
@@ -332,8 +370,11 @@ bool TextRenderer::createPipeline(WGPUDevice device, WGPUTextureFormat format) {
     pipelineDesc.multisample.mask = 0xFFFFFFFF;
 
     pipeline_ = wgpuDeviceCreateRenderPipeline(device, &pipelineDesc);
+    if (!pipeline_) {
+        return Err<void>("Failed to create render pipeline");
+    }
 
-    return pipeline_ != nullptr;
+    return Ok();
 }
 
 void TextRenderer::resize(uint32_t width, uint32_t height) {
@@ -522,15 +563,25 @@ void TextRenderer::render(WebGPUContext& ctx, const Grid& grid,
 
     // Recreate textures and bind group if grid size changed
     if (cols != textureCols_ || rows != textureRows_) {
-        createCellTextures(device_, cols, rows);
-        createBindGroup(device_, *font_);
+        if (auto res = createCellTextures(device_, cols, rows); !res) {
+            std::cerr << "TextRenderer: " << error_msg(res) << std::endl;
+            return;
+        }
+        if (auto res = createBindGroup(device_, *font_); !res) {
+            std::cerr << "TextRenderer: " << error_msg(res) << std::endl;
+            return;
+        }
     }
 
     updateUniformBuffer(queue, grid, cursorCol, cursorRow, cursorVisible);
     updateCellTextures(queue, grid);
 
-    WGPUTextureView targetView = ctx.getCurrentTextureView();
-    if (!targetView) return;
+    auto targetViewResult = ctx.getCurrentTextureView();
+    if (!targetViewResult) {
+        std::cerr << "TextRenderer: " << error_msg(targetViewResult) << std::endl;
+        return;
+    }
+    WGPUTextureView targetView = *targetViewResult;
 
     WGPUCommandEncoderDescriptor encoderDesc = {};
     WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(ctx.getDevice(), &encoderDesc);
@@ -579,8 +630,14 @@ void TextRenderer::render(WebGPUContext& ctx, const Grid& grid,
 
     // Recreate textures and bind group if grid size changed
     if (cols != textureCols_ || rows != textureRows_) {
-        createCellTextures(device_, cols, rows);
-        createBindGroup(device_, *font_);
+        if (auto res = createCellTextures(device_, cols, rows); !res) {
+            std::cerr << "TextRenderer: " << error_msg(res) << std::endl;
+            return;
+        }
+        if (auto res = createBindGroup(device_, *font_); !res) {
+            std::cerr << "TextRenderer: " << error_msg(res) << std::endl;
+            return;
+        }
         // Force full update when textures are recreated
         updateCellTextures(queue, grid);
     } else if (fullDamage) {
@@ -605,8 +662,12 @@ void TextRenderer::render(WebGPUContext& ctx, const Grid& grid,
 
     updateUniformBuffer(queue, grid, cursorCol, cursorRow, cursorVisible);
 
-    WGPUTextureView targetView = ctx.getCurrentTextureView();
-    if (!targetView) return;
+    auto targetViewResult = ctx.getCurrentTextureView();
+    if (!targetViewResult) {
+        std::cerr << "TextRenderer: " << error_msg(targetViewResult) << std::endl;
+        return;
+    }
+    WGPUTextureView targetView = *targetViewResult;
 
     WGPUCommandEncoderDescriptor encoderDesc = {};
     WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(ctx.getDevice(), &encoderDesc);
