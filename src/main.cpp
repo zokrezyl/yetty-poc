@@ -18,6 +18,8 @@
 #include <fstream>
 #include <string>
 #include <vector>
+#include <thread>
+#include <chrono>
 #include <cstdlib>
 #include <ctime>
 #include <cmath>
@@ -210,6 +212,7 @@ static void mainLoopIteration() {
 
         // Skip rendering if nothing needs update
         if (!cursorChanged && !hasDamage && !hasPlugins) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(16));  // ~60fps idle
             return;
         }
 
