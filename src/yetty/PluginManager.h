@@ -72,9 +72,12 @@ public:
     void update(double deltaTime);
 
     // Render all plugin instances
+    // scrollOffset: lines scrolled back (0 = at bottom)
+    // termRows: number of visible terminal rows
     void render(WebGPUContext& ctx, WGPUTextureView targetView,
                 uint32_t screenWidth, uint32_t screenHeight,
-                float cellWidth, float cellHeight);
+                float cellWidth, float cellHeight,
+                int scrollOffset = 0, uint32_t termRows = 0);
 
     // Handle terminal resize
     void onTerminalResize(uint32_t newCols, uint32_t newRows,

@@ -307,21 +307,36 @@ void PluginManager::update(double deltaTime) {
 
 void PluginManager::render(WebGPUContext& ctx, WGPUTextureView targetView,
                             uint32_t screenWidth, uint32_t screenHeight,
-                            float cellWidth, float cellHeight) {
+                            float cellWidth, float cellHeight,
+                            int scrollOffset, uint32_t termRows) {
     if (!targetView) return;
 
     for (auto& instance : instances_) {
-        if (instance->isVisible()) {
-            // Calculate pixel position and size
-            float pixelX = instance->getX() * cellWidth;
-            float pixelY = instance->getY() * cellHeight;
-            float pixelW = instance->getWidthCells() * cellWidth;
-            float pixelH = instance->getHeightCells() * cellHeight;
+        if (!instance->isVisible()) continue;
 
-            instance->render(ctx, targetView, ctx.getSurfaceFormat(),
-                            screenWidth, screenHeight,
-                            pixelX, pixelY, pixelW, pixelH);
+        // Calculate base position
+        float pixelX = instance->getX() * cellWidth;
+        float pixelY = instance->getY() * cellHeight;
+        float pixelW = instance->getWidthCells() * cellWidth;
+        float pixelH = instance->getHeightCells() * cellHeight;
+
+        // For Relative plugins, adjust position when viewing scrollback
+        // They should appear shifted down by scrollOffset rows
+        if (instance->getPositionMode() == PositionMode::Relative && scrollOffset > 0) {
+            pixelY += scrollOffset * cellHeight;
         }
+
+        // Skip rendering if plugin is entirely off-screen
+        if (termRows > 0) {
+            float screenPixelHeight = termRows * cellHeight;
+            if (pixelY + pixelH <= 0 || pixelY >= screenPixelHeight) {
+                continue;  // Off-screen, skip render but keep alive
+            }
+        }
+
+        instance->render(ctx, targetView, ctx.getSurfaceFormat(),
+                        screenWidth, screenHeight,
+                        pixelX, pixelY, pixelW, pixelH);
     }
 }
 

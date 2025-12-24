@@ -16,13 +16,13 @@ namespace yetty {
 // Static callbacks for libvterm screen layer
 static VTermScreenCallbacks screenCallbacks = {
     .damage = Terminal::onDamage,
-    .moverect = nullptr,
+    .moverect = Terminal::onMoverect,
     .movecursor = Terminal::onMoveCursor,
     .settermprop = nullptr,
     .bell = Terminal::onBell,
     .resize = Terminal::onResize,
     .sb_pushline = Terminal::onSbPushline,
-    .sb_popline = nullptr,
+    .sb_popline = Terminal::onSbPopline,
     .sb_clear = nullptr,
 };
 
@@ -150,14 +150,19 @@ void Terminal::update() {
         }
 
         // Sync based on damage tracking config
-        if (config_ && config_->useDamageTracking && !fullDamage_) {
+        // When scrolled back, always use full sync since damage rects don't apply to scrollback
+        if (config_ && config_->useDamageTracking && !fullDamage_ && scrollOffset_ == 0) {
             syncDamageToGrid();
         } else {
             syncToGrid();
-            fullDamage_ = false;
+            // Note: don't clear fullDamage_ here - main loop clears after rendering
         }
     } else if (nread < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
         running_ = false;
+    } else if (fullDamage_) {
+        // No new data but need to sync (e.g., after scrolling)
+        syncToGrid();
+        // Note: don't clear fullDamage_ here - main loop clears after rendering
     }
 }
 
@@ -245,46 +250,73 @@ void Terminal::syncToGrid() {
     VTermScreenCell cell;
     VTermPos pos;
 
+    int sbSize = static_cast<int>(scrollback_.size());
+    int effectiveOffset = std::min(scrollOffset_, sbSize);
+
     for (uint32_t row = 0; row < rows_; row++) {
-        for (uint32_t col = 0; col < cols_; col++) {
-            pos.row = row;
-            pos.col = col;
+        // Calculate which line this row maps to
+        int lineIndex = static_cast<int>(row) - effectiveOffset;
 
-            vterm_screen_get_cell(vtermScreen_, pos, &cell);
+        if (lineIndex < 0) {
+            // This row shows scrollback content
+            int sbIndex = sbSize + lineIndex;  // Index from end of scrollback
+            if (sbIndex >= 0 && sbIndex < sbSize) {
+                const ScrollbackLine& sbLine = scrollback_[sbIndex];
+                for (uint32_t col = 0; col < cols_; col++) {
+                    uint32_t codepoint = ' ';
+                    uint8_t fgR = 255, fgG = 255, fgB = 255;
+                    uint8_t bgR = 0, bgG = 0, bgB = 0;
 
-            // Get glyph index
-            uint32_t codepoint = cell.chars[0];
-            if (codepoint == 0) codepoint = ' ';
+                    if (col < sbLine.chars.size()) {
+                        codepoint = sbLine.chars[col];
+                        fgR = sbLine.fgColors[col * 3 + 0];
+                        fgG = sbLine.fgColors[col * 3 + 1];
+                        fgB = sbLine.fgColors[col * 3 + 2];
+                        bgR = sbLine.bgColors[col * 3 + 0];
+                        bgG = sbLine.bgColors[col * 3 + 1];
+                        bgB = sbLine.bgColors[col * 3 + 2];
+                    }
 
-            uint16_t glyphIndex = font_ ? font_->getGlyphIndex(codepoint) : static_cast<uint16_t>(codepoint);
-
-            // Convert colors
-            uint8_t fgR, fgG, fgB;
-            uint8_t bgR, bgG, bgB;
-
-            VTermColor fg = cell.fg;
-            VTermColor bg = cell.bg;
-
-            // Convert indexed colors to RGB
-            vterm_screen_convert_color_to_rgb(vtermScreen_, &fg);
-            vterm_screen_convert_color_to_rgb(vtermScreen_, &bg);
-
-            colorToRGB(fg, fgR, fgG, fgB);
-            colorToRGB(bg, bgR, bgG, bgB);
-
-            // Handle reverse video
-            if (cell.attrs.reverse) {
-                std::swap(fgR, bgR);
-                std::swap(fgG, bgG);
-                std::swap(fgB, bgB);
+                    uint16_t glyphIndex = font_ ? font_->getGlyphIndex(codepoint) : static_cast<uint16_t>(codepoint);
+                    grid_.setCell(col, row, glyphIndex, fgR, fgG, fgB, bgR, bgG, bgB);
+                }
             }
+        } else {
+            // This row shows vterm screen content
+            for (uint32_t col = 0; col < cols_; col++) {
+                pos.row = lineIndex;
+                pos.col = col;
 
-            grid_.setCell(col, row, glyphIndex, fgR, fgG, fgB, bgR, bgG, bgB);
+                vterm_screen_get_cell(vtermScreen_, pos, &cell);
+
+                uint32_t codepoint = cell.chars[0];
+                if (codepoint == 0) codepoint = ' ';
+
+                uint16_t glyphIndex = font_ ? font_->getGlyphIndex(codepoint) : static_cast<uint16_t>(codepoint);
+
+                uint8_t fgR, fgG, fgB;
+                uint8_t bgR, bgG, bgB;
+
+                VTermColor fg = cell.fg;
+                VTermColor bg = cell.bg;
+
+                vterm_screen_convert_color_to_rgb(vtermScreen_, &fg);
+                vterm_screen_convert_color_to_rgb(vtermScreen_, &bg);
+
+                colorToRGB(fg, fgR, fgG, fgB);
+                colorToRGB(bg, bgR, bgG, bgB);
+
+                if (cell.attrs.reverse) {
+                    std::swap(fgR, bgR);
+                    std::swap(fgG, bgG);
+                    std::swap(fgB, bgB);
+                }
+
+                grid_.setCell(col, row, glyphIndex, fgR, fgG, fgB, bgR, bgG, bgB);
+            }
         }
     }
-
-    // Clear damage rects since we did a full sync
-    damageRects_.clear();
+    // Note: don't clear damage here - main loop clears after rendering
 }
 
 void Terminal::syncDamageToGrid() {
@@ -408,16 +440,94 @@ int Terminal::onBell(void* user) {
 }
 
 int Terminal::onSbPushline(int cols, const VTermScreenCell* cells, void* user) {
-    (void)cols;
-    (void)cells;
     Terminal* term = static_cast<Terminal*>(user);
+
+    // Store line in scrollback buffer
+    ScrollbackLine line;
+    line.chars.resize(cols);
+    line.fgColors.resize(cols * 3);
+    line.bgColors.resize(cols * 3);
+
+    for (int i = 0; i < cols; i++) {
+        const VTermScreenCell& cell = cells[i];
+        line.chars[i] = cell.chars[0] ? cell.chars[0] : ' ';
+
+        // Convert colors
+        VTermColor fg = cell.fg;
+        VTermColor bg = cell.bg;
+        vterm_screen_convert_color_to_rgb(term->vtermScreen_, &fg);
+        vterm_screen_convert_color_to_rgb(term->vtermScreen_, &bg);
+
+        line.fgColors[i * 3 + 0] = fg.rgb.red;
+        line.fgColors[i * 3 + 1] = fg.rgb.green;
+        line.fgColors[i * 3 + 2] = fg.rgb.blue;
+        line.bgColors[i * 3 + 0] = bg.rgb.red;
+        line.bgColors[i * 3 + 1] = bg.rgb.green;
+        line.bgColors[i * 3 + 2] = bg.rgb.blue;
+    }
+
+    term->scrollback_.push_back(std::move(line));
+
+    // Trim scrollback if too large
+    uint32_t maxLines = term->config_ ? term->config_->scrollbackLines : 10000;
+    while (term->scrollback_.size() > maxLines) {
+        term->scrollback_.pop_front();
+    }
 
     // Notify plugin manager that content scrolled up by 1 line
     if (term->pluginManager_) {
         term->pluginManager_->onScroll(1);
     }
 
-    return 0;  // We don't store scrollback, just track the scroll event
+    return 1;  // We stored the line
+}
+
+int Terminal::onSbPopline(int cols, VTermScreenCell* cells, void* user) {
+    Terminal* term = static_cast<Terminal*>(user);
+
+    if (term->scrollback_.empty()) {
+        return 0;  // No lines to pop
+    }
+
+    ScrollbackLine& line = term->scrollback_.back();
+    int lineCols = std::min(cols, static_cast<int>(line.chars.size()));
+
+    for (int i = 0; i < lineCols; i++) {
+        cells[i].chars[0] = line.chars[i];
+        cells[i].chars[1] = 0;
+        cells[i].width = 1;
+
+        cells[i].fg.type = VTERM_COLOR_RGB;
+        cells[i].fg.rgb.red = line.fgColors[i * 3 + 0];
+        cells[i].fg.rgb.green = line.fgColors[i * 3 + 1];
+        cells[i].fg.rgb.blue = line.fgColors[i * 3 + 2];
+
+        cells[i].bg.type = VTERM_COLOR_RGB;
+        cells[i].bg.rgb.red = line.bgColors[i * 3 + 0];
+        cells[i].bg.rgb.green = line.bgColors[i * 3 + 1];
+        cells[i].bg.rgb.blue = line.bgColors[i * 3 + 2];
+    }
+
+    // Fill remaining cells with spaces
+    for (int i = lineCols; i < cols; i++) {
+        cells[i].chars[0] = ' ';
+        cells[i].chars[1] = 0;
+        cells[i].width = 1;
+        cells[i].fg.type = VTERM_COLOR_DEFAULT_FG;
+        cells[i].bg.type = VTERM_COLOR_DEFAULT_BG;
+    }
+
+    term->scrollback_.pop_back();
+    return 1;  // We restored the line
+}
+
+int Terminal::onMoverect(VTermRect dest, VTermRect src, void* user) {
+    Terminal* term = static_cast<Terminal*>(user);
+
+    // Mark as full damage for now - GPU texture shift optimization later
+    term->fullDamage_ = true;
+
+    return 0;  // Let libvterm handle it with damage
 }
 
 int Terminal::onOSC(int command, VTermStringFragment frag, void* user) {
@@ -464,6 +574,27 @@ int Terminal::onOSC(int command, VTermStringFragment frag, void* user) {
     }
 
     return 1;  // We handled it
+}
+
+void Terminal::scrollUp(int lines) {
+    int maxOffset = static_cast<int>(scrollback_.size());
+    scrollOffset_ = std::min(scrollOffset_ + lines, maxOffset);
+    fullDamage_ = true;  // Need to redraw with scrollback content
+}
+
+void Terminal::scrollDown(int lines) {
+    scrollOffset_ = std::max(scrollOffset_ - lines, 0);
+    fullDamage_ = true;  // Need to redraw
+}
+
+void Terminal::scrollToTop() {
+    scrollOffset_ = static_cast<int>(scrollback_.size());
+    fullDamage_ = true;
+}
+
+void Terminal::scrollToBottom() {
+    scrollOffset_ = 0;
+    fullDamage_ = true;
 }
 
 } // namespace yetty

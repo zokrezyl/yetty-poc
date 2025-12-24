@@ -11,8 +11,16 @@ extern "C" {
 
 #include <string>
 #include <vector>
+#include <deque>
 
 namespace yetty {
+
+// A single line in the scrollback buffer
+struct ScrollbackLine {
+    std::vector<uint32_t> chars;      // Unicode codepoints
+    std::vector<uint8_t> fgColors;    // RGB per cell (3 bytes each)
+    std::vector<uint8_t> bgColors;    // RGB per cell (3 bytes each)
+};
 
 // Forward declaration
 class PluginManager;
@@ -77,6 +85,17 @@ public:
     static int onBell(void* user);
     static int onOSC(int command, VTermStringFragment frag, void* user);
     static int onSbPushline(int cols, const VTermScreenCell* cells, void* user);
+    static int onSbPopline(int cols, VTermScreenCell* cells, void* user);
+    static int onMoverect(VTermRect dest, VTermRect src, void* user);
+
+    // Scrollback navigation
+    void scrollUp(int lines = 1);
+    void scrollDown(int lines = 1);
+    void scrollToTop();
+    void scrollToBottom();
+    int getScrollOffset() const { return scrollOffset_; }
+    bool isScrolledBack() const { return scrollOffset_ > 0; }
+    size_t getScrollbackSize() const { return scrollback_.size(); }
 
     // Plugin support
     void setPluginManager(PluginManager* mgr) { pluginManager_ = mgr; }
@@ -133,6 +152,10 @@ private:
     // OSC sequence buffer (for multi-fragment sequences)
     std::string oscBuffer_;
     int oscCommand_ = -1;
+
+    // Scrollback buffer
+    std::deque<ScrollbackLine> scrollback_;
+    int scrollOffset_ = 0;  // 0 = at bottom, >0 = scrolled back N lines
 };
 
 } // namespace yetty

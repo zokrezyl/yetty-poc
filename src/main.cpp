@@ -247,9 +247,11 @@ static void mainLoopIteration() {
             if (targetViewResult) {
                 float cellWidth = state.baseCellWidth * state.zoomLevel;
                 float cellHeight = state.baseCellHeight * state.zoomLevel;
+                int scrollOffset = state.terminal ? state.terminal->getScrollOffset() : 0;
+                uint32_t termRows = state.terminal ? state.terminal->getGrid().getRows() : 0;
                 state.pluginManager->render(*state.ctx, *targetViewResult,
                     static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                    cellWidth, cellHeight);
+                    cellWidth, cellHeight, scrollOffset, termRows);
             }
         }
 
@@ -303,13 +305,29 @@ static void mainLoopIteration() {
     }
 }
 
-// Scroll callback for zooming
+// Scroll callback - wheel=scroll, Ctrl+wheel=zoom
 void scrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
     (void)xoffset;
     auto* state = static_cast<AppState*>(glfwGetWindowUserPointer(window));
     if (!state || !state->renderer) return;
 
-    // Adjust zoom level
+    bool ctrlPressed = glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ||
+                       glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS;
+
+#if !YETTY_WEB
+    // Scroll through scrollback (no Ctrl)
+    if (!ctrlPressed && state->terminal) {
+        int lines = static_cast<int>(yoffset * 3);  // 3 lines per scroll notch
+        if (lines > 0) {
+            state->terminal->scrollUp(lines);
+        } else if (lines < 0) {
+            state->terminal->scrollDown(-lines);
+        }
+        return;
+    }
+#endif
+
+    // Zoom (Ctrl + wheel)
     state->zoomLevel += static_cast<float>(yoffset) * 0.1f;
     state->zoomLevel = glm::clamp(state->zoomLevel, 0.2f, 5.0f);
 
