@@ -9,6 +9,9 @@
 #include "yetty/PluginManager.h"
 #include "yetty/plugins/ShaderToy.h"
 #include "yetty/plugins/Image.h"
+#ifdef YETTY_YMERY_ENABLED
+#include "yetty/plugins/Ymery.h"
+#endif
 #include <termios.h>
 #include <unistd.h>
 #endif
@@ -683,6 +686,9 @@ int main(int argc, char* argv[]) {
         // Register built-in plugins
         pluginMgr->registerPlugin("shader", ShaderToy::create);
         pluginMgr->registerPlugin("image", Image::create);
+#ifdef YETTY_YMERY_ENABLED
+        pluginMgr->registerPlugin("ymery", Ymery::create);
+#endif
 
         // Load external plugins from directory (if exists)
         const char* pluginDir = getenv("YETTY_PLUGINS_DIR");

@@ -33,6 +33,10 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Optional: Enable ymery plugin (requires ymery-cpp library)
+option(YETTY_YMERY_ENABLED "Enable ymery ImGui plugin" ON)
+set(YMERY_PATH "/home/misi/work/my/waew-meta/ymery-cpp" CACHE PATH "Path to ymery-cpp source directory")
+
 # Include CPM.cmake
 include(cmake/CPM.cmake)
 
@@ -85,6 +89,10 @@ if(NOT EMSCRIPTEN)
             "FT_DISABLE_HARFBUZZ ON"
             "FT_DISABLE_BROTLI ON"
     )
+    # Create alias for msdfgen's find_package(Freetype)
+    if(NOT TARGET Freetype::Freetype)
+        add_library(Freetype::Freetype ALIAS freetype)
+    endif()
 
     # msdfgen with FreeType support
     CPMAddPackage(
@@ -156,6 +164,7 @@ add_executable(yetty
     $<$<NOT:$<BOOL:${EMSCRIPTEN}>>:src/yetty/PluginManager.cpp>
     $<$<NOT:$<BOOL:${EMSCRIPTEN}>>:src/yetty/plugins/ShaderToy.cpp>
     $<$<NOT:$<BOOL:${EMSCRIPTEN}>>:src/yetty/plugins/Image.cpp>
+    $<$<AND:$<NOT:$<BOOL:${EMSCRIPTEN}>>,$<BOOL:${YETTY_YMERY_ENABLED}>>:src/yetty/plugins/Ymery.cpp>
 )
 
 target_include_directories(yetty PRIVATE
@@ -213,6 +222,27 @@ else()
         vterm
         util  # for forkpty
     )
+
+    #-------------------------------------------------------------------------
+    # Optional: ymery plugin support
+    #-------------------------------------------------------------------------
+    if(YETTY_YMERY_ENABLED)
+        if(NOT YMERY_PATH)
+            message(FATAL_ERROR "YETTY_YMERY_ENABLED is ON but YMERY_PATH is not set")
+        endif()
+
+        # Configure ymery to use WebGPU backend (must be set before add_subdirectory)
+        set(YMERY_USE_WEBGPU ON CACHE BOOL "Use WebGPU backend for ymery" FORCE)
+
+        # Add ymery as subdirectory
+        add_subdirectory(${YMERY_PATH} ${CMAKE_BINARY_DIR}/ymery)
+
+        target_compile_definitions(yetty PRIVATE YETTY_YMERY_ENABLED=1)
+        target_include_directories(yetty PRIVATE ${YMERY_PATH}/src)
+        target_link_libraries(yetty PRIVATE ymery)
+
+        message(STATUS "ymery plugin enabled (path: ${YMERY_PATH})")
+    endif()
 
     file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/assets DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
     configure_file(
