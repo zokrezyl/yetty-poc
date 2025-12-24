@@ -186,7 +186,6 @@ static void mainLoopIteration() {
     // Terminal mode: update terminal and render its grid
     if (!state.demoMode && state.terminal) {
         state.terminal->update();
-        state.terminal->updateCursorBlink(glfwGetTime());
 
         // Update decorators
         static double lastTime = glfwGetTime();
@@ -200,6 +199,17 @@ static void mainLoopIteration() {
 
         if (!state.terminal->isRunning()) {
             glfwSetWindowShouldClose(state.window, GLFW_TRUE);
+            return;
+        }
+
+        // Check if we need to render this frame
+        auto cursorBlinkResult = state.terminal->updateCursorBlink(currentTime);
+        bool cursorChanged = cursorBlinkResult && *cursorBlinkResult;
+        bool hasDamage = state.terminal->hasDamage();
+        bool hasPlugins = state.pluginManager && !state.pluginManager->getInstances().empty();
+
+        // Skip rendering if nothing needs update
+        if (!cursorChanged && !hasDamage && !hasPlugins) {
             return;
         }
 
@@ -229,7 +239,7 @@ static void mainLoopIteration() {
         }
 
         // Render plugin overlays (after terminal, before present)
-        if (state.pluginManager && !state.pluginManager->getInstances().empty()) {
+        if (hasPlugins) {
             auto targetViewResult = state.ctx->getCurrentTextureView();
             if (targetViewResult) {
                 float cellWidth = state.baseCellWidth * state.zoomLevel;

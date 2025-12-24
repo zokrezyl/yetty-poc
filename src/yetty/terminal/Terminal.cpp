@@ -385,11 +385,13 @@ int Terminal::onMoveCursor(VTermPos pos, VTermPos oldpos, int visible, void* use
     return 0;
 }
 
-void Terminal::updateCursorBlink(double currentTime) {
+Result<bool> Terminal::updateCursorBlink(double currentTime) {
     if (currentTime - lastBlinkTime_ >= blinkInterval_) {
         cursorBlink_ = !cursorBlink_;
         lastBlinkTime_ = currentTime;
+        return Ok(true);  // Blink state changed
     }
+    return Ok(false);
 }
 
 int Terminal::onResize(int rows, int cols, void* user) {
@@ -421,22 +423,15 @@ int Terminal::onSbPushline(int cols, const VTermScreenCell* cells, void* user) {
 int Terminal::onOSC(int command, VTermStringFragment frag, void* user) {
     Terminal* term = static_cast<Terminal*>(user);
 
-    std::cerr << "OSC received: cmd=" << command
-              << " initial=" << (frag.initial ? "yes" : "no")
-              << " final=" << (frag.final ? "yes" : "no")
-              << " len=" << frag.len << std::endl;
-
     // Check if this is our vendor ID
     if (command != YETTY_OSC_VENDOR_ID) {
-        std::cerr << "  -> Not our vendor ID (expected " << YETTY_OSC_VENDOR_ID << ")" << std::endl;
         return 0;  // Not our sequence, let someone else handle it
     }
-
-    std::cerr << "  -> Yetty plugin sequence!" << std::endl;
 
     // Handle multi-fragment sequences
     if (frag.initial) {
         term->oscBuffer_.clear();
+        term->oscBuffer_.reserve(256 * 1024);  // Pre-allocate for large payloads
         term->oscCommand_ = command;
     }
 
@@ -447,8 +442,6 @@ int Terminal::onOSC(int command, VTermStringFragment frag, void* user) {
 
     // Process when complete
     if (frag.final) {
-        std::cerr << "  -> Complete! Buffer: " << term->oscBuffer_.substr(0, 100) << "..." << std::endl;
-
         if (term->pluginManager_) {
             // Build full sequence: command;rest
             std::string fullSeq = std::to_string(command) + ";" + term->oscBuffer_;
@@ -461,8 +454,6 @@ int Terminal::onOSC(int command, VTermStringFragment frag, void* user) {
                 term->cellWidth_,
                 term->cellHeight_
             );
-
-            std::cerr << "  -> Handled: " << (handled ? "yes" : "no") << std::endl;
 
             if (handled) {
                 term->fullDamage_ = true;  // Force full redraw

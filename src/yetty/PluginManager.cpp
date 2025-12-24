@@ -402,29 +402,21 @@ void PluginManager::clearGridCells(Grid* grid, Plugin* plugin) {
 std::string PluginManager::base94Decode(const std::string& encoded) {
     if (encoded.empty()) return "";
 
+    const size_t len = encoded.size();
     std::string result;
-    result.reserve(encoded.size() / 2);
+    result.resize(len / 2);  // Pre-size for direct access
 
-    for (size_t i = 0; i + 1 < encoded.size(); i += 2) {
-        int v1 = encoded[i] - '!';
-        int v2 = encoded[i + 1] - '!';
+    const char* src = encoded.data();
+    char* dst = &result[0];
+    size_t outIdx = 0;
 
-        // Validate range
-        if (v1 < 0 || v1 > 2 || v2 < 0 || v2 >= 94) {
-            std::cerr << "base94Decode: invalid chars at " << i << ": "
-                      << (int)encoded[i] << ", " << (int)encoded[i+1] << std::endl;
-            continue;
-        }
-
-        int byte = v1 * 94 + v2;
-        if (byte > 255) {
-            std::cerr << "base94Decode: decoded value out of range: " << byte << std::endl;
-            continue;
-        }
-
-        result.push_back(static_cast<char>(byte));
+    for (size_t i = 0; i + 1 < len; i += 2) {
+        unsigned char c1 = src[i] - '!';
+        unsigned char c2 = src[i + 1] - '!';
+        dst[outIdx++] = static_cast<char>(c1 * 94 + c2);
     }
 
+    result.resize(outIdx);
     return result;
 }
 

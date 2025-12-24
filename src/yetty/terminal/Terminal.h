@@ -57,7 +57,8 @@ public:
     bool isCursorVisible() const { return cursorVisible_ && cursorBlink_; }
 
     // Update cursor blink state (call each frame with current time)
-    void updateCursorBlink(double currentTime);
+    // Returns Ok(true) if blink state changed, Ok(false) otherwise
+    Result<bool> updateCursorBlink(double currentTime);
 
     // Damage tracking
     const std::vector<DamageRect>& getDamageRects() const { return damageRects_; }
