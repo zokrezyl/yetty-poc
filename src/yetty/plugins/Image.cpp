@@ -235,6 +235,7 @@ Result<void> Image::createPipeline(WebGPUContext& ctx, WGPUTextureFormat targetF
     samplerDesc.addressModeU = WGPUAddressMode_ClampToEdge;
     samplerDesc.addressModeV = WGPUAddressMode_ClampToEdge;
     samplerDesc.addressModeW = WGPUAddressMode_ClampToEdge;
+    samplerDesc.maxAnisotropy = 1;  // Must be at least 1
     sampler_ = wgpuDeviceCreateSampler(device, &samplerDesc);
     if (!sampler_) {
         return Err<void>("Failed to create sampler");
