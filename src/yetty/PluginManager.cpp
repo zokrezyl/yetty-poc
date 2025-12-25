@@ -489,6 +489,12 @@ bool PluginManager::onMouseMove(float pixelX, float pixelY, const Grid* grid,
             // Calculate local coordinates relative to plugin's top-left
             float pluginPixelX = plugin->getX() * cellWidth;
             float pluginPixelY = plugin->getY() * cellHeight;
+
+            // For Relative plugins, adjust for scroll offset (same as in render)
+            if (plugin->getPositionMode() == PositionMode::Relative && scrollOffset > 0) {
+                pluginPixelY += scrollOffset * cellHeight;
+            }
+
             float localX = pixelX - pluginPixelX;
             float localY = pixelY - pluginPixelY;
 
@@ -502,7 +508,6 @@ bool PluginManager::onMouseMove(float pixelX, float pixelY, const Grid* grid,
 
 bool PluginManager::onMouseButton(int button, bool pressed, float pixelX, float pixelY,
                                    const Grid* grid, float cellWidth, float cellHeight, int scrollOffset) {
-    (void)scrollOffset;
 
     // Convert pixel coordinates to grid cell
     int col = static_cast<int>(pixelX / cellWidth);
@@ -539,6 +544,12 @@ bool PluginManager::onMouseButton(int button, bool pressed, float pixelX, float 
             // Calculate local coordinates
             float pluginPixelX = plugin->getX() * cellWidth;
             float pluginPixelY = plugin->getY() * cellHeight;
+
+            // For Relative plugins, adjust for scroll offset (same as in render)
+            if (plugin->getPositionMode() == PositionMode::Relative && scrollOffset > 0) {
+                pluginPixelY += scrollOffset * cellHeight;
+            }
+
             float localX = pixelX - pluginPixelX;
             float localY = pixelY - pluginPixelY;
 
@@ -555,7 +566,6 @@ bool PluginManager::onMouseButton(int button, bool pressed, float pixelX, float 
 
 bool PluginManager::onMouseScroll(float xoffset, float yoffset, int mods, float pixelX, float pixelY,
                                    const Grid* grid, float cellWidth, float cellHeight, int scrollOffset) {
-    (void)scrollOffset;
 
     // Convert pixel coordinates to grid cell
     int col = static_cast<int>(pixelX / cellWidth);
