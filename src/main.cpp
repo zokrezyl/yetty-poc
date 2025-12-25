@@ -17,6 +17,7 @@
 #endif
 
 #include <GLFW/glfw3.h>
+#include <spdlog/spdlog.h>
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -474,6 +475,10 @@ void printUsage(const char* prog) {
 }
 
 int main(int argc, char* argv[]) {
+    // Set up logging
+    spdlog::set_level(spdlog::level::debug);
+    spdlog::info("yetty starting...");
+
     // Parse command line
     bool generateAtlasOnly = false;
     bool usePrebuiltAtlas = YETTY_USE_PREBUILT_ATLAS;

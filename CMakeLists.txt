@@ -105,6 +105,7 @@ if(NOT EMSCRIPTEN)
             "MSDFGEN_USE_SKIA OFF"
             "MSDFGEN_USE_VCPKG OFF"
             "MSDFGEN_DISABLE_SVG ON"
+            "MSDFGEN_DISABLE_PNG ON"
             "MSDFGEN_INSTALL OFF"
     )
 
@@ -239,7 +240,7 @@ else()
 
         target_compile_definitions(yetty PRIVATE YETTY_YMERY_ENABLED=1)
         target_include_directories(yetty PRIVATE ${YMERY_PATH}/src)
-        target_link_libraries(yetty PRIVATE ymery)
+        target_link_libraries(yetty PRIVATE ymery spdlog::spdlog)
 
         message(STATUS "ymery plugin enabled (path: ${YMERY_PATH})")
     endif()

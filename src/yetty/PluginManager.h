@@ -88,12 +88,12 @@ public:
 
     // Input routing - returns true if event was consumed by a plugin
     // pixelX/Y are screen coordinates, cellWidth/Height for grid lookup
-    bool onMouseMove(float pixelX, float pixelY, Grid* grid,
+    bool onMouseMove(float pixelX, float pixelY, const Grid* grid,
                      float cellWidth, float cellHeight, int scrollOffset);
     bool onMouseButton(int button, bool pressed, float pixelX, float pixelY,
-                       Grid* grid, float cellWidth, float cellHeight, int scrollOffset);
+                       const Grid* grid, float cellWidth, float cellHeight, int scrollOffset);
     bool onMouseScroll(float xoffset, float yoffset, float pixelX, float pixelY,
-                       Grid* grid, float cellWidth, float cellHeight, int scrollOffset);
+                       const Grid* grid, float cellWidth, float cellHeight, int scrollOffset);
     bool onKey(int key, int scancode, int action, int mods);
     bool onChar(unsigned int codepoint);
 
@@ -109,7 +109,7 @@ public:
 
 private:
     // Find plugin at grid cell (returns nullptr if no plugin)
-    PluginPtr pluginAtCell(int col, int row, Grid* grid);
+    PluginPtr pluginAtCell(int col, int row, const Grid* grid);
     void markGridCells(Grid* grid, Plugin* plugin);
     void clearGridCells(Grid* grid, Plugin* plugin);
 

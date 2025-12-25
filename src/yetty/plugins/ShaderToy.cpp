@@ -1,5 +1,6 @@
 #include "ShaderToy.h"
 #include "../renderer/WebGPUContext.h"
+#include <spdlog/spdlog.h>
 #include <iostream>
 #include <sstream>
 
@@ -84,19 +85,30 @@ void ShaderToy::render(WebGPUContext& ctx,
 
     struct Uniforms {
         float time;
-        float _pad1, _pad2, _pad3;
+        float param;
+        float _pad1, _pad2;
         float resolution[2];
-        float _pad4[2];
-        float rect[4];  // x, y, w, h in NDC
+        float _pad3[2];
+        float rect[4];     // x, y, w, h in NDC
+        float mouse[4];    // x, y (normalized 0-1), pressed, focused
     } uniforms;
 
     uniforms.time = time_;
+    uniforms.param = param_;
+    uniforms._pad1 = 0.0f;
+    uniforms._pad2 = 0.0f;
     uniforms.resolution[0] = pixelW;
     uniforms.resolution[1] = pixelH;
+    uniforms._pad3[0] = 0.0f;
+    uniforms._pad3[1] = 0.0f;
     uniforms.rect[0] = ndcX;
     uniforms.rect[1] = ndcY;
     uniforms.rect[2] = ndcW;
     uniforms.rect[3] = ndcH;
+    uniforms.mouse[0] = mouseX_;
+    uniforms.mouse[1] = mouseY_;
+    uniforms.mouse[2] = mouseGrabbed_ ? 1.0f : 0.0f;  // Grabbed state (click held)
+    uniforms.mouse[3] = mouseDown_ ? 1.0f : 0.0f;     // Current button state
 
     wgpuQueueWriteBuffer(ctx.getQueue(), uniformBuffer_, 0, &uniforms, sizeof(uniforms));
 
@@ -145,16 +157,57 @@ void ShaderToy::onResize(uint32_t newWidth, uint32_t newHeight) {
     // Could trigger re-render if needed
 }
 
+bool ShaderToy::onMouseMove(float localX, float localY) {
+    // Normalize to 0-1 range based on pixel size
+    mouseX_ = localX / static_cast<float>(pixelWidth_);
+    mouseY_ = localY / static_cast<float>(pixelHeight_);
+    spdlog::debug("ShaderToy::onMouseMove: local=({},{}) normalized=({},{})",
+                  localX, localY, mouseX_, mouseY_);
+    return true;
+}
+
+bool ShaderToy::onMouseButton(int button, bool pressed) {
+    if (button == 0) {  // Left button
+        mouseDown_ = pressed;
+        if (pressed) {
+            mouseGrabbed_ = true;
+        } else {
+            mouseGrabbed_ = false;
+        }
+        spdlog::debug("ShaderToy::onMouseButton: button={} pressed={} grabbed={}",
+                      button, pressed, mouseGrabbed_);
+        return true;
+    }
+    // Button -1 means click outside (focus lost)
+    if (button == -1) {
+        mouseGrabbed_ = false;
+        spdlog::debug("ShaderToy::onMouseButton: focus lost, grabbed=false");
+        return false;
+    }
+    return false;
+}
+
+bool ShaderToy::onMouseScroll(float xoffset, float yoffset) {
+    (void)xoffset;
+    // Adjust param with scroll, clamp to 0-1
+    param_ += yoffset * 0.1f;
+    if (param_ < 0.0f) param_ = 0.0f;
+    if (param_ > 1.0f) param_ = 1.0f;
+    spdlog::debug("ShaderToy::onMouseScroll: yoffset={} param_={}", yoffset, param_);
+    return true;
+}
+
 const char* ShaderToy::getVertexShader() {
     return R"(
 struct Uniforms {
     time: f32,
+    param: f32,
     _pad1: f32,
     _pad2: f32,
-    _pad3: f32,
     resolution: vec2<f32>,
-    _pad4: vec2<f32>,
+    _pad3: vec2<f32>,
     rect: vec4<f32>,  // x, y, w, h in NDC
+    mouse: vec4<f32>, // x, y (normalized 0-1), pressed, focused
 }
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -195,15 +248,24 @@ std::string ShaderToy::wrapFragmentShader(const std::string& userCode) {
     ss << R"(
 struct Uniforms {
     time: f32,
+    param: f32,
     _pad1: f32,
     _pad2: f32,
-    _pad3: f32,
     resolution: vec2<f32>,
-    _pad4: vec2<f32>,
+    _pad3: vec2<f32>,
     rect: vec4<f32>,
+    mouse: vec4<f32>,  // x, y, grabbed, buttonDown
 }
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
+
+// Convenience aliases for user code
+fn iTime() -> f32 { return u.time; }
+fn iResolution() -> vec2<f32> { return u.resolution; }
+fn iMouse() -> vec4<f32> { return u.mouse; }
+fn iParam() -> f32 { return u.param; }
+fn iGrabbed() -> bool { return u.mouse.z > 0.5; }
+fn iMouseDown() -> bool { return u.mouse.w > 0.5; }
 
 // User's shader code - should define mainImage(fragCoord: vec2<f32>) -> vec4<f32>
 )" << userCode << R"(
@@ -211,7 +273,25 @@ struct Uniforms {
 @fragment
 fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
     let fragCoord = uv * u.resolution;
-    return mainImage(fragCoord);
+    var col = mainImage(fragCoord);
+
+    // Always draw a thin frame for visibility
+    let border = 3.0;
+    let res = u.resolution;
+    let onBorder = fragCoord.x < border || fragCoord.x > res.x - border ||
+                   fragCoord.y < border || fragCoord.y > res.y - border;
+
+    if (onBorder) {
+        if (iGrabbed()) {
+            // Green frame when grabbed (mouse held)
+            col = vec4<f32>(0.2, 0.9, 0.3, 1.0);
+        } else {
+            // Gray frame normally
+            col = vec4<f32>(0.4, 0.4, 0.4, 1.0);
+        }
+    }
+
+    return col;
 }
 )";
     return ss.str();
@@ -220,9 +300,9 @@ fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
 Result<void> ShaderToy::compileShader(WebGPUContext& ctx,
                                        WGPUTextureFormat targetFormat,
                                        const std::string& fragmentCode) {
-    // Create uniform buffer (48 bytes: time, pad, resolution, pad, rect)
+    // Create uniform buffer (64 bytes: time, param, pad[2], resolution, pad[2], rect, mouse)
     WGPUBufferDescriptor bufDesc = {};
-    bufDesc.size = 48;
+    bufDesc.size = 64;
     bufDesc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
     uniformBuffer_ = wgpuDeviceCreateBuffer(ctx.getDevice(), &bufDesc);
     if (!uniformBuffer_) {
@@ -289,7 +369,7 @@ Result<void> ShaderToy::compileShader(WebGPUContext& ctx,
     WGPUBindGroupEntry bgEntry = {};
     bgEntry.binding = 0;
     bgEntry.buffer = uniformBuffer_;
-    bgEntry.size = 48;
+    bgEntry.size = 64;
 
     WGPUBindGroupDescriptor bgDesc = {};
     bgDesc.layout = bgl;

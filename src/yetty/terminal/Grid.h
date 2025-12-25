@@ -36,6 +36,11 @@ public:
     uint16_t getGlyph(uint32_t col, uint32_t row) const;
     void getFgColor(uint32_t col, uint32_t row, uint8_t& r, uint8_t& g, uint8_t& b) const;
 
+    // Plugin ID tracking (separate from glyph data)
+    void setPluginId(uint32_t col, uint32_t row, uint16_t pluginId);
+    uint16_t getPluginId(uint32_t col, uint32_t row) const;
+    void clearPluginId(uint32_t col, uint32_t row);
+
     // Write ASCII string (helper) - needs Font to convert codepoints to glyph indices
     // If font is nullptr, uses codepoint directly as index (for testing only)
     void writeString(uint32_t col, uint32_t row, const char* str,
@@ -69,6 +74,9 @@ private:
     std::vector<uint16_t> glyphIndices_;  // 1 x uint16 per cell
     std::vector<uint8_t> fgColors_;       // RGBA per cell (4 bytes)
     std::vector<uint8_t> bgColors_;       // RGBA per cell (4 bytes)
+
+    // Plugin tracking (0 = no plugin, non-zero = plugin ID)
+    std::vector<uint16_t> pluginIds_;
 
     bool dirty_ = true;
 

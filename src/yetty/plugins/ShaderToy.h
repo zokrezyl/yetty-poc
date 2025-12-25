@@ -26,10 +26,20 @@ public:
                float pixelX, float pixelY, float pixelW, float pixelH) override;
     void onResize(uint32_t newWidth, uint32_t newHeight) override;
 
+    // Input handling
+    bool onMouseMove(float localX, float localY) override;
+    bool onMouseButton(int button, bool pressed) override;
+    bool onMouseScroll(float xoffset, float yoffset) override;
+    bool wantsMouse() const override { return true; }
+
 private:
     Result<void> compileShader(WebGPUContext& ctx,
                                WGPUTextureFormat targetFormat,
                                const std::string& fragmentCode);
+    void renderFocusFrame(WebGPUContext& ctx,
+                          WGPUTextureView targetView, WGPUTextureFormat targetFormat,
+                          uint32_t screenWidth, uint32_t screenHeight,
+                          float pixelX, float pixelY, float pixelW, float pixelH);
 
     // Vertex shader that positions the quad
     static const char* getVertexShader();
@@ -40,10 +50,31 @@ private:
     WGPURenderPipeline pipeline_ = nullptr;
     WGPUBindGroup bindGroup_ = nullptr;
     WGPUBuffer uniformBuffer_ = nullptr;
+    WGPURenderPipeline framePipeline_ = nullptr;
 
     float time_ = 0.0f;
     bool compiled_ = false;
     bool failed_ = false;
+
+    // Mouse state (in local coordinates, normalized 0-1)
+    float mouseX_ = 0.0f;
+    float mouseY_ = 0.0f;
+    bool mouseDown_ = false;
+    bool mouseGrabbed_ = false;  // True while mouse button held
+
+    // Scroll-controlled parameter (exposed to shader)
+    float param_ = 0.5f;
+
+    // Frame pipeline for visual feedback
+    bool frameCompiled_ = false;
+    WGPURenderPipeline framePipeline2_ = nullptr;
+    WGPUBindGroup frameBindGroup_ = nullptr;
+    WGPUBuffer frameUniformBuffer_ = nullptr;
+
+    Result<void> compileFramePipeline(WebGPUContext& ctx, WGPUTextureFormat targetFormat);
+    void renderFrame(WebGPUContext& ctx, WGPUTextureView targetView,
+                     uint32_t screenWidth, uint32_t screenHeight,
+                     float pixelX, float pixelY, float pixelW, float pixelH);
 };
 
 } // namespace yetty

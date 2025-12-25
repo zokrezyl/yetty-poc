@@ -82,9 +82,9 @@ def main():
             x = int(arg.split('=', 1)[1])
         elif arg.startswith('--y='):
             y = int(arg.split('=', 1)[1])
-        elif arg.startswith('--w='):
+        elif arg.startswith('--w=') or arg.startswith('--width='):
             w = int(arg.split('=', 1)[1])
-        elif arg.startswith('--h='):
+        elif arg.startswith('--h=') or arg.startswith('--height='):
             h = int(arg.split('=', 1)[1])
         elif arg.startswith('--save='):
             save_file = arg.split('=', 1)[1]

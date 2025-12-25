@@ -11,6 +11,7 @@ Grid::Grid(uint32_t cols, uint32_t rows)
     glyphIndices_.resize(cellCount, 0);
     fgColors_.resize(cellCount * 4, 255);  // RGBA, default white
     bgColors_.resize(cellCount * 4, 0);    // RGBA, default black (with alpha 0)
+    pluginIds_.resize(cellCount, 0);       // No plugins initially
 
     // Set default alpha for fg colors
     for (size_t i = 0; i < cellCount; ++i) {
@@ -25,6 +26,7 @@ void Grid::resize(uint32_t cols, uint32_t rows) {
     std::vector<uint16_t> newGlyphs(newCellCount, 0);
     std::vector<uint8_t> newFgColors(newCellCount * 4, 255);
     std::vector<uint8_t> newBgColors(newCellCount * 4, 0);
+    std::vector<uint16_t> newPluginIds(newCellCount, 0);
 
     // Set alpha for new fg colors
     for (size_t i = 0; i < newCellCount; ++i) {
@@ -41,6 +43,7 @@ void Grid::resize(uint32_t cols, uint32_t rows) {
             size_t newIdx = r * cols + c;
 
             newGlyphs[newIdx] = glyphIndices_[oldIdx];
+            newPluginIds[newIdx] = pluginIds_[oldIdx];
 
             newFgColors[newIdx * 4 + 0] = fgColors_[oldIdx * 4 + 0];
             newFgColors[newIdx * 4 + 1] = fgColors_[oldIdx * 4 + 1];
@@ -59,12 +62,14 @@ void Grid::resize(uint32_t cols, uint32_t rows) {
     glyphIndices_ = std::move(newGlyphs);
     fgColors_ = std::move(newFgColors);
     bgColors_ = std::move(newBgColors);
+    pluginIds_ = std::move(newPluginIds);
     dirty_ = true;
 }
 
 void Grid::clear() {
     size_t cellCount = cols_ * rows_;
     std::fill(glyphIndices_.begin(), glyphIndices_.end(), 0);
+    std::fill(pluginIds_.begin(), pluginIds_.end(), 0);
 
     // Reset fg to white, bg to black
     for (size_t i = 0; i < cellCount; ++i) {
@@ -142,6 +147,20 @@ void Grid::getFgColor(uint32_t col, uint32_t row, uint8_t& r, uint8_t& g, uint8_
     r = fgColors_[idx + 0];
     g = fgColors_[idx + 1];
     b = fgColors_[idx + 2];
+}
+
+void Grid::setPluginId(uint32_t col, uint32_t row, uint16_t pluginId) {
+    if (col >= cols_ || row >= rows_) return;
+    pluginIds_[cellIndex(col, row)] = pluginId;
+}
+
+uint16_t Grid::getPluginId(uint32_t col, uint32_t row) const {
+    if (col >= cols_ || row >= rows_) return 0;
+    return pluginIds_[cellIndex(col, row)];
+}
+
+void Grid::clearPluginId(uint32_t col, uint32_t row) {
+    setPluginId(col, row, 0);
 }
 
 void Grid::writeString(uint32_t col, uint32_t row, const char* str,

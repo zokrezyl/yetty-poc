@@ -1,6 +1,7 @@
 #include "PluginManager.h"
 #include "terminal/Grid.h"
 #include "renderer/WebGPUContext.h"
+#include <spdlog/spdlog.h>
 #include <iostream>
 #include <filesystem>
 #include <dlfcn.h>
@@ -368,12 +369,7 @@ void PluginManager::markGridCells(Grid* grid, Plugin* plugin) {
     int32_t startY = plugin->getY();
     uint32_t w = plugin->getWidthCells();
     uint32_t h = plugin->getHeightCells();
-    uint32_t id = plugin->getId();
-
-    // Encode plugin ID into fg color (24 bits)
-    uint8_t idR = (id >> 16) & 0xFF;
-    uint8_t idG = (id >> 8) & 0xFF;
-    uint8_t idB = id & 0xFF;
+    uint16_t id = static_cast<uint16_t>(plugin->getId());
 
     for (uint32_t row = 0; row < h; row++) {
         for (uint32_t col = 0; col < w; col++) {
@@ -382,10 +378,7 @@ void PluginManager::markGridCells(Grid* grid, Plugin* plugin) {
 
             if (gridCol >= 0 && gridCol < (int32_t)grid->getCols() &&
                 gridRow >= 0 && gridRow < (int32_t)grid->getRows()) {
-                grid->setCell(gridCol, gridRow,
-                              GLYPH_PLUGIN,
-                              idR, idG, idB,    // fg = plugin ID
-                              0, 0, 0);         // bg = reserved
+                grid->setPluginId(gridCol, gridRow, id);
             }
         }
     }
@@ -406,8 +399,7 @@ void PluginManager::clearGridCells(Grid* grid, Plugin* plugin) {
 
             if (gridCol >= 0 && gridCol < (int32_t)grid->getCols() &&
                 gridRow >= 0 && gridRow < (int32_t)grid->getRows()) {
-                // Reset to space with default colors
-                grid->setCell(gridCol, gridRow, ' ', 255, 255, 255, 0, 0, 0);
+                grid->clearPluginId(gridCol, gridRow);
             }
         }
     }
@@ -454,18 +446,17 @@ std::string PluginManager::base94Encode(const std::string& data) {
 // Input routing
 //-----------------------------------------------------------------------------
 
-PluginPtr PluginManager::pluginAtCell(int col, int row, Grid* grid) {
+PluginPtr PluginManager::pluginAtCell(int col, int row, const Grid* grid) {
     if (!grid) return nullptr;
     if (col < 0 || row < 0) return nullptr;
     if ((uint32_t)col >= grid->getCols() || (uint32_t)row >= grid->getRows()) return nullptr;
 
-    uint16_t glyph = grid->getGlyph(col, row);
-    if (glyph != GLYPH_PLUGIN) return nullptr;
+    uint16_t pluginId = grid->getPluginId(col, row);
+    if (pluginId == 0) {
+        return nullptr;
+    }
 
-    // Extract plugin ID from fg color (encoded as RGB)
-    uint8_t r, g, b;
-    grid->getFgColor(col, row, r, g, b);
-    uint32_t pluginId = ((uint32_t)r << 16) | ((uint32_t)g << 8) | b;
+    spdlog::debug("pluginAtCell({},{}): FOUND plugin ID={}", col, row, pluginId);
 
     return getInstance(pluginId);
 }
@@ -477,7 +468,7 @@ void PluginManager::clearFocus() {
     }
 }
 
-bool PluginManager::onMouseMove(float pixelX, float pixelY, Grid* grid,
+bool PluginManager::onMouseMove(float pixelX, float pixelY, const Grid* grid,
                                  float cellWidth, float cellHeight, int scrollOffset) {
     lastMouseX_ = pixelX;
     lastMouseY_ = pixelY;
@@ -491,66 +482,94 @@ bool PluginManager::onMouseMove(float pixelX, float pixelY, Grid* grid,
     // The scrollOffset affects rendering position, not grid lookup
 
     PluginPtr plugin = pluginAtCell(col, row, grid);
-    if (plugin && plugin->wantsMouse()) {
-        // Calculate local coordinates relative to plugin's top-left
-        float pluginPixelX = plugin->getX() * cellWidth;
-        float pluginPixelY = plugin->getY() * cellHeight;
-        float localX = pixelX - pluginPixelX;
-        float localY = pixelY - pluginPixelY;
+    if (plugin) {
+        spdlog::debug("onMouseMove: plugin found at cell ({},{}), wantsMouse={}",
+                      col, row, plugin->wantsMouse());
+        if (plugin->wantsMouse()) {
+            // Calculate local coordinates relative to plugin's top-left
+            float pluginPixelX = plugin->getX() * cellWidth;
+            float pluginPixelY = plugin->getY() * cellHeight;
+            float localX = pixelX - pluginPixelX;
+            float localY = pixelY - pluginPixelY;
 
-        return plugin->onMouseMove(localX, localY);
+            spdlog::debug("onMouseMove: forwarding to plugin, local=({},{})", localX, localY);
+            return plugin->onMouseMove(localX, localY);
+        }
     }
 
     return false;
 }
 
 bool PluginManager::onMouseButton(int button, bool pressed, float pixelX, float pixelY,
-                                   Grid* grid, float cellWidth, float cellHeight, int scrollOffset) {
+                                   const Grid* grid, float cellWidth, float cellHeight, int scrollOffset) {
     (void)scrollOffset;
 
     // Convert pixel coordinates to grid cell
     int col = static_cast<int>(pixelX / cellWidth);
     int row = static_cast<int>(pixelY / cellHeight);
 
+    spdlog::debug("onMouseButton: button={} pressed={} at pixel ({},{}) -> cell ({},{})",
+                  button, pressed, pixelX, pixelY, col, row);
+
     PluginPtr plugin = pluginAtCell(col, row, grid);
 
     // Handle focus changes on mouse press
     if (pressed && button == 0) {  // Left click
+        spdlog::debug("onMouseButton: left click, plugin={}, focusedPlugin_={}",
+                      (void*)plugin.get(), (void*)focusedPlugin_.get());
         if (plugin != focusedPlugin_) {
+            // Notify old focused plugin about focus loss (button -1 signals click outside)
+            if (focusedPlugin_) {
+                spdlog::debug("onMouseButton: notifying old plugin {} of focus loss", focusedPlugin_->getId());
+                focusedPlugin_->onMouseButton(-1, false);
+            }
             clearFocus();
-            if (plugin && plugin->wantsKeyboard()) {
+            // Set focus for plugins that want keyboard OR mouse
+            if (plugin && (plugin->wantsKeyboard() || plugin->wantsMouse())) {
                 focusedPlugin_ = plugin;
                 plugin->setFocus(true);
+                spdlog::debug("onMouseButton: set focus to plugin {}", plugin->getId());
             }
         }
     }
 
-    if (plugin && plugin->wantsMouse()) {
-        // Calculate local coordinates
-        float pluginPixelX = plugin->getX() * cellWidth;
-        float pluginPixelY = plugin->getY() * cellHeight;
-        float localX = pixelX - pluginPixelX;
-        float localY = pixelY - pluginPixelY;
+    if (plugin) {
+        spdlog::debug("onMouseButton: plugin found, wantsMouse={}", plugin->wantsMouse());
+        if (plugin->wantsMouse()) {
+            // Calculate local coordinates
+            float pluginPixelX = plugin->getX() * cellWidth;
+            float pluginPixelY = plugin->getY() * cellHeight;
+            float localX = pixelX - pluginPixelX;
+            float localY = pixelY - pluginPixelY;
 
-        // Forward mouse position first (ymery needs this)
-        plugin->onMouseMove(localX, localY);
-        return plugin->onMouseButton(button, pressed);
+            // Forward mouse position first (ymery needs this)
+            plugin->onMouseMove(localX, localY);
+            bool consumed = plugin->onMouseButton(button, pressed);
+            spdlog::debug("onMouseButton: plugin consumed={}", consumed);
+            return consumed;
+        }
     }
 
     return false;
 }
 
 bool PluginManager::onMouseScroll(float xoffset, float yoffset, float pixelX, float pixelY,
-                                   Grid* grid, float cellWidth, float cellHeight, int scrollOffset) {
+                                   const Grid* grid, float cellWidth, float cellHeight, int scrollOffset) {
     (void)scrollOffset;
 
     // Convert pixel coordinates to grid cell
     int col = static_cast<int>(pixelX / cellWidth);
     int row = static_cast<int>(pixelY / cellHeight);
 
+    spdlog::debug("onMouseScroll: offset=({},{}) at pixel ({},{}) -> cell ({},{})",
+                  xoffset, yoffset, pixelX, pixelY, col, row);
+
     PluginPtr plugin = pluginAtCell(col, row, grid);
     if (plugin && plugin->wantsMouse()) {
-        return plugin->onMouseScroll(xoffset, yoffset);
+        spdlog::debug("onMouseScroll: forwarding to plugin {}", plugin->getId());
+        bool consumed = plugin->onMouseScroll(xoffset, yoffset);
+        spdlog::debug("onMouseScroll: plugin consumed={}", consumed);
+        return consumed;
     }
 
     return false;
