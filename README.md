@@ -4,3 +4,7 @@
 
 
 https://github.com/zokrezyl/yetty-poc/raw/refs/heads/main/docs/animation.mp4
+
+
+https://raw.githubusercontent.com/zokrezyl/yetty-poc/refs/heads/main/docs/animation.mp4
+
