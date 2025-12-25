@@ -29,7 +29,7 @@ public:
     // Input handling
     bool onMouseMove(float localX, float localY) override;
     bool onMouseButton(int button, bool pressed) override;
-    bool onMouseScroll(float xoffset, float yoffset) override;
+    bool onMouseScroll(float xoffset, float yoffset, int mods) override;
     bool wantsMouse() const override { return true; }
 
 private:
@@ -62,8 +62,9 @@ private:
     bool mouseDown_ = false;
     bool mouseGrabbed_ = false;  // True while mouse button held
 
-    // Scroll-controlled parameter (exposed to shader)
-    float param_ = 0.5f;
+    // Scroll-controlled parameters (exposed to shader)
+    float param_ = 0.5f;   // wheel scroll
+    float zoom_ = 1.0f;    // ctrl+wheel zoom
 
     // Frame pipeline for visual feedback
     bool frameCompiled_ = false;

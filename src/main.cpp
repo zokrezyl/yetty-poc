@@ -373,16 +373,17 @@ void scrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
 
     bool ctrlPressed = glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ||
                        glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS;
+    int mods = ctrlPressed ? 0x0002 : 0;  // GLFW_MOD_CONTROL = 0x0002
 
 #if !YETTY_WEB
-    // Check if scroll is over a plugin first
-    if (!ctrlPressed && state->pluginManager && state->terminal) {
+    // Check if scroll is over a plugin first (with or without Ctrl)
+    if (state->pluginManager && state->terminal) {
         float cellWidth = state->baseCellWidth * state->zoomLevel;
         float cellHeight = state->baseCellHeight * state->zoomLevel;
         int scrollOffset = state->terminal->getScrollOffset();
 
         bool consumed = state->pluginManager->onMouseScroll(
-            static_cast<float>(xoffset), static_cast<float>(yoffset),
+            static_cast<float>(xoffset), static_cast<float>(yoffset), mods,
             static_cast<float>(state->mouseX), static_cast<float>(state->mouseY),
             &state->terminal->getGrid(), cellWidth, cellHeight, scrollOffset);
 
@@ -401,7 +402,7 @@ void scrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
     }
 #endif
 
-    // Zoom (Ctrl + wheel)
+    // Zoom grid (Ctrl + wheel, not over plugin)
     state->zoomLevel += static_cast<float>(yoffset) * 0.1f;
     state->zoomLevel = glm::clamp(state->zoomLevel, 0.2f, 5.0f);
 

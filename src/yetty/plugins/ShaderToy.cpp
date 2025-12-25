@@ -86,21 +86,22 @@ void ShaderToy::render(WebGPUContext& ctx,
     struct Uniforms {
         float time;
         float param;
-        float _pad1, _pad2;
+        float zoom;
+        float _pad1;
         float resolution[2];
-        float _pad3[2];
+        float _pad2[2];
         float rect[4];     // x, y, w, h in NDC
-        float mouse[4];    // x, y (normalized 0-1), pressed, focused
+        float mouse[4];    // x, y (normalized 0-1), grabbed, buttonDown
     } uniforms;
 
     uniforms.time = time_;
     uniforms.param = param_;
+    uniforms.zoom = zoom_;
     uniforms._pad1 = 0.0f;
-    uniforms._pad2 = 0.0f;
     uniforms.resolution[0] = pixelW;
     uniforms.resolution[1] = pixelH;
-    uniforms._pad3[0] = 0.0f;
-    uniforms._pad3[1] = 0.0f;
+    uniforms._pad2[0] = 0.0f;
+    uniforms._pad2[1] = 0.0f;
     uniforms.rect[0] = ndcX;
     uniforms.rect[1] = ndcY;
     uniforms.rect[2] = ndcW;
@@ -187,13 +188,25 @@ bool ShaderToy::onMouseButton(int button, bool pressed) {
     return false;
 }
 
-bool ShaderToy::onMouseScroll(float xoffset, float yoffset) {
+bool ShaderToy::onMouseScroll(float xoffset, float yoffset, int mods) {
     (void)xoffset;
-    // Adjust param with scroll, clamp to 0-1
-    param_ += yoffset * 0.1f;
-    if (param_ < 0.0f) param_ = 0.0f;
-    if (param_ > 1.0f) param_ = 1.0f;
-    spdlog::debug("ShaderToy::onMouseScroll: yoffset={} param_={}", yoffset, param_);
+
+    // GLFW_MOD_CONTROL = 0x0002
+    bool ctrlPressed = (mods & 0x0002) != 0;
+
+    if (ctrlPressed) {
+        // Ctrl+scroll = zoom
+        zoom_ += yoffset * 0.1f;
+        if (zoom_ < 0.1f) zoom_ = 0.1f;
+        if (zoom_ > 5.0f) zoom_ = 5.0f;
+        spdlog::debug("ShaderToy::onMouseScroll: CTRL+scroll zoom_={}", zoom_);
+    } else {
+        // Regular scroll = param
+        param_ += yoffset * 0.1f;
+        if (param_ < 0.0f) param_ = 0.0f;
+        if (param_ > 1.0f) param_ = 1.0f;
+        spdlog::debug("ShaderToy::onMouseScroll: scroll param_={}", param_);
+    }
     return true;
 }
 
@@ -202,12 +215,12 @@ const char* ShaderToy::getVertexShader() {
 struct Uniforms {
     time: f32,
     param: f32,
+    zoom: f32,
     _pad1: f32,
-    _pad2: f32,
     resolution: vec2<f32>,
-    _pad3: vec2<f32>,
+    _pad2: vec2<f32>,
     rect: vec4<f32>,  // x, y, w, h in NDC
-    mouse: vec4<f32>, // x, y (normalized 0-1), pressed, focused
+    mouse: vec4<f32>, // x, y (normalized 0-1), grabbed, buttonDown
 }
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -249,10 +262,10 @@ std::string ShaderToy::wrapFragmentShader(const std::string& userCode) {
 struct Uniforms {
     time: f32,
     param: f32,
+    zoom: f32,
     _pad1: f32,
-    _pad2: f32,
     resolution: vec2<f32>,
-    _pad3: vec2<f32>,
+    _pad2: vec2<f32>,
     rect: vec4<f32>,
     mouse: vec4<f32>,  // x, y, grabbed, buttonDown
 }
@@ -264,6 +277,7 @@ fn iTime() -> f32 { return u.time; }
 fn iResolution() -> vec2<f32> { return u.resolution; }
 fn iMouse() -> vec4<f32> { return u.mouse; }
 fn iParam() -> f32 { return u.param; }
+fn iZoom() -> f32 { return u.zoom; }
 fn iGrabbed() -> bool { return u.mouse.z > 0.5; }
 fn iMouseDown() -> bool { return u.mouse.w > 0.5; }
 

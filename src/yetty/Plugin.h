@@ -51,7 +51,7 @@ public:
     // Return true if event was consumed
     virtual bool onMouseMove(float localX, float localY) { (void)localX; (void)localY; return false; }
     virtual bool onMouseButton(int button, bool pressed) { (void)button; (void)pressed; return false; }
-    virtual bool onMouseScroll(float xoffset, float yoffset) { (void)xoffset; (void)yoffset; return false; }
+    virtual bool onMouseScroll(float xoffset, float yoffset, int mods) { (void)xoffset; (void)yoffset; (void)mods; return false; }
     virtual bool onKey(int key, int scancode, int action, int mods) {
         (void)key; (void)scancode; (void)action; (void)mods; return false;
     }
@@ -63,7 +63,7 @@ public:
 
     // Focus state
     bool hasFocus() const { return hasFocus_; }
-    void setFocus(bool f) { hasFocus_ = f; }
+    virtual void setFocus(bool f) { hasFocus_ = f; }
 
     // Accessors
     uint32_t getId() const { return id_; }

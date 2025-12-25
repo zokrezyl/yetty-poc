@@ -201,7 +201,7 @@ bool Ymery::onMouseMove(float x, float y) {
 #ifdef YETTY_YMERY_ENABLED
     if (!app_) return false;
     app_->on_mouse_pos(x, y);
-    return app_->wants_mouse();
+    return true;  // Always consume mouse events - ymery is ImGui-based
 #else
     (void)x; (void)y;
     return false;
@@ -212,20 +212,21 @@ bool Ymery::onMouseButton(int button, bool pressed) {
 #ifdef YETTY_YMERY_ENABLED
     if (!app_) return false;
     app_->on_mouse_button(button, pressed);
-    return app_->wants_mouse();
+    return true;  // Always consume mouse events - ymery is ImGui-based
 #else
     (void)button; (void)pressed;
     return false;
 #endif
 }
 
-bool Ymery::onMouseScroll(float xoffset, float yoffset) {
+bool Ymery::onMouseScroll(float xoffset, float yoffset, int mods) {
 #ifdef YETTY_YMERY_ENABLED
     if (!app_) return false;
+    (void)mods;  // ymery doesn't use mods yet
     app_->on_mouse_scroll(xoffset, yoffset);
-    return app_->wants_mouse();
+    return true;  // Always consume scroll events - ymery is ImGui-based
 #else
-    (void)xoffset; (void)yoffset;
+    (void)xoffset; (void)yoffset; (void)mods;
     return false;
 #endif
 }
@@ -234,7 +235,7 @@ bool Ymery::onKey(int key, int scancode, int action, int mods) {
 #ifdef YETTY_YMERY_ENABLED
     if (!app_) return false;
     app_->on_key(key, scancode, action, mods);
-    return app_->wants_keyboard();
+    return app_->wants_keyboard();  // Only consume if ImGui wants keyboard
 #else
     (void)key; (void)scancode; (void)action; (void)mods;
     return false;
@@ -263,10 +264,19 @@ bool Ymery::wantsKeyboard() const {
 
 bool Ymery::wantsMouse() const {
 #ifdef YETTY_YMERY_ENABLED
-    if (!app_) return false;
-    return app_->wants_mouse();
+    // Always want mouse - ymery is ImGui-based and needs mouse input
+    return app_ != nullptr;
 #else
     return false;
+#endif
+}
+
+void Ymery::setFocus(bool f) {
+    Plugin::setFocus(f);
+#ifdef YETTY_YMERY_ENABLED
+    if (app_) {
+        app_->on_focus(f);
+    }
 #endif
 }
 

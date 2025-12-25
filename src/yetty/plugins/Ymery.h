@@ -35,13 +35,16 @@ public:
     // Input forwarding - returns true if event was consumed
     bool onMouseMove(float x, float y) override;
     bool onMouseButton(int button, bool pressed) override;
-    bool onMouseScroll(float xoffset, float yoffset) override;
+    bool onMouseScroll(float xoffset, float yoffset, int mods) override;
     bool onKey(int key, int scancode, int action, int mods) override;
     bool onChar(unsigned int codepoint) override;
 
     // Query if ymery wants input
     bool wantsKeyboard() const override;
     bool wantsMouse() const override;
+
+    // Focus handling
+    void setFocus(bool f) override;
 
 private:
     Result<void> parsePayload(const std::string& payload);

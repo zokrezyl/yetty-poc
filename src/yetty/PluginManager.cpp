@@ -553,7 +553,7 @@ bool PluginManager::onMouseButton(int button, bool pressed, float pixelX, float 
     return false;
 }
 
-bool PluginManager::onMouseScroll(float xoffset, float yoffset, float pixelX, float pixelY,
+bool PluginManager::onMouseScroll(float xoffset, float yoffset, int mods, float pixelX, float pixelY,
                                    const Grid* grid, float cellWidth, float cellHeight, int scrollOffset) {
     (void)scrollOffset;
 
@@ -561,13 +561,13 @@ bool PluginManager::onMouseScroll(float xoffset, float yoffset, float pixelX, fl
     int col = static_cast<int>(pixelX / cellWidth);
     int row = static_cast<int>(pixelY / cellHeight);
 
-    spdlog::debug("onMouseScroll: offset=({},{}) at pixel ({},{}) -> cell ({},{})",
-                  xoffset, yoffset, pixelX, pixelY, col, row);
+    spdlog::debug("onMouseScroll: offset=({},{}) mods={} at pixel ({},{}) -> cell ({},{})",
+                  xoffset, yoffset, mods, pixelX, pixelY, col, row);
 
     PluginPtr plugin = pluginAtCell(col, row, grid);
     if (plugin && plugin->wantsMouse()) {
         spdlog::debug("onMouseScroll: forwarding to plugin {}", plugin->getId());
-        bool consumed = plugin->onMouseScroll(xoffset, yoffset);
+        bool consumed = plugin->onMouseScroll(xoffset, yoffset, mods);
         spdlog::debug("onMouseScroll: plugin consumed={}", consumed);
         return consumed;
     }

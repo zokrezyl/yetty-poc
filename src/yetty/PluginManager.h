@@ -92,7 +92,7 @@ public:
                      float cellWidth, float cellHeight, int scrollOffset);
     bool onMouseButton(int button, bool pressed, float pixelX, float pixelY,
                        const Grid* grid, float cellWidth, float cellHeight, int scrollOffset);
-    bool onMouseScroll(float xoffset, float yoffset, float pixelX, float pixelY,
+    bool onMouseScroll(float xoffset, float yoffset, int mods, float pixelX, float pixelY,
                        const Grid* grid, float cellWidth, float cellHeight, int scrollOffset);
     bool onKey(int key, int scancode, int action, int mods);
     bool onChar(unsigned int codepoint);

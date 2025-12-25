@@ -35,7 +35,6 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Optional: Enable ymery plugin (requires ymery-cpp library)
 option(YETTY_YMERY_ENABLED "Enable ymery ImGui plugin" ON)
-set(YMERY_PATH "/home/misi/work/my/waew-meta/ymery-cpp" CACHE PATH "Path to ymery-cpp source directory")
 
 # Include CPM.cmake
 include(cmake/CPM.cmake)
@@ -228,21 +227,25 @@ else()
     # Optional: ymery plugin support
     #-------------------------------------------------------------------------
     if(YETTY_YMERY_ENABLED)
-        if(NOT YMERY_PATH)
-            message(FATAL_ERROR "YETTY_YMERY_ENABLED is ON but YMERY_PATH is not set")
-        endif()
-
-        # Configure ymery to use WebGPU backend (must be set before add_subdirectory)
+        # Configure ymery to use WebGPU backend (must be set before CPMAddPackage)
         set(YMERY_USE_WEBGPU ON CACHE BOOL "Use WebGPU backend for ymery" FORCE)
 
-        # Add ymery as subdirectory
-        add_subdirectory(${YMERY_PATH} ${CMAKE_BINARY_DIR}/ymery)
+        # Fetch ymery-cpp from GitHub
+        CPMAddPackage(
+            NAME ymery
+            GITHUB_REPOSITORY misirov/ymery-cpp
+            GIT_TAG main
+            OPTIONS
+                "YMERY_USE_WEBGPU ON"
+                "YMERY_BUILD_DEMO OFF"
+                "YMERY_BUILD_TESTS OFF"
+        )
 
         target_compile_definitions(yetty PRIVATE YETTY_YMERY_ENABLED=1)
-        target_include_directories(yetty PRIVATE ${YMERY_PATH}/src)
+        target_include_directories(yetty PRIVATE ${ymery_SOURCE_DIR}/src)
         target_link_libraries(yetty PRIVATE ymery spdlog::spdlog)
 
-        message(STATUS "ymery plugin enabled (path: ${YMERY_PATH})")
+        message(STATUS "ymery plugin enabled (from GitHub)")
     endif()
 
     file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/assets DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
