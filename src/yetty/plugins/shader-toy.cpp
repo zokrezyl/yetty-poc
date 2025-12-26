@@ -23,13 +23,13 @@ Result<PluginPtr> ShaderToyPlugin::create() {
 Result<void> ShaderToyPlugin::init(WebGPUContext* ctx) {
     (void)ctx;
     // No shared resources for ShaderToy - each layer compiles its own shader
-    initialized_ = true;
+    _initialized = true;
     return Ok();
 }
 
 void ShaderToyPlugin::dispose() {
     Plugin::dispose();
-    initialized_ = false;
+    _initialized = false;
 }
 
 Result<PluginLayerPtr> ShaderToyPlugin::createLayer(const std::string& payload) {
@@ -46,7 +46,7 @@ void ShaderToyPlugin::renderAll(WebGPUContext& ctx,
                                  uint32_t screenWidth, uint32_t screenHeight,
                                  float cellWidth, float cellHeight,
                                  int scrollOffset, uint32_t termRows) {
-    for (auto& layerBase : layers_) {
+    for (auto& layerBase : _layers) {
         if (!layerBase->isVisible()) continue;
 
         auto layer = std::static_pointer_cast<ShaderToyLayer>(layerBase);
@@ -91,54 +91,54 @@ Result<void> ShaderToyLayer::init(const std::string& payload) {
         return Err<void>("ShaderToyLayer: empty payload");
     }
 
-    payload_ = payload;
-    compiled_ = false;
-    failed_ = false;
-    time_ = 0.0f;
+    _payload = payload;
+    _compiled = false;
+    _failed = false;
+    _time = 0.0f;
 
     std::cout << "ShaderToyLayer: initialized with " << payload.size() << " bytes of shader code" << std::endl;
     return Ok();
 }
 
 void ShaderToyLayer::dispose() {
-    if (bindGroup_) {
-        wgpuBindGroupRelease(bindGroup_);
-        bindGroup_ = nullptr;
+    if (_bind_group) {
+        wgpuBindGroupRelease(_bind_group);
+        _bind_group = nullptr;
     }
-    if (pipeline_) {
-        wgpuRenderPipelineRelease(pipeline_);
-        pipeline_ = nullptr;
+    if (_pipeline) {
+        wgpuRenderPipelineRelease(_pipeline);
+        _pipeline = nullptr;
     }
-    if (uniformBuffer_) {
-        wgpuBufferRelease(uniformBuffer_);
-        uniformBuffer_ = nullptr;
+    if (_uniform_buffer) {
+        wgpuBufferRelease(_uniform_buffer);
+        _uniform_buffer = nullptr;
     }
-    compiled_ = false;
+    _compiled = false;
 }
 
 void ShaderToyLayer::update(double deltaTime) {
-    time_ += static_cast<float>(deltaTime);
+    _time += static_cast<float>(deltaTime);
 }
 
 void ShaderToyLayer::render(WebGPUContext& ctx,
                              WGPUTextureView targetView, WGPUTextureFormat targetFormat,
                              uint32_t screenWidth, uint32_t screenHeight,
                              float pixelX, float pixelY, float pixelW, float pixelH) {
-    if (failed_) return;
+    if (_failed) return;
 
     // First time: compile shader
-    if (!compiled_) {
-        auto result = compileShader(ctx, targetFormat, payload_);
+    if (!_compiled) {
+        auto result = compileShader(ctx, targetFormat, _payload);
         if (!result) {
             std::cerr << "ShaderToyLayer: " << error_msg(result) << std::endl;
-            failed_ = true;
+            _failed = true;
             return;
         }
-        compiled_ = true;
+        _compiled = true;
     }
 
-    if (!pipeline_ || !uniformBuffer_ || !bindGroup_) {
-        failed_ = true;
+    if (!_pipeline || !_uniform_buffer || !_bind_group) {
+        _failed = true;
         return;
     }
 
@@ -159,9 +159,9 @@ void ShaderToyLayer::render(WebGPUContext& ctx,
         float mouse[4];
     } uniforms;
 
-    uniforms.time = time_;
-    uniforms.param = param_;
-    uniforms.zoom = zoom_;
+    uniforms.time = _time;
+    uniforms.param = _param;
+    uniforms.zoom = _zoom;
     uniforms._pad1 = 0.0f;
     uniforms.resolution[0] = pixelW;
     uniforms.resolution[1] = pixelH;
@@ -171,12 +171,12 @@ void ShaderToyLayer::render(WebGPUContext& ctx,
     uniforms.rect[1] = ndcY;
     uniforms.rect[2] = ndcW;
     uniforms.rect[3] = ndcH;
-    uniforms.mouse[0] = mouseX_;
-    uniforms.mouse[1] = mouseY_;
-    uniforms.mouse[2] = mouseGrabbed_ ? 1.0f : 0.0f;
-    uniforms.mouse[3] = mouseDown_ ? 1.0f : 0.0f;
+    uniforms.mouse[0] = _mouse_x;
+    uniforms.mouse[1] = _mouse_y;
+    uniforms.mouse[2] = _mouse_grabbed ? 1.0f : 0.0f;
+    uniforms.mouse[3] = _mouse_down ? 1.0f : 0.0f;
 
-    wgpuQueueWriteBuffer(ctx.getQueue(), uniformBuffer_, 0, &uniforms, sizeof(uniforms));
+    wgpuQueueWriteBuffer(ctx.getQueue(), _uniform_buffer, 0, &uniforms, sizeof(uniforms));
 
     // Create command encoder
     WGPUCommandEncoderDescriptor encoderDesc = {};
@@ -203,8 +203,8 @@ void ShaderToyLayer::render(WebGPUContext& ctx,
         return;
     }
 
-    wgpuRenderPassEncoderSetPipeline(pass, pipeline_);
-    wgpuRenderPassEncoderSetBindGroup(pass, 0, bindGroup_, 0, nullptr);
+    wgpuRenderPassEncoderSetPipeline(pass, _pipeline);
+    wgpuRenderPassEncoderSetBindGroup(pass, 0, _bind_group, 0, nullptr);
     wgpuRenderPassEncoderDraw(pass, 6, 1, 0, 0);
     wgpuRenderPassEncoderEnd(pass);
     wgpuRenderPassEncoderRelease(pass);
@@ -219,23 +219,23 @@ void ShaderToyLayer::render(WebGPUContext& ctx,
 }
 
 bool ShaderToyLayer::onMouseMove(float localX, float localY) {
-    mouseX_ = localX / static_cast<float>(pixelWidth_);
-    mouseY_ = localY / static_cast<float>(pixelHeight_);
+    _mouse_x = localX / static_cast<float>(_pixel_width);
+    _mouse_y = localY / static_cast<float>(_pixel_height);
     spdlog::debug("ShaderToyLayer::onMouseMove: local=({},{}) normalized=({},{})",
-                  localX, localY, mouseX_, mouseY_);
+                  localX, localY, _mouse_x, _mouse_y);
     return true;
 }
 
 bool ShaderToyLayer::onMouseButton(int button, bool pressed) {
     if (button == 0) {
-        mouseDown_ = pressed;
-        mouseGrabbed_ = pressed;
+        _mouse_down = pressed;
+        _mouse_grabbed = pressed;
         spdlog::debug("ShaderToyLayer::onMouseButton: button={} pressed={} grabbed={}",
-                      button, pressed, mouseGrabbed_);
+                      button, pressed, _mouse_grabbed);
         return true;
     }
     if (button == -1) {
-        mouseGrabbed_ = false;
+        _mouse_grabbed = false;
         spdlog::debug("ShaderToyLayer::onMouseButton: focus lost");
         return false;
     }
@@ -247,13 +247,13 @@ bool ShaderToyLayer::onMouseScroll(float xoffset, float yoffset, int mods) {
     bool ctrlPressed = (mods & 0x0002) != 0;
 
     if (ctrlPressed) {
-        zoom_ += yoffset * 0.1f;
-        zoom_ = std::max(0.1f, std::min(5.0f, zoom_));
-        spdlog::debug("ShaderToyLayer::onMouseScroll: CTRL+scroll zoom_={}", zoom_);
+        _zoom += yoffset * 0.1f;
+        _zoom = std::max(0.1f, std::min(5.0f, _zoom));
+        spdlog::debug("ShaderToyLayer::onMouseScroll: CTRL+scroll _zoom={}", _zoom);
     } else {
-        param_ += yoffset * 0.1f;
-        param_ = std::max(0.0f, std::min(1.0f, param_));
-        spdlog::debug("ShaderToyLayer::onMouseScroll: scroll param_={}", param_);
+        _param += yoffset * 0.1f;
+        _param = std::max(0.0f, std::min(1.0f, _param));
+        spdlog::debug("ShaderToyLayer::onMouseScroll: scroll _param={}", _param);
     }
     return true;
 }
@@ -358,8 +358,8 @@ Result<void> ShaderToyLayer::compileShader(WebGPUContext& ctx,
     WGPUBufferDescriptor bufDesc = {};
     bufDesc.size = 64;
     bufDesc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
-    uniformBuffer_ = wgpuDeviceCreateBuffer(ctx.getDevice(), &bufDesc);
-    if (!uniformBuffer_) {
+    _uniform_buffer = wgpuDeviceCreateBuffer(ctx.getDevice(), &bufDesc);
+    if (!_uniform_buffer) {
         return Err<void>("Failed to create uniform buffer");
     }
 
@@ -422,15 +422,15 @@ Result<void> ShaderToyLayer::compileShader(WebGPUContext& ctx,
     // Bind group
     WGPUBindGroupEntry bgEntry = {};
     bgEntry.binding = 0;
-    bgEntry.buffer = uniformBuffer_;
+    bgEntry.buffer = _uniform_buffer;
     bgEntry.size = 64;
 
     WGPUBindGroupDescriptor bgDesc = {};
     bgDesc.layout = bgl;
     bgDesc.entryCount = 1;
     bgDesc.entries = &bgEntry;
-    bindGroup_ = wgpuDeviceCreateBindGroup(ctx.getDevice(), &bgDesc);
-    if (!bindGroup_) {
+    _bind_group = wgpuDeviceCreateBindGroup(ctx.getDevice(), &bgDesc);
+    if (!_bind_group) {
         wgpuShaderModuleRelease(vertModule);
         wgpuShaderModuleRelease(fragModule);
         wgpuBindGroupLayoutRelease(bgl);
@@ -472,14 +472,14 @@ Result<void> ShaderToyLayer::compileShader(WebGPUContext& ctx,
     pipelineDesc.multisample.count = 1;
     pipelineDesc.multisample.mask = ~0u;
 
-    pipeline_ = wgpuDeviceCreateRenderPipeline(ctx.getDevice(), &pipelineDesc);
+    _pipeline = wgpuDeviceCreateRenderPipeline(ctx.getDevice(), &pipelineDesc);
 
     wgpuShaderModuleRelease(vertModule);
     wgpuShaderModuleRelease(fragModule);
     wgpuBindGroupLayoutRelease(bgl);
     wgpuPipelineLayoutRelease(pipelineLayout);
 
-    if (!pipeline_) {
+    if (!_pipeline) {
         return Err<void>("Failed to create render pipeline");
     }
 

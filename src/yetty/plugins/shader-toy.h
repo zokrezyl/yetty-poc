@@ -69,23 +69,23 @@ private:
     static std::string wrapFragmentShader(const std::string& userCode);
 
     // WebGPU resources
-    WGPURenderPipeline pipeline_ = nullptr;
-    WGPUBindGroup bindGroup_ = nullptr;
-    WGPUBuffer uniformBuffer_ = nullptr;
+    WGPURenderPipeline _pipeline = nullptr;
+    WGPUBindGroup _bind_group = nullptr;
+    WGPUBuffer _uniform_buffer = nullptr;
 
-    float time_ = 0.0f;
-    bool compiled_ = false;
-    bool failed_ = false;
+    float _time = 0.0f;
+    bool _compiled = false;
+    bool _failed = false;
 
     // Mouse state (in local coordinates, normalized 0-1)
-    float mouseX_ = 0.0f;
-    float mouseY_ = 0.0f;
-    bool mouseDown_ = false;
-    bool mouseGrabbed_ = false;
+    float _mouse_x = 0.0f;
+    float _mouse_y = 0.0f;
+    bool _mouse_down = false;
+    bool _mouse_grabbed = false;
 
     // Scroll-controlled parameters
-    float param_ = 0.5f;
-    float zoom_ = 1.0f;
+    float _param = 0.5f;
+    float _zoom = 1.0f;
 };
 
 // Backward compatibility alias

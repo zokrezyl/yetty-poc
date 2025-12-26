@@ -1,5 +1,5 @@
 #include "terminal.h"
-#include "../PluginManager.h"
+#include "../plugin-manager.h"
 
 #include <iostream>
 #include <cstring>

@@ -51,20 +51,20 @@ private:
     Result<void> loadImage(const std::string& data);
     Result<void> createPipeline(WebGPUContext& ctx, WGPUTextureFormat targetFormat);
 
-    unsigned char* imageData_ = nullptr;
-    int imageWidth_ = 0;
-    int imageHeight_ = 0;
-    int imageChannels_ = 0;
+    unsigned char* _image_data = nullptr;
+    int _image_width = 0;
+    int _image_height = 0;
+    int _image_channels = 0;
 
-    WGPURenderPipeline pipeline_ = nullptr;
-    WGPUBindGroup bindGroup_ = nullptr;
-    WGPUBuffer uniformBuffer_ = nullptr;
-    WGPUTexture texture_ = nullptr;
-    WGPUTextureView textureView_ = nullptr;
-    WGPUSampler sampler_ = nullptr;
+    WGPURenderPipeline _pipeline = nullptr;
+    WGPUBindGroup _bind_group = nullptr;
+    WGPUBuffer _uniform_buffer = nullptr;
+    WGPUTexture _texture = nullptr;
+    WGPUTextureView _texture_view = nullptr;
+    WGPUSampler _sampler = nullptr;
 
-    bool gpuInitialized_ = false;
-    bool failed_ = false;
+    bool _gpu_initialized = false;
+    bool _failed = false;
 };
 
 using Image = ImagePlugin;

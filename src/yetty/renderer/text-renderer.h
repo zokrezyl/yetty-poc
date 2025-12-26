@@ -2,9 +2,9 @@
 
 #include "webgpu-context.h"
 #include "../result.hpp"
-#include "../terminal/Grid.h"
-#include "../terminal/Font.h"
-#include "../Config.h"
+#include "../terminal/grid.h"
+#include "../terminal/font.h"
+#include "../config.h"
 #include <glm/glm.hpp>
 #include <vector>
 

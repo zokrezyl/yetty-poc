@@ -57,60 +57,60 @@ public:
     virtual bool wantsMouse() const { return false; }
 
     // Focus state
-    bool hasFocus() const { return hasFocus_; }
-    virtual void setFocus(bool f) { hasFocus_ = f; }
+    bool hasFocus() const { return _has_focus; }
+    virtual void setFocus(bool f) { _has_focus = f; }
 
     // Handle resize (called when cell dimensions change)
     virtual void onResize(uint32_t newPixelWidth, uint32_t newPixelHeight) {
-        pixelWidth_ = newPixelWidth;
-        pixelHeight_ = newPixelHeight;
+        _pixel_width = newPixelWidth;
+        _pixel_height = newPixelHeight;
     }
 
     // Accessors
-    uint32_t getId() const { return id_; }
-    void setId(uint32_t id) { id_ = id; }
+    uint32_t getId() const { return _id; }
+    void setId(uint32_t id) { _id = id; }
 
-    Plugin* getParent() const { return parent_; }
-    void setParent(Plugin* p) { parent_ = p; }
+    Plugin* getParent() const { return _parent; }
+    void setParent(Plugin* p) { _parent = p; }
 
-    PositionMode getPositionMode() const { return positionMode_; }
-    void setPositionMode(PositionMode mode) { positionMode_ = mode; }
+    PositionMode getPositionMode() const { return _position_mode; }
+    void setPositionMode(PositionMode mode) { _position_mode = mode; }
 
-    int32_t getX() const { return x_; }
-    int32_t getY() const { return y_; }
-    void setPosition(int32_t x, int32_t y) { x_ = x; y_ = y; }
+    int32_t getX() const { return _x; }
+    int32_t getY() const { return _y; }
+    void setPosition(int32_t x, int32_t y) { _x = x; _y = y; }
 
-    uint32_t getWidthCells() const { return widthCells_; }
-    uint32_t getHeightCells() const { return heightCells_; }
-    void setCellSize(uint32_t w, uint32_t h) { widthCells_ = w; heightCells_ = h; }
+    uint32_t getWidthCells() const { return _width_cells; }
+    uint32_t getHeightCells() const { return _height_cells; }
+    void setCellSize(uint32_t w, uint32_t h) { _width_cells = w; _height_cells = h; }
 
-    uint32_t getPixelWidth() const { return pixelWidth_; }
-    uint32_t getPixelHeight() const { return pixelHeight_; }
-    void setPixelSize(uint32_t w, uint32_t h) { pixelWidth_ = w; pixelHeight_ = h; }
+    uint32_t getPixelWidth() const { return _pixel_width; }
+    uint32_t getPixelHeight() const { return _pixel_height; }
+    void setPixelSize(uint32_t w, uint32_t h) { _pixel_width = w; _pixel_height = h; }
 
-    bool isVisible() const { return visible_; }
-    void setVisible(bool v) { visible_ = v; }
+    bool isVisible() const { return _visible; }
+    void setVisible(bool v) { _visible = v; }
 
-    const std::string& getPayload() const { return payload_; }
-    void setPayload(const std::string& p) { payload_ = p; }
+    const std::string& getPayload() const { return _payload; }
+    void setPayload(const std::string& p) { _payload = p; }
 
-    bool needsRender() const { return needsRender_; }
-    void setNeedsRender(bool v) { needsRender_ = v; }
+    bool needsRender() const { return _needs_render; }
+    void setNeedsRender(bool v) { _needs_render = v; }
 
 protected:
-    uint32_t id_ = 0;
-    Plugin* parent_ = nullptr;
-    PositionMode positionMode_ = PositionMode::Absolute;
-    int32_t x_ = 0;
-    int32_t y_ = 0;
-    uint32_t widthCells_ = 1;
-    uint32_t heightCells_ = 1;
-    uint32_t pixelWidth_ = 0;
-    uint32_t pixelHeight_ = 0;
-    bool visible_ = true;
-    bool needsRender_ = true;
-    bool hasFocus_ = false;
-    std::string payload_;
+    uint32_t _id = 0;
+    Plugin* _parent = nullptr;
+    PositionMode _position_mode = PositionMode::Absolute;
+    int32_t _x = 0;
+    int32_t _y = 0;
+    uint32_t _width_cells = 1;
+    uint32_t _height_cells = 1;
+    uint32_t _pixel_width = 0;
+    uint32_t _pixel_height = 0;
+    bool _visible = true;
+    bool _needs_render = true;
+    bool _has_focus = false;
+    std::string _payload;
 };
 
 //-----------------------------------------------------------------------------
@@ -132,10 +132,10 @@ public:
 
     // Dispose shared resources
     virtual void dispose() {
-        for (auto& layer : layers_) {
+        for (auto& layer : _layers) {
             if (layer) layer->dispose();
         }
-        layers_.clear();
+        _layers.clear();
     }
 
     // Create a new layer for this plugin
@@ -144,15 +144,15 @@ public:
     // Add a layer to this plugin (called by PluginManager after createLayer)
     void addLayer(PluginLayerPtr layer) {
         layer->setParent(this);
-        layers_.push_back(layer);
+        _layers.push_back(layer);
     }
 
     // Remove a layer by ID
     bool removeLayer(uint32_t id) {
-        for (auto it = layers_.begin(); it != layers_.end(); ++it) {
+        for (auto it = _layers.begin(); it != _layers.end(); ++it) {
             if ((*it)->getId() == id) {
                 (*it)->dispose();
-                layers_.erase(it);
+                _layers.erase(it);
                 return true;
             }
         }
@@ -161,18 +161,18 @@ public:
 
     // Get a layer by ID
     PluginLayerPtr getLayer(uint32_t id) {
-        for (auto& layer : layers_) {
+        for (auto& layer : _layers) {
             if (layer->getId() == id) return layer;
         }
         return nullptr;
     }
 
     // Get all layers
-    const std::vector<PluginLayerPtr>& getLayers() const { return layers_; }
+    const std::vector<PluginLayerPtr>& getLayers() const { return _layers; }
 
     // Update all layers
     virtual void update(double deltaTime) {
-        for (auto& layer : layers_) {
+        for (auto& layer : _layers) {
             if (layer->isVisible()) {
                 layer->update(deltaTime);
             }
@@ -189,7 +189,7 @@ public:
 
     // Handle terminal resize - notify all layers
     virtual void onTerminalResize(uint32_t cellWidth, uint32_t cellHeight) {
-        for (auto& layer : layers_) {
+        for (auto& layer : _layers) {
             uint32_t newW = layer->getWidthCells() * cellWidth;
             uint32_t newH = layer->getHeightCells() * cellHeight;
             layer->onResize(newW, newH);
@@ -198,12 +198,12 @@ public:
     }
 
     // Check if plugin is initialized
-    bool isInitialized() const { return initialized_; }
-    void setInitialized(bool v) { initialized_ = v; }
+    bool isInitialized() const { return _initialized; }
+    void setInitialized(bool v) { _initialized = v; }
 
 protected:
-    std::vector<PluginLayerPtr> layers_;
-    bool initialized_ = false;
+    std::vector<PluginLayerPtr> _layers;
+    bool _initialized = false;
 };
 
 // C function types for dynamic loading

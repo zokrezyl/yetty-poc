@@ -106,11 +106,11 @@ Result<void> YmeryPlugin::init(WebGPUContext* ctx) {
         return Err<void>("YmeryPlugin::init: WebGPUContext required");
     }
 
-    device_ = ctx->getDevice();
-    queue_ = ctx->getQueue();
-    format_ = ctx->getSurfaceFormat();
+    _device = ctx->getDevice();
+    _queue = ctx->getQueue();
+    _format = ctx->getSurfaceFormat();
 
-    initialized_ = true;
+    _initialized = true;
     std::cout << "YmeryPlugin initialized" << std::endl;
     return Ok();
 #endif
@@ -118,26 +118,26 @@ Result<void> YmeryPlugin::init(WebGPUContext* ctx) {
 
 void YmeryPlugin::dispose() {
 #ifdef YETTY_YMERY_ENABLED
-    if (app_) {
-        app_->dispose();
-        app_.reset();
+    if (_app) {
+        _app->dispose();
+        _app.reset();
     }
 
-    if (imguiCtx_) {
-        ImGui::SetCurrentContext(imguiCtx_);
+    if (_imgui_ctx) {
+        ImGui::SetCurrentContext(_imgui_ctx);
         ImGui_ImplWGPU_Shutdown();
 
-        if (implotCtx_) {
-            ImPlot::DestroyContext(implotCtx_);
-            implotCtx_ = nullptr;
+        if (_implot_ctx) {
+            ImPlot::DestroyContext(_implot_ctx);
+            _implot_ctx = nullptr;
         }
 
-        ImGui::DestroyContext(imguiCtx_);
-        imguiCtx_ = nullptr;
+        ImGui::DestroyContext(_imgui_ctx);
+        _imgui_ctx = nullptr;
     }
 #endif
     Plugin::dispose();
-    initialized_ = false;
+    _initialized = false;
 }
 
 Result<PluginLayerPtr> YmeryPlugin::createLayer(const std::string& payload) {
@@ -156,23 +156,23 @@ Result<PluginLayerPtr> YmeryPlugin::createLayer(const std::string& payload) {
 
 #ifdef YETTY_YMERY_ENABLED
 Result<void> YmeryPlugin::initImGui(uint32_t screenWidth, uint32_t screenHeight) {
-    if (imguiCtx_) return Ok();  // Already initialized
+    if (_imgui_ctx) return Ok();  // Already initialized
 
     // Create ImGui context
-    imguiCtx_ = ImGui::CreateContext();
-    if (!imguiCtx_) {
+    _imgui_ctx = ImGui::CreateContext();
+    if (!_imgui_ctx) {
         return Err<void>("Failed to create ImGui context");
     }
-    ImGui::SetCurrentContext(imguiCtx_);
+    ImGui::SetCurrentContext(_imgui_ctx);
 
     // Create ImPlot context
-    implotCtx_ = ImPlot::CreateContext();
-    if (!implotCtx_) {
-        ImGui::DestroyContext(imguiCtx_);
-        imguiCtx_ = nullptr;
+    _implot_ctx = ImPlot::CreateContext();
+    if (!_implot_ctx) {
+        ImGui::DestroyContext(_imgui_ctx);
+        _imgui_ctx = nullptr;
         return Err<void>("Failed to create ImPlot context");
     }
-    ImPlot::SetCurrentContext(implotCtx_);
+    ImPlot::SetCurrentContext(_implot_ctx);
 
     // Configure ImGui
     ImGuiIO& io = ImGui::GetIO();
@@ -185,16 +185,16 @@ Result<void> YmeryPlugin::initImGui(uint32_t screenWidth, uint32_t screenHeight)
 
     // Initialize WebGPU backend
     ImGui_ImplWGPU_InitInfo wgpu_info = {};
-    wgpu_info.Device = device_;
+    wgpu_info.Device = _device;
     wgpu_info.NumFramesInFlight = 3;
-    wgpu_info.RenderTargetFormat = format_;
+    wgpu_info.RenderTargetFormat = _format;
     wgpu_info.DepthStencilFormat = WGPUTextureFormat_Undefined;
 
     if (!ImGui_ImplWGPU_Init(&wgpu_info)) {
-        ImPlot::DestroyContext(implotCtx_);
-        ImGui::DestroyContext(imguiCtx_);
-        implotCtx_ = nullptr;
-        imguiCtx_ = nullptr;
+        ImPlot::DestroyContext(_implot_ctx);
+        ImGui::DestroyContext(_imgui_ctx);
+        _implot_ctx = nullptr;
+        _imgui_ctx = nullptr;
         return Err<void>("Failed to init ImGui WebGPU backend");
     }
 
@@ -215,10 +215,10 @@ void YmeryPlugin::renderAll(WebGPUContext& ctx,
     (void)scrollOffset; (void)termRows;
     return;
 #else
-    if (layers_.empty()) return;
+    if (_layers.empty()) return;
 
     // Initialize ImGui on first render
-    if (!imguiCtx_) {
+    if (!_imgui_ctx) {
         if (auto res = initImGui(screenWidth, screenHeight); !res) {
             std::cerr << "YmeryPlugin: " << error_msg(res) << std::endl;
             return;
@@ -226,8 +226,8 @@ void YmeryPlugin::renderAll(WebGPUContext& ctx,
     }
 
     // Lazy create ymery app on first render
-    if (!app_) {
-        auto firstLayer = std::static_pointer_cast<YmeryLayer>(layers_[0]);
+    if (!_app) {
+        auto firstLayer = std::static_pointer_cast<YmeryLayer>(_layers[0]);
 
         ymery::EmbeddedConfig config;
         config.layout_paths.push_back(firstLayer->getLayoutPath());
@@ -242,25 +242,25 @@ void YmeryPlugin::renderAll(WebGPUContext& ctx,
                       << ymery::error_msg(res) << std::endl;
             return;
         }
-        app_ = *res;
+        _app = *res;
         std::cout << "YmeryPlugin: EmbeddedApp created" << std::endl;
     }
 
-    if (!app_) return;
+    if (!_app) return;
 
     // Store cell dimensions for input coordinate calculation
-    cellWidth_ = cellWidth;
-    cellHeight_ = cellHeight;
+    _cell_width = cellWidth;
+    _cell_height = cellHeight;
 
     // Set ImGui context
-    ImGui::SetCurrentContext(imguiCtx_);
-    ImPlot::SetCurrentContext(implotCtx_);
+    ImGui::SetCurrentContext(_imgui_ctx);
+    ImPlot::SetCurrentContext(_implot_ctx);
 
     // Calculate delta time
     double currentTime = glfwGetTime();
-    float deltaTime = static_cast<float>(currentTime - lastTime_);
+    float deltaTime = static_cast<float>(currentTime - _last_time);
     if (deltaTime <= 0.0f) deltaTime = 1.0f / 60.0f;
-    lastTime_ = currentTime;
+    _last_time = currentTime;
 
     // Update display size
     ImGuiIO& io = ImGui::GetIO();
@@ -272,7 +272,7 @@ void YmeryPlugin::renderAll(WebGPUContext& ctx,
     ImGui::NewFrame();
 
     // Render each layer at its position
-    for (auto& layerBase : layers_) {
+    for (auto& layerBase : _layers) {
         if (!layerBase->isVisible()) continue;
 
         auto layer = std::static_pointer_cast<YmeryLayer>(layerBase);
@@ -301,7 +301,7 @@ void YmeryPlugin::renderAll(WebGPUContext& ctx,
     }
 
     // Render ymery widgets
-    app_->render_widgets();
+    _app->render_widgets();
 
     // End ImGui frame
     ImGui::Render();
@@ -363,15 +363,15 @@ Result<void> YmeryLayer::parsePayload(const std::string& payload) {
         while (!value.empty() && (value.back() == ' ' || value.back() == '\t')) value.pop_back();
 
         if (key == "layout_path" || key == "layout") {
-            layoutPath_ = value;
+            _layout_path = value;
         } else if (key == "plugin_path" || key == "plugins") {
-            pluginPath_ = value;
+            _plugin_path = value;
         } else if (key == "main" || key == "module") {
-            mainModule_ = value;
+            _main_module = value;
         }
     }
 
-    if (layoutPath_.empty()) {
+    if (_layout_path.empty()) {
         return Err<void>("YmeryLayer: layout_path is required");
     }
 
@@ -379,7 +379,7 @@ Result<void> YmeryLayer::parsePayload(const std::string& payload) {
 }
 
 Result<void> YmeryLayer::init(const std::string& payload) {
-    payload_ = payload;
+    _payload = payload;
     return parsePayload(payload);
 }
 
@@ -388,13 +388,13 @@ void YmeryLayer::dispose() {
 
 bool YmeryLayer::onMouseMove(float x, float y) {
 #ifdef YETTY_YMERY_ENABLED
-    auto plugin = static_cast<YmeryPlugin*>(parent_);
+    auto plugin = static_cast<YmeryPlugin*>(_parent);
     if (plugin && plugin->imguiContext()) {
         ImGui::SetCurrentContext(plugin->imguiContext());
         ImGuiIO& io = ImGui::GetIO();
         // Add layer offset to get absolute position
-        float absX = x + getX() * plugin->cellWidth_;
-        float absY = y + getY() * plugin->cellHeight_;
+        float absX = x + getX() * plugin->_cell_width;
+        float absY = y + getY() * plugin->_cell_height;
         io.AddMousePosEvent(absX, absY);
         return true;
     }
@@ -406,7 +406,7 @@ bool YmeryLayer::onMouseMove(float x, float y) {
 
 bool YmeryLayer::onMouseButton(int button, bool pressed) {
 #ifdef YETTY_YMERY_ENABLED
-    auto plugin = static_cast<YmeryPlugin*>(parent_);
+    auto plugin = static_cast<YmeryPlugin*>(_parent);
     if (plugin && plugin->imguiContext()) {
         ImGui::SetCurrentContext(plugin->imguiContext());
         ImGuiIO& io = ImGui::GetIO();
@@ -424,7 +424,7 @@ bool YmeryLayer::onMouseButton(int button, bool pressed) {
 bool YmeryLayer::onMouseScroll(float xoffset, float yoffset, int mods) {
 #ifdef YETTY_YMERY_ENABLED
     (void)mods;
-    auto plugin = static_cast<YmeryPlugin*>(parent_);
+    auto plugin = static_cast<YmeryPlugin*>(_parent);
     if (plugin && plugin->imguiContext()) {
         ImGui::SetCurrentContext(plugin->imguiContext());
         ImGuiIO& io = ImGui::GetIO();
@@ -440,7 +440,7 @@ bool YmeryLayer::onMouseScroll(float xoffset, float yoffset, int mods) {
 bool YmeryLayer::onKey(int key, int scancode, int action, int mods) {
 #ifdef YETTY_YMERY_ENABLED
     (void)scancode;
-    auto plugin = static_cast<YmeryPlugin*>(parent_);
+    auto plugin = static_cast<YmeryPlugin*>(_parent);
     if (plugin && plugin->imguiContext()) {
         ImGui::SetCurrentContext(plugin->imguiContext());
         ImGuiIO& io = ImGui::GetIO();
@@ -464,7 +464,7 @@ bool YmeryLayer::onKey(int key, int scancode, int action, int mods) {
 
 bool YmeryLayer::onChar(unsigned int codepoint) {
 #ifdef YETTY_YMERY_ENABLED
-    auto plugin = static_cast<YmeryPlugin*>(parent_);
+    auto plugin = static_cast<YmeryPlugin*>(_parent);
     if (plugin && plugin->imguiContext()) {
         ImGui::SetCurrentContext(plugin->imguiContext());
         ImGuiIO& io = ImGui::GetIO();
@@ -479,7 +479,7 @@ bool YmeryLayer::onChar(unsigned int codepoint) {
 
 bool YmeryLayer::wantsKeyboard() const {
 #ifdef YETTY_YMERY_ENABLED
-    auto plugin = static_cast<YmeryPlugin*>(parent_);
+    auto plugin = static_cast<YmeryPlugin*>(_parent);
     if (plugin && plugin->imguiContext()) {
         ImGui::SetCurrentContext(plugin->imguiContext());
         return ImGui::GetIO().WantCaptureKeyboard;
@@ -490,7 +490,7 @@ bool YmeryLayer::wantsKeyboard() const {
 
 bool YmeryLayer::wantsMouse() const {
 #ifdef YETTY_YMERY_ENABLED
-    auto plugin = static_cast<YmeryPlugin*>(parent_);
+    auto plugin = static_cast<YmeryPlugin*>(_parent);
     return plugin && plugin->imguiContext();
 #else
     return false;
@@ -500,7 +500,7 @@ bool YmeryLayer::wantsMouse() const {
 void YmeryLayer::setFocus(bool f) {
     PluginLayer::setFocus(f);
 #ifdef YETTY_YMERY_ENABLED
-    auto plugin = static_cast<YmeryPlugin*>(parent_);
+    auto plugin = static_cast<YmeryPlugin*>(_parent);
     if (plugin && plugin->imguiContext()) {
         ImGui::SetCurrentContext(plugin->imguiContext());
         ImGuiIO& io = ImGui::GetIO();

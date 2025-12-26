@@ -40,26 +40,26 @@ public:
                    int scrollOffset, uint32_t termRows) override;
 
 #ifdef YETTY_YMERY_ENABLED
-    ImGuiContext* imguiContext() const { return imguiCtx_; }
-    std::shared_ptr<ymery::EmbeddedApp> app() const { return app_; }
+    ImGuiContext* imguiContext() const { return _imgui_ctx; }
+    std::shared_ptr<ymery::EmbeddedApp> app() const { return _app; }
 
     // For input coordinate calculation
-    float cellWidth_ = 0;
-    float cellHeight_ = 0;
+    float _cell_width = 0;
+    float _cell_height = 0;
 #endif
 
 private:
 #ifdef YETTY_YMERY_ENABLED
     Result<void> initImGui(uint32_t screenWidth, uint32_t screenHeight);
 
-    std::shared_ptr<ymery::EmbeddedApp> app_;
-    ImGuiContext* imguiCtx_ = nullptr;
-    ImPlotContext* implotCtx_ = nullptr;
-    WGPUDevice device_ = nullptr;
-    WGPUQueue queue_ = nullptr;
-    WGPUTextureFormat format_ = WGPUTextureFormat_Undefined;
+    std::shared_ptr<ymery::EmbeddedApp> _app;
+    ImGuiContext* _imgui_ctx = nullptr;
+    ImPlotContext* _implot_ctx = nullptr;
+    WGPUDevice _device = nullptr;
+    WGPUQueue _queue = nullptr;
+    WGPUTextureFormat _format = WGPUTextureFormat_Undefined;
 #endif
-    double lastTime_ = 0.0;
+    double _last_time = 0.0;
 };
 
 //-----------------------------------------------------------------------------
@@ -84,16 +84,16 @@ public:
 
     void setFocus(bool f) override;
 
-    const std::string& getLayoutPath() const { return layoutPath_; }
-    const std::string& getPluginPath() const { return pluginPath_; }
-    const std::string& getMainModule() const { return mainModule_; }
+    const std::string& getLayoutPath() const { return _layout_path; }
+    const std::string& getPluginPath() const { return _plugin_path; }
+    const std::string& getMainModule() const { return _main_module; }
 
 private:
     Result<void> parsePayload(const std::string& payload);
 
-    std::string layoutPath_;
-    std::string pluginPath_;
-    std::string mainModule_ = "app";
+    std::string _layout_path;
+    std::string _plugin_path;
+    std::string _main_module = "app";
 };
 
 using Ymery = YmeryPlugin;

@@ -1,5 +1,5 @@
 #include "text-renderer.h"
-#include "../terminal/Terminal.h"  // For DamageRect
+#include "../terminal/terminal.h"  // For DamageRect
 #include <glm/gtc/matrix_transform.hpp>
 #include <fstream>
 #include <sstream>

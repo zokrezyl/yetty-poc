@@ -1,6 +1,6 @@
 #include "plugin-manager.h"
-#include "terminal/Grid.h"
-#include "renderer/WebGPUContext.h"
+#include "terminal/grid.h"
+#include "renderer/webgpu-context.h"
 #include <spdlog/spdlog.h>
 #include <iostream>
 #include <filesystem>

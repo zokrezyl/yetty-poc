@@ -2,7 +2,7 @@
 
 #include "grid.h"
 #include "font.h"
-#include "../Config.h"
+#include "../config.h"
 #include "../result.hpp"
 
 extern "C" {
