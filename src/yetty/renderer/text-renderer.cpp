@@ -463,8 +463,8 @@ void TextRenderer::updateCellTextures(WGPUQueue queue, const Grid& grid) {
 
 void TextRenderer::updateCellTextureRegion(WGPUQueue queue, const Grid& grid, const DamageRect& rect) {
     const uint32_t cols = grid.getCols();
-    const uint32_t regionWidth = rect.endCol - rect.startCol;
-    const uint32_t regionHeight = rect.endRow - rect.startRow;
+    const uint32_t regionWidth = rect._endCol - rect._startCol;
+    const uint32_t regionHeight = rect._endRow - rect._startRow;
 
     if (regionWidth == 0 || regionHeight == 0) return;
 
@@ -476,7 +476,7 @@ void TextRenderer::updateCellTextureRegion(WGPUQueue queue, const Grid& grid, co
     const uint16_t* srcGlyphs = grid.getGlyphData();
     for (uint32_t row = 0; row < regionHeight; row++) {
         for (uint32_t col = 0; col < regionWidth; col++) {
-            uint32_t srcIdx = (rect.startRow + row) * cols + (rect.startCol + col);
+            uint32_t srcIdx = (rect._startRow + row) * cols + (rect._startCol + col);
             glyphRegion[row * regionWidth + col] = srcGlyphs[srcIdx];
         }
     }
@@ -484,7 +484,7 @@ void TextRenderer::updateCellTextureRegion(WGPUQueue queue, const Grid& grid, co
     WGPUImageCopyTexture glyphDest = {};
     glyphDest.texture = cellGlyphTexture_;
     glyphDest.mipLevel = 0;
-    glyphDest.origin = {rect.startCol, rect.startRow, 0};
+    glyphDest.origin = {rect._startCol, rect._startRow, 0};
     glyphDest.aspect = WGPUTextureAspect_All;
 
     WGPUTextureDataLayout glyphLayout = {};
@@ -501,7 +501,7 @@ void TextRenderer::updateCellTextureRegion(WGPUQueue queue, const Grid& grid, co
     const uint8_t* srcFg = grid.getFgColorData();
     for (uint32_t row = 0; row < regionHeight; row++) {
         for (uint32_t col = 0; col < regionWidth; col++) {
-            uint32_t srcIdx = ((rect.startRow + row) * cols + (rect.startCol + col)) * 4;
+            uint32_t srcIdx = ((rect._startRow + row) * cols + (rect._startCol + col)) * 4;
             uint32_t dstIdx = (row * regionWidth + col) * 4;
             fgRegion[dstIdx + 0] = srcFg[srcIdx + 0];
             fgRegion[dstIdx + 1] = srcFg[srcIdx + 1];
@@ -513,7 +513,7 @@ void TextRenderer::updateCellTextureRegion(WGPUQueue queue, const Grid& grid, co
     WGPUImageCopyTexture fgDest = {};
     fgDest.texture = cellFgColorTexture_;
     fgDest.mipLevel = 0;
-    fgDest.origin = {rect.startCol, rect.startRow, 0};
+    fgDest.origin = {rect._startCol, rect._startRow, 0};
     fgDest.aspect = WGPUTextureAspect_All;
 
     WGPUTextureDataLayout fgLayout = {};
@@ -530,7 +530,7 @@ void TextRenderer::updateCellTextureRegion(WGPUQueue queue, const Grid& grid, co
     const uint8_t* srcBg = grid.getBgColorData();
     for (uint32_t row = 0; row < regionHeight; row++) {
         for (uint32_t col = 0; col < regionWidth; col++) {
-            uint32_t srcIdx = ((rect.startRow + row) * cols + (rect.startCol + col)) * 4;
+            uint32_t srcIdx = ((rect._startRow + row) * cols + (rect._startCol + col)) * 4;
             uint32_t dstIdx = (row * regionWidth + col) * 4;
             bgRegion[dstIdx + 0] = srcBg[srcIdx + 0];
             bgRegion[dstIdx + 1] = srcBg[srcIdx + 1];
@@ -542,7 +542,7 @@ void TextRenderer::updateCellTextureRegion(WGPUQueue queue, const Grid& grid, co
     WGPUImageCopyTexture bgDest = {};
     bgDest.texture = cellBgColorTexture_;
     bgDest.mipLevel = 0;
-    bgDest.origin = {rect.startCol, rect.startRow, 0};
+    bgDest.origin = {rect._startCol, rect._startRow, 0};
     bgDest.aspect = WGPUTextureAspect_All;
 
     WGPUTextureDataLayout bgLayout = {};
@@ -649,10 +649,10 @@ void TextRenderer::render(WebGPUContext& ctx, const Grid& grid,
             updateCellTextureRegion(queue, grid, rect);
         }
 
-        if (config_ && config_->debugDamageRects) {
+        if (config_ && config_->_debugDamageRects) {
             uint32_t totalCells = 0;
             for (const auto& rect : damageRects) {
-                totalCells += (rect.endCol - rect.startCol) * (rect.endRow - rect.startRow);
+                totalCells += (rect._endCol - rect._startCol) * (rect._endRow - rect._startRow);
             }
             std::cout << "Updated " << totalCells << " cells in " << damageRects.size()
                       << " rects (vs " << (cols * rows) << " total)" << std::endl;

@@ -275,29 +275,29 @@ bool Font::generate(const std::string& fontPath, float fontSize, uint32_t atlasS
 
         if (glyph.atlasW > 0 && glyph.atlasH > 0) {
             // UV coordinates
-            m.uvMin = glm::vec2(
+            m._uvMin = glm::vec2(
                 static_cast<float>(glyph.atlasX) / atlasWidth_,
                 static_cast<float>(glyph.atlasY) / atlasHeight_
             );
-            m.uvMax = glm::vec2(
+            m._uvMax = glm::vec2(
                 static_cast<float>(glyph.atlasX + glyph.atlasW) / atlasWidth_,
                 static_cast<float>(glyph.atlasY + glyph.atlasH) / atlasHeight_
             );
         } else {
-            m.uvMin = m.uvMax = glm::vec2(0);
+            m._uvMin = m._uvMax = glm::vec2(0);
         }
 
-        m.size = glm::vec2(static_cast<float>(glyph.atlasW), static_cast<float>(glyph.atlasH));
+        m._size = glm::vec2(static_cast<float>(glyph.atlasW), static_cast<float>(glyph.atlasH));
 
         // Bearing: offset from cursor position to glyph quad
         // bearingX: horizontal offset (left side of glyph minus padding)
         // bearingY: vertical offset from baseline to TOP of glyph quad
         //           In screen coords (Y-down), positive bearingY means glyph extends above baseline
-        m.bearing = glm::vec2(
+        m._bearing = glm::vec2(
             static_cast<float>(glyph.bearingX - padding),           // Left edge offset
             static_cast<float>(glyph.boundsT * fontScale + padding) // Top of glyph from baseline
         );
-        m.advance = static_cast<float>(glyph.advance);
+        m._advance = static_cast<float>(glyph.advance);
 
         glyphs_[glyph.codepoint] = m;
     }
@@ -344,11 +344,11 @@ bool Font::saveAtlas(const std::string& atlasPath, const std::string& metricsPat
         first = false;
 
         file << "    \"" << codepoint << "\": {\n";
-        file << "      \"uvMin\": [" << m.uvMin.x << ", " << m.uvMin.y << "],\n";
-        file << "      \"uvMax\": [" << m.uvMax.x << ", " << m.uvMax.y << "],\n";
-        file << "      \"size\": [" << m.size.x << ", " << m.size.y << "],\n";
-        file << "      \"bearing\": [" << m.bearing.x << ", " << m.bearing.y << "],\n";
-        file << "      \"advance\": " << m.advance << "\n";
+        file << "      \"uvMin\": [" << m._uvMin.x << ", " << m._uvMin.y << "],\n";
+        file << "      \"uvMax\": [" << m._uvMax.x << ", " << m._uvMax.y << "],\n";
+        file << "      \"size\": [" << m._size.x << ", " << m._size.y << "],\n";
+        file << "      \"bearing\": [" << m._bearing.x << ", " << m._bearing.y << "],\n";
+        file << "      \"advance\": " << m._advance << "\n";
         file << "    }";
     }
 
@@ -528,13 +528,13 @@ bool Font::loadAtlas(const std::string& atlasPath, const std::string& metricsPat
             return trim(glyphJson.substr(p, e - p));
         };
 
-        m.uvMin = parseVec2(findGlyphValue("uvMin"));
-        m.uvMax = parseVec2(findGlyphValue("uvMax"));
-        m.size = parseVec2(findGlyphValue("size"));
-        m.bearing = parseVec2(findGlyphValue("bearing"));
+        m._uvMin = parseVec2(findGlyphValue("uvMin"));
+        m._uvMax = parseVec2(findGlyphValue("uvMax"));
+        m._size = parseVec2(findGlyphValue("size"));
+        m._bearing = parseVec2(findGlyphValue("bearing"));
 
         val = findGlyphValue("advance");
-        m.advance = val.empty() ? 0.0f : parseFloat(val);
+        m._advance = val.empty() ? 0.0f : parseFloat(val);
 
         glyphs_[codepoint] = m;
         pos = braceEnd;
@@ -568,15 +568,15 @@ void Font::buildGlyphIndexMap() {
 
         const GlyphMetrics& m = glyphs_[cp];
         GlyphMetadataGPU gpu;
-        gpu.uvMinX = m.uvMin.x;
-        gpu.uvMinY = m.uvMin.y;
-        gpu.uvMaxX = m.uvMax.x;
-        gpu.uvMaxY = m.uvMax.y;
-        gpu.sizeX = m.size.x;
-        gpu.sizeY = m.size.y;
-        gpu.bearingX = m.bearing.x;
-        gpu.bearingY = m.bearing.y;
-        gpu.advance = m.advance;
+        gpu._uvMinX = m._uvMin.x;
+        gpu._uvMinY = m._uvMin.y;
+        gpu._uvMaxX = m._uvMax.x;
+        gpu._uvMaxY = m._uvMax.y;
+        gpu._sizeX = m._size.x;
+        gpu._sizeY = m._size.y;
+        gpu._bearingX = m._bearing.x;
+        gpu._bearingY = m._bearing.y;
+        gpu._advance = m._advance;
         gpu._pad = 0.0f;
 
         glyphMetadata_.push_back(gpu);

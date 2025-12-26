@@ -1,12 +1,10 @@
 #include "ymery.h"
 #include "../renderer/webgpu-context.h"
 
-#ifdef YETTY_YMERY_ENABLED
 #include <ymery/embedded.hpp>
 #include <imgui.h>
 #include <imgui_impl_wgpu.h>
 #include <implot.h>
-#endif
 
 #include <GLFW/glfw3.h>
 #include <algorithm>
@@ -15,7 +13,6 @@
 
 namespace yetty {
 
-#ifdef YETTY_YMERY_ENABLED
 // GLFW key to ImGui key translation
 static ImGuiKey glfw_key_to_imgui_key(int key) {
     switch (key) {
@@ -81,7 +78,6 @@ static ImGuiKey glfw_key_to_imgui_key(int key) {
         default: return ImGuiKey_None;
     }
 }
-#endif
 
 //-----------------------------------------------------------------------------
 // YmeryPlugin
@@ -90,7 +86,7 @@ static ImGuiKey glfw_key_to_imgui_key(int key) {
 YmeryPlugin::YmeryPlugin() = default;
 
 YmeryPlugin::~YmeryPlugin() {
-    dispose();
+    (void)dispose();
 }
 
 Result<PluginPtr> YmeryPlugin::create() {
@@ -98,10 +94,6 @@ Result<PluginPtr> YmeryPlugin::create() {
 }
 
 Result<void> YmeryPlugin::init(WebGPUContext* ctx) {
-#ifndef YETTY_YMERY_ENABLED
-    (void)ctx;
-    return Err<void>("Ymery plugin not enabled (YETTY_YMERY_ENABLED not defined)");
-#else
     if (!ctx) {
         return Err<void>("YmeryPlugin::init: WebGPUContext required");
     }
@@ -113,15 +105,19 @@ Result<void> YmeryPlugin::init(WebGPUContext* ctx) {
     _initialized = true;
     std::cout << "YmeryPlugin initialized" << std::endl;
     return Ok();
-#endif
 }
 
-void YmeryPlugin::dispose() {
-#ifdef YETTY_YMERY_ENABLED
-    // Just reset - shared_ptr destructor chain handles cleanup
-    // Don't call _app->dispose() as it causes double-free
-    _app.reset();
+Result<void> YmeryPlugin::dispose() {
+    // Order matters: clear layers first, then app, then ImGui
+    if (auto res = Plugin::dispose(); !res) {
+        return Err<void>("Failed to dispose YmeryPlugin base", res);
+    }
 
+    // FIXME: ymery-cpp has a bug in WidgetFactory destructor
+    // Don't reset app - let it leak for now until ymery-cpp is fixed
+    // _app.reset();
+
+    // Finally clean up ImGui
     if (_imgui_ctx) {
         ImGui::SetCurrentContext(_imgui_ctx);
         ImGui_ImplWGPU_Shutdown();
@@ -134,26 +130,20 @@ void YmeryPlugin::dispose() {
         ImGui::DestroyContext(_imgui_ctx);
         _imgui_ctx = nullptr;
     }
-#endif
-    Plugin::dispose();
+
     _initialized = false;
+    return Ok();
 }
 
 Result<PluginLayerPtr> YmeryPlugin::createLayer(const std::string& payload) {
-#ifndef YETTY_YMERY_ENABLED
-    (void)payload;
-    return Err<PluginLayerPtr>("Ymery plugin not enabled");
-#else
     auto layer = std::make_shared<YmeryLayer>();
     auto result = layer->init(payload);
     if (!result) {
         return Err<PluginLayerPtr>("Failed to initialize YmeryLayer", result);
     }
     return Ok<PluginLayerPtr>(layer);
-#endif
 }
 
-#ifdef YETTY_YMERY_ENABLED
 Result<void> YmeryPlugin::initImGui(uint32_t screenWidth, uint32_t screenHeight) {
     if (_imgui_ctx) return Ok();  // Already initialized
 
@@ -200,27 +190,32 @@ Result<void> YmeryPlugin::initImGui(uint32_t screenWidth, uint32_t screenHeight)
     std::cout << "YmeryPlugin: ImGui initialized (" << screenWidth << "x" << screenHeight << ")" << std::endl;
     return Ok();
 }
-#endif
 
-void YmeryPlugin::renderAll(WebGPUContext& ctx,
-                             WGPUTextureView targetView, WGPUTextureFormat targetFormat,
-                             uint32_t screenWidth, uint32_t screenHeight,
-                             float cellWidth, float cellHeight,
-                             int scrollOffset, uint32_t termRows) {
-#ifndef YETTY_YMERY_ENABLED
-    (void)ctx; (void)targetView; (void)targetFormat;
-    (void)screenWidth; (void)screenHeight;
-    (void)cellWidth; (void)cellHeight;
-    (void)scrollOffset; (void)termRows;
-    return;
-#else
-    if (_layers.empty()) return;
+Result<void> YmeryPlugin::renderAll(WebGPUContext& ctx,
+                                     WGPUTextureView targetView, WGPUTextureFormat targetFormat,
+                                     uint32_t screenWidth, uint32_t screenHeight,
+                                     float cellWidth, float cellHeight,
+                                     int scrollOffset, uint32_t termRows,
+                                     bool isAltScreen) {
+    (void)targetFormat;
+
+    if (_layers.empty()) return Ok();
+
+    // Filter layers for current screen
+    ScreenType currentScreen = isAltScreen ? ScreenType::Alternate : ScreenType::Main;
+    bool hasVisibleLayers = false;
+    for (auto& layer : _layers) {
+        if (layer->isVisible() && layer->getScreenType() == currentScreen) {
+            hasVisibleLayers = true;
+            break;
+        }
+    }
+    if (!hasVisibleLayers) return Ok();
 
     // Initialize ImGui on first render
     if (!_imgui_ctx) {
         if (auto res = initImGui(screenWidth, screenHeight); !res) {
-            std::cerr << "YmeryPlugin: " << error_msg(res) << std::endl;
-            return;
+            return Err<void>("Failed to initialize ImGui", res);
         }
     }
 
@@ -237,15 +232,13 @@ void YmeryPlugin::renderAll(WebGPUContext& ctx,
 
         auto res = ymery::EmbeddedApp::create(config);
         if (!res) {
-            std::cerr << "YmeryPlugin: failed to create EmbeddedApp: "
-                      << ymery::error_msg(res) << std::endl;
-            return;
+            return Err<void>("Failed to create EmbeddedApp: " + ymery::error_msg(res));
         }
         _app = *res;
         std::cout << "YmeryPlugin: EmbeddedApp created" << std::endl;
     }
 
-    if (!_app) return;
+    if (!_app) return Err<void>("YmeryPlugin: app not initialized");
 
     // Store cell dimensions for input coordinate calculation
     _cell_width = cellWidth;
@@ -273,6 +266,7 @@ void YmeryPlugin::renderAll(WebGPUContext& ctx,
     // Render each layer at its position
     for (auto& layerBase : _layers) {
         if (!layerBase->isVisible()) continue;
+        if (layerBase->getScreenType() != currentScreen) continue;
 
         auto layer = std::static_pointer_cast<YmeryLayer>(layerBase);
 
@@ -334,7 +328,7 @@ void YmeryPlugin::renderAll(WebGPUContext& ctx,
 
     wgpuCommandBufferRelease(cmdBuffer);
     wgpuCommandEncoderRelease(encoder);
-#endif
+    return Ok();
 }
 
 //-----------------------------------------------------------------------------
@@ -382,11 +376,11 @@ Result<void> YmeryLayer::init(const std::string& payload) {
     return parsePayload(payload);
 }
 
-void YmeryLayer::dispose() {
+Result<void> YmeryLayer::dispose() {
+    return Ok();
 }
 
 bool YmeryLayer::onMouseMove(float x, float y) {
-#ifdef YETTY_YMERY_ENABLED
     auto plugin = static_cast<YmeryPlugin*>(_parent);
     if (plugin && plugin->imguiContext()) {
         ImGui::SetCurrentContext(plugin->imguiContext());
@@ -397,14 +391,10 @@ bool YmeryLayer::onMouseMove(float x, float y) {
         io.AddMousePosEvent(absX, absY);
         return true;
     }
-#else
-    (void)x; (void)y;
-#endif
     return false;
 }
 
 bool YmeryLayer::onMouseButton(int button, bool pressed) {
-#ifdef YETTY_YMERY_ENABLED
     auto plugin = static_cast<YmeryPlugin*>(_parent);
     if (plugin && plugin->imguiContext()) {
         ImGui::SetCurrentContext(plugin->imguiContext());
@@ -414,14 +404,10 @@ bool YmeryLayer::onMouseButton(int button, bool pressed) {
         }
         return true;
     }
-#else
-    (void)button; (void)pressed;
-#endif
     return false;
 }
 
 bool YmeryLayer::onMouseScroll(float xoffset, float yoffset, int mods) {
-#ifdef YETTY_YMERY_ENABLED
     (void)mods;
     auto plugin = static_cast<YmeryPlugin*>(_parent);
     if (plugin && plugin->imguiContext()) {
@@ -430,14 +416,10 @@ bool YmeryLayer::onMouseScroll(float xoffset, float yoffset, int mods) {
         io.AddMouseWheelEvent(xoffset, yoffset);
         return true;
     }
-#else
-    (void)xoffset; (void)yoffset; (void)mods;
-#endif
     return false;
 }
 
 bool YmeryLayer::onKey(int key, int scancode, int action, int mods) {
-#ifdef YETTY_YMERY_ENABLED
     (void)scancode;
     auto plugin = static_cast<YmeryPlugin*>(_parent);
     if (plugin && plugin->imguiContext()) {
@@ -455,14 +437,10 @@ bool YmeryLayer::onKey(int key, int scancode, int action, int mods) {
 
         return io.WantCaptureKeyboard;
     }
-#else
-    (void)key; (void)scancode; (void)action; (void)mods;
-#endif
     return false;
 }
 
 bool YmeryLayer::onChar(unsigned int codepoint) {
-#ifdef YETTY_YMERY_ENABLED
     auto plugin = static_cast<YmeryPlugin*>(_parent);
     if (plugin && plugin->imguiContext()) {
         ImGui::SetCurrentContext(plugin->imguiContext());
@@ -470,42 +448,31 @@ bool YmeryLayer::onChar(unsigned int codepoint) {
         io.AddInputCharacter(codepoint);
         return io.WantCaptureKeyboard;
     }
-#else
-    (void)codepoint;
-#endif
     return false;
 }
 
 bool YmeryLayer::wantsKeyboard() const {
-#ifdef YETTY_YMERY_ENABLED
     auto plugin = static_cast<YmeryPlugin*>(_parent);
     if (plugin && plugin->imguiContext()) {
         ImGui::SetCurrentContext(plugin->imguiContext());
         return ImGui::GetIO().WantCaptureKeyboard;
     }
-#endif
     return false;
 }
 
 bool YmeryLayer::wantsMouse() const {
-#ifdef YETTY_YMERY_ENABLED
     auto plugin = static_cast<YmeryPlugin*>(_parent);
     return plugin && plugin->imguiContext();
-#else
-    return false;
-#endif
 }
 
 void YmeryLayer::setFocus(bool f) {
     PluginLayer::setFocus(f);
-#ifdef YETTY_YMERY_ENABLED
     auto plugin = static_cast<YmeryPlugin*>(_parent);
     if (plugin && plugin->imguiContext()) {
         ImGui::SetCurrentContext(plugin->imguiContext());
         ImGuiIO& io = ImGui::GetIO();
         io.AddFocusEvent(f);
     }
-#endif
 }
 
 } // namespace yetty

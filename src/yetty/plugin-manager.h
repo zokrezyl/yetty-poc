@@ -2,6 +2,7 @@
 
 #include "plugin.h"
 #include "result.hpp"
+#include <webgpu/webgpu.h>
 #include <memory>
 #include <vector>
 #include <unordered_map>
@@ -22,10 +23,10 @@ using BuiltinPluginFactory = std::function<Result<PluginPtr>()>;
 
 // Metadata for a registered plugin type
 struct PluginMeta {
-    std::string name;
-    BuiltinPluginFactory factory;
-    void* handle = nullptr;        // For dynamically loaded plugins
-    PluginCreateFn createFn = nullptr;
+    std::string _name;
+    BuiltinPluginFactory _factory;
+    void* _handle = nullptr;        // For dynamically loaded plugins
+    PluginCreateFn _createFn = nullptr;
 };
 
 class PluginManager {
@@ -40,10 +41,11 @@ public:
     void loadPluginsFromDirectory(const std::string& path);
 
     // Create a new layer for a plugin type
+    // widthCells/heightCells: 0 = stretch to edge, negative = termSize - abs(value)
     Result<PluginLayerPtr> createLayer(const std::string& pluginName,
                                         PositionMode mode,
                                         int32_t x, int32_t y,
-                                        uint32_t widthCells, uint32_t heightCells,
+                                        int32_t widthCells, int32_t heightCells,
                                         const std::string& payload,
                                         Grid* grid,
                                         uint32_t cellWidth, uint32_t cellHeight);
@@ -69,17 +71,17 @@ public:
                           uint32_t* linesToAdvance = nullptr);
 
     // Update all plugins
-    void update(double deltaTime);
+    Result<void> update(double deltaTime);
 
     // Render all plugins
-    void render(WebGPUContext& ctx, WGPUTextureView targetView,
-                uint32_t screenWidth, uint32_t screenHeight,
-                float cellWidth, float cellHeight,
-                int scrollOffset = 0, uint32_t termRows = 0);
+    Result<void> render(WebGPUContext& ctx, WGPUTextureView targetView,
+                        uint32_t screenWidth, uint32_t screenHeight,
+                        float cellWidth, float cellHeight,
+                        int scrollOffset = 0, uint32_t termRows = 0);
 
     // Handle terminal resize
-    void onTerminalResize(uint32_t newCols, uint32_t newRows,
-                          uint32_t cellWidth, uint32_t cellHeight);
+    Result<void> onTerminalResize(uint32_t newCols, uint32_t newRows,
+                                  uint32_t cellWidth, uint32_t cellHeight);
 
     // Handle scroll
     void onScroll(int lines, Grid* grid = nullptr);
@@ -96,12 +98,23 @@ public:
 
     void clearFocus();
     PluginLayerPtr getFocusedLayer() const { return focusedLayer_; }
+    PluginLayerPtr getHoveredLayer() const { return hoveredLayer_; }
+
+    // Alternate screen handling
+    void onAltScreenChange(bool isAltScreen);
+    bool isAltScreen() const { return isAltScreen_; }
 
     // Base94 encode/decode
     static std::string base94Decode(const std::string& encoded);
     static std::string base94Encode(const std::string& data);
 
 private:
+    // Debug frame rendering
+    Result<void> initFrameRenderer(WGPUDevice device, WGPUTextureFormat format);
+    void renderFrame(WebGPUContext& ctx, WGPUTextureView targetView,
+                     uint32_t screenWidth, uint32_t screenHeight,
+                     float x, float y, float w, float h,
+                     float r, float g, float b, float a);
     // Get or create plugin instance for a type
     Result<PluginPtr> getOrCreatePlugin(const std::string& name);
 
@@ -115,8 +128,17 @@ private:
     uint32_t nextLayerId_ = 1;
     std::vector<void*> handles_;
     PluginLayerPtr focusedLayer_;
+    PluginLayerPtr hoveredLayer_;
     float lastMouseX_ = 0;
     float lastMouseY_ = 0;
+    bool isAltScreen_ = false;
+
+    // Debug frame rendering resources
+    WGPURenderPipeline framePipeline_ = nullptr;
+    WGPUBuffer frameUniformBuffer_ = nullptr;
+    WGPUBindGroup frameBindGroup_ = nullptr;
+    WGPUBindGroupLayout frameBindGroupLayout_ = nullptr;
+    bool frameRendererInitialized_ = false;
 };
 
 } // namespace yetty

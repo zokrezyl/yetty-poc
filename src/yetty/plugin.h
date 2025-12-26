@@ -24,6 +24,12 @@ enum class PositionMode {
     Relative   // Relative to cursor when created, scrolls with content
 };
 
+// Screen type for plugin layers (main vs alternate screen)
+enum class ScreenType {
+    Main,       // Normal/primary screen
+    Alternate   // Alternate screen (vim, less, htop, etc.)
+};
+
 //-----------------------------------------------------------------------------
 // PluginLayer - represents a specific layer at a position in the terminal
 // Each layer has its own position, size, payload, and per-layer state
@@ -37,10 +43,10 @@ public:
     virtual Result<void> init(const std::string& payload) = 0;
 
     // Dispose layer-specific resources
-    virtual void dispose() {}
+    virtual Result<void> dispose() { return Ok(); }
 
     // Called every frame (for animation, etc.)
-    virtual void update(double deltaTime) { (void)deltaTime; }
+    virtual Result<void> update(double deltaTime) { (void)deltaTime; return Ok(); }
 
     // Input handling - coordinates are relative to layer's top-left (in screen pixels)
     // Return true if event was consumed
@@ -76,6 +82,9 @@ public:
     PositionMode getPositionMode() const { return _position_mode; }
     void setPositionMode(PositionMode mode) { _position_mode = mode; }
 
+    ScreenType getScreenType() const { return _screen_type; }
+    void setScreenType(ScreenType type) { _screen_type = type; }
+
     int32_t getX() const { return _x; }
     int32_t getY() const { return _y; }
     void setPosition(int32_t x, int32_t y) { _x = x; _y = y; }
@@ -101,6 +110,7 @@ protected:
     uint32_t _id = 0;
     Plugin* _parent = nullptr;
     PositionMode _position_mode = PositionMode::Absolute;
+    ScreenType _screen_type = ScreenType::Main;
     int32_t _x = 0;
     int32_t _y = 0;
     uint32_t _width_cells = 1;
@@ -131,11 +141,16 @@ public:
     virtual Result<void> init(WebGPUContext* ctx) { (void)ctx; return Ok(); }
 
     // Dispose shared resources
-    virtual void dispose() {
+    virtual Result<void> dispose() {
         for (auto& layer : _layers) {
-            if (layer) layer->dispose();
+            if (layer) {
+                if (auto res = layer->dispose(); !res) {
+                    return Err<void>("Failed to dispose layer", res);
+                }
+            }
         }
         _layers.clear();
+        return Ok();
     }
 
     // Create a new layer for this plugin
@@ -148,15 +163,17 @@ public:
     }
 
     // Remove a layer by ID
-    bool removeLayer(uint32_t id) {
+    Result<void> removeLayer(uint32_t id) {
         for (auto it = _layers.begin(); it != _layers.end(); ++it) {
             if ((*it)->getId() == id) {
-                (*it)->dispose();
+                if (auto res = (*it)->dispose(); !res) {
+                    return Err<void>("Failed to dispose layer " + std::to_string(id), res);
+                }
                 _layers.erase(it);
-                return true;
+                return Ok();
             }
         }
-        return false;
+        return Err<void>("Layer not found: " + std::to_string(id));
     }
 
     // Get a layer by ID
@@ -171,30 +188,36 @@ public:
     const std::vector<PluginLayerPtr>& getLayers() const { return _layers; }
 
     // Update all layers
-    virtual void update(double deltaTime) {
+    virtual Result<void> update(double deltaTime) {
         for (auto& layer : _layers) {
             if (layer->isVisible()) {
-                layer->update(deltaTime);
+                if (auto res = layer->update(deltaTime); !res) {
+                    return Err<void>("Failed to update layer", res);
+                }
             }
         }
+        return Ok();
     }
 
     // Render all layers of this plugin
     // Subclasses can override to batch rendering (e.g., single ImGui frame for all ymery layers)
-    virtual void renderAll(WebGPUContext& ctx,
-                           WGPUTextureView targetView, WGPUTextureFormat targetFormat,
-                           uint32_t screenWidth, uint32_t screenHeight,
-                           float cellWidth, float cellHeight,
-                           int scrollOffset, uint32_t termRows) = 0;
+    // isAltScreen: true if currently on alternate screen (vim, less, etc.)
+    virtual Result<void> renderAll(WebGPUContext& ctx,
+                                   WGPUTextureView targetView, WGPUTextureFormat targetFormat,
+                                   uint32_t screenWidth, uint32_t screenHeight,
+                                   float cellWidth, float cellHeight,
+                                   int scrollOffset, uint32_t termRows,
+                                   bool isAltScreen = false) = 0;
 
     // Handle terminal resize - notify all layers
-    virtual void onTerminalResize(uint32_t cellWidth, uint32_t cellHeight) {
+    virtual Result<void> onTerminalResize(uint32_t cellWidth, uint32_t cellHeight) {
         for (auto& layer : _layers) {
             uint32_t newW = layer->getWidthCells() * cellWidth;
             uint32_t newH = layer->getHeightCells() * cellHeight;
             layer->onResize(newW, newH);
             layer->setNeedsRender(true);
         }
+        return Ok();
     }
 
     // Check if plugin is initialized

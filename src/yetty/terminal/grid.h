@@ -10,9 +10,9 @@ constexpr uint16_t GLYPH_PLUGIN = 0xFFFF;  // Cell is occupied by a plugin
 
 // Cell attributes (bold, italic, etc.) packed into a single byte
 struct CellAttrs {
-    uint8_t bold : 1;
-    uint8_t italic : 1;
-    uint8_t underline : 1;
+    uint8_t _bold : 1;
+    uint8_t _italic : 1;
+    uint8_t _underline : 1;
     uint8_t _reserved : 5;
 };
 

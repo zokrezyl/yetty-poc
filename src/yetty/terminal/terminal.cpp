@@ -18,7 +18,7 @@ static VTermScreenCallbacks screenCallbacks = {
     .damage = Terminal::onDamage,
     .moverect = Terminal::onMoverect,
     .movecursor = Terminal::onMoveCursor,
-    .settermprop = nullptr,
+    .settermprop = Terminal::onSetTermProp,
     .bell = Terminal::onBell,
     .resize = Terminal::onResize,
     .sb_pushline = Terminal::onSbPushline,
@@ -47,6 +47,7 @@ Terminal::Terminal(uint32_t cols, uint32_t rows, Font* font)
     // Get the screen layer
     vtermScreen_ = vterm_obtain_screen(vterm_);
     vterm_screen_set_callbacks(vtermScreen_, &screenCallbacks, this);
+    vterm_screen_enable_altscreen(vtermScreen_, 1);  // Enable alternate screen support
     vterm_screen_reset(vtermScreen_, 1);
 
     // Set up fallback callbacks for unrecognized OSC sequences (plugins)
@@ -160,7 +161,7 @@ void Terminal::update() {
 
         // Sync based on damage tracking config
         // When scrolled back, always use full sync since damage rects don't apply to scrollback
-        if (config_ && config_->useDamageTracking && !fullDamage_ && scrollOffset_ == 0) {
+        if (config_ && config_->_useDamageTracking && !fullDamage_ && scrollOffset_ == 0) {
             syncDamageToGrid();
         } else {
             syncToGrid();
@@ -276,14 +277,14 @@ void Terminal::syncToGrid() {
                     uint8_t fgR = 255, fgG = 255, fgB = 255;
                     uint8_t bgR = 0, bgG = 0, bgB = 0;
 
-                    if (col < sbLine.chars.size()) {
-                        codepoint = sbLine.chars[col];
-                        fgR = sbLine.fgColors[col * 3 + 0];
-                        fgG = sbLine.fgColors[col * 3 + 1];
-                        fgB = sbLine.fgColors[col * 3 + 2];
-                        bgR = sbLine.bgColors[col * 3 + 0];
-                        bgG = sbLine.bgColors[col * 3 + 1];
-                        bgB = sbLine.bgColors[col * 3 + 2];
+                    if (col < sbLine._chars.size()) {
+                        codepoint = sbLine._chars[col];
+                        fgR = sbLine._fgColors[col * 3 + 0];
+                        fgG = sbLine._fgColors[col * 3 + 1];
+                        fgB = sbLine._fgColors[col * 3 + 2];
+                        bgR = sbLine._bgColors[col * 3 + 0];
+                        bgG = sbLine._bgColors[col * 3 + 1];
+                        bgB = sbLine._bgColors[col * 3 + 2];
                     }
 
                     uint16_t glyphIndex = font_ ? font_->getGlyphIndex(codepoint) : static_cast<uint16_t>(codepoint);
@@ -335,8 +336,8 @@ void Terminal::syncDamageToGrid() {
     VTermPos pos;
 
     for (const auto& damage : damageRects_) {
-        for (uint32_t row = damage.startRow; row < damage.endRow && row < rows_; row++) {
-            for (uint32_t col = damage.startCol; col < damage.endCol && col < cols_; col++) {
+        for (uint32_t row = damage._startRow; row < damage._endRow && row < rows_; row++) {
+            for (uint32_t col = damage._startCol; col < damage._endCol && col < cols_; col++) {
                 pos.row = row;
                 pos.col = col;
 
@@ -396,15 +397,15 @@ int Terminal::onDamage(VTermRect rect, void* user) {
 
     // Record the damage rectangle
     DamageRect damage;
-    damage.startCol = static_cast<uint32_t>(rect.start_col);
-    damage.startRow = static_cast<uint32_t>(rect.start_row);
-    damage.endCol = static_cast<uint32_t>(rect.end_col);
-    damage.endRow = static_cast<uint32_t>(rect.end_row);
+    damage._startCol = static_cast<uint32_t>(rect.start_col);
+    damage._startRow = static_cast<uint32_t>(rect.start_row);
+    damage._endCol = static_cast<uint32_t>(rect.end_col);
+    damage._endRow = static_cast<uint32_t>(rect.end_row);
     term->damageRects_.push_back(damage);
 
-    if (term->config_ && term->config_->debugDamageRects) {
-        std::cout << "Damage: [" << damage.startCol << "," << damage.startRow
-                  << "] -> [" << damage.endCol << "," << damage.endRow << "]" << std::endl;
+    if (term->config_ && term->config_->_debugDamageRects) {
+        std::cout << "Damage: [" << damage._startCol << "," << damage._startRow
+                  << "] -> [" << damage._endCol << "," << damage._endRow << "]" << std::endl;
     }
 
     return 0;
@@ -442,6 +443,27 @@ int Terminal::onResize(int rows, int cols, void* user) {
     return 0;
 }
 
+int Terminal::onSetTermProp(VTermProp prop, VTermValue* val, void* user) {
+    Terminal* term = static_cast<Terminal*>(user);
+
+    switch (prop) {
+        case VTERM_PROP_ALTSCREEN:
+            term->isAltScreen_ = val->boolean;
+            std::cout << "Terminal: alternate screen " << (term->isAltScreen_ ? "ON" : "OFF") << std::endl;
+            // Notify plugin manager about screen change
+            if (term->pluginManager_) {
+                term->pluginManager_->onAltScreenChange(term->isAltScreen_);
+            }
+            break;
+        case VTERM_PROP_CURSORVISIBLE:
+            term->cursorVisible_ = val->boolean;
+            break;
+        default:
+            break;
+    }
+    return 0;
+}
+
 int Terminal::onBell(void* user) {
     (void)user;
     std::cout << '\a' << std::flush;  // Terminal bell
@@ -453,13 +475,13 @@ int Terminal::onSbPushline(int cols, const VTermScreenCell* cells, void* user) {
 
     // Store line in scrollback buffer
     ScrollbackLine line;
-    line.chars.resize(cols);
-    line.fgColors.resize(cols * 3);
-    line.bgColors.resize(cols * 3);
+    line._chars.resize(cols);
+    line._fgColors.resize(cols * 3);
+    line._bgColors.resize(cols * 3);
 
     for (int i = 0; i < cols; i++) {
         const VTermScreenCell& cell = cells[i];
-        line.chars[i] = cell.chars[0] ? cell.chars[0] : ' ';
+        line._chars[i] = cell.chars[0] ? cell.chars[0] : ' ';
 
         // Convert colors
         VTermColor fg = cell.fg;
@@ -467,18 +489,18 @@ int Terminal::onSbPushline(int cols, const VTermScreenCell* cells, void* user) {
         vterm_screen_convert_color_to_rgb(term->vtermScreen_, &fg);
         vterm_screen_convert_color_to_rgb(term->vtermScreen_, &bg);
 
-        line.fgColors[i * 3 + 0] = fg.rgb.red;
-        line.fgColors[i * 3 + 1] = fg.rgb.green;
-        line.fgColors[i * 3 + 2] = fg.rgb.blue;
-        line.bgColors[i * 3 + 0] = bg.rgb.red;
-        line.bgColors[i * 3 + 1] = bg.rgb.green;
-        line.bgColors[i * 3 + 2] = bg.rgb.blue;
+        line._fgColors[i * 3 + 0] = fg.rgb.red;
+        line._fgColors[i * 3 + 1] = fg.rgb.green;
+        line._fgColors[i * 3 + 2] = fg.rgb.blue;
+        line._bgColors[i * 3 + 0] = bg.rgb.red;
+        line._bgColors[i * 3 + 1] = bg.rgb.green;
+        line._bgColors[i * 3 + 2] = bg.rgb.blue;
     }
 
     term->scrollback_.push_back(std::move(line));
 
     // Trim scrollback if too large
-    uint32_t maxLines = term->config_ ? term->config_->scrollbackLines : 10000;
+    uint32_t maxLines = term->config_ ? term->config_->_scrollbackLines : 10000;
     while (term->scrollback_.size() > maxLines) {
         term->scrollback_.pop_front();
     }
@@ -500,22 +522,22 @@ int Terminal::onSbPopline(int cols, VTermScreenCell* cells, void* user) {
     }
 
     ScrollbackLine& line = term->scrollback_.back();
-    int lineCols = std::min(cols, static_cast<int>(line.chars.size()));
+    int lineCols = std::min(cols, static_cast<int>(line._chars.size()));
 
     for (int i = 0; i < lineCols; i++) {
-        cells[i].chars[0] = line.chars[i];
+        cells[i].chars[0] = line._chars[i];
         cells[i].chars[1] = 0;
         cells[i].width = 1;
 
         cells[i].fg.type = VTERM_COLOR_RGB;
-        cells[i].fg.rgb.red = line.fgColors[i * 3 + 0];
-        cells[i].fg.rgb.green = line.fgColors[i * 3 + 1];
-        cells[i].fg.rgb.blue = line.fgColors[i * 3 + 2];
+        cells[i].fg.rgb.red = line._fgColors[i * 3 + 0];
+        cells[i].fg.rgb.green = line._fgColors[i * 3 + 1];
+        cells[i].fg.rgb.blue = line._fgColors[i * 3 + 2];
 
         cells[i].bg.type = VTERM_COLOR_RGB;
-        cells[i].bg.rgb.red = line.bgColors[i * 3 + 0];
-        cells[i].bg.rgb.green = line.bgColors[i * 3 + 1];
-        cells[i].bg.rgb.blue = line.bgColors[i * 3 + 2];
+        cells[i].bg.rgb.red = line._bgColors[i * 3 + 0];
+        cells[i].bg.rgb.green = line._bgColors[i * 3 + 1];
+        cells[i].bg.rgb.blue = line._bgColors[i * 3 + 2];
     }
 
     // Fill remaining cells with spaces

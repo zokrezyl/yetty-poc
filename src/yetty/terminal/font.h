@@ -11,23 +11,23 @@ namespace yetty {
 // Glyph metrics for CPU-side lookups
 struct GlyphMetrics {
     // UV coordinates in atlas (normalized 0-1)
-    glm::vec2 uvMin;
-    glm::vec2 uvMax;
+    glm::vec2 _uvMin;
+    glm::vec2 _uvMax;
 
     // Glyph metrics in pixels
-    glm::vec2 size;           // Width and height of glyph
-    glm::vec2 bearing;        // Offset from baseline to left/top of glyph
-    float advance;            // Horizontal advance to next character
+    glm::vec2 _size;           // Width and height of glyph
+    glm::vec2 _bearing;        // Offset from baseline to left/top of glyph
+    float _advance;            // Horizontal advance to next character
 };
 
 // GPU-friendly glyph metadata for SSBO (40 bytes, 8-byte aligned)
 struct GlyphMetadataGPU {
-    float uvMinX, uvMinY;     // 8 bytes
-    float uvMaxX, uvMaxY;     // 8 bytes
-    float sizeX, sizeY;       // 8 bytes
-    float bearingX, bearingY; // 8 bytes
-    float advance;            // 4 bytes
-    float _pad;               // 4 bytes (alignment)
+    float _uvMinX, _uvMinY;     // 8 bytes
+    float _uvMaxX, _uvMaxY;     // 8 bytes
+    float _sizeX, _sizeY;       // 8 bytes
+    float _bearingX, _bearingY; // 8 bytes
+    float _advance;             // 4 bytes
+    float _pad;                 // 4 bytes (alignment)
 };
 
 class Font {

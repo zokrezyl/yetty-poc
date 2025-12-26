@@ -28,6 +28,7 @@
 #include <ctime>
 #include <cmath>
 #include <cstring>
+#include <filesystem>
 
 #if YETTY_WEB
 #include <emscripten.h>
@@ -38,45 +39,45 @@ using namespace yetty;
 
 // Application state for callbacks and main loop
 struct AppState {
-    GLFWwindow* window = nullptr;
-    WebGPUContext* ctx = nullptr;
-    TextRenderer* renderer = nullptr;
-    Font* font = nullptr;
-    Config* config = nullptr;
-    float zoomLevel = 1.0f;
-    float baseCellWidth = 0.0f;
-    float baseCellHeight = 0.0f;
+    GLFWwindow* _window = nullptr;
+    WebGPUContext* _ctx = nullptr;
+    TextRenderer* _renderer = nullptr;
+    Font* _font = nullptr;
+    Config* _config = nullptr;
+    float _zoomLevel = 1.0f;
+    float _baseCellWidth = 0.0f;
+    float _baseCellHeight = 0.0f;
 
     // Mouse tracking for plugin input
-    double mouseX = 0.0;
-    double mouseY = 0.0;
+    double _mouseX = 0.0;
+    double _mouseY = 0.0;
 
 #if !YETTY_WEB
-    Terminal* terminal = nullptr;
-    PluginManager* pluginManager = nullptr;
-    struct termios originalTermios;
-    bool termiosSet = false;
+    Terminal* _terminal = nullptr;
+    PluginManager* _pluginManager = nullptr;
+    struct termios _originalTermios;
+    bool _termiosSet = false;
 #endif
 
     // Demo mode (scrolling text)
-    bool demoMode = false;
-    Grid* demoGrid = nullptr;
-    int scrollMs = 50;
-    double lastScrollTime = 0.0;
-    std::vector<std::string>* dictionary = nullptr;
-    uint32_t cols = 80;
-    uint32_t rows = 24;
+    bool _demoMode = false;
+    Grid* _demoGrid = nullptr;
+    int _scrollMs = 50;
+    double _lastScrollTime = 0.0;
+    std::vector<std::string>* _dictionary = nullptr;
+    uint32_t _cols = 80;
+    uint32_t _rows = 24;
 
     // FPS tracking
-    double lastFpsTime = 0.0;
-    uint32_t frameCount = 0;
+    double _lastFpsTime = 0.0;
+    uint32_t _frameCount = 0;
 };
 
 // Global state for Emscripten main loop
 static AppState* g_appState = nullptr;
 
 // Colors for random text (RGB uint8)
-struct RGB { uint8_t r, g, b; };
+struct RGB { uint8_t _r, _g, _b; };
 static RGB g_colors[] = {
     {255, 255, 255},  // white
     {0, 255, 0},      // green
@@ -101,18 +102,18 @@ void cursorPosCallback(GLFWwindow* window, double xpos, double ypos) {
     auto* state = static_cast<AppState*>(glfwGetWindowUserPointer(window));
     if (!state) return;
 
-    state->mouseX = xpos;
-    state->mouseY = ypos;
+    state->_mouseX = xpos;
+    state->_mouseY = ypos;
 
     // Route to plugins
-    if (state->pluginManager && state->terminal) {
-        float cellWidth = state->baseCellWidth * state->zoomLevel;
-        float cellHeight = state->baseCellHeight * state->zoomLevel;
-        int scrollOffset = state->terminal->getScrollOffset();
+    if (state->_pluginManager && state->_terminal) {
+        float cellWidth = state->_baseCellWidth * state->_zoomLevel;
+        float cellHeight = state->_baseCellHeight * state->_zoomLevel;
+        int scrollOffset = state->_terminal->getScrollOffset();
 
-        state->pluginManager->onMouseMove(
+        state->_pluginManager->onMouseMove(
             static_cast<float>(xpos), static_cast<float>(ypos),
-            &state->terminal->getGrid(), cellWidth, cellHeight, scrollOffset);
+            &state->_terminal->getGrid(), cellWidth, cellHeight, scrollOffset);
     }
 }
 
@@ -123,15 +124,15 @@ void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
     if (!state) return;
 
     // Route to plugins
-    if (state->pluginManager && state->terminal) {
-        float cellWidth = state->baseCellWidth * state->zoomLevel;
-        float cellHeight = state->baseCellHeight * state->zoomLevel;
-        int scrollOffset = state->terminal->getScrollOffset();
+    if (state->_pluginManager && state->_terminal) {
+        float cellWidth = state->_baseCellWidth * state->_zoomLevel;
+        float cellHeight = state->_baseCellHeight * state->_zoomLevel;
+        int scrollOffset = state->_terminal->getScrollOffset();
 
-        bool consumed = state->pluginManager->onMouseButton(
+        bool consumed = state->_pluginManager->onMouseButton(
             button, action == GLFW_PRESS,
-            static_cast<float>(state->mouseX), static_cast<float>(state->mouseY),
-            &state->terminal->getGrid(), cellWidth, cellHeight, scrollOffset);
+            static_cast<float>(state->_mouseX), static_cast<float>(state->_mouseY),
+            &state->_terminal->getGrid(), cellWidth, cellHeight, scrollOffset);
 
         if (consumed) return;
     }
@@ -142,11 +143,11 @@ void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
 // Key callback for terminal mode
 void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {
     auto* state = static_cast<AppState*>(glfwGetWindowUserPointer(window));
-    if (!state || !state->terminal) return;
+    if (!state || !state->_terminal) return;
 
     // Route to focused plugin first
-    if (state->pluginManager) {
-        if (state->pluginManager->onKey(key, scancode, action, mods)) {
+    if (state->_pluginManager) {
+        if (state->_pluginManager->onKey(key, scancode, action, mods)) {
             return;  // Plugin consumed the event
         }
     }
@@ -166,7 +167,7 @@ void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods
             if (keyName[1] == '\0') {
                 uint32_t ch = keyName[0];
                 std::cerr << "  -> Sending Ctrl/Alt+'" << (char)ch << "'" << std::endl;
-                state->terminal->sendKey(ch, vtermMod);
+                state->_terminal->sendKey(ch, vtermMod);
                 return;
             }
         }
@@ -175,46 +176,46 @@ void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods
     // Map GLFW keys to VTerm keys
     switch (key) {
         case GLFW_KEY_ENTER:
-            state->terminal->sendSpecialKey(VTERM_KEY_ENTER, vtermMod);
+            state->_terminal->sendSpecialKey(VTERM_KEY_ENTER, vtermMod);
             break;
         case GLFW_KEY_BACKSPACE:
-            state->terminal->sendSpecialKey(VTERM_KEY_BACKSPACE, vtermMod);
+            state->_terminal->sendSpecialKey(VTERM_KEY_BACKSPACE, vtermMod);
             break;
         case GLFW_KEY_TAB:
-            state->terminal->sendSpecialKey(VTERM_KEY_TAB, vtermMod);
+            state->_terminal->sendSpecialKey(VTERM_KEY_TAB, vtermMod);
             break;
         case GLFW_KEY_ESCAPE:
-            state->terminal->sendSpecialKey(VTERM_KEY_ESCAPE, vtermMod);
+            state->_terminal->sendSpecialKey(VTERM_KEY_ESCAPE, vtermMod);
             break;
         case GLFW_KEY_UP:
-            state->terminal->sendSpecialKey(VTERM_KEY_UP, vtermMod);
+            state->_terminal->sendSpecialKey(VTERM_KEY_UP, vtermMod);
             break;
         case GLFW_KEY_DOWN:
-            state->terminal->sendSpecialKey(VTERM_KEY_DOWN, vtermMod);
+            state->_terminal->sendSpecialKey(VTERM_KEY_DOWN, vtermMod);
             break;
         case GLFW_KEY_LEFT:
-            state->terminal->sendSpecialKey(VTERM_KEY_LEFT, vtermMod);
+            state->_terminal->sendSpecialKey(VTERM_KEY_LEFT, vtermMod);
             break;
         case GLFW_KEY_RIGHT:
-            state->terminal->sendSpecialKey(VTERM_KEY_RIGHT, vtermMod);
+            state->_terminal->sendSpecialKey(VTERM_KEY_RIGHT, vtermMod);
             break;
         case GLFW_KEY_HOME:
-            state->terminal->sendSpecialKey(VTERM_KEY_HOME, vtermMod);
+            state->_terminal->sendSpecialKey(VTERM_KEY_HOME, vtermMod);
             break;
         case GLFW_KEY_END:
-            state->terminal->sendSpecialKey(VTERM_KEY_END, vtermMod);
+            state->_terminal->sendSpecialKey(VTERM_KEY_END, vtermMod);
             break;
         case GLFW_KEY_PAGE_UP:
-            state->terminal->sendSpecialKey(VTERM_KEY_PAGEUP, vtermMod);
+            state->_terminal->sendSpecialKey(VTERM_KEY_PAGEUP, vtermMod);
             break;
         case GLFW_KEY_PAGE_DOWN:
-            state->terminal->sendSpecialKey(VTERM_KEY_PAGEDOWN, vtermMod);
+            state->_terminal->sendSpecialKey(VTERM_KEY_PAGEDOWN, vtermMod);
             break;
         case GLFW_KEY_INSERT:
-            state->terminal->sendSpecialKey(VTERM_KEY_INS, vtermMod);
+            state->_terminal->sendSpecialKey(VTERM_KEY_INS, vtermMod);
             break;
         case GLFW_KEY_DELETE:
-            state->terminal->sendSpecialKey(VTERM_KEY_DEL, vtermMod);
+            state->_terminal->sendSpecialKey(VTERM_KEY_DEL, vtermMod);
             break;
         default:
             break;
@@ -224,16 +225,16 @@ void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods
 // Character callback for regular text input
 void charCallback(GLFWwindow* window, unsigned int codepoint) {
     auto* state = static_cast<AppState*>(glfwGetWindowUserPointer(window));
-    if (!state || !state->terminal) return;
+    if (!state || !state->_terminal) return;
 
     // Route to focused plugin first
-    if (state->pluginManager) {
-        if (state->pluginManager->onChar(codepoint)) {
+    if (state->_pluginManager) {
+        if (state->_pluginManager->onChar(codepoint)) {
             return;  // Plugin consumed the event
         }
     }
 
-    state->terminal->sendKey(codepoint);
+    state->_terminal->sendKey(codepoint);
 }
 #endif
 
@@ -247,8 +248,8 @@ static void mainLoopIteration() {
 
 #if !YETTY_WEB
     // Terminal mode: update terminal and render its grid
-    if (!state.demoMode && state.terminal) {
-        state.terminal->update();
+    if (!state._demoMode && state._terminal) {
+        state._terminal->update();
 
         // Update decorators
         static double lastTime = glfwGetTime();
@@ -256,20 +257,22 @@ static void mainLoopIteration() {
         double deltaTime = currentTime - lastTime;
         lastTime = currentTime;
 
-        if (state.pluginManager) {
-            state.pluginManager->update(deltaTime);
+        if (state._pluginManager) {
+            if (auto res = state._pluginManager->update(deltaTime); !res) {
+                spdlog::error("Plugin update failed: {}", error_msg(res));
+            }
         }
 
-        if (!state.terminal->isRunning()) {
-            glfwSetWindowShouldClose(state.window, GLFW_TRUE);
+        if (!state._terminal->isRunning()) {
+            glfwSetWindowShouldClose(state._window, GLFW_TRUE);
             return;
         }
 
         // Check if we need to render this frame
-        auto cursorBlinkResult = state.terminal->updateCursorBlink(currentTime);
+        auto cursorBlinkResult = state._terminal->updateCursorBlink(currentTime);
         bool cursorChanged = cursorBlinkResult && *cursorBlinkResult;
-        bool hasDamage = state.terminal->hasDamage();
-        bool hasPlugins = state.pluginManager && !state.pluginManager->getAllLayers().empty();
+        bool hasDamage = state._terminal->hasDamage();
+        bool hasPlugins = state._pluginManager && !state._pluginManager->getAllLayers().empty();
 
         // Skip rendering if nothing needs update
         if (!cursorChanged && !hasDamage && !hasPlugins) {
@@ -279,53 +282,55 @@ static void mainLoopIteration() {
 
         // Get current window size
         int w, h;
-        glfwGetFramebufferSize(state.window, &w, &h);
+        glfwGetFramebufferSize(state._window, &w, &h);
         if (w > 0 && h > 0) {
-            state.renderer->resize(static_cast<uint32_t>(w), static_cast<uint32_t>(h));
+            state._renderer->resize(static_cast<uint32_t>(w), static_cast<uint32_t>(h));
         }
 
         // Render terminal grid with cursor and damage tracking
-        if (state.config && state.config->useDamageTracking) {
-            state.renderer->render(*state.ctx, state.terminal->getGrid(),
-                                   state.terminal->getDamageRects(),
-                                   state.terminal->hasFullDamage(),
-                                   state.terminal->getCursorCol(),
-                                   state.terminal->getCursorRow(),
-                                   state.terminal->isCursorVisible());
+        if (state._config && state._config->_useDamageTracking) {
+            state._renderer->render(*state._ctx, state._terminal->getGrid(),
+                                   state._terminal->getDamageRects(),
+                                   state._terminal->hasFullDamage(),
+                                   state._terminal->getCursorCol(),
+                                   state._terminal->getCursorRow(),
+                                   state._terminal->isCursorVisible());
             // Clear damage after rendering
-            state.terminal->clearDamageRects();
-            state.terminal->clearFullDamage();
+            state._terminal->clearDamageRects();
+            state._terminal->clearFullDamage();
         } else {
-            state.renderer->render(*state.ctx, state.terminal->getGrid(),
-                                   state.terminal->getCursorCol(),
-                                   state.terminal->getCursorRow(),
-                                   state.terminal->isCursorVisible());
+            state._renderer->render(*state._ctx, state._terminal->getGrid(),
+                                   state._terminal->getCursorCol(),
+                                   state._terminal->getCursorRow(),
+                                   state._terminal->isCursorVisible());
         }
 
         // Render plugin overlays (after terminal, before present)
         if (hasPlugins) {
-            auto targetViewResult = state.ctx->getCurrentTextureView();
+            auto targetViewResult = state._ctx->getCurrentTextureView();
             if (targetViewResult) {
-                float cellWidth = state.baseCellWidth * state.zoomLevel;
-                float cellHeight = state.baseCellHeight * state.zoomLevel;
-                int scrollOffset = state.terminal ? state.terminal->getScrollOffset() : 0;
-                uint32_t termRows = state.terminal ? state.terminal->getGrid().getRows() : 0;
-                state.pluginManager->render(*state.ctx, *targetViewResult,
+                float cellWidth = state._baseCellWidth * state._zoomLevel;
+                float cellHeight = state._baseCellHeight * state._zoomLevel;
+                int scrollOffset = state._terminal ? state._terminal->getScrollOffset() : 0;
+                uint32_t termRows = state._terminal ? state._terminal->getGrid().getRows() : 0;
+                if (auto res = state._pluginManager->render(*state._ctx, *targetViewResult,
                     static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                    cellWidth, cellHeight, scrollOffset, termRows);
+                    cellWidth, cellHeight, scrollOffset, termRows); !res) {
+                    spdlog::error("Plugin render failed: {}", error_msg(res));
+                }
             }
         }
 
         // Present the frame (releases cached texture view)
-        state.ctx->present();
+        state._ctx->present();
     } else
 #endif
     {
         // Demo mode: scrolling text
-        if (state.demoMode && state.demoGrid) {
+        if (state._demoMode && state._demoGrid) {
             // Check for ESC key
-            if (glfwGetKey(state.window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
-                glfwSetWindowShouldClose(state.window, GLFW_TRUE);
+            if (glfwGetKey(state._window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
+                glfwSetWindowShouldClose(state._window, GLFW_TRUE);
 #if YETTY_WEB
                 emscripten_cancel_main_loop();
 #endif
@@ -334,42 +339,42 @@ static void mainLoopIteration() {
 
             // Scrolling logic
             double currentTime = glfwGetTime();
-            if (state.scrollMs > 0 && state.dictionary &&
-                (currentTime - state.lastScrollTime) * 1000.0 >= state.scrollMs) {
-                state.demoGrid->scrollUp();
-                std::string newLine = generateLine(*state.dictionary, state.cols);
+            if (state._scrollMs > 0 && state._dictionary &&
+                (currentTime - state._lastScrollTime) * 1000.0 >= state._scrollMs) {
+                state._demoGrid->scrollUp();
+                std::string newLine = generateLine(*state._dictionary, state._cols);
                 RGB color = g_colors[std::rand() % 4];
-                state.demoGrid->writeString(0, state.rows - 1, newLine.c_str(),
-                                            color.r, color.g, color.b, state.font);
-                state.lastScrollTime = currentTime;
+                state._demoGrid->writeString(0, state._rows - 1, newLine.c_str(),
+                                            color._r, color._g, color._b, state._font);
+                state._lastScrollTime = currentTime;
             }
 
             // Get current window size
             int w, h;
-            glfwGetFramebufferSize(state.window, &w, &h);
+            glfwGetFramebufferSize(state._window, &w, &h);
             if (w > 0 && h > 0) {
-                state.renderer->resize(static_cast<uint32_t>(w), static_cast<uint32_t>(h));
+                state._renderer->resize(static_cast<uint32_t>(w), static_cast<uint32_t>(h));
             }
 
             // Render demo grid
-            state.renderer->render(*state.ctx, *state.demoGrid);
+            state._renderer->render(*state._ctx, *state._demoGrid);
         }
     }
 
     // FPS counter
     double currentTime = glfwGetTime();
-    state.frameCount++;
-    if (currentTime - state.lastFpsTime >= 1.0) {
-        std::cout << "FPS: " << state.frameCount << std::endl;
-        state.frameCount = 0;
-        state.lastFpsTime = currentTime;
+    state._frameCount++;
+    if (currentTime - state._lastFpsTime >= 1.0) {
+        std::cout << "FPS: " << state._frameCount << std::endl;
+        state._frameCount = 0;
+        state._lastFpsTime = currentTime;
     }
 }
 
 // Scroll callback - wheel=scroll, Ctrl+wheel=zoom
 void scrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
     auto* state = static_cast<AppState*>(glfwGetWindowUserPointer(window));
-    if (!state || !state->renderer) return;
+    if (!state || !state->_renderer) return;
 
     bool ctrlPressed = glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ||
                        glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS;
@@ -377,40 +382,40 @@ void scrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
 
 #if !YETTY_WEB
     // Check if scroll is over a plugin first (with or without Ctrl)
-    if (state->pluginManager && state->terminal) {
-        float cellWidth = state->baseCellWidth * state->zoomLevel;
-        float cellHeight = state->baseCellHeight * state->zoomLevel;
-        int scrollOffset = state->terminal->getScrollOffset();
+    if (state->_pluginManager && state->_terminal) {
+        float cellWidth = state->_baseCellWidth * state->_zoomLevel;
+        float cellHeight = state->_baseCellHeight * state->_zoomLevel;
+        int scrollOffset = state->_terminal->getScrollOffset();
 
-        bool consumed = state->pluginManager->onMouseScroll(
+        bool consumed = state->_pluginManager->onMouseScroll(
             static_cast<float>(xoffset), static_cast<float>(yoffset), mods,
-            static_cast<float>(state->mouseX), static_cast<float>(state->mouseY),
-            &state->terminal->getGrid(), cellWidth, cellHeight, scrollOffset);
+            static_cast<float>(state->_mouseX), static_cast<float>(state->_mouseY),
+            &state->_terminal->getGrid(), cellWidth, cellHeight, scrollOffset);
 
         if (consumed) return;
     }
 
     // Scroll through scrollback (no Ctrl, not over plugin)
-    if (!ctrlPressed && state->terminal) {
+    if (!ctrlPressed && state->_terminal) {
         int lines = static_cast<int>(yoffset * 3);  // 3 lines per scroll notch
         if (lines > 0) {
-            state->terminal->scrollUp(lines);
+            state->_terminal->scrollUp(lines);
         } else if (lines < 0) {
-            state->terminal->scrollDown(-lines);
+            state->_terminal->scrollDown(-lines);
         }
         return;
     }
 #endif
 
     // Zoom grid (Ctrl + wheel, not over plugin)
-    state->zoomLevel += static_cast<float>(yoffset) * 0.1f;
-    state->zoomLevel = glm::clamp(state->zoomLevel, 0.2f, 5.0f);
+    state->_zoomLevel += static_cast<float>(yoffset) * 0.1f;
+    state->_zoomLevel = glm::clamp(state->_zoomLevel, 0.2f, 5.0f);
 
     // Update cell size and scale
-    float newCellWidth = state->baseCellWidth * state->zoomLevel;
-    float newCellHeight = state->baseCellHeight * state->zoomLevel;
-    state->renderer->setCellSize(newCellWidth, newCellHeight);
-    state->renderer->setScale(state->zoomLevel);
+    float newCellWidth = state->_baseCellWidth * state->_zoomLevel;
+    float newCellHeight = state->_baseCellHeight * state->_zoomLevel;
+    state->_renderer->setCellSize(newCellWidth, newCellHeight);
+    state->_renderer->setScale(state->_zoomLevel);
 
     // Get current window size
     int w, h;
@@ -420,20 +425,20 @@ void scrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
     uint32_t newCols = static_cast<uint32_t>(w / newCellWidth);
     uint32_t newRows = static_cast<uint32_t>(h / newCellHeight);
 
-    if (newCols != state->cols || newRows != state->rows) {
-        state->cols = newCols;
-        state->rows = newRows;
+    if (newCols != state->_cols || newRows != state->_rows) {
+        state->_cols = newCols;
+        state->_rows = newRows;
 
 #if !YETTY_WEB
-        if (state->terminal) {
-            state->terminal->resize(newCols, newRows);
+        if (state->_terminal) {
+            state->_terminal->resize(newCols, newRows);
         }
 #endif
-        if (state->demoGrid) {
-            state->demoGrid->resize(newCols, newRows);
+        if (state->_demoGrid) {
+            state->_demoGrid->resize(newCols, newRows);
         }
 
-        std::cout << "Zoom: " << (state->zoomLevel * 100.0f) << "% -> Grid "
+        std::cout << "Zoom: " << (state->_zoomLevel * 100.0f) << "% -> Grid "
                   << newCols << "x" << newRows << std::endl;
     }
 }
@@ -644,8 +649,7 @@ int main(int argc, char* argv[]) {
 
         // Save to cache
         // Create cache directory
-        std::string mkdirCmd = "mkdir -p \"" + cacheDir + "\"";
-        system(mkdirCmd.c_str());
+        std::filesystem::create_directories(cacheDir);
 
         std::cout << "Caching atlas to: " << cachedAtlas << std::endl;
         if (!font.saveAtlas(cachedAtlas, cachedMetrics)) {
@@ -663,9 +667,9 @@ int main(int argc, char* argv[]) {
 
     // Create config from command line args
     static Config config;
-    config.useDamageTracking = useDamageTracking;
-    config.showFps = true;
-    config.debugDamageRects = debugDamageRects;
+    config._useDamageTracking = useDamageTracking;
+    config._showFps = true;
+    config._debugDamageRects = debugDamageRects;
 
     // Initialize text renderer
     TextRenderer renderer;
@@ -688,19 +692,19 @@ int main(int argc, char* argv[]) {
 
     // Set up application state
     static AppState appState;
-    appState.window = window;
-    appState.ctx = &ctx;
-    appState.renderer = &renderer;
-    appState.font = &font;
-    appState.config = &config;
-    appState.baseCellWidth = cellWidth;
-    appState.baseCellHeight = cellHeight;
-    appState.zoomLevel = 1.0f;
-    appState.demoMode = demoMode;
-    appState.cols = cols;
-    appState.rows = rows;
-    appState.lastFpsTime = glfwGetTime();
-    appState.frameCount = 0;
+    appState._window = window;
+    appState._ctx = &ctx;
+    appState._renderer = &renderer;
+    appState._font = &font;
+    appState._config = &config;
+    appState._baseCellWidth = cellWidth;
+    appState._baseCellHeight = cellHeight;
+    appState._zoomLevel = 1.0f;
+    appState._demoMode = demoMode;
+    appState._cols = cols;
+    appState._rows = rows;
+    appState._lastFpsTime = glfwGetTime();
+    appState._frameCount = 0;
 
 #if !YETTY_WEB
     Terminal* terminal = nullptr;
@@ -712,9 +716,9 @@ int main(int argc, char* argv[]) {
     if (demoMode) {
         // Demo mode: scrolling text
         demoGrid = new Grid(cols, rows);
-        appState.demoGrid = demoGrid;
-        appState.scrollMs = scrollMs;
-        appState.lastScrollTime = glfwGetTime();
+        appState._demoGrid = demoGrid;
+        appState._scrollMs = scrollMs;
+        appState._lastScrollTime = glfwGetTime();
 
         // Load dictionary
         static std::vector<std::string> dictionary;
@@ -736,14 +740,14 @@ int main(int argc, char* argv[]) {
                          "cell", "color", "alpha", "buffer", "vertex", "fragment", "compute"};
             std::cout << "Using fallback dictionary with " << dictionary.size() << " words" << std::endl;
         }
-        appState.dictionary = &dictionary;
+        appState._dictionary = &dictionary;
         std::srand(static_cast<unsigned>(std::time(nullptr)));
 
         // Fill initial content
         for (uint32_t row = 0; row < rows; ++row) {
             std::string line = generateLine(dictionary, cols);
             RGB color = g_colors[std::rand() % 4];
-            demoGrid->writeString(0, row, line.c_str(), color.r, color.g, color.b, &font);
+            demoGrid->writeString(0, row, line.c_str(), color._r, color._g, color._b, &font);
         }
 
         std::cout << "Demo mode: Grid " << cols << "x" << rows << ", scroll: " << scrollMs << "ms" << std::endl;
@@ -753,11 +757,11 @@ int main(int argc, char* argv[]) {
         // Terminal mode
         terminal = new Terminal(cols, rows, &font);
         terminal->setConfig(&config);
-        appState.terminal = terminal;
+        appState._terminal = terminal;
 
         // Create and configure PluginManager
         PluginManager* pluginMgr = new PluginManager();
-        appState.pluginManager = pluginMgr;
+        appState._pluginManager = pluginMgr;
 
         // Register built-in plugins
         pluginMgr->registerPlugin("shader", ShaderToy::create);
@@ -786,7 +790,7 @@ int main(int argc, char* argv[]) {
         }
 
         std::cout << "Terminal mode: Grid " << cols << "x" << rows
-                  << " (damage tracking: " << (config.useDamageTracking ? "on" : "off") << ")" << std::endl;
+                  << " (damage tracking: " << (config._useDamageTracking ? "on" : "off") << ")" << std::endl;
 
         // Set up keyboard and mouse callbacks
         glfwSetKeyCallback(window, keyCallback);
@@ -806,27 +810,27 @@ int main(int argc, char* argv[]) {
         if (!state) return;
 
         // Resize WebGPU context
-        if (state->ctx) {
-            state->ctx->resize(static_cast<uint32_t>(newWidth), static_cast<uint32_t>(newHeight));
+        if (state->_ctx) {
+            state->_ctx->resize(static_cast<uint32_t>(newWidth), static_cast<uint32_t>(newHeight));
         }
 
         // Recalculate grid size based on current cell size
-        float cellWidth = state->baseCellWidth * state->zoomLevel;
-        float cellHeight = state->baseCellHeight * state->zoomLevel;
+        float cellWidth = state->_baseCellWidth * state->_zoomLevel;
+        float cellHeight = state->_baseCellHeight * state->_zoomLevel;
         uint32_t newCols = static_cast<uint32_t>(newWidth / cellWidth);
         uint32_t newRows = static_cast<uint32_t>(newHeight / cellHeight);
 
-        if (newCols != state->cols || newRows != state->rows) {
-            state->cols = newCols;
-            state->rows = newRows;
+        if (newCols != state->_cols || newRows != state->_rows) {
+            state->_cols = newCols;
+            state->_rows = newRows;
 
 #if !YETTY_WEB
-            if (state->terminal) {
-                state->terminal->resize(newCols, newRows);
+            if (state->_terminal) {
+                state->_terminal->resize(newCols, newRows);
             }
 #endif
-            if (state->demoGrid) {
-                state->demoGrid->resize(newCols, newRows);
+            if (state->_demoGrid) {
+                state->_demoGrid->resize(newCols, newRows);
             }
 
             std::cout << "Window resize -> Grid " << newCols << "x" << newRows << std::endl;
@@ -850,7 +854,7 @@ int main(int argc, char* argv[]) {
 
     std::cout << "Shutting down..." << std::endl;
 
-    delete appState.pluginManager;
+    delete appState._pluginManager;
     delete terminal;
     delete demoGrid;
 

@@ -13,7 +13,7 @@ namespace yetty {
 ShaderToyPlugin::ShaderToyPlugin() = default;
 
 ShaderToyPlugin::~ShaderToyPlugin() {
-    dispose();
+    (void)dispose();
 }
 
 Result<PluginPtr> ShaderToyPlugin::create() {
@@ -27,9 +27,12 @@ Result<void> ShaderToyPlugin::init(WebGPUContext* ctx) {
     return Ok();
 }
 
-void ShaderToyPlugin::dispose() {
-    Plugin::dispose();
+Result<void> ShaderToyPlugin::dispose() {
+    if (auto res = Plugin::dispose(); !res) {
+        return Err<void>("Failed to dispose ShaderToyPlugin", res);
+    }
     _initialized = false;
+    return Ok();
 }
 
 Result<PluginLayerPtr> ShaderToyPlugin::createLayer(const std::string& payload) {
@@ -41,13 +44,16 @@ Result<PluginLayerPtr> ShaderToyPlugin::createLayer(const std::string& payload) 
     return Ok<PluginLayerPtr>(layer);
 }
 
-void ShaderToyPlugin::renderAll(WebGPUContext& ctx,
-                                 WGPUTextureView targetView, WGPUTextureFormat targetFormat,
-                                 uint32_t screenWidth, uint32_t screenHeight,
-                                 float cellWidth, float cellHeight,
-                                 int scrollOffset, uint32_t termRows) {
+Result<void> ShaderToyPlugin::renderAll(WebGPUContext& ctx,
+                                         WGPUTextureView targetView, WGPUTextureFormat targetFormat,
+                                         uint32_t screenWidth, uint32_t screenHeight,
+                                         float cellWidth, float cellHeight,
+                                         int scrollOffset, uint32_t termRows,
+                                         bool isAltScreen) {
+    ScreenType currentScreen = isAltScreen ? ScreenType::Alternate : ScreenType::Main;
     for (auto& layerBase : _layers) {
         if (!layerBase->isVisible()) continue;
+        if (layerBase->getScreenType() != currentScreen) continue;
 
         auto layer = std::static_pointer_cast<ShaderToyLayer>(layerBase);
 
@@ -70,10 +76,13 @@ void ShaderToyPlugin::renderAll(WebGPUContext& ctx,
             }
         }
 
-        layer->render(ctx, targetView, targetFormat,
-                      screenWidth, screenHeight,
-                      pixelX, pixelY, pixelW, pixelH);
+        if (auto res = layer->render(ctx, targetView, targetFormat,
+                                      screenWidth, screenHeight,
+                                      pixelX, pixelY, pixelW, pixelH); !res) {
+            return Err<void>("Failed to render ShaderToy layer", res);
+        }
     }
+    return Ok();
 }
 
 //-----------------------------------------------------------------------------
@@ -83,7 +92,7 @@ void ShaderToyPlugin::renderAll(WebGPUContext& ctx,
 ShaderToyLayer::ShaderToyLayer() = default;
 
 ShaderToyLayer::~ShaderToyLayer() {
-    dispose();
+    (void)dispose();
 }
 
 Result<void> ShaderToyLayer::init(const std::string& payload) {
@@ -100,7 +109,7 @@ Result<void> ShaderToyLayer::init(const std::string& payload) {
     return Ok();
 }
 
-void ShaderToyLayer::dispose() {
+Result<void> ShaderToyLayer::dispose() {
     if (_bind_group) {
         wgpuBindGroupRelease(_bind_group);
         _bind_group = nullptr;
@@ -114,32 +123,33 @@ void ShaderToyLayer::dispose() {
         _uniform_buffer = nullptr;
     }
     _compiled = false;
+    return Ok();
 }
 
-void ShaderToyLayer::update(double deltaTime) {
+Result<void> ShaderToyLayer::update(double deltaTime) {
     _time += static_cast<float>(deltaTime);
+    return Ok();
 }
 
-void ShaderToyLayer::render(WebGPUContext& ctx,
-                             WGPUTextureView targetView, WGPUTextureFormat targetFormat,
-                             uint32_t screenWidth, uint32_t screenHeight,
-                             float pixelX, float pixelY, float pixelW, float pixelH) {
-    if (_failed) return;
+Result<void> ShaderToyLayer::render(WebGPUContext& ctx,
+                                     WGPUTextureView targetView, WGPUTextureFormat targetFormat,
+                                     uint32_t screenWidth, uint32_t screenHeight,
+                                     float pixelX, float pixelY, float pixelW, float pixelH) {
+    if (_failed) return Err<void>("ShaderToyLayer already failed");
 
     // First time: compile shader
     if (!_compiled) {
         auto result = compileShader(ctx, targetFormat, _payload);
         if (!result) {
-            std::cerr << "ShaderToyLayer: " << error_msg(result) << std::endl;
             _failed = true;
-            return;
+            return Err<void>("Failed to compile shader", result);
         }
         _compiled = true;
     }
 
     if (!_pipeline || !_uniform_buffer || !_bind_group) {
         _failed = true;
-        return;
+        return Err<void>("ShaderToyLayer pipeline not initialized");
     }
 
     // Update uniform buffer
@@ -182,8 +192,7 @@ void ShaderToyLayer::render(WebGPUContext& ctx,
     WGPUCommandEncoderDescriptor encoderDesc = {};
     WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(ctx.getDevice(), &encoderDesc);
     if (!encoder) {
-        std::cerr << "ShaderToyLayer: failed to create command encoder" << std::endl;
-        return;
+        return Err<void>("Failed to create command encoder");
     }
 
     // Render pass
@@ -198,9 +207,8 @@ void ShaderToyLayer::render(WebGPUContext& ctx,
 
     WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
     if (!pass) {
-        std::cerr << "ShaderToyLayer: failed to begin render pass" << std::endl;
         wgpuCommandEncoderRelease(encoder);
-        return;
+        return Err<void>("Failed to begin render pass");
     }
 
     wgpuRenderPassEncoderSetPipeline(pass, _pipeline);
@@ -216,6 +224,7 @@ void ShaderToyLayer::render(WebGPUContext& ctx,
         wgpuCommandBufferRelease(cmdBuffer);
     }
     wgpuCommandEncoderRelease(encoder);
+    return Ok();
 }
 
 bool ShaderToyLayer::onMouseMove(float localX, float localY) {

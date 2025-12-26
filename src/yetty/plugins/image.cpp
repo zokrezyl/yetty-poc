@@ -12,7 +12,7 @@ namespace yetty {
 //-----------------------------------------------------------------------------
 
 ImagePlugin::ImagePlugin() = default;
-ImagePlugin::~ImagePlugin() { dispose(); }
+ImagePlugin::~ImagePlugin() { (void)dispose(); }
 
 Result<PluginPtr> ImagePlugin::create() {
     return Ok<PluginPtr>(std::make_shared<ImagePlugin>());
@@ -24,9 +24,12 @@ Result<void> ImagePlugin::init(WebGPUContext* ctx) {
     return Ok();
 }
 
-void ImagePlugin::dispose() {
-    Plugin::dispose();
+Result<void> ImagePlugin::dispose() {
+    if (auto res = Plugin::dispose(); !res) {
+        return Err<void>("Failed to dispose ImagePlugin", res);
+    }
     _initialized = false;
+    return Ok();
 }
 
 Result<PluginLayerPtr> ImagePlugin::createLayer(const std::string& payload) {
@@ -38,13 +41,16 @@ Result<PluginLayerPtr> ImagePlugin::createLayer(const std::string& payload) {
     return Ok<PluginLayerPtr>(layer);
 }
 
-void ImagePlugin::renderAll(WebGPUContext& ctx,
-                             WGPUTextureView targetView, WGPUTextureFormat targetFormat,
-                             uint32_t screenWidth, uint32_t screenHeight,
-                             float cellWidth, float cellHeight,
-                             int scrollOffset, uint32_t termRows) {
+Result<void> ImagePlugin::renderAll(WebGPUContext& ctx,
+                                     WGPUTextureView targetView, WGPUTextureFormat targetFormat,
+                                     uint32_t screenWidth, uint32_t screenHeight,
+                                     float cellWidth, float cellHeight,
+                                     int scrollOffset, uint32_t termRows,
+                                     bool isAltScreen) {
+    ScreenType currentScreen = isAltScreen ? ScreenType::Alternate : ScreenType::Main;
     for (auto& layerBase : _layers) {
         if (!layerBase->isVisible()) continue;
+        if (layerBase->getScreenType() != currentScreen) continue;
 
         auto layer = std::static_pointer_cast<ImageLayer>(layerBase);
 
@@ -64,10 +70,13 @@ void ImagePlugin::renderAll(WebGPUContext& ctx,
             }
         }
 
-        layer->render(ctx, targetView, targetFormat,
-                      screenWidth, screenHeight,
-                      pixelX, pixelY, pixelW, pixelH);
+        if (auto res = layer->render(ctx, targetView, targetFormat,
+                                      screenWidth, screenHeight,
+                                      pixelX, pixelY, pixelW, pixelH); !res) {
+            return Err<void>("Failed to render ImageLayer", res);
+        }
     }
+    return Ok();
 }
 
 //-----------------------------------------------------------------------------
@@ -76,7 +85,7 @@ void ImagePlugin::renderAll(WebGPUContext& ctx,
 
 ImageLayer::ImageLayer() = default;
 
-ImageLayer::~ImageLayer() { dispose(); }
+ImageLayer::~ImageLayer() { (void)dispose(); }
 
 Result<void> ImageLayer::init(const std::string& payload) {
     if (payload.empty()) {
@@ -84,7 +93,7 @@ Result<void> ImageLayer::init(const std::string& payload) {
     }
 
     _payload = payload;
-    dispose();
+    (void)dispose();
 
     auto result = loadImage(payload);
     if (!result) {
@@ -115,7 +124,7 @@ Result<void> ImageLayer::loadImage(const std::string& data) {
     return Ok();
 }
 
-void ImageLayer::dispose() {
+Result<void> ImageLayer::dispose() {
     if (_bind_group) { wgpuBindGroupRelease(_bind_group); _bind_group = nullptr; }
     if (_pipeline) { wgpuRenderPipelineRelease(_pipeline); _pipeline = nullptr; }
     if (_uniform_buffer) { wgpuBufferRelease(_uniform_buffer); _uniform_buffer = nullptr; }
@@ -124,27 +133,28 @@ void ImageLayer::dispose() {
     if (_texture) { wgpuTextureRelease(_texture); _texture = nullptr; }
     if (_image_data) { stbi_image_free(_image_data); _image_data = nullptr; }
     _gpu_initialized = false;
+    return Ok();
 }
 
-void ImageLayer::render(WebGPUContext& ctx,
-                         WGPUTextureView targetView, WGPUTextureFormat targetFormat,
-                         uint32_t screenWidth, uint32_t screenHeight,
-                         float pixelX, float pixelY, float pixelW, float pixelH) {
-    if (_failed || !_image_data) return;
+Result<void> ImageLayer::render(WebGPUContext& ctx,
+                                 WGPUTextureView targetView, WGPUTextureFormat targetFormat,
+                                 uint32_t screenWidth, uint32_t screenHeight,
+                                 float pixelX, float pixelY, float pixelW, float pixelH) {
+    if (_failed) return Err<void>("ImageLayer already failed");
+    if (!_image_data) return Err<void>("ImageLayer has no image data");
 
     if (!_gpu_initialized) {
         auto result = createPipeline(ctx, targetFormat);
         if (!result) {
-            std::cerr << "ImageLayer: " << error_msg(result) << std::endl;
             _failed = true;
-            return;
+            return Err<void>("Failed to create pipeline", result);
         }
         _gpu_initialized = true;
     }
 
     if (!_pipeline || !_uniform_buffer || !_bind_group) {
         _failed = true;
-        return;
+        return Err<void>("ImageLayer pipeline not initialized");
     }
 
     float ndcX = (pixelX / screenWidth) * 2.0f - 1.0f;
@@ -162,7 +172,7 @@ void ImageLayer::render(WebGPUContext& ctx,
 
     WGPUCommandEncoderDescriptor encoderDesc = {};
     WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(ctx.getDevice(), &encoderDesc);
-    if (!encoder) return;
+    if (!encoder) return Err<void>("Failed to create command encoder");
 
     WGPURenderPassColorAttachment colorAttachment = {};
     colorAttachment.view = targetView;
@@ -174,7 +184,10 @@ void ImageLayer::render(WebGPUContext& ctx,
     passDesc.colorAttachments = &colorAttachment;
 
     WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
-    if (!pass) { wgpuCommandEncoderRelease(encoder); return; }
+    if (!pass) {
+        wgpuCommandEncoderRelease(encoder);
+        return Err<void>("Failed to begin render pass");
+    }
 
     wgpuRenderPassEncoderSetPipeline(pass, _pipeline);
     wgpuRenderPassEncoderSetBindGroup(pass, 0, _bind_group, 0, nullptr);
@@ -189,6 +202,7 @@ void ImageLayer::render(WebGPUContext& ctx,
         wgpuCommandBufferRelease(cmdBuffer);
     }
     wgpuCommandEncoderRelease(encoder);
+    return Ok();
 }
 
 Result<void> ImageLayer::createPipeline(WebGPUContext& ctx, WGPUTextureFormat targetFormat) {

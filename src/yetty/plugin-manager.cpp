@@ -13,7 +13,7 @@ PluginManager::PluginManager() = default;
 PluginManager::~PluginManager() {
     // Dispose all plugins (which disposes their layers)
     for (auto& [name, plugin] : plugins_) {
-        if (plugin) plugin->dispose();
+        if (plugin) (void)plugin->dispose();
     }
     plugins_.clear();
     pluginMetas_.clear();
@@ -23,12 +23,18 @@ PluginManager::~PluginManager() {
         if (handle) dlclose(handle);
     }
     handles_.clear();
+
+    // Clean up frame renderer resources
+    if (frameBindGroup_) wgpuBindGroupRelease(frameBindGroup_);
+    if (frameBindGroupLayout_) wgpuBindGroupLayoutRelease(frameBindGroupLayout_);
+    if (frameUniformBuffer_) wgpuBufferRelease(frameUniformBuffer_);
+    if (framePipeline_) wgpuRenderPipelineRelease(framePipeline_);
 }
 
 void PluginManager::registerPlugin(const std::string& name, BuiltinPluginFactory factory) {
     PluginMeta meta;
-    meta.name = name;
-    meta.factory = std::move(factory);
+    meta._name = name;
+    meta._factory = std::move(factory);
     pluginMetas_[name] = std::move(meta);
     std::cout << "Registered built-in plugin: " << name << std::endl;
 }
@@ -68,12 +74,12 @@ void PluginManager::loadPluginsFromDirectory(const std::string& path) {
             }
 
             PluginMeta meta;
-            meta.name = nameFn();
-            meta.handle = handle;
-            meta.createFn = createFn;
+            meta._name = nameFn();
+            meta._handle = handle;
+            meta._createFn = createFn;
 
-            std::cout << "Loaded plugin: " << meta.name << " from " << filePath << std::endl;
-            pluginMetas_[meta.name] = std::move(meta);
+            std::cout << "Loaded plugin: " << meta._name << " from " << filePath << std::endl;
+            pluginMetas_[meta._name] = std::move(meta);
             handles_.push_back(handle);
         }
     }
@@ -95,10 +101,10 @@ Result<PluginPtr> PluginManager::getOrCreatePlugin(const std::string& name) {
     const auto& meta = metaIt->second;
     Result<PluginPtr> result;
 
-    if (meta.factory) {
-        result = meta.factory();
-    } else if (meta.createFn) {
-        result = meta.createFn();
+    if (meta._factory) {
+        result = meta._factory();
+    } else if (meta._createFn) {
+        result = meta._createFn();
     } else {
         return Err<PluginPtr>("Plugin has no factory: " + name);
     }
@@ -115,7 +121,7 @@ Result<PluginPtr> PluginManager::getOrCreatePlugin(const std::string& name) {
 Result<PluginLayerPtr> PluginManager::createLayer(const std::string& pluginName,
                                                    PositionMode mode,
                                                    int32_t x, int32_t y,
-                                                   uint32_t widthCells, uint32_t heightCells,
+                                                   int32_t widthCells, int32_t heightCells,
                                                    const std::string& payload,
                                                    Grid* grid,
                                                    uint32_t cellWidth, uint32_t cellHeight) {
@@ -133,12 +139,39 @@ Result<PluginLayerPtr> PluginManager::createLayer(const std::string& pluginName,
     }
     PluginLayerPtr layer = *layerResult;
 
+    // Resolve flexible dimensions using terminal size
+    uint32_t termCols = grid ? grid->getCols() : 80;
+    uint32_t termRows = grid ? grid->getRows() : 24;
+
+    uint32_t finalWidth, finalHeight;
+
+    // Width: 0 = stretch to edge, negative = termCols - abs(value)
+    if (widthCells == 0) {
+        finalWidth = (x >= 0 && static_cast<uint32_t>(x) < termCols) ? termCols - x : 1;
+    } else if (widthCells < 0) {
+        int32_t w = static_cast<int32_t>(termCols) + widthCells;  // termCols - abs(widthCells)
+        finalWidth = (w > 0) ? static_cast<uint32_t>(w) : 1;
+    } else {
+        finalWidth = static_cast<uint32_t>(widthCells);
+    }
+
+    // Height: 0 = stretch to edge, negative = termRows - abs(value)
+    if (heightCells == 0) {
+        finalHeight = (y >= 0 && static_cast<uint32_t>(y) < termRows) ? termRows - y : 1;
+    } else if (heightCells < 0) {
+        int32_t h = static_cast<int32_t>(termRows) + heightCells;  // termRows - abs(heightCells)
+        finalHeight = (h > 0) ? static_cast<uint32_t>(h) : 1;
+    } else {
+        finalHeight = static_cast<uint32_t>(heightCells);
+    }
+
     // Configure the layer
     layer->setId(nextLayerId_++);
     layer->setPositionMode(mode);
+    layer->setScreenType(isAltScreen_ ? ScreenType::Alternate : ScreenType::Main);
     layer->setPosition(x, y);
-    layer->setCellSize(widthCells, heightCells);
-    layer->setPixelSize(widthCells * cellWidth, heightCells * cellHeight);
+    layer->setCellSize(finalWidth, finalHeight);
+    layer->setPixelSize(finalWidth * cellWidth, finalHeight * cellHeight);
 
     // Add to plugin
     plugin->addLayer(layer);
@@ -161,7 +194,9 @@ Result<void> PluginManager::updateLayer(uint32_t id, const std::string& payload)
     layer->setNeedsRender(true);
 
     // Re-init
-    layer->dispose();
+    if (auto res = layer->dispose(); !res) {
+        return Err<void>("Failed to dispose layer during update", res);
+    }
     if (auto res = layer->init(payload); !res) {
         return Err<void>("Layer re-init failed", res);
     }
@@ -176,7 +211,9 @@ Result<void> PluginManager::removeLayer(uint32_t id, Grid* grid) {
             if (grid) {
                 clearGridCells(grid, layer.get());
             }
-            plugin->removeLayer(id);
+            if (auto res = plugin->removeLayer(id); !res) {
+                return Err<void>("Failed to remove layer from plugin", res);
+            }
             return Ok();
         }
     }
@@ -311,8 +348,8 @@ bool PluginManager::handleOSCSequence(const std::string& sequence,
         PositionMode posMode = (mode == "A") ? PositionMode::Absolute : PositionMode::Relative;
         int32_t x = std::stoi(xStr);
         int32_t y = std::stoi(yStr);
-        uint32_t w = std::stoul(wStr);
-        uint32_t h = std::stoul(hStr);
+        int32_t w = std::stoi(wStr);  // 0 = stretch to edge, negative = termSize - abs(value)
+        int32_t h = std::stoi(hStr);
 
         size_t payloadStart = findNthSemicolon(sequence, 7);
         std::string encodedPayload = (payloadStart != std::string::npos)
@@ -342,42 +379,106 @@ bool PluginManager::handleOSCSequence(const std::string& sequence,
     return false;
 }
 
-void PluginManager::update(double deltaTime) {
+Result<void> PluginManager::update(double deltaTime) {
     for (auto& [name, plugin] : plugins_) {
-        plugin->update(deltaTime);
+        if (auto res = plugin->update(deltaTime); !res) {
+            return Err<void>("Failed to update plugin " + name, res);
+        }
     }
+    return Ok();
 }
 
-void PluginManager::render(WebGPUContext& ctx, WGPUTextureView targetView,
-                            uint32_t screenWidth, uint32_t screenHeight,
-                            float cellWidth, float cellHeight,
-                            int scrollOffset, uint32_t termRows) {
-    if (!targetView) return;
+Result<void> PluginManager::render(WebGPUContext& ctx, WGPUTextureView targetView,
+                                    uint32_t screenWidth, uint32_t screenHeight,
+                                    float cellWidth, float cellHeight,
+                                    int scrollOffset, uint32_t termRows) {
+    if (!targetView) return Err<void>("PluginManager::render: targetView is null");
+
+    // Initialize frame renderer on first use
+    if (!frameRendererInitialized_) {
+        if (auto res = initFrameRenderer(ctx.getDevice(), ctx.getSurfaceFormat()); !res) {
+            return Err<void>("Failed to init frame renderer", res);
+        }
+        frameRendererInitialized_ = true;
+    }
+
+    // Render debug frames first, then plugins on top
+    constexpr float framePadding = 2.0f;  // Pixels larger than layer bounds
 
     for (auto& [name, plugin] : plugins_) {
         // Lazy init plugin if needed
         if (!plugin->isInitialized()) {
             if (auto res = plugin->init(&ctx); !res) {
-                std::cerr << "Failed to init plugin " << name << ": " << error_msg(res) << std::endl;
-                continue;
+                return Err<void>("Failed to init plugin " + name, res);
             }
         }
 
-        plugin->renderAll(ctx, targetView, ctx.getSurfaceFormat(),
-                          screenWidth, screenHeight,
-                          cellWidth, cellHeight,
-                          scrollOffset, termRows);
+        // Render debug frame for each layer
+        ScreenType currentScreen = isAltScreen_ ? ScreenType::Alternate : ScreenType::Main;
+        for (auto& layer : plugin->getLayers()) {
+            if (!layer->isVisible()) continue;
+
+            // Skip layers that belong to a different screen
+            if (layer->getScreenType() != currentScreen) continue;
+
+            float pixelX = layer->getX() * cellWidth;
+            float pixelY = layer->getY() * cellHeight;
+            float pixelW = layer->getWidthCells() * cellWidth;
+            float pixelH = layer->getHeightCells() * cellHeight;
+
+            // Adjust for scroll offset
+            if (layer->getPositionMode() == PositionMode::Relative && scrollOffset > 0) {
+                pixelY += scrollOffset * cellHeight;
+            }
+
+            // Skip if off-screen
+            if (termRows > 0) {
+                float screenPixelHeight = termRows * cellHeight;
+                if (pixelY + pixelH <= 0 || pixelY >= screenPixelHeight) {
+                    continue;
+                }
+            }
+
+            // Determine frame color based on state
+            float r, g, b, a;
+            if (layer == focusedLayer_) {
+                r = 0.0f; g = 1.0f; b = 0.0f; a = 1.0f;  // Green for focused
+            } else if (layer == hoveredLayer_) {
+                r = 1.0f; g = 1.0f; b = 0.0f; a = 1.0f;  // Yellow for hovered
+            } else {
+                r = 0.3f; g = 0.5f; b = 0.7f; a = 0.8f;  // Dim cyan for default
+            }
+
+            // Render frame slightly larger than layer
+            renderFrame(ctx, targetView, screenWidth, screenHeight,
+                        pixelX - framePadding, pixelY - framePadding,
+                        pixelW + framePadding * 2, pixelH + framePadding * 2,
+                        r, g, b, a);
+        }
+
+        // Render plugin content
+        if (auto res = plugin->renderAll(ctx, targetView, ctx.getSurfaceFormat(),
+                                          screenWidth, screenHeight,
+                                          cellWidth, cellHeight,
+                                          scrollOffset, termRows,
+                                          isAltScreen_); !res) {
+            return Err<void>("Failed to render plugin " + name, res);
+        }
     }
+    return Ok();
 }
 
-void PluginManager::onTerminalResize(uint32_t newCols, uint32_t newRows,
-                                      uint32_t cellWidth, uint32_t cellHeight) {
+Result<void> PluginManager::onTerminalResize(uint32_t newCols, uint32_t newRows,
+                                              uint32_t cellWidth, uint32_t cellHeight) {
     (void)newCols;
     (void)newRows;
 
     for (auto& [name, plugin] : plugins_) {
-        plugin->onTerminalResize(cellWidth, cellHeight);
+        if (auto res = plugin->onTerminalResize(cellWidth, cellHeight); !res) {
+            return Err<void>("Failed to resize plugin " + name, res);
+        }
     }
+    return Ok();
 }
 
 void PluginManager::onScroll(int lines, Grid* grid) {
@@ -498,6 +599,19 @@ void PluginManager::clearFocus() {
     }
 }
 
+void PluginManager::onAltScreenChange(bool isAltScreen) {
+    isAltScreen_ = isAltScreen;
+    // Clear focus when switching screens - focused layer may not be visible
+    if (focusedLayer_) {
+        ScreenType currentScreen = isAltScreen ? ScreenType::Alternate : ScreenType::Main;
+        if (focusedLayer_->getScreenType() != currentScreen) {
+            clearFocus();
+        }
+    }
+    // Also clear hovered layer
+    hoveredLayer_ = nullptr;
+}
+
 bool PluginManager::onMouseMove(float pixelX, float pixelY, const Grid* grid,
                                  float cellWidth, float cellHeight, int scrollOffset) {
     lastMouseX_ = pixelX;
@@ -508,6 +622,10 @@ bool PluginManager::onMouseMove(float pixelX, float pixelY, const Grid* grid,
     int logicalRow = row - scrollOffset;
 
     PluginLayerPtr layer = layerAtCell(col, logicalRow, grid);
+
+    // Track hovered layer for debug frame coloring
+    hoveredLayer_ = layer;
+
     if (layer && layer->wantsMouse()) {
         float layerPixelX = layer->getX() * cellWidth;
         float layerPixelY = layer->getY() * cellHeight;
@@ -591,6 +709,236 @@ bool PluginManager::onChar(unsigned int codepoint) {
         return focusedLayer_->onChar(codepoint);
     }
     return false;
+}
+
+//-----------------------------------------------------------------------------
+// Debug frame rendering
+//-----------------------------------------------------------------------------
+
+Result<void> PluginManager::initFrameRenderer(WGPUDevice device, WGPUTextureFormat format) {
+    // Shader that draws a thin rectangular outline
+    const char* shaderCode = R"(
+struct Uniforms {
+    rect: vec4<f32>,  // x, y, w, h in NDC
+    color: vec4<f32>,
+    screenSize: vec2<f32>,
+    thickness: f32,
+    _pad: f32,
+}
+
+@group(0) @binding(0) var<uniform> u: Uniforms;
+
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+}
+
+@vertex fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOutput {
+    // Full-screen quad vertices
+    var positions = array<vec2<f32>, 6>(
+        vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 0.0), vec2<f32>(1.0, 1.0),
+        vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 1.0), vec2<f32>(0.0, 1.0)
+    );
+    let pos = positions[vi];
+
+    var out: VertexOutput;
+    out.position = vec4<f32>(
+        u.rect.x + pos.x * u.rect.z,
+        u.rect.y - pos.y * u.rect.w,
+        0.0, 1.0
+    );
+    out.uv = pos;
+    return out;
+}
+
+@fragment fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
+    // Calculate pixel position within rect
+    let pixelW = u.rect.z * u.screenSize.x * 0.5;
+    let pixelH = u.rect.w * u.screenSize.y * 0.5;
+    let pixelX = uv.x * pixelW;
+    let pixelY = uv.y * pixelH;
+
+    // Check if pixel is on the border
+    let t = u.thickness;
+    let onBorder = pixelX < t || pixelX > pixelW - t ||
+                   pixelY < t || pixelY > pixelH - t;
+
+    if (onBorder) {
+        return u.color;
+    }
+    discard;
+}
+)";
+
+    WGPUShaderModuleWGSLDescriptor wgslDesc = {};
+    wgslDesc.chain.sType = WGPUSType_ShaderModuleWGSLDescriptor;
+    wgslDesc.code = shaderCode;
+
+    WGPUShaderModuleDescriptor shaderDesc = {};
+    shaderDesc.nextInChain = &wgslDesc.chain;
+    WGPUShaderModule shaderModule = wgpuDeviceCreateShaderModule(device, &shaderDesc);
+    if (!shaderModule) {
+        return Err<void>("Failed to create frame shader module");
+    }
+
+    // Create uniform buffer (rect + color + screenSize + thickness)
+    WGPUBufferDescriptor bufDesc = {};
+    bufDesc.size = 48;  // 4 floats rect + 4 floats color + 2 floats screen + 1 float thickness + 1 pad = 12 floats = 48 bytes
+    bufDesc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
+    frameUniformBuffer_ = wgpuDeviceCreateBuffer(device, &bufDesc);
+    if (!frameUniformBuffer_) {
+        wgpuShaderModuleRelease(shaderModule);
+        return Err<void>("Failed to create frame uniform buffer");
+    }
+
+    // Bind group layout
+    WGPUBindGroupLayoutEntry entry = {};
+    entry.binding = 0;
+    entry.visibility = WGPUShaderStage_Vertex | WGPUShaderStage_Fragment;
+    entry.buffer.type = WGPUBufferBindingType_Uniform;
+
+    WGPUBindGroupLayoutDescriptor bglDesc = {};
+    bglDesc.entryCount = 1;
+    bglDesc.entries = &entry;
+    frameBindGroupLayout_ = wgpuDeviceCreateBindGroupLayout(device, &bglDesc);
+    if (!frameBindGroupLayout_) {
+        wgpuShaderModuleRelease(shaderModule);
+        return Err<void>("Failed to create frame bind group layout");
+    }
+
+    // Bind group
+    WGPUBindGroupEntry bgEntry = {};
+    bgEntry.binding = 0;
+    bgEntry.buffer = frameUniformBuffer_;
+    bgEntry.size = 48;
+
+    WGPUBindGroupDescriptor bgDesc = {};
+    bgDesc.layout = frameBindGroupLayout_;
+    bgDesc.entryCount = 1;
+    bgDesc.entries = &bgEntry;
+    frameBindGroup_ = wgpuDeviceCreateBindGroup(device, &bgDesc);
+    if (!frameBindGroup_) {
+        wgpuShaderModuleRelease(shaderModule);
+        return Err<void>("Failed to create frame bind group");
+    }
+
+    // Pipeline layout
+    WGPUPipelineLayoutDescriptor plDesc = {};
+    plDesc.bindGroupLayoutCount = 1;
+    plDesc.bindGroupLayouts = &frameBindGroupLayout_;
+    WGPUPipelineLayout pipelineLayout = wgpuDeviceCreatePipelineLayout(device, &plDesc);
+
+    // Render pipeline
+    WGPURenderPipelineDescriptor pipelineDesc = {};
+    pipelineDesc.layout = pipelineLayout;
+    pipelineDesc.vertex.module = shaderModule;
+    pipelineDesc.vertex.entryPoint = "vs_main";
+
+    WGPUBlendState blend = {};
+    blend.color.srcFactor = WGPUBlendFactor_SrcAlpha;
+    blend.color.dstFactor = WGPUBlendFactor_OneMinusSrcAlpha;
+    blend.color.operation = WGPUBlendOperation_Add;
+    blend.alpha.srcFactor = WGPUBlendFactor_One;
+    blend.alpha.dstFactor = WGPUBlendFactor_OneMinusSrcAlpha;
+    blend.alpha.operation = WGPUBlendOperation_Add;
+
+    WGPUColorTargetState colorTarget = {};
+    colorTarget.format = format;
+    colorTarget.blend = &blend;
+    colorTarget.writeMask = WGPUColorWriteMask_All;
+
+    WGPUFragmentState fragState = {};
+    fragState.module = shaderModule;
+    fragState.entryPoint = "fs_main";
+    fragState.targetCount = 1;
+    fragState.targets = &colorTarget;
+    pipelineDesc.fragment = &fragState;
+
+    pipelineDesc.primitive.topology = WGPUPrimitiveTopology_TriangleList;
+    pipelineDesc.multisample.count = 1;
+    pipelineDesc.multisample.mask = ~0u;
+
+    framePipeline_ = wgpuDeviceCreateRenderPipeline(device, &pipelineDesc);
+
+    wgpuShaderModuleRelease(shaderModule);
+    wgpuPipelineLayoutRelease(pipelineLayout);
+
+    if (!framePipeline_) {
+        return Err<void>("Failed to create frame render pipeline");
+    }
+
+    std::cout << "PluginManager: frame renderer initialized" << std::endl;
+    return Ok();
+}
+
+void PluginManager::renderFrame(WebGPUContext& ctx, WGPUTextureView targetView,
+                                 uint32_t screenWidth, uint32_t screenHeight,
+                                 float x, float y, float w, float h,
+                                 float r, float g, float b, float a) {
+    if (!framePipeline_ || !frameUniformBuffer_ || !frameBindGroup_) return;
+
+    // Convert pixel coords to NDC
+    float ndcX = (x / screenWidth) * 2.0f - 1.0f;
+    float ndcY = 1.0f - (y / screenHeight) * 2.0f;
+    float ndcW = (w / screenWidth) * 2.0f;
+    float ndcH = (h / screenHeight) * 2.0f;
+
+    // Uniform data: rect, color, screenSize, thickness
+    struct Uniforms {
+        float rect[4];
+        float color[4];
+        float screenSize[2];
+        float thickness;
+        float pad;
+    } uniforms;
+
+    uniforms.rect[0] = ndcX;
+    uniforms.rect[1] = ndcY;
+    uniforms.rect[2] = ndcW;
+    uniforms.rect[3] = ndcH;
+    uniforms.color[0] = r;
+    uniforms.color[1] = g;
+    uniforms.color[2] = b;
+    uniforms.color[3] = a;
+    uniforms.screenSize[0] = static_cast<float>(screenWidth);
+    uniforms.screenSize[1] = static_cast<float>(screenHeight);
+    uniforms.thickness = 1.5f;  // Border thickness in pixels
+    uniforms.pad = 0.0f;
+
+    wgpuQueueWriteBuffer(ctx.getQueue(), frameUniformBuffer_, 0, &uniforms, sizeof(uniforms));
+
+    WGPUCommandEncoderDescriptor encoderDesc = {};
+    WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(ctx.getDevice(), &encoderDesc);
+    if (!encoder) return;
+
+    WGPURenderPassColorAttachment colorAttachment = {};
+    colorAttachment.view = targetView;
+    colorAttachment.loadOp = WGPULoadOp_Load;
+    colorAttachment.storeOp = WGPUStoreOp_Store;
+
+    WGPURenderPassDescriptor passDesc = {};
+    passDesc.colorAttachmentCount = 1;
+    passDesc.colorAttachments = &colorAttachment;
+
+    WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
+    if (!pass) {
+        wgpuCommandEncoderRelease(encoder);
+        return;
+    }
+
+    wgpuRenderPassEncoderSetPipeline(pass, framePipeline_);
+    wgpuRenderPassEncoderSetBindGroup(pass, 0, frameBindGroup_, 0, nullptr);
+    wgpuRenderPassEncoderDraw(pass, 6, 1, 0, 0);
+    wgpuRenderPassEncoderEnd(pass);
+    wgpuRenderPassEncoderRelease(pass);
+
+    WGPUCommandBufferDescriptor cmdDesc = {};
+    WGPUCommandBuffer cmdBuffer = wgpuCommandEncoderFinish(encoder, &cmdDesc);
+    if (cmdBuffer) {
+        wgpuQueueSubmit(ctx.getQueue(), 1, &cmdBuffer);
+        wgpuCommandBufferRelease(cmdBuffer);
+    }
+    wgpuCommandEncoderRelease(encoder);
 }
 
 } // namespace yetty

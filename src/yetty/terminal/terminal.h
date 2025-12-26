@@ -17,9 +17,9 @@ namespace yetty {
 
 // A single line in the scrollback buffer
 struct ScrollbackLine {
-    std::vector<uint32_t> chars;      // Unicode codepoints
-    std::vector<uint8_t> fgColors;    // RGB per cell (3 bytes each)
-    std::vector<uint8_t> bgColors;    // RGB per cell (3 bytes each)
+    std::vector<uint32_t> _chars;      // Unicode codepoints
+    std::vector<uint8_t> _fgColors;    // RGB per cell (3 bytes each)
+    std::vector<uint8_t> _bgColors;    // RGB per cell (3 bytes each)
 };
 
 // Forward declaration
@@ -27,8 +27,8 @@ class PluginManager;
 
 // Rectangle representing damaged (changed) cells
 struct DamageRect {
-    uint32_t startCol, startRow;
-    uint32_t endCol, endRow;  // exclusive
+    uint32_t _startCol, _startRow;
+    uint32_t _endCol, _endRow;  // exclusive
 };
 
 // Terminal class that wraps libvterm with PTY support
@@ -78,9 +78,13 @@ public:
     // Configuration
     void setConfig(const Config* config) { config_ = config; }
 
+    // Alternate screen state
+    bool isAltScreen() const { return isAltScreen_; }
+
     // Static callbacks for libvterm (must be public for C callback)
     static int onDamage(VTermRect rect, void* user);
     static int onMoveCursor(VTermPos pos, VTermPos oldpos, int visible, void* user);
+    static int onSetTermProp(VTermProp prop, VTermValue* val, void* user);
     static int onResize(int rows, int cols, void* user);
     static int onBell(void* user);
     static int onOSC(int command, VTermStringFragment frag, void* user);
@@ -132,6 +136,7 @@ private:
     int cursorCol_ = 0;
     bool cursorVisible_ = true;   // From libvterm (cursor shown/hidden by escape codes)
     bool cursorBlink_ = true;     // Blink state (toggled by timer)
+    bool isAltScreen_ = false;    // True when on alternate screen (vim, less, etc.)
     double lastBlinkTime_ = 0.0;
     double blinkInterval_ = 0.5;  // 500ms blink interval
 

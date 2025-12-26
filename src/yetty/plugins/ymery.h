@@ -29,15 +29,16 @@ public:
     const char* pluginName() const override { return "ymery"; }
 
     Result<void> init(WebGPUContext* ctx) override;
-    void dispose() override;
+    Result<void> dispose() override;
 
     Result<PluginLayerPtr> createLayer(const std::string& payload) override;
 
-    void renderAll(WebGPUContext& ctx,
-                   WGPUTextureView targetView, WGPUTextureFormat targetFormat,
-                   uint32_t screenWidth, uint32_t screenHeight,
-                   float cellWidth, float cellHeight,
-                   int scrollOffset, uint32_t termRows) override;
+    Result<void> renderAll(WebGPUContext& ctx,
+                           WGPUTextureView targetView, WGPUTextureFormat targetFormat,
+                           uint32_t screenWidth, uint32_t screenHeight,
+                           float cellWidth, float cellHeight,
+                           int scrollOffset, uint32_t termRows,
+                           bool isAltScreen = false) override;
 
 #ifdef YETTY_YMERY_ENABLED
     ImGuiContext* imguiContext() const { return _imgui_ctx; }
@@ -71,7 +72,7 @@ public:
     ~YmeryLayer() override;
 
     Result<void> init(const std::string& payload) override;
-    void dispose() override;
+    Result<void> dispose() override;
 
     bool onMouseMove(float x, float y) override;
     bool onMouseButton(int button, bool pressed) override;
