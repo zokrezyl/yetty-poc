@@ -280,6 +280,13 @@ static void mainLoopIteration() {
             return;
         }
 
+        // Upload any pending fallback glyphs to GPU
+        if (state._font && state._font->hasPendingGlyphs()) {
+            state._font->uploadPendingGlyphs(state._ctx->getDevice(), state._ctx->getQueue());
+            // Need to recreate the bind group with the new glyph metadata buffer
+            state._renderer->updateFontBindings(*state._font);
+        }
+
         // Get current window size
         int w, h;
         glfwGetFramebufferSize(state._window, &w, &h);

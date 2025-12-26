@@ -210,6 +210,12 @@ else()
         YETTY_USE_PREBUILT_ATLAS=0
     )
 
+    # Find fontconfig for font fallback
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(FONTCONFIG REQUIRED fontconfig)
+
+    target_include_directories(yetty PRIVATE ${FONTCONFIG_INCLUDE_DIRS})
+
     target_link_libraries(yetty PRIVATE
         webgpu
         glfw
@@ -221,6 +227,7 @@ else()
         freetype
         vterm
         util  # for forkpty
+        ${FONTCONFIG_LIBRARIES}
     )
 
     #-------------------------------------------------------------------------

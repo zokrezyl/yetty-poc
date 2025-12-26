@@ -3,6 +3,7 @@
 #if !YETTY_USE_PREBUILT_ATLAS
 #include <msdfgen.h>
 #include <msdfgen-ext.h>
+#include <fontconfig/fontconfig.h>
 #endif
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -22,10 +23,32 @@ namespace yetty {
 Font::Font() = default;
 
 Font::~Font() {
-    if (glyphMetadataBuffer_) wgpuBufferRelease(glyphMetadataBuffer_);
-    if (sampler_) wgpuSamplerRelease(sampler_);
-    if (textureView_) wgpuTextureViewRelease(textureView_);
-    if (texture_) wgpuTextureRelease(texture_);
+    if (_glyphMetadataBuffer) wgpuBufferRelease(_glyphMetadataBuffer);
+    if (_sampler) wgpuSamplerRelease(_sampler);
+    if (_textureView) wgpuTextureViewRelease(_textureView);
+    if (_texture) wgpuTextureRelease(_texture);
+
+#if !YETTY_USE_PREBUILT_ATLAS
+    // Clean up fallback fonts
+    for (auto& [path, handle] : _fallbackFonts) {
+        if (handle) {
+            msdfgen::destroyFont(static_cast<msdfgen::FontHandle*>(handle));
+        }
+    }
+    _fallbackFonts.clear();
+
+    // Clean up primary font
+    if (_primaryFont) {
+        msdfgen::destroyFont(static_cast<msdfgen::FontHandle*>(_primaryFont));
+        _primaryFont = nullptr;
+    }
+
+    // Clean up FreeType handle
+    if (_freetypeHandle) {
+        msdfgen::deinitializeFreetype(static_cast<msdfgen::FreetypeHandle*>(_freetypeHandle));
+        _freetypeHandle = nullptr;
+    }
+#endif
 }
 
 #if !YETTY_USE_PREBUILT_ATLAS
@@ -47,7 +70,7 @@ class ShelfPacker {
 public:
     ShelfPacker(int width, int height, int padding = 2)
         : width_(width), height_(height), padding_(padding),
-          shelfX_(padding), shelfY_(padding), shelfHeight_(0) {}
+          _shelfX(padding), _shelfY(padding), _shelfHeight(0) {}
 
     bool pack(int w, int h, int& outX, int& outY) {
         // Add padding
@@ -55,34 +78,34 @@ public:
         int ph = h + padding_;
 
         // Check if fits on current shelf
-        if (shelfX_ + pw > width_) {
+        if (_shelfX + pw > width_) {
             // Move to next shelf
-            shelfX_ = padding_;
-            shelfY_ += shelfHeight_ + padding_;
-            shelfHeight_ = 0;
+            _shelfX = padding_;
+            _shelfY += _shelfHeight + padding_;
+            _shelfHeight = 0;
         }
 
         // Check if fits vertically
-        if (shelfY_ + ph > height_) {
+        if (_shelfY + ph > height_) {
             return false;  // Atlas full
         }
 
-        outX = shelfX_;
-        outY = shelfY_;
-        shelfX_ += pw;
-        shelfHeight_ = std::max(shelfHeight_, ph);
+        outX = _shelfX;
+        outY = _shelfY;
+        _shelfX += pw;
+        _shelfHeight = std::max(_shelfHeight, ph);
         return true;
     }
 
 private:
     int width_, height_, padding_;
-    int shelfX_, shelfY_, shelfHeight_;
+    int _shelfX, _shelfY, _shelfHeight;
 };
 
 bool Font::generate(const std::string& fontPath, float fontSize, uint32_t atlasSize) {
-    fontSize_ = fontSize;
-    atlasWidth_ = atlasSize;
-    atlasHeight_ = atlasSize;
+    _fontSize = fontSize;
+    _atlasWidth = atlasSize;
+    _atlasHeight = atlasSize;
 
     // Initialize FreeType
     msdfgen::FreetypeHandle* ft = msdfgen::initializeFreetype();
@@ -178,7 +201,7 @@ bool Font::generate(const std::string& fontPath, float fontSize, uint32_t atlasS
             pg.sizeY = (bounds.t - bounds.b) * fontScale;
 
             // Calculate atlas size needed (with padding for SDF range)
-            int padding = static_cast<int>(std::ceil(pixelRange_));
+            int padding = static_cast<int>(std::ceil(_pixelRange));
             pg.atlasW = static_cast<int>(std::ceil(pg.sizeX)) + padding * 2;
             pg.atlasH = static_cast<int>(std::ceil(pg.sizeY)) + padding * 2;
         } else {
@@ -200,7 +223,7 @@ bool Font::generate(const std::string& fontPath, float fontSize, uint32_t atlasS
     });
 
     // Pack glyphs into atlas
-    ShelfPacker packer(atlasWidth_, atlasHeight_);
+    ShelfPacker packer(_atlasWidth, _atlasHeight);
     for (auto& glyph : glyphs) {
         if (glyph.atlasW > 0 && glyph.atlasH > 0) {
             if (!packer.pack(glyph.atlasW, glyph.atlasH, glyph.atlasX, glyph.atlasY)) {
@@ -213,10 +236,10 @@ bool Font::generate(const std::string& fontPath, float fontSize, uint32_t atlasS
     }
 
     // Create atlas bitmap (RGBA)
-    atlasData_.resize(atlasWidth_ * atlasHeight_ * 4, 0);
+    _atlasData.resize(_atlasWidth * _atlasHeight * 4, 0);
 
     // Generate MSDF for each glyph
-    int padding = static_cast<int>(std::ceil(pixelRange_));
+    int padding = static_cast<int>(std::ceil(_pixelRange));
 
     for (auto& glyph : glyphs) {
         if (glyph.shape.contours.empty()) continue;
@@ -242,7 +265,7 @@ bool Font::generate(const std::string& fontPath, float fontSize, uint32_t atlasS
             padding - glyph.boundsB * scale
         );
 
-        msdfgen::generateMSDF(msdf, glyph.shape, pixelRange_, scale, translate);
+        msdfgen::generateMSDF(msdf, glyph.shape, _pixelRange, scale, translate);
 
         // Copy to atlas with Y-flip (TrueType Y-up -> bitmap/WebGPU Y-down)
         for (int y = 0; y < glyph.atlasH; ++y) {
@@ -250,24 +273,48 @@ bool Font::generate(const std::string& fontPath, float fontSize, uint32_t atlasS
                 int atlasX = glyph.atlasX + x;
                 int atlasY = glyph.atlasY + (glyph.atlasH - 1 - y);  // Flip Y
 
-                if (atlasX >= 0 && atlasX < (int)atlasWidth_ &&
-                    atlasY >= 0 && atlasY < (int)atlasHeight_) {
-                    size_t idx = (atlasY * atlasWidth_ + atlasX) * 4;
-                    atlasData_[idx + 0] = static_cast<uint8_t>(std::clamp(msdf(x, y)[0] * 255.0f, 0.0f, 255.0f));
-                    atlasData_[idx + 1] = static_cast<uint8_t>(std::clamp(msdf(x, y)[1] * 255.0f, 0.0f, 255.0f));
-                    atlasData_[idx + 2] = static_cast<uint8_t>(std::clamp(msdf(x, y)[2] * 255.0f, 0.0f, 255.0f));
-                    atlasData_[idx + 3] = 255;
+                if (atlasX >= 0 && atlasX < (int)_atlasWidth &&
+                    atlasY >= 0 && atlasY < (int)_atlasHeight) {
+                    size_t idx = (atlasY * _atlasWidth + atlasX) * 4;
+                    _atlasData[idx + 0] = static_cast<uint8_t>(std::clamp(msdf(x, y)[0] * 255.0f, 0.0f, 255.0f));
+                    _atlasData[idx + 1] = static_cast<uint8_t>(std::clamp(msdf(x, y)[1] * 255.0f, 0.0f, 255.0f));
+                    _atlasData[idx + 2] = static_cast<uint8_t>(std::clamp(msdf(x, y)[2] * 255.0f, 0.0f, 255.0f));
+                    _atlasData[idx + 3] = 255;
                 }
             }
         }
     }
 
     // Calculate line height
-    lineHeight_ = static_cast<float>(lineHeight * fontScale);
+    _lineHeight = static_cast<float>(lineHeight * fontScale);
 
-    // Cleanup FreeType
-    msdfgen::destroyFont(font);
-    msdfgen::deinitializeFreetype(ft);
+    // Keep FreeType and font alive for fallback loading
+    _freetypeHandle = ft;
+    _primaryFont = font;
+
+    // Track shelf packer state for dynamic glyph addition
+    // We need to find the final position after packing
+    _shelfX = _atlasPadding;
+    _shelfY = _atlasPadding;
+    _shelfHeight = 0;
+    for (const auto& glyph : glyphs) {
+        if (glyph.atlasW > 0 && glyph.atlasH > 0) {
+            // Track maximum Y position used
+            int glyphBottom = glyph.atlasY + glyph.atlasH;
+            if (glyph.atlasX + glyph.atlasW > _shelfX) {
+                _shelfX = glyph.atlasX + glyph.atlasW + _atlasPadding;
+            }
+            if (glyphBottom > _shelfY) {
+                // This glyph is on a new shelf
+                _shelfY = glyph.atlasY;
+                _shelfHeight = glyph.atlasH;
+            }
+        }
+    }
+
+    // Note: We no longer cleanup FreeType here - done in destructor
+    // msdfgen::destroyFont(font);
+    // msdfgen::deinitializeFreetype(ft);
 
     // Extract glyph metrics
     for (const auto& glyph : glyphs) {
@@ -276,12 +323,12 @@ bool Font::generate(const std::string& fontPath, float fontSize, uint32_t atlasS
         if (glyph.atlasW > 0 && glyph.atlasH > 0) {
             // UV coordinates
             m._uvMin = glm::vec2(
-                static_cast<float>(glyph.atlasX) / atlasWidth_,
-                static_cast<float>(glyph.atlasY) / atlasHeight_
+                static_cast<float>(glyph.atlasX) / _atlasWidth,
+                static_cast<float>(glyph.atlasY) / _atlasHeight
             );
             m._uvMax = glm::vec2(
-                static_cast<float>(glyph.atlasX + glyph.atlasW) / atlasWidth_,
-                static_cast<float>(glyph.atlasY + glyph.atlasH) / atlasHeight_
+                static_cast<float>(glyph.atlasX + glyph.atlasW) / _atlasWidth,
+                static_cast<float>(glyph.atlasY + glyph.atlasH) / _atlasHeight
             );
         } else {
             m._uvMin = m._uvMax = glm::vec2(0);
@@ -299,11 +346,11 @@ bool Font::generate(const std::string& fontPath, float fontSize, uint32_t atlasS
         );
         m._advance = static_cast<float>(glyph.advance);
 
-        glyphs_[glyph.codepoint] = m;
+        _glyphs[glyph.codepoint] = m;
     }
 
-    std::cout << "Generated MSDF atlas: " << atlasWidth_ << "x" << atlasHeight_
-              << " with " << glyphs_.size() << " glyphs" << std::endl;
+    std::cout << "Generated MSDF atlas: " << _atlasWidth << "x" << _atlasHeight
+              << " with " << _glyphs.size() << " glyphs" << std::endl;
 
     // Build codepoint→index mapping
     buildGlyphIndexMap();
@@ -312,13 +359,13 @@ bool Font::generate(const std::string& fontPath, float fontSize, uint32_t atlasS
 }
 
 bool Font::saveAtlas(const std::string& atlasPath, const std::string& metricsPath) const {
-    if (atlasData_.empty()) {
+    if (_atlasData.empty()) {
         std::cerr << "No atlas data to save" << std::endl;
         return false;
     }
 
     // Save atlas as PNG
-    if (!stbi_write_png(atlasPath.c_str(), atlasWidth_, atlasHeight_, 4, atlasData_.data(), atlasWidth_ * 4)) {
+    if (!stbi_write_png(atlasPath.c_str(), _atlasWidth, _atlasHeight, 4, _atlasData.data(), _atlasWidth * 4)) {
         std::cerr << "Failed to write atlas PNG: " << atlasPath << std::endl;
         return false;
     }
@@ -331,15 +378,15 @@ bool Font::saveAtlas(const std::string& atlasPath, const std::string& metricsPat
     }
 
     file << "{\n";
-    file << "  \"atlasWidth\": " << atlasWidth_ << ",\n";
-    file << "  \"atlasHeight\": " << atlasHeight_ << ",\n";
-    file << "  \"fontSize\": " << fontSize_ << ",\n";
-    file << "  \"lineHeight\": " << lineHeight_ << ",\n";
-    file << "  \"pixelRange\": " << pixelRange_ << ",\n";
+    file << "  \"atlasWidth\": " << _atlasWidth << ",\n";
+    file << "  \"atlasHeight\": " << _atlasHeight << ",\n";
+    file << "  \"fontSize\": " << _fontSize << ",\n";
+    file << "  \"lineHeight\": " << _lineHeight << ",\n";
+    file << "  \"pixelRange\": " << _pixelRange << ",\n";
     file << "  \"glyphs\": {\n";
 
     bool first = true;
-    for (const auto& [codepoint, m] : glyphs_) {
+    for (const auto& [codepoint, m] : _glyphs) {
         if (!first) file << ",\n";
         first = false;
 
@@ -356,6 +403,358 @@ bool Font::saveAtlas(const std::string& atlasPath, const std::string& metricsPat
     file << "}\n";
 
     std::cout << "Saved atlas to " << atlasPath << " and metrics to " << metricsPath << std::endl;
+    return true;
+}
+
+std::vector<std::string> Font::findFontsForCodepoint(uint32_t codepoint) {
+    std::vector<std::string> fonts;
+
+    // Use fontconfig to find fonts that contain this codepoint
+    // We need outline fonts (not color bitmap) for MSDF rendering
+    FcConfig* config = FcInitLoadConfigAndFonts();
+    if (!config) {
+        std::cerr << "Failed to initialize fontconfig" << std::endl;
+        return fonts;
+    }
+
+    // Create a pattern that matches fonts containing this codepoint
+    FcPattern* pattern = FcPatternCreate();
+    if (!pattern) {
+        FcConfigDestroy(config);
+        return fonts;
+    }
+
+    // Create a charset containing just the codepoint we need
+    FcCharSet* charset = FcCharSetCreate();
+    FcCharSetAddChar(charset, codepoint);
+    FcPatternAddCharSet(pattern, FC_CHARSET, charset);
+
+    // Require outline fonts (not bitmap) - critical for MSDF rendering
+    FcPatternAddBool(pattern, FC_OUTLINE, FcTrue);
+    FcPatternAddBool(pattern, FC_SCALABLE, FcTrue);
+
+    // Configure pattern for best match
+    FcConfigSubstitute(config, pattern, FcMatchPattern);
+    FcDefaultSubstitute(pattern);
+
+    // Get sorted list of matching fonts
+    FcResult result;
+    FcFontSet* fontSet = FcFontSort(config, pattern, FcFalse, nullptr, &result);
+
+    if (fontSet) {
+        std::set<std::string> seen;  // Avoid duplicates
+
+        for (int i = 0; i < fontSet->nfont && fonts.size() < 10; i++) {
+            FcPattern* font = fontSet->fonts[i];
+            FcChar8* file = nullptr;
+            FcChar8* family = nullptr;
+
+            if (FcPatternGetString(font, FC_FILE, 0, &file) != FcResultMatch || !file) {
+                continue;
+            }
+
+            std::string fontPath = reinterpret_cast<const char*>(file);
+
+            // Skip duplicates
+            if (seen.count(fontPath)) {
+                continue;
+            }
+            seen.insert(fontPath);
+
+            // Get font family name
+            FcPatternGetString(font, FC_FAMILY, 0, &family);
+            std::string familyStr = family ? reinterpret_cast<const char*>(family) : "";
+
+            // Skip known color emoji fonts (they don't have proper outlines)
+            if (familyStr.find("Color") != std::string::npos) {
+                continue;
+            }
+
+            // Check if font has outline property set
+            FcBool outline = FcFalse;
+            if (FcPatternGetBool(font, FC_OUTLINE, 0, &outline) == FcResultMatch && !outline) {
+                continue;
+            }
+
+            fonts.push_back(fontPath);
+        }
+        FcFontSetDestroy(fontSet);
+    }
+
+    FcCharSetDestroy(charset);
+    FcPatternDestroy(pattern);
+    FcConfigDestroy(config);
+
+    return fonts;
+}
+
+bool Font::loadGlyphFromFont(const std::string& fontPath, uint32_t codepoint) {
+    if (!_freetypeHandle) {
+        return false;
+    }
+
+    msdfgen::FreetypeHandle* ft = static_cast<msdfgen::FreetypeHandle*>(_freetypeHandle);
+    msdfgen::FontHandle* font = nullptr;
+
+    // Check if we already loaded this font
+    auto it = _fallbackFonts.find(fontPath);
+    if (it != _fallbackFonts.end()) {
+        font = static_cast<msdfgen::FontHandle*>(it->second);
+    } else {
+        // Load the font
+        font = msdfgen::loadFont(ft, fontPath.c_str());
+        if (!font) {
+            return false;
+        }
+        _fallbackFonts[fontPath] = font;
+    }
+
+    // Get font metrics for scaling
+    msdfgen::FontMetrics metrics;
+    msdfgen::getFontMetrics(metrics, font);
+    double unitsPerEm = metrics.emSize > 0 ? metrics.emSize : (metrics.ascenderY - metrics.descenderY);
+    double fontScale = _fontSize / unitsPerEm;
+    int padding = static_cast<int>(std::ceil(_pixelRange));
+
+    // Load the glyph shape
+    msdfgen::Shape shape;
+    double advance;
+    if (!msdfgen::loadGlyph(shape, font, codepoint, &advance)) {
+        return false;
+    }
+
+    // Check if the glyph has actual outline data (color emoji fonts return empty shapes)
+    if (shape.contours.empty()) {
+        return false;
+    }
+
+    // Calculate glyph dimensions
+    int atlasW = 0, atlasH = 0;
+    double bearingX = 0, bearingY = 0, sizeX = 0, sizeY = 0;
+    double boundsL = 0, boundsB = 0, boundsR = 0, boundsT = 0;
+
+    if (!shape.contours.empty()) {
+        shape.normalize();
+        msdfgen::Shape::Bounds bounds = shape.getBounds();
+        boundsL = bounds.l;
+        boundsB = bounds.b;
+        boundsR = bounds.r;
+        boundsT = bounds.t;
+
+        // Calculate raw scaled size
+        double rawSizeY = (bounds.t - bounds.b) * fontScale;
+
+        // Scale fallback glyphs to match the actual rendered cell height
+        // _shelfHeight reflects the actual max glyph height in the atlas
+        double targetHeight = (_shelfHeight > 0) ? _shelfHeight : _fontSize * 0.5;
+        std::cerr << "[SCALE] rawSizeY=" << rawSizeY << " shelfHeight=" << _shelfHeight
+                  << " target=" << targetHeight << std::endl;
+        if (rawSizeY > targetHeight && targetHeight > 0) {
+            double scaleDown = targetHeight / rawSizeY;
+            fontScale *= scaleDown;
+            std::cerr << "[SCALE] Scaling down by " << scaleDown << std::endl;
+        }
+
+        bearingX = bounds.l * fontScale;
+        bearingY = bounds.t * fontScale;
+        sizeX = (bounds.r - bounds.l) * fontScale;
+        sizeY = (bounds.t - bounds.b) * fontScale;
+
+        atlasW = static_cast<int>(std::ceil(sizeX)) + padding * 2;
+        atlasH = static_cast<int>(std::ceil(sizeY)) + padding * 2;
+    }
+
+    // Pack into atlas using shelf packer logic
+    int atlasX = 0, atlasY = 0;
+    if (atlasW > 0 && atlasH > 0) {
+        int pw = atlasW + _atlasPadding;
+        int ph = atlasH + _atlasPadding;
+
+        // Check if fits on current shelf
+        if (_shelfX + pw > static_cast<int>(_atlasWidth)) {
+            // Move to next shelf
+            _shelfX = _atlasPadding;
+            _shelfY += _shelfHeight + _atlasPadding;
+            _shelfHeight = 0;
+        }
+
+        // Check if fits vertically
+        if (_shelfY + ph > static_cast<int>(_atlasHeight)) {
+            std::cerr << "Atlas full, cannot add glyph U+" << std::hex << codepoint << std::dec << std::endl;
+            return false;
+        }
+
+        atlasX = _shelfX;
+        atlasY = _shelfY;
+        _shelfX += pw;
+        _shelfHeight = std::max(_shelfHeight, ph);
+    }
+
+    // Generate MSDF for the glyph
+    if (!shape.contours.empty()) {
+        if (!shape.validate()) {
+            std::cerr << "Warning: Invalid shape for fallback glyph U+" << std::hex << codepoint << std::dec << std::endl;
+        }
+
+        shape.normalize();
+        msdfgen::edgeColoringSimple(shape, 3.0);
+
+        msdfgen::Bitmap<float, 3> msdf(atlasW, atlasH);
+
+        msdfgen::Vector2 translate(
+            padding - boundsL * fontScale,
+            padding - boundsB * fontScale
+        );
+
+        msdfgen::generateMSDF(msdf, shape, _pixelRange, fontScale, translate);
+
+        // Copy to atlas with Y-flip
+        for (int y = 0; y < atlasH; ++y) {
+            for (int x = 0; x < atlasW; ++x) {
+                int ax = atlasX + x;
+                int ay = atlasY + (atlasH - 1 - y);
+
+                if (ax >= 0 && ax < static_cast<int>(_atlasWidth) &&
+                    ay >= 0 && ay < static_cast<int>(_atlasHeight)) {
+                    size_t idx = (ay * _atlasWidth + ax) * 4;
+                    _atlasData[idx + 0] = static_cast<uint8_t>(std::clamp(msdf(x, y)[0] * 255.0f, 0.0f, 255.0f));
+                    _atlasData[idx + 1] = static_cast<uint8_t>(std::clamp(msdf(x, y)[1] * 255.0f, 0.0f, 255.0f));
+                    _atlasData[idx + 2] = static_cast<uint8_t>(std::clamp(msdf(x, y)[2] * 255.0f, 0.0f, 255.0f));
+                    _atlasData[idx + 3] = 255;
+                }
+            }
+        }
+    }
+
+    // Create glyph metrics
+    GlyphMetrics m;
+    if (atlasW > 0 && atlasH > 0) {
+        m._uvMin = glm::vec2(
+            static_cast<float>(atlasX) / _atlasWidth,
+            static_cast<float>(atlasY) / _atlasHeight
+        );
+        m._uvMax = glm::vec2(
+            static_cast<float>(atlasX + atlasW) / _atlasWidth,
+            static_cast<float>(atlasY + atlasH) / _atlasHeight
+        );
+    } else {
+        m._uvMin = m._uvMax = glm::vec2(0);
+    }
+
+    m._size = glm::vec2(static_cast<float>(atlasW), static_cast<float>(atlasH));
+    m._bearing = glm::vec2(
+        static_cast<float>(bearingX - padding),
+        static_cast<float>(boundsT * fontScale + padding)
+    );
+    m._advance = static_cast<float>(advance * fontScale);
+
+    _glyphs[codepoint] = m;
+
+    // Add to index map and GPU metadata
+    uint16_t index = static_cast<uint16_t>(_glyphMetadata.size());
+    _codepointToIndex[codepoint] = index;
+
+    GlyphMetadataGPU gpu;
+    gpu._uvMinX = m._uvMin.x;
+    gpu._uvMinY = m._uvMin.y;
+    gpu._uvMaxX = m._uvMax.x;
+    gpu._uvMaxY = m._uvMax.y;
+    gpu._sizeX = m._size.x;
+    gpu._sizeY = m._size.y;
+    gpu._bearingX = m._bearing.x;
+    gpu._bearingY = m._bearing.y;
+    gpu._advance = m._advance;
+    gpu._pad = 0.0f;
+    _glyphMetadata.push_back(gpu);
+
+    // Mark as pending for GPU upload
+    _pendingGlyphs.insert(codepoint);
+
+    std::cout << "Loaded fallback glyph U+" << std::hex << codepoint << std::dec
+              << " at atlas (" << atlasX << "," << atlasY << ") size " << atlasW << "x" << atlasH << std::endl;
+
+    return true;
+}
+
+bool Font::loadMissingGlyph(uint32_t codepoint) {
+    std::cerr << "[FALLBACK] Loading U+" << std::hex << codepoint << std::dec << std::endl;
+
+    // Check if already loaded
+    if (_glyphs.find(codepoint) != _glyphs.end()) {
+        return true;
+    }
+
+    // Check if we already tried and failed
+    if (_failedCodepoints.find(codepoint) != _failedCodepoints.end()) {
+        return false;
+    }
+
+    // Check if FreeType is initialized
+    if (!_freetypeHandle) {
+        std::cerr << "[FALLBACK] No FreeType!" << std::endl;
+        _failedCodepoints.insert(codepoint);
+        return false;
+    }
+
+    // Find fallback fonts using fontconfig
+    std::vector<std::string> fontPaths = findFontsForCodepoint(codepoint);
+    std::cerr << "[FALLBACK] Found " << fontPaths.size() << " fonts" << std::endl;
+
+    if (fontPaths.empty()) {
+        _failedCodepoints.insert(codepoint);
+        return false;
+    }
+
+    // Try each font until one works
+    for (const auto& fontPath : fontPaths) {
+        if (loadGlyphFromFont(fontPath, codepoint)) {
+            return true;
+        }
+    }
+
+    // All fonts failed
+    _failedCodepoints.insert(codepoint);
+    return false;
+}
+
+bool Font::uploadPendingGlyphs(WGPUDevice device, WGPUQueue queue) {
+    if (_pendingGlyphs.empty()) {
+        return true;
+    }
+
+    // Re-upload entire atlas texture
+    // (A more efficient approach would be to only upload the changed regions)
+    if (_texture) {
+        WGPUImageCopyTexture dest = {};
+        dest.texture = _texture;
+        dest.mipLevel = 0;
+        dest.origin = {0, 0, 0};
+        dest.aspect = WGPUTextureAspect_All;
+
+        WGPUTextureDataLayout layout = {};
+        layout.offset = 0;
+        layout.bytesPerRow = _atlasWidth * 4;
+        layout.rowsPerImage = _atlasHeight;
+
+        WGPUExtent3D extent = {_atlasWidth, _atlasHeight, 1};
+        wgpuQueueWriteTexture(queue, &dest, _atlasData.data(), _atlasData.size(), &layout, &extent);
+    }
+
+    // Re-upload glyph metadata buffer
+    if (_glyphMetadataBuffer) {
+        // We need to recreate the buffer since it may have grown
+        wgpuBufferRelease(_glyphMetadataBuffer);
+        _glyphMetadataBuffer = nullptr;
+    }
+
+    if (!createGlyphMetadataBuffer(device)) {
+        std::cerr << "Failed to recreate glyph metadata buffer" << std::endl;
+        return false;
+    }
+
+    std::cout << "Uploaded " << _pendingGlyphs.size() << " pending glyphs to GPU" << std::endl;
+    _pendingGlyphs.clear();
+
     return true;
 }
 
@@ -404,9 +803,9 @@ bool Font::loadAtlas(const std::string& atlasPath, const std::string& metricsPat
         return false;
     }
 
-    atlasWidth_ = static_cast<uint32_t>(width);
-    atlasHeight_ = static_cast<uint32_t>(height);
-    atlasData_.assign(data, data + (width * height * 4));
+    _atlasWidth = static_cast<uint32_t>(width);
+    _atlasHeight = static_cast<uint32_t>(height);
+    _atlasData.assign(data, data + (width * height * 4));
     stbi_image_free(data);
 
     // Load metrics JSON
@@ -456,19 +855,19 @@ bool Font::loadAtlas(const std::string& atlasPath, const std::string& metricsPat
     // Parse header fields
     std::string val;
     val = findValue("atlasWidth");
-    if (!val.empty()) atlasWidth_ = parseUint(val);
+    if (!val.empty()) _atlasWidth = parseUint(val);
 
     val = findValue("atlasHeight");
-    if (!val.empty()) atlasHeight_ = parseUint(val);
+    if (!val.empty()) _atlasHeight = parseUint(val);
 
     val = findValue("fontSize");
-    if (!val.empty()) fontSize_ = parseFloat(val);
+    if (!val.empty()) _fontSize = parseFloat(val);
 
     val = findValue("lineHeight");
-    if (!val.empty()) lineHeight_ = parseFloat(val);
+    if (!val.empty()) _lineHeight = parseFloat(val);
 
     val = findValue("pixelRange");
-    if (!val.empty()) pixelRange_ = parseFloat(val);
+    if (!val.empty()) _pixelRange = parseFloat(val);
 
     // Parse glyphs
     auto glyphsPos = json.find("\"glyphs\":");
@@ -536,37 +935,75 @@ bool Font::loadAtlas(const std::string& atlasPath, const std::string& metricsPat
         val = findGlyphValue("advance");
         m._advance = val.empty() ? 0.0f : parseFloat(val);
 
-        glyphs_[codepoint] = m;
+        _glyphs[codepoint] = m;
         pos = braceEnd;
     }
 
-    std::cout << "Loaded atlas " << atlasWidth_ << "x" << atlasHeight_
-              << " with " << glyphs_.size() << " glyphs from " << metricsPath << std::endl;
+    std::cout << "Loaded atlas " << _atlasWidth << "x" << _atlasHeight
+              << " with " << _glyphs.size() << " glyphs from " << metricsPath << std::endl;
 
     buildGlyphIndexMap();
+
+#if !YETTY_USE_PREBUILT_ATLAS
+    // Initialize FreeType for fallback font loading
+    _freetypeHandle = msdfgen::initializeFreetype();
+    if (!_freetypeHandle) {
+        std::cerr << "Warning: Failed to initialize FreeType for fallback fonts" << std::endl;
+    }
+
+    // Calculate shelf packer state from loaded glyphs
+    // Find the maximum Y extent and rightmost X position
+    _shelfX = _atlasPadding;
+    _shelfY = _atlasPadding;
+    _shelfHeight = 0;
+    int maxY = 0;
+    for (const auto& [codepoint, m] : _glyphs) {
+        if (m._size.x > 0 && m._size.y > 0) {
+            // Calculate atlas position from UV coordinates
+            int atlasX = static_cast<int>(m._uvMin.x * _atlasWidth);
+            int atlasY = static_cast<int>(m._uvMin.y * _atlasHeight);
+            int atlasW = static_cast<int>((m._uvMax.x - m._uvMin.x) * _atlasWidth);
+            int atlasH = static_cast<int>((m._uvMax.y - m._uvMin.y) * _atlasHeight);
+
+            int bottom = atlasY + atlasH;
+            if (bottom > maxY) {
+                maxY = bottom;
+                _shelfY = atlasY;
+                _shelfHeight = atlasH;
+            }
+            int right = atlasX + atlasW + _atlasPadding;
+            if (right > _shelfX && atlasY >= _shelfY) {
+                _shelfX = right;
+            }
+        }
+    }
+
+    std::cout << "Shelf packer state: x=" << _shelfX << " y=" << _shelfY
+              << " height=" << _shelfHeight << std::endl;
+#endif
 
     return true;
 }
 
 void Font::buildGlyphIndexMap() {
-    codepointToIndex_.clear();
-    glyphMetadata_.clear();
+    _codepointToIndex.clear();
+    _glyphMetadata.clear();
 
     GlyphMetadataGPU emptyGlyph = {};
-    glyphMetadata_.push_back(emptyGlyph);
+    _glyphMetadata.push_back(emptyGlyph);
 
     std::vector<uint32_t> codepoints;
-    codepoints.reserve(glyphs_.size());
-    for (const auto& [cp, _] : glyphs_) {
+    codepoints.reserve(_glyphs.size());
+    for (const auto& [cp, _] : _glyphs) {
         codepoints.push_back(cp);
     }
     std::sort(codepoints.begin(), codepoints.end());
 
     for (uint32_t cp : codepoints) {
-        uint16_t index = static_cast<uint16_t>(glyphMetadata_.size());
-        codepointToIndex_[cp] = index;
+        uint16_t index = static_cast<uint16_t>(_glyphMetadata.size());
+        _codepointToIndex[cp] = index;
 
-        const GlyphMetrics& m = glyphs_[cp];
+        const GlyphMetrics& m = _glyphs[cp];
         GlyphMetadataGPU gpu;
         gpu._uvMinX = m._uvMin.x;
         gpu._uvMinY = m._uvMin.y;
@@ -579,31 +1016,49 @@ void Font::buildGlyphIndexMap() {
         gpu._advance = m._advance;
         gpu._pad = 0.0f;
 
-        glyphMetadata_.push_back(gpu);
+        _glyphMetadata.push_back(gpu);
     }
 
-    std::cout << "Built glyph index map with " << glyphMetadata_.size() << " entries" << std::endl;
+    std::cout << "Built glyph index map with " << _glyphMetadata.size() << " entries" << std::endl;
 }
 
-uint16_t Font::getGlyphIndex(uint32_t codepoint) const {
-    auto it = codepointToIndex_.find(codepoint);
-    if (it != codepointToIndex_.end()) {
+uint16_t Font::getGlyphIndex(uint32_t codepoint) {
+    auto it = _codepointToIndex.find(codepoint);
+    if (it != _codepointToIndex.end()) {
         return it->second;
     }
-    it = codepointToIndex_.find('?');
-    if (it != codepointToIndex_.end()) {
+
+    // Log missing codepoints in emoji range
+    if (codepoint > 0x1F000) {
+        std::cerr << "[FONT] Missing emoji U+" << std::hex << codepoint << std::dec << std::endl;
+    }
+
+#if !YETTY_USE_PREBUILT_ATLAS
+    // Try to load the glyph from a fallback font
+    if (loadMissingGlyph(codepoint)) {
+        it = _codepointToIndex.find(codepoint);
+        if (it != _codepointToIndex.end()) {
+            std::cerr << "[FONT] Loaded! index=" << it->second << std::endl;
+            return it->second;
+        }
+    }
+#endif
+
+    // Fall back to '?' character
+    it = _codepointToIndex.find('?');
+    if (it != _codepointToIndex.end()) {
         return it->second;
     }
     return 0;
 }
 
 bool Font::createGlyphMetadataBuffer(WGPUDevice device) {
-    if (glyphMetadata_.empty()) {
+    if (_glyphMetadata.empty()) {
         std::cerr << "No glyph metadata to create buffer from" << std::endl;
         return false;
     }
 
-    size_t bufferSize = glyphMetadata_.size() * sizeof(GlyphMetadataGPU);
+    size_t bufferSize = _glyphMetadata.size() * sizeof(GlyphMetadataGPU);
 
     WGPUBufferDescriptor bufDesc = {};
     bufDesc.label = "glyph metadata";
@@ -611,24 +1066,24 @@ bool Font::createGlyphMetadataBuffer(WGPUDevice device) {
     bufDesc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
     bufDesc.mappedAtCreation = true;
 
-    glyphMetadataBuffer_ = wgpuDeviceCreateBuffer(device, &bufDesc);
-    if (!glyphMetadataBuffer_) {
+    _glyphMetadataBuffer = wgpuDeviceCreateBuffer(device, &bufDesc);
+    if (!_glyphMetadataBuffer) {
         std::cerr << "Failed to create glyph metadata buffer" << std::endl;
         return false;
     }
 
-    void* mapped = wgpuBufferGetMappedRange(glyphMetadataBuffer_, 0, bufferSize);
-    memcpy(mapped, glyphMetadata_.data(), bufferSize);
-    wgpuBufferUnmap(glyphMetadataBuffer_);
+    void* mapped = wgpuBufferGetMappedRange(_glyphMetadataBuffer, 0, bufferSize);
+    memcpy(mapped, _glyphMetadata.data(), bufferSize);
+    wgpuBufferUnmap(_glyphMetadataBuffer);
 
     std::cout << "Created glyph metadata buffer: " << bufferSize << " bytes for "
-              << glyphMetadata_.size() << " glyphs" << std::endl;
+              << _glyphMetadata.size() << " glyphs" << std::endl;
 
     return true;
 }
 
 bool Font::createTexture(WGPUDevice device, WGPUQueue queue) {
-    if (atlasData_.empty()) {
+    if (_atlasData.empty()) {
         std::cerr << "No atlas data to create texture from" << std::endl;
         return false;
     }
@@ -636,31 +1091,31 @@ bool Font::createTexture(WGPUDevice device, WGPUQueue queue) {
     WGPUTextureDescriptor texDesc = {};
     texDesc.label = "font atlas";
     texDesc.dimension = WGPUTextureDimension_2D;
-    texDesc.size = {atlasWidth_, atlasHeight_, 1};
+    texDesc.size = {_atlasWidth, _atlasHeight, 1};
     texDesc.format = WGPUTextureFormat_RGBA8Unorm;
     texDesc.mipLevelCount = 1;
     texDesc.sampleCount = 1;
     texDesc.usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst;
 
-    texture_ = wgpuDeviceCreateTexture(device, &texDesc);
-    if (!texture_) {
+    _texture = wgpuDeviceCreateTexture(device, &texDesc);
+    if (!_texture) {
         std::cerr << "Failed to create font atlas texture" << std::endl;
         return false;
     }
 
     WGPUImageCopyTexture dest = {};
-    dest.texture = texture_;
+    dest.texture = _texture;
     dest.mipLevel = 0;
     dest.origin = {0, 0, 0};
     dest.aspect = WGPUTextureAspect_All;
 
     WGPUTextureDataLayout layout = {};
     layout.offset = 0;
-    layout.bytesPerRow = atlasWidth_ * 4;
-    layout.rowsPerImage = atlasHeight_;
+    layout.bytesPerRow = _atlasWidth * 4;
+    layout.rowsPerImage = _atlasHeight;
 
-    WGPUExtent3D extent = {atlasWidth_, atlasHeight_, 1};
-    wgpuQueueWriteTexture(queue, &dest, atlasData_.data(), atlasData_.size(), &layout, &extent);
+    WGPUExtent3D extent = {_atlasWidth, _atlasHeight, 1};
+    wgpuQueueWriteTexture(queue, &dest, _atlasData.data(), _atlasData.size(), &layout, &extent);
 
     WGPUTextureViewDescriptor viewDesc = {};
     viewDesc.format = WGPUTextureFormat_RGBA8Unorm;
@@ -671,7 +1126,7 @@ bool Font::createTexture(WGPUDevice device, WGPUQueue queue) {
     viewDesc.arrayLayerCount = 1;
     viewDesc.aspect = WGPUTextureAspect_All;
 
-    textureView_ = wgpuTextureCreateView(texture_, &viewDesc);
+    _textureView = wgpuTextureCreateView(_texture, &viewDesc);
 
     WGPUSamplerDescriptor samplerDesc = {};
     samplerDesc.addressModeU = WGPUAddressMode_ClampToEdge;
@@ -686,19 +1141,19 @@ bool Font::createTexture(WGPUDevice device, WGPUQueue queue) {
 #endif
     samplerDesc.maxAnisotropy = 1;
 
-    sampler_ = wgpuDeviceCreateSampler(device, &samplerDesc);
+    _sampler = wgpuDeviceCreateSampler(device, &samplerDesc);
 
     std::cout << "Created font atlas texture" << std::endl;
     return true;
 }
 
 const GlyphMetrics* Font::getGlyph(uint32_t codepoint) const {
-    auto it = glyphs_.find(codepoint);
-    if (it != glyphs_.end()) {
+    auto it = _glyphs.find(codepoint);
+    if (it != _glyphs.end()) {
         return &it->second;
     }
-    it = glyphs_.find('?');
-    if (it != glyphs_.end()) {
+    it = _glyphs.find('?');
+    if (it != _glyphs.end()) {
         return &it->second;
     }
     return nullptr;

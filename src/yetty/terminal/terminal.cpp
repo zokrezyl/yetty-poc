@@ -300,6 +300,12 @@ void Terminal::syncToGrid() {
                 vterm_screen_get_cell(vtermScreen_, pos, &cell);
 
                 uint32_t codepoint = cell.chars[0];
+
+                // Handle wide character continuation cells (chars[0] == -1 or 0xFFFFFFFF)
+                // These are placeholder cells for the right half of wide characters
+                if (codepoint == 0xFFFFFFFF || codepoint == static_cast<uint32_t>(-1)) {
+                    codepoint = ' ';  // Render as space (the left cell has the actual glyph)
+                }
                 if (codepoint == 0) codepoint = ' ';
 
                 uint16_t glyphIndex = font_ ? font_->getGlyphIndex(codepoint) : static_cast<uint16_t>(codepoint);
@@ -345,6 +351,11 @@ void Terminal::syncDamageToGrid() {
 
                 // Get glyph index
                 uint32_t codepoint = cell.chars[0];
+
+                // Handle wide character continuation cells
+                if (codepoint == 0xFFFFFFFF || codepoint == static_cast<uint32_t>(-1)) {
+                    codepoint = ' ';
+                }
                 if (codepoint == 0) codepoint = ' ';
 
                 uint16_t glyphIndex = font_ ? font_->getGlyphIndex(codepoint) : static_cast<uint16_t>(codepoint);
@@ -415,14 +426,11 @@ int Terminal::onMoveCursor(VTermPos pos, VTermPos oldpos, int visible, void* use
     Terminal* term = static_cast<Terminal*>(user);
     term->cursorRow_ = pos.row;
     term->cursorCol_ = pos.col;
-    // visible: 1 = visible, 0 = invisible, -1 = no change (cursor hidden by DECCM)
-    // Only hide cursor if explicitly set to 0
-    if (visible == 0) {
-        term->cursorVisible_ = false;
-    } else if (visible > 0) {
-        term->cursorVisible_ = true;
-    }
-    // If visible == -1, leave cursorVisible_ unchanged
+    // Note: visible param is NOT used for cursor visibility - that's handled by
+    // VTERM_PROP_CURSORVISIBLE in onSetTermProp. The visible param here indicates
+    // whether cursor moved to a visible area of the screen, but we always want to
+    // show cursor if DECTCEM is enabled.
+    (void)visible;
     (void)oldpos;
     return 0;
 }
@@ -481,7 +489,12 @@ int Terminal::onSbPushline(int cols, const VTermScreenCell* cells, void* user) {
 
     for (int i = 0; i < cols; i++) {
         const VTermScreenCell& cell = cells[i];
-        line._chars[i] = cell.chars[0] ? cell.chars[0] : ' ';
+        uint32_t ch = cell.chars[0];
+        // Handle wide character continuation cells
+        if (ch == 0xFFFFFFFF || ch == static_cast<uint32_t>(-1) || ch == 0) {
+            ch = ' ';
+        }
+        line._chars[i] = ch;
 
         // Convert colors
         VTermColor fg = cell.fg;

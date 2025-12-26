@@ -29,6 +29,9 @@ public:
 
     void setConfig(const Config* config) { config_ = config; }
 
+    // Update font bindings (call after font atlas/metadata changes)
+    void updateFontBindings(Font& font);
+
     // Render with damage tracking (only updates changed regions)
     void render(WebGPUContext& ctx, const Grid& grid,
                 const std::vector<DamageRect>& damageRects, bool fullDamage,

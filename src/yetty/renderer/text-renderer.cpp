@@ -386,6 +386,18 @@ void TextRenderer::setCellSize(float width, float height) {
     cellSize_ = {width, height};
 }
 
+void TextRenderer::updateFontBindings(Font& font) {
+    if (!device_) return;
+
+    font_ = &font;
+
+    // Recreate bind group with updated font resources
+    auto result = createBindGroup(device_, font);
+    if (!result) {
+        std::cerr << "Failed to update font bindings: " << error_msg(result) << std::endl;
+    }
+}
+
 void TextRenderer::updateUniformBuffer(WGPUQueue queue, const Grid& grid,
                                        int cursorCol, int cursorRow, bool cursorVisible) {
     uniforms_.projection = glm::ortho(
