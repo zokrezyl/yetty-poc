@@ -280,6 +280,15 @@ Result<void> TextRenderer::createBindGroup(WGPUDevice device, Font& font) {
     // Release old bind group if it exists (for recreation when textures change)
     if (bindGroup_) { wgpuBindGroupRelease(bindGroup_); bindGroup_ = nullptr; }
 
+    // Validate required resources exist
+    if (!uniformBuffer_) return Err<void>("uniformBuffer_ is null");
+    if (!font.getTextureView()) return Err<void>("font texture view is null");
+    if (!font.getSampler()) return Err<void>("font sampler is null");
+    if (!font.getGlyphMetadataBuffer()) return Err<void>("glyph metadata buffer is null");
+    if (!cellGlyphView_) return Err<void>("cellGlyphView_ is null - call render() first");
+    if (!cellFgColorView_) return Err<void>("cellFgColorView_ is null");
+    if (!cellBgColorView_) return Err<void>("cellBgColorView_ is null");
+
     // Bind group entries - uses current texture views
     WGPUBindGroupEntry bgEntries[7] = {};
 
@@ -391,10 +400,20 @@ void TextRenderer::updateFontBindings(Font& font) {
 
     font_ = &font;
 
+    // Only recreate bind group if cell textures already exist
+    // Otherwise, render() will create both textures and bind group
+    if (!cellGlyphView_ || !cellFgColorView_ || !cellBgColorView_) {
+        // Mark that bind group needs recreation on next render
+        needsBindGroupRecreation_ = true;
+        return;
+    }
+
     // Recreate bind group with updated font resources
     auto result = createBindGroup(device_, font);
     if (!result) {
         std::cerr << "Failed to update font bindings: " << error_msg(result) << std::endl;
+    } else {
+        needsBindGroupRecreation_ = false;
     }
 }
 
@@ -583,6 +602,14 @@ void TextRenderer::render(WebGPUContext& ctx, const Grid& grid,
             std::cerr << "TextRenderer: " << error_msg(res) << std::endl;
             return;
         }
+        needsBindGroupRecreation_ = false;
+    } else if (needsBindGroupRecreation_) {
+        // Deferred bind group recreation (e.g., after glyph metadata buffer update)
+        if (auto res = createBindGroup(device_, *font_); !res) {
+            std::cerr << "TextRenderer: " << error_msg(res) << std::endl;
+            return;
+        }
+        needsBindGroupRecreation_ = false;
     }
 
     updateUniformBuffer(queue, grid, cursorCol, cursorRow, cursorVisible);
@@ -650,7 +677,17 @@ void TextRenderer::render(WebGPUContext& ctx, const Grid& grid,
             std::cerr << "TextRenderer: " << error_msg(res) << std::endl;
             return;
         }
+        needsBindGroupRecreation_ = false;
         // Force full update when textures are recreated
+        updateCellTextures(queue, grid);
+    } else if (needsBindGroupRecreation_) {
+        // Deferred bind group recreation (e.g., after glyph metadata buffer update)
+        if (auto res = createBindGroup(device_, *font_); !res) {
+            std::cerr << "TextRenderer: " << error_msg(res) << std::endl;
+            return;
+        }
+        needsBindGroupRecreation_ = false;
+        // Also need full update for new glyphs
         updateCellTextures(queue, grid);
     } else if (fullDamage) {
         // Full damage - update entire texture

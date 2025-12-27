@@ -1,4 +1,5 @@
 #include "font.h"
+#include <spdlog/spdlog.h>
 
 #if !YETTY_USE_PREBUILT_ATLAS
 #include <msdfgen.h>
@@ -544,15 +545,15 @@ bool Font::loadGlyphFromFont(const std::string& fontPath, uint32_t codepoint) {
         // Calculate raw scaled size
         double rawSizeY = (bounds.t - bounds.b) * fontScale;
 
-        // Scale fallback glyphs to match the actual rendered cell height
-        // _shelfHeight reflects the actual max glyph height in the atlas
-        double targetHeight = (_shelfHeight > 0) ? _shelfHeight : _fontSize * 0.5;
-        std::cerr << "[SCALE] rawSizeY=" << rawSizeY << " shelfHeight=" << _shelfHeight
-                  << " target=" << targetHeight << std::endl;
+        // Scale fallback glyphs to fit cell height
+        // Use fontSize/2 as target (typical cell height for monospace fonts)
+        double targetHeight = _fontSize * 0.5;
+        spdlog::debug("Fallback glyph U+{:04X}: rawSizeY={:.1f} target={:.1f} fontSize={:.1f}",
+                      codepoint, rawSizeY, targetHeight, _fontSize);
         if (rawSizeY > targetHeight && targetHeight > 0) {
             double scaleDown = targetHeight / rawSizeY;
             fontScale *= scaleDown;
-            std::cerr << "[SCALE] Scaling down by " << scaleDown << std::endl;
+            spdlog::debug("  -> Scaling down by {:.3f}", scaleDown);
         }
 
         bearingX = bounds.l * fontScale;
@@ -670,14 +671,17 @@ bool Font::loadGlyphFromFont(const std::string& fontPath, uint32_t codepoint) {
     // Mark as pending for GPU upload
     _pendingGlyphs.insert(codepoint);
 
-    std::cout << "Loaded fallback glyph U+" << std::hex << codepoint << std::dec
-              << " at atlas (" << atlasX << "," << atlasY << ") size " << atlasW << "x" << atlasH << std::endl;
+    spdlog::info("Loaded fallback glyph U+{:04X} at ({},{}) size {}x{}",
+                 codepoint, atlasX, atlasY, atlasW, atlasH);
+    spdlog::debug("  Glyph metrics: uv({:.4f},{:.4f})->({:.4f},{:.4f}) size({:.1f},{:.1f}) bearing({:.1f},{:.1f}) adv={:.1f}",
+                  m._uvMin.x, m._uvMin.y, m._uvMax.x, m._uvMax.y,
+                  m._size.x, m._size.y, m._bearing.x, m._bearing.y, m._advance);
 
     return true;
 }
 
 bool Font::loadMissingGlyph(uint32_t codepoint) {
-    std::cerr << "[FALLBACK] Loading U+" << std::hex << codepoint << std::dec << std::endl;
+    spdlog::debug("Loading fallback glyph U+{:04X}", codepoint);
 
     // Check if already loaded
     if (_glyphs.find(codepoint) != _glyphs.end()) {
@@ -691,14 +695,14 @@ bool Font::loadMissingGlyph(uint32_t codepoint) {
 
     // Check if FreeType is initialized
     if (!_freetypeHandle) {
-        std::cerr << "[FALLBACK] No FreeType!" << std::endl;
+        spdlog::error("FreeType not initialized for fallback loading");
         _failedCodepoints.insert(codepoint);
         return false;
     }
 
     // Find fallback fonts using fontconfig
     std::vector<std::string> fontPaths = findFontsForCodepoint(codepoint);
-    std::cerr << "[FALLBACK] Found " << fontPaths.size() << " fonts" << std::endl;
+    spdlog::debug("Found {} fallback fonts for U+{:04X}", fontPaths.size(), codepoint);
 
     if (fontPaths.empty()) {
         _failedCodepoints.insert(codepoint);
@@ -708,6 +712,7 @@ bool Font::loadMissingGlyph(uint32_t codepoint) {
     // Try each font until one works
     for (const auto& fontPath : fontPaths) {
         if (loadGlyphFromFont(fontPath, codepoint)) {
+            spdlog::debug("Loaded U+{:04X} from: {}", codepoint, fontPath);
             return true;
         }
     }
@@ -1020,6 +1025,15 @@ void Font::buildGlyphIndexMap() {
     }
 
     std::cout << "Built glyph index map with " << _glyphMetadata.size() << " entries" << std::endl;
+
+    // Log sample glyph metrics for debugging
+    auto itA = _codepointToIndex.find('A');
+    if (itA != _codepointToIndex.end()) {
+        const auto& m = _glyphMetadata[itA->second];
+        spdlog::debug("Sample 'A' glyph: uv({:.4f},{:.4f})->({:.4f},{:.4f}) size({:.1f},{:.1f}) bearing({:.1f},{:.1f})",
+                      m._uvMinX, m._uvMinY, m._uvMaxX, m._uvMaxY,
+                      m._sizeX, m._sizeY, m._bearingX, m._bearingY);
+    }
 }
 
 uint16_t Font::getGlyphIndex(uint32_t codepoint) {
@@ -1030,7 +1044,7 @@ uint16_t Font::getGlyphIndex(uint32_t codepoint) {
 
     // Log missing codepoints in emoji range
     if (codepoint > 0x1F000) {
-        std::cerr << "[FONT] Missing emoji U+" << std::hex << codepoint << std::dec << std::endl;
+        spdlog::debug("Missing emoji glyph U+{:04X}", codepoint);
     }
 
 #if !YETTY_USE_PREBUILT_ATLAS
@@ -1038,7 +1052,7 @@ uint16_t Font::getGlyphIndex(uint32_t codepoint) {
     if (loadMissingGlyph(codepoint)) {
         it = _codepointToIndex.find(codepoint);
         if (it != _codepointToIndex.end()) {
-            std::cerr << "[FONT] Loaded! index=" << it->second << std::endl;
+            spdlog::debug("Loaded fallback glyph U+{:04X} -> index {}", codepoint, it->second);
             return it->second;
         }
     }

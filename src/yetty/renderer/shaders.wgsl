@@ -78,7 +78,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     );
 
     // Get cell data from textures
-    let glyphIndex = textureLoad(cellGlyphTexture, cellCoord, 0).r;
+    var glyphIndex = textureLoad(cellGlyphTexture, cellCoord, 0).r;
     let fgColor = textureLoad(cellFgColorTexture, cellCoord, 0);
     let bgColor = textureLoad(cellBgColorTexture, cellCoord, 0);
 
@@ -89,8 +89,24 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
                    cellCoord.x == cursorCol &&
                    cellCoord.y == cursorRow;
 
-    // If no glyph (index 0), output background (possibly inverted for cursor)
-    if (glyphIndex == 0u) {
+    // Handle wide character continuation (0xFFFE) - look at previous cell
+    var cellOffset = 0.0;
+    if (glyphIndex == 0xFFFEu) {
+        if (cellCoord.x > 0) {
+            let prevCellCoord = vec2<i32>(cellCoord.x - 1, cellCoord.y);
+            glyphIndex = textureLoad(cellGlyphTexture, prevCellCoord, 0).r;
+            cellOffset = uniforms.cellSize.x;  // Offset by one cell width to continue rendering
+        } else {
+            // Edge case: continuation at column 0 (shouldn't happen)
+            if (isCursor) {
+                return vec4<f32>(vec3<f32>(1.0, 1.0, 1.0) - bgColor.rgb, 1.0);
+            }
+            return bgColor;
+        }
+    }
+
+    // If no glyph (index 0) or plugin cell (0xFFFF), output background
+    if (glyphIndex == 0u || glyphIndex == 0xFFFFu) {
         if (isCursor) {
             return vec4<f32>(vec3<f32>(1.0, 1.0, 1.0) - bgColor.rgb, 1.0);
         }
@@ -113,8 +129,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let glyphMinPx = vec2<f32>(glyphLeft, glyphTop);
     let glyphMaxPx = vec2<f32>(glyphLeft + scaledGlyphSize.x, glyphTop + scaledGlyphSize.y);
 
-    // Current pixel position within cell
-    let localPx = cellLocalPos * uniforms.cellSize;
+    // Current pixel position within cell (offset for wide char continuation)
+    let localPx = cellLocalPos * uniforms.cellSize + vec2<f32>(cellOffset, 0.0);
 
     // Check if inside glyph bounds
     if (localPx.x < glyphMinPx.x || localPx.x >= glyphMaxPx.x ||

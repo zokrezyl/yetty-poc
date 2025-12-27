@@ -6,7 +6,8 @@
 namespace yetty {
 
 // Special glyph index values
-constexpr uint16_t GLYPH_PLUGIN = 0xFFFF;  // Cell is occupied by a plugin
+constexpr uint16_t GLYPH_PLUGIN = 0xFFFF;     // Cell is occupied by a plugin
+constexpr uint16_t GLYPH_WIDE_CONT = 0xFFFE;  // Wide char continuation (look at previous cell)
 
 // Cell attributes (bold, italic, etc.) packed into a single byte
 struct CellAttrs {

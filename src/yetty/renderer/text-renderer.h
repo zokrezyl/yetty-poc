@@ -95,6 +95,7 @@ private:
     WGPUDevice device_ = nullptr;  // Cached for recreating bind groups
     Font* font_ = nullptr;
     const Config* config_ = nullptr;
+    bool needsBindGroupRecreation_ = false;  // Deferred bind group recreation
 };
 
 } // namespace yetty

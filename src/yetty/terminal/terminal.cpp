@@ -1,6 +1,7 @@
 #include "terminal.h"
 #include "../plugin-manager.h"
 
+#include <spdlog/spdlog.h>
 #include <iostream>
 #include <cstring>
 #include <unistd.h>
@@ -257,6 +258,8 @@ void Terminal::resize(uint32_t cols, uint32_t rows) {
 }
 
 void Terminal::syncToGrid() {
+    spdlog::debug("syncToGrid called");
+
     VTermScreenCell cell;
     VTermPos pos;
 
@@ -304,11 +307,31 @@ void Terminal::syncToGrid() {
                 // Handle wide character continuation cells (chars[0] == -1 or 0xFFFFFFFF)
                 // These are placeholder cells for the right half of wide characters
                 if (codepoint == 0xFFFFFFFF || codepoint == static_cast<uint32_t>(-1)) {
-                    codepoint = ' ';  // Render as space (the left cell has the actual glyph)
+                    // Wide char continuation - mark with special glyph so shader can look left
+                    spdlog::debug("SyncToGrid ({},{}) wide continuation", col, row);
+                    uint8_t fgR, fgG, fgB, bgR, bgG, bgB;
+                    VTermColor fg = cell.fg;
+                    VTermColor bg = cell.bg;
+                    vterm_screen_convert_color_to_rgb(vtermScreen_, &fg);
+                    vterm_screen_convert_color_to_rgb(vtermScreen_, &bg);
+                    colorToRGB(fg, fgR, fgG, fgB);
+                    colorToRGB(bg, bgR, bgG, bgB);
+                    if (cell.attrs.reverse) {
+                        std::swap(fgR, bgR);
+                        std::swap(fgG, bgG);
+                        std::swap(fgB, bgB);
+                    }
+                    grid_.setCell(col, row, GLYPH_WIDE_CONT, fgR, fgG, fgB, bgR, bgG, bgB);
+                    continue;
                 }
                 if (codepoint == 0) codepoint = ' ';
 
                 uint16_t glyphIndex = font_ ? font_->getGlyphIndex(codepoint) : static_cast<uint16_t>(codepoint);
+
+                // Log high codepoints (emojis, etc.)
+                if (codepoint > 0x1000) {
+                    spdlog::debug("SyncToGrid ({},{}) U+{:04X} -> glyph {}", col, row, codepoint, glyphIndex);
+                }
 
                 uint8_t fgR, fgG, fgB;
                 uint8_t bgR, bgG, bgB;
@@ -338,6 +361,8 @@ void Terminal::syncToGrid() {
 void Terminal::syncDamageToGrid() {
     if (damageRects_.empty()) return;
 
+    spdlog::debug("syncDamageToGrid: {} damage rects", damageRects_.size());
+
     VTermScreenCell cell;
     VTermPos pos;
 
@@ -354,11 +379,32 @@ void Terminal::syncDamageToGrid() {
 
                 // Handle wide character continuation cells
                 if (codepoint == 0xFFFFFFFF || codepoint == static_cast<uint32_t>(-1)) {
-                    codepoint = ' ';
+                    // Wide char continuation - mark with special glyph so shader can look left
+                    spdlog::debug("DamageSync ({},{}) wide continuation", col, row);
+                    // Still need to set colors from the cell
+                    uint8_t fgR, fgG, fgB, bgR, bgG, bgB;
+                    VTermColor fg = cell.fg;
+                    VTermColor bg = cell.bg;
+                    vterm_screen_convert_color_to_rgb(vtermScreen_, &fg);
+                    vterm_screen_convert_color_to_rgb(vtermScreen_, &bg);
+                    colorToRGB(fg, fgR, fgG, fgB);
+                    colorToRGB(bg, bgR, bgG, bgB);
+                    if (cell.attrs.reverse) {
+                        std::swap(fgR, bgR);
+                        std::swap(fgG, bgG);
+                        std::swap(fgB, bgB);
+                    }
+                    grid_.setCell(col, row, GLYPH_WIDE_CONT, fgR, fgG, fgB, bgR, bgG, bgB);
+                    continue;
                 }
                 if (codepoint == 0) codepoint = ' ';
 
                 uint16_t glyphIndex = font_ ? font_->getGlyphIndex(codepoint) : static_cast<uint16_t>(codepoint);
+
+                // Log emoji cells
+                if (codepoint > 0x1F000) {
+                    spdlog::debug("DamageSync ({},{}) U+{:04X} -> glyph {}", col, row, codepoint, glyphIndex);
+                }
 
                 // Convert colors
                 uint8_t fgR, fgG, fgB;
