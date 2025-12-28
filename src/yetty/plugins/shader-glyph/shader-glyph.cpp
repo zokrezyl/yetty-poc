@@ -95,10 +95,12 @@ Result<void> ShaderGlyphPlugin::init(WebGPUContext* ctx) {
     _device = ctx->getDevice();
     _targetFormat = ctx->getSurfaceFormat();
 
-    // Set shader path relative to source directory
-    _shaderPath = std::string(CMAKE_SOURCE_DIR) + "/src/yetty/plugins/shader-glyph/shaders/";
+    // Set paths relative to source directory
+    // Shaders are in shared directory, mapping is plugin-specific
+    _shaderPath = std::string(CMAKE_SOURCE_DIR) + "/src/yetty/plugins/shared/shaders/";
+    std::string mappingPath = std::string(CMAKE_SOURCE_DIR) + "/src/yetty/plugins/shader-glyph/shaders/mapping.yaml";
 
-    if (auto res = loadMapping(); !res) {
+    if (auto res = loadMapping(mappingPath); !res) {
         spdlog::warn("ShaderGlyphPlugin: failed to load mapping, using defaults");
     }
 
@@ -111,9 +113,7 @@ Result<void> ShaderGlyphPlugin::init(WebGPUContext* ctx) {
     return Ok();
 }
 
-Result<void> ShaderGlyphPlugin::loadMapping() {
-    std::string mappingPath = _shaderPath + "mapping.yaml";
-
+Result<void> ShaderGlyphPlugin::loadMapping(const std::string& mappingPath) {
     try {
         YAML::Node config = YAML::LoadFile(mappingPath);
 

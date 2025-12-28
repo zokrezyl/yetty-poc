@@ -76,7 +76,7 @@ public:
                               float time, uint32_t codepoint);
 
 private:
-    Result<void> loadMapping();
+    Result<void> loadMapping(const std::string& mappingPath);
     Result<void> initSharedResources(WGPUDevice device, WGPUTextureFormat targetFormat);
     Result<WGPURenderPipeline> loadShaderPipeline(const std::string& shaderFile);
     std::string getShaderForCodepoint(uint32_t codepoint) const;

@@ -7,11 +7,11 @@
 #if !YETTY_WEB
 #include "yetty/terminal/terminal.h"
 #include "yetty/plugin-manager.h"
-#include "yetty/plugins/shader-toy.h"
+#include "yetty/plugins/shader-toy/shader-toy.h"
 #include "yetty/plugins/shader-glyph/shader-glyph.h"
-#include "yetty/plugins/image.h"
+#include "yetty/plugins/image/image.h"
 #ifdef YETTY_YMERY_ENABLED
-#include "yetty/plugins/ymery.h"
+#include "yetty/plugins/ymery/ymery.h"
 #endif
 #include <termios.h>
 #include <unistd.h>

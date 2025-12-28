@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../plugin.h"
+#include "../../plugin.h"
 #include <webgpu/webgpu.h>
 #include <memory>
 
