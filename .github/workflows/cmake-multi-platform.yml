@@ -91,9 +91,12 @@ jobs:
         echo "NDK_HOME=$ANDROID_HOME/ndk/26.1.10909125" >> $GITHUB_ENV
 
     - name: Download wgpu-native for Android
+      run: bash android/build-wgpu.sh
+
+    - name: Build BusyBox for Android
       run: |
-        cd android
-        bash ./build-wgpu.sh
+        export PATH="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
+        bash android/build-busybox.sh
 
     - name: Setup Gradle
       uses: gradle/actions/setup-gradle@v3

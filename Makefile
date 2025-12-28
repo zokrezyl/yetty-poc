@@ -103,38 +103,8 @@ busybox-download: ## Download BusyBox source and meefik patches
 	fi
 
 .PHONY: busybox-android
-busybox-android: busybox-download ## Cross-compile BusyBox for Android using nix flake
-	@echo "Building BusyBox $(BUSYBOX_VERSION) for Android using nix flake..."
-	@mkdir -p $(BUILD_DIR_ANDROID)/assets
-	nix develop .#android --command bash -c '\
-		set -e && \
-		cd $(BUSYBOX_SRC) && \
-		echo "Patching for Android NDK 26..." && \
-		sed -i "s/#if defined(ANDROID) || defined(__ANDROID__)/#if __ANDROID_API__ < 21/" libbb/missing_syscalls.c && \
-		sed -i "s/^# undef HAVE_STRCHRNUL$$/# if __ANDROID_API__ < 24\n#  undef HAVE_STRCHRNUL\n# endif/" include/platform.h && \
-		echo "Configuring BusyBox with defconfig..." && \
-		make defconfig && \
-		echo "Disabling Android-incompatible features..." && \
-		sed -i "s/^CONFIG_STATIC=.*/CONFIG_STATIC=y/" .config && \
-		sed -i "s/^CONFIG_ASH_INTERNAL_GLOB=.*/CONFIG_ASH_INTERNAL_GLOB=y/" .config && \
-		for opt in HUSH SHELL_HUSH FEATURE_SH_NOFORK NTPD ADJTIMEX ZCIP FEATURE_UTMP FEATURE_WTMP \
-			HOSTID LOGNAME FEATURE_SYNC_FANCY SU LOADFONT SETFONT CONSPY IFCONFIG ARP IFENSLAVE \
-			FSCK_MINIX MKFS_MINIX IPCRM IPCS MOUNT UMOUNT SWAPON SWAPOFF ETHER_WAKE \
-			SYSLOGD LOGGER LOGREAD KLOGD PIVOT_ROOT NSLOOKUP FEATURE_NSLOOKUP_BIG \
-			FEATURE_INETD_RPC FEATURE_HTTPD_SETUID TRACEROUTE TRACEROUTE6 PING PING6; do \
-			sed -i "s/^CONFIG_$${opt}=y/# CONFIG_$${opt} is not set/" .config; \
-		done && \
-		yes "" | make oldconfig && \
-		echo "Building with NDK clang..." && \
-		make CC=aarch64-linux-android26-clang \
-			AR=llvm-ar \
-			STRIP=llvm-strip \
-			HOSTCC=gcc \
-			-j$$(nproc) && \
-		echo "Stripping..." && \
-		llvm-strip busybox'
-	cp $(BUSYBOX_SRC)/busybox $(BUILD_DIR_ANDROID)/assets/
-	@echo "BusyBox built: $(BUILD_DIR_ANDROID)/assets/busybox"
+busybox-android: ## Cross-compile BusyBox for Android
+	nix develop .#android --command bash android/build-busybox.sh
 
 .PHONY: busybox-clean
 busybox-clean: ## Clean BusyBox build
