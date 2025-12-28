@@ -120,7 +120,8 @@ Result<void> WebGPUContext::init(GLFWwindow* window, uint32_t width, uint32_t he
         return Err<void>("Failed to get WebGPU device");
     }
 
-    // Set error callback
+    // Set error callback (not available in wgpu-native v22+)
+#if !YETTY_ANDROID
     wgpuDeviceSetUncapturedErrorCallback(
         device_,
         [](WGPUErrorType type, char const* message, void* userdata) {
@@ -128,6 +129,7 @@ Result<void> WebGPUContext::init(GLFWwindow* window, uint32_t width, uint32_t he
         },
         nullptr
     );
+#endif
 
     // Get queue
     queue_ = wgpuDeviceGetQueue(device_);

@@ -7,7 +7,8 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-OUTPUT_DIR="$SCRIPT_DIR/app/libs"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+OUTPUT_DIR="$PROJECT_ROOT/build-android/wgpu-libs"
 
 # wgpu-native version with Android pre-builts
 # Note: v0.19.x does not have Android pre-builts

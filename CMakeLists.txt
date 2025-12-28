@@ -45,9 +45,9 @@ include(cmake/CPM.cmake)
 
 # WebGPU setup - different approaches per platform
 if(YETTY_ANDROID)
-    # Android: Use locally-built wgpu-native from android/app/libs
-    # Built by android/build-wgpu.sh script
-    set(WGPU_ANDROID_LIB "${CMAKE_CURRENT_SOURCE_DIR}/android/app/libs/arm64-v8a/libwgpu_native.so")
+    # Android: Use pre-built wgpu-native from build-android/wgpu-libs
+    # Downloaded by android/build-wgpu.sh script
+    set(WGPU_ANDROID_LIB "${CMAKE_CURRENT_SOURCE_DIR}/build-android/wgpu-libs/arm64-v8a/libwgpu_native.so")
 
     if(NOT EXISTS "${WGPU_ANDROID_LIB}")
         message(FATAL_ERROR
