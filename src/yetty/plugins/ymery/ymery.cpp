@@ -8,10 +8,30 @@
 
 #include <GLFW/glfw3.h>
 #include <algorithm>
-#include <iostream>
 #include <sstream>
+#include <filesystem>
+#include <spdlog/spdlog.h>
+
+#ifdef __linux__
+#include <unistd.h>
+#include <linux/limits.h>
+#endif
 
 namespace yetty {
+
+// Get the directory containing the executable
+static std::string getExecutableDir() {
+#ifdef __linux__
+    char path[PATH_MAX];
+    ssize_t len = readlink("/proc/self/exe", path, sizeof(path) - 1);
+    if (len != -1) {
+        path[len] = '\0';
+        return std::filesystem::path(path).parent_path().string();
+    }
+#endif
+    // Fallback to current working directory
+    return std::filesystem::current_path().string();
+}
 
 // GLFW key to ImGui key translation
 static ImGuiKey glfw_key_to_imgui_key(int key) {
@@ -103,7 +123,7 @@ Result<void> YmeryPlugin::init(WebGPUContext* ctx) {
     _format = ctx->getSurfaceFormat();
 
     _initialized = true;
-    std::cout << "YmeryPlugin initialized" << std::endl;
+    spdlog::info("YmeryPlugin initialized");
     return Ok();
 }
 
@@ -187,7 +207,7 @@ Result<void> YmeryPlugin::initImGui(uint32_t screenWidth, uint32_t screenHeight)
         return Err<void>("Failed to init ImGui WebGPU backend");
     }
 
-    std::cout << "YmeryPlugin: ImGui initialized (" << screenWidth << "x" << screenHeight << ")" << std::endl;
+    spdlog::info("YmeryPlugin: ImGui initialized ({}x{})", screenWidth, screenHeight);
     return Ok();
 }
 
@@ -225,8 +245,24 @@ Result<void> YmeryPlugin::renderAll(WebGPUContext& ctx,
 
         ymery::EmbeddedConfig config;
         config.layout_paths.push_back(firstLayer->getLayoutPath());
-        if (!firstLayer->getPluginPath().empty()) {
-            config.plugin_paths.push_back(firstLayer->getPluginPath());
+
+        // Determine plugins directory
+        std::string pluginsDir;
+        std::string passedPath = firstLayer->getPluginPath();
+
+        if (!passedPath.empty() && std::filesystem::exists(passedPath)) {
+            // Use passed path if it exists
+            pluginsDir = passedPath;
+        } else {
+            // Default to plugins directory relative to executable
+            pluginsDir = getExecutableDir() + "/plugins";
+        }
+
+        spdlog::info("YmeryPlugin: using plugins dir: {}", pluginsDir);
+        if (std::filesystem::exists(pluginsDir)) {
+            config.plugin_paths.push_back(pluginsDir);
+        } else {
+            spdlog::warn("YmeryPlugin: plugins dir does not exist: {}", pluginsDir);
         }
         config.main_module = firstLayer->getMainModule();
 
@@ -235,7 +271,7 @@ Result<void> YmeryPlugin::renderAll(WebGPUContext& ctx,
             return Err<void>("Failed to create EmbeddedApp: " + ymery::error_msg(res));
         }
         _app = *res;
-        std::cout << "YmeryPlugin: EmbeddedApp created" << std::endl;
+        spdlog::info("YmeryPlugin: EmbeddedApp created");
     }
 
     if (!_app) return Err<void>("YmeryPlugin: app not initialized");
