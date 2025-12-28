@@ -253,8 +253,12 @@ static bool configureSurface() {
     // Get surface capabilities
     WGPUSurfaceCapabilities caps = {};
     wgpuSurfaceGetCapabilities(g_state.surface, g_state.adapter, &caps);
-    if (caps.formatCount > 0) {
+    if (caps.formatCount > 0 && caps.formats != nullptr) {
         g_state.surfaceFormat = caps.formats[0];
+    } else {
+        // Default to BGRA8Unorm if capabilities query fails
+        LOGW("No surface formats returned, using default BGRA8Unorm");
+        g_state.surfaceFormat = WGPUTextureFormat_BGRA8Unorm;
     }
     wgpuSurfaceCapabilitiesFreeMembers(caps);
 
