@@ -95,7 +95,7 @@ suite terminal_selection_tests = [] {
 
         term.feed("Hello World");
         term.startSelection(0, 0);
-        term.extendSelection(0, 5);
+        term.extendSelection(0, 4);  // 'o' is at position 4
 
         std::string text = term.getSelectedText();
         expect(text == "Hello") << "Got: '" << text << "'";
@@ -106,7 +106,7 @@ suite terminal_selection_tests = [] {
 
         term.feed("Hello World");
         term.startSelection(0, 6);
-        term.extendSelection(0, 11);
+        term.extendSelection(0, 10);  // 'd' is at position 10
 
         std::string text = term.getSelectedText();
         expect(text == "World") << "Got: '" << text << "'";

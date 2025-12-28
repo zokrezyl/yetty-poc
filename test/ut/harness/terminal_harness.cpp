@@ -155,10 +155,11 @@ void TerminalHarness::startSelection(int row, int col, SelectionMode mode) {
         }
         _selection_start = pos;
 
-        // Find word end (go right while not space)
+        // Find word end (go right while current char is part of word)
         pos = {row, col};
         while (pos.col < _cols - 1) {
-            vterm_screen_get_cell(_screen, pos, &cell);
+            VTermPos nextPos = {pos.row, pos.col + 1};
+            vterm_screen_get_cell(_screen, nextPos, &cell);
             uint32_t ch = cell.chars[0];
             if (ch == 0 || ch == ' ' || ch == '\t') break;
             pos.col++;

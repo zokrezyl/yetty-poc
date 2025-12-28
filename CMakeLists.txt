@@ -2,27 +2,23 @@
 # yetty-poc - WebGPU Terminal Emulator
 #=============================================================================
 #
-# BUILD TARGETS:
+# BUILD TARGETS (use Makefile for convenience):
 #
-#   Native (Linux/macOS/Windows):
-#     mkdir build && cd build
-#     cmake ..
-#     make -j$(nproc)
+#   Desktop (Linux/macOS/Windows):
+#     make release    # or: cmake -B build && cmake --build build
 #
-#   Emscripten (WebAssembly):
-#     Prerequisites:
-#       1. Emscripten SDK 3.x (system: /usr/bin/emcc)
-#       2. Build native first, then generate atlas:
-#          cd build && ./yetty --generate-atlas
+#   Web (Emscripten):
+#     Prerequisites: Emscripten SDK, pre-built atlas (./yetty --generate-atlas)
+#     make web        # or: emcmake cmake -B web-build && cmake --build web-build
 #
-#     Build:
-#       mkdir web-build && cd web-build
-#       emcmake cmake ..
-#       emmake make -j$(nproc)
+#   Android:
+#     Prerequisites: Android NDK, BusyBox cross-compiled
+#     make android    # builds BusyBox + yetty shared library
 #
-#     Output: yetty.html, yetty.js, yetty.wasm, yetty.data
-#     Serve:  cd web-build && python -m http.server 8080
-#             Open: http://localhost:8080/yetty.html
+#   Tests:
+#     make test       # or: cmake --build build --target yetty_tests && ./build/test/ut/yetty_tests
+#
+# See Makefile for more targets and options.
 #
 #=============================================================================
 
@@ -33,8 +29,12 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# Optional: Enable ymery plugin (requires ymery-cpp library)
+# Build target options
+option(YETTY_ANDROID "Build for Android" OFF)
 option(YETTY_YMERY_ENABLED "Enable ymery ImGui plugin" ON)
+
+# BusyBox path for Android shell
+set(BUSYBOX_PATH "" CACHE PATH "Path to BusyBox install directory for Android")
 
 # Include CPM.cmake
 include(cmake/CPM.cmake)
@@ -81,9 +81,9 @@ CPMAddPackage(
 )
 
 #-----------------------------------------------------------------------------
-# Native-only dependencies (font atlas generation)
+# Desktop-only dependencies (font atlas generation, GLFW windowing)
 #-----------------------------------------------------------------------------
-if(NOT EMSCRIPTEN)
+if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
     # FreeType for font loading
     CPMAddPackage(
         NAME freetype
@@ -116,7 +116,7 @@ if(NOT EMSCRIPTEN)
             "MSDFGEN_INSTALL OFF"
     )
 
-    # GLFW and glfw3webgpu adapter
+    # GLFW and glfw3webgpu adapter (desktop only, not Android)
     CPMAddPackage(
         NAME glfw
         GITHUB_REPOSITORY glfw/glfw
@@ -137,7 +137,28 @@ if(NOT EMSCRIPTEN)
 endif()
 
 #-----------------------------------------------------------------------------
-# libvterm (native only)
+# Android-specific dependencies
+#-----------------------------------------------------------------------------
+if(YETTY_ANDROID)
+    # Add native_app_glue from Android NDK
+    add_library(native_app_glue STATIC
+        ${ANDROID_NDK}/sources/android/native_app_glue/android_native_app_glue.c
+    )
+    target_include_directories(native_app_glue PUBLIC
+        ${ANDROID_NDK}/sources/android/native_app_glue
+    )
+
+    # BusyBox configuration
+    if(BUSYBOX_PATH)
+        message(STATUS "BusyBox path: ${BUSYBOX_PATH}")
+        add_compile_definitions(YETTY_BUSYBOX_PATH="${BUSYBOX_PATH}")
+    else()
+        message(WARNING "BUSYBOX_PATH not set - Android build will not have shell")
+    endif()
+endif()
+
+#-----------------------------------------------------------------------------
+# libvterm (native and Android - not web)
 #-----------------------------------------------------------------------------
 if(NOT EMSCRIPTEN)
     set(LIBVTERM_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/libvterm-0.3.3)
@@ -160,22 +181,39 @@ if(NOT EMSCRIPTEN)
 endif()
 
 #-----------------------------------------------------------------------------
-# Main executable
+# Main target (executable for desktop/web, shared library for Android)
 #-----------------------------------------------------------------------------
-add_executable(yetty
+set(YETTY_SOURCES
     src/main.cpp
     src/yetty/renderer/webgpu-context.cpp
     src/yetty/renderer/text-renderer.cpp
     src/yetty/terminal/grid.cpp
     src/yetty/terminal/font.cpp
-    $<$<NOT:$<BOOL:${EMSCRIPTEN}>>:src/yetty/terminal/terminal.cpp>
-    $<$<NOT:$<BOOL:${EMSCRIPTEN}>>:src/yetty/plugin-manager.cpp>
-    $<$<NOT:$<BOOL:${EMSCRIPTEN}>>:src/yetty/custom-glyph-plugin.cpp>
-    $<$<NOT:$<BOOL:${EMSCRIPTEN}>>:src/yetty/plugins/shader-toy/shader-toy.cpp>
-    $<$<NOT:$<BOOL:${EMSCRIPTEN}>>:src/yetty/plugins/shader-glyph/shader-glyph.cpp>
-    $<$<NOT:$<BOOL:${EMSCRIPTEN}>>:src/yetty/plugins/image/image.cpp>
-    $<$<AND:$<NOT:$<BOOL:${EMSCRIPTEN}>>,$<BOOL:${YETTY_YMERY_ENABLED}>>:src/yetty/plugins/ymery/ymery.cpp>
 )
+
+# Platform-specific sources
+if(NOT EMSCRIPTEN)
+    list(APPEND YETTY_SOURCES
+        src/yetty/terminal/terminal.cpp
+        src/yetty/plugin-manager.cpp
+        src/yetty/custom-glyph-plugin.cpp
+        src/yetty/plugins/shader-toy/shader-toy.cpp
+        src/yetty/plugins/shader-glyph/shader-glyph.cpp
+        src/yetty/plugins/image/image.cpp
+    )
+    if(YETTY_YMERY_ENABLED AND NOT YETTY_ANDROID)
+        list(APPEND YETTY_SOURCES
+            src/yetty/plugins/ymery/ymery.cpp
+        )
+    endif()
+endif()
+
+# Android builds as shared library, others as executable
+if(YETTY_ANDROID)
+    add_library(yetty SHARED ${YETTY_SOURCES})
+else()
+    add_executable(yetty ${YETTY_SOURCES})
+endif()
 
 target_include_directories(yetty PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -191,6 +229,7 @@ if(EMSCRIPTEN)
     #-------------------------------------------------------------------------
     target_compile_definitions(yetty PRIVATE
         YETTY_WEB=1
+        YETTY_ANDROID=0
         YETTY_USE_PREBUILT_ATLAS=1
     )
 
@@ -211,12 +250,50 @@ if(EMSCRIPTEN)
         glm::glm
         stb
     )
-else()
+
+elseif(YETTY_ANDROID)
     #-------------------------------------------------------------------------
-    # Native build - can generate atlas at runtime
+    # Android build - WebGPU via Vulkan, native_app_glue, BusyBox shell
     #-------------------------------------------------------------------------
     target_compile_definitions(yetty PRIVATE
         YETTY_WEB=0
+        YETTY_ANDROID=1
+        YETTY_USE_PREBUILT_ATLAS=1
+    )
+
+    # Create shared library for Android (not executable)
+    set_target_properties(yetty PROPERTIES
+        LIBRARY_OUTPUT_NAME "yetty"
+    )
+
+    target_link_libraries(yetty PRIVATE
+        webgpu
+        native_app_glue
+        glm::glm
+        stb
+        yaml-cpp
+        vterm
+        android
+        log
+    )
+
+    # Copy assets to Android assets directory
+    file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/assets DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
+    configure_file(
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/yetty/renderer/shaders.wgsl
+        ${CMAKE_CURRENT_BINARY_DIR}/shaders.wgsl
+        COPYONLY
+    )
+
+    message(STATUS "Building for Android with WebGPU (Vulkan backend)")
+
+else()
+    #-------------------------------------------------------------------------
+    # Desktop (Native) build - can generate atlas at runtime
+    #-------------------------------------------------------------------------
+    target_compile_definitions(yetty PRIVATE
+        YETTY_WEB=0
+        YETTY_ANDROID=0
         YETTY_USE_PREBUILT_ATLAS=0
     )
 
@@ -274,7 +351,7 @@ else()
     )
 
     #-------------------------------------------------------------------------
-    # Unit tests (native only)
+    # Unit tests (desktop only)
     #-------------------------------------------------------------------------
     option(YETTY_BUILD_TESTS "Build unit tests" ON)
     if(YETTY_BUILD_TESTS)
