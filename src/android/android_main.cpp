@@ -5,6 +5,7 @@
 // Uses WebGPU (wgpu-native with Vulkan backend) for rendering
 // Uses BusyBox ash as the shell
 
+#include <jni.h>
 #include <android/log.h>
 #include <android/native_activity.h>
 #include <android_native_app_glue.h>
@@ -121,24 +122,58 @@ static bool extractAsset(struct android_app* app, const char* assetName, const c
     return true;
 }
 
+static std::string getNativeLibraryDir(struct android_app* app) {
+    JNIEnv* env;
+    app->activity->vm->AttachCurrentThread(&env, nullptr);
+
+    // Get the NativeActivity class
+    jclass activityClass = env->GetObjectClass(app->activity->clazz);
+
+    // Get getApplicationInfo() method
+    jmethodID getAppInfo = env->GetMethodID(activityClass, "getApplicationInfo",
+                                             "()Landroid/content/pm/ApplicationInfo;");
+    jobject appInfo = env->CallObjectMethod(app->activity->clazz, getAppInfo);
+
+    // Get nativeLibraryDir field
+    jclass appInfoClass = env->GetObjectClass(appInfo);
+    jfieldID nativeLibDirField = env->GetFieldID(appInfoClass, "nativeLibraryDir",
+                                                  "Ljava/lang/String;");
+    jstring nativeLibDir = (jstring)env->GetObjectField(appInfo, nativeLibDirField);
+
+    // Convert to C++ string
+    const char* nativeLibDirCStr = env->GetStringUTFChars(nativeLibDir, nullptr);
+    std::string result(nativeLibDirCStr);
+    env->ReleaseStringUTFChars(nativeLibDir, nativeLibDirCStr);
+
+    // Clean up local refs
+    env->DeleteLocalRef(nativeLibDir);
+    env->DeleteLocalRef(appInfoClass);
+    env->DeleteLocalRef(appInfo);
+    env->DeleteLocalRef(activityClass);
+
+    app->activity->vm->DetachCurrentThread();
+
+    return result;
+}
+
 static bool setupBusybox(struct android_app* app) {
     g_state.dataDir = getInternalDataPath(app);
-    g_state.busyboxPath = g_state.dataDir + "/busybox";
 
-    // Check if busybox already exists
+    // BusyBox is now in the native library directory as libbusybox.so
+    // This directory has execute permissions (unlike the files directory)
+    std::string nativeLibDir = getNativeLibraryDir(app);
+    g_state.busyboxPath = nativeLibDir + "/libbusybox.so";
+
+    LOGI("Looking for BusyBox at %s", g_state.busyboxPath.c_str());
+
+    // Check if busybox exists and is executable
     if (access(g_state.busyboxPath.c_str(), X_OK) == 0) {
-        LOGI("BusyBox already installed at %s", g_state.busyboxPath.c_str());
+        LOGI("BusyBox found at %s", g_state.busyboxPath.c_str());
         return true;
     }
 
-    // Extract from assets
-    if (!extractAsset(app, "busybox", g_state.busyboxPath.c_str())) {
-        LOGE("Failed to extract BusyBox");
-        return false;
-    }
-
-    LOGI("BusyBox installed at %s", g_state.busyboxPath.c_str());
-    return true;
+    LOGE("BusyBox not found at %s", g_state.busyboxPath.c_str());
+    return false;
 }
 
 //-----------------------------------------------------------------------------
@@ -250,8 +285,9 @@ static bool initTerminal() {
     g_state.terminal = std::make_unique<yetty::Terminal>(
         g_state.cols, g_state.rows, g_state.font.get());
 
-    // Start shell
-    std::string shell = g_state.busyboxPath + " ash";
+    // Start shell - try system shell first for testing
+    // BusyBox ash has issues with argv[0] detection, use /system/bin/sh for now
+    std::string shell = "/system/bin/sh";
     auto result = g_state.terminal->start(shell);
     if (!result) {
         LOGE("Failed to start shell: %s", result.error().message().c_str());
@@ -280,6 +316,26 @@ static void cleanup() {
 //-----------------------------------------------------------------------------
 // Input Handling
 //-----------------------------------------------------------------------------
+
+// Show soft keyboard
+static void showSoftKeyboard(struct android_app* app) {
+    ANativeActivity_showSoftInput(app->activity, ANATIVEACTIVITY_SHOW_SOFT_INPUT_FORCED);
+}
+
+// Hide soft keyboard
+static void hideSoftKeyboard(struct android_app* app) {
+    ANativeActivity_hideSoftInput(app->activity, 0);
+}
+
+// Get VTerm modifier flags from Android meta state
+static VTermModifier getModifiers(int32_t metaState) {
+    int mod = VTERM_MOD_NONE;
+    if (metaState & AMETA_SHIFT_ON) mod |= VTERM_MOD_SHIFT;
+    if (metaState & AMETA_CTRL_ON) mod |= VTERM_MOD_CTRL;
+    if (metaState & AMETA_ALT_ON) mod |= VTERM_MOD_ALT;
+    return static_cast<VTermModifier>(mod);
+}
+
 static int32_t handleInput(struct android_app* app, AInputEvent* event) {
     int32_t eventType = AInputEvent_getType(event);
 
@@ -298,6 +354,9 @@ static int32_t handleInput(struct android_app* app, AInputEvent* event) {
                 g_state.touchY = y;
                 g_state.touching = true;
                 g_state.touchDownTime = getTime();
+
+                // Show soft keyboard on tap
+                showSoftKeyboard(app);
 
                 // Start selection
                 if (g_state.terminal) {
@@ -327,33 +386,105 @@ static int32_t handleInput(struct android_app* app, AInputEvent* event) {
     if (eventType == AINPUT_EVENT_TYPE_KEY) {
         int32_t keyCode = AKeyEvent_getKeyCode(event);
         int32_t action = AKeyEvent_getAction(event);
+        int32_t metaState = AKeyEvent_getMetaState(event);
+        VTermModifier mod = getModifiers(metaState);
+
+        LOGI("Key event: keyCode=%d action=%d meta=0x%x", keyCode, action, metaState);
 
         if (action == AKEY_EVENT_ACTION_DOWN && g_state.terminal) {
-            // Handle Android key events
-            // TODO: Map Android keycodes to VTerm keys
+            // Handle special keys first
             switch (keyCode) {
                 case AKEYCODE_ENTER:
-                    g_state.terminal->sendKey('\r', VTERM_MOD_NONE);
-                    break;
+                    g_state.terminal->sendKey('\r', mod);
+                    return 1;
                 case AKEYCODE_DEL:  // Backspace
-                    g_state.terminal->sendKey(VTERM_KEY_BACKSPACE, VTERM_MOD_NONE);
-                    break;
+                    g_state.terminal->sendKey(VTERM_KEY_BACKSPACE, mod);
+                    return 1;
+                case AKEYCODE_FORWARD_DEL:  // Delete
+                    g_state.terminal->sendKey(VTERM_KEY_DEL, mod);
+                    return 1;
+                case AKEYCODE_TAB:
+                    g_state.terminal->sendKey('\t', mod);
+                    return 1;
+                case AKEYCODE_ESCAPE:
+                    g_state.terminal->sendKey(VTERM_KEY_ESCAPE, mod);
+                    return 1;
                 case AKEYCODE_DPAD_UP:
-                    g_state.terminal->sendKey(VTERM_KEY_UP, VTERM_MOD_NONE);
-                    break;
+                    g_state.terminal->sendKey(VTERM_KEY_UP, mod);
+                    return 1;
                 case AKEYCODE_DPAD_DOWN:
-                    g_state.terminal->sendKey(VTERM_KEY_DOWN, VTERM_MOD_NONE);
-                    break;
+                    g_state.terminal->sendKey(VTERM_KEY_DOWN, mod);
+                    return 1;
                 case AKEYCODE_DPAD_LEFT:
-                    g_state.terminal->sendKey(VTERM_KEY_LEFT, VTERM_MOD_NONE);
-                    break;
+                    g_state.terminal->sendKey(VTERM_KEY_LEFT, mod);
+                    return 1;
                 case AKEYCODE_DPAD_RIGHT:
-                    g_state.terminal->sendKey(VTERM_KEY_RIGHT, VTERM_MOD_NONE);
-                    break;
-                default:
-                    // Try to get Unicode character
-                    // Note: Full keyboard support needs soft keyboard integration
-                    break;
+                    g_state.terminal->sendKey(VTERM_KEY_RIGHT, mod);
+                    return 1;
+                case AKEYCODE_MOVE_HOME:
+                    g_state.terminal->sendKey(VTERM_KEY_HOME, mod);
+                    return 1;
+                case AKEYCODE_MOVE_END:
+                    g_state.terminal->sendKey(VTERM_KEY_END, mod);
+                    return 1;
+                case AKEYCODE_PAGE_UP:
+                    g_state.terminal->sendKey(VTERM_KEY_PAGEUP, mod);
+                    return 1;
+                case AKEYCODE_PAGE_DOWN:
+                    g_state.terminal->sendKey(VTERM_KEY_PAGEDOWN, mod);
+                    return 1;
+                case AKEYCODE_INSERT:
+                    g_state.terminal->sendKey(VTERM_KEY_INS, mod);
+                    return 1;
+                // Skip modifier-only keys
+                case AKEYCODE_SHIFT_LEFT:
+                case AKEYCODE_SHIFT_RIGHT:
+                case AKEYCODE_CTRL_LEFT:
+                case AKEYCODE_CTRL_RIGHT:
+                case AKEYCODE_ALT_LEFT:
+                case AKEYCODE_ALT_RIGHT:
+                case AKEYCODE_META_LEFT:
+                case AKEYCODE_META_RIGHT:
+                case AKEYCODE_CAPS_LOCK:
+                case AKEYCODE_NUM_LOCK:
+                case AKEYCODE_SCROLL_LOCK:
+                    return 1;
+            }
+
+            // For regular characters, get the Unicode character
+            // We need to use JNI to get the actual character from KeyEvent
+            JNIEnv* env;
+            app->activity->vm->AttachCurrentThread(&env, nullptr);
+
+            // Get KeyEvent class and create instance
+            jclass keyEventClass = env->FindClass("android/view/KeyEvent");
+            jmethodID constructor = env->GetMethodID(keyEventClass, "<init>", "(II)V");
+            jobject keyEvent = env->NewObject(keyEventClass, constructor, action, keyCode);
+
+            // Get getUnicodeChar method
+            jmethodID getUnicodeChar = env->GetMethodID(keyEventClass, "getUnicodeChar", "(I)I");
+            jint unicodeChar = env->CallIntMethod(keyEvent, getUnicodeChar, metaState);
+
+            env->DeleteLocalRef(keyEvent);
+            env->DeleteLocalRef(keyEventClass);
+            app->activity->vm->DetachCurrentThread();
+
+            if (unicodeChar > 0) {
+                LOGI("Unicode char: %d ('%c')", unicodeChar, (char)unicodeChar);
+                // Handle Ctrl+key combinations
+                if (mod & VTERM_MOD_CTRL) {
+                    // Ctrl+A through Ctrl+Z become 1-26
+                    if (unicodeChar >= 'a' && unicodeChar <= 'z') {
+                        g_state.terminal->sendKey(unicodeChar - 'a' + 1, VTERM_MOD_NONE);
+                    } else if (unicodeChar >= 'A' && unicodeChar <= 'Z') {
+                        g_state.terminal->sendKey(unicodeChar - 'A' + 1, VTERM_MOD_NONE);
+                    } else {
+                        g_state.terminal->sendKey(unicodeChar, mod);
+                    }
+                } else {
+                    g_state.terminal->sendKey(unicodeChar, VTERM_MOD_NONE);
+                }
+                return 1;
             }
         }
 
@@ -445,11 +576,63 @@ static void handleCmd(struct android_app* app, int32_t cmd) {
 // Render Frame
 //-----------------------------------------------------------------------------
 static void renderFrame() {
-    if (!g_state.initialized || !g_state.running) return;
-    if (!g_state.ctx || !g_state.renderer || !g_state.terminal) return;
+    static int frameCount = 0;
+    static int skipCount = 0;
+
+    if (!g_state.initialized || !g_state.running) {
+        if (skipCount++ % 1000 == 0) {
+            LOGI("renderFrame skipped: initialized=%d running=%d", g_state.initialized, g_state.running);
+        }
+        return;
+    }
+    if (!g_state.ctx || !g_state.renderer || !g_state.terminal) {
+        if (skipCount++ % 1000 == 0) {
+            LOGI("renderFrame skipped: ctx=%p renderer=%p terminal=%p",
+                 g_state.ctx.get(), g_state.renderer.get(), g_state.terminal.get());
+        }
+        return;
+    }
 
     // Update terminal (read PTY output)
     g_state.terminal->update();
+
+    // Log grid state for first few frames
+    if (frameCount < 3) {
+        const auto& grid = g_state.terminal->getGrid();
+        LOGI("Frame %d: grid=%ux%u, cursor=(%d,%d)",
+             frameCount, grid.getCols(), grid.getRows(),
+             g_state.terminal->getCursorCol(), g_state.terminal->getCursorRow());
+
+        // Check if grid has any non-zero glyphs
+        const uint16_t* glyphData = grid.getGlyphData();
+        int nonZeroGlyphs = 0;
+        for (uint32_t i = 0; i < grid.getCols() * grid.getRows() && i < 100; i++) {
+            if (glyphData[i] != 0) nonZeroGlyphs++;
+        }
+        LOGI("Frame %d: first 100 cells have %d non-zero glyphs", frameCount, nonZeroGlyphs);
+    }
+
+    // Get surface texture
+    auto textureViewResult = g_state.ctx->getCurrentTextureView();
+    if (!textureViewResult) {
+        if (frameCount % 60 == 0) {
+            LOGE("Failed to get texture view: %s", textureViewResult.error().message().c_str());
+        }
+        frameCount++;
+        return;
+    }
+
+    if (frameCount == 0) {
+        LOGI("First frame rendering, textureView=%p", *textureViewResult);
+        // Log font state
+        LOGI("Font: glyphCount=%zu, textureView=%p, sampler=%p, metadataBuffer=%p",
+             g_state.font->getGlyphCount(),
+             g_state.font->getTextureView(),
+             g_state.font->getSampler(),
+             g_state.font->getGlyphMetadataBuffer());
+        LOGI("Surface format: %d, screen size: %dx%d",
+             g_state.ctx->getSurfaceFormat(), g_state.width, g_state.height);
+    }
 
     // Render terminal using TextRenderer
     g_state.renderer->render(*g_state.ctx, g_state.terminal->getGrid(),
@@ -459,6 +642,14 @@ static void renderFrame() {
 
     // Present
     g_state.ctx->present();
+
+    if (frameCount == 0) {
+        LOGI("First frame presented");
+    }
+    if (frameCount < 5 || frameCount % 60 == 0) {
+        LOGI("Frame %d rendered", frameCount);
+    }
+    frameCount++;
 }
 
 } // anonymous namespace
@@ -474,6 +665,7 @@ void android_main(struct android_app* app) {
     app->onInputEvent = handleInput;
 
     // Main loop
+    static int loopCount = 0;
     while (true) {
         int events;
         struct android_poll_source* source;
@@ -482,7 +674,12 @@ void android_main(struct android_app* app) {
         // Use timeout of 0 when running (non-blocking), -1 when paused (blocking)
         int timeout = g_state.running ? 0 : -1;
 
-        while (ALooper_pollAll(timeout, nullptr, &events, reinterpret_cast<void**>(&source)) >= 0) {
+        if (loopCount == 0) {
+            LOGI("Main loop starting, running=%d, timeout=%d", g_state.running, timeout);
+        }
+
+        int pollResult;
+        while ((pollResult = ALooper_pollAll(timeout, nullptr, &events, reinterpret_cast<void**>(&source))) >= 0) {
             if (source != nullptr) {
                 source->process(app, source);
             }
@@ -492,11 +689,19 @@ void android_main(struct android_app* app) {
                 cleanup();
                 return;
             }
+
+            // Recalculate timeout in case running state changed
+            timeout = g_state.running ? 0 : -1;
         }
 
         // Render frame
         if (g_state.running) {
             renderFrame();
+        }
+
+        loopCount++;
+        if (loopCount == 1) {
+            LOGI("Main loop iteration 1 complete");
         }
     }
 }

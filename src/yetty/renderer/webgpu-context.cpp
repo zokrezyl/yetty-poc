@@ -330,6 +330,9 @@ Result<WGPUTextureView> WebGPUContext::getCurrentTextureView() {
 }
 
 void WebGPUContext::present() {
+    static int presentCount = 0;
+    presentCount++;
+
     // Release cached texture view
     if (currentTextureView_) {
         wgpuTextureViewRelease(currentTextureView_);
@@ -340,6 +343,11 @@ void WebGPUContext::present() {
 #if YETTY_WEB
     // Emscripten: swapchain presents automatically
 #else
+#if YETTY_ANDROID
+    if (presentCount <= 3) {
+        LOGI("present() call %d: surface=%p", presentCount, surface_);
+    }
+#endif
     wgpuSurfacePresent(surface_);
 #endif
 }

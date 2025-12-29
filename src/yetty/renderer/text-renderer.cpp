@@ -9,6 +9,15 @@
 #include <cstdlib>  // for getenv
 #include <spdlog/spdlog.h>
 
+#if YETTY_ANDROID
+#include <android/log.h>
+#define TR_LOGI(...) __android_log_print(ANDROID_LOG_INFO, "yetty-tr", __VA_ARGS__)
+#define TR_LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "yetty-tr", __VA_ARGS__)
+#else
+#define TR_LOGI(...) do { spdlog::info(__VA_ARGS__); } while(0)
+#define TR_LOGE(...) do { spdlog::error(__VA_ARGS__); } while(0)
+#endif
+
 namespace yetty {
 
 TextRenderer::TextRenderer() = default;
@@ -599,22 +608,29 @@ void TextRenderer::render(WebGPUContext& ctx, const Grid& grid,
     const uint32_t cols = grid.getCols();
     const uint32_t rows = grid.getRows();
 
+#if YETTY_ANDROID
+    if (frameCount <= 3) {
+        TR_LOGI("render() frame %d: grid %ux%u, cursor (%d,%d)", frameCount, cols, rows, cursorCol, cursorRow);
+    }
+#endif
+
     // Recreate textures and bind group if grid size changed
     if (cols != textureCols_ || rows != textureRows_) {
-        spdlog::info("Creating cell textures: {}x{}", cols, rows);
+        TR_LOGI("Creating cell textures: %ux%u", cols, rows);
         if (auto res = createCellTextures(device_, cols, rows); !res) {
-            spdlog::error("TextRenderer: {}", error_msg(res));
+            TR_LOGE("TextRenderer: %s", error_msg(res).c_str());
             return;
         }
         if (auto res = createBindGroup(device_, *font_); !res) {
-            spdlog::error("TextRenderer: {}", error_msg(res));
+            TR_LOGE("TextRenderer: %s", error_msg(res).c_str());
             return;
         }
         needsBindGroupRecreation_ = false;
+        TR_LOGI("Cell textures and bind group created successfully");
     } else if (needsBindGroupRecreation_) {
         // Deferred bind group recreation (e.g., after glyph metadata buffer update)
         if (auto res = createBindGroup(device_, *font_); !res) {
-            spdlog::error("TextRenderer: {}", error_msg(res));
+            TR_LOGE("TextRenderer: %s", error_msg(res).c_str());
             return;
         }
         needsBindGroupRecreation_ = false;
@@ -625,15 +641,22 @@ void TextRenderer::render(WebGPUContext& ctx, const Grid& grid,
 
     auto targetViewResult = ctx.getCurrentTextureView();
     if (!targetViewResult) {
-        spdlog::error("TextRenderer: getCurrentTextureView failed: {}", error_msg(targetViewResult));
+        TR_LOGE("TextRenderer: getCurrentTextureView failed: %s", error_msg(targetViewResult).c_str());
         return;
     }
     WGPUTextureView targetView = *targetViewResult;
 
+#if YETTY_ANDROID
+    if (frameCount <= 3) {
+        TR_LOGI("Frame %d: targetView=%p, pipeline=%p, bindGroup=%p",
+                frameCount, (void*)targetView, (void*)pipeline_, (void*)bindGroup_);
+    }
+#else
     if (frameCount <= 3) {
         spdlog::info("Frame {}: targetView={}, pipeline={}, bindGroup={}",
                      frameCount, (void*)targetView, (void*)pipeline_, (void*)bindGroup_);
     }
+#endif
 
     WGPUCommandEncoderDescriptor encoderDesc = {};
     WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(ctx.getDevice(), &encoderDesc);
@@ -669,6 +692,12 @@ void TextRenderer::render(WebGPUContext& ctx, const Grid& grid,
 
     wgpuQueueSubmit(queue, 1, &cmdBuffer);
     wgpuCommandBufferRelease(cmdBuffer);
+
+#if YETTY_ANDROID
+    if (frameCount <= 3) {
+        TR_LOGI("Frame %d: render pass completed, command buffer submitted", frameCount);
+    }
+#endif
 
     // Note: targetView is cached by WebGPUContext, don't release here
     // Note: present() should be called by main loop after all rendering

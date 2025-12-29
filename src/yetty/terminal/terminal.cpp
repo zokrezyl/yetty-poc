@@ -3,6 +3,7 @@
 
 #include <spdlog/spdlog.h>
 #include <iostream>
+#include <sstream>
 #include <cstring>
 #include <unistd.h>
 #include <fcntl.h>
@@ -11,6 +12,15 @@
 #include <termios.h>
 #include <pty.h>
 #include <signal.h>
+
+#if YETTY_ANDROID
+#include <android/log.h>
+#define TERM_LOGI(...) __android_log_print(ANDROID_LOG_INFO, "yetty-term", __VA_ARGS__)
+#define TERM_LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "yetty-term", __VA_ARGS__)
+#else
+#define TERM_LOGI(...) do { } while(0)
+#define TERM_LOGE(...) do { } while(0)
+#endif
 
 namespace yetty {
 
@@ -79,6 +89,9 @@ Result<void> Terminal::start(const std::string& shell) {
         shellPath = envShell ? envShell : "/bin/sh";
     }
 
+    TERM_LOGI("Starting shell: %s", shellPath.c_str());
+    TERM_LOGI("Terminal size: %ux%u", cols_, rows_);
+
     // Create PTY
     struct winsize ws;
     ws.ws_row = rows_;
@@ -86,9 +99,11 @@ Result<void> Terminal::start(const std::string& shell) {
     ws.ws_xpixel = 0;
     ws.ws_ypixel = 0;
 
+    TERM_LOGI("Calling forkpty...");
     childPid_ = forkpty(&ptyMaster_, nullptr, nullptr, &ws);
 
     if (childPid_ < 0) {
+        TERM_LOGE("forkpty failed: %s (errno=%d)", strerror(errno), errno);
         return Err<void>(std::string("forkpty failed: ") + strerror(errno));
     }
 
@@ -101,11 +116,38 @@ Result<void> Terminal::start(const std::string& shell) {
             close(fd);
         }
 
-        execlp(shellPath.c_str(), shellPath.c_str(), nullptr);
+        // Parse shell command into program and arguments
+        // e.g., "/path/to/busybox ash" -> program="/path/to/busybox", args=["busybox", "ash", NULL]
+        std::vector<std::string> parts;
+        std::istringstream iss(shellPath);
+        std::string part;
+        while (iss >> part) {
+            parts.push_back(part);
+        }
+
+        if (parts.empty()) {
+            fprintf(stderr, "exec failed: empty shell command\n");
+            _exit(1);
+        }
+
+        // Build argv array
+        std::vector<char*> argv;
+        for (auto& p : parts) {
+            argv.push_back(const_cast<char*>(p.c_str()));
+        }
+        argv.push_back(nullptr);
+
+        // Execute - first part is the program path
+        execv(parts[0].c_str(), argv.data());
+
+        // If exec fails, write error to stderr (which goes to PTY)
+        fprintf(stderr, "exec failed: %s\n", strerror(errno));
         _exit(1);  // Only reached if exec fails
     }
 
     // Parent process
+    TERM_LOGI("forkpty succeeded: ptyMaster=%d, childPid=%d", ptyMaster_, childPid_);
+
     // Set PTY to non-blocking
     int flags = fcntl(ptyMaster_, F_GETFL, 0);
     fcntl(ptyMaster_, F_SETFL, flags | O_NONBLOCK);
@@ -113,18 +155,29 @@ Result<void> Terminal::start(const std::string& shell) {
     running_ = true;
     std::cout << "Terminal started with shell: " << shellPath << std::endl;
     std::cout << "PTY master fd: " << ptyMaster_ << ", child PID: " << childPid_ << std::endl;
+    TERM_LOGI("Terminal started successfully");
 
     return Ok();
 }
 
 void Terminal::update() {
-    if (!running_ || ptyMaster_ < 0) return;
+    static int updateCount = 0;
+    static int totalBytesRead = 0;
+    updateCount++;
+
+    if (!running_ || ptyMaster_ < 0) {
+        if (updateCount <= 3) {
+            TERM_LOGI("update() skipped: running=%d, ptyMaster=%d", running_, ptyMaster_);
+        }
+        return;
+    }
 
     // Check if child is still running
     int status;
     pid_t result = waitpid(childPid_, &status, WNOHANG);
     if (result > 0) {
         running_ = false;
+        TERM_LOGI("Shell exited with status: %d", WEXITSTATUS(status));
         std::cout << "Shell exited with status: " << WEXITSTATUS(status) << std::endl;
         return;
     }
@@ -134,6 +187,12 @@ void Terminal::update() {
     ssize_t nread = read(ptyMaster_, buf, sizeof(buf));
 
     if (nread > 0) {
+        totalBytesRead += nread;
+        if (updateCount <= 10 || updateCount % 100 == 0) {
+            TERM_LOGI("PTY read: %zd bytes (total: %d), first chars: '%.*s'",
+                     nread, totalBytesRead, (int)(nread > 40 ? 40 : nread), buf);
+        }
+
         // Feed data to libvterm
         vterm_input_write(vterm_, buf, nread);
         vterm_screen_flush_damage(vtermScreen_);
@@ -169,7 +228,13 @@ void Terminal::update() {
             // Note: don't clear fullDamage_ here - main loop clears after rendering
         }
     } else if (nread < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+        TERM_LOGE("PTY read error: %s (errno=%d)", strerror(errno), errno);
         running_ = false;
+    } else if (nread < 0) {
+        // EAGAIN/EWOULDBLOCK - no data available (normal for non-blocking)
+        if (updateCount <= 5) {
+            TERM_LOGI("PTY read: no data (EAGAIN)");
+        }
     } else if (fullDamage_) {
         // No new data but need to sync (e.g., after scrolling)
         syncToGrid();
@@ -258,7 +323,14 @@ void Terminal::resize(uint32_t cols, uint32_t rows) {
 }
 
 void Terminal::syncToGrid() {
+    static int syncCount = 0;
+    syncCount++;
+
     spdlog::debug("syncToGrid called");
+
+    if (syncCount <= 5) {
+        TERM_LOGI("syncToGrid #%d: grid %ux%u", syncCount, cols_, rows_);
+    }
 
     VTermScreenCell cell;
     VTermPos pos;
@@ -373,6 +445,21 @@ void Terminal::syncToGrid() {
             }
         }
     }
+
+    // Log sync completion with content info
+    if (syncCount <= 5) {
+        // Count non-space glyphs in first row
+        int nonSpaceInRow0 = 0;
+        const uint16_t* glyphData = grid_.getGlyphData();
+        uint16_t spaceGlyph = font_ ? font_->getGlyphIndex(' ') : 0;
+        for (uint32_t col = 0; col < cols_; col++) {
+            if (glyphData[col] != spaceGlyph && glyphData[col] != 0) {
+                nonSpaceInRow0++;
+            }
+        }
+        TERM_LOGI("syncToGrid #%d done: %d non-space glyphs in row 0", syncCount, nonSpaceInRow0);
+    }
+
     // Note: don't clear damage here - main loop clears after rendering
 }
 

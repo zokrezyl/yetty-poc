@@ -64,6 +64,12 @@ android {
         prefab = true
     }
 
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true  // Extract native libs to lib/ directory
+        }
+    }
+
     // Include pre-built wgpu-native library and assets from build-android
     sourceSets {
         getByName("main") {
