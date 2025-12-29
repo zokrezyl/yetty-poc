@@ -86,7 +86,7 @@ Result<void> TextRenderer::createShaderModule(WGPUDevice device) {
 
     WGPUShaderSourceWGSL wgslDesc = {};
     wgslDesc.chain.sType = WGPUSType_ShaderSourceWGSL;
-    wgslDesc.code = { .data = shaderSource.c_str(), .length = shaderSource.size() };
+    WGPU_SHADER_CODE(wgslDesc, shaderSource);
 
     WGPUShaderModuleDescriptor moduleDesc = {};
     moduleDesc.nextInChain = &wgslDesc.chain;
@@ -666,7 +666,7 @@ void TextRenderer::render(WebGPUContext& ctx, const Grid& grid,
     colorAttachment.loadOp = WGPULoadOp_Clear;
     colorAttachment.storeOp = WGPUStoreOp_Store;
 #if YETTY_WEB
-    colorAttachment.clearColor = {0.1, 0.1, 0.1, 1.0};
+    WGPU_COLOR_ATTACHMENT_CLEAR(colorAttachment, 0.1, 0.1, 0.1, 1.0);
 #else
     colorAttachment.clearValue = {0.1, 0.1, 0.1, 1.0};
     colorAttachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;  // v27: required for 2D textures
@@ -769,7 +769,7 @@ void TextRenderer::render(WebGPUContext& ctx, const Grid& grid,
     colorAttachment.loadOp = WGPULoadOp_Clear;
     colorAttachment.storeOp = WGPUStoreOp_Store;
 #if YETTY_WEB
-    colorAttachment.clearColor = {0.1, 0.1, 0.1, 1.0};
+    WGPU_COLOR_ATTACHMENT_CLEAR(colorAttachment, 0.1, 0.1, 0.1, 1.0);
 #else
     colorAttachment.clearValue = {0.1, 0.1, 0.1, 1.0};
     colorAttachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;  // v27: required for 2D textures

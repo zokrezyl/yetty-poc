@@ -117,7 +117,8 @@ Result<void> Terminal::start(const std::string& shell) {
         }
 
         // Parse shell command into program and arguments
-        // e.g., "/path/to/busybox ash" -> program="/path/to/busybox", args=["busybox", "ash", NULL]
+        // e.g., "/path/to/busybox ash" -> program="/path/to/busybox", argv=["ash", NULL]
+        // For busybox: argv[0] must be the applet name, not the path
         std::vector<std::string> parts;
         std::istringstream iss(shellPath);
         std::string part;
@@ -130,15 +131,25 @@ Result<void> Terminal::start(const std::string& shell) {
             _exit(1);
         }
 
+        std::string program = parts[0];
+
         // Build argv array
+        // For busybox-style multi-call binaries: if there are multiple args,
+        // use args[1..] as argv (so argv[0] is the applet name like "ash")
         std::vector<char*> argv;
-        for (auto& p : parts) {
-            argv.push_back(const_cast<char*>(p.c_str()));
+        if (parts.size() > 1) {
+            // Multi-call binary: argv[0] = applet name (e.g., "ash")
+            for (size_t i = 1; i < parts.size(); i++) {
+                argv.push_back(const_cast<char*>(parts[i].c_str()));
+            }
+        } else {
+            // Single command: argv[0] = program path
+            argv.push_back(const_cast<char*>(parts[0].c_str()));
         }
         argv.push_back(nullptr);
 
-        // Execute - first part is the program path
-        execv(parts[0].c_str(), argv.data());
+        // Execute
+        execv(program.c_str(), argv.data());
 
         // If exec fails, write error to stderr (which goes to PTY)
         fprintf(stderr, "exec failed: %s\n", strerror(errno));

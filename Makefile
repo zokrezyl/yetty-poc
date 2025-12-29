@@ -57,11 +57,20 @@ debug: ## Build Debug (WebGPU, native)
 # === Web/Emscripten Build ===
 
 .PHONY: web
-web: ## Build for Web with Emscripten
-	PATH="$(SYSTEM_PATH)" $(CMAKE) -B $(BUILD_DIR_WEB) $(CMAKE_GENERATOR) $(CMAKE_COMMON) $(CMAKE_RELEASE) \
-		-DCMAKE_TOOLCHAIN_FILE=$(EMSDK)/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake \
-		-DYETTY_WEB=ON
-	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_WEB) --parallel
+web: ## Build for Web with Emscripten (via nix)
+	nix develop .#web --command bash -c '\
+		export EMCC_SKIP_SANITY_CHECK=1 && \
+		emcmake cmake -B $(BUILD_DIR_WEB) $(CMAKE_GENERATOR) $(CMAKE_COMMON) \
+			-DCMAKE_BUILD_TYPE=Release \
+			-DCMAKE_EXE_LINKER_FLAGS="-O2" && \
+		cmake --build $(BUILD_DIR_WEB) --parallel'
+	@cp web/index.html $(BUILD_DIR_WEB)/
+
+.PHONY: web-serve
+web-serve: ## Serve web build locally (with COOP/COEP headers)
+	@echo "Starting local server at http://localhost:8000"
+	@echo "Headers enabled for WebGPU/SharedArrayBuffer support"
+	python3 web/serve.py 8000 $(BUILD_DIR_WEB)
 
 # === Android Build ===
 

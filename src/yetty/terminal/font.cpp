@@ -1150,9 +1150,9 @@ bool Font::createTexture(WGPUDevice device, WGPUQueue queue) {
     samplerDesc.magFilter = WGPUFilterMode_Linear;
     samplerDesc.minFilter = WGPUFilterMode_Linear;
 #if YETTY_WEB
-    samplerDesc.mipmapFilter = WGPUFilterMode_Linear;
+    samplerDesc.mipmapFilter = WGPU_MIPMAP_FILTER_LINEAR;
 #else
-    samplerDesc.mipmapFilter = WGPUMipmapFilterMode_Linear;
+    samplerDesc.mipmapFilter = WGPU_MIPMAP_FILTER_LINEAR;
 #endif
     samplerDesc.maxAnisotropy = 1;
 

@@ -275,18 +275,20 @@ static bool initTerminal() {
 
     LOGI("Terminal dimensions: %ux%u", g_state.cols, g_state.rows);
 
-    // Set up environment for BusyBox shell
+    // Set up environment
     setenv("TERM", "xterm-256color", 1);
     setenv("HOME", g_state.dataDir.c_str(), 1);
-    setenv("PATH", g_state.dataDir.c_str(), 1);
-    setenv("SHELL", g_state.busyboxPath.c_str(), 1);
+    setenv("PATH", "/system/bin:/system/xbin", 1);
+    setenv("SHELL", "/system/bin/sh", 1);
+    // Make busybox available as BUSYBOX env var
+    setenv("BUSYBOX", g_state.busyboxPath.c_str(), 1);
 
     // Create terminal
     g_state.terminal = std::make_unique<yetty::Terminal>(
         g_state.cols, g_state.rows, g_state.font.get());
 
-    // Start shell - try system shell first for testing
-    // BusyBox ash has issues with argv[0] detection, use /system/bin/sh for now
+    // Start shell - use system shell (busybox crashes on some devices)
+    // BusyBox is available via $BUSYBOX command (e.g., $BUSYBOX ls)
     std::string shell = "/system/bin/sh";
     auto result = g_state.terminal->start(shell);
     if (!result) {
@@ -294,6 +296,7 @@ static bool initTerminal() {
         return false;
     }
     LOGI("Terminal started with shell: %s", shell.c_str());
+    LOGI("BusyBox available at: %s", g_state.busyboxPath.c_str());
 
     return true;
 }
@@ -317,14 +320,105 @@ static void cleanup() {
 // Input Handling
 //-----------------------------------------------------------------------------
 
-// Show soft keyboard
+// Show soft keyboard using JNI (more reliable than ANativeActivity_showSoftInput)
 static void showSoftKeyboard(struct android_app* app) {
-    ANativeActivity_showSoftInput(app->activity, ANATIVEACTIVITY_SHOW_SOFT_INPUT_FORCED);
+    JNIEnv* env;
+    app->activity->vm->AttachCurrentThread(&env, nullptr);
+
+    // Get the NativeActivity class
+    jclass activityClass = env->GetObjectClass(app->activity->clazz);
+
+    // Get getSystemService method
+    jmethodID getSystemService = env->GetMethodID(activityClass, "getSystemService",
+                                                   "(Ljava/lang/String;)Ljava/lang/Object;");
+
+    // Get INPUT_METHOD_SERVICE constant
+    jstring serviceName = env->NewStringUTF("input_method");
+    jobject imm = env->CallObjectMethod(app->activity->clazz, getSystemService, serviceName);
+    env->DeleteLocalRef(serviceName);
+
+    if (imm) {
+        // Get InputMethodManager class
+        jclass immClass = env->GetObjectClass(imm);
+
+        // Get getWindow().getDecorView() to get the view
+        jmethodID getWindow = env->GetMethodID(activityClass, "getWindow", "()Landroid/view/Window;");
+        jobject window = env->CallObjectMethod(app->activity->clazz, getWindow);
+
+        if (window) {
+            jclass windowClass = env->GetObjectClass(window);
+            jmethodID getDecorView = env->GetMethodID(windowClass, "getDecorView", "()Landroid/view/View;");
+            jobject decorView = env->CallObjectMethod(window, getDecorView);
+
+            if (decorView) {
+                // Call showSoftInput(view, flags)
+                jmethodID showSoftInput = env->GetMethodID(immClass, "showSoftInput",
+                                                            "(Landroid/view/View;I)Z");
+                env->CallBooleanMethod(imm, showSoftInput, decorView, 0);
+                LOGI("Requested soft keyboard");
+                env->DeleteLocalRef(decorView);
+            }
+            env->DeleteLocalRef(windowClass);
+            env->DeleteLocalRef(window);
+        }
+
+        env->DeleteLocalRef(immClass);
+        env->DeleteLocalRef(imm);
+    }
+
+    env->DeleteLocalRef(activityClass);
+    app->activity->vm->DetachCurrentThread();
 }
 
 // Hide soft keyboard
 static void hideSoftKeyboard(struct android_app* app) {
-    ANativeActivity_hideSoftInput(app->activity, 0);
+    JNIEnv* env;
+    app->activity->vm->AttachCurrentThread(&env, nullptr);
+
+    jclass activityClass = env->GetObjectClass(app->activity->clazz);
+    jmethodID getSystemService = env->GetMethodID(activityClass, "getSystemService",
+                                                   "(Ljava/lang/String;)Ljava/lang/Object;");
+    jstring serviceName = env->NewStringUTF("input_method");
+    jobject imm = env->CallObjectMethod(app->activity->clazz, getSystemService, serviceName);
+    env->DeleteLocalRef(serviceName);
+
+    if (imm) {
+        jclass immClass = env->GetObjectClass(imm);
+        jmethodID getWindow = env->GetMethodID(activityClass, "getWindow", "()Landroid/view/Window;");
+        jobject window = env->CallObjectMethod(app->activity->clazz, getWindow);
+
+        if (window) {
+            jclass windowClass = env->GetObjectClass(window);
+            jmethodID getDecorView = env->GetMethodID(windowClass, "getDecorView", "()Landroid/view/View;");
+            jobject decorView = env->CallObjectMethod(window, getDecorView);
+
+            if (decorView) {
+                // Get window token
+                jclass viewClass = env->GetObjectClass(decorView);
+                jmethodID getWindowToken = env->GetMethodID(viewClass, "getWindowToken",
+                                                             "()Landroid/os/IBinder;");
+                jobject token = env->CallObjectMethod(decorView, getWindowToken);
+
+                if (token) {
+                    jmethodID hideSoftInputFromWindow = env->GetMethodID(immClass,
+                        "hideSoftInputFromWindow", "(Landroid/os/IBinder;I)Z");
+                    env->CallBooleanMethod(imm, hideSoftInputFromWindow, token, 0);
+                    env->DeleteLocalRef(token);
+                }
+
+                env->DeleteLocalRef(viewClass);
+                env->DeleteLocalRef(decorView);
+            }
+            env->DeleteLocalRef(windowClass);
+            env->DeleteLocalRef(window);
+        }
+
+        env->DeleteLocalRef(immClass);
+        env->DeleteLocalRef(imm);
+    }
+
+    env->DeleteLocalRef(activityClass);
+    app->activity->vm->DetachCurrentThread();
 }
 
 // Get VTerm modifier flags from Android meta state
@@ -566,6 +660,44 @@ static void handleCmd(struct android_app* app, int32_t cmd) {
                     g_state.cols = newCols;
                     g_state.rows = newRows;
                     g_state.terminal->resize(newCols, newRows);
+                }
+            }
+            break;
+
+        case APP_CMD_CONTENT_RECT_CHANGED:
+            // Content rect changed - this happens when soft keyboard appears/disappears
+            LOGI("APP_CMD_CONTENT_RECT_CHANGED: rect=[%d,%d,%d,%d]",
+                 app->contentRect.left, app->contentRect.top,
+                 app->contentRect.right, app->contentRect.bottom);
+            if (g_state.initialized && g_state.ctx) {
+                int32_t newWidth = app->contentRect.right - app->contentRect.left;
+                int32_t newHeight = app->contentRect.bottom - app->contentRect.top;
+
+                if (newWidth > 0 && newHeight > 0 &&
+                    (newWidth != g_state.width || newHeight != g_state.height)) {
+                    g_state.width = newWidth;
+                    g_state.height = newHeight;
+                    LOGI("Resizing to content rect: %dx%d", newWidth, newHeight);
+
+                    // Reconfigure surface
+                    g_state.ctx->resize(g_state.width, g_state.height);
+
+                    // Resize renderer
+                    if (g_state.renderer) {
+                        g_state.renderer->resize(g_state.width, g_state.height);
+                    }
+
+                    // Resize terminal
+                    uint32_t newCols = static_cast<uint32_t>(g_state.width / g_state.cellWidth);
+                    uint32_t newRows = static_cast<uint32_t>(g_state.height / g_state.cellHeight);
+                    if (newCols < 20) newCols = 20;
+                    if (newRows < 5) newRows = 5;
+                    if (g_state.terminal && (newCols != g_state.cols || newRows != g_state.rows)) {
+                        g_state.cols = newCols;
+                        g_state.rows = newRows;
+                        g_state.terminal->resize(newCols, newRows);
+                        LOGI("Terminal resized to %ux%u", newCols, newRows);
+                    }
                 }
             }
             break;

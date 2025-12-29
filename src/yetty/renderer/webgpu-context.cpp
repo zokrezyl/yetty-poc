@@ -53,9 +53,40 @@ Result<void> WebGPUContext::init(GLFWwindow* window, uint32_t width, uint32_t he
     width_ = width;
     height_ = height;
 
-    // Create WebGPU instance
+    // Platform-specific WebGPU initialization
 #if YETTY_WEB
+    // Emscripten: Get device directly using emscripten_webgpu_get_device()
+    // This handles adapter/instance internally and is synchronous
+    device_ = emscripten_webgpu_get_device();
+    if (!device_) {
+        return Err<void>("Failed to get WebGPU device (emscripten_webgpu_get_device failed)");
+    }
+
+    // Get queue from device
+    queue_ = wgpuDeviceGetQueue(device_);
+    if (!queue_) {
+        return Err<void>("Failed to get WebGPU queue");
+    }
+
+    // Create surface from canvas
+    WGPUSurfaceDescriptorFromCanvasHTMLSelector canvasDesc = {};
+    canvasDesc.chain.sType = WGPUSType_SurfaceDescriptorFromCanvasHTMLSelector;
+    canvasDesc.selector = "#canvas";
+
+    WGPUSurfaceDescriptor surfaceDesc = {};
+    surfaceDesc.nextInChain = &canvasDesc.chain;
+
+    // For Emscripten, we create instance just for creating surface
     instance_ = wgpuCreateInstance(nullptr);
+    surface_ = wgpuInstanceCreateSurface(instance_, &surfaceDesc);
+    if (!surface_) {
+        return Err<void>("Failed to create WebGPU surface from canvas");
+    }
+
+    // Set up swapchain
+    surfaceFormat_ = WGPUTextureFormat_BGRA8Unorm;
+    createSwapChain(width, height);
+
 #elif YETTY_ANDROID
     // Enable wgpu-native logging for debugging
     wgpuSetLogCallback(wgpuLogCallback, nullptr);
@@ -64,25 +95,11 @@ Result<void> WebGPUContext::init(GLFWwindow* window, uint32_t width, uint32_t he
     WGPUInstanceDescriptor instanceDesc = {};
     instance_ = wgpuCreateInstance(&instanceDesc);
     LOGI("Instance created: %p", instance_);
-#else
-    WGPUInstanceDescriptor instanceDesc = {};
-    instance_ = wgpuCreateInstance(&instanceDesc);
-#endif
+
     if (!instance_) {
         return Err<void>("Failed to create WebGPU instance");
     }
 
-    // Create surface from window
-#if YETTY_WEB
-    // Emscripten: create surface from canvas
-    WGPUSurfaceDescriptorFromCanvasHTMLSelector canvasDesc = {};
-    canvasDesc.chain.sType = WGPUSType_SurfaceDescriptorFromCanvasHTMLSelector;
-    canvasDesc.selector = "#canvas";
-
-    WGPUSurfaceDescriptor surfaceDesc = {};
-    surfaceDesc.nextInChain = &canvasDesc.chain;
-    surface_ = wgpuInstanceCreateSurface(instance_, &surfaceDesc);
-#elif YETTY_ANDROID
     // Android: create surface from ANativeWindow (v27 API)
     LOGI("Creating surface from ANativeWindow...");
     WGPUSurfaceSourceAndroidNativeWindow androidDesc = {};
@@ -93,22 +110,16 @@ Result<void> WebGPUContext::init(GLFWwindow* window, uint32_t width, uint32_t he
     surfaceDesc.nextInChain = &androidDesc.chain;
     surface_ = wgpuInstanceCreateSurface(instance_, &surfaceDesc);
     LOGI("Surface created: %p", surface_);
-#else
-    surface_ = glfwCreateWindowWGPUSurface(instance_, window);
-#endif
+
     if (!surface_) {
         return Err<void>("Failed to create WebGPU surface");
     }
 
     // Request adapter
-#if YETTY_ANDROID
     LOGI("Requesting adapter...");
-#endif
     WGPURequestAdapterOptions adapterOpts = {};
     adapterOpts.compatibleSurface = surface_;
-#if !YETTY_WEB
     adapterOpts.powerPreference = WGPUPowerPreference_HighPerformance;
-#endif
 
     WGPURequestAdapterCallbackInfo adapterCallbackInfo = {};
     adapterCallbackInfo.mode = WGPUCallbackMode_AllowSpontaneous;
@@ -121,33 +132,24 @@ Result<void> WebGPUContext::init(GLFWwindow* window, uint32_t width, uint32_t he
     };
     adapterCallbackInfo.userdata1 = &adapter_;
     wgpuInstanceRequestAdapter(instance_, &adapterOpts, adapterCallbackInfo);
-#if YETTY_ANDROID
     LOGI("Adapter obtained: %p", adapter_);
-#endif
 
     if (!adapter_) {
         return Err<void>("Failed to get WebGPU adapter");
     }
 
     // Request device
-#if YETTY_ANDROID
     LOGI("Requesting device...");
-#endif
     WGPUDeviceDescriptor deviceDesc = {};
     deviceDesc.label = WGPU_STR("yetty device");
-#if !YETTY_WEB
     deviceDesc.requiredFeatureCount = 0;
     deviceDesc.requiredLimits = nullptr;
     deviceDesc.defaultQueue.label = WGPU_STR("default queue");
-    // v27 API: error callback with new signature
     deviceDesc.uncapturedErrorCallbackInfo.callback = [](WGPUDevice const* device, WGPUErrorType type, WGPUStringView message, void* userdata1, void* userdata2) {
         std::cerr << "WebGPU error (" << type << "): " << (message.data ? std::string(message.data, message.length) : "unknown") << std::endl;
-#if YETTY_ANDROID
         __android_log_print(ANDROID_LOG_ERROR, "yetty-webgpu", "WebGPU error (%d): %.*s", type,
                             (int)message.length, message.data ? message.data : "unknown");
-#endif
     };
-#endif
 
     WGPURequestDeviceCallbackInfo deviceCallbackInfo = {};
     deviceCallbackInfo.mode = WGPUCallbackMode_AllowSpontaneous;
@@ -160,28 +162,82 @@ Result<void> WebGPUContext::init(GLFWwindow* window, uint32_t width, uint32_t he
     };
     deviceCallbackInfo.userdata1 = &device_;
     wgpuAdapterRequestDevice(adapter_, &deviceDesc, deviceCallbackInfo);
-#if YETTY_ANDROID
     LOGI("Device obtained: %p", device_);
-#endif
 
     if (!device_) {
         return Err<void>("Failed to get WebGPU device");
     }
 
     // Get queue
-#if YETTY_ANDROID
     LOGI("Getting queue...");
-#endif
     queue_ = wgpuDeviceGetQueue(device_);
-#if YETTY_ANDROID
     LOGI("Queue obtained: %p", queue_);
+
+#else
+    // Desktop: standard wgpu-native initialization
+    WGPUInstanceDescriptor instanceDesc = {};
+    instance_ = wgpuCreateInstance(&instanceDesc);
+    if (!instance_) {
+        return Err<void>("Failed to create WebGPU instance");
+    }
+
+    surface_ = glfwCreateWindowWGPUSurface(instance_, window);
+    if (!surface_) {
+        return Err<void>("Failed to create WebGPU surface");
+    }
+
+    // Request adapter
+    WGPURequestAdapterOptions adapterOpts = {};
+    adapterOpts.compatibleSurface = surface_;
+    adapterOpts.powerPreference = WGPUPowerPreference_HighPerformance;
+
+    WGPURequestAdapterCallbackInfo adapterCallbackInfo = {};
+    adapterCallbackInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+    adapterCallbackInfo.callback = [](WGPURequestAdapterStatus status, WGPUAdapter adapter, WGPUStringView message, void* userdata1, void* userdata2) {
+        if (status == WGPURequestAdapterStatus_Success) {
+            *static_cast<WGPUAdapter*>(userdata1) = adapter;
+        } else {
+            std::cerr << "Failed to get WebGPU adapter: " << (message.data ? std::string(message.data, message.length) : "unknown error") << std::endl;
+        }
+    };
+    adapterCallbackInfo.userdata1 = &adapter_;
+    wgpuInstanceRequestAdapter(instance_, &adapterOpts, adapterCallbackInfo);
+
+    if (!adapter_) {
+        return Err<void>("Failed to get WebGPU adapter");
+    }
+
+    // Request device
+    WGPUDeviceDescriptor deviceDesc = {};
+    deviceDesc.label = WGPU_STR("yetty device");
+    deviceDesc.requiredFeatureCount = 0;
+    deviceDesc.requiredLimits = nullptr;
+    deviceDesc.defaultQueue.label = WGPU_STR("default queue");
+    deviceDesc.uncapturedErrorCallbackInfo.callback = [](WGPUDevice const* device, WGPUErrorType type, WGPUStringView message, void* userdata1, void* userdata2) {
+        std::cerr << "WebGPU error (" << type << "): " << (message.data ? std::string(message.data, message.length) : "unknown") << std::endl;
+    };
+
+    WGPURequestDeviceCallbackInfo deviceCallbackInfo = {};
+    deviceCallbackInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+    deviceCallbackInfo.callback = [](WGPURequestDeviceStatus status, WGPUDevice device, WGPUStringView message, void* userdata1, void* userdata2) {
+        if (status == WGPURequestDeviceStatus_Success) {
+            *static_cast<WGPUDevice*>(userdata1) = device;
+        } else {
+            std::cerr << "Failed to get WebGPU device: " << (message.data ? std::string(message.data, message.length) : "unknown error") << std::endl;
+        }
+    };
+    deviceCallbackInfo.userdata1 = &device_;
+    wgpuAdapterRequestDevice(adapter_, &deviceDesc, deviceCallbackInfo);
+
+    if (!device_) {
+        return Err<void>("Failed to get WebGPU device");
+    }
+
+    // Get queue
+    queue_ = wgpuDeviceGetQueue(device_);
 #endif
 
-#if YETTY_WEB
-    // Emscripten: use swapchain API
-    surfaceFormat_ = WGPUTextureFormat_BGRA8Unorm;  // Standard for web
-    createSwapChain(width, height);
-#elif YETTY_ANDROID
+#if YETTY_ANDROID
     // Android/Vulkan: query surface capabilities to get supported formats
     LOGI("Querying surface capabilities...");
     WGPUSurfaceCapabilities caps = {};
@@ -212,7 +268,7 @@ Result<void> WebGPUContext::init(GLFWwindow* window, uint32_t width, uint32_t he
     LOGI("Configuring surface with format %d, size %dx%d...", surfaceFormat_, width, height);
     configureSurface(width, height);
     LOGI("Surface configured successfully");
-#else
+#elif !YETTY_WEB
     // Desktop wgpu-native: get preferred surface format
     WGPUSurfaceCapabilities caps = {};
     wgpuSurfaceGetCapabilities(surface_, adapter_, &caps);
@@ -224,6 +280,7 @@ Result<void> WebGPUContext::init(GLFWwindow* window, uint32_t width, uint32_t he
     // Configure surface
     configureSurface(width, height);
 #endif
+    // (Web already configured swapchain above)
 
     std::cout << "WebGPU initialized successfully" << std::endl;
     return Ok();

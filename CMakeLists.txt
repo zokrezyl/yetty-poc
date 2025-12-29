@@ -127,14 +127,12 @@ CPMAddPackage(
     OPTIONS "YAML_CPP_BUILD_TESTS OFF" "YAML_CPP_BUILD_TOOLS OFF"
 )
 
-# spdlog for logging (desktop and Android, not web)
-if(NOT EMSCRIPTEN)
-    CPMAddPackage(
-        NAME spdlog
-        GITHUB_REPOSITORY gabime/spdlog
-        GIT_TAG v1.12.0
-    )
-endif()
+# spdlog for logging (all platforms - header-only library)
+CPMAddPackage(
+    NAME spdlog
+    GITHUB_REPOSITORY gabime/spdlog
+    GIT_TAG v1.12.0
+)
 
 #-----------------------------------------------------------------------------
 # Desktop-only dependencies (font atlas generation, GLFW windowing)
@@ -218,10 +216,11 @@ if(YETTY_ANDROID)
 endif()
 
 #-----------------------------------------------------------------------------
-# libvterm (native and Android - not web)
+# libvterm (all platforms - terminal emulation library)
+# Note: Web builds won't use PTY, but need vterm for types/parsing
 #-----------------------------------------------------------------------------
-if(NOT EMSCRIPTEN)
-    set(LIBVTERM_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/libvterm-0.3.3)
+set(LIBVTERM_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/libvterm-0.3.3)
+if(EXISTS ${LIBVTERM_DIR})
     add_library(vterm STATIC
         ${LIBVTERM_DIR}/src/encoding.c
         ${LIBVTERM_DIR}/src/keyboard.c
@@ -312,17 +311,26 @@ if(EMSCRIPTEN)
         -sUSE_WEBGPU
         -sASYNCIFY
         -sALLOW_MEMORY_GROWTH
+        -sWASM_BIGINT
+        --no-heap-copy
         "--preload-file=${CMAKE_CURRENT_SOURCE_DIR}/src/yetty/renderer/shaders.wgsl@/shaders.wgsl"
         "--preload-file=${CMAKE_CURRENT_SOURCE_DIR}/assets@/assets"
-        "--shell-file=${CMAKE_CURRENT_SOURCE_DIR}/web/shell.html"
     )
 
-    set_target_properties(yetty PROPERTIES SUFFIX ".html")
+    # Use -O2 to avoid aggressive wasm-opt that causes binaryen version issues
+    target_compile_options(yetty PRIVATE -O2)
+
+    # Output as .js (not .html) to avoid html-minifier-terser dependency
+    # A standalone index.html will be provided to load yetty.js
+    set_target_properties(yetty PROPERTIES SUFFIX ".js")
 
     target_link_libraries(yetty PRIVATE
         webgpu
         glm::glm
         stb
+        yaml-cpp
+        vterm
+        spdlog::spdlog
     )
 
 elseif(YETTY_ANDROID)

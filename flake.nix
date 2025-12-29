@@ -2,7 +2,7 @@
   description = "Yetty - WebGPU Terminal Emulator";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.05";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.11";
     rust-overlay.url = "github:oxalica/rust-overlay";
     flake-utils.url = "github:numtide/flake-utils";
   };
@@ -111,6 +111,28 @@
               echo "  NDK clang: $(which aarch64-linux-android26-clang 2>/dev/null || echo 'not in PATH')"
               echo ""
               echo "Run: make android"
+            '';
+          };
+
+          # Web/Emscripten build shell
+          web = pkgs.mkShell {
+            buildInputs = commonDeps ++ [
+              pkgs.emscripten
+              pkgs.python3
+              pkgs.nodejs
+            ];
+
+            # Emscripten environment
+            EMSDK = "${pkgs.emscripten}/share/emscripten";
+            EM_CONFIG = "${pkgs.emscripten}/share/emscripten/.emscripten";
+            EM_CACHE = "/tmp/emscripten-cache";
+
+            shellHook = ''
+              echo "Yetty Web/Emscripten build environment"
+              echo "  Emscripten: $(emcc --version | head -1)"
+              echo "  EMSDK: $EMSDK"
+              echo ""
+              echo "Run: make web"
             '';
           };
         };
