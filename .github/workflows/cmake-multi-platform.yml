@@ -33,7 +33,7 @@ jobs:
       id: strings
       shell: bash
       run: |
-        echo "build-output-dir=${{ github.workspace }}/build" >> "$GITHUB_OUTPUT"
+        echo "build-output-dir=${{ github.workspace }}/build-desktop" >> "$GITHUB_OUTPUT"
 
     - name: Install Linux dependencies
       if: runner.os == 'Linux'
@@ -91,12 +91,12 @@ jobs:
         echo "NDK_HOME=$ANDROID_HOME/ndk/26.1.10909125" >> $GITHUB_ENV
 
     - name: Download wgpu-native for Android
-      run: bash android/build-wgpu.sh
+      run: bash build-tools/android/build-wgpu.sh
 
     - name: Build BusyBox for Android
       run: |
         export PATH="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
-        bash android/build-busybox.sh
+        bash build-tools/android/build-busybox.sh
 
     - name: Copy font assets
       run: |

@@ -4,176 +4,155 @@
 # Use system tools for most builds (avoid nix)
 SYSTEM_PATH := /usr/bin:/bin:/usr/local/bin:$(PATH)
 
-# Android SDK (adjust paths as needed)
+# Android SDK
 export JAVA_HOME ?= /usr/lib/jvm/java-17-openjdk-amd64
 export ANDROID_HOME ?= $(HOME)/android-sdk
 export ANDROID_SDK_ROOT ?= $(ANDROID_HOME)
-
-# Android NDK (for BusyBox cross-compilation)
 export ANDROID_NDK_HOME ?= $(ANDROID_HOME)/ndk/26.1.10909125
 export ANDROID_ABI ?= arm64-v8a
 export ANDROID_PLATFORM ?= android-26
 
-# Directories
-BUILD_DIR := build
-BUILD_DIR_DEBUG := build-debug
-BUILD_DIR_WEB := web-build
+# Build directories
+BUILD_DIR_DESKTOP := build-desktop
 BUILD_DIR_ANDROID := build-android
+BUILD_DIR_WEBASM := build-webasm
+
+# External dependencies
 BUSYBOX_VERSION := 1.34.1
 BUSYBOX_DIR := external/busybox
-BUSYBOX_SRC := $(BUSYBOX_DIR)/busybox-$(BUSYBOX_VERSION)
-BUSYBOX_MEEFIK_DIR := $(BUSYBOX_DIR)/meefik-busybox-$(BUSYBOX_VERSION)
 
 # CMake options
 CMAKE := cmake
 CMAKE_GENERATOR := -G Ninja
-CMAKE_COMMON :=
 CMAKE_RELEASE := -DCMAKE_BUILD_TYPE=Release
 CMAKE_DEBUG := -DCMAKE_BUILD_TYPE=Debug
 
-# Android toolchain
-ANDROID_TOOLCHAIN := $(ANDROID_NDK_HOME)/build/cmake/android.toolchain.cmake
-ANDROID_CMAKE_OPTS := -DCMAKE_TOOLCHAIN_FILE=$(ANDROID_TOOLCHAIN) \
-	-DANDROID_ABI=$(ANDROID_ABI) \
-	-DANDROID_PLATFORM=$(ANDROID_PLATFORM) \
-	-DANDROID_STL=c++_shared
+# Gradle options
+GRADLE_OPTS := --project-cache-dir=../$(BUILD_DIR_ANDROID)/.gradle
 
-# Default target
+# Default target - show help
 .PHONY: all
-all: release
+all: help
 
-# === Desktop Builds ===
+#=============================================================================
+# Desktop
+#=============================================================================
 
-.PHONY: release
-release: ## Build Release (WebGPU, native)
-	PATH="$(SYSTEM_PATH)" $(CMAKE) -B $(BUILD_DIR) $(CMAKE_GENERATOR) $(CMAKE_COMMON) $(CMAKE_RELEASE)
-	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR) --parallel
+.PHONY: config-desktop
+config-desktop: ## Configure desktop build
+	PATH="$(SYSTEM_PATH)" $(CMAKE) -B $(BUILD_DIR_DESKTOP) $(CMAKE_GENERATOR) $(CMAKE_RELEASE)
 
-.PHONY: debug
-debug: ## Build Debug (WebGPU, native)
-	PATH="$(SYSTEM_PATH)" $(CMAKE) -B $(BUILD_DIR_DEBUG) $(CMAKE_GENERATOR) $(CMAKE_COMMON) $(CMAKE_DEBUG)
-	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_DEBUG) --parallel
+.PHONY: build-desktop
+build-desktop: ## Build for desktop
+	@if [ ! -f "$(BUILD_DIR_DESKTOP)/build.ninja" ]; then $(MAKE) config-desktop; fi
+	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_DESKTOP) --parallel
 
-# === Web/Emscripten Build ===
+#=============================================================================
+# Android
+#=============================================================================
 
-.PHONY: web
-web: ## Build for Web with Emscripten (via nix)
+.PHONY: config-android
+config-android: ## Configure Android build
+	@$(MAKE) _android-wgpu
+
+.PHONY: build-android
+build-android: ## Build for Android
+	@$(MAKE) _android-deps
+	nix develop .#android --command bash -c "cd android && ./gradlew $(GRADLE_OPTS) assembleDebug"
+
+#=============================================================================
+# WebAssembly
+#=============================================================================
+
+.PHONY: config-webasm
+config-webasm: ## Configure WebAssembly build
 	nix develop .#web --command bash -c '\
 		export EMCC_SKIP_SANITY_CHECK=1 && \
-		emcmake cmake -B $(BUILD_DIR_WEB) $(CMAKE_GENERATOR) $(CMAKE_COMMON) \
+		emcmake cmake -B $(BUILD_DIR_WEBASM) $(CMAKE_GENERATOR) \
 			-DCMAKE_BUILD_TYPE=Release \
-			-DCMAKE_EXE_LINKER_FLAGS="-O2" && \
-		cmake --build $(BUILD_DIR_WEB) --parallel'
-	@cp web/index.html $(BUILD_DIR_WEB)/
+			-DCMAKE_EXE_LINKER_FLAGS="-O2"'
 
-.PHONY: web-serve
-web-serve: ## Serve web build locally (with COOP/COEP headers)
-	@echo "Starting local server at http://localhost:8000"
-	@echo "Headers enabled for WebGPU/SharedArrayBuffer support"
-	python3 web/serve.py 8000 $(BUILD_DIR_WEB)
+.PHONY: build-webasm
+build-webasm: ## Build for WebAssembly
+	@if [ ! -f "$(BUILD_DIR_WEBASM)/build.ninja" ]; then $(MAKE) config-webasm; fi
+	nix develop .#web --command bash -c 'cmake --build $(BUILD_DIR_WEBASM) --parallel'
+	@cp web/index.html $(BUILD_DIR_WEBASM)/
 
-# === Android Build ===
+#=============================================================================
+# Run
+#=============================================================================
 
-.PHONY: android-wgpu
-android-wgpu: ## Download pre-built wgpu-native for Android
-	cd android && bash ./build-wgpu.sh
+.PHONY: run-desktop
+run-desktop: build-desktop ## Run desktop build
+	./$(BUILD_DIR_DESKTOP)/yetty
 
-# Gradle options to keep all build artifacts in build-android/
-GRADLE_OPTS := --project-cache-dir=../build-android/.gradle
+.PHONY: run-webasm
+run-webasm: build-webasm ## Serve and open WebAssembly build
+	python3 web/serve.py 8000 $(BUILD_DIR_WEBASM)
 
-.PHONY: android-assets
-android-assets: ## Copy font assets to build-android/assets
+#=============================================================================
+# Test
+#=============================================================================
+
+.PHONY: test-desktop
+test-desktop: ## Run desktop tests
+	@if [ ! -f "$(BUILD_DIR_DESKTOP)/build.ninja" ]; then \
+		PATH="$(SYSTEM_PATH)" $(CMAKE) -B $(BUILD_DIR_DESKTOP) $(CMAKE_GENERATOR) $(CMAKE_DEBUG); \
+	fi
+	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_DESKTOP) --target yetty_tests --parallel
+	./$(BUILD_DIR_DESKTOP)/test/ut/yetty_tests
+
+.PHONY: test-android
+test-android: build-android ## Run Android tests (installs on connected device)
+	adb install -r $(BUILD_DIR_ANDROID)/app/outputs/apk/debug/app-debug.apk
+	adb shell am start -n com.yetty.terminal/android.app.NativeActivity
+
+.PHONY: test-webasm
+test-webasm: build-webasm ## Run WebAssembly tests (opens in browser)
+	python3 web/serve.py 8000 $(BUILD_DIR_WEBASM)
+
+#=============================================================================
+# Clean
+#=============================================================================
+
+.PHONY: clean
+clean: ## Clean all build directories
+	rm -rf $(BUILD_DIR_DESKTOP) $(BUILD_DIR_ANDROID) $(BUILD_DIR_WEBASM)
+
+#=============================================================================
+# Internal targets (not shown in help)
+#=============================================================================
+
+.PHONY: _android-wgpu
+_android-wgpu:
+	@cd $(CURDIR) && bash build-tools/android/build-wgpu.sh
+
+.PHONY: _android-busybox
+_android-busybox:
+	@nix develop .#android --command bash build-tools/android/build-busybox.sh
+
+.PHONY: _android-assets
+_android-assets:
 	@mkdir -p $(BUILD_DIR_ANDROID)/assets
 	@cp -f assets/*.ttf assets/*.png assets/*.json $(BUILD_DIR_ANDROID)/assets/ 2>/dev/null || true
 
-.PHONY: android
-android: android-wgpu busybox-android android-assets ## Build Android APK (Debug)
-	nix develop .#android --command bash -c "cd android && ./gradlew $(GRADLE_OPTS) assembleDebug"
+.PHONY: _android-deps
+_android-deps: _android-wgpu _android-busybox _android-assets
 
-.PHONY: android-release
-android-release: android-wgpu busybox-android android-assets ## Build Android APK (Release)
-	nix develop .#android --command bash -c "cd android && ./gradlew $(GRADLE_OPTS) assembleRelease"
-
-.PHONY: android-clean
-android-clean: ## Clean Android build
-	nix develop .#android --command bash -c "cd android && ./gradlew $(GRADLE_OPTS) clean" || true
-	rm -rf $(BUILD_DIR_ANDROID)
-
-# === BusyBox for Android ===
-
-.PHONY: busybox-download
-busybox-download: ## Download BusyBox source and meefik patches
-	@mkdir -p $(BUSYBOX_DIR)
-	@if [ ! -d "$(BUSYBOX_MEEFIK_DIR)" ]; then \
-		echo "Downloading meefik/busybox $(BUSYBOX_VERSION) patches..."; \
-		curl -L https://github.com/meefik/busybox/archive/refs/tags/$(BUSYBOX_VERSION).tar.gz | tar -xz -C $(BUSYBOX_DIR); \
-		mv $(BUSYBOX_DIR)/busybox-$(BUSYBOX_VERSION) $(BUSYBOX_MEEFIK_DIR); \
-	else \
-		echo "meefik/busybox patches already exist"; \
-	fi
-	@if [ ! -d "$(BUSYBOX_DIR)/busybox-$(BUSYBOX_VERSION)" ]; then \
-		echo "Downloading official BusyBox $(BUSYBOX_VERSION) source..."; \
-		curl -L https://busybox.net/downloads/busybox-$(BUSYBOX_VERSION).tar.bz2 | tar -xj -C $(BUSYBOX_DIR); \
-	else \
-		echo "BusyBox source already exists"; \
-	fi
-
-.PHONY: busybox-android
-busybox-android: ## Cross-compile BusyBox for Android
-	nix develop .#android --command bash android/build-busybox.sh
-
-.PHONY: busybox-clean
-busybox-clean: ## Clean BusyBox build
-	rm -rf $(BUSYBOX_DIR)
-
-# === Run Targets ===
-
-.PHONY: run
-run: release ## Run yetty
-	./$(BUILD_DIR)/yetty
-
-.PHONY: run-debug
-run-debug: debug ## Run yetty (debug)
-	./$(BUILD_DIR_DEBUG)/yetty
-
-# === Test Targets ===
-
-.PHONY: test
-test: ## Build and run tests
-	PATH="$(SYSTEM_PATH)" $(CMAKE) -B $(BUILD_DIR) $(CMAKE_GENERATOR) $(CMAKE_COMMON) $(CMAKE_DEBUG)
-	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR) --target yetty_tests --parallel
-	./$(BUILD_DIR)/test/ut/yetty_tests
-
-.PHONY: coverage
-coverage: ## Run tests with coverage
-	PATH="$(SYSTEM_PATH)" $(CMAKE) -B $(BUILD_DIR) $(CMAKE_GENERATOR) $(CMAKE_COMMON) $(CMAKE_DEBUG) -DYETTY_COVERAGE=ON
-	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR) --target yetty_tests --parallel
-	./$(BUILD_DIR)/test/ut/yetty_tests
-	~/.local/bin/uv run gcovr --root . --filter 'test/ut/harness/' -s
-
-# === Clean Targets ===
-
-.PHONY: clean
-clean: ## Clean build directories
-	rm -rf $(BUILD_DIR) $(BUILD_DIR_DEBUG) $(BUILD_DIR_WEB) $(BUILD_DIR_ANDROID)
-
-.PHONY: clean-all
-clean-all: clean busybox-clean ## Clean everything including external deps
-	-cd android && PATH="$(SYSTEM_PATH)" ./gradlew clean 2>/dev/null || true
-
-# === Help ===
+#=============================================================================
+# Help
+#=============================================================================
 
 .PHONY: help
-help: ## Show this help
+help:
 	@echo "Yetty Build System"
 	@echo ""
 	@echo "Usage: make <target>"
 	@echo ""
 	@echo "Targets:"
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 	@echo ""
-	@echo "Environment variables:"
-	@echo "  ANDROID_NDK_HOME  - Android NDK path (default: ~/Android/Sdk/ndk/...)"
-	@echo "  ANDROID_ABI       - Target ABI (default: arm64-v8a)"
-	@echo "  ANDROID_PLATFORM  - Min API level (default: android-26)"
-	@echo "  EMSDK             - Emscripten SDK path (for web target)"
+	@echo "Build outputs:"
+	@echo "  build-desktop/yetty"
+	@echo "  build-android/app/outputs/apk/"
+	@echo "  build-webasm/yetty.html"

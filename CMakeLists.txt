@@ -37,7 +37,7 @@ option(YETTY_YMERY_ENABLED "Enable ymery ImGui plugin" ON)
 set(BUSYBOX_PATH "" CACHE PATH "Path to BusyBox install directory for Android")
 
 # Include CPM.cmake
-include(cmake/CPM.cmake)
+include(build-tools/cmake/CPM.cmake)
 
 #-----------------------------------------------------------------------------
 # Dependencies
@@ -82,7 +82,7 @@ if(YETTY_ANDROID)
 
 elseif(NOT EMSCRIPTEN)
     # Desktop (Linux/macOS/Windows): Auto-download wgpu-native from GitHub releases
-    include(cmake/WgpuNative.cmake)
+    include(build-tools/cmake/WgpuNative.cmake)
 endif()
 
 # GLM for math
