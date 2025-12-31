@@ -102,50 +102,34 @@ Result<void> Terminal::start(const std::string& shell) {
     if (childPid_ == 0) {
         // Child process - exec the shell
         setenv("TERM", "xterm-256color", 1);
+        setenv("COLORTERM", "truecolor", 1);
 
         // Close all file descriptors except stdin/stdout/stderr
         for (int fd = 3; fd < 1024; fd++) {
             close(fd);
         }
 
-        // Parse shell command into program and arguments
-        // e.g., "/path/to/busybox ash" -> program="/path/to/busybox", argv=["ash", NULL]
-        // For busybox: argv[0] must be the applet name, not the path
-        std::vector<std::string> parts;
-        std::istringstream iss(shellPath);
-        std::string part;
-        while (iss >> part) {
-            parts.push_back(part);
-        }
+        // Check if this is a simple shell path or a command with arguments
+        bool hasSpaces = shellPath.find(' ') != std::string::npos;
 
-        if (parts.empty()) {
-            fprintf(stderr, "exec failed: empty shell command\n");
+        if (hasSpaces) {
+            // Command with arguments - run through shell
+            // e.g., "tools/yetty-client/yetty-client pdf file.pdf"
+            const char* shellBin = "/bin/sh";
+            const char* envShell = getenv("SHELL");
+            if (envShell && envShell[0] != '\0') {
+                shellBin = envShell;
+            }
+
+            execl(shellBin, shellBin, "-c", shellPath.c_str(), nullptr);
+            fprintf(stderr, "exec shell failed: %s\n", strerror(errno));
+            _exit(1);
+        } else {
+            // Simple shell path - execute directly
+            execl(shellPath.c_str(), shellPath.c_str(), nullptr);
+            fprintf(stderr, "exec failed: %s\n", strerror(errno));
             _exit(1);
         }
-
-        std::string program = parts[0];
-
-        // Build argv array
-        // For busybox-style multi-call binaries: if there are multiple args,
-        // use args[1..] as argv (so argv[0] is the applet name like "ash")
-        std::vector<char*> argv;
-        if (parts.size() > 1) {
-            // Multi-call binary: argv[0] = applet name (e.g., "ash")
-            for (size_t i = 1; i < parts.size(); i++) {
-                argv.push_back(const_cast<char*>(parts[i].c_str()));
-            }
-        } else {
-            // Single command: argv[0] = program path
-            argv.push_back(const_cast<char*>(parts[0].c_str()));
-        }
-        argv.push_back(nullptr);
-
-        // Execute
-        execv(program.c_str(), argv.data());
-
-        // If exec fails, write error to stderr (which goes to PTY)
-        fprintf(stderr, "exec failed: %s\n", strerror(errno));
-        _exit(1);  // Only reached if exec fails
     }
 
     // Parent process

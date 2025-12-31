@@ -158,6 +158,16 @@ if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
             "MSDFGEN_INSTALL OFF"
     )
 
+    # MuPDF for PDF rendering (official tarball includes all bundled dependencies)
+    CPMAddPackage(
+        NAME mupdf
+        URL https://mupdf.com/downloads/archive/mupdf-1.25.4-source.tar.gz
+        DOWNLOAD_ONLY YES
+    )
+    if(mupdf_ADDED)
+        include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/mupdf/CMakeLists.txt)
+    endif()
+
     # GLFW and glfw3webgpu adapter (desktop only, not Android)
     CPMAddPackage(
         NAME glfw
@@ -257,6 +267,11 @@ elseif(NOT EMSCRIPTEN)
         src/yetty/plugins/shader-glyph/shader-glyph.cpp
         src/yetty/plugins/image/image.cpp
         src/yetty/plugins/markdown/markdown.cpp
+        src/yetty/plugins/pdf/pdf.cpp
+        src/yetty/plugins/plot/plot.cpp
+        src/yetty/plugins/piano/piano.cpp
+        src/yetty/plugins/musical-score/musical-score.cpp
+        src/yetty/plugins/sdf-primitives/sdf-primitives.cpp
     )
     if(YETTY_YMERY_ENABLED)
         list(APPEND YETTY_SOURCES
@@ -390,6 +405,7 @@ else()
         msdfgen::msdfgen-core
         msdfgen::msdfgen-ext
         freetype
+        mupdf
         vterm
         spdlog::spdlog
         util  # for forkpty

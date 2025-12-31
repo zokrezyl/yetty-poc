@@ -116,6 +116,14 @@ Result<PluginPtr> PluginManager::getOrCreatePlugin(const std::string& name) {
 
     PluginPtr plugin = *result;
     plugin->setFont(font_);  // Pass font for text-rendering plugins
+
+    // Initialize plugin if we have a WebGPU context
+    if (ctx_ && !plugin->isInitialized()) {
+        if (auto res = plugin->init(ctx_); !res) {
+            return Err<PluginPtr>("Failed to init plugin: " + name, res);
+        }
+    }
+
     plugins_[name] = plugin;
     return Ok(plugin);
 }

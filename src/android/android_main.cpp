@@ -285,6 +285,7 @@ static bool initTerminal() {
 
     // Set up environment
     setenv("TERM", "xterm-256color", 1);
+    setenv("COLORTERM", "truecolor", 1);
     setenv("HOME", g_state.dataDir.c_str(), 1);
     setenv("PATH", "/system/bin:/system/xbin", 1);
     setenv("SHELL", "/system/bin/sh", 1);

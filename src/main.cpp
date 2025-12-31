@@ -11,6 +11,11 @@
 #include "yetty/plugins/shader-glyph/shader-glyph.h"
 #include "yetty/plugins/image/image.h"
 #include "yetty/plugins/markdown/markdown.h"
+#include "yetty/plugins/pdf/pdf.h"
+#include "yetty/plugins/plot/plot.h"
+#include "yetty/plugins/piano/piano.h"
+#include "yetty/plugins/musical-score/musical-score.h"
+#include "yetty/plugins/sdf-primitives/sdf-primitives.h"
 #ifdef YETTY_YMERY_ENABLED
 #include "yetty/plugins/ymery/ymery.h"
 #endif
@@ -643,6 +648,7 @@ void printUsage(const char* prog) {
     std::cerr << "  --demo [scroll_ms] Run scrolling text demo (default: terminal mode)" << std::endl;
     std::cerr << "  --no-damage        Disable damage tracking (update full screen each frame)" << std::endl;
     std::cerr << "  --debug-damage     Log damage rectangle updates" << std::endl;
+    std::cerr << "  -e <command>       Execute command instead of shell" << std::endl;
     std::cerr << std::endl;
     std::cerr << "Arguments:" << std::endl;
     std::cerr << "  font.ttf   - Path to TTF font (default: system monospace)" << std::endl;
@@ -663,6 +669,7 @@ int main(int argc, char* argv[]) {
     bool debugDamageRects = false;
     int scrollMs = 50;
     const char* fontPath = DEFAULT_FONT;
+    std::string executeCommand;  // Command to execute with -e
     uint32_t width = 1024;
     uint32_t height = 768;
 
@@ -681,6 +688,15 @@ int main(int argc, char* argv[]) {
             useDamageTracking = false;
         } else if (std::strcmp(argv[argIndex], "--debug-damage") == 0) {
             debugDamageRects = true;
+        } else if (std::strcmp(argv[argIndex], "-e") == 0) {
+            if (argIndex + 1 < argc) {
+                executeCommand = argv[++argIndex];
+                spdlog::info("Execute command: {}", executeCommand);
+            } else {
+                std::cerr << "Error: -e requires a command argument" << std::endl;
+                printUsage(argv[0]);
+                return 1;
+            }
         } else if (std::strcmp(argv[argIndex], "--help") == 0 || std::strcmp(argv[argIndex], "-h") == 0) {
             printUsage(argv[0]);
             return 0;
@@ -937,12 +953,18 @@ int main(int argc, char* argv[]) {
         pluginMgr->registerPlugin("shader", ShaderToy::create);
         pluginMgr->registerPlugin("image", Image::create);
         pluginMgr->registerPlugin("markdown", Markdown::create);
+        pluginMgr->registerPlugin("pdf", PDF::create);
+        pluginMgr->registerPlugin("plot", Plot::create);
+        pluginMgr->registerPlugin("piano", Piano::create);
+        pluginMgr->registerPlugin("musical-score", MusicalScore::create);
+        pluginMgr->registerPlugin("sdf-primitives", SDFPrimitives::create);
 #ifdef YETTY_YMERY_ENABLED
         pluginMgr->registerPlugin("ymery", Ymery::create);
 #endif
 
-        // Pass font to plugins for text rendering
+        // Pass font and context to plugins for text rendering
         pluginMgr->setFont(&font);
+        pluginMgr->setContext(&ctx);
 
         // Register custom glyph plugins (for animated emoji, etc.)
         if (auto shaderGlyphResult = ShaderGlyphPlugin::create()) {
@@ -959,7 +981,7 @@ int main(int argc, char* argv[]) {
         terminal->setPluginManager(pluginMgr);
         terminal->setCellSize(static_cast<uint32_t>(cellWidth), static_cast<uint32_t>(cellHeight));
 
-        if (auto result = terminal->start(); !result) {
+        if (auto result = terminal->start(executeCommand); !result) {
             std::cerr << "Failed to start terminal: " << error_msg(result) << std::endl;
             delete pluginMgr;
             delete terminal;

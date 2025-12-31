@@ -110,6 +110,10 @@ public:
     void setFont(Font* font) { font_ = font; }
     Font* getFont() const { return font_; }
 
+    // WebGPU context for plugin initialization
+    void setContext(WebGPUContext* ctx) { ctx_ = ctx; }
+    WebGPUContext* getContext() const { return ctx_; }
+
     // Base94 encode/decode
     static std::string base94Decode(const std::string& encoded);
     static std::string base94Encode(const std::string& data);
@@ -159,6 +163,7 @@ private:
     std::unordered_map<std::string, PluginPtr> plugins_;  // Active plugin instances
     uint32_t nextLayerId_ = 1;
     Font* font_ = nullptr;
+    WebGPUContext* ctx_ = nullptr;
     std::vector<void*> handles_;
     PluginLayerPtr focusedLayer_;
     PluginLayerPtr hoveredLayer_;
