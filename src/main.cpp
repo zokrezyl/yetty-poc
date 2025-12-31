@@ -16,6 +16,7 @@
 #include "yetty/plugins/piano/piano.h"
 #include "yetty/plugins/musical-score/musical-score.h"
 #include "yetty/plugins/sdf-primitives/sdf-primitives.h"
+#include "yetty/plugins/video/video.h"
 #ifdef YETTY_YMERY_ENABLED
 #include "yetty/plugins/ymery/ymery.h"
 #endif
@@ -958,6 +959,7 @@ int main(int argc, char* argv[]) {
         pluginMgr->registerPlugin("piano", Piano::create);
         pluginMgr->registerPlugin("musical-score", MusicalScore::create);
         pluginMgr->registerPlugin("sdf-primitives", SDFPrimitives::create);
+        pluginMgr->registerPlugin("video", Video::create);
 #ifdef YETTY_YMERY_ENABLED
         pluginMgr->registerPlugin("ymery", Ymery::create);
 #endif

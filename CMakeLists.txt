@@ -244,6 +244,8 @@ endif()
 set(YETTY_SOURCES
     src/yetty/renderer/webgpu-context.cpp
     src/yetty/renderer/text-renderer.cpp
+    src/yetty/renderer/font-manager.cpp
+    src/yetty/renderer/rich-text.cpp
     src/yetty/terminal/grid.cpp
     src/yetty/terminal/font.cpp
 )
@@ -272,6 +274,7 @@ elseif(NOT EMSCRIPTEN)
         src/yetty/plugins/piano/piano.cpp
         src/yetty/plugins/musical-score/musical-score.cpp
         src/yetty/plugins/sdf-primitives/sdf-primitives.cpp
+        src/yetty/plugins/video/video.cpp
     )
     if(YETTY_YMERY_ENABLED)
         list(APPEND YETTY_SOURCES
@@ -393,7 +396,10 @@ else()
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(FONTCONFIG REQUIRED fontconfig)
 
-    target_include_directories(yetty PRIVATE ${FONTCONFIG_INCLUDE_DIRS})
+    # Build FFmpeg from source for video plugin
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/cmake/ffmpeg ffmpeg_build)
+
+    target_include_directories(yetty PRIVATE ${FONTCONFIG_INCLUDE_DIRS} ${FFMPEG_INCLUDE_DIR})
 
     target_link_libraries(yetty PRIVATE
         webgpu
@@ -410,6 +416,7 @@ else()
         spdlog::spdlog
         util  # for forkpty
         ${FONTCONFIG_LIBRARIES}
+        ffmpeg
     )
 
     #-------------------------------------------------------------------------
