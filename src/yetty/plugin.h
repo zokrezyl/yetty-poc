@@ -12,6 +12,7 @@ namespace yetty {
 // Forward declarations
 struct WebGPUContext;
 class Grid;
+class Font;
 class Plugin;
 class PluginLayer;
 
@@ -224,9 +225,14 @@ public:
     bool isInitialized() const { return _initialized; }
     void setInitialized(bool v) { _initialized = v; }
 
+    // Font access for text rendering plugins
+    void setFont(Font* font) { _font = font; }
+    Font* getFont() const { return _font; }
+
 protected:
     std::vector<PluginLayerPtr> _layers;
     bool _initialized = false;
+    Font* _font = nullptr;
 };
 
 // C function types for dynamic loading

@@ -10,6 +10,7 @@
 #include "yetty/plugins/shader-toy/shader-toy.h"
 #include "yetty/plugins/shader-glyph/shader-glyph.h"
 #include "yetty/plugins/image/image.h"
+#include "yetty/plugins/markdown/markdown.h"
 #ifdef YETTY_YMERY_ENABLED
 #include "yetty/plugins/ymery/ymery.h"
 #endif
@@ -935,9 +936,13 @@ int main(int argc, char* argv[]) {
         // Register built-in plugins
         pluginMgr->registerPlugin("shader", ShaderToy::create);
         pluginMgr->registerPlugin("image", Image::create);
+        pluginMgr->registerPlugin("markdown", Markdown::create);
 #ifdef YETTY_YMERY_ENABLED
         pluginMgr->registerPlugin("ymery", Ymery::create);
 #endif
+
+        // Pass font to plugins for text rendering
+        pluginMgr->setFont(&font);
 
         // Register custom glyph plugins (for animated emoji, etc.)
         if (auto shaderGlyphResult = ShaderGlyphPlugin::create()) {

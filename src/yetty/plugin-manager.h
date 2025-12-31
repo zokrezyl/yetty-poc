@@ -106,6 +106,10 @@ public:
     void onAltScreenChange(bool isAltScreen);
     bool isAltScreen() const { return isAltScreen_; }
 
+    // Font access for text-rendering plugins
+    void setFont(Font* font) { font_ = font; }
+    Font* getFont() const { return font_; }
+
     // Base94 encode/decode
     static std::string base94Decode(const std::string& encoded);
     static std::string base94Encode(const std::string& data);
@@ -154,6 +158,7 @@ private:
     std::unordered_map<std::string, PluginMeta> pluginMetas_;
     std::unordered_map<std::string, PluginPtr> plugins_;  // Active plugin instances
     uint32_t nextLayerId_ = 1;
+    Font* font_ = nullptr;
     std::vector<void*> handles_;
     PluginLayerPtr focusedLayer_;
     PluginLayerPtr hoveredLayer_;

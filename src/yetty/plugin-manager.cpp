@@ -115,6 +115,7 @@ Result<PluginPtr> PluginManager::getOrCreatePlugin(const std::string& name) {
     }
 
     PluginPtr plugin = *result;
+    plugin->setFont(font_);  // Pass font for text-rendering plugins
     plugins_[name] = plugin;
     return Ok(plugin);
 }

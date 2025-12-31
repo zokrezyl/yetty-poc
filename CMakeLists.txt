@@ -256,6 +256,7 @@ elseif(NOT EMSCRIPTEN)
         src/yetty/plugins/shader-toy/shader-toy.cpp
         src/yetty/plugins/shader-glyph/shader-glyph.cpp
         src/yetty/plugins/image/image.cpp
+        src/yetty/plugins/markdown/markdown.cpp
     )
     if(YETTY_YMERY_ENABLED)
         list(APPEND YETTY_SOURCES
