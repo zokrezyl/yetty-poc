@@ -254,17 +254,71 @@ if(EXISTS ${LIBVTERM_DIR})
 endif()
 
 #-----------------------------------------------------------------------------
+# Core shared library (for plugins to link against on desktop)
+#-----------------------------------------------------------------------------
+if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
+    set(YETTY_CORE_SOURCES
+        src/yetty/webgpu-context.cpp
+        src/yetty/font.cpp
+        src/yetty/font-manager.cpp
+        src/yetty/rich-text.cpp
+    )
+
+    add_library(yetty_core SHARED ${YETTY_CORE_SOURCES})
+
+    target_include_directories(yetty_core PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+
+    target_compile_definitions(yetty_core PRIVATE
+        YETTY_WEB=0
+        YETTY_ANDROID=0
+    )
+
+    # Find fontconfig for font fallback
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(FONTCONFIG REQUIRED fontconfig)
+
+    target_include_directories(yetty_core PRIVATE ${FONTCONFIG_INCLUDE_DIRS})
+
+    target_link_libraries(yetty_core PUBLIC
+        webgpu
+        glfw
+        glfw3webgpu
+        glm::glm
+        stb
+        msdfgen::msdfgen-core
+        msdfgen::msdfgen-ext
+        freetype
+        spdlog::spdlog
+        ${FONTCONFIG_LIBRARIES}
+    )
+
+    set_target_properties(yetty_core PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+        POSITION_INDEPENDENT_CODE ON
+    )
+endif()
+
+#-----------------------------------------------------------------------------
 # Main target (executable for desktop/web, shared library for Android)
 #-----------------------------------------------------------------------------
 # Common sources for all platforms
 set(YETTY_SOURCES
-    src/yetty/webgpu-context.cpp
     src/yetty/text-renderer.cpp
-    src/yetty/font-manager.cpp
-    src/yetty/rich-text.cpp
     src/yetty/grid.cpp
-    src/yetty/font.cpp
 )
+
+# Add core sources for non-desktop platforms (desktop uses yetty_core library)
+if(EMSCRIPTEN OR YETTY_ANDROID)
+    list(APPEND YETTY_SOURCES
+        src/yetty/webgpu-context.cpp
+        src/yetty/font.cpp
+        src/yetty/font-manager.cpp
+        src/yetty/rich-text.cpp
+    )
+endif()
 
 # Platform-specific entry point and sources
 if(YETTY_ANDROID)
@@ -279,6 +333,8 @@ elseif(NOT EMSCRIPTEN)
     # Plugins are built as shared libraries and loaded at runtime
     list(APPEND YETTY_SOURCES
         src/yetty/main.cpp
+        src/yetty/yetty.cpp
+        src/yetty/input-handler.cpp
         src/yetty/config.cpp
         src/yetty/terminal.cpp
         src/yetty/plugin-manager.cpp
@@ -289,6 +345,8 @@ else()
     # Web uses main.cpp with Emscripten GLFW
     list(APPEND YETTY_SOURCES
         src/yetty/main.cpp
+        src/yetty/yetty.cpp
+        src/yetty/input-handler.cpp
     )
 endif()
 
@@ -397,30 +455,21 @@ else()
         YETTY_USE_PREBUILT_ATLAS=0
     )
 
-    # Find fontconfig for font fallback
-    find_package(PkgConfig REQUIRED)
-    pkg_check_modules(FONTCONFIG REQUIRED fontconfig)
-
     # Build FFmpeg from source for video plugin
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/build-tools/cmake/ffmpeg ffmpeg_build)
 
-    target_include_directories(yetty PRIVATE ${FONTCONFIG_INCLUDE_DIRS} ${FFMPEG_INCLUDE_DIR})
+    target_include_directories(yetty PRIVATE ${FFMPEG_INCLUDE_DIR})
 
+    # Link against yetty_core (provides font, rich-text, webgpu-context)
     target_link_libraries(yetty PRIVATE
-        webgpu
+        yetty_core
         glfw
         glfw3webgpu
-        glm::glm
         stb
         yaml-cpp
         args
-        msdfgen::msdfgen-core
-        msdfgen::msdfgen-ext
-        freetype
         vterm
-        spdlog::spdlog
         util  # for forkpty
-        ${FONTCONFIG_LIBRARIES}
     )
 
     #-------------------------------------------------------------------------

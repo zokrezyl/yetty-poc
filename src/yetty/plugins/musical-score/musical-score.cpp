@@ -1,4 +1,5 @@
 #include "musical-score.h"
+#include <yetty/yetty.h>
 #include <yetty/webgpu-context.h>
 #include <yetty/wgpu-compat.h>
 #include <spdlog/spdlog.h>
@@ -12,18 +13,19 @@ namespace yetty {
 // MusicalScorePlugin
 //-----------------------------------------------------------------------------
 
-MusicalScorePlugin::MusicalScorePlugin() = default;
-
 MusicalScorePlugin::~MusicalScorePlugin() {
     (void)dispose();
 }
 
-Result<PluginPtr> MusicalScorePlugin::create() {
-    return Ok<PluginPtr>(std::make_shared<MusicalScorePlugin>());
+Result<PluginPtr> MusicalScorePlugin::create(YettyPtr engine) noexcept {
+    auto p = PluginPtr(new MusicalScorePlugin(std::move(engine)));
+    if (auto res = static_cast<MusicalScorePlugin*>(p.get())->init(); !res) {
+        return Err<PluginPtr>("Failed to init MusicalScorePlugin", res);
+    }
+    return Ok(p);
 }
 
-Result<void> MusicalScorePlugin::init(WebGPUContext* ctx) {
-    (void)ctx;
+Result<void> MusicalScorePlugin::init() noexcept {
     _initialized = true;
     return Ok();
 }
@@ -45,12 +47,13 @@ Result<PluginLayerPtr> MusicalScorePlugin::createLayer(const std::string& payloa
     return Ok<PluginLayerPtr>(layer);
 }
 
-Result<void> MusicalScorePlugin::renderAll(WebGPUContext& ctx,
-                                     WGPUTextureView targetView, WGPUTextureFormat targetFormat,
+Result<void> MusicalScorePlugin::renderAll(WGPUTextureView targetView, WGPUTextureFormat targetFormat,
                                      uint32_t screenWidth, uint32_t screenHeight,
                                      float cellWidth, float cellHeight,
                                      int scrollOffset, uint32_t termRows,
                                      bool isAltScreen) {
+    if (!engine_) return Err<void>("MusicalScorePlugin::renderAll: no engine");
+
     ScreenType currentScreen = isAltScreen ? ScreenType::Alternate : ScreenType::Main;
     for (auto& layerBase : _layers) {
         if (!layerBase->isVisible()) continue;
@@ -74,7 +77,7 @@ Result<void> MusicalScorePlugin::renderAll(WebGPUContext& ctx,
             }
         }
 
-        if (auto res = layer->render(ctx, targetView, targetFormat,
+        if (auto res = layer->render(*engine_->context(), targetView, targetFormat,
                                       screenWidth, screenHeight,
                                       pixelX, pixelY, pixelW, pixelH); !res) {
             return Err<void>("Failed to render MusicalScore layer", res);
@@ -425,5 +428,5 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
 extern "C" {
     const char* name() { return "musical-score"; }
-    yetty::Result<yetty::PluginPtr> create() { return yetty::MusicalScorePlugin::create(); }
+    yetty::Result<yetty::PluginPtr> create(yetty::YettyPtr engine) { return yetty::MusicalScorePlugin::create(std::move(engine)); }
 }

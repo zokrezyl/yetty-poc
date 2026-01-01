@@ -1,4 +1,5 @@
 #include "shader-toy.h"
+#include <yetty/yetty.h>
 #include <yetty/webgpu-context.h>
 #include <yetty/wgpu-compat.h>
 #include <spdlog/spdlog.h>
@@ -11,18 +12,19 @@ namespace yetty {
 // ShaderToyPlugin
 //-----------------------------------------------------------------------------
 
-ShaderToyPlugin::ShaderToyPlugin() = default;
-
 ShaderToyPlugin::~ShaderToyPlugin() {
     (void)dispose();
 }
 
-Result<PluginPtr> ShaderToyPlugin::create() {
-    return Ok<PluginPtr>(std::make_shared<ShaderToyPlugin>());
+Result<PluginPtr> ShaderToyPlugin::create(YettyPtr engine) noexcept {
+    auto p = PluginPtr(new ShaderToyPlugin(std::move(engine)));
+    if (auto res = static_cast<ShaderToyPlugin*>(p.get())->init(); !res) {
+        return Err<PluginPtr>("Failed to init ShaderToyPlugin", res);
+    }
+    return Ok(p);
 }
 
-Result<void> ShaderToyPlugin::init(WebGPUContext* ctx) {
-    (void)ctx;
+Result<void> ShaderToyPlugin::init() noexcept {
     // No shared resources for ShaderToy - each layer compiles its own shader
     _initialized = true;
     return Ok();
@@ -45,12 +47,13 @@ Result<PluginLayerPtr> ShaderToyPlugin::createLayer(const std::string& payload) 
     return Ok<PluginLayerPtr>(layer);
 }
 
-Result<void> ShaderToyPlugin::renderAll(WebGPUContext& ctx,
-                                         WGPUTextureView targetView, WGPUTextureFormat targetFormat,
+Result<void> ShaderToyPlugin::renderAll(WGPUTextureView targetView, WGPUTextureFormat targetFormat,
                                          uint32_t screenWidth, uint32_t screenHeight,
                                          float cellWidth, float cellHeight,
                                          int scrollOffset, uint32_t termRows,
                                          bool isAltScreen) {
+    if (!engine_) return Err<void>("ShaderToyPlugin::renderAll: no engine");
+
     ScreenType currentScreen = isAltScreen ? ScreenType::Alternate : ScreenType::Main;
     for (auto& layerBase : _layers) {
         if (!layerBase->isVisible()) continue;
@@ -77,7 +80,7 @@ Result<void> ShaderToyPlugin::renderAll(WebGPUContext& ctx,
             }
         }
 
-        if (auto res = layer->render(ctx, targetView, targetFormat,
+        if (auto res = layer->render(*engine_->context(), targetView, targetFormat,
                                       screenWidth, screenHeight,
                                       pixelX, pixelY, pixelW, pixelH); !res) {
             return Err<void>("Failed to render ShaderToy layer", res);
@@ -503,5 +506,7 @@ Result<void> ShaderToyLayer::compileShader(WebGPUContext& ctx,
 // C exports for dynamic loading
 extern "C" {
     const char* name() { return "shader"; }
-    yetty::Result<yetty::PluginPtr> create() { return yetty::ShaderToyPlugin::create(); }
+    yetty::Result<yetty::PluginPtr> create(yetty::YettyPtr engine) {
+        return yetty::ShaderToyPlugin::create(std::move(engine));
+    }
 }

@@ -9,7 +9,20 @@
 
 namespace yetty {
 
-PluginManager::PluginManager() = default;
+Result<PluginManager::Ptr> PluginManager::create() noexcept {
+    auto mgr = Ptr(new PluginManager());
+    if (auto res = mgr->init(); !res) {
+        return Err<Ptr>("Failed to initialize PluginManager", res);
+    }
+    return Ok(std::move(mgr));
+}
+
+PluginManager::PluginManager() noexcept = default;
+
+Result<void> PluginManager::init() noexcept {
+    // Nothing to initialize currently
+    return Ok();
+}
 
 PluginManager::~PluginManager() {
     // Dispose all plugins (which disposes their layers)
@@ -103,9 +116,9 @@ Result<PluginPtr> PluginManager::getOrCreatePlugin(const std::string& name) {
     Result<PluginPtr> result;
 
     if (meta._factory) {
-        result = meta._factory();
+        result = meta._factory(engine_);
     } else if (meta._createFn) {
-        result = meta._createFn();
+        result = meta._createFn(engine_);
     } else {
         return Err<PluginPtr>("Plugin has no factory: " + name);
     }
@@ -117,13 +130,7 @@ Result<PluginPtr> PluginManager::getOrCreatePlugin(const std::string& name) {
     PluginPtr plugin = *result;
     plugin->setFont(font_);  // Pass font for text-rendering plugins
 
-    // Initialize plugin if we have a WebGPU context
-    if (ctx_ && !plugin->isInitialized()) {
-        if (auto res = plugin->init(ctx_); !res) {
-            return Err<PluginPtr>("Failed to init plugin: " + name, res);
-        }
-    }
-
+    // Plugin is already initialized by create()
     plugins_[name] = plugin;
     return Ok(plugin);
 }
@@ -416,12 +423,7 @@ Result<void> PluginManager::render(WebGPUContext& ctx, WGPUTextureView targetVie
     constexpr float framePadding = 2.0f;  // Pixels larger than layer bounds
 
     for (auto& [name, plugin] : plugins_) {
-        // Lazy init plugin if needed
-        if (!plugin->isInitialized()) {
-            if (auto res = plugin->init(&ctx); !res) {
-                return Err<void>("Failed to init plugin " + name, res);
-            }
-        }
+        // Plugin is already initialized by create()
 
         // Render debug frame for each layer
         ScreenType currentScreen = isAltScreen_ ? ScreenType::Alternate : ScreenType::Main;
@@ -467,7 +469,7 @@ Result<void> PluginManager::render(WebGPUContext& ctx, WGPUTextureView targetVie
         }
 
         // Render plugin content
-        if (auto res = plugin->renderAll(ctx, targetView, ctx.getSurfaceFormat(),
+        if (auto res = plugin->renderAll(targetView, ctx.getSurfaceFormat(),
                                           screenWidth, screenHeight,
                                           cellWidth, cellHeight,
                                           scrollOffset, termRows,
@@ -1057,7 +1059,7 @@ Result<void> PluginManager::renderCustomGlyphs(WebGPUContext& ctx, WGPUTextureVi
         spdlog::debug("Rendering custom glyph plugin {} with {} layers",
                      plugin->pluginName(), plugin->getLayers().size());
 
-        if (auto res = plugin->renderAll(ctx, targetView, ctx.getSurfaceFormat(),
+        if (auto res = plugin->renderAll(targetView, ctx.getSurfaceFormat(),
                                           screenWidth, screenHeight,
                                           cellWidth, cellHeight, scrollOffset); !res) {
             spdlog::warn("Custom glyph plugin {} render failed: {}",

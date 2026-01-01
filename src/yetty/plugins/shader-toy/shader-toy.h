@@ -13,26 +13,25 @@ class ShaderToyLayer;
 //-----------------------------------------------------------------------------
 class ShaderToyPlugin : public Plugin {
 public:
-    ShaderToyPlugin();
     ~ShaderToyPlugin() override;
 
-    // Factory method for plugin creation
-    static Result<PluginPtr> create();
+    static Result<PluginPtr> create(YettyPtr engine) noexcept;
 
-    // Plugin interface
     const char* pluginName() const override { return "shader"; }
 
-    Result<void> init(WebGPUContext* ctx) override;
     Result<void> dispose() override;
 
     Result<PluginLayerPtr> createLayer(const std::string& payload) override;
 
-    Result<void> renderAll(WebGPUContext& ctx,
-                           WGPUTextureView targetView, WGPUTextureFormat targetFormat,
+    Result<void> renderAll(WGPUTextureView targetView, WGPUTextureFormat targetFormat,
                            uint32_t screenWidth, uint32_t screenHeight,
                            float cellWidth, float cellHeight,
                            int scrollOffset, uint32_t termRows,
                            bool isAltScreen = false) override;
+
+private:
+    explicit ShaderToyPlugin(YettyPtr engine) noexcept : Plugin(std::move(engine)) {}
+    Result<void> init() noexcept override;
 };
 
 //-----------------------------------------------------------------------------
@@ -97,5 +96,5 @@ using ShaderToy = ShaderToyPlugin;
 // C exports for dynamic loading
 extern "C" {
     const char* name();
-    yetty::Result<yetty::PluginPtr> create();
+    yetty::Result<yetty::PluginPtr> create(yetty::YettyPtr engine);
 }

@@ -1,4 +1,5 @@
 #include "rich-text-plugin.h"
+#include <yetty/yetty.h>
 #include <yetty/webgpu-context.h>
 #include <yaml-cpp/yaml.h>
 #include <spdlog/spdlog.h>
@@ -11,40 +12,39 @@ namespace yetty {
 // RichTextPlugin
 //-----------------------------------------------------------------------------
 
-RichTextPlugin::RichTextPlugin() = default;
-
 RichTextPlugin::~RichTextPlugin() {
     (void)dispose();
 }
 
-Result<PluginPtr> RichTextPlugin::create() {
-    return Ok<PluginPtr>(std::make_shared<RichTextPlugin>());
+Result<PluginPtr> RichTextPlugin::create(YettyPtr engine) noexcept {
+    auto p = PluginPtr(new RichTextPlugin(std::move(engine)));
+    if (auto res = static_cast<RichTextPlugin*>(p.get())->init(); !res) {
+        return Err<PluginPtr>("Failed to init RichTextPlugin", res);
+    }
+    return Ok(p);
 }
 
-Result<void> RichTextPlugin::init(WebGPUContext* ctx) {
-    if (!ctx) {
-        return Err<void>("RichTextPlugin::init: null WebGPUContext");
-    }
-
-    // Initialize font manager
-    auto result = fontManager_.init(ctx);
-    if (!result) {
-        return Err<void>("Failed to initialize FontManager", result);
+Result<void> RichTextPlugin::init() noexcept {
+    // Verify engine has a FontManager
+    if (!engine_ || !engine_->fontManager()) {
+        return Err<void>("RichTextPlugin: engine has no FontManager");
     }
 
     _initialized = true;
-    spdlog::info("RichTextPlugin initialized");
+    spdlog::info("RichTextPlugin initialized (using engine's FontManager)");
     return Ok();
 }
 
 Result<void> RichTextPlugin::dispose() {
-    fontManager_.dispose();
-
     if (auto res = Plugin::dispose(); !res) {
         return Err<void>("Failed to dispose RichTextPlugin", res);
     }
     _initialized = false;
     return Ok();
+}
+
+FontManager* RichTextPlugin::getFontManager() {
+    return engine_ ? engine_->fontManager().get() : nullptr;
 }
 
 Result<PluginLayerPtr> RichTextPlugin::createLayer(const std::string& payload) {
@@ -56,14 +56,15 @@ Result<PluginLayerPtr> RichTextPlugin::createLayer(const std::string& payload) {
     return Ok<PluginLayerPtr>(layer);
 }
 
-Result<void> RichTextPlugin::renderAll(WebGPUContext& ctx,
-                                        WGPUTextureView targetView,
+Result<void> RichTextPlugin::renderAll(WGPUTextureView targetView,
                                         WGPUTextureFormat targetFormat,
                                         uint32_t screenWidth,
                                         uint32_t screenHeight,
                                         float cellWidth, float cellHeight,
                                         int scrollOffset, uint32_t termRows,
                                         bool isAltScreen) {
+    if (!engine_) return Err<void>("RichTextPlugin::renderAll: no engine");
+
     ScreenType currentScreen = isAltScreen ? ScreenType::Alternate : ScreenType::Main;
 
     for (auto& layerBase : _layers) {
@@ -88,7 +89,7 @@ Result<void> RichTextPlugin::renderAll(WebGPUContext& ctx,
             }
         }
 
-        if (auto res = layer->render(ctx, targetView, targetFormat,
+        if (auto res = layer->render(*engine_->context(), targetView, targetFormat,
                                       screenWidth, screenHeight,
                                       pixelX, pixelY, pixelW, pixelH); !res) {
             return Err<void>("Failed to render RichTextLayer", res);
@@ -148,8 +149,8 @@ Result<void> RichTextLayer::parseYAML(const std::string& yaml) {
             return Err<void>("RichTextLayer: YAML must have 'spans' array");
         }
 
-        // Create RichText instance
-        richText_ = std::make_unique<RichText>();
+        // Clear pending spans (RichText will be created in render() when we have ctx)
+        pendingSpans_.clear();
 
         float cursorY = 0;
         float lastLineHeight = 20.0f;
@@ -226,7 +227,7 @@ Result<void> RichTextLayer::parseYAML(const std::string& yaml) {
                 lastLineHeight = span.lineHeight;
             }
 
-            richText_->addSpan(span);
+            pendingSpans_.push_back(span);
 
             // Update cursor for next span (if no explicit y)
             if (!spanNode["y"]) {
@@ -262,26 +263,32 @@ Result<void> RichTextLayer::render(WebGPUContext& ctx,
         return Err<void>("RichTextLayer already failed");
     }
 
-    if (!richText_) {
-        return Err<void>("RichTextLayer: no content");
-    }
-
     // Initialize RichText GPU resources if needed
-    if (!initialized_) {
-        auto result = richText_->init(&ctx, targetFormat);
+    if (!richText_) {
+        auto result = RichText::create(&ctx, targetFormat);
         if (!result) {
             failed_ = true;
-            return Err<void>("Failed to initialize RichText", result);
+            return Err<void>("Failed to create RichText", result);
         }
+        richText_ = *result;
+
+        // Add pending spans
+        for (const auto& span : pendingSpans_) {
+            richText_->addSpan(span);
+        }
+        pendingSpans_.clear();
 
         // Get font - try FontManager first, fall back to plugin's font
         Font* font = nullptr;
-        auto fontResult = plugin_->getFontManager().getFont(fontName_);
-        if (fontResult) {
-            font = *fontResult;
-        }
-        if (!font) {
-            font = plugin_->getFontManager().getDefaultFont();
+        auto fontMgr = plugin_->getFontManager();
+        if (fontMgr) {
+            auto fontResult = fontMgr->getFont(fontName_);
+            if (fontResult) {
+                font = *fontResult;
+            }
+            if (!font) {
+                font = fontMgr->getDefaultFont();
+            }
         }
         if (!font) {
             // Fall back to the font passed to the plugin from PluginManager
@@ -335,8 +342,8 @@ const char* name() {
     return "rich-text";
 }
 
-yetty::Result<yetty::PluginPtr> create() {
-    return yetty::RichTextPlugin::create();
+yetty::Result<yetty::PluginPtr> create(yetty::YettyPtr engine) {
+    return yetty::RichTextPlugin::create(std::move(engine));
 }
 
 }

@@ -32,30 +32,28 @@ class RichTextLayer;
 //-----------------------------------------------------------------------------
 class RichTextPlugin : public Plugin {
 public:
-    RichTextPlugin();
     ~RichTextPlugin() override;
 
-    static Result<PluginPtr> create();
+    static Result<PluginPtr> create(YettyPtr engine) noexcept;
 
     const char* pluginName() const override { return "rich-text"; }
 
-    Result<void> init(WebGPUContext* ctx) override;
     Result<void> dispose() override;
 
     Result<PluginLayerPtr> createLayer(const std::string& payload) override;
 
-    Result<void> renderAll(WebGPUContext& ctx,
-                           WGPUTextureView targetView, WGPUTextureFormat targetFormat,
+    Result<void> renderAll(WGPUTextureView targetView, WGPUTextureFormat targetFormat,
                            uint32_t screenWidth, uint32_t screenHeight,
                            float cellWidth, float cellHeight,
                            int scrollOffset, uint32_t termRows,
                            bool isAltScreen = false) override;
 
-    // Access to font manager for layers
-    FontManager& getFontManager() { return fontManager_; }
+    // Access to font manager for layers (from engine)
+    FontManager* getFontManager();
 
 private:
-    FontManager fontManager_;
+    explicit RichTextPlugin(YettyPtr engine) noexcept : Plugin(std::move(engine)) {}
+    Result<void> init() noexcept override;
 };
 
 //-----------------------------------------------------------------------------
@@ -82,8 +80,9 @@ private:
     Result<void> parseYAML(const std::string& yaml);
 
     RichTextPlugin* plugin_ = nullptr;
-    std::unique_ptr<RichText> richText_;
+    RichText::Ptr richText_;
     std::string fontName_;
+    std::vector<TextSpan> pendingSpans_;  // Stored until RichText is created
 
     bool initialized_ = false;
     bool failed_ = false;
@@ -93,5 +92,5 @@ private:
 
 extern "C" {
     const char* name();
-    yetty::Result<yetty::PluginPtr> create();
+    yetty::Result<yetty::PluginPtr> create(yetty::YettyPtr engine);
 }

@@ -15,13 +15,13 @@ namespace yetty {
 
 // Forward declarations
 class Grid;
-struct WebGPUContext;
+class WebGPUContext;
 
 // Our vendor ID for OSC sequences
 constexpr int YETTY_OSC_VENDOR_ID = 99999;
 
 // Factory function type for built-in plugins
-using BuiltinPluginFactory = std::function<Result<PluginPtr>()>;
+using BuiltinPluginFactory = std::function<Result<PluginPtr>(YettyPtr)>;
 
 // Metadata for a registered plugin type
 struct PluginMeta {
@@ -33,8 +33,15 @@ struct PluginMeta {
 
 class PluginManager {
 public:
-    PluginManager();
+    using Ptr = std::shared_ptr<PluginManager>;
+
+    static Result<Ptr> create() noexcept;
+
     ~PluginManager();
+
+    // Non-copyable
+    PluginManager(const PluginManager&) = delete;
+    PluginManager& operator=(const PluginManager&) = delete;
 
     // Register a built-in plugin factory
     void registerPlugin(const std::string& name, BuiltinPluginFactory factory);
@@ -110,9 +117,9 @@ public:
     void setFont(Font* font) { font_ = font; }
     Font* getFont() const { return font_; }
 
-    // WebGPU context for plugin initialization
-    void setContext(WebGPUContext* ctx) { ctx_ = ctx; }
-    WebGPUContext* getContext() const { return ctx_; }
+    // Engine for plugin initialization
+    void setEngine(YettyPtr engine) { engine_ = std::move(engine); }
+    YettyPtr getEngine() const { return engine_; }
 
     // Base94 encode/decode
     static std::string base94Decode(const std::string& encoded);
@@ -145,6 +152,9 @@ public:
     void updateCustomGlyphs(double deltaTime);
 
 private:
+    PluginManager() noexcept;
+    Result<void> init() noexcept;
+
     // Debug frame rendering
     Result<void> initFrameRenderer(WGPUDevice device, WGPUTextureFormat format);
     void renderFrame(WebGPUContext& ctx, WGPUTextureView targetView,
@@ -163,7 +173,7 @@ private:
     std::unordered_map<std::string, PluginPtr> plugins_;  // Active plugin instances
     uint32_t nextLayerId_ = 1;
     Font* font_ = nullptr;
-    WebGPUContext* ctx_ = nullptr;
+    YettyPtr engine_;
     std::vector<void*> handles_;
     PluginLayerPtr focusedLayer_;
     PluginLayerPtr hoveredLayer_;

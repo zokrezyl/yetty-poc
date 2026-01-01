@@ -17,7 +17,16 @@
 
 namespace yetty {
 
-Config::Config() {
+Result<Config::Ptr> Config::create(const std::string& configPath, const YAML::Node& cmdOverrides) noexcept {
+    auto config = Ptr(new Config(configPath, cmdOverrides));
+    if (auto res = config->init(); !res) {
+        return Err<Ptr>("Failed to initialize Config", res);
+    }
+    return Ok(std::move(config));
+}
+
+Config::Config(const std::string& configPath, const YAML::Node& cmdOverrides) noexcept
+    : _configPath(configPath), _cmdOverrides(cmdOverrides) {
     // Set defaults
     _config["plugins"]["path"] = "";  // Will be filled with default paths
     _config["rendering"]["damage-tracking"] = true;
@@ -26,13 +35,7 @@ Config::Config() {
     _config["debug"]["damage-rects"] = false;
 }
 
-Result<Config*> Config::create() {
-    Config* config = new Config();
-    // Constructor doesn't throw, init() will be called separately
-    return Ok(config);
-}
-
-Result<void> Config::init(const std::string& configPath, const YAML::Node& cmdOverrides) {
+Result<void> Config::init() noexcept {
     // Priority (lowest to highest):
     // 1. Defaults (already set in constructor)
     // 2. Config file
@@ -40,7 +43,7 @@ Result<void> Config::init(const std::string& configPath, const YAML::Node& cmdOv
     // 4. Command line arguments
 
     // Determine config file path
-    std::string effectivePath = configPath;
+    std::string effectivePath = _configPath;
     if (effectivePath.empty()) {
         // Check XDG config
         auto xdgPath = getXDGConfigPath();
@@ -63,8 +66,8 @@ Result<void> Config::init(const std::string& configPath, const YAML::Node& cmdOv
     applyEnvOverrides();
 
     // Apply command line overrides
-    if (cmdOverrides && !cmdOverrides.IsNull()) {
-        applyOverrides(cmdOverrides);
+    if (_cmdOverrides && !_cmdOverrides.IsNull()) {
+        applyOverrides(_cmdOverrides);
     }
 
     // If no plugin paths configured, use defaults

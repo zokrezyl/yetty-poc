@@ -21,20 +21,17 @@ class YmeryLayer;
 //-----------------------------------------------------------------------------
 class YmeryPlugin : public Plugin {
 public:
-    YmeryPlugin();
     ~YmeryPlugin() override;
 
-    static Result<PluginPtr> create();
+    static Result<PluginPtr> create(YettyPtr engine) noexcept;
 
     const char* pluginName() const override { return "ymery"; }
 
-    Result<void> init(WebGPUContext* ctx) override;
     Result<void> dispose() override;
 
     Result<PluginLayerPtr> createLayer(const std::string& payload) override;
 
-    Result<void> renderAll(WebGPUContext& ctx,
-                           WGPUTextureView targetView, WGPUTextureFormat targetFormat,
+    Result<void> renderAll(WGPUTextureView targetView, WGPUTextureFormat targetFormat,
                            uint32_t screenWidth, uint32_t screenHeight,
                            float cellWidth, float cellHeight,
                            int scrollOffset, uint32_t termRows,
@@ -50,6 +47,9 @@ public:
 #endif
 
 private:
+    explicit YmeryPlugin(YettyPtr engine) noexcept : Plugin(std::move(engine)) {}
+    Result<void> init() noexcept override;
+
 #ifdef YETTY_YMERY_ENABLED
     Result<void> initImGui(uint32_t screenWidth, uint32_t screenHeight);
 
@@ -103,5 +103,5 @@ using Ymery = YmeryPlugin;
 
 extern "C" {
     const char* name();
-    yetty::Result<yetty::PluginPtr> create();
+    yetty::Result<yetty::PluginPtr> create(yetty::YettyPtr engine);
 }

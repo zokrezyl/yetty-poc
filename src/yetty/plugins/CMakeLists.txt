@@ -8,12 +8,14 @@ function(add_yetty_plugin NAME)
 
     target_include_directories(${NAME}_plugin PRIVATE
         ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_SOURCE_DIR}/src
         ${PLUGIN_INCLUDES}
     )
 
+    # Link against yetty_core (provides Font, FontManager, RichText, WebGPUContext)
     target_link_libraries(${NAME}_plugin PRIVATE
-        webgpu
-        spdlog::spdlog
+        yetty_core
+        yaml-cpp
         ${PLUGIN_LIBS}
     )
 
@@ -47,7 +49,7 @@ add_yetty_plugin(markdown
 # pdf plugin
 add_yetty_plugin(pdf
     SOURCES pdf/pdf.cpp
-    LIBS mupdf freetype msdfgen::msdfgen-core msdfgen::msdfgen-ext
+    LIBS mupdf
 )
 
 # plot plugin
@@ -68,7 +70,6 @@ add_yetty_plugin(musical-score
 # sdf-primitives plugin
 add_yetty_plugin(sdf-primitives
     SOURCES sdf-primitives/sdf-primitives.cpp
-    LIBS yaml-cpp
 )
 
 # video plugin
@@ -80,7 +81,6 @@ add_yetty_plugin(video
 # rich-text plugin
 add_yetty_plugin(rich-text
     SOURCES rich-text/rich-text-plugin.cpp
-    LIBS yaml-cpp msdfgen::msdfgen-core msdfgen::msdfgen-ext freetype
 )
 
 # ymery plugin (optional) - disabled for now due to API changes

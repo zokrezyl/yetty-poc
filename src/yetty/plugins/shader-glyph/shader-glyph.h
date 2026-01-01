@@ -54,8 +54,7 @@ public:
 
     Result<void> init(WebGPUContext* ctx) override;
     Result<CustomGlyphLayerPtr> createLayer(uint32_t codepoint) override;
-    Result<void> renderAll(WebGPUContext& ctx,
-                           WGPUTextureView targetView,
+    Result<void> renderAll(WGPUTextureView targetView,
                            WGPUTextureFormat targetFormat,
                            uint32_t screenWidth, uint32_t screenHeight,
                            float cellWidth, float cellHeight,

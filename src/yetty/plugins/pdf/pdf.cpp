@@ -1,4 +1,5 @@
 #include "pdf.h"
+#include <yetty/yetty.h>
 #include <yetty/webgpu-context.h>
 #include <yetty/wgpu-compat.h>
 #include <algorithm>
@@ -35,29 +36,29 @@ namespace yetty {
 // PDFPlugin
 //-----------------------------------------------------------------------------
 
-PDFPlugin::PDFPlugin() = default;
-
 PDFPlugin::~PDFPlugin() { (void)dispose(); }
 
-Result<PluginPtr> PDFPlugin::create() {
-  return Ok<PluginPtr>(std::make_shared<PDFPlugin>());
+Result<PluginPtr> PDFPlugin::create(YettyPtr engine) noexcept {
+    auto p = PluginPtr(new PDFPlugin(std::move(engine)));
+    if (auto res = static_cast<PDFPlugin*>(p.get())->init(); !res) {
+        return Err<PluginPtr>("Failed to init PDFPlugin", res);
+    }
+    return Ok(p);
 }
 
-Result<void> PDFPlugin::init(WebGPUContext *ctx) {
-  (void)ctx;
-
+Result<void> PDFPlugin::init() noexcept {
   // Create MuPDF context
   fz_context *mctx = fz_new_context(nullptr, nullptr, FZ_STORE_UNLIMITED);
   if (!mctx) {
     return Err<void>("Failed to create MuPDF context");
   }
-  ctx_ = mctx;
+  fzCtx_ = mctx;
 
   // Register document handlers
   fz_try(mctx) { fz_register_document_handlers(mctx); }
   fz_catch(mctx) {
     fz_drop_context(mctx);
-    ctx_ = nullptr;
+    fzCtx_ = nullptr;
     return Err<void>("Failed to register MuPDF document handlers");
   }
 
@@ -66,9 +67,9 @@ Result<void> PDFPlugin::init(WebGPUContext *ctx) {
 }
 
 Result<void> PDFPlugin::dispose() {
-  if (ctx_) {
-    fz_drop_context(static_cast<fz_context *>(ctx_));
-    ctx_ = nullptr;
+  if (fzCtx_) {
+    fz_drop_context(static_cast<fz_context *>(fzCtx_));
+    fzCtx_ = nullptr;
   }
 
   if (auto res = Plugin::dispose(); !res) {
@@ -79,7 +80,7 @@ Result<void> PDFPlugin::dispose() {
 }
 
 Result<PluginLayerPtr> PDFPlugin::createLayer(const std::string &payload) {
-  auto layer = std::make_shared<PDFLayer>(ctx_);
+  auto layer = std::make_shared<PDFLayer>(fzCtx_);
   auto result = layer->init(payload);
   if (!result) {
     return Err<PluginLayerPtr>("Failed to init PDFLayer", result);
@@ -88,10 +89,12 @@ Result<PluginLayerPtr> PDFPlugin::createLayer(const std::string &payload) {
 }
 
 Result<void>
-PDFPlugin::renderAll(WebGPUContext &ctx, WGPUTextureView targetView,
+PDFPlugin::renderAll(WGPUTextureView targetView,
                      WGPUTextureFormat targetFormat, uint32_t screenWidth,
                      uint32_t screenHeight, float cellWidth, float cellHeight,
                      int scrollOffset, uint32_t termRows, bool isAltScreen) {
+  if (!engine_) return Err<void>("PDFPlugin::renderAll: no engine");
+
   spdlog::debug("PDFPlugin::renderAll: {} layers, isAltScreen={}", _layers.size(), isAltScreen);
   ScreenType currentScreen =
       isAltScreen ? ScreenType::Alternate : ScreenType::Main;
@@ -122,7 +125,7 @@ PDFPlugin::renderAll(WebGPUContext &ctx, WGPUTextureView targetView,
       }
     }
 
-    if (auto res = layer->render(ctx, targetView, targetFormat, screenWidth,
+    if (auto res = layer->render(*engine_->context(), targetView, targetFormat, screenWidth,
                                  screenHeight, pixelX, pixelY, pixelW, pixelH);
         !res) {
       return Err<void>("Failed to render PDFLayer", res);
@@ -1312,7 +1315,7 @@ bool PDFLayer::onKey(int key, int scancode, int action, int mods) {
 
 extern "C" {
 const char* name() { return "pdf"; }
-yetty::Result<yetty::PluginPtr> create() {
-  return yetty::PDFPlugin::create();
+yetty::Result<yetty::PluginPtr> create(yetty::YettyPtr engine) {
+  return yetty::PDFPlugin::create(std::move(engine));
 }
 }

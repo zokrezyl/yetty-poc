@@ -13,43 +13,34 @@ using namespace yetty::test;
 
 suite plugin_tests = [] {
     "plugin can be created"_test = [] {
-        auto result = MockPlugin::create();
+        auto result = MockPlugin::create(nullptr);
 
         expect(result.has_value());
     };
 
     "plugin has correct name"_test = [] {
-        auto result = MockPlugin::create();
+        auto result = MockPlugin::create(nullptr);
         auto plugin = *result;
 
         expect(std::string(plugin->pluginName()) == "mock");
     };
 
-    "plugin is not initialized by default"_test = [] {
-        auto result = MockPlugin::create();
+    "plugin is initialized after create"_test = [] {
+        auto result = MockPlugin::create(nullptr);
         auto plugin = *result;
-
-        expect(!plugin->isInitialized());
-    };
-
-    "plugin init sets initialized flag"_test = [] {
-        auto result = MockPlugin::create();
-        auto plugin = *result;
-
-        plugin->init(nullptr);
 
         expect(plugin->isInitialized());
     };
 
     "plugin has no layers initially"_test = [] {
-        auto result = MockPlugin::create();
+        auto result = MockPlugin::create(nullptr);
         auto plugin = *result;
 
         expect(plugin->getLayers().empty());
     };
 
     "plugin createLayer returns valid layer"_test = [] {
-        auto result = MockPlugin::create();
+        auto result = MockPlugin::create(nullptr);
         auto plugin = *result;
 
         auto layerResult = plugin->createLayer("test_payload");
@@ -58,7 +49,7 @@ suite plugin_tests = [] {
     };
 
     "plugin addLayer adds layer to list"_test = [] {
-        auto result = MockPlugin::create();
+        auto result = MockPlugin::create(nullptr);
         auto plugin = *result;
 
         auto layerResult = plugin->createLayer("payload");
@@ -68,7 +59,7 @@ suite plugin_tests = [] {
     };
 
     "plugin can have multiple layers"_test = [] {
-        auto result = MockPlugin::create();
+        auto result = MockPlugin::create(nullptr);
         auto plugin = *result;
 
         auto layer1 = *plugin->createLayer("payload1");
@@ -83,7 +74,7 @@ suite plugin_tests = [] {
     };
 
     "plugin getLayer returns correct layer by ID"_test = [] {
-        auto result = MockPlugin::create();
+        auto result = MockPlugin::create(nullptr);
         auto plugin = *result;
 
         auto layer1 = *plugin->createLayer("p1");
@@ -100,7 +91,7 @@ suite plugin_tests = [] {
     };
 
     "plugin getLayer returns nullptr for unknown ID"_test = [] {
-        auto result = MockPlugin::create();
+        auto result = MockPlugin::create(nullptr);
         auto plugin = *result;
 
         auto found = plugin->getLayer(999);
@@ -109,7 +100,7 @@ suite plugin_tests = [] {
     };
 
     "plugin removeLayer removes layer by ID"_test = [] {
-        auto result = MockPlugin::create();
+        auto result = MockPlugin::create(nullptr);
         auto plugin = *result;
 
         auto layer = *plugin->createLayer("payload");
@@ -125,7 +116,7 @@ suite plugin_tests = [] {
     };
 
     "plugin removeLayer fails for unknown ID"_test = [] {
-        auto result = MockPlugin::create();
+        auto result = MockPlugin::create(nullptr);
         auto plugin = *result;
 
         auto removeResult = plugin->removeLayer(999);
@@ -134,7 +125,7 @@ suite plugin_tests = [] {
     };
 
     "plugin removeLayer calls dispose on layer"_test = [] {
-        auto result = MockPlugin::create();
+        auto result = MockPlugin::create(nullptr);
         auto mockPlugin = std::static_pointer_cast<MockPlugin>(*result);
 
         auto layerResult = mockPlugin->createLayer("payload");
@@ -151,7 +142,7 @@ suite plugin_tests = [] {
     };
 
     "plugin update calls update on all visible layers"_test = [] {
-        auto result = MockPlugin::create();
+        auto result = MockPlugin::create(nullptr);
         auto mockPlugin = std::static_pointer_cast<MockPlugin>(*result);
 
         auto layer1 = std::static_pointer_cast<MockPluginLayer>(*mockPlugin->createLayer("p1"));
@@ -166,7 +157,7 @@ suite plugin_tests = [] {
     };
 
     "plugin update skips invisible layers"_test = [] {
-        auto result = MockPlugin::create();
+        auto result = MockPlugin::create(nullptr);
         auto mockPlugin = std::static_pointer_cast<MockPlugin>(*result);
 
         auto layer1 = std::static_pointer_cast<MockPluginLayer>(*mockPlugin->createLayer("p1"));
@@ -182,7 +173,7 @@ suite plugin_tests = [] {
     };
 
     "plugin dispose disposes all layers"_test = [] {
-        auto result = MockPlugin::create();
+        auto result = MockPlugin::create(nullptr);
         auto mockPlugin = std::static_pointer_cast<MockPlugin>(*result);
 
         auto layer1 = std::static_pointer_cast<MockPluginLayer>(*mockPlugin->createLayer("p1"));
@@ -198,7 +189,7 @@ suite plugin_tests = [] {
     };
 
     "plugin onTerminalResize updates layer pixel sizes"_test = [] {
-        auto result = MockPlugin::create();
+        auto result = MockPlugin::create(nullptr);
         auto plugin = *result;
 
         auto layer = *plugin->createLayer("payload");
@@ -212,7 +203,7 @@ suite plugin_tests = [] {
     };
 
     "plugin onTerminalResize sets needsRender on layers"_test = [] {
-        auto result = MockPlugin::create();
+        auto result = MockPlugin::create(nullptr);
         auto plugin = *result;
 
         auto layer = *plugin->createLayer("payload");
@@ -225,7 +216,7 @@ suite plugin_tests = [] {
     };
 
     "layer parent is set when added to plugin"_test = [] {
-        auto result = MockPlugin::create();
+        auto result = MockPlugin::create(nullptr);
         auto plugin = *result;
 
         auto layer = *plugin->createLayer("payload");

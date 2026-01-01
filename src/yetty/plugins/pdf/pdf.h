@@ -20,27 +20,27 @@ class PDFLayer;
 //-----------------------------------------------------------------------------
 class PDFPlugin : public Plugin {
 public:
-    PDFPlugin();
     ~PDFPlugin() override;
 
-    static Result<PluginPtr> create();
+    static Result<PluginPtr> create(YettyPtr engine) noexcept;
 
     const char* pluginName() const override { return "pdf"; }
 
-    Result<void> init(WebGPUContext* ctx) override;
     Result<void> dispose() override;
 
     Result<PluginLayerPtr> createLayer(const std::string& payload) override;
 
-    Result<void> renderAll(WebGPUContext& ctx,
-                           WGPUTextureView targetView, WGPUTextureFormat targetFormat,
+    Result<void> renderAll(WGPUTextureView targetView, WGPUTextureFormat targetFormat,
                            uint32_t screenWidth, uint32_t screenHeight,
                            float cellWidth, float cellHeight,
                            int scrollOffset, uint32_t termRows,
                            bool isAltScreen = false) override;
 
 private:
-    void* ctx_ = nullptr;  // fz_context*
+    explicit PDFPlugin(YettyPtr engine) noexcept : Plugin(std::move(engine)) {}
+    Result<void> init() noexcept override;
+
+    void* fzCtx_ = nullptr;  // fz_context*
 };
 
 //-----------------------------------------------------------------------------
@@ -196,5 +196,5 @@ using PDF = PDFPlugin;
 
 extern "C" {
     const char* name();
-    yetty::Result<yetty::PluginPtr> create();
+    yetty::Result<yetty::PluginPtr> create(yetty::YettyPtr engine);
 }
