@@ -688,6 +688,6 @@ bool MarkdownLayer::onMouseScroll(float xoffset, float yoffset, int mods) {
 } // namespace yetty
 
 extern "C" {
-    const char* markdown_plugin_name() { return "markdown"; }
-    yetty::Result<yetty::PluginPtr> markdown_plugin_create() { return yetty::MarkdownPlugin::create(); }
+    const char* name() { return "markdown"; }
+    yetty::Result<yetty::PluginPtr> create() { return yetty::MarkdownPlugin::create(); }
 }

@@ -1783,6 +1783,6 @@ Result<void> SDFPrimitivesLayer::createPipeline(WebGPUContext& ctx, WGPUTextureF
 } // namespace yetty
 
 extern "C" {
-    const char* sdf_primitives_plugin_name() { return "sdf-primitives"; }
-    yetty::Result<yetty::PluginPtr> sdf_primitives_plugin_create() { return yetty::SDFPrimitivesPlugin::create(); }
+    const char* name() { return "sdf-primitives"; }
+    yetty::Result<yetty::PluginPtr> create() { return yetty::SDFPrimitivesPlugin::create(); }
 }

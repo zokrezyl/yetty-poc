@@ -1,0 +1,59 @@
+# SDF Primitives - All Available Shapes
+# Based on Inigo Quilez (iquilezles.org)
+
+- body:
+    # Circle
+    - sdCircle:
+        position: [60, 50]
+        radius: 35
+        fill: "#e74c3c"
+        stroke: "#c0392b"
+        stroke-width: 2
+
+    # Box with rounded corners
+    - sdBox:
+        position: [160, 50]
+        size: [40, 30]
+        fill: "#3498db"
+        stroke: "#2980b9"
+        stroke-width: 2
+        round: 8
+
+    # Rotated box
+    - sdBox:
+        position: [260, 50]
+        size: [30, 30]
+        fill: "#9b59b6"
+        rotate: 45
+
+    # Line segment
+    - sdSegment:
+        from: [30, 120]
+        to: [290, 120]
+        stroke: "#34495e"
+        stroke-width: 3
+
+    # Triangle
+    - sdTriangle:
+        p0: [60, 150]
+        p1: [100, 220]
+        p2: [20, 220]
+        fill: "#2ecc71"
+        stroke: "#27ae60"
+        stroke-width: 2
+
+    # Quadratic Bezier curve
+    - sdBezier:
+        p0: [130, 220]
+        p1: [180, 140]
+        p2: [230, 220]
+        stroke: "#e67e22"
+        stroke-width: 4
+
+    # Arc
+    - sdArc:
+        position: [280, 180]
+        angle: [0, 270]
+        radius: 30
+        thickness: 6
+        fill: "#1abc9c"

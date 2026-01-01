@@ -113,6 +113,13 @@ CPMAddPackage(
     OPTIONS "YAML_CPP_BUILD_TESTS OFF" "YAML_CPP_BUILD_TOOLS OFF"
 )
 
+# Taywee/args for command line parsing
+CPMAddPackage(
+    NAME args
+    GITHUB_REPOSITORY Taywee/args
+    GIT_TAG 6.4.6
+)
+
 # spdlog for logging (all platforms)
 CPMAddPackage(
     NAME spdlog
@@ -142,6 +149,8 @@ if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
     if(NOT TARGET Freetype::Freetype)
         add_library(Freetype::Freetype ALIAS freetype)
     endif()
+    # Enable PIC for shared library plugins
+    set_target_properties(freetype PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
     # msdfgen with FreeType support
     CPMAddPackage(
@@ -157,6 +166,13 @@ if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
             "MSDFGEN_DISABLE_PNG ON"
             "MSDFGEN_INSTALL OFF"
     )
+    # Enable PIC for shared library plugins
+    if(TARGET msdfgen-core)
+        set_target_properties(msdfgen-core PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    endif()
+    if(TARGET msdfgen-ext)
+        set_target_properties(msdfgen-ext PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    endif()
 
     # MuPDF for PDF rendering (official tarball includes all bundled dependencies)
     CPMAddPackage(
@@ -165,7 +181,7 @@ if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
         DOWNLOAD_ONLY YES
     )
     if(mupdf_ADDED)
-        include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/mupdf/CMakeLists.txt)
+        include(${CMAKE_CURRENT_SOURCE_DIR}/build-tools/cmake/mupdf/CMakeLists.txt)
     endif()
 
     # GLFW and glfw3webgpu adapter (desktop only, not Android)
@@ -260,31 +276,19 @@ if(YETTY_ANDROID)
     )
 elseif(NOT EMSCRIPTEN)
     # Desktop uses main.cpp with GLFW
+    # Plugins are built as shared libraries and loaded at runtime
     list(APPEND YETTY_SOURCES
-        src/main.cpp
+        src/yetty/main.cpp
+        src/yetty/config.cpp
         src/yetty/terminal/terminal.cpp
         src/yetty/plugin-manager.cpp
         src/yetty/custom-glyph-plugin.cpp
-        src/yetty/plugins/shader-toy/shader-toy.cpp
         src/yetty/plugins/shader-glyph/shader-glyph.cpp
-        src/yetty/plugins/image/image.cpp
-        src/yetty/plugins/markdown/markdown.cpp
-        src/yetty/plugins/pdf/pdf.cpp
-        src/yetty/plugins/plot/plot.cpp
-        src/yetty/plugins/piano/piano.cpp
-        src/yetty/plugins/musical-score/musical-score.cpp
-        src/yetty/plugins/sdf-primitives/sdf-primitives.cpp
-        src/yetty/plugins/video/video.cpp
     )
-    if(YETTY_YMERY_ENABLED)
-        list(APPEND YETTY_SOURCES
-            src/yetty/plugins/ymery/ymery.cpp
-        )
-    endif()
 else()
     # Web uses main.cpp with Emscripten GLFW
     list(APPEND YETTY_SOURCES
-        src/main.cpp
+        src/yetty/main.cpp
     )
 endif()
 
@@ -397,7 +401,7 @@ else()
     pkg_check_modules(FONTCONFIG REQUIRED fontconfig)
 
     # Build FFmpeg from source for video plugin
-    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/cmake/ffmpeg ffmpeg_build)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/build-tools/cmake/ffmpeg ffmpeg_build)
 
     target_include_directories(yetty PRIVATE ${FONTCONFIG_INCLUDE_DIRS} ${FFMPEG_INCLUDE_DIR})
 
@@ -408,15 +412,14 @@ else()
         glm::glm
         stb
         yaml-cpp
+        args
         msdfgen::msdfgen-core
         msdfgen::msdfgen-ext
         freetype
-        mupdf
         vterm
         spdlog::spdlog
         util  # for forkpty
         ${FONTCONFIG_LIBRARIES}
-        ffmpeg
     )
 
     #-------------------------------------------------------------------------
@@ -440,6 +443,7 @@ else()
         )
 
         # Patch ymery to skip its own webgpu setup if target already exists
+        # and output plugins to plugins/ymery subdirectory
         if(ymery_ADDED)
             file(READ "${ymery_SOURCE_DIR}/CMakeLists.txt" YMERY_CMAKE_CONTENT)
             string(REPLACE
@@ -448,6 +452,37 @@ else()
                 YMERY_CMAKE_CONTENT "${YMERY_CMAKE_CONTENT}")
             file(WRITE "${ymery_SOURCE_DIR}/CMakeLists.txt" "${YMERY_CMAKE_CONTENT}")
             message(STATUS "Patched ymery to use existing webgpu target")
+
+            # Patch ymery frontend plugins to output to plugins/ymery
+            file(READ "${ymery_SOURCE_DIR}/src/ymery/plugins/frontend/CMakeLists.txt" YMERY_FRONTEND_CMAKE)
+            string(REPLACE
+                "set(PLUGIN_OUTPUT_DIR \"\${CMAKE_BINARY_DIR}/plugins\")"
+                "set(PLUGIN_OUTPUT_DIR \"\${CMAKE_BINARY_DIR}/plugins/ymery\")"
+                YMERY_FRONTEND_CMAKE "${YMERY_FRONTEND_CMAKE}")
+            # Also patch meta file copy destination
+            string(REPLACE
+                "\"\${CMAKE_BINARY_DIR}/plugins/\${meta_name}\""
+                "\"\${CMAKE_BINARY_DIR}/plugins/ymery/\${meta_name}\""
+                YMERY_FRONTEND_CMAKE "${YMERY_FRONTEND_CMAKE}")
+            file(WRITE "${ymery_SOURCE_DIR}/src/ymery/plugins/frontend/CMakeLists.txt" "${YMERY_FRONTEND_CMAKE}")
+
+            # Patch ymery backend plugins to output to plugins/ymery
+            file(READ "${ymery_SOURCE_DIR}/src/ymery/plugins/backend/CMakeLists.txt" YMERY_BACKEND_CMAKE)
+            string(REPLACE
+                "set(PLUGIN_OUTPUT_DIR \"\${CMAKE_BINARY_DIR}/plugins\")"
+                "set(PLUGIN_OUTPUT_DIR \"\${CMAKE_BINARY_DIR}/plugins/ymery\")"
+                YMERY_BACKEND_CMAKE "${YMERY_BACKEND_CMAKE}")
+            file(WRITE "${ymery_SOURCE_DIR}/src/ymery/plugins/backend/CMakeLists.txt" "${YMERY_BACKEND_CMAKE}")
+
+            # Patch ymery filesystem plugins to output to plugins/ymery
+            file(READ "${ymery_SOURCE_DIR}/src/ymery/plugins/backend/filesystem/CMakeLists.txt" YMERY_FS_CMAKE)
+            string(REPLACE
+                "set(PLUGIN_OUTPUT_DIR \"\${CMAKE_BINARY_DIR}/plugins\")"
+                "set(PLUGIN_OUTPUT_DIR \"\${CMAKE_BINARY_DIR}/plugins/ymery\")"
+                YMERY_FS_CMAKE "${YMERY_FS_CMAKE}")
+            file(WRITE "${ymery_SOURCE_DIR}/src/ymery/plugins/backend/filesystem/CMakeLists.txt" "${YMERY_FS_CMAKE}")
+
+            message(STATUS "Patched ymery plugins to output to plugins/ymery/")
 
             # Create missing static_plugins files (ymery bug - files referenced but not present)
             if(NOT EXISTS "${ymery_SOURCE_DIR}/src/ymery/static_plugins.hpp")
@@ -484,17 +519,13 @@ inline const std::vector<StaticPluginInfo>& get_static_plugins() {
         set(YMERY_BUILD_TESTS OFF CACHE BOOL "" FORCE)
         add_subdirectory(${ymery_SOURCE_DIR} ${ymery_BINARY_DIR})
 
-        target_compile_definitions(yetty PRIVATE YETTY_YMERY_ENABLED=1)
-        target_include_directories(yetty PRIVATE
-            ${ymery_SOURCE_DIR}/src
-            ${imgui_SOURCE_DIR}
-            ${imgui_SOURCE_DIR}/backends
-            ${implot_SOURCE_DIR}
-        )
-        target_link_libraries(yetty PRIVATE ymery_lib imgui implot)
-
-        message(STATUS "ymery plugin enabled (from GitHub)")
+        message(STATUS "ymery library built for plugin")
     endif()
+
+    #-------------------------------------------------------------------------
+    # Build plugins as shared libraries
+    #-------------------------------------------------------------------------
+    add_subdirectory(src/yetty/plugins)
 
     file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/assets DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
     configure_file(

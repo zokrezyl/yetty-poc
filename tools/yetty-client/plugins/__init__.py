@@ -9,31 +9,33 @@ import click
 
 def discover_plugins() -> Dict[str, click.Command]:
     """Discover all plugins in the plugins directory.
-    
+
     Returns:
         Dictionary mapping plugin names to their Click commands
     """
     plugins = {}
     package_path = Path(__file__).parent
-    
+
     for _, name, _ in pkgutil.iter_modules([str(package_path)]):
         if name.startswith('_'):
             continue
         try:
             module = importlib.import_module(f'.{name}', package=__package__)
+            # Convert underscores to hyphens for plugin name
+            plugin_name = name.replace('_', '-')
             # Look for a click command with the same name as the module
             if hasattr(module, name):
                 cmd = getattr(module, name)
                 if isinstance(cmd, click.Command):
-                    plugins[name] = cmd
+                    plugins[plugin_name] = cmd
             # Also check for 'command' attribute
             elif hasattr(module, 'command'):
                 cmd = getattr(module, 'command')
                 if isinstance(cmd, click.Command):
-                    plugins[name] = cmd
+                    plugins[plugin_name] = cmd
         except Exception as e:
             click.echo(f"Warning: Failed to load plugin '{name}': {e}", err=True)
-    
+
     return plugins
 
 

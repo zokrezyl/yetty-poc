@@ -314,6 +314,9 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(mupdf PRIVATE -w)
 endif()
 
+# Enable position independent code for shared library plugins
+set_target_properties(mupdf PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 # C++ flags for HarfBuzz sources
 set_source_files_properties(${HARFBUZZ_SOURCES}
     PROPERTIES

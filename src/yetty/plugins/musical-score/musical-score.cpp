@@ -424,6 +424,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 } // namespace yetty
 
 extern "C" {
-    const char* musical_score_plugin_name() { return "musical-score"; }
-    yetty::Result<yetty::PluginPtr> musical_score_plugin_create() { return yetty::MusicalScorePlugin::create(); }
+    const char* name() { return "musical-score"; }
+    yetty::Result<yetty::PluginPtr> create() { return yetty::MusicalScorePlugin::create(); }
 }

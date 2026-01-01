@@ -73,6 +73,6 @@ using Image = ImagePlugin;
 } // namespace yetty
 
 extern "C" {
-    const char* image_plugin_name();
-    yetty::Result<yetty::PluginPtr> image_plugin_create();
+    const char* name();
+    yetty::Result<yetty::PluginPtr> create();
 }

@@ -850,7 +850,7 @@ void TextRenderer::render(WebGPUContext& ctx, const Grid& grid,
             updateCellTextureRegion(queue, grid, rect);
         }
 
-        if (config_ && config_->_debugDamageRects) {
+        if (config_ && config_->debugDamageRects()) {
             uint32_t totalCells = 0;
             for (const auto& rect : damageRects) {
                 totalCells += (rect._endCol - rect._startCol) * (rect._endRow - rect._startRow);

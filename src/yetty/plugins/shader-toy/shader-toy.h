@@ -96,6 +96,6 @@ using ShaderToy = ShaderToyPlugin;
 
 // C exports for dynamic loading
 extern "C" {
-    const char* shader_plugin_name();
-    yetty::Result<yetty::PluginPtr> shader_plugin_create();
+    const char* name();
+    yetty::Result<yetty::PluginPtr> create();
 }

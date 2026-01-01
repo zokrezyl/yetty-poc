@@ -8,6 +8,7 @@ set(FFMPEG_PREFIX "${CMAKE_BINARY_DIR}/ffmpeg")
 set(FFMPEG_INSTALL_DIR "${FFMPEG_PREFIX}/install")
 
 # Minimal config: decode only, no encoding, no filters, no devices
+# PIC required for shared library plugins - disable all asm for maximum compatibility
 set(FFMPEG_CONFIGURE_OPTS
     --prefix=${FFMPEG_INSTALL_DIR}
     --disable-programs
@@ -15,6 +16,8 @@ set(FFMPEG_CONFIGURE_OPTS
     --disable-network
     --disable-autodetect
     --disable-x86asm
+    --disable-asm
+    --disable-inline-asm
     --enable-static
     --disable-shared
     --enable-pic

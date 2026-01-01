@@ -225,7 +225,7 @@ Result<void> Terminal::update() {
 
         // Sync based on damage tracking config
         // When scrolled back, always use full sync since damage rects don't apply to scrollback
-        if (config_ && config_->_useDamageTracking && !fullDamage_ && scrollOffset_ == 0) {
+        if (config_ && config_->useDamageTracking() && !fullDamage_ && scrollOffset_ == 0) {
             syncDamageToGrid();
         } else {
             syncToGrid();
@@ -584,7 +584,7 @@ int Terminal::onDamage(VTermRect rect, void* user) {
     damage._endRow = static_cast<uint32_t>(rect.end_row);
     term->damageRects_.push_back(damage);
 
-    if (term->config_ && term->config_->_debugDamageRects) {
+    if (term->config_ && term->config_->debugDamageRects()) {
         spdlog::debug("Damage: [{},{}] -> [{},{}]",
                       damage._startCol, damage._startRow, damage._endCol, damage._endRow);
     }
@@ -690,7 +690,7 @@ int Terminal::onSbPushline(int cols, const VTermScreenCell* cells, void* user) {
     term->scrollback_.push_back(std::move(line));
 
     // Trim scrollback if too large
-    uint32_t maxLines = term->config_ ? term->config_->_scrollbackLines : 10000;
+    uint32_t maxLines = term->config_ ? term->config_->scrollbackLines() : 10000;
     while (term->scrollback_.size() > maxLines) {
         term->scrollback_.pop_front();
     }

@@ -132,6 +132,6 @@ using Video = VideoPlugin;
 } // namespace yetty
 
 extern "C" {
-    const char* video_plugin_name();
-    yetty::Result<yetty::PluginPtr> video_plugin_create();
+    const char* name();
+    yetty::Result<yetty::PluginPtr> create();
 }

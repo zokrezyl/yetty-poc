@@ -500,8 +500,8 @@ Result<void> ShaderToyLayer::compileShader(WebGPUContext& ctx,
 
 } // namespace yetty
 
-// C exports
+// C exports for dynamic loading
 extern "C" {
-    const char* shader_plugin_name() { return "shader"; }
-    yetty::Result<yetty::PluginPtr> shader_plugin_create() { return yetty::ShaderToyPlugin::create(); }
+    const char* name() { return "shader"; }
+    yetty::Result<yetty::PluginPtr> create() { return yetty::ShaderToyPlugin::create(); }
 }

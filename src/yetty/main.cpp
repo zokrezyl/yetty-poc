@@ -1,27 +1,16 @@
-#include "yetty/renderer/webgpu-context.h"
-#include "yetty/renderer/text-renderer.h"
-#include "yetty/terminal/grid.h"
-#include "yetty/terminal/font.h"
-#include "yetty/config.h"
+#include "renderer/webgpu-context.h"
+#include "renderer/text-renderer.h"
+#include "terminal/grid.h"
+#include "terminal/font.h"
+#include "config.h"
 
 #if !YETTY_WEB
-#include "yetty/terminal/terminal.h"
-#include "yetty/plugin-manager.h"
-#include "yetty/plugins/shader-toy/shader-toy.h"
-#include "yetty/plugins/shader-glyph/shader-glyph.h"
-#include "yetty/plugins/image/image.h"
-#include "yetty/plugins/markdown/markdown.h"
-#include "yetty/plugins/pdf/pdf.h"
-#include "yetty/plugins/plot/plot.h"
-#include "yetty/plugins/piano/piano.h"
-#include "yetty/plugins/musical-score/musical-score.h"
-#include "yetty/plugins/sdf-primitives/sdf-primitives.h"
-#include "yetty/plugins/video/video.h"
-#ifdef YETTY_YMERY_ENABLED
-#include "yetty/plugins/ymery/ymery.h"
-#endif
+#include "terminal/terminal.h"
+#include "plugin-manager.h"
+#include "plugins/shader-glyph/shader-glyph.h"
 #include <termios.h>
 #include <unistd.h>
+#include <args.hxx>
 #endif
 
 #include <GLFW/glfw3.h>
@@ -448,7 +437,7 @@ static void mainLoopIteration() {
         }
 
         // Render terminal grid with cursor and damage tracking
-        if (state._config && state._config->_useDamageTracking) {
+        if (state._config && state._config->useDamageTracking()) {
             state._renderer->render(*state._ctx, state._terminal->getGrid(),
                                    state._terminal->getDamageRects(),
                                    state._terminal->hasFullDamage(),
@@ -638,79 +627,108 @@ const char* DEFAULT_ATLAS = "assets/atlas.png";
 const char* DEFAULT_METRICS = "assets/atlas.json";
 #endif
 
-void printUsage(const char* prog) {
-    std::cerr << "Usage: " << prog << " [options] [font.ttf] [width] [height]" << std::endl;
-    std::cerr << std::endl;
-    std::cerr << "Options:" << std::endl;
-#if !YETTY_USE_PREBUILT_ATLAS
-    std::cerr << "  --generate-atlas   Generate atlas.png and atlas.json in assets/" << std::endl;
-#endif
-    std::cerr << "  --load-atlas       Use pre-built atlas instead of generating" << std::endl;
-    std::cerr << "  --demo [scroll_ms] Run scrolling text demo (default: terminal mode)" << std::endl;
-    std::cerr << "  --no-damage        Disable damage tracking (update full screen each frame)" << std::endl;
-    std::cerr << "  --debug-damage     Log damage rectangle updates" << std::endl;
-    std::cerr << "  -e <command>       Execute command instead of shell" << std::endl;
-    std::cerr << std::endl;
-    std::cerr << "Arguments:" << std::endl;
-    std::cerr << "  font.ttf   - Path to TTF font (default: system monospace)" << std::endl;
-    std::cerr << "  width      - Window width in pixels (default: 1024)" << std::endl;
-    std::cerr << "  height     - Window height in pixels (default: 768)" << std::endl;
-}
-
 int main(int argc, char* argv[]) {
     // Set up logging
     spdlog::set_level(spdlog::level::debug);
     spdlog::info("yetty starting...");
 
-    // Parse command line
-    bool generateAtlasOnly = false;
-    bool usePrebuiltAtlas = YETTY_USE_PREBUILT_ATLAS;
-    bool demoMode = YETTY_WEB ? true : false;  // Web always uses demo mode
-    bool useDamageTracking = true;
-    bool debugDamageRects = false;
-    int scrollMs = 50;
-    const char* fontPath = DEFAULT_FONT;
-    std::string executeCommand;  // Command to execute with -e
-    uint32_t width = 1024;
-    uint32_t height = 768;
+#if !YETTY_WEB
+    // Parse command line with Taywee/args
+    args::ArgumentParser parser("yetty - WebGPU Terminal Emulator");
+    args::HelpFlag help(parser, "help", "Display this help menu", {'h', "help"});
 
-    int argIndex = 1;
-    while (argIndex < argc && argv[argIndex][0] == '-') {
-        if (std::strcmp(argv[argIndex], "--generate-atlas") == 0) {
-            generateAtlasOnly = true;
-        } else if (std::strcmp(argv[argIndex], "--load-atlas") == 0) {
-            usePrebuiltAtlas = true;
-        } else if (std::strcmp(argv[argIndex], "--demo") == 0) {
-            demoMode = true;
-            if (argIndex + 1 < argc && argv[argIndex + 1][0] != '-') {
-                scrollMs = std::atoi(argv[++argIndex]);
-            }
-        } else if (std::strcmp(argv[argIndex], "--no-damage") == 0) {
-            useDamageTracking = false;
-        } else if (std::strcmp(argv[argIndex], "--debug-damage") == 0) {
-            debugDamageRects = true;
-        } else if (std::strcmp(argv[argIndex], "-e") == 0) {
-            if (argIndex + 1 < argc) {
-                executeCommand = argv[++argIndex];
-                spdlog::info("Execute command: {}", executeCommand);
-            } else {
-                std::cerr << "Error: -e requires a command argument" << std::endl;
-                printUsage(argv[0]);
-                return 1;
-            }
-        } else if (std::strcmp(argv[argIndex], "--help") == 0 || std::strcmp(argv[argIndex], "-h") == 0) {
-            printUsage(argv[0]);
-            return 0;
-        }
-        argIndex++;
+    // Config and plugin options
+    args::ValueFlag<std::string> configFile(parser, "path", "Config file path", {'c', "config"});
+    args::ValueFlag<std::string> pluginPath(parser, "path", "Plugin search path (colon-separated)", {'p', "plugin-path"});
+
+    // Display options
+    args::ValueFlag<std::string> fontPathArg(parser, "font", "Path to TTF font", {'f', "font"});
+    args::ValueFlag<uint32_t> widthArg(parser, "width", "Window width in pixels", {'W', "width"});
+    args::ValueFlag<uint32_t> heightArg(parser, "height", "Window height in pixels", {'H', "height"});
+
+    // Mode options
+    args::Flag generateAtlasFlag(parser, "generate-atlas", "Generate font atlas and exit", {"generate-atlas"});
+    args::Flag loadAtlasFlag(parser, "load-atlas", "Use pre-built atlas", {"load-atlas"});
+    args::ValueFlag<int> demoFlag(parser, "scroll_ms", "Run scrolling text demo", {"demo"});
+    args::Flag noDamageFlag(parser, "no-damage", "Disable damage tracking", {"no-damage"});
+    args::Flag debugDamageFlag(parser, "debug-damage", "Log damage rectangle updates", {"debug-damage"});
+    args::ValueFlag<std::string> executeArg(parser, "command", "Execute command instead of shell", {'e'});
+
+    try {
+        parser.ParseCLI(argc, argv);
+    } catch (const args::Help&) {
+        std::cout << parser;
+        return 0;
+    } catch (const args::ParseError& e) {
+        std::cerr << e.what() << std::endl;
+        std::cerr << parser;
+        return 1;
     }
 
-    if (argIndex < argc) fontPath = argv[argIndex++];
-    if (argIndex < argc) width = static_cast<uint32_t>(std::atoi(argv[argIndex++]));
-    if (argIndex < argc) height = static_cast<uint32_t>(std::atoi(argv[argIndex++]));
+    // Create and initialize config
+    auto configResult = Config::create();
+    if (!configResult) {
+        std::cerr << "Failed to create config: " << error_msg(configResult) << std::endl;
+        return 1;
+    }
+    Config* config = *configResult;
+
+    // Build command line overrides for config
+    YAML::Node cmdOverrides;
+    if (pluginPath) {
+        cmdOverrides["plugins"]["path"] = args::get(pluginPath);
+    }
+    if (noDamageFlag) {
+        cmdOverrides["rendering"]["damage-tracking"] = false;
+    }
+    if (debugDamageFlag) {
+        cmdOverrides["debug"]["damage-rects"] = true;
+    }
+
+    // Initialize config with file path and overrides
+    std::string configPath = configFile ? args::get(configFile) : "";
+    if (auto res = config->init(configPath, cmdOverrides); !res) {
+        spdlog::warn("Config init warning: {}", error_msg(res));
+    }
+
+    // Extract final values (config already has priority: file < env < cmdline)
+    bool generateAtlasOnly = generateAtlasFlag;
+    bool usePrebuiltAtlas = YETTY_USE_PREBUILT_ATLAS || loadAtlasFlag;
+    bool demoMode = demoFlag;
+    int scrollMs = demoFlag ? args::get(demoFlag) : 50;
+    std::string fontPath = fontPathArg ? args::get(fontPathArg) : std::string(DEFAULT_FONT);
+    std::string executeCommand = executeArg ? args::get(executeArg) : "";
+    uint32_t width = widthArg ? args::get(widthArg) : 1024;
+    uint32_t height = heightArg ? args::get(heightArg) : 768;
 
     if (width == 0) width = 1024;
     if (height == 0) height = 768;
+
+    if (!executeCommand.empty()) {
+        spdlog::info("Execute command: {}", executeCommand);
+    }
+
+#else
+    // Web build: simplified config without command line parsing
+    auto configResult = Config::create();
+    if (!configResult) {
+        std::cerr << "Failed to create config" << std::endl;
+        return 1;
+    }
+    Config* config = *configResult;
+    if (auto res = config->init(); !res) {
+        spdlog::warn("Config init warning: {}", error_msg(res));
+    }
+
+    bool generateAtlasOnly = false;
+    bool usePrebuiltAtlas = true;
+    bool demoMode = true;
+    int scrollMs = 50;
+    std::string fontPath = DEFAULT_FONT;
+    std::string executeCommand;
+    uint32_t width = 1024;
+    uint32_t height = 768;
+#endif
 
 #if !YETTY_USE_PREBUILT_ATLAS
     // Generate atlas only mode (no window needed)
@@ -852,19 +870,13 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // Create config from command line args
-    static Config config;
-    config._useDamageTracking = useDamageTracking;
-    config._showFps = true;
-    config._debugDamageRects = debugDamageRects;
-
     // Initialize text renderer
     TextRenderer renderer;
     float cellWidth = fontSize * 0.6f;   // Approximate monospace width
     float cellHeight = fontSize * 1.2f;  // Line height
     renderer.setCellSize(cellWidth, cellHeight);
     renderer.resize(width, height);
-    renderer.setConfig(&config);
+    renderer.setConfig(config);
 
     if (auto result = renderer.init(ctx, font); !result) {
         std::cerr << "Failed to initialize text renderer: " << error_msg(result) << std::endl;
@@ -883,7 +895,7 @@ int main(int argc, char* argv[]) {
     appState._ctx = &ctx;
     appState._renderer = &renderer;
     appState._font = &font;
-    appState._config = &config;
+    appState._config = config;
     appState._baseCellWidth = cellWidth;
     appState._baseCellHeight = cellHeight;
     appState._zoomLevel = 1.0f;
@@ -943,26 +955,12 @@ int main(int argc, char* argv[]) {
     else {
         // Terminal mode
         terminal = new Terminal(cols, rows, &font);
-        terminal->setConfig(&config);
+        terminal->setConfig(config);
         appState._terminal = terminal;
 
         // Create and configure PluginManager
         PluginManager* pluginMgr = new PluginManager();
         appState._pluginManager = pluginMgr;
-
-        // Register built-in plugins
-        pluginMgr->registerPlugin("shader", ShaderToy::create);
-        pluginMgr->registerPlugin("image", Image::create);
-        pluginMgr->registerPlugin("markdown", Markdown::create);
-        pluginMgr->registerPlugin("pdf", PDF::create);
-        pluginMgr->registerPlugin("plot", Plot::create);
-        pluginMgr->registerPlugin("piano", Piano::create);
-        pluginMgr->registerPlugin("musical-score", MusicalScore::create);
-        pluginMgr->registerPlugin("sdf-primitives", SDFPrimitives::create);
-        pluginMgr->registerPlugin("video", Video::create);
-#ifdef YETTY_YMERY_ENABLED
-        pluginMgr->registerPlugin("ymery", Ymery::create);
-#endif
 
         // Pass font and context to plugins for text rendering
         pluginMgr->setFont(&font);
@@ -973,10 +971,11 @@ int main(int argc, char* argv[]) {
             pluginMgr->registerCustomGlyphPlugin(*shaderGlyphResult);
         }
 
-        // Load external plugins from directory (if exists)
-        const char* pluginDir = getenv("YETTY_PLUGINS_DIR");
-        if (pluginDir) {
-            pluginMgr->loadPluginsFromDirectory(pluginDir);
+        // Load plugins from configured paths
+        auto pluginPaths = config->pluginPaths();
+        for (const auto& path : pluginPaths) {
+            spdlog::info("Loading plugins from: {}", path);
+            pluginMgr->loadPluginsFromDirectory(path);
         }
 
         // Wire up plugin manager to terminal
@@ -993,7 +992,7 @@ int main(int argc, char* argv[]) {
         }
 
         std::cout << "Terminal mode: Grid " << cols << "x" << rows
-                  << " (damage tracking: " << (config._useDamageTracking ? "on" : "off") << ")" << std::endl;
+                  << " (damage tracking: " << (config->useDamageTracking() ? "on" : "off") << ")" << std::endl;
 
         // Set up keyboard and mouse callbacks
         glfwSetKeyCallback(window, keyCallback);
@@ -1064,6 +1063,7 @@ int main(int argc, char* argv[]) {
     delete appState._pluginManager;
     delete terminal;
     delete demoGrid;
+    delete config;
 
     glfwDestroyWindow(window);
     glfwTerminate();

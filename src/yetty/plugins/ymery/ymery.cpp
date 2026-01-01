@@ -514,6 +514,6 @@ void YmeryLayer::setFocus(bool f) {
 } // namespace yetty
 
 extern "C" {
-    const char* ymery_plugin_name() { return "ymery"; }
-    yetty::Result<yetty::PluginPtr> ymery_plugin_create() { return yetty::YmeryPlugin::create(); }
+    const char* name() { return "ymery"; }
+    yetty::Result<yetty::PluginPtr> create() { return yetty::YmeryPlugin::create(); }
 }

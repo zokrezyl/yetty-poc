@@ -719,6 +719,6 @@ fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
 } // namespace yetty
 
 extern "C" {
-    const char* plot_plugin_name() { return "plot"; }
-    yetty::Result<yetty::PluginPtr> plot_plugin_create() { return yetty::PlotPlugin::create(); }
+    const char* name() { return "plot"; }
+    yetty::Result<yetty::PluginPtr> create() { return yetty::PlotPlugin::create(); }
 }

@@ -682,6 +682,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 } // namespace yetty
 
 extern "C" {
-    const char* piano_plugin_name() { return "piano"; }
-    yetty::Result<yetty::PluginPtr> piano_plugin_create() { return yetty::PianoPlugin::create(); }
+    const char* name() { return "piano"; }
+    yetty::Result<yetty::PluginPtr> create() { return yetty::PianoPlugin::create(); }
 }

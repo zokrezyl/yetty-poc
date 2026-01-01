@@ -160,6 +160,6 @@ using SDFPrimitives = SDFPrimitivesPlugin;
 } // namespace yetty
 
 extern "C" {
-    const char* sdf_primitives_plugin_name();
-    yetty::Result<yetty::PluginPtr> sdf_primitives_plugin_create();
+    const char* name();
+    yetty::Result<yetty::PluginPtr> create();
 }

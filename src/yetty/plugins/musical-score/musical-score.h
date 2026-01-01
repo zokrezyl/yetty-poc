@@ -84,6 +84,6 @@ using MusicalScore = MusicalScorePlugin;
 } // namespace yetty
 
 extern "C" {
-    const char* musical_score_plugin_name();
-    yetty::Result<yetty::PluginPtr> musical_score_plugin_create();
+    const char* name();
+    yetty::Result<yetty::PluginPtr> create();
 }

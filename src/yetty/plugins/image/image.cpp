@@ -345,6 +345,6 @@ struct VertexOutput { @builtin(position) position: vec4<f32>, @location(0) uv: v
 } // namespace yetty
 
 extern "C" {
-    const char* image_plugin_name() { return "image"; }
-    yetty::Result<yetty::PluginPtr> image_plugin_create() { return yetty::ImagePlugin::create(); }
+    const char* name() { return "image"; }
+    yetty::Result<yetty::PluginPtr> create() { return yetty::ImagePlugin::create(); }
 }

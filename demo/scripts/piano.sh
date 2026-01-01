@@ -1,0 +1,24 @@
+#!/bin/bash
+# Piano keyboard demo
+#
+# Usage: ./demo/scripts/piano.sh [octaves] [start_octave]
+#   octaves: 1-8 (default: 2)
+#   start_octave: 0-9 (default: 4, middle C)
+#
+# Controls:
+#   Mouse: Click keys to play
+#   Keyboard: A-L = white keys (C to B)
+#             W,E,T,Y,U,O,P = black keys
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+OCTAVES="${1:-2}"
+START="${2:-4}"
+WIDTH="${3:-80}"
+HEIGHT="${4:-15}"
+
+cd "$ROOT_DIR"
+~/.local/bin/uv run python tools/yetty-client/main.py run piano \
+    -o "$OCTAVES" -s "$START" \
+    -w "$WIDTH" -H "$HEIGHT"

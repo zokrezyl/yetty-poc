@@ -117,6 +117,6 @@ using Markdown = MarkdownPlugin;
 } // namespace yetty
 
 extern "C" {
-    const char* markdown_plugin_name();
-    yetty::Result<yetty::PluginPtr> markdown_plugin_create();
+    const char* name();
+    yetty::Result<yetty::PluginPtr> create();
 }

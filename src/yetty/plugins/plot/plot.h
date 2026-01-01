@@ -132,6 +132,6 @@ using Plot = PlotPlugin;
 } // namespace yetty
 
 extern "C" {
-    const char* plot_plugin_name();
-    yetty::Result<yetty::PluginPtr> plot_plugin_create();
+    const char* name();
+    yetty::Result<yetty::PluginPtr> create();
 }

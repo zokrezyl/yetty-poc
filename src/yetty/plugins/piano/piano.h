@@ -108,6 +108,6 @@ using Piano = PianoPlugin;
 } // namespace yetty
 
 extern "C" {
-    const char* piano_plugin_name();
-    yetty::Result<yetty::PluginPtr> piano_plugin_create();
+    const char* name();
+    yetty::Result<yetty::PluginPtr> create();
 }

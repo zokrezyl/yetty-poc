@@ -195,6 +195,6 @@ using PDF = PDFPlugin;
 } // namespace yetty
 
 extern "C" {
-    const char* pdf_plugin_name();
-    yetty::Result<yetty::PluginPtr> pdf_plugin_create();
+    const char* name();
+    yetty::Result<yetty::PluginPtr> create();
 }

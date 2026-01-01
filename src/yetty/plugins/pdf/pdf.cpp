@@ -1311,8 +1311,8 @@ bool PDFLayer::onKey(int key, int scancode, int action, int mods) {
 } // namespace yetty
 
 extern "C" {
-const char *pdf_plugin_name() { return "pdf"; }
-yetty::Result<yetty::PluginPtr> pdf_plugin_create() {
+const char* name() { return "pdf"; }
+yetty::Result<yetty::PluginPtr> create() {
   return yetty::PDFPlugin::create();
 }
 }

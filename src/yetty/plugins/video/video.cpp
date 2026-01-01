@@ -743,6 +743,6 @@ struct VertexOutput { @builtin(position) position: vec4<f32>, @location(0) uv: v
 } // namespace yetty
 
 extern "C" {
-    const char* video_plugin_name() { return "video"; }
-    yetty::Result<yetty::PluginPtr> video_plugin_create() { return yetty::VideoPlugin::create(); }
+    const char* name() { return "video"; }
+    yetty::Result<yetty::PluginPtr> create() { return yetty::VideoPlugin::create(); }
 }

@@ -102,6 +102,6 @@ using Ymery = YmeryPlugin;
 } // namespace yetty
 
 extern "C" {
-    const char* ymery_plugin_name();
-    yetty::Result<yetty::PluginPtr> ymery_plugin_create();
+    const char* name();
+    yetty::Result<yetty::PluginPtr> create();
 }
