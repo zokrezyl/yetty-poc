@@ -6,10 +6,12 @@
 option(YETTY_COVERAGE "Enable code coverage" OFF)
 
 # Boost UT - Modern C++20 unit testing framework
+# Note: v2.3+ requires CMake 4.0, stick with v2.1.0
 CPMAddPackage(
     NAME ut
     GITHUB_REPOSITORY boost-ext/ut
-    GIT_TAG v2.3.1
+    GIT_TAG v2.1.0
+    OPTIONS "BUILD_BENCHMARKS OFF" "BUILD_EXAMPLES OFF"
 )
 
 #-----------------------------------------------------------------------------

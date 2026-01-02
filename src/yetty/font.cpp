@@ -1486,18 +1486,46 @@ glm::vec2 parseVec2(const std::string& s) {
 } // anonymous namespace
 
 bool Font::loadAtlas(const std::string& atlasPath, const std::string& metricsPath) {
-    // Load atlas image
-    int width, height, channels;
-    unsigned char* data = stbi_load(atlasPath.c_str(), &width, &height, &channels, 4);
-    if (!data) {
-        std::cerr << "Failed to load atlas: " << atlasPath << std::endl;
+    // Load LZ4 compressed atlas
+    std::ifstream atlasFile(atlasPath, std::ios::binary | std::ios::ate);
+    if (!atlasFile) {
+        std::cerr << "Failed to open atlas file: " << atlasPath << std::endl;
         return false;
     }
 
-    _atlasWidth = static_cast<uint32_t>(width);
-    _atlasHeight = static_cast<uint32_t>(height);
-    _atlasData.assign(data, data + (width * height * 4));
-    stbi_image_free(data);
+    const size_t fileSize = atlasFile.tellg();
+    atlasFile.seekg(0, std::ios::beg);
+
+    // Read header: magic, width, height, uncompressed size, compressed size
+    uint32_t magic, uncompressedSize, compressedSize;
+    atlasFile.read(reinterpret_cast<char*>(&magic), sizeof(magic));
+    atlasFile.read(reinterpret_cast<char*>(&_atlasWidth), sizeof(_atlasWidth));
+    atlasFile.read(reinterpret_cast<char*>(&_atlasHeight), sizeof(_atlasHeight));
+    atlasFile.read(reinterpret_cast<char*>(&uncompressedSize), sizeof(uncompressedSize));
+    atlasFile.read(reinterpret_cast<char*>(&compressedSize), sizeof(compressedSize));
+
+    if (magic != 0x344A5A4C) { // "LZ4\0"
+        std::cerr << "Invalid atlas file magic: " << atlasPath << std::endl;
+        return false;
+    }
+
+    // Read compressed data
+    std::vector<char> compressed(compressedSize);
+    atlasFile.read(compressed.data(), compressedSize);
+
+    // Decompress with LZ4
+    _atlasData.resize(uncompressedSize);
+    const int decompressedSize = LZ4_decompress_safe(
+        compressed.data(),
+        reinterpret_cast<char*>(_atlasData.data()),
+        static_cast<int>(compressedSize),
+        static_cast<int>(uncompressedSize)
+    );
+
+    if (decompressedSize < 0 || static_cast<uint32_t>(decompressedSize) != uncompressedSize) {
+        std::cerr << "LZ4 decompression failed: " << atlasPath << std::endl;
+        return false;
+    }
 
     // Load metrics JSON
     std::ifstream file(metricsPath);

@@ -399,7 +399,7 @@ Result<Font*> FontManager::getFont(const std::string& family, Font::Style style,
     std::string cachePath = getCachePath(cacheName, fontSize, fontData.data(), fontData.size());
 
     // Check disk cache
-    spdlog::info("FontManager: looking for disk cache: {}.png", cachePath);
+    spdlog::info("FontManager: looking for disk cache: {}.lz4", cachePath);
     auto diskResult = loadFromDiskCache(cachePath);
     if (diskResult) {
         spdlog::info("FontManager: DISK CACHE HIT for font '{}' {}", family, styleName);
@@ -523,7 +523,7 @@ Result<Font*> FontManager::getFont(const unsigned char* data, size_t dataLen,
 
     // Check disk cache
     std::string cachePath = getCachePath(fontName, fontSize, data, dataLen);
-    spdlog::info("FontManager: looking for disk cache: {}.png", cachePath);
+    spdlog::info("FontManager: looking for disk cache: {}.lz4", cachePath);
     auto diskResult = loadFromDiskCache(cachePath);
     if (diskResult) {
         spdlog::info("FontManager: DISK CACHE HIT for font '{}'", fontName);
@@ -687,7 +687,7 @@ std::string FontManager::getCachePath(const std::string& fontName, float fontSiz
 
 Result<std::unique_ptr<Font>> FontManager::loadFromDiskCache(const std::string& cachePath) noexcept {
 #if !YETTY_USE_PREBUILT_ATLAS
-    std::string atlasPath = cachePath + ".png";
+    std::string atlasPath = cachePath + ".lz4";
     std::string metricsPath = cachePath + ".json";
 
     if (!fs::exists(atlasPath) || !fs::exists(metricsPath)) {
@@ -733,7 +733,7 @@ bool FontManager::saveToDiskCache(const Font* font, const std::string& cachePath
         spdlog::info("FontManager: created cache directory: {}", cacheDir);
     }
 
-    std::string atlasPath = cachePath + ".png";
+    std::string atlasPath = cachePath + ".lz4";
     std::string metricsPath = cachePath + ".json";
 
     if (!font->saveAtlas(atlasPath, metricsPath)) {
