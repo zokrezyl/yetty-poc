@@ -260,6 +260,9 @@ target_include_directories(mupdf PRIVATE
 
 # Compile definitions
 target_compile_definitions(mupdf PRIVATE
+    # zlib needs unistd.h on POSIX systems for read/write/close/lseek
+    $<$<NOT:$<PLATFORM_ID:Windows>>:Z_HAVE_UNISTD_H>
+
     # Disable features we don't need (reduces font binary size)
     TOFU
     TOFU_CJK
