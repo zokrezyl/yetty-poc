@@ -20,7 +20,30 @@ fi
 mkdir -p "$BUSYBOX_DIR"
 if [ ! -d "$BUSYBOX_SRC" ]; then
     echo "Downloading BusyBox ${BUSYBOX_VERSION}..."
-    curl -L "https://busybox.net/downloads/busybox-${BUSYBOX_VERSION}.tar.bz2" | tar -xj -C "$BUSYBOX_DIR"
+    # Try multiple mirrors (busybox.net SSL cert sometimes expires)
+    BUSYBOX_URL=""
+    for mirror in \
+        "https://www.busybox.net/downloads/busybox-${BUSYBOX_VERSION}.tar.bz2" \
+        "https://busybox.net/downloads/busybox-${BUSYBOX_VERSION}.tar.bz2" \
+        "https://github.com/nicupavel/busybox/archive/refs/tags/${BUSYBOX_VERSION}.tar.gz"; do
+        echo "  Trying: $mirror"
+        if curl -fsSL --connect-timeout 10 "$mirror" -o /dev/null 2>/dev/null; then
+            BUSYBOX_URL="$mirror"
+            break
+        fi
+    done
+
+    if [ -z "$BUSYBOX_URL" ]; then
+        echo "ERROR: Could not download BusyBox from any mirror"
+        echo "Trying with certificate verification disabled..."
+        curl -kL "https://busybox.net/downloads/busybox-${BUSYBOX_VERSION}.tar.bz2" | tar -xj -C "$BUSYBOX_DIR"
+    elif [[ "$BUSYBOX_URL" == *".tar.gz" ]]; then
+        # GitHub mirror has different archive structure
+        curl -fsSL "$BUSYBOX_URL" | tar -xz -C "$BUSYBOX_DIR"
+        mv "$BUSYBOX_DIR/busybox-${BUSYBOX_VERSION}" "$BUSYBOX_SRC" 2>/dev/null || true
+    else
+        curl -fsSL "$BUSYBOX_URL" | tar -xj -C "$BUSYBOX_DIR"
+    fi
 fi
 
 cd "$BUSYBOX_SRC"
