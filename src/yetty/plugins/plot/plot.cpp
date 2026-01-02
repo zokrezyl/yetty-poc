@@ -1,6 +1,7 @@
 #include "plot.h"
-#include "../../renderer/webgpu-context.h"
-#include "../../renderer/wgpu-compat.h"
+#include <yetty/yetty.h>
+#include <yetty/webgpu-context.h>
+#include <yetty/wgpu-compat.h>
 #include <spdlog/spdlog.h>
 #include <cstring>
 #include <cmath>
@@ -34,18 +35,19 @@ static const float DEFAULT_COLORS[16 * 4] = {
 // PlotPlugin
 //-----------------------------------------------------------------------------
 
-PlotPlugin::PlotPlugin() = default;
-
 PlotPlugin::~PlotPlugin() {
     (void)dispose();
 }
 
-Result<PluginPtr> PlotPlugin::create() {
-    return Ok<PluginPtr>(std::make_shared<PlotPlugin>());
+Result<PluginPtr> PlotPlugin::create(YettyPtr engine) noexcept {
+    auto p = PluginPtr(new PlotPlugin(std::move(engine)));
+    if (auto res = static_cast<PlotPlugin*>(p.get())->init(); !res) {
+        return Err<PluginPtr>("Failed to init PlotPlugin", res);
+    }
+    return Ok(p);
 }
 
-Result<void> PlotPlugin::init(WebGPUContext* ctx) {
-    (void)ctx;
+Result<void> PlotPlugin::init() noexcept {
     _initialized = true;
     return Ok();
 }
@@ -67,12 +69,13 @@ Result<PluginLayerPtr> PlotPlugin::createLayer(const std::string& payload) {
     return Ok<PluginLayerPtr>(layer);
 }
 
-Result<void> PlotPlugin::renderAll(WebGPUContext& ctx,
-                                    WGPUTextureView targetView, WGPUTextureFormat targetFormat,
+Result<void> PlotPlugin::renderAll(WGPUTextureView targetView, WGPUTextureFormat targetFormat,
                                     uint32_t screenWidth, uint32_t screenHeight,
                                     float cellWidth, float cellHeight,
                                     int scrollOffset, uint32_t termRows,
                                     bool isAltScreen) {
+    if (!engine_) return Err<void>("PlotPlugin::renderAll: no engine");
+
     ScreenType currentScreen = isAltScreen ? ScreenType::Alternate : ScreenType::Main;
     for (auto& layerBase : _layers) {
         if (!layerBase->isVisible()) continue;
@@ -96,7 +99,7 @@ Result<void> PlotPlugin::renderAll(WebGPUContext& ctx,
             }
         }
 
-        if (auto res = layer->render(ctx, targetView, targetFormat,
+        if (auto res = layer->render(*engine_->context(), targetView, targetFormat,
                                       screenWidth, screenHeight,
                                       pixelX, pixelY, pixelW, pixelH); !res) {
             return Err<void>("Failed to render Plot layer", res);
@@ -719,6 +722,6 @@ fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
 } // namespace yetty
 
 extern "C" {
-    const char* plot_plugin_name() { return "plot"; }
-    yetty::Result<yetty::PluginPtr> plot_plugin_create() { return yetty::PlotPlugin::create(); }
+    const char* name() { return "plot"; }
+    yetty::Result<yetty::PluginPtr> create(yetty::YettyPtr engine) { return yetty::PlotPlugin::create(std::move(engine)); }
 }

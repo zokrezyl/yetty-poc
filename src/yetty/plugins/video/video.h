@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../../plugin.h"
+#include <yetty/plugin.h>
 #include <webgpu/webgpu.h>
 #include <memory>
 #include <vector>
@@ -25,20 +25,17 @@ class VideoLayer;
 //-----------------------------------------------------------------------------
 class VideoPlugin : public Plugin {
 public:
-    VideoPlugin();
     ~VideoPlugin() override;
 
-    static Result<PluginPtr> create();
+    static Result<PluginPtr> create(YettyPtr engine) noexcept;
 
     const char* pluginName() const override { return "video"; }
 
-    Result<void> init(WebGPUContext* ctx) override;
     Result<void> dispose() override;
 
     Result<PluginLayerPtr> createLayer(const std::string& payload) override;
 
-    Result<void> renderAll(WebGPUContext& ctx,
-                           WGPUTextureView targetView, WGPUTextureFormat targetFormat,
+    Result<void> renderAll(WGPUTextureView targetView, WGPUTextureFormat targetFormat,
                            uint32_t screenWidth, uint32_t screenHeight,
                            float cellWidth, float cellHeight,
                            int scrollOffset, uint32_t termRows,
@@ -46,6 +43,10 @@ public:
 
     // Check if data looks like a video format
     static bool isVideoFormat(const std::string& data);
+
+private:
+    explicit VideoPlugin(YettyPtr engine) noexcept : Plugin(std::move(engine)) {}
+    Result<void> init() noexcept override;
 };
 
 //-----------------------------------------------------------------------------
@@ -132,6 +133,6 @@ using Video = VideoPlugin;
 } // namespace yetty
 
 extern "C" {
-    const char* video_plugin_name();
-    yetty::Result<yetty::PluginPtr> video_plugin_create();
+    const char* name();
+    yetty::Result<yetty::PluginPtr> create(yetty::YettyPtr engine);
 }

@@ -1,5 +1,6 @@
 #include "ymery.h"
-#include "../../renderer/webgpu-context.h"
+#include <yetty/yetty.h>
+#include <yetty/webgpu-context.h>
 
 #include <ymery/embedded.hpp>
 #include <imgui.h>
@@ -103,24 +104,26 @@ static ImGuiKey glfw_key_to_imgui_key(int key) {
 // YmeryPlugin
 //-----------------------------------------------------------------------------
 
-YmeryPlugin::YmeryPlugin() = default;
-
 YmeryPlugin::~YmeryPlugin() {
     (void)dispose();
 }
 
-Result<PluginPtr> YmeryPlugin::create() {
-    return std::make_shared<YmeryPlugin>();
+Result<PluginPtr> YmeryPlugin::create(YettyPtr engine) noexcept {
+    auto p = PluginPtr(new YmeryPlugin(std::move(engine)));
+    if (auto res = static_cast<YmeryPlugin*>(p.get())->init(); !res) {
+        return Err<PluginPtr>("Failed to init YmeryPlugin", res);
+    }
+    return Ok(p);
 }
 
-Result<void> YmeryPlugin::init(WebGPUContext* ctx) {
-    if (!ctx) {
-        return Err<void>("YmeryPlugin::init: WebGPUContext required");
+Result<void> YmeryPlugin::init() noexcept {
+    if (!engine_) {
+        return Err<void>("YmeryPlugin::init: Yetty engine required");
     }
 
-    _device = ctx->getDevice();
-    _queue = ctx->getQueue();
-    _format = ctx->getSurfaceFormat();
+    _device = engine_->context()->getDevice();
+    _queue = engine_->context()->getQueue();
+    _format = engine_->context()->getSurfaceFormat();
 
     _initialized = true;
     spdlog::info("YmeryPlugin initialized");
@@ -211,13 +214,13 @@ Result<void> YmeryPlugin::initImGui(uint32_t screenWidth, uint32_t screenHeight)
     return Ok();
 }
 
-Result<void> YmeryPlugin::renderAll(WebGPUContext& ctx,
-                                     WGPUTextureView targetView, WGPUTextureFormat targetFormat,
+Result<void> YmeryPlugin::renderAll(WGPUTextureView targetView, WGPUTextureFormat targetFormat,
                                      uint32_t screenWidth, uint32_t screenHeight,
                                      float cellWidth, float cellHeight,
                                      int scrollOffset, uint32_t termRows,
                                      bool isAltScreen) {
     (void)targetFormat;
+    if (!engine_) return Err<void>("YmeryPlugin::renderAll: no engine");
 
     if (_layers.empty()) return Ok();
 
@@ -514,6 +517,6 @@ void YmeryLayer::setFocus(bool f) {
 } // namespace yetty
 
 extern "C" {
-    const char* ymery_plugin_name() { return "ymery"; }
-    yetty::Result<yetty::PluginPtr> ymery_plugin_create() { return yetty::YmeryPlugin::create(); }
+    const char* name() { return "ymery"; }
+    yetty::Result<yetty::PluginPtr> create(yetty::YettyPtr engine) { return yetty::YmeryPlugin::create(std::move(engine)); }
 }

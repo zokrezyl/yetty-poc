@@ -4,7 +4,7 @@ import click
 from pathlib import Path
 
 
-@click.command()
+@click.command(name='sdf-primitives')
 @click.option('--file', '-f', type=click.Path(exists=True), help='YAML file with primitives')
 @click.option('--demo', '-d', type=click.Choice(['basic', 'shapes', 'widget']),
               help='Run a built-in demo')
@@ -22,9 +22,9 @@ def sdf_primitives(ctx, file, demo):
            (including all path commands: M, L, H, V, C, S, Q, T, A, Z)
 
     Examples:
-        yetty-client run sdf_primitives -f shapes.yaml -w 80 -H 40
-        yetty-client run sdf_primitives -f image.svg -w 80 -H 60
-        yetty-client run sdf_primitives --demo basic -w 60 -H 30
+        yetty-client run sdf-primitives -f shapes.yaml -w 80 -H 40
+        yetty-client run sdf-primitives -f image.svg -w 80 -H 60
+        yetty-client run sdf-primitives --demo basic -w 60 -H 30
     """
     ctx.ensure_object(dict)
 
@@ -40,7 +40,6 @@ def sdf_primitives(ctx, file, demo):
     ctx.obj['plugin_name'] = 'sdf-primitives'
 
 
-# Alias for CLI (allows both sdf_primitives and sdf-primitives)
 command = sdf_primitives
 
 

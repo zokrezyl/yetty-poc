@@ -7,7 +7,7 @@
 // without GPU dependencies.
 //=============================================================================
 
-#include "yetty/plugin.h"
+#include <yetty/plugin.h>
 #include <string>
 #include <vector>
 
@@ -89,21 +89,17 @@ private:
 //-----------------------------------------------------------------------------
 class MockPlugin : public Plugin {
 public:
-    MockPlugin() = default;
     ~MockPlugin() override = default;
 
-    static Result<PluginPtr> create() {
-        return Ok<PluginPtr>(std::make_shared<MockPlugin>());
+    static Result<PluginPtr> create(YettyPtr engine) noexcept {
+        auto p = PluginPtr(new MockPlugin(std::move(engine)));
+        if (auto res = static_cast<MockPlugin*>(p.get())->init(); !res) {
+            return Err<PluginPtr>("Failed to init MockPlugin", res);
+        }
+        return Ok(p);
     }
 
     const char* pluginName() const override { return "mock"; }
-
-    Result<void> init(WebGPUContext* ctx) override {
-        (void)ctx;
-        _initialized = true;
-        _init_count++;
-        return Ok();
-    }
 
     Result<PluginLayerPtr> createLayer(const std::string& payload) override {
         auto layer = std::make_shared<MockPluginLayer>();
@@ -114,13 +110,12 @@ public:
         return Ok<PluginLayerPtr>(layer);
     }
 
-    Result<void> renderAll(WebGPUContext& ctx,
-                           WGPUTextureView targetView, WGPUTextureFormat targetFormat,
+    Result<void> renderAll(WGPUTextureView targetView, WGPUTextureFormat targetFormat,
                            uint32_t screenWidth, uint32_t screenHeight,
                            float cellWidth, float cellHeight,
                            int scrollOffset, uint32_t termRows,
                            bool isAltScreen = false) override {
-        (void)ctx; (void)targetView; (void)targetFormat;
+        (void)targetView; (void)targetFormat;
         (void)screenWidth; (void)screenHeight;
         (void)cellWidth; (void)cellHeight;
         (void)scrollOffset; (void)termRows; (void)isAltScreen;
@@ -136,6 +131,13 @@ public:
     }
 
 private:
+    explicit MockPlugin(YettyPtr engine) noexcept : Plugin(std::move(engine)) {}
+    Result<void> init() noexcept override {
+        _initialized = true;
+        _init_count++;
+        return Ok();
+    }
+
     int _init_count = 0;
     int _render_count = 0;
     std::vector<std::shared_ptr<MockPluginLayer>> _created_layers;

@@ -3,7 +3,7 @@
 import click
 
 
-@click.command()
+@click.command(name='musical-score')
 @click.option('--staves', '-s', type=int, default=4, help='Number of staves (1-16)')
 @click.pass_context
 def musical_score(ctx, staves):

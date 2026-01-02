@@ -6,10 +6,16 @@
 option(YETTY_COVERAGE "Enable code coverage" OFF)
 
 # Boost UT - Modern C++20 unit testing framework
+# Note: v2.3+ requires CMake 4.0, stick with v2.1.0
+# Suppress CMP0175 warning from ut's add_custom_command usage
+if(POLICY CMP0175)
+    cmake_policy(SET CMP0175 OLD)
+endif()
 CPMAddPackage(
     NAME ut
     GITHUB_REPOSITORY boost-ext/ut
     GIT_TAG v2.1.0
+    OPTIONS "BUILD_BENCHMARKS OFF" "BUILD_EXAMPLES OFF"
 )
 
 #-----------------------------------------------------------------------------
@@ -22,6 +28,7 @@ add_library(yetty_test_lib STATIC
 target_include_directories(yetty_test_lib PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/include
 )
 
 target_link_libraries(yetty_test_lib PUBLIC

@@ -1,0 +1,13 @@
+# Rich Text Demo
+# Demonstrates styled text rendering with the rich-text plugin
+
+spans:
+  - text: "This is a long paragraph that demonstrates word wrapping with DejaVu Sans font. When the text reaches the maximum width, it automatically wraps to the next line. gpqyj descenders should align properly. (DejaVu Sans)"
+    x: 10
+    y: 20
+    size: 20
+    wrap: true
+    max-width: 500
+    line-height: 28
+    color: [0.9, 0.9, 0.9, 1.0]
+    font-name: DejaVu Sans

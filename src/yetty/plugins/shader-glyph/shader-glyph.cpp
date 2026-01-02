@@ -1,6 +1,6 @@
 #include "shader-glyph.h"
-#include "../../renderer/webgpu-context.h"
-#include "../../renderer/wgpu-compat.h"
+#include <yetty/webgpu-context.h>
+#include <yetty/wgpu-compat.h>
 #include <yaml-cpp/yaml.h>
 #include <spdlog/spdlog.h>
 #include <fstream>
@@ -93,6 +93,7 @@ Result<void> ShaderGlyphPlugin::init(WebGPUContext* ctx) {
         return Err<void>("ShaderGlyphPlugin::init: null context");
     }
 
+    ctx_ = ctx;  // Store context
     _device = ctx->getDevice();
     _targetFormat = ctx->getSurfaceFormat();
 
@@ -377,13 +378,12 @@ Result<CustomGlyphLayerPtr> ShaderGlyphPlugin::createLayer(uint32_t codepoint) {
     return Ok<CustomGlyphLayerPtr>(layer);
 }
 
-Result<void> ShaderGlyphPlugin::renderAll(WebGPUContext& ctx,
-                                           WGPUTextureView targetView,
+Result<void> ShaderGlyphPlugin::renderAll(WGPUTextureView targetView,
                                            WGPUTextureFormat targetFormat,
                                            uint32_t screenWidth, uint32_t screenHeight,
                                            float cellWidth, float cellHeight,
                                            int scrollOffset) {
-    if (!_initialized) {
+    if (!_initialized || !ctx_) {
         return Ok();
     }
 
@@ -401,7 +401,7 @@ Result<void> ShaderGlyphPlugin::renderAll(WebGPUContext& ctx,
 
         if (pixelY + pixelH <= 0 || pixelY >= screenHeight) continue;
 
-        if (auto res = renderLayer(ctx, targetView, targetFormat,
+        if (auto res = renderLayer(*ctx_, targetView, targetFormat,
                                     screenWidth, screenHeight,
                                     pixelX, pixelY, pixelW, pixelH,
                                     layer->getTime(), layer->getCodepoint()); !res) {

@@ -1,6 +1,7 @@
 #include "video.h"
-#include "../../renderer/webgpu-context.h"
-#include "../../renderer/wgpu-compat.h"
+#include <yetty/yetty.h>
+#include <yetty/webgpu-context.h>
+#include <yetty/wgpu-compat.h>
 #include <iostream>
 #include <cstring>
 
@@ -122,15 +123,17 @@ bool VideoPlugin::isVideoFormat(const std::string& data) {
 // VideoPlugin
 //-----------------------------------------------------------------------------
 
-VideoPlugin::VideoPlugin() = default;
 VideoPlugin::~VideoPlugin() { (void)dispose(); }
 
-Result<PluginPtr> VideoPlugin::create() {
-    return Ok<PluginPtr>(std::make_shared<VideoPlugin>());
+Result<PluginPtr> VideoPlugin::create(YettyPtr engine) noexcept {
+    auto p = PluginPtr(new VideoPlugin(std::move(engine)));
+    if (auto res = static_cast<VideoPlugin*>(p.get())->init(); !res) {
+        return Err<PluginPtr>("Failed to init VideoPlugin", res);
+    }
+    return Ok(p);
 }
 
-Result<void> VideoPlugin::init(WebGPUContext* ctx) {
-    (void)ctx;
+Result<void> VideoPlugin::init() noexcept {
     _initialized = true;
     return Ok();
 }
@@ -152,12 +155,13 @@ Result<PluginLayerPtr> VideoPlugin::createLayer(const std::string& payload) {
     return Ok<PluginLayerPtr>(layer);
 }
 
-Result<void> VideoPlugin::renderAll(WebGPUContext& ctx,
-                                     WGPUTextureView targetView, WGPUTextureFormat targetFormat,
+Result<void> VideoPlugin::renderAll(WGPUTextureView targetView, WGPUTextureFormat targetFormat,
                                      uint32_t screenWidth, uint32_t screenHeight,
                                      float cellWidth, float cellHeight,
                                      int scrollOffset, uint32_t termRows,
                                      bool isAltScreen) {
+    if (!engine_) return Err<void>("VideoPlugin::renderAll: no engine");
+
     ScreenType currentScreen = isAltScreen ? ScreenType::Alternate : ScreenType::Main;
     for (auto& layerBase : _layers) {
         if (!layerBase->isVisible()) continue;
@@ -181,7 +185,7 @@ Result<void> VideoPlugin::renderAll(WebGPUContext& ctx,
             }
         }
 
-        if (auto res = layer->render(ctx, targetView, targetFormat,
+        if (auto res = layer->render(*engine_->context(), targetView, targetFormat,
                                       screenWidth, screenHeight,
                                       pixelX, pixelY, pixelW, pixelH); !res) {
             return Err<void>("Failed to render VideoLayer", res);
@@ -743,6 +747,6 @@ struct VertexOutput { @builtin(position) position: vec4<f32>, @location(0) uv: v
 } // namespace yetty
 
 extern "C" {
-    const char* video_plugin_name() { return "video"; }
-    yetty::Result<yetty::PluginPtr> video_plugin_create() { return yetty::VideoPlugin::create(); }
+    const char* name() { return "video"; }
+    yetty::Result<yetty::PluginPtr> create(yetty::YettyPtr engine) { return yetty::VideoPlugin::create(std::move(engine)); }
 }

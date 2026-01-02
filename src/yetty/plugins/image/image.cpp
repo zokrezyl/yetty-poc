@@ -1,6 +1,7 @@
 #include "image.h"
-#include "../../renderer/webgpu-context.h"
-#include "../../renderer/wgpu-compat.h"
+#include <yetty/yetty.h>
+#include <yetty/webgpu-context.h>
+#include <yetty/wgpu-compat.h>
 #include <iostream>
 #include <cstring>
 
@@ -12,15 +13,17 @@ namespace yetty {
 // ImagePlugin
 //-----------------------------------------------------------------------------
 
-ImagePlugin::ImagePlugin() = default;
 ImagePlugin::~ImagePlugin() { (void)dispose(); }
 
-Result<PluginPtr> ImagePlugin::create() {
-    return Ok<PluginPtr>(std::make_shared<ImagePlugin>());
+Result<PluginPtr> ImagePlugin::create(YettyPtr engine) noexcept {
+    auto p = PluginPtr(new ImagePlugin(std::move(engine)));
+    if (auto res = static_cast<ImagePlugin*>(p.get())->init(); !res) {
+        return Err<PluginPtr>("Failed to init ImagePlugin", res);
+    }
+    return Ok(p);
 }
 
-Result<void> ImagePlugin::init(WebGPUContext* ctx) {
-    (void)ctx;
+Result<void> ImagePlugin::init() noexcept {
     _initialized = true;
     return Ok();
 }
@@ -42,12 +45,13 @@ Result<PluginLayerPtr> ImagePlugin::createLayer(const std::string& payload) {
     return Ok<PluginLayerPtr>(layer);
 }
 
-Result<void> ImagePlugin::renderAll(WebGPUContext& ctx,
-                                     WGPUTextureView targetView, WGPUTextureFormat targetFormat,
+Result<void> ImagePlugin::renderAll(WGPUTextureView targetView, WGPUTextureFormat targetFormat,
                                      uint32_t screenWidth, uint32_t screenHeight,
                                      float cellWidth, float cellHeight,
                                      int scrollOffset, uint32_t termRows,
                                      bool isAltScreen) {
+    if (!engine_) return Err<void>("ImagePlugin::renderAll: no engine");
+
     ScreenType currentScreen = isAltScreen ? ScreenType::Alternate : ScreenType::Main;
     for (auto& layerBase : _layers) {
         if (!layerBase->isVisible()) continue;
@@ -71,7 +75,7 @@ Result<void> ImagePlugin::renderAll(WebGPUContext& ctx,
             }
         }
 
-        if (auto res = layer->render(ctx, targetView, targetFormat,
+        if (auto res = layer->render(*engine_->context(), targetView, targetFormat,
                                       screenWidth, screenHeight,
                                       pixelX, pixelY, pixelW, pixelH); !res) {
             return Err<void>("Failed to render ImageLayer", res);
@@ -345,6 +349,8 @@ struct VertexOutput { @builtin(position) position: vec4<f32>, @location(0) uv: v
 } // namespace yetty
 
 extern "C" {
-    const char* image_plugin_name() { return "image"; }
-    yetty::Result<yetty::PluginPtr> image_plugin_create() { return yetty::ImagePlugin::create(); }
+    const char* name() { return "image"; }
+    yetty::Result<yetty::PluginPtr> create(yetty::YettyPtr engine) {
+        return yetty::ImagePlugin::create(std::move(engine));
+    }
 }

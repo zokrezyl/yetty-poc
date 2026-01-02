@@ -1,6 +1,7 @@
 #include "piano.h"
-#include "../../renderer/webgpu-context.h"
-#include "../../renderer/wgpu-compat.h"
+#include <yetty/yetty.h>
+#include <yetty/webgpu-context.h>
+#include <yetty/wgpu-compat.h>
 #include <spdlog/spdlog.h>
 #include <cstring>
 #include <cmath>
@@ -12,18 +13,19 @@ namespace yetty {
 // PianoPlugin
 //-----------------------------------------------------------------------------
 
-PianoPlugin::PianoPlugin() = default;
-
 PianoPlugin::~PianoPlugin() {
     (void)dispose();
 }
 
-Result<PluginPtr> PianoPlugin::create() {
-    return Ok<PluginPtr>(std::make_shared<PianoPlugin>());
+Result<PluginPtr> PianoPlugin::create(YettyPtr engine) noexcept {
+    auto p = PluginPtr(new PianoPlugin(std::move(engine)));
+    if (auto res = static_cast<PianoPlugin*>(p.get())->init(); !res) {
+        return Err<PluginPtr>("Failed to init PianoPlugin", res);
+    }
+    return Ok(p);
 }
 
-Result<void> PianoPlugin::init(WebGPUContext* ctx) {
-    (void)ctx;
+Result<void> PianoPlugin::init() noexcept {
     _initialized = true;
     return Ok();
 }
@@ -45,12 +47,13 @@ Result<PluginLayerPtr> PianoPlugin::createLayer(const std::string& payload) {
     return Ok<PluginLayerPtr>(layer);
 }
 
-Result<void> PianoPlugin::renderAll(WebGPUContext& ctx,
-                                     WGPUTextureView targetView, WGPUTextureFormat targetFormat,
+Result<void> PianoPlugin::renderAll(WGPUTextureView targetView, WGPUTextureFormat targetFormat,
                                      uint32_t screenWidth, uint32_t screenHeight,
                                      float cellWidth, float cellHeight,
                                      int scrollOffset, uint32_t termRows,
                                      bool isAltScreen) {
+    if (!engine_) return Err<void>("PianoPlugin::renderAll: no engine");
+
     ScreenType currentScreen = isAltScreen ? ScreenType::Alternate : ScreenType::Main;
     for (auto& layerBase : _layers) {
         if (!layerBase->isVisible()) continue;
@@ -74,7 +77,7 @@ Result<void> PianoPlugin::renderAll(WebGPUContext& ctx,
             }
         }
 
-        if (auto res = layer->render(ctx, targetView, targetFormat,
+        if (auto res = layer->render(*engine_->context(), targetView, targetFormat,
                                       screenWidth, screenHeight,
                                       pixelX, pixelY, pixelW, pixelH); !res) {
             return Err<void>("Failed to render Piano layer", res);
@@ -682,6 +685,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 } // namespace yetty
 
 extern "C" {
-    const char* piano_plugin_name() { return "piano"; }
-    yetty::Result<yetty::PluginPtr> piano_plugin_create() { return yetty::PianoPlugin::create(); }
+    const char* name() { return "piano"; }
+    yetty::Result<yetty::PluginPtr> create(yetty::YettyPtr engine) { return yetty::PianoPlugin::create(std::move(engine)); }
 }

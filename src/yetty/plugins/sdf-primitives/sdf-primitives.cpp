@@ -1,6 +1,7 @@
 #include "sdf-primitives.h"
-#include "../../renderer/webgpu-context.h"
-#include "../../renderer/wgpu-compat.h"
+#include <yetty/yetty.h>
+#include <yetty/webgpu-context.h>
+#include <yetty/wgpu-compat.h>
 #include <yaml-cpp/yaml.h>
 #include <spdlog/spdlog.h>
 #include <cstring>
@@ -423,18 +424,19 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 // SDFPrimitivesPlugin
 //-----------------------------------------------------------------------------
 
-SDFPrimitivesPlugin::SDFPrimitivesPlugin() = default;
-
 SDFPrimitivesPlugin::~SDFPrimitivesPlugin() {
     (void)dispose();
 }
 
-Result<PluginPtr> SDFPrimitivesPlugin::create() {
-    return Ok<PluginPtr>(std::make_shared<SDFPrimitivesPlugin>());
+Result<PluginPtr> SDFPrimitivesPlugin::create(YettyPtr engine) noexcept {
+    auto p = PluginPtr(new SDFPrimitivesPlugin(std::move(engine)));
+    if (auto res = static_cast<SDFPrimitivesPlugin*>(p.get())->init(); !res) {
+        return Err<PluginPtr>("Failed to init SDFPrimitivesPlugin", res);
+    }
+    return Ok(p);
 }
 
-Result<void> SDFPrimitivesPlugin::init(WebGPUContext* ctx) {
-    (void)ctx;
+Result<void> SDFPrimitivesPlugin::init() noexcept {
     _initialized = true;
     return Ok();
 }
@@ -456,12 +458,13 @@ Result<PluginLayerPtr> SDFPrimitivesPlugin::createLayer(const std::string& paylo
     return Ok<PluginLayerPtr>(layer);
 }
 
-Result<void> SDFPrimitivesPlugin::renderAll(WebGPUContext& ctx,
-                                     WGPUTextureView targetView, WGPUTextureFormat targetFormat,
+Result<void> SDFPrimitivesPlugin::renderAll(WGPUTextureView targetView, WGPUTextureFormat targetFormat,
                                      uint32_t screenWidth, uint32_t screenHeight,
                                      float cellWidth, float cellHeight,
                                      int scrollOffset, uint32_t termRows,
                                      bool isAltScreen) {
+    if (!engine_) return Err<void>("SDFPrimitivesPlugin::renderAll: no engine");
+
     ScreenType currentScreen = isAltScreen ? ScreenType::Alternate : ScreenType::Main;
     for (auto& layerBase : _layers) {
         if (!layerBase->isVisible()) continue;
@@ -485,7 +488,7 @@ Result<void> SDFPrimitivesPlugin::renderAll(WebGPUContext& ctx,
             }
         }
 
-        if (auto res = layer->render(ctx, targetView, targetFormat,
+        if (auto res = layer->render(*engine_->context(), targetView, targetFormat,
                                       screenWidth, screenHeight,
                                       pixelX, pixelY, pixelW, pixelH); !res) {
             return Err<void>("Failed to render SDFPrimitives layer", res);
@@ -1783,6 +1786,6 @@ Result<void> SDFPrimitivesLayer::createPipeline(WebGPUContext& ctx, WGPUTextureF
 } // namespace yetty
 
 extern "C" {
-    const char* sdf_primitives_plugin_name() { return "sdf-primitives"; }
-    yetty::Result<yetty::PluginPtr> sdf_primitives_plugin_create() { return yetty::SDFPrimitivesPlugin::create(); }
+    const char* name() { return "sdf-primitives"; }
+    yetty::Result<yetty::PluginPtr> create(yetty::YettyPtr engine) { return yetty::SDFPrimitivesPlugin::create(std::move(engine)); }
 }

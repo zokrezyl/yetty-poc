@@ -1,10 +1,11 @@
 #include "markdown.h"
-#include "../../renderer/webgpu-context.h"
-#include "../../renderer/wgpu-compat.h"
+#include <yetty/yetty.h>
+#include <yetty/webgpu-context.h>
+#include <yetty/font-manager.h>
+#include <spdlog/spdlog.h>
 #include <fstream>
 #include <sstream>
 #include <iostream>
-#include <cstring>
 #include <algorithm>
 
 namespace yetty {
@@ -13,15 +14,21 @@ namespace yetty {
 // MarkdownPlugin
 //-----------------------------------------------------------------------------
 
-MarkdownPlugin::MarkdownPlugin() = default;
 MarkdownPlugin::~MarkdownPlugin() { (void)dispose(); }
 
-Result<PluginPtr> MarkdownPlugin::create() {
-    return Ok<PluginPtr>(std::make_shared<MarkdownPlugin>());
+Result<PluginPtr> MarkdownPlugin::create(YettyPtr engine) noexcept {
+    auto p = PluginPtr(new MarkdownPlugin(std::move(engine)));
+    if (auto res = static_cast<MarkdownPlugin*>(p.get())->init(); !res) {
+        return Err<PluginPtr>("Failed to init MarkdownPlugin", res);
+    }
+    return Ok(p);
 }
 
-Result<void> MarkdownPlugin::init(WebGPUContext* ctx) {
-    (void)ctx;
+Result<void> MarkdownPlugin::init() noexcept {
+    // Verify engine has a FontManager
+    if (!engine_ || !engine_->fontManager()) {
+        return Err<void>("MarkdownPlugin: engine has no FontManager");
+    }
     _initialized = true;
     return Ok();
 }
@@ -34,8 +41,12 @@ Result<void> MarkdownPlugin::dispose() {
     return Ok();
 }
 
+FontManager* MarkdownPlugin::getFontManager() {
+    return engine_ ? engine_->fontManager().get() : nullptr;
+}
+
 Result<PluginLayerPtr> MarkdownPlugin::createLayer(const std::string& payload) {
-    auto layer = std::make_shared<MarkdownLayer>();
+    auto layer = std::make_shared<MarkdownLayer>(this);
     auto result = layer->init(payload);
     if (!result) {
         return Err<PluginLayerPtr>("Failed to init MarkdownLayer", result);
@@ -43,12 +54,13 @@ Result<PluginLayerPtr> MarkdownPlugin::createLayer(const std::string& payload) {
     return Ok<PluginLayerPtr>(layer);
 }
 
-Result<void> MarkdownPlugin::renderAll(WebGPUContext& ctx,
-                                        WGPUTextureView targetView, WGPUTextureFormat targetFormat,
+Result<void> MarkdownPlugin::renderAll(WGPUTextureView targetView, WGPUTextureFormat targetFormat,
                                         uint32_t screenWidth, uint32_t screenHeight,
                                         float cellWidth, float cellHeight,
                                         int scrollOffset, uint32_t termRows,
                                         bool isAltScreen) {
+    if (!engine_) return Err<void>("MarkdownPlugin::renderAll: no engine");
+
     ScreenType currentScreen = isAltScreen ? ScreenType::Alternate : ScreenType::Main;
     for (auto& layerBase : _layers) {
         if (!layerBase->isVisible()) continue;
@@ -72,7 +84,7 @@ Result<void> MarkdownPlugin::renderAll(WebGPUContext& ctx,
             }
         }
 
-        if (auto res = layer->render(ctx, targetView, targetFormat,
+        if (auto res = layer->render(*engine_->context(), targetView, targetFormat,
                                       screenWidth, screenHeight,
                                       pixelX, pixelY, pixelW, pixelH); !res) {
             return Err<void>("Failed to render MarkdownLayer", res);
@@ -85,7 +97,8 @@ Result<void> MarkdownPlugin::renderAll(WebGPUContext& ctx,
 // MarkdownLayer
 //-----------------------------------------------------------------------------
 
-MarkdownLayer::MarkdownLayer() = default;
+MarkdownLayer::MarkdownLayer(MarkdownPlugin* plugin)
+    : plugin_(plugin) {}
 
 MarkdownLayer::~MarkdownLayer() { (void)dispose(); }
 
@@ -114,18 +127,17 @@ Result<void> MarkdownLayer::init(const std::string& payload) {
     }
 
     parseMarkdown(content);
-    std::cout << "MarkdownLayer: parsed " << lines_.size() << " lines" << std::endl;
+    std::cout << "MarkdownLayer: parsed " << parsedLines_.size() << " lines" << std::endl;
     return Ok();
 }
 
 Result<void> MarkdownLayer::dispose() {
-    if (bindGroup_) { wgpuBindGroupRelease(bindGroup_); bindGroup_ = nullptr; }
-    if (bindGroupLayout_) { wgpuBindGroupLayoutRelease(bindGroupLayout_); bindGroupLayout_ = nullptr; }
-    if (pipeline_) { wgpuRenderPipelineRelease(pipeline_); pipeline_ = nullptr; }
-    if (uniformBuffer_) { wgpuBufferRelease(uniformBuffer_); uniformBuffer_ = nullptr; }
-    if (glyphBuffer_) { wgpuBufferRelease(glyphBuffer_); glyphBuffer_ = nullptr; }
-    if (sampler_) { wgpuSamplerRelease(sampler_); sampler_ = nullptr; }
-    gpuInitialized_ = false;
+    if (richText_) {
+        richText_->dispose();
+        richText_.reset();
+    }
+    initialized_ = false;
+    failed_ = false;
     return Ok();
 }
 
@@ -134,13 +146,13 @@ Result<void> MarkdownLayer::dispose() {
 //-----------------------------------------------------------------------------
 
 void MarkdownLayer::parseMarkdown(const std::string& content) {
-    lines_.clear();
+    parsedLines_.clear();
 
     std::istringstream stream(content);
     std::string line;
 
     while (std::getline(stream, line)) {
-        TextLine textLine;
+        ParsedLine textLine;
 
         // Check for headers
         int headerLevel = 0;
@@ -165,7 +177,7 @@ void MarkdownLayer::parseMarkdown(const std::string& content) {
         // Parse inline styles
         size_t pos = 0;
         while (pos < line.size()) {
-            TextSpan span;
+            ParsedSpan span;
 
             // Check for code
             if (line[pos] == '`') {
@@ -229,7 +241,7 @@ void MarkdownLayer::parseMarkdown(const std::string& content) {
 
         // Add bullet if needed
         if (isBullet && !textLine.spans.empty()) {
-            TextSpan bullet;
+            ParsedSpan bullet;
             bullet.text = "\xE2\x80\xA2 ";  // Unicode bullet
             bullet.style = Font::Regular;
             bullet.isBullet = true;
@@ -238,338 +250,74 @@ void MarkdownLayer::parseMarkdown(const std::string& content) {
 
         // Add empty span for empty lines (paragraph break)
         if (textLine.spans.empty()) {
-            TextSpan empty;
+            ParsedSpan empty;
             empty.text = "";
             empty.style = Font::Regular;
             textLine.spans.push_back(empty);
         }
 
-        lines_.push_back(textLine);
+        parsedLines_.push_back(textLine);
     }
 }
 
 //-----------------------------------------------------------------------------
-// Text Layout
+// Build RichText spans from parsed markdown
 //-----------------------------------------------------------------------------
 
-void MarkdownLayer::layoutText(Font* font, float maxWidth) {
-    if (!font) return;
+void MarkdownLayer::buildRichTextSpans(float fontSize, float maxWidth) {
+    if (!richText_) {
+        spdlog::warn("MarkdownLayer::buildRichTextSpans: richText_ is null!");
+        return;
+    }
 
-    glyphs_.clear();
+    spdlog::debug("MarkdownLayer::buildRichTextSpans: {} lines, fontSize={}, maxWidth={}",
+                  parsedLines_.size(), fontSize, maxWidth);
+
+    richText_->clear();
+
     float cursorY = 0.0f;
-    lineHeight_ = font->getLineHeight();
+    float lineHeight = fontSize * 1.4f;
+    int spanCount = 0;
 
-    for (const auto& line : lines_) {
+    for (const auto& line : parsedLines_) {
         float cursorX = line.indent;
         float scale = line.scale;
-        float scaledLineHeight = lineHeight_ * scale;
+        float scaledLineHeight = lineHeight * scale;
+        float scaledSize = fontSize * scale;
 
-        for (const auto& span : line.spans) {
-            // Determine colors
-            float r = 0.9f, g = 0.9f, b = 0.9f, a = 1.0f;
-            if (span.isCode) {
-                r = 0.6f; g = 0.8f; b = 0.6f;  // Green for code
-            } else if (span.style == Font::Bold || span.style == Font::BoldItalic) {
-                r = 1.0f; g = 1.0f; b = 1.0f;  // Brighter for bold
+        for (const auto& pspan : line.spans) {
+            TextSpan span;
+            span.text = pspan.text;
+            span.x = cursorX;
+            span.y = cursorY;
+            span.size = scaledSize;
+            span.style = pspan.style;
+            span.wrap = true;
+            span.maxWidth = maxWidth - cursorX;
+            span.lineHeight = scaledLineHeight;
+
+            // Set colors based on style
+            if (pspan.isCode) {
+                span.color = glm::vec4(0.6f, 0.8f, 0.6f, 1.0f);  // Green for code
+            } else if (pspan.style == Font::Bold || pspan.style == Font::BoldItalic) {
+                span.color = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);  // Bright white for bold
+            } else {
+                span.color = glm::vec4(0.9f, 0.9f, 0.9f, 1.0f);  // Slightly dimmer for regular
             }
 
-            // Process each codepoint
-            const char* ptr = span.text.c_str();
-            const char* end = ptr + span.text.size();
+            richText_->addSpan(span);
+            spanCount++;
 
-            while (ptr < end) {
-                // Decode UTF-8
-                uint32_t codepoint = 0;
-                if ((*ptr & 0x80) == 0) {
-                    codepoint = *ptr++;
-                } else if ((*ptr & 0xE0) == 0xC0) {
-                    codepoint = (*ptr++ & 0x1F) << 6;
-                    if (ptr < end) codepoint |= (*ptr++ & 0x3F);
-                } else if ((*ptr & 0xF0) == 0xE0) {
-                    codepoint = (*ptr++ & 0x0F) << 12;
-                    if (ptr < end) codepoint |= (*ptr++ & 0x3F) << 6;
-                    if (ptr < end) codepoint |= (*ptr++ & 0x3F);
-                } else if ((*ptr & 0xF8) == 0xF0) {
-                    codepoint = (*ptr++ & 0x07) << 18;
-                    if (ptr < end) codepoint |= (*ptr++ & 0x3F) << 12;
-                    if (ptr < end) codepoint |= (*ptr++ & 0x3F) << 6;
-                    if (ptr < end) codepoint |= (*ptr++ & 0x3F);
-                } else {
-                    ptr++;  // Invalid, skip
-                    continue;
-                }
-
-                if (codepoint == '\n' || codepoint == '\r') continue;
-
-                // Get glyph metrics
-                const auto* metrics = font->getGlyph(codepoint);
-                if (!metrics) continue;
-
-                float glyphW = metrics->_size.x * scale;
-                float glyphH = metrics->_size.y * scale;
-                float advance = metrics->_advance * scale;
-
-                // Word wrap check
-                if (cursorX + glyphW > maxWidth && cursorX > line.indent) {
-                    cursorX = line.indent;
-                    cursorY += scaledLineHeight;
-                }
-
-                // Position glyph
-                float x = cursorX + metrics->_bearing.x * scale;
-                float y = cursorY + (scaledLineHeight - metrics->_bearing.y * scale);
-
-                GlyphInstance inst;
-                inst.posX = x;
-                inst.posY = y;
-                inst.uvMinX = metrics->_uvMin.x;
-                inst.uvMinY = metrics->_uvMin.y;
-                inst.uvMaxX = metrics->_uvMax.x;
-                inst.uvMaxY = metrics->_uvMax.y;
-                inst.sizeX = glyphW;
-                inst.sizeY = glyphH;
-                inst.colorR = r;
-                inst.colorG = g;
-                inst.colorB = b;
-                inst.colorA = a;
-
-                glyphs_.push_back(inst);
-                cursorX += advance;
-            }
+            // Advance cursor (approximate - RichText will do proper layout)
+            // This is just for inline spans on the same line
+            cursorX += pspan.text.length() * scaledSize * 0.5f;
         }
 
-        cursorY += lineHeight_ * line.scale;
+        cursorY += scaledLineHeight;
     }
 
-    documentHeight_ = cursorY;
-    glyphCount_ = static_cast<uint32_t>(glyphs_.size());
-}
-
-void MarkdownLayer::buildGlyphBuffer(Font* font) {
-    layoutText(font, static_cast<float>(_pixel_width));
-}
-
-//-----------------------------------------------------------------------------
-// GPU Pipeline
-//-----------------------------------------------------------------------------
-
-Result<void> MarkdownLayer::createPipeline(WebGPUContext& ctx, WGPUTextureFormat targetFormat) {
-    WGPUDevice device = ctx.getDevice();
-    Plugin* parent = getParent();
-    Font* font = parent ? parent->getFont() : nullptr;
-    if (!font) {
-        return Err<void>("MarkdownLayer: no font available");
-    }
-
-    // Create sampler
-    WGPUSamplerDescriptor samplerDesc = {};
-    samplerDesc.minFilter = WGPUFilterMode_Linear;
-    samplerDesc.magFilter = WGPUFilterMode_Linear;
-    samplerDesc.addressModeU = WGPUAddressMode_ClampToEdge;
-    samplerDesc.addressModeV = WGPUAddressMode_ClampToEdge;
-    samplerDesc.addressModeW = WGPUAddressMode_ClampToEdge;
-    samplerDesc.maxAnisotropy = 1;
-    sampler_ = wgpuDeviceCreateSampler(device, &samplerDesc);
-    if (!sampler_) return Err<void>("Failed to create sampler");
-
-    // Create uniform buffer (rect + screen size + scroll + pixel range)
-    WGPUBufferDescriptor bufDesc = {};
-    bufDesc.size = 48;  // 4 floats rect + 2 floats screen + 1 float scroll + 1 float pixelRange + padding
-    bufDesc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
-    uniformBuffer_ = wgpuDeviceCreateBuffer(device, &bufDesc);
-    if (!uniformBuffer_) return Err<void>("Failed to create uniform buffer");
-
-    // Create glyph buffer
-    if (!glyphs_.empty()) {
-        WGPUBufferDescriptor glyphBufDesc = {};
-        glyphBufDesc.size = glyphs_.size() * sizeof(GlyphInstance);
-        glyphBufDesc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
-        glyphBuffer_ = wgpuDeviceCreateBuffer(device, &glyphBufDesc);
-        if (!glyphBuffer_) return Err<void>("Failed to create glyph buffer");
-
-        wgpuQueueWriteBuffer(ctx.getQueue(), glyphBuffer_, 0,
-                             glyphs_.data(), glyphs_.size() * sizeof(GlyphInstance));
-    }
-
-    // Shader
-    const char* shaderCode = R"(
-struct Uniforms {
-    rect: vec4<f32>,       // x, y, w, h in NDC
-    screenSize: vec2<f32>,
-    scrollOffset: f32,
-    pixelRange: f32,
-}
-
-struct GlyphInstance {
-    posX: f32, posY: f32,
-    uvMinX: f32, uvMinY: f32,
-    uvMaxX: f32, uvMaxY: f32,
-    sizeX: f32, sizeY: f32,
-    colorR: f32, colorG: f32, colorB: f32, colorA: f32,
-}
-
-@group(0) @binding(0) var<uniform> u: Uniforms;
-@group(0) @binding(1) var fontSampler: sampler;
-@group(0) @binding(2) var fontAtlas: texture_2d<f32>;
-@group(0) @binding(3) var<storage, read> glyphs: array<GlyphInstance>;
-
-struct VertexOutput {
-    @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-    @location(1) color: vec4<f32>,
-}
-
-@vertex
-fn vs_main(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VertexOutput {
-    let corners = array<vec2<f32>, 6>(
-        vec2(0.0, 0.0), vec2(1.0, 0.0), vec2(1.0, 1.0),
-        vec2(0.0, 0.0), vec2(1.0, 1.0), vec2(0.0, 1.0)
-    );
-    let corner = corners[vi];
-    let g = glyphs[ii];
-
-    // Position in layer pixels
-    let layerX = g.posX + corner.x * g.sizeX;
-    let layerY = g.posY + corner.y * g.sizeY - u.scrollOffset;
-
-    // Convert to NDC
-    let ndcX = u.rect.x + (layerX / u.screenSize.x) * 2.0;
-    let ndcY = u.rect.y - (layerY / u.screenSize.y) * 2.0;
-
-    var out: VertexOutput;
-    out.position = vec4(ndcX, ndcY, 0.0, 1.0);
-    out.uv = vec2(
-        g.uvMinX + corner.x * (g.uvMaxX - g.uvMinX),
-        g.uvMinY + corner.y * (g.uvMaxY - g.uvMinY)
-    );
-    out.color = vec4(g.colorR, g.colorG, g.colorB, g.colorA);
-    return out;
-}
-
-fn median(r: f32, g: f32, b: f32) -> f32 {
-    return max(min(r, g), min(max(r, g), b));
-}
-
-@fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let msd = textureSample(fontAtlas, fontSampler, in.uv);
-    let sd = median(msd.r, msd.g, msd.b);
-    let screenPxDistance = u.pixelRange * (sd - 0.5);
-    let opacity = clamp(screenPxDistance + 0.5, 0.0, 1.0);
-    return vec4(in.color.rgb, in.color.a * opacity);
-}
-)";
-
-    WGPUShaderSourceWGSL wgslDesc = {};
-    wgslDesc.chain.sType = WGPUSType_ShaderSourceWGSL;
-    wgslDesc.code = WGPU_STR(shaderCode);
-    WGPUShaderModuleDescriptor shaderDesc = {};
-    shaderDesc.nextInChain = &wgslDesc.chain;
-    WGPUShaderModule shaderModule = wgpuDeviceCreateShaderModule(device, &shaderDesc);
-    if (!shaderModule) return Err<void>("Failed to create shader module");
-
-    // Bind group layout
-    WGPUBindGroupLayoutEntry entries[4] = {};
-    entries[0].binding = 0;
-    entries[0].visibility = WGPUShaderStage_Vertex | WGPUShaderStage_Fragment;
-    entries[0].buffer.type = WGPUBufferBindingType_Uniform;
-
-    entries[1].binding = 1;
-    entries[1].visibility = WGPUShaderStage_Fragment;
-    entries[1].sampler.type = WGPUSamplerBindingType_Filtering;
-
-    entries[2].binding = 2;
-    entries[2].visibility = WGPUShaderStage_Fragment;
-    entries[2].texture.sampleType = WGPUTextureSampleType_Float;
-    entries[2].texture.viewDimension = WGPUTextureViewDimension_2D;
-
-    entries[3].binding = 3;
-    entries[3].visibility = WGPUShaderStage_Vertex;
-    entries[3].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
-
-    WGPUBindGroupLayoutDescriptor bglDesc = {};
-    bglDesc.entryCount = 4;
-    bglDesc.entries = entries;
-    bindGroupLayout_ = wgpuDeviceCreateBindGroupLayout(device, &bglDesc);
-    if (!bindGroupLayout_) {
-        wgpuShaderModuleRelease(shaderModule);
-        return Err<void>("Failed to create bind group layout");
-    }
-
-    // Pipeline layout
-    WGPUPipelineLayoutDescriptor plDesc = {};
-    plDesc.bindGroupLayoutCount = 1;
-    plDesc.bindGroupLayouts = &bindGroupLayout_;
-    WGPUPipelineLayout pipelineLayout = wgpuDeviceCreatePipelineLayout(device, &plDesc);
-
-    // Bind group
-    WGPUTextureView atlasView = font->getTextureView();
-    if (!atlasView) {
-        wgpuShaderModuleRelease(shaderModule);
-        wgpuPipelineLayoutRelease(pipelineLayout);
-        return Err<void>("Font atlas not available");
-    }
-
-    WGPUBindGroupEntry bgEntries[4] = {};
-    bgEntries[0].binding = 0;
-    bgEntries[0].buffer = uniformBuffer_;
-    bgEntries[0].size = 48;
-
-    bgEntries[1].binding = 1;
-    bgEntries[1].sampler = sampler_;
-
-    bgEntries[2].binding = 2;
-    bgEntries[2].textureView = atlasView;
-
-    bgEntries[3].binding = 3;
-    bgEntries[3].buffer = glyphBuffer_ ? glyphBuffer_ : uniformBuffer_;  // Fallback if no glyphs
-    bgEntries[3].size = glyphBuffer_ ? (glyphs_.size() * sizeof(GlyphInstance)) : 48;
-
-    WGPUBindGroupDescriptor bgDesc = {};
-    bgDesc.layout = bindGroupLayout_;
-    bgDesc.entryCount = 4;
-    bgDesc.entries = bgEntries;
-    bindGroup_ = wgpuDeviceCreateBindGroup(device, &bgDesc);
-
-    // Render pipeline
-    WGPURenderPipelineDescriptor pipelineDesc = {};
-    pipelineDesc.layout = pipelineLayout;
-    pipelineDesc.vertex.module = shaderModule;
-    pipelineDesc.vertex.entryPoint = WGPU_STR("vs_main");
-
-    WGPUFragmentState fragState = {};
-    fragState.module = shaderModule;
-    fragState.entryPoint = WGPU_STR("fs_main");
-
-    WGPUColorTargetState colorTarget = {};
-    colorTarget.format = targetFormat;
-    colorTarget.writeMask = WGPUColorWriteMask_All;
-
-    WGPUBlendState blend = {};
-    blend.color.srcFactor = WGPUBlendFactor_SrcAlpha;
-    blend.color.dstFactor = WGPUBlendFactor_OneMinusSrcAlpha;
-    blend.color.operation = WGPUBlendOperation_Add;
-    blend.alpha.srcFactor = WGPUBlendFactor_One;
-    blend.alpha.dstFactor = WGPUBlendFactor_OneMinusSrcAlpha;
-    blend.alpha.operation = WGPUBlendOperation_Add;
-    colorTarget.blend = &blend;
-
-    fragState.targetCount = 1;
-    fragState.targets = &colorTarget;
-    pipelineDesc.fragment = &fragState;
-    pipelineDesc.primitive.topology = WGPUPrimitiveTopology_TriangleList;
-    pipelineDesc.multisample.count = 1;
-    pipelineDesc.multisample.mask = ~0u;
-
-    pipeline_ = wgpuDeviceCreateRenderPipeline(device, &pipelineDesc);
-
-    wgpuShaderModuleRelease(shaderModule);
-    wgpuPipelineLayoutRelease(pipelineLayout);
-
-    if (!pipeline_) return Err<void>("Failed to create render pipeline");
-
-    std::cout << "MarkdownLayer: pipeline created with " << glyphCount_ << " glyphs" << std::endl;
-    return Ok();
+    spdlog::info("MarkdownLayer::buildRichTextSpans: added {} spans", spanCount);
+    richText_->setNeedsLayout();
 }
 
 //-----------------------------------------------------------------------------
@@ -582,89 +330,46 @@ Result<void> MarkdownLayer::render(WebGPUContext& ctx,
                                     float pixelX, float pixelY, float pixelW, float pixelH) {
     if (failed_) return Err<void>("MarkdownLayer already failed");
 
-    Plugin* parent = getParent();
-    Font* font = parent ? parent->getFont() : nullptr;
-    if (!font) return Err<void>("No font available");
+    // Create RichText if needed
+    if (!richText_) {
+        auto fontMgr = plugin_ ? plugin_->getFontManager() : nullptr;
+        if (!fontMgr) {
+            failed_ = true;
+            return Err<void>("No FontManager available for markdown rendering");
+        }
+
+        auto result = RichText::create(&ctx, targetFormat, fontMgr);
+        if (!result) {
+            failed_ = true;
+            return Err<void>("Failed to create RichText", result);
+        }
+        richText_ = *result;
+
+        // Pre-load a fallback font NOW (before rendering) to avoid MSDF generation during render loop
+        spdlog::info("MarkdownLayer: pre-loading fallback font...");
+        richText_->setDefaultFontFamily("monospace");
+
+        // Force the font to actually load now
+        auto preloadResult = fontMgr->getFont("monospace", Font::Regular);
+        if (!preloadResult || !*preloadResult) {
+            preloadResult = fontMgr->getFont("sans-serif", Font::Regular);
+        }
+        if (preloadResult && *preloadResult) {
+            spdlog::info("MarkdownLayer: fallback font pre-loaded successfully");
+        }
+
+        initialized_ = true;
+    }
 
     // Re-layout if width changed
     if (lastLayoutWidth_ != pixelW) {
-        layoutText(font, pixelW);
+        buildRichTextSpans(baseSize_, pixelW);
         lastLayoutWidth_ = pixelW;
-        gpuInitialized_ = false;  // Need to recreate glyph buffer
     }
 
-    if (!gpuInitialized_) {
-        auto result = createPipeline(ctx, targetFormat);
-        if (!result) {
-            failed_ = true;
-            return Err<void>("Failed to create pipeline", result);
-        }
-        gpuInitialized_ = true;
-    }
-
-    if (!pipeline_ || !uniformBuffer_ || !bindGroup_ || glyphCount_ == 0) {
-        return Ok();  // Nothing to render
-    }
-
-    // Update uniforms
-    float ndcX = (pixelX / screenWidth) * 2.0f - 1.0f;
-    float ndcY = 1.0f - (pixelY / screenHeight) * 2.0f;
-
-    struct Uniforms {
-        float rect[4];
-        float screenSize[2];
-        float scrollOffset;
-        float pixelRange;
-        float padding[4];
-    } uniforms;
-
-    uniforms.rect[0] = ndcX;
-    uniforms.rect[1] = ndcY;
-    uniforms.rect[2] = pixelW;
-    uniforms.rect[3] = pixelH;
-    uniforms.screenSize[0] = static_cast<float>(screenWidth);
-    uniforms.screenSize[1] = static_cast<float>(screenHeight);
-    uniforms.scrollOffset = scrollOffset_;
-    uniforms.pixelRange = font->getPixelRange();
-
-    wgpuQueueWriteBuffer(ctx.getQueue(), uniformBuffer_, 0, &uniforms, sizeof(uniforms));
-
-    // Render
-    WGPUCommandEncoderDescriptor encoderDesc = {};
-    WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(ctx.getDevice(), &encoderDesc);
-    if (!encoder) return Err<void>("Failed to create command encoder");
-
-    WGPURenderPassColorAttachment colorAttachment = {};
-    colorAttachment.view = targetView;
-    colorAttachment.loadOp = WGPULoadOp_Load;
-    colorAttachment.storeOp = WGPUStoreOp_Store;
-    colorAttachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
-
-    WGPURenderPassDescriptor passDesc = {};
-    passDesc.colorAttachmentCount = 1;
-    passDesc.colorAttachments = &colorAttachment;
-
-    WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
-    if (!pass) {
-        wgpuCommandEncoderRelease(encoder);
-        return Err<void>("Failed to begin render pass");
-    }
-
-    wgpuRenderPassEncoderSetPipeline(pass, pipeline_);
-    wgpuRenderPassEncoderSetBindGroup(pass, 0, bindGroup_, 0, nullptr);
-    wgpuRenderPassEncoderDraw(pass, 6, glyphCount_, 0, 0);
-    wgpuRenderPassEncoderEnd(pass);
-    wgpuRenderPassEncoderRelease(pass);
-
-    WGPUCommandBufferDescriptor cmdDesc = {};
-    WGPUCommandBuffer cmdBuffer = wgpuCommandEncoderFinish(encoder, &cmdDesc);
-    if (cmdBuffer) {
-        wgpuQueueSubmit(ctx.getQueue(), 1, &cmdBuffer);
-        wgpuCommandBufferRelease(cmdBuffer);
-    }
-    wgpuCommandEncoderRelease(encoder);
-
-    return Ok();
+    // Render using RichText
+    return richText_->render(ctx, targetView, screenWidth, screenHeight,
+                              pixelX, pixelY, pixelW, pixelH);
 }
 
 //-----------------------------------------------------------------------------
@@ -675,12 +380,16 @@ bool MarkdownLayer::onMouseScroll(float xoffset, float yoffset, int mods) {
     (void)xoffset;
     (void)mods;
 
-    float scrollAmount = yoffset * lineHeight_ * 3.0f;
-    scrollOffset_ -= scrollAmount;
+    if (!richText_) return false;
+
+    float scrollAmount = yoffset * baseSize_ * 3.0f;
+    richText_->scroll(-scrollAmount);
 
     // Clamp scroll
-    float maxScroll = std::max(0.0f, documentHeight_ - static_cast<float>(_pixel_height));
-    scrollOffset_ = std::clamp(scrollOffset_, 0.0f, maxScroll);
+    float maxScroll = std::max(0.0f, richText_->getContentHeight() - static_cast<float>(_pixel_height));
+    if (richText_->getScrollOffset() > maxScroll) {
+        richText_->setScrollOffset(maxScroll);
+    }
 
     return true;
 }
@@ -688,6 +397,6 @@ bool MarkdownLayer::onMouseScroll(float xoffset, float yoffset, int mods) {
 } // namespace yetty
 
 extern "C" {
-    const char* markdown_plugin_name() { return "markdown"; }
-    yetty::Result<yetty::PluginPtr> markdown_plugin_create() { return yetty::MarkdownPlugin::create(); }
+    const char* name() { return "markdown"; }
+    yetty::Result<yetty::PluginPtr> create(yetty::YettyPtr engine) { return yetty::MarkdownPlugin::create(std::move(engine)); }
 }
