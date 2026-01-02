@@ -233,6 +233,10 @@ private:
 
     // Mouse mode (apps can request mouse events)
     int mouseMode_ = VTERM_PROP_MOUSE_NONE;
+
+    // Persistent read buffer for PTY draining (avoid per-frame allocation)
+    static constexpr size_t PTY_READ_BUFFER_SIZE = 256 * 1024;  // 256KB
+    std::unique_ptr<char[]> ptyReadBuffer_;
 };
 
 } // namespace yetty
