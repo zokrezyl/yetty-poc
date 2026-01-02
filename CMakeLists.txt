@@ -230,6 +230,11 @@ if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
         GIT_TAG main  # v27 API compatible
     )
 
+    # glfw3webgpu needs _GLFW_X11 on Linux for X11 surface creation
+    if(UNIX AND NOT APPLE)
+        target_compile_definitions(glfw3webgpu PRIVATE _GLFW_X11)
+    endif()
+
 endif()
 
 #-----------------------------------------------------------------------------

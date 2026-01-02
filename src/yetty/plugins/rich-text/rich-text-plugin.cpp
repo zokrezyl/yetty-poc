@@ -138,10 +138,10 @@ Result<void> RichTextLayer::parseYAML(const std::string& yaml) {
     try {
         YAML::Node root = YAML::Load(yaml);
 
-        // Get font name (optional)
-        fontName_ = "default";
-        if (root["font"]) {
-            fontName_ = root["font"].as<std::string>();
+        // Get font name (optional) - if not specified, will use FontManager's default
+        fontName_ = "";
+        if (root["font-name"]) {
+            fontName_ = root["font-name"].as<std::string>();
         }
 
         // Parse spans
@@ -210,6 +210,11 @@ Result<void> RichTextLayer::parseYAML(const std::string& yaml) {
                 }
             }
 
+            // Font name (per-span override, uses exact font name)
+            if (spanNode["font-name"]) {
+                span.fontFamily = spanNode["font-name"].as<std::string>();
+            }
+
             // Wrap options
             span.wrap = false;
             if (spanNode["wrap"]) {
@@ -217,13 +222,13 @@ Result<void> RichTextLayer::parseYAML(const std::string& yaml) {
             }
 
             span.maxWidth = 0;
-            if (spanNode["maxWidth"]) {
-                span.maxWidth = spanNode["maxWidth"].as<float>();
+            if (spanNode["max-width"]) {
+                span.maxWidth = spanNode["max-width"].as<float>();
             }
 
             span.lineHeight = 0;
-            if (spanNode["lineHeight"]) {
-                span.lineHeight = spanNode["lineHeight"].as<float>();
+            if (spanNode["line-height"]) {
+                span.lineHeight = spanNode["line-height"].as<float>();
                 lastLineHeight = span.lineHeight;
             }
 

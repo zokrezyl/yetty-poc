@@ -25,6 +25,7 @@ struct GlyphInstance {
     uvMaxX: f32, uvMaxY: f32,
     sizeX: f32, sizeY: f32,
     colorR: f32, colorG: f32, colorB: f32, colorA: f32,
+    scale: f32,
 }
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -36,6 +37,7 @@ struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
+    @location(2) scale: f32,
 }
 
 @vertex
@@ -60,6 +62,7 @@ fn vs_main(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> 
         g.uvMinY + corner.y * (g.uvMaxY - g.uvMinY)
     );
     out.color = vec4(g.colorR, g.colorG, g.colorB, g.colorA);
+    out.scale = g.scale;
     return out;
 }
 
@@ -71,8 +74,9 @@ fn median(r: f32, g: f32, b: f32) -> f32 {
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let msd = textureSample(fontAtlas, fontSampler, in.uv);
     let sd = median(msd.r, msd.g, msd.b);
-    let screenPxDistance = u.pixelRange * (sd - 0.5);
-    let opacity = clamp(screenPxDistance + 0.5, 0.0, 1.0);
+    // Use pixelRange directly - scale affects glyph size, not SDF distance
+    let screenPxRange = u.pixelRange;
+    let opacity = clamp((sd - 0.5) * screenPxRange + 0.5, 0.0, 1.0);
     return vec4(in.color.rgb, in.color.a * opacity);
 }
 )";
@@ -429,6 +433,12 @@ void RichText::buildGlyphInstances() {
         float glyphX = ch.x + metrics->_bearing.x * fontScale;
         float glyphY = ch.y - metrics->_bearing.y * fontScale;
 
+        // Debug logging for descender characters
+        if (ch.codepoint == 'g' || ch.codepoint == 'p' || ch.codepoint == 'q' || ch.codepoint == 'A') {
+            spdlog::debug("Glyph '{}': ch.y={:.2f}, bearing.y={:.2f}, fontScale={:.4f}, glyphY={:.2f}, size=({:.1f},{:.1f})",
+                          static_cast<char>(ch.codepoint), ch.y, metrics->_bearing.y, fontScale, glyphY, glyphW, glyphH);
+        }
+
         GlyphInstance inst;
         inst.posX = glyphX;
         inst.posY = glyphY;
@@ -442,6 +452,7 @@ void RichText::buildGlyphInstances() {
         inst.colorG = ch.color.g;
         inst.colorB = ch.color.b;
         inst.colorA = ch.color.a;
+        inst.scale = fontScale;  // Store scale for pixelRange adjustment in shader
 
         // Find or create batch for this font
         auto it = fontToBatch.find(font);
