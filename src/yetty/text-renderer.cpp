@@ -931,9 +931,18 @@ void TextRenderer::render(const Grid& grid,
         // Full damage - update entire texture
         updateCellTextures(queue, grid);
     } else if (!damageRects.empty()) {
-        // Partial damage - only update changed regions
-        for (const auto& rect : damageRects) {
-            updateCellTextureRegion(queue, grid, rect);
+        // If too many damage rects, a single full upload is cheaper than many small ones
+        // Each wgpuQueueWriteTexture has overhead, so threshold at ~10% of grid or 100 rects
+        const size_t threshold = std::max(static_cast<size_t>(100), static_cast<size_t>(cols * rows / 10));
+        if (damageRects.size() > threshold) {
+            // Many small rects - single full upload is more efficient
+            updateCellTextures(queue, grid);
+            spdlog::debug("Damage rects {} > threshold {} - using full upload", damageRects.size(), threshold);
+        } else {
+            // Partial damage - only update changed regions
+            for (const auto& rect : damageRects) {
+                updateCellTextureRegion(queue, grid, rect);
+            }
         }
 
         if (config_ && config_->debugDamageRects()) {
