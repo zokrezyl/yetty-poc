@@ -48,8 +48,10 @@ set(FREETYPE_SOURCES
     ${MUPDF_SOURCE_DIR}/thirdparty/freetype/src/type1/type1.c
 )
 
-# Bundled zlib sources
-file(GLOB ZLIB_SOURCES "${MUPDF_SOURCE_DIR}/thirdparty/zlib/*.c")
+# Bundled zlib sources (skip on macOS - use system zlib to avoid header conflicts)
+if(NOT APPLE)
+    file(GLOB ZLIB_SOURCES "${MUPDF_SOURCE_DIR}/thirdparty/zlib/*.c")
+endif()
 
 # Bundled libjpeg sources (from MuPDF Makelists)
 set(LIBJPEG_SOURCES
@@ -250,7 +252,7 @@ target_include_directories(mupdf PRIVATE
     ${MUPDF_SOURCE_DIR}/thirdparty/openjpeg/src/lib/openjp2
     ${MUPDF_SOURCE_DIR}/thirdparty/lcms2/include
     ${MUPDF_SOURCE_DIR}/thirdparty/libjpeg
-    ${MUPDF_SOURCE_DIR}/thirdparty/zlib
+    $<$<NOT:$<PLATFORM_ID:Darwin>>:${MUPDF_SOURCE_DIR}/thirdparty/zlib>
     ${MUPDF_SOURCE_DIR}/thirdparty/gumbo-parser/src
     ${MUPDF_SOURCE_DIR}/thirdparty/mujs
     ${MUPDF_SOURCE_DIR}/scripts/freetype
@@ -260,8 +262,9 @@ target_include_directories(mupdf PRIVATE
 
 # Compile definitions
 target_compile_definitions(mupdf PRIVATE
-    # zlib needs unistd.h on POSIX systems for read/write/close/lseek
-    $<$<NOT:$<PLATFORM_ID:Windows>>:Z_HAVE_UNISTD_H>
+    # zlib needs proper POSIX defines on Linux (macOS uses system zlib)
+    $<$<PLATFORM_ID:Linux>:Z_HAVE_UNISTD_H>
+    $<$<PLATFORM_ID:Linux>:HAVE_FSEEKO>
 
     # Disable features we don't need (reduces font binary size)
     TOFU
@@ -327,7 +330,13 @@ set_source_files_properties(${HARFBUZZ_SOURCES}
     COMPILE_DEFINITIONS "hb_malloc_impl=fz_hb_malloc;hb_calloc_impl=fz_hb_calloc;hb_free_impl=fz_hb_free;hb_realloc_impl=fz_hb_realloc"
 )
 
-# Link math library on Unix
+# Link math library on Unix (not macOS)
 if(UNIX AND NOT APPLE)
     target_link_libraries(mupdf PUBLIC m)
+endif()
+
+# On macOS, use system zlib instead of bundled (avoids header conflicts)
+if(APPLE)
+    find_package(ZLIB REQUIRED)
+    target_link_libraries(mupdf PUBLIC ZLIB::ZLIB)
 endif()
