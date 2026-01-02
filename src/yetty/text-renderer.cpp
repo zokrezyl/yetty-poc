@@ -927,7 +927,12 @@ void TextRenderer::render(const Grid& grid,
         needsBindGroupRecreation_ = false;
         // Also need full update for new glyphs
         updateCellTextures(queue, grid);
-    } else if (fullDamage) {
+    }
+    // PERF: Force full upload - partial updates slower due to GPU call overhead
+    // TODO: revisit damage tracking optimization
+    fullDamage = true;
+
+    if (fullDamage) {
         // Full damage - update entire texture
         updateCellTextures(queue, grid);
     } else if (!damageRects.empty()) {
