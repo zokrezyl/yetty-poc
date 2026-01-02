@@ -27,11 +27,7 @@ cmake_minimum_required(VERSION 3.20)
 # Allow dependencies with older cmake_minimum_required (yaml-cpp, etc.)
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "Minimum CMake policy version for dependencies")
 
-# Enable Objective-C++ on macOS for imgui WebGPU backend
 project(yetty-poc VERSION 0.1.0 LANGUAGES C CXX)
-if(APPLE)
-    enable_language(OBJCXX)
-endif()
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -619,8 +615,8 @@ inline const std::vector<StaticPluginInfo>& get_static_plugins() {
             get_target_property(IMGUI_SOURCES imgui SOURCES)
             foreach(SRC ${IMGUI_SOURCES})
                 if(SRC MATCHES "imgui_impl_wgpu\\.cpp$")
-                    set_source_files_properties(${SRC} PROPERTIES LANGUAGE OBJCXX)
-                    message(STATUS "Set ${SRC} to compile as Objective-C++")
+                    set_source_files_properties(${SRC} PROPERTIES COMPILE_FLAGS "-x objective-c++")
+                    message(STATUS "Set ${SRC} to compile as Objective-C++ via -x flag")
                 endif()
             endforeach()
         endif()
