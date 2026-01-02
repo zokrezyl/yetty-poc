@@ -207,6 +207,11 @@ if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
     endif()
 
     # GLFW and glfw3webgpu adapter (desktop only, not Android)
+    # Disable X11 on macOS to prevent glfw3webgpu from including X11 headers
+    if(APPLE)
+        set(GLFW_BUILD_X11 OFF CACHE BOOL "" FORCE)
+    endif()
+
     CPMAddPackage(
         NAME glfw
         GITHUB_REPOSITORY glfw/glfw
@@ -225,9 +230,6 @@ if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
         GIT_TAG main  # v27 API compatible
     )
 
-    # glfw3webgpu needs to know which native platform GLFW is using
-    # to properly expose the native window handles
-    target_compile_definitions(glfw3webgpu PRIVATE _GLFW_X11)
 endif()
 
 #-----------------------------------------------------------------------------
@@ -609,17 +611,6 @@ inline const std::vector<StaticPluginInfo>& get_static_plugins() {
         set(YMERY_BUILD_DEMO OFF CACHE BOOL "" FORCE)
         set(YMERY_BUILD_TESTS OFF CACHE BOOL "" FORCE)
         add_subdirectory(${ymery_SOURCE_DIR} ${ymery_BINARY_DIR})
-
-        # macOS: imgui_impl_wgpu.cpp includes Cocoa.h and must be compiled as Objective-C++
-        if(APPLE AND TARGET imgui)
-            get_target_property(IMGUI_SOURCES imgui SOURCES)
-            foreach(SRC ${IMGUI_SOURCES})
-                if(SRC MATCHES "imgui_impl_wgpu\\.cpp$")
-                    set_source_files_properties(${SRC} PROPERTIES COMPILE_FLAGS "-x objective-c++")
-                    message(STATUS "Set ${SRC} to compile as Objective-C++ via -x flag")
-                endif()
-            endforeach()
-        endif()
 
         message(STATUS "ymery library built for plugin")
     endif()
