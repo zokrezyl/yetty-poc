@@ -265,12 +265,21 @@ Result<void> RichTextLayer::render(WebGPUContext& ctx,
 
     // Initialize RichText GPU resources if needed
     if (!richText_) {
-        auto result = RichText::create(&ctx, targetFormat);
+        auto fontMgr = plugin_->getFontManager();
+        if (!fontMgr) {
+            failed_ = true;
+            return Err<void>("No FontManager available for RichText rendering");
+        }
+
+        auto result = RichText::create(&ctx, targetFormat, fontMgr);
         if (!result) {
             failed_ = true;
             return Err<void>("Failed to create RichText", result);
         }
         richText_ = *result;
+
+        // Set default font family
+        richText_->setDefaultFontFamily(fontName_);
 
         // Add pending spans
         for (const auto& span : pendingSpans_) {
@@ -278,28 +287,6 @@ Result<void> RichTextLayer::render(WebGPUContext& ctx,
         }
         pendingSpans_.clear();
 
-        // Get font - try FontManager first, fall back to plugin's font
-        Font* font = nullptr;
-        auto fontMgr = plugin_->getFontManager();
-        if (fontMgr) {
-            auto fontResult = fontMgr->getFont(fontName_);
-            if (fontResult) {
-                font = *fontResult;
-            }
-            if (!font) {
-                font = fontMgr->getDefaultFont();
-            }
-        }
-        if (!font) {
-            // Fall back to the font passed to the plugin from PluginManager
-            font = plugin_->getFont();
-        }
-        if (!font) {
-            failed_ = true;
-            return Err<void>("No font available for RichText rendering");
-        }
-
-        richText_->setFont(font);
         initialized_ = true;
     }
 

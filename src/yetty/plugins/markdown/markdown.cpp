@@ -2,6 +2,7 @@
 #include <yetty/yetty.h>
 #include <yetty/webgpu-context.h>
 #include <yetty/font-manager.h>
+#include <spdlog/spdlog.h>
 #include <fstream>
 #include <sstream>
 #include <iostream>
@@ -264,12 +265,19 @@ void MarkdownLayer::parseMarkdown(const std::string& content) {
 //-----------------------------------------------------------------------------
 
 void MarkdownLayer::buildRichTextSpans(float fontSize, float maxWidth) {
-    if (!richText_) return;
+    if (!richText_) {
+        spdlog::warn("MarkdownLayer::buildRichTextSpans: richText_ is null!");
+        return;
+    }
+
+    spdlog::debug("MarkdownLayer::buildRichTextSpans: {} lines, fontSize={}, maxWidth={}",
+                  parsedLines_.size(), fontSize, maxWidth);
 
     richText_->clear();
 
     float cursorY = 0.0f;
     float lineHeight = fontSize * 1.4f;
+    int spanCount = 0;
 
     for (const auto& line : parsedLines_) {
         float cursorX = line.indent;
@@ -298,6 +306,7 @@ void MarkdownLayer::buildRichTextSpans(float fontSize, float maxWidth) {
             }
 
             richText_->addSpan(span);
+            spanCount++;
 
             // Advance cursor (approximate - RichText will do proper layout)
             // This is just for inline spans on the same line
@@ -307,6 +316,7 @@ void MarkdownLayer::buildRichTextSpans(float fontSize, float maxWidth) {
         cursorY += scaledLineHeight;
     }
 
+    spdlog::info("MarkdownLayer::buildRichTextSpans: added {} spans", spanCount);
     richText_->setNeedsLayout();
 }
 
@@ -322,31 +332,32 @@ Result<void> MarkdownLayer::render(WebGPUContext& ctx,
 
     // Create RichText if needed
     if (!richText_) {
-        auto result = RichText::create(&ctx, targetFormat);
+        auto fontMgr = plugin_ ? plugin_->getFontManager() : nullptr;
+        if (!fontMgr) {
+            failed_ = true;
+            return Err<void>("No FontManager available for markdown rendering");
+        }
+
+        auto result = RichText::create(&ctx, targetFormat, fontMgr);
         if (!result) {
             failed_ = true;
             return Err<void>("Failed to create RichText", result);
         }
         richText_ = *result;
 
-        // Get font from FontManager
-        Font* font = nullptr;
-        if (plugin_) {
-            auto fontMgr = plugin_->getFontManager();
-            if (fontMgr) {
-                font = fontMgr->getDefaultFont();
-            }
+        // Pre-load a fallback font NOW (before rendering) to avoid MSDF generation during render loop
+        spdlog::info("MarkdownLayer: pre-loading fallback font...");
+        richText_->setDefaultFontFamily("monospace");
+
+        // Force the font to actually load now
+        auto preloadResult = fontMgr->getFont("monospace", Font::Regular);
+        if (!preloadResult || !*preloadResult) {
+            preloadResult = fontMgr->getFont("sans-serif", Font::Regular);
         }
-        if (!font) {
-            // Fall back to the font passed to the plugin from PluginManager
-            font = plugin_ ? plugin_->getFont() : nullptr;
-        }
-        if (!font) {
-            failed_ = true;
-            return Err<void>("No font available for markdown rendering");
+        if (preloadResult && *preloadResult) {
+            spdlog::info("MarkdownLayer: fallback font pre-loaded successfully");
         }
 
-        richText_->setFont(font);
         initialized_ = true;
     }
 

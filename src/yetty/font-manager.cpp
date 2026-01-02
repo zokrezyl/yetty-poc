@@ -38,6 +38,7 @@ FontCacheKey FontManager::createCacheKey(FT_Face face) noexcept {
 #if !YETTY_USE_PREBUILT_ATLAS
     key.familyName = face->family_name ? face->family_name : "";
     key.styleName = face->style_name ? face->style_name : "";
+    // Use actual font properties to distinguish embedded fonts with empty/same names
     key.numGlyphs = face->num_glyphs;
     key.unitsPerEM = face->units_per_EM;
 #endif
@@ -167,11 +168,23 @@ Result<std::unique_ptr<Font>> FontManager::generateFont(const std::string& path,
 #endif
 }
 
-Result<std::unique_ptr<Font>> FontManager::generateFont(FT_Face face, float fontSize) noexcept {
+Result<std::unique_ptr<Font>> FontManager::generateFont(FT_Face face, const std::string& fontName, float fontSize) noexcept {
 #if !YETTY_USE_PREBUILT_ATLAS
-    // TODO: Implement using msdfgen::adoptFreetypeFont()
-    spdlog::warn("FontManager::generateFont(FT_Face) not yet fully implemented");
-    return Err<std::unique_ptr<Font>>("generateFont(FT_Face) not yet implemented");
+    auto font = std::make_unique<Font>();
+
+    if (!font->generate(face, fontName, fontSize)) {
+        return Err<std::unique_ptr<Font>>("Failed to generate font atlas from FT_Face");
+    }
+
+    if (!font->createTexture(ctx_->getDevice(), ctx_->getQueue())) {
+        return Err<std::unique_ptr<Font>>("Failed to create font texture for embedded font");
+    }
+
+    if (!font->createGlyphMetadataBuffer(ctx_->getDevice())) {
+        return Err<std::unique_ptr<Font>>("Failed to create glyph metadata buffer for embedded font");
+    }
+
+    return Ok(std::move(font));
 #else
     return Err<std::unique_ptr<Font>>("Font generation not available on this platform");
 #endif
@@ -208,25 +221,28 @@ Result<Font*> FontManager::getFont(const std::string& family, Font::Style style,
     return Ok(ptr);
 }
 
-Result<Font*> FontManager::getFont(FT_Face face, float fontSize) noexcept {
+Result<Font*> FontManager::getFont(FT_Face face, const std::string& fontName, float fontSize) noexcept {
 #if !YETTY_USE_PREBUILT_ATLAS
     if (!face) {
         return Err<Font*>("Invalid FreeType face");
     }
 
-    FontCacheKey key = createCacheKey(face);
+    // Use the provided fontName for caching (MuPDF font names are unique)
+    FontCacheKey key;
+    key.familyName = fontName;
+    key.styleName = "";
+    key.numGlyphs = 0;
+    key.unitsPerEM = 0;
 
     auto it = fontCache_.find(key);
     if (it != fontCache_.end()) {
-        spdlog::debug("FontManager: cache hit for FT_Face (family={}, style={}, glyphs={})",
-                      key.familyName, key.styleName, key.numGlyphs);
+        spdlog::debug("FontManager: cache hit for FT_Face '{}'", fontName);
         return Ok(it->second.get());
     }
 
-    spdlog::info("FontManager: cache miss for FT_Face, generating font (family={}, style={}, glyphs={})",
-                 key.familyName, key.styleName, key.numGlyphs);
+    spdlog::info("FontManager: cache miss for FT_Face '{}', generating font", fontName);
 
-    auto result = generateFont(face, fontSize);
+    auto result = generateFont(face, fontName, fontSize);
     if (!result) {
         return Err<Font*>(result.error().message());
     }
@@ -242,6 +258,70 @@ Result<Font*> FontManager::getFont(FT_Face face, float fontSize) noexcept {
     return Ok(ptr);
 #else
     return Err<Font*>("FreeType font loading not available on this platform");
+#endif
+}
+
+Result<std::unique_ptr<Font>> FontManager::generateFont(const unsigned char* data, size_t dataLen,
+                                                         const std::string& fontName, float fontSize) noexcept {
+#if !YETTY_USE_PREBUILT_ATLAS
+    auto font = std::make_unique<Font>();
+
+    if (!font->generate(data, dataLen, fontName, fontSize)) {
+        return Err<std::unique_ptr<Font>>("Failed to generate font atlas from font data");
+    }
+
+    if (!font->createTexture(ctx_->getDevice(), ctx_->getQueue())) {
+        return Err<std::unique_ptr<Font>>("Failed to create font texture for embedded font");
+    }
+
+    if (!font->createGlyphMetadataBuffer(ctx_->getDevice())) {
+        return Err<std::unique_ptr<Font>>("Failed to create glyph metadata buffer for embedded font");
+    }
+
+    return Ok(std::move(font));
+#else
+    return Err<std::unique_ptr<Font>>("Font generation not available on this platform");
+#endif
+}
+
+Result<Font*> FontManager::getFont(const unsigned char* data, size_t dataLen,
+                                    const std::string& fontName, float fontSize) noexcept {
+#if !YETTY_USE_PREBUILT_ATLAS
+    if (!data || dataLen == 0) {
+        return Err<Font*>("Invalid font data");
+    }
+
+    // Use the provided fontName for caching
+    FontCacheKey key;
+    key.familyName = fontName;
+    key.styleName = "";
+    key.numGlyphs = 0;
+    key.unitsPerEM = 0;
+
+    auto it = fontCache_.find(key);
+    if (it != fontCache_.end()) {
+        spdlog::debug("FontManager: cache hit for font data '{}'", fontName);
+        return Ok(it->second.get());
+    }
+
+    spdlog::info("FontManager: cache miss for font data '{}', generating font", fontName);
+
+    auto result = generateFont(data, dataLen, fontName, fontSize);
+    if (!result) {
+        return Err<Font*>(result.error().message());
+    }
+
+    Font* ptr = result.value().get();
+    fontCache_[key] = std::move(result.value());
+
+    if (!hasDefaultFont_) {
+        defaultFontKey_ = key;
+        hasDefaultFont_ = true;
+    }
+
+    return Ok(ptr);
+#else
+    return Err<Font*>("Font loading from data not available on this platform");
 #endif
 }
 
@@ -272,14 +352,6 @@ bool FontManager::hasFont(const std::string& family, Font::Style style) const no
     return fontCache_.find(key) != fontCache_.end();
 }
 
-bool FontManager::hasFont(FT_Face face) const noexcept {
-#if !YETTY_USE_PREBUILT_ATLAS
-    FontCacheKey key = createCacheKey(face);
-    return fontCache_.find(key) != fontCache_.end();
-#else
-    return false;
-#endif
-}
 
 void FontManager::unloadFont(const std::string& family, Font::Style style) noexcept {
     FontCacheKey key = createCacheKey(family, style);

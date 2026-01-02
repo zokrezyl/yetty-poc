@@ -3,6 +3,8 @@
 #include <spdlog/spdlog.h>
 
 #if !YETTY_USE_PREBUILT_ATLAS
+#include <ft2build.h>
+#include FT_FREETYPE_H
 #include <msdfgen.h>
 #include <msdfgen-ext.h>
 #include <fontconfig/fontconfig.h>
@@ -542,6 +544,440 @@ bool Font::generate(const std::string& regularPath,
               << _boldItalicGlyphs.size() << " bold-italic glyphs" << std::endl;
 
     // Build codepoint→index mapping
+    buildGlyphIndexMap();
+
+    return true;
+}
+
+bool Font::generate(FT_Face face, float fontSize, uint32_t atlasSize) {
+    if (!face) {
+        spdlog::error("Font::generate(FT_Face): null FT_Face");
+        return false;
+    }
+
+    // Validate the FT_Face has basic required data
+    if (!face->num_glyphs || face->num_glyphs < 1) {
+        spdlog::error("Font::generate(FT_Face): FT_Face has no glyphs");
+        return false;
+    }
+
+    std::string fontFamily = face->family_name ? face->family_name : "unknown";
+    std::string fontStyle = face->style_name ? face->style_name : "Regular";
+    spdlog::info("Font::generate(FT_Face): generating atlas for '{}' {} (num_glyphs={}, units_per_EM={})",
+                 fontFamily, fontStyle, face->num_glyphs, face->units_per_EM);
+
+    _fontSize = fontSize;
+    _atlasWidth = atlasSize;
+    _atlasHeight = atlasSize;
+
+    // Initialize msdfgen's FreeType wrapper if not already done
+    // This is needed for msdfgen's internal state, even when adopting an existing FT_Face
+    static msdfgen::FreetypeHandle* s_freetypeHandle = nullptr;
+    if (!s_freetypeHandle) {
+        s_freetypeHandle = msdfgen::initializeFreetype();
+        if (!s_freetypeHandle) {
+            spdlog::error("Failed to initialize msdfgen FreeType");
+            return false;
+        }
+    }
+
+    // Adopt the existing FT_Face into msdfgen
+    msdfgen::FontHandle* font = msdfgen::adoptFreetypeFont(face);
+    if (!font) {
+        spdlog::error("Failed to adopt FreeType face for embedded font '{}'", fontFamily);
+        return false;
+    }
+
+    // Get font metrics with proper scaling (not legacy 1/64 scaling)
+    msdfgen::FontMetrics metrics;
+    msdfgen::getFontMetrics(metrics, font, msdfgen::FONT_SCALING_NONE);
+    double unitsPerEm = metrics.emSize > 0 ? metrics.emSize : 1000.0;
+    double fontScale = fontSize / unitsPerEm;
+    double lineHeight = metrics.lineHeight;
+    spdlog::debug("Font::generate(FT_Face): unitsPerEm={}, fontScale={}", unitsPerEm, fontScale);
+
+    // Define character set - we'll generate a smaller set for PDF embedded fonts
+    // since they may only contain a subset of glyphs anyway
+    std::vector<uint32_t> charset;
+
+    // ASCII printable (32-126)
+    for (uint32_t c = 32; c <= 126; ++c) charset.push_back(c);
+
+    // Latin Extended-A (0x0100-0x017F)
+    for (uint32_t c = 0x0100; c <= 0x017F; ++c) charset.push_back(c);
+
+    // Common punctuation and symbols
+    for (uint32_t c = 0x2000; c <= 0x206F; ++c) charset.push_back(c);
+
+    // Load glyph shapes
+    std::vector<PackedGlyph> glyphs;
+    int padding = static_cast<int>(std::ceil(_pixelRange));
+
+    for (uint32_t codepoint : charset) {
+        PackedGlyph pg;
+        pg.codepoint = codepoint;
+        pg.style = Regular;
+        pg.fontScale = fontScale;
+
+        double advance;
+        if (!msdfgen::loadGlyph(pg.shape, font, codepoint, msdfgen::FONT_SCALING_NONE, &advance)) continue;
+
+        pg.advance = advance * fontScale;
+
+        if (!pg.shape.contours.empty()) {
+            pg.shape.normalize();
+            msdfgen::Shape::Bounds bounds = pg.shape.getBounds();
+
+            pg.boundsL = bounds.l;
+            pg.boundsB = bounds.b;
+            pg.boundsR = bounds.r;
+            pg.boundsT = bounds.t;
+
+            pg.bearingX = bounds.l * fontScale;
+            pg.bearingY = bounds.t * fontScale;
+            pg.sizeX = (bounds.r - bounds.l) * fontScale;
+            pg.sizeY = (bounds.t - bounds.b) * fontScale;
+
+            pg.atlasW = static_cast<int>(std::ceil(pg.sizeX)) + padding * 2;
+            pg.atlasH = static_cast<int>(std::ceil(pg.sizeY)) + padding * 2;
+        } else {
+            pg.boundsL = pg.boundsB = pg.boundsR = pg.boundsT = 0;
+            pg.bearingX = pg.bearingY = 0;
+            pg.sizeX = pg.sizeY = 0;
+            pg.atlasW = pg.atlasH = 0;
+        }
+
+        glyphs.push_back(std::move(pg));
+    }
+
+    spdlog::info("Font::generate(FT_Face): loaded {} glyphs from embedded font", glyphs.size());
+
+    // Sort by height for better packing
+    std::sort(glyphs.begin(), glyphs.end(), [](const PackedGlyph& a, const PackedGlyph& b) {
+        return a.atlasH > b.atlasH;
+    });
+
+    // Pack glyphs into atlas
+    ShelfPacker packer(_atlasWidth, _atlasHeight);
+    for (auto& glyph : glyphs) {
+        if (glyph.atlasW > 0 && glyph.atlasH > 0) {
+            if (!packer.pack(glyph.atlasW, glyph.atlasH, glyph.atlasX, glyph.atlasY)) {
+                spdlog::warn("Atlas full, could not pack glyph {}", glyph.codepoint);
+                continue;
+            }
+        } else {
+            glyph.atlasX = glyph.atlasY = 0;
+        }
+    }
+
+    // Create atlas bitmap (RGBA)
+    _atlasData.resize(_atlasWidth * _atlasHeight * 4, 0);
+
+    // Generate MSDF for each glyph
+    for (auto& glyph : glyphs) {
+        if (glyph.shape.contours.empty()) continue;
+
+        if (!glyph.shape.validate()) {
+            spdlog::warn("Invalid shape for codepoint {} in embedded font", glyph.codepoint);
+        }
+
+        glyph.shape.normalize();
+        msdfgen::edgeColoringSimple(glyph.shape, 3.0);
+
+        double scale = glyph.fontScale;
+        msdfgen::Bitmap<float, 3> msdf(glyph.atlasW, glyph.atlasH);
+
+        msdfgen::Vector2 translate(
+            padding - glyph.boundsL * scale,
+            padding - glyph.boundsB * scale
+        );
+
+        msdfgen::generateMSDF(msdf, glyph.shape, _pixelRange, scale, translate);
+
+        // Copy to atlas with Y-flip
+        for (int y = 0; y < glyph.atlasH; ++y) {
+            for (int x = 0; x < glyph.atlasW; ++x) {
+                int atlasX = glyph.atlasX + x;
+                int atlasY = glyph.atlasY + (glyph.atlasH - 1 - y);
+
+                if (atlasX >= 0 && atlasX < (int)_atlasWidth &&
+                    atlasY >= 0 && atlasY < (int)_atlasHeight) {
+                    size_t idx = (atlasY * _atlasWidth + atlasX) * 4;
+                    _atlasData[idx + 0] = static_cast<uint8_t>(std::clamp(msdf(x, y)[0] * 255.0f, 0.0f, 255.0f));
+                    _atlasData[idx + 1] = static_cast<uint8_t>(std::clamp(msdf(x, y)[1] * 255.0f, 0.0f, 255.0f));
+                    _atlasData[idx + 2] = static_cast<uint8_t>(std::clamp(msdf(x, y)[2] * 255.0f, 0.0f, 255.0f));
+                    _atlasData[idx + 3] = 255;
+                }
+            }
+        }
+    }
+
+    _lineHeight = static_cast<float>(lineHeight * fontScale);
+
+    // Note: We don't take ownership of the adopted font - MuPDF owns the FT_Face
+    _freetypeHandle = nullptr;
+    _primaryFont = nullptr;
+
+    // Track shelf state
+    _shelfX = _atlasPadding;
+    _shelfY = _atlasPadding;
+    _shelfHeight = 0;
+    for (const auto& glyph : glyphs) {
+        if (glyph.atlasW > 0 && glyph.atlasH > 0) {
+            int glyphBottom = glyph.atlasY + glyph.atlasH;
+            if (glyph.atlasX + glyph.atlasW > _shelfX) {
+                _shelfX = glyph.atlasX + glyph.atlasW + _atlasPadding;
+            }
+            if (glyphBottom > _shelfY) {
+                _shelfY = glyph.atlasY;
+                _shelfHeight = glyph.atlasH;
+            }
+        }
+    }
+
+    // Extract glyph metrics
+    for (const auto& glyph : glyphs) {
+        GlyphMetrics m;
+
+        if (glyph.atlasW > 0 && glyph.atlasH > 0) {
+            m._uvMin = glm::vec2(
+                static_cast<float>(glyph.atlasX) / _atlasWidth,
+                static_cast<float>(glyph.atlasY) / _atlasHeight
+            );
+            m._uvMax = glm::vec2(
+                static_cast<float>(glyph.atlasX + glyph.atlasW) / _atlasWidth,
+                static_cast<float>(glyph.atlasY + glyph.atlasH) / _atlasHeight
+            );
+        } else {
+            m._uvMin = m._uvMax = glm::vec2(0);
+        }
+
+        m._size = glm::vec2(static_cast<float>(glyph.atlasW), static_cast<float>(glyph.atlasH));
+        m._bearing = glm::vec2(
+            static_cast<float>(glyph.bearingX - padding),
+            static_cast<float>(glyph.boundsT * glyph.fontScale + padding)
+        );
+        m._advance = static_cast<float>(glyph.advance);
+
+        _glyphs[glyph.codepoint] = m;
+    }
+
+    spdlog::info("Generated MSDF atlas for embedded font '{}': {}x{} with {} glyphs",
+                 fontFamily, _atlasWidth, _atlasHeight, _glyphs.size());
+
+    buildGlyphIndexMap();
+
+    // Clean up the adopted font handle (but NOT the underlying FT_Face!)
+    msdfgen::destroyFont(font);
+
+    return true;
+}
+
+bool Font::generate(FT_Face face, const std::string& fontName, float fontSize, uint32_t atlasSize) {
+    // This is just a wrapper that logs the font name properly
+    // The actual implementation still uses face->family_name internally
+    spdlog::info("Font::generate(FT_Face, name='{}'): delegating to FT_Face generate", fontName);
+    return generate(face, fontSize, atlasSize);
+}
+
+bool Font::generate(const unsigned char* data, size_t dataLen,
+                    const std::string& fontName, float fontSize, uint32_t atlasSize) {
+    if (!data || dataLen == 0) {
+        spdlog::error("Font::generate(data): null or empty font data");
+        return false;
+    }
+
+    spdlog::info("Font::generate(data): loading font '{}' from {} bytes", fontName, dataLen);
+
+    _fontSize = fontSize;
+    _atlasWidth = atlasSize;
+    _atlasHeight = atlasSize;
+
+    // Initialize msdfgen's FreeType
+    msdfgen::FreetypeHandle* ft = msdfgen::initializeFreetype();
+    if (!ft) {
+        spdlog::error("Failed to initialize msdfgen FreeType");
+        return false;
+    }
+
+    // Load font from memory
+    msdfgen::FontHandle* font = msdfgen::loadFontData(ft, data, static_cast<int>(dataLen));
+    if (!font) {
+        spdlog::error("Failed to load font '{}' from data", fontName);
+        msdfgen::deinitializeFreetype(ft);
+        return false;
+    }
+
+    // Get font metrics
+    msdfgen::FontMetrics metrics;
+    msdfgen::getFontMetrics(metrics, font, msdfgen::FONT_SCALING_NONE);
+    double unitsPerEm = metrics.emSize > 0 ? metrics.emSize : 1000.0;
+    double fontScale = fontSize / unitsPerEm;
+    double lineHeight = metrics.lineHeight;
+    spdlog::debug("Font::generate(data): unitsPerEm={}, fontScale={}", unitsPerEm, fontScale);
+
+    // Define character set
+    std::vector<uint32_t> charset;
+    for (uint32_t c = 32; c <= 126; ++c) charset.push_back(c);
+    for (uint32_t c = 0x0100; c <= 0x017F; ++c) charset.push_back(c);
+    for (uint32_t c = 0x2000; c <= 0x206F; ++c) charset.push_back(c);
+
+    // Load glyph shapes
+    std::vector<PackedGlyph> glyphs;
+    int padding = static_cast<int>(std::ceil(_pixelRange));
+
+    for (uint32_t codepoint : charset) {
+        PackedGlyph pg;
+        pg.codepoint = codepoint;
+        pg.style = Regular;
+        pg.fontScale = fontScale;
+
+        double advance;
+        if (!msdfgen::loadGlyph(pg.shape, font, codepoint, msdfgen::FONT_SCALING_NONE, &advance)) continue;
+
+        pg.advance = advance * fontScale;
+
+        if (!pg.shape.contours.empty()) {
+            pg.shape.normalize();
+            msdfgen::Shape::Bounds bounds = pg.shape.getBounds();
+
+            pg.boundsL = bounds.l;
+            pg.boundsB = bounds.b;
+            pg.boundsR = bounds.r;
+            pg.boundsT = bounds.t;
+
+            pg.bearingX = bounds.l * fontScale;
+            pg.bearingY = bounds.t * fontScale;
+            pg.sizeX = (bounds.r - bounds.l) * fontScale;
+            pg.sizeY = (bounds.t - bounds.b) * fontScale;
+
+            pg.atlasW = static_cast<int>(std::ceil(pg.sizeX)) + padding * 2;
+            pg.atlasH = static_cast<int>(std::ceil(pg.sizeY)) + padding * 2;
+        } else {
+            pg.boundsL = pg.boundsB = pg.boundsR = pg.boundsT = 0;
+            pg.bearingX = pg.bearingY = 0;
+            pg.sizeX = pg.sizeY = 0;
+            pg.atlasW = pg.atlasH = 0;
+        }
+
+        glyphs.push_back(std::move(pg));
+    }
+
+    spdlog::info("Font::generate(data): loaded {} glyphs from font '{}'", glyphs.size(), fontName);
+
+    // Sort by height for better packing
+    std::sort(glyphs.begin(), glyphs.end(), [](const PackedGlyph& a, const PackedGlyph& b) {
+        return a.atlasH > b.atlasH;
+    });
+
+    // Pack glyphs into atlas
+    ShelfPacker packer(_atlasWidth, _atlasHeight);
+    for (auto& glyph : glyphs) {
+        if (glyph.atlasW > 0 && glyph.atlasH > 0) {
+            if (!packer.pack(glyph.atlasW, glyph.atlasH, glyph.atlasX, glyph.atlasY)) {
+                spdlog::warn("Atlas full, could not pack glyph {}", glyph.codepoint);
+                continue;
+            }
+        } else {
+            glyph.atlasX = glyph.atlasY = 0;
+        }
+    }
+
+    // Create atlas bitmap (RGBA)
+    _atlasData.resize(_atlasWidth * _atlasHeight * 4, 0);
+
+    // Generate MSDF for each glyph
+    for (auto& glyph : glyphs) {
+        if (glyph.shape.contours.empty()) continue;
+
+        if (!glyph.shape.validate()) {
+            spdlog::warn("Invalid shape for codepoint {} in font '{}'", glyph.codepoint, fontName);
+        }
+
+        glyph.shape.normalize();
+        msdfgen::edgeColoringSimple(glyph.shape, 3.0);
+
+        double scale = glyph.fontScale;
+        msdfgen::Bitmap<float, 3> msdf(glyph.atlasW, glyph.atlasH);
+
+        msdfgen::Vector2 translate(
+            padding - glyph.boundsL * scale,
+            padding - glyph.boundsB * scale
+        );
+
+        msdfgen::generateMSDF(msdf, glyph.shape, _pixelRange, scale, translate);
+
+        // Copy to atlas with Y-flip
+        for (int y = 0; y < glyph.atlasH; ++y) {
+            for (int x = 0; x < glyph.atlasW; ++x) {
+                int atlasX = glyph.atlasX + x;
+                int atlasY = glyph.atlasY + (glyph.atlasH - 1 - y);
+
+                if (atlasX >= 0 && atlasX < (int)_atlasWidth &&
+                    atlasY >= 0 && atlasY < (int)_atlasHeight) {
+                    size_t idx = (atlasY * _atlasWidth + atlasX) * 4;
+                    _atlasData[idx + 0] = static_cast<uint8_t>(std::clamp(msdf(x, y)[0] * 255.0f, 0.0f, 255.0f));
+                    _atlasData[idx + 1] = static_cast<uint8_t>(std::clamp(msdf(x, y)[1] * 255.0f, 0.0f, 255.0f));
+                    _atlasData[idx + 2] = static_cast<uint8_t>(std::clamp(msdf(x, y)[2] * 255.0f, 0.0f, 255.0f));
+                    _atlasData[idx + 3] = 255;
+                }
+            }
+        }
+    }
+
+    _lineHeight = static_cast<float>(lineHeight * fontScale);
+
+    // We own this FreeType instance
+    _freetypeHandle = ft;
+    _primaryFont = font;
+
+    // Track shelf state
+    _shelfX = _atlasPadding;
+    _shelfY = _atlasPadding;
+    _shelfHeight = 0;
+    for (const auto& glyph : glyphs) {
+        if (glyph.atlasW > 0 && glyph.atlasH > 0) {
+            int glyphBottom = glyph.atlasY + glyph.atlasH;
+            if (glyph.atlasX + glyph.atlasW > _shelfX) {
+                _shelfX = glyph.atlasX + glyph.atlasW + _atlasPadding;
+            }
+            if (glyphBottom > _shelfY) {
+                _shelfY = glyph.atlasY;
+                _shelfHeight = glyph.atlasH;
+            }
+        }
+    }
+
+    // Extract glyph metrics
+    for (const auto& glyph : glyphs) {
+        GlyphMetrics m;
+
+        if (glyph.atlasW > 0 && glyph.atlasH > 0) {
+            m._uvMin = glm::vec2(
+                static_cast<float>(glyph.atlasX) / _atlasWidth,
+                static_cast<float>(glyph.atlasY) / _atlasHeight
+            );
+            m._uvMax = glm::vec2(
+                static_cast<float>(glyph.atlasX + glyph.atlasW) / _atlasWidth,
+                static_cast<float>(glyph.atlasY + glyph.atlasH) / _atlasHeight
+            );
+        } else {
+            m._uvMin = m._uvMax = glm::vec2(0);
+        }
+
+        m._size = glm::vec2(static_cast<float>(glyph.atlasW), static_cast<float>(glyph.atlasH));
+        m._bearing = glm::vec2(
+            static_cast<float>(glyph.bearingX - padding),
+            static_cast<float>(glyph.boundsT * glyph.fontScale + padding)
+        );
+        m._advance = static_cast<float>(glyph.advance);
+
+        _glyphs[glyph.codepoint] = m;
+    }
+
+    spdlog::info("Generated MSDF atlas for font '{}': {}x{} with {} glyphs",
+                 fontName, _atlasWidth, _atlasHeight, _glyphs.size());
+
     buildGlyphIndexMap();
 
     return true;

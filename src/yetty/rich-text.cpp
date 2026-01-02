@@ -81,19 +81,22 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 // RichText Implementation
 //-----------------------------------------------------------------------------
 
-Result<RichText::Ptr> RichText::create(WebGPUContext* ctx, WGPUTextureFormat targetFormat) noexcept {
+Result<RichText::Ptr> RichText::create(WebGPUContext* ctx, WGPUTextureFormat targetFormat, FontManager* fontMgr) noexcept {
     if (!ctx) {
         return Err<Ptr>("RichText::create: null context");
     }
-    auto rt = Ptr(new RichText(ctx, targetFormat));
+    if (!fontMgr) {
+        return Err<Ptr>("RichText::create: null FontManager");
+    }
+    auto rt = Ptr(new RichText(ctx, targetFormat, fontMgr));
     if (auto res = rt->init(); !res) {
         return Err<Ptr>("Failed to initialize RichText", res);
     }
     return Ok(std::move(rt));
 }
 
-RichText::RichText(WebGPUContext* ctx, WGPUTextureFormat targetFormat) noexcept
-    : ctx_(ctx), targetFormat_(targetFormat) {}
+RichText::RichText(WebGPUContext* ctx, WGPUTextureFormat targetFormat, FontManager* fontMgr) noexcept
+    : ctx_(ctx), targetFormat_(targetFormat), fontMgr_(fontMgr) {}
 
 RichText::~RichText() {
     dispose();
@@ -110,14 +113,19 @@ Result<void> RichText::init() noexcept {
 }
 
 void RichText::dispose() noexcept {
-    if (bindGroup_) { wgpuBindGroupRelease(bindGroup_); bindGroup_ = nullptr; }
+    // Release per-font bind groups
+    for (auto& [font, bindGroup] : fontBindGroups_) {
+        if (bindGroup) wgpuBindGroupRelease(bindGroup);
+    }
+    fontBindGroups_.clear();
+
     if (bindGroupLayout_) { wgpuBindGroupLayoutRelease(bindGroupLayout_); bindGroupLayout_ = nullptr; }
     if (pipeline_) { wgpuRenderPipelineRelease(pipeline_); pipeline_ = nullptr; }
     if (uniformBuffer_) { wgpuBufferRelease(uniformBuffer_); uniformBuffer_ = nullptr; }
     if (glyphBuffer_) { wgpuBufferRelease(glyphBuffer_); glyphBuffer_ = nullptr; }
     if (sampler_) { wgpuSamplerRelease(sampler_); sampler_ = nullptr; }
 
-    glyphs_.clear();
+    fontBatches_.clear();
     chars_.clear();
     spans_.clear();
     glyphCount_ = 0;
@@ -126,19 +134,74 @@ void RichText::dispose() noexcept {
     gpuResourcesDirty_ = true;
 }
 
-void RichText::setFont(Font* font) {
-    if (font_ != font) {
-        font_ = font;
-        // Bind group needs to be recreated with new font texture
-        gpuResourcesDirty_ = true;
-        layoutDirty_ = true;
+//-----------------------------------------------------------------------------
+// Font Resolution
+//-----------------------------------------------------------------------------
+
+Font* RichText::resolveFont(const std::string& fontFamily, Font::Style style) {
+    if (!fontMgr_) {
+        spdlog::error("RichText::resolveFont: fontMgr_ is null!");
+        return nullptr;
     }
+
+    // Use specified family or fall back to default
+    std::string family = fontFamily.empty() ? defaultFontFamily_ : fontFamily;
+
+    spdlog::debug("RichText::resolveFont: family='{}' (input='{}', default='{}'), style={}",
+                  family, fontFamily, defaultFontFamily_, static_cast<int>(style));
+
+    // If family is specified, try to get it
+    if (!family.empty()) {
+        // Try to get font with specific style
+        auto result = fontMgr_->getFont(family, style);
+        if (result && *result) {
+            spdlog::debug("RichText::resolveFont: found font for family='{}' style={}", family, static_cast<int>(style));
+            return *result;
+        }
+
+        // Fall back to regular style of same family
+        result = fontMgr_->getFont(family);
+        if (result && *result) {
+            spdlog::debug("RichText::resolveFont: found font for family='{}' (regular)", family);
+            return *result;
+        }
+    }
+
+    // Try default font from FontManager
+    Font* font = fontMgr_->getDefaultFont();
+    if (font) {
+        spdlog::debug("RichText::resolveFont: using FontManager default font");
+        return font;
+    }
+
+    // FontManager has no default set - try loading common fallback fonts
+    static const char* fallbackFonts[] = {
+        "monospace",
+        "DejaVu Sans Mono",
+        "Liberation Mono",
+        "Courier New",
+        "sans-serif",
+        "DejaVu Sans",
+        "Liberation Sans",
+        "Arial"
+    };
+
+    for (const char* fallback : fallbackFonts) {
+        auto result = fontMgr_->getFont(fallback, style);
+        if (result && *result) {
+            spdlog::info("RichText::resolveFont: loaded fallback font '{}'", fallback);
+            return *result;
+        }
+    }
+
+    spdlog::error("RichText::resolveFont: no font could be loaded!");
+    return nullptr;
 }
 
 void RichText::clear() {
     spans_.clear();
     chars_.clear();
-    glyphs_.clear();
+    fontBatches_.clear();
     contentHeight_ = 0;
     contentWidth_ = 0;
     glyphCount_ = 0;
@@ -216,7 +279,12 @@ uint32_t RichText::decodeUTF8(const uint8_t*& ptr, const uint8_t* end) {
 
 void RichText::layoutSpans(float viewWidth, float viewHeight) {
     (void)viewHeight;
-    if (!font_) return;
+    if (!fontMgr_) {
+        spdlog::error("RichText::layoutSpans: fontMgr_ is null!");
+        return;
+    }
+
+    spdlog::debug("RichText::layoutSpans: {} spans, viewWidth={}", spans_.size(), viewWidth);
 
     chars_.clear();
     contentHeight_ = 0;
@@ -225,8 +293,15 @@ void RichText::layoutSpans(float viewWidth, float viewHeight) {
     for (const auto& span : spans_) {
         if (span.text.empty()) continue;
 
-        float scale = span.size / font_->getFontSize();
-        float lineHeight = span.lineHeight > 0 ? span.lineHeight : font_->getLineHeight() * scale;
+        // Resolve font for this span
+        Font* font = resolveFont(span.fontFamily, span.style);
+        if (!font) {
+            spdlog::warn("RichText::layoutSpans: no font for span, skipping");
+            continue;
+        }
+
+        float scale = span.size / font->getFontSize();
+        float lineHeight = span.lineHeight > 0 ? span.lineHeight : font->getLineHeight() * scale;
         float maxWidth = span.wrap ? span.maxWidth : viewWidth;
         float startX = span.x;
 
@@ -249,7 +324,7 @@ void RichText::layoutSpans(float viewWidth, float viewHeight) {
             if (codepoint == '\r') continue;
 
             // Get glyph metrics
-            const auto* metrics = font_->getGlyph(codepoint);
+            const auto* metrics = font->getGlyph(codepoint);
             if (!metrics) continue;
 
             float advance = metrics->_advance * scale;
@@ -260,7 +335,7 @@ void RichText::layoutSpans(float viewWidth, float viewHeight) {
                 cursorY += lineHeight;
             }
 
-            // Add character
+            // Add character with font family for later rendering
             TextChar ch;
             ch.codepoint = codepoint;
             ch.x = cursorX;
@@ -268,6 +343,7 @@ void RichText::layoutSpans(float viewWidth, float viewHeight) {
             ch.size = span.size;
             ch.color = span.color;
             ch.style = span.style;
+            ch.fontFamily = span.fontFamily;
             chars_.push_back(ch);
 
             cursorX += advance;
@@ -276,6 +352,9 @@ void RichText::layoutSpans(float viewWidth, float viewHeight) {
 
         contentHeight_ = std::max(contentHeight_, cursorY + lineHeight);
     }
+
+    spdlog::debug("RichText::layoutSpans: produced {} chars, content {}x{}",
+                  chars_.size(), contentWidth_, contentHeight_);
 }
 
 //-----------------------------------------------------------------------------
@@ -286,6 +365,9 @@ void RichText::layoutChars(float viewWidth, float viewHeight) {
     (void)viewWidth;
     (void)viewHeight;
 
+    spdlog::debug("RichText::layoutChars: {} chars (useCharsDirectly={})",
+                  chars_.size(), useCharsDirectly_);
+
     contentHeight_ = 0;
     contentWidth_ = 0;
 
@@ -293,27 +375,48 @@ void RichText::layoutChars(float viewWidth, float viewHeight) {
         contentWidth_ = std::max(contentWidth_, ch.x + ch.size);
         contentHeight_ = std::max(contentHeight_, ch.y + ch.size);
     }
+
+    spdlog::debug("RichText::layoutChars: content {}x{}", contentWidth_, contentHeight_);
 }
 
 //-----------------------------------------------------------------------------
-// Build GPU glyph instances from chars
+// Build GPU glyph instances from chars, grouped by font
 //-----------------------------------------------------------------------------
 
 void RichText::buildGlyphInstances() {
-    if (!font_) return;
+    if (!fontMgr_) {
+        spdlog::error("RichText::buildGlyphInstances: fontMgr_ is null!");
+        return;
+    }
 
-    glyphs_.clear();
+    spdlog::debug("RichText::buildGlyphInstances: processing {} chars", chars_.size());
 
-    // Base font size used for MSDF atlas
-    float atlasBaseSize = font_->getFontSize();
+    fontBatches_.clear();
+    glyphCount_ = 0;
+
+    // Map from Font* to batch index for grouping
+    std::map<Font*, size_t> fontToBatch;
+    int skippedNoFont = 0;
+    int skippedNoGlyph = 0;
 
     for (const auto& ch : chars_) {
         if (ch.codepoint == '\n' || ch.codepoint == '\r') continue;
 
-        const auto* metrics = font_->getGlyph(ch.codepoint);
-        if (!metrics) continue;
+        // Resolve font for this character
+        Font* font = resolveFont(ch.fontFamily, ch.style);
+        if (!font) {
+            skippedNoFont++;
+            continue;
+        }
+
+        const auto* metrics = font->getGlyph(ch.codepoint);
+        if (!metrics) {
+            skippedNoGlyph++;
+            continue;
+        }
 
         // Scale factor from char size to atlas base
+        float atlasBaseSize = font->getFontSize();
         float fontScale = ch.size / atlasBaseSize;
 
         float glyphW = metrics->_size.x * fontScale;
@@ -340,10 +443,22 @@ void RichText::buildGlyphInstances() {
         inst.colorB = ch.color.b;
         inst.colorA = ch.color.a;
 
-        glyphs_.push_back(inst);
+        // Find or create batch for this font
+        auto it = fontToBatch.find(font);
+        if (it == fontToBatch.end()) {
+            fontToBatch[font] = fontBatches_.size();
+            FontGlyphBatch batch;
+            batch.font = font;
+            fontBatches_.push_back(batch);
+            it = fontToBatch.find(font);
+        }
+
+        fontBatches_[it->second].glyphs.push_back(inst);
+        glyphCount_++;
     }
 
-    glyphCount_ = static_cast<uint32_t>(glyphs_.size());
+    spdlog::info("RichText::buildGlyphInstances: {} glyphs in {} batches (skipped: {} no font, {} no glyph)",
+                  glyphCount_, fontBatches_.size(), skippedNoFont, skippedNoGlyph);
 }
 
 //-----------------------------------------------------------------------------
@@ -481,48 +596,23 @@ Result<void> RichText::createPipeline(WebGPUContext& ctx, WGPUTextureFormat targ
 }
 
 //-----------------------------------------------------------------------------
-// Create/Update Bind Group
+// Create/Update Bind Group for a specific font
 //-----------------------------------------------------------------------------
 
-Result<void> RichText::createBindGroup(WebGPUContext& ctx) {
-    if (!font_ || !font_->getTextureView()) {
+Result<void> RichText::createBindGroup(WebGPUContext& ctx, Font* font) {
+    if (!font || !font->getTextureView()) {
         return Err<void>("No font texture available");
-    }
-
-    if (glyphs_.empty()) {
-        return Ok();  // Nothing to render
     }
 
     WGPUDevice device = ctx.getDevice();
 
-    // Create or resize glyph buffer
-    uint32_t requiredCapacity = static_cast<uint32_t>(glyphs_.size());
-    if (requiredCapacity > glyphBufferCapacity_) {
-        if (glyphBuffer_) {
-            wgpuBufferRelease(glyphBuffer_);
-        }
-        // Allocate with some headroom
-        glyphBufferCapacity_ = std::max(requiredCapacity, glyphBufferCapacity_ * 2);
-        if (glyphBufferCapacity_ < 256) glyphBufferCapacity_ = 256;
-
-        WGPUBufferDescriptor bufDesc = {};
-        bufDesc.size = glyphBufferCapacity_ * sizeof(GlyphInstance);
-        bufDesc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
-        glyphBuffer_ = wgpuDeviceCreateBuffer(device, &bufDesc);
-        if (!glyphBuffer_) return Err<void>("Failed to create glyph buffer");
+    // Check if we already have a bind group for this font
+    auto it = fontBindGroups_.find(font);
+    if (it != fontBindGroups_.end()) {
+        return Ok();  // Already cached
     }
 
-    // Upload glyph data
-    wgpuQueueWriteBuffer(ctx.getQueue(), glyphBuffer_, 0,
-                         glyphs_.data(), glyphs_.size() * sizeof(GlyphInstance));
-
-    // Release old bind group
-    if (bindGroup_) {
-        wgpuBindGroupRelease(bindGroup_);
-        bindGroup_ = nullptr;
-    }
-
-    // Create new bind group
+    // Create bind group for this font
     WGPUBindGroupEntry bgEntries[4] = {};
 
     bgEntries[0].binding = 0;
@@ -533,34 +623,34 @@ Result<void> RichText::createBindGroup(WebGPUContext& ctx) {
     bgEntries[1].sampler = sampler_;
 
     bgEntries[2].binding = 2;
-    bgEntries[2].textureView = font_->getTextureView();
+    bgEntries[2].textureView = font->getTextureView();
 
+    // Note: glyph buffer binding will be set per-batch during render
+    // We use maximum capacity here for the layout
     bgEntries[3].binding = 3;
     bgEntries[3].buffer = glyphBuffer_;
-    bgEntries[3].size = glyphs_.size() * sizeof(GlyphInstance);
+    bgEntries[3].size = glyphBufferCapacity_ * sizeof(GlyphInstance);
 
     WGPUBindGroupDescriptor bgDesc = {};
     bgDesc.layout = bindGroupLayout_;
     bgDesc.entryCount = 4;
     bgDesc.entries = bgEntries;
-    bindGroup_ = wgpuDeviceCreateBindGroup(device, &bgDesc);
 
-    if (!bindGroup_) return Err<void>("Failed to create bind group");
+    WGPUBindGroup bindGroup = wgpuDeviceCreateBindGroup(device, &bgDesc);
+    if (!bindGroup) return Err<void>("Failed to create bind group for font");
 
-    gpuResourcesDirty_ = false;
+    fontBindGroups_[font] = bindGroup;
     return Ok();
 }
 
 Result<void> RichText::uploadGlyphBuffer(WebGPUContext& ctx) {
-    if (glyphs_.empty() || !glyphBuffer_) return Ok();
-
-    wgpuQueueWriteBuffer(ctx.getQueue(), glyphBuffer_, 0,
-                         glyphs_.data(), glyphs_.size() * sizeof(GlyphInstance));
+    (void)ctx;
+    // This function is no longer used - glyph data is uploaded per-batch in render()
     return Ok();
 }
 
 //-----------------------------------------------------------------------------
-// Render (mirrors PDFLayer::render)
+// Render - renders all font batches
 //-----------------------------------------------------------------------------
 
 Result<void> RichText::render(WebGPUContext& ctx,
@@ -568,25 +658,59 @@ Result<void> RichText::render(WebGPUContext& ctx,
                                uint32_t screenWidth, uint32_t screenHeight,
                                float pixelX, float pixelY,
                                float pixelW, float pixelH) {
+    spdlog::debug("RichText::render: initialized={}, spans={}, chars={}, batches={}, glyphs={}",
+                  initialized_, spans_.size(), chars_.size(), fontBatches_.size(), glyphCount_);
+
     if (!initialized_) {
+        spdlog::error("RichText::render: not initialized!");
         return Err<void>("RichText not initialized");
     }
 
     // Re-layout if view size changed
     if (lastViewWidth_ != pixelW || lastViewHeight_ != pixelH || layoutDirty_) {
+        spdlog::debug("RichText::render: triggering layout (dirty={}, size changed={})",
+                      layoutDirty_, lastViewWidth_ != pixelW || lastViewHeight_ != pixelH);
         layout(pixelW, pixelH);
     }
 
-    // Update GPU resources if needed
-    if (gpuResourcesDirty_) {
-        auto result = createBindGroup(ctx);
-        if (!result) {
-            return Err<void>("Failed to create bind group", result);
-        }
+    if (!pipeline_) {
+        spdlog::warn("RichText::render: no pipeline!");
+        return Ok();
     }
 
-    if (!pipeline_ || !bindGroup_ || glyphCount_ == 0) {
+    if (fontBatches_.empty() || glyphCount_ == 0) {
+        spdlog::debug("RichText::render: nothing to render (batches={}, glyphs={})",
+                      fontBatches_.size(), glyphCount_);
         return Ok();  // Nothing to render
+    }
+
+    WGPUDevice device = ctx.getDevice();
+
+    // Find max batch size for glyph buffer allocation
+    size_t maxBatchSize = 0;
+    for (const auto& batch : fontBatches_) {
+        maxBatchSize = std::max(maxBatchSize, batch.glyphs.size());
+    }
+
+    // Ensure glyph buffer is large enough for any batch
+    if (maxBatchSize > glyphBufferCapacity_) {
+        if (glyphBuffer_) {
+            wgpuBufferRelease(glyphBuffer_);
+        }
+        glyphBufferCapacity_ = std::max(static_cast<uint32_t>(maxBatchSize), glyphBufferCapacity_ * 2);
+        if (glyphBufferCapacity_ < 256) glyphBufferCapacity_ = 256;
+
+        WGPUBufferDescriptor bufDesc = {};
+        bufDesc.size = glyphBufferCapacity_ * sizeof(GlyphInstance);
+        bufDesc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
+        glyphBuffer_ = device ? wgpuDeviceCreateBuffer(device, &bufDesc) : nullptr;
+        if (!glyphBuffer_) return Err<void>("Failed to create glyph buffer");
+
+        // Invalidate cached bind groups since buffer changed
+        for (auto& [font, bindGroup] : fontBindGroups_) {
+            if (bindGroup) wgpuBindGroupRelease(bindGroup);
+        }
+        fontBindGroups_.clear();
     }
 
     // Update uniforms
@@ -623,7 +747,7 @@ Result<void> RichText::render(WebGPUContext& ctx,
     passDesc.colorAttachmentCount = 1;
     passDesc.colorAttachments = &colorAttachment;
 
-    WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(ctx.getDevice(), nullptr);
+    WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(device, nullptr);
     WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
 
     // Set scissor rect to clip content to bounds
@@ -635,8 +759,29 @@ Result<void> RichText::render(WebGPUContext& ctx,
         static_cast<uint32_t>(pixelH));
 
     wgpuRenderPassEncoderSetPipeline(pass, pipeline_);
-    wgpuRenderPassEncoderSetBindGroup(pass, 0, bindGroup_, 0, nullptr);
-    wgpuRenderPassEncoderDraw(pass, 6, glyphCount_, 0, 0);
+
+    // Render each font batch
+    for (const auto& batch : fontBatches_) {
+        if (batch.glyphs.empty() || !batch.font) continue;
+
+        // Ensure bind group exists for this font
+        auto result = createBindGroup(ctx, batch.font);
+        if (!result) {
+            spdlog::warn("RichText: Failed to create bind group for font");
+            continue;
+        }
+
+        auto it = fontBindGroups_.find(batch.font);
+        if (it == fontBindGroups_.end() || !it->second) continue;
+
+        // Upload this batch's glyphs
+        wgpuQueueWriteBuffer(ctx.getQueue(), glyphBuffer_, 0,
+                             batch.glyphs.data(), batch.glyphs.size() * sizeof(GlyphInstance));
+
+        // Draw with this font's bind group
+        wgpuRenderPassEncoderSetBindGroup(pass, 0, it->second, 0, nullptr);
+        wgpuRenderPassEncoderDraw(pass, 6, static_cast<uint32_t>(batch.glyphs.size()), 0, 0);
+    }
 
     wgpuRenderPassEncoderEnd(pass);
     wgpuRenderPassEncoderRelease(pass);
@@ -647,6 +792,7 @@ Result<void> RichText::render(WebGPUContext& ctx,
     wgpuQueueSubmit(ctx.getQueue(), 1, &cmdBuffer);
     wgpuCommandBufferRelease(cmdBuffer);
 
+    gpuResourcesDirty_ = false;
     return Ok();
 }
 

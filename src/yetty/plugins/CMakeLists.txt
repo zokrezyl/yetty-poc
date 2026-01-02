@@ -46,9 +46,15 @@ add_yetty_plugin(markdown
     SOURCES markdown/markdown.cpp
 )
 
-# pdf plugin
+# pdf plugin - uses RichText for rendering
 add_yetty_plugin(pdf
     SOURCES pdf/pdf.cpp
+    LIBS mupdf
+)
+
+# pdf-old plugin - for testing
+add_yetty_plugin(pdf-old
+    SOURCES pdf-old/pdf.cpp
     LIBS mupdf
 )
 
