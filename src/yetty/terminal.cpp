@@ -16,8 +16,12 @@
 #include <sys/ioctl.h>
 #include <sys/wait.h>
 #include <termios.h>
-#include <pty.h>
 #include <signal.h>
+#ifdef __APPLE__
+#include <util.h>  // macOS: forkpty is in util.h
+#else
+#include <pty.h>   // Linux: forkpty is in pty.h
+#endif
 #endif
 
 
