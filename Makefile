@@ -31,8 +31,8 @@ CMAKE_GENERATOR := -G Ninja
 CMAKE_RELEASE := -DCMAKE_BUILD_TYPE=Release
 CMAKE_DEBUG := -DCMAKE_BUILD_TYPE=Debug
 
-# Gradle options
-GRADLE_OPTS := --project-cache-dir=../$(BUILD_DIR_ANDROID_DEBUG)/.gradle
+# Gradle options (path relative to build-tools/android/)
+GRADLE_OPTS := --project-cache-dir=../../$(BUILD_DIR_ANDROID_DEBUG)/.gradle
 
 # Default target - show help
 .PHONY: all
@@ -89,21 +89,21 @@ config-android-release: ## Configure Android release build
 .PHONY: build-android-debug
 build-android-debug: ## Build Android debug APK
 	@$(MAKE) _android-deps
-	nix develop .#android --command bash -c "cd android && ./gradlew $(GRADLE_OPTS) assembleDebug"
+	nix develop .#android --command bash -c "cd build-tools/android && ./gradlew $(GRADLE_OPTS) assembleDebug"
 
 .PHONY: build-android-release
 build-android-release: ## Build Android release APK
 	@$(MAKE) _android-deps
-	nix develop .#android --command bash -c "cd android && ./gradlew $(GRADLE_OPTS) assembleRelease"
+	nix develop .#android --command bash -c "cd build-tools/android && ./gradlew $(GRADLE_OPTS) assembleRelease"
 
 .PHONY: test-android-debug
 test-android-debug: build-android-debug ## Install and run Android debug build
-	adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+	adb install -r build-tools/android/app/build/outputs/apk/debug/app-debug.apk
 	adb shell am start -n com.yetty.terminal/android.app.NativeActivity
 
 .PHONY: test-android-release
 test-android-release: build-android-release ## Install and run Android release build
-	adb install -r android/app/build/outputs/apk/release/app-release.apk
+	adb install -r build-tools/android/app/build/outputs/apk/release/app-release.apk
 	adb shell am start -n com.yetty.terminal/android.app.NativeActivity
 
 #=============================================================================
@@ -212,5 +212,5 @@ help:
 	@echo ""
 	@echo "Build outputs:"
 	@echo "  build-desktop-{debug,release}/yetty"
-	@echo "  android/app/build/outputs/apk/{debug,release}/"
+	@echo "  build-tools/android/app/build/outputs/apk/{debug,release}/"
 	@echo "  build-webasm-{debug,release}/yetty.html"

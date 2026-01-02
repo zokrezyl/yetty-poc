@@ -51,7 +51,8 @@ android {
             path = file("src/main/cpp/CMakeLists.txt")
             version = "3.22.1"
             // Redirect CMake build output to build-android/cxx at project root
-            buildStagingDirectory = File(rootProject.projectDir.parentFile, "build-android/cxx")
+            // Go up two levels: build-tools/android -> root
+            buildStagingDirectory = File(rootProject.projectDir.parentFile.parentFile, "build-android/cxx")
         }
     }
 
@@ -71,10 +72,11 @@ android {
     }
 
     // Include pre-built wgpu-native library and assets from build-android
+    // Go up two levels: build-tools/android -> root
     sourceSets {
         getByName("main") {
-            jniLibs.srcDirs(File(rootProject.projectDir.parentFile, "build-android/wgpu-libs"))
-            assets.srcDirs(File(rootProject.projectDir.parentFile, "build-android/assets"))
+            jniLibs.srcDirs(File(rootProject.projectDir.parentFile.parentFile, "build-android/wgpu-libs"))
+            assets.srcDirs(File(rootProject.projectDir.parentFile.parentFile, "build-android/assets"))
         }
     }
 }

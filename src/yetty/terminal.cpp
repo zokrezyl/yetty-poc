@@ -4,6 +4,13 @@
 #include <spdlog/spdlog.h>
 #include <sstream>
 #include <cstring>
+
+#ifdef _WIN32
+// Windows ConPTY support
+#include <windows.h>
+#include <process.h>
+#else
+// Unix PTY support
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
@@ -11,6 +18,7 @@
 #include <termios.h>
 #include <pty.h>
 #include <signal.h>
+#endif
 
 
 namespace yetty {
@@ -76,6 +84,26 @@ Result<void> Terminal::init() noexcept {
 }
 
 Terminal::~Terminal() {
+#ifdef _WIN32
+    // Windows ConPTY cleanup
+    if (hPC_ != INVALID_HANDLE_VALUE) {
+        ClosePseudoConsole(hPC_);
+    }
+    if (hPipeIn_ != INVALID_HANDLE_VALUE) {
+        CloseHandle(hPipeIn_);
+    }
+    if (hPipeOut_ != INVALID_HANDLE_VALUE) {
+        CloseHandle(hPipeOut_);
+    }
+    if (hProcess_ != INVALID_HANDLE_VALUE) {
+        TerminateProcess(hProcess_, 0);
+        CloseHandle(hProcess_);
+    }
+    if (hThread_ != INVALID_HANDLE_VALUE) {
+        CloseHandle(hThread_);
+    }
+#else
+    // Unix PTY cleanup
     if (ptyMaster_ >= 0) {
         close(ptyMaster_);
     }
@@ -84,6 +112,7 @@ Terminal::~Terminal() {
         kill(childPid_, SIGTERM);
         waitpid(childPid_, nullptr, 0);
     }
+#endif
 
     if (vterm_) {
         vterm_free(vterm_);
@@ -91,7 +120,121 @@ Terminal::~Terminal() {
 }
 
 Result<void> Terminal::start(const std::string& shell) {
-    // Get shell from environment if not specified
+#ifdef _WIN32
+    // Windows ConPTY implementation
+    std::string shellPath = shell;
+    if (shellPath.empty()) {
+        const char* envComSpec = getenv("COMSPEC");
+        shellPath = envComSpec ? envComSpec : "cmd.exe";
+    }
+
+    spdlog::debug("Starting shell: {}", shellPath);
+    spdlog::debug("Terminal size: {}x{}", cols_, rows_);
+
+    // Create pipes for ConPTY
+    HANDLE hPipeInRead = INVALID_HANDLE_VALUE;
+    HANDLE hPipeOutWrite = INVALID_HANDLE_VALUE;
+
+    if (!CreatePipe(&hPipeInRead, &hPipeOut_, nullptr, 0)) {
+        return Err<void>("Failed to create input pipe");
+    }
+    if (!CreatePipe(&hPipeIn_, &hPipeOutWrite, nullptr, 0)) {
+        CloseHandle(hPipeInRead);
+        CloseHandle(hPipeOut_);
+        hPipeOut_ = INVALID_HANDLE_VALUE;
+        return Err<void>("Failed to create output pipe");
+    }
+
+    // Create the pseudo console
+    COORD size = {static_cast<SHORT>(cols_), static_cast<SHORT>(rows_)};
+    HRESULT hr = CreatePseudoConsole(size, hPipeInRead, hPipeOutWrite, 0, &hPC_);
+    if (FAILED(hr)) {
+        CloseHandle(hPipeInRead);
+        CloseHandle(hPipeOutWrite);
+        CloseHandle(hPipeIn_);
+        CloseHandle(hPipeOut_);
+        hPipeIn_ = INVALID_HANDLE_VALUE;
+        hPipeOut_ = INVALID_HANDLE_VALUE;
+        return Err<void>("CreatePseudoConsole failed with HRESULT: " + std::to_string(hr));
+    }
+
+    // Close the ends of the pipes the ConPTY now owns
+    CloseHandle(hPipeInRead);
+    CloseHandle(hPipeOutWrite);
+
+    // Set up startup info with pseudo console
+    STARTUPINFOEXW siEx = {};
+    siEx.StartupInfo.cb = sizeof(STARTUPINFOEXW);
+
+    // Get required size for attribute list
+    SIZE_T attrListSize = 0;
+    InitializeProcThreadAttributeList(nullptr, 1, 0, &attrListSize);
+
+    siEx.lpAttributeList = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(
+        HeapAlloc(GetProcessHeap(), 0, attrListSize));
+    if (!siEx.lpAttributeList) {
+        ClosePseudoConsole(hPC_);
+        hPC_ = INVALID_HANDLE_VALUE;
+        return Err<void>("Failed to allocate attribute list");
+    }
+
+    if (!InitializeProcThreadAttributeList(siEx.lpAttributeList, 1, 0, &attrListSize)) {
+        HeapFree(GetProcessHeap(), 0, siEx.lpAttributeList);
+        ClosePseudoConsole(hPC_);
+        hPC_ = INVALID_HANDLE_VALUE;
+        return Err<void>("InitializeProcThreadAttributeList failed");
+    }
+
+    if (!UpdateProcThreadAttribute(siEx.lpAttributeList, 0,
+                                   PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
+                                   hPC_, sizeof(HPCON), nullptr, nullptr)) {
+        DeleteProcThreadAttributeList(siEx.lpAttributeList);
+        HeapFree(GetProcessHeap(), 0, siEx.lpAttributeList);
+        ClosePseudoConsole(hPC_);
+        hPC_ = INVALID_HANDLE_VALUE;
+        return Err<void>("UpdateProcThreadAttribute failed");
+    }
+
+    // Convert shell path to wide string
+    int wideLen = MultiByteToWideChar(CP_UTF8, 0, shellPath.c_str(), -1, nullptr, 0);
+    std::wstring wideShellPath(wideLen, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, shellPath.c_str(), -1, wideShellPath.data(), wideLen);
+
+    // Create the process
+    PROCESS_INFORMATION pi = {};
+    BOOL success = CreateProcessW(
+        nullptr,
+        wideShellPath.data(),
+        nullptr,
+        nullptr,
+        FALSE,
+        EXTENDED_STARTUPINFO_PRESENT,
+        nullptr,
+        nullptr,
+        &siEx.StartupInfo,
+        &pi
+    );
+
+    DeleteProcThreadAttributeList(siEx.lpAttributeList);
+    HeapFree(GetProcessHeap(), 0, siEx.lpAttributeList);
+
+    if (!success) {
+        DWORD error = GetLastError();
+        ClosePseudoConsole(hPC_);
+        hPC_ = INVALID_HANDLE_VALUE;
+        return Err<void>("CreateProcess failed with error: " + std::to_string(error));
+    }
+
+    hProcess_ = pi.hProcess;
+    hThread_ = pi.hThread;
+
+    running_ = true;
+    spdlog::info("Terminal started with shell: {}", shellPath);
+
+    return Ok();
+
+#else
+    // Unix PTY implementation
     std::string shellPath = shell;
     if (shellPath.empty()) {
         const char* envShell = getenv("SHELL");
@@ -161,14 +304,30 @@ Result<void> Terminal::start(const std::string& shell) {
                  shellPath, ptyMaster_, childPid_);
 
     return Ok();
+#endif
 }
 
 Result<void> Terminal::writeToPty(const char* data, size_t len) {
-    if (ptyMaster_ < 0) {
-        return Err("PTY not open");
-    }
     if (len == 0) {
         return Ok();
+    }
+
+#ifdef _WIN32
+    if (hPipeOut_ == INVALID_HANDLE_VALUE) {
+        return Err("PTY not open");
+    }
+
+    DWORD written = 0;
+    if (!WriteFile(hPipeOut_, data, static_cast<DWORD>(len), &written, nullptr)) {
+        return Err("PTY write failed with error: " + std::to_string(GetLastError()));
+    }
+    if (written != len) {
+        return Err("PTY write incomplete: wrote " + std::to_string(written) +
+                   " of " + std::to_string(len) + " bytes");
+    }
+#else
+    if (ptyMaster_ < 0) {
+        return Err("PTY not open");
     }
 
     ssize_t written = write(ptyMaster_, data, len);
@@ -179,6 +338,7 @@ Result<void> Terminal::writeToPty(const char* data, size_t len) {
         return Err("PTY write incomplete: wrote " + std::to_string(written) +
                    " of " + std::to_string(len) + " bytes");
     }
+#endif
     return Ok();
 }
 
@@ -203,6 +363,82 @@ Result<void> Terminal::flushVtermOutput() {
 }
 
 Result<void> Terminal::update() {
+#ifdef _WIN32
+    if (!running_ || hPipeIn_ == INVALID_HANDLE_VALUE) {
+        return Ok();  // Not an error, just nothing to do
+    }
+
+    // Check if child process is still running
+    DWORD exitCode;
+    if (GetExitCodeProcess(hProcess_, &exitCode) && exitCode != STILL_ACTIVE) {
+        running_ = false;
+        spdlog::info("Shell exited with code: {}", exitCode);
+        return Ok();  // Shell exited, not an error
+    }
+
+    // Check if data is available (non-blocking)
+    DWORD bytesAvailable = 0;
+    if (!PeekNamedPipe(hPipeIn_, nullptr, 0, nullptr, &bytesAvailable, nullptr)) {
+        DWORD error = GetLastError();
+        if (error == ERROR_BROKEN_PIPE) {
+            running_ = false;
+            spdlog::info("Shell pipe closed");
+            return Ok();
+        }
+        // Other errors - just no data available
+        bytesAvailable = 0;
+    }
+
+    char buf[4096];
+    DWORD nread = 0;
+
+    if (bytesAvailable > 0) {
+        DWORD toRead = std::min(bytesAvailable, static_cast<DWORD>(sizeof(buf)));
+        if (!ReadFile(hPipeIn_, buf, toRead, &nread, nullptr)) {
+            DWORD error = GetLastError();
+            if (error == ERROR_BROKEN_PIPE) {
+                running_ = false;
+                spdlog::info("Shell pipe closed");
+                return Ok();
+            }
+            spdlog::error("PTY read error: {}", error);
+            running_ = false;
+            return Err("PTY read failed with error: " + std::to_string(error));
+        }
+    }
+
+    if (nread > 0) {
+        // Feed data to libvterm
+        vterm_input_write(vterm_, buf, nread);
+        vterm_screen_flush_damage(vtermScreen_);
+
+        // Process any deferred newlines from plugin activation
+        if (pendingNewlines_ > 0) {
+            std::string newlines(pendingNewlines_, '\n');
+            vterm_input_write(vterm_, newlines.c_str(), newlines.size());
+            vterm_screen_flush_damage(vtermScreen_);
+            pendingNewlines_ = 0;
+        }
+
+        // Flush any output libvterm generated
+        auto flushResult = flushVtermOutput();
+        if (!flushResult) {
+            return flushResult;
+        }
+
+        // Sync based on damage tracking config
+        if (config_ && config_->useDamageTracking() && !fullDamage_ && scrollOffset_ == 0) {
+            syncDamageToGrid();
+        } else {
+            syncToGrid();
+        }
+    } else if (fullDamage_) {
+        syncToGrid();
+    }
+
+    return Ok();
+
+#else
     if (!running_ || ptyMaster_ < 0) {
         return Ok();  // Not an error, just nothing to do
     }
@@ -262,12 +498,19 @@ Result<void> Terminal::update() {
     }
 
     return Ok();
+#endif
 }
 
 Result<void> Terminal::sendKey(uint32_t codepoint, VTermModifier mod) {
+#ifdef _WIN32
+    if (!running_ || hPipeOut_ == INVALID_HANDLE_VALUE) {
+        return Ok();  // Nothing to do
+    }
+#else
     if (!running_ || ptyMaster_ < 0) {
         return Ok();  // Nothing to do
     }
+#endif
 
     // Flush any accumulated output first (e.g., responses to escape sequences)
     auto flushResult = flushVtermOutput();
@@ -283,16 +526,28 @@ Result<void> Terminal::sendKey(uint32_t codepoint, VTermModifier mod) {
 }
 
 Result<void> Terminal::sendRaw(const char* data, size_t len) {
+#ifdef _WIN32
+    if (!running_ || hPipeOut_ == INVALID_HANDLE_VALUE || len == 0) {
+        return Ok();
+    }
+#else
     if (!running_ || ptyMaster_ < 0 || len == 0) {
         return Ok();
     }
+#endif
     return writeToPty(data, len);
 }
 
 Result<void> Terminal::sendSpecialKey(VTermKey key, VTermModifier mod) {
+#ifdef _WIN32
+    if (!running_ || hPipeOut_ == INVALID_HANDLE_VALUE) {
+        return Ok();
+    }
+#else
     if (!running_ || ptyMaster_ < 0) {
         return Ok();
     }
+#endif
 
     vterm_keyboard_key(vterm_, key, mod);
 
@@ -308,6 +563,12 @@ void Terminal::resize(uint32_t cols, uint32_t rows) {
     grid_.resize(cols, rows);
 
     // Update PTY window size
+#ifdef _WIN32
+    if (hPC_ != INVALID_HANDLE_VALUE) {
+        COORD size = {static_cast<SHORT>(cols), static_cast<SHORT>(rows)};
+        ResizePseudoConsole(hPC_, size);
+    }
+#else
     if (ptyMaster_ >= 0) {
         struct winsize ws;
         ws.ws_row = rows;
@@ -316,6 +577,7 @@ void Terminal::resize(uint32_t cols, uint32_t rows) {
         ws.ws_ypixel = 0;
         ioctl(ptyMaster_, TIOCSWINSZ, &ws);
     }
+#endif
 
     syncToGrid();
 }
@@ -666,9 +928,14 @@ int Terminal::onSetTermProp(VTermProp prop, VTermValue* val, void* user) {
 int Terminal::onBell(void* user) {
     (void)user;
     // Ring the bell by writing to stdout (the actual terminal)
+#ifdef _WIN32
+    DWORD written;
+    WriteFile(GetStdHandle(STD_OUTPUT_HANDLE), "\a", 1, &written, nullptr);
+#else
     if (write(STDOUT_FILENO, "\a", 1) < 0) {
         // Ignore bell errors - not critical
     }
+#endif
     return 0;
 }
 

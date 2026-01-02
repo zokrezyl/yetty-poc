@@ -263,9 +263,24 @@ std::filesystem::path Config::getExecutableDir() {
 }
 
 std::filesystem::path Config::getXDGConfigPath() {
-    const char* xdgConfig = std::getenv("XDG_CONFIG_HOME");
     std::filesystem::path configDir;
 
+#ifdef _WIN32
+    // Windows: use %APPDATA%
+    const char* appData = std::getenv("APPDATA");
+    if (appData && appData[0] != '\0') {
+        configDir = appData;
+    } else {
+        const char* userProfile = std::getenv("USERPROFILE");
+        if (userProfile) {
+            configDir = std::filesystem::path(userProfile) / "AppData" / "Roaming";
+        } else {
+            configDir = "C:\\";
+        }
+    }
+#else
+    // Unix: Follow XDG Base Directory Specification
+    const char* xdgConfig = std::getenv("XDG_CONFIG_HOME");
     if (xdgConfig && xdgConfig[0] != '\0') {
         configDir = xdgConfig;
     } else {
@@ -276,6 +291,7 @@ std::filesystem::path Config::getXDGConfigPath() {
             configDir = "/tmp";
         }
     }
+#endif
 
     return configDir / "yetty" / "config.yaml";
 }

@@ -352,8 +352,9 @@ void PDFLayer::buildRichTextContent(float viewWidth) {
         if (ch.codepoint == '\n' || ch.codepoint == '\r') continue;
 
         // Convert PDF coordinates to screen coordinates
+        // PDF has Y-up (origin at bottom-left), screen has Y-down (origin at top-left)
         float screenX = ch.x * scale;
-        float screenY = ch.y * scale;
+        float screenY = (pdfHeight - ch.y) * scale;  // Flip Y axis
         float fontSize = ch.size * scale;
 
         // Color conversion (ARGB to RGBA)

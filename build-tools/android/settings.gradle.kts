@@ -6,8 +6,8 @@ pluginManagement {
     }
 }
 
-// Redirect Gradle cache to build-android
-rootProject.projectDir.parentFile.let { projectRoot ->
+// Redirect Gradle cache to build-android (go up two levels: build-tools/android -> root)
+rootProject.projectDir.parentFile.parentFile.let { projectRoot ->
     gradle.projectsLoaded {
         allprojects {
             layout.buildDirectory.set(File(projectRoot, "build-android/${project.name}"))

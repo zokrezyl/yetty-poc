@@ -6,8 +6,8 @@
 # and sets up the webgpu target for linking.
 #
 # Supported platforms:
-#   - Linux x86_64
-#   - macOS x86_64/arm64 (universal)
+#   - Linux x86_64/aarch64
+#   - macOS x86_64/aarch64
 #   - Windows x86_64
 #
 # For Android, use the separate android/build-wgpu.sh script.
@@ -30,8 +30,14 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         message(FATAL_ERROR "Unsupported Linux architecture: ${CMAKE_SYSTEM_PROCESSOR}")
     endif()
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-    # macOS universal binary works for both x86_64 and arm64
-    set(WGPU_PLATFORM "macos-universal")
+    # macOS architecture-specific binaries (universal no longer available)
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64|ARM64")
+        set(WGPU_PLATFORM "macos-aarch64")
+    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
+        set(WGPU_PLATFORM "macos-x86_64")
+    else()
+        message(FATAL_ERROR "Unsupported macOS architecture: ${CMAKE_SYSTEM_PROCESSOR}")
+    endif()
     set(WGPU_LIB_NAME "libwgpu_native.dylib")
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")

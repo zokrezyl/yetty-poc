@@ -113,18 +113,20 @@ CPMAddPackage(
     OPTIONS "YAML_CPP_BUILD_TESTS OFF" "YAML_CPP_BUILD_TOOLS OFF"
 )
 
-# Taywee/args for command line parsing
-CPMAddPackage(
-    NAME args
-    GITHUB_REPOSITORY Taywee/args
-    GIT_TAG 6.4.6
-)
+# Taywee/args for command line parsing (desktop only)
+if(NOT YETTY_ANDROID)
+    CPMAddPackage(
+        NAME args
+        GITHUB_REPOSITORY Taywee/args
+        GIT_TAG 6.4.6
+    )
+endif()
 
 # spdlog for logging (all platforms)
 CPMAddPackage(
     NAME spdlog
     GITHUB_REPOSITORY gabime/spdlog
-    GIT_TAG v1.12.0
+    GIT_TAG v1.16.0
     OPTIONS
         "CMAKE_POSITION_INDEPENDENT_CODE ON"
 )
@@ -276,11 +278,18 @@ if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
         YETTY_ANDROID=0
     )
 
-    # Find fontconfig for font fallback
-    find_package(PkgConfig REQUIRED)
-    pkg_check_modules(FONTCONFIG REQUIRED fontconfig)
-
-    target_include_directories(yetty_core PRIVATE ${FONTCONFIG_INCLUDE_DIRS})
+    # Platform-specific font discovery
+    if(WIN32)
+        # Windows: Use DirectWrite/GDI for font discovery (no fontconfig)
+        target_compile_definitions(yetty_core PRIVATE YETTY_USE_DIRECTWRITE=1)
+        target_link_libraries(yetty_core PUBLIC dwrite)
+    else()
+        # Unix: Use fontconfig for font fallback
+        find_package(PkgConfig REQUIRED)
+        pkg_check_modules(FONTCONFIG REQUIRED fontconfig)
+        target_include_directories(yetty_core PRIVATE ${FONTCONFIG_INCLUDE_DIRS})
+        target_compile_definitions(yetty_core PRIVATE YETTY_USE_FONTCONFIG=1)
+    endif()
 
     target_link_libraries(yetty_core PUBLIC
         webgpu
@@ -292,7 +301,7 @@ if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
         msdfgen::msdfgen-ext
         freetype
         spdlog::spdlog
-        ${FONTCONFIG_LIBRARIES}
+        $<$<NOT:$<BOOL:${WIN32}>>:${FONTCONFIG_LIBRARIES}>
     )
 
     set_target_properties(yetty_core PROPERTIES
@@ -322,11 +331,13 @@ endif()
 
 # Platform-specific entry point and sources
 if(YETTY_ANDROID)
-    # Android uses android_main.cpp instead of main.cpp
+    # Android uses unified main.cpp with android_main() entry point
     list(APPEND YETTY_SOURCES
-        src/android/android_main.cpp
-        src/android/plugin-manager-stub.cpp
+        src/yetty/main.cpp
+        src/yetty/yetty.cpp
+        src/yetty/config.cpp
         src/yetty/terminal.cpp
+        src/android/plugin-manager-stub.cpp
     )
 elseif(NOT EMSCRIPTEN)
     # Desktop uses main.cpp with GLFW
@@ -469,8 +480,17 @@ else()
         yaml-cpp
         args
         vterm
-        util  # for forkpty
     )
+
+    # Platform-specific PTY library
+    if(WIN32)
+        # Windows: Link against ConPTY (part of kernel32)
+        target_compile_definitions(yetty PRIVATE YETTY_USE_CONPTY=1)
+    else()
+        # Unix: Link against util for forkpty
+        target_link_libraries(yetty PRIVATE util)
+        target_compile_definitions(yetty PRIVATE YETTY_USE_FORKPTY=1)
+    endif()
 
     #-------------------------------------------------------------------------
     # Optional: ymery plugin support

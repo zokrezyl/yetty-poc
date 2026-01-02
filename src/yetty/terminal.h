@@ -14,6 +14,10 @@ extern "C" {
 #include <deque>
 #include <memory>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 namespace yetty {
 
 // A single line in the scrollback buffer
@@ -168,8 +172,18 @@ private:
     Grid grid_;
     Font* font_;
 
+#ifdef _WIN32
+    // Windows ConPTY handles
+    HPCON hPC_ = INVALID_HANDLE_VALUE;
+    HANDLE hPipeIn_ = INVALID_HANDLE_VALUE;   // Read from child
+    HANDLE hPipeOut_ = INVALID_HANDLE_VALUE;  // Write to child
+    HANDLE hProcess_ = INVALID_HANDLE_VALUE;
+    HANDLE hThread_ = INVALID_HANDLE_VALUE;
+#else
+    // Unix PTY
     int ptyMaster_ = -1;
     pid_t childPid_ = -1;
+#endif
     bool running_ = false;
 
     int cursorRow_ = 0;

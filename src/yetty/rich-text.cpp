@@ -425,9 +425,9 @@ void RichText::buildGlyphInstances() {
         // Skip empty glyphs (spaces)
         if (glyphW < 0.1f || glyphH < 0.1f) continue;
 
-        // Position with bearing
+        // Position with bearing (same as terminal shader: glyphTop = baseline - bearingY)
         float glyphX = ch.x + metrics->_bearing.x * fontScale;
-        float glyphY = ch.y + (ch.size - metrics->_bearing.y * fontScale);
+        float glyphY = ch.y - metrics->_bearing.y * fontScale;
 
         GlyphInstance inst;
         inst.posX = glyphX;
