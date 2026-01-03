@@ -207,9 +207,6 @@ Result<void> PluginManager::updateLayer(uint32_t id, const std::string& payload)
         return Err<void>("Layer not found: " + std::to_string(id));
     }
 
-    layer->setPayload(payload);
-    layer->setNeedsRender(true);
-
     // Re-init
     if (auto res = layer->dispose(); !res) {
         return Err<void>("Failed to dispose layer during update", res);
@@ -334,7 +331,7 @@ bool PluginManager::handleOSCSequence(const std::string& sequence,
             result += ";!;Q";
             for (auto& layer : getAllLayers()) {
                 result += ";";
-                result += std::to_string(layer->getId());
+                result += std::to_string(layer->id());
                 result += ",";
                 result += layer->getParent()->pluginName();
                 result += ",";
@@ -384,7 +381,7 @@ bool PluginManager::handleOSCSequence(const std::string& sequence,
             std::cerr << "PluginManager: " << error_msg(result) << std::endl;
             return false;
         }
-        std::cout << "Created layer id=" << (*result)->getId() << " plugin=" << pluginId
+        std::cout << "Created layer id=" << (*result)->id() << " plugin=" << pluginId
                   << " at (" << x << "," << y << ") size " << w << "x" << h << std::endl;
 
         if (linesToAdvance && posMode == PositionMode::Relative) {
@@ -397,11 +394,8 @@ bool PluginManager::handleOSCSequence(const std::string& sequence,
 }
 
 Result<void> PluginManager::update(double deltaTime) {
-    for (auto& [name, plugin] : plugins_) {
-        if (auto res = plugin->update(deltaTime); !res) {
-            return Err<void>("Failed to update plugin " + name, res);
-        }
-    }
+    // Plugins no longer have update() - they render directly
+    (void)deltaTime;
     return Ok();
 }
 
@@ -468,13 +462,11 @@ Result<void> PluginManager::render(WebGPUContext& ctx, WGPUTextureView targetVie
                         r, g, b, a);
         }
 
-        // Render plugin content
-        if (auto res = plugin->renderAll(targetView, ctx.getSurfaceFormat(),
-                                          screenWidth, screenHeight,
-                                          cellWidth, cellHeight,
-                                          scrollOffset, termRows,
-                                          isAltScreen_); !res) {
-            return Err<void>("Failed to render plugin " + name, res);
+        // Render plugin content - each layer renders itself
+        for (auto& layer : plugin->getLayers()) {
+            if (!layer->isVisible()) continue;
+            if (layer->getScreenType() != currentScreen) continue;
+            layer->render(ctx);
         }
     }
     return Ok();
@@ -516,7 +508,7 @@ void PluginManager::markGridCells(Grid* grid, PluginLayer* layer) {
     int32_t startY = layer->getY();
     uint32_t w = layer->getWidthCells();
     uint32_t h = layer->getHeightCells();
-    uint16_t id = static_cast<uint16_t>(layer->getId());
+    uint16_t id = static_cast<uint16_t>(layer->id());
 
     for (uint32_t row = 0; row < h; row++) {
         for (uint32_t col = 0; col < w; col++) {

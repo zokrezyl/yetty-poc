@@ -56,10 +56,8 @@ struct DamageRect {
 //
 // Threading model:
 //   - Worker thread runs libuv event loop, reads from PTY, updates state
-//   - Main thread calls get_command_queue() to get render commands
+//   - Main thread calls render() each frame
 //   - Mutex protects shared state between worker and main threads
-//
-// Implements Renderable interface for the new command-based architecture.
 //=============================================================================
 
 class Terminal : public Renderable {
@@ -86,7 +84,7 @@ public:
     void stop() override;
     bool isRunning() const override { return running_.load(); }
 
-    CommandQueue* get_command_queue(CommandQueue* old_queue) override;
+    bool render(WebGPUContext& ctx) override;
 
     //=========================================================================
     // Terminal-specific interface (all thread-safe)
@@ -238,9 +236,6 @@ private:
     uint32_t pendingCols_ = 0;
     uint32_t pendingRows_ = 0;
 
-    // Command queue recycling
-    std::unique_ptr<CommandQueue> recycledQueue_;
-    bool shaderRegistered_ = false;  // Track if shader was registered with Yetty
 
     //=========================================================================
     // Terminal state (protected by mutex_)

@@ -160,7 +160,7 @@ public:
     // Clean up all resources for a renderable (when deleted)
     void cleanupResources(uint32_t renderableId) noexcept;
 
-    // Current renderable context (set during collectAndExecuteCommands)
+    // Current renderable context (set during renderAll)
     uint32_t currentRenderableId() const noexcept { return _currentRenderableId; }
 
     //=========================================================================
@@ -195,7 +195,7 @@ private:
 
     // Renderable management
     void processEngineCommands() noexcept;
-    void collectAndExecuteCommands() noexcept;
+    void renderAll() noexcept;
     void addRenderable(Renderable::Ptr renderable) noexcept;
     void removeRenderable(uint32_t id) noexcept;
     uint32_t nextRenderableId() noexcept { return _nextRenderableId++; }
@@ -233,7 +233,6 @@ private:
 
     // Renderables (sorted by zOrder)
     std::vector<Renderable::Ptr> _renderables;
-    std::unordered_map<uint32_t, CommandQueue*> _oldQueues;  // Recycled queues per renderable
     std::vector<std::unique_ptr<YettyCommand>> _pendingEngineCommands;
     uint32_t _nextRenderableId = 1;
 

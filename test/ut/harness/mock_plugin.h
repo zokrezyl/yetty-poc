@@ -32,10 +32,10 @@ public:
         return Ok();
     }
 
-    Result<void> update(double deltaTime) override {
-        _update_count++;
-        _last_delta_time = deltaTime;
-        return Ok();
+    bool render(WebGPUContext& ctx) override {
+        (void)ctx;
+        _render_count++;
+        return true;
     }
 
     bool onMouseMove(float localX, float localY) override {
@@ -58,8 +58,7 @@ public:
     // Test inspection
     bool initCalled() const { return _init_called; }
     bool disposeCalled() const { return _dispose_called; }
-    int updateCount() const { return _update_count; }
-    double lastDeltaTime() const { return _last_delta_time; }
+    int renderCount() const { return _render_count; }
     float lastMouseX() const { return _last_mouse_x; }
     float lastMouseY() const { return _last_mouse_y; }
     int mouseButtonCount() const { return _mouse_button_count; }
@@ -72,8 +71,7 @@ public:
 private:
     bool _init_called = false;
     bool _dispose_called = false;
-    int _update_count = 0;
-    double _last_delta_time = 0;
+    int _render_count = 0;
     float _last_mouse_x = 0;
     float _last_mouse_y = 0;
     int _last_button = 0;
@@ -110,17 +108,10 @@ public:
         return Ok<PluginLayerPtr>(layer);
     }
 
-    Result<void> renderAll(WGPUTextureView targetView, WGPUTextureFormat targetFormat,
-                           uint32_t screenWidth, uint32_t screenHeight,
-                           float cellWidth, float cellHeight,
-                           int scrollOffset, uint32_t termRows,
-                           bool isAltScreen = false) override {
-        (void)targetView; (void)targetFormat;
-        (void)screenWidth; (void)screenHeight;
-        (void)cellWidth; (void)cellHeight;
-        (void)scrollOffset; (void)termRows; (void)isAltScreen;
+    bool render(WebGPUContext& ctx) override {
+        (void)ctx;
         _render_count++;
-        return Ok();
+        return true;
     }
 
     // Test inspection

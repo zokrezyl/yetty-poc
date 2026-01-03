@@ -796,7 +796,7 @@ void Yetty::mainLoopIteration() noexcept {
   processEngineCommands();
 
   // Collect and execute render commands from all renderables
-  collectAndExecuteCommands();
+  renderAll();
 
   // Present
   _ctx->present();
@@ -829,7 +829,7 @@ void Yetty::mainLoopIteration() noexcept {
 
   // Collect and execute render commands from all renderables
   // Each renderable returns nullptr if no damage (skip frame efficiently)
-  collectAndExecuteCommands();
+  renderAll();
 
   // Present the frame
   _ctx->present();
@@ -954,14 +954,6 @@ void Yetty::removeRenderable(uint32_t id) noexcept {
   if (it != _renderables.end()) {
     spdlog::debug("Removing renderable '{}' (id={})", (*it)->name(), id);
     (*it)->stop();
-
-    // Clean up old queue
-    auto queueIt = _oldQueues.find(id);
-    if (queueIt != _oldQueues.end()) {
-      delete queueIt->second;
-      _oldQueues.erase(queueIt);
-    }
-
     _renderables.erase(it);
   }
 }
@@ -1017,46 +1009,17 @@ void Yetty::processEngineCommands() noexcept {
   _pendingEngineCommands.clear();
 }
 
-void Yetty::collectAndExecuteCommands() noexcept {
-  // Collect commands from ALL renderables - no special cases!
-  // If get_command_queue() returns nullptr -> no damage, skip
-  // If get_command_queue() returns commands -> execute them
+void Yetty::renderAll() noexcept {
+  // Render all renderables in zOrder
   for (auto &renderable : _renderables) {
     if (!renderable->isRunning())
       continue;
 
-    // Set current renderable context for resource namespace lookup
+    // Set current renderable context
     _currentRenderableId = renderable->id();
 
-    // Get old queue for this renderable (may be nullptr)
-    CommandQueue *oldQueue = nullptr;
-    auto it = _oldQueues.find(renderable->id());
-    if (it != _oldQueues.end()) {
-      oldQueue = it->second;
-      _oldQueues.erase(it); // Transfer ownership to renderable
-    }
-
-    // Get new queue (nullptr if no damage/work to do)
-    CommandQueue *queue = renderable->get_command_queue(oldQueue);
-    if (!queue)
-      continue; // Renderable had no damage or was busy
-
-    // Process commands
-    for (auto &cmd : queue->commands()) {
-      if (cmd->isEngineCommand()) {
-        // Collect engine commands for next frame
-        _pendingEngineCommands.push_back(std::move(cmd));
-      } else {
-      // Execute GPU command immediately
-      spdlog:
-        spdlog::debug("got gpu command to execute");
-        cmd->execute(*_ctx, *this);
-      }
-    }
-
-    // Clear executed commands but keep the queue for recycling
-    queue->clear();
-    _oldQueues[renderable->id()] = queue;
+    // Call render - each renderable manages its own GPU resources
+    renderable->render(*_ctx);
   }
 
   // Reset context
