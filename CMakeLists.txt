@@ -339,6 +339,9 @@ if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
         LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
         POSITION_INDEPENDENT_CODE ON
     )
+
+    # Build plugins as shared libraries (desktop only)
+    add_subdirectory(src/yetty/plugins)
 endif()
 
 #-----------------------------------------------------------------------------
@@ -382,7 +385,8 @@ elseif(NOT EMSCRIPTEN)
         src/yetty/terminal.cpp
         src/yetty/plugin-manager.cpp
         src/yetty/custom-glyph-plugin.cpp
-        src/yetty/plugins/shader-glyph/shader-glyph.cpp
+        src/yetty/shader-manager.cpp
+        src/yetty/shader-glyph-renderer.cpp
     )
 else()
     # Web uses main.cpp with Emscripten GLFW

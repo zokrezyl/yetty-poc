@@ -868,25 +868,39 @@ int Terminal::onMoverect(VTermRect, VTermRect, void* user) {
 int Terminal::onOSC(int command, VTermStringFragment frag, void* user) {
     auto* term = static_cast<Terminal*>(user);
 
-    if (command != YETTY_OSC_VENDOR_ID) return 0;
+    spdlog::debug("onOSC: command={} initial={} final={} len={}",
+                  command, (bool)frag.initial, (bool)frag.final, (size_t)frag.len);
+
+    if (command != YETTY_OSC_VENDOR_ID) {
+        spdlog::debug("onOSC: ignoring non-yetty command {}", command);
+        return 0;
+    }
 
     if (frag.initial) {
         term->oscBuffer_.clear();
         term->oscCommand_ = command;
+        spdlog::debug("onOSC: started new OSC buffer");
     }
 
     if (frag.len > 0) {
         term->oscBuffer_.append(frag.str, frag.len);
+        spdlog::debug("onOSC: appended {} bytes, total={}", (size_t)frag.len, term->oscBuffer_.size());
     }
 
     if (frag.final && term->pluginManager_) {
         std::string fullSeq = std::to_string(command) + ";" + term->oscBuffer_;
+        spdlog::debug("onOSC: FINAL buffer content: '{}'", term->oscBuffer_);
+        spdlog::debug("onOSC: FINAL fullSeq: '{}'", fullSeq);
+
         std::string response;
         uint32_t linesToAdvance = 0;
 
         bool handled = term->pluginManager_->handleOSCSequence(
             fullSeq, &term->grid_, term->cursorCol_, term->cursorRow_,
             term->cellWidth_, term->cellHeight_, &response, &linesToAdvance);
+
+        spdlog::debug("onOSC: handled={} response_len={} linesToAdvance={}",
+                      handled, response.size(), linesToAdvance);
 
         if (handled) {
             term->fullDamage_ = true;
@@ -899,6 +913,8 @@ int Terminal::onOSC(int command, VTermStringFragment frag, void* user) {
         }
         term->oscBuffer_.clear();
         term->oscCommand_ = -1;
+    } else if (frag.final) {
+        spdlog::warn("onOSC: FINAL but no pluginManager!");
     }
 
     return 1;

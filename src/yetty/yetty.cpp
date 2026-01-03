@@ -16,7 +16,7 @@
 
 #if !YETTY_WEB && !defined(__ANDROID__)
 #include "plugin-manager.h"
-#include "plugins/shader-glyph/shader-glyph.h"
+#include <yetty/shader-glyph-renderer.h>
 #include "terminal.h"
 #include <args.hxx>
 #elif defined(__ANDROID__)
@@ -479,10 +479,7 @@ Result<void> Yetty::initTerminal() noexcept {
   _pluginManager->setFont(_font);
   _pluginManager->setEngine(shared_from_this());
 
-  // Register built-in shader glyph plugin
-  if (auto shaderGlyphResult = ShaderGlyphPlugin::create()) {
-    _pluginManager->registerCustomGlyphPlugin(*shaderGlyphResult);
-  }
+  // Note: ShaderGlyphRenderer is now integrated via Terminal, not as a plugin
 
   // Load plugins from configured paths
   auto pluginPaths = _config->pluginPaths();
@@ -824,6 +821,11 @@ void Yetty::mainLoopIteration() noexcept {
   // Collect and execute render commands from all renderables
   // Each renderable returns nullptr if no damage (skip frame efficiently)
   renderAll();
+
+  // Render plugin layers on top
+  if (_pluginManager) {
+    _pluginManager->render(*_ctx);
+  }
 
   // Present the frame
   _ctx->present();
