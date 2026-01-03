@@ -800,9 +800,6 @@ void Yetty::mainLoopIteration() noexcept {
 #else
   // Note: glfwPollEvents() is called in onFrameTimer() before this
 
-  // Process pending engine commands from previous frame
-  processEngineCommands();
-
 #if !YETTY_WEB
   // Check if any renderable is still running
   bool anyRunning = false;
@@ -953,57 +950,6 @@ void Yetty::removeRenderable(uint32_t id) noexcept {
     (*it)->stop();
     _renderables.erase(it);
   }
-}
-
-void Yetty::processEngineCommands() noexcept {
-  for (auto &cmd : _pendingEngineCommands) {
-    switch (cmd->type()) {
-    case YettyCommand::Type::CreateRenderable: {
-      auto *createCmd = static_cast<CreateRenderableCmd *>(cmd.get());
-      uint32_t id = nextRenderableId();
-      auto renderable = RenderableFactory::instance().create(
-          createCmd->renderableType(), id, createCmd->config());
-      if (renderable) {
-        renderable->start();
-        addRenderable(renderable);
-      } else {
-        spdlog::error("Failed to create renderable of type '{}'",
-                      createCmd->renderableType());
-      }
-      break;
-    }
-    case YettyCommand::Type::DeleteRenderable: {
-      auto *deleteCmd = static_cast<DeleteRenderableCmd *>(cmd.get());
-      removeRenderable(deleteCmd->renderableId());
-      break;
-    }
-    case YettyCommand::Type::StopRenderable: {
-      auto *stopCmd = static_cast<StopRenderableCmd *>(cmd.get());
-      auto it = std::find_if(_renderables.begin(), _renderables.end(),
-                             [&](const Renderable::Ptr &r) {
-                               return r->id() == stopCmd->renderableId();
-                             });
-      if (it != _renderables.end()) {
-        (*it)->stop();
-      }
-      break;
-    }
-    case YettyCommand::Type::StartRenderable: {
-      auto *startCmd = static_cast<StartRenderableCmd *>(cmd.get());
-      auto it = std::find_if(_renderables.begin(), _renderables.end(),
-                             [&](const Renderable::Ptr &r) {
-                               return r->id() == startCmd->renderableId();
-                             });
-      if (it != _renderables.end()) {
-        (*it)->start();
-      }
-      break;
-    }
-    default:
-      break;
-    }
-  }
-  _pendingEngineCommands.clear();
 }
 
 void Yetty::renderAll() noexcept {
