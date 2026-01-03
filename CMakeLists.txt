@@ -35,7 +35,6 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Build target options
 option(YETTY_ANDROID "Build for Android" OFF)
-option(YETTY_YMERY_ENABLED "Enable ymery ImGui plugin" ON)
 
 # BusyBox path for Android shell
 set(BUSYBOX_PATH "" CACHE PATH "Path to BusyBox install directory for Android")
@@ -75,7 +74,7 @@ if(YETTY_ANDROID)
     )
     target_compile_definitions(webgpu INTERFACE WEBGPU_BACKEND_WGPU)
 
-    # Mark webgpu as already added so CPM/ymery won't try to fetch it again
+    # Mark webgpu as already added so CPM won't try to fetch it again
     set(CPM_PACKAGES "${CPM_PACKAGES};webgpu" CACHE INTERNAL "")
     set(webgpu_SOURCE_DIR "${WGPU_INCLUDE}" CACHE INTERNAL "")
     set(webgpu_VERSION "27.0.4.0" CACHE INTERNAL "")
@@ -197,16 +196,6 @@ if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
         set_target_properties(msdfgen-ext PROPERTIES POSITION_INDEPENDENT_CODE ON)
     endif()
 
-    # MuPDF for PDF rendering (official tarball includes all bundled dependencies)
-    CPMAddPackage(
-        NAME mupdf
-        URL https://mupdf.com/downloads/archive/mupdf-1.25.4-source.tar.gz
-        DOWNLOAD_ONLY YES
-    )
-    if(mupdf_ADDED)
-        include(${CMAKE_CURRENT_SOURCE_DIR}/build-tools/cmake/mupdf/CMakeLists.txt)
-    endif()
-
     # GLFW and glfw3webgpu adapter (desktop only, not Android)
     # Disable X11 on macOS to prevent glfw3webgpu from including X11 headers
     if(APPLE)
@@ -235,6 +224,16 @@ if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
     if(UNIX AND NOT APPLE)
         target_compile_definitions(glfw3webgpu PRIVATE _GLFW_X11)
     endif()
+
+    # libuv for async I/O (PTY reading, event loops)
+    CPMAddPackage(
+        NAME libuv
+        GITHUB_REPOSITORY libuv/libuv
+        GIT_TAG v1.48.0
+        OPTIONS
+            "LIBUV_BUILD_TESTS OFF"
+            "LIBUV_BUILD_BENCH OFF"
+    )
 
 endif()
 
@@ -293,6 +292,7 @@ if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
         src/yetty/font-manager.cpp
         src/yetty/rich-text.cpp
         src/yetty/emoji-atlas.cpp
+        src/yetty/renderable.cpp
     )
 
     add_library(yetty_core SHARED ${YETTY_CORE_SOURCES})
@@ -331,6 +331,7 @@ if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
         freetype
         spdlog::spdlog
         lz4_static
+        uv_a
         $<$<NOT:$<BOOL:${WIN32}>>:${FONTCONFIG_LIBRARIES}>
     )
 
@@ -345,7 +346,7 @@ endif()
 #-----------------------------------------------------------------------------
 # Common sources for all platforms
 set(YETTY_SOURCES
-    src/yetty/text-renderer.cpp
+    src/yetty/grid-renderer.cpp
     src/yetty/grid.cpp
 )
 
@@ -372,7 +373,7 @@ if(YETTY_ANDROID)
     )
 elseif(NOT EMSCRIPTEN)
     # Desktop uses main.cpp with GLFW
-    # Plugins are built as shared libraries and loaded at runtime
+    # Desktop with plugin support
     list(APPEND YETTY_SOURCES
         src/yetty/main.cpp
         src/yetty/yetty.cpp
@@ -498,11 +499,6 @@ else()
         YETTY_USE_PREBUILT_ATLAS=0
     )
 
-    # Build FFmpeg from source for video plugin
-    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/build-tools/cmake/ffmpeg ffmpeg_build)
-
-    target_include_directories(yetty PRIVATE ${FFMPEG_INCLUDE_DIR})
-
     # Link against yetty_core (provides font, rich-text, webgpu-context)
     target_link_libraries(yetty PRIVATE
         yetty_core
@@ -523,111 +519,6 @@ else()
         target_link_libraries(yetty PRIVATE util)
         target_compile_definitions(yetty PRIVATE YETTY_USE_FORKPTY=1)
     endif()
-
-    #-------------------------------------------------------------------------
-    # Optional: ymery plugin support
-    #-------------------------------------------------------------------------
-    if(YETTY_YMERY_ENABLED)
-        # Configure ymery to use WebGPU backend (must be set before CPMAddPackage)
-        set(YMERY_USE_WEBGPU ON CACHE BOOL "Use WebGPU backend for ymery" FORCE)
-
-        # Pass our wgpu-native location to ymery via cache variables
-        # ymery will skip its own wgpu-native setup if these are set
-        set(YMERY_WGPU_NATIVE_INCLUDE_DIR "${WGPU_NATIVE_INCLUDE_DIR}" CACHE PATH "" FORCE)
-        set(YMERY_WGPU_NATIVE_LIB_PATH "${WGPU_NATIVE_LIB_PATH}" CACHE PATH "" FORCE)
-
-        # Fetch ymery-cpp from GitHub
-        CPMAddPackage(
-            NAME ymery
-            GITHUB_REPOSITORY zokrezyl/ymery-cpp
-            GIT_TAG main
-            DOWNLOAD_ONLY YES
-        )
-
-        # Patch ymery to skip its own webgpu setup if target already exists
-        # and output plugins to plugins/ymery subdirectory
-        if(ymery_ADDED)
-            file(READ "${ymery_SOURCE_DIR}/CMakeLists.txt" YMERY_CMAKE_CONTENT)
-            string(REPLACE
-                "if(YMERY_USE_WEBGPU AND NOT YMERY_WEB)"
-                "if(YMERY_USE_WEBGPU AND NOT YMERY_WEB AND NOT TARGET webgpu)"
-                YMERY_CMAKE_CONTENT "${YMERY_CMAKE_CONTENT}")
-            file(WRITE "${ymery_SOURCE_DIR}/CMakeLists.txt" "${YMERY_CMAKE_CONTENT}")
-            message(STATUS "Patched ymery to use existing webgpu target")
-
-            # Patch ymery frontend plugins to output to plugins/ymery
-            file(READ "${ymery_SOURCE_DIR}/src/ymery/plugins/frontend/CMakeLists.txt" YMERY_FRONTEND_CMAKE)
-            string(REPLACE
-                "set(PLUGIN_OUTPUT_DIR \"\${CMAKE_BINARY_DIR}/plugins\")"
-                "set(PLUGIN_OUTPUT_DIR \"\${CMAKE_BINARY_DIR}/plugins/ymery\")"
-                YMERY_FRONTEND_CMAKE "${YMERY_FRONTEND_CMAKE}")
-            # Also patch meta file copy destination
-            string(REPLACE
-                "\"\${CMAKE_BINARY_DIR}/plugins/\${meta_name}\""
-                "\"\${CMAKE_BINARY_DIR}/plugins/ymery/\${meta_name}\""
-                YMERY_FRONTEND_CMAKE "${YMERY_FRONTEND_CMAKE}")
-            file(WRITE "${ymery_SOURCE_DIR}/src/ymery/plugins/frontend/CMakeLists.txt" "${YMERY_FRONTEND_CMAKE}")
-
-            # Patch ymery backend plugins to output to plugins/ymery
-            file(READ "${ymery_SOURCE_DIR}/src/ymery/plugins/backend/CMakeLists.txt" YMERY_BACKEND_CMAKE)
-            string(REPLACE
-                "set(PLUGIN_OUTPUT_DIR \"\${CMAKE_BINARY_DIR}/plugins\")"
-                "set(PLUGIN_OUTPUT_DIR \"\${CMAKE_BINARY_DIR}/plugins/ymery\")"
-                YMERY_BACKEND_CMAKE "${YMERY_BACKEND_CMAKE}")
-            file(WRITE "${ymery_SOURCE_DIR}/src/ymery/plugins/backend/CMakeLists.txt" "${YMERY_BACKEND_CMAKE}")
-
-            # Patch ymery filesystem plugins to output to plugins/ymery
-            file(READ "${ymery_SOURCE_DIR}/src/ymery/plugins/backend/filesystem/CMakeLists.txt" YMERY_FS_CMAKE)
-            string(REPLACE
-                "set(PLUGIN_OUTPUT_DIR \"\${CMAKE_BINARY_DIR}/plugins\")"
-                "set(PLUGIN_OUTPUT_DIR \"\${CMAKE_BINARY_DIR}/plugins/ymery\")"
-                YMERY_FS_CMAKE "${YMERY_FS_CMAKE}")
-            file(WRITE "${ymery_SOURCE_DIR}/src/ymery/plugins/backend/filesystem/CMakeLists.txt" "${YMERY_FS_CMAKE}")
-
-            message(STATUS "Patched ymery plugins to output to plugins/ymery/")
-
-            # Create missing static_plugins files (ymery bug - files referenced but not present)
-            if(NOT EXISTS "${ymery_SOURCE_DIR}/src/ymery/static_plugins.hpp")
-                file(WRITE "${ymery_SOURCE_DIR}/src/ymery/static_plugins.hpp"
-"#pragma once
-#include <vector>
-#include <string>
-
-struct StaticPluginInfo {
-    std::string (*name_fn)();
-    std::string (*type_fn)();
-    void* create;
-
-    std::string name() const { return name_fn(); }
-    std::string type() const { return type_fn(); }
-};
-
-inline const std::vector<StaticPluginInfo>& get_static_plugins() {
-    static std::vector<StaticPluginInfo> plugins;
-    return plugins;
-}
-")
-                file(WRITE "${ymery_SOURCE_DIR}/src/ymery/static_plugins.cpp"
-"#include \"static_plugins.hpp\"
-// Empty - plugins are loaded dynamically on desktop
-")
-                message(STATUS "Created ymery static_plugins stub files")
-            endif()
-        endif()
-
-        # Now add ymery as subdirectory with our options
-        set(YMERY_USE_WEBGPU ON CACHE BOOL "" FORCE)
-        set(YMERY_BUILD_DEMO OFF CACHE BOOL "" FORCE)
-        set(YMERY_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-        add_subdirectory(${ymery_SOURCE_DIR} ${ymery_BINARY_DIR})
-
-        message(STATUS "ymery library built for plugin")
-    endif()
-
-    #-------------------------------------------------------------------------
-    # Build plugins as shared libraries
-    #-------------------------------------------------------------------------
-    add_subdirectory(src/yetty/plugins)
 
     file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/assets DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
     configure_file(

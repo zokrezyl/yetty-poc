@@ -1,11 +1,14 @@
 #pragma once
 
+#include <yetty/renderable.h>
 #include <yetty/result.hpp>
 #include <webgpu/webgpu.h>
 #include <string>
 #include <cstdint>
 #include <memory>
 #include <vector>
+#include <atomic>
+#include <mutex>
 
 namespace yetty {
 
@@ -37,13 +40,22 @@ enum class ScreenType {
 };
 
 //-----------------------------------------------------------------------------
-// PluginLayer - represents a specific layer at a position in the terminal
-// Each layer has its own position, size, payload, and per-layer state
+// PluginLayer - represents a specific layer/instance at a position
+// Each layer is a Renderable that renders itself via render()
 //-----------------------------------------------------------------------------
-class PluginLayer : public std::enable_shared_from_this<PluginLayer> {
+class PluginLayer : public Renderable, public std::enable_shared_from_this<PluginLayer> {
 public:
     PluginLayer() = default;
-    virtual ~PluginLayer() = default;
+    ~PluginLayer() override = default;
+
+    // Renderable interface
+    uint32_t id() const override { return _id; }
+    uint32_t zOrder() const override { return _zOrder; }
+    const std::string& name() const override { return _name; }
+    void start() override { _running.store(true); }
+    void stop() override { _running.store(false); }
+    bool isRunning() const override { return _running.load(); }
+    bool render(WebGPUContext& ctx) override = 0;
 
     // Initialize this layer with its payload
     virtual Result<void> init(const std::string& payload) = 0;
@@ -51,11 +63,7 @@ public:
     // Dispose layer-specific resources
     virtual Result<void> dispose() { return Ok(); }
 
-    // Called every frame (for animation, etc.)
-    virtual Result<void> update(double deltaTime) { (void)deltaTime; return Ok(); }
-
     // Input handling - coordinates are relative to layer's top-left (in screen pixels)
-    // Return true if event was consumed
     virtual bool onMouseMove(float localX, float localY) { (void)localX; (void)localY; return false; }
     virtual bool onMouseButton(int button, bool pressed) { (void)button; (void)pressed; return false; }
     virtual bool onMouseScroll(float xoffset, float yoffset, int mods) { (void)xoffset; (void)yoffset; (void)mods; return false; }
@@ -79,8 +87,9 @@ public:
     }
 
     // Accessors
-    uint32_t getId() const { return _id; }
     void setId(uint32_t id) { _id = id; }
+    void setZOrder(uint32_t z) { _zOrder = z; }
+    void setName(const std::string& n) { _name = n; }
 
     Plugin* getParent() const { return _parent; }
     void setParent(Plugin* p) { _parent = p; }
@@ -109,11 +118,13 @@ public:
     const std::string& getPayload() const { return _payload; }
     void setPayload(const std::string& p) { _payload = p; }
 
-    bool needsRender() const { return _needs_render; }
-    void setNeedsRender(bool v) { _needs_render = v; }
-
 protected:
     uint32_t _id = 0;
+    uint32_t _zOrder = 200;  // Plugins render above terminal (0)
+    std::string _name = "PluginLayer";
+    std::atomic<bool> _running{false};
+    std::mutex _mutex;
+
     Plugin* _parent = nullptr;
     PositionMode _position_mode = PositionMode::Absolute;
     ScreenType _screen_type = ScreenType::Main;
@@ -124,35 +135,41 @@ protected:
     uint32_t _pixel_width = 0;
     uint32_t _pixel_height = 0;
     bool _visible = true;
-    bool _needs_render = true;
     bool _has_focus = false;
     std::string _payload;
 };
 
 //-----------------------------------------------------------------------------
-// Plugin - represents a plugin TYPE (e.g., "ymery", "shadertoy")
-// Holds shared resources (e.g., single ImGui context for all ymery layers)
-// Lazily initialized when first layer is created
+// Plugin - represents a plugin TYPE (e.g., "simple-plot", "shadertoy")
+// Plugin is a Renderable for shared resources (shaders, etc.)
+// Layers are separate Renderables for per-instance rendering
 //-----------------------------------------------------------------------------
-class Plugin : public std::enable_shared_from_this<Plugin> {
+class Plugin : public Renderable, public std::enable_shared_from_this<Plugin> {
 public:
-    virtual ~Plugin() = default;
+    ~Plugin() override = default;
 
     // Plugin identification
     virtual const char* pluginName() const = 0;
 
-protected:
-    // Constructor - PROTECTED, takes engine shared_ptr which is stored
-    // Derived classes pass engine from their create() to constructor
-    // Using shared_ptr ensures engine stays alive while plugin exists
-    explicit Plugin(YettyPtr engine) noexcept : engine_(std::move(engine)) {}
+    // Renderable interface
+    uint32_t id() const override { return _pluginId; }
+    uint32_t zOrder() const override { return _pluginZOrder; }
+    const std::string& name() const override { return _pluginName; }
+    void start() override { _running.store(true); }
+    void stop() override { _running.store(false); }
+    bool isRunning() const override { return _running.load(); }
 
-    // init() - PROTECTED, takes NO arguments, uses stored engine_
-    // Called by derived create() after construction
+    // Plugin's render() for shared resources - default does nothing
+    bool render(WebGPUContext& ctx) override {
+        (void)ctx;
+        return false;
+    }
+
+protected:
+    explicit Plugin(YettyPtr engine) noexcept : engine_(std::move(engine)) {}
     virtual Result<void> init() noexcept { return Ok(); }
 
 public:
-
     // Dispose shared resources
     virtual Result<void> dispose() {
         for (auto& layer : _layers) {
@@ -169,7 +186,7 @@ public:
     // Create a new layer for this plugin
     virtual Result<PluginLayerPtr> createLayer(const std::string& payload) = 0;
 
-    // Add a layer to this plugin (called by PluginManager after createLayer)
+    // Add a layer to this plugin
     void addLayer(PluginLayerPtr layer) {
         layer->setParent(this);
         _layers.push_back(layer);
@@ -178,7 +195,7 @@ public:
     // Remove a layer by ID
     Result<void> removeLayer(uint32_t id) {
         for (auto it = _layers.begin(); it != _layers.end(); ++it) {
-            if ((*it)->getId() == id) {
+            if ((*it)->id() == id) {
                 if (auto res = (*it)->dispose(); !res) {
                     return Err<void>("Failed to dispose layer " + std::to_string(id), res);
                 }
@@ -192,35 +209,13 @@ public:
     // Get a layer by ID
     PluginLayerPtr getLayer(uint32_t id) {
         for (auto& layer : _layers) {
-            if (layer->getId() == id) return layer;
+            if (layer->id() == id) return layer;
         }
         return nullptr;
     }
 
-    // Get all layers
+    // Get all layers (each is a Renderable)
     const std::vector<PluginLayerPtr>& getLayers() const { return _layers; }
-
-    // Update all layers
-    virtual Result<void> update(double deltaTime) {
-        for (auto& layer : _layers) {
-            if (layer->isVisible()) {
-                if (auto res = layer->update(deltaTime); !res) {
-                    return Err<void>("Failed to update layer", res);
-                }
-            }
-        }
-        return Ok();
-    }
-
-    // Render all layers of this plugin
-    // Subclasses can override to batch rendering (e.g., single ImGui frame for all ymery layers)
-    // Uses stored ctx_ from init()
-    // isAltScreen: true if currently on alternate screen (vim, less, etc.)
-    virtual Result<void> renderAll(WGPUTextureView targetView, WGPUTextureFormat targetFormat,
-                                   uint32_t screenWidth, uint32_t screenHeight,
-                                   float cellWidth, float cellHeight,
-                                   int scrollOffset, uint32_t termRows,
-                                   bool isAltScreen = false) = 0;
 
     // Handle terminal resize - notify all layers
     virtual Result<void> onTerminalResize(uint32_t cellWidth, uint32_t cellHeight) {
@@ -228,7 +223,6 @@ public:
             uint32_t newW = layer->getWidthCells() * cellWidth;
             uint32_t newH = layer->getHeightCells() * cellHeight;
             layer->onResize(newW, newH);
-            layer->setNeedsRender(true);
         }
         return Ok();
     }
@@ -241,7 +235,7 @@ public:
     void setFont(Font* font) { _font = font; }
     Font* getFont() const { return _font; }
 
-    // Engine access (for context, fontManager, config, etc.)
+    // Engine access
     YettyPtr getEngine() const { return engine_; }
 
 protected:
@@ -249,6 +243,12 @@ protected:
     std::vector<PluginLayerPtr> _layers;
     bool _initialized = false;
     Font* _font = nullptr;
+
+    uint32_t _pluginId = 0;
+    uint32_t _pluginZOrder = 150;  // Plugin shared resources render before layers
+    std::string _pluginName = "Plugin";
+    std::atomic<bool> _running{false};
+    std::mutex _mutex;
 };
 
 // C function types for dynamic loading

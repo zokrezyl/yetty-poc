@@ -87,7 +87,7 @@ suite plugin_tests = [] {
 
         auto found = plugin->getLayer(200);
         expect(found != nullptr);
-        expect(found->getId() == 200_u);
+        expect(found->id() == 200_u);
     };
 
     "plugin getLayer returns nullptr for unknown ID"_test = [] {
@@ -141,37 +141,6 @@ suite plugin_tests = [] {
         expect(createdLayers[0]->disposeCalled());
     };
 
-    "plugin update calls update on all visible layers"_test = [] {
-        auto result = MockPlugin::create(nullptr);
-        auto mockPlugin = std::static_pointer_cast<MockPlugin>(*result);
-
-        auto layer1 = std::static_pointer_cast<MockPluginLayer>(*mockPlugin->createLayer("p1"));
-        auto layer2 = std::static_pointer_cast<MockPluginLayer>(*mockPlugin->createLayer("p2"));
-        mockPlugin->addLayer(layer1);
-        mockPlugin->addLayer(layer2);
-
-        mockPlugin->update(0.016);
-
-        expect(layer1->updateCount() == 1_i);
-        expect(layer2->updateCount() == 1_i);
-    };
-
-    "plugin update skips invisible layers"_test = [] {
-        auto result = MockPlugin::create(nullptr);
-        auto mockPlugin = std::static_pointer_cast<MockPlugin>(*result);
-
-        auto layer1 = std::static_pointer_cast<MockPluginLayer>(*mockPlugin->createLayer("p1"));
-        auto layer2 = std::static_pointer_cast<MockPluginLayer>(*mockPlugin->createLayer("p2"));
-        layer2->setVisible(false);
-        mockPlugin->addLayer(layer1);
-        mockPlugin->addLayer(layer2);
-
-        mockPlugin->update(0.016);
-
-        expect(layer1->updateCount() == 1_i);
-        expect(layer2->updateCount() == 0_i);
-    };
-
     "plugin dispose disposes all layers"_test = [] {
         auto result = MockPlugin::create(nullptr);
         auto mockPlugin = std::static_pointer_cast<MockPlugin>(*result);
@@ -200,19 +169,6 @@ suite plugin_tests = [] {
 
         expect(layer->getPixelWidth() == 120_u);  // 10 * 12
         expect(layer->getPixelHeight() == 120_u); // 5 * 24
-    };
-
-    "plugin onTerminalResize sets needsRender on layers"_test = [] {
-        auto result = MockPlugin::create(nullptr);
-        auto plugin = *result;
-
-        auto layer = *plugin->createLayer("payload");
-        layer->setNeedsRender(false);
-        plugin->addLayer(layer);
-
-        plugin->onTerminalResize(12, 24);
-
-        expect(layer->needsRender());
     };
 
     "layer parent is set when added to plugin"_test = [] {

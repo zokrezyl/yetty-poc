@@ -83,6 +83,16 @@ public:
                           const std::string& fontName, float fontSize = 32.0f) noexcept;
 
     /**
+     * @brief Load a font from a prebuilt atlas (for Android/Web).
+     * @param atlasPath Path to the atlas image file (.png or .lz4)
+     * @param metricsPath Path to the metrics JSON file
+     * @param fontName Name to cache the font under
+     */
+    Result<Font*> loadFromAtlas(const std::string& atlasPath,
+                                 const std::string& metricsPath,
+                                 const std::string& fontName = "default") noexcept;
+
+    /**
      * @brief Get the default font.
      */
     Font* getDefaultFont() noexcept;

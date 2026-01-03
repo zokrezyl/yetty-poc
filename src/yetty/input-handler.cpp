@@ -1,6 +1,6 @@
 #include "input-handler.h"
 #include <yetty/yetty.h>
-#include "text-renderer.h"
+#include "grid-renderer.h"
 
 #include <iostream>
 
@@ -126,7 +126,7 @@ void InputHandler::onMouseButton(int button, int action, int mods) noexcept {
         const char* clipboard = glfwGetClipboardString(window);
         if (clipboard && *clipboard) {
             terminal->clearSelection();
-            CHECK_RESULT(terminal->sendRaw(clipboard, strlen(clipboard)));
+            terminal->sendRaw(clipboard, strlen(clipboard));
             spdlog::debug("Pasted {} bytes from clipboard (middle-click)", strlen(clipboard));
         }
         return;
@@ -214,7 +214,7 @@ void InputHandler::onKey(int key, int scancode, int action, int mods) noexcept {
                 // Clear selection before pasting
                 terminal->clearSelection();
                 // Send clipboard content to terminal
-                CHECK_RESULT(terminal->sendRaw(clipboard, strlen(clipboard)));
+                terminal->sendRaw(clipboard, strlen(clipboard));
                 spdlog::debug("Pasted {} bytes from clipboard", strlen(clipboard));
             }
             return;
@@ -249,7 +249,7 @@ void InputHandler::onKey(int key, int scancode, int action, int mods) noexcept {
             if (keyName[1] == '\0') {
                 uint32_t ch = keyName[0];
                 spdlog::debug("Sending Ctrl/Alt+'{}'", (char)ch);
-                CHECK_RESULT(terminal->sendKey(ch, vtermMod));
+                terminal->sendKey(ch, vtermMod);
                 return;
             }
         }
@@ -258,46 +258,46 @@ void InputHandler::onKey(int key, int scancode, int action, int mods) noexcept {
     // Map GLFW keys to VTerm keys
     switch (key) {
         case GLFW_KEY_ENTER:
-            CHECK_RESULT(terminal->sendSpecialKey(VTERM_KEY_ENTER, vtermMod));
+            terminal->sendSpecialKey(VTERM_KEY_ENTER, vtermMod);
             break;
         case GLFW_KEY_BACKSPACE:
-            CHECK_RESULT(terminal->sendSpecialKey(VTERM_KEY_BACKSPACE, vtermMod));
+            terminal->sendSpecialKey(VTERM_KEY_BACKSPACE, vtermMod);
             break;
         case GLFW_KEY_TAB:
-            CHECK_RESULT(terminal->sendSpecialKey(VTERM_KEY_TAB, vtermMod));
+            terminal->sendSpecialKey(VTERM_KEY_TAB, vtermMod);
             break;
         case GLFW_KEY_ESCAPE:
-            CHECK_RESULT(terminal->sendSpecialKey(VTERM_KEY_ESCAPE, vtermMod));
+            terminal->sendSpecialKey(VTERM_KEY_ESCAPE, vtermMod);
             break;
         case GLFW_KEY_UP:
-            CHECK_RESULT(terminal->sendSpecialKey(VTERM_KEY_UP, vtermMod));
+            terminal->sendSpecialKey(VTERM_KEY_UP, vtermMod);
             break;
         case GLFW_KEY_DOWN:
-            CHECK_RESULT(terminal->sendSpecialKey(VTERM_KEY_DOWN, vtermMod));
+            terminal->sendSpecialKey(VTERM_KEY_DOWN, vtermMod);
             break;
         case GLFW_KEY_LEFT:
-            CHECK_RESULT(terminal->sendSpecialKey(VTERM_KEY_LEFT, vtermMod));
+            terminal->sendSpecialKey(VTERM_KEY_LEFT, vtermMod);
             break;
         case GLFW_KEY_RIGHT:
-            CHECK_RESULT(terminal->sendSpecialKey(VTERM_KEY_RIGHT, vtermMod));
+            terminal->sendSpecialKey(VTERM_KEY_RIGHT, vtermMod);
             break;
         case GLFW_KEY_HOME:
-            CHECK_RESULT(terminal->sendSpecialKey(VTERM_KEY_HOME, vtermMod));
+            terminal->sendSpecialKey(VTERM_KEY_HOME, vtermMod);
             break;
         case GLFW_KEY_END:
-            CHECK_RESULT(terminal->sendSpecialKey(VTERM_KEY_END, vtermMod));
+            terminal->sendSpecialKey(VTERM_KEY_END, vtermMod);
             break;
         case GLFW_KEY_PAGE_UP:
-            CHECK_RESULT(terminal->sendSpecialKey(VTERM_KEY_PAGEUP, vtermMod));
+            terminal->sendSpecialKey(VTERM_KEY_PAGEUP, vtermMod);
             break;
         case GLFW_KEY_PAGE_DOWN:
-            CHECK_RESULT(terminal->sendSpecialKey(VTERM_KEY_PAGEDOWN, vtermMod));
+            terminal->sendSpecialKey(VTERM_KEY_PAGEDOWN, vtermMod);
             break;
         case GLFW_KEY_INSERT:
-            CHECK_RESULT(terminal->sendSpecialKey(VTERM_KEY_INS, vtermMod));
+            terminal->sendSpecialKey(VTERM_KEY_INS, vtermMod);
             break;
         case GLFW_KEY_DELETE:
-            CHECK_RESULT(terminal->sendSpecialKey(VTERM_KEY_DEL, vtermMod));
+            terminal->sendSpecialKey(VTERM_KEY_DEL, vtermMod);
             break;
         default:
             break;
@@ -321,7 +321,7 @@ void InputHandler::onChar(unsigned int codepoint) noexcept {
         }
     }
 
-    CHECK_RESULT(terminal->sendKey(codepoint));
+    terminal->sendKey(codepoint);
 #else
     (void)codepoint;
 #endif

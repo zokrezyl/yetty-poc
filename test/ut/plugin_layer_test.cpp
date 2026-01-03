@@ -102,7 +102,7 @@ suite plugin_layer_tests = [] {
 
         layer.setId(42);
 
-        expect(layer.getId() == 42_u);
+        expect(layer.id() == 42_u);
     };
 
     "layer has no focus by default"_test = [] {
@@ -129,20 +129,6 @@ suite plugin_layer_tests = [] {
         expect(layer.getPayload() == "test_payload");
     };
 
-    "layer needsRender is true by default"_test = [] {
-        MockPluginLayer layer;
-
-        expect(layer.needsRender());
-    };
-
-    "layer needsRender can be cleared"_test = [] {
-        MockPluginLayer layer;
-
-        layer.setNeedsRender(false);
-
-        expect(!layer.needsRender());
-    };
-
     "layer init is called with payload"_test = [] {
         MockPluginLayer layer;
 
@@ -161,24 +147,6 @@ suite plugin_layer_tests = [] {
 
         expect(result.has_value());
         expect(layer.disposeCalled());
-    };
-
-    "layer update increments counter"_test = [] {
-        MockPluginLayer layer;
-
-        layer.update(0.016);
-        layer.update(0.016);
-        layer.update(0.016);
-
-        expect(layer.updateCount() == 3_i);
-    };
-
-    "layer update receives delta time"_test = [] {
-        MockPluginLayer layer;
-
-        layer.update(0.033);
-
-        expect(layer.lastDeltaTime() == 0.033_d);
     };
 
     "layer mouse move is tracked"_test = [] {
