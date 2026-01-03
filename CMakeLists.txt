@@ -292,7 +292,6 @@ if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
         src/yetty/font-manager.cpp
         src/yetty/rich-text.cpp
         src/yetty/emoji-atlas.cpp
-        src/yetty/yetty-command.cpp
         src/yetty/renderable.cpp
     )
 

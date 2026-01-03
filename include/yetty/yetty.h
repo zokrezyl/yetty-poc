@@ -17,7 +17,6 @@
 #include <yetty/font.h>
 #include <yetty/font-manager.h>
 #include <yetty/renderable.h>
-#include <yetty/yetty-command.h>
 
 #include <memory>
 #include <string>
@@ -194,7 +193,6 @@ private:
     void handleResize(int width, int height) noexcept;
 
     // Renderable management
-    void processEngineCommands() noexcept;
     void renderAll() noexcept;
     void addRenderable(Renderable::Ptr renderable) noexcept;
     void removeRenderable(uint32_t id) noexcept;
@@ -233,7 +231,6 @@ private:
 
     // Renderables (sorted by zOrder)
     std::vector<Renderable::Ptr> _renderables;
-    std::vector<std::unique_ptr<YettyCommand>> _pendingEngineCommands;
     uint32_t _nextRenderableId = 1;
 
     // Per-renderable GPU resources (renderable_id -> {name -> resource})

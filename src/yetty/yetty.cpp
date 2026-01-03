@@ -792,10 +792,7 @@ void Yetty::mainLoopIteration() noexcept {
     return;
   }
 
-  // Process pending engine commands from previous frame
-  processEngineCommands();
-
-  // Collect and execute render commands from all renderables
+  // Render all renderables
   renderAll();
 
   // Present
