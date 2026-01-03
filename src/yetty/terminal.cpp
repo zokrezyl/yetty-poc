@@ -145,26 +145,26 @@ void Terminal::stop() {
     running_.store(false);
 }
 
-bool Terminal::render(WebGPUContext& ctx) {
+Result<void> Terminal::render(WebGPUContext& ctx) {
     (void)ctx;  // We use renderer_ directly
 
     // Try to acquire lock - don't block main thread
     std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
     if (!lock.owns_lock()) {
-        return false;  // Busy, skip this frame
+        return Ok();  // Busy, skip this frame
     }
 
     if (!running_.load()) {
-        return false;
+        return Ok();
     }
 
     if (!renderer_) {
-        return false;
+        return Ok();
     }
 
     // No damage = nothing to render
     if (!hasDamage()) {
-        return false;
+        return Ok();
     }
 
     // Render the grid with damage tracking
@@ -176,7 +176,7 @@ bool Terminal::render(WebGPUContext& ctx) {
     damageRects_.clear();
     fullDamage_ = false;
 
-    return true;
+    return Ok();
 }
 
 //=============================================================================
@@ -656,10 +656,33 @@ void Terminal::syncToGrid() {
                 bool isBold = cell.attrs.bold != 0;
                 bool isItalic = cell.attrs.italic != 0;
 
-                int emojiIdx = findCommonEmojiIndex(cp);
-                uint16_t gi = (emojiIdx >= 0)
-                    ? static_cast<uint16_t>(emojiIdx)
-                    : (font_ ? font_->getGlyphIndex(cp, isBold, isItalic) : static_cast<uint16_t>(cp));
+                // Determine glyph index:
+                // 1. For emojis, use EmojiAtlas (dynamically load if needed)
+                // 2. For regular text, use Font (MSDF)
+                uint16_t gi;
+                int emojiIdx = -1;
+
+                if (isEmoji(cp) && emojiAtlas_) {
+                    // Check if already loaded in EmojiAtlas
+                    emojiIdx = emojiAtlas_->getEmojiIndex(cp);
+                    if (emojiIdx < 0) {
+                        // Try to load it dynamically
+                        auto result = emojiAtlas_->loadEmoji(cp);
+                        if (result && *result >= 0) {
+                            emojiIdx = *result;
+                        }
+                    }
+
+                    if (emojiIdx >= 0) {
+                        gi = static_cast<uint16_t>(emojiIdx);
+                    } else {
+                        // Emoji not available in font, use space as fallback
+                        gi = font_ ? font_->getGlyphIndex(' ') : static_cast<uint16_t>(' ');
+                    }
+                } else {
+                    // Regular text glyph - use MSDF font
+                    gi = font_ ? font_->getGlyphIndex(cp, isBold, isItalic) : static_cast<uint16_t>(cp);
+                }
 
                 if (pluginManager_) {
                     uint32_t w = cell.width > 0 ? cell.width : 1;

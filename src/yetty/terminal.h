@@ -84,7 +84,7 @@ public:
     void stop() override;
     bool isRunning() const override { return running_.load(); }
 
-    bool render(WebGPUContext& ctx) override;
+    Result<void> render(WebGPUContext& ctx) override;
 
     //=========================================================================
     // Terminal-specific interface (all thread-safe)

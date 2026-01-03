@@ -32,10 +32,10 @@ public:
         return Ok();
     }
 
-    bool render(WebGPUContext& ctx) override {
+    Result<void> render(WebGPUContext& ctx) override {
         (void)ctx;
         _render_count++;
-        return true;
+        return Ok();
     }
 
     bool onMouseMove(float localX, float localY) override {
@@ -108,10 +108,10 @@ public:
         return Ok<PluginLayerPtr>(layer);
     }
 
-    bool render(WebGPUContext& ctx) override {
+    Result<void> render(WebGPUContext& ctx) override {
         (void)ctx;
         _render_count++;
-        return true;
+        return Ok();
     }
 
     // Test inspection

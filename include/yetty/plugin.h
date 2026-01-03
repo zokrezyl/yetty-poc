@@ -27,6 +27,23 @@ using YettyPtr = std::shared_ptr<Yetty>;
 using PluginPtr = std::shared_ptr<Plugin>;
 using PluginLayerPtr = std::shared_ptr<PluginLayer>;
 
+//-----------------------------------------------------------------------------
+// RenderContext - rendering parameters passed to PluginLayer::render()
+// Set by the owner (Terminal/PluginManager) before calling render()
+//-----------------------------------------------------------------------------
+struct RenderContext {
+    WGPUTextureView targetView = nullptr;
+    WGPUTextureFormat targetFormat = WGPUTextureFormat_BGRA8Unorm;
+    uint32_t screenWidth = 0;
+    uint32_t screenHeight = 0;
+    float cellWidth = 0.0f;
+    float cellHeight = 0.0f;
+    int scrollOffset = 0;
+    uint32_t termRows = 0;
+    bool isAltScreen = false;
+    double deltaTime = 0.0;  // Time since last frame
+};
+
 // Position mode for plugin layers
 enum class PositionMode {
     Absolute,  // Fixed position, doesn't scroll
@@ -55,7 +72,7 @@ public:
     void start() override { _running.store(true); }
     void stop() override { _running.store(false); }
     bool isRunning() const override { return _running.load(); }
-    bool render(WebGPUContext& ctx) override = 0;
+    Result<void> render(WebGPUContext& ctx) override = 0;
 
     // Initialize this layer with its payload
     virtual Result<void> init(const std::string& payload) = 0;
@@ -118,6 +135,10 @@ public:
     const std::string& getPayload() const { return _payload; }
     void setPayload(const std::string& p) { _payload = p; }
 
+    // RenderContext - set by owner before calling render()
+    const RenderContext& getRenderContext() const { return _render_context; }
+    void setRenderContext(const RenderContext& ctx) { _render_context = ctx; }
+
 protected:
     uint32_t _id = 0;
     uint32_t _zOrder = 200;  // Plugins render above terminal (0)
@@ -137,6 +158,7 @@ protected:
     bool _visible = true;
     bool _has_focus = false;
     std::string _payload;
+    RenderContext _render_context;
 };
 
 //-----------------------------------------------------------------------------
@@ -160,9 +182,9 @@ public:
     bool isRunning() const override { return _running.load(); }
 
     // Plugin's render() for shared resources - default does nothing
-    bool render(WebGPUContext& ctx) override {
+    Result<void> render(WebGPUContext& ctx) override {
         (void)ctx;
-        return false;
+        return Ok();
     }
 
 protected:

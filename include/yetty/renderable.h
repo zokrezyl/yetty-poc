@@ -1,5 +1,6 @@
 #pragma once
 
+#include <yetty/result.hpp>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -67,8 +68,8 @@ public:
 
     // Render this renderable. Called by main loop each frame.
     // The renderable manages its own GPU resources and does all WebGPU calls.
-    // Returns true if something was rendered, false if skipped (no damage).
-    virtual bool render(WebGPUContext& ctx) = 0;
+    // Returns Ok() on success, Err() with chained error on failure.
+    virtual Result<void> render(WebGPUContext& ctx) = 0;
 };
 
 //=============================================================================
