@@ -39,6 +39,10 @@
 #include <emscripten.h>
 #endif
 
+#if !YETTY_WEB && !defined(__ANDROID__)
+#include <uv.h>
+#endif
+
 namespace yetty {
 
 // Forward declarations
@@ -134,6 +138,12 @@ public:
     // State modifiers (called by InputHandler)
     void setZoomLevel(float zoom) noexcept;
     void updateGridSize(uint32_t cols, uint32_t rows) noexcept;
+
+    // Request a render (called by Terminal when it has new output)
+    void requestRender() noexcept;
+
+    // Get elapsed time since start (for shader uniforms)
+    double getElapsedTime() const noexcept;
 
     //=========================================================================
     // Per-Renderable Resource Management
@@ -270,6 +280,21 @@ private:
     // FPS tracking
     double _lastFpsTime = 0.0;
     uint32_t _frameCount = 0;
+
+#if !YETTY_WEB && !defined(__ANDROID__)
+    // libuv event loop for main thread (50Hz timer-driven rendering)
+    uv_loop_t* _uvLoop = nullptr;
+    uv_timer_t* _frameTimer = nullptr;
+    uv_async_t* _wakeAsync = nullptr;  // For Terminal to wake up main loop
+    bool _needsRender = true;          // Flag to trigger render
+    double _lastRenderTime = 0.0;      // For time-based shader uniforms
+
+    // libuv callbacks
+    static void onFrameTimer(uv_timer_t* handle);
+    static void onWakeAsync(uv_async_t* handle);
+    void initEventLoop() noexcept;
+    void shutdownEventLoop() noexcept;
+#endif
 
     // For Emscripten
     static Yetty* s_instance;

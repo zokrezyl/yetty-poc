@@ -585,6 +585,9 @@ void Yetty::shutdown() noexcept {
     _ctx.reset();
     _androidInitialized = false;
 #else
+    // Shutdown libuv event loop
+    shutdownEventLoop();
+
     // shared_ptrs are cleaned up automatically
 
     if (_window) {
@@ -596,6 +599,97 @@ void Yetty::shutdown() noexcept {
 
     s_instance = nullptr;
 }
+
+//-----------------------------------------------------------------------------
+// libuv Event Loop (Desktop only)
+//-----------------------------------------------------------------------------
+
+#if !YETTY_WEB && !defined(__ANDROID__)
+void Yetty::initEventLoop() noexcept {
+    _uvLoop = new uv_loop_t;
+    uv_loop_init(_uvLoop);
+
+    // Frame timer - fires at 50Hz (every 20ms)
+    _frameTimer = new uv_timer_t;
+    uv_timer_init(_uvLoop, _frameTimer);
+    _frameTimer->data = this;
+    uv_timer_start(_frameTimer, onFrameTimer, 0, 20);  // 50Hz
+
+    // Async handle for Terminal to wake up main loop
+    _wakeAsync = new uv_async_t;
+    uv_async_init(_uvLoop, _wakeAsync, onWakeAsync);
+    _wakeAsync->data = this;
+
+    _lastRenderTime = glfwGetTime();
+    spdlog::debug("libuv event loop initialized (50Hz timer)");
+}
+
+void Yetty::shutdownEventLoop() noexcept {
+    if (_frameTimer) {
+        uv_timer_stop(_frameTimer);
+        uv_close(reinterpret_cast<uv_handle_t*>(_frameTimer), nullptr);
+    }
+    if (_wakeAsync) {
+        uv_close(reinterpret_cast<uv_handle_t*>(_wakeAsync), nullptr);
+    }
+    if (_uvLoop) {
+        // Run loop once to process close callbacks
+        uv_run(_uvLoop, UV_RUN_NOWAIT);
+        uv_loop_close(_uvLoop);
+        delete _uvLoop;
+        _uvLoop = nullptr;
+    }
+    if (_frameTimer) {
+        delete _frameTimer;
+        _frameTimer = nullptr;
+    }
+    if (_wakeAsync) {
+        delete _wakeAsync;
+        _wakeAsync = nullptr;
+    }
+}
+
+void Yetty::onFrameTimer(uv_timer_t* handle) {
+    Yetty* self = static_cast<Yetty*>(handle->data);
+
+    // Poll GLFW events (non-blocking)
+    glfwPollEvents();
+
+    // Check if window should close
+    if (glfwWindowShouldClose(self->_window)) {
+        uv_stop(self->_uvLoop);
+        return;
+    }
+
+    // Render frame
+    self->mainLoopIteration();
+}
+
+void Yetty::onWakeAsync(uv_async_t* handle) {
+    Yetty* self = static_cast<Yetty*>(handle->data);
+    self->_needsRender = true;
+    // The next timer tick will render
+}
+
+void Yetty::requestRender() noexcept {
+    _needsRender = true;
+    if (_wakeAsync) {
+        uv_async_send(_wakeAsync);
+    }
+}
+
+double Yetty::getElapsedTime() const noexcept {
+    return glfwGetTime() - _lastRenderTime;
+}
+#else
+void Yetty::requestRender() noexcept {
+    // No-op on web/Android
+}
+
+double Yetty::getElapsedTime() const noexcept {
+    return 0.0;
+}
+#endif
 
 int Yetty::run() noexcept {
 #if defined(__ANDROID__)
@@ -638,9 +732,12 @@ int Yetty::run() noexcept {
     return 0;
 #else
     std::cout << "Starting render loop... (use mouse scroll to zoom, ESC to exit)" << std::endl;
-    while (!glfwWindowShouldClose(_window)) {
-        mainLoopIteration();
-    }
+
+    // Initialize libuv event loop with 50Hz timer
+    initEventLoop();
+
+    // Run libuv event loop - blocks until uv_stop() is called
+    uv_run(_uvLoop, UV_RUN_DEFAULT);
 
     std::cout << "Shutting down..." << std::endl;
     return 0;
@@ -673,7 +770,7 @@ void Yetty::mainLoopIteration() noexcept {
     // Present
     _ctx->present();
 #else
-    glfwPollEvents();
+    // Note: glfwPollEvents() is called in onFrameTimer() before this
 
     // Process pending engine commands from previous frame
     processEngineCommands();
