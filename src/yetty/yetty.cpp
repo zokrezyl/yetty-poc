@@ -1,5 +1,5 @@
 #include <yetty/yetty.h>
-#include "text-renderer.h"
+#include "grid-renderer.h"
 #include "grid.h"
 
 #if defined(__ANDROID__)
@@ -24,6 +24,7 @@
 #endif
 
 #include <spdlog/spdlog.h>
+#include <algorithm>
 #include <iostream>
 #include <fstream>
 #include <cstdlib>
@@ -48,26 +49,6 @@ namespace yetty {
 
 // Static instance for Emscripten
 Yetty* Yetty::s_instance = nullptr;
-
-// Colors for random text (RGB uint8)
-struct RGB { uint8_t _r, _g, _b; };
-static RGB g_colors[] = {
-    {255, 255, 255},  // white
-    {0, 255, 0},      // green
-    {0, 255, 255},    // cyan
-    {255, 255, 0}     // yellow
-};
-
-// Generate random line from dictionary
-static std::string generateLine(const std::vector<std::string>& dict, uint32_t maxCols) {
-    std::string line;
-    while (line.length() < maxCols - 10) {
-        const std::string& word = dict[std::rand() % dict.size()];
-        if (!line.empty()) line += " ";
-        line += word;
-    }
-    return line;
-}
 
 // Default paths
 #if YETTY_WEB
@@ -139,9 +120,6 @@ Result<void> Yetty::init(struct android_app* app) noexcept {
     }
     _config = *configResult;
 
-    // Android uses prebuilt atlas
-    _usePrebuiltAtlas = true;
-    _demoMode = false;
     _initialWidth = 1024;  // Will be set when window is created
     _initialHeight = 768;
 
@@ -186,8 +164,8 @@ Result<void> Yetty::init(int argc, char* argv[]) noexcept {
         return res;
     }
 
-    // Initialize terminal or demo mode
-    if (auto res = initTerminalOrDemo(); !res) {
+    // Initialize terminal
+    if (auto res = initTerminal(); !res) {
         return res;
     }
 
@@ -220,8 +198,6 @@ Result<void> Yetty::parseArgs(int argc, char* argv[]) noexcept {
 
     // Mode options
     args::Flag generateAtlasFlag(parser, "generate-atlas", "Generate font atlas and exit", {"generate-atlas"});
-    args::Flag loadAtlasFlag(parser, "load-atlas", "Use pre-built atlas", {"load-atlas"});
-    args::ValueFlag<int> demoFlag(parser, "scroll_ms", "Run scrolling text demo", {"demo"});
     args::Flag noDamageFlag(parser, "no-damage", "Disable damage tracking", {"no-damage"});
     args::Flag debugDamageFlag(parser, "debug-damage", "Log damage rectangle updates", {"debug-damage"});
     args::ValueFlag<std::string> executeArg(parser, "command", "Execute command instead of shell", {'e'});
@@ -259,9 +235,6 @@ Result<void> Yetty::parseArgs(int argc, char* argv[]) noexcept {
 
     // Extract final values
     _generateAtlasOnly = generateAtlasFlag;
-    _usePrebuiltAtlas = YETTY_USE_PREBUILT_ATLAS || loadAtlasFlag;
-    _demoMode = demoFlag;
-    _scrollMs = demoFlag ? args::get(demoFlag) : 50;
     _fontPath = fontPathArg ? args::get(fontPathArg) : std::string(DEFAULT_FONT);
     _executeCommand = executeArg ? args::get(executeArg) : "";
     _initialWidth = widthArg ? args::get(widthArg) : 1024;
@@ -284,9 +257,6 @@ Result<void> Yetty::parseArgs(int argc, char* argv[]) noexcept {
     _config = *configResult;
 
     _generateAtlasOnly = false;
-    _usePrebuiltAtlas = true;
-    _demoMode = true;
-    _scrollMs = 50;
     _fontPath = DEFAULT_FONT;
     _initialWidth = 1024;
     _initialHeight = 768;
@@ -378,43 +348,33 @@ Result<void> Yetty::initGraphics() noexcept {
 
 Result<void> Yetty::initFont() noexcept {
 #if defined(__ANDROID__)
-    // Android: extract assets and load prebuilt atlas
-    // TODO: Migrate Android to use FontManager with asset loading support
+    // Android: extract assets and load prebuilt atlas via FontManager
     if (auto res = extractAssets(); !res) {
         return res;
     }
 
-    _font_storage = std::make_unique<Font>();
-    _font = _font_storage.get();
     std::string atlasPath = _dataDir + "/atlas.lz4";
     std::string metricsPath = _dataDir + "/atlas.json";
 
-    LOGI("Loading atlas from: %s", atlasPath.c_str());
-    if (!_font->loadAtlas(atlasPath, metricsPath)) {
-        return Err<void>("Failed to load font atlas");
+    LOGI("Loading atlas via FontManager from: %s", atlasPath.c_str());
+    auto fontResult = _fontManager->loadFromAtlas(atlasPath, metricsPath, "default");
+    if (!fontResult) {
+        return Err<void>("Failed to load font atlas", fontResult);
     }
-    LOGI("Font atlas loaded");
-
-    if (!_font->createTexture(_ctx->getDevice(), _ctx->getQueue())) {
-        return Err<void>("Failed to create font texture");
-    }
+    _font = *fontResult;
+    LOGI("Font atlas loaded via FontManager");
 
     float fontSize = _font->getFontSize();
     _baseCellWidth = fontSize * 0.6f;
     _baseCellHeight = fontSize * 1.2f;
 #elif YETTY_USE_PREBUILT_ATLAS
-    // Web build: load prebuilt atlas
-    // TODO: Migrate Web to use FontManager with asset loading support
-    _font_storage = std::make_unique<Font>();
-    _font = _font_storage.get();
-    std::cout << "Loading pre-built atlas..." << std::endl;
-    if (!_font->loadAtlas(DEFAULT_ATLAS, DEFAULT_METRICS)) {
-        return Err<void>("Failed to load pre-built atlas");
+    // Web build: load prebuilt atlas via FontManager
+    spdlog::info("Loading pre-built atlas via FontManager...");
+    auto fontResult = _fontManager->loadFromAtlas(DEFAULT_ATLAS, DEFAULT_METRICS, "default");
+    if (!fontResult) {
+        return Err<void>("Failed to load pre-built atlas", fontResult);
     }
-
-    if (!_font->createTexture(_ctx->getDevice(), _ctx->getQueue())) {
-        return Err<void>("Failed to create font texture");
-    }
+    _font = *fontResult;
 
     float fontSize = _font->getFontSize();
     _baseCellWidth = fontSize * 0.6f;
@@ -428,7 +388,7 @@ Result<void> Yetty::initFont() noexcept {
 }
 
 Result<void> Yetty::initRenderer() noexcept {
-    auto rendererResult = TextRenderer::create(_ctx, _fontManager);
+    auto rendererResult = GridRenderer::create(_ctx, _fontManager);
     if (!rendererResult) {
         return Err<void>("Failed to create text renderer", rendererResult);
     }
@@ -455,10 +415,10 @@ Result<void> Yetty::initRenderer() noexcept {
     return Ok();
 }
 
-Result<void> Yetty::initTerminalOrDemo() noexcept {
+Result<void> Yetty::initTerminal() noexcept {
 #if defined(__ANDROID__)
-    // Android: Terminal mode only (no demo mode, no plugins)
-    auto terminalResult = Terminal::create(_cols, _rows, _font);
+    // Android: Terminal mode (no plugins)
+    auto terminalResult = Terminal::create(nextRenderableId(), _cols, _rows, _font);
     if (!terminalResult) {
         return Err<void>("Failed to create terminal", terminalResult);
     }
@@ -474,106 +434,78 @@ Result<void> Yetty::initTerminalOrDemo() noexcept {
     setenv("BUSYBOX", _busyboxPath.c_str(), 1);
 
     // Start shell
-    std::string shell = "/system/bin/sh";
-    if (auto result = _terminal->start(shell); !result) {
-        return Err<void>("Failed to start shell", result);
-    }
-    LOGI("Terminal started with shell: %s", shell.c_str());
+    _terminal->setShell("/system/bin/sh");
+    _terminal->start();
+    addRenderable(_terminal);
+    LOGI("Terminal started with shell: /system/bin/sh");
     LOGI("BusyBox available at: %s", _busyboxPath.c_str());
+#elif !YETTY_WEB
+    // Desktop: Terminal mode with plugins
+    auto terminalResult = Terminal::create(nextRenderableId(), _cols, _rows, _font);
+    if (!terminalResult) {
+        return Err<void>("Failed to create terminal", terminalResult);
+    }
+    _terminal = *terminalResult;
+    _terminal->setConfig(_config.get());
+
+    // Create and configure PluginManager
+    auto pluginMgrResult = PluginManager::create();
+    if (!pluginMgrResult) {
+        return Err<void>("Failed to create plugin manager", pluginMgrResult);
+    }
+    _pluginManager = *pluginMgrResult;
+
+    // Pass font and engine to plugins
+    _pluginManager->setFont(_font);
+    _pluginManager->setEngine(shared_from_this());
+
+    // Register built-in shader glyph plugin
+    if (auto shaderGlyphResult = ShaderGlyphPlugin::create()) {
+        _pluginManager->registerCustomGlyphPlugin(*shaderGlyphResult);
+    }
+
+    // Load plugins from configured paths
+    auto pluginPaths = _config->pluginPaths();
+    for (const auto& path : pluginPaths) {
+        spdlog::info("Loading plugins from: {}", path);
+        _pluginManager->loadPluginsFromDirectory(path);
+    }
+
+    // Wire up plugin manager to terminal
+    _terminal->setPluginManager(_pluginManager.get());
+    _terminal->setCellSize(static_cast<uint32_t>(_baseCellWidth), static_cast<uint32_t>(_baseCellHeight));
+
+    // Wire up emoji atlas for dynamic emoji loading
+    if (_renderer) {
+        _terminal->setEmojiAtlas(_renderer->getEmojiAtlas());
+        _terminal->setRenderer(_renderer.get());
+    }
+
+    // Set up zoom handling on terminal
+    _terminal->setBaseCellSize(_baseCellWidth, _baseCellHeight);
+
+    // Set shell command and start terminal
+    if (!_executeCommand.empty()) {
+        _terminal->setShell(_executeCommand);
+    }
+    _terminal->start();
+
+    // Add terminal to renderables
+    addRenderable(_terminal);
+
+    std::cout << "Terminal mode: Grid " << _cols << "x" << _rows
+              << " (damage tracking: " << (_config->useDamageTracking() ? "on" : "off") << ")" << std::endl;
+
+    // Create input handler
+    auto inputResult = InputHandler::create(this);
+    if (!inputResult) {
+        return Err<void>("Failed to create input handler", inputResult);
+    }
+    _inputHandler = *inputResult;
 #else
-    if (_demoMode) {
-        // Demo mode: scrolling text
-        _demoGrid = new Grid(_cols, _rows);
-        _lastScrollTime = glfwGetTime();
-
-        // Load dictionary
-#if !YETTY_WEB
-        std::ifstream dictFile("/usr/share/dict/words");
-        if (dictFile.is_open()) {
-            std::string word;
-            while (std::getline(dictFile, word)) {
-                if (!word.empty() && word[0] >= 'a' && word[0] <= 'z') {
-                    _dictionary.push_back(word);
-                }
-            }
-            std::cout << "Loaded " << _dictionary.size() << " words from dictionary" << std::endl;
-        } else
+    // Web build: Terminal not available yet
+    spdlog::warn("Web build: Terminal mode not yet implemented");
 #endif
-        {
-            _dictionary = {"hello", "world", "terminal", "webgpu", "render", "scroll", "test",
-                         "browser", "wasm", "gpu", "shader", "pixel", "font", "text", "grid",
-                         "cell", "color", "alpha", "buffer", "vertex", "fragment", "compute"};
-            std::cout << "Using fallback dictionary with " << _dictionary.size() << " words" << std::endl;
-        }
-        std::srand(static_cast<unsigned>(std::time(nullptr)));
-
-        // Fill initial content
-        for (uint32_t row = 0; row < _rows; ++row) {
-            std::string line = generateLine(_dictionary, _cols);
-            RGB color = g_colors[std::rand() % 4];
-            _demoGrid->writeString(0, row, line.c_str(), color._r, color._g, color._b, _font);
-        }
-
-        std::cout << "Demo mode: Grid " << _cols << "x" << _rows << ", scroll: " << _scrollMs << "ms" << std::endl;
-    }
-#if !YETTY_WEB
-    else {
-        // Terminal mode
-        auto terminalResult = Terminal::create(_cols, _rows, _font);
-        if (!terminalResult) {
-            return Err<void>("Failed to create terminal", terminalResult);
-        }
-        _terminal = *terminalResult;
-        _terminal->setConfig(_config.get());
-
-        // Create and configure PluginManager
-        auto pluginMgrResult = PluginManager::create();
-        if (!pluginMgrResult) {
-            return Err<void>("Failed to create plugin manager", pluginMgrResult);
-        }
-        _pluginManager = *pluginMgrResult;
-
-        // Pass font and engine to plugins
-        _pluginManager->setFont(_font);
-        _pluginManager->setEngine(shared_from_this());
-
-        // Register custom glyph plugins
-        if (auto shaderGlyphResult = ShaderGlyphPlugin::create()) {
-            _pluginManager->registerCustomGlyphPlugin(*shaderGlyphResult);
-        }
-
-        // Load plugins from configured paths
-        auto pluginPaths = _config->pluginPaths();
-        for (const auto& path : pluginPaths) {
-            spdlog::info("Loading plugins from: {}", path);
-            _pluginManager->loadPluginsFromDirectory(path);
-        }
-
-        // Wire up plugin manager to terminal
-        _terminal->setPluginManager(_pluginManager.get());
-        _terminal->setCellSize(static_cast<uint32_t>(_baseCellWidth), static_cast<uint32_t>(_baseCellHeight));
-
-        // Wire up emoji atlas for dynamic emoji loading
-        if (_renderer) {
-            _terminal->setEmojiAtlas(_renderer->getEmojiAtlas());
-        }
-
-        if (auto result = _terminal->start(_executeCommand); !result) {
-            return Err<void>("Failed to start terminal", result);
-        }
-
-        std::cout << "Terminal mode: Grid " << _cols << "x" << _rows
-                  << " (damage tracking: " << (_config->useDamageTracking() ? "on" : "off") << ")" << std::endl;
-
-        // Create input handler
-        auto inputResult = InputHandler::create(this);
-        if (!inputResult) {
-            return Err<void>("Failed to create input handler", inputResult);
-        }
-        _inputHandler = *inputResult;
-    }
-#endif
-#endif  // __ANDROID__
 
     return Ok();
 }
@@ -586,7 +518,7 @@ Result<void> Yetty::initCallbacks() noexcept {
     glfwSetWindowUserPointer(_window, this);
 
 #if !YETTY_WEB
-    if (!_demoMode && _inputHandler) {
+    if (_inputHandler) {
         // Set up keyboard and mouse callbacks via lambdas that call InputHandler
         glfwSetKeyCallback(_window, [](GLFWwindow* w, int key, int scancode, int action, int mods) {
             auto* engine = static_cast<Yetty*>(glfwGetWindowUserPointer(w));
@@ -648,14 +580,11 @@ void Yetty::shutdown() noexcept {
     // Reset in reverse order of creation
     _terminal.reset();
     _renderer.reset();
-    _font_storage.reset();
+    _fontManager.reset();  // FontManager owns all fonts
     _font = nullptr;
     _ctx.reset();
     _androidInitialized = false;
 #else
-    delete _demoGrid;
-    _demoGrid = nullptr;
-
     // shared_ptrs are cleaned up automatically
 
     if (_window) {
@@ -736,8 +665,7 @@ void Yetty::mainLoopIteration() noexcept {
         return;
     }
 
-    // Update terminal (read PTY output)
-    CHECK_RESULT(_terminal->update());
+    // Terminal worker thread handles PTY updates
 
     // Get surface texture
     auto textureViewResult = _ctx->getCurrentTextureView();
@@ -745,7 +673,7 @@ void Yetty::mainLoopIteration() noexcept {
         return;
     }
 
-    // Render terminal using TextRenderer
+    // Render terminal using GridRenderer
     _renderer->render(_terminal->getGrid(),
                      _terminal->getCursorCol(),
                      _terminal->getCursorRow(),
@@ -756,11 +684,12 @@ void Yetty::mainLoopIteration() noexcept {
 #else
     glfwPollEvents();
 
-#if !YETTY_WEB
-    // Terminal mode: update terminal and render its grid
-    if (!_demoMode && _terminal) {
-        CHECK_RESULT(_terminal->update());
+    // Process pending engine commands from previous frame
+    processEngineCommands();
 
+#if !YETTY_WEB
+    // Terminal mode: worker thread handles PTY updates, we just render
+    if (_terminal) {
         // Update decorators
         static double lastTime = glfwGetTime();
         double currentTime = glfwGetTime();
@@ -780,13 +709,12 @@ void Yetty::mainLoopIteration() noexcept {
         }
 
         // Check if we need to render this frame
-        auto cursorBlinkResult = _terminal->updateCursorBlink(currentTime);
-        bool cursorChanged = cursorBlinkResult && *cursorBlinkResult;
+        // Worker thread updates cursor blink, damage is updated by worker
         bool hasDamage = _terminal->hasDamage();
         bool hasPlugins = _pluginManager && !_pluginManager->getAllLayers().empty();
 
         // Skip rendering if nothing needs update
-        if (!cursorChanged && !hasDamage && !hasPlugins) {
+        if (!hasDamage && !hasPlugins) {
             std::this_thread::sleep_for(std::chrono::milliseconds(16));
             return;
         }
@@ -853,45 +781,15 @@ void Yetty::mainLoopIteration() noexcept {
             }
         }
 
+        // Process renderable commands (new architecture)
+        if (!_renderables.empty()) {
+            collectAndExecuteCommands();
+        }
+
         // Present the frame
         _ctx->present();
-    } else
-#endif
-    {
-        // Demo mode: scrolling text
-        if (_demoMode && _demoGrid) {
-            // Check for ESC key
-            if (glfwGetKey(_window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
-                glfwSetWindowShouldClose(_window, GLFW_TRUE);
-#if YETTY_WEB
-                emscripten_cancel_main_loop();
-#endif
-                return;
-            }
-
-            // Scrolling logic
-            double currentTime = glfwGetTime();
-            if (_scrollMs > 0 && !_dictionary.empty() &&
-                (currentTime - _lastScrollTime) * 1000.0 >= _scrollMs) {
-                _demoGrid->scrollUp();
-                std::string newLine = generateLine(_dictionary, _cols);
-                RGB color = g_colors[std::rand() % 4];
-                _demoGrid->writeString(0, _rows - 1, newLine.c_str(),
-                                      color._r, color._g, color._b, _font);
-                _lastScrollTime = currentTime;
-            }
-
-            // Get current window size
-            int w, h;
-            glfwGetFramebufferSize(_window, &w, &h);
-            if (w > 0 && h > 0) {
-                _renderer->resize(static_cast<uint32_t>(w), static_cast<uint32_t>(h));
-            }
-
-            // Render demo grid
-            _renderer->render(*_demoGrid);
-        }
     }
+#endif
 
     // FPS counter
     double currentTime = glfwGetTime();
@@ -957,10 +855,12 @@ uint32_t Yetty::windowHeight() const noexcept {
 void Yetty::setZoomLevel(float zoom) noexcept {
     _zoomLevel = zoom;
 
-    float newCellWidth = _baseCellWidth * _zoomLevel;
-    float newCellHeight = _baseCellHeight * _zoomLevel;
-    _renderer->setCellSize(newCellWidth, newCellHeight);
-    _renderer->setScale(_zoomLevel);
+#if !YETTY_WEB
+    // Delegate to terminal which owns the zoom state and updates renderer
+    if (_terminal) {
+        _terminal->setZoomLevel(zoom);
+    }
+#endif
 }
 
 void Yetty::updateGridSize(uint32_t cols, uint32_t rows) noexcept {
@@ -976,8 +876,123 @@ void Yetty::updateGridSize(uint32_t cols, uint32_t rows) noexcept {
         _terminal->resize(cols, rows);
     }
 #endif
-    if (_demoGrid) {
-        _demoGrid->resize(cols, rows);
+}
+
+//-----------------------------------------------------------------------------
+// Renderable management
+//-----------------------------------------------------------------------------
+
+void Yetty::addRenderable(Renderable::Ptr renderable) noexcept {
+    if (!renderable) return;
+
+    // Insert sorted by zOrder
+    auto it = std::lower_bound(_renderables.begin(), _renderables.end(), renderable,
+        [](const Renderable::Ptr& a, const Renderable::Ptr& b) {
+            return a->zOrder() < b->zOrder();
+        });
+    _renderables.insert(it, renderable);
+
+    spdlog::debug("Added renderable '{}' (id={}, zOrder={})",
+                  renderable->name(), renderable->id(), renderable->zOrder());
+}
+
+void Yetty::removeRenderable(uint32_t id) noexcept {
+    auto it = std::find_if(_renderables.begin(), _renderables.end(),
+        [id](const Renderable::Ptr& r) { return r->id() == id; });
+
+    if (it != _renderables.end()) {
+        spdlog::debug("Removing renderable '{}' (id={})", (*it)->name(), id);
+        (*it)->stop();
+
+        // Clean up old queue
+        auto queueIt = _oldQueues.find(id);
+        if (queueIt != _oldQueues.end()) {
+            delete queueIt->second;
+            _oldQueues.erase(queueIt);
+        }
+
+        _renderables.erase(it);
+    }
+}
+
+void Yetty::processEngineCommands() noexcept {
+    for (auto& cmd : _pendingEngineCommands) {
+        switch (cmd->type()) {
+            case YettyCommand::Type::CreateRenderable: {
+                auto* createCmd = static_cast<CreateRenderableCmd*>(cmd.get());
+                uint32_t id = nextRenderableId();
+                auto renderable = RenderableFactory::instance().create(
+                    createCmd->renderableType(), id, createCmd->config());
+                if (renderable) {
+                    renderable->start();
+                    addRenderable(renderable);
+                } else {
+                    spdlog::error("Failed to create renderable of type '{}'",
+                                  createCmd->renderableType());
+                }
+                break;
+            }
+            case YettyCommand::Type::DeleteRenderable: {
+                auto* deleteCmd = static_cast<DeleteRenderableCmd*>(cmd.get());
+                removeRenderable(deleteCmd->renderableId());
+                break;
+            }
+            case YettyCommand::Type::StopRenderable: {
+                auto* stopCmd = static_cast<StopRenderableCmd*>(cmd.get());
+                auto it = std::find_if(_renderables.begin(), _renderables.end(),
+                    [&](const Renderable::Ptr& r) { return r->id() == stopCmd->renderableId(); });
+                if (it != _renderables.end()) {
+                    (*it)->stop();
+                }
+                break;
+            }
+            case YettyCommand::Type::StartRenderable: {
+                auto* startCmd = static_cast<StartRenderableCmd*>(cmd.get());
+                auto it = std::find_if(_renderables.begin(), _renderables.end(),
+                    [&](const Renderable::Ptr& r) { return r->id() == startCmd->renderableId(); });
+                if (it != _renderables.end()) {
+                    (*it)->start();
+                }
+                break;
+            }
+            default:
+                break;
+        }
+    }
+    _pendingEngineCommands.clear();
+}
+
+void Yetty::collectAndExecuteCommands() noexcept {
+    // Collect commands from all renderables
+    for (auto& renderable : _renderables) {
+        if (!renderable->isRunning()) continue;
+
+        // Get old queue for this renderable (may be nullptr)
+        CommandQueue* oldQueue = nullptr;
+        auto it = _oldQueues.find(renderable->id());
+        if (it != _oldQueues.end()) {
+            oldQueue = it->second;
+            _oldQueues.erase(it);  // Transfer ownership to renderable
+        }
+
+        // Get new queue
+        CommandQueue* queue = renderable->get_command_queue(oldQueue);
+        if (!queue) continue;  // Renderable was busy
+
+        // Process commands
+        for (auto& cmd : queue->commands()) {
+            if (cmd->isEngineCommand()) {
+                // Collect engine commands for next frame
+                _pendingEngineCommands.push_back(std::move(cmd));
+            } else {
+                // Execute GPU command immediately
+                cmd->execute(*_ctx);
+            }
+        }
+
+        // Clear executed commands but keep the queue for recycling
+        queue->clear();
+        _oldQueues[renderable->id()] = queue;
     }
 }
 
@@ -1031,7 +1046,7 @@ Result<void> Yetty::extractAssets() noexcept {
     if (!extractAsset("shaders.wgsl", shaderPath.c_str())) {
         LOGW("Failed to extract shaders.wgsl (may not be needed)");
     } else {
-        // Set environment variable for TextRenderer to find the shader
+        // Set environment variable for GridRenderer to find the shader
         setenv("YETTY_SHADER_PATH", shaderPath.c_str(), 1);
         LOGI("Shader extracted to %s", shaderPath.c_str());
     }
@@ -1309,7 +1324,7 @@ void Yetty::handleCmd(struct android_app* app, int32_t cmd) {
                 }
 
                 // Initialize terminal
-                if (auto res = engine->initTerminalOrDemo(); !res) {
+                if (auto res = engine->initTerminal(); !res) {
                     LOGE("Failed to init terminal: %s", res.error().message().c_str());
                     return;
                 }

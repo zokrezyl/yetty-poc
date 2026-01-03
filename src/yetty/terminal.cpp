@@ -1,18 +1,14 @@
-#include "yetty/terminal.h"
+#include "terminal.h"
 #include "emoji-atlas.h"
+#include "grid-renderer.h"
 #include "yetty/emoji.h"
 #include "yetty/plugin-manager.h"
 
+#include <chrono>
 #include <cstring>
 #include <spdlog/spdlog.h>
-#include <sstream>
 
-#ifdef _WIN32
-// Windows ConPTY support
-#include <process.h>
-#include <windows.h>
-#else
-// Unix PTY support
+#ifndef _WIN32
 #include <fcntl.h>
 #include <signal.h>
 #include <sys/ioctl.h>
@@ -20,15 +16,15 @@
 #include <termios.h>
 #include <unistd.h>
 #ifdef __APPLE__
-#include <util.h> // macOS: forkpty is in util.h
+#include <util.h>
 #else
-#include <pty.h> // Linux: forkpty is in pty.h
+#include <pty.h>
 #endif
 #endif
 
 namespace yetty {
 
-// Static callbacks for libvterm screen layer
+// libvterm callbacks
 static VTermScreenCallbacks screenCallbacks = {
     .damage = Terminal::onDamage,
     .moverect = Terminal::onMoverect,
@@ -41,7 +37,6 @@ static VTermScreenCallbacks screenCallbacks = {
     .sb_clear = nullptr,
 };
 
-// Static fallback callbacks for unrecognized sequences (OSC for plugins)
 static VTermStateFallbacks stateFallbacks = {
     .control = nullptr,
     .csi = nullptr,
@@ -52,1342 +47,837 @@ static VTermStateFallbacks stateFallbacks = {
     .sos = nullptr,
 };
 
-Result<Terminal::Ptr> Terminal::create(uint32_t cols, uint32_t rows,
-                                       Font *font) noexcept {
-  if (!font) {
-    return Err<Ptr>("Terminal::create: null Font");
-  }
-  auto term = Ptr(new Terminal(cols, rows, font));
-  if (auto res = term->init(); !res) {
-    return Err<Ptr>("Failed to initialize Terminal", res);
-  }
-  return Ok(std::move(term));
+//=============================================================================
+// Factory
+//=============================================================================
+
+Result<Terminal::Ptr> Terminal::create(uint32_t id, uint32_t cols, uint32_t rows, Font* font) noexcept {
+    if (!font) {
+        return Err<Ptr>("Terminal::create: null Font");
+    }
+    auto term = Ptr(new Terminal(id, cols, rows, font));
+    if (auto res = term->init(); !res) {
+        return Err<Ptr>("Failed to initialize Terminal", res);
+    }
+    return Ok(std::move(term));
 }
 
-Terminal::Terminal(uint32_t cols, uint32_t rows, Font *font) noexcept
-    : grid_(cols, rows), font_(font), cols_(cols), rows_(rows) {}
+Terminal::Terminal(uint32_t id, uint32_t cols, uint32_t rows, Font* font) noexcept
+    : id_(id)
+    , name_("terminal-" + std::to_string(id))
+    , grid_(cols, rows)
+    , font_(font)
+    , cols_(cols)
+    , rows_(rows) {}
 
 Result<void> Terminal::init() noexcept {
-  // Create libvterm
-  vterm_ = vterm_new(rows_, cols_);
-  if (!vterm_) {
-    return Err<void>("Failed to create VTerm");
-  }
-  vterm_set_utf8(vterm_, 1);
+    vterm_ = vterm_new(rows_, cols_);
+    if (!vterm_) {
+        return Err<void>("Failed to create VTerm");
+    }
+    vterm_set_utf8(vterm_, 1);
 
-  // Get the screen layer
-  vtermScreen_ = vterm_obtain_screen(vterm_);
-  vterm_screen_set_callbacks(vtermScreen_, &screenCallbacks, this);
-  vterm_screen_enable_altscreen(vtermScreen_,
-                                1); // Enable alternate screen support
-  vterm_screen_enable_reflow(vtermScreen_,
-                             true); // Enable text reflow on resize
-  vterm_screen_reset(vtermScreen_, 1);
+    vtermScreen_ = vterm_obtain_screen(vterm_);
+    vterm_screen_set_callbacks(vtermScreen_, &screenCallbacks, this);
+    vterm_screen_enable_altscreen(vtermScreen_, 1);
+    vterm_screen_enable_reflow(vtermScreen_, true);
+    vterm_screen_reset(vtermScreen_, 1);
 
-  // Set up fallback callbacks for unrecognized OSC sequences (plugins)
-  VTermState *state = vterm_obtain_state(vterm_);
-  vterm_state_set_unrecognised_fallbacks(state, &stateFallbacks, this);
+    VTermState* state = vterm_obtain_state(vterm_);
+    vterm_state_set_unrecognised_fallbacks(state, &stateFallbacks, this);
 
-  // Allocate persistent PTY read buffer
-  ptyReadBuffer_ = std::make_unique<char[]>(PTY_READ_BUFFER_SIZE);
+    ptyReadBuffer_ = std::make_unique<char[]>(PTY_READ_BUFFER_SIZE);
 
-  return Ok();
+    return Ok();
 }
 
 Terminal::~Terminal() {
-#ifdef _WIN32
-  // Windows ConPTY cleanup
-  if (hPC_ != INVALID_HANDLE_VALUE) {
-    ClosePseudoConsole(hPC_);
-  }
-  if (hPipeIn_ != INVALID_HANDLE_VALUE) {
-    CloseHandle(hPipeIn_);
-  }
-  if (hPipeOut_ != INVALID_HANDLE_VALUE) {
-    CloseHandle(hPipeOut_);
-  }
-  if (hProcess_ != INVALID_HANDLE_VALUE) {
-    TerminateProcess(hProcess_, 0);
-    CloseHandle(hProcess_);
-  }
-  if (hThread_ != INVALID_HANDLE_VALUE) {
-    CloseHandle(hThread_);
-  }
-#else
-  // Unix PTY cleanup
-  if (ptyMaster_ >= 0) {
-    close(ptyMaster_);
-  }
+    stop();
 
-  if (childPid_ > 0) {
-    kill(childPid_, SIGTERM);
-    waitpid(childPid_, nullptr, 0);
-  }
+#ifndef _WIN32
+    if (ptyMaster_ >= 0) {
+        close(ptyMaster_);
+    }
+    if (childPid_ > 0) {
+        kill(childPid_, SIGTERM);
+        waitpid(childPid_, nullptr, 0);
+    }
 #endif
 
-  if (vterm_) {
-    vterm_free(vterm_);
-  }
+    if (vterm_) {
+        vterm_free(vterm_);
+    }
 }
 
-Result<void> Terminal::start(const std::string &shell) {
-#ifdef _WIN32
-  // Windows ConPTY implementation
-  std::string shellPath = shell;
-  if (shellPath.empty()) {
-    const char *envComSpec = getenv("COMSPEC");
-    shellPath = envComSpec ? envComSpec : "cmd.exe";
-  }
+//=============================================================================
+// Renderable interface
+//=============================================================================
 
-  spdlog::debug("Starting shell: {}", shellPath);
-  spdlog::debug("Terminal size: {}x{}", cols_, rows_);
+void Terminal::start() {
+    if (running_.load()) return;
 
-  // Create pipes for ConPTY
-  HANDLE hPipeInRead = INVALID_HANDLE_VALUE;
-  HANDLE hPipeOutWrite = INVALID_HANDLE_VALUE;
-
-  if (!CreatePipe(&hPipeInRead, &hPipeOut_, nullptr, 0)) {
-    return Err<void>("Failed to create input pipe");
-  }
-  if (!CreatePipe(&hPipeIn_, &hPipeOutWrite, nullptr, 0)) {
-    CloseHandle(hPipeInRead);
-    CloseHandle(hPipeOut_);
-    hPipeOut_ = INVALID_HANDLE_VALUE;
-    return Err<void>("Failed to create output pipe");
-  }
-
-  // Create the pseudo console
-  COORD size = {static_cast<SHORT>(cols_), static_cast<SHORT>(rows_)};
-  HRESULT hr = CreatePseudoConsole(size, hPipeInRead, hPipeOutWrite, 0, &hPC_);
-  if (FAILED(hr)) {
-    CloseHandle(hPipeInRead);
-    CloseHandle(hPipeOutWrite);
-    CloseHandle(hPipeIn_);
-    CloseHandle(hPipeOut_);
-    hPipeIn_ = INVALID_HANDLE_VALUE;
-    hPipeOut_ = INVALID_HANDLE_VALUE;
-    return Err<void>("CreatePseudoConsole failed with HRESULT: " +
-                     std::to_string(hr));
-  }
-
-  // Close the ends of the pipes the ConPTY now owns
-  CloseHandle(hPipeInRead);
-  CloseHandle(hPipeOutWrite);
-
-  // Set up startup info with pseudo console
-  STARTUPINFOEXW siEx = {};
-  siEx.StartupInfo.cb = sizeof(STARTUPINFOEXW);
-
-  // Get required size for attribute list
-  SIZE_T attrListSize = 0;
-  InitializeProcThreadAttributeList(nullptr, 1, 0, &attrListSize);
-
-  siEx.lpAttributeList = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(
-      HeapAlloc(GetProcessHeap(), 0, attrListSize));
-  if (!siEx.lpAttributeList) {
-    ClosePseudoConsole(hPC_);
-    hPC_ = INVALID_HANDLE_VALUE;
-    return Err<void>("Failed to allocate attribute list");
-  }
-
-  if (!InitializeProcThreadAttributeList(siEx.lpAttributeList, 1, 0,
-                                         &attrListSize)) {
-    HeapFree(GetProcessHeap(), 0, siEx.lpAttributeList);
-    ClosePseudoConsole(hPC_);
-    hPC_ = INVALID_HANDLE_VALUE;
-    return Err<void>("InitializeProcThreadAttributeList failed");
-  }
-
-  if (!UpdateProcThreadAttribute(siEx.lpAttributeList, 0,
-                                 PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, hPC_,
-                                 sizeof(HPCON), nullptr, nullptr)) {
-    DeleteProcThreadAttributeList(siEx.lpAttributeList);
-    HeapFree(GetProcessHeap(), 0, siEx.lpAttributeList);
-    ClosePseudoConsole(hPC_);
-    hPC_ = INVALID_HANDLE_VALUE;
-    return Err<void>("UpdateProcThreadAttribute failed");
-  }
-
-  // Convert shell path to wide string
-  int wideLen =
-      MultiByteToWideChar(CP_UTF8, 0, shellPath.c_str(), -1, nullptr, 0);
-  std::wstring wideShellPath(wideLen, L'\0');
-  MultiByteToWideChar(CP_UTF8, 0, shellPath.c_str(), -1, wideShellPath.data(),
-                      wideLen);
-
-  // Create the process
-  PROCESS_INFORMATION pi = {};
-  BOOL success = CreateProcessW(nullptr, wideShellPath.data(), nullptr, nullptr,
-                                FALSE, EXTENDED_STARTUPINFO_PRESENT, nullptr,
-                                nullptr, &siEx.StartupInfo, &pi);
-
-  DeleteProcThreadAttributeList(siEx.lpAttributeList);
-  HeapFree(GetProcessHeap(), 0, siEx.lpAttributeList);
-
-  if (!success) {
-    DWORD error = GetLastError();
-    ClosePseudoConsole(hPC_);
-    hPC_ = INVALID_HANDLE_VALUE;
-    return Err<void>("CreateProcess failed with error: " +
-                     std::to_string(error));
-  }
-
-  hProcess_ = pi.hProcess;
-  hThread_ = pi.hThread;
-
-  running_ = true;
-  spdlog::info("Terminal started with shell: {}", shellPath);
-
-  return Ok();
-
-#else
-  // Unix PTY implementation
-  std::string shellPath = shell;
-  if (shellPath.empty()) {
-    const char *envShell = getenv("SHELL");
-    shellPath = envShell ? envShell : "/bin/sh";
-  }
-
-  spdlog::debug("Starting shell: {}", shellPath);
-  spdlog::debug("Terminal size: {}x{}", cols_, rows_);
-
-  // Create PTY
-  struct winsize ws;
-  ws.ws_row = rows_;
-  ws.ws_col = cols_;
-  ws.ws_xpixel = 0;
-  ws.ws_ypixel = 0;
-
-  spdlog::debug("Calling forkpty...");
-  childPid_ = forkpty(&ptyMaster_, nullptr, nullptr, &ws);
-
-  if (childPid_ < 0) {
-    spdlog::error("forkpty failed: {} (errno={})", strerror(errno), errno);
-    return Err<void>(std::string("forkpty failed: ") + strerror(errno));
-  }
-
-  if (childPid_ == 0) {
-    // Child process - exec the shell
-    setenv("TERM", "xterm-256color", 1);
-    setenv("COLORTERM", "truecolor", 1);
-
-    // Close all file descriptors except stdin/stdout/stderr
-    for (int fd = 3; fd < 1024; fd++) {
-      close(fd);
+    // Start shell
+    if (auto res = startShell(shell_); !res) {
+        spdlog::error("Terminal: failed to start shell: {}", res.error().to_string());
+        return;
     }
 
-    // Check if this is a simple shell path or a command with arguments
-    bool hasSpaces = shellPath.find(' ') != std::string::npos;
+    running_.store(true);
+    stopRequested_.store(false);
 
-    if (hasSpaces) {
-      // Command with arguments - run through shell
-      // e.g., "tools/yetty-client/yetty-client pdf file.pdf"
-      const char *shellBin = "/bin/sh";
-      const char *envShell = getenv("SHELL");
-      if (envShell && envShell[0] != '\0') {
-        shellBin = envShell;
-      }
-
-      execl(shellBin, shellBin, "-c", shellPath.c_str(), nullptr);
-      fprintf(stderr, "exec shell failed: %s\n", strerror(errno));
-      _exit(1);
-    } else {
-      // Simple shell path - execute directly
-      execl(shellPath.c_str(), shellPath.c_str(), nullptr);
-      fprintf(stderr, "exec failed: %s\n", strerror(errno));
-      _exit(1);
-    }
-  }
-
-  // Parent process
-  spdlog::debug("forkpty succeeded: ptyMaster={}, childPid={}", ptyMaster_,
-                childPid_);
-
-  // Set PTY to non-blocking
-  int flags = fcntl(ptyMaster_, F_GETFL, 0);
-  fcntl(ptyMaster_, F_SETFL, flags | O_NONBLOCK);
-
-  running_ = true;
-  spdlog::info("Terminal started with shell: {}, PTY fd: {}, child PID: {}",
-               shellPath, ptyMaster_, childPid_);
-
-  return Ok();
-#endif
+    // Start worker thread
+    workerThread_ = std::thread(&Terminal::workerLoop, this);
 }
 
-Result<void> Terminal::writeToPty(const char *data, size_t len) {
-  if (len == 0) {
+void Terminal::stop() {
+    if (!running_.load()) return;
+
+    stopRequested_.store(true);
+
+    if (asyncHandle_) {
+        uv_async_send(asyncHandle_);
+    }
+
+    if (workerThread_.joinable()) {
+        workerThread_.join();
+    }
+
+    running_.store(false);
+}
+
+CommandQueue* Terminal::get_command_queue(CommandQueue* old_queue) {
+    // Recycle old queue
+    if (old_queue) {
+        old_queue->clear();
+        recycledQueue_.reset(old_queue);
+    }
+
+    // Try to acquire lock - don't block main thread
+    std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
+    if (!lock.owns_lock()) {
+        return nullptr;
+    }
+
+    if (!running_.load()) {
+        return nullptr;
+    }
+
+    // Get or create queue
+    CommandQueue* queue = recycledQueue_ ? recycledQueue_.release() : new CommandQueue();
+
+    // Build GridRenderCmd
+    queue->emplace<GridRenderCmd>(
+        id_,
+        &grid_,
+        cursorCol_,
+        cursorRow_,
+        cursorVisible_ && cursorBlink_,
+        zOrder_
+    );
+
+    return queue;
+}
+
+//=============================================================================
+// Shell startup
+//=============================================================================
+
+Result<void> Terminal::startShell(const std::string& shell) {
+#ifndef _WIN32
+    std::string shellPath = shell.empty() ? (getenv("SHELL") ? getenv("SHELL") : "/bin/sh") : shell;
+
+    spdlog::debug("Starting shell: {}", shellPath);
+
+    struct winsize ws;
+    ws.ws_row = rows_;
+    ws.ws_col = cols_;
+    ws.ws_xpixel = 0;
+    ws.ws_ypixel = 0;
+
+    childPid_ = forkpty(&ptyMaster_, nullptr, nullptr, &ws);
+
+    if (childPid_ < 0) {
+        return Err<void>(std::string("forkpty failed: ") + strerror(errno));
+    }
+
+    if (childPid_ == 0) {
+        // Child
+        setenv("TERM", "xterm-256color", 1);
+        setenv("COLORTERM", "truecolor", 1);
+
+        for (int fd = 3; fd < 1024; fd++) close(fd);
+
+        if (shellPath.find(' ') != std::string::npos) {
+            const char* sh = getenv("SHELL") ? getenv("SHELL") : "/bin/sh";
+            execl(sh, sh, "-c", shellPath.c_str(), nullptr);
+        } else {
+            execl(shellPath.c_str(), shellPath.c_str(), nullptr);
+        }
+        _exit(1);
+    }
+
+    // Parent - set non-blocking
+    int flags = fcntl(ptyMaster_, F_GETFL, 0);
+    fcntl(ptyMaster_, F_SETFL, flags | O_NONBLOCK);
+
+    spdlog::info("Terminal started: PTY fd={}, PID={}", ptyMaster_, childPid_);
     return Ok();
-  }
-
-#ifdef _WIN32
-  if (hPipeOut_ == INVALID_HANDLE_VALUE) {
-    return Err("PTY not open");
-  }
-
-  DWORD written = 0;
-  if (!WriteFile(hPipeOut_, data, static_cast<DWORD>(len), &written, nullptr)) {
-    return Err("PTY write failed with error: " +
-               std::to_string(GetLastError()));
-  }
-  if (written != len) {
-    return Err("PTY write incomplete: wrote " + std::to_string(written) +
-               " of " + std::to_string(len) + " bytes");
-  }
 #else
-  if (ptyMaster_ < 0) {
-    return Err("PTY not open");
-  }
-
-  ssize_t written = write(ptyMaster_, data, len);
-  if (written < 0) {
-    return Err("PTY write failed: " + std::string(strerror(errno)));
-  }
-  if (static_cast<size_t>(written) != len) {
-    return Err("PTY write incomplete: wrote " + std::to_string(written) +
-               " of " + std::to_string(len) + " bytes");
-  }
+    return Err<void>("Windows not implemented yet");
 #endif
-  return Ok();
+}
+
+//=============================================================================
+// Worker thread
+//=============================================================================
+
+void Terminal::workerLoop() {
+    spdlog::debug("Terminal[{}]: worker started", id_);
+
+    loop_ = new uv_loop_t;
+    uv_loop_init(loop_);
+
+    // Async handle for cross-thread signaling
+    asyncHandle_ = new uv_async_t;
+    uv_async_init(loop_, asyncHandle_, onAsync);
+    asyncHandle_->data = this;
+
+    // Cursor blink timer
+    cursorTimer_ = new uv_timer_t;
+    uv_timer_init(loop_, cursorTimer_);
+    cursorTimer_->data = this;
+    uv_timer_start(cursorTimer_, onTimer, 500, 500);
+
+#ifndef _WIN32
+    // PTY poll handle
+    if (ptyMaster_ >= 0) {
+        ptyPoll_ = new uv_poll_t;
+        uv_poll_init(loop_, ptyPoll_, ptyMaster_);
+        ptyPoll_->data = this;
+        uv_poll_start(ptyPoll_, UV_READABLE, onPtyPoll);
+    }
+#endif
+
+    // Run event loop
+    while (!stopRequested_.load()) {
+        uv_run(loop_, UV_RUN_ONCE);
+    }
+
+    // Cleanup
+#ifndef _WIN32
+    if (ptyPoll_) {
+        uv_poll_stop(ptyPoll_);
+        uv_close(reinterpret_cast<uv_handle_t*>(ptyPoll_), [](uv_handle_t* h) {
+            delete reinterpret_cast<uv_poll_t*>(h);
+        });
+        ptyPoll_ = nullptr;
+    }
+#endif
+
+    uv_timer_stop(cursorTimer_);
+    uv_close(reinterpret_cast<uv_handle_t*>(cursorTimer_), [](uv_handle_t* h) {
+        delete reinterpret_cast<uv_timer_t*>(h);
+    });
+    cursorTimer_ = nullptr;
+
+    uv_close(reinterpret_cast<uv_handle_t*>(asyncHandle_), [](uv_handle_t* h) {
+        delete reinterpret_cast<uv_async_t*>(h);
+    });
+    asyncHandle_ = nullptr;
+
+    uv_run(loop_, UV_RUN_DEFAULT);
+    uv_loop_close(loop_);
+    delete loop_;
+    loop_ = nullptr;
+
+    spdlog::debug("Terminal[{}]: worker stopped", id_);
+}
+
+void Terminal::onAsync(uv_async_t* handle) {
+    auto* self = static_cast<Terminal*>(handle->data);
+    self->processPendingInput();
+}
+
+void Terminal::onTimer(uv_timer_t* handle) {
+    auto* self = static_cast<Terminal*>(handle->data);
+    double now = std::chrono::duration<double>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+
+    std::lock_guard<std::mutex> lock(self->mutex_);
+    self->updateCursorBlink(now);
+}
+
+void Terminal::onPtyPoll(uv_poll_t* handle, int status, int events) {
+    auto* self = static_cast<Terminal*>(handle->data);
+
+    if (status < 0) {
+        spdlog::error("Terminal[{}]: PTY poll error: {}", self->id_, uv_strerror(status));
+        return;
+    }
+
+    if (events & UV_READABLE) {
+        std::lock_guard<std::mutex> lock(self->mutex_);
+        if (auto res = self->readPty(); !res) {
+            spdlog::error("Terminal[{}]: PTY read error: {}", self->id_, res.error().to_string());
+        }
+    }
+}
+
+void Terminal::processPendingInput() {
+    std::vector<PendingKey> keys;
+    std::vector<char> raw;
+    bool doResize = false;
+    uint32_t newCols = 0, newRows = 0;
+
+    {
+        std::lock_guard<std::mutex> lock(inputMutex_);
+        keys = std::move(pendingKeys_);
+        pendingKeys_.clear();
+        raw = std::move(pendingRaw_);
+        pendingRaw_.clear();
+        doResize = pendingResize_;
+        newCols = pendingCols_;
+        newRows = pendingRows_;
+        pendingResize_ = false;
+    }
+
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    if (doResize) {
+        cols_ = newCols;
+        rows_ = newRows;
+        vterm_set_size(vterm_, rows_, cols_);
+        grid_.resize(cols_, rows_);
+#ifndef _WIN32
+        if (ptyMaster_ >= 0) {
+            struct winsize ws = {static_cast<unsigned short>(rows_), static_cast<unsigned short>(cols_), 0, 0};
+            ioctl(ptyMaster_, TIOCSWINSZ, &ws);
+        }
+#endif
+        syncToGrid();
+    }
+
+    for (const auto& key : keys) {
+        if (key.isSpecial) {
+            vterm_keyboard_key(vterm_, key.specialKey, key.mod);
+        } else {
+            vterm_keyboard_unichar(vterm_, key.codepoint, key.mod);
+        }
+        flushVtermOutput();
+    }
+
+    if (!raw.empty()) {
+        writeToPty(raw.data(), raw.size());
+    }
+}
+
+//=============================================================================
+// PTY I/O
+//=============================================================================
+
+Result<void> Terminal::readPty() {
+#ifndef _WIN32
+    // Check child status
+    int status;
+    if (waitpid(childPid_, &status, WNOHANG) > 0) {
+        running_.store(false);
+        stopRequested_.store(true);
+        spdlog::info("Shell exited");
+        return Ok();
+    }
+
+    // Drain PTY
+    size_t totalRead = 0;
+    ssize_t n;
+    while ((n = read(ptyMaster_, ptyReadBuffer_.get() + totalRead, PTY_READ_BUFFER_SIZE - totalRead)) > 0) {
+        totalRead += n;
+        if (totalRead >= PTY_READ_BUFFER_SIZE) break;
+    }
+
+    if (totalRead > 0) {
+        vterm_input_write(vterm_, ptyReadBuffer_.get(), totalRead);
+        vterm_screen_flush_damage(vtermScreen_);
+
+        if (pendingNewlines_ > 0) {
+            std::string nl(pendingNewlines_, '\n');
+            vterm_input_write(vterm_, nl.c_str(), nl.size());
+            vterm_screen_flush_damage(vtermScreen_);
+            pendingNewlines_ = 0;
+        }
+
+        flushVtermOutput();
+        syncToGrid();
+    }
+
+    if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+        return Err<void>(std::string("PTY read error: ") + strerror(errno));
+    }
+
+    return Ok();
+#else
+    return Err<void>("Windows not implemented");
+#endif
+}
+
+Result<void> Terminal::writeToPty(const char* data, size_t len) {
+    if (len == 0) return Ok();
+#ifndef _WIN32
+    if (ptyMaster_ < 0) return Err("PTY not open");
+    ssize_t written = write(ptyMaster_, data, len);
+    if (written < 0) {
+        return Err("PTY write failed: " + std::string(strerror(errno)));
+    }
+#endif
+    return Ok();
 }
 
 Result<void> Terminal::flushVtermOutput() {
-  size_t outlen = vterm_output_get_buffer_current(vterm_);
-  if (outlen == 0) {
-    return Ok();
-  }
-
-  char outbuf[256 * 256];
-  while (outlen > 0) {
-    size_t n = vterm_output_read(vterm_, outbuf, sizeof(outbuf));
-    spdlog::debug("flushVtermOutput: {}", n);
-    if (n > 0) {
-      auto result = writeToPty(outbuf, n);
-      if (!result) {
-        return result;
-      }
+    size_t outlen = vterm_output_get_buffer_current(vterm_);
+    char buf[65536];
+    while (outlen > 0) {
+        size_t n = vterm_output_read(vterm_, buf, sizeof(buf));
+        if (n > 0) {
+            if (auto res = writeToPty(buf, n); !res) return res;
+        }
+        outlen = vterm_output_get_buffer_current(vterm_);
     }
-    outlen = vterm_output_get_buffer_current(vterm_);
-  }
-  return Ok();
+    return Ok();
 }
 
-Result<void> Terminal::update() {
-#ifdef _WIN32
-  if (!running_ || hPipeIn_ == INVALID_HANDLE_VALUE) {
-    return Ok(); // Not an error, just nothing to do
-  }
+//=============================================================================
+// Input API (thread-safe, queue for worker)
+//=============================================================================
 
-  // Check if child process is still running
-  DWORD exitCode;
-  if (GetExitCodeProcess(hProcess_, &exitCode) && exitCode != STILL_ACTIVE) {
-    running_ = false;
-    spdlog::info("Shell exited with code: {}", exitCode);
-    return Ok(); // Shell exited, not an error
-  }
-
-  // Check if data is available (non-blocking)
-  DWORD bytesAvailable = 0;
-  if (!PeekNamedPipe(hPipeIn_, nullptr, 0, nullptr, &bytesAvailable, nullptr)) {
-    DWORD error = GetLastError();
-    if (error == ERROR_BROKEN_PIPE) {
-      running_ = false;
-      spdlog::info("Shell pipe closed");
-      return Ok();
-    }
-    // Other errors - just no data available
-    bytesAvailable = 0;
-  }
-
-  char buf[4096];
-  DWORD nread = 0;
-
-  if (bytesAvailable > 0) {
-    DWORD toRead = std::min(bytesAvailable, static_cast<DWORD>(sizeof(buf)));
-    if (!ReadFile(hPipeIn_, buf, toRead, &nread, nullptr)) {
-      DWORD error = GetLastError();
-      if (error == ERROR_BROKEN_PIPE) {
-        running_ = false;
-        spdlog::info("Shell pipe closed");
-        return Ok();
-      }
-      spdlog::error("PTY read error: {}", error);
-      running_ = false;
-      return Err("PTY read failed with error: " + std::to_string(error));
-    }
-  }
-
-  if (nread > 0) {
-    // Feed data to libvterm
-    vterm_input_write(vterm_, buf, nread);
-    vterm_screen_flush_damage(vtermScreen_);
-
-    // Process any deferred newlines from plugin activation
-    if (pendingNewlines_ > 0) {
-      std::string newlines(pendingNewlines_, '\n');
-      vterm_input_write(vterm_, newlines.c_str(), newlines.size());
-      vterm_screen_flush_damage(vtermScreen_);
-      pendingNewlines_ = 0;
-    }
-
-    // Flush any output libvterm generated
-    auto flushResult = flushVtermOutput();
-    if (!flushResult) {
-      return flushResult;
-    }
-
-    // Sync based on damage tracking config
-    if (config_ && config_->useDamageTracking() && !fullDamage_ &&
-        scrollOffset_ == 0) {
-      syncDamageToGrid();
-    } else {
-      syncToGrid();
-    }
-  } else if (fullDamage_) {
-    syncToGrid();
-  }
-
-  return Ok();
-
-#else
-  if (!running_ || ptyMaster_ < 0) {
-    return Ok(); // Not an error, just nothing to do
-  }
-
-  // Check if child is still running
-  int status;
-  pid_t waitResult = waitpid(childPid_, &status, WNOHANG);
-  if (waitResult > 0) {
-    running_ = false;
-    spdlog::info("Shell exited with status: {}", WEXITSTATUS(status));
-    return Ok(); // Shell exited, not an error
-  }
-
-  // Drain all available data from PTY into persistent buffer
-  // This avoids processing damage and syncing after every 4KB chunk
-  size_t totalRead = 0;
-  ssize_t nread;
-
-  while ((nread = read(ptyMaster_, ptyReadBuffer_.get() + totalRead,
-                       PTY_READ_BUFFER_SIZE - totalRead)) > 0) {
-    totalRead += nread;
-    if (totalRead >= PTY_READ_BUFFER_SIZE) {
-      break;  // Buffer full, process what we have
-    }
-  }
-
-  if (totalRead > 0) {
-    spdlog::debug("read from ptyMaster: {} bytes (buffer: {})", totalRead, PTY_READ_BUFFER_SIZE);
-
-    // Feed ALL data to libvterm in one shot
-    vterm_input_write(vterm_, ptyReadBuffer_.get(), totalRead);
-    vterm_screen_flush_damage(vtermScreen_);
-
-    // Process any deferred newlines from plugin activation
-    // (can't call vterm_input_write during OSC callback)
-    if (pendingNewlines_ > 0) {
-      std::string newlines(pendingNewlines_, '\n');
-      vterm_input_write(vterm_, newlines.c_str(), newlines.size());
-      vterm_screen_flush_damage(vtermScreen_);
-      pendingNewlines_ = 0;
-    }
-
-    // Flush any output libvterm generated (e.g., cursor position responses)
-    auto flushResult = flushVtermOutput();
-    if (!flushResult) {
-      return flushResult;
-    }
-
-    // Sync based on damage tracking config
-    // When scrolled back, always use full sync since damage rects don't apply
-    // to scrollback
-    if (config_ && config_->useDamageTracking() && !fullDamage_ &&
-        scrollOffset_ == 0) {
-      syncDamageToGrid();
-    } else {
-      syncToGrid();
-    }
-  } else if (nread < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-    spdlog::error("PTY read error: {} (errno={})", strerror(errno), errno);
-    running_ = false;
-    return Err("PTY read failed: " + std::string(strerror(errno)));
-  } else if (nread < 0) {
-    // EAGAIN/EWOULDBLOCK - no data available (normal for non-blocking)
-    if (fullDamage_) {
-      syncToGrid();
-    }
-  } else if (fullDamage_) {
-    // nread == 0 (EOF) but need to sync
-    syncToGrid();
-  }
-
-  return Ok();
-#endif
+void Terminal::sendKey(uint32_t codepoint, VTermModifier mod) {
+    std::lock_guard<std::mutex> lock(inputMutex_);
+    pendingKeys_.push_back({codepoint, mod, false, VTERM_KEY_NONE});
+    if (asyncHandle_) uv_async_send(asyncHandle_);
 }
 
-Result<void> Terminal::sendKey(uint32_t codepoint, VTermModifier mod) {
-#ifdef _WIN32
-  if (!running_ || hPipeOut_ == INVALID_HANDLE_VALUE) {
-    return Ok(); // Nothing to do
-  }
-#else
-  if (!running_ || ptyMaster_ < 0) {
-    return Ok(); // Nothing to do
-  }
-#endif
-
-  // Flush any accumulated output first (e.g., responses to escape sequences)
-  auto flushResult = flushVtermOutput();
-  if (!flushResult) {
-    return flushResult;
-  }
-
-  // Send to libvterm which will generate output
-  vterm_keyboard_unichar(vterm_, codepoint, mod);
-
-  // Flush the keyboard output to PTY
-  return flushVtermOutput();
+void Terminal::sendSpecialKey(VTermKey key, VTermModifier mod) {
+    std::lock_guard<std::mutex> lock(inputMutex_);
+    pendingKeys_.push_back({0, mod, true, key});
+    if (asyncHandle_) uv_async_send(asyncHandle_);
 }
 
-Result<void> Terminal::sendRaw(const char *data, size_t len) {
-#ifdef _WIN32
-  if (!running_ || hPipeOut_ == INVALID_HANDLE_VALUE || len == 0) {
-    return Ok();
-  }
-#else
-  if (!running_ || ptyMaster_ < 0 || len == 0) {
-    return Ok();
-  }
-#endif
-  return writeToPty(data, len);
-}
-
-Result<void> Terminal::sendSpecialKey(VTermKey key, VTermModifier mod) {
-#ifdef _WIN32
-  if (!running_ || hPipeOut_ == INVALID_HANDLE_VALUE) {
-    return Ok();
-  }
-#else
-  if (!running_ || ptyMaster_ < 0) {
-    return Ok();
-  }
-#endif
-
-  vterm_keyboard_key(vterm_, key, mod);
-
-  // Flush vterm output to PTY
-  return flushVtermOutput();
+void Terminal::sendRaw(const char* data, size_t len) {
+    std::lock_guard<std::mutex> lock(inputMutex_);
+    pendingRaw_.insert(pendingRaw_.end(), data, data + len);
+    if (asyncHandle_) uv_async_send(asyncHandle_);
 }
 
 void Terminal::resize(uint32_t cols, uint32_t rows) {
-  cols_ = cols;
-  rows_ = rows;
-
-  vterm_set_size(vterm_, rows, cols);
-  grid_.resize(cols, rows);
-
-  // Update PTY window size
-#ifdef _WIN32
-  if (hPC_ != INVALID_HANDLE_VALUE) {
-    COORD size = {static_cast<SHORT>(cols), static_cast<SHORT>(rows)};
-    ResizePseudoConsole(hPC_, size);
-  }
-#else
-  if (ptyMaster_ >= 0) {
-    struct winsize ws;
-    ws.ws_row = rows;
-    ws.ws_col = cols;
-    ws.ws_xpixel = 0;
-    ws.ws_ypixel = 0;
-    ioctl(ptyMaster_, TIOCSWINSZ, &ws);
-  }
-#endif
-
-  syncToGrid();
+    std::lock_guard<std::mutex> lock(inputMutex_);
+    pendingResize_ = true;
+    pendingCols_ = cols;
+    pendingRows_ = rows;
+    if (asyncHandle_) uv_async_send(asyncHandle_);
 }
 
-void Terminal::syncToGrid() {
-  static int syncCount = 0;
-  syncCount++;
-
-  if (syncCount <= 5) {
-    spdlog::debug("syncToGrid #{}: grid {}x{}", syncCount, cols_, rows_);
-  }
-
-  VTermScreenCell cell;
-  VTermPos pos;
-
-  int sbSize = static_cast<int>(scrollback_.size());
-  int effectiveOffset = std::min(scrollOffset_, sbSize);
-
-  for (uint32_t row = 0; row < rows_; row++) {
-    // Calculate which line this row maps to
-    int lineIndex = static_cast<int>(row) - effectiveOffset;
-
-    if (lineIndex < 0) {
-      // This row shows scrollback content
-      int sbIndex = sbSize + lineIndex; // Index from end of scrollback
-      if (sbIndex >= 0 && sbIndex < sbSize) {
-        const ScrollbackLine &sbLine = scrollback_[sbIndex];
-        for (uint32_t col = 0; col < cols_; col++) {
-          uint32_t codepoint = ' ';
-          uint8_t fgR = 255, fgG = 255, fgB = 255;
-          uint8_t bgR = 0, bgG = 0, bgB = 0;
-
-          if (col < sbLine._chars.size()) {
-            codepoint = sbLine._chars[col];
-            fgR = sbLine._fgColors[col * 3 + 0];
-            fgG = sbLine._fgColors[col * 3 + 1];
-            fgB = sbLine._fgColors[col * 3 + 2];
-            bgR = sbLine._bgColors[col * 3 + 0];
-            bgG = sbLine._bgColors[col * 3 + 1];
-            bgB = sbLine._bgColors[col * 3 + 2];
-          }
-
-          uint16_t glyphIndex = font_ ? font_->getGlyphIndex(codepoint)
-                                      : static_cast<uint16_t>(codepoint);
-          CellAttrs sbAttrs;
-          sbAttrs._emoji = isEmoji(codepoint) ? 1 : 0;
-          grid_.setCell(col, row, glyphIndex, fgR, fgG, fgB, bgR, bgG, bgB,
-                        sbAttrs);
-        }
-      }
-    } else {
-      // This row shows vterm screen content
-      for (uint32_t col = 0; col < cols_; col++) {
-        pos.row = lineIndex;
-        pos.col = col;
-
-        vterm_screen_get_cell(vtermScreen_, pos, &cell);
-
-        uint32_t codepoint = cell.chars[0];
-
-        // Handle wide character continuation cells (chars[0] == -1 or
-        // 0xFFFFFFFF) These are placeholder cells for the right half of wide
-        // characters
-        if (codepoint == 0xFFFFFFFF || codepoint == static_cast<uint32_t>(-1)) {
-          // Wide char continuation - mark with special glyph so shader can look
-          // left
-          spdlog::debug("SyncToGrid ({},{}) wide continuation", col, row);
-          uint8_t fgR, fgG, fgB, bgR, bgG, bgB;
-          VTermColor fg = cell.fg;
-          VTermColor bg = cell.bg;
-          vterm_screen_convert_color_to_rgb(vtermScreen_, &fg);
-          vterm_screen_convert_color_to_rgb(vtermScreen_, &bg);
-          colorToRGB(fg, fgR, fgG, fgB);
-          colorToRGB(bg, bgR, bgG, bgB);
-          if (cell.attrs.reverse) {
-            std::swap(fgR, bgR);
-            std::swap(fgG, bgG);
-            std::swap(fgB, bgB);
-          }
-          // Extract text attributes for wide char continuation too
-          CellAttrs wideAttrs;
-          wideAttrs._bold = cell.attrs.bold ? 1 : 0;
-          wideAttrs._italic = cell.attrs.italic ? 1 : 0;
-          wideAttrs._strikethrough = cell.attrs.strike ? 1 : 0;
-          wideAttrs._reserved = 0;
-          wideAttrs._underline =
-              static_cast<uint8_t>(cell.attrs.underline & 0x3);
-          grid_.setCell(col, row, GLYPH_WIDE_CONT, fgR, fgG, fgB, bgR, bgG, bgB,
-                        wideAttrs);
-          continue;
-        }
-        if (codepoint == 0)
-          codepoint = ' ';
-
-        // Extract text attributes from libvterm (needed for glyph selection)
-        bool isBold = cell.attrs.bold != 0;
-        bool isItalic = cell.attrs.italic != 0;
-
-        // Check if this emoji is in our emoji atlas
-        int emojiIndex = findCommonEmojiIndex(codepoint);
-
-        // Get glyph index - use emoji atlas index if available, otherwise MSDF
-        uint16_t glyphIndex;
-        if (emojiIndex >= 0) {
-          // Emoji is in atlas - use emoji index
-          glyphIndex = static_cast<uint16_t>(emojiIndex);
-        } else {
-          // Use MSDF glyph with style (bold/italic font variant if available)
-          glyphIndex = font_ ? font_->getGlyphIndex(codepoint, isBold, isItalic)
-                             : static_cast<uint16_t>(codepoint);
-        }
-
-        // Check if this codepoint has a custom glyph plugin
-        if (pluginManager_) {
-          uint32_t widthCells = (cell.width > 0) ? cell.width : 1;
-          uint16_t customIdx =
-              pluginManager_->onCellSync(col, row, codepoint, widthCells);
-          if (customIdx != 0) {
-            glyphIndex = customIdx;
-            spdlog::debug(
-                "SyncToGrid ({},{}) U+{:04X} -> custom glyph 0x{:04X}", col,
-                row, codepoint, glyphIndex);
-          }
-        }
-
-        // Log high codepoints (emojis, etc.)
-        if (codepoint > 0x1000 && !isCustomGlyph(glyphIndex)) {
-          spdlog::debug("SyncToGrid ({},{}) U+{:04X} -> glyph {}", col, row,
-                        codepoint, glyphIndex);
-        }
-
-        uint8_t fgR, fgG, fgB;
-        uint8_t bgR, bgG, bgB;
-
-        VTermColor fg = cell.fg;
-        VTermColor bg = cell.bg;
-
-        vterm_screen_convert_color_to_rgb(vtermScreen_, &fg);
-        vterm_screen_convert_color_to_rgb(vtermScreen_, &bg);
-
-        colorToRGB(fg, fgR, fgG, fgB);
-        colorToRGB(bg, bgR, bgG, bgB);
-
-        if (cell.attrs.reverse) {
-          std::swap(fgR, bgR);
-          std::swap(fgG, bgG);
-          std::swap(fgB, bgB);
-        }
-
-        // Apply selection highlight (invert colors)
-        if (isInSelection(lineIndex, col)) {
-          std::swap(fgR, bgR);
-          std::swap(fgG, bgG);
-          std::swap(fgB, bgB);
-        }
-
-        // Pack text attributes for GPU
-        CellAttrs attrs;
-        attrs._bold = isBold ? 1 : 0;
-        attrs._italic = isItalic ? 1 : 0;
-        attrs._strikethrough = cell.attrs.strike ? 1 : 0;
-        attrs._reserved = 0;
-        // Map libvterm underline values: 0=none, 1=single, 2=double, 3=curly
-        attrs._underline = static_cast<uint8_t>(cell.attrs.underline & 0x3);
-        // Set emoji flag if emoji is in the atlas (we already computed
-        // emojiIndex above)
-        attrs._emoji = (emojiIndex >= 0) ? 1 : 0;
-
-        grid_.setCell(col, row, glyphIndex, fgR, fgG, fgB, bgR, bgG, bgB,
-                      attrs);
-      }
-    }
-  }
-
-  // Log sync completion with content info
-  if (syncCount <= 5) {
-    // Count non-space glyphs in first row
-    int nonSpaceInRow0 = 0;
-    const uint16_t *glyphData = grid_.getGlyphData();
-    uint16_t spaceGlyph = font_ ? font_->getGlyphIndex(' ') : 0;
-    for (uint32_t col = 0; col < cols_; col++) {
-      if (glyphData[col] != spaceGlyph && glyphData[col] != 0) {
-        nonSpaceInRow0++;
-      }
-    }
-    spdlog::debug("syncToGrid #{} done: {} non-space glyphs in row 0",
-                  syncCount, nonSpaceInRow0);
-  }
-
-  // Note: don't clear damage here - main loop clears after rendering
-}
-
-void Terminal::syncDamageToGrid() {
-  if (damageRects_.empty())
-    return;
-
-  spdlog::debug("syncDamageToGrid: {} damage rects", damageRects_.size());
-
-  VTermScreenCell cell;
-  VTermPos pos;
-
-  for (const auto &damage : damageRects_) {
-    for (uint32_t row = damage._startRow; row < damage._endRow && row < rows_;
-         row++) {
-      for (uint32_t col = damage._startCol; col < damage._endCol && col < cols_;
-           col++) {
-        pos.row = row;
-        pos.col = col;
-
-        vterm_screen_get_cell(vtermScreen_, pos, &cell);
-
-        // Get glyph index
-        uint32_t codepoint = cell.chars[0];
-
-        // Handle wide character continuation cells
-        if (codepoint == 0xFFFFFFFF || codepoint == static_cast<uint32_t>(-1)) {
-          // Wide char continuation - mark with special glyph so shader can look
-          // left
-          spdlog::debug("DamageSync ({},{}) wide continuation", col, row);
-          // Still need to set colors from the cell
-          uint8_t fgR, fgG, fgB, bgR, bgG, bgB;
-          VTermColor fg = cell.fg;
-          VTermColor bg = cell.bg;
-          vterm_screen_convert_color_to_rgb(vtermScreen_, &fg);
-          vterm_screen_convert_color_to_rgb(vtermScreen_, &bg);
-          colorToRGB(fg, fgR, fgG, fgB);
-          colorToRGB(bg, bgR, bgG, bgB);
-          if (cell.attrs.reverse) {
-            std::swap(fgR, bgR);
-            std::swap(fgG, bgG);
-            std::swap(fgB, bgB);
-          }
-          grid_.setCell(col, row, GLYPH_WIDE_CONT, fgR, fgG, fgB, bgR, bgG,
-                        bgB);
-          continue;
-        }
-        if (codepoint == 0)
-          codepoint = ' ';
-
-        // Check if this is an emoji and try to load it from atlas
-        int emojiIndex = -1;
-        if (!emojiAtlas_) {
-          if (codepoint > 0x1F000) {
-            spdlog::error("EMOJI ATLAS IS NULL! codepoint U+{:04X}", codepoint);
-          }
-        } else if (isEmoji(codepoint)) {
-          // Try to get existing or load new emoji
-          emojiIndex = emojiAtlas_->getEmojiIndex(codepoint);
-          if (emojiIndex < 0) {
-            // Not loaded yet - try to load it
-            if (auto res = emojiAtlas_->loadEmoji(codepoint);
-                res && *res >= 0) {
-              emojiIndex = *res;
-              spdlog::debug("Loaded emoji U+{:04X} -> index {}", codepoint,
-                            emojiIndex);
-            }
-          }
-        }
-
-        // Get glyph index - use emoji atlas index if available, otherwise MSDF
-        uint16_t glyphIndex;
-        if (emojiIndex >= 0) {
-          // Emoji is in atlas - use emoji index
-          glyphIndex = static_cast<uint16_t>(emojiIndex);
-        } else {
-          // Use MSDF glyph
-          glyphIndex = font_ ? font_->getGlyphIndex(codepoint)
-                             : static_cast<uint16_t>(codepoint);
-        }
-
-        // Check if this codepoint has a custom glyph plugin
-        if (pluginManager_) {
-          uint32_t widthCells = (cell.width > 0) ? cell.width : 1;
-          uint16_t customIdx =
-              pluginManager_->onCellSync(col, row, codepoint, widthCells);
-          if (customIdx != 0) {
-            glyphIndex = customIdx;
-            spdlog::debug(
-                "DamageSync ({},{}) U+{:04X} -> custom glyph 0x{:04X}", col,
-                row, codepoint, glyphIndex);
-          }
-        }
-
-        // Log emoji cells
-        if (codepoint > 0x1F000 && !isCustomGlyph(glyphIndex)) {
-          spdlog::debug("DamageSync ({},{}) U+{:04X} -> glyph {}", col, row,
-                        codepoint, glyphIndex);
-        }
-
-        // Convert colors
-        uint8_t fgR, fgG, fgB;
-        uint8_t bgR, bgG, bgB;
-
-        VTermColor fg = cell.fg;
-        VTermColor bg = cell.bg;
-
-        vterm_screen_convert_color_to_rgb(vtermScreen_, &fg);
-        vterm_screen_convert_color_to_rgb(vtermScreen_, &bg);
-
-        colorToRGB(fg, fgR, fgG, fgB);
-        colorToRGB(bg, bgR, bgG, bgB);
-
-        if (cell.attrs.reverse) {
-          std::swap(fgR, bgR);
-          std::swap(fgG, bgG);
-          std::swap(fgB, bgB);
-        }
-
-        // Apply selection highlight (invert colors)
-        if (isInSelection(row, col)) {
-          std::swap(fgR, bgR);
-          std::swap(fgG, bgG);
-          std::swap(fgB, bgB);
-        }
-
-        // Build cell attributes
-        CellAttrs cellAttrs;
-        cellAttrs._bold = cell.attrs.bold ? 1 : 0;
-        cellAttrs._italic = cell.attrs.italic ? 1 : 0;
-        cellAttrs._underline = static_cast<uint8_t>(cell.attrs.underline & 0x3);
-        cellAttrs._strikethrough = cell.attrs.strike ? 1 : 0;
-        cellAttrs._reserved = 0;
-        // Set emoji flag if emoji is in the atlas (we already computed
-        // emojiIndex above)
-        cellAttrs._emoji = (emojiIndex >= 0) ? 1 : 0;
-
-        // DEBUG: Log emoji attrs
-        if (emojiIndex >= 0) {
-          uint8_t packed = cellAttrs.pack();
-          spdlog::info(
-              "EMOJI ({},{}) U+{:04X} idx={} packed=0x{:02X} emoji_bit={}", col,
-              row, codepoint, emojiIndex, packed, (packed & 0x20) ? 1 : 0);
-        }
-
-        grid_.setCell(col, row, glyphIndex, fgR, fgG, fgB, bgR, bgG, bgB,
-                      cellAttrs);
-      }
-    }
-  }
-  // Note: don't clear damageRects_ here - TextRenderer needs them for partial
-  // updates
-}
-
-void Terminal::colorToRGB(const VTermColor &color, uint8_t &r, uint8_t &g,
-                          uint8_t &b) {
-  if (VTERM_COLOR_IS_DEFAULT_FG(&color)) {
-    // Default foreground: white
-    r = 255;
-    g = 255;
-    b = 255;
-  } else if (VTERM_COLOR_IS_DEFAULT_BG(&color)) {
-    // Default background: black
-    r = 0;
-    g = 0;
-    b = 0;
-  } else if (VTERM_COLOR_IS_RGB(&color)) {
-    r = color.rgb.red;
-    g = color.rgb.green;
-    b = color.rgb.blue;
-  } else {
-    // Fallback for indexed colors (shouldn't happen after convert_to_rgb)
-    r = 128;
-    g = 128;
-    b = 128;
-  }
-}
-
-int Terminal::onDamage(VTermRect rect, void *user) {
-  Terminal *term = static_cast<Terminal *>(user);
-
-  // Record the damage rectangle
-  DamageRect damage;
-  damage._startCol = static_cast<uint32_t>(rect.start_col);
-  damage._startRow = static_cast<uint32_t>(rect.start_row);
-  damage._endCol = static_cast<uint32_t>(rect.end_col);
-  damage._endRow = static_cast<uint32_t>(rect.end_row);
-  term->damageRects_.push_back(damage);
-
-  if (term->config_ && term->config_->debugDamageRects()) {
-    spdlog::debug("Damage: [{},{}] -> [{},{}]", damage._startCol,
-                  damage._startRow, damage._endCol, damage._endRow);
-  }
-
-  return 0;
-}
-
-int Terminal::onMoveCursor(VTermPos pos, VTermPos oldpos, int visible,
-                           void *user) {
-  Terminal *term = static_cast<Terminal *>(user);
-  term->cursorRow_ = pos.row;
-  term->cursorCol_ = pos.col;
-  // Note: visible param is NOT used for cursor visibility - that's handled by
-  // VTERM_PROP_CURSORVISIBLE in onSetTermProp. The visible param here indicates
-  // whether cursor moved to a visible area of the screen, but we always want to
-  // show cursor if DECTCEM is enabled.
-  (void)visible;
-  (void)oldpos;
-  return 0;
-}
-
-Result<bool> Terminal::updateCursorBlink(double currentTime) {
-  if (currentTime - lastBlinkTime_ >= blinkInterval_) {
-    cursorBlink_ = !cursorBlink_;
-    lastBlinkTime_ = currentTime;
-    return Ok(true); // Blink state changed
-  }
-  return Ok(false);
-}
-
-int Terminal::onResize(int rows, int cols, void *user) {
-  (void)rows;
-  (void)cols;
-  (void)user;
-  return 0;
-}
-
-int Terminal::onSetTermProp(VTermProp prop, VTermValue *val, void *user) {
-  Terminal *term = static_cast<Terminal *>(user);
-
-  switch (prop) {
-  case VTERM_PROP_ALTSCREEN:
-    term->isAltScreen_ = val->boolean;
-    spdlog::debug("Terminal: alternate screen {}",
-                  term->isAltScreen_ ? "ON" : "OFF");
-    // Notify plugin manager about screen change
-    if (term->pluginManager_) {
-      term->pluginManager_->onAltScreenChange(term->isAltScreen_);
-    }
-    break;
-  case VTERM_PROP_CURSORVISIBLE:
-    term->cursorVisible_ = val->boolean;
-    break;
-  case VTERM_PROP_MOUSE:
-    term->mouseMode_ = val->number;
-    spdlog::debug("Terminal: mouse mode set to {}", term->mouseMode_);
-    break;
-  default:
-    break;
-  }
-  return 0;
-}
-
-int Terminal::onBell(void *user) {
-  (void)user;
-  // Ring the bell by writing to stdout (the actual terminal)
-#ifdef _WIN32
-  DWORD written;
-  WriteFile(GetStdHandle(STD_OUTPUT_HANDLE), "\a", 1, &written, nullptr);
-#else
-  if (write(STDOUT_FILENO, "\a", 1) < 0) {
-    // Ignore bell errors - not critical
-  }
-#endif
-  return 0;
-}
-
-int Terminal::onSbPushline(int cols, const VTermScreenCell *cells, void *user) {
-  Terminal *term = static_cast<Terminal *>(user);
-
-  // Store line in scrollback buffer
-  ScrollbackLine line;
-  line._chars.resize(cols);
-  line._fgColors.resize(cols * 3);
-  line._bgColors.resize(cols * 3);
-
-  for (int i = 0; i < cols; i++) {
-    const VTermScreenCell &cell = cells[i];
-    uint32_t ch = cell.chars[0];
-    // Handle wide character continuation cells
-    if (ch == 0xFFFFFFFF || ch == static_cast<uint32_t>(-1) || ch == 0) {
-      ch = ' ';
-    }
-    line._chars[i] = ch;
-
-    // Convert colors
-    VTermColor fg = cell.fg;
-    VTermColor bg = cell.bg;
-    vterm_screen_convert_color_to_rgb(term->vtermScreen_, &fg);
-    vterm_screen_convert_color_to_rgb(term->vtermScreen_, &bg);
-
-    line._fgColors[i * 3 + 0] = fg.rgb.red;
-    line._fgColors[i * 3 + 1] = fg.rgb.green;
-    line._fgColors[i * 3 + 2] = fg.rgb.blue;
-    line._bgColors[i * 3 + 0] = bg.rgb.red;
-    line._bgColors[i * 3 + 1] = bg.rgb.green;
-    line._bgColors[i * 3 + 2] = bg.rgb.blue;
-  }
-
-  term->scrollback_.push_back(std::move(line));
-
-  // Trim scrollback if too large
-  uint32_t maxLines = term->config_ ? term->config_->scrollbackLines() : 10000;
-  while (term->scrollback_.size() > maxLines) {
-    term->scrollback_.pop_front();
-  }
-
-  // Notify plugin manager that content scrolled up by 1 line
-  // Pass grid so plugin cell markers can be updated
-  if (term->pluginManager_) {
-    term->pluginManager_->onScroll(1, &term->grid_);
-  }
-
-  return 1; // We stored the line
-}
-
-int Terminal::onSbPopline(int cols, VTermScreenCell *cells, void *user) {
-  Terminal *term = static_cast<Terminal *>(user);
-
-  if (term->scrollback_.empty()) {
-    return 0; // No lines to pop
-  }
-
-  ScrollbackLine &line = term->scrollback_.back();
-  int lineCols = std::min(cols, static_cast<int>(line._chars.size()));
-
-  for (int i = 0; i < lineCols; i++) {
-    cells[i].chars[0] = line._chars[i];
-    cells[i].chars[1] = 0;
-    cells[i].width = 1;
-
-    cells[i].fg.type = VTERM_COLOR_RGB;
-    cells[i].fg.rgb.red = line._fgColors[i * 3 + 0];
-    cells[i].fg.rgb.green = line._fgColors[i * 3 + 1];
-    cells[i].fg.rgb.blue = line._fgColors[i * 3 + 2];
-
-    cells[i].bg.type = VTERM_COLOR_RGB;
-    cells[i].bg.rgb.red = line._bgColors[i * 3 + 0];
-    cells[i].bg.rgb.green = line._bgColors[i * 3 + 1];
-    cells[i].bg.rgb.blue = line._bgColors[i * 3 + 2];
-  }
-
-  // Fill remaining cells with spaces
-  for (int i = lineCols; i < cols; i++) {
-    cells[i].chars[0] = ' ';
-    cells[i].chars[1] = 0;
-    cells[i].width = 1;
-    cells[i].fg.type = VTERM_COLOR_DEFAULT_FG;
-    cells[i].bg.type = VTERM_COLOR_DEFAULT_BG;
-  }
-
-  term->scrollback_.pop_back();
-
-  // Notify plugin manager that content scrolled down by 1 line
-  // (opposite of pushline - plugins move down)
-  if (term->pluginManager_) {
-    term->pluginManager_->onScroll(-1, &term->grid_);
-  }
-
-  return 1; // We restored the line
-}
-
-int Terminal::onMoverect(VTermRect dest, VTermRect src, void *user) {
-  Terminal *term = static_cast<Terminal *>(user);
-
-  // Calculate vertical scroll delta from source to destination
-  // Positive delta = content moved UP (like sb_pushline)
-  // Negative delta = content moved DOWN (like sb_popline)
-  int scrollDelta = src.start_row - dest.start_row;
-
-  if (scrollDelta != 0 && term->pluginManager_) {
-    term->pluginManager_->onScroll(scrollDelta, &term->grid_);
-  }
-
-  // Mark as full damage for now - GPU texture shift optimization later
-  term->fullDamage_ = true;
-
-  return 0; // Let libvterm handle it with damage
-}
-
-int Terminal::onOSC(int command, VTermStringFragment frag, void *user) {
-  Terminal *term = static_cast<Terminal *>(user);
-
-  // Check if this is our vendor ID
-  if (command != YETTY_OSC_VENDOR_ID) {
-    return 0; // Not our sequence, let someone else handle it
-  }
-
-  // Handle multi-fragment sequences
-  if (frag.initial) {
-    term->oscBuffer_.clear();
-    term->oscBuffer_.reserve(256 * 1024); // Pre-allocate for large payloads
-    term->oscCommand_ = command;
-  }
-
-  // Append fragment data
-  if (frag.len > 0) {
-    term->oscBuffer_.append(frag.str, frag.len);
-  }
-
-  // Process when complete
-  if (frag.final) {
-    if (term->pluginManager_) {
-      // Build full sequence: command;rest
-      std::string fullSeq = std::to_string(command) + ";" + term->oscBuffer_;
-      std::string response;
-      uint32_t linesToAdvance = 0;
-
-      bool handled = term->pluginManager_->handleOSCSequence(
-          fullSeq, &term->grid_, term->cursorCol_, term->cursorRow_,
-          term->cellWidth_, term->cellHeight_, &response, &linesToAdvance);
-
-      if (handled) {
-        term->fullDamage_ = true; // Force full redraw
-        // Write query response back to PTY if any
-        if (!response.empty() && term->ptyMaster_ >= 0) {
-          auto result = term->writeToPty(response.c_str(), response.size());
-          if (!result) {
-            spdlog::error("Failed to write OSC response: {}",
-                          result.error().message());
-          }
-        }
-
-        // Defer cursor advance - can't call vterm_input_write during callback
-        // Will be processed after current vterm_input_write completes
-        if (linesToAdvance > 0) {
-          term->pendingNewlines_ = linesToAdvance;
-        }
-      }
-    }
-    term->oscBuffer_.clear();
-    term->oscCommand_ = -1;
-  }
-
-  return 1; // We handled it
-}
+//=============================================================================
+// Scrollback
+//=============================================================================
 
 void Terminal::scrollUp(int lines) {
-  int maxOffset = static_cast<int>(scrollback_.size());
-  scrollOffset_ = std::min(scrollOffset_ + lines, maxOffset);
-  fullDamage_ = true; // Need to redraw with scrollback content
+    std::lock_guard<std::mutex> lock(mutex_);
+    scrollOffset_ = std::min(scrollOffset_ + lines, static_cast<int>(scrollback_.size()));
+    fullDamage_ = true;
 }
 
 void Terminal::scrollDown(int lines) {
-  scrollOffset_ = std::max(scrollOffset_ - lines, 0);
-  fullDamage_ = true; // Need to redraw
+    std::lock_guard<std::mutex> lock(mutex_);
+    scrollOffset_ = std::max(scrollOffset_ - lines, 0);
+    fullDamage_ = true;
 }
 
 void Terminal::scrollToTop() {
-  scrollOffset_ = static_cast<int>(scrollback_.size());
-  fullDamage_ = true;
+    std::lock_guard<std::mutex> lock(mutex_);
+    scrollOffset_ = static_cast<int>(scrollback_.size());
+    fullDamage_ = true;
 }
 
 void Terminal::scrollToBottom() {
-  scrollOffset_ = 0;
-  fullDamage_ = true;
+    std::lock_guard<std::mutex> lock(mutex_);
+    scrollOffset_ = 0;
+    fullDamage_ = true;
 }
 
-//-----------------------------------------------------------------------------
-// Selection support
-//-----------------------------------------------------------------------------
+//=============================================================================
+// Selection
+//=============================================================================
 
 void Terminal::startSelection(int row, int col, SelectionMode mode) {
-  selectionStart_.row = row;
-  selectionStart_.col = col;
-  selectionEnd_.row = row;
-  selectionEnd_.col = col;
-  selectionMode_ = mode;
-
-  // For word/line mode, expand selection immediately
-  if (mode == SelectionMode::Word) {
-    // Expand to word boundaries
-    VTermPos pos = {row, col};
-    VTermScreenCell cell;
-
-    // Find word start (go left while not space/punctuation)
-    while (pos.col > 0) {
-      VTermPos testPos = {pos.row, pos.col - 1};
-      vterm_screen_get_cell(vtermScreen_, testPos, &cell);
-      uint32_t ch = cell.chars[0];
-      if (ch == 0 || ch == ' ' || ch == '\t')
-        break;
-      pos.col--;
-    }
-    selectionStart_ = pos;
-
-    // Find word end (go right while not space/punctuation)
-    pos = {row, col};
-    while (pos.col < static_cast<int>(cols_) - 1) {
-      vterm_screen_get_cell(vtermScreen_, pos, &cell);
-      uint32_t ch = cell.chars[0];
-      if (ch == 0 || ch == ' ' || ch == '\t')
-        break;
-      pos.col++;
-    }
-    selectionEnd_ = pos;
-  } else if (mode == SelectionMode::Line) {
-    selectionStart_.col = 0;
-    selectionEnd_.col = static_cast<int>(cols_);
-  }
-
-  fullDamage_ = true; // Need redraw for selection highlight
+    std::lock_guard<std::mutex> lock(mutex_);
+    selectionStart_ = {row, col};
+    selectionEnd_ = {row, col};
+    selectionMode_ = mode;
+    fullDamage_ = true;
 }
 
 void Terminal::extendSelection(int row, int col) {
-  if (selectionMode_ == SelectionMode::None)
-    return;
-
-  selectionEnd_.row = row;
-  selectionEnd_.col = col;
-
-  // For line mode, always extend to full lines
-  if (selectionMode_ == SelectionMode::Line) {
-    if (row >= selectionStart_.row) {
-      selectionEnd_.col = static_cast<int>(cols_);
-    } else {
-      selectionEnd_.col = 0;
-    }
-  }
-
-  fullDamage_ = true; // Need redraw for selection highlight
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (selectionMode_ == SelectionMode::None) return;
+    selectionEnd_ = {row, col};
+    fullDamage_ = true;
 }
 
 void Terminal::clearSelection() {
-  selectionMode_ = SelectionMode::None;
-  selectionStart_ = {0, 0};
-  selectionEnd_ = {0, 0};
-  fullDamage_ = true; // Need redraw to remove highlight
+    std::lock_guard<std::mutex> lock(mutex_);
+    selectionMode_ = SelectionMode::None;
+    fullDamage_ = true;
 }
 
 bool Terminal::isInSelection(int row, int col) const {
-  if (selectionMode_ == SelectionMode::None)
-    return false;
+    if (selectionMode_ == SelectionMode::None) return false;
 
-  // Normalize start/end so start <= end in document order
-  VTermPos start = selectionStart_;
-  VTermPos end = selectionEnd_;
+    VTermPos start = selectionStart_, end = selectionEnd_;
+    if (vterm_pos_cmp(start, end) > 0) std::swap(start, end);
 
-  if (vterm_pos_cmp(start, end) > 0) {
-    std::swap(start, end);
-  }
-
-  VTermPos pos = {row, col};
-
-  // Check if pos is between start and end
-  if (vterm_pos_cmp(pos, start) < 0)
-    return false;
-  if (vterm_pos_cmp(pos, end) > 0)
-    return false;
-
-  return true;
+    VTermPos pos = {row, col};
+    return vterm_pos_cmp(pos, start) >= 0 && vterm_pos_cmp(pos, end) <= 0;
 }
 
-std::string Terminal::getSelectedText() const {
-  if (selectionMode_ == SelectionMode::None)
-    return "";
+std::string Terminal::getSelectedText() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (selectionMode_ == SelectionMode::None) return "";
 
-  // Normalize start/end
-  VTermPos start = selectionStart_;
-  VTermPos end = selectionEnd_;
+    VTermPos start = selectionStart_, end = selectionEnd_;
+    if (vterm_pos_cmp(start, end) > 0) std::swap(start, end);
 
-  if (vterm_pos_cmp(start, end) > 0) {
-    std::swap(start, end);
-  }
+    std::string result;
+    for (int row = start.row; row <= end.row; row++) {
+        int sc = (row == start.row) ? start.col : 0;
+        int ec = (row == end.row) ? end.col + 1 : static_cast<int>(cols_);
 
-  std::string result;
+        VTermRect rect = {row, row + 1, sc, ec};
+        char buf[1024];
+        size_t len = vterm_screen_get_text(vtermScreen_, buf, sizeof(buf), rect);
+        if (len > 0) result.append(buf, len);
+        if (row < end.row) result += '\n';
+    }
+    return result;
+}
 
-  // Build text line by line
-  for (int row = start.row; row <= end.row; row++) {
-    int startCol = (row == start.row) ? start.col : 0;
-    // end_col is exclusive in VTermRect, so add 1 to include the last character
-    int endCol = (row == end.row) ? end.col + 1 : static_cast<int>(cols_);
+//=============================================================================
+// Cell size / zoom
+//=============================================================================
 
-    // Use vterm_screen_get_text for this row segment
-    VTermRect rect;
-    rect.start_row = row;
-    rect.end_row = row + 1;
-    rect.start_col = startCol;
-    rect.end_col = endCol;
+void Terminal::setCellSize(uint32_t width, uint32_t height) {
+    cellWidth_ = width;
+    cellHeight_ = height;
+}
 
-    // Allocate buffer (worst case: 4 bytes per cell for UTF-8)
-    size_t bufSize = (endCol - startCol + 1) * 4 + 1;
-    std::vector<char> buf(bufSize);
+void Terminal::setBaseCellSize(float width, float height) {
+    baseCellWidth_ = width;
+    baseCellHeight_ = height;
+}
 
-    size_t len = vterm_screen_get_text(vtermScreen_, buf.data(), bufSize, rect);
+void Terminal::setZoomLevel(float zoom) {
+    zoomLevel_ = zoom;
+    if (renderer_) {
+        renderer_->setCellSize(baseCellWidth_ * zoom, baseCellHeight_ * zoom);
+        renderer_->setScale(zoom);
+    }
+}
 
-    if (len > 0) {
-      result.append(buf.data(), len);
+//=============================================================================
+// Cursor blink
+//=============================================================================
+
+void Terminal::updateCursorBlink(double currentTime) {
+    if (currentTime - lastBlinkTime_ >= blinkInterval_) {
+        cursorBlink_ = !cursorBlink_;
+        lastBlinkTime_ = currentTime;
+    }
+}
+
+//=============================================================================
+// Grid sync
+//=============================================================================
+
+void Terminal::syncToGrid() {
+    VTermScreenCell cell;
+    VTermPos pos;
+
+    int sbSize = static_cast<int>(scrollback_.size());
+    int effectiveOffset = std::min(scrollOffset_, sbSize);
+
+    for (uint32_t row = 0; row < rows_; row++) {
+        int lineIndex = static_cast<int>(row) - effectiveOffset;
+
+        if (lineIndex < 0) {
+            // Scrollback
+            int sbIndex = sbSize + lineIndex;
+            if (sbIndex >= 0 && sbIndex < sbSize) {
+                const auto& sbLine = scrollback_[sbIndex];
+                for (uint32_t col = 0; col < cols_; col++) {
+                    uint32_t cp = (col < sbLine._chars.size()) ? sbLine._chars[col] : ' ';
+                    uint8_t fgR = 255, fgG = 255, fgB = 255;
+                    uint8_t bgR = 0, bgG = 0, bgB = 0;
+                    if (col < sbLine._chars.size()) {
+                        fgR = sbLine._fgColors[col * 3];
+                        fgG = sbLine._fgColors[col * 3 + 1];
+                        fgB = sbLine._fgColors[col * 3 + 2];
+                        bgR = sbLine._bgColors[col * 3];
+                        bgG = sbLine._bgColors[col * 3 + 1];
+                        bgB = sbLine._bgColors[col * 3 + 2];
+                    }
+                    uint16_t gi = font_ ? font_->getGlyphIndex(cp) : static_cast<uint16_t>(cp);
+                    CellAttrs attrs;
+                    attrs._emoji = isEmoji(cp) ? 1 : 0;
+                    grid_.setCell(col, row, gi, fgR, fgG, fgB, bgR, bgG, bgB, attrs);
+                }
+            }
+        } else {
+            // VTerm screen
+            for (uint32_t col = 0; col < cols_; col++) {
+                pos.row = lineIndex;
+                pos.col = col;
+                vterm_screen_get_cell(vtermScreen_, pos, &cell);
+
+                uint32_t cp = cell.chars[0];
+                if (cp == 0xFFFFFFFF || cp == static_cast<uint32_t>(-1)) {
+                    // Wide char continuation
+                    uint8_t fgR, fgG, fgB, bgR, bgG, bgB;
+                    VTermColor fg = cell.fg, bg = cell.bg;
+                    vterm_screen_convert_color_to_rgb(vtermScreen_, &fg);
+                    vterm_screen_convert_color_to_rgb(vtermScreen_, &bg);
+                    colorToRGB(fg, fgR, fgG, fgB);
+                    colorToRGB(bg, bgR, bgG, bgB);
+                    if (cell.attrs.reverse) {
+                        std::swap(fgR, bgR); std::swap(fgG, bgG); std::swap(fgB, bgB);
+                    }
+                    grid_.setCell(col, row, GLYPH_WIDE_CONT, fgR, fgG, fgB, bgR, bgG, bgB);
+                    continue;
+                }
+                if (cp == 0) cp = ' ';
+
+                bool isBold = cell.attrs.bold != 0;
+                bool isItalic = cell.attrs.italic != 0;
+
+                int emojiIdx = findCommonEmojiIndex(cp);
+                uint16_t gi = (emojiIdx >= 0)
+                    ? static_cast<uint16_t>(emojiIdx)
+                    : (font_ ? font_->getGlyphIndex(cp, isBold, isItalic) : static_cast<uint16_t>(cp));
+
+                if (pluginManager_) {
+                    uint32_t w = cell.width > 0 ? cell.width : 1;
+                    uint16_t customIdx = pluginManager_->onCellSync(col, row, cp, w);
+                    if (customIdx != 0) gi = customIdx;
+                }
+
+                uint8_t fgR, fgG, fgB, bgR, bgG, bgB;
+                VTermColor fg = cell.fg, bg = cell.bg;
+                vterm_screen_convert_color_to_rgb(vtermScreen_, &fg);
+                vterm_screen_convert_color_to_rgb(vtermScreen_, &bg);
+                colorToRGB(fg, fgR, fgG, fgB);
+                colorToRGB(bg, bgR, bgG, bgB);
+
+                if (cell.attrs.reverse) {
+                    std::swap(fgR, bgR); std::swap(fgG, bgG); std::swap(fgB, bgB);
+                }
+                if (isInSelection(lineIndex, col)) {
+                    std::swap(fgR, bgR); std::swap(fgG, bgG); std::swap(fgB, bgB);
+                }
+
+                CellAttrs attrs;
+                attrs._bold = isBold ? 1 : 0;
+                attrs._italic = isItalic ? 1 : 0;
+                attrs._strikethrough = cell.attrs.strike ? 1 : 0;
+                attrs._underline = static_cast<uint8_t>(cell.attrs.underline & 0x3);
+                attrs._emoji = (emojiIdx >= 0) ? 1 : 0;
+
+                grid_.setCell(col, row, gi, fgR, fgG, fgB, bgR, bgG, bgB, attrs);
+            }
+        }
+    }
+}
+
+void Terminal::syncDamageToGrid() {
+    // Simplified - just use syncToGrid for now
+    syncToGrid();
+}
+
+void Terminal::colorToRGB(const VTermColor& color, uint8_t& r, uint8_t& g, uint8_t& b) {
+    if (VTERM_COLOR_IS_DEFAULT_FG(&color)) {
+        r = 255; g = 255; b = 255;
+    } else if (VTERM_COLOR_IS_DEFAULT_BG(&color)) {
+        r = 0; g = 0; b = 0;
+    } else if (VTERM_COLOR_IS_RGB(&color)) {
+        r = color.rgb.red; g = color.rgb.green; b = color.rgb.blue;
+    } else {
+        r = 128; g = 128; b = 128;
+    }
+}
+
+//=============================================================================
+// libvterm callbacks
+//=============================================================================
+
+int Terminal::onDamage(VTermRect rect, void* user) {
+    auto* term = static_cast<Terminal*>(user);
+    DamageRect d;
+    d._startCol = rect.start_col;
+    d._startRow = rect.start_row;
+    d._endCol = rect.end_col;
+    d._endRow = rect.end_row;
+    term->damageRects_.push_back(d);
+    return 0;
+}
+
+int Terminal::onMoveCursor(VTermPos pos, VTermPos, int, void* user) {
+    auto* term = static_cast<Terminal*>(user);
+    term->cursorRow_ = pos.row;
+    term->cursorCol_ = pos.col;
+    return 0;
+}
+
+int Terminal::onSetTermProp(VTermProp prop, VTermValue* val, void* user) {
+    auto* term = static_cast<Terminal*>(user);
+    switch (prop) {
+        case VTERM_PROP_ALTSCREEN:
+            term->isAltScreen_ = val->boolean;
+            if (term->pluginManager_) term->pluginManager_->onAltScreenChange(term->isAltScreen_);
+            break;
+        case VTERM_PROP_CURSORVISIBLE:
+            term->cursorVisible_ = val->boolean;
+            break;
+        case VTERM_PROP_MOUSE:
+            term->mouseMode_ = val->number;
+            break;
+        default: break;
+    }
+    return 0;
+}
+
+int Terminal::onResize(int, int, void*) { return 0; }
+
+int Terminal::onBell(void*) {
+#ifndef _WIN32
+    write(STDOUT_FILENO, "\a", 1);
+#endif
+    return 0;
+}
+
+int Terminal::onSbPushline(int cols, const VTermScreenCell* cells, void* user) {
+    auto* term = static_cast<Terminal*>(user);
+
+    ScrollbackLine line;
+    line._chars.resize(cols);
+    line._fgColors.resize(cols * 3);
+    line._bgColors.resize(cols * 3);
+
+    for (int i = 0; i < cols; i++) {
+        uint32_t ch = cells[i].chars[0];
+        if (ch == 0xFFFFFFFF || ch == static_cast<uint32_t>(-1) || ch == 0) ch = ' ';
+        line._chars[i] = ch;
+
+        VTermColor fg = cells[i].fg, bg = cells[i].bg;
+        vterm_screen_convert_color_to_rgb(term->vtermScreen_, &fg);
+        vterm_screen_convert_color_to_rgb(term->vtermScreen_, &bg);
+        line._fgColors[i * 3] = fg.rgb.red;
+        line._fgColors[i * 3 + 1] = fg.rgb.green;
+        line._fgColors[i * 3 + 2] = fg.rgb.blue;
+        line._bgColors[i * 3] = bg.rgb.red;
+        line._bgColors[i * 3 + 1] = bg.rgb.green;
+        line._bgColors[i * 3 + 2] = bg.rgb.blue;
     }
 
-    // Add newline between lines (but not after last line)
-    if (row < end.row) {
-      result += '\n';
-    }
-  }
+    term->scrollback_.push_back(std::move(line));
 
-  return result;
+    uint32_t maxLines = term->config_ ? term->config_->scrollbackLines() : 10000;
+    while (term->scrollback_.size() > maxLines) {
+        term->scrollback_.pop_front();
+    }
+
+    if (term->pluginManager_) {
+        term->pluginManager_->onScroll(1, &term->grid_);
+    }
+
+    return 1;
+}
+
+int Terminal::onSbPopline(int cols, VTermScreenCell* cells, void* user) {
+    auto* term = static_cast<Terminal*>(user);
+    if (term->scrollback_.empty()) return 0;
+
+    auto& line = term->scrollback_.back();
+    int lineCols = std::min(cols, static_cast<int>(line._chars.size()));
+
+    for (int i = 0; i < lineCols; i++) {
+        cells[i].chars[0] = line._chars[i];
+        cells[i].chars[1] = 0;
+        cells[i].width = 1;
+        cells[i].fg.type = VTERM_COLOR_RGB;
+        cells[i].fg.rgb.red = line._fgColors[i * 3];
+        cells[i].fg.rgb.green = line._fgColors[i * 3 + 1];
+        cells[i].fg.rgb.blue = line._fgColors[i * 3 + 2];
+        cells[i].bg.type = VTERM_COLOR_RGB;
+        cells[i].bg.rgb.red = line._bgColors[i * 3];
+        cells[i].bg.rgb.green = line._bgColors[i * 3 + 1];
+        cells[i].bg.rgb.blue = line._bgColors[i * 3 + 2];
+    }
+
+    for (int i = lineCols; i < cols; i++) {
+        cells[i].chars[0] = ' ';
+        cells[i].chars[1] = 0;
+        cells[i].width = 1;
+        cells[i].fg.type = VTERM_COLOR_DEFAULT_FG;
+        cells[i].bg.type = VTERM_COLOR_DEFAULT_BG;
+    }
+
+    term->scrollback_.pop_back();
+
+    if (term->pluginManager_) {
+        term->pluginManager_->onScroll(-1, &term->grid_);
+    }
+
+    return 1;
+}
+
+int Terminal::onMoverect(VTermRect, VTermRect, void* user) {
+    auto* term = static_cast<Terminal*>(user);
+    term->fullDamage_ = true;
+    return 0;
+}
+
+int Terminal::onOSC(int command, VTermStringFragment frag, void* user) {
+    auto* term = static_cast<Terminal*>(user);
+
+    if (command != YETTY_OSC_VENDOR_ID) return 0;
+
+    if (frag.initial) {
+        term->oscBuffer_.clear();
+        term->oscCommand_ = command;
+    }
+
+    if (frag.len > 0) {
+        term->oscBuffer_.append(frag.str, frag.len);
+    }
+
+    if (frag.final && term->pluginManager_) {
+        std::string fullSeq = std::to_string(command) + ";" + term->oscBuffer_;
+        std::string response;
+        uint32_t linesToAdvance = 0;
+
+        bool handled = term->pluginManager_->handleOSCSequence(
+            fullSeq, &term->grid_, term->cursorCol_, term->cursorRow_,
+            term->cellWidth_, term->cellHeight_, &response, &linesToAdvance);
+
+        if (handled) {
+            term->fullDamage_ = true;
+            if (!response.empty() && term->ptyMaster_ >= 0) {
+                term->writeToPty(response.c_str(), response.size());
+            }
+            if (linesToAdvance > 0) {
+                term->pendingNewlines_ = linesToAdvance;
+            }
+        }
+        term->oscBuffer_.clear();
+        term->oscCommand_ = -1;
+    }
+
+    return 1;
 }
 
 } // namespace yetty

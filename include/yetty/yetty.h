@@ -17,9 +17,12 @@
 #include <yetty/config.h>
 #include <yetty/font.h>
 #include <yetty/font-manager.h>
+#include <yetty/renderable.h>
+#include <yetty/yetty-command.h>
 
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #if defined(__ANDROID__)
@@ -39,7 +42,7 @@
 namespace yetty {
 
 // Forward declarations
-class TextRenderer;
+class GridRenderer;
 class Terminal;
 class PluginManager;
 class Grid;
@@ -67,7 +70,7 @@ public:
     // Service accessors (for plugins and InputHandler)
     Config::Ptr config() const noexcept { return _config; }
     WebGPUContext::Ptr context() const noexcept { return _ctx; }
-    std::shared_ptr<TextRenderer> renderer() const noexcept { return _renderer; }
+    std::shared_ptr<GridRenderer> renderer() const noexcept { return _renderer; }
     Font* font() const noexcept { return _font; }
     FontManager::Ptr fontManager() const noexcept { return _fontManager; }
 
@@ -97,10 +100,6 @@ public:
     void setZoomLevel(float zoom) noexcept;
     void updateGridSize(uint32_t cols, uint32_t rows) noexcept;
 
-    // Demo mode
-    bool isDemoMode() const noexcept { return _demoMode; }
-    Grid* demoGrid() const noexcept { return _demoGrid; }
-
 private:
     Yetty() noexcept = default;
 
@@ -115,13 +114,20 @@ private:
     Result<void> initGraphics() noexcept;
     Result<void> initFont() noexcept;
     Result<void> initRenderer() noexcept;
-    Result<void> initTerminalOrDemo() noexcept;
+    Result<void> initTerminal() noexcept;
     Result<void> initCallbacks() noexcept;
     void shutdown() noexcept;
 
     // Main loop
     void mainLoopIteration() noexcept;
     void handleResize(int width, int height) noexcept;
+
+    // Renderable management
+    void processEngineCommands() noexcept;
+    void collectAndExecuteCommands() noexcept;
+    void addRenderable(Renderable::Ptr renderable) noexcept;
+    void removeRenderable(uint32_t id) noexcept;
+    uint32_t nextRenderableId() noexcept { return _nextRenderableId++; }
 
 #if defined(__ANDROID__)
     // Android-specific initialization
@@ -144,9 +150,8 @@ private:
     // Core components
     Config::Ptr _config;
     WebGPUContext::Ptr _ctx;
-    std::shared_ptr<TextRenderer> _renderer;
-    std::unique_ptr<Font> _font_storage;  // Owns the font
-    Font* _font = nullptr;                 // Raw pointer for compatibility
+    std::shared_ptr<GridRenderer> _renderer;
+    Font* _font = nullptr;                 // Pointer to font (owned by FontManager)
     FontManager::Ptr _fontManager;
 
 #if !YETTY_WEB
@@ -154,6 +159,12 @@ private:
     std::shared_ptr<PluginManager> _pluginManager;
     std::shared_ptr<InputHandler> _inputHandler;
 #endif
+
+    // Renderables (sorted by zOrder)
+    std::vector<Renderable::Ptr> _renderables;
+    std::unordered_map<uint32_t, CommandQueue*> _oldQueues;  // Recycled queues per renderable
+    std::vector<std::unique_ptr<YettyCommand>> _pendingEngineCommands;
+    uint32_t _nextRenderableId = 1;
 
     // Window / Platform
 #if defined(__ANDROID__)
@@ -180,20 +191,12 @@ private:
     float _baseCellHeight = 0.0f;
     float _zoomLevel = 1.0f;
 
-    // Demo mode
-    bool _demoMode = false;
-    Grid* _demoGrid = nullptr;
-    int _scrollMs = 50;
-    double _lastScrollTime = 0.0;
-    std::vector<std::string> _dictionary;
-
     // Command line options
     std::string _fontPath;
     std::string _executeCommand;
     uint32_t _initialWidth = 1024;
     uint32_t _initialHeight = 768;
     bool _generateAtlasOnly = false;
-    bool _usePrebuiltAtlas = false;
 
     // FPS tracking
     double _lastFpsTime = 0.0;

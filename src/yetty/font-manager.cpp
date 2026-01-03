@@ -563,6 +563,46 @@ Result<Font*> FontManager::getFont(const unsigned char* data, size_t dataLen,
 #endif
 }
 
+Result<Font*> FontManager::loadFromAtlas(const std::string& atlasPath,
+                                          const std::string& metricsPath,
+                                          const std::string& fontName) noexcept {
+    // Check cache first
+    FontCacheKey key;
+    key.familyName = fontName;
+    key.styleName = "prebuilt";
+    key.numGlyphs = 0;
+    key.unitsPerEM = 0;
+
+    auto it = fontCache_.find(key);
+    if (it != fontCache_.end()) {
+        spdlog::debug("FontManager: cache hit for prebuilt atlas '{}'", fontName);
+        return Ok(it->second.get());
+    }
+
+    // Load font from prebuilt atlas
+    auto font = std::make_unique<Font>();
+
+    spdlog::info("FontManager: loading prebuilt atlas from: {}", atlasPath);
+    if (!font->loadAtlas(atlasPath, metricsPath)) {
+        return Err<Font*>("Failed to load font atlas from: " + atlasPath);
+    }
+
+    if (!font->createTexture(ctx_->getDevice(), ctx_->getQueue())) {
+        return Err<Font*>("Failed to create font texture from prebuilt atlas");
+    }
+
+    Font* ptr = font.get();
+    fontCache_[key] = std::move(font);
+
+    if (!hasDefaultFont_) {
+        defaultFontKey_ = key;
+        hasDefaultFont_ = true;
+    }
+
+    spdlog::info("FontManager: loaded prebuilt atlas '{}' successfully", fontName);
+    return Ok(ptr);
+}
+
 Font* FontManager::getDefaultFont() noexcept {
     if (!hasDefaultFont_) {
         return nullptr;
