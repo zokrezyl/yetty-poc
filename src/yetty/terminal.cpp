@@ -589,6 +589,15 @@ void Terminal::updateCursorBlink(double currentTime) {
     if (currentTime - lastBlinkTime_ >= blinkInterval_) {
         cursorBlink_ = !cursorBlink_;
         lastBlinkTime_ = currentTime;
+        // Mark cursor cell as damaged so it gets re-rendered
+        if (cursorVisible_) {
+            DamageRect d;
+            d._startRow = static_cast<uint32_t>(cursorRow_);
+            d._startCol = static_cast<uint32_t>(cursorCol_);
+            d._endRow = static_cast<uint32_t>(cursorRow_ + 1);  // exclusive
+            d._endCol = static_cast<uint32_t>(cursorCol_ + 1);  // exclusive
+            damageRects_.push_back(d);
+        }
     }
 }
 

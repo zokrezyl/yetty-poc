@@ -24,6 +24,7 @@
           platformVersions = [ "34" ];
           buildToolsVersions = [ "34.0.0" ];
           ndkVersions = [ "26.1.10909125" ];
+          cmakeVersions = [ "3.22.1" ];
           includeNDK = true;
         };
 

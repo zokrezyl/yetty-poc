@@ -225,7 +225,10 @@ if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
         target_compile_definitions(glfw3webgpu PRIVATE _GLFW_X11)
     endif()
 
-    # libuv for async I/O (PTY reading, event loops)
+endif()
+
+# libuv for async I/O (PTY reading, event loops) - needed for all platforms except Emscripten
+if(NOT EMSCRIPTEN)
     CPMAddPackage(
         NAME libuv
         GITHUB_REPOSITORY libuv/libuv
@@ -234,7 +237,6 @@ if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
             "LIBUV_BUILD_TESTS OFF"
             "LIBUV_BUILD_BENCH OFF"
     )
-
 endif()
 
 #-----------------------------------------------------------------------------
@@ -387,6 +389,7 @@ elseif(NOT EMSCRIPTEN)
         src/yetty/custom-glyph-plugin.cpp
         src/yetty/shader-manager.cpp
         src/yetty/shader-glyph-renderer.cpp
+        src/yetty/cursor-renderer.cpp
     )
 else()
     # Web uses main.cpp with Emscripten GLFW
@@ -476,6 +479,7 @@ elseif(YETTY_ANDROID)
         vterm
         spdlog::spdlog
         lz4_static
+        uv_a
         android
         log
     )

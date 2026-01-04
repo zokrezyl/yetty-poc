@@ -84,3 +84,25 @@ android {
 dependencies {
     // No Java dependencies needed - pure native app
 }
+
+// Copy APK to build-android-{buildType} at repo root
+val repoRoot = rootProject.projectDir.parentFile.parentFile
+android.applicationVariants.all {
+    val variant = this
+    val buildType = variant.buildType.name
+    val outputDir = File(repoRoot, "build-android-${buildType}")
+
+    variant.assembleProvider.get().doLast {
+        outputDir.mkdirs()
+        variant.outputs.all {
+            val apkFile = outputFile
+            if (apkFile.exists()) {
+                copy {
+                    from(apkFile)
+                    into(outputDir)
+                }
+                println("APK copied to: ${outputDir}/${apkFile.name}")
+            }
+        }
+    }
+}

@@ -406,6 +406,11 @@ Result<void> PluginManager::render(WebGPUContext& ctx, WGPUTextureView targetVie
                                     int scrollOffset, uint32_t termRows) {
     if (!targetView) return Err<void>("PluginManager::render: targetView is null");
 
+    // Early return if no layers to render
+    if (getAllLayers().empty()) {
+        return Ok();
+    }
+
     // Initialize frame renderer on first use
     if (!frameRendererInitialized_) {
         if (auto res = initFrameRenderer(ctx.getDevice(), ctx.getSurfaceFormat()); !res) {
@@ -467,6 +472,21 @@ Result<void> PluginManager::render(WebGPUContext& ctx, WGPUTextureView targetVie
         for (auto& layer : plugin->getLayers()) {
             if (!layer->isVisible()) continue;
             if (layer->getScreenType() != currentScreen) continue;
+
+            // Set RenderContext for the layer
+            RenderContext rc;
+            rc.targetView = targetView;
+            rc.targetFormat = ctx.getSurfaceFormat();
+            rc.screenWidth = screenWidth;
+            rc.screenHeight = screenHeight;
+            rc.cellWidth = cellWidth;
+            rc.cellHeight = cellHeight;
+            rc.scrollOffset = scrollOffset;
+            rc.termRows = termRows;
+            rc.isAltScreen = isAltScreen_;
+            rc.deltaTime = 0.016;  // ~60fps default
+            layer->setRenderContext(rc);
+
             layer->render(ctx);
         }
     }

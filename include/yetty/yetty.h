@@ -51,6 +51,8 @@ class Terminal;
 class PluginManager;
 class Grid;
 class InputHandler;
+class ShaderManager;
+class CursorRenderer;
 
 //-----------------------------------------------------------------------------
 // GPU Resource entries (per-renderable namespace)
@@ -227,6 +229,8 @@ private:
     std::shared_ptr<Terminal> _terminal;
     std::shared_ptr<PluginManager> _pluginManager;
     std::shared_ptr<InputHandler> _inputHandler;
+    std::shared_ptr<ShaderManager> _shaderManager;
+    std::shared_ptr<CursorRenderer> _cursorRenderer;
 #endif
 
     // Renderables (sorted by zOrder)

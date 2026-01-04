@@ -17,6 +17,8 @@
 #if !YETTY_WEB && !defined(__ANDROID__)
 #include "plugin-manager.h"
 #include <yetty/shader-glyph-renderer.h>
+#include <yetty/shader-manager.h>
+#include <yetty/cursor-renderer.h>
 #include "terminal.h"
 #include <args.hxx>
 #elif defined(__ANDROID__)
@@ -511,6 +513,22 @@ Result<void> Yetty::initTerminal() noexcept {
   // Add terminal to renderables
   addRenderable(_terminal);
 
+  // Create ShaderManager for shader-based rendering (cursor, custom glyphs)
+  _shaderManager = std::make_shared<ShaderManager>();
+  std::string shaderPath = std::string(CMAKE_SOURCE_DIR) + "/src/yetty/shaders/";
+  if (auto res = _shaderManager->init(_ctx->getDevice(), shaderPath); !res) {
+    spdlog::warn("Failed to init ShaderManager: {} - cursor shader disabled", error_msg(res));
+    _shaderManager.reset();
+  }
+
+  // CursorRenderer disabled - GridRenderer handles cursor via shaders.wgsl
+  // The separate CursorRenderer causes issues because when terminal has no
+  // damage, it doesn't render, leaving swapchain texture with undefined
+  // content. CursorRenderer's LoadOp_Load then loads garbage.
+  // TODO: Implement GPU-driven cursor blinking in GridRenderer's shader
+  // using a time uniform, so cursor blinks even without damage.
+  (void)_shaderManager;  // Keep ShaderManager for future use
+
   std::cout << "Terminal mode: Grid " << _cols << "x" << _rows
             << " (damage tracking: "
             << (_config->useDamageTracking() ? "on" : "off") << ")"
@@ -816,37 +834,22 @@ void Yetty::mainLoopIteration() noexcept {
     _font->uploadPendingGlyphs(_ctx->getDevice(), _ctx->getQueue());
     _renderer->updateFontBindings(*_font);
   }
+
 #endif
 
   // Collect and execute render commands from all renderables
   // Each renderable returns nullptr if no damage (skip frame efficiently)
   renderAll();
 
-  // Render plugin layers on top
-  if (_pluginManager) {
-    auto layers = _pluginManager->getAllLayers();
-    if (!layers.empty()) {
-      auto viewResult = _ctx->getCurrentTextureView();
-      if (viewResult) {
-        RenderContext rc;
-        rc.targetView = *viewResult;
-        rc.targetFormat = _ctx->getSurfaceFormat();
-        rc.screenWidth = windowWidth();
-        rc.screenHeight = windowHeight();
-        rc.cellWidth = cellWidth();
-        rc.cellHeight = cellHeight();
-        rc.scrollOffset = _terminal ? _terminal->getScrollOffset() : 0;
-        rc.termRows = _rows;
-        rc.isAltScreen = false;
-        rc.deltaTime = getElapsedTime();
-
-        for (auto& layer : layers) {
-          if (layer && layer->isVisible()) {
-            layer->setRenderContext(rc);
-            CHECK_RESULT(layer->render(*_ctx));
-          }
-        }
-      }
+  // Render plugin layers on top (only if there are layers)
+  if (_pluginManager && !_pluginManager->getAllLayers().empty()) {
+    auto viewResult = _ctx->getCurrentTextureView();
+    if (viewResult) {
+      CHECK_RESULT(_pluginManager->render(*_ctx, *viewResult,
+                                          windowWidth(), windowHeight(),
+                                          cellWidth(), cellHeight(),
+                                          _terminal ? _terminal->getScrollOffset() : 0,
+                                          _rows));
     }
   }
 
@@ -1244,48 +1247,46 @@ int32_t Yetty::handleInput(struct android_app *app, AInputEvent *event) {
       // Handle special keys first
       switch (keyCode) {
       case AKEYCODE_ENTER:
-        CHECK_RESULT(engine->_terminal->sendKey('\r', mod));
+        engine->_terminal->sendKey('\r', mod);
         return 1;
       case AKEYCODE_DEL: // Backspace
-        CHECK_RESULT(
-            engine->_terminal->sendSpecialKey(VTERM_KEY_BACKSPACE, mod));
+        engine->_terminal->sendSpecialKey(VTERM_KEY_BACKSPACE, mod);
         return 1;
       case AKEYCODE_FORWARD_DEL: // Delete
-        CHECK_RESULT(engine->_terminal->sendSpecialKey(VTERM_KEY_DEL, mod));
+        engine->_terminal->sendSpecialKey(VTERM_KEY_DEL, mod);
         return 1;
       case AKEYCODE_TAB:
-        CHECK_RESULT(engine->_terminal->sendKey('\t', mod));
+        engine->_terminal->sendKey('\t', mod);
         return 1;
       case AKEYCODE_ESCAPE:
-        CHECK_RESULT(engine->_terminal->sendSpecialKey(VTERM_KEY_ESCAPE, mod));
+        engine->_terminal->sendSpecialKey(VTERM_KEY_ESCAPE, mod);
         return 1;
       case AKEYCODE_DPAD_UP:
-        CHECK_RESULT(engine->_terminal->sendSpecialKey(VTERM_KEY_UP, mod));
+        engine->_terminal->sendSpecialKey(VTERM_KEY_UP, mod);
         return 1;
       case AKEYCODE_DPAD_DOWN:
-        CHECK_RESULT(engine->_terminal->sendSpecialKey(VTERM_KEY_DOWN, mod));
+        engine->_terminal->sendSpecialKey(VTERM_KEY_DOWN, mod);
         return 1;
       case AKEYCODE_DPAD_LEFT:
-        CHECK_RESULT(engine->_terminal->sendSpecialKey(VTERM_KEY_LEFT, mod));
+        engine->_terminal->sendSpecialKey(VTERM_KEY_LEFT, mod);
         return 1;
       case AKEYCODE_DPAD_RIGHT:
-        CHECK_RESULT(engine->_terminal->sendSpecialKey(VTERM_KEY_RIGHT, mod));
+        engine->_terminal->sendSpecialKey(VTERM_KEY_RIGHT, mod);
         return 1;
       case AKEYCODE_MOVE_HOME:
-        CHECK_RESULT(engine->_terminal->sendSpecialKey(VTERM_KEY_HOME, mod));
+        engine->_terminal->sendSpecialKey(VTERM_KEY_HOME, mod);
         return 1;
       case AKEYCODE_MOVE_END:
-        CHECK_RESULT(engine->_terminal->sendSpecialKey(VTERM_KEY_END, mod));
+        engine->_terminal->sendSpecialKey(VTERM_KEY_END, mod);
         return 1;
       case AKEYCODE_PAGE_UP:
-        CHECK_RESULT(engine->_terminal->sendSpecialKey(VTERM_KEY_PAGEUP, mod));
+        engine->_terminal->sendSpecialKey(VTERM_KEY_PAGEUP, mod);
         return 1;
       case AKEYCODE_PAGE_DOWN:
-        CHECK_RESULT(
-            engine->_terminal->sendSpecialKey(VTERM_KEY_PAGEDOWN, mod));
+        engine->_terminal->sendSpecialKey(VTERM_KEY_PAGEDOWN, mod);
         return 1;
       case AKEYCODE_INSERT:
-        CHECK_RESULT(engine->_terminal->sendSpecialKey(VTERM_KEY_INS, mod));
+        engine->_terminal->sendSpecialKey(VTERM_KEY_INS, mod);
         return 1;
       // Skip modifier-only keys
       case AKEYCODE_SHIFT_LEFT:
@@ -1326,16 +1327,14 @@ int32_t Yetty::handleInput(struct android_app *app, AInputEvent *event) {
         // Handle Ctrl+key combinations
         if (mod & VTERM_MOD_CTRL) {
           if (unicodeChar >= 'a' && unicodeChar <= 'z') {
-            CHECK_RESULT(engine->_terminal->sendKey(unicodeChar - 'a' + 1,
-                                                    VTERM_MOD_NONE));
+            engine->_terminal->sendKey(unicodeChar - 'a' + 1, VTERM_MOD_NONE);
           } else if (unicodeChar >= 'A' && unicodeChar <= 'Z') {
-            CHECK_RESULT(engine->_terminal->sendKey(unicodeChar - 'A' + 1,
-                                                    VTERM_MOD_NONE));
+            engine->_terminal->sendKey(unicodeChar - 'A' + 1, VTERM_MOD_NONE);
           } else {
-            CHECK_RESULT(engine->_terminal->sendKey(unicodeChar, mod));
+            engine->_terminal->sendKey(unicodeChar, mod);
           }
         } else {
-          CHECK_RESULT(engine->_terminal->sendKey(unicodeChar, VTERM_MOD_NONE));
+          engine->_terminal->sendKey(unicodeChar, VTERM_MOD_NONE);
         }
         return 1;
       }
