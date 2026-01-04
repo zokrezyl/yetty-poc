@@ -1657,6 +1657,13 @@ Result<void> SDFPrimitivesLayer::render(WebGPUContext& ctx) {
     return Ok();
 }
 
+bool SDFPrimitivesLayer::renderToPass(WGPURenderPassEncoder pass, WebGPUContext& ctx) {
+    // Not implemented for SDFPrimitivesLayer - uses legacy render path
+    (void)pass;
+    (void)ctx;
+    return false;
+}
+
 Result<void> SDFPrimitivesLayer::createPipeline(WebGPUContext& ctx, WGPUTextureFormat targetFormat) {
     WGPUDevice device = ctx.getDevice();
 

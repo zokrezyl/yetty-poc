@@ -276,6 +276,13 @@ Result<void> RichTextLayer::render(WebGPUContext& ctx) {
                               pixelX, pixelY, pixelW, pixelH);
 }
 
+bool RichTextLayer::renderToPass(WGPURenderPassEncoder pass, WebGPUContext& ctx) {
+    // Not implemented for RichTextLayer - uses legacy render path
+    (void)pass;
+    (void)ctx;
+    return false;
+}
+
 //-----------------------------------------------------------------------------
 // Mouse Scroll
 //-----------------------------------------------------------------------------
