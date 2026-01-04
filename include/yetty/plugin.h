@@ -114,6 +114,10 @@ public:
     void setZOrder(uint32_t z) { _zOrder = z; }
     void setName(const std::string& n) { _name = n; }
 
+    // Hash ID (8 char nix-style: [a-z0-9]{8})
+    const std::string& hashId() const { return _hashId; }
+    void setHashId(const std::string& id) { _hashId = id; }
+
     Plugin* getParent() const { return _parent; }
     void setParent(Plugin* p) { _parent = p; }
 
@@ -172,6 +176,7 @@ public:
 
 protected:
     uint32_t _id = 0;
+    std::string _hashId;     // 8 char nix-style ID: [a-z0-9]{8}
     uint32_t _zOrder = 200;  // Plugins render above terminal (0)
     std::string _name = "PluginLayer";
     std::atomic<bool> _running{false};

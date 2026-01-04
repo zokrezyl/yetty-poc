@@ -2,6 +2,7 @@
 
 #include <yetty/plugin.h>
 #include <yetty/custom-glyph-plugin.h>
+#include <yetty/osc-command.h>
 #include "yetty/grid.h"
 #include <yetty/result.hpp>
 #include <webgpu/webgpu.h>
@@ -16,9 +17,6 @@ namespace yetty {
 // Forward declarations
 class Grid;
 class WebGPUContext;
-
-// Our vendor ID for OSC sequences
-constexpr int YETTY_OSC_VENDOR_ID = 99999;
 
 // Factory function type for built-in plugins
 using BuiltinPluginFactory = std::function<Result<PluginPtr>(YettyPtr)>;
@@ -59,14 +57,31 @@ public:
                                         Grid* grid,
                                         uint32_t cellWidth, uint32_t cellHeight);
 
-    // Update a layer
-    Result<void> updateLayer(uint32_t id, const std::string& payload);
+    // Update a layer (by hash ID)
+    Result<void> updateLayer(const std::string& hashId, const std::string& payload);
 
-    // Remove a layer
-    Result<void> removeLayer(uint32_t id, Grid* grid);
+    // Remove a layer (by hash ID)
+    Result<void> removeLayer(const std::string& hashId, Grid* grid);
 
-    // Get a layer by ID
-    PluginLayerPtr getLayer(uint32_t id);
+    // Get a layer by hash ID
+    PluginLayerPtr getLayer(const std::string& hashId);
+
+    // Get a layer by numeric ID (internal use)
+    PluginLayerPtr getLayerById(uint32_t id);
+
+    // Stop a layer (pause rendering)
+    Result<void> stopLayer(const std::string& hashId);
+    Result<void> stopLayersByPlugin(const std::string& pluginName);
+
+    // Start a layer (resume rendering)
+    Result<void> startLayer(const std::string& hashId);
+    Result<void> startLayersByPlugin(const std::string& pluginName);
+
+    // Kill (destroy) layers by plugin type
+    Result<void> killLayersByPlugin(const std::string& pluginName, Grid* grid);
+
+    // Get list of available plugin names
+    std::vector<std::string> getAvailablePlugins() const;
 
     // Get all layers (across all plugins)
     std::vector<PluginLayerPtr> getAllLayers() const;
@@ -171,7 +186,9 @@ private:
 
     std::unordered_map<std::string, PluginMeta> pluginMetas_;
     std::unordered_map<std::string, PluginPtr> plugins_;  // Active plugin instances
+    std::unordered_map<std::string, PluginLayerPtr> layersByHashId_;  // Hash ID -> layer
     uint32_t nextLayerId_ = 1;
+    OscCommandParser oscParser_;  // OSC command parser
     Font* font_ = nullptr;
     YettyPtr engine_;
     std::vector<void*> handles_;

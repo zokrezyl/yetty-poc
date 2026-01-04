@@ -277,10 +277,59 @@ Result<void> RichTextLayer::render(WebGPUContext& ctx) {
 }
 
 bool RichTextLayer::renderToPass(WGPURenderPassEncoder pass, WebGPUContext& ctx) {
-    // Not implemented for RichTextLayer - uses legacy render path
-    (void)pass;
-    (void)ctx;
-    return false;
+    if (failed_ || !_visible) return false;
+
+    const auto& rc = _render_context;
+
+    // Calculate pixel position from cell position
+    float pixelX = _x * rc.cellWidth;
+    float pixelY = _y * rc.cellHeight;
+    float pixelW = _width_cells * rc.cellWidth;
+    float pixelH = _height_cells * rc.cellHeight;
+
+    // For Relative layers, adjust position when viewing scrollback
+    if (_position_mode == PositionMode::Relative && rc.scrollOffset > 0) {
+        pixelY += rc.scrollOffset * rc.cellHeight;
+    }
+
+    // Skip if off-screen
+    if (rc.termRows > 0) {
+        float screenPixelHeight = rc.termRows * rc.cellHeight;
+        if (pixelY + pixelH <= 0 || pixelY >= screenPixelHeight) {
+            return false;
+        }
+    }
+
+    // Initialize RichText GPU resources if needed
+    if (!richText_) {
+        auto fontMgr = plugin_->getFontManager();
+        if (!fontMgr) {
+            failed_ = true;
+            return false;
+        }
+
+        auto result = RichText::create(&ctx, rc.targetFormat, fontMgr);
+        if (!result) {
+            failed_ = true;
+            return false;
+        }
+        richText_ = *result;
+
+        // Set default font family
+        richText_->setDefaultFontFamily(fontName_);
+
+        // Add pending spans
+        for (const auto& span : pendingSpans_) {
+            richText_->addSpan(span);
+        }
+        pendingSpans_.clear();
+
+        initialized_ = true;
+    }
+
+    // Use batched render
+    return richText_->renderToPass(pass, ctx, rc.screenWidth, rc.screenHeight,
+                                    pixelX, pixelY, pixelW, pixelH);
 }
 
 //-----------------------------------------------------------------------------
