@@ -761,13 +761,19 @@ Result<void> RichText::render(WebGPUContext& ctx,
     WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(device, nullptr);
     WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
 
-    // Set scissor rect to clip content to bounds
-    wgpuRenderPassEncoderSetScissorRect(
-        pass,
-        static_cast<uint32_t>(pixelX),
-        static_cast<uint32_t>(pixelY),
-        static_cast<uint32_t>(pixelW),
-        static_cast<uint32_t>(pixelH));
+    // Set scissor rect to clip content to bounds (clamped to screen)
+    float sx = std::max(0.0f, pixelX);
+    float sy = std::max(0.0f, pixelY);
+    float sw = std::min(pixelW, screenWidth - sx);
+    float sh = std::min(pixelH, screenHeight - sy);
+    if (sw > 0 && sh > 0) {
+        wgpuRenderPassEncoderSetScissorRect(
+            pass,
+            static_cast<uint32_t>(sx),
+            static_cast<uint32_t>(sy),
+            static_cast<uint32_t>(sw),
+            static_cast<uint32_t>(sh));
+    }
 
     wgpuRenderPassEncoderSetPipeline(pass, pipeline_);
 
@@ -805,6 +811,113 @@ Result<void> RichText::render(WebGPUContext& ctx,
 
     gpuResourcesDirty_ = false;
     return Ok();
+}
+
+bool RichText::renderToPass(WGPURenderPassEncoder pass, WebGPUContext& ctx,
+                             uint32_t screenWidth, uint32_t screenHeight,
+                             float pixelX, float pixelY,
+                             float pixelW, float pixelH) {
+    if (!initialized_ || !pipeline_) return false;
+
+    // Re-layout if view size changed
+    if (lastViewWidth_ != pixelW || lastViewHeight_ != pixelH || layoutDirty_) {
+        layout(pixelW, pixelH);
+    }
+
+    if (fontBatches_.empty() || glyphCount_ == 0) {
+        return false;  // Nothing to render
+    }
+
+    WGPUDevice device = ctx.getDevice();
+
+    // Find max batch size for glyph buffer allocation
+    size_t maxBatchSize = 0;
+    for (const auto& batch : fontBatches_) {
+        maxBatchSize = std::max(maxBatchSize, batch.glyphs.size());
+    }
+
+    // Ensure glyph buffer is large enough for any batch
+    if (maxBatchSize > glyphBufferCapacity_) {
+        if (glyphBuffer_) {
+            wgpuBufferRelease(glyphBuffer_);
+        }
+        glyphBufferCapacity_ = std::max(static_cast<uint32_t>(maxBatchSize), glyphBufferCapacity_ * 2);
+        if (glyphBufferCapacity_ < 256) glyphBufferCapacity_ = 256;
+
+        WGPUBufferDescriptor bufDesc = {};
+        bufDesc.size = glyphBufferCapacity_ * sizeof(GlyphInstance);
+        bufDesc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
+        glyphBuffer_ = device ? wgpuDeviceCreateBuffer(device, &bufDesc) : nullptr;
+        if (!glyphBuffer_) return false;
+
+        // Invalidate cached bind groups since buffer changed
+        for (auto& [font, bindGroup] : fontBindGroups_) {
+            if (bindGroup) wgpuBindGroupRelease(bindGroup);
+        }
+        fontBindGroups_.clear();
+    }
+
+    // Update uniforms
+    float ndcX = (pixelX / screenWidth) * 2.0f - 1.0f;
+    float ndcY = 1.0f - (pixelY / screenHeight) * 2.0f;
+
+    struct Uniforms {
+        float rect[4];
+        float screenSize[2];
+        float scrollOffset;
+        float pixelRange;
+        float _pad[4];
+    } uniforms;
+
+    uniforms.rect[0] = ndcX;
+    uniforms.rect[1] = ndcY;
+    uniforms.rect[2] = pixelW;
+    uniforms.rect[3] = pixelH;
+    uniforms.screenSize[0] = static_cast<float>(screenWidth);
+    uniforms.screenSize[1] = static_cast<float>(screenHeight);
+    uniforms.scrollOffset = scrollOffset_;
+    uniforms.pixelRange = pixelRange_;
+
+    wgpuQueueWriteBuffer(ctx.getQueue(), uniformBuffer_, 0, &uniforms, sizeof(uniforms));
+
+    // Set scissor rect to clip content to bounds (clamped to screen)
+    float sx = std::max(0.0f, pixelX);
+    float sy = std::max(0.0f, pixelY);
+    float sw = std::min(pixelW, screenWidth - sx);
+    float sh = std::min(pixelH, screenHeight - sy);
+    if (sw > 0 && sh > 0) {
+        wgpuRenderPassEncoderSetScissorRect(
+            pass,
+            static_cast<uint32_t>(sx),
+            static_cast<uint32_t>(sy),
+            static_cast<uint32_t>(sw),
+            static_cast<uint32_t>(sh));
+    }
+
+    wgpuRenderPassEncoderSetPipeline(pass, pipeline_);
+
+    // Render each font batch
+    for (const auto& batch : fontBatches_) {
+        if (batch.glyphs.empty() || !batch.font) continue;
+
+        // Ensure bind group exists for this font
+        auto result = createBindGroup(ctx, batch.font);
+        if (!result) continue;
+
+        auto it = fontBindGroups_.find(batch.font);
+        if (it == fontBindGroups_.end() || !it->second) continue;
+
+        // Upload this batch's glyphs
+        wgpuQueueWriteBuffer(ctx.getQueue(), glyphBuffer_, 0,
+                             batch.glyphs.data(), batch.glyphs.size() * sizeof(GlyphInstance));
+
+        // Draw with this font's bind group
+        wgpuRenderPassEncoderSetBindGroup(pass, 0, it->second, 0, nullptr);
+        wgpuRenderPassEncoderDraw(pass, 6, static_cast<uint32_t>(batch.glyphs.size()), 0, 0);
+    }
+
+    gpuResourcesDirty_ = false;
+    return true;
 }
 
 } // namespace yetty

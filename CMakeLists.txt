@@ -295,6 +295,7 @@ if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
         src/yetty/rich-text.cpp
         src/yetty/emoji-atlas.cpp
         src/yetty/renderable.cpp
+        src/yetty/ydraw.cpp
     )
 
     add_library(yetty_core SHARED ${YETTY_CORE_SOURCES})
@@ -328,6 +329,7 @@ if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
         glfw3webgpu
         glm::glm
         stb
+        yaml-cpp
         msdfgen::msdfgen-core
         msdfgen::msdfgen-ext
         freetype
@@ -363,6 +365,7 @@ if(EMSCRIPTEN OR YETTY_ANDROID)
         src/yetty/font-manager.cpp
         src/yetty/rich-text.cpp
         src/yetty/emoji-atlas.cpp
+        src/yetty/ydraw.cpp
     )
 endif()
 
@@ -386,6 +389,7 @@ elseif(NOT EMSCRIPTEN)
         src/yetty/config.cpp
         src/yetty/terminal.cpp
         src/yetty/plugin-manager.cpp
+        src/yetty/osc-command.cpp
         src/yetty/custom-glyph-plugin.cpp
         src/yetty/shader-manager.cpp
         src/yetty/shader-glyph-renderer.cpp

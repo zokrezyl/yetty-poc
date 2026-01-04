@@ -184,6 +184,7 @@ Result<PluginLayerPtr> PluginManager::createLayer(const std::string& pluginName,
 
     // Configure the layer
     layer->setId(nextLayerId_++);
+    layer->setHashId(oscParser_.generateId());  // Generate 8-char hash ID
     layer->setPositionMode(mode);
     layer->setScreenType(isAltScreen_ ? ScreenType::Alternate : ScreenType::Main);
     layer->setPosition(x, y);
@@ -193,6 +194,9 @@ Result<PluginLayerPtr> PluginManager::createLayer(const std::string& pluginName,
     // Add to plugin
     plugin->addLayer(layer);
 
+    // Add to hash ID lookup map
+    layersByHashId_[layer->hashId()] = layer;
+
     // Mark grid cells
     if (grid) {
         markGridCells(grid, layer.get());
@@ -201,10 +205,10 @@ Result<PluginLayerPtr> PluginManager::createLayer(const std::string& pluginName,
     return Ok(layer);
 }
 
-Result<void> PluginManager::updateLayer(uint32_t id, const std::string& payload) {
-    PluginLayerPtr layer = getLayer(id);
+Result<void> PluginManager::updateLayer(const std::string& hashId, const std::string& payload) {
+    PluginLayerPtr layer = getLayer(hashId);
     if (!layer) {
-        return Err<void>("Layer not found: " + std::to_string(id));
+        return Err<void>("Layer not found: " + hashId);
     }
 
     // Re-init
@@ -218,29 +222,118 @@ Result<void> PluginManager::updateLayer(uint32_t id, const std::string& payload)
     return Ok();
 }
 
-Result<void> PluginManager::removeLayer(uint32_t id, Grid* grid) {
+Result<void> PluginManager::removeLayer(const std::string& hashId, Grid* grid) {
+    auto it = layersByHashId_.find(hashId);
+    if (it == layersByHashId_.end()) {
+        return Err<void>("Layer not found: " + hashId);
+    }
+
+    PluginLayerPtr layer = it->second;
+    uint32_t numericId = layer->id();
+
+    if (grid) {
+        clearGridCells(grid, layer.get());
+    }
+
+    // Remove from plugin
     for (auto& [name, plugin] : plugins_) {
-        PluginLayerPtr layer = plugin->getLayer(id);
-        if (layer) {
-            if (grid) {
-                clearGridCells(grid, layer.get());
-            }
-            if (auto res = plugin->removeLayer(id); !res) {
+        if (plugin->getLayer(numericId)) {
+            if (auto res = plugin->removeLayer(numericId); !res) {
                 return Err<void>("Failed to remove layer from plugin", res);
             }
-            return Ok();
+            break;
         }
     }
-    return Err<void>("Layer not found: " + std::to_string(id));
+
+    // Remove from hash ID map
+    layersByHashId_.erase(it);
+
+    return Ok();
 }
 
-PluginLayerPtr PluginManager::getLayer(uint32_t id) {
+PluginLayerPtr PluginManager::getLayer(const std::string& hashId) {
+    auto it = layersByHashId_.find(hashId);
+    return (it != layersByHashId_.end()) ? it->second : nullptr;
+}
+
+PluginLayerPtr PluginManager::getLayerById(uint32_t id) {
     for (auto& [name, plugin] : plugins_) {
         if (auto layer = plugin->getLayer(id)) {
             return layer;
         }
     }
     return nullptr;
+}
+
+Result<void> PluginManager::stopLayer(const std::string& hashId) {
+    PluginLayerPtr layer = getLayer(hashId);
+    if (!layer) {
+        return Err<void>("Layer not found: " + hashId);
+    }
+    layer->stop();
+    return Ok();
+}
+
+Result<void> PluginManager::stopLayersByPlugin(const std::string& pluginName) {
+    auto it = plugins_.find(pluginName);
+    if (it == plugins_.end()) {
+        return Err<void>("Plugin not found: " + pluginName);
+    }
+    for (auto& layer : it->second->getLayers()) {
+        layer->stop();
+    }
+    return Ok();
+}
+
+Result<void> PluginManager::startLayer(const std::string& hashId) {
+    PluginLayerPtr layer = getLayer(hashId);
+    if (!layer) {
+        return Err<void>("Layer not found: " + hashId);
+    }
+    layer->start();
+    return Ok();
+}
+
+Result<void> PluginManager::startLayersByPlugin(const std::string& pluginName) {
+    auto it = plugins_.find(pluginName);
+    if (it == plugins_.end()) {
+        return Err<void>("Plugin not found: " + pluginName);
+    }
+    for (auto& layer : it->second->getLayers()) {
+        layer->start();
+    }
+    return Ok();
+}
+
+Result<void> PluginManager::killLayersByPlugin(const std::string& pluginName, Grid* grid) {
+    auto it = plugins_.find(pluginName);
+    if (it == plugins_.end()) {
+        return Err<void>("Plugin not found: " + pluginName);
+    }
+
+    // Collect hash IDs first (can't modify while iterating)
+    std::vector<std::string> hashIds;
+    for (auto& layer : it->second->getLayers()) {
+        hashIds.push_back(layer->hashId());
+    }
+
+    // Remove each layer
+    for (const auto& hashId : hashIds) {
+        if (auto res = removeLayer(hashId, grid); !res) {
+            return res;
+        }
+    }
+
+    return Ok();
+}
+
+std::vector<std::string> PluginManager::getAvailablePlugins() const {
+    std::vector<std::string> names;
+    names.reserve(pluginMetas_.size());
+    for (const auto& [name, meta] : pluginMetas_) {
+        names.push_back(name);
+    }
+    return names;
 }
 
 std::vector<PluginLayerPtr> PluginManager::getAllLayers() const {
@@ -253,145 +346,176 @@ std::vector<PluginLayerPtr> PluginManager::getAllLayers() const {
     return layers;
 }
 
-// Helper functions for parsing
-static size_t findNthSemicolon(const std::string& s, int n) {
-    size_t pos = 0;
-    for (int i = 0; i < n; i++) {
-        pos = s.find(';', pos);
-        if (pos == std::string::npos) return pos;
-        pos++;
-    }
-    return pos;
-}
-
-static std::string getField(const std::string& s, int fieldIndex) {
-    size_t start = (fieldIndex == 0) ? 0 : findNthSemicolon(s, fieldIndex);
-    if (start == std::string::npos) return "";
-    size_t end = s.find(';', start);
-    if (end == std::string::npos) return s.substr(start);
-    return s.substr(start, end - start);
-}
-
 bool PluginManager::handleOSCSequence(const std::string& sequence,
                                        Grid* grid,
                                        int cursorCol, int cursorRow,
                                        uint32_t cellWidth, uint32_t cellHeight,
                                        std::string* response,
                                        uint32_t* linesToAdvance) {
-    std::string vendorStr = getField(sequence, 0);
-    if (vendorStr.empty()) return false;
-
-    int vendorId = 0;
-    try {
-        vendorId = std::stoi(vendorStr);
-    } catch (...) {
+    // Parse the OSC sequence using the new command parser
+    auto parseResult = oscParser_.parse(sequence);
+    if (!parseResult) {
+        if (response) {
+            *response = OscResponse::error(error_msg(parseResult));
+        }
         return false;
     }
 
-    if (vendorId != YETTY_OSC_VENDOR_ID) return false;
-
-    std::string pluginId = getField(sequence, 1);
-    std::string mode = getField(sequence, 2);
-
-    if (pluginId.empty() || mode.empty()) return false;
-
-    if (mode == "D") {
-        std::string idStr = getField(sequence, 3);
-        if (idStr.empty()) return false;
-        uint32_t layerId = std::stoul(idStr);
-        auto result = removeLayer(layerId, grid);
-        if (!result) {
-            std::cerr << "PluginManager: " << error_msg(result) << std::endl;
-            return false;
-        }
-        return true;
-    }
-
-    if (mode == "U") {
-        std::string idStr = getField(sequence, 3);
-        if (idStr.empty()) return false;
-        uint32_t layerId = std::stoul(idStr);
-
-        size_t payloadStart = findNthSemicolon(sequence, 4);
-        std::string encodedPayload = (payloadStart != std::string::npos)
-            ? sequence.substr(payloadStart) : "";
-        std::string payload = base94Decode(encodedPayload);
-        auto result = updateLayer(layerId, payload);
-        if (!result) {
-            std::cerr << "PluginManager: " << error_msg(result) << std::endl;
-            return false;
-        }
-        return true;
-    }
-
-    if (mode == "Q") {
+    OscCommand cmd = *parseResult;
+    if (!cmd.isValid()) {
         if (response) {
-            std::string result = "\033]";
-            result += std::to_string(YETTY_OSC_VENDOR_ID);
-            result += ";!;Q";
-            for (auto& layer : getAllLayers()) {
-                result += ";";
-                result += std::to_string(layer->id());
-                result += ",";
-                result += layer->getParent()->pluginName();
-                result += ",";
-                result += std::to_string(layer->getX());
-                result += ",";
-                result += std::to_string(layer->getY());
-                result += ",";
-                result += std::to_string(layer->getWidthCells());
-                result += ",";
-                result += std::to_string(layer->getHeightCells());
+            *response = OscResponse::error(cmd.error);
+        }
+        return false;
+    }
+
+    switch (cmd.type) {
+        case OscCommandType::Create: {
+            int32_t x = cmd.create.x;
+            int32_t y = cmd.create.y;
+
+            // Adjust for relative positioning
+            if (cmd.create.relative) {
+                x += cursorCol;
+                y += cursorRow;
             }
-            result += "\033\\";
-            *response = result;
+
+            PositionMode mode = cmd.create.relative ? PositionMode::Relative : PositionMode::Absolute;
+
+            // Decode payload if provided in plugin args
+            std::string payload = cmd.payload;
+
+            auto result = createLayer(cmd.create.plugin, mode, x, y,
+                                      cmd.create.width, cmd.create.height,
+                                      payload, grid, cellWidth, cellHeight);
+            if (!result) {
+                if (response) {
+                    *response = OscResponse::error(error_msg(result));
+                }
+                return false;
+            }
+
+            PluginLayerPtr layer = *result;
+            std::cout << "Created layer " << layer->hashId() << " plugin=" << cmd.create.plugin
+                      << " at (" << x << "," << y << ") size "
+                      << cmd.create.width << "x" << cmd.create.height << std::endl;
+
+            if (linesToAdvance && cmd.create.relative) {
+                *linesToAdvance = std::abs(cmd.create.height);
+            }
+            return true;
         }
-        return true;
-    }
 
-    if (mode == "A" || mode == "R") {
-        std::string xStr = getField(sequence, 3);
-        std::string yStr = getField(sequence, 4);
-        std::string wStr = getField(sequence, 5);
-        std::string hStr = getField(sequence, 6);
+        case OscCommandType::List: {
+            if (response) {
+                std::vector<std::tuple<std::string, std::string, int, int, int, int, bool>> layers;
+                for (auto& layer : getAllLayers()) {
+                    if (!cmd.list.all && !layer->isRunning()) {
+                        continue;  // Skip stopped layers unless --all
+                    }
+                    layers.emplace_back(
+                        layer->hashId(),
+                        layer->getParent()->pluginName(),
+                        layer->getX(),
+                        layer->getY(),
+                        layer->getWidthCells(),
+                        layer->getHeightCells(),
+                        layer->isRunning()
+                    );
+                }
+                *response = OscResponse::layerList(layers);
+            }
+            return true;
+        }
 
-        if (xStr.empty() || yStr.empty() || wStr.empty() || hStr.empty()) {
+        case OscCommandType::Plugins: {
+            if (response) {
+                *response = OscResponse::pluginList(getAvailablePlugins());
+            }
+            return true;
+        }
+
+        case OscCommandType::Kill: {
+            Result<void> result;
+            if (!cmd.target.id.empty()) {
+                result = removeLayer(cmd.target.id, grid);
+            } else if (!cmd.target.plugin.empty()) {
+                result = killLayersByPlugin(cmd.target.plugin, grid);
+            } else {
+                result = Err<void>("kill: --id or --plugin required");
+            }
+
+            if (!result) {
+                if (response) {
+                    *response = OscResponse::error(error_msg(result));
+                }
+                return false;
+            }
+            return true;
+        }
+
+        case OscCommandType::Stop: {
+            Result<void> result;
+            if (!cmd.target.id.empty()) {
+                result = stopLayer(cmd.target.id);
+            } else if (!cmd.target.plugin.empty()) {
+                result = stopLayersByPlugin(cmd.target.plugin);
+            } else {
+                result = Err<void>("stop: --id or --plugin required");
+            }
+
+            if (!result) {
+                if (response) {
+                    *response = OscResponse::error(error_msg(result));
+                }
+                return false;
+            }
+            return true;
+        }
+
+        case OscCommandType::Start: {
+            Result<void> result;
+            if (!cmd.target.id.empty()) {
+                result = startLayer(cmd.target.id);
+            } else if (!cmd.target.plugin.empty()) {
+                result = startLayersByPlugin(cmd.target.plugin);
+            } else {
+                result = Err<void>("start: --id or --plugin required");
+            }
+
+            if (!result) {
+                if (response) {
+                    *response = OscResponse::error(error_msg(result));
+                }
+                return false;
+            }
+            return true;
+        }
+
+        case OscCommandType::Update: {
+            if (cmd.target.id.empty()) {
+                if (response) {
+                    *response = OscResponse::error("update: --id required");
+                }
+                return false;
+            }
+
+            auto result = updateLayer(cmd.target.id, cmd.payload);
+            if (!result) {
+                if (response) {
+                    *response = OscResponse::error(error_msg(result));
+                }
+                return false;
+            }
+            return true;
+        }
+
+        default:
+            if (response) {
+                *response = OscResponse::error("unknown command");
+            }
             return false;
-        }
-
-        PositionMode posMode = (mode == "A") ? PositionMode::Absolute : PositionMode::Relative;
-        int32_t x = std::stoi(xStr);
-        int32_t y = std::stoi(yStr);
-        int32_t w = std::stoi(wStr);  // 0 = stretch to edge, negative = termSize - abs(value)
-        int32_t h = std::stoi(hStr);
-
-        size_t payloadStart = findNthSemicolon(sequence, 7);
-        std::string encodedPayload = (payloadStart != std::string::npos)
-            ? sequence.substr(payloadStart) : "";
-        std::string payload = base94Decode(encodedPayload);
-        spdlog::debug("handleOSC: decoded payload:\n{}", payload);
-
-        if (posMode == PositionMode::Relative) {
-            x += cursorCol;
-            y += cursorRow;
-        }
-
-        auto result = createLayer(pluginId, posMode, x, y, w, h, payload,
-                                  grid, cellWidth, cellHeight);
-        if (!result) {
-            std::cerr << "PluginManager: " << error_msg(result) << std::endl;
-            return false;
-        }
-        std::cout << "Created layer id=" << (*result)->id() << " plugin=" << pluginId
-                  << " at (" << x << "," << y << ") size " << w << "x" << h << std::endl;
-
-        if (linesToAdvance && posMode == PositionMode::Relative) {
-            *linesToAdvance = h;
-        }
-        return true;
     }
-
-    return false;
 }
 
 Result<void> PluginManager::update(double deltaTime) {
@@ -419,61 +543,63 @@ Result<void> PluginManager::render(WebGPUContext& ctx, WGPUTextureView targetVie
         frameRendererInitialized_ = true;
     }
 
-    // Render debug frames first, then plugins on top
+    // DEBUG: Skip frame rendering - causes separate GPU submits per layer
+    // TODO: Batch frame rendering or make it configurable
+    constexpr bool RENDER_DEBUG_FRAMES = false;
+
     constexpr float framePadding = 2.0f;  // Pixels larger than layer bounds
+
+    ScreenType currentScreen = isAltScreen_ ? ScreenType::Alternate : ScreenType::Main;
 
     for (auto& [name, plugin] : plugins_) {
         // Plugin is already initialized by create()
 
-        // Render debug frame for each layer
-        ScreenType currentScreen = isAltScreen_ ? ScreenType::Alternate : ScreenType::Main;
-        for (auto& layer : plugin->getLayers()) {
-            if (!layer->isVisible()) continue;
+        // Render debug frame for each layer (disabled by default - expensive!)
+        if (RENDER_DEBUG_FRAMES) {
+            for (auto& layer : plugin->getLayers()) {
+                if (!layer->isVisible()) continue;
 
-            // Skip layers that belong to a different screen
-            if (layer->getScreenType() != currentScreen) continue;
+                // Skip layers that belong to a different screen
+                if (layer->getScreenType() != currentScreen) continue;
 
-            float pixelX = layer->getX() * cellWidth;
-            float pixelY = layer->getY() * cellHeight;
-            float pixelW = layer->getWidthCells() * cellWidth;
-            float pixelH = layer->getHeightCells() * cellHeight;
+                float pixelX = layer->getX() * cellWidth;
+                float pixelY = layer->getY() * cellHeight;
+                float pixelW = layer->getWidthCells() * cellWidth;
+                float pixelH = layer->getHeightCells() * cellHeight;
 
-            // Adjust for scroll offset
-            if (layer->getPositionMode() == PositionMode::Relative && scrollOffset > 0) {
-                pixelY += scrollOffset * cellHeight;
-            }
-
-            // Skip if off-screen
-            if (termRows > 0) {
-                float screenPixelHeight = termRows * cellHeight;
-                if (pixelY + pixelH <= 0 || pixelY >= screenPixelHeight) {
-                    continue;
+                // Adjust for scroll offset
+                if (layer->getPositionMode() == PositionMode::Relative && scrollOffset > 0) {
+                    pixelY += scrollOffset * cellHeight;
                 }
-            }
 
-            // Determine frame color based on state
-            float r, g, b, a;
-            if (layer == focusedLayer_) {
-                r = 0.0f; g = 1.0f; b = 0.0f; a = 1.0f;  // Green for focused
-            } else if (layer == hoveredLayer_) {
-                r = 1.0f; g = 1.0f; b = 0.0f; a = 1.0f;  // Yellow for hovered
-            } else {
-                r = 0.3f; g = 0.5f; b = 0.7f; a = 0.8f;  // Dim cyan for default
-            }
+                // Skip if off-screen
+                if (termRows > 0) {
+                    float screenPixelHeight = termRows * cellHeight;
+                    if (pixelY + pixelH <= 0 || pixelY >= screenPixelHeight) {
+                        continue;
+                    }
+                }
 
-            // Render frame slightly larger than layer
-            renderFrame(ctx, targetView, screenWidth, screenHeight,
-                        pixelX - framePadding, pixelY - framePadding,
-                        pixelW + framePadding * 2, pixelH + framePadding * 2,
-                        r, g, b, a);
+                // Determine frame color based on state
+                float r, g, b, a;
+                if (layer == focusedLayer_) {
+                    r = 0.0f; g = 1.0f; b = 0.0f; a = 1.0f;  // Green for focused
+                } else if (layer == hoveredLayer_) {
+                    r = 1.0f; g = 1.0f; b = 0.0f; a = 1.0f;  // Yellow for hovered
+                } else {
+                    r = 0.3f; g = 0.5f; b = 0.7f; a = 0.8f;  // Dim cyan for default
+                }
+
+                // Render frame slightly larger than layer
+                renderFrame(ctx, targetView, screenWidth, screenHeight,
+                            pixelX - framePadding, pixelY - framePadding,
+                            pixelW + framePadding * 2, pixelH + framePadding * 2,
+                            r, g, b, a);
+            }
         }
 
-        // Render plugin content - each layer renders itself
+        // Set RenderContext for each layer (needed for position calculations)
         for (auto& layer : plugin->getLayers()) {
-            if (!layer->isVisible()) continue;
-            if (layer->getScreenType() != currentScreen) continue;
-
-            // Set RenderContext for the layer
             RenderContext rc;
             rc.targetView = targetView;
             rc.targetFormat = ctx.getSurfaceFormat();
@@ -486,10 +612,56 @@ Result<void> PluginManager::render(WebGPUContext& ctx, WGPUTextureView targetVie
             rc.isAltScreen = isAltScreen_;
             rc.deltaTime = 0.016;  // ~60fps default
             layer->setRenderContext(rc);
-
-            layer->render(ctx);
         }
     }
+
+    // Create ONE command encoder for ALL plugins
+    WGPUCommandEncoderDescriptor encoderDesc = {};
+    WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(ctx.getDevice(), &encoderDesc);
+    if (!encoder) {
+        return Err<void>("PluginManager: Failed to create command encoder");
+    }
+
+    // Begin ONE render pass for ALL plugins
+    WGPURenderPassColorAttachment colorAttachment = {};
+    colorAttachment.view = targetView;
+    colorAttachment.loadOp = WGPULoadOp_Load;  // Preserve terminal content
+    colorAttachment.storeOp = WGPUStoreOp_Store;
+    colorAttachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+
+    WGPURenderPassDescriptor passDesc = {};
+    passDesc.colorAttachmentCount = 1;
+    passDesc.colorAttachments = &colorAttachment;
+
+    WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
+    if (!pass) {
+        wgpuCommandEncoderRelease(encoder);
+        return Err<void>("PluginManager: Failed to begin render pass");
+    }
+
+    // Render ALL plugin layers in this single pass
+    for (auto& [name, plugin] : plugins_) {
+        for (auto& layer : plugin->getLayers()) {
+            if (!layer->isVisible()) continue;
+            if (layer->getScreenType() != currentScreen) continue;
+
+            // Use batched renderToPass - just draws, no encoder/submit overhead!
+            layer->renderToPass(pass, ctx);
+        }
+    }
+
+    // End pass and submit ONCE
+    wgpuRenderPassEncoderEnd(pass);
+    wgpuRenderPassEncoderRelease(pass);
+
+    WGPUCommandBufferDescriptor cmdDesc = {};
+    WGPUCommandBuffer cmdBuffer = wgpuCommandEncoderFinish(encoder, &cmdDesc);
+    if (cmdBuffer) {
+        wgpuQueueSubmit(ctx.getQueue(), 1, &cmdBuffer);
+        wgpuCommandBufferRelease(cmdBuffer);
+    }
+    wgpuCommandEncoderRelease(encoder);
+
     return Ok();
 }
 
@@ -614,7 +786,7 @@ PluginLayerPtr PluginManager::layerAtCell(int col, int row, const Grid* grid) {
     if (layerId == 0) return nullptr;
 
     spdlog::debug("layerAtCell({},{}): FOUND layer ID={}", col, row, layerId);
-    return getLayer(layerId);
+    return getLayerById(layerId);
 }
 
 void PluginManager::clearFocus() {

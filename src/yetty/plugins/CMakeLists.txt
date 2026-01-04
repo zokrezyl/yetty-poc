@@ -35,9 +35,9 @@ add_yetty_plugin(shader
     SOURCES shader/shader.cpp
 )
 
-# sdf-primitives plugin
-add_yetty_plugin(sdf-primitives
-    SOURCES sdf-primitives/sdf-primitives.cpp
+# ydraw plugin (2D/3D SDF rendering using core library)
+add_yetty_plugin(ydraw
+    SOURCES ydraw/ydraw.cpp
 )
 
 # rich-text plugin
@@ -48,4 +48,9 @@ add_yetty_plugin(rich-text
 # image plugin
 add_yetty_plugin(image
     SOURCES image/image.cpp
+)
+
+# markdown plugin
+add_yetty_plugin(markdown
+    SOURCES markdown/markdown.cpp
 )
