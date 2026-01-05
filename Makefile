@@ -80,11 +80,11 @@ test-desktop-debug: ## Run desktop debug tests
 
 .PHONY: config-android-debug
 config-android-debug: ## Configure Android debug build
-	@$(MAKE) _android-wgpu
+	@$(MAKE) _android-deps
 
 .PHONY: config-android-release
 config-android-release: ## Configure Android release build
-	@$(MAKE) _android-wgpu
+	@$(MAKE) _android-deps
 
 .PHONY: build-android-debug
 build-android-debug: ## Build Android debug APK
@@ -145,26 +145,6 @@ run-webasm-debug: build-webasm-debug ## Serve WebAssembly debug build
 run-webasm-release: build-webasm-release ## Serve WebAssembly release build
 	python3 $(BUILD_DIR_WEBASM_RELEASE)/serve.py 8000 $(BUILD_DIR_WEBASM_RELEASE)
 
-#=============================================================================
-# Convenience aliases (default to release for run, debug for test)
-#=============================================================================
-
-.PHONY: config-desktop build-desktop run-desktop test-desktop
-config-desktop: config-desktop-release ## Alias for config-desktop-release
-build-desktop: build-desktop-release ## Alias for build-desktop-release
-run-desktop: run-desktop-release ## Alias for run-desktop-release
-test-desktop: test-desktop-debug ## Alias for test-desktop-debug
-
-.PHONY: config-android build-android test-android
-config-android: config-android-debug ## Alias for config-android-debug
-build-android: build-android-debug ## Alias for build-android-debug
-test-android: test-android-debug ## Alias for test-android-debug
-
-.PHONY: config-webasm build-webasm run-webasm test-webasm
-config-webasm: config-webasm-release ## Alias for config-webasm-release
-build-webasm: build-webasm-release ## Alias for build-webasm-release
-run-webasm: run-webasm-release ## Alias for run-webasm-release
-test-webasm: run-webasm-debug ## Alias for run-webasm-debug
 
 #=============================================================================
 # Clean
@@ -181,21 +161,9 @@ clean: ## Clean all build directories
 # Internal targets (not shown in help)
 #=============================================================================
 
-.PHONY: _android-wgpu
-_android-wgpu:
-	@cd $(CURDIR) && bash build-tools/android/build-wgpu.sh
-
-.PHONY: _android-busybox
-_android-busybox:
-	@nix develop .#android --command bash build-tools/android/build-busybox.sh
-
-.PHONY: _android-assets
-_android-assets:
-	@mkdir -p $(BUILD_DIR_ANDROID_DEBUG)/assets
-	@cp -f assets/*.ttf assets/*.png assets/*.json $(BUILD_DIR_ANDROID_DEBUG)/assets/ 2>/dev/null || true
-
 .PHONY: _android-deps
-_android-deps: _android-wgpu _android-busybox _android-assets
+_android-deps:
+	@cd $(CURDIR) && bash build-tools/android/build-wgpu.sh
 
 #=============================================================================
 # Help

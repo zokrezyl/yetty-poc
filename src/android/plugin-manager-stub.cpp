@@ -39,15 +39,19 @@ Result<PluginLayerPtr> PluginManager::createLayer(const std::string&,
     return Err<PluginLayerPtr>("Plugins not supported on Android");
 }
 
-Result<void> PluginManager::updateLayer(uint32_t, const std::string&) {
+Result<void> PluginManager::updateLayer(const std::string&, const std::string&) {
     return Ok();
 }
 
-Result<void> PluginManager::removeLayer(uint32_t, Grid*) {
+Result<void> PluginManager::removeLayer(const std::string&, Grid*) {
     return Ok();
 }
 
-PluginLayerPtr PluginManager::getLayer(uint32_t) {
+PluginLayerPtr PluginManager::getLayer(const std::string&) {
+    return nullptr;
+}
+
+PluginLayerPtr PluginManager::getLayerById(uint32_t) {
     return nullptr;
 }
 

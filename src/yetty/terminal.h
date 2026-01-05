@@ -23,6 +23,9 @@ extern "C" {
 #include <windows.h>
 #endif
 
+// DamageRect is in separate header to avoid libuv dependency for grid-renderer on web
+#include "damage-rect.h"
+
 namespace yetty {
 
 // Forward declarations
@@ -43,12 +46,6 @@ enum class SelectionMode {
     Character,
     Word,
     Line
-};
-
-// Rectangle representing damaged (changed) cells
-struct DamageRect {
-    uint32_t _startCol, _startRow;
-    uint32_t _endCol, _endRow;  // exclusive
 };
 
 //=============================================================================

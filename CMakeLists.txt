@@ -12,8 +12,8 @@
 #     make web        # or: emcmake cmake -B web-build && cmake --build web-build
 #
 #   Android:
-#     Prerequisites: Android NDK, BusyBox cross-compiled
-#     make android    # builds BusyBox + yetty shared library
+#     Prerequisites: Android NDK, Toybox (auto-downloaded)
+#     make android    # downloads Toybox + builds yetty shared library
 #
 #   Tests:
 #     make test       # or: cmake --build build --target yetty_tests && ./build/test/ut/yetty_tests
@@ -36,8 +36,9 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # Build target options
 option(YETTY_ANDROID "Build for Android" OFF)
 
-# BusyBox path for Android shell
-set(BUSYBOX_PATH "" CACHE PATH "Path to BusyBox install directory for Android")
+# Toybox - BSD-licensed shell utilities (used on all platforms)
+# Binaries available at https://landley.net/toybox/bin/
+set(TOYBOX_PATH "" CACHE PATH "Path to Toybox binary")
 
 # Include CPM.cmake
 include(build-tools/cmake/CPM.cmake)
@@ -116,8 +117,8 @@ CPMAddPackage(
     OPTIONS "YAML_CPP_BUILD_TESTS OFF" "YAML_CPP_BUILD_TOOLS OFF"
 )
 
-# Taywee/args for command line parsing (desktop only)
-if(NOT YETTY_ANDROID)
+# Taywee/args for command line parsing (desktop only, not web)
+if(NOT YETTY_ANDROID AND NOT EMSCRIPTEN)
     CPMAddPackage(
         NAME args
         GITHUB_REPOSITORY Taywee/args
@@ -251,12 +252,12 @@ if(YETTY_ANDROID)
         ${ANDROID_NDK}/sources/android/native_app_glue
     )
 
-    # BusyBox configuration
-    if(BUSYBOX_PATH)
-        message(STATUS "BusyBox path: ${BUSYBOX_PATH}")
-        add_compile_definitions(YETTY_BUSYBOX_PATH="${BUSYBOX_PATH}")
+    # Toybox configuration (BSD-licensed shell utilities)
+    if(TOYBOX_PATH)
+        message(STATUS "Toybox path: ${TOYBOX_PATH}")
+        add_compile_definitions(YETTY_TOYBOX_PATH="${TOYBOX_PATH}")
     else()
-        message(WARNING "BUSYBOX_PATH not set - Android build will not have shell")
+        message(STATUS "TOYBOX_PATH not set - will look for toybox at runtime")
     endif()
 endif()
 
@@ -377,6 +378,7 @@ if(YETTY_ANDROID)
         src/yetty/yetty.cpp
         src/yetty/config.cpp
         src/yetty/terminal.cpp
+        src/yetty/osc-command.cpp
         src/android/plugin-manager-stub.cpp
     )
 elseif(NOT EMSCRIPTEN)
@@ -399,7 +401,11 @@ else()
     list(APPEND YETTY_SOURCES
         src/yetty/main.cpp
         src/yetty/yetty.cpp
+        src/yetty/config.cpp
         src/yetty/input-handler.cpp
+        src/yetty/renderable.cpp
+        src/yetty/web-terminal.cpp
+        src/yetty/web-display.cpp
     )
 endif()
 
@@ -438,10 +444,14 @@ if(EMSCRIPTEN)
         --no-heap-copy
         "--preload-file=${CMAKE_CURRENT_SOURCE_DIR}/src/yetty/shaders/shaders.wgsl@/shaders.wgsl"
         "--preload-file=${CMAKE_CURRENT_SOURCE_DIR}/assets@/assets"
+        # Export web terminal functions for JavaScript
+        "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','UTF8ToString','stringToUTF8']"
+        "-sEXPORTED_FUNCTIONS=['_main','_web_terminal_init','_web_terminal_write','_web_terminal_print','_web_terminal_get_cell_char','_web_terminal_get_cursor_row','_web_terminal_get_cursor_col','_web_terminal_get_rows','_web_terminal_get_cols','_web_terminal_key_input','_web_terminal_read_output','_web_terminal_cleanup']"
     )
 
-    # Use -O2 to avoid aggressive wasm-opt that causes binaryen version issues
-    target_compile_options(yetty PRIVATE -O2)
+    # Use -O1 to avoid wasm-opt which has binaryen version mismatch issues
+    target_compile_options(yetty PRIVATE -O1)
+    target_link_options(yetty PRIVATE -O1)
 
     # Output as .js (not .html) to avoid html-minifier-terser dependency
     # A standalone index.html will be provided to load yetty.js
@@ -458,7 +468,7 @@ if(EMSCRIPTEN)
 
 elseif(YETTY_ANDROID)
     #-------------------------------------------------------------------------
-    # Android build - WebGPU via Vulkan, native_app_glue, BusyBox shell
+    # Android build - WebGPU via Vulkan, native_app_glue, Toybox shell
     #-------------------------------------------------------------------------
     target_compile_definitions(yetty PRIVATE
         YETTY_WEB=0

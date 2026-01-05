@@ -23,6 +23,9 @@
 #include <args.hxx>
 #elif defined(__ANDROID__)
 #include "terminal.h"
+#elif YETTY_WEB
+#include <yetty/config.h>
+#include "web-display.h"
 #endif
 
 #include <algorithm>
@@ -109,8 +112,8 @@ Result<void> Yetty::init(struct android_app *app) noexcept {
   _androidApp = app;
   _dataDir = std::string(app->activity->internalDataPath);
 
-  // Set up BusyBox
-  if (auto res = setupBusybox(); !res) {
+  // Set up Toybox
+  if (auto res = setupToybox(); !res) {
     return res;
   }
 
@@ -452,14 +455,14 @@ Result<void> Yetty::initTerminal() noexcept {
   setenv("HOME", _dataDir.c_str(), 1);
   setenv("PATH", "/system/bin:/system/xbin", 1);
   setenv("SHELL", "/system/bin/sh", 1);
-  setenv("BUSYBOX", _busyboxPath.c_str(), 1);
+  setenv("TOYBOX", _toyboxPath.c_str(), 1);
 
   // Start shell
   _terminal->setShell("/system/bin/sh");
   _terminal->start();
   addRenderable(_terminal);
   LOGI("Terminal started with shell: /system/bin/sh");
-  LOGI("BusyBox available at: %s", _busyboxPath.c_str());
+  LOGI("Toybox available at: %s", _toyboxPath.c_str());
 #elif !YETTY_WEB
   // Desktop: Terminal mode with plugins
   auto terminalResult =
@@ -541,8 +544,108 @@ Result<void> Yetty::initTerminal() noexcept {
   }
   _inputHandler = *inputResult;
 #else
-  // Web build: Terminal not available yet
-  spdlog::warn("Web build: Terminal mode not yet implemented");
+  // Web build: Create WebDisplay renderable
+  spdlog::info("Web build: Creating WebDisplay");
+
+  auto displayResult = WebDisplay::create(nextRenderableId(), _cols, _rows, _ctx, _fontManager);
+  if (!displayResult) {
+    return Err<void>("Failed to create WebDisplay", displayResult);
+  }
+  _webDisplay = *displayResult;
+  addRenderable(_webDisplay);
+
+  // Fill the grid with a welcome message
+  Grid& grid = _webDisplay->grid();
+  Font* font = _webDisplay->font();
+
+  const char* lines[] = {
+    "+---------------------------------------------------------------------------+",
+    "|                                                                           |",
+    "|                     YETTY - WebGPU Terminal Emulator                      |",
+    "|                                                                           |",
+    "+---------------------------------------------------------------------------+",
+    "|                                                                           |",
+    "|  Welcome to the yetty web demo!                                           |",
+    "|                                                                           |",
+    "|  This terminal is rendered using WebGPU with MSDF fonts.                  |",
+    "|                                                                           |",
+    "|  Features:                                                                |",
+    "|    * GPU-accelerated text rendering                                       |",
+    "|    * Smooth scaling via MSDF (Multi-channel Signed Distance Fields)       |",
+    "|    * Full Unicode support including emoji                                 |",
+    "|    * 24-bit true color support                                            |",
+    "|                                                                           |",
+    "|  Use the Toybox shell below to run commands.                              |",
+    "|                                                                           |",
+    "+---------------------------------------------------------------------------+",
+  };
+
+  // Default colors
+  uint8_t fgR = 0xCC, fgG = 0xCC, fgB = 0xCC;  // Light gray
+  uint8_t bgR = 0x0F, bgG = 0x0F, bgB = 0x23;  // Dark background
+
+  // Write each line
+  for (size_t row = 0; row < sizeof(lines)/sizeof(lines[0]) && row < _rows; row++) {
+    const char* line = lines[row];
+    uint32_t col = 0;
+
+    // UTF-8 decode and write
+    const uint8_t* p = reinterpret_cast<const uint8_t*>(line);
+    while (*p && col < _cols) {
+      uint32_t codepoint;
+      if ((*p & 0x80) == 0) {
+        codepoint = *p++;
+      } else if ((*p & 0xE0) == 0xC0) {
+        codepoint = (*p++ & 0x1F) << 6;
+        codepoint |= (*p++ & 0x3F);
+      } else if ((*p & 0xF0) == 0xE0) {
+        codepoint = (*p++ & 0x0F) << 12;
+        codepoint |= (*p++ & 0x3F) << 6;
+        codepoint |= (*p++ & 0x3F);
+      } else if ((*p & 0xF8) == 0xF0) {
+        codepoint = (*p++ & 0x07) << 18;
+        codepoint |= (*p++ & 0x3F) << 12;
+        codepoint |= (*p++ & 0x3F) << 6;
+        codepoint |= (*p++ & 0x3F);
+      } else {
+        codepoint = '?';
+        p++;
+      }
+
+      // Get glyph index from font
+      uint16_t glyphIndex = font ? font->getGlyphIndex(codepoint) : static_cast<uint16_t>(codepoint);
+
+      // Set colors based on character type
+      uint8_t r = fgR, g = fgG, b = fgB;
+      if (codepoint == '+' || codepoint == '-' || codepoint == '|') {
+        // Box drawing characters - use accent color
+        r = 0xE9; g = 0x45; b = 0x60;  // Red accent
+      } else if (codepoint == '*') {
+        r = 0x4A; g = 0xDE; b = 0x80;  // Green for bullets
+      }
+
+      grid.setCell(col, row, glyphIndex, r, g, b, bgR, bgG, bgB);
+      col++;
+    }
+
+    // Fill rest of line with spaces
+    uint16_t spaceGlyph = font ? font->getGlyphIndex(' ') : ' ';
+    while (col < _cols) {
+      grid.setCell(col, row, spaceGlyph, fgR, fgG, fgB, bgR, bgG, bgB);
+      col++;
+    }
+  }
+
+  // Fill remaining rows with spaces
+  uint16_t spaceGlyph = font ? font->getGlyphIndex(' ') : ' ';
+  for (uint32_t row = sizeof(lines)/sizeof(lines[0]); row < _rows; row++) {
+    for (uint32_t col = 0; col < _cols; col++) {
+      grid.setCell(col, row, spaceGlyph, fgR, fgG, fgB, bgR, bgG, bgB);
+    }
+  }
+
+  _webDisplay->start();
+  spdlog::info("Web demo: WebDisplay {}x{} initialized", _cols, _rows);
 #endif
 
   return Ok();
@@ -627,8 +730,11 @@ void Yetty::shutdown() noexcept {
   _font = nullptr;
   _ctx.reset();
   _androidInitialized = false;
+#elif YETTY_WEB
+  // Web: just clean up shared_ptrs (handled automatically)
+  // GLFW termination handled by Emscripten runtime
 #else
-  // Shutdown libuv event loop
+  // Desktop: Shutdown libuv event loop
   shutdownEventLoop();
 
   // shared_ptrs are cleaned up automatically
@@ -812,10 +918,17 @@ void Yetty::mainLoopIteration() noexcept {
 
   // Present
   _ctx->present();
+#elif YETTY_WEB
+  // Web build: simplified rendering loop
+  // Collect and execute render commands from all renderables
+  renderAll();
+
+  // Present the frame
+  _ctx->present();
 #else
+  // Desktop build: full rendering with plugins and shader manager
   // Note: glfwPollEvents() is called in onFrameTimer() before this
 
-#if !YETTY_WEB
   // Check if any renderable is still running
   bool anyRunning = false;
   for (const auto &r : _renderables) {
@@ -834,8 +947,6 @@ void Yetty::mainLoopIteration() noexcept {
     _font->uploadPendingGlyphs(_ctx->getDevice(), _ctx->getQueue());
     _renderer->updateFontBindings(*_font);
   }
-
-#endif
 
   // Update global uniforms (time, mouse, screen) once per frame
   if (_shaderManager) {
@@ -1077,21 +1188,21 @@ ANativeWindow *Yetty::nativeWindow() const noexcept {
   return _androidApp ? _androidApp->window : nullptr;
 }
 
-Result<void> Yetty::setupBusybox() noexcept {
-  // BusyBox is now in the native library directory as libbusybox.so
+Result<void> Yetty::setupToybox() noexcept {
+  // Toybox is in the native library directory as libtoybox.so
   // This directory has execute permissions (unlike the files directory)
   std::string nativeLibDir = getNativeLibraryDir();
-  _busyboxPath = nativeLibDir + "/libbusybox.so";
+  _toyboxPath = nativeLibDir + "/libtoybox.so";
 
-  LOGI("Looking for BusyBox at %s", _busyboxPath.c_str());
+  LOGI("Looking for Toybox at %s", _toyboxPath.c_str());
 
-  // Check if busybox exists and is executable
-  if (access(_busyboxPath.c_str(), X_OK) == 0) {
-    LOGI("BusyBox found at %s", _busyboxPath.c_str());
+  // Check if toybox exists and is executable
+  if (access(_toyboxPath.c_str(), X_OK) == 0) {
+    LOGI("Toybox found at %s", _toyboxPath.c_str());
     return Ok();
   }
 
-  LOGW("BusyBox not found at %s", _busyboxPath.c_str());
+  LOGW("Toybox not found at %s", _toyboxPath.c_str());
   return Ok(); // Not a fatal error
 }
 
