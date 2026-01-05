@@ -35,6 +35,7 @@ public:
     WGPUQueue getQueue() const noexcept { return queue_; }
     WGPUSurface getSurface() const noexcept { return surface_; }
     WGPUTextureFormat getSurfaceFormat() const noexcept { return surfaceFormat_; }
+    WGPUInstance getInstance() const noexcept { return instance_; }
 
     Result<WGPUTextureView> getCurrentTextureView() noexcept;
     void present() noexcept;

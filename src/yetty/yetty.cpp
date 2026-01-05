@@ -18,6 +18,7 @@
 #include "plugin-manager.h"
 #include <yetty/shader-glyph-renderer.h>
 #include <yetty/shader-manager.h>
+#include <yetty/cursor-renderer.h>
 #include "terminal.h"
 #include <args.hxx>
 #elif defined(__ANDROID__)

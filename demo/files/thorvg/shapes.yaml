@@ -1,0 +1,139 @@
+# ThorVG YAML Vector Graphics Demo
+# A simple scene demonstrating various shape primitives
+
+canvas:
+  width: 500
+  height: 400
+  background: "#1a1a2e"
+
+body:
+  # Large decorative circle in background
+  - circle:
+      cx: 400
+      cy: 80
+      r: 120
+      fill: "#16213e"
+      opacity: 0.8
+
+  # Panel background
+  - rect:
+      x: 30
+      y: 30
+      width: 440
+      height: 340
+      rx: 16
+      fill: "#0f3460"
+      stroke: "#e94560"
+      stroke-width: 2
+
+  # Title
+  - text:
+      x: 250
+      y: 70
+      content: "ThorVG YAML Demo"
+      fill: "#e94560"
+      font-size: 24
+      font-family: "sans-serif"
+      text-anchor: middle
+
+  # Row of circles
+  - circle:
+      cx: 100
+      cy: 140
+      r: 35
+      fill: "#e94560"
+
+  - circle:
+      cx: 200
+      cy: 140
+      r: 35
+      fill: "#0f3460"
+      stroke: "#e94560"
+      stroke-width: 3
+
+  - circle:
+      cx: 300
+      cy: 140
+      r: 35
+      fill: "#f1c40f"
+
+  - circle:
+      cx: 400
+      cy: 140
+      r: 35
+      fill: "#2ecc71"
+
+  # Row of rectangles
+  - rect:
+      x: 65
+      y: 200
+      width: 70
+      height: 50
+      fill: "#3498db"
+      rx: 8
+
+  - rect:
+      x: 165
+      y: 200
+      width: 70
+      height: 50
+      fill: "#9b59b6"
+      rx: 0
+
+  - rect:
+      x: 265
+      y: 200
+      width: 70
+      height: 50
+      fill: "#e67e22"
+      rx: 25
+
+  - rect:
+      x: 365
+      y: 200
+      width: 70
+      height: 50
+      fill: "#1abc9c"
+      stroke: "#16a085"
+      stroke-width: 3
+      rx: 4
+
+  # Lines and ellipses
+  - line:
+      x1: 60
+      y1: 280
+      x2: 440
+      y2: 280
+      stroke: "#7f8c8d"
+      stroke-width: 2
+
+  - ellipse:
+      cx: 130
+      cy: 330
+      rx: 50
+      ry: 25
+      fill: "#e74c3c"
+      opacity: 0.8
+
+  - ellipse:
+      cx: 250
+      cy: 330
+      rx: 50
+      ry: 25
+      fill: "#3498db"
+      opacity: 0.8
+
+  - ellipse:
+      cx: 370
+      cy: 330
+      rx: 50
+      ry: 25
+      fill: "#2ecc71"
+      opacity: 0.8
+
+  # Decorative path (star-like shape)
+  - path:
+      d: "M 250 275 L 260 295 L 280 295 L 265 308 L 272 328 L 250 315 L 228 328 L 235 308 L 220 295 L 240 295 Z"
+      fill: "#f1c40f"
+      stroke: "#f39c12"
+      stroke-width: 1
