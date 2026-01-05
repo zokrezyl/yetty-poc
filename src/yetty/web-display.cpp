@@ -1,9 +1,27 @@
 #if YETTY_WEB
 
 #include "web-display.h"
+#include <emscripten.h>
 #include <spdlog/spdlog.h>
+#include <cstring>
 
 namespace yetty {
+
+// Static instance for JavaScript callbacks
+WebDisplay* WebDisplay::s_instance = nullptr;
+
+// vterm screen callbacks
+static VTermScreenCallbacks screenCallbacks = {
+    .damage = WebDisplay::onDamage,
+    .moverect = nullptr,
+    .movecursor = WebDisplay::onMoveCursor,
+    .settermprop = WebDisplay::onSetTermProp,
+    .bell = nullptr,
+    .resize = nullptr,
+    .sb_pushline = nullptr,
+    .sb_popline = nullptr,
+    .sb_clear = nullptr,
+};
 
 WebDisplay::WebDisplay(uint32_t id, uint32_t cols, uint32_t rows,
                        WebGPUContext::Ptr ctx, FontManager::Ptr fontManager) noexcept
@@ -14,6 +32,18 @@ WebDisplay::WebDisplay(uint32_t id, uint32_t cols, uint32_t rows,
     , cols_(cols)
     , rows_(rows)
 {
+    s_instance = this;
+}
+
+WebDisplay::~WebDisplay()
+{
+    if (vterm_) {
+        vterm_free(vterm_);
+        vterm_ = nullptr;
+    }
+    if (s_instance == this) {
+        s_instance = nullptr;
+    }
 }
 
 Result<WebDisplay::Ptr> WebDisplay::create(uint32_t id, uint32_t cols, uint32_t rows,
@@ -42,17 +72,159 @@ Result<void> WebDisplay::init() noexcept
     }
     renderer_ = *rendererResult;
 
-    // Set cell size based on font metrics (lineHeight and typical monospace ratio)
+    // Set cell size based on font metrics
     float lineHeight = font_->getLineHeight();
-    float cellWidth = lineHeight * 0.5f;   // Typical monospace ratio
+    float cellWidth = lineHeight * 0.5f;
     float cellHeight = lineHeight;
     renderer_->setCellSize(cellWidth, cellHeight);
 
-    spdlog::info("WebDisplay initialized: {}x{} grid, cell size: {}x{}",
-                 cols_, rows_, cellWidth, cellHeight);
+    // Initialize vterm
+    vterm_ = vterm_new(rows_, cols_);
+    if (!vterm_) {
+        return Err<void>("Failed to create vterm");
+    }
+    vterm_set_utf8(vterm_, 1);
+
+    vtermScreen_ = vterm_obtain_screen(vterm_);
+    vterm_screen_set_callbacks(vtermScreen_, &screenCallbacks, this);
+    vterm_screen_reset(vtermScreen_, 1);
+
+    spdlog::info("WebDisplay initialized: {}x{} grid with vterm", cols_, rows_);
+
+    // Print initial prompt
+    const char* welcome = "\r\n  Welcome to yetty - WebGPU Terminal\r\n\r\n$ ";
+    vterm_input_write(vterm_, welcome, strlen(welcome));
+    syncToGrid();
 
     return Ok();
 }
+
+//=============================================================================
+// vterm callbacks
+//=============================================================================
+
+int WebDisplay::onDamage(VTermRect rect, void* user)
+{
+    auto* self = static_cast<WebDisplay*>(user);
+    self->needsSync_ = true;
+    return 1;
+}
+
+int WebDisplay::onMoveCursor(VTermPos pos, VTermPos oldpos, int visible, void* user)
+{
+    auto* self = static_cast<WebDisplay*>(user);
+    self->cursorRow_ = pos.row;
+    self->cursorCol_ = pos.col;
+    self->cursorVisible_ = visible;
+    return 1;
+}
+
+int WebDisplay::onSetTermProp(VTermProp prop, VTermValue* val, void* user)
+{
+    return 1;
+}
+
+//=============================================================================
+// Terminal I/O
+//=============================================================================
+
+void WebDisplay::write(const char* data, size_t len)
+{
+    if (!vterm_ || !data || len == 0) return;
+    vterm_input_write(vterm_, data, len);
+    needsSync_ = true;
+}
+
+void WebDisplay::sendKey(uint32_t codepoint)
+{
+    if (!vterm_) return;
+    vterm_keyboard_unichar(vterm_, codepoint, VTERM_MOD_NONE);
+}
+
+void WebDisplay::sendSpecialKey(VTermKey key, VTermModifier mod)
+{
+    if (!vterm_) return;
+    vterm_keyboard_key(vterm_, key, mod);
+}
+
+size_t WebDisplay::readOutput(char* buffer, size_t maxlen)
+{
+    if (!vterm_ || !buffer || maxlen == 0) return 0;
+    return vterm_output_read(vterm_, buffer, maxlen);
+}
+
+//=============================================================================
+// Grid synchronization
+//=============================================================================
+
+void WebDisplay::colorToRGB(const VTermColor& color, uint8_t& r, uint8_t& g, uint8_t& b)
+{
+    if (VTERM_COLOR_IS_RGB(&color)) {
+        r = color.rgb.red;
+        g = color.rgb.green;
+        b = color.rgb.blue;
+    } else if (VTERM_COLOR_IS_INDEXED(&color)) {
+        // Basic 16-color palette
+        static const uint8_t palette[16][3] = {
+            {0, 0, 0}, {170, 0, 0}, {0, 170, 0}, {170, 85, 0},
+            {0, 0, 170}, {170, 0, 170}, {0, 170, 170}, {170, 170, 170},
+            {85, 85, 85}, {255, 85, 85}, {85, 255, 85}, {255, 255, 85},
+            {85, 85, 255}, {255, 85, 255}, {85, 255, 255}, {255, 255, 255}
+        };
+        int idx = color.indexed.idx;
+        if (idx < 16) {
+            r = palette[idx][0];
+            g = palette[idx][1];
+            b = palette[idx][2];
+        } else if (idx < 232) {
+            // 6x6x6 color cube
+            idx -= 16;
+            r = (idx / 36) * 51;
+            g = ((idx / 6) % 6) * 51;
+            b = (idx % 6) * 51;
+        } else {
+            // Grayscale
+            int gray = (idx - 232) * 10 + 8;
+            r = g = b = gray;
+        }
+    } else {
+        // Default colors
+        r = g = b = 204;
+    }
+}
+
+void WebDisplay::syncToGrid()
+{
+    if (!vtermScreen_) return;
+
+    for (int row = 0; row < static_cast<int>(rows_); row++) {
+        for (int col = 0; col < static_cast<int>(cols_); col++) {
+            VTermPos pos = {row, col};
+            VTermScreenCell cell;
+            vterm_screen_get_cell(vtermScreen_, pos, &cell);
+
+            uint32_t codepoint = cell.chars[0] ? cell.chars[0] : ' ';
+            uint8_t fgR, fgG, fgB, bgR, bgG, bgB;
+            colorToRGB(cell.fg, fgR, fgG, fgB);
+            colorToRGB(cell.bg, bgR, bgG, bgB);
+
+            // Use default colors if black on black
+            if (fgR == 0 && fgG == 0 && fgB == 0 && bgR == 0 && bgG == 0 && bgB == 0) {
+                fgR = fgG = fgB = 204;
+            }
+
+            grid_.setCell(col, row, codepoint,
+                         fgR, fgG, fgB,
+                         bgR, bgG, bgB);
+        }
+    }
+
+    needsSync_ = false;
+}
+
+//=============================================================================
+// Rendering
+//=============================================================================
 
 Result<void> WebDisplay::render(WebGPUContext& ctx)
 {
@@ -60,7 +232,12 @@ Result<void> WebDisplay::render(WebGPUContext& ctx)
         return Err<void>("No renderer available");
     }
 
-    // Render the grid
+    // Sync vterm to grid if needed
+    if (needsSync_) {
+        syncToGrid();
+    }
+
+    // Render the grid with cursor
     renderer_->render(grid_, cursorCol_, cursorRow_, cursorVisible_);
 
     return Ok();
@@ -81,5 +258,84 @@ void WebDisplay::setCellSize(float width, float height)
 }
 
 } // namespace yetty
+
+//=============================================================================
+// JavaScript Bridge Functions
+//=============================================================================
+
+extern "C" {
+
+// Write shell output to terminal
+EMSCRIPTEN_KEEPALIVE
+void yetty_write(const char* data, int len)
+{
+    auto* display = yetty::WebDisplay::instance();
+    if (display && data) {
+        if (len < 0) len = strlen(data);
+        display->write(data, len);
+    }
+}
+
+// Send keyboard character
+EMSCRIPTEN_KEEPALIVE
+void yetty_key(int codepoint)
+{
+    auto* display = yetty::WebDisplay::instance();
+    if (display) {
+        display->sendKey(codepoint);
+    }
+}
+
+// Send special key (Enter, Backspace, etc.)
+// key values: 1=Enter, 2=Tab, 3=Backspace, 4=Escape, 5=Up, 6=Down, 7=Left, 8=Right
+EMSCRIPTEN_KEEPALIVE
+void yetty_special_key(int key, int mods)
+{
+    auto* display = yetty::WebDisplay::instance();
+    if (!display) return;
+
+    VTermKey vtkey = VTERM_KEY_NONE;
+    switch (key) {
+        case 1: vtkey = VTERM_KEY_ENTER; break;
+        case 2: vtkey = VTERM_KEY_TAB; break;
+        case 3: vtkey = VTERM_KEY_BACKSPACE; break;
+        case 4: vtkey = VTERM_KEY_ESCAPE; break;
+        case 5: vtkey = VTERM_KEY_UP; break;
+        case 6: vtkey = VTERM_KEY_DOWN; break;
+        case 7: vtkey = VTERM_KEY_LEFT; break;
+        case 8: vtkey = VTERM_KEY_RIGHT; break;
+        case 9: vtkey = VTERM_KEY_HOME; break;
+        case 10: vtkey = VTERM_KEY_END; break;
+        case 11: vtkey = VTERM_KEY_DEL; break;
+    }
+
+    if (vtkey != VTERM_KEY_NONE) {
+        VTermModifier vtmods = static_cast<VTermModifier>(mods);
+        display->sendSpecialKey(vtkey, vtmods);
+    }
+}
+
+// Read pending output (what user typed, to send to shell)
+EMSCRIPTEN_KEEPALIVE
+int yetty_read_input(char* buffer, int maxlen)
+{
+    auto* display = yetty::WebDisplay::instance();
+    if (display && buffer && maxlen > 0) {
+        return display->readOutput(buffer, maxlen);
+    }
+    return 0;
+}
+
+// Force sync display
+EMSCRIPTEN_KEEPALIVE
+void yetty_sync()
+{
+    auto* display = yetty::WebDisplay::instance();
+    if (display) {
+        display->syncToGrid();
+    }
+}
+
+} // extern "C"
 
 #endif // YETTY_WEB

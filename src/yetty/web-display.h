@@ -8,16 +8,21 @@
 #include "grid.h"
 #include "grid-renderer.h"
 
+extern "C" {
+#include <vterm.h>
+}
+
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace yetty {
 
 //=============================================================================
-// WebDisplay - Simple Renderable for web builds that displays a Grid
+// WebDisplay - Terminal Renderable for web builds with vterm emulation
 //
-// This is a simplified version of Terminal that doesn't need PTY/libuv.
-// It can be used to display static content or content fed from JavaScript.
+// This provides full terminal emulation via libvterm, with input/output
+// bridged to JavaScript for integration with Toybox shell.
 //=============================================================================
 
 class WebDisplay : public Renderable {
@@ -28,7 +33,7 @@ public:
     static Result<Ptr> create(uint32_t id, uint32_t cols, uint32_t rows,
                               WebGPUContext::Ptr ctx, FontManager::Ptr fontManager) noexcept;
 
-    ~WebDisplay() override = default;
+    ~WebDisplay() override;
 
     // Non-copyable
     WebDisplay(const WebDisplay&) = delete;
@@ -48,8 +53,19 @@ public:
     Result<void> render(WebGPUContext& ctx) override;
 
     //=========================================================================
-    // WebDisplay-specific interface
+    // Terminal emulation interface
     //=========================================================================
+
+    // Write data to terminal (from shell output)
+    void write(const char* data, size_t len);
+    void write(const std::string& str) { write(str.c_str(), str.size()); }
+
+    // Send keyboard input (returns data to send to shell)
+    void sendKey(uint32_t codepoint);
+    void sendSpecialKey(VTermKey key, VTermModifier mod = VTERM_MOD_NONE);
+
+    // Read pending output (what to send to shell after keyboard input)
+    size_t readOutput(char* buffer, size_t maxlen);
 
     // Grid access
     Grid& grid() { return grid_; }
@@ -67,10 +83,23 @@ public:
     // Cell size for scaling
     void setCellSize(float width, float height);
 
+    // Sync vterm state to grid
+    void syncToGrid();
+
+    // Static instance accessor (for C callbacks)
+    static WebDisplay* instance() { return s_instance; }
+
 private:
     WebDisplay(uint32_t id, uint32_t cols, uint32_t rows,
                WebGPUContext::Ptr ctx, FontManager::Ptr fontManager) noexcept;
     Result<void> init() noexcept;
+
+    // vterm callbacks
+    static int onDamage(VTermRect rect, void* user);
+    static int onMoveCursor(VTermPos pos, VTermPos oldpos, int visible, void* user);
+    static int onSetTermProp(VTermProp prop, VTermValue* val, void* user);
+
+    void colorToRGB(const VTermColor& color, uint8_t& r, uint8_t& g, uint8_t& b);
 
     // Identity
     uint32_t id_;
@@ -85,6 +114,11 @@ private:
     WebGPUContext::Ptr ctx_;
     FontManager::Ptr fontManager_;
 
+    // vterm state
+    VTerm* vterm_ = nullptr;
+    VTermScreen* vtermScreen_ = nullptr;
+    bool needsSync_ = true;
+
     // Cursor
     int cursorCol_ = 0;
     int cursorRow_ = 0;
@@ -92,6 +126,8 @@ private:
 
     uint32_t cols_;
     uint32_t rows_;
+
+    static WebDisplay* s_instance;
 };
 
 } // namespace yetty

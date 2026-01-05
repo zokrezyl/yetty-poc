@@ -45,9 +45,9 @@ using WGPUShaderSourceWGSL = WGPUShaderModuleWGSLDescriptor;
 // Shader code: in v27 it's WGPUStringView
 #define WGPU_SHADER_CODE(desc, src) (desc).code = { .data = (src).c_str(), .length = (src).size() }
 
-// Render pass color attachment uses clearColor in v27
+// Render pass color attachment uses clearValue in v27
 #define WGPU_COLOR_ATTACHMENT_CLEAR(attachment, r, g, b, a) \
-    (attachment).clearColor = {(r), (g), (b), (a)}
+    (attachment).clearValue = {(r), (g), (b), (a)}
 
 // Mipmap filter
 #define WGPU_MIPMAP_FILTER_LINEAR WGPUMipmapFilterMode_Linear
