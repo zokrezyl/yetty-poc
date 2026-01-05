@@ -3,8 +3,10 @@
 #include <yetty/webgpu-context.h>
 #include <yetty/wgpu-compat.h>
 #include <spdlog/spdlog.h>
+#include <yaml-cpp/yaml.h>
 #include <cstring>
 #include <cmath>
+#include <sstream>
 
 namespace yetty {
 
@@ -74,21 +76,41 @@ Result<void> ThorvgLayer::init(const std::string& payload) {
 
     _payload = payload;
     
-    // Detect mime type from payload
+    std::string content = payload;
     std::string mimeType;
     
-    // Check for Lottie JSON (starts with { or whitespace + {)
-    size_t start = payload.find_first_not_of(" \t\n\r");
-    if (start != std::string::npos && payload[start] == '{') {
-        mimeType = "lottie";
+    // Check for type prefix (format: "type\n<content>")
+    size_t newlinePos = payload.find('\n');
+    if (newlinePos != std::string::npos && newlinePos < 20) {
+        std::string prefix = payload.substr(0, newlinePos);
+        if (prefix == "svg" || prefix == "lottie" || prefix == "yaml") {
+            mimeType = prefix;
+            content = payload.substr(newlinePos + 1);
+        }
     }
-    // Check for SVG (contains <svg or <?xml ... <svg)
-    else if (payload.find("<svg") != std::string::npos || 
-             (payload.find("<?xml") != std::string::npos && payload.find("<svg") != std::string::npos)) {
+    
+    // If no prefix, auto-detect from content
+    if (mimeType.empty()) {
+        size_t start = content.find_first_not_of(" \t\n\r");
+        if (start != std::string::npos && content[start] == '{') {
+            mimeType = "lottie";
+        } else if (content.find("<svg") != std::string::npos || 
+                   (content.find("<?xml") != std::string::npos && content.find("<svg") != std::string::npos)) {
+            mimeType = "svg";
+        }
+    }
+    
+    // Handle YAML vector graphics by converting to SVG
+    if (mimeType == "yaml") {
+        auto result = yamlToSvg(content);
+        if (!result) {
+            return Err<void>("Failed to convert YAML to SVG", result);
+        }
+        content = *result;
         mimeType = "svg";
     }
 
-    auto result = loadContent(payload, mimeType);
+    auto result = loadContent(content, mimeType);
     if (!result) {
         return result;
     }
@@ -178,7 +200,7 @@ Result<void> ThorvgLayer::initWebGPU(WebGPUContext& ctx) {
     WGPUInstance instance = ctx.getInstance();
     
     // Create render texture that ThorVG will render to
-    // ThorVG's WgCanvas needs RGBA8Unorm format with specific usage flags
+    // ThorVG's WgCanvas internal blit pipeline uses BGRA8Unorm format
     WGPUTextureDescriptor texDesc = {};
     texDesc.size.width = _content_width;
     texDesc.size.height = _content_height;
@@ -186,7 +208,7 @@ Result<void> ThorvgLayer::initWebGPU(WebGPUContext& ctx) {
     texDesc.mipLevelCount = 1;
     texDesc.sampleCount = 1;
     texDesc.dimension = WGPUTextureDimension_2D;
-    texDesc.format = WGPUTextureFormat_RGBA8Unorm;
+    texDesc.format = WGPUTextureFormat_BGRA8Unorm;  // Must match ThorVG's internal blit pipeline
     // ThorVG needs RenderAttachment for drawing, we need TextureBinding for compositing
     texDesc.usage = WGPUTextureUsage_RenderAttachment | WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopySrc;
 
@@ -195,7 +217,7 @@ Result<void> ThorvgLayer::initWebGPU(WebGPUContext& ctx) {
 
     // Create texture view for our composite shader
     WGPUTextureViewDescriptor viewDesc = {};
-    viewDesc.format = WGPUTextureFormat_RGBA8Unorm;
+    viewDesc.format = WGPUTextureFormat_BGRA8Unorm;
     viewDesc.dimension = WGPUTextureViewDimension_2D;
     viewDesc.mipLevelCount = 1;
     viewDesc.arrayLayerCount = 1;
@@ -348,20 +370,76 @@ struct VertexOutput { @builtin(position) position: vec4<f32>, @location(0) uv: v
     return Ok();
 }
 
-void ThorvgLayer::renderThorvgFrame() {
-    if (!_canvas || !_picture) return;
+// Error scope callback data for ThorVG rendering
+struct ThorvgErrorData {
+    bool hasError = false;
+    std::string message;
+};
+
+static void thorvgErrorCallback(WGPUPopErrorScopeStatus status, WGPUErrorType type, 
+                                 WGPUStringView message, void* userdata1, void* userdata2) {
+    (void)userdata2;
+    ThorvgErrorData* data = static_cast<ThorvgErrorData*>(userdata1);
+    if (status != WGPUPopErrorScopeStatus_Success || type != WGPUErrorType_NoError) {
+        data->hasError = true;
+        data->message = message.data ? std::string(message.data, message.length) : "unknown WebGPU error";
+        spdlog::error("ThorvgLayer WebGPU error (type={}): {}", static_cast<int>(type), data->message);
+    }
+}
+
+Result<void> ThorvgLayer::renderThorvgFrame(WGPUDevice device) {
+    if (!_canvas || !_picture) return Ok();  // Nothing to render is not an error
 
     // Update animation frame if animated
     if (_is_animated && _animation) {
         _animation->frame(_current_frame);
     }
 
+    // Push error scope to catch validation errors before they panic
+    wgpuDevicePushErrorScope(device, WGPUErrorFilter_Validation);
+    
     // Render using ThorVG's WebGPU canvas
-    _canvas->update();
-    _canvas->draw();
-    _canvas->sync();
+    auto updateResult = _canvas->update();
+    if (updateResult != tvg::Result::Success) {
+        // Pop and discard error scope
+        WGPUPopErrorScopeCallbackInfo cbInfo = {};
+        cbInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+        cbInfo.callback = nullptr;
+        wgpuDevicePopErrorScope(device, cbInfo);
+        return Err<void>("ThorVG canvas update failed");
+    }
+    
+    auto drawResult = _canvas->draw();
+    if (drawResult != tvg::Result::Success) {
+        // Pop and discard error scope
+        WGPUPopErrorScopeCallbackInfo cbInfo = {};
+        cbInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+        cbInfo.callback = nullptr;
+        wgpuDevicePopErrorScope(device, cbInfo);
+        return Err<void>("ThorVG canvas draw failed");
+    }
+    
+    // sync() submits WebGPU commands - this is where validation errors occur
+    auto syncResult = _canvas->sync();
+    
+    // Pop error scope and check for WebGPU errors
+    ThorvgErrorData errorData;
+    WGPUPopErrorScopeCallbackInfo cbInfo = {};
+    cbInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+    cbInfo.callback = thorvgErrorCallback;
+    cbInfo.userdata1 = &errorData;
+    wgpuDevicePopErrorScope(device, cbInfo);
+    
+    if (errorData.hasError) {
+        return Err<void>("ThorVG WebGPU sync error: " + errorData.message);
+    }
+    
+    if (syncResult != tvg::Result::Success) {
+        return Err<void>("ThorVG canvas sync failed");
+    }
     
     _content_dirty = false;
+    return Ok();
 }
 
 void ThorvgLayer::setFrame(float frame) {
@@ -376,6 +454,205 @@ void ThorvgLayer::setFrame(float frame) {
     }
     
     _content_dirty = true;
+}
+
+//-----------------------------------------------------------------------------
+// YAML to SVG Conversion
+// Converts simple YAML vector graphics definitions to SVG format
+//-----------------------------------------------------------------------------
+
+Result<std::string> ThorvgLayer::yamlToSvg(const std::string& yamlContent) {
+    try {
+        YAML::Node root = YAML::Load(yamlContent);
+        
+        // Default canvas size
+        int width = 800;
+        int height = 600;
+        std::string bgColor = "none";
+        
+        // Check for canvas settings at root
+        if (root["canvas"]) {
+            if (root["canvas"]["width"]) width = root["canvas"]["width"].as<int>();
+            if (root["canvas"]["height"]) height = root["canvas"]["height"].as<int>();
+            if (root["canvas"]["background"]) bgColor = root["canvas"]["background"].as<std::string>();
+        }
+        
+        std::ostringstream svg;
+        svg << R"(<?xml version="1.0" encoding="UTF-8"?>)" << "\n";
+        svg << R"(<svg xmlns="http://www.w3.org/2000/svg" width=")" << width 
+            << R"(" height=")" << height << R"(" viewBox="0 0 )" << width << " " << height << R"(">)" << "\n";
+        
+        // Background
+        if (bgColor != "none") {
+            svg << R"(  <rect width="100%" height="100%" fill=")" << bgColor << R"("/>)" << "\n";
+        }
+        
+        // Process shapes - find 'body' or 'shapes' array
+        YAML::Node shapes;
+        if (root["body"]) {
+            shapes = root["body"];
+        } else if (root["shapes"]) {
+            shapes = root["shapes"];
+        } else if (root.IsSequence()) {
+            // Root is directly a sequence of shapes
+            shapes = root;
+        }
+        
+        if (shapes && shapes.IsSequence()) {
+            for (const auto& shape : shapes) {
+                // Circle
+                if (shape["circle"]) {
+                    auto c = shape["circle"];
+                    float cx = c["cx"] ? c["cx"].as<float>() : (c["x"] ? c["x"].as<float>() : 0);
+                    float cy = c["cy"] ? c["cy"].as<float>() : (c["y"] ? c["y"].as<float>() : 0);
+                    float r = c["r"] ? c["r"].as<float>() : (c["radius"] ? c["radius"].as<float>() : 10);
+                    std::string fill = c["fill"] ? c["fill"].as<std::string>() : "#000000";
+                    std::string stroke = c["stroke"] ? c["stroke"].as<std::string>() : "none";
+                    float strokeWidth = c["stroke-width"] ? c["stroke-width"].as<float>() : 1;
+                    float opacity = c["opacity"] ? c["opacity"].as<float>() : 1.0f;
+                    
+                    svg << R"(  <circle cx=")" << cx << R"(" cy=")" << cy 
+                        << R"(" r=")" << r << R"(" fill=")" << fill
+                        << R"(" stroke=")" << stroke << R"(" stroke-width=")" << strokeWidth
+                        << R"(" opacity=")" << opacity << R"("/>)" << "\n";
+                }
+                // Rectangle
+                else if (shape["rect"]) {
+                    auto c = shape["rect"];
+                    float x = c["x"] ? c["x"].as<float>() : 0;
+                    float y = c["y"] ? c["y"].as<float>() : 0;
+                    float w = c["width"] ? c["width"].as<float>() : (c["w"] ? c["w"].as<float>() : 50);
+                    float h = c["height"] ? c["height"].as<float>() : (c["h"] ? c["h"].as<float>() : 50);
+                    float rx = c["rx"] ? c["rx"].as<float>() : (c["round"] ? c["round"].as<float>() : 0);
+                    float ry = c["ry"] ? c["ry"].as<float>() : rx;
+                    std::string fill = c["fill"] ? c["fill"].as<std::string>() : "#000000";
+                    std::string stroke = c["stroke"] ? c["stroke"].as<std::string>() : "none";
+                    float strokeWidth = c["stroke-width"] ? c["stroke-width"].as<float>() : 1;
+                    float opacity = c["opacity"] ? c["opacity"].as<float>() : 1.0f;
+                    
+                    svg << R"(  <rect x=")" << x << R"(" y=")" << y 
+                        << R"(" width=")" << w << R"(" height=")" << h
+                        << R"(" rx=")" << rx << R"(" ry=")" << ry
+                        << R"(" fill=")" << fill << R"(" stroke=")" << stroke 
+                        << R"(" stroke-width=")" << strokeWidth
+                        << R"(" opacity=")" << opacity << R"("/>)" << "\n";
+                }
+                // Line
+                else if (shape["line"]) {
+                    auto c = shape["line"];
+                    float x1 = c["x1"] ? c["x1"].as<float>() : 0;
+                    float y1 = c["y1"] ? c["y1"].as<float>() : 0;
+                    float x2 = c["x2"] ? c["x2"].as<float>() : 100;
+                    float y2 = c["y2"] ? c["y2"].as<float>() : 100;
+                    std::string stroke = c["stroke"] ? c["stroke"].as<std::string>() : "#000000";
+                    float strokeWidth = c["stroke-width"] ? c["stroke-width"].as<float>() : 1;
+                    float opacity = c["opacity"] ? c["opacity"].as<float>() : 1.0f;
+                    
+                    svg << R"(  <line x1=")" << x1 << R"(" y1=")" << y1
+                        << R"(" x2=")" << x2 << R"(" y2=")" << y2
+                        << R"(" stroke=")" << stroke << R"(" stroke-width=")" << strokeWidth
+                        << R"(" opacity=")" << opacity << R"("/>)" << "\n";
+                }
+                // Ellipse
+                else if (shape["ellipse"]) {
+                    auto c = shape["ellipse"];
+                    float cx = c["cx"] ? c["cx"].as<float>() : (c["x"] ? c["x"].as<float>() : 0);
+                    float cy = c["cy"] ? c["cy"].as<float>() : (c["y"] ? c["y"].as<float>() : 0);
+                    float rx = c["rx"] ? c["rx"].as<float>() : 20;
+                    float ry = c["ry"] ? c["ry"].as<float>() : 10;
+                    std::string fill = c["fill"] ? c["fill"].as<std::string>() : "#000000";
+                    std::string stroke = c["stroke"] ? c["stroke"].as<std::string>() : "none";
+                    float strokeWidth = c["stroke-width"] ? c["stroke-width"].as<float>() : 1;
+                    float opacity = c["opacity"] ? c["opacity"].as<float>() : 1.0f;
+                    
+                    svg << R"(  <ellipse cx=")" << cx << R"(" cy=")" << cy
+                        << R"(" rx=")" << rx << R"(" ry=")" << ry
+                        << R"(" fill=")" << fill << R"(" stroke=")" << stroke
+                        << R"(" stroke-width=")" << strokeWidth
+                        << R"(" opacity=")" << opacity << R"("/>)" << "\n";
+                }
+                // Polygon
+                else if (shape["polygon"]) {
+                    auto c = shape["polygon"];
+                    std::string points;
+                    if (c["points"]) {
+                        if (c["points"].IsSequence()) {
+                            for (size_t i = 0; i < c["points"].size(); i += 2) {
+                                if (i > 0) points += " ";
+                                points += std::to_string(c["points"][i].as<float>()) + "," +
+                                         std::to_string(c["points"][i+1].as<float>());
+                            }
+                        } else {
+                            points = c["points"].as<std::string>();
+                        }
+                    }
+                    std::string fill = c["fill"] ? c["fill"].as<std::string>() : "#000000";
+                    std::string stroke = c["stroke"] ? c["stroke"].as<std::string>() : "none";
+                    float strokeWidth = c["stroke-width"] ? c["stroke-width"].as<float>() : 1;
+                    float opacity = c["opacity"] ? c["opacity"].as<float>() : 1.0f;
+                    
+                    svg << R"(  <polygon points=")" << points
+                        << R"(" fill=")" << fill << R"(" stroke=")" << stroke
+                        << R"(" stroke-width=")" << strokeWidth
+                        << R"(" opacity=")" << opacity << R"("/>)" << "\n";
+                }
+                // Path
+                else if (shape["path"]) {
+                    auto c = shape["path"];
+                    std::string d = c["d"] ? c["d"].as<std::string>() : "";
+                    std::string fill = c["fill"] ? c["fill"].as<std::string>() : "none";
+                    std::string stroke = c["stroke"] ? c["stroke"].as<std::string>() : "#000000";
+                    float strokeWidth = c["stroke-width"] ? c["stroke-width"].as<float>() : 1;
+                    float opacity = c["opacity"] ? c["opacity"].as<float>() : 1.0f;
+                    
+                    svg << R"(  <path d=")" << d
+                        << R"(" fill=")" << fill << R"(" stroke=")" << stroke
+                        << R"(" stroke-width=")" << strokeWidth
+                        << R"(" opacity=")" << opacity << R"("/>)" << "\n";
+                }
+                // Text
+                else if (shape["text"]) {
+                    auto c = shape["text"];
+                    float x = c["x"] ? c["x"].as<float>() : 0;
+                    float y = c["y"] ? c["y"].as<float>() : 0;
+                    std::string content = c["content"] ? c["content"].as<std::string>() : "";
+                    std::string fill = c["fill"] ? c["fill"].as<std::string>() : "#000000";
+                    float fontSize = c["font-size"] ? c["font-size"].as<float>() : 16;
+                    std::string fontFamily = c["font-family"] ? c["font-family"].as<std::string>() : "sans-serif";
+                    std::string anchor = c["text-anchor"] ? c["text-anchor"].as<std::string>() : "start";
+                    float opacity = c["opacity"] ? c["opacity"].as<float>() : 1.0f;
+                    
+                    svg << R"(  <text x=")" << x << R"(" y=")" << y
+                        << R"(" fill=")" << fill << R"(" font-size=")" << fontSize
+                        << R"(" font-family=")" << fontFamily << R"(" text-anchor=")" << anchor
+                        << R"(" opacity=")" << opacity << R"(">)" << content << R"(</text>)" << "\n";
+                }
+                // Group
+                else if (shape["group"] || shape["g"]) {
+                    auto c = shape["group"] ? shape["group"] : shape["g"];
+                    std::string transform = c["transform"] ? c["transform"].as<std::string>() : "";
+                    float opacity = c["opacity"] ? c["opacity"].as<float>() : 1.0f;
+                    
+                    svg << R"(  <g)";
+                    if (!transform.empty()) svg << R"( transform=")" << transform << R"(")";
+                    if (opacity < 1.0f) svg << R"( opacity=")" << opacity << R"(")";
+                    svg << R"(>)" << "\n";
+                    // TODO: recursively process children
+                    svg << R"(  </g>)" << "\n";
+                }
+            }
+        }
+        
+        svg << R"(</svg>)" << "\n";
+        
+        spdlog::debug("ThorvgLayer: converted YAML to SVG ({} bytes)", svg.str().size());
+        return Ok(svg.str());
+        
+    } catch (const YAML::Exception& e) {
+        return Err<std::string>(std::string("YAML parse error: ") + e.what());
+    } catch (const std::exception& e) {
+        return Err<std::string>(std::string("Error converting YAML to SVG: ") + e.what());
+    }
 }
 
 Result<void> ThorvgLayer::dispose() {
@@ -448,7 +725,11 @@ Result<void> ThorvgLayer::render(WebGPUContext& ctx) {
 
     // Render ThorVG content if dirty
     if (_content_dirty) {
-        renderThorvgFrame();
+        auto renderResult = renderThorvgFrame(ctx.getDevice());
+        if (!renderResult) {
+            _failed = true;
+            return Err<void>("ThorvgLayer render failed", renderResult);
+        }
     }
 
     if (!_composite_pipeline || !_uniform_buffer || !_bind_group) {
@@ -581,7 +862,12 @@ bool ThorvgLayer::renderToPass(WGPURenderPassEncoder pass, WebGPUContext& ctx) {
 
     // Render ThorVG content if dirty (animation frame changed)
     if (_content_dirty) {
-        renderThorvgFrame();
+        auto renderResult = renderThorvgFrame(ctx.getDevice());
+        if (!renderResult) {
+            spdlog::error("ThorvgLayer::renderToPass: {}", renderResult.error().message());
+            _failed = true;
+            return false;
+        }
     }
 
     if (!_composite_pipeline || !_uniform_buffer || !_bind_group) {

@@ -66,7 +66,8 @@ private:
     Result<void> loadContent(const std::string& data, const std::string& mimeType = "");
     Result<void> initWebGPU(WebGPUContext& ctx);
     Result<void> createCompositePipeline(WebGPUContext& ctx, WGPUTextureFormat targetFormat);
-    void renderThorvgFrame();
+    Result<void> renderThorvgFrame(WGPUDevice device);
+    Result<std::string> yamlToSvg(const std::string& yamlContent);
 
     // ThorVG objects - using WebGPU canvas
     std::unique_ptr<tvg::WgCanvas> _canvas;
