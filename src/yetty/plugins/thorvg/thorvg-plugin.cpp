@@ -294,6 +294,7 @@ Result<void> ThorvgLayer::createCompositePipeline(WebGPUContext& ctx, WGPUTextur
     if (!_uniform_buffer) return Err<void>("Failed to create uniform buffer");
 
     // Composite shader - renders ThorVG output texture as a quad
+    // ThorVG WebGPU outputs ABGR into a BGRA texture, so swizzle to RGBA
     const char* shaderCode = R"(
 struct Uniforms { rect: vec4<f32>, }
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -309,9 +310,9 @@ struct VertexOutput { @builtin(position) position: vec4<f32>, @location(0) uv: v
     return o;
 }
 @fragment fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
-    let col = textureSample(tex, texSampler, uv);
-    // DEBUG: Mix texture with magenta to see if quad is drawing
-    return mix(vec4(1.0, 0.0, 1.0, 1.0), col, col.a);
+    let c = textureSample(tex, texSampler, uv);
+    // ThorVG writes ABGR; BGRA view yields c = (B=A, G=B, R=G, A=R). Swizzle back to RGBA.
+    return vec4(c.a, c.r, c.g, c.b);
 }
 )";
 
@@ -448,7 +449,33 @@ Result<void> ThorvgLayer::renderThorvgFrame(WGPUDevice device) {
     }
     
     _content_dirty = false;
-    spdlog::info("ThorvgLayer::renderThorvgFrame: completed successfully");
+    
+    // Recreate texture view to ensure fresh GPU state after ThorVG render
+    if (_render_texture_view) {
+        wgpuTextureViewRelease(_render_texture_view);
+    }
+    WGPUTextureViewDescriptor viewDesc = {};
+    viewDesc.format = WGPUTextureFormat_BGRA8Unorm;
+    viewDesc.dimension = WGPUTextureViewDimension_2D;
+    viewDesc.mipLevelCount = 1;
+    viewDesc.arrayLayerCount = 1;
+    _render_texture_view = wgpuTextureCreateView(_render_texture, &viewDesc);
+    
+    // Recreate bind group with fresh texture view
+    if (_bind_group) {
+        wgpuBindGroupRelease(_bind_group);
+    }
+    WGPUBindGroupEntry bgE[3] = {};
+    bgE[0].binding = 0; bgE[0].buffer = _uniform_buffer; bgE[0].size = 16;
+    bgE[1].binding = 1; bgE[1].sampler = _sampler;
+    bgE[2].binding = 2; bgE[2].textureView = _render_texture_view;
+    WGPUBindGroupDescriptor bgDesc = {};
+    bgDesc.layout = wgpuRenderPipelineGetBindGroupLayout(_composite_pipeline, 0);
+    bgDesc.entryCount = 3;
+    bgDesc.entries = bgE;
+    _bind_group = wgpuDeviceCreateBindGroup(device, &bgDesc);
+    
+    spdlog::info("ThorvgLayer::renderThorvgFrame: completed successfully, recreated view/bindgroup");
     return Ok();
 }
 
