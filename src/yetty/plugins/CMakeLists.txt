@@ -54,3 +54,96 @@ add_yetty_plugin(image
 add_yetty_plugin(markdown
     SOURCES markdown/markdown.cpp
 )
+
+#-----------------------------------------------------------------------------
+# ThorVG plugin - Vector graphics (SVG, Lottie animations)
+#-----------------------------------------------------------------------------
+# Download ThorVG from GitHub release for reproducible builds
+CPMAddPackage(
+    NAME thorvg
+    URL https://github.com/thorvg/thorvg/archive/refs/tags/v1.0-pre34.tar.gz
+    DOWNLOAD_ONLY YES
+)
+
+if(thorvg_ADDED)
+    # Build ThorVG as a static library from source files
+    # We use WebGPU renderer for direct GPU rendering integration with yetty
+    
+    # Collect ThorVG source files using GLOB
+    file(GLOB THORVG_COMMON_SOURCES
+        ${thorvg_SOURCE_DIR}/src/common/*.cpp
+    )
+    
+    file(GLOB THORVG_RENDERER_SOURCES
+        ${thorvg_SOURCE_DIR}/src/renderer/*.cpp
+    )
+    
+    # WebGPU engine for native WebGPU rendering
+    file(GLOB THORVG_WG_ENGINE_SOURCES
+        ${thorvg_SOURCE_DIR}/src/renderer/wg_engine/*.cpp
+    )
+    
+    file(GLOB THORVG_SVG_LOADER_SOURCES
+        ${thorvg_SOURCE_DIR}/src/loaders/svg/*.cpp
+    )
+    
+    file(GLOB THORVG_LOTTIE_LOADER_SOURCES
+        ${thorvg_SOURCE_DIR}/src/loaders/lottie/*.cpp
+    )
+    
+    file(GLOB THORVG_RAW_LOADER_SOURCES
+        ${thorvg_SOURCE_DIR}/src/loaders/raw/*.cpp
+    )
+    
+    set(THORVG_SOURCES
+        ${THORVG_COMMON_SOURCES}
+        ${THORVG_RENDERER_SOURCES}
+        ${THORVG_WG_ENGINE_SOURCES}
+        ${THORVG_SVG_LOADER_SOURCES}
+        ${THORVG_LOTTIE_LOADER_SOURCES}
+        ${THORVG_RAW_LOADER_SOURCES}
+    )
+    
+    # Create thorvg library
+    add_library(thorvg_lib STATIC ${THORVG_SOURCES})
+    
+    target_include_directories(thorvg_lib PUBLIC
+        ${thorvg_SOURCE_DIR}/inc
+    )
+    
+    target_include_directories(thorvg_lib PRIVATE
+        ${thorvg_SOURCE_DIR}/src/common
+        ${thorvg_SOURCE_DIR}/src/renderer
+        ${thorvg_SOURCE_DIR}/src/renderer/wg_engine
+        ${thorvg_SOURCE_DIR}/src/loaders/svg
+        ${thorvg_SOURCE_DIR}/src/loaders/lottie
+        ${thorvg_SOURCE_DIR}/src/loaders/lottie/rapidjson
+        ${thorvg_SOURCE_DIR}/src/loaders/raw
+    )
+    
+    # ThorVG configuration defines - using WebGPU renderer
+    target_compile_definitions(thorvg_lib PRIVATE
+        TVG_STATIC
+        THORVG_WG_RASTER_SUPPORT
+        THORVG_SVG_LOADER_SUPPORT
+        THORVG_LOTTIE_LOADER_SUPPORT
+    )
+    
+    # Link with WebGPU library (provided by yetty_core)
+    target_link_libraries(thorvg_lib PRIVATE webgpu)
+    
+    # Suppress warnings in third-party code
+    target_compile_options(thorvg_lib PRIVATE -w)
+    
+    # Enable PIC for shared library plugin
+    set_target_properties(thorvg_lib PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    
+    # Create the thorvg plugin
+    add_yetty_plugin(thorvg
+        SOURCES thorvg/thorvg-plugin.cpp
+        LIBS thorvg_lib
+        INCLUDES ${thorvg_SOURCE_DIR}/inc
+    )
+    
+    message(STATUS "ThorVG plugin: enabled (v1.0-pre34)")
+endif()
