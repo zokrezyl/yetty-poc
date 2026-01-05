@@ -15,7 +15,9 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image_write.h>
 
+#if !YETTY_USE_PREBUILT_ATLAS
 #include <lz4.h>
+#endif
 
 #include <iostream>
 #include <fstream>
@@ -1486,45 +1488,72 @@ glm::vec2 parseVec2(const std::string& s) {
 } // anonymous namespace
 
 bool Font::loadAtlas(const std::string& atlasPath, const std::string& metricsPath) {
-    // Load LZ4 compressed atlas
-    std::ifstream atlasFile(atlasPath, std::ios::binary | std::ios::ate);
-    if (!atlasFile) {
-        std::cerr << "Failed to open atlas file: " << atlasPath << std::endl;
+    // Detect format based on file extension
+    bool isPng = atlasPath.size() >= 4 &&
+                 (atlasPath.substr(atlasPath.size() - 4) == ".png" ||
+                  atlasPath.substr(atlasPath.size() - 4) == ".PNG");
+
+    if (isPng) {
+        // Load PNG atlas using stb_image
+        int width, height, channels;
+        unsigned char* data = stbi_load(atlasPath.c_str(), &width, &height, &channels, 4);
+        if (!data) {
+            std::cerr << "Failed to load PNG atlas: " << atlasPath << std::endl;
+            return false;
+        }
+
+        _atlasWidth = static_cast<uint32_t>(width);
+        _atlasHeight = static_cast<uint32_t>(height);
+        _atlasData.resize(width * height * 4);
+        std::memcpy(_atlasData.data(), data, _atlasData.size());
+        stbi_image_free(data);
+    } else {
+#if !YETTY_USE_PREBUILT_ATLAS
+        // Load LZ4 compressed atlas
+        std::ifstream atlasFile(atlasPath, std::ios::binary | std::ios::ate);
+        if (!atlasFile) {
+            std::cerr << "Failed to open atlas file: " << atlasPath << std::endl;
+            return false;
+        }
+
+        const size_t fileSize = atlasFile.tellg();
+        atlasFile.seekg(0, std::ios::beg);
+        (void)fileSize;  // Suppress unused warning
+
+        // Read header: magic, width, height, uncompressed size, compressed size
+        uint32_t magic, uncompressedSize, compressedSize;
+        atlasFile.read(reinterpret_cast<char*>(&magic), sizeof(magic));
+        atlasFile.read(reinterpret_cast<char*>(&_atlasWidth), sizeof(_atlasWidth));
+        atlasFile.read(reinterpret_cast<char*>(&_atlasHeight), sizeof(_atlasHeight));
+        atlasFile.read(reinterpret_cast<char*>(&uncompressedSize), sizeof(uncompressedSize));
+        atlasFile.read(reinterpret_cast<char*>(&compressedSize), sizeof(compressedSize));
+
+        if (magic != 0x344A5A4C) { // "LZ4\0"
+            std::cerr << "Invalid atlas file magic: " << atlasPath << std::endl;
+            return false;
+        }
+
+        // Read compressed data
+        std::vector<char> compressed(compressedSize);
+        atlasFile.read(compressed.data(), compressedSize);
+
+        // Decompress with LZ4
+        _atlasData.resize(uncompressedSize);
+        const int decompressedSize = LZ4_decompress_safe(
+            compressed.data(),
+            reinterpret_cast<char*>(_atlasData.data()),
+            static_cast<int>(compressedSize),
+            static_cast<int>(uncompressedSize)
+        );
+
+        if (decompressedSize < 0 || static_cast<uint32_t>(decompressedSize) != uncompressedSize) {
+            std::cerr << "LZ4 decompression failed: " << atlasPath << std::endl;
+            return false;
+        }
+#else
+        std::cerr << "LZ4 atlas loading not available in prebuilt atlas mode: " << atlasPath << std::endl;
         return false;
-    }
-
-    const size_t fileSize = atlasFile.tellg();
-    atlasFile.seekg(0, std::ios::beg);
-
-    // Read header: magic, width, height, uncompressed size, compressed size
-    uint32_t magic, uncompressedSize, compressedSize;
-    atlasFile.read(reinterpret_cast<char*>(&magic), sizeof(magic));
-    atlasFile.read(reinterpret_cast<char*>(&_atlasWidth), sizeof(_atlasWidth));
-    atlasFile.read(reinterpret_cast<char*>(&_atlasHeight), sizeof(_atlasHeight));
-    atlasFile.read(reinterpret_cast<char*>(&uncompressedSize), sizeof(uncompressedSize));
-    atlasFile.read(reinterpret_cast<char*>(&compressedSize), sizeof(compressedSize));
-
-    if (magic != 0x344A5A4C) { // "LZ4\0"
-        std::cerr << "Invalid atlas file magic: " << atlasPath << std::endl;
-        return false;
-    }
-
-    // Read compressed data
-    std::vector<char> compressed(compressedSize);
-    atlasFile.read(compressed.data(), compressedSize);
-
-    // Decompress with LZ4
-    _atlasData.resize(uncompressedSize);
-    const int decompressedSize = LZ4_decompress_safe(
-        compressed.data(),
-        reinterpret_cast<char*>(_atlasData.data()),
-        static_cast<int>(compressedSize),
-        static_cast<int>(uncompressedSize)
-    );
-
-    if (decompressedSize < 0 || static_cast<uint32_t>(decompressedSize) != uncompressedSize) {
-        std::cerr << "LZ4 decompression failed: " << atlasPath << std::endl;
-        return false;
+#endif
     }
 
     // Load metrics JSON

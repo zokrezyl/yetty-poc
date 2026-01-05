@@ -1,4 +1,4 @@
-#include "yetty/terminal.h" // For DamageRect
+#include "damage-rect.h"  // For DamageRect (separate to avoid libuv on web)
 #include "yetty/grid-renderer.h"
 #include "yetty/config.h"
 #include <cstdlib> // for getenv
