@@ -197,6 +197,11 @@ if(UNIX)
         ${CMAKE_BINARY_DIR}/python/init.py
         COPYONLY
     )
+    configure_file(
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/yetty.py
+        ${CMAKE_BINARY_DIR}/python/yetty.py
+        COPYONLY
+    )
     
     message(STATUS "Python plugin: enabled with static libpython")
 endif()

@@ -5,10 +5,23 @@ This module provides lifecycle hooks for the Python plugin system.
 User scripts should not modify this file.
 """
 
+import os
+
+# Set WGPU_LIB_PATH BEFORE any wgpu/pygfx imports
+# This ensures wgpu-py uses the same wgpu-native library as yetty
+_yetty_wgpu_lib = os.environ.get('YETTY_WGPU_LIB_PATH')
+if _yetty_wgpu_lib:
+    os.environ['WGPU_LIB_PATH'] = _yetty_wgpu_lib
+
+# Force offscreen mode for rendercanvas
+os.environ['RENDERCANVAS_FORCE_OFFSCREEN'] = '1'
+
 import yetty_wgpu
+import yetty
 
 # Global state
 _plugin_initialized = False
+_current_layer_id = 0
 
 
 def init_plugin():
@@ -35,45 +48,69 @@ def init_layer(ctx, width, height):
     """
     Called when a new Python layer is created.
     
-    This is called BEFORE the user script runs, so WebGPU resources
-    are available to the user script.
+    This is called AFTER the user script runs and registers a @yetty.layer class.
     
     Args:
         ctx: Dictionary with WebGPU context info:
             - 'device': WGPUDevice handle (as int)
             - 'queue': WGPUQueue handle (as int)
-            - 'width': Render target width
-            - 'height': Render target height
         width: Layer width in pixels
         height: Layer height in pixels
     """
-    print(f"[yetty] Initializing layer: {width}x{height}")
+    global _current_layer_id
     
-    # Set WebGPU handles for yetty_wgpu module
-    yetty_wgpu.set_handles(
-        device=ctx['device'],
-        queue=ctx['queue']
+    print(f"[yetty] init_layer called: {width}x{height}")
+    
+    # Generate layer ID
+    _current_layer_id += 1
+    layer_id = _current_layer_id
+    
+    # Create layer instance from registered class
+    yetty._create_layer_instance(layer_id)
+    
+    # Initialize the layer
+    yetty._init_layer(
+        layer_id,
+        ctx['device'],
+        ctx['queue'],
+        width,
+        height
     )
     
-    # Create render texture for this layer
-    if not yetty_wgpu.create_render_texture(width, height):
-        raise RuntimeError(f"Failed to create render texture {width}x{height}")
+    print(f"[yetty] Layer {layer_id} initialized: {width}x{height}")
+    return layer_id
+
+
+def render_layer(layer_id, frame, width, height, render_pass_handle):
+    """
+    Called every frame to render a layer.
     
-    print(f"[yetty] Layer initialized: {width}x{height}")
+    Args:
+        layer_id: The layer ID returned from init_layer
+        frame: Frame counter
+        width: Current width
+        height: Current height
+        render_pass_handle: Raw WGPURenderPassEncoder handle from yetty
+    """
+    return yetty._render_layer(layer_id, frame, width, height, render_pass_handle)
 
 
-def dispose_layer():
+def dispose_layer(layer_id):
     """
     Called when a Python layer is destroyed.
     
-    Clean up any layer-specific resources here.
+    Args:
+        layer_id: The layer ID to destroy
     """
-    print("[yetty] Disposing layer...")
+    print(f"[yetty] Disposing layer {layer_id}...")
     
-    # Cleanup yetty_wgpu resources
-    yetty_wgpu.cleanup()
+    yetty._destroy_layer(layer_id)
     
-    print("[yetty] Layer disposed")
+    # Cleanup yetty_wgpu resources if no more layers
+    if not yetty._layer_instances:
+        yetty_wgpu.cleanup()
+    
+    print(f"[yetty] Layer {layer_id} disposed")
 
 
 def dispose_plugin():
@@ -86,7 +123,9 @@ def dispose_plugin():
     
     print("[yetty] Python plugin disposing...")
     
-    # Global cleanup goes here
+    # Destroy all remaining layers
+    for layer_id in list(yetty._layer_instances.keys()):
+        dispose_layer(layer_id)
     
     _plugin_initialized = False
     print("[yetty] Python plugin disposed")

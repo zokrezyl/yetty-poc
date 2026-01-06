@@ -556,6 +556,31 @@ else()
         enable_testing()
         add_subdirectory(test/ut)
     endif()
+
+    #-------------------------------------------------------------------------
+    # Plugin tester (desktop only)
+    #-------------------------------------------------------------------------
+    add_executable(yetty-plugin-tester
+        src/yetty/tester/main.cpp
+        src/yetty/webgpu-context.cpp
+    )
+    target_include_directories(yetty-plugin-tester PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_compile_definitions(yetty-plugin-tester PRIVATE
+        CMAKE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+        CMAKE_BINARY_DIR="${CMAKE_CURRENT_BINARY_DIR}"
+    )
+    target_link_libraries(yetty-plugin-tester PRIVATE
+        webgpu
+        glfw
+        glfw3webgpu
+        glm::glm
+        spdlog::spdlog
+        args
+        ${CMAKE_DL_LIBS}
+    )
 endif()
 
 

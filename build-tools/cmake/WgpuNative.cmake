@@ -16,7 +16,7 @@
 
 include(FetchContent)
 
-set(WGPU_VERSION "27.0.4.0" CACHE STRING "wgpu-native version to use")
+set(WGPU_VERSION "27.0.2.0" CACHE STRING "wgpu-native version to use")
 
 # Determine platform and download URL
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")

@@ -1,51 +1,25 @@
-"""
-Fastplotlib demo for yetty
-"""
+"""pygfx demo - orange box rendering to yetty's render pass."""
 import sys
-print("[Demo] Python version:", sys.version)
-print("[Demo] Python executable:", sys.executable)
-print("[Demo] sys.path:", sys.path[:3])
+import yetty
+import pygfx
 
-import numpy as np
-print("[Demo] numpy imported, version:", np.__version__)
-print("[Demo] numpy file:", np.__file__)
-
-import yetty_pygfx
-print("[Demo] yetty_pygfx imported")
-
-print("[Demo] Starting fastplotlib demo...")
-
-# Initialize yetty-pygfx integration
-yetty_pygfx.init()
-print("[Demo] yetty_pygfx initialized")
-
-# Create figure (setup, done once)
-fig = yetty_pygfx.create_figure()
-print(f"[Demo] Figure created: {fig}")
-
-# Create sine wave data
-x = np.linspace(0, 4*np.pi, 500)
-y = np.sin(x)
-
-# Add line plot (using cmap for color)
-line = fig[0, 0].add_line(np.column_stack([x, y]), thickness=8, cmap='hot')
-print(f"[Demo] Line added: {line}")
-
-
-def render(ctx, frame_num, width, height):
-    """
-    Render callback called every frame by yetty.
+@yetty.layer
+class OrangeBoxDemo:
+    def init(self, ctx):
+        from yetty_pygfx import PygfxRenderer
+        self.renderer = PygfxRenderer(ctx)
+        
+        self.scene = pygfx.Scene()
+        self.camera = pygfx.OrthographicCamera(4, 4)
+        self.camera.local.position = (0, 0, 5)
+        
+        geometry = pygfx.box_geometry(3, 3, 0.1)
+        material = pygfx.MeshBasicMaterial(color=(1.0, 0.5, 0.0))
+        self.box = pygfx.Mesh(geometry, material)
+        self.scene.add(self.box)
+        
+        sys.stderr.write("[Demo] Orange box scene created\n")
+        sys.stderr.flush()
     
-    Args:
-        ctx: WebGPU context dict with 'device' and 'queue'
-        frame_num: Current frame number
-        width: Render target width
-        height: Render target height
-    """
-    # THIS is where the actual rendering happens every frame
-    fig.show()
-    yetty_pygfx.render_frame()
-    return True
-
-
-print("[Demo] Render callback defined")
+    def render(self, render_pass, frame, width, height):
+        self.renderer.render(render_pass, self.scene, self.camera)

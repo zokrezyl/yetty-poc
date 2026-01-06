@@ -95,7 +95,7 @@ public:
     
     // Callback management
     bool callInitLayer(WebGPUContext& ctx, uint32_t width, uint32_t height);
-    bool callRender(WebGPUContext& ctx, uint32_t frame_num, uint32_t width, uint32_t height);
+    bool callRender(WGPURenderPassEncoder pass, WebGPUContext& ctx, uint32_t frame_num, uint32_t width, uint32_t height);
     bool callDisposeLayer();
 
 private:
@@ -122,6 +122,9 @@ private:
     
     // User render callback
     PyObject* _user_render_func = nullptr;
+    
+    // Python layer ID (returned from init.init_layer)
+    int _python_layer_id = 0;
 
     // Blit pipeline resources
     WGPURenderPipeline _blit_pipeline = nullptr;
