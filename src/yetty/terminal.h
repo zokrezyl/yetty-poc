@@ -33,11 +33,29 @@ class PluginManager;
 class EmojiAtlas;
 class GridRenderer;
 
+// Scrollback cell style (colors + attrs packed together for RLE)
+struct ScrollbackStyle {
+    uint8_t fgR, fgG, fgB;
+    uint8_t bgR, bgG, bgB;
+    uint16_t attrs;  // packed VTermScreenCellAttrs
+    
+    bool operator==(const ScrollbackStyle& o) const {
+        return fgR == o.fgR && fgG == o.fgG && fgB == o.fgB &&
+               bgR == o.bgR && bgG == o.bgG && bgB == o.bgB &&
+               attrs == o.attrs;
+    }
+};
+
+// RLE run for style (colors + attrs)
+struct StyleRun {
+    ScrollbackStyle style;
+    uint16_t count;
+};
+
 // A single line in the scrollback buffer
 struct ScrollbackLine {
-    std::vector<uint32_t> _chars;
-    std::vector<uint8_t> _fgColors;  // RGB per cell (3 bytes each)
-    std::vector<uint8_t> _bgColors;
+    std::vector<uint32_t> chars;        // one per cell
+    std::vector<StyleRun> styleRuns;    // RLE-compressed styles
 };
 
 // Selection mode for mouse selection

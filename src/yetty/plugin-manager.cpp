@@ -894,9 +894,20 @@ bool PluginManager::onMouseScroll(float xoffset, float yoffset, int mods, float 
     int row = static_cast<int>(pixelY / cellHeight);
     int logicalRow = row - scrollOffset;
 
+    spdlog::debug("PluginManager::onMouseScroll: pixel({:.1f},{:.1f}) -> cell({},{}) logicalRow={} scrollOffset={}", 
+                  pixelX, pixelY, col, row, logicalRow, scrollOffset);
+
     PluginLayerPtr layer = layerAtCell(col, logicalRow, grid);
-    if (layer && layer->wantsMouse()) {
-        return layer->onMouseScroll(xoffset, yoffset, mods);
+    if (layer) {
+        spdlog::debug("PluginManager::onMouseScroll: Found layer '{}' wantsMouse={}", 
+                      layer->name(), layer->wantsMouse());
+        if (layer->wantsMouse()) {
+            bool handled = layer->onMouseScroll(xoffset, yoffset, mods);
+            spdlog::debug("PluginManager::onMouseScroll: Layer handled scroll={}", handled);
+            return handled;
+        }
+    } else {
+        spdlog::debug("PluginManager::onMouseScroll: No layer at cell({},{})", col, logicalRow);
     }
 
     return false;

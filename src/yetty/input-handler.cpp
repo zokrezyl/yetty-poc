@@ -344,17 +344,26 @@ void InputHandler::onScroll(double xoffset, double yoffset) noexcept {
         float cellHeight = _engine->cellHeight();
         int scrollOffset = terminal->getScrollOffset();
 
+        spdlog::debug("onScroll: yoffset={:.2f} ctrlPressed={} mouseX={:.1f} mouseY={:.1f} scrollOffset={}", 
+                      yoffset, ctrlPressed, _mouseX, _mouseY, scrollOffset);
+
         bool consumed = pluginManager->onMouseScroll(
             static_cast<float>(xoffset), static_cast<float>(yoffset), mods,
             static_cast<float>(_mouseX), static_cast<float>(_mouseY),
             &terminal->getGrid(), cellWidth, cellHeight, scrollOffset);
 
-        if (consumed) return;
+        spdlog::debug("onScroll: plugin consumed={}", consumed);
+
+        if (consumed) {
+            spdlog::info("onScroll: Plugin consumed scroll event - NOT scrolling terminal");
+            return;
+        }
     }
 
     // Scroll through scrollback (no Ctrl, not over plugin)
     if (!ctrlPressed && terminal) {
         int lines = static_cast<int>(yoffset * 3);  // 3 lines per scroll notch
+        spdlog::info("onScroll: Scrolling terminal by {} lines", lines);
         if (lines > 0) {
             terminal->scrollUp(lines);
         } else if (lines < 0) {

@@ -171,6 +171,11 @@ Result<void> Terminal::render(WebGPUContext& ctx) {
         return Ok();
     }
 
+    // Re-sync grid when fullDamage is set (e.g., after scrolling)
+    if (fullDamage_) {
+        syncToGrid();
+    }
+
     // Render the grid - GridRenderer handles the clear and draw
     renderer_->render(grid_, damageRects_, fullDamage_,
                       cursorCol_, cursorRow_,
@@ -485,13 +490,20 @@ void Terminal::resize(uint32_t cols, uint32_t rows) {
 
 void Terminal::scrollUp(int lines) {
     std::lock_guard<std::mutex> lock(mutex_);
-    scrollOffset_ = std::min(scrollOffset_ + lines, static_cast<int>(scrollback_.size()));
+    int oldOffset = scrollOffset_;
+    int sbSize = static_cast<int>(scrollback_.size());
+    scrollOffset_ = std::min(scrollOffset_ + lines, sbSize);
+    spdlog::debug("Terminal::scrollUp: lines={}, scrollback_.size()={}, oldOffset={}, newOffset={}", 
+                  lines, sbSize, oldOffset, scrollOffset_);
     fullDamage_ = true;
 }
 
 void Terminal::scrollDown(int lines) {
     std::lock_guard<std::mutex> lock(mutex_);
+    int oldOffset = scrollOffset_;
     scrollOffset_ = std::max(scrollOffset_ - lines, 0);
+    spdlog::debug("Terminal::scrollDown: lines={}, oldOffset={}, newOffset={}", 
+                  lines, oldOffset, scrollOffset_);
     fullDamage_ = true;
 }
 
@@ -624,22 +636,58 @@ void Terminal::syncToGrid() {
             int sbIndex = sbSize + lineIndex;
             if (sbIndex >= 0 && sbIndex < sbSize) {
                 const auto& sbLine = scrollback_[sbIndex];
+                
+                // Decode RLE styles for this line
+                size_t runIdx = 0;
+                int currentRunRemaining = 0;
+                ScrollbackStyle currentStyle = {};
+                if (!sbLine.styleRuns.empty()) {
+                    currentStyle = sbLine.styleRuns[0].style;
+                    currentRunRemaining = sbLine.styleRuns[0].count;
+                }
+                
                 for (uint32_t col = 0; col < cols_; col++) {
-                    uint32_t cp = (col < sbLine._chars.size()) ? sbLine._chars[col] : ' ';
+                    uint32_t cp = (col < sbLine.chars.size()) ? sbLine.chars[col] : ' ';
                     uint8_t fgR = 255, fgG = 255, fgB = 255;
                     uint8_t bgR = 0, bgG = 0, bgB = 0;
-                    if (col < sbLine._chars.size()) {
-                        fgR = sbLine._fgColors[col * 3];
-                        fgG = sbLine._fgColors[col * 3 + 1];
-                        fgB = sbLine._fgColors[col * 3 + 2];
-                        bgR = sbLine._bgColors[col * 3];
-                        bgG = sbLine._bgColors[col * 3 + 1];
-                        bgB = sbLine._bgColors[col * 3 + 2];
+                    
+                    // Get style from RLE
+                    bool isBold = false, isItalic = false, isUnderline = false, isStrike = false, isReverse = false;
+                    if (currentRunRemaining > 0) {
+                        fgR = currentStyle.fgR;
+                        fgG = currentStyle.fgG;
+                        fgB = currentStyle.fgB;
+                        bgR = currentStyle.bgR;
+                        bgG = currentStyle.bgG;
+                        bgB = currentStyle.bgB;
+                        
+                        uint16_t attrs = currentStyle.attrs;
+                        isBold = attrs & 1;
+                        isUnderline = (attrs >> 1) & 3;
+                        isItalic = (attrs >> 3) & 1;
+                        isReverse = (attrs >> 5) & 1;
+                        isStrike = (attrs >> 7) & 1;
+                        
+                        currentRunRemaining--;
+                        if (currentRunRemaining == 0 && runIdx + 1 < sbLine.styleRuns.size()) {
+                            runIdx++;
+                            currentStyle = sbLine.styleRuns[runIdx].style;
+                            currentRunRemaining = sbLine.styleRuns[runIdx].count;
+                        }
                     }
-                    uint16_t gi = font_ ? font_->getGlyphIndex(cp) : static_cast<uint16_t>(cp);
-                    CellAttrs attrs;
-                    attrs._emoji = isEmoji(cp) ? 1 : 0;
-                    grid_.setCell(col, row, gi, fgR, fgG, fgB, bgR, bgG, bgB, attrs);
+                    
+                    if (isReverse) {
+                        std::swap(fgR, bgR); std::swap(fgG, bgG); std::swap(fgB, bgB);
+                    }
+                    
+                    uint16_t gi = font_ ? font_->getGlyphIndex(cp, isBold, isItalic) : static_cast<uint16_t>(cp);
+                    CellAttrs cellAttrs;
+                    cellAttrs._emoji = isEmoji(cp) ? 1 : 0;
+                    cellAttrs._bold = isBold ? 1 : 0;
+                    cellAttrs._italic = isItalic ? 1 : 0;
+                    cellAttrs._underline = isUnderline ? 1 : 0;
+                    cellAttrs._strikethrough = isStrike ? 1 : 0;
+                    grid_.setCell(col, row, gi, fgR, fgG, fgB, bgR, bgG, bgB, cellAttrs);
                 }
             }
         } else {
@@ -799,25 +847,51 @@ int Terminal::onBell(void*) {
 int Terminal::onSbPushline(int cols, const VTermScreenCell* cells, void* user) {
     auto* term = static_cast<Terminal*>(user);
 
+    // Helper to pack attrs into uint16_t
+    auto packAttrs = [](const VTermScreenCellAttrs& a) -> uint16_t {
+        return (a.bold) | (a.underline << 1) | (a.italic << 3) |
+               (a.blink << 4) | (a.reverse << 5) | (a.conceal << 6) |
+               (a.strike << 7) | (a.font << 8) | (a.dwl << 12) |
+               (a.dhl << 13) | (a.small << 15);
+    };
+
     ScrollbackLine line;
-    line._chars.resize(cols);
-    line._fgColors.resize(cols * 3);
-    line._bgColors.resize(cols * 3);
+    line.chars.resize(cols);
+
+    ScrollbackStyle lastStyle = {};
+    uint16_t runCount = 0;
 
     for (int i = 0; i < cols; i++) {
         uint32_t ch = cells[i].chars[0];
         if (ch == 0xFFFFFFFF || ch == static_cast<uint32_t>(-1) || ch == 0) ch = ' ';
-        line._chars[i] = ch;
+        line.chars[i] = ch;
 
         VTermColor fg = cells[i].fg, bg = cells[i].bg;
         vterm_screen_convert_color_to_rgb(term->vtermScreen_, &fg);
         vterm_screen_convert_color_to_rgb(term->vtermScreen_, &bg);
-        line._fgColors[i * 3] = fg.rgb.red;
-        line._fgColors[i * 3 + 1] = fg.rgb.green;
-        line._fgColors[i * 3 + 2] = fg.rgb.blue;
-        line._bgColors[i * 3] = bg.rgb.red;
-        line._bgColors[i * 3 + 1] = bg.rgb.green;
-        line._bgColors[i * 3 + 2] = bg.rgb.blue;
+
+        ScrollbackStyle style;
+        style.fgR = fg.rgb.red;
+        style.fgG = fg.rgb.green;
+        style.fgB = fg.rgb.blue;
+        style.bgR = bg.rgb.red;
+        style.bgG = bg.rgb.green;
+        style.bgB = bg.rgb.blue;
+        style.attrs = packAttrs(cells[i].attrs);
+
+        if (i == 0) {
+            lastStyle = style;
+            runCount = 1;
+        } else if (style == lastStyle && runCount < 65535) {
+            runCount++;
+        } else {
+            line.styleRuns.push_back({lastStyle, runCount});
+            lastStyle = style;
+            runCount = 1;
+        }
+    }
+    if (runCount > 0) {
+        line.styleRuns.push_back({lastStyle, runCount});
     }
 
     term->scrollback_.push_back(std::move(line));
@@ -839,26 +913,68 @@ int Terminal::onSbPopline(int cols, VTermScreenCell* cells, void* user) {
     if (term->scrollback_.empty()) return 0;
 
     auto& line = term->scrollback_.back();
-    int lineCols = std::min(cols, static_cast<int>(line._chars.size()));
+    int lineCols = std::min(cols, static_cast<int>(line.chars.size()));
+
+    // Helper to unpack attrs from uint16_t
+    auto unpackAttrs = [](uint16_t packed, VTermScreenCellAttrs& a) {
+        memset(&a, 0, sizeof(a));
+        a.bold = packed & 1;
+        a.underline = (packed >> 1) & 3;
+        a.italic = (packed >> 3) & 1;
+        a.blink = (packed >> 4) & 1;
+        a.reverse = (packed >> 5) & 1;
+        a.conceal = (packed >> 6) & 1;
+        a.strike = (packed >> 7) & 1;
+        a.font = (packed >> 8) & 0xF;
+        a.dwl = (packed >> 12) & 1;
+        a.dhl = (packed >> 13) & 3;
+        a.small = (packed >> 15) & 1;
+    };
+
+    // Decode RLE styles
+    size_t runIdx = 0;
+    ScrollbackStyle currentStyle = {};
+    int currentRunRemaining = 0;
+    
+    if (!line.styleRuns.empty()) {
+        currentStyle = line.styleRuns[0].style;
+        currentRunRemaining = line.styleRuns[0].count;
+    }
 
     for (int i = 0; i < lineCols; i++) {
-        cells[i].chars[0] = line._chars[i];
+        cells[i].chars[0] = line.chars[i];
         cells[i].chars[1] = 0;
         cells[i].width = 1;
-        cells[i].fg.type = VTERM_COLOR_RGB;
-        cells[i].fg.rgb.red = line._fgColors[i * 3];
-        cells[i].fg.rgb.green = line._fgColors[i * 3 + 1];
-        cells[i].fg.rgb.blue = line._fgColors[i * 3 + 2];
-        cells[i].bg.type = VTERM_COLOR_RGB;
-        cells[i].bg.rgb.red = line._bgColors[i * 3];
-        cells[i].bg.rgb.green = line._bgColors[i * 3 + 1];
-        cells[i].bg.rgb.blue = line._bgColors[i * 3 + 2];
+        
+        if (currentRunRemaining > 0) {
+            unpackAttrs(currentStyle.attrs, cells[i].attrs);
+            cells[i].fg.type = VTERM_COLOR_RGB;
+            cells[i].fg.rgb.red = currentStyle.fgR;
+            cells[i].fg.rgb.green = currentStyle.fgG;
+            cells[i].fg.rgb.blue = currentStyle.fgB;
+            cells[i].bg.type = VTERM_COLOR_RGB;
+            cells[i].bg.rgb.red = currentStyle.bgR;
+            cells[i].bg.rgb.green = currentStyle.bgG;
+            cells[i].bg.rgb.blue = currentStyle.bgB;
+            
+            currentRunRemaining--;
+            if (currentRunRemaining == 0 && runIdx + 1 < line.styleRuns.size()) {
+                runIdx++;
+                currentStyle = line.styleRuns[runIdx].style;
+                currentRunRemaining = line.styleRuns[runIdx].count;
+            }
+        } else {
+            memset(&cells[i].attrs, 0, sizeof(cells[i].attrs));
+            cells[i].fg.type = VTERM_COLOR_DEFAULT_FG;
+            cells[i].bg.type = VTERM_COLOR_DEFAULT_BG;
+        }
     }
 
     for (int i = lineCols; i < cols; i++) {
         cells[i].chars[0] = ' ';
         cells[i].chars[1] = 0;
         cells[i].width = 1;
+        memset(&cells[i].attrs, 0, sizeof(cells[i].attrs));
         cells[i].fg.type = VTERM_COLOR_DEFAULT_FG;
         cells[i].bg.type = VTERM_COLOR_DEFAULT_BG;
     }
