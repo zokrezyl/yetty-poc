@@ -168,6 +168,9 @@ Result<void> Yetty::init(int argc, char *argv[]) noexcept {
     return res;
   }
 
+  // Initialize libuv loop before terminal (terminal uses it)
+  initEventLoop();
+
   // Initialize terminal
   if (auto res = initTerminal(); !res) {
     return res;
@@ -442,7 +445,7 @@ Result<void> Yetty::initTerminal() noexcept {
 #if defined(__ANDROID__)
   // Android: Terminal mode (no plugins)
   auto terminalResult =
-      Terminal::create(nextRenderableId(), _cols, _rows, _font);
+      Terminal::create(nextRenderableId(), _cols, _rows, _font, _uvLoop);
   if (!terminalResult) {
     return Err<void>("Failed to create terminal", terminalResult);
   }
@@ -466,7 +469,7 @@ Result<void> Yetty::initTerminal() noexcept {
 #elif !YETTY_WEB
   // Desktop: Terminal mode with plugins
   auto terminalResult =
-      Terminal::create(nextRenderableId(), _cols, _rows, _font);
+      Terminal::create(nextRenderableId(), _cols, _rows, _font, _uvLoop);
   if (!terminalResult) {
     return Err<void>("Failed to create terminal", terminalResult);
   }
@@ -884,9 +887,6 @@ int Yetty::run() noexcept {
 #else
   std::cout << "Starting render loop... (use mouse scroll to zoom, ESC to exit)"
             << std::endl;
-
-  // Initialize libuv event loop with 50Hz timer
-  initEventLoop();
 
   // Run libuv event loop - blocks until uv_stop() is called
   uv_run(_uvLoop, UV_RUN_DEFAULT);

@@ -51,20 +51,24 @@ static VTermStateFallbacks stateFallbacks = {
 // Factory
 //=============================================================================
 
-Result<Terminal::Ptr> Terminal::create(uint32_t id, uint32_t cols, uint32_t rows, Font* font) noexcept {
+Result<Terminal::Ptr> Terminal::create(uint32_t id, uint32_t cols, uint32_t rows, Font* font, uv_loop_t* loop) noexcept {
     if (!font) {
         return Err<Ptr>("Terminal::create: null Font");
     }
-    auto term = Ptr(new Terminal(id, cols, rows, font));
+    if (!loop) {
+        return Err<Ptr>("Terminal::create: null libuv loop");
+    }
+    auto term = Ptr(new Terminal(id, cols, rows, font, loop));
     if (auto res = term->init(); !res) {
         return Err<Ptr>("Failed to initialize Terminal", res);
     }
     return Ok(std::move(term));
 }
 
-Terminal::Terminal(uint32_t id, uint32_t cols, uint32_t rows, Font* font) noexcept
+Terminal::Terminal(uint32_t id, uint32_t cols, uint32_t rows, Font* font, uv_loop_t* loop) noexcept
     : id_(id)
     , name_("terminal-" + std::to_string(id))
+    , loop_(loop)
     , grid_(cols, rows)
     , font_(font)
     , cols_(cols)
@@ -114,7 +118,7 @@ Terminal::~Terminal() {
 //=============================================================================
 
 void Terminal::start() {
-    if (running_.load()) return;
+    if (running_) return;
 
     // Start shell
     if (auto res = startShell(shell_); !res) {
@@ -122,39 +126,53 @@ void Terminal::start() {
         return;
     }
 
-    running_.store(true);
-    stopRequested_.store(false);
+    running_ = true;
 
-    // Start worker thread
-    workerThread_ = std::thread(&Terminal::workerLoop, this);
+    // Set up cursor blink timer (500ms)
+    cursorTimer_ = new uv_timer_t;
+    uv_timer_init(loop_, cursorTimer_);
+    cursorTimer_->data = this;
+    uv_timer_start(cursorTimer_, onTimer, 500, 500);
+
+#ifndef _WIN32
+    // Set up PTY poll handle on external loop
+    if (ptyMaster_ >= 0) {
+        ptyPoll_ = new uv_poll_t;
+        uv_poll_init(loop_, ptyPoll_, ptyMaster_);
+        ptyPoll_->data = this;
+        uv_poll_start(ptyPoll_, UV_READABLE, onPtyPoll);
+    }
+#endif
 }
 
 void Terminal::stop() {
-    if (!running_.load()) return;
+    if (!running_) return;
 
-    stopRequested_.store(true);
+    running_ = false;
 
-    if (asyncHandle_) {
-        uv_async_send(asyncHandle_);
+#ifndef _WIN32
+    if (ptyPoll_) {
+        uv_poll_stop(ptyPoll_);
+        uv_close(reinterpret_cast<uv_handle_t*>(ptyPoll_), [](uv_handle_t* h) {
+            delete reinterpret_cast<uv_poll_t*>(h);
+        });
+        ptyPoll_ = nullptr;
     }
+#endif
 
-    if (workerThread_.joinable()) {
-        workerThread_.join();
+    if (cursorTimer_) {
+        uv_timer_stop(cursorTimer_);
+        uv_close(reinterpret_cast<uv_handle_t*>(cursorTimer_), [](uv_handle_t* h) {
+            delete reinterpret_cast<uv_timer_t*>(h);
+        });
+        cursorTimer_ = nullptr;
     }
-
-    running_.store(false);
 }
 
 Result<void> Terminal::render(WebGPUContext& ctx) {
     (void)ctx;  // We use renderer_ directly
 
-    // Try to acquire lock - don't block main thread
-    std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
-    if (!lock.owns_lock()) {
-        return Ok();  // Busy, skip this frame
-    }
-
-    if (!running_.load()) {
+    if (!running_) {
         return Ok();
     }
 
@@ -171,9 +189,11 @@ Result<void> Terminal::render(WebGPUContext& ctx) {
         return Ok();
     }
 
-    // Re-sync grid when fullDamage is set (e.g., after scrolling)
+    // Sync grid from vterm based on damage
     if (fullDamage_) {
         syncToGrid();
+    } else if (!damageRects_.empty()) {
+        syncDamageToGrid();
     }
 
     // Render the grid - GridRenderer handles the clear and draw
@@ -238,82 +258,13 @@ Result<void> Terminal::startShell(const std::string& shell) {
 }
 
 //=============================================================================
-// Worker thread
+// libuv callbacks
 //=============================================================================
-
-void Terminal::workerLoop() {
-    spdlog::debug("Terminal[{}]: worker started", id_);
-
-    loop_ = new uv_loop_t;
-    uv_loop_init(loop_);
-
-    // Async handle for cross-thread signaling
-    asyncHandle_ = new uv_async_t;
-    uv_async_init(loop_, asyncHandle_, onAsync);
-    asyncHandle_->data = this;
-
-    // Cursor blink timer
-    cursorTimer_ = new uv_timer_t;
-    uv_timer_init(loop_, cursorTimer_);
-    cursorTimer_->data = this;
-    uv_timer_start(cursorTimer_, onTimer, 500, 500);
-
-#ifndef _WIN32
-    // PTY poll handle
-    if (ptyMaster_ >= 0) {
-        ptyPoll_ = new uv_poll_t;
-        uv_poll_init(loop_, ptyPoll_, ptyMaster_);
-        ptyPoll_->data = this;
-        uv_poll_start(ptyPoll_, UV_READABLE, onPtyPoll);
-    }
-#endif
-
-    // Run event loop
-    while (!stopRequested_.load()) {
-        uv_run(loop_, UV_RUN_ONCE);
-    }
-
-    // Cleanup
-#ifndef _WIN32
-    if (ptyPoll_) {
-        uv_poll_stop(ptyPoll_);
-        uv_close(reinterpret_cast<uv_handle_t*>(ptyPoll_), [](uv_handle_t* h) {
-            delete reinterpret_cast<uv_poll_t*>(h);
-        });
-        ptyPoll_ = nullptr;
-    }
-#endif
-
-    uv_timer_stop(cursorTimer_);
-    uv_close(reinterpret_cast<uv_handle_t*>(cursorTimer_), [](uv_handle_t* h) {
-        delete reinterpret_cast<uv_timer_t*>(h);
-    });
-    cursorTimer_ = nullptr;
-
-    uv_close(reinterpret_cast<uv_handle_t*>(asyncHandle_), [](uv_handle_t* h) {
-        delete reinterpret_cast<uv_async_t*>(h);
-    });
-    asyncHandle_ = nullptr;
-
-    uv_run(loop_, UV_RUN_DEFAULT);
-    uv_loop_close(loop_);
-    delete loop_;
-    loop_ = nullptr;
-
-    spdlog::debug("Terminal[{}]: worker stopped", id_);
-}
-
-void Terminal::onAsync(uv_async_t* handle) {
-    auto* self = static_cast<Terminal*>(handle->data);
-    self->processPendingInput();
-}
 
 void Terminal::onTimer(uv_timer_t* handle) {
     auto* self = static_cast<Terminal*>(handle->data);
     double now = std::chrono::duration<double>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
-
-    std::lock_guard<std::mutex> lock(self->mutex_);
     self->updateCursorBlink(now);
 }
 
@@ -326,70 +277,54 @@ void Terminal::onPtyPoll(uv_poll_t* handle, int status, int events) {
     }
 
     if (events & UV_READABLE) {
-        std::lock_guard<std::mutex> lock(self->mutex_);
         if (auto res = self->readPty(); !res) {
             spdlog::error("Terminal[{}]: PTY read error: {}", self->id_, res.error().to_string());
         }
     }
 }
 
-void Terminal::processPendingInput() {
-    std::vector<PendingKey> keys;
-    std::vector<char> raw;
-    bool doResize = false;
-    uint32_t newCols = 0, newRows = 0;
+//=============================================================================
+// Keyboard input (direct write, no queueing)
+//=============================================================================
 
-    {
-        std::lock_guard<std::mutex> lock(inputMutex_);
-        keys = std::move(pendingKeys_);
-        pendingKeys_.clear();
-        raw = std::move(pendingRaw_);
-        pendingRaw_.clear();
-        doResize = pendingResize_;
-        newCols = pendingCols_;
-        newRows = pendingRows_;
-        pendingResize_ = false;
+void Terminal::sendKey(uint32_t codepoint, VTermModifier mod) {
+    if (scrollOffset_ != 0) {
+        scrollOffset_ = 0;
+        fullDamage_ = true;
     }
+    vterm_keyboard_unichar(vterm_, codepoint, mod);
+    flushVtermOutput();
+}
 
-    std::lock_guard<std::mutex> lock(mutex_);
+void Terminal::sendSpecialKey(VTermKey key, VTermModifier mod) {
+    if (scrollOffset_ != 0) {
+        scrollOffset_ = 0;
+        fullDamage_ = true;
+    }
+    vterm_keyboard_key(vterm_, key, mod);
+    flushVtermOutput();
+}
 
-    if (doResize) {
-        cols_ = newCols;
-        rows_ = newRows;
-        vterm_set_size(vterm_, rows_, cols_);
-        grid_.resize(cols_, rows_);
+void Terminal::sendRaw(const char* data, size_t len) {
+    if (scrollOffset_ != 0) {
+        scrollOffset_ = 0;
+        fullDamage_ = true;
+    }
+    writeToPty(data, len);
+}
+
+void Terminal::resize(uint32_t cols, uint32_t rows) {
+    cols_ = cols;
+    rows_ = rows;
+    vterm_set_size(vterm_, rows_, cols_);
+    grid_.resize(cols_, rows_);
 #ifndef _WIN32
-        if (ptyMaster_ >= 0) {
-            struct winsize ws = {static_cast<unsigned short>(rows_), static_cast<unsigned short>(cols_), 0, 0};
-            ioctl(ptyMaster_, TIOCSWINSZ, &ws);
-        }
+    if (ptyMaster_ >= 0) {
+        struct winsize ws = {static_cast<unsigned short>(rows_), static_cast<unsigned short>(cols_), 0, 0};
+        ioctl(ptyMaster_, TIOCSWINSZ, &ws);
+    }
 #endif
-        syncToGrid();
-    }
-
-    for (const auto& key : keys) {
-        // Scroll to bottom when user types (standard terminal behavior)
-        if (scrollOffset_ != 0) {
-            scrollOffset_ = 0;
-            fullDamage_ = true;
-        }
-        
-        if (key.isSpecial) {
-            vterm_keyboard_key(vterm_, key.specialKey, key.mod);
-        } else {
-            vterm_keyboard_unichar(vterm_, key.codepoint, key.mod);
-        }
-        flushVtermOutput();
-    }
-
-    if (!raw.empty()) {
-        // Scroll to bottom when raw input is sent
-        if (scrollOffset_ != 0) {
-            scrollOffset_ = 0;
-            fullDamage_ = true;
-        }
-        writeToPty(raw.data(), raw.size());
-    }
+    fullDamage_ = true;
 }
 
 //=============================================================================
@@ -401,20 +336,19 @@ Result<void> Terminal::readPty() {
     // Check child status
     int status;
     if (waitpid(childPid_, &status, WNOHANG) > 0) {
-        running_.store(false);
-        stopRequested_.store(true);
+        running_ = false;
         spdlog::info("Shell exited");
         return Ok();
     }
 
-    // Drain PTY
+    // Drain PTY - read as much as available up to 40KB
     size_t totalRead = 0;
     ssize_t n;
     while ((n = read(ptyMaster_, ptyReadBuffer_.get() + totalRead, PTY_READ_BUFFER_SIZE - totalRead)) > 0) {
         totalRead += n;
         if (totalRead >= PTY_READ_BUFFER_SIZE) break;
     }
-
+    
     if (totalRead > 0) {
         vterm_input_write(vterm_, ptyReadBuffer_.get(), totalRead);
         vterm_screen_flush_damage(vtermScreen_);
@@ -427,7 +361,7 @@ Result<void> Terminal::readPty() {
         }
 
         flushVtermOutput();
-        syncToGrid();
+        // NOTE: syncToGrid is NOT called here - render() will sync based on damage
     }
 
     if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
@@ -466,41 +400,10 @@ Result<void> Terminal::flushVtermOutput() {
 }
 
 //=============================================================================
-// Input API (thread-safe, queue for worker)
-//=============================================================================
-
-void Terminal::sendKey(uint32_t codepoint, VTermModifier mod) {
-    std::lock_guard<std::mutex> lock(inputMutex_);
-    pendingKeys_.push_back({codepoint, mod, false, VTERM_KEY_NONE});
-    if (asyncHandle_) uv_async_send(asyncHandle_);
-}
-
-void Terminal::sendSpecialKey(VTermKey key, VTermModifier mod) {
-    std::lock_guard<std::mutex> lock(inputMutex_);
-    pendingKeys_.push_back({0, mod, true, key});
-    if (asyncHandle_) uv_async_send(asyncHandle_);
-}
-
-void Terminal::sendRaw(const char* data, size_t len) {
-    std::lock_guard<std::mutex> lock(inputMutex_);
-    pendingRaw_.insert(pendingRaw_.end(), data, data + len);
-    if (asyncHandle_) uv_async_send(asyncHandle_);
-}
-
-void Terminal::resize(uint32_t cols, uint32_t rows) {
-    std::lock_guard<std::mutex> lock(inputMutex_);
-    pendingResize_ = true;
-    pendingCols_ = cols;
-    pendingRows_ = rows;
-    if (asyncHandle_) uv_async_send(asyncHandle_);
-}
-
-//=============================================================================
 // Scrollback
 //=============================================================================
 
 void Terminal::scrollUp(int lines) {
-    std::lock_guard<std::mutex> lock(mutex_);
     int oldOffset = scrollOffset_;
     int sbSize = static_cast<int>(scrollback_.size());
     scrollOffset_ = std::min(scrollOffset_ + lines, sbSize);
@@ -510,7 +413,6 @@ void Terminal::scrollUp(int lines) {
 }
 
 void Terminal::scrollDown(int lines) {
-    std::lock_guard<std::mutex> lock(mutex_);
     int oldOffset = scrollOffset_;
     scrollOffset_ = std::max(scrollOffset_ - lines, 0);
     spdlog::debug("Terminal::scrollDown: lines={}, oldOffset={}, newOffset={}", 
@@ -519,13 +421,11 @@ void Terminal::scrollDown(int lines) {
 }
 
 void Terminal::scrollToTop() {
-    std::lock_guard<std::mutex> lock(mutex_);
     scrollOffset_ = static_cast<int>(scrollback_.size());
     fullDamage_ = true;
 }
 
 void Terminal::scrollToBottom() {
-    std::lock_guard<std::mutex> lock(mutex_);
     scrollOffset_ = 0;
     fullDamage_ = true;
 }
@@ -535,7 +435,6 @@ void Terminal::scrollToBottom() {
 //=============================================================================
 
 void Terminal::startSelection(int row, int col, SelectionMode mode) {
-    std::lock_guard<std::mutex> lock(mutex_);
     selectionStart_ = {row, col};
     selectionEnd_ = {row, col};
     selectionMode_ = mode;
@@ -543,14 +442,12 @@ void Terminal::startSelection(int row, int col, SelectionMode mode) {
 }
 
 void Terminal::extendSelection(int row, int col) {
-    std::lock_guard<std::mutex> lock(mutex_);
     if (selectionMode_ == SelectionMode::None) return;
     selectionEnd_ = {row, col};
     fullDamage_ = true;
 }
 
 void Terminal::clearSelection() {
-    std::lock_guard<std::mutex> lock(mutex_);
     selectionMode_ = SelectionMode::None;
     fullDamage_ = true;
 }
@@ -566,7 +463,6 @@ bool Terminal::isInSelection(int row, int col) const {
 }
 
 std::string Terminal::getSelectedText() {
-    std::lock_guard<std::mutex> lock(mutex_);
     if (selectionMode_ == SelectionMode::None) return "";
 
     VTermPos start = selectionStart_, end = selectionEnd_;

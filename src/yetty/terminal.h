@@ -70,17 +70,17 @@ enum class SelectionMode {
 // Terminal - Renderable terminal emulator with libuv-based async PTY I/O
 //
 // Threading model:
-//   - Worker thread runs libuv event loop, reads from PTY, updates state
-//   - Main thread calls render() each frame
-//   - Mutex protects shared state between worker and main threads
+//   - Single-threaded: uses external libuv loop (from Yetty)
+//   - PTY read events trigger vterm updates
+//   - render() syncs grid from vterm damage
 //=============================================================================
 
 class Terminal : public Renderable {
 public:
     using Ptr = std::shared_ptr<Terminal>;
 
-    // Factory - creates terminal with given grid size
-    static Result<Ptr> create(uint32_t id, uint32_t cols, uint32_t rows, Font* font) noexcept;
+    // Factory - creates terminal with given grid size and external libuv loop
+    static Result<Ptr> create(uint32_t id, uint32_t cols, uint32_t rows, Font* font, uv_loop_t* loop) noexcept;
 
     ~Terminal() override;
 
@@ -97,18 +97,18 @@ public:
 
     void start() override;
     void stop() override;
-    bool isRunning() const override { return running_.load(); }
+    bool isRunning() const override { return running_; }
 
     Result<void> render(WebGPUContext& ctx) override;
 
     //=========================================================================
-    // Terminal-specific interface (all thread-safe)
+    // Terminal-specific interface (single-threaded, call from main thread)
     //=========================================================================
 
     // Start with specific shell (called internally by start(), can override)
     Result<void> startShell(const std::string& shell = "");
 
-    // Send keyboard input (queued for worker thread)
+    // Send keyboard input (direct write to PTY)
     void sendKey(uint32_t codepoint, VTermModifier mod = VTERM_MOD_NONE);
     void sendSpecialKey(VTermKey key, VTermModifier mod = VTERM_MOD_NONE);
     void sendRaw(const char* data, size_t len);
@@ -116,7 +116,7 @@ public:
     // Resize terminal
     void resize(uint32_t cols, uint32_t rows);
 
-    // Grid access (for rendering - use under lock or via command queue)
+    // Grid access
     const Grid& getGrid() const { return grid_; }
     Grid& getGridMutable() { return grid_; }
 
@@ -193,17 +193,14 @@ public:
     static int onMoverect(VTermRect dest, VTermRect src, void* user);
 
 private:
-    Terminal(uint32_t id, uint32_t cols, uint32_t rows, Font* font) noexcept;
+    Terminal(uint32_t id, uint32_t cols, uint32_t rows, Font* font, uv_loop_t* loop) noexcept;
     Result<void> init() noexcept;
 
-    // Worker thread
-    void workerLoop();
-    void processPendingInput();
-    static void onAsync(uv_async_t* handle);
+    // libuv callbacks
     static void onTimer(uv_timer_t* handle);
     static void onPtyPoll(uv_poll_t* handle, int status, int events);
 
-    // PTY operations (called on worker thread)
+    // PTY operations
     Result<void> readPty();
     Result<void> writeToPty(const char* data, size_t len);
     Result<void> flushVtermOutput();
@@ -224,36 +221,16 @@ private:
     std::string name_;
 
     //=========================================================================
-    // Thread synchronization
+    // libuv (external loop, not owned)
     //=========================================================================
-    mutable std::mutex mutex_;
-    std::atomic<bool> running_{false};
-    std::atomic<bool> stopRequested_{false};
-    std::thread workerThread_;
-
-    // libuv handles
     uv_loop_t* loop_ = nullptr;
-    uv_async_t* asyncHandle_ = nullptr;
     uv_timer_t* cursorTimer_ = nullptr;
     uv_poll_t* ptyPoll_ = nullptr;
-
-    // Pending input from main thread
-    std::mutex inputMutex_;
-    struct PendingKey {
-        uint32_t codepoint;
-        VTermModifier mod;
-        bool isSpecial;
-        VTermKey specialKey;
-    };
-    std::vector<PendingKey> pendingKeys_;
-    std::vector<char> pendingRaw_;
-    bool pendingResize_ = false;
-    uint32_t pendingCols_ = 0;
-    uint32_t pendingRows_ = 0;
+    bool running_ = false;
 
 
     //=========================================================================
-    // Terminal state (protected by mutex_)
+    // Terminal state
     //=========================================================================
     VTerm* vterm_ = nullptr;
     VTermScreen* vtermScreen_ = nullptr;
@@ -312,7 +289,7 @@ private:
 
     int mouseMode_ = VTERM_PROP_MOUSE_NONE;
 
-    static constexpr size_t PTY_READ_BUFFER_SIZE = 256 * 1024;
+    static constexpr size_t PTY_READ_BUFFER_SIZE = 40960;  // 40KB (10x4KB)
     std::unique_ptr<char[]> ptyReadBuffer_;
 };
 
