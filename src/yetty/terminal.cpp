@@ -368,6 +368,12 @@ void Terminal::processPendingInput() {
     }
 
     for (const auto& key : keys) {
+        // Scroll to bottom when user types (standard terminal behavior)
+        if (scrollOffset_ != 0) {
+            scrollOffset_ = 0;
+            fullDamage_ = true;
+        }
+        
         if (key.isSpecial) {
             vterm_keyboard_key(vterm_, key.specialKey, key.mod);
         } else {
@@ -377,6 +383,11 @@ void Terminal::processPendingInput() {
     }
 
     if (!raw.empty()) {
+        // Scroll to bottom when raw input is sent
+        if (scrollOffset_ != 0) {
+            scrollOffset_ = 0;
+            fullDamage_ = true;
+        }
         writeToPty(raw.data(), raw.size());
     }
 }
