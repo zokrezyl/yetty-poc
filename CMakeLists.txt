@@ -557,3 +557,10 @@ else()
         add_subdirectory(test/ut)
     endif()
 endif()
+
+
+# Python for python plugin (Unix only - requires ./configure + make)
+if(UNIX)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/build-tools/cmake/python python_build)
+endif()
+
