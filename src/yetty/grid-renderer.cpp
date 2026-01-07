@@ -511,7 +511,7 @@ Result<void> GridRenderer::createBindGroup(WGPUDevice device, Font &font) {
 
   bgEntries[3].binding = 3;
   bgEntries[3].buffer = font.getGlyphMetadataBuffer();
-  bgEntries[3].size = font.getGlyphCount() * sizeof(GlyphMetadataGPU);
+  bgEntries[3].size = font.getBufferGlyphCount() * sizeof(GlyphMetadataGPU);
 
   bgEntries[4].binding = 4;
   bgEntries[4].textureView = cellGlyphView_;
@@ -914,14 +914,17 @@ void GridRenderer::render(const Grid &grid, int cursorCol, int cursorRow,
       return;
     }
     needsBindGroupRecreation_ = false;
+    lastFontResourceVersion_ = font_->getResourceVersion();
     TR_LOGI("Cell textures and bind group created successfully");
-  } else if (needsBindGroupRecreation_) {
+  } else if (needsBindGroupRecreation_ || 
+             font_->getResourceVersion() != lastFontResourceVersion_) {
     // Deferred bind group recreation (e.g., after glyph metadata buffer update)
     if (auto res = createBindGroup(device, *font_); !res) {
       TR_LOGE("GridRenderer: %s", error_msg(res).c_str());
       return;
     }
     needsBindGroupRecreation_ = false;
+    lastFontResourceVersion_ = font_->getResourceVersion();
   }
 
   updateUniformBuffer(queue, grid, cursorCol, cursorRow, cursorVisible);
@@ -1018,15 +1021,18 @@ void GridRenderer::render(const Grid &grid,
       return;
     }
     needsBindGroupRecreation_ = false;
+    lastFontResourceVersion_ = font_->getResourceVersion();
     // Force full update when textures are recreated
     updateCellTextures(queue, grid);
-  } else if (needsBindGroupRecreation_) {
+  } else if (needsBindGroupRecreation_ ||
+             font_->getResourceVersion() != lastFontResourceVersion_) {
     // Deferred bind group recreation (e.g., after glyph metadata buffer update)
     if (auto res = createBindGroup(device, *font_); !res) {
       std::cerr << "GridRenderer: " << error_msg(res) << std::endl;
       return;
     }
     needsBindGroupRecreation_ = false;
+    lastFontResourceVersion_ = font_->getResourceVersion();
     // Also need full update for new glyphs
     updateCellTextures(queue, grid);
   }
@@ -1143,12 +1149,15 @@ void GridRenderer::renderFromBuffers(uint32_t cols, uint32_t rows,
       return;
     }
     needsBindGroupRecreation_ = false;
-  } else if (needsBindGroupRecreation_) {
+    lastFontResourceVersion_ = font_->getResourceVersion();
+  } else if (needsBindGroupRecreation_ ||
+             font_->getResourceVersion() != lastFontResourceVersion_) {
     if (auto res = createBindGroup(device, *font_); !res) {
       spdlog::error("GridRenderer::renderFromBuffers: {}", error_msg(res));
       return;
     }
     needsBindGroupRecreation_ = false;
+    lastFontResourceVersion_ = font_->getResourceVersion();
   }
 
   // Update cell textures from buffer data

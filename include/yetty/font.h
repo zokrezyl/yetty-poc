@@ -110,6 +110,14 @@ public:
     // Glyph metadata buffer for shader access
     WGPUBuffer getGlyphMetadataBuffer() const { return _glyphMetadataBuffer; }
     uint32_t getGlyphCount() const { return static_cast<uint32_t>(_glyphMetadata.size()); }
+    
+    // Get the glyph count that the GPU buffer was created with
+    // Use this for bind group size to avoid buffer overflow
+    uint32_t getBufferGlyphCount() const { return _bufferGlyphCount; }
+    
+    // Version number incremented when GPU resources change (buffer recreated)
+    // Renderables should track this to know when to recreate their bind groups
+    uint32_t getResourceVersion() const { return _resourceVersion; }
 
     // Get pixel range for MSDF shader
     float getPixelRange() const { return _pixelRange; }
@@ -188,6 +196,11 @@ private:
     float _fontSize = 0.0f;
     float _lineHeight = 0.0f;
     float _pixelRange = 4.0f;  // MSDF pixel range (higher = better AA quality)
+    
+    // Track the glyph count the buffer was created with
+    uint32_t _bufferGlyphCount = 0;
+    // Version incremented when GPU resources change
+    uint32_t _resourceVersion = 0;
 
     WGPUTexture _texture = nullptr;
     WGPUTextureView _textureView = nullptr;

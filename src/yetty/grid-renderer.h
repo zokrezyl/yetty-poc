@@ -130,6 +130,7 @@ private:
   EmojiAtlas::Ptr emojiAtlas_; // Color emoji atlas
   const Config *config_ = nullptr;
   bool needsBindGroupRecreation_ = false; // Deferred bind group recreation
+  uint32_t lastFontResourceVersion_ = 0;  // Track font resource changes
 };
 
 } // namespace yetty

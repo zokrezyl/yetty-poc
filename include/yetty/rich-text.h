@@ -198,6 +198,8 @@ private:
 
     // Cache for bind groups per font (avoid recreating every frame)
     std::map<Font*, WGPUBindGroup> fontBindGroups_;
+    // Track font resource versions to detect when bind groups need recreation
+    std::map<Font*, uint32_t> fontResourceVersions_;
 
     static constexpr float pixelRange_ = 4.0f;
     bool initialized_ = false;
