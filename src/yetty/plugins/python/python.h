@@ -85,6 +85,12 @@ public:
     bool onKey(int key, int scancode, int action, int mods) override;
     bool onChar(unsigned int codepoint) override;
     bool wantsKeyboard() const override { return true; }
+    
+    // Mouse input handling for pygfx interaction
+    bool onMouseMove(float localX, float localY) override;
+    bool onMouseButton(int button, bool pressed) override;
+    bool onMouseScroll(float xoffset, float yoffset, int mods) override;
+    bool wantsMouse() const override { return true; }
 
     // pygfx integration
     bool initPygfx(WebGPUContext& ctx, uint32_t width, uint32_t height);
@@ -95,7 +101,7 @@ public:
     
     // Callback management
     bool callInitLayer(WebGPUContext& ctx, uint32_t width, uint32_t height);
-    bool callRender(WGPURenderPassEncoder pass, WebGPUContext& ctx, uint32_t frame_num, uint32_t width, uint32_t height);
+    bool callRender(WebGPUContext& ctx, uint32_t frame_num, uint32_t width, uint32_t height);
     bool callDisposeLayer();
 
 private:
@@ -123,8 +129,11 @@ private:
     // User render callback
     PyObject* _user_render_func = nullptr;
     
-    // Python layer ID (returned from init.init_layer)
-    int _python_layer_id = 0;
+    // Mouse state for pygfx interaction
+    float _mouse_x = 0.0f;
+    float _mouse_y = 0.0f;
+    bool _mouse_down = false;
+    int _mouse_button = 0;
 
     // Blit pipeline resources
     WGPURenderPipeline _blit_pipeline = nullptr;

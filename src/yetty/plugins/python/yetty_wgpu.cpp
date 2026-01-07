@@ -26,11 +26,6 @@ struct YettyWGPUState {
     uint32_t textureWidth = 0;
     uint32_t textureHeight = 0;
 
-    // Current render pass (set each frame by yetty for direct rendering)
-    WGPURenderPassEncoder currentRenderPass = nullptr;
-    uint32_t renderPassWidth = 0;
-    uint32_t renderPassHeight = 0;
-
     // Reference to WebGPUContext (if available)
     yetty::WebGPUContext* ctx = nullptr;
 };
