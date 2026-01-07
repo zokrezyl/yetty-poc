@@ -19,6 +19,6 @@ WIDTH="${3:-80}"
 HEIGHT="${4:-15}"
 
 cd "$ROOT_DIR"
-~/.local/bin/uv run python tools/yetty-client/main.py run piano \
+~/.local/bin/uv run python tools/yetty-client/main.py create piano \
     -o "$OCTAVES" -s "$START" \
     -w "$WIDTH" -H "$HEIGHT"

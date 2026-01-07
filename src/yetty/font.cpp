@@ -1967,9 +1967,14 @@ bool Font::createGlyphMetadataBuffer(WGPUDevice device) {
     void* mapped = wgpuBufferGetMappedRange(_glyphMetadataBuffer, 0, bufferSize);
     memcpy(mapped, _glyphMetadata.data(), bufferSize);
     wgpuBufferUnmap(_glyphMetadataBuffer);
+    
+    // Track the glyph count this buffer was created with
+    _bufferGlyphCount = static_cast<uint32_t>(_glyphMetadata.size());
+    // Increment version so renderables know to recreate their bind groups
+    _resourceVersion++;
 
     std::cout << "Created glyph metadata buffer: " << bufferSize << " bytes for "
-              << _glyphMetadata.size() << " glyphs" << std::endl;
+              << _glyphMetadata.size() << " glyphs (version " << _resourceVersion << ")" << std::endl;
 
     return true;
 }

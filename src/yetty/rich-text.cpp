@@ -122,6 +122,7 @@ void RichText::dispose() noexcept {
         if (bindGroup) wgpuBindGroupRelease(bindGroup);
     }
     fontBindGroups_.clear();
+    fontResourceVersions_.clear();
 
     if (bindGroupLayout_) { wgpuBindGroupLayoutRelease(bindGroupLayout_); bindGroupLayout_ = nullptr; }
     if (pipeline_) { wgpuRenderPipelineRelease(pipeline_); pipeline_ = nullptr; }
@@ -617,10 +618,21 @@ Result<void> RichText::createBindGroup(WebGPUContext& ctx, Font* font) {
 
     WGPUDevice device = ctx.getDevice();
 
-    // Check if we already have a bind group for this font
+    // Check if we already have a bind group for this font with current version
     auto it = fontBindGroups_.find(font);
-    if (it != fontBindGroups_.end()) {
-        return Ok();  // Already cached
+    auto versionIt = fontResourceVersions_.find(font);
+    uint32_t currentVersion = font->getResourceVersion();
+    
+    if (it != fontBindGroups_.end() && 
+        versionIt != fontResourceVersions_.end() &&
+        versionIt->second == currentVersion) {
+        return Ok();  // Already cached and up to date
+    }
+    
+    // Release old bind group if version changed
+    if (it != fontBindGroups_.end() && it->second) {
+        wgpuBindGroupRelease(it->second);
+        fontBindGroups_.erase(it);
     }
 
     // Create bind group for this font
@@ -651,6 +663,7 @@ Result<void> RichText::createBindGroup(WebGPUContext& ctx, Font* font) {
     if (!bindGroup) return Err<void>("Failed to create bind group for font");
 
     fontBindGroups_[font] = bindGroup;
+    fontResourceVersions_[font] = currentVersion;
     return Ok();
 }
 
@@ -722,6 +735,7 @@ Result<void> RichText::render(WebGPUContext& ctx,
             if (bindGroup) wgpuBindGroupRelease(bindGroup);
         }
         fontBindGroups_.clear();
+        fontResourceVersions_.clear();
     }
 
     // Update uniforms
@@ -855,6 +869,7 @@ bool RichText::renderToPass(WGPURenderPassEncoder pass, WebGPUContext& ctx,
             if (bindGroup) wgpuBindGroupRelease(bindGroup);
         }
         fontBindGroups_.clear();
+        fontResourceVersions_.clear();
     }
 
     // Update uniforms
