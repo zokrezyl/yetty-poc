@@ -47,13 +47,13 @@ FontManager* RichTextPlugin::getFontManager() {
     return engine_ ? engine_->fontManager().get() : nullptr;
 }
 
-Result<PluginLayerPtr> RichTextPlugin::createLayer(const std::string& payload) {
+Result<WidgetPtr> RichTextPlugin::createWidget(const std::string& payload) {
     auto layer = std::make_shared<RichTextLayer>(this);
     auto result = layer->init(payload);
     if (!result) {
-        return Err<PluginLayerPtr>("Failed to init RichTextLayer", result);
+        return Err<WidgetPtr>("Failed to init RichTextLayer", result);
     }
-    return Ok<PluginLayerPtr>(layer);
+    return Ok<WidgetPtr>(layer);
 }
 
 //-----------------------------------------------------------------------------
@@ -276,7 +276,7 @@ Result<void> RichTextLayer::render(WebGPUContext& ctx) {
                               pixelX, pixelY, pixelW, pixelH);
 }
 
-bool RichTextLayer::renderToPass(WGPURenderPassEncoder pass, WebGPUContext& ctx) {
+bool RichTextLayer::render(WGPURenderPassEncoder pass, WebGPUContext& ctx) {
     if (failed_ || !_visible) return false;
 
     const auto& rc = _render_context;
@@ -328,7 +328,7 @@ bool RichTextLayer::renderToPass(WGPURenderPassEncoder pass, WebGPUContext& ctx)
     }
 
     // Use batched render
-    return richText_->renderToPass(pass, ctx, rc.screenWidth, rc.screenHeight,
+    return richText_->render(pass, ctx, rc.screenWidth, rc.screenHeight,
                                     pixelX, pixelY, pixelW, pixelH);
 }
 

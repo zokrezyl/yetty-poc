@@ -240,7 +240,7 @@ int cmdRun(const std::string& pluginDir,
     }
 
     // Create layer with payload
-    auto layerResult = handle->plugin->createLayer(payload);
+    auto layerResult = handle->plugin->createWidget(payload);
     if (!layerResult) {
         spdlog::error("Failed to create layer: {}", layerResult.error().message());
         glfwDestroyWindow(window);
@@ -250,8 +250,8 @@ int cmdRun(const std::string& pluginDir,
     auto layer = *layerResult;
     
     // Debug: print struct sizes to detect ODR violations
-    spdlog::info("Tester: sizeof(RenderContext)={} sizeof(PluginLayer)={}", 
-                 sizeof(yetty::RenderContext), sizeof(yetty::PluginLayer));
+    spdlog::info("Tester: sizeof(RenderContext)={} sizeof(Widget)={}", 
+                 sizeof(yetty::RenderContext), sizeof(yetty::Widget));
 
     // Set pixel size for the layer (fills the whole window)
     spdlog::info("Tester: layer ptr = {}", (void*)layer.get());
@@ -359,9 +359,9 @@ int cmdRun(const std::string& pluginDir,
 
         WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
 
-        // Render using renderToPass
-        spdlog::debug("Tester: Before renderToPass, getPixelWidth={}", layer->getPixelWidth());
-        layer->renderToPass(pass, *ctx);
+        // Render using render
+        spdlog::debug("Tester: Before render, getPixelWidth={}", layer->getPixelWidth());
+        layer->render(pass, *ctx);
 
         wgpuRenderPassEncoderEnd(pass);
         wgpuRenderPassEncoderRelease(pass);

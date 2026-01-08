@@ -22,7 +22,7 @@ public:
 
     Result<void> dispose() override;
 
-    Result<PluginLayerPtr> createLayer(const std::string& payload) override;
+    Result<WidgetPtr> createWidget(const std::string& payload) override;
 
     Result<void> renderAll(WGPUTextureView targetView, WGPUTextureFormat targetFormat,
                            uint32_t screenWidth, uint32_t screenHeight,
@@ -45,7 +45,7 @@ private:
 //
 // The X axis is implicit: x[i] = i / (M-1) normalized to [0,1]
 //-----------------------------------------------------------------------------
-class PlotLayer : public PluginLayer {
+class PlotLayer : public Widget {
 public:
     static constexpr uint32_t MAX_PLOTS = 16;  // Maximum number of plots per layer
 

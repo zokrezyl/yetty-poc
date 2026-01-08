@@ -13,7 +13,7 @@ typedef _ts PyThreadState;
 
 namespace yetty {
 
-class PythonLayer;
+class PythonWidget;
 
 //-----------------------------------------------------------------------------
 // PythonPlugin - Embeds Python interpreter
@@ -28,7 +28,7 @@ public:
 
     Result<void> dispose() override;
 
-    Result<PluginLayerPtr> createLayer(const std::string& payload) override;
+    Result<WidgetPtr> createWidget(const std::string& payload) override;
 
     // Execute Python code and return result as string
     Result<std::string> execute(const std::string& code);
@@ -40,8 +40,8 @@ public:
     bool isInitialized() const { return _py_initialized; }
     
     // Callback functions from init.py
-    PyObject* getInitLayerFunc() const { return _init_layer_func; }
-    PyObject* getDisposeLayerFunc() const { return _dispose_layer_func; }
+    PyObject* getInitWidgetFunc() const { return _init_widget_func; }
+    PyObject* getDisposeWidgetFunc() const { return _dispose_widget_func; }
 
 private:
     explicit PythonPlugin(YettyPtr engine) noexcept : Plugin(std::move(engine)) {}
@@ -57,18 +57,18 @@ private:
     // Callback functions from init.py
     PyObject* _init_module = nullptr;
     PyObject* _init_plugin_func = nullptr;
-    PyObject* _init_layer_func = nullptr;
-    PyObject* _dispose_layer_func = nullptr;
+    PyObject* _init_widget_func = nullptr;
+    PyObject* _dispose_widget_func = nullptr;
     PyObject* _dispose_plugin_func = nullptr;
 };
 
 //-----------------------------------------------------------------------------
-// PythonLayer - Displays Python output or runs Python scripts
+// PythonWidget - Displays Python output or runs Python scripts
 //-----------------------------------------------------------------------------
-class PythonLayer : public PluginLayer {
+class PythonWidget : public Widget {
 public:
-    PythonLayer(PythonPlugin* plugin);
-    ~PythonLayer() override;
+    PythonWidget(PythonPlugin* plugin);
+    ~PythonWidget() override;
 
     Result<void> init(const std::string& payload) override;
     Result<void> dispose() override;
@@ -84,7 +84,7 @@ public:
     void prepareFrame(WebGPUContext& ctx) override;
     
     // Batched render - only blits pre-rendered texture
-    bool renderToPass(WGPURenderPassEncoder pass, WebGPUContext& ctx) override;
+    bool render(WGPURenderPassEncoder pass, WebGPUContext& ctx) override;
 
     // Input handling for REPL-like interaction
     bool onKey(int key, int scancode, int action, int mods) override;
@@ -105,9 +105,9 @@ public:
     bool isPygfxInitialized() const { return _pygfx_initialized; }
     
     // Callback management
-    bool callInitLayer(WebGPUContext& ctx, uint32_t width, uint32_t height);
+    bool callInitWidget(WebGPUContext& ctx, uint32_t width, uint32_t height);
     bool callRender(WebGPUContext& ctx, uint32_t frame_num, uint32_t width, uint32_t height);
-    bool callDisposeLayer();
+    bool callDisposeWidget();
 
 private:
     PythonPlugin* _plugin = nullptr;

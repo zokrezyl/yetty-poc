@@ -28,10 +28,6 @@ using YettyPtr = std::shared_ptr<Yetty>;
 using PluginPtr = std::shared_ptr<Plugin>;
 using WidgetPtr = std::shared_ptr<Widget>;
 
-// Legacy alias for backward compatibility during migration
-using PluginLayer = Widget;
-using PluginLayerPtr = WidgetPtr;
-
 //-----------------------------------------------------------------------------
 // PluginMeta - metadata returned by plugins via meta() function
 //-----------------------------------------------------------------------------
@@ -44,7 +40,7 @@ struct PluginMeta {
 };
 
 //-----------------------------------------------------------------------------
-// RenderContext - rendering parameters passed to PluginLayer::render()
+// RenderContext - rendering parameters passed to Widget::render()
 // Set by the owner (Terminal/PluginManager) before calling render()
 //-----------------------------------------------------------------------------
 struct RenderContext {
@@ -75,10 +71,39 @@ enum class ScreenType {
 //-----------------------------------------------------------------------------
 // Widget - a plugin instance rendered at a position in the terminal
 //
-// Widgets decide internally how to render:
-// - Simple drawing: draw directly to the provided render pass
-// - Need texture: create/manage own texture, render to it, blit to pass
-// - Complex pipeline: manage own render passes, blit result to pass
+// ## Rendering Architecture
+//
+// Widgets have two rendering phases:
+//
+// ### Phase 1: prepareFrame() - Pre-render (before shared pass)
+// Called BEFORE the main render pass begins. Use this phase when your widget
+// needs to render to an intermediate texture first. Examples:
+// - ThorVG: renders SVG/Lottie to texture via WgCanvas::sync()
+// - pygfx: renders 3D scenes to texture via its own WebGPU pipeline
+// - Any plugin that submits its own GPU commands (can't be done during active pass)
+//
+// Default implementation does nothing - only override if you need texture rendering.
+//
+// ### Phase 2: render() - Main render (during shared pass)
+// Called DURING the shared render pass. Choose your rendering approach:
+//
+// **Direct rendering** (simple, efficient):
+// Draw directly using the provided render pass encoder. Good for:
+// - Shader-based effects (shadertoy plugin)
+// - Simple geometry (colored rectangles, lines)
+// - Text rendering with shared font atlas
+//
+// **Texture blitting** (for complex rendering):
+// Render to texture in prepareFrame(), then blit the texture here. Required when:
+// - Your rendering library submits its own GPU commands (ThorVG, pygfx)
+// - You need multiple render passes for your content
+// - You want to cache/reuse rendered content across frames
+//
+// ## Rendering Flow
+// 1. PluginManager calls prepareFrame() on all visible widgets
+// 2. PluginManager creates shared command encoder and render pass
+// 3. PluginManager calls render() on all visible widgets (sorted by z-order)
+// 4. Pass is ended and commands are submitted
 //-----------------------------------------------------------------------------
 class Widget : public Renderable, public std::enable_shared_from_this<Widget> {
 public:
@@ -93,18 +118,47 @@ public:
     void stop() override { _running.store(false); }
     bool isRunning() const override { return _running.load(); }
 
-    // Legacy render - creates own command encoder (slow, avoid!)
+    // Legacy render - creates own command encoder (deprecated, avoid!)
     Result<void> render(WebGPUContext& ctx) override = 0;
 
-    // Pre-render phase - called BEFORE the shared render pass begins
-    // Use this to render to intermediate textures (ThorVG, pygfx, etc.)
-    // Default implementation does nothing
+    /// Pre-render phase - called BEFORE the shared render pass begins.
+    ///
+    /// Override this method if your widget needs to:
+    /// - Render to an intermediate texture (ThorVG, pygfx, etc.)
+    /// - Submit GPU commands that can't run during an active render pass
+    /// - Perform expensive initialization on first frame
+    ///
+    /// After prepareFrame(), your texture is ready to be blitted in render().
+    /// Default implementation does nothing.
+    ///
+    /// @param ctx WebGPU context with device, queue, and utilities
     virtual void prepareFrame(WebGPUContext& ctx) { (void)ctx; }
 
-    // Batched render - draws into existing render pass
-    // Widget decides internally: draw directly, or render to texture and blit
-    // Returns true if drew something, false if skipped (off-screen, etc.)
-    virtual bool renderToPass(WGPURenderPassEncoder pass, WebGPUContext& ctx) = 0;
+    /// Main render phase - draws into the shared render pass.
+    ///
+    /// This is where your widget produces visible output. Two approaches:
+    ///
+    /// **Direct rendering**: Draw directly using the pass encoder.
+    /// ```cpp
+    /// bool render(WGPURenderPassEncoder pass, WebGPUContext& ctx) override {
+    ///     wgpuRenderPassEncoderSetPipeline(pass, myPipeline_);
+    ///     wgpuRenderPassEncoderSetBindGroup(pass, 0, myBindGroup_, 0, nullptr);
+    ///     wgpuRenderPassEncoderDraw(pass, 6, 1, 0, 0);
+    ///     return true;
+    /// }
+    /// ```
+    ///
+    /// **Texture blitting**: Blit pre-rendered texture from prepareFrame().
+    /// ```cpp
+    /// bool render(WGPURenderPassEncoder pass, WebGPUContext& ctx) override {
+    ///     return blitToPass(pass, ctx);  // Uses shared blit pipeline
+    /// }
+    /// ```
+    ///
+    /// @param pass Active render pass encoder (do NOT end it!)
+    /// @param ctx WebGPU context
+    /// @return true if something was drawn, false if skipped (off-screen, etc.)
+    virtual bool render(WGPURenderPassEncoder pass, WebGPUContext& ctx) = 0;
 
     // Initialize this widget with its payload
     virtual Result<void> init(const std::string& payload) = 0;
@@ -277,16 +331,8 @@ public:
     }
 
     // Create a new widget for this plugin
-    // Legacy name is createLayer - both work
     virtual Result<WidgetPtr> createWidget(const std::string& payload) {
-        // Default implementation calls legacy createLayer if overridden
-        // Subclasses should override createWidget (preferred) or createLayer (legacy)
         return Err<WidgetPtr>("createWidget not implemented");
-    }
-    
-    // Legacy name - override this or createWidget
-    virtual Result<WidgetPtr> createLayer(const std::string& payload) {
-        return createWidget(payload);
     }
 
     // Add a widget to this plugin
@@ -294,9 +340,6 @@ public:
         widget->setParent(this);
         _widgets.push_back(widget);
     }
-    
-    // Legacy alias
-    void addLayer(WidgetPtr widget) { addWidget(widget); }
 
     // Remove a widget by ID
     Result<void> removeWidget(uint32_t id) {
@@ -311,9 +354,6 @@ public:
         }
         return Err<void>("Widget not found: " + std::to_string(id));
     }
-    
-    // Legacy alias
-    Result<void> removeLayer(uint32_t id) { return removeWidget(id); }
 
     // Get a widget by ID
     WidgetPtr getWidget(uint32_t id) {
@@ -322,15 +362,9 @@ public:
         }
         return nullptr;
     }
-    
-    // Legacy alias
-    WidgetPtr getLayer(uint32_t id) { return getWidget(id); }
 
     // Get all widgets
     const std::vector<WidgetPtr>& getWidgets() const { return _widgets; }
-    
-    // Legacy alias
-    const std::vector<WidgetPtr>& getLayers() const { return _widgets; }
 
     // Handle terminal resize - notify all widgets
     virtual Result<void> onTerminalResize(uint32_t cellWidth, uint32_t cellHeight) {
@@ -369,8 +403,6 @@ protected:
 // C function types for dynamic loading
 using PluginMetaFn = PluginMeta (*)();
 using PluginCreateFn = Result<PluginPtr> (*)(YettyPtr);
-
-// Legacy alias
 using PluginNameFn = const char* (*)();
 
 } // namespace yetty

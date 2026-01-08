@@ -226,11 +226,11 @@ Result<void> PythonPlugin::loadInitCallbacks() {
     
     // Get callback functions
     _init_plugin_func = PyObject_GetAttrString(_init_module, "init_plugin");
-    _init_layer_func = PyObject_GetAttrString(_init_module, "init_layer");
-    _dispose_layer_func = PyObject_GetAttrString(_init_module, "dispose_layer");
+    _init_widget_func = PyObject_GetAttrString(_init_module, "init_widget");
+    _dispose_widget_func = PyObject_GetAttrString(_init_module, "dispose_widget");
     _dispose_plugin_func = PyObject_GetAttrString(_init_module, "dispose_plugin");
     
-    if (!_init_plugin_func || !_init_layer_func || !_dispose_layer_func) {
+    if (!_init_plugin_func || !_init_widget_func || !_dispose_widget_func) {
         PyErr_Print();
         return Err<void>("Failed to get callback functions from init module");
     }
@@ -272,13 +272,13 @@ Result<void> PythonPlugin::dispose() {
     return Ok();
 }
 
-Result<PluginLayerPtr> PythonPlugin::createLayer(const std::string& payload) {
-    auto layer = std::make_shared<PythonLayer>(this);
+Result<WidgetPtr> PythonPlugin::createWidget(const std::string& payload) {
+    auto layer = std::make_shared<PythonWidget>(this);
     auto result = layer->init(payload);
     if (!result) {
-        return Err<PluginLayerPtr>("Failed to init PythonLayer", result);
+        return Err<WidgetPtr>("Failed to init PythonWidget", result);
     }
-    return Ok<PluginLayerPtr>(layer);
+    return Ok<WidgetPtr>(layer);
 }
 
 Result<std::string> PythonPlugin::execute(const std::string& code) {
@@ -371,20 +371,20 @@ Result<void> PythonPlugin::runFile(const std::string& path) {
 }
 
 //-----------------------------------------------------------------------------
-// PythonLayer
+// PythonWidget
 //-----------------------------------------------------------------------------
 
-PythonLayer::PythonLayer(PythonPlugin* plugin)
+PythonWidget::PythonWidget(PythonPlugin* plugin)
     : _plugin(plugin) {}
 
-PythonLayer::~PythonLayer() {
+PythonWidget::~PythonWidget() {
     (void)dispose();
 }
 
-Result<void> PythonLayer::init(const std::string& payload) {
+Result<void> PythonWidget::init(const std::string& payload) {
     // Store the payload but DON'T execute yet
     // We need to wait for render() to be called so we have WebGPU context
-    // to call init_layer() first
+    // to call init_widget() first
     
     if (payload.empty()) {
         return Err("Empty payload");
@@ -394,7 +394,7 @@ Result<void> PythonLayer::init(const std::string& payload) {
     if (payload.compare(0, 7, "inline:") == 0) {
         // Inline code - extract content after "inline:" prefix
         _payload = payload.substr(7);
-        spdlog::info("PythonLayer: inline code provided ({} bytes)", _payload.size());
+        spdlog::info("PythonWidget: inline code provided ({} bytes)", _payload.size());
     } else {
         // File path - verify it exists and load it
         std::ifstream file(payload);
@@ -413,7 +413,7 @@ Result<void> PythonLayer::init(const std::string& payload) {
         
         _payload = content;
         _script_path = payload;
-        spdlog::info("PythonLayer: loaded script from file: {} ({} bytes)", 
+        spdlog::info("PythonWidget: loaded script from file: {} ({} bytes)", 
                     payload, _payload.size());
     }
 
@@ -421,9 +421,9 @@ Result<void> PythonLayer::init(const std::string& payload) {
     return Ok();
 }
 
-Result<void> PythonLayer::dispose() {
+Result<void> PythonWidget::dispose() {
     // Call dispose_layer callback
-    callDisposeLayer();
+    callDisposeWidget();
     
     // Cleanup blit resources first (before Python cleanup)
     if (_blit_bind_group) {
@@ -474,13 +474,13 @@ Result<void> PythonLayer::dispose() {
     return Ok();
 }
 
-Result<void> PythonLayer::render(WebGPUContext& ctx) {
+Result<void> PythonWidget::render(WebGPUContext& ctx) {
     (void)ctx;
-    // Legacy render - not used. Use renderToPass() instead.
+    // Legacy render - not used. Use render() instead.
     return Ok();
 }
 
-void PythonLayer::prepareFrame(WebGPUContext& ctx) {
+void PythonWidget::prepareFrame(WebGPUContext& ctx) {
     // This is called BEFORE the shared render pass begins
     // Here we initialize and render pygfx content to our texture
     
@@ -493,35 +493,35 @@ void PythonLayer::prepareFrame(WebGPUContext& ctx) {
         uint32_t width = getPixelWidth();
         uint32_t height = getPixelHeight();
         
-        spdlog::info("PythonLayer: First prepareFrame - layer dimensions: {}x{}", width, height);
+        spdlog::info("PythonWidget: First prepareFrame - layer dimensions: {}x{}", width, height);
         
         // Use defaults if not set
         if (width == 0) width = 1024;
         if (height == 0) height = 768;
         
-        spdlog::info("PythonLayer: Initializing layer with dimensions: {}x{}", width, height);
+        spdlog::info("PythonWidget: Initializing layer with dimensions: {}x{}", width, height);
         
-        // Call init_layer() callback with WebGPU context
-        if (!callInitLayer(ctx, width, height)) {
+        // Call init_widget() callback with WebGPU context
+        if (!callInitWidget(ctx, width, height)) {
             _failed = true;
             return;
         }
         
         // Now execute the user script (init.py has already been called)
         if (!_script_path.empty()) {
-            spdlog::info("PythonLayer: Executing user script: {}", _script_path);
+            spdlog::info("PythonWidget: Executing user script: {}", _script_path);
             auto result = _plugin->runFile(_script_path);
             if (!result) {
                 _output = "Error: " + result.error().message();
-                spdlog::error("PythonLayer: failed to run script: {}", _script_path);
+                spdlog::error("PythonWidget: failed to run script: {}", _script_path);
                 _failed = true;
                 return;
             }
             _output = "Script executed: " + _script_path;
-            spdlog::info("PythonLayer: User script executed successfully");
+            spdlog::info("PythonWidget: User script executed successfully");
         } else if (!_payload.empty()) {
             // Inline code
-            spdlog::info("PythonLayer: Executing inline code");
+            spdlog::info("PythonWidget: Executing inline code");
             auto result = _plugin->execute(_payload);
             if (!result) {
                 _output = "Error: " + result.error().message();
@@ -546,7 +546,7 @@ void PythonLayer::prepareFrame(WebGPUContext& ctx) {
     _frame_count++;
 }
 
-bool PythonLayer::renderToPass(WGPURenderPassEncoder pass, WebGPUContext& ctx) {
+bool PythonWidget::render(WGPURenderPassEncoder pass, WebGPUContext& ctx) {
     // This is called INSIDE the shared render pass
     // We only blit our pre-rendered texture here - NO Python rendering!
     
@@ -556,22 +556,22 @@ bool PythonLayer::renderToPass(WGPURenderPassEncoder pass, WebGPUContext& ctx) {
 
     // Blit the rendered texture to the layer rectangle in the pass
     if (!blitToPass(pass, ctx)) {
-        spdlog::error("PythonLayer: Failed to blit render texture");
+        spdlog::error("PythonWidget: Failed to blit render texture");
         return false;
     }
     
     return true;
 }
 
-bool PythonLayer::callInitLayer(WebGPUContext& ctx, uint32_t width, uint32_t height) {
-    spdlog::info("PythonLayer: calling init_layer({}, {})", width, height);
+bool PythonWidget::callInitWidget(WebGPUContext& ctx, uint32_t width, uint32_t height) {
+    spdlog::info("PythonWidget: calling init_widget({}, {})", width, height);
     
     // Acquire GIL
     PyGILState_STATE gstate = PyGILState_Ensure();
     
-    auto init_func = _plugin->getInitLayerFunc();
+    auto init_func = _plugin->getInitWidgetFunc();
     if (!init_func) {
-        spdlog::error("PythonLayer: init_layer function not available");
+        spdlog::error("PythonWidget: init_layer function not available");
         PyGILState_Release(gstate);
         return false;
     }
@@ -579,7 +579,7 @@ bool PythonLayer::callInitLayer(WebGPUContext& ctx, uint32_t width, uint32_t hei
     // Create context dict with WebGPU handles
     PyObject* ctx_dict = PyDict_New();
     if (!ctx_dict) {
-        spdlog::error("PythonLayer: Failed to create ctx dict");
+        spdlog::error("PythonWidget: Failed to create ctx dict");
         PyGILState_Release(gstate);
         return false;
     }
@@ -602,24 +602,24 @@ bool PythonLayer::callInitLayer(WebGPUContext& ctx, uint32_t width, uint32_t hei
     Py_DECREF(width_obj);
     Py_DECREF(height_obj);
     
-    // Call init_layer(ctx, width, height)
+    // Call init_widget(ctx, width, height)
     PyObject* args = Py_BuildValue("(OII)", ctx_dict, width, height);
     if (!args) {
         Py_DECREF(ctx_dict);
-        spdlog::error("PythonLayer: Failed to build args");
+        spdlog::error("PythonWidget: Failed to build args");
         PyErr_Print();
         PyGILState_Release(gstate);
         return false;
     }
     
-    spdlog::info("PythonLayer: Calling Python init_layer...");
+    spdlog::info("PythonWidget: Calling Python init_layer...");
     PyObject* result = PyObject_CallObject(init_func, args);
     
     Py_DECREF(ctx_dict);
     Py_DECREF(args);
     
     if (!result) {
-        spdlog::error("PythonLayer: init_layer() raised exception");
+        spdlog::error("PythonWidget: init_widget() raised exception");
         PyErr_Print();
         PyGILState_Release(gstate);
         return false;
@@ -632,11 +632,11 @@ bool PythonLayer::callInitLayer(WebGPUContext& ctx, uint32_t width, uint32_t hei
     _texture_width = width;
     _texture_height = height;
     
-    spdlog::info("PythonLayer: init_layer() completed successfully");
+    spdlog::info("PythonWidget: init_widget() completed successfully");
     return true;
 }
 
-bool PythonLayer::callRender(WebGPUContext& ctx, uint32_t frame_num, uint32_t width, uint32_t height) {
+bool PythonWidget::callRender(WebGPUContext& ctx, uint32_t frame_num, uint32_t width, uint32_t height) {
     // Acquire GIL
     PyGILState_STATE gstate = PyGILState_Ensure();
     
@@ -647,13 +647,13 @@ bool PythonLayer::callRender(WebGPUContext& ctx, uint32_t frame_num, uint32_t wi
         _user_render_func = PyDict_GetItemString(main_dict, "render");
         
         if (!_user_render_func) {
-            spdlog::warn("PythonLayer: No render() function found in user script");
+            spdlog::warn("PythonWidget: No render() function found in user script");
             PyGILState_Release(gstate);
             return false;
         }
         
         Py_INCREF(_user_render_func);  // Keep reference
-        spdlog::info("PythonLayer: Found user render() function");
+        spdlog::info("PythonWidget: Found user render() function");
     }
     
     // Create context dict
@@ -670,7 +670,7 @@ bool PythonLayer::callRender(WebGPUContext& ctx, uint32_t frame_num, uint32_t wi
     
     if (!result) {
         PyErr_Print();
-        spdlog::error("PythonLayer: render() failed");
+        spdlog::error("PythonWidget: render() failed");
         PyGILState_Release(gstate);
         return false;
     }
@@ -680,13 +680,13 @@ bool PythonLayer::callRender(WebGPUContext& ctx, uint32_t frame_num, uint32_t wi
     return true;
 }
 
-bool PythonLayer::callDisposeLayer() {
-    spdlog::info("PythonLayer: calling dispose_layer()");
+bool PythonWidget::callDisposeWidget() {
+    spdlog::info("PythonWidget: calling dispose_widget()");
     
     // Acquire GIL
     PyGILState_STATE gstate = PyGILState_Ensure();
     
-    auto dispose_func = _plugin->getDisposeLayerFunc();
+    auto dispose_func = _plugin->getDisposeWidgetFunc();
     if (!dispose_func) {
         PyGILState_Release(gstate);
         return true;  // Not an error if not available
@@ -695,7 +695,7 @@ bool PythonLayer::callDisposeLayer() {
     PyObject* result = PyObject_CallObject(dispose_func, nullptr);
     if (!result) {
         PyErr_Print();
-        spdlog::warn("PythonLayer: dispose_layer() failed");
+        spdlog::warn("PythonWidget: dispose_widget() failed");
         PyGILState_Release(gstate);
         return false;
     }
@@ -705,7 +705,7 @@ bool PythonLayer::callDisposeLayer() {
     return true;
 }
 
-bool PythonLayer::initPygfx(WebGPUContext& ctx, uint32_t width, uint32_t height) {
+bool PythonWidget::initPygfx(WebGPUContext& ctx, uint32_t width, uint32_t height) {
     if (_pygfx_initialized) {
         return true;
     }
@@ -723,7 +723,7 @@ bool PythonLayer::initPygfx(WebGPUContext& ctx, uint32_t width, uint32_t height)
 
     // Create render texture
     if (!yetty_wgpu_create_render_texture(width, height)) {
-        spdlog::error("PythonLayer: Failed to create render texture");
+        spdlog::error("PythonWidget: Failed to create render texture");
         return false;
     }
     _texture_width = width;
@@ -736,7 +736,7 @@ bool PythonLayer::initPygfx(WebGPUContext& ctx, uint32_t width, uint32_t height)
         "sys.path.insert(0, '" + std::string(CMAKE_BINARY_DIR) + "/python')\n"
     );
     if (!result) {
-        spdlog::error("PythonLayer: Failed to set Python path");
+        spdlog::error("PythonWidget: Failed to set Python path");
         return false;
     }
 
@@ -746,7 +746,7 @@ bool PythonLayer::initPygfx(WebGPUContext& ctx, uint32_t width, uint32_t height)
         "yetty_pygfx.init_pygfx()\n"
     );
     if (!result) {
-        spdlog::error("PythonLayer: Failed to import yetty_pygfx: {}", result.error().message());
+        spdlog::error("PythonWidget: Failed to import yetty_pygfx: {}", result.error().message());
         return false;
     }
 
@@ -755,7 +755,7 @@ bool PythonLayer::initPygfx(WebGPUContext& ctx, uint32_t width, uint32_t height)
         "fig = yetty_pygfx.create_figure(" + std::to_string(width) + ", " + std::to_string(height) + ")\n";
     result = _plugin->execute(create_fig_code);
     if (!result) {
-        spdlog::error("PythonLayer: Failed to create figure: {}", result.error().message());
+        spdlog::error("PythonWidget: Failed to create figure: {}", result.error().message());
         return false;
     }
 
@@ -766,12 +766,12 @@ bool PythonLayer::initPygfx(WebGPUContext& ctx, uint32_t width, uint32_t height)
     }
 
     _pygfx_initialized = true;
-    spdlog::info("PythonLayer: pygfx initialized with {}x{} render target", width, height);
+    spdlog::info("PythonWidget: pygfx initialized with {}x{} render target", width, height);
 
     return true;
 }
 
-bool PythonLayer::renderPygfx() {
+bool PythonWidget::renderPygfx() {
     if (!_pygfx_initialized || !_render_frame_func) {
         return false;
     }
@@ -790,7 +790,7 @@ bool PythonLayer::renderPygfx() {
     return success;
 }
 
-bool PythonLayer::createBlitPipeline(WebGPUContext& ctx) {
+bool PythonWidget::createBlitPipeline(WebGPUContext& ctx) {
     if (_blit_initialized) return true;
 
     WGPUDevice device = ctx.getDevice();
@@ -807,7 +807,7 @@ bool PythonLayer::createBlitPipeline(WebGPUContext& ctx) {
 
     _blit_sampler = wgpuDeviceCreateSampler(device, &samplerDesc);
     if (!_blit_sampler) {
-        spdlog::error("PythonLayer: Failed to create blit sampler");
+        spdlog::error("PythonWidget: Failed to create blit sampler");
         return false;
     }
 
@@ -860,7 +860,7 @@ bool PythonLayer::createBlitPipeline(WebGPUContext& ctx) {
 
     WGPUShaderModule shader = wgpuDeviceCreateShaderModule(device, &shaderDesc);
     if (!shader) {
-        spdlog::error("PythonLayer: Failed to create blit shader");
+        spdlog::error("PythonWidget: Failed to create blit shader");
         return false;
     }
 
@@ -929,16 +929,16 @@ bool PythonLayer::createBlitPipeline(WebGPUContext& ctx) {
     wgpuBindGroupLayoutRelease(bgl);
 
     if (!_blit_pipeline) {
-        spdlog::error("PythonLayer: Failed to create blit pipeline");
+        spdlog::error("PythonWidget: Failed to create blit pipeline");
         return false;
     }
 
     _blit_initialized = true;
-    spdlog::info("PythonLayer: Blit pipeline created");
+    spdlog::info("PythonWidget: Blit pipeline created");
     return true;
 }
 
-bool PythonLayer::blitToPass(WGPURenderPassEncoder pass, WebGPUContext& ctx) {
+bool PythonWidget::blitToPass(WGPURenderPassEncoder pass, WebGPUContext& ctx) {
     // Get the render texture view
     WGPUTextureView texView = yetty_wgpu_get_render_texture_view();
     if (!texView) {
@@ -977,7 +977,7 @@ bool PythonLayer::blitToPass(WGPURenderPassEncoder pass, WebGPUContext& ctx) {
     wgpuBindGroupLayoutRelease(bgl);
 
     if (!_blit_bind_group) {
-        spdlog::error("PythonLayer: Failed to create blit bind group");
+        spdlog::error("PythonWidget: Failed to create blit bind group");
         return false;
     }
 
@@ -1029,14 +1029,14 @@ bool PythonLayer::blitToPass(WGPURenderPassEncoder pass, WebGPUContext& ctx) {
     return true;
 }
 
-bool PythonLayer::blitRenderTexture(WebGPUContext& ctx) {
+bool PythonWidget::blitRenderTexture(WebGPUContext& ctx) {
     // Legacy method - creates own render pass (slow, don't use)
     // Use blitToPass() instead
     (void)ctx;
     return false;
 }
 
-bool PythonLayer::onKey(int key, int scancode, int action, int mods) {
+bool PythonWidget::onKey(int key, int scancode, int action, int mods) {
     (void)scancode;
     (void)mods;
 
@@ -1067,7 +1067,7 @@ bool PythonLayer::onKey(int key, int scancode, int action, int mods) {
     return false;
 }
 
-bool PythonLayer::onChar(unsigned int codepoint) {
+bool PythonWidget::onChar(unsigned int codepoint) {
     if (codepoint < 128) {
         _input_buffer += static_cast<char>(codepoint);
         return true;
@@ -1075,7 +1075,7 @@ bool PythonLayer::onChar(unsigned int codepoint) {
     return false;
 }
 
-bool PythonLayer::onMouseMove(float localX, float localY) {
+bool PythonWidget::onMouseMove(float localX, float localY) {
     _mouse_x = localX;
     _mouse_y = localY;
     
@@ -1103,7 +1103,7 @@ bool PythonLayer::onMouseMove(float localX, float localY) {
     return true;
 }
 
-bool PythonLayer::onMouseButton(int button, bool pressed) {
+bool PythonWidget::onMouseButton(int button, bool pressed) {
     _mouse_down = pressed;
     _mouse_button = button;
     
@@ -1130,7 +1130,7 @@ bool PythonLayer::onMouseButton(int button, bool pressed) {
     return true;
 }
 
-bool PythonLayer::onMouseScroll(float xoffset, float yoffset, int mods) {
+bool PythonWidget::onMouseScroll(float xoffset, float yoffset, int mods) {
     if (!_pygfx_initialized) return false;
     
     // Forward to pygfx via Python callback

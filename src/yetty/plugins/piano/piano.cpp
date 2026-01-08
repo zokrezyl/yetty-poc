@@ -38,13 +38,13 @@ Result<void> PianoPlugin::dispose() {
     return Ok();
 }
 
-Result<PluginLayerPtr> PianoPlugin::createLayer(const std::string& payload) {
+Result<WidgetPtr> PianoPlugin::createWidget(const std::string& payload) {
     auto layer = std::make_shared<PianoLayer>();
     auto result = layer->init(payload);
     if (!result) {
-        return Err<PluginLayerPtr>("Failed to initialize Piano layer", result);
+        return Err<WidgetPtr>("Failed to initialize Piano layer", result);
     }
-    return Ok<PluginLayerPtr>(layer);
+    return Ok<WidgetPtr>(layer);
 }
 
 Result<void> PianoPlugin::renderAll(WGPUTextureView targetView, WGPUTextureFormat targetFormat,

@@ -39,13 +39,13 @@ Result<void> ShaderPlugin::dispose() {
     return Ok();
 }
 
-Result<PluginLayerPtr> ShaderPlugin::createLayer(const std::string& payload) {
+Result<WidgetPtr> ShaderPlugin::createWidget(const std::string& payload) {
     auto layer = std::make_shared<ShaderLayer>();
     auto result = layer->init(payload);
     if (!result) {
-        return Err<PluginLayerPtr>("Failed to initialize Shader layer", result);
+        return Err<WidgetPtr>("Failed to initialize Shader layer", result);
     }
-    return Ok<PluginLayerPtr>(layer);
+    return Ok<WidgetPtr>(layer);
 }
 
 //-----------------------------------------------------------------------------
@@ -220,7 +220,7 @@ Result<void> ShaderLayer::render(WebGPUContext& ctx) {
     return Ok();
 }
 
-bool ShaderLayer::renderToPass(WGPURenderPassEncoder pass, WebGPUContext& ctx) {
+bool ShaderLayer::render(WGPURenderPassEncoder pass, WebGPUContext& ctx) {
     if (_failed || !_visible) return false;
 
     const auto& rc = _render_context;

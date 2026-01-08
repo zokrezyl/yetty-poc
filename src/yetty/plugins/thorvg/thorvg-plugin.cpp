@@ -53,16 +53,16 @@ Result<void> ThorvgPlugin::dispose() {
     return Ok();
 }
 
-Result<PluginLayerPtr> ThorvgPlugin::createLayer(const std::string& payload) {
-    spdlog::info("ThorvgPlugin::createLayer called with payload size={}", payload.size());
+Result<WidgetPtr> ThorvgPlugin::createWidget(const std::string& payload) {
+    spdlog::info("ThorvgPlugin::createWidget called with payload size={}", payload.size());
     auto layer = std::make_shared<ThorvgLayer>();
     auto result = layer->init(payload);
     if (!result) {
-        spdlog::error("ThorvgPlugin::createLayer: init failed: {}", result.error().message());
-        return Err<PluginLayerPtr>("Failed to init ThorvgLayer", result);
+        spdlog::error("ThorvgPlugin::createWidget: init failed: {}", result.error().message());
+        return Err<WidgetPtr>("Failed to init ThorvgLayer", result);
     }
-    spdlog::info("ThorvgPlugin::createLayer: layer created successfully");
-    return Ok<PluginLayerPtr>(layer);
+    spdlog::info("ThorvgPlugin::createWidget: layer created successfully");
+    return Ok<WidgetPtr>(layer);
 }
 
 //-----------------------------------------------------------------------------
@@ -927,7 +927,7 @@ void ThorvgLayer::prepareFrame(WebGPUContext& ctx) {
     }
 }
 
-bool ThorvgLayer::renderToPass(WGPURenderPassEncoder pass, WebGPUContext& ctx) {
+bool ThorvgLayer::render(WGPURenderPassEncoder pass, WebGPUContext& ctx) {
     // This is called INSIDE the shared render pass
     // We only blit our pre-rendered texture here - NO ThorVG rendering!
     
@@ -953,22 +953,22 @@ bool ThorvgLayer::renderToPass(WGPURenderPassEncoder pass, WebGPUContext& ctx) {
     float pixelW = _width_cells * rc.cellWidth;
     float pixelH = _height_cells * rc.cellHeight;
     
-    spdlog::info("ThorvgLayer::renderToPass: cell pos ({},{}) size ({},{}) cells", _x, _y, _width_cells, _height_cells);
-    spdlog::info("ThorvgLayer::renderToPass: pixel pos ({},{}) size ({},{})", pixelX, pixelY, pixelW, pixelH);
+    spdlog::info("ThorvgLayer::render: cell pos ({},{}) size ({},{}) cells", _x, _y, _width_cells, _height_cells);
+    spdlog::info("ThorvgLayer::render: pixel pos ({},{}) size ({},{})", pixelX, pixelY, pixelW, pixelH);
 
     // Adjust for scroll offset
     if (_position_mode == PositionMode::Relative && rc.scrollOffset > 0) {
         pixelY += rc.scrollOffset * rc.cellHeight;
-        spdlog::info("ThorvgLayer::renderToPass: adjusted for scroll, new pixelY={}", pixelY);
+        spdlog::info("ThorvgLayer::render: adjusted for scroll, new pixelY={}", pixelY);
     }
 
     // Skip if off-screen
     if (rc.termRows > 0) {
         float screenPixelHeight = rc.termRows * rc.cellHeight;
-        spdlog::info("ThorvgLayer::renderToPass: termRows={}, screenPixelHeight={}, pixelY={}, pixelH={}", 
+        spdlog::info("ThorvgLayer::render: termRows={}, screenPixelHeight={}, pixelY={}, pixelH={}", 
                      rc.termRows, screenPixelHeight, pixelY, pixelH);
         if (pixelY + pixelH <= 0 || pixelY >= screenPixelHeight) {
-            spdlog::info("ThorvgLayer::renderToPass: skipped - off-screen");
+            spdlog::info("ThorvgLayer::render: skipped - off-screen");
             return false;
         }
     }
@@ -995,18 +995,18 @@ bool ThorvgLayer::renderToPass(WGPURenderPassEncoder pass, WebGPUContext& ctx) {
     }
 
     // Draw ThorVG rendered content into existing pass
-    spdlog::info("ThorvgLayer::renderToPass: drawing composite - NDC rect ({}, {}, {}, {})", 
+    spdlog::info("ThorvgLayer::render: drawing composite - NDC rect ({}, {}, {}, {})", 
                  ndcX, ndcY, ndcW, ndcH);
-    spdlog::info("ThorvgLayer::renderToPass: pixel position ({}, {}) size ({}, {})",
+    spdlog::info("ThorvgLayer::render: pixel position ({}, {}) size ({}, {})",
                  pixelX, pixelY, pixelW, pixelH);
-    spdlog::info("ThorvgLayer::renderToPass: screen size ({}, {}), cell size ({}, {})",
+    spdlog::info("ThorvgLayer::render: screen size ({}, {}), cell size ({}, {})",
                  rc.screenWidth, rc.screenHeight, rc.cellWidth, rc.cellHeight);
     
     wgpuRenderPassEncoderSetPipeline(pass, _composite_pipeline);
     wgpuRenderPassEncoderSetBindGroup(pass, 0, _bind_group, 0, nullptr);
     wgpuRenderPassEncoderDraw(pass, 6, 1, 0, 0);
 
-    spdlog::info("ThorvgLayer::renderToPass: composite draw issued");
+    spdlog::info("ThorvgLayer::render: composite draw issued");
     return true;
 }
 

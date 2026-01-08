@@ -241,6 +241,44 @@ if(NOT EMSCRIPTEN)
 endif()
 
 #-----------------------------------------------------------------------------
+# MuPDF for PDF rendering (desktop only)
+#-----------------------------------------------------------------------------
+if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
+    CPMAddPackage(
+        NAME mupdf
+        URL https://mupdf.com/downloads/archive/mupdf-1.25.4-source.tar.gz
+        DOWNLOAD_ONLY YES
+    )
+    if(mupdf_ADDED)
+        include(${CMAKE_CURRENT_SOURCE_DIR}/build-tools/cmake/mupdf/CMakeLists.txt)
+    endif()
+endif()
+
+#-----------------------------------------------------------------------------
+# ymery-cpp for ymery plugin (ImGui/ImPlot scientific visualization)
+#-----------------------------------------------------------------------------
+if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
+    # ymery-cpp plugins go to plugins/ymery subdirectory
+    set(YMERY_PLUGIN_DIR "${CMAKE_BINARY_DIR}/plugins/ymery" CACHE PATH "")
+    CPMAddPackage(
+        NAME ymery-cpp
+        GITHUB_REPOSITORY zokrezyl/ymery-cpp
+        GIT_TAG main
+        OPTIONS
+            "YMERY_BUILD_TESTS OFF"
+            "YMERY_BUILD_GUI_TESTS OFF"
+            "YMERY_USE_WEBGPU ON"
+    )
+endif()
+
+#-----------------------------------------------------------------------------
+# FFmpeg for video plugin (Unix only - requires ./configure + make)
+#-----------------------------------------------------------------------------
+if(UNIX AND NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/build-tools/cmake/ffmpeg ffmpeg_build)
+endif()
+
+#-----------------------------------------------------------------------------
 # Android-specific dependencies
 #-----------------------------------------------------------------------------
 if(YETTY_ANDROID)

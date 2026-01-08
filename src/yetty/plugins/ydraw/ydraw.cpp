@@ -35,13 +35,13 @@ Result<void> YDrawPlugin::dispose() {
     return Ok();
 }
 
-Result<PluginLayerPtr> YDrawPlugin::createLayer(const std::string& payload) {
+Result<WidgetPtr> YDrawPlugin::createWidget(const std::string& payload) {
     auto layer = std::make_shared<YDrawLayer>();
     auto result = layer->init(payload);
     if (!result) {
-        return Err<PluginLayerPtr>("Failed to initialize YDraw layer", result);
+        return Err<WidgetPtr>("Failed to initialize YDraw layer", result);
     }
-    return Ok<PluginLayerPtr>(layer);
+    return Ok<WidgetPtr>(layer);
 }
 
 //-----------------------------------------------------------------------------
@@ -176,7 +176,7 @@ Result<void> YDrawLayer::render(WebGPUContext& ctx) {
     return Ok();
 }
 
-bool YDrawLayer::renderToPass(WGPURenderPassEncoder pass, WebGPUContext& ctx) {
+bool YDrawLayer::render(WGPURenderPassEncoder pass, WebGPUContext& ctx) {
     if (_failed || !_visible || !_renderer) return false;
 
     const auto& rc = _render_context;

@@ -3,7 +3,7 @@
 //=============================================================================
 // Mock Plugin for Testing
 //
-// Lightweight mock plugin and layer for testing plugin manager behavior
+// Lightweight mock plugin and widget for testing plugin manager behavior
 // without GPU dependencies.
 //=============================================================================
 
@@ -14,12 +14,12 @@
 namespace yetty::test {
 
 //-----------------------------------------------------------------------------
-// MockPluginLayer - Simple layer for testing
+// MockPluginWidget - Simple widget for testing
 //-----------------------------------------------------------------------------
-class MockPluginLayer : public PluginLayer {
+class MockPluginWidget : public Widget {
 public:
-    MockPluginLayer() = default;
-    ~MockPluginLayer() override = default;
+    MockPluginWidget() = default;
+    ~MockPluginWidget() override = default;
 
     Result<void> init(const std::string& payload) override {
         _payload = payload;
@@ -38,7 +38,7 @@ public:
         return Ok();
     }
 
-    bool renderToPass(WGPURenderPassEncoder pass, WebGPUContext& ctx) override {
+    bool render(WGPURenderPassEncoder pass, WebGPUContext& ctx) override {
         (void)pass;
         (void)ctx;
         _render_count++;
@@ -106,13 +106,13 @@ public:
 
     const char* pluginName() const override { return "mock"; }
 
-    Result<PluginLayerPtr> createLayer(const std::string& payload) override {
-        auto layer = std::make_shared<MockPluginLayer>();
+    Result<WidgetPtr> createWidget(const std::string& payload) override {
+        auto layer = std::make_shared<MockPluginWidget>();
         if (auto res = layer->init(payload); !res) {
-            return Err<PluginLayerPtr>("Failed to init mock layer", res);
+            return Err<WidgetPtr>("Failed to init mock layer", res);
         }
         _created_layers.push_back(layer);
-        return Ok<PluginLayerPtr>(layer);
+        return Ok<WidgetPtr>(layer);
     }
 
     Result<void> render(WebGPUContext& ctx) override {
@@ -124,7 +124,7 @@ public:
     // Test inspection
     int initCount() const { return _init_count; }
     int renderCount() const { return _render_count; }
-    const std::vector<std::shared_ptr<MockPluginLayer>>& createdLayers() const {
+    const std::vector<std::shared_ptr<MockPluginWidget>>& createdWidgets() const {
         return _created_layers;
     }
 
@@ -138,7 +138,7 @@ private:
 
     int _init_count = 0;
     int _render_count = 0;
-    std::vector<std::shared_ptr<MockPluginLayer>> _created_layers;
+    std::vector<std::shared_ptr<MockPluginWidget>> _created_layers;
 };
 
 } // namespace yetty::test

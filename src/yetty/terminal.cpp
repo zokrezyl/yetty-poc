@@ -182,7 +182,7 @@ Result<void> Terminal::render(WebGPUContext& ctx) {
 
     // Check if plugins need rendering - if so, we must always render to provide
     // a defined base (swapchain texture is undefined each frame)
-    bool pluginsActive = pluginManager_ && !pluginManager_->getAllLayers().empty();
+    bool pluginsActive = pluginManager_ && !pluginManager_->getAllWidgets().empty();
 
     // Skip rendering if no damage AND no plugins need base
     if (!hasDamage() && !pluginsActive) {

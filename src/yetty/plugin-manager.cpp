@@ -25,7 +25,7 @@ Result<void> PluginManager::init() noexcept {
 }
 
 PluginManager::~PluginManager() {
-    // Dispose all plugins (which disposes their layers)
+    // Dispose all plugins (which disposes their widgets)
     for (auto& [name, plugin] : plugins_) {
         if (plugin) (void)plugin->dispose();
     }
@@ -161,10 +161,10 @@ Result<WidgetPtr> PluginManager::createWidget(const std::string& pluginName,
     PluginPtr plugin = *pluginResult;
 
     // Create the widget
-    spdlog::info("PluginManager::createWidget: calling plugin->createLayer with payload_size={}", payload.size());
-    auto widgetResult = plugin->createLayer(payload);  // Uses legacy name for compatibility
+    spdlog::info("PluginManager::createWidget: calling plugin->createWidget with payload_size={}", payload.size());
+    auto widgetResult = plugin->createWidget(payload);
     if (!widgetResult) {
-        spdlog::error("PluginManager::createWidget: createLayer failed: {}", error_msg(widgetResult));
+        spdlog::error("PluginManager::createWidget: createWidget failed: {}", error_msg(widgetResult));
         return Err<WidgetPtr>("Failed to create widget", widgetResult);
     }
     WidgetPtr widget = *widgetResult;
@@ -196,7 +196,7 @@ Result<WidgetPtr> PluginManager::createWidget(const std::string& pluginName,
     }
 
     // Configure the widget
-    widget->setId(nextLayerId_++);
+    widget->setId(nextWidgetId_++);
     widget->setHashId(oscParser_.generateId());  // Generate 8-char hash ID
     widget->setPositionMode(mode);
     widget->setScreenType(isAltScreen_ ? ScreenType::Alternate : ScreenType::Main);
@@ -218,41 +218,41 @@ Result<WidgetPtr> PluginManager::createWidget(const std::string& pluginName,
     return Ok(widget);
 }
 
-Result<void> PluginManager::updateLayer(const std::string& hashId, const std::string& payload) {
-    PluginLayerPtr layer = getLayer(hashId);
-    if (!layer) {
-        return Err<void>("Layer not found: " + hashId);
+Result<void> PluginManager::updateWidget(const std::string& hashId, const std::string& payload) {
+    WidgetPtr widget = getWidget(hashId);
+    if (!widget) {
+        return Err<void>("Widget not found: " + hashId);
     }
 
     // Re-init
-    if (auto res = layer->dispose(); !res) {
-        return Err<void>("Failed to dispose layer during update", res);
+    if (auto res = widget->dispose(); !res) {
+        return Err<void>("Failed to dispose widget during update", res);
     }
-    if (auto res = layer->init(payload); !res) {
-        return Err<void>("Layer re-init failed", res);
+    if (auto res = widget->init(payload); !res) {
+        return Err<void>("Widget re-init failed", res);
     }
 
     return Ok();
 }
 
-Result<void> PluginManager::removeLayer(const std::string& hashId, Grid* grid) {
+Result<void> PluginManager::removeWidget(const std::string& hashId, Grid* grid) {
     auto it = widgetsByHashId_.find(hashId);
     if (it == widgetsByHashId_.end()) {
-        return Err<void>("Layer not found: " + hashId);
+        return Err<void>("Widget not found: " + hashId);
     }
 
-    PluginLayerPtr layer = it->second;
-    uint32_t numericId = layer->id();
+    WidgetPtr widget = it->second;
+    uint32_t numericId = widget->id();
 
     if (grid) {
-        clearGridCells(grid, layer.get());
+        clearGridCells(grid, widget.get());
     }
 
     // Remove from plugin
     for (auto& [name, plugin] : plugins_) {
-        if (plugin->getLayer(numericId)) {
-            if (auto res = plugin->removeLayer(numericId); !res) {
-                return Err<void>("Failed to remove layer from plugin", res);
+        if (plugin->getWidget(numericId)) {
+            if (auto res = plugin->removeWidget(numericId); !res) {
+                return Err<void>("Failed to remove widget from plugin", res);
             }
             break;
         }
@@ -264,61 +264,61 @@ Result<void> PluginManager::removeLayer(const std::string& hashId, Grid* grid) {
     return Ok();
 }
 
-PluginLayerPtr PluginManager::getLayer(const std::string& hashId) {
+WidgetPtr PluginManager::getWidget(const std::string& hashId) {
     auto it = widgetsByHashId_.find(hashId);
     return (it != widgetsByHashId_.end()) ? it->second : nullptr;
 }
 
-PluginLayerPtr PluginManager::getLayerById(uint32_t id) {
+WidgetPtr PluginManager::getWidgetById(uint32_t id) {
     for (auto& [name, plugin] : plugins_) {
-        if (auto layer = plugin->getLayer(id)) {
-            return layer;
+        if (auto widget = plugin->getWidget(id)) {
+            return widget;
         }
     }
     return nullptr;
 }
 
-Result<void> PluginManager::stopLayer(const std::string& hashId) {
-    PluginLayerPtr layer = getLayer(hashId);
-    if (!layer) {
-        return Err<void>("Layer not found: " + hashId);
+Result<void> PluginManager::stopWidget(const std::string& hashId) {
+    WidgetPtr widget = getWidget(hashId);
+    if (!widget) {
+        return Err<void>("Widget not found: " + hashId);
     }
-    layer->stop();
+    widget->stop();
     return Ok();
 }
 
-Result<void> PluginManager::stopLayersByPlugin(const std::string& pluginName) {
+Result<void> PluginManager::stopWidgetsByPlugin(const std::string& pluginName) {
     auto it = plugins_.find(pluginName);
     if (it == plugins_.end()) {
         return Err<void>("Plugin not found: " + pluginName);
     }
-    for (auto& layer : it->second->getLayers()) {
-        layer->stop();
+    for (auto& widget : it->second->getWidgets()) {
+        widget->stop();
     }
     return Ok();
 }
 
-Result<void> PluginManager::startLayer(const std::string& hashId) {
-    PluginLayerPtr layer = getLayer(hashId);
-    if (!layer) {
-        return Err<void>("Layer not found: " + hashId);
+Result<void> PluginManager::startWidget(const std::string& hashId) {
+    WidgetPtr widget = getWidget(hashId);
+    if (!widget) {
+        return Err<void>("Widget not found: " + hashId);
     }
-    layer->start();
+    widget->start();
     return Ok();
 }
 
-Result<void> PluginManager::startLayersByPlugin(const std::string& pluginName) {
+Result<void> PluginManager::startWidgetsByPlugin(const std::string& pluginName) {
     auto it = plugins_.find(pluginName);
     if (it == plugins_.end()) {
         return Err<void>("Plugin not found: " + pluginName);
     }
-    for (auto& layer : it->second->getLayers()) {
-        layer->start();
+    for (auto& widget : it->second->getWidgets()) {
+        widget->start();
     }
     return Ok();
 }
 
-Result<void> PluginManager::killLayersByPlugin(const std::string& pluginName, Grid* grid) {
+Result<void> PluginManager::killWidgetsByPlugin(const std::string& pluginName, Grid* grid) {
     auto it = plugins_.find(pluginName);
     if (it == plugins_.end()) {
         return Err<void>("Plugin not found: " + pluginName);
@@ -326,13 +326,13 @@ Result<void> PluginManager::killLayersByPlugin(const std::string& pluginName, Gr
 
     // Collect hash IDs first (can't modify while iterating)
     std::vector<std::string> hashIds;
-    for (auto& layer : it->second->getLayers()) {
-        hashIds.push_back(layer->hashId());
+    for (auto& widget : it->second->getWidgets()) {
+        hashIds.push_back(widget->hashId());
     }
 
-    // Remove each layer
+    // Remove each widget
     for (const auto& hashId : hashIds) {
-        if (auto res = removeLayer(hashId, grid); !res) {
+        if (auto res = removeWidget(hashId, grid); !res) {
             return res;
         }
     }
@@ -349,14 +349,14 @@ std::vector<std::string> PluginManager::getAvailablePlugins() const {
     return names;
 }
 
-std::vector<PluginLayerPtr> PluginManager::getAllLayers() const {
-    std::vector<PluginLayerPtr> layers;
+std::vector<WidgetPtr> PluginManager::getAllWidgets() const {
+    std::vector<WidgetPtr> widgets;
     for (auto& [name, plugin] : plugins_) {
-        for (auto& layer : plugin->getLayers()) {
-            layers.push_back(layer);
+        for (auto& widget : plugin->getWidgets()) {
+            widgets.push_back(widget);
         }
     }
-    return layers;
+    return widgets;
 }
 
 bool PluginManager::handleOSCSequence(const std::string& sequence,
@@ -412,32 +412,32 @@ bool PluginManager::handleOSCSequence(const std::string& sequence,
             WidgetPtr widget = *result;
             std::cout << "Created widget " << widget->hashId() << " plugin=" << cmd.create.plugin
                       << " at (" << x << "," << y << ") size "
-                      << cmd.create.width << "x" << cmd.create.height << std::endl;
+                      << widget->getWidthCells() << "x" << widget->getHeightCells() << std::endl;
 
             if (linesToAdvance && cmd.create.relative) {
-                *linesToAdvance = std::abs(cmd.create.height);
+                *linesToAdvance = std::abs(static_cast<int>(widget->getHeightCells()));
             }
             return true;
         }
 
         case OscCommandType::List: {
             if (response) {
-                std::vector<std::tuple<std::string, std::string, int, int, int, int, bool>> layers;
-                for (auto& layer : getAllLayers()) {
-                    if (!cmd.list.all && !layer->isRunning()) {
-                        continue;  // Skip stopped layers unless --all
+                std::vector<std::tuple<std::string, std::string, int, int, int, int, bool>> widgets;
+                for (auto& widget : getAllWidgets()) {
+                    if (!cmd.list.all && !widget->isRunning()) {
+                        continue;  // Skip stopped widgets unless --all
                     }
-                    layers.emplace_back(
-                        layer->hashId(),
-                        layer->getParent()->pluginName(),
-                        layer->getX(),
-                        layer->getY(),
-                        layer->getWidthCells(),
-                        layer->getHeightCells(),
-                        layer->isRunning()
+                    widgets.emplace_back(
+                        widget->hashId(),
+                        widget->getParent()->pluginName(),
+                        widget->getX(),
+                        widget->getY(),
+                        widget->getWidthCells(),
+                        widget->getHeightCells(),
+                        widget->isRunning()
                     );
                 }
-                *response = OscResponse::layerList(layers);
+                *response = OscResponse::widgetList(widgets);
             }
             return true;
         }
@@ -452,9 +452,9 @@ bool PluginManager::handleOSCSequence(const std::string& sequence,
         case OscCommandType::Kill: {
             Result<void> result;
             if (!cmd.target.id.empty()) {
-                result = removeLayer(cmd.target.id, grid);
+                result = removeWidget(cmd.target.id, grid);
             } else if (!cmd.target.plugin.empty()) {
-                result = killLayersByPlugin(cmd.target.plugin, grid);
+                result = killWidgetsByPlugin(cmd.target.plugin, grid);
             } else {
                 result = Err<void>("kill: --id or --plugin required");
             }
@@ -471,9 +471,9 @@ bool PluginManager::handleOSCSequence(const std::string& sequence,
         case OscCommandType::Stop: {
             Result<void> result;
             if (!cmd.target.id.empty()) {
-                result = stopLayer(cmd.target.id);
+                result = stopWidget(cmd.target.id);
             } else if (!cmd.target.plugin.empty()) {
-                result = stopLayersByPlugin(cmd.target.plugin);
+                result = stopWidgetsByPlugin(cmd.target.plugin);
             } else {
                 result = Err<void>("stop: --id or --plugin required");
             }
@@ -490,9 +490,9 @@ bool PluginManager::handleOSCSequence(const std::string& sequence,
         case OscCommandType::Start: {
             Result<void> result;
             if (!cmd.target.id.empty()) {
-                result = startLayer(cmd.target.id);
+                result = startWidget(cmd.target.id);
             } else if (!cmd.target.plugin.empty()) {
-                result = startLayersByPlugin(cmd.target.plugin);
+                result = startWidgetsByPlugin(cmd.target.plugin);
             } else {
                 result = Err<void>("start: --id or --plugin required");
             }
@@ -514,7 +514,7 @@ bool PluginManager::handleOSCSequence(const std::string& sequence,
                 return false;
             }
 
-            auto result = updateLayer(cmd.target.id, cmd.payload);
+            auto result = updateWidget(cmd.target.id, cmd.payload);
             if (!result) {
                 if (response) {
                     *response = OscResponse::error(error_msg(result));
@@ -544,8 +544,8 @@ Result<void> PluginManager::render(WebGPUContext& ctx, WGPUTextureView targetVie
                                     int scrollOffset, uint32_t termRows) {
     if (!targetView) return Err<void>("PluginManager::render: targetView is null");
 
-    // Early return if no layers to render
-    if (getAllLayers().empty()) {
+    // Early return if no widgets to render
+    if (getAllWidgets().empty()) {
         return Ok();
     }
 
@@ -568,21 +568,21 @@ Result<void> PluginManager::render(WebGPUContext& ctx, WGPUTextureView targetVie
     for (auto& [name, plugin] : plugins_) {
         // Plugin is already initialized by create()
 
-        // Render debug frame for each layer (disabled by default - expensive!)
+        // Render debug frame for each widget (disabled by default - expensive!)
         if (RENDER_DEBUG_FRAMES) {
-            for (auto& layer : plugin->getLayers()) {
-                if (!layer->isVisible()) continue;
+            for (auto& widget : plugin->getWidgets()) {
+                if (!widget->isVisible()) continue;
 
-                // Skip layers that belong to a different screen
-                if (layer->getScreenType() != currentScreen) continue;
+                // Skip widgets that belong to a different screen
+                if (widget->getScreenType() != currentScreen) continue;
 
-                float pixelX = layer->getX() * cellWidth;
-                float pixelY = layer->getY() * cellHeight;
-                float pixelW = layer->getWidthCells() * cellWidth;
-                float pixelH = layer->getHeightCells() * cellHeight;
+                float pixelX = widget->getX() * cellWidth;
+                float pixelY = widget->getY() * cellHeight;
+                float pixelW = widget->getWidthCells() * cellWidth;
+                float pixelH = widget->getHeightCells() * cellHeight;
 
                 // Adjust for scroll offset
-                if (layer->getPositionMode() == PositionMode::Relative && scrollOffset > 0) {
+                if (widget->getPositionMode() == PositionMode::Relative && scrollOffset > 0) {
                     pixelY += scrollOffset * cellHeight;
                 }
 
@@ -596,15 +596,15 @@ Result<void> PluginManager::render(WebGPUContext& ctx, WGPUTextureView targetVie
 
                 // Determine frame color based on state
                 float r, g, b, a;
-                if (layer == focusedLayer_) {
+                if (widget == focusedWidget_) {
                     r = 0.0f; g = 1.0f; b = 0.0f; a = 1.0f;  // Green for focused
-                } else if (layer == hoveredLayer_) {
+                } else if (widget == hoveredWidget_) {
                     r = 1.0f; g = 1.0f; b = 0.0f; a = 1.0f;  // Yellow for hovered
                 } else {
                     r = 0.3f; g = 0.5f; b = 0.7f; a = 0.8f;  // Dim cyan for default
                 }
 
-                // Render frame slightly larger than layer
+                // Render frame slightly larger than widget
                 renderFrame(ctx, targetView, screenWidth, screenHeight,
                             pixelX - framePadding, pixelY - framePadding,
                             pixelW + framePadding * 2, pixelH + framePadding * 2,
@@ -612,8 +612,8 @@ Result<void> PluginManager::render(WebGPUContext& ctx, WGPUTextureView targetVie
             }
         }
 
-        // Set RenderContext for each layer (needed for position calculations)
-        for (auto& layer : plugin->getLayers()) {
+        // Set RenderContext for each widget (needed for position calculations)
+        for (auto& widget : plugin->getWidgets()) {
             RenderContext rc;
             rc.targetView = targetView;
             rc.targetFormat = ctx.getSurfaceFormat();
@@ -625,20 +625,23 @@ Result<void> PluginManager::render(WebGPUContext& ctx, WGPUTextureView targetVie
             rc.termRows = termRows;
             rc.isAltScreen = isAltScreen_;
             rc.deltaTime = 0.016;  // ~60fps default
-            layer->setRenderContext(rc);
+            widget->setRenderContext(rc);
         }
     }
 
     // PRE-RENDER PHASE: Let plugins render to their intermediate textures
     // This happens BEFORE the shared render pass, so plugins can submit their own commands
     for (auto& [name, plugin] : plugins_) {
-        for (auto& layer : plugin->getLayers()) {
-            if (!layer->isVisible()) continue;
-            if (layer->getScreenType() != currentScreen) continue;
+        // Call plugin's render() for shared resources (e.g., ymery's ImGui context)
+        plugin->render(ctx);
+        
+        for (auto& widget : plugin->getWidgets()) {
+            if (!widget->isVisible()) continue;
+            if (widget->getScreenType() != currentScreen) continue;
             
             // prepareFrame() allows plugins to render to textures (ThorVG, pygfx, etc.)
-            spdlog::info("PluginManager: calling prepareFrame on layer {}", layer->name());
-            layer->prepareFrame(ctx);
+            spdlog::info("PluginManager: calling prepareFrame on widget {}", widget->name());
+            widget->prepareFrame(ctx);
         }
     }
 
@@ -666,14 +669,14 @@ Result<void> PluginManager::render(WebGPUContext& ctx, WGPUTextureView targetVie
         return Err<void>("PluginManager: Failed to begin render pass");
     }
 
-    // Render ALL plugin layers in this single pass (blit pre-rendered textures)
+    // Render ALL plugin widgets in this single pass (blit pre-rendered textures)
     for (auto& [name, plugin] : plugins_) {
-        for (auto& layer : plugin->getLayers()) {
-            if (!layer->isVisible()) continue;
-            if (layer->getScreenType() != currentScreen) continue;
+        for (auto& widget : plugin->getWidgets()) {
+            if (!widget->isVisible()) continue;
+            if (widget->getScreenType() != currentScreen) continue;
 
-            // Use batched renderToPass - just draws, no encoder/submit overhead!
-            layer->renderToPass(pass, ctx);
+            // Use batched render() - just draws, no encoder/submit overhead!
+            widget->render(pass, ctx);
         }
     }
 
@@ -707,28 +710,28 @@ Result<void> PluginManager::onTerminalResize(uint32_t newCols, uint32_t newRows,
 
 void PluginManager::onScroll(int lines, Grid* grid) {
     for (auto& [name, plugin] : plugins_) {
-        for (auto& layer : plugin->getLayers()) {
-            if (layer->getPositionMode() == PositionMode::Relative) {
+        for (auto& widget : plugin->getWidgets()) {
+            if (widget->getPositionMode() == PositionMode::Relative) {
                 if (grid) {
-                    clearGridCells(grid, layer.get());
+                    clearGridCells(grid, widget.get());
                 }
-                layer->setPosition(layer->getX(), layer->getY() - lines);
+                widget->setPosition(widget->getX(), widget->getY() - lines);
                 if (grid) {
-                    markGridCells(grid, layer.get());
+                    markGridCells(grid, widget.get());
                 }
             }
         }
     }
 }
 
-void PluginManager::markGridCells(Grid* grid, PluginLayer* layer) {
-    if (!grid || !layer) return;
+void PluginManager::markGridCells(Grid* grid, Widget* widget) {
+    if (!grid || !widget) return;
 
-    int32_t startX = layer->getX();
-    int32_t startY = layer->getY();
-    uint32_t w = layer->getWidthCells();
-    uint32_t h = layer->getHeightCells();
-    uint16_t id = static_cast<uint16_t>(layer->id());
+    int32_t startX = widget->getX();
+    int32_t startY = widget->getY();
+    uint32_t w = widget->getWidthCells();
+    uint32_t h = widget->getHeightCells();
+    uint16_t id = static_cast<uint16_t>(widget->id());
 
     for (uint32_t row = 0; row < h; row++) {
         for (uint32_t col = 0; col < w; col++) {
@@ -743,13 +746,13 @@ void PluginManager::markGridCells(Grid* grid, PluginLayer* layer) {
     }
 }
 
-void PluginManager::clearGridCells(Grid* grid, PluginLayer* layer) {
-    if (!grid || !layer) return;
+void PluginManager::clearGridCells(Grid* grid, Widget* widget) {
+    if (!grid || !widget) return;
 
-    int32_t startX = layer->getX();
-    int32_t startY = layer->getY();
-    uint32_t w = layer->getWidthCells();
-    uint32_t h = layer->getHeightCells();
+    int32_t startX = widget->getX();
+    int32_t startY = widget->getY();
+    uint32_t w = widget->getWidthCells();
+    uint32_t h = widget->getHeightCells();
 
     for (uint32_t row = 0; row < h; row++) {
         for (uint32_t col = 0; col < w; col++) {
@@ -804,36 +807,36 @@ std::string PluginManager::base94Encode(const std::string& data) {
 // Input routing
 //-----------------------------------------------------------------------------
 
-PluginLayerPtr PluginManager::layerAtCell(int col, int row, const Grid* grid) {
+WidgetPtr PluginManager::widgetAtCell(int col, int row, const Grid* grid) {
     if (!grid) return nullptr;
     if (col < 0 || row < 0) return nullptr;
     if ((uint32_t)col >= grid->getCols() || (uint32_t)row >= grid->getRows()) return nullptr;
 
-    uint16_t layerId = grid->getPluginId(col, row);
-    if (layerId == 0) return nullptr;
+    uint16_t widgetId = grid->getPluginId(col, row);
+    if (widgetId == 0) return nullptr;
 
-    spdlog::debug("layerAtCell({},{}): FOUND layer ID={}", col, row, layerId);
-    return getLayerById(layerId);
+    spdlog::debug("widgetAtCell({},{}): FOUND widget ID={}", col, row, widgetId);
+    return getWidgetById(widgetId);
 }
 
 void PluginManager::clearFocus() {
-    if (focusedLayer_) {
-        focusedLayer_->setFocus(false);
-        focusedLayer_ = nullptr;
+    if (focusedWidget_) {
+        focusedWidget_->setFocus(false);
+        focusedWidget_ = nullptr;
     }
 }
 
 void PluginManager::onAltScreenChange(bool isAltScreen) {
     isAltScreen_ = isAltScreen;
-    // Clear focus when switching screens - focused layer may not be visible
-    if (focusedLayer_) {
+    // Clear focus when switching screens - focused widget may not be visible
+    if (focusedWidget_) {
         ScreenType currentScreen = isAltScreen ? ScreenType::Alternate : ScreenType::Main;
-        if (focusedLayer_->getScreenType() != currentScreen) {
+        if (focusedWidget_->getScreenType() != currentScreen) {
             clearFocus();
         }
     }
-    // Also clear hovered layer
-    hoveredLayer_ = nullptr;
+    // Also clear hovered widget
+    hoveredWidget_ = nullptr;
 }
 
 bool PluginManager::onMouseMove(float pixelX, float pixelY, const Grid* grid,
@@ -845,23 +848,23 @@ bool PluginManager::onMouseMove(float pixelX, float pixelY, const Grid* grid,
     int row = static_cast<int>(pixelY / cellHeight);
     int logicalRow = row - scrollOffset;
 
-    PluginLayerPtr layer = layerAtCell(col, logicalRow, grid);
+    WidgetPtr widget = widgetAtCell(col, logicalRow, grid);
 
-    // Track hovered layer for debug frame coloring
-    hoveredLayer_ = layer;
+    // Track hovered widget for debug frame coloring
+    hoveredWidget_ = widget;
 
-    if (layer && layer->wantsMouse()) {
-        float layerPixelX = layer->getX() * cellWidth;
-        float layerPixelY = layer->getY() * cellHeight;
+    if (widget && widget->wantsMouse()) {
+        float widgetPixelX = widget->getX() * cellWidth;
+        float widgetPixelY = widget->getY() * cellHeight;
 
-        if (layer->getPositionMode() == PositionMode::Relative && scrollOffset > 0) {
-            layerPixelY += scrollOffset * cellHeight;
+        if (widget->getPositionMode() == PositionMode::Relative && scrollOffset > 0) {
+            widgetPixelY += scrollOffset * cellHeight;
         }
 
-        float localX = pixelX - layerPixelX;
-        float localY = pixelY - layerPixelY;
+        float localX = pixelX - widgetPixelX;
+        float localY = pixelY - widgetPixelY;
 
-        return layer->onMouseMove(localX, localY);
+        return widget->onMouseMove(localX, localY);
     }
 
     return false;
@@ -873,35 +876,35 @@ bool PluginManager::onMouseButton(int button, bool pressed, float pixelX, float 
     int row = static_cast<int>(pixelY / cellHeight);
     int logicalRow = row - scrollOffset;
 
-    PluginLayerPtr layer = layerAtCell(col, logicalRow, grid);
+    WidgetPtr widget = widgetAtCell(col, logicalRow, grid);
 
     // Handle focus changes on left click
     if (pressed && button == 0) {
-        if (layer != focusedLayer_) {
-            if (focusedLayer_) {
-                focusedLayer_->onMouseButton(-1, false);
+        if (widget != focusedWidget_) {
+            if (focusedWidget_) {
+                focusedWidget_->onMouseButton(-1, false);
             }
             clearFocus();
-            if (layer && (layer->wantsKeyboard() || layer->wantsMouse())) {
-                focusedLayer_ = layer;
-                layer->setFocus(true);
+            if (widget && (widget->wantsKeyboard() || widget->wantsMouse())) {
+                focusedWidget_ = widget;
+                widget->setFocus(true);
             }
         }
     }
 
-    if (layer && layer->wantsMouse()) {
-        float layerPixelX = layer->getX() * cellWidth;
-        float layerPixelY = layer->getY() * cellHeight;
+    if (widget && widget->wantsMouse()) {
+        float widgetPixelX = widget->getX() * cellWidth;
+        float widgetPixelY = widget->getY() * cellHeight;
 
-        if (layer->getPositionMode() == PositionMode::Relative && scrollOffset > 0) {
-            layerPixelY += scrollOffset * cellHeight;
+        if (widget->getPositionMode() == PositionMode::Relative && scrollOffset > 0) {
+            widgetPixelY += scrollOffset * cellHeight;
         }
 
-        float localX = pixelX - layerPixelX;
-        float localY = pixelY - layerPixelY;
+        float localX = pixelX - widgetPixelX;
+        float localY = pixelY - widgetPixelY;
 
-        layer->onMouseMove(localX, localY);
-        return layer->onMouseButton(button, pressed);
+        widget->onMouseMove(localX, localY);
+        return widget->onMouseButton(button, pressed);
     }
 
     return false;
@@ -916,32 +919,32 @@ bool PluginManager::onMouseScroll(float xoffset, float yoffset, int mods, float 
     spdlog::debug("PluginManager::onMouseScroll: pixel({:.1f},{:.1f}) -> cell({},{}) logicalRow={} scrollOffset={}", 
                   pixelX, pixelY, col, row, logicalRow, scrollOffset);
 
-    PluginLayerPtr layer = layerAtCell(col, logicalRow, grid);
-    if (layer) {
-        spdlog::debug("PluginManager::onMouseScroll: Found layer '{}' wantsMouse={}", 
-                      layer->name(), layer->wantsMouse());
-        if (layer->wantsMouse()) {
-            bool handled = layer->onMouseScroll(xoffset, yoffset, mods);
-            spdlog::debug("PluginManager::onMouseScroll: Layer handled scroll={}", handled);
+    WidgetPtr widget = widgetAtCell(col, logicalRow, grid);
+    if (widget) {
+        spdlog::debug("PluginManager::onMouseScroll: Found widget '{}' wantsMouse={}", 
+                      widget->name(), widget->wantsMouse());
+        if (widget->wantsMouse()) {
+            bool handled = widget->onMouseScroll(xoffset, yoffset, mods);
+            spdlog::debug("PluginManager::onMouseScroll: Widget handled scroll={}", handled);
             return handled;
         }
     } else {
-        spdlog::debug("PluginManager::onMouseScroll: No layer at cell({},{})", col, logicalRow);
+        spdlog::debug("PluginManager::onMouseScroll: No widget at cell({},{})", col, logicalRow);
     }
 
     return false;
 }
 
 bool PluginManager::onKey(int key, int scancode, int action, int mods) {
-    if (focusedLayer_ && focusedLayer_->wantsKeyboard()) {
-        return focusedLayer_->onKey(key, scancode, action, mods);
+    if (focusedWidget_ && focusedWidget_->wantsKeyboard()) {
+        return focusedWidget_->onKey(key, scancode, action, mods);
     }
     return false;
 }
 
 bool PluginManager::onChar(unsigned int codepoint) {
-    if (focusedLayer_ && focusedLayer_->wantsKeyboard()) {
-        return focusedLayer_->onChar(codepoint);
+    if (focusedWidget_ && focusedWidget_->wantsKeyboard()) {
+        return focusedWidget_->onChar(codepoint);
     }
     return false;
 }
@@ -1203,7 +1206,7 @@ uint16_t PluginManager::onCellSync(uint32_t col, uint32_t row, uint32_t codepoin
     uint64_t posKey = makePositionKey(col, row);
     auto existingIt = customGlyphPositions_.find(posKey);
     if (existingIt != customGlyphPositions_.end()) {
-        // Already have a custom glyph here - remove the old layer first
+        // Already have a custom glyph here - remove the old widget first
         onCellClear(col, row);
     }
 
@@ -1213,18 +1216,18 @@ uint16_t PluginManager::onCellSync(uint32_t col, uint32_t row, uint32_t codepoin
         return 0;  // No custom glyph for this codepoint
     }
 
-    // Create a layer for this codepoint
-    auto layerResult = plugin->createLayer(codepoint);
-    if (!layerResult) {
-        spdlog::warn("Failed to create custom glyph layer for U+{:04X}: {}",
-                     codepoint, error_msg(layerResult));
+    // Create a widget for this codepoint
+    auto widgetResult = plugin->createWidget(codepoint);
+    if (!widgetResult) {
+        spdlog::warn("Failed to create custom glyph widget for U+{:04X}: {}",
+                     codepoint, error_msg(widgetResult));
         return 0;
     }
 
-    auto layer = *layerResult;
-    layer->setPosition(col, row);
-    layer->setCellSize(widthCells, 1);
-    plugin->addLayer(layer);
+    auto widget = *widgetResult;
+    widget->setPosition(col, row);
+    widget->setCellSize(widthCells, 1);
+    plugin->addWidget(widget);
 
     // Assign a reserved glyph index
     uint16_t glyphIndex = nextCustomGlyphIndex_++;
@@ -1235,7 +1238,7 @@ uint16_t PluginManager::onCellSync(uint32_t col, uint32_t row, uint32_t codepoin
 
     customGlyphPositions_[posKey] = glyphIndex;
 
-    spdlog::debug("Created custom glyph layer for U+{:04X} at ({},{}) -> index 0x{:04X}",
+    spdlog::debug("Created custom glyph widget for U+{:04X} at ({},{}) -> index 0x{:04X}",
                   codepoint, col, row, glyphIndex);
 
     return glyphIndex;
@@ -1248,12 +1251,12 @@ void PluginManager::onCellClear(uint32_t col, uint32_t row) {
         return;  // No custom glyph at this position
     }
 
-    // Find and remove the layer from its plugin
+    // Find and remove the widget from its plugin
     for (auto& plugin : customGlyphPlugins_) {
-        auto layer = plugin->getLayerAt(col, row);
-        if (layer) {
-            plugin->removeLayerAt(col, row);
-            spdlog::debug("Removed custom glyph layer at ({},{})", col, row);
+        auto widget = plugin->getWidgetAt(col, row);
+        if (widget) {
+            plugin->removeWidgetAt(col, row);
+            spdlog::debug("Removed custom glyph widget at ({},{})", col, row);
             break;
         }
     }
@@ -1279,8 +1282,8 @@ Result<void> PluginManager::renderCustomGlyphs(WebGPUContext& ctx, WGPUTextureVi
             spdlog::info("Custom glyph plugin {} initialized successfully", plugin->pluginName());
         }
 
-        spdlog::debug("Rendering custom glyph plugin {} with {} layers",
-                     plugin->pluginName(), plugin->getLayers().size());
+        spdlog::debug("Rendering custom glyph plugin {} with {} widgets",
+                     plugin->pluginName(), plugin->getWidgets().size());
 
         if (auto res = plugin->renderAll(targetView, ctx.getSurfaceFormat(),
                                           screenWidth, screenHeight,

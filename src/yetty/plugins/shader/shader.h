@@ -21,7 +21,7 @@ public:
 
     Result<void> dispose() override;
 
-    Result<PluginLayerPtr> createLayer(const std::string& payload) override;
+    Result<WidgetPtr> createWidget(const std::string& payload) override;
 
 private:
     explicit ShaderPlugin(YettyPtr engine) noexcept : Plugin(std::move(engine)) {}
@@ -31,7 +31,7 @@ private:
 //-----------------------------------------------------------------------------
 // ShaderLayer - a single shader instance at a position
 //-----------------------------------------------------------------------------
-class ShaderLayer : public PluginLayer {
+class ShaderLayer : public Widget {
 public:
     ShaderLayer();
     ~ShaderLayer() override;
@@ -43,7 +43,7 @@ public:
     Result<void> render(WebGPUContext& ctx) override;
 
     // Batched render (draws into existing pass - fast!)
-    bool renderToPass(WGPURenderPassEncoder pass, WebGPUContext& ctx) override;
+    bool render(WGPURenderPassEncoder pass, WebGPUContext& ctx) override;
 
     // Input handling
     bool onMouseMove(float localX, float localY) override;

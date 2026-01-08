@@ -25,7 +25,7 @@ public:
 
     Result<void> dispose() override;
 
-    Result<PluginLayerPtr> createLayer(const std::string& payload) override;
+    Result<WidgetPtr> createWidget(const std::string& payload) override;
 
 private:
     explicit ThorvgPlugin(YettyPtr engine) noexcept : Plugin(std::move(engine)) {}
@@ -37,7 +37,7 @@ private:
 // Can display static SVG or animated Lottie content
 // Renders directly using WebGPU via ThorVG's WgCanvas
 //-----------------------------------------------------------------------------
-class ThorvgLayer : public PluginLayer {
+class ThorvgLayer : public Widget {
 public:
     ThorvgLayer();
     ~ThorvgLayer() override;
@@ -53,7 +53,7 @@ public:
 
     // Batched render (draws into existing pass - fast!)
     // Only blits pre-rendered texture, no ThorVG rendering here
-    bool renderToPass(WGPURenderPassEncoder pass, WebGPUContext& ctx) override;
+    bool render(WGPURenderPassEncoder pass, WebGPUContext& ctx) override;
 
     // Animation control
     bool isAnimated() const { return _is_animated; }

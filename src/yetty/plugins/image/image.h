@@ -20,7 +20,7 @@ public:
 
     Result<void> dispose() override;
 
-    Result<PluginLayerPtr> createLayer(const std::string& payload) override;
+    Result<WidgetPtr> createWidget(const std::string& payload) override;
 
 private:
     explicit ImagePlugin(YettyPtr engine) noexcept : Plugin(std::move(engine)) {}
@@ -30,7 +30,7 @@ private:
 //-----------------------------------------------------------------------------
 // ImageLayer
 //-----------------------------------------------------------------------------
-class ImageLayer : public PluginLayer {
+class ImageLayer : public Widget {
 public:
     ImageLayer();
     ~ImageLayer() override;
@@ -42,7 +42,7 @@ public:
     Result<void> render(WebGPUContext& ctx) override;
 
     // Batched render (draws into existing pass - fast!)
-    bool renderToPass(WGPURenderPassEncoder pass, WebGPUContext& ctx) override;
+    bool render(WGPURenderPassEncoder pass, WebGPUContext& ctx) override;
 
 private:
     Result<void> loadImage(const std::string& data);

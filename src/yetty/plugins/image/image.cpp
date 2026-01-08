@@ -36,13 +36,13 @@ Result<void> ImagePlugin::dispose() {
     return Ok();
 }
 
-Result<PluginLayerPtr> ImagePlugin::createLayer(const std::string& payload) {
+Result<WidgetPtr> ImagePlugin::createWidget(const std::string& payload) {
     auto layer = std::make_shared<ImageLayer>();
     auto result = layer->init(payload);
     if (!result) {
-        return Err<PluginLayerPtr>("Failed to init ImageLayer", result);
+        return Err<WidgetPtr>("Failed to init ImageLayer", result);
     }
-    return Ok<PluginLayerPtr>(layer);
+    return Ok<WidgetPtr>(layer);
 }
 
 //-----------------------------------------------------------------------------
@@ -102,7 +102,7 @@ Result<void> ImageLayer::dispose() {
 }
 
 Result<void> ImageLayer::render(WebGPUContext& ctx) {
-    // Legacy path - avoid using this, prefer renderToPass for batching
+    // Legacy path - avoid using this, prefer render for batching
     if (_failed) return Err<void>("ImageLayer already failed");
     if (!_visible) return Ok();
     if (!_image_data) return Err<void>("ImageLayer has no image data");
@@ -205,7 +205,7 @@ Result<void> ImageLayer::render(WebGPUContext& ctx) {
     return Ok();
 }
 
-bool ImageLayer::renderToPass(WGPURenderPassEncoder pass, WebGPUContext& ctx) {
+bool ImageLayer::render(WGPURenderPassEncoder pass, WebGPUContext& ctx) {
     if (_failed || !_visible || !_image_data) return false;
 
     const auto& rc = _render_context;

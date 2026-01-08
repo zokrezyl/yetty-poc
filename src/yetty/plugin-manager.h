@@ -56,46 +56,35 @@ public:
                                     const std::string& payload,
                                     Grid* grid,
                                     uint32_t cellWidth, uint32_t cellHeight);
-    
-    // Legacy alias
-    Result<WidgetPtr> createLayer(const std::string& pluginName,
-                                   PositionMode mode,
-                                   int32_t x, int32_t y,
-                                   int32_t widthCells, int32_t heightCells,
-                                   const std::string& payload,
-                                   Grid* grid,
-                                   uint32_t cellWidth, uint32_t cellHeight) {
-        return createWidget(pluginName, mode, x, y, widthCells, heightCells, payload, grid, cellWidth, cellHeight);
-    }
 
     // Update a widget (by hash ID)
-    Result<void> updateLayer(const std::string& hashId, const std::string& payload);
+    Result<void> updateWidget(const std::string& hashId, const std::string& payload);
 
-    // Remove a layer (by hash ID)
-    Result<void> removeLayer(const std::string& hashId, Grid* grid);
+    // Remove a widget (by hash ID)
+    Result<void> removeWidget(const std::string& hashId, Grid* grid);
 
-    // Get a layer by hash ID
-    PluginLayerPtr getLayer(const std::string& hashId);
+    // Get a widget by hash ID
+    WidgetPtr getWidget(const std::string& hashId);
 
-    // Get a layer by numeric ID (internal use)
-    PluginLayerPtr getLayerById(uint32_t id);
+    // Get a widget by numeric ID (internal use)
+    WidgetPtr getWidgetById(uint32_t id);
 
-    // Stop a layer (pause rendering)
-    Result<void> stopLayer(const std::string& hashId);
-    Result<void> stopLayersByPlugin(const std::string& pluginName);
+    // Stop a widget (pause rendering)
+    Result<void> stopWidget(const std::string& hashId);
+    Result<void> stopWidgetsByPlugin(const std::string& pluginName);
 
-    // Start a layer (resume rendering)
-    Result<void> startLayer(const std::string& hashId);
-    Result<void> startLayersByPlugin(const std::string& pluginName);
+    // Start a widget (resume rendering)
+    Result<void> startWidget(const std::string& hashId);
+    Result<void> startWidgetsByPlugin(const std::string& pluginName);
 
-    // Kill (destroy) layers by plugin type
-    Result<void> killLayersByPlugin(const std::string& pluginName, Grid* grid);
+    // Kill (destroy) widgets by plugin type
+    Result<void> killWidgetsByPlugin(const std::string& pluginName, Grid* grid);
 
     // Get list of available plugin names
     std::vector<std::string> getAvailablePlugins() const;
 
-    // Get all layers (across all plugins)
-    std::vector<PluginLayerPtr> getAllLayers() const;
+    // Get all widgets (across all plugins)
+    std::vector<WidgetPtr> getAllWidgets() const;
 
     // Parse OSC sequence
     bool handleOSCSequence(const std::string& sequence,
@@ -132,8 +121,8 @@ public:
     bool onChar(unsigned int codepoint);
 
     void clearFocus();
-    PluginLayerPtr getFocusedLayer() const { return focusedLayer_; }
-    PluginLayerPtr getHoveredLayer() const { return hoveredLayer_; }
+    WidgetPtr getFocusedWidget() const { return focusedWidget_; }
+    WidgetPtr getHoveredWidget() const { return hoveredWidget_; }
 
     // Alternate screen handling
     void onAltScreenChange(bool isAltScreen);
@@ -190,21 +179,21 @@ private:
     // Get or create plugin instance for a type
     Result<PluginPtr> getOrCreatePlugin(const std::string& name);
 
-    // Find layer at grid cell
-    PluginLayerPtr layerAtCell(int col, int row, const Grid* grid);
+    // Find widget at grid cell
+    WidgetPtr widgetAtCell(int col, int row, const Grid* grid);
     void markGridCells(Grid* grid, Widget* widget);
     void clearGridCells(Grid* grid, Widget* widget);
 
     std::unordered_map<std::string, PluginRegistryEntry> pluginRegistry_;
     std::unordered_map<std::string, PluginPtr> plugins_;  // Active plugin instances
     std::unordered_map<std::string, WidgetPtr> widgetsByHashId_;  // Hash ID -> widget
-    uint32_t nextLayerId_ = 1;
+    uint32_t nextWidgetId_ = 1;
     OscCommandParser oscParser_;  // OSC command parser
     Font* font_ = nullptr;
     YettyPtr engine_;
     std::vector<void*> handles_;
-    PluginLayerPtr focusedLayer_;
-    PluginLayerPtr hoveredLayer_;
+    WidgetPtr focusedWidget_;
+    WidgetPtr hoveredWidget_;
     float lastMouseX_ = 0;
     float lastMouseY_ = 0;
     bool isAltScreen_ = false;

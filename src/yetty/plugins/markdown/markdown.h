@@ -24,7 +24,7 @@ public:
 
     Result<void> dispose() override;
 
-    Result<PluginLayerPtr> createLayer(const std::string& payload) override;
+    Result<WidgetPtr> createWidget(const std::string& payload) override;
 
     // Access to font manager (from engine)
     FontManager* getFontManager();
@@ -57,7 +57,7 @@ struct ParsedLine {
 //-----------------------------------------------------------------------------
 // MarkdownLayer - single markdown document layer (uses RichText for rendering)
 //-----------------------------------------------------------------------------
-class MarkdownLayer : public PluginLayer {
+class MarkdownLayer : public Widget {
 public:
     explicit MarkdownLayer(MarkdownPlugin* plugin);
     ~MarkdownLayer() override;
@@ -67,7 +67,7 @@ public:
 
     // Renderable interface
     Result<void> render(WebGPUContext& ctx) override;
-    bool renderToPass(WGPURenderPassEncoder pass, WebGPUContext& ctx) override;
+    bool render(WGPURenderPassEncoder pass, WebGPUContext& ctx) override;
 
     // Mouse scrolling
     bool onMouseScroll(float xoffset, float yoffset, int mods) override;

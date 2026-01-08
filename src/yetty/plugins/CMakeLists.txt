@@ -149,7 +149,7 @@ if(thorvg_ADDED)
         TVG_STATIC
     )
     
-    # Link with WebGPU library (provided by yetty_core)
+    # Link with WebGPU library (provided by yetty_cory)
     target_link_libraries(thorvg_lib PRIVATE webgpu)
     
     # Suppress warnings in third-party code
@@ -199,4 +199,31 @@ if(UNIX)
     )
     
     message(STATUS "Python plugin: enabled with static libpython")
+endif()
+
+
+# pdf plugin - uses RichText for rendering
+add_yetty_plugin(pdf
+    SOURCES pdf/pdf.cpp
+    LIBS mupdf
+)
+
+# video plugin (Unix only - FFmpeg build requires ./configure + make)
+if(UNIX)
+    add_yetty_plugin(video
+        SOURCES video/video.cpp
+        LIBS ffmpeg
+    )
+endif()
+
+# ymery plugin - ImGui/ImPlot scientific visualization (requires ymery-cpp)
+if(TARGET ymery_lib)
+    add_yetty_plugin(ymery
+        SOURCES ymery/ymery.cpp
+        LIBS ymery_lib
+    )
+    target_compile_definitions(ymery_plugin PRIVATE YETTY_YMERY_ENABLED=1)
+    message(STATUS "ymery plugin: enabled")
+else()
+    message(STATUS "ymery plugin: disabled (ymery_lib not found)")
 endif()

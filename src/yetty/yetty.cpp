@@ -1014,7 +1014,7 @@ void Yetty::mainLoopIteration() noexcept {
   renderAll();
 
   // Render plugin layers on top (only if there are layers)
-  if (_pluginManager && !_pluginManager->getAllLayers().empty()) {
+  if (_pluginManager && !_pluginManager->getAllWidgets().empty()) {
     auto viewResult = _ctx->getCurrentTextureView();
     if (viewResult) {
       CHECK_RESULT(_pluginManager->render(*_ctx, *viewResult,

@@ -45,13 +45,13 @@ FontManager* MarkdownPlugin::getFontManager() {
     return engine_ ? engine_->fontManager().get() : nullptr;
 }
 
-Result<PluginLayerPtr> MarkdownPlugin::createLayer(const std::string& payload) {
+Result<WidgetPtr> MarkdownPlugin::createWidget(const std::string& payload) {
     auto layer = std::make_shared<MarkdownLayer>(this);
     auto result = layer->init(payload);
     if (!result) {
-        return Err<PluginLayerPtr>("Failed to init MarkdownLayer", result);
+        return Err<WidgetPtr>("Failed to init MarkdownLayer", result);
     }
-    return Ok<PluginLayerPtr>(layer);
+    return Ok<WidgetPtr>(layer);
 }
 
 //-----------------------------------------------------------------------------
@@ -286,7 +286,7 @@ void MarkdownLayer::buildRichTextSpans(float fontSize, float maxWidth) {
 //-----------------------------------------------------------------------------
 
 Result<void> MarkdownLayer::render(WebGPUContext& ctx) {
-    // Legacy render - not used, prefer renderToPass
+    // Legacy render - not used, prefer render
     if (failed_ || !_visible) return Ok();
 
     const auto& rc = _render_context;
@@ -334,7 +334,7 @@ Result<void> MarkdownLayer::render(WebGPUContext& ctx) {
                               pixelX, pixelY, pixelW, pixelH);
 }
 
-bool MarkdownLayer::renderToPass(WGPURenderPassEncoder pass, WebGPUContext& ctx) {
+bool MarkdownLayer::render(WGPURenderPassEncoder pass, WebGPUContext& ctx) {
     if (failed_ || !_visible) return false;
 
     const auto& rc = _render_context;
@@ -379,7 +379,7 @@ bool MarkdownLayer::renderToPass(WGPURenderPassEncoder pass, WebGPUContext& ctx)
     }
 
     // Use batched render
-    return richText_->renderToPass(pass, ctx, rc.screenWidth, rc.screenHeight,
+    return richText_->render(pass, ctx, rc.screenWidth, rc.screenHeight,
                                     pixelX, pixelY, pixelW, pixelH);
 }
 

@@ -20,7 +20,7 @@ public:
 
     Result<void> dispose() override;
 
-    Result<PluginLayerPtr> createLayer(const std::string& payload) override;
+    Result<WidgetPtr> createWidget(const std::string& payload) override;
 
     Result<void> renderAll(WGPUTextureView targetView, WGPUTextureFormat targetFormat,
                            uint32_t screenWidth, uint32_t screenHeight,
@@ -39,7 +39,7 @@ private:
 // Payload format: "sheetWidth,numStaves"
 //   e.g., "800,4" = 800px wide sheet with 4 staves
 //-----------------------------------------------------------------------------
-class MusicalScoreLayer : public PluginLayer {
+class MusicalScoreLayer : public Widget {
 public:
     static constexpr int MAX_STAVES = 16;
     static constexpr int LINES_PER_STAFF = 5;

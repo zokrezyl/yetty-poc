@@ -60,13 +60,13 @@ Result<void> PlotPlugin::dispose() {
     return Ok();
 }
 
-Result<PluginLayerPtr> PlotPlugin::createLayer(const std::string& payload) {
+Result<WidgetPtr> PlotPlugin::createWidget(const std::string& payload) {
     auto layer = std::make_shared<PlotLayer>();
     auto result = layer->init(payload);
     if (!result) {
-        return Err<PluginLayerPtr>("Failed to initialize Plot layer", result);
+        return Err<WidgetPtr>("Failed to initialize Plot layer", result);
     }
-    return Ok<PluginLayerPtr>(layer);
+    return Ok<WidgetPtr>(layer);
 }
 
 Result<void> PlotPlugin::renderAll(WGPUTextureView targetView, WGPUTextureFormat targetFormat,

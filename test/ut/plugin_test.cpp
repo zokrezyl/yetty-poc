@@ -36,134 +36,134 @@ suite plugin_tests = [] {
         auto result = MockPlugin::create(nullptr);
         auto plugin = *result;
 
-        expect(plugin->getLayers().empty());
+        expect(plugin->getWidgets().empty());
     };
 
-    "plugin createLayer returns valid layer"_test = [] {
+    "plugin createWidget returns valid layer"_test = [] {
         auto result = MockPlugin::create(nullptr);
         auto plugin = *result;
 
-        auto layerResult = plugin->createLayer("test_payload");
+        auto layerResult = plugin->createWidget("test_payload");
 
         expect(layerResult.has_value());
     };
 
-    "plugin addLayer adds layer to list"_test = [] {
+    "plugin addWidget adds layer to list"_test = [] {
         auto result = MockPlugin::create(nullptr);
         auto plugin = *result;
 
-        auto layerResult = plugin->createLayer("payload");
-        plugin->addLayer(*layerResult);
+        auto layerResult = plugin->createWidget("payload");
+        plugin->addWidget(*layerResult);
 
-        expect(plugin->getLayers().size() == 1_ul);
+        expect(plugin->getWidgets().size() == 1_ul);
     };
 
     "plugin can have multiple layers"_test = [] {
         auto result = MockPlugin::create(nullptr);
         auto plugin = *result;
 
-        auto layer1 = *plugin->createLayer("payload1");
-        auto layer2 = *plugin->createLayer("payload2");
-        auto layer3 = *plugin->createLayer("payload3");
+        auto layer1 = *plugin->createWidget("payload1");
+        auto layer2 = *plugin->createWidget("payload2");
+        auto layer3 = *plugin->createWidget("payload3");
 
-        plugin->addLayer(layer1);
-        plugin->addLayer(layer2);
-        plugin->addLayer(layer3);
+        plugin->addWidget(layer1);
+        plugin->addWidget(layer2);
+        plugin->addWidget(layer3);
 
-        expect(plugin->getLayers().size() == 3_ul);
+        expect(plugin->getWidgets().size() == 3_ul);
     };
 
-    "plugin getLayer returns correct layer by ID"_test = [] {
+    "plugin getWidget returns correct layer by ID"_test = [] {
         auto result = MockPlugin::create(nullptr);
         auto plugin = *result;
 
-        auto layer1 = *plugin->createLayer("p1");
-        auto layer2 = *plugin->createLayer("p2");
+        auto layer1 = *plugin->createWidget("p1");
+        auto layer2 = *plugin->createWidget("p2");
         layer1->setId(100);
         layer2->setId(200);
 
-        plugin->addLayer(layer1);
-        plugin->addLayer(layer2);
+        plugin->addWidget(layer1);
+        plugin->addWidget(layer2);
 
-        auto found = plugin->getLayer(200);
+        auto found = plugin->getWidget(200);
         expect(found != nullptr);
         expect(found->id() == 200_u);
     };
 
-    "plugin getLayer returns nullptr for unknown ID"_test = [] {
+    "plugin getWidget returns nullptr for unknown ID"_test = [] {
         auto result = MockPlugin::create(nullptr);
         auto plugin = *result;
 
-        auto found = plugin->getLayer(999);
+        auto found = plugin->getWidget(999);
 
         expect(found == nullptr);
     };
 
-    "plugin removeLayer removes layer by ID"_test = [] {
+    "plugin removeWidget removes layer by ID"_test = [] {
         auto result = MockPlugin::create(nullptr);
         auto plugin = *result;
 
-        auto layer = *plugin->createLayer("payload");
+        auto layer = *plugin->createWidget("payload");
         layer->setId(42);
-        plugin->addLayer(layer);
+        plugin->addWidget(layer);
 
-        expect(plugin->getLayers().size() == 1_ul);
+        expect(plugin->getWidgets().size() == 1_ul);
 
-        auto removeResult = plugin->removeLayer(42);
+        auto removeResult = plugin->removeWidget(42);
 
         expect(removeResult.has_value());
-        expect(plugin->getLayers().empty());
+        expect(plugin->getWidgets().empty());
     };
 
-    "plugin removeLayer fails for unknown ID"_test = [] {
+    "plugin removeWidget fails for unknown ID"_test = [] {
         auto result = MockPlugin::create(nullptr);
         auto plugin = *result;
 
-        auto removeResult = plugin->removeLayer(999);
+        auto removeResult = plugin->removeWidget(999);
 
         expect(!removeResult.has_value());
     };
 
-    "plugin removeLayer calls dispose on layer"_test = [] {
+    "plugin removeWidget calls dispose on layer"_test = [] {
         auto result = MockPlugin::create(nullptr);
         auto mockPlugin = std::static_pointer_cast<MockPlugin>(*result);
 
-        auto layerResult = mockPlugin->createLayer("payload");
+        auto layerResult = mockPlugin->createWidget("payload");
         auto layer = *layerResult;
         layer->setId(42);
-        mockPlugin->addLayer(layer);
+        mockPlugin->addWidget(layer);
 
-        mockPlugin->removeLayer(42);
+        mockPlugin->removeWidget(42);
 
         // Check the created layer was disposed
-        auto& createdLayers = mockPlugin->createdLayers();
-        expect(!createdLayers.empty());
-        expect(createdLayers[0]->disposeCalled());
+        auto& createdWidgets = mockPlugin->createdWidgets();
+        expect(!createdWidgets.empty());
+        expect(createdWidgets[0]->disposeCalled());
     };
 
     "plugin dispose disposes all layers"_test = [] {
         auto result = MockPlugin::create(nullptr);
         auto mockPlugin = std::static_pointer_cast<MockPlugin>(*result);
 
-        auto layer1 = std::static_pointer_cast<MockPluginLayer>(*mockPlugin->createLayer("p1"));
-        auto layer2 = std::static_pointer_cast<MockPluginLayer>(*mockPlugin->createLayer("p2"));
-        mockPlugin->addLayer(layer1);
-        mockPlugin->addLayer(layer2);
+        auto layer1 = std::static_pointer_cast<MockPluginWidget>(*mockPlugin->createWidget("p1"));
+        auto layer2 = std::static_pointer_cast<MockPluginWidget>(*mockPlugin->createWidget("p2"));
+        mockPlugin->addWidget(layer1);
+        mockPlugin->addWidget(layer2);
 
         mockPlugin->dispose();
 
         expect(layer1->disposeCalled());
         expect(layer2->disposeCalled());
-        expect(mockPlugin->getLayers().empty());
+        expect(mockPlugin->getWidgets().empty());
     };
 
     "plugin onTerminalResize updates layer pixel sizes"_test = [] {
         auto result = MockPlugin::create(nullptr);
         auto plugin = *result;
 
-        auto layer = *plugin->createLayer("payload");
+        auto layer = *plugin->createWidget("payload");
         layer->setCellSize(10, 5);  // 10 cols x 5 rows
-        plugin->addLayer(layer);
+        plugin->addWidget(layer);
 
         plugin->onTerminalResize(12, 24);  // cell size 12x24 pixels
 
@@ -175,10 +175,10 @@ suite plugin_tests = [] {
         auto result = MockPlugin::create(nullptr);
         auto plugin = *result;
 
-        auto layer = *plugin->createLayer("payload");
+        auto layer = *plugin->createWidget("payload");
         expect(layer->getParent() == nullptr);
 
-        plugin->addLayer(layer);
+        plugin->addWidget(layer);
 
         expect(layer->getParent() == plugin.get());
     };

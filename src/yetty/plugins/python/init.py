@@ -16,7 +16,7 @@ def init_plugin():
     Called once when the Python plugin is loaded.
     
     This is the place for global initialization that should happen
-    once per plugin, not per layer.
+    once per plugin, not per widget.
     """
     global _plugin_initialized
     
@@ -31,9 +31,9 @@ def init_plugin():
     print("[yetty] Python plugin initialized")
 
 
-def init_layer(ctx, width, height):
+def init_widget(ctx, width, height):
     """
-    Called when a new Python layer is created.
+    Called when a new Python widget is created.
     
     This is called BEFORE the user script runs, so WebGPU resources
     are available to the user script.
@@ -44,10 +44,10 @@ def init_layer(ctx, width, height):
             - 'queue': WGPUQueue handle (as int)
             - 'width': Render target width
             - 'height': Render target height
-        width: Layer width in pixels
-        height: Layer height in pixels
+        width: Widget width in pixels
+        height: Widget height in pixels
     """
-    print(f"[yetty] Initializing layer: {width}x{height}")
+    print(f"[yetty] Initializing widget: {width}x{height}")
     
     # Set WebGPU handles for yetty_wgpu module
     yetty_wgpu.set_handles(
@@ -55,25 +55,25 @@ def init_layer(ctx, width, height):
         queue=ctx['queue']
     )
     
-    # Create render texture for this layer
+    # Create render texture for this widget
     if not yetty_wgpu.create_render_texture(width, height):
         raise RuntimeError(f"Failed to create render texture {width}x{height}")
     
-    print(f"[yetty] Layer initialized: {width}x{height}")
+    print(f"[yetty] Widget initialized: {width}x{height}")
 
 
-def dispose_layer():
+def dispose_widget():
     """
-    Called when a Python layer is destroyed.
+    Called when a Python widget is destroyed.
     
-    Clean up any layer-specific resources here.
+    Clean up any widget-specific resources here.
     """
-    print("[yetty] Disposing layer...")
+    print("[yetty] Disposing widget...")
     
     # Cleanup yetty_wgpu resources
     yetty_wgpu.cleanup()
     
-    print("[yetty] Layer disposed")
+    print("[yetty] Widget disposed")
 
 
 def dispose_plugin():

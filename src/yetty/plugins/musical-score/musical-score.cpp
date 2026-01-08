@@ -38,13 +38,13 @@ Result<void> MusicalScorePlugin::dispose() {
     return Ok();
 }
 
-Result<PluginLayerPtr> MusicalScorePlugin::createLayer(const std::string& payload) {
+Result<WidgetPtr> MusicalScorePlugin::createWidget(const std::string& payload) {
     auto layer = std::make_shared<MusicalScoreLayer>();
     auto result = layer->init(payload);
     if (!result) {
-        return Err<PluginLayerPtr>("Failed to initialize MusicalScore layer", result);
+        return Err<WidgetPtr>("Failed to initialize MusicalScore layer", result);
     }
-    return Ok<PluginLayerPtr>(layer);
+    return Ok<WidgetPtr>(layer);
 }
 
 Result<void> MusicalScorePlugin::renderAll(WGPUTextureView targetView, WGPUTextureFormat targetFormat,

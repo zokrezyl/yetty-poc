@@ -827,7 +827,7 @@ Result<void> RichText::render(WebGPUContext& ctx,
     return Ok();
 }
 
-bool RichText::renderToPass(WGPURenderPassEncoder pass, WebGPUContext& ctx,
+bool RichText::render(WGPURenderPassEncoder pass, WebGPUContext& ctx,
                              uint32_t screenWidth, uint32_t screenHeight,
                              float pixelX, float pixelY,
                              float pixelW, float pixelH) {

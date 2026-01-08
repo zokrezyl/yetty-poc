@@ -22,7 +22,7 @@ public:
 
     Result<void> dispose() override;
 
-    Result<PluginLayerPtr> createLayer(const std::string& payload) override;
+    Result<WidgetPtr> createWidget(const std::string& payload) override;
 
     Result<void> renderAll(WGPUTextureView targetView, WGPUTextureFormat targetFormat,
                            uint32_t screenWidth, uint32_t screenHeight,
@@ -42,7 +42,7 @@ private:
 //   e.g., "2" = 2 octaves starting from C4
 //   e.g., "3,3" = 3 octaves starting from C3
 //-----------------------------------------------------------------------------
-class PianoLayer : public PluginLayer {
+class PianoLayer : public Widget {
 public:
     static constexpr int MAX_OCTAVES = 8;
     static constexpr int KEYS_PER_OCTAVE = 12;  // 7 white + 5 black
