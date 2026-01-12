@@ -483,12 +483,6 @@ Result<void> Python::dispose() {
     return Ok();
 }
 
-Result<void> Python::render(WebGPUContext& ctx) {
-    (void)ctx;
-    // Legacy render - not used. Use render() instead.
-    return Ok();
-}
-
 void Python::prepareFrame(WebGPUContext& ctx) {
     // This is called BEFORE the shared render pass begins
     // Here we initialize and render pygfx content to our texture
@@ -555,21 +549,20 @@ void Python::prepareFrame(WebGPUContext& ctx) {
     frameCount_++;
 }
 
-bool Python::render(WGPURenderPassEncoder pass, WebGPUContext& ctx) {
+Result<void> Python::render(WGPURenderPassEncoder pass, WebGPUContext& ctx) {
     // This is called INSIDE the shared render pass
     // We only blit our pre-rendered texture here - NO Python rendering!
 
-    if (failed_) return false;
-    if (!_visible) return false;
-    if (!wgpuHandlesSet_) return false;  // prepareFrame() hasn't run yet
+    if (failed_) return Err<void>("Python: failed flag is set");
+    if (!_visible) return Ok();
+    if (!wgpuHandlesSet_) return Ok();  // prepareFrame() hasn't run yet
 
     // Blit the rendered texture to the layer rectangle in the pass
     if (!blitToPass(pass, ctx)) {
-        yerror("Python: Failed to blit render texture");
-        return false;
+        return Err<void>("Python: Failed to blit render texture");
     }
 
-    return true;
+    return Ok();
 }
 
 bool Python::callInitWidget(WebGPUContext& ctx, uint32_t width, uint32_t height) {

@@ -401,7 +401,9 @@ int cmdRun(const std::string& pluginDir,
 
         // Render using render
         ydebug("Tester: Before render, getPixelWidth={}", layer->getPixelWidth());
-        layer->render(pass, *ctx);
+        if (auto res = layer->render(pass, *ctx); !res) {
+            yerror("Tester: widget render failed: {}", res.error().message());
+        }
 
         wgpuRenderPassEncoderEnd(pass);
         wgpuRenderPassEncoderRelease(pass);

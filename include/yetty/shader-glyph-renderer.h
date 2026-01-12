@@ -57,7 +57,9 @@ public:
     void start() override { _running.store(true); }
     void stop() override { _running.store(false); }
     bool isRunning() const override { return _running.load(); }
-    Result<void> render(WebGPUContext& ctx) override;
+
+    void prepareFrame(WebGPUContext& ctx) override;
+    Result<void> render(WGPURenderPassEncoder pass, WebGPUContext& ctx) override;
 
     // Update instances (called by Terminal when dirty)
     void setInstances(const std::vector<ShaderGlyphInstance>& instances);

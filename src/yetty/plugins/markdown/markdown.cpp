@@ -295,8 +295,60 @@ void MarkdownW::buildRichTextSpans(float fontSize, float maxWidth) {
 // Render
 //-----------------------------------------------------------------------------
 
-Result<void> MarkdownW::render(WebGPUContext& ctx) {
-    // Legacy render - not used, prefer render
+void MarkdownW::prepareFrame(WebGPUContext& ctx) {
+    if (failed_ || !_visible) return;
+
+    const auto& rc = _renderCtx;
+
+    float pixelX = _x * rc.cellWidth;
+    float pixelY = _y * rc.cellHeight;
+    float pixelW = _widthCells * rc.cellWidth;
+    float pixelH = _heightCells * rc.cellHeight;
+
+    if (_positionMode == PositionMode::Relative && rc.scrollOffset > 0) {
+        pixelY += rc.scrollOffset * rc.cellHeight;
+    }
+
+    if (rc.termRows > 0) {
+        float screenPixelHeight = rc.termRows * rc.cellHeight;
+        if (pixelY + pixelH <= 0 || pixelY >= screenPixelHeight) {
+            return;
+        }
+    }
+
+    // Create RichText if needed
+    if (!richText_) {
+        auto fontMgr = plugin_ ? plugin_->getFontManager() : nullptr;
+        if (!fontMgr) {
+            failed_ = true;
+            yerror("No FontManager available for markdown rendering");
+            return;
+        }
+
+        auto result = RichText::create(&ctx, rc.targetFormat, fontMgr);
+        if (!result) {
+            failed_ = true;
+            yerror("Failed to create RichText: {}", result.error().message());
+            return;
+        }
+        richText_ = *result;
+        richText_->setDefaultFontFamily("monospace");
+        _initialized = true;
+    }
+
+    if (lastLayoutWidth_ != pixelW) {
+        buildRichTextSpans(baseSize_, pixelW);
+        lastLayoutWidth_ = pixelW;
+    }
+
+    auto res = richText_->render(ctx, rc.targetView, rc.screenWidth, rc.screenHeight,
+                                  pixelX, pixelY, pixelW, pixelH);
+    if (!res) {
+        yerror("MarkdownW: render failed: {}", res.error().message());
+    }
+}
+
+Result<void> MarkdownW::render(WGPURenderPassEncoder pass, WebGPUContext& ctx) {
     if (failed_ || !_visible) return Ok();
 
     const auto& rc = _renderCtx;
@@ -313,7 +365,7 @@ Result<void> MarkdownW::render(WebGPUContext& ctx) {
     if (rc.termRows > 0) {
         float screenPixelHeight = rc.termRows * rc.cellHeight;
         if (pixelY + pixelH <= 0 || pixelY >= screenPixelHeight) {
-            return Ok();
+            return Ok();  // Off-screen, not an error
         }
     }
 
@@ -322,61 +374,13 @@ Result<void> MarkdownW::render(WebGPUContext& ctx) {
         auto fontMgr = plugin_ ? plugin_->getFontManager() : nullptr;
         if (!fontMgr) {
             failed_ = true;
-            return Err<void>("No FontManager available for markdown rendering");
+            return Err<void>("MarkdownW: no font manager");
         }
 
         auto result = RichText::create(&ctx, rc.targetFormat, fontMgr);
         if (!result) {
             failed_ = true;
-            return Err<void>("Failed to create RichText", result);
-        }
-        richText_ = *result;
-        richText_->setDefaultFontFamily("monospace");
-        _initialized = true;
-    }
-
-    if (lastLayoutWidth_ != pixelW) {
-        buildRichTextSpans(baseSize_, pixelW);
-        lastLayoutWidth_ = pixelW;
-    }
-
-    return richText_->render(ctx, rc.targetView, rc.screenWidth, rc.screenHeight,
-                              pixelX, pixelY, pixelW, pixelH);
-}
-
-bool MarkdownW::render(WGPURenderPassEncoder pass, WebGPUContext& ctx) {
-    if (failed_ || !_visible) return false;
-
-    const auto& rc = _renderCtx;
-
-    float pixelX = _x * rc.cellWidth;
-    float pixelY = _y * rc.cellHeight;
-    float pixelW = _widthCells * rc.cellWidth;
-    float pixelH = _heightCells * rc.cellHeight;
-
-    if (_positionMode == PositionMode::Relative && rc.scrollOffset > 0) {
-        pixelY += rc.scrollOffset * rc.cellHeight;
-    }
-
-    if (rc.termRows > 0) {
-        float screenPixelHeight = rc.termRows * rc.cellHeight;
-        if (pixelY + pixelH <= 0 || pixelY >= screenPixelHeight) {
-            return false;
-        }
-    }
-
-    // Create RichText if needed
-    if (!richText_) {
-        auto fontMgr = plugin_ ? plugin_->getFontManager() : nullptr;
-        if (!fontMgr) {
-            failed_ = true;
-            return false;
-        }
-
-        auto result = RichText::create(&ctx, rc.targetFormat, fontMgr);
-        if (!result) {
-            failed_ = true;
-            return false;
+            return Err<void>("MarkdownW: failed to create RichText", result);
         }
         richText_ = *result;
         richText_->setDefaultFontFamily("monospace");

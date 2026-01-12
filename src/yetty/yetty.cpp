@@ -1054,7 +1054,9 @@ void Yetty::mainLoopIteration() noexcept {
   for (const auto &widget : _rootWidgets) {
     if (!widget->isRunning())
       continue;
-    widget->render(*_ctx);
+    if (auto res = widget->render(*_ctx); !res) {
+      yerror("Yetty: root widget render failed: {}", res.error().message());
+    }
   }
 
   // Present
@@ -1064,7 +1066,9 @@ void Yetty::mainLoopIteration() noexcept {
   for (const auto &widget : _rootWidgets) {
     if (!widget->isRunning())
       continue;
-    widget->render(*_ctx);
+    if (auto res = widget->render(*_ctx); !res) {
+      yerror("Yetty: root widget render failed: {}", res.error().message());
+    }
   }
 
   // Present the frame (only if a texture was actually acquired)
@@ -1186,7 +1190,9 @@ void Yetty::mainLoopIteration() noexcept {
   for (const auto &widget : _rootWidgets) {
     if (!widget->isRunning())
       continue;
-    widget->render(pass, *_ctx);
+    if (auto res = widget->render(pass, *_ctx); !res) {
+      yerror("Yetty: root widget batched render failed: {}", res.error().message());
+    }
   }
 
   // Clear current encoder/pass

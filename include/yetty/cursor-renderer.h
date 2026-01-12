@@ -44,7 +44,10 @@ public:
     void start() override { _running.store(true); }
     void stop() override { _running.store(false); }
     bool isRunning() const override { return _running.load(); }
-    Result<void> render(WebGPUContext& ctx) override;
+    void prepareFrame(WebGPUContext& ctx) override;
+    Result<void> render(WGPURenderPassEncoder pass, WebGPUContext& ctx) override {
+        (void)pass; (void)ctx; return Ok();  // Cursor renders in prepareFrame
+    }
 
     // Set cursor position (in cells)
     void setCursorPos(int col, int row);

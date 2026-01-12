@@ -50,6 +50,11 @@ add_yetty_plugin(image
     SOURCES image/image.cpp
 )
 
+# plot plugin
+add_yetty_plugin(plot
+    SOURCES plot/plot.cpp
+)
+
 # markdown plugin
 add_yetty_plugin(markdown
     SOURCES markdown/markdown.cpp

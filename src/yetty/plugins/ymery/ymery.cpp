@@ -237,7 +237,7 @@ Result<void> YmeryPlugin::initImGui(uint32_t screenWidth, uint32_t screenHeight)
     return Ok();
 }
 
-Result<void> YmeryPlugin::render(WebGPUContext& ctx) {
+Result<void> YmeryPlugin::renderImGui(WebGPUContext& ctx) {
     (void)ctx;  // Use _ctx from base class
 
     if (_widgets.empty()) return Ok();

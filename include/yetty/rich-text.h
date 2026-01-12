@@ -114,7 +114,7 @@ public:
                         float pixelW, float pixelH);
 
     // Batched render - draws into existing render pass (fast!)
-    bool render(WGPURenderPassEncoder pass, WebGPUContext& ctx,
+    Result<void> render(WGPURenderPassEncoder pass, WebGPUContext& ctx,
                       uint32_t screenWidth, uint32_t screenHeight,
                       float pixelX, float pixelY,
                       float pixelW, float pixelH);

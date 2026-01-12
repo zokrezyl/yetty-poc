@@ -43,8 +43,8 @@ public:
         const std::string& payload
     ) override;
 
-    // Shared render for ImGui - called once per frame for all layers
-    Result<void> render(WebGPUContext& ctx);
+    // Plugin-level render for ImGui (called from Ymery widget's prepareFrame)
+    Result<void> renderImGui(WebGPUContext& ctx);
 
 #ifdef YETTY_YMERY_ENABLED
     ImGuiContext* imguiContext() const { return _imgui_ctx; }
@@ -108,10 +108,8 @@ public:
 
     Result<void> dispose() override;
 
-    // Render is handled by the plugin's shared ImGui context
-    Result<void> render(WebGPUContext& ctx) override { (void)ctx; return Ok(); }
-    bool render(WGPURenderPassEncoder pass, WebGPUContext& ctx) override {
-        (void)pass; (void)ctx; return true;
+    Result<void> render(WGPURenderPassEncoder pass, WebGPUContext& ctx) override {
+        (void)pass; (void)ctx; return Ok();
     }
 
     bool onMouseMove(float x, float y) override;

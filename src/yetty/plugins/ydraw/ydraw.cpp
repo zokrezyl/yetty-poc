@@ -113,10 +113,9 @@ bool YDrawW::onChar(unsigned int codepoint) {
 // Rendering
 //-----------------------------------------------------------------------------
 
-Result<void> YDrawW::render(WebGPUContext& ctx) {
-    if (failed_) return Err<void>("YDrawW already failed");
-    if (!_visible) return Ok();
-    if (!renderer_ || renderer_->primitiveCount() == 0) return Ok();
+void YDrawW::prepareFrame(WebGPUContext& ctx) {
+    if (failed_ || !_visible) return;
+    if (!renderer_ || renderer_->primitiveCount() == 0) return;
 
     const auto& rc = _renderCtx;
 
@@ -135,7 +134,7 @@ Result<void> YDrawW::render(WebGPUContext& ctx) {
     if (rc.termRows > 0) {
         float screenPixelHeight = rc.termRows * rc.cellHeight;
         if (pixelY + pixelH <= 0 || pixelY >= screenPixelHeight) {
-            return Ok();
+            return;
         }
     }
 
@@ -143,7 +142,8 @@ Result<void> YDrawW::render(WebGPUContext& ctx) {
     WGPUCommandEncoderDescriptor encoderDesc = {};
     WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(ctx.getDevice(), &encoderDesc);
     if (!encoder) {
-        return Err<void>("YDrawW: Failed to create command encoder");
+        yerror("YDrawW: Failed to create command encoder");
+        return;
     }
 
     WGPURenderPassColorAttachment colorAttachment = {};
@@ -159,7 +159,8 @@ Result<void> YDrawW::render(WebGPUContext& ctx) {
     WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
     if (!pass) {
         wgpuCommandEncoderRelease(encoder);
-        return Err<void>("YDrawW: Failed to begin render pass");
+        yerror("YDrawW: Failed to begin render pass");
+        return;
     }
 
     // Render using core YDrawRenderer
@@ -173,7 +174,8 @@ Result<void> YDrawW::render(WebGPUContext& ctx) {
     WGPUCommandBuffer cmdBuffer = wgpuCommandEncoderFinish(encoder, &cmdDesc);
     if (!cmdBuffer) {
         wgpuCommandEncoderRelease(encoder);
-        return Err<void>("YDrawW: Failed to finish command encoder");
+        yerror("YDrawW: Failed to finish command encoder");
+        return;
     }
     wgpuQueueSubmit(ctx.getQueue(), 1, &cmdBuffer);
     wgpuCommandBufferRelease(cmdBuffer);
@@ -181,14 +183,12 @@ Result<void> YDrawW::render(WebGPUContext& ctx) {
 
     if (!result) {
         failed_ = true;
-        return Err<void>("YDrawW: render failed", result);
+        yerror("YDrawW: render failed: {}", result.error().message());
     }
-
-    return Ok();
 }
 
-bool YDrawW::render(WGPURenderPassEncoder pass, WebGPUContext& ctx) {
-    if (failed_ || !_visible || !renderer_) return false;
+Result<void> YDrawW::render(WGPURenderPassEncoder pass, WebGPUContext& ctx) {
+    if (failed_ || !_visible || !renderer_) return Ok();
 
     const auto& rc = _renderCtx;
 
@@ -201,9 +201,8 @@ bool YDrawW::render(WGPURenderPassEncoder pass, WebGPUContext& ctx) {
         pixelY += rc.scrollOffset * rc.cellHeight;
     }
 
-    auto result = renderer_->render(ctx, pass, pixelX, pixelY, pixelW, pixelH,
-                                     rc.screenWidth, rc.screenHeight, rc.targetFormat);
-    return result.has_value();
+    return renderer_->render(ctx, pass, pixelX, pixelY, pixelW, pixelH,
+                             rc.screenWidth, rc.screenHeight, rc.targetFormat);
 }
 
 } // namespace yetty

@@ -827,11 +827,11 @@ Result<void> RichText::render(WebGPUContext& ctx,
     return Ok();
 }
 
-bool RichText::render(WGPURenderPassEncoder pass, WebGPUContext& ctx,
+Result<void> RichText::render(WGPURenderPassEncoder pass, WebGPUContext& ctx,
                              uint32_t screenWidth, uint32_t screenHeight,
                              float pixelX, float pixelY,
                              float pixelW, float pixelH) {
-    if (!initialized_ || !pipeline_) return false;
+    if (!initialized_ || !pipeline_) return Ok();  // Not initialized yet
 
     // Re-layout if view size changed
     if (lastViewWidth_ != pixelW || lastViewHeight_ != pixelH || layoutDirty_) {
@@ -839,7 +839,7 @@ bool RichText::render(WGPURenderPassEncoder pass, WebGPUContext& ctx,
     }
 
     if (fontBatches_.empty() || glyphCount_ == 0) {
-        return false;  // Nothing to render
+        return Ok();  // Nothing to render
     }
 
     WGPUDevice device = ctx.getDevice();
@@ -862,7 +862,7 @@ bool RichText::render(WGPURenderPassEncoder pass, WebGPUContext& ctx,
         bufDesc.size = glyphBufferCapacity_ * sizeof(GlyphInstance);
         bufDesc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
         glyphBuffer_ = device ? wgpuDeviceCreateBuffer(device, &bufDesc) : nullptr;
-        if (!glyphBuffer_) return false;
+        if (!glyphBuffer_) return Err<void>("RichText: failed to create glyph buffer");
 
         // Invalidate cached bind groups since buffer changed
         for (auto& [font, bindGroup] : fontBindGroups_) {
@@ -932,7 +932,7 @@ bool RichText::render(WGPURenderPassEncoder pass, WebGPUContext& ctx,
     }
 
     gpuResourcesDirty_ = false;
-    return true;
+    return Ok();
 }
 
 } // namespace yetty

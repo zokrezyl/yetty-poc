@@ -60,9 +60,8 @@ public:
 
     Result<void> dispose() override;
 
-    // Renderable interface
-    Result<void> render(WebGPUContext& ctx) override;
-    bool render(WGPURenderPassEncoder pass, WebGPUContext& ctx) override;
+    void prepareFrame(WebGPUContext& ctx) override;
+    Result<void> render(WGPURenderPassEncoder pass, WebGPUContext& ctx) override;
 
     bool onMouseMove(float localX, float localY) override;
     bool onMouseButton(int button, bool pressed) override;

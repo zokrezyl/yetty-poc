@@ -223,11 +223,8 @@ Result<void> RichTextW::parseYAML(const std::string& yaml) {
 // Render
 //-----------------------------------------------------------------------------
 
-Result<void> RichTextW::render(WebGPUContext& ctx) {
-    if (failed_) {
-        return Err<void>("RichTextW already failed");
-    }
-    if (!_visible) return Ok();
+void RichTextW::prepareFrame(WebGPUContext& ctx) {
+    if (failed_ || !_visible) return;
 
     // Get render context set by owner
     const auto& rc = _renderCtx;
@@ -243,11 +240,11 @@ Result<void> RichTextW::render(WebGPUContext& ctx) {
         pixelY += rc.scrollOffset * rc.cellHeight;
     }
 
-    // Skip if off-screen (not an error)
+    // Skip if off-screen
     if (rc.termRows > 0) {
         float screenPixelHeight = rc.termRows * rc.cellHeight;
         if (pixelY + pixelH <= 0 || pixelY >= screenPixelHeight) {
-            return Ok();
+            return;
         }
     }
 
@@ -256,13 +253,15 @@ Result<void> RichTextW::render(WebGPUContext& ctx) {
         auto fontMgr = plugin_->getFontManager();
         if (!fontMgr) {
             failed_ = true;
-            return Err<void>("No FontManager available for RichText rendering");
+            yerror("No FontManager available for RichText rendering");
+            return;
         }
 
         auto result = RichText::create(&ctx, rc.targetFormat, fontMgr);
         if (!result) {
             failed_ = true;
-            return Err<void>("Failed to create RichText", result);
+            yerror("Failed to create RichText: {}", result.error().message());
+            return;
         }
         richText_ = *result;
 
@@ -279,12 +278,15 @@ Result<void> RichTextW::render(WebGPUContext& ctx) {
     }
 
     // Render
-    return richText_->render(ctx, rc.targetView, rc.screenWidth, rc.screenHeight,
-                              pixelX, pixelY, pixelW, pixelH);
+    auto res = richText_->render(ctx, rc.targetView, rc.screenWidth, rc.screenHeight,
+                                  pixelX, pixelY, pixelW, pixelH);
+    if (!res) {
+        yerror("RichTextW: render failed: {}", res.error().message());
+    }
 }
 
-bool RichTextW::render(WGPURenderPassEncoder pass, WebGPUContext& ctx) {
-    if (failed_ || !_visible) return false;
+Result<void> RichTextW::render(WGPURenderPassEncoder pass, WebGPUContext& ctx) {
+    if (failed_ || !_visible) return Ok();
 
     const auto& rc = _renderCtx;
 
@@ -303,7 +305,7 @@ bool RichTextW::render(WGPURenderPassEncoder pass, WebGPUContext& ctx) {
     if (rc.termRows > 0) {
         float screenPixelHeight = rc.termRows * rc.cellHeight;
         if (pixelY + pixelH <= 0 || pixelY >= screenPixelHeight) {
-            return false;
+            return Ok();  // Off-screen, not an error
         }
     }
 
@@ -312,13 +314,13 @@ bool RichTextW::render(WGPURenderPassEncoder pass, WebGPUContext& ctx) {
         auto fontMgr = plugin_->getFontManager();
         if (!fontMgr) {
             failed_ = true;
-            return false;
+            return Err<void>("RichTextW: no font manager");
         }
 
         auto result = RichText::create(&ctx, rc.targetFormat, fontMgr);
         if (!result) {
             failed_ = true;
-            return false;
+            return Err<void>("RichTextW: failed to create RichText", result);
         }
         richText_ = *result;
 
