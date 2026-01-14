@@ -503,14 +503,6 @@ Result<void> Terminal::readPty() {
     if (totalRead > 0) {
         vterm_input_write(_vterm, _ptyReadBuffer.get(), totalRead);
         vterm_screen_flush_damage(_vtermScreen);
-
-        if (_pendingNewlines > 0) {
-            std::string nl(_pendingNewlines, '\n');
-            vterm_input_write(_vterm, nl.c_str(), nl.size());
-            vterm_screen_flush_damage(_vtermScreen);
-            _pendingNewlines = 0;
-        }
-
         flushVtermOutput();
         // NOTE: syncToGrid is NOT called here - render() will sync based on damage
     }
@@ -1094,8 +1086,14 @@ int Terminal::onOSC(int command, VTermStringFragment frag, void* user) {
             if (!response.empty() && term->_ptyMaster >= 0) {
                 term->writeToPty(response.c_str(), response.size());
             }
+            // Inject newlines immediately to advance cursor past the widget
+            // This must happen during OSC processing, not deferred, otherwise
+            // any prompt text that follows in the same PTY read gets displayed
+            // before the cursor advances
             if (linesToAdvance > 0) {
-                term->_pendingNewlines = linesToAdvance;
+                std::string nl(linesToAdvance, '\n');
+                vterm_input_write(term->_vterm, nl.c_str(), nl.size());
+                vterm_screen_flush_damage(term->_vtermScreen);
             }
         }
         term->_oscBuffer.clear();
