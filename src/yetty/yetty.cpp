@@ -22,6 +22,7 @@
 #include <yetty/cursor-renderer.h>
 #include <yetty/shader-glyph-renderer.h>
 #include <yetty/shader-manager.h>
+#include <yetty/widget-frame-renderer.h>
 #elif defined(__ANDROID__)
 #include "terminal.h"
 #elif YETTY_WEB
@@ -627,6 +628,17 @@ setup_shader_manager:
   // TODO: Implement GPU-driven cursor blinking in GridRenderer's shader
   // using a time uniform, so cursor blinks even without damage.
   (void)_shaderManager; // Keep ShaderManager for future use
+
+  // Create WidgetFrameRenderer for drawing frames around widgets and toolbox
+  auto frameRendererResult = WidgetFrameRenderer::create(
+      _ctx->getDevice(), _ctx->getSurfaceFormat());
+  if (!frameRendererResult) {
+    ywarn("Failed to init WidgetFrameRenderer: {} - widget frames disabled",
+          error_msg(frameRendererResult));
+  } else {
+    _frameRenderer = std::move(*frameRendererResult);
+    yinfo("WidgetFrameRenderer initialized");
+  }
 
   std::cout << "Terminal mode: Grid " << _cols << "x" << _rows
             << " (damage tracking: "
@@ -1280,6 +1292,77 @@ void Yetty::mainLoopIteration() noexcept {
       continue;
     if (auto res = widget->render(pass, *_ctx); !res) {
       yerror("Yetty: root widget batched render failed: {}", res.error().message());
+    }
+  }
+
+  // Render frames around child widgets and toolbox for focused widget
+  if (_frameRenderer && _terminal) {
+    _frameRenderer->resetDrawIndex();  // Reset buffer pool for new frame
+    float cellW = cellWidth();
+    float cellH = cellHeight();
+    uint32_t screenW = windowWidth();
+    uint32_t screenH = windowHeight();
+    WidgetPtr focusedWidget = _inputHandler ? _inputHandler->focusedWidget() : nullptr;
+    WidgetPtr hoveredWidget = _inputHandler ? _inputHandler->hoveredWidget() : nullptr;
+
+    static int logCount = 0;
+    if (logCount++ < 10) {
+      yinfo("Frame render: terminal has {} children, focused={}, hovered={}",
+            _terminal->getChildWidgets().size(),
+            focusedWidget ? focusedWidget->name() : "none",
+            hoveredWidget ? hoveredWidget->name() : "none");
+    }
+
+    int scrollOffset = _terminal->getScrollOffset();
+
+    for (const auto& child : _terminal->getChildWidgets()) {
+      if (!child->isVisible()) continue;
+
+      float pixelX = child->getX() * cellW;
+      float pixelY = child->getY() * cellH;
+      float pixelW = child->getWidthCells() * cellW;
+      float pixelH = child->getHeightCells() * cellH;
+
+      // Adjust for scroll (relative widgets move with content)
+      if (child->getPositionMode() == PositionMode::Relative && scrollOffset > 0) {
+        pixelY += scrollOffset * cellH;
+      }
+
+      // Determine frame color based on state
+      // Priority: focused (green) > hovered (yellow) > default (white)
+      float r, g, b, a;
+      bool isFocused = (child == focusedWidget);
+      bool isHovered = (child == hoveredWidget);
+      if (isFocused) {
+        r = 0.0f; g = 1.0f; b = 0.0f; a = 1.0f;  // Green for focused
+      } else if (isHovered) {
+        r = 1.0f; g = 1.0f; b = 0.0f; a = 1.0f;  // Yellow for hovered
+      } else {
+        r = 1.0f; g = 1.0f; b = 1.0f; a = 0.6f;  // White for default
+      }
+
+      // Render frame around widget (thicker for focused)
+      float thickness = isFocused ? 5.0f : 1.0f;  // Much thicker for debugging
+
+      // Debug log for focused widgets
+      if (isFocused) {
+        static int focusLogCount = 0;
+        if (focusLogCount++ < 30) {
+          yinfo("FOCUSED frame render: widget='{}' pos=({:.0f},{:.0f}) size={:.0f}x{:.0f} color=({:.1f},{:.1f},{:.1f},{:.1f}) thickness={:.0f}",
+                child->name(), pixelX, pixelY, pixelW, pixelH, r, g, b, a, thickness);
+        }
+      }
+
+      _frameRenderer->renderFrame(pass, _ctx->getQueue(), screenW, screenH,
+                                  pixelX, pixelY, pixelW, pixelH,
+                                  r, g, b, a, thickness);
+
+      // Render toolbox for focused widget
+      if (isFocused) {
+        _frameRenderer->renderToolbox(pass, _ctx->getQueue(), screenW, screenH,
+                                      pixelX, pixelY, pixelW, pixelH,
+                                      child->isRunning());
+      }
     }
   }
 

@@ -46,8 +46,9 @@ public:
     // Selection state
     bool isSelecting() const noexcept { return _selecting; }
 
-    // Widget focus
+    // Widget focus and hover
     WidgetPtr focusedWidget() const { return _focusedWidget; }
+    WidgetPtr hoveredWidget() const { return _hoveredWidget; }
     void clearWidgetFocus();
 
 private:

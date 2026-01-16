@@ -54,6 +54,7 @@ class Grid;
 class InputHandler;
 class ShaderManager;
 class CursorRenderer;
+class WidgetFrameRenderer;
 
 //-----------------------------------------------------------------------------
 // GPU Resource entries (per-renderable namespace)
@@ -210,6 +211,7 @@ private:
     std::shared_ptr<InputHandler> _inputHandler;
     std::shared_ptr<ShaderManager> _shaderManager;
     std::shared_ptr<CursorRenderer> _cursorRenderer;
+    std::unique_ptr<WidgetFrameRenderer> _frameRenderer;
 #endif
 
     // Root widgets (Terminal or RemoteTerminal, more in future)

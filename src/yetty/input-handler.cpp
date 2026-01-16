@@ -1,6 +1,7 @@
 #include "input-handler.h"
 #include <yetty/yetty.h>
 #include <yetty/widget.h>
+#include <yetty/widget-frame-renderer.h>
 #include "grid-renderer.h"
 #include "grid.h"
 
@@ -184,6 +185,41 @@ bool InputHandler::dispatchMouseMoveToWidget(float pixelX, float pixelY) {
 bool InputHandler::dispatchMouseButtonToWidget(int button, bool pressed, float pixelX, float pixelY) {
     yfunc();
 #if !YETTY_WEB
+    // Check if click is on toolbox of focused widget first
+    if (_focusedWidget && pressed && button == 0) {
+        float cellW = _engine->cellWidth();
+        float cellH = _engine->cellHeight();
+        float widgetPixelX = _focusedWidget->getX() * cellW;
+        float widgetPixelY = _focusedWidget->getY() * cellH;
+        float widgetPixelW = _focusedWidget->getWidthCells() * cellW;
+        float widgetPixelH = _focusedWidget->getHeightCells() * cellH;
+
+        // Use static method for hit testing (doesn't need renderer instance)
+        ToolboxButton btn = WidgetFrameRenderer::hitTestToolbox(
+            pixelX, pixelY,
+            widgetPixelX, widgetPixelY,
+            widgetPixelW, widgetPixelH
+        );
+
+        if (btn == ToolboxButton::Close) {
+            yinfo("Toolbox: Close clicked for widget '{}'", _focusedWidget->name());
+            auto terminal = _engine->terminal();
+            if (terminal) {
+                terminal->removeChildWidget(_focusedWidget->id());
+            }
+            clearWidgetFocus();
+            return true;
+        } else if (btn == ToolboxButton::StopStart) {
+            yinfo("Toolbox: Stop/Start clicked for widget '{}'", _focusedWidget->name());
+            if (_focusedWidget->isRunning()) {
+                _focusedWidget->stop();
+            } else {
+                _focusedWidget->start();
+            }
+            return true;
+        }
+    }
+
     WidgetPtr widget = widgetAtPixel(pixelX, pixelY);
 
     // Handle focus changes on left click

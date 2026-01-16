@@ -360,6 +360,7 @@ if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
         src/yetty/rich-text.cpp
         src/yetty/emoji-atlas.cpp
         src/yetty/ydraw.cpp
+        src/yetty/widget-frame-renderer.cpp
     )
 
     add_library(yetty_core SHARED ${YETTY_CORE_SOURCES})
@@ -430,6 +431,7 @@ if(EMSCRIPTEN OR YETTY_ANDROID)
         src/yetty/rich-text.cpp
         src/yetty/emoji-atlas.cpp
         src/yetty/ydraw.cpp
+        src/yetty/widget-frame-renderer.cpp
     )
 endif()
 
