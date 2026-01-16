@@ -618,20 +618,29 @@ else()
         # Windows: Link against ConPTY (part of kernel32)
         target_compile_definitions(yetty PRIVATE YETTY_USE_CONPTY=1)
     else()
-        # Unix: Link against util for forkpty
-        target_link_libraries(yetty PRIVATE util)
+        # Unix: Link against util for forkpty (Linux only, macOS has it in libc)
+        if(NOT APPLE)
+            target_link_libraries(yetty PRIVATE util)
+        endif()
         target_compile_definitions(yetty PRIVATE YETTY_USE_FORKPTY=1)
 
         # Link Python into main executable so symbols are globally visible to numpy extensions
-        # Use --whole-archive to export all Python symbols from the static library
+        # Use --whole-archive (Linux) or -force_load (macOS) to export all Python symbols
         if(TARGET python_embedded)
             add_dependencies(yetty python_embedded)
-            target_link_libraries(yetty PRIVATE
-                -Wl,--whole-archive
-                python_embedded
-                -Wl,--no-whole-archive
-                m dl pthread
-            )
+            if(APPLE)
+                target_link_libraries(yetty PRIVATE
+                    -Wl,-force_load,$<TARGET_FILE:python_embedded>
+                    m pthread
+                )
+            else()
+                target_link_libraries(yetty PRIVATE
+                    -Wl,--whole-archive
+                    python_embedded
+                    -Wl,--no-whole-archive
+                    m dl pthread
+                )
+            endif()
         endif()
     endif()
 
@@ -685,13 +694,20 @@ else()
     # Link Python into plugin tester so Python plugin symbols are available
     if(TARGET python_embedded)
         add_dependencies(yetty-plugin-tester python_embedded)
-        target_link_options(yetty-plugin-tester PRIVATE -rdynamic)
-        target_link_libraries(yetty-plugin-tester PRIVATE
-            -Wl,--whole-archive
-            python_embedded
-            -Wl,--no-whole-archive
-            m dl pthread
-        )
+        if(APPLE)
+            target_link_libraries(yetty-plugin-tester PRIVATE
+                -Wl,-force_load,$<TARGET_FILE:python_embedded>
+                m pthread
+            )
+        else()
+            target_link_options(yetty-plugin-tester PRIVATE -rdynamic)
+            target_link_libraries(yetty-plugin-tester PRIVATE
+                -Wl,--whole-archive
+                python_embedded
+                -Wl,--no-whole-archive
+                m dl pthread
+            )
+        endif()
     endif()
 
     #-------------------------------------------------------------------------
