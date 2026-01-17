@@ -411,12 +411,13 @@ Result<void> PdfiumWidget::extractPageContent(int pageNum) {
         double left = 0, right = 0, bottom = 0, top = 0;
         FPDFText_GetCharBox(textPage, i, &left, &right, &bottom, &top);
 
-        // Use ORIGIN (baseline) for positioning - this is standard text rendering
-        // RichText will apply the font's bearing to get glyph top-left
+        // Store ORIGIN (baseline) position and ASCENT from charbox
+        // ascent = distance from baseline to charbox TOP (this is what PDFium uses for positioning)
         textChar.x = static_cast<float>(originX);
-        textChar.y = static_cast<float>(originY);  // Baseline in PDF coords
+        textChar.y = static_cast<float>(originY);  // Baseline in PDF coords (Y-up)
         textChar.width = static_cast<float>(right - left);
         textChar.height = static_cast<float>(top - bottom);
+        textChar.ascent = static_cast<float>(top - originY);  // PDFium's actual ascent for this glyph
 
         // Get font size - prefer pre-calculated line font size for consistency
         double fontSize = FPDFText_GetFontSize(textPage, i);
@@ -523,9 +524,12 @@ void PdfiumWidget::buildRichTextContent(float viewWidth) {
     for (const auto& ch : page.chars) {
         // Convert PDF coordinates to screen coordinates
         // PDF has Y-up (origin at bottom-left), screen has Y-down (origin at top-left)
-        float screenX = ch.x * scale;
-        float screenY = (pdfHeight - ch.y) * scale;  // Flip Y axis
+        // ch.x, ch.y = origin (baseline) position in PDF coords
+        // ch.ascent = distance from baseline to charbox TOP (PDFium's actual ascent)
+        float baselineScreenX = ch.x * scale;
+        float baselineScreenY = (pdfHeight - ch.y) * scale;  // Flip Y: baseline in screen coords
         float fontSize = ch.size * scale;
+        float pdfiumAscent = ch.ascent * scale;  // PDFium's ascent for this glyph
 
         // Skip very small text
         if (fontSize < 1.0f) {
@@ -548,22 +552,26 @@ void PdfiumWidget::buildRichTextContent(float viewWidth) {
 
         // Debug first few screen coordinates
         if (debugCount < 10) {
-            yinfo("PdfiumWidget: screen[{}] cp={} ('{}') screenPos=({:.1f},{:.1f}) fontSize={:.1f} font={}",
+            yinfo("PdfiumWidget: screen[{}] cp={} ('{}') baseline=({:.1f},{:.1f}) pdfiumAscent={:.1f} fontSize={:.1f} font={}",
                   debugCount, ch.codepoint, (ch.codepoint > 31 && ch.codepoint < 127) ? (char)ch.codepoint : '?',
-                  screenX, screenY, fontSize, ch.fontFamily);
+                  baselineScreenX, baselineScreenY, pdfiumAscent, fontSize, ch.fontFamily);
             debugCount++;
         }
 
         // Create TextChar for RichText
+        // Use baseline position + PDFium's ascent to compute glyph top
         TextChar textChar;
         textChar.codepoint = ch.codepoint;
-        textChar.x = screenX;
-        textChar.y = screenY;  // Baseline in screen coords
+        textChar.x = baselineScreenX;
+        textChar.y = baselineScreenY - pdfiumAscent;  // Glyph TOP = baseline - ascent (screen Y-down)
         textChar.size = fontSize;
         textChar.color = glm::vec4(r, g, b, a);
         textChar.fontFamily = ch.fontFamily;
-        // Use standard text rendering: baseline position + font bearing
-        textChar.prePositioned = false;
+        // prePositioned=true: position is glyph top-left (computed from PDFium's ascent)
+        textChar.prePositioned = true;
+        // Set target size from charbox
+        textChar.targetWidth = ch.width * scale;
+        textChar.targetHeight = ch.height * scale;
 
         // Determine style
         if (ch.bold && ch.italic) {

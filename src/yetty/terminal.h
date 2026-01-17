@@ -6,6 +6,7 @@
 #include <yetty/result.hpp>
 #include <yetty/osc-command.h>
 #include "grid.h"
+#include "gpu-screen.h"
 #include "terminal-backend.h"  // For SelectionMode, ScrollbackStyle, ScrollbackLine
 
 extern "C" {
@@ -112,14 +113,14 @@ public:
     bool hasFullDamage() const { return _fullDamage; }
     void clearFullDamage() { _fullDamage = false; }
 
-    // Scrollback navigation
+    // Scrollback navigation - delegated to GPUScreen
     void scrollUp(int lines = 1);
     void scrollDown(int lines = 1);
     void scrollToTop();
     void scrollToBottom();
-    int getScrollOffset() const { return _scrollOffset; }
-    bool isScrolledBack() const { return _scrollOffset > 0; }
-    size_t getScrollbackSize() const { return _scrollback.size(); }
+    int getScrollOffset() const { return _gpuScreen ? _gpuScreen->getScrollOffset() : 0; }
+    bool isScrolledBack() const { return _gpuScreen ? _gpuScreen->isScrolledBack() : false; }
+    size_t getScrollbackSize() const { return _gpuScreen ? _gpuScreen->getScrollbackSize() : 0; }
 
     // Selection
     void startSelection(int row, int col, SelectionMode mode = SelectionMode::Character);
@@ -173,19 +174,14 @@ public:
     bool wantsMouseEvents() const { return _mouseMode != VTERM_PROP_MOUSE_NONE; }
 
     // VTerm access
-    VTermScreen* getVTermScreen() const { return _vtermScreen; }
+    VTerm* getVTerm() const { return _vterm; }
+    GPUScreen* getGPUScreen() const { return _gpuScreen.get(); }
     bool isAltScreen() const { return _isAltScreen; }
 
     // libvterm callbacks (public for C callback access)
-    static int onDamage(VTermRect rect, void* user);
-    static int onMoveCursor(VTermPos pos, VTermPos oldpos, int visible, void* user);
-    static int onSetTermProp(VTermProp prop, VTermValue* val, void* user);
-    static int onResize(int rows, int cols, void* user);
-    static int onBell(void* user);
+    // Note: Most Screen callbacks are handled by GPUScreen now
+    // These are kept for OSC handling and legacy compatibility
     static int onOSC(int command, VTermStringFragment frag, void* user);
-    static int onSbPushline(int cols, const VTermScreenCell* cells, void* user);
-    static int onSbPopline(int cols, VTermScreenCell* cells, void* user);
-    static int onMoverect(VTermRect dest, VTermRect src, void* user);
 
 private:
     Terminal(uint32_t id, uint32_t cols, uint32_t rows, Font* font, uv_loop_t* loop) noexcept;
@@ -223,8 +219,9 @@ private:
     // Terminal state
     //=========================================================================
     VTerm* _vterm = nullptr;
-    VTermScreen* _vtermScreen = nullptr;
+    std::unique_ptr<GPUScreen> _gpuScreen;
 
+    // Keep Grid for compatibility during transition (scrollback rendering)
     Grid _grid;
     Font* _font;
     std::string _shell;
@@ -274,8 +271,7 @@ private:
     std::string _oscBuffer;
     int _oscCommand = -1;
 
-    std::deque<ScrollbackLine> _scrollback;
-    int _scrollOffset = 0;
+    // Scrollback is now handled by GPUScreen directly
 
     uint32_t _pendingNewlines = 0;
 

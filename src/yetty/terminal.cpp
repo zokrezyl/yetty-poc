@@ -27,7 +27,9 @@
 
 namespace yetty {
 
-// libvterm callbacks
+// libvterm screen callbacks - NO LONGER USED with GPUScreen
+// Kept for reference during transition
+#if 0
 static VTermScreenCallbacks screenCallbacks = {
     .damage = Terminal::onDamage,
     .moverect = Terminal::onMoverect,
@@ -39,7 +41,9 @@ static VTermScreenCallbacks screenCallbacks = {
     .sb_popline = Terminal::onSbPopline,
     .sb_clear = nullptr,
 };
+#endif
 
+// OSC fallbacks still needed for widget embedding
 static VTermStateFallbacks stateFallbacks = {
     .control = nullptr,
     .csi = nullptr,
@@ -169,13 +173,41 @@ Result<void> Terminal::init() noexcept {
     yinfo("Terminal::init: vterm created");
     vterm_set_utf8(_vterm, 1);
 
-    _vtermScreen = vterm_obtain_screen(_vterm);
-    vterm_screen_set_callbacks(_vtermScreen, &screenCallbacks, this);
-    vterm_screen_enable_altscreen(_vtermScreen, 1);
-    vterm_screen_enable_reflow(_vtermScreen, true);
-    vterm_screen_reset(_vtermScreen, 1);
-    yinfo("Terminal::init: vterm screen configured");
+    // Create GPUScreen - replaces vterm_screen with direct GPU buffer storage
+    _gpuScreen = std::make_unique<GPUScreen>(_rows, _cols, _font);
+    
+    // Set up GPUScreen callbacks for Terminal integration
+    _gpuScreen->setTermPropCallback([this](VTermProp prop, VTermValue* val) {
+        switch (prop) {
+            case VTERM_PROP_ALTSCREEN:
+                _isAltScreen = val->boolean;
+                break;
+            case VTERM_PROP_CURSORVISIBLE:
+                _cursorVisible = val->boolean;
+                break;
+            case VTERM_PROP_MOUSE:
+                _mouseMode = val->number;
+                break;
+            default: break;
+        }
+    });
+    
+    _gpuScreen->setBellCallback([]() {
+#ifndef _WIN32
+        write(STDOUT_FILENO, "\a", 1);
+#endif
+    });
+    
+    // Set up scroll callback for widget position updates
+    _gpuScreen->setScrollCallback([this](int lines) {
+        updateWidgetPositionsOnScroll(lines);
+    });
+    
+    // Attach GPUScreen to vterm (registers State callbacks)
+    _gpuScreen->attach(_vterm);
+    yinfo("Terminal::init: GPUScreen attached to vterm");
 
+    // Set up OSC fallbacks for widget embedding (still needed)
     VTermState* state = vterm_obtain_state(_vterm);
     vterm_state_set_unrecognised_fallbacks(state, &stateFallbacks, this);
 
@@ -302,22 +334,29 @@ Result<void> Terminal::render(WGPURenderPassEncoder pass, WebGPUContext& ctx, bo
         return Ok();
     }
 
-    // Sync grid from vterm when there's damage
-    if (_fullDamage) {
-        syncToGrid();
-    } else if (!_damageRects.empty()) {
-        syncDamageToGrid();
+    // GPUScreen already has data in GPU-ready format from State callbacks
+    // No syncToGrid needed!
+    bool needsUpload = _gpuScreen->hasDamage() || _fullDamage;
+    
+    // Render grid from GPUScreen buffers
+    if (_renderer && _gpuScreen) {
+        _renderer->renderToPassFromBuffers(
+            pass,
+            static_cast<uint32_t>(_gpuScreen->getCols()),
+            static_cast<uint32_t>(_gpuScreen->getRows()),
+            _gpuScreen->getGlyphData(),
+            _gpuScreen->getFgColorData(),
+            _gpuScreen->getBgColorData(),
+            _gpuScreen->getAttrsData(),
+            needsUpload,
+            _gpuScreen->getCursorCol(),
+            _gpuScreen->getCursorRow(),
+            _gpuScreen->isCursorVisible() && _cursorBlink
+        );
     }
 
-    // Render grid - renderToPass uploads to GPU only when damage exists
-    if (_renderer) {
-        _renderer->renderToPass(pass, _grid, _damageRects, _fullDamage,
-                                _cursorCol, _cursorRow,
-                                _cursorVisible && _cursorBlink);
-    }
-
-    // Clear damage after renderToPass has used it
-    _damageRects.clear();
+    // Clear damage tracking
+    _gpuScreen->clearDamage();
     _fullDamage = false;
 
     // Child widgets decide themselves if they need to render
@@ -428,27 +467,24 @@ void Terminal::onPtyPoll(uv_poll_t* handle, int status, int events) {
 //=============================================================================
 
 void Terminal::sendKey(uint32_t codepoint, VTermModifier mod) {
-    if (_scrollOffset != 0) {
-        _scrollOffset = 0;
-        _fullDamage = true;
+    if (_gpuScreen && _gpuScreen->isScrolledBack()) {
+        _gpuScreen->scrollToBottom();
     }
     vterm_keyboard_unichar(_vterm, codepoint, mod);
     flushVtermOutput();
 }
 
 void Terminal::sendSpecialKey(VTermKey key, VTermModifier mod) {
-    if (_scrollOffset != 0) {
-        _scrollOffset = 0;
-        _fullDamage = true;
+    if (_gpuScreen && _gpuScreen->isScrolledBack()) {
+        _gpuScreen->scrollToBottom();
     }
     vterm_keyboard_key(_vterm, key, mod);
     flushVtermOutput();
 }
 
 void Terminal::sendRaw(const char* data, size_t len) {
-    if (_scrollOffset != 0) {
-        _scrollOffset = 0;
-        _fullDamage = true;
+    if (_gpuScreen && _gpuScreen->isScrolledBack()) {
+        _gpuScreen->scrollToBottom();
     }
     writeToPty(data, len);
 }
@@ -512,9 +548,9 @@ Result<void> Terminal::readPty() {
 
     if (totalRead > 0) {
         vterm_input_write(_vterm, _ptyReadBuffer.get(), totalRead);
-        vterm_screen_flush_damage(_vtermScreen);
+        // GPUScreen handles damage tracking automatically via State callbacks
+        // No need for vterm_screen_flush_damage
         flushVtermOutput();
-        // NOTE: syncToGrid is NOT called here - render() will sync based on damage
     }
 
     return Ok();
@@ -549,34 +585,31 @@ Result<void> Terminal::flushVtermOutput() {
 }
 
 //=============================================================================
-// Scrollback
+// Scrollback - delegated to GPUScreen
 //=============================================================================
 
 void Terminal::scrollUp(int lines) {
-    int oldOffset = _scrollOffset;
-    int sbSize = static_cast<int>(_scrollback.size());
-    _scrollOffset = std::min(_scrollOffset + lines, sbSize);
-    ydebug("Terminal::scrollUp: lines={}, _scrollback.size()={}, oldOffset={}, newOffset={}",
-                  lines, sbSize, oldOffset, _scrollOffset);
-    _fullDamage = true;
+    if (_gpuScreen) {
+        _gpuScreen->scrollUp(lines);
+    }
 }
 
 void Terminal::scrollDown(int lines) {
-    int oldOffset = _scrollOffset;
-    _scrollOffset = std::max(_scrollOffset - lines, 0);
-    ydebug("Terminal::scrollDown: lines={}, oldOffset={}, newOffset={}",
-                  lines, oldOffset, _scrollOffset);
-    _fullDamage = true;
+    if (_gpuScreen) {
+        _gpuScreen->scrollDown(lines);
+    }
 }
 
 void Terminal::scrollToTop() {
-    _scrollOffset = static_cast<int>(_scrollback.size());
-    _fullDamage = true;
+    if (_gpuScreen) {
+        _gpuScreen->scrollToTop();
+    }
 }
 
 void Terminal::scrollToBottom() {
-    _scrollOffset = 0;
-    _fullDamage = true;
+    if (_gpuScreen) {
+        _gpuScreen->scrollToBottom();
+    }
 }
 
 //=============================================================================
@@ -617,18 +650,11 @@ std::string Terminal::getSelectedText() {
     VTermPos start = _selectionStart, end = _selectionEnd;
     if (vterm_pos_cmp(start, end) > 0) std::swap(start, end);
 
-    std::string result;
-    for (int row = start.row; row <= end.row; row++) {
-        int sc = (row == start.row) ? start.col : 0;
-        int ec = (row == end.row) ? end.col + 1 : static_cast<int>(_cols);
-
-        VTermRect rect = {row, row + 1, sc, ec};
-        char buf[1024];
-        size_t len = vterm_screen_get_text(_vtermScreen, buf, sizeof(buf), rect);
-        if (len > 0) result.append(buf, len);
-        if (row < end.row) result += '\n';
+    // Use GPUScreen's getText instead of vterm_screen_get_text
+    if (_gpuScreen) {
+        return _gpuScreen->getText(start.row, start.col, end.row, end.col);
     }
-    return result;
+    return "";
 }
 
 //=============================================================================
@@ -674,165 +700,17 @@ void Terminal::updateCursorBlink(double currentTime) {
 }
 
 //=============================================================================
-// Grid sync
+// Grid sync - DEPRECATED: GPUScreen handles this now
 //=============================================================================
 
 void Terminal::syncToGrid() {
-    VTermScreenCell cell;
-    VTermPos pos;
-
-    int sbSize = static_cast<int>(_scrollback.size());
-    int effectiveOffset = std::min(_scrollOffset, sbSize);
-
-    for (uint32_t row = 0; row < _rows; row++) {
-        int lineIndex = static_cast<int>(row) - effectiveOffset;
-
-        if (lineIndex < 0) {
-            // Scrollback
-            int sbIndex = sbSize + lineIndex;
-            if (sbIndex >= 0 && sbIndex < sbSize) {
-                const auto& sbLine = _scrollback[sbIndex];
-                
-                // Decode RLE styles for this line
-                size_t runIdx = 0;
-                int currentRunRemaining = 0;
-                ScrollbackStyle currentStyle = {};
-                if (!sbLine.styleRuns.empty()) {
-                    currentStyle = sbLine.styleRuns[0].style;
-                    currentRunRemaining = sbLine.styleRuns[0].count;
-                }
-                
-                for (uint32_t col = 0; col < _cols; col++) {
-                    uint32_t cp = (col < sbLine.chars.size()) ? sbLine.chars[col] : ' ';
-                    uint8_t fgR = 255, fgG = 255, fgB = 255;
-                    uint8_t bgR = 0, bgG = 0, bgB = 0;
-                    
-                    // Get style from RLE
-                    bool isBold = false, isItalic = false, isUnderline = false, isStrike = false, isReverse = false;
-                    if (currentRunRemaining > 0) {
-                        fgR = currentStyle.fgR;
-                        fgG = currentStyle.fgG;
-                        fgB = currentStyle.fgB;
-                        bgR = currentStyle.bgR;
-                        bgG = currentStyle.bgG;
-                        bgB = currentStyle.bgB;
-                        
-                        uint16_t attrs = currentStyle.attrs;
-                        isBold = attrs & 1;
-                        isUnderline = (attrs >> 1) & 3;
-                        isItalic = (attrs >> 3) & 1;
-                        isReverse = (attrs >> 5) & 1;
-                        isStrike = (attrs >> 7) & 1;
-                        
-                        currentRunRemaining--;
-                        if (currentRunRemaining == 0 && runIdx + 1 < sbLine.styleRuns.size()) {
-                            runIdx++;
-                            currentStyle = sbLine.styleRuns[runIdx].style;
-                            currentRunRemaining = sbLine.styleRuns[runIdx].count;
-                        }
-                    }
-                    
-                    if (isReverse) {
-                        std::swap(fgR, bgR); std::swap(fgG, bgG); std::swap(fgB, bgB);
-                    }
-                    
-                    uint16_t gi = _font ? _font->getGlyphIndex(cp, isBold, isItalic) : static_cast<uint16_t>(cp);
-                    CellAttrs cellAttrs;
-                    cellAttrs._emoji = isEmoji(cp) ? 1 : 0;
-                    cellAttrs._bold = isBold ? 1 : 0;
-                    cellAttrs._italic = isItalic ? 1 : 0;
-                    cellAttrs._underline = isUnderline ? 1 : 0;
-                    cellAttrs._strikethrough = isStrike ? 1 : 0;
-                    _grid.setCell(col, row, gi, fgR, fgG, fgB, bgR, bgG, bgB, cellAttrs);
-                }
-            }
-        } else {
-            // VTerm screen
-            for (uint32_t col = 0; col < _cols; col++) {
-                pos.row = lineIndex;
-                pos.col = col;
-                vterm_screen_get_cell(_vtermScreen, pos, &cell);
-
-                uint32_t cp = cell.chars[0];
-                if (cp == 0xFFFFFFFF || cp == static_cast<uint32_t>(-1)) {
-                    // Wide char continuation
-                    uint8_t fgR, fgG, fgB, bgR, bgG, bgB;
-                    VTermColor fg = cell.fg, bg = cell.bg;
-                    vterm_screen_convert_color_to_rgb(_vtermScreen, &fg);
-                    vterm_screen_convert_color_to_rgb(_vtermScreen, &bg);
-                    colorToRGB(fg, fgR, fgG, fgB);
-                    colorToRGB(bg, bgR, bgG, bgB);
-                    if (cell.attrs.reverse) {
-                        std::swap(fgR, bgR); std::swap(fgG, bgG); std::swap(fgB, bgB);
-                    }
-                    _grid.setCell(col, row, GLYPH_WIDE_CONT, fgR, fgG, fgB, bgR, bgG, bgB);
-                    continue;
-                }
-                if (cp == 0) cp = ' ';
-
-                bool isBold = cell.attrs.bold != 0;
-                bool isItalic = cell.attrs.italic != 0;
-
-                // Determine glyph index:
-                // 1. For emojis, use EmojiAtlas (dynamically load if needed)
-                // 2. For regular text, use Font (MSDF)
-                uint16_t gi;
-                int emojiIdx = -1;
-
-                if (isEmoji(cp) && _emojiAtlas) {
-                    // Check if already loaded in EmojiAtlas
-                    emojiIdx = _emojiAtlas->getEmojiIndex(cp);
-                    if (emojiIdx < 0) {
-                        // Try to load it dynamically
-                        auto result = _emojiAtlas->loadEmoji(cp);
-                        if (result && *result >= 0) {
-                            emojiIdx = *result;
-                        }
-                    }
-
-                    if (emojiIdx >= 0) {
-                        gi = static_cast<uint16_t>(emojiIdx);
-                    } else {
-                        // Emoji not available in font, use space as fallback
-                        gi = _font ? _font->getGlyphIndex(' ') : static_cast<uint16_t>(' ');
-                    }
-                } else {
-                    // Regular text glyph - use MSDF font
-                    gi = _font ? _font->getGlyphIndex(cp, isBold, isItalic) : static_cast<uint16_t>(cp);
-                }
-
-                // Plugin-based custom glyph rendering removed - widgets handle their own rendering
-
-                uint8_t fgR, fgG, fgB, bgR, bgG, bgB;
-                VTermColor fg = cell.fg, bg = cell.bg;
-                vterm_screen_convert_color_to_rgb(_vtermScreen, &fg);
-                vterm_screen_convert_color_to_rgb(_vtermScreen, &bg);
-                colorToRGB(fg, fgR, fgG, fgB);
-                colorToRGB(bg, bgR, bgG, bgB);
-
-                if (cell.attrs.reverse) {
-                    std::swap(fgR, bgR); std::swap(fgG, bgG); std::swap(fgB, bgB);
-                }
-                if (isInSelection(lineIndex, col)) {
-                    std::swap(fgR, bgR); std::swap(fgG, bgG); std::swap(fgB, bgB);
-                }
-
-                CellAttrs attrs;
-                attrs._bold = isBold ? 1 : 0;
-                attrs._italic = isItalic ? 1 : 0;
-                attrs._strikethrough = cell.attrs.strike ? 1 : 0;
-                attrs._underline = static_cast<uint8_t>(cell.attrs.underline & 0x3);
-                attrs._emoji = (emojiIdx >= 0) ? 1 : 0;
-
-                _grid.setCell(col, row, gi, fgR, fgG, fgB, bgR, bgG, bgB, attrs);
-            }
-        }
-    }
+    // GPUScreen handles grid data via State callbacks
+    // This function is kept for scrollback rendering which is TODO
+    // For now, scrollback viewing is disabled
 }
 
 void Terminal::syncDamageToGrid() {
-    // Simplified - just use syncToGrid for now
-    syncToGrid();
+    // GPUScreen handles damage tracking automatically
 }
 
 void Terminal::colorToRGB(const VTermColor& color, uint8_t& r, uint8_t& g, uint8_t& b) {
@@ -861,9 +739,11 @@ void Terminal::updateWidgetPositionsOnScroll(int lines) {
 }
 
 //=============================================================================
-// libvterm callbacks
+// libvterm callbacks - DEPRECATED: GPUScreen handles most of these now
+// Only onOSC is still needed for widget embedding
 //=============================================================================
 
+#if 0  // No longer used - GPUScreen handles via State callbacks
 int Terminal::onDamage(VTermRect rect, void* user) {
     auto* term = static_cast<Terminal*>(user);
     DamageRect d;
@@ -887,7 +767,6 @@ int Terminal::onSetTermProp(VTermProp prop, VTermValue* val, void* user) {
     switch (prop) {
         case VTERM_PROP_ALTSCREEN:
             term->_isAltScreen = val->boolean;
-            // Alt screen change notification removed - widgets track via RenderContext
             break;
         case VTERM_PROP_CURSORVISIBLE:
             term->_cursorVisible = val->boolean;
@@ -910,145 +789,13 @@ int Terminal::onBell(void*) {
 }
 
 int Terminal::onSbPushline(int cols, const VTermScreenCell* cells, void* user) {
-    auto* term = static_cast<Terminal*>(user);
-
-    // Helper to pack attrs into uint16_t
-    auto packAttrs = [](const VTermScreenCellAttrs& a) -> uint16_t {
-        return (a.bold) | (a.underline << 1) | (a.italic << 3) |
-               (a.blink << 4) | (a.reverse << 5) | (a.conceal << 6) |
-               (a.strike << 7) | (a.font << 8) | (a.dwl << 12) |
-               (a.dhl << 13) | (a.small << 15);
-    };
-
-    ScrollbackLine line;
-    line.chars.resize(cols);
-
-    ScrollbackStyle lastStyle = {};
-    uint16_t runCount = 0;
-
-    for (int i = 0; i < cols; i++) {
-        uint32_t ch = cells[i].chars[0];
-        if (ch == 0xFFFFFFFF || ch == static_cast<uint32_t>(-1) || ch == 0) ch = ' ';
-        line.chars[i] = ch;
-
-        VTermColor fg = cells[i].fg, bg = cells[i].bg;
-        vterm_screen_convert_color_to_rgb(term->_vtermScreen, &fg);
-        vterm_screen_convert_color_to_rgb(term->_vtermScreen, &bg);
-
-        ScrollbackStyle style;
-        style.fgR = fg.rgb.red;
-        style.fgG = fg.rgb.green;
-        style.fgB = fg.rgb.blue;
-        style.bgR = bg.rgb.red;
-        style.bgG = bg.rgb.green;
-        style.bgB = bg.rgb.blue;
-        style.attrs = packAttrs(cells[i].attrs);
-
-        if (i == 0) {
-            lastStyle = style;
-            runCount = 1;
-        } else if (style == lastStyle && runCount < 65535) {
-            runCount++;
-        } else {
-            line.styleRuns.push_back({lastStyle, runCount});
-            lastStyle = style;
-            runCount = 1;
-        }
-    }
-    if (runCount > 0) {
-        line.styleRuns.push_back({lastStyle, runCount});
-    }
-
-    term->_scrollback.push_back(std::move(line));
-
-    uint32_t maxLines = term->_config ? term->_config->scrollbackLines() : 10000;
-    while (term->_scrollback.size() > maxLines) {
-        term->_scrollback.pop_front();
-    }
-
-    // Update widget positions - content scrolled up by 1 line
-    term->updateWidgetPositionsOnScroll(1);
-
+    // Scrollback is handled by GPUScreen callback now
     return 1;
 }
 
 int Terminal::onSbPopline(int cols, VTermScreenCell* cells, void* user) {
-    auto* term = static_cast<Terminal*>(user);
-    if (term->_scrollback.empty()) return 0;
-
-    auto& line = term->_scrollback.back();
-    int lineCols = std::min(cols, static_cast<int>(line.chars.size()));
-
-    // Helper to unpack attrs from uint16_t
-    auto unpackAttrs = [](uint16_t packed, VTermScreenCellAttrs& a) {
-        memset(&a, 0, sizeof(a));
-        a.bold = packed & 1;
-        a.underline = (packed >> 1) & 3;
-        a.italic = (packed >> 3) & 1;
-        a.blink = (packed >> 4) & 1;
-        a.reverse = (packed >> 5) & 1;
-        a.conceal = (packed >> 6) & 1;
-        a.strike = (packed >> 7) & 1;
-        a.font = (packed >> 8) & 0xF;
-        a.dwl = (packed >> 12) & 1;
-        a.dhl = (packed >> 13) & 3;
-        a.small = (packed >> 15) & 1;
-    };
-
-    // Decode RLE styles
-    size_t runIdx = 0;
-    ScrollbackStyle currentStyle = {};
-    int currentRunRemaining = 0;
-    
-    if (!line.styleRuns.empty()) {
-        currentStyle = line.styleRuns[0].style;
-        currentRunRemaining = line.styleRuns[0].count;
-    }
-
-    for (int i = 0; i < lineCols; i++) {
-        cells[i].chars[0] = line.chars[i];
-        cells[i].chars[1] = 0;
-        cells[i].width = 1;
-        
-        if (currentRunRemaining > 0) {
-            unpackAttrs(currentStyle.attrs, cells[i].attrs);
-            cells[i].fg.type = VTERM_COLOR_RGB;
-            cells[i].fg.rgb.red = currentStyle.fgR;
-            cells[i].fg.rgb.green = currentStyle.fgG;
-            cells[i].fg.rgb.blue = currentStyle.fgB;
-            cells[i].bg.type = VTERM_COLOR_RGB;
-            cells[i].bg.rgb.red = currentStyle.bgR;
-            cells[i].bg.rgb.green = currentStyle.bgG;
-            cells[i].bg.rgb.blue = currentStyle.bgB;
-            
-            currentRunRemaining--;
-            if (currentRunRemaining == 0 && runIdx + 1 < line.styleRuns.size()) {
-                runIdx++;
-                currentStyle = line.styleRuns[runIdx].style;
-                currentRunRemaining = line.styleRuns[runIdx].count;
-            }
-        } else {
-            memset(&cells[i].attrs, 0, sizeof(cells[i].attrs));
-            cells[i].fg.type = VTERM_COLOR_DEFAULT_FG;
-            cells[i].bg.type = VTERM_COLOR_DEFAULT_BG;
-        }
-    }
-
-    for (int i = lineCols; i < cols; i++) {
-        cells[i].chars[0] = ' ';
-        cells[i].chars[1] = 0;
-        cells[i].width = 1;
-        memset(&cells[i].attrs, 0, sizeof(cells[i].attrs));
-        cells[i].fg.type = VTERM_COLOR_DEFAULT_FG;
-        cells[i].bg.type = VTERM_COLOR_DEFAULT_BG;
-    }
-
-    term->_scrollback.pop_back();
-
-    // Update widget positions - content scrolled down by 1 line
-    term->updateWidgetPositionsOnScroll(-1);
-
-    return 1;
+    // Scrollback pop is not used with GPUScreen
+    return 0;
 }
 
 int Terminal::onMoverect(VTermRect, VTermRect, void* user) {
@@ -1056,7 +803,9 @@ int Terminal::onMoverect(VTermRect, VTermRect, void* user) {
     term->_fullDamage = true;
     return 0;
 }
+#endif  // #if 0 - deprecated callbacks
 
+// OSC callback is still needed for widget embedding
 int Terminal::onOSC(int command, VTermStringFragment frag, void* user) {
     auto* term = static_cast<Terminal*>(user);
 
@@ -1103,7 +852,7 @@ int Terminal::onOSC(int command, VTermStringFragment frag, void* user) {
             if (linesToAdvance > 0) {
                 std::string nl(linesToAdvance, '\n');
                 vterm_input_write(term->_vterm, nl.c_str(), nl.size());
-                vterm_screen_flush_damage(term->_vtermScreen);
+                // GPUScreen handles damage tracking automatically
             }
         }
         term->_oscBuffer.clear();
