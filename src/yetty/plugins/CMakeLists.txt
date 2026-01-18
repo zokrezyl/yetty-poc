@@ -225,10 +225,15 @@ endif()
 
 
 # pdf plugin - uses RichText for rendering (MuPDF - AGPL licensed)
-add_yetty_plugin(pdf
-    SOURCES pdf/pdf.cpp
-    LIBS mupdf
-)
+if(TARGET mupdf)
+    add_yetty_plugin(pdf
+        SOURCES pdf/pdf.cpp
+        LIBS mupdf
+    )
+    message(STATUS "pdf plugin: enabled (MuPDF - AGPL license)")
+else()
+    message(STATUS "pdf plugin: disabled (mupdf not found)")
+endif()
 
 # pdfium plugin - uses RichText for rendering (PDFium - BSD-3-Clause, MIT compatible)
 if(TARGET pdfium_lib)
@@ -242,11 +247,14 @@ else()
 endif()
 
 # video plugin (Unix only - FFmpeg build requires ./configure + make)
-if(UNIX)
+if(UNIX AND TARGET ffmpeg)
     add_yetty_plugin(video
         SOURCES video/video.cpp
         LIBS ffmpeg
     )
+    message(STATUS "video plugin: enabled (FFmpeg)")
+else()
+    message(STATUS "video plugin: disabled (ffmpeg not found)")
 endif()
 
 # ymery plugin - ImGui/ImPlot scientific visualization (requires ymery-cpp)

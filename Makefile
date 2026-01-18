@@ -12,102 +12,181 @@ export ANDROID_NDK_HOME ?= $(ANDROID_HOME)/ndk/26.1.10909125
 export ANDROID_ABI ?= arm64-v8a
 export ANDROID_PLATFORM ?= android-26
 
-# Build directories (with debug/release suffix)
-BUILD_DIR_DESKTOP_DEBUG := build-desktop-debug
-BUILD_DIR_DESKTOP_RELEASE := build-desktop-release
-BUILD_DIR_ANDROID_DEBUG := build-android-debug
-BUILD_DIR_ANDROID_RELEASE := build-android-release
+# WebGPU backends
+BACKEND_WGPU := wgpu
+BACKEND_DAWN := dawn
+
+# Build directories (platform-backend-buildtype)
+BUILD_DIR_DESKTOP_WGPU_DEBUG := build-desktop-wgpu-debug
+BUILD_DIR_DESKTOP_WGPU_RELEASE := build-desktop-wgpu-release
+BUILD_DIR_DESKTOP_DAWN_DEBUG := build-desktop-dawn-debug
+BUILD_DIR_DESKTOP_DAWN_RELEASE := build-desktop-dawn-release
+
+BUILD_DIR_ANDROID_WGPU_DEBUG := build-android-wgpu-debug
+BUILD_DIR_ANDROID_WGPU_RELEASE := build-android-wgpu-release
+BUILD_DIR_ANDROID_DAWN_DEBUG := build-android-dawn-debug
+BUILD_DIR_ANDROID_DAWN_RELEASE := build-android-dawn-release
+
+# WebAssembly uses browser native WebGPU (no backend choice)
 BUILD_DIR_WEBASM_DEBUG := build-webasm-debug
 BUILD_DIR_WEBASM_RELEASE := build-webasm-release
-
-# Legacy build directories (for backward compatibility)
-BUILD_DIR_DESKTOP := build-desktop
-BUILD_DIR_ANDROID := build-android
-BUILD_DIR_WEBASM := build-webasm
 
 # CMake options
 CMAKE := cmake
 CMAKE_GENERATOR := -G Ninja
 CMAKE_RELEASE := -DCMAKE_BUILD_TYPE=Release
 CMAKE_DEBUG := -DCMAKE_BUILD_TYPE=Debug
+CMAKE_BACKEND_WGPU := -DWEBGPU_BACKEND=wgpu
+CMAKE_BACKEND_DAWN := -DWEBGPU_BACKEND=dawn
 
 # Gradle options (path relative to build-tools/android/)
-GRADLE_OPTS := --project-cache-dir=../../$(BUILD_DIR_ANDROID_DEBUG)/.gradle
+GRADLE_OPTS_WGPU_DEBUG := --project-cache-dir=../../$(BUILD_DIR_ANDROID_WGPU_DEBUG)/.gradle
+GRADLE_OPTS_WGPU_RELEASE := --project-cache-dir=../../$(BUILD_DIR_ANDROID_WGPU_RELEASE)/.gradle
+GRADLE_OPTS_DAWN_DEBUG := --project-cache-dir=../../$(BUILD_DIR_ANDROID_DAWN_DEBUG)/.gradle
+GRADLE_OPTS_DAWN_RELEASE := --project-cache-dir=../../$(BUILD_DIR_ANDROID_DAWN_RELEASE)/.gradle
 
 # Default target - show help
 .PHONY: all
 all: help
 
 #=============================================================================
-# Desktop
+# Desktop - wgpu backend
 #=============================================================================
 
-.PHONY: config-desktop-debug
-config-desktop-debug: ## Configure desktop debug build
-	PATH="$(SYSTEM_PATH)" $(CMAKE) -B $(BUILD_DIR_DESKTOP_DEBUG) $(CMAKE_GENERATOR) $(CMAKE_DEBUG)
+.PHONY: config-desktop-wgpu-debug
+config-desktop-wgpu-debug: ## Configure desktop wgpu debug build
+	PATH="$(SYSTEM_PATH)" $(CMAKE) -B $(BUILD_DIR_DESKTOP_WGPU_DEBUG) $(CMAKE_GENERATOR) $(CMAKE_DEBUG) $(CMAKE_BACKEND_WGPU)
 
-.PHONY: config-desktop-release
-config-desktop-release: ## Configure desktop release build
-	PATH="$(SYSTEM_PATH)" $(CMAKE) -B $(BUILD_DIR_DESKTOP_RELEASE) $(CMAKE_GENERATOR) $(CMAKE_RELEASE)
+.PHONY: config-desktop-wgpu-release
+config-desktop-wgpu-release: ## Configure desktop wgpu release build
+	PATH="$(SYSTEM_PATH)" $(CMAKE) -B $(BUILD_DIR_DESKTOP_WGPU_RELEASE) $(CMAKE_GENERATOR) $(CMAKE_RELEASE) $(CMAKE_BACKEND_WGPU)
 
-.PHONY: build-desktop-debug
-build-desktop-debug: ## Build desktop debug
-	@if [ ! -f "$(BUILD_DIR_DESKTOP_DEBUG)/build.ninja" ]; then $(MAKE) config-desktop-debug; fi
-	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_DESKTOP_DEBUG) --parallel
+.PHONY: build-desktop-wgpu-debug
+build-desktop-wgpu-debug: ## Build desktop wgpu debug
+	@if [ ! -f "$(BUILD_DIR_DESKTOP_WGPU_DEBUG)/build.ninja" ]; then $(MAKE) config-desktop-wgpu-debug; fi
+	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_DESKTOP_WGPU_DEBUG) --parallel
 
-.PHONY: build-desktop-release
-build-desktop-release: ## Build desktop release
-	@if [ ! -f "$(BUILD_DIR_DESKTOP_RELEASE)/build.ninja" ]; then $(MAKE) config-desktop-release; fi
-	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_DESKTOP_RELEASE) --parallel
+.PHONY: build-desktop-wgpu-release
+build-desktop-wgpu-release: ## Build desktop wgpu release
+	@if [ ! -f "$(BUILD_DIR_DESKTOP_WGPU_RELEASE)/build.ninja" ]; then $(MAKE) config-desktop-wgpu-release; fi
+	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_DESKTOP_WGPU_RELEASE) --parallel
 
-.PHONY: run-desktop-debug
-run-desktop-debug: build-desktop-debug ## Run desktop debug build
-	./$(BUILD_DIR_DESKTOP_DEBUG)/yetty
+.PHONY: run-desktop-wgpu-debug
+run-desktop-wgpu-debug: build-desktop-wgpu-debug ## Run desktop wgpu debug build
+	./$(BUILD_DIR_DESKTOP_WGPU_DEBUG)/yetty
 
-.PHONY: run-desktop-release
-run-desktop-release: build-desktop-release ## Run desktop release build
-	./$(BUILD_DIR_DESKTOP_RELEASE)/yetty
+.PHONY: run-desktop-wgpu-release
+run-desktop-wgpu-release: build-desktop-wgpu-release ## Run desktop wgpu release build
+	./$(BUILD_DIR_DESKTOP_WGPU_RELEASE)/yetty
 
-.PHONY: test-desktop-debug
-test-desktop-debug: ## Run desktop debug tests
-	@if [ ! -f "$(BUILD_DIR_DESKTOP_DEBUG)/build.ninja" ]; then $(MAKE) config-desktop-debug; fi
-	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_DESKTOP_DEBUG) --target yetty_tests --parallel
-	./$(BUILD_DIR_DESKTOP_DEBUG)/test/ut/yetty_tests
+.PHONY: test-desktop-wgpu-debug
+test-desktop-wgpu-debug: ## Run desktop wgpu debug tests
+	@if [ ! -f "$(BUILD_DIR_DESKTOP_WGPU_DEBUG)/build.ninja" ]; then $(MAKE) config-desktop-wgpu-debug; fi
+	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_DESKTOP_WGPU_DEBUG) --target yetty_tests --parallel
+	./$(BUILD_DIR_DESKTOP_WGPU_DEBUG)/test/ut/yetty_tests
 
 #=============================================================================
-# Android
+# Desktop - dawn backend
 #=============================================================================
 
-.PHONY: config-android-debug
-config-android-debug: ## Configure Android debug build
-	@$(MAKE) _android-deps
+.PHONY: config-desktop-dawn-debug
+config-desktop-dawn-debug: ## Configure desktop dawn debug build
+	PATH="$(SYSTEM_PATH)" $(CMAKE) -B $(BUILD_DIR_DESKTOP_DAWN_DEBUG) $(CMAKE_GENERATOR) $(CMAKE_DEBUG) $(CMAKE_BACKEND_DAWN)
 
-.PHONY: config-android-release
-config-android-release: ## Configure Android release build
-	@$(MAKE) _android-deps
+.PHONY: config-desktop-dawn-release
+config-desktop-dawn-release: ## Configure desktop dawn release build
+	PATH="$(SYSTEM_PATH)" $(CMAKE) -B $(BUILD_DIR_DESKTOP_DAWN_RELEASE) $(CMAKE_GENERATOR) $(CMAKE_RELEASE) $(CMAKE_BACKEND_DAWN)
 
-.PHONY: build-android-debug
-build-android-debug: ## Build Android debug APK
-	@$(MAKE) _android-deps
-	nix develop .#android --command bash -c "cd build-tools/android && ./gradlew $(GRADLE_OPTS) assembleDebug"
+.PHONY: build-desktop-dawn-debug
+build-desktop-dawn-debug: ## Build desktop dawn debug
+	@if [ ! -f "$(BUILD_DIR_DESKTOP_DAWN_DEBUG)/build.ninja" ]; then $(MAKE) config-desktop-dawn-debug; fi
+	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_DESKTOP_DAWN_DEBUG) --parallel
 
-.PHONY: build-android-release
-build-android-release: ## Build Android release APK
-	@$(MAKE) _android-deps
-	nix develop .#android --command bash -c "cd build-tools/android && ./gradlew $(GRADLE_OPTS) assembleRelease"
+.PHONY: build-desktop-dawn-release
+build-desktop-dawn-release: ## Build desktop dawn release
+	@if [ ! -f "$(BUILD_DIR_DESKTOP_DAWN_RELEASE)/build.ninja" ]; then $(MAKE) config-desktop-dawn-release; fi
+	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_DESKTOP_DAWN_RELEASE) --parallel
 
-.PHONY: test-android-debug
-test-android-debug: build-android-debug ## Install and run Android debug build
+.PHONY: run-desktop-dawn-debug
+run-desktop-dawn-debug: build-desktop-dawn-debug ## Run desktop dawn debug build
+	./$(BUILD_DIR_DESKTOP_DAWN_DEBUG)/yetty
+
+.PHONY: run-desktop-dawn-release
+run-desktop-dawn-release: build-desktop-dawn-release ## Run desktop dawn release build
+	./$(BUILD_DIR_DESKTOP_DAWN_RELEASE)/yetty
+
+.PHONY: test-desktop-dawn-debug
+test-desktop-dawn-debug: ## Run desktop dawn debug tests
+	@if [ ! -f "$(BUILD_DIR_DESKTOP_DAWN_DEBUG)/build.ninja" ]; then $(MAKE) config-desktop-dawn-debug; fi
+	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_DESKTOP_DAWN_DEBUG) --target yetty_tests --parallel
+	./$(BUILD_DIR_DESKTOP_DAWN_DEBUG)/test/ut/yetty_tests
+
+#=============================================================================
+# Android - wgpu backend
+#=============================================================================
+
+.PHONY: config-android-wgpu-debug
+config-android-wgpu-debug: ## Configure Android wgpu debug build
+	@$(MAKE) _android-wgpu-deps
+
+.PHONY: config-android-wgpu-release
+config-android-wgpu-release: ## Configure Android wgpu release build
+	@$(MAKE) _android-wgpu-deps
+
+.PHONY: build-android-wgpu-debug
+build-android-wgpu-debug: ## Build Android wgpu debug APK
+	@$(MAKE) _android-wgpu-deps
+	WEBGPU_BACKEND=wgpu nix develop .#android --command bash -c "cd build-tools/android && ./gradlew $(GRADLE_OPTS_WGPU_DEBUG) assembleDebug"
+
+.PHONY: build-android-wgpu-release
+build-android-wgpu-release: ## Build Android wgpu release APK
+	@$(MAKE) _android-wgpu-deps
+	WEBGPU_BACKEND=wgpu nix develop .#android --command bash -c "cd build-tools/android && ./gradlew $(GRADLE_OPTS_WGPU_RELEASE) assembleRelease"
+
+.PHONY: test-android-wgpu-debug
+test-android-wgpu-debug: build-android-wgpu-debug ## Install and run Android wgpu debug build
 	adb install -r build-tools/android/app/build/outputs/apk/debug/app-debug.apk
 	adb shell am start -n com.yetty.terminal/android.app.NativeActivity
 
-.PHONY: test-android-release
-test-android-release: build-android-release ## Install and run Android release build
+.PHONY: test-android-wgpu-release
+test-android-wgpu-release: build-android-wgpu-release ## Install and run Android wgpu release build
 	adb install -r build-tools/android/app/build/outputs/apk/release/app-release.apk
 	adb shell am start -n com.yetty.terminal/android.app.NativeActivity
 
 #=============================================================================
-# WebAssembly
+# Android - dawn backend
+#=============================================================================
+
+.PHONY: config-android-dawn-debug
+config-android-dawn-debug: ## Configure Android dawn debug build
+	@$(MAKE) _android-dawn-deps
+
+.PHONY: config-android-dawn-release
+config-android-dawn-release: ## Configure Android dawn release build
+	@$(MAKE) _android-dawn-deps
+
+.PHONY: build-android-dawn-debug
+build-android-dawn-debug: ## Build Android dawn debug APK
+	@$(MAKE) _android-dawn-deps
+	WEBGPU_BACKEND=dawn nix develop .#android --command bash -c "cd build-tools/android && ./gradlew $(GRADLE_OPTS_DAWN_DEBUG) assembleDebug"
+
+.PHONY: build-android-dawn-release
+build-android-dawn-release: ## Build Android dawn release APK
+	@$(MAKE) _android-dawn-deps
+	WEBGPU_BACKEND=dawn nix develop .#android --command bash -c "cd build-tools/android && ./gradlew $(GRADLE_OPTS_DAWN_RELEASE) assembleRelease"
+
+.PHONY: test-android-dawn-debug
+test-android-dawn-debug: build-android-dawn-debug ## Install and run Android dawn debug build
+	adb install -r build-tools/android/app/build/outputs/apk/debug/app-debug.apk
+	adb shell am start -n com.yetty.terminal/android.app.NativeActivity
+
+.PHONY: test-android-dawn-release
+test-android-dawn-release: build-android-dawn-release ## Install and run Android dawn release build
+	adb install -r build-tools/android/app/build/outputs/apk/release/app-release.apk
+	adb shell am start -n com.yetty.terminal/android.app.NativeActivity
+
+#=============================================================================
+# WebAssembly (browser native WebGPU - no backend choice)
 #=============================================================================
 
 .PHONY: config-webasm-debug
@@ -152,18 +231,26 @@ run-webasm-release: build-webasm-release ## Serve WebAssembly release build
 
 .PHONY: clean
 clean: ## Clean all build directories
-	rm -rf $(BUILD_DIR_DESKTOP_DEBUG) $(BUILD_DIR_DESKTOP_RELEASE) \
-	       $(BUILD_DIR_ANDROID_DEBUG) $(BUILD_DIR_ANDROID_RELEASE) \
+	rm -rf $(BUILD_DIR_DESKTOP_WGPU_DEBUG) $(BUILD_DIR_DESKTOP_WGPU_RELEASE) \
+	       $(BUILD_DIR_DESKTOP_DAWN_DEBUG) $(BUILD_DIR_DESKTOP_DAWN_RELEASE) \
+	       $(BUILD_DIR_ANDROID_WGPU_DEBUG) $(BUILD_DIR_ANDROID_WGPU_RELEASE) \
+	       $(BUILD_DIR_ANDROID_DAWN_DEBUG) $(BUILD_DIR_ANDROID_DAWN_RELEASE) \
 	       $(BUILD_DIR_WEBASM_DEBUG) $(BUILD_DIR_WEBASM_RELEASE) \
-	       $(BUILD_DIR_DESKTOP) $(BUILD_DIR_ANDROID) $(BUILD_DIR_WEBASM)
+	       build-desktop build-android build-webasm \
+	       build-desktop-debug build-desktop-release \
+	       build-android-debug build-android-release
 
 #=============================================================================
 # Internal targets (not shown in help)
 #=============================================================================
 
-.PHONY: _android-deps
-_android-deps:
-	@cd $(CURDIR) && bash build-tools/android/build-wgpu.sh
+.PHONY: _android-wgpu-deps
+_android-wgpu-deps:
+	@cd $(CURDIR) && WEBGPU_BACKEND=wgpu bash build-tools/android/build-wgpu.sh
+
+.PHONY: _android-dawn-deps
+_android-dawn-deps:
+	@cd $(CURDIR) && WEBGPU_BACKEND=dawn bash build-tools/android/build-dawn.sh
 
 #=============================================================================
 # Help
@@ -175,10 +262,14 @@ help:
 	@echo ""
 	@echo "Usage: make <target>"
 	@echo ""
+	@echo "WebGPU Backends:"
+	@echo "  wgpu  - wgpu-native (Rust implementation, required for pygfx)"
+	@echo "  dawn  - Dawn (Google's C++ implementation)"
+	@echo ""
 	@echo "Targets:"
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-24s\033[0m %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-30s\033[0m %s\n", $$1, $$2}'
 	@echo ""
 	@echo "Build outputs:"
-	@echo "  build-desktop-{debug,release}/yetty"
+	@echo "  build-desktop-{wgpu,dawn}-{debug,release}/yetty"
 	@echo "  build-tools/android/app/build/outputs/apk/{debug,release}/"
 	@echo "  build-webasm-{debug,release}/yetty.html"

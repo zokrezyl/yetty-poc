@@ -36,6 +36,12 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # Build target options
 option(YETTY_ANDROID "Build for Android" OFF)
 
+# WebGPU backend selection: "wgpu" (default) or "dawn"
+# - wgpu: wgpu-native (Rust implementation, required for pygfx integration)
+# - dawn: Dawn (Google's C++ WebGPU implementation)
+set(WEBGPU_BACKEND "wgpu" CACHE STRING "WebGPU backend to use (wgpu or dawn)")
+set_property(CACHE WEBGPU_BACKEND PROPERTY STRINGS "wgpu" "dawn")
+
 # Toybox - BSD-licensed shell utilities (used on all platforms)
 # Binaries available at https://landley.net/toybox/bin/
 set(TOYBOX_PATH "" CACHE PATH "Path to Toybox binary")
@@ -47,46 +53,77 @@ include(build-tools/cmake/CPM.cmake)
 # Dependencies
 #-----------------------------------------------------------------------------
 
-# WebGPU setup - use wgpu-native v27.0.4.0 for all platforms
+# WebGPU setup - supports both wgpu-native and Dawn backends
+message(STATUS "WebGPU backend: ${WEBGPU_BACKEND}")
+
 if(YETTY_ANDROID)
-    # Android: Use pre-built wgpu-native from build-android/wgpu-libs
-    # Android cross-compilation requires manual setup due to NDK toolchain
-    set(WGPU_LIB "${CMAKE_CURRENT_SOURCE_DIR}/build-android/wgpu-libs/arm64-v8a/libwgpu_native.so")
-    set(WGPU_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/build-android/wgpu-include")
+    # Android: Use pre-built WebGPU library
+    if(WEBGPU_BACKEND STREQUAL "dawn")
+        # Dawn backend for Android
+        set(WEBGPU_LIB "${CMAKE_CURRENT_SOURCE_DIR}/build-android/dawn-libs/arm64-v8a/libwebgpu_dawn.so")
+        set(WEBGPU_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/build-android/dawn-include")
+        set(WEBGPU_BACKEND_DEFINE "WEBGPU_BACKEND_DAWN")
+        set(WEBGPU_VERSION "20260117")
 
-    if(NOT EXISTS "${WGPU_LIB}")
-        message(FATAL_ERROR
-            "wgpu-native Android library not found at ${WGPU_LIB}\n"
-            "Run 'make android-wgpu' or 'android/build-wgpu.sh' first.")
-    endif()
+        if(NOT EXISTS "${WEBGPU_LIB}")
+            message(FATAL_ERROR
+                "Dawn Android library not found at ${WEBGPU_LIB}\n"
+                "Run 'make build-android-dawn-*' first.")
+        endif()
 
-    if(NOT EXISTS "${WGPU_INCLUDE}/webgpu/webgpu.h")
-        message(FATAL_ERROR
-            "wgpu-native headers not found at ${WGPU_INCLUDE}\n"
-            "Run 'make android-wgpu' first.")
+        if(NOT EXISTS "${WEBGPU_INCLUDE}/webgpu/webgpu.h")
+            message(FATAL_ERROR
+                "Dawn headers not found at ${WEBGPU_INCLUDE}\n"
+                "Run 'make build-android-dawn-*' first.")
+        endif()
+
+        message(STATUS "Using Dawn (Android):")
+    else()
+        # wgpu-native backend for Android (default)
+        set(WEBGPU_LIB "${CMAKE_CURRENT_SOURCE_DIR}/build-android/wgpu-libs/arm64-v8a/libwgpu_native.so")
+        set(WEBGPU_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/build-android/wgpu-include")
+        set(WEBGPU_BACKEND_DEFINE "WEBGPU_BACKEND_WGPU")
+        set(WEBGPU_VERSION "27.0.4.0")
+
+        if(NOT EXISTS "${WEBGPU_LIB}")
+            message(FATAL_ERROR
+                "wgpu-native Android library not found at ${WEBGPU_LIB}\n"
+                "Run 'make build-android-wgpu-*' first.")
+        endif()
+
+        if(NOT EXISTS "${WEBGPU_INCLUDE}/webgpu/webgpu.h")
+            message(FATAL_ERROR
+                "wgpu-native headers not found at ${WEBGPU_INCLUDE}\n"
+                "Run 'make build-android-wgpu-*' first.")
+        endif()
+
+        message(STATUS "Using wgpu-native v${WEBGPU_VERSION} (Android):")
     endif()
 
     # Create imported library target for Android
     add_library(webgpu SHARED IMPORTED GLOBAL)
     set_target_properties(webgpu PROPERTIES
-        IMPORTED_LOCATION "${WGPU_LIB}"
+        IMPORTED_LOCATION "${WEBGPU_LIB}"
         IMPORTED_NO_SONAME TRUE
-        INTERFACE_INCLUDE_DIRECTORIES "${WGPU_INCLUDE}"
+        INTERFACE_INCLUDE_DIRECTORIES "${WEBGPU_INCLUDE}"
     )
-    target_compile_definitions(webgpu INTERFACE WEBGPU_BACKEND_WGPU)
+    target_compile_definitions(webgpu INTERFACE ${WEBGPU_BACKEND_DEFINE})
 
     # Mark webgpu as already added so CPM won't try to fetch it again
     set(CPM_PACKAGES "${CPM_PACKAGES};webgpu" CACHE INTERNAL "")
-    set(webgpu_SOURCE_DIR "${WGPU_INCLUDE}" CACHE INTERNAL "")
-    set(webgpu_VERSION "27.0.4.0" CACHE INTERNAL "")
+    set(webgpu_SOURCE_DIR "${WEBGPU_INCLUDE}" CACHE INTERNAL "")
+    set(webgpu_VERSION "${WEBGPU_VERSION}" CACHE INTERNAL "")
 
-    message(STATUS "Using wgpu-native v27.0.4.0 (Android):")
-    message(STATUS "  Library: ${WGPU_LIB}")
-    message(STATUS "  Headers: ${WGPU_INCLUDE}")
+    message(STATUS "  Library: ${WEBGPU_LIB}")
+    message(STATUS "  Headers: ${WEBGPU_INCLUDE}")
 
 elseif(NOT EMSCRIPTEN)
-    # Desktop (Linux/macOS/Windows): Auto-download wgpu-native from GitHub releases
-    include(build-tools/cmake/WgpuNative.cmake)
+    # Desktop (Linux/macOS/Windows): Auto-download from GitHub releases
+    if(WEBGPU_BACKEND STREQUAL "dawn")
+        include(build-tools/cmake/Dawn.cmake)
+    else()
+        include(build-tools/cmake/WgpuNative.cmake)
+    endif()
 endif()
 
 # GLM for math
@@ -257,8 +294,9 @@ endif()
 
 #-----------------------------------------------------------------------------
 # MuPDF for PDF rendering (desktop only) - AGPL licensed
+# Note: Disabled for Dawn builds to reduce build time
 #-----------------------------------------------------------------------------
-if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
+if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID AND NOT WEBGPU_BACKEND STREQUAL "dawn")
     CPMAddPackage(
         NAME mupdf
         URL https://mupdf.com/downloads/archive/mupdf-1.25.4-source.tar.gz
@@ -272,8 +310,9 @@ endif()
 #-----------------------------------------------------------------------------
 # PDFium for PDF rendering (desktop only) - BSD-3-Clause licensed (MIT compatible)
 # Uses prebuilt binaries from https://github.com/bblanchon/pdfium-binaries
+# Note: Disabled for Dawn builds to reduce build time
 #-----------------------------------------------------------------------------
-if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
+if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID AND NOT WEBGPU_BACKEND STREQUAL "dawn")
     # Detect platform for PDFium binary download
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
@@ -315,8 +354,9 @@ endif()
 
 #-----------------------------------------------------------------------------
 # ymery-cpp for ymery plugin (ImGui/ImPlot scientific visualization)
+# Note: ymery-cpp is not compatible with Dawn backend (API differences)
 #-----------------------------------------------------------------------------
-if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
+if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID AND NOT WEBGPU_BACKEND STREQUAL "dawn")
     # ymery-cpp plugins go to plugins/ymery subdirectory
     set(YMERY_PLUGIN_DIR "${CMAKE_BINARY_DIR}/plugins/ymery" CACHE PATH "")
     CPMAddPackage(
@@ -333,12 +373,15 @@ if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
     if(TARGET filesystem_common)
         target_compile_definitions(filesystem_common PRIVATE YTRACE_USE_SPDLOG=1)
     endif()
+elseif(WEBGPU_BACKEND STREQUAL "dawn")
+    message(STATUS "ymery plugin: disabled (not compatible with Dawn backend)")
 endif()
 
 #-----------------------------------------------------------------------------
 # FFmpeg for video plugin (Unix only - requires ./configure + make)
+# Note: Disabled for Dawn builds to reduce build time
 #-----------------------------------------------------------------------------
-if(UNIX AND NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
+if(UNIX AND NOT EMSCRIPTEN AND NOT YETTY_ANDROID AND NOT WEBGPU_BACKEND STREQUAL "dawn")
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/build-tools/cmake/ffmpeg ffmpeg_build)
 endif()
 
