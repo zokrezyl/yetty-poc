@@ -157,7 +157,7 @@ Result<void> WebDisplay::render(WGPURenderPassEncoder pass, WebGPUContext& ctx, 
     bool needsUpload = _fullDamage || _gpuScreen->hasDamage();
 
     // Render directly from GPUScreen buffers - zero-copy path
-    _renderer->renderToPassFromBuffers(
+    if (auto res = _renderer->renderToPassFromBuffers(
         pass,
         _cols,
         _rows,
@@ -167,7 +167,9 @@ Result<void> WebDisplay::render(WGPURenderPassEncoder pass, WebGPUContext& ctx, 
         _gpuScreen->getAttrsData(),
         needsUpload,
         _cursorCol, _cursorRow, _cursorVisible
-    );
+    ); !res) {
+        return Err<void>("WebDisplay::render failed", res);
+    }
 
     // Clear damage after rendering
     _gpuScreen->clearDamage();

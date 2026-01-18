@@ -52,21 +52,21 @@ public:
               bool cursorVisible = false) noexcept;
 
   // Render to provided pass (for batched rendering - no encoder/submit)
-  void renderToPass(WGPURenderPassEncoder pass, const Grid &grid,
-                    const std::vector<DamageRect> &damageRects,
-                    bool fullDamage, int cursorCol = -1, int cursorRow = -1,
-                    bool cursorVisible = false) noexcept;
+  Result<void> renderToPass(WGPURenderPassEncoder pass, const Grid &grid,
+                            const std::vector<DamageRect> &damageRects,
+                            bool fullDamage, int cursorCol = -1, int cursorRow = -1,
+                            bool cursorVisible = false) noexcept;
 
   // Render to existing pass from CPU buffer data (zero-copy path)
-  void renderToPassFromBuffers(WGPURenderPassEncoder pass,
-                               uint32_t cols, uint32_t rows,
-                               const uint16_t* glyphs,
-                               const uint8_t* fgColors,
-                               const uint8_t* bgColors,
-                               const uint8_t* attrs,
-                               bool fullDamage,
-                               int cursorCol, int cursorRow,
-                               bool cursorVisible) noexcept;
+  Result<void> renderToPassFromBuffers(WGPURenderPassEncoder pass,
+                                       uint32_t cols, uint32_t rows,
+                                       const uint16_t* glyphs,
+                                       const uint8_t* fgColors,
+                                       const uint8_t* bgColors,
+                                       const uint8_t* attrs,
+                                       bool fullDamage,
+                                       int cursorCol, int cursorRow,
+                                       bool cursorVisible) noexcept;
 
   // Render from CPU buffer data (creates its own pass, used by RenderGridCmd)
   void renderFromBuffers(uint32_t cols, uint32_t rows,

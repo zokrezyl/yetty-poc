@@ -805,10 +805,60 @@ int GPUScreen::onErase(VTermRect rect, int, void* user) {
     int endRow = std::min(self->rows_, rect.end_row);
     int startCol = std::max(0, rect.start_col);
     int endCol = std::min(self->cols_, rect.end_col);
+    int width = endCol - startCol;
+    int cols = self->cols_;
 
-    for (int row = startRow; row < endRow; row++) {
-        for (int col = startCol; col < endCol; col++) {
-            self->clearCell(row, col);
+    if (width <= 0 || startRow >= endRow) return 1;
+
+    // Pre-compute colors once (not per cell)
+    uint8_t fgR, fgG, fgB, bgR, bgG, bgB;
+    self->colorToRGB(self->pen_.fg, fgR, fgG, fgB);
+    self->colorToRGB(self->pen_.bg, bgR, bgG, bgB);
+    if (self->pen_.reverse) {
+        std::swap(fgR, bgR);
+        std::swap(fgG, bgG);
+        std::swap(fgB, bgB);
+    }
+
+    // Build color patterns for one cell (4 bytes each)
+    uint8_t fgPattern[4] = {fgR, fgG, fgB, 255};
+    uint8_t bgPattern[4] = {bgR, bgG, bgB, 255};
+    uint16_t spaceGlyph = self->cachedSpaceGlyph_;
+
+    // Fast path: full-width erase - memory is contiguous per row
+    if (startCol == 0 && endCol == cols) {
+        for (int row = startRow; row < endRow; row++) {
+            size_t rowOffset = static_cast<size_t>(row * cols);
+            size_t colorOffset = rowOffset * 4;
+
+            // Fill glyphs with space
+            std::fill(&self->visibleGlyphs_[rowOffset],
+                     &self->visibleGlyphs_[rowOffset + cols], spaceGlyph);
+
+            // Fill colors - copy pattern for each cell
+            for (int col = 0; col < cols; col++) {
+                size_t idx = colorOffset + col * 4;
+                std::memcpy(&self->visibleFgColors_[idx], fgPattern, 4);
+                std::memcpy(&self->visibleBgColors_[idx], bgPattern, 4);
+            }
+
+            // Clear attrs
+            std::memset(&self->visibleAttrs_[rowOffset], 0, cols);
+        }
+    } else {
+        // Partial width - still optimize with pre-computed colors
+        for (int row = startRow; row < endRow; row++) {
+            size_t rowOffset = static_cast<size_t>(row * cols);
+
+            for (int col = startCol; col < endCol; col++) {
+                size_t idx = rowOffset + col;
+                size_t colorIdx = idx * 4;
+
+                self->visibleGlyphs_[idx] = spaceGlyph;
+                std::memcpy(&self->visibleFgColors_[colorIdx], fgPattern, 4);
+                std::memcpy(&self->visibleBgColors_[colorIdx], bgPattern, 4);
+                self->visibleAttrs_[idx] = 0;
+            }
         }
     }
 

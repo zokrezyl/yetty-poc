@@ -392,7 +392,7 @@ Result<void> Terminal::render(WGPURenderPassEncoder pass, WebGPUContext& ctx, bo
     
     // Render grid from GPUScreen buffers
     if (_renderer && _gpuScreen) {
-        _renderer->renderToPassFromBuffers(
+        if (auto res = _renderer->renderToPassFromBuffers(
             pass,
             static_cast<uint32_t>(_gpuScreen->getCols()),
             static_cast<uint32_t>(_gpuScreen->getRows()),
@@ -404,7 +404,9 @@ Result<void> Terminal::render(WGPURenderPassEncoder pass, WebGPUContext& ctx, bo
             _gpuScreen->getCursorCol(),
             _gpuScreen->getCursorRow(),
             _gpuScreen->isCursorVisible() && _cursorBlink
-        );
+        ); !res) {
+            return Err<void>("Terminal::render failed", res);
+        }
     }
 
     // Clear damage tracking
