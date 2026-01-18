@@ -41,6 +41,9 @@ GPUScreen::GPUScreen(int rows, int cols, Font* font, size_t maxScrollback)
     pen_.fg = defaultFg_;
     pen_.bg = defaultBg_;
 
+    // Cache space glyph index to avoid repeated lookups in hot paths
+    cachedSpaceGlyph_ = font_ ? font_->getGlyphIndex(' ') : 0;
+
     // Allocate buffers
     resize(rows, cols);
 }
@@ -103,16 +106,21 @@ void GPUScreen::resize(int rows, int cols) {
     viewFgColors_.resize(numCells * 4);
     viewBgColors_.resize(numCells * 4);
     viewAttrs_.resize(numCells);
-    
+
+    // Pre-allocate scratch buffers for onMoveRect (one full row)
+    scratchGlyphs_.resize(cols);
+    scratchFgColors_.resize(cols * 4);
+    scratchBgColors_.resize(cols * 4);
+    scratchAttrs_.resize(cols);
+
     // Initialize with default background
     uint8_t fgR, fgG, fgB, bgR, bgG, bgB;
     colorToRGB(defaultFg_, fgR, fgG, fgB);
     colorToRGB(defaultBg_, bgR, bgG, bgB);
-    uint16_t spaceGlyph = font_ ? font_->getGlyphIndex(' ') : ' ';
-    
+
     for (int row = 0; row < rows; row++) {
         for (int col = 0; col < cols; col++) {
-            setCell(row, col, spaceGlyph, fgR, fgG, fgB, bgR, bgG, bgB, 0);
+            setCell(row, col, cachedSpaceGlyph_, fgR, fgG, fgB, bgR, bgG, bgB, 0);
         }
     }
     
@@ -162,11 +170,9 @@ void GPUScreen::reset() {
     colorToRGB(defaultFg_, fgR, fgG, fgB);
     colorToRGB(defaultBg_, bgR, bgG, bgB);
 
-    uint16_t spaceGlyph = font_ ? font_->getGlyphIndex(' ') : ' ';
-
     for (int row = 0; row < rows_; row++) {
         for (int col = 0; col < cols_; col++) {
-            setCell(row, col, spaceGlyph, fgR, fgG, fgB, bgR, bgG, bgB, 0);
+            setCell(row, col, cachedSpaceGlyph_, fgR, fgG, fgB, bgR, bgG, bgB, 0);
         }
     }
 
@@ -306,9 +312,8 @@ void GPUScreen::decompressLine(const ScrollbackLineGPU& line, int viewRow) {
         viewGlyphs_[dstOffset + col] = line.glyphs[col];
     }
     // Fill remainder with spaces
-    uint16_t spaceGlyph = font_ ? font_->getGlyphIndex(' ') : ' ';
     for (int col = lineCols; col < cols_; col++) {
-        viewGlyphs_[dstOffset + col] = spaceGlyph;
+        viewGlyphs_[dstOffset + col] = cachedSpaceGlyph_;
     }
 
     // Decompress RLE styles
@@ -505,8 +510,7 @@ void GPUScreen::clearCell(int row, int col) {
         std::swap(fgB, bgB);
     }
 
-    uint16_t spaceGlyph = font_ ? font_->getGlyphIndex(' ') : ' ';
-    setCell(row, col, spaceGlyph, fgR, fgG, fgB, bgR, bgG, bgB, 0);
+    setCell(row, col, cachedSpaceGlyph_, fgR, fgG, fgB, bgR, bgG, bgB, 0);
 }
 
 void GPUScreen::colorToRGB(const VTermColor& color, uint8_t& r, uint8_t& g, uint8_t& b) {
@@ -633,40 +637,158 @@ int GPUScreen::onScrollRect(VTermRect rect, int downward, int rightward, void* u
 int GPUScreen::onMoveRect(VTermRect dest, VTermRect src, void* user) {
     auto* self = static_cast<GPUScreen*>(user);
 
-    // Copy rectangle from src to dest
     int height = src.end_row - src.start_row;
     int width = src.end_col - src.start_col;
+    int cols = self->cols_;
+    int rows = self->rows_;
 
-    // Need to handle overlapping regions carefully
-    // For simplicity, use temporary buffer
-    std::vector<uint16_t> tmpGlyphs(height * width);
-    std::vector<uint8_t> tmpFg(height * width * 4);
-    std::vector<uint8_t> tmpBg(height * width * 4);
-    std::vector<uint8_t> tmpAttrs(height * width);
+    // Bounds checking to prevent memory corruption
+    if (height <= 0 || width <= 0) return 1;
+    if (src.start_row < 0 || src.end_row > rows) return 1;
+    if (dest.start_row < 0 || dest.start_row + height > rows) return 1;
+    if (src.start_col < 0 || src.end_col > cols) return 1;
+    if (dest.start_col < 0 || dest.start_col + width > cols) return 1;
 
-    // Copy to temp
-    for (int row = 0; row < height; row++) {
-        for (int col = 0; col < width; col++) {
-            size_t srcIdx = self->cellIndex(src.start_row + row, src.start_col + col);
-            size_t tmpIdx = row * width + col;
+    // Ultra-fast path: full-width move starting at column 0
+    // Memory is fully contiguous - single memmove for entire region
+    if (src.start_col == 0 && dest.start_col == 0 && width == cols) {
+        size_t srcIdx = self->cellIndex(src.start_row, 0);
+        size_t dstIdx = self->cellIndex(dest.start_row, 0);
+        size_t totalCells = static_cast<size_t>(height) * cols;
 
-            tmpGlyphs[tmpIdx] = self->visibleGlyphs_[srcIdx];
-            std::memcpy(&tmpFg[tmpIdx * 4], &self->visibleFgColors_[srcIdx * 4], 4);
-            std::memcpy(&tmpBg[tmpIdx * 4], &self->visibleBgColors_[srcIdx * 4], 4);
-            tmpAttrs[tmpIdx] = self->visibleAttrs_[srcIdx];
-        }
+        std::memmove(&self->visibleGlyphs_[dstIdx],
+                    &self->visibleGlyphs_[srcIdx],
+                    totalCells * sizeof(uint16_t));
+        std::memmove(&self->visibleFgColors_[dstIdx * 4],
+                    &self->visibleFgColors_[srcIdx * 4],
+                    totalCells * 4);
+        std::memmove(&self->visibleBgColors_[dstIdx * 4],
+                    &self->visibleBgColors_[srcIdx * 4],
+                    totalCells * 4);
+        std::memmove(&self->visibleAttrs_[dstIdx],
+                    &self->visibleAttrs_[srcIdx],
+                    totalCells);
     }
+    // Fast path: full-width but not starting at column 0 (scroll regions)
+    // Still contiguous per row, do row-by-row
+    else if (src.start_col == dest.start_col && width == cols) {
+        if (dest.start_row < src.start_row) {
+            for (int row = 0; row < height; row++) {
+                size_t srcIdx = self->cellIndex(src.start_row + row, 0);
+                size_t dstIdx = self->cellIndex(dest.start_row + row, 0);
 
-    // Copy from temp to dest
-    for (int row = 0; row < height; row++) {
-        for (int col = 0; col < width; col++) {
-            size_t dstIdx = self->cellIndex(dest.start_row + row, dest.start_col + col);
-            size_t tmpIdx = row * width + col;
+                std::memmove(&self->visibleGlyphs_[dstIdx],
+                            &self->visibleGlyphs_[srcIdx],
+                            width * sizeof(uint16_t));
+                std::memmove(&self->visibleFgColors_[dstIdx * 4],
+                            &self->visibleFgColors_[srcIdx * 4],
+                            width * 4);
+                std::memmove(&self->visibleBgColors_[dstIdx * 4],
+                            &self->visibleBgColors_[srcIdx * 4],
+                            width * 4);
+                std::memmove(&self->visibleAttrs_[dstIdx],
+                            &self->visibleAttrs_[srcIdx],
+                            width);
+            }
+        } else {
+            for (int row = height - 1; row >= 0; row--) {
+                size_t srcIdx = self->cellIndex(src.start_row + row, 0);
+                size_t dstIdx = self->cellIndex(dest.start_row + row, 0);
 
-            self->visibleGlyphs_[dstIdx] = tmpGlyphs[tmpIdx];
-            std::memcpy(&self->visibleFgColors_[dstIdx * 4], &tmpFg[tmpIdx * 4], 4);
-            std::memcpy(&self->visibleBgColors_[dstIdx * 4], &tmpBg[tmpIdx * 4], 4);
-            self->visibleAttrs_[dstIdx] = tmpAttrs[tmpIdx];
+                std::memmove(&self->visibleGlyphs_[dstIdx],
+                            &self->visibleGlyphs_[srcIdx],
+                            width * sizeof(uint16_t));
+                std::memmove(&self->visibleFgColors_[dstIdx * 4],
+                            &self->visibleFgColors_[srcIdx * 4],
+                            width * 4);
+                std::memmove(&self->visibleBgColors_[dstIdx * 4],
+                            &self->visibleBgColors_[srcIdx * 4],
+                            width * 4);
+                std::memmove(&self->visibleAttrs_[dstIdx],
+                            &self->visibleAttrs_[srcIdx],
+                            width);
+            }
+        }
+    } else {
+        // General case: use pre-allocated scratch buffer, copy row-by-row
+        // Ensure scratch buffers are large enough
+        if (static_cast<int>(self->scratchGlyphs_.size()) < width) {
+            self->scratchGlyphs_.resize(width);
+            self->scratchFgColors_.resize(width * 4);
+            self->scratchBgColors_.resize(width * 4);
+            self->scratchAttrs_.resize(width);
+        }
+
+        // Determine copy direction
+        bool copyForward = (dest.start_row < src.start_row) ||
+                          (dest.start_row == src.start_row && dest.start_col <= src.start_col);
+
+        if (copyForward) {
+            for (int row = 0; row < height; row++) {
+                size_t srcRowStart = self->cellIndex(src.start_row + row, src.start_col);
+                size_t dstRowStart = self->cellIndex(dest.start_row + row, dest.start_col);
+
+                // Copy to scratch
+                std::memcpy(self->scratchGlyphs_.data(),
+                           &self->visibleGlyphs_[srcRowStart],
+                           width * sizeof(uint16_t));
+                std::memcpy(self->scratchFgColors_.data(),
+                           &self->visibleFgColors_[srcRowStart * 4],
+                           width * 4);
+                std::memcpy(self->scratchBgColors_.data(),
+                           &self->visibleBgColors_[srcRowStart * 4],
+                           width * 4);
+                std::memcpy(self->scratchAttrs_.data(),
+                           &self->visibleAttrs_[srcRowStart],
+                           width);
+
+                // Copy from scratch to dest
+                std::memcpy(&self->visibleGlyphs_[dstRowStart],
+                           self->scratchGlyphs_.data(),
+                           width * sizeof(uint16_t));
+                std::memcpy(&self->visibleFgColors_[dstRowStart * 4],
+                           self->scratchFgColors_.data(),
+                           width * 4);
+                std::memcpy(&self->visibleBgColors_[dstRowStart * 4],
+                           self->scratchBgColors_.data(),
+                           width * 4);
+                std::memcpy(&self->visibleAttrs_[dstRowStart],
+                           self->scratchAttrs_.data(),
+                           width);
+            }
+        } else {
+            for (int row = height - 1; row >= 0; row--) {
+                size_t srcRowStart = self->cellIndex(src.start_row + row, src.start_col);
+                size_t dstRowStart = self->cellIndex(dest.start_row + row, dest.start_col);
+
+                // Copy to scratch
+                std::memcpy(self->scratchGlyphs_.data(),
+                           &self->visibleGlyphs_[srcRowStart],
+                           width * sizeof(uint16_t));
+                std::memcpy(self->scratchFgColors_.data(),
+                           &self->visibleFgColors_[srcRowStart * 4],
+                           width * 4);
+                std::memcpy(self->scratchBgColors_.data(),
+                           &self->visibleBgColors_[srcRowStart * 4],
+                           width * 4);
+                std::memcpy(self->scratchAttrs_.data(),
+                           &self->visibleAttrs_[srcRowStart],
+                           width);
+
+                // Copy from scratch to dest
+                std::memcpy(&self->visibleGlyphs_[dstRowStart],
+                           self->scratchGlyphs_.data(),
+                           width * sizeof(uint16_t));
+                std::memcpy(&self->visibleFgColors_[dstRowStart * 4],
+                           self->scratchFgColors_.data(),
+                           width * 4);
+                std::memcpy(&self->visibleBgColors_[dstRowStart * 4],
+                           self->scratchBgColors_.data(),
+                           width * 4);
+                std::memcpy(&self->visibleAttrs_[dstRowStart],
+                           self->scratchAttrs_.data(),
+                           width);
+            }
         }
     }
 
@@ -678,8 +800,14 @@ int GPUScreen::onMoveRect(VTermRect dest, VTermRect src, void* user) {
 int GPUScreen::onErase(VTermRect rect, int, void* user) {
     auto* self = static_cast<GPUScreen*>(user);
 
-    for (int row = rect.start_row; row < rect.end_row; row++) {
-        for (int col = rect.start_col; col < rect.end_col; col++) {
+    // Bounds checking to prevent memory corruption
+    int startRow = std::max(0, rect.start_row);
+    int endRow = std::min(self->rows_, rect.end_row);
+    int startCol = std::max(0, rect.start_col);
+    int endCol = std::min(self->cols_, rect.end_col);
+
+    for (int row = startRow; row < endRow; row++) {
+        for (int col = startCol; col < endCol; col++) {
             self->clearCell(row, col);
         }
     }

@@ -253,6 +253,15 @@ private:
 
     // Track widgets whose markers have scrolled into scrollback
     std::vector<ScrolledOutWidget> scrolledOutWidgets_;
+
+    // Pre-allocated scratch buffers for onMoveRect (avoid allocation per call)
+    std::vector<uint16_t> scratchGlyphs_;
+    std::vector<uint8_t> scratchFgColors_;
+    std::vector<uint8_t> scratchBgColors_;
+    std::vector<uint8_t> scratchAttrs_;
+
+    // Cached space glyph index (initialized from font in constructor)
+    uint16_t cachedSpaceGlyph_ = 0;
 };
 
 } // namespace yetty
