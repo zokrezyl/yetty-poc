@@ -492,6 +492,13 @@ void InputHandler::onKey(int key, int scancode, int action, int mods) noexcept {
 
     // Handle Ctrl/Alt combinations - use glfwGetKeyName for correct keyboard layout
     if (mods & (GLFW_MOD_CONTROL | GLFW_MOD_ALT)) {
+        // Special case for space key - glfwGetKeyName may return NULL for it
+        if (key == GLFW_KEY_SPACE) {
+            ydebug("Sending Ctrl/Alt+Space");
+            WITH_ACTIVE_TERMINAL(terminal.sendKey(' ', vtermMod););
+            return;
+        }
+
         const char* keyName = glfwGetKeyName(key, scancode);
         if (keyName && keyName[0] != '\0') {
             // Single character key name - send it with modifier

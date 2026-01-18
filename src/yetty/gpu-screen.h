@@ -174,17 +174,25 @@ private:
     }
     void colorToRGB(const VTermColor& color, uint8_t& r, uint8_t& g, uint8_t& b);
 
+    // Switch between primary and alternate screen
+    void switchToScreen(bool alt);
+    void clearScreen(std::vector<uint16_t>& glyphs,
+                     std::vector<uint8_t>& fgColors,
+                     std::vector<uint8_t>& bgColors,
+                     std::vector<uint8_t>& attrs);
+
     // Check if cell is a protected widget marker - INLINE for performance
     bool isWidgetMarkerCell(int row, int col) const {
         if (row < 0 || row >= rows_ || col < 0 || col >= cols_) return false;
+        if (!visibleGlyphs_) return false;
         size_t idx = static_cast<size_t>(row * cols_ + col);
-        if (idx >= visibleGlyphs_.size()) return false;
-        if (visibleGlyphs_[idx] != 0xFFFF) return false;  // GLYPH_PLUGIN
+        if (idx >= visibleGlyphs_->size()) return false;
+        if ((*visibleGlyphs_)[idx] != 0xFFFF) return false;  // GLYPH_PLUGIN
         size_t colorIdx = idx * 4;
-        return visibleFgColors_[colorIdx + 2] == 0xFF &&
-               visibleFgColors_[colorIdx + 3] == 0xFF &&
-               visibleBgColors_[colorIdx + 0] == 0xAA &&
-               visibleBgColors_[colorIdx + 1] == 0xAA;
+        return (*visibleFgColors_)[colorIdx + 2] == 0xFF &&
+               (*visibleFgColors_)[colorIdx + 3] == 0xFF &&
+               (*visibleBgColors_)[colorIdx + 0] == 0xAA &&
+               (*visibleBgColors_)[colorIdx + 1] == 0xAA;
     }
 
     // Scrollback helpers
@@ -193,14 +201,33 @@ private:
     void decompressLine(const ScrollbackLineGPU& line, int viewRow);
 
     //=========================================================================
-    // Visible buffer - where vterm State callbacks write directly
+    // Primary screen buffer - where vterm State callbacks write for main screen
     // No codepoints stored - glyph index is sufficient for rendering
     // Widget markers: glyph=0xFFFF, widgetId in fgColors[0..1]
     //=========================================================================
-    std::vector<uint16_t> visibleGlyphs_;
-    std::vector<uint8_t> visibleFgColors_;
-    std::vector<uint8_t> visibleBgColors_;
-    std::vector<uint8_t> visibleAttrs_;
+    std::vector<uint16_t> primaryGlyphs_;
+    std::vector<uint8_t> primaryFgColors_;
+    std::vector<uint8_t> primaryBgColors_;
+    std::vector<uint8_t> primaryAttrs_;
+
+    //=========================================================================
+    // Alternate screen buffer - for apps like vim, htop, less
+    // No scrollback for alternate screen (traditional terminal behavior)
+    //=========================================================================
+    std::vector<uint16_t> altGlyphs_;
+    std::vector<uint8_t> altFgColors_;
+    std::vector<uint8_t> altBgColors_;
+    std::vector<uint8_t> altAttrs_;
+
+    //=========================================================================
+    // Pointers to current active screen (primary or alternate)
+    //=========================================================================
+    std::vector<uint16_t>* visibleGlyphs_ = nullptr;
+    std::vector<uint8_t>* visibleFgColors_ = nullptr;
+    std::vector<uint8_t>* visibleBgColors_ = nullptr;
+    std::vector<uint8_t>* visibleAttrs_ = nullptr;
+
+    bool isAltScreen_ = false;
 
     //=========================================================================
     // View buffer - what gets rendered (== visible when scrollOffset_==0)
@@ -211,7 +238,7 @@ private:
     std::vector<uint8_t> viewAttrs_;
 
     //=========================================================================
-    // Scrollback - compressed line storage (uses ScrollbackLineGPU for glyph indices)
+    // Scrollback - compressed line storage (primary screen only)
     //=========================================================================
     std::deque<ScrollbackLineGPU> scrollback_;
     size_t maxScrollback_;
