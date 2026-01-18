@@ -614,7 +614,7 @@ void InputHandler::onScroll(double xoffset, double yoffset) noexcept {
     (void)xoffset;
 
     // Zoom grid (Ctrl + wheel, not over plugin)
-    float newZoom = _engine->zoomLevel() + static_cast<float>(yoffset) * 0.1f;
+    float newZoom = _engine->zoomLevel() + static_cast<float>(yoffset) * 0.02f;
     newZoom = glm::clamp(newZoom, 0.2f, 5.0f);
     _engine->setZoomLevel(newZoom);
 

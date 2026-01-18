@@ -9,6 +9,9 @@
 #include <ytrace/ytrace.hpp>
 #include <sstream>
 #include <yetty/wgpu-compat.h>
+#if !YETTY_WEB
+#include <webgpu/wgpu.h>  // For wgpuDevicePoll
+#endif
 
 #if YETTY_ANDROID
 #include <android/log.h>
@@ -227,6 +230,12 @@ Result<void> GridRenderer::createCellTextures(WGPUDevice device, uint32_t cols,
   cols = 200;
   rows = 100;
 #else
+  // Wait for GPU to finish using old textures before releasing them
+  // This prevents use-after-free when textures are still referenced by in-flight commands
+  if (cellGlyphTexture_) {
+    wgpuDevicePoll(device, true, nullptr);
+  }
+
   // Release old textures if they exist (views first)
   if (cellGlyphView_) {
     wgpuTextureViewRelease(cellGlyphView_);
@@ -1121,10 +1130,12 @@ void GridRenderer::render(const Grid &grid,
   // Note: present() should be called by main loop after all rendering
 }
 
-void GridRenderer::renderToPass(WGPURenderPassEncoder pass, const Grid &grid,
-                                const std::vector<DamageRect> &damageRects,
-                                bool fullDamage, int cursorCol, int cursorRow,
-                                bool cursorVisible) noexcept {
+Result<void> GridRenderer::renderToPass(WGPURenderPassEncoder pass, const Grid &grid,
+                                        const std::vector<DamageRect> &damageRects,
+                                        bool fullDamage, int cursorCol, int cursorRow,
+                                        bool cursorVisible) noexcept {
+  if (!_ctx) return Err<void>("GridRenderer::renderToPass: context is null");
+
   WGPUDevice device = _ctx->getDevice();
   WGPUQueue queue = _ctx->getQueue();
 
@@ -1138,12 +1149,10 @@ void GridRenderer::renderToPass(WGPURenderPassEncoder pass, const Grid &grid,
   // Recreate textures and bind group if grid size changed
   if (cols != textureCols_ || rows != textureRows_) {
     if (auto res = createCellTextures(device, cols, rows); !res) {
-      std::cerr << "GridRenderer: " << error_msg(res) << std::endl;
-      return;
+      return Err<void>("GridRenderer::renderToPass: createCellTextures failed", res);
     }
     if (auto res = createBindGroup(device, *font_); !res) {
-      std::cerr << "GridRenderer: " << error_msg(res) << std::endl;
-      return;
+      return Err<void>("GridRenderer::renderToPass: createBindGroup failed", res);
     }
     needsBindGroupRecreation_ = false;
     lastFontResourceVersion_ = font_->getResourceVersion();
@@ -1151,8 +1160,7 @@ void GridRenderer::renderToPass(WGPURenderPassEncoder pass, const Grid &grid,
   } else if (needsBindGroupRecreation_ ||
              font_->getResourceVersion() != lastFontResourceVersion_) {
     if (auto res = createBindGroup(device, *font_); !res) {
-      std::cerr << "GridRenderer: " << error_msg(res) << std::endl;
-      return;
+      return Err<void>("GridRenderer::renderToPass: createBindGroup failed", res);
     }
     needsBindGroupRecreation_ = false;
     lastFontResourceVersion_ = font_->getResourceVersion();
@@ -1175,24 +1183,29 @@ void GridRenderer::renderToPass(WGPURenderPassEncoder pass, const Grid &grid,
 
   updateUniformBuffer(queue, grid, cursorCol, cursorRow, cursorVisible);
 
-  // Draw to provided pass (no encoder/submit - caller handles that)
+  // Draw to provided pass - check pipeline/bindGroup after potential recreation
+  if (!pipeline_) return Err<void>("GridRenderer::renderToPass: pipeline not initialized after setup");
+  if (!bindGroup_) return Err<void>("GridRenderer::renderToPass: bindGroup not initialized after setup");
+
   wgpuRenderPassEncoderSetPipeline(pass, pipeline_);
   wgpuRenderPassEncoderSetBindGroup(pass, 0, bindGroup_, 0, nullptr);
   wgpuRenderPassEncoderSetVertexBuffer(pass, 0, quadVertexBuffer_, 0,
                                        WGPU_WHOLE_SIZE);
   wgpuRenderPassEncoderDraw(pass, 6, 1, 0, 0);
+  return Ok();
 }
 
-void GridRenderer::renderToPassFromBuffers(WGPURenderPassEncoder pass,
-                                           uint32_t cols, uint32_t rows,
-                                           const uint16_t* glyphs,
-                                           const uint8_t* fgColors,
-                                           const uint8_t* bgColors,
-                                           const uint8_t* attrs,
-                                           bool fullDamage,
-                                           int cursorCol, int cursorRow,
-                                           bool cursorVisible) noexcept {
-  if (!_ctx || !font_) return;
+Result<void> GridRenderer::renderToPassFromBuffers(WGPURenderPassEncoder pass,
+                                                   uint32_t cols, uint32_t rows,
+                                                   const uint16_t* glyphs,
+                                                   const uint8_t* fgColors,
+                                                   const uint8_t* bgColors,
+                                                   const uint8_t* attrs,
+                                                   bool fullDamage,
+                                                   int cursorCol, int cursorRow,
+                                                   bool cursorVisible) noexcept {
+  if (!_ctx) return Err<void>("GridRenderer::renderToPassFromBuffers: context is null");
+  if (!font_) return Err<void>("GridRenderer::renderToPassFromBuffers: font is null");
 
   WGPUDevice device = _ctx->getDevice();
   WGPUQueue queue = _ctx->getQueue();
@@ -1205,12 +1218,10 @@ void GridRenderer::renderToPassFromBuffers(WGPURenderPassEncoder pass,
   // Recreate textures and bind group if grid size changed
   if (cols != textureCols_ || rows != textureRows_) {
     if (auto res = createCellTextures(device, cols, rows); !res) {
-      yerror("GridRenderer::renderToPassFromBuffers: {}", error_msg(res));
-      return;
+      return Err<void>("GridRenderer::renderToPassFromBuffers: createCellTextures failed", res);
     }
     if (auto res = createBindGroup(device, *font_); !res) {
-      yerror("GridRenderer::renderToPassFromBuffers: {}", error_msg(res));
-      return;
+      return Err<void>("GridRenderer::renderToPassFromBuffers: createBindGroup failed", res);
     }
     needsBindGroupRecreation_ = false;
     lastFontResourceVersion_ = font_->getResourceVersion();
@@ -1218,8 +1229,7 @@ void GridRenderer::renderToPassFromBuffers(WGPURenderPassEncoder pass,
   } else if (needsBindGroupRecreation_ ||
              font_->getResourceVersion() != lastFontResourceVersion_) {
     if (auto res = createBindGroup(device, *font_); !res) {
-      yerror("GridRenderer::renderToPassFromBuffers: {}", error_msg(res));
-      return;
+      return Err<void>("GridRenderer::renderToPassFromBuffers: createBindGroup failed", res);
     }
     needsBindGroupRecreation_ = false;
     lastFontResourceVersion_ = font_->getResourceVersion();
@@ -1305,12 +1315,16 @@ void GridRenderer::renderToPassFromBuffers(WGPURenderPassEncoder pass,
   uniforms_.cursorVisible = cursorVisible ? 1.0f : 0.0f;
   wgpuQueueWriteBuffer(queue, uniformBuffer_, 0, &uniforms_, sizeof(Uniforms));
 
-  // Draw to provided pass
+  // Draw to provided pass - check pipeline/bindGroup after potential recreation
+  if (!pipeline_) return Err<void>("GridRenderer::renderToPassFromBuffers: pipeline not initialized after setup");
+  if (!bindGroup_) return Err<void>("GridRenderer::renderToPassFromBuffers: bindGroup not initialized after setup");
+
   wgpuRenderPassEncoderSetPipeline(pass, pipeline_);
   wgpuRenderPassEncoderSetBindGroup(pass, 0, bindGroup_, 0, nullptr);
   wgpuRenderPassEncoderSetVertexBuffer(pass, 0, quadVertexBuffer_, 0,
                                        WGPU_WHOLE_SIZE);
   wgpuRenderPassEncoderDraw(pass, 6, 1, 0, 0);
+  return Ok();
 }
 
 void GridRenderer::renderFromBuffers(uint32_t cols, uint32_t rows,
