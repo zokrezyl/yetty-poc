@@ -16,11 +16,23 @@ namespace yetty {
 class Font;
 
 //=============================================================================
-// GPUScreen scrollback line - only stores glyph indices and styles
+// Cell structure - contains all per-cell data in a single struct
+// This enables single-memcpy scroll operations instead of 4 separate copies
+//=============================================================================
+struct Cell {
+    uint16_t glyph;     // glyph index in font atlas
+    uint8_t fg[4];      // RGBA foreground color
+    uint8_t bg[4];      // RGBA background color
+    uint8_t attrs;      // packed attributes (bold, italic, underline, strike)
+    uint8_t _pad;       // padding to 12 bytes for alignment
+};
+static_assert(sizeof(Cell) == 12, "Cell must be 12 bytes for optimal alignment");
+
+//=============================================================================
+// GPUScreen scrollback line - stores cells directly (no separate arrays)
 //=============================================================================
 struct ScrollbackLineGPU {
-    std::vector<uint16_t> glyphs;  // glyph indices only (no codepoints needed)
-    std::vector<StyleRun> styleRuns;  // RLE compressed styles
+    std::vector<Cell> cells;  // direct cell storage
 };
 
 //=============================================================================
@@ -176,23 +188,21 @@ private:
 
     // Switch between primary and alternate screen
     void switchToScreen(bool alt);
-    void clearScreen(std::vector<uint16_t>& glyphs,
-                     std::vector<uint8_t>& fgColors,
-                     std::vector<uint8_t>& bgColors,
-                     std::vector<uint8_t>& attrs);
+    void clearBuffer(std::vector<Cell>& buffer);
+
+    // Extract Cell buffer to separate GPU arrays
+    void extractToGPUBuffers() const;
 
     // Check if cell is a protected widget marker - INLINE for performance
     bool isWidgetMarkerCell(int row, int col) const {
         if (row < 0 || row >= rows_ || col < 0 || col >= cols_) return false;
-        if (!visibleGlyphs_) return false;
+        if (!visibleBuffer_) return false;
         size_t idx = static_cast<size_t>(row * cols_ + col);
-        if (idx >= visibleGlyphs_->size()) return false;
-        if ((*visibleGlyphs_)[idx] != 0xFFFF) return false;  // GLYPH_PLUGIN
-        size_t colorIdx = idx * 4;
-        return (*visibleFgColors_)[colorIdx + 2] == 0xFF &&
-               (*visibleFgColors_)[colorIdx + 3] == 0xFF &&
-               (*visibleBgColors_)[colorIdx + 0] == 0xAA &&
-               (*visibleBgColors_)[colorIdx + 1] == 0xAA;
+        if (idx >= visibleBuffer_->size()) return false;
+        const Cell& cell = (*visibleBuffer_)[idx];
+        if (cell.glyph != 0xFFFF) return false;  // GLYPH_PLUGIN
+        return cell.fg[2] == 0xFF && cell.fg[3] == 0xFF &&
+               cell.bg[0] == 0xAA && cell.bg[1] == 0xAA;
     }
 
     // Scrollback helpers
@@ -202,40 +212,38 @@ private:
 
     //=========================================================================
     // Primary screen buffer - where vterm State callbacks write for main screen
-    // No codepoints stored - glyph index is sufficient for rendering
-    // Widget markers: glyph=0xFFFF, widgetId in fgColors[0..1]
+    // Uses Cell struct for single-memcpy scroll operations
+    // Widget markers: glyph=0xFFFF, widgetId in fg[0..1]
     //=========================================================================
-    std::vector<uint16_t> primaryGlyphs_;
-    std::vector<uint8_t> primaryFgColors_;
-    std::vector<uint8_t> primaryBgColors_;
-    std::vector<uint8_t> primaryAttrs_;
+    std::vector<Cell> primaryBuffer_;
 
     //=========================================================================
     // Alternate screen buffer - for apps like vim, htop, less
     // No scrollback for alternate screen (traditional terminal behavior)
     //=========================================================================
-    std::vector<uint16_t> altGlyphs_;
-    std::vector<uint8_t> altFgColors_;
-    std::vector<uint8_t> altBgColors_;
-    std::vector<uint8_t> altAttrs_;
+    std::vector<Cell> altBuffer_;
 
     //=========================================================================
-    // Pointers to current active screen (primary or alternate)
+    // Pointer to current active screen (primary or alternate)
     //=========================================================================
-    std::vector<uint16_t>* visibleGlyphs_ = nullptr;
-    std::vector<uint8_t>* visibleFgColors_ = nullptr;
-    std::vector<uint8_t>* visibleBgColors_ = nullptr;
-    std::vector<uint8_t>* visibleAttrs_ = nullptr;
+    std::vector<Cell>* visibleBuffer_ = nullptr;
 
     bool isAltScreen_ = false;
 
     //=========================================================================
     // View buffer - what gets rendered (== visible when scrollOffset_==0)
     //=========================================================================
-    std::vector<uint16_t> viewGlyphs_;
-    std::vector<uint8_t> viewFgColors_;
-    std::vector<uint8_t> viewBgColors_;
-    std::vector<uint8_t> viewAttrs_;
+    std::vector<Cell> viewBuffer_;
+
+    //=========================================================================
+    // GPU extraction buffers - extracted from Cell buffers for GPU upload
+    // Only extracted when gpuBuffersDirty_ is true
+    //=========================================================================
+    mutable std::vector<uint16_t> gpuGlyphs_;
+    mutable std::vector<uint8_t> gpuFgColors_;
+    mutable std::vector<uint8_t> gpuBgColors_;
+    mutable std::vector<uint8_t> gpuAttrs_;
+    mutable bool gpuBuffersDirty_ = true;
 
     //=========================================================================
     // Scrollback - compressed line storage (primary screen only)
@@ -281,11 +289,8 @@ private:
     // Track widgets whose markers have scrolled into scrollback
     std::vector<ScrolledOutWidget> scrolledOutWidgets_;
 
-    // Pre-allocated scratch buffers for onMoveRect (avoid allocation per call)
-    std::vector<uint16_t> scratchGlyphs_;
-    std::vector<uint8_t> scratchFgColors_;
-    std::vector<uint8_t> scratchBgColors_;
-    std::vector<uint8_t> scratchAttrs_;
+    // Pre-allocated scratch buffer for onMoveRect (avoid allocation per call)
+    std::vector<Cell> scratchBuffer_;
 
     // Cached space glyph index (initialized from font in constructor)
     uint16_t cachedSpaceGlyph_ = 0;
