@@ -65,6 +65,7 @@
     <script>
         // Toybox WASM module factory
         let ToyboxFactory = null;
+        let toyboxInstance = null;  // Persistent Toybox instance with synced FS
         let commandHistory = [];
         let historyIndex = -1;
 
@@ -74,6 +75,39 @@
             'wc', 'sort', 'uniq', 'cut', 'tr', 'rev', 'basename', 'dirname', 'tee',
             'yes', 'seq', 'cal', 'factor', 'sleep', 'date'
         ];
+
+        // Recursively copy directory from yetty's FS to Toybox's FS
+        function syncDirectoryToToybox(toybox, srcPath) {
+            if (!Module.FS || !toybox.FS) {
+                console.error('syncDirectoryToToybox: FS not available', {yettyFS: !!Module.FS, toyboxFS: !!toybox.FS});
+                return;
+            }
+
+            try {
+                const entries = Module.FS.readdir(srcPath);
+                console.log('Syncing', srcPath, 'entries:', entries.length - 2); // -2 for . and ..
+                for (const entry of entries) {
+                    if (entry === '.' || entry === '..') continue;
+
+                    const fullPath = srcPath + '/' + entry;
+                    const stat = Module.FS.stat(fullPath);
+
+                    if (Module.FS.isDir(stat.mode)) {
+                        try { toybox.FS.mkdir(fullPath); } catch (e) {}
+                        syncDirectoryToToybox(toybox, fullPath);
+                    } else if (Module.FS.isFile(stat.mode)) {
+                        try {
+                            const data = Module.FS.readFile(fullPath);
+                            toybox.FS.writeFile(fullPath, data);
+                        } catch (e) {
+                            console.warn('Failed to sync file:', fullPath, e);
+                        }
+                    }
+                }
+            } catch (e) {
+                console.error('Failed to read directory:', srcPath, e);
+            }
+        }
 
         async function initToybox() {
             const status = document.getElementById('status');
@@ -102,6 +136,34 @@
                 if (status) status.textContent = 'Error: ' + err.message;
                 console.error('Failed to initialize Toybox:', err);
             }
+        }
+
+        async function getToyboxInstance() {
+            if (toyboxInstance) return toyboxInstance;
+
+            if (!ToyboxFactory) return null;
+
+            // Create persistent Toybox instance
+            toyboxInstance = await ToyboxFactory({
+                thisProgram: 'toybox',
+                print: () => {},  // Will be overridden per-command
+                printErr: () => {},
+                noExitRuntime: true,
+            });
+
+            // Sync demo and assets directories from yetty's FS
+            try {
+                toyboxInstance.FS.mkdir('/demo');
+            } catch (e) {}
+            try {
+                toyboxInstance.FS.mkdir('/assets');
+            } catch (e) {}
+
+            syncDirectoryToToybox(toyboxInstance, '/demo');
+            syncDirectoryToToybox(toyboxInstance, '/assets');
+
+            console.log('Toybox filesystem synced with yetty');
+            return toyboxInstance;
         }
 
         // Pre-allocated buffer for terminal writes (avoids malloc/free per keypress)
@@ -204,12 +266,22 @@
             }
 
             try {
+                // Create fresh Toybox instance and sync filesystem from yetty
                 const mod = await ToyboxFactory({
                     thisProgram: 'toybox',
                     print: (text) => writeToTerminal(text + '\r\n'),
                     printErr: (text) => writeToTerminal('\x1b[31m' + text + '\x1b[0m\r\n'),
                     noExitRuntime: true,
                 });
+
+                // Sync demo and assets directories from yetty's FS to this Toybox instance
+                if (Module.FS && mod.FS) {
+                    try { mod.FS.mkdir('/demo'); } catch (e) {}
+                    try { mod.FS.mkdir('/assets'); } catch (e) {}
+                    syncDirectoryToToybox(mod, '/demo');
+                    syncDirectoryToToybox(mod, '/assets');
+                }
+
                 mod.callMain(parts);
             } catch (err) {
                 if (!err.message?.includes('exit') && !err.message?.includes('unreachable')) {

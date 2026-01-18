@@ -1,9 +1,14 @@
 #include "gpu-screen.h"
 #include <yetty/font.h>
-#include "grid.h"  // For GLYPH_WIDE_CONT constant
+#include <ytrace/ytrace.hpp>
+#include "grid.h"  // For GLYPH_WIDE_CONT, GLYPH_PLUGIN constants
 #include <algorithm>
 #include <cstring>
 #include <string>
+
+#if defined(__SSE2__)
+#include <emmintrin.h>
+#endif
 
 namespace yetty {
 
@@ -70,36 +75,31 @@ void GPUScreen::resize(int rows, int cols) {
     
     // Save old buffers
     auto oldGlyphs = std::move(visibleGlyphs_);
-    auto oldCodepoints = std::move(visibleCodepoints_);
     auto oldFgColors = std::move(visibleFgColors_);
     auto oldBgColors = std::move(visibleBgColors_);
     auto oldAttrs = std::move(visibleAttrs_);
-    
+
     rows_ = rows;
     cols_ = cols;
-    
+
     size_t numCells = static_cast<size_t>(rows * cols);
-    
+
     // Allocate new buffers (clear first to ensure clean state)
     visibleGlyphs_.clear();
-    visibleCodepoints_.clear();
     visibleFgColors_.clear();
     visibleBgColors_.clear();
     visibleAttrs_.clear();
     viewGlyphs_.clear();
-    viewCodepoints_.clear();
     viewFgColors_.clear();
     viewBgColors_.clear();
     viewAttrs_.clear();
-    
+
     visibleGlyphs_.resize(numCells);
-    visibleCodepoints_.resize(numCells);
     visibleFgColors_.resize(numCells * 4);
     visibleBgColors_.resize(numCells * 4);
     visibleAttrs_.resize(numCells);
-    
+
     viewGlyphs_.resize(numCells);
-    viewCodepoints_.resize(numCells);
     viewFgColors_.resize(numCells * 4);
     viewBgColors_.resize(numCells * 4);
     viewAttrs_.resize(numCells);
@@ -112,7 +112,7 @@ void GPUScreen::resize(int rows, int cols) {
     
     for (int row = 0; row < rows; row++) {
         for (int col = 0; col < cols; col++) {
-            setCell(row, col, ' ', spaceGlyph, fgR, fgG, fgB, bgR, bgG, bgB, 0);
+            setCell(row, col, spaceGlyph, fgR, fgG, fgB, bgR, bgG, bgB, 0);
         }
     }
     
@@ -120,18 +120,15 @@ void GPUScreen::resize(int rows, int cols) {
     if (hasOldContent && oldRows > 0 && oldCols > 0) {
         int copyRows = std::min(oldRows, rows);
         int copyCols = std::min(oldCols, cols);
-        
+
         for (int row = 0; row < copyRows; row++) {
             for (int col = 0; col < copyCols; col++) {
                 size_t oldIdx = static_cast<size_t>(row * oldCols + col);
                 size_t newIdx = cellIndex(row, col);
-                
+
                 // Bounds check on old buffers
                 if (oldIdx < oldGlyphs.size()) {
                     visibleGlyphs_[newIdx] = oldGlyphs[oldIdx];
-                }
-                if (oldIdx < oldCodepoints.size()) {
-                    visibleCodepoints_[newIdx] = oldCodepoints[oldIdx];
                 }
                 if (oldIdx * 4 + 3 < oldFgColors.size()) {
                     std::memcpy(&visibleFgColors_[newIdx * 4], &oldFgColors[oldIdx * 4], 4);
@@ -166,13 +163,13 @@ void GPUScreen::reset() {
     colorToRGB(defaultBg_, bgR, bgG, bgB);
 
     uint16_t spaceGlyph = font_ ? font_->getGlyphIndex(' ') : ' ';
-    
+
     for (int row = 0; row < rows_; row++) {
         for (int col = 0; col < cols_; col++) {
-            setCell(row, col, ' ', spaceGlyph, fgR, fgG, fgB, bgR, bgG, bgB, 0);
+            setCell(row, col, spaceGlyph, fgR, fgG, fgB, bgR, bgG, bgB, 0);
         }
     }
-    
+
     cursorRow_ = 0;
     cursorCol_ = 0;
     cursorVisible_ = true;
@@ -290,33 +287,30 @@ void GPUScreen::composeViewBuffer() {
         size_t numCells = static_cast<size_t>(cols_);
         size_t srcOffset = static_cast<size_t>(visRow * cols_);
         size_t dstOffset = static_cast<size_t>(viewRow * cols_);
-        
+
         std::memcpy(&viewGlyphs_[dstOffset], &visibleGlyphs_[srcOffset], numCells * sizeof(uint16_t));
-        std::memcpy(&viewCodepoints_[dstOffset], &visibleCodepoints_[srcOffset], numCells * sizeof(uint32_t));
         std::memcpy(&viewFgColors_[dstOffset * 4], &visibleFgColors_[srcOffset * 4], numCells * 4);
         std::memcpy(&viewBgColors_[dstOffset * 4], &visibleBgColors_[srcOffset * 4], numCells * 4);
         std::memcpy(&viewAttrs_[dstOffset], &visibleAttrs_[srcOffset], numCells);
     }
-    
+
     viewBufferDirty_ = false;
 }
 
 void GPUScreen::decompressLine(const ScrollbackLineGPU& line, int viewRow) {
     size_t dstOffset = static_cast<size_t>(viewRow * cols_);
-    
-    // Copy glyphs and codepoints (chars)
+
+    // Copy glyphs only (no codepoints needed)
     int lineCols = std::min(static_cast<int>(line.glyphs.size()), cols_);
     for (int col = 0; col < lineCols; col++) {
         viewGlyphs_[dstOffset + col] = line.glyphs[col];
-        viewCodepoints_[dstOffset + col] = col < static_cast<int>(line.chars.size()) ? line.chars[col] : ' ';
     }
     // Fill remainder with spaces
     uint16_t spaceGlyph = font_ ? font_->getGlyphIndex(' ') : ' ';
     for (int col = lineCols; col < cols_; col++) {
         viewGlyphs_[dstOffset + col] = spaceGlyph;
-        viewCodepoints_[dstOffset + col] = ' ';
     }
-    
+
     // Decompress RLE styles
     int col = 0;
     for (const auto& run : line.styleRuns) {
@@ -357,15 +351,38 @@ void GPUScreen::decompressLine(const ScrollbackLineGPU& line, int viewRow) {
 void GPUScreen::pushLineToScrollback(int row) {
     ScrollbackLineGPU line;
     line.glyphs.resize(cols_);
-    line.chars.resize(cols_);
-    
-    // Copy raw data
+
+    // Copy glyph data only (no codepoints needed)
     size_t srcOffset = static_cast<size_t>(row * cols_);
     for (int col = 0; col < cols_; col++) {
         line.glyphs[col] = visibleGlyphs_[srcOffset + col];
-        line.chars[col] = visibleCodepoints_[srcOffset + col];
     }
-    
+
+    // Scan this row for widget markers - if found, track in scrolledOutWidgets_
+    yinfo("GPUScreen::pushLineToScrollback: scanning row {} for markers", row);
+    for (int col = 0; col < cols_; col++) {
+        if (visibleGlyphs_[srcOffset + col] == GLYPH_PLUGIN) {
+            size_t colorIdx = (srcOffset + col) * 4;
+            yinfo("GPUScreen::pushLineToScrollback: found GLYPH_PLUGIN at row={} col={}, checking validation", row, col);
+            // Validate marker pattern
+            if (visibleFgColors_[colorIdx + 2] == 0xFF &&
+                visibleFgColors_[colorIdx + 3] == 0xFF &&
+                visibleBgColors_[colorIdx + 0] == 0xAA &&
+                visibleBgColors_[colorIdx + 1] == 0xAA) {
+                uint16_t widgetId = static_cast<uint16_t>(visibleFgColors_[colorIdx + 0]) |
+                                   (static_cast<uint16_t>(visibleFgColors_[colorIdx + 1]) << 8);
+                yinfo("GPUScreen::pushLineToScrollback: VALID marker! widget {} at row={} col={} -> scrolledOutWidgets_ with y=-1",
+                       widgetId, row, col);
+                // Add with Y = -1 (just scrolled out)
+                scrolledOutWidgets_.push_back({widgetId, -1, col});
+            } else {
+                yinfo("GPUScreen::pushLineToScrollback: marker validation FAILED fg[2]={} fg[3]={} bg[0]={} bg[1]={}",
+                      visibleFgColors_[colorIdx + 2], visibleFgColors_[colorIdx + 3],
+                      visibleBgColors_[colorIdx + 0], visibleBgColors_[colorIdx + 1]);
+            }
+        }
+    }
+
     // RLE compress styles
     ScrollbackStyle lastStyle;
     size_t colorIdx = srcOffset * 4;
@@ -377,7 +394,7 @@ void GPUScreen::pushLineToScrollback(int row) {
     lastStyle.bgB = visibleBgColors_[colorIdx + 2];
     lastStyle.attrs = visibleAttrs_[srcOffset];
     uint16_t runCount = 1;
-    
+
     for (int col = 1; col < cols_; col++) {
         colorIdx = (srcOffset + col) * 4;
         ScrollbackStyle style;
@@ -388,7 +405,7 @@ void GPUScreen::pushLineToScrollback(int row) {
         style.bgG = visibleBgColors_[colorIdx + 1];
         style.bgB = visibleBgColors_[colorIdx + 2];
         style.attrs = visibleAttrs_[srcOffset + col];
-        
+
         if (style == lastStyle && runCount < 65535) {
             runCount++;
         } else {
@@ -398,15 +415,37 @@ void GPUScreen::pushLineToScrollback(int row) {
         }
     }
     line.styleRuns.push_back({lastStyle, runCount});
-    
+
     scrollback_.push_back(std::move(line));
-    
+
     // If scrolled back, increment scroll offset to maintain view position
     // (otherwise the view would shift as new lines push into scrollback)
     if (scrollOffset_ > 0) {
         scrollOffset_++;
     }
-    
+
+    // Decrement Y for all scrolled-out widgets (they move up with each scroll)
+    int maxNegativeY = -static_cast<int>(maxScrollback_);
+    if (!scrolledOutWidgets_.empty()) {
+        yinfo("GPUScreen::pushLineToScrollback: decrementing Y for {} scrolled-out widgets", scrolledOutWidgets_.size());
+    }
+    auto it = scrolledOutWidgets_.begin();
+    while (it != scrolledOutWidgets_.end()) {
+        int oldY = it->y;
+        it->y--;
+        yinfo("GPUScreen::pushLineToScrollback: widget {} y: {} -> {}", it->widgetId, oldY, it->y);
+        if (it->y < maxNegativeY) {
+            // This widget's marker has been removed from scrollback
+            yinfo("GPUScreen: widget {} y={} below threshold {}, disposing", it->widgetId, it->y, maxNegativeY);
+            if (widgetDisposalCallback_) {
+                widgetDisposalCallback_(it->widgetId);
+            }
+            it = scrolledOutWidgets_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
     // Limit scrollback size
     while (scrollback_.size() > maxScrollback_) {
         scrollback_.pop_front();
@@ -415,8 +454,8 @@ void GPUScreen::pushLineToScrollback(int row) {
             scrollOffset_ = static_cast<int>(scrollback_.size());
         }
     }
-    
-    // Notify callback (for widget position updates)
+
+    // Notify callback (for widget position updates - but we already updated Y above)
     if (scrollCallback_) {
         scrollCallback_(1);
     }
@@ -426,33 +465,32 @@ void GPUScreen::pushLineToScrollback(int row) {
 // Cell manipulation (writes to visible buffer)
 //=============================================================================
 
-void GPUScreen::setCell(int row, int col, uint32_t codepoint, uint16_t glyph,
+void GPUScreen::setCell(int row, int col, uint16_t glyph,
                         uint8_t fgR, uint8_t fgG, uint8_t fgB,
                         uint8_t bgR, uint8_t bgG, uint8_t bgB,
                         uint8_t attrsByte) {
     if (row < 0 || row >= rows_ || col < 0 || col >= cols_) return;
-    
+
     size_t idx = cellIndex(row, col);
-    
+
     // Bounds check on buffers
     if (idx >= visibleGlyphs_.size()) return;
-    
+
     visibleGlyphs_[idx] = glyph;
-    visibleCodepoints_[idx] = codepoint;
-    
+
     size_t colorIdx = idx * 4;
     if (colorIdx + 3 >= visibleFgColors_.size()) return;
-    
+
     visibleFgColors_[colorIdx + 0] = fgR;
     visibleFgColors_[colorIdx + 1] = fgG;
     visibleFgColors_[colorIdx + 2] = fgB;
     visibleFgColors_[colorIdx + 3] = 255;
-    
+
     visibleBgColors_[colorIdx + 0] = bgR;
     visibleBgColors_[colorIdx + 1] = bgG;
     visibleBgColors_[colorIdx + 2] = bgB;
     visibleBgColors_[colorIdx + 3] = 255;
-    
+
     visibleAttrs_[idx] = attrsByte;
 }
 
@@ -460,15 +498,15 @@ void GPUScreen::clearCell(int row, int col) {
     uint8_t fgR, fgG, fgB, bgR, bgG, bgB;
     colorToRGB(pen_.fg, fgR, fgG, fgB);
     colorToRGB(pen_.bg, bgR, bgG, bgB);
-    
+
     if (pen_.reverse) {
         std::swap(fgR, bgR);
         std::swap(fgG, bgG);
         std::swap(fgB, bgB);
     }
-    
+
     uint16_t spaceGlyph = font_ ? font_->getGlyphIndex(' ') : ' ';
-    setCell(row, col, ' ', spaceGlyph, fgR, fgG, fgB, bgR, bgG, bgB, 0);
+    setCell(row, col, spaceGlyph, fgR, fgG, fgB, bgR, bgG, bgB, 0);
 }
 
 void GPUScreen::colorToRGB(const VTermColor& color, uint8_t& r, uint8_t& g, uint8_t& b) {
@@ -501,50 +539,48 @@ void GPUScreen::colorToRGB(const VTermColor& color, uint8_t& r, uint8_t& g, uint
 
 int GPUScreen::onPutglyph(VTermGlyphInfo* info, VTermPos pos, void* user) {
     auto* self = static_cast<GPUScreen*>(user);
-    
+
     uint32_t cp = info->chars[0];
     if (cp == 0) cp = ' ';
-    
+
     // Get glyph index from font
-    uint16_t glyphIdx = self->font_ 
+    uint16_t glyphIdx = self->font_
         ? self->font_->getGlyphIndex(cp, self->pen_.bold, self->pen_.italic)
         : static_cast<uint16_t>(cp);
-    
+
     // Get colors from current pen
     uint8_t fgR, fgG, fgB, bgR, bgG, bgB;
     self->colorToRGB(self->pen_.fg, fgR, fgG, fgB);
     self->colorToRGB(self->pen_.bg, bgR, bgG, bgB);
-    
+
     if (self->pen_.reverse) {
         std::swap(fgR, bgR);
         std::swap(fgG, bgG);
         std::swap(fgB, bgB);
     }
-    
+
     // Pack attributes
     uint8_t attrsByte = 0;
     if (self->pen_.bold) attrsByte |= 0x01;
     if (self->pen_.italic) attrsByte |= 0x02;
     attrsByte |= (self->pen_.underline & 0x03) << 2;
     if (self->pen_.strike) attrsByte |= 0x10;
-    // Bit 5 is emoji flag - check if codepoint is emoji
-    // (simplified - real implementation should check Unicode emoji ranges)
-    
-    self->setCell(pos.row, pos.col, cp, glyphIdx, fgR, fgG, fgB, bgR, bgG, bgB, attrsByte);
-    
+
+    self->setCell(pos.row, pos.col, glyphIdx, fgR, fgG, fgB, bgR, bgG, bgB, attrsByte);
+
     // Handle wide characters (width > 1)
     for (int i = 1; i < info->width; i++) {
-        // Wide char continuation - store 0xFFFFFFFF as codepoint marker
-        self->setCell(pos.row, pos.col + i, 0xFFFFFFFF, GLYPH_WIDE_CONT, 
+        self->setCell(pos.row, pos.col + i, GLYPH_WIDE_CONT,
                       fgR, fgG, fgB, bgR, bgG, bgB, attrsByte);
     }
-    
+
     self->hasDamage_ = true;
     return 1;
 }
 
-int GPUScreen::onMoveCursor(VTermPos pos, VTermPos, int visible, void* user) {
+int GPUScreen::onMoveCursor(VTermPos pos, VTermPos oldpos, int visible, void* user) {
     auto* self = static_cast<GPUScreen*>(user);
+    ydebug("GPUScreen::onMoveCursor: ({},{}) -> ({},{})", oldpos.row, oldpos.col, pos.row, pos.col);
     self->cursorRow_ = pos.row;
     self->cursorCol_ = pos.col;
     self->cursorVisible_ = visible != 0;
@@ -555,65 +591,85 @@ int GPUScreen::onMoveCursor(VTermPos pos, VTermPos, int visible, void* user) {
 int GPUScreen::onScrollRect(VTermRect rect, int downward, int rightward, void* user) {
     auto* self = static_cast<GPUScreen*>(user);
     (void)rightward;
-    
+
+    yinfo("GPUScreen::onScrollRect: rect=[{},{})x[{},{}) downward={} rightward={}",
+           rect.start_row, rect.end_row, rect.start_col, rect.end_col, downward, rightward);
+
+    bool isFullWidth = (rect.start_col == 0 && rect.end_col == self->cols_);
+
     // Save lines to scrollback BEFORE vterm moves content (via moverect/erase)
-    if (downward < 0) {
+    // downward > 0: content moves down, top rows pushed to scrollback
+    // downward < 0: content moves up, bottom rows cleared (less common)
+    if (downward > 0 && rect.start_row == 0 && isFullWidth) {
+        yinfo("GPUScreen::onScrollRect: pushing {} lines to scrollback (downward > 0)", downward);
+        for (int i = 0; i < downward && i < rect.end_row; i++) {
+            self->pushLineToScrollback(i);
+        }
+    } else if (downward < 0) {
         // Scroll up: top lines will be overwritten
         int upAmount = -downward;
-        if (rect.start_row == 0 && rect.start_col == 0 && rect.end_col == self->cols_) {
+        yinfo("GPUScreen::onScrollRect: upAmount={} isFullWidth={} start_row={}", upAmount, isFullWidth, rect.start_row);
+
+        if (rect.start_row == 0 && isFullWidth) {
+            // Full-screen scroll from top - push to scrollback
+            yinfo("GPUScreen::onScrollRect: pushing {} lines to scrollback (downward < 0)", upAmount);
             for (int i = 0; i < upAmount && i < rect.end_row; i++) {
                 self->pushLineToScrollback(i);
             }
+        } else if (isFullWidth) {
+            // Scroll within region (not from row 0) - still notify for widget position updates
+            ydebug("GPUScreen::onScrollRect: scroll region [{},{}), notifying {} lines",
+                   rect.start_row, rect.end_row, upAmount);
+            if (self->scrollCallback_) {
+                self->scrollCallback_(upAmount);
+            }
         }
     }
-    
+
     // Return 0 to let vterm handle the actual scroll via moverect/erase callbacks
     return 0;
 }
 
 int GPUScreen::onMoveRect(VTermRect dest, VTermRect src, void* user) {
     auto* self = static_cast<GPUScreen*>(user);
-    
+
     // Copy rectangle from src to dest
     int height = src.end_row - src.start_row;
     int width = src.end_col - src.start_col;
-    
+
     // Need to handle overlapping regions carefully
     // For simplicity, use temporary buffer
     std::vector<uint16_t> tmpGlyphs(height * width);
-    std::vector<uint32_t> tmpCodepoints(height * width);
     std::vector<uint8_t> tmpFg(height * width * 4);
     std::vector<uint8_t> tmpBg(height * width * 4);
     std::vector<uint8_t> tmpAttrs(height * width);
-    
+
     // Copy to temp
     for (int row = 0; row < height; row++) {
         for (int col = 0; col < width; col++) {
             size_t srcIdx = self->cellIndex(src.start_row + row, src.start_col + col);
             size_t tmpIdx = row * width + col;
-            
+
             tmpGlyphs[tmpIdx] = self->visibleGlyphs_[srcIdx];
-            tmpCodepoints[tmpIdx] = self->visibleCodepoints_[srcIdx];
             std::memcpy(&tmpFg[tmpIdx * 4], &self->visibleFgColors_[srcIdx * 4], 4);
             std::memcpy(&tmpBg[tmpIdx * 4], &self->visibleBgColors_[srcIdx * 4], 4);
             tmpAttrs[tmpIdx] = self->visibleAttrs_[srcIdx];
         }
     }
-    
+
     // Copy from temp to dest
     for (int row = 0; row < height; row++) {
         for (int col = 0; col < width; col++) {
             size_t dstIdx = self->cellIndex(dest.start_row + row, dest.start_col + col);
             size_t tmpIdx = row * width + col;
-            
+
             self->visibleGlyphs_[dstIdx] = tmpGlyphs[tmpIdx];
-            self->visibleCodepoints_[dstIdx] = tmpCodepoints[tmpIdx];
             std::memcpy(&self->visibleFgColors_[dstIdx * 4], &tmpFg[tmpIdx * 4], 4);
             std::memcpy(&self->visibleBgColors_[dstIdx * 4], &tmpBg[tmpIdx * 4], 4);
             self->visibleAttrs_[dstIdx] = tmpAttrs[tmpIdx];
         }
     }
-    
+
     self->hasDamage_ = true;
     self->viewBufferDirty_ = true;
     return 1;
@@ -621,13 +677,13 @@ int GPUScreen::onMoveRect(VTermRect dest, VTermRect src, void* user) {
 
 int GPUScreen::onErase(VTermRect rect, int, void* user) {
     auto* self = static_cast<GPUScreen*>(user);
-    
+
     for (int row = rect.start_row; row < rect.end_row; row++) {
         for (int col = rect.start_col; col < rect.end_col; col++) {
             self->clearCell(row, col);
         }
     }
-    
+
     self->hasDamage_ = true;
     if (self->scrollOffset_ > 0) {
         self->viewBufferDirty_ = true;
@@ -721,55 +777,143 @@ int GPUScreen::onSetLineInfo(int, const VTermLineInfo*, const VTermLineInfo*, vo
     return 1;
 }
 
-std::string GPUScreen::getText(int startRow, int startCol, int endRow, int endCol) const {
-    std::string result;
-    
-    // Clamp to valid range
-    startRow = std::max(0, startRow);
-    startCol = std::max(0, startCol);
-    endRow = std::min(endRow, rows_ - 1);
-    endCol = std::min(endCol, cols_ - 1);
-    
-    // For now, only get text from visible buffer (not scrollback)
-    // TODO: support getText across scrollback
-    
-    for (int row = startRow; row <= endRow; row++) {
-        int sc = (row == startRow) ? startCol : 0;
-        int ec = (row == endRow) ? endCol : cols_ - 1;
-        
-        for (int col = sc; col <= ec; col++) {
-            uint32_t cp = visibleCodepoints_[cellIndex(row, col)];
-            
-            // Skip wide char continuations
-            if (cp == 0xFFFFFFFF) continue;
-            
-            // Convert codepoint to UTF-8
-            if (cp == 0 || cp == ' ') {
-                result += ' ';
-            } else if (cp < 0x80) {
-                result += static_cast<char>(cp);
-            } else if (cp < 0x800) {
-                result += static_cast<char>(0xC0 | (cp >> 6));
-                result += static_cast<char>(0x80 | (cp & 0x3F));
-            } else if (cp < 0x10000) {
-                result += static_cast<char>(0xE0 | (cp >> 12));
-                result += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
-                result += static_cast<char>(0x80 | (cp & 0x3F));
-            } else {
-                result += static_cast<char>(0xF0 | (cp >> 18));
-                result += static_cast<char>(0x80 | ((cp >> 12) & 0x3F));
-                result += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
-                result += static_cast<char>(0x80 | (cp & 0x3F));
+//=============================================================================
+// Widget marker methods
+//=============================================================================
+
+void GPUScreen::setWidgetMarker(int row, int col, uint16_t widgetId) {
+    if (row < 0 || row >= rows_ || col < 0 || col >= cols_) {
+        ydebug("GPUScreen::setWidgetMarker: OUT OF BOUNDS row={} col={} (screen {}x{})",
+               row, col, rows_, cols_);
+        return;
+    }
+
+    size_t idx = cellIndex(row, col);
+    if (idx >= visibleGlyphs_.size()) return;
+
+    ydebug("GPUScreen::setWidgetMarker: row={} col={} widgetId={} idx={}",
+           row, col, widgetId, idx);
+
+    // Set glyph to GLYPH_PLUGIN (0xFFFF) to mark as widget cell
+    visibleGlyphs_[idx] = GLYPH_PLUGIN;
+
+    // Encode widget ID using fg RGB + bg R + attrs = 40 bits available
+    // Use: fgR=bits0-7, fgG=bits8-15, bgR=validation marker (0xAA)
+    size_t colorIdx = idx * 4;
+    visibleFgColors_[colorIdx + 0] = static_cast<uint8_t>(widgetId & 0xFF);        // bits 0-7
+    visibleFgColors_[colorIdx + 1] = static_cast<uint8_t>((widgetId >> 8) & 0xFF); // bits 8-15
+    visibleFgColors_[colorIdx + 2] = 0xFF;  // Marker validation byte
+    visibleFgColors_[colorIdx + 3] = 0xFF;  // Marker validation byte
+
+    // Also set bg to distinguish from erased cells
+    visibleBgColors_[colorIdx + 0] = 0xAA;  // Validation pattern
+    visibleBgColors_[colorIdx + 1] = 0xAA;
+    visibleBgColors_[colorIdx + 2] = 0xAA;
+    visibleBgColors_[colorIdx + 3] = 0xAA;
+
+    hasDamage_ = true;
+}
+
+void GPUScreen::clearWidgetMarker(int row, int col) {
+    if (row < 0 || row >= rows_ || col < 0 || col >= cols_) return;
+
+    size_t idx = cellIndex(row, col);
+    if (idx >= visibleGlyphs_.size()) return;
+
+    // Only clear if it's actually a widget marker
+    if (visibleGlyphs_[idx] == GLYPH_PLUGIN) {
+        clearCell(row, col);
+    }
+}
+
+void GPUScreen::trackScrolledOutWidget(uint16_t widgetId, int col) {
+    // Widget marker just scrolled from row 0 into scrollback
+    // Start tracking with y = -1 (just above visible area)
+    ydebug("GPUScreen::trackScrolledOutWidget: widget {} col={} y=-1", widgetId, col);
+    scrolledOutWidgets_.push_back({widgetId, -1, col});
+}
+
+std::vector<WidgetPosition> GPUScreen::scanWidgetPositions() const {
+    std::vector<WidgetPosition> positions;
+
+    // When scrolled back, scan the composed view buffer (includes scrollback content)
+    // Otherwise scan the visible buffer directly
+    const uint16_t* glyphs;
+    const uint8_t* fgColors;
+    const uint8_t* bgColors;
+
+    if (scrollOffset_ > 0) {
+        // Ensure view buffer is composed
+        const_cast<GPUScreen*>(this)->composeViewBuffer();
+        glyphs = viewGlyphs_.data();
+        fgColors = viewFgColors_.data();
+        bgColors = viewBgColors_.data();
+    } else {
+        glyphs = visibleGlyphs_.data();
+        fgColors = visibleFgColors_.data();
+        bgColors = visibleBgColors_.data();
+    }
+
+    int numCells = rows_ * cols_;
+
+    // Helper lambda to validate and extract widget marker
+    auto extractWidget = [&](int cellIdx) -> bool {
+        size_t colorIdx = cellIdx * 4;
+        // Validate marker pattern: fg[2..3] = 0xFF, bg[0..3] = 0xAA
+        if (fgColors[colorIdx + 2] != 0xFF || fgColors[colorIdx + 3] != 0xFF) return false;
+        if (bgColors[colorIdx + 0] != 0xAA || bgColors[colorIdx + 1] != 0xAA) return false;
+
+        int row = cellIdx / cols_;
+        int col = cellIdx % cols_;
+        uint16_t widgetId = static_cast<uint16_t>(fgColors[colorIdx + 0]) |
+                           (static_cast<uint16_t>(fgColors[colorIdx + 1]) << 8);
+        ydebug("GPUScreen::scanWidgetPositions: found widget {} at row={} col={}",
+               widgetId, row, col);
+        positions.push_back({widgetId, row, col});
+        return true;
+    };
+
+    int i = 0;
+
+#if defined(__SSE2__)
+    // SSE2 optimized path: compare 8 uint16_t values at once
+    __m128i marker = _mm_set1_epi16(static_cast<int16_t>(GLYPH_PLUGIN));
+
+    for (; i + 8 <= numCells; i += 8) {
+        __m128i data = _mm_loadu_si128(reinterpret_cast<const __m128i*>(&glyphs[i]));
+        __m128i cmp = _mm_cmpeq_epi16(data, marker);
+        int mask = _mm_movemask_epi8(cmp);
+
+        if (mask != 0) {
+            // Found at least one match - check individual cells with validation
+            for (int j = 0; j < 8; j++) {
+                if (glyphs[i + j] == GLYPH_PLUGIN) {
+                    extractWidget(i + j);
+                }
             }
         }
-        
-        // Add newline between rows (except for last row)
-        if (row < endRow) {
-            result += '\n';
+    }
+#endif
+
+    // Scalar fallback for remaining cells
+    for (; i < numCells; i++) {
+        if (glyphs[i] == GLYPH_PLUGIN) {
+            extractWidget(i);
         }
     }
-    
-    return result;
+
+    // Include widgets from helper struct (markers scrolled into scrollback)
+    if (!scrolledOutWidgets_.empty()) {
+        yinfo("GPUScreen::scanWidgetPositions: adding {} scrolled-out widgets", scrolledOutWidgets_.size());
+    }
+    for (const auto& sow : scrolledOutWidgets_) {
+        yinfo("GPUScreen::scanWidgetPositions: scrolled-out widget {} at y={} col={}",
+               sow.widgetId, sow.y, sow.col);
+        positions.push_back({sow.widgetId, sow.y, sow.col});
+    }
+
+    yinfo("GPUScreen::scanWidgetPositions: returning {} total positions", positions.size());
+    return positions;
 }
 
 } // namespace yetty

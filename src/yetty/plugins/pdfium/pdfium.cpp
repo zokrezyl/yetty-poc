@@ -603,27 +603,7 @@ void PdfiumWidget::prepareFrame(WebGPUContext& ctx, bool on) {
 
 Result<void> PdfiumWidget::render(WGPURenderPassEncoder pass, WebGPUContext& ctx, bool on) {
     if (!on || _failed || !_visible) return Ok();
-
-    const auto& rc = _renderCtx;
-
-    // Use pre-computed pixel positions from Widget base class
-    float pixelX = _pixelX;
-    float pixelY = _pixelY;
-    float pixelW = static_cast<float>(_pixelWidth);
-    float pixelH = static_cast<float>(_pixelHeight);
-
-    // Skip if dimensions are invalid
-    if (pixelW <= 0 || pixelH <= 0) {
-        return Ok();
-    }
-
-    // Skip if off-screen
-    if (rc.termRows > 0) {
-        float screenPixelHeight = rc.termRows * rc.cellHeight;
-        if (pixelY + pixelH <= 0 || pixelY >= screenPixelHeight) {
-            return Ok();  // Off-screen, not an error
-        }
-    }
+    if (_pixelWidth <= 0 || _pixelHeight <= 0) return Ok();
 
     // Create RichText if needed
     if (!_richText) {
@@ -633,37 +613,28 @@ Result<void> PdfiumWidget::render(WGPURenderPassEncoder pass, WebGPUContext& ctx
             return Err<void>("PdfiumWidget: no font manager");
         }
 
-        auto result = RichText::create(&ctx, rc.targetFormat, fontMgr);
+        auto result = RichText::create(&ctx, ctx.getSurfaceFormat(), fontMgr);
         if (!result) {
             _failed = true;
             return Err<void>("PdfiumWidget: failed to create RichText", result);
         }
         _richText = *result;
-
-        // Set default font family for fallback
         _richText->setDefaultFontFamily("sans-serif");
-
-        // Set white background for PDF viewing
         _richText->setBackgroundColor(glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
-
         _initialized = true;
-
-        yinfo("PdfiumWidget: RichText created, ready to render");
     }
 
     // Re-layout if view size changed
-    if (_lastViewWidth != pixelW || _lastViewHeight != pixelH) {
-        buildRichTextContent(pixelW);
-        _lastViewWidth = pixelW;
-        _lastViewHeight = pixelH;
+    if (_lastViewWidth != _pixelWidth || _lastViewHeight != _pixelHeight) {
+        buildRichTextContent(static_cast<float>(_pixelWidth));
+        _lastViewWidth = _pixelWidth;
+        _lastViewHeight = _pixelHeight;
     }
 
-    // Apply scroll offset to RichText
     _richText->setScrollOffset(_scrollOffset);
 
-    // Use batched render
-    return _richText->render(pass, ctx, rc.screenWidth, rc.screenHeight,
-                             pixelX, pixelY, pixelW, pixelH);
+    return _richText->render(pass, ctx, ctx.getSurfaceWidth(), ctx.getSurfaceHeight(),
+                             _pixelX, _pixelY, static_cast<float>(_pixelWidth), static_cast<float>(_pixelHeight));
 }
 
 //-----------------------------------------------------------------------------

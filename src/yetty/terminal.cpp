@@ -202,7 +202,16 @@ Result<void> Terminal::init() noexcept {
     _gpuScreen->setScrollCallback([this](int lines) {
         updateWidgetPositionsOnScroll(lines);
     });
-    
+
+    // Set up widget disposal callback for when markers are removed from scrollback
+    _gpuScreen->setWidgetDisposalCallback([this](uint16_t widgetId) {
+        yinfo("Terminal: disposing widget {} (marker removed from scrollback)", widgetId);
+        auto result = removeChildWidget(static_cast<uint32_t>(widgetId));
+        if (!result) {
+            ywarn("Terminal: failed to dispose widget {}: {}", widgetId, result.error().message());
+        }
+    });
+
     // Attach GPUScreen to vterm (registers State callbacks)
     _gpuScreen->attach(_vterm);
     yinfo("Terminal::init: GPUScreen attached to vterm");
@@ -307,16 +316,59 @@ void Terminal::stop() {
 void Terminal::prepareFrame(WebGPUContext& ctx, bool on) {
     (void)on;  // Terminal is always on when called
 
+    // Scan for widget markers when terminal has damage - markers scroll with content
+    if (_gpuScreen && !_childWidgets.empty()) {
+        bool hasDamage = _gpuScreen->hasDamage();
+        ydebug("prepareFrame: hasDamage={} childWidgets={}", hasDamage, _childWidgets.size());
+
+        if (hasDamage) {
+            auto positions = _gpuScreen->scanWidgetPositions();
+            ydebug("prepareFrame: scanWidgetPositions found {} positions", positions.size());
+
+            for (const auto& pos : positions) {
+                for (const auto& widget : _childWidgets) {
+                    if (static_cast<uint16_t>(widget->id()) == pos.widgetId) {
+                        if (widget->getX() != pos.col || widget->getY() != pos.row) {
+                            ydebug("prepareFrame: widget {} position updated ({},{}) -> ({},{})",
+                                   pos.widgetId, widget->getX(), widget->getY(), pos.col, pos.row);
+                            widget->setPosition(pos.col, pos.row);
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     // Get current screen type for filtering
     ScreenType currentScreen = _isAltScreen ? ScreenType::Alternate : ScreenType::Main;
 
-    // Propagate RenderContext and prepareFrame to all child widgets
+    // Compute and set pixel positions for child widgets
     for (const auto& widget : _childWidgets) {
         if (!widget->isVisible()) continue;
         if (widget->getScreenType() != currentScreen) continue;
 
-        // Propagate our RenderContext to children
-        widget->setRenderContext(_renderCtx);
+        // Terminal computes pixel position from grid position
+        float pixelX = static_cast<float>(widget->getX()) * _cellWidth;
+        float pixelY = static_cast<float>(widget->getY()) * _cellHeight;
+
+        // Adjust for scroll offset if widget is relative
+        int scrollOff = getScrollOffset();
+        if (widget->getPositionMode() == PositionMode::Relative && scrollOff > 0) {
+            pixelY += scrollOff * _cellHeight;
+        }
+
+        // Compute pixel size from cell size
+        uint32_t pixelW = widget->getWidthCells() * _cellWidth;
+        uint32_t pixelH = widget->getHeightCells() * _cellHeight;
+
+        yinfo("Terminal::prepareFrame widget '{}' grid=({},{}) cellSize=({},{}) -> pixel=({},{}) size={}x{}",
+              widget->name(), widget->getX(), widget->getY(), _cellWidth, _cellHeight,
+              pixelX, pixelY, pixelW, pixelH);
+
+        // Set pixel position and size on widget
+        widget->setPixelPosition(pixelX, pixelY);
+        widget->setPixelSize(pixelW, pixelH);
 
         // TODO: Calculate if widget is visible based on scroll position
         bool widgetOn = true;
@@ -647,13 +699,12 @@ bool Terminal::isInSelection(int row, int col) const {
 std::string Terminal::getSelectedText() {
     if (_selectionMode == SelectionMode::None) return "";
 
-    VTermPos start = _selectionStart, end = _selectionEnd;
-    if (vterm_pos_cmp(start, end) > 0) std::swap(start, end);
-
-    // Use GPUScreen's getText instead of vterm_screen_get_text
-    if (_gpuScreen) {
-        return _gpuScreen->getText(start.row, start.col, end.row, end.col);
-    }
+    // TODO: Implement text selection without codepoints
+    // Since we removed codepoints from GPUScreen for efficiency,
+    // we need to query vterm directly for cell contents when needed.
+    // For now, return empty string.
+    (void)_selectionStart;
+    (void)_selectionEnd;
     return "";
 }
 
@@ -687,14 +738,9 @@ void Terminal::updateCursorBlink(double currentTime) {
     if (currentTime - _lastBlinkTime >= _blinkInterval) {
         _cursorBlink = !_cursorBlink;
         _lastBlinkTime = currentTime;
-        // Mark cursor cell as damaged so it gets re-rendered
-        if (_cursorVisible) {
-            DamageRect d;
-            d._startRow = static_cast<uint32_t>(_cursorRow);
-            d._startCol = static_cast<uint32_t>(_cursorCol);
-            d._endRow = static_cast<uint32_t>(_cursorRow + 1);  // exclusive
-            d._endCol = static_cast<uint32_t>(_cursorCol + 1);  // exclusive
-            _damageRects.push_back(d);
+        // Mark damage so cursor gets re-rendered with new blink state
+        if (_cursorVisible && _gpuScreen) {
+            _gpuScreen->markDamage();
         }
     }
 }
@@ -726,16 +772,11 @@ void Terminal::colorToRGB(const VTermColor& color, uint8_t& r, uint8_t& g, uint8
 }
 
 void Terminal::updateWidgetPositionsOnScroll(int lines) {
-    for (auto& widget : _childWidgets) {
-        if (widget->getPositionMode() == PositionMode::Relative) {
-            // Clear old grid cell marks
-            clearWidgetGridCells(widget.get());
-            // Update position (content moved up = widget y decreases)
-            widget->setPosition(widget->getX(), widget->getY() - lines);
-            // Re-mark grid cells at new position
-            markWidgetGridCells(widget.get());
-        }
-    }
+    (void)lines;
+    // Widget marker tracking is handled by GPUScreen::pushLineToScrollback
+    // (scans row 0 for markers before pushing to scrollback)
+    // Widget positions are updated by prepareFrame via scanWidgetPositions
+    // which includes both visible buffer markers AND scrolledOutWidgets_
 }
 
 //=============================================================================
@@ -879,48 +920,31 @@ void Terminal::addChildWidget(WidgetPtr widget) {
 }
 
 void Terminal::markWidgetGridCells(Widget* widget) {
-    if (!widget) return;
+    if (!widget || !_gpuScreen) return;
 
-    int32_t startX = widget->getX();
-    int32_t startY = widget->getY();
-    uint32_t w = widget->getWidthCells();
-    uint32_t h = widget->getHeightCells();
+    int32_t x = widget->getX();
+    int32_t y = widget->getY();
     uint16_t id = static_cast<uint16_t>(widget->id());
 
-    ydebug("markWidgetGridCells: widget {} at ({},{}) size {}x{} id={}",
-           widget->name(), startX, startY, w, h, id);
+    ydebug("markWidgetGridCells: widget {} at ({},{}) id={}", widget->name(), x, y, id);
 
-    for (uint32_t row = 0; row < h; row++) {
-        for (uint32_t col = 0; col < w; col++) {
-            int32_t gridCol = startX + col;
-            int32_t gridRow = startY + row;
-
-            if (gridCol >= 0 && gridCol < (int32_t)_grid.getCols() &&
-                gridRow >= 0 && gridRow < (int32_t)_grid.getRows()) {
-                _grid.setWidgetId(gridCol, gridRow, id);
-            }
-        }
+    // Only mark the top-left cell with the widget marker
+    if (x >= 0 && x < _gpuScreen->getCols() &&
+        y >= 0 && y < _gpuScreen->getRows()) {
+        _gpuScreen->setWidgetMarker(y, x, id);
     }
 }
 
 void Terminal::clearWidgetGridCells(Widget* widget) {
-    if (!widget) return;
+    if (!widget || !_gpuScreen) return;
 
-    int32_t startX = widget->getX();
-    int32_t startY = widget->getY();
-    uint32_t w = widget->getWidthCells();
-    uint32_t h = widget->getHeightCells();
+    int32_t x = widget->getX();
+    int32_t y = widget->getY();
 
-    for (uint32_t row = 0; row < h; row++) {
-        for (uint32_t col = 0; col < w; col++) {
-            int32_t gridCol = startX + col;
-            int32_t gridRow = startY + row;
-
-            if (gridCol >= 0 && gridCol < (int32_t)_grid.getCols() &&
-                gridRow >= 0 && gridRow < (int32_t)_grid.getRows()) {
-                _grid.clearWidgetId(gridCol, gridRow);
-            }
-        }
+    // Only the top-left cell has the marker
+    if (x >= 0 && x < _gpuScreen->getCols() &&
+        y >= 0 && y < _gpuScreen->getRows()) {
+        _gpuScreen->clearWidgetMarker(y, x);
     }
 }
 
@@ -1003,9 +1027,15 @@ bool Terminal::handleOSCSequence(const std::string& sequence,
             int32_t x = cmd.create.x;
             int32_t y = cmd.create.y;
 
+            ydebug("OSC Create: cmd.x={} cmd.y={} relative={}", x, y, cmd.create.relative);
+
             if (cmd.create.relative) {
-                x += _cursorCol;
-                y += _cursorRow;
+                int cursorCol = _gpuScreen ? _gpuScreen->getCursorCol() : 0;
+                int cursorRow = _gpuScreen ? _gpuScreen->getCursorRow() : 0;
+                ydebug("OSC Create: cursor at ({},{}) before adding", cursorCol, cursorRow);
+                x += cursorCol;
+                y += cursorRow;
+                ydebug("OSC Create: final position ({},{})", x, y);
             }
 
             // Build widget name: "plugin" or "plugin.type"
@@ -1036,13 +1066,18 @@ bool Terminal::handleOSCSequence(const std::string& sequence,
 
             WidgetPtr widget = *result;
 
-            // Configure widget
+            // Configure widget position - must be set explicitly as not all plugins do this
+            widget->setPosition(x, y);
             widget->setId(_nextChildWidgetId++);
             widget->setHashId(_oscParser.generateId());
             widget->setScreenType(_isAltScreen ? ScreenType::Alternate : ScreenType::Main);
             if (cmd.create.relative) {
                 widget->setPositionMode(PositionMode::Relative);
             }
+
+            ydebug("Terminal::handleOSCSequence: widget created at ({},{}) cursor was ({},{})",
+                   x, y, _gpuScreen ? _gpuScreen->getCursorCol() : -1,
+                   _gpuScreen ? _gpuScreen->getCursorRow() : -1);
 
             // Add to Terminal
             addChildWidget(widget);

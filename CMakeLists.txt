@@ -584,8 +584,9 @@ if(EMSCRIPTEN)
         --no-heap-copy
         "--preload-file=${CMAKE_CURRENT_SOURCE_DIR}/src/yetty/shaders/shaders.wgsl@/shaders.wgsl"
         "--preload-file=${CMAKE_CURRENT_SOURCE_DIR}/assets@/assets"
+        "--preload-file=${CMAKE_CURRENT_SOURCE_DIR}/demo@/demo"
         # Export web terminal functions for JavaScript
-        "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','UTF8ToString','stringToUTF8','allocateUTF8','writeAsciiToMemory']"
+        "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','UTF8ToString','stringToUTF8','allocateUTF8','writeAsciiToMemory','FS']"
         "-sEXPORTED_FUNCTIONS=['_main','_web_terminal_init','_web_terminal_write','_web_terminal_print','_web_terminal_get_cell_char','_web_terminal_get_cursor_row','_web_terminal_get_cursor_col','_web_terminal_get_rows','_web_terminal_get_cols','_web_terminal_key_input','_web_terminal_read_output','_web_terminal_cleanup','_yetty_write','_yetty_key','_yetty_special_key','_yetty_read_input','_yetty_sync','_yetty_set_scale','_yetty_resize','_yetty_get_cols','_yetty_get_rows','_malloc','_free']"
     )
 

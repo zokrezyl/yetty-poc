@@ -101,9 +101,9 @@ public:
     const Grid& getGrid() const { return _grid; }
     Grid& getGridMutable() { return _grid; }
 
-    // Cursor state
-    int getCursorRow() const { return _cursorRow; }
-    int getCursorCol() const { return _cursorCol; }
+    // Cursor state - delegated to GPUScreen
+    int getCursorRow() const { return _gpuScreen ? _gpuScreen->getCursorRow() : 0; }
+    int getCursorCol() const { return _gpuScreen ? _gpuScreen->getCursorCol() : 0; }
     bool isCursorVisible() const { return _cursorVisible && _cursorBlink; }
 
     // Damage tracking
@@ -237,8 +237,7 @@ private:
     pid_t _childPid = -1;
 #endif
 
-    int _cursorRow = 0;
-    int _cursorCol = 0;
+    // Note: cursor position is now tracked by GPUScreen (getCursorRow/Col delegate to it)
     bool _cursorVisible = true;
     bool _cursorBlink = true;
     bool _isAltScreen = false;
