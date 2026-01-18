@@ -30,7 +30,8 @@ public:
 
     // Factory - creates display with given grid size
     static Result<Ptr> create(uint32_t cols, uint32_t rows,
-                              WebGPUContext::Ptr ctx, FontManager::Ptr fontManager) noexcept;
+                              WebGPUContext::Ptr ctx, FontManager::Ptr fontManager,
+                              WGPUBindGroupLayout sharedBindGroupLayout) noexcept;
 
     ~WebDisplay() override;
 
@@ -103,7 +104,8 @@ public:
 
 private:
     WebDisplay(uint32_t cols, uint32_t rows,
-               WebGPUContext::Ptr ctx, FontManager::Ptr fontManager) noexcept;
+               WebGPUContext::Ptr ctx, FontManager::Ptr fontManager,
+               WGPUBindGroupLayout sharedBindGroupLayout) noexcept;
     Result<void> init() noexcept override;
 
     // Display state
@@ -111,6 +113,7 @@ private:
     Font* _font = nullptr;
     GridRenderer::Ptr _renderer;
     FontManager::Ptr _fontManager;
+    WGPUBindGroupLayout _sharedBindGroupLayout = nullptr;
 
     // vterm state
     VTerm* _vterm = nullptr;

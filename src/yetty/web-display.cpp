@@ -11,9 +11,11 @@ namespace yetty {
 WebDisplay* WebDisplay::_sInstance = nullptr;
 
 WebDisplay::WebDisplay(uint32_t cols, uint32_t rows,
-                       WebGPUContext::Ptr ctx, FontManager::Ptr fontManager) noexcept
+                       WebGPUContext::Ptr ctx, FontManager::Ptr fontManager,
+                       WGPUBindGroupLayout sharedBindGroupLayout) noexcept
     : Widget()
     , _fontManager(fontManager)
+    , _sharedBindGroupLayout(sharedBindGroupLayout)
     , _cols(cols)
     , _rows(rows)
 {
@@ -35,9 +37,10 @@ WebDisplay::~WebDisplay()
 
 Result<WebDisplay::Ptr> WebDisplay::create(uint32_t cols, uint32_t rows,
                                            WebGPUContext::Ptr ctx,
-                                           FontManager::Ptr fontManager) noexcept
+                                           FontManager::Ptr fontManager,
+                                           WGPUBindGroupLayout sharedBindGroupLayout) noexcept
 {
-    auto display = Ptr(new WebDisplay(cols, rows, ctx, fontManager));
+    auto display = Ptr(new WebDisplay(cols, rows, ctx, fontManager, sharedBindGroupLayout));
     if (auto res = display->init(); !res) {
         return Err<Ptr>("Failed to initialize WebDisplay", res);
     }
@@ -54,7 +57,7 @@ Result<void> WebDisplay::init() noexcept
 
     // Create GridRenderer
     auto ctxShared = std::shared_ptr<WebGPUContext>(_ctx, [](WebGPUContext*){});  // non-owning shared_ptr
-    auto rendererResult = GridRenderer::create(ctxShared, _fontManager);
+    auto rendererResult = GridRenderer::create(ctxShared, _fontManager, _sharedBindGroupLayout);
     if (!rendererResult) {
         return Err<void>("Failed to create GridRenderer", rendererResult);
     }
@@ -153,18 +156,15 @@ Result<void> WebDisplay::render(WGPURenderPassEncoder pass, WebGPUContext& ctx, 
     _cursorRow = _gpuScreen->getCursorRow();
     _cursorVisible = _gpuScreen->isCursorVisible();
 
-    // Determine if we need to upload textures (any damage = full upload for now)
+    // Determine if we need to upload buffer (any damage = full upload)
     bool needsUpload = _fullDamage || _gpuScreen->hasDamage();
 
-    // Render directly from GPUScreen buffers - zero-copy path
-    if (auto res = _renderer->renderToPassFromBuffers(
+    // Render directly from GPUScreen Cell buffer - zero-copy path
+    if (auto res = _renderer->renderToPassFromCells(
         pass,
         _cols,
         _rows,
-        _gpuScreen->getGlyphData(),
-        _gpuScreen->getFgColorData(),
-        _gpuScreen->getBgColorData(),
-        _gpuScreen->getAttrsData(),
+        _gpuScreen->getCellData(),
         needsUpload,
         _cursorCol, _cursorRow, _cursorVisible
     ); !res) {

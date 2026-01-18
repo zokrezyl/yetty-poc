@@ -16,17 +16,21 @@ namespace yetty {
 class Font;
 
 //=============================================================================
-// Cell structure - contains all per-cell data in a single struct
-// This enables single-memcpy scroll operations instead of 4 separate copies
+// Cell structure - GPU-ready format, uploaded directly to shader (zero-copy)
+// 12 bytes per cell, aligned for efficient GPU access
 //=============================================================================
 struct Cell {
-    uint16_t glyph;     // glyph index in font atlas
-    uint8_t fg[4];      // RGBA foreground color
-    uint8_t bg[4];      // RGBA background color
-    uint8_t attrs;      // packed attributes (bold, italic, underline, strike)
-    uint8_t _pad;       // padding to 12 bytes for alignment
+    uint32_t glyph;     // 4 bytes - glyph index (room for shader-based glyphs, extended features)
+    uint8_t fgR;        // 1 byte
+    uint8_t fgG;        // 1 byte
+    uint8_t fgB;        // 1 byte
+    uint8_t alpha;      // 1 byte - for future transparent text effects
+    uint8_t bgR;        // 1 byte
+    uint8_t bgG;        // 1 byte
+    uint8_t bgB;        // 1 byte
+    uint8_t style;      // 1 byte - packed attributes (bold, italic, underline, strike)
 };
-static_assert(sizeof(Cell) == 12, "Cell must be 12 bytes for optimal alignment");
+static_assert(sizeof(Cell) == 12, "Cell must be 12 bytes for GPU alignment");
 
 //=============================================================================
 // GPUScreen scrollback line - stores cells directly (no separate arrays)
@@ -64,11 +68,10 @@ struct ScrolledOutWidget {
 // When scrollOffset_ == 0: render from visibleBuffer_ (zero-copy from vterm)
 // When scrollOffset_ > 0: compose viewBuffer_ from scrollback + visible
 //
-// Buffer layout (matches GridRenderer expectations):
-//   - glyphIndices: uint16_t per cell (glyph index in font atlas)
-//   - fgColors: 4 bytes per cell (RGBA)
-//   - bgColors: 4 bytes per cell (RGBA)
-//   - attrs: 1 byte per cell (packed attributes)
+// Buffer layout: Cell struct (12 bytes per cell) uploaded directly to GPU
+//   - glyph: uint32 (4 bytes) - glyph index, room for shader features
+//   - fgR, fgG, fgB, alpha: 4 bytes - foreground color with alpha
+//   - bgR, bgG, bgB, style: 4 bytes - background color and attributes
 //=============================================================================
 
 class GPUScreen {
@@ -86,18 +89,11 @@ public:
     void reset();
 
     //=========================================================================
-    // Buffer access for GPU upload - returns VIEW buffer (handles scrollback)
+    // Buffer access for GPU upload - returns Cell buffer directly (zero-copy)
     //=========================================================================
-    const uint16_t* getGlyphData() const;
-    const uint8_t* getFgColorData() const;
-    const uint8_t* getBgColorData() const;
-    const uint8_t* getAttrsData() const;
-
-    // Buffer sizes
-    size_t getGlyphDataSize() const { return static_cast<size_t>(rows_ * cols_) * sizeof(uint16_t); }
-    size_t getFgColorDataSize() const { return static_cast<size_t>(rows_ * cols_) * 4; }
-    size_t getBgColorDataSize() const { return static_cast<size_t>(rows_ * cols_) * 4; }
-    size_t getAttrsDataSize() const { return static_cast<size_t>(rows_ * cols_); }
+    const Cell* getCellData() const;
+    size_t getCellDataSize() const { return static_cast<size_t>(rows_ * cols_) * sizeof(Cell); }
+    size_t getCellCount() const { return static_cast<size_t>(rows_ * cols_); }
 
     // Dimensions
     int getRows() const { return rows_; }
@@ -176,7 +172,7 @@ private:
     //=========================================================================
     // Internal helpers
     //=========================================================================
-    void setCell(int row, int col, uint16_t glyph,
+    void setCell(int row, int col, uint32_t glyph,
                  uint8_t fgR, uint8_t fgG, uint8_t fgB,
                  uint8_t bgR, uint8_t bgG, uint8_t bgB,
                  uint8_t attrs);
@@ -190,10 +186,8 @@ private:
     void switchToScreen(bool alt);
     void clearBuffer(std::vector<Cell>& buffer);
 
-    // Extract Cell buffer to separate GPU arrays
-    void extractToGPUBuffers() const;
-
     // Check if cell is a protected widget marker - INLINE for performance
+    // Marker pattern: glyph=GLYPH_PLUGIN, fgB=0xFF, alpha=0xFF, bgR=0xAA, bgG=0xAA
     bool isWidgetMarkerCell(int row, int col) const {
         if (row < 0 || row >= rows_ || col < 0 || col >= cols_) return false;
         if (!visibleBuffer_) return false;
@@ -201,8 +195,7 @@ private:
         if (idx >= visibleBuffer_->size()) return false;
         const Cell& cell = (*visibleBuffer_)[idx];
         if (cell.glyph != 0xFFFF) return false;  // GLYPH_PLUGIN
-        return cell.fg[2] == 0xFF && cell.fg[3] == 0xFF &&
-               cell.bg[0] == 0xAA && cell.bg[1] == 0xAA;
+        return cell.fgB == 0xFF && cell.alpha == 0xFF && cell.bgR == 0xAA && cell.bgG == 0xAA;
     }
 
     // Scrollback helpers
@@ -234,16 +227,6 @@ private:
     // View buffer - what gets rendered (== visible when scrollOffset_==0)
     //=========================================================================
     std::vector<Cell> viewBuffer_;
-
-    //=========================================================================
-    // GPU extraction buffers - extracted from Cell buffers for GPU upload
-    // Only extracted when gpuBuffersDirty_ is true
-    //=========================================================================
-    mutable std::vector<uint16_t> gpuGlyphs_;
-    mutable std::vector<uint8_t> gpuFgColors_;
-    mutable std::vector<uint8_t> gpuBgColors_;
-    mutable std::vector<uint8_t> gpuAttrs_;
-    mutable bool gpuBuffersDirty_ = true;
 
     //=========================================================================
     // Scrollback - compressed line storage (primary screen only)
@@ -293,7 +276,7 @@ private:
     std::vector<Cell> scratchBuffer_;
 
     // Cached space glyph index (initialized from font in constructor)
-    uint16_t cachedSpaceGlyph_ = 0;
+    uint32_t cachedSpaceGlyph_ = 0;
 };
 
 } // namespace yetty

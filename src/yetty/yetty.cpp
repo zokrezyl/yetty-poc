@@ -1,6 +1,7 @@
 #include "grid-renderer.h"
 #include "grid.h"
 #include <yetty/yetty.h>
+#include <yetty/wgpu-compat.h>
 
 #if defined(__ANDROID__)
 #include <sys/stat.h>
@@ -401,6 +402,40 @@ Result<void> Yetty::initGraphics() noexcept {
   _ctx = *ctxResult;
 #endif
 
+  // Create shared uniform buffer for all renderers
+  WGPUBufferDescriptor bufDesc = {};
+  bufDesc.label = WGPU_STR("Shared Uniforms");
+  bufDesc.size = sizeof(SharedUniforms);
+  bufDesc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
+  bufDesc.mappedAtCreation = false;
+  _sharedUniformBuffer = wgpuDeviceCreateBuffer(_ctx->getDevice(), &bufDesc);
+
+  // Create bind group layout for shared uniforms (group 0)
+  WGPUBindGroupLayoutEntry layoutEntry = {};
+  layoutEntry.binding = 0;
+  layoutEntry.visibility = WGPUShaderStage_Fragment;
+  layoutEntry.buffer.type = WGPUBufferBindingType_Uniform;
+  layoutEntry.buffer.minBindingSize = sizeof(SharedUniforms);
+
+  WGPUBindGroupLayoutDescriptor layoutDesc = {};
+  layoutDesc.label = WGPU_STR("Shared Uniforms Layout");
+  layoutDesc.entryCount = 1;
+  layoutDesc.entries = &layoutEntry;
+  _sharedBindGroupLayout = wgpuDeviceCreateBindGroupLayout(_ctx->getDevice(), &layoutDesc);
+
+  // Create bind group for shared uniforms
+  WGPUBindGroupEntry bindEntry = {};
+  bindEntry.binding = 0;
+  bindEntry.buffer = _sharedUniformBuffer;
+  bindEntry.size = sizeof(SharedUniforms);
+
+  WGPUBindGroupDescriptor bindDesc = {};
+  bindDesc.label = WGPU_STR("Shared Uniforms Bind Group");
+  bindDesc.layout = _sharedBindGroupLayout;
+  bindDesc.entryCount = 1;
+  bindDesc.entries = &bindEntry;
+  _sharedBindGroup = wgpuDeviceCreateBindGroup(_ctx->getDevice(), &bindDesc);
+
   return Ok();
 }
 
@@ -453,7 +488,7 @@ Result<void> Yetty::initRenderer() noexcept {
   }
   yinfo("Using font: {}", fontFamily);
 
-  auto rendererResult = GridRenderer::create(_ctx, _fontManager, fontFamily);
+  auto rendererResult = GridRenderer::create(_ctx, _fontManager, _sharedBindGroupLayout, fontFamily);
   if (!rendererResult) {
     return Err<void>("Failed to create text renderer", rendererResult);
   }
@@ -657,7 +692,7 @@ setup_shader_manager:
   // Web build: Create WebDisplay widget
   yinfo("Web build: Creating WebDisplay");
 
-  auto displayResult = WebDisplay::create(_cols, _rows, _ctx, _fontManager);
+  auto displayResult = WebDisplay::create(_cols, _rows, _ctx, _fontManager, _sharedBindGroupLayout);
   if (!displayResult) {
     return Err<void>("Failed to create WebDisplay", displayResult);
   }
@@ -1107,6 +1142,17 @@ void Yetty::mainLoopIteration() noexcept {
   float deltaTime = static_cast<float>(now - _lastRenderTime);
   _lastRenderTime = now;
 
+  // Update shared uniforms buffer (used by all renderers)
+  _sharedUniforms.time = static_cast<float>(now);
+  _sharedUniforms.deltaTime = deltaTime;
+  _sharedUniforms.screenWidth = static_cast<float>(windowWidth());
+  _sharedUniforms.screenHeight = static_cast<float>(windowHeight());
+  wgpuQueueWriteBuffer(_ctx->getQueue(), _sharedUniformBuffer, 0,
+                       &_sharedUniforms, sizeof(SharedUniforms));
+
+  // Set time in context for widgets to access
+  _ctx->setTime(static_cast<float>(now));
+
   if (_shaderManager) {
     // Get mouse position (normalized 0-1)
     double mouseX = 0, mouseY = 0;
@@ -1176,6 +1222,9 @@ void Yetty::mainLoopIteration() noexcept {
   // Set current encoder/pass for any code that needs it
   _currentEncoder = encoder;
   _currentRenderPass = pass;
+
+  // Set shared uniforms bind group (group 0) - available to all shaders
+  wgpuRenderPassEncoderSetBindGroup(pass, 0, _sharedBindGroup, 0, nullptr);
 
   // Render all root widgets (each propagates to its children)
   for (const auto &widget : _rootWidgets) {

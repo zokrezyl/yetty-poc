@@ -379,7 +379,6 @@ void Terminal::prepareFrame(WebGPUContext& ctx, bool on) {
 }
 
 Result<void> Terminal::render(WGPURenderPassEncoder pass, WebGPUContext& ctx, bool on) {
-    (void)ctx;
     (void)on;  // Terminal is always on when called
 
     if (!_running) {
@@ -389,17 +388,14 @@ Result<void> Terminal::render(WGPURenderPassEncoder pass, WebGPUContext& ctx, bo
     // GPUScreen already has data in GPU-ready format from State callbacks
     // No syncToGrid needed!
     bool needsUpload = _gpuScreen->hasDamage() || _fullDamage;
-    
-    // Render grid from GPUScreen buffers
+
+    // Render grid from GPUScreen Cell buffer (zero-copy)
     if (_renderer && _gpuScreen) {
-        if (auto res = _renderer->renderToPassFromBuffers(
+        if (auto res = _renderer->renderToPassFromCells(
             pass,
             static_cast<uint32_t>(_gpuScreen->getCols()),
             static_cast<uint32_t>(_gpuScreen->getRows()),
-            _gpuScreen->getGlyphData(),
-            _gpuScreen->getFgColorData(),
-            _gpuScreen->getBgColorData(),
-            _gpuScreen->getAttrsData(),
+            _gpuScreen->getCellData(),
             needsUpload,
             _gpuScreen->getCursorCol(),
             _gpuScreen->getCursorRow(),

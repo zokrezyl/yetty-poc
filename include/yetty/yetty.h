@@ -221,6 +221,23 @@ private:
     WGPUCommandEncoder _currentEncoder = nullptr;
     WGPURenderPassEncoder _currentRenderPass = nullptr;
 
+    // Shared uniforms for all renderers (time, screen size, etc.)
+    struct SharedUniforms {
+        float time;           // 4 bytes
+        float deltaTime;      // 4 bytes
+        float screenWidth;    // 4 bytes
+        float screenHeight;   // 4 bytes
+    };  // 16 bytes
+    WGPUBuffer _sharedUniformBuffer = nullptr;
+    WGPUBindGroupLayout _sharedBindGroupLayout = nullptr;
+    WGPUBindGroup _sharedBindGroup = nullptr;
+    SharedUniforms _sharedUniforms = {};
+
+public:
+    // Access shared uniforms for renderers
+    WGPUBindGroupLayout getSharedBindGroupLayout() const noexcept { return _sharedBindGroupLayout; }
+    WGPUBindGroup getSharedBindGroup() const noexcept { return _sharedBindGroup; }
+
     // Window / Platform
 #if defined(__ANDROID__)
     struct android_app* _androidApp = nullptr;
