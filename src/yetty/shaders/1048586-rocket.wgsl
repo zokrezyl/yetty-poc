@@ -5,7 +5,10 @@ fn shaderGlyph_1048586_hash(p: vec2<f32>) -> f32 {
     return fract(sin(dot(p, vec2<f32>(127.1, 311.7))) * 43758.5453);
 }
 
-fn shaderGlyph_1048586(localUV: vec2<f32>, time: f32, fgColor: vec3<f32>, bgColor: vec3<f32>, pixelPos: vec2<f32>) -> vec3<f32> {
+fn shaderGlyph_1048586(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
+    let bgColor = unpackColor(bg);
+    // fgColor unused - rocket has its own colors
+
     let p = (localUV - 0.5) * 2.0;
     var color = bgColor;
     var alpha = 0.0;

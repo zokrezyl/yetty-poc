@@ -1,7 +1,10 @@
 // Shader glyph: Spinner (codepoint 1048577 / U+100001)
 // Renders an animated spinning indicator
 
-fn shaderGlyph_1048577(localUV: vec2<f32>, time: f32, fgColor: vec3<f32>, bgColor: vec3<f32>, pixelPos: vec2<f32>) -> vec3<f32> {
+fn shaderGlyph_1048577(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
+    let fgColor = unpackColor(fg);
+    let bgColor = unpackColor(bg);
+
     let center = vec2<f32>(0.5, 0.5);
     let uv = localUV - center;
 

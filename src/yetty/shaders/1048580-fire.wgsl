@@ -30,7 +30,10 @@ fn shaderGlyph_1048580_fbm(p: vec2<f32>) -> f32 {
     return v;
 }
 
-fn shaderGlyph_1048580(localUV: vec2<f32>, time: f32, fgColor: vec3<f32>, bgColor: vec3<f32>, pixelPos: vec2<f32>) -> vec3<f32> {
+fn shaderGlyph_1048580(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
+    let bgColor = unpackColor(bg);
+    // fgColor unused - fire has its own colors
+
     var p = localUV;
     p.y = 1.0 - p.y;  // Flip so fire goes up
 

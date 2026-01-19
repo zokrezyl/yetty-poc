@@ -177,7 +177,7 @@ private:
     uint32_t _cellHeight = 20;
     float _baseCellWidth = 10.0f;
     float _baseCellHeight = 20.0f;
-    float _zoomLevel = 1.0f;
+    float _zoomLevel = 0.5f;
 };
 
 } // namespace yetty

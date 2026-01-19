@@ -2,6 +2,7 @@
 #include "grid.h"
 #include <yetty/yetty.h>
 #include <yetty/wgpu-compat.h>
+#include <array>
 
 #if defined(__ANDROID__)
 #include <sys/stat.h>
@@ -19,6 +20,9 @@
 #include "remote-terminal.h"
 #include "terminal.h"
 #include "widget-factory.h"
+#include "card-buffer-manager.h"
+#include "card-factory.h"
+#include "cards/plot-card.h"
 #include <args.hxx>
 #include <yetty/cursor-renderer.h>
 #include <yetty/shader-glyph-renderer.h>
@@ -410,7 +414,63 @@ Result<void> Yetty::initGraphics() noexcept {
   bufDesc.mappedAtCreation = false;
   _sharedUniformBuffer = wgpuDeviceCreateBuffer(_ctx->getDevice(), &bufDesc);
 
-  // Create bind group layout for shared uniforms (group 0)
+#if !YETTY_WEB && !defined(__ANDROID__)
+  // Create CardBufferManager for card-based widgets (plots, etc.)
+  // Must be created before bind group layout to include its buffers
+  _cardBufferManager = std::make_unique<CardBufferManager>(_ctx->getDevice());
+  yinfo("CardBufferManager created");
+
+  // Create bind group layout for shared uniforms + card buffers (group 0)
+  // Binding 0: SharedUniforms
+  // Binding 1: Card metadata buffer (read-only storage)
+  // Binding 2: Card storage buffer (read-only storage)
+  std::array<WGPUBindGroupLayoutEntry, 3> layoutEntries = {};
+
+  layoutEntries[0].binding = 0;
+  layoutEntries[0].visibility = WGPUShaderStage_Fragment;
+  layoutEntries[0].buffer.type = WGPUBufferBindingType_Uniform;
+  layoutEntries[0].buffer.minBindingSize = sizeof(SharedUniforms);
+
+  layoutEntries[1].binding = 1;
+  layoutEntries[1].visibility = WGPUShaderStage_Fragment;
+  layoutEntries[1].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
+  layoutEntries[1].buffer.minBindingSize = 0;  // Dynamic size
+
+  layoutEntries[2].binding = 2;
+  layoutEntries[2].visibility = WGPUShaderStage_Fragment;
+  layoutEntries[2].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
+  layoutEntries[2].buffer.minBindingSize = 0;  // Dynamic size
+
+  WGPUBindGroupLayoutDescriptor layoutDesc = {};
+  layoutDesc.label = WGPU_STR("Shared Bind Group Layout");
+  layoutDesc.entryCount = layoutEntries.size();
+  layoutDesc.entries = layoutEntries.data();
+  _sharedBindGroupLayout = wgpuDeviceCreateBindGroupLayout(_ctx->getDevice(), &layoutDesc);
+
+  // Create bind group with all buffers
+  std::array<WGPUBindGroupEntry, 3> bindEntries = {};
+
+  bindEntries[0].binding = 0;
+  bindEntries[0].buffer = _sharedUniformBuffer;
+  bindEntries[0].size = sizeof(SharedUniforms);
+
+  bindEntries[1].binding = 1;
+  bindEntries[1].buffer = _cardBufferManager->metadataBuffer();
+  bindEntries[1].size = wgpuBufferGetSize(_cardBufferManager->metadataBuffer());
+
+  bindEntries[2].binding = 2;
+  bindEntries[2].buffer = _cardBufferManager->storageBuffer();
+  bindEntries[2].size = wgpuBufferGetSize(_cardBufferManager->storageBuffer());
+
+  WGPUBindGroupDescriptor bindDesc = {};
+  bindDesc.label = WGPU_STR("Shared Bind Group");
+  bindDesc.layout = _sharedBindGroupLayout;
+  bindDesc.entryCount = bindEntries.size();
+  bindDesc.entries = bindEntries.data();
+  _sharedBindGroup = wgpuDeviceCreateBindGroup(_ctx->getDevice(), &bindDesc);
+
+#else
+  // Web/Android: only shared uniforms (no card buffers)
   WGPUBindGroupLayoutEntry layoutEntry = {};
   layoutEntry.binding = 0;
   layoutEntry.visibility = WGPUShaderStage_Fragment;
@@ -423,7 +483,6 @@ Result<void> Yetty::initGraphics() noexcept {
   layoutDesc.entries = &layoutEntry;
   _sharedBindGroupLayout = wgpuDeviceCreateBindGroupLayout(_ctx->getDevice(), &layoutDesc);
 
-  // Create bind group for shared uniforms
   WGPUBindGroupEntry bindEntry = {};
   bindEntry.binding = 0;
   bindEntry.buffer = _sharedUniformBuffer;
@@ -435,6 +494,7 @@ Result<void> Yetty::initGraphics() noexcept {
   bindDesc.entryCount = 1;
   bindDesc.entries = &bindEntry;
   _sharedBindGroup = wgpuDeviceCreateBindGroup(_ctx->getDevice(), &bindDesc);
+#endif
 
   return Ok();
 }
@@ -502,13 +562,17 @@ Result<void> Yetty::initRenderer() noexcept {
   _font = *fontResult;
   calculateCellSizeFromFont(_font, _baseCellWidth, _baseCellHeight);
 
-  _renderer->setCellSize(_baseCellWidth, _baseCellHeight);
+  // Apply zoom level to cell size
+  float zoomedCellWidth = _baseCellWidth * _zoomLevel;
+  float zoomedCellHeight = _baseCellHeight * _zoomLevel;
+
+  _renderer->setCellSize(zoomedCellWidth, zoomedCellHeight);
   _renderer->resize(_initialWidth, _initialHeight);
   _renderer->setConfig(_config.get());
 
-  // Calculate grid size
-  _cols = static_cast<uint32_t>(_initialWidth / _baseCellWidth);
-  _rows = static_cast<uint32_t>(_initialHeight / _baseCellHeight);
+  // Calculate grid size using zoomed cell size
+  _cols = static_cast<uint32_t>(_initialWidth / zoomedCellWidth);
+  _rows = static_cast<uint32_t>(_initialHeight / zoomedCellHeight);
 
   return Ok();
 }
@@ -567,10 +631,9 @@ Result<void> Yetty::initTerminal() noexcept {
         _remoteTerminal->setRenderer(_renderer.get());
       }
 
-      // Set up cell size
+      // Set up zoom handling (must be after setRenderer)
       _remoteTerminal->setBaseCellSize(_baseCellWidth, _baseCellHeight);
-      _remoteTerminal->setCellSize(static_cast<uint32_t>(_baseCellWidth),
-                                   static_cast<uint32_t>(_baseCellHeight));
+      _remoteTerminal->setZoomLevel(_zoomLevel);  // Sets cell size and renderer scale
 
       // Start remote terminal
       _remoteTerminal->start();
@@ -626,17 +689,23 @@ Result<void> Yetty::initTerminal() noexcept {
     }
     yinfo("Yetty::initTerminal: Terminal created id={}", _terminal->id());
 
-    _terminal->setCellSize(static_cast<uint32_t>(_baseCellWidth),
-                           static_cast<uint32_t>(_baseCellHeight));
-
     // Wire up emoji atlas for dynamic emoji loading
     if (_renderer) {
       _terminal->setEmojiAtlas(_renderer->getEmojiAtlas());
       _terminal->setRenderer(_renderer.get());
     }
 
-    // Set up zoom handling on terminal
+    // Set up zoom handling on terminal (must be after setRenderer)
     _terminal->setBaseCellSize(_baseCellWidth, _baseCellHeight);
+    _terminal->setZoomLevel(_zoomLevel);  // Sets cell size and renderer scale
+
+    // Create CardFactory for card-based widgets (plots, etc.)
+    if (_cardBufferManager && _terminal->getGPUScreen()) {
+      _cardFactory = std::make_unique<CardFactory>(_cardBufferManager.get());
+      registerPlotCard(*_cardFactory);
+      _terminal->getGPUScreen()->setCardFactory(_cardFactory.get());
+      yinfo("CardFactory created and registered with GPUScreen");
+    }
 
     // Start terminal
     yinfo("Yetty::initTerminal: Starting terminal");
@@ -1142,13 +1211,31 @@ void Yetty::mainLoopIteration() noexcept {
   float deltaTime = static_cast<float>(now - _lastRenderTime);
   _lastRenderTime = now;
 
+  // Get mouse position for shared uniforms
+  double mouseXd = 0, mouseYd = 0;
+  glfwGetCursorPos(_window, &mouseXd, &mouseYd);
+
+  static int debugCounter = 0;
+  if (++debugCounter % 100 == 0) {
+    yinfo("Mouse: {}, {} Screen: {}x{}", mouseXd, mouseYd, windowWidth(), windowHeight());
+  }
+
   // Update shared uniforms buffer (used by all renderers)
   _sharedUniforms.time = static_cast<float>(now);
   _sharedUniforms.deltaTime = deltaTime;
   _sharedUniforms.screenWidth = static_cast<float>(windowWidth());
   _sharedUniforms.screenHeight = static_cast<float>(windowHeight());
+  _sharedUniforms.mouseX = static_cast<float>(mouseXd);
+  _sharedUniforms.mouseY = static_cast<float>(mouseYd);
   wgpuQueueWriteBuffer(_ctx->getQueue(), _sharedUniformBuffer, 0,
                        &_sharedUniforms, sizeof(SharedUniforms));
+
+  // Flush card buffer manager (uploads dirty regions to GPU)
+  if (_cardBufferManager) {
+    if (auto res = _cardBufferManager->flush(_ctx->getQueue()); !res) {
+      yerror("CardBufferManager flush failed: {}", res.error().message());
+    }
+  }
 
   // Set time in context for widgets to access
   _ctx->setTime(static_cast<float>(now));

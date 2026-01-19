@@ -1,15 +1,18 @@
 // Shader glyph: Plasma (codepoint 1048584 / U+100008)
-// Classic plasma effect - colorful animated pattern
+// Classic plasma effect - seamlessly tiles across screen using pixelPos
 
-fn shaderGlyph_1048584(localUV: vec2<f32>, time: f32, fgColor: vec3<f32>, bgColor: vec3<f32>, pixelPos: vec2<f32>) -> vec3<f32> {
-    let p = localUV * 3.0;
+fn shaderGlyph_1048584(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
+    // fgColor/bgColor unused - plasma has its own colors
+    // Use pixel position for seamless tiling across cells
+    // Scale down for nice pattern size
+    let p = pixelPos * 0.02;
     let t = time * 0.5;
 
     var v = 0.0;
     v += sin(p.x + t);
     v += sin(p.y + t * 0.5);
     v += sin(p.x + p.y + t * 0.3);
-    v += sin(sqrt(p.x * p.x + p.y * p.y) + t);
+    v += sin(sqrt(p.x * p.x + p.y * p.y) * 0.5 + t);
     v /= 4.0;
 
     // Rainbow colors

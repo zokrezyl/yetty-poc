@@ -4,6 +4,10 @@ struct SharedUniforms {
     deltaTime: f32,      // 4 bytes
     screenWidth: f32,    // 4 bytes
     screenHeight: f32,   // 4 bytes
+    mouseX: f32,         // 4 bytes
+    mouseY: f32,         // 4 bytes
+    _pad1: f32,          // 4 bytes padding
+    _pad2: f32,          // 4 bytes padding
 };
 
 // Grid uniforms (managed by renderer, group 1)
@@ -47,6 +51,8 @@ struct Cell {
 
 // Shared bindings (group 0 - managed by Yetty)
 @group(0) @binding(0) var<uniform> globals: SharedUniforms;
+@group(0) @binding(1) var<storage, read> cardMetadata: array<u32>;
+@group(0) @binding(2) var<storage, read> cardStorage: array<f32>;
 
 // Grid bindings (group 1 - managed by renderer)
 @group(1) @binding(0) var<uniform> grid: GridUniforms;
@@ -153,13 +159,34 @@ fn isShaderGlyph(glyphIndex: u32) -> bool {
 // ==== SHADER GLYPH FUNCTIONS (injected by loader) ====
 // SHADER_GLYPH_FUNCTIONS_PLACEHOLDER
 
+// Helper to unpack u32 color to vec3<f32>
+fn unpackColor(packed: u32) -> vec3<f32> {
+    return vec3<f32>(
+        f32(packed & 0xFFu) / 255.0,
+        f32((packed >> 8u) & 0xFFu) / 255.0,
+        f32((packed >> 16u) & 0xFFu) / 255.0
+    );
+}
+
+// Helper to unpack u32 color to vec4<f32> (with alpha)
+fn unpackColorAlpha(packed: u32) -> vec4<f32> {
+    return vec4<f32>(
+        f32(packed & 0xFFu) / 255.0,
+        f32((packed >> 8u) & 0xFFu) / 255.0,
+        f32((packed >> 16u) & 0xFFu) / 255.0,
+        f32((packed >> 24u) & 0xFFu) / 255.0
+    );
+}
+
 // Dispatch to shader glyph by codepoint
 // Returns rendered color, or bgColor if glyph not found
 // pixelPos: absolute pixel coordinates on screen (for tiled effects like fractals)
-fn renderShaderGlyph(glyphIndex: u32, localUV: vec2<f32>, time: f32, fgColor: vec3<f32>, bgColor: vec3<f32>, pixelPos: vec2<f32>) -> vec3<f32> {
+// mousePos: current mouse position in pixels
+// fg/bg: raw packed u32 from cell - cards use as metadata index, regular glyphs unpack to color
+fn renderShaderGlyph(glyphIndex: u32, localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
     // SHADER_GLYPH_DISPATCH_PLACEHOLDER
     // (loader generates: if glyphIndex == 1048577u { return shaderGlyph_1048577(...); } else if ...)
-    return bgColor;  // Fallback if no shader glyph matches
+    return unpackColor(bg);  // Fallback if no shader glyph matches
 }
 
 @fragment
@@ -253,7 +280,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         if (isShaderGlyph(glyphIndex)) {
             // Shader glyph: render procedurally
             let localUV = localPxBase / grid.cellSize;  // Normalize to 0-1
-            finalColor = renderShaderGlyph(glyphIndex, localUV, globals.time, fgColor.rgb, bgColor.rgb, pixelPos);
+            let mousePos = vec2<f32>(globals.mouseX, globals.mouseY);
+            finalColor = renderShaderGlyph(glyphIndex, localUV, globals.time, cell.fg, cell.bg, pixelPos, mousePos);
             hasGlyph = true;
         } else if (isEmoji) {
             // Emoji rendering: glyphIndex is the emoji index in emojiMetadata array

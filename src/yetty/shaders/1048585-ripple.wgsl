@@ -1,7 +1,10 @@
 // Shader glyph: Ripple (codepoint 1048585 / U+100009)
 // Water ripple effect - concentric animated rings
 
-fn shaderGlyph_1048585(localUV: vec2<f32>, time: f32, fgColor: vec3<f32>, bgColor: vec3<f32>, pixelPos: vec2<f32>) -> vec3<f32> {
+fn shaderGlyph_1048585(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
+    let bgColor = unpackColor(bg);
+    // fgColor unused - ripple has its own water colors
+
     let p = (localUV - 0.5) * 2.0;
     let d = length(p);
 

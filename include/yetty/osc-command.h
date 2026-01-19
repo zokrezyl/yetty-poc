@@ -9,8 +9,11 @@
 
 namespace yetty {
 
-// Vendor ID for yetty OSC sequences
+// Vendor ID for yetty OSC sequences (legacy plugin system)
 constexpr int YETTY_OSC_VENDOR_ID = 999999;
+
+// Vendor ID for card-based widgets (new system)
+constexpr int YETTY_OSC_VENDOR_CARD_ID = 666666;
 
 //-----------------------------------------------------------------------------
 // OscCommand - parsed OSC command

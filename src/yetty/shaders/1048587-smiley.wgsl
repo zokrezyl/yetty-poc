@@ -5,7 +5,10 @@ fn shaderGlyph_1048587_sdCircle(p: vec2<f32>, r: f32) -> f32 {
     return length(p) - r;
 }
 
-fn shaderGlyph_1048587(localUV: vec2<f32>, time: f32, fgColor: vec3<f32>, bgColor: vec3<f32>, pixelPos: vec2<f32>) -> vec3<f32> {
+fn shaderGlyph_1048587(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
+    let bgColor = unpackColor(bg);
+    // fgColor unused - smiley has its own yellow color
+
     let p = (localUV - 0.5) * 2.0;
     let blink = step(0.9, fract(time * 0.5));
 

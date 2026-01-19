@@ -1,5 +1,9 @@
 #include "gpu-screen.h"
+#include "widget-factory.h"
+#include "card.h"
+#include "card-factory.h"
 #include <yetty/font.h>
+#include <yetty/result.hpp>
 #include <ytrace/ytrace.hpp>
 #include "grid.h"  // For GLYPH_WIDE_CONT, GLYPH_PLUGIN constants
 #include <algorithm>
@@ -989,6 +993,552 @@ std::vector<WidgetPosition> GPUScreen::scanWidgetPositions() const {
 
     yinfo("GPUScreen::scanWidgetPositions: returning {} total positions", positions.size());
     return positions;
+}
+
+//=============================================================================
+// Extended widget marker methods - mark ALL cells in widget region
+//=============================================================================
+
+void GPUScreen::setWidgetMarker(int row, int col, uint16_t widgetId, uint32_t width, uint32_t height,
+                                 uint32_t shaderGlyph, uint32_t fg, uint32_t bg) {
+    if (!visibleBuffer_) return;
+
+    ydebug("GPUScreen::setWidgetMarker: row={} col={} widgetId={} size={}x{} glyph={:#x} fg={:#x} bg={:#x}",
+           row, col, widgetId, width, height, shaderGlyph, fg, bg);
+
+    // Mark ALL cells in the widget region with the same glyph and attributes
+    for (uint32_t dy = 0; dy < height; dy++) {
+        int cellRow = row + static_cast<int>(dy);
+        if (cellRow < 0 || cellRow >= rows_) continue;
+
+        for (uint32_t dx = 0; dx < width; dx++) {
+            int cellCol = col + static_cast<int>(dx);
+            if (cellCol < 0 || cellCol >= cols_) continue;
+
+            size_t idx = cellIndex(cellRow, cellCol);
+            if (idx >= visibleBuffer_->size()) continue;
+
+            Cell& cell = (*visibleBuffer_)[idx];
+            cell.glyph = shaderGlyph;
+
+            // Unpack fg u32 into cell bytes
+            cell.fgR = static_cast<uint8_t>(fg & 0xFF);
+            cell.fgG = static_cast<uint8_t>((fg >> 8) & 0xFF);
+            cell.fgB = static_cast<uint8_t>((fg >> 16) & 0xFF);
+            cell.alpha = static_cast<uint8_t>((fg >> 24) & 0xFF);
+
+            // Unpack bg u32 into cell bytes
+            cell.bgR = static_cast<uint8_t>(bg & 0xFF);
+            cell.bgG = static_cast<uint8_t>((bg >> 8) & 0xFF);
+            cell.bgB = static_cast<uint8_t>((bg >> 16) & 0xFF);
+            cell.style = static_cast<uint8_t>((bg >> 24) & 0xFF);
+        }
+    }
+
+    hasDamage_ = true;
+}
+
+void GPUScreen::clearWidgetMarker(int row, int col, uint32_t width, uint32_t height) {
+    if (!visibleBuffer_) return;
+
+    for (uint32_t dy = 0; dy < height; dy++) {
+        int cellRow = row + static_cast<int>(dy);
+        if (cellRow < 0 || cellRow >= rows_) continue;
+
+        for (uint32_t dx = 0; dx < width; dx++) {
+            int cellCol = col + static_cast<int>(dx);
+            if (cellCol < 0 || cellCol >= cols_) continue;
+
+            clearCell(cellRow, cellCol);
+        }
+    }
+
+    hasDamage_ = true;
+}
+
+//=============================================================================
+// Widget management implementation
+//=============================================================================
+
+void GPUScreen::addChildWidget(WidgetPtr widget) {
+    if (!widget) return;
+    childWidgets_.push_back(widget);
+    // Sort by zOrder for correct render order
+    std::sort(childWidgets_.begin(), childWidgets_.end(),
+              [](const WidgetPtr& a, const WidgetPtr& b) {
+                  return a->zOrder() < b->zOrder();
+              });
+}
+
+void GPUScreen::markWidgetGridCells(Widget* widget) {
+    if (!widget) return;
+
+    int32_t x = widget->getX();
+    int32_t y = widget->getY();
+    uint16_t id = static_cast<uint16_t>(widget->id());
+
+    ydebug("GPUScreen::markWidgetGridCells: widget {} at ({},{}) id={}", widget->name(), x, y, id);
+
+    // Only mark the top-left cell with the widget marker (for tracking)
+    if (x >= 0 && x < cols_ && y >= 0 && y < rows_) {
+        setWidgetMarker(y, x, id);
+    }
+}
+
+void GPUScreen::clearWidgetGridCells(Widget* widget) {
+    if (!widget) return;
+
+    int32_t x = widget->getX();
+    int32_t y = widget->getY();
+
+    // Only the top-left cell has the marker
+    if (x >= 0 && x < cols_ && y >= 0 && y < rows_) {
+        clearWidgetMarker(y, x);
+    }
+}
+
+Result<void> GPUScreen::removeChildWidget(uint32_t id) {
+    for (auto it = childWidgets_.begin(); it != childWidgets_.end(); ++it) {
+        if ((*it)->id() == id) {
+            clearWidgetGridCells(it->get());
+            if (auto res = (*it)->dispose(); !res) {
+                return Err<void>("Failed to dispose widget " + std::to_string(id));
+            }
+            childWidgets_.erase(it);
+            return Ok();
+        }
+    }
+    return Err<void>("Widget not found: " + std::to_string(id));
+}
+
+WidgetPtr GPUScreen::getChildWidget(uint32_t id) const {
+    for (const auto& widget : childWidgets_) {
+        if (widget->id() == id) return widget;
+    }
+    return nullptr;
+}
+
+WidgetPtr GPUScreen::getChildWidgetByHashId(const std::string& hashId) const {
+    auto it = childWidgetsByHashId_.find(hashId);
+    return (it != childWidgetsByHashId_.end()) ? it->second : nullptr;
+}
+
+Result<void> GPUScreen::removeChildWidgetByHashId(const std::string& hashId) {
+    auto it = childWidgetsByHashId_.find(hashId);
+    if (it == childWidgetsByHashId_.end()) {
+        return Err<void>("Widget not found: " + hashId);
+    }
+
+    WidgetPtr widget = it->second;
+    childWidgetsByHashId_.erase(it);
+
+    // Clear grid cells and remove from childWidgets_ vector
+    clearWidgetGridCells(widget.get());
+    for (auto vit = childWidgets_.begin(); vit != childWidgets_.end(); ++vit) {
+        if ((*vit)->id() == widget->id()) {
+            if (auto res = (*vit)->dispose(); !res) {
+                return Err<void>("Failed to dispose widget");
+            }
+            childWidgets_.erase(vit);
+            break;
+        }
+    }
+    return Ok();
+}
+
+//=============================================================================
+// OSC Sequence Handling
+//=============================================================================
+
+bool GPUScreen::handleOSCSequence(const std::string& sequence,
+                                   std::string* response,
+                                   uint32_t* linesToAdvance) {
+    yinfo("GPUScreen::handleOSCSequence: ENTERED, sequence len={}", sequence.size());
+
+    // Parse vendor ID from sequence (format: "vendorId;...")
+    size_t semicolon = sequence.find(';');
+    if (semicolon == std::string::npos) {
+        yerror("GPUScreen::handleOSCSequence: no semicolon found!");
+        if (response)
+            *response = OscResponse::error("Invalid OSC sequence: no vendor ID");
+        return false;
+    }
+
+    int vendorId = 0;
+    try {
+        vendorId = std::stoi(sequence.substr(0, semicolon));
+    } catch (...) {
+        yerror("GPUScreen::handleOSCSequence: failed to parse vendor ID");
+        if (response)
+            *response = OscResponse::error("Invalid vendor ID");
+        return false;
+    }
+
+    yinfo("GPUScreen::handleOSCSequence: vendorId={} (CARD_ID={}, LEGACY_ID={})",
+          vendorId, YETTY_OSC_VENDOR_CARD_ID, YETTY_OSC_VENDOR_ID);
+
+    // Route to card handling for new vendor ID
+    if (vendorId == YETTY_OSC_VENDOR_CARD_ID) {
+        yinfo("GPUScreen::handleOSCSequence: routing to CARD handler");
+        return handleCardOSCSequence(sequence, response, linesToAdvance);
+    }
+
+    // Legacy plugin handling (YETTY_OSC_VENDOR_ID)
+    if (!widgetFactory_) {
+        yerror("GPUScreen::handleOSCSequence: no WidgetFactory!");
+        if (response)
+            *response = OscResponse::error("No WidgetFactory");
+        return false;
+    }
+
+    auto parseResult = oscParser_.parse(sequence);
+    if (!parseResult) {
+        if (response)
+            *response = OscResponse::error(error_msg(parseResult));
+        return false;
+    }
+
+    OscCommand cmd = *parseResult;
+    if (!cmd.isValid()) {
+        if (response)
+            *response = OscResponse::error(cmd.error);
+        return false;
+    }
+
+    switch (cmd.type) {
+    case OscCommandType::Create: {
+        int32_t x = cmd.create.x;
+        int32_t y = cmd.create.y;
+
+        ydebug("OSC Create: cmd.x={} cmd.y={} relative={}", x, y, cmd.create.relative);
+
+        if (cmd.create.relative) {
+            int cursorCol = getCursorCol();
+            int cursorRow = getCursorRow();
+            ydebug("OSC Create: cursor at ({},{}) before adding", cursorCol, cursorRow);
+            x += cursorCol;
+            y += cursorRow;
+            ydebug("OSC Create: final position ({},{})", x, y);
+        }
+
+        // Build widget name: "plugin" or "plugin.type"
+        std::string widgetName = cmd.create.plugin;
+
+        // Build plugin args string
+        std::string pluginArgs = cmd.pluginArgs;
+        if (cmd.create.relative) {
+            if (!pluginArgs.empty()) {
+                pluginArgs += " ";
+            }
+            pluginArgs += "--relative";
+        }
+
+        auto result = widgetFactory_->createWidget(
+            widgetName, x, y, static_cast<uint32_t>(cmd.create.width),
+            static_cast<uint32_t>(cmd.create.height), pluginArgs, cmd.payload);
+        if (!result) {
+            yerror("GPUScreen: createWidget failed: {}", error_msg(result));
+            if (response)
+                *response = OscResponse::error(error_msg(result));
+            return false;
+        }
+
+        WidgetPtr widget = *result;
+
+        // Configure widget position
+        widget->setPosition(x, y);
+        widget->setId(nextChildWidgetId_++);
+        widget->setHashId(oscParser_.generateId());
+        widget->setScreenType(isAltScreenExternal_ ? ScreenType::Alternate : ScreenType::Main);
+        if (cmd.create.relative) {
+            widget->setPositionMode(PositionMode::Relative);
+        }
+
+        ydebug("GPUScreen::handleOSCSequence: widget created at ({},{}) cursor was ({},{})",
+               x, y, getCursorCol(), getCursorRow());
+
+        // Add to GPUScreen
+        addChildWidget(widget);
+        childWidgetsByHashId_[widget->hashId()] = widget;
+
+        // Mark grid cells with widget ID for mouse hit testing
+        markWidgetGridCells(widget.get());
+
+        yinfo("GPUScreen: Created widget {} plugin={} at ({},{}) size {}x{}",
+              widget->hashId(), cmd.create.plugin, x, y, widget->getWidthCells(),
+              widget->getHeightCells());
+
+        if (linesToAdvance && cmd.create.relative) {
+            *linesToAdvance = std::abs(static_cast<int>(widget->getHeightCells()));
+        }
+        return true;
+    }
+
+    case OscCommandType::List: {
+        if (response) {
+            std::vector<std::tuple<std::string, std::string, int, int, int, int, bool>> widgetList;
+            for (const auto& widget : childWidgets_) {
+                if (!cmd.list.all && !widget->isRunning()) continue;
+                widgetList.emplace_back(widget->hashId(), widget->name(),
+                                        widget->getX(), widget->getY(),
+                                        widget->getWidthCells(),
+                                        widget->getHeightCells(), widget->isRunning());
+            }
+            *response = OscResponse::widgetList(widgetList);
+        }
+        return true;
+    }
+
+    case OscCommandType::Kill: {
+        if (!cmd.target.id.empty()) {
+            auto res = removeChildWidgetByHashId(cmd.target.id);
+            if (!res) {
+                if (response)
+                    *response = OscResponse::error(error_msg(res));
+                return false;
+            }
+        } else {
+            if (response)
+                *response = OscResponse::error("kill: --id required");
+            return false;
+        }
+        return true;
+    }
+
+    case OscCommandType::Stop: {
+        if (!cmd.target.id.empty()) {
+            auto widget = getChildWidgetByHashId(cmd.target.id);
+            if (widget) {
+                widget->stop();
+            } else {
+                if (response)
+                    *response = OscResponse::error("Widget not found: " + cmd.target.id);
+                return false;
+            }
+        } else {
+            if (response)
+                *response = OscResponse::error("stop: --id required");
+            return false;
+        }
+        return true;
+    }
+
+    case OscCommandType::Start: {
+        if (!cmd.target.id.empty()) {
+            auto widget = getChildWidgetByHashId(cmd.target.id);
+            if (widget) {
+                widget->start();
+            } else {
+                if (response)
+                    *response = OscResponse::error("Widget not found: " + cmd.target.id);
+                return false;
+            }
+        } else {
+            if (response)
+                *response = OscResponse::error("start: --id required");
+            return false;
+        }
+        return true;
+    }
+
+    case OscCommandType::Update: {
+        if (cmd.target.id.empty()) {
+            if (response)
+                *response = OscResponse::error("update: --id required");
+            return false;
+        }
+        auto widget = getChildWidgetByHashId(cmd.target.id);
+        if (!widget) {
+            if (response)
+                *response = OscResponse::error("Widget not found: " + cmd.target.id);
+            return false;
+        }
+        if (auto res = widget->dispose(); !res) {
+            if (response)
+                *response = OscResponse::error("Failed to dispose widget");
+            return false;
+        }
+        widget->setPayload(cmd.payload);
+        if (auto res = widget->reinit(); !res) {
+            if (response)
+                *response = OscResponse::error("Widget re-init failed");
+            return false;
+        }
+        return true;
+    }
+
+    case OscCommandType::Plugins: {
+        if (response) {
+            *response = OscResponse::pluginList(widgetFactory_->getAvailableWidgets());
+        }
+        return true;
+    }
+
+    default:
+        if (response)
+            *response = OscResponse::error("unknown command");
+        return false;
+    }
+}
+
+//=============================================================================
+// Card OSC Handling
+//=============================================================================
+
+bool GPUScreen::handleCardOSCSequence(const std::string& sequence,
+                                       std::string* response,
+                                       uint32_t* linesToAdvance) {
+    yinfo("GPUScreen::handleCardOSCSequence: ENTERED with sequence length={}", sequence.size());
+    yinfo("GPUScreen::handleCardOSCSequence: sequence={}", sequence.substr(0, 200));
+
+    if (!cardFactory_) {
+        yerror("GPUScreen::handleCardOSCSequence: no CardFactory!");
+        if (response)
+            *response = OscResponse::error("No CardFactory");
+        return false;
+    }
+    yinfo("GPUScreen::handleCardOSCSequence: cardFactory_ is set");
+
+    // Parse using the same OSC parser (same argument format)
+    auto parseResult = oscParser_.parse(sequence);
+    if (!parseResult) {
+        yerror("GPUScreen::handleCardOSCSequence: parse FAILED: {}", error_msg(parseResult));
+        if (response)
+            *response = OscResponse::error(error_msg(parseResult));
+        return false;
+    }
+    yinfo("GPUScreen::handleCardOSCSequence: parse succeeded");
+
+    OscCommand cmd = *parseResult;
+    if (!cmd.isValid()) {
+        yerror("GPUScreen::handleCardOSCSequence: cmd invalid: {}", cmd.error);
+        if (response)
+            *response = OscResponse::error(cmd.error);
+        return false;
+    }
+    yinfo("GPUScreen::handleCardOSCSequence: cmd valid, type={}, plugin='{}'",
+          static_cast<int>(cmd.type), cmd.create.plugin);
+
+    switch (cmd.type) {
+    case OscCommandType::Create: {
+        yinfo("GPUScreen::handleCardOSCSequence: CREATE command for plugin '{}'", cmd.create.plugin);
+        int32_t x = cmd.create.x;
+        int32_t y = cmd.create.y;
+
+        ydebug("Card OSC Create: cmd.x={} cmd.y={} relative={}", x, y, cmd.create.relative);
+
+        if (cmd.create.relative) {
+            x += getCursorCol();
+            y += getCursorRow();
+            ydebug("Card OSC Create: final position ({},{})", x, y);
+        }
+
+        // Create the card
+        auto result = cardFactory_->createCard(
+            cmd.create.plugin, x, y,
+            static_cast<uint32_t>(cmd.create.width),
+            static_cast<uint32_t>(cmd.create.height),
+            cmd.pluginArgs, cmd.payload);
+
+        if (!result) {
+            yerror("GPUScreen: createCard failed: {}", error_msg(result));
+            if (response)
+                *response = OscResponse::error(error_msg(result));
+            return false;
+        }
+
+        CardPtr cardPtr = std::move(*result);
+        Card* card = cardPtr.get();
+
+        // Register the card for input routing
+        registerCard(card);
+
+        // Mark grid cells with shader glyph
+        uint32_t fg = card->metadataOffset();  // fg encodes metadata offset
+        uint32_t bg = 0x000F0F23;              // Default dark background
+        setWidgetMarker(y, x, 0, card->widthCells(), card->heightCells(),
+                        card->shaderGlyph(), fg, bg);
+
+        yinfo("GPUScreen: Created card '{}' at ({},{}) size {}x{} metaOffset={} shaderGlyph={:#x}",
+              card->typeName(), x, y, card->widthCells(), card->heightCells(),
+              card->metadataOffset(), card->shaderGlyph());
+
+        // Store the card (transfer ownership)
+        cards_.push_back(std::move(cardPtr));
+
+        if (linesToAdvance && cmd.create.relative) {
+            *linesToAdvance = card->heightCells();
+        }
+
+        hasDamage_ = true;
+        return true;
+    }
+
+    case OscCommandType::Plugins: {
+        if (response) {
+            *response = OscResponse::pluginList(cardFactory_->getRegisteredCards());
+        }
+        return true;
+    }
+
+    // TODO: Implement Kill, Stop, Start, Update, List for cards
+
+    default:
+        if (response)
+            *response = OscResponse::error("Card: unknown or unsupported command");
+        return false;
+    }
+}
+
+//=============================================================================
+// Card Registry Management
+//=============================================================================
+
+void GPUScreen::registerCard(Card* card) {
+    if (!card) return;
+
+    uint32_t offset = card->metadataOffset();
+    cardRegistry_[offset] = card;
+    ydebug("GPUScreen::registerCard: registered card at offset {}", offset);
+}
+
+void GPUScreen::unregisterCard(Card* card) {
+    if (!card) return;
+
+    uint32_t offset = card->metadataOffset();
+    cardRegistry_.erase(offset);
+    ydebug("GPUScreen::unregisterCard: unregistered card at offset {}", offset);
+}
+
+Card* GPUScreen::getCardByMetadataOffset(uint32_t offset) const {
+    auto it = cardRegistry_.find(offset);
+    return (it != cardRegistry_.end()) ? it->second : nullptr;
+}
+
+Card* GPUScreen::getCardAtCell(int row, int col) const {
+    if (row < 0 || row >= rows_ || col < 0 || col >= cols_) {
+        return nullptr;
+    }
+
+    if (!visibleBuffer_) return nullptr;
+
+    size_t idx = cellIndex(row, col);
+    if (idx >= visibleBuffer_->size()) return nullptr;
+
+    const Cell& cell = (*visibleBuffer_)[idx];
+
+    // Check if this cell has a shader glyph (Plane 16 PUA-B: U+100000 - U+10FFFD)
+    if (cell.glyph < 0x100000 || cell.glyph > 0x10FFFD) {
+        return nullptr;
+    }
+
+    // The fg value encodes the metadata offset
+    uint32_t fg = static_cast<uint32_t>(cell.fgR) |
+                  (static_cast<uint32_t>(cell.fgG) << 8) |
+                  (static_cast<uint32_t>(cell.fgB) << 16) |
+                  (static_cast<uint32_t>(cell.alpha) << 24);
+
+    return getCardByMetadataOffset(fg);
 }
 
 } // namespace yetty

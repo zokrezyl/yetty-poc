@@ -71,6 +71,10 @@ ShaderManager* WidgetFactory::getShaderManager() const {
     return _engine ? _engine->shaderManager().get() : nullptr;
 }
 
+CardBufferManager* WidgetFactory::getCardBufferManager() const {
+    return _engine ? _engine->cardBufferManager() : nullptr;
+}
+
 //-----------------------------------------------------------------------------
 // Registration
 //-----------------------------------------------------------------------------

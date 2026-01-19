@@ -1,60 +1,60 @@
 // Shader glyph: Mandelbrot fractal (codepoint 1048590 / U+10000E)
 // Tiled fractal - uses pixelPos to create seamless rendering across cells
-// Zooms in and out based on time
+// Mouse position shifts the view center
 
-fn shaderGlyph_1048590(localUV: vec2<f32>, time: f32, fgColor: vec3<f32>, bgColor: vec3<f32>, pixelPos: vec2<f32>) -> vec3<f32> {
-    // Normalize pixel position to screen UV (0-1)
-    let screenUV = pixelPos / vec2<f32>(globals.screenWidth, globals.screenHeight);
+fn shaderGlyph_1048590(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
+    // fg/bg unused - fractal has its own colors
+    // Normalize coordinates to 0-1
+    let screenSize = vec2<f32>(globals.screenWidth, globals.screenHeight);
+    let screenUV = pixelPos / screenSize;
+    let mouseUV = clamp(mousePos / screenSize, vec2<f32>(0.0), vec2<f32>(1.0));
 
-    // Center point for zoom (interesting area of Mandelbrot)
-    let centerX = -0.745;
-    let centerY = 0.186;
+    // Base center in Mandelbrot space (classic view)
+    let baseCenterX = -0.5;
+    let baseCenterY = 0.0;
 
-    // Zoom oscillates between close-up and overview
-    let zoomBase = 2.0;
-    let zoomRange = 1.8;
-    let zoomSpeed = 0.3;
-    let zoom = zoomBase + zoomRange * sin(time * zoomSpeed);
+    // Mouse shifts the center slightly (range: -0.5 to 0.5)
+    let centerX = baseCenterX + (mouseUV.x - 0.5) * 1.0;
+    let centerY = baseCenterY + (mouseUV.y - 0.5) * 1.0;
+
+    // Zoom based on time - oscillates between overview and detail
+    let zoomLevel = 2.0 + 1.5 * sin(time * 0.2);
 
     // Map screen UV to complex plane coordinates
-    // Aspect ratio correction
-    let aspect = globals.screenWidth / globals.screenHeight;
+    let aspect = screenSize.x / screenSize.y;
     var c = vec2<f32>(
-        (screenUV.x - 0.5) * zoom * aspect + centerX,
-        (screenUV.y - 0.5) * zoom + centerY
+        (screenUV.x - 0.5) * zoomLevel * aspect + centerX,
+        (screenUV.y - 0.5) * zoomLevel + centerY
     );
 
-    // Mandelbrot iteration: z = z² + c, starting at z = 0
+    // Mandelbrot iteration
     var z = vec2<f32>(0.0, 0.0);
     var iterations = 0u;
     let maxIterations = 100u;
 
     for (var i = 0u; i < maxIterations; i++) {
-        // z² = (a + bi)² = a² - b² + 2abi
         let zNew = vec2<f32>(
             z.x * z.x - z.y * z.y + c.x,
             2.0 * z.x * z.y + c.y
         );
         z = zNew;
 
-        // Escape condition
         if (dot(z, z) > 4.0) {
             break;
         }
         iterations++;
     }
 
-    // Color based on iteration count
+    // Inside the set - dark
     if (iterations == maxIterations) {
-        // Inside the set - use background or dark color
-        return bgColor * 0.2;
+        return vec3<f32>(0.0, 0.0, 0.1);
     }
 
-    // Smooth coloring for outside
+    // Smooth coloring
     let smooth_iter = f32(iterations) - log2(log2(dot(z, z)));
     let t = smooth_iter / f32(maxIterations);
 
-    // Create colorful gradient
+    // Colorful gradient
     let r = 0.5 + 0.5 * sin(3.0 + t * 6.28318 * 2.0);
     let g = 0.5 + 0.5 * sin(3.0 + t * 6.28318 * 2.0 + 2.094);
     let b = 0.5 + 0.5 * sin(3.0 + t * 6.28318 * 2.0 + 4.188);

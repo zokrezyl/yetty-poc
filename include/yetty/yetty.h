@@ -55,6 +55,8 @@ class InputHandler;
 class ShaderManager;
 class CursorRenderer;
 class WidgetFrameRenderer;
+class CardBufferManager;
+class CardFactory;
 
 //-----------------------------------------------------------------------------
 // GPU Resource entries (per-renderable namespace)
@@ -114,6 +116,7 @@ public:
     std::shared_ptr<RemoteTerminal> remoteTerminal() const noexcept { return _remoteTerminal; }
     std::shared_ptr<WidgetFactory> widgetFactory() const noexcept { return _widgetFactory; }
     std::shared_ptr<ShaderManager> shaderManager() const noexcept { return _shaderManager; }
+    CardBufferManager* cardBufferManager() const noexcept { return _cardBufferManager.get(); }
 #endif
 
 #if !YETTY_WEB
@@ -212,6 +215,8 @@ private:
     std::shared_ptr<ShaderManager> _shaderManager;
     std::shared_ptr<CursorRenderer> _cursorRenderer;
     std::unique_ptr<WidgetFrameRenderer> _frameRenderer;
+    std::unique_ptr<CardBufferManager> _cardBufferManager;
+    std::unique_ptr<CardFactory> _cardFactory;
 #endif
 
     // Root widgets (Terminal or RemoteTerminal, more in future)
@@ -221,13 +226,17 @@ private:
     WGPUCommandEncoder _currentEncoder = nullptr;
     WGPURenderPassEncoder _currentRenderPass = nullptr;
 
-    // Shared uniforms for all renderers (time, screen size, etc.)
+    // Shared uniforms for all renderers (time, screen size, mouse, etc.)
     struct SharedUniforms {
         float time;           // 4 bytes
         float deltaTime;      // 4 bytes
         float screenWidth;    // 4 bytes
         float screenHeight;   // 4 bytes
-    };  // 16 bytes
+        float mouseX;         // 4 bytes
+        float mouseY;         // 4 bytes
+        float _pad1;          // 4 bytes padding
+        float _pad2;          // 4 bytes padding
+    };  // 32 bytes
     WGPUBuffer _sharedUniformBuffer = nullptr;
     WGPUBindGroupLayout _sharedBindGroupLayout = nullptr;
     WGPUBindGroup _sharedBindGroup = nullptr;
@@ -261,7 +270,7 @@ public:
     uint32_t _rows = 24;
     float _baseCellWidth = 0.0f;
     float _baseCellHeight = 0.0f;
-    float _zoomLevel = 1.0f;
+    float _zoomLevel = 0.5f;
 
     // Command line options
     std::string _fontPath;

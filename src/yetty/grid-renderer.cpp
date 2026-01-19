@@ -182,7 +182,7 @@ static std::string loadShaderGlyphs(const std::string& shaderDir) {
     }
     dispatch += "if (glyphIndex == " + std::to_string(codepoint) + "u) {\n";
     dispatch += "        return shaderGlyph_" + std::to_string(codepoint) +
-                "(localUV, time, fgColor, bgColor, pixelPos);\n    }";
+                "(localUV, time, fg, bg, pixelPos, mousePos);\n    }";
   }
 
   if (!dispatch.empty()) {
