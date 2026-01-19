@@ -60,6 +60,7 @@ public:
     Config* getConfig() const;
     uv_loop_t* getLoop() const;
     class ShaderManager* getShaderManager() const;
+    class CardBufferManager* getCardBufferManager() const;
 
     //-------------------------------------------------------------------------
     // Widget registration (for non-plugin widgets)

@@ -553,6 +553,9 @@ elseif(NOT EMSCRIPTEN)
         src/yetty/custom-glyph-plugin.cpp
         src/yetty/shader-manager.cpp
         src/yetty/shader-glyph-renderer.cpp
+        src/yetty/card-buffer-manager.cpp
+        src/yetty/card-factory.cpp
+        src/yetty/cards/plot-card.cpp
     )
     # Python plugin built into main executable (Unix only)
     if(UNIX)

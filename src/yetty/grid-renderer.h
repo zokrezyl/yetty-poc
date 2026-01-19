@@ -2,6 +2,7 @@
 
 #include "yetty/emoji-atlas.h"
 #include "yetty/grid.h"
+#include "yetty/gpu-screen.h"  // For Cell struct
 #include <glm/glm.hpp>
 #include <memory>
 #include <vector>
@@ -21,6 +22,7 @@ public:
 
   static Result<Ptr> create(WebGPUContext::Ptr ctx,
                             FontManager::Ptr fontManager,
+                            WGPUBindGroupLayout sharedBindGroupLayout,
                             const std::string& fontFamily = "default") noexcept;
 
   ~GridRenderer();
@@ -35,6 +37,7 @@ public:
 
   void setCellSize(float width, float height) noexcept;
   void setScale(float scale) noexcept { scale_ = scale; }
+  void setSharedBindGroupLayout(WGPUBindGroupLayout layout) noexcept;
   glm::vec2 getCellSize() const noexcept { return cellSize_; }
   float getScale() const noexcept { return scale_; }
 
@@ -57,25 +60,19 @@ public:
                             bool fullDamage, int cursorCol = -1, int cursorRow = -1,
                             bool cursorVisible = false) noexcept;
 
-  // Render to existing pass from CPU buffer data (zero-copy path)
-  Result<void> renderToPassFromBuffers(WGPURenderPassEncoder pass,
-                                       uint32_t cols, uint32_t rows,
-                                       const uint16_t* glyphs,
-                                       const uint8_t* fgColors,
-                                       const uint8_t* bgColors,
-                                       const uint8_t* attrs,
-                                       bool fullDamage,
-                                       int cursorCol, int cursorRow,
-                                       bool cursorVisible) noexcept;
+  // Render to existing pass from Cell buffer (zero-copy path)
+  Result<void> renderToPassFromCells(WGPURenderPassEncoder pass,
+                                     uint32_t cols, uint32_t rows,
+                                     const Cell* cells,
+                                     bool fullDamage,
+                                     int cursorCol, int cursorRow,
+                                     bool cursorVisible) noexcept;
 
-  // Render from CPU buffer data (creates its own pass, used by RenderGridCmd)
-  void renderFromBuffers(uint32_t cols, uint32_t rows,
-                         const uint16_t* glyphs,
-                         const uint8_t* fgColors,
-                         const uint8_t* bgColors,
-                         const uint8_t* attrs,
-                         int cursorCol, int cursorRow,
-                         bool cursorVisible) noexcept;
+  // Render from Cell buffer (creates its own pass, used by RenderGridCmd)
+  void renderFromCells(uint32_t cols, uint32_t rows,
+                       const Cell* cells,
+                       int cursorCol, int cursorRow,
+                       bool cursorVisible) noexcept;
 
 private:
   GridRenderer(WebGPUContext::Ptr ctx, FontManager::Ptr fontManager,
@@ -84,16 +81,13 @@ private:
   Result<void> createShaderModule(WGPUDevice device);
   Result<void> createPipeline(WGPUDevice device, WGPUTextureFormat format);
   Result<void> createBuffers(WGPUDevice device);
-  Result<void> createCellTextures(WGPUDevice device, uint32_t cols,
-                                  uint32_t rows);
+  Result<void> createCellBuffer(WGPUDevice device, uint32_t cols, uint32_t rows);
   Result<void> createBindGroupLayout(WGPUDevice device);
   Result<void> createBindGroup(WGPUDevice device, Font &font);
 
   void updateUniformBuffer(WGPUQueue queue, const Grid &grid, int cursorCol,
                            int cursorRow, bool cursorVisible);
-  void updateCellTextures(WGPUQueue queue, const Grid &grid);
-  void updateCellTextureRegion(WGPUQueue queue, const Grid &grid,
-                               const DamageRect &rect);
+  void updateCellBuffer(WGPUQueue queue, const Cell* cells, uint32_t cols, uint32_t rows);
 
   // Uniforms struct - must match shader
   struct Uniforms {
@@ -105,12 +99,13 @@ private:
     float scale;          // 4 bytes, offset 92
     glm::vec2 cursorPos;  // 8 bytes, offset 96 (col, row)
     float cursorVisible;  // 4 bytes, offset 104
-    float _pad;           // 4 bytes, offset 108
+    float _pad;           // 4 bytes, offset 108 - padding for alignment
   }; // Total: 112 bytes
 
   WGPUShaderModule shaderModule_ = nullptr;
   WGPURenderPipeline pipeline_ = nullptr;
   WGPUBindGroupLayout bindGroupLayout_ = nullptr;
+  WGPUBindGroupLayout sharedBindGroupLayout_ = nullptr;  // From Yetty (group 0)
   WGPUBindGroup bindGroup_ = nullptr;
   WGPUPipelineLayout pipelineLayout_ = nullptr;
 
@@ -118,16 +113,9 @@ private:
   WGPUBuffer uniformBuffer_ = nullptr;
   WGPUBuffer quadVertexBuffer_ = nullptr; // Fullscreen quad vertices
 
-  // Cell data textures (sized to grid dimensions)
-  WGPUTexture cellGlyphTexture_ = nullptr; // R16Uint - glyph index per cell
-  WGPUTextureView cellGlyphView_ = nullptr;
-  WGPUTexture cellFgColorTexture_ = nullptr; // RGBA8Unorm - FG color per cell
-  WGPUTextureView cellFgColorView_ = nullptr;
-  WGPUTexture cellBgColorTexture_ = nullptr; // RGBA8Unorm - BG color per cell
-  WGPUTextureView cellBgColorView_ = nullptr;
-  WGPUTexture cellAttrsTexture_ =
-      nullptr; // R8Uint - attributes per cell (bold, italic, underline, strike)
-  WGPUTextureView cellAttrsView_ = nullptr;
+  // Cell data storage buffer (12 bytes per cell: glyph u32 + fg RGBA + bg RGB + style)
+  WGPUBuffer cellBuffer_ = nullptr;
+  size_t cellBufferSize_ = 0;  // Current buffer capacity in bytes
 
   Uniforms uniforms_;
   glm::vec2 cellSize_ = {10.0f, 20.0f};

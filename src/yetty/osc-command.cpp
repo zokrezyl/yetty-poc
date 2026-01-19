@@ -96,7 +96,7 @@ Result<OscCommand> OscCommandParser::parse(const std::string& sequence) {
         return Ok(cmd);
     }
 
-    if (vendorId != YETTY_OSC_VENDOR_ID) {
+    if (vendorId != YETTY_OSC_VENDOR_ID && vendorId != YETTY_OSC_VENDOR_CARD_ID) {
         cmd.error = "unknown vendor ID: " + std::to_string(vendorId);
         return Ok(cmd);
     }

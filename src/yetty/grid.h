@@ -5,17 +5,35 @@
 
 namespace yetty {
 
-// Special glyph index values
-constexpr uint16_t GLYPH_PLUGIN = 0xFFFF;     // Cell is occupied by a decorator plugin
-constexpr uint16_t GLYPH_WIDE_CONT = 0xFFFE;  // Wide char continuation (look at previous cell)
+// Special glyph index values (legacy 16-bit range, kept for compatibility)
+constexpr uint32_t GLYPH_PLUGIN = 0xFFFF;     // Cell is occupied by a decorator plugin
+constexpr uint32_t GLYPH_WIDE_CONT = 0xFFFE;  // Wide char continuation (look at previous cell)
 
-// Reserved range for custom glyph rendering (shader-based glyphs like animated emoji)
-constexpr uint16_t GLYPH_CUSTOM_START = 0xF000;
-constexpr uint16_t GLYPH_CUSTOM_END = 0xFFFD;
+// Legacy custom glyph range (conflicts with Nerd Fonts, prefer SHADER_GLYPH range)
+constexpr uint32_t GLYPH_CUSTOM_START = 0xF000;
+constexpr uint32_t GLYPH_CUSTOM_END = 0xFFFD;
 
-// Helper to check if a glyph index is in the custom range
-inline bool isCustomGlyph(uint16_t glyphIndex) {
-    return glyphIndex >= GLYPH_CUSTOM_START && glyphIndex <= GLYPH_CUSTOM_END;
+// Shader glyph range - procedural glyphs rendered directly in terminal shader
+// Uses Unicode Plane 16 Private Use Area-B (U+100000 - U+10FFFD)
+// Codepoint IS the glyph index directly - no bit manipulation needed
+// Files: src/yetty/shaders/1048577-spinner.wgsl -> codepoint 1048577 (U+100001)
+constexpr uint32_t SHADER_GLYPH_START = 0x100000;  // 1048576 decimal (U+100000)
+constexpr uint32_t SHADER_GLYPH_END = 0x10FFFD;    // 1114109 decimal (U+10FFFD)
+
+// Helper to check if a glyph index is a shader glyph
+inline bool isShaderGlyph(uint32_t glyphIndex) {
+    return glyphIndex >= SHADER_GLYPH_START && glyphIndex <= SHADER_GLYPH_END;
+}
+
+// Get shader ID from glyph index (1048577 -> 1)
+inline uint32_t getShaderGlyphId(uint32_t glyphIndex) {
+    return glyphIndex - SHADER_GLYPH_START;
+}
+
+// Legacy helper (kept for compatibility)
+inline bool isCustomGlyph(uint32_t glyphIndex) {
+    return (glyphIndex >= GLYPH_CUSTOM_START && glyphIndex <= GLYPH_CUSTOM_END) ||
+           isShaderGlyph(glyphIndex);
 }
 
 // Cell attributes packed into a single byte for GPU upload

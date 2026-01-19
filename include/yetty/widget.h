@@ -113,6 +113,10 @@ public:
     /// @param on - false if widget should release GPU resources (scrolled out or explicitly disabled)
     virtual void prepareFrame(WebGPUContext& ctx, bool on) { (void)ctx; (void)on; }
 
+    /// Check if widget needs rendering this frame (damage, animations, etc.)
+    /// Return false to skip GPU submission entirely when idle
+    virtual bool needsRender() const { return true; }
+
     /// Render to the given render pass
     /// @param on - false if widget should skip rendering (scrolled out or explicitly disabled)
     virtual Result<void> render(WGPURenderPassEncoder pass, WebGPUContext& ctx, bool on) = 0;

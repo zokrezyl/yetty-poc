@@ -41,9 +41,13 @@ public:
 
     Result<WGPUTextureView> getCurrentTextureView() noexcept;
     void present() noexcept;
-    
+
     // Check if a texture was acquired this frame (to know if present() should be called)
     bool hasCurrentTexture() const noexcept { return currentTextureView_ != nullptr; }
+
+    // Global time for animations (set by main loop, used by all renderers)
+    void setTime(float time) noexcept { time_ = time; }
+    float getTime() const noexcept { return time_; }
 
 private:
 #if YETTY_ANDROID
@@ -83,6 +87,9 @@ private:
     // Cached texture view for current frame (to avoid double-acquire)
     WGPUTextureView currentTextureView_ = nullptr;
     WGPUTexture currentTexture_ = nullptr;
+
+    // Global time for animations
+    float time_ = 0.0f;
 };
 
 } // namespace yetty

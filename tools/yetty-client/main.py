@@ -28,12 +28,16 @@ from plugins import discover_plugins, get_plugin
 @click.group()
 @click.option('--verbose', '-v', is_flag=True, help='Enable verbose output')
 @click.option('--dry-run', '-n', is_flag=True, help='Show what would be done')
+@click.option('--new', is_flag=True, help='Use new card system (OSC 666666) instead of legacy plugins (OSC 999999)')
 @click.pass_context
-def cli(ctx, verbose, dry_run):
+def cli(ctx, verbose, dry_run, new):
     """Yetty Client - manage yetty terminal plugins."""
     ctx.ensure_object(dict)
     ctx.obj['verbose'] = verbose
     ctx.obj['dry_run'] = dry_run
+    ctx.obj['use_new'] = new
+    # Set the OSC vendor ID based on --new flag
+    osc.set_use_new_system(new)
 
 
 @cli.command('create', context_settings=dict(

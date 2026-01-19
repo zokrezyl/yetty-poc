@@ -20,7 +20,29 @@ Where ESC characters in content are doubled (ESC -> ESC ESC).
 import os
 from . import base94
 
-VENDOR_ID = 999999
+# Legacy plugin system vendor ID
+VENDOR_ID_LEGACY = 999999
+
+# New card system vendor ID
+VENDOR_ID_CARD = 666666
+
+# Current vendor ID (can be switched with --new flag)
+_current_vendor_id = VENDOR_ID_LEGACY
+
+
+def set_use_new_system(use_new: bool):
+    """Switch between legacy (999999) and new card (666666) OSC codes."""
+    global _current_vendor_id
+    _current_vendor_id = VENDOR_ID_CARD if use_new else VENDOR_ID_LEGACY
+
+
+def get_vendor_id() -> int:
+    """Get the current vendor ID."""
+    return _current_vendor_id
+
+
+# Keep VENDOR_ID for backward compatibility
+VENDOR_ID = VENDOR_ID_LEGACY
 
 
 def is_inside_tmux() -> bool:
@@ -69,7 +91,7 @@ def create_sequence(
         args += " -r"
 
     encoded_payload = base94.encode_string(payload) if payload else ""
-    return f"\033]{VENDOR_ID};{args};{plugin_args};{encoded_payload}\033\\"
+    return f"\033]{get_vendor_id()};{args};{plugin_args};{encoded_payload}\033\\"
 
 
 def create_sequence_bytes(
@@ -88,18 +110,18 @@ def create_sequence_bytes(
         args += " -r"
 
     encoded_payload = base94.encode(payload_bytes) if payload_bytes else ""
-    return f"\033]{VENDOR_ID};{args};{plugin_args};{encoded_payload}\033\\"
+    return f"\033]{get_vendor_id()};{args};{plugin_args};{encoded_payload}\033\\"
 
 
 def list_sequence(all: bool = False) -> str:
     """Create an OSC sequence to list active layers."""
     args = "ls --all" if all else "ls"
-    return f"\033]{VENDOR_ID};{args};;\033\\"
+    return f"\033]{get_vendor_id()};{args};;\033\\"
 
 
 def plugins_sequence() -> str:
     """Create an OSC sequence to list available plugins."""
-    return f"\033]{VENDOR_ID};plugins;;\033\\"
+    return f"\033]{get_vendor_id()};plugins;;\033\\"
 
 
 def kill_sequence(id: str = None, plugin: str = None) -> str:
@@ -110,7 +132,7 @@ def kill_sequence(id: str = None, plugin: str = None) -> str:
         args = f"kill --plugin {plugin}"
     else:
         raise ValueError("Either id or plugin must be specified")
-    return f"\033]{VENDOR_ID};{args};;\033\\"
+    return f"\033]{get_vendor_id()};{args};;\033\\"
 
 
 def stop_sequence(id: str = None, plugin: str = None) -> str:
@@ -121,7 +143,7 @@ def stop_sequence(id: str = None, plugin: str = None) -> str:
         args = f"stop --plugin {plugin}"
     else:
         raise ValueError("Either id or plugin must be specified")
-    return f"\033]{VENDOR_ID};{args};;\033\\"
+    return f"\033]{get_vendor_id()};{args};;\033\\"
 
 
 def start_sequence(id: str = None, plugin: str = None) -> str:
@@ -132,11 +154,11 @@ def start_sequence(id: str = None, plugin: str = None) -> str:
         args = f"start --plugin {plugin}"
     else:
         raise ValueError("Either id or plugin must be specified")
-    return f"\033]{VENDOR_ID};{args};;\033\\"
+    return f"\033]{get_vendor_id()};{args};;\033\\"
 
 
 def update_sequence(id: str, payload: str = "", plugin_args: str = "") -> str:
     """Create an OSC sequence to update a layer."""
     args = f"update --id {id}"
     encoded_payload = base94.encode_string(payload) if payload else ""
-    return f"\033]{VENDOR_ID};{args};{plugin_args};{encoded_payload}\033\\"
+    return f"\033]{get_vendor_id()};{args};{plugin_args};{encoded_payload}\033\\"

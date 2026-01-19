@@ -3,9 +3,11 @@
 #include "yetty/config.h"
 #include <cstdlib> // for getenv
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <glm/gtc/matrix_transform.hpp>
 #include <iostream>
+#include <regex>
 #include <ytrace/ytrace.hpp>
 #include <sstream>
 #include <yetty/wgpu-compat.h>
@@ -35,6 +37,7 @@ namespace yetty {
 Result<GridRenderer::Ptr>
 GridRenderer::create(WebGPUContext::Ptr ctx,
                      FontManager::Ptr fontManager,
+                     WGPUBindGroupLayout sharedBindGroupLayout,
                      const std::string& fontFamily) noexcept {
   if (!ctx) {
     return Err<Ptr>("GridRenderer::create: null WebGPUContext");
@@ -42,7 +45,11 @@ GridRenderer::create(WebGPUContext::Ptr ctx,
   if (!fontManager) {
     return Err<Ptr>("GridRenderer::create: null FontManager");
   }
+  if (!sharedBindGroupLayout) {
+    return Err<Ptr>("GridRenderer::create: null sharedBindGroupLayout");
+  }
   auto renderer = Ptr(new GridRenderer(std::move(ctx), std::move(fontManager), fontFamily));
+  renderer->sharedBindGroupLayout_ = sharedBindGroupLayout;
   if (auto res = renderer->init(); !res) {
     return Err<Ptr>("Failed to initialize GridRenderer", res);
   }
@@ -55,25 +62,9 @@ GridRenderer::GridRenderer(WebGPUContext::Ptr ctx,
     : _ctx(std::move(ctx)), fontManager_(std::move(fontManager)), fontFamily_(fontFamily) {}
 
 GridRenderer::~GridRenderer() {
-  // On web, texture and bind group releases cause Emscripten WebGPU manager
-  // issues because bind groups hold references to textures
 #if !YETTY_WEB
-  if (cellAttrsView_)
-    wgpuTextureViewRelease(cellAttrsView_);
-  if (cellBgColorView_)
-    wgpuTextureViewRelease(cellBgColorView_);
-  if (cellFgColorView_)
-    wgpuTextureViewRelease(cellFgColorView_);
-  if (cellGlyphView_)
-    wgpuTextureViewRelease(cellGlyphView_);
-  if (cellAttrsTexture_)
-    wgpuTextureRelease(cellAttrsTexture_);
-  if (cellBgColorTexture_)
-    wgpuTextureRelease(cellBgColorTexture_);
-  if (cellFgColorTexture_)
-    wgpuTextureRelease(cellFgColorTexture_);
-  if (cellGlyphTexture_)
-    wgpuTextureRelease(cellGlyphTexture_);
+  if (cellBuffer_)
+    wgpuBufferRelease(cellBuffer_);
   if (bindGroup_)
     wgpuBindGroupRelease(bindGroup_);
 #endif
@@ -141,16 +132,81 @@ Result<void> GridRenderer::init() noexcept {
   return Ok();
 }
 
+// Scan for shader glyph files and build concatenated shader source
+static std::string loadShaderGlyphs(const std::string& shaderDir) {
+  std::string functions;
+  std::string dispatch;
+
+  // Pattern: decimal codepoint followed by name, e.g. "1048577-spinner.wgsl"
+  std::regex pattern(R"(^(\d+)-.*\.wgsl$)");
+
+  std::vector<std::pair<uint32_t, std::string>> glyphs;
+
+#if !YETTY_WEB && !YETTY_ANDROID
+  try {
+    for (const auto& entry : std::filesystem::directory_iterator(shaderDir)) {
+      if (!entry.is_regular_file()) continue;
+
+      std::string filename = entry.path().filename().string();
+      std::smatch match;
+      if (std::regex_match(filename, match, pattern)) {
+        uint32_t codepoint = static_cast<uint32_t>(std::stoul(match[1].str()));
+
+        // Read shader glyph file
+        std::ifstream file(entry.path());
+        if (file.is_open()) {
+          std::stringstream buf;
+          buf << file.rdbuf();
+          glyphs.emplace_back(codepoint, buf.str());
+          yinfo("Loaded shader glyph: {} (codepoint {})", filename, codepoint);
+        }
+      }
+    }
+  } catch (const std::exception& e) {
+    yerror("Error scanning shader glyphs: {}", e.what());
+  }
+#endif
+
+  // Sort by codepoint for consistent ordering
+  std::sort(glyphs.begin(), glyphs.end(),
+            [](const auto& a, const auto& b) { return a.first < b.first; });
+
+  // Build functions and dispatch
+  for (const auto& [codepoint, code] : glyphs) {
+    functions += "// Shader glyph codepoint " + std::to_string(codepoint) + "\n";
+    functions += code + "\n\n";
+
+    // Add dispatch case
+    if (!dispatch.empty()) {
+      dispatch += " else ";
+    }
+    dispatch += "if (glyphIndex == " + std::to_string(codepoint) + "u) {\n";
+    dispatch += "        return shaderGlyph_" + std::to_string(codepoint) +
+                "(localUV, time, fg, bg, pixelPos, mousePos);\n    }";
+  }
+
+  if (!dispatch.empty()) {
+    dispatch += "\n    ";
+  }
+
+  yinfo("Loaded {} shader glyphs", glyphs.size());
+
+  return "FUNCTIONS:" + functions + "\nDISPATCH:" + dispatch;
+}
+
 Result<void> GridRenderer::createShaderModule(WGPUDevice device) {
 #if YETTY_WEB
   const char *shaderPath = "/shaders.wgsl";
+  const char *shaderDir = "/";
 #elif YETTY_ANDROID
   // On Android, shader is extracted to app's data directory
   const char *envPath = std::getenv("YETTY_SHADER_PATH");
   const char *shaderPath = envPath ? envPath : "/data/local/tmp/shaders.wgsl";
+  const char *shaderDir = "/data/local/tmp/";
   yinfo("Loading shader from: {}", shaderPath);
 #else
   const char *shaderPath = CMAKE_SOURCE_DIR "/src/yetty/shaders/shaders.wgsl";
+  const char *shaderDir = CMAKE_SOURCE_DIR "/src/yetty/shaders/";
 #endif
 
   std::ifstream file(shaderPath);
@@ -161,6 +217,23 @@ Result<void> GridRenderer::createShaderModule(WGPUDevice device) {
   std::stringstream buffer;
   buffer << file.rdbuf();
   std::string shaderSource = buffer.str();
+
+  // Load and inject shader glyphs
+  std::string glyphData = loadShaderGlyphs(shaderDir);
+  size_t funcSep = glyphData.find("\nDISPATCH:");
+  std::string functions = glyphData.substr(10, funcSep - 10);  // Skip "FUNCTIONS:"
+  std::string dispatch = glyphData.substr(funcSep + 10);       // Skip "\nDISPATCH:"
+
+  // Replace placeholders
+  size_t funcPos = shaderSource.find("// SHADER_GLYPH_FUNCTIONS_PLACEHOLDER");
+  if (funcPos != std::string::npos) {
+    shaderSource.replace(funcPos, 37, functions);
+  }
+
+  size_t dispPos = shaderSource.find("// SHADER_GLYPH_DISPATCH_PLACEHOLDER");
+  if (dispPos != std::string::npos) {
+    shaderSource.replace(dispPos, 36, dispatch);
+  }
 
   WGPUShaderSourceWGSL wgslDesc = {};
   wgslDesc.chain.sType = WGPUSType_ShaderSourceWGSL;
@@ -216,12 +289,14 @@ Result<void> GridRenderer::createBuffers(WGPUDevice device) {
   return Ok();
 }
 
-Result<void> GridRenderer::createCellTextures(WGPUDevice device, uint32_t cols,
+Result<void> GridRenderer::createCellBuffer(WGPUDevice device, uint32_t cols,
                                               uint32_t rows) {
+  // Calculate required buffer size (12 bytes per Cell)
+  size_t requiredSize = static_cast<size_t>(cols) * rows * sizeof(Cell);
+
 #if YETTY_WEB
-  // On web, only create textures once to avoid Emscripten WebGPU manager issues
-  if (cellGlyphTexture_) {
-    // Already created, just update dimensions for shader
+  // On web, only create buffer once with large fixed size
+  if (cellBuffer_) {
     textureCols_ = cols;
     textureRows_ = rows;
     return Ok();
@@ -229,155 +304,45 @@ Result<void> GridRenderer::createCellTextures(WGPUDevice device, uint32_t cols,
   // First creation - use large fixed size to avoid needing recreation
   cols = 200;
   rows = 100;
+  requiredSize = static_cast<size_t>(cols) * rows * sizeof(Cell);
 #else
-  // Wait for GPU to finish using old textures before releasing them
-  // This prevents use-after-free when textures are still referenced by in-flight commands
-  if (cellGlyphTexture_) {
-    wgpuDevicePoll(device, true, nullptr);
+  // Only recreate if buffer is too small
+  if (cellBuffer_ && cellBufferSize_ >= requiredSize) {
+    textureCols_ = cols;
+    textureRows_ = rows;
+    return Ok();
   }
 
-  // Release old textures if they exist (views first)
-  if (cellGlyphView_) {
-    wgpuTextureViewRelease(cellGlyphView_);
-    cellGlyphView_ = nullptr;
-  }
-  if (cellFgColorView_) {
-    wgpuTextureViewRelease(cellFgColorView_);
-    cellFgColorView_ = nullptr;
-  }
-  if (cellBgColorView_) {
-    wgpuTextureViewRelease(cellBgColorView_);
-    cellBgColorView_ = nullptr;
-  }
-  if (cellAttrsView_) {
-    wgpuTextureViewRelease(cellAttrsView_);
-    cellAttrsView_ = nullptr;
-  }
-  if (cellGlyphTexture_) {
-    wgpuTextureRelease(cellGlyphTexture_);
-    cellGlyphTexture_ = nullptr;
-  }
-  if (cellFgColorTexture_) {
-    wgpuTextureRelease(cellFgColorTexture_);
-    cellFgColorTexture_ = nullptr;
-  }
-  if (cellBgColorTexture_) {
-    wgpuTextureRelease(cellBgColorTexture_);
-    cellBgColorTexture_ = nullptr;
-  }
-  if (cellAttrsTexture_) {
-    wgpuTextureRelease(cellAttrsTexture_);
-    cellAttrsTexture_ = nullptr;
+  // Wait for GPU to finish using old buffer before releasing
+  if (cellBuffer_) {
+    wgpuDevicePoll(device, true, nullptr);
+    wgpuBufferRelease(cellBuffer_);
+    cellBuffer_ = nullptr;
   }
 #endif
 
   textureCols_ = cols;
   textureRows_ = rows;
 
-  // Glyph texture: R16Uint (16-bit unsigned int per cell)
-  WGPUTextureDescriptor glyphTexDesc = {};
-  glyphTexDesc.label = WGPU_STR("cell glyphs");
-  glyphTexDesc.size = {cols, rows, 1};
-  glyphTexDesc.mipLevelCount = 1;
-  glyphTexDesc.sampleCount = 1;
-  glyphTexDesc.dimension = WGPUTextureDimension_2D;
-  glyphTexDesc.format = WGPUTextureFormat_R16Uint;
-  glyphTexDesc.usage =
-      WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst;
-  cellGlyphTexture_ = wgpuDeviceCreateTexture(device, &glyphTexDesc);
-  if (!cellGlyphTexture_) {
-    return Err<void>("Failed to create glyph texture");
+  // Create storage buffer for cell data (zero-copy upload from CPU)
+  WGPUBufferDescriptor bufferDesc = {};
+  bufferDesc.label = WGPU_STR("cell buffer");
+  bufferDesc.size = requiredSize;
+  bufferDesc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
+  cellBuffer_ = wgpuDeviceCreateBuffer(device, &bufferDesc);
+  if (!cellBuffer_) {
+    return Err<void>("Failed to create cell buffer");
   }
-
-  WGPUTextureViewDescriptor glyphViewDesc = {};
-  glyphViewDesc.format = WGPUTextureFormat_R16Uint;
-  glyphViewDesc.dimension = WGPUTextureViewDimension_2D;
-  glyphViewDesc.mipLevelCount = 1;
-  glyphViewDesc.arrayLayerCount = 1;
-  cellGlyphView_ = wgpuTextureCreateView(cellGlyphTexture_, &glyphViewDesc);
-  if (!cellGlyphView_) {
-    return Err<void>("Failed to create glyph texture view");
-  }
-
-  // FG color texture: RGBA8Unorm
-  WGPUTextureDescriptor fgTexDesc = {};
-  fgTexDesc.label = WGPU_STR("cell fg colors");
-  fgTexDesc.size = {cols, rows, 1};
-  fgTexDesc.mipLevelCount = 1;
-  fgTexDesc.sampleCount = 1;
-  fgTexDesc.dimension = WGPUTextureDimension_2D;
-  fgTexDesc.format = WGPUTextureFormat_RGBA8Unorm;
-  fgTexDesc.usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst;
-  cellFgColorTexture_ = wgpuDeviceCreateTexture(device, &fgTexDesc);
-  if (!cellFgColorTexture_) {
-    return Err<void>("Failed to create foreground color texture");
-  }
-
-  WGPUTextureViewDescriptor fgViewDesc = {};
-  fgViewDesc.format = WGPUTextureFormat_RGBA8Unorm;
-  fgViewDesc.dimension = WGPUTextureViewDimension_2D;
-  fgViewDesc.mipLevelCount = 1;
-  fgViewDesc.arrayLayerCount = 1;
-  cellFgColorView_ = wgpuTextureCreateView(cellFgColorTexture_, &fgViewDesc);
-  if (!cellFgColorView_) {
-    return Err<void>("Failed to create foreground color texture view");
-  }
-
-  // BG color texture: RGBA8Unorm
-  WGPUTextureDescriptor bgTexDesc = {};
-  bgTexDesc.label = WGPU_STR("cell bg colors");
-  bgTexDesc.size = {cols, rows, 1};
-  bgTexDesc.mipLevelCount = 1;
-  bgTexDesc.sampleCount = 1;
-  bgTexDesc.dimension = WGPUTextureDimension_2D;
-  bgTexDesc.format = WGPUTextureFormat_RGBA8Unorm;
-  bgTexDesc.usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst;
-  cellBgColorTexture_ = wgpuDeviceCreateTexture(device, &bgTexDesc);
-  if (!cellBgColorTexture_) {
-    return Err<void>("Failed to create background color texture");
-  }
-
-  WGPUTextureViewDescriptor bgViewDesc = {};
-  bgViewDesc.format = WGPUTextureFormat_RGBA8Unorm;
-  bgViewDesc.dimension = WGPUTextureViewDimension_2D;
-  bgViewDesc.mipLevelCount = 1;
-  bgViewDesc.arrayLayerCount = 1;
-  cellBgColorView_ = wgpuTextureCreateView(cellBgColorTexture_, &bgViewDesc);
-  if (!cellBgColorView_) {
-    return Err<void>("Failed to create background color texture view");
-  }
-
-  // Attrs texture: R8Uint (8-bit packed attributes per cell)
-  WGPUTextureDescriptor attrsTexDesc = {};
-  attrsTexDesc.label = WGPU_STR("cell attrs");
-  attrsTexDesc.size = {cols, rows, 1};
-  attrsTexDesc.mipLevelCount = 1;
-  attrsTexDesc.sampleCount = 1;
-  attrsTexDesc.dimension = WGPUTextureDimension_2D;
-  attrsTexDesc.format = WGPUTextureFormat_R8Uint;
-  attrsTexDesc.usage =
-      WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst;
-  cellAttrsTexture_ = wgpuDeviceCreateTexture(device, &attrsTexDesc);
-  if (!cellAttrsTexture_) {
-    return Err<void>("Failed to create attrs texture");
-  }
-
-  WGPUTextureViewDescriptor attrsViewDesc = {};
-  attrsViewDesc.format = WGPUTextureFormat_R8Uint;
-  attrsViewDesc.dimension = WGPUTextureViewDimension_2D;
-  attrsViewDesc.mipLevelCount = 1;
-  attrsViewDesc.arrayLayerCount = 1;
-  cellAttrsView_ = wgpuTextureCreateView(cellAttrsTexture_, &attrsViewDesc);
-  if (!cellAttrsView_) {
-    return Err<void>("Failed to create attrs texture view");
-  }
+  cellBufferSize_ = requiredSize;
 
   return Ok();
 }
 
 Result<void> GridRenderer::createBindGroupLayout(WGPUDevice device) {
-  // Bind group layout: 11 bindings (8 base + 3 emoji)
-  WGPUBindGroupLayoutEntry entries[11] = {};
+  // Bind group layout: 8 bindings
+  // 0: Uniforms, 1: Font texture, 2: Font sampler, 3: Glyph metadata
+  // 4: Cell buffer (storage), 5: Emoji texture, 6: Emoji sampler, 7: Emoji metadata
+  WGPUBindGroupLayoutEntry entries[8] = {};
 
   // 0: Uniforms
   entries[0].binding = 0;
@@ -396,66 +361,52 @@ Result<void> GridRenderer::createBindGroupLayout(WGPUDevice device) {
   entries[2].visibility = WGPUShaderStage_Fragment;
   entries[2].sampler.type = WGPUSamplerBindingType_Filtering;
 
-  // 3: Glyph metadata SSBO (still a buffer - one per font, not per cell)
+  // 3: Glyph metadata SSBO
   entries[3].binding = 3;
   entries[3].visibility = WGPUShaderStage_Fragment;
   entries[3].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
   entries[3].buffer.minBindingSize = sizeof(GlyphMetadataGPU);
 
-  // 4: Cell glyph indices texture (R16Uint)
+  // 4: Cell buffer SSBO (12 bytes per cell: glyph u32 + fg RGBA + bg RGB + style)
   entries[4].binding = 4;
   entries[4].visibility = WGPUShaderStage_Fragment;
-  entries[4].texture.sampleType = WGPUTextureSampleType_Uint;
-  entries[4].texture.viewDimension = WGPUTextureViewDimension_2D;
+  entries[4].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
+  entries[4].buffer.minBindingSize = sizeof(Cell);  // Minimum 1 cell
 
-  // 5: Cell FG colors texture (RGBA8Unorm)
+  // 5: Emoji atlas texture (RGBA8Unorm - color emoji bitmap)
   entries[5].binding = 5;
   entries[5].visibility = WGPUShaderStage_Fragment;
   entries[5].texture.sampleType = WGPUTextureSampleType_Float;
   entries[5].texture.viewDimension = WGPUTextureViewDimension_2D;
 
-  // 6: Cell BG colors texture (RGBA8Unorm)
+  // 6: Emoji sampler
   entries[6].binding = 6;
   entries[6].visibility = WGPUShaderStage_Fragment;
-  entries[6].texture.sampleType = WGPUTextureSampleType_Float;
-  entries[6].texture.viewDimension = WGPUTextureViewDimension_2D;
+  entries[6].sampler.type = WGPUSamplerBindingType_Filtering;
 
-  // 7: Cell attributes texture (R8Uint - packed
-  // bold/italic/underline/strike/emoji)
+  // 7: Emoji metadata SSBO
   entries[7].binding = 7;
   entries[7].visibility = WGPUShaderStage_Fragment;
-  entries[7].texture.sampleType = WGPUTextureSampleType_Uint;
-  entries[7].texture.viewDimension = WGPUTextureViewDimension_2D;
-
-  // 8: Emoji atlas texture (RGBA8Unorm - color emoji bitmap)
-  entries[8].binding = 8;
-  entries[8].visibility = WGPUShaderStage_Fragment;
-  entries[8].texture.sampleType = WGPUTextureSampleType_Float;
-  entries[8].texture.viewDimension = WGPUTextureViewDimension_2D;
-
-  // 9: Emoji sampler
-  entries[9].binding = 9;
-  entries[9].visibility = WGPUShaderStage_Fragment;
-  entries[9].sampler.type = WGPUSamplerBindingType_Filtering;
-
-  // 10: Emoji metadata SSBO
-  entries[10].binding = 10;
-  entries[10].visibility = WGPUShaderStage_Fragment;
-  entries[10].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
-  entries[10].buffer.minBindingSize = sizeof(EmojiGlyphMetadata);
+  entries[7].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
+  entries[7].buffer.minBindingSize = sizeof(EmojiGlyphMetadata);
 
   WGPUBindGroupLayoutDescriptor layoutDesc = {};
-  layoutDesc.entryCount = 11;
+  layoutDesc.entryCount = 8;
   layoutDesc.entries = entries;
   bindGroupLayout_ = wgpuDeviceCreateBindGroupLayout(device, &layoutDesc);
   if (!bindGroupLayout_) {
     return Err<void>("Failed to create bind group layout");
   }
 
-  // Pipeline layout
+  // Pipeline layout - includes both shared (group 0) and grid (group 1) layouts
+  // Note: sharedBindGroupLayout_ must be set via setSharedBindGroupLayout before pipeline creation
+  if (!sharedBindGroupLayout_) {
+    return Err<void>("sharedBindGroupLayout_ not set - call setSharedBindGroupLayout first");
+  }
+  WGPUBindGroupLayout layouts[2] = { sharedBindGroupLayout_, bindGroupLayout_ };
   WGPUPipelineLayoutDescriptor pipelineLayoutDesc = {};
-  pipelineLayoutDesc.bindGroupLayoutCount = 1;
-  pipelineLayoutDesc.bindGroupLayouts = &bindGroupLayout_;
+  pipelineLayoutDesc.bindGroupLayoutCount = 2;
+  pipelineLayoutDesc.bindGroupLayouts = layouts;
   pipelineLayout_ = wgpuDeviceCreatePipelineLayout(device, &pipelineLayoutDesc);
   if (!pipelineLayout_) {
     return Err<void>("Failed to create pipeline layout");
@@ -464,15 +415,18 @@ Result<void> GridRenderer::createBindGroupLayout(WGPUDevice device) {
   return Ok();
 }
 
+void GridRenderer::setSharedBindGroupLayout(WGPUBindGroupLayout layout) noexcept {
+  sharedBindGroupLayout_ = layout;
+}
+
 Result<void> GridRenderer::createBindGroup(WGPUDevice device, Font &font) {
 #if YETTY_WEB
-  // On web, only create bind group once to avoid Emscripten WebGPU manager
-  // issues
+  // On web, only create bind group once to avoid Emscripten WebGPU manager issues
   if (bindGroup_) {
     return Ok();
   }
 #else
-  // Release old bind group if it exists (for recreation when textures change)
+  // Release old bind group if it exists (for recreation when buffer changes)
   if (bindGroup_) {
     wgpuBindGroupRelease(bindGroup_);
     bindGroup_ = nullptr;
@@ -490,14 +444,8 @@ Result<void> GridRenderer::createBindGroup(WGPUDevice device, Font &font) {
     return Err<void>("font sampler is null");
   if (!font.getGlyphMetadataBuffer())
     return Err<void>("glyph metadata buffer is null");
-  if (!cellGlyphView_)
-    return Err<void>("cellGlyphView_ is null - call render() first");
-  if (!cellFgColorView_)
-    return Err<void>("cellFgColorView_ is null");
-  if (!cellBgColorView_)
-    return Err<void>("cellBgColorView_ is null");
-  if (!cellAttrsView_)
-    return Err<void>("cellAttrsView_ is null");
+  if (!cellBuffer_)
+    return Err<void>("cellBuffer_ is null - call render() first");
 
   // Check emoji atlas resources (required for bind group)
   if (!emojiAtlas_ || !emojiAtlas_->getTextureView() ||
@@ -505,8 +453,8 @@ Result<void> GridRenderer::createBindGroup(WGPUDevice device, Font &font) {
     return Err<void>("emoji atlas resources not ready");
   }
 
-  // Bind group entries - uses current texture views (11 entries)
-  WGPUBindGroupEntry bgEntries[11] = {};
+  // Bind group entries (8 entries)
+  WGPUBindGroupEntry bgEntries[8] = {};
 
   bgEntries[0].binding = 0;
   bgEntries[0].buffer = uniformBuffer_;
@@ -522,36 +470,29 @@ Result<void> GridRenderer::createBindGroup(WGPUDevice device, Font &font) {
   bgEntries[3].buffer = font.getGlyphMetadataBuffer();
   bgEntries[3].size = font.getBufferGlyphCount() * sizeof(GlyphMetadataGPU);
 
+  // Cell buffer - storage buffer with Cell structs (12 bytes each)
   bgEntries[4].binding = 4;
-  bgEntries[4].textureView = cellGlyphView_;
-
-  bgEntries[5].binding = 5;
-  bgEntries[5].textureView = cellFgColorView_;
-
-  bgEntries[6].binding = 6;
-  bgEntries[6].textureView = cellBgColorView_;
-
-  bgEntries[7].binding = 7;
-  bgEntries[7].textureView = cellAttrsView_;
+  bgEntries[4].buffer = cellBuffer_;
+  bgEntries[4].size = cellBufferSize_;
 
   // Emoji atlas resources
-  bgEntries[8].binding = 8;
-  bgEntries[8].textureView = emojiAtlas_->getTextureView();
+  bgEntries[5].binding = 5;
+  bgEntries[5].textureView = emojiAtlas_->getTextureView();
 
-  bgEntries[9].binding = 9;
-  bgEntries[9].sampler = emojiAtlas_->getSampler();
+  bgEntries[6].binding = 6;
+  bgEntries[6].sampler = emojiAtlas_->getSampler();
 
-  bgEntries[10].binding = 10;
-  bgEntries[10].buffer = emojiAtlas_->getMetadataBuffer();
-  // Use full buffer size to allow dynamic emoji loading (256 max emojis)
+  bgEntries[7].binding = 7;
+  bgEntries[7].buffer = emojiAtlas_->getMetadataBuffer();
+  // Use full buffer size to allow dynamic emoji loading
   uint32_t maxEmojis =
       (emojiAtlas_->getAtlasSize() / emojiAtlas_->getGlyphSize());
   maxEmojis = maxEmojis * maxEmojis; // glyphsPerRow^2
-  bgEntries[10].size = maxEmojis * sizeof(EmojiGlyphMetadata);
+  bgEntries[7].size = maxEmojis * sizeof(EmojiGlyphMetadata);
 
   WGPUBindGroupDescriptor bindGroupDesc = {};
   bindGroupDesc.layout = bindGroupLayout_;
-  bindGroupDesc.entryCount = 11;
+  bindGroupDesc.entryCount = 8;
   bindGroupDesc.entries = bgEntries;
   bindGroup_ = wgpuDeviceCreateBindGroup(device, &bindGroupDesc);
   if (!bindGroup_) {
@@ -636,10 +577,9 @@ void GridRenderer::updateFontBindings(Font &font) noexcept {
 
   font_ = &font;
 
-  // Only recreate bind group if cell textures already exist
-  // Otherwise, render() will create both textures and bind group
-  if (!cellGlyphView_ || !cellFgColorView_ || !cellBgColorView_ ||
-      !cellAttrsView_) {
+  // Only recreate bind group if cell buffer already exists
+  // Otherwise, render() will create both buffer and bind group
+  if (!cellBuffer_) {
     // Mark that bind group needs recreation on next render
     needsBindGroupRecreation_ = true;
     return;
@@ -671,222 +611,50 @@ void GridRenderer::updateUniformBuffer(WGPUQueue queue, const Grid &grid,
   uniforms_.cursorPos = {static_cast<float>(cursorCol),
                          static_cast<float>(cursorRow)};
   uniforms_.cursorVisible = cursorVisible ? 1.0f : 0.0f;
-  uniforms_._pad = 0.0f;
+  // Note: time is set by Yetty::mainLoopIteration via setTime()
 
   wgpuQueueWriteBuffer(queue, uniformBuffer_, 0, &uniforms_, sizeof(Uniforms));
 }
 
-void GridRenderer::updateCellTextures(WGPUQueue queue, const Grid &grid) {
-  // IMPORTANT: Use texture dimensions, not grid dimensions!
-  // The grid can be resized by another thread between the size check
-  // in render() and this function call, causing a race condition.
-  const uint32_t cols = textureCols_;
-  const uint32_t rows = textureRows_;
-
-  // Guard against zero-sized grids (would cause GPU texture errors)
-  if (cols == 0 || rows == 0) {
-    return;
-  }
-
-  // Guard against grid/texture size mismatch (race condition during resize)
-  // Skip this update - next frame will have matching dimensions after resize
-  if (grid.getCols() != cols || grid.getRows() != rows) {
-    ydebug("GridRenderer: skipping texture update - grid {}x{} != texture {}x{}",
-                  grid.getCols(), grid.getRows(), cols, rows);
+void GridRenderer::updateCellBuffer(WGPUQueue queue, const Cell* cells,
+                                    uint32_t cols, uint32_t rows) {
+  // Guard against zero-sized grids
+  if (cols == 0 || rows == 0 || !cells) {
     return;
   }
 
   gridCols_ = cols;
   gridRows_ = rows;
 
-  // Write glyph indices directly (uint16 -> R16Uint texture)
-  WGPUTexelCopyTextureInfo glyphDest = {};
-  glyphDest.texture = cellGlyphTexture_;
-  glyphDest.mipLevel = 0;
-  glyphDest.origin = {0, 0, 0};
-  glyphDest.aspect = WGPUTextureAspect_All;
-
-  WGPUTexelCopyBufferLayout glyphLayout = {};
-  glyphLayout.offset = 0;
-  glyphLayout.bytesPerRow = cols * sizeof(uint16_t);
-  glyphLayout.rowsPerImage = rows;
-
-  WGPUExtent3D glyphSize = {cols, rows, 1};
-  wgpuQueueWriteTexture(queue, &glyphDest, grid.getGlyphData(),
-                        cols * rows * sizeof(uint16_t), &glyphLayout,
-                        &glyphSize);
-
-  // Write FG colors directly (RGBA8 -> RGBA8Unorm texture)
-  WGPUTexelCopyTextureInfo fgDest = {};
-  fgDest.texture = cellFgColorTexture_;
-  fgDest.mipLevel = 0;
-  fgDest.origin = {0, 0, 0};
-  fgDest.aspect = WGPUTextureAspect_All;
-
-  WGPUTexelCopyBufferLayout fgLayout = {};
-  fgLayout.offset = 0;
-  fgLayout.bytesPerRow = cols * 4; // RGBA8 = 4 bytes per pixel
-  fgLayout.rowsPerImage = rows;
-
-  WGPUExtent3D fgSize = {cols, rows, 1};
-  wgpuQueueWriteTexture(queue, &fgDest, grid.getFgColorData(), cols * rows * 4,
-                        &fgLayout, &fgSize);
-
-  // Write BG colors directly (RGBA8 -> RGBA8Unorm texture)
-  WGPUTexelCopyTextureInfo bgDest = {};
-  bgDest.texture = cellBgColorTexture_;
-  bgDest.mipLevel = 0;
-  bgDest.origin = {0, 0, 0};
-  bgDest.aspect = WGPUTextureAspect_All;
-
-  WGPUTexelCopyBufferLayout bgLayout = {};
-  bgLayout.offset = 0;
-  bgLayout.bytesPerRow = cols * 4;
-  bgLayout.rowsPerImage = rows;
-
-  WGPUExtent3D bgSize = {cols, rows, 1};
-  wgpuQueueWriteTexture(queue, &bgDest, grid.getBgColorData(), cols * rows * 4,
-                        &bgLayout, &bgSize);
-
-  // Write attributes directly (uint8 -> R8Uint texture)
-  WGPUTexelCopyTextureInfo attrsDest = {};
-  attrsDest.texture = cellAttrsTexture_;
-  attrsDest.mipLevel = 0;
-  attrsDest.origin = {0, 0, 0};
-  attrsDest.aspect = WGPUTextureAspect_All;
-
-  WGPUTexelCopyBufferLayout attrsLayout = {};
-  attrsLayout.offset = 0;
-  attrsLayout.bytesPerRow = cols; // 1 byte per cell
-  attrsLayout.rowsPerImage = rows;
-
-  WGPUExtent3D attrsSize = {cols, rows, 1};
-  wgpuQueueWriteTexture(queue, &attrsDest, grid.getAttrsData(), cols * rows,
-                        &attrsLayout, &attrsSize);
+  // Zero-copy upload: Cell buffer goes directly to GPU storage buffer
+  size_t dataSize = static_cast<size_t>(cols) * rows * sizeof(Cell);
+  wgpuQueueWriteBuffer(queue, cellBuffer_, 0, cells, dataSize);
 }
 
-void GridRenderer::updateCellTextureRegion(WGPUQueue queue, const Grid &grid,
-                                           const DamageRect &rect) {
+// Helper: convert Grid's separate buffers to Cell format for legacy Grid-based rendering
+static void convertGridToCells(const Grid& grid, std::vector<Cell>& cells) {
   const uint32_t cols = grid.getCols();
-  const uint32_t regionWidth = rect._endCol - rect._startCol;
-  const uint32_t regionHeight = rect._endRow - rect._startRow;
+  const uint32_t rows = grid.getRows();
+  const size_t cellCount = static_cast<size_t>(cols) * rows;
 
-  if (regionWidth == 0 || regionHeight == 0)
-    return;
+  cells.resize(cellCount);
 
-  // For partial updates, we need to extract the subregion from the grid's
-  // linear data and write it to the correct location in the texture
+  const uint16_t* glyphs = grid.getGlyphData();
+  const uint8_t* fg = grid.getFgColorData();
+  const uint8_t* bg = grid.getBgColorData();
+  const uint8_t* attrs = grid.getAttrsData();
 
-  // Glyph texture update
-  std::vector<uint16_t> glyphRegion(regionWidth * regionHeight);
-  const uint16_t *srcGlyphs = grid.getGlyphData();
-  for (uint32_t row = 0; row < regionHeight; row++) {
-    for (uint32_t col = 0; col < regionWidth; col++) {
-      uint32_t srcIdx = (rect._startRow + row) * cols + (rect._startCol + col);
-      glyphRegion[row * regionWidth + col] = srcGlyphs[srcIdx];
-    }
+  for (size_t i = 0; i < cellCount; ++i) {
+    cells[i].glyph = glyphs[i];  // 16-bit to 32-bit
+    cells[i].fgR = fg[i * 4 + 0];
+    cells[i].fgG = fg[i * 4 + 1];
+    cells[i].fgB = fg[i * 4 + 2];
+    cells[i].alpha = fg[i * 4 + 3];
+    cells[i].bgR = bg[i * 4 + 0];
+    cells[i].bgG = bg[i * 4 + 1];
+    cells[i].bgB = bg[i * 4 + 2];
+    cells[i].style = attrs[i];
   }
-
-  WGPUTexelCopyTextureInfo glyphDest = {};
-  glyphDest.texture = cellGlyphTexture_;
-  glyphDest.mipLevel = 0;
-  glyphDest.origin = {rect._startCol, rect._startRow, 0};
-  glyphDest.aspect = WGPUTextureAspect_All;
-
-  WGPUTexelCopyBufferLayout glyphLayout = {};
-  glyphLayout.offset = 0;
-  glyphLayout.bytesPerRow = regionWidth * sizeof(uint16_t);
-  glyphLayout.rowsPerImage = regionHeight;
-
-  WGPUExtent3D glyphSize = {regionWidth, regionHeight, 1};
-  wgpuQueueWriteTexture(queue, &glyphDest, glyphRegion.data(),
-                        regionWidth * regionHeight * sizeof(uint16_t),
-                        &glyphLayout, &glyphSize);
-
-  // FG color texture update
-  std::vector<uint8_t> fgRegion(regionWidth * regionHeight * 4);
-  const uint8_t *srcFg = grid.getFgColorData();
-  for (uint32_t row = 0; row < regionHeight; row++) {
-    for (uint32_t col = 0; col < regionWidth; col++) {
-      uint32_t srcIdx =
-          ((rect._startRow + row) * cols + (rect._startCol + col)) * 4;
-      uint32_t dstIdx = (row * regionWidth + col) * 4;
-      fgRegion[dstIdx + 0] = srcFg[srcIdx + 0];
-      fgRegion[dstIdx + 1] = srcFg[srcIdx + 1];
-      fgRegion[dstIdx + 2] = srcFg[srcIdx + 2];
-      fgRegion[dstIdx + 3] = srcFg[srcIdx + 3];
-    }
-  }
-
-  WGPUTexelCopyTextureInfo fgDest = {};
-  fgDest.texture = cellFgColorTexture_;
-  fgDest.mipLevel = 0;
-  fgDest.origin = {rect._startCol, rect._startRow, 0};
-  fgDest.aspect = WGPUTextureAspect_All;
-
-  WGPUTexelCopyBufferLayout fgLayout = {};
-  fgLayout.offset = 0;
-  fgLayout.bytesPerRow = regionWidth * 4;
-  fgLayout.rowsPerImage = regionHeight;
-
-  WGPUExtent3D fgSize = {regionWidth, regionHeight, 1};
-  wgpuQueueWriteTexture(queue, &fgDest, fgRegion.data(),
-                        regionWidth * regionHeight * 4, &fgLayout, &fgSize);
-
-  // BG color texture update
-  std::vector<uint8_t> bgRegion(regionWidth * regionHeight * 4);
-  const uint8_t *srcBg = grid.getBgColorData();
-  for (uint32_t row = 0; row < regionHeight; row++) {
-    for (uint32_t col = 0; col < regionWidth; col++) {
-      uint32_t srcIdx =
-          ((rect._startRow + row) * cols + (rect._startCol + col)) * 4;
-      uint32_t dstIdx = (row * regionWidth + col) * 4;
-      bgRegion[dstIdx + 0] = srcBg[srcIdx + 0];
-      bgRegion[dstIdx + 1] = srcBg[srcIdx + 1];
-      bgRegion[dstIdx + 2] = srcBg[srcIdx + 2];
-      bgRegion[dstIdx + 3] = srcBg[srcIdx + 3];
-    }
-  }
-
-  WGPUTexelCopyTextureInfo bgDest = {};
-  bgDest.texture = cellBgColorTexture_;
-  bgDest.mipLevel = 0;
-  bgDest.origin = {rect._startCol, rect._startRow, 0};
-  bgDest.aspect = WGPUTextureAspect_All;
-
-  WGPUTexelCopyBufferLayout bgLayout = {};
-  bgLayout.offset = 0;
-  bgLayout.bytesPerRow = regionWidth * 4;
-  bgLayout.rowsPerImage = regionHeight;
-
-  WGPUExtent3D bgSize = {regionWidth, regionHeight, 1};
-  wgpuQueueWriteTexture(queue, &bgDest, bgRegion.data(),
-                        regionWidth * regionHeight * 4, &bgLayout, &bgSize);
-
-  // Attrs texture update
-  std::vector<uint8_t> attrsRegion(regionWidth * regionHeight);
-  const uint8_t *srcAttrs = grid.getAttrsData();
-  for (uint32_t row = 0; row < regionHeight; row++) {
-    for (uint32_t col = 0; col < regionWidth; col++) {
-      uint32_t srcIdx = (rect._startRow + row) * cols + (rect._startCol + col);
-      attrsRegion[row * regionWidth + col] = srcAttrs[srcIdx];
-    }
-  }
-
-  WGPUTexelCopyTextureInfo attrsDest = {};
-  attrsDest.texture = cellAttrsTexture_;
-  attrsDest.mipLevel = 0;
-  attrsDest.origin = {rect._startCol, rect._startRow, 0};
-  attrsDest.aspect = WGPUTextureAspect_All;
-
-  WGPUTexelCopyBufferLayout attrsLayout = {};
-  attrsLayout.offset = 0;
-  attrsLayout.bytesPerRow = regionWidth;
-  attrsLayout.rowsPerImage = regionHeight;
-
-  WGPUExtent3D attrsSize = {regionWidth, regionHeight, 1};
-  wgpuQueueWriteTexture(queue, &attrsDest, attrsRegion.data(),
-                        regionWidth * regionHeight, &attrsLayout, &attrsSize);
 }
 
 void GridRenderer::render(const Grid &grid, int cursorCol, int cursorRow,
@@ -911,10 +679,10 @@ void GridRenderer::render(const Grid &grid, int cursorCol, int cursorRow,
   }
 #endif
 
-  // Recreate textures and bind group if grid size changed
+  // Recreate buffer and bind group if grid size changed
   if (cols != textureCols_ || rows != textureRows_) {
-    TR_LOGI("Creating cell textures: %ux%u", cols, rows);
-    if (auto res = createCellTextures(device, cols, rows); !res) {
+    TR_LOGI("Creating cell buffer: %ux%u", cols, rows);
+    if (auto res = createCellBuffer(device, cols, rows); !res) {
       TR_LOGE("GridRenderer: %s", error_msg(res).c_str());
       return;
     }
@@ -924,10 +692,9 @@ void GridRenderer::render(const Grid &grid, int cursorCol, int cursorRow,
     }
     needsBindGroupRecreation_ = false;
     lastFontResourceVersion_ = font_->getResourceVersion();
-    TR_LOGI("Cell textures and bind group created successfully");
-  } else if (needsBindGroupRecreation_ || 
+    TR_LOGI("Cell buffer and bind group created successfully");
+  } else if (needsBindGroupRecreation_ ||
              font_->getResourceVersion() != lastFontResourceVersion_) {
-    // Deferred bind group recreation (e.g., after glyph metadata buffer update)
     if (auto res = createBindGroup(device, *font_); !res) {
       TR_LOGE("GridRenderer: %s", error_msg(res).c_str());
       return;
@@ -937,7 +704,11 @@ void GridRenderer::render(const Grid &grid, int cursorCol, int cursorRow,
   }
 
   updateUniformBuffer(queue, grid, cursorCol, cursorRow, cursorVisible);
-  updateCellTextures(queue, grid);
+
+  // Convert Grid's separate arrays to Cell format and upload
+  static thread_local std::vector<Cell> cellBuffer;
+  convertGridToCells(grid, cellBuffer);
+  updateCellBuffer(queue, cellBuffer.data(), cols, rows);
 
   auto targetViewResult = _ctx->getCurrentTextureView();
   if (!targetViewResult) {
@@ -969,7 +740,7 @@ void GridRenderer::render(const Grid &grid, int cursorCol, int cursorRow,
   colorAttachment.loadOp = WGPULoadOp_Clear;
   colorAttachment.storeOp = WGPUStoreOp_Store;
   WGPU_COLOR_ATTACHMENT_CLEAR(colorAttachment, 0.1, 0.1, 0.1, 1.0);
-  colorAttachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED; // Required for 2D textures
+  colorAttachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
 
   WGPURenderPassDescriptor passDesc = {};
   passDesc.colorAttachmentCount = 1;
@@ -979,7 +750,7 @@ void GridRenderer::render(const Grid &grid, int cursorCol, int cursorRow,
       wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
 
   wgpuRenderPassEncoderSetPipeline(pass, pipeline_);
-  wgpuRenderPassEncoderSetBindGroup(pass, 0, bindGroup_, 0, nullptr);
+  wgpuRenderPassEncoderSetBindGroup(pass, 1, bindGroup_, 0, nullptr);
   wgpuRenderPassEncoderSetVertexBuffer(pass, 0, quadVertexBuffer_, 0,
                                        WGPU_WHOLE_SIZE);
   wgpuRenderPassEncoderDraw(pass, 6, 1, 0, 0);
@@ -1000,9 +771,6 @@ void GridRenderer::render(const Grid &grid, int cursorCol, int cursorRow,
             frameCount);
   }
 #endif
-
-  // Note: targetView is cached by WebGPUContext, don't release here
-  // Note: present() should be called by main loop after all rendering
 }
 
 void GridRenderer::render(const Grid &grid,
@@ -1019,9 +787,9 @@ void GridRenderer::render(const Grid &grid,
   const uint32_t cols = grid.getCols();
   const uint32_t rows = grid.getRows();
 
-  // Recreate textures and bind group if grid size changed
+  // Recreate buffer and bind group if grid size changed
   if (cols != textureCols_ || rows != textureRows_) {
-    if (auto res = createCellTextures(device, cols, rows); !res) {
+    if (auto res = createCellBuffer(device, cols, rows); !res) {
       std::cerr << "GridRenderer: " << error_msg(res) << std::endl;
       return;
     }
@@ -1031,57 +799,25 @@ void GridRenderer::render(const Grid &grid,
     }
     needsBindGroupRecreation_ = false;
     lastFontResourceVersion_ = font_->getResourceVersion();
-    // Force full update when textures are recreated
-    updateCellTextures(queue, grid);
+    fullDamage = true;  // Force full update when buffer is recreated
   } else if (needsBindGroupRecreation_ ||
              font_->getResourceVersion() != lastFontResourceVersion_) {
-    // Deferred bind group recreation (e.g., after glyph metadata buffer update)
     if (auto res = createBindGroup(device, *font_); !res) {
       std::cerr << "GridRenderer: " << error_msg(res) << std::endl;
       return;
     }
     needsBindGroupRecreation_ = false;
     lastFontResourceVersion_ = font_->getResourceVersion();
-    // Also need full update for new glyphs
-    updateCellTextures(queue, grid);
+    fullDamage = true;
   }
-  // NOTE: We don't force fullDamage anymore. When there's no damage,
-  // cell textures already have correct data from previous frame.
-  // We still clear screen and draw to provide defined base for plugins.
 
-  if (fullDamage) {
-    // Full damage - update entire texture
-    updateCellTextures(queue, grid);
-  } else if (!damageRects.empty()) {
-    // If too many damage rects, a single full upload is cheaper than many small
-    // ones Each wgpuQueueWriteTexture has overhead, so threshold at ~10% of
-    // grid or 100 rects
-    const size_t threshold = std::max(static_cast<size_t>(100),
-                                      static_cast<size_t>(cols * rows / 10));
-    if (damageRects.size() > threshold) {
-      // Many small rects - single full upload is more efficient
-      updateCellTextures(queue, grid);
-      ydebug("Damage rects {} > threshold {} - using full upload",
-                    damageRects.size(), threshold);
-    } else {
-      // Partial damage - only update changed regions
-      for (const auto &rect : damageRects) {
-        updateCellTextureRegion(queue, grid, rect);
-      }
-    }
-
-    if (config_ && config_->debugDamageRects()) {
-      uint32_t totalCells = 0;
-      for (const auto &rect : damageRects) {
-        totalCells +=
-            (rect._endCol - rect._startCol) * (rect._endRow - rect._startRow);
-      }
-      std::cout << "Updated " << totalCells << " cells in "
-                << damageRects.size() << " rects (vs " << (cols * rows)
-                << " total)" << std::endl;
-    }
+  // Convert Grid to Cell format and upload when there's damage
+  // Note: With storage buffer, partial damage tracking is complex, so always do full upload
+  if (fullDamage || !damageRects.empty()) {
+    static thread_local std::vector<Cell> cellBuffer;
+    convertGridToCells(grid, cellBuffer);
+    updateCellBuffer(queue, cellBuffer.data(), cols, rows);
   }
-  // else: no damage, skip texture update entirely
 
   updateUniformBuffer(queue, grid, cursorCol, cursorRow, cursorVisible);
 
@@ -1101,7 +837,7 @@ void GridRenderer::render(const Grid &grid,
   colorAttachment.loadOp = WGPULoadOp_Clear;
   colorAttachment.storeOp = WGPUStoreOp_Store;
   WGPU_COLOR_ATTACHMENT_CLEAR(colorAttachment, 0.1, 0.1, 0.1, 1.0);
-  colorAttachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED; // Required for 2D textures
+  colorAttachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
 
   WGPURenderPassDescriptor passDesc = {};
   passDesc.colorAttachmentCount = 1;
@@ -1111,7 +847,7 @@ void GridRenderer::render(const Grid &grid,
       wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
 
   wgpuRenderPassEncoderSetPipeline(pass, pipeline_);
-  wgpuRenderPassEncoderSetBindGroup(pass, 0, bindGroup_, 0, nullptr);
+  wgpuRenderPassEncoderSetBindGroup(pass, 1, bindGroup_, 0, nullptr);
   wgpuRenderPassEncoderSetVertexBuffer(pass, 0, quadVertexBuffer_, 0,
                                        WGPU_WHOLE_SIZE);
   wgpuRenderPassEncoderDraw(pass, 6, 1, 0, 0);
@@ -1125,9 +861,6 @@ void GridRenderer::render(const Grid &grid,
 
   wgpuQueueSubmit(queue, 1, &cmdBuffer);
   wgpuCommandBufferRelease(cmdBuffer);
-
-  // Note: targetView is cached by WebGPUContext, don't release here
-  // Note: present() should be called by main loop after all rendering
 }
 
 Result<void> GridRenderer::renderToPass(WGPURenderPassEncoder pass, const Grid &grid,
@@ -1146,17 +879,17 @@ Result<void> GridRenderer::renderToPass(WGPURenderPassEncoder pass, const Grid &
   const uint32_t cols = grid.getCols();
   const uint32_t rows = grid.getRows();
 
-  // Recreate textures and bind group if grid size changed
+  // Recreate buffer and bind group if grid size changed
   if (cols != textureCols_ || rows != textureRows_) {
-    if (auto res = createCellTextures(device, cols, rows); !res) {
-      return Err<void>("GridRenderer::renderToPass: createCellTextures failed", res);
+    if (auto res = createCellBuffer(device, cols, rows); !res) {
+      return Err<void>("GridRenderer::renderToPass: createCellBuffer failed", res);
     }
     if (auto res = createBindGroup(device, *font_); !res) {
       return Err<void>("GridRenderer::renderToPass: createBindGroup failed", res);
     }
     needsBindGroupRecreation_ = false;
     lastFontResourceVersion_ = font_->getResourceVersion();
-    updateCellTextures(queue, grid);
+    fullDamage = true;
   } else if (needsBindGroupRecreation_ ||
              font_->getResourceVersion() != lastFontResourceVersion_) {
     if (auto res = createBindGroup(device, *font_); !res) {
@@ -1164,48 +897,39 @@ Result<void> GridRenderer::renderToPass(WGPURenderPassEncoder pass, const Grid &
     }
     needsBindGroupRecreation_ = false;
     lastFontResourceVersion_ = font_->getResourceVersion();
-    updateCellTextures(queue, grid);
+    fullDamage = true;
   }
 
-  if (fullDamage) {
-    updateCellTextures(queue, grid);
-  } else if (!damageRects.empty()) {
-    const size_t threshold = std::max(static_cast<size_t>(100),
-                                      static_cast<size_t>(cols * rows / 10));
-    if (damageRects.size() > threshold) {
-      updateCellTextures(queue, grid);
-    } else {
-      for (const auto &rect : damageRects) {
-        updateCellTextureRegion(queue, grid, rect);
-      }
-    }
+  // Convert Grid to Cell format and upload when there's damage
+  if (fullDamage || !damageRects.empty()) {
+    static thread_local std::vector<Cell> cellBuffer;
+    convertGridToCells(grid, cellBuffer);
+    updateCellBuffer(queue, cellBuffer.data(), cols, rows);
   }
 
   updateUniformBuffer(queue, grid, cursorCol, cursorRow, cursorVisible);
 
-  // Draw to provided pass - check pipeline/bindGroup after potential recreation
-  if (!pipeline_) return Err<void>("GridRenderer::renderToPass: pipeline not initialized after setup");
-  if (!bindGroup_) return Err<void>("GridRenderer::renderToPass: bindGroup not initialized after setup");
+  // Draw to provided pass
+  if (!pipeline_) return Err<void>("GridRenderer::renderToPass: pipeline not initialized");
+  if (!bindGroup_) return Err<void>("GridRenderer::renderToPass: bindGroup not initialized");
 
   wgpuRenderPassEncoderSetPipeline(pass, pipeline_);
-  wgpuRenderPassEncoderSetBindGroup(pass, 0, bindGroup_, 0, nullptr);
+  wgpuRenderPassEncoderSetBindGroup(pass, 1, bindGroup_, 0, nullptr);
   wgpuRenderPassEncoderSetVertexBuffer(pass, 0, quadVertexBuffer_, 0,
                                        WGPU_WHOLE_SIZE);
   wgpuRenderPassEncoderDraw(pass, 6, 1, 0, 0);
   return Ok();
 }
 
-Result<void> GridRenderer::renderToPassFromBuffers(WGPURenderPassEncoder pass,
-                                                   uint32_t cols, uint32_t rows,
-                                                   const uint16_t* glyphs,
-                                                   const uint8_t* fgColors,
-                                                   const uint8_t* bgColors,
-                                                   const uint8_t* attrs,
-                                                   bool fullDamage,
-                                                   int cursorCol, int cursorRow,
-                                                   bool cursorVisible) noexcept {
-  if (!_ctx) return Err<void>("GridRenderer::renderToPassFromBuffers: context is null");
-  if (!font_) return Err<void>("GridRenderer::renderToPassFromBuffers: font is null");
+Result<void> GridRenderer::renderToPassFromCells(WGPURenderPassEncoder pass,
+                                                 uint32_t cols, uint32_t rows,
+                                                 const Cell* cells,
+                                                 bool fullDamage,
+                                                 int cursorCol, int cursorRow,
+                                                 bool cursorVisible) noexcept {
+  if (!_ctx) return Err<void>("GridRenderer::renderToPassFromCells: context is null");
+  if (!font_) return Err<void>("GridRenderer::renderToPassFromCells: font is null");
+  if (!cells) return Err<void>("GridRenderer::renderToPassFromCells: cells is null");
 
   WGPUDevice device = _ctx->getDevice();
   WGPUQueue queue = _ctx->getQueue();
@@ -1215,13 +939,13 @@ Result<void> GridRenderer::renderToPassFromBuffers(WGPURenderPassEncoder pass,
     emojiAtlas_->uploadToGPU();
   }
 
-  // Recreate textures and bind group if grid size changed
+  // Recreate buffer and bind group if grid size changed
   if (cols != textureCols_ || rows != textureRows_) {
-    if (auto res = createCellTextures(device, cols, rows); !res) {
-      return Err<void>("GridRenderer::renderToPassFromBuffers: createCellTextures failed", res);
+    if (auto res = createCellBuffer(device, cols, rows); !res) {
+      return Err<void>("GridRenderer::renderToPassFromCells: createCellBuffer failed", res);
     }
     if (auto res = createBindGroup(device, *font_); !res) {
-      return Err<void>("GridRenderer::renderToPassFromBuffers: createBindGroup failed", res);
+      return Err<void>("GridRenderer::renderToPassFromCells: createBindGroup failed", res);
     }
     needsBindGroupRecreation_ = false;
     lastFontResourceVersion_ = font_->getResourceVersion();
@@ -1229,81 +953,19 @@ Result<void> GridRenderer::renderToPassFromBuffers(WGPURenderPassEncoder pass,
   } else if (needsBindGroupRecreation_ ||
              font_->getResourceVersion() != lastFontResourceVersion_) {
     if (auto res = createBindGroup(device, *font_); !res) {
-      return Err<void>("GridRenderer::renderToPassFromBuffers: createBindGroup failed", res);
+      return Err<void>("GridRenderer::renderToPassFromCells: createBindGroup failed", res);
     }
     needsBindGroupRecreation_ = false;
     lastFontResourceVersion_ = font_->getResourceVersion();
     fullDamage = true;
   }
 
-  // Only upload textures when there's damage
+  // Only upload cell buffer when there's damage (zero-copy from GPUScreen)
   if (fullDamage) {
-    gridCols_ = cols;
-    gridRows_ = rows;
-
-    // Write glyph indices
-    WGPUTexelCopyTextureInfo glyphDest = {};
-    glyphDest.texture = cellGlyphTexture_;
-    glyphDest.mipLevel = 0;
-    glyphDest.origin = {0, 0, 0};
-    glyphDest.aspect = WGPUTextureAspect_All;
-
-    WGPUTexelCopyBufferLayout glyphLayout = {};
-    glyphLayout.offset = 0;
-    glyphLayout.bytesPerRow = cols * sizeof(uint16_t);
-    glyphLayout.rowsPerImage = rows;
-
-    WGPUExtent3D glyphSize = {cols, rows, 1};
-    wgpuQueueWriteTexture(queue, &glyphDest, glyphs,
-                          cols * rows * sizeof(uint16_t), &glyphLayout, &glyphSize);
-
-    // Write FG colors
-    WGPUTexelCopyTextureInfo fgDest = {};
-    fgDest.texture = cellFgColorTexture_;
-    fgDest.mipLevel = 0;
-    fgDest.origin = {0, 0, 0};
-    fgDest.aspect = WGPUTextureAspect_All;
-
-    WGPUTexelCopyBufferLayout fgLayout = {};
-    fgLayout.offset = 0;
-    fgLayout.bytesPerRow = cols * 4;
-    fgLayout.rowsPerImage = rows;
-
-    WGPUExtent3D fgSize = {cols, rows, 1};
-    wgpuQueueWriteTexture(queue, &fgDest, fgColors, cols * rows * 4, &fgLayout, &fgSize);
-
-    // Write BG colors
-    WGPUTexelCopyTextureInfo bgDest = {};
-    bgDest.texture = cellBgColorTexture_;
-    bgDest.mipLevel = 0;
-    bgDest.origin = {0, 0, 0};
-    bgDest.aspect = WGPUTextureAspect_All;
-
-    WGPUTexelCopyBufferLayout bgLayout = {};
-    bgLayout.offset = 0;
-    bgLayout.bytesPerRow = cols * 4;
-    bgLayout.rowsPerImage = rows;
-
-    WGPUExtent3D bgSize = {cols, rows, 1};
-    wgpuQueueWriteTexture(queue, &bgDest, bgColors, cols * rows * 4, &bgLayout, &bgSize);
-
-    // Write attrs
-    WGPUTexelCopyTextureInfo attrsDest = {};
-    attrsDest.texture = cellAttrsTexture_;
-    attrsDest.mipLevel = 0;
-    attrsDest.origin = {0, 0, 0};
-    attrsDest.aspect = WGPUTextureAspect_All;
-
-    WGPUTexelCopyBufferLayout attrsLayout = {};
-    attrsLayout.offset = 0;
-    attrsLayout.bytesPerRow = cols;
-    attrsLayout.rowsPerImage = rows;
-
-    WGPUExtent3D attrsSize = {cols, rows, 1};
-    wgpuQueueWriteTexture(queue, &attrsDest, attrs, cols * rows, &attrsLayout, &attrsSize);
+    updateCellBuffer(queue, cells, cols, rows);
   }
 
-  // Update uniforms
+  // Update uniforms (time is set by Yetty::mainLoopIteration via setTime())
   uniforms_.projection = glm::ortho(0.0f, static_cast<float>(screenWidth_),
                                     static_cast<float>(screenHeight_), 0.0f, -1.0f, 1.0f);
   uniforms_.screenSize = {static_cast<float>(screenWidth_), static_cast<float>(screenHeight_)};
@@ -1315,26 +977,23 @@ Result<void> GridRenderer::renderToPassFromBuffers(WGPURenderPassEncoder pass,
   uniforms_.cursorVisible = cursorVisible ? 1.0f : 0.0f;
   wgpuQueueWriteBuffer(queue, uniformBuffer_, 0, &uniforms_, sizeof(Uniforms));
 
-  // Draw to provided pass - check pipeline/bindGroup after potential recreation
-  if (!pipeline_) return Err<void>("GridRenderer::renderToPassFromBuffers: pipeline not initialized after setup");
-  if (!bindGroup_) return Err<void>("GridRenderer::renderToPassFromBuffers: bindGroup not initialized after setup");
+  // Draw to provided pass
+  if (!pipeline_) return Err<void>("GridRenderer::renderToPassFromCells: pipeline not initialized");
+  if (!bindGroup_) return Err<void>("GridRenderer::renderToPassFromCells: bindGroup not initialized");
 
   wgpuRenderPassEncoderSetPipeline(pass, pipeline_);
-  wgpuRenderPassEncoderSetBindGroup(pass, 0, bindGroup_, 0, nullptr);
+  wgpuRenderPassEncoderSetBindGroup(pass, 1, bindGroup_, 0, nullptr);
   wgpuRenderPassEncoderSetVertexBuffer(pass, 0, quadVertexBuffer_, 0,
                                        WGPU_WHOLE_SIZE);
   wgpuRenderPassEncoderDraw(pass, 6, 1, 0, 0);
   return Ok();
 }
 
-void GridRenderer::renderFromBuffers(uint32_t cols, uint32_t rows,
-                                     const uint16_t* glyphs,
-                                     const uint8_t* fgColors,
-                                     const uint8_t* bgColors,
-                                     const uint8_t* attrs,
-                                     int cursorCol, int cursorRow,
-                                     bool cursorVisible) noexcept {
-  if (!_ctx || !font_) return;
+void GridRenderer::renderFromCells(uint32_t cols, uint32_t rows,
+                                   const Cell* cells,
+                                   int cursorCol, int cursorRow,
+                                   bool cursorVisible) noexcept {
+  if (!_ctx || !font_ || !cells) return;
 
   WGPUDevice device = _ctx->getDevice();
   WGPUQueue queue = _ctx->getQueue();
@@ -1344,14 +1003,14 @@ void GridRenderer::renderFromBuffers(uint32_t cols, uint32_t rows,
     emojiAtlas_->uploadToGPU();
   }
 
-  // Recreate textures and bind group if grid size changed
+  // Recreate buffer and bind group if grid size changed
   if (cols != textureCols_ || rows != textureRows_) {
-    if (auto res = createCellTextures(device, cols, rows); !res) {
-      yerror("GridRenderer::renderFromBuffers: {}", error_msg(res));
+    if (auto res = createCellBuffer(device, cols, rows); !res) {
+      yerror("GridRenderer::renderFromCells: {}", error_msg(res));
       return;
     }
     if (auto res = createBindGroup(device, *font_); !res) {
-      yerror("GridRenderer::renderFromBuffers: {}", error_msg(res));
+      yerror("GridRenderer::renderFromCells: {}", error_msg(res));
       return;
     }
     needsBindGroupRecreation_ = false;
@@ -1359,79 +1018,17 @@ void GridRenderer::renderFromBuffers(uint32_t cols, uint32_t rows,
   } else if (needsBindGroupRecreation_ ||
              font_->getResourceVersion() != lastFontResourceVersion_) {
     if (auto res = createBindGroup(device, *font_); !res) {
-      yerror("GridRenderer::renderFromBuffers: {}", error_msg(res));
+      yerror("GridRenderer::renderFromCells: {}", error_msg(res));
       return;
     }
     needsBindGroupRecreation_ = false;
     lastFontResourceVersion_ = font_->getResourceVersion();
   }
 
-  // Update cell textures from buffer data
-  gridCols_ = cols;
-  gridRows_ = rows;
+  // Zero-copy upload of Cell buffer
+  updateCellBuffer(queue, cells, cols, rows);
 
-  // Write glyph indices
-  WGPUTexelCopyTextureInfo glyphDest = {};
-  glyphDest.texture = cellGlyphTexture_;
-  glyphDest.mipLevel = 0;
-  glyphDest.origin = {0, 0, 0};
-  glyphDest.aspect = WGPUTextureAspect_All;
-
-  WGPUTexelCopyBufferLayout glyphLayout = {};
-  glyphLayout.offset = 0;
-  glyphLayout.bytesPerRow = cols * sizeof(uint16_t);
-  glyphLayout.rowsPerImage = rows;
-
-  WGPUExtent3D glyphSize = {cols, rows, 1};
-  wgpuQueueWriteTexture(queue, &glyphDest, glyphs,
-                        cols * rows * sizeof(uint16_t), &glyphLayout, &glyphSize);
-
-  // Write FG colors
-  WGPUTexelCopyTextureInfo fgDest = {};
-  fgDest.texture = cellFgColorTexture_;
-  fgDest.mipLevel = 0;
-  fgDest.origin = {0, 0, 0};
-  fgDest.aspect = WGPUTextureAspect_All;
-
-  WGPUTexelCopyBufferLayout fgLayout = {};
-  fgLayout.offset = 0;
-  fgLayout.bytesPerRow = cols * 4;
-  fgLayout.rowsPerImage = rows;
-
-  WGPUExtent3D fgSize = {cols, rows, 1};
-  wgpuQueueWriteTexture(queue, &fgDest, fgColors, cols * rows * 4, &fgLayout, &fgSize);
-
-  // Write BG colors
-  WGPUTexelCopyTextureInfo bgDest = {};
-  bgDest.texture = cellBgColorTexture_;
-  bgDest.mipLevel = 0;
-  bgDest.origin = {0, 0, 0};
-  bgDest.aspect = WGPUTextureAspect_All;
-
-  WGPUTexelCopyBufferLayout bgLayout = {};
-  bgLayout.offset = 0;
-  bgLayout.bytesPerRow = cols * 4;
-  bgLayout.rowsPerImage = rows;
-
-  WGPUExtent3D bgSize = {cols, rows, 1};
-  wgpuQueueWriteTexture(queue, &bgDest, bgColors, cols * rows * 4, &bgLayout, &bgSize);
-
-  // Write attrs
-  WGPUTexelCopyTextureInfo attrsDest = {};
-  attrsDest.texture = cellAttrsTexture_;
-  attrsDest.mipLevel = 0;
-  attrsDest.origin = {0, 0, 0};
-  attrsDest.aspect = WGPUTextureAspect_All;
-
-  WGPUTexelCopyBufferLayout attrsLayout = {};
-  attrsLayout.offset = 0;
-  attrsLayout.bytesPerRow = cols;
-  attrsLayout.rowsPerImage = rows;
-
-  WGPUExtent3D attrsSize = {cols, rows, 1};
-  wgpuQueueWriteTexture(queue, &attrsDest, attrs, cols * rows, &attrsLayout, &attrsSize);
-
-  // Update uniforms
+  // Update uniforms (time is set by Yetty::mainLoopIteration via setTime())
   uniforms_.projection = glm::ortho(0.0f, static_cast<float>(screenWidth_),
                                     static_cast<float>(screenHeight_), 0.0f, -1.0f, 1.0f);
   uniforms_.screenSize = {static_cast<float>(screenWidth_), static_cast<float>(screenHeight_)};
@@ -1446,7 +1043,7 @@ void GridRenderer::renderFromBuffers(uint32_t cols, uint32_t rows,
   // Render
   auto targetViewResult = _ctx->getCurrentTextureView();
   if (!targetViewResult) {
-    yerror("GridRenderer::renderFromBuffers: getCurrentTextureView failed");
+    yerror("GridRenderer::renderFromCells: getCurrentTextureView failed");
     return;
   }
   WGPUTextureView targetView = *targetViewResult;
@@ -1471,7 +1068,7 @@ void GridRenderer::renderFromBuffers(uint32_t cols, uint32_t rows,
 
   WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
   wgpuRenderPassEncoderSetPipeline(pass, pipeline_);
-  wgpuRenderPassEncoderSetBindGroup(pass, 0, bindGroup_, 0, nullptr);
+  wgpuRenderPassEncoderSetBindGroup(pass, 1, bindGroup_, 0, nullptr);
   wgpuRenderPassEncoderSetVertexBuffer(pass, 0, quadVertexBuffer_, 0, WGPU_WHOLE_SIZE);
   wgpuRenderPassEncoderDraw(pass, 6, 1, 0, 0);
   wgpuRenderPassEncoderEnd(pass);
