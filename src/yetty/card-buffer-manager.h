@@ -8,7 +8,7 @@
 namespace yetty {
 
 // Constants for image atlas
-constexpr uint32_t IMAGE_ATLAS_SIZE = 4096;       // 4096x4096 = 64MB RGBA8
+constexpr uint32_t IMAGE_ATLAS_SIZE = 2048;       // 2048x2048 = 16MB RGBA8
 constexpr uint32_t MAX_CARD_SLOTS = 16384;        // Max unique card slots to track
 
 // Handle types for type safety
@@ -66,6 +66,9 @@ public:
 
     uint32_t totalSize() const { return _totalSize; }
 
+    // High water mark: maximum offset+size ever allocated (for upload optimization)
+    uint32_t highWaterMark() const { return _highWaterMark; }
+
 private:
     MetadataPool* findPool(uint32_t size);
     MetadataPool* findPoolBySlotSize(uint32_t slotSize);
@@ -75,6 +78,7 @@ private:
     MetadataPool _pool128;
     MetadataPool _pool256;
     uint32_t _totalSize;
+    uint32_t _highWaterMark = 0;
 };
 
 // Free-list allocator for variable-size storage
@@ -89,6 +93,9 @@ public:
     uint32_t used() const { return _used; }
     uint32_t fragmentCount() const { return static_cast<uint32_t>(_freeBlocks.size()); }
 
+    // High water mark: maximum offset+size ever allocated (for upload optimization)
+    uint32_t highWaterMark() const { return _highWaterMark; }
+
 private:
     struct FreeBlock {
         uint32_t offset;
@@ -99,6 +106,7 @@ private:
 
     uint32_t _capacity;
     uint32_t _used;
+    uint32_t _highWaterMark = 0;
     std::vector<FreeBlock> _freeBlocks;
 };
 
@@ -118,11 +126,11 @@ private:
 // Configuration for CardBufferManager
 struct CardBufferConfig {
     uint32_t metadataPool32Count = 0;    // No 32-byte slots needed currently
-    uint32_t metadataPool64Count = 256;  // ImageCard uses 64-byte metadata
-    uint32_t metadataPool128Count = 64;
-    uint32_t metadataPool256Count = 32;
-    uint32_t storageCapacity = 16 * 1024 * 1024;      // For plot data (array<f32>)
-    uint32_t imageDataCapacity = 256 * 1024 * 1024;   // For image pixels (array<u32> RGBA8) - scrollback storage
+    uint32_t metadataPool64Count = 64;   // ImageCard uses 64-byte metadata (64 cards max)
+    uint32_t metadataPool128Count = 16;
+    uint32_t metadataPool256Count = 8;
+    uint32_t storageCapacity = 1 * 1024 * 1024;       // 1MB for plot data (array<f32>)
+    uint32_t imageDataCapacity = 8 * 1024 * 1024;     // 8MB for image pixels - ~2 1024x1024 images
 };
 
 // Main buffer manager
@@ -180,6 +188,11 @@ public:
     WGPUBuffer metadataBuffer() const { return _metadataGpuBuffer; }
     WGPUBuffer storageBuffer() const { return _storageGpuBuffer; }
     WGPUBuffer imageDataBuffer() const { return _imageDataGpuBuffer; }
+
+    // High water marks for upload optimization (only upload up to this extent)
+    uint32_t metadataHighWaterMark() const { return _metadataAllocator.highWaterMark(); }
+    uint32_t storageHighWaterMark() const { return _storageAllocator.highWaterMark(); }
+    uint32_t imageDataHighWaterMark() const { return _imageDataAllocator.highWaterMark(); }
 
     // Atlas accessors (for fragment shader binding)
     WGPUTexture atlasTexture() const { return _atlasTexture; }

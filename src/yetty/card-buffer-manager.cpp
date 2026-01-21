@@ -86,7 +86,16 @@ Result<MetadataHandle> MetadataAllocator::allocate(uint32_t size) {
         return Err("MetadataAllocator: pool exhausted");
     }
 
-    return Ok(MetadataHandle{result.value(), pool->slotSize()});
+    uint32_t offset = result.value();
+    uint32_t slotSize = pool->slotSize();
+
+    // Update high water mark
+    uint32_t endOffset = offset + slotSize;
+    if (endOffset > _highWaterMark) {
+        _highWaterMark = endOffset;
+    }
+
+    return Ok(MetadataHandle{offset, slotSize});
 }
 
 Result<void> MetadataAllocator::deallocate(MetadataHandle handle) {
@@ -126,6 +135,13 @@ Result<StorageHandle> StorageAllocator::allocate(uint32_t size) {
             }
 
             _used += size;
+
+            // Update high water mark
+            uint32_t endOffset = offset + size;
+            if (endOffset > _highWaterMark) {
+                _highWaterMark = endOffset;
+            }
+
             return Ok(StorageHandle{offset, size});
         }
     }
@@ -742,16 +758,28 @@ Result<void> CardBufferManager::prepareAtlas(WGPUCommandEncoder encoder, WGPUQue
     bindEntries[0].offset = 0;
     bindEntries[0].size = gridCols * gridRows * 12;  // 12 bytes per cell (3 u32s)
 
+    // Use high water marks to limit GPU memory binding (only bind what we've actually used)
+    uint32_t metadataExtent = _metadataAllocator.highWaterMark();
+    uint32_t imageDataExtent = _imageDataAllocator.highWaterMark();
+
+    // Minimum 64 bytes to avoid zero-size binding issues
+    if (metadataExtent < 64) metadataExtent = 64;
+    if (imageDataExtent < 64) imageDataExtent = 64;
+
+    yinfo("prepareAtlas: binding metadata extent={} (full={}), imageData extent={} (full={})",
+          metadataExtent, _metadataCpuBuffer.size() * sizeof(uint32_t),
+          imageDataExtent, _imageDataCpuBuffer.size() * sizeof(uint32_t));
+
     bindEntries[1].binding = 1;
     bindEntries[1].buffer = _metadataGpuBuffer;
     bindEntries[1].offset = 0;
-    bindEntries[1].size = _metadataCpuBuffer.size() * sizeof(uint32_t);  // Convert to bytes
+    bindEntries[1].size = metadataExtent;
     yinfo("prepareAtlas: compute bind group using metadataBuffer={}", (void*)_metadataGpuBuffer);
 
     bindEntries[2].binding = 2;
     bindEntries[2].buffer = _imageDataGpuBuffer;
     bindEntries[2].offset = 0;
-    bindEntries[2].size = _imageDataCpuBuffer.size() * sizeof(uint32_t);  // Convert to bytes
+    bindEntries[2].size = imageDataExtent;
 
     bindEntries[3].binding = 3;
     bindEntries[3].textureView = _atlasTextureView;
