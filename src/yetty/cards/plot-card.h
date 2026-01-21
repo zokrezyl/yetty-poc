@@ -11,7 +11,23 @@ namespace yetty {
 //
 // Uses shader glyph 1048592 (U+100010)
 //
-// Metadata layout (64 bytes - uses SLOT_64):
+// =============================================================================
+// ANSI-Compatible Cell Encoding (24-bit true-color)
+// =============================================================================
+// Cards are rendered by outputting ANSI escape sequences to vterm, allowing
+// proper scrolling and scrollback buffer management. Each cell encodes:
+//
+//   fg (24 bits via ANSI RGB): Metadata SLOT INDEX (not byte offset!)
+//     - slotIndex = byteOffset / 32 (metadata is 32-byte aligned)
+//     - Shader converts: metaOffset_u32 = slotIndex * 8
+//     - Addressable: 2^24 × 32 = 512MB metadata
+//
+//   bg (24 bits via ANSI RGB): Relative position within widget
+//     - Encoding: (relRow << 12) | relCol
+//     - 12 bits each → max 4096×4096 cell widgets
+//
+// =============================================================================
+// Metadata layout (48 bytes, uses 64-byte slot):
 //   offset 0:  plotType (u32)   - 0=line, 1=bar, 2=scatter, 3=area
 //   offset 4:  dataOffset (u32) - float index into cardStorage (NOT byte offset!)
 //   offset 8:  dataCount (u32)  - number of data points
@@ -20,11 +36,10 @@ namespace yetty {
 //   offset 20: lineColor (u32)  - packed RGBA for line/points
 //   offset 24: fillColor (u32)  - packed RGBA for fill/bars
 //   offset 28: flags (u32)      - bit 0: show grid, bit 1: show axes
-//   offset 32: widgetCol (u32)  - widget's column position in grid
-//   offset 36: widgetRow (u32)  - widget's row position in grid
-//   offset 40: widthCells (u32) - widget width in cells
-//   offset 44: heightCells (u32)- widget height in cells
-//   offset 48-63: reserved (16 bytes padding)
+//   offset 32: widthCells (u32) - widget width in cells
+//   offset 36: heightCells (u32)- widget height in cells
+//   offset 40: bgColor (u32)    - packed RGBA for background
+//   offset 44-63: reserved (20 bytes padding)
 //=============================================================================
 
 class PlotCard : public Card {
@@ -116,11 +131,10 @@ private:
         uint32_t lineColor;
         uint32_t fillColor;
         uint32_t flags;
-        uint32_t widgetCol;    // Widget's column position
-        uint32_t widgetRow;    // Widget's row position
         uint32_t widthCells;   // Widget width in cells
         uint32_t heightCells;  // Widget height in cells
-        uint32_t _reserved[4]; // Padding to 64 bytes
+        uint32_t bgColor;      // Background color
+        uint32_t _reserved[5]; // Padding to 64 bytes
     };
     static_assert(sizeof(Metadata) == 64, "Metadata must be 64 bytes");
 
@@ -131,6 +145,7 @@ private:
     bool autoRange_ = true;
     uint32_t lineColor_ = 0xFF00FF00;  // Green
     uint32_t fillColor_ = 0x8000FF00;  // Semi-transparent green
+    uint32_t bgColor_ = 0xFF1A1A2E;    // Dark blue-ish background
     uint32_t flags_ = FLAG_GRID | FLAG_AXES;
 
     StorageHandle storageHandle_ = StorageHandle::invalid();

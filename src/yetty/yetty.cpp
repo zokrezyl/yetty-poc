@@ -23,6 +23,7 @@
 #include "card-buffer-manager.h"
 #include "card-factory.h"
 #include "cards/plot-card.h"
+#include "cards/image-card.h"
 #include <args.hxx>
 #include <yetty/cursor-renderer.h>
 #include <yetty/shader-glyph-renderer.h>
@@ -415,16 +416,26 @@ Result<void> Yetty::initGraphics() noexcept {
   _sharedUniformBuffer = wgpuDeviceCreateBuffer(_ctx->getDevice(), &bufDesc);
 
 #if !YETTY_WEB && !defined(__ANDROID__)
-  // Create CardBufferManager for card-based widgets (plots, etc.)
+  // Create CardBufferManager for card-based widgets (plots, images, etc.)
   // Must be created before bind group layout to include its buffers
   _cardBufferManager = std::make_unique<CardBufferManager>(_ctx->getDevice());
   yinfo("CardBufferManager created");
 
-  // Create bind group layout for shared uniforms + card buffers (group 0)
+  // Initialize the atlas (compute shader pipelines and textures)
+  if (auto res = _cardBufferManager->initAtlas(); !res) {
+    yerror("Failed to initialize card image atlas: {}", res.error().message());
+    return res;
+  }
+  yinfo("Card image atlas initialized");
+
+  // Create bind group layout for shared uniforms + card buffers + atlas (group 0)
   // Binding 0: SharedUniforms
   // Binding 1: Card metadata buffer (read-only storage)
   // Binding 2: Card storage buffer (read-only storage)
-  std::array<WGPUBindGroupLayoutEntry, 3> layoutEntries = {};
+  // Binding 3: Card image atlas texture
+  // Binding 4: Card image sampler
+  // Binding 5: Card image data buffer (read-only storage)
+  std::array<WGPUBindGroupLayoutEntry, 6> layoutEntries = {};
 
   layoutEntries[0].binding = 0;
   layoutEntries[0].visibility = WGPUShaderStage_Fragment;
@@ -441,14 +452,38 @@ Result<void> Yetty::initGraphics() noexcept {
   layoutEntries[2].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
   layoutEntries[2].buffer.minBindingSize = 0;  // Dynamic size
 
+  layoutEntries[3].binding = 3;
+  layoutEntries[3].visibility = WGPUShaderStage_Fragment;
+  layoutEntries[3].texture.sampleType = WGPUTextureSampleType_Float;
+  layoutEntries[3].texture.viewDimension = WGPUTextureViewDimension_2D;
+
+  layoutEntries[4].binding = 4;
+  layoutEntries[4].visibility = WGPUShaderStage_Fragment;
+  layoutEntries[4].sampler.type = WGPUSamplerBindingType_Filtering;
+
+  layoutEntries[5].binding = 5;
+  layoutEntries[5].visibility = WGPUShaderStage_Fragment;
+  layoutEntries[5].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
+  layoutEntries[5].buffer.minBindingSize = 0;  // Dynamic size
+
   WGPUBindGroupLayoutDescriptor layoutDesc = {};
   layoutDesc.label = WGPU_STR("Shared Bind Group Layout");
   layoutDesc.entryCount = layoutEntries.size();
   layoutDesc.entries = layoutEntries.data();
   _sharedBindGroupLayout = wgpuDeviceCreateBindGroupLayout(_ctx->getDevice(), &layoutDesc);
 
-  // Create bind group with all buffers
-  std::array<WGPUBindGroupEntry, 3> bindEntries = {};
+  // Verify atlas resources are valid
+  WGPUTextureView atlasView = _cardBufferManager->atlasTextureView();
+  WGPUSampler atlasSampler = _cardBufferManager->atlasSampler();
+  if (!atlasView || !atlasSampler) {
+    yerror("Atlas resources not initialized: view={}, sampler={}",
+           (void*)atlasView, (void*)atlasSampler);
+    return Err<void>("Atlas resources not initialized");
+  }
+  yinfo("Atlas resources verified: view={}, sampler={}", (void*)atlasView, (void*)atlasSampler);
+
+  // Create bind group with all buffers and textures
+  std::array<WGPUBindGroupEntry, 6> bindEntries = {};
 
   bindEntries[0].binding = 0;
   bindEntries[0].buffer = _sharedUniformBuffer;
@@ -457,10 +492,21 @@ Result<void> Yetty::initGraphics() noexcept {
   bindEntries[1].binding = 1;
   bindEntries[1].buffer = _cardBufferManager->metadataBuffer();
   bindEntries[1].size = wgpuBufferGetSize(_cardBufferManager->metadataBuffer());
+  yinfo("Shared bind group using metadataBuffer={}", (void*)_cardBufferManager->metadataBuffer());
 
   bindEntries[2].binding = 2;
   bindEntries[2].buffer = _cardBufferManager->storageBuffer();
   bindEntries[2].size = wgpuBufferGetSize(_cardBufferManager->storageBuffer());
+
+  bindEntries[3].binding = 3;
+  bindEntries[3].textureView = atlasView;
+
+  bindEntries[4].binding = 4;
+  bindEntries[4].sampler = atlasSampler;
+
+  bindEntries[5].binding = 5;
+  bindEntries[5].buffer = _cardBufferManager->imageDataBuffer();
+  bindEntries[5].size = wgpuBufferGetSize(_cardBufferManager->imageDataBuffer());
 
   WGPUBindGroupDescriptor bindDesc = {};
   bindDesc.label = WGPU_STR("Shared Bind Group");
@@ -468,6 +514,11 @@ Result<void> Yetty::initGraphics() noexcept {
   bindDesc.entryCount = bindEntries.size();
   bindDesc.entries = bindEntries.data();
   _sharedBindGroup = wgpuDeviceCreateBindGroup(_ctx->getDevice(), &bindDesc);
+  if (!_sharedBindGroup) {
+    yerror("Failed to create shared bind group");
+    return Err<void>("Failed to create shared bind group");
+  }
+  yinfo("Shared bind group created successfully");
 
 #else
   // Web/Android: only shared uniforms (no card buffers)
@@ -699,10 +750,11 @@ Result<void> Yetty::initTerminal() noexcept {
     _terminal->setBaseCellSize(_baseCellWidth, _baseCellHeight);
     _terminal->setZoomLevel(_zoomLevel);  // Sets cell size and renderer scale
 
-    // Create CardFactory for card-based widgets (plots, etc.)
+    // Create CardFactory for card-based widgets (plots, images, etc.)
     if (_cardBufferManager && _terminal->getGPUScreen()) {
       _cardFactory = std::make_unique<CardFactory>(_cardBufferManager.get());
       registerPlotCard(*_cardFactory);
+      registerImageCard(*_cardFactory);
       _terminal->getGPUScreen()->setCardFactory(_cardFactory.get());
       yinfo("CardFactory created and registered with GPUScreen");
     }
@@ -874,7 +926,22 @@ void Yetty::shutdown() noexcept {
   // 5. Then font resources
   _fontManager.reset();
   _font = nullptr;
-  // 6. Finally WebGPU context
+  // 6. Card buffer manager (owns atlas resources now)
+  _cardFactory.reset();
+  _cardBufferManager.reset();
+  if (_sharedBindGroup) {
+    wgpuBindGroupRelease(_sharedBindGroup);
+    _sharedBindGroup = nullptr;
+  }
+  if (_sharedBindGroupLayout) {
+    wgpuBindGroupLayoutRelease(_sharedBindGroupLayout);
+    _sharedBindGroupLayout = nullptr;
+  }
+  if (_sharedUniformBuffer) {
+    wgpuBufferRelease(_sharedUniformBuffer);
+    _sharedUniformBuffer = nullptr;
+  }
+  // 7. Finally WebGPU context
   _ctx.reset();
 
   if (_window) {
@@ -1285,6 +1352,55 @@ void Yetty::mainLoopIteration() noexcept {
   if (!encoder) {
     yerror("mainLoopIteration: Failed to create command encoder");
     return;
+  }
+
+  //=========================================================================
+  // Compute pass: Populate image atlas before render pass
+  // IMPORTANT: Must upload cells to GPU BEFORE running compute shader
+  //=========================================================================
+  if (_cardBufferManager && _cardBufferManager->atlasInitialized() && _renderer && _terminal) {
+    // Get cells from Terminal's GPUScreen and upload to GPU buffer
+    GPUScreen* gpuScreen = _terminal->getGPUScreen();
+    if (gpuScreen) {
+      const Cell* cells = gpuScreen->getCellData();
+      uint32_t cols = static_cast<uint32_t>(gpuScreen->getCols());
+      uint32_t rows = static_cast<uint32_t>(gpuScreen->getRows());
+
+      if (cells && cols > 0 && rows > 0) {
+        // DEBUG: Scan cells for image glyphs (1048596)
+        constexpr uint32_t IMAGE_GLYPH = 1048596;
+        int imageGlyphCount = 0;
+        uint32_t firstFg = 0, firstBg = 0, firstGlyph = 0;
+        for (uint32_t i = 0; i < cols * rows; ++i) {
+          if (cells[i].glyph == IMAGE_GLYPH) {
+            if (imageGlyphCount == 0) {
+              firstFg = cells[i].fgR | (cells[i].fgG << 8) | (cells[i].fgB << 16);
+              firstBg = cells[i].bgR | (cells[i].bgG << 8) | (cells[i].bgB << 16);
+              firstGlyph = cells[i].glyph;
+            }
+            imageGlyphCount++;
+          }
+        }
+        if (imageGlyphCount > 0) {
+          yinfo("DEBUG: Found {} image glyph cells, first glyph={:#x} fg={:#x} bg={:#x}",
+                imageGlyphCount, firstGlyph, firstFg, firstBg);
+        }
+
+        // Upload cells to GPU buffer first (required for compute shader)
+        if (auto res = _renderer->uploadCells(cols, rows, cells); !res) {
+          yerror("uploadCells failed: {}", res.error().message());
+        }
+
+        // Now run compute shader on the uploaded cell buffer
+        WGPUBuffer cellBuffer = _renderer->getCellBuffer();
+        if (cellBuffer) {
+          if (auto res = _cardBufferManager->prepareAtlas(encoder, _ctx->getQueue(),
+                                                           cellBuffer, cols, rows); !res) {
+            yerror("prepareAtlas failed: {}", res.error().message());
+          }
+        }
+      }
+    }
   }
 
   WGPURenderPassColorAttachment colorAttachment = {};

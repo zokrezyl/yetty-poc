@@ -46,6 +46,14 @@ public:
   // Get emoji atlas for dynamic loading
   EmojiAtlas *getEmojiAtlas() const noexcept { return emojiAtlas_.get(); }
 
+  // Get cell buffer for compute shader access (image atlas)
+  WGPUBuffer getCellBuffer() const noexcept { return cellBuffer_; }
+  uint32_t getGridCols() const noexcept { return gridCols_; }
+  uint32_t getGridRows() const noexcept { return gridRows_; }
+
+  // Upload cells to GPU buffer (for compute shader access before render)
+  Result<void> uploadCells(uint32_t cols, uint32_t rows, const Cell* cells) noexcept;
+
   // Update font bindings (call after font atlas/metadata changes)
   void updateFontBindings(Font &font) noexcept;
 

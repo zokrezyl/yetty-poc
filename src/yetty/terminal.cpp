@@ -592,8 +592,11 @@ void Terminal::sendRaw(const char *data, size_t len) {
 void Terminal::resize(uint32_t cols, uint32_t rows) {
   _cols = cols;
   _rows = rows;
-  vterm_set_size(_vterm, _rows, _cols);
+  // CRITICAL: Resize GPUScreen BEFORE vterm_set_size!
+  // vterm_set_size triggers callbacks (scroll, moverect) that access GPUScreen
+  // buffers. If GPUScreen has old dimensions, we get heap corruption.
   _grid.resize(_cols, _rows);
+  vterm_set_size(_vterm, _rows, _cols);
 #ifndef _WIN32
   if (_ptyMaster >= 0) {
     struct winsize ws = {static_cast<unsigned short>(_rows),

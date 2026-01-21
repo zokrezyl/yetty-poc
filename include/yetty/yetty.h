@@ -242,6 +242,8 @@ private:
     WGPUBindGroup _sharedBindGroup = nullptr;
     SharedUniforms _sharedUniforms = {};
 
+    // Card image atlas is owned by CardBufferManager
+
 public:
     // Access shared uniforms for renderers
     WGPUBindGroupLayout getSharedBindGroupLayout() const noexcept { return _sharedBindGroupLayout; }

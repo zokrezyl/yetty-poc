@@ -7,6 +7,10 @@
 
 namespace yetty {
 
+// Constants for image atlas
+constexpr uint32_t IMAGE_ATLAS_SIZE = 4096;       // 4096x4096 = 64MB RGBA8
+constexpr uint32_t MAX_CARD_SLOTS = 16384;        // Max unique card slots to track
+
 // Handle types for type safety
 struct MetadataHandle {
     uint32_t offset;
@@ -23,6 +27,9 @@ struct StorageHandle {
     bool isValid() const { return size > 0; }
     static StorageHandle invalid() { return {0, 0}; }
 };
+
+// Alias for image data (same structure as StorageHandle)
+using ImageDataHandle = StorageHandle;
 
 // Pool allocator for fixed-size metadata slots
 class MetadataPool {
@@ -114,7 +121,8 @@ struct CardBufferConfig {
     uint32_t metadataPool64Count = 128;
     uint32_t metadataPool128Count = 64;
     uint32_t metadataPool256Count = 32;
-    uint32_t storageCapacity = 16 * 1024 * 1024;
+    uint32_t storageCapacity = 16 * 1024 * 1024;      // For plot data (array<f32>)
+    uint32_t imageDataCapacity = 256 * 1024 * 1024;   // For image pixels (array<u32> RGBA8) - scrollback storage
 };
 
 // Main buffer manager
@@ -134,7 +142,7 @@ public:
     Result<void> writeMetadata(MetadataHandle handle, const void* data, uint32_t size);
     Result<void> writeMetadataAt(MetadataHandle handle, uint32_t offset, const void* data, uint32_t size);
 
-    // Storage operations
+    // Storage operations (for float data like plot points)
     Result<StorageHandle> allocateStorage(uint32_t size);
     Result<void> deallocateStorage(StorageHandle handle);
     Result<void> writeStorage(StorageHandle handle, const void* data, uint32_t size);
@@ -145,40 +153,111 @@ public:
                                                   uint32_t metaFieldOffset,
                                                   uint32_t storageSize);
 
+    // Image data operations (for RGBA8 pixel data)
+    Result<ImageDataHandle> allocateImageData(uint32_t size);
+    Result<void> deallocateImageData(ImageDataHandle handle);
+    Result<void> writeImageData(ImageDataHandle handle, const void* data, uint32_t size);
+    Result<void> writeImageDataAt(ImageDataHandle handle, uint32_t offset, const void* data, uint32_t size);
+
     // GPU upload
     Result<void> flush(WGPUQueue queue);
+
+    // =========================================================================
+    // Image Atlas (GPU-driven)
+    // =========================================================================
+
+    // Initialize atlas resources (call after constructor)
+    Result<void> initAtlas();
+
+    // Dispatch compute shader to populate atlas before render pass
+    // cellBuffer: terminal cell buffer with glyph/fg/bg data
+    // gridCols, gridRows: grid dimensions
+    Result<void> prepareAtlas(WGPUCommandEncoder encoder, WGPUQueue queue,
+                              WGPUBuffer cellBuffer,
+                              uint32_t gridCols, uint32_t gridRows);
 
     // Accessors
     WGPUBuffer metadataBuffer() const { return _metadataGpuBuffer; }
     WGPUBuffer storageBuffer() const { return _storageGpuBuffer; }
+    WGPUBuffer imageDataBuffer() const { return _imageDataGpuBuffer; }
+
+    // Atlas accessors (for fragment shader binding)
+    WGPUTexture atlasTexture() const { return _atlasTexture; }
+    WGPUTextureView atlasTextureView() const { return _atlasTextureView; }
+    WGPUSampler atlasSampler() const { return _atlasSampler; }
+    bool atlasInitialized() const { return _atlasInitialized; }
 
     struct Stats {
         uint32_t metadataUsed;
         uint32_t metadataCapacity;
         uint32_t storageUsed;
         uint32_t storageCapacity;
+        uint32_t imageDataUsed;
+        uint32_t imageDataCapacity;
         uint32_t pendingMetadataUploads;
         uint32_t pendingStorageUploads;
+        uint32_t pendingImageDataUploads;
     };
     Stats getStats() const;
 
 private:
     Result<void> createGpuBuffers();
+    Result<void> createAtlasTexture();
+    Result<void> createAtlasComputePipeline();
 
     WGPUDevice _device;
     Config _config;
 
-    std::vector<uint8_t> _metadataCpuBuffer;
-    std::vector<uint8_t> _storageCpuBuffer;
+    // CPU buffers - use uint32_t for guaranteed 32-bit alignment
+    std::vector<uint32_t> _metadataCpuBuffer;
+    std::vector<uint32_t> _storageCpuBuffer;
+    std::vector<uint32_t> _imageDataCpuBuffer;
 
     WGPUBuffer _metadataGpuBuffer;
     WGPUBuffer _storageGpuBuffer;
+    WGPUBuffer _imageDataGpuBuffer;
 
     MetadataAllocator _metadataAllocator;
     StorageAllocator _storageAllocator;
+    StorageAllocator _imageDataAllocator;
 
     DirtyTracker _metadataDirty;
     DirtyTracker _storageDirty;
+    DirtyTracker _imageDataDirty;
+
+    // =========================================================================
+    // Image Atlas Resources
+    // =========================================================================
+    WGPUTexture _atlasTexture = nullptr;
+    WGPUTextureView _atlasTextureView = nullptr;
+    WGPUSampler _atlasSampler = nullptr;
+
+    // Compute pipeline for atlas population
+    WGPUShaderModule _atlasShaderModule = nullptr;
+    WGPUComputePipeline _scanPipeline = nullptr;     // Phase 1: scan cells, allocate positions
+    WGPUComputePipeline _copyPipeline = nullptr;     // Phase 2: copy pixels
+
+    // Bind group for compute shader
+    WGPUBindGroupLayout _atlasBindGroupLayout = nullptr;
+    WGPUBindGroup _atlasBindGroup = nullptr;
+
+    // Atlas state buffer (for atomic allocation)
+    struct AtlasState {
+        uint32_t nextX;
+        uint32_t nextY;
+        uint32_t rowHeight;
+        uint32_t atlasWidth;
+        uint32_t atlasHeight;
+        uint32_t gridCols;
+        uint32_t gridRows;
+        uint32_t _padding;
+    };
+    WGPUBuffer _atlasStateBuffer = nullptr;
+
+    // Processed cards tracking (to avoid duplicate processing)
+    WGPUBuffer _processedCardsBuffer = nullptr;
+
+    bool _atlasInitialized = false;
 };
 
 }  // namespace yetty

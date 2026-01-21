@@ -1082,4 +1082,34 @@ void GridRenderer::renderFromCells(uint32_t cols, uint32_t rows,
   wgpuCommandBufferRelease(cmdBuffer);
 }
 
+Result<void> GridRenderer::uploadCells(uint32_t cols, uint32_t rows, const Cell* cells) noexcept {
+  if (!_ctx || !cells || cols == 0 || rows == 0) {
+    return Err<void>("GridRenderer::uploadCells: invalid parameters");
+  }
+
+  WGPUDevice device = _ctx->getDevice();
+  WGPUQueue queue = _ctx->getQueue();
+
+  // Create/resize cell buffer if needed
+  if (cols != textureCols_ || rows != textureRows_) {
+    if (auto res = createCellBuffer(device, cols, rows); !res) {
+      return Err<void>("GridRenderer::uploadCells: createCellBuffer failed", res);
+    }
+    if (font_) {
+      if (auto res = createBindGroup(device, *font_); !res) {
+        return Err<void>("GridRenderer::uploadCells: createBindGroup failed", res);
+      }
+    }
+    needsBindGroupRecreation_ = false;
+    if (font_) {
+      lastFontResourceVersion_ = font_->getResourceVersion();
+    }
+  }
+
+  // Upload cell data to GPU
+  updateCellBuffer(queue, cells, cols, rows);
+
+  return Ok();
+}
+
 } // namespace yetty

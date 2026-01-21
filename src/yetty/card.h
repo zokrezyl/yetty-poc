@@ -53,8 +53,13 @@ public:
     // Accessors - GPUScreen needs these to mark cells and route input
     //=========================================================================
 
-    // Unique identifier (frozen for card lifetime)
+    // Raw byte offset in metadata buffer (for internal use)
     uint32_t metadataOffset() const { return metaHandle_.offset; }
+
+    // Slot index for ANSI encoding (offset / 32)
+    // Metadata is always 32-byte aligned, so we can address 512MB with 24 bits
+    // This is what gets encoded in the fg color for ANSI true-color sequences
+    uint32_t metadataSlotIndex() const { return metaHandle_.offset / 32; }
 
     // Shader glyph codepoint (in Plane 16 PUA-B range)
     uint32_t shaderGlyph() const { return shaderGlyph_; }
