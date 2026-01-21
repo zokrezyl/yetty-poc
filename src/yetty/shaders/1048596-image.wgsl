@@ -16,16 +16,16 @@
 // =============================================================================
 // Per-cell encoding (ANSI true-color compatible):
 //
-//   fg (24 bits): Metadata SLOT INDEX
+//   fg (24 bits): Metadata SLOT INDEX (encodes byte offset / 32)
 //     - slotIndex = byteOffset / 32
-//     - Shader: metaOffset_u32 = slotIndex * 8
+//     - Shader: metaOffset_u32 = slotIndex * 8 = byteOffset / 4
 //
 //   bg (24 bits): Relative position within widget
 //     - Lower 12 bits = relCol, upper 12 bits = relRow
 //     - Shader computes widget-wide UV from cell position
 //
 // =============================================================================
-// Metadata layout (64 bytes = 16 u32s, but addressed as 8 u32s per 32-byte slot):
+// Metadata layout (64 bytes = 16 u32s):
 //   offset 0:  imageDataOffset (u32) - byte offset in cardImageData buffer
 //   offset 1:  imageWidth (u32)      - image width in pixels
 //   offset 2:  imageHeight (u32)     - image height in pixels
@@ -39,6 +39,7 @@
 //   offset 10: flags (u32)           - bit 0: bilinear, bit 1: preserve aspect
 //   offset 11: bgColor (u32)         - background color (packed RGBA)
 //
+// Note: Cell dimensions come from grid.cellSize uniform (GridUniforms)
 // =============================================================================
 
 const IMAGE_FLAG_BILINEAR: u32 = 1u;
@@ -76,16 +77,6 @@ fn shaderGlyph_1048596(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
 
     let bgColor = unpackColor(bgColorPacked);
 
-    // DEBUG: Different colors for different failure modes
-    if (imageWidth == 0u || imageHeight == 0u) {
-        // CYAN = no image dimensions
-        return vec3<f32>(0.0, 1.0, 1.0);
-    }
-    if (atlasX == 0xFFFFFFFFu || atlasY == 0xFFFFFFFFu) {
-        // MAGENTA = atlas position not set
-        return vec3<f32>(1.0, 0.0, 1.0);
-    }
-
     // ==========================================================================
     // Compute widget-wide UV from cell position + local UV
     // ==========================================================================
@@ -96,22 +87,6 @@ fn shaderGlyph_1048596(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
     // Apply zoom and pan
     // ==========================================================================
     var imageUV = (widgetUV - vec2<f32>(0.5)) / zoom + vec2<f32>(centerX, centerY);
-
-    // ==========================================================================
-    // Handle aspect ratio preservation
-    // ==========================================================================
-    if ((flags & IMAGE_FLAG_PRESERVE_ASPECT) != 0u) {
-        let imageAspect = f32(imageWidth) / f32(imageHeight);
-        let widgetAspect = f32(widthCells) / f32(heightCells);
-
-        if (imageAspect > widgetAspect) {
-            let scale = widgetAspect / imageAspect;
-            imageUV.y = (imageUV.y - 0.5) / scale + 0.5;
-        } else {
-            let scale = imageAspect / widgetAspect;
-            imageUV.x = (imageUV.x - 0.5) / scale + 0.5;
-        }
-    }
 
     // ==========================================================================
     // Check bounds - show background if outside image

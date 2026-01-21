@@ -52,6 +52,8 @@ namespace yetty {
 //   offset 40: flags (u32)           - bit 0: bilinear filter, bit 1: preserve aspect
 //   offset 44: bgColor (u32)         - background color (packed RGBA)
 //   offset 48-63: reserved (16 bytes)
+//
+// Note: Cell dimensions come from grid.cellSize uniform (not per-card metadata)
 //=============================================================================
 
 class ImageCard : public Card {

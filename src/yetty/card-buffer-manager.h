@@ -117,8 +117,8 @@ private:
 
 // Configuration for CardBufferManager
 struct CardBufferConfig {
-    uint32_t metadataPool32Count = 256;
-    uint32_t metadataPool64Count = 128;
+    uint32_t metadataPool32Count = 0;    // No 32-byte slots needed currently
+    uint32_t metadataPool64Count = 256;  // ImageCard uses 64-byte metadata
     uint32_t metadataPool128Count = 64;
     uint32_t metadataPool256Count = 32;
     uint32_t storageCapacity = 16 * 1024 * 1024;      // For plot data (array<f32>)

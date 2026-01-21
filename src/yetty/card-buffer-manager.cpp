@@ -812,11 +812,11 @@ Result<void> CardBufferManager::prepareAtlas(WGPUCommandEncoder encoder, WGPUQue
     // Note: bind group is already set
 
     // Dispatch workgroups: (imageWidth/16, imageHeight/16, numSlots)
-    // Slots 256+ are for 64-byte metadata (pool64 starts at byte 8192 = slot 256)
-    // So we need to dispatch for slots 0-511 to cover pool32 and pool64
-    constexpr uint32_t MAX_VISIBLE_CARDS = 512;
-    uint32_t maxImageDim = 512;  // Max image dimension we handle per dispatch
-    uint32_t workgroupsPerImage = (maxImageDim + 15) / 16;  // 32 workgroups
+    // For ~1000x1000 images, need 64x64 workgroups
+    // Limit visible cards to reduce dispatch overhead (early-exit for unused slots)
+    constexpr uint32_t MAX_VISIBLE_CARDS = 16;
+    uint32_t maxImageDim = 1024;  // Max image dimension we handle per dispatch
+    uint32_t workgroupsPerImage = (maxImageDim + 15) / 16;  // 64 workgroups
     wgpuComputePassEncoderDispatchWorkgroups(computePass, workgroupsPerImage, workgroupsPerImage, MAX_VISIBLE_CARDS);
 
     wgpuComputePassEncoderEnd(computePass);

@@ -51,16 +51,6 @@ const IMAGE_SHADER_GLYPH: u32 = 1048596u;
 // Phase 1: Scan cells, mark visible cards, allocate atlas positions
 @compute @workgroup_size(256, 1, 1)
 fn scanAndAllocate(@builtin(global_invocation_id) gid: vec3<u32>) {
-    // DEBUG: Thread 0 writes marker to cardMetadata[0] to verify shader runs
-    if (gid.x == 0u) {
-        cardMetadata[0u] = 0xDEADBEEFu;
-        // Also write to slot 256 and mark it as processed for copyPixels
-        let testOffset = 256u * 8u;  // 2048
-        cardMetadata[testOffset + 3u] = 0u;  // atlasX = 0
-        cardMetadata[testOffset + 4u] = 0u;  // atlasY = 0
-        atomicStore(&processedCards[256u], 1u);  // Mark slot 256 as processed
-    }
-
     let cellIndex = gid.x;
     let totalCells = atlasState.gridCols * atlasState.gridRows;
 
@@ -130,9 +120,6 @@ fn scanAndAllocate(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Write atlas position back to metadata
     cardMetadata[metaOffset + 3u] = atlasX;  // atlasX
     cardMetadata[metaOffset + 4u] = atlasY;  // atlasY
-
-    // DEBUG: Also write a marker at slot 0 to confirm shader runs
-    cardMetadata[0u] = 0xDEADBEEFu;
 }
 
 // Phase 2: Copy pixels to atlas
