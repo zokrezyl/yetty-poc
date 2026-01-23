@@ -42,27 +42,28 @@ public:
 #if !YETTY_USE_PREBUILT_ATLAS
     // Generate MSDF atlas from a TTF font file (native only)
     // Automatically discovers Bold, Italic, BoldItalic variants if available
-    bool generate(const std::string& fontPath, float fontSize, uint32_t atlasSize = 4096);
+    // If basicLatinOnly=true, only loads ASCII+Latin-1 (~256 glyphs) for small atlas
+    bool generate(const std::string& fontPath, float fontSize, uint32_t atlasSize = 0, bool basicLatinOnly = false);
 
     // Generate MSDF atlas with explicit variant paths
     bool generate(const std::string& regularPath,
                   const std::string& boldPath,
                   const std::string& italicPath,
                   const std::string& boldItalicPath,
-                  float fontSize, uint32_t atlasSize = 4096);
+                  float fontSize, uint32_t atlasSize = 0, bool basicLatinOnly = false);
 
     // Generate MSDF atlas from an existing FreeType face (for embedded fonts)
     // WARNING: This may cause issues with MuPDF-owned FT_Face due to lock callbacks
     // Prefer using generate(data, dataLen, fontName, ...) instead
-    bool generate(FT_Face face, float fontSize, uint32_t atlasSize = 4096);
+    bool generate(FT_Face face, float fontSize, uint32_t atlasSize = 0);
 
     // Generate MSDF atlas from an existing FreeType face with explicit font name
-    bool generate(FT_Face face, const std::string& fontName, float fontSize, uint32_t atlasSize = 4096);
+    bool generate(FT_Face face, const std::string& fontName, float fontSize, uint32_t atlasSize = 0);
 
     // Generate MSDF atlas from raw font data (TTF/OTF bytes)
     // This is the safest way to load embedded fonts (avoids FreeType lock issues)
     bool generate(const unsigned char* data, size_t dataLen,
-                  const std::string& fontName, float fontSize, uint32_t atlasSize = 4096);
+                  const std::string& fontName, float fontSize, uint32_t atlasSize = 0);
 
     // Save atlas to PNG and metrics to JSON
     bool saveAtlas(const std::string& atlasPath, const std::string& metricsPath) const;
@@ -136,6 +137,29 @@ public:
 
     // Upload pending glyphs to GPU (call after loadMissingGlyph)
     bool uploadPendingGlyphs(WGPUDevice device, WGPUQueue queue);
+
+    // Grow the atlas height when full (adds 512 rows)
+    // Returns true if growth succeeded, false if at max size
+    bool growAtlas();
+
+    // Save individual glyph cache (new format - uncompressed indexed)
+    // Generates MSDF for ALL glyphs and saves to disk (run once)
+    bool saveGlyphCache(const std::string& cachePath) const;
+
+    // Load glyph cache index only (small - just codepoint → offset mapping)
+    // Call this at startup, then use loadGlyphFromCache for individual glyphs
+    bool loadGlyphCacheIndex(const std::string& cachePath);
+
+    // Load single glyph from cache file on demand (disk read)
+    // Reads MSDF pixels from disk, adds to runtime atlas
+    bool loadGlyphFromCache(uint32_t codepoint);
+
+    // Set the cache path for on-demand loading
+    void setGlyphCachePath(const std::string& path) { _glyphCachePath = path; }
+
+    // Check if atlas needs GPU texture recreation (after growth)
+    bool needsTextureRecreation() const { return _needsTextureRecreation; }
+    void clearTextureRecreationFlag() { _needsTextureRecreation = false; }
 #endif
 
 private:
@@ -164,6 +188,27 @@ private:
     int _shelfY = 0;
     int _shelfHeight = 0;
     int _atlasPadding = 2;
+
+    // Atlas growth tracking
+    bool _needsTextureRecreation = false;
+    static constexpr uint32_t ATLAS_GROW_HEIGHT = 512;
+    static constexpr uint32_t ATLAS_MAX_HEIGHT = 8192;
+    static constexpr uint32_t ATLAS_INITIAL_WIDTH = 2048;
+    static constexpr uint32_t ATLAS_INITIAL_HEIGHT = 512;
+
+    // Glyph cache for on-demand loading from disk
+    struct GlyphCacheEntry {
+        uint32_t dataOffset;    // Offset in cache file
+        uint16_t width;
+        uint16_t height;
+        float bearingX;
+        float bearingY;
+        float sizeX;
+        float sizeY;
+        float advance;
+    };
+    std::unordered_map<uint32_t, GlyphCacheEntry> _glyphCacheIndex;  // codepoint → cache entry
+    std::string _glyphCachePath;  // Path to cache file for on-demand reads
 
     // FreeType handle (kept alive for fallback loading)
     void* _freetypeHandle = nullptr;

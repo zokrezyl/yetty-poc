@@ -6,7 +6,6 @@
 #include <algorithm>
 #include <cstring>
 #include <string>
-#include <yetty/font.h>
 #include <yetty/result.hpp>
 #include <ytrace/ytrace.hpp>
 
@@ -32,8 +31,8 @@ static VTermStateCallbacks stateCallbacks = {
     .sb_clear = nullptr,
 };
 
-GPUScreen::GPUScreen(int rows, int cols, Font *font, size_t maxScrollback)
-    : maxScrollback_(maxScrollback), rows_(rows), cols_(cols), font_(font) {
+GPUScreen::GPUScreen(int rows, int cols, YettyFont::Ptr terminalFont, size_t maxScrollback)
+    : maxScrollback_(maxScrollback), rows_(rows), cols_(cols), terminalFont_(terminalFont) {
   // Initialize default colors
   vterm_color_rgb(&defaultFg_, 204, 204, 204); // Light gray
   vterm_color_rgb(&defaultBg_, 15, 15, 35);    // Dark blue-ish
@@ -42,7 +41,7 @@ GPUScreen::GPUScreen(int rows, int cols, Font *font, size_t maxScrollback)
   pen_.bg = defaultBg_;
 
   // Cache space glyph index to avoid repeated lookups in hot paths
-  cachedSpaceGlyph_ = font_ ? font_->getGlyphIndex(' ') : 0;
+  cachedSpaceGlyph_ = terminalFont_ ? terminalFont_->getGlyphIndex(' ') : 0;
 
   // Start on primary screen
   isAltScreen_ = false;
@@ -579,10 +578,10 @@ int GPUScreen::onPutglyph(VTermGlyphInfo *info, VTermPos pos, void *user) {
   uint32_t glyphIdx;
   if (isShaderGlyph(cp)) {
     glyphIdx = cp; // Shader glyph codepoint IS the glyph index
+  } else if (self->terminalFont_) {
+    glyphIdx = self->terminalFont_->getGlyphIndex(cp, self->pen_.bold, self->pen_.italic);
   } else {
-    glyphIdx = self->font_ ? self->font_->getGlyphIndex(cp, self->pen_.bold,
-                                                        self->pen_.italic)
-                           : cp;
+    glyphIdx = cp;
   }
 
   // Get colors from current pen

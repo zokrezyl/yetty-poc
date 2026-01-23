@@ -104,7 +104,8 @@ fn shaderGlyph_1048596(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
 
     var color: vec4<f32>;
     if ((flags & IMAGE_FLAG_BILINEAR) != 0u) {
-        color = textureSample(cardImageAtlas, cardImageSampler, atlasUV);
+        // Use textureSampleLevel for Dawn compatibility (no derivatives needed)
+        color = textureSampleLevel(cardImageAtlas, cardImageSampler, atlasUV, 0.0);
     } else {
         let texelCoord = vec2<i32>(atlasUV * atlasSize);
         color = textureLoad(cardImageAtlas, texelCoord, 0);

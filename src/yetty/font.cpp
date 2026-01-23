@@ -25,6 +25,7 @@
 #include <cstring>
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
 
 namespace yetty {
 
@@ -197,7 +198,7 @@ static void discoverVariantPaths(const std::string& basePath,
     }
 }
 
-bool Font::generate(const std::string& fontPath, float fontSize, uint32_t atlasSize) {
+bool Font::generate(const std::string& fontPath, float fontSize, uint32_t atlasSize, bool basicLatinOnly) {
     // Auto-detect variant fonts
     std::string boldPath, italicPath, boldItalicPath;
     discoverVariantPaths(fontPath, boldPath, italicPath, boldItalicPath);
@@ -208,17 +209,23 @@ bool Font::generate(const std::string& fontPath, float fontSize, uint32_t atlasS
     yinfo("  Italic: {}", italicPath.empty() ? "(not found)" : italicPath);
     yinfo("  BoldItalic: {}", boldItalicPath.empty() ? "(not found)" : boldItalicPath);
 
-    return generate(fontPath, boldPath, italicPath, boldItalicPath, fontSize, atlasSize);
+    return generate(fontPath, boldPath, italicPath, boldItalicPath, fontSize, atlasSize, basicLatinOnly);
 }
 
 bool Font::generate(const std::string& regularPath,
                     const std::string& boldPath,
                     const std::string& italicPath,
                     const std::string& boldItalicPath,
-                    float fontSize, uint32_t atlasSize) {
+                    float fontSize, uint32_t atlasSize, bool basicLatinOnly) {
     _fontSize = fontSize;
-    _atlasWidth = atlasSize;
-    _atlasHeight = atlasSize;
+    // Use dynamic initial size if atlasSize is 0
+    if (atlasSize == 0) {
+        _atlasWidth = ATLAS_INITIAL_WIDTH;
+        _atlasHeight = ATLAS_INITIAL_HEIGHT;
+    } else {
+        _atlasWidth = atlasSize;
+        _atlasHeight = atlasSize;
+    }
 
     // Initialize FreeType
     msdfgen::FreetypeHandle* ft = msdfgen::initializeFreetype();
@@ -279,6 +286,12 @@ bool Font::generate(const std::string& regularPath,
 
     // Latin Extended-A (0x0100-0x017F)
     for (uint32_t c = 0x0100; c <= 0x017F; ++c) charset.push_back(c);
+
+    // If basicLatinOnly mode, stop here (for on-demand loading)
+    if (basicLatinOnly) {
+        yinfo("Using basic Latin charset only ({} codepoints) for on-demand loading", charset.size());
+        goto charset_done;
+    }
 
     // Latin Extended-B subset (0x0180-0x024F)
     for (uint32_t c = 0x0180; c <= 0x024F; ++c) charset.push_back(c);
@@ -636,8 +649,14 @@ bool Font::generate(FT_Face face, float fontSize, uint32_t atlasSize) {
                  fontFamily, fontStyle, face->num_glyphs, face->units_per_EM);
 
     _fontSize = fontSize;
-    _atlasWidth = atlasSize;
-    _atlasHeight = atlasSize;
+    // Use dynamic initial size if atlasSize is 0
+    if (atlasSize == 0) {
+        _atlasWidth = ATLAS_INITIAL_WIDTH;
+        _atlasHeight = ATLAS_INITIAL_HEIGHT;
+    } else {
+        _atlasWidth = atlasSize;
+        _atlasHeight = atlasSize;
+    }
 
     // Initialize msdfgen's FreeType wrapper if not already done
     // This is needed for msdfgen's internal state, even when adopting an existing FT_Face
@@ -859,8 +878,14 @@ bool Font::generate(const unsigned char* data, size_t dataLen,
     yinfo("Font::generate(data): loading font '{}' from {} bytes", fontName, dataLen);
 
     _fontSize = fontSize;
-    _atlasWidth = atlasSize;
-    _atlasHeight = atlasSize;
+    // Use dynamic initial size if atlasSize is 0
+    if (atlasSize == 0) {
+        _atlasWidth = ATLAS_INITIAL_WIDTH;
+        _atlasHeight = ATLAS_INITIAL_HEIGHT;
+    } else {
+        _atlasWidth = atlasSize;
+        _atlasHeight = atlasSize;
+    }
 
     // Initialize msdfgen's FreeType
     msdfgen::FreetypeHandle* ft = msdfgen::initializeFreetype();
@@ -1363,10 +1388,17 @@ bool Font::loadGlyphFromFont(const std::string& fontPath, uint32_t codepoint) {
             _shelfHeight = 0;
         }
 
-        // Check if fits vertically
+        // Check if fits vertically - grow atlas if needed
         if (_shelfY + ph > static_cast<int>(_atlasHeight)) {
-            std::cerr << "Atlas full, cannot add glyph U+" << std::hex << codepoint << std::dec << std::endl;
-            return false;
+            if (!growAtlas()) {
+                yerror("Atlas full and cannot grow, cannot add glyph U+{:04X}", codepoint);
+                return false;
+            }
+            // After growing, we should still fit
+            if (_shelfY + ph > static_cast<int>(_atlasHeight)) {
+                yerror("Glyph too tall for atlas even after growth: U+{:04X}", codepoint);
+                return false;
+            }
         }
 
         atlasX = _shelfX;
@@ -1507,13 +1539,33 @@ bool Font::loadMissingGlyph(uint32_t codepoint) {
 }
 
 bool Font::uploadPendingGlyphs(WGPUDevice device, WGPUQueue queue) {
-    if (_pendingGlyphs.empty()) {
+    if (_pendingGlyphs.empty() && !_needsTextureRecreation) {
         return true;
     }
 
-    // Re-upload entire atlas texture
-    // (A more efficient approach would be to only upload the changed regions)
-    if (_texture) {
+    // Check if texture needs recreation due to atlas growth
+    if (_needsTextureRecreation) {
+        yinfo("Recreating font texture due to atlas growth: {}x{}", _atlasWidth, _atlasHeight);
+
+        // Release old texture resources
+        if (_textureView) {
+            wgpuTextureViewRelease(_textureView);
+            _textureView = nullptr;
+        }
+        if (_texture) {
+            wgpuTextureRelease(_texture);
+            _texture = nullptr;
+        }
+
+        // Create new texture with updated size
+        if (!createTexture(device, queue)) {
+            yerror("Failed to recreate texture after atlas growth");
+            return false;
+        }
+
+        _needsTextureRecreation = false;
+    } else if (_texture) {
+        // Just re-upload atlas data to existing texture
         WGPUTexelCopyTextureInfo dest = {};
         dest.texture = _texture;
         dest.mipLevel = 0;
@@ -1544,6 +1596,252 @@ bool Font::uploadPendingGlyphs(WGPUDevice device, WGPUQueue queue) {
     std::cout << "Uploaded " << _pendingGlyphs.size() << " pending glyphs to GPU" << std::endl;
     _pendingGlyphs.clear();
 
+    return true;
+}
+
+bool Font::growAtlas() {
+    uint32_t newHeight = _atlasHeight + ATLAS_GROW_HEIGHT;
+    if (newHeight > ATLAS_MAX_HEIGHT) {
+        yerror("Cannot grow atlas beyond max height {}", ATLAS_MAX_HEIGHT);
+        return false;
+    }
+
+    yinfo("Growing atlas from {}x{} to {}x{}", _atlasWidth, _atlasHeight, _atlasWidth, newHeight);
+
+    // Resize atlas data (new rows are zero-initialized)
+    size_t oldSize = _atlasData.size();
+    size_t newSize = static_cast<size_t>(_atlasWidth) * newHeight * 4;
+    _atlasData.resize(newSize, 0);
+
+    _atlasHeight = newHeight;
+    _needsTextureRecreation = true;
+
+    yinfo("Atlas grown: {} -> {} bytes", oldSize, newSize);
+    return true;
+}
+
+bool Font::saveGlyphCache(const std::string& cachePath) const {
+    // New format: uncompressed indexed glyph cache
+    // Header (24 bytes): magic(4) + version(4) + fontSize(4) + lineHeight(4) + pixelRange(4) + glyphCount(4)
+    // Index (32 bytes per glyph): codepoint(4) + w(2) + h(2) + bearingX(4) + bearingY(4) + sizeX(4) + sizeY(4) + advance(4) + dataOffset(4)
+    // Data: raw MSDF pixels for each glyph (w * h * 4 bytes each)
+
+    // Create parent directory if it doesn't exist
+    std::filesystem::path cacheFilePath(cachePath);
+    if (auto parentDir = cacheFilePath.parent_path(); !parentDir.empty()) {
+        std::error_code ec;
+        std::filesystem::create_directories(parentDir, ec);
+        if (ec) {
+            yerror("Failed to create cache directory {}: {}", parentDir.string(), ec.message());
+            return false;
+        }
+    }
+
+    std::ofstream file(cachePath, std::ios::binary);
+    if (!file) {
+        yerror("Failed to open glyph cache for writing: {}", cachePath);
+        return false;
+    }
+
+    const uint32_t magic = 0x47465359; // "YSFG" - Yetty Scalable Font Glyphs
+    const uint32_t version = 1;
+    const uint32_t glyphCount = static_cast<uint32_t>(_glyphs.size());
+
+    file.write(reinterpret_cast<const char*>(&magic), 4);
+    file.write(reinterpret_cast<const char*>(&version), 4);
+    file.write(reinterpret_cast<const char*>(&_fontSize), 4);
+    file.write(reinterpret_cast<const char*>(&_lineHeight), 4);
+    file.write(reinterpret_cast<const char*>(&_pixelRange), 4);
+    file.write(reinterpret_cast<const char*>(&glyphCount), 4);
+
+    // Calculate index size to determine data section offset
+    const uint32_t indexEntrySize = 32;  // bytes per glyph in index
+    const uint32_t headerSize = 24;
+    const uint32_t indexSize = glyphCount * indexEntrySize;
+    const uint32_t dataStartOffset = headerSize + indexSize;
+
+    // Build glyph data and write index
+    std::vector<uint8_t> glyphData;
+
+    for (const auto& [codepoint, metrics] : _glyphs) {
+        // Get glyph dimensions from atlas
+        uint16_t atlasX = static_cast<uint16_t>(metrics._uvMin.x * _atlasWidth);
+        uint16_t atlasY = static_cast<uint16_t>(metrics._uvMin.y * _atlasHeight);
+        uint16_t w = static_cast<uint16_t>((metrics._uvMax.x - metrics._uvMin.x) * _atlasWidth + 0.5f);
+        uint16_t h = static_cast<uint16_t>((metrics._uvMax.y - metrics._uvMin.y) * _atlasHeight + 0.5f);
+
+        // Data offset relative to data section start
+        uint32_t dataOffset = dataStartOffset + static_cast<uint32_t>(glyphData.size());
+
+        // Write index entry (32 bytes)
+        file.write(reinterpret_cast<const char*>(&codepoint), 4);
+        file.write(reinterpret_cast<const char*>(&w), 2);
+        file.write(reinterpret_cast<const char*>(&h), 2);
+        file.write(reinterpret_cast<const char*>(&metrics._bearing.x), 4);
+        file.write(reinterpret_cast<const char*>(&metrics._bearing.y), 4);
+        file.write(reinterpret_cast<const char*>(&metrics._size.x), 4);
+        file.write(reinterpret_cast<const char*>(&metrics._size.y), 4);
+        file.write(reinterpret_cast<const char*>(&metrics._advance), 4);
+        file.write(reinterpret_cast<const char*>(&dataOffset), 4);
+
+        // Extract glyph pixels from atlas and append to data
+        for (uint16_t row = 0; row < h; ++row) {
+            size_t srcOffset = (static_cast<size_t>(atlasY + row) * _atlasWidth + atlasX) * 4;
+            if (srcOffset + w * 4 <= _atlasData.size()) {
+                glyphData.insert(glyphData.end(),
+                    _atlasData.begin() + srcOffset,
+                    _atlasData.begin() + srcOffset + w * 4);
+            }
+        }
+    }
+
+    // Write glyph pixel data
+    file.write(reinterpret_cast<const char*>(glyphData.data()), glyphData.size());
+
+    yinfo("Saved glyph cache: {} glyphs, {} bytes index, {} bytes data",
+          glyphCount, indexSize, glyphData.size());
+    return true;
+}
+
+bool Font::loadGlyphCacheIndex(const std::string& cachePath) {
+    std::ifstream file(cachePath, std::ios::binary);
+    if (!file) {
+        yerror("Failed to open glyph cache: {}", cachePath);
+        return false;
+    }
+
+    // Read header
+    uint32_t magic, version, glyphCount;
+    file.read(reinterpret_cast<char*>(&magic), 4);
+    if (magic != 0x47465359) {
+        yerror("Invalid glyph cache magic: {:08X}", magic);
+        return false;
+    }
+    file.read(reinterpret_cast<char*>(&version), 4);
+    if (version != 1) {
+        yerror("Unsupported glyph cache version: {}", version);
+        return false;
+    }
+    file.read(reinterpret_cast<char*>(&_fontSize), 4);
+    file.read(reinterpret_cast<char*>(&_lineHeight), 4);
+    file.read(reinterpret_cast<char*>(&_pixelRange), 4);
+    file.read(reinterpret_cast<char*>(&glyphCount), 4);
+
+    // Read index entries
+    _glyphCacheIndex.clear();
+    _glyphCacheIndex.reserve(glyphCount);
+
+    for (uint32_t i = 0; i < glyphCount; ++i) {
+        uint32_t codepoint;
+        GlyphCacheEntry entry;
+
+        file.read(reinterpret_cast<char*>(&codepoint), 4);
+        file.read(reinterpret_cast<char*>(&entry.width), 2);
+        file.read(reinterpret_cast<char*>(&entry.height), 2);
+        file.read(reinterpret_cast<char*>(&entry.bearingX), 4);
+        file.read(reinterpret_cast<char*>(&entry.bearingY), 4);
+        file.read(reinterpret_cast<char*>(&entry.sizeX), 4);
+        file.read(reinterpret_cast<char*>(&entry.sizeY), 4);
+        file.read(reinterpret_cast<char*>(&entry.advance), 4);
+        file.read(reinterpret_cast<char*>(&entry.dataOffset), 4);
+
+        _glyphCacheIndex[codepoint] = entry;
+    }
+
+    _glyphCachePath = cachePath;
+    yinfo("Loaded glyph cache index: {} glyphs from {}", glyphCount, cachePath);
+    return true;
+}
+
+bool Font::loadGlyphFromCache(uint32_t codepoint) {
+    // Check if already loaded
+    if (_glyphs.find(codepoint) != _glyphs.end()) {
+        return true;
+    }
+
+    // Check if in cache index
+    auto it = _glyphCacheIndex.find(codepoint);
+    if (it == _glyphCacheIndex.end()) {
+        return false;  // Not in cache, fall back to fontconfig
+    }
+
+    const GlyphCacheEntry& entry = it->second;
+
+    // Open cache file and seek to glyph data
+    std::ifstream file(_glyphCachePath, std::ios::binary);
+    if (!file) {
+        yerror("Failed to open glyph cache for reading: {}", _glyphCachePath);
+        return false;
+    }
+
+    file.seekg(entry.dataOffset);
+    if (!file) {
+        yerror("Failed to seek to glyph data at offset {}", entry.dataOffset);
+        return false;
+    }
+
+    // Read glyph pixel data
+    size_t pixelDataSize = static_cast<size_t>(entry.width) * entry.height * 4;
+    std::vector<uint8_t> pixelData(pixelDataSize);
+    file.read(reinterpret_cast<char*>(pixelData.data()), pixelDataSize);
+    if (!file) {
+        yerror("Failed to read glyph pixel data for U+{:04X}", codepoint);
+        return false;
+    }
+
+    // Pack glyph into runtime atlas using shelf packer
+    int atlasX = 0, atlasY = 0;
+    int pw = entry.width + _atlasPadding;
+    int ph = entry.height + _atlasPadding;
+
+    // Check if fits on current shelf
+    if (_shelfX + pw > static_cast<int>(_atlasWidth)) {
+        // Move to next shelf
+        _shelfX = _atlasPadding;
+        _shelfY += _shelfHeight + _atlasPadding;
+        _shelfHeight = 0;
+    }
+
+    // Check if fits vertically - grow atlas if needed
+    while (_shelfY + ph > static_cast<int>(_atlasHeight)) {
+        if (!growAtlas()) {
+            yerror("Cannot grow atlas for glyph U+{:04X}", codepoint);
+            return false;
+        }
+    }
+
+    atlasX = _shelfX;
+    atlasY = _shelfY;
+    _shelfX += pw;
+    _shelfHeight = std::max(_shelfHeight, ph);
+
+    // Copy pixel data to atlas
+    for (uint16_t row = 0; row < entry.height; ++row) {
+        size_t srcOffset = static_cast<size_t>(row) * entry.width * 4;
+        size_t dstOffset = (static_cast<size_t>(atlasY + row) * _atlasWidth + atlasX) * 4;
+        if (dstOffset + entry.width * 4 <= _atlasData.size()) {
+            std::memcpy(_atlasData.data() + dstOffset, pixelData.data() + srcOffset, entry.width * 4);
+        }
+    }
+
+    // Create glyph metrics
+    GlyphMetrics metrics;
+    metrics._uvMin = glm::vec2(
+        static_cast<float>(atlasX) / _atlasWidth,
+        static_cast<float>(atlasY) / _atlasHeight
+    );
+    metrics._uvMax = glm::vec2(
+        static_cast<float>(atlasX + entry.width) / _atlasWidth,
+        static_cast<float>(atlasY + entry.height) / _atlasHeight
+    );
+    metrics._size = glm::vec2(entry.sizeX, entry.sizeY);
+    metrics._bearing = glm::vec2(entry.bearingX, entry.bearingY);
+    metrics._advance = entry.advance;
+
+    _glyphs[codepoint] = metrics;
+    _pendingGlyphs.insert(codepoint);
+
+    ydebug("Loaded glyph U+{:04X} from cache at atlas ({}, {})", codepoint, atlasX, atlasY);
     return true;
 }
 
@@ -1932,7 +2230,18 @@ uint16_t Font::getGlyphIndex(uint32_t codepoint) {
     }
 
 #if !YETTY_USE_PREBUILT_ATLAS
-    // Try to load the glyph from a fallback font
+    // First try to load from glyph cache (fast disk read)
+    if (!_glyphCachePath.empty() && loadGlyphFromCache(codepoint)) {
+        // Rebuild index map to include new glyph
+        buildGlyphIndexMap();
+        it = _codepointToIndex.find(codepoint);
+        if (it != _codepointToIndex.end()) {
+            ydebug("Loaded glyph U+{:04X} from cache -> index {}", codepoint, it->second);
+            return it->second;
+        }
+    }
+
+    // Fall back to fontconfig for glyphs not in cache
     if (loadMissingGlyph(codepoint)) {
         it = _codepointToIndex.find(codepoint);
         if (it != _codepointToIndex.end()) {

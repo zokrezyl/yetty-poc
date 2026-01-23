@@ -3,7 +3,7 @@
 #include "grid-renderer.h"
 #include "widget-factory.h"
 #include "yetty/emoji.h"
-#include <yetty/font-manager.h>
+#include <yetty/yetty-font-manager.h>
 #include <ytrace/ytrace.hpp>
 
 #include <algorithm>
@@ -71,17 +71,17 @@ Result<WidgetPtr> Terminal::create(WidgetFactory *factory,
     return Err<WidgetPtr>("Terminal::create: null factory");
   }
 
-  auto *fontManager = factory->getFontManager();
-  yinfo("Terminal::create: fontManager={}", (void *)fontManager);
-  if (!fontManager) {
-    ywarn("Terminal::create: null FontManager");
-    return Err<WidgetPtr>("Terminal::create: null FontManager");
+  auto *yettyFontManager = factory->getYettyFontManager();
+  yinfo("Terminal::create: yettyFontManager={}", (void *)yettyFontManager);
+  if (!yettyFontManager) {
+    ywarn("Terminal::create: null YettyFontManager");
+    return Err<WidgetPtr>("Terminal::create: null YettyFontManager");
   }
-  auto *font = fontManager->getDefaultFont();
-  yinfo("Terminal::create: font={}", (void *)font);
+  auto font = yettyFontManager->getDefaultFont();
+  yinfo("Terminal::create: font={}", (void *)font.get());
   if (!font) {
-    ywarn("Terminal::create: null Font");
-    return Err<WidgetPtr>("Terminal::create: null Font");
+    ywarn("Terminal::create: null YettyFont");
+    return Err<WidgetPtr>("Terminal::create: null YettyFont");
   }
 
   auto *loop = params.loop;
@@ -136,17 +136,17 @@ Result<WidgetPtr> Terminal::create(WidgetFactory *factory,
 
 // Legacy create (for direct creation)
 Result<Terminal::Ptr>
-Terminal::create(uint32_t id, uint32_t cols, uint32_t rows, Font *font,
+Terminal::create(uint32_t id, uint32_t cols, uint32_t rows, YettyFont::Ptr font,
                  uv_loop_t *loop,
                  CardBufferManager *cardBufferManager) noexcept {
   yfunc();
   yinfo("Terminal::create(legacy) id={} cols={} rows={} font={} loop={} "
         "cardBufferManager={}",
-        id, cols, rows, (void *)font, (void *)loop, (void *)cardBufferManager);
+        id, cols, rows, (void *)font.get(), (void *)loop, (void *)cardBufferManager);
 
   if (!font) {
-    ywarn("Terminal::create: null Font");
-    return Err<Ptr>("Terminal::create: null Font");
+    ywarn("Terminal::create: null YettyFont");
+    return Err<Ptr>("Terminal::create: null YettyFont");
   }
   if (!loop) {
     ywarn("Terminal::create: null libuv loop");
@@ -163,7 +163,7 @@ Terminal::create(uint32_t id, uint32_t cols, uint32_t rows, Font *font,
   return Ok(std::move(term));
 }
 
-Terminal::Terminal(uint32_t id, uint32_t cols, uint32_t rows, Font *font,
+Terminal::Terminal(uint32_t id, uint32_t cols, uint32_t rows, YettyFont::Ptr font,
                    uv_loop_t *loop,
                    CardBufferManager *cardBufferManager) noexcept
     : Widget() // Widget base constructor assigns id from nextId_

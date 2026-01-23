@@ -253,6 +253,7 @@ private:
     // Bind group for compute shader
     WGPUBindGroupLayout _atlasBindGroupLayout = nullptr;
     WGPUBindGroup _atlasBindGroup = nullptr;
+    WGPUBuffer _lastCellBuffer = nullptr;  // Track to avoid recreating bind group every frame
 
     // Atlas state buffer (for atomic allocation)
     struct AtlasState {

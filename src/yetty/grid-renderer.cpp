@@ -11,8 +11,8 @@
 #include <ytrace/ytrace.hpp>
 #include <sstream>
 #include <yetty/wgpu-compat.h>
-#if !YETTY_WEB
-#include <webgpu/wgpu.h>  // For wgpuDevicePoll
+#if !YETTY_WEB && !defined(WEBGPU_BACKEND_DAWN)
+#include <webgpu/wgpu.h>  // For wgpuDevicePoll (wgpu-native only)
 #endif
 
 #if YETTY_ANDROID
@@ -36,14 +36,14 @@ namespace yetty {
 
 Result<GridRenderer::Ptr>
 GridRenderer::create(WebGPUContext::Ptr ctx,
-                     FontManager::Ptr fontManager,
+                     YettyFontManager::Ptr fontManager,
                      WGPUBindGroupLayout sharedBindGroupLayout,
                      const std::string& fontFamily) noexcept {
   if (!ctx) {
     return Err<Ptr>("GridRenderer::create: null WebGPUContext");
   }
   if (!fontManager) {
-    return Err<Ptr>("GridRenderer::create: null FontManager");
+    return Err<Ptr>("GridRenderer::create: null YettyFontManager");
   }
   if (!sharedBindGroupLayout) {
     return Err<Ptr>("GridRenderer::create: null sharedBindGroupLayout");
@@ -57,7 +57,7 @@ GridRenderer::create(WebGPUContext::Ptr ctx,
 }
 
 GridRenderer::GridRenderer(WebGPUContext::Ptr ctx,
-                           FontManager::Ptr fontManager,
+                           YettyFontManager::Ptr fontManager,
                            const std::string& fontFamily) noexcept
     : _ctx(std::move(ctx)), fontManager_(std::move(fontManager)), fontFamily_(fontFamily) {}
 
@@ -84,18 +84,23 @@ GridRenderer::~GridRenderer() {
 
 Result<void> GridRenderer::init() noexcept {
   WGPUDevice device = _ctx->getDevice();
+  WGPUQueue queue = _ctx->getQueue();
 
-  // Get terminal font from FontManager
-  auto fontResult = fontManager_->getFont(fontFamily_, Font::Regular, 32.0f);
+  // Get terminal font from YettyFontManager
+  auto fontResult = fontManager_->getMsMsdfFont(fontFamily_);
   if (!fontResult) {
-    return Err<void>("Failed to get terminal font: " +
-                     fontResult.error().message());
+    return Err<void>("Failed to get terminal font", fontResult);
   }
   font_ = *fontResult;
 
-  // Create glyph metadata buffer in Font
-  if (!font_->createGlyphMetadataBuffer(device)) {
-    return Err<void>("Failed to create glyph metadata buffer");
+  // Create GPU resources for font
+  auto texResult = font_->createTexture(device, queue);
+  if (!texResult) {
+    return Err<void>("Failed to create font texture", texResult);
+  }
+  auto bufResult = font_->createGlyphMetadataBuffer(device);
+  if (!bufResult) {
+    return Err<void>("Failed to create glyph metadata buffer", bufResult);
   }
 
   // Create emoji atlas (NotoColorEmoji uses 136x128 bitmaps, use 136px cells)
@@ -261,6 +266,7 @@ Result<void> GridRenderer::createBuffers(WGPUDevice device) {
   if (!uniformBuffer_) {
     return Err<void>("Failed to create uniform buffer");
   }
+  yinfo("GPU_ALLOC GridRenderer: uniformBuffer={} bytes", sizeof(Uniforms));
 
   // Fullscreen quad vertices (2 triangles, 6 vertices)
   float quadVertices[] = {
@@ -285,6 +291,7 @@ Result<void> GridRenderer::createBuffers(WGPUDevice device) {
       wgpuBufferGetMappedRange(quadVertexBuffer_, 0, sizeof(quadVertices));
   memcpy(mapped, quadVertices, sizeof(quadVertices));
   wgpuBufferUnmap(quadVertexBuffer_);
+  yinfo("GPU_ALLOC GridRenderer: quadVertexBuffer={} bytes", sizeof(quadVertices));
 
   return Ok();
 }
@@ -315,7 +322,9 @@ Result<void> GridRenderer::createCellBuffer(WGPUDevice device, uint32_t cols,
 
   // Wait for GPU to finish using old buffer before releasing
   if (cellBuffer_) {
+#if !defined(WEBGPU_BACKEND_DAWN)
     wgpuDevicePoll(device, true, nullptr);
+#endif
     wgpuBufferRelease(cellBuffer_);
     cellBuffer_ = nullptr;
   }
@@ -334,6 +343,8 @@ Result<void> GridRenderer::createCellBuffer(WGPUDevice device, uint32_t cols,
     return Err<void>("Failed to create cell buffer");
   }
   cellBufferSize_ = requiredSize;
+  yinfo("GPU_ALLOC GridRenderer: cellBuffer={} bytes ({:.2f} MB) for {}x{} cells",
+        requiredSize, requiredSize / (1024.0 * 1024.0), cols, rows);
 
   return Ok();
 }
@@ -419,7 +430,7 @@ void GridRenderer::setSharedBindGroupLayout(WGPUBindGroupLayout layout) noexcept
   sharedBindGroupLayout_ = layout;
 }
 
-Result<void> GridRenderer::createBindGroup(WGPUDevice device, Font &font) {
+Result<void> GridRenderer::createBindGroup(WGPUDevice device, MsMsdfFont &font) {
 #if YETTY_WEB
   // On web, only create bind group once to avoid Emscripten WebGPU manager issues
   if (bindGroup_) {
@@ -571,11 +582,9 @@ void GridRenderer::setCellSize(float width, float height) noexcept {
   cellSize_ = {width, height};
 }
 
-void GridRenderer::updateFontBindings(Font &font) noexcept {
+void GridRenderer::updateFontBindings(MsMsdfFont &font) noexcept {
   if (!_ctx)
     return;
-
-  font_ = &font;
 
   // Only recreate bind group if cell buffer already exists
   // Otherwise, render() will create both buffer and bind group

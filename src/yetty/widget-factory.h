@@ -18,6 +18,7 @@ namespace yetty {
 class Yetty;
 class WebGPUContext;
 class FontManager;
+class YettyFontManager;
 class Config;
 class WidgetFactory;
 
@@ -55,7 +56,7 @@ public:
     //-------------------------------------------------------------------------
     // Shared resource access (for widgets that need them)
     //-------------------------------------------------------------------------
-    FontManager* getFontManager() const;
+    YettyFontManager* getYettyFontManager() const;
     WebGPUContext* getContext() const;
     Config* getConfig() const;
     uv_loop_t* getLoop() const;

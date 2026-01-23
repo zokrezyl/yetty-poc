@@ -11,11 +11,11 @@ namespace yetty {
 //=============================================================================
 
 Result<RemoteTerminal::Ptr> RemoteTerminal::create(
-    uint32_t id, uint32_t cols, uint32_t rows, Font* font, uv_loop_t* loop) noexcept {
+    uint32_t id, uint32_t cols, uint32_t rows, YettyFont::Ptr font, uv_loop_t* loop) noexcept {
     (void)id;  // Ignored - Widget base class auto-assigns IDs
 
     if (!font) {
-        return Err<Ptr>("RemoteTerminal::create: null Font");
+        return Err<Ptr>("RemoteTerminal::create: null YettyFont");
     }
     if (!loop) {
         return Err<Ptr>("RemoteTerminal::create: null libuv loop");
@@ -29,7 +29,7 @@ Result<RemoteTerminal::Ptr> RemoteTerminal::create(
 }
 
 RemoteTerminal::RemoteTerminal(
-    uint32_t cols, uint32_t rows, Font* font, uv_loop_t* loop) noexcept
+    uint32_t cols, uint32_t rows, YettyFont::Ptr font, uv_loop_t* loop) noexcept
     : Widget()
     , _loop(loop)
     , _font(font)

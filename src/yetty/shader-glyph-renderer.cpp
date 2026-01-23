@@ -104,6 +104,7 @@ Result<void> ShaderGlyphRenderer::createPipeline(WGPUTextureFormat targetFormat)
     if (!_uniformBuffer) {
         return Err<void>("Failed to create uniform buffer");
     }
+    yinfo("GPU_ALLOC ShaderGlyphRenderer: uniformBuffer={} bytes", sizeof(ShaderGlyphUniforms));
 
     // Bind group layout
     WGPUBindGroupLayoutEntry entry = {};

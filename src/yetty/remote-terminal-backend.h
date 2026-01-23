@@ -3,6 +3,7 @@
 #include "terminal-backend.h"
 #include "shared-grid.h"
 #include <yetty/result.hpp>
+#include <yetty/yetty-font.h>
 
 #include <uv.h>
 #include <memory>
@@ -102,7 +103,7 @@ public:
     void setCallbacks(const TerminalBackendCallbacks& callbacks) { callbacks_ = callbacks; }
     
     // Set Font for codepoint-to-glyph conversion
-    void setFont(class Font* font);
+    void setFont(YettyFont::Ptr font);
     
     // Server socket path
     std::string getSocketPath() const { return socketPath_; }
@@ -170,8 +171,8 @@ private:
 
     TerminalBackendCallbacks callbacks_;
     
-    // Font for codepoint-to-glyph conversion (not owned)
-    Font* font_ = nullptr;
+    // Font for codepoint-to-glyph conversion
+    YettyFont::Ptr font_;
     
     // Read buffer for IPC
     static constexpr size_t READ_BUFFER_SIZE = 65536;

@@ -4,7 +4,7 @@
 #include "grid.h"
 #include "terminal-backend.h" // For SelectionMode, ScrollbackStyle, ScrollbackLine
 #include <yetty/config.h>
-#include <yetty/font.h>
+#include <yetty/yetty-font.h>
 #include <yetty/osc-command.h>
 #include <yetty/result.hpp>
 #include <yetty/widget.h>
@@ -64,7 +64,7 @@ public:
 
   // Legacy create (for direct creation during transition)
   static Result<Ptr>
-  create(uint32_t id, uint32_t cols, uint32_t rows, Font *font, uv_loop_t *loop,
+  create(uint32_t id, uint32_t cols, uint32_t rows, YettyFont::Ptr font, uv_loop_t *loop,
          CardBufferManager *cardBufferManager = nullptr) noexcept;
 
   ~Terminal() override;
@@ -197,7 +197,7 @@ public:
   static int onOSC(int command, VTermStringFragment frag, void *user);
 
 private:
-  Terminal(uint32_t id, uint32_t cols, uint32_t rows, Font *font,
+  Terminal(uint32_t id, uint32_t cols, uint32_t rows, YettyFont::Ptr font,
            uv_loop_t *loop, CardBufferManager *cardBufferManager) noexcept;
   Result<void> init() noexcept override;
 
@@ -234,7 +234,7 @@ private:
 
   // Keep Grid for compatibility during transition (scrollback rendering)
   Grid _grid;
-  Font *_font;
+  YettyFont::Ptr _font;
   std::string _shell;
 
 #ifdef _WIN32

@@ -182,12 +182,13 @@ Result<void> Yetty::init(int argc, char *argv[]) noexcept {
     return res;
   }
 
-  // Initialize font manager
-  if (auto fmRes = FontManager::create(_ctx); !fmRes) {
-    return Err<void>("Failed to create FontManager", fmRes);
-  } else {
-    _fontManager = *fmRes;
+  // Initialize YettyFontManager (MSDF fonts from CDB)
+  auto yfmRes = YettyFontManager::create();
+  if (!yfmRes) {
+    return Err<void>("Failed to create YettyFontManager", yfmRes);
   }
+  _yettyFontManager = *yfmRes;
+  yinfo("YettyFontManager created successfully");
 
   // Initialize font
   if (auto res = initFont(); !res) {
@@ -414,6 +415,7 @@ Result<void> Yetty::initGraphics() noexcept {
   bufDesc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
   bufDesc.mappedAtCreation = false;
   _sharedUniformBuffer = wgpuDeviceCreateBuffer(_ctx->getDevice(), &bufDesc);
+  yinfo("GPU_ALLOC Yetty: sharedUniformBuffer={} bytes", sizeof(SharedUniforms));
 
 #if !YETTY_WEB && !defined(__ANDROID__)
   // Create CardBufferManager for card-based widgets (plots, images, etc.)
@@ -590,28 +592,33 @@ Result<void> Yetty::initFont() noexcept {
 }
 
 Result<void> Yetty::initRenderer() noexcept {
-  // Get font family - use config or default bundled Nerd Font
-  std::string fontFamily = _config ? _config->fontFamily() : "default";
-  if (fontFamily == "default") {
-    // Use bundled Nerd Font
-    fontFamily = Config::getExecutableDir().string() +
-                 "/assets/DejaVuSansMNerdFontMono-Regular.ttf";
+  // Get font name - use config or default Nerd Font (family name, not with style suffix)
+  std::string fontName = _config ? _config->fontFamily() : "default";
+  if (fontName == "default") {
+    fontName = "DejaVuSansMNerdFontMono";
   }
-  yinfo("Using font: {}", fontFamily);
+  yinfo("Using font: {}", fontName);
 
-  auto rendererResult = GridRenderer::create(_ctx, _fontManager, _sharedBindGroupLayout, fontFamily);
+  if (!_yettyFontManager) {
+    return Err<void>("YettyFontManager not available");
+  }
+
+  auto rendererResult = GridRenderer::create(_ctx, _yettyFontManager, _sharedBindGroupLayout, fontName);
   if (!rendererResult) {
     return Err<void>("Failed to create text renderer", rendererResult);
   }
   _renderer = *rendererResult;
 
   // Get font for cell size calculation
-  auto fontResult = _fontManager->getFont(fontFamily, Font::Regular, 32.0f);
+  auto fontResult = _yettyFontManager->getMsMsdfFont(fontName);
   if (!fontResult) {
     return Err<void>("Failed to get font for cell size", fontResult);
   }
-  _font = *fontResult;
-  calculateCellSizeFromFont(_font, _baseCellWidth, _baseCellHeight);
+  auto msdfFont = *fontResult;
+
+  // Calculate cell size from MSDF font metrics
+  _baseCellWidth = msdfFont->getFontSize() * 0.6f;  // Approximate monospace width
+  _baseCellHeight = msdfFont->getLineHeight();
 
   // Apply zoom level to cell size
   float zoomedCellWidth = _baseCellWidth * _zoomLevel;
@@ -629,10 +636,19 @@ Result<void> Yetty::initRenderer() noexcept {
 }
 
 Result<void> Yetty::initTerminal() noexcept {
+  // Get terminal font from YettyFontManager
+  if (!_yettyFontManager) {
+    return Err<void>("YettyFontManager not available for terminal");
+  }
+  auto terminalFont = _yettyFontManager->getDefaultFont();
+  if (!terminalFont) {
+    return Err<void>("Failed to get terminal font from YettyFontManager");
+  }
+
 #if defined(__ANDROID__)
   // Android: Terminal mode (no plugins)
   // ID 0 means Widget base class will auto-assign an ID
-  auto terminalResult = Terminal::create(0, _cols, _rows, _font, _uvLoop);
+  auto terminalResult = Terminal::create(0, _cols, _rows, terminalFont, _uvLoop);
   if (!terminalResult) {
     return Err<void>("Failed to create terminal", terminalResult);
   }
@@ -660,9 +676,16 @@ Result<void> Yetty::initTerminal() noexcept {
   if (_useMux) {
     yinfo("Multiplexed terminal mode: connecting to yetty-server...");
 
+    // Get terminal font from YettyFontManager
+    auto terminalFont = _yettyFontManager ? _yettyFontManager->getDefaultFont() : nullptr;
+    if (!terminalFont) {
+      yerror("No terminal font available from YettyFontManager for mux mode");
+      return Err<void>("No terminal font available for mux mode");
+    }
+
     // ID 0 means Widget base class will auto-assign an ID
     auto remoteTerminalResult =
-        RemoteTerminal::create(0, _cols, _rows, _font, _uvLoop);
+        RemoteTerminal::create(0, _cols, _rows, terminalFont, _uvLoop);
     if (!remoteTerminalResult) {
       yerror("Failed to create RemoteTerminal: {}",
              error_msg(remoteTerminalResult));
@@ -902,8 +925,7 @@ void Yetty::shutdown() noexcept {
   // Reset in reverse order of creation
   _terminal.reset();
   _renderer.reset();
-  _fontManager.reset(); // FontManager owns all fonts
-  _font = nullptr;
+  _yettyFontManager.reset();
   _ctx.reset();
   _androidInitialized = false;
 #elif YETTY_WEB
@@ -924,8 +946,7 @@ void Yetty::shutdown() noexcept {
   // 4. Then renderer
   _renderer.reset();
   // 5. Then font resources
-  _fontManager.reset();
-  _font = nullptr;
+  _yettyFontManager.reset();
   // 6. Card buffer manager (owns atlas resources now)
   _cardFactory.reset();
   _cardBufferManager.reset();
@@ -1267,10 +1288,13 @@ void Yetty::mainLoopIteration() noexcept {
     return;
   }
 
-  // Upload any pending fallback glyphs to GPU
-  if (_font && _font->hasPendingGlyphs()) {
-    _font->uploadPendingGlyphs(_ctx->getDevice(), _ctx->getQueue());
-    _renderer->updateFontBindings(*_font);
+  // Upload any pending glyphs to GPU (MsMsdfFont handles this)
+  if (_yettyFontManager) {
+    auto font = _yettyFontManager->getDefaultFont();
+    if (font && font->hasPendingGlyphs()) {
+      font->uploadPendingGlyphs(_ctx->getDevice(), _ctx->getQueue());
+      _renderer->updateFontBindings(*font);
+    }
   }
 
   // Update global uniforms (time, mouse, screen) once per frame
@@ -1944,6 +1968,15 @@ void Yetty::handleCmd(struct android_app *app, int32_t cmd) {
         return;
       } else {
         engine->_fontManager = *fmRes;
+      }
+
+      // Initialize YettyFontManager (MSDF fonts from CDB)
+      if (auto yfmRes = YettyFontManager::create(); !yfmRes) {
+        LOGI("YettyFontManager not available: %s", yfmRes.error().message().c_str());
+        // Not fatal - fall back to old FontManager
+      } else {
+        engine->_yettyFontManager = *yfmRes;
+        LOGI("YettyFontManager created successfully");
       }
 
       // Initialize font

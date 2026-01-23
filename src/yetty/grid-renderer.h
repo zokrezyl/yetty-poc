@@ -6,8 +6,8 @@
 #include <glm/glm.hpp>
 #include <memory>
 #include <vector>
-#include <yetty/font-manager.h>
-#include <yetty/font.h>
+#include <yetty/yetty-font-manager.h>
+#include <yetty/ms-msdf-font.h>
 #include <yetty/result.hpp>
 #include <yetty/webgpu-context.h>
 
@@ -21,7 +21,7 @@ public:
   using Ptr = std::shared_ptr<GridRenderer>;
 
   static Result<Ptr> create(WebGPUContext::Ptr ctx,
-                            FontManager::Ptr fontManager,
+                            YettyFontManager::Ptr fontManager,
                             WGPUBindGroupLayout sharedBindGroupLayout,
                             const std::string& fontFamily = "default") noexcept;
 
@@ -55,7 +55,7 @@ public:
   Result<void> uploadCells(uint32_t cols, uint32_t rows, const Cell* cells) noexcept;
 
   // Update font bindings (call after font atlas/metadata changes)
-  void updateFontBindings(Font &font) noexcept;
+  void updateFontBindings(MsMsdfFont &font) noexcept;
 
   // Render with damage tracking (only updates changed regions)
   void render(const Grid &grid, const std::vector<DamageRect> &damageRects,
@@ -83,7 +83,7 @@ public:
                        bool cursorVisible) noexcept;
 
 private:
-  GridRenderer(WebGPUContext::Ptr ctx, FontManager::Ptr fontManager,
+  GridRenderer(WebGPUContext::Ptr ctx, YettyFontManager::Ptr fontManager,
                const std::string& fontFamily) noexcept;
   Result<void> init() noexcept;
   Result<void> createShaderModule(WGPUDevice device);
@@ -91,7 +91,7 @@ private:
   Result<void> createBuffers(WGPUDevice device);
   Result<void> createCellBuffer(WGPUDevice device, uint32_t cols, uint32_t rows);
   Result<void> createBindGroupLayout(WGPUDevice device);
-  Result<void> createBindGroup(WGPUDevice device, Font &font);
+  Result<void> createBindGroup(WGPUDevice device, MsMsdfFont &font);
 
   void updateUniformBuffer(WGPUQueue queue, const Grid &grid, int cursorCol,
                            int cursorRow, bool cursorVisible);
@@ -137,9 +137,9 @@ private:
   uint32_t gridRows_ = 0;
 
   WebGPUContext::Ptr _ctx;
-  FontManager::Ptr fontManager_;
+  YettyFontManager::Ptr fontManager_;
   std::string fontFamily_;
-  Font *font_ = nullptr;       // Cached pointer from FontManager
+  std::shared_ptr<MsMsdfFont> font_;  // From YettyFontManager
   EmojiAtlas::Ptr emojiAtlas_; // Color emoji atlas
   const Config *config_ = nullptr;
   bool needsBindGroupRecreation_ = false; // Deferred bind group recreation

@@ -14,8 +14,7 @@
 
 #include <yetty/webgpu-context.h>
 #include <yetty/result.hpp>
-#include <yetty/font.h>
-#include <yetty/font-manager.h>
+#include <yetty/yetty-font-manager.h>
 #include <yetty/widget.h>
 
 #include <memory>
@@ -108,8 +107,7 @@ public:
     std::shared_ptr<Config> config() const noexcept { return _config; }
     WebGPUContext::Ptr context() const noexcept { return _ctx; }
     std::shared_ptr<GridRenderer> renderer() const noexcept { return _renderer; }
-    Font* font() const noexcept { return _font; }
-    FontManager::Ptr fontManager() const noexcept { return _fontManager; }
+    YettyFontManager::Ptr yettyFontManager() const noexcept { return _yettyFontManager; }
 
 #if !YETTY_WEB
     std::shared_ptr<Terminal> terminal() const noexcept { return _terminal; }
@@ -202,8 +200,7 @@ private:
     std::shared_ptr<Config> _config;
     WebGPUContext::Ptr _ctx;
     std::shared_ptr<GridRenderer> _renderer;
-    Font* _font = nullptr;                 // Pointer to font (owned by FontManager)
-    FontManager::Ptr _fontManager;
+    YettyFontManager::Ptr _yettyFontManager;
 
 #if YETTY_WEB
     std::shared_ptr<class WebDisplay> _webDisplay;  // Demo display for web builds

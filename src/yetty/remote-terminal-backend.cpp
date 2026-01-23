@@ -1,6 +1,5 @@
 #include "remote-terminal-backend.h"
 #include "shared-grid.h"
-#include <yetty/font.h>
 
 #include <ytrace/ytrace.hpp>
 #include <cstring>
@@ -493,7 +492,7 @@ std::string RemoteTerminalBackend::getSelectedText() {
 // Grid sync
 //=============================================================================
 
-void RemoteTerminalBackend::setFont(Font* font) {
+void RemoteTerminalBackend::setFont(YettyFont::Ptr font) {
     font_ = font;
     if (sharedGridView_) {
         sharedGridView_->setFont(font);

@@ -83,6 +83,7 @@ Result<void> ShaderManager::createGlobalUniformBuffer() {
     if (!_globalUniformBuffer) {
         return Err<void>("Failed to create global uniform buffer");
     }
+    yinfo("GPU_ALLOC ShaderManager: globalUniformBuffer={} bytes", sizeof(GlobalUniforms));
 
     // Create bind group layout
     WGPUBindGroupLayoutEntry entry = {};

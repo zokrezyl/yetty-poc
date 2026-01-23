@@ -279,6 +279,13 @@ Result<void> CardBufferManager::createGpuBuffers() {
     size_t storageBytes = _storageCpuBuffer.size() * sizeof(uint32_t);
     size_t imageDataBytes = _imageDataCpuBuffer.size() * sizeof(uint32_t);
 
+    yinfo("GPU_ALLOC CardBufferManager: metadataBuffer={} bytes ({:.2f} MB)",
+          metadataBytes, metadataBytes / (1024.0 * 1024.0));
+    yinfo("GPU_ALLOC CardBufferManager: storageBuffer={} bytes ({:.2f} MB)",
+          storageBytes, storageBytes / (1024.0 * 1024.0));
+    yinfo("GPU_ALLOC CardBufferManager: imageDataBuffer={} bytes ({:.2f} MB)",
+          imageDataBytes, imageDataBytes / (1024.0 * 1024.0));
+
     WGPUBufferDescriptor metaDesc = {};
     metaDesc.label = {.data = "CardMetadataBuffer", .length = WGPU_STRLEN};
     metaDesc.size = metadataBytes;
@@ -505,7 +512,9 @@ Result<void> CardBufferManager::initAtlas() {
 }
 
 Result<void> CardBufferManager::createAtlasTexture() {
-    yinfo("Creating atlas texture {}x{}", IMAGE_ATLAS_SIZE, IMAGE_ATLAS_SIZE);
+    size_t atlasBytes = IMAGE_ATLAS_SIZE * IMAGE_ATLAS_SIZE * 4;  // RGBA8
+    yinfo("GPU_ALLOC CardBufferManager: atlasTexture={}x{} RGBA8 = {} bytes ({:.2f} MB)",
+          IMAGE_ATLAS_SIZE, IMAGE_ATLAS_SIZE, atlasBytes, atlasBytes / (1024.0 * 1024.0));
 
     WGPUTextureDescriptor texDesc = {};
     texDesc.label = WGPU_STR("ImageAtlas");
@@ -566,6 +575,7 @@ Result<void> CardBufferManager::createAtlasTexture() {
     if (!_atlasStateBuffer) {
         return Err<void>("Failed to create atlas state buffer");
     }
+    yinfo("GPU_ALLOC CardBufferManager: atlasStateBuffer={} bytes", sizeof(AtlasState));
 
     // Create processed cards buffer
     WGPUBufferDescriptor processedDesc = {};
@@ -578,6 +588,9 @@ Result<void> CardBufferManager::createAtlasTexture() {
     if (!_processedCardsBuffer) {
         return Err<void>("Failed to create processed cards buffer");
     }
+    size_t processedBytes = MAX_CARD_SLOTS * sizeof(uint32_t);
+    yinfo("GPU_ALLOC CardBufferManager: processedCardsBuffer={} bytes ({:.2f} KB)",
+          processedBytes, processedBytes / 1024.0);
 
     return Ok();
 }
@@ -742,71 +755,64 @@ Result<void> CardBufferManager::prepareAtlas(WGPUCommandEncoder encoder, WGPUQue
     std::vector<uint32_t> zeros(MAX_CARD_SLOTS, 0);
     wgpuQueueWriteBuffer(queue, _processedCardsBuffer, 0, zeros.data(), zeros.size() * sizeof(uint32_t));
 
-    // Create bind group with current buffers
-    std::array<WGPUBindGroupEntry, 6> bindEntries = {};
+    // Only recreate bind group if cellBuffer changed (grid resized)
+    bool needNewBindGroup = !_atlasBindGroup || cellBuffer != _lastCellBuffer;
 
-    // Check cellBuffer size
-    uint64_t cellBufferSize = wgpuBufferGetSize(cellBuffer);
-    uint64_t expectedCellBufferSize = static_cast<uint64_t>(gridCols) * gridRows * 12;
-    yinfo("prepareAtlas: cellBuffer size={} expected={}", cellBufferSize, expectedCellBufferSize);
-    if (cellBufferSize < expectedCellBufferSize) {
-        yerror("prepareAtlas: cellBuffer too small! size={} expected={}", cellBufferSize, expectedCellBufferSize);
-    }
+    if (needNewBindGroup) {
+        // Check cellBuffer size
+        uint64_t cellBufferSize = wgpuBufferGetSize(cellBuffer);
+        uint64_t expectedCellBufferSize = static_cast<uint64_t>(gridCols) * gridRows * 12;
+        if (cellBufferSize < expectedCellBufferSize) {
+            yerror("prepareAtlas: cellBuffer too small! size={} expected={}", cellBufferSize, expectedCellBufferSize);
+        }
 
-    bindEntries[0].binding = 0;
-    bindEntries[0].buffer = cellBuffer;
-    bindEntries[0].offset = 0;
-    bindEntries[0].size = gridCols * gridRows * 12;  // 12 bytes per cell (3 u32s)
+        std::array<WGPUBindGroupEntry, 6> bindEntries = {};
 
-    // Use high water marks to limit GPU memory binding (only bind what we've actually used)
-    uint32_t metadataExtent = _metadataAllocator.highWaterMark();
-    uint32_t imageDataExtent = _imageDataAllocator.highWaterMark();
+        bindEntries[0].binding = 0;
+        bindEntries[0].buffer = cellBuffer;
+        bindEntries[0].offset = 0;
+        bindEntries[0].size = cellBufferSize;  // Bind full buffer
 
-    // Minimum 64 bytes to avoid zero-size binding issues
-    if (metadataExtent < 64) metadataExtent = 64;
-    if (imageDataExtent < 64) imageDataExtent = 64;
+        // Bind full buffer sizes (not just high water mark) so we can cache the bind group
+        bindEntries[1].binding = 1;
+        bindEntries[1].buffer = _metadataGpuBuffer;
+        bindEntries[1].offset = 0;
+        bindEntries[1].size = _metadataCpuBuffer.size() * sizeof(uint32_t);
 
-    yinfo("prepareAtlas: binding metadata extent={} (full={}), imageData extent={} (full={})",
-          metadataExtent, _metadataCpuBuffer.size() * sizeof(uint32_t),
-          imageDataExtent, _imageDataCpuBuffer.size() * sizeof(uint32_t));
+        bindEntries[2].binding = 2;
+        bindEntries[2].buffer = _imageDataGpuBuffer;
+        bindEntries[2].offset = 0;
+        bindEntries[2].size = _imageDataCpuBuffer.size() * sizeof(uint32_t);
 
-    bindEntries[1].binding = 1;
-    bindEntries[1].buffer = _metadataGpuBuffer;
-    bindEntries[1].offset = 0;
-    bindEntries[1].size = metadataExtent;
-    yinfo("prepareAtlas: compute bind group using metadataBuffer={}", (void*)_metadataGpuBuffer);
+        bindEntries[3].binding = 3;
+        bindEntries[3].textureView = _atlasTextureView;
 
-    bindEntries[2].binding = 2;
-    bindEntries[2].buffer = _imageDataGpuBuffer;
-    bindEntries[2].offset = 0;
-    bindEntries[2].size = imageDataExtent;
+        bindEntries[4].binding = 4;
+        bindEntries[4].buffer = _atlasStateBuffer;
+        bindEntries[4].offset = 0;
+        bindEntries[4].size = sizeof(AtlasState);
 
-    bindEntries[3].binding = 3;
-    bindEntries[3].textureView = _atlasTextureView;
+        bindEntries[5].binding = 5;
+        bindEntries[5].buffer = _processedCardsBuffer;
+        bindEntries[5].offset = 0;
+        bindEntries[5].size = MAX_CARD_SLOTS * sizeof(uint32_t);
 
-    bindEntries[4].binding = 4;
-    bindEntries[4].buffer = _atlasStateBuffer;
-    bindEntries[4].offset = 0;
-    bindEntries[4].size = sizeof(AtlasState);
+        WGPUBindGroupDescriptor bindGroupDesc = {};
+        bindGroupDesc.label = WGPU_STR("ImageAtlasComputeBindGroup");
+        bindGroupDesc.layout = _atlasBindGroupLayout;
+        bindGroupDesc.entryCount = bindEntries.size();
+        bindGroupDesc.entries = bindEntries.data();
 
-    bindEntries[5].binding = 5;
-    bindEntries[5].buffer = _processedCardsBuffer;
-    bindEntries[5].offset = 0;
-    bindEntries[5].size = MAX_CARD_SLOTS * sizeof(uint32_t);
-
-    WGPUBindGroupDescriptor bindGroupDesc = {};
-    bindGroupDesc.label = WGPU_STR("ImageAtlasComputeBindGroup");
-    bindGroupDesc.layout = _atlasBindGroupLayout;
-    bindGroupDesc.entryCount = bindEntries.size();
-    bindGroupDesc.entries = bindEntries.data();
-
-    // Release previous bind group if exists
-    if (_atlasBindGroup) {
-        wgpuBindGroupRelease(_atlasBindGroup);
-    }
-    _atlasBindGroup = wgpuDeviceCreateBindGroup(_device, &bindGroupDesc);
-    if (!_atlasBindGroup) {
-        return Err<void>("Failed to create compute bind group");
+        // Release previous bind group if exists
+        if (_atlasBindGroup) {
+            wgpuBindGroupRelease(_atlasBindGroup);
+        }
+        _atlasBindGroup = wgpuDeviceCreateBindGroup(_device, &bindGroupDesc);
+        if (!_atlasBindGroup) {
+            return Err<void>("Failed to create compute bind group");
+        }
+        _lastCellBuffer = cellBuffer;
+        yinfo("prepareAtlas: created new bind group for cellBuffer={}", (void*)cellBuffer);
     }
 
     // Begin compute pass

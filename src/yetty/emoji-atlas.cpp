@@ -101,6 +101,10 @@ Result<void> EmojiAtlas::uploadToGPU() noexcept {
 }
 
 Result<void> EmojiAtlas::createGPUResources() noexcept {
+    size_t textureBytes = atlasSize_ * atlasSize_ * 4;
+    yinfo("GPU_ALLOC EmojiAtlas(stub): texture={}x{} RGBA8 = {} bytes ({:.2f} MB)",
+          atlasSize_, atlasSize_, textureBytes, textureBytes / (1024.0 * 1024.0));
+
     // Create minimal texture (1x1 transparent)
     WGPUTextureDescriptor texDesc = {};
     texDesc.label = WGPU_STR("emoji atlas stub");
@@ -611,6 +615,9 @@ Result<void> EmojiAtlas::createGPUResources() noexcept {
     if (!texture_) {
         return Err<void>("Failed to create emoji atlas texture");
     }
+    size_t texBytes = static_cast<size_t>(atlasSize_) * atlasSize_ * 4;
+    yinfo("GPU_ALLOC EmojiAtlas: texture={}x{} RGBA8 = {} bytes ({:.2f} MB)",
+          atlasSize_, atlasSize_, texBytes, texBytes / (1024.0 * 1024.0));
 
     // Create texture view
     WGPUTextureViewDescriptor viewDesc = {};
@@ -651,6 +658,9 @@ Result<void> EmojiAtlas::createGPUResources() noexcept {
     if (!metadataBuffer_) {
         return Err<void>("Failed to create emoji metadata buffer");
     }
+    size_t metaBytes = maxEmojis * sizeof(EmojiGlyphMetadata);
+    yinfo("GPU_ALLOC EmojiAtlas: metadataBuffer={} bytes ({:.2f} MB) for {} emojis",
+          metaBytes, metaBytes / (1024.0 * 1024.0), maxEmojis);
 
     gpuResourcesCreated_ = true;
     yinfo("EmojiAtlas: created GPU resources ({}x{} texture, {} max emojis)",

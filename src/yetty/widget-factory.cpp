@@ -51,8 +51,8 @@ WidgetFactory::~WidgetFactory() {
 // Shared resource access
 //-----------------------------------------------------------------------------
 
-FontManager* WidgetFactory::getFontManager() const {
-    return _engine ? _engine->fontManager().get() : nullptr;
+YettyFontManager* WidgetFactory::getYettyFontManager() const {
+    return _engine ? _engine->yettyFontManager().get() : nullptr;
 }
 
 WebGPUContext* WidgetFactory::getContext() const {
@@ -118,7 +118,7 @@ Result<WidgetPtr> WidgetFactory::createWidget(
         auto it = _widgetFactories.find(widgetName);
         if (it != _widgetFactories.end()) {
             ydebug("createWidget: found in widget factories, calling factory");
-            return it->second(widgetName, this, getFontManager(), loop, x, y, widthCells, heightCells, pluginArgs, payload);
+            return it->second(widgetName, this, nullptr /* FontManager deprecated */, loop, x, y, widthCells, heightCells, pluginArgs, payload);
         }
 
         // Try loading as plugin (e.g., "shader" -> shader.so with default widget)
@@ -131,8 +131,8 @@ Result<WidgetPtr> WidgetFactory::createWidget(
 
         // Use default widget type (empty string lets plugin decide)
         ydebug("createWidget: plugin loaded, calling plugin->createWidget with widgetName=''");
-        ydebug("createWidget: this={} getFontManager()={} loop={}", (void*)this, (void*)getFontManager(), (void*)loop);
-        auto result = pluginResult.value()->createWidget("", this, getFontManager(), loop, x, y, widthCells, heightCells, pluginArgs, payload);
+        ydebug("createWidget: this={} fontManager=nullptr loop={}", (void*)this, (void*)loop);
+        auto result = pluginResult.value()->createWidget("", this, nullptr /* FontManager deprecated */, loop, x, y, widthCells, heightCells, pluginArgs, payload);
         if (!result) {
             ydebug("createWidget: plugin->createWidget FAILED: {}", result.error().message());
         } else {
@@ -150,7 +150,7 @@ Result<WidgetPtr> WidgetFactory::createWidget(
     }
 
     ydebug("createWidget: plugin loaded, calling plugin->createWidget with widgetName='{}'", widgetName);
-    return pluginResult.value()->createWidget(widgetName, this, getFontManager(), loop, x, y, widthCells, heightCells, pluginArgs, payload);
+    return pluginResult.value()->createWidget(widgetName, this, nullptr /* FontManager deprecated */, loop, x, y, widthCells, heightCells, pluginArgs, payload);
 }
 
 Result<WidgetPtr> WidgetFactory::createWidget(
