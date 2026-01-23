@@ -53,6 +53,13 @@ struct Cell {
 @group(0) @binding(0) var<uniform> globals: SharedUniforms;
 @group(0) @binding(1) var<storage, read> cardMetadata: array<u32>;
 @group(0) @binding(2) var<storage, read> cardStorage: array<f32>;
+// Card image atlas - populated by compute shader from cardImageData buffer
+// Contains only visible card images, recycled per frame
+@group(0) @binding(3) var cardImageAtlas: texture_2d<f32>;
+@group(0) @binding(4) var cardImageSampler: sampler;
+// Card image data buffer - raw RGBA8 pixels stored by ImageCard
+// Fragment shader can read directly from here (bypassing atlas for simplicity)
+@group(0) @binding(5) var<storage, read> cardImageData: array<u32>;
 
 // Grid bindings (group 1 - managed by renderer)
 @group(1) @binding(0) var<uniform> grid: GridUniforms;
@@ -71,12 +78,24 @@ const ATTR_BOLD: u32 = 0x01u;           // Bit 0
 const ATTR_ITALIC: u32 = 0x02u;         // Bit 1
 const ATTR_UNDERLINE_MASK: u32 = 0x0Cu; // Bits 2-3 (0=none, 1=single, 2=double, 3=curly)
 const ATTR_STRIKETHROUGH: u32 = 0x10u;  // Bit 4
-const ATTR_EMOJI: u32 = 0x20u;          // Bit 5 - render from emoji atlas
+const ATTR_FONT_TYPE_MASK: u32 = 0xE0u; // Bits 5-7 - font type
+
+// Font type constants (bits 5-7 of style byte)
+const FONT_TYPE_MSDF: u32 = 0u;     // Default text rendering
+const FONT_TYPE_BITMAP: u32 = 1u;   // Bitmap fonts (emoji, color fonts)
+const FONT_TYPE_SHADER: u32 = 2u;   // Single-cell shader glyphs
+const FONT_TYPE_CARD: u32 = 3u;     // Multi-cell card glyphs
+
+// Legacy alias for backward compatibility
+const ATTR_EMOJI: u32 = 0x20u;      // Bit 5 - same position as FONT_TYPE_BITMAP
 
 // Shader glyph constants (matches grid.h)
 // Uses Unicode Plane 16 PUA-B: U+100000 - U+10FFFD (codepoint = glyph index)
-const SHADER_GLYPH_START: u32 = 0x100000u;  // 1048576 decimal
-const SHADER_GLYPH_END: u32 = 0x10FFFDu;    // 1114109 decimal
+const CARD_GLYPH_BASE: u32 = 0x100000u;     // 1048576 decimal - card range start
+const CARD_GLYPH_END: u32 = 0x100FFFu;      // 1052671 decimal - card range end
+const SHADER_GLYPH_BASE: u32 = 0x101000u;   // 1052672 decimal - shader glyph range start
+const SHADER_GLYPH_END: u32 = 0x10FFFDu;    // 1114109 decimal - shader glyph range end
+const SHADER_GLYPH_START: u32 = 0x100000u;  // Legacy alias
 
 // Vertex input/output
 struct VertexInput {
@@ -156,6 +175,21 @@ fn isShaderGlyph(glyphIndex: u32) -> bool {
     return glyphIndex >= SHADER_GLYPH_START && glyphIndex <= SHADER_GLYPH_END;
 }
 
+// Check if glyph index is a card glyph
+fn isCardGlyph(glyphIndex: u32) -> bool {
+    return glyphIndex >= CARD_GLYPH_BASE && glyphIndex <= CARD_GLYPH_END;
+}
+
+// Check if glyph is any procedural glyph (card or shader)
+fn isProceduralGlyph(glyphIndex: u32) -> bool {
+    return glyphIndex >= CARD_GLYPH_BASE && glyphIndex <= SHADER_GLYPH_END;
+}
+
+// Extract font type from cell attrs (bits 5-7)
+fn getFontType(attrs: u32) -> u32 {
+    return (attrs >> 5u) & 0x7u;
+}
+
 // ==== SHADER GLYPH FUNCTIONS (injected by loader) ====
 // SHADER_GLYPH_FUNCTIONS_PLACEHOLDER
 
@@ -185,7 +219,7 @@ fn unpackColorAlpha(packed: u32) -> vec4<f32> {
 // fg/bg: raw packed u32 from cell - cards use as metadata index, regular glyphs unpack to color
 fn renderShaderGlyph(glyphIndex: u32, localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
     // SHADER_GLYPH_DISPATCH_PLACEHOLDER
-    // (loader generates: if glyphIndex == 1048577u { return shaderGlyph_1048577(...); } else if ...)
+    // (loader generates: if glyphIndex == 1052672u { return shaderGlyph_1048577(...); } else if ...)
     return unpackColor(bg);  // Fallback if no shader glyph matches
 }
 
@@ -237,7 +271,9 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     // Extract attribute flags
     let underlineType = (cellAttrs & ATTR_UNDERLINE_MASK) >> 2u;
     let hasStrikethrough = (cellAttrs & ATTR_STRIKETHROUGH) != 0u;
-    let isEmoji = (cellAttrs & ATTR_EMOJI) != 0u;
+    let fontType = getFontType(cellAttrs);
+    // Backward compatible: if fontType is BITMAP or legacy emoji bit is set
+    let isEmoji = fontType == FONT_TYPE_BITMAP;
 
     // Check if cursor should be rendered on this cell
     let cursorCol = i32(grid.cursorPos.x);

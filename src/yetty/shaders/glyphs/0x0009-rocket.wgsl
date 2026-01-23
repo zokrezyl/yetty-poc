@@ -1,11 +1,11 @@
-// Shader glyph: Rocket (codepoint 1048586 / U+10000A)
+// Shader glyph: Rocket (codepoint 1052681 / U+101009)
 // Animated rocket with flames
 
-fn shaderGlyph_1048586_hash(p: vec2<f32>) -> f32 {
+fn shaderGlyph_1052681_hash(p: vec2<f32>) -> f32 {
     return fract(sin(dot(p, vec2<f32>(127.1, 311.7))) * 43758.5453);
 }
 
-fn shaderGlyph_1048586(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
+fn shaderGlyph_1052681(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
     let bgColor = unpackColor(bg);
     // fgColor unused - rocket has its own colors
 
@@ -31,7 +31,7 @@ fn shaderGlyph_1048586(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
     // Flames
     let flameY = rp.y + 0.5;
     if (flameY > 0.0 && flameY < 0.5 && abs(rp.x) < 0.15) {
-        let flicker = shaderGlyph_1048586_hash(vec2<f32>(time * 10.0, rp.x * 100.0));
+        let flicker = shaderGlyph_1052681_hash(vec2<f32>(time * 10.0, rp.x * 100.0));
         let intensity = (0.5 - flameY) * 2.0 * (0.7 + flicker * 0.3);
         color = mix(vec3<f32>(1.0, 0.8, 0.2), vec3<f32>(1.0, 0.3, 0.1), flameY * 2.0);
         alpha = intensity;

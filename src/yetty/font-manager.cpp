@@ -454,42 +454,77 @@ Result<Font*> FontManager::getFont(const std::string& family, Font::Style style,
     std::string cacheName = baseName + "-" + styleName;
     std::string cachePath = getCachePath(cacheName, fontSize, fontData.data(), fontData.size());
 
-    // Check disk cache
-    yinfo("FontManager: looking for disk cache: {}.lz4", cachePath);
-    auto diskResult = loadFromDiskCache(cachePath);
-    if (diskResult) {
-        yinfo("FontManager: DISK CACHE HIT for font '{}' (all styles)", family);
-        Font* ptr = diskResult.value().get();
-        fontCache_[key] = std::move(diskResult.value());
+    // Check for new glyph cache format first (.glyphcache)
+    std::string glyphCachePath = cachePath + ".glyphcache";
+    yinfo("FontManager: looking for glyph cache: {}", glyphCachePath);
 
-        if (!hasDefaultFont_) {
-            defaultFontKey_ = key;
-            hasDefaultFont_ = true;
+    auto font = std::make_unique<Font>();
+
+    if (std::ifstream(glyphCachePath).good()) {
+        // Glyph cache exists - load index only, create small atlas
+        yinfo("FontManager: GLYPH CACHE HIT for font '{}'", family);
+
+        if (!font->loadGlyphCacheIndex(glyphCachePath)) {
+            yerror("FontManager: Failed to load glyph cache index");
+            return Err<Font*>("Failed to load glyph cache index");
         }
 
-        return Ok(ptr);
+        // Initialize small runtime atlas with basic Latin only
+        // The atlas will grow on-demand as glyphs are loaded from cache
+        font->setGlyphCachePath(glyphCachePath);
+
+        // Generate basic Latin glyphs into small runtime atlas (basicLatinOnly=true)
+        if (!font->generate(fontPath, fontSize, 0, true)) {
+            return Err<Font*>("Failed to generate basic font atlas");
+        }
+    } else {
+        // No glyph cache - generate full atlas first to build cache, then use small atlas
+        yinfo("FontManager: GLYPH CACHE MISS for font '{}', generating full cache...", family);
+
+        // Generate full atlas with all glyphs (temporary, in separate scope to free memory)
+        {
+            Font tempFont;
+            if (!tempFont.generate(fontPath, fontSize)) {
+                return Err<Font*>("Failed to generate font atlas for caching");
+            }
+
+            // Save glyph cache
+            if (!tempFont.saveGlyphCache(glyphCachePath)) {
+                ywarn("FontManager: Failed to save glyph cache");
+            } else {
+                yinfo("FontManager: Saved glyph cache to {}", glyphCachePath);
+            }
+            // tempFont destructor frees the large atlas memory here
+        }
+
+        // Now load from cache with small atlas, or just use basicLatinOnly without cache
+        if (font->loadGlyphCacheIndex(glyphCachePath)) {
+            font->setGlyphCachePath(glyphCachePath);
+        }
+
+        // Always generate basic Latin only - cache just enables on-demand loading of other glyphs
+        if (!font->generate(fontPath, fontSize, 0, true)) {
+            return Err<Font*>("Failed to generate basic font atlas");
+        }
     }
 
-    // Generate font from file path (will discover all style variants)
-    yinfo("FontManager: DISK CACHE MISS for font '{}', generating atlas with all styles...", family);
-    auto result = generateFont(fontPath, fontSize);
-    if (!result) {
-        return Err<Font*>(result.error().message());
+    if (!font->createTexture(_ctx->getDevice(), _ctx->getQueue())) {
+        return Err<Font*>("Failed to create font texture");
     }
 
-    Font* ptr = result.value().get();
+    if (!font->createGlyphMetadataBuffer(_ctx->getDevice())) {
+        return Err<Font*>("Failed to create glyph metadata buffer");
+    }
 
-    // Save to disk cache
-    saveToDiskCache(ptr, cachePath);
-
-    fontCache_[key] = std::move(result.value());
+    Font* ptr = font.get();
+    fontCache_[key] = std::move(font);
 
     if (!hasDefaultFont_) {
         defaultFontKey_ = key;
         hasDefaultFont_ = true;
     }
 
-    yinfo("FontManager: loaded font '{}' (all styles) from {}", family, fontPath);
+    yinfo("FontManager: loaded font '{}' with on-demand glyph loading", family);
     return Ok(ptr);
 }
 

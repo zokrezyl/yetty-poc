@@ -1,7 +1,7 @@
-// Shader glyph: Heart (codepoint 1048582 / U+100006)
+// Shader glyph: Heart (codepoint 1052677 / U+101005)
 // Pulsing heart effect
 
-fn shaderGlyph_1048582_sdHeart(p: vec2<f32>) -> f32 {
+fn shaderGlyph_1052677_sdHeart(p: vec2<f32>) -> f32 {
     let q = vec2<f32>(abs(p.x), p.y);
     let w = q - vec2<f32>(0.25, 0.75);
 
@@ -15,7 +15,7 @@ fn shaderGlyph_1048582_sdHeart(p: vec2<f32>) -> f32 {
     return sqrt(min(dot(b, b), dot(c, c))) * sign(q.x - q.y);
 }
 
-fn shaderGlyph_1048582(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
+fn shaderGlyph_1052677(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
     let bgColor = unpackColor(bg);
     // fgColor unused - heart has its own red color
 
@@ -26,7 +26,7 @@ fn shaderGlyph_1048582(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
     let beat = 1.0 + 0.1 * sin(time * 6.0) * exp(-2.0 * fract(time * 1.5));
     p /= beat;
 
-    let d = shaderGlyph_1048582_sdHeart(p);
+    let d = shaderGlyph_1052677_sdHeart(p);
 
     // Red heart with soft edge
     let heartColor = vec3<f32>(0.9, 0.1, 0.2);

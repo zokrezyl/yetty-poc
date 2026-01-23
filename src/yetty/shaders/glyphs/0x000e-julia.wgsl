@@ -1,8 +1,8 @@
-// Shader glyph: Julia set fractal (codepoint 1048591 / U+10000F)
+// Shader glyph: Julia set fractal (codepoint 1052686 / U+10100E)
 // Tiled fractal - uses pixelPos to create seamless rendering across cells
 // Mouse position controls the Julia constant (c) - different positions = different fractals
 
-fn shaderGlyph_1048591(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
+fn shaderGlyph_1052686(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
     // fg/bg unused - fractal has its own colors
     // Normalize coordinates to 0-1
     let screenSize = vec2<f32>(globals.screenWidth, globals.screenHeight);

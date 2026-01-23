@@ -136,7 +136,8 @@ struct VertexOutput {
         return u.color;
     }
 
-    discard;
+    // Default: transparent (Dawn requires explicit return)
+    return vec4<f32>(0.0, 0.0, 0.0, 0.0);
 }
 )";
 
@@ -232,6 +233,8 @@ Result<void> WidgetFrameRenderer::init(WGPUDevice device, WGPUTextureFormat form
             return Err<void>("Failed to create frame bind group");
         }
     }
+    yinfo("GPU_ALLOC WidgetFrameRenderer: {} uniformBuffers of 48 bytes each = {} bytes total",
+          MAX_DRAWS_PER_FRAME, MAX_DRAWS_PER_FRAME * 48);
 
     // Create pipeline layout
     WGPUPipelineLayoutDescriptor pipelineLayoutDesc = {};

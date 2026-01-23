@@ -1,11 +1,11 @@
-// Shader glyph: Smiley (codepoint 1048587 / U+10000B)
+// Shader glyph: Smiley (codepoint 1052682 / U+10100A)
 // Animated smiley face with blinking
 
-fn shaderGlyph_1048587_sdCircle(p: vec2<f32>, r: f32) -> f32 {
+fn shaderGlyph_1052682_sdCircle(p: vec2<f32>, r: f32) -> f32 {
     return length(p) - r;
 }
 
-fn shaderGlyph_1048587(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
+fn shaderGlyph_1052682(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
     let bgColor = unpackColor(bg);
     // fgColor unused - smiley has its own yellow color
 
@@ -13,7 +13,7 @@ fn shaderGlyph_1048587(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
     let blink = step(0.9, fract(time * 0.5));
 
     // Face
-    let face = shaderGlyph_1048587_sdCircle(p, 0.85);
+    let face = shaderGlyph_1052682_sdCircle(p, 0.85);
     var color = bgColor;
     var alpha = 0.0;
 
@@ -24,8 +24,8 @@ fn shaderGlyph_1048587(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
 
     // Eyes
     let eyeH = mix(0.12, 0.02, blink);
-    let leftEye = shaderGlyph_1048587_sdCircle(vec2<f32>(p.x + 0.3, (p.y - 0.2) / (eyeH / 0.12)), 0.12);
-    let rightEye = shaderGlyph_1048587_sdCircle(vec2<f32>(p.x - 0.3, (p.y - 0.2) / (eyeH / 0.12)), 0.12);
+    let leftEye = shaderGlyph_1052682_sdCircle(vec2<f32>(p.x + 0.3, (p.y - 0.2) / (eyeH / 0.12)), 0.12);
+    let rightEye = shaderGlyph_1052682_sdCircle(vec2<f32>(p.x - 0.3, (p.y - 0.2) / (eyeH / 0.12)), 0.12);
     if (leftEye < 0.0 || rightEye < 0.0) {
         color = vec3<f32>(0.1, 0.1, 0.1);
     }

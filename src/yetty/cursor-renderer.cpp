@@ -113,6 +113,7 @@ Result<void> CursorRenderer::createPipeline(WGPUTextureFormat targetFormat) {
     if (!_uniformBuffer) {
         return Err<void>("CursorRenderer: failed to create uniform buffer");
     }
+    yinfo("GPU_ALLOC CursorRenderer: uniformBuffer={} bytes", sizeof(QuadUniforms));
 
     // Bind group layout
     WGPUBindGroupLayoutEntry bindingEntry = {};

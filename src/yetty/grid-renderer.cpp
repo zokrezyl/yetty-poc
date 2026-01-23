@@ -1,6 +1,7 @@
 #include "damage-rect.h"  // For DamageRect (separate to avoid libuv on web)
 #include "yetty/grid-renderer.h"
 #include "yetty/config.h"
+#include <algorithm>
 #include <cstdlib> // for getenv
 #include <cstring>
 #include <filesystem>
@@ -11,8 +12,8 @@
 #include <ytrace/ytrace.hpp>
 #include <sstream>
 #include <yetty/wgpu-compat.h>
-#if !YETTY_WEB
-#include <webgpu/wgpu.h>  // For wgpuDevicePoll
+#if !YETTY_WEB && !defined(WEBGPU_BACKEND_DAWN)
+#include <webgpu/wgpu.h>  // For wgpuDevicePoll (wgpu-native only)
 #endif
 
 #if YETTY_ANDROID
@@ -36,19 +37,23 @@ namespace yetty {
 
 Result<GridRenderer::Ptr>
 GridRenderer::create(WebGPUContext::Ptr ctx,
-                     FontManager::Ptr fontManager,
+                     YettyFontManager::Ptr fontManager,
                      WGPUBindGroupLayout sharedBindGroupLayout,
+                     ShaderFont::Ptr shaderGlyphFont,
+                     ShaderFont::Ptr cardFont,
                      const std::string& fontFamily) noexcept {
   if (!ctx) {
     return Err<Ptr>("GridRenderer::create: null WebGPUContext");
   }
   if (!fontManager) {
-    return Err<Ptr>("GridRenderer::create: null FontManager");
+    return Err<Ptr>("GridRenderer::create: null YettyFontManager");
   }
   if (!sharedBindGroupLayout) {
     return Err<Ptr>("GridRenderer::create: null sharedBindGroupLayout");
   }
-  auto renderer = Ptr(new GridRenderer(std::move(ctx), std::move(fontManager), fontFamily));
+  auto renderer = Ptr(new GridRenderer(std::move(ctx), std::move(fontManager),
+                                       std::move(shaderGlyphFont), std::move(cardFont),
+                                       fontFamily));
   renderer->sharedBindGroupLayout_ = sharedBindGroupLayout;
   if (auto res = renderer->init(); !res) {
     return Err<Ptr>("Failed to initialize GridRenderer", res);
@@ -57,9 +62,13 @@ GridRenderer::create(WebGPUContext::Ptr ctx,
 }
 
 GridRenderer::GridRenderer(WebGPUContext::Ptr ctx,
-                           FontManager::Ptr fontManager,
+                           YettyFontManager::Ptr fontManager,
+                           ShaderFont::Ptr shaderGlyphFont,
+                           ShaderFont::Ptr cardFont,
                            const std::string& fontFamily) noexcept
-    : _ctx(std::move(ctx)), fontManager_(std::move(fontManager)), fontFamily_(fontFamily) {}
+    : _ctx(std::move(ctx)), fontManager_(std::move(fontManager)),
+      shaderGlyphFont_(std::move(shaderGlyphFont)), cardFont_(std::move(cardFont)),
+      fontFamily_(fontFamily) {}
 
 GridRenderer::~GridRenderer() {
 #if !YETTY_WEB
@@ -84,18 +93,23 @@ GridRenderer::~GridRenderer() {
 
 Result<void> GridRenderer::init() noexcept {
   WGPUDevice device = _ctx->getDevice();
+  WGPUQueue queue = _ctx->getQueue();
 
-  // Get terminal font from FontManager
-  auto fontResult = fontManager_->getFont(fontFamily_, Font::Regular, 32.0f);
+  // Get terminal font from YettyFontManager
+  auto fontResult = fontManager_->getMsMsdfFont(fontFamily_);
   if (!fontResult) {
-    return Err<void>("Failed to get terminal font: " +
-                     fontResult.error().message());
+    return Err<void>("Failed to get terminal font", fontResult);
   }
   font_ = *fontResult;
 
-  // Create glyph metadata buffer in Font
-  if (!font_->createGlyphMetadataBuffer(device)) {
-    return Err<void>("Failed to create glyph metadata buffer");
+  // Create GPU resources for font
+  auto texResult = font_->createTexture(device, queue);
+  if (!texResult) {
+    return Err<void>("Failed to create font texture", texResult);
+  }
+  auto bufResult = font_->createGlyphMetadataBuffer(device);
+  if (!bufResult) {
+    return Err<void>("Failed to create glyph metadata buffer", bufResult);
   }
 
   // Create emoji atlas (NotoColorEmoji uses 136x128 bitmaps, use 136px cells)
@@ -132,81 +146,16 @@ Result<void> GridRenderer::init() noexcept {
   return Ok();
 }
 
-// Scan for shader glyph files and build concatenated shader source
-static std::string loadShaderGlyphs(const std::string& shaderDir) {
-  std::string functions;
-  std::string dispatch;
-
-  // Pattern: decimal codepoint followed by name, e.g. "1048577-spinner.wgsl"
-  std::regex pattern(R"(^(\d+)-.*\.wgsl$)");
-
-  std::vector<std::pair<uint32_t, std::string>> glyphs;
-
-#if !YETTY_WEB && !YETTY_ANDROID
-  try {
-    for (const auto& entry : std::filesystem::directory_iterator(shaderDir)) {
-      if (!entry.is_regular_file()) continue;
-
-      std::string filename = entry.path().filename().string();
-      std::smatch match;
-      if (std::regex_match(filename, match, pattern)) {
-        uint32_t codepoint = static_cast<uint32_t>(std::stoul(match[1].str()));
-
-        // Read shader glyph file
-        std::ifstream file(entry.path());
-        if (file.is_open()) {
-          std::stringstream buf;
-          buf << file.rdbuf();
-          glyphs.emplace_back(codepoint, buf.str());
-          yinfo("Loaded shader glyph: {} (codepoint {})", filename, codepoint);
-        }
-      }
-    }
-  } catch (const std::exception& e) {
-    yerror("Error scanning shader glyphs: {}", e.what());
-  }
-#endif
-
-  // Sort by codepoint for consistent ordering
-  std::sort(glyphs.begin(), glyphs.end(),
-            [](const auto& a, const auto& b) { return a.first < b.first; });
-
-  // Build functions and dispatch
-  for (const auto& [codepoint, code] : glyphs) {
-    functions += "// Shader glyph codepoint " + std::to_string(codepoint) + "\n";
-    functions += code + "\n\n";
-
-    // Add dispatch case
-    if (!dispatch.empty()) {
-      dispatch += " else ";
-    }
-    dispatch += "if (glyphIndex == " + std::to_string(codepoint) + "u) {\n";
-    dispatch += "        return shaderGlyph_" + std::to_string(codepoint) +
-                "(localUV, time, fg, bg, pixelPos, mousePos);\n    }";
-  }
-
-  if (!dispatch.empty()) {
-    dispatch += "\n    ";
-  }
-
-  yinfo("Loaded {} shader glyphs", glyphs.size());
-
-  return "FUNCTIONS:" + functions + "\nDISPATCH:" + dispatch;
-}
-
 Result<void> GridRenderer::createShaderModule(WGPUDevice device) {
 #if YETTY_WEB
   const char *shaderPath = "/shaders.wgsl";
-  const char *shaderDir = "/";
 #elif YETTY_ANDROID
   // On Android, shader is extracted to app's data directory
   const char *envPath = std::getenv("YETTY_SHADER_PATH");
   const char *shaderPath = envPath ? envPath : "/data/local/tmp/shaders.wgsl";
-  const char *shaderDir = "/data/local/tmp/";
   yinfo("Loading shader from: {}", shaderPath);
 #else
   const char *shaderPath = CMAKE_SOURCE_DIR "/src/yetty/shaders/shaders.wgsl";
-  const char *shaderDir = CMAKE_SOURCE_DIR "/src/yetty/shaders/";
 #endif
 
   std::ifstream file(shaderPath);
@@ -218,11 +167,26 @@ Result<void> GridRenderer::createShaderModule(WGPUDevice device) {
   buffer << file.rdbuf();
   std::string shaderSource = buffer.str();
 
-  // Load and inject shader glyphs
-  std::string glyphData = loadShaderGlyphs(shaderDir);
-  size_t funcSep = glyphData.find("\nDISPATCH:");
-  std::string functions = glyphData.substr(10, funcSep - 10);  // Skip "FUNCTIONS:"
-  std::string dispatch = glyphData.substr(funcSep + 10);       // Skip "\nDISPATCH:"
+  // Get shader code from ShaderFont instances
+  std::string functions;
+  std::string dispatch;
+
+  if (shaderGlyphFont_) {
+    functions += shaderGlyphFont_->getCode();
+    dispatch += shaderGlyphFont_->getDispatchCode();
+    yinfo("GridRenderer: loaded {} glyph shaders from ShaderFont",
+          shaderGlyphFont_->getFunctionCount());
+  }
+
+  if (cardFont_) {
+    functions += cardFont_->getCode();
+    if (!dispatch.empty() && !cardFont_->getDispatchCode().empty()) {
+      dispatch += " else ";
+    }
+    dispatch += cardFont_->getDispatchCode();
+    yinfo("GridRenderer: loaded {} card shaders from ShaderFont",
+          cardFont_->getFunctionCount());
+  }
 
   // Replace placeholders
   size_t funcPos = shaderSource.find("// SHADER_GLYPH_FUNCTIONS_PLACEHOLDER");
@@ -234,6 +198,9 @@ Result<void> GridRenderer::createShaderModule(WGPUDevice device) {
   if (dispPos != std::string::npos) {
     shaderSource.replace(dispPos, 36, dispatch);
   }
+
+  yinfo("GridRenderer: compiling main shader ({} lines)",
+        std::count(shaderSource.begin(), shaderSource.end(), '\n') + 1);
 
   WGPUShaderSourceWGSL wgslDesc = {};
   wgslDesc.chain.sType = WGPUSType_ShaderSourceWGSL;
@@ -261,6 +228,7 @@ Result<void> GridRenderer::createBuffers(WGPUDevice device) {
   if (!uniformBuffer_) {
     return Err<void>("Failed to create uniform buffer");
   }
+  yinfo("GPU_ALLOC GridRenderer: uniformBuffer={} bytes", sizeof(Uniforms));
 
   // Fullscreen quad vertices (2 triangles, 6 vertices)
   float quadVertices[] = {
@@ -285,6 +253,7 @@ Result<void> GridRenderer::createBuffers(WGPUDevice device) {
       wgpuBufferGetMappedRange(quadVertexBuffer_, 0, sizeof(quadVertices));
   memcpy(mapped, quadVertices, sizeof(quadVertices));
   wgpuBufferUnmap(quadVertexBuffer_);
+  yinfo("GPU_ALLOC GridRenderer: quadVertexBuffer={} bytes", sizeof(quadVertices));
 
   return Ok();
 }
@@ -315,7 +284,9 @@ Result<void> GridRenderer::createCellBuffer(WGPUDevice device, uint32_t cols,
 
   // Wait for GPU to finish using old buffer before releasing
   if (cellBuffer_) {
+#if !defined(WEBGPU_BACKEND_DAWN)
     wgpuDevicePoll(device, true, nullptr);
+#endif
     wgpuBufferRelease(cellBuffer_);
     cellBuffer_ = nullptr;
   }
@@ -334,6 +305,8 @@ Result<void> GridRenderer::createCellBuffer(WGPUDevice device, uint32_t cols,
     return Err<void>("Failed to create cell buffer");
   }
   cellBufferSize_ = requiredSize;
+  yinfo("GPU_ALLOC GridRenderer: cellBuffer={} bytes ({:.2f} MB) for {}x{} cells",
+        requiredSize, requiredSize / (1024.0 * 1024.0), cols, rows);
 
   return Ok();
 }
@@ -419,7 +392,7 @@ void GridRenderer::setSharedBindGroupLayout(WGPUBindGroupLayout layout) noexcept
   sharedBindGroupLayout_ = layout;
 }
 
-Result<void> GridRenderer::createBindGroup(WGPUDevice device, Font &font) {
+Result<void> GridRenderer::createBindGroup(WGPUDevice device, MsMsdfFont &font) {
 #if YETTY_WEB
   // On web, only create bind group once to avoid Emscripten WebGPU manager issues
   if (bindGroup_) {
@@ -571,11 +544,9 @@ void GridRenderer::setCellSize(float width, float height) noexcept {
   cellSize_ = {width, height};
 }
 
-void GridRenderer::updateFontBindings(Font &font) noexcept {
+void GridRenderer::updateFontBindings(MsMsdfFont &font) noexcept {
   if (!_ctx)
     return;
-
-  font_ = &font;
 
   // Only recreate bind group if cell buffer already exists
   // Otherwise, render() will create both buffer and bind group
@@ -1080,6 +1051,36 @@ void GridRenderer::renderFromCells(uint32_t cols, uint32_t rows,
 
   wgpuQueueSubmit(queue, 1, &cmdBuffer);
   wgpuCommandBufferRelease(cmdBuffer);
+}
+
+Result<void> GridRenderer::uploadCells(uint32_t cols, uint32_t rows, const Cell* cells) noexcept {
+  if (!_ctx || !cells || cols == 0 || rows == 0) {
+    return Err<void>("GridRenderer::uploadCells: invalid parameters");
+  }
+
+  WGPUDevice device = _ctx->getDevice();
+  WGPUQueue queue = _ctx->getQueue();
+
+  // Create/resize cell buffer if needed
+  if (cols != textureCols_ || rows != textureRows_) {
+    if (auto res = createCellBuffer(device, cols, rows); !res) {
+      return Err<void>("GridRenderer::uploadCells: createCellBuffer failed", res);
+    }
+    if (font_) {
+      if (auto res = createBindGroup(device, *font_); !res) {
+        return Err<void>("GridRenderer::uploadCells: createBindGroup failed", res);
+      }
+    }
+    needsBindGroupRecreation_ = false;
+    if (font_) {
+      lastFontResourceVersion_ = font_->getResourceVersion();
+    }
+  }
+
+  // Upload cell data to GPU
+  updateCellBuffer(queue, cells, cols, rows);
+
+  return Ok();
 }
 
 } // namespace yetty

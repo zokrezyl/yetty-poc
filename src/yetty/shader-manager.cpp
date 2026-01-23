@@ -83,6 +83,7 @@ Result<void> ShaderManager::createGlobalUniformBuffer() {
     if (!_globalUniformBuffer) {
         return Err<void>("Failed to create global uniform buffer");
     }
+    yinfo("GPU_ALLOC ShaderManager: globalUniformBuffer={} bytes", sizeof(GlobalUniforms));
 
     // Create bind group layout
     WGPUBindGroupLayoutEntry entry = {};
@@ -290,6 +291,9 @@ fn fs_entry(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
 )";
 
     // Compile
+    yinfo("ShaderManager: compiling {} ({} lines merged)", filename,
+          std::count(fullSource.begin(), fullSource.end(), '\n') + 1);
+
     WGPUShaderSourceWGSL wgslDesc = {};
     wgslDesc.chain.sType = WGPUSType_ShaderSourceWGSL;
     wgslDesc.code = { .data = fullSource.c_str(), .length = fullSource.size() };
@@ -297,10 +301,48 @@ fn fs_entry(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
     WGPUShaderModuleDescriptor shaderDesc = {};
     shaderDesc.nextInChain = &wgslDesc.chain;
 
+    // Use compilation info callback to detect errors
     WGPUShaderModule module = wgpuDeviceCreateShaderModule(_device, &shaderDesc);
     if (!module) {
+        yerror("Failed to compile shader: {} - dumping source:", filename);
+        // Dump with line numbers
+        std::istringstream iss(fullSource);
+        std::string line;
+        int lineNum = 1;
+        while (std::getline(iss, line)) {
+            yerror("{:4d}: {}", lineNum++, line);
+        }
         return Err<WGPUShaderModule>("Failed to compile shader: " + filename);
     }
+
+    // Check compilation info for errors (Dawn reports errors here)
+    WGPUCompilationInfoCallbackInfo cbInfo = {};
+    cbInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+    cbInfo.callback = [](WGPUCompilationInfoRequestStatus status,
+                         WGPUCompilationInfo const* info,
+                         void* userdata1, void* userdata2) {
+        auto* src = static_cast<std::string*>(userdata1);
+        auto* fname = static_cast<std::string*>(userdata2);
+        if (info && info->messageCount > 0) {
+            for (size_t i = 0; i < info->messageCount; i++) {
+                auto& msg = info->messages[i];
+                if (msg.type == WGPUCompilationMessageType_Error) {
+                    yerror("Shader {} error at line {}: {}", *fname, msg.lineNum,
+                           std::string(msg.message.data, msg.message.length));
+                    // Dump source with line numbers
+                    std::istringstream iss(*src);
+                    std::string line;
+                    int lineNum = 1;
+                    while (std::getline(iss, line)) {
+                        yerror("{:4d}: {}", lineNum++, line);
+                    }
+                }
+            }
+        }
+    };
+    cbInfo.userdata1 = new std::string(fullSource);
+    cbInfo.userdata2 = new std::string(filename);
+    wgpuShaderModuleGetCompilationInfo(module, cbInfo);
 
     yinfo("ShaderManager: compiled shader {}", filename);
     return Ok(module);

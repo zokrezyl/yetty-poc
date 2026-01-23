@@ -1,7 +1,7 @@
-// Shader glyph: Star (codepoint 1048589 / U+10000D)
+// Shader glyph: Star (codepoint 1052684 / U+10100C)
 // Glowing pulsing star
 
-fn shaderGlyph_1048589_sdStar(p: vec2<f32>, r: f32, n: i32, m: f32) -> f32 {
+fn shaderGlyph_1052684_sdStar(p: vec2<f32>, r: f32, n: i32, m: f32) -> f32 {
     let an = 3.141593 / f32(n);
     let en = 3.141593 / m;
     let acs = vec2<f32>(cos(an), sin(an));
@@ -16,7 +16,7 @@ fn shaderGlyph_1048589_sdStar(p: vec2<f32>, r: f32, n: i32, m: f32) -> f32 {
     return length(q) * sign(q.x);
 }
 
-fn shaderGlyph_1048589(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
+fn shaderGlyph_1052684(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
     let bgColor = unpackColor(bg);
     // fgColor unused - star has its own golden color
 
@@ -27,7 +27,7 @@ fn shaderGlyph_1048589(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
     let glow = 1.0 + 0.3 * sin(time * 5.0);
 
     // Star shape
-    let star = shaderGlyph_1048589_sdStar(p, 0.5 * pulse, 5, 2.5);
+    let star = shaderGlyph_1052684_sdStar(p, 0.5 * pulse, 5, 2.5);
 
     var color = bgColor;
     var alpha = 0.0;

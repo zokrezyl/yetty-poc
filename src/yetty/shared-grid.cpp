@@ -212,9 +212,8 @@ void SharedGrid::updateBackBuffer(int cursorRow, int cursorCol, bool cursorVisib
 
 } // namespace yetty
 
-// Include Font here to avoid circular dependency in header
+// Include emoji here for client build
 #ifndef YETTY_SERVER_BUILD
-#include <yetty/font.h>
 #include "yetty/emoji.h"
 #endif
 

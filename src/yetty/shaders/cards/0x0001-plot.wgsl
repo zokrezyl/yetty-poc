@@ -1,8 +1,40 @@
-// Shader glyph: Plot widget (codepoint 1048592 / U+100010)
+// Shader glyph: Plot widget (codepoint 1048577 / U+100001)
 // Card-based plot rendering - uses cardMetadata and cardStorage buffers
-// The fg u32 contains the metadata offset into cardMetadata buffer
 //
-// Metadata layout (64 bytes, fits in SLOT_64):
+// =============================================================================
+// DESIGN: ANSI-Compatible Cell Encoding for Scroll-Independent Widgets
+// =============================================================================
+//
+// Problem: Cards/widgets span multiple terminal cells. When terminal scrolls,
+// the widget must move with it. Direct buffer manipulation breaks this.
+//
+// Solution: Encode card data in standard ANSI true-color sequences (24-bit RGB).
+// This allows card cells to flow through vterm's normal line handling, which
+// properly manages scrolling, newlines, and scrollback buffer.
+//
+// Per-cell encoding (fits in ANSI true-color RGB, 24 bits each):
+//
+//   fg (24 bits): Metadata SLOT INDEX (not byte offset!)
+//     - Metadata is always allocated in 32-byte aligned slots
+//     - slotIndex = byteOffset / 32
+//     - With 24 bits: 2^24 slots × 32 bytes = 512MB addressable metadata
+//     - Shader converts: metaOffset_u32 = slotIndex * 8 (32 bytes = 8 u32s)
+//
+//   bg (24 bits): Relative position within widget
+//     - 12 bits for relCol (0-4095), 12 bits for relRow (0-4095)
+//     - Encoding: bg24 = (relRow << 12) | relCol
+//     - Max widget size: 4096 × 4096 cells (way more than any terminal)
+//     - This makes widgets scroll-independent: each cell knows its position
+//       within the widget regardless of where the widget is on screen
+//
+// Why not use full 32-bit fg/bg?
+//   - ANSI true-color only provides 24-bit RGB per color
+//   - We want cards to work with standard terminal escape sequences
+//   - This enables: OSC → create card → output ANSI sequences → vterm handles rest
+//
+// =============================================================================
+//
+// Metadata layout (48 bytes, fits in 64-byte slot):
 //   offset 0:  plotType (u32)   - 0=line, 1=bar, 2=scatter, 3=area
 //   offset 4:  dataOffset (u32) - float index into cardStorage (NOT byte offset!)
 //   offset 8:  dataCount (u32)  - number of data points
@@ -11,10 +43,9 @@
 //   offset 20: lineColor (u32)  - packed RGBA for line/points
 //   offset 24: fillColor (u32)  - packed RGBA for fill/bars
 //   offset 28: flags (u32)      - bit 0: show grid, bit 1: show axes
-//   offset 32: widgetCol (u32)  - widget's column position in grid
-//   offset 36: widgetRow (u32)  - widget's row position in grid
-//   offset 40: widthCells (u32) - widget width in cells
-//   offset 44: heightCells (u32)- widget height in cells
+//   offset 32: widthCells (u32) - widget width in cells
+//   offset 36: heightCells (u32)- widget height in cells
+//   offset 40: bgColor (u32)    - packed RGBA for background
 
 const PLOT_TYPE_LINE: u32 = 0u;
 const PLOT_TYPE_BAR: u32 = 1u;
@@ -24,11 +55,21 @@ const PLOT_TYPE_AREA: u32 = 3u;
 const PLOT_FLAG_GRID: u32 = 1u;
 const PLOT_FLAG_AXES: u32 = 2u;
 
-fn shaderGlyph_1048592(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
-    let bgColor = unpackColor(bg);
+fn shaderGlyph_1048577(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
+    // ==========================================================================
+    // Decode ANSI-compatible cell encoding (see header comments for design)
+    // ==========================================================================
 
-    // fg contains the metadata offset (divided by 4 to get u32 index)
-    let metaOffset = fg / 4u;
+    // fg (24 bits used): metadata slot index
+    // Slot index = byteOffset / 32, so multiply by 8 to get u32 index (32 bytes = 8 u32s)
+    let slotIndex = fg & 0xFFFFFFu;  // Mask to 24 bits (ANSI true-color limit)
+    let metaOffset = slotIndex * 8u;
+
+    // bg (24 bits used): relative position within widget
+    // Lower 12 bits = relCol, upper 12 bits = relRow
+    let bg24 = bg & 0xFFFFFFu;       // Mask to 24 bits
+    let relCol = bg24 & 0xFFFu;      // Bits 0-11: column (0-4095)
+    let relRow = (bg24 >> 12u) & 0xFFFu;  // Bits 12-23: row (0-4095)
 
     // Read metadata from cardMetadata buffer
     let plotType = cardMetadata[metaOffset + 0u];
@@ -39,28 +80,22 @@ fn shaderGlyph_1048592(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
     let lineColorPacked = cardMetadata[metaOffset + 5u];
     let fillColorPacked = cardMetadata[metaOffset + 6u];
     let flags = cardMetadata[metaOffset + 7u];
-    let widgetCol = cardMetadata[metaOffset + 8u];
-    let widgetRow = cardMetadata[metaOffset + 9u];
-    let widthCells = cardMetadata[metaOffset + 10u];
-    let heightCells = cardMetadata[metaOffset + 11u];
+    let widthCells = cardMetadata[metaOffset + 8u];
+    let heightCells = cardMetadata[metaOffset + 9u];
+    let bgColorPacked = cardMetadata[metaOffset + 10u];
 
     let lineColor = unpackColor(lineColorPacked);
     let fillColor = unpackColor(fillColorPacked);
+    let bgColor = unpackColor(bgColorPacked);
 
     // If no data, just show background with optional grid
     if (dataCount == 0u) {
         return bgColor;
     }
 
-    // Compute widget-wide UV (not per-cell UV)
-    // widgetPixelPos = top-left corner of widget in pixels
-    let widgetPixelX = f32(widgetCol) * grid.cellSize.x;
-    let widgetPixelY = f32(widgetRow) * grid.cellSize.y;
-    // widgetPixelSize = total widget size in pixels
-    let widgetPixelW = f32(widthCells) * grid.cellSize.x;
-    let widgetPixelH = f32(heightCells) * grid.cellSize.y;
-    // Compute UV across entire widget (0-1 range)
-    let widgetUV = (pixelPos - vec2<f32>(widgetPixelX, widgetPixelY)) / vec2<f32>(widgetPixelW, widgetPixelH);
+    // Compute widget-wide UV using relative cell position + local UV within cell
+    // This makes the widget scroll-independent
+    let widgetUV = (vec2<f32>(f32(relCol), f32(relRow)) + localUV) / vec2<f32>(f32(widthCells), f32(heightCells));
 
     var color = bgColor;
     let padding = 0.05;  // 5% padding on each side

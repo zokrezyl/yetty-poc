@@ -1251,6 +1251,7 @@ Result<void> YDrawRenderer::createPipeline(WebGPUContext& ctx, WGPUTextureFormat
     bufDesc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
     _uniform_buffer = wgpuDeviceCreateBuffer(device, &bufDesc);
     if (!_uniform_buffer) return Err<void>("Failed to create uniform buffer");
+    yinfo("GPU_ALLOC YDrawRenderer: uniformBuffer=32 bytes");
 
     // Primitive storage buffer
     WGPUBufferDescriptor primBufDesc = {};
@@ -1258,6 +1259,7 @@ Result<void> YDrawRenderer::createPipeline(WebGPUContext& ctx, WGPUTextureFormat
     primBufDesc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
     _primitive_buffer = wgpuDeviceCreateBuffer(device, &primBufDesc);
     if (!_primitive_buffer) return Err<void>("Failed to create primitive buffer");
+    yinfo("GPU_ALLOC YDrawRenderer: primitiveBuffer={} bytes", MAX_PRIMITIVES * sizeof(YDrawPrimitiveGPU));
 
     // Shader
     WGPUShaderSourceWGSL wgslDesc = {};

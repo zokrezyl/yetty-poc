@@ -150,6 +150,14 @@ void PlotCard::parseArgs(const std::string& args) {
                 maxValue_ = val;
                 autoRange_ = false;
             }
+        } else if (token == "--bg-color") {
+            std::string colorStr;
+            if (iss >> colorStr) {
+                if (colorStr.substr(0, 2) == "0x" || colorStr.substr(0, 2) == "0X") {
+                    colorStr = colorStr.substr(2);
+                }
+                bgColor_ = static_cast<uint32_t>(std::stoul(colorStr, nullptr, 16));
+            }
         }
     }
 
@@ -322,16 +330,15 @@ Result<void> PlotCard::uploadMetadata() {
     meta.lineColor = lineColor_;
     meta.fillColor = fillColor_;
     meta.flags = flags_;
-    // Widget bounds for computing UV across entire widget
-    meta.widgetCol = static_cast<uint32_t>(x_);
-    meta.widgetRow = static_cast<uint32_t>(y_);
+    // Widget dimensions (position is now per-cell in bg field)
     meta.widthCells = widthCells_;
     meta.heightCells = heightCells_;
+    meta.bgColor = bgColor_;
 
-    yinfo("PlotCard::uploadMetadata: metaOffset={} plotType={} dataOffset={} dataCount={} min={} max={} flags={} widget=({},{}) size={}x{}",
+    yinfo("PlotCard::uploadMetadata: metaOffset={} plotType={} dataOffset={} dataCount={} min={} max={} flags={} size={}x{} bgColor={:#x}",
           metaHandle_.offset, meta.plotType, meta.dataOffset, meta.dataCount,
           meta.minValue, meta.maxValue, meta.flags,
-          meta.widgetCol, meta.widgetRow, meta.widthCells, meta.heightCells);
+          meta.widthCells, meta.heightCells, meta.bgColor);
 
     if (auto res = cardMgr_->writeMetadata(metaHandle_, &meta, sizeof(meta)); !res) {
         return Err<void>("PlotCard::uploadMetadata: write failed");

@@ -1,7 +1,7 @@
-// Shader glyph: Pulse dot (codepoint 1048578 / U+100002)
+// Shader glyph: Pulse dot (codepoint 1052673 / U+101001)
 // Renders a pulsing circular dot
 
-fn shaderGlyph_1048578(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
+fn shaderGlyph_1052673(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
     let fgColor = unpackColor(fg);
     let bgColor = unpackColor(bg);
 

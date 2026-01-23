@@ -1,6 +1,7 @@
 #pragma once
 
 #include "grid.h"
+#include <yetty/yetty-font.h>
 #include <atomic>
 #include <cstdint>
 #include <string>
@@ -257,11 +258,9 @@ private:
 // Colors and attrs are zero-copy from shared memory.
 //=============================================================================
 
-class Font;  // Forward declaration
-
 class SharedGridView : public Grid {
 public:
-    explicit SharedGridView(SharedGrid* sharedGrid, Font* font = nullptr)
+    explicit SharedGridView(SharedGrid* sharedGrid, YettyFont::Ptr font = nullptr)
         : Grid(0, 0)  // Don't allocate storage in base
         , sharedGrid_(sharedGrid)
         , font_(font) {
@@ -271,8 +270,8 @@ public:
             glyphIndices_.resize(cellCount, 0);
         }
     }
-    
-    void setFont(Font* font) { font_ = font; }
+
+    void setFont(YettyFont::Ptr font) { font_ = font; }
     
     // Sync: convert codepoints to glyph indices
     // Call this before rendering!
@@ -316,7 +315,7 @@ public:
 
 private:
     SharedGrid* sharedGrid_;
-    Font* font_ = nullptr;
+    YettyFont::Ptr font_;
     std::vector<uint16_t> glyphIndices_;  // Converted from codepoints
     uint32_t lastSequence_ = 0;  // Track if we need to re-convert
 };

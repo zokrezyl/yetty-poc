@@ -18,6 +18,9 @@ namespace yetty {
 class Yetty;
 class WebGPUContext;
 class FontManager;
+class YettyFontManager;
+class BmFont;
+class ShaderFont;
 class Config;
 class WidgetFactory;
 
@@ -55,12 +58,17 @@ public:
     //-------------------------------------------------------------------------
     // Shared resource access (for widgets that need them)
     //-------------------------------------------------------------------------
-    FontManager* getFontManager() const;
+    YettyFontManager* getYettyFontManager() const;
     WebGPUContext* getContext() const;
     Config* getConfig() const;
     uv_loop_t* getLoop() const;
     class ShaderManager* getShaderManager() const;
     class CardBufferManager* getCardBufferManager() const;
+
+    // Font accessors (for Terminal/GPUScreen)
+    std::shared_ptr<BmFont> getBmFont() const;
+    std::shared_ptr<ShaderFont> getShaderGlyphFont() const;
+    std::shared_ptr<ShaderFont> getCardFont() const;
 
     //-------------------------------------------------------------------------
     // Widget registration (for non-plugin widgets)

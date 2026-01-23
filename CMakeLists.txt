@@ -204,6 +204,53 @@ if(TARGET lz4_static)
 endif()
 
 #-----------------------------------------------------------------------------
+# CDB (Constant Database) for fast key-value lookups
+# Downloads from https://cdb.cr.yp.to (public domain)
+#-----------------------------------------------------------------------------
+if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
+    set(CDB_VERSION "20251021")
+    set(CDB_URL "https://cdb.cr.yp.to/cdb-${CDB_VERSION}.tar.gz")
+    set(CDB_SOURCE_DIR "${CMAKE_BINARY_DIR}/_deps/cdb-${CDB_VERSION}")
+
+    if(NOT EXISTS "${CDB_SOURCE_DIR}/cdb.c")
+        message(STATUS "Downloading CDB ${CDB_VERSION}...")
+        file(DOWNLOAD ${CDB_URL} "${CMAKE_BINARY_DIR}/_deps/cdb-${CDB_VERSION}.tar.gz"
+             STATUS CDB_DOWNLOAD_STATUS)
+        list(GET CDB_DOWNLOAD_STATUS 0 CDB_DOWNLOAD_ERROR)
+        if(CDB_DOWNLOAD_ERROR)
+            message(FATAL_ERROR "Failed to download CDB: ${CDB_DOWNLOAD_STATUS}")
+        endif()
+        execute_process(
+            COMMAND ${CMAKE_COMMAND} -E tar xzf "${CMAKE_BINARY_DIR}/_deps/cdb-${CDB_VERSION}.tar.gz"
+            WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/_deps"
+        )
+    endif()
+
+    # Build CDB as a static library
+    add_library(cdb STATIC
+        ${CDB_SOURCE_DIR}/cdb.c
+        ${CDB_SOURCE_DIR}/cdb_hash.c
+        ${CDB_SOURCE_DIR}/cdb_make.c
+        ${CDB_SOURCE_DIR}/byte_copy.c
+        ${CDB_SOURCE_DIR}/byte_diff.c
+        ${CDB_SOURCE_DIR}/num_from4bytes.c
+        ${CDB_SOURCE_DIR}/num_to4bytes.c
+        ${CDB_SOURCE_DIR}/outbuf_init.c
+        ${CDB_SOURCE_DIR}/outbuf_put.c
+        ${CDB_SOURCE_DIR}/outbuf_write.c
+        ${CDB_SOURCE_DIR}/inbuf_0.c
+        ${CDB_SOURCE_DIR}/inbuf_init.c
+        ${CDB_SOURCE_DIR}/inbuf_get.c
+        ${CDB_SOURCE_DIR}/inbuf_read.c
+        ${CDB_SOURCE_DIR}/seek_set.c
+        ${CDB_SOURCE_DIR}/seek_cur.c
+    )
+    target_include_directories(cdb PUBLIC ${CDB_SOURCE_DIR})
+    target_compile_options(cdb PRIVATE -w)  # Suppress warnings in third-party code
+    set_target_properties(cdb PROPERTIES POSITION_INDEPENDENT_CODE ON)
+endif()
+
+#-----------------------------------------------------------------------------
 # Desktop-only dependencies (font atlas generation, GLFW windowing)
 #-----------------------------------------------------------------------------
 if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
@@ -293,99 +340,6 @@ if(NOT EMSCRIPTEN)
 endif()
 
 #-----------------------------------------------------------------------------
-# MuPDF for PDF rendering (desktop only) - AGPL licensed
-# Note: Disabled for Dawn builds to reduce build time
-#-----------------------------------------------------------------------------
-if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID AND NOT WEBGPU_BACKEND STREQUAL "dawn")
-    CPMAddPackage(
-        NAME mupdf
-        URL https://mupdf.com/downloads/archive/mupdf-1.25.4-source.tar.gz
-        DOWNLOAD_ONLY YES
-    )
-    if(mupdf_ADDED)
-        include(${CMAKE_CURRENT_SOURCE_DIR}/build-tools/cmake/mupdf/CMakeLists.txt)
-    endif()
-endif()
-
-#-----------------------------------------------------------------------------
-# PDFium for PDF rendering (desktop only) - BSD-3-Clause licensed (MIT compatible)
-# Uses prebuilt binaries from https://github.com/bblanchon/pdfium-binaries
-# Note: Disabled for Dawn builds to reduce build time
-#-----------------------------------------------------------------------------
-if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID AND NOT WEBGPU_BACKEND STREQUAL "dawn")
-    # Detect platform for PDFium binary download
-    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
-            set(PDFIUM_PLATFORM "linux-arm64")
-        else()
-            set(PDFIUM_PLATFORM "linux-x64")
-        endif()
-    elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-        if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
-            set(PDFIUM_PLATFORM "mac-arm64")
-        else()
-            set(PDFIUM_PLATFORM "mac-x64")
-        endif()
-    elseif(WIN32)
-        if(CMAKE_SIZEOF_VOID_P EQUAL 8)
-            set(PDFIUM_PLATFORM "win-x64")
-        else()
-            set(PDFIUM_PLATFORM "win-x86")
-        endif()
-    else()
-        message(WARNING "Unknown platform for PDFium, skipping")
-        set(PDFIUM_PLATFORM "")
-    endif()
-
-    if(PDFIUM_PLATFORM)
-        # PDFium version 7630 (chromium/7630 release - latest as of Jan 2026)
-        set(PDFIUM_VERSION "7630")
-        CPMAddPackage(
-            NAME pdfium
-            URL https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/${PDFIUM_VERSION}/pdfium-${PDFIUM_PLATFORM}.tgz
-            DOWNLOAD_ONLY YES
-        )
-        if(pdfium_ADDED)
-            include(${CMAKE_CURRENT_SOURCE_DIR}/build-tools/cmake/pdfium/CMakeLists.txt)
-            message(STATUS "PDFium: enabled (${PDFIUM_PLATFORM}, chromium/${PDFIUM_VERSION})")
-        endif()
-    endif()
-endif()
-
-#-----------------------------------------------------------------------------
-# ymery-cpp for ymery plugin (ImGui/ImPlot scientific visualization)
-# Note: ymery-cpp is not compatible with Dawn backend (API differences)
-#-----------------------------------------------------------------------------
-if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID AND NOT WEBGPU_BACKEND STREQUAL "dawn")
-    # ymery-cpp plugins go to plugins/ymery subdirectory
-    set(YMERY_PLUGIN_DIR "${CMAKE_BINARY_DIR}/plugins/ymery" CACHE PATH "")
-    CPMAddPackage(
-        NAME ymery-cpp
-        GITHUB_REPOSITORY zokrezyl/ymery-cpp
-        GIT_TAG main
-        OPTIONS
-            "YMERY_BUILD_TESTS OFF"
-            "YMERY_BUILD_GUI_TESTS OFF"
-            "YMERY_USE_WEBGPU ON"
-    )
-    # Fix: ymery-cpp's filesystem_common includes ytrace headers but doesn't link ytrace::ytrace
-    # This adds the missing YTRACE_USE_SPDLOG define
-    if(TARGET filesystem_common)
-        target_compile_definitions(filesystem_common PRIVATE YTRACE_USE_SPDLOG=1)
-    endif()
-elseif(WEBGPU_BACKEND STREQUAL "dawn")
-    message(STATUS "ymery plugin: disabled (not compatible with Dawn backend)")
-endif()
-
-#-----------------------------------------------------------------------------
-# FFmpeg for video plugin (Unix only - requires ./configure + make)
-# Note: Disabled for Dawn builds to reduce build time
-#-----------------------------------------------------------------------------
-if(UNIX AND NOT EMSCRIPTEN AND NOT YETTY_ANDROID AND NOT WEBGPU_BACKEND STREQUAL "dawn")
-    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/build-tools/cmake/ffmpeg ffmpeg_build)
-endif()
-
-#-----------------------------------------------------------------------------
 # Android-specific dependencies
 #-----------------------------------------------------------------------------
 if(YETTY_ANDROID)
@@ -436,7 +390,8 @@ endif()
 if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
     # Python for built-in plugin (Unix only - requires ./configure + make)
     # Must be defined before yetty so python_embedded target exists
-    if(UNIX)
+    option(YETTY_PLUGIN_PYTHON "Build Python plugin (requires Python build)" OFF)
+    if(UNIX AND YETTY_PLUGIN_PYTHON)
         add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/build-tools/cmake/python python_build)
     endif()
 
@@ -444,8 +399,13 @@ if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
         src/yetty/webgpu-context.cpp
         src/yetty/font.cpp
         src/yetty/font-manager.cpp
+        src/yetty/ms-msdf-font.cpp
+        src/yetty/yetty-font-manager.cpp
         src/yetty/rich-text.cpp
         src/yetty/emoji-atlas.cpp
+        src/yetty/bm-font.cpp
+        src/yetty/shader-font.cpp
+        src/yetty/shader-compiler.cpp
         src/yetty/ydraw.cpp
         src/yetty/widget-frame-renderer.cpp
     )
@@ -488,6 +448,7 @@ if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
         ytrace::ytrace
         lz4_static
         uv_a
+        cdb
         $<$<NOT:$<BOOL:${WIN32}>>:${FONTCONFIG_LIBRARIES}>
     )
 
@@ -517,6 +478,9 @@ if(EMSCRIPTEN OR YETTY_ANDROID)
         src/yetty/font-manager.cpp
         src/yetty/rich-text.cpp
         src/yetty/emoji-atlas.cpp
+        src/yetty/bm-font.cpp
+        src/yetty/shader-font.cpp
+        src/yetty/shader-compiler.cpp
         src/yetty/ydraw.cpp
         src/yetty/widget-frame-renderer.cpp
     )
@@ -556,9 +520,10 @@ elseif(NOT EMSCRIPTEN)
         src/yetty/card-buffer-manager.cpp
         src/yetty/card-factory.cpp
         src/yetty/cards/plot-card.cpp
+        src/yetty/cards/image-card.cpp
     )
     # Python plugin built into main executable (Unix only)
-    if(UNIX)
+    if(UNIX AND YETTY_PLUGIN_PYTHON)
         list(APPEND YETTY_SOURCES
             src/yetty/plugins/python/python.cpp
             src/yetty/plugins/python/yetty_wgpu.cpp
@@ -590,9 +555,9 @@ target_include_directories(yetty PRIVATE
 )
 
 # Python includes for built-in Python plugin (Unix only)
-if(UNIX AND NOT EMSCRIPTEN)
+if(UNIX AND NOT EMSCRIPTEN AND YETTY_PLUGIN_PYTHON)
     target_include_directories(yetty PRIVATE ${CMAKE_BINARY_DIR}/python/install/include/python3.13)
-    target_compile_definitions(yetty PRIVATE CMAKE_BINARY_DIR="${CMAKE_BINARY_DIR}")
+    target_compile_definitions(yetty PRIVATE CMAKE_BINARY_DIR="${CMAKE_BINARY_DIR}" YETTY_PLUGIN_PYTHON=1)
 endif()
 
 target_compile_definitions(yetty PRIVATE
@@ -870,6 +835,9 @@ else()
 
     # Tools
     add_subdirectory(tools)
+
+    # MSDF generator tool
+    add_subdirectory(src/yetty/msdf-gen)
 endif()
 
 

@@ -3,7 +3,9 @@
 #include "grid-renderer.h"
 #include "widget-factory.h"
 #include "yetty/emoji.h"
-#include <yetty/font-manager.h>
+#include <yetty/yetty-font-manager.h>
+#include <yetty/bm-font.h>
+#include <yetty/shader-font.h>
 #include <ytrace/ytrace.hpp>
 
 #include <algorithm>
@@ -71,17 +73,17 @@ Result<WidgetPtr> Terminal::create(WidgetFactory *factory,
     return Err<WidgetPtr>("Terminal::create: null factory");
   }
 
-  auto *fontManager = factory->getFontManager();
-  yinfo("Terminal::create: fontManager={}", (void *)fontManager);
-  if (!fontManager) {
-    ywarn("Terminal::create: null FontManager");
-    return Err<WidgetPtr>("Terminal::create: null FontManager");
+  auto *yettyFontManager = factory->getYettyFontManager();
+  yinfo("Terminal::create: yettyFontManager={}", (void *)yettyFontManager);
+  if (!yettyFontManager) {
+    ywarn("Terminal::create: null YettyFontManager");
+    return Err<WidgetPtr>("Terminal::create: null YettyFontManager");
   }
-  auto *font = fontManager->getDefaultFont();
-  yinfo("Terminal::create: font={}", (void *)font);
+  auto font = yettyFontManager->getDefaultFont();
+  yinfo("Terminal::create: font={}", (void *)font.get());
   if (!font) {
-    ywarn("Terminal::create: null Font");
-    return Err<WidgetPtr>("Terminal::create: null Font");
+    ywarn("Terminal::create: null YettyFont");
+    return Err<WidgetPtr>("Terminal::create: null YettyFont");
   }
 
   auto *loop = params.loop;
@@ -136,17 +138,17 @@ Result<WidgetPtr> Terminal::create(WidgetFactory *factory,
 
 // Legacy create (for direct creation)
 Result<Terminal::Ptr>
-Terminal::create(uint32_t id, uint32_t cols, uint32_t rows, Font *font,
+Terminal::create(uint32_t id, uint32_t cols, uint32_t rows, YettyFont::Ptr font,
                  uv_loop_t *loop,
                  CardBufferManager *cardBufferManager) noexcept {
   yfunc();
   yinfo("Terminal::create(legacy) id={} cols={} rows={} font={} loop={} "
         "cardBufferManager={}",
-        id, cols, rows, (void *)font, (void *)loop, (void *)cardBufferManager);
+        id, cols, rows, (void *)font.get(), (void *)loop, (void *)cardBufferManager);
 
   if (!font) {
-    ywarn("Terminal::create: null Font");
-    return Err<Ptr>("Terminal::create: null Font");
+    ywarn("Terminal::create: null YettyFont");
+    return Err<Ptr>("Terminal::create: null YettyFont");
   }
   if (!loop) {
     ywarn("Terminal::create: null libuv loop");
@@ -163,7 +165,7 @@ Terminal::create(uint32_t id, uint32_t cols, uint32_t rows, Font *font,
   return Ok(std::move(term));
 }
 
-Terminal::Terminal(uint32_t id, uint32_t cols, uint32_t rows, Font *font,
+Terminal::Terminal(uint32_t id, uint32_t cols, uint32_t rows, YettyFont::Ptr font,
                    uv_loop_t *loop,
                    CardBufferManager *cardBufferManager) noexcept
     : Widget() // Widget base constructor assigns id from nextId_
@@ -189,8 +191,22 @@ Result<void> Terminal::init() noexcept {
   yinfo("Terminal::init: vterm created");
   vterm_set_utf8(_vterm, 1);
 
+  // Get additional fonts from WidgetFactory if available
+  BmFont::Ptr bitmapFont = nullptr;
+  ShaderFont::Ptr shaderGlyphFont = nullptr;
+  ShaderFont::Ptr cardFont = nullptr;
+
+  if (_widgetFactory) {
+    bitmapFont = _widgetFactory->getBmFont();
+    shaderGlyphFont = _widgetFactory->getShaderGlyphFont();
+    cardFont = _widgetFactory->getCardFont();
+    yinfo("Terminal::init: got fonts from WidgetFactory - bitmap={} shaderGlyph={} card={}",
+          (void*)bitmapFont.get(), (void*)shaderGlyphFont.get(), (void*)cardFont.get());
+  }
+
   // Create GPUScreen - replaces vterm_screen with direct GPU buffer storage
-  _gpuScreen = std::make_unique<GPUScreen>(_rows, _cols, _font);
+  // Pass all 4 font types for proper glyph rendering
+  _gpuScreen = std::make_unique<GPUScreen>(_rows, _cols, _font, bitmapFont, shaderGlyphFont, cardFont);
 
   // Set up GPUScreen callbacks for Terminal integration
   _gpuScreen->setTermPropCallback([this](VTermProp prop, VTermValue *val) {
@@ -592,8 +608,11 @@ void Terminal::sendRaw(const char *data, size_t len) {
 void Terminal::resize(uint32_t cols, uint32_t rows) {
   _cols = cols;
   _rows = rows;
-  vterm_set_size(_vterm, _rows, _cols);
+  // CRITICAL: Resize GPUScreen BEFORE vterm_set_size!
+  // vterm_set_size triggers callbacks (scroll, moverect) that access GPUScreen
+  // buffers. If GPUScreen has old dimensions, we get heap corruption.
   _grid.resize(_cols, _rows);
+  vterm_set_size(_vterm, _rows, _cols);
 #ifndef _WIN32
   if (_ptyMaster >= 0) {
     struct winsize ws = {static_cast<unsigned short>(_rows),

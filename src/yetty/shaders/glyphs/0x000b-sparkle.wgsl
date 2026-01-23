@@ -1,11 +1,11 @@
-// Shader glyph: Sparkle (codepoint 1048588 / U+10000C)
+// Shader glyph: Sparkle (codepoint 1052683 / U+10100B)
 // Twinkling sparkle effect - uses pixelPos for unique patterns per cell
 
-fn shaderGlyph_1048588_hash(p: vec2<f32>) -> f32 {
+fn shaderGlyph_1052683_hash(p: vec2<f32>) -> f32 {
     return fract(sin(dot(p, vec2<f32>(127.1, 311.7))) * 43758.5453);
 }
 
-fn shaderGlyph_1048588(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
+fn shaderGlyph_1052683(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
     let bgColor = unpackColor(bg);
     // fgColor unused - sparkle has its own golden color
 
@@ -23,10 +23,10 @@ fn shaderGlyph_1048588(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
         let seed = vec2<f32>(fi * 1.7 + cellSeed.x * 13.37, fi * 2.3 + cellSeed.y * 7.91);
 
         // Random position within cell
-        let pos = vec2<f32>(shaderGlyph_1048588_hash(seed), shaderGlyph_1048588_hash(seed + 1.0));
+        let pos = vec2<f32>(shaderGlyph_1052683_hash(seed), shaderGlyph_1052683_hash(seed + 1.0));
 
         // Twinkle phase - varies with cell position for variety
-        let phase = shaderGlyph_1048588_hash(seed + 2.0) * 6.28 + (cellSeed.x + cellSeed.y) * 0.5;
+        let phase = shaderGlyph_1052683_hash(seed + 2.0) * 6.28 + (cellSeed.x + cellSeed.y) * 0.5;
         let twinkle = pow(sin(time * 3.0 + phase) * 0.5 + 0.5, 3.0);
 
         // Distance to sparkle

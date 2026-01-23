@@ -10,6 +10,9 @@
 #include "card.h"              // For CardPtr
 #include <yetty/osc-command.h>
 #include <yetty/widget.h>
+#include <yetty/yetty-font.h>
+#include <yetty/bm-font.h>
+#include <yetty/shader-font.h>
 
 extern "C" {
 #include <vterm.h>
@@ -17,7 +20,6 @@ extern "C" {
 
 namespace yetty {
 
-class Font;
 class WidgetFactory;
 class CardBufferManager;
 class CardFactory;
@@ -84,7 +86,12 @@ struct ScrolledOutWidget {
 
 class GPUScreen {
 public:
-    GPUScreen(int rows, int cols, Font* font, size_t maxScrollback = 10000);
+    GPUScreen(int rows, int cols,
+              YettyFont::Ptr msdfFont,
+              BmFont::Ptr bitmapFont,
+              ShaderFont::Ptr shaderGlyphFont,
+              ShaderFont::Ptr cardFont,
+              size_t maxScrollback = 10000);
     ~GPUScreen();
 
     // Attach to vterm (registers State callbacks)
@@ -304,7 +311,13 @@ private:
 
     int rows_;
     int cols_;
-    Font* font_;
+
+    // Font instances for different glyph types
+    YettyFont::Ptr msdfFont_;           // MSDF text rendering
+    BmFont::Ptr bitmapFont_;            // Bitmap fonts (emoji, color fonts)
+    ShaderFont::Ptr shaderGlyphFont_;   // Single-cell shader glyphs
+    ShaderFont::Ptr cardFont_;          // Multi-cell card glyphs
+
     VTerm* vterm_ = nullptr;
     VTermState* state_ = nullptr;
 

@@ -1,4 +1,4 @@
-// Shader glyph: Minkowski Tube (codepoint 1048594 / U+100012)
+// Shader glyph: Minkowski Tube (codepoint 1052688 / U+101010)
 // Traced rounded square tunnel with Voronoi-like texturing
 // Based on "Simplified, Traced Minkowski Tube" by Shane from Shadertoy
 
@@ -45,7 +45,7 @@ fn minkowski_voronesque(p_in: vec3<f32>) -> f32 {
     return max(v.x, v.y) - max(v.z, v.w);
 }
 
-fn shaderGlyph_1048594(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
+fn shaderGlyph_1052688(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
     let screenSize = vec2<f32>(globals.screenWidth, globals.screenHeight);
 
     // Screen coordinates with movement

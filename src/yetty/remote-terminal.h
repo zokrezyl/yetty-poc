@@ -1,7 +1,7 @@
 #pragma once
 
 #include <yetty/widget.h>
-#include <yetty/font.h>
+#include <yetty/yetty-font.h>
 #include <yetty/config.h>
 #include <yetty/result.hpp>
 #include "remote-terminal-backend.h"
@@ -35,7 +35,7 @@ public:
     // Factory - creates remote terminal with given grid size
     // ID is ignored - Widget base class auto-assigns IDs
     static Result<Ptr> create(uint32_t id, uint32_t cols, uint32_t rows,
-                              Font* font, uv_loop_t* loop) noexcept;
+                              YettyFont::Ptr font, uv_loop_t* loop) noexcept;
 
     ~RemoteTerminal() override;
 
@@ -140,7 +140,7 @@ public:
     RemoteTerminalBackend* getBackend() const { return _backend.get(); }
 
 private:
-    RemoteTerminal(uint32_t cols, uint32_t rows, Font* font, uv_loop_t* loop) noexcept;
+    RemoteTerminal(uint32_t cols, uint32_t rows, YettyFont::Ptr font, uv_loop_t* loop) noexcept;
     Result<void> init() noexcept override;
 
     // libuv callbacks
@@ -159,7 +159,7 @@ private:
     // Backend and state
     //=========================================================================
     RemoteTerminalBackend::Ptr _backend;
-    Font* _font;
+    YettyFont::Ptr _font;
     std::string _shell;
 
     uint32_t _cols;

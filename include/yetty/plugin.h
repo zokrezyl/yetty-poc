@@ -16,8 +16,8 @@ namespace yetty {
 // Forward declarations
 class WebGPUContext;
 class Grid;
-class Font;
 class FontManager;
+class YettyFontManager;
 class Plugin;
 class WidgetFactory;
 
@@ -64,7 +64,7 @@ public:
     // Create widget
     // widgetName: e.g., "lottie", "svg" for ThorvgPlugin, or "" for single-widget plugins
     // factory: for creating other widgets
-    // fontManager: for drawing fonts
+    // fontManager: for drawing fonts (legacy - deprecated, may be nullptr)
     // loop: for async callbacks
     // x, y: position in cells
     // widthCells, heightCells: size in cells
