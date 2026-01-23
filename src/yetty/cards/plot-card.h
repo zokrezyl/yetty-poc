@@ -9,7 +9,7 @@ namespace yetty {
 //=============================================================================
 // PlotCard - Card for rendering plots via shader glyph
 //
-// Uses shader glyph 1048592 (U+100010)
+// Uses shader glyph U+100001 (card base + offset 0x0001)
 //
 // =============================================================================
 // ANSI-Compatible Cell Encoding (24-bit true-color)
@@ -45,7 +45,7 @@ namespace yetty {
 class PlotCard : public Card {
 public:
     // Shader glyph codepoint for plots
-    static constexpr uint32_t SHADER_GLYPH = 1048592;  // U+100010
+    static constexpr uint32_t SHADER_GLYPH = 0x100001;  // Card base + 0x0001
 
     // Plot types
     enum class PlotType : uint32_t {

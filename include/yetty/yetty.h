@@ -15,6 +15,8 @@
 #include <yetty/webgpu-context.h>
 #include <yetty/result.hpp>
 #include <yetty/yetty-font-manager.h>
+#include <yetty/bm-font.h>
+#include <yetty/shader-font.h>
 #include <yetty/widget.h>
 
 #include <memory>
@@ -109,6 +111,11 @@ public:
     std::shared_ptr<GridRenderer> renderer() const noexcept { return _renderer; }
     YettyFontManager::Ptr yettyFontManager() const noexcept { return _yettyFontManager; }
 
+    // Font accessors (for Terminal/GPUScreen)
+    BmFont::Ptr bitmapFont() const noexcept { return _bitmapFont; }
+    ShaderFont::Ptr shaderGlyphFont() const noexcept { return _shaderGlyphFont; }
+    ShaderFont::Ptr cardFont() const noexcept { return _cardFont; }
+
 #if !YETTY_WEB
     std::shared_ptr<Terminal> terminal() const noexcept { return _terminal; }
     std::shared_ptr<RemoteTerminal> remoteTerminal() const noexcept { return _remoteTerminal; }
@@ -201,6 +208,11 @@ private:
     WebGPUContext::Ptr _ctx;
     std::shared_ptr<GridRenderer> _renderer;
     YettyFontManager::Ptr _yettyFontManager;
+
+    // Font instances for different glyph types
+    BmFont::Ptr _bitmapFont;           // Bitmap/emoji font
+    ShaderFont::Ptr _shaderGlyphFont;  // Single-cell shader glyphs
+    ShaderFont::Ptr _cardFont;         // Multi-cell card glyphs
 
 #if YETTY_WEB
     std::shared_ptr<class WebDisplay> _webDisplay;  // Demo display for web builds

@@ -585,7 +585,54 @@ Result<void> Yetty::initFont() noexcept {
   calculateCellSizeFromFont(_font, _baseCellWidth, _baseCellHeight);
 #else
   // Native build: FontManager handles everything in initRenderer()
-  // Nothing to do here
+  // Create BmFont for bitmap/emoji rendering
+  {
+    auto bmFontResult = BmFont::create(_ctx->getDevice());
+    if (!bmFontResult) {
+      ywarn("Failed to create BmFont: {} - emoji rendering disabled",
+            bmFontResult.error().message());
+      // Not fatal - emojis will fall back to placeholders
+    } else {
+      _bitmapFont = *bmFontResult;
+      // Pre-load common emojis
+      if (auto res = _bitmapFont->loadCommonGlyphs(); !res) {
+        ywarn("Failed to load common glyphs: {}", res.error().message());
+      }
+      yinfo("BmFont created successfully");
+    }
+  }
+
+  // Create ShaderFont for single-cell shader glyphs (spinner, pulse, etc.)
+  // ShaderFont will look in the glyphs/ subdirectory based on category
+  {
+    std::string shaderDir = std::string(CMAKE_SOURCE_DIR) + "/src/yetty/shaders/";
+    auto shaderGlyphResult = ShaderFont::create(ShaderFont::Category::Glyph, shaderDir);
+    if (!shaderGlyphResult) {
+      ywarn("Failed to create ShaderFont for glyphs: {} - shader glyphs disabled",
+            shaderGlyphResult.error().message());
+      // Not fatal - shader glyphs will fall back to placeholders
+    } else {
+      _shaderGlyphFont = *shaderGlyphResult;
+      yinfo("ShaderFont for glyphs created successfully with {} shaders",
+            _shaderGlyphFont->getFunctionCount());
+    }
+  }
+
+  // Create ShaderFont for multi-cell card glyphs (image card, etc.)
+  // ShaderFont will look in the cards/ subdirectory based on category
+  {
+    std::string shaderDir = std::string(CMAKE_SOURCE_DIR) + "/src/yetty/shaders/";
+    auto cardFontResult = ShaderFont::create(ShaderFont::Category::Card, shaderDir);
+    if (!cardFontResult) {
+      ywarn("Failed to create ShaderFont for cards: {} - card glyphs disabled",
+            cardFontResult.error().message());
+      // Not fatal - card glyphs will fall back to placeholders
+    } else {
+      _cardFont = *cardFontResult;
+      yinfo("ShaderFont for cards created successfully with {} shaders",
+            _cardFont->getFunctionCount());
+    }
+  }
 #endif
 
   return Ok();
@@ -603,7 +650,8 @@ Result<void> Yetty::initRenderer() noexcept {
     return Err<void>("YettyFontManager not available");
   }
 
-  auto rendererResult = GridRenderer::create(_ctx, _yettyFontManager, _sharedBindGroupLayout, fontName);
+  auto rendererResult = GridRenderer::create(_ctx, _yettyFontManager, _sharedBindGroupLayout,
+                                             _shaderGlyphFont, _cardFont, fontName);
   if (!rendererResult) {
     return Err<void>("Failed to create text renderer", rendererResult);
   }
@@ -1391,8 +1439,8 @@ void Yetty::mainLoopIteration() noexcept {
       uint32_t rows = static_cast<uint32_t>(gpuScreen->getRows());
 
       if (cells && cols > 0 && rows > 0) {
-        // DEBUG: Scan cells for image glyphs (1048596)
-        constexpr uint32_t IMAGE_GLYPH = 1048596;
+        // DEBUG: Scan cells for image glyphs (0x100000)
+        constexpr uint32_t IMAGE_GLYPH = 0x100000;
         int imageGlyphCount = 0;
         uint32_t firstFg = 0, firstBg = 0, firstGlyph = 0;
         for (uint32_t i = 0; i < cols * rows; ++i) {
@@ -1424,6 +1472,26 @@ void Yetty::mainLoopIteration() noexcept {
           }
         }
       }
+    }
+  }
+
+  // Submit compute work before render pass (Dawn requires synchronization between
+  // buffer write in compute and buffer read in render within same command buffer)
+  {
+    WGPUCommandBufferDescriptor cmdDesc = {};
+    WGPUCommandBuffer cmdBuffer = wgpuCommandEncoderFinish(encoder, &cmdDesc);
+    wgpuQueueSubmit(_ctx->getQueue(), 1, &cmdBuffer);
+    wgpuCommandBufferRelease(cmdBuffer);
+    wgpuCommandEncoderRelease(encoder);
+  }
+
+  // Create new encoder for render pass
+  {
+    WGPUCommandEncoderDescriptor encoderDesc = {};
+    encoder = wgpuDeviceCreateCommandEncoder(_ctx->getDevice(), &encoderDesc);
+    if (!encoder) {
+      yerror("mainLoopIteration: Failed to create render command encoder");
+      return;
     }
   }
 

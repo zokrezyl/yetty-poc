@@ -1,6 +1,7 @@
 #include "gpu-screen.h"
 #include "card-factory.h"
 #include "card.h"
+#include "emoji.h" // For isEmoji() function
 #include "grid.h" // For GLYPH_WIDE_CONT, GLYPH_PLUGIN constants
 #include "widget-factory.h"
 #include <algorithm>
@@ -31,8 +32,15 @@ static VTermStateCallbacks stateCallbacks = {
     .sb_clear = nullptr,
 };
 
-GPUScreen::GPUScreen(int rows, int cols, YettyFont::Ptr terminalFont, size_t maxScrollback)
-    : maxScrollback_(maxScrollback), rows_(rows), cols_(cols), terminalFont_(terminalFont) {
+GPUScreen::GPUScreen(int rows, int cols,
+                     YettyFont::Ptr msdfFont,
+                     BmFont::Ptr bitmapFont,
+                     ShaderFont::Ptr shaderGlyphFont,
+                     ShaderFont::Ptr cardFont,
+                     size_t maxScrollback)
+    : maxScrollback_(maxScrollback), rows_(rows), cols_(cols),
+      msdfFont_(msdfFont), bitmapFont_(bitmapFont),
+      shaderGlyphFont_(shaderGlyphFont), cardFont_(cardFont) {
   // Initialize default colors
   vterm_color_rgb(&defaultFg_, 204, 204, 204); // Light gray
   vterm_color_rgb(&defaultBg_, 15, 15, 35);    // Dark blue-ish
@@ -41,7 +49,7 @@ GPUScreen::GPUScreen(int rows, int cols, YettyFont::Ptr terminalFont, size_t max
   pen_.bg = defaultBg_;
 
   // Cache space glyph index to avoid repeated lookups in hot paths
-  cachedSpaceGlyph_ = terminalFont_ ? terminalFont_->getGlyphIndex(' ') : 0;
+  cachedSpaceGlyph_ = msdfFont_ ? msdfFont_->getGlyphIndex(' ') : 0;
 
   // Start on primary screen
   isAltScreen_ = false;
@@ -574,13 +582,28 @@ int GPUScreen::onPutglyph(VTermGlyphInfo *info, VTermPos pos, void *user) {
   if (cp == 0)
     cp = ' ';
 
-  // Get glyph index - shader glyphs (Plane 16 PUA) pass through directly
-  uint32_t glyphIdx;
-  if (isShaderGlyph(cp)) {
-    glyphIdx = cp; // Shader glyph codepoint IS the glyph index
-  } else if (self->terminalFont_) {
-    glyphIdx = self->terminalFont_->getGlyphIndex(cp, self->pen_.bold, self->pen_.italic);
+  // Determine font type and glyph index based on codepoint
+  uint32_t glyphIdx = 0;
+  uint8_t fontType = FONT_TYPE_MSDF;  // Default to MSDF text
+
+  if (isCardGlyph(cp)) {
+    // Card glyphs (multi-cell widgets)
+    fontType = FONT_TYPE_CARD;
+    glyphIdx = self->cardFont_ ? self->cardFont_->getGlyphIndex(cp) : cp;
+  } else if (isShaderGlyph(cp)) {
+    // Shader glyphs (single-cell animated)
+    fontType = FONT_TYPE_SHADER;
+    glyphIdx = self->shaderGlyphFont_ ? self->shaderGlyphFont_->getGlyphIndex(cp) : cp;
+  } else if (isEmoji(cp) && self->bitmapFont_) {
+    // Emoji - render from bitmap font atlas
+    fontType = FONT_TYPE_BITMAP;
+    glyphIdx = self->bitmapFont_->getGlyphIndex(cp);
+  } else if (self->msdfFont_) {
+    // Regular text - get glyph from MSDF font
+    fontType = FONT_TYPE_MSDF;
+    glyphIdx = self->msdfFont_->getGlyphIndex(cp, self->pen_.bold, self->pen_.italic);
   } else {
+    fontType = FONT_TYPE_MSDF;
     glyphIdx = cp;
   }
 
@@ -595,7 +618,7 @@ int GPUScreen::onPutglyph(VTermGlyphInfo *info, VTermPos pos, void *user) {
     std::swap(fgB, bgB);
   }
 
-  // Pack attributes
+  // Pack attributes (bits 0-4) with font type (bits 5-7)
   uint8_t attrsByte = 0;
   if (self->pen_.bold)
     attrsByte |= 0x01;
@@ -604,6 +627,7 @@ int GPUScreen::onPutglyph(VTermGlyphInfo *info, VTermPos pos, void *user) {
   attrsByte |= (self->pen_.underline & 0x03) << 2;
   if (self->pen_.strike)
     attrsByte |= 0x10;
+  attrsByte |= (fontType & 0x07) << 5;  // Pack font type into bits 5-7
 
   self->setCell(pos.row, pos.col, glyphIdx, fgR, fgG, fgB, bgR, bgG, bgB,
                 attrsByte);

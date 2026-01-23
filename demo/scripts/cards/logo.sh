@@ -4,7 +4,7 @@
 # Usage: ./logo.sh [width] [height]
 #   Default: 40x20 cells
 #
-# This uses the new card system with shader glyph 1048596 (U+100014)
+# This uses the new card system with shader glyph U+100000 (image card)
 # which renders images via a GPU texture atlas.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

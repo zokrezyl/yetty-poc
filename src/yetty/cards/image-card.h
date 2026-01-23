@@ -9,7 +9,7 @@ namespace yetty {
 //=============================================================================
 // ImageCard - Card for rendering images via shader glyph + texture atlas
 //
-// Uses shader glyph 1048596 (U+100014)
+// Uses shader glyph U+100000 (card base + offset 0x0000)
 //
 // =============================================================================
 // ANSI-Compatible Cell Encoding (24-bit true-color)
@@ -59,7 +59,7 @@ namespace yetty {
 class ImageCard : public Card {
 public:
     // Shader glyph codepoint for images
-    static constexpr uint32_t SHADER_GLYPH = 1048596;  // U+100014
+    static constexpr uint32_t SHADER_GLYPH = 0x100000;  // Card base + 0x0000
 
     // Flags
     static constexpr uint32_t FLAG_BILINEAR = 1;

@@ -13,21 +13,64 @@ constexpr uint32_t GLYPH_WIDE_CONT = 0xFFFE;  // Wide char continuation (look at
 constexpr uint32_t GLYPH_CUSTOM_START = 0xF000;
 constexpr uint32_t GLYPH_CUSTOM_END = 0xFFFD;
 
-// Shader glyph range - procedural glyphs rendered directly in terminal shader
-// Uses Unicode Plane 16 Private Use Area-B (U+100000 - U+10FFFD)
-// Codepoint IS the glyph index directly - no bit manipulation needed
-// Files: src/yetty/shaders/1048577-spinner.wgsl -> codepoint 1048577 (U+100001)
-constexpr uint32_t SHADER_GLYPH_START = 0x100000;  // 1048576 decimal (U+100000)
-constexpr uint32_t SHADER_GLYPH_END = 0x10FFFD;    // 1114109 decimal (U+10FFFD)
+// =============================================================================
+// Font type encoding for cell attributes (bits 5-7 of style byte)
+// =============================================================================
+constexpr uint8_t FONT_TYPE_MSDF = 0;    // Default text rendering
+constexpr uint8_t FONT_TYPE_BITMAP = 1;  // Bitmap fonts (emoji, color fonts)
+constexpr uint8_t FONT_TYPE_SHADER = 2;  // Single-cell shader glyphs (spinner, etc.)
+constexpr uint8_t FONT_TYPE_CARD = 3;    // Multi-cell card glyphs (image card, etc.)
+// 4-7 = reserved for future font types
 
-// Helper to check if a glyph index is a shader glyph
-inline bool isShaderGlyph(uint32_t glyphIndex) {
-    return glyphIndex >= SHADER_GLYPH_START && glyphIndex <= SHADER_GLYPH_END;
+// =============================================================================
+// UTF Codepoint ranges for different glyph types
+// =============================================================================
+
+// Card glyph range - multi-cell widgets rendered by shader
+// Uses Unicode Plane 16 Private Use Area-B (U+100000 - U+100FFF)
+constexpr uint32_t CARD_GLYPH_BASE = 0x100000;   // 1048576 decimal (U+100000)
+constexpr uint32_t CARD_GLYPH_END = 0x100FFF;    // 1052671 decimal (U+100FFF)
+
+// Shader glyph range - single-cell procedural glyphs
+// Uses Unicode Plane 16 Private Use Area-B (U+101000 - U+10FFFD)
+constexpr uint32_t SHADER_GLYPH_BASE = 0x101000;  // 1052672 decimal (U+101000)
+constexpr uint32_t SHADER_GLYPH_END = 0x10FFFD;   // 1114109 decimal (U+10FFFD)
+
+// Legacy aliases for backwards compatibility
+constexpr uint32_t SHADER_GLYPH_START = CARD_GLYPH_BASE;
+
+// =============================================================================
+// Helper functions for glyph type detection
+// =============================================================================
+
+// Check if codepoint is a card glyph (multi-cell widget)
+inline bool isCardGlyph(uint32_t codepoint) {
+    return codepoint >= CARD_GLYPH_BASE && codepoint <= CARD_GLYPH_END;
 }
 
-// Get shader ID from glyph index (1048577 -> 1)
+// Check if codepoint is a shader glyph (single-cell procedural)
+inline bool isShaderGlyph(uint32_t codepoint) {
+    return codepoint >= SHADER_GLYPH_BASE && codepoint <= SHADER_GLYPH_END;
+}
+
+// Check if codepoint is any procedural glyph (card or shader)
+inline bool isProceduralGlyph(uint32_t codepoint) {
+    return codepoint >= CARD_GLYPH_BASE && codepoint <= SHADER_GLYPH_END;
+}
+
+// Get offset within card glyph range (for dispatch index)
+inline uint32_t getCardGlyphOffset(uint32_t codepoint) {
+    return codepoint - CARD_GLYPH_BASE;
+}
+
+// Get offset within shader glyph range (for dispatch index)
+inline uint32_t getShaderGlyphOffset(uint32_t codepoint) {
+    return codepoint - SHADER_GLYPH_BASE;
+}
+
+// Legacy helper - get shader ID from glyph index
 inline uint32_t getShaderGlyphId(uint32_t glyphIndex) {
-    return glyphIndex - SHADER_GLYPH_START;
+    return glyphIndex - CARD_GLYPH_BASE;
 }
 
 // Legacy helper (kept for compatibility)
@@ -37,15 +80,21 @@ inline bool isCustomGlyph(uint32_t glyphIndex) {
 }
 
 // Cell attributes packed into a single byte for GPU upload
-// Bit layout: [reserved(2)][emoji][strikethrough][underline_type(2)][italic][bold]
+// Bit layout: [fontType(3)][strikethrough][underline_type(2)][italic][bold]
 // This matches what the shader expects in cellAttrsTexture (R8Uint)
+//
+// fontType (bits 5-7):
+//   0 = MSDF (default text)
+//   1 = Bitmap (emoji, color fonts)
+//   2 = Shader glyph (single-cell animated)
+//   3 = Card glyph (multi-cell widgets)
+//   4-7 = reserved
 struct CellAttrs {
     uint8_t _bold : 1;           // Bit 0: bold
     uint8_t _italic : 1;         // Bit 1: italic
     uint8_t _underline : 2;      // Bits 2-3: underline type (0=none, 1=single, 2=double, 3=curly)
     uint8_t _strikethrough : 1;  // Bit 4: strikethrough
-    uint8_t _emoji : 1;          // Bit 5: emoji (render from color emoji atlas instead of MSDF)
-    uint8_t _reserved : 2;       // Bits 6-7: reserved
+    uint8_t _fontType : 3;       // Bits 5-7: font type (MSDF=0, Bitmap=1, Shader=2, Card=3)
 
     uint8_t pack() const {
         return static_cast<uint8_t>(
@@ -53,7 +102,7 @@ struct CellAttrs {
             ((_italic & 0x1) << 1) |
             ((_underline & 0x3) << 2) |
             ((_strikethrough & 0x1) << 4) |
-            ((_emoji & 0x1) << 5)
+            ((_fontType & 0x7) << 5)
         );
     }
 
@@ -63,9 +112,16 @@ struct CellAttrs {
         attrs._italic = (packed >> 1) & 0x1;
         attrs._underline = (packed >> 2) & 0x3;
         attrs._strikethrough = (packed >> 4) & 0x1;
-        attrs._emoji = (packed >> 5) & 0x1;
-        attrs._reserved = 0;
+        attrs._fontType = (packed >> 5) & 0x7;
         return attrs;
+    }
+
+    // Convenience: check if this is a bitmap/emoji font type
+    bool isEmoji() const { return _fontType == FONT_TYPE_BITMAP; }
+
+    // Convenience: set font type from legacy emoji flag
+    void setEmoji(bool emoji) {
+        _fontType = emoji ? FONT_TYPE_BITMAP : FONT_TYPE_MSDF;
     }
 };
 

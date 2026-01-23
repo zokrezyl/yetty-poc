@@ -1,6 +1,7 @@
 #include "damage-rect.h"  // For DamageRect (separate to avoid libuv on web)
 #include "yetty/grid-renderer.h"
 #include "yetty/config.h"
+#include <algorithm>
 #include <cstdlib> // for getenv
 #include <cstring>
 #include <filesystem>
@@ -38,6 +39,8 @@ Result<GridRenderer::Ptr>
 GridRenderer::create(WebGPUContext::Ptr ctx,
                      YettyFontManager::Ptr fontManager,
                      WGPUBindGroupLayout sharedBindGroupLayout,
+                     ShaderFont::Ptr shaderGlyphFont,
+                     ShaderFont::Ptr cardFont,
                      const std::string& fontFamily) noexcept {
   if (!ctx) {
     return Err<Ptr>("GridRenderer::create: null WebGPUContext");
@@ -48,7 +51,9 @@ GridRenderer::create(WebGPUContext::Ptr ctx,
   if (!sharedBindGroupLayout) {
     return Err<Ptr>("GridRenderer::create: null sharedBindGroupLayout");
   }
-  auto renderer = Ptr(new GridRenderer(std::move(ctx), std::move(fontManager), fontFamily));
+  auto renderer = Ptr(new GridRenderer(std::move(ctx), std::move(fontManager),
+                                       std::move(shaderGlyphFont), std::move(cardFont),
+                                       fontFamily));
   renderer->sharedBindGroupLayout_ = sharedBindGroupLayout;
   if (auto res = renderer->init(); !res) {
     return Err<Ptr>("Failed to initialize GridRenderer", res);
@@ -58,8 +63,12 @@ GridRenderer::create(WebGPUContext::Ptr ctx,
 
 GridRenderer::GridRenderer(WebGPUContext::Ptr ctx,
                            YettyFontManager::Ptr fontManager,
+                           ShaderFont::Ptr shaderGlyphFont,
+                           ShaderFont::Ptr cardFont,
                            const std::string& fontFamily) noexcept
-    : _ctx(std::move(ctx)), fontManager_(std::move(fontManager)), fontFamily_(fontFamily) {}
+    : _ctx(std::move(ctx)), fontManager_(std::move(fontManager)),
+      shaderGlyphFont_(std::move(shaderGlyphFont)), cardFont_(std::move(cardFont)),
+      fontFamily_(fontFamily) {}
 
 GridRenderer::~GridRenderer() {
 #if !YETTY_WEB
@@ -137,81 +146,16 @@ Result<void> GridRenderer::init() noexcept {
   return Ok();
 }
 
-// Scan for shader glyph files and build concatenated shader source
-static std::string loadShaderGlyphs(const std::string& shaderDir) {
-  std::string functions;
-  std::string dispatch;
-
-  // Pattern: decimal codepoint followed by name, e.g. "1048577-spinner.wgsl"
-  std::regex pattern(R"(^(\d+)-.*\.wgsl$)");
-
-  std::vector<std::pair<uint32_t, std::string>> glyphs;
-
-#if !YETTY_WEB && !YETTY_ANDROID
-  try {
-    for (const auto& entry : std::filesystem::directory_iterator(shaderDir)) {
-      if (!entry.is_regular_file()) continue;
-
-      std::string filename = entry.path().filename().string();
-      std::smatch match;
-      if (std::regex_match(filename, match, pattern)) {
-        uint32_t codepoint = static_cast<uint32_t>(std::stoul(match[1].str()));
-
-        // Read shader glyph file
-        std::ifstream file(entry.path());
-        if (file.is_open()) {
-          std::stringstream buf;
-          buf << file.rdbuf();
-          glyphs.emplace_back(codepoint, buf.str());
-          yinfo("Loaded shader glyph: {} (codepoint {})", filename, codepoint);
-        }
-      }
-    }
-  } catch (const std::exception& e) {
-    yerror("Error scanning shader glyphs: {}", e.what());
-  }
-#endif
-
-  // Sort by codepoint for consistent ordering
-  std::sort(glyphs.begin(), glyphs.end(),
-            [](const auto& a, const auto& b) { return a.first < b.first; });
-
-  // Build functions and dispatch
-  for (const auto& [codepoint, code] : glyphs) {
-    functions += "// Shader glyph codepoint " + std::to_string(codepoint) + "\n";
-    functions += code + "\n\n";
-
-    // Add dispatch case
-    if (!dispatch.empty()) {
-      dispatch += " else ";
-    }
-    dispatch += "if (glyphIndex == " + std::to_string(codepoint) + "u) {\n";
-    dispatch += "        return shaderGlyph_" + std::to_string(codepoint) +
-                "(localUV, time, fg, bg, pixelPos, mousePos);\n    }";
-  }
-
-  if (!dispatch.empty()) {
-    dispatch += "\n    ";
-  }
-
-  yinfo("Loaded {} shader glyphs", glyphs.size());
-
-  return "FUNCTIONS:" + functions + "\nDISPATCH:" + dispatch;
-}
-
 Result<void> GridRenderer::createShaderModule(WGPUDevice device) {
 #if YETTY_WEB
   const char *shaderPath = "/shaders.wgsl";
-  const char *shaderDir = "/";
 #elif YETTY_ANDROID
   // On Android, shader is extracted to app's data directory
   const char *envPath = std::getenv("YETTY_SHADER_PATH");
   const char *shaderPath = envPath ? envPath : "/data/local/tmp/shaders.wgsl";
-  const char *shaderDir = "/data/local/tmp/";
   yinfo("Loading shader from: {}", shaderPath);
 #else
   const char *shaderPath = CMAKE_SOURCE_DIR "/src/yetty/shaders/shaders.wgsl";
-  const char *shaderDir = CMAKE_SOURCE_DIR "/src/yetty/shaders/";
 #endif
 
   std::ifstream file(shaderPath);
@@ -223,11 +167,26 @@ Result<void> GridRenderer::createShaderModule(WGPUDevice device) {
   buffer << file.rdbuf();
   std::string shaderSource = buffer.str();
 
-  // Load and inject shader glyphs
-  std::string glyphData = loadShaderGlyphs(shaderDir);
-  size_t funcSep = glyphData.find("\nDISPATCH:");
-  std::string functions = glyphData.substr(10, funcSep - 10);  // Skip "FUNCTIONS:"
-  std::string dispatch = glyphData.substr(funcSep + 10);       // Skip "\nDISPATCH:"
+  // Get shader code from ShaderFont instances
+  std::string functions;
+  std::string dispatch;
+
+  if (shaderGlyphFont_) {
+    functions += shaderGlyphFont_->getCode();
+    dispatch += shaderGlyphFont_->getDispatchCode();
+    yinfo("GridRenderer: loaded {} glyph shaders from ShaderFont",
+          shaderGlyphFont_->getFunctionCount());
+  }
+
+  if (cardFont_) {
+    functions += cardFont_->getCode();
+    if (!dispatch.empty() && !cardFont_->getDispatchCode().empty()) {
+      dispatch += " else ";
+    }
+    dispatch += cardFont_->getDispatchCode();
+    yinfo("GridRenderer: loaded {} card shaders from ShaderFont",
+          cardFont_->getFunctionCount());
+  }
 
   // Replace placeholders
   size_t funcPos = shaderSource.find("// SHADER_GLYPH_FUNCTIONS_PLACEHOLDER");
@@ -239,6 +198,9 @@ Result<void> GridRenderer::createShaderModule(WGPUDevice device) {
   if (dispPos != std::string::npos) {
     shaderSource.replace(dispPos, 36, dispatch);
   }
+
+  yinfo("GridRenderer: compiling main shader ({} lines)",
+        std::count(shaderSource.begin(), shaderSource.end(), '\n') + 1);
 
   WGPUShaderSourceWGSL wgslDesc = {};
   wgslDesc.chain.sType = WGPUSType_ShaderSourceWGSL;

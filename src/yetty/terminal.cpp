@@ -4,6 +4,8 @@
 #include "widget-factory.h"
 #include "yetty/emoji.h"
 #include <yetty/yetty-font-manager.h>
+#include <yetty/bm-font.h>
+#include <yetty/shader-font.h>
 #include <ytrace/ytrace.hpp>
 
 #include <algorithm>
@@ -189,8 +191,22 @@ Result<void> Terminal::init() noexcept {
   yinfo("Terminal::init: vterm created");
   vterm_set_utf8(_vterm, 1);
 
+  // Get additional fonts from WidgetFactory if available
+  BmFont::Ptr bitmapFont = nullptr;
+  ShaderFont::Ptr shaderGlyphFont = nullptr;
+  ShaderFont::Ptr cardFont = nullptr;
+
+  if (_widgetFactory) {
+    bitmapFont = _widgetFactory->getBmFont();
+    shaderGlyphFont = _widgetFactory->getShaderGlyphFont();
+    cardFont = _widgetFactory->getCardFont();
+    yinfo("Terminal::init: got fonts from WidgetFactory - bitmap={} shaderGlyph={} card={}",
+          (void*)bitmapFont.get(), (void*)shaderGlyphFont.get(), (void*)cardFont.get());
+  }
+
   // Create GPUScreen - replaces vterm_screen with direct GPU buffer storage
-  _gpuScreen = std::make_unique<GPUScreen>(_rows, _cols, _font);
+  // Pass all 4 font types for proper glyph rendering
+  _gpuScreen = std::make_unique<GPUScreen>(_rows, _cols, _font, bitmapFont, shaderGlyphFont, cardFont);
 
   // Set up GPUScreen callbacks for Terminal integration
   _gpuScreen->setTermPropCallback([this](VTermProp prop, VTermValue *val) {

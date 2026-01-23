@@ -136,7 +136,8 @@ struct VertexOutput {
         return u.color;
     }
 
-    discard;
+    // Default: transparent (Dawn requires explicit return)
+    return vec4<f32>(0.0, 0.0, 0.0, 0.0);
 }
 )";
 

@@ -166,7 +166,7 @@ void MsMsdfFont::initBasicLatin() {
     yinfo("Pre-loaded {} basic Latin glyphs", _glyphMetadata.size() - 1);
 }
 
-uint16_t MsMsdfFont::loadGlyphFromCdb(uint32_t codepoint, Style style) {
+uint32_t MsMsdfFont::loadGlyphFromCdb(uint32_t codepoint, Style style) {
     int idx = styleIndex(style);
 
     // Check if already loaded
@@ -237,7 +237,7 @@ uint16_t MsMsdfFont::loadGlyphFromCdb(uint32_t codepoint, Style style) {
         meta._uvMaxX = 0;
         meta._uvMaxY = 0;
 
-        uint16_t glyphIndex = static_cast<uint16_t>(_glyphMetadata.size());
+        uint32_t glyphIndex = static_cast<uint32_t>(_glyphMetadata.size());
         _glyphMetadata.push_back(meta);
         _codepointToIndex[idx][codepoint] = glyphIndex;
         return glyphIndex;
@@ -302,7 +302,7 @@ uint16_t MsMsdfFont::loadGlyphFromCdb(uint32_t codepoint, Style style) {
     _shelfHeight = std::max(_shelfHeight, static_cast<uint32_t>(header.height));
 
     // Add to metadata and index
-    uint16_t glyphIndex = static_cast<uint16_t>(_glyphMetadata.size());
+    uint32_t glyphIndex = static_cast<uint32_t>(_glyphMetadata.size());
     _glyphMetadata.push_back(meta);
     _codepointToIndex[idx][codepoint] = glyphIndex;
 
@@ -310,11 +310,11 @@ uint16_t MsMsdfFont::loadGlyphFromCdb(uint32_t codepoint, Style style) {
     return glyphIndex;
 }
 
-uint16_t MsMsdfFont::getGlyphIndex(uint32_t codepoint) {
+uint32_t MsMsdfFont::getGlyphIndex(uint32_t codepoint) {
     return getGlyphIndex(codepoint, Style::Regular);
 }
 
-uint16_t MsMsdfFont::getGlyphIndex(uint32_t codepoint, Style style) {
+uint32_t MsMsdfFont::getGlyphIndex(uint32_t codepoint, Style style) {
     int idx = styleIndex(style);
 
     // Check if already loaded
@@ -327,7 +327,7 @@ uint16_t MsMsdfFont::getGlyphIndex(uint32_t codepoint, Style style) {
     return loadGlyphFromCdb(codepoint, style);
 }
 
-uint16_t MsMsdfFont::getGlyphIndex(uint32_t codepoint, bool bold, bool italic) {
+uint32_t MsMsdfFont::getGlyphIndex(uint32_t codepoint, bool bold, bool italic) {
     Style style = static_cast<Style>(styleIndex(bold, italic));
     return getGlyphIndex(codepoint, style);
 }

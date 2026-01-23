@@ -390,7 +390,8 @@ endif()
 if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
     # Python for built-in plugin (Unix only - requires ./configure + make)
     # Must be defined before yetty so python_embedded target exists
-    if(UNIX)
+    option(YETTY_PLUGIN_PYTHON "Build Python plugin (requires Python build)" OFF)
+    if(UNIX AND YETTY_PLUGIN_PYTHON)
         add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/build-tools/cmake/python python_build)
     endif()
 
@@ -402,6 +403,9 @@ if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
         src/yetty/yetty-font-manager.cpp
         src/yetty/rich-text.cpp
         src/yetty/emoji-atlas.cpp
+        src/yetty/bm-font.cpp
+        src/yetty/shader-font.cpp
+        src/yetty/shader-compiler.cpp
         src/yetty/ydraw.cpp
         src/yetty/widget-frame-renderer.cpp
     )
@@ -474,6 +478,9 @@ if(EMSCRIPTEN OR YETTY_ANDROID)
         src/yetty/font-manager.cpp
         src/yetty/rich-text.cpp
         src/yetty/emoji-atlas.cpp
+        src/yetty/bm-font.cpp
+        src/yetty/shader-font.cpp
+        src/yetty/shader-compiler.cpp
         src/yetty/ydraw.cpp
         src/yetty/widget-frame-renderer.cpp
     )
@@ -516,7 +523,7 @@ elseif(NOT EMSCRIPTEN)
         src/yetty/cards/image-card.cpp
     )
     # Python plugin built into main executable (Unix only)
-    if(UNIX)
+    if(UNIX AND YETTY_PLUGIN_PYTHON)
         list(APPEND YETTY_SOURCES
             src/yetty/plugins/python/python.cpp
             src/yetty/plugins/python/yetty_wgpu.cpp
@@ -548,9 +555,9 @@ target_include_directories(yetty PRIVATE
 )
 
 # Python includes for built-in Python plugin (Unix only)
-if(UNIX AND NOT EMSCRIPTEN)
+if(UNIX AND NOT EMSCRIPTEN AND YETTY_PLUGIN_PYTHON)
     target_include_directories(yetty PRIVATE ${CMAKE_BINARY_DIR}/python/install/include/python3.13)
-    target_compile_definitions(yetty PRIVATE CMAKE_BINARY_DIR="${CMAKE_BINARY_DIR}")
+    target_compile_definitions(yetty PRIVATE CMAKE_BINARY_DIR="${CMAKE_BINARY_DIR}" YETTY_PLUGIN_PYTHON=1)
 endif()
 
 target_compile_definitions(yetty PRIVATE

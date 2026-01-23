@@ -21,9 +21,10 @@ public:
     virtual ~YettyFont() = default;
 
     // Get glyph index - handles variants with fallback
-    virtual uint16_t getGlyphIndex(uint32_t codepoint) = 0;
-    virtual uint16_t getGlyphIndex(uint32_t codepoint, Style style) = 0;
-    virtual uint16_t getGlyphIndex(uint32_t codepoint, bool bold, bool italic) = 0;
+    // Returns uint32_t to support shader glyphs in Plane 16 PUA-B range
+    virtual uint32_t getGlyphIndex(uint32_t codepoint) = 0;
+    virtual uint32_t getGlyphIndex(uint32_t codepoint, Style style) = 0;
+    virtual uint32_t getGlyphIndex(uint32_t codepoint, bool bold, bool italic) = 0;
 
     // Upload atlas to GPU - called when dirty
     virtual void uploadToGpu() = 0;

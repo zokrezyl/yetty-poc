@@ -497,7 +497,7 @@ void LocalTerminalBackend::syncToGrid() {
                     
                     uint16_t gi = font_ ? font_->getGlyphIndex(cp, isBold, isItalic) : static_cast<uint16_t>(cp);
                     CellAttrs cellAttrs;
-                    cellAttrs._emoji = isEmoji(cp) ? 1 : 0;
+                    cellAttrs.setEmoji(isEmoji(cp));
                     cellAttrs._bold = isBold ? 1 : 0;
                     cellAttrs._italic = isItalic ? 1 : 0;
                     cellAttrs._underline = isUnderline ? 1 : 0;
@@ -577,7 +577,7 @@ void LocalTerminalBackend::syncToGrid() {
                 attrs._italic = isItalic ? 1 : 0;
                 attrs._strikethrough = cell.attrs.strike ? 1 : 0;
                 attrs._underline = static_cast<uint8_t>(cell.attrs.underline & 0x3);
-                attrs._emoji = (emojiIdx >= 0) ? 1 : 0;
+                attrs.setEmoji(emojiIdx >= 0);
 
                 grid_.setCell(col, row, gi, fgR, fgG, fgB, bgR, bgG, bgB, attrs);
             }

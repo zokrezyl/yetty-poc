@@ -23,9 +23,9 @@ public:
     ~MsMsdfFont() override;
 
     // YettyFont interface
-    uint16_t getGlyphIndex(uint32_t codepoint) override;
-    uint16_t getGlyphIndex(uint32_t codepoint, Style style) override;
-    uint16_t getGlyphIndex(uint32_t codepoint, bool bold, bool italic) override;
+    uint32_t getGlyphIndex(uint32_t codepoint) override;
+    uint32_t getGlyphIndex(uint32_t codepoint, Style style) override;
+    uint32_t getGlyphIndex(uint32_t codepoint, bool bold, bool italic) override;
 
     void uploadToGpu() override;
     bool isDirty() const override { return _dirty; }
@@ -83,7 +83,7 @@ private:
     uint32_t _atlasHeight = 512;
 
     // Per-style glyph tracking: codepoint -> glyph index
-    std::unordered_map<uint32_t, uint16_t> _codepointToIndex[4];
+    std::unordered_map<uint32_t, uint32_t> _codepointToIndex[4];
 
     // GPU metadata for all loaded glyphs
     std::vector<GlyphMetadataGPU> _glyphMetadata;
@@ -111,7 +111,7 @@ private:
 
     // Load glyph from CDB into atlas
     // Returns glyph index, or 0 (placeholder) if not found
-    uint16_t loadGlyphFromCdb(uint32_t codepoint, Style style);
+    uint32_t loadGlyphFromCdb(uint32_t codepoint, Style style);
 
     // Initialize with basic Latin (ASCII 32-126)
     void initBasicLatin();

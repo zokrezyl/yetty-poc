@@ -85,7 +85,8 @@ Result<void> WebDisplay::init() noexcept
     vterm_set_utf8(_vterm, 1);
 
     // Create GPUScreen - replaces vterm's Screen layer with direct State callbacks
-    _gpuScreen = std::make_unique<GPUScreen>(_rows, _cols, _font);
+    // Web build doesn't have BmFont or ShaderFont, pass nullptr
+    _gpuScreen = std::make_unique<GPUScreen>(_rows, _cols, _font, nullptr, nullptr, nullptr);
     _gpuScreen->attach(_vterm);
 
     yinfo("WebDisplay initialized: {}x{} grid with GPUScreen, screen {}x{}", 

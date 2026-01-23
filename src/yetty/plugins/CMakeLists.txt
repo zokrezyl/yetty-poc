@@ -69,6 +69,9 @@ add_yetty_plugin(markdown
 #-----------------------------------------------------------------------------
 # ThorVG plugin - Vector graphics (SVG, Lottie animations)
 #-----------------------------------------------------------------------------
+option(YETTY_PLUGIN_THORVG "Build ThorVG plugin for SVG/Lottie support" OFF)
+
+if(YETTY_PLUGIN_THORVG)
 # Download ThorVG from GitHub release for reproducible builds
 CPMAddPackage(
     NAME thorvg
@@ -178,13 +181,16 @@ if(thorvg_ADDED)
     
     message(STATUS "ThorVG plugin: enabled (v1.0-pre34)")
 endif()
+else()
+    message(STATUS "ThorVG plugin: disabled (set -DYETTY_PLUGIN_THORVG=ON to enable)")
+endif()
 
 
 #-----------------------------------------------------------------------------
 # Python widget - statically linked into main executable (not a dynamic plugin)
 # Python requires -force_load/--whole-archive so extension modules can resolve symbols
 #-----------------------------------------------------------------------------
-if(UNIX)
+if(UNIX AND YETTY_PLUGIN_PYTHON)
     add_library(python_widget STATIC
         python/python.cpp
         python/yetty_wgpu.cpp
@@ -221,6 +227,8 @@ if(UNIX)
     )
 
     message(STATUS "Python widget: enabled (statically linked)")
+else()
+    message(STATUS "Python widget: disabled (set -DYETTY_PLUGIN_PYTHON=ON to enable)")
 endif()
 
 

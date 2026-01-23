@@ -8,6 +8,7 @@
 #include <vector>
 #include <yetty/yetty-font-manager.h>
 #include <yetty/ms-msdf-font.h>
+#include <yetty/shader-font.h>
 #include <yetty/result.hpp>
 #include <yetty/webgpu-context.h>
 
@@ -23,6 +24,8 @@ public:
   static Result<Ptr> create(WebGPUContext::Ptr ctx,
                             YettyFontManager::Ptr fontManager,
                             WGPUBindGroupLayout sharedBindGroupLayout,
+                            ShaderFont::Ptr shaderGlyphFont,
+                            ShaderFont::Ptr cardFont,
                             const std::string& fontFamily = "default") noexcept;
 
   ~GridRenderer();
@@ -84,6 +87,7 @@ public:
 
 private:
   GridRenderer(WebGPUContext::Ptr ctx, YettyFontManager::Ptr fontManager,
+               ShaderFont::Ptr shaderGlyphFont, ShaderFont::Ptr cardFont,
                const std::string& fontFamily) noexcept;
   Result<void> init() noexcept;
   Result<void> createShaderModule(WGPUDevice device);
@@ -138,6 +142,8 @@ private:
 
   WebGPUContext::Ptr _ctx;
   YettyFontManager::Ptr fontManager_;
+  ShaderFont::Ptr shaderGlyphFont_;  // Single-cell shader glyphs
+  ShaderFont::Ptr cardFont_;          // Multi-cell card glyphs
   std::string fontFamily_;
   std::shared_ptr<MsMsdfFont> font_;  // From YettyFontManager
   EmojiAtlas::Ptr emojiAtlas_; // Color emoji atlas

@@ -2,6 +2,8 @@
 #include <yetty/yetty.h>
 #include <yetty/webgpu-context.h>
 #include <yetty/font-manager.h>
+#include <yetty/bm-font.h>
+#include <yetty/shader-font.h>
 #include <yetty/config.h>
 #include <ytrace/ytrace.hpp>
 #include <ytrace/ytrace.hpp>
@@ -9,7 +11,7 @@
 #include <dlfcn.h>
 
 // Built-in plugins (linked into main executable)
-#if (defined(__unix__) || defined(__APPLE__)) && !defined(__ANDROID__)
+#if (defined(__unix__) || defined(__APPLE__)) && !defined(__ANDROID__) && defined(YETTY_PLUGIN_PYTHON)
 #include "plugins/python/python.h"
 #endif
 
@@ -31,7 +33,7 @@ WidgetFactory::WidgetFactory(Yetty* engine, const std::vector<std::string>& sear
     , _searchPaths(searchPaths)
 {
     // Register built-in plugins as available (lazy - not created until used)
-#if (defined(__unix__) || defined(__APPLE__)) && !defined(__ANDROID__)
+#if (defined(__unix__) || defined(__APPLE__)) && !defined(__ANDROID__) && defined(YETTY_PLUGIN_PYTHON)
     _builtinPlugins["python"] = []() -> Result<PluginPtr> {
         return PythonPlugin::create();
     };
@@ -73,6 +75,18 @@ ShaderManager* WidgetFactory::getShaderManager() const {
 
 CardBufferManager* WidgetFactory::getCardBufferManager() const {
     return _engine ? _engine->cardBufferManager() : nullptr;
+}
+
+std::shared_ptr<BmFont> WidgetFactory::getBmFont() const {
+    return _engine ? _engine->bitmapFont() : nullptr;
+}
+
+std::shared_ptr<ShaderFont> WidgetFactory::getShaderGlyphFont() const {
+    return _engine ? _engine->shaderGlyphFont() : nullptr;
+}
+
+std::shared_ptr<ShaderFont> WidgetFactory::getCardFont() const {
+    return _engine ? _engine->cardFont() : nullptr;
 }
 
 //-----------------------------------------------------------------------------

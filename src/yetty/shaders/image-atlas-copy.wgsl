@@ -10,7 +10,7 @@
 //   - cardImageData buffer (raw RGBA pixels)
 //
 // This compute shader:
-//   1. Scans cell buffer to find image card glyphs (1048596)
+//   1. Scans cell buffer to find image card glyphs (0x100000)
 //   2. Extracts metadata slot index from fg color
 //   3. Allocates atlas positions using atomic counter
 //   4. Copies pixels from cardImageData to atlas texture
@@ -38,7 +38,7 @@ struct AtlasState {
 }
 
 // Image card glyph constant
-const IMAGE_SHADER_GLYPH: u32 = 1048596u;
+const IMAGE_SHADER_GLYPH: u32 = 0x100000u;
 
 // Bindings
 @group(0) @binding(0) var<storage, read> cellBuffer: array<Cell>;
