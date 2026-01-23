@@ -325,6 +325,65 @@ if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
         target_compile_definitions(glfw3webgpu PRIVATE _GLFW_X11)
     endif()
 
+    #-------------------------------------------------------------------------
+    # ImGui - Immediate mode GUI library with docking support
+    #-------------------------------------------------------------------------
+    CPMAddPackage(
+        NAME imgui
+        GITHUB_REPOSITORY ocornut/imgui
+        GIT_TAG docking
+        DOWNLOAD_ONLY YES
+    )
+
+    if(imgui_ADDED)
+        # Core ImGui source files
+        set(IMGUI_SOURCES
+            ${imgui_SOURCE_DIR}/imgui.cpp
+            ${imgui_SOURCE_DIR}/imgui_demo.cpp
+            ${imgui_SOURCE_DIR}/imgui_draw.cpp
+            ${imgui_SOURCE_DIR}/imgui_tables.cpp
+            ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+        )
+
+        # Platform backend: GLFW for desktop
+        list(APPEND IMGUI_SOURCES ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp)
+
+        # Renderer backend: WebGPU (wgpu-native)
+        list(APPEND IMGUI_SOURCES ${imgui_SOURCE_DIR}/backends/imgui_impl_wgpu.cpp)
+
+        add_library(imgui STATIC ${IMGUI_SOURCES})
+        target_include_directories(imgui PUBLIC
+            ${imgui_SOURCE_DIR}
+            ${imgui_SOURCE_DIR}/backends
+        )
+
+        # Link dependencies and set compile definitions
+        if(APPLE)
+            target_link_libraries(imgui PUBLIC glfw webgpu)
+            # imgui_impl_wgpu.cpp includes Cocoa.h and must be compiled as Objective-C++
+            set_source_files_properties(
+                ${imgui_SOURCE_DIR}/backends/imgui_impl_wgpu.cpp
+                PROPERTIES COMPILE_FLAGS "-x objective-c++"
+            )
+        elseif(WIN32)
+            target_link_libraries(imgui PUBLIC glfw webgpu)
+        else()
+            # Linux - requires X11
+            find_package(X11 REQUIRED)
+            target_link_libraries(imgui PUBLIC glfw webgpu X11::X11)
+        endif()
+
+        # Backend-specific defines: wgpu-native vs Dawn
+        if(WEBGPU_BACKEND STREQUAL "wgpu")
+            target_compile_definitions(imgui PUBLIC IMGUI_IMPL_WEBGPU_BACKEND_WGPU=1)
+        else()
+            # Dawn backend - uses standard WebGPU API
+            target_compile_definitions(imgui PUBLIC IMGUI_IMPL_WEBGPU_BACKEND_DAWN=1)
+        endif()
+
+        set_target_properties(imgui PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    endif()
+
 endif()
 
 # libuv for async I/O (PTY reading, event loops) - needed for all platforms except Emscripten
@@ -439,6 +498,7 @@ if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
         webgpu
         glfw
         glfw3webgpu
+        imgui
         glm::glm
         stb
         yaml-cpp
