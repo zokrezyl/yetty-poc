@@ -467,7 +467,7 @@ Result<void> TerminalView::render(WGPURenderPassEncoder pass, WebGPUContext& ctx
     _impl->uniforms.cellSize = {_impl->cellWidth, _impl->cellHeight};
     _impl->uniforms.gridSize = {static_cast<float>(cols), static_cast<float>(rows)};
     _impl->uniforms.pixelRange = _impl->font ? _impl->font->getPixelRange() : 2.0f;
-    _impl->uniforms.scale = 1.0f;
+    _impl->uniforms.scale = _impl->cellHeight / _impl->font->getLineHeight();
     _impl->uniforms.cursorPos = {static_cast<float>(_impl->terminal->getCursorCol()),
                                   static_cast<float>(_impl->terminal->getCursorRow())};
     _impl->uniforms.cursorVisible = _impl->terminal->isCursorVisible() ? 1.0f : 0.0f;
