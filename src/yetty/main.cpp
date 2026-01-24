@@ -9,8 +9,10 @@
 //=============================================================================
 
 #include <yetty/yetty.h>
+#include <yetty/new-yetty.h>
 #include <ytrace/ytrace.hpp>
 #include <iostream>
+#include <cstring>
 
 #if YETTY_WEB
 // Keep Yetty alive for the duration of the web app
@@ -39,6 +41,19 @@ void android_main(struct android_app* app) {
 // Desktop Entry Point
 //-----------------------------------------------------------------------------
 int main(int argc, char* argv[]) {
+    // Use NewYetty (tiled terminal)
+    auto result = yetty::NewYetty::create(argc, argv);
+    if (!result) {
+        std::string msg = result.error().message();
+        if (msg == "Help requested") {
+            return 0;
+        }
+        yerror("Failed to initialize new-yetty: {}", yetty::error_msg(result));
+        return 1;
+    }
+    return (*result)->run();
+
+#if 0
     auto result = yetty::Yetty::create(argc, argv);
     if (!result) {
         // Check if this is just a "help requested" or "atlas generated" exit
@@ -56,6 +71,7 @@ int main(int argc, char* argv[]) {
     return g_yetty->run();
 #else
     return (*result)->run();
+#endif
 #endif
 }
 #endif

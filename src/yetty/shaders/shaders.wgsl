@@ -21,6 +21,8 @@ struct GridUniforms {
     cursorPos: vec2<f32>,      // 8 bytes (col, row)
     cursorVisible: f32,        // 4 bytes
     _pad: f32,                 // 4 bytes padding
+    viewportOrigin: vec2<f32>, // 8 bytes - viewport origin in framebuffer
+    _pad2: vec2<f32>,          // 8 bytes padding for alignment
 };
 
 // Glyph metadata (40 bytes per glyph, matches C++ GlyphMetadataGPU)
@@ -225,8 +227,8 @@ fn renderShaderGlyph(glyphIndex: u32, localUV: vec2<f32>, time: f32, fg: u32, bg
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    // Convert fragment position to pixel coordinates
-    let pixelPos = input.position.xy;
+    // Convert fragment position to viewport-local pixel coordinates
+    let pixelPos = input.position.xy - grid.viewportOrigin;
 
     // Calculate grid dimensions in pixels
     let gridPixelWidth = grid.gridSize.x * grid.cellSize.x;

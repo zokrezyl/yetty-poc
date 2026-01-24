@@ -12,11 +12,19 @@ function(add_yetty_plugin NAME)
         ${PLUGIN_INCLUDES}
     )
 
-    # Link against yetty_core (provides Font, FontManager, RichText, WebGPUContext)
+    # Add include directories from dependencies
     target_link_libraries(${NAME}_plugin PRIVATE
-        yetty_core
+        glm::glm
+        webgpu
         yaml-cpp
+        ytrace::ytrace
+        stb
         ${PLUGIN_LIBS}
+    )
+
+    # GLFW include dir needed for webgpu-context.h (header only)
+    target_include_directories(${NAME}_plugin PRIVATE
+        ${glfw_SOURCE_DIR}/include
     )
 
     # Output to plugins directory
@@ -202,7 +210,7 @@ if(UNIX AND YETTY_PLUGIN_PYTHON)
         ${PYTHON_EMBEDDED_INCLUDE_DIR}
     )
 
-    target_link_libraries(python_widget PRIVATE yetty_core yaml-cpp)
+    target_link_libraries(python_widget PRIVATE yaml-cpp)
 
     # Ensure Python is built before this
     add_dependencies(python_widget python_embedded)

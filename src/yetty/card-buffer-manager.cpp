@@ -227,7 +227,15 @@ std::vector<std::pair<uint32_t, uint32_t>> DirtyTracker::getCoalescedRanges(uint
 
 // --- CardBufferManager ---
 
-CardBufferManager::CardBufferManager(WGPUDevice device, Config config)
+Result<CardBufferManager::Ptr> CardBufferManager::create(WGPUDevice device, Config config) noexcept {
+    auto mgr = Ptr(new CardBufferManager(device, config));
+    if (auto res = mgr->init(); !res) {
+        return Err<Ptr>("Failed to initialize CardBufferManager", res);
+    }
+    return Ok(std::move(mgr));
+}
+
+CardBufferManager::CardBufferManager(WGPUDevice device, Config config) noexcept
     : _device(device)
     , _config(config)
     , _metadataGpuBuffer(nullptr)
@@ -237,16 +245,18 @@ CardBufferManager::CardBufferManager(WGPUDevice device, Config config)
                          config.metadataPool128Count, config.metadataPool256Count)
     , _storageAllocator(config.storageCapacity)
     , _imageDataAllocator(config.imageDataCapacity) {
+}
 
+Result<void> CardBufferManager::init() noexcept {
     // Resize to byte count / 4 (buffers are uint32_t for alignment)
     _metadataCpuBuffer.resize((_metadataAllocator.totalSize() + 3) / 4, 0);
-    _storageCpuBuffer.resize((config.storageCapacity + 3) / 4, 0);
-    _imageDataCpuBuffer.resize((config.imageDataCapacity + 3) / 4, 0);
+    _storageCpuBuffer.resize((_config.storageCapacity + 3) / 4, 0);
+    _imageDataCpuBuffer.resize((_config.imageDataCapacity + 3) / 4, 0);
 
-    auto result = createGpuBuffers();
-    if (!result) {
-        // Log error but don't throw - buffers will be null
+    if (auto res = createGpuBuffers(); !res) {
+        return Err<void>("Failed to create GPU buffers", res);
     }
+    return Ok();
 }
 
 CardBufferManager::~CardBufferManager() {

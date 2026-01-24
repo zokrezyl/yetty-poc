@@ -17,8 +17,10 @@ namespace yetty {
 
 class MsMsdfFont : public YettyFont {
 public:
+    using Ptr = std::shared_ptr<MsMsdfFont>;
+
     // Factory method - calls constructor then init()
-    static Result<std::shared_ptr<MsMsdfFont>> create(const std::string& cdbBasePath);
+    static Result<Ptr> create(const std::string& cdbBasePath);
 
     ~MsMsdfFont() override;
 

@@ -38,7 +38,7 @@ Result<void> YettyFontManager::init() noexcept {
     return Ok();
 }
 
-Result<std::shared_ptr<MsMsdfFont>> YettyFontManager::getMsMsdfFont(const std::string& fontName) noexcept {
+Result<MsMsdfFont::Ptr> YettyFontManager::getMsMsdfFont(const std::string& fontName) noexcept {
     // Check if already cached
     auto it = _fontCache.find(fontName);
     if (it != _fontCache.end()) {
@@ -51,7 +51,7 @@ Result<std::shared_ptr<MsMsdfFont>> YettyFontManager::getMsMsdfFont(const std::s
     // Try to create the font
     auto result = MsMsdfFont::create(cdbBasePath);
     if (!result) {
-        return Err<std::shared_ptr<MsMsdfFont>>("Failed to load MsMsdfFont: " + fontName, result);
+        return Err<MsMsdfFont::Ptr>("Failed to load MsMsdfFont: " + fontName, result);
     }
 
     // Cache and return
@@ -67,7 +67,7 @@ Result<std::shared_ptr<MsMsdfFont>> YettyFontManager::getMsMsdfFont(const std::s
     return Ok(font);
 }
 
-std::shared_ptr<MsMsdfFont> YettyFontManager::getDefaultFont() noexcept {
+MsMsdfFont::Ptr YettyFontManager::getDefaultFont() noexcept {
     // Return cached default if available
     if (!_defaultFontName.empty()) {
         auto it = _fontCache.find(_defaultFontName);

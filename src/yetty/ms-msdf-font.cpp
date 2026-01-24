@@ -60,11 +60,11 @@ MsMsdfFont::~MsMsdfFont() {
     if (_texture) wgpuTextureRelease(_texture);
 }
 
-Result<std::shared_ptr<MsMsdfFont>> MsMsdfFont::create(const std::string& cdbBasePath) {
-    auto font = std::shared_ptr<MsMsdfFont>(new MsMsdfFont(cdbBasePath));
+Result<MsMsdfFont::Ptr> MsMsdfFont::create(const std::string& cdbBasePath) {
+    auto font = MsMsdfFont::Ptr(new MsMsdfFont(cdbBasePath));
     auto initResult = font->init();
     if (!initResult) {
-        return Err<std::shared_ptr<MsMsdfFont>>("Failed to initialize MsMsdfFont", initResult);
+        return Err<MsMsdfFont::Ptr>("Failed to initialize MsMsdfFont", initResult);
     }
     return Ok(std::move(font));
 }

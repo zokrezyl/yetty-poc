@@ -37,7 +37,7 @@ public:
      * @param fontName Base name of the font (e.g., "DejaVuSansMNerdFontMono-Regular")
      * @return Shared pointer to MsMsdfFont, or error if not found
      */
-    Result<std::shared_ptr<MsMsdfFont>> getMsMsdfFont(const std::string& fontName) noexcept;
+    Result<MsMsdfFont::Ptr> getMsMsdfFont(const std::string& fontName) noexcept;
 
     /**
      * @brief Get the default MSDF font.

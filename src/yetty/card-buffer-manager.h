@@ -137,12 +137,14 @@ struct CardBufferConfig {
 class CardBufferManager {
 public:
     using Config = CardBufferConfig;
+    using Ptr = std::unique_ptr<CardBufferManager>;
 
-    CardBufferManager(WGPUDevice device, Config config = {});
     ~CardBufferManager();
 
     CardBufferManager(const CardBufferManager&) = delete;
     CardBufferManager& operator=(const CardBufferManager&) = delete;
+
+    static Result<Ptr> create(WGPUDevice device, Config config = {}) noexcept;
 
     // Metadata operations
     Result<MetadataHandle> allocateMetadata(uint32_t size);
@@ -214,6 +216,9 @@ public:
     Stats getStats() const;
 
 private:
+    CardBufferManager(WGPUDevice device, Config config) noexcept;
+    Result<void> init() noexcept;
+
     Result<void> createGpuBuffers();
     Result<void> createAtlasTexture();
     Result<void> createAtlasComputePipeline();

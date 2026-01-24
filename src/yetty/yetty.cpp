@@ -420,7 +420,11 @@ Result<void> Yetty::initGraphics() noexcept {
 #if !YETTY_WEB && !defined(__ANDROID__)
   // Create CardBufferManager for card-based widgets (plots, images, etc.)
   // Must be created before bind group layout to include its buffers
-  _cardBufferManager = std::make_unique<CardBufferManager>(_ctx->getDevice());
+  auto cbmResult = CardBufferManager::create(_ctx->getDevice());
+  if (!cbmResult) {
+    return Err<void>("Failed to create CardBufferManager", cbmResult);
+  }
+  _cardBufferManager = std::move(*cbmResult);
   yinfo("CardBufferManager created");
 
   // Initialize the atlas (compute shader pipelines and textures)
