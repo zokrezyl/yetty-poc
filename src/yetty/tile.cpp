@@ -112,7 +112,7 @@ void Pane::registerForEvents() {
     loop->registerListener(Event::Type::MouseDown, self);
 
     // All panes register for focus events to know when to activate/deactivate
-    loop->registerListener(Event::Type::FocusPane, self);
+    loop->registerListener(Event::Type::SetFocus, self);
 
     // First pane created gets initial focus
     static bool firstPane = true;
@@ -127,7 +127,7 @@ void Pane::registerForEvents() {
 
 Result<bool> Pane::onEvent(const Event& event) {
     switch (event.type) {
-        case Event::Type::FocusPane:
+        case Event::Type::SetFocus:
             handleFocusEvent(event);
             return Ok(false); // Don't consume - all panes need to see this
 
@@ -148,7 +148,7 @@ void Pane::handleFocusEvent(const Event& event) {
     auto loop = EventLoop::instance();
     auto self = sharedAs<Pane>();
 
-    bool shouldBeFocused = (event.focus.objectId == id());
+    bool shouldBeFocused = (event.setFocus.objectId == id());
 
     if (shouldBeFocused && !_focused) {
         // Gaining focus - register for keyboard
@@ -172,7 +172,7 @@ bool Pane::handleMouseEvent(const Event& event) {
 
     // Click in our bounds - broadcast focus event
     auto loop = EventLoop::instance();
-    loop->broadcast(Event::focusPane(id()));
+    loop->broadcast(Event::focusEvent(id()));
 
     // Forward to view with local coordinates
     if (auto* view = activeView()) {

@@ -2,6 +2,7 @@
 
 #include <yetty/result.hpp>
 #include <yetty/gpu-context.h>
+#include <yetty/base/event-loop.h>
 #include <memory>
 #include <functional>
 #include <cstdint>
@@ -15,7 +16,7 @@ struct Cell {
 };
 static_assert(sizeof(Cell) == 12, "Cell must be 12 bytes");
 
-class GPUScreen {
+class GPUScreen : public base::EventListener {
 public:
     using Ptr = std::shared_ptr<GPUScreen>;
 
@@ -66,6 +67,14 @@ public:
     // Cell size (from font metrics * zoom)
     virtual float getCellWidth() const = 0;
     virtual float getCellHeight() const = 0;
+
+    // Focus management
+    virtual base::ObjectId id() const = 0;
+    virtual bool isFocused() const = 0;
+    virtual void registerForFocus() = 0;
+
+    // EventListener interface
+    Result<bool> onEvent(const base::Event& event) override = 0;
 
 protected:
     GPUScreen() = default;

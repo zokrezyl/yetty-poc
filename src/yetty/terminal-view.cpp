@@ -32,20 +32,9 @@ public:
     }
 
     Result<bool> onEvent(const Event& event) override {
-        if (!terminal_) {
-            return Ok(false);
-        }
-
-        if (event.type == Event::Type::Char) {
-            terminal_->sendKey(event.chr.codepoint, 0);
-            return Ok(true);
-        }
-
-        if (event.type == Event::Type::KeyDown) {
-            terminal_->sendSpecialKey(event.key.key, event.key.mods);
-            return Ok(true);
-        }
-
+        // Terminal handles keyboard events directly via EventLoop registration
+        // TerminalView only handles view-specific events
+        (void)event;
         return Ok(false);
     }
 

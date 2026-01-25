@@ -556,14 +556,37 @@ Result<void> NewYettyImpl::initCallbacks() noexcept {
     glfwSetWindowUserPointer(_window, this);
 
     glfwSetKeyCallback(_window, [](GLFWwindow* w, int key, int scancode, int action, int mods) {
-        (void)scancode;
+        ydebug("glfwKeyCallback: key={} scancode={} action={} mods={}", key, scancode, action, mods);
+        if (action != GLFW_PRESS && action != GLFW_REPEAT) return;
+
         auto loop = base::EventLoop::instance();
-        if (action == GLFW_PRESS || action == GLFW_REPEAT) {
-            loop->dispatch(base::Event::keyDown(key, mods));
+
+        // Handle Ctrl/Alt + character combinations using glfwGetKeyName
+        // This is how the old InputHandler::onKey did it
+        if (mods & (GLFW_MOD_CONTROL | GLFW_MOD_ALT)) {
+            // Special case for space key - glfwGetKeyName may return NULL for it
+            if (key == GLFW_KEY_SPACE) {
+                ydebug("Sending Ctrl/Alt+Space");
+                loop->dispatch(base::Event::keyDown(key, mods, scancode));
+                return;
+            }
+
+            const char* keyName = glfwGetKeyName(key, scancode);
+            if (keyName && keyName[0] != '\0' && keyName[1] == '\0') {
+                // Single character key - dispatch as char with mods
+                uint32_t ch = static_cast<uint32_t>(keyName[0]);
+                ydebug("Ctrl/Alt+char: keyName='{}' -> dispatching charInput with mods", keyName);
+                loop->dispatch(base::Event::charInputWithMods(ch, mods));
+                return;
+            }
         }
+
+        // For special keys (Enter, Backspace, arrows, etc.), dispatch keyDown
+        loop->dispatch(base::Event::keyDown(key, mods, scancode));
     });
 
     glfwSetCharCallback(_window, [](GLFWwindow* w, unsigned int codepoint) {
+        ydebug("glfwCharCallback: codepoint={} ('{}')", codepoint, codepoint < 32 ? '?' : (char)codepoint);
         auto loop = base::EventLoop::instance();
         loop->dispatch(base::Event::charInput(codepoint));
     });
@@ -571,6 +594,21 @@ Result<void> NewYettyImpl::initCallbacks() noexcept {
     glfwSetFramebufferSizeCallback(_window, [](GLFWwindow* w, int newWidth, int newHeight) {
         auto* impl = static_cast<NewYettyImpl*>(glfwGetWindowUserPointer(w));
         if (impl) impl->handleResize(newWidth, newHeight);
+    });
+
+    glfwSetWindowCloseCallback(_window, [](GLFWwindow* w) {
+        ydebug("glfwWindowCloseCallback triggered!");
+    });
+
+    glfwSetMouseButtonCallback(_window, [](GLFWwindow* w, int button, int action, int mods) {
+        (void)mods;
+        if (action == GLFW_PRESS) {
+            double xpos, ypos;
+            glfwGetCursorPos(w, &xpos, &ypos);
+            ydebug("glfwMouseButtonCallback: button={} at ({}, {})", button, xpos, ypos);
+            auto loop = base::EventLoop::instance();
+            loop->dispatch(base::Event::mouseDown(static_cast<float>(xpos), static_cast<float>(ypos), button));
+        }
     });
 
     return Ok();

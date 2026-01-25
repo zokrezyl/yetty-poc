@@ -53,8 +53,13 @@ public:
 #if !YETTY_WEB && !defined(__ANDROID__)
         _running = false;
 
+        auto loop = base::EventLoop::instance();
+
+        // Deregister keyboard event listeners
+        loop->deregisterListener(sharedAs<base::EventListener>());
+
         if (_pollId >= 0) {
-            base::EventLoop::instance()->destroyPoll(_pollId);
+            loop->destroyPoll(_pollId);
             _pollId = -1;
         }
 
@@ -121,16 +126,13 @@ public:
 
     Result<bool> onEvent(const base::Event& event) override {
 #if !YETTY_WEB && !defined(__ANDROID__)
-        ydebug("Terminal::onEvent: type={} poll.fd={} _ptyMaster={}",
-               static_cast<int>(event.type), event.poll.fd, _ptyMaster);
         if (event.type == base::Event::Type::PollReadable && event.poll.fd == _ptyMaster) {
-            ydebug("Terminal::onEvent: calling readPty");
+            ydebug("Terminal::onEvent: PollReadable on PTY");
             readPty();
             return Ok(true);
         }
-#else
-        (void)event;
 #endif
+        // Keyboard events are handled by GPUScreen directly
         return Ok(false);
     }
 
@@ -196,6 +198,11 @@ private:
         loop->configPoll(_pollId, _ptyMaster);
         loop->registerPollListener(_pollId, sharedAs<base::EventListener>());
         loop->startPoll(_pollId);
+
+        // Register GPUScreen for focus events (keyboard events are handled by GPUScreen)
+        if (_gpuScreen) {
+            _gpuScreen->registerForFocus();
+        }
 
         _running = true;
         yinfo("Terminal started: PTY fd={}, PID={}", _ptyMaster, _childPid);

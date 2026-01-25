@@ -142,6 +142,12 @@ public:
     void sendKey(uint32_t codepoint, int mods) override;
     void sendSpecialKey(int key, int mods) override;
 
+    // Focus management (EventListener)
+    base::ObjectId id() const override { return _id; }
+    bool isFocused() const override { return _focused; }
+    void registerForFocus() override;
+    Result<bool> onEvent(const base::Event& event) override;
+
     // VTerm state callbacks (static)
     static int onPutglyph(VTermGlyphInfo *info, VTermPos pos, void *user);
     static int onMoveCursor(VTermPos pos, VTermPos oldpos, int visible, void *user);
@@ -314,6 +320,11 @@ private:
     float _viewportY = 0.0f;
     float _viewportWidth = 0.0f;
     float _viewportHeight = 0.0f;
+
+    // Focus management
+    base::ObjectId _id = 0;
+    bool _focused = false;
+    static base::ObjectId _nextId;
 };
 
 // State callbacks struct
@@ -332,9 +343,13 @@ static VTermStateCallbacks stateCallbacks = {
     .sb_clear = nullptr,
 };
 
+// Static ID counter for GPUScreen instances
+base::ObjectId GPUScreenImpl::_nextId = 1;
+
 GPUScreenImpl::GPUScreenImpl(const GPUContext& gpuContext)
     : maxScrollback_(10000)
-    , _gpuContext(gpuContext) {
+    , _gpuContext(gpuContext)
+    , _id(_nextId++) {
   // Get fonts from singleton
   auto fontMgr = YettyFontManager::instance();
   _msdfFont = fontMgr->getDefaultMsMsdfFont();
@@ -2297,6 +2312,8 @@ void GPUScreenImpl::sendKey(uint32_t codepoint, int mods) {
 void GPUScreenImpl::sendSpecialKey(int key, int mods) {
   if (!_vterm) return;
 
+  ydebug("sendSpecialKey: key={} mods={}", key, mods);
+
   // Convert GLFW modifiers to VTermModifier
   // GLFW: GLFW_MOD_SHIFT=0x0001, GLFW_MOD_CONTROL=0x0002, GLFW_MOD_ALT=0x0004
   VTermModifier vtMods = VTERM_MOD_NONE;
@@ -2346,6 +2363,7 @@ void GPUScreenImpl::sendSpecialKey(int key, int mods) {
           ch = static_cast<uint32_t>(key + 32); // lowercase
         }
         if (ch != 0) {
+          ydebug("sendSpecialKey: sending ctrl/alt char '{}' ({})", (char)ch, ch);
           vterm_keyboard_unichar(_vterm, ch, vtMods);
         }
       }
@@ -2365,6 +2383,74 @@ void GPUScreenImpl::setOutputCallback(OutputCallback cb) {
       }
     }, this);
   }
+}
+
+void GPUScreenImpl::registerForFocus() {
+  auto loop = base::EventLoop::instance();
+  loop->registerListener(base::Event::Type::SetFocus, sharedAs<base::EventListener>());
+  loop->registerListener(base::Event::Type::MouseDown, sharedAs<base::EventListener>());
+  yinfo("GPUScreen {} registered for SetFocus and MouseDown events", _id);
+
+  // Auto-focus on startup so keyboard works immediately
+  loop->dispatch(base::Event::focusEvent(_id));
+}
+
+Result<bool> GPUScreenImpl::onEvent(const base::Event& event) {
+  // Handle mouse click - dispatch SetFocus if clicked on our surface
+  if (event.type == base::Event::Type::MouseDown) {
+    float mx = event.mouse.x;
+    float my = event.mouse.y;
+    // Check if click is within our viewport
+    if (mx >= _viewportX && mx < _viewportX + _viewportWidth &&
+        my >= _viewportY && my < _viewportY + _viewportHeight) {
+      ydebug("GPUScreen {} clicked at ({}, {}), dispatching SetFocus", _id, mx, my);
+      auto loop = base::EventLoop::instance();
+      loop->dispatch(base::Event::focusEvent(_id));
+      return Ok(true);
+    }
+    return Ok(false);
+  }
+
+  if (event.type == base::Event::Type::SetFocus) {
+    auto loop = base::EventLoop::instance();
+    if (event.setFocus.objectId == _id) {
+      // This GPUScreen is being focused
+      if (!_focused) {
+        _focused = true;
+        // Register for keyboard events
+        loop->registerListener(base::Event::Type::Char, sharedAs<base::EventListener>());
+        loop->registerListener(base::Event::Type::KeyDown, sharedAs<base::EventListener>());
+        yinfo("GPUScreen {} gained focus, registered for keyboard events", _id);
+      }
+    } else {
+      // Another element is being focused, we lose focus
+      if (_focused) {
+        _focused = false;
+        // Deregister from keyboard events (but keep SetFocus registration)
+        loop->deregisterListener(base::Event::Type::Char, sharedAs<base::EventListener>());
+        loop->deregisterListener(base::Event::Type::KeyDown, sharedAs<base::EventListener>());
+        yinfo("GPUScreen {} lost focus, deregistered from keyboard events", _id);
+      }
+    }
+    return Ok(true);
+  }
+
+  // Handle keyboard events (only when focused)
+  if (_focused) {
+    if (event.type == base::Event::Type::Char) {
+      ydebug("GPUScreen::onEvent: Char codepoint={} mods={}", event.chr.codepoint, event.chr.mods);
+      sendKey(event.chr.codepoint, event.chr.mods);
+      return Ok(true);
+    }
+
+    if (event.type == base::Event::Type::KeyDown) {
+      ydebug("GPUScreen::onEvent: KeyDown key={} mods={}", event.key.key, event.key.mods);
+      sendSpecialKey(event.key.key, event.key.mods);
+      return Ok(true);
+    }
+  }
+
+  return Ok(false);
 }
 
 Result<void> GPUScreenImpl::initPipeline() {

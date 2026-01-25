@@ -15,6 +15,11 @@
 #include <spdlog/cfg/env.h>
 #include <iostream>
 #include <cstring>
+#include <signal.h>
+
+static void sigint_handler(int sig) {
+    yinfo("SIGINT received! (signal {})", sig);
+}
 
 #if YETTY_WEB
 // Keep Yetty alive for the duration of the web app
@@ -43,8 +48,12 @@ void android_main(struct android_app* app) {
 // Desktop Entry Point
 //-----------------------------------------------------------------------------
 int main(int argc, char* argv[]) {
-    // Load log level from SPDLOG_LEVEL env var
+    // Set default log level to trace, can be overridden by SPDLOG_LEVEL env var
+    spdlog::set_level(spdlog::level::trace);
     spdlog::cfg::load_env_levels();
+
+    // Debug: catch SIGINT to see if process receives it
+    signal(SIGINT, sigint_handler);
 
     // Use NewYetty (tiled terminal)
     auto result = yetty::NewYetty::create(argc, argv);
