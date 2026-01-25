@@ -11,6 +11,8 @@
 #include <yetty/yetty.h>
 #include <yetty/new-yetty.h>
 #include <ytrace/ytrace.hpp>
+#include <spdlog/spdlog.h>
+#include <spdlog/cfg/env.h>
 #include <iostream>
 #include <cstring>
 
@@ -41,6 +43,9 @@ void android_main(struct android_app* app) {
 // Desktop Entry Point
 //-----------------------------------------------------------------------------
 int main(int argc, char* argv[]) {
+    // Load log level from SPDLOG_LEVEL env var
+    spdlog::cfg::load_env_levels();
+
     // Use NewYetty (tiled terminal)
     auto result = yetty::NewYetty::create(argc, argv);
     if (!result) {

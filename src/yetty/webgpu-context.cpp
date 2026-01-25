@@ -1,3 +1,5 @@
+#error "DEPRECATED: Do not use WebGPUContext. Use GPUContext from gpu-context.h instead."
+
 #include <yetty/webgpu-context.h>
 #include <yetty/wgpu-compat.h>
 #include <iostream>

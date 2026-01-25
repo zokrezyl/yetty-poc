@@ -1,3 +1,5 @@
+#error "DEPRECATED: RemoteTerminal is obsolete."
+
 #include "remote-terminal.h"
 #include "grid-renderer.h"
 

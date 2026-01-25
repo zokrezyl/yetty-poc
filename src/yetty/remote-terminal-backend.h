@@ -1,5 +1,7 @@
 #pragma once
 
+#error "DEPRECATED: RemoteTerminalBackend is obsolete."
+
 #include "terminal-backend.h"
 #include "shared-grid.h"
 #include <yetty/result.hpp>

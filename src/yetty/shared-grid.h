@@ -1,5 +1,7 @@
 #pragma once
 
+#error "DEPRECATED: SharedGrid is obsolete."
+
 #include "grid.h"
 #include <yetty/yetty-font.h>
 #include <atomic>

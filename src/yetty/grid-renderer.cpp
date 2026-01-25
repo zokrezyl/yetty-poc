@@ -1,3 +1,5 @@
+#error "DEPRECATED: GridRenderer is obsolete. Use GPUScreen for rendering."
+
 #include "damage-rect.h"  // For DamageRect (separate to avoid libuv on web)
 #include "yetty/grid-renderer.h"
 #include "yetty/config.h"

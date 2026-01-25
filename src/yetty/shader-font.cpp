@@ -1,4 +1,5 @@
 #include <yetty/shader-font.h>
+#include <yetty/shader-manager.h>
 #include <ytrace/ytrace.hpp>
 
 #include <filesystem>
@@ -33,7 +34,14 @@ Result<ShaderFont::Ptr> ShaderFont::create(Category category, const std::string&
 }
 
 Result<void> ShaderFont::init() {
-    return loadShaders();
+    if (auto res = loadShaders(); !res) {
+        return res;
+    }
+
+    // Self-register with ShaderManager singleton
+    ShaderManager::instance()->addProvider(shared_from_this());
+
+    return Ok();
 }
 
 bool ShaderFont::parseShaderFilename(const std::string& filename, uint32_t& offset, std::string& name) {

@@ -1,3 +1,5 @@
+#error "DEPRECATED: RemoteTerminalBackend is obsolete."
+
 #include "remote-terminal-backend.h"
 #include "shared-grid.h"
 

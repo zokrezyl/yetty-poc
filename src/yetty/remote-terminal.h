@@ -1,5 +1,7 @@
 #pragma once
 
+#error "DEPRECATED: RemoteTerminal is obsolete."
+
 #include <yetty/widget.h>
 #include <yetty/yetty-font.h>
 #include <yetty/config.h>

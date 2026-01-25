@@ -3,100 +3,190 @@
 
 #include <cstdlib>
 #include <filesystem>
+#include <unordered_map>
+
+#ifndef CMAKE_SOURCE_DIR
+#define CMAKE_SOURCE_DIR "."
+#endif
 
 namespace yetty {
 
-YettyFontManager::YettyFontManager() noexcept = default;
+class YettyFontManagerImpl : public YettyFontManager {
+public:
+    YettyFontManagerImpl() = default;
+    ~YettyFontManagerImpl() override = default;
 
-YettyFontManager::~YettyFontManager() = default;
+    Result<void> init(const GPUContext& gpu) noexcept override {
+        if (_initialized) return Ok();
 
-Result<YettyFontManager::Ptr> YettyFontManager::create() noexcept {
-    auto mgr = Ptr(new YettyFontManager());
-    auto initResult = mgr->init();
-    if (!initResult) {
-        return Err<Ptr>("Failed to initialize YettyFontManager", initResult);
-    }
-    return Ok(std::move(mgr));
-}
+        _gpu = gpu;
 
-Result<void> YettyFontManager::init() noexcept {
-    // Determine cache directory: ~/.cache/yetty/msdf-font-cache
-    const char* home = std::getenv("HOME");
-    if (!home) {
-        return Err<void>("HOME environment variable not set");
-    }
+        if (auto res = initMsMsdfFonts(); !res) {
+            return Err<void>("Failed to initialize MSDF fonts", res);
+        }
 
-    _cacheDir = std::string(home) + "/.cache/yetty/msdf-font-cache";
+        if (auto res = initBmFont(gpu); !res) {
+            ywarn("Failed to initialize BmFont: {} - emoji rendering disabled",
+                  res.error().message());
+        }
 
-    // Check if cache directory exists
-    if (!std::filesystem::exists(_cacheDir)) {
-        ywarn("MSDF font cache directory does not exist: {}", _cacheDir);
-        // Don't fail - fonts can be loaded later if directory is created
-    }
+        if (auto res = initShaderFonts(); !res) {
+            ywarn("Failed to initialize ShaderFonts: {} - shader glyphs disabled",
+                  res.error().message());
+        }
 
-    yinfo("YettyFontManager initialized, cache dir: {}", _cacheDir);
-    return Ok();
-}
-
-Result<MsMsdfFont::Ptr> YettyFontManager::getMsMsdfFont(const std::string& fontName) noexcept {
-    // Check if already cached
-    auto it = _fontCache.find(fontName);
-    if (it != _fontCache.end()) {
-        return Ok(it->second);
+        _initialized = true;
+        yinfo("YettyFontManager initialized");
+        return Ok();
     }
 
-    // Build CDB base path
-    std::string cdbBasePath = _cacheDir + "/" + fontName;
+    Result<MsMsdfFont::Ptr> getMsMsdfFont(const std::string& fontName) noexcept override {
+        auto it = _msdfFontCache.find(fontName);
+        if (it != _msdfFontCache.end()) {
+            return Ok(it->second);
+        }
 
-    // Try to create the font
-    auto result = MsMsdfFont::create(cdbBasePath);
-    if (!result) {
-        return Err<MsMsdfFont::Ptr>("Failed to load MsMsdfFont: " + fontName, result);
+        std::string cdbBasePath = _cacheDir + "/" + fontName;
+        auto result = MsMsdfFont::create(cdbBasePath);
+        if (!result) {
+            return Err<MsMsdfFont::Ptr>("Failed to load MsMsdfFont: " + fontName, result);
+        }
+
+        auto font = std::move(*result);
+
+        // Create GPU resources (texture, sampler, metadata buffer)
+        if (auto res = font->createTexture(_gpu.device, _gpu.queue); !res) {
+            return Err<MsMsdfFont::Ptr>("Failed to create MsMsdfFont texture", res);
+        }
+        if (auto res = font->createGlyphMetadataBuffer(_gpu.device); !res) {
+            return Err<MsMsdfFont::Ptr>("Failed to create MsMsdfFont metadata buffer", res);
+        }
+
+        _msdfFontCache[fontName] = font;
+
+        if (_defaultFontName.empty()) {
+            _defaultFontName = fontName;
+        }
+
+        yinfo("Loaded MsMsdfFont: {}", fontName);
+        return Ok(font);
     }
 
-    // Cache and return
-    auto font = std::move(*result);
-    _fontCache[fontName] = font;
+    MsMsdfFont::Ptr getDefaultMsMsdfFont() noexcept override {
+        if (!_defaultFontName.empty()) {
+            auto it = _msdfFontCache.find(_defaultFontName);
+            if (it != _msdfFontCache.end()) {
+                return it->second;
+            }
+        }
 
-    // Set as default if this is the first font
-    if (_defaultFontName.empty()) {
+        auto result = getMsMsdfFont("DejaVuSansMNerdFontMono");
+        if (result) {
+            return *result;
+        }
+
+        if (!_msdfFontCache.empty()) {
+            return _msdfFontCache.begin()->second;
+        }
+
+        yerror("No MSDF fonts available");
+        return nullptr;
+    }
+
+    BmFont::Ptr getDefaultBmFont() noexcept override {
+        return _bitmapFont;
+    }
+
+    ShaderFont::Ptr getDefaultShaderGlyphFont() noexcept override {
+        return _shaderGlyphFont;
+    }
+
+    ShaderFont::Ptr getDefaultCardFont() noexcept override {
+        return _cardFont;
+    }
+
+    void setDefaultFont(const std::string& fontName) noexcept override {
         _defaultFontName = fontName;
     }
 
-    yinfo("Loaded MsMsdfFont: {}", fontName);
-    return Ok(font);
-}
+    bool hasFont(const std::string& fontName) const noexcept override {
+        return _msdfFontCache.find(fontName) != _msdfFontCache.end();
+    }
 
-MsMsdfFont::Ptr YettyFontManager::getDefaultFont() noexcept {
-    // Return cached default if available
-    if (!_defaultFontName.empty()) {
-        auto it = _fontCache.find(_defaultFontName);
-        if (it != _fontCache.end()) {
-            return it->second;
+    const std::string& getCacheDir() const noexcept override {
+        return _cacheDir;
+    }
+
+private:
+    Result<void> initMsMsdfFonts() noexcept {
+        const char* home = std::getenv("HOME");
+        if (!home) {
+            return Err<void>("HOME environment variable not set");
         }
+
+        _cacheDir = std::string(home) + "/.cache/yetty/msdf-font-cache";
+
+        if (!std::filesystem::exists(_cacheDir)) {
+            ywarn("MSDF font cache directory does not exist: {}", _cacheDir);
+        }
+
+        yinfo("MSDF font cache dir: {}", _cacheDir);
+        return Ok();
     }
 
-    // Try to load default font (base family name, not with -Regular suffix)
-    auto result = getMsMsdfFont("DejaVuSansMNerdFontMono");
-    if (result) {
-        return *result;
+    Result<void> initBmFont(const GPUContext& gpu) noexcept {
+        auto bmFontResult = BmFont::create(gpu.device);
+        if (!bmFontResult) {
+            return Err<void>("Failed to create BmFont", bmFontResult);
+        }
+
+        _bitmapFont = *bmFontResult;
+
+        if (auto res = _bitmapFont->loadCommonGlyphs(); !res) {
+            ywarn("Failed to load common glyphs: {}", res.error().message());
+        }
+
+        yinfo("BmFont created successfully");
+        return Ok();
     }
 
-    // Return first cached font if available
-    if (!_fontCache.empty()) {
-        return _fontCache.begin()->second;
+    Result<void> initShaderFonts() noexcept {
+        std::string shaderDir = std::string(CMAKE_SOURCE_DIR) + "/src/yetty/shaders/";
+
+        auto shaderGlyphResult = ShaderFont::create(ShaderFont::Category::Glyph, shaderDir);
+        if (!shaderGlyphResult) {
+            ywarn("Failed to create ShaderFont for glyphs: {}", shaderGlyphResult.error().message());
+        } else {
+            _shaderGlyphFont = *shaderGlyphResult;
+            yinfo("ShaderFont for glyphs created with {} shaders",
+                  _shaderGlyphFont->getFunctionCount());
+        }
+
+        auto cardFontResult = ShaderFont::create(ShaderFont::Category::Card, shaderDir);
+        if (!cardFontResult) {
+            ywarn("Failed to create ShaderFont for cards: {}", cardFontResult.error().message());
+        } else {
+            _cardFont = *cardFontResult;
+            yinfo("ShaderFont for cards created with {} shaders",
+                  _cardFont->getFunctionCount());
+        }
+
+        return Ok();
     }
 
-    yerror("No fonts available");
-    return nullptr;
-}
+    GPUContext _gpu = {};
+    std::string _cacheDir;
+    std::unordered_map<std::string, MsMsdfFont::Ptr> _msdfFontCache;
+    std::string _defaultFontName;
+    BmFont::Ptr _bitmapFont;
+    ShaderFont::Ptr _shaderGlyphFont;
+    ShaderFont::Ptr _cardFont;
+    bool _initialized = false;
+};
 
-void YettyFontManager::setDefaultFont(const std::string& fontName) noexcept {
-    _defaultFontName = fontName;
-}
-
-bool YettyFontManager::hasFont(const std::string& fontName) const noexcept {
-    return _fontCache.find(fontName) != _fontCache.end();
+// Factory for ThreadSingleton
+YettyFontManager::Ptr YettyFontManager::createImpl() noexcept {
+    return std::make_shared<YettyFontManagerImpl>();
 }
 
 } // namespace yetty

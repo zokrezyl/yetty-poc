@@ -1,96 +1,117 @@
 #pragma once
 
+#include <yetty/shader-provider.h>
+#include <yetty/gpu-context.h>
 #include <yetty/result.hpp>
+#include <yetty/base/base.h>
 #include <webgpu/webgpu.h>
 #include <string>
-#include <unordered_map>
+#include <vector>
+#include <map>
+#include <memory>
 
 namespace yetty {
 
-class WebGPUContext;
-
-//-----------------------------------------------------------------------------
-// Global uniforms - shared by all shaders, updated once per frame
-//-----------------------------------------------------------------------------
-struct GlobalUniforms {
-    float iTime;              // Time since app start (ShaderToy compatible)
-    float iTimeRelative;      // Same as iTime (explicit name)
-    float iTimeDelta;         // Time since last frame
-    uint32_t iFrame;          // Frame counter
-    float iMouse[4];          // xy = current pos (normalized), zw = click pos
-    float iScreenResolution[2]; // Screen size in pixels
-    float _pad[2];            // Padding to 48 bytes (16-byte aligned)
-};
-
-//-----------------------------------------------------------------------------
-// ShaderManager - caches compiled shader modules (owned by Yetty)
-//
-// Used by ShaderGlyphRenderer for animated glyphs and by ShaderToy plugin.
-// Also manages global uniforms (time, mouse) shared by all shaders.
-//-----------------------------------------------------------------------------
-class ShaderManager {
+/**
+ * ShaderManager manages the compilation and sharing of the terminal grid shader.
+ *
+ * It collects shader code from ShaderProvider instances (like ShaderFont) and merges
+ * them with the base shader template to produce a shared shader module and pipeline.
+ *
+ * Features:
+ * - ThreadSingleton - single instance shared across all terminals
+ * - Providers self-register via addProvider(shared_from_this())
+ * - Per-frame dirty check for hot-reload support
+ * - Owns shared grid pipeline resources
+ */
+class ShaderManager : public base::ThreadSingleton<ShaderManager> {
+    friend class base::ThreadSingleton<ShaderManager>;
 public:
+    using Ptr = std::shared_ptr<ShaderManager>;
+
+    virtual ~ShaderManager();
+
+    // Factory for ThreadSingleton
+    static Ptr createImpl() noexcept;
+
+    // Non-copyable
+    ShaderManager(const ShaderManager&) = delete;
+    ShaderManager& operator=(const ShaderManager&) = delete;
+
+    /**
+     * Initialize with GPU context.
+     * Loads base shader from default path.
+     */
+    Result<void> init(const GPUContext& gpu) noexcept;
+
+    /**
+     * Register a shader provider.
+     * Providers self-register during their init via shared_from_this().
+     */
+    void addProvider(std::shared_ptr<ShaderProvider> provider);
+
+    /**
+     * Add a shared library.
+     * Libraries provide reusable functions (e.g., SDF utilities).
+     */
+    void addLibrary(const std::string& name, const std::string& code);
+
+    /**
+     * Load base shader from file (called by init).
+     */
+    Result<void> loadBaseShader(const std::string& path);
+
+    /**
+     * Check if any provider needs recompilation.
+     */
+    bool needsRecompile() const;
+
+    /**
+     * Compile all shaders and create pipeline.
+     * Call after all providers are registered.
+     */
+    Result<void> compile();
+
+    /**
+     * Per-frame update - checks dirty providers and recompiles if needed.
+     */
+    void update();
+
+    // =========================================================================
+    // Shared resources for GPUScreen instances
+    // =========================================================================
+
+    WGPUShaderModule getShaderModule() const { return _shaderModule; }
+    WGPURenderPipeline getGridPipeline() const { return _gridPipeline; }
+    WGPUBindGroupLayout getGridBindGroupLayout() const { return _gridBindGroupLayout; }
+    WGPUBuffer getQuadVertexBuffer() const { return _quadVertexBuffer; }
+
+    /**
+     * Get the merged shader source code (for debugging).
+     */
+    const std::string& getMergedSource() const { return _mergedSource; }
+
+protected:
     ShaderManager() = default;
-    ~ShaderManager();
-
-    // Initialize with device and shader search path
-    Result<void> init(WGPUDevice device, const std::string& shaderPath);
-    void dispose();
-
-    // Get compiled fragment shader by name (loads and caches)
-    Result<WGPUShaderModule> getFragmentShader(const std::string& name);
-
-    // Shared vertex shader for rendering quads
-    WGPUShaderModule getQuadVertexShader();
-
-    // Check if shader exists (without loading)
-    bool hasShader(const std::string& name) const;
-
-    // Get shader path
-    const std::string& shaderPath() const { return _shaderPath; }
-
-    //-------------------------------------------------------------------------
-    // Global uniforms - updated once per frame, shared by all shaders
-    //-------------------------------------------------------------------------
-
-    // Update global uniforms (call once per frame from main render loop)
-    void updateGlobalUniforms(WGPUQueue queue,
-                              float deltaTime,
-                              float mouseX, float mouseY,
-                              float mouseClickX, float mouseClickY,
-                              uint32_t screenWidth, uint32_t screenHeight);
-
-    // Get global bind group layout (for creating pipelines)
-    WGPUBindGroupLayout getGlobalBindGroupLayout() const { return _globalBindGroupLayout; }
-
-    // Get global bind group (for rendering)
-    WGPUBindGroup getGlobalBindGroup() const { return _globalBindGroup; }
-
-    // Get current global uniforms (for plugins that need CPU-side values)
-    const GlobalUniforms& getGlobalUniforms() const { return _globalUniforms; }
 
 private:
-    Result<WGPUShaderModule> loadShader(const std::string& filename);
-    Result<void> createQuadVertexShader();
-    Result<void> createGlobalUniformBuffer();
+    Result<void> createPipelineResources();
+    std::string mergeShaders() const;
 
-    WGPUDevice _device = nullptr;
-    std::string _shaderPath;
+    GPUContext _gpu = {};
+    std::string _baseShader;
+    std::vector<std::shared_ptr<ShaderProvider>> _providers;
+    std::map<std::string, std::string> _libraries;
+    std::string _mergedSource;
 
-    // Shared vertex shader for all quad-based rendering
-    WGPUShaderModule _quadVertexShader = nullptr;
+    // Shared GPU resources
+    WGPUShaderModule _shaderModule = nullptr;
+    WGPURenderPipeline _gridPipeline = nullptr;
+    WGPUPipelineLayout _pipelineLayout = nullptr;
+    WGPUBindGroupLayout _gridBindGroupLayout = nullptr;
+    WGPUBuffer _quadVertexBuffer = nullptr;
 
-    // Cached fragment shaders by name
-    std::unordered_map<std::string, WGPUShaderModule> _fragmentShaders;
-
-    // Global uniforms (time, mouse, screen)
-    GlobalUniforms _globalUniforms = {};
-    WGPUBuffer _globalUniformBuffer = nullptr;
-    WGPUBindGroupLayout _globalBindGroupLayout = nullptr;
-    WGPUBindGroup _globalBindGroup = nullptr;
-    uint32_t _frameCount = 0;
-    double _appStartTime = 0.0;
-    double _lastFrameTime = 0.0;
+    bool _initialized = false;
 };
 
 } // namespace yetty

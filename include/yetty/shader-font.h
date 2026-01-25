@@ -24,7 +24,9 @@ namespace yetty {
  * Shader files are loaded from disk and merged into the main shader module.
  * File naming convention: 0xNNNN-name.wgsl where NNNN is hex offset within category.
  */
-class ShaderFont : public YettyFont, public ShaderProvider {
+class ShaderFont : public YettyFont,
+                   public ShaderProvider,
+                   public std::enable_shared_from_this<ShaderFont> {
 public:
     using Ptr = std::shared_ptr<ShaderFont>;
 

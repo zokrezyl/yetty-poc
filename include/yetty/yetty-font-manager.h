@@ -1,79 +1,40 @@
 #pragma once
 
 #include <yetty/ms-msdf-font.h>
+#include <yetty/bm-font.h>
+#include <yetty/shader-font.h>
+#include <yetty/gpu-context.h>
 #include <yetty/result.hpp>
+#include <yetty/base/base.h>
 #include <string>
 #include <memory>
-#include <unordered_map>
 
 namespace yetty {
 
-/**
- * @brief Font manager for MsMsdfFont instances.
- *
- * Manages loading and caching of MSDF fonts from CDB files stored in
- * ~/.cache/yetty/msdf-font-cache/
- */
-class YettyFontManager {
+class YettyFontManager : public base::ThreadSingleton<YettyFontManager> {
+    friend class base::ThreadSingleton<YettyFontManager>;
 public:
     using Ptr = std::shared_ptr<YettyFontManager>;
 
-    /**
-     * @brief Create a new YettyFontManager instance.
-     */
-    static Result<Ptr> create() noexcept;
+    virtual ~YettyFontManager() = default;
 
-    ~YettyFontManager();
+    // Factory for ThreadSingleton
+    static Ptr createImpl() noexcept;
 
-    // Non-copyable
-    YettyFontManager(const YettyFontManager&) = delete;
-    YettyFontManager& operator=(const YettyFontManager&) = delete;
+    virtual Result<void> init(const GPUContext& gpu) noexcept = 0;
 
-    /**
-     * @brief Get an MsMsdfFont by font name.
-     *
-     * Looks for CDB files at: ~/.cache/yetty/msdf-font-cache/<fontName>-regular.cdb
-     *
-     * @param fontName Base name of the font (e.g., "DejaVuSansMNerdFontMono-Regular")
-     * @return Shared pointer to MsMsdfFont, or error if not found
-     */
-    Result<MsMsdfFont::Ptr> getMsMsdfFont(const std::string& fontName) noexcept;
+    virtual Result<MsMsdfFont::Ptr> getMsMsdfFont(const std::string& fontName) noexcept = 0;
+    virtual MsMsdfFont::Ptr getDefaultMsMsdfFont() noexcept = 0;
+    virtual BmFont::Ptr getDefaultBmFont() noexcept = 0;
+    virtual ShaderFont::Ptr getDefaultShaderGlyphFont() noexcept = 0;
+    virtual ShaderFont::Ptr getDefaultCardFont() noexcept = 0;
 
-    /**
-     * @brief Get the default MSDF font.
-     *
-     * Returns the first successfully loaded font, or attempts to load
-     * "DejaVuSansMNerdFontMono-Regular" if no fonts are loaded.
-     */
-    std::shared_ptr<MsMsdfFont> getDefaultFont() noexcept;
+    virtual void setDefaultFont(const std::string& fontName) noexcept = 0;
+    virtual bool hasFont(const std::string& fontName) const noexcept = 0;
+    virtual const std::string& getCacheDir() const noexcept = 0;
 
-    /**
-     * @brief Set which font should be the default.
-     */
-    void setDefaultFont(const std::string& fontName) noexcept;
-
-    /**
-     * @brief Check if a font is already loaded.
-     */
-    bool hasFont(const std::string& fontName) const noexcept;
-
-    /**
-     * @brief Get the cache directory path.
-     */
-    const std::string& getCacheDir() const noexcept { return _cacheDir; }
-
-    /**
-     * @brief Get number of cached fonts.
-     */
-    size_t getCacheSize() const noexcept { return _fontCache.size(); }
-
-private:
-    YettyFontManager() noexcept;
-    Result<void> init() noexcept;
-
-    std::string _cacheDir;
-    std::unordered_map<std::string, std::shared_ptr<MsMsdfFont>> _fontCache;
-    std::string _defaultFontName;
+protected:
+    YettyFontManager() = default;
 };
 
 } // namespace yetty

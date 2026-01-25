@@ -463,21 +463,17 @@ endif()
 #-----------------------------------------------------------------------------
 # Common sources for all platforms
 set(YETTY_SOURCES
-    src/yetty/grid-renderer.cpp
-    src/yetty/grid.cpp
 )
 
 # Add core sources for non-desktop platforms (desktop uses yetty_core library)
 if(EMSCRIPTEN OR YETTY_ANDROID)
     list(APPEND YETTY_SOURCES
-        src/yetty/webgpu-context.cpp
         src/yetty/font.cpp
         src/yetty/font-manager.cpp
         src/yetty/rich-text.cpp
-        src/yetty/emoji-atlas.cpp
         src/yetty/bm-font.cpp
         src/yetty/shader-font.cpp
-        src/yetty/shader-compiler.cpp
+        src/yetty/shader-manager.cpp
         src/yetty/ydraw.cpp
         src/yetty/widget-frame-renderer.cpp
     )
@@ -500,37 +496,27 @@ elseif(NOT EMSCRIPTEN)
     # Desktop with plugin support
     list(APPEND YETTY_SOURCES
         src/yetty/main.cpp
-        src/yetty/yetty.cpp
         src/yetty/new-yetty.cpp
-        src/yetty/input-handler.cpp
         src/yetty/config.cpp
         src/yetty/terminal.cpp
         src/yetty/terminal-view.cpp
         src/yetty/gpu-screen.cpp
-        src/yetty/local-terminal-backend.cpp
-        src/yetty/remote-terminal-backend.cpp
-        src/yetty/remote-terminal.cpp
-        src/yetty/shared-grid.cpp
         src/yetty/widget-factory.cpp
         src/yetty/osc-command.cpp
         src/yetty/custom-glyph-plugin.cpp
-        src/yetty/shader-manager.cpp
-        src/yetty/shader-glyph-renderer.cpp
         src/yetty/card-buffer-manager.cpp
         src/yetty/card-factory.cpp
         src/yetty/cards/plot-card.cpp
         src/yetty/cards/image-card.cpp
         # Core sources (previously in yetty_core)
-        src/yetty/webgpu-context.cpp
         src/yetty/font.cpp
         src/yetty/font-manager.cpp
         src/yetty/ms-msdf-font.cpp
         src/yetty/yetty-font-manager.cpp
         src/yetty/rich-text.cpp
-        src/yetty/emoji-atlas.cpp
         src/yetty/bm-font.cpp
         src/yetty/shader-font.cpp
-        src/yetty/shader-compiler.cpp
+        src/yetty/shader-manager.cpp
         src/yetty/ydraw.cpp
         src/yetty/widget-frame-renderer.cpp
         src/yetty/tile.cpp
@@ -791,35 +777,6 @@ else()
 
     # Plugin tester disabled - was using yetty_core which is removed
     # TODO: Re-enable when needed
-
-    #-------------------------------------------------------------------------
-    # yetty-server - Terminal multiplexer server (desktop only)
-    #-------------------------------------------------------------------------
-    add_executable(yetty-server
-        src/yetty/server/main.cpp
-        src/yetty/local-terminal-backend.cpp
-        src/yetty/shared-grid.cpp
-        src/yetty/grid.cpp
-    )
-    target_include_directories(yetty-server PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
-        ${CMAKE_CURRENT_SOURCE_DIR}/include
-    )
-    target_compile_definitions(yetty-server PRIVATE
-        CMAKE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
-        YETTY_SERVER_BUILD=1
-    )
-    target_link_libraries(yetty-server PRIVATE
-        vterm
-        uv_a
-        ytrace::ytrace
-        ${CMAKE_DL_LIBS}
-    )
-    # Linux: Link against util for forkpty, rt for shm_open
-    # macOS has these in libc, no separate libraries needed
-    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        target_link_libraries(yetty-server PRIVATE util rt)
-    endif()
 
     # Tools
     add_subdirectory(tools)

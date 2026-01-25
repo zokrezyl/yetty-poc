@@ -1,3 +1,5 @@
+#error "DEPRECATED: emoji-atlas.cpp is obsolete. BmFont handles emoji."
+
 #include "emoji-atlas.h"
 #include "emoji.h"
 #include <yetty/wgpu-compat.h>

@@ -1,3 +1,5 @@
+#error "DEPRECATED: SharedGrid is obsolete."
+
 #include "shared-grid.h"
 #include <ytrace/ytrace.hpp>
 #include <cstring>

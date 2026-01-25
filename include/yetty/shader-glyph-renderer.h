@@ -1,5 +1,7 @@
 #pragma once
 
+#error "DEPRECATED: shader-glyph-renderer.h is obsolete. Removed."
+
 #include <yetty/widget.h>
 #include <yetty/result.hpp>
 #include <webgpu/webgpu.h>

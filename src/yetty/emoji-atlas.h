@@ -1,5 +1,7 @@
 #pragma once
 
+#error "DEPRECATED: emoji-atlas.h is obsolete. BmFont handles emoji."
+
 #include <yetty/result.hpp>
 #include <yetty/webgpu-context.h>
 #include <cstdint>

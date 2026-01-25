@@ -1,7 +1,7 @@
 #pragma once
 
 #include <yetty/result.hpp>
-#include "../../src/yetty/base/base.h"
+#include <yetty/base/base.h>
 #include <memory>
 #include <vector>
 #include <webgpu/webgpu.h>
@@ -11,7 +11,6 @@ namespace yetty {
 using namespace yetty::base;
 
 class View;
-class WebGPUContext;
 
 struct Rect {
     float x = 0, y = 0, width = 0, height = 0;
@@ -29,7 +28,7 @@ public:
 
     virtual ~Tile() = default;
 
-    virtual Result<void> render(WGPURenderPassEncoder pass, WebGPUContext& ctx) = 0;
+    virtual Result<void> render(WGPURenderPassEncoder pass) = 0;
 
     Rect bounds() const { return _bounds; }
     virtual Result<void> setBounds(Rect r) { _bounds = r; return Ok(); }
@@ -51,7 +50,7 @@ public:
 
     static Result<Ptr> create(Orientation orientation);
 
-    Result<void> render(WGPURenderPassEncoder pass, WebGPUContext& ctx) override;
+    Result<void> render(WGPURenderPassEncoder pass) override;
     Result<void> setBounds(Rect r) override;
 
     Result<void> setFirst(Tile::Ptr tile);
@@ -80,7 +79,7 @@ public:
 
     static Result<Ptr> create();
 
-    Result<void> render(WGPURenderPassEncoder pass, WebGPUContext& ctx) override;
+    Result<void> render(WGPURenderPassEncoder pass) override;
     Result<void> setBounds(Rect r) override;
 
     // EventListener

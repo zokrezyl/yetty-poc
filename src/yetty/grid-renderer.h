@@ -1,5 +1,7 @@
 #pragma once
 
+#error "DEPRECATED: GridRenderer is obsolete. Use GPUScreen for rendering."
+
 #include "yetty/emoji-atlas.h"
 #include "yetty/grid.h"
 #include "yetty/gpu-screen.h"  // For Cell struct

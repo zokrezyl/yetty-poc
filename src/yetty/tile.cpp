@@ -1,6 +1,5 @@
 #include <yetty/tile.h>
 #include <yetty/view.h>
-#include <yetty/webgpu-context.h>
 
 namespace yetty {
 
@@ -47,14 +46,14 @@ Result<void> Split::setBounds(Rect r) {
     return Ok();
 }
 
-Result<void> Split::render(WGPURenderPassEncoder pass, WebGPUContext& ctx) {
+Result<void> Split::render(WGPURenderPassEncoder pass) {
     if (_first) {
-        if (auto r = _first->render(pass, ctx); !r) {
+        if (auto r = _first->render(pass); !r) {
             return Err<void>("Failed to render first tile", r);
         }
     }
     if (_second) {
-        if (auto r = _second->render(pass, ctx); !r) {
+        if (auto r = _second->render(pass); !r) {
             return Err<void>("Failed to render second tile", r);
         }
     }
@@ -204,9 +203,9 @@ Result<void> Pane::setBounds(Rect r) {
     return Ok();
 }
 
-Result<void> Pane::render(WGPURenderPassEncoder pass, WebGPUContext& ctx) {
+Result<void> Pane::render(WGPURenderPassEncoder pass) {
     if (auto* view = activeView()) {
-        return view->render(pass, ctx);
+        return view->render(pass);
     }
     return Ok();
 }
