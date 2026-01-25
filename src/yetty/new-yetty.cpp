@@ -10,6 +10,7 @@
 #include <glfw3webgpu.h>
 #include <array>
 #include <iostream>
+#include <csignal>
 #include <ytrace/ytrace.hpp>
 
 namespace yetty {
@@ -674,8 +675,17 @@ Result<bool> NewYettyImpl::onEvent(const base::Event& event) {
     return Ok(false);
 }
 
+static void signalHandler(int sig) {
+    yinfo("Received signal {}, shutting down...", sig);
+    base::EventLoop::instance()->stop();
+}
+
 int NewYettyImpl::run() noexcept {
     yinfo("Starting render loop...");
+
+    // Handle Ctrl+C from launching terminal
+    std::signal(SIGINT, signalHandler);
+    std::signal(SIGTERM, signalHandler);
 
 #if !YETTY_WEB && !defined(__ANDROID__)
     auto loop = base::EventLoop::instance();

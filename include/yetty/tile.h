@@ -16,6 +16,14 @@ struct Rect {
     float x = 0, y = 0, width = 0, height = 0;
 };
 
+// Frame information for rendering tile borders
+struct FrameInfo {
+    Rect rect;
+    float r = 0.4f, g = 0.4f, b = 0.4f, a = 1.0f;  // Default gray
+    float thickness = 1.0f;
+    bool focused = false;  // For highlight color
+};
+
 enum class Orientation {
     Horizontal,
     Vertical
@@ -29,6 +37,9 @@ public:
     virtual ~Tile() = default;
 
     virtual Result<void> render(WGPURenderPassEncoder pass) = 0;
+
+    // Collect frame rectangles for rendering (recursive)
+    virtual void collectFrames(std::vector<FrameInfo>& frames) const = 0;
 
     Rect bounds() const { return _bounds; }
     virtual Result<void> setBounds(Rect r) { _bounds = r; return Ok(); }
@@ -51,6 +62,7 @@ public:
     static Result<Ptr> create(Orientation orientation);
 
     Result<void> render(WGPURenderPassEncoder pass) override;
+    void collectFrames(std::vector<FrameInfo>& frames) const override;
     Result<void> setBounds(Rect r) override;
 
     Result<void> setFirst(Tile::Ptr tile);
@@ -80,6 +92,7 @@ public:
     static Result<Ptr> create();
 
     Result<void> render(WGPURenderPassEncoder pass) override;
+    void collectFrames(std::vector<FrameInfo>& frames) const override;
     Result<void> setBounds(Rect r) override;
 
     // EventListener
@@ -98,8 +111,6 @@ private:
 
     void registerForEvents();
     void handleFocusEvent(const Event& event);
-    bool handleMouseEvent(const Event& event);
-    bool handleKeyEvent(const Event& event);
 
     bool _focused = false;
     std::vector<std::shared_ptr<View>> _views;

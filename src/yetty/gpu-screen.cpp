@@ -122,16 +122,8 @@ public:
     // GPUScreen interface
     void write(const char* data, size_t len) override;
     void resize(uint32_t cols, uint32_t rows) override;
-    const Cell* getCellData() const override;
     uint32_t getCols() const override;
     uint32_t getRows() const override;
-    int getCursorCol() const override { return _cursorCol; }
-    int getCursorRow() const override { return _cursorRow; }
-    bool isCursorVisible() const override { return _cursorVisible; }
-    void scrollUp(int lines) override;
-    void scrollDown(int lines) override;
-    void scrollToBottom() override;
-    bool isScrolledBack() const override { return _scrollOffset > 0; }
     bool hasDamage() const override { return _hasDamage; }
     void clearDamage() override { _hasDamage = false; }
     void setOutputCallback(OutputCallback cb) override;
@@ -139,14 +131,24 @@ public:
     void setViewport(float x, float y, float width, float height) override;
     float getCellWidth() const override { return _baseCellWidth * _zoomLevel; }
     float getCellHeight() const override { return _baseCellHeight * _zoomLevel; }
-    void sendKey(uint32_t codepoint, int mods) override;
-    void sendSpecialKey(int key, int mods) override;
 
-    // Focus management (EventListener)
-    base::ObjectId id() const override { return _id; }
-    bool isFocused() const override { return _focused; }
-    void registerForFocus() override;
+    // EventListener interface
     Result<bool> onEvent(const base::Event& event) override;
+
+    // Internal methods (not in base class)
+    const Cell* getCellData() const;
+    int getCursorCol() const { return _cursorCol; }
+    int getCursorRow() const { return _cursorRow; }
+    bool isCursorVisible() const { return _cursorVisible; }
+    void scrollUp(int lines);
+    void scrollDown(int lines);
+    void scrollToBottom();
+    bool isScrolledBack() const { return _scrollOffset > 0; }
+    void sendKey(uint32_t codepoint, int mods);
+    void sendSpecialKey(int key, int mods);
+    base::ObjectId id() const { return _id; }
+    bool isFocused() const { return _focused; }
+    void registerForFocus();
 
     // VTerm state callbacks (static)
     static int onPutglyph(VTermGlyphInfo *info, VTermPos pos, void *user);
@@ -455,6 +457,7 @@ void GPUScreenImpl::resize(uint32_t cols, uint32_t rows) {
 }
 
 void GPUScreenImpl::setViewport(float x, float y, float width, float height) {
+  ydebug("GPUScreen {} setViewport({}, {}, {}, {})", _id, x, y, width, height);
   _viewportX = x;
   _viewportY = y;
   _viewportWidth = width;
@@ -785,6 +788,12 @@ void GPUScreenImpl::switchToScreen(bool alt) {
   _isAltScreen = alt;
 
   if (alt) {
+    // Allocate alt buffer if not yet allocated
+    if (_altBuffer.empty()) {
+      size_t numCells = static_cast<size_t>(_rows * _cols);
+      _altBuffer.resize(numCells);
+    }
+
     // Switch to alternate screen
     _visibleBuffer = &_altBuffer;
 
@@ -2400,13 +2409,19 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event& event) {
   if (event.type == base::Event::Type::MouseDown) {
     float mx = event.mouse.x;
     float my = event.mouse.y;
-    // Check if click is within our viewport
-    if (mx >= _viewportX && mx < _viewportX + _viewportWidth &&
-        my >= _viewportY && my < _viewportY + _viewportHeight) {
-      ydebug("GPUScreen {} clicked at ({}, {}), dispatching SetFocus", _id, mx, my);
-      auto loop = base::EventLoop::instance();
-      loop->dispatch(base::Event::focusEvent(_id));
-      return Ok(true);
+    ydebug("GPUScreen {} MouseDown at ({}, {}), viewport=({},{} {}x{})",
+           _id, mx, my, _viewportX, _viewportY, _viewportWidth, _viewportHeight);
+
+    // Only check bounds if viewport is set
+    if (_viewportWidth > 0 && _viewportHeight > 0) {
+      // Check if click is within our viewport
+      if (mx >= _viewportX && mx < _viewportX + _viewportWidth &&
+          my >= _viewportY && my < _viewportY + _viewportHeight) {
+        yinfo("GPUScreen {} clicked at ({}, {}), dispatching SetFocus", _id, mx, my);
+        auto loop = base::EventLoop::instance();
+        loop->dispatch(base::Event::focusEvent(_id));
+        return Ok(true);
+      }
     }
     return Ok(false);
   }
@@ -2432,7 +2447,8 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event& event) {
         yinfo("GPUScreen {} lost focus, deregistered from keyboard events", _id);
       }
     }
-    return Ok(true);
+    // Don't consume - all GPUScreens need to see SetFocus
+    return Ok(false);
   }
 
   // Handle keyboard events (only when focused)
@@ -2629,6 +2645,7 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
 
 Result<GPUScreen::Ptr> GPUScreen::create(const GPUContext& gpuContext) noexcept {
   auto screen = std::make_shared<GPUScreenImpl>(gpuContext);
+  screen->registerForFocus();
   return Ok<Ptr>(screen);
 }
 

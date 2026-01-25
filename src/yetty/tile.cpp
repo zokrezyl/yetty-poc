@@ -60,6 +60,26 @@ Result<void> Split::render(WGPURenderPassEncoder pass) {
     return Ok();
 }
 
+void Split::collectFrames(std::vector<FrameInfo>& frames) const {
+    // Add frame around the split container itself
+    FrameInfo splitFrame;
+    splitFrame.rect = _bounds;
+    splitFrame.r = 1.0f;  // Bright red for debugging
+    splitFrame.g = 0.0f;
+    splitFrame.b = 0.0f;
+    splitFrame.a = 1.0f;
+    splitFrame.thickness = 5.0f;
+    frames.push_back(splitFrame);
+
+    // Recurse to children
+    if (_first) {
+        _first->collectFrames(frames);
+    }
+    if (_second) {
+        _second->collectFrames(frames);
+    }
+}
+
 Result<void> Split::setFirst(Tile::Ptr tile) {
     _first = std::move(tile);
     if (_bounds.width > 0 && _bounds.height > 0) {
@@ -105,94 +125,25 @@ Result<Pane::Ptr> Pane::create() {
 }
 
 void Pane::registerForEvents() {
+    // Pane doesn't handle focus/keyboard - GPUScreen does that directly
+    // Pane only tracks focus state for visual feedback (frame highlighting)
     auto loop = EventLoop::instance();
     auto self = sharedAs<Pane>();
-
-    // All panes register for mouse events to detect clicks
-    loop->registerListener(Event::Type::MouseDown, self);
-
-    // All panes register for focus events to know when to activate/deactivate
     loop->registerListener(Event::Type::SetFocus, self);
-
-    // First pane created gets initial focus
-    static bool firstPane = true;
-    if (firstPane) {
-        firstPane = false;
-        _focused = true;
-        loop->registerListener(Event::Type::KeyDown, self);
-        loop->registerListener(Event::Type::KeyUp, self);
-        loop->registerListener(Event::Type::Char, self);
-    }
 }
 
 Result<bool> Pane::onEvent(const Event& event) {
-    switch (event.type) {
-        case Event::Type::SetFocus:
-            handleFocusEvent(event);
-            return Ok(false); // Don't consume - all panes need to see this
-
-        case Event::Type::MouseDown:
-            return Ok(handleMouseEvent(event));
-
-        case Event::Type::KeyDown:
-        case Event::Type::KeyUp:
-        case Event::Type::Char:
-            return Ok(handleKeyEvent(event));
-
-        default:
-            return Ok(false);
+    // Pane only tracks focus state for visual feedback
+    if (event.type == Event::Type::SetFocus) {
+        handleFocusEvent(event);
     }
+    return Ok(false); // Never consume - GPUScreen handles focus/keyboard
 }
 
 void Pane::handleFocusEvent(const Event& event) {
-    auto loop = EventLoop::instance();
-    auto self = sharedAs<Pane>();
-
-    bool shouldBeFocused = (event.setFocus.objectId == id());
-
-    if (shouldBeFocused && !_focused) {
-        // Gaining focus - register for keyboard
-        _focused = true;
-        loop->registerListener(Event::Type::KeyDown, self);
-        loop->registerListener(Event::Type::KeyUp, self);
-        loop->registerListener(Event::Type::Char, self);
-    } else if (!shouldBeFocused && _focused) {
-        // Losing focus - deregister from keyboard
-        _focused = false;
-        loop->deregisterListener(Event::Type::KeyDown, self);
-        loop->deregisterListener(Event::Type::KeyUp, self);
-        loop->deregisterListener(Event::Type::Char, self);
-    }
-}
-
-bool Pane::handleMouseEvent(const Event& event) {
-    if (!containsPoint(event.mouse.x, event.mouse.y)) {
-        return false;
-    }
-
-    // Click in our bounds - broadcast focus event
-    auto loop = EventLoop::instance();
-    loop->broadcast(Event::focusEvent(id()));
-
-    // Forward to view with local coordinates
-    if (auto* view = activeView()) {
-        Event localEvent = event;
-        localEvent.mouse.x = event.mouse.x - _bounds.x;
-        localEvent.mouse.y = event.mouse.y - _bounds.y;
-        view->onEvent(localEvent);
-    }
-
-    return true;
-}
-
-bool Pane::handleKeyEvent(const Event& event) {
-    if (!_focused) return false;
-
-    auto* view = activeView();
-    if (!view) return false;
-
-    view->onEvent(event);
-    return true;
+    // Just track focus state for visual feedback (frame highlighting)
+    // Pane doesn't know GPUScreen's ID - focus tracking is for future use
+    (void)event;
 }
 
 Result<void> Pane::setBounds(Rect r) {
@@ -208,6 +159,30 @@ Result<void> Pane::render(WGPURenderPassEncoder pass) {
         return view->render(pass);
     }
     return Ok();
+}
+
+void Pane::collectFrames(std::vector<FrameInfo>& frames) const {
+    FrameInfo paneFrame;
+    paneFrame.rect = _bounds;
+    paneFrame.focused = _focused;
+
+    if (_focused) {
+        // Focused pane: bright yellow border
+        paneFrame.r = 1.0f;
+        paneFrame.g = 1.0f;
+        paneFrame.b = 0.0f;
+        paneFrame.a = 1.0f;
+        paneFrame.thickness = 5.0f;
+    } else {
+        // Unfocused pane: bright green border
+        paneFrame.r = 0.0f;
+        paneFrame.g = 1.0f;
+        paneFrame.b = 0.0f;
+        paneFrame.a = 1.0f;
+        paneFrame.thickness = 4.0f;
+    }
+
+    frames.push_back(paneFrame);
 }
 
 Result<void> Pane::pushView(std::shared_ptr<View> view) {

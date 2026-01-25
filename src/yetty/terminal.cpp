@@ -112,18 +112,6 @@ public:
         return _gpuScreen ? _gpuScreen->getCellHeight() : 20.0f;
     }
 
-    void sendKey(uint32_t codepoint, int mods) override {
-        if (_gpuScreen) {
-            _gpuScreen->sendKey(codepoint, mods);
-        }
-    }
-
-    void sendSpecialKey(int key, int mods) override {
-        if (_gpuScreen) {
-            _gpuScreen->sendSpecialKey(key, mods);
-        }
-    }
-
     Result<bool> onEvent(const base::Event& event) override {
 #if !YETTY_WEB && !defined(__ANDROID__)
         if (event.type == base::Event::Type::PollReadable && event.poll.fd == _ptyMaster) {
@@ -198,11 +186,6 @@ private:
         loop->configPoll(_pollId, _ptyMaster);
         loop->registerPollListener(_pollId, sharedAs<base::EventListener>());
         loop->startPoll(_pollId);
-
-        // Register GPUScreen for focus events (keyboard events are handled by GPUScreen)
-        if (_gpuScreen) {
-            _gpuScreen->registerForFocus();
-        }
 
         _running = true;
         yinfo("Terminal started: PTY fd={}, PID={}", _ptyMaster, _childPid);

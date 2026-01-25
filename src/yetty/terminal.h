@@ -33,10 +33,6 @@ public:
     virtual float getCellWidth() const = 0;
     virtual float getCellHeight() const = 0;
 
-    // Input from keyboard
-    virtual void sendKey(uint32_t codepoint, int mods) = 0;
-    virtual void sendSpecialKey(int key, int mods) = 0;
-
 protected:
     Terminal() = default;
 };
