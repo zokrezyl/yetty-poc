@@ -70,6 +70,19 @@ enum class SDFType : uint32_t {
     Bezier3 = 5,    // Cubic bezier
     Ellipse = 6,
     Arc = 7,
+    RoundedBox = 8, // Box with per-corner radii
+    Rhombus = 9,
+    Pentagon = 10,
+    Hexagon = 11,
+    Star = 12,
+    Pie = 13,
+    Ring = 14,
+    Heart = 15,
+    Cross = 16,
+    RoundedX = 17,
+    Capsule = 18,
+    Moon = 19,
+    Egg = 20,
     // Text glyph (handled specially)
     TextGlyph = 64
 };

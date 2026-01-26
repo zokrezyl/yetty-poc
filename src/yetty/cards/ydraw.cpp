@@ -118,6 +118,120 @@ static void computeAABB(SDFPrimitive& prim) {
             prim.aabbMaxY = prim.params[1] + r;
             break;
         }
+        case SDFType::RoundedBox: {
+            // params: [cx, cy, halfW, halfH, r0, r1, r2, r3]
+            float maxR = std::max({prim.params[4], prim.params[5],
+                                   prim.params[6], prim.params[7]});
+            float hw = prim.params[2] + maxR + expand;
+            float hh = prim.params[3] + maxR + expand;
+            prim.aabbMinX = prim.params[0] - hw;
+            prim.aabbMinY = prim.params[1] - hh;
+            prim.aabbMaxX = prim.params[0] + hw;
+            prim.aabbMaxY = prim.params[1] + hh;
+            break;
+        }
+        case SDFType::Rhombus: {
+            // params: [cx, cy, bx, by] - half diagonals
+            float hw = prim.params[2] + expand;
+            float hh = prim.params[3] + expand;
+            prim.aabbMinX = prim.params[0] - hw;
+            prim.aabbMinY = prim.params[1] - hh;
+            prim.aabbMaxX = prim.params[0] + hw;
+            prim.aabbMaxY = prim.params[1] + hh;
+            break;
+        }
+        case SDFType::Pentagon:
+        case SDFType::Hexagon: {
+            // params: [cx, cy, r]
+            float r = prim.params[2] + expand;
+            prim.aabbMinX = prim.params[0] - r;
+            prim.aabbMinY = prim.params[1] - r;
+            prim.aabbMaxX = prim.params[0] + r;
+            prim.aabbMaxY = prim.params[1] + r;
+            break;
+        }
+        case SDFType::Star: {
+            // params: [cx, cy, r, n, m]
+            float r = prim.params[2] + expand;
+            prim.aabbMinX = prim.params[0] - r;
+            prim.aabbMinY = prim.params[1] - r;
+            prim.aabbMaxX = prim.params[0] + r;
+            prim.aabbMaxY = prim.params[1] + r;
+            break;
+        }
+        case SDFType::Pie: {
+            // params: [cx, cy, sin, cos, r]
+            float r = prim.params[4] + expand;
+            prim.aabbMinX = prim.params[0] - r;
+            prim.aabbMinY = prim.params[1] - r;
+            prim.aabbMaxX = prim.params[0] + r;
+            prim.aabbMaxY = prim.params[1] + r;
+            break;
+        }
+        case SDFType::Ring: {
+            // params: [cx, cy, nx, ny, r, th]
+            float r = prim.params[4] + prim.params[5] + expand;
+            prim.aabbMinX = prim.params[0] - r;
+            prim.aabbMinY = prim.params[1] - r;
+            prim.aabbMaxX = prim.params[0] + r;
+            prim.aabbMaxY = prim.params[1] + r;
+            break;
+        }
+        case SDFType::Heart: {
+            // params: [cx, cy, scale]
+            float s = prim.params[2] * 1.5f + expand;  // Heart extends ~1.5 units
+            prim.aabbMinX = prim.params[0] - s;
+            prim.aabbMinY = prim.params[1] - s;
+            prim.aabbMaxX = prim.params[0] + s;
+            prim.aabbMaxY = prim.params[1] + s;
+            break;
+        }
+        case SDFType::Cross: {
+            // params: [cx, cy, bx, by, r]
+            float hw = std::max(prim.params[2], prim.params[3]) + expand;
+            float hh = hw;
+            prim.aabbMinX = prim.params[0] - hw;
+            prim.aabbMinY = prim.params[1] - hh;
+            prim.aabbMaxX = prim.params[0] + hw;
+            prim.aabbMaxY = prim.params[1] + hh;
+            break;
+        }
+        case SDFType::RoundedX: {
+            // params: [cx, cy, w, r]
+            float s = prim.params[2] + prim.params[3] + expand;
+            prim.aabbMinX = prim.params[0] - s;
+            prim.aabbMinY = prim.params[1] - s;
+            prim.aabbMaxX = prim.params[0] + s;
+            prim.aabbMaxY = prim.params[1] + s;
+            break;
+        }
+        case SDFType::Capsule: {
+            // params: [x0, y0, x1, y1, r]
+            float r = prim.params[4] + expand;
+            prim.aabbMinX = std::min(prim.params[0], prim.params[2]) - r;
+            prim.aabbMinY = std::min(prim.params[1], prim.params[3]) - r;
+            prim.aabbMaxX = std::max(prim.params[0], prim.params[2]) + r;
+            prim.aabbMaxY = std::max(prim.params[1], prim.params[3]) + r;
+            break;
+        }
+        case SDFType::Moon: {
+            // params: [cx, cy, d, ra, rb]
+            float r = std::max(prim.params[3], prim.params[4]) + expand;
+            prim.aabbMinX = prim.params[0] - r;
+            prim.aabbMinY = prim.params[1] - r;
+            prim.aabbMaxX = prim.params[0] + r + prim.params[2];
+            prim.aabbMaxY = prim.params[1] + r;
+            break;
+        }
+        case SDFType::Egg: {
+            // params: [cx, cy, ra, rb]
+            float r = std::max(prim.params[2], prim.params[3]) + expand;
+            prim.aabbMinX = prim.params[0] - r;
+            prim.aabbMinY = prim.params[1] - r;
+            prim.aabbMaxX = prim.params[0] + r;
+            prim.aabbMaxY = prim.params[1] + r + prim.params[2];
+            break;
+        }
         default:
             // Unknown type - use large bounds
             prim.aabbMinX = -1e10f;
@@ -533,45 +647,55 @@ private:
     uint32_t buildBVHRecursive(uint32_t start, uint32_t end) {
         uint32_t nodeIndex = static_cast<uint32_t>(_bvhNodes.size());
         _bvhNodes.push_back(BVHNode{});
-        BVHNode& node = _bvhNodes[nodeIndex];
+        // NOTE: Do NOT take a reference here - recursive calls may reallocate the vector!
 
         uint32_t count = end - start;
 
         if (count <= 4) {
-            // Leaf node
-            node.primIndex = start;
-            node.primCount = count;
-            node.leftChild = 0xFFFFFFFF;
-            node.rightChild = 0xFFFFFFFF;
+            // Leaf node - safe to access by index since no recursive calls
+            _bvhNodes[nodeIndex].primIndex = start;
+            _bvhNodes[nodeIndex].primCount = count;
+            _bvhNodes[nodeIndex].leftChild = 0xFFFFFFFF;
+            _bvhNodes[nodeIndex].rightChild = 0xFFFFFFFF;
 
             // Compute AABB from primitives
-            node.aabbMinX = 1e10f;
-            node.aabbMinY = 1e10f;
-            node.aabbMaxX = -1e10f;
-            node.aabbMaxY = -1e10f;
+            float aabbMinX = 1e10f;
+            float aabbMinY = 1e10f;
+            float aabbMaxX = -1e10f;
+            float aabbMaxY = -1e10f;
 
             for (uint32_t i = start; i < end; i++) {
                 const auto& prim = _primitives[_sortedIndices[i]];
-                node.aabbMinX = std::min(node.aabbMinX, prim.aabbMinX);
-                node.aabbMinY = std::min(node.aabbMinY, prim.aabbMinY);
-                node.aabbMaxX = std::max(node.aabbMaxX, prim.aabbMaxX);
-                node.aabbMaxY = std::max(node.aabbMaxY, prim.aabbMaxY);
+                aabbMinX = std::min(aabbMinX, prim.aabbMinX);
+                aabbMinY = std::min(aabbMinY, prim.aabbMinY);
+                aabbMaxX = std::max(aabbMaxX, prim.aabbMaxX);
+                aabbMaxY = std::max(aabbMaxY, prim.aabbMaxY);
             }
+
+            _bvhNodes[nodeIndex].aabbMinX = aabbMinX;
+            _bvhNodes[nodeIndex].aabbMinY = aabbMinY;
+            _bvhNodes[nodeIndex].aabbMaxX = aabbMaxX;
+            _bvhNodes[nodeIndex].aabbMaxY = aabbMaxY;
         } else {
             // Internal node
             uint32_t mid = start + count / 2;
 
-            node.leftChild = buildBVHRecursive(start, mid);
-            node.rightChild = buildBVHRecursive(mid, end);
-            node.primCount = 0;
+            // Do recursive calls first - they may reallocate _bvhNodes
+            uint32_t leftChild = buildBVHRecursive(start, mid);
+            uint32_t rightChild = buildBVHRecursive(mid, end);
+
+            // Now safe to access _bvhNodes[nodeIndex] - no more recursive calls
+            _bvhNodes[nodeIndex].leftChild = leftChild;
+            _bvhNodes[nodeIndex].rightChild = rightChild;
+            _bvhNodes[nodeIndex].primCount = 0;
 
             // AABB is union of children
-            const auto& left = _bvhNodes[node.leftChild];
-            const auto& right = _bvhNodes[node.rightChild];
-            node.aabbMinX = std::min(left.aabbMinX, right.aabbMinX);
-            node.aabbMinY = std::min(left.aabbMinY, right.aabbMinY);
-            node.aabbMaxX = std::max(left.aabbMaxX, right.aabbMaxX);
-            node.aabbMaxY = std::max(left.aabbMaxY, right.aabbMaxY);
+            const auto& left = _bvhNodes[leftChild];
+            const auto& right = _bvhNodes[rightChild];
+            _bvhNodes[nodeIndex].aabbMinX = std::min(left.aabbMinX, right.aabbMinX);
+            _bvhNodes[nodeIndex].aabbMinY = std::min(left.aabbMinY, right.aabbMinY);
+            _bvhNodes[nodeIndex].aabbMaxX = std::max(left.aabbMaxX, right.aabbMaxX);
+            _bvhNodes[nodeIndex].aabbMaxY = std::max(left.aabbMaxY, right.aabbMaxY);
         }
 
         return nodeIndex;

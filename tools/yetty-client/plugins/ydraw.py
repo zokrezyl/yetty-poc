@@ -15,6 +15,19 @@ SDF_TYPE_BEZIER2 = 4
 SDF_TYPE_BEZIER3 = 5
 SDF_TYPE_ELLIPSE = 6
 SDF_TYPE_ARC = 7
+SDF_TYPE_ROUNDED_BOX = 8
+SDF_TYPE_RHOMBUS = 9
+SDF_TYPE_PENTAGON = 10
+SDF_TYPE_HEXAGON = 11
+SDF_TYPE_STAR = 12
+SDF_TYPE_PIE = 13
+SDF_TYPE_RING = 14
+SDF_TYPE_HEART = 15
+SDF_TYPE_CROSS = 16
+SDF_TYPE_ROUNDED_X = 17
+SDF_TYPE_CAPSULE = 18
+SDF_TYPE_MOON = 19
+SDF_TYPE_EGG = 20
 
 
 def parse_color(color_str: str) -> int:
@@ -151,6 +164,74 @@ def compute_aabb(prim_type: int, params: List[float], stroke_width: float, corne
         r = max(params[4], params[5]) + expand
         return (params[0] - r, params[1] - r, params[0] + r, params[1] + r)
 
+    elif prim_type == SDF_TYPE_ROUNDED_BOX:
+        # params: [cx, cy, halfW, halfH, r0, r1, r2, r3]
+        max_r = max(params[4], params[5], params[6], params[7]) if len(params) > 7 else 0
+        hw = params[2] + max_r + expand
+        hh = params[3] + max_r + expand
+        return (params[0] - hw, params[1] - hh, params[0] + hw, params[1] + hh)
+
+    elif prim_type == SDF_TYPE_RHOMBUS:
+        # params: [cx, cy, bx, by]
+        hw = params[2] + expand
+        hh = params[3] + expand
+        return (params[0] - hw, params[1] - hh, params[0] + hw, params[1] + hh)
+
+    elif prim_type in (SDF_TYPE_PENTAGON, SDF_TYPE_HEXAGON):
+        # params: [cx, cy, r]
+        r = params[2] + expand
+        return (params[0] - r, params[1] - r, params[0] + r, params[1] + r)
+
+    elif prim_type == SDF_TYPE_STAR:
+        # params: [cx, cy, r, n, m]
+        r = params[2] + expand
+        return (params[0] - r, params[1] - r, params[0] + r, params[1] + r)
+
+    elif prim_type == SDF_TYPE_PIE:
+        # params: [cx, cy, sin, cos, r]
+        r = params[4] + expand
+        return (params[0] - r, params[1] - r, params[0] + r, params[1] + r)
+
+    elif prim_type == SDF_TYPE_RING:
+        # params: [cx, cy, nx, ny, r, th]
+        r = params[4] + params[5] + expand
+        return (params[0] - r, params[1] - r, params[0] + r, params[1] + r)
+
+    elif prim_type == SDF_TYPE_HEART:
+        # params: [cx, cy, scale]
+        s = params[2] * 1.5 + expand
+        return (params[0] - s, params[1] - s, params[0] + s, params[1] + s)
+
+    elif prim_type == SDF_TYPE_CROSS:
+        # params: [cx, cy, bx, by, r]
+        hw = max(params[2], params[3]) + expand
+        return (params[0] - hw, params[1] - hw, params[0] + hw, params[1] + hw)
+
+    elif prim_type == SDF_TYPE_ROUNDED_X:
+        # params: [cx, cy, w, r]
+        s = params[2] + params[3] + expand
+        return (params[0] - s, params[1] - s, params[0] + s, params[1] + s)
+
+    elif prim_type == SDF_TYPE_CAPSULE:
+        # params: [x0, y0, x1, y1, r]
+        r = params[4] + expand
+        return (
+            min(params[0], params[2]) - r,
+            min(params[1], params[3]) - r,
+            max(params[0], params[2]) + r,
+            max(params[1], params[3]) + r
+        )
+
+    elif prim_type == SDF_TYPE_MOON:
+        # params: [cx, cy, d, ra, rb]
+        r = max(params[3], params[4]) + expand
+        return (params[0] - r, params[1] - r, params[0] + r + params[2], params[1] + r)
+
+    elif prim_type == SDF_TYPE_EGG:
+        # params: [cx, cy, ra, rb]
+        r = max(params[2], params[3]) + expand
+        return (params[0] - r, params[1] - r, params[0] + r, params[1] + r + params[2])
+
     else:
         # Unknown - use large bounds
         return (-1e10, -1e10, 1e10, 1e10)
@@ -235,6 +316,167 @@ def parse_primitive(prim_dict: Dict[str, Any], layer: int) -> bytes:
         else:
             stroke_color = parse_color('#ffffff')
         stroke_width = b.get('stroke-width', 1)
+
+    elif 'arc' in prim_dict:
+        prim_type = SDF_TYPE_ARC
+        a = prim_dict['arc']
+        pos = a.get('position', [0, 0])
+        import math
+        angle = a.get('angle', 90) * math.pi / 180  # Convert degrees to radians
+        ra = a.get('radius', 20)
+        rb = a.get('thickness', 2)
+        params = [pos[0], pos[1], math.sin(angle), math.cos(angle), ra, rb]
+        if 'stroke' in a:
+            stroke_color = parse_color(a['stroke'])
+        else:
+            stroke_color = parse_color('#ffffff')
+        stroke_width = a.get('stroke-width', 0)
+        fill_color = parse_color(a.get('fill', '#ffffff'))
+
+    elif 'pentagon' in prim_dict:
+        prim_type = SDF_TYPE_PENTAGON
+        p = prim_dict['pentagon']
+        pos = p.get('position', [0, 0])
+        r = p.get('radius', 20)
+        params = [pos[0], pos[1], r]
+        fill_color = parse_color(p.get('fill', '#ffffff'))
+        if 'stroke' in p:
+            stroke_color = parse_color(p['stroke'])
+        stroke_width = p.get('stroke-width', 0)
+
+    elif 'hexagon' in prim_dict:
+        prim_type = SDF_TYPE_HEXAGON
+        h = prim_dict['hexagon']
+        pos = h.get('position', [0, 0])
+        r = h.get('radius', 20)
+        params = [pos[0], pos[1], r]
+        fill_color = parse_color(h.get('fill', '#ffffff'))
+        if 'stroke' in h:
+            stroke_color = parse_color(h['stroke'])
+        stroke_width = h.get('stroke-width', 0)
+
+    elif 'star' in prim_dict:
+        prim_type = SDF_TYPE_STAR
+        s = prim_dict['star']
+        pos = s.get('position', [0, 0])
+        r = s.get('radius', 20)
+        n = float(s.get('points', 5))  # Number of points
+        m = float(s.get('inner', 2.5))  # Inner ratio (pointiness)
+        params = [pos[0], pos[1], r, n, m]
+        fill_color = parse_color(s.get('fill', '#ffffff'))
+        if 'stroke' in s:
+            stroke_color = parse_color(s['stroke'])
+        stroke_width = s.get('stroke-width', 0)
+
+    elif 'pie' in prim_dict:
+        prim_type = SDF_TYPE_PIE
+        p = prim_dict['pie']
+        pos = p.get('position', [0, 0])
+        import math
+        angle = p.get('angle', 45) * math.pi / 180
+        r = p.get('radius', 20)
+        params = [pos[0], pos[1], math.sin(angle), math.cos(angle), r]
+        fill_color = parse_color(p.get('fill', '#ffffff'))
+        if 'stroke' in p:
+            stroke_color = parse_color(p['stroke'])
+        stroke_width = p.get('stroke-width', 0)
+
+    elif 'ring' in prim_dict:
+        prim_type = SDF_TYPE_RING
+        rg = prim_dict['ring']
+        pos = rg.get('position', [0, 0])
+        import math
+        angle = rg.get('angle', 0) * math.pi / 180
+        r = rg.get('radius', 20)
+        th = rg.get('thickness', 4)
+        params = [pos[0], pos[1], math.sin(angle), math.cos(angle), r, th]
+        fill_color = parse_color(rg.get('fill', '#ffffff'))
+        if 'stroke' in rg:
+            stroke_color = parse_color(rg['stroke'])
+        stroke_width = rg.get('stroke-width', 0)
+
+    elif 'heart' in prim_dict:
+        prim_type = SDF_TYPE_HEART
+        h = prim_dict['heart']
+        pos = h.get('position', [0, 0])
+        scale = h.get('scale', 20)
+        params = [pos[0], pos[1], scale]
+        fill_color = parse_color(h.get('fill', '#ff0000'))
+        if 'stroke' in h:
+            stroke_color = parse_color(h['stroke'])
+        stroke_width = h.get('stroke-width', 0)
+
+    elif 'cross' in prim_dict:
+        prim_type = SDF_TYPE_CROSS
+        c = prim_dict['cross']
+        pos = c.get('position', [0, 0])
+        size = c.get('size', [20, 5])
+        r = c.get('round', 0)
+        params = [pos[0], pos[1], size[0], size[1], r]
+        fill_color = parse_color(c.get('fill', '#ffffff'))
+        if 'stroke' in c:
+            stroke_color = parse_color(c['stroke'])
+        stroke_width = c.get('stroke-width', 0)
+
+    elif 'rounded_x' in prim_dict:
+        prim_type = SDF_TYPE_ROUNDED_X
+        x = prim_dict['rounded_x']
+        pos = x.get('position', [0, 0])
+        w = x.get('width', 20)
+        r = x.get('round', 3)
+        params = [pos[0], pos[1], w, r]
+        fill_color = parse_color(x.get('fill', '#ffffff'))
+        if 'stroke' in x:
+            stroke_color = parse_color(x['stroke'])
+        stroke_width = x.get('stroke-width', 0)
+
+    elif 'capsule' in prim_dict:
+        prim_type = SDF_TYPE_CAPSULE
+        c = prim_dict['capsule']
+        p0 = c.get('from', [0, 0])
+        p1 = c.get('to', [100, 0])
+        r = c.get('radius', 10)
+        params = [p0[0], p0[1], p1[0], p1[1], r]
+        fill_color = parse_color(c.get('fill', '#ffffff'))
+        if 'stroke' in c:
+            stroke_color = parse_color(c['stroke'])
+        stroke_width = c.get('stroke-width', 0)
+
+    elif 'rhombus' in prim_dict:
+        prim_type = SDF_TYPE_RHOMBUS
+        r = prim_dict['rhombus']
+        pos = r.get('position', [0, 0])
+        size = r.get('size', [20, 30])  # half-diagonals
+        params = [pos[0], pos[1], size[0], size[1]]
+        fill_color = parse_color(r.get('fill', '#ffffff'))
+        if 'stroke' in r:
+            stroke_color = parse_color(r['stroke'])
+        stroke_width = r.get('stroke-width', 0)
+
+    elif 'moon' in prim_dict:
+        prim_type = SDF_TYPE_MOON
+        m = prim_dict['moon']
+        pos = m.get('position', [0, 0])
+        d = m.get('distance', 10)
+        ra = m.get('radius_outer', 20)
+        rb = m.get('radius_inner', 15)
+        params = [pos[0], pos[1], d, ra, rb]
+        fill_color = parse_color(m.get('fill', '#ffffff'))
+        if 'stroke' in m:
+            stroke_color = parse_color(m['stroke'])
+        stroke_width = m.get('stroke-width', 0)
+
+    elif 'egg' in prim_dict:
+        prim_type = SDF_TYPE_EGG
+        e = prim_dict['egg']
+        pos = e.get('position', [0, 0])
+        ra = e.get('radius_bottom', 20)
+        rb = e.get('radius_top', 10)
+        params = [pos[0], pos[1], ra, rb]
+        fill_color = parse_color(e.get('fill', '#ffffff'))
+        if 'stroke' in e:
+            stroke_color = parse_color(e['stroke'])
+        stroke_width = e.get('stroke-width', 0)
 
     else:
         return b''  # Unknown primitive type

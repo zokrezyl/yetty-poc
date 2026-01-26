@@ -21,6 +21,7 @@ BUILD_DIR_DESKTOP_WGPU_DEBUG := build-desktop-wgpu-debug
 BUILD_DIR_DESKTOP_WGPU_RELEASE := build-desktop-wgpu-release
 BUILD_DIR_DESKTOP_DAWN_DEBUG := build-desktop-dawn-debug
 BUILD_DIR_DESKTOP_DAWN_RELEASE := build-desktop-dawn-release
+BUILD_DIR_DESKTOP_DAWN_ASAN := build-desktop-dawn-asan
 
 BUILD_DIR_ANDROID_WGPU_DEBUG := build-android-wgpu-debug
 BUILD_DIR_ANDROID_WGPU_RELEASE := build-android-wgpu-release
@@ -38,6 +39,7 @@ CMAKE_RELEASE := -DCMAKE_BUILD_TYPE=Release
 CMAKE_DEBUG := -DCMAKE_BUILD_TYPE=Debug
 CMAKE_BACKEND_WGPU := -DWEBGPU_BACKEND=wgpu
 CMAKE_BACKEND_DAWN := -DWEBGPU_BACKEND=dawn
+CMAKE_ASAN := -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer -g" -DCMAKE_C_FLAGS="-fsanitize=address -fno-omit-frame-pointer -g" -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address"
 
 # Gradle options (path relative to build-tools/android/)
 GRADLE_OPTS_WGPU_DEBUG := --project-cache-dir=../../$(BUILD_DIR_ANDROID_WGPU_DEBUG)/.gradle
@@ -120,6 +122,23 @@ test-desktop-dawn-debug: ## Run desktop dawn debug tests
 	@if [ ! -f "$(BUILD_DIR_DESKTOP_DAWN_DEBUG)/build.ninja" ]; then $(MAKE) config-desktop-dawn-debug; fi
 	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_DESKTOP_DAWN_DEBUG) --target yetty_tests --parallel
 	./$(BUILD_DIR_DESKTOP_DAWN_DEBUG)/test/ut/yetty_tests
+
+#=============================================================================
+# Desktop - dawn backend with ASAN
+#=============================================================================
+
+.PHONY: config-desktop-dawn-asan
+config-desktop-dawn-asan: ## Configure desktop dawn ASAN build
+	PATH="$(SYSTEM_PATH)" $(CMAKE) -B $(BUILD_DIR_DESKTOP_DAWN_ASAN) $(CMAKE_GENERATOR) $(CMAKE_DEBUG) $(CMAKE_BACKEND_DAWN) $(CMAKE_ASAN)
+
+.PHONY: build-desktop-dawn-asan
+build-desktop-dawn-asan: ## Build desktop dawn ASAN
+	@if [ ! -f "$(BUILD_DIR_DESKTOP_DAWN_ASAN)/build.ninja" ]; then $(MAKE) config-desktop-dawn-asan; fi
+	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_DESKTOP_DAWN_ASAN) --parallel
+
+.PHONY: run-desktop-dawn-asan
+run-desktop-dawn-asan: build-desktop-dawn-asan ## Run desktop dawn ASAN build
+	./$(BUILD_DIR_DESKTOP_DAWN_ASAN)/yetty
 
 #=============================================================================
 # Android - wgpu backend
@@ -233,6 +252,7 @@ run-webasm-release: build-webasm-release ## Serve WebAssembly release build
 clean: ## Clean all build directories
 	rm -rf $(BUILD_DIR_DESKTOP_WGPU_DEBUG) $(BUILD_DIR_DESKTOP_WGPU_RELEASE) \
 	       $(BUILD_DIR_DESKTOP_DAWN_DEBUG) $(BUILD_DIR_DESKTOP_DAWN_RELEASE) \
+	       $(BUILD_DIR_DESKTOP_DAWN_ASAN) \
 	       $(BUILD_DIR_ANDROID_WGPU_DEBUG) $(BUILD_DIR_ANDROID_WGPU_RELEASE) \
 	       $(BUILD_DIR_ANDROID_DAWN_DEBUG) $(BUILD_DIR_ANDROID_DAWN_RELEASE) \
 	       $(BUILD_DIR_WEBASM_DEBUG) $(BUILD_DIR_WEBASM_RELEASE) \
