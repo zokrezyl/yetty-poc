@@ -7,6 +7,7 @@
 #include <yetty/shader-manager.h>
 #include <yetty/card-buffer-manager.h>
 #include <yetty/card-factory.h>
+#include <yetty/imgui-manager.h>
 #include <yetty/wgpu-compat.h>
 #include <yetty/base/base.h>
 #include <glfw3webgpu.h>
@@ -153,6 +154,14 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     _yettyContext.gpu = _gpuContext;
     _yettyContext.shaderManager = shaderMgr;
     _yettyContext.fontManager = fontMgr;
+
+    // Create ImguiManager
+    auto imguiMgrResult = ImguiManager::create(_yettyContext);
+    if (!imguiMgrResult) {
+        return Err<void>("Failed to create ImguiManager", imguiMgrResult);
+    }
+    _yettyContext.imguiManager = *imguiMgrResult;
+    _yettyContext.imguiManager->updateDisplaySize(_surfaceWidth, _surfaceHeight);
 
 #if !YETTY_WEB && !defined(__ANDROID__)
     // Create CardFactory (after CardBufferManager is set in initSharedResources)
@@ -799,6 +808,10 @@ void YettyImpl::mainLoopIteration() noexcept {
         if (_activeWorkspace) {
             _activeWorkspace->render(pass);
         }
+        // Render ImGui (context menus, etc.) after main content
+        if (_yettyContext.imguiManager) {
+            _yettyContext.imguiManager->render(pass);
+        }
         wgpuRenderPassEncoderEnd(pass);
         wgpuRenderPassEncoderRelease(pass);
     }
@@ -832,6 +845,11 @@ void YettyImpl::handleResize(int newWidth, int newHeight) noexcept {
 
     if (_activeWorkspace) {
         _activeWorkspace->resize(static_cast<float>(newWidth), static_cast<float>(newHeight));
+    }
+
+    if (_yettyContext.imguiManager) {
+        _yettyContext.imguiManager->updateDisplaySize(
+            static_cast<uint32_t>(newWidth), static_cast<uint32_t>(newHeight));
     }
 }
 

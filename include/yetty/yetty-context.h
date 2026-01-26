@@ -5,6 +5,7 @@
 #include <yetty/font-manager.h>
 #include <yetty/card-buffer-manager.h>
 #include <yetty/card-factory.h>
+#include <yetty/imgui-manager.h>
 
 namespace yetty {
 
@@ -19,6 +20,7 @@ struct YettyContext {
     FontManager::Ptr fontManager;
     CardBufferManager::Ptr cardBufferManager;
     CardFactory::Ptr cardFactory;
+    ImguiManager::Ptr imguiManager;
 };
 
 } // namespace yetty

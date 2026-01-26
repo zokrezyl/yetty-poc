@@ -2,6 +2,8 @@
 
 #include "types.h"
 #include <cstdint>
+#include <cstring>
+#include <string>
 
 namespace yetty {
 namespace base {
@@ -25,7 +27,9 @@ struct Event {
         // Poll
         PollReadable,
         // Timer
-        Timer
+        Timer,
+        // Context menu
+        ContextMenuAction
     };
 
     struct KeyEvent {
@@ -69,6 +73,13 @@ struct Event {
         int timerId;
     };
 
+    struct ContextMenuActionEvent {
+        ObjectId objectId;
+        int row;
+        int col;
+        char action[32];
+    };
+
     Type type = Type::None;
 
     union {
@@ -80,6 +91,7 @@ struct Event {
         ResizeEvent resize;
         PollEvent poll;
         TimerEvent timer;
+        ContextMenuActionEvent ctxMenu;
     };
 
     // Factory methods
@@ -164,6 +176,18 @@ struct Event {
         Event e;
         e.type = Type::Timer;
         e.timer = {timerId};
+        return e;
+    }
+
+    // Context menu action with cell position payload
+    static Event contextMenuAction(ObjectId objectId, const std::string& action, int row, int col) {
+        Event e;
+        e.type = Type::ContextMenuAction;
+        e.ctxMenu.objectId = objectId;
+        e.ctxMenu.row = row;
+        e.ctxMenu.col = col;
+        std::strncpy(e.ctxMenu.action, action.c_str(), sizeof(e.ctxMenu.action) - 1);
+        e.ctxMenu.action[sizeof(e.ctxMenu.action) - 1] = '\0';
         return e;
     }
 };

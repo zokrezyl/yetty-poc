@@ -508,6 +508,7 @@ elseif(NOT EMSCRIPTEN)
         src/yetty/card-buffer-manager.cpp
         src/yetty/card-factory.cpp
         src/yetty/card.cpp
+        src/yetty/imgui-manager.cpp
         src/yetty/cards/plot-card.cpp
         src/yetty/cards/image-card.cpp
         # Core sources (previously in yetty_core)

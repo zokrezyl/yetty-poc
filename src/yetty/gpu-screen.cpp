@@ -2714,14 +2714,43 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
   if (event.type == base::Event::Type::MouseDown) {
     float mx = event.mouse.x;
     float my = event.mouse.y;
-    ydebug("GPUScreen {} MouseDown at ({}, {}), viewport=({},{} {}x{})", _id,
-           mx, my, _viewportX, _viewportY, _viewportWidth, _viewportHeight);
+    int button = event.mouse.button;
+    ydebug("GPUScreen {} MouseDown at ({}, {}), button={}, viewport=({},{} {}x{})", _id,
+           mx, my, button, _viewportX, _viewportY, _viewportWidth, _viewportHeight);
 
     // Only check bounds if viewport is set
     if (_viewportWidth > 0 && _viewportHeight > 0) {
       // Check if click is within our viewport
       if (mx >= _viewportX && mx < _viewportX + _viewportWidth &&
           my >= _viewportY && my < _viewportY + _viewportHeight) {
+
+        // Right-click: open context menu
+        if (button == 1 && _ctx.imguiManager) {  // GLFW_MOUSE_BUTTON_RIGHT = 1
+          // Calculate cell position from mouse coordinates
+          float localX = mx - _viewportX;
+          float localY = my - _viewportY;
+          int col = static_cast<int>(localX / getCellWidth());
+          int row = static_cast<int>(localY / getCellHeight());
+
+          // Clamp to valid range
+          col = std::max(0, std::min(col, static_cast<int>(_cols) - 1));
+          row = std::max(0, std::min(row, static_cast<int>(_rows) - 1));
+
+          // Add context menu items - menu opens automatically on render
+          _ctx.imguiManager->addContextMenuItem({
+            "Copy cell info",
+            base::Event::contextMenuAction(_id, "copy_cell_info", row, col)
+          });
+          _ctx.imguiManager->addContextMenuItem({
+            "Inspect glyph",
+            base::Event::contextMenuAction(_id, "inspect_glyph", row, col)
+          });
+
+          yinfo("GPUScreen {} right-click at cell ({}, {}), opening context menu", _id, row, col);
+          return Ok(true);
+        }
+
+        // Left-click: focus
         yinfo("GPUScreen {} clicked at ({}, {}), dispatching SetFocus", _id, mx,
               my);
         auto loop = *base::EventLoop::instance();
