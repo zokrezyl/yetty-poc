@@ -6,10 +6,10 @@
 #include <yetty/gpu-context.h>
 #include <vector>
 
-namespace yetty {
+namespace yetty::card {
 
 //=============================================================================
-// ImageCard - Card for rendering images via shader glyph + texture atlas
+// Image - Card for rendering images via shader glyph + texture atlas
 //
 // Uses shader glyph U+100000 (card base + offset 0x0000)
 //
@@ -58,10 +58,10 @@ namespace yetty {
 // Note: Cell dimensions come from grid.cellSize uniform (not per-card metadata)
 //=============================================================================
 
-class ImageCard : public Card,
-                  public base::ObjectFactory<ImageCard> {
+class Image : public Card,
+              public base::ObjectFactory<Image> {
 public:
-    using Ptr = std::shared_ptr<ImageCard>;
+    using Ptr = std::shared_ptr<Image>;
 
     // Shader glyph codepoint for images
     static constexpr uint32_t SHADER_GLYPH = 0x100000;  // Card base + 0x0000
@@ -91,7 +91,7 @@ public:
         const std::string& args,
         const std::string& payload) noexcept;
 
-    virtual ~ImageCard() = default;
+    virtual ~Image() = default;
 
     //=========================================================================
     // Card interface
@@ -132,11 +132,11 @@ public:
     virtual void setAtlasPosition(uint32_t x, uint32_t y) = 0;
 
 protected:
-    ImageCard(CardBufferManager::Ptr mgr, const GPUContext& gpu,
-              int32_t x, int32_t y,
-              uint32_t widthCells, uint32_t heightCells)
+    Image(CardBufferManager::Ptr mgr, const GPUContext& gpu,
+          int32_t x, int32_t y,
+          uint32_t widthCells, uint32_t heightCells)
         : Card(std::move(mgr), gpu, x, y, widthCells, heightCells)
     {}
 };
 
-} // namespace yetty
+} // namespace yetty::card

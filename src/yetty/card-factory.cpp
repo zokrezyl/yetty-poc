@@ -1,6 +1,7 @@
 #include <yetty/card-factory.h>
-#include "cards/image-card.h"
-#include "cards/plot-card.h"
+#include "cards/image.h"
+#include "cards/plot.h"
+#include "cards/ydraw.h"
 #include <ytrace/ytrace.hpp>
 #include <unordered_map>
 
@@ -22,7 +23,7 @@ public:
                                  uint32_t w, uint32_t h,
                                  const std::string& args,
                                  const std::string& payload) {
-            return ImageCard::create(mgr, gpu, x, y, w, h, args, payload);
+            return card::Image::create(mgr, gpu, x, y, w, h, args, payload);
         });
 
         registerCard("plot", [](CardBufferManager::Ptr mgr, const GPUContext& gpu,
@@ -30,7 +31,15 @@ public:
                                 uint32_t w, uint32_t h,
                                 const std::string& args,
                                 const std::string& payload) {
-            return PlotCard::create(mgr, gpu, x, y, w, h, args, payload);
+            return card::Plot::create(mgr, gpu, x, y, w, h, args, payload);
+        });
+
+        registerCard("ydraw", [](CardBufferManager::Ptr mgr, const GPUContext& gpu,
+                                 int32_t x, int32_t y,
+                                 uint32_t w, uint32_t h,
+                                 const std::string& args,
+                                 const std::string& payload) {
+            return card::YDraw::create(mgr, gpu, x, y, w, h, args, payload);
         });
 
         return Ok();
