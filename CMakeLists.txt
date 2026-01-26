@@ -785,6 +785,9 @@ else()
 
     # MSDF generator tool
     add_subdirectory(src/yetty/msdf-gen)
+
+    # MSDFGL WebGPU port (sandbox)
+    add_subdirectory(sandbox/msdfgl)
 endif()
 
 

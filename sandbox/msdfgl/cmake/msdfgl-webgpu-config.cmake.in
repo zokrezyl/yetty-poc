@@ -1,0 +1,7 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+find_dependency(Freetype)
+
+include("${CMAKE_CURRENT_LIST_DIR}/msdfgl-webgpu-targets.cmake")
