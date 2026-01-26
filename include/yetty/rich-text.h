@@ -34,7 +34,7 @@ struct TextChar {
     float x, y;                                // Position in document coordinates
     float size;                                // Font size
     glm::vec4 color = {1.0f, 1.0f, 1.0f, 1.0f};
-    Font::Style style = Font::Regular;
+    Font::Style style = Font::Style::Regular;
     std::string fontFamily;                    // Font family (resolved via FontManager)
     bool prePositioned = false;                // If true, (x,y) is glyph top-left, skip bearing
     float targetWidth = 0;                     // If >0, scale glyph to this width (for prePositioned)
@@ -49,7 +49,7 @@ struct TextSpan {
     std::string text;
     float x = 0, y = 0;                        // Position in document coordinates
     float size = 16.0f;                        // Font size in pixels
-    Font::Style style = Font::Regular;         // Bold/Italic
+    Font::Style style = Font::Style::Regular;         // Bold/Italic
     glm::vec4 color = {1.0f, 1.0f, 1.0f, 1.0f};  // RGBA
     std::string fontFamily;                    // Font family (resolved via FontManager)
 

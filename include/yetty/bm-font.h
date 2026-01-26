@@ -1,6 +1,6 @@
 #pragma once
 
-#include <yetty/yetty-font.h>
+#include <yetty/font.h>
 #include <yetty/result.hpp>
 #include <webgpu/webgpu.h>
 #include <cstdint>
@@ -23,9 +23,9 @@ struct BitmapGlyphMetadata {
  * BmFont manages a color (RGBA) texture atlas for bitmap font rendering.
  * This includes emojis and any other color bitmap glyphs.
  *
- * Implements the YettyFont interface for unified font handling.
+ * Implements the Font interface for unified font handling.
  */
-class BmFont : public YettyFont {
+class BmFont : public Font {
 public:
     using Ptr = std::shared_ptr<BmFont>;
 
@@ -40,7 +40,7 @@ public:
     BmFont& operator=(const BmFont&) = delete;
 
     // =========================================================================
-    // YettyFont interface implementation
+    // Font interface implementation
     // =========================================================================
 
     uint32_t getGlyphIndex(uint32_t codepoint) override;

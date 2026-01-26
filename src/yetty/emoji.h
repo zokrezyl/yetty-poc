@@ -1,5 +1,7 @@
 #pragma once
 
+#error "DEPRECATED: emoji.h is obsolete. Emoji handled by BmFont."
+
 #include <cstdint>
 
 namespace yetty {

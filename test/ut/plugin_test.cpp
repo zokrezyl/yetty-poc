@@ -4,6 +4,11 @@
 // Tests for Plugin base class functionality
 //=============================================================================
 
+// Include C++ standard headers before boost/ut.hpp (cdb version file conflict)
+#include <cstddef>
+#include <version>
+#include <algorithm>
+
 #include <boost/ut.hpp>
 #include "harness/mock_plugin.h"
 

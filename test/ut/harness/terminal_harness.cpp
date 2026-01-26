@@ -71,6 +71,59 @@ uint32_t TerminalHarness::getChar(int row, int col) const {
     return cell.chars[0];
 }
 
+CellInfo TerminalHarness::getCell(int row, int col) const {
+    VTermPos pos = { row, col };
+    VTermScreenCell cell;
+    vterm_screen_get_cell(_screen, pos, &cell);
+
+    CellInfo info;
+    info.glyph = cell.chars[0];
+    info.width = cell.width;
+
+    // Attributes
+    info.bold = cell.attrs.bold != 0;
+    info.italic = cell.attrs.italic != 0;
+    info.underline = cell.attrs.underline != 0;
+    info.reverse = cell.attrs.reverse != 0;
+    info.blink = cell.attrs.blink != 0;
+
+    // Foreground color
+    if (VTERM_COLOR_IS_DEFAULT_FG(&cell.fg)) {
+        info.fgDefault = true;
+        info.fgR = 240; info.fgG = 240; info.fgB = 240;  // Default fg
+    } else if (VTERM_COLOR_IS_INDEXED(&cell.fg)) {
+        info.fgDefault = false;
+        vterm_screen_convert_color_to_rgb(_screen, &cell.fg);
+        info.fgR = cell.fg.rgb.red;
+        info.fgG = cell.fg.rgb.green;
+        info.fgB = cell.fg.rgb.blue;
+    } else if (VTERM_COLOR_IS_RGB(&cell.fg)) {
+        info.fgDefault = false;
+        info.fgR = cell.fg.rgb.red;
+        info.fgG = cell.fg.rgb.green;
+        info.fgB = cell.fg.rgb.blue;
+    }
+
+    // Background color
+    if (VTERM_COLOR_IS_DEFAULT_BG(&cell.bg)) {
+        info.bgDefault = true;
+        info.bgR = 0; info.bgG = 0; info.bgB = 0;  // Default bg
+    } else if (VTERM_COLOR_IS_INDEXED(&cell.bg)) {
+        info.bgDefault = false;
+        vterm_screen_convert_color_to_rgb(_screen, &cell.bg);
+        info.bgR = cell.bg.rgb.red;
+        info.bgG = cell.bg.rgb.green;
+        info.bgB = cell.bg.rgb.blue;
+    } else if (VTERM_COLOR_IS_RGB(&cell.bg)) {
+        info.bgDefault = false;
+        info.bgR = cell.bg.rgb.red;
+        info.bgG = cell.bg.rgb.green;
+        info.bgB = cell.bg.rgb.blue;
+    }
+
+    return info;
+}
+
 //-----------------------------------------------------------------------------
 // libvterm callbacks
 //-----------------------------------------------------------------------------

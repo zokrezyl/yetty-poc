@@ -23,4 +23,14 @@ struct MsdfGlyphData {
 constexpr uint32_t MSDF_CDB_MAGIC = 0x4D534446; // "MSDF"
 constexpr uint32_t MSDF_CDB_VERSION = 1;
 
+// GPU-friendly glyph metadata for SSBO (40 bytes, 8-byte aligned)
+struct GlyphMetadataGPU {
+    float _uvMinX, _uvMinY;     // 8 bytes
+    float _uvMaxX, _uvMaxY;     // 8 bytes
+    float _sizeX, _sizeY;       // 8 bytes
+    float _bearingX, _bearingY; // 8 bytes
+    float _advance;             // 4 bytes
+    float _pad;                 // 4 bytes (alignment)
+};
+
 } // namespace yetty

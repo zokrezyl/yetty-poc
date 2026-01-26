@@ -1,5 +1,7 @@
 #pragma once
 
+#error "DEPRECATED: grid.h is obsolete. Use GPUScreen Cell struct."
+
 #include <vector>
 #include <cstdint>
 

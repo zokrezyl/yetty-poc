@@ -23,6 +23,18 @@ CPMAddPackage(
 #-----------------------------------------------------------------------------
 add_library(yetty_test_lib STATIC
     harness/terminal_harness.cpp
+    # GPUScreen and dependencies for gpu_screen_test.cpp
+    ${CMAKE_SOURCE_DIR}/src/yetty/gpu-screen.cpp
+    ${CMAKE_SOURCE_DIR}/src/yetty/osc-command.cpp
+    ${CMAKE_SOURCE_DIR}/src/yetty/shader-manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/yetty/font-manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/yetty/ms-msdf-font.cpp
+    ${CMAKE_SOURCE_DIR}/src/yetty/bm-font.cpp
+    ${CMAKE_SOURCE_DIR}/src/yetty/shader-font.cpp
+    ${CMAKE_SOURCE_DIR}/src/yetty/card-buffer-manager.cpp
+    # ${CMAKE_SOURCE_DIR}/src/yetty/widget-factory.cpp  # TODO: refactor later
+    ${CMAKE_SOURCE_DIR}/src/yetty/card-factory.cpp
+    ${CMAKE_SOURCE_DIR}/src/yetty/base/event-loop.cpp
 )
 
 target_include_directories(yetty_test_lib PUBLIC
@@ -31,10 +43,23 @@ target_include_directories(yetty_test_lib PUBLIC
     ${CMAKE_SOURCE_DIR}/include
 )
 
+# Fontconfig for bm-font.cpp
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(FONTCONFIG REQUIRED fontconfig)
+
 target_link_libraries(yetty_test_lib PUBLIC
     vterm
-    ut
     webgpu
+    glfw
+    cdb
+    Freetype::Freetype
+    msdfgen::msdfgen
+    glm::glm
+    yaml-cpp
+    ytrace::ytrace
+    uv_a
+    ut
+    ${FONTCONFIG_LIBRARIES}
 )
 
 #-----------------------------------------------------------------------------
@@ -46,12 +71,10 @@ add_executable(yetty_tests
     terminal_moverect_test.cpp
     terminal_content_test.cpp
     terminal_selection_test.cpp
+    terminal_pen_test.cpp
+    gpu_screen_test.cpp
     plugin_layer_test.cpp
     plugin_test.cpp
-    shared_grid_test.cpp
-    # SharedGrid implementation for testing
-    ${CMAKE_SOURCE_DIR}/src/yetty/shared-grid.cpp
-    ${CMAKE_SOURCE_DIR}/src/yetty/grid.cpp
 )
 
 # Define YETTY_SERVER_BUILD to avoid Font dependency in SharedGridView

@@ -1,351 +1,445 @@
 #include <yetty/shader-manager.h>
 #include <yetty/wgpu-compat.h>
+#include <yetty/ms-msdf-font.h>
+#include <yetty/bm-font.h>
 #include <ytrace/ytrace.hpp>
+
 #include <fstream>
 #include <sstream>
-#include <filesystem>
-#include <chrono>
+#include <algorithm>
+#include <cstring>
+#include <vector>
+#include <map>
+
+#ifndef CMAKE_SOURCE_DIR
+#define CMAKE_SOURCE_DIR "."
+#endif
 
 namespace yetty {
 
-ShaderManager::~ShaderManager() {
-    dispose();
+// Placeholder markers in the base shader
+static const char* FUNCTIONS_PLACEHOLDER = "// SHADER_GLYPH_FUNCTIONS_PLACEHOLDER";
+static const char* DISPATCH_PLACEHOLDER = "// SHADER_GLYPH_DISPATCH_PLACEHOLDER";
+
+class ShaderManagerImpl : public ShaderManager {
+public:
+    ShaderManagerImpl() = default;
+    ~ShaderManagerImpl() override;
+
+    Result<void> init(const GPUContext& gpu) noexcept;
+
+    void addProvider(std::shared_ptr<ShaderProvider> provider) override;
+    void addLibrary(const std::string& name, const std::string& code) override;
+    bool needsRecompile() const override;
+    Result<void> compile() override;
+    void update() override;
+
+    WGPUShaderModule getShaderModule() const override { return _shaderModule; }
+    WGPURenderPipeline getGridPipeline() const override { return _gridPipeline; }
+    WGPUBindGroupLayout getGridBindGroupLayout() const override { return _gridBindGroupLayout; }
+    WGPUBuffer getQuadVertexBuffer() const override { return _quadVertexBuffer; }
+    const std::string& getMergedSource() const override { return _mergedSource; }
+
+private:
+    Result<void> loadBaseShader(const std::string& path);
+    Result<void> createPipelineResources();
+    std::string mergeShaders() const;
+
+    GPUContext _gpu = {};
+    std::string _baseShader;
+    std::vector<std::shared_ptr<ShaderProvider>> _providers;
+    std::map<std::string, std::string> _libraries;
+    std::string _mergedSource;
+
+    // Shared GPU resources
+    WGPUShaderModule _shaderModule = nullptr;
+    WGPURenderPipeline _gridPipeline = nullptr;
+    WGPUPipelineLayout _pipelineLayout = nullptr;
+    WGPUBindGroupLayout _gridBindGroupLayout = nullptr;
+    WGPUBuffer _quadVertexBuffer = nullptr;
+
+    bool _initialized = false;
+};
+
+// Factory implementation
+Result<ShaderManager::Ptr> ShaderManager::createImpl(ContextType&, const GPUContext& gpu) noexcept {
+    auto impl = Ptr(new ShaderManagerImpl());
+    if (auto res = static_cast<ShaderManagerImpl*>(impl.get())->init(gpu); !res) {
+        return Err<Ptr>("ShaderManager init failed", res);
+    }
+    return Ok(std::move(impl));
 }
 
-Result<void> ShaderManager::init(WGPUDevice device, const std::string& shaderPath) {
-    if (!device) {
+ShaderManagerImpl::~ShaderManagerImpl() {
+    if (_shaderModule) {
+        wgpuShaderModuleRelease(_shaderModule);
+        _shaderModule = nullptr;
+    }
+    if (_gridPipeline) {
+        wgpuRenderPipelineRelease(_gridPipeline);
+        _gridPipeline = nullptr;
+    }
+    if (_pipelineLayout) {
+        wgpuPipelineLayoutRelease(_pipelineLayout);
+        _pipelineLayout = nullptr;
+    }
+    if (_gridBindGroupLayout) {
+        wgpuBindGroupLayoutRelease(_gridBindGroupLayout);
+        _gridBindGroupLayout = nullptr;
+    }
+    if (_quadVertexBuffer) {
+        wgpuBufferRelease(_quadVertexBuffer);
+        _quadVertexBuffer = nullptr;
+    }
+}
+
+Result<void> ShaderManagerImpl::init(const GPUContext& gpu) noexcept {
+    if (_initialized) {
+        return Ok();
+    }
+
+    if (!gpu.device) {
         return Err<void>("ShaderManager::init: null device");
     }
 
-    _device = device;
-    _shaderPath = shaderPath;
+    _gpu = gpu;
 
-    // Ensure path ends with separator
-    if (!_shaderPath.empty() && _shaderPath.back() != '/') {
-        _shaderPath += '/';
+    // Load base shader
+    std::string shaderPath = std::string(CMAKE_SOURCE_DIR) + "/src/yetty/shaders/shaders.wgsl";
+    if (auto res = loadBaseShader(shaderPath); !res) {
+        return res;
     }
 
-    // Create shared quad vertex shader
-    if (auto res = createQuadVertexShader(); !res) {
-        return Err<void>("ShaderManager: failed to create quad vertex shader", res);
-    }
-
-    // Create global uniform buffer for time, mouse, screen
-    if (auto res = createGlobalUniformBuffer(); !res) {
-        return Err<void>("ShaderManager: failed to create global uniform buffer", res);
-    }
-
-    // Record app start time
-    auto now = std::chrono::steady_clock::now();
-    _appStartTime = std::chrono::duration<double>(now.time_since_epoch()).count();
-    _lastFrameTime = _appStartTime;
-
-    yinfo("ShaderManager: initialized with path {}", _shaderPath);
+    _initialized = true;
+    yinfo("ShaderManager: initialized");
     return Ok();
 }
 
-void ShaderManager::dispose() {
-    for (auto& [name, module] : _fragmentShaders) {
-        if (module) {
-            wgpuShaderModuleRelease(module);
-        }
+void ShaderManagerImpl::addProvider(std::shared_ptr<ShaderProvider> provider) {
+    if (provider) {
+        _providers.push_back(std::move(provider));
+        ydebug("ShaderManager: provider registered ({} total)", _providers.size());
     }
-    _fragmentShaders.clear();
-
-    if (_quadVertexShader) {
-        wgpuShaderModuleRelease(_quadVertexShader);
-        _quadVertexShader = nullptr;
-    }
-
-    // Release global uniforms
-    if (_globalBindGroup) {
-        wgpuBindGroupRelease(_globalBindGroup);
-        _globalBindGroup = nullptr;
-    }
-    if (_globalBindGroupLayout) {
-        wgpuBindGroupLayoutRelease(_globalBindGroupLayout);
-        _globalBindGroupLayout = nullptr;
-    }
-    if (_globalUniformBuffer) {
-        wgpuBufferRelease(_globalUniformBuffer);
-        _globalUniformBuffer = nullptr;
-    }
-
-    _device = nullptr;
 }
 
-Result<void> ShaderManager::createGlobalUniformBuffer() {
-    // Create uniform buffer
-    WGPUBufferDescriptor bufDesc = {};
-    bufDesc.size = sizeof(GlobalUniforms);
-    bufDesc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
-    _globalUniformBuffer = wgpuDeviceCreateBuffer(_device, &bufDesc);
-    if (!_globalUniformBuffer) {
-        return Err<void>("Failed to create global uniform buffer");
-    }
-    yinfo("GPU_ALLOC ShaderManager: globalUniformBuffer={} bytes", sizeof(GlobalUniforms));
-
-    // Create bind group layout
-    WGPUBindGroupLayoutEntry entry = {};
-    entry.binding = 0;
-    entry.visibility = WGPUShaderStage_Vertex | WGPUShaderStage_Fragment;
-    entry.buffer.type = WGPUBufferBindingType_Uniform;
-
-    WGPUBindGroupLayoutDescriptor bglDesc = {};
-    bglDesc.entryCount = 1;
-    bglDesc.entries = &entry;
-    _globalBindGroupLayout = wgpuDeviceCreateBindGroupLayout(_device, &bglDesc);
-    if (!_globalBindGroupLayout) {
-        return Err<void>("Failed to create global bind group layout");
-    }
-
-    // Create bind group
-    WGPUBindGroupEntry bgEntry = {};
-    bgEntry.binding = 0;
-    bgEntry.buffer = _globalUniformBuffer;
-    bgEntry.size = sizeof(GlobalUniforms);
-
-    WGPUBindGroupDescriptor bgDesc = {};
-    bgDesc.layout = _globalBindGroupLayout;
-    bgDesc.entryCount = 1;
-    bgDesc.entries = &bgEntry;
-    _globalBindGroup = wgpuDeviceCreateBindGroup(_device, &bgDesc);
-    if (!_globalBindGroup) {
-        return Err<void>("Failed to create global bind group");
-    }
-
-    ydebug("ShaderManager: global uniform buffer created (size={})", sizeof(GlobalUniforms));
-    return Ok();
+void ShaderManagerImpl::addLibrary(const std::string& name, const std::string& code) {
+    _libraries[name] = code;
+    yinfo("ShaderManager: added library '{}'", name);
 }
 
-void ShaderManager::updateGlobalUniforms(WGPUQueue queue,
-                                          float deltaTime,
-                                          float mouseX, float mouseY,
-                                          float mouseClickX, float mouseClickY,
-                                          uint32_t screenWidth, uint32_t screenHeight) {
-    // Update frame counter
-    _frameCount++;
-
-    // Calculate time since app start
-    auto now = std::chrono::steady_clock::now();
-    double currentTime = std::chrono::duration<double>(now.time_since_epoch()).count();
-    float timeSinceStart = static_cast<float>(currentTime - _appStartTime);
-
-    // Update global uniforms struct
-    _globalUniforms.iTime = timeSinceStart;
-    _globalUniforms.iTimeRelative = timeSinceStart;
-    _globalUniforms.iTimeDelta = deltaTime;
-    _globalUniforms.iFrame = _frameCount;
-    _globalUniforms.iMouse[0] = mouseX;
-    _globalUniforms.iMouse[1] = mouseY;
-    _globalUniforms.iMouse[2] = mouseClickX;
-    _globalUniforms.iMouse[3] = mouseClickY;
-    _globalUniforms.iScreenResolution[0] = static_cast<float>(screenWidth);
-    _globalUniforms.iScreenResolution[1] = static_cast<float>(screenHeight);
-
-    // Upload to GPU
-    wgpuQueueWriteBuffer(queue, _globalUniformBuffer, 0, &_globalUniforms, sizeof(GlobalUniforms));
-
-    _lastFrameTime = currentTime;
-}
-
-Result<void> ShaderManager::createQuadVertexShader() {
-    const char* vertCode = R"(
-struct QuadUniforms {
-    iTime: f32,
-    iTimeDelta: f32,
-    iFrame: u32,
-    _pad0: u32,
-    iResolution: vec2<f32>,
-    iMouse: vec2<f32>,
-    iParam0: u32,
-    _pad1a: u32,
-    _pad1b: u32,
-    _pad1c: u32,
-    rect: vec4<f32>,
-}
-
-@group(0) @binding(0) var<uniform> u: QuadUniforms;
-
-struct VertexOutput {
-    @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-}
-
-@vertex
-fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
-    var positions = array<vec2<f32>, 6>(
-        vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 0.0), vec2<f32>(1.0, 1.0),
-        vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 1.0), vec2<f32>(0.0, 1.0)
-    );
-
-    let pos = positions[vertexIndex];
-    let ndcX = u.rect.x + pos.x * u.rect.z;
-    let ndcY = u.rect.y - pos.y * u.rect.w;
-
-    var output: VertexOutput;
-    output.position = vec4<f32>(ndcX, ndcY, 0.0, 1.0);
-    output.uv = pos;
-    return output;
-}
-)";
-
-    WGPUShaderSourceWGSL wgslDesc = {};
-    wgslDesc.chain.sType = WGPUSType_ShaderSourceWGSL;
-    wgslDesc.code = WGPU_STR(vertCode);
-
-    WGPUShaderModuleDescriptor shaderDesc = {};
-    shaderDesc.nextInChain = &wgslDesc.chain;
-
-    _quadVertexShader = wgpuDeviceCreateShaderModule(_device, &shaderDesc);
-    if (!_quadVertexShader) {
-        return Err<void>("Failed to compile quad vertex shader");
-    }
-
-    return Ok();
-}
-
-WGPUShaderModule ShaderManager::getQuadVertexShader() {
-    return _quadVertexShader;
-}
-
-bool ShaderManager::hasShader(const std::string& name) const {
-    // Check cache first
-    if (_fragmentShaders.count(name) > 0) {
-        return true;
-    }
-
-    // Check if file exists
-    std::string fullPath = _shaderPath + name;
-    return std::filesystem::exists(fullPath);
-}
-
-Result<WGPUShaderModule> ShaderManager::getFragmentShader(const std::string& name) {
-    // Check cache
-    auto it = _fragmentShaders.find(name);
-    if (it != _fragmentShaders.end()) {
-        return Ok(it->second);
-    }
-
-    // Load and compile
-    auto result = loadShader(name);
-    if (!result) {
-        return Err<WGPUShaderModule>("Failed to load shader: " + name, result);
-    }
-
-    _fragmentShaders[name] = *result;
-    ydebug("ShaderManager: loaded and cached shader {}", name);
-    return Ok(*result);
-}
-
-Result<WGPUShaderModule> ShaderManager::loadShader(const std::string& filename) {
-    std::string fullPath = _shaderPath + filename;
-
-    // Read file
-    std::ifstream file(fullPath);
+Result<void> ShaderManagerImpl::loadBaseShader(const std::string& path) {
+    std::ifstream file(path);
     if (!file.is_open()) {
-        return Err<WGPUShaderModule>("Failed to open shader file: " + fullPath);
+        return Err<void>("Failed to open shader file: " + path);
     }
 
     std::stringstream buffer;
     buffer << file.rdbuf();
-    std::string source = buffer.str();
+    _baseShader = buffer.str();
 
-    if (source.empty()) {
-        return Err<WGPUShaderModule>("Shader file is empty: " + fullPath);
+    if (_baseShader.empty()) {
+        return Err<void>("Shader file is empty: " + path);
     }
 
-    // Prepend uniforms struct and Shadertoy-compatible globals
-    std::string fullSource = R"(
-struct QuadUniforms {
-    iTime: f32,
-    iTimeDelta: f32,
-    iFrame: u32,
-    _pad0: u32,
-    iResolution: vec2<f32>,
-    iMouse: vec2<f32>,
-    iParam0: u32,
-    _pad1a: u32,
-    _pad1b: u32,
-    _pad1c: u32,
-    rect: vec4<f32>,
+    yinfo("ShaderManager: loaded base shader from {} ({} lines)",
+          path, std::count(_baseShader.begin(), _baseShader.end(), '\n') + 1);
+
+    return Ok();
 }
 
-@group(0) @binding(0) var<uniform> u: QuadUniforms;
-
-// Shadertoy-compatible globals (set by entry point)
-var<private> iTime: f32;
-var<private> iResolution: vec2<f32>;
-var<private> iMouse: vec2<f32>;
-
-)" + source + R"(
-
-// Entry point wrapper - calls user's fs_main
-@fragment
-fn fs_entry(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
-    iTime = u.iTime;
-    iResolution = u.iResolution;
-    iMouse = u.iMouse;
-    return fs_main(uv);
+bool ShaderManagerImpl::needsRecompile() const {
+    // Check if any provider is dirty
+    for (const auto& provider : _providers) {
+        if (provider && provider->isDirty()) {
+            return true;
+        }
+    }
+    // Also need initial compile if no shader module exists
+    return _shaderModule == nullptr;
 }
-)";
 
-    // Compile
-    yinfo("ShaderManager: compiling {} ({} lines merged)", filename,
-          std::count(fullSource.begin(), fullSource.end(), '\n') + 1);
+void ShaderManagerImpl::update() {
+    if (needsRecompile()) {
+        if (auto res = compile(); !res) {
+            yerror("ShaderManager::update: recompile failed: {}", res.error().message());
+        }
+    }
+}
 
+std::string ShaderManagerImpl::mergeShaders() const {
+    std::string result = _baseShader;
+
+    // Collect all function code
+    std::string allFunctions;
+    allFunctions.reserve(64 * 1024);
+
+    // Add library code first
+    for (const auto& [name, code] : _libraries) {
+        allFunctions += "// Library: " + name + "\n";
+        allFunctions += code;
+        allFunctions += "\n\n";
+    }
+
+    // Add provider function code
+    for (const auto& provider : _providers) {
+        if (provider) {
+            allFunctions += provider->getCode();
+        }
+    }
+
+    // Collect all dispatch code
+    std::string allDispatch;
+    allDispatch.reserve(16 * 1024);
+
+    for (const auto& provider : _providers) {
+        if (provider) {
+            std::string dispatch = provider->getDispatchCode();
+            if (!dispatch.empty()) {
+                if (!allDispatch.empty()) {
+                    allDispatch += " else ";
+                }
+                allDispatch += dispatch;
+            }
+        }
+    }
+
+    // Replace placeholders
+    auto replacePlaceholder = [](std::string& str, const std::string& placeholder,
+                                  const std::string& replacement) {
+        size_t pos = str.find(placeholder);
+        if (pos != std::string::npos) {
+            str.replace(pos, placeholder.length(), replacement);
+            return true;
+        }
+        return false;
+    };
+
+    if (!replacePlaceholder(result, FUNCTIONS_PLACEHOLDER, allFunctions)) {
+        ywarn("ShaderManager: functions placeholder not found in base shader");
+    }
+
+    yinfo("ShaderManager: dispatch code length={}", allDispatch.size());
+    // Log first and last parts of dispatch code to see all glyphs
+    if (allDispatch.size() > 200) {
+        yinfo("  dispatch start: '{}'", allDispatch.substr(0, 200));
+        yinfo("  dispatch end: '{}'", allDispatch.substr(allDispatch.size() - 200));
+    } else {
+        yinfo("  dispatch: '{}'", allDispatch);
+    }
+
+    if (!replacePlaceholder(result, DISPATCH_PLACEHOLDER, allDispatch)) {
+        ywarn("ShaderManager: dispatch placeholder not found in base shader");
+    }
+
+    return result;
+}
+
+Result<void> ShaderManagerImpl::compile() {
+    if (_baseShader.empty()) {
+        return Err<void>("ShaderManager: no base shader loaded");
+    }
+
+    WGPUDevice device = _gpu.device;
+
+    // Merge all shader code
+    _mergedSource = mergeShaders();
+
+    int lineCount = static_cast<int>(std::count(_mergedSource.begin(), _mergedSource.end(), '\n')) + 1;
+    yinfo("ShaderManager: compiling merged shader ({} lines)", lineCount);
+
+    // Release old shader module if exists
+    if (_shaderModule) {
+        wgpuShaderModuleRelease(_shaderModule);
+        _shaderModule = nullptr;
+    }
+
+    // Create shader module
     WGPUShaderSourceWGSL wgslDesc = {};
     wgslDesc.chain.sType = WGPUSType_ShaderSourceWGSL;
-    wgslDesc.code = { .data = fullSource.c_str(), .length = fullSource.size() };
+    WGPU_SHADER_CODE(wgslDesc, _mergedSource);
 
     WGPUShaderModuleDescriptor shaderDesc = {};
+    shaderDesc.label = WGPU_STR("terminal shader");
     shaderDesc.nextInChain = &wgslDesc.chain;
 
-    // Use compilation info callback to detect errors
-    WGPUShaderModule module = wgpuDeviceCreateShaderModule(_device, &shaderDesc);
-    if (!module) {
-        yerror("Failed to compile shader: {} - dumping source:", filename);
-        // Dump with line numbers
-        std::istringstream iss(fullSource);
+    _shaderModule = wgpuDeviceCreateShaderModule(device, &shaderDesc);
+    if (!_shaderModule) {
+        yerror("ShaderManager: failed to compile shader - dumping source:");
+        std::istringstream iss(_mergedSource);
         std::string line;
         int lineNum = 1;
         while (std::getline(iss, line)) {
             yerror("{:4d}: {}", lineNum++, line);
         }
-        return Err<WGPUShaderModule>("Failed to compile shader: " + filename);
+        return Err<void>("Failed to compile shader module");
     }
 
-    // Check compilation info for errors (Dawn reports errors here)
-    WGPUCompilationInfoCallbackInfo cbInfo = {};
-    cbInfo.mode = WGPUCallbackMode_AllowSpontaneous;
-    cbInfo.callback = [](WGPUCompilationInfoRequestStatus status,
-                         WGPUCompilationInfo const* info,
-                         void* userdata1, void* userdata2) {
-        auto* src = static_cast<std::string*>(userdata1);
-        auto* fname = static_cast<std::string*>(userdata2);
-        if (info && info->messageCount > 0) {
-            for (size_t i = 0; i < info->messageCount; i++) {
-                auto& msg = info->messages[i];
-                if (msg.type == WGPUCompilationMessageType_Error) {
-                    yerror("Shader {} error at line {}: {}", *fname, msg.lineNum,
-                           std::string(msg.message.data, msg.message.length));
-                    // Dump source with line numbers
-                    std::istringstream iss(*src);
-                    std::string line;
-                    int lineNum = 1;
-                    while (std::getline(iss, line)) {
-                        yerror("{:4d}: {}", lineNum++, line);
-                    }
-                }
-            }
+    // Clear dirty flags on all providers
+    for (auto& provider : _providers) {
+        if (provider) {
+            provider->clearDirty();
         }
-    };
-    cbInfo.userdata1 = new std::string(fullSource);
-    cbInfo.userdata2 = new std::string(filename);
-    wgpuShaderModuleGetCompilationInfo(module, cbInfo);
+    }
 
-    yinfo("ShaderManager: compiled shader {}", filename);
-    return Ok(module);
+    // Create pipeline resources if not already created
+    if (!_gridPipeline) {
+        if (auto res = createPipelineResources(); !res) {
+            return res;
+        }
+    }
+
+    // Count total functions
+    uint32_t totalFunctions = 0;
+    for (const auto& provider : _providers) {
+        if (provider) {
+            totalFunctions += provider->getFunctionCount();
+        }
+    }
+
+    yinfo("ShaderManager: compiled successfully ({} shader functions)", totalFunctions);
+    return Ok();
+}
+
+Result<void> ShaderManagerImpl::createPipelineResources() {
+    WGPUDevice device = _gpu.device;
+
+    // 1. Create quad vertex buffer
+    float quadVertices[] = {
+        -1.0f, -1.0f,
+         1.0f, -1.0f,
+        -1.0f,  1.0f,
+        -1.0f,  1.0f,
+         1.0f, -1.0f,
+         1.0f,  1.0f,
+    };
+    WGPUBufferDescriptor quadDesc = {};
+    quadDesc.label = WGPU_STR("quad vertices");
+    quadDesc.size = sizeof(quadVertices);
+    quadDesc.usage = WGPUBufferUsage_Vertex;
+    quadDesc.mappedAtCreation = true;
+    _quadVertexBuffer = wgpuDeviceCreateBuffer(device, &quadDesc);
+    if (!_quadVertexBuffer) {
+        return Err<void>("Failed to create quad vertex buffer");
+    }
+    void* mapped = wgpuBufferGetMappedRange(_quadVertexBuffer, 0, sizeof(quadVertices));
+    memcpy(mapped, quadVertices, sizeof(quadVertices));
+    wgpuBufferUnmap(_quadVertexBuffer);
+
+    // 2. Create grid bind group layout (8 bindings)
+    WGPUBindGroupLayoutEntry entries[8] = {};
+
+    // 0: Grid uniforms
+    entries[0].binding = 0;
+    entries[0].visibility = WGPUShaderStage_Vertex | WGPUShaderStage_Fragment;
+    entries[0].buffer.type = WGPUBufferBindingType_Uniform;
+
+    // 1: Font atlas texture
+    entries[1].binding = 1;
+    entries[1].visibility = WGPUShaderStage_Fragment;
+    entries[1].texture.sampleType = WGPUTextureSampleType_Float;
+    entries[1].texture.viewDimension = WGPUTextureViewDimension_2D;
+
+    // 2: Font sampler
+    entries[2].binding = 2;
+    entries[2].visibility = WGPUShaderStage_Fragment;
+    entries[2].sampler.type = WGPUSamplerBindingType_Filtering;
+
+    // 3: Glyph metadata SSBO
+    entries[3].binding = 3;
+    entries[3].visibility = WGPUShaderStage_Fragment;
+    entries[3].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
+
+    // 4: Cell buffer SSBO
+    entries[4].binding = 4;
+    entries[4].visibility = WGPUShaderStage_Fragment;
+    entries[4].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
+
+    // 5: Bitmap/Emoji atlas texture
+    entries[5].binding = 5;
+    entries[5].visibility = WGPUShaderStage_Fragment;
+    entries[5].texture.sampleType = WGPUTextureSampleType_Float;
+    entries[5].texture.viewDimension = WGPUTextureViewDimension_2D;
+
+    // 6: Bitmap/Emoji sampler
+    entries[6].binding = 6;
+    entries[6].visibility = WGPUShaderStage_Fragment;
+    entries[6].sampler.type = WGPUSamplerBindingType_Filtering;
+
+    // 7: Bitmap/Emoji metadata SSBO
+    entries[7].binding = 7;
+    entries[7].visibility = WGPUShaderStage_Fragment;
+    entries[7].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
+
+    WGPUBindGroupLayoutDescriptor layoutDesc = {};
+    layoutDesc.entryCount = 8;
+    layoutDesc.entries = entries;
+    _gridBindGroupLayout = wgpuDeviceCreateBindGroupLayout(device, &layoutDesc);
+    if (!_gridBindGroupLayout) {
+        return Err<void>("Failed to create grid bind group layout");
+    }
+
+    // 3. Create pipeline layout (group 0: shared, group 1: grid)
+    WGPUBindGroupLayout layouts[2] = { _gpu.sharedBindGroupLayout, _gridBindGroupLayout };
+    WGPUPipelineLayoutDescriptor pipelineLayoutDesc = {};
+    pipelineLayoutDesc.bindGroupLayoutCount = 2;
+    pipelineLayoutDesc.bindGroupLayouts = layouts;
+    _pipelineLayout = wgpuDeviceCreatePipelineLayout(device, &pipelineLayoutDesc);
+    if (!_pipelineLayout) {
+        return Err<void>("Failed to create pipeline layout");
+    }
+
+    // 4. Create render pipeline
+    WGPUVertexAttribute posAttr = {};
+    posAttr.format = WGPUVertexFormat_Float32x2;
+    posAttr.offset = 0;
+    posAttr.shaderLocation = 0;
+
+    WGPUVertexBufferLayout vertexLayout = {};
+    vertexLayout.arrayStride = 2 * sizeof(float);
+    vertexLayout.stepMode = WGPUVertexStepMode_Vertex;
+    vertexLayout.attributeCount = 1;
+    vertexLayout.attributes = &posAttr;
+
+    WGPUBlendState blendState = {};
+    blendState.color.srcFactor = WGPUBlendFactor_SrcAlpha;
+    blendState.color.dstFactor = WGPUBlendFactor_OneMinusSrcAlpha;
+    blendState.color.operation = WGPUBlendOperation_Add;
+    blendState.alpha.srcFactor = WGPUBlendFactor_One;
+    blendState.alpha.dstFactor = WGPUBlendFactor_OneMinusSrcAlpha;
+    blendState.alpha.operation = WGPUBlendOperation_Add;
+
+    WGPUColorTargetState colorTarget = {};
+    colorTarget.format = _gpu.surfaceFormat;
+    colorTarget.blend = &blendState;
+    colorTarget.writeMask = WGPUColorWriteMask_All;
+
+    WGPUFragmentState fragState = {};
+    fragState.module = _shaderModule;
+    fragState.entryPoint = WGPU_STR("fs_main");
+    fragState.targetCount = 1;
+    fragState.targets = &colorTarget;
+
+    WGPURenderPipelineDescriptor pipelineDesc = {};
+    pipelineDesc.label = WGPU_STR("grid pipeline");
+    pipelineDesc.layout = _pipelineLayout;
+    pipelineDesc.vertex.module = _shaderModule;
+    pipelineDesc.vertex.entryPoint = WGPU_STR("vs_main");
+    pipelineDesc.vertex.bufferCount = 1;
+    pipelineDesc.vertex.buffers = &vertexLayout;
+    pipelineDesc.fragment = &fragState;
+    pipelineDesc.primitive.topology = WGPUPrimitiveTopology_TriangleList;
+    pipelineDesc.primitive.frontFace = WGPUFrontFace_CCW;
+    pipelineDesc.primitive.cullMode = WGPUCullMode_None;
+    pipelineDesc.multisample.count = 1;
+    pipelineDesc.multisample.mask = 0xFFFFFFFF;
+
+    _gridPipeline = wgpuDeviceCreateRenderPipeline(device, &pipelineDesc);
+    if (!_gridPipeline) {
+        return Err<void>("Failed to create grid render pipeline");
+    }
+
+    yinfo("ShaderManager: created shared pipeline resources");
+    return Ok();
 }
 
 } // namespace yetty

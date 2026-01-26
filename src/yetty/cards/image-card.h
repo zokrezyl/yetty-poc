@@ -1,7 +1,9 @@
 #pragma once
 
-#include "../card.h"
-#include "../card-factory.h"
+#include <yetty/card.h>
+#include <yetty/card-buffer-manager.h>
+#include <yetty/base/factory.h>
+#include <yetty/gpu-context.h>
 #include <vector>
 
 namespace yetty {
@@ -56,8 +58,11 @@ namespace yetty {
 // Note: Cell dimensions come from grid.cellSize uniform (not per-card metadata)
 //=============================================================================
 
-class ImageCard : public Card {
+class ImageCard : public Card,
+                  public base::ObjectFactory<ImageCard> {
 public:
+    using Ptr = std::shared_ptr<ImageCard>;
+
     // Shader glyph codepoint for images
     static constexpr uint32_t SHADER_GLYPH = 0x100000;  // Card base + 0x0000
 
@@ -69,21 +74,31 @@ public:
     // Factory method
     //=========================================================================
     static Result<CardPtr> create(
-        CardBufferManager* mgr,
+        CardBufferManager::Ptr mgr,
+        const GPUContext& gpu,
         int32_t x, int32_t y,
         uint32_t widthCells, uint32_t heightCells,
         const std::string& args,
-        const std::string& payload
-    );
+        const std::string& payload);
 
-    ~ImageCard() override;
+    // ObjectFactory createImpl
+    static Result<Ptr> createImpl(
+        ContextType& ctx,
+        CardBufferManager::Ptr mgr,
+        const GPUContext& gpu,
+        int32_t x, int32_t y,
+        uint32_t widthCells, uint32_t heightCells,
+        const std::string& args,
+        const std::string& payload) noexcept;
+
+    virtual ~ImageCard() = default;
 
     //=========================================================================
     // Card interface
     //=========================================================================
-    Result<void> init() override;
-    void dispose() override;
-    void update(float time) override;
+    Result<void> init() override = 0;
+    void dispose() override = 0;
+    void update(float time) override = 0;
     const char* typeName() const override { return "image"; }
 
     //=========================================================================
@@ -92,84 +107,36 @@ public:
 
     // Set image data (copies and uploads to GPU buffer)
     // Data should be RGBA8 pixels (4 bytes per pixel)
-    Result<void> setImageData(const uint8_t* data, uint32_t width, uint32_t height);
+    virtual Result<void> setImageData(const uint8_t* data, uint32_t width, uint32_t height) = 0;
 
     // Set zoom level (1.0 = fit to cell area)
-    void setZoom(float zoom);
-    float zoom() const { return zoom_; }
+    virtual void setZoom(float zoom) = 0;
+    virtual float zoom() const = 0;
 
     // Set pan center (0.5, 0.5 = centered)
-    void setCenter(float x, float y);
-    float centerX() const { return centerX_; }
-    float centerY() const { return centerY_; }
+    virtual void setCenter(float x, float y) = 0;
+    virtual float centerX() const = 0;
+    virtual float centerY() const = 0;
 
     // Set flags
-    void setBilinearFilter(bool enabled);
-    void setPreserveAspect(bool enabled);
+    virtual void setBilinearFilter(bool enabled) = 0;
+    virtual void setPreserveAspect(bool enabled) = 0;
 
     // Get image dimensions
-    uint32_t imageWidth() const { return imageWidth_; }
-    uint32_t imageHeight() const { return imageHeight_; }
+    virtual uint32_t imageWidth() const = 0;
+    virtual uint32_t imageHeight() const = 0;
 
     // Get atlas position (set by compute shader preparation)
-    uint32_t atlasX() const { return atlasX_; }
-    uint32_t atlasY() const { return atlasY_; }
-    void setAtlasPosition(uint32_t x, uint32_t y);
+    virtual uint32_t atlasX() const = 0;
+    virtual uint32_t atlasY() const = 0;
+    virtual void setAtlasPosition(uint32_t x, uint32_t y) = 0;
 
-private:
-    ImageCard(CardBufferManager* mgr, int32_t x, int32_t y,
-              uint32_t widthCells, uint32_t heightCells,
-              const std::string& args, const std::string& payload);
-
-    // Parse args string (e.g., "--zoom 2.0 --center 0.5 0.5")
-    void parseArgs(const std::string& args);
-
-    // Load image from payload (raw image file data, already base94-decoded by OSC parser)
-    Result<void> decodePayload(const std::string& payload);
-
-    // Upload metadata to GPU
-    Result<void> uploadMetadata();
-
-    // Metadata structure (matches shader layout)
-    struct Metadata {
-        uint32_t imageDataOffset;  // Byte offset in cardImageData buffer
-        uint32_t imageWidth;       // Image width in pixels
-        uint32_t imageHeight;      // Image height in pixels
-        uint32_t atlasX;           // Atlas X position (set during render prep)
-        uint32_t atlasY;           // Atlas Y position (set during render prep)
-        uint32_t widthCells;       // Widget width in cells
-        uint32_t heightCells;      // Widget height in cells
-        float zoom;                // Zoom level
-        float centerX;             // Pan center X
-        float centerY;             // Pan center Y
-        uint32_t flags;            // Rendering flags
-        uint32_t bgColor;          // Background color
-        uint32_t _reserved[4];     // Padding to 64 bytes
-    };
-    static_assert(sizeof(Metadata) == 64, "Metadata must be 64 bytes");
-
-    uint32_t imageWidth_ = 0;
-    uint32_t imageHeight_ = 0;
-    float zoom_ = 1.0f;
-    float centerX_ = 0.5f;
-    float centerY_ = 0.5f;
-    uint32_t flags_ = FLAG_BILINEAR | FLAG_PRESERVE_ASPECT;
-    uint32_t bgColor_ = 0xFF000000;  // Black background
-
-    // Atlas position (updated during render preparation)
-    // Initialized to invalid (0xFFFFFFFF) - compute shader writes valid values
-    // DEBUG: Set to 0 to test if fragment shader works without compute shader
-    uint32_t atlasX_ = 0;
-    uint32_t atlasY_ = 0;
-
-    ImageDataHandle imageDataHandle_ = ImageDataHandle::invalid();
-    bool metadataDirty_ = true;
-
-    std::string argsStr_;
-    std::string payloadStr_;
+protected:
+    ImageCard(CardBufferManager::Ptr mgr, const GPUContext& gpu,
+              int32_t x, int32_t y,
+              uint32_t widthCells, uint32_t heightCells)
+        : Card(std::move(mgr), gpu, x, y, widthCells, heightCells)
+    {}
 };
-
-// Register ImageCard with CardFactory
-void registerImageCard(CardFactory& factory);
 
 } // namespace yetty

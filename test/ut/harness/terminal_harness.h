@@ -41,6 +41,21 @@ struct DamageEvent {
     VTermRect rect;
 };
 
+// Cell info for testing (simplified from VTermScreenCell)
+struct CellInfo {
+    uint32_t glyph = 0;      // Unicode codepoint
+    uint8_t fgR = 0, fgG = 0, fgB = 0;
+    uint8_t bgR = 0, bgG = 0, bgB = 0;
+    bool fgDefault = true;
+    bool bgDefault = true;
+    bool bold = false;
+    bool italic = false;
+    bool underline = false;
+    bool reverse = false;
+    bool blink = false;
+    int width = 1;
+};
+
 //-----------------------------------------------------------------------------
 // TerminalHarness - Test wrapper for libvterm
 //-----------------------------------------------------------------------------
@@ -74,6 +89,9 @@ public:
 
     // Get cell content at position
     uint32_t getChar(int row, int col) const;
+
+    // Get full cell info at position (including colors)
+    CellInfo getCell(int row, int col) const;
 
     // Get raw vterm for advanced testing
     VTerm* vterm() { return _vterm; }

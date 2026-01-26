@@ -1,4 +1,5 @@
 #include <yetty/shader-font.h>
+#include <yetty/shader-manager.h>
 #include <ytrace/ytrace.hpp>
 
 #include <filesystem>
@@ -6,6 +7,7 @@
 #include <sstream>
 #include <regex>
 #include <algorithm>
+#include <unordered_map>
 
 namespace yetty {
 
@@ -13,30 +15,94 @@ namespace yetty {
 static constexpr uint32_t CARD_GLYPH_BASE = 0x100000;
 static constexpr uint32_t SHADER_GLYPH_BASE = 0x101000;
 
-ShaderFont::ShaderFont(Category category, const std::string& shaderDir)
+class ShaderFontImpl : public ShaderFont {
+public:
+    ShaderFontImpl(Category category, const std::string& shaderDir);
+    ~ShaderFontImpl() override = default;
+
+    Result<void> init(std::shared_ptr<ShaderManager> shaderMgr);
+
+    // Font::init() - not used for ShaderFont (we use init with shaderMgr)
+    Result<void> init() override { return Ok(); }
+
+    // Font interface
+    uint32_t getGlyphIndex(uint32_t codepoint) override;
+    uint32_t getGlyphIndex(uint32_t codepoint, Style style) override;
+    uint32_t getGlyphIndex(uint32_t codepoint, bool bold, bool italic) override;
+    void uploadToGpu() override;
+    bool isDirty() const override { return _dirty; }
+    void clearDirty() override { _dirty = false; }
+    uint32_t getAtlasWidth() const override { return 0; }
+    uint32_t getAtlasHeight() const override { return 0; }
+    const std::vector<uint8_t>& getAtlasData() const override { return _empty; }
+
+    // ShaderProvider interface
+    std::string getCode() const override;
+    std::string getDispatchCode() const override;
+    uint32_t getFunctionCount() const override;
+
+    // ShaderFont specific
+    Category getCategory() const override { return _category; }
+    uint32_t getBaseCodepoint() const override { return _baseCodepoint; }
+    Result<void> reload() override;
+    std::vector<std::string> getShaderNames() const override;
+
+private:
+    Result<void> loadShaders();
+    bool parseShaderFilename(const std::string& filename, uint32_t& offset, std::string& name);
+
+    Category _category;
+    std::string _shaderDir;
+    uint32_t _baseCodepoint;
+
+    struct ShaderEntry {
+        uint32_t offset;
+        uint32_t codepoint;
+        std::string name;
+        std::string code;
+    };
+    std::vector<ShaderEntry> _entries;
+    std::unordered_map<uint32_t, uint32_t> _codepointToIndex;
+
+    bool _dirty = true;
+    std::vector<uint8_t> _empty;
+};
+
+// Factory implementation
+Result<ShaderFont::Ptr> ShaderFont::createImpl(ContextType&,
+                                                std::shared_ptr<ShaderManager> shaderMgr,
+                                                Category category,
+                                                const std::string& shaderDir) {
+    auto impl = Ptr(new ShaderFontImpl(category, shaderDir));
+    if (auto res = static_cast<ShaderFontImpl*>(impl.get())->init(shaderMgr); !res) {
+        return Err<Ptr>("ShaderFont init failed", res);
+    }
+    return Ok(std::move(impl));
+}
+
+ShaderFontImpl::ShaderFontImpl(Category category, const std::string& shaderDir)
     : _category(category), _shaderDir(shaderDir) {
-    // Set base codepoint based on category
     _baseCodepoint = (category == Category::Card) ? CARD_GLYPH_BASE : SHADER_GLYPH_BASE;
 
-    // Ensure path ends with separator
     if (!_shaderDir.empty() && _shaderDir.back() != '/' && _shaderDir.back() != '\\') {
         _shaderDir += '/';
     }
 }
 
-Result<ShaderFont::Ptr> ShaderFont::create(Category category, const std::string& shaderDir) {
-    auto font = Ptr(new ShaderFont(category, shaderDir));
-    if (auto res = font->init(); !res) {
-        return Err<Ptr>("Failed to initialize ShaderFont", res);
+Result<void> ShaderFontImpl::init(std::shared_ptr<ShaderManager> shaderMgr) {
+    if (auto res = loadShaders(); !res) {
+        return res;
     }
-    return Ok(std::move(font));
+
+    // Register with ShaderManager
+    if (shaderMgr) {
+        shaderMgr->addProvider(shared_from_this());
+    }
+
+    return Ok();
 }
 
-Result<void> ShaderFont::init() {
-    return loadShaders();
-}
-
-bool ShaderFont::parseShaderFilename(const std::string& filename, uint32_t& offset, std::string& name) {
+bool ShaderFontImpl::parseShaderFilename(const std::string& filename, uint32_t& offset, std::string& name) {
     // Try hex format: 0xNNNN-name.wgsl
     std::regex hexPattern(R"(^0x([0-9a-fA-F]+)-(.+)\.wgsl$)");
     std::smatch hexMatch;
@@ -50,23 +116,18 @@ bool ShaderFont::parseShaderFilename(const std::string& filename, uint32_t& offs
         }
     }
 
-    // Try decimal format (legacy): NNNNNN-name.wgsl (e.g., 1048577-spinner.wgsl)
+    // Try decimal format (legacy): NNNNNN-name.wgsl
     std::regex decPattern(R"(^(\d+)-(.+)\.wgsl$)");
     std::smatch decMatch;
     if (std::regex_match(filename, decMatch, decPattern)) {
         try {
             uint32_t codepoint = static_cast<uint32_t>(std::stoul(decMatch[1].str()));
-            // For legacy files, the number is the full codepoint, not offset
-            // Calculate offset from the category's base
             if (codepoint >= _baseCodepoint) {
                 offset = codepoint - _baseCodepoint;
                 name = decMatch[2].str();
                 return true;
             }
-            // If codepoint is less than base, check if it's in the card range for glyph category
             if (_category == Category::Glyph && codepoint >= CARD_GLYPH_BASE) {
-                // Legacy: full codepoint was used, convert to offset from CARD_GLYPH_BASE
-                // for backward compatibility with existing shader files
                 offset = codepoint - CARD_GLYPH_BASE;
                 name = decMatch[2].str();
                 return true;
@@ -80,12 +141,11 @@ bool ShaderFont::parseShaderFilename(const std::string& filename, uint32_t& offs
     return false;
 }
 
-Result<void> ShaderFont::loadShaders() {
+Result<void> ShaderFontImpl::loadShaders() {
     _entries.clear();
     _codepointToIndex.clear();
 
 #if defined(__EMSCRIPTEN__) || defined(__ANDROID__)
-    // Limited filesystem support on web/Android
     yinfo("ShaderFont: filesystem limited on this platform, using embedded shaders");
     return Ok();
 #else
@@ -94,7 +154,6 @@ Result<void> ShaderFont::loadShaders() {
         return Ok();
     }
 
-    // Determine subdirectory based on category
     std::string searchDir = _shaderDir;
     if (_category == Category::Card) {
         searchDir += "cards/";
@@ -102,8 +161,6 @@ Result<void> ShaderFont::loadShaders() {
         searchDir += "glyphs/";
     }
 
-    // If the subdirectory doesn't exist, fall back to main directory
-    // (for backward compatibility with old file structure)
     if (!std::filesystem::exists(searchDir)) {
         searchDir = _shaderDir;
     }
@@ -120,7 +177,6 @@ Result<void> ShaderFont::loadShaders() {
                 continue;
             }
 
-            // Read shader file
             std::ifstream file(entry.path());
             if (!file.is_open()) {
                 ywarn("ShaderFont: failed to open {}", entry.path().string());
@@ -136,10 +192,8 @@ Result<void> ShaderFont::loadShaders() {
                 continue;
             }
 
-            // Calculate full codepoint
             uint32_t codepoint = _baseCodepoint + offset;
 
-            // Store entry
             ShaderEntry shaderEntry;
             shaderEntry.offset = offset;
             shaderEntry.codepoint = codepoint;
@@ -155,14 +209,11 @@ Result<void> ShaderFont::loadShaders() {
         }
     } catch (const std::exception& e) {
         yerror("ShaderFont: error scanning shaders: {}", e.what());
-        // Don't fail - just continue with whatever we have
     }
 
-    // Sort entries by offset for consistent ordering
     std::sort(_entries.begin(), _entries.end(),
               [](const auto& a, const auto& b) { return a.offset < b.offset; });
 
-    // Rebuild index map after sorting
     _codepointToIndex.clear();
     for (uint32_t i = 0; i < _entries.size(); i++) {
         _codepointToIndex[_entries[i].codepoint] = i;
@@ -178,49 +229,38 @@ Result<void> ShaderFont::loadShaders() {
 #endif
 }
 
-Result<void> ShaderFont::reload() {
+Result<void> ShaderFontImpl::reload() {
     return loadShaders();
 }
 
-// =========================================================================
-// YettyFont interface
-// =========================================================================
-
-uint32_t ShaderFont::getGlyphIndex(uint32_t codepoint) {
+// Font interface
+uint32_t ShaderFontImpl::getGlyphIndex(uint32_t codepoint) {
     auto it = _codepointToIndex.find(codepoint);
     if (it != _codepointToIndex.end()) {
-        // Return the codepoint itself - shader glyphs use codepoint as glyph index
         return codepoint;
     }
-    // Return default (first shader in category, or 0 if none)
     if (!_entries.empty()) {
         return _entries[0].codepoint;
     }
     return 0;
 }
 
-uint32_t ShaderFont::getGlyphIndex(uint32_t codepoint, Style) {
-    // Shader fonts don't have style variants
+uint32_t ShaderFontImpl::getGlyphIndex(uint32_t codepoint, Style) {
     return getGlyphIndex(codepoint);
 }
 
-uint32_t ShaderFont::getGlyphIndex(uint32_t codepoint, bool, bool) {
-    // Shader fonts don't have style variants
+uint32_t ShaderFontImpl::getGlyphIndex(uint32_t codepoint, bool, bool) {
     return getGlyphIndex(codepoint);
 }
 
-void ShaderFont::uploadToGpu() {
-    // Shader fonts don't have texture data to upload
-    // They contribute code to the shader module instead
+void ShaderFontImpl::uploadToGpu() {
+    // Shader fonts contribute code to shader module, no texture upload
 }
 
-// =========================================================================
 // ShaderProvider interface
-// =========================================================================
-
-std::string ShaderFont::getCode() const {
+std::string ShaderFontImpl::getCode() const {
     std::string code;
-    code.reserve(_entries.size() * 1024); // Estimate
+    code.reserve(_entries.size() * 1024);
 
     for (const auto& entry : _entries) {
         code += "// Shader ";
@@ -228,7 +268,6 @@ std::string ShaderFont::getCode() const {
         code += ": ";
         code += entry.name;
         code += " (codepoint 0x";
-        // Format as hex
         char buf[16];
         snprintf(buf, sizeof(buf), "%06X", entry.codepoint);
         code += buf;
@@ -240,7 +279,7 @@ std::string ShaderFont::getCode() const {
     return code;
 }
 
-std::string ShaderFont::getDispatchCode() const {
+std::string ShaderFontImpl::getDispatchCode() const {
     if (_entries.empty()) {
         return "";
     }
@@ -255,7 +294,6 @@ std::string ShaderFont::getDispatchCode() const {
         }
         first = false;
 
-        // Generate dispatch: if (glyphIndex == CODEPOINT) { return shaderGlyph_CODEPOINT(...); }
         dispatch += "if (glyphIndex == ";
         dispatch += std::to_string(entry.codepoint);
         dispatch += "u) {\n        return shaderGlyph_";
@@ -270,11 +308,11 @@ std::string ShaderFont::getDispatchCode() const {
     return dispatch;
 }
 
-uint32_t ShaderFont::getFunctionCount() const {
+uint32_t ShaderFontImpl::getFunctionCount() const {
     return static_cast<uint32_t>(_entries.size());
 }
 
-std::vector<std::string> ShaderFont::getShaderNames() const {
+std::vector<std::string> ShaderFontImpl::getShaderNames() const {
     std::vector<std::string> names;
     names.reserve(_entries.size());
     for (const auto& entry : _entries) {

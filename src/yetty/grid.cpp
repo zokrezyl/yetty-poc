@@ -1,3 +1,5 @@
+#error "DEPRECATED: grid.cpp is obsolete. Use GPUScreen."
+
 #include "yetty/grid.h"
 #ifndef YETTY_SERVER_BUILD
 #include <yetty/font.h>

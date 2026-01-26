@@ -12,11 +12,19 @@ function(add_yetty_plugin NAME)
         ${PLUGIN_INCLUDES}
     )
 
-    # Link against yetty_core (provides Font, FontManager, RichText, WebGPUContext)
+    # Add include directories from dependencies
     target_link_libraries(${NAME}_plugin PRIVATE
-        yetty_core
+        glm::glm
+        webgpu
         yaml-cpp
+        ytrace::ytrace
+        stb
         ${PLUGIN_LIBS}
+    )
+
+    # GLFW include dir needed for webgpu-context.h (header only)
+    target_include_directories(${NAME}_plugin PRIVATE
+        ${glfw_SOURCE_DIR}/include
     )
 
     # Output to plugins directory
@@ -40,20 +48,20 @@ add_yetty_plugin(ydraw
     SOURCES ydraw/ydraw.cpp
 )
 
-# rich-text plugin
-add_yetty_plugin(rich-text
-    SOURCES rich-text/rich-text.cpp
-)
+# rich-text plugin - TODO: refactor for new Font interface
+# add_yetty_plugin(rich-text
+#     SOURCES rich-text/rich-text.cpp
+# )
 
 # image plugin
 add_yetty_plugin(image
     SOURCES image/image.cpp
 )
 
-# plot plugin
-add_yetty_plugin(plot
-    SOURCES plot/plot.cpp
-)
+# plot plugin - TODO: refactor for new Font interface
+# add_yetty_plugin(plot
+#     SOURCES plot/plot.cpp
+# )
 
 # piano plugin
 add_subdirectory(piano)
@@ -61,10 +69,10 @@ add_subdirectory(piano)
 # musical-score plugin
 add_subdirectory(musical-score)
 
-# markdown plugin
-add_yetty_plugin(markdown
-    SOURCES markdown/markdown.cpp
-)
+# markdown plugin - TODO: refactor for new Font interface
+# add_yetty_plugin(markdown
+#     SOURCES markdown/markdown.cpp
+# )
 
 #-----------------------------------------------------------------------------
 # ThorVG plugin - Vector graphics (SVG, Lottie animations)
@@ -202,7 +210,7 @@ if(UNIX AND YETTY_PLUGIN_PYTHON)
         ${PYTHON_EMBEDDED_INCLUDE_DIR}
     )
 
-    target_link_libraries(python_widget PRIVATE yetty_core yaml-cpp)
+    target_link_libraries(python_widget PRIVATE yaml-cpp)
 
     # Ensure Python is built before this
     add_dependencies(python_widget python_embedded)

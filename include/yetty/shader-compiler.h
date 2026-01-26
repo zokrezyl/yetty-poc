@@ -1,5 +1,7 @@
 #pragma once
 
+#error "DEPRECATED: shader-compiler.h is obsolete. Use shader-manager.h"
+
 #include <yetty/shader-provider.h>
 #include <yetty/result.hpp>
 #include <webgpu/webgpu.h>

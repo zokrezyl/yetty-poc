@@ -1,5 +1,8 @@
 #pragma once
 
+// DEPRECATED: Do not use WebGPUContext. Use GPUContext from gpu-context.h instead.
+// This header is kept for backward compatibility with Android/Web builds.
+
 #include <yetty/result.hpp>
 #include <webgpu/webgpu.h>
 #include <memory>

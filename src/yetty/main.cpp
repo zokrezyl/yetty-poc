@@ -10,7 +10,15 @@
 
 #include <yetty/yetty.h>
 #include <ytrace/ytrace.hpp>
+#include <spdlog/spdlog.h>
+#include <spdlog/cfg/env.h>
 #include <iostream>
+#include <cstring>
+#include <signal.h>
+
+static void sigint_handler(int sig) {
+    yinfo("SIGINT received! (signal {})", sig);
+}
 
 #if YETTY_WEB
 // Keep Yetty alive for the duration of the web app
@@ -39,23 +47,22 @@ void android_main(struct android_app* app) {
 // Desktop Entry Point
 //-----------------------------------------------------------------------------
 int main(int argc, char* argv[]) {
+    // Set default log level to trace, can be overridden by SPDLOG_LEVEL env var
+    spdlog::set_level(spdlog::level::trace);
+    spdlog::cfg::load_env_levels();
+
+    // Debug: catch SIGINT to see if process receives it
+    signal(SIGINT, sigint_handler);
+
     auto result = yetty::Yetty::create(argc, argv);
     if (!result) {
-        // Check if this is just a "help requested" or "atlas generated" exit
         std::string msg = result.error().message();
-        if (msg == "Help requested" || msg == "Atlas generation complete") {
+        if (msg == "Help requested") {
             return 0;
         }
         yerror("Failed to initialize yetty: {}", yetty::error_msg(result));
         return 1;
     }
-#if YETTY_WEB
-    // Store in global to keep alive after main() returns
-    // (Emscripten main loop continues via requestAnimationFrame)
-    g_yetty = *result;
-    return g_yetty->run();
-#else
     return (*result)->run();
-#endif
 }
 #endif

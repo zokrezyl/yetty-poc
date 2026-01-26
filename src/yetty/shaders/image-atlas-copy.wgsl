@@ -5,17 +5,31 @@
 // =============================================================================
 //
 // The CPU uploads:
-//   - Cell buffer (terminal matrix with glyph codes, fg, bg)
 //   - cardMetadata buffer (image info: dataOffset, dimensions, etc.)
 //   - cardImageData buffer (raw RGBA pixels)
 //
 // This compute shader:
-//   1. Scans cell buffer to find image card glyphs (0x100000)
-//   2. Extracts metadata slot index from fg color
-//   3. Allocates atlas positions using atomic counter
-//   4. Copies pixels from cardImageData to atlas texture
-//   5. Writes atlasX/atlasY back to cardMetadata
+//   1. Scans metadata slots to find valid images (width > 0, height > 0)
+//   2. Allocates atlas positions using atomic counter
+//   3. Copies pixels from cardImageData to atlas texture
+//   4. Writes atlasX/atlasY back to cardMetadata
 //
+// =============================================================================
+// CHANGE LOG:
+// -----------------------------------------------------------------------------
+// Original implementation (main branch, commit c1a0446 "Image card (#39)"):
+//   - Scanned CELL BUFFER to find visible image card glyphs (0x100000)
+//   - Extracted metadata slot index from fg color
+//   - Only processed images that were currently visible on screen
+//
+// Current implementation (ui-refactor branch):
+//   - Scans METADATA SLOTS directly (no cell buffer dependency)
+//   - Processes ALL allocated images, not just visible ones
+//   - Simpler integration: flush() can call prepareAtlas() without cell buffer
+//
+// TODO: Re-add visibility optimization. GPUScreen will notify CardBufferManager
+// which cards are visible/off-screen, allowing us to skip off-screen images.
+// The original cell-scanning approach is preserved in scanAndAllocate_ORIGINAL().
 // =============================================================================
 
 // Cell structure - matches CPU Cell struct
@@ -48,9 +62,82 @@ const IMAGE_SHADER_GLYPH: u32 = 0x100000u;
 @group(0) @binding(4) var<storage, read_write> atlasState: AtlasState;
 @group(0) @binding(5) var<storage, read_write> processedCards: array<atomic<u32>>;
 
-// Phase 1: Scan cells, mark visible cards, allocate atlas positions
+// =============================================================================
+// Phase 1: Scan metadata slots directly (CURRENT - no cell buffer needed)
+// =============================================================================
+// Iterates over all metadata slots and processes those with valid image data.
+// This processes ALL images, not just visible ones.
+// Dispatch with: workgroups = ceil(maxSlots / 256)
 @compute @workgroup_size(256, 1, 1)
-fn scanAndAllocate(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn scanMetadataSlots(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let slotIndex = gid.x;
+
+    // atlasState.gridCols is repurposed as maxSlots for this entry point
+    let maxSlots = atlasState.gridCols;
+    if (slotIndex >= maxSlots) {
+        return;
+    }
+
+    // Read metadata for this slot
+    // ImageCard::Metadata and PlotCard::Metadata are 64 bytes = 16 u32s
+    let metaOffset = slotIndex * 16u;  // 64-byte slots = 16 u32s
+    let imageDataOffset = cardMetadata[metaOffset + 0u];
+    let imageWidth = cardMetadata[metaOffset + 1u];
+    let imageHeight = cardMetadata[metaOffset + 2u];
+
+    // Skip if no valid image data
+    if (imageWidth == 0u || imageHeight == 0u) {
+        return;
+    }
+
+    // Mark as processed
+    atomicStore(&processedCards[slotIndex], 1u);
+
+    // Allocate atlas position using simple row-based packing
+    var atlasX: u32;
+    var atlasY: u32;
+
+    // Atomically allocate X position
+    let prevX = atomicAdd(&atlasState.nextX, imageWidth);
+
+    if (prevX + imageWidth <= atlasState.atlasWidth) {
+        // Fits in current row
+        atlasX = prevX;
+        atlasY = atomicLoad(&atlasState.nextY);
+        atomicMax(&atlasState.rowHeight, imageHeight);
+    } else {
+        // Need new row
+        let currentRowHeight = atomicLoad(&atlasState.rowHeight);
+        let newY = atomicAdd(&atlasState.nextY, currentRowHeight);
+        atomicStore(&atlasState.nextX, imageWidth);
+        atomicStore(&atlasState.rowHeight, imageHeight);
+        atlasX = 0u;
+        atlasY = newY + currentRowHeight;
+    }
+
+    // Check if we exceeded atlas bounds
+    if (atlasY + imageHeight > atlasState.atlasHeight) {
+        atlasX = 0xFFFFFFFFu;
+        atlasY = 0xFFFFFFFFu;
+    }
+
+    // Write atlas position back to metadata
+    cardMetadata[metaOffset + 3u] = atlasX;
+    cardMetadata[metaOffset + 4u] = atlasY;
+}
+
+// =============================================================================
+// Phase 1 ORIGINAL: Scan cells for visible images (PRESERVED FOR FUTURE USE)
+// =============================================================================
+// This is the original implementation from main branch (commit c1a0446).
+// It scans the cell buffer to find visible image card glyphs, which means
+// only images currently on screen get atlas space - more efficient but
+// requires cell buffer dependency.
+//
+// TODO: Re-enable this when GPUScreen notifies CardBufferManager about
+// visible cards. For now, use scanMetadataSlots() instead.
+@compute @workgroup_size(256, 1, 1)
+fn scanAndAllocate_ORIGINAL(@builtin(global_invocation_id) gid: vec3<u32>) {
     let cellIndex = gid.x;
     let totalCells = atlasState.gridCols * atlasState.gridRows;
 
@@ -75,7 +162,8 @@ fn scanAndAllocate(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     // Read metadata for this card
-    let metaOffset = slotIndex * 8u;  // 32-byte slots = 8 u32s
+    // ImageCard::Metadata and PlotCard::Metadata are 64 bytes = 16 u32s
+    let metaOffset = slotIndex * 16u;  // 64-byte slots = 16 u32s
     let imageDataOffset = cardMetadata[metaOffset + 0u];
     let imageWidth = cardMetadata[metaOffset + 1u];
     let imageHeight = cardMetadata[metaOffset + 2u];
@@ -135,7 +223,8 @@ fn copyPixels(@builtin(global_invocation_id) gid: vec3<u32>,
     }
 
     // Read metadata
-    let metaOffset = slotIndex * 8u;
+    // ImageCard::Metadata and PlotCard::Metadata are 64 bytes = 16 u32s
+    let metaOffset = slotIndex * 16u;  // 64-byte slots = 16 u32s
     let imageDataOffset = cardMetadata[metaOffset + 0u];
     let imageWidth = cardMetadata[metaOffset + 1u];
     let imageHeight = cardMetadata[metaOffset + 2u];

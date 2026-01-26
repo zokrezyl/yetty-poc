@@ -1,10 +1,11 @@
-#include "card-buffer-manager.h"
+#include <yetty/card-buffer-manager.h>
 #include <ytrace/ytrace.hpp>
 #include <algorithm>
 #include <cstring>
 #include <fstream>
 #include <sstream>
 #include <array>
+#include <vector>
 
 #ifndef CMAKE_SOURCE_DIR
 #define CMAKE_SOURCE_DIR "."
@@ -14,6 +15,210 @@
 #define WGPU_STR(s) WGPUStringView{.data = s, .length = WGPU_STRLEN}
 
 namespace yetty {
+
+// =============================================================================
+// Helper classes (internal to this .cpp file)
+// =============================================================================
+
+// Pool allocator for fixed-size metadata slots
+class MetadataPool {
+public:
+    MetadataPool(uint32_t slotSize, uint32_t baseOffset, uint32_t slotCount);
+
+    Result<uint32_t> allocate();
+    Result<void> deallocate(uint32_t offset);
+
+    uint32_t slotSize() const { return _slotSize; }
+    uint32_t capacity() const { return _slotCount; }
+    uint32_t used() const { return _slotCount - static_cast<uint32_t>(_freeSlots.size()); }
+
+private:
+    uint32_t _slotSize;
+    uint32_t _baseOffset;
+    uint32_t _slotCount;
+    std::vector<uint32_t> _freeSlots;
+};
+
+// Metadata allocator with multiple pools
+class MetadataAllocator {
+public:
+    static constexpr uint32_t SLOT_32 = 32;
+    static constexpr uint32_t SLOT_64 = 64;
+    static constexpr uint32_t SLOT_128 = 128;
+    static constexpr uint32_t SLOT_256 = 256;
+
+    MetadataAllocator(uint32_t pool32Count, uint32_t pool64Count,
+                      uint32_t pool128Count, uint32_t pool256Count);
+
+    Result<MetadataHandle> allocate(uint32_t size);
+    Result<void> deallocate(MetadataHandle handle);
+
+    uint32_t totalSize() const { return _totalSize; }
+    uint32_t highWaterMark() const { return _highWaterMark; }
+
+private:
+    MetadataPool* findPool(uint32_t size);
+    MetadataPool* findPoolBySlotSize(uint32_t slotSize);
+
+    MetadataPool _pool32;
+    MetadataPool _pool64;
+    MetadataPool _pool128;
+    MetadataPool _pool256;
+    uint32_t _totalSize;
+    uint32_t _highWaterMark = 0;
+};
+
+// Free-list allocator for variable-size storage
+class StorageAllocator {
+public:
+    explicit StorageAllocator(uint32_t capacity);
+
+    Result<StorageHandle> allocate(uint32_t size);
+    Result<void> deallocate(StorageHandle handle);
+
+    uint32_t capacity() const { return _capacity; }
+    uint32_t used() const { return _used; }
+    uint32_t fragmentCount() const { return static_cast<uint32_t>(_freeBlocks.size()); }
+    uint32_t highWaterMark() const { return _highWaterMark; }
+
+private:
+    struct FreeBlock {
+        uint32_t offset;
+        uint32_t size;
+    };
+
+    void mergeFreeBlocks();
+
+    uint32_t _capacity;
+    uint32_t _used;
+    uint32_t _highWaterMark = 0;
+    std::vector<FreeBlock> _freeBlocks;
+};
+
+// Dirty region tracking
+class DirtyTracker {
+public:
+    void markDirty(uint32_t offset, uint32_t size);
+    void clear();
+
+    std::vector<std::pair<uint32_t, uint32_t>> getCoalescedRanges(uint32_t maxGap = 64);
+    bool hasDirty() const { return !_dirtyRanges.empty(); }
+
+private:
+    std::vector<std::pair<uint32_t, uint32_t>> _dirtyRanges;
+};
+
+// =============================================================================
+// CardBufferManagerImpl - implementation class (follows gpu-screen pattern)
+// =============================================================================
+
+class CardBufferManagerImpl : public CardBufferManager {
+public:
+    CardBufferManagerImpl(WGPUDevice device, Config config) noexcept;
+    ~CardBufferManagerImpl() override;
+
+    Result<void> init() noexcept;
+
+    // CardBufferManager interface
+    Result<MetadataHandle> allocateMetadata(uint32_t size) override;
+    Result<void> deallocateMetadata(MetadataHandle handle) override;
+    Result<void> writeMetadata(MetadataHandle handle, const void* data, uint32_t size) override;
+    Result<void> writeMetadataAt(MetadataHandle handle, uint32_t offset, const void* data, uint32_t size) override;
+
+    Result<StorageHandle> allocateStorage(uint32_t size) override;
+    Result<void> deallocateStorage(StorageHandle handle) override;
+    Result<void> writeStorage(StorageHandle handle, const void* data, uint32_t size) override;
+    Result<void> writeStorageAt(StorageHandle handle, uint32_t offset, const void* data, uint32_t size) override;
+
+    Result<StorageHandle> allocateStorageAndLink(MetadataHandle metaHandle,
+                                                  uint32_t metaFieldOffset,
+                                                  uint32_t storageSize) override;
+
+    Result<ImageDataHandle> allocateImageData(uint32_t size) override;
+    Result<void> deallocateImageData(ImageDataHandle handle) override;
+    Result<void> writeImageData(ImageDataHandle handle, const void* data, uint32_t size) override;
+    Result<void> writeImageDataAt(ImageDataHandle handle, uint32_t offset, const void* data, uint32_t size) override;
+
+    Result<void> flush(WGPUQueue queue) override;
+
+    Result<void> initAtlas() override;
+
+    WGPUBuffer metadataBuffer() const override { return _metadataGpuBuffer; }
+    WGPUBuffer storageBuffer() const override { return _storageGpuBuffer; }
+    WGPUBuffer imageDataBuffer() const override { return _imageDataGpuBuffer; }
+
+    uint32_t metadataHighWaterMark() const override { return _metadataAllocator.highWaterMark(); }
+    uint32_t storageHighWaterMark() const override { return _storageAllocator.highWaterMark(); }
+    uint32_t imageDataHighWaterMark() const override { return _imageDataAllocator.highWaterMark(); }
+
+    WGPUTexture atlasTexture() const override { return _atlasTexture; }
+    WGPUTextureView atlasTextureView() const override { return _atlasTextureView; }
+    WGPUSampler atlasSampler() const override { return _atlasSampler; }
+    bool atlasInitialized() const override { return _atlasInitialized; }
+
+    Stats getStats() const override;
+
+private:
+    Result<void> createGpuBuffers();
+    Result<void> createAtlasTexture();
+    Result<void> createAtlasComputePipeline();
+    Result<void> prepareAtlas(WGPUCommandEncoder encoder, WGPUQueue queue,
+                              WGPUBuffer cellBuffer,
+                              uint32_t gridCols, uint32_t gridRows);
+
+    WGPUDevice _device;
+    Config _config;
+
+    // CPU buffers
+    std::vector<uint32_t> _metadataCpuBuffer;
+    std::vector<uint32_t> _storageCpuBuffer;
+    std::vector<uint32_t> _imageDataCpuBuffer;
+
+    WGPUBuffer _metadataGpuBuffer = nullptr;
+    WGPUBuffer _storageGpuBuffer = nullptr;
+    WGPUBuffer _imageDataGpuBuffer = nullptr;
+
+    MetadataAllocator _metadataAllocator;
+    StorageAllocator _storageAllocator;
+    StorageAllocator _imageDataAllocator;
+
+    DirtyTracker _metadataDirty;
+    DirtyTracker _storageDirty;
+    DirtyTracker _imageDataDirty;
+
+    // Image Atlas Resources
+    WGPUTexture _atlasTexture = nullptr;
+    WGPUTextureView _atlasTextureView = nullptr;
+    WGPUSampler _atlasSampler = nullptr;
+
+    WGPUShaderModule _atlasShaderModule = nullptr;
+    WGPUComputePipeline _scanPipeline = nullptr;
+    WGPUComputePipeline _copyPipeline = nullptr;
+
+    WGPUBindGroupLayout _atlasBindGroupLayout = nullptr;
+    WGPUBindGroup _atlasBindGroup = nullptr;
+    WGPUBuffer _lastCellBuffer = nullptr;
+
+    struct AtlasState {
+        uint32_t nextX;
+        uint32_t nextY;
+        uint32_t rowHeight;
+        uint32_t atlasWidth;
+        uint32_t atlasHeight;
+        uint32_t gridCols;
+        uint32_t gridRows;
+        uint32_t _padding;
+    };
+    WGPUBuffer _atlasStateBuffer = nullptr;
+    WGPUBuffer _processedCardsBuffer = nullptr;
+    WGPUBuffer _dummyCellBuffer = nullptr;
+
+    bool _atlasInitialized = false;
+};
+
+// =============================================================================
+// Helper class implementations
+// =============================================================================
 
 // --- MetadataPool ---
 
@@ -225,9 +430,23 @@ std::vector<std::pair<uint32_t, uint32_t>> DirtyTracker::getCoalescedRanges(uint
     return coalesced;
 }
 
-// --- CardBufferManager ---
+// =============================================================================
+// CardBufferManager factory (creates CardBufferManagerImpl)
+// =============================================================================
 
-CardBufferManager::CardBufferManager(WGPUDevice device, Config config)
+Result<CardBufferManager::Ptr> CardBufferManager::create(WGPUDevice device, Config config) noexcept {
+    auto mgr = std::make_shared<CardBufferManagerImpl>(device, config);
+    if (auto res = mgr->init(); !res) {
+        return Err<Ptr>("Failed to initialize CardBufferManager", res);
+    }
+    return Ok(std::move(mgr));
+}
+
+// =============================================================================
+// CardBufferManagerImpl implementation
+// =============================================================================
+
+CardBufferManagerImpl::CardBufferManagerImpl(WGPUDevice device, Config config) noexcept
     : _device(device)
     , _config(config)
     , _metadataGpuBuffer(nullptr)
@@ -237,19 +456,21 @@ CardBufferManager::CardBufferManager(WGPUDevice device, Config config)
                          config.metadataPool128Count, config.metadataPool256Count)
     , _storageAllocator(config.storageCapacity)
     , _imageDataAllocator(config.imageDataCapacity) {
-
-    // Resize to byte count / 4 (buffers are uint32_t for alignment)
-    _metadataCpuBuffer.resize((_metadataAllocator.totalSize() + 3) / 4, 0);
-    _storageCpuBuffer.resize((config.storageCapacity + 3) / 4, 0);
-    _imageDataCpuBuffer.resize((config.imageDataCapacity + 3) / 4, 0);
-
-    auto result = createGpuBuffers();
-    if (!result) {
-        // Log error but don't throw - buffers will be null
-    }
 }
 
-CardBufferManager::~CardBufferManager() {
+Result<void> CardBufferManagerImpl::init() noexcept {
+    // Resize to byte count / 4 (buffers are uint32_t for alignment)
+    _metadataCpuBuffer.resize((_metadataAllocator.totalSize() + 3) / 4, 0);
+    _storageCpuBuffer.resize((_config.storageCapacity + 3) / 4, 0);
+    _imageDataCpuBuffer.resize((_config.imageDataCapacity + 3) / 4, 0);
+
+    if (auto res = createGpuBuffers(); !res) {
+        return Err<void>("Failed to create GPU buffers", res);
+    }
+    return Ok();
+}
+
+CardBufferManagerImpl::~CardBufferManagerImpl() {
     if (_metadataGpuBuffer) {
         wgpuBufferRelease(_metadataGpuBuffer);
     }
@@ -268,12 +489,13 @@ CardBufferManager::~CardBufferManager() {
     if (_atlasShaderModule) wgpuShaderModuleRelease(_atlasShaderModule);
     if (_processedCardsBuffer) wgpuBufferRelease(_processedCardsBuffer);
     if (_atlasStateBuffer) wgpuBufferRelease(_atlasStateBuffer);
+    if (_dummyCellBuffer) wgpuBufferRelease(_dummyCellBuffer);
     if (_atlasSampler) wgpuSamplerRelease(_atlasSampler);
     if (_atlasTextureView) wgpuTextureViewRelease(_atlasTextureView);
     if (_atlasTexture) wgpuTextureRelease(_atlasTexture);
 }
 
-Result<void> CardBufferManager::createGpuBuffers() {
+Result<void> CardBufferManagerImpl::createGpuBuffers() {
     // GPU buffer sizes in bytes (CPU buffers are uint32_t vectors)
     size_t metadataBytes = _metadataCpuBuffer.size() * sizeof(uint32_t);
     size_t storageBytes = _storageCpuBuffer.size() * sizeof(uint32_t);
@@ -322,20 +544,20 @@ Result<void> CardBufferManager::createGpuBuffers() {
     return Ok();
 }
 
-Result<MetadataHandle> CardBufferManager::allocateMetadata(uint32_t size) {
+Result<MetadataHandle> CardBufferManagerImpl::allocateMetadata(uint32_t size) {
     return _metadataAllocator.allocate(size);
 }
 
-Result<void> CardBufferManager::deallocateMetadata(MetadataHandle handle) {
+Result<void> CardBufferManagerImpl::deallocateMetadata(MetadataHandle handle) {
     return _metadataAllocator.deallocate(handle);
 }
 
-Result<void> CardBufferManager::writeMetadata(MetadataHandle handle, const void* data, uint32_t size) {
+Result<void> CardBufferManagerImpl::writeMetadata(MetadataHandle handle, const void* data, uint32_t size) {
     return writeMetadataAt(handle, 0, data, size);
 }
 
-Result<void> CardBufferManager::writeMetadataAt(MetadataHandle handle, uint32_t offset,
-                                                 const void* data, uint32_t size) {
+Result<void> CardBufferManagerImpl::writeMetadataAt(MetadataHandle handle, uint32_t offset,
+                                                     const void* data, uint32_t size) {
     if (!handle.isValid()) {
         return Err("writeMetadataAt: invalid handle");
     }
@@ -352,20 +574,20 @@ Result<void> CardBufferManager::writeMetadataAt(MetadataHandle handle, uint32_t 
     return Ok();
 }
 
-Result<StorageHandle> CardBufferManager::allocateStorage(uint32_t size) {
+Result<StorageHandle> CardBufferManagerImpl::allocateStorage(uint32_t size) {
     return _storageAllocator.allocate(size);
 }
 
-Result<void> CardBufferManager::deallocateStorage(StorageHandle handle) {
+Result<void> CardBufferManagerImpl::deallocateStorage(StorageHandle handle) {
     return _storageAllocator.deallocate(handle);
 }
 
-Result<void> CardBufferManager::writeStorage(StorageHandle handle, const void* data, uint32_t size) {
+Result<void> CardBufferManagerImpl::writeStorage(StorageHandle handle, const void* data, uint32_t size) {
     return writeStorageAt(handle, 0, data, size);
 }
 
-Result<void> CardBufferManager::writeStorageAt(StorageHandle handle, uint32_t offset,
-                                                const void* data, uint32_t size) {
+Result<void> CardBufferManagerImpl::writeStorageAt(StorageHandle handle, uint32_t offset,
+                                                    const void* data, uint32_t size) {
     if (!handle.isValid()) {
         return Err("writeStorageAt: invalid handle");
     }
@@ -382,9 +604,9 @@ Result<void> CardBufferManager::writeStorageAt(StorageHandle handle, uint32_t of
     return Ok();
 }
 
-Result<StorageHandle> CardBufferManager::allocateStorageAndLink(MetadataHandle metaHandle,
-                                                                 uint32_t metaFieldOffset,
-                                                                 uint32_t storageSize) {
+Result<StorageHandle> CardBufferManagerImpl::allocateStorageAndLink(MetadataHandle metaHandle,
+                                                                     uint32_t metaFieldOffset,
+                                                                     uint32_t storageSize) {
     auto storageResult = allocateStorage(storageSize);
     if (!storageResult) {
         return Err("allocateStorageAndLink: storage allocation failed");
@@ -402,20 +624,20 @@ Result<StorageHandle> CardBufferManager::allocateStorageAndLink(MetadataHandle m
     return Ok(storage);
 }
 
-Result<ImageDataHandle> CardBufferManager::allocateImageData(uint32_t size) {
+Result<ImageDataHandle> CardBufferManagerImpl::allocateImageData(uint32_t size) {
     return _imageDataAllocator.allocate(size);
 }
 
-Result<void> CardBufferManager::deallocateImageData(ImageDataHandle handle) {
+Result<void> CardBufferManagerImpl::deallocateImageData(ImageDataHandle handle) {
     return _imageDataAllocator.deallocate(handle);
 }
 
-Result<void> CardBufferManager::writeImageData(ImageDataHandle handle, const void* data, uint32_t size) {
+Result<void> CardBufferManagerImpl::writeImageData(ImageDataHandle handle, const void* data, uint32_t size) {
     return writeImageDataAt(handle, 0, data, size);
 }
 
-Result<void> CardBufferManager::writeImageDataAt(ImageDataHandle handle, uint32_t offset,
-                                                  const void* data, uint32_t size) {
+Result<void> CardBufferManagerImpl::writeImageDataAt(ImageDataHandle handle, uint32_t offset,
+                                                      const void* data, uint32_t size) {
     if (!handle.isValid()) {
         return Err("writeImageDataAt: invalid handle");
     }
@@ -432,7 +654,7 @@ Result<void> CardBufferManager::writeImageDataAt(ImageDataHandle handle, uint32_
     return Ok();
 }
 
-Result<void> CardBufferManager::flush(WGPUQueue queue) {
+Result<void> CardBufferManagerImpl::flush(WGPUQueue queue) {
     // Cast to uint8_t* for byte-based offset arithmetic
     const uint8_t* metadataBytes = reinterpret_cast<const uint8_t*>(_metadataCpuBuffer.data());
     const uint8_t* storageBytes = reinterpret_cast<const uint8_t*>(_storageCpuBuffer.data());
@@ -477,10 +699,37 @@ Result<void> CardBufferManager::flush(WGPUQueue queue) {
         }
     }
 
+    // =========================================================================
+    // Run compute shader to populate atlas texture
+    // This uses scanMetadataSlots which iterates over metadata slots directly,
+    // no cell buffer scanning needed (simplified from original design).
+    // See image-atlas-copy.wgsl for details.
+    // =========================================================================
+    if (_atlasInitialized && _imageDataAllocator.used() > 0) {
+        WGPUCommandEncoderDescriptor encoderDesc = {};
+        WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(_device, &encoderDesc);
+        if (encoder) {
+            // Use maxSlots based on how many 64-byte slots we have
+            // (metadataPool64Count from config, typically 64)
+            uint32_t maxSlots = _config.metadataPool64Count;
+            if (auto res = prepareAtlas(encoder, queue, _dummyCellBuffer, maxSlots, 1); !res) {
+                yerror("flush: prepareAtlas failed: {}", res.error().message());
+            }
+
+            WGPUCommandBufferDescriptor cmdDesc = {};
+            WGPUCommandBuffer cmdBuffer = wgpuCommandEncoderFinish(encoder, &cmdDesc);
+            if (cmdBuffer) {
+                wgpuQueueSubmit(queue, 1, &cmdBuffer);
+                wgpuCommandBufferRelease(cmdBuffer);
+            }
+            wgpuCommandEncoderRelease(encoder);
+        }
+    }
+
     return Ok();
 }
 
-CardBufferManager::Stats CardBufferManager::getStats() const {
+CardBufferManager::Stats CardBufferManagerImpl::getStats() const {
     return Stats{
         .metadataUsed = _metadataAllocator.totalSize() - 0,  // TODO: track properly
         .metadataCapacity = _metadataAllocator.totalSize(),
@@ -498,7 +747,7 @@ CardBufferManager::Stats CardBufferManager::getStats() const {
 // Image Atlas Implementation
 // =============================================================================
 
-Result<void> CardBufferManager::initAtlas() {
+Result<void> CardBufferManagerImpl::initAtlas() {
     if (auto res = createAtlasTexture(); !res) {
         return res;
     }
@@ -511,7 +760,7 @@ Result<void> CardBufferManager::initAtlas() {
     return Ok();
 }
 
-Result<void> CardBufferManager::createAtlasTexture() {
+Result<void> CardBufferManagerImpl::createAtlasTexture() {
     size_t atlasBytes = IMAGE_ATLAS_SIZE * IMAGE_ATLAS_SIZE * 4;  // RGBA8
     yinfo("GPU_ALLOC CardBufferManager: atlasTexture={}x{} RGBA8 = {} bytes ({:.2f} MB)",
           IMAGE_ATLAS_SIZE, IMAGE_ATLAS_SIZE, atlasBytes, atlasBytes / (1024.0 * 1024.0));
@@ -592,10 +841,22 @@ Result<void> CardBufferManager::createAtlasTexture() {
     yinfo("GPU_ALLOC CardBufferManager: processedCardsBuffer={} bytes ({:.2f} KB)",
           processedBytes, processedBytes / 1024.0);
 
+    // Create dummy cell buffer - scanMetadataSlots doesn't use cells, but the
+    // shader binding still requires a valid buffer at binding 0
+    WGPUBufferDescriptor dummyDesc = {};
+    dummyDesc.label = WGPU_STR("DummyCellBuffer");
+    dummyDesc.size = 12;  // One Cell struct (3 x u32)
+    dummyDesc.usage = WGPUBufferUsage_Storage;
+    dummyDesc.mappedAtCreation = false;
+    _dummyCellBuffer = wgpuDeviceCreateBuffer(_device, &dummyDesc);
+    if (!_dummyCellBuffer) {
+        return Err<void>("Failed to create dummy cell buffer");
+    }
+
     return Ok();
 }
 
-Result<void> CardBufferManager::createAtlasComputePipeline() {
+Result<void> CardBufferManagerImpl::createAtlasComputePipeline() {
     // Load shader source
     const char* shaderPath = CMAKE_SOURCE_DIR "/src/yetty/shaders/image-atlas-copy.wgsl";
     yinfo("Loading compute shader from: {}", shaderPath);
@@ -687,7 +948,9 @@ Result<void> CardBufferManager::createAtlasComputePipeline() {
     scanPipelineDesc.label = WGPU_STR("ImageAtlasScanPipeline");
     scanPipelineDesc.layout = pipelineLayout;
     scanPipelineDesc.compute.module = _atlasShaderModule;
-    scanPipelineDesc.compute.entryPoint = WGPU_STR("scanAndAllocate");
+    // Use scanMetadataSlots - iterates over metadata slots, no cell buffer needed
+    // Original scanAndAllocate_ORIGINAL is preserved in shader for future use
+    scanPipelineDesc.compute.entryPoint = WGPU_STR("scanMetadataSlots");
 
     _scanPipeline = wgpuDeviceCreateComputePipeline(_device, &scanPipelineDesc);
     if (!_scanPipeline) {
@@ -714,39 +977,41 @@ Result<void> CardBufferManager::createAtlasComputePipeline() {
     return Ok();
 }
 
-Result<void> CardBufferManager::prepareAtlas(WGPUCommandEncoder encoder, WGPUQueue queue,
-                                              WGPUBuffer cellBuffer,
-                                              uint32_t gridCols, uint32_t gridRows) {
+Result<void> CardBufferManagerImpl::prepareAtlas(WGPUCommandEncoder encoder, WGPUQueue queue,
+                                                  WGPUBuffer cellBuffer,
+                                                  uint32_t gridCols, uint32_t gridRows) {
     if (!_atlasInitialized) {
         return Err<void>("Atlas not initialized");
     }
 
-    // DEBUG: Dump metadata for slot 256 (where image card is allocated)
+    // DEBUG: Dump metadata for first few slots
     const uint32_t* metaU32 = _metadataCpuBuffer.data();
-    uint32_t slot = 256;
-    uint32_t offset = slot * 8;  // 32 bytes = 8 u32s per slot index
-    if (offset + 5 < _metadataCpuBuffer.size()) {
-        uint32_t imageDataOffset = metaU32[offset + 0];
-        uint32_t imageWidth = metaU32[offset + 1];
-        uint32_t imageHeight = metaU32[offset + 2];
-        uint32_t atlasX = metaU32[offset + 3];
-        uint32_t atlasY = metaU32[offset + 4];
-        if (imageWidth > 0 && imageHeight > 0) {
-            yinfo("DEBUG slot[256]: dataOffset={} size={}x{} atlasPos=({},{}) bufSize={}",
-                  imageDataOffset, imageWidth, imageHeight, atlasX, atlasY,
-                  _metadataCpuBuffer.size() * sizeof(uint32_t));
+    for (uint32_t slot = 0; slot < 4 && slot < gridCols; ++slot) {
+        // ImageCard::Metadata and PlotCard::Metadata are 64 bytes = 16 u32s
+        uint32_t offset = slot * 16;  // 64 bytes = 16 u32s per slot
+        if (offset + 5 < _metadataCpuBuffer.size()) {
+            uint32_t imageDataOffset = metaU32[offset + 0];
+            uint32_t imageWidth = metaU32[offset + 1];
+            uint32_t imageHeight = metaU32[offset + 2];
+            uint32_t atlasX = metaU32[offset + 3];
+            uint32_t atlasY = metaU32[offset + 4];
+            if (imageWidth > 0 && imageHeight > 0) {
+                yinfo("DEBUG slot[{}]: dataOffset={} size={}x{} atlasPos=({},{})",
+                      slot, imageDataOffset, imageWidth, imageHeight, atlasX, atlasY);
+            }
         }
     }
 
     // Reset atlas state for this frame
+    // Note: gridCols is repurposed as maxSlots for scanMetadataSlots shader
     AtlasState initialState = {};
     initialState.nextX = 0;
     initialState.nextY = 0;
     initialState.rowHeight = 0;
     initialState.atlasWidth = IMAGE_ATLAS_SIZE;
     initialState.atlasHeight = IMAGE_ATLAS_SIZE;
-    initialState.gridCols = gridCols;
-    initialState.gridRows = gridRows;
+    initialState.gridCols = gridCols;  // maxSlots for scanMetadataSlots
+    initialState.gridRows = gridRows;  // unused in scanMetadataSlots
     initialState._padding = 0;
 
     wgpuQueueWriteBuffer(queue, _atlasStateBuffer, 0, &initialState, sizeof(initialState));
@@ -824,7 +1089,8 @@ Result<void> CardBufferManager::prepareAtlas(WGPUCommandEncoder encoder, WGPUQue
         return Err<void>("Failed to begin compute pass");
     }
 
-    // Phase 1: Scan cells and allocate atlas positions
+    // Phase 1: Scan metadata slots and allocate atlas positions
+    // Note: gridCols is repurposed as maxSlots when using scanMetadataSlots
     if (!_scanPipeline) {
         yerror("prepareAtlas: _scanPipeline is NULL!");
         wgpuComputePassEncoderEnd(computePass);
@@ -835,10 +1101,11 @@ Result<void> CardBufferManager::prepareAtlas(WGPUCommandEncoder encoder, WGPUQue
     wgpuComputePassEncoderSetPipeline(computePass, _scanPipeline);
     wgpuComputePassEncoderSetBindGroup(computePass, 0, _atlasBindGroup, 0, nullptr);
 
-    uint32_t totalCells = gridCols * gridRows;
-    uint32_t workgroupsX = (totalCells + 255) / 256;
-    yinfo("prepareAtlas: dispatching scanAndAllocate with {} workgroups ({} cells, {}x{})",
-          workgroupsX, totalCells, gridCols, gridRows);
+    // gridCols = maxSlots when using scanMetadataSlots (see shader comment)
+    uint32_t maxSlots = gridCols;
+    uint32_t workgroupsX = (maxSlots + 255) / 256;
+    yinfo("prepareAtlas: dispatching scanMetadataSlots with {} workgroups ({} slots)",
+          workgroupsX, maxSlots);
     wgpuComputePassEncoderDispatchWorkgroups(computePass, workgroupsX, 1, 1);
 
     // Phase 2: Copy pixels to atlas
@@ -847,11 +1114,9 @@ Result<void> CardBufferManager::prepareAtlas(WGPUCommandEncoder encoder, WGPUQue
 
     // Dispatch workgroups: (imageWidth/16, imageHeight/16, numSlots)
     // For ~1000x1000 images, need 64x64 workgroups
-    // Limit visible cards to reduce dispatch overhead (early-exit for unused slots)
-    constexpr uint32_t MAX_VISIBLE_CARDS = 16;
     uint32_t maxImageDim = 1024;  // Max image dimension we handle per dispatch
     uint32_t workgroupsPerImage = (maxImageDim + 15) / 16;  // 64 workgroups
-    wgpuComputePassEncoderDispatchWorkgroups(computePass, workgroupsPerImage, workgroupsPerImage, MAX_VISIBLE_CARDS);
+    wgpuComputePassEncoderDispatchWorkgroups(computePass, workgroupsPerImage, workgroupsPerImage, maxSlots);
 
     wgpuComputePassEncoderEnd(computePass);
     wgpuComputePassEncoderRelease(computePass);

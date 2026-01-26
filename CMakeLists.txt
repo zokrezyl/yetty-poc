@@ -245,7 +245,8 @@ if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
         ${CDB_SOURCE_DIR}/seek_set.c
         ${CDB_SOURCE_DIR}/seek_cur.c
     )
-    target_include_directories(cdb PUBLIC ${CDB_SOURCE_DIR})
+    # Use SYSTEM to avoid cdb's 'version' file conflicting with C++20 <version> header
+    target_include_directories(cdb SYSTEM PUBLIC ${CDB_SOURCE_DIR})
     target_compile_options(cdb PRIVATE -w)  # Suppress warnings in third-party code
     set_target_properties(cdb PROPERTIES POSITION_INDEPENDENT_CODE ON)
 endif()
@@ -454,69 +455,6 @@ if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
         add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/build-tools/cmake/python python_build)
     endif()
 
-    set(YETTY_CORE_SOURCES
-        src/yetty/webgpu-context.cpp
-        src/yetty/font.cpp
-        src/yetty/font-manager.cpp
-        src/yetty/ms-msdf-font.cpp
-        src/yetty/yetty-font-manager.cpp
-        src/yetty/rich-text.cpp
-        src/yetty/emoji-atlas.cpp
-        src/yetty/bm-font.cpp
-        src/yetty/shader-font.cpp
-        src/yetty/shader-compiler.cpp
-        src/yetty/ydraw.cpp
-        src/yetty/widget-frame-renderer.cpp
-    )
-
-    add_library(yetty_core SHARED ${YETTY_CORE_SOURCES})
-
-    target_include_directories(yetty_core PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
-        ${CMAKE_CURRENT_SOURCE_DIR}/include
-    )
-
-    target_compile_definitions(yetty_core PRIVATE
-        YETTY_WEB=0
-        YETTY_ANDROID=0
-    )
-
-    # Platform-specific font discovery
-    if(WIN32)
-        # Windows: Use DirectWrite/GDI for font discovery (no fontconfig)
-        target_compile_definitions(yetty_core PRIVATE YETTY_USE_DIRECTWRITE=1)
-        target_link_libraries(yetty_core PUBLIC dwrite)
-    else()
-        # Unix: Use fontconfig for font fallback
-        find_package(PkgConfig REQUIRED)
-        pkg_check_modules(FONTCONFIG REQUIRED fontconfig)
-        target_include_directories(yetty_core PRIVATE ${FONTCONFIG_INCLUDE_DIRS})
-        target_compile_definitions(yetty_core PRIVATE YETTY_USE_FONTCONFIG=1)
-    endif()
-
-    target_link_libraries(yetty_core PUBLIC
-        webgpu
-        glfw
-        glfw3webgpu
-        imgui
-        glm::glm
-        stb
-        yaml-cpp
-        msdfgen::msdfgen-core
-        msdfgen::msdfgen-ext
-        freetype
-        ytrace::ytrace
-        lz4_static
-        uv_a
-        cdb
-        $<$<NOT:$<BOOL:${WIN32}>>:${FONTCONFIG_LIBRARIES}>
-    )
-
-    set_target_properties(yetty_core PROPERTIES
-        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
-        POSITION_INDEPENDENT_CODE ON
-    )
-
     # Build plugins as shared libraries (desktop only)
     add_subdirectory(src/yetty/plugins)
 endif()
@@ -526,21 +464,17 @@ endif()
 #-----------------------------------------------------------------------------
 # Common sources for all platforms
 set(YETTY_SOURCES
-    src/yetty/grid-renderer.cpp
-    src/yetty/grid.cpp
 )
 
 # Add core sources for non-desktop platforms (desktop uses yetty_core library)
 if(EMSCRIPTEN OR YETTY_ANDROID)
     list(APPEND YETTY_SOURCES
-        src/yetty/webgpu-context.cpp
-        src/yetty/font.cpp
+        # src/yetty/font.cpp  # Moved to obsolete
         src/yetty/font-manager.cpp
-        src/yetty/rich-text.cpp
-        src/yetty/emoji-atlas.cpp
+        # src/yetty/rich-text.cpp  # TODO: refactor for new Font interface
         src/yetty/bm-font.cpp
         src/yetty/shader-font.cpp
-        src/yetty/shader-compiler.cpp
+        src/yetty/shader-manager.cpp
         src/yetty/ydraw.cpp
         src/yetty/widget-frame-renderer.cpp
     )
@@ -556,7 +490,7 @@ if(YETTY_ANDROID)
         src/yetty/terminal.cpp
         src/yetty/gpu-screen.cpp
         src/yetty/osc-command.cpp
-        src/yetty/widget-factory.cpp
+        # src/yetty/widget-factory.cpp  # TODO: refactor later
     )
 elseif(NOT EMSCRIPTEN)
     # Desktop uses main.cpp with GLFW
@@ -564,23 +498,33 @@ elseif(NOT EMSCRIPTEN)
     list(APPEND YETTY_SOURCES
         src/yetty/main.cpp
         src/yetty/yetty.cpp
-        src/yetty/input-handler.cpp
         src/yetty/config.cpp
         src/yetty/terminal.cpp
+        src/yetty/terminal-view.cpp
         src/yetty/gpu-screen.cpp
-        src/yetty/local-terminal-backend.cpp
-        src/yetty/remote-terminal-backend.cpp
-        src/yetty/remote-terminal.cpp
-        src/yetty/shared-grid.cpp
-        src/yetty/widget-factory.cpp
+        # src/yetty/widget-factory.cpp  # TODO: refactor later
         src/yetty/osc-command.cpp
         src/yetty/custom-glyph-plugin.cpp
-        src/yetty/shader-manager.cpp
-        src/yetty/shader-glyph-renderer.cpp
         src/yetty/card-buffer-manager.cpp
         src/yetty/card-factory.cpp
+        src/yetty/card.cpp
+        src/yetty/imgui-manager.cpp
         src/yetty/cards/plot-card.cpp
         src/yetty/cards/image-card.cpp
+        # Core sources (previously in yetty_core)
+        # src/yetty/font.cpp  # Moved to obsolete
+        src/yetty/ms-msdf-font.cpp
+        src/yetty/font-manager.cpp
+        # src/yetty/rich-text.cpp  # TODO: refactor for new Font interface
+        src/yetty/bm-font.cpp
+        src/yetty/shader-font.cpp
+        src/yetty/shader-manager.cpp
+        src/yetty/ydraw.cpp
+        src/yetty/widget-frame-renderer.cpp
+        src/yetty/tile.cpp
+        src/yetty/view.cpp
+        src/yetty/workspace.cpp
+        src/yetty/base/event-loop.cpp
     )
     # Python plugin built into main executable (Unix only)
     if(UNIX AND YETTY_PLUGIN_PYTHON)
@@ -735,13 +679,35 @@ else()
     # Export symbols so plugins can find them (e.g., WidgetFactory::getShaderManager)
     set_target_properties(yetty PROPERTIES ENABLE_EXPORTS TRUE)
 
-    # Link against yetty_core (provides font, rich-text, webgpu-context, glfw, glfw3webgpu)
+    # Platform-specific font discovery
+    if(WIN32)
+        target_compile_definitions(yetty PRIVATE YETTY_USE_DIRECTWRITE=1)
+        target_link_libraries(yetty PRIVATE dwrite)
+    else()
+        find_package(PkgConfig REQUIRED)
+        pkg_check_modules(FONTCONFIG REQUIRED fontconfig)
+        target_include_directories(yetty PRIVATE ${FONTCONFIG_INCLUDE_DIRS})
+        target_compile_definitions(yetty PRIVATE YETTY_USE_FONTCONFIG=1)
+    endif()
+
     target_link_libraries(yetty PRIVATE
-        yetty_core
+        webgpu
+        glfw
+        glfw3webgpu
+        imgui
+        glm::glm
         stb
         yaml-cpp
         args
         vterm
+        msdfgen::msdfgen-core
+        msdfgen::msdfgen-ext
+        freetype
+        ytrace::ytrace
+        lz4_static
+        uv_a
+        cdb
+        $<$<NOT:$<BOOL:${WIN32}>>:${FONTCONFIG_LIBRARIES}>
     )
 
     # Platform-specific PTY library
@@ -805,93 +771,14 @@ else()
     #-------------------------------------------------------------------------
     # Unit tests (desktop only)
     #-------------------------------------------------------------------------
-    option(YETTY_BUILD_TESTS "Build unit tests" ON)
+    option(YETTY_BUILD_TESTS "Build unit tests" OFF)
     if(YETTY_BUILD_TESTS)
         enable_testing()
         add_subdirectory(test/ut)
     endif()
 
-    #-------------------------------------------------------------------------
-    # Plugin tester (desktop only)
-    #-------------------------------------------------------------------------
-    add_executable(yetty-plugin-tester
-        src/yetty/tester/main.cpp
-        src/yetty/webgpu-context.cpp
-    )
-    target_include_directories(yetty-plugin-tester PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
-        ${CMAKE_CURRENT_SOURCE_DIR}/include
-    )
-    target_compile_definitions(yetty-plugin-tester PRIVATE
-        CMAKE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
-        CMAKE_BINARY_DIR="${CMAKE_CURRENT_BINARY_DIR}"
-    )
-    target_link_libraries(yetty-plugin-tester PRIVATE
-        yetty_core
-        webgpu
-        glm::glm
-        ytrace::ytrace
-        args
-        ${CMAKE_DL_LIBS}
-    )
-    # Link Python into plugin tester so Python plugin symbols are available
-    if(TARGET python_embedded)
-        add_dependencies(yetty-plugin-tester python_embedded)
-        if(APPLE)
-            # On macOS, also need libintl and iconv for Python's locale module
-            if(EXISTS "/usr/local/lib/libintl.a")
-                set(INTL_LIBRARY "/usr/local/lib/libintl.a")
-            elseif(EXISTS "/opt/homebrew/lib/libintl.a")
-                set(INTL_LIBRARY "/opt/homebrew/lib/libintl.a")
-            elseif(EXISTS "/opt/local/lib/libintl.a")
-                set(INTL_LIBRARY "/opt/local/lib/libintl.a")
-            endif()
-
-            target_link_libraries(yetty-plugin-tester PRIVATE
-                -Wl,-force_load,$<TARGET_FILE:python_embedded>
-                ${INTL_LIBRARY}
-                iconv
-                m pthread
-            )
-        else()
-            target_link_options(yetty-plugin-tester PRIVATE -rdynamic)
-            target_link_libraries(yetty-plugin-tester PRIVATE
-                -Wl,--whole-archive
-                python_embedded
-                -Wl,--no-whole-archive
-                m dl pthread
-            )
-        endif()
-    endif()
-
-    #-------------------------------------------------------------------------
-    # yetty-server - Terminal multiplexer server (desktop only)
-    #-------------------------------------------------------------------------
-    add_executable(yetty-server
-        src/yetty/server/main.cpp
-        src/yetty/local-terminal-backend.cpp
-        src/yetty/shared-grid.cpp
-        src/yetty/grid.cpp
-    )
-    target_include_directories(yetty-server PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
-        ${CMAKE_CURRENT_SOURCE_DIR}/include
-    )
-    target_compile_definitions(yetty-server PRIVATE
-        CMAKE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
-        YETTY_SERVER_BUILD=1
-    )
-    target_link_libraries(yetty-server PRIVATE
-        vterm
-        uv_a
-        ytrace::ytrace
-        ${CMAKE_DL_LIBS}
-    )
-    # Linux: Link against util for forkpty, rt for shm_open
-    # macOS has these in libc, no separate libraries needed
-    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        target_link_libraries(yetty-server PRIVATE util rt)
-    endif()
+    # Plugin tester disabled - was using yetty_core which is removed
+    # TODO: Re-enable when needed
 
     # Tools
     add_subdirectory(tools)

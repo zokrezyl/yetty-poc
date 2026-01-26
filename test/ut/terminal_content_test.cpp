@@ -5,6 +5,11 @@
 // Covers: reset(), getChar(), scrollback restore
 //=============================================================================
 
+// Include C++ standard headers before boost/ut.hpp (cdb version file conflict)
+#include <cstddef>
+#include <version>
+#include <algorithm>
+
 #include <boost/ut.hpp>
 #include "harness/terminal_harness.h"
 
