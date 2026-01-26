@@ -185,6 +185,9 @@ public:
     void update(float time) override = 0;
     const char* typeName() const override { return "ydraw"; }
 
+    // Override for 64-byte metadata slots (shader uses slotIndex * 16)
+    uint32_t metadataSlotIndex() const override { return _metaHandle.offset / 64; }
+
     //=========================================================================
     // YDraw-specific API
     //=========================================================================

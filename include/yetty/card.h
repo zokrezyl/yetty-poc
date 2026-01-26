@@ -66,8 +66,10 @@ public:
     // Raw byte offset in metadata buffer
     uint32_t metadataOffset() const { return _metaHandle.offset; }
 
-    // Slot index for ANSI encoding (offset / 32)
-    uint32_t metadataSlotIndex() const { return _metaHandle.offset / 32; }
+    // Slot index for ANSI encoding
+    // Default: 32-byte slots (Image, Plot)
+    // Override for 64-byte slots (YDraw, HDraw)
+    virtual uint32_t metadataSlotIndex() const { return _metaHandle.offset / 32; }
 
     // Shader glyph codepoint
     uint32_t shaderGlyph() const { return _shaderGlyph; }

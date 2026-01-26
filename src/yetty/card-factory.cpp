@@ -2,6 +2,7 @@
 #include "cards/image.h"
 #include "cards/plot.h"
 #include "cards/ydraw.h"
+#include "cards/hdraw.h"
 #include <ytrace/ytrace.hpp>
 #include <unordered_map>
 
@@ -40,6 +41,14 @@ public:
                                  const std::string& args,
                                  const std::string& payload) {
             return card::YDraw::create(mgr, gpu, x, y, w, h, args, payload);
+        });
+
+        registerCard("hdraw", [](CardBufferManager::Ptr mgr, const GPUContext& gpu,
+                                 int32_t x, int32_t y,
+                                 uint32_t w, uint32_t h,
+                                 const std::string& args,
+                                 const std::string& payload) {
+            return card::HDraw::create(mgr, gpu, x, y, w, h, args, payload);
         });
 
         return Ok();
