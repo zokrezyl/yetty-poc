@@ -642,6 +642,24 @@ Result<void> YettyImpl::initCallbacks() noexcept {
         loop->dispatch(base::Event::mouseMove(static_cast<float>(xpos), static_cast<float>(ypos)));
     });
 
+    glfwSetScrollCallback(_window, [](GLFWwindow* w, double xoffset, double yoffset) {
+        double xpos, ypos;
+        glfwGetCursorPos(w, &xpos, &ypos);
+        int mods = 0;
+        if (glfwGetKey(w, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ||
+            glfwGetKey(w, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS) {
+            mods |= GLFW_MOD_CONTROL;
+        }
+        if (glfwGetKey(w, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
+            glfwGetKey(w, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS) {
+            mods |= GLFW_MOD_SHIFT;
+        }
+        auto loop = *base::EventLoop::instance();
+        loop->dispatch(base::Event::scrollEvent(
+            static_cast<float>(xpos), static_cast<float>(ypos),
+            static_cast<float>(xoffset), static_cast<float>(yoffset), mods));
+    });
+
     return Ok();
 }
 

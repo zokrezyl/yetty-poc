@@ -2705,7 +2705,9 @@ void GPUScreenImpl::registerForFocus() {
                          sharedAs<base::EventListener>());
   loop->registerListener(base::Event::Type::MouseMove,
                          sharedAs<base::EventListener>());
-  yinfo("GPUScreen {} registered for SetFocus, MouseDown and MouseMove events", _id);
+  loop->registerListener(base::Event::Type::Scroll,
+                         sharedAs<base::EventListener>());
+  yinfo("GPUScreen {} registered for SetFocus, MouseDown, MouseMove and Scroll events", _id);
 
   // Auto-focus on startup so keyboard works immediately
   loop->dispatch(base::Event::focusEvent(_id));
@@ -2792,6 +2794,42 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
       }
     }
     return Ok(false);  // Don't consume
+  }
+
+  // Handle scroll - scrollback or zoom
+  if (event.type == base::Event::Type::Scroll) {
+    float mx = event.scroll.x;
+    float my = event.scroll.y;
+
+    if (_viewportWidth > 0 && _viewportHeight > 0) {
+      if (mx >= _viewportX && mx < _viewportX + _viewportWidth &&
+          my >= _viewportY && my < _viewportY + _viewportHeight) {
+
+        bool ctrlPressed = (event.scroll.mods & 0x0002) != 0;  // GLFW_MOD_CONTROL
+
+        if (ctrlPressed) {
+          // Ctrl+scroll: zoom
+          float newZoom = _zoomLevel + event.scroll.dy * 0.02f;
+          newZoom = std::max(0.2f, std::min(newZoom, 5.0f));
+          if (newZoom != _zoomLevel) {
+            _zoomLevel = newZoom;
+            // Recalculate cols/rows from viewport and new zoom
+            setViewport(_viewportX, _viewportY, _viewportWidth, _viewportHeight);
+            yinfo("GPUScreen {} zoom: {:.0f}%", _id, _zoomLevel * 100.0f);
+          }
+        } else {
+          // Normal scroll: scrollback
+          int lines = static_cast<int>(event.scroll.dy * 3);  // 3 lines per notch
+          if (lines > 0) {
+            scrollUp(lines);
+          } else if (lines < 0) {
+            scrollDown(-lines);
+          }
+        }
+        return Ok(true);  // Consume
+      }
+    }
+    return Ok(false);
   }
 
   if (event.type == base::Event::Type::SetFocus) {

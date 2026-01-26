@@ -54,6 +54,7 @@ struct Event {
         float y;
         float dx;
         float dy;
+        int mods;
     };
 
     struct SetFocusEvent {
@@ -151,10 +152,10 @@ struct Event {
         return e;
     }
 
-    static Event scrollEvent(float x, float y, float dx, float dy) {
+    static Event scrollEvent(float x, float y, float dx, float dy, int mods = 0) {
         Event e;
         e.type = Type::Scroll;
-        e.scroll = {x, y, dx, dy};
+        e.scroll = {x, y, dx, dy, mods};
         return e;
     }
 
