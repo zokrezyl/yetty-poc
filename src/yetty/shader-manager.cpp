@@ -8,6 +8,8 @@
 #include <sstream>
 #include <algorithm>
 #include <cstring>
+#include <vector>
+#include <map>
 
 #ifndef CMAKE_SOURCE_DIR
 #define CMAKE_SOURCE_DIR "."
@@ -19,11 +21,56 @@ namespace yetty {
 static const char* FUNCTIONS_PLACEHOLDER = "// SHADER_GLYPH_FUNCTIONS_PLACEHOLDER";
 static const char* DISPATCH_PLACEHOLDER = "// SHADER_GLYPH_DISPATCH_PLACEHOLDER";
 
-ShaderManager::Ptr ShaderManager::createImpl() noexcept {
-    return Ptr(new ShaderManager());
+class ShaderManagerImpl : public ShaderManager {
+public:
+    ShaderManagerImpl() = default;
+    ~ShaderManagerImpl() override;
+
+    Result<void> init(const GPUContext& gpu) noexcept;
+
+    void addProvider(std::shared_ptr<ShaderProvider> provider) override;
+    void addLibrary(const std::string& name, const std::string& code) override;
+    bool needsRecompile() const override;
+    Result<void> compile() override;
+    void update() override;
+
+    WGPUShaderModule getShaderModule() const override { return _shaderModule; }
+    WGPURenderPipeline getGridPipeline() const override { return _gridPipeline; }
+    WGPUBindGroupLayout getGridBindGroupLayout() const override { return _gridBindGroupLayout; }
+    WGPUBuffer getQuadVertexBuffer() const override { return _quadVertexBuffer; }
+    const std::string& getMergedSource() const override { return _mergedSource; }
+
+private:
+    Result<void> loadBaseShader(const std::string& path);
+    Result<void> createPipelineResources();
+    std::string mergeShaders() const;
+
+    GPUContext _gpu = {};
+    std::string _baseShader;
+    std::vector<std::shared_ptr<ShaderProvider>> _providers;
+    std::map<std::string, std::string> _libraries;
+    std::string _mergedSource;
+
+    // Shared GPU resources
+    WGPUShaderModule _shaderModule = nullptr;
+    WGPURenderPipeline _gridPipeline = nullptr;
+    WGPUPipelineLayout _pipelineLayout = nullptr;
+    WGPUBindGroupLayout _gridBindGroupLayout = nullptr;
+    WGPUBuffer _quadVertexBuffer = nullptr;
+
+    bool _initialized = false;
+};
+
+// Factory implementation
+Result<ShaderManager::Ptr> ShaderManager::createImpl(ContextType&, const GPUContext& gpu) noexcept {
+    auto impl = Ptr(new ShaderManagerImpl());
+    if (auto res = static_cast<ShaderManagerImpl*>(impl.get())->init(gpu); !res) {
+        return Err<Ptr>("ShaderManager init failed", res);
+    }
+    return Ok(std::move(impl));
 }
 
-ShaderManager::~ShaderManager() {
+ShaderManagerImpl::~ShaderManagerImpl() {
     if (_shaderModule) {
         wgpuShaderModuleRelease(_shaderModule);
         _shaderModule = nullptr;
@@ -46,7 +93,7 @@ ShaderManager::~ShaderManager() {
     }
 }
 
-Result<void> ShaderManager::init(const GPUContext& gpu) noexcept {
+Result<void> ShaderManagerImpl::init(const GPUContext& gpu) noexcept {
     if (_initialized) {
         return Ok();
     }
@@ -68,19 +115,19 @@ Result<void> ShaderManager::init(const GPUContext& gpu) noexcept {
     return Ok();
 }
 
-void ShaderManager::addProvider(std::shared_ptr<ShaderProvider> provider) {
+void ShaderManagerImpl::addProvider(std::shared_ptr<ShaderProvider> provider) {
     if (provider) {
         _providers.push_back(std::move(provider));
         ydebug("ShaderManager: provider registered ({} total)", _providers.size());
     }
 }
 
-void ShaderManager::addLibrary(const std::string& name, const std::string& code) {
+void ShaderManagerImpl::addLibrary(const std::string& name, const std::string& code) {
     _libraries[name] = code;
     yinfo("ShaderManager: added library '{}'", name);
 }
 
-Result<void> ShaderManager::loadBaseShader(const std::string& path) {
+Result<void> ShaderManagerImpl::loadBaseShader(const std::string& path) {
     std::ifstream file(path);
     if (!file.is_open()) {
         return Err<void>("Failed to open shader file: " + path);
@@ -100,7 +147,7 @@ Result<void> ShaderManager::loadBaseShader(const std::string& path) {
     return Ok();
 }
 
-bool ShaderManager::needsRecompile() const {
+bool ShaderManagerImpl::needsRecompile() const {
     // Check if any provider is dirty
     for (const auto& provider : _providers) {
         if (provider && provider->isDirty()) {
@@ -111,7 +158,7 @@ bool ShaderManager::needsRecompile() const {
     return _shaderModule == nullptr;
 }
 
-void ShaderManager::update() {
+void ShaderManagerImpl::update() {
     if (needsRecompile()) {
         if (auto res = compile(); !res) {
             yerror("ShaderManager::update: recompile failed: {}", res.error().message());
@@ -119,7 +166,7 @@ void ShaderManager::update() {
     }
 }
 
-std::string ShaderManager::mergeShaders() const {
+std::string ShaderManagerImpl::mergeShaders() const {
     std::string result = _baseShader;
 
     // Collect all function code
@@ -178,7 +225,7 @@ std::string ShaderManager::mergeShaders() const {
     return result;
 }
 
-Result<void> ShaderManager::compile() {
+Result<void> ShaderManagerImpl::compile() {
     if (_baseShader.empty()) {
         return Err<void>("ShaderManager: no base shader loaded");
     }
@@ -244,7 +291,7 @@ Result<void> ShaderManager::compile() {
     return Ok();
 }
 
-Result<void> ShaderManager::createPipelineResources() {
+Result<void> ShaderManagerImpl::createPipelineResources() {
     WGPUDevice device = _gpu.device;
 
     // 1. Create quad vertex buffer

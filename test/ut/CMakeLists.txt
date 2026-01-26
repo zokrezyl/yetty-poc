@@ -27,12 +27,12 @@ add_library(yetty_test_lib STATIC
     ${CMAKE_SOURCE_DIR}/src/yetty/gpu-screen.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/osc-command.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/shader-manager.cpp
-    ${CMAKE_SOURCE_DIR}/src/yetty/yetty-font-manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/yetty/font-manager.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/ms-msdf-font.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/bm-font.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/shader-font.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/card-buffer-manager.cpp
-    ${CMAKE_SOURCE_DIR}/src/yetty/widget-factory.cpp
+    # ${CMAKE_SOURCE_DIR}/src/yetty/widget-factory.cpp  # TODO: refactor later
     ${CMAKE_SOURCE_DIR}/src/yetty/card-factory.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/base/event-loop.cpp
 )

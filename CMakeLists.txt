@@ -469,9 +469,9 @@ set(YETTY_SOURCES
 # Add core sources for non-desktop platforms (desktop uses yetty_core library)
 if(EMSCRIPTEN OR YETTY_ANDROID)
     list(APPEND YETTY_SOURCES
-        src/yetty/font.cpp
+        # src/yetty/font.cpp  # Moved to obsolete
         src/yetty/font-manager.cpp
-        src/yetty/rich-text.cpp
+        # src/yetty/rich-text.cpp  # TODO: refactor for new Font interface
         src/yetty/bm-font.cpp
         src/yetty/shader-font.cpp
         src/yetty/shader-manager.cpp
@@ -490,19 +490,19 @@ if(YETTY_ANDROID)
         src/yetty/terminal.cpp
         src/yetty/gpu-screen.cpp
         src/yetty/osc-command.cpp
-        src/yetty/widget-factory.cpp
+        # src/yetty/widget-factory.cpp  # TODO: refactor later
     )
 elseif(NOT EMSCRIPTEN)
     # Desktop uses main.cpp with GLFW
     # Desktop with plugin support
     list(APPEND YETTY_SOURCES
         src/yetty/main.cpp
-        src/yetty/new-yetty.cpp
+        src/yetty/yetty.cpp
         src/yetty/config.cpp
         src/yetty/terminal.cpp
         src/yetty/terminal-view.cpp
         src/yetty/gpu-screen.cpp
-        src/yetty/widget-factory.cpp
+        # src/yetty/widget-factory.cpp  # TODO: refactor later
         src/yetty/osc-command.cpp
         src/yetty/custom-glyph-plugin.cpp
         src/yetty/card-buffer-manager.cpp
@@ -510,11 +510,10 @@ elseif(NOT EMSCRIPTEN)
         src/yetty/cards/plot-card.cpp
         src/yetty/cards/image-card.cpp
         # Core sources (previously in yetty_core)
-        src/yetty/font.cpp
-        src/yetty/font-manager.cpp
+        # src/yetty/font.cpp  # Moved to obsolete
         src/yetty/ms-msdf-font.cpp
-        src/yetty/yetty-font-manager.cpp
-        src/yetty/rich-text.cpp
+        src/yetty/font-manager.cpp
+        # src/yetty/rich-text.cpp  # TODO: refactor for new Font interface
         src/yetty/bm-font.cpp
         src/yetty/shader-font.cpp
         src/yetty/shader-manager.cpp

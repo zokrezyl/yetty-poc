@@ -21,19 +21,19 @@ namespace yetty {
 
 class TerminalImpl : public Terminal {
 public:
-    explicit TerminalImpl(const GPUContext& gpuContext)
-        : _gpuContext(gpuContext) {}
+    explicit TerminalImpl(const YettyContext& ctx)
+        : _ctx(ctx) {}
 
     ~TerminalImpl() override {
         stop();
     }
 
     Result<void> init() {
-        auto gpuResult = GPUScreen::create(_gpuContext);
-        if (!gpuResult) {
-            return Err<void>("Failed to create GPUScreen", gpuResult);
+        auto screenResult = GPUScreen::create(_ctx);
+        if (!screenResult) {
+            return Err<void>("Failed to create GPUScreen", screenResult);
         }
-        _gpuScreen = *gpuResult;
+        _gpuScreen = *screenResult;
 
         _gpuScreen->setOutputCallback([this](const char* data, size_t len) {
             writeToPty(data, len);
@@ -53,7 +53,7 @@ public:
 #if !YETTY_WEB && !defined(__ANDROID__)
         _running = false;
 
-        auto loop = base::EventLoop::instance();
+        auto loop = *base::EventLoop::instance();
 
         // Deregister keyboard event listeners
         loop->deregisterListener(sharedAs<base::EventListener>());
@@ -181,11 +181,21 @@ private:
         int flags = fcntl(_ptyMaster, F_GETFL, 0);
         fcntl(_ptyMaster, F_SETFL, flags | O_NONBLOCK);
 
-        auto loop = base::EventLoop::instance();
-        _pollId = loop->createPoll();
-        loop->configPoll(_pollId, _ptyMaster);
-        loop->registerPollListener(_pollId, sharedAs<base::EventListener>());
-        loop->startPoll(_pollId);
+        auto loop = *base::EventLoop::instance();
+        auto pollResult = loop->createPoll();
+        if (!pollResult) {
+            return Err<void>("Failed to create poll", pollResult);
+        }
+        _pollId = *pollResult;
+        if (auto res = loop->configPoll(_pollId, _ptyMaster); !res) {
+            return Err<void>("Failed to configure poll", res);
+        }
+        if (auto res = loop->registerPollListener(_pollId, sharedAs<base::EventListener>()); !res) {
+            return Err<void>("Failed to register poll listener", res);
+        }
+        if (auto res = loop->startPoll(_pollId); !res) {
+            return Err<void>("Failed to start poll", res);
+        }
 
         _running = true;
         yinfo("Terminal started: PTY fd={}, PID={}", _ptyMaster, _childPid);
@@ -219,12 +229,12 @@ private:
 #endif
 
     bool _running = false;
-    GPUContext _gpuContext;
+    YettyContext _ctx;
     GPUScreen::Ptr _gpuScreen;
 };
 
-Result<Terminal::Ptr> Terminal::create(const GPUContext& gpuContext) noexcept {
-    auto term = std::make_shared<TerminalImpl>(gpuContext);
+Result<Terminal::Ptr> Terminal::create(const YettyContext& ctx) noexcept {
+    auto term = std::make_shared<TerminalImpl>(ctx);
     if (auto res = term->init(); !res) {
         return Err<Ptr>("Failed to initialize Terminal", res);
     }

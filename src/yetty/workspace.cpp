@@ -7,14 +7,14 @@ namespace yetty {
 
 class WorkspaceImpl : public Workspace {
 public:
-    explicit WorkspaceImpl(const GPUContext& gpuContext)
-        : _gpuContext(gpuContext)
+    explicit WorkspaceImpl(const YettyContext& ctx)
+        : _ctx(ctx)
     {}
 
     Result<void> init() {
         // Create frame renderer
         auto frameResult = WidgetFrameRenderer::create(
-            _gpuContext.device, _gpuContext.surfaceFormat);
+            _ctx.gpu.device, _ctx.gpu.surfaceFormat);
         if (!frameResult) {
             ywarn("Failed to create WidgetFrameRenderer for workspace: {}",
                   frameResult.error().message());
@@ -64,7 +64,7 @@ private:
         for (const auto& frame : frames) {
             _frameRenderer->renderFrame(
                 pass,
-                _gpuContext.queue,
+                _ctx.gpu.queue,
                 screenW, screenH,
                 frame.rect.x, frame.rect.y,
                 frame.rect.width, frame.rect.height,
@@ -101,7 +101,7 @@ public:
         auto pane = *paneResult;
 
 #if !YETTY_WEB && !defined(__ANDROID__)
-        auto viewResult = TerminalView::create(_gpuContext);
+        auto viewResult = TerminalView::create(_ctx);
         if (!viewResult) {
             return Err<Pane::Ptr>("Failed to create TerminalView", viewResult);
         }
@@ -119,12 +119,12 @@ private:
     Tile::Ptr _root;
     float _width = 0;
     float _height = 0;
-    GPUContext _gpuContext;
+    YettyContext _ctx;
     std::unique_ptr<WidgetFrameRenderer> _frameRenderer;
 };
 
-Result<Workspace::Ptr> Workspace::create(const GPUContext& gpuContext) {
-    auto ws = std::make_shared<WorkspaceImpl>(gpuContext);
+Result<Workspace::Ptr> Workspace::create(const YettyContext& ctx) {
+    auto ws = std::make_shared<WorkspaceImpl>(ctx);
     if (auto res = ws->init(); !res) {
         return Err<Workspace::Ptr>("Failed to initialize Workspace", res);
     }

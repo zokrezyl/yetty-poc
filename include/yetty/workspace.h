@@ -2,7 +2,7 @@
 
 #include <yetty/result.hpp>
 #include <yetty/tile.h>
-#include <yetty/gpu-context.h>
+#include <yetty/yetty-context.h>
 #include <memory>
 
 namespace yetty {
@@ -11,7 +11,7 @@ class Workspace {
 public:
     using Ptr = std::shared_ptr<Workspace>;
 
-    static Result<Ptr> create(const GPUContext& gpu);
+    static Result<Ptr> create(const YettyContext& ctx);
 
     virtual ~Workspace() = default;
 

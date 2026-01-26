@@ -1,8 +1,9 @@
-#include <yetty/new-yetty.h>
+#include <yetty/yetty.h>
 #include <yetty/gpu-context.h>
+#include <yetty/yetty-context.h>
 #include <yetty/terminal-view.h>
 #include <yetty/workspace.h>
-#include <yetty/yetty-font-manager.h>
+#include <yetty/font-manager.h>
 #include <yetty/shader-manager.h>
 #include <yetty/card-buffer-manager.h>
 #include <yetty/wgpu-compat.h>
@@ -15,10 +16,10 @@
 
 namespace yetty {
 
-class NewYettyImpl : public NewYetty, public base::EventListener {
+class YettyImpl : public Yetty, public base::EventListener {
 public:
-    NewYettyImpl() = default;
-    ~NewYettyImpl() override { shutdown(); }
+    YettyImpl() = default;
+    ~YettyImpl() override { shutdown(); }
 
     Result<void> init(int argc, char* argv[]) noexcept;
     int run() noexcept override;
@@ -80,6 +81,7 @@ private:
     WGPUBindGroup _sharedBindGroup = nullptr;
     SharedUniforms _sharedUniforms = {};
     GPUContext _gpuContext = {};
+    YettyContext _yettyContext = {};
 
 #if !YETTY_WEB && !defined(__ANDROID__)
     std::unique_ptr<CardBufferManager> _cardBufferManager;
@@ -107,19 +109,19 @@ private:
     // Command line options
     std::string _executeCommand;
 
-    static NewYettyImpl* s_instance;
+    static YettyImpl* s_instance;
 };
 
-NewYettyImpl* NewYettyImpl::s_instance = nullptr;
+YettyImpl* YettyImpl::s_instance = nullptr;
 
 //=============================================================================
 // Factory
 //=============================================================================
 
-Result<NewYetty::Ptr> NewYetty::create(int argc, char* argv[]) noexcept {
-    auto impl = std::make_shared<NewYettyImpl>();
+Result<Yetty::Ptr> Yetty::create(int argc, char* argv[]) noexcept {
+    auto impl = std::make_shared<YettyImpl>();
     if (auto res = impl->init(argc, argv); !res) {
-        return Err<Ptr>("Failed to init NewYetty", res);
+        return Err<Ptr>("Failed to init Yetty", res);
     }
     return Ok<Ptr>(impl);
 }
@@ -128,26 +130,40 @@ Result<NewYetty::Ptr> NewYetty::create(int argc, char* argv[]) noexcept {
 // Initialization
 //=============================================================================
 
-Result<void> NewYettyImpl::init(int argc, char* argv[]) noexcept {
-    yinfo("NewYetty starting...");
+Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
+    yinfo("Yetty starting...");
 
     if (auto res = parseArgs(argc, argv); !res) return res;
     if (auto res = initWindow(); !res) return res;
     if (auto res = initWebGPU(); !res) return res;
     if (auto res = initSharedResources(); !res) return res;
 
-    // Initialize ShaderManager before fonts (so fonts can register as providers)
-    if (auto res = ShaderManager::instance()->init(_gpuContext); !res) {
-        return Err<void>("Failed to init ShaderManager", res);
+    // Create ShaderManager with GPUContext
+    auto shaderMgrResult = ShaderManager::create(_gpuContext);
+    if (!shaderMgrResult) {
+        return Err<void>("Failed to create ShaderManager", shaderMgrResult);
     }
+    auto shaderMgr = *shaderMgrResult;
 
-    // Initialize fonts - ShaderFont will self-register with ShaderManager
-    if (auto res = initFonts(); !res) return res;
+    // Create FontManager with GPUContext and ShaderManager
+    auto fontMgrResult = FontManager::create(_gpuContext, shaderMgr);
+    if (!fontMgrResult) {
+        return Err<void>("Failed to create FontManager", fontMgrResult);
+    }
+    auto fontMgr = *fontMgrResult;
+
+    // Build YettyContext
+    _yettyContext.gpu = _gpuContext;
+    _yettyContext.shaderManager = shaderMgr;
+    _yettyContext.fontManager = fontMgr;
 
     // Compile shaders after all providers (fonts) are registered
-    if (auto res = ShaderManager::instance()->compile(); !res) {
+    if (auto res = shaderMgr->compile(); !res) {
         return Err<void>("Failed to compile shaders", res);
     }
+
+    // Calculate grid dimensions based on font metrics
+    if (auto res = initFonts(); !res) return res;
 
 #if !YETTY_WEB && !defined(__ANDROID__)
     initEventLoop();
@@ -162,7 +178,7 @@ Result<void> NewYettyImpl::init(int argc, char* argv[]) noexcept {
     return Ok();
 }
 
-Result<void> NewYettyImpl::parseArgs(int argc, char* argv[]) noexcept {
+Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
         if (arg == "-e" && i + 1 < argc) {
@@ -173,7 +189,7 @@ Result<void> NewYettyImpl::parseArgs(int argc, char* argv[]) noexcept {
     return Ok();
 }
 
-Result<void> NewYettyImpl::initWindow() noexcept {
+Result<void> YettyImpl::initWindow() noexcept {
     if (!glfwInit()) {
         return Err<void>("Failed to initialize GLFW");
     }
@@ -190,7 +206,7 @@ Result<void> NewYettyImpl::initWindow() noexcept {
     return Ok();
 }
 
-Result<void> NewYettyImpl::initWebGPU() noexcept {
+Result<void> YettyImpl::initWebGPU() noexcept {
     // Create instance
     WGPUInstanceDescriptor instanceDesc = {};
     _instance = wgpuCreateInstance(&instanceDesc);
@@ -302,7 +318,7 @@ Result<void> NewYettyImpl::initWebGPU() noexcept {
     return Ok();
 }
 
-void NewYettyImpl::configureSurface(uint32_t width, uint32_t height) noexcept {
+void YettyImpl::configureSurface(uint32_t width, uint32_t height) noexcept {
     _surfaceWidth = width;
     _surfaceHeight = height;
 
@@ -318,7 +334,7 @@ void NewYettyImpl::configureSurface(uint32_t width, uint32_t height) noexcept {
     wgpuSurfaceConfigure(_surface, &config);
 }
 
-Result<WGPUTextureView> NewYettyImpl::getCurrentTextureView() noexcept {
+Result<WGPUTextureView> YettyImpl::getCurrentTextureView() noexcept {
     if (_currentTextureView) {
         return Ok(_currentTextureView);
     }
@@ -343,7 +359,7 @@ Result<WGPUTextureView> NewYettyImpl::getCurrentTextureView() noexcept {
     return Ok(_currentTextureView);
 }
 
-void NewYettyImpl::present() noexcept {
+void YettyImpl::present() noexcept {
     if (_currentTextureView) {
         wgpuTextureViewRelease(_currentTextureView);
         _currentTextureView = nullptr;
@@ -355,7 +371,7 @@ void NewYettyImpl::present() noexcept {
     wgpuSurfacePresent(_surface);
 }
 
-Result<void> NewYettyImpl::initSharedResources() noexcept {
+Result<void> YettyImpl::initSharedResources() noexcept {
 #if !YETTY_WEB && !defined(__ANDROID__)
     // Create CardBufferManager
     auto cbmResult = CardBufferManager::create(_device);
@@ -478,19 +494,14 @@ Result<void> NewYettyImpl::initSharedResources() noexcept {
     return Ok();
 }
 
-Result<void> NewYettyImpl::initFonts() noexcept {
-    auto fontManager = YettyFontManager::instance();
-    if (auto res = fontManager->init(_gpuContext); !res) {
-        return Err<void>("Failed to init YettyFontManager", res);
-    }
-
+Result<void> YettyImpl::initFonts() noexcept {
+    // Font manager already created; calculate grid dimensions
     _cols = static_cast<uint32_t>(_initialWidth / (_baseCellWidth * _zoomLevel));
     _rows = static_cast<uint32_t>(_initialHeight / (_baseCellHeight * _zoomLevel));
-
     return Ok();
 }
 
-Result<void> NewYettyImpl::initWorkspace() noexcept {
+Result<void> YettyImpl::initWorkspace() noexcept {
     auto wsResult = createWorkspace();
     if (!wsResult) {
         return Err<void>("Failed to create default workspace", wsResult);
@@ -535,8 +546,8 @@ static Result<Tile::Ptr> createMatrix2x2(Workspace& workspace) {
     return Ok<Tile::Ptr>(root);
 }
 
-Result<Workspace::Ptr> NewYettyImpl::createWorkspace() noexcept {
-    auto wsResult = Workspace::create(_gpuContext);
+Result<Workspace::Ptr> YettyImpl::createWorkspace() noexcept {
+    auto wsResult = Workspace::create(_yettyContext);
     if (!wsResult) {
         return Err<Workspace::Ptr>("Failed to create Workspace", wsResult);
     }
@@ -561,14 +572,14 @@ Result<Workspace::Ptr> NewYettyImpl::createWorkspace() noexcept {
     return Ok(workspace);
 }
 
-Result<void> NewYettyImpl::initCallbacks() noexcept {
+Result<void> YettyImpl::initCallbacks() noexcept {
     glfwSetWindowUserPointer(_window, this);
 
     glfwSetKeyCallback(_window, [](GLFWwindow* w, int key, int scancode, int action, int mods) {
         ydebug("glfwKeyCallback: key={} scancode={} action={} mods={}", key, scancode, action, mods);
         if (action != GLFW_PRESS && action != GLFW_REPEAT) return;
 
-        auto loop = base::EventLoop::instance();
+        auto loop = *base::EventLoop::instance();
 
         // Handle Ctrl/Alt + character combinations using glfwGetKeyName
         // This is how the old InputHandler::onKey did it
@@ -596,12 +607,12 @@ Result<void> NewYettyImpl::initCallbacks() noexcept {
 
     glfwSetCharCallback(_window, [](GLFWwindow* w, unsigned int codepoint) {
         ydebug("glfwCharCallback: codepoint={} ('{}')", codepoint, codepoint < 32 ? '?' : (char)codepoint);
-        auto loop = base::EventLoop::instance();
+        auto loop = *base::EventLoop::instance();
         loop->dispatch(base::Event::charInput(codepoint));
     });
 
     glfwSetFramebufferSizeCallback(_window, [](GLFWwindow* w, int newWidth, int newHeight) {
-        auto* impl = static_cast<NewYettyImpl*>(glfwGetWindowUserPointer(w));
+        auto* impl = static_cast<YettyImpl*>(glfwGetWindowUserPointer(w));
         if (impl) impl->handleResize(newWidth, newHeight);
     });
 
@@ -615,7 +626,7 @@ Result<void> NewYettyImpl::initCallbacks() noexcept {
             double xpos, ypos;
             glfwGetCursorPos(w, &xpos, &ypos);
             ydebug("glfwMouseButtonCallback: button={} at ({}, {})", button, xpos, ypos);
-            auto loop = base::EventLoop::instance();
+            auto loop = *base::EventLoop::instance();
             loop->dispatch(base::Event::mouseDown(static_cast<float>(xpos), static_cast<float>(ypos), button));
         }
     });
@@ -623,7 +634,7 @@ Result<void> NewYettyImpl::initCallbacks() noexcept {
     return Ok();
 }
 
-void NewYettyImpl::shutdown() noexcept {
+void YettyImpl::shutdown() noexcept {
 #if !YETTY_WEB && !defined(__ANDROID__)
     shutdownEventLoop();
 #endif
@@ -653,27 +664,38 @@ void NewYettyImpl::shutdown() noexcept {
 //=============================================================================
 
 #if !YETTY_WEB && !defined(__ANDROID__)
-void NewYettyImpl::initEventLoop() noexcept {
-    auto loop = base::EventLoop::instance();
-    _frameTimerId = loop->createTimer();
-    loop->configTimer(_frameTimerId, 16);
-    loop->registerTimerListener(_frameTimerId, sharedAs<base::EventListener>());
+void YettyImpl::initEventLoop() noexcept {
+    auto loop = *base::EventLoop::instance();
+    auto timerResult = loop->createTimer();
+    if (!timerResult) {
+        yerror("Failed to create frame timer: {}", error_msg(timerResult));
+        return;
+    }
+    _frameTimerId = *timerResult;
+    if (auto res = loop->configTimer(_frameTimerId, 16); !res) {
+        yerror("Failed to configure frame timer: {}", error_msg(res));
+        return;
+    }
+    if (auto res = loop->registerTimerListener(_frameTimerId, sharedAs<base::EventListener>()); !res) {
+        yerror("Failed to register timer listener: {}", error_msg(res));
+        return;
+    }
 }
 
-void NewYettyImpl::shutdownEventLoop() noexcept {
+void YettyImpl::shutdownEventLoop() noexcept {
     if (_frameTimerId >= 0) {
-        base::EventLoop::instance()->destroyTimer(_frameTimerId);
+        (*base::EventLoop::instance())->destroyTimer(_frameTimerId);
         _frameTimerId = -1;
     }
 }
 #endif
 
-Result<bool> NewYettyImpl::onEvent(const base::Event& event) {
+Result<bool> YettyImpl::onEvent(const base::Event& event) {
 #if !YETTY_WEB && !defined(__ANDROID__)
     if (event.type == base::Event::Type::Timer && event.timer.timerId == _frameTimerId) {
         glfwPollEvents();
         if (glfwWindowShouldClose(_window)) {
-            base::EventLoop::instance()->stop();
+            (*base::EventLoop::instance())->stop();
             return Ok(true);
         }
         mainLoopIteration();
@@ -685,10 +707,10 @@ Result<bool> NewYettyImpl::onEvent(const base::Event& event) {
 
 static void signalHandler(int sig) {
     yinfo("Received signal {}, shutting down...", sig);
-    base::EventLoop::instance()->stop();
+    (*base::EventLoop::instance())->stop();
 }
 
-int NewYettyImpl::run() noexcept {
+int YettyImpl::run() noexcept {
     yinfo("Starting render loop...");
 
     // Handle Ctrl+C from launching terminal
@@ -696,7 +718,7 @@ int NewYettyImpl::run() noexcept {
     std::signal(SIGTERM, signalHandler);
 
 #if !YETTY_WEB && !defined(__ANDROID__)
-    auto loop = base::EventLoop::instance();
+    auto loop = *base::EventLoop::instance();
     loop->startTimer(_frameTimerId);
     loop->start();
 #endif
@@ -705,7 +727,7 @@ int NewYettyImpl::run() noexcept {
     return 0;
 }
 
-void NewYettyImpl::mainLoopIteration() noexcept {
+void YettyImpl::mainLoopIteration() noexcept {
     auto viewResult = getCurrentTextureView();
     if (!viewResult) return;
     WGPUTextureView targetView = *viewResult;
@@ -731,8 +753,7 @@ void NewYettyImpl::mainLoopIteration() noexcept {
     wgpuQueueWriteBuffer(_queue, _sharedUniformBuffer, 0, &_sharedUniforms, sizeof(SharedUniforms));
 
     // Upload any pending font glyphs (e.g., bold/italic loaded on demand)
-    auto fontMgr = YettyFontManager::instance();
-    if (auto msdfFont = fontMgr->getDefaultMsMsdfFont()) {
+    if (auto msdfFont = _yettyContext.fontManager->getDefaultMsMsdfFont()) {
         if (msdfFont->hasPendingGlyphs()) {
             auto uploadResult = msdfFont->uploadPendingGlyphs(_device, _queue);
             if (!uploadResult) {
@@ -784,7 +805,7 @@ void NewYettyImpl::mainLoopIteration() noexcept {
     }
 }
 
-void NewYettyImpl::handleResize(int newWidth, int newHeight) noexcept {
+void YettyImpl::handleResize(int newWidth, int newHeight) noexcept {
     if (newWidth == 0 || newHeight == 0) return;
 
     configureSurface(static_cast<uint32_t>(newWidth), static_cast<uint32_t>(newHeight));

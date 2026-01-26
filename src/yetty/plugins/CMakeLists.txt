@@ -48,20 +48,20 @@ add_yetty_plugin(ydraw
     SOURCES ydraw/ydraw.cpp
 )
 
-# rich-text plugin
-add_yetty_plugin(rich-text
-    SOURCES rich-text/rich-text.cpp
-)
+# rich-text plugin - TODO: refactor for new Font interface
+# add_yetty_plugin(rich-text
+#     SOURCES rich-text/rich-text.cpp
+# )
 
 # image plugin
 add_yetty_plugin(image
     SOURCES image/image.cpp
 )
 
-# plot plugin
-add_yetty_plugin(plot
-    SOURCES plot/plot.cpp
-)
+# plot plugin - TODO: refactor for new Font interface
+# add_yetty_plugin(plot
+#     SOURCES plot/plot.cpp
+# )
 
 # piano plugin
 add_subdirectory(piano)
@@ -69,10 +69,10 @@ add_subdirectory(piano)
 # musical-score plugin
 add_subdirectory(musical-score)
 
-# markdown plugin
-add_yetty_plugin(markdown
-    SOURCES markdown/markdown.cpp
-)
+# markdown plugin - TODO: refactor for new Font interface
+# add_yetty_plugin(markdown
+#     SOURCES markdown/markdown.cpp
+# )
 
 #-----------------------------------------------------------------------------
 # ThorVG plugin - Vector graphics (SVG, Lottie animations)

@@ -1,7 +1,7 @@
 #pragma once
 
 #include <yetty/result.hpp>
-#include <yetty/gpu-context.h>
+#include <yetty/yetty-context.h>
 #include <yetty/base/event-loop.h>
 #include <memory>
 #include <functional>
@@ -20,7 +20,7 @@ class GPUScreen : public base::EventListener {
 public:
     using Ptr = std::shared_ptr<GPUScreen>;
 
-    static Result<Ptr> create(const GPUContext& gpu) noexcept;
+    static Result<Ptr> create(const YettyContext& ctx) noexcept;
 
     // Test-only factory - creates GPUScreen without GPU resources
     static Result<Ptr> createForTest(uint32_t cols, uint32_t rows) noexcept;

@@ -1,7 +1,6 @@
 #pragma once
 
-#include <yetty/yetty-font.h>
-#include <yetty/font.h>  // For GlyphMetadataGPU
+#include <yetty/font.h>
 #include <yetty/msdf-glyph-data.h>
 #include <webgpu/webgpu.h>
 
@@ -15,7 +14,7 @@ struct cdb;
 
 namespace yetty {
 
-class MsMsdfFont : public YettyFont {
+class MsMsdfFont : public Font {
 public:
     using Ptr = std::shared_ptr<MsMsdfFont>;
 
@@ -24,7 +23,7 @@ public:
 
     ~MsMsdfFont() override;
 
-    // YettyFont interface
+    // Font interface
     uint32_t getGlyphIndex(uint32_t codepoint) override;
     uint32_t getGlyphIndex(uint32_t codepoint, Style style) override;
     uint32_t getGlyphIndex(uint32_t codepoint, bool bold, bool italic) override;

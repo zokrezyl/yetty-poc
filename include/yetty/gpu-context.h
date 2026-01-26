@@ -4,8 +4,8 @@
 
 namespace yetty {
 
-// Immutable GPU context - all handles stable for app lifetime
-// Created once by NewYetty, passed to all renderers
+// Low-level GPU context - pure WebGPU handles
+// For components that only need GPU access without application-level dependencies
 struct GPUContext {
     WGPUDevice device;
     WGPUQueue queue;

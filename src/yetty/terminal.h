@@ -1,7 +1,7 @@
 #pragma once
 
 #include <yetty/result.hpp>
-#include <yetty/gpu-context.h>
+#include <yetty/yetty-context.h>
 #include <yetty/base/event-listener.h>
 #include <memory>
 
@@ -13,7 +13,7 @@ class Terminal : public base::EventListener {
 public:
     using Ptr = std::shared_ptr<Terminal>;
 
-    static Result<Ptr> create(const GPUContext& gpu) noexcept;
+    static Result<Ptr> create(const YettyContext& ctx) noexcept;
 
     virtual ~Terminal() = default;
 

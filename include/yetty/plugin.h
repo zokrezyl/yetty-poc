@@ -17,7 +17,6 @@ namespace yetty {
 class WebGPUContext;
 class Grid;
 class FontManager;
-class YettyFontManager;
 class Plugin;
 class WidgetFactory;
 

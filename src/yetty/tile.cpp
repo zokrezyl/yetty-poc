@@ -127,7 +127,7 @@ Result<Pane::Ptr> Pane::create() {
 void Pane::registerForEvents() {
     // Pane doesn't handle focus/keyboard - GPUScreen does that directly
     // Pane only tracks focus state for visual feedback (frame highlighting)
-    auto loop = EventLoop::instance();
+    auto loop = *EventLoop::instance();
     auto self = sharedAs<Pane>();
     loop->registerListener(Event::Type::SetFocus, self);
 }

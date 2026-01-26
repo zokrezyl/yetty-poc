@@ -9,7 +9,6 @@
 //=============================================================================
 
 #include <yetty/yetty.h>
-#include <yetty/new-yetty.h>
 #include <ytrace/ytrace.hpp>
 #include <spdlog/spdlog.h>
 #include <spdlog/cfg/env.h>
@@ -55,37 +54,15 @@ int main(int argc, char* argv[]) {
     // Debug: catch SIGINT to see if process receives it
     signal(SIGINT, sigint_handler);
 
-    // Use NewYetty (tiled terminal)
-    auto result = yetty::NewYetty::create(argc, argv);
+    auto result = yetty::Yetty::create(argc, argv);
     if (!result) {
         std::string msg = result.error().message();
         if (msg == "Help requested") {
             return 0;
         }
-        yerror("Failed to initialize new-yetty: {}", yetty::error_msg(result));
-        return 1;
-    }
-    return (*result)->run();
-
-#if 0
-    auto result = yetty::Yetty::create(argc, argv);
-    if (!result) {
-        // Check if this is just a "help requested" or "atlas generated" exit
-        std::string msg = result.error().message();
-        if (msg == "Help requested" || msg == "Atlas generation complete") {
-            return 0;
-        }
         yerror("Failed to initialize yetty: {}", yetty::error_msg(result));
         return 1;
     }
-#if YETTY_WEB
-    // Store in global to keep alive after main() returns
-    // (Emscripten main loop continues via requestAnimationFrame)
-    g_yetty = *result;
-    return g_yetty->run();
-#else
     return (*result)->run();
-#endif
-#endif
 }
 #endif

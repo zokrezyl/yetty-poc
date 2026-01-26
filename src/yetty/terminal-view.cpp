@@ -14,8 +14,8 @@ public:
         }
     }
 
-    Result<void> init(const GPUContext& gpuContext) {
-        auto terminalResult = Terminal::create(gpuContext);
+    Result<void> init(const YettyContext& ctx) {
+        auto terminalResult = Terminal::create(ctx);
         if (!terminalResult) {
             return Err<void>("Failed to create Terminal", terminalResult);
         }
@@ -57,9 +57,9 @@ private:
     Terminal::Ptr terminal_;
 };
 
-Result<TerminalView::Ptr> TerminalView::create(const GPUContext& gpuContext) noexcept {
+Result<TerminalView::Ptr> TerminalView::create(const YettyContext& ctx) noexcept {
     auto view = std::make_shared<TerminalViewImpl>();
-    if (auto res = view->init(gpuContext); !res) {
+    if (auto res = view->init(ctx); !res) {
         return Err<Ptr>("Failed to init TerminalView", res);
     }
     return Ok<Ptr>(view);

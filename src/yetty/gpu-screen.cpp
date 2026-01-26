@@ -14,7 +14,7 @@
 #include <yetty/result.hpp>
 #include <yetty/shader-manager.h>
 #include <yetty/wgpu-compat.h>
-#include <yetty/yetty-font-manager.h>
+#include <yetty/font-manager.h>
 #include <ytrace/ytrace.hpp>
 
 #ifndef CMAKE_SOURCE_DIR
@@ -124,8 +124,11 @@ struct Pen {
 
 class GPUScreenImpl : public GPUScreen {
 public:
-  explicit GPUScreenImpl(const GPUContext &gpuContext);
+  explicit GPUScreenImpl(const YettyContext &ctx);
   ~GPUScreenImpl() override;
+
+  // Initialize fonts and cell metrics - called from factory after construction
+  Result<void> init() noexcept;
 
   // GPUScreen interface
   void write(const char *data, size_t len) override;
@@ -266,8 +269,7 @@ private:
   VTermColor defaultBg_;
 
   // Fonts
-  using YettyFont = MsMsdfFont;
-  YettyFont::Ptr _msdfFont;
+  MsMsdfFont::Ptr _msdfFont;
   BmFont::Ptr _bitmapFont;
   ShaderFont::Ptr _shaderGlyphFont;
   ShaderFont::Ptr _cardFont;
@@ -299,7 +301,7 @@ private:
   OscCommandParser _oscParser;
 
   // Rendering - GPU resources (shared resources come from ShaderManager)
-  GPUContext _gpuContext;
+  YettyContext _ctx;
   // Per-instance resources only:
   WGPUBindGroup _bindGroup = nullptr;
   WGPUBuffer _uniformBuffer = nullptr;
@@ -364,15 +366,8 @@ static VTermStateCallbacks stateCallbacks = {
 // Static ID counter for GPUScreen instances
 base::ObjectId GPUScreenImpl::_nextId = 1;
 
-GPUScreenImpl::GPUScreenImpl(const GPUContext &gpuContext)
-    : maxScrollback_(10000), _gpuContext(gpuContext), _id(_nextId++) {
-  // Get fonts from singleton
-  auto fontMgr = YettyFontManager::instance();
-  _msdfFont = fontMgr->getDefaultMsMsdfFont();
-  _bitmapFont = fontMgr->getDefaultBmFont();
-  _shaderGlyphFont = fontMgr->getDefaultShaderGlyphFont();
-  _cardFont = fontMgr->getDefaultCardFont();
-
+GPUScreenImpl::GPUScreenImpl(const YettyContext &ctx)
+    : maxScrollback_(10000), _ctx(ctx), _id(_nextId++) {
   // Initialize default colors
   vterm_color_rgb(&defaultFg_, 204, 204, 204); // Light gray
   vterm_color_rgb(&defaultBg_, 15, 15, 35);    // Dark blue-ish
@@ -380,27 +375,37 @@ GPUScreenImpl::GPUScreenImpl(const GPUContext &gpuContext)
   _pen.fg = defaultFg_;
   _pen.bg = defaultBg_;
 
+  // Start on primary screen
+  _isAltScreen = false;
+
+  // Fonts, cell size, vterm and buffers initialized in init()
+}
+
+Result<void> GPUScreenImpl::init() noexcept {
+  // Get fonts from context
+  if (_ctx.fontManager) {
+    _msdfFont = _ctx.fontManager->getDefaultMsMsdfFont();
+    _bitmapFont = _ctx.fontManager->getDefaultBmFont();
+    _shaderGlyphFont = _ctx.fontManager->getDefaultShaderGlyphFont();
+    _cardFont = _ctx.fontManager->getDefaultCardFont();
+  }
+
   // Cache space glyph index to avoid repeated lookups in hot paths
   _cachedSpaceGlyph = _msdfFont ? _msdfFont->getGlyphIndex(' ') : 0;
 
   // Calculate base cell size from font metrics
   if (_msdfFont) {
     _baseCellHeight = _msdfFont->getLineHeight();
-    // Get advance width from a representative glyph like 'M'
     const auto &metadata = _msdfFont->getGlyphMetadata();
     uint32_t mIndex = _msdfFont->getGlyphIndex('M');
     if (mIndex > 0 && mIndex < metadata.size()) {
       _baseCellWidth = metadata[mIndex]._advance;
     } else {
-      // Fallback: assume monospace with 0.6 aspect ratio
       _baseCellWidth = _baseCellHeight * 0.5f;
     }
   }
 
-  // Start on primary screen
-  _isAltScreen = false;
-
-  // vterm and buffers created on first resize()
+  return Ok();
 }
 
 GPUScreenImpl::~GPUScreenImpl() {
@@ -2011,17 +2016,22 @@ bool GPUScreenImpl::handleOSCSequence(const std::string &sequence,
       pluginArgs += "--relative";
     }
 
-    auto result = _widgetFactory->createWidget(
-        widgetName, x, y, static_cast<uint32_t>(cmd.create.width),
-        static_cast<uint32_t>(cmd.create.height), pluginArgs, cmd.payload);
-    if (!result) {
-      yerror("GPUScreen: createWidget failed: {}", error_msg(result));
-      if (response)
-        *response = OscResponse::error(error_msg(result));
-      return false;
-    }
+    // TODO: WidgetFactory disabled during refactoring
+    // auto result = _widgetFactory->createWidget(
+    //     widgetName, x, y, static_cast<uint32_t>(cmd.create.width),
+    //     static_cast<uint32_t>(cmd.create.height), pluginArgs, cmd.payload);
+    // if (!result) {
+    //   yerror("GPUScreen: createWidget failed: {}", error_msg(result));
+    //   if (response)
+    //     *response = OscResponse::error(error_msg(result));
+    //   return false;
+    // }
+    // WidgetPtr widget = *result;
+    if (response)
+      *response = OscResponse::error("WidgetFactory disabled");
+    return false;
 
-    WidgetPtr widget = *result;
+    WidgetPtr widget = nullptr; // placeholder
 
     // Configure widget position
     widget->setPosition(x, y);
@@ -2152,9 +2162,9 @@ bool GPUScreenImpl::handleOSCSequence(const std::string &sequence,
   }
 
   case OscCommandType::Plugins: {
+    // TODO: WidgetFactory disabled during refactoring
     if (response) {
-      *response =
-          OscResponse::pluginList(_widgetFactory->getAvailableWidgets());
+      *response = OscResponse::error("WidgetFactory disabled");
     }
     return true;
   }
@@ -2581,7 +2591,7 @@ void GPUScreenImpl::setOutputCallback(OutputCallback cb) {
 }
 
 void GPUScreenImpl::registerForFocus() {
-  auto loop = base::EventLoop::instance();
+  auto loop = *base::EventLoop::instance();
   loop->registerListener(base::Event::Type::SetFocus,
                          sharedAs<base::EventListener>());
   loop->registerListener(base::Event::Type::MouseDown,
@@ -2607,7 +2617,7 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
           my >= _viewportY && my < _viewportY + _viewportHeight) {
         yinfo("GPUScreen {} clicked at ({}, {}), dispatching SetFocus", _id, mx,
               my);
-        auto loop = base::EventLoop::instance();
+        auto loop = *base::EventLoop::instance();
         loop->dispatch(base::Event::focusEvent(_id));
         return Ok(true);
       }
@@ -2616,7 +2626,7 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
   }
 
   if (event.type == base::Event::Type::SetFocus) {
-    auto loop = base::EventLoop::instance();
+    auto loop = *base::EventLoop::instance();
     if (event.setFocus.objectId == _id) {
       // This GPUScreen is being focused
       if (!_focused) {
@@ -2669,11 +2679,11 @@ Result<void> GPUScreenImpl::initPipeline() {
   if (_pipelineInitialized)
     return Ok();
 
-  WGPUDevice device = _gpuContext.device;
+  WGPUDevice device = _ctx.gpu.device;
   yinfo("GPUScreenImpl::initPipeline: initializing per-instance resources");
 
   // Verify ShaderManager has shared resources ready
-  auto shaderMgr = ShaderManager::instance();
+  auto shaderMgr = _ctx.shaderManager;
   if (!shaderMgr->getGridPipeline() || !shaderMgr->getGridBindGroupLayout()) {
     return Err<void>("ShaderManager not initialized - shared pipeline "
                      "resources not available");
@@ -2707,9 +2717,9 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
     }
   }
 
-  WGPUDevice device = _gpuContext.device;
-  WGPUQueue queue = _gpuContext.queue;
-  auto shaderMgr = ShaderManager::instance();
+  WGPUDevice device = _ctx.gpu.device;
+  WGPUQueue queue = _ctx.gpu.queue;
+  auto shaderMgr = _ctx.shaderManager;
 
   // Recreate cell buffer if grid size changed
   size_t requiredSize = static_cast<size_t>(_cols) * _rows * sizeof(Cell);
@@ -2855,7 +2865,7 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
 
   // Draw using shared pipeline and quad vertex buffer from ShaderManager
   wgpuRenderPassEncoderSetPipeline(pass, shaderMgr->getGridPipeline());
-  wgpuRenderPassEncoderSetBindGroup(pass, 0, _gpuContext.sharedBindGroup, 0,
+  wgpuRenderPassEncoderSetBindGroup(pass, 0, _ctx.gpu.sharedBindGroup, 0,
                                     nullptr);
   wgpuRenderPassEncoderSetBindGroup(pass, 1, _bindGroup, 0, nullptr);
   wgpuRenderPassEncoderSetVertexBuffer(
@@ -2870,16 +2880,20 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
 //=============================================================================
 
 Result<GPUScreen::Ptr>
-GPUScreen::create(const GPUContext &gpuContext) noexcept {
-  auto screen = std::make_shared<GPUScreenImpl>(gpuContext);
+GPUScreen::create(const YettyContext &ctx) noexcept {
+  auto screen = std::make_shared<GPUScreenImpl>(ctx);
+  if (auto res = screen->init(); !res) {
+    return Err<Ptr>("GPUScreen init failed", res);
+  }
   screen->registerForFocus();
   return Ok<Ptr>(screen);
 }
 
 Result<GPUScreen::Ptr> GPUScreen::createForTest(uint32_t cols,
                                                 uint32_t rows) noexcept {
-  GPUContext nullContext = {}; // Empty context - no GPU
+  YettyContext nullContext = {}; // Empty context - no GPU, no managers
   auto screen = std::make_shared<GPUScreenImpl>(nullContext);
+  // Don't call init() - no font manager in test context
   // Don't register for focus - no event loop in tests
   // Resize to requested dimensions
   screen->resize(cols, rows);
