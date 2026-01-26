@@ -218,6 +218,15 @@ std::string ShaderManagerImpl::mergeShaders() const {
         ywarn("ShaderManager: functions placeholder not found in base shader");
     }
 
+    yinfo("ShaderManager: dispatch code length={}", allDispatch.size());
+    // Log first and last parts of dispatch code to see all glyphs
+    if (allDispatch.size() > 200) {
+        yinfo("  dispatch start: '{}'", allDispatch.substr(0, 200));
+        yinfo("  dispatch end: '{}'", allDispatch.substr(allDispatch.size() - 200));
+    } else {
+        yinfo("  dispatch: '{}'", allDispatch);
+    }
+
     if (!replacePlaceholder(result, DISPATCH_PLACEHOLDER, allDispatch)) {
         ywarn("ShaderManager: dispatch placeholder not found in base shader");
     }

@@ -1,6 +1,6 @@
 #include "gpu-screen.h"
-#include "card-factory.h"
-#include "card.h"
+#include <yetty/card-factory.h>
+#include <yetty/card.h>
 #include "widget-factory.h"
 #include <algorithm>
 #include <cstdlib>
@@ -34,10 +34,8 @@ namespace yetty {
 // Forward declarations
 class Widget;
 class WidgetFactory;
-class CardFactory;
-class Card;
 using WidgetPtr = std::shared_ptr<Widget>;
-using CardPtr = std::unique_ptr<Card>;
+// CardPtr and Card come from <yetty/card.h> via card-factory.h
 
 // =============================================================================
 // Glyph constants (formerly in grid.h)
@@ -175,6 +173,7 @@ public:
   static int onSetTermProp(VTermProp prop, VTermValue *val, void *user);
   static int onBell(void *user);
   static int onResize(int rows, int cols, VTermStateFields *fields, void *user);
+  static int onOSC(int command, VTermStringFragment frag, void *user);
   static int onSetLineInfo(int row, const VTermLineInfo *newinfo,
                            const VTermLineInfo *oldinfo, void *user);
 
@@ -291,14 +290,16 @@ private:
 
   // Cards
   std::vector<CardPtr> _cards;
-  std::unordered_map<uint32_t, Card *> cardRegistry_;
+  std::unordered_map<uint32_t, Card *> _cardRegistry;
 
   // Factories
   WidgetFactory *_widgetFactory = nullptr;
-  CardFactory *_cardFactory = nullptr;
+  // CardFactory comes from _ctx.cardFactory
 
   // OSC parsing
   OscCommandParser _oscParser;
+  std::string _oscBuffer;
+  int _oscCommand = -1;
 
   // Rendering - GPU resources (shared resources come from ShaderManager)
   YettyContext _ctx;
@@ -363,6 +364,17 @@ static VTermStateCallbacks stateCallbacks = {
     .sb_clear = nullptr,
 };
 
+// State fallbacks for unrecognized sequences (OSC, etc.)
+static VTermStateFallbacks stateFallbacks = {
+    .control = nullptr,
+    .csi = nullptr,
+    .osc = GPUScreenImpl::onOSC,
+    .dcs = nullptr,
+    .apc = nullptr,
+    .pm = nullptr,
+    .sos = nullptr,
+};
+
 // Static ID counter for GPUScreen instances
 base::ObjectId GPUScreenImpl::_nextId = 1;
 
@@ -416,11 +428,19 @@ GPUScreenImpl::~GPUScreenImpl() {
 }
 
 void GPUScreenImpl::attach(VTerm *vt) {
+  yinfo(">>> GPUScreenImpl::attach: ENTERED vt={}", (void*)vt);
   _vterm = vt;
   state_ = vterm_obtain_state(vt);
+  yinfo(">>> GPUScreenImpl::attach: state_={}", (void*)state_);
 
   // Register our callbacks with State layer
   vterm_state_set_callbacks(state_, &stateCallbacks, this);
+  yinfo(">>> GPUScreenImpl::attach: state callbacks registered");
+
+  // Register fallbacks for unrecognized sequences (OSC, etc.)
+  vterm_state_set_unrecognised_fallbacks(state_, &stateFallbacks, this);
+  yinfo(">>> GPUScreenImpl::attach: OSC fallbacks registered (stateFallbacks.osc={})",
+        (void*)stateFallbacks.osc);
 
   // Get default colors from vterm (white fg, black bg)
   vterm_state_get_default_colors(state_, &defaultFg_, &defaultBg_);
@@ -482,6 +502,16 @@ void GPUScreenImpl::createVTerm() {
         },
         this);
   }
+
+  // Set up vterm input callback for card ANSI output
+  // This allows cards to inject their ANSI-encoded cells into vterm
+  vtermInputCallback_ = [this](const char *data, size_t len) {
+    yinfo(">>> vtermInputCallback_: injecting {} bytes into vterm", len);
+    if (_vterm) {
+      vterm_input_write(_vterm, data, len);
+    }
+  };
+  yinfo(">>> GPUScreenImpl::createVTerm: vtermInputCallback_ SET");
 }
 
 void GPUScreenImpl::write(const char *data, size_t len) {
@@ -1221,6 +1251,12 @@ int GPUScreenImpl::onPutglyph(VTermGlyphInfo *info, VTermPos pos, void *user) {
   auto *self = static_cast<GPUScreenImpl *>(user);
 
   uint32_t cp = info->chars[0];
+
+  // Debug: log all high codepoints (above BMP)
+  if (cp >= 0x10000) {
+    yinfo(">>> onPutglyph: HIGH CODEPOINT cp={:#x} pos=({},{})", cp, pos.row, pos.col);
+  }
+
   if (cp == 0)
     cp = ' ';
 
@@ -1232,6 +1268,8 @@ int GPUScreenImpl::onPutglyph(VTermGlyphInfo *info, VTermPos pos, void *user) {
     // Card glyphs (multi-cell widgets)
     fontType = FONT_TYPE_CARD;
     glyphIdx = self->_cardFont ? self->_cardFont->getGlyphIndex(cp) : cp;
+    yinfo(">>> CARD GLYPH: cp={:#x} glyphIdx={} _cardFont={} pos=({},{})",
+          cp, glyphIdx, (void*)self->_cardFont.get(), pos.row, pos.col);
   } else if (isShaderGlyph(cp)) {
     // Shader glyphs (single-cell animated)
     fontType = FONT_TYPE_SHADER;
@@ -1283,6 +1321,16 @@ int GPUScreenImpl::onPutglyph(VTermGlyphInfo *info, VTermPos pos, void *user) {
   if (self->_pen.strike)
     attrsByte |= 0x10;
   attrsByte |= (fontType & 0x07) << 5; // Pack font type into bits 5-7
+
+  // Debug card glyph cells
+  if (fontType == FONT_TYPE_CARD) {
+    static int cardDebugCount = 0;
+    if (cardDebugCount < 5) {
+      cardDebugCount++;
+      yinfo(">>> CARD CELL: pos=({},{}) glyph={} fg=({},{},{}) bg=({},{},{}) attrs={:#x}",
+            pos.row, pos.col, glyphIdx, fgR, fgG, fgB, bgR, bgG, bgB, attrsByte);
+    }
+  }
 
   self->setCell(pos.row, pos.col, glyphIdx, fgR, fgG, fgB, bgR, bgG, bgB,
                 attrsByte);
@@ -1616,6 +1664,65 @@ int GPUScreenImpl::onResize(int rows, int cols, VTermStateFields *fields,
 int GPUScreenImpl::onSetLineInfo(int, const VTermLineInfo *,
                                  const VTermLineInfo *, void *) {
   // Line info (double-width, double-height) - not commonly used
+  return 1;
+}
+
+int GPUScreenImpl::onOSC(int command, VTermStringFragment frag, void *user) {
+  auto *self = static_cast<GPUScreenImpl *>(user);
+
+  yinfo(">>> onOSC: command={} initial={} final={} len={}", command,
+         (bool)frag.initial, (bool)frag.final, (size_t)frag.len);
+
+  // Handle both legacy plugins and new cards
+  if (command != YETTY_OSC_VENDOR_ID && command != YETTY_OSC_VENDOR_CARD_ID) {
+    yinfo(">>> onOSC: ignoring non-yetty command {}", command);
+    return 0;
+  }
+
+  yinfo(">>> onOSC: *** YETTY OSC DETECTED *** command={}", command);
+
+  if (frag.initial) {
+    self->_oscBuffer.clear();
+    self->_oscCommand = command;
+    yinfo(">>> onOSC: started new OSC buffer");
+  }
+
+  if (frag.len > 0) {
+    self->_oscBuffer.append(frag.str, frag.len);
+    yinfo(">>> onOSC: appended {} bytes, total={}", (size_t)frag.len,
+           self->_oscBuffer.size());
+  }
+
+  if (frag.final) {
+    std::string fullSeq = std::to_string(command) + ";" + self->_oscBuffer;
+    yinfo("onOSC: FINAL - fullSeq len={} first100chars='{}'",
+          fullSeq.size(), fullSeq.substr(0, 100));
+
+    std::string response;
+    uint32_t linesToAdvance = 0;
+
+    // Forward OSC handling to handleOSCSequence
+    bool handled = self->handleOSCSequence(fullSeq, &response, &linesToAdvance);
+
+    yinfo("onOSC: handled={} response_len={} linesToAdvance={}", handled,
+           response.size(), linesToAdvance);
+
+    if (handled) {
+      self->viewBufferDirty_ = true;
+      if (!response.empty() && self->_outputCallback) {
+        // Send response back to the shell
+        self->_outputCallback(response.c_str(), response.size());
+      }
+      // Inject newlines immediately to advance cursor past the widget
+      if (linesToAdvance > 0 && self->_vterm) {
+        std::string nl(linesToAdvance, '\n');
+        vterm_input_write(self->_vterm, nl.c_str(), nl.size());
+      }
+    }
+    self->_oscBuffer.clear();
+    self->_oscCommand = -1;
+  }
+
   return 1;
 }
 
@@ -2188,13 +2295,13 @@ bool GPUScreenImpl::handleCardOSCSequence(const std::string &sequence,
   yinfo("GPUScreenImpl::handleCardOSCSequence: sequence={}",
         sequence.substr(0, 200));
 
-  if (!_cardFactory) {
+  if (!_ctx.cardFactory) {
     yerror("GPUScreenImpl::handleCardOSCSequence: no CardFactory!");
     if (response)
       *response = OscResponse::error("No CardFactory");
     return false;
   }
-  yinfo("GPUScreenImpl::handleCardOSCSequence: _cardFactory is set");
+  yinfo("GPUScreenImpl::handleCardOSCSequence: cardFactory is available");
 
   // Parse using the same OSC parser (same argument format)
   auto parseResult = _oscParser.parse(sequence);
@@ -2235,7 +2342,7 @@ bool GPUScreenImpl::handleCardOSCSequence(const std::string &sequence,
     }
 
     // Create the card
-    auto result = _cardFactory->createCard(
+    auto result = _ctx.cardFactory->createCard(
         cmd.create.plugin, x, y, static_cast<uint32_t>(cmd.create.width),
         static_cast<uint32_t>(cmd.create.height), cmd.pluginArgs, cmd.payload);
 
@@ -2360,7 +2467,7 @@ bool GPUScreenImpl::handleCardOSCSequence(const std::string &sequence,
 
   case OscCommandType::Plugins: {
     if (response) {
-      *response = OscResponse::pluginList(_cardFactory->getRegisteredCards());
+      *response = OscResponse::pluginList(_ctx.cardFactory->getRegisteredCards());
     }
     return true;
   }
@@ -2383,7 +2490,7 @@ void GPUScreenImpl::registerCard(Card *card) {
     return;
 
   uint32_t offset = card->metadataOffset();
-  cardRegistry_[offset] = card;
+  _cardRegistry[offset] = card;
   ydebug("GPUScreenImpl::registerCard: registered card at offset {}", offset);
 }
 
@@ -2392,14 +2499,14 @@ void GPUScreenImpl::unregisterCard(Card *card) {
     return;
 
   uint32_t offset = card->metadataOffset();
-  cardRegistry_.erase(offset);
+  _cardRegistry.erase(offset);
   ydebug("GPUScreenImpl::unregisterCard: unregistered card at offset {}",
          offset);
 }
 
 Card *GPUScreenImpl::getCardByMetadataOffset(uint32_t offset) const {
-  auto it = cardRegistry_.find(offset);
-  return (it != cardRegistry_.end()) ? it->second : nullptr;
+  auto it = _cardRegistry.find(offset);
+  return (it != _cardRegistry.end()) ? it->second : nullptr;
 }
 
 Card *GPUScreenImpl::getCardAtCell(int row, int col) const {

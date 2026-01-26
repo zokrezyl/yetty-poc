@@ -6,6 +6,7 @@
 #include <yetty/font-manager.h>
 #include <yetty/shader-manager.h>
 #include <yetty/card-buffer-manager.h>
+#include <yetty/card-factory.h>
 #include <yetty/wgpu-compat.h>
 #include <yetty/base/base.h>
 #include <glfw3webgpu.h>
@@ -83,10 +84,6 @@ private:
     GPUContext _gpuContext = {};
     YettyContext _yettyContext = {};
 
-#if !YETTY_WEB && !defined(__ANDROID__)
-    std::unique_ptr<CardBufferManager> _cardBufferManager;
-#endif
-
     // Workspaces
     std::vector<Workspace::Ptr> _workspaces;
     Workspace::Ptr _activeWorkspace;
@@ -156,6 +153,17 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     _yettyContext.gpu = _gpuContext;
     _yettyContext.shaderManager = shaderMgr;
     _yettyContext.fontManager = fontMgr;
+
+#if !YETTY_WEB && !defined(__ANDROID__)
+    // Create CardFactory (after CardBufferManager is set in initSharedResources)
+    if (_yettyContext.cardBufferManager) {
+        auto cardFactoryResult = CardFactory::create(_gpuContext, _yettyContext.cardBufferManager);
+        if (!cardFactoryResult) {
+            return Err<void>("Failed to create CardFactory", cardFactoryResult);
+        }
+        _yettyContext.cardFactory = *cardFactoryResult;
+    }
+#endif
 
     // Compile shaders after all providers (fonts) are registered
     if (auto res = shaderMgr->compile(); !res) {
@@ -372,15 +380,20 @@ void YettyImpl::present() noexcept {
 }
 
 Result<void> YettyImpl::initSharedResources() noexcept {
+    // Initialize GPUContext first (needed by CardBufferManager)
+    _gpuContext.device = _device;
+    _gpuContext.queue = _queue;
+    _gpuContext.surfaceFormat = _surfaceFormat;
+
 #if !YETTY_WEB && !defined(__ANDROID__)
     // Create CardBufferManager
     auto cbmResult = CardBufferManager::create(_device);
     if (!cbmResult) {
         return Err<void>("Failed to create CardBufferManager", cbmResult);
     }
-    _cardBufferManager = std::move(*cbmResult);
+    _yettyContext.cardBufferManager = *cbmResult;
 
-    if (auto res = _cardBufferManager->initAtlas(); !res) {
+    if (auto res = _yettyContext.cardBufferManager->initAtlas(); !res) {
         return Err<void>("Failed to initialize card atlas", res);
     }
 #endif
@@ -436,22 +449,22 @@ Result<void> YettyImpl::initSharedResources() noexcept {
     bindEntries[0].size = sizeof(SharedUniforms);
 
     bindEntries[1].binding = 1;
-    bindEntries[1].buffer = _cardBufferManager->metadataBuffer();
-    bindEntries[1].size = wgpuBufferGetSize(_cardBufferManager->metadataBuffer());
+    bindEntries[1].buffer = _yettyContext.cardBufferManager->metadataBuffer();
+    bindEntries[1].size = wgpuBufferGetSize(_yettyContext.cardBufferManager->metadataBuffer());
 
     bindEntries[2].binding = 2;
-    bindEntries[2].buffer = _cardBufferManager->storageBuffer();
-    bindEntries[2].size = wgpuBufferGetSize(_cardBufferManager->storageBuffer());
+    bindEntries[2].buffer = _yettyContext.cardBufferManager->storageBuffer();
+    bindEntries[2].size = wgpuBufferGetSize(_yettyContext.cardBufferManager->storageBuffer());
 
     bindEntries[3].binding = 3;
-    bindEntries[3].textureView = _cardBufferManager->atlasTextureView();
+    bindEntries[3].textureView = _yettyContext.cardBufferManager->atlasTextureView();
 
     bindEntries[4].binding = 4;
-    bindEntries[4].sampler = _cardBufferManager->atlasSampler();
+    bindEntries[4].sampler = _yettyContext.cardBufferManager->atlasSampler();
 
     bindEntries[5].binding = 5;
-    bindEntries[5].buffer = _cardBufferManager->imageDataBuffer();
-    bindEntries[5].size = wgpuBufferGetSize(_cardBufferManager->imageDataBuffer());
+    bindEntries[5].buffer = _yettyContext.cardBufferManager->imageDataBuffer();
+    bindEntries[5].size = wgpuBufferGetSize(_yettyContext.cardBufferManager->imageDataBuffer());
 
     WGPUBindGroupDescriptor bindDesc = {};
     bindDesc.label = WGPU_STR("Shared Bind Group");
@@ -484,10 +497,7 @@ Result<void> YettyImpl::initSharedResources() noexcept {
     _sharedBindGroup = wgpuDeviceCreateBindGroup(_device, &bindDesc);
 #endif
 
-    // Initialize GPUContext
-    _gpuContext.device = _device;
-    _gpuContext.queue = _queue;
-    _gpuContext.surfaceFormat = _surfaceFormat;
+    // Complete GPUContext initialization with shared resources
     _gpuContext.sharedBindGroupLayout = _sharedBindGroupLayout;
     _gpuContext.sharedBindGroup = _sharedBindGroup;
 
@@ -751,6 +761,13 @@ void YettyImpl::mainLoopIteration() noexcept {
     _sharedUniforms.mouseX = static_cast<float>(mouseXd);
     _sharedUniforms.mouseY = static_cast<float>(mouseYd);
     wgpuQueueWriteBuffer(_queue, _sharedUniformBuffer, 0, &_sharedUniforms, sizeof(SharedUniforms));
+
+    // Flush card buffer manager (uploads dirty regions to GPU)
+    if (_yettyContext.cardBufferManager) {
+        if (auto res = _yettyContext.cardBufferManager->flush(_queue); !res) {
+            yerror("CardBufferManager flush failed: {}", res.error().message());
+        }
+    }
 
     // Upload any pending font glyphs (e.g., bold/italic loaded on demand)
     if (auto msdfFont = _yettyContext.fontManager->getDefaultMsMsdfFont()) {

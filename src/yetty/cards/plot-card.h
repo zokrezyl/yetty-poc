@@ -1,7 +1,9 @@
 #pragma once
 
-#include "../card.h"
-#include "../card-factory.h"
+#include <yetty/card.h>
+#include <yetty/card-buffer-manager.h>
+#include <yetty/base/factory.h>
+#include <yetty/gpu-context.h>
 #include <vector>
 
 namespace yetty {
@@ -42,8 +44,11 @@ namespace yetty {
 //   offset 44-63: reserved (20 bytes padding)
 //=============================================================================
 
-class PlotCard : public Card {
+class PlotCard : public Card,
+                 public base::ObjectFactory<PlotCard> {
 public:
+    using Ptr = std::shared_ptr<PlotCard>;
+
     // Shader glyph codepoint for plots
     static constexpr uint32_t SHADER_GLYPH = 0x100001;  // Card base + 0x0001
 
@@ -63,21 +68,31 @@ public:
     // Factory method
     //=========================================================================
     static Result<CardPtr> create(
-        CardBufferManager* mgr,
+        CardBufferManager::Ptr mgr,
+        const GPUContext& gpu,
         int32_t x, int32_t y,
         uint32_t widthCells, uint32_t heightCells,
         const std::string& args,
-        const std::string& payload
-    );
+        const std::string& payload);
 
-    ~PlotCard() override;
+    // ObjectFactory createImpl
+    static Result<Ptr> createImpl(
+        ContextType& ctx,
+        CardBufferManager::Ptr mgr,
+        const GPUContext& gpu,
+        int32_t x, int32_t y,
+        uint32_t widthCells, uint32_t heightCells,
+        const std::string& args,
+        const std::string& payload) noexcept;
+
+    virtual ~PlotCard() = default;
 
     //=========================================================================
     // Card interface
     //=========================================================================
-    Result<void> init() override;
-    void dispose() override;
-    void update(float time) override;
+    Result<void> init() override = 0;
+    void dispose() override = 0;
+    void update(float time) override = 0;
     const char* typeName() const override { return "plot"; }
 
     //=========================================================================
@@ -85,77 +100,44 @@ public:
     //=========================================================================
 
     // Set plot type
-    void setPlotType(PlotType type);
-    PlotType plotType() const { return plotType_; }
+    virtual void setPlotType(PlotType type) = 0;
+    virtual PlotType plotType() const = 0;
 
     // Set data points (copies and uploads to GPU)
-    Result<void> setData(const std::vector<float>& data);
-    Result<void> setData(const float* data, uint32_t count);
+    virtual Result<void> setData(const std::vector<float>& data) = 0;
+    virtual Result<void> setData(const float* data, uint32_t count) = 0;
 
     // Set value range (auto-calculated if not set)
-    void setRange(float minVal, float maxVal);
-    void setAutoRange(bool enabled) { autoRange_ = enabled; }
+    virtual void setRange(float minVal, float maxVal) = 0;
+    virtual void setAutoRange(bool enabled) = 0;
+
+    // Get current range
+    virtual float minValue() const = 0;
+    virtual float maxValue() const = 0;
 
     // Set colors (packed RGBA: 0xAABBGGRR)
-    void setLineColor(uint32_t color);
-    void setFillColor(uint32_t color);
+    virtual void setLineColor(uint32_t color) = 0;
+    virtual void setFillColor(uint32_t color) = 0;
+    virtual void setBgColor(uint32_t color) = 0;
+
+    // Get colors
+    virtual uint32_t lineColor() const = 0;
+    virtual uint32_t fillColor() const = 0;
+    virtual uint32_t bgColor() const = 0;
 
     // Set flags
-    void setShowGrid(bool show);
-    void setShowAxes(bool show);
+    virtual void setShowGrid(bool show) = 0;
+    virtual void setShowAxes(bool show) = 0;
 
-private:
-    PlotCard(CardBufferManager* mgr, int32_t x, int32_t y,
-             uint32_t widthCells, uint32_t heightCells,
-             const std::string& args, const std::string& payload);
+    // Get data count
+    virtual uint32_t dataCount() const = 0;
 
-    // Parse args string (e.g., "--type line --grid --axes")
-    void parseArgs(const std::string& args);
-
-    // Parse payload as comma-separated values
-    Result<void> parsePayload(const std::string& payload);
-
-    // Upload metadata to GPU
-    Result<void> uploadMetadata();
-
-    // Calculate min/max from data
-    void calculateRange();
-
-    // Metadata structure (matches shader layout)
-    struct Metadata {
-        uint32_t plotType;
-        uint32_t dataOffset;
-        uint32_t dataCount;
-        float minValue;
-        float maxValue;
-        uint32_t lineColor;
-        uint32_t fillColor;
-        uint32_t flags;
-        uint32_t widthCells;   // Widget width in cells
-        uint32_t heightCells;  // Widget height in cells
-        uint32_t bgColor;      // Background color
-        uint32_t _reserved[5]; // Padding to 64 bytes
-    };
-    static_assert(sizeof(Metadata) == 64, "Metadata must be 64 bytes");
-
-    PlotType plotType_ = PlotType::Line;
-    std::vector<float> data_;
-    float minValue_ = 0.0f;
-    float maxValue_ = 1.0f;
-    bool autoRange_ = true;
-    uint32_t lineColor_ = 0xFF00FF00;  // Green
-    uint32_t fillColor_ = 0x8000FF00;  // Semi-transparent green
-    uint32_t bgColor_ = 0xFF1A1A2E;    // Dark blue-ish background
-    uint32_t flags_ = FLAG_GRID | FLAG_AXES;
-
-    StorageHandle storageHandle_ = StorageHandle::invalid();
-    bool metadataDirty_ = true;
-
-    std::string argsStr_;
-    std::string payloadStr_;
+protected:
+    PlotCard(CardBufferManager::Ptr mgr, const GPUContext& gpu,
+             int32_t x, int32_t y,
+             uint32_t widthCells, uint32_t heightCells)
+        : Card(std::move(mgr), gpu, x, y, widthCells, heightCells)
+    {}
 };
-
-// Register PlotCard with CardFactory
-void registerPlotCard(CardFactory& factory);
 
 } // namespace yetty

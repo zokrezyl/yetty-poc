@@ -314,9 +314,9 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
                     (glyphIndex >= 0xF000u && glyphIndex <= 0xFFFDu);
 
     if (!skipGlyph) {
-        // Check for shader glyph first (Plane 16 PUA-B range)
-        if (isShaderGlyph(glyphIndex)) {
-            // Shader glyph: render procedurally
+        // Check for card/shader glyph first (Plane 16 PUA-B range)
+        if (isCardGlyph(glyphIndex) || isShaderGlyph(glyphIndex)) {
+            // Card or shader glyph: render via shader function
             let localUV = localPxBase / grid.cellSize;  // Normalize to 0-1
             let mousePos = vec2<f32>(globals.mouseX, globals.mouseY);
             finalColor = renderShaderGlyph(glyphIndex, localUV, globals.time, cell.fg, cell.bg, pixelPos, mousePos);

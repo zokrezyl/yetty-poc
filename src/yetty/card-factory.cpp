@@ -1,64 +1,116 @@
-#include "card-factory.h"
+#include <yetty/card-factory.h>
+#include "cards/image-card.h"
+#include "cards/plot-card.h"
 #include <ytrace/ytrace.hpp>
+#include <unordered_map>
 
 namespace yetty {
 
-CardFactory::CardFactory(CardBufferManager* cardMgr)
-    : cardMgr_(cardMgr)
-{
-}
+class CardFactoryImpl : public CardFactory {
+public:
+    CardFactoryImpl(const GPUContext& gpu, CardBufferManager::Ptr cardMgr)
+        : _gpu(gpu)
+        , _cardMgr(std::move(cardMgr))
+    {}
 
-void CardFactory::registerCard(const std::string& name, CreateFn creator) {
-    if (creators_.find(name) != creators_.end()) {
-        ywarn("CardFactory: overwriting existing card type '{}'", name);
-    }
-    creators_[name] = std::move(creator);
-    yinfo("CardFactory: registered card type '{}'", name);
-}
+    ~CardFactoryImpl() override = default;
 
-bool CardFactory::hasCard(const std::string& name) const {
-    return creators_.find(name) != creators_.end();
-}
+    Result<void> init() {
+        // Register built-in card types
+        registerCard("image", [](CardBufferManager::Ptr mgr, const GPUContext& gpu,
+                                 int32_t x, int32_t y,
+                                 uint32_t w, uint32_t h,
+                                 const std::string& args,
+                                 const std::string& payload) {
+            return ImageCard::create(mgr, gpu, x, y, w, h, args, payload);
+        });
 
-std::vector<std::string> CardFactory::getRegisteredCards() const {
-    std::vector<std::string> names;
-    names.reserve(creators_.size());
-    for (const auto& [name, _] : creators_) {
-        names.push_back(name);
-    }
-    return names;
-}
+        registerCard("plot", [](CardBufferManager::Ptr mgr, const GPUContext& gpu,
+                                int32_t x, int32_t y,
+                                uint32_t w, uint32_t h,
+                                const std::string& args,
+                                const std::string& payload) {
+            return PlotCard::create(mgr, gpu, x, y, w, h, args, payload);
+        });
 
-Result<CardPtr> CardFactory::createCard(
-    const std::string& name,
-    int32_t x, int32_t y,
-    uint32_t widthCells, uint32_t heightCells,
-    const std::string& args,
-    const std::string& payload)
-{
-    auto it = creators_.find(name);
-    if (it == creators_.end()) {
-        return Err<CardPtr>("Unknown card type: " + name);
+        return Ok();
     }
 
-    if (!cardMgr_) {
-        return Err<CardPtr>("CardFactory: no CardBufferManager");
+    void registerCard(const std::string& name, CreateFn creator) override {
+        if (_creators.find(name) != _creators.end()) {
+            ywarn("CardFactory: overwriting existing card type '{}'", name);
+        }
+        _creators[name] = std::move(creator);
+        yinfo("CardFactory: registered card type '{}'", name);
     }
 
-    yinfo("CardFactory: creating card '{}' at ({},{}) size {}x{}",
-          name, x, y, widthCells, heightCells);
+    bool hasCard(const std::string& name) const override {
+        return _creators.find(name) != _creators.end();
+    }
 
-    // Call the creator function - it constructs the card and calls init()
-    auto result = it->second(cardMgr_, x, y, widthCells, heightCells, args, payload);
-    if (!result) {
-        yerror("CardFactory: failed to create card '{}': {}", name, error_msg(result));
+    std::vector<std::string> getRegisteredCards() const override {
+        std::vector<std::string> names;
+        names.reserve(_creators.size());
+        for (const auto& [name, _] : _creators) {
+            names.push_back(name);
+        }
+        return names;
+    }
+
+    Result<CardPtr> createCard(
+        const std::string& name,
+        int32_t x, int32_t y,
+        uint32_t widthCells, uint32_t heightCells,
+        const std::string& args,
+        const std::string& payload) override
+    {
+        auto it = _creators.find(name);
+        if (it == _creators.end()) {
+            return Err<CardPtr>("Unknown card type: " + name);
+        }
+
+        if (!_cardMgr) {
+            return Err<CardPtr>("CardFactory: no CardBufferManager");
+        }
+
+        yinfo("CardFactory: creating card '{}' at ({},{}) size {}x{}",
+              name, x, y, widthCells, heightCells);
+
+        // Call the creator function - it constructs the card and calls init()
+        auto result = it->second(_cardMgr, _gpu, x, y, widthCells, heightCells, args, payload);
+        if (!result) {
+            yerror("CardFactory: failed to create card '{}': {}", name, error_msg(result));
+            return result;
+        }
+
+        yinfo("CardFactory: created card '{}' with metadataOffset={}",
+              name, (*result)->metadataOffset());
+
         return result;
     }
 
-    yinfo("CardFactory: created card '{}' with metadataOffset={}",
-          name, (*result)->metadataOffset());
+    CardBufferManager::Ptr cardBufferManager() const override { return _cardMgr; }
+    const GPUContext& gpuContext() const override { return _gpu; }
 
-    return result;
+private:
+    GPUContext _gpu;
+    CardBufferManager::Ptr _cardMgr;
+    std::unordered_map<std::string, CreateFn> _creators;
+};
+
+// Factory implementation
+Result<CardFactory::Ptr> CardFactory::createImpl(
+    ContextType& ctx,
+    const GPUContext& gpu,
+    CardBufferManager::Ptr cardMgr) noexcept
+{
+    (void)ctx; // ObjectFactory context marker
+
+    auto impl = std::make_shared<CardFactoryImpl>(gpu, std::move(cardMgr));
+    if (auto res = impl->init(); !res) {
+        return Err<Ptr>("Failed to initialize CardFactory", res);
+    }
+    return Ok<Ptr>(impl);
 }
 
 } // namespace yetty

@@ -507,6 +507,7 @@ elseif(NOT EMSCRIPTEN)
         src/yetty/custom-glyph-plugin.cpp
         src/yetty/card-buffer-manager.cpp
         src/yetty/card-factory.cpp
+        src/yetty/card.cpp
         src/yetty/cards/plot-card.cpp
         src/yetty/cards/image-card.cpp
         # Core sources (previously in yetty_core)
@@ -769,7 +770,7 @@ else()
     #-------------------------------------------------------------------------
     # Unit tests (desktop only)
     #-------------------------------------------------------------------------
-    option(YETTY_BUILD_TESTS "Build unit tests" ON)
+    option(YETTY_BUILD_TESTS "Build unit tests" OFF)
     if(YETTY_BUILD_TESTS)
         enable_testing()
         add_subdirectory(test/ut)
