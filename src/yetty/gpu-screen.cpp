@@ -2703,7 +2703,9 @@ void GPUScreenImpl::registerForFocus() {
                          sharedAs<base::EventListener>());
   loop->registerListener(base::Event::Type::MouseDown,
                          sharedAs<base::EventListener>());
-  yinfo("GPUScreen {} registered for SetFocus and MouseDown events", _id);
+  loop->registerListener(base::Event::Type::MouseMove,
+                         sharedAs<base::EventListener>());
+  yinfo("GPUScreen {} registered for SetFocus, MouseDown and MouseMove events", _id);
 
   // Auto-focus on startup so keyboard works immediately
   loop->dispatch(base::Event::focusEvent(_id));
@@ -2759,6 +2761,37 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
       }
     }
     return Ok(false);
+  }
+
+  // Handle mouse move - update statusbar with cell info
+  if (event.type == base::Event::Type::MouseMove) {
+    float mx = event.mouse.x;
+    float my = event.mouse.y;
+
+    if (_viewportWidth > 0 && _viewportHeight > 0 && _ctx.imguiManager) {
+      if (mx >= _viewportX && mx < _viewportX + _viewportWidth &&
+          my >= _viewportY && my < _viewportY + _viewportHeight) {
+
+        float localX = mx - _viewportX;
+        float localY = my - _viewportY;
+        int col = static_cast<int>(localX / getCellWidth());
+        int row = static_cast<int>(localY / getCellHeight());
+
+        col = std::max(0, std::min(col, static_cast<int>(_cols) - 1));
+        row = std::max(0, std::min(row, static_cast<int>(_rows) - 1));
+
+        Cell cell = getCell(row, col);
+        char statusBuf[256];
+        snprintf(statusBuf, sizeof(statusBuf),
+                 "Row:%d Col:%d Glyph:U+%04X FG:(%d,%d,%d) BG:(%d,%d,%d) Style:0x%02X",
+                 row, col, cell.glyph,
+                 cell.fgR, cell.fgG, cell.fgB,
+                 cell.bgR, cell.bgG, cell.bgB,
+                 cell.style);
+        _ctx.imguiManager->setStatusText(statusBuf);
+      }
+    }
+    return Ok(false);  // Don't consume
   }
 
   if (event.type == base::Event::Type::SetFocus) {

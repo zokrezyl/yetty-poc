@@ -28,7 +28,11 @@ public:
     void updateDisplaySize(uint32_t width, uint32_t height) override;
     void addContextMenuItem(const ContextMenuItem& item) override;
     void clearContextMenu() override;
+    void setStatusText(const std::string& text) override;
+    float getStatusbarHeight() const override { return STATUSBAR_HEIGHT; }
     Result<void> render(WGPURenderPassEncoder pass) override;
+
+    static constexpr float STATUSBAR_HEIGHT = 22.0f;
     bool isContextMenuOpen() const override { return _menuOpen; }
     ImGuiContext* context() const override { return _imguiContext; }
 
@@ -46,6 +50,9 @@ private:
     float _menuY = 0.0f;
     bool _menuOpen = false;
     bool _rightClickPending = false;
+
+    // Statusbar
+    std::string _statusText;
 };
 
 //-----------------------------------------------------------------------------
@@ -163,6 +170,10 @@ void ImguiManagerImpl::clearContextMenu() {
     _rightClickPending = false;
 }
 
+void ImguiManagerImpl::setStatusText(const std::string& text) {
+    _statusText = text;
+}
+
 void ImguiManagerImpl::dispatchEvent(const base::Event& event) {
     auto loopResult = base::EventLoop::instance();
     if (!loopResult) {
@@ -212,6 +223,30 @@ Result<void> ImguiManagerImpl::render(WGPURenderPassEncoder pass) {
             // Popup was closed (clicked outside)
             clearContextMenu();
         }
+    }
+
+    // Statusbar at bottom of screen
+    {
+        float yPos = static_cast<float>(_displayHeight) - STATUSBAR_HEIGHT;
+        ImGui::SetNextWindowPos(ImVec2(0, yPos), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(static_cast<float>(_displayWidth), STATUSBAR_HEIGHT), ImGuiCond_Always);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 4));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.1f, 0.1f, 0.1f, 0.9f));
+        ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+                                 ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing;
+        if (ImGui::Begin("##Statusbar", nullptr, flags)) {
+            if (_statusText.empty()) {
+                ImGui::Text("Ready");
+            } else {
+                ImGui::Text("%s", _statusText.c_str());
+            }
+        }
+        ImGui::End();
+        ImGui::PopStyleColor(1);
+        ImGui::PopStyleVar(3);
     }
 
     // Render

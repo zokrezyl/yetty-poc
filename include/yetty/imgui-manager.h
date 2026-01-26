@@ -42,6 +42,10 @@ public:
     virtual void addContextMenuItem(const ContextMenuItem& item) = 0;
     virtual void clearContextMenu() = 0;
 
+    // Statusbar API
+    virtual void setStatusText(const std::string& text) = 0;
+    virtual float getStatusbarHeight() const = 0;
+
     // Render ImGui - call after main scene render, in same render pass
     virtual Result<void> render(WGPURenderPassEncoder pass) = 0;
 

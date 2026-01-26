@@ -32,7 +32,6 @@ private:
     Result<void> initWindow() noexcept;
     Result<void> initWebGPU() noexcept;
     Result<void> initSharedResources() noexcept;
-    Result<void> initFonts() noexcept;
     Result<void> initWorkspace() noexcept;
     Result<void> initCallbacks() noexcept;
     void shutdown() noexcept;
@@ -90,11 +89,6 @@ private:
     Workspace::Ptr _activeWorkspace;
 
     // Grid dimensions
-    uint32_t _cols = 80;
-    uint32_t _rows = 24;
-    float _baseCellWidth = 10.0f;
-    float _baseCellHeight = 20.0f;
-    float _zoomLevel = 0.5f;
 
 #if !YETTY_WEB && !defined(__ANDROID__)
     base::TimerId _frameTimerId = -1;
@@ -178,9 +172,6 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     if (auto res = shaderMgr->compile(); !res) {
         return Err<void>("Failed to compile shaders", res);
     }
-
-    // Calculate grid dimensions based on font metrics
-    if (auto res = initFonts(); !res) return res;
 
 #if !YETTY_WEB && !defined(__ANDROID__)
     initEventLoop();
@@ -513,19 +504,13 @@ Result<void> YettyImpl::initSharedResources() noexcept {
     return Ok();
 }
 
-Result<void> YettyImpl::initFonts() noexcept {
-    // Font manager already created; calculate grid dimensions
-    _cols = static_cast<uint32_t>(_initialWidth / (_baseCellWidth * _zoomLevel));
-    _rows = static_cast<uint32_t>(_initialHeight / (_baseCellHeight * _zoomLevel));
-    return Ok();
-}
 
 Result<void> YettyImpl::initWorkspace() noexcept {
     auto wsResult = createWorkspace();
     if (!wsResult) {
         return Err<void>("Failed to create default workspace", wsResult);
     }
-    yinfo("Created default workspace: {} cols x {} rows", _cols, _rows);
+    yinfo("Created default workspace");
     return Ok();
 }
 
@@ -571,7 +556,8 @@ Result<Workspace::Ptr> YettyImpl::createWorkspace() noexcept {
         return Err<Workspace::Ptr>("Failed to create Workspace", wsResult);
     }
     auto workspace = *wsResult;
-    workspace->resize(static_cast<float>(_initialWidth), static_cast<float>(_initialHeight));
+    float statusbarHeight = _yettyContext.imguiManager ? _yettyContext.imguiManager->getStatusbarHeight() : 0.0f;
+    workspace->resize(static_cast<float>(_initialWidth), static_cast<float>(_initialHeight) - statusbarHeight);
 
 #if !YETTY_WEB && !defined(__ANDROID__)
     // Create single pane for debugging
@@ -648,6 +634,12 @@ Result<void> YettyImpl::initCallbacks() noexcept {
             auto loop = *base::EventLoop::instance();
             loop->dispatch(base::Event::mouseDown(static_cast<float>(xpos), static_cast<float>(ypos), button));
         }
+    });
+
+    glfwSetCursorPosCallback(_window, [](GLFWwindow* w, double xpos, double ypos) {
+        (void)w;
+        auto loop = *base::EventLoop::instance();
+        loop->dispatch(base::Event::mouseMove(static_cast<float>(xpos), static_cast<float>(ypos)));
     });
 
     return Ok();
@@ -840,16 +832,14 @@ void YettyImpl::handleResize(int newWidth, int newHeight) noexcept {
 
     configureSurface(static_cast<uint32_t>(newWidth), static_cast<uint32_t>(newHeight));
 
-    _cols = static_cast<uint32_t>(newWidth / (_baseCellWidth * _zoomLevel));
-    _rows = static_cast<uint32_t>(newHeight / (_baseCellHeight * _zoomLevel));
-
-    if (_activeWorkspace) {
-        _activeWorkspace->resize(static_cast<float>(newWidth), static_cast<float>(newHeight));
-    }
-
     if (_yettyContext.imguiManager) {
         _yettyContext.imguiManager->updateDisplaySize(
             static_cast<uint32_t>(newWidth), static_cast<uint32_t>(newHeight));
+    }
+
+    if (_activeWorkspace) {
+        float statusbarHeight = _yettyContext.imguiManager ? _yettyContext.imguiManager->getStatusbarHeight() : 0.0f;
+        _activeWorkspace->resize(static_cast<float>(newWidth), static_cast<float>(newHeight) - statusbarHeight);
     }
 }
 
