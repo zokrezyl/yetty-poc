@@ -79,7 +79,8 @@ fn scanMetadataSlots(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     // Read metadata for this slot
-    let metaOffset = slotIndex * 8u;  // 32-byte slots = 8 u32s
+    // ImageCard::Metadata and PlotCard::Metadata are 64 bytes = 16 u32s
+    let metaOffset = slotIndex * 16u;  // 64-byte slots = 16 u32s
     let imageDataOffset = cardMetadata[metaOffset + 0u];
     let imageWidth = cardMetadata[metaOffset + 1u];
     let imageHeight = cardMetadata[metaOffset + 2u];
@@ -161,7 +162,8 @@ fn scanAndAllocate_ORIGINAL(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     // Read metadata for this card
-    let metaOffset = slotIndex * 8u;  // 32-byte slots = 8 u32s
+    // ImageCard::Metadata and PlotCard::Metadata are 64 bytes = 16 u32s
+    let metaOffset = slotIndex * 16u;  // 64-byte slots = 16 u32s
     let imageDataOffset = cardMetadata[metaOffset + 0u];
     let imageWidth = cardMetadata[metaOffset + 1u];
     let imageHeight = cardMetadata[metaOffset + 2u];
@@ -221,7 +223,8 @@ fn copyPixels(@builtin(global_invocation_id) gid: vec3<u32>,
     }
 
     // Read metadata
-    let metaOffset = slotIndex * 8u;
+    // ImageCard::Metadata and PlotCard::Metadata are 64 bytes = 16 u32s
+    let metaOffset = slotIndex * 16u;  // 64-byte slots = 16 u32s
     let imageDataOffset = cardMetadata[metaOffset + 0u];
     let imageWidth = cardMetadata[metaOffset + 1u];
     let imageHeight = cardMetadata[metaOffset + 2u];

@@ -984,20 +984,21 @@ Result<void> CardBufferManagerImpl::prepareAtlas(WGPUCommandEncoder encoder, WGP
         return Err<void>("Atlas not initialized");
     }
 
-    // DEBUG: Dump metadata for slot 256 (where image card is allocated)
+    // DEBUG: Dump metadata for first few slots
     const uint32_t* metaU32 = _metadataCpuBuffer.data();
-    uint32_t slot = 256;
-    uint32_t offset = slot * 8;  // 32 bytes = 8 u32s per slot index
-    if (offset + 5 < _metadataCpuBuffer.size()) {
-        uint32_t imageDataOffset = metaU32[offset + 0];
-        uint32_t imageWidth = metaU32[offset + 1];
-        uint32_t imageHeight = metaU32[offset + 2];
-        uint32_t atlasX = metaU32[offset + 3];
-        uint32_t atlasY = metaU32[offset + 4];
-        if (imageWidth > 0 && imageHeight > 0) {
-            yinfo("DEBUG slot[256]: dataOffset={} size={}x{} atlasPos=({},{}) bufSize={}",
-                  imageDataOffset, imageWidth, imageHeight, atlasX, atlasY,
-                  _metadataCpuBuffer.size() * sizeof(uint32_t));
+    for (uint32_t slot = 0; slot < 4 && slot < gridCols; ++slot) {
+        // ImageCard::Metadata and PlotCard::Metadata are 64 bytes = 16 u32s
+        uint32_t offset = slot * 16;  // 64 bytes = 16 u32s per slot
+        if (offset + 5 < _metadataCpuBuffer.size()) {
+            uint32_t imageDataOffset = metaU32[offset + 0];
+            uint32_t imageWidth = metaU32[offset + 1];
+            uint32_t imageHeight = metaU32[offset + 2];
+            uint32_t atlasX = metaU32[offset + 3];
+            uint32_t atlasY = metaU32[offset + 4];
+            if (imageWidth > 0 && imageHeight > 0) {
+                yinfo("DEBUG slot[{}]: dataOffset={} size={}x{} atlasPos=({},{})",
+                      slot, imageDataOffset, imageWidth, imageHeight, atlasX, atlasY);
+            }
         }
     }
 
