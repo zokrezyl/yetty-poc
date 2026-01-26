@@ -2341,9 +2341,9 @@ bool GPUScreenImpl::handleCardOSCSequence(const std::string &sequence,
       ydebug("Card OSC Create: final position ({},{})", x, y);
     }
 
-    // Create the card
+    // Create the card (pass full YettyContext for font access etc)
     auto result = _ctx.cardFactory->createCard(
-        cmd.create.plugin, x, y, static_cast<uint32_t>(cmd.create.width),
+        _ctx, cmd.create.plugin, x, y, static_cast<uint32_t>(cmd.create.width),
         static_cast<uint32_t>(cmd.create.height), cmd.pluginArgs, cmd.payload);
 
     if (!result) {

@@ -1,5 +1,7 @@
 #include "hdraw.h"
 #include "ydraw.h"  // For SDFPrimitive definition
+#include <yetty/ms-msdf-font.h>
+#include <yetty/font-manager.h>
 #include <ytrace/ytrace.hpp>
 #include <sstream>
 #include <algorithm>
@@ -193,15 +195,20 @@ static void computeAABB_hdraw(SDFPrimitive& prim) {
 
 class HDrawImpl : public HDraw {
 public:
-    HDrawImpl(CardBufferManager::Ptr mgr, const GPUContext& gpu,
+    HDrawImpl(const YettyContext& ctx,
               int32_t x, int32_t y,
               uint32_t widthCells, uint32_t heightCells,
               const std::string& args, const std::string& payload)
-        : HDraw(std::move(mgr), gpu, x, y, widthCells, heightCells)
+        : HDraw(ctx.cardBufferManager, ctx.gpu, x, y, widthCells, heightCells)
+        , _fontManager(ctx.fontManager)
         , _argsStr(args)
         , _payloadStr(payload)
     {
         _shaderGlyph = SHADER_GLYPH;
+        // Get default MSDF font for text rendering
+        if (_fontManager) {
+            _font = _fontManager->getDefaultMsMsdfFont();
+        }
     }
 
     ~HDrawImpl() override {
@@ -356,14 +363,101 @@ public:
         return addPrimitive(prim);
     }
 
+    uint32_t addText(float x, float y, const std::string& text,
+                     float fontSize, uint32_t color,
+                     uint32_t layer) override {
+        if (!_font || text.empty()) {
+            return 0;
+        }
+
+        // Get font metrics
+        float fontBaseSize = _font->getFontSize();  // Size the glyphs were generated at
+        float scale = fontSize / fontBaseSize;
+
+        // Layout text horizontally
+        float cursorX = x;
+        uint32_t glyphsAdded = 0;
+
+        // Iterate through UTF-8 text
+        const uint8_t* ptr = reinterpret_cast<const uint8_t*>(text.data());
+        const uint8_t* end = ptr + text.size();
+
+        while (ptr < end) {
+            // Decode UTF-8 codepoint
+            uint32_t codepoint = 0;
+            if ((*ptr & 0x80) == 0) {
+                codepoint = *ptr++;
+            } else if ((*ptr & 0xE0) == 0xC0) {
+                codepoint = (*ptr++ & 0x1F) << 6;
+                if (ptr < end) codepoint |= (*ptr++ & 0x3F);
+            } else if ((*ptr & 0xF0) == 0xE0) {
+                codepoint = (*ptr++ & 0x0F) << 12;
+                if (ptr < end) codepoint |= (*ptr++ & 0x3F) << 6;
+                if (ptr < end) codepoint |= (*ptr++ & 0x3F);
+            } else if ((*ptr & 0xF8) == 0xF0) {
+                codepoint = (*ptr++ & 0x07) << 18;
+                if (ptr < end) codepoint |= (*ptr++ & 0x3F) << 12;
+                if (ptr < end) codepoint |= (*ptr++ & 0x3F) << 6;
+                if (ptr < end) codepoint |= (*ptr++ & 0x3F);
+            } else {
+                ptr++;  // Invalid byte, skip
+                continue;
+            }
+
+            // Get glyph index from font
+            uint32_t glyphIndex = _font->getGlyphIndex(codepoint);
+            if (glyphIndex == 0 && codepoint != ' ') {
+                // Try to load the glyph (triggers lazy loading)
+                glyphIndex = _font->getGlyphIndex(codepoint);
+            }
+
+            // Get glyph metrics
+            const auto& metadata = _font->getGlyphMetadata();
+            if (glyphIndex >= metadata.size()) {
+                // Use space advance as fallback
+                cursorX += fontSize * 0.5f;
+                continue;
+            }
+
+            const auto& glyph = metadata[glyphIndex];
+
+            // Create positioned glyph
+            HDrawGlyph posGlyph = {};
+            posGlyph.x = cursorX + glyph._bearingX * scale;
+            posGlyph.y = y - glyph._bearingY * scale;  // Y is typically from baseline
+            posGlyph.width = glyph._sizeX * scale;
+            posGlyph.height = glyph._sizeY * scale;
+            posGlyph.glyphIndex = glyphIndex;
+            posGlyph.color = color;
+            posGlyph.layer = layer;
+
+            _glyphs.push_back(posGlyph);
+            glyphsAdded++;
+
+            // Advance cursor
+            cursorX += glyph._advance * scale;
+        }
+
+        if (glyphsAdded > 0) {
+            _dirty = true;
+        }
+
+        return glyphsAdded;
+    }
+
     void clear() override {
         _primitives.clear();
+        _glyphs.clear();
         _grid.clear();
         _dirty = true;
     }
 
     uint32_t primitiveCount() const override {
         return static_cast<uint32_t>(_primitives.size());
+    }
+
+    uint32_t glyphCount() const override {
+        return static_cast<uint32_t>(_glyphs.size());
     }
 
     void markDirty() override {
@@ -545,12 +639,34 @@ private:
         // Compute grid dimensions
         float sceneWidth = _sceneMaxX - _sceneMinX;
         float sceneHeight = _sceneMaxY - _sceneMinY;
+        float sceneArea = sceneWidth * sceneHeight;
+
+        // Auto-compute optimal cell size if not set
+        // Target: ~2-4 primitives per cell on average
+        // Cell size = sqrt(sceneArea / (numPrimitives * targetPrimsPerCell))
+        if (_cellSize <= 0.0f) {
+            float avgPrimArea = 0.0f;
+            for (const auto& prim : _primitives) {
+                float w = prim.aabbMaxX - prim.aabbMinX;
+                float h = prim.aabbMaxY - prim.aabbMinY;
+                avgPrimArea += w * h;
+            }
+            avgPrimArea /= _primitives.size();
+
+            // Cell should be ~1.5x the average primitive size for good coverage
+            _cellSize = std::sqrt(avgPrimArea) * 1.5f;
+
+            // Clamp to reasonable range
+            float minCellSize = std::sqrt(sceneArea / 65536.0f);  // Max 256x256 grid
+            float maxCellSize = std::sqrt(sceneArea / 16.0f);     // Min 4x4 grid
+            _cellSize = std::clamp(_cellSize, minCellSize, maxCellSize);
+        }
 
         _gridWidth = std::max(1u, static_cast<uint32_t>(std::ceil(sceneWidth / _cellSize)));
         _gridHeight = std::max(1u, static_cast<uint32_t>(std::ceil(sceneHeight / _cellSize)));
 
         // Limit grid size to avoid excessive memory
-        const uint32_t MAX_GRID_DIM = 256;
+        const uint32_t MAX_GRID_DIM = 512;
         if (_gridWidth > MAX_GRID_DIM) {
             _gridWidth = MAX_GRID_DIM;
             _cellSize = sceneWidth / _gridWidth;
@@ -607,11 +723,12 @@ private:
         buildGrid();
 
         // Calculate storage requirements
-        // Layout: [primitives][grid]
+        // Layout: [primitives][grid][glyphs]
         uint32_t primSize = static_cast<uint32_t>(_primitives.size() * sizeof(SDFPrimitive));
         uint32_t gridSize = static_cast<uint32_t>(_grid.size() * sizeof(uint32_t));
+        uint32_t glyphSize = static_cast<uint32_t>(_glyphs.size() * sizeof(HDrawGlyph));
 
-        uint32_t totalSize = primSize + gridSize;
+        uint32_t totalSize = primSize + gridSize + glyphSize;
 
         if (totalSize == 0) {
             return;
@@ -631,8 +748,8 @@ private:
         }
         _storageHandle = *storageResult;
 
-        yinfo("HDraw::rebuildAndUpload: allocated {} bytes at offset {}",
-              totalSize, _storageHandle.offset);
+        yinfo("HDraw::rebuildAndUpload: allocated {} bytes at offset {} (prims={} grid={} glyphs={})",
+              totalSize, _storageHandle.offset, _primitives.size(), _grid.size(), _glyphs.size());
 
         // Upload data
         uint32_t offset = 0;
@@ -651,6 +768,15 @@ private:
             gridHandle.offset += offset;
             _cardMgr->writeStorage(gridHandle, _grid.data(), gridSize);
         }
+        offset += gridSize;
+
+        // Glyphs
+        _glyphOffset = (_storageHandle.offset + offset) / sizeof(float);
+        if (!_glyphs.empty()) {
+            StorageHandle glyphHandle = _storageHandle;
+            glyphHandle.offset += offset;
+            _cardMgr->writeStorage(glyphHandle, _glyphs.data(), glyphSize);
+        }
 
         _metadataDirty = true;
     }
@@ -667,8 +793,8 @@ private:
         meta.gridWidth = _gridWidth;
         meta.gridHeight = _gridHeight;
         std::memcpy(&meta.cellSize, &_cellSize, sizeof(float));  // Store float as u32 bits
-        meta.maxPrimsPerCell = _maxPrimsPerCell;
-        meta._reserved = 0;
+        meta.glyphOffset = _glyphOffset;
+        meta.glyphCount = static_cast<uint32_t>(_glyphs.size());
         std::memcpy(&meta.sceneMinX, &_sceneMinX, sizeof(float));
         std::memcpy(&meta.sceneMinY, &_sceneMinY, sizeof(float));
         std::memcpy(&meta.sceneMaxX, &_sceneMaxX, sizeof(float));
@@ -699,8 +825,8 @@ private:
         uint32_t gridWidth;         // 12
         uint32_t gridHeight;        // 16
         uint32_t cellSize;          // 20 (f32 stored as bits)
-        uint32_t maxPrimsPerCell;   // 24
-        uint32_t _reserved;         // 28
+        uint32_t glyphOffset;       // 24 - offset of glyph data in storage
+        uint32_t glyphCount;        // 28 - number of glyphs
         uint32_t sceneMinX;         // 32 (f32 stored as bits)
         uint32_t sceneMinY;         // 36 (f32 stored as bits)
         uint32_t sceneMaxX;         // 40 (f32 stored as bits)
@@ -714,6 +840,9 @@ private:
 
     // Primitive data
     std::vector<SDFPrimitive> _primitives;
+
+    // Text glyphs
+    std::vector<HDrawGlyph> _glyphs;
 
     // Spatial hash grid
     // Layout: for each cell [primCount][primIdx0][primIdx1]...[primIdxN]
@@ -733,6 +862,7 @@ private:
     // GPU offsets (in float units)
     uint32_t _primitiveOffset = 0;
     uint32_t _gridOffset = 0;
+    uint32_t _glyphOffset = 0;
 
     // Rendering
     uint32_t _bgColor = 0xFF2E1A1A;
@@ -744,6 +874,10 @@ private:
 
     std::string _argsStr;
     std::string _payloadStr;
+
+    // Font for text rendering
+    FontManager::Ptr _fontManager;
+    MsMsdfFont::Ptr _font;
 };
 
 //=============================================================================
@@ -751,8 +885,7 @@ private:
 //=============================================================================
 
 Result<CardPtr> HDraw::create(
-    CardBufferManager::Ptr mgr,
-    const GPUContext& gpu,
+    const YettyContext& ctx,
     int32_t x, int32_t y,
     uint32_t widthCells, uint32_t heightCells,
     const std::string& args,
@@ -761,13 +894,13 @@ Result<CardPtr> HDraw::create(
     yinfo("HDraw::create: pos=({},{}) size={}x{} args='{}' payload_len={}",
           x, y, widthCells, heightCells, args, payload.size());
 
-    if (!mgr) {
+    if (!ctx.cardBufferManager) {
         yerror("HDraw::create: null CardBufferManager!");
         return Err<CardPtr>("HDraw::create: null CardBufferManager");
     }
 
     auto card = std::make_shared<HDrawImpl>(
-        std::move(mgr), gpu, x, y, widthCells, heightCells, args, payload);
+        ctx, x, y, widthCells, heightCells, args, payload);
 
     if (auto res = card->init(); !res) {
         yerror("HDraw::create: init FAILED: {}", error_msg(res));
@@ -780,8 +913,7 @@ Result<CardPtr> HDraw::create(
 
 Result<HDraw::Ptr> HDraw::createImpl(
     ContextType& ctx,
-    CardBufferManager::Ptr mgr,
-    const GPUContext& gpu,
+    const YettyContext& yettyCtx,
     int32_t x, int32_t y,
     uint32_t widthCells, uint32_t heightCells,
     const std::string& args,
@@ -789,7 +921,7 @@ Result<HDraw::Ptr> HDraw::createImpl(
 {
     (void)ctx;
 
-    auto result = create(std::move(mgr), gpu, x, y, widthCells, heightCells, args, payload);
+    auto result = create(yettyCtx, x, y, widthCells, heightCells, args, payload);
     if (!result) {
         return Err<Ptr>("Failed to create HDraw", result);
     }

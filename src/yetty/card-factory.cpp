@@ -1,4 +1,5 @@
 #include <yetty/card-factory.h>
+#include <yetty/yetty-context.h>
 #include "cards/image.h"
 #include "cards/plot.h"
 #include "cards/ydraw.h"
@@ -19,36 +20,36 @@ public:
 
     Result<void> init() {
         // Register built-in card types
-        registerCard("image", [](CardBufferManager::Ptr mgr, const GPUContext& gpu,
+        registerCard("image", [](const YettyContext& ctx,
                                  int32_t x, int32_t y,
                                  uint32_t w, uint32_t h,
                                  const std::string& args,
                                  const std::string& payload) {
-            return card::Image::create(mgr, gpu, x, y, w, h, args, payload);
+            return card::Image::create(ctx.cardBufferManager, ctx.gpu, x, y, w, h, args, payload);
         });
 
-        registerCard("plot", [](CardBufferManager::Ptr mgr, const GPUContext& gpu,
+        registerCard("plot", [](const YettyContext& ctx,
                                 int32_t x, int32_t y,
                                 uint32_t w, uint32_t h,
                                 const std::string& args,
                                 const std::string& payload) {
-            return card::Plot::create(mgr, gpu, x, y, w, h, args, payload);
+            return card::Plot::create(ctx.cardBufferManager, ctx.gpu, x, y, w, h, args, payload);
         });
 
-        registerCard("ydraw", [](CardBufferManager::Ptr mgr, const GPUContext& gpu,
+        registerCard("ydraw", [](const YettyContext& ctx,
                                  int32_t x, int32_t y,
                                  uint32_t w, uint32_t h,
                                  const std::string& args,
                                  const std::string& payload) {
-            return card::YDraw::create(mgr, gpu, x, y, w, h, args, payload);
+            return card::YDraw::create(ctx.cardBufferManager, ctx.gpu, x, y, w, h, args, payload);
         });
 
-        registerCard("hdraw", [](CardBufferManager::Ptr mgr, const GPUContext& gpu,
+        registerCard("hdraw", [](const YettyContext& ctx,
                                  int32_t x, int32_t y,
                                  uint32_t w, uint32_t h,
                                  const std::string& args,
                                  const std::string& payload) {
-            return card::HDraw::create(mgr, gpu, x, y, w, h, args, payload);
+            return card::HDraw::create(ctx, x, y, w, h, args, payload);
         });
 
         return Ok();
@@ -76,6 +77,7 @@ public:
     }
 
     Result<CardPtr> createCard(
+        const YettyContext& ctx,
         const std::string& name,
         int32_t x, int32_t y,
         uint32_t widthCells, uint32_t heightCells,
@@ -87,15 +89,15 @@ public:
             return Err<CardPtr>("Unknown card type: " + name);
         }
 
-        if (!_cardMgr) {
-            return Err<CardPtr>("CardFactory: no CardBufferManager");
+        if (!ctx.cardBufferManager) {
+            return Err<CardPtr>("CardFactory: no CardBufferManager in context");
         }
 
         yinfo("CardFactory: creating card '{}' at ({},{}) size {}x{}",
               name, x, y, widthCells, heightCells);
 
-        // Call the creator function - it constructs the card and calls init()
-        auto result = it->second(_cardMgr, _gpu, x, y, widthCells, heightCells, args, payload);
+        // Call the creator function with full context
+        auto result = it->second(ctx, x, y, widthCells, heightCells, args, payload);
         if (!result) {
             yerror("CardFactory: failed to create card '{}': {}", name, error_msg(result));
             return result;
