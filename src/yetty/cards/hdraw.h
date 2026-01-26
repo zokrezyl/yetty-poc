@@ -4,6 +4,7 @@
 #include <yetty/card-buffer-manager.h>
 #include <yetty/base/factory.h>
 #include <yetty/gpu-context.h>
+#include <yetty/yetty-context.h>
 #include <vector>
 #include <string>
 
@@ -55,6 +56,22 @@ namespace yetty::card {
 struct SDFPrimitive;  // Defined in ydraw.h
 
 //=============================================================================
+// Text structures for MSDF text rendering
+//=============================================================================
+
+// Positioned glyph for GPU rendering (32 bytes)
+// Stored in cardStorage, rendered by shader
+struct HDrawGlyph {
+    float x, y;              // Position in scene coordinates
+    float width, height;     // Glyph size in scene coordinates
+    uint32_t glyphIndex;     // Index in glyphMetadata buffer
+    uint32_t color;          // RGBA packed color
+    uint32_t layer;          // Draw order
+    uint32_t _pad;           // Padding for alignment
+};
+static_assert(sizeof(HDrawGlyph) == 32, "HDrawGlyph must be 32 bytes");
+
+//=============================================================================
 // HDraw class
 //=============================================================================
 
@@ -67,8 +84,8 @@ public:
     static constexpr uint32_t SHADER_GLYPH = 0x100003;  // Card base + 0x0003
 
     // Default grid parameters
-    static constexpr uint32_t DEFAULT_MAX_PRIMS_PER_CELL = 8;
-    static constexpr float DEFAULT_CELL_SIZE = 50.0f;  // Scene units
+    static constexpr uint32_t DEFAULT_MAX_PRIMS_PER_CELL = 16;
+    static constexpr float DEFAULT_CELL_SIZE = 0.0f;  // 0 = auto-compute optimal size
 
     // Flags
     static constexpr uint32_t FLAG_SHOW_BOUNDS = 1;
@@ -79,8 +96,7 @@ public:
     // Factory method
     //=========================================================================
     static Result<CardPtr> create(
-        CardBufferManager::Ptr mgr,
-        const GPUContext& gpu,
+        const YettyContext& ctx,
         int32_t x, int32_t y,
         uint32_t widthCells, uint32_t heightCells,
         const std::string& args,
@@ -89,8 +105,7 @@ public:
     // ObjectFactory createImpl
     static Result<Ptr> createImpl(
         ContextType& ctx,
-        CardBufferManager::Ptr mgr,
-        const GPUContext& gpu,
+        const YettyContext& yettyCtx,
         int32_t x, int32_t y,
         uint32_t widthCells, uint32_t heightCells,
         const std::string& args,
@@ -135,11 +150,19 @@ public:
                                 uint32_t strokeColor, float strokeWidth = 1,
                                 uint32_t layer = 0) = 0;
 
-    // Clear all primitives
+    // Add text at position (returns number of glyphs added)
+    // Text is laid out horizontally starting at (x, y)
+    // fontSize is in scene units
+    virtual uint32_t addText(float x, float y, const std::string& text,
+                             float fontSize, uint32_t color,
+                             uint32_t layer = 0) = 0;
+
+    // Clear all primitives and text
     virtual void clear() = 0;
 
-    // Get primitive count
+    // Get counts
     virtual uint32_t primitiveCount() const = 0;
+    virtual uint32_t glyphCount() const = 0;
 
     // Mark data as dirty (triggers grid rebuild on next update)
     virtual void markDirty() = 0;
