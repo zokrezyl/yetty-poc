@@ -509,8 +509,9 @@ elseif(NOT EMSCRIPTEN)
         src/yetty/card-factory.cpp
         src/yetty/card.cpp
         src/yetty/imgui-manager.cpp
-        src/yetty/cards/plot-card.cpp
-        src/yetty/cards/image-card.cpp
+        src/yetty/cards/plot.cpp
+        src/yetty/cards/image.cpp
+        src/yetty/cards/ydraw.cpp
         # Core sources (previously in yetty_core)
         # src/yetty/font.cpp  # Moved to obsolete
         src/yetty/ms-msdf-font.cpp

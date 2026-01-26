@@ -1,4 +1,4 @@
-#include "image-card.h"
+#include "image.h"
 #include <ytrace/ytrace.hpp>
 #include <sstream>
 #include <algorithm>
@@ -8,26 +8,26 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
-namespace yetty {
+namespace yetty::card {
 
 //=============================================================================
-// ImageCardImpl - Implementation of ImageCard
+// ImageImpl - Implementation of Image
 //=============================================================================
 
-class ImageCardImpl : public ImageCard {
+class ImageImpl : public Image {
 public:
-    ImageCardImpl(CardBufferManager::Ptr mgr, const GPUContext& gpu,
-                  int32_t x, int32_t y,
-                  uint32_t widthCells, uint32_t heightCells,
-                  const std::string& args, const std::string& payload)
-        : ImageCard(std::move(mgr), gpu, x, y, widthCells, heightCells)
+    ImageImpl(CardBufferManager::Ptr mgr, const GPUContext& gpu,
+              int32_t x, int32_t y,
+              uint32_t widthCells, uint32_t heightCells,
+              const std::string& args, const std::string& payload)
+        : Image(std::move(mgr), gpu, x, y, widthCells, heightCells)
         , _argsStr(args)
         , _payloadStr(payload)
     {
         _shaderGlyph = SHADER_GLYPH;
     }
 
-    ~ImageCardImpl() override {
+    ~ImageImpl() override {
         dispose();
     }
 
@@ -39,11 +39,11 @@ public:
         // Allocate metadata slot
         auto metaResult = _cardMgr->allocateMetadata(sizeof(Metadata));
         if (!metaResult) {
-            return Err<void>("ImageCard::init: failed to allocate metadata");
+            return Err<void>("Image::init: failed to allocate metadata");
         }
         _metaHandle = *metaResult;
 
-        yinfo("ImageCard::init: allocated metadata at offset {}", _metaHandle.offset);
+        yinfo("Image::init: allocated metadata at offset {}", _metaHandle.offset);
 
         // Parse args
         parseArgs(_argsStr);
@@ -51,14 +51,14 @@ public:
         // Decode and load image from payload if provided
         if (!_payloadStr.empty()) {
             if (auto res = decodePayload(_payloadStr); !res) {
-                yerror("ImageCard::init: failed to decode payload: {}", error_msg(res));
-                return Err<void>("ImageCard::init: failed to decode payload");
+                yerror("Image::init: failed to decode payload: {}", error_msg(res));
+                return Err<void>("Image::init: failed to decode payload");
             }
         }
 
         // Upload initial metadata
         if (auto res = uploadMetadata(); !res) {
-            return Err<void>("ImageCard::init: failed to upload metadata");
+            return Err<void>("Image::init: failed to upload metadata");
         }
 
         return Ok();
@@ -90,10 +90,10 @@ public:
     //=========================================================================
 
     Result<void> setImageData(const uint8_t* data, uint32_t width, uint32_t height) override {
-        yinfo("ImageCard::setImageData: {}x{}", width, height);
+        yinfo("Image::setImageData: {}x{}", width, height);
 
         if (!data || width == 0 || height == 0) {
-            return Err<void>("ImageCard::setImageData: invalid data or dimensions");
+            return Err<void>("Image::setImageData: invalid data or dimensions");
         }
 
         _imageWidth = width;
@@ -107,27 +107,27 @@ public:
 
         // Calculate storage size (RGBA8 = 4 bytes per pixel)
         uint32_t dataSize = width * height * 4;
-        yinfo("ImageCard::setImageData: allocating {} bytes for {}x{} RGBA image",
+        yinfo("Image::setImageData: allocating {} bytes for {}x{} RGBA image",
               dataSize, width, height);
 
         // Allocate from image data buffer
         auto allocResult = _cardMgr->allocateImageData(dataSize);
         if (!allocResult) {
-            yerror("ImageCard::setImageData: failed to allocate image data");
-            return Err<void>("ImageCard::setImageData: failed to allocate image data");
+            yerror("Image::setImageData: failed to allocate image data");
+            return Err<void>("Image::setImageData: failed to allocate image data");
         }
         _imageDataHandle = *allocResult;
 
-        yinfo("ImageCard::setImageData: image data allocated at byte offset {}",
+        yinfo("Image::setImageData: image data allocated at byte offset {}",
               _imageDataHandle.offset);
 
         // Write image data to buffer
         if (auto res = _cardMgr->writeImageData(_imageDataHandle, data, dataSize); !res) {
-            yerror("ImageCard::setImageData: failed to write image data");
-            return Err<void>("ImageCard::setImageData: failed to write image data");
+            yerror("Image::setImageData: failed to write image data");
+            return Err<void>("Image::setImageData: failed to write image data");
         }
 
-        yinfo("ImageCard::setImageData: {} bytes written to image data buffer", dataSize);
+        yinfo("Image::setImageData: {} bytes written to image data buffer", dataSize);
 
         _metadataDirty = true;
         return Ok();
@@ -175,7 +175,7 @@ public:
 
 private:
     void parseArgs(const std::string& args) {
-        yinfo("ImageCard::parseArgs: args='{}'", args);
+        yinfo("Image::parseArgs: args='{}'", args);
 
         std::istringstream iss(args);
         std::string token;
@@ -215,15 +215,15 @@ private:
     }
 
     Result<void> decodePayload(const std::string& payload) {
-        yinfo("ImageCard::decodePayload: payload length={}", payload.size());
+        yinfo("Image::decodePayload: payload length={}", payload.size());
 
         if (payload.empty()) {
-            return Err<void>("ImageCard::decodePayload: empty payload");
+            return Err<void>("Image::decodePayload: empty payload");
         }
 
         // Convert string to byte vector (string contains raw binary data)
         std::vector<uint8_t> imageFileData(payload.begin(), payload.end());
-        yinfo("ImageCard::decodePayload: image file data {} bytes", imageFileData.size());
+        yinfo("Image::decodePayload: image file data {} bytes", imageFileData.size());
 
         // Load image using stb_image
         int width, height, channels;
@@ -233,11 +233,11 @@ private:
             &width, &height, &channels, 4);  // Force RGBA
 
         if (!pixels) {
-            return Err<void>(std::string("ImageCard::decodePayload: stbi_load failed: ") +
+            return Err<void>(std::string("Image::decodePayload: stbi_load failed: ") +
                              stbi_failure_reason());
         }
 
-        yinfo("ImageCard::decodePayload: loaded image {}x{} ({} channels -> 4)",
+        yinfo("Image::decodePayload: loaded image {}x{} ({} channels -> 4)",
               width, height, channels);
 
         // Set image data (this will upload to GPU)
@@ -251,7 +251,7 @@ private:
 
     Result<void> uploadMetadata() {
         if (!_metaHandle.isValid()) {
-            return Err<void>("ImageCard::uploadMetadata: invalid metadata handle");
+            return Err<void>("Image::uploadMetadata: invalid metadata handle");
         }
 
         Metadata meta = {};  // Zero-initialize including reserved
@@ -268,7 +268,7 @@ private:
         meta.flags = _flags;
         meta.bgColor = _bgColor;
 
-        yinfo("ImageCard::uploadMetadata: metaOffset={} imageDataOffset={} "
+        yinfo("Image::uploadMetadata: metaOffset={} imageDataOffset={} "
               "imageSize={}x{} atlasPos=({},{}) widgetSize={}x{} zoom={} center=({},{}) flags={:#x}",
               _metaHandle.offset, meta.imageDataOffset,
               meta.imageWidth, meta.imageHeight,
@@ -277,7 +277,7 @@ private:
               meta.zoom, meta.centerX, meta.centerY, meta.flags);
 
         if (auto res = _cardMgr->writeMetadata(_metaHandle, &meta, sizeof(meta)); !res) {
-            return Err<void>("ImageCard::uploadMetadata: write failed");
+            return Err<void>("Image::uploadMetadata: write failed");
         }
 
         return Ok();
@@ -323,7 +323,7 @@ private:
 // Factory methods
 //=============================================================================
 
-Result<CardPtr> ImageCard::create(
+Result<CardPtr> Image::create(
     CardBufferManager::Ptr mgr,
     const GPUContext& gpu,
     int32_t x, int32_t y,
@@ -331,28 +331,28 @@ Result<CardPtr> ImageCard::create(
     const std::string& args,
     const std::string& payload)
 {
-    yinfo("ImageCard::create: ENTERED pos=({},{}) size={}x{} args='{}' payload_len={}",
+    yinfo("Image::create: ENTERED pos=({},{}) size={}x{} args='{}' payload_len={}",
           x, y, widthCells, heightCells, args, payload.size());
 
     if (!mgr) {
-        yerror("ImageCard::create: null CardBufferManager!");
-        return Err<CardPtr>("ImageCard::create: null CardBufferManager");
+        yerror("Image::create: null CardBufferManager!");
+        return Err<CardPtr>("Image::create: null CardBufferManager");
     }
 
-    auto card = std::make_shared<ImageCardImpl>(
+    auto card = std::make_shared<ImageImpl>(
         std::move(mgr), gpu, x, y, widthCells, heightCells, args, payload);
 
-    yinfo("ImageCard::create: calling init()...");
+    yinfo("Image::create: calling init()...");
     if (auto res = card->init(); !res) {
-        yerror("ImageCard::create: init FAILED: {}", error_msg(res));
-        return Err<CardPtr>("ImageCard::create: init failed");
+        yerror("Image::create: init FAILED: {}", error_msg(res));
+        return Err<CardPtr>("Image::create: init failed");
     }
 
-    yinfo("ImageCard::create: SUCCESS, shaderGlyph={:#x}", card->shaderGlyph());
+    yinfo("Image::create: SUCCESS, shaderGlyph={:#x}", card->shaderGlyph());
     return Ok<CardPtr>(card);
 }
 
-Result<ImageCard::Ptr> ImageCard::createImpl(
+Result<Image::Ptr> Image::createImpl(
     ContextType& ctx,
     CardBufferManager::Ptr mgr,
     const GPUContext& gpu,
@@ -365,14 +365,14 @@ Result<ImageCard::Ptr> ImageCard::createImpl(
 
     auto result = create(std::move(mgr), gpu, x, y, widthCells, heightCells, args, payload);
     if (!result) {
-        return Err<Ptr>("Failed to create ImageCard", result);
+        return Err<Ptr>("Failed to create Image", result);
     }
-    // Dynamic cast from CardPtr to ImageCard::Ptr
-    auto imageCard = std::dynamic_pointer_cast<ImageCard>(*result);
+    // Dynamic cast from CardPtr to Image::Ptr
+    auto imageCard = std::dynamic_pointer_cast<Image>(*result);
     if (!imageCard) {
-        return Err<Ptr>("Created card is not an ImageCard");
+        return Err<Ptr>("Created card is not an Image");
     }
     return Ok(imageCard);
 }
 
-} // namespace yetty
+} // namespace yetty::card
