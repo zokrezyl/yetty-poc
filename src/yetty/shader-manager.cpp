@@ -110,6 +110,21 @@ Result<void> ShaderManagerImpl::init(const GPUContext& gpu) noexcept {
         return res;
     }
 
+    // Load shared SDF library
+    std::string libPath = std::string(CMAKE_SOURCE_DIR) + "/src/yetty/shaders/lib/distfunctions.wgsl";
+    std::ifstream libFile(libPath);
+    if (libFile.is_open()) {
+        std::stringstream buffer;
+        buffer << libFile.rdbuf();
+        std::string libCode = buffer.str();
+        if (!libCode.empty()) {
+            addLibrary("distfunctions", libCode);
+            yinfo("ShaderManager: loaded SDF library ({} bytes)", libCode.size());
+        }
+    } else {
+        ywarn("ShaderManager: SDF library not found at {}", libPath);
+    }
+
     _initialized = true;
     yinfo("ShaderManager: initialized");
     return Ok();

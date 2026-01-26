@@ -512,6 +512,7 @@ elseif(NOT EMSCRIPTEN)
         src/yetty/cards/plot.cpp
         src/yetty/cards/image.cpp
         src/yetty/cards/ydraw.cpp
+        src/yetty/cards/hdraw.cpp
         # Core sources (previously in yetty_core)
         # src/yetty/font.cpp  # Moved to obsolete
         src/yetty/ms-msdf-font.cpp

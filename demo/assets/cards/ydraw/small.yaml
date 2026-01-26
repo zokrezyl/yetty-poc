@@ -1,0 +1,57 @@
+# YDraw Small Demo - Testing new SDF shapes
+background: "#1a1a2e"
+body:
+  - circle:
+      position: [50, 50]
+      radius: 20
+      fill: "#e74c3c"
+
+  - pentagon:
+      position: [120, 50]
+      radius: 18
+      fill: "#3498db"
+
+  - hexagon:
+      position: [190, 50]
+      radius: 18
+      fill: "#2ecc71"
+
+  - star:
+      position: [260, 50]
+      radius: 22
+      points: 5
+      inner: 2.5
+      fill: "#f1c40f"
+
+  - heart:
+      position: [330, 50]
+      scale: 20
+      fill: "#e74c3c"
+
+  - box:
+      position: [50, 120]
+      size: [30, 25]
+      fill: "#9b59b6"
+      round: 5
+
+  - ellipse:
+      position: [120, 120]
+      radii: [25, 15]
+      fill: "#1abc9c"
+
+  - triangle:
+      p0: [190, 100]
+      p1: [210, 140]
+      p2: [170, 140]
+      fill: "#e67e22"
+
+  - capsule:
+      from: [240, 120]
+      to: [290, 120]
+      radius: 10
+      fill: "#34495e"
+
+  - rhombus:
+      position: [340, 120]
+      size: [15, 25]
+      fill: "#16a085"

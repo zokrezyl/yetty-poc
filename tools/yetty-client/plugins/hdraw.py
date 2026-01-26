@@ -1,4 +1,8 @@
-"""YDraw plugin - render 2D shapes using signed distance functions."""
+"""HDraw plugin - render 2D shapes using spatial hashing + signed distance functions.
+
+HDraw uses O(1) uniform grid spatial hashing instead of BVH traversal for
+faster performance with many primitives.
+"""
 
 import struct
 import click
@@ -43,21 +47,17 @@ def parse_color(color_str: str) -> int:
     if color_str.startswith('#'):
         hex_str = color_str[1:]
         if len(hex_str) == 3:
-            # #RGB -> #RRGGBB
             hex_str = ''.join(c + c for c in hex_str)
         if len(hex_str) == 4:
-            # #RGBA -> #RRGGBBAA
             hex_str = ''.join(c + c for c in hex_str)
         if len(hex_str) == 6:
-            hex_str += 'FF'  # Add alpha
+            hex_str += 'FF'
         r = int(hex_str[0:2], 16)
         g = int(hex_str[2:4], 16)
         b = int(hex_str[4:6], 16)
         a = int(hex_str[6:8], 16)
-        # Pack as ABGR (0xAABBGGRR)
         return (a << 24) | (b << 16) | (g << 8) | r
     elif color_str.startswith('0x') or color_str.startswith('0X'):
-        # Assume input is 0xAARRGGBB, convert to ABGR
         val = int(color_str, 16)
         a = (val >> 24) & 0xFF
         r = (val >> 16) & 0xFF
@@ -76,35 +76,22 @@ def pack_sdf_primitive(
     stroke_color: int,
     stroke_width: float,
     corner_round: float,
-    aabb: Tuple[float, float, float, float]  # minX, minY, maxX, maxY
+    aabb: Tuple[float, float, float, float]
 ) -> bytes:
-    """Pack a single SDF primitive into 96 bytes matching C++ SDFPrimitive struct.
-
-    Layout (96 bytes = 24 floats):
-        uint32 type
-        uint32 layer
-        float params[12]
-        uint32 fillColor
-        uint32 strokeColor
-        float strokeWidth
-        float round
-        float aabbMinX, aabbMinY, aabbMaxX, aabbMaxY
-        uint32 _pad[2]
-    """
-    # Pad params to 12 floats
+    """Pack a single SDF primitive into 96 bytes matching C++ SDFPrimitive struct."""
     params_padded = list(params) + [0.0] * (12 - len(params))
 
     return struct.pack(
-        '<II12fIIff4fII',  # Little endian
-        prim_type,           # type (u32)
-        layer,               # layer (u32)
-        *params_padded,      # params[12] (12 floats)
-        fill_color,          # fillColor (u32)
-        stroke_color,        # strokeColor (u32)
-        stroke_width,        # strokeWidth (f32)
-        corner_round,        # round (f32)
-        *aabb,               # aabbMinX, aabbMinY, aabbMaxX, aabbMaxY (4 floats)
-        0, 0                 # _pad[2] (2 u32)
+        '<II12fIIff4fII',
+        prim_type,
+        layer,
+        *params_padded,
+        fill_color,
+        stroke_color,
+        stroke_width,
+        corner_round,
+        *aabb,
+        0, 0
     )
 
 
@@ -113,18 +100,15 @@ def compute_aabb(prim_type: int, params: List[float], stroke_width: float, corne
     expand = stroke_width * 0.5
 
     if prim_type == SDF_TYPE_CIRCLE:
-        # params: [cx, cy, radius]
         r = params[2] + expand
         return (params[0] - r, params[1] - r, params[0] + r, params[1] + r)
 
     elif prim_type == SDF_TYPE_BOX:
-        # params: [cx, cy, halfW, halfH]
         hw = params[2] + corner_round + expand
         hh = params[3] + corner_round + expand
         return (params[0] - hw, params[1] - hh, params[0] + hw, params[1] + hh)
 
     elif prim_type == SDF_TYPE_SEGMENT:
-        # params: [x0, y0, x1, y1]
         return (
             min(params[0], params[2]) - expand,
             min(params[1], params[3]) - expand,
@@ -133,7 +117,6 @@ def compute_aabb(prim_type: int, params: List[float], stroke_width: float, corne
         )
 
     elif prim_type == SDF_TYPE_TRIANGLE:
-        # params: [x0, y0, x1, y1, x2, y2]
         return (
             min(params[0], params[2], params[4]) - expand,
             min(params[1], params[3], params[5]) - expand,
@@ -142,7 +125,6 @@ def compute_aabb(prim_type: int, params: List[float], stroke_width: float, corne
         )
 
     elif prim_type == SDF_TYPE_BEZIER2:
-        # params: [x0, y0, x1, y1, x2, y2]
         return (
             min(params[0], params[2], params[4]) - expand,
             min(params[1], params[3], params[5]) - expand,
@@ -151,7 +133,6 @@ def compute_aabb(prim_type: int, params: List[float], stroke_width: float, corne
         )
 
     elif prim_type == SDF_TYPE_ELLIPSE:
-        # params: [cx, cy, rx, ry]
         return (
             params[0] - params[2] - expand,
             params[1] - params[3] - expand,
@@ -160,60 +141,49 @@ def compute_aabb(prim_type: int, params: List[float], stroke_width: float, corne
         )
 
     elif prim_type == SDF_TYPE_ARC:
-        # params: [cx, cy, sc.x, sc.y, ra, rb]
         r = max(params[4], params[5]) + expand
         return (params[0] - r, params[1] - r, params[0] + r, params[1] + r)
 
     elif prim_type == SDF_TYPE_ROUNDED_BOX:
-        # params: [cx, cy, halfW, halfH, r0, r1, r2, r3]
         max_r = max(params[4], params[5], params[6], params[7]) if len(params) > 7 else 0
         hw = params[2] + max_r + expand
         hh = params[3] + max_r + expand
         return (params[0] - hw, params[1] - hh, params[0] + hw, params[1] + hh)
 
     elif prim_type == SDF_TYPE_RHOMBUS:
-        # params: [cx, cy, bx, by]
         hw = params[2] + expand
         hh = params[3] + expand
         return (params[0] - hw, params[1] - hh, params[0] + hw, params[1] + hh)
 
     elif prim_type in (SDF_TYPE_PENTAGON, SDF_TYPE_HEXAGON):
-        # params: [cx, cy, r]
         r = params[2] + expand
         return (params[0] - r, params[1] - r, params[0] + r, params[1] + r)
 
     elif prim_type == SDF_TYPE_STAR:
-        # params: [cx, cy, r, n, m]
         r = params[2] + expand
         return (params[0] - r, params[1] - r, params[0] + r, params[1] + r)
 
     elif prim_type == SDF_TYPE_PIE:
-        # params: [cx, cy, sin, cos, r]
         r = params[4] + expand
         return (params[0] - r, params[1] - r, params[0] + r, params[1] + r)
 
     elif prim_type == SDF_TYPE_RING:
-        # params: [cx, cy, nx, ny, r, th]
         r = params[4] + params[5] + expand
         return (params[0] - r, params[1] - r, params[0] + r, params[1] + r)
 
     elif prim_type == SDF_TYPE_HEART:
-        # params: [cx, cy, scale]
         s = params[2] * 1.5 + expand
         return (params[0] - s, params[1] - s, params[0] + s, params[1] + s)
 
     elif prim_type == SDF_TYPE_CROSS:
-        # params: [cx, cy, bx, by, r]
         hw = max(params[2], params[3]) + expand
         return (params[0] - hw, params[1] - hw, params[0] + hw, params[1] + hw)
 
     elif prim_type == SDF_TYPE_ROUNDED_X:
-        # params: [cx, cy, w, r]
         s = params[2] + params[3] + expand
         return (params[0] - s, params[1] - s, params[0] + s, params[1] + s)
 
     elif prim_type == SDF_TYPE_CAPSULE:
-        # params: [x0, y0, x1, y1, r]
         r = params[4] + expand
         return (
             min(params[0], params[2]) - r,
@@ -223,17 +193,14 @@ def compute_aabb(prim_type: int, params: List[float], stroke_width: float, corne
         )
 
     elif prim_type == SDF_TYPE_MOON:
-        # params: [cx, cy, d, ra, rb]
         r = max(params[3], params[4]) + expand
         return (params[0] - r, params[1] - r, params[0] + r + params[2], params[1] + r)
 
     elif prim_type == SDF_TYPE_EGG:
-        # params: [cx, cy, ra, rb]
         r = max(params[2], params[3]) + expand
         return (params[0] - r, params[1] - r, params[0] + r, params[1] + r + params[2])
 
     else:
-        # Unknown - use large bounds
         return (-1e10, -1e10, 1e10, 1e10)
 
 
@@ -246,7 +213,6 @@ def parse_primitive(prim_dict: Dict[str, Any], layer: int) -> bytes:
     stroke_width = 0.0
     corner_round = 0.0
 
-    # Check for primitive type
     if 'circle' in prim_dict:
         prim_type = SDF_TYPE_CIRCLE
         c = prim_dict['circle']
@@ -322,7 +288,7 @@ def parse_primitive(prim_dict: Dict[str, Any], layer: int) -> bytes:
         a = prim_dict['arc']
         pos = a.get('position', [0, 0])
         import math
-        angle = a.get('angle', 90) * math.pi / 180  # Convert degrees to radians
+        angle = a.get('angle', 90) * math.pi / 180
         ra = a.get('radius', 20)
         rb = a.get('thickness', 2)
         params = [pos[0], pos[1], math.sin(angle), math.cos(angle), ra, rb]
@@ -360,8 +326,8 @@ def parse_primitive(prim_dict: Dict[str, Any], layer: int) -> bytes:
         s = prim_dict['star']
         pos = s.get('position', [0, 0])
         r = s.get('radius', 20)
-        n = float(s.get('points', 5))  # Number of points
-        m = float(s.get('inner', 2.5))  # Inner ratio (pointiness)
+        n = float(s.get('points', 5))
+        m = float(s.get('inner', 2.5))
         params = [pos[0], pos[1], r, n, m]
         fill_color = parse_color(s.get('fill', '#ffffff'))
         if 'stroke' in s:
@@ -446,7 +412,7 @@ def parse_primitive(prim_dict: Dict[str, Any], layer: int) -> bytes:
         prim_type = SDF_TYPE_RHOMBUS
         r = prim_dict['rhombus']
         pos = r.get('position', [0, 0])
-        size = r.get('size', [20, 30])  # half-diagonals
+        size = r.get('size', [20, 30])
         params = [pos[0], pos[1], size[0], size[1]]
         fill_color = parse_color(r.get('fill', '#ffffff'))
         if 'stroke' in r:
@@ -479,12 +445,11 @@ def parse_primitive(prim_dict: Dict[str, Any], layer: int) -> bytes:
         stroke_width = e.get('stroke-width', 0)
 
     else:
-        return b''  # Unknown primitive type
+        return b''
 
     if prim_type is None:
         return b''
 
-    # Compute AABB
     aabb = compute_aabb(prim_type, params, stroke_width, corner_round)
 
     return pack_sdf_primitive(
@@ -494,14 +459,15 @@ def parse_primitive(prim_dict: Dict[str, Any], layer: int) -> bytes:
     )
 
 
-def parse_yaml_to_binary(yaml_content: str) -> Tuple[bytes, int]:
+def parse_yaml_to_binary(yaml_content: str) -> Tuple[bytes, int, int]:
     """Parse YAML content and convert to binary primitives.
 
     Returns:
-        (binary_data, bg_color)
+        (binary_data, bg_color, flags)
     """
     primitives = []
-    bg_color = 0xFF2E1A1A  # Default dark background (ABGR: alpha=FF, B=2E, G=1A, R=1A)
+    bg_color = 0xFF2E1A1A
+    flags = 0
 
     try:
         docs = list(yaml.safe_load_all(yaml_content))
@@ -514,18 +480,15 @@ def parse_yaml_to_binary(yaml_content: str) -> Tuple[bytes, int]:
             continue
 
         if isinstance(doc, list):
-            # List of items
             for item in doc:
                 if isinstance(item, dict):
                     if 'body' in item:
-                        # Process body items
                         for prim in item['body']:
                             data = parse_primitive(prim, layer)
                             if data:
                                 primitives.append(data)
                                 layer += 1
                     else:
-                        # Direct primitive
                         data = parse_primitive(item, layer)
                         if data:
                             primitives.append(data)
@@ -539,44 +502,50 @@ def parse_yaml_to_binary(yaml_content: str) -> Tuple[bytes, int]:
                         layer += 1
             if 'background' in doc:
                 bg_color = parse_color(doc['background'])
-
-    # Parse flags
-    flags = 0
-    if isinstance(doc, dict) and 'flags' in doc:
-        flag_list = doc['flags']
-        if isinstance(flag_list, str):
-            flag_list = [flag_list]
-        for flag in flag_list:
-            if flag == 'show_bounds':
-                flags |= 1
-            elif flag == 'show_bvh':
-                flags |= 2
-            elif flag == 'show_eval_count':
-                flags |= 4
+            if 'flags' in doc:
+                flag_list = doc['flags']
+                if isinstance(flag_list, str):
+                    flag_list = [flag_list]
+                for flag in flag_list:
+                    if flag == 'show_bounds':
+                        flags |= 1
+                    elif flag == 'show_grid':
+                        flags |= 2
+                    elif flag == 'show_eval_count':
+                        flags |= 4
 
     # Header: [version (u32)][primitive_count (u32)][bg_color (u32)][flags (u32)]
     header = struct.pack('<IIII', 1, len(primitives), bg_color, flags)
 
-    return header + b''.join(primitives), bg_color
+    return header + b''.join(primitives), bg_color, flags
 
 
-@click.command(name='ydraw')
+@click.command(name='hdraw')
 @click.option('--file', '-f', type=click.Path(exists=True), help='YAML file with primitives')
-@click.option('--demo', '-d', type=click.Choice(['2d', 'simple']),
+@click.option('--demo', '-d', type=click.Choice(['2d', 'simple', 'grid']),
               help='Run a built-in demo')
+@click.option('--cell-size', '-c', type=float, default=50.0,
+              help='Grid cell size for spatial hashing (default: 50)')
+@click.option('--show-grid', is_flag=True, help='Show grid overlay')
+@click.option('--show-eval-count', is_flag=True, help='Show heatmap of SDF evaluations')
 @click.pass_context
-def ydraw(ctx, file, demo):
-    """YDraw plugin - 2D SDF rendering.
+def hdraw(ctx, file, demo, cell_size, show_grid, show_eval_count):
+    """HDraw plugin - 2D SDF rendering with O(1) spatial hashing.
 
-    GPU-accelerated rendering using signed distance functions.
-    Based on Inigo Quilez's SDF functions (iquilezles.org).
+    GPU-accelerated rendering using signed distance functions with
+    uniform grid spatial hashing for O(1) primitive lookup.
+
+    This is faster than YDraw (BVH-based) for many primitives.
 
     2D Primitives:
-        circle, box, segment, triangle, bezier, ellipse
+        circle, box, segment, triangle, bezier, ellipse,
+        pentagon, hexagon, star, pie, ring, heart, cross,
+        rounded_x, capsule, rhombus, moon, egg
 
     Examples:
-        yetty-client create ydraw -f shapes.yaml -w 80 -H 40
-        yetty-client create ydraw --demo 2d -w 60 -H 40
+        yetty-client create hdraw -f shapes.yaml -w 80 -H 40
+        yetty-client create hdraw --demo grid -w 60 -H 40 --show-grid
+        yetty-client create hdraw --demo 2d -c 30 --show-eval-count
     """
     ctx.ensure_object(dict)
 
@@ -589,21 +558,28 @@ def ydraw(ctx, file, demo):
         yaml_content = DEMOS['simple']
 
     try:
-        payload_bytes, bg_color = parse_yaml_to_binary(yaml_content)
+        payload_bytes, bg_color, flags = parse_yaml_to_binary(yaml_content)
     except ValueError as e:
         raise click.ClickException(str(e))
 
+    # Build args string
+    args_parts = [f'--bg-color 0x{bg_color:08X}', f'--cell-size {cell_size}']
+    if show_grid:
+        args_parts.append('--show-grid')
+    if show_eval_count:
+        args_parts.append('--show-eval-count')
+
     ctx.obj['payload_bytes'] = payload_bytes
-    ctx.obj['plugin_name'] = 'ydraw'
-    ctx.obj['plugin_args'] = f'--bg-color 0x{bg_color:08X}'
+    ctx.obj['plugin_name'] = 'hdraw'
+    ctx.obj['plugin_args'] = ' '.join(args_parts)
 
 
-command = ydraw
+command = hdraw
 
 
 DEMOS = {
     'simple': """
-# YDraw Simple Demo - Basic primitives
+# HDraw Simple Demo - Basic primitives with spatial hashing
 - body:
     - circle:
         position: [100, 80]
@@ -628,7 +604,7 @@ DEMOS = {
 """,
 
     '2d': """
-# YDraw 2D Demo - Multiple primitives
+# HDraw 2D Demo - Multiple primitives
 - body:
     - circle:
         position: [100, 80]
@@ -659,5 +635,50 @@ DEMOS = {
         to: [350, 160]
         stroke: "#34495e"
         stroke-width: 3
+""",
+
+    'grid': """
+# HDraw Grid Demo - Shows spatial hashing grid
+# Use --show-grid to visualize the grid cells
+- body:
+    - circle:
+        position: [50, 50]
+        radius: 20
+        fill: "#e74c3c"
+
+    - circle:
+        position: [150, 50]
+        radius: 20
+        fill: "#3498db"
+
+    - circle:
+        position: [250, 50]
+        radius: 20
+        fill: "#2ecc71"
+
+    - circle:
+        position: [50, 130]
+        radius: 20
+        fill: "#9b59b6"
+
+    - circle:
+        position: [150, 130]
+        radius: 20
+        fill: "#f39c12"
+
+    - circle:
+        position: [250, 130]
+        radius: 20
+        fill: "#1abc9c"
+
+    - box:
+        position: [100, 90]
+        size: [30, 30]
+        fill: "#e67e22"
+
+    - box:
+        position: [200, 90]
+        size: [30, 30]
+        fill: "#34495e"
 """
 }
