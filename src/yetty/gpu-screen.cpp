@@ -1,8 +1,4 @@
 #include "gpu-screen.h"
-#include <yetty/yetty-font-manager.h>
-#include <yetty/shader-manager.h>
-#include <yetty/osc-command.h>
-#include <yetty/wgpu-compat.h>
 #include "card-factory.h"
 #include "card.h"
 #include "widget-factory.h"
@@ -10,12 +6,16 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
-#include <sstream>
-#include <string>
-#include <yetty/result.hpp>
-#include <ytrace/ytrace.hpp>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <sstream>
+#include <string>
+#include <yetty/osc-command.h>
+#include <yetty/result.hpp>
+#include <yetty/shader-manager.h>
+#include <yetty/wgpu-compat.h>
+#include <yetty/yetty-font-manager.h>
+#include <ytrace/ytrace.hpp>
 
 #ifndef CMAKE_SOURCE_DIR
 #define CMAKE_SOURCE_DIR "."
@@ -25,9 +25,9 @@
 #include <emmintrin.h>
 #endif
 
-#include <vterm.h>
 #include <deque>
 #include <unordered_map>
+#include <vterm.h>
 
 namespace yetty {
 
@@ -42,14 +42,14 @@ using CardPtr = std::unique_ptr<Card>;
 // =============================================================================
 // Glyph constants (formerly in grid.h)
 // =============================================================================
-constexpr uint32_t GLYPH_PLUGIN = 0xFFFF;     // Cell occupied by a widget
-constexpr uint32_t GLYPH_WIDE_CONT = 0xFFFE;  // Wide char continuation
+constexpr uint32_t GLYPH_PLUGIN = 0xFFFF;    // Cell occupied by a widget
+constexpr uint32_t GLYPH_WIDE_CONT = 0xFFFE; // Wide char continuation
 
 // Font type encoding for cell attributes (bits 5-7 of style byte)
-constexpr uint8_t FONT_TYPE_MSDF = 0;    // Default text rendering
-constexpr uint8_t FONT_TYPE_BITMAP = 1;  // Bitmap fonts (emoji, color fonts)
-constexpr uint8_t FONT_TYPE_SHADER = 2;  // Single-cell shader glyphs
-constexpr uint8_t FONT_TYPE_CARD = 3;    // Multi-cell card glyphs
+constexpr uint8_t FONT_TYPE_MSDF = 0;   // Default text rendering
+constexpr uint8_t FONT_TYPE_BITMAP = 1; // Bitmap fonts (emoji, color fonts)
+constexpr uint8_t FONT_TYPE_SHADER = 2; // Single-cell shader glyphs
+constexpr uint8_t FONT_TYPE_CARD = 3;   // Multi-cell card glyphs
 
 // Card glyph range - multi-cell widgets (U+100000 - U+100FFF)
 constexpr uint32_t CARD_GLYPH_BASE = 0x100000;
@@ -61,272 +61,288 @@ constexpr uint32_t SHADER_GLYPH_END = 0x10FFFD;
 
 // Helper functions for glyph type detection
 inline bool isCardGlyph(uint32_t codepoint) {
-    return codepoint >= CARD_GLYPH_BASE && codepoint <= CARD_GLYPH_END;
+  return codepoint >= CARD_GLYPH_BASE && codepoint <= CARD_GLYPH_END;
 }
 
 inline bool isShaderGlyph(uint32_t codepoint) {
-    return codepoint >= SHADER_GLYPH_BASE && codepoint <= SHADER_GLYPH_END;
+  return codepoint >= SHADER_GLYPH_BASE && codepoint <= SHADER_GLYPH_END;
 }
 
 // Check if codepoint is an emoji (common ranges)
 inline bool isEmoji(uint32_t cp) {
-    if (cp >= 0x1F600 && cp <= 0x1F64F) return true;  // Emoticons
-    if (cp >= 0x1F300 && cp <= 0x1F5FF) return true;  // Misc Symbols/Pictographs
-    if (cp >= 0x1F680 && cp <= 0x1F6FF) return true;  // Transport/Map
-    if (cp >= 0x1F900 && cp <= 0x1F9FF) return true;  // Supplemental Symbols
-    if (cp >= 0x1FA00 && cp <= 0x1FAFF) return true;  // Symbols Extended
-    if (cp >= 0x2600 && cp <= 0x26FF) return true;    // Misc Symbols
-    if (cp >= 0x2700 && cp <= 0x27BF) return true;    // Dingbats
-    if (cp >= 0x1F1E0 && cp <= 0x1F1FF) return true;  // Regional Indicators
-    return false;
+  if (cp >= 0x1F600 && cp <= 0x1F64F)
+    return true; // Emoticons
+  if (cp >= 0x1F300 && cp <= 0x1F5FF)
+    return true; // Misc Symbols/Pictographs
+  if (cp >= 0x1F680 && cp <= 0x1F6FF)
+    return true; // Transport/Map
+  if (cp >= 0x1F900 && cp <= 0x1F9FF)
+    return true; // Supplemental Symbols
+  if (cp >= 0x1FA00 && cp <= 0x1FAFF)
+    return true; // Symbols Extended
+  if (cp >= 0x2600 && cp <= 0x26FF)
+    return true; // Misc Symbols
+  if (cp >= 0x2700 && cp <= 0x27BF)
+    return true; // Dingbats
+  if (cp >= 0x1F1E0 && cp <= 0x1F1FF)
+    return true; // Regional Indicators
+  return false;
 }
 
 // Scrollback line storage
 struct ScrollbackLineGPU {
-    std::vector<Cell> cells;
+  std::vector<Cell> cells;
 };
 
 // Widget position tracking
 struct WidgetPosition {
-    uint16_t widgetId;
-    int y;
-    int col;
+  uint16_t widgetId;
+  int y;
+  int col;
 };
 
 // Scrolled-out widget tracking
 struct ScrolledOutWidget {
-    uint16_t widgetId;
-    int y;
-    int col;
+  uint16_t widgetId;
+  int y;
+  int col;
 };
 
 // Pen state for current text attributes
 struct Pen {
-    VTermColor fg;
-    VTermColor bg;
-    bool bold = false;
-    bool italic = false;
-    uint8_t underline = 0;
-    bool strike = false;
-    bool reverse = false;
-    bool blink = false;
+  VTermColor fg;
+  VTermColor bg;
+  bool bold = false;
+  bool italic = false;
+  uint8_t underline = 0;
+  bool strike = false;
+  bool reverse = false;
+  bool blink = false;
 };
 
 // OSC parsing is included via osc-command.h
 
 class GPUScreenImpl : public GPUScreen {
 public:
-    explicit GPUScreenImpl(const GPUContext& gpuContext);
-    ~GPUScreenImpl() override;
+  explicit GPUScreenImpl(const GPUContext &gpuContext);
+  ~GPUScreenImpl() override;
 
-    // GPUScreen interface
-    void write(const char* data, size_t len) override;
-    void resize(uint32_t cols, uint32_t rows) override;
-    uint32_t getCols() const override;
-    uint32_t getRows() const override;
-    bool hasDamage() const override { return _hasDamage; }
-    void clearDamage() override { _hasDamage = false; }
-    void setOutputCallback(OutputCallback cb) override;
-    Result<void> render(WGPURenderPassEncoder pass) override;
-    void setViewport(float x, float y, float width, float height) override;
-    float getCellWidth() const override { return _baseCellWidth * _zoomLevel; }
-    float getCellHeight() const override { return _baseCellHeight * _zoomLevel; }
+  // GPUScreen interface
+  void write(const char *data, size_t len) override;
+  void resize(uint32_t cols, uint32_t rows) override;
+  uint32_t getCols() const override;
+  uint32_t getRows() const override;
+  bool hasDamage() const override { return _hasDamage; }
+  void clearDamage() override { _hasDamage = false; }
+  void setOutputCallback(OutputCallback cb) override;
+  Result<void> render(WGPURenderPassEncoder pass) override;
+  void setViewport(float x, float y, float width, float height) override;
+  float getCellWidth() const override { return _baseCellWidth * _zoomLevel; }
+  float getCellHeight() const override { return _baseCellHeight * _zoomLevel; }
 
-    // EventListener interface
-    Result<bool> onEvent(const base::Event& event) override;
+  // EventListener interface
+  Result<bool> onEvent(const base::Event &event) override;
 
-    // Internal methods (not in base class)
-    const Cell* getCellData() const;
-    int getCursorCol() const { return _cursorCol; }
-    int getCursorRow() const { return _cursorRow; }
-    bool isCursorVisible() const { return _cursorVisible; }
-    void scrollUp(int lines);
-    void scrollDown(int lines);
-    void scrollToBottom();
-    bool isScrolledBack() const { return _scrollOffset > 0; }
-    void sendKey(uint32_t codepoint, int mods);
-    void sendSpecialKey(int key, int mods);
-    base::ObjectId id() const { return _id; }
-    bool isFocused() const { return _focused; }
-    void registerForFocus();
+  // GPUScreen interface - test methods
+  const Cell *getCellData() const override;
+  Cell getCell(int row, int col) const override;
+  int getCursorCol() const { return _cursorCol; }
+  int getCursorRow() const { return _cursorRow; }
+  bool isCursorVisible() const { return _cursorVisible; }
+  void scrollUp(int lines);
+  void scrollDown(int lines);
+  void scrollToBottom();
+  bool isScrolledBack() const { return _scrollOffset > 0; }
+  void sendKey(uint32_t codepoint, int mods);
+  void sendSpecialKey(int key, int mods);
+  base::ObjectId id() const { return _id; }
+  bool isFocused() const { return _focused; }
+  void registerForFocus();
 
-    // VTerm state callbacks (static)
-    static int onPutglyph(VTermGlyphInfo *info, VTermPos pos, void *user);
-    static int onMoveCursor(VTermPos pos, VTermPos oldpos, int visible, void *user);
-    static int onScrollRect(VTermRect rect, int downward, int rightward, void *user);
-    static int onMoveRect(VTermRect dest, VTermRect src, void *user);
-    static int onErase(VTermRect rect, int selective, void *user);
-    static int onInitPen(void *user);
-    static int onSetPenAttr(VTermAttr attr, VTermValue *val, void *user);
-    static int onSetTermProp(VTermProp prop, VTermValue *val, void *user);
-    static int onBell(void *user);
-    static int onResize(int rows, int cols, VTermStateFields *fields, void *user);
-    static int onSetLineInfo(int row, const VTermLineInfo *newinfo, const VTermLineInfo *oldinfo, void *user);
+  // VTerm state callbacks (static)
+  static int onPutglyph(VTermGlyphInfo *info, VTermPos pos, void *user);
+  static int onMoveCursor(VTermPos pos, VTermPos oldpos, int visible,
+                          void *user);
+  static int onScrollRect(VTermRect rect, int downward, int rightward,
+                          void *user);
+  static int onMoveRect(VTermRect dest, VTermRect src, void *user);
+  static int onErase(VTermRect rect, int selective, void *user);
+  static int onInitPen(void *user);
+  static int onSetPenAttr(VTermAttr attr, VTermValue *val, void *user);
+  static int onSetTermProp(VTermProp prop, VTermValue *val, void *user);
+  static int onBell(void *user);
+  static int onResize(int rows, int cols, VTermStateFields *fields, void *user);
+  static int onSetLineInfo(int row, const VTermLineInfo *newinfo,
+                           const VTermLineInfo *oldinfo, void *user);
 
 private:
-    Result<void> initPipeline();
-    void createVTerm();
-    void attach(VTerm* vt);
-    void resizeInternal(int rows, int cols, VTermStateFields* fields);
-    void resizeBuffer(int bufidx, int newRows, int newCols, bool active, VTermStateFields* fields);
-    int linePopcount(const std::vector<Cell>& buffer, int row, int cols) const;
-    void clearBuffer(std::vector<Cell>& buffer);
-    void switchToScreen(bool alt);
-    void reset();
-    void composeViewBuffer();
-    void decompressLine(const ScrollbackLineGPU& line, int viewRow);
-    void pushLineToScrollback(int row);
-    void scrollToTop();
+  Result<void> initPipeline();
+  void createVTerm();
+  void attach(VTerm *vt);
+  void resizeInternal(int rows, int cols, VTermStateFields *fields);
+  void resizeBuffer(int bufidx, int newRows, int newCols, bool active,
+                    VTermStateFields *fields);
+  int linePopcount(const std::vector<Cell> &buffer, int row, int cols) const;
+  void clearBuffer(std::vector<Cell> &buffer);
+  void switchToScreen(bool alt);
+  void reset();
+  void composeViewBuffer();
+  void decompressLine(const ScrollbackLineGPU &line, int viewRow);
+  void pushLineToScrollback(int row);
+  void scrollToTop();
 
-    void setCell(int row, int col, uint32_t glyph,
-                 uint8_t fgR, uint8_t fgG, uint8_t fgB,
-                 uint8_t bgR, uint8_t bgG, uint8_t bgB,
-                 uint8_t attrsByte);
-    void clearCell(int row, int col);
-    void colorToRGB(const VTermColor& color, uint8_t& r, uint8_t& g, uint8_t& b);
+  void setCell(int row, int col, uint32_t glyph, uint8_t fgR, uint8_t fgG,
+               uint8_t fgB, uint8_t bgR, uint8_t bgG, uint8_t bgB,
+               uint8_t attrsByte);
+  void clearCell(int row, int col);
+  void colorToRGB(const VTermColor &color, uint8_t &r, uint8_t &g, uint8_t &b);
 
-    size_t cellIndex(int row, int col) const { return static_cast<size_t>(row * _cols + col); }
+  size_t cellIndex(int row, int col) const {
+    return static_cast<size_t>(row * _cols + col);
+  }
 
-    // Widget marker methods
-    void setWidgetMarker(int row, int col, uint16_t widgetId);
-    void setWidgetMarker(int row, int col, uint16_t widgetId,
-                        uint32_t width, uint32_t height,
-                        uint32_t shaderGlyph, uint32_t fg, uint32_t bg);
-    void clearWidgetMarker(int row, int col);
-    void clearWidgetMarker(int row, int col, uint32_t width, uint32_t height);
-    void trackScrolledOutWidget(uint16_t widgetId, int col);
-    std::vector<WidgetPosition> scanWidgetPositions() const;
+  // Widget marker methods
+  void setWidgetMarker(int row, int col, uint16_t widgetId);
+  void setWidgetMarker(int row, int col, uint16_t widgetId, uint32_t width,
+                       uint32_t height, uint32_t shaderGlyph, uint32_t fg,
+                       uint32_t bg);
+  void clearWidgetMarker(int row, int col);
+  void clearWidgetMarker(int row, int col, uint32_t width, uint32_t height);
+  void trackScrolledOutWidget(uint16_t widgetId, int col);
+  std::vector<WidgetPosition> scanWidgetPositions() const;
 
-    // Widget management
-    void addChildWidget(WidgetPtr widget);
-    Result<void> removeChildWidget(uint32_t id);
-    WidgetPtr getChildWidget(uint32_t id) const;
-    WidgetPtr getChildWidgetByHashId(const std::string& hashId) const;
-    Result<void> removeChildWidgetByHashId(const std::string& hashId);
-    void markWidgetGridCells(Widget* widget);
-    void clearWidgetGridCells(Widget* widget);
+  // Widget management
+  void addChildWidget(WidgetPtr widget);
+  Result<void> removeChildWidget(uint32_t id);
+  WidgetPtr getChildWidget(uint32_t id) const;
+  WidgetPtr getChildWidgetByHashId(const std::string &hashId) const;
+  Result<void> removeChildWidgetByHashId(const std::string &hashId);
+  void markWidgetGridCells(Widget *widget);
+  void clearWidgetGridCells(Widget *widget);
 
-    // OSC handling
-    bool handleOSCSequence(const std::string& sequence, std::string* response, uint32_t* linesToAdvance);
-    bool handleCardOSCSequence(const std::string& sequence, std::string* response, uint32_t* linesToAdvance);
+  // OSC handling
+  bool handleOSCSequence(const std::string &sequence, std::string *response,
+                         uint32_t *linesToAdvance);
+  bool handleCardOSCSequence(const std::string &sequence, std::string *response,
+                             uint32_t *linesToAdvance);
 
-    // Card registry
-    void registerCard(Card* card);
-    void unregisterCard(Card* card);
-    Card* getCardByMetadataOffset(uint32_t offset) const;
-    Card* getCardAtCell(int row, int col) const;
+  // Card registry
+  void registerCard(Card *card);
+  void unregisterCard(Card *card);
+  Card *getCardByMetadataOffset(uint32_t offset) const;
+  Card *getCardAtCell(int row, int col) const;
 
-    // VTerm
-    VTerm* _vterm = nullptr;
-    VTermState* state_ = nullptr;
+  // VTerm
+  VTerm *_vterm = nullptr;
+  VTermState *state_ = nullptr;
 
-    // Buffers
-    std::vector<Cell> _primaryBuffer;
-    std::vector<Cell> _altBuffer;
-    std::vector<Cell> viewBuffer_;
-    std::vector<Cell> scratchBuffer_;
-    std::vector<Cell>* _visibleBuffer = nullptr;
+  // Buffers
+  std::vector<Cell> _primaryBuffer;
+  std::vector<Cell> _altBuffer;
+  std::vector<Cell> viewBuffer_;
+  std::vector<Cell> scratchBuffer_;
+  std::vector<Cell> *_visibleBuffer = nullptr;
 
-    // Scrollback
-    std::deque<ScrollbackLineGPU> _scrollback;
-    size_t maxScrollback_;
-    int _scrollOffset = 0;
-    bool viewBufferDirty_ = false;
+  // Scrollback
+  std::deque<ScrollbackLineGPU> _scrollback;
+  size_t maxScrollback_;
+  int _scrollOffset = 0;
+  bool viewBufferDirty_ = false;
 
-    // Screen state
-    int _rows = 0;
-    int _cols = 0;
-    int _cursorRow = 0;
-    int _cursorCol = 0;
-    bool _cursorVisible = true;
-    bool _isAltScreen = false;
-    bool isAltScreenExternal_ = false;
-    bool _hasDamage = false;
-    bool _reflow = true;  // Enable reflow on resize (like screen.c)
+  // Screen state
+  int _rows = 0;
+  int _cols = 0;
+  int _cursorRow = 0;
+  int _cursorCol = 0;
+  bool _cursorVisible = true;
+  bool _isAltScreen = false;
+  bool isAltScreenExternal_ = false;
+  bool _hasDamage = false;
+  bool _reflow = true; // Enable reflow on resize (like screen.c)
 
-    // Pen state
-    Pen _pen;
-    VTermColor defaultFg_;
-    VTermColor defaultBg_;
+  // Pen state
+  Pen _pen;
+  VTermColor defaultFg_;
+  VTermColor defaultBg_;
 
-    // Fonts
-    using YettyFont = MsMsdfFont;
-    YettyFont::Ptr _msdfFont;
-    BmFont::Ptr _bitmapFont;
-    ShaderFont::Ptr _shaderGlyphFont;
-    ShaderFont::Ptr _cardFont;
-    uint32_t _cachedSpaceGlyph = 0;
+  // Fonts
+  using YettyFont = MsMsdfFont;
+  YettyFont::Ptr _msdfFont;
+  BmFont::Ptr _bitmapFont;
+  ShaderFont::Ptr _shaderGlyphFont;
+  ShaderFont::Ptr _cardFont;
+  uint32_t _cachedSpaceGlyph = 0;
 
-    // Callbacks
-    OutputCallback _outputCallback;
-    std::function<void(int)> scrollCallback_;
-    std::function<void(VTermProp, VTermValue*)> termPropCallback_;
-    std::function<void()> bellCallback_;
-    std::function<void(uint16_t)> widgetDisposalCallback_;
-    std::function<void(const char*, size_t)> vtermInputCallback_;
+  // Callbacks
+  OutputCallback _outputCallback;
+  std::function<void(int)> scrollCallback_;
+  std::function<void(VTermProp, VTermValue *)> termPropCallback_;
+  std::function<void()> bellCallback_;
+  std::function<void(uint16_t)> widgetDisposalCallback_;
+  std::function<void(const char *, size_t)> vtermInputCallback_;
 
-    // Widgets
-    std::vector<WidgetPtr> childWidgets_;
-    std::unordered_map<std::string, WidgetPtr> childWidgetsByHashId_;
-    uint32_t nextChildWidgetId_ = 1;
-    std::vector<ScrolledOutWidget> _scrolledOutWidgets;
+  // Widgets
+  std::vector<WidgetPtr> childWidgets_;
+  std::unordered_map<std::string, WidgetPtr> childWidgetsByHashId_;
+  uint32_t nextChildWidgetId_ = 1;
+  std::vector<ScrolledOutWidget> _scrolledOutWidgets;
 
-    // Cards
-    std::vector<CardPtr> _cards;
-    std::unordered_map<uint32_t, Card*> cardRegistry_;
+  // Cards
+  std::vector<CardPtr> _cards;
+  std::unordered_map<uint32_t, Card *> cardRegistry_;
 
-    // Factories
-    WidgetFactory* _widgetFactory = nullptr;
-    CardFactory* _cardFactory = nullptr;
+  // Factories
+  WidgetFactory *_widgetFactory = nullptr;
+  CardFactory *_cardFactory = nullptr;
 
-    // OSC parsing
-    OscCommandParser _oscParser;
+  // OSC parsing
+  OscCommandParser _oscParser;
 
-    // Rendering - GPU resources (shared resources come from ShaderManager)
-    GPUContext _gpuContext;
-    // Per-instance resources only:
-    WGPUBindGroup _bindGroup = nullptr;
-    WGPUBuffer _uniformBuffer = nullptr;
-    WGPUBuffer _cellBuffer = nullptr;
-    size_t _cellBufferSize = 0;
-    uint32_t _textureCols = 0;
-    uint32_t _textureRows = 0;
-    bool _pipelineInitialized = false;
-    bool _needsBindGroupRecreation = false;
-    uint32_t _lastFontResourceVersion = 0;
+  // Rendering - GPU resources (shared resources come from ShaderManager)
+  GPUContext _gpuContext;
+  // Per-instance resources only:
+  WGPUBindGroup _bindGroup = nullptr;
+  WGPUBuffer _uniformBuffer = nullptr;
+  WGPUBuffer _cellBuffer = nullptr;
+  size_t _cellBufferSize = 0;
+  uint32_t _textureCols = 0;
+  uint32_t _textureRows = 0;
+  bool _pipelineInitialized = false;
+  bool _needsBindGroupRecreation = false;
+  uint32_t _lastFontResourceVersion = 0;
 
-    // Grid uniforms (must match shader GridUniforms - group 1 binding 0)
-    struct Uniforms {
-        glm::mat4 projection;     // 64 bytes
-        glm::vec2 screenSize;     // 8 bytes
-        glm::vec2 cellSize;       // 8 bytes
-        glm::vec2 gridSize;       // 8 bytes (cols, rows)
-        float pixelRange;         // 4 bytes
-        float scale;              // 4 bytes
-        glm::vec2 cursorPos;      // 8 bytes (col, row)
-        float cursorVisible;      // 4 bytes
-        float pad1;               // 4 bytes
-        glm::vec2 viewportOrigin; // 8 bytes
-        glm::vec2 pad2;           // 8 bytes
-    }; // Total: 128 bytes
+  // Grid uniforms (must match shader GridUniforms - group 1 binding 0)
+  struct Uniforms {
+    glm::mat4 projection;     // 64 bytes
+    glm::vec2 screenSize;     // 8 bytes
+    glm::vec2 cellSize;       // 8 bytes
+    glm::vec2 gridSize;       // 8 bytes (cols, rows)
+    float pixelRange;         // 4 bytes
+    float scale;              // 4 bytes
+    glm::vec2 cursorPos;      // 8 bytes (col, row)
+    float cursorVisible;      // 4 bytes
+    float pad1;               // 4 bytes
+    glm::vec2 viewportOrigin; // 8 bytes
+    glm::vec2 pad2;           // 8 bytes
+  }; // Total: 128 bytes
 
-    Uniforms _uniforms;
+  Uniforms _uniforms;
 
-    // Cell size from font metrics
-    float _baseCellWidth = 10.0f;   // from font advance
-    float _baseCellHeight = 20.0f;  // from font line height
-    float _zoomLevel = 0.5f;        // adjustable with ctrl+wheel
+  // Cell size from font metrics
+  float _baseCellWidth = 10.0f;  // from font advance
+  float _baseCellHeight = 20.0f; // from font line height
+  float _zoomLevel = 0.5f;       // adjustable with ctrl+wheel
 
-    // Viewport (pixel coordinates within window)
-    float _viewportX = 0.0f;
-    float _viewportY = 0.0f;
-    float _viewportWidth = 0.0f;
-    float _viewportHeight = 0.0f;
+  // Viewport (pixel coordinates within window)
+  float _viewportX = 0.0f;
+  float _viewportY = 0.0f;
+  float _viewportWidth = 0.0f;
+  float _viewportHeight = 0.0f;
 
-    // Focus management
-    base::ObjectId _id = 0;
-    bool _focused = false;
-    static base::ObjectId _nextId;
+  // Focus management
+  base::ObjectId _id = 0;
+  bool _focused = false;
+  static base::ObjectId _nextId;
 };
 
 // State callbacks struct
@@ -348,10 +364,8 @@ static VTermStateCallbacks stateCallbacks = {
 // Static ID counter for GPUScreen instances
 base::ObjectId GPUScreenImpl::_nextId = 1;
 
-GPUScreenImpl::GPUScreenImpl(const GPUContext& gpuContext)
-    : maxScrollback_(10000)
-    , _gpuContext(gpuContext)
-    , _id(_nextId++) {
+GPUScreenImpl::GPUScreenImpl(const GPUContext &gpuContext)
+    : maxScrollback_(10000), _gpuContext(gpuContext), _id(_nextId++) {
   // Get fonts from singleton
   auto fontMgr = YettyFontManager::instance();
   _msdfFont = fontMgr->getDefaultMsMsdfFont();
@@ -373,7 +387,7 @@ GPUScreenImpl::GPUScreenImpl(const GPUContext& gpuContext)
   if (_msdfFont) {
     _baseCellHeight = _msdfFont->getLineHeight();
     // Get advance width from a representative glyph like 'M'
-    const auto& metadata = _msdfFont->getGlyphMetadata();
+    const auto &metadata = _msdfFont->getGlyphMetadata();
     uint32_t mIndex = _msdfFont->getGlyphIndex('M');
     if (mIndex > 0 && mIndex < metadata.size()) {
       _baseCellWidth = metadata[mIndex]._advance;
@@ -403,8 +417,34 @@ void GPUScreenImpl::attach(VTerm *vt) {
   // Register our callbacks with State layer
   vterm_state_set_callbacks(state_, &stateCallbacks, this);
 
-  // Get default colors from state
+  // Get default colors from vterm (white fg, black bg)
   vterm_state_get_default_colors(state_, &defaultFg_, &defaultBg_);
+
+  yinfo("attach: defaultFg_ type={} idx={} rgb=({},{},{})",
+        VTERM_COLOR_IS_DEFAULT_FG(&defaultFg_) ? "DEFAULT_FG" :
+        VTERM_COLOR_IS_DEFAULT_BG(&defaultFg_) ? "DEFAULT_BG" :
+        VTERM_COLOR_IS_INDEXED(&defaultFg_) ? "INDEXED" : "RGB",
+        defaultFg_.indexed.idx,
+        defaultFg_.rgb.red, defaultFg_.rgb.green, defaultFg_.rgb.blue);
+  yinfo("attach: defaultBg_ type={} idx={} rgb=({},{},{})",
+        VTERM_COLOR_IS_DEFAULT_BG(&defaultBg_) ? "DEFAULT_BG" :
+        VTERM_COLOR_IS_DEFAULT_FG(&defaultBg_) ? "DEFAULT_FG" :
+        VTERM_COLOR_IS_INDEXED(&defaultBg_) ? "INDEXED" : "RGB",
+        defaultBg_.indexed.idx,
+        defaultBg_.rgb.red, defaultBg_.rgb.green, defaultBg_.rgb.blue);
+
+  // Convert to RGB if they're indexed
+  if (VTERM_COLOR_IS_INDEXED(&defaultFg_)) {
+    vterm_state_convert_color_to_rgb(state_, &defaultFg_);
+    yinfo("attach: converted defaultFg_ to RGB: ({},{},{})",
+          defaultFg_.rgb.red, defaultFg_.rgb.green, defaultFg_.rgb.blue);
+  }
+  if (VTERM_COLOR_IS_INDEXED(&defaultBg_)) {
+    vterm_state_convert_color_to_rgb(state_, &defaultBg_);
+    yinfo("attach: converted defaultBg_ to RGB: ({},{},{})",
+          defaultBg_.rgb.red, defaultBg_.rgb.green, defaultBg_.rgb.blue);
+  }
+
   _pen.fg = defaultFg_;
   _pen.bg = defaultBg_;
 
@@ -413,10 +453,12 @@ void GPUScreenImpl::attach(VTerm *vt) {
 }
 
 void GPUScreenImpl::createVTerm() {
-  if (_vterm) return;  // Already have vterm
+  if (_vterm)
+    return; // Already have vterm
 
   _vterm = vterm_new(_rows, _cols);
-  if (!_vterm) return;
+  if (!_vterm)
+    return;
 
   vterm_set_utf8(_vterm, 1);
 
@@ -425,17 +467,20 @@ void GPUScreenImpl::createVTerm() {
 
   // Set output callback if it was provided before vterm was created
   if (_outputCallback) {
-    vterm_output_set_callback(_vterm, [](const char* data, size_t len, void* user) {
-      auto* self = static_cast<GPUScreenImpl*>(user);
-      if (self->_outputCallback) {
-        self->_outputCallback(data, len);
-      }
-    }, this);
+    vterm_output_set_callback(
+        _vterm,
+        [](const char *data, size_t len, void *user) {
+          auto *self = static_cast<GPUScreenImpl *>(user);
+          if (self->_outputCallback) {
+            self->_outputCallback(data, len);
+          }
+        },
+        this);
   }
 }
 
-void GPUScreenImpl::write(const char* data, size_t len) {
-  ydebug("GPUScreenImpl::write: len={} _vterm={}", len, (void*)_vterm);
+void GPUScreenImpl::write(const char *data, size_t len) {
+  ydebug("GPUScreenImpl::write: len={} _vterm={}", len, (void *)_vterm);
   if (_vterm && len > 0) {
     vterm_input_write(_vterm, data, len);
   }
@@ -471,18 +516,19 @@ void GPUScreenImpl::setViewport(float x, float y, float width, float height) {
   uint32_t newRows = static_cast<uint32_t>(height / cellHeight);
 
   // Only resize if size actually changed
-  if (newCols > 0 && newRows > 0 &&
-      (newCols != _cols || newRows != _rows)) {
+  if (newCols > 0 && newRows > 0 && (newCols != _cols || newRows != _rows)) {
     resize(newCols, newRows);
   }
 }
 
 // Helper: count non-blank cells from end of row (like screen.c line_popcount)
-int GPUScreenImpl::linePopcount(const std::vector<Cell>& buffer, int row, int cols) const {
+int GPUScreenImpl::linePopcount(const std::vector<Cell> &buffer, int row,
+                                int cols) const {
   int col = cols - 1;
   while (col >= 0) {
     size_t idx = static_cast<size_t>(row * cols + col);
-    if (idx < buffer.size() && buffer[idx].glyph != 0 && buffer[idx].glyph != _cachedSpaceGlyph) {
+    if (idx < buffer.size() && buffer[idx].glyph != 0 &&
+        buffer[idx].glyph != _cachedSpaceGlyph) {
       break;
     }
     col--;
@@ -491,28 +537,31 @@ int GPUScreenImpl::linePopcount(const std::vector<Cell>& buffer, int row, int co
 }
 
 // Resize a single buffer with proper reflow (mirrors screen.c resize_buffer)
-void GPUScreenImpl::resizeBuffer(int bufidx, int newRows, int newCols, bool active, VTermStateFields* fields) {
+void GPUScreenImpl::resizeBuffer(int bufidx, int newRows, int newCols,
+                                 bool active, VTermStateFields *fields) {
+  yfunc();
   int oldRows = _rows;
   int oldCols = _cols;
 
-  std::vector<Cell>& oldBuffer = (bufidx == 0) ? _primaryBuffer : _altBuffer;
-  VTermLineInfo* oldLineinfo = fields ? fields->lineinfos[bufidx] : nullptr;
+  std::vector<Cell> &oldBuffer = (bufidx == 0) ? _primaryBuffer : _altBuffer;
+  VTermLineInfo *oldLineinfo = fields ? fields->lineinfos[bufidx] : nullptr;
 
   // Allocate new buffer
   std::vector<Cell> newBuffer(static_cast<size_t>(newRows * newCols));
   clearBuffer(newBuffer);
 
   // Allocate new lineinfo
-  VTermLineInfo* newLineinfo = nullptr;
+  VTermLineInfo *newLineinfo = nullptr;
   if (fields) {
-    newLineinfo = static_cast<VTermLineInfo*>(calloc(static_cast<size_t>(newRows), sizeof(VTermLineInfo)));
+    newLineinfo = static_cast<VTermLineInfo *>(
+        calloc(static_cast<size_t>(newRows), sizeof(VTermLineInfo)));
   }
 
   int oldRow = oldRows - 1;
   int newRow = newRows - 1;
 
-  VTermPos oldCursor = { _cursorRow, _cursorCol };
-  VTermPos newCursor = { -1, -1 };
+  VTermPos oldCursor = {_cursorRow, _cursorCol};
+  VTermPos newCursor = {-1, -1};
 
   int finalBlankRow = newRows;
 
@@ -521,7 +570,8 @@ void GPUScreenImpl::resizeBuffer(int bufidx, int newRows, int newCols, bool acti
     int oldRowEnd = oldRow;
 
     // Find start of logical line by following continuation markers backwards
-    while (_reflow && oldLineinfo && oldRow >= 0 && oldLineinfo[oldRow].continuation) {
+    while (_reflow && oldLineinfo && oldRow >= 0 &&
+           oldLineinfo[oldRow].continuation) {
       oldRow--;
     }
     int oldRowStart = oldRow;
@@ -529,8 +579,9 @@ void GPUScreenImpl::resizeBuffer(int bufidx, int newRows, int newCols, bool acti
     // Calculate total width of logical line
     int width = 0;
     for (int row = oldRowStart; row <= oldRowEnd; row++) {
-      if (_reflow && row < (oldRows - 1) && oldLineinfo && oldLineinfo[row + 1].continuation) {
-        width += oldCols;  // Full row if next row is continuation
+      if (_reflow && row < (oldRows - 1) && oldLineinfo &&
+          oldLineinfo[row + 1].continuation) {
+        width += oldCols; // Full row if next row is continuation
       } else {
         width += linePopcount(oldBuffer, row, oldCols);
       }
@@ -553,9 +604,11 @@ void GPUScreenImpl::resizeBuffer(int bufidx, int newRows, int newCols, bool acti
 
     // If we'd fall off top, try to scroll content down into blank rows
     if (newRowStart < 0 && spareRows >= 0 &&
-        (!active || newCursor.row == -1 || (newCursor.row - newRowStart) < newRows)) {
+        (!active || newCursor.row == -1 ||
+         (newCursor.row - newRowStart) < newRows)) {
       int downwards = -newRowStart;
-      if (downwards > spareRows) downwards = spareRows;
+      if (downwards > spareRows)
+        downwards = spareRows;
       int rowcount = newRows - downwards;
 
       // Move existing content down
@@ -572,7 +625,8 @@ void GPUScreenImpl::resizeBuffer(int bufidx, int newRows, int newCols, bool acti
       newRowStart += downwards;
       newRowEnd += downwards;
 
-      if (newCursor.row >= 0) newCursor.row += downwards;
+      if (newCursor.row >= 0)
+        newCursor.row += downwards;
       finalBlankRow += downwards;
     }
 
@@ -581,13 +635,15 @@ void GPUScreenImpl::resizeBuffer(int bufidx, int newRows, int newCols, bool acti
       if (oldRowStart <= oldCursor.row && oldCursor.row <= oldRowEnd) {
         newCursor.row = 0;
         newCursor.col = oldCursor.col;
-        if (newCursor.col >= newCols) newCursor.col = newCols - 1;
+        if (newCursor.col >= newCols)
+          newCursor.col = newCols - 1;
       }
       break;
     }
 
     // Copy content with reflow
-    for (newRow = newRowStart, oldRow = oldRowStart; newRow <= newRowEnd; newRow++) {
+    for (newRow = newRowStart, oldRow = oldRowStart; newRow <= newRowEnd;
+         newRow++) {
       int count = (width >= newCols) ? newCols : width;
       width -= count;
 
@@ -625,7 +681,8 @@ void GPUScreenImpl::resizeBuffer(int bufidx, int newRows, int newCols, bool acti
       if (oldCursor.row == oldRow && oldCursor.col >= oldCol) {
         newCursor.row = newRow;
         newCursor.col = oldCursor.col - oldCol + newCol;
-        if (newCursor.col >= newCols) newCursor.col = newCols - 1;
+        if (newCursor.col >= newCols)
+          newCursor.col = newCols - 1;
       }
 
       // Set continuation marker for new lineinfo
@@ -642,7 +699,8 @@ void GPUScreenImpl::resizeBuffer(int bufidx, int newRows, int newCols, bool acti
   if (oldCursor.row <= oldRow) {
     newCursor.row = 0;
     newCursor.col = oldCursor.col;
-    if (newCursor.col >= newCols) newCursor.col = newCols - 1;
+    if (newCursor.col >= newCols)
+      newCursor.col = newCols - 1;
   }
 
   // Fallback cursor position
@@ -660,7 +718,8 @@ void GPUScreenImpl::resizeBuffer(int bufidx, int newRows, int newCols, bool acti
     }
     if (active) {
       newCursor.row -= (oldRow + 1);
-      if (newCursor.row < 0) newCursor.row = 0;
+      if (newCursor.row < 0)
+        newCursor.row = 0;
     }
   }
 
@@ -677,7 +736,8 @@ void GPUScreenImpl::resizeBuffer(int bufidx, int newRows, int newCols, bool acti
     }
 
     newCursor.row -= (newRow + 1);
-    if (newCursor.row < 0) newCursor.row = 0;
+    if (newCursor.row < 0)
+      newCursor.row = 0;
 
     // Clear bottom rows
     for (int r = moveRows; r < newRows; r++) {
@@ -711,14 +771,15 @@ void GPUScreenImpl::resizeBuffer(int bufidx, int newRows, int newCols, bool acti
   }
 }
 
-void GPUScreenImpl::resizeInternal(int rows, int cols, VTermStateFields* fields) {
+void GPUScreenImpl::resizeInternal(int rows, int cols,
+                                   VTermStateFields *fields) {
   // Check if this is a no-op (same size AND buffers already allocated)
   if (rows == _rows && cols == _cols && !_primaryBuffer.empty()) {
     return;
   }
 
-  yinfo("GPUScreenImpl::resize: {}x{} -> {}x{} isAltScreen={}", _rows, _cols, rows,
-        cols, _isAltScreen);
+  yinfo("GPUScreenImpl::resize: {}x{} -> {}x{} isAltScreen={}", _rows, _cols,
+        rows, cols, _isAltScreen);
 
   int oldRows = _rows;
   int oldCols = _cols;
@@ -733,7 +794,8 @@ void GPUScreenImpl::resizeInternal(int rows, int cols, VTermStateFields* fields)
   } else if (rows != oldRows && fields && fields->lineinfos[1]) {
     // Alt buffer not in use but we need to resize its lineinfo
     free(fields->lineinfos[1]);
-    VTermLineInfo* newLineinfo = static_cast<VTermLineInfo*>(calloc(static_cast<size_t>(rows), sizeof(VTermLineInfo)));
+    VTermLineInfo *newLineinfo = static_cast<VTermLineInfo *>(
+        calloc(static_cast<size_t>(rows), sizeof(VTermLineInfo)));
     fields->lineinfos[1] = newLineinfo;
   }
 
@@ -782,8 +844,8 @@ void GPUScreenImpl::switchToScreen(bool alt) {
   if (_isAltScreen == alt)
     return; // Already on the requested screen
 
-  yinfo("GPUScreenImpl::switchToScreen: {} -> {}", _isAltScreen ? "alt" : "primary",
-        alt ? "alt" : "primary");
+  yinfo("GPUScreenImpl::switchToScreen: {} -> {}",
+        _isAltScreen ? "alt" : "primary", alt ? "alt" : "primary");
 
   _isAltScreen = alt;
 
@@ -842,6 +904,16 @@ const Cell *GPUScreenImpl::getCellData() const {
     return _visibleBuffer->data();
   }
   return nullptr;
+}
+
+Cell GPUScreenImpl::getCell(int row, int col) const {
+  if (!_visibleBuffer || row < 0 || col < 0 || row >= _rows || col >= _cols) {
+    Cell empty = {};
+    return empty;
+  }
+  size_t idx = static_cast<size_t>(row) * static_cast<size_t>(_cols) +
+               static_cast<size_t>(col);
+  return (*_visibleBuffer)[idx];
 }
 
 //=============================================================================
@@ -977,7 +1049,8 @@ void GPUScreenImpl::pushLineToScrollback(int row) {
               _cols * sizeof(Cell));
 
   // Scan this row for widget markers - if found, track in _scrolledOutWidgets
-  yinfo("GPUScreenImpl::pushLineToScrollback: scanning row {} for markers", row);
+  yinfo("GPUScreenImpl::pushLineToScrollback: scanning row {} for markers",
+        row);
   for (int col = 0; col < _cols; col++) {
     const Cell &cell = (*_visibleBuffer)[srcOffset + col];
     if (cell.glyph == GLYPH_PLUGIN) {
@@ -1012,7 +1085,8 @@ void GPUScreenImpl::pushLineToScrollback(int row) {
   // Decrement Y for all scrolled-out widgets (they move up with each scroll)
   int maxNegativeY = -static_cast<int>(maxScrollback_);
   if (!_scrolledOutWidgets.empty()) {
-    yinfo("GPUScreenImpl::pushLineToScrollback: decrementing Y for {} scrolled-out "
+    yinfo("GPUScreenImpl::pushLineToScrollback: decrementing Y for {} "
+          "scrolled-out "
           "widgets",
           _scrolledOutWidgets.size());
   }
@@ -1056,8 +1130,8 @@ void GPUScreenImpl::pushLineToScrollback(int row) {
 //=============================================================================
 
 void GPUScreenImpl::setCell(int row, int col, uint32_t glyph, uint8_t fgR,
-                        uint8_t fgG, uint8_t fgB, uint8_t bgR, uint8_t bgG,
-                        uint8_t bgB, uint8_t attrsByte) {
+                            uint8_t fgG, uint8_t fgB, uint8_t bgR, uint8_t bgG,
+                            uint8_t bgB, uint8_t attrsByte) {
   if (row < 0 || row >= _rows || col < 0 || col >= _cols)
     return;
   if (!_visibleBuffer)
@@ -1096,16 +1170,20 @@ void GPUScreenImpl::clearCell(int row, int col) {
 }
 
 void GPUScreenImpl::colorToRGB(const VTermColor &color, uint8_t &r, uint8_t &g,
-                           uint8_t &b) {
+                               uint8_t &b) {
+  const char* colorType = "UNKNOWN";
   if (VTERM_COLOR_IS_DEFAULT_FG(&color)) {
+    colorType = "DEFAULT_FG";
     r = defaultFg_.rgb.red;
     g = defaultFg_.rgb.green;
     b = defaultFg_.rgb.blue;
   } else if (VTERM_COLOR_IS_DEFAULT_BG(&color)) {
+    colorType = "DEFAULT_BG";
     r = defaultBg_.rgb.red;
     g = defaultBg_.rgb.green;
     b = defaultBg_.rgb.blue;
   } else if (VTERM_COLOR_IS_INDEXED(&color)) {
+    colorType = "INDEXED";
     VTermColor rgb = color;
     if (state_) {
       vterm_state_convert_color_to_rgb(state_, &rgb);
@@ -1114,9 +1192,19 @@ void GPUScreenImpl::colorToRGB(const VTermColor &color, uint8_t &r, uint8_t &g,
     g = rgb.rgb.green;
     b = rgb.rgb.blue;
   } else {
+    colorType = "RGB";
     r = color.rgb.red;
     g = color.rgb.green;
     b = color.rgb.blue;
+  }
+
+  // Debug: log non-default color conversions
+  static int colorDebugCount = 0;
+  bool isNonDefault = !VTERM_COLOR_IS_DEFAULT_FG(&color) && !VTERM_COLOR_IS_DEFAULT_BG(&color);
+  if (colorDebugCount < 50 && isNonDefault) {
+    colorDebugCount++;
+    yinfo("colorToRGB: type={} idx={} -> RGB({},{},{})",
+          colorType, color.indexed.idx, r, g, b);
   }
 }
 
@@ -1133,7 +1221,7 @@ int GPUScreenImpl::onPutglyph(VTermGlyphInfo *info, VTermPos pos, void *user) {
 
   // Determine font type and glyph index based on codepoint
   uint32_t glyphIdx = 0;
-  uint8_t fontType = FONT_TYPE_MSDF;  // Default to MSDF text
+  uint8_t fontType = FONT_TYPE_MSDF; // Default to MSDF text
 
   if (isCardGlyph(cp)) {
     // Card glyphs (multi-cell widgets)
@@ -1142,7 +1230,8 @@ int GPUScreenImpl::onPutglyph(VTermGlyphInfo *info, VTermPos pos, void *user) {
   } else if (isShaderGlyph(cp)) {
     // Shader glyphs (single-cell animated)
     fontType = FONT_TYPE_SHADER;
-    glyphIdx = self->_shaderGlyphFont ? self->_shaderGlyphFont->getGlyphIndex(cp) : cp;
+    glyphIdx =
+        self->_shaderGlyphFont ? self->_shaderGlyphFont->getGlyphIndex(cp) : cp;
   } else if (isEmoji(cp) && self->_bitmapFont) {
     // Emoji - render from bitmap font atlas
     fontType = FONT_TYPE_BITMAP;
@@ -1150,7 +1239,8 @@ int GPUScreenImpl::onPutglyph(VTermGlyphInfo *info, VTermPos pos, void *user) {
   } else if (self->_msdfFont) {
     // Regular text - get glyph from MSDF font
     fontType = FONT_TYPE_MSDF;
-    glyphIdx = self->_msdfFont->getGlyphIndex(cp, self->_pen.bold, self->_pen.italic);
+    glyphIdx =
+        self->_msdfFont->getGlyphIndex(cp, self->_pen.bold, self->_pen.italic);
   } else {
     fontType = FONT_TYPE_MSDF;
     glyphIdx = cp;
@@ -1160,6 +1250,17 @@ int GPUScreenImpl::onPutglyph(VTermGlyphInfo *info, VTermPos pos, void *user) {
   uint8_t fgR, fgG, fgB, bgR, bgG, bgB;
   self->colorToRGB(self->_pen.fg, fgR, fgG, fgB);
   self->colorToRGB(self->_pen.bg, bgR, bgG, bgB);
+
+  // Debug: log first few colored glyphs with bold state
+  static int debugCount = 0;
+  bool hasColor = (bgR != 0 || bgG != 0 || bgB != 0) ||
+                  (fgR != 240 || fgG != 240 || fgB != 240);
+  if (debugCount < 10 && hasColor) {
+    debugCount++;
+    yinfo("onPutglyph: '{}' glyph={} bold={} fg=({},{},{}) fontType={}",
+          (cp >= 32 && cp < 127) ? static_cast<char>(cp) : '?', glyphIdx,
+          self->_pen.bold, fgR, fgG, fgB, fontType);
+  }
 
   if (self->_pen.reverse) {
     std::swap(fgR, bgR);
@@ -1176,7 +1277,7 @@ int GPUScreenImpl::onPutglyph(VTermGlyphInfo *info, VTermPos pos, void *user) {
   attrsByte |= (self->_pen.underline & 0x03) << 2;
   if (self->_pen.strike)
     attrsByte |= 0x10;
-  attrsByte |= (fontType & 0x07) << 5;  // Pack font type into bits 5-7
+  attrsByte |= (fontType & 0x07) << 5; // Pack font type into bits 5-7
 
   self->setCell(pos.row, pos.col, glyphIdx, fgR, fgG, fgB, bgR, bgG, bgB,
                 attrsByte);
@@ -1192,10 +1293,10 @@ int GPUScreenImpl::onPutglyph(VTermGlyphInfo *info, VTermPos pos, void *user) {
 }
 
 int GPUScreenImpl::onMoveCursor(VTermPos pos, VTermPos oldpos, int visible,
-                            void *user) {
+                                void *user) {
   auto *self = static_cast<GPUScreenImpl *>(user);
-  ydebug("GPUScreenImpl::onMoveCursor: ({},{}) -> ({},{})", oldpos.row, oldpos.col,
-         pos.row, pos.col);
+  ydebug("GPUScreenImpl::onMoveCursor: ({},{}) -> ({},{})", oldpos.row,
+         oldpos.col, pos.row, pos.col);
   self->_cursorRow = pos.row;
   self->_cursorCol = pos.col;
   self->_cursorVisible = visible != 0;
@@ -1204,7 +1305,7 @@ int GPUScreenImpl::onMoveCursor(VTermPos pos, VTermPos oldpos, int visible,
 }
 
 int GPUScreenImpl::onScrollRect(VTermRect rect, int downward, int rightward,
-                            void *user) {
+                                void *user) {
   auto *self = static_cast<GPUScreenImpl *>(user);
   (void)rightward;
 
@@ -1426,9 +1527,11 @@ int GPUScreenImpl::onSetPenAttr(VTermAttr attr, VTermValue *val, void *user) {
   switch (attr) {
   case VTERM_ATTR_BOLD:
     self->_pen.bold = val->boolean != 0;
+    yinfo("VTERM_ATTR_BOLD: val->boolean={} pen.bold={}", val->boolean, self->_pen.bold);
     break;
   case VTERM_ATTR_ITALIC:
     self->_pen.italic = val->boolean != 0;
+    yinfo("VTERM_ATTR_ITALIC: val->boolean={} pen.italic={}", val->boolean, self->_pen.italic);
     break;
   case VTERM_ATTR_UNDERLINE:
     self->_pen.underline = static_cast<uint8_t>(val->number & 0x03);
@@ -1438,15 +1541,29 @@ int GPUScreenImpl::onSetPenAttr(VTermAttr attr, VTermValue *val, void *user) {
     break;
   case VTERM_ATTR_REVERSE:
     self->_pen.reverse = val->boolean != 0;
+    yinfo("VTERM_ATTR_REVERSE: val->boolean={} pen.reverse={}", val->boolean,
+          self->_pen.reverse);
     break;
   case VTERM_ATTR_BLINK:
     self->_pen.blink = val->boolean != 0;
     break;
   case VTERM_ATTR_FOREGROUND:
     self->_pen.fg = val->color;
+    yinfo("VTERM_ATTR_FOREGROUND: type={} idx={} rgb=({},{},{})",
+          VTERM_COLOR_IS_DEFAULT_FG(&val->color) ? "DEFAULT_FG" :
+          VTERM_COLOR_IS_DEFAULT_BG(&val->color) ? "DEFAULT_BG" :
+          VTERM_COLOR_IS_INDEXED(&val->color) ? "INDEXED" : "RGB",
+          val->color.indexed.idx,
+          val->color.rgb.red, val->color.rgb.green, val->color.rgb.blue);
     break;
   case VTERM_ATTR_BACKGROUND:
     self->_pen.bg = val->color;
+    yinfo("VTERM_ATTR_BACKGROUND: type={} idx={} rgb=({},{},{})",
+          VTERM_COLOR_IS_DEFAULT_BG(&val->color) ? "DEFAULT_BG" :
+          VTERM_COLOR_IS_DEFAULT_FG(&val->color) ? "DEFAULT_FG" :
+          VTERM_COLOR_IS_INDEXED(&val->color) ? "INDEXED" : "RGB",
+          val->color.indexed.idx,
+          val->color.rgb.red, val->color.rgb.green, val->color.rgb.blue);
     break;
   default:
     break;
@@ -1482,15 +1599,17 @@ int GPUScreenImpl::onBell(void *user) {
   return 1;
 }
 
-int GPUScreenImpl::onResize(int rows, int cols, VTermStateFields *fields, void *user) {
+int GPUScreenImpl::onResize(int rows, int cols, VTermStateFields *fields,
+                            void *user) {
   auto *self = static_cast<GPUScreenImpl *>(user);
-  // resizeInternal handles buffer reflow AND lineinfo reallocation (like screen.c)
+  // resizeInternal handles buffer reflow AND lineinfo reallocation (like
+  // screen.c)
   self->resizeInternal(rows, cols, fields);
   return 1;
 }
 
-int GPUScreenImpl::onSetLineInfo(int, const VTermLineInfo *, const VTermLineInfo *,
-                             void *) {
+int GPUScreenImpl::onSetLineInfo(int, const VTermLineInfo *,
+                                 const VTermLineInfo *, void *) {
   // Line info (double-width, double-height) - not commonly used
   return 1;
 }
@@ -1501,9 +1620,10 @@ int GPUScreenImpl::onSetLineInfo(int, const VTermLineInfo *, const VTermLineInfo
 
 void GPUScreenImpl::setWidgetMarker(int row, int col, uint16_t widgetId) {
   if (row < 0 || row >= _rows || col < 0 || col >= _cols) {
-    ydebug("GPUScreenImpl::setWidgetMarker: OUT OF BOUNDS row={} col={} (screen "
-           "{}x{})",
-           row, col, _rows, _cols);
+    ydebug(
+        "GPUScreenImpl::setWidgetMarker: OUT OF BOUNDS row={} col={} (screen "
+        "{}x{})",
+        row, col, _rows, _cols);
     return;
   }
   if (!_visibleBuffer)
@@ -1513,8 +1633,8 @@ void GPUScreenImpl::setWidgetMarker(int row, int col, uint16_t widgetId) {
   if (idx >= _visibleBuffer->size())
     return;
 
-  ydebug("GPUScreenImpl::setWidgetMarker: row={} col={} widgetId={} idx={}", row,
-         col, widgetId, idx);
+  ydebug("GPUScreenImpl::setWidgetMarker: row={} col={} widgetId={} idx={}",
+         row, col, widgetId, idx);
 
   Cell &cell = (*_visibleBuffer)[idx];
 
@@ -1556,8 +1676,8 @@ void GPUScreenImpl::clearWidgetMarker(int row, int col) {
 void GPUScreenImpl::trackScrolledOutWidget(uint16_t widgetId, int col) {
   // Widget marker just scrolled from row 0 into scrollback
   // Start tracking with y = -1 (just above visible area)
-  ydebug("GPUScreenImpl::trackScrolledOutWidget: widget {} col={} y=-1", widgetId,
-         col);
+  ydebug("GPUScreenImpl::trackScrolledOutWidget: widget {} col={} y=-1",
+         widgetId, col);
   _scrolledOutWidgets.push_back({widgetId, -1, col});
 }
 
@@ -1593,8 +1713,9 @@ std::vector<WidgetPosition> GPUScreenImpl::scanWidgetPositions() const {
     int col = cellIdx % _cols;
     uint16_t widgetId = static_cast<uint16_t>(cell.fgR) |
                         (static_cast<uint16_t>(cell.fgG) << 8);
-    ydebug("GPUScreenImpl::scanWidgetPositions: found widget {} at row={} col={}",
-           widgetId, row, col);
+    ydebug(
+        "GPUScreenImpl::scanWidgetPositions: found widget {} at row={} col={}",
+        widgetId, row, col);
     positions.push_back({widgetId, row, col});
     return true;
   };
@@ -1612,9 +1733,9 @@ std::vector<WidgetPosition> GPUScreenImpl::scanWidgetPositions() const {
           _scrolledOutWidgets.size());
   }
   for (const auto &sow : _scrolledOutWidgets) {
-    yinfo(
-        "GPUScreenImpl::scanWidgetPositions: scrolled-out widget {} at y={} col={}",
-        sow.widgetId, sow.y, sow.col);
+    yinfo("GPUScreenImpl::scanWidgetPositions: scrolled-out widget {} at y={} "
+          "col={}",
+          sow.widgetId, sow.y, sow.col);
     positions.push_back({sow.widgetId, sow.y, sow.col});
   }
 
@@ -1628,9 +1749,9 @@ std::vector<WidgetPosition> GPUScreenImpl::scanWidgetPositions() const {
 //=============================================================================
 
 void GPUScreenImpl::setWidgetMarker(int row, int col, uint16_t widgetId,
-                                uint32_t width, uint32_t height,
-                                uint32_t shaderGlyph, uint32_t fg,
-                                uint32_t /* bg unused */) {
+                                    uint32_t width, uint32_t height,
+                                    uint32_t shaderGlyph, uint32_t fg,
+                                    uint32_t /* bg unused */) {
   if (!_visibleBuffer)
     return;
 
@@ -1681,7 +1802,7 @@ void GPUScreenImpl::setWidgetMarker(int row, int col, uint16_t widgetId,
 }
 
 void GPUScreenImpl::clearWidgetMarker(int row, int col, uint32_t width,
-                                  uint32_t height) {
+                                      uint32_t height) {
   if (!_visibleBuffer)
     return;
 
@@ -1769,12 +1890,14 @@ WidgetPtr GPUScreenImpl::getChildWidget(uint32_t id) const {
   return nullptr;
 }
 
-WidgetPtr GPUScreenImpl::getChildWidgetByHashId(const std::string &hashId) const {
+WidgetPtr
+GPUScreenImpl::getChildWidgetByHashId(const std::string &hashId) const {
   auto it = childWidgetsByHashId_.find(hashId);
   return (it != childWidgetsByHashId_.end()) ? it->second : nullptr;
 }
 
-Result<void> GPUScreenImpl::removeChildWidgetByHashId(const std::string &hashId) {
+Result<void>
+GPUScreenImpl::removeChildWidgetByHashId(const std::string &hashId) {
   auto it = childWidgetsByHashId_.find(hashId);
   if (it == childWidgetsByHashId_.end()) {
     return Err<void>("Widget not found: " + hashId);
@@ -1802,8 +1925,8 @@ Result<void> GPUScreenImpl::removeChildWidgetByHashId(const std::string &hashId)
 //=============================================================================
 
 bool GPUScreenImpl::handleOSCSequence(const std::string &sequence,
-                                  std::string *response,
-                                  uint32_t *linesToAdvance) {
+                                      std::string *response,
+                                      uint32_t *linesToAdvance) {
   yinfo("GPUScreenImpl::handleOSCSequence: ENTERED, sequence len={}",
         sequence.size());
 
@@ -1826,7 +1949,8 @@ bool GPUScreenImpl::handleOSCSequence(const std::string &sequence,
     return false;
   }
 
-  yinfo("GPUScreenImpl::handleOSCSequence: vendorId={} (CARD_ID={}, LEGACY_ID={})",
+  yinfo("GPUScreenImpl::handleOSCSequence: vendorId={} (CARD_ID={}, "
+        "LEGACY_ID={})",
         vendorId, YETTY_OSC_VENDOR_CARD_ID, YETTY_OSC_VENDOR_ID);
 
   // Route to card handling for new vendor ID
@@ -1909,7 +2033,8 @@ bool GPUScreenImpl::handleOSCSequence(const std::string &sequence,
       widget->setPositionMode(PositionMode::Relative);
     }
 
-    ydebug("GPUScreenImpl::handleOSCSequence: widget created at ({},{}) cursor was "
+    ydebug("GPUScreenImpl::handleOSCSequence: widget created at ({},{}) cursor "
+           "was "
            "({},{})",
            x, y, getCursorCol(), getCursorRow());
 
@@ -2046,8 +2171,8 @@ bool GPUScreenImpl::handleOSCSequence(const std::string &sequence,
 //=============================================================================
 
 bool GPUScreenImpl::handleCardOSCSequence(const std::string &sequence,
-                                      std::string *response,
-                                      uint32_t *linesToAdvance) {
+                                          std::string *response,
+                                          uint32_t *linesToAdvance) {
   yinfo("GPUScreenImpl::handleCardOSCSequence: ENTERED with sequence length={}",
         sequence.size());
   yinfo("GPUScreenImpl::handleCardOSCSequence: sequence={}",
@@ -2084,8 +2209,9 @@ bool GPUScreenImpl::handleCardOSCSequence(const std::string &sequence,
 
   switch (cmd.type) {
   case OscCommandType::Create: {
-    yinfo("GPUScreenImpl::handleCardOSCSequence: CREATE command for plugin '{}'",
-          cmd.create.plugin);
+    yinfo(
+        "GPUScreenImpl::handleCardOSCSequence: CREATE command for plugin '{}'",
+        cmd.create.plugin);
     int32_t x = cmd.create.x;
     int32_t y = cmd.create.y;
 
@@ -2257,7 +2383,8 @@ void GPUScreenImpl::unregisterCard(Card *card) {
 
   uint32_t offset = card->metadataOffset();
   cardRegistry_.erase(offset);
-  ydebug("GPUScreenImpl::unregisterCard: unregistered card at offset {}", offset);
+  ydebug("GPUScreenImpl::unregisterCard: unregistered card at offset {}",
+         offset);
 }
 
 Card *GPUScreenImpl::getCardByMetadataOffset(uint32_t offset) const {
@@ -2297,86 +2424,142 @@ Card *GPUScreenImpl::getCardAtCell(int row, int col) const {
 // Interface method implementations
 //=============================================================================
 
-uint32_t GPUScreenImpl::getCols() const {
-  return static_cast<uint32_t>(_cols);
-}
+uint32_t GPUScreenImpl::getCols() const { return static_cast<uint32_t>(_cols); }
 
-uint32_t GPUScreenImpl::getRows() const {
-  return static_cast<uint32_t>(_rows);
-}
+uint32_t GPUScreenImpl::getRows() const { return static_cast<uint32_t>(_rows); }
 
 void GPUScreenImpl::sendKey(uint32_t codepoint, int mods) {
-  if (!_vterm) return;
+  if (!_vterm)
+    return;
 
   // Convert GLFW modifiers to VTermModifier
   // GLFW: GLFW_MOD_SHIFT=0x0001, GLFW_MOD_CONTROL=0x0002, GLFW_MOD_ALT=0x0004
   VTermModifier vtMods = VTERM_MOD_NONE;
-  if (mods & 0x0001) vtMods = static_cast<VTermModifier>(vtMods | VTERM_MOD_SHIFT);
-  if (mods & 0x0002) vtMods = static_cast<VTermModifier>(vtMods | VTERM_MOD_CTRL);
-  if (mods & 0x0004) vtMods = static_cast<VTermModifier>(vtMods | VTERM_MOD_ALT);
+  if (mods & 0x0001)
+    vtMods = static_cast<VTermModifier>(vtMods | VTERM_MOD_SHIFT);
+  if (mods & 0x0002)
+    vtMods = static_cast<VTermModifier>(vtMods | VTERM_MOD_CTRL);
+  if (mods & 0x0004)
+    vtMods = static_cast<VTermModifier>(vtMods | VTERM_MOD_ALT);
 
   vterm_keyboard_unichar(_vterm, codepoint, vtMods);
 }
 
 void GPUScreenImpl::sendSpecialKey(int key, int mods) {
-  if (!_vterm) return;
+  if (!_vterm)
+    return;
 
   ydebug("sendSpecialKey: key={} mods={}", key, mods);
 
   // Convert GLFW modifiers to VTermModifier
   // GLFW: GLFW_MOD_SHIFT=0x0001, GLFW_MOD_CONTROL=0x0002, GLFW_MOD_ALT=0x0004
   VTermModifier vtMods = VTERM_MOD_NONE;
-  if (mods & 0x0001) vtMods = static_cast<VTermModifier>(vtMods | VTERM_MOD_SHIFT);
-  if (mods & 0x0002) vtMods = static_cast<VTermModifier>(vtMods | VTERM_MOD_CTRL);
-  if (mods & 0x0004) vtMods = static_cast<VTermModifier>(vtMods | VTERM_MOD_ALT);
+  if (mods & 0x0001)
+    vtMods = static_cast<VTermModifier>(vtMods | VTERM_MOD_SHIFT);
+  if (mods & 0x0002)
+    vtMods = static_cast<VTermModifier>(vtMods | VTERM_MOD_CTRL);
+  if (mods & 0x0004)
+    vtMods = static_cast<VTermModifier>(vtMods | VTERM_MOD_ALT);
 
   // Convert GLFW key to VTermKey
   VTermKey vtKey = VTERM_KEY_NONE;
   switch (key) {
-    case 257: vtKey = VTERM_KEY_ENTER; break;      // GLFW_KEY_ENTER
-    case 259: vtKey = VTERM_KEY_BACKSPACE; break;  // GLFW_KEY_BACKSPACE
-    case 258: vtKey = VTERM_KEY_TAB; break;        // GLFW_KEY_TAB
-    case 256: vtKey = VTERM_KEY_ESCAPE; break;     // GLFW_KEY_ESCAPE
-    case 265: vtKey = VTERM_KEY_UP; break;         // GLFW_KEY_UP
-    case 264: vtKey = VTERM_KEY_DOWN; break;       // GLFW_KEY_DOWN
-    case 263: vtKey = VTERM_KEY_LEFT; break;       // GLFW_KEY_LEFT
-    case 262: vtKey = VTERM_KEY_RIGHT; break;      // GLFW_KEY_RIGHT
-    case 268: vtKey = VTERM_KEY_HOME; break;       // GLFW_KEY_HOME
-    case 269: vtKey = VTERM_KEY_END; break;        // GLFW_KEY_END
-    case 266: vtKey = VTERM_KEY_PAGEUP; break;     // GLFW_KEY_PAGE_UP
-    case 267: vtKey = VTERM_KEY_PAGEDOWN; break;   // GLFW_KEY_PAGE_DOWN
-    case 260: vtKey = VTERM_KEY_INS; break;        // GLFW_KEY_INSERT
-    case 261: vtKey = VTERM_KEY_DEL; break;        // GLFW_KEY_DELETE
-    case 290: vtKey = static_cast<VTermKey>(VTERM_KEY_FUNCTION(1)); break;  // GLFW_KEY_F1
-    case 291: vtKey = static_cast<VTermKey>(VTERM_KEY_FUNCTION(2)); break;  // GLFW_KEY_F2
-    case 292: vtKey = static_cast<VTermKey>(VTERM_KEY_FUNCTION(3)); break;  // GLFW_KEY_F3
-    case 293: vtKey = static_cast<VTermKey>(VTERM_KEY_FUNCTION(4)); break;  // GLFW_KEY_F4
-    case 294: vtKey = static_cast<VTermKey>(VTERM_KEY_FUNCTION(5)); break;  // GLFW_KEY_F5
-    case 295: vtKey = static_cast<VTermKey>(VTERM_KEY_FUNCTION(6)); break;  // GLFW_KEY_F6
-    case 296: vtKey = static_cast<VTermKey>(VTERM_KEY_FUNCTION(7)); break;  // GLFW_KEY_F7
-    case 297: vtKey = static_cast<VTermKey>(VTERM_KEY_FUNCTION(8)); break;  // GLFW_KEY_F8
-    case 298: vtKey = static_cast<VTermKey>(VTERM_KEY_FUNCTION(9)); break;  // GLFW_KEY_F9
-    case 299: vtKey = static_cast<VTermKey>(VTERM_KEY_FUNCTION(10)); break; // GLFW_KEY_F10
-    case 300: vtKey = static_cast<VTermKey>(VTERM_KEY_FUNCTION(11)); break; // GLFW_KEY_F11
-    case 301: vtKey = static_cast<VTermKey>(VTERM_KEY_FUNCTION(12)); break; // GLFW_KEY_F12
-    default:
-      // Handle Ctrl/Alt + character combinations
-      // GLFW key codes: SPACE=32, 0-9=48-57, A-Z=65-90
-      if (mods & (0x0002 | 0x0004)) { // CTRL or ALT
-        uint32_t ch = 0;
-        if (key == 32) { // GLFW_KEY_SPACE
-          ch = ' ';
-        } else if (key >= 48 && key <= 57) { // GLFW_KEY_0 - GLFW_KEY_9
-          ch = static_cast<uint32_t>(key);
-        } else if (key >= 65 && key <= 90) { // GLFW_KEY_A - GLFW_KEY_Z
-          ch = static_cast<uint32_t>(key + 32); // lowercase
-        }
-        if (ch != 0) {
-          ydebug("sendSpecialKey: sending ctrl/alt char '{}' ({})", (char)ch, ch);
-          vterm_keyboard_unichar(_vterm, ch, vtMods);
-        }
+  case 257:
+    vtKey = VTERM_KEY_ENTER;
+    break; // GLFW_KEY_ENTER
+  case 259:
+    vtKey = VTERM_KEY_BACKSPACE;
+    break; // GLFW_KEY_BACKSPACE
+  case 258:
+    vtKey = VTERM_KEY_TAB;
+    break; // GLFW_KEY_TAB
+  case 256:
+    vtKey = VTERM_KEY_ESCAPE;
+    break; // GLFW_KEY_ESCAPE
+  case 265:
+    vtKey = VTERM_KEY_UP;
+    break; // GLFW_KEY_UP
+  case 264:
+    vtKey = VTERM_KEY_DOWN;
+    break; // GLFW_KEY_DOWN
+  case 263:
+    vtKey = VTERM_KEY_LEFT;
+    break; // GLFW_KEY_LEFT
+  case 262:
+    vtKey = VTERM_KEY_RIGHT;
+    break; // GLFW_KEY_RIGHT
+  case 268:
+    vtKey = VTERM_KEY_HOME;
+    break; // GLFW_KEY_HOME
+  case 269:
+    vtKey = VTERM_KEY_END;
+    break; // GLFW_KEY_END
+  case 266:
+    vtKey = VTERM_KEY_PAGEUP;
+    break; // GLFW_KEY_PAGE_UP
+  case 267:
+    vtKey = VTERM_KEY_PAGEDOWN;
+    break; // GLFW_KEY_PAGE_DOWN
+  case 260:
+    vtKey = VTERM_KEY_INS;
+    break; // GLFW_KEY_INSERT
+  case 261:
+    vtKey = VTERM_KEY_DEL;
+    break; // GLFW_KEY_DELETE
+  case 290:
+    vtKey = static_cast<VTermKey>(VTERM_KEY_FUNCTION(1));
+    break; // GLFW_KEY_F1
+  case 291:
+    vtKey = static_cast<VTermKey>(VTERM_KEY_FUNCTION(2));
+    break; // GLFW_KEY_F2
+  case 292:
+    vtKey = static_cast<VTermKey>(VTERM_KEY_FUNCTION(3));
+    break; // GLFW_KEY_F3
+  case 293:
+    vtKey = static_cast<VTermKey>(VTERM_KEY_FUNCTION(4));
+    break; // GLFW_KEY_F4
+  case 294:
+    vtKey = static_cast<VTermKey>(VTERM_KEY_FUNCTION(5));
+    break; // GLFW_KEY_F5
+  case 295:
+    vtKey = static_cast<VTermKey>(VTERM_KEY_FUNCTION(6));
+    break; // GLFW_KEY_F6
+  case 296:
+    vtKey = static_cast<VTermKey>(VTERM_KEY_FUNCTION(7));
+    break; // GLFW_KEY_F7
+  case 297:
+    vtKey = static_cast<VTermKey>(VTERM_KEY_FUNCTION(8));
+    break; // GLFW_KEY_F8
+  case 298:
+    vtKey = static_cast<VTermKey>(VTERM_KEY_FUNCTION(9));
+    break; // GLFW_KEY_F9
+  case 299:
+    vtKey = static_cast<VTermKey>(VTERM_KEY_FUNCTION(10));
+    break; // GLFW_KEY_F10
+  case 300:
+    vtKey = static_cast<VTermKey>(VTERM_KEY_FUNCTION(11));
+    break; // GLFW_KEY_F11
+  case 301:
+    vtKey = static_cast<VTermKey>(VTERM_KEY_FUNCTION(12));
+    break; // GLFW_KEY_F12
+  default:
+    // Handle Ctrl/Alt + character combinations
+    // GLFW key codes: SPACE=32, 0-9=48-57, A-Z=65-90
+    if (mods & (0x0002 | 0x0004)) { // CTRL or ALT
+      uint32_t ch = 0;
+      if (key == 32) { // GLFW_KEY_SPACE
+        ch = ' ';
+      } else if (key >= 48 && key <= 57) { // GLFW_KEY_0 - GLFW_KEY_9
+        ch = static_cast<uint32_t>(key);
+      } else if (key >= 65 && key <= 90) {    // GLFW_KEY_A - GLFW_KEY_Z
+        ch = static_cast<uint32_t>(key + 32); // lowercase
       }
-      return;
+      if (ch != 0) {
+        ydebug("sendSpecialKey: sending ctrl/alt char '{}' ({})", (char)ch, ch);
+        vterm_keyboard_unichar(_vterm, ch, vtMods);
+      }
+    }
+    return;
   }
 
   vterm_keyboard_key(_vterm, vtKey, vtMods);
@@ -2385,39 +2568,45 @@ void GPUScreenImpl::sendSpecialKey(int key, int mods) {
 void GPUScreenImpl::setOutputCallback(OutputCallback cb) {
   _outputCallback = std::move(cb);
   if (_vterm && _outputCallback) {
-    vterm_output_set_callback(_vterm, [](const char* data, size_t len, void* user) {
-      auto* self = static_cast<GPUScreenImpl*>(user);
-      if (self->_outputCallback) {
-        self->_outputCallback(data, len);
-      }
-    }, this);
+    vterm_output_set_callback(
+        _vterm,
+        [](const char *data, size_t len, void *user) {
+          auto *self = static_cast<GPUScreenImpl *>(user);
+          if (self->_outputCallback) {
+            self->_outputCallback(data, len);
+          }
+        },
+        this);
   }
 }
 
 void GPUScreenImpl::registerForFocus() {
   auto loop = base::EventLoop::instance();
-  loop->registerListener(base::Event::Type::SetFocus, sharedAs<base::EventListener>());
-  loop->registerListener(base::Event::Type::MouseDown, sharedAs<base::EventListener>());
+  loop->registerListener(base::Event::Type::SetFocus,
+                         sharedAs<base::EventListener>());
+  loop->registerListener(base::Event::Type::MouseDown,
+                         sharedAs<base::EventListener>());
   yinfo("GPUScreen {} registered for SetFocus and MouseDown events", _id);
 
   // Auto-focus on startup so keyboard works immediately
   loop->dispatch(base::Event::focusEvent(_id));
 }
 
-Result<bool> GPUScreenImpl::onEvent(const base::Event& event) {
+Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
   // Handle mouse click - dispatch SetFocus if clicked on our surface
   if (event.type == base::Event::Type::MouseDown) {
     float mx = event.mouse.x;
     float my = event.mouse.y;
-    ydebug("GPUScreen {} MouseDown at ({}, {}), viewport=({},{} {}x{})",
-           _id, mx, my, _viewportX, _viewportY, _viewportWidth, _viewportHeight);
+    ydebug("GPUScreen {} MouseDown at ({}, {}), viewport=({},{} {}x{})", _id,
+           mx, my, _viewportX, _viewportY, _viewportWidth, _viewportHeight);
 
     // Only check bounds if viewport is set
     if (_viewportWidth > 0 && _viewportHeight > 0) {
       // Check if click is within our viewport
       if (mx >= _viewportX && mx < _viewportX + _viewportWidth &&
           my >= _viewportY && my < _viewportY + _viewportHeight) {
-        yinfo("GPUScreen {} clicked at ({}, {}), dispatching SetFocus", _id, mx, my);
+        yinfo("GPUScreen {} clicked at ({}, {}), dispatching SetFocus", _id, mx,
+              my);
         auto loop = base::EventLoop::instance();
         loop->dispatch(base::Event::focusEvent(_id));
         return Ok(true);
@@ -2433,8 +2622,10 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event& event) {
       if (!_focused) {
         _focused = true;
         // Register for keyboard events
-        loop->registerListener(base::Event::Type::Char, sharedAs<base::EventListener>());
-        loop->registerListener(base::Event::Type::KeyDown, sharedAs<base::EventListener>());
+        loop->registerListener(base::Event::Type::Char,
+                               sharedAs<base::EventListener>());
+        loop->registerListener(base::Event::Type::KeyDown,
+                               sharedAs<base::EventListener>());
         yinfo("GPUScreen {} gained focus, registered for keyboard events", _id);
       }
     } else {
@@ -2442,9 +2633,12 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event& event) {
       if (_focused) {
         _focused = false;
         // Deregister from keyboard events (but keep SetFocus registration)
-        loop->deregisterListener(base::Event::Type::Char, sharedAs<base::EventListener>());
-        loop->deregisterListener(base::Event::Type::KeyDown, sharedAs<base::EventListener>());
-        yinfo("GPUScreen {} lost focus, deregistered from keyboard events", _id);
+        loop->deregisterListener(base::Event::Type::Char,
+                                 sharedAs<base::EventListener>());
+        loop->deregisterListener(base::Event::Type::KeyDown,
+                                 sharedAs<base::EventListener>());
+        yinfo("GPUScreen {} lost focus, deregistered from keyboard events",
+              _id);
       }
     }
     // Don't consume - all GPUScreens need to see SetFocus
@@ -2454,13 +2648,15 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event& event) {
   // Handle keyboard events (only when focused)
   if (_focused) {
     if (event.type == base::Event::Type::Char) {
-      ydebug("GPUScreen::onEvent: Char codepoint={} mods={}", event.chr.codepoint, event.chr.mods);
+      ydebug("GPUScreen::onEvent: Char codepoint={} mods={}",
+             event.chr.codepoint, event.chr.mods);
       sendKey(event.chr.codepoint, event.chr.mods);
       return Ok(true);
     }
 
     if (event.type == base::Event::Type::KeyDown) {
-      ydebug("GPUScreen::onEvent: KeyDown key={} mods={}", event.key.key, event.key.mods);
+      ydebug("GPUScreen::onEvent: KeyDown key={} mods={}", event.key.key,
+             event.key.mods);
       sendSpecialKey(event.key.key, event.key.mods);
       return Ok(true);
     }
@@ -2470,7 +2666,8 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event& event) {
 }
 
 Result<void> GPUScreenImpl::initPipeline() {
-  if (_pipelineInitialized) return Ok();
+  if (_pipelineInitialized)
+    return Ok();
 
   WGPUDevice device = _gpuContext.device;
   yinfo("GPUScreenImpl::initPipeline: initializing per-instance resources");
@@ -2478,7 +2675,8 @@ Result<void> GPUScreenImpl::initPipeline() {
   // Verify ShaderManager has shared resources ready
   auto shaderMgr = ShaderManager::instance();
   if (!shaderMgr->getGridPipeline() || !shaderMgr->getGridBindGroupLayout()) {
-    return Err<void>("ShaderManager not initialized - shared pipeline resources not available");
+    return Err<void>("ShaderManager not initialized - shared pipeline "
+                     "resources not available");
   }
 
   // Create per-instance uniform buffer only
@@ -2497,9 +2695,9 @@ Result<void> GPUScreenImpl::initPipeline() {
 }
 
 Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
-  const Cell* cells = getCellData();
+  const Cell *cells = getCellData();
   if (!cells || _cols == 0 || _rows == 0) {
-    return Ok();  // Nothing to render
+    return Ok(); // Nothing to render
   }
 
   // Initialize pipeline on first render
@@ -2515,7 +2713,8 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
 
   // Recreate cell buffer if grid size changed
   size_t requiredSize = static_cast<size_t>(_cols) * _rows * sizeof(Cell);
-  if (_cols != _textureCols || _rows != _textureRows || !_cellBuffer || _cellBufferSize < requiredSize) {
+  if (_cols != _textureCols || _rows != _textureRows || !_cellBuffer ||
+      _cellBufferSize < requiredSize) {
     if (_cellBuffer) {
       wgpuBufferRelease(_cellBuffer);
       _cellBuffer = nullptr;
@@ -2533,23 +2732,25 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
     _textureCols = _cols;
     _textureRows = _rows;
     _needsBindGroupRecreation = true;
-    yinfo("GPUScreenImpl::render: created cell buffer {}x{} ({} bytes)", _cols, _rows, requiredSize);
+    yinfo("GPUScreenImpl::render: created cell buffer {}x{} ({} bytes)", _cols,
+          _rows, requiredSize);
   }
 
   // Recreate bind group if needed
   if (_needsBindGroupRecreation || !_bindGroup ||
-      (_msdfFont && _msdfFont->getResourceVersion() != _lastFontResourceVersion)) {
+      (_msdfFont &&
+       _msdfFont->getResourceVersion() != _lastFontResourceVersion)) {
     if (_bindGroup) {
       wgpuBindGroupRelease(_bindGroup);
       _bindGroup = nullptr;
     }
 
-    if (!_msdfFont || !_msdfFont->getTextureView() || !_msdfFont->getSampler() ||
-        !_msdfFont->getGlyphMetadataBuffer()) {
+    if (!_msdfFont || !_msdfFont->getTextureView() ||
+        !_msdfFont->getSampler() || !_msdfFont->getGlyphMetadataBuffer()) {
       return Err<void>("MSDF font resources not ready");
     }
-    if (!_bitmapFont || !_bitmapFont->getTextureView() || !_bitmapFont->getSampler() ||
-        !_bitmapFont->getMetadataBuffer()) {
+    if (!_bitmapFont || !_bitmapFont->getTextureView() ||
+        !_bitmapFont->getSampler() || !_bitmapFont->getMetadataBuffer()) {
       return Err<void>("Bitmap font resources not ready");
     }
 
@@ -2567,7 +2768,8 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
 
     bgEntries[3].binding = 3;
     bgEntries[3].buffer = _msdfFont->getGlyphMetadataBuffer();
-    bgEntries[3].size = _msdfFont->getBufferGlyphCount() * sizeof(GlyphMetadataGPU);
+    bgEntries[3].size =
+        _msdfFont->getBufferGlyphCount() * sizeof(GlyphMetadataGPU);
 
     bgEntries[4].binding = 4;
     bgEntries[4].buffer = _cellBuffer;
@@ -2581,8 +2783,10 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
 
     bgEntries[7].binding = 7;
     bgEntries[7].buffer = _bitmapFont->getMetadataBuffer();
-    uint32_t glyphsPerRow = _bitmapFont->getAtlasWidth() / _bitmapFont->getGlyphSize();
-    bgEntries[7].size = glyphsPerRow * glyphsPerRow * sizeof(BitmapGlyphMetadata);
+    uint32_t glyphsPerRow =
+        _bitmapFont->getAtlasWidth() / _bitmapFont->getGlyphSize();
+    bgEntries[7].size =
+        glyphsPerRow * glyphsPerRow * sizeof(BitmapGlyphMetadata);
 
     WGPUBindGroupDescriptor bindGroupDesc = {};
     bindGroupDesc.layout = shaderMgr->getGridBindGroupLayout();
@@ -2600,7 +2804,25 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
   }
 
   // Upload cells to GPU
-  wgpuQueueWriteBuffer(queue, _cellBuffer, 0, cells, _cols * _rows * sizeof(Cell));
+  wgpuQueueWriteBuffer(queue, _cellBuffer, 0, cells,
+                       _cols * _rows * sizeof(Cell));
+
+  // Debug: log first few non-default colored cells during render
+  static int renderDebugCount = 0;
+  if (renderDebugCount < 5) {
+    for (size_t i = 0; i < std::min(static_cast<size_t>(50), static_cast<size_t>(_cols * _rows)); i++) {
+      const Cell& c = cells[i];
+      bool hasColor = (c.fgR != 240 || c.fgG != 240 || c.fgB != 240) ||
+                      (c.bgR != 0 || c.bgG != 0 || c.bgB != 0);
+      if (hasColor && c.glyph != 0 && c.glyph != ' ') {
+        yinfo("render[{}]: glyph={} fg=({},{},{}) bg=({},{},{}) style={}",
+              i, c.glyph, c.fgR, c.fgG, c.fgB, c.bgR, c.bgG, c.bgB, c.style);
+        renderDebugCount++;
+        if (renderDebugCount >= 5) break;
+      }
+    }
+  }
+
 
   // Calculate cell size from font base size and zoom level
   float cellWidth = _baseCellWidth * _zoomLevel;
@@ -2611,13 +2833,15 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
   float screenHeight = static_cast<float>(_rows) * cellHeight;
 
   // Update uniforms
-  _uniforms.projection = glm::ortho(0.0f, screenWidth, screenHeight, 0.0f, -1.0f, 1.0f);
+  _uniforms.projection =
+      glm::ortho(0.0f, screenWidth, screenHeight, 0.0f, -1.0f, 1.0f);
   _uniforms.screenSize = {screenWidth, screenHeight};
   _uniforms.cellSize = {cellWidth, cellHeight};
   _uniforms.gridSize = {static_cast<float>(_cols), static_cast<float>(_rows)};
   _uniforms.pixelRange = _msdfFont ? _msdfFont->getPixelRange() : 2.0f;
   _uniforms.scale = _zoomLevel;
-  _uniforms.cursorPos = {static_cast<float>(_cursorCol), static_cast<float>(_cursorRow)};
+  _uniforms.cursorPos = {static_cast<float>(_cursorCol),
+                         static_cast<float>(_cursorRow)};
   _uniforms.cursorVisible = _cursorVisible ? 1.0f : 0.0f;
   _uniforms.viewportOrigin = {_viewportX, _viewportY};
   wgpuQueueWriteBuffer(queue, _uniformBuffer, 0, &_uniforms, sizeof(Uniforms));
@@ -2625,15 +2849,17 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
   // Set viewport to this terminal's tile bounds
   if (_viewportWidth > 0 && _viewportHeight > 0) {
     wgpuRenderPassEncoderSetViewport(pass, _viewportX, _viewportY,
-                                      _viewportWidth, _viewportHeight,
-                                      0.0f, 1.0f);
+                                     _viewportWidth, _viewportHeight, 0.0f,
+                                     1.0f);
   }
 
   // Draw using shared pipeline and quad vertex buffer from ShaderManager
   wgpuRenderPassEncoderSetPipeline(pass, shaderMgr->getGridPipeline());
-  wgpuRenderPassEncoderSetBindGroup(pass, 0, _gpuContext.sharedBindGroup, 0, nullptr);
+  wgpuRenderPassEncoderSetBindGroup(pass, 0, _gpuContext.sharedBindGroup, 0,
+                                    nullptr);
   wgpuRenderPassEncoderSetBindGroup(pass, 1, _bindGroup, 0, nullptr);
-  wgpuRenderPassEncoderSetVertexBuffer(pass, 0, shaderMgr->getQuadVertexBuffer(), 0, WGPU_WHOLE_SIZE);
+  wgpuRenderPassEncoderSetVertexBuffer(
+      pass, 0, shaderMgr->getQuadVertexBuffer(), 0, WGPU_WHOLE_SIZE);
   wgpuRenderPassEncoderDraw(pass, 6, 1, 0, 0);
 
   return Ok();
@@ -2643,9 +2869,20 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
 // Factory
 //=============================================================================
 
-Result<GPUScreen::Ptr> GPUScreen::create(const GPUContext& gpuContext) noexcept {
+Result<GPUScreen::Ptr>
+GPUScreen::create(const GPUContext &gpuContext) noexcept {
   auto screen = std::make_shared<GPUScreenImpl>(gpuContext);
   screen->registerForFocus();
+  return Ok<Ptr>(screen);
+}
+
+Result<GPUScreen::Ptr> GPUScreen::createForTest(uint32_t cols,
+                                                uint32_t rows) noexcept {
+  GPUContext nullContext = {}; // Empty context - no GPU
+  auto screen = std::make_shared<GPUScreenImpl>(nullContext);
+  // Don't register for focus - no event loop in tests
+  // Resize to requested dimensions
+  screen->resize(cols, rows);
   return Ok<Ptr>(screen);
 }
 

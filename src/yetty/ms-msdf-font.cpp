@@ -329,7 +329,16 @@ uint32_t MsMsdfFont::getGlyphIndex(uint32_t codepoint, Style style) {
 
 uint32_t MsMsdfFont::getGlyphIndex(uint32_t codepoint, bool bold, bool italic) {
     Style style = static_cast<Style>(styleIndex(bold, italic));
-    return getGlyphIndex(codepoint, style);
+    uint32_t idx = getGlyphIndex(codepoint, style);
+    if (bold || italic) {
+        static int debugCount = 0;
+        if (debugCount < 20) {
+            debugCount++;
+            yinfo("MsMsdfFont::getGlyphIndex: cp={} bold={} italic={} style={} -> idx={}",
+                  codepoint, bold, italic, static_cast<int>(style), idx);
+        }
+    }
+    return idx;
 }
 
 void MsMsdfFont::uploadToGpu() {

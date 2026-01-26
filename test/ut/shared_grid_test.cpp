@@ -5,6 +5,11 @@
 // Covers: creation, buffer swapping, data access, codepoint storage
 //=============================================================================
 
+// Include C++ standard headers before boost/ut.hpp (cdb version file conflict)
+#include <cstddef>
+#include <version>
+#include <algorithm>
+
 #include <boost/ut.hpp>
 #include "yetty/shared-grid.h"
 #include <cstring>

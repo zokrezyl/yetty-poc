@@ -104,6 +104,9 @@ private:
     double _lastFpsTime = 0.0;
     uint32_t _frameCount = 0;
 
+    // Command line options
+    std::string _executeCommand;
+
     static NewYettyImpl* s_instance;
 };
 
@@ -160,8 +163,13 @@ Result<void> NewYettyImpl::init(int argc, char* argv[]) noexcept {
 }
 
 Result<void> NewYettyImpl::parseArgs(int argc, char* argv[]) noexcept {
-    (void)argc;
-    (void)argv;
+    for (int i = 1; i < argc; i++) {
+        std::string arg = argv[i];
+        if (arg == "-e" && i + 1 < argc) {
+            _executeCommand = argv[++i];
+            yinfo("Execute command: {}", _executeCommand);
+        }
+    }
     return Ok();
 }
 
@@ -536,13 +544,13 @@ Result<Workspace::Ptr> NewYettyImpl::createWorkspace() noexcept {
     workspace->resize(static_cast<float>(_initialWidth), static_cast<float>(_initialHeight));
 
 #if !YETTY_WEB && !defined(__ANDROID__)
-    // Create 2x2 matrix of terminal panes
-    auto matrixResult = createMatrix2x2(*workspace);
-    if (!matrixResult) {
-        return Err<Workspace::Ptr>("Failed to create 2x2 matrix", matrixResult);
+    // Create single pane for debugging
+    auto paneResult = workspace->createPane();
+    if (!paneResult) {
+        return Err<Workspace::Ptr>("Failed to create pane", paneResult);
     }
-    workspace->setRoot(*matrixResult);
-    yinfo("Created 2x2 terminal matrix (4 terminals)");
+    workspace->setRoot(*paneResult);
+    yinfo("Created single terminal pane");
 #endif
 
     _workspaces.push_back(workspace);
@@ -702,6 +710,37 @@ void NewYettyImpl::mainLoopIteration() noexcept {
     if (!viewResult) return;
     WGPUTextureView targetView = *viewResult;
 
+    // Update shared uniforms
+    static double lastTime = glfwGetTime();
+    double now = glfwGetTime();
+    float deltaTime = static_cast<float>(now - lastTime);
+    lastTime = now;
+
+    int windowWidth, windowHeight;
+    glfwGetWindowSize(_window, &windowWidth, &windowHeight);
+
+    double mouseXd, mouseYd;
+    glfwGetCursorPos(_window, &mouseXd, &mouseYd);
+
+    _sharedUniforms.time = static_cast<float>(now);
+    _sharedUniforms.deltaTime = deltaTime;
+    _sharedUniforms.screenWidth = static_cast<float>(windowWidth);
+    _sharedUniforms.screenHeight = static_cast<float>(windowHeight);
+    _sharedUniforms.mouseX = static_cast<float>(mouseXd);
+    _sharedUniforms.mouseY = static_cast<float>(mouseYd);
+    wgpuQueueWriteBuffer(_queue, _sharedUniformBuffer, 0, &_sharedUniforms, sizeof(SharedUniforms));
+
+    // Upload any pending font glyphs (e.g., bold/italic loaded on demand)
+    auto fontMgr = YettyFontManager::instance();
+    if (auto msdfFont = fontMgr->getDefaultMsMsdfFont()) {
+        if (msdfFont->hasPendingGlyphs()) {
+            auto uploadResult = msdfFont->uploadPendingGlyphs(_device, _queue);
+            if (!uploadResult) {
+                ywarn("Failed to upload pending glyphs: {}", uploadResult.error().message());
+            }
+        }
+    }
+
     WGPUCommandEncoderDescriptor encoderDesc = {};
     WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(_device, &encoderDesc);
     if (!encoder) return;
@@ -737,11 +776,11 @@ void NewYettyImpl::mainLoopIteration() noexcept {
     present();
 
     _frameCount++;
-    double now = glfwGetTime();
-    if (now - _lastFpsTime >= 1.0) {
+    double fpsNow = glfwGetTime();
+    if (fpsNow - _lastFpsTime >= 1.0) {
         yinfo("FPS: {}", _frameCount);
         _frameCount = 0;
-        _lastFpsTime = now;
+        _lastFpsTime = fpsNow;
     }
 }
 

@@ -245,7 +245,8 @@ if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
         ${CDB_SOURCE_DIR}/seek_set.c
         ${CDB_SOURCE_DIR}/seek_cur.c
     )
-    target_include_directories(cdb PUBLIC ${CDB_SOURCE_DIR})
+    # Use SYSTEM to avoid cdb's 'version' file conflicting with C++20 <version> header
+    target_include_directories(cdb SYSTEM PUBLIC ${CDB_SOURCE_DIR})
     target_compile_options(cdb PRIVATE -w)  # Suppress warnings in third-party code
     set_target_properties(cdb PROPERTIES POSITION_INDEPENDENT_CODE ON)
 endif()

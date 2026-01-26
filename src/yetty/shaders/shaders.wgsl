@@ -227,8 +227,8 @@ fn renderShaderGlyph(glyphIndex: u32, localUV: vec2<f32>, time: f32, fg: u32, bg
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    // Convert fragment position to viewport-local pixel coordinates
-    let pixelPos = input.position.xy - grid.viewportOrigin;
+    // Convert fragment position to pixel coordinates
+    let pixelPos = input.position.xy;
 
     // Calculate grid dimensions in pixels
     let gridPixelWidth = grid.gridSize.x * grid.cellSize.x;

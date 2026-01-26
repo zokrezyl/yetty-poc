@@ -22,6 +22,9 @@ public:
 
     static Result<Ptr> create(const GPUContext& gpu) noexcept;
 
+    // Test-only factory - creates GPUScreen without GPU resources
+    static Result<Ptr> createForTest(uint32_t cols, uint32_t rows) noexcept;
+
     virtual ~GPUScreen() = default;
 
     // Write data from PTY to vterm
@@ -49,6 +52,10 @@ public:
     // Cell size (from font metrics)
     virtual float getCellWidth() const = 0;
     virtual float getCellHeight() const = 0;
+
+    // Test interface - access cell data
+    virtual const Cell* getCellData() const = 0;
+    virtual Cell getCell(int row, int col) const = 0;
 
 protected:
     GPUScreen() = default;
