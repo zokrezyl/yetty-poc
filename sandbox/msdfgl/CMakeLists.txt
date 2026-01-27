@@ -62,3 +62,6 @@ add_subdirectory(gen-cdb)
 
 # CDB comparison tool
 add_subdirectory(compare)
+
+# Atlas viewer (debug tool)
+add_subdirectory(render-atlas)

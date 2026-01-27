@@ -719,7 +719,7 @@ void cleanup() {
 int main(int argc, char* argv[]) {
     // Default settings
     std::string fontPath = "assets/DejaVuSansMNerdFontMono-Regular.ttf";
-    std::string outputDir = "/tmp/msdfgl-gen";
+    std::string outputPath;  // Empty means auto-generate from font name
     bool includeNerdFonts = true;
 
     // Parse arguments
@@ -728,7 +728,7 @@ int main(int argc, char* argv[]) {
         if (arg == "--font" && i + 1 < argc) {
             fontPath = argv[++i];
         } else if (arg == "--output" && i + 1 < argc) {
-            outputDir = argv[++i];
+            outputPath = argv[++i];
         } else if (arg == "--no-nerd") {
             includeNerdFonts = false;
         } else if (arg == "--help" || arg == "-h") {
@@ -736,19 +736,24 @@ int main(int argc, char* argv[]) {
                       << "Usage: " << argv[0] << " [options]\n\n"
                       << "Options:\n"
                       << "  --font PATH     Font file (default: assets/DejaVuSansMNerdFontMono-Regular.ttf)\n"
-                      << "  --output DIR    Output directory (default: /tmp/msdfgl-gen)\n"
+                      << "  --output FILE   Output .cdb file (default: /tmp/<font-name>.cdb)\n"
                       << "  --no-nerd       Exclude Nerd Font symbols\n"
-                      << "  --help, -h      Show this help\n\n"
-                      << "Output: <output-dir>/<font-name>-gpu.cdb\n";
+                      << "  --help, -h      Show this help\n";
             return 0;
         }
+    }
+
+    // Auto-generate output path if not specified
+    if (outputPath.empty()) {
+        std::filesystem::path fp(fontPath);
+        outputPath = "/tmp/" + fp.stem().string() + ".cdb";
     }
 
     std::cout << "========================================\n"
               << "MSDFGL GPU CDB Generator\n"
               << "========================================\n"
               << "Font: " << fontPath << "\n"
-              << "Output: " << outputDir << "\n"
+              << "Output: " << outputPath << "\n"
               << "Nerd Fonts: " << (includeNerdFonts ? "yes" : "no") << "\n"
               << "========================================\n" << std::endl;
 
@@ -802,10 +807,12 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // Create output directory and write CDB
-    std::filesystem::create_directories(outputDir);
-    std::filesystem::path fp(fontPath);
-    std::string cdbPath = outputDir + "/" + fp.stem().string() + "-gpu.cdb";
+    // Create output directory if needed
+    std::filesystem::path outPath(outputPath);
+    if (outPath.has_parent_path()) {
+        std::filesystem::create_directories(outPath.parent_path());
+    }
+    std::string cdbPath = outputPath;
 
     if (!writeCdb(cdbPath, atlasData, atlasWidth, atlasHeight)) {
         std::cerr << "Failed to write CDB" << std::endl;

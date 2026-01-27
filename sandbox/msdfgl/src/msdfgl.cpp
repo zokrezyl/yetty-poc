@@ -16,6 +16,8 @@
 #include <climits>
 #include <string>
 #include <stdexcept>
+#include <fstream>
+#include <sstream>
 
 namespace msdfgl {
 
@@ -177,6 +179,208 @@ int glyphBufferSize(FT_Face face, int code, size_t& metaSize, size_t& pointSize)
     metaSize = ctx.metaSize;
     pointSize = ctx.dataSize * 2 * sizeof(float);
     return 0;
+}
+
+// Bounds calculation - computes actual outline bounds like msdf-gen does
+struct GlyphBounds {
+    float minX, minY, maxX, maxY;
+    bool empty;
+};
+
+struct BoundsCtx {
+    float minX, minY, maxX, maxY;
+    float curX, curY;
+    bool first;
+};
+
+static void updateBounds(BoundsCtx* ctx, float x, float y) {
+    if (ctx->first) {
+        ctx->minX = ctx->maxX = x;
+        ctx->minY = ctx->maxY = y;
+        ctx->first = false;
+    } else {
+        if (x < ctx->minX) ctx->minX = x;
+        if (x > ctx->maxX) ctx->maxX = x;
+        if (y < ctx->minY) ctx->minY = y;
+        if (y > ctx->maxY) ctx->maxY = y;
+    }
+}
+
+static int boundsMoveTo(const FT_Vector* to, void* user) {
+    auto* ctx = static_cast<BoundsCtx*>(user);
+    float x = to->x / SERIALIZER_SCALE;
+    float y = to->y / SERIALIZER_SCALE;
+    updateBounds(ctx, x, y);
+    ctx->curX = x;
+    ctx->curY = y;
+    return 0;
+}
+
+static int boundsLineTo(const FT_Vector* to, void* user) {
+    auto* ctx = static_cast<BoundsCtx*>(user);
+    float x = to->x / SERIALIZER_SCALE;
+    float y = to->y / SERIALIZER_SCALE;
+    updateBounds(ctx, x, y);
+    ctx->curX = x;
+    ctx->curY = y;
+    return 0;
+}
+
+// Evaluate quadratic bezier at parameter t
+static float quadBezier(float p0, float p1, float p2, float t) {
+    float mt = 1.0f - t;
+    return mt * mt * p0 + 2.0f * mt * t * p1 + t * t * p2;
+}
+
+static int boundsConicTo(const FT_Vector* control, const FT_Vector* to, void* user) {
+    auto* ctx = static_cast<BoundsCtx*>(user);
+    float p0x = ctx->curX, p0y = ctx->curY;  // start point
+    float p1x = control->x / SERIALIZER_SCALE;  // control point
+    float p1y = control->y / SERIALIZER_SCALE;
+    float p2x = to->x / SERIALIZER_SCALE;  // end point
+    float p2y = to->y / SERIALIZER_SCALE;
+
+    // Always include endpoints
+    updateBounds(ctx, p2x, p2y);
+
+    // Find extrema using derivative: t = (p1-p0) / (2*p1 - p0 - p2)
+    // For X axis
+    float botx = 2.0f * p1x - p0x - p2x;
+    if (std::abs(botx) > 1e-6f) {
+        float tx = (p1x - p0x) / botx;
+        if (tx > 0.0f && tx < 1.0f) {
+            float ex = quadBezier(p0x, p1x, p2x, tx);
+            float ey = quadBezier(p0y, p1y, p2y, tx);
+            updateBounds(ctx, ex, ey);
+        }
+    }
+    // For Y axis
+    float boty = 2.0f * p1y - p0y - p2y;
+    if (std::abs(boty) > 1e-6f) {
+        float ty = (p1y - p0y) / boty;
+        if (ty > 0.0f && ty < 1.0f) {
+            float ex = quadBezier(p0x, p1x, p2x, ty);
+            float ey = quadBezier(p0y, p1y, p2y, ty);
+            updateBounds(ctx, ex, ey);
+        }
+    }
+
+    ctx->curX = p2x;
+    ctx->curY = p2y;
+    return 0;
+}
+
+// Evaluate cubic bezier at parameter t
+static float cubicBezier(float p0, float p1, float p2, float p3, float t) {
+    float mt = 1.0f - t;
+    float mt2 = mt * mt;
+    float t2 = t * t;
+    return mt2 * mt * p0 + 3.0f * mt2 * t * p1 + 3.0f * mt * t2 * p2 + t2 * t * p3;
+}
+
+// Solve quadratic ax² + bx + c = 0, return number of solutions in [0,1]
+static int solveQuadraticIn01(float a, float b, float c, float* solutions) {
+    int count = 0;
+    if (std::abs(a) < 1e-12f) {
+        // Linear: bx + c = 0
+        if (std::abs(b) > 1e-12f) {
+            float t = -c / b;
+            if (t > 0.0f && t < 1.0f)
+                solutions[count++] = t;
+        }
+    } else {
+        float disc = b * b - 4.0f * a * c;
+        if (disc >= 0.0f) {
+            float sd = std::sqrt(disc);
+            float t1 = (-b - sd) / (2.0f * a);
+            float t2 = (-b + sd) / (2.0f * a);
+            if (t1 > 0.0f && t1 < 1.0f)
+                solutions[count++] = t1;
+            if (t2 > 0.0f && t2 < 1.0f && std::abs(t2 - t1) > 1e-12f)
+                solutions[count++] = t2;
+        }
+    }
+    return count;
+}
+
+static int boundsCubicTo(const FT_Vector* c1, const FT_Vector* c2, const FT_Vector* to, void* user) {
+    auto* ctx = static_cast<BoundsCtx*>(user);
+    float p0x = ctx->curX, p0y = ctx->curY;
+    float p1x = c1->x / SERIALIZER_SCALE, p1y = c1->y / SERIALIZER_SCALE;
+    float p2x = c2->x / SERIALIZER_SCALE, p2y = c2->y / SERIALIZER_SCALE;
+    float p3x = to->x / SERIALIZER_SCALE, p3y = to->y / SERIALIZER_SCALE;
+
+    // Always include endpoints
+    updateBounds(ctx, p3x, p3y);
+
+    // Derivative coefficients: B'(t) = a2*t² + a1*t + a0
+    // a0 = p1 - p0
+    // a1 = 2*(p2 - p1 - a0) = 2*(p2 - 2*p1 + p0)
+    // a2 = p3 - 3*p2 + 3*p1 - p0
+    float solutions[2];
+    int n;
+
+    // X axis extrema
+    float a0x = p1x - p0x;
+    float a1x = 2.0f * (p2x - 2.0f * p1x + p0x);
+    float a2x = p3x - 3.0f * p2x + 3.0f * p1x - p0x;
+    n = solveQuadraticIn01(a2x, a1x, a0x, solutions);
+    for (int i = 0; i < n; i++) {
+        float ex = cubicBezier(p0x, p1x, p2x, p3x, solutions[i]);
+        float ey = cubicBezier(p0y, p1y, p2y, p3y, solutions[i]);
+        updateBounds(ctx, ex, ey);
+    }
+
+    // Y axis extrema
+    float a0y = p1y - p0y;
+    float a1y = 2.0f * (p2y - 2.0f * p1y + p0y);
+    float a2y = p3y - 3.0f * p2y + 3.0f * p1y - p0y;
+    n = solveQuadraticIn01(a2y, a1y, a0y, solutions);
+    for (int i = 0; i < n; i++) {
+        float ex = cubicBezier(p0x, p1x, p2x, p3x, solutions[i]);
+        float ey = cubicBezier(p0y, p1y, p2y, p3y, solutions[i]);
+        updateBounds(ctx, ex, ey);
+    }
+
+    ctx->curX = p3x;
+    ctx->curY = p3y;
+    return 0;
+}
+
+GlyphBounds getGlyphBounds(FT_Face face, int code) {
+    GlyphBounds result = {0, 0, 0, 0, true};
+
+    if (FT_Load_Char(face, code, FT_LOAD_NO_SCALE))
+        return result;
+
+    if (face->glyph->outline.n_points == 0)
+        return result;  // Empty glyph
+
+    FT_Outline_Funcs fns = {};
+    fns.shift = 0;
+    fns.delta = 0;
+    fns.move_to = boundsMoveTo;
+    fns.line_to = boundsLineTo;
+    fns.conic_to = boundsConicTo;
+    fns.cubic_to = boundsCubicTo;
+
+    BoundsCtx ctx;
+    ctx.first = true;
+    ctx.curX = ctx.curY = 0;
+    ctx.minX = ctx.minY = ctx.maxX = ctx.maxY = 0;
+
+    if (FT_Outline_Decompose(&face->glyph->outline, &fns, &ctx))
+        return result;
+
+    if (ctx.first)
+        return result;  // No points processed
+
+    result.minX = ctx.minX;
+    result.minY = ctx.minY;
+    result.maxX = ctx.maxX;
+    result.maxY = ctx.maxY;
+    result.empty = false;
+    return result;
 }
 
 struct GlyphDataCtx {
@@ -739,92 +943,27 @@ float Font::getVerticalAdvance(float size) const {
 // Context implementation
 //------------------------------------------------------------------------------
 
-// Embedded shader source
-static const char* MSDF_GEN_SHADER_SOURCE = R"(
-// MSDF Generation Shader - simplified version for compilation
-struct GenUniforms {
-    projection: mat4x4<f32>,
-    offset: vec2<f32>,
-    translate: vec2<f32>,
-    scale: vec2<f32>,
-    range: f32,
-    meta_offset: i32,
-    point_offset: i32,
-    glyph_height: f32,
-};
+// Shader file paths - these need to be set before Context creation
+static std::string sGenShaderPath = "shaders/msdf_gen.wgsl";
+static std::string sRenderShaderPath = "shaders/font_render.wgsl";
 
-@group(0) @binding(0) var<uniform> uniforms: GenUniforms;
-
-struct VertexOutput {
-    @builtin(position) position: vec4<f32>,
-};
-
-@vertex
-fn vs_main(@location(0) position: vec2<f32>) -> VertexOutput {
-    var output: VertexOutput;
-    output.position = uniforms.projection * vec4<f32>(position + uniforms.offset, 1.0, 1.0);
-    return output;
+// Helper to load shader from file
+static std::string loadShaderFile(const std::string& path) {
+    std::ifstream file(path);
+    if (!file.is_open()) {
+        std::fprintf(stderr, "[MSDFGL] Failed to open shader file: %s\n", path.c_str());
+        return "";
+    }
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+    return buffer.str();
 }
 
-@fragment
-fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
-    // Simplified - full implementation in msdf_gen.wgsl
-    return vec4<f32>(0.5, 0.5, 0.5, 1.0);
+// Set shader paths before creating Context
+void setShaderPaths(const std::string& genPath, const std::string& renderPath) {
+    sGenShaderPath = genPath;
+    sRenderShaderPath = renderPath;
 }
-)";
-
-static const char* FONT_RENDER_SHADER_SOURCE = R"(
-struct RenderUniforms {
-    projection: mat4x4<f32>,
-    font_projection: mat4x4<f32>,
-    padding: f32,
-    units_per_em: f32,
-    dpi: vec2<f32>,
-};
-
-@group(0) @binding(0) var<uniform> uniforms: RenderUniforms;
-@group(0) @binding(1) var font_atlas: texture_2d<f32>;
-@group(0) @binding(2) var font_sampler: sampler;
-
-struct VertexOutput {
-    @builtin(position) position: vec4<f32>,
-    @location(0) text_pos: vec2<f32>,
-    @location(1) text_color: vec4<f32>,
-    @location(2) strength: f32,
-};
-
-@vertex
-fn vs_main(
-    @location(0) position: vec2<f32>,
-    @location(1) color: vec4<f32>,
-    @location(2) glyph_index: i32,
-    @location(3) size: f32,
-    @location(4) y_offset: f32,
-    @location(5) skewness: f32,
-    @location(6) strength: f32,
-    @builtin(vertex_index) vertex_id: u32
-) -> VertexOutput {
-    var output: VertexOutput;
-    output.position = uniforms.projection * vec4<f32>(position, 0.0, 1.0);
-    output.text_pos = vec2<f32>(0.0, 0.0);
-    output.text_color = color;
-    output.strength = strength;
-    return output;
-}
-
-fn median(r: f32, g: f32, b: f32) -> f32 {
-    return max(min(r, g), min(max(r, g), b));
-}
-
-@fragment
-fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    let threshold = 1.0 - input.strength;
-    let s = textureSample(font_atlas, font_sampler, input.text_pos).rgb;
-    var sig_dist = median(s.r, s.g, s.b) - threshold;
-    let opacity = clamp(sig_dist + 0.5, 0.0, 1.0);
-    return mix(vec4<f32>(0.0, 0.0, 0.0, 0.0), input.text_color, opacity);
-}
-)";
 
 Context::Context(WGPUDevice device, const ContextConfig& config)
     : _device(device), _dpi{config.dpiX, config.dpiY} {
@@ -923,9 +1062,14 @@ void Context::cleanup() {
 bool Context::initShaders() {
     std::fprintf(stderr, "[MSDFGL] initShaders() starting...\n");
 
-    // Create generation shader module
-    std::string genShaderSource(MSDF_GEN_SHADER_SOURCE);
-    std::fprintf(stderr, "[MSDFGL] Gen shader source length: %zu bytes\n", genShaderSource.size());
+    // Load generation shader from file
+    std::string genShaderSource = loadShaderFile(sGenShaderPath);
+    if (genShaderSource.empty()) {
+        std::fprintf(stderr, "[MSDFGL] Failed to load gen shader from: %s\n", sGenShaderPath.c_str());
+        return false;
+    }
+    std::fprintf(stderr, "[MSDFGL] Gen shader loaded from %s, length: %zu bytes\n",
+                 sGenShaderPath.c_str(), genShaderSource.size());
 
     WGPUShaderSourceWGSL wgslDesc = {};
     wgslDesc.chain.sType = WGPUSType_ShaderSourceWGSL;
@@ -942,9 +1086,14 @@ bool Context::initShaders() {
         return false;
     }
 
-    // Create render shader module
-    std::string renderShaderSource(FONT_RENDER_SHADER_SOURCE);
-    std::fprintf(stderr, "[MSDFGL] Render shader source length: %zu bytes\n", renderShaderSource.size());
+    // Load render shader from file
+    std::string renderShaderSource = loadShaderFile(sRenderShaderPath);
+    if (renderShaderSource.empty()) {
+        std::fprintf(stderr, "[MSDFGL] Failed to load render shader from: %s\n", sRenderShaderPath.c_str());
+        return false;
+    }
+    std::fprintf(stderr, "[MSDFGL] Render shader loaded from %s, length: %zu bytes\n",
+                 sRenderShaderPath.c_str(), renderShaderSource.size());
 
     WGPU_SHADER_CODE(wgslDesc, renderShaderSource);
     shaderDesc.label = WGPU_STR("MSDFGL Render Shader");
@@ -1236,11 +1385,38 @@ int Context::generateGlyphsInternal(Font& font, int32_t start, int32_t end,
             continue;
         }
 
-        // Add 2*range padding to match CPU generator's formula: ceil(logicalSize) + 2*padding
-        float bufferWidth = font.getFace()->glyph->metrics.width / SERIALIZER_SCALE + 2.0f * font.getRange();
-        float bufferHeight = font.getFace()->glyph->metrics.height / SERIALIZER_SCALE + 2.0f * font.getRange();
-        bufferWidth *= font.getScale();
-        bufferHeight *= font.getScale();
+        // Get actual outline bounds (like msdf-gen does) for precise sizing
+        auto bounds = serializer::getGlyphBounds(font.getFace(), code);
+
+        float bufferWidth, bufferHeight;
+        float glyphWidth, glyphHeight;
+
+        if (bounds.empty) {
+            // Fallback to FreeType metrics for empty/unusual glyphs
+            // Use same formula as bounds case: ceil(size * scale) + padding * 2
+            float metricsWidth = font.getFace()->glyph->metrics.width / SERIALIZER_SCALE;
+            float metricsHeight = font.getFace()->glyph->metrics.height / SERIALIZER_SCALE;
+            int padding = static_cast<int>(std::ceil(font.getRange()));
+            float logicalSizeX = metricsWidth * font.getScale();
+            float logicalSizeY = metricsHeight * font.getScale();
+            bufferWidth = std::ceil(logicalSizeX) + padding * 2;
+            bufferHeight = std::ceil(logicalSizeY) + padding * 2;
+            glyphWidth = static_cast<float>(font.getFace()->glyph->metrics.width);
+            glyphHeight = static_cast<float>(font.getFace()->glyph->metrics.height);
+        } else {
+            // Use actual outline bounds (matching CPU generator formula exactly)
+            // CPU: bitmapW = ceil(boundsWidth * scale) + padding * 2
+            float boundsWidth = bounds.maxX - bounds.minX;
+            float boundsHeight = bounds.maxY - bounds.minY;
+            int padding = static_cast<int>(std::ceil(font.getRange()));
+            float logicalSizeX = boundsWidth * font.getScale();
+            float logicalSizeY = boundsHeight * font.getScale();
+            bufferWidth = std::ceil(logicalSizeX) + padding * 2;
+            bufferHeight = std::ceil(logicalSizeY) + padding * 2;
+            // Store actual glyph dimensions in font units (for consistency with FreeType format)
+            glyphWidth = boundsWidth * SERIALIZER_SCALE;
+            glyphHeight = boundsHeight * SERIALIZER_SCALE;
+        }
 
         float offsetX, offsetY;
         atlas->allocateGlyph(bufferWidth, bufferHeight, offsetX, offsetY);
@@ -1251,8 +1427,8 @@ int Context::generateGlyphsInternal(Font& font, int32_t start, int32_t end,
         atlasIndex[i].sizeY = bufferHeight;
         atlasIndex[i].bearingX = static_cast<float>(font.getFace()->glyph->metrics.horiBearingX);
         atlasIndex[i].bearingY = static_cast<float>(font.getFace()->glyph->metrics.horiBearingY);
-        atlasIndex[i].glyphWidth = static_cast<float>(font.getFace()->glyph->metrics.width);
-        atlasIndex[i].glyphHeight = static_cast<float>(font.getFace()->glyph->metrics.height);
+        atlasIndex[i].glyphWidth = glyphWidth;
+        atlasIndex[i].glyphHeight = glyphHeight;
 
         // Check if we need to expand texture height
         while ((atlas->_offsetY + bufferHeight) > newTextureHeight) {
@@ -1278,24 +1454,196 @@ int Context::generateGlyphsInternal(Font& font, int32_t start, int32_t end,
     WGPUQueue queue = wgpuDeviceGetQueue(_device);
 
     if (!metadata.empty()) {
-        // Pad to 4-byte alignment (required by WebGPU)
-        size_t paddedSize = (metadata.size() + 3) & ~3;
-        if (paddedSize > metadata.size()) {
-            metadata.resize(paddedSize, 0);
+        // Convert metadata from bytes to uint32s (shader expects array<u32>)
+        std::vector<uint32_t> metadataU32(metadata.size());
+        for (size_t i = 0; i < metadata.size(); ++i) {
+            metadataU32[i] = static_cast<uint32_t>(static_cast<unsigned char>(metadata[i]));
         }
-        wgpuQueueWriteBuffer(queue, font._metaInputBuffer, 0, metadata.data(), metadata.size());
+        size_t requiredSize = metadataU32.size() * sizeof(uint32_t);
+        // Recreate buffer if too small
+        if (wgpuBufferGetSize(font._metaInputBuffer) < requiredSize) {
+            wgpuBufferDestroy(font._metaInputBuffer);
+            wgpuBufferRelease(font._metaInputBuffer);
+            WGPUBufferDescriptor bufDesc = {};
+            bufDesc.label = WGPU_STR("MSDFGL Meta Input Buffer");
+            bufDesc.size = requiredSize;
+            bufDesc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
+            font._metaInputBuffer = wgpuDeviceCreateBuffer(_device, &bufDesc);
+        }
+        wgpuQueueWriteBuffer(queue, font._metaInputBuffer, 0, metadataU32.data(), requiredSize);
     }
     if (!pointData.empty()) {
-        wgpuQueueWriteBuffer(queue, font._pointInputBuffer, 0, pointData.data(),
-                            pointData.size() * sizeof(float));
+        size_t requiredSize = pointData.size() * sizeof(float);
+        // Recreate buffer if too small
+        if (wgpuBufferGetSize(font._pointInputBuffer) < requiredSize) {
+            wgpuBufferDestroy(font._pointInputBuffer);
+            wgpuBufferRelease(font._pointInputBuffer);
+            WGPUBufferDescriptor bufDesc = {};
+            bufDesc.label = WGPU_STR("MSDFGL Point Input Buffer");
+            bufDesc.size = requiredSize;
+            bufDesc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
+            font._pointInputBuffer = wgpuDeviceCreateBuffer(_device, &bufDesc);
+        }
+        wgpuQueueWriteBuffer(queue, font._pointInputBuffer, 0, pointData.data(), requiredSize);
     }
 
     // Generate MSDF for each glyph using the GPU
-    // This would involve creating render passes to the atlas texture
-    // For each glyph, we render a quad and the fragment shader computes the MSDF
+    // Create orthographic projection for atlas rendering
+    float atlasW = static_cast<float>(atlas->getTextureWidth());
+    float atlasH = static_cast<float>(atlas->getTextureHeight());
+    float projection[16] = {
+        2.0f / atlasW, 0, 0, 0,
+        0, -2.0f / atlasH, 0, 0,
+        0, 0, 1, 0,
+        -1, 1, 0, 1
+    };
 
-    // For now, we'll implement a simplified version that requires the full WGSL shader
-    // In production, you'd create render passes here to generate the MSDF data
+    // Create command encoder for all glyph generation
+    WGPUCommandEncoderDescriptor encoderDesc = {};
+    WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(_device, &encoderDesc);
+
+    // Collect resources to release after submit
+    std::vector<WGPUBuffer> vertexBuffers;
+    std::vector<WGPUBuffer> uniformBuffers;
+    std::vector<WGPUBindGroup> bindGroups;
+
+    // Accumulate offsets into metadata and point buffers
+    size_t metaOffset = 0;
+    size_t pointOffset = 0;
+
+    for (int i = 0; i < nrender; ++i) {
+        // Skip glyphs with no data
+        if (metaSizes[i] == 0 || atlasIndex[i].sizeX <= 0 || atlasIndex[i].sizeY <= 0) {
+            metaOffset += metaSizes[i];
+            pointOffset += pointSizes[i] / sizeof(float);
+            continue;
+        }
+
+        float glyphW = atlasIndex[i].sizeX;
+        float glyphH = atlasIndex[i].sizeY;
+        float offsetX = atlasIndex[i].offsetX;
+        float offsetY = atlasIndex[i].offsetY;
+
+        // Create quad vertices for this glyph (2 triangles)
+        float vertices[] = {
+            0, 0,
+            glyphW, 0,
+            0, glyphH,
+            glyphW, 0,
+            glyphW, glyphH,
+            0, glyphH
+        };
+
+        // Create vertex buffer for this glyph's quad
+        WGPUBufferDescriptor vertBufDesc = {};
+        vertBufDesc.label = WGPU_STR("MSDFGL Glyph Vertex Buffer");
+        vertBufDesc.size = sizeof(vertices);
+        vertBufDesc.usage = WGPUBufferUsage_Vertex | WGPUBufferUsage_CopyDst;
+        WGPUBuffer vertexBuffer = wgpuDeviceCreateBuffer(_device, &vertBufDesc);
+        wgpuQueueWriteBuffer(queue, vertexBuffer, 0, vertices, sizeof(vertices));
+        vertexBuffers.push_back(vertexBuffer);
+
+        // Set up uniforms for this glyph
+        struct GenUniforms {
+            float projection[16];
+            float offset[2];
+            float translate[2];
+            float scale[2];
+            float range;
+            int32_t meta_offset;
+            int32_t point_offset;
+            float glyph_height;
+            float padding[2];  // Pad to 16-byte alignment
+        } uniforms;
+
+        memcpy(uniforms.projection, projection, sizeof(projection));
+        uniforms.offset[0] = offsetX;
+        uniforms.offset[1] = offsetY;
+        uniforms.translate[0] = font.getRange();  // Padding offset
+        uniforms.translate[1] = font.getRange();
+        uniforms.scale[0] = font.getScale();
+        uniforms.scale[1] = font.getScale();
+        uniforms.range = font.getRange();
+        // metaOffset is in bytes, and each byte is now a uint32 element
+        uniforms.meta_offset = static_cast<int32_t>(metaOffset);
+        // pointOffset is in floats, but shader expects point index (each point = 2 floats)
+        uniforms.point_offset = static_cast<int32_t>(pointOffset / 2);
+        uniforms.glyph_height = glyphH;
+        uniforms.padding[0] = 0;
+        uniforms.padding[1] = 0;
+
+        // Create per-glyph uniform buffer (needed because GPU reads happen after all writes)
+        WGPUBufferDescriptor uniformBufDesc = {};
+        uniformBufDesc.label = WGPU_STR("MSDFGL Glyph Uniform Buffer");
+        uniformBufDesc.size = sizeof(uniforms);
+        uniformBufDesc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
+        WGPUBuffer uniformBuffer = wgpuDeviceCreateBuffer(_device, &uniformBufDesc);
+        wgpuQueueWriteBuffer(queue, uniformBuffer, 0, &uniforms, sizeof(uniforms));
+        uniformBuffers.push_back(uniformBuffer);
+
+        // Create bind group for this glyph
+        WGPUBindGroupEntry entries[3] = {};
+        entries[0].binding = 0;
+        entries[0].buffer = uniformBuffer;
+        entries[0].size = sizeof(uniforms);
+
+        entries[1].binding = 1;
+        entries[1].buffer = font._metaInputBuffer;
+        entries[1].size = wgpuBufferGetSize(font._metaInputBuffer);
+
+        entries[2].binding = 2;
+        entries[2].buffer = font._pointInputBuffer;
+        entries[2].size = wgpuBufferGetSize(font._pointInputBuffer);
+
+        WGPUBindGroupDescriptor bindGroupDesc = {};
+        bindGroupDesc.layout = _genBindGroupLayout;
+        bindGroupDesc.entryCount = 3;
+        bindGroupDesc.entries = entries;
+        WGPUBindGroup bindGroup = wgpuDeviceCreateBindGroup(_device, &bindGroupDesc);
+        bindGroups.push_back(bindGroup);
+
+        // Create render pass targeting the atlas texture
+        WGPURenderPassColorAttachment colorAttachment = {};
+        colorAttachment.view = atlas->getAtlasTextureView();
+        colorAttachment.loadOp = WGPULoadOp_Load;
+        colorAttachment.storeOp = WGPUStoreOp_Store;
+        colorAttachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;  // Required for 2D textures
+
+        WGPURenderPassDescriptor passDesc = {};
+        passDesc.colorAttachmentCount = 1;
+        passDesc.colorAttachments = &colorAttachment;
+
+        WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
+        wgpuRenderPassEncoderSetPipeline(pass, _genPipeline);
+        wgpuRenderPassEncoderSetBindGroup(pass, 0, bindGroup, 0, nullptr);
+        wgpuRenderPassEncoderSetVertexBuffer(pass, 0, vertexBuffer, 0, sizeof(vertices));
+        wgpuRenderPassEncoderDraw(pass, 6, 1, 0, 0);
+        wgpuRenderPassEncoderEnd(pass);
+        wgpuRenderPassEncoderRelease(pass);
+
+        metaOffset += metaSizes[i];
+        pointOffset += pointSizes[i] / sizeof(float);
+    }
+
+    // Submit all glyph generation commands
+    WGPUCommandBufferDescriptor cmdBufDesc = {};
+    WGPUCommandBuffer cmdBuffer = wgpuCommandEncoderFinish(encoder, &cmdBufDesc);
+    wgpuQueueSubmit(queue, 1, &cmdBuffer);
+    wgpuCommandBufferRelease(cmdBuffer);
+    wgpuCommandEncoderRelease(encoder);
+
+    // Now release resources after submit
+    for (auto bg : bindGroups) {
+        wgpuBindGroupRelease(bg);
+    }
+    for (auto vb : vertexBuffers) {
+        wgpuBufferDestroy(vb);
+        wgpuBufferRelease(vb);
+    }
+    for (auto ub : uniformBuffers) {
+        wgpuBufferDestroy(ub);
+        wgpuBufferRelease(ub);
+    }
 
     atlas->_nglyphs += nrender;
     return nrender;
