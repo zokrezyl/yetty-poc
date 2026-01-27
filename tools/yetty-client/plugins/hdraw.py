@@ -459,13 +459,48 @@ def parse_primitive(prim_dict: Dict[str, Any], layer: int) -> bytes:
     )
 
 
+def parse_text_entry(text_dict: Dict[str, Any], layer: int) -> Tuple[float, float, float, int, int, str]:
+    """Parse a text entry from YAML.
+
+    Returns: (x, y, fontSize, color, layer, text_string)
+    """
+    t = text_dict.get('text', text_dict)
+    pos = t.get('position', [0, 0])
+    x, y = pos[0], pos[1]
+    fontSize = t.get('font-size', t.get('fontSize', 16.0))
+    color = parse_color(t.get('color', '#ffffff'))
+    text_str = t.get('content', t.get('text', ''))
+    return (x, y, fontSize, color, layer, text_str)
+
+
+def pack_text_entries(texts: List[Tuple[float, float, float, int, int, str]]) -> bytes:
+    """Pack text entries into binary format.
+
+    Format per entry:
+      x (f32), y (f32), fontSize (f32), color (u32), layer (u32), textLen (u32), text (bytes, padded to 4)
+    """
+    result = b''
+    for x, y, fontSize, color, layer, text_str in texts:
+        text_bytes = text_str.encode('utf-8')
+        text_len = len(text_bytes)
+        # Pad to 4-byte boundary
+        padded_len = (text_len + 3) & ~3
+        text_bytes_padded = text_bytes + b'\x00' * (padded_len - text_len)
+
+        result += struct.pack('<fffIII', x, y, fontSize, color, layer, text_len)
+        result += text_bytes_padded
+
+    return result
+
+
 def parse_yaml_to_binary(yaml_content: str) -> Tuple[bytes, int, int]:
-    """Parse YAML content and convert to binary primitives.
+    """Parse YAML content and convert to binary primitives and text.
 
     Returns:
         (binary_data, bg_color, flags)
     """
     primitives = []
+    texts = []
     bg_color = 0xFF2E1A1A
     flags = 0
 
@@ -484,10 +519,17 @@ def parse_yaml_to_binary(yaml_content: str) -> Tuple[bytes, int, int]:
                 if isinstance(item, dict):
                     if 'body' in item:
                         for prim in item['body']:
-                            data = parse_primitive(prim, layer)
-                            if data:
-                                primitives.append(data)
+                            if 'text' in prim:
+                                texts.append(parse_text_entry(prim, layer))
                                 layer += 1
+                            else:
+                                data = parse_primitive(prim, layer)
+                                if data:
+                                    primitives.append(data)
+                                    layer += 1
+                    elif 'text' in item:
+                        texts.append(parse_text_entry(item, layer))
+                        layer += 1
                     else:
                         data = parse_primitive(item, layer)
                         if data:
@@ -496,10 +538,14 @@ def parse_yaml_to_binary(yaml_content: str) -> Tuple[bytes, int, int]:
         elif isinstance(doc, dict):
             if 'body' in doc:
                 for prim in doc['body']:
-                    data = parse_primitive(prim, layer)
-                    if data:
-                        primitives.append(data)
+                    if 'text' in prim:
+                        texts.append(parse_text_entry(prim, layer))
                         layer += 1
+                    else:
+                        data = parse_primitive(prim, layer)
+                        if data:
+                            primitives.append(data)
+                            layer += 1
             if 'background' in doc:
                 bg_color = parse_color(doc['background'])
             if 'flags' in doc:
@@ -514,14 +560,18 @@ def parse_yaml_to_binary(yaml_content: str) -> Tuple[bytes, int, int]:
                     elif flag == 'show_eval_count':
                         flags |= 4
 
-    # Header: [version (u32)][primitive_count (u32)][bg_color (u32)][flags (u32)]
-    header = struct.pack('<IIII', 1, len(primitives), bg_color, flags)
+    # Header v2: [version (u32)][prim_count (u32)][bg_color (u32)][flags (u32)][text_count (u32)][reserved (u32)]
+    header = struct.pack('<IIIIII', 2, len(primitives), bg_color, flags, len(texts), 0)
 
-    return header + b''.join(primitives), bg_color, flags
+    # Pack text entries
+    text_data = pack_text_entries(texts)
+
+    return header + b''.join(primitives) + text_data, bg_color, flags
 
 
 @click.command(name='hdraw')
-@click.option('--file', '-f', type=click.Path(exists=True), help='YAML file with primitives')
+@click.option('--input', '-i', 'input_', help='YAML file (use - for stdin)')
+@click.option('--binary', '-b', is_flag=True, help='Convert YAML to binary format (default: pass YAML to C++)')
 @click.option('--demo', '-d', type=click.Choice(['2d', 'simple', 'grid']),
               help='Run a built-in demo')
 @click.option('--cell-size', '-c', type=float, default=50.0,
@@ -529,47 +579,67 @@ def parse_yaml_to_binary(yaml_content: str) -> Tuple[bytes, int, int]:
 @click.option('--show-grid', is_flag=True, help='Show grid overlay')
 @click.option('--show-eval-count', is_flag=True, help='Show heatmap of SDF evaluations')
 @click.pass_context
-def hdraw(ctx, file, demo, cell_size, show_grid, show_eval_count):
+def hdraw(ctx, input_, binary, demo, cell_size, show_grid, show_eval_count):
     """HDraw plugin - 2D SDF rendering with O(1) spatial hashing.
 
     GPU-accelerated rendering using signed distance functions with
     uniform grid spatial hashing for O(1) primitive lookup.
 
-    This is faster than YDraw (BVH-based) for many primitives.
+    Supports text rendering via MSDF fonts.
 
     2D Primitives:
         circle, box, segment, triangle, bezier, ellipse,
         pentagon, hexagon, star, pie, ring, heart, cross,
         rounded_x, capsule, rhombus, moon, egg
 
+    Text:
+        text: position, content, font-size, color
+
     Examples:
-        yetty-client create hdraw -f shapes.yaml -w 80 -H 40
+        yetty-client create hdraw -i shapes.yaml -w 80 -H 40
+        yetty-client create hdraw -i shapes.yaml -b -w 80 -H 40  # binary mode
         yetty-client create hdraw --demo grid -w 60 -H 40 --show-grid
-        yetty-client create hdraw --demo 2d -c 30 --show-eval-count
+        cat shapes.yaml | yetty-client create hdraw -i - -w 80 -H 40
     """
+    import sys
+    from pathlib import Path
+
     ctx.ensure_object(dict)
 
-    if file:
-        with open(file, 'r') as f:
-            yaml_content = f.read()
+    # Read input
+    if input_:
+        if input_ == '-':
+            yaml_content = sys.stdin.read()
+        else:
+            path = Path(input_)
+            if not path.exists():
+                raise click.ClickException(f"File not found: {input_}")
+            with open(path, 'r') as f:
+                yaml_content = f.read()
     elif demo:
         yaml_content = DEMOS.get(demo, DEMOS['simple'])
     else:
         yaml_content = DEMOS['simple']
 
-    try:
-        payload_bytes, bg_color, flags = parse_yaml_to_binary(yaml_content)
-    except ValueError as e:
-        raise click.ClickException(str(e))
-
     # Build args string
-    args_parts = [f'--bg-color 0x{bg_color:08X}', f'--cell-size {cell_size}']
+    args_parts = [f'--cell-size {cell_size}']
     if show_grid:
         args_parts.append('--show-grid')
     if show_eval_count:
         args_parts.append('--show-eval-count')
 
-    ctx.obj['payload_bytes'] = payload_bytes
+    if binary:
+        # Binary mode: convert YAML to binary payload
+        try:
+            payload_bytes, bg_color, flags = parse_yaml_to_binary(yaml_content)
+        except ValueError as e:
+            raise click.ClickException(str(e))
+        args_parts.insert(0, f'--bg-color 0x{bg_color:08X}')
+        ctx.obj['payload_bytes'] = payload_bytes
+    else:
+        # YAML mode: pass YAML directly to C++ for parsing
+        ctx.obj['payload'] = yaml_content
+
     ctx.obj['plugin_name'] = 'hdraw'
     ctx.obj['plugin_args'] = ' '.join(args_parts)
 

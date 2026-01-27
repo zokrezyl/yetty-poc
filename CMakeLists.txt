@@ -510,7 +510,7 @@ elseif(NOT EMSCRIPTEN)
         src/yetty/card.cpp
         src/yetty/imgui-manager.cpp
         src/yetty/cards/plot.cpp
-        src/yetty/cards/image.cpp
+        src/yetty/cards/texture.cpp
         src/yetty/cards/ydraw.cpp
         src/yetty/cards/hdraw.cpp
         # Core sources (previously in yetty_core)
@@ -601,7 +601,7 @@ if(EMSCRIPTEN)
         -sALLOW_MEMORY_GROWTH
         -sWASM_BIGINT
         --no-heap-copy
-        "--preload-file=${CMAKE_CURRENT_SOURCE_DIR}/src/yetty/shaders/shaders.wgsl@/shaders.wgsl"
+        "--preload-file=${CMAKE_CURRENT_SOURCE_DIR}/src/yetty/shaders/gpu-screen.wgsl@/gpu-screen.wgsl"
         "--preload-file=${CMAKE_CURRENT_SOURCE_DIR}/assets@/assets"
         "--preload-file=${CMAKE_CURRENT_SOURCE_DIR}/demo@/demo"
         # Export web terminal functions for JavaScript
@@ -663,8 +663,8 @@ elseif(YETTY_ANDROID)
     file(GLOB ASSET_FILES "${CMAKE_CURRENT_SOURCE_DIR}/assets/*")
     file(COPY ${ASSET_FILES} DESTINATION ${ANDROID_ASSETS_DIR})
     configure_file(
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/yetty/shaders/shaders.wgsl
-        ${ANDROID_ASSETS_DIR}/shaders.wgsl
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/yetty/shaders/gpu-screen.wgsl
+        ${ANDROID_ASSETS_DIR}/gpu-screen.wgsl
         COPYONLY
     )
 
@@ -768,8 +768,8 @@ else()
         COMMENT "Copying assets to build directory"
     )
     configure_file(
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/yetty/shaders/shaders.wgsl
-        ${CMAKE_CURRENT_BINARY_DIR}/shaders.wgsl
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/yetty/shaders/gpu-screen.wgsl
+        ${CMAKE_CURRENT_BINARY_DIR}/gpu-screen.wgsl
         COPYONLY
     )
 

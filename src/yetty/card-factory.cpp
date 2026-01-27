@@ -1,6 +1,6 @@
 #include <yetty/card-factory.h>
 #include <yetty/yetty-context.h>
-#include "cards/image.h"
+#include "cards/texture.h"
 #include "cards/plot.h"
 #include "cards/ydraw.h"
 #include "cards/hdraw.h"
@@ -20,12 +20,12 @@ public:
 
     Result<void> init() {
         // Register built-in card types
-        registerCard("image", [](const YettyContext& ctx,
-                                 int32_t x, int32_t y,
-                                 uint32_t w, uint32_t h,
-                                 const std::string& args,
-                                 const std::string& payload) {
-            return card::Image::create(ctx.cardBufferManager, ctx.gpu, x, y, w, h, args, payload);
+        registerCard("texture", [](const YettyContext& ctx,
+                                   int32_t x, int32_t y,
+                                   uint32_t w, uint32_t h,
+                                   const std::string& args,
+                                   const std::string& payload) {
+            return card::Texture::create(ctx.cardBufferManager, ctx.gpu, x, y, w, h, args, payload);
         });
 
         registerCard("plot", [](const YettyContext& ctx,

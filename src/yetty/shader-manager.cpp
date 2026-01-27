@@ -10,6 +10,7 @@
 #include <cstring>
 #include <vector>
 #include <map>
+#include <filesystem>
 
 #ifndef CMAKE_SOURCE_DIR
 #define CMAKE_SOURCE_DIR "."
@@ -105,24 +106,31 @@ Result<void> ShaderManagerImpl::init(const GPUContext& gpu) noexcept {
     _gpu = gpu;
 
     // Load base shader
-    std::string shaderPath = std::string(CMAKE_SOURCE_DIR) + "/src/yetty/shaders/shaders.wgsl";
+    std::string shaderPath = std::string(CMAKE_SOURCE_DIR) + "/src/yetty/shaders/gpu-screen.wgsl";
     if (auto res = loadBaseShader(shaderPath); !res) {
         return res;
     }
 
-    // Load shared SDF library
-    std::string libPath = std::string(CMAKE_SOURCE_DIR) + "/src/yetty/shaders/lib/distfunctions.wgsl";
-    std::ifstream libFile(libPath);
-    if (libFile.is_open()) {
-        std::stringstream buffer;
-        buffer << libFile.rdbuf();
-        std::string libCode = buffer.str();
-        if (!libCode.empty()) {
-            addLibrary("distfunctions", libCode);
-            yinfo("ShaderManager: loaded SDF library ({} bytes)", libCode.size());
+    // Load all shader libraries from lib directory
+    std::string libDir = std::string(CMAKE_SOURCE_DIR) + "/src/yetty/shaders/lib";
+    if (std::filesystem::exists(libDir) && std::filesystem::is_directory(libDir)) {
+        for (const auto& entry : std::filesystem::directory_iterator(libDir)) {
+            if (entry.is_regular_file() && entry.path().extension() == ".wgsl") {
+                std::ifstream libFile(entry.path());
+                if (libFile.is_open()) {
+                    std::stringstream buffer;
+                    buffer << libFile.rdbuf();
+                    std::string libCode = buffer.str();
+                    if (!libCode.empty()) {
+                        std::string libName = entry.path().stem().string();
+                        addLibrary(libName, libCode);
+                        yinfo("ShaderManager: loaded library '{}' ({} bytes)", libName, libCode.size());
+                    }
+                }
+            }
         }
     } else {
-        ywarn("ShaderManager: SDF library not found at {}", libPath);
+        ywarn("ShaderManager: lib directory not found at {}", libDir);
     }
 
     _initialized = true;

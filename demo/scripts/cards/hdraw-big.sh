@@ -14,6 +14,6 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR/../../.."
 
 # Use the yetty-client Python tool to create the HDraw card
-python3 tools/yetty-client/main.py --new create hdraw -f demo/assets/cards/ydraw/big.yaml -w 80 -H 25
+python3 tools/yetty-client/main.py --new create hdraw -i demo/assets/cards/ydraw/big.yaml -w 80 -H 25
 
 echo  # newline after the card
