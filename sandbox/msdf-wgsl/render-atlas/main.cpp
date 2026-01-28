@@ -1,5 +1,5 @@
 /**
- * MSDF-WGSL Atlas Viewer - Debug tool to visualize the atlas texture
+ * MSDF-WGSL Atlas Viewer - Grid-based glyph viewer with scrolling
  */
 
 #include <msdf-wgsl.h>
@@ -12,6 +12,8 @@
 #include <iostream>
 #include <vector>
 #include <cstring>
+#include <algorithm>
+#include <cmath>
 
 int windowWidth = 1280;
 int windowHeight = 720;
@@ -30,30 +32,51 @@ WGPURenderPipeline pipeline = nullptr;
 WGPUBindGroup bindGroup = nullptr;
 WGPUSampler sampler = nullptr;
 WGPUBuffer uniformBuffer = nullptr;
+WGPUBuffer glyphBuffer = nullptr;
 
-// Pan and zoom state
+// Pan and zoom state (world coordinates are in cell units)
 float panX = 0.0f;
 float panY = 0.0f;
-float zoom = 1.0f;  // Will be set based on atlas size after loading
+float zoom = 1.0f;
+float scrollY = 0.0f;
 bool dragging = false;
 double lastMouseX = 0, lastMouseY = 0;
+
+// Grid parameters
+int gridCols = 80;
+int totalGlyphCount = 0;
 
 bool adapterReady = false;
 bool deviceReady = false;
 
-// Simple shader that renders the atlas texture to a fullscreen quad
+// Shader: grid-based glyph viewer with storage buffer for glyph atlas rects
 const char* shaderCode = R"(
 struct Uniforms {
-    pan: vec2<f32>,
+    panX: f32,
+    panY: f32,
     zoom: f32,
     aspect: f32,
-    atlas_aspect: f32,
-    _padding: vec3<f32>,
+    atlasW: f32,
+    atlasH: f32,
+    scrollY: f32,
+    cols: f32,
+    totalGlyphs: f32,
+    _pad1: f32,
+    _pad2: f32,
+    _pad3: f32,
+};
+
+struct GlyphRect {
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
 };
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(0) @binding(1) var atlasSampler: sampler;
 @group(0) @binding(2) var atlasTexture: texture_2d<f32>;
+@group(0) @binding(3) var<storage, read> glyphs: array<GlyphRect>;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -82,41 +105,70 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOutput {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    // Screen coordinates centered at 0,0
-    var screen = (in.uv - 0.5) * 2.0;  // -1 to 1
-
-    // Apply window aspect ratio (so circles stay circular)
-    screen.x *= uniforms.aspect;
-
-    // Apply zoom (higher zoom = see more)
-    screen = screen * uniforms.zoom;
-
-    // Apply pan
-    screen = screen + uniforms.pan * 2.0;
-
-    // Convert to atlas UV space, accounting for atlas aspect ratio
-    var uv = screen;
-    uv.x = uv.x / uniforms.atlas_aspect;  // Scale X by atlas aspect
-    uv = uv * 0.5 + 0.5;  // Back to 0-1 range
-
-    // Clamp UV to valid range for sampling
-    let sample_uv = clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0));
-
-    // Sample atlas
-    let msdf = textureSample(atlasTexture, atlasSampler, sample_uv);
-
-    // Compute median of RGB channels (standard MSDF decoding)
-    let r = msdf.r;
-    let g = msdf.g;
-    let b = msdf.b;
-    let median = max(min(r, g), min(max(r, g), b));
-
-    // Check bounds
-    let in_bounds = uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0;
     let bg_color = vec4<f32>(0.15, 0.15, 0.15, 1.0);
+    let grid_color = vec4<f32>(0.25, 0.25, 0.25, 1.0);
+    let empty_color = vec4<f32>(0.1, 0.1, 0.12, 1.0);
 
-    // Display median as grayscale
-    return select(bg_color, vec4<f32>(median, median, median, 1.0), in_bounds);
+    // Screen coordinates: uv (0,0)=top-left, (1,1)=bottom-right
+    let screen = vec2<f32>(
+        (in.uv.x - 0.5) * 2.0 * uniforms.aspect,
+        (in.uv.y - 0.5) * 2.0
+    );
+
+    // World coordinates in cell units
+    let world = vec2<f32>(
+        screen.x / uniforms.zoom + uniforms.panX,
+        screen.y / uniforms.zoom + uniforms.panY + uniforms.scrollY
+    );
+
+    // Grid cell
+    let col = floor(world.x);
+    let row = floor(world.y);
+
+    // Glyph index (clamped for safe buffer access)
+    let rawIdx = u32(max(row, 0.0)) * u32(uniforms.cols) + u32(max(col, 0.0));
+    let safeIdx = min(rawIdx, u32(max(uniforms.totalGlyphs - 1.0, 0.0)));
+
+    // Local UV within cell (0 to 1)
+    let localUV = fract(world);
+
+    // Get glyph rect from storage buffer
+    let glyph = glyphs[safeIdx];
+
+    // Compute atlas UV (safe even if glyph is empty, will just sample somewhere)
+    let margin = 0.02;
+    let innerUV = (localUV - margin) / (1.0 - 2.0 * margin);
+    let glyphW = max(glyph.w, 1.0);
+    let glyphH = max(glyph.h, 1.0);
+    let atlasUV = vec2<f32>(
+        (glyph.x + clamp(innerUV.x, 0.0, 1.0) * glyphW) / uniforms.atlasW,
+        (glyph.y + clamp(innerUV.y, 0.0, 1.0) * glyphH) / uniforms.atlasH
+    );
+
+    // Sample MSDF (must be in uniform control flow - no early returns before this)
+    let msdf = textureSample(atlasTexture, atlasSampler, atlasUV);
+
+    // Median of RGB (standard MSDF decoding)
+    let median = max(min(msdf.r, msdf.g), min(max(msdf.r, msdf.g), msdf.b));
+    let glyph_color = vec4<f32>(median, median, median, 1.0);
+
+    // Grid lines at cell edges
+    let edgeX = min(localUV.x, 1.0 - localUV.x);
+    let edgeY = min(localUV.y, 1.0 - localUV.y);
+    let edge = min(edgeX, edgeY);
+    let is_grid_line = edge < margin;
+
+    // Determine what to show
+    let out_of_bounds = col < 0.0 || col >= uniforms.cols || row < 0.0 || rawIdx >= u32(uniforms.totalGlyphs);
+    let is_empty = glyph.w <= 0.0 || glyph.h <= 0.0;
+
+    // Compose final color using select (no branching)
+    var color = glyph_color;
+    color = select(color, empty_color, is_empty);
+    color = select(color, grid_color, is_grid_line && !out_of_bounds);
+    color = select(color, bg_color, out_of_bounds);
+
+    return color;
 }
 )";
 
@@ -173,7 +225,13 @@ bool initWebGPU(GLFWwindow* window) {
     WGPUUncapturedErrorCallbackInfo errorInfo = {};
     errorInfo.callback = onUncapturedError;
 
+    // Request higher buffer size limit for large atlases
+    WGPULimits requiredLimits = WGPU_LIMITS_INIT;
+    requiredLimits.maxBufferSize = 2147483648ULL;  // 2 GB
+    requiredLimits.maxStorageBufferBindingSize = 2147483648ULL;
+
     WGPUDeviceDescriptor deviceDesc = {};
+    deviceDesc.requiredLimits = &requiredLimits;
     deviceDesc.uncapturedErrorCallbackInfo = errorInfo;
 
     WGPURequestDeviceCallbackInfo deviceCallback = {};
@@ -207,8 +265,27 @@ bool initRendering() {
     auto* atlas = font->getAtlas();
     if (!atlas) return false;
 
+    const auto& glyphs = font->getGlyphs();
+    totalGlyphCount = static_cast<int>(glyphs.size());
+
     std::cout << "[Render] Atlas size: " << atlas->getWidth() << "x"
-              << atlas->getHeight() << std::endl;
+              << atlas->getHeight() << ", glyphs: " << totalGlyphCount << std::endl;
+
+    // Build glyph rect storage buffer (4 floats per glyph: x, y, w, h in atlas pixels)
+    size_t glyphBufSize = std::max(totalGlyphCount, 1) * 4 * sizeof(float);
+    std::vector<float> glyphRects(std::max(totalGlyphCount, 1) * 4, 0.0f);
+    for (int i = 0; i < totalGlyphCount; i++) {
+        glyphRects[i * 4 + 0] = static_cast<float>(glyphs[i].atlasX);
+        glyphRects[i * 4 + 1] = static_cast<float>(glyphs[i].atlasY);
+        glyphRects[i * 4 + 2] = static_cast<float>(glyphs[i].atlasW);
+        glyphRects[i * 4 + 3] = static_cast<float>(glyphs[i].atlasH);
+    }
+
+    WGPUBufferDescriptor glyphBufDesc = {};
+    glyphBufDesc.size = glyphBufSize;
+    glyphBufDesc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
+    glyphBuffer = wgpuDeviceCreateBuffer(device, &glyphBufDesc);
+    wgpuQueueWriteBuffer(queue, glyphBuffer, 0, glyphRects.data(), glyphBufSize);
 
     // Create shader module
     WGPUShaderSourceWGSL wgslDesc = {};
@@ -228,14 +305,14 @@ bool initRendering() {
     samplerDesc.maxAnisotropy = 1;
     sampler = wgpuDeviceCreateSampler(device, &samplerDesc);
 
-    // Create uniform buffer (48 bytes due to WGSL alignment rules)
+    // Create uniform buffer (48 bytes = 12 floats)
     WGPUBufferDescriptor uniformDesc = {};
     uniformDesc.size = 48;
     uniformDesc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
     uniformBuffer = wgpuDeviceCreateBuffer(device, &uniformDesc);
 
-    // Create bind group layout
-    WGPUBindGroupLayoutEntry layoutEntries[3] = {};
+    // Create bind group layout (4 entries: uniform, sampler, texture, storage)
+    WGPUBindGroupLayoutEntry layoutEntries[4] = {};
 
     layoutEntries[0].binding = 0;
     layoutEntries[0].visibility = WGPUShaderStage_Fragment;
@@ -250,13 +327,17 @@ bool initRendering() {
     layoutEntries[2].texture.sampleType = WGPUTextureSampleType_UnfilterableFloat;
     layoutEntries[2].texture.viewDimension = WGPUTextureViewDimension_2D;
 
+    layoutEntries[3].binding = 3;
+    layoutEntries[3].visibility = WGPUShaderStage_Fragment;
+    layoutEntries[3].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
+
     WGPUBindGroupLayoutDescriptor layoutDesc = {};
-    layoutDesc.entryCount = 3;
+    layoutDesc.entryCount = 4;
     layoutDesc.entries = layoutEntries;
     WGPUBindGroupLayout bindGroupLayout = wgpuDeviceCreateBindGroupLayout(device, &layoutDesc);
 
     // Create bind group
-    WGPUBindGroupEntry bindEntries[3] = {};
+    WGPUBindGroupEntry bindEntries[4] = {};
 
     bindEntries[0].binding = 0;
     bindEntries[0].buffer = uniformBuffer;
@@ -268,9 +349,13 @@ bool initRendering() {
     bindEntries[2].binding = 2;
     bindEntries[2].textureView = atlas->getTextureView();
 
+    bindEntries[3].binding = 3;
+    bindEntries[3].buffer = glyphBuffer;
+    bindEntries[3].size = glyphBufSize;
+
     WGPUBindGroupDescriptor bindGroupDesc = {};
     bindGroupDesc.layout = bindGroupLayout;
-    bindGroupDesc.entryCount = 3;
+    bindGroupDesc.entryCount = 4;
     bindGroupDesc.entries = bindEntries;
     bindGroup = wgpuDeviceCreateBindGroup(device, &bindGroupDesc);
 
@@ -312,18 +397,26 @@ bool initRendering() {
 
 void updateUniforms() {
     auto* atlas = font->getAtlas();
-    float atlasAspect = static_cast<float>(atlas->getWidth()) / static_cast<float>(atlas->getHeight());
     float windowAspect = static_cast<float>(windowWidth) / static_cast<float>(windowHeight);
 
-    // Must match WGSL alignment: vec3 requires 16-byte alignment
-    struct alignas(16) {
-        float panX, panY;       // 8 bytes at offset 0
-        float zoom;             // 4 bytes at offset 8
-        float aspect;           // 4 bytes at offset 12
-        float atlasAspect;      // 4 bytes at offset 16
-        float _pad1[3];         // 12 bytes at offset 20 (aligns next to 32)
-        float padding[4];       // 16 bytes at offset 32 (vec3 + struct padding)
-    } uniforms = {panX, panY, zoom, windowAspect, atlasAspect, {0, 0, 0}, {0, 0, 0, 0}};
+    // 12 floats = 48 bytes, all f32 scalars (no alignment issues)
+    struct {
+        float panX, panY;
+        float zoom;
+        float aspect;
+        float atlasW, atlasH;
+        float scrollY;
+        float cols;
+        float totalGlyphs;
+        float _pad1, _pad2, _pad3;
+    } uniforms = {
+        panX, panY, zoom, windowAspect,
+        static_cast<float>(atlas->getWidth()), static_cast<float>(atlas->getHeight()),
+        scrollY,
+        static_cast<float>(gridCols),
+        static_cast<float>(totalGlyphCount),
+        0, 0, 0
+    };
 
     wgpuQueueWriteBuffer(queue, uniformBuffer, 0, &uniforms, 48);
 }
@@ -374,12 +467,24 @@ void render() {
 }
 
 void cleanup() {
+    if (glyphBuffer) wgpuBufferRelease(glyphBuffer);
     if (uniformBuffer) wgpuBufferRelease(uniformBuffer);
     if (bindGroup) wgpuBindGroupRelease(bindGroup);
     if (pipeline) wgpuRenderPipelineRelease(pipeline);
     if (sampler) wgpuSamplerRelease(sampler);
     msdfContext.reset();
     font.reset();
+}
+
+void resetView() {
+    float windowAspect = static_cast<float>(windowWidth) / static_cast<float>(windowHeight);
+    // Fit all gridCols columns in view
+    zoom = 2.0f * windowAspect / static_cast<float>(gridCols);
+    // Center horizontally on the grid
+    panX = static_cast<float>(gridCols) / 2.0f;
+    // Position so row 0 is near top of screen
+    panY = 1.0f / zoom;
+    scrollY = 0.0f;
 }
 
 void framebufferSizeCallback(GLFWwindow* window, int width, int height) {
@@ -401,29 +506,37 @@ void framebufferSizeCallback(GLFWwindow* window, int width, int height) {
 }
 
 void scrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
-    // Get mouse position in normalized coordinates (-1 to 1)
-    double mouseX, mouseY;
-    glfwGetCursorPos(window, &mouseX, &mouseY);
-    float normX = (static_cast<float>(mouseX) / windowWidth - 0.5f) * 2.0f;
-    float normY = -(static_cast<float>(mouseY) / windowHeight - 0.5f) * 2.0f;  // Flip Y
+    bool ctrlPressed = glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ||
+                       glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS;
 
-    // Apply window aspect to get screen coordinates
-    normX *= static_cast<float>(windowWidth) / static_cast<float>(windowHeight);
+    if (ctrlPressed) {
+        // Zoom to cursor
+        double mouseX, mouseY;
+        glfwGetCursorPos(window, &mouseX, &mouseY);
+        float windowAspect = static_cast<float>(windowWidth) / static_cast<float>(windowHeight);
+        float screenX = (static_cast<float>(mouseX) / windowWidth - 0.5f) * 2.0f * windowAspect;
+        float screenY = (static_cast<float>(mouseY) / windowHeight - 0.5f) * 2.0f;
 
-    // Calculate point in world space before zoom
-    float worldX = normX * zoom + panX;
-    float worldY = normY * zoom + panY;
+        // World point under cursor
+        float worldX = screenX / zoom + panX;
+        float worldY = screenY / zoom + panY;
 
-    // Apply zoom
-    float zoomFactor = (yoffset > 0) ? 0.8f : 1.25f;  // Scroll up = zoom in (smaller zoom value)
-    float newZoom = zoom * zoomFactor;
-    newZoom = std::max(0.1f, std::min(newZoom, 200.0f));
+        float zoomFactor = (yoffset > 0) ? 0.8f : 1.25f;
+        float newZoom = zoom * zoomFactor;
+        newZoom = std::max(0.005f, std::min(newZoom, 50.0f));
 
-    // Adjust pan so the world point stays under the cursor
-    panX = worldX - normX * newZoom;
-    panY = worldY - normY * newZoom;
-
-    zoom = newZoom;
+        // Adjust pan to keep world point under cursor
+        panX = worldX - screenX / newZoom;
+        panY = worldY - screenY / newZoom;
+        zoom = newZoom;
+    } else {
+        // Vertical scroll (3 rows per tick)
+        scrollY -= static_cast<float>(yoffset) * 3.0f;
+        scrollY = std::max(0.0f, scrollY);
+        // Cap at max rows
+        int totalRows = (totalGlyphCount + gridCols - 1) / gridCols;
+        scrollY = std::min(scrollY, static_cast<float>(std::max(totalRows - 1, 0)));
+    }
 }
 
 void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
@@ -435,33 +548,36 @@ void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
 
 void cursorPosCallback(GLFWwindow* window, double xpos, double ypos) {
     if (dragging) {
-        float dx = static_cast<float>(xpos - lastMouseX) / windowWidth;
-        float dy = static_cast<float>(ypos - lastMouseY) / windowHeight;
-        panX += dx / zoom;
-        panY -= dy / zoom;
+        float windowAspect = static_cast<float>(windowWidth) / static_cast<float>(windowHeight);
+        float dx = static_cast<float>(xpos - lastMouseX) / windowWidth * 2.0f * windowAspect / zoom;
+        float dy = static_cast<float>(ypos - lastMouseY) / windowHeight * 2.0f / zoom;
+        panX -= dx;
+        panY -= dy;
         lastMouseX = xpos;
         lastMouseY = ypos;
     }
 }
 
 void printUsage(const char* prog) {
-    std::cout << "MSDF-WGSL Atlas Viewer\n\n"
+    std::cout << "MSDF-WGSL Atlas Viewer (Grid Mode)\n\n"
               << "Usage: " << prog << " [options]\n\n"
               << "Options:\n"
               << "  -f, --font FILE    Font file to load (default: system DejaVuSansMono)\n"
-              << "  -n, --num N        Number of glyphs to generate (default: 95 - printable ASCII)\n"
+              << "  -n, --num N        Number of glyphs to generate (default: all in font)\n"
               << "  --nerd             Include Nerd Font symbols\n"
+              << "  -c, --cols N       Grid columns (default: 80)\n"
               << "  -h, --help         Show this help\n\n"
               << "Controls:\n"
+              << "  Mouse wheel        Scroll through glyphs\n"
+              << "  Ctrl+wheel         Zoom to cursor\n"
               << "  Mouse drag         Pan the view\n"
-              << "  Mouse wheel        Zoom in/out\n"
               << "  R                  Reset view\n"
               << "  ESC                Exit\n";
 }
 
 int main(int argc, char* argv[]) {
     std::string fontPath = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf";
-    int numGlyphs = 95;  // Printable ASCII
+    int numGlyphs = -1;  // -1 = all glyphs in font
     bool nerdFonts = false;
 
     // Parse arguments
@@ -471,6 +587,8 @@ int main(int argc, char* argv[]) {
             fontPath = argv[++i];
         } else if ((arg == "-n" || arg == "--num") && i + 1 < argc) {
             numGlyphs = std::atoi(argv[++i]);
+        } else if ((arg == "-c" || arg == "--cols") && i + 1 < argc) {
+            gridCols = std::max(1, std::atoi(argv[++i]));
         } else if (arg == "--nerd") {
             nerdFonts = true;
         } else if (arg == "-h" || arg == "--help") {
@@ -480,10 +598,11 @@ int main(int argc, char* argv[]) {
     }
 
     std::cout << "========================================\n"
-              << "MSDF-WGSL Atlas Viewer\n"
+              << "MSDF-WGSL Atlas Viewer (Grid Mode)\n"
               << "========================================\n"
               << "Font: " << fontPath << "\n"
-              << "Glyphs: " << numGlyphs << "\n"
+              << "Glyphs: " << (numGlyphs < 0 ? "all" : std::to_string(numGlyphs)) << "\n"
+              << "Grid columns: " << gridCols << "\n"
               << "========================================\n" << std::endl;
 
     if (!glfwInit()) {
@@ -537,8 +656,11 @@ int main(int argc, char* argv[]) {
         if (numGlyphs > 0 && static_cast<size_t>(numGlyphs) < charset.size()) {
             charset.resize(numGlyphs);
         }
+    } else if (numGlyphs < 0) {
+        // All glyphs in the font
+        charset = font->getAllCodepoints();
     } else {
-        // Printable ASCII
+        // Printable ASCII (limited)
         for (uint32_t c = 0x20; c <= 0x7E && charset.size() < static_cast<size_t>(numGlyphs); ++c) {
             charset.push_back(c);
         }
@@ -547,13 +669,7 @@ int main(int argc, char* argv[]) {
     int result = msdfContext->generateGlyphs(*font, charset);
     std::cout << "[Font] Generated " << result << " glyphs" << std::endl;
 
-    // Set initial zoom to fit atlas height in window
-    auto* atlas = font->getAtlas();
-    float atlasAspect = static_cast<float>(atlas->getWidth()) / static_cast<float>(atlas->getHeight());
-    zoom = atlasAspect / 5.0f;  // Show about 1/5 of the atlas width
-    std::cout << "[View] Atlas aspect: " << atlasAspect << ", initial zoom: " << zoom << std::endl;
-
-    // Initialize rendering
+    // Initialize rendering (also sets up glyph storage buffer)
     if (!initRendering()) {
         std::cerr << "Failed to initialize rendering" << std::endl;
         cleanup();
@@ -561,8 +677,15 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // Set initial view to fit grid
+    resetView();
+
+    int totalRows = (totalGlyphCount + gridCols - 1) / gridCols;
+    std::cout << "[Grid] " << totalGlyphCount << " glyphs, "
+              << gridCols << " cols, " << totalRows << " rows" << std::endl;
+
     std::cout << "[Main] Starting render loop...\n"
-              << "  Drag to pan, scroll to zoom, R to reset, ESC to exit\n" << std::endl;
+              << "  Scroll to navigate, Ctrl+scroll to zoom, drag to pan, R to reset, ESC to exit\n" << std::endl;
 
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
@@ -571,10 +694,7 @@ int main(int argc, char* argv[]) {
             glfwSetWindowShouldClose(window, GLFW_TRUE);
         }
         if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS) {
-            panX = panY = 0.0f;
-            auto* atlas = font->getAtlas();
-            float atlasAspect = static_cast<float>(atlas->getWidth()) / static_cast<float>(atlas->getHeight());
-            zoom = atlasAspect / 5.0f;
+            resetView();
         }
 
         render();
