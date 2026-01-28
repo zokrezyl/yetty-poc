@@ -55,9 +55,12 @@ fn distance_to_line(p0: vec2<f32>, p1: vec2<f32>, origin: vec2<f32>) -> vec3<f32
     let ab = p1 - p0;
     let t = clamp(dot(aq, ab) / dot(ab, ab), 0.0, 1.0);
     let closest = p0 + t * ab;
-    let dist = length(origin - closest);
-    // Negate sign: cross2d gives positive when inside CCW contour, but we want negative for inside
-    let sign_val = -sign(cross2d(ab, aq));
+    let to_origin = origin - closest;
+    let dist = length(to_origin);
+
+    // Use cross product with vector from closest point to origin for correct sign
+    // Negate because: positive cross = left of edge = inside CCW contour = should be negative
+    let sign_val = -sign(cross2d(ab, to_origin));
 
     // Return: signed distance, orthogonality (0 at endpoints), parameter t
     var ortho = 0.0;

@@ -99,6 +99,9 @@ public:
     float getRange() const { return _range; }
     FT_Face getFace() const { return _face; }
 
+    // Get all codepoints present in the font
+    std::vector<uint32_t> getAllCodepoints() const;
+
 private:
     friend class Context;
 

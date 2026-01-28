@@ -19,16 +19,70 @@
 #include <thread>
 #include <chrono>
 
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
+
 namespace msdf {
 
 // Scale factor for FreeType units
 constexpr float FT_SCALE = 64.0f;
 
 // Shader path
-static std::string sShaderPath = "shaders/msdf_gen.wgsl";
+static std::string sShaderPath = "";
 
 void setShaderPath(const std::string& path) {
     sShaderPath = path;
+}
+
+// Get directory of current executable
+static std::string getExecutableDir() {
+#ifdef _WIN32
+    char path[MAX_PATH];
+    GetModuleFileNameA(NULL, path, MAX_PATH);
+    std::string p(path);
+    auto pos = p.find_last_of("\\/");
+    return pos != std::string::npos ? p.substr(0, pos) : ".";
+#else
+    char path[4096];
+    ssize_t len = readlink("/proc/self/exe", path, sizeof(path) - 1);
+    if (len > 0) {
+        path[len] = '\0';
+        std::string p(path);
+        auto pos = p.find_last_of('/');
+        return pos != std::string::npos ? p.substr(0, pos) : ".";
+    }
+    return ".";
+#endif
+}
+
+// Find shader file, trying multiple locations
+static std::string findShaderPath() {
+    // 1. Explicit path set by user
+    if (!sShaderPath.empty()) {
+        std::ifstream f(sShaderPath);
+        if (f.good()) return sShaderPath;
+    }
+
+    // 2. Next to executable
+    std::string exeDir = getExecutableDir();
+    std::string path = exeDir + "/msdf_gen.wgsl";
+    {
+        std::ifstream f(path);
+        if (f.good()) return path;
+    }
+
+    // 3. In shaders/ subdir next to executable
+    path = exeDir + "/shaders/msdf_gen.wgsl";
+    {
+        std::ifstream f(path);
+        if (f.good()) return path;
+    }
+
+    // 4. Legacy relative path
+    return "shaders/msdf_gen.wgsl";
 }
 
 //------------------------------------------------------------------------------
@@ -60,27 +114,55 @@ struct GlyphCtx {
     Vec2 lastPoint = {0, 0};
 };
 
+// Helper to add closing segment for a contour
+static void closeContour(GlyphCtx* ctx) {
+    if (ctx->currentContourIndex < 0) return;
+
+    // Find start of current contour
+    size_t contourStart = 0;
+    int metaIdx = 1;
+    for (int i = 0; i < ctx->currentContourIndex; i++) {
+        int nseg = ctx->metadata[metaIdx + 1];
+        metaIdx += 2;
+        for (int j = 0; j < nseg; j++) {
+            int np = ctx->metadata[metaIdx + 1];
+            contourStart += (np - 1) * 2;
+            metaIdx += 2;
+        }
+        contourStart += 2;
+    }
+
+    // Get first point of this contour
+    float startX = ctx->points[contourStart];
+    float startY = ctx->points[contourStart + 1];
+
+    // Only add closing segment if we're not already at the start
+    if (std::abs(ctx->lastPoint.x - startX) > 1e-6f ||
+        std::abs(ctx->lastPoint.y - startY) > 1e-6f) {
+        // Add closing line segment
+        int segMetaIdx = 1;
+        for (int i = 0; i <= ctx->currentContourIndex; i++) {
+            if (i < ctx->currentContourIndex) {
+                int nseg = ctx->metadata[segMetaIdx + 1];
+                segMetaIdx += 2 + nseg * 2;
+            } else {
+                ctx->metadata[segMetaIdx + 1]++;  // Increment segment count
+            }
+        }
+        ctx->metadata.push_back(WHITE);  // Color
+        ctx->metadata.push_back(2);      // 2 points for line
+        ctx->points.push_back(startX);
+        ctx->points.push_back(startY);
+        ctx->lastPoint = {startX, startY};
+    }
+}
+
 // Callbacks for FT_Outline_Decompose
 static int moveTo(const FT_Vector* to, void* user) {
     auto* ctx = static_cast<GlyphCtx*>(user);
 
-    if (ctx->currentContourIndex >= 0) {
-        // Close previous contour - duplicate first point
-        size_t contourStart = 0;
-        int metaIdx = 1;
-        for (int i = 0; i < ctx->currentContourIndex; i++) {
-            int nseg = ctx->metadata[metaIdx + 1];
-            metaIdx += 2;
-            for (int j = 0; j < nseg; j++) {
-                int np = ctx->metadata[metaIdx + 1];
-                contourStart += (np - 1) * 2;
-                metaIdx += 2;
-            }
-            contourStart += 2;
-        }
-        ctx->points.push_back(ctx->points[contourStart]);
-        ctx->points.push_back(ctx->points[contourStart + 1]);
-    }
+    // Close previous contour with a segment
+    closeContour(ctx);
 
     ctx->currentContourIndex++;
     ctx->metadata[0]++;  // Increment contour count
@@ -164,27 +246,16 @@ static float computeWinding(const std::vector<float>& points, size_t start, size
 
 // Assign edge colors ensuring adjacent edges differ in at least one channel
 static void assignColors(GlyphCtx& ctx) {
-    // Color cycle that ensures adjacent colors always differ in at least one channel
-    // CYAN (G+B), MAGENTA (R+B), YELLOW (R+G) - each pair differs in exactly 2 channels
-    static const Color colorCycle[] = {CYAN, MAGENTA, YELLOW};
-
+    // For now, use WHITE for all edges (pure SDF mode) to debug
+    // TODO: Implement proper MSDF coloring once SDF works correctly
     int metaIdx = 1;
     for (uint32_t i = 0; i < ctx.metadata[0]; i++) {
         metaIdx++;  // Skip winding
         int nsegments = ctx.metadata[metaIdx++];
 
-        if (nsegments <= 2) {
-            // For 1-2 segments, use WHITE (all channels) to avoid issues
-            for (int j = 0; j < nsegments; j++) {
-                ctx.metadata[metaIdx] = WHITE;
-                metaIdx += 2;
-            }
-        } else {
-            // For 3+ segments, cycle through colors
-            for (int j = 0; j < nsegments; j++) {
-                ctx.metadata[metaIdx] = colorCycle[j % 3];
-                metaIdx += 2;
-            }
+        for (int j = 0; j < nsegments; j++) {
+            ctx.metadata[metaIdx] = WHITE;
+            metaIdx += 2;
         }
     }
 }
@@ -233,11 +304,8 @@ bool serializeGlyph(FT_Face face, uint32_t codepoint,
         return false;
     }
 
-    // Close last contour
-    if (ctx.currentContourIndex >= 0 && ctx.points.size() >= 2) {
-        ctx.points.push_back(ctx.points[0]);
-        ctx.points.push_back(ctx.points[1]);
-    }
+    // Close last contour with a proper segment
+    closeContour(&ctx);
 
     if (ctx.metadata[0] > 0) {
         computeWindings(ctx);
@@ -486,9 +554,10 @@ void Context::cleanup() {
 
 bool Context::initCompute() {
     // Load shader from file
-    std::ifstream file(sShaderPath);
+    std::string shaderPath = findShaderPath();
+    std::ifstream file(shaderPath);
     if (!file.is_open()) {
-        fprintf(stderr, "[MSDF] Failed to open shader: %s\n", sShaderPath.c_str());
+        fprintf(stderr, "[MSDF] Failed to open shader: %s\n", shaderPath.c_str());
         return false;
     }
     std::stringstream buffer;
@@ -496,7 +565,7 @@ bool Context::initCompute() {
     std::string shaderSource = buffer.str();
 
     fprintf(stderr, "[MSDF] Loaded shader from %s (%zu bytes)\n",
-            sShaderPath.c_str(), shaderSource.size());
+            shaderPath.c_str(), shaderSource.size());
 
     // Create shader module
     WGPUShaderSourceWGSL wgslDesc = {};
@@ -957,38 +1026,28 @@ std::vector<uint8_t> Context::readAtlasToRGBA8(const Atlas& atlas) {
 // Default Charset
 //------------------------------------------------------------------------------
 
-std::vector<uint32_t> getDefaultCharset(bool includeNerdFonts) {
+std::vector<uint32_t> getDefaultCharset(bool) {
+    // This function is deprecated - use Font::getAllCodepoints() instead
     std::vector<uint32_t> charset;
-
-    // Basic Latin
+    // Basic Latin only as fallback
     for (uint32_t c = 0x20; c <= 0x7E; c++) charset.push_back(c);
+    return charset;
+}
 
-    // Latin-1 Supplement
-    for (uint32_t c = 0xA0; c <= 0xFF; c++) charset.push_back(c);
+std::vector<uint32_t> Font::getAllCodepoints() const {
+    std::vector<uint32_t> codepoints;
 
-    // Latin Extended-A/B
-    for (uint32_t c = 0x100; c <= 0x24F; c++) charset.push_back(c);
+    FT_ULong charcode;
+    FT_UInt glyphIndex;
 
-    // Greek, Cyrillic
-    for (uint32_t c = 0x370; c <= 0x4FF; c++) charset.push_back(c);
-
-    // General Punctuation
-    for (uint32_t c = 0x2000; c <= 0x206F; c++) charset.push_back(c);
-
-    // Box Drawing, Block Elements
-    for (uint32_t c = 0x2500; c <= 0x259F; c++) charset.push_back(c);
-
-    if (includeNerdFonts) {
-        // Powerline symbols
-        for (uint32_t c = 0xE0A0; c <= 0xE0D4; c++) charset.push_back(c);
-
-        // Nerd Fonts - Devicons, Font Awesome, etc.
-        for (uint32_t c = 0xE700; c <= 0xE7C5; c++) charset.push_back(c);
-        for (uint32_t c = 0xF000; c <= 0xF2E0; c++) charset.push_back(c);
-        for (uint32_t c = 0xE200; c <= 0xE2A9; c++) charset.push_back(c);
+    // Iterate through all codepoints in the font
+    charcode = FT_Get_First_Char(_face, &glyphIndex);
+    while (glyphIndex != 0) {
+        codepoints.push_back(static_cast<uint32_t>(charcode));
+        charcode = FT_Get_Next_Char(_face, charcode, &glyphIndex);
     }
 
-    return charset;
+    return codepoints;
 }
 
 } // namespace msdf

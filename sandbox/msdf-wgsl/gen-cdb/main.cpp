@@ -82,8 +82,43 @@ bool initWebGPU() {
     WGPUUncapturedErrorCallbackInfo errorInfo = {};
     errorInfo.callback = onUncapturedError;
 
+    // Request higher buffer size limit for large fonts
+    WGPULimits limits = {};
+    limits.maxTextureDimension1D = WGPU_LIMIT_U32_UNDEFINED;
+    limits.maxTextureDimension2D = WGPU_LIMIT_U32_UNDEFINED;
+    limits.maxTextureDimension3D = WGPU_LIMIT_U32_UNDEFINED;
+    limits.maxTextureArrayLayers = WGPU_LIMIT_U32_UNDEFINED;
+    limits.maxBindGroups = WGPU_LIMIT_U32_UNDEFINED;
+    limits.maxBindGroupsPlusVertexBuffers = WGPU_LIMIT_U32_UNDEFINED;
+    limits.maxBindingsPerBindGroup = WGPU_LIMIT_U32_UNDEFINED;
+    limits.maxDynamicUniformBuffersPerPipelineLayout = WGPU_LIMIT_U32_UNDEFINED;
+    limits.maxDynamicStorageBuffersPerPipelineLayout = WGPU_LIMIT_U32_UNDEFINED;
+    limits.maxSampledTexturesPerShaderStage = WGPU_LIMIT_U32_UNDEFINED;
+    limits.maxSamplersPerShaderStage = WGPU_LIMIT_U32_UNDEFINED;
+    limits.maxStorageBuffersPerShaderStage = WGPU_LIMIT_U32_UNDEFINED;
+    limits.maxStorageTexturesPerShaderStage = WGPU_LIMIT_U32_UNDEFINED;
+    limits.maxUniformBuffersPerShaderStage = WGPU_LIMIT_U32_UNDEFINED;
+    limits.maxUniformBufferBindingSize = WGPU_LIMIT_U64_UNDEFINED;
+    limits.maxStorageBufferBindingSize = 2ULL * 1024 * 1024 * 1024;  // 2GB for large fonts
+    limits.minUniformBufferOffsetAlignment = WGPU_LIMIT_U32_UNDEFINED;
+    limits.minStorageBufferOffsetAlignment = WGPU_LIMIT_U32_UNDEFINED;
+    limits.maxVertexBuffers = WGPU_LIMIT_U32_UNDEFINED;
+    limits.maxBufferSize = 2ULL * 1024 * 1024 * 1024;  // 2GB
+    limits.maxVertexAttributes = WGPU_LIMIT_U32_UNDEFINED;
+    limits.maxVertexBufferArrayStride = WGPU_LIMIT_U32_UNDEFINED;
+    limits.maxInterStageShaderVariables = WGPU_LIMIT_U32_UNDEFINED;
+    limits.maxColorAttachments = WGPU_LIMIT_U32_UNDEFINED;
+    limits.maxColorAttachmentBytesPerSample = WGPU_LIMIT_U32_UNDEFINED;
+    limits.maxComputeWorkgroupStorageSize = WGPU_LIMIT_U32_UNDEFINED;
+    limits.maxComputeInvocationsPerWorkgroup = WGPU_LIMIT_U32_UNDEFINED;
+    limits.maxComputeWorkgroupSizeX = WGPU_LIMIT_U32_UNDEFINED;
+    limits.maxComputeWorkgroupSizeY = WGPU_LIMIT_U32_UNDEFINED;
+    limits.maxComputeWorkgroupSizeZ = WGPU_LIMIT_U32_UNDEFINED;
+    limits.maxComputeWorkgroupsPerDimension = WGPU_LIMIT_U32_UNDEFINED;
+
     WGPUDeviceDescriptor deviceDesc = {};
     deviceDesc.uncapturedErrorCallbackInfo = errorInfo;
+    deviceDesc.requiredLimits = &limits;
 
     WGPURequestDeviceCallbackInfo deviceCb = {};
     deviceCb.mode = WGPUCallbackMode_AllowSpontaneous;
@@ -163,11 +198,12 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        // Get charset
-        auto charset = msdf::getDefaultCharset(nerdFonts);
+        // Get all codepoints from the font
+        auto charset = font->getAllCodepoints();
         if (limit > 0 && static_cast<size_t>(limit) < charset.size()) {
             charset.resize(limit);
         }
+        (void)nerdFonts;  // No longer needed - we enumerate all glyphs
 
         std::cout << "[ATLAS] Generating " << charset.size() << " glyphs...\n";
         auto startTime = std::chrono::steady_clock::now();
