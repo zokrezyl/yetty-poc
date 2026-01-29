@@ -138,8 +138,8 @@ public:
   void setOutputCallback(OutputCallback cb) override;
   Result<void> render(WGPURenderPassEncoder pass) override;
   void setViewport(float x, float y, float width, float height) override;
-  float getCellWidth() const override { return _baseCellWidth * _zoomLevel; }
-  float getCellHeight() const override { return _baseCellHeight * _zoomLevel; }
+  uint32_t getCellWidth() const override { return static_cast<uint32_t>(_baseCellWidth * _zoomLevel); }
+  uint32_t getCellHeight() const override { return static_cast<uint32_t>(_baseCellHeight * _zoomLevel); }
 
   // EventListener interface
   Result<bool> onEvent(const base::Event &event) override;
@@ -229,9 +229,9 @@ private:
                              uint32_t *linesToAdvance);
 
   // Card registry
-  void registerCard(Card *card);
-  void unregisterCard(Card *card);
-  Card *getCardByMetadataOffset(uint32_t offset) const;
+  void registerCard(CardPtr card);
+  void unregisterCard(uint32_t metadataOffset);
+  Card *getCardBySlotIndex(uint32_t offset) const;
   Card *getCardAtCell(int row, int col) const;
 
   // VTerm
@@ -289,8 +289,7 @@ private:
   std::vector<ScrolledOutWidget> _scrolledOutWidgets;
 
   // Cards
-  std::vector<CardPtr> _cards;
-  std::unordered_map<uint32_t, Card *> _cardRegistry;
+  std::unordered_map<uint32_t, CardPtr> _cards;
 
   // Factories
   WidgetFactory *_widgetFactory = nullptr;
@@ -544,11 +543,11 @@ void GPUScreenImpl::setViewport(float x, float y, float width, float height) {
   _viewportHeight = height;
 
   // Calculate cols/rows from viewport size and cell size
-  float cellWidth = _baseCellWidth * _zoomLevel;
-  float cellHeight = _baseCellHeight * _zoomLevel;
+  uint32_t cellWidth = getCellWidth();
+  uint32_t cellHeight = getCellHeight();
 
-  uint32_t newCols = static_cast<uint32_t>(width / cellWidth);
-  uint32_t newRows = static_cast<uint32_t>(height / cellHeight);
+  uint32_t newCols = cellWidth > 0 ? static_cast<uint32_t>(width) / cellWidth : 0;
+  uint32_t newRows = cellHeight > 0 ? static_cast<uint32_t>(height) / cellHeight : 0;
 
   // Only resize if size actually changed
   if (newCols > 0 && newRows > 0 && (newCols != _cols || newRows != _rows)) {
@@ -2341,9 +2340,9 @@ bool GPUScreenImpl::handleCardOSCSequence(const std::string &sequence,
       ydebug("Card OSC Create: final position ({},{})", x, y);
     }
 
-    // Create the card
+    // Create the card (pass full YettyContext for font access etc)
     auto result = _ctx.cardFactory->createCard(
-        cmd.create.plugin, x, y, static_cast<uint32_t>(cmd.create.width),
+        _ctx, cmd.create.plugin, x, y, static_cast<uint32_t>(cmd.create.width),
         static_cast<uint32_t>(cmd.create.height), cmd.pluginArgs, cmd.payload);
 
     if (!result) {
@@ -2355,9 +2354,6 @@ bool GPUScreenImpl::handleCardOSCSequence(const std::string &sequence,
 
     CardPtr cardPtr = std::move(*result);
     Card *card = cardPtr.get();
-
-    // Register the card for input routing
-    registerCard(card);
 
     // =====================================================================
     // Generate ANSI escape sequences for card cells
@@ -2454,8 +2450,8 @@ bool GPUScreenImpl::handleCardOSCSequence(const std::string &sequence,
           card->typeName(), x, y, card->widthCells(), card->heightCells(),
           card->metadataSlotIndex(), card->shaderGlyph());
 
-    // Store the card (transfer ownership)
-    _cards.push_back(std::move(cardPtr));
+    // Store and register the card (transfer ownership)
+    registerCard(std::move(cardPtr));
 
     // Don't set linesToAdvance - vterm handles cursor movement via the newlines
     // we output The ANSI sequences include newlines which advance the cursor
@@ -2485,28 +2481,24 @@ bool GPUScreenImpl::handleCardOSCSequence(const std::string &sequence,
 // Card Registry Management
 //=============================================================================
 
-void GPUScreenImpl::registerCard(Card *card) {
+void GPUScreenImpl::registerCard(CardPtr card) {
   if (!card)
     return;
 
-  uint32_t offset = card->metadataOffset();
-  _cardRegistry[offset] = card;
-  ydebug("GPUScreenImpl::registerCard: registered card at offset {}", offset);
+  uint32_t slotIndex = card->metadataSlotIndex();
+  ydebug("GPUScreenImpl::registerCard: registered card at slotIndex {}", slotIndex);
+  _cards[slotIndex] = std::move(card);
 }
 
-void GPUScreenImpl::unregisterCard(Card *card) {
-  if (!card)
-    return;
-
-  uint32_t offset = card->metadataOffset();
-  _cardRegistry.erase(offset);
-  ydebug("GPUScreenImpl::unregisterCard: unregistered card at offset {}",
-         offset);
+void GPUScreenImpl::unregisterCard(uint32_t slotIndex) {
+  _cards.erase(slotIndex);
+  ydebug("GPUScreenImpl::unregisterCard: unregistered card at slotIndex {}",
+         slotIndex);
 }
 
-Card *GPUScreenImpl::getCardByMetadataOffset(uint32_t offset) const {
-  auto it = _cardRegistry.find(offset);
-  return (it != _cardRegistry.end()) ? it->second : nullptr;
+Card *GPUScreenImpl::getCardBySlotIndex(uint32_t offset) const {
+  auto it = _cards.find(offset);
+  return (it != _cards.end()) ? it->second.get() : nullptr;
 }
 
 Card *GPUScreenImpl::getCardAtCell(int row, int col) const {
@@ -2528,13 +2520,12 @@ Card *GPUScreenImpl::getCardAtCell(int row, int col) const {
     return nullptr;
   }
 
-  // The fg value encodes the metadata offset
-  uint32_t fg = static_cast<uint32_t>(cell.fgR) |
-                (static_cast<uint32_t>(cell.fgG) << 8) |
-                (static_cast<uint32_t>(cell.fgB) << 16) |
-                (static_cast<uint32_t>(cell.alpha) << 24);
+  // The fg RGB channels encode the metadata slot index (3 bytes = 24 bits)
+  uint32_t slotIndex = static_cast<uint32_t>(cell.fgR) |
+                       (static_cast<uint32_t>(cell.fgG) << 8) |
+                       (static_cast<uint32_t>(cell.fgB) << 16);
 
-  return getCardByMetadataOffset(fg);
+  return getCardBySlotIndex(slotIndex);
 }
 
 //=============================================================================
@@ -2755,10 +2746,33 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
         }
 
         // Left-click: focus
-        yinfo("GPUScreen {} clicked at ({}, {}), dispatching SetFocus", _id, mx,
-              my);
+        float localX = mx - _viewportX;
+        float localY = my - _viewportY;
+        int col = static_cast<int>(localX / getCellWidth());
+        int row = static_cast<int>(localY / getCellHeight());
+        col = std::max(0, std::min(col, static_cast<int>(_cols) - 1));
+        row = std::max(0, std::min(row, static_cast<int>(_rows) - 1));
+
         auto loop = *base::EventLoop::instance();
-        loop->dispatch(base::Event::focusEvent(_id));
+
+        // Check if clicked cell is a card
+        {
+          size_t idx = cellIndex(row, col);
+          if (idx < _visibleBuffer->size()) {
+            const Cell& dbgCell = (*_visibleBuffer)[idx];
+            yinfo("GPUScreen {} click debug: cell({},{}) glyph={:#x} fg=({},{},{}) alpha={} style={:#x}",
+                  _id, row, col, dbgCell.glyph, dbgCell.fgR, dbgCell.fgG, dbgCell.fgB, dbgCell.alpha, dbgCell.style);
+          }
+        }
+        Card* card = getCardAtCell(row, col);
+        if (card) {
+          yinfo("GPUScreen {} clicked on card '{}' (id={}) at cell ({},{}), dispatching SetFocus",
+                _id, card->typeName(), card->id(), row, col);
+          loop->dispatch(base::Event::focusEvent(card->id()));
+        } else {
+          yinfo("GPUScreen {} clicked at ({}, {}), dispatching SetFocus", _id, mx, my);
+          loop->dispatch(base::Event::focusEvent(_id));
+        }
         return Ok(true);
       }
     }
@@ -2796,8 +2810,8 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
     return Ok(false);  // Don't consume
   }
 
-  // Handle scroll - scrollback or zoom
-  if (event.type == base::Event::Type::Scroll) {
+  // Handle scroll - scrollback or zoom (only when focused)
+  if (_focused && event.type == base::Event::Type::Scroll) {
     float mx = event.scroll.x;
     float my = event.scroll.y;
 
@@ -2815,6 +2829,10 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
             _zoomLevel = newZoom;
             // Recalculate cols/rows from viewport and new zoom
             setViewport(_viewportX, _viewportY, _viewportWidth, _viewportHeight);
+            // Notify cards of new cell size
+            for (auto& [slotIndex, card] : _cards) {
+              card->setCellSize(getCellWidth(), getCellHeight());
+            }
             yinfo("GPUScreen {} zoom: {:.0f}%", _id, _zoomLevel * 100.0f);
           }
         } else {
@@ -2912,6 +2930,13 @@ Result<void> GPUScreenImpl::initPipeline() {
 }
 
 Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
+  // Update all cards before rendering
+  for (auto& [slotIndex, card] : _cards) {
+    if (auto res = card->update(0.0f); !res) {
+      yerror("GPUScreen::render: card '{}' update failed: {}", card->typeName(), error_msg(res));
+    }
+  }
+
   const Cell *cells = getCellData();
   if (!cells || _cols == 0 || _rows == 0) {
     return Ok(); // Nothing to render
@@ -3041,19 +3066,19 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
   }
 
 
-  // Calculate cell size from font base size and zoom level
-  float cellWidth = _baseCellWidth * _zoomLevel;
-  float cellHeight = _baseCellHeight * _zoomLevel;
+  // Precise float cell size for GPU shaders
+  float cellWidthF = _baseCellWidth * _zoomLevel;
+  float cellHeightF = _baseCellHeight * _zoomLevel;
 
   // Screen size is grid * cell size
-  float screenWidth = static_cast<float>(_cols) * cellWidth;
-  float screenHeight = static_cast<float>(_rows) * cellHeight;
+  float screenWidth = static_cast<float>(_cols) * cellWidthF;
+  float screenHeight = static_cast<float>(_rows) * cellHeightF;
 
   // Update uniforms
   _uniforms.projection =
       glm::ortho(0.0f, screenWidth, screenHeight, 0.0f, -1.0f, 1.0f);
   _uniforms.screenSize = {screenWidth, screenHeight};
-  _uniforms.cellSize = {cellWidth, cellHeight};
+  _uniforms.cellSize = {cellWidthF, cellHeightF};
   _uniforms.gridSize = {static_cast<float>(_cols), static_cast<float>(_rows)};
   _uniforms.pixelRange = _msdfFont ? _msdfFont->getPixelRange() : 2.0f;
   _uniforms.scale = _zoomLevel;
@@ -3063,11 +3088,14 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
   _uniforms.viewportOrigin = {_viewportX, _viewportY};
   wgpuQueueWriteBuffer(queue, _uniformBuffer, 0, &_uniforms, sizeof(Uniforms));
 
-  // Set viewport to this terminal's tile bounds
+  // Set viewport and scissor to this terminal's tile bounds
   if (_viewportWidth > 0 && _viewportHeight > 0) {
     wgpuRenderPassEncoderSetViewport(pass, _viewportX, _viewportY,
                                      _viewportWidth, _viewportHeight, 0.0f,
                                      1.0f);
+    wgpuRenderPassEncoderSetScissorRect(pass,
+        static_cast<uint32_t>(_viewportX), static_cast<uint32_t>(_viewportY),
+        static_cast<uint32_t>(_viewportWidth), static_cast<uint32_t>(_viewportHeight));
   }
 
   // Draw using shared pipeline and quad vertex buffer from ShaderManager

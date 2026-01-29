@@ -509,8 +509,7 @@ elseif(NOT EMSCRIPTEN)
         src/yetty/card-factory.cpp
         src/yetty/card.cpp
         src/yetty/imgui-manager.cpp
-        src/yetty/cards/plot-card.cpp
-        src/yetty/cards/image-card.cpp
+        # Card sources added via add_subdirectory(src/yetty/cards)
         # Core sources (previously in yetty_core)
         # src/yetty/font.cpp  # Moved to obsolete
         src/yetty/ms-msdf-font.cpp
@@ -566,6 +565,11 @@ if(UNIX AND NOT EMSCRIPTEN AND YETTY_PLUGIN_PYTHON)
     target_compile_definitions(yetty PRIVATE CMAKE_BINARY_DIR="${CMAKE_BINARY_DIR}" YETTY_PLUGIN_PYTHON=1)
 endif()
 
+# Card subdirectories (desktop only - cards use CardBufferManager, ImGui, etc.)
+if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
+    add_subdirectory(src/yetty/cards)
+endif()
+
 target_compile_definitions(yetty PRIVATE
     CMAKE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
 )
@@ -599,7 +603,7 @@ if(EMSCRIPTEN)
         -sALLOW_MEMORY_GROWTH
         -sWASM_BIGINT
         --no-heap-copy
-        "--preload-file=${CMAKE_CURRENT_SOURCE_DIR}/src/yetty/shaders/shaders.wgsl@/shaders.wgsl"
+        "--preload-file=${CMAKE_CURRENT_SOURCE_DIR}/src/yetty/shaders/gpu-screen.wgsl@/gpu-screen.wgsl"
         "--preload-file=${CMAKE_CURRENT_SOURCE_DIR}/assets@/assets"
         "--preload-file=${CMAKE_CURRENT_SOURCE_DIR}/demo@/demo"
         # Export web terminal functions for JavaScript
@@ -661,8 +665,8 @@ elseif(YETTY_ANDROID)
     file(GLOB ASSET_FILES "${CMAKE_CURRENT_SOURCE_DIR}/assets/*")
     file(COPY ${ASSET_FILES} DESTINATION ${ANDROID_ASSETS_DIR})
     configure_file(
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/yetty/shaders/shaders.wgsl
-        ${ANDROID_ASSETS_DIR}/shaders.wgsl
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/yetty/shaders/gpu-screen.wgsl
+        ${ANDROID_ASSETS_DIR}/gpu-screen.wgsl
         COPYONLY
     )
 
@@ -766,8 +770,8 @@ else()
         COMMENT "Copying assets to build directory"
     )
     configure_file(
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/yetty/shaders/shaders.wgsl
-        ${CMAKE_CURRENT_BINARY_DIR}/shaders.wgsl
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/yetty/shaders/gpu-screen.wgsl
+        ${CMAKE_CURRENT_BINARY_DIR}/gpu-screen.wgsl
         COPYONLY
     )
 

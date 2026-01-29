@@ -6,10 +6,10 @@
 #include <yetty/gpu-context.h>
 #include <vector>
 
-namespace yetty {
+namespace yetty::card {
 
 //=============================================================================
-// PlotCard - Card for rendering plots via shader glyph
+// Plot - Card for rendering plots via shader glyph
 //
 // Uses shader glyph U+100001 (card base + offset 0x0001)
 //
@@ -44,10 +44,10 @@ namespace yetty {
 //   offset 44-63: reserved (20 bytes padding)
 //=============================================================================
 
-class PlotCard : public Card,
-                 public base::ObjectFactory<PlotCard> {
+class Plot : public Card,
+             public base::ObjectFactory<Plot> {
 public:
-    using Ptr = std::shared_ptr<PlotCard>;
+    using Ptr = std::shared_ptr<Plot>;
 
     // Shader glyph codepoint for plots
     static constexpr uint32_t SHADER_GLYPH = 0x100001;  // Card base + 0x0001
@@ -85,15 +85,17 @@ public:
         const std::string& args,
         const std::string& payload) noexcept;
 
-    virtual ~PlotCard() = default;
+    virtual ~Plot() = default;
 
     //=========================================================================
     // Card interface
     //=========================================================================
-    Result<void> init() override = 0;
-    void dispose() override = 0;
-    void update(float time) override = 0;
+    Result<void> dispose() override = 0;
+    Result<void> update(float time) override = 0;
     const char* typeName() const override { return "plot"; }
+
+    // Override for 64-byte metadata slots (shader uses slotIndex * 16)
+    uint32_t metadataSlotIndex() const override { return _metaHandle.offset / 64; }
 
     //=========================================================================
     // Plot-specific API
@@ -133,11 +135,11 @@ public:
     virtual uint32_t dataCount() const = 0;
 
 protected:
-    PlotCard(CardBufferManager::Ptr mgr, const GPUContext& gpu,
-             int32_t x, int32_t y,
-             uint32_t widthCells, uint32_t heightCells)
+    Plot(CardBufferManager::Ptr mgr, const GPUContext& gpu,
+         int32_t x, int32_t y,
+         uint32_t widthCells, uint32_t heightCells)
         : Card(std::move(mgr), gpu, x, y, widthCells, heightCells)
     {}
 };
 
-} // namespace yetty
+} // namespace yetty::card

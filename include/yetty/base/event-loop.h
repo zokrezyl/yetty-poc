@@ -27,7 +27,8 @@ public:
     virtual void stop() = 0;
 
     // Event listener registration by type
-    virtual Result<void> registerListener(Event::Type type, EventListener::Ptr listener) = 0;
+    // priority: higher value = called first (default 0)
+    virtual Result<void> registerListener(Event::Type type, EventListener::Ptr listener, int priority = 0) = 0;
     virtual Result<void> deregisterListener(Event::Type type, EventListener::Ptr listener) = 0;
     virtual Result<void> deregisterListener(EventListener::Ptr listener) = 0;
 

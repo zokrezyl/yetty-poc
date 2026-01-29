@@ -1,29 +1,29 @@
-#include "plot-card.h"
+#include "plot.h"
 #include <ytrace/ytrace.hpp>
 #include <sstream>
 #include <algorithm>
 #include <cmath>
 
-namespace yetty {
+namespace yetty::card {
 
 //=============================================================================
-// PlotCardImpl - Implementation of PlotCard
+// PlotImpl - Implementation of Plot
 //=============================================================================
 
-class PlotCardImpl : public PlotCard {
+class PlotImpl : public Plot {
 public:
-    PlotCardImpl(CardBufferManager::Ptr mgr, const GPUContext& gpu,
-                 int32_t x, int32_t y,
-                 uint32_t widthCells, uint32_t heightCells,
-                 const std::string& args, const std::string& payload)
-        : PlotCard(std::move(mgr), gpu, x, y, widthCells, heightCells)
+    PlotImpl(CardBufferManager::Ptr mgr, const GPUContext& gpu,
+             int32_t x, int32_t y,
+             uint32_t widthCells, uint32_t heightCells,
+             const std::string& args, const std::string& payload)
+        : Plot(std::move(mgr), gpu, x, y, widthCells, heightCells)
         , _argsStr(args)
         , _payloadStr(payload)
     {
         _shaderGlyph = SHADER_GLYPH;
     }
 
-    ~PlotCardImpl() override {
+    ~PlotImpl() override {
         dispose();
     }
 
@@ -31,15 +31,15 @@ public:
     // Card interface
     //=========================================================================
 
-    Result<void> init() override {
+    Result<void> init() {
         // Allocate metadata slot
         auto metaResult = _cardMgr->allocateMetadata(sizeof(Metadata));
         if (!metaResult) {
-            return Err<void>("PlotCard::init: failed to allocate metadata");
+            return Err<void>("Plot::init: failed to allocate metadata");
         }
         _metaHandle = *metaResult;
 
-        yinfo("PlotCard::init: allocated metadata at offset {}", _metaHandle.offset);
+        yinfo("Plot::init: allocated metadata at offset {}", _metaHandle.offset);
 
         // Parse args
         parseArgs(_argsStr);
@@ -47,19 +47,19 @@ public:
         // Parse payload if provided
         if (!_payloadStr.empty()) {
             if (auto res = parsePayload(_payloadStr); !res) {
-                ywarn("PlotCard::init: failed to parse payload: {}", error_msg(res));
+                ywarn("Plot::init: failed to parse payload: {}", error_msg(res));
             }
         }
 
         // Upload initial metadata
         if (auto res = uploadMetadata(); !res) {
-            return Err<void>("PlotCard::init: failed to upload metadata");
+            return Err<void>("Plot::init: failed to upload metadata");
         }
 
         return Ok();
     }
 
-    void dispose() override {
+    Result<void> dispose() override {
         if (_storageHandle.isValid() && _cardMgr) {
             _cardMgr->deallocateStorage(_storageHandle);
             _storageHandle = StorageHandle::invalid();
@@ -69,15 +69,21 @@ public:
             _cardMgr->deallocateMetadata(_metaHandle);
             _metaHandle = MetadataHandle::invalid();
         }
+
+        return Ok();
     }
 
-    void update(float time) override {
+    Result<void> update(float time) override {
         (void)time;
 
         if (_metadataDirty) {
-            uploadMetadata();
+            if (auto res = uploadMetadata(); !res) {
+                return Err<void>("Plot::update: metadata upload failed", res);
+            }
             _metadataDirty = false;
         }
+
+        return Ok();
     }
 
     //=========================================================================
@@ -96,16 +102,16 @@ public:
     }
 
     Result<void> setData(const float* data, uint32_t count) override {
-        yinfo("PlotCard::setData: count={}", count);
+        yinfo("Plot::setData: count={}", count);
 
         if (count == 0 || !data) {
-            return Err<void>("PlotCard::setData: empty data");
+            return Err<void>("Plot::setData: empty data");
         }
 
         // Copy data locally
         _data.assign(data, data + count);
 
-        yinfo("PlotCard::setData: copied {} floats, first few: {} {} {} {} {}",
+        yinfo("Plot::setData: copied {} floats, first few: {} {} {} {} {}",
               _data.size(),
               count > 0 ? _data[0] : 0.0f,
               count > 1 ? _data[1] : 0.0f,
@@ -126,25 +132,25 @@ public:
 
         // Allocate new storage
         uint32_t storageSize = count * sizeof(float);
-        yinfo("PlotCard::setData: allocating {} bytes for {} floats", storageSize, count);
+        yinfo("Plot::setData: allocating {} bytes for {} floats", storageSize, count);
 
         auto storageResult = _cardMgr->allocateStorage(storageSize);
         if (!storageResult) {
-            yerror("PlotCard::setData: failed to allocate storage");
-            return Err<void>("PlotCard::setData: failed to allocate storage");
+            yerror("Plot::setData: failed to allocate storage");
+            return Err<void>("Plot::setData: failed to allocate storage");
         }
         _storageHandle = *storageResult;
 
-        yinfo("PlotCard::setData: storage allocated at byte offset {}, float index {}",
+        yinfo("Plot::setData: storage allocated at byte offset {}, float index {}",
               _storageHandle.offset, _storageHandle.offset / sizeof(float));
 
         // Write data to storage
         if (auto res = _cardMgr->writeStorage(_storageHandle, _data.data(), storageSize); !res) {
-            yerror("PlotCard::setData: failed to write storage");
-            return Err<void>("PlotCard::setData: failed to write storage");
+            yerror("Plot::setData: failed to write storage");
+            return Err<void>("Plot::setData: failed to write storage");
         }
 
-        yinfo("PlotCard::setData: {} floats written to storage", count);
+        yinfo("Plot::setData: {} floats written to storage", count);
 
         _metadataDirty = true;
         return Ok();
@@ -205,7 +211,7 @@ public:
 
 private:
     void parseArgs(const std::string& args) {
-        yinfo("PlotCard::parseArgs: args='{}'", args);
+        yinfo("Plot::parseArgs: args='{}'", args);
 
         std::istringstream iss(args);
         std::string token;
@@ -270,9 +276,9 @@ private:
     }
 
     Result<void> parsePayload(const std::string& payload) {
-        yinfo("PlotCard::parsePayload: payload length={}", payload.size());
+        yinfo("Plot::parsePayload: payload length={}", payload.size());
         if (payload.size() > 0) {
-            yinfo("PlotCard::parsePayload: first 100 chars: '{}'", payload.substr(0, 100));
+            yinfo("Plot::parsePayload: first 100 chars: '{}'", payload.substr(0, 100));
         }
 
         // Parse comma or space separated float values
@@ -290,14 +296,14 @@ private:
                 try {
                     values.push_back(std::stof(token));
                 } catch (const std::exception& e) {
-                    ywarn("PlotCard::parsePayload: invalid float '{}'", token);
+                    ywarn("Plot::parsePayload: invalid float '{}'", token);
                 }
             }
         }
 
-        yinfo("PlotCard::parsePayload: parsed {} values", values.size());
+        yinfo("Plot::parsePayload: parsed {} values", values.size());
         if (values.size() >= 5) {
-            yinfo("PlotCard::parsePayload: first 5 values: {} {} {} {} {}",
+            yinfo("Plot::parsePayload: first 5 values: {} {} {} {} {}",
                   values[0], values[1], values[2], values[3], values[4]);
         }
 
@@ -329,7 +335,7 @@ private:
 
     Result<void> uploadMetadata() {
         if (!_metaHandle.isValid()) {
-            return Err<void>("PlotCard::uploadMetadata: invalid metadata handle");
+            return Err<void>("Plot::uploadMetadata: invalid metadata handle");
         }
 
         Metadata meta = {};  // Zero-initialize including reserved
@@ -346,14 +352,14 @@ private:
         meta.heightCells = _heightCells;
         meta.bgColor = _bgColor;
 
-        yinfo("PlotCard::uploadMetadata: metaOffset={} plotType={} dataOffset={} "
+        yinfo("Plot::uploadMetadata: metaOffset={} plotType={} dataOffset={} "
               "dataCount={} min={} max={} flags={} size={}x{} bgColor={:#x}",
               _metaHandle.offset, meta.plotType, meta.dataOffset, meta.dataCount,
               meta.minValue, meta.maxValue, meta.flags,
               meta.widthCells, meta.heightCells, meta.bgColor);
 
         if (auto res = _cardMgr->writeMetadata(_metaHandle, &meta, sizeof(meta)); !res) {
-            return Err<void>("PlotCard::uploadMetadata: write failed");
+            return Err<void>("Plot::uploadMetadata: write failed");
         }
 
         return Ok();
@@ -397,7 +403,7 @@ private:
 // Factory methods
 //=============================================================================
 
-Result<CardPtr> PlotCard::create(
+Result<CardPtr> Plot::create(
     CardBufferManager::Ptr mgr,
     const GPUContext& gpu,
     int32_t x, int32_t y,
@@ -405,28 +411,28 @@ Result<CardPtr> PlotCard::create(
     const std::string& args,
     const std::string& payload)
 {
-    yinfo("PlotCard::create: ENTERED pos=({},{}) size={}x{} args='{}' payload_len={}",
+    yinfo("Plot::create: ENTERED pos=({},{}) size={}x{} args='{}' payload_len={}",
           x, y, widthCells, heightCells, args, payload.size());
 
     if (!mgr) {
-        yerror("PlotCard::create: null CardBufferManager!");
-        return Err<CardPtr>("PlotCard::create: null CardBufferManager");
+        yerror("Plot::create: null CardBufferManager!");
+        return Err<CardPtr>("Plot::create: null CardBufferManager");
     }
 
-    auto card = std::make_shared<PlotCardImpl>(
+    auto card = std::make_shared<PlotImpl>(
         std::move(mgr), gpu, x, y, widthCells, heightCells, args, payload);
 
-    yinfo("PlotCard::create: calling init()...");
+    yinfo("Plot::create: calling init()...");
     if (auto res = card->init(); !res) {
-        yerror("PlotCard::create: init FAILED: {}", error_msg(res));
-        return Err<CardPtr>("PlotCard::create: init failed");
+        yerror("Plot::create: init FAILED: {}", error_msg(res));
+        return Err<CardPtr>("Plot::create: init failed");
     }
 
-    yinfo("PlotCard::create: SUCCESS, shaderGlyph={:#x}", card->shaderGlyph());
+    yinfo("Plot::create: SUCCESS, shaderGlyph={:#x}", card->shaderGlyph());
     return Ok<CardPtr>(card);
 }
 
-Result<PlotCard::Ptr> PlotCard::createImpl(
+Result<Plot::Ptr> Plot::createImpl(
     ContextType& ctx,
     CardBufferManager::Ptr mgr,
     const GPUContext& gpu,
@@ -439,14 +445,14 @@ Result<PlotCard::Ptr> PlotCard::createImpl(
 
     auto result = create(std::move(mgr), gpu, x, y, widthCells, heightCells, args, payload);
     if (!result) {
-        return Err<Ptr>("Failed to create PlotCard", result);
+        return Err<Ptr>("Failed to create Plot", result);
     }
-    // Dynamic cast from CardPtr to PlotCard::Ptr
-    auto plotCard = std::dynamic_pointer_cast<PlotCard>(*result);
+    // Dynamic cast from CardPtr to Plot::Ptr
+    auto plotCard = std::dynamic_pointer_cast<Plot>(*result);
     if (!plotCard) {
-        return Err<Ptr>("Created card is not a PlotCard");
+        return Err<Ptr>("Created card is not a Plot");
     }
     return Ok(plotCard);
 }
 
-} // namespace yetty
+} // namespace yetty::card

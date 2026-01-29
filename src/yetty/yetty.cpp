@@ -85,6 +85,7 @@ private:
     GPUContext _gpuContext = {};
     YettyContext _yettyContext = {};
 
+
     // Workspaces
     std::vector<Workspace::Ptr> _workspaces;
     Workspace::Ptr _activeWorkspace;
@@ -400,20 +401,7 @@ Result<void> YettyImpl::initSharedResources() noexcept {
     _gpuContext.queue = _queue;
     _gpuContext.surfaceFormat = _surfaceFormat;
 
-#if !YETTY_WEB && !defined(__ANDROID__)
-    // Create CardBufferManager
-    auto cbmResult = CardBufferManager::create(_device);
-    if (!cbmResult) {
-        return Err<void>("Failed to create CardBufferManager", cbmResult);
-    }
-    _yettyContext.cardBufferManager = *cbmResult;
-
-    if (auto res = _yettyContext.cardBufferManager->initAtlas(); !res) {
-        return Err<void>("Failed to initialize card atlas", res);
-    }
-#endif
-
-    // Create shared uniform buffer
+    // Create shared uniform buffer FIRST (needed by CardBufferManager)
     WGPUBufferDescriptor bufDesc = {};
     bufDesc.label = WGPU_STR("Shared Uniforms");
     bufDesc.size = sizeof(SharedUniforms);
@@ -421,72 +409,21 @@ Result<void> YettyImpl::initSharedResources() noexcept {
     _sharedUniformBuffer = wgpuDeviceCreateBuffer(_device, &bufDesc);
 
 #if !YETTY_WEB && !defined(__ANDROID__)
-    // Create bind group layout with card buffers
-    std::array<WGPUBindGroupLayoutEntry, 6> layoutEntries = {};
+    // Create CardBufferManager - it manages the shared bind group internally
+    auto cbmResult = CardBufferManager::create(&_gpuContext, _sharedUniformBuffer, sizeof(SharedUniforms));
+    if (!cbmResult) {
+        return Err<void>("Failed to create CardBufferManager", cbmResult);
+    }
+    _yettyContext.cardBufferManager = *cbmResult;
 
-    layoutEntries[0].binding = 0;
-    layoutEntries[0].visibility = WGPUShaderStage_Fragment;
-    layoutEntries[0].buffer.type = WGPUBufferBindingType_Uniform;
-    layoutEntries[0].buffer.minBindingSize = sizeof(SharedUniforms);
+    // Initialize atlas - this also creates the shared bind group
+    if (auto res = _yettyContext.cardBufferManager->initAtlas(); !res) {
+        return Err<void>("Failed to initialize card atlas", res);
+    }
 
-    layoutEntries[1].binding = 1;
-    layoutEntries[1].visibility = WGPUShaderStage_Fragment;
-    layoutEntries[1].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
-
-    layoutEntries[2].binding = 2;
-    layoutEntries[2].visibility = WGPUShaderStage_Fragment;
-    layoutEntries[2].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
-
-    layoutEntries[3].binding = 3;
-    layoutEntries[3].visibility = WGPUShaderStage_Fragment;
-    layoutEntries[3].texture.sampleType = WGPUTextureSampleType_Float;
-    layoutEntries[3].texture.viewDimension = WGPUTextureViewDimension_2D;
-
-    layoutEntries[4].binding = 4;
-    layoutEntries[4].visibility = WGPUShaderStage_Fragment;
-    layoutEntries[4].sampler.type = WGPUSamplerBindingType_Filtering;
-
-    layoutEntries[5].binding = 5;
-    layoutEntries[5].visibility = WGPUShaderStage_Fragment;
-    layoutEntries[5].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
-
-    WGPUBindGroupLayoutDescriptor layoutDesc = {};
-    layoutDesc.label = WGPU_STR("Shared Bind Group Layout");
-    layoutDesc.entryCount = layoutEntries.size();
-    layoutDesc.entries = layoutEntries.data();
-    _sharedBindGroupLayout = wgpuDeviceCreateBindGroupLayout(_device, &layoutDesc);
-
-    // Create bind group
-    std::array<WGPUBindGroupEntry, 6> bindEntries = {};
-
-    bindEntries[0].binding = 0;
-    bindEntries[0].buffer = _sharedUniformBuffer;
-    bindEntries[0].size = sizeof(SharedUniforms);
-
-    bindEntries[1].binding = 1;
-    bindEntries[1].buffer = _yettyContext.cardBufferManager->metadataBuffer();
-    bindEntries[1].size = wgpuBufferGetSize(_yettyContext.cardBufferManager->metadataBuffer());
-
-    bindEntries[2].binding = 2;
-    bindEntries[2].buffer = _yettyContext.cardBufferManager->storageBuffer();
-    bindEntries[2].size = wgpuBufferGetSize(_yettyContext.cardBufferManager->storageBuffer());
-
-    bindEntries[3].binding = 3;
-    bindEntries[3].textureView = _yettyContext.cardBufferManager->atlasTextureView();
-
-    bindEntries[4].binding = 4;
-    bindEntries[4].sampler = _yettyContext.cardBufferManager->atlasSampler();
-
-    bindEntries[5].binding = 5;
-    bindEntries[5].buffer = _yettyContext.cardBufferManager->imageDataBuffer();
-    bindEntries[5].size = wgpuBufferGetSize(_yettyContext.cardBufferManager->imageDataBuffer());
-
-    WGPUBindGroupDescriptor bindDesc = {};
-    bindDesc.label = WGPU_STR("Shared Bind Group");
-    bindDesc.layout = _sharedBindGroupLayout;
-    bindDesc.entryCount = bindEntries.size();
-    bindDesc.entries = bindEntries.data();
-    _sharedBindGroup = wgpuDeviceCreateBindGroup(_device, &bindDesc);
+    // Get bind group references from CardBufferManager (it updates GPUContext directly)
+    _sharedBindGroupLayout = _gpuContext.sharedBindGroupLayout;
+    _sharedBindGroup = _gpuContext.sharedBindGroup;
 #else
     // Web/Android: only shared uniforms
     WGPUBindGroupLayoutEntry layoutEntry = {};
@@ -510,11 +447,10 @@ Result<void> YettyImpl::initSharedResources() noexcept {
     bindDesc.entryCount = 1;
     bindDesc.entries = &bindEntry;
     _sharedBindGroup = wgpuDeviceCreateBindGroup(_device, &bindDesc);
-#endif
 
-    // Complete GPUContext initialization with shared resources
     _gpuContext.sharedBindGroupLayout = _sharedBindGroupLayout;
     _gpuContext.sharedBindGroup = _sharedBindGroup;
+#endif
 
     return Ok();
 }
@@ -796,7 +732,7 @@ void YettyImpl::mainLoopIteration() noexcept {
     _sharedUniforms.mouseY = static_cast<float>(mouseYd);
     wgpuQueueWriteBuffer(_queue, _sharedUniformBuffer, 0, &_sharedUniforms, sizeof(SharedUniforms));
 
-    // Flush card buffer manager (uploads dirty regions to GPU)
+    // Flush card buffer manager (uploads dirty regions to GPU, may grow buffers)
     if (_yettyContext.cardBufferManager) {
         if (auto res = _yettyContext.cardBufferManager->flush(_queue); !res) {
             yerror("CardBufferManager flush failed: {}", res.error().message());

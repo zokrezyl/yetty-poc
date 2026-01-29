@@ -19,8 +19,7 @@ namespace yetty {
  *
  * The metadataOffset serves as the unique identifier for the card's lifetime.
  */
-class Card : public base::EventListener,
-             public std::enable_shared_from_this<Card> {
+class Card : public base::EventListener {
 public:
     using Ptr = std::shared_ptr<Card>;
 
@@ -33,8 +32,7 @@ public:
     //=========================================================================
     // Lifecycle
     //=========================================================================
-    virtual Result<void> init() = 0;
-    virtual void dispose() = 0;
+    virtual Result<void> dispose() = 0;
 
     //=========================================================================
     // EventListener interface - for mouse/keyboard input
@@ -57,7 +55,12 @@ public:
     //=========================================================================
     // Per-frame update (called if card is visible)
     //=========================================================================
-    virtual void update(float time) { (void)time; }
+    virtual Result<void> update(float time) { (void)time; return Ok(); }
+
+    // Called by gpu-screen when cell pixel size changes (e.g. zoom)
+    virtual void setCellSize(uint32_t cellWidth, uint32_t cellHeight) {
+        (void)cellWidth; (void)cellHeight;
+    }
 
     //=========================================================================
     // Accessors
@@ -66,8 +69,8 @@ public:
     // Raw byte offset in metadata buffer
     uint32_t metadataOffset() const { return _metaHandle.offset; }
 
-    // Slot index for ANSI encoding (offset / 32)
-    uint32_t metadataSlotIndex() const { return _metaHandle.offset / 32; }
+    // Slot index for ANSI encoding - must be implemented by each card
+    virtual uint32_t metadataSlotIndex() const = 0;
 
     // Shader glyph codepoint
     uint32_t shaderGlyph() const { return _shaderGlyph; }

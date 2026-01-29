@@ -116,10 +116,7 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     return output;
 }
 
-// MSDF median function
-fn median(r: f32, g: f32, b: f32) -> f32 {
-    return max(min(r, g), min(max(r, g), b));
-}
+// Note: median() function moved to lib/text.wgsl
 
 // Helper function to check if pixel is in underline region
 fn isInUnderline(localY: f32, cellHeight: f32, underlineType: u32, scale: f32) -> bool {

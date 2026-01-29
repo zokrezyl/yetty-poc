@@ -11,23 +11,24 @@
 
 namespace yetty {
 
+struct YettyContext;  // Forward declaration
+
 /**
  * CardFactory - Creates card instances by type name
  *
  * Card types register themselves with a creator function.
  * GPUScreen uses this to create cards from OSC commands.
  *
- * Created via ObjectFactory with GPUContext and CardBufferManager.
+ * Created via ObjectFactory with YettyContext.
  * Stored in YettyContext for access by GPUScreen.
  */
 class CardFactory : public base::ObjectFactory<CardFactory> {
 public:
     using Ptr = std::shared_ptr<CardFactory>;
 
-    // Creator function signature
+    // Creator function signature - receives full YettyContext
     using CreateFn = std::function<Result<CardPtr>(
-        CardBufferManager::Ptr mgr,
-        const GPUContext& gpu,
+        const YettyContext& ctx,
         int32_t x, int32_t y,
         uint32_t widthCells, uint32_t heightCells,
         const std::string& args,
@@ -61,6 +62,7 @@ public:
 
     // Create a card instance
     virtual Result<CardPtr> createCard(
+        const YettyContext& ctx,
         const std::string& name,
         int32_t x, int32_t y,
         uint32_t widthCells, uint32_t heightCells,
