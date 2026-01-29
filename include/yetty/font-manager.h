@@ -5,6 +5,7 @@
 #include <yetty/shader-font.h>
 #include <yetty/gpu-context.h>
 #include <yetty/shader-manager.h>
+#include <yetty/msdf-cdb-provider.h>
 #include <yetty/result.hpp>
 #include <yetty/base/base.h>
 #include <string>
@@ -27,7 +28,8 @@ public:
     // Factory - creates FontManagerImpl
     static Result<Ptr> createImpl(ContextType& ctx,
                                   const GPUContext& gpu,
-                                  ShaderManager::Ptr shaderMgr) noexcept;
+                                  ShaderManager::Ptr shaderMgr,
+                                  MsdfCdbProvider::Ptr cdbProvider = nullptr) noexcept;
 
     virtual Result<MsMsdfFont::Ptr> getMsMsdfFont(const std::string& fontName) noexcept = 0;
     virtual MsMsdfFont::Ptr getDefaultMsMsdfFont() noexcept = 0;

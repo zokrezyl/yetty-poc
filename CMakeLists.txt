@@ -515,6 +515,8 @@ elseif(NOT EMSCRIPTEN)
         # src/yetty/font.cpp  # Moved to obsolete
         src/yetty/ms-msdf-font.cpp
         src/yetty/font-manager.cpp
+        src/yetty/msdf-cdb-provider.cpp
+        src/yetty/msdf-gen/generator.cpp
         # src/yetty/rich-text.cpp  # TODO: refactor for new Font interface
         src/yetty/bm-font.cpp
         src/yetty/shader-font.cpp
@@ -703,6 +705,7 @@ else()
         msdfgen::msdfgen-core
         msdfgen::msdfgen-ext
         freetype
+        msdf::wgsl
         ytrace::ytrace
         lz4_static
         uv_a

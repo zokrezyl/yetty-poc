@@ -25,6 +25,10 @@ if(TARGET webgpu)
     target_link_libraries(msdf-wgsl PUBLIC webgpu)
 endif()
 
+if(TARGET cdb)
+    target_link_libraries(msdf-wgsl PUBLIC cdb)
+endif()
+
 if(TARGET Freetype::Freetype)
     target_link_libraries(msdf-wgsl PUBLIC Freetype::Freetype)
 elseif(TARGET freetype)
@@ -45,3 +49,6 @@ add_subdirectory(gen-cdb)
 
 # Atlas viewer
 add_subdirectory(render-atlas)
+
+# CDB comparison tool
+add_subdirectory(compare)

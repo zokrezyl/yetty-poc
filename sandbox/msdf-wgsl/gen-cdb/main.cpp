@@ -14,6 +14,7 @@
 #include <iostream>
 #include <cstring>
 #include <chrono>
+#include <cmath>
 #include <vector>
 #include <fstream>
 #include <filesystem>
@@ -187,10 +188,29 @@ int main(int argc, char* argv[]) {
         // Create context with instance for event processing
         msdf::Context ctx(device, instance);
 
-        // Load font
+        // Load font with scale matching the CPU generator so atlas pixel
+        // dimensions equal display pixel dimensions.
+        // CPU uses fontScale = fontSize / unitsPerEm (with fontSize=32).
+        // GPU atlas: atlasW = ceil(boundsW/64 * scale) + 2*padding
+        // CPU bitmap: bitmapW = ceil(boundsW * fontScale) + 2*padding
+        //           = ceil(boundsW/64 * fontScale*64) + 2*padding
+        // For them to match: scale = fontScale * 64 = fontSize * 64 / unitsPerEm
+        // Read unitsPerEm via FreeType before loading
+        float fontSize = 32.0f;
+        FT_Library ftLib;
+        FT_Face ftFace;
+        FT_Init_FreeType(&ftLib);
+        FT_New_Face(ftLib, fontPath.c_str(), 0, &ftFace);
+        float unitsPerEm = static_cast<float>(ftFace->units_per_EM);
+        FT_Done_Face(ftFace);
+        FT_Done_FreeType(ftLib);
+
         msdf::FontConfig config;
-        config.scale = 2.0f;
         config.range = 4.0f;
+        config.scale = fontSize * 64.0f / unitsPerEm;
+
+        std::cout << "[FONT] unitsPerEm=" << unitsPerEm
+                  << " scale=" << config.scale << "\n";
 
         auto font = ctx.loadFont(fontPath, config);
         if (!font) {
@@ -243,6 +263,10 @@ int main(int argc, char* argv[]) {
         int atlasW = font->getAtlas()->getWidth();
         int written = 0;
 
+        // Convert from FreeType font design units to scaled pixel values
+        float fontScale = fontSize / unitsPerEm;
+        int padding = static_cast<int>(std::ceil(config.range));
+
         for (const auto& glyph : glyphs) {
             // Build CDB key (4-byte little-endian codepoint)
             char key[4];
@@ -252,12 +276,16 @@ int main(int argc, char* argv[]) {
             key[3] = (glyph.codepoint >> 24) & 0xFF;
 
             // Build value: header + pixel data
-            MsdfGlyphData header;
+            MsdfGlyphData header{};
+            header.codepoint = glyph.codepoint;
             header.width = glyph.atlasW;
             header.height = glyph.atlasH;
-            header.bearingX = glyph.bearingX;
-            header.bearingY = glyph.bearingY;
-            header.advance = glyph.advance;
+            header.bearingX = static_cast<float>(glyph.bearingX) * fontScale - padding;
+            header.bearingY = static_cast<float>(glyph.bearingY) * fontScale + padding;
+            // With scale = fontSize*64/unitsPerEm, atlas dimensions match display dimensions
+            header.sizeX    = static_cast<float>(glyph.atlasW);
+            header.sizeY    = static_cast<float>(glyph.atlasH);
+            header.advance  = glyph.advance * fontScale;
 
             size_t pixelBytes = glyph.atlasW * glyph.atlasH * 4;
             std::vector<char> value(sizeof(MsdfGlyphData) + pixelBytes);
