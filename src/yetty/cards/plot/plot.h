@@ -90,10 +90,12 @@ public:
     //=========================================================================
     // Card interface
     //=========================================================================
-    Result<void> init() override = 0;
-    void dispose() override = 0;
-    void update(float time) override = 0;
+    Result<void> dispose() override = 0;
+    Result<void> update(float time) override = 0;
     const char* typeName() const override { return "plot"; }
+
+    // Override for 64-byte metadata slots (shader uses slotIndex * 16)
+    uint32_t metadataSlotIndex() const override { return _metaHandle.offset / 64; }
 
     //=========================================================================
     // Plot-specific API

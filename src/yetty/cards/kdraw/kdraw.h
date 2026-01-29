@@ -11,36 +11,41 @@
 namespace yetty::card {
 
 //=============================================================================
-// HDraw - Card for rendering SDF primitives with UNIFORM GRID SPATIAL HASHING
+// KDraw - Card for rendering SDF primitives with COMPUTE SHADER TILE CULLING
 //
-// Uses shader glyph U+100003 (card base + offset 0x0003)
+// Uses shader glyph U+100004 (card base + offset 0x0004)
 //
 // =============================================================================
 // Architecture:
 // =============================================================================
 // 1. Input: SDF primitives (circle, box, bezier, etc.)
-// 2. CPU: Build uniform grid - O(N) to assign primitives to cells
-// 3. Fragment shader: O(1) grid lookup - pixel -> cell -> primitive list
+// 2. Compute shader: For each 8x8 pixel tile, build compact primitive list
+// 3. Fragment shader: Read tile's compact list, evaluate only those primitives
 //
-// This is MUCH faster than BVH for dense/uniform scenes.
+// This approach:
+// - Uses screen-space tiles (always 8x8 pixels regardless of zoom)
+// - Leverages GPU shared memory for tile-local primitive lists
+// - All 64 threads in a tile share the same primitive list (no divergence)
+// - Much better cache coherency than scene-space grids
 //
 // =============================================================================
-// Grid layout:
+// Buffer layout:
 // =============================================================================
-// Scene is divided into gridWidth x gridHeight cells.
-// Each cell stores: [primCount][primIdx0][primIdx1]...[primIdxN]
-// Cell lookup: cellIndex = (y / cellSize) * gridWidth + (x / cellSize)
+// 1. Primitives buffer: SDFPrimitive array
+// 2. Tile lists buffer: Per-tile compact primitive indices
+//    - Organized as: [tile0_count, tile0_idx0, tile0_idx1, ..., tile1_count, ...]
+//    - Each tile has MAX_PRIMS_PER_TILE + 1 slots (count + indices)
 //
 // =============================================================================
 // Metadata layout (64 bytes):
 //   offset 0:  primitiveOffset (u32)  - offset in cardStorage (float index)
 //   offset 4:  primitiveCount (u32)   - number of primitives
-//   offset 8:  gridOffset (u32)       - offset of grid data in cardStorage
-//   offset 12: gridWidth (u32)        - number of cells horizontally
-//   offset 16: gridHeight (u32)       - number of cells vertically
-//   offset 20: cellSize (f32)         - size of each cell in scene units
-//   offset 24: maxPrimsPerCell (u32)  - max primitives stored per cell
-//   offset 28: _reserved (u32)
+//   offset 8:  tileListOffset (u32)   - offset of tile lists in cardStorage
+//   offset 12: tileCountX (u32)       - number of tiles horizontally
+//   offset 16: tileCountY (u32)       - number of tiles vertically
+//   offset 20: tileSize (u32)         - tile size in pixels (8)
+//   offset 24: glyphOffset (u32)      - offset of glyph data
+//   offset 28: glyphCount (u32)       - number of glyphs
 //   offset 32: sceneMinX (f32)
 //   offset 36: sceneMinY (f32)
 //   offset 40: sceneMaxX (f32)
@@ -52,16 +57,10 @@ namespace yetty::card {
 //=============================================================================
 
 // Import SDFPrimitive from ydraw.h (same format)
-// We forward declare here to avoid full include
 struct SDFPrimitive;  // Defined in ydraw.h
 
-//=============================================================================
-// Text structures for MSDF text rendering
-//=============================================================================
-
-// Positioned glyph for GPU rendering (32 bytes)
-// Stored in cardStorage, rendered by shader
-struct HDrawGlyph {
+// Positioned glyph for GPU rendering (32 bytes) - same as HDraw
+struct KDrawGlyph {
     float x, y;              // Position in scene coordinates
     float width, height;     // Glyph size in scene coordinates
     uint32_t glyphIndex;     // Index in glyphMetadata buffer
@@ -69,27 +68,27 @@ struct HDrawGlyph {
     uint32_t layer;          // Draw order
     uint32_t _pad;           // Padding for alignment
 };
-static_assert(sizeof(HDrawGlyph) == 32, "HDrawGlyph must be 32 bytes");
+static_assert(sizeof(KDrawGlyph) == 32, "KDrawGlyph must be 32 bytes");
 
 //=============================================================================
-// HDraw class
+// KDraw class
 //=============================================================================
 
-class HDraw : public Card,
-              public base::ObjectFactory<HDraw> {
+class KDraw : public Card,
+              public base::ObjectFactory<KDraw> {
 public:
-    using Ptr = std::shared_ptr<HDraw>;
+    using Ptr = std::shared_ptr<KDraw>;
 
     // Shader glyph codepoint
-    static constexpr uint32_t SHADER_GLYPH = 0x100003;  // Card base + 0x0003
+    static constexpr uint32_t SHADER_GLYPH = 0x100004;  // Card base + 0x0004
 
-    // Default grid parameters
-    static constexpr uint32_t DEFAULT_MAX_PRIMS_PER_CELL = 16;
-    static constexpr float DEFAULT_CELL_SIZE = 0.0f;  // 0 = auto-compute optimal size
+    // Tile parameters
+    static constexpr uint32_t TILE_SIZE = 8;  // 8x8 pixels per tile
+    static constexpr uint32_t MAX_PRIMS_PER_TILE = 16;  // Max primitives per tile
 
     // Flags
     static constexpr uint32_t FLAG_SHOW_BOUNDS = 1;
-    static constexpr uint32_t FLAG_SHOW_GRID = 2;
+    static constexpr uint32_t FLAG_SHOW_TILES = 2;
     static constexpr uint32_t FLAG_SHOW_EVAL_COUNT = 4;
 
     //=========================================================================
@@ -111,21 +110,20 @@ public:
         const std::string& args,
         const std::string& payload) noexcept;
 
-    virtual ~HDraw() = default;
+    virtual ~KDraw() = default;
 
     //=========================================================================
     // Card interface
     //=========================================================================
-    Result<void> init() override = 0;
-    void dispose() override = 0;
-    void update(float time) override = 0;
-    const char* typeName() const override { return "hdraw"; }
+    Result<void> dispose() override = 0;
+    Result<void> update(float time) override = 0;
+    const char* typeName() const override { return "kdraw"; }
 
-    // Override for 64-byte metadata slots (shader uses slotIndex * 16)
+    // Override for 64-byte metadata slots
     uint32_t metadataSlotIndex() const override { return _metaHandle.offset / 64; }
 
     //=========================================================================
-    // HDraw-specific API
+    // KDraw-specific API
     //=========================================================================
 
     // Add SDF primitive (returns primitive index)
@@ -151,8 +149,6 @@ public:
                                 uint32_t layer = 0) = 0;
 
     // Add text at position (returns number of glyphs added)
-    // Text is laid out horizontally starting at (x, y)
-    // fontSize is in scene units
     virtual uint32_t addText(float x, float y, const std::string& text,
                              float fontSize, uint32_t color,
                              uint32_t layer = 0) = 0;
@@ -164,7 +160,7 @@ public:
     virtual uint32_t primitiveCount() const = 0;
     virtual uint32_t glyphCount() const = 0;
 
-    // Mark data as dirty (triggers grid rebuild on next update)
+    // Mark data as dirty (triggers tile rebuild on next update)
     virtual void markDirty() = 0;
 
     // Set background color
@@ -175,12 +171,11 @@ public:
     virtual void setSceneBounds(float minX, float minY, float maxX, float maxY) = 0;
     virtual bool hasExplicitBounds() const = 0;
 
-    // Set grid cell size (smaller = finer grid, more cells, more memory)
-    virtual void setCellSize(float size) = 0;
-    virtual float cellSize() const = 0;
+    // Run compute shader to build tile lists (called automatically in update)
+    virtual void runTileCulling() = 0;
 
 protected:
-    HDraw(CardBufferManager::Ptr mgr, const GPUContext& gpu,
+    KDraw(CardBufferManager::Ptr mgr, const GPUContext& gpu,
           int32_t x, int32_t y,
           uint32_t widthCells, uint32_t heightCells)
         : Card(std::move(mgr), gpu, x, y, widthCells, heightCells)

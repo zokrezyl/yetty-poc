@@ -267,7 +267,7 @@ public:
     // Card interface
     //=========================================================================
 
-    Result<void> init() override {
+    Result<void> init() {
         // Allocate metadata slot
         auto metaResult = _cardMgr->allocateMetadata(sizeof(Metadata));
         if (!metaResult) {
@@ -303,7 +303,7 @@ public:
         return Ok();
     }
 
-    void dispose() override {
+    Result<void> dispose() override {
         if (_storageHandle.isValid() && _cardMgr) {
             _cardMgr->deallocateStorage(_storageHandle);
             _storageHandle = StorageHandle::invalid();
@@ -313,9 +313,11 @@ public:
             _cardMgr->deallocateMetadata(_metaHandle);
             _metaHandle = MetadataHandle::invalid();
         }
+
+        return Ok();
     }
 
-    void update(float time) override {
+    Result<void> update(float time) override {
         (void)time;
 
         ydebug("YDraw::update called, _dirty={} _metadataDirty={} primCount={}",
@@ -329,9 +331,13 @@ public:
 
         if (_metadataDirty) {
             ydebug("YDraw::update: calling uploadMetadata()");
-            uploadMetadata();
+            if (auto res = uploadMetadata(); !res) {
+                return Err<void>("YDraw::update: metadata upload failed", res);
+            }
             _metadataDirty = false;
         }
+
+        return Ok();
     }
 
     //=========================================================================

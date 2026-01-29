@@ -58,8 +58,15 @@ public:
 #endif
     }
 
-    Result<void> registerListener(Event::Type type, EventListener::Ptr listener) override {
-        _listeners[type].push_back(listener);
+    Result<void> registerListener(Event::Type type, EventListener::Ptr listener, int priority = 0) override {
+        auto& vec = _listeners[type];
+        // Insert sorted by priority (descending - higher priority first)
+        PrioritizedListener entry{listener, priority};
+        auto insertPos = std::lower_bound(vec.begin(), vec.end(), entry,
+            [](const PrioritizedListener& a, const PrioritizedListener& b) {
+                return a.priority > b.priority;  // descending
+            });
+        vec.insert(insertPos, entry);
         return Ok();
     }
 
@@ -70,8 +77,8 @@ public:
         auto& vec = it->second;
         vec.erase(
             std::remove_if(vec.begin(), vec.end(),
-                [&](const std::weak_ptr<EventListener>& wp) {
-                    auto sp = wp.lock();
+                [&](const PrioritizedListener& pl) {
+                    auto sp = pl.listener.lock();
                     return !sp || sp == listener;
                 }),
             vec.end());
@@ -82,8 +89,8 @@ public:
         for (auto& [type, vec] : _listeners) {
             vec.erase(
                 std::remove_if(vec.begin(), vec.end(),
-                    [&](const std::weak_ptr<EventListener>& wp) {
-                        auto sp = wp.lock();
+                    [&](const PrioritizedListener& pl) {
+                        auto sp = pl.listener.lock();
                         return !sp || sp == listener;
                     }),
                 vec.end());
@@ -95,15 +102,15 @@ public:
         auto it = _listeners.find(event.type);
         if (it == _listeners.end()) return Ok(false);
 
-        auto listeners = it->second;
-        for (const auto& wp : listeners) {
-            if (auto sp = wp.lock()) {
+        auto listeners = it->second;  // copy for safe iteration
+        for (const auto& pl : listeners) {
+            if (auto sp = pl.listener.lock()) {
                 auto result = sp->onEvent(event);
                 if (!result) {
                     return Err<bool>("Event handler failed", result);
                 }
                 if (*result) {
-                    return Ok(true);
+                    return Ok(true);  // consumed by higher priority listener
                 }
             }
         }
@@ -113,8 +120,8 @@ public:
     Result<void> broadcast(const Event& event) override {
         auto listenersCopy = _listeners;
         for (auto& [type, vec] : listenersCopy) {
-            for (const auto& wp : vec) {
-                if (auto sp = wp.lock()) {
+            for (const auto& pl : vec) {
+                if (auto sp = pl.listener.lock()) {
                     auto result = sp->onEvent(event);
                     if (!result) {
                         return Err<void>("Broadcast handler failed", result);
@@ -351,7 +358,12 @@ private:
     }
 #endif
 
-    std::unordered_map<Event::Type, std::vector<std::weak_ptr<EventListener>>, EventTypeHash> _listeners;
+    struct PrioritizedListener {
+        std::weak_ptr<EventListener> listener;
+        int priority;
+    };
+
+    std::unordered_map<Event::Type, std::vector<PrioritizedListener>, EventTypeHash> _listeners;
 
 #if !YETTY_WEB && !defined(__ANDROID__)
     uv_loop_t* _loop = nullptr;

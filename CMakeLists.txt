@@ -509,10 +509,7 @@ elseif(NOT EMSCRIPTEN)
         src/yetty/card-factory.cpp
         src/yetty/card.cpp
         src/yetty/imgui-manager.cpp
-        src/yetty/cards/plot.cpp
-        src/yetty/cards/texture.cpp
-        src/yetty/cards/ydraw.cpp
-        src/yetty/cards/hdraw.cpp
+        # Card sources added via add_subdirectory(src/yetty/cards)
         # Core sources (previously in yetty_core)
         # src/yetty/font.cpp  # Moved to obsolete
         src/yetty/ms-msdf-font.cpp
@@ -566,6 +563,11 @@ target_include_directories(yetty PRIVATE
 if(UNIX AND NOT EMSCRIPTEN AND YETTY_PLUGIN_PYTHON)
     target_include_directories(yetty PRIVATE ${CMAKE_BINARY_DIR}/python/install/include/python3.13)
     target_compile_definitions(yetty PRIVATE CMAKE_BINARY_DIR="${CMAKE_BINARY_DIR}" YETTY_PLUGIN_PYTHON=1)
+endif()
+
+# Card subdirectories (desktop only - cards use CardBufferManager, ImGui, etc.)
+if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
+    add_subdirectory(src/yetty/cards)
 endif()
 
 target_compile_definitions(yetty PRIVATE

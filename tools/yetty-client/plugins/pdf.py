@@ -1,41 +1,40 @@
 """PDF plugin - display PDF documents in terminal."""
 
+import sys
 import click
 from pathlib import Path
 
 
 @click.command()
-@click.argument('file', type=click.Path(exists=True))
-@click.option('--page', '-p', type=int, default=1, help='Initial page to display (1-indexed)')
+@click.option('--input', '-i', 'input_', required=True, help='PDF file (use - for stdin)')
+@click.option('--page', '-p', default=None, type=int, help='Initial page number (0-based)')
+@click.option('--zoom', '-z', default=None, type=float, help='Initial zoom level (e.g. 1.0, 2.0)')
 @click.pass_context
-def pdf(ctx, file, page):
-    """PDF viewer plugin.
+def pdf(ctx, input_, page, zoom):
+    """PDF display plugin.
 
-    Renders PDF documents using MuPDF and MSDF text rendering.
-    Text is extracted from the PDF and rendered using the terminal font.
+    Displays PDF documents in the terminal using WebGPU rendering.
+    Scroll to navigate pages, Ctrl+Scroll to zoom.
 
-    Navigation:
-        PageUp/PageDown - Previous/next page
-        +/-             - Zoom in/out
-        Mouse scroll    - Scroll within page
-
-    Examples:
-        yetty-client run pdf document.pdf
-        yetty-client run pdf --page 5 manual.pdf
+    Example:
+        yetty-client --new create pdf -i document.pdf -w 80 -H 40
+        cat document.pdf | yetty-client --new create pdf -i - -w 80 -H 40
     """
     ctx.ensure_object(dict)
 
-    path = Path(file)
-    if not path.exists():
-        raise click.ClickException(f"File not found: {file}")
+    if input_ == '-':
+        pdf_data = sys.stdin.buffer.read()
+    else:
+        pdf_data = Path(input_).read_bytes()
 
-    if not path.suffix.lower() == '.pdf':
-        raise click.ClickException(f"File must be a PDF: {file}")
-
-    # Payload is just the file path - the C++ plugin handles everything
-    payload = str(path.absolute())
-
-    ctx.obj['payload'] = payload
+    ctx.obj['payload_bytes'] = pdf_data
     ctx.obj['plugin_name'] = 'pdf'
-    # Store page for potential future use (plugin would need to support it)
-    ctx.obj['initial_page'] = page - 1  # Convert to 0-indexed
+
+    # Build plugin args from options
+    args_parts = []
+    if page is not None:
+        args_parts.append(f'--page {page}')
+    if zoom is not None:
+        args_parts.append(f'--zoom {zoom}')
+    if args_parts:
+        ctx.obj['plugin_args'] = ' '.join(args_parts)

@@ -1,5 +1,7 @@
 #include <yetty/tile.h>
 #include <yetty/view.h>
+#include <ytrace/ytrace.hpp>
+#include <algorithm>
 
 namespace yetty {
 
@@ -146,10 +148,26 @@ void Pane::handleFocusEvent(const Event& event) {
     (void)event;
 }
 
+Rect Pane::innerBounds() const {
+    constexpr float border = 5.0f; // max of focused(5) / unfocused(4)
+    return {
+        _bounds.x + border,
+        _bounds.y + border,
+        std::max(0.0f, _bounds.width - 2 * border),
+        std::max(0.0f, _bounds.height - 2 * border)
+    };
+}
+
 Result<void> Pane::setBounds(Rect r) {
     _bounds = r;
     if (auto* view = activeView()) {
-        view->setBounds(r);
+        Rect inner = innerBounds();
+        yinfo("Pane::setBounds outer=({},{} {}x{}) inner=({},{} {}x{})",
+              r.x, r.y, r.width, r.height,
+              inner.x, inner.y, inner.width, inner.height);
+        if (inner.width > 0 && inner.height > 0) {
+            view->setBounds(inner);
+        }
     }
     return Ok();
 }
@@ -188,7 +206,7 @@ void Pane::collectFrames(std::vector<FrameInfo>& frames) const {
 Result<void> Pane::pushView(std::shared_ptr<View> view) {
     _views.push_back(std::move(view));
     if (!_views.empty() && _bounds.width > 0 && _bounds.height > 0) {
-        _views.back()->setBounds(_bounds);
+        _views.back()->setBounds(innerBounds());
     }
     return Ok();
 }

@@ -101,6 +101,7 @@ public:
     // id() comes from Object base class
     bool focused() const { return _focused; }
 
+    Rect innerBounds() const;
     Result<void> pushView(std::shared_ptr<View> view);
     Result<void> popView();
     View* activeView();

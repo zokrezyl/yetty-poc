@@ -1,5 +1,5 @@
 #include "hdraw.h"
-#include "ydraw.h"  // For SDFPrimitive definition
+#include "../ydraw/ydraw.h"  // For SDFPrimitive definition
 #include <yetty/ms-msdf-font.h>
 #include <yetty/font-manager.h>
 #include <ytrace/ytrace.hpp>
@@ -220,7 +220,7 @@ public:
     // Card interface
     //=========================================================================
 
-    Result<void> init() override {
+    Result<void> init() {
         // Allocate metadata slot
         auto metaResult = _cardMgr->allocateMetadata(sizeof(Metadata));
         if (!metaResult) {
@@ -257,7 +257,7 @@ public:
         return Ok();
     }
 
-    void dispose() override {
+    Result<void> dispose() override {
         if (_storageHandle.isValid() && _cardMgr) {
             _cardMgr->deallocateStorage(_storageHandle);
             _storageHandle = StorageHandle::invalid();
@@ -267,9 +267,11 @@ public:
             _cardMgr->deallocateMetadata(_metaHandle);
             _metaHandle = MetadataHandle::invalid();
         }
+
+        return Ok();
     }
 
-    void update(float time) override {
+    Result<void> update(float time) override {
         (void)time;
 
         if (_dirty) {
@@ -278,9 +280,13 @@ public:
         }
 
         if (_metadataDirty) {
-            uploadMetadata();
+            if (auto res = uploadMetadata(); !res) {
+                return Err<void>("HDraw::update: metadata upload failed", res);
+            }
             _metadataDirty = false;
         }
+
+        return Ok();
     }
 
     //=========================================================================

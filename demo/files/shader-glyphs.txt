@@ -1,18 +1,20 @@
-􁀀 spinner
-􁀁 pulse
-􁀂 wave
-􁀃 fire
-􁀄 gem
-􁀅 heart
-􁀆 party
-􁀇 plasma
-􁀈 ripple
-􁀉 rocket
-􁀊 smiley
-􁀋 sparkle
-􁀌 star
-􁀍 mandelbrot
-􁀎 julia
-􁀏 biomine
-􁀐 minkowski-tube
-􁀑 voronoi
+ 􁀀 spinner
+ 􁀁 pulse
+ 􁀂 wave
+ 􁀃 fire
+ 􁀄 gem
+ 􁀅 heart
+ 􁀆 party
+ 􁀇 plasma
+ 􁀈 ripple
+ 􁀉 rocket
+ 􁀊 smiley
+ 􁀋 sparkle
+ 􁀌 star
+ 􁀍 mandelbrot
+ 􁀎 julia
+ 􁀏 biomine
+ 􁀐 minkowski-tube
+ 􁀑 voronoi
+ 􁀒 watch
+ 􁀓 spiral

@@ -1,9 +1,13 @@
 #include <yetty/card-factory.h>
 #include <yetty/yetty-context.h>
-#include "cards/texture.h"
-#include "cards/plot.h"
-#include "cards/ydraw.h"
-#include "cards/hdraw.h"
+#include "cards/image/image.h"
+#include "cards/plot/plot.h"
+#include "cards/ydraw/ydraw.h"
+#include "cards/hdraw/hdraw.h"
+#include "cards/kdraw/kdraw.h"
+#ifdef YETTY_CARD_PDF
+#include "cards/pdf/pdf.h"
+#endif
 #include <ytrace/ytrace.hpp>
 #include <unordered_map>
 
@@ -20,12 +24,15 @@ public:
 
     Result<void> init() {
         // Register built-in card types
-        registerCard("texture", [](const YettyContext& ctx,
-                                   int32_t x, int32_t y,
-                                   uint32_t w, uint32_t h,
-                                   const std::string& args,
-                                   const std::string& payload) {
-            return card::Texture::create(ctx.cardBufferManager, ctx.gpu, x, y, w, h, args, payload);
+        // "texture" is the canonical name, "image" is an alias for backward compatibility
+        registerCard("image", [](const YettyContext& ctx,
+                                int32_t x, int32_t y,
+                                uint32_t w, uint32_t h,
+                                const std::string& args,
+                                const std::string& payload) -> Result<CardPtr> {
+            auto result = card::Image::create(ctx, x, y, w, h, args, payload);
+            if (!result) return std::unexpected(result.error());
+            return Ok<CardPtr>(*result);
         });
 
         registerCard("plot", [](const YettyContext& ctx,
@@ -51,6 +58,26 @@ public:
                                  const std::string& payload) {
             return card::HDraw::create(ctx, x, y, w, h, args, payload);
         });
+
+        registerCard("kdraw", [](const YettyContext& ctx,
+                                 int32_t x, int32_t y,
+                                 uint32_t w, uint32_t h,
+                                 const std::string& args,
+                                 const std::string& payload) {
+            return card::KDraw::create(ctx, x, y, w, h, args, payload);
+        });
+
+#ifdef YETTY_CARD_PDF
+        registerCard("pdf", [](const YettyContext& ctx,
+                                int32_t x, int32_t y,
+                                uint32_t w, uint32_t h,
+                                const std::string& args,
+                                const std::string& payload) -> Result<CardPtr> {
+            auto result = card::Pdf::create(ctx, x, y, w, h, args, payload);
+            if (!result) return std::unexpected(result.error());
+            return Ok<CardPtr>(*result);
+        });
+#endif
 
         return Ok();
     }

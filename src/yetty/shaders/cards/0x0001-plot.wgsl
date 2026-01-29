@@ -61,9 +61,9 @@ fn shaderGlyph_1048577(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
     // ==========================================================================
 
     // fg (24 bits used): metadata slot index
-    // Slot index = byteOffset / 32, so multiply by 8 to get u32 index (32 bytes = 8 u32s)
+    // Slot index = byteOffset / 64, so multiply by 16 to get u32 index (64 bytes = 16 u32s)
     let slotIndex = fg & 0xFFFFFFu;  // Mask to 24 bits (ANSI true-color limit)
-    let metaOffset = slotIndex * 8u;
+    let metaOffset = slotIndex * 16u;
 
     // bg (24 bits used): relative position within widget
     // Lower 12 bits = relCol, upper 12 bits = relRow
