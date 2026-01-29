@@ -1,706 +1,754 @@
-#include <yetty/yetty.h>
-#include <yetty/gpu-context.h>
-#include <yetty/yetty-context.h>
-#include <yetty/terminal-view.h>
-#include <yetty/workspace.h>
-#include <yetty/font-manager.h>
-#include <yetty/msdf-cdb-provider.h>
-#include <yetty/shader-manager.h>
+#include <array>
+#include <csignal>
+#include <glfw3webgpu.h>
+#include <iostream>
+#include <yetty/base/base.h>
 #include <yetty/card-buffer-manager.h>
 #include <yetty/card-factory.h>
+#include <yetty/font-manager.h>
+#include <yetty/gpu-context.h>
 #include <yetty/imgui-manager.h>
+#include <yetty/msdf-cdb-provider.h>
+#include <yetty/shader-manager.h>
+#include <yetty/terminal-view.h>
 #include <yetty/wgpu-compat.h>
-#include <yetty/base/base.h>
-#include <glfw3webgpu.h>
-#include <array>
-#include <iostream>
-#include <csignal>
+#include <yetty/workspace.h>
+#include <yetty/yetty-context.h>
+#include <yetty/yetty.h>
 #include <ytrace/ytrace.hpp>
 
 namespace yetty {
 
 class YettyImpl : public Yetty, public base::EventListener {
 public:
-    YettyImpl() = default;
-    ~YettyImpl() override { shutdown(); }
+  YettyImpl() = default;
+  ~YettyImpl() override { shutdown(); }
 
-    Result<void> init(int argc, char* argv[]) noexcept;
-    int run() noexcept override;
-    Result<bool> onEvent(const base::Event& event) override;
+  Result<void> init(int argc, char *argv[]) noexcept;
+  int run() noexcept override;
+  Result<bool> onEvent(const base::Event &event) override;
 
 private:
-    Result<void> parseArgs(int argc, char* argv[]) noexcept;
-    Result<void> initWindow() noexcept;
-    Result<void> initWebGPU() noexcept;
-    Result<void> initSharedResources() noexcept;
-    Result<void> initWorkspace() noexcept;
-    Result<void> initCallbacks() noexcept;
-    void shutdown() noexcept;
+  Result<void> parseArgs(int argc, char *argv[]) noexcept;
+  Result<void> initWindow() noexcept;
+  Result<void> initWebGPU() noexcept;
+  Result<void> initSharedResources() noexcept;
+  Result<void> initWorkspace() noexcept;
+  Result<void> initCallbacks() noexcept;
+  void shutdown() noexcept;
 
-    void mainLoopIteration() noexcept;
-    void handleResize(int width, int height) noexcept;
-    void configureSurface(uint32_t width, uint32_t height) noexcept;
-    Result<WGPUTextureView> getCurrentTextureView() noexcept;
-    void present() noexcept;
-
-#if !YETTY_WEB && !defined(__ANDROID__)
-    void initEventLoop() noexcept;
-    void shutdownEventLoop() noexcept;
-#endif
-
-    Result<Workspace::Ptr> createWorkspace() noexcept;
-
-    // Window
-    GLFWwindow* _window = nullptr;
-    uint32_t _initialWidth = 1024;
-    uint32_t _initialHeight = 768;
-
-    // WebGPU handles
-    WGPUInstance _instance = nullptr;
-    WGPUAdapter _adapter = nullptr;
-    WGPUDevice _device = nullptr;
-    WGPUQueue _queue = nullptr;
-    WGPUSurface _surface = nullptr;
-    WGPUTextureFormat _surfaceFormat = WGPUTextureFormat_BGRA8Unorm;
-    WGPUTextureView _currentTextureView = nullptr;
-    WGPUTexture _currentTexture = nullptr;
-    uint32_t _surfaceWidth = 0;
-    uint32_t _surfaceHeight = 0;
-
-    // Shared resources
-    struct SharedUniforms {
-        float time;
-        float deltaTime;
-        float screenWidth;
-        float screenHeight;
-        float mouseX;
-        float mouseY;
-        float _pad1;
-        float _pad2;
-    };
-    WGPUBuffer _sharedUniformBuffer = nullptr;
-    WGPUBindGroupLayout _sharedBindGroupLayout = nullptr;
-    WGPUBindGroup _sharedBindGroup = nullptr;
-    SharedUniforms _sharedUniforms = {};
-    GPUContext _gpuContext = {};
-    YettyContext _yettyContext = {};
-
-    // Workspaces
-    std::vector<Workspace::Ptr> _workspaces;
-    Workspace::Ptr _activeWorkspace;
-
-    // Grid dimensions
+  void mainLoopIteration() noexcept;
+  void handleResize(int width, int height) noexcept;
+  void configureSurface(uint32_t width, uint32_t height) noexcept;
+  Result<WGPUTextureView> getCurrentTextureView() noexcept;
+  void present() noexcept;
 
 #if !YETTY_WEB && !defined(__ANDROID__)
-    base::TimerId _frameTimerId = -1;
+  void initEventLoop() noexcept;
+  void shutdownEventLoop() noexcept;
 #endif
 
-    // FPS tracking
-    double _lastFpsTime = 0.0;
-    uint32_t _frameCount = 0;
+  Result<Workspace::Ptr> createWorkspace() noexcept;
 
-    // Command line options
-    std::string _executeCommand;
-    std::string _msdfProviderName = "gpu";  // "cpu" or "gpu"
+  // Window
+  GLFWwindow *_window = nullptr;
+  uint32_t _initialWidth = 1024;
+  uint32_t _initialHeight = 768;
 
-    static YettyImpl* s_instance;
+  // WebGPU handles
+  WGPUInstance _instance = nullptr;
+  WGPUAdapter _adapter = nullptr;
+  WGPUDevice _device = nullptr;
+  WGPUQueue _queue = nullptr;
+  WGPUSurface _surface = nullptr;
+  WGPUTextureFormat _surfaceFormat = WGPUTextureFormat_BGRA8Unorm;
+  WGPUTextureView _currentTextureView = nullptr;
+  WGPUTexture _currentTexture = nullptr;
+  uint32_t _surfaceWidth = 0;
+  uint32_t _surfaceHeight = 0;
+
+  // Shared resources
+  struct SharedUniforms {
+    float time;
+    float deltaTime;
+    float screenWidth;
+    float screenHeight;
+    float mouseX;
+    float mouseY;
+    float _pad1;
+    float _pad2;
+  };
+  WGPUBuffer _sharedUniformBuffer = nullptr;
+  WGPUBindGroupLayout _sharedBindGroupLayout = nullptr;
+  WGPUBindGroup _sharedBindGroup = nullptr;
+  SharedUniforms _sharedUniforms = {};
+  GPUContext _gpuContext = {};
+  YettyContext _yettyContext = {};
+
+  // Workspaces
+  std::vector<Workspace::Ptr> _workspaces;
+  Workspace::Ptr _activeWorkspace;
+
+  // Grid dimensions
+
+#if !YETTY_WEB && !defined(__ANDROID__)
+  base::TimerId _frameTimerId = -1;
+#endif
+
+  // FPS tracking
+  double _lastFpsTime = 0.0;
+  uint32_t _frameCount = 0;
+
+  // Command line options
+  std::string _executeCommand;
+  std::string _msdfProviderName = "cpu"; // "cpu" or "gpu"
+
+  static YettyImpl *s_instance;
 };
 
-YettyImpl* YettyImpl::s_instance = nullptr;
+YettyImpl *YettyImpl::s_instance = nullptr;
 
 //=============================================================================
 // Factory
 //=============================================================================
 
-Result<Yetty::Ptr> Yetty::create(int argc, char* argv[]) noexcept {
-    auto impl = std::make_shared<YettyImpl>();
-    if (auto res = impl->init(argc, argv); !res) {
-        return Err<Ptr>("Failed to init Yetty", res);
-    }
-    return Ok<Ptr>(impl);
+Result<Yetty::Ptr> Yetty::create(int argc, char *argv[]) noexcept {
+  auto impl = std::make_shared<YettyImpl>();
+  if (auto res = impl->init(argc, argv); !res) {
+    return Err<Ptr>("Failed to init Yetty", res);
+  }
+  return Ok<Ptr>(impl);
 }
 
 //=============================================================================
 // Initialization
 //=============================================================================
 
-Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
-    yinfo("Yetty starting...");
+Result<void> YettyImpl::init(int argc, char *argv[]) noexcept {
+  yinfo("Yetty starting...");
 
-    if (auto res = parseArgs(argc, argv); !res) return res;
-    if (auto res = initWindow(); !res) return res;
-    if (auto res = initWebGPU(); !res) return res;
-    if (auto res = initSharedResources(); !res) return res;
+  if (auto res = parseArgs(argc, argv); !res)
+    return res;
+  if (auto res = initWindow(); !res)
+    return res;
+  if (auto res = initWebGPU(); !res)
+    return res;
+  if (auto res = initSharedResources(); !res)
+    return res;
 
-    // Create ShaderManager with GPUContext
-    auto shaderMgrResult = ShaderManager::create(_gpuContext);
-    if (!shaderMgrResult) {
-        return Err<void>("Failed to create ShaderManager", shaderMgrResult);
-    }
-    auto shaderMgr = *shaderMgrResult;
+  // Create ShaderManager with GPUContext
+  auto shaderMgrResult = ShaderManager::create(_gpuContext);
+  if (!shaderMgrResult) {
+    return Err<void>("Failed to create ShaderManager", shaderMgrResult);
+  }
+  auto shaderMgr = *shaderMgrResult;
 
-    // Create MSDF CDB provider based on CLI flag
-    MsdfCdbProvider::Ptr cdbProvider;
-    if (_msdfProviderName == "cpu") {
-        cdbProvider = std::make_shared<CpuMsdfCdbProvider>();
-        yinfo("Using CPU MSDF CDB provider");
-    } else {
-        cdbProvider = std::make_shared<GpuMsdfCdbProvider>(_instance);
-        yinfo("Using GPU MSDF CDB provider");
-    }
+  // Create MSDF CDB provider based on CLI flag
+  MsdfCdbProvider::Ptr cdbProvider;
+  if (_msdfProviderName == "cpu") {
+    cdbProvider = std::make_shared<CpuMsdfCdbProvider>();
+    yinfo("Using CPU MSDF CDB provider");
+  } else {
+    cdbProvider = std::make_shared<GpuMsdfCdbProvider>(_instance);
+    yinfo("Using GPU MSDF CDB provider");
+  }
 
-    // Create FontManager with GPUContext, ShaderManager, and CDB provider
-    auto fontMgrResult = FontManager::create(_gpuContext, shaderMgr, cdbProvider);
-    if (!fontMgrResult) {
-        return Err<void>("Failed to create FontManager", fontMgrResult);
-    }
-    auto fontMgr = *fontMgrResult;
+  // Create FontManager with GPUContext, ShaderManager, and CDB provider
+  auto fontMgrResult = FontManager::create(_gpuContext, shaderMgr, cdbProvider);
+  if (!fontMgrResult) {
+    return Err<void>("Failed to create FontManager", fontMgrResult);
+  }
+  auto fontMgr = *fontMgrResult;
 
-    // Build YettyContext
-    _yettyContext.gpu = _gpuContext;
-    _yettyContext.shaderManager = shaderMgr;
-    _yettyContext.fontManager = fontMgr;
+  // Build YettyContext
+  _yettyContext.gpu = _gpuContext;
+  _yettyContext.shaderManager = shaderMgr;
+  _yettyContext.fontManager = fontMgr;
 
-    // Create ImguiManager
-    auto imguiMgrResult = ImguiManager::create(_yettyContext);
-    if (!imguiMgrResult) {
-        return Err<void>("Failed to create ImguiManager", imguiMgrResult);
-    }
-    _yettyContext.imguiManager = *imguiMgrResult;
-    _yettyContext.imguiManager->updateDisplaySize(_surfaceWidth, _surfaceHeight);
-
-#if !YETTY_WEB && !defined(__ANDROID__)
-    // Create CardFactory (after CardBufferManager is set in initSharedResources)
-    if (_yettyContext.cardBufferManager) {
-        auto cardFactoryResult = CardFactory::create(_gpuContext, _yettyContext.cardBufferManager);
-        if (!cardFactoryResult) {
-            return Err<void>("Failed to create CardFactory", cardFactoryResult);
-        }
-        _yettyContext.cardFactory = *cardFactoryResult;
-    }
-#endif
-
-    // Compile shaders after all providers (fonts) are registered
-    if (auto res = shaderMgr->compile(); !res) {
-        return Err<void>("Failed to compile shaders", res);
-    }
+  // Create ImguiManager
+  auto imguiMgrResult = ImguiManager::create(_yettyContext);
+  if (!imguiMgrResult) {
+    return Err<void>("Failed to create ImguiManager", imguiMgrResult);
+  }
+  _yettyContext.imguiManager = *imguiMgrResult;
+  _yettyContext.imguiManager->updateDisplaySize(_surfaceWidth, _surfaceHeight);
 
 #if !YETTY_WEB && !defined(__ANDROID__)
-    initEventLoop();
+  // Create CardFactory (after CardBufferManager is set in initSharedResources)
+  if (_yettyContext.cardBufferManager) {
+    auto cardFactoryResult =
+        CardFactory::create(_gpuContext, _yettyContext.cardBufferManager);
+    if (!cardFactoryResult) {
+      return Err<void>("Failed to create CardFactory", cardFactoryResult);
+    }
+    _yettyContext.cardFactory = *cardFactoryResult;
+  }
 #endif
 
-    if (auto res = initWorkspace(); !res) return res;
-    if (auto res = initCallbacks(); !res) return res;
+  // Compile shaders after all providers (fonts) are registered
+  if (auto res = shaderMgr->compile(); !res) {
+    return Err<void>("Failed to compile shaders", res);
+  }
 
-    s_instance = this;
-    _lastFpsTime = glfwGetTime();
+#if !YETTY_WEB && !defined(__ANDROID__)
+  initEventLoop();
+#endif
 
-    return Ok();
+  if (auto res = initWorkspace(); !res)
+    return res;
+  if (auto res = initCallbacks(); !res)
+    return res;
+
+  s_instance = this;
+  _lastFpsTime = glfwGetTime();
+
+  return Ok();
 }
 
-Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
-    for (int i = 1; i < argc; i++) {
-        std::string arg = argv[i];
-        if (arg == "-e" && i + 1 < argc) {
-            _executeCommand = argv[++i];
-            yinfo("Execute command: {}", _executeCommand);
-        } else if (arg == "--msdf-provider" && i + 1 < argc) {
-            _msdfProviderName = argv[++i];
-            yinfo("MSDF provider: {}", _msdfProviderName);
-        }
+Result<void> YettyImpl::parseArgs(int argc, char *argv[]) noexcept {
+  for (int i = 1; i < argc; i++) {
+    std::string arg = argv[i];
+    if (arg == "-e" && i + 1 < argc) {
+      _executeCommand = argv[++i];
+      yinfo("Execute command: {}", _executeCommand);
+    } else if (arg == "--msdf-provider" && i + 1 < argc) {
+      _msdfProviderName = argv[++i];
+      yinfo("MSDF provider: {}", _msdfProviderName);
     }
-    return Ok();
+  }
+  return Ok();
 }
 
 Result<void> YettyImpl::initWindow() noexcept {
-    if (!glfwInit()) {
-        return Err<void>("Failed to initialize GLFW");
-    }
+  if (!glfwInit()) {
+    return Err<void>("Failed to initialize GLFW");
+  }
 
-    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+  glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+  glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
-    _window = glfwCreateWindow(_initialWidth, _initialHeight, "yetty", nullptr, nullptr);
-    if (!_window) {
-        glfwTerminate();
-        return Err<void>("Failed to create window");
-    }
+  _window = glfwCreateWindow(_initialWidth, _initialHeight, "yetty", nullptr,
+                             nullptr);
+  if (!_window) {
+    glfwTerminate();
+    return Err<void>("Failed to create window");
+  }
 
-    return Ok();
+  return Ok();
 }
 
 Result<void> YettyImpl::initWebGPU() noexcept {
-    // Create instance
-    WGPUInstanceDescriptor instanceDesc = {};
-    _instance = wgpuCreateInstance(&instanceDesc);
-    if (!_instance) {
-        return Err<void>("Failed to create WebGPU instance");
+  // Create instance
+  WGPUInstanceDescriptor instanceDesc = {};
+  _instance = wgpuCreateInstance(&instanceDesc);
+  if (!_instance) {
+    return Err<void>("Failed to create WebGPU instance");
+  }
+
+  // Create surface
+  _surface = glfwCreateWindowWGPUSurface(_instance, _window);
+  if (!_surface) {
+    return Err<void>("Failed to create WebGPU surface");
+  }
+
+  // Request adapter
+  WGPURequestAdapterOptions adapterOpts = {};
+  adapterOpts.compatibleSurface = _surface;
+  adapterOpts.powerPreference = WGPUPowerPreference_HighPerformance;
+
+  WGPURequestAdapterCallbackInfo adapterCallbackInfo = {};
+  adapterCallbackInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+  adapterCallbackInfo.callback = [](WGPURequestAdapterStatus status,
+                                    WGPUAdapter adapter, WGPUStringView message,
+                                    void *userdata1, void *userdata2) {
+    if (status == WGPURequestAdapterStatus_Success) {
+      *static_cast<WGPUAdapter *>(userdata1) = adapter;
     }
+  };
+  adapterCallbackInfo.userdata1 = &_adapter;
+  wgpuInstanceRequestAdapter(_instance, &adapterOpts, adapterCallbackInfo);
 
-    // Create surface
-    _surface = glfwCreateWindowWGPUSurface(_instance, _window);
-    if (!_surface) {
-        return Err<void>("Failed to create WebGPU surface");
+  if (!_adapter) {
+    return Err<void>("Failed to get WebGPU adapter");
+  }
+
+  // Request device with higher storage buffer limits
+  WGPULimits limits = {};
+  limits.maxTextureDimension1D = WGPU_LIMIT_U32_UNDEFINED;
+  limits.maxTextureDimension2D = WGPU_LIMIT_U32_UNDEFINED;
+  limits.maxTextureDimension3D = WGPU_LIMIT_U32_UNDEFINED;
+  limits.maxTextureArrayLayers = WGPU_LIMIT_U32_UNDEFINED;
+  limits.maxBindGroups = WGPU_LIMIT_U32_UNDEFINED;
+  limits.maxBindGroupsPlusVertexBuffers = WGPU_LIMIT_U32_UNDEFINED;
+  limits.maxBindingsPerBindGroup = WGPU_LIMIT_U32_UNDEFINED;
+  limits.maxDynamicUniformBuffersPerPipelineLayout = WGPU_LIMIT_U32_UNDEFINED;
+  limits.maxDynamicStorageBuffersPerPipelineLayout = WGPU_LIMIT_U32_UNDEFINED;
+  limits.maxSampledTexturesPerShaderStage = WGPU_LIMIT_U32_UNDEFINED;
+  limits.maxSamplersPerShaderStage = WGPU_LIMIT_U32_UNDEFINED;
+  limits.maxStorageBuffersPerShaderStage = WGPU_LIMIT_U32_UNDEFINED;
+  limits.maxStorageTexturesPerShaderStage = WGPU_LIMIT_U32_UNDEFINED;
+  limits.maxUniformBuffersPerShaderStage = WGPU_LIMIT_U32_UNDEFINED;
+  limits.maxUniformBufferBindingSize = WGPU_LIMIT_U64_UNDEFINED;
+  limits.maxStorageBufferBindingSize = 512 * 1024 * 1024; // 512MB
+  limits.minUniformBufferOffsetAlignment = WGPU_LIMIT_U32_UNDEFINED;
+  limits.minStorageBufferOffsetAlignment = WGPU_LIMIT_U32_UNDEFINED;
+  limits.maxVertexBuffers = WGPU_LIMIT_U32_UNDEFINED;
+  limits.maxBufferSize = WGPU_LIMIT_U64_UNDEFINED;
+  limits.maxVertexAttributes = WGPU_LIMIT_U32_UNDEFINED;
+  limits.maxVertexBufferArrayStride = WGPU_LIMIT_U32_UNDEFINED;
+  limits.maxInterStageShaderVariables = WGPU_LIMIT_U32_UNDEFINED;
+  limits.maxColorAttachments = WGPU_LIMIT_U32_UNDEFINED;
+  limits.maxColorAttachmentBytesPerSample = WGPU_LIMIT_U32_UNDEFINED;
+  limits.maxComputeWorkgroupStorageSize = WGPU_LIMIT_U32_UNDEFINED;
+  limits.maxComputeInvocationsPerWorkgroup = WGPU_LIMIT_U32_UNDEFINED;
+  limits.maxComputeWorkgroupSizeX = WGPU_LIMIT_U32_UNDEFINED;
+  limits.maxComputeWorkgroupSizeY = WGPU_LIMIT_U32_UNDEFINED;
+  limits.maxComputeWorkgroupSizeZ = WGPU_LIMIT_U32_UNDEFINED;
+  limits.maxComputeWorkgroupsPerDimension = WGPU_LIMIT_U32_UNDEFINED;
+
+  WGPUDeviceDescriptor deviceDesc = {};
+  deviceDesc.label = WGPU_STR("yetty device");
+  deviceDesc.requiredFeatureCount = 0;
+  deviceDesc.requiredLimits = &limits;
+  deviceDesc.defaultQueue.label = WGPU_STR("default queue");
+  deviceDesc.uncapturedErrorCallbackInfo.callback =
+      [](WGPUDevice const *device, WGPUErrorType type, WGPUStringView message,
+         void *userdata1, void *userdata2) {
+        yerror("WebGPU error ({}): {}", static_cast<int>(type),
+               message.data ? std::string(message.data, message.length)
+                            : "unknown");
+      };
+
+  WGPURequestDeviceCallbackInfo deviceCallbackInfo = {};
+  deviceCallbackInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+  deviceCallbackInfo.callback = [](WGPURequestDeviceStatus status,
+                                   WGPUDevice device, WGPUStringView message,
+                                   void *userdata1, void *userdata2) {
+    if (status == WGPURequestDeviceStatus_Success) {
+      *static_cast<WGPUDevice *>(userdata1) = device;
+    } else {
+      yerror("WebGPU device request failed ({}): {}", static_cast<int>(status),
+             message.data ? std::string(message.data, message.length)
+                          : "unknown");
     }
+  };
+  deviceCallbackInfo.userdata1 = &_device;
+  wgpuAdapterRequestDevice(_adapter, &deviceDesc, deviceCallbackInfo);
 
-    // Request adapter
-    WGPURequestAdapterOptions adapterOpts = {};
-    adapterOpts.compatibleSurface = _surface;
-    adapterOpts.powerPreference = WGPUPowerPreference_HighPerformance;
+  if (!_device) {
+    return Err<void>("Failed to get WebGPU device");
+  }
 
-    WGPURequestAdapterCallbackInfo adapterCallbackInfo = {};
-    adapterCallbackInfo.mode = WGPUCallbackMode_AllowSpontaneous;
-    adapterCallbackInfo.callback = [](WGPURequestAdapterStatus status, WGPUAdapter adapter,
-                                      WGPUStringView message, void* userdata1, void* userdata2) {
-        if (status == WGPURequestAdapterStatus_Success) {
-            *static_cast<WGPUAdapter*>(userdata1) = adapter;
-        }
-    };
-    adapterCallbackInfo.userdata1 = &_adapter;
-    wgpuInstanceRequestAdapter(_instance, &adapterOpts, adapterCallbackInfo);
+  _queue = wgpuDeviceGetQueue(_device);
 
-    if (!_adapter) {
-        return Err<void>("Failed to get WebGPU adapter");
-    }
+  // Configure surface
+  WGPUSurfaceCapabilities caps = {};
+  wgpuSurfaceGetCapabilities(_surface, _adapter, &caps);
+  if (caps.formatCount > 0) {
+    _surfaceFormat = caps.formats[0];
+  }
+  wgpuSurfaceCapabilitiesFreeMembers(caps);
 
-    // Request device with higher storage buffer limits
-    WGPULimits limits = {};
-    limits.maxTextureDimension1D = WGPU_LIMIT_U32_UNDEFINED;
-    limits.maxTextureDimension2D = WGPU_LIMIT_U32_UNDEFINED;
-    limits.maxTextureDimension3D = WGPU_LIMIT_U32_UNDEFINED;
-    limits.maxTextureArrayLayers = WGPU_LIMIT_U32_UNDEFINED;
-    limits.maxBindGroups = WGPU_LIMIT_U32_UNDEFINED;
-    limits.maxBindGroupsPlusVertexBuffers = WGPU_LIMIT_U32_UNDEFINED;
-    limits.maxBindingsPerBindGroup = WGPU_LIMIT_U32_UNDEFINED;
-    limits.maxDynamicUniformBuffersPerPipelineLayout = WGPU_LIMIT_U32_UNDEFINED;
-    limits.maxDynamicStorageBuffersPerPipelineLayout = WGPU_LIMIT_U32_UNDEFINED;
-    limits.maxSampledTexturesPerShaderStage = WGPU_LIMIT_U32_UNDEFINED;
-    limits.maxSamplersPerShaderStage = WGPU_LIMIT_U32_UNDEFINED;
-    limits.maxStorageBuffersPerShaderStage = WGPU_LIMIT_U32_UNDEFINED;
-    limits.maxStorageTexturesPerShaderStage = WGPU_LIMIT_U32_UNDEFINED;
-    limits.maxUniformBuffersPerShaderStage = WGPU_LIMIT_U32_UNDEFINED;
-    limits.maxUniformBufferBindingSize = WGPU_LIMIT_U64_UNDEFINED;
-    limits.maxStorageBufferBindingSize = 512 * 1024 * 1024;  // 512MB
-    limits.minUniformBufferOffsetAlignment = WGPU_LIMIT_U32_UNDEFINED;
-    limits.minStorageBufferOffsetAlignment = WGPU_LIMIT_U32_UNDEFINED;
-    limits.maxVertexBuffers = WGPU_LIMIT_U32_UNDEFINED;
-    limits.maxBufferSize = WGPU_LIMIT_U64_UNDEFINED;
-    limits.maxVertexAttributes = WGPU_LIMIT_U32_UNDEFINED;
-    limits.maxVertexBufferArrayStride = WGPU_LIMIT_U32_UNDEFINED;
-    limits.maxInterStageShaderVariables = WGPU_LIMIT_U32_UNDEFINED;
-    limits.maxColorAttachments = WGPU_LIMIT_U32_UNDEFINED;
-    limits.maxColorAttachmentBytesPerSample = WGPU_LIMIT_U32_UNDEFINED;
-    limits.maxComputeWorkgroupStorageSize = WGPU_LIMIT_U32_UNDEFINED;
-    limits.maxComputeInvocationsPerWorkgroup = WGPU_LIMIT_U32_UNDEFINED;
-    limits.maxComputeWorkgroupSizeX = WGPU_LIMIT_U32_UNDEFINED;
-    limits.maxComputeWorkgroupSizeY = WGPU_LIMIT_U32_UNDEFINED;
-    limits.maxComputeWorkgroupSizeZ = WGPU_LIMIT_U32_UNDEFINED;
-    limits.maxComputeWorkgroupsPerDimension = WGPU_LIMIT_U32_UNDEFINED;
+  configureSurface(_initialWidth, _initialHeight);
 
-    WGPUDeviceDescriptor deviceDesc = {};
-    deviceDesc.label = WGPU_STR("yetty device");
-    deviceDesc.requiredFeatureCount = 0;
-    deviceDesc.requiredLimits = &limits;
-    deviceDesc.defaultQueue.label = WGPU_STR("default queue");
-    deviceDesc.uncapturedErrorCallbackInfo.callback = [](WGPUDevice const* device, WGPUErrorType type,
-                                                         WGPUStringView message, void* userdata1, void* userdata2) {
-        yerror("WebGPU error ({}): {}", static_cast<int>(type), message.data ? std::string(message.data, message.length) : "unknown");
-    };
-
-    WGPURequestDeviceCallbackInfo deviceCallbackInfo = {};
-    deviceCallbackInfo.mode = WGPUCallbackMode_AllowSpontaneous;
-    deviceCallbackInfo.callback = [](WGPURequestDeviceStatus status, WGPUDevice device,
-                                     WGPUStringView message, void* userdata1, void* userdata2) {
-        if (status == WGPURequestDeviceStatus_Success) {
-            *static_cast<WGPUDevice*>(userdata1) = device;
-        } else {
-            yerror("WebGPU device request failed ({}): {}", static_cast<int>(status),
-                   message.data ? std::string(message.data, message.length) : "unknown");
-        }
-    };
-    deviceCallbackInfo.userdata1 = &_device;
-    wgpuAdapterRequestDevice(_adapter, &deviceDesc, deviceCallbackInfo);
-
-    if (!_device) {
-        return Err<void>("Failed to get WebGPU device");
-    }
-
-    _queue = wgpuDeviceGetQueue(_device);
-
-    // Configure surface
-    WGPUSurfaceCapabilities caps = {};
-    wgpuSurfaceGetCapabilities(_surface, _adapter, &caps);
-    if (caps.formatCount > 0) {
-        _surfaceFormat = caps.formats[0];
-    }
-    wgpuSurfaceCapabilitiesFreeMembers(caps);
-
-    configureSurface(_initialWidth, _initialHeight);
-
-    yinfo("WebGPU initialized: device={} queue={}", (void*)_device, (void*)_queue);
-    return Ok();
+  yinfo("WebGPU initialized: device={} queue={}", (void *)_device,
+        (void *)_queue);
+  return Ok();
 }
 
 void YettyImpl::configureSurface(uint32_t width, uint32_t height) noexcept {
-    _surfaceWidth = width;
-    _surfaceHeight = height;
+  _surfaceWidth = width;
+  _surfaceHeight = height;
 
-    WGPUSurfaceConfiguration config = {};
-    config.device = _device;
-    config.format = _surfaceFormat;
-    config.usage = WGPUTextureUsage_RenderAttachment;
-    config.width = width;
-    config.height = height;
-    config.presentMode = WGPUPresentMode_Fifo;
-    config.alphaMode = WGPUCompositeAlphaMode_Auto;
+  WGPUSurfaceConfiguration config = {};
+  config.device = _device;
+  config.format = _surfaceFormat;
+  config.usage = WGPUTextureUsage_RenderAttachment;
+  config.width = width;
+  config.height = height;
+  config.presentMode = WGPUPresentMode_Fifo;
+  config.alphaMode = WGPUCompositeAlphaMode_Auto;
 
-    wgpuSurfaceConfigure(_surface, &config);
+  wgpuSurfaceConfigure(_surface, &config);
 }
 
 Result<WGPUTextureView> YettyImpl::getCurrentTextureView() noexcept {
-    if (_currentTextureView) {
-        return Ok(_currentTextureView);
-    }
-
-    WGPUSurfaceTexture surfaceTexture;
-    wgpuSurfaceGetCurrentTexture(_surface, &surfaceTexture);
-
-    if (surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal &&
-        surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessSuboptimal) {
-        return Err<WGPUTextureView>("Failed to get surface texture");
-    }
-
-    _currentTexture = surfaceTexture.texture;
-
-    WGPUTextureViewDescriptor viewDesc = {};
-    viewDesc.format = _surfaceFormat;
-    viewDesc.dimension = WGPUTextureViewDimension_2D;
-    viewDesc.mipLevelCount = 1;
-    viewDesc.arrayLayerCount = 1;
-
-    _currentTextureView = wgpuTextureCreateView(_currentTexture, &viewDesc);
+  if (_currentTextureView) {
     return Ok(_currentTextureView);
+  }
+
+  WGPUSurfaceTexture surfaceTexture;
+  wgpuSurfaceGetCurrentTexture(_surface, &surfaceTexture);
+
+  if (surfaceTexture.status !=
+          WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal &&
+      surfaceTexture.status !=
+          WGPUSurfaceGetCurrentTextureStatus_SuccessSuboptimal) {
+    return Err<WGPUTextureView>("Failed to get surface texture");
+  }
+
+  _currentTexture = surfaceTexture.texture;
+
+  WGPUTextureViewDescriptor viewDesc = {};
+  viewDesc.format = _surfaceFormat;
+  viewDesc.dimension = WGPUTextureViewDimension_2D;
+  viewDesc.mipLevelCount = 1;
+  viewDesc.arrayLayerCount = 1;
+
+  _currentTextureView = wgpuTextureCreateView(_currentTexture, &viewDesc);
+  return Ok(_currentTextureView);
 }
 
 void YettyImpl::present() noexcept {
-    if (_currentTextureView) {
-        wgpuTextureViewRelease(_currentTextureView);
-        _currentTextureView = nullptr;
-    }
-    if (_currentTexture) {
-        wgpuTextureRelease(_currentTexture);
-        _currentTexture = nullptr;
-    }
-    wgpuSurfacePresent(_surface);
+  if (_currentTextureView) {
+    wgpuTextureViewRelease(_currentTextureView);
+    _currentTextureView = nullptr;
+  }
+  if (_currentTexture) {
+    wgpuTextureRelease(_currentTexture);
+    _currentTexture = nullptr;
+  }
+  wgpuSurfacePresent(_surface);
 }
 
 Result<void> YettyImpl::initSharedResources() noexcept {
-    // Initialize GPUContext first (needed by CardBufferManager)
-    _gpuContext.device = _device;
-    _gpuContext.queue = _queue;
-    _gpuContext.surfaceFormat = _surfaceFormat;
+  // Initialize GPUContext first (needed by CardBufferManager)
+  _gpuContext.device = _device;
+  _gpuContext.queue = _queue;
+  _gpuContext.surfaceFormat = _surfaceFormat;
 
 #if !YETTY_WEB && !defined(__ANDROID__)
-    // Create CardBufferManager
-    auto cbmResult = CardBufferManager::create(_device);
-    if (!cbmResult) {
-        return Err<void>("Failed to create CardBufferManager", cbmResult);
-    }
-    _yettyContext.cardBufferManager = *cbmResult;
+  // Create CardBufferManager
+  auto cbmResult = CardBufferManager::create(_device);
+  if (!cbmResult) {
+    return Err<void>("Failed to create CardBufferManager", cbmResult);
+  }
+  _yettyContext.cardBufferManager = *cbmResult;
 
-    if (auto res = _yettyContext.cardBufferManager->initAtlas(); !res) {
-        return Err<void>("Failed to initialize card atlas", res);
-    }
+  if (auto res = _yettyContext.cardBufferManager->initAtlas(); !res) {
+    return Err<void>("Failed to initialize card atlas", res);
+  }
 #endif
 
-    // Create shared uniform buffer
-    WGPUBufferDescriptor bufDesc = {};
-    bufDesc.label = WGPU_STR("Shared Uniforms");
-    bufDesc.size = sizeof(SharedUniforms);
-    bufDesc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
-    _sharedUniformBuffer = wgpuDeviceCreateBuffer(_device, &bufDesc);
+  // Create shared uniform buffer
+  WGPUBufferDescriptor bufDesc = {};
+  bufDesc.label = WGPU_STR("Shared Uniforms");
+  bufDesc.size = sizeof(SharedUniforms);
+  bufDesc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
+  _sharedUniformBuffer = wgpuDeviceCreateBuffer(_device, &bufDesc);
 
 #if !YETTY_WEB && !defined(__ANDROID__)
-    // Create bind group layout with card buffers
-    std::array<WGPUBindGroupLayoutEntry, 6> layoutEntries = {};
+  // Create bind group layout with card buffers
+  std::array<WGPUBindGroupLayoutEntry, 6> layoutEntries = {};
 
-    layoutEntries[0].binding = 0;
-    layoutEntries[0].visibility = WGPUShaderStage_Fragment;
-    layoutEntries[0].buffer.type = WGPUBufferBindingType_Uniform;
-    layoutEntries[0].buffer.minBindingSize = sizeof(SharedUniforms);
+  layoutEntries[0].binding = 0;
+  layoutEntries[0].visibility = WGPUShaderStage_Fragment;
+  layoutEntries[0].buffer.type = WGPUBufferBindingType_Uniform;
+  layoutEntries[0].buffer.minBindingSize = sizeof(SharedUniforms);
 
-    layoutEntries[1].binding = 1;
-    layoutEntries[1].visibility = WGPUShaderStage_Fragment;
-    layoutEntries[1].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
+  layoutEntries[1].binding = 1;
+  layoutEntries[1].visibility = WGPUShaderStage_Fragment;
+  layoutEntries[1].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
 
-    layoutEntries[2].binding = 2;
-    layoutEntries[2].visibility = WGPUShaderStage_Fragment;
-    layoutEntries[2].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
+  layoutEntries[2].binding = 2;
+  layoutEntries[2].visibility = WGPUShaderStage_Fragment;
+  layoutEntries[2].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
 
-    layoutEntries[3].binding = 3;
-    layoutEntries[3].visibility = WGPUShaderStage_Fragment;
-    layoutEntries[3].texture.sampleType = WGPUTextureSampleType_Float;
-    layoutEntries[3].texture.viewDimension = WGPUTextureViewDimension_2D;
+  layoutEntries[3].binding = 3;
+  layoutEntries[3].visibility = WGPUShaderStage_Fragment;
+  layoutEntries[3].texture.sampleType = WGPUTextureSampleType_Float;
+  layoutEntries[3].texture.viewDimension = WGPUTextureViewDimension_2D;
 
-    layoutEntries[4].binding = 4;
-    layoutEntries[4].visibility = WGPUShaderStage_Fragment;
-    layoutEntries[4].sampler.type = WGPUSamplerBindingType_Filtering;
+  layoutEntries[4].binding = 4;
+  layoutEntries[4].visibility = WGPUShaderStage_Fragment;
+  layoutEntries[4].sampler.type = WGPUSamplerBindingType_Filtering;
 
-    layoutEntries[5].binding = 5;
-    layoutEntries[5].visibility = WGPUShaderStage_Fragment;
-    layoutEntries[5].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
+  layoutEntries[5].binding = 5;
+  layoutEntries[5].visibility = WGPUShaderStage_Fragment;
+  layoutEntries[5].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
 
-    WGPUBindGroupLayoutDescriptor layoutDesc = {};
-    layoutDesc.label = WGPU_STR("Shared Bind Group Layout");
-    layoutDesc.entryCount = layoutEntries.size();
-    layoutDesc.entries = layoutEntries.data();
-    _sharedBindGroupLayout = wgpuDeviceCreateBindGroupLayout(_device, &layoutDesc);
+  WGPUBindGroupLayoutDescriptor layoutDesc = {};
+  layoutDesc.label = WGPU_STR("Shared Bind Group Layout");
+  layoutDesc.entryCount = layoutEntries.size();
+  layoutDesc.entries = layoutEntries.data();
+  _sharedBindGroupLayout =
+      wgpuDeviceCreateBindGroupLayout(_device, &layoutDesc);
 
-    // Create bind group
-    std::array<WGPUBindGroupEntry, 6> bindEntries = {};
+  // Create bind group
+  std::array<WGPUBindGroupEntry, 6> bindEntries = {};
 
-    bindEntries[0].binding = 0;
-    bindEntries[0].buffer = _sharedUniformBuffer;
-    bindEntries[0].size = sizeof(SharedUniforms);
+  bindEntries[0].binding = 0;
+  bindEntries[0].buffer = _sharedUniformBuffer;
+  bindEntries[0].size = sizeof(SharedUniforms);
 
-    bindEntries[1].binding = 1;
-    bindEntries[1].buffer = _yettyContext.cardBufferManager->metadataBuffer();
-    bindEntries[1].size = wgpuBufferGetSize(_yettyContext.cardBufferManager->metadataBuffer());
+  bindEntries[1].binding = 1;
+  bindEntries[1].buffer = _yettyContext.cardBufferManager->metadataBuffer();
+  bindEntries[1].size =
+      wgpuBufferGetSize(_yettyContext.cardBufferManager->metadataBuffer());
 
-    bindEntries[2].binding = 2;
-    bindEntries[2].buffer = _yettyContext.cardBufferManager->storageBuffer();
-    bindEntries[2].size = wgpuBufferGetSize(_yettyContext.cardBufferManager->storageBuffer());
+  bindEntries[2].binding = 2;
+  bindEntries[2].buffer = _yettyContext.cardBufferManager->storageBuffer();
+  bindEntries[2].size =
+      wgpuBufferGetSize(_yettyContext.cardBufferManager->storageBuffer());
 
-    bindEntries[3].binding = 3;
-    bindEntries[3].textureView = _yettyContext.cardBufferManager->atlasTextureView();
+  bindEntries[3].binding = 3;
+  bindEntries[3].textureView =
+      _yettyContext.cardBufferManager->atlasTextureView();
 
-    bindEntries[4].binding = 4;
-    bindEntries[4].sampler = _yettyContext.cardBufferManager->atlasSampler();
+  bindEntries[4].binding = 4;
+  bindEntries[4].sampler = _yettyContext.cardBufferManager->atlasSampler();
 
-    bindEntries[5].binding = 5;
-    bindEntries[5].buffer = _yettyContext.cardBufferManager->imageDataBuffer();
-    bindEntries[5].size = wgpuBufferGetSize(_yettyContext.cardBufferManager->imageDataBuffer());
+  bindEntries[5].binding = 5;
+  bindEntries[5].buffer = _yettyContext.cardBufferManager->imageDataBuffer();
+  bindEntries[5].size =
+      wgpuBufferGetSize(_yettyContext.cardBufferManager->imageDataBuffer());
 
-    WGPUBindGroupDescriptor bindDesc = {};
-    bindDesc.label = WGPU_STR("Shared Bind Group");
-    bindDesc.layout = _sharedBindGroupLayout;
-    bindDesc.entryCount = bindEntries.size();
-    bindDesc.entries = bindEntries.data();
-    _sharedBindGroup = wgpuDeviceCreateBindGroup(_device, &bindDesc);
+  WGPUBindGroupDescriptor bindDesc = {};
+  bindDesc.label = WGPU_STR("Shared Bind Group");
+  bindDesc.layout = _sharedBindGroupLayout;
+  bindDesc.entryCount = bindEntries.size();
+  bindDesc.entries = bindEntries.data();
+  _sharedBindGroup = wgpuDeviceCreateBindGroup(_device, &bindDesc);
 #else
-    // Web/Android: only shared uniforms
-    WGPUBindGroupLayoutEntry layoutEntry = {};
-    layoutEntry.binding = 0;
-    layoutEntry.visibility = WGPUShaderStage_Fragment;
-    layoutEntry.buffer.type = WGPUBufferBindingType_Uniform;
-    layoutEntry.buffer.minBindingSize = sizeof(SharedUniforms);
+  // Web/Android: only shared uniforms
+  WGPUBindGroupLayoutEntry layoutEntry = {};
+  layoutEntry.binding = 0;
+  layoutEntry.visibility = WGPUShaderStage_Fragment;
+  layoutEntry.buffer.type = WGPUBufferBindingType_Uniform;
+  layoutEntry.buffer.minBindingSize = sizeof(SharedUniforms);
 
-    WGPUBindGroupLayoutDescriptor layoutDesc = {};
-    layoutDesc.entryCount = 1;
-    layoutDesc.entries = &layoutEntry;
-    _sharedBindGroupLayout = wgpuDeviceCreateBindGroupLayout(_device, &layoutDesc);
+  WGPUBindGroupLayoutDescriptor layoutDesc = {};
+  layoutDesc.entryCount = 1;
+  layoutDesc.entries = &layoutEntry;
+  _sharedBindGroupLayout =
+      wgpuDeviceCreateBindGroupLayout(_device, &layoutDesc);
 
-    WGPUBindGroupEntry bindEntry = {};
-    bindEntry.binding = 0;
-    bindEntry.buffer = _sharedUniformBuffer;
-    bindEntry.size = sizeof(SharedUniforms);
+  WGPUBindGroupEntry bindEntry = {};
+  bindEntry.binding = 0;
+  bindEntry.buffer = _sharedUniformBuffer;
+  bindEntry.size = sizeof(SharedUniforms);
 
-    WGPUBindGroupDescriptor bindDesc = {};
-    bindDesc.layout = _sharedBindGroupLayout;
-    bindDesc.entryCount = 1;
-    bindDesc.entries = &bindEntry;
-    _sharedBindGroup = wgpuDeviceCreateBindGroup(_device, &bindDesc);
+  WGPUBindGroupDescriptor bindDesc = {};
+  bindDesc.layout = _sharedBindGroupLayout;
+  bindDesc.entryCount = 1;
+  bindDesc.entries = &bindEntry;
+  _sharedBindGroup = wgpuDeviceCreateBindGroup(_device, &bindDesc);
 #endif
 
-    // Complete GPUContext initialization with shared resources
-    _gpuContext.sharedBindGroupLayout = _sharedBindGroupLayout;
-    _gpuContext.sharedBindGroup = _sharedBindGroup;
+  // Complete GPUContext initialization with shared resources
+  _gpuContext.sharedBindGroupLayout = _sharedBindGroupLayout;
+  _gpuContext.sharedBindGroup = _sharedBindGroup;
 
-    return Ok();
+  return Ok();
 }
 
-
 Result<void> YettyImpl::initWorkspace() noexcept {
-    auto wsResult = createWorkspace();
-    if (!wsResult) {
-        return Err<void>("Failed to create default workspace", wsResult);
-    }
-    yinfo("Created default workspace");
-    return Ok();
+  auto wsResult = createWorkspace();
+  if (!wsResult) {
+    return Err<void>("Failed to create default workspace", wsResult);
+  }
+  yinfo("Created default workspace");
+  return Ok();
 }
 
 // Helper to create a 2x2 matrix of panes
-static Result<Tile::Ptr> createMatrix2x2(Workspace& workspace) {
-    // Create 4 panes
-    std::array<Pane::Ptr, 4> panes;
-    for (int i = 0; i < 4; ++i) {
-        auto paneResult = workspace.createPane();
-        if (!paneResult) {
-            return Err<Tile::Ptr>("Failed to create pane", paneResult);
-        }
-        panes[i] = *paneResult;
+static Result<Tile::Ptr> createMatrix2x2(Workspace &workspace) {
+  // Create 4 panes
+  std::array<Pane::Ptr, 4> panes;
+  for (int i = 0; i < 4; ++i) {
+    auto paneResult = workspace.createPane();
+    if (!paneResult) {
+      return Err<Tile::Ptr>("Failed to create pane", paneResult);
     }
+    panes[i] = *paneResult;
+  }
 
-    // Top row: panes[0] | panes[1]
-    auto topResult = Split::create(Orientation::Vertical);
-    if (!topResult) return Err<Tile::Ptr>("Failed to create split", topResult);
-    auto top = *topResult;
-    top->setFirst(panes[0]);
-    top->setSecond(panes[1]);
+  // Top row: panes[0] | panes[1]
+  auto topResult = Split::create(Orientation::Vertical);
+  if (!topResult)
+    return Err<Tile::Ptr>("Failed to create split", topResult);
+  auto top = *topResult;
+  top->setFirst(panes[0]);
+  top->setSecond(panes[1]);
 
-    // Bottom row: panes[2] | panes[3]
-    auto bottomResult = Split::create(Orientation::Vertical);
-    if (!bottomResult) return Err<Tile::Ptr>("Failed to create split", bottomResult);
-    auto bottom = *bottomResult;
-    bottom->setFirst(panes[2]);
-    bottom->setSecond(panes[3]);
+  // Bottom row: panes[2] | panes[3]
+  auto bottomResult = Split::create(Orientation::Vertical);
+  if (!bottomResult)
+    return Err<Tile::Ptr>("Failed to create split", bottomResult);
+  auto bottom = *bottomResult;
+  bottom->setFirst(panes[2]);
+  bottom->setSecond(panes[3]);
 
-    // Stack top and bottom
-    auto rootResult = Split::create(Orientation::Horizontal);
-    if (!rootResult) return Err<Tile::Ptr>("Failed to create split", rootResult);
-    auto root = *rootResult;
-    root->setFirst(top);
-    root->setSecond(bottom);
+  // Stack top and bottom
+  auto rootResult = Split::create(Orientation::Horizontal);
+  if (!rootResult)
+    return Err<Tile::Ptr>("Failed to create split", rootResult);
+  auto root = *rootResult;
+  root->setFirst(top);
+  root->setSecond(bottom);
 
-    return Ok<Tile::Ptr>(root);
+  return Ok<Tile::Ptr>(root);
 }
 
 Result<Workspace::Ptr> YettyImpl::createWorkspace() noexcept {
-    auto wsResult = Workspace::create(_yettyContext);
-    if (!wsResult) {
-        return Err<Workspace::Ptr>("Failed to create Workspace", wsResult);
-    }
-    auto workspace = *wsResult;
-    float statusbarHeight = _yettyContext.imguiManager ? _yettyContext.imguiManager->getStatusbarHeight() : 0.0f;
-    workspace->resize(static_cast<float>(_initialWidth), static_cast<float>(_initialHeight) - statusbarHeight);
+  auto wsResult = Workspace::create(_yettyContext);
+  if (!wsResult) {
+    return Err<Workspace::Ptr>("Failed to create Workspace", wsResult);
+  }
+  auto workspace = *wsResult;
+  float statusbarHeight = _yettyContext.imguiManager
+                              ? _yettyContext.imguiManager->getStatusbarHeight()
+                              : 0.0f;
+  workspace->resize(static_cast<float>(_initialWidth),
+                    static_cast<float>(_initialHeight) - statusbarHeight);
 
 #if !YETTY_WEB && !defined(__ANDROID__)
-    // Create single pane for debugging
-    auto paneResult = workspace->createPane();
-    if (!paneResult) {
-        return Err<Workspace::Ptr>("Failed to create pane", paneResult);
-    }
-    workspace->setRoot(*paneResult);
-    yinfo("Created single terminal pane");
+  // Create single pane for debugging
+  auto paneResult = workspace->createPane();
+  if (!paneResult) {
+    return Err<Workspace::Ptr>("Failed to create pane", paneResult);
+  }
+  workspace->setRoot(*paneResult);
+  yinfo("Created single terminal pane");
 #endif
 
-    _workspaces.push_back(workspace);
-    if (_workspaces.size() == 1) {
-        _activeWorkspace = workspace;
-    }
+  _workspaces.push_back(workspace);
+  if (_workspaces.size() == 1) {
+    _activeWorkspace = workspace;
+  }
 
-    return Ok(workspace);
+  return Ok(workspace);
 }
 
 Result<void> YettyImpl::initCallbacks() noexcept {
-    glfwSetWindowUserPointer(_window, this);
+  glfwSetWindowUserPointer(_window, this);
 
-    glfwSetKeyCallback(_window, [](GLFWwindow* w, int key, int scancode, int action, int mods) {
-        ydebug("glfwKeyCallback: key={} scancode={} action={} mods={}", key, scancode, action, mods);
-        if (action != GLFW_PRESS && action != GLFW_REPEAT) return;
+  glfwSetKeyCallback(_window, [](GLFWwindow *w, int key, int scancode,
+                                 int action, int mods) {
+    ydebug("glfwKeyCallback: key={} scancode={} action={} mods={}", key,
+           scancode, action, mods);
+    if (action != GLFW_PRESS && action != GLFW_REPEAT)
+      return;
 
-        auto loop = *base::EventLoop::instance();
+    auto loop = *base::EventLoop::instance();
 
-        // Handle Ctrl/Alt + character combinations using glfwGetKeyName
-        // This is how the old InputHandler::onKey did it
-        if (mods & (GLFW_MOD_CONTROL | GLFW_MOD_ALT)) {
-            // Special case for space key - glfwGetKeyName may return NULL for it
-            if (key == GLFW_KEY_SPACE) {
-                ydebug("Sending Ctrl/Alt+Space");
-                loop->dispatch(base::Event::keyDown(key, mods, scancode));
-                return;
-            }
-
-            const char* keyName = glfwGetKeyName(key, scancode);
-            if (keyName && keyName[0] != '\0' && keyName[1] == '\0') {
-                // Single character key - dispatch as char with mods
-                uint32_t ch = static_cast<uint32_t>(keyName[0]);
-                ydebug("Ctrl/Alt+char: keyName='{}' -> dispatching charInput with mods", keyName);
-                loop->dispatch(base::Event::charInputWithMods(ch, mods));
-                return;
-            }
-        }
-
-        // For special keys (Enter, Backspace, arrows, etc.), dispatch keyDown
+    // Handle Ctrl/Alt + character combinations using glfwGetKeyName
+    // This is how the old InputHandler::onKey did it
+    if (mods & (GLFW_MOD_CONTROL | GLFW_MOD_ALT)) {
+      // Special case for space key - glfwGetKeyName may return NULL for it
+      if (key == GLFW_KEY_SPACE) {
+        ydebug("Sending Ctrl/Alt+Space");
         loop->dispatch(base::Event::keyDown(key, mods, scancode));
-    });
+        return;
+      }
 
-    glfwSetCharCallback(_window, [](GLFWwindow* w, unsigned int codepoint) {
-        ydebug("glfwCharCallback: codepoint={} ('{}')", codepoint, codepoint < 32 ? '?' : (char)codepoint);
-        auto loop = *base::EventLoop::instance();
-        loop->dispatch(base::Event::charInput(codepoint));
-    });
+      const char *keyName = glfwGetKeyName(key, scancode);
+      if (keyName && keyName[0] != '\0' && keyName[1] == '\0') {
+        // Single character key - dispatch as char with mods
+        uint32_t ch = static_cast<uint32_t>(keyName[0]);
+        ydebug("Ctrl/Alt+char: keyName='{}' -> dispatching charInput with mods",
+               keyName);
+        loop->dispatch(base::Event::charInputWithMods(ch, mods));
+        return;
+      }
+    }
 
-    glfwSetFramebufferSizeCallback(_window, [](GLFWwindow* w, int newWidth, int newHeight) {
-        auto* impl = static_cast<YettyImpl*>(glfwGetWindowUserPointer(w));
-        if (impl) impl->handleResize(newWidth, newHeight);
-    });
+    // For special keys (Enter, Backspace, arrows, etc.), dispatch keyDown
+    loop->dispatch(base::Event::keyDown(key, mods, scancode));
+  });
 
-    glfwSetWindowCloseCallback(_window, [](GLFWwindow* w) {
-        ydebug("glfwWindowCloseCallback triggered!");
-    });
+  glfwSetCharCallback(_window, [](GLFWwindow *w, unsigned int codepoint) {
+    ydebug("glfwCharCallback: codepoint={} ('{}')", codepoint,
+           codepoint < 32 ? '?' : (char)codepoint);
+    auto loop = *base::EventLoop::instance();
+    loop->dispatch(base::Event::charInput(codepoint));
+  });
 
-    glfwSetMouseButtonCallback(_window, [](GLFWwindow* w, int button, int action, int mods) {
-        (void)mods;
-        if (action == GLFW_PRESS) {
-            double xpos, ypos;
-            glfwGetCursorPos(w, &xpos, &ypos);
-            ydebug("glfwMouseButtonCallback: button={} at ({}, {})", button, xpos, ypos);
-            auto loop = *base::EventLoop::instance();
-            loop->dispatch(base::Event::mouseDown(static_cast<float>(xpos), static_cast<float>(ypos), button));
-        }
-    });
+  glfwSetFramebufferSizeCallback(
+      _window, [](GLFWwindow *w, int newWidth, int newHeight) {
+        auto *impl = static_cast<YettyImpl *>(glfwGetWindowUserPointer(w));
+        if (impl)
+          impl->handleResize(newWidth, newHeight);
+      });
 
-    glfwSetCursorPosCallback(_window, [](GLFWwindow* w, double xpos, double ypos) {
+  glfwSetWindowCloseCallback(_window, [](GLFWwindow *w) {
+    ydebug("glfwWindowCloseCallback triggered!");
+  });
+
+  glfwSetMouseButtonCallback(_window, [](GLFWwindow *w, int button, int action,
+                                         int mods) {
+    (void)mods;
+    if (action == GLFW_PRESS) {
+      double xpos, ypos;
+      glfwGetCursorPos(w, &xpos, &ypos);
+      ydebug("glfwMouseButtonCallback: button={} at ({}, {})", button, xpos,
+             ypos);
+      auto loop = *base::EventLoop::instance();
+      loop->dispatch(base::Event::mouseDown(static_cast<float>(xpos),
+                                            static_cast<float>(ypos), button));
+    }
+  });
+
+  glfwSetCursorPosCallback(
+      _window, [](GLFWwindow *w, double xpos, double ypos) {
         (void)w;
         auto loop = *base::EventLoop::instance();
-        loop->dispatch(base::Event::mouseMove(static_cast<float>(xpos), static_cast<float>(ypos)));
-    });
+        loop->dispatch(base::Event::mouseMove(static_cast<float>(xpos),
+                                              static_cast<float>(ypos)));
+      });
 
-    glfwSetScrollCallback(_window, [](GLFWwindow* w, double xoffset, double yoffset) {
+  glfwSetScrollCallback(
+      _window, [](GLFWwindow *w, double xoffset, double yoffset) {
         double xpos, ypos;
         glfwGetCursorPos(w, &xpos, &ypos);
         int mods = 0;
         if (glfwGetKey(w, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ||
             glfwGetKey(w, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS) {
-            mods |= GLFW_MOD_CONTROL;
+          mods |= GLFW_MOD_CONTROL;
         }
         if (glfwGetKey(w, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
             glfwGetKey(w, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS) {
-            mods |= GLFW_MOD_SHIFT;
+          mods |= GLFW_MOD_SHIFT;
         }
         auto loop = *base::EventLoop::instance();
         loop->dispatch(base::Event::scrollEvent(
             static_cast<float>(xpos), static_cast<float>(ypos),
             static_cast<float>(xoffset), static_cast<float>(yoffset), mods));
-    });
+      });
 
-    return Ok();
+  return Ok();
 }
 
 void YettyImpl::shutdown() noexcept {
 #if !YETTY_WEB && !defined(__ANDROID__)
-    shutdownEventLoop();
+  shutdownEventLoop();
 #endif
 
-    _activeWorkspace.reset();
-    _workspaces.clear();
+  _activeWorkspace.reset();
+  _workspaces.clear();
 
-    if (_sharedBindGroup) wgpuBindGroupRelease(_sharedBindGroup);
-    if (_sharedBindGroupLayout) wgpuBindGroupLayoutRelease(_sharedBindGroupLayout);
-    if (_sharedUniformBuffer) wgpuBufferRelease(_sharedUniformBuffer);
-    if (_device) wgpuDeviceRelease(_device);
-    if (_adapter) wgpuAdapterRelease(_adapter);
-    if (_surface) wgpuSurfaceRelease(_surface);
-    if (_instance) wgpuInstanceRelease(_instance);
+  if (_sharedBindGroup)
+    wgpuBindGroupRelease(_sharedBindGroup);
+  if (_sharedBindGroupLayout)
+    wgpuBindGroupLayoutRelease(_sharedBindGroupLayout);
+  if (_sharedUniformBuffer)
+    wgpuBufferRelease(_sharedUniformBuffer);
+  if (_device)
+    wgpuDeviceRelease(_device);
+  if (_adapter)
+    wgpuAdapterRelease(_adapter);
+  if (_surface)
+    wgpuSurfaceRelease(_surface);
+  if (_instance)
+    wgpuInstanceRelease(_instance);
 
-    if (_window) {
-        glfwDestroyWindow(_window);
-        _window = nullptr;
-    }
-    glfwTerminate();
+  if (_window) {
+    glfwDestroyWindow(_window);
+    _window = nullptr;
+  }
+  glfwTerminate();
 
-    s_instance = nullptr;
+  s_instance = nullptr;
 }
 
 //=============================================================================
@@ -709,171 +757,186 @@ void YettyImpl::shutdown() noexcept {
 
 #if !YETTY_WEB && !defined(__ANDROID__)
 void YettyImpl::initEventLoop() noexcept {
-    auto loop = *base::EventLoop::instance();
-    auto timerResult = loop->createTimer();
-    if (!timerResult) {
-        yerror("Failed to create frame timer: {}", error_msg(timerResult));
-        return;
-    }
-    _frameTimerId = *timerResult;
-    if (auto res = loop->configTimer(_frameTimerId, 16); !res) {
-        yerror("Failed to configure frame timer: {}", error_msg(res));
-        return;
-    }
-    if (auto res = loop->registerTimerListener(_frameTimerId, sharedAs<base::EventListener>()); !res) {
-        yerror("Failed to register timer listener: {}", error_msg(res));
-        return;
-    }
+  auto loop = *base::EventLoop::instance();
+  auto timerResult = loop->createTimer();
+  if (!timerResult) {
+    yerror("Failed to create frame timer: {}", error_msg(timerResult));
+    return;
+  }
+  _frameTimerId = *timerResult;
+  if (auto res = loop->configTimer(_frameTimerId, 16); !res) {
+    yerror("Failed to configure frame timer: {}", error_msg(res));
+    return;
+  }
+  if (auto res = loop->registerTimerListener(_frameTimerId,
+                                             sharedAs<base::EventListener>());
+      !res) {
+    yerror("Failed to register timer listener: {}", error_msg(res));
+    return;
+  }
 }
 
 void YettyImpl::shutdownEventLoop() noexcept {
-    if (_frameTimerId >= 0) {
-        (*base::EventLoop::instance())->destroyTimer(_frameTimerId);
-        _frameTimerId = -1;
-    }
+  if (_frameTimerId >= 0) {
+    (*base::EventLoop::instance())->destroyTimer(_frameTimerId);
+    _frameTimerId = -1;
+  }
 }
 #endif
 
-Result<bool> YettyImpl::onEvent(const base::Event& event) {
+Result<bool> YettyImpl::onEvent(const base::Event &event) {
 #if !YETTY_WEB && !defined(__ANDROID__)
-    if (event.type == base::Event::Type::Timer && event.timer.timerId == _frameTimerId) {
-        glfwPollEvents();
-        if (glfwWindowShouldClose(_window)) {
-            (*base::EventLoop::instance())->stop();
-            return Ok(true);
-        }
-        mainLoopIteration();
-        return Ok(true);
+  if (event.type == base::Event::Type::Timer &&
+      event.timer.timerId == _frameTimerId) {
+    glfwPollEvents();
+    if (glfwWindowShouldClose(_window)) {
+      (*base::EventLoop::instance())->stop();
+      return Ok(true);
     }
+    mainLoopIteration();
+    return Ok(true);
+  }
 #endif
-    return Ok(false);
+  return Ok(false);
 }
 
 static void signalHandler(int sig) {
-    yinfo("Received signal {}, shutting down...", sig);
-    (*base::EventLoop::instance())->stop();
+  yinfo("Received signal {}, shutting down...", sig);
+  (*base::EventLoop::instance())->stop();
 }
 
 int YettyImpl::run() noexcept {
-    yinfo("Starting render loop...");
+  yinfo("Starting render loop...");
 
-    // Handle Ctrl+C from launching terminal
-    std::signal(SIGINT, signalHandler);
-    std::signal(SIGTERM, signalHandler);
+  // Handle Ctrl+C from launching terminal
+  std::signal(SIGINT, signalHandler);
+  std::signal(SIGTERM, signalHandler);
 
 #if !YETTY_WEB && !defined(__ANDROID__)
-    auto loop = *base::EventLoop::instance();
-    loop->startTimer(_frameTimerId);
-    loop->start();
+  auto loop = *base::EventLoop::instance();
+  loop->startTimer(_frameTimerId);
+  loop->start();
 #endif
 
-    yinfo("Shutting down...");
-    return 0;
+  yinfo("Shutting down...");
+  return 0;
 }
 
 void YettyImpl::mainLoopIteration() noexcept {
-    auto viewResult = getCurrentTextureView();
-    if (!viewResult) return;
-    WGPUTextureView targetView = *viewResult;
+  auto viewResult = getCurrentTextureView();
+  if (!viewResult)
+    return;
+  WGPUTextureView targetView = *viewResult;
 
-    // Update shared uniforms
-    static double lastTime = glfwGetTime();
-    double now = glfwGetTime();
-    float deltaTime = static_cast<float>(now - lastTime);
-    lastTime = now;
+  // Update shared uniforms
+  static double lastTime = glfwGetTime();
+  double now = glfwGetTime();
+  float deltaTime = static_cast<float>(now - lastTime);
+  lastTime = now;
 
-    int windowWidth, windowHeight;
-    glfwGetWindowSize(_window, &windowWidth, &windowHeight);
+  int windowWidth, windowHeight;
+  glfwGetWindowSize(_window, &windowWidth, &windowHeight);
 
-    double mouseXd, mouseYd;
-    glfwGetCursorPos(_window, &mouseXd, &mouseYd);
+  double mouseXd, mouseYd;
+  glfwGetCursorPos(_window, &mouseXd, &mouseYd);
 
-    _sharedUniforms.time = static_cast<float>(now);
-    _sharedUniforms.deltaTime = deltaTime;
-    _sharedUniforms.screenWidth = static_cast<float>(windowWidth);
-    _sharedUniforms.screenHeight = static_cast<float>(windowHeight);
-    _sharedUniforms.mouseX = static_cast<float>(mouseXd);
-    _sharedUniforms.mouseY = static_cast<float>(mouseYd);
-    wgpuQueueWriteBuffer(_queue, _sharedUniformBuffer, 0, &_sharedUniforms, sizeof(SharedUniforms));
+  _sharedUniforms.time = static_cast<float>(now);
+  _sharedUniforms.deltaTime = deltaTime;
+  _sharedUniforms.screenWidth = static_cast<float>(windowWidth);
+  _sharedUniforms.screenHeight = static_cast<float>(windowHeight);
+  _sharedUniforms.mouseX = static_cast<float>(mouseXd);
+  _sharedUniforms.mouseY = static_cast<float>(mouseYd);
+  wgpuQueueWriteBuffer(_queue, _sharedUniformBuffer, 0, &_sharedUniforms,
+                       sizeof(SharedUniforms));
 
-    // Flush card buffer manager (uploads dirty regions to GPU)
-    if (_yettyContext.cardBufferManager) {
-        if (auto res = _yettyContext.cardBufferManager->flush(_queue); !res) {
-            yerror("CardBufferManager flush failed: {}", res.error().message());
-        }
+  // Flush card buffer manager (uploads dirty regions to GPU)
+  if (_yettyContext.cardBufferManager) {
+    if (auto res = _yettyContext.cardBufferManager->flush(_queue); !res) {
+      yerror("CardBufferManager flush failed: {}", res.error().message());
     }
+  }
 
-    // Upload any pending font glyphs (e.g., bold/italic loaded on demand)
-    if (auto msdfFont = _yettyContext.fontManager->getDefaultMsMsdfFont()) {
-        if (msdfFont->hasPendingGlyphs()) {
-            auto uploadResult = msdfFont->uploadPendingGlyphs(_device, _queue);
-            if (!uploadResult) {
-                ywarn("Failed to upload pending glyphs: {}", uploadResult.error().message());
-            }
-        }
+  // Upload any pending font glyphs (e.g., bold/italic loaded on demand)
+  if (auto msdfFont = _yettyContext.fontManager->getDefaultMsMsdfFont()) {
+    if (msdfFont->hasPendingGlyphs()) {
+      auto uploadResult = msdfFont->uploadPendingGlyphs(_device, _queue);
+      if (!uploadResult) {
+        ywarn("Failed to upload pending glyphs: {}",
+              uploadResult.error().message());
+      }
     }
+  }
 
-    WGPUCommandEncoderDescriptor encoderDesc = {};
-    WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(_device, &encoderDesc);
-    if (!encoder) return;
+  WGPUCommandEncoderDescriptor encoderDesc = {};
+  WGPUCommandEncoder encoder =
+      wgpuDeviceCreateCommandEncoder(_device, &encoderDesc);
+  if (!encoder)
+    return;
 
-    WGPURenderPassColorAttachment colorAttachment = {};
-    colorAttachment.view = targetView;
-    colorAttachment.loadOp = WGPULoadOp_Clear;
-    colorAttachment.storeOp = WGPUStoreOp_Store;
-    colorAttachment.clearValue = {0.1f, 0.1f, 0.2f, 1.0f};
-    colorAttachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+  WGPURenderPassColorAttachment colorAttachment = {};
+  colorAttachment.view = targetView;
+  colorAttachment.loadOp = WGPULoadOp_Clear;
+  colorAttachment.storeOp = WGPUStoreOp_Store;
+  colorAttachment.clearValue = {0.1f, 0.1f, 0.2f, 1.0f};
+  colorAttachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
 
-    WGPURenderPassDescriptor passDesc = {};
-    passDesc.colorAttachmentCount = 1;
-    passDesc.colorAttachments = &colorAttachment;
+  WGPURenderPassDescriptor passDesc = {};
+  passDesc.colorAttachmentCount = 1;
+  passDesc.colorAttachments = &colorAttachment;
 
-    WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
-    if (pass) {
-        if (_activeWorkspace) {
-            _activeWorkspace->render(pass);
-        }
-        // Render ImGui (context menus, etc.) after main content
-        if (_yettyContext.imguiManager) {
-            _yettyContext.imguiManager->render(pass);
-        }
-        wgpuRenderPassEncoderEnd(pass);
-        wgpuRenderPassEncoderRelease(pass);
+  WGPURenderPassEncoder pass =
+      wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
+  if (pass) {
+    if (_activeWorkspace) {
+      _activeWorkspace->render(pass);
     }
-
-    WGPUCommandBufferDescriptor cmdDesc = {};
-    WGPUCommandBuffer cmdBuffer = wgpuCommandEncoderFinish(encoder, &cmdDesc);
-    if (cmdBuffer) {
-        wgpuQueueSubmit(_queue, 1, &cmdBuffer);
-        wgpuCommandBufferRelease(cmdBuffer);
+    // Render ImGui (context menus, etc.) after main content
+    if (_yettyContext.imguiManager) {
+      _yettyContext.imguiManager->render(pass);
     }
-    wgpuCommandEncoderRelease(encoder);
+    wgpuRenderPassEncoderEnd(pass);
+    wgpuRenderPassEncoderRelease(pass);
+  }
 
-    present();
+  WGPUCommandBufferDescriptor cmdDesc = {};
+  WGPUCommandBuffer cmdBuffer = wgpuCommandEncoderFinish(encoder, &cmdDesc);
+  if (cmdBuffer) {
+    wgpuQueueSubmit(_queue, 1, &cmdBuffer);
+    wgpuCommandBufferRelease(cmdBuffer);
+  }
+  wgpuCommandEncoderRelease(encoder);
 
-    _frameCount++;
-    double fpsNow = glfwGetTime();
-    if (fpsNow - _lastFpsTime >= 1.0) {
-        yinfo("FPS: {}", _frameCount);
-        _frameCount = 0;
-        _lastFpsTime = fpsNow;
-    }
+  present();
+
+  _frameCount++;
+  double fpsNow = glfwGetTime();
+  if (fpsNow - _lastFpsTime >= 1.0) {
+    yinfo("FPS: {}", _frameCount);
+    _frameCount = 0;
+    _lastFpsTime = fpsNow;
+  }
 }
 
 void YettyImpl::handleResize(int newWidth, int newHeight) noexcept {
-    if (newWidth == 0 || newHeight == 0) return;
+  if (newWidth == 0 || newHeight == 0)
+    return;
 
-    configureSurface(static_cast<uint32_t>(newWidth), static_cast<uint32_t>(newHeight));
+  configureSurface(static_cast<uint32_t>(newWidth),
+                   static_cast<uint32_t>(newHeight));
 
-    if (_yettyContext.imguiManager) {
-        _yettyContext.imguiManager->updateDisplaySize(
-            static_cast<uint32_t>(newWidth), static_cast<uint32_t>(newHeight));
-    }
+  if (_yettyContext.imguiManager) {
+    _yettyContext.imguiManager->updateDisplaySize(
+        static_cast<uint32_t>(newWidth), static_cast<uint32_t>(newHeight));
+  }
 
-    if (_activeWorkspace) {
-        float statusbarHeight = _yettyContext.imguiManager ? _yettyContext.imguiManager->getStatusbarHeight() : 0.0f;
-        _activeWorkspace->resize(static_cast<float>(newWidth), static_cast<float>(newHeight) - statusbarHeight);
-    }
+  if (_activeWorkspace) {
+    float statusbarHeight =
+        _yettyContext.imguiManager
+            ? _yettyContext.imguiManager->getStatusbarHeight()
+            : 0.0f;
+    _activeWorkspace->resize(static_cast<float>(newWidth),
+                             static_cast<float>(newHeight) - statusbarHeight);
+  }
 }
 
 } // namespace yetty

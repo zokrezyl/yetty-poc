@@ -199,8 +199,15 @@ int main(int argc, char* argv[]) {
         float fontSize = 32.0f;
         FT_Library ftLib;
         FT_Face ftFace;
-        FT_Init_FreeType(&ftLib);
-        FT_New_Face(ftLib, fontPath.c_str(), 0, &ftFace);
+        if (FT_Init_FreeType(&ftLib)) {
+            std::cerr << "Failed to init FreeType\n";
+            return 1;
+        }
+        if (FT_New_Face(ftLib, fontPath.c_str(), 0, &ftFace)) {
+            std::cerr << "Failed to load font face: " << fontPath << "\n";
+            FT_Done_FreeType(ftLib);
+            return 1;
+        }
         float unitsPerEm = static_cast<float>(ftFace->units_per_EM);
         FT_Done_Face(ftFace);
         FT_Done_FreeType(ftLib);

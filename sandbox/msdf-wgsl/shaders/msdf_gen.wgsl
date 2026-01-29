@@ -48,32 +48,37 @@ fn cross2d(a: vec2<f32>, b: vec2<f32>) -> f32 {
     return a.x * b.y - a.y * b.x;
 }
 
+// Equivalent to msdfgen's nonZeroSign: returns -1 for v <= 0, +1 for v > 0
+// Unlike sign(), never returns 0 — prevents zero-distance artifacts on tangent extensions
+fn nonZeroSign(v: f32) -> f32 {
+    return select(-1.0, 1.0, v > 0.0);
+}
+
 // Signed distance to a line segment
-// Convention: negative = inside, positive = outside
-fn distance_to_line(p0: vec2<f32>, p1: vec2<f32>, origin: vec2<f32>) -> vec3<f32> {
+// Returns vec4: (signed_dist, ortho, clamped_t, ext_param)
+fn distance_to_line(p0: vec2<f32>, p1: vec2<f32>, origin: vec2<f32>) -> vec4<f32> {
     let aq = origin - p0;
     let ab = p1 - p0;
-    let t = clamp(dot(aq, ab) / dot(ab, ab), 0.0, 1.0);
+    let param = dot(aq, ab) / dot(ab, ab);  // unclamped parameter
+    let t = clamp(param, 0.0, 1.0);
     let closest = p0 + t * ab;
     let to_origin = origin - closest;
     let dist = length(to_origin);
 
-    // Use cross product with vector from closest point to origin for correct sign
-    // Negate because: positive cross = left of edge = inside CCW contour = should be negative
-    let sign_val = -sign(cross2d(ab, to_origin));
+    let sign_val = -nonZeroSign(cross2d(ab, to_origin));
+    let signed_dist = sign_val * dist;
 
-    // Return: signed distance, orthogonality (0 at endpoints), parameter t
     var ortho = 0.0;
-    if t <= 0.0 {
+    if param <= 0.0 {
         ortho = abs(dot(normalize(ab), normalize(aq)));
-    } else if t >= 1.0 {
+    } else if param >= 1.0 {
         ortho = abs(dot(normalize(ab), normalize(origin - p1)));
     }
 
-    return vec3<f32>(sign_val * dist, ortho, t);
+    return vec4<f32>(signed_dist, ortho, t, param);
 }
 
-// Signed distance to a quadratic bezier curve
+// Signed distance to a quadratic bezier curve with pseudo-distance at endpoints
 fn distance_to_quad(p0: vec2<f32>, p1: vec2<f32>, p2: vec2<f32>, origin: vec2<f32>) -> vec3<f32> {
     let qa = p0 - origin;
     let ab = p1 - p0;
@@ -132,17 +137,29 @@ fn distance_to_quad(p0: vec2<f32>, p1: vec2<f32>, p2: vec2<f32>, origin: vec2<f3
         num_solutions = 1;
     }
 
-    // Find minimum distance (negate sign: negative = inside, positive = outside)
-    // Start with endpoint p0 (t=0), tangent at t=0 is ab
-    var min_dist = -sign(cross2d(ab, qa)) * length(qa);
-    var param = 0.0;
+    // Tangent directions at endpoints (with degenerate fallback)
+    var dir0 = ab;
+    if dot(dir0, dir0) < 1e-10 {
+        dir0 = p2 - p0;
+    }
+    var dir1 = p2 - p1;
+    if dot(dir1, dir1) < 1e-10 {
+        dir1 = p2 - p0;
+    }
 
-    // Check endpoint p2 (t=1), tangent at t=1 is (p2-p1)
-    let qc = p2 - origin;
-    let dist_end = -sign(cross2d(p2 - p1, -qc)) * length(qc);
+    // Start with endpoint p0 (t=0)
+    // msdfgen: nonZeroSign(crossProduct(direction(0), qa)) * qa.length()
+    var min_dist = nonZeroSign(cross2d(dir0, qa)) * length(qa);
+    // Extended parameter for pseudo-distance (matches CPU's param computation)
+    var ext_param = -dot(qa, dir0) / dot(dir0, dir0);
+
+    // Check endpoint p2 (t=1)
+    // msdfgen: nonZeroSign(crossProduct(direction(1), p2-origin)) * |p2-origin|
+    let p2q = p2 - origin;
+    let dist_end = nonZeroSign(cross2d(dir1, p2q)) * length(p2q);
     if abs(dist_end) < abs(min_dist) {
         min_dist = dist_end;
-        param = 1.0;
+        ext_param = dot(origin - p1, dir1) / dot(dir1, dir1);
     }
 
     // Check interior solutions
@@ -150,27 +167,48 @@ fn distance_to_quad(p0: vec2<f32>, p1: vec2<f32>, p2: vec2<f32>, origin: vec2<f3
         let t = solutions[i];
         if t > 0.0 && t < 1.0 {
             // Point on curve: B(t) = p0 + 2*t*ab + t^2*br
-            let point_on_curve = p0 + ab * 2.0 * t + br * t * t;
-            let to_origin = origin - point_on_curve;
-            // Tangent at t: B'(t) = 2*(ab + t*br)
+            let qe = qa + ab * 2.0 * t + br * t * t;
             let tangent = ab + br * t;
-            let dist = -sign(cross2d(tangent, to_origin)) * length(to_origin);
-            if abs(dist) < abs(min_dist) {
+            let dist = nonZeroSign(cross2d(tangent, qe)) * length(qe);
+            if abs(dist) <= abs(min_dist) {
                 min_dist = dist;
-                param = t;
+                ext_param = t;
+            }
+        }
+    }
+
+    // Pseudo-distance at endpoints (matches msdfgen's distanceToPerpendicularDistance)
+    if ext_param < 0.0 {
+        let dir = normalize(dir0);
+        let ep = origin - p0;
+        let ts = dot(ep, dir);
+        if ts < 0.0 {
+            let perp = cross2d(ep, dir);
+            if abs(perp) <= abs(min_dist) {
+                min_dist = perp;
+            }
+        }
+    } else if ext_param > 1.0 {
+        let dir = normalize(dir1);
+        let ep = origin - p2;
+        let ts = dot(ep, dir);
+        if ts > 0.0 {
+            let perp = cross2d(ep, dir);
+            if abs(perp) <= abs(min_dist) {
+                min_dist = perp;
             }
         }
     }
 
     var ortho = 0.0;
-    if param > 1.0 {
-        ortho = abs(dot(normalize(p2 - p1), normalize(p2 - origin)));
+    if ext_param > 1.0 {
+        ortho = abs(dot(normalize(dir1), normalize(p2q)));
     }
-    if param < 0.0 {
-        ortho = abs(dot(normalize(ab), normalize(qa)));
+    if ext_param < 0.0 {
+        ortho = abs(dot(normalize(dir0), normalize(qa)));
     }
 
-    return vec3<f32>(min_dist, ortho, param);
+    return vec3<f32>(min_dist, ortho, clamp(ext_param, 0.0, 1.0));
 }
 
 // Get direction of segment at parameter t
@@ -301,10 +339,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if min_abs_b >= INFINITY_F { min_dist_b = select(-min_overall, min_overall, min_dist_r > 0.0 || min_dist_g > 0.0); }
 
     // Normalize to 0-1 range centered at 0.5
+    // msdfgen convention: output = dist / (2 * range) + 0.5
+    let inv_range = 1.0 / (2.0 * uniforms.range);
     let normalized = vec3<f32>(
-        min_dist_r / uniforms.range + 0.5,
-        min_dist_g / uniforms.range + 0.5,
-        min_dist_b / uniforms.range + 0.5
+        min_dist_r * inv_range + 0.5,
+        min_dist_g * inv_range + 0.5,
+        min_dist_b * inv_range + 0.5
     );
 
     // Write to atlas

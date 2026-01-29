@@ -244,10 +244,10 @@ static float computeWinding(const std::vector<float>& points, size_t start, size
     return total;
 }
 
-// Assign edge colors ensuring adjacent edges differ in at least one channel
+// Assign edge colors - all WHITE (pure SDF mode)
+// MSDF edge coloring would improve corner sharpness but requires
+// pseudo-distance correction to avoid artifacts
 static void assignColors(GlyphCtx& ctx) {
-    // For now, use WHITE for all edges (pure SDF mode) to debug
-    // TODO: Implement proper MSDF coloring once SDF works correctly
     int metaIdx = 1;
     for (uint32_t i = 0; i < ctx.metadata[0]; i++) {
         metaIdx++;  // Skip winding

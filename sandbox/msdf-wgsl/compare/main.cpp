@@ -131,11 +131,76 @@ int main(int argc, char* argv[]) {
         }
 
         if (foundA && foundB) {
-            bool match = (ha.width == hb.width && ha.height == hb.height &&
+            bool headerMatch = (ha.width == hb.width && ha.height == hb.height &&
                           ha.bearingX == hb.bearingX && ha.bearingY == hb.bearingY &&
                           ha.sizeX == hb.sizeX && ha.sizeY == hb.sizeY &&
                           ha.advance == hb.advance);
-            printf("  %s\n", match ? "MATCH" : "DIFFER");
+            printf("  Header: %s\n", headerMatch ? "MATCH" : "DIFFER");
+
+            // Pixel comparison: compute median(R,G,B) for each pixel and compare
+            if (ha.width == hb.width && ha.height == hb.height && !pa.empty() && !pb.empty()) {
+                int w = ha.width, h = ha.height;
+                int totalPx = w * h;
+                int diffCount = 0;
+                int maxDiff = 0;
+                long long sumDiff = 0;
+
+                // Print median map for both side by side, row by row
+                printf("\n  Median(R,G,B) comparison — A(CPU) vs B(GPU):\n");
+                printf("  Row format: row_num | A_medians... | B_medians... | diff...\n\n");
+
+                for (int y = 0; y < h; y++) {
+                    // Compute medians for this row
+                    std::vector<int> medA(w), medB(w);
+                    for (int x = 0; x < w; x++) {
+                        int idx = (y * w + x) * 4;
+                        int ra = pa[idx], ga = pa[idx+1], ba = pa[idx+2];
+                        int rb = pb[idx], gb = pb[idx+1], bb = pb[idx+2];
+
+                        // median of 3
+                        auto med3 = [](int a, int b, int c) -> int {
+                            if (a > b) std::swap(a, b);
+                            if (b > c) std::swap(b, c);
+                            if (a > b) std::swap(a, b);
+                            return b;
+                        };
+                        medA[x] = med3(ra, ga, ba);
+                        medB[x] = med3(rb, gb, bb);
+
+                        int d = std::abs(medA[x] - medB[x]);
+                        if (d > 0) diffCount++;
+                        if (d > maxDiff) maxDiff = d;
+                        sumDiff += d;
+                    }
+
+                    // Print row
+                    printf("  y=%2d A: ", y);
+                    for (int x = 0; x < w; x++) printf("%3d ", medA[x]);
+                    printf("\n");
+                    printf("       B: ");
+                    for (int x = 0; x < w; x++) printf("%3d ", medB[x]);
+                    printf("\n");
+
+                    // Print diff row only if there are differences
+                    bool hasDiff = false;
+                    for (int x = 0; x < w; x++) {
+                        if (medA[x] != medB[x]) { hasDiff = true; break; }
+                    }
+                    if (hasDiff) {
+                        printf("    diff: ");
+                        for (int x = 0; x < w; x++) {
+                            int d = medA[x] - medB[x];
+                            if (d == 0) printf("  . ");
+                            else printf("%+3d ", d);
+                        }
+                        printf("\n");
+                    }
+                    printf("\n");
+                }
+
+                printf("  Pixel stats: %d/%d differ, maxDiff=%d, avgDiff=%.1f\n",
+                       diffCount, totalPx, maxDiff, totalPx > 0 ? (double)sumDiff / totalPx : 0.0);
+            }
         }
         printf("\n");
     }

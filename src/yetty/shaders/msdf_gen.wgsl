@@ -48,6 +48,12 @@ fn cross2d(a: vec2<f32>, b: vec2<f32>) -> f32 {
     return a.x * b.y - a.y * b.x;
 }
 
+// Equivalent to msdfgen's nonZeroSign: returns -1 for v <= 0, +1 for v > 0
+// Unlike sign(), never returns 0 — prevents zero-distance artifacts on tangent extensions
+fn nonZeroSign(v: f32) -> f32 {
+    return select(-1.0, 1.0, v > 0.0);
+}
+
 // Signed distance to a line segment
 // Convention: negative = inside, positive = outside
 fn distance_to_line(p0: vec2<f32>, p1: vec2<f32>, origin: vec2<f32>) -> vec3<f32> {
@@ -60,7 +66,7 @@ fn distance_to_line(p0: vec2<f32>, p1: vec2<f32>, origin: vec2<f32>) -> vec3<f32
 
     // Use cross product with vector from closest point to origin for correct sign
     // Negate because: positive cross = left of edge = inside CCW contour = should be negative
-    let sign_val = -sign(cross2d(ab, to_origin));
+    let sign_val = -nonZeroSign(cross2d(ab, to_origin));
 
     // Return: signed distance, orthogonality (0 at endpoints), parameter t
     var ortho = 0.0;
@@ -132,14 +138,16 @@ fn distance_to_quad(p0: vec2<f32>, p1: vec2<f32>, p2: vec2<f32>, origin: vec2<f3
         num_solutions = 1;
     }
 
-    // Find minimum distance (negate sign: negative = inside, positive = outside)
+    // Find minimum distance
     // Start with endpoint p0 (t=0), tangent at t=0 is ab
-    var min_dist = -sign(cross2d(ab, qa)) * length(qa);
+    // Sign must match interior formula: at t=0, to_origin = -qa, so
+    // -nonZeroSign(cross2d(ab, -qa)) = nonZeroSign(cross2d(ab, qa))
+    var min_dist = nonZeroSign(cross2d(ab, qa)) * length(qa);
     var param = 0.0;
 
     // Check endpoint p2 (t=1), tangent at t=1 is (p2-p1)
     let qc = p2 - origin;
-    let dist_end = -sign(cross2d(p2 - p1, -qc)) * length(qc);
+    let dist_end = -nonZeroSign(cross2d(p2 - p1, -qc)) * length(qc);
     if abs(dist_end) < abs(min_dist) {
         min_dist = dist_end;
         param = 1.0;
@@ -154,8 +162,8 @@ fn distance_to_quad(p0: vec2<f32>, p1: vec2<f32>, p2: vec2<f32>, origin: vec2<f3
             let to_origin = origin - point_on_curve;
             // Tangent at t: B'(t) = 2*(ab + t*br)
             let tangent = ab + br * t;
-            let dist = -sign(cross2d(tangent, to_origin)) * length(to_origin);
-            if abs(dist) < abs(min_dist) {
+            let dist = -nonZeroSign(cross2d(tangent, to_origin)) * length(to_origin);
+            if abs(dist) <= abs(min_dist) {
                 min_dist = dist;
                 param = t;
             }
@@ -301,10 +309,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if min_abs_b >= INFINITY_F { min_dist_b = select(-min_overall, min_overall, min_dist_r > 0.0 || min_dist_g > 0.0); }
 
     // Normalize to 0-1 range centered at 0.5
+    // msdfgen convention: output = dist / (2 * range) + 0.5
+    let inv_range = 1.0 / (2.0 * uniforms.range);
     let normalized = vec3<f32>(
-        min_dist_r / uniforms.range + 0.5,
-        min_dist_g / uniforms.range + 0.5,
-        min_dist_b / uniforms.range + 0.5
+        min_dist_r * inv_range + 0.5,
+        min_dist_g * inv_range + 0.5,
+        min_dist_b * inv_range + 0.5
     );
 
     // Write to atlas
