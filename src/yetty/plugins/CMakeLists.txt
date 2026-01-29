@@ -36,6 +36,11 @@ function(add_yetty_plugin NAME)
 
     # Ensure position independent code
     set_target_properties(${NAME}_plugin PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+    # Allow plugins to reference symbols from the host executable at runtime
+    if(APPLE)
+        target_link_options(${NAME}_plugin PRIVATE -undefined dynamic_lookup)
+    endif()
 endfunction()
 
 # shader plugin

@@ -226,6 +226,9 @@ if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
         )
     endif()
 
+    # Remove cdb's 'version' file which shadows the C++ <version> header
+    file(REMOVE "${CDB_SOURCE_DIR}/version")
+
     # Build CDB as a static library
     add_library(cdb STATIC
         ${CDB_SOURCE_DIR}/cdb.c
