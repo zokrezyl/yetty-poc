@@ -2,6 +2,7 @@
 #include <yetty/shader-manager.h>
 #include <ytrace/ytrace.hpp>
 
+#include <array>
 #include <cstdlib>
 #include <filesystem>
 #include <unordered_map>
@@ -17,11 +18,13 @@ public:
     FontManagerImpl() = default;
     ~FontManagerImpl() override = default;
 
-    Result<void> init(const GPUContext& gpu, ShaderManager::Ptr shaderMgr) noexcept {
+    Result<void> init(const GPUContext& gpu, ShaderManager::Ptr shaderMgr,
+                      MsdfCdbProvider::Ptr cdbProvider) noexcept {
         if (_initialized) return Ok();
 
         _gpu = gpu;
         _shaderMgr = shaderMgr;
+        _cdbProvider = cdbProvider;
 
         if (auto res = initMsMsdfFonts(); !res) {
             return Err<void>("Failed to initialize MSDF fonts", res);
@@ -49,6 +52,43 @@ public:
         }
 
         std::string cdbBasePath = _cacheDir + "/" + fontName;
+
+        // Check if all required CDB files exist; generate any missing ones
+        if (_cdbProvider) {
+            static const std::array<std::string, 4> styleSuffixes = {
+                "Regular", "Bold", "Oblique", "BoldOblique"
+            };
+
+            auto ttfPaths = findTtfPaths(fontName);
+            bool anyMissing = false;
+            for (size_t i = 0; i < styleSuffixes.size(); ++i) {
+                if (i < ttfPaths.size() && !ttfPaths[i].empty()) {
+                    std::string cdbPath = cdbBasePath + "-" + styleSuffixes[i] + ".cdb";
+                    if (!std::filesystem::exists(cdbPath)) {
+                        anyMissing = true;
+                        break;
+                    }
+                }
+            }
+
+            if (anyMissing && !ttfPaths.empty() && !ttfPaths[0].empty()) {
+                yinfo("CDB missing for {}, generating via {} provider...",
+                      fontName, _cdbProvider->name());
+
+                MsdfCdbConfig cfg;
+                cfg.fontName  = fontName;
+                cfg.ttfPaths  = ttfPaths;
+                cfg.outputDir = _cacheDir;
+
+                if (auto res = _cdbProvider->generate(cfg); !res) {
+                    return Err<MsMsdfFont::Ptr>(
+                        "CDB generation failed for " + fontName, res);
+                }
+
+                yinfo("CDB generation complete for {}", fontName);
+            }
+        }
+
         auto result = MsMsdfFont::create(cdbBasePath);
         if (!result) {
             return Err<MsMsdfFont::Ptr>("Failed to load MsMsdfFont: " + fontName, result);
@@ -126,10 +166,11 @@ private:
             return Err<void>("HOME environment variable not set");
         }
 
-        _cacheDir = std::string(home) + "/.cache/yetty/msdf-font-cache";
+        _cacheDir = std::string(home) + "/.cache/yetty/msdf-font-cache-tmp";
 
         if (!std::filesystem::exists(_cacheDir)) {
-            ywarn("MSDF font cache directory does not exist: {}", _cacheDir);
+            yinfo("Creating MSDF font cache directory: {}", _cacheDir);
+            std::filesystem::create_directories(_cacheDir);
         }
 
         yinfo("MSDF font cache dir: {}", _cacheDir);
@@ -176,8 +217,30 @@ private:
         return Ok();
     }
 
+    // Discover TTF paths for a font name in assets/ directory
+    // Returns [Regular, Bold, Oblique, BoldOblique] paths (empty string if not found)
+    std::vector<std::string> findTtfPaths(const std::string& fontName) {
+        static const std::array<std::string, 4> suffixes = {
+            "Regular", "Bold", "Oblique", "BoldOblique"
+        };
+
+        std::string assetsDir = std::string(CMAKE_SOURCE_DIR) + "/assets";
+        std::vector<std::string> paths(4);
+
+        for (size_t i = 0; i < suffixes.size(); ++i) {
+            std::string candidate = assetsDir + "/" + fontName + "-" + suffixes[i] + ".ttf";
+            if (std::filesystem::exists(candidate)) {
+                paths[i] = candidate;
+                yinfo("Found TTF: {}", candidate);
+            }
+        }
+
+        return paths;
+    }
+
     GPUContext _gpu = {};
     ShaderManager::Ptr _shaderMgr;
+    MsdfCdbProvider::Ptr _cdbProvider;
     std::string _cacheDir;
     std::unordered_map<std::string, MsMsdfFont::Ptr> _msdfFontCache;
     std::string _defaultFontName;
@@ -191,9 +254,10 @@ private:
 Result<FontManager::Ptr> FontManager::createImpl(
         ContextType&,
         const GPUContext& gpu,
-        ShaderManager::Ptr shaderMgr) noexcept {
+        ShaderManager::Ptr shaderMgr,
+        MsdfCdbProvider::Ptr cdbProvider) noexcept {
     auto impl = Ptr(new FontManagerImpl());
-    if (auto res = static_cast<FontManagerImpl*>(impl.get())->init(gpu, shaderMgr); !res) {
+    if (auto res = static_cast<FontManagerImpl*>(impl.get())->init(gpu, shaderMgr, cdbProvider); !res) {
         return Err<Ptr>("FontManager init failed", res);
     }
     return Ok(std::move(impl));

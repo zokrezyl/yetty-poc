@@ -4,6 +4,7 @@
 #include <yetty/terminal-view.h>
 #include <yetty/workspace.h>
 #include <yetty/font-manager.h>
+#include <yetty/msdf-cdb-provider.h>
 #include <yetty/shader-manager.h>
 #include <yetty/card-buffer-manager.h>
 #include <yetty/card-factory.h>
@@ -100,6 +101,7 @@ private:
 
     // Command line options
     std::string _executeCommand;
+    std::string _msdfProviderName = "gpu";  // "cpu" or "gpu"
 
     static YettyImpl* s_instance;
 };
@@ -137,8 +139,18 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     }
     auto shaderMgr = *shaderMgrResult;
 
-    // Create FontManager with GPUContext and ShaderManager
-    auto fontMgrResult = FontManager::create(_gpuContext, shaderMgr);
+    // Create MSDF CDB provider based on CLI flag
+    MsdfCdbProvider::Ptr cdbProvider;
+    if (_msdfProviderName == "cpu") {
+        cdbProvider = std::make_shared<CpuMsdfCdbProvider>();
+        yinfo("Using CPU MSDF CDB provider");
+    } else {
+        cdbProvider = std::make_shared<GpuMsdfCdbProvider>(_instance);
+        yinfo("Using GPU MSDF CDB provider");
+    }
+
+    // Create FontManager with GPUContext, ShaderManager, and CDB provider
+    auto fontMgrResult = FontManager::create(_gpuContext, shaderMgr, cdbProvider);
     if (!fontMgrResult) {
         return Err<void>("Failed to create FontManager", fontMgrResult);
     }
@@ -192,6 +204,9 @@ Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
         if (arg == "-e" && i + 1 < argc) {
             _executeCommand = argv[++i];
             yinfo("Execute command: {}", _executeCommand);
+        } else if (arg == "--msdf-provider" && i + 1 < argc) {
+            _msdfProviderName = argv[++i];
+            yinfo("MSDF provider: {}", _msdfProviderName);
         }
     }
     return Ok();
