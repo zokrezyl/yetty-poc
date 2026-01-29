@@ -526,6 +526,14 @@ elseif(NOT EMSCRIPTEN)
         src/yetty/view.cpp
         src/yetty/workspace.cpp
         src/yetty/base/event-loop.cpp
+        # Ymery - YAML-driven ImGui widget system (ported from ymery-cpp)
+        src/yetty/ymery/types.cpp
+        src/yetty/ymery/data-bag.cpp
+        src/yetty/ymery/data-tree.cpp
+        src/yetty/ymery/dispatcher.cpp
+        src/yetty/ymery/lang.cpp
+        src/yetty/ymery/simple-data-tree.cpp
+        src/yetty/ymery/renderer.cpp
     )
     # Python plugin built into main executable (Unix only)
     if(UNIX AND YETTY_PLUGIN_PYTHON)

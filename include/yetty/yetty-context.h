@@ -7,6 +7,10 @@
 #include <yetty/card-factory.h>
 #include <yetty/imgui-manager.h>
 
+#include <memory>
+
+namespace yetty::ymery { class Renderer; }
+
 namespace yetty {
 
 // Application-level context for Yetty components
@@ -23,6 +27,9 @@ struct YettyContext {
 
     // Per-screen card buffer manager (set by GPUScreen, not globally)
     CardBufferManager::Ptr cardBufferManager;
+
+    // Ymery widget renderer (YAML-driven ImGui widgets)
+    std::shared_ptr<ymery::Renderer> ymeryRenderer;
 };
 
 } // namespace yetty

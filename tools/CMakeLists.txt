@@ -1,2 +1,45 @@
 add_subdirectory(gpu-info)
 
+# Ymery test tool - standalone ImGui/OpenGL3 app that loads YAML layouts
+add_executable(ymery-test
+    ymery/test.cpp
+    ${CMAKE_SOURCE_DIR}/src/yetty/ymery/types.cpp
+    ${CMAKE_SOURCE_DIR}/src/yetty/ymery/data-bag.cpp
+    ${CMAKE_SOURCE_DIR}/src/yetty/ymery/data-tree.cpp
+    ${CMAKE_SOURCE_DIR}/src/yetty/ymery/dispatcher.cpp
+    ${CMAKE_SOURCE_DIR}/src/yetty/ymery/lang.cpp
+    ${CMAKE_SOURCE_DIR}/src/yetty/ymery/simple-data-tree.cpp
+    ${CMAKE_SOURCE_DIR}/src/yetty/ymery/renderer.cpp
+)
+
+target_include_directories(ymery-test PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src
+)
+
+# ImGui with OpenGL3 backend (not WebGPU)
+target_sources(ymery-test PRIVATE
+    ${imgui_SOURCE_DIR}/imgui.cpp
+    ${imgui_SOURCE_DIR}/imgui_demo.cpp
+    ${imgui_SOURCE_DIR}/imgui_draw.cpp
+    ${imgui_SOURCE_DIR}/imgui_tables.cpp
+    ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
+)
+
+target_include_directories(ymery-test PRIVATE
+    ${imgui_SOURCE_DIR}
+    ${imgui_SOURCE_DIR}/backends
+)
+
+find_package(OpenGL REQUIRED)
+
+target_link_libraries(ymery-test PRIVATE
+    glfw
+    OpenGL::GL
+    yaml-cpp
+    ytrace::ytrace
+)
+
+target_compile_features(ymery-test PRIVATE cxx_std_23)

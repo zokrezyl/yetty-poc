@@ -1,6 +1,7 @@
 #include <yetty/imgui-manager.h>
 #include <yetty/yetty-context.h>
 #include <yetty/base/event-loop.h>
+#include "ymery/renderer.hpp"
 #include <ytrace/ytrace.hpp>
 
 #include <imgui.h>
@@ -222,6 +223,13 @@ Result<void> ImguiManagerImpl::render(WGPURenderPassEncoder pass) {
         } else {
             // Popup was closed (clicked outside)
             clearContextMenu();
+        }
+    }
+
+    // Ymery: render YAML-driven widgets
+    if (_ctx.ymeryRenderer) {
+        if (auto res = _ctx.ymeryRenderer->renderFrame(); !res) {
+            ydebug("ymeryRenderer->renderFrame() failed: {}", res.error().to_string());
         }
     }
 
