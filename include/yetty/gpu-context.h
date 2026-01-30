@@ -12,6 +12,8 @@ struct GPUContext {
     WGPUTextureFormat surfaceFormat;
     WGPUBindGroupLayout sharedBindGroupLayout;
     WGPUBindGroup sharedBindGroup;
+    WGPUBuffer sharedUniformBuffer;
+    uint32_t sharedUniformSize;
 };
 
 } // namespace yetty

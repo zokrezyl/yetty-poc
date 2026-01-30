@@ -201,7 +201,7 @@ private:
     DirtyTracker _storageDirty;
     DirtyTracker _textureDataDirty;
 
-    // Image Atlas Resources
+    // Atlas Resources
     WGPUTexture _atlasTexture = nullptr;
     WGPUTextureView _atlasTextureView = nullptr;
     WGPUSampler _atlasSampler = nullptr;
@@ -232,9 +232,13 @@ private:
     uint32_t _currentAtlasSize = IMAGE_ATLAS_SIZE;  // Can grow dynamically
     static constexpr uint32_t MAX_ATLAS_SIZE = 8192;  // Maximum atlas size
 
+    // Current storage capacity (can grow)
+    uint32_t _currentStorageCapacity;
+    static constexpr uint32_t MAX_STORAGE_SIZE = 32 * 1024 * 1024;  // 32 MB max
+
     // Current textureData capacity (can grow)
-    uint32_t _currentImageDataCapacity;
-    static constexpr uint32_t MAX_IMAGE_DATA_SIZE = 128 * 1024 * 1024;  // 128 MB max
+    uint32_t _currentTextureDataCapacity;
+    static constexpr uint32_t MAX_TEXTURE_DATA_SIZE = 128 * 1024 * 1024;  // 128 MB max
 
     // Shared bind group for rendering (managed internally)
     WGPUBindGroupLayout _sharedBindGroupLayout = nullptr;
@@ -243,7 +247,8 @@ private:
     // Helper to check if atlas needs to grow and grow it
     Result<void> checkAndGrowAtlas(WGPUQueue queue);
     Result<void> growAtlas();
-    Result<void> growImageDataBuffer(uint32_t requiredSize);
+    Result<void> growStorageBuffer(uint32_t requiredSize);
+    Result<void> growTextureDataBuffer(uint32_t requiredSize);
 };
 
 // =============================================================================
@@ -487,16 +492,19 @@ CardBufferManagerImpl::CardBufferManagerImpl(GPUContext* gpuContext, WGPUBuffer 
     , _textureDataGpuBuffer(nullptr)
     , _metadataAllocator(config.metadataPool32Count, config.metadataPool64Count,
                          config.metadataPool128Count, config.metadataPool256Count)
-    , _storageAllocator(config.storageCapacity)
-    , _textureDataAllocator(config.textureDataCapacity)
-    , _currentImageDataCapacity(config.textureDataCapacity) {
+    , _storageAllocator(4)          // Start tiny, grow on demand
+    , _textureDataAllocator(4)      // Start tiny, grow on demand
+    , _currentStorageCapacity(4)
+    , _currentTextureDataCapacity(4) {
 }
 
 Result<void> CardBufferManagerImpl::init() noexcept {
-    // Resize to byte count / 4 (buffers are uint32_t for alignment)
+    // Metadata pool has fixed slots — allocate at full size (only ~20KB)
     _metadataCpuBuffer.resize((_metadataAllocator.totalSize() + 3) / 4, 0);
-    _storageCpuBuffer.resize((_config.storageCapacity + 3) / 4, 0);
-    _textureDataCpuBuffer.resize((_config.textureDataCapacity + 3) / 4, 0);
+    // Storage and textureData start as tiny placeholders (4 bytes).
+    // They grow on demand when cards actually allocate storage/texture data.
+    _storageCpuBuffer.resize(1, 0);    // 4 bytes placeholder
+    _textureDataCpuBuffer.resize(1, 0); // 4 bytes placeholder
 
     if (auto res = createGpuBuffers(); !res) {
         return Err<void>("Failed to create GPU buffers", res);
@@ -520,9 +528,8 @@ CardBufferManagerImpl::~CardBufferManagerImpl() {
         wgpuBufferRelease(_textureDataGpuBuffer);
     }
 
-    // Release shared bind group resources
+    // Release shared bind group (layout is owned by GPUContext, not us)
     if (_sharedBindGroup) wgpuBindGroupRelease(_sharedBindGroup);
-    if (_sharedBindGroupLayout) wgpuBindGroupLayoutRelease(_sharedBindGroupLayout);
 
     // Release atlas resources
     if (_atlasBindGroup) wgpuBindGroupRelease(_atlasBindGroup);
@@ -574,14 +581,14 @@ Result<void> CardBufferManagerImpl::createGpuBuffers() {
     }
 
     WGPUBufferDescriptor textureDataDesc = {};
-    textureDataDesc.label = {.data = "CardImageDataBuffer", .length = WGPU_STRLEN};
+    textureDataDesc.label = {.data = "CardTextureDataBuffer", .length = WGPU_STRLEN};
     textureDataDesc.size = textureDataBytes;
     textureDataDesc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
     textureDataDesc.mappedAtCreation = false;
 
     _textureDataGpuBuffer = wgpuDeviceCreateBuffer(_device, &textureDataDesc);
     if (!_textureDataGpuBuffer) {
-        return Err("Failed to create image data GPU buffer");
+        return Err("Failed to create textureData GPU buffer");
     }
 
     return Ok();
@@ -599,54 +606,12 @@ Result<void> CardBufferManagerImpl::createSharedBindGroup() {
         _sharedBindGroup = nullptr;
     }
 
-    // Create layout only once
+    // Use the shared bind group layout from GPUContext (created at init time)
     if (!_sharedBindGroupLayout) {
-        std::array<WGPUBindGroupLayoutEntry, 6> layoutEntries = {};
-
-        // Binding 0: Shared uniforms
-        layoutEntries[0].binding = 0;
-        layoutEntries[0].visibility = WGPUShaderStage_Fragment;
-        layoutEntries[0].buffer.type = WGPUBufferBindingType_Uniform;
-        layoutEntries[0].buffer.minBindingSize = _uniformSize;
-
-        // Binding 1: Card metadata buffer
-        layoutEntries[1].binding = 1;
-        layoutEntries[1].visibility = WGPUShaderStage_Fragment;
-        layoutEntries[1].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
-
-        // Binding 2: Card storage buffer
-        layoutEntries[2].binding = 2;
-        layoutEntries[2].visibility = WGPUShaderStage_Fragment;
-        layoutEntries[2].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
-
-        // Binding 3: Atlas texture
-        layoutEntries[3].binding = 3;
-        layoutEntries[3].visibility = WGPUShaderStage_Fragment;
-        layoutEntries[3].texture.sampleType = WGPUTextureSampleType_Float;
-        layoutEntries[3].texture.viewDimension = WGPUTextureViewDimension_2D;
-
-        // Binding 4: Atlas sampler
-        layoutEntries[4].binding = 4;
-        layoutEntries[4].visibility = WGPUShaderStage_Fragment;
-        layoutEntries[4].sampler.type = WGPUSamplerBindingType_Filtering;
-
-        // Binding 5: Image data buffer
-        layoutEntries[5].binding = 5;
-        layoutEntries[5].visibility = WGPUShaderStage_Fragment;
-        layoutEntries[5].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
-
-        WGPUBindGroupLayoutDescriptor layoutDesc = {};
-        layoutDesc.label = WGPU_STR("Shared Bind Group Layout");
-        layoutDesc.entryCount = layoutEntries.size();
-        layoutDesc.entries = layoutEntries.data();
-
-        _sharedBindGroupLayout = wgpuDeviceCreateBindGroupLayout(_device, &layoutDesc);
+        _sharedBindGroupLayout = _gpuContext->sharedBindGroupLayout;
         if (!_sharedBindGroupLayout) {
-            return Err<void>("Failed to create shared bind group layout");
+            return Err<void>("No shared bind group layout in GPUContext");
         }
-
-        // Update GPUContext
-        _gpuContext->sharedBindGroupLayout = _sharedBindGroupLayout;
     }
 
     // Create bind group with current resources
@@ -724,7 +689,26 @@ Result<void> CardBufferManagerImpl::writeMetadataAt(MetadataHandle handle, uint3
 }
 
 Result<StorageHandle> CardBufferManagerImpl::allocateStorage(uint32_t size) {
-    return _storageAllocator.allocate(size);
+    auto result = _storageAllocator.allocate(size);
+    if (!result) {
+        // Grow storage buffer to fit
+        uint32_t requiredCapacity = _storageAllocator.used() + size;
+        uint32_t newCapacity = std::max(_config.storageCapacity, _currentStorageCapacity * 2);
+        while (newCapacity < requiredCapacity && newCapacity < MAX_STORAGE_SIZE) {
+            newCapacity *= 2;
+        }
+        newCapacity = std::min(newCapacity, MAX_STORAGE_SIZE);
+        if (newCapacity < requiredCapacity) {
+            return Err<StorageHandle>("Storage buffer would exceed maximum size");
+        }
+
+        if (auto res = growStorageBuffer(newCapacity); !res) {
+            return Err<StorageHandle>("Failed to grow storage buffer", res);
+        }
+
+        result = _storageAllocator.allocate(size);
+    }
+    return result;
 }
 
 Result<void> CardBufferManagerImpl::deallocateStorage(StorageHandle handle) {
@@ -778,23 +762,23 @@ Result<TextureDataHandle> CardBufferManagerImpl::allocateTextureData(uint32_t si
     if (!result) {
         // Allocation failed - try to grow the buffer
         uint32_t requiredCapacity = _textureDataAllocator.used() + size;
-        if (requiredCapacity > MAX_IMAGE_DATA_SIZE) {
+        if (requiredCapacity > MAX_TEXTURE_DATA_SIZE) {
             yerror("allocateTextureData: required {} exceeds max {} bytes",
-                   requiredCapacity, MAX_IMAGE_DATA_SIZE);
+                   requiredCapacity, MAX_TEXTURE_DATA_SIZE);
             return Err<TextureDataHandle>("TextureData buffer would exceed maximum size");
         }
 
-        // Grow to at least double or to fit the new allocation
-        uint32_t newCapacity = _currentImageDataCapacity * 2;
-        while (newCapacity < requiredCapacity && newCapacity < MAX_IMAGE_DATA_SIZE) {
+        // Grow to at least configured capacity, then double from there
+        uint32_t newCapacity = std::max(_config.textureDataCapacity, _currentTextureDataCapacity * 2);
+        while (newCapacity < requiredCapacity && newCapacity < MAX_TEXTURE_DATA_SIZE) {
             newCapacity *= 2;
         }
-        newCapacity = std::min(newCapacity, MAX_IMAGE_DATA_SIZE);
+        newCapacity = std::min(newCapacity, MAX_TEXTURE_DATA_SIZE);
 
         yinfo("allocateTextureData: growing textureData buffer from {} to {} bytes",
-              _currentImageDataCapacity, newCapacity);
+              _currentTextureDataCapacity, newCapacity);
 
-        if (auto res = growImageDataBuffer(newCapacity); !res) {
+        if (auto res = growTextureDataBuffer(newCapacity); !res) {
             return Err<TextureDataHandle>("Failed to grow textureData buffer", res);
         }
 
@@ -859,6 +843,14 @@ Result<void> CardBufferManagerImpl::flush(WGPUQueue queue) {
         _textureDataDirty.clear();
     }
 
+    // Lazily initialize atlas on first use
+    if (!_atlasInitialized && _atlasDirty && _textureDataAllocator.used() > 0) {
+        if (auto res = initAtlas(); !res) {
+            yerror("flush: lazy atlas init failed: {}", res.error().message());
+            return res;
+        }
+    }
+
     // Rebuild atlas only when something changed (metadata or textureData written)
     if (_atlasInitialized && _atlasDirty && _textureDataAllocator.used() > 0) {
         if (auto res = checkAndGrowAtlas(queue); !res) {
@@ -895,7 +887,7 @@ CardBufferManager::Stats CardBufferManagerImpl::getStats() const {
         .storageUsed = _storageAllocator.used(),
         .storageCapacity = _storageAllocator.capacity(),
         .textureDataUsed = _textureDataAllocator.used(),
-        .textureDataCapacity = _currentImageDataCapacity,  // Use current (possibly grown) capacity
+        .textureDataCapacity = _currentTextureDataCapacity,  // Use current (possibly grown) capacity
         .pendingMetadataUploads = _metadataDirty.hasDirty() ? 1u : 0u,
         .pendingStorageUploads = _storageDirty.hasDirty() ? 1u : 0u
     };
@@ -1384,14 +1376,67 @@ Result<void> CardBufferManagerImpl::growAtlas() {
     return Ok();
 }
 
-Result<void> CardBufferManagerImpl::growImageDataBuffer(uint32_t newCapacity) {
-    if (newCapacity <= _currentImageDataCapacity) {
+Result<void> CardBufferManagerImpl::growStorageBuffer(uint32_t newCapacity) {
+    if (newCapacity <= _currentStorageCapacity) {
+        return Ok();
+    }
+
+    yinfo("CardBufferManager: growing storage buffer from {} to {} bytes ({:.2f} MB to {:.2f} MB)",
+          _currentStorageCapacity, newCapacity,
+          _currentStorageCapacity / (1024.0 * 1024.0),
+          newCapacity / (1024.0 * 1024.0));
+
+    // 1. Resize CPU buffer (preserves existing data)
+    uint32_t newU32Count = (newCapacity + 3) / 4;
+    _storageCpuBuffer.resize(newU32Count, 0);
+
+    // 2. Grow the allocator's capacity
+    _storageAllocator.grow(newCapacity);
+
+    // 3. Release old GPU buffer
+    if (_storageGpuBuffer) {
+        wgpuBufferRelease(_storageGpuBuffer);
+        _storageGpuBuffer = nullptr;
+    }
+
+    // 4. Create new larger GPU buffer
+    WGPUBufferDescriptor storageDesc = {};
+    storageDesc.label = {.data = "CardStorageBuffer", .length = WGPU_STRLEN};
+    storageDesc.size = newU32Count * sizeof(uint32_t);
+    storageDesc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
+    storageDesc.mappedAtCreation = false;
+
+    _storageGpuBuffer = wgpuDeviceCreateBuffer(_device, &storageDesc);
+    if (!_storageGpuBuffer) {
+        return Err<void>("Failed to create larger storage GPU buffer");
+    }
+
+    // 5. Mark existing data dirty for re-upload
+    uint32_t usedBytes = _storageAllocator.highWaterMark();
+    if (usedBytes > 0) {
+        _storageDirty.markDirty(0, usedBytes);
+    }
+
+    _currentStorageCapacity = newCapacity;
+
+    // 6. Recreate shared bind group with new storage buffer
+    if (auto res = createSharedBindGroup(); !res) {
+        return Err<void>("Failed to recreate shared bind group after storage growth", res);
+    }
+
+    yinfo("GPU_ALLOC CardBufferManager: storageBuffer grown to {} bytes ({:.2f} MB)",
+          newCapacity, newCapacity / (1024.0 * 1024.0));
+    return Ok();
+}
+
+Result<void> CardBufferManagerImpl::growTextureDataBuffer(uint32_t newCapacity) {
+    if (newCapacity <= _currentTextureDataCapacity) {
         return Ok();  // Nothing to do
     }
 
     yinfo("CardBufferManager: growing textureData buffer from {} to {} bytes ({:.2f} MB to {:.2f} MB)",
-          _currentImageDataCapacity, newCapacity,
-          _currentImageDataCapacity / (1024.0 * 1024.0),
+          _currentTextureDataCapacity, newCapacity,
+          _currentTextureDataCapacity / (1024.0 * 1024.0),
           newCapacity / (1024.0 * 1024.0));
 
     // 1. Resize CPU buffer (preserves existing data)
@@ -1410,7 +1455,7 @@ Result<void> CardBufferManagerImpl::growImageDataBuffer(uint32_t newCapacity) {
 
     // 4. Create new larger GPU buffer
     WGPUBufferDescriptor textureDataDesc = {};
-    textureDataDesc.label = {.data = "CardImageDataBuffer", .length = WGPU_STRLEN};
+    textureDataDesc.label = {.data = "CardTextureDataBuffer", .length = WGPU_STRLEN};
     textureDataDesc.size = newU32Count * sizeof(uint32_t);
     textureDataDesc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
     textureDataDesc.mappedAtCreation = false;
@@ -1434,7 +1479,7 @@ Result<void> CardBufferManagerImpl::growImageDataBuffer(uint32_t newCapacity) {
         _atlasBindGroup = nullptr;
     }
 
-    _currentImageDataCapacity = newCapacity;
+    _currentTextureDataCapacity = newCapacity;
 
     // Recreate shared bind group with new textureData buffer
     if (auto res = createSharedBindGroup(); !res) {

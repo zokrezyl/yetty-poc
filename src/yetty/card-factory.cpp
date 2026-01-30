@@ -15,9 +15,8 @@ namespace yetty {
 
 class CardFactoryImpl : public CardFactory {
 public:
-    CardFactoryImpl(const GPUContext& gpu, CardBufferManager::Ptr cardMgr)
+    explicit CardFactoryImpl(const GPUContext& gpu)
         : _gpu(gpu)
-        , _cardMgr(std::move(cardMgr))
     {}
 
     ~CardFactoryImpl() override = default;
@@ -136,24 +135,21 @@ public:
         return result;
     }
 
-    CardBufferManager::Ptr cardBufferManager() const override { return _cardMgr; }
     const GPUContext& gpuContext() const override { return _gpu; }
 
 private:
     GPUContext _gpu;
-    CardBufferManager::Ptr _cardMgr;
     std::unordered_map<std::string, CreateFn> _creators;
 };
 
 // Factory implementation
 Result<CardFactory::Ptr> CardFactory::createImpl(
     ContextType& ctx,
-    const GPUContext& gpu,
-    CardBufferManager::Ptr cardMgr) noexcept
+    const GPUContext& gpu) noexcept
 {
     (void)ctx; // ObjectFactory context marker
 
-    auto impl = std::make_shared<CardFactoryImpl>(gpu, std::move(cardMgr));
+    auto impl = std::make_shared<CardFactoryImpl>(gpu);
     if (auto res = impl->init(); !res) {
         return Err<Ptr>("Failed to initialize CardFactory", res);
     }

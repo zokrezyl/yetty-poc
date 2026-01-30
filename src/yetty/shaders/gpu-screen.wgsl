@@ -20,9 +20,10 @@ struct GridUniforms {
     scale: f32,                // 4 bytes
     cursorPos: vec2<f32>,      // 8 bytes (col, row)
     cursorVisible: f32,        // 4 bytes
-    _pad: f32,                 // 4 bytes padding
+    cursorShape: f32,          // 4 bytes (1=block, 2=underline, 3=bar)
     viewportOrigin: vec2<f32>, // 8 bytes - viewport origin in framebuffer
-    _pad2: vec2<f32>,          // 8 bytes padding for alignment
+    cursorBlink: f32,          // 4 bytes (0=no blink, 1=blink)
+    _pad2: f32,                // 4 bytes padding for alignment
 };
 
 // Glyph metadata (40 bytes per glyph, matches C++ GlyphMetadataGPU)
@@ -420,9 +421,34 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         }
     }
 
-    // Cursor rendering: invert colors at cursor position
+    // Cursor rendering: shape + blink
     if (isCursor) {
-        finalColor = vec3<f32>(1.0, 1.0, 1.0) - finalColor;
+        // Blink: skip drawing cursor during off-phase (1Hz, 50% duty)
+        var cursorOn = true;
+        if (grid.cursorBlink > 0.5) {
+            cursorOn = fract(globals.time) < 0.5;
+        }
+
+        if (cursorOn) {
+            let localUV = localPxBase / grid.cellSize;
+            let shape = i32(grid.cursorShape);
+            var drawCursor = false;
+
+            if (shape == 2) {
+                // Underline: bottom 15% of cell
+                drawCursor = localUV.y > 0.85;
+            } else if (shape == 3) {
+                // Bar: left 10% of cell
+                drawCursor = localUV.x < 0.1;
+            } else {
+                // Block (1 or default): full cell
+                drawCursor = true;
+            }
+
+            if (drawCursor) {
+                finalColor = vec3<f32>(1.0, 1.0, 1.0) - finalColor;
+            }
+        }
     }
 
     return vec4<f32>(finalColor, 1.0);

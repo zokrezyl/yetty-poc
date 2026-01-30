@@ -18,9 +18,11 @@ struct YettyContext {
     // Shared managers
     ShaderManager::Ptr shaderManager;
     FontManager::Ptr fontManager;
-    CardBufferManager::Ptr cardBufferManager;
     CardFactory::Ptr cardFactory;
     ImguiManager::Ptr imguiManager;
+
+    // Per-screen card buffer manager (set by GPUScreen, not globally)
+    CardBufferManager::Ptr cardBufferManager;
 };
 
 } // namespace yetty

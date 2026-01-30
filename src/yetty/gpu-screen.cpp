@@ -1,4 +1,5 @@
 #include "gpu-screen.h"
+#include <yetty/card-buffer-manager.h>
 #include <yetty/card-factory.h>
 #include <yetty/card.h>
 #include "widget-factory.h"
@@ -257,6 +258,8 @@ private:
   int _cursorRow = 0;
   int _cursorCol = 0;
   bool _cursorVisible = true;
+  bool _cursorBlink = true;
+  int _cursorShape = 1; // VTERM_PROP_CURSORSHAPE_BLOCK
   bool _isAltScreen = false;
   bool isAltScreenExternal_ = false;
   bool _hasDamage = false;
@@ -290,6 +293,7 @@ private:
 
   // Cards
   std::unordered_map<uint32_t, CardPtr> _cards;
+  CardBufferManager::Ptr _cardBufferManager;
 
   // Factories
   WidgetFactory *_widgetFactory = nullptr;
@@ -323,9 +327,10 @@ private:
     float scale;              // 4 bytes
     glm::vec2 cursorPos;      // 8 bytes (col, row)
     float cursorVisible;      // 4 bytes
-    float pad1;               // 4 bytes
+    float cursorShape;        // 4 bytes (1=block, 2=underline, 3=bar)
     glm::vec2 viewportOrigin; // 8 bytes
-    glm::vec2 pad2;           // 8 bytes
+    float cursorBlink;        // 4 bytes (0=no blink, 1=blink)
+    float pad2;               // 4 bytes
   }; // Total: 128 bytes
 
   Uniforms _uniforms;
@@ -416,10 +421,32 @@ Result<void> GPUScreenImpl::init() noexcept {
     }
   }
 
+  // Create per-screen CardBufferManager (owns GPU buffers for cards).
+  // Starts with tiny placeholder buffers (~20KB for metadata pool + 4 bytes each
+  // for storage/textureData). Real buffers and atlas are allocated lazily
+  // on first card creation, avoiding ~81MB GPU allocation when no cards are used.
+  if (_ctx.gpu.device && _ctx.gpu.sharedUniformBuffer) {
+    auto cbmResult = CardBufferManager::create(
+        &_ctx.gpu, _ctx.gpu.sharedUniformBuffer, _ctx.gpu.sharedUniformSize);
+    if (!cbmResult) {
+      ywarn("GPUScreen: failed to create CardBufferManager: {}", error_msg(cbmResult));
+    } else {
+      _cardBufferManager = *cbmResult;
+      // Set on local context so cards created from this screen use our manager
+      _ctx.cardBufferManager = _cardBufferManager;
+      yinfo("GPUScreen[{}]: created per-screen CardBufferManager (lazy)", _id);
+    }
+  }
+
   return Ok();
 }
 
 GPUScreenImpl::~GPUScreenImpl() {
+  // Release cards before CardBufferManager so they can deallocate their slots
+  _cards.clear();
+  _cardBufferManager.reset();
+  yinfo("GPUScreen[{}]: destroyed, CardBufferManager released", _id);
+
   if (_vterm) {
     vterm_free(_vterm);
     _vterm = nullptr;
@@ -1629,6 +1656,10 @@ int GPUScreenImpl::onSetTermProp(VTermProp prop, VTermValue *val, void *user) {
 
   if (prop == VTERM_PROP_CURSORVISIBLE) {
     self->_cursorVisible = val->boolean != 0;
+  } else if (prop == VTERM_PROP_CURSORBLINK) {
+    self->_cursorBlink = val->boolean != 0;
+  } else if (prop == VTERM_PROP_CURSORSHAPE) {
+    self->_cursorShape = val->number;
   } else if (prop == VTERM_PROP_ALTSCREEN) {
     // Switch between primary and alternate screen
     self->switchToScreen(val->boolean != 0);
@@ -2937,6 +2968,13 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
     }
   }
 
+  // Flush per-screen CardBufferManager (uploads dirty regions to GPU)
+  if (_cardBufferManager) {
+    if (auto res = _cardBufferManager->flush(_ctx.gpu.queue); !res) {
+      yerror("GPUScreen[{}]: CardBufferManager flush failed: {}", _id, res.error().message());
+    }
+  }
+
   const Cell *cells = getCellData();
   if (!cells || _cols == 0 || _rows == 0) {
     return Ok(); // Nothing to render
@@ -3085,7 +3123,9 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
   _uniforms.cursorPos = {static_cast<float>(_cursorCol),
                          static_cast<float>(_cursorRow)};
   _uniforms.cursorVisible = _cursorVisible ? 1.0f : 0.0f;
+  _uniforms.cursorShape = static_cast<float>(_cursorShape);
   _uniforms.viewportOrigin = {_viewportX, _viewportY};
+  _uniforms.cursorBlink = _cursorBlink ? 1.0f : 0.0f;
   wgpuQueueWriteBuffer(queue, _uniformBuffer, 0, &_uniforms, sizeof(Uniforms));
 
   // Set viewport and scissor to this terminal's tile bounds
@@ -3100,8 +3140,13 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
 
   // Draw using shared pipeline and quad vertex buffer from ShaderManager
   wgpuRenderPassEncoderSetPipeline(pass, shaderMgr->getGridPipeline());
-  wgpuRenderPassEncoderSetBindGroup(pass, 0, _ctx.gpu.sharedBindGroup, 0,
-                                    nullptr);
+  // Use per-screen CardBufferManager bind group (uniforms + card buffers),
+  // falling back to the minimal shared bind group (uniforms only)
+  WGPUBindGroup bindGroup0 = _cardBufferManager
+      ? _cardBufferManager->sharedBindGroup()
+      : nullptr;
+  if (!bindGroup0) bindGroup0 = _ctx.gpu.sharedBindGroup;
+  wgpuRenderPassEncoderSetBindGroup(pass, 0, bindGroup0, 0, nullptr);
   wgpuRenderPassEncoderSetBindGroup(pass, 1, _bindGroup, 0, nullptr);
   wgpuRenderPassEncoderSetVertexBuffer(
       pass, 0, shaderMgr->getQuadVertexBuffer(), 0, WGPU_WHOLE_SIZE);

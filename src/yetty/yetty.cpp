@@ -6,7 +6,6 @@
 #include <yetty/font-manager.h>
 #include <yetty/msdf-cdb-provider.h>
 #include <yetty/shader-manager.h>
-#include <yetty/card-buffer-manager.h>
 #include <yetty/card-factory.h>
 #include <yetty/imgui-manager.h>
 #include <yetty/wgpu-compat.h>
@@ -102,7 +101,7 @@ private:
 
     // Command line options
     std::string _executeCommand;
-    std::string _msdfProviderName = "gpu";  // "cpu" or "gpu"
+    std::string _msdfProviderName = "cpu";  // "cpu" or "gpu"
 
     static YettyImpl* s_instance;
 };
@@ -113,12 +112,12 @@ YettyImpl* YettyImpl::s_instance = nullptr;
 // Factory
 //=============================================================================
 
-Result<Yetty::Ptr> Yetty::create(int argc, char* argv[]) noexcept {
-    auto impl = std::make_shared<YettyImpl>();
-    if (auto res = impl->init(argc, argv); !res) {
+Result<Yetty::Ptr> Yetty::createImpl(ContextType&, int argc, char* argv[]) noexcept {
+    auto impl = Ptr(new YettyImpl());
+    if (auto res = static_cast<YettyImpl*>(impl.get())->init(argc, argv); !res) {
         return Err<Ptr>("Failed to init Yetty", res);
     }
-    return Ok<Ptr>(impl);
+    return Ok(std::move(impl));
 }
 
 //=============================================================================
@@ -171,9 +170,9 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     _yettyContext.imguiManager->updateDisplaySize(_surfaceWidth, _surfaceHeight);
 
 #if !YETTY_WEB && !defined(__ANDROID__)
-    // Create CardFactory (after CardBufferManager is set in initSharedResources)
-    if (_yettyContext.cardBufferManager) {
-        auto cardFactoryResult = CardFactory::create(_gpuContext, _yettyContext.cardBufferManager);
+    // Create CardFactory (card types registry, no CardBufferManager needed)
+    {
+        auto cardFactoryResult = CardFactory::create(_gpuContext);
         if (!cardFactoryResult) {
             return Err<void>("Failed to create CardFactory", cardFactoryResult);
         }
@@ -264,7 +263,31 @@ Result<void> YettyImpl::initWebGPU() noexcept {
         return Err<void>("Failed to get WebGPU adapter");
     }
 
-    // Request device with higher storage buffer limits
+    // Log adapter info
+    {
+        WGPUAdapterInfo info = {};
+        if (wgpuAdapterGetInfo(_adapter, &info) == WGPUStatus_Success) {
+            auto sv = [](WGPUStringView s) -> std::string {
+                return (s.data && s.length > 0) ? std::string(s.data, s.length) : "(unknown)";
+            };
+            yinfo("GPU adapter: {} ({})", sv(info.device), sv(info.vendor));
+            yinfo("GPU backend: {} | architecture: {} | description: {}",
+                  static_cast<int>(info.backendType), sv(info.architecture), sv(info.description));
+            yinfo("GPU vendor ID: 0x{:x} | device ID: 0x{:x} | type: {}",
+                  info.vendorID, info.deviceID, static_cast<int>(info.adapterType));
+            wgpuAdapterInfoFreeMembers(info);
+        } else {
+            ywarn("Failed to query adapter info");
+        }
+    }
+
+    // Query adapter limits to avoid requesting more than supported
+    WGPULimits adapterLimits = {};
+    wgpuAdapterGetLimits(_adapter, &adapterLimits);
+    uint64_t adapterMaxStorage = adapterLimits.maxStorageBufferBindingSize;
+    yinfo("GPU adapter maxStorageBufferBindingSize: {} MB", adapterMaxStorage / (1024 * 1024));
+
+    // Request device with limits capped to adapter support
     WGPULimits limits = {};
     limits.maxTextureDimension1D = WGPU_LIMIT_U32_UNDEFINED;
     limits.maxTextureDimension2D = WGPU_LIMIT_U32_UNDEFINED;
@@ -281,7 +304,7 @@ Result<void> YettyImpl::initWebGPU() noexcept {
     limits.maxStorageTexturesPerShaderStage = WGPU_LIMIT_U32_UNDEFINED;
     limits.maxUniformBuffersPerShaderStage = WGPU_LIMIT_U32_UNDEFINED;
     limits.maxUniformBufferBindingSize = WGPU_LIMIT_U64_UNDEFINED;
-    limits.maxStorageBufferBindingSize = 512 * 1024 * 1024;  // 512MB
+    limits.maxStorageBufferBindingSize = std::min(static_cast<uint64_t>(512 * 1024 * 1024), adapterMaxStorage);
     limits.minUniformBufferOffsetAlignment = WGPU_LIMIT_U32_UNDEFINED;
     limits.minStorageBufferOffsetAlignment = WGPU_LIMIT_U32_UNDEFINED;
     limits.maxVertexBuffers = WGPU_LIMIT_U32_UNDEFINED;
@@ -308,6 +331,7 @@ Result<void> YettyImpl::initWebGPU() noexcept {
         yerror("WebGPU error ({}): {}", static_cast<int>(type), message.data ? std::string(message.data, message.length) : "unknown");
     };
 
+    std::string deviceError;
     WGPURequestDeviceCallbackInfo deviceCallbackInfo = {};
     deviceCallbackInfo.mode = WGPUCallbackMode_AllowSpontaneous;
     deviceCallbackInfo.callback = [](WGPURequestDeviceStatus status, WGPUDevice device,
@@ -315,15 +339,16 @@ Result<void> YettyImpl::initWebGPU() noexcept {
         if (status == WGPURequestDeviceStatus_Success) {
             *static_cast<WGPUDevice*>(userdata1) = device;
         } else {
-            yerror("WebGPU device request failed ({}): {}", static_cast<int>(status),
-                   message.data ? std::string(message.data, message.length) : "unknown");
+            auto msg = message.data ? std::string(message.data, message.length) : "unknown";
+            *static_cast<std::string*>(userdata2) = msg;
         }
     };
     deviceCallbackInfo.userdata1 = &_device;
+    deviceCallbackInfo.userdata2 = &deviceError;
     wgpuAdapterRequestDevice(_adapter, &deviceDesc, deviceCallbackInfo);
 
     if (!_device) {
-        return Err<void>("Failed to get WebGPU device");
+        return Err<void>("Failed to get WebGPU device: " + deviceError);
     }
 
     _queue = wgpuDeviceGetQueue(_device);
@@ -407,50 +432,115 @@ Result<void> YettyImpl::initSharedResources() noexcept {
     bufDesc.size = sizeof(SharedUniforms);
     bufDesc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
     _sharedUniformBuffer = wgpuDeviceCreateBuffer(_device, &bufDesc);
+    _gpuContext.sharedUniformBuffer = _sharedUniformBuffer;
+    _gpuContext.sharedUniformSize = sizeof(SharedUniforms);
 
-#if !YETTY_WEB && !defined(__ANDROID__)
-    // Create CardBufferManager - it manages the shared bind group internally
-    auto cbmResult = CardBufferManager::create(&_gpuContext, _sharedUniformBuffer, sizeof(SharedUniforms));
-    if (!cbmResult) {
-        return Err<void>("Failed to create CardBufferManager", cbmResult);
-    }
-    _yettyContext.cardBufferManager = *cbmResult;
+    // Full shared bind group layout matching shader group(0):
+    //   binding 0: shared uniforms (uniform buffer)
+    //   binding 1: card metadata (read-only storage)
+    //   binding 2: card storage (read-only storage)
+    //   binding 3: atlas texture (2D float)
+    //   binding 4: atlas sampler (filtering)
+    //   binding 5: texture data (read-only storage)
+    // Each GPUScreen's CardBufferManager creates a bind group matching this layout.
+    // We also create a fallback bind group with dummy resources for non-card rendering.
+    std::array<WGPUBindGroupLayoutEntry, 6> layoutEntries = {};
 
-    // Initialize atlas - this also creates the shared bind group
-    if (auto res = _yettyContext.cardBufferManager->initAtlas(); !res) {
-        return Err<void>("Failed to initialize card atlas", res);
-    }
+    layoutEntries[0].binding = 0;
+    layoutEntries[0].visibility = WGPUShaderStage_Fragment;
+    layoutEntries[0].buffer.type = WGPUBufferBindingType_Uniform;
+    layoutEntries[0].buffer.minBindingSize = sizeof(SharedUniforms);
 
-    // Get bind group references from CardBufferManager (it updates GPUContext directly)
-    _sharedBindGroupLayout = _gpuContext.sharedBindGroupLayout;
-    _sharedBindGroup = _gpuContext.sharedBindGroup;
-#else
-    // Web/Android: only shared uniforms
-    WGPUBindGroupLayoutEntry layoutEntry = {};
-    layoutEntry.binding = 0;
-    layoutEntry.visibility = WGPUShaderStage_Fragment;
-    layoutEntry.buffer.type = WGPUBufferBindingType_Uniform;
-    layoutEntry.buffer.minBindingSize = sizeof(SharedUniforms);
+    layoutEntries[1].binding = 1;
+    layoutEntries[1].visibility = WGPUShaderStage_Fragment;
+    layoutEntries[1].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
+
+    layoutEntries[2].binding = 2;
+    layoutEntries[2].visibility = WGPUShaderStage_Fragment;
+    layoutEntries[2].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
+
+    layoutEntries[3].binding = 3;
+    layoutEntries[3].visibility = WGPUShaderStage_Fragment;
+    layoutEntries[3].texture.sampleType = WGPUTextureSampleType_Float;
+    layoutEntries[3].texture.viewDimension = WGPUTextureViewDimension_2D;
+
+    layoutEntries[4].binding = 4;
+    layoutEntries[4].visibility = WGPUShaderStage_Fragment;
+    layoutEntries[4].sampler.type = WGPUSamplerBindingType_Filtering;
+
+    layoutEntries[5].binding = 5;
+    layoutEntries[5].visibility = WGPUShaderStage_Fragment;
+    layoutEntries[5].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
 
     WGPUBindGroupLayoutDescriptor layoutDesc = {};
-    layoutDesc.entryCount = 1;
-    layoutDesc.entries = &layoutEntry;
+    layoutDesc.label = WGPU_STR("Shared Bind Group Layout");
+    layoutDesc.entryCount = layoutEntries.size();
+    layoutDesc.entries = layoutEntries.data();
     _sharedBindGroupLayout = wgpuDeviceCreateBindGroupLayout(_device, &layoutDesc);
 
-    WGPUBindGroupEntry bindEntry = {};
-    bindEntry.binding = 0;
-    bindEntry.buffer = _sharedUniformBuffer;
-    bindEntry.size = sizeof(SharedUniforms);
+    // Create dummy resources for fallback bind group
+    WGPUBufferDescriptor dummyBufDesc = {};
+    dummyBufDesc.label = WGPU_STR("dummy storage");
+    dummyBufDesc.size = 4;
+    dummyBufDesc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
+    WGPUBuffer dummyBuffer = wgpuDeviceCreateBuffer(_device, &dummyBufDesc);
+
+    WGPUTextureDescriptor dummyTexDesc = {};
+    dummyTexDesc.label = WGPU_STR("dummy texture");
+    dummyTexDesc.size = {1, 1, 1};
+    dummyTexDesc.format = WGPUTextureFormat_RGBA8Unorm;
+    dummyTexDesc.usage = WGPUTextureUsage_TextureBinding;
+    dummyTexDesc.dimension = WGPUTextureDimension_2D;
+    dummyTexDesc.mipLevelCount = 1;
+    dummyTexDesc.sampleCount = 1;
+    WGPUTexture dummyTexture = wgpuDeviceCreateTexture(_device, &dummyTexDesc);
+
+    WGPUTextureViewDescriptor dummyViewDesc = {};
+    dummyViewDesc.format = WGPUTextureFormat_RGBA8Unorm;
+    dummyViewDesc.dimension = WGPUTextureViewDimension_2D;
+    dummyViewDesc.mipLevelCount = 1;
+    dummyViewDesc.arrayLayerCount = 1;
+    WGPUTextureView dummyView = wgpuTextureCreateView(dummyTexture, &dummyViewDesc);
+
+    WGPUSamplerDescriptor dummySamplerDesc = {};
+    dummySamplerDesc.magFilter = WGPUFilterMode_Linear;
+    dummySamplerDesc.minFilter = WGPUFilterMode_Linear;
+    dummySamplerDesc.maxAnisotropy = 1;
+    WGPUSampler dummySampler = wgpuDeviceCreateSampler(_device, &dummySamplerDesc);
+
+    std::array<WGPUBindGroupEntry, 6> bindEntries = {};
+    bindEntries[0].binding = 0;
+    bindEntries[0].buffer = _sharedUniformBuffer;
+    bindEntries[0].size = sizeof(SharedUniforms);
+    bindEntries[1].binding = 1;
+    bindEntries[1].buffer = dummyBuffer;
+    bindEntries[1].size = 4;
+    bindEntries[2].binding = 2;
+    bindEntries[2].buffer = dummyBuffer;
+    bindEntries[2].size = 4;
+    bindEntries[3].binding = 3;
+    bindEntries[3].textureView = dummyView;
+    bindEntries[4].binding = 4;
+    bindEntries[4].sampler = dummySampler;
+    bindEntries[5].binding = 5;
+    bindEntries[5].buffer = dummyBuffer;
+    bindEntries[5].size = 4;
 
     WGPUBindGroupDescriptor bindDesc = {};
+    bindDesc.label = WGPU_STR("Fallback Shared Bind Group");
     bindDesc.layout = _sharedBindGroupLayout;
-    bindDesc.entryCount = 1;
-    bindDesc.entries = &bindEntry;
+    bindDesc.entryCount = bindEntries.size();
+    bindDesc.entries = bindEntries.data();
     _sharedBindGroup = wgpuDeviceCreateBindGroup(_device, &bindDesc);
+
+    // Release dummy resources (bind group retains references)
+    wgpuTextureViewRelease(dummyView);
+    wgpuTextureRelease(dummyTexture);
+    wgpuSamplerRelease(dummySampler);
+    wgpuBufferRelease(dummyBuffer);
 
     _gpuContext.sharedBindGroupLayout = _sharedBindGroupLayout;
     _gpuContext.sharedBindGroup = _sharedBindGroup;
-#endif
 
     return Ok();
 }
@@ -732,12 +822,7 @@ void YettyImpl::mainLoopIteration() noexcept {
     _sharedUniforms.mouseY = static_cast<float>(mouseYd);
     wgpuQueueWriteBuffer(_queue, _sharedUniformBuffer, 0, &_sharedUniforms, sizeof(SharedUniforms));
 
-    // Flush card buffer manager (uploads dirty regions to GPU, may grow buffers)
-    if (_yettyContext.cardBufferManager) {
-        if (auto res = _yettyContext.cardBufferManager->flush(_queue); !res) {
-            yerror("CardBufferManager flush failed: {}", res.error().message());
-        }
-    }
+    // Each GPUScreen flushes its own CardBufferManager during render
 
     // Upload any pending font glyphs (e.g., bold/italic loaded on demand)
     if (auto msdfFont = _yettyContext.fontManager->getDefaultMsMsdfFont()) {
