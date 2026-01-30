@@ -2974,13 +2974,15 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
   for (auto& [slotIndex, card] : _cards) {
     if (auto res = card->update(0.0f); !res) {
       yerror("GPUScreen::render: card '{}' update failed: {}", card->typeName(), error_msg(res));
+      return Err<void>("GPUScreen::render: card update failed", res);
     }
   }
 
   // Flush per-screen CardBufferManager (uploads dirty regions to GPU)
   if (_cardBufferManager) {
     if (auto res = _cardBufferManager->flush(_ctx.gpu.queue); !res) {
-      yerror("GPUScreen[{}]: CardBufferManager flush failed: {}", _id, res.error().message());
+      yerror("GPUScreen: CardBufferManager flush failed: {}", error_msg(res));
+      return Err<void>("GPUScreen: CardBufferManager flush failed", res);
     }
   }
 

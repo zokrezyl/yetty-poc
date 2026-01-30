@@ -18,3 +18,7 @@
  􁀑 voronoi
  􁀒 watch
  􁀓 spiral
+ 􁀔 hg-sdf
+ 􁀕 border-dots
+ 􁀖 orbit-dots
+ 􁀗 border-dots-grouped

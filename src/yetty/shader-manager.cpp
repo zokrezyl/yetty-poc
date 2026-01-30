@@ -456,9 +456,29 @@ Result<void> ShaderManagerImpl::createPipelineResources() {
     pipelineDesc.multisample.count = 1;
     pipelineDesc.multisample.mask = 0xFFFFFFFF;
 
+    // Use error scope to catch deferred validation errors synchronously
+    wgpuDevicePushErrorScope(device, WGPUErrorFilter_Validation);
+
     _gridPipeline = wgpuDeviceCreateRenderPipeline(device, &pipelineDesc);
-    if (!_gridPipeline) {
-        return Err<void>("Failed to create grid render pipeline");
+
+    bool hadError = false;
+    std::string scopeErrorMsg;
+    WGPUPopErrorScopeCallbackInfo popInfo = {};
+    popInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+    popInfo.callback = [](WGPUPopErrorScopeStatus status, WGPUErrorType type,
+                          WGPUStringView message, void* userdata1, void* userdata2) {
+        if (type != WGPUErrorType_NoError) {
+            *static_cast<bool*>(userdata1) = true;
+            auto* msg = static_cast<std::string*>(userdata2);
+            *msg = message.data ? std::string(message.data, message.length) : "unknown";
+        }
+    };
+    popInfo.userdata1 = &hadError;
+    popInfo.userdata2 = &scopeErrorMsg;
+    wgpuDevicePopErrorScope(device, popInfo);
+
+    if (hadError || !_gridPipeline) {
+        return Err<void>("Failed to create grid render pipeline: " + scopeErrorMsg);
     }
 
     yinfo("ShaderManager: created shared pipeline resources");

@@ -36,7 +36,7 @@ private:
     Result<void> initCallbacks() noexcept;
     void shutdown() noexcept;
 
-    void mainLoopIteration() noexcept;
+    Result<void> mainLoopIteration() noexcept;
     void handleResize(int width, int height) noexcept;
     void configureSurface(uint32_t width, uint32_t height) noexcept;
     Result<WGPUTextureView> getCurrentTextureView() noexcept;
@@ -94,6 +94,11 @@ private:
 #if !YETTY_WEB && !defined(__ANDROID__)
     base::TimerId _frameTimerId = -1;
 #endif
+
+    // Fatal GPU error tracking
+    bool _fatalGpuError = false;
+    std::string _fatalGpuErrorMsg;
+    int _exitCode = 0;
 
     // FPS tracking
     double _lastFpsTime = 0.0;
@@ -328,8 +333,13 @@ Result<void> YettyImpl::initWebGPU() noexcept {
     deviceDesc.defaultQueue.label = WGPU_STR("default queue");
     deviceDesc.uncapturedErrorCallbackInfo.callback = [](WGPUDevice const* device, WGPUErrorType type,
                                                          WGPUStringView message, void* userdata1, void* userdata2) {
-        yerror("WebGPU error ({}): {}", static_cast<int>(type), message.data ? std::string(message.data, message.length) : "unknown");
+        auto* self = static_cast<YettyImpl*>(userdata1);
+        auto msg = message.data ? std::string(message.data, message.length) : "unknown";
+        yerror("WebGPU error ({}): {}", static_cast<int>(type), msg);
+        self->_fatalGpuError = true;
+        self->_fatalGpuErrorMsg = msg;
     };
+    deviceDesc.uncapturedErrorCallbackInfo.userdata1 = this;
 
     std::string deviceError;
     WGPURequestDeviceCallbackInfo deviceCallbackInfo = {};
@@ -771,7 +781,11 @@ Result<bool> YettyImpl::onEvent(const base::Event& event) {
             (*base::EventLoop::instance())->stop();
             return Ok(true);
         }
-        mainLoopIteration();
+        if (auto res = mainLoopIteration(); !res) {
+            yerror("Fatal render error: {}", error_msg(res));
+            _exitCode = 1;
+            (*base::EventLoop::instance())->stop();
+        }
         return Ok(true);
     }
 #endif
@@ -797,12 +811,16 @@ int YettyImpl::run() noexcept {
 #endif
 
     yinfo("Shutting down...");
-    return 0;
+    return _exitCode;
 }
 
-void YettyImpl::mainLoopIteration() noexcept {
+Result<void> YettyImpl::mainLoopIteration() noexcept {
+    if (_fatalGpuError) {
+        return Err<void>("Fatal GPU error: " + _fatalGpuErrorMsg);
+    }
+
     auto viewResult = getCurrentTextureView();
-    if (!viewResult) return;
+    if (!viewResult) return Err<void>("Failed to get texture view");
     WGPUTextureView targetView = *viewResult;
 
     // Update shared uniforms
@@ -839,7 +857,7 @@ void YettyImpl::mainLoopIteration() noexcept {
 
     WGPUCommandEncoderDescriptor encoderDesc = {};
     WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(_device, &encoderDesc);
-    if (!encoder) return;
+    if (!encoder) return Err<void>("Failed to create command encoder");
 
     WGPURenderPassColorAttachment colorAttachment = {};
     colorAttachment.view = targetView;
@@ -855,11 +873,21 @@ void YettyImpl::mainLoopIteration() noexcept {
     WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
     if (pass) {
         if (_activeWorkspace) {
-            _activeWorkspace->render(pass);
+            if (auto res = _activeWorkspace->render(pass); !res) {
+                wgpuRenderPassEncoderEnd(pass);
+                wgpuRenderPassEncoderRelease(pass);
+                wgpuCommandEncoderRelease(encoder);
+                return Err<void>("Workspace render failed", res);
+            }
         }
         // Render ImGui (context menus, etc.) after main content
         if (_yettyContext.imguiManager) {
-            _yettyContext.imguiManager->render(pass);
+            if (auto res = _yettyContext.imguiManager->render(pass); !res) {
+                wgpuRenderPassEncoderEnd(pass);
+                wgpuRenderPassEncoderRelease(pass);
+                wgpuCommandEncoderRelease(encoder);
+                return Err<void>("ImGui render failed", res);
+            }
         }
         wgpuRenderPassEncoderEnd(pass);
         wgpuRenderPassEncoderRelease(pass);
@@ -875,6 +903,11 @@ void YettyImpl::mainLoopIteration() noexcept {
 
     present();
 
+    // Check if GPU error occurred during this frame
+    if (_fatalGpuError) {
+        return Err<void>("GPU error during frame: " + _fatalGpuErrorMsg);
+    }
+
     _frameCount++;
     double fpsNow = glfwGetTime();
     if (fpsNow - _lastFpsTime >= 1.0) {
@@ -882,6 +915,8 @@ void YettyImpl::mainLoopIteration() noexcept {
         _frameCount = 0;
         _lastFpsTime = fpsNow;
     }
+
+    return Ok();
 }
 
 void YettyImpl::handleResize(int newWidth, int newHeight) noexcept {
