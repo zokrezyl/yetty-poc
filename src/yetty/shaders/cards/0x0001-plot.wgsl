@@ -83,6 +83,14 @@ fn shaderGlyph_1048577(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
     let widthCells = cardMetadata[metaOffset + 8u];
     let heightCells = cardMetadata[metaOffset + 9u];
     let bgColorPacked = cardMetadata[metaOffset + 10u];
+    let zoomRaw = bitcast<f32>(cardMetadata[metaOffset + 11u]);
+    let centerXRaw = bitcast<f32>(cardMetadata[metaOffset + 12u]);
+    let centerYRaw = bitcast<f32>(cardMetadata[metaOffset + 13u]);
+
+    // Handle legacy (zero = no zoom metadata)
+    let effectiveZoom = select(zoomRaw, 1.0, zoomRaw <= 0.0);
+    let effectiveCenterX = select(centerXRaw, 0.5, zoomRaw <= 0.0);
+    let effectiveCenterY = select(centerYRaw, 0.5, zoomRaw <= 0.0);
 
     let lineColor = unpackColor(lineColorPacked);
     let fillColor = unpackColor(fillColorPacked);
@@ -101,41 +109,6 @@ fn shaderGlyph_1048577(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
     let padding = 0.05;  // 5% padding on each side
     let plotArea = vec4<f32>(padding, padding, 1.0 - padding, 1.0 - padding);
 
-    // Draw grid if enabled
-    if ((flags & PLOT_FLAG_GRID) != 0u) {
-        let gridLines = 4u;
-        let gridColorDark = mix(bgColor, lineColor, 0.15);
-
-        // Horizontal grid lines
-        for (var i = 0u; i <= gridLines; i++) {
-            let y = plotArea.y + f32(i) * (plotArea.w - plotArea.y) / f32(gridLines);
-            if (abs(widgetUV.y - y) < 0.008) {
-                color = gridColorDark;
-            }
-        }
-
-        // Vertical grid lines
-        for (var i = 0u; i <= gridLines; i++) {
-            let x = plotArea.x + f32(i) * (plotArea.z - plotArea.x) / f32(gridLines);
-            if (abs(widgetUV.x - x) < 0.008) {
-                color = gridColorDark;
-            }
-        }
-    }
-
-    // Draw axes if enabled
-    if ((flags & PLOT_FLAG_AXES) != 0u) {
-        let axisColor = mix(bgColor, lineColor, 0.5);
-        // Y axis (left edge of plot area)
-        if (abs(widgetUV.x - plotArea.x) < 0.012 && widgetUV.y >= plotArea.y && widgetUV.y <= plotArea.w) {
-            color = axisColor;
-        }
-        // X axis (bottom edge of plot area)
-        if (abs(widgetUV.y - plotArea.w) < 0.012 && widgetUV.x >= plotArea.x && widgetUV.x <= plotArea.z) {
-            color = axisColor;
-        }
-    }
-
     // Check if we're inside the plot area
     if (widgetUV.x < plotArea.x || widgetUV.x > plotArea.z ||
         widgetUV.y < plotArea.y || widgetUV.y > plotArea.w) {
@@ -148,8 +121,66 @@ fn shaderGlyph_1048577(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
         (widgetUV.y - plotArea.y) / (plotArea.w - plotArea.y)
     );
 
+    // Apply zoom/pan: transform plotUV through viewport
+    let zoomedUV = (plotUV - vec2(0.5)) / effectiveZoom + vec2(effectiveCenterX, effectiveCenterY);
+
+    // Line thickness scales inversely with zoom so lines stay consistent on screen
+    let gridThickness = 0.003 / effectiveZoom;
+    let axisThickness = 0.005 / effectiveZoom;
+
+    // Draw infinite grid if enabled — spacing adapts to zoom, snapped to 1/2/5 intervals
+    // Grid is drawn before the data bounds check so it extends beyond [0,1] when zoomed out
+    if ((flags & PLOT_FLAG_GRID) != 0u) {
+        let gridColorDark = mix(bgColor, lineColor, 0.15);
+
+        // Compute nice grid spacing: aim for ~4-6 visible lines per axis
+        let visibleRange = 1.0 / effectiveZoom;
+        let rawSpacing = visibleRange / 5.0;
+        let logSp = log2(rawSpacing) / 3.321928;  // log10
+        let mag = pow(10.0, floor(logSp));
+        let residual = rawSpacing / mag;
+        var spacing: f32;
+        if (residual < 1.5) {
+            spacing = mag;
+        } else if (residual < 3.5) {
+            spacing = 2.0 * mag;
+        } else if (residual < 7.5) {
+            spacing = 5.0 * mag;
+        } else {
+            spacing = 10.0 * mag;
+        }
+
+        // Snap zoomedUV to nearest grid line and check distance
+        let snapX = round(zoomedUV.x / spacing) * spacing;
+        if (abs(zoomedUV.x - snapX) < gridThickness) {
+            color = gridColorDark;
+        }
+        let snapY = round(zoomedUV.y / spacing) * spacing;
+        if (abs(zoomedUV.y - snapY) < gridThickness) {
+            color = gridColorDark;
+        }
+    }
+
+    // Draw axes if enabled (in data/zoomed space)
+    if ((flags & PLOT_FLAG_AXES) != 0u) {
+        let axisColor = mix(bgColor, lineColor, 0.5);
+        // Y axis (x=0 in data space, left edge)
+        if (abs(zoomedUV.x) < axisThickness) {
+            color = axisColor;
+        }
+        // X axis (y=1 in data space, bottom edge)
+        if (abs(zoomedUV.y - 1.0) < axisThickness) {
+            color = axisColor;
+        }
+    }
+
+    // If zoomed UV is outside [0,1] data range, skip data drawing (grid/axes already drawn)
+    if (zoomedUV.x < 0.0 || zoomedUV.x > 1.0 || zoomedUV.y < 0.0 || zoomedUV.y > 1.0) {
+        return color;
+    }
+
     // Calculate which data point(s) we're near
-    let dataX = plotUV.x * f32(dataCount - 1u);
+    let dataX = zoomedUV.x * f32(dataCount - 1u);
     let dataIndex = u32(floor(dataX));
     let nextIndex = min(dataIndex + 1u, dataCount - 1u);
     let t = fract(dataX);
@@ -168,7 +199,7 @@ fn shaderGlyph_1048577(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
     let interpolatedValue = mix(normalizedValue1, normalizedValue2, t);
 
     // Y is inverted (0 at top, 1 at bottom in UV), but we want 0 at bottom
-    let plotY = 1.0 - plotUV.y;
+    let plotY = 1.0 - zoomedUV.y;
 
     if (plotType == PLOT_TYPE_LINE) {
         // Line plot: draw line between points
@@ -185,10 +216,10 @@ fn shaderGlyph_1048577(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
         let barLeft = barCenter - barWidth * 0.5;
         let barRight = barCenter + barWidth * 0.5;
 
-        if (plotUV.x >= barLeft && plotUV.x <= barRight && plotY <= normalizedValue1) {
+        if (zoomedUV.x >= barLeft && zoomedUV.x <= barRight && plotY <= normalizedValue1) {
             color = fillColor;
             // Bar outline
-            if (abs(plotUV.x - barLeft) < 0.01 || abs(plotUV.x - barRight) < 0.01 ||
+            if (abs(zoomedUV.x - barLeft) < 0.01 || abs(zoomedUV.x - barRight) < 0.01 ||
                 abs(plotY - normalizedValue1) < 0.015) {
                 color = lineColor;
             }
@@ -198,7 +229,7 @@ fn shaderGlyph_1048577(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
         let pointRadius = 0.04;
         let pointX = (f32(dataIndex) + 0.5) / f32(dataCount);
         let pointY = normalizedValue1;
-        let dist = distance(vec2<f32>(plotUV.x, plotY), vec2<f32>(pointX, pointY));
+        let dist = distance(vec2<f32>(zoomedUV.x, plotY), vec2<f32>(pointX, pointY));
         if (dist < pointRadius) {
             let alpha = 1.0 - dist / pointRadius;
             color = mix(color, lineColor, alpha * alpha);
@@ -206,7 +237,7 @@ fn shaderGlyph_1048577(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
         // Also check next point
         let nextPointX = (f32(nextIndex) + 0.5) / f32(dataCount);
         let nextPointY = normalizedValue2;
-        let nextDist = distance(vec2<f32>(plotUV.x, plotY), vec2<f32>(nextPointX, nextPointY));
+        let nextDist = distance(vec2<f32>(zoomedUV.x, plotY), vec2<f32>(nextPointX, nextPointY));
         if (nextDist < pointRadius) {
             let alpha = 1.0 - nextDist / pointRadius;
             color = mix(color, lineColor, alpha * alpha);

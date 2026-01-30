@@ -4,6 +4,7 @@
 #include <yetty/card-buffer-manager.h>
 #include <yetty/base/factory.h>
 #include <yetty/gpu-context.h>
+#include <yetty/yetty-context.h>
 #include <vector>
 
 namespace yetty::card {
@@ -68,8 +69,7 @@ public:
     // Factory method
     //=========================================================================
     static Result<CardPtr> create(
-        CardBufferManager::Ptr mgr,
-        const GPUContext& gpu,
+        const YettyContext& ctx,
         int32_t x, int32_t y,
         uint32_t widthCells, uint32_t heightCells,
         const std::string& args,
@@ -77,9 +77,8 @@ public:
 
     // ObjectFactory createImpl
     static Result<Ptr> createImpl(
-        ContextType& ctx,
-        CardBufferManager::Ptr mgr,
-        const GPUContext& gpu,
+        ContextType& factoryCtx,
+        const YettyContext& ctx,
         int32_t x, int32_t y,
         uint32_t widthCells, uint32_t heightCells,
         const std::string& args,

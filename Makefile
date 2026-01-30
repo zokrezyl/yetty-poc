@@ -32,6 +32,16 @@ BUILD_DIR_ANDROID_DAWN_RELEASE := build-android-dawn-release
 BUILD_DIR_WEBASM_DEBUG := build-webasm-debug
 BUILD_DIR_WEBASM_RELEASE := build-webasm-release
 
+# Parallel jobs (override with: make build-... PARALLEL_JOBS=30)
+PARALLEL_JOBS ?=
+CMAKE_PARALLEL := $(if $(PARALLEL_JOBS),--parallel $(PARALLEL_JOBS),--parallel)
+
+# Distributed build with ccache + distcc
+DISTCC_HOSTS ?= localhost 192.168.1.10
+export DISTCC_HOSTS
+export CCACHE_PREFIX := distcc
+CMAKE_COMPILER_LAUNCHER := -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
 # CMake options
 CMAKE := cmake
 CMAKE_GENERATOR := -G Ninja
@@ -57,21 +67,21 @@ all: help
 
 .PHONY: config-desktop-wgpu-debug
 config-desktop-wgpu-debug: ## Configure desktop wgpu debug build
-	PATH="$(SYSTEM_PATH)" $(CMAKE) -B $(BUILD_DIR_DESKTOP_WGPU_DEBUG) $(CMAKE_GENERATOR) $(CMAKE_DEBUG) $(CMAKE_BACKEND_WGPU)
+	PATH="$(SYSTEM_PATH)" $(CMAKE) -B $(BUILD_DIR_DESKTOP_WGPU_DEBUG) $(CMAKE_GENERATOR) $(CMAKE_DEBUG) $(CMAKE_BACKEND_WGPU) $(CMAKE_COMPILER_LAUNCHER)
 
 .PHONY: config-desktop-wgpu-release
 config-desktop-wgpu-release: ## Configure desktop wgpu release build
-	PATH="$(SYSTEM_PATH)" $(CMAKE) -B $(BUILD_DIR_DESKTOP_WGPU_RELEASE) $(CMAKE_GENERATOR) $(CMAKE_RELEASE) $(CMAKE_BACKEND_WGPU)
+	PATH="$(SYSTEM_PATH)" $(CMAKE) -B $(BUILD_DIR_DESKTOP_WGPU_RELEASE) $(CMAKE_GENERATOR) $(CMAKE_RELEASE) $(CMAKE_BACKEND_WGPU) $(CMAKE_COMPILER_LAUNCHER)
 
 .PHONY: build-desktop-wgpu-debug
 build-desktop-wgpu-debug: ## Build desktop wgpu debug
 	@if [ ! -f "$(BUILD_DIR_DESKTOP_WGPU_DEBUG)/build.ninja" ]; then $(MAKE) config-desktop-wgpu-debug; fi
-	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_DESKTOP_WGPU_DEBUG) --parallel
+	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_DESKTOP_WGPU_DEBUG) $(CMAKE_PARALLEL)
 
 .PHONY: build-desktop-wgpu-release
 build-desktop-wgpu-release: ## Build desktop wgpu release
 	@if [ ! -f "$(BUILD_DIR_DESKTOP_WGPU_RELEASE)/build.ninja" ]; then $(MAKE) config-desktop-wgpu-release; fi
-	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_DESKTOP_WGPU_RELEASE) --parallel
+	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_DESKTOP_WGPU_RELEASE) $(CMAKE_PARALLEL)
 
 .PHONY: run-desktop-wgpu-debug
 run-desktop-wgpu-debug: build-desktop-wgpu-debug ## Run desktop wgpu debug build
@@ -84,7 +94,7 @@ run-desktop-wgpu-release: build-desktop-wgpu-release ## Run desktop wgpu release
 .PHONY: test-desktop-wgpu-debug
 test-desktop-wgpu-debug: ## Run desktop wgpu debug tests
 	@if [ ! -f "$(BUILD_DIR_DESKTOP_WGPU_DEBUG)/build.ninja" ]; then $(MAKE) config-desktop-wgpu-debug; fi
-	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_DESKTOP_WGPU_DEBUG) --target yetty_tests --parallel
+	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_DESKTOP_WGPU_DEBUG) --target yetty_tests $(CMAKE_PARALLEL)
 	./$(BUILD_DIR_DESKTOP_WGPU_DEBUG)/test/ut/yetty_tests
 
 #=============================================================================
@@ -93,21 +103,21 @@ test-desktop-wgpu-debug: ## Run desktop wgpu debug tests
 
 .PHONY: config-desktop-dawn-debug
 config-desktop-dawn-debug: ## Configure desktop dawn debug build
-	PATH="$(SYSTEM_PATH)" $(CMAKE) -B $(BUILD_DIR_DESKTOP_DAWN_DEBUG) $(CMAKE_GENERATOR) $(CMAKE_DEBUG) $(CMAKE_BACKEND_DAWN)
+	PATH="$(SYSTEM_PATH)" $(CMAKE) -B $(BUILD_DIR_DESKTOP_DAWN_DEBUG) $(CMAKE_GENERATOR) $(CMAKE_DEBUG) $(CMAKE_BACKEND_DAWN) $(CMAKE_COMPILER_LAUNCHER)
 
 .PHONY: config-desktop-dawn-release
 config-desktop-dawn-release: ## Configure desktop dawn release build
-	PATH="$(SYSTEM_PATH)" $(CMAKE) -B $(BUILD_DIR_DESKTOP_DAWN_RELEASE) $(CMAKE_GENERATOR) $(CMAKE_RELEASE) $(CMAKE_BACKEND_DAWN)
+	PATH="$(SYSTEM_PATH)" $(CMAKE) -B $(BUILD_DIR_DESKTOP_DAWN_RELEASE) $(CMAKE_GENERATOR) $(CMAKE_RELEASE) $(CMAKE_BACKEND_DAWN) $(CMAKE_COMPILER_LAUNCHER)
 
 .PHONY: build-desktop-dawn-debug
 build-desktop-dawn-debug: ## Build desktop dawn debug
 	@if [ ! -f "$(BUILD_DIR_DESKTOP_DAWN_DEBUG)/build.ninja" ]; then $(MAKE) config-desktop-dawn-debug; fi
-	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_DESKTOP_DAWN_DEBUG) --parallel
+	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_DESKTOP_DAWN_DEBUG) $(CMAKE_PARALLEL)
 
 .PHONY: build-desktop-dawn-release
 build-desktop-dawn-release: ## Build desktop dawn release
 	@if [ ! -f "$(BUILD_DIR_DESKTOP_DAWN_RELEASE)/build.ninja" ]; then $(MAKE) config-desktop-dawn-release; fi
-	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_DESKTOP_DAWN_RELEASE) --parallel
+	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_DESKTOP_DAWN_RELEASE) $(CMAKE_PARALLEL)
 
 .PHONY: run-desktop-dawn-debug
 run-desktop-dawn-debug: build-desktop-dawn-debug ## Run desktop dawn debug build
@@ -120,7 +130,7 @@ run-desktop-dawn-release: build-desktop-dawn-release ## Run desktop dawn release
 .PHONY: test-desktop-dawn-debug
 test-desktop-dawn-debug: ## Run desktop dawn debug tests
 	@if [ ! -f "$(BUILD_DIR_DESKTOP_DAWN_DEBUG)/build.ninja" ]; then $(MAKE) config-desktop-dawn-debug; fi
-	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_DESKTOP_DAWN_DEBUG) --target yetty_tests --parallel
+	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_DESKTOP_DAWN_DEBUG) --target yetty_tests $(CMAKE_PARALLEL)
 	./$(BUILD_DIR_DESKTOP_DAWN_DEBUG)/test/ut/yetty_tests
 
 #=============================================================================
@@ -129,12 +139,12 @@ test-desktop-dawn-debug: ## Run desktop dawn debug tests
 
 .PHONY: config-desktop-dawn-asan
 config-desktop-dawn-asan: ## Configure desktop dawn ASAN build
-	PATH="$(SYSTEM_PATH)" $(CMAKE) -B $(BUILD_DIR_DESKTOP_DAWN_ASAN) $(CMAKE_GENERATOR) $(CMAKE_DEBUG) $(CMAKE_BACKEND_DAWN) $(CMAKE_ASAN)
+	PATH="$(SYSTEM_PATH)" $(CMAKE) -B $(BUILD_DIR_DESKTOP_DAWN_ASAN) $(CMAKE_GENERATOR) $(CMAKE_DEBUG) $(CMAKE_BACKEND_DAWN) $(CMAKE_ASAN) $(CMAKE_COMPILER_LAUNCHER)
 
 .PHONY: build-desktop-dawn-asan
 build-desktop-dawn-asan: ## Build desktop dawn ASAN
 	@if [ ! -f "$(BUILD_DIR_DESKTOP_DAWN_ASAN)/build.ninja" ]; then $(MAKE) config-desktop-dawn-asan; fi
-	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_DESKTOP_DAWN_ASAN) --parallel
+	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_DESKTOP_DAWN_ASAN) $(CMAKE_PARALLEL)
 
 .PHONY: run-desktop-dawn-asan
 run-desktop-dawn-asan: build-desktop-dawn-asan ## Run desktop dawn ASAN build
@@ -226,13 +236,13 @@ config-webasm-release: ## Configure WebAssembly release build
 .PHONY: build-webasm-debug
 build-webasm-debug: ## Build WebAssembly debug
 	@if [ ! -f "$(BUILD_DIR_WEBASM_DEBUG)/build.ninja" ]; then $(MAKE) config-webasm-debug; fi
-	nix develop .#web --command bash -c 'cmake --build $(BUILD_DIR_WEBASM_DEBUG) --parallel'
+	nix develop .#web --command bash -c 'cmake --build $(BUILD_DIR_WEBASM_DEBUG) $(CMAKE_PARALLEL)'
 	@cp build-tools/web/index.html build-tools/web/serve.py $(BUILD_DIR_WEBASM_DEBUG)/
 
 .PHONY: build-webasm-release
 build-webasm-release: ## Build WebAssembly release
 	@if [ ! -f "$(BUILD_DIR_WEBASM_RELEASE)/build.ninja" ]; then $(MAKE) config-webasm-release; fi
-	nix develop .#web --command bash -c 'cmake --build $(BUILD_DIR_WEBASM_RELEASE) --parallel'
+	nix develop .#web --command bash -c 'cmake --build $(BUILD_DIR_WEBASM_RELEASE) $(CMAKE_PARALLEL)'
 	@cp build-tools/web/index.html build-tools/web/serve.py $(BUILD_DIR_WEBASM_RELEASE)/
 
 .PHONY: run-webasm-debug

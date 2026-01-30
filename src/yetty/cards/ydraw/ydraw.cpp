@@ -288,9 +288,11 @@ public:
         }
 
         // Build BVH and upload primitives to GPU storage
-        if (!_primitives.empty()) {
-            yinfo("YDraw::init: calling rebuildAndUpload for {} primitives", _primitives.size());
-            rebuildAndUpload();
+        if (_primCount > 0) {
+            yinfo("YDraw::init: calling rebuildAndUpload for {} primitives", _primCount);
+            if (auto res = rebuildAndUpload(); !res) {
+                return Err<void>("YDraw::init: rebuildAndUpload failed", res);
+            }
             _dirty = false;
         }
 
@@ -304,13 +306,30 @@ public:
     }
 
     Result<void> dispose() override {
-        if (_storageHandle.isValid() && _cardMgr) {
-            _cardMgr->deallocateStorage(_storageHandle);
-            _storageHandle = StorageHandle::invalid();
+        if (_derivedStorage.isValid() && _cardMgr) {
+            if (auto res = _cardMgr->deallocateStorage(_derivedStorage); !res) {
+                yerror("YDraw::dispose: deallocateStorage (derived) failed: {}", error_msg(res));
+            }
+            _derivedStorage = StorageHandle::invalid();
+            _bvhNodes = nullptr;
+            _sortedIndices = nullptr;
+            _bvhNodeCount = 0;
+        }
+
+        if (_primStorage.isValid() && _cardMgr) {
+            if (auto res = _cardMgr->deallocateStorage(_primStorage); !res) {
+                yerror("YDraw::dispose: deallocateStorage (prims) failed: {}", error_msg(res));
+            }
+            _primStorage = StorageHandle::invalid();
+            _primitives = nullptr;
+            _primCount = 0;
+            _primCapacity = 0;
         }
 
         if (_metaHandle.isValid() && _cardMgr) {
-            _cardMgr->deallocateMetadata(_metaHandle);
+            if (auto res = _cardMgr->deallocateMetadata(_metaHandle); !res) {
+                yerror("YDraw::dispose: deallocateMetadata failed: {}", error_msg(res));
+            }
             _metaHandle = MetadataHandle::invalid();
         }
 
@@ -321,11 +340,13 @@ public:
         (void)time;
 
         ydebug("YDraw::update called, _dirty={} _metadataDirty={} primCount={}",
-               _dirty, _metadataDirty, _primitives.size());
+               _dirty, _metadataDirty, _primCount);
 
         if (_dirty) {
             ydebug("YDraw::update: calling rebuildAndUpload()");
-            rebuildAndUpload();
+            if (auto res = rebuildAndUpload(); !res) {
+                return Err<void>("YDraw::update: rebuildAndUpload failed", res);
+            }
             _dirty = false;
         }
 
@@ -345,14 +366,19 @@ public:
     //=========================================================================
 
     uint32_t addPrimitive(const SDFPrimitive& prim) override {
-        uint32_t idx = static_cast<uint32_t>(_primitives.size());
-        _primitives.push_back(prim);
+        if (auto res = ensurePrimCapacity(_primCount + 1); !res) {
+            yerror("YDraw::addPrimitive: failed to grow storage");
+            return 0;
+        }
+        uint32_t idx = _primCount++;
+        _primitives[idx] = prim;
 
         // Compute AABB if not set
-        if (_primitives.back().aabbMinX == 0 && _primitives.back().aabbMaxX == 0) {
-            computeAABB(_primitives.back());
+        if (_primitives[idx].aabbMinX == 0 && _primitives[idx].aabbMaxX == 0) {
+            computeAABB(_primitives[idx]);
         }
 
+        _cardMgr->markStorageDirty(_primStorage);
         _dirty = true;
         return idx;
     }
@@ -445,16 +471,15 @@ public:
     }
 
     void clear() override {
-        _primitives.clear();
+        _primCount = 0;
+        _bvhNodeCount = 0;
         _textSpans.clear();
         _textBuffer.clear();
-        _bvhNodes.clear();
-        _sortedIndices.clear();
         _dirty = true;
     }
 
     uint32_t primitiveCount() const override {
-        return static_cast<uint32_t>(_primitives.size());
+        return _primCount;
     }
 
     uint32_t textSpanCount() const override {
@@ -561,21 +586,23 @@ private:
         }
 
         const uint8_t* primData = data + HEADER_SIZE;
-        _primitives.clear();
-        _primitives.reserve(primCount);
+
+        // Allocate buffer and copy directly from payload (no intermediate vector)
+        if (auto res = ensurePrimCapacity(primCount); !res) {
+            return Err<void>("YDraw::parsePayload: failed to allocate prim storage");
+        }
+        _primCount = primCount;
+        std::memcpy(_primitives, primData, primCount * PRIM_SIZE);
+        _cardMgr->markStorageDirty(_primStorage);
 
         for (uint32_t i = 0; i < primCount; i++) {
-            SDFPrimitive prim;
-            std::memcpy(&prim, primData + i * PRIM_SIZE, PRIM_SIZE);
-            _primitives.push_back(prim);
-
             yinfo("YDraw::parsePayload: prim[{}] type={} layer={} fill={:#010x} aabb=[{},{},{},{}]",
-                  i, prim.type, prim.layer, prim.fillColor,
-                  prim.aabbMinX, prim.aabbMinY, prim.aabbMaxX, prim.aabbMaxY);
+                  i, _primitives[i].type, _primitives[i].layer, _primitives[i].fillColor,
+                  _primitives[i].aabbMinX, _primitives[i].aabbMinY, _primitives[i].aabbMaxX, _primitives[i].aabbMaxY);
         }
 
         _dirty = true;
-        yinfo("YDraw::parsePayload: loaded {} primitives", _primitives.size());
+        yinfo("YDraw::parsePayload: loaded {} primitives", _primCount);
 
         return Ok();
     }
@@ -588,11 +615,11 @@ private:
         _sceneMaxX = -1e10f;
         _sceneMaxY = -1e10f;
 
-        for (const auto& prim : _primitives) {
-            _sceneMinX = std::min(_sceneMinX, prim.aabbMinX);
-            _sceneMinY = std::min(_sceneMinY, prim.aabbMinY);
-            _sceneMaxX = std::max(_sceneMaxX, prim.aabbMaxX);
-            _sceneMaxY = std::max(_sceneMaxY, prim.aabbMaxY);
+        for (uint32_t i = 0; i < _primCount; i++) {
+            _sceneMinX = std::min(_sceneMinX, _primitives[i].aabbMinX);
+            _sceneMinY = std::min(_sceneMinY, _primitives[i].aabbMinY);
+            _sceneMaxX = std::max(_sceneMaxX, _primitives[i].aabbMaxX);
+            _sceneMaxY = std::max(_sceneMaxY, _primitives[i].aabbMaxY);
         }
 
         // Add padding
@@ -614,189 +641,196 @@ private:
         }
     }
 
-    void buildBVH() {
-        _bvhNodes.clear();
-        _sortedIndices.clear();
+    // Build BVH into temporary vectors, returning sorted indices and nodes.
+    // Called from rebuildAndUpload BEFORE buffer allocation so we know exact sizes.
+    void buildBVH(std::vector<BVHNode>& outNodes, std::vector<uint32_t>& outSortedIndices) {
+        if (_primCount == 0) return;
 
-        if (_primitives.empty()) {
-            return;
-        }
-
-        // Compute scene bounds
-        computeSceneBounds();
-
-        // Compute Morton codes for each primitive's center
-        std::vector<std::pair<uint32_t, uint32_t>> mortonPairs; // (morton, primIndex)
-        for (uint32_t i = 0; i < _primitives.size(); i++) {
+        // Compute Morton codes for spatial sorting
+        std::vector<std::pair<uint32_t, uint32_t>> mortonPairs;
+        mortonPairs.reserve(_primCount);
+        for (uint32_t i = 0; i < _primCount; i++) {
             float cx = (_primitives[i].aabbMinX + _primitives[i].aabbMaxX) * 0.5f;
             float cy = (_primitives[i].aabbMinY + _primitives[i].aabbMaxY) * 0.5f;
             uint32_t morton = morton2D(cx, cy, _sceneMinX, _sceneMinY, _sceneMaxX, _sceneMaxY);
             mortonPairs.push_back({morton, i});
         }
-
-        // Sort by Morton code
         std::sort(mortonPairs.begin(), mortonPairs.end());
 
-        // Build sorted indices
-        _sortedIndices.reserve(mortonPairs.size());
-        for (const auto& p : mortonPairs) {
-            _sortedIndices.push_back(p.second);
+        outSortedIndices.resize(_primCount);
+        for (uint32_t i = 0; i < _primCount; i++) {
+            outSortedIndices[i] = mortonPairs[i].second;
         }
 
         // Build BVH recursively
-        buildBVHRecursive(0, static_cast<uint32_t>(mortonPairs.size()));
+        outNodes.reserve(_primCount);  // reasonable estimate
+        buildBVHRecursive(outNodes, outSortedIndices, 0, _primCount);
 
         yinfo("YDraw::buildBVH: {} primitives -> {} BVH nodes",
-              _primitives.size(), _bvhNodes.size());
+              _primCount, static_cast<uint32_t>(outNodes.size()));
     }
 
-    uint32_t buildBVHRecursive(uint32_t start, uint32_t end) {
-        uint32_t nodeIndex = static_cast<uint32_t>(_bvhNodes.size());
-        _bvhNodes.push_back(BVHNode{});
-        // NOTE: Do NOT take a reference here - recursive calls may reallocate the vector!
+    uint32_t buildBVHRecursive(std::vector<BVHNode>& nodes,
+                               const std::vector<uint32_t>& sortedIndices,
+                               uint32_t start, uint32_t end) {
+        uint32_t nodeIndex = static_cast<uint32_t>(nodes.size());
+        nodes.push_back(BVHNode{});
 
         uint32_t count = end - start;
 
         if (count <= 4) {
-            // Leaf node - safe to access by index since no recursive calls
-            _bvhNodes[nodeIndex].primIndex = start;
-            _bvhNodes[nodeIndex].primCount = count;
-            _bvhNodes[nodeIndex].leftChild = 0xFFFFFFFF;
-            _bvhNodes[nodeIndex].rightChild = 0xFFFFFFFF;
+            // Leaf node
+            nodes[nodeIndex].primIndex = start;
+            nodes[nodeIndex].primCount = count;
+            nodes[nodeIndex].leftChild = 0xFFFFFFFF;
+            nodes[nodeIndex].rightChild = 0xFFFFFFFF;
 
-            // Compute AABB from primitives
-            float aabbMinX = 1e10f;
-            float aabbMinY = 1e10f;
-            float aabbMaxX = -1e10f;
-            float aabbMaxY = -1e10f;
-
+            float aabbMinX = 1e10f, aabbMinY = 1e10f;
+            float aabbMaxX = -1e10f, aabbMaxY = -1e10f;
             for (uint32_t i = start; i < end; i++) {
-                const auto& prim = _primitives[_sortedIndices[i]];
+                const auto& prim = _primitives[sortedIndices[i]];
                 aabbMinX = std::min(aabbMinX, prim.aabbMinX);
                 aabbMinY = std::min(aabbMinY, prim.aabbMinY);
                 aabbMaxX = std::max(aabbMaxX, prim.aabbMaxX);
                 aabbMaxY = std::max(aabbMaxY, prim.aabbMaxY);
             }
-
-            _bvhNodes[nodeIndex].aabbMinX = aabbMinX;
-            _bvhNodes[nodeIndex].aabbMinY = aabbMinY;
-            _bvhNodes[nodeIndex].aabbMaxX = aabbMaxX;
-            _bvhNodes[nodeIndex].aabbMaxY = aabbMaxY;
+            nodes[nodeIndex].aabbMinX = aabbMinX;
+            nodes[nodeIndex].aabbMinY = aabbMinY;
+            nodes[nodeIndex].aabbMaxX = aabbMaxX;
+            nodes[nodeIndex].aabbMaxY = aabbMaxY;
         } else {
-            // Internal node
             uint32_t mid = start + count / 2;
+            uint32_t leftChild = buildBVHRecursive(nodes, sortedIndices, start, mid);
+            uint32_t rightChild = buildBVHRecursive(nodes, sortedIndices, mid, end);
 
-            // Do recursive calls first - they may reallocate _bvhNodes
-            uint32_t leftChild = buildBVHRecursive(start, mid);
-            uint32_t rightChild = buildBVHRecursive(mid, end);
+            nodes[nodeIndex].leftChild = leftChild;
+            nodes[nodeIndex].rightChild = rightChild;
+            nodes[nodeIndex].primCount = 0;
 
-            // Now safe to access _bvhNodes[nodeIndex] - no more recursive calls
-            _bvhNodes[nodeIndex].leftChild = leftChild;
-            _bvhNodes[nodeIndex].rightChild = rightChild;
-            _bvhNodes[nodeIndex].primCount = 0;
-
-            // AABB is union of children
-            const auto& left = _bvhNodes[leftChild];
-            const auto& right = _bvhNodes[rightChild];
-            _bvhNodes[nodeIndex].aabbMinX = std::min(left.aabbMinX, right.aabbMinX);
-            _bvhNodes[nodeIndex].aabbMinY = std::min(left.aabbMinY, right.aabbMinY);
-            _bvhNodes[nodeIndex].aabbMaxX = std::max(left.aabbMaxX, right.aabbMaxX);
-            _bvhNodes[nodeIndex].aabbMaxY = std::max(left.aabbMaxY, right.aabbMaxY);
+            const auto& left = nodes[leftChild];
+            const auto& right = nodes[rightChild];
+            nodes[nodeIndex].aabbMinX = std::min(left.aabbMinX, right.aabbMinX);
+            nodes[nodeIndex].aabbMinY = std::min(left.aabbMinY, right.aabbMinY);
+            nodes[nodeIndex].aabbMaxX = std::max(left.aabbMaxX, right.aabbMaxX);
+            nodes[nodeIndex].aabbMaxY = std::max(left.aabbMaxY, right.aabbMaxY);
         }
 
         return nodeIndex;
     }
 
-    void rebuildAndUpload() {
-        // Build BVH
-        buildBVH();
+    Result<void> ensurePrimCapacity(uint32_t required) {
+        if (_primStorage.isValid() && required <= _primCapacity) {
+            return Ok();
+        }
+        uint32_t newCap = std::max(required, _primCapacity == 0 ? 64u : _primCapacity * 2);
+        uint32_t newSize = newCap * sizeof(SDFPrimitive);
 
-        // Calculate storage requirements
-        // Layout: [primitives][bvhNodes][sortedIndices][textSpans][textBuffer]
-        uint32_t primSize = static_cast<uint32_t>(_primitives.size() * sizeof(SDFPrimitive));
-        uint32_t bvhSize = static_cast<uint32_t>(_bvhNodes.size() * sizeof(BVHNode));
-        uint32_t indicesSize = static_cast<uint32_t>(_sortedIndices.size() * sizeof(uint32_t));
+        auto newStorage = _cardMgr->allocateStorage(newSize);
+        if (!newStorage) {
+            return Err<void>("YDraw: failed to allocate prim storage");
+        }
+
+        if (_primCount > 0 && _primStorage.isValid()) {
+            std::memcpy(newStorage->data, _primStorage.data, _primCount * sizeof(SDFPrimitive));
+        }
+        if (_primStorage.isValid()) {
+            _cardMgr->deallocateStorage(_primStorage);
+        }
+
+        _primStorage = *newStorage;
+        _primitives = reinterpret_cast<SDFPrimitive*>(_primStorage.data);
+        _primCapacity = newCap;
+        return Ok();
+    }
+
+    Result<void> rebuildAndUpload() {
+        if (_primCount == 0 && _textSpans.empty()) {
+            return Ok();
+        }
+
+        // Compute scene bounds from primitives already in buffer
+        computeSceneBounds();
+
+        // Build BVH into temp storage first to determine exact sizes
+        std::vector<BVHNode> tempBvhNodes;
+        std::vector<uint32_t> tempSortedIndices;
+        if (_primCount > 0) {
+            buildBVH(tempBvhNodes, tempSortedIndices);
+        }
+
+        // Now we know exact sizes
+        _bvhNodeCount = static_cast<uint32_t>(tempBvhNodes.size());
+        uint32_t bvhSize = _bvhNodeCount * sizeof(BVHNode);
+        uint32_t indicesSize = _primCount * sizeof(uint32_t);
         uint32_t textSpanSize = static_cast<uint32_t>(_textSpans.size() * sizeof(TextSpan));
         uint32_t textBufSize = static_cast<uint32_t>(_textBuffer.size());
+        uint32_t derivedTotalSize = bvhSize + indicesSize + textSpanSize + textBufSize;
 
-        uint32_t totalSize = primSize + bvhSize + indicesSize + textSpanSize + textBufSize;
-
-        if (totalSize == 0) {
-            return; // Nothing to upload
-        }
-
-        // Deallocate old storage
-        if (_storageHandle.isValid()) {
-            _cardMgr->deallocateStorage(_storageHandle);
-            _storageHandle = StorageHandle::invalid();
-        }
-
-        // Allocate new storage
-        auto storageResult = _cardMgr->allocateStorage(totalSize);
-        if (!storageResult) {
-            yerror("YDraw::rebuildAndUpload: failed to allocate {} bytes", totalSize);
-            return;
-        }
-        _storageHandle = *storageResult;
-
-        yinfo("YDraw::rebuildAndUpload: allocated {} bytes at offset {}",
-              totalSize, _storageHandle.offset);
-
-        // Upload data
-        uint32_t offset = 0;
-
-        // Primitives
-        _primitiveOffset = _storageHandle.offset / sizeof(float);
-        ydebug("YDraw::rebuildAndUpload: primitiveOffset={} (bytes={}) primCount={} primSize={}",
-               _primitiveOffset, _storageHandle.offset, _primitives.size(), primSize);
-        if (!_primitives.empty()) {
-            auto res = _cardMgr->writeStorage(_storageHandle, _primitives.data(), primSize);
-            if (!res) {
-                yerror("YDraw::rebuildAndUpload: writeStorage FAILED: {}", error_msg(res));
-            } else {
-                ydebug("YDraw::rebuildAndUpload: writeStorage SUCCESS, first prim type={} aabb=[{},{},{},{}]",
-                       _primitives[0].type, _primitives[0].aabbMinX, _primitives[0].aabbMinY,
-                       _primitives[0].aabbMaxX, _primitives[0].aabbMaxY);
+        // Deallocate old derived storage
+        if (_derivedStorage.isValid()) {
+            if (auto res = _cardMgr->deallocateStorage(_derivedStorage); !res) {
+                return Err<void>("YDraw::rebuildAndUpload: deallocateStorage failed");
             }
+            _derivedStorage = StorageHandle::invalid();
+            _bvhNodes = nullptr;
+            _sortedIndices = nullptr;
         }
-        offset += primSize;
 
-        // BVH nodes
-        _bvhOffset = (_storageHandle.offset + offset) / sizeof(float);
-        if (!_bvhNodes.empty()) {
-            StorageHandle bvhHandle = _storageHandle;
-            bvhHandle.offset += offset;
-            _cardMgr->writeStorage(bvhHandle, _bvhNodes.data(), bvhSize);
+        if (derivedTotalSize > 0) {
+            auto storageResult = _cardMgr->allocateStorage(derivedTotalSize);
+            if (!storageResult) {
+                return Err<void>("YDraw::rebuildAndUpload: failed to allocate derived storage");
+            }
+            _derivedStorage = *storageResult;
+
+            uint8_t* base = _derivedStorage.data;
+            uint32_t offset = 0;
+
+            // Copy BVH nodes into buffer (exact fit, no wasted space)
+            _bvhNodes = reinterpret_cast<BVHNode*>(base + offset);
+            _bvhOffset = (_derivedStorage.offset + offset) / sizeof(float);
+            if (_bvhNodeCount > 0) {
+                std::memcpy(_bvhNodes, tempBvhNodes.data(), bvhSize);
+            }
+            offset += bvhSize;
+
+            // Copy sorted indices into buffer (right after BVH nodes)
+            _sortedIndices = reinterpret_cast<uint32_t*>(base + offset);
+            _sortedIndicesOffset = (_derivedStorage.offset + offset) / sizeof(float);
+            if (_primCount > 0) {
+                std::memcpy(_sortedIndices, tempSortedIndices.data(), indicesSize);
+            }
+            offset += indicesSize;
+
+            // Text spans
+            _textSpanOffset = (_derivedStorage.offset + offset) / sizeof(float);
+            if (!_textSpans.empty()) {
+                std::memcpy(base + offset, _textSpans.data(), textSpanSize);
+            }
+            offset += textSpanSize;
+
+            // Text buffer
+            _textBufferOffset = (_derivedStorage.offset + offset) / sizeof(float);
+            if (!_textBuffer.empty()) {
+                std::memcpy(base + offset, _textBuffer.data(), textBufSize);
+            }
+
+            _cardMgr->markStorageDirty(_derivedStorage);
         }
-        offset += bvhSize;
 
-        // Sorted indices
-        _sortedIndicesOffset = (_storageHandle.offset + offset) / sizeof(float);
-        if (!_sortedIndices.empty()) {
-            StorageHandle indicesHandle = _storageHandle;
-            indicesHandle.offset += offset;
-            _cardMgr->writeStorage(indicesHandle, _sortedIndices.data(), indicesSize);
-        }
-        offset += indicesSize;
+        // Primitives are already in _primStorage - just update offset
+        _primitiveOffset = _primStorage.isValid() ? _primStorage.offset / sizeof(float) : 0;
 
-        // Text spans
-        _textSpanOffset = (_storageHandle.offset + offset) / sizeof(float);
-        if (!_textSpans.empty()) {
-            StorageHandle textSpanHandle = _storageHandle;
-            textSpanHandle.offset += offset;
-            _cardMgr->writeStorage(textSpanHandle, _textSpans.data(), textSpanSize);
-        }
-        offset += textSpanSize;
-
-        // Text buffer
-        _textBufferOffset = (_storageHandle.offset + offset) / sizeof(float);
-        if (!_textBuffer.empty()) {
-            StorageHandle textBufHandle = _storageHandle;
-            textBufHandle.offset += offset;
-            _cardMgr->writeStorage(textBufHandle, _textBuffer.data(), textBufSize);
+        if (_primStorage.isValid()) {
+            _cardMgr->markStorageDirty(_primStorage);
         }
 
         _metadataDirty = true;
+
+        yinfo("YDraw::rebuildAndUpload: {} prims, {} BVH nodes, derived {} bytes",
+              _primCount, _bvhNodeCount, derivedTotalSize);
+
+        return Ok();
     }
 
     Result<void> uploadMetadata() {
@@ -806,11 +840,11 @@ private:
 
         Metadata meta = {};
         meta.primitiveOffset = _primitiveOffset;
-        meta.primitiveCount = static_cast<uint32_t>(_primitives.size());
+        meta.primitiveCount = _primCount;
         meta.textSpanOffset = _textSpanOffset;
         meta.textSpanCount = static_cast<uint32_t>(_textSpans.size());
         meta.bvhOffset = _bvhOffset;
-        meta.bvhNodeCount = static_cast<uint32_t>(_bvhNodes.size());
+        meta.bvhNodeCount = _bvhNodeCount;
         meta.glyphOffset = 0;  // TODO: positioned glyphs
         meta.glyphCount = 0;
         meta.sceneMinX = _sceneMinX;
@@ -860,12 +894,19 @@ private:
     };
     static_assert(sizeof(Metadata) == 64, "Metadata must be 64 bytes");
 
-    // Primitive data
-    std::vector<SDFPrimitive> _primitives;
-    std::vector<BVHNode> _bvhNodes;
-    std::vector<uint32_t> _sortedIndices;
+    // Primitive data - direct buffer storage (no intermediate vector)
+    SDFPrimitive* _primitives = nullptr;
+    uint32_t _primCount = 0;
+    uint32_t _primCapacity = 0;
+    StorageHandle _primStorage = StorageHandle::invalid();
 
-    // Text data
+    // BVH data - built directly in derived storage buffer
+    BVHNode* _bvhNodes = nullptr;
+    uint32_t _bvhNodeCount = 0;
+    uint32_t* _sortedIndices = nullptr;
+    StorageHandle _derivedStorage = StorageHandle::invalid();
+
+    // Text data (small, vector OK)
     std::vector<TextSpan> _textSpans;
     std::vector<uint8_t> _textBuffer;
 
@@ -882,10 +923,9 @@ private:
     uint32_t _textBufferOffset = 0;
 
     // Rendering
-    uint32_t _bgColor = 0xFF2E1A1A;     // Dark blue-ish background (ABGR format)
+    uint32_t _bgColor = 0xFF2E1A1A;
     uint32_t _flags = 0;
 
-    StorageHandle _storageHandle = StorageHandle::invalid();
     bool _dirty = true;
     bool _metadataDirty = true;
 

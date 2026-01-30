@@ -146,6 +146,7 @@ public:
 
     Result<TextureDataHandle> allocateTextureData(uint32_t size) override;
     Result<void> deallocateTextureData(TextureDataHandle handle) override;
+    void markStorageDirty(StorageHandle handle) override;
     void markTextureDataDirty(TextureDataHandle handle) override;
 
     Result<void> flush(WGPUQueue queue) override;
@@ -707,8 +708,15 @@ Result<StorageHandle> CardBufferManagerImpl::allocateStorage(uint32_t size) {
         }
 
         result = _storageAllocator.allocate(size);
+        if (!result) {
+            return result;
+        }
     }
-    return result;
+    // Fill in the data pointer to CPU buffer (like allocateTextureData does)
+    StorageHandle handle = *result;
+    uint8_t* bufferBytes = reinterpret_cast<uint8_t*>(_storageCpuBuffer.data());
+    handle.data = bufferBytes + handle.offset;
+    return Ok(handle);
 }
 
 Result<void> CardBufferManagerImpl::deallocateStorage(StorageHandle handle) {
@@ -799,6 +807,12 @@ Result<TextureDataHandle> CardBufferManagerImpl::allocateTextureData(uint32_t si
 
 Result<void> CardBufferManagerImpl::deallocateTextureData(TextureDataHandle handle) {
     return _textureDataAllocator.deallocate(handle);
+}
+
+void CardBufferManagerImpl::markStorageDirty(StorageHandle handle) {
+    if (handle.isValid()) {
+        _storageDirty.markDirty(handle.offset, handle.size);
+    }
 }
 
 void CardBufferManagerImpl::markTextureDataDirty(TextureDataHandle handle) {

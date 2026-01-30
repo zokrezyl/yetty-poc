@@ -1,8 +1,15 @@
 #include "plot.h"
+#include <yetty/base/event-loop.h>
+#include <yetty/yetty-context.h>
+#include <yetty/ms-msdf-font.h>
 #include <ytrace/ytrace.hpp>
 #include <sstream>
 #include <algorithm>
 #include <cmath>
+
+// GLFW modifier constants
+constexpr int GLFW_MOD_SHIFT   = 0x0001;
+constexpr int GLFW_MOD_CONTROL = 0x0002;
 
 namespace yetty::card {
 
@@ -12,15 +19,27 @@ namespace yetty::card {
 
 class PlotImpl : public Plot {
 public:
-    PlotImpl(CardBufferManager::Ptr mgr, const GPUContext& gpu,
+    PlotImpl(const YettyContext& ctx,
              int32_t x, int32_t y,
              uint32_t widthCells, uint32_t heightCells,
              const std::string& args, const std::string& payload)
-        : Plot(std::move(mgr), gpu, x, y, widthCells, heightCells)
+        : Plot(ctx.cardBufferManager, ctx.gpu, x, y, widthCells, heightCells)
         , _argsStr(args)
         , _payloadStr(payload)
     {
         _shaderGlyph = SHADER_GLYPH;
+
+        // Look up glyph indices for axis label characters
+        if (ctx.fontManager) {
+            auto font = ctx.fontManager->getDefaultMsMsdfFont();
+            if (font) {
+                _glyphBase0 = font->getGlyphIndex('0');
+                _glyphDot   = font->getGlyphIndex('.');
+                _glyphMinus = font->getGlyphIndex('-');
+                yinfo("Plot: glyph indices: '0'={} '.'={} '-'={}",
+                      _glyphBase0, _glyphDot, _glyphMinus);
+            }
+        }
     }
 
     ~PlotImpl() override {
@@ -56,10 +75,20 @@ public:
             return Err<void>("Plot::init: failed to upload metadata");
         }
 
+        // Register for events - cards have priority 1000, above gpu-screen
+        if (auto res = registerForEvents(); !res) {
+            return Err<void>("Plot::init: failed to register for events", res);
+        }
+
         return Ok();
     }
 
     Result<void> dispose() override {
+        // Deregister from events
+        if (auto res = deregisterFromEvents(); !res) {
+            return Err<void>("Plot::dispose: failed to deregister", res);
+        }
+
         if (_storageHandle.isValid() && _cardMgr) {
             _cardMgr->deallocateStorage(_storageHandle);
             _storageHandle = StorageHandle::invalid();
@@ -209,7 +238,93 @@ public:
         return static_cast<uint32_t>(_data.size());
     }
 
+    //=========================================================================
+    // EventListener interface
+    //=========================================================================
+
+    Result<bool> onEvent(const base::Event& event) override {
+        // Handle SetFocus events
+        if (event.type == base::Event::Type::SetFocus) {
+            if (event.setFocus.objectId == id()) {
+                if (!_focused) {
+                    _focused = true;
+                    ydebug("Plot::onEvent: focused (id={})", id());
+                }
+                return Ok(true);
+            } else if (_focused) {
+                _focused = false;
+                ydebug("Plot::onEvent: unfocused (id={})", id());
+            }
+            return Ok(false);
+        }
+
+        // Handle scroll events (only when focused)
+        if (_focused && event.type == base::Event::Type::Scroll) {
+            if (event.scroll.mods & GLFW_MOD_CONTROL) {
+                // Ctrl+Scroll: zoom
+                float zoomDelta = event.scroll.dy * 0.1f;
+                float newZoom = std::clamp(_zoom + zoomDelta, 0.1f, 10.0f);
+                if (newZoom != _zoom) {
+                    _zoom = newZoom;
+                    _metadataDirty = true;
+                    yinfo("Plot::onEvent: zoom={:.2f}", _zoom);
+                }
+                return Ok(true);
+            } else if (event.scroll.mods & GLFW_MOD_SHIFT) {
+                // Shift+Scroll: pan Y
+                float dy = event.scroll.dy * 0.05f / _zoom;
+                _centerY = std::clamp(_centerY + dy, 0.0f, 1.0f);
+                _metadataDirty = true;
+                return Ok(true);
+            } else {
+                // Plain scroll: pan X
+                float dx = event.scroll.dy * 0.05f / _zoom;
+                _centerX = std::clamp(_centerX + dx, 0.0f, 1.0f);
+                _metadataDirty = true;
+                return Ok(true);
+            }
+        }
+
+        return Ok(false);
+    }
+
 private:
+    //=========================================================================
+    // Event registration
+    //=========================================================================
+
+    Result<void> registerForEvents() {
+        auto loopResult = base::EventLoop::instance();
+        if (!loopResult) {
+            return Err<void>("Plot::registerForEvents: no EventLoop instance", loopResult);
+        }
+        auto loop = *loopResult;
+        auto self = sharedAs<base::EventListener>();
+
+        if (auto res = loop->registerListener(base::Event::Type::SetFocus, self, 1000); !res) {
+            return Err<void>("Plot::registerForEvents: failed to register SetFocus", res);
+        }
+        if (auto res = loop->registerListener(base::Event::Type::Scroll, self, 1000); !res) {
+            return Err<void>("Plot::registerForEvents: failed to register Scroll", res);
+        }
+
+        yinfo("Plot card {} registered for events (priority 1000)", id());
+        return Ok();
+    }
+
+    Result<void> deregisterFromEvents() {
+        auto loopResult = base::EventLoop::instance();
+        if (!loopResult) {
+            return Err<void>("Plot::deregisterFromEvents: no EventLoop instance", loopResult);
+        }
+        auto loop = *loopResult;
+
+        if (auto res = loop->deregisterListener(sharedAs<base::EventListener>()); !res) {
+            return Err<void>("Plot::deregisterFromEvents: failed to deregister", res);
+        }
+        return Ok();
+    }
+
     void parseArgs(const std::string& args) {
         yinfo("Plot::parseArgs: args='{}'", args);
 
@@ -338,24 +453,29 @@ private:
             return Err<void>("Plot::uploadMetadata: invalid metadata handle");
         }
 
-        Metadata meta = {};  // Zero-initialize including reserved
-        meta.plotType = static_cast<uint32_t>(_plotType);
-        // dataOffset is in float units (not bytes) since cardStorage is array<f32>
+        Metadata meta = {};
+        meta.plotType = static_cast<uint8_t>(_plotType);
+        meta.flags = static_cast<uint8_t>(_flags);
+        meta.widthCells = static_cast<uint16_t>(_widthCells);
+        meta.heightCells = static_cast<uint16_t>(_heightCells);
         meta.dataOffset = _storageHandle.isValid() ? (_storageHandle.offset / sizeof(float)) : 0;
         meta.dataCount = static_cast<uint32_t>(_data.size());
         meta.minValue = _minValue;
         meta.maxValue = _maxValue;
         meta.lineColor = _lineColor;
         meta.fillColor = _fillColor;
-        meta.flags = _flags;
-        meta.widthCells = _widthCells;
-        meta.heightCells = _heightCells;
         meta.bgColor = _bgColor;
+        meta.zoom = _zoom;
+        meta.centerX = _centerX;
+        meta.centerY = _centerY;
+        meta.glyphBase0 = static_cast<uint8_t>(_glyphBase0);
+        meta.glyphDot = static_cast<uint8_t>(_glyphDot);
+        meta.glyphMinus = static_cast<uint8_t>(_glyphMinus);
 
         yinfo("Plot::uploadMetadata: metaOffset={} plotType={} dataOffset={} "
               "dataCount={} min={} max={} flags={} size={}x{} bgColor={:#x}",
-              _metaHandle.offset, meta.plotType, meta.dataOffset, meta.dataCount,
-              meta.minValue, meta.maxValue, meta.flags,
+              _metaHandle.offset, meta.plotType, meta.dataOffset,
+              meta.dataCount, meta.minValue, meta.maxValue, meta.flags,
               meta.widthCells, meta.heightCells, meta.bgColor);
 
         if (auto res = _cardMgr->writeMetadata(_metaHandle, &meta, sizeof(meta)); !res) {
@@ -365,20 +485,37 @@ private:
         return Ok();
     }
 
-    // Metadata structure (matches shader layout)
+    // Metadata structure (64 bytes = 16 u32 slots)
+    // Shader reads as cardMetadata[metaOffset + N] (raw u32s).
     struct Metadata {
-        uint32_t plotType;
-        uint32_t dataOffset;
+        // [0]: plotType(8) | flags(8) | padding(16)
+        uint8_t plotType;
+        uint8_t flags;
+        uint16_t _pad0;
+        // [1]: widthCells(16) | heightCells(16)
+        uint16_t widthCells;
+        uint16_t heightCells;
+        // [2-3]
+        uint32_t dataOffset;    // float index into cardStorage
         uint32_t dataCount;
+        // [4-5]
         float minValue;
         float maxValue;
-        uint32_t lineColor;
-        uint32_t fillColor;
-        uint32_t flags;
-        uint32_t widthCells;
-        uint32_t heightCells;
-        uint32_t bgColor;
-        uint32_t _reserved[5];
+        // [6-8]
+        uint32_t lineColor;     // RGBA
+        uint32_t fillColor;     // RGBA
+        uint32_t bgColor;       // RGBA
+        // [9-11]
+        float zoom;
+        float centerX;
+        float centerY;
+        // [12]: glyphBase0(8) | glyphDot(8) | glyphMinus(8) | padding(8)
+        uint8_t glyphBase0;
+        uint8_t glyphDot;
+        uint8_t glyphMinus;
+        uint8_t _pad1;
+        // [13-15]: reserved for future data series
+        uint32_t _reserved[3];
     };
     static_assert(sizeof(Metadata) == 64, "Metadata must be 64 bytes");
 
@@ -392,7 +529,18 @@ private:
     uint32_t _bgColor = 0xFF1A1A2E;     // Dark blue-ish background
     uint32_t _flags = FLAG_GRID | FLAG_AXES;
 
+    // Zoom and pan
+    float _zoom = 1.0f;
+    float _centerX = 0.5f;
+    float _centerY = 0.5f;
+
+    // Font glyph indices for axis labels
+    uint32_t _glyphBase0 = 0;
+    uint32_t _glyphDot = 0;
+    uint32_t _glyphMinus = 0;
+
     StorageHandle _storageHandle = StorageHandle::invalid();
+    bool _focused = false;
     bool _metadataDirty = true;
 
     std::string _argsStr;

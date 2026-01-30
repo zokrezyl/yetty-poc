@@ -11,6 +11,7 @@
 #include <cstring>
 
 // GLFW modifier constants
+constexpr int GLFW_MOD_SHIFT   = 0x0001;
 constexpr int GLFW_MOD_CONTROL = 0x0002;
 
 // WebGPU string helper
@@ -175,9 +176,10 @@ public:
             return Ok(false);
         }
 
-        // Handle ctrl+scroll for content zoom (only when focused)
+        // Handle scroll events (only when focused)
         if (_focused && event.type == base::Event::Type::Scroll) {
             if (event.scroll.mods & GLFW_MOD_CONTROL) {
+                // Ctrl+Scroll: zoom
                 float zoomDelta = event.scroll.dy * 0.1f;
                 float newZoom = std::clamp(_contentZoom + zoomDelta, 0.1f, 10.0f);
                 if (newZoom != _contentZoom) {
@@ -185,6 +187,18 @@ public:
                     _metadataDirty = true;
                     yinfo("Image::onEvent: content zoom={:.2f}", _contentZoom);
                 }
+                return Ok(true);
+            } else if (event.scroll.mods & GLFW_MOD_SHIFT) {
+                // Shift+Scroll: pan horizontally
+                float dx = event.scroll.dy * 0.05f / _contentZoom;
+                _centerX = std::clamp(_centerX + dx, 0.0f, 1.0f);
+                _metadataDirty = true;
+                return Ok(true);
+            } else {
+                // Plain scroll: pan vertically
+                float dy = event.scroll.dy * 0.05f / _contentZoom;
+                _centerY = std::clamp(_centerY + dy, 0.0f, 1.0f);
+                _metadataDirty = true;
                 return Ok(true);
             }
         }

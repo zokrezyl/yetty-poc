@@ -229,10 +229,12 @@ public:
         }
 
         // Upload primitives to GPU storage
-        if (!_primitives.empty() || !_glyphs.empty()) {
+        if (_primCount > 0 || !_glyphs.empty()) {
             yinfo("KDraw::init: calling rebuildAndUpload for {} primitives, {} glyphs",
-                  _primitives.size(), _glyphs.size());
-            rebuildAndUpload();
+                  _primCount, _glyphs.size());
+            if (auto res = rebuildAndUpload(); !res) {
+                return Err<void>("KDraw::init: rebuildAndUpload failed", res);
+            }
             _dirty = false;
         }
 
@@ -272,13 +274,29 @@ public:
             _tileCullShaderModule = nullptr;
         }
 
-        if (_storageHandle.isValid() && _cardMgr) {
-            _cardMgr->deallocateStorage(_storageHandle);
-            _storageHandle = StorageHandle::invalid();
+        if (_derivedStorage.isValid() && _cardMgr) {
+            if (auto res = _cardMgr->deallocateStorage(_derivedStorage); !res) {
+                yerror("KDraw::dispose: deallocateStorage (derived) failed: {}", error_msg(res));
+            }
+            _derivedStorage = StorageHandle::invalid();
+            _tileLists = nullptr;
+            _tileListsSize = 0;
+        }
+
+        if (_primStorage.isValid() && _cardMgr) {
+            if (auto res = _cardMgr->deallocateStorage(_primStorage); !res) {
+                yerror("KDraw::dispose: deallocateStorage (prims) failed: {}", error_msg(res));
+            }
+            _primStorage = StorageHandle::invalid();
+            _primitives = nullptr;
+            _primCount = 0;
+            _primCapacity = 0;
         }
 
         if (_metaHandle.isValid() && _cardMgr) {
-            _cardMgr->deallocateMetadata(_metaHandle);
+            if (auto res = _cardMgr->deallocateMetadata(_metaHandle); !res) {
+                yerror("KDraw::dispose: deallocateMetadata failed: {}", error_msg(res));
+            }
             _metaHandle = MetadataHandle::invalid();
         }
 
@@ -289,7 +307,9 @@ public:
         (void)time;
 
         if (_dirty) {
-            rebuildAndUpload();
+            if (auto res = rebuildAndUpload(); !res) {
+                return Err<void>("KDraw::update: rebuildAndUpload failed", res);
+            }
             _dirty = false;
         }
 
@@ -308,14 +328,16 @@ public:
     //=========================================================================
 
     uint32_t addPrimitive(const SDFPrimitive& prim) override {
-        uint32_t idx = static_cast<uint32_t>(_primitives.size());
-        _primitives.push_back(prim);
-
-        // Compute AABB if not set
-        if (_primitives.back().aabbMinX == 0 && _primitives.back().aabbMaxX == 0) {
-            computeAABB_kdraw(_primitives.back());
+        if (auto res = ensurePrimCapacity(_primCount + 1); !res) {
+            yerror("KDraw::addPrimitive: failed to grow storage");
+            return 0;
         }
-
+        uint32_t idx = _primCount++;
+        _primitives[idx] = prim;
+        if (_primitives[idx].aabbMinX == 0 && _primitives[idx].aabbMaxX == 0) {
+            computeAABB_kdraw(_primitives[idx]);
+        }
+        _cardMgr->markStorageDirty(_primStorage);
         _dirty = true;
         return idx;
     }
@@ -454,13 +476,14 @@ public:
     }
 
     void clear() override {
-        _primitives.clear();
+        _primCount = 0;
+        _tileListsSize = 0;
         _glyphs.clear();
         _dirty = true;
     }
 
     uint32_t primitiveCount() const override {
-        return static_cast<uint32_t>(_primitives.size());
+        return _primCount;
     }
 
     uint32_t glyphCount() const override {
@@ -496,6 +519,31 @@ public:
     }
 
 private:
+    Result<void> ensurePrimCapacity(uint32_t required) {
+        if (_primStorage.isValid() && required <= _primCapacity) {
+            return Ok();
+        }
+        uint32_t newCap = std::max(required, _primCapacity == 0 ? 64u : _primCapacity * 2);
+        uint32_t newSize = newCap * sizeof(SDFPrimitive);
+
+        auto newStorage = _cardMgr->allocateStorage(newSize);
+        if (!newStorage) {
+            return Err<void>("KDraw: failed to allocate prim storage");
+        }
+
+        if (_primCount > 0 && _primStorage.isValid()) {
+            std::memcpy(newStorage->data, _primStorage.data, _primCount * sizeof(SDFPrimitive));
+        }
+        if (_primStorage.isValid()) {
+            _cardMgr->deallocateStorage(_primStorage);
+        }
+
+        _primStorage = *newStorage;
+        _primitives = reinterpret_cast<SDFPrimitive*>(_primStorage.data);
+        _primCapacity = newCap;
+        return Ok();
+    }
+
     void parseArgs(const std::string& args) {
         yinfo("KDraw::parseArgs: args='{}'", args);
 
@@ -581,14 +629,13 @@ private:
         }
 
         const uint8_t* primData = data + HEADER_SIZE;
-        _primitives.clear();
-        _primitives.reserve(primCount);
 
-        for (uint32_t i = 0; i < primCount; i++) {
-            SDFPrimitive prim;
-            std::memcpy(&prim, primData + i * PRIM_SIZE, PRIM_SIZE);
-            _primitives.push_back(prim);
+        if (auto res = ensurePrimCapacity(primCount); !res) {
+            return Err<void>("KDraw::parseBinary: failed to allocate prim storage");
         }
+        _primCount = primCount;
+        std::memcpy(_primitives, primData, primCount * PRIM_SIZE);
+        _cardMgr->markStorageDirty(_primStorage);
 
         _dirty = true;
         return Ok();
@@ -651,10 +698,10 @@ private:
 
             _dirty = true;
             yinfo("KDraw::parseYAML: loaded {} primitives, {} glyphs",
-                  _primitives.size(), _glyphs.size());
+                  _primCount, _glyphs.size());
 
             // Log first few primitives for debugging
-            for (size_t i = 0; i < std::min(_primitives.size(), size_t(3)); i++) {
+            for (size_t i = 0; i < std::min(size_t(_primCount), size_t(3)); i++) {
                 const auto& p = _primitives[i];
                 yinfo("KDraw: prim[{}] type={} aabb=[{},{},{},{}] fill={:#010x}",
                       i, p.type, p.aabbMinX, p.aabbMinY, p.aabbMaxX, p.aabbMaxY, p.fillColor);
@@ -668,7 +715,7 @@ private:
     }
 
     void parseYAMLPrimitive(const YAML::Node& item) {
-        uint32_t layer = static_cast<uint32_t>(_primitives.size() + _glyphs.size());
+        uint32_t layer = static_cast<uint32_t>(_primCount + _glyphs.size());
 
         // Text
         if (item["text"]) {
@@ -789,7 +836,7 @@ private:
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
             computeAABB_kdraw(prim);
-            _primitives.push_back(prim);
+            addPrimitive(prim);
             return;
         }
 
@@ -821,7 +868,7 @@ private:
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
             computeAABB_kdraw(prim);
-            _primitives.push_back(prim);
+            addPrimitive(prim);
             return;
         }
 
@@ -855,7 +902,7 @@ private:
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
             computeAABB_kdraw(prim);
-            _primitives.push_back(prim);
+            addPrimitive(prim);
             return;
         }
 
@@ -884,7 +931,7 @@ private:
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
             computeAABB_kdraw(prim);
-            _primitives.push_back(prim);
+            addPrimitive(prim);
             return;
         }
 
@@ -913,7 +960,7 @@ private:
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
             computeAABB_kdraw(prim);
-            _primitives.push_back(prim);
+            addPrimitive(prim);
             return;
         }
 
@@ -945,7 +992,7 @@ private:
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
             computeAABB_kdraw(prim);
-            _primitives.push_back(prim);
+            addPrimitive(prim);
             return;
         }
 
@@ -978,7 +1025,7 @@ private:
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
             computeAABB_kdraw(prim);
-            _primitives.push_back(prim);
+            addPrimitive(prim);
             return;
         }
 
@@ -1012,7 +1059,7 @@ private:
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
             computeAABB_kdraw(prim);
-            _primitives.push_back(prim);
+            addPrimitive(prim);
             return;
         }
 
@@ -1041,7 +1088,7 @@ private:
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
             computeAABB_kdraw(prim);
-            _primitives.push_back(prim);
+            addPrimitive(prim);
             return;
         }
 
@@ -1074,7 +1121,7 @@ private:
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
             computeAABB_kdraw(prim);
-            _primitives.push_back(prim);
+            addPrimitive(prim);
             return;
         }
 
@@ -1104,7 +1151,7 @@ private:
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
             computeAABB_kdraw(prim);
-            _primitives.push_back(prim);
+            addPrimitive(prim);
             return;
         }
 
@@ -1138,7 +1185,7 @@ private:
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
             computeAABB_kdraw(prim);
-            _primitives.push_back(prim);
+            addPrimitive(prim);
             return;
         }
 
@@ -1170,7 +1217,7 @@ private:
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
             computeAABB_kdraw(prim);
-            _primitives.push_back(prim);
+            addPrimitive(prim);
             return;
         }
 
@@ -1201,7 +1248,7 @@ private:
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
             computeAABB_kdraw(prim);
-            _primitives.push_back(prim);
+            addPrimitive(prim);
             return;
         }
 
@@ -1231,7 +1278,7 @@ private:
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
             computeAABB_kdraw(prim);
-            _primitives.push_back(prim);
+            addPrimitive(prim);
             return;
         }
 
@@ -1383,11 +1430,11 @@ private:
         _sceneMaxX = -1e10f;
         _sceneMaxY = -1e10f;
 
-        for (const auto& prim : _primitives) {
-            _sceneMinX = std::min(_sceneMinX, prim.aabbMinX);
-            _sceneMinY = std::min(_sceneMinY, prim.aabbMinY);
-            _sceneMaxX = std::max(_sceneMaxX, prim.aabbMaxX);
-            _sceneMaxY = std::max(_sceneMaxY, prim.aabbMaxY);
+        for (uint32_t i = 0; i < _primCount; i++) {
+            _sceneMinX = std::min(_sceneMinX, _primitives[i].aabbMinX);
+            _sceneMinY = std::min(_sceneMinY, _primitives[i].aabbMinY);
+            _sceneMaxX = std::max(_sceneMaxX, _primitives[i].aabbMaxX);
+            _sceneMaxY = std::max(_sceneMaxY, _primitives[i].aabbMaxY);
         }
 
         for (const auto& glyph : _glyphs) {
@@ -1417,23 +1464,12 @@ private:
     void buildTileLists() {
         // CPU-based tile culling (fallback when compute shader not available)
         // This builds per-tile primitive lists on CPU
-
-        computeSceneBounds();
-
-        // Estimate pixel dimensions based on cell count
-        // Actual pixel size depends on terminal cell size, but we use a reasonable estimate
-        const uint32_t ESTIMATED_CELL_PIXELS = 16;  // Typical terminal cell width
-        uint32_t pixelWidth = _widthCells * ESTIMATED_CELL_PIXELS;
-        uint32_t pixelHeight = _heightCells * ESTIMATED_CELL_PIXELS;
-
-        _tileCountX = (pixelWidth + TILE_SIZE - 1) / TILE_SIZE;
-        _tileCountY = (pixelHeight + TILE_SIZE - 1) / TILE_SIZE;
+        // _tileLists pointer and _tileListsSize are already set by rebuildAndUpload
 
         uint32_t totalTiles = _tileCountX * _tileCountY;
         uint32_t tileStride = 1 + MAX_PRIMS_PER_TILE;  // [count][idx0][idx1]...
 
-        _tileLists.clear();
-        _tileLists.resize(totalTiles * tileStride, 0);
+        std::memset(_tileLists, 0, _tileListsSize * sizeof(uint32_t));
 
         // For each tile, find primitives that overlap
         float sceneWidth = _sceneMaxX - _sceneMinX;
@@ -1452,7 +1488,7 @@ private:
                 uint32_t count = 0;
 
                 // Test each primitive against tile bounds
-                for (uint32_t pi = 0; pi < _primitives.size() && count < MAX_PRIMS_PER_TILE; pi++) {
+                for (uint32_t pi = 0; pi < _primCount && count < MAX_PRIMS_PER_TILE; pi++) {
                     const auto& prim = _primitives[pi];
 
                     // AABB overlap test
@@ -1480,7 +1516,7 @@ private:
 
         yinfo("KDraw::buildTileLists: {} primitives -> {}x{} tiles ({} total), "
               "tilesWithPrims={}, totalPrimsInTiles={}, maxPrimsInTile={}",
-              _primitives.size(), _tileCountX, _tileCountY, totalTiles,
+              _primCount, _tileCountX, _tileCountY, totalTiles,
               tilesWithPrims, totalPrimsInTiles, maxPrimsInTile);
 
         // Log scene bounds for debugging
@@ -1488,72 +1524,75 @@ private:
               _sceneMinX, _sceneMinY, _sceneMaxX, _sceneMaxY);
     }
 
-    void rebuildAndUpload() {
-        // Compute scene bounds
+    Result<void> rebuildAndUpload() {
         computeSceneBounds();
 
-        // Build tile lists (CPU fallback for now)
-        if (!_useComputeShader) {
-            buildTileLists();
+        // Calculate tile dimensions
+        const uint32_t ESTIMATED_CELL_PIXELS = 16;
+        uint32_t pixelWidth = _widthCells * ESTIMATED_CELL_PIXELS;
+        uint32_t pixelHeight = _heightCells * ESTIMATED_CELL_PIXELS;
+        _tileCountX = (pixelWidth + TILE_SIZE - 1) / TILE_SIZE;
+        _tileCountY = (pixelHeight + TILE_SIZE - 1) / TILE_SIZE;
+        uint32_t totalTiles = _tileCountX * _tileCountY;
+        uint32_t tileStride = 1 + MAX_PRIMS_PER_TILE;
+        uint32_t tileTotalU32 = totalTiles * tileStride;
+        uint32_t tileBytes = tileTotalU32 * sizeof(uint32_t);
+        uint32_t glyphBytes = static_cast<uint32_t>(_glyphs.size() * sizeof(KDrawGlyph));
+        uint32_t derivedTotalSize = tileBytes + glyphBytes;
+
+        // Deallocate old derived storage
+        if (_derivedStorage.isValid()) {
+            if (auto res = _cardMgr->deallocateStorage(_derivedStorage); !res) {
+                return Err<void>("KDraw::rebuildAndUpload: deallocateStorage failed");
+            }
+            _derivedStorage = StorageHandle::invalid();
+            _tileLists = nullptr;
+            _tileListsSize = 0;
         }
 
-        // Calculate storage requirements
-        // Layout: [primitives][tileLists][glyphs]
-        uint32_t primSize = static_cast<uint32_t>(_primitives.size() * sizeof(SDFPrimitive));
-        uint32_t tileSize = static_cast<uint32_t>(_tileLists.size() * sizeof(uint32_t));
-        uint32_t glyphSize = static_cast<uint32_t>(_glyphs.size() * sizeof(KDrawGlyph));
+        if (derivedTotalSize > 0) {
+            auto storageResult = _cardMgr->allocateStorage(derivedTotalSize);
+            if (!storageResult) {
+                return Err<void>("KDraw::rebuildAndUpload: failed to allocate derived storage");
+            }
+            _derivedStorage = *storageResult;
 
-        uint32_t totalSize = primSize + tileSize + glyphSize;
+            uint8_t* base = _derivedStorage.data;
+            uint32_t offset = 0;
 
-        if (totalSize == 0) {
-            return;
+            // Set up tile list pointer directly into buffer
+            _tileLists = reinterpret_cast<uint32_t*>(base + offset);
+            _tileListsSize = tileTotalU32;
+            _tileListOffset = (_derivedStorage.offset + offset) / sizeof(float);
+            offset += tileBytes;
+
+            // Build tile lists directly into buffer
+            if (_primCount > 0 && !_useComputeShader) {
+                buildTileLists();
+            }
+
+            // Glyphs (small data)
+            _glyphOffset = (_derivedStorage.offset + offset) / sizeof(float);
+            if (!_glyphs.empty()) {
+                std::memcpy(base + offset, _glyphs.data(), glyphBytes);
+            }
+
+            _cardMgr->markStorageDirty(_derivedStorage);
         }
 
-        // Deallocate old storage
-        if (_storageHandle.isValid()) {
-            _cardMgr->deallocateStorage(_storageHandle);
-            _storageHandle = StorageHandle::invalid();
-        }
+        // Primitives are already in _primStorage
+        _primitiveOffset = _primStorage.isValid() ? _primStorage.offset / sizeof(float) : 0;
 
-        // Allocate new storage
-        auto storageResult = _cardMgr->allocateStorage(totalSize);
-        if (!storageResult) {
-            yerror("KDraw::rebuildAndUpload: failed to allocate {} bytes", totalSize);
-            return;
-        }
-        _storageHandle = *storageResult;
-
-        yinfo("KDraw::rebuildAndUpload: allocated {} bytes at offset {} (prims={} tiles={} glyphs={})",
-              totalSize, _storageHandle.offset, _primitives.size(), _tileLists.size(), _glyphs.size());
-
-        // Upload data
-        uint32_t offset = 0;
-
-        // Primitives
-        _primitiveOffset = _storageHandle.offset / sizeof(float);
-        if (!_primitives.empty()) {
-            _cardMgr->writeStorage(_storageHandle, _primitives.data(), primSize);
-        }
-        offset += primSize;
-
-        // Tile lists
-        _tileListOffset = (_storageHandle.offset + offset) / sizeof(float);
-        if (!_tileLists.empty()) {
-            StorageHandle tileHandle = _storageHandle;
-            tileHandle.offset += offset;
-            _cardMgr->writeStorage(tileHandle, _tileLists.data(), tileSize);
-        }
-        offset += tileSize;
-
-        // Glyphs
-        _glyphOffset = (_storageHandle.offset + offset) / sizeof(float);
-        if (!_glyphs.empty()) {
-            StorageHandle glyphHandle = _storageHandle;
-            glyphHandle.offset += offset;
-            _cardMgr->writeStorage(glyphHandle, _glyphs.data(), glyphSize);
+        if (_primStorage.isValid()) {
+            _cardMgr->markStorageDirty(_primStorage);
         }
 
         _metadataDirty = true;
+
+        yinfo("KDraw::rebuildAndUpload: {} prims, {}x{} tiles, {} glyphs, derived {} bytes",
+              _primCount, _tileCountX, _tileCountY, _glyphs.size(), derivedTotalSize);
+
+        return Ok();
     }
 
     Result<void> uploadMetadata() {
@@ -1563,7 +1602,7 @@ private:
 
         Metadata meta = {};
         meta.primitiveOffset = _primitiveOffset;
-        meta.primitiveCount = static_cast<uint32_t>(_primitives.size());
+        meta.primitiveCount = _primCount;
         meta.tileListOffset = _tileListOffset;
         meta.tileCountX = _tileCountX;
         meta.tileCountY = _tileCountY;
@@ -1626,14 +1665,21 @@ private:
         float sceneMaxY;
     };
 
-    // Primitive data
-    std::vector<SDFPrimitive> _primitives;
+    // Primitive data - direct buffer storage
+    SDFPrimitive* _primitives = nullptr;
+    uint32_t _primCount = 0;
+    uint32_t _primCapacity = 0;
+    StorageHandle _primStorage = StorageHandle::invalid();
 
-    // Text glyphs
+    // Tile lists + glyphs - built directly in derived storage
+    uint32_t* _tileLists = nullptr;
+    uint32_t _tileListsSize = 0;  // total uint32_t elements
+    StorageHandle _derivedStorage = StorageHandle::invalid();
+
+    // Glyphs (small, vector OK)
     std::vector<KDrawGlyph> _glyphs;
 
-    // Tile lists (CPU-built fallback)
-    std::vector<uint32_t> _tileLists;
+    // Tile dimensions
     uint32_t _tileCountX = 0;
     uint32_t _tileCountY = 0;
 
@@ -1651,7 +1697,7 @@ private:
     uint32_t _bgColor = 0xFF2E1A1A;
     uint32_t _flags = 0;
 
-    StorageHandle _storageHandle = StorageHandle::invalid();
+    // (storage handles are _primStorage and _derivedStorage above)
     bool _dirty = true;
     bool _metadataDirty = true;
 

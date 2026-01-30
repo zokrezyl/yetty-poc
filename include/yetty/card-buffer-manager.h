@@ -26,7 +26,7 @@ struct StorageHandle {
     uint32_t offset;    // Byte offset (for metadata references)
     uint32_t size;      // Allocation size in bytes
 
-    bool isValid() const { return data != nullptr && size > 0; }
+    bool isValid() const { return size > 0; }
     static StorageHandle invalid() { return {nullptr, 0, 0}; }
 };
 
@@ -75,6 +75,9 @@ public:
     virtual Result<StorageHandle> allocateStorageAndLink(MetadataHandle metaHandle,
                                                           uint32_t metaFieldOffset,
                                                           uint32_t storageSize) = 0;
+
+    // Mark storage region as dirty (after direct writes to handle.data)
+    virtual void markStorageDirty(StorageHandle handle) = 0;
 
     // Texture data operations (for scaled RGBA8 pixel data)
     // Cards allocate space, write directly to handle.data, then call markTextureDataDirty

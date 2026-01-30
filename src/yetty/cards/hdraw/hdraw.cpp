@@ -241,10 +241,12 @@ public:
         }
 
         // Build grid and upload primitives/glyphs to GPU storage
-        if (!_primitives.empty() || !_glyphs.empty()) {
+        if (_primCount > 0 || !_glyphs.empty()) {
             yinfo("HDraw::init: calling rebuildAndUpload for {} primitives, {} glyphs",
-                  _primitives.size(), _glyphs.size());
-            rebuildAndUpload();
+                  _primCount, _glyphs.size());
+            if (auto res = rebuildAndUpload(); !res) {
+                return Err<void>("HDraw::init: rebuildAndUpload failed", res);
+            }
             _dirty = false;
         }
 
@@ -258,13 +260,29 @@ public:
     }
 
     Result<void> dispose() override {
-        if (_storageHandle.isValid() && _cardMgr) {
-            _cardMgr->deallocateStorage(_storageHandle);
-            _storageHandle = StorageHandle::invalid();
+        if (_derivedStorage.isValid() && _cardMgr) {
+            if (auto res = _cardMgr->deallocateStorage(_derivedStorage); !res) {
+                yerror("HDraw::dispose: deallocateStorage (derived) failed: {}", error_msg(res));
+            }
+            _derivedStorage = StorageHandle::invalid();
+            _grid = nullptr;
+            _gridSize = 0;
+        }
+
+        if (_primStorage.isValid() && _cardMgr) {
+            if (auto res = _cardMgr->deallocateStorage(_primStorage); !res) {
+                yerror("HDraw::dispose: deallocateStorage (prims) failed: {}", error_msg(res));
+            }
+            _primStorage = StorageHandle::invalid();
+            _primitives = nullptr;
+            _primCount = 0;
+            _primCapacity = 0;
         }
 
         if (_metaHandle.isValid() && _cardMgr) {
-            _cardMgr->deallocateMetadata(_metaHandle);
+            if (auto res = _cardMgr->deallocateMetadata(_metaHandle); !res) {
+                yerror("HDraw::dispose: deallocateMetadata failed: {}", error_msg(res));
+            }
             _metaHandle = MetadataHandle::invalid();
         }
 
@@ -275,7 +293,9 @@ public:
         (void)time;
 
         if (_dirty) {
-            rebuildAndUpload();
+            if (auto res = rebuildAndUpload(); !res) {
+                return Err<void>("HDraw::update: rebuildAndUpload failed", res);
+            }
             _dirty = false;
         }
 
@@ -294,14 +314,16 @@ public:
     //=========================================================================
 
     uint32_t addPrimitive(const SDFPrimitive& prim) override {
-        uint32_t idx = static_cast<uint32_t>(_primitives.size());
-        _primitives.push_back(prim);
-
-        // Compute AABB if not set
-        if (_primitives.back().aabbMinX == 0 && _primitives.back().aabbMaxX == 0) {
-            computeAABB_hdraw(_primitives.back());
+        if (auto res = ensurePrimCapacity(_primCount + 1); !res) {
+            yerror("HDraw::addPrimitive: failed to grow storage");
+            return 0;
         }
-
+        uint32_t idx = _primCount++;
+        _primitives[idx] = prim;
+        if (_primitives[idx].aabbMinX == 0 && _primitives[idx].aabbMaxX == 0) {
+            computeAABB_hdraw(_primitives[idx]);
+        }
+        _cardMgr->markStorageDirty(_primStorage);
         _dirty = true;
         return idx;
     }
@@ -454,14 +476,14 @@ public:
     }
 
     void clear() override {
-        _primitives.clear();
+        _primCount = 0;
+        _gridSize = 0;
         _glyphs.clear();
-        _grid.clear();
         _dirty = true;
     }
 
     uint32_t primitiveCount() const override {
-        return static_cast<uint32_t>(_primitives.size());
+        return _primCount;
     }
 
     uint32_t glyphCount() const override {
@@ -498,6 +520,31 @@ public:
     float cellSize() const override { return _cellSize; }
 
 private:
+    Result<void> ensurePrimCapacity(uint32_t required) {
+        if (_primStorage.isValid() && required <= _primCapacity) {
+            return Ok();
+        }
+        uint32_t newCap = std::max(required, _primCapacity == 0 ? 64u : _primCapacity * 2);
+        uint32_t newSize = newCap * sizeof(SDFPrimitive);
+
+        auto newStorage = _cardMgr->allocateStorage(newSize);
+        if (!newStorage) {
+            return Err<void>("HDraw: failed to allocate prim storage");
+        }
+
+        if (_primCount > 0 && _primStorage.isValid()) {
+            std::memcpy(newStorage->data, _primStorage.data, _primCount * sizeof(SDFPrimitive));
+        }
+        if (_primStorage.isValid()) {
+            _cardMgr->deallocateStorage(_primStorage);
+        }
+
+        _primStorage = *newStorage;
+        _primitives = reinterpret_cast<SDFPrimitive*>(_primStorage.data);
+        _primCapacity = newCap;
+        return Ok();
+    }
+
     void parseArgs(const std::string& args) {
         yinfo("HDraw::parseArgs: args='{}'", args);
 
@@ -605,17 +652,17 @@ private:
         }
 
         const uint8_t* primData = data + HEADER_SIZE;
-        _primitives.clear();
-        _primitives.reserve(primCount);
 
-        for (uint32_t i = 0; i < primCount; i++) {
-            SDFPrimitive prim;
-            std::memcpy(&prim, primData + i * PRIM_SIZE, PRIM_SIZE);
-            _primitives.push_back(prim);
+        // Allocate buffer and copy directly from payload
+        if (auto res = ensurePrimCapacity(primCount); !res) {
+            return Err<void>("HDraw::parseBinary: failed to allocate prim storage");
         }
+        _primCount = primCount;
+        std::memcpy(_primitives, primData, primCount * PRIM_SIZE);
+        _cardMgr->markStorageDirty(_primStorage);
 
         _dirty = true;
-        yinfo("HDraw::parseBinary: loaded {} primitives", _primitives.size());
+        yinfo("HDraw::parseBinary: loaded {} primitives", _primCount);
 
         return Ok();
     }
@@ -697,7 +744,7 @@ private:
 
             _dirty = true;
             yinfo("HDraw::parseYAML: loaded {} primitives, {} glyphs",
-                  _primitives.size(), _glyphs.size());
+                  _primCount, _glyphs.size());
 
             return Ok();
 
@@ -707,7 +754,7 @@ private:
     }
 
     void parseYAMLPrimitive(const YAML::Node& item) {
-        uint32_t layer = static_cast<uint32_t>(_primitives.size() + _glyphs.size());
+        uint32_t layer = static_cast<uint32_t>(_primCount + _glyphs.size());
 
         // Text
         if (item["text"]) {
@@ -828,7 +875,7 @@ private:
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
             computeAABB_hdraw(prim);
-            _primitives.push_back(prim);
+            addPrimitive(prim);
             return;
         }
 
@@ -886,7 +933,7 @@ private:
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
             computeAABB_hdraw(prim);
-            _primitives.push_back(prim);
+            addPrimitive(prim);
             return;
         }
 
@@ -920,7 +967,7 @@ private:
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
             computeAABB_hdraw(prim);
-            _primitives.push_back(prim);
+            addPrimitive(prim);
             return;
         }
 
@@ -949,7 +996,7 @@ private:
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
             computeAABB_hdraw(prim);
-            _primitives.push_back(prim);
+            addPrimitive(prim);
             return;
         }
 
@@ -978,7 +1025,7 @@ private:
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
             computeAABB_hdraw(prim);
-            _primitives.push_back(prim);
+            addPrimitive(prim);
             return;
         }
 
@@ -1010,7 +1057,7 @@ private:
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
             computeAABB_hdraw(prim);
-            _primitives.push_back(prim);
+            addPrimitive(prim);
             return;
         }
 
@@ -1043,7 +1090,7 @@ private:
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
             computeAABB_hdraw(prim);
-            _primitives.push_back(prim);
+            addPrimitive(prim);
             return;
         }
 
@@ -1077,7 +1124,7 @@ private:
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
             computeAABB_hdraw(prim);
-            _primitives.push_back(prim);
+            addPrimitive(prim);
             return;
         }
 
@@ -1106,7 +1153,7 @@ private:
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
             computeAABB_hdraw(prim);
-            _primitives.push_back(prim);
+            addPrimitive(prim);
             return;
         }
 
@@ -1139,7 +1186,7 @@ private:
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
             computeAABB_hdraw(prim);
-            _primitives.push_back(prim);
+            addPrimitive(prim);
             return;
         }
 
@@ -1169,7 +1216,7 @@ private:
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
             computeAABB_hdraw(prim);
-            _primitives.push_back(prim);
+            addPrimitive(prim);
             return;
         }
 
@@ -1203,7 +1250,7 @@ private:
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
             computeAABB_hdraw(prim);
-            _primitives.push_back(prim);
+            addPrimitive(prim);
             return;
         }
 
@@ -1235,7 +1282,7 @@ private:
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
             computeAABB_hdraw(prim);
-            _primitives.push_back(prim);
+            addPrimitive(prim);
             return;
         }
 
@@ -1266,7 +1313,7 @@ private:
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
             computeAABB_hdraw(prim);
-            _primitives.push_back(prim);
+            addPrimitive(prim);
             return;
         }
 
@@ -1296,7 +1343,7 @@ private:
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
             computeAABB_hdraw(prim);
-            _primitives.push_back(prim);
+            addPrimitive(prim);
             return;
         }
     }
@@ -1310,11 +1357,11 @@ private:
         _sceneMaxY = -1e10f;
 
         // Include primitive bounds
-        for (const auto& prim : _primitives) {
-            _sceneMinX = std::min(_sceneMinX, prim.aabbMinX);
-            _sceneMinY = std::min(_sceneMinY, prim.aabbMinY);
-            _sceneMaxX = std::max(_sceneMaxX, prim.aabbMaxX);
-            _sceneMaxY = std::max(_sceneMaxY, prim.aabbMaxY);
+        for (uint32_t i = 0; i < _primCount; i++) {
+            _sceneMinX = std::min(_sceneMinX, _primitives[i].aabbMinX);
+            _sceneMinY = std::min(_sceneMinY, _primitives[i].aabbMinY);
+            _sceneMaxX = std::max(_sceneMaxX, _primitives[i].aabbMaxX);
+            _sceneMaxY = std::max(_sceneMaxY, _primitives[i].aabbMaxY);
         }
 
         // Include glyph bounds
@@ -1345,68 +1392,23 @@ private:
     }
 
     void buildGrid() {
-        _grid.clear();
+        // Grid buffer already allocated by rebuildAndUpload
+        // _grid, _gridSize, _gridWidth, _gridHeight, _cellSize are set
 
-        // Always compute scene bounds (includes both primitives and glyphs)
-        computeSceneBounds();
-
-        if (_primitives.empty()) {
-            _gridWidth = 0;
-            _gridHeight = 0;
+        if (_primCount == 0 || _gridSize == 0) {
             return;
         }
 
-        // Compute grid dimensions
-        float sceneWidth = _sceneMaxX - _sceneMinX;
-        float sceneHeight = _sceneMaxY - _sceneMinY;
-        float sceneArea = sceneWidth * sceneHeight;
-
-        // Auto-compute optimal cell size if not set
-        // Target: ~2-4 primitives per cell on average
-        // Cell size = sqrt(sceneArea / (numPrimitives * targetPrimsPerCell))
-        if (_cellSize <= 0.0f) {
-            float avgPrimArea = 0.0f;
-            for (const auto& prim : _primitives) {
-                float w = prim.aabbMaxX - prim.aabbMinX;
-                float h = prim.aabbMaxY - prim.aabbMinY;
-                avgPrimArea += w * h;
-            }
-            avgPrimArea /= _primitives.size();
-
-            // Cell should be ~1.5x the average primitive size for good coverage
-            _cellSize = std::sqrt(avgPrimArea) * 1.5f;
-
-            // Clamp to reasonable range
-            float minCellSize = std::sqrt(sceneArea / 65536.0f);  // Max 256x256 grid
-            float maxCellSize = std::sqrt(sceneArea / 16.0f);     // Min 4x4 grid
-            _cellSize = std::clamp(_cellSize, minCellSize, maxCellSize);
-        }
-
-        _gridWidth = std::max(1u, static_cast<uint32_t>(std::ceil(sceneWidth / _cellSize)));
-        _gridHeight = std::max(1u, static_cast<uint32_t>(std::ceil(sceneHeight / _cellSize)));
-
-        // Limit grid size to avoid excessive memory
-        const uint32_t MAX_GRID_DIM = 512;
-        if (_gridWidth > MAX_GRID_DIM) {
-            _gridWidth = MAX_GRID_DIM;
-            _cellSize = sceneWidth / _gridWidth;
-        }
-        if (_gridHeight > MAX_GRID_DIM) {
-            _gridHeight = MAX_GRID_DIM;
-            _cellSize = std::max(_cellSize, sceneHeight / _gridHeight);
-        }
-
         uint32_t totalCells = _gridWidth * _gridHeight;
-        uint32_t cellStride = 1 + _maxPrimsPerCell;  // [count][idx0][idx1]...
+        uint32_t cellStride = 1 + _maxPrimsPerCell;
 
-        // Initialize grid with zeros
-        _grid.resize(totalCells * cellStride, 0);
+        // Zero the grid
+        std::memset(_grid, 0, _gridSize * sizeof(uint32_t));
 
         // Assign each primitive to cells it overlaps
-        for (uint32_t primIdx = 0; primIdx < _primitives.size(); primIdx++) {
+        for (uint32_t primIdx = 0; primIdx < _primCount; primIdx++) {
             const auto& prim = _primitives[primIdx];
 
-            // Find cell range that overlaps this primitive's AABB
             uint32_t cellMinX = static_cast<uint32_t>(
                 std::clamp((prim.aabbMinX - _sceneMinX) / _cellSize, 0.0f, float(_gridWidth - 1)));
             uint32_t cellMaxX = static_cast<uint32_t>(
@@ -1416,16 +1418,11 @@ private:
             uint32_t cellMaxY = static_cast<uint32_t>(
                 std::clamp((prim.aabbMaxY - _sceneMinY) / _cellSize, 0.0f, float(_gridHeight - 1)));
 
-            // Add primitive to each overlapping cell
             for (uint32_t cy = cellMinY; cy <= cellMaxY; cy++) {
                 for (uint32_t cx = cellMinX; cx <= cellMaxX; cx++) {
                     uint32_t cellIndex = cy * _gridWidth + cx;
                     uint32_t cellOffset = cellIndex * cellStride;
-
-                    // Read current count
                     uint32_t count = _grid[cellOffset];
-
-                    // Add if not full
                     if (count < _maxPrimsPerCell) {
                         _grid[cellOffset + 1 + count] = primIdx;
                         _grid[cellOffset] = count + 1;
@@ -1435,70 +1432,104 @@ private:
         }
 
         yinfo("HDraw::buildGrid: {} primitives -> {}x{} grid ({} cells), cellSize={}",
-              _primitives.size(), _gridWidth, _gridHeight, totalCells, _cellSize);
+              _primCount, _gridWidth, _gridHeight, totalCells, _cellSize);
     }
 
-    void rebuildAndUpload() {
-        // Build spatial hash grid
-        buildGrid();
+    Result<void> rebuildAndUpload() {
+        // Compute scene bounds from primitives already in buffer
+        computeSceneBounds();
 
-        // Calculate storage requirements
-        // Layout: [primitives][grid][glyphs]
-        uint32_t primSize = static_cast<uint32_t>(_primitives.size() * sizeof(SDFPrimitive));
-        uint32_t gridSize = static_cast<uint32_t>(_grid.size() * sizeof(uint32_t));
-        uint32_t glyphSize = static_cast<uint32_t>(_glyphs.size() * sizeof(HDrawGlyph));
+        // Pre-calculate grid dimensions to know derived storage size
+        float sceneWidth = _sceneMaxX - _sceneMinX;
+        float sceneHeight = _sceneMaxY - _sceneMinY;
 
-        uint32_t totalSize = primSize + gridSize + glyphSize;
+        uint32_t gridW = 0, gridH = 0;
+        float cellSize = _cellSize;
 
-        if (totalSize == 0) {
-            return;
+        if (_primCount > 0) {
+            float sceneArea = sceneWidth * sceneHeight;
+            if (cellSize <= 0.0f) {
+                float avgPrimArea = 0.0f;
+                for (uint32_t i = 0; i < _primCount; i++) {
+                    float w = _primitives[i].aabbMaxX - _primitives[i].aabbMinX;
+                    float h = _primitives[i].aabbMaxY - _primitives[i].aabbMinY;
+                    avgPrimArea += w * h;
+                }
+                avgPrimArea /= _primCount;
+                cellSize = std::sqrt(avgPrimArea) * 1.5f;
+                float minCellSize = std::sqrt(sceneArea / 65536.0f);
+                float maxCellSize = std::sqrt(sceneArea / 16.0f);
+                cellSize = std::clamp(cellSize, minCellSize, maxCellSize);
+            }
+            gridW = std::max(1u, static_cast<uint32_t>(std::ceil(sceneWidth / cellSize)));
+            gridH = std::max(1u, static_cast<uint32_t>(std::ceil(sceneHeight / cellSize)));
+            const uint32_t MAX_GRID_DIM = 512;
+            if (gridW > MAX_GRID_DIM) { gridW = MAX_GRID_DIM; cellSize = sceneWidth / gridW; }
+            if (gridH > MAX_GRID_DIM) { gridH = MAX_GRID_DIM; cellSize = std::max(cellSize, sceneHeight / gridH); }
         }
 
-        // Deallocate old storage
-        if (_storageHandle.isValid()) {
-            _cardMgr->deallocateStorage(_storageHandle);
-            _storageHandle = StorageHandle::invalid();
+        uint32_t cellStride = 1 + _maxPrimsPerCell;
+        uint32_t gridTotalU32 = gridW * gridH * cellStride;
+        uint32_t gridBytes = gridTotalU32 * sizeof(uint32_t);
+        uint32_t glyphBytes = static_cast<uint32_t>(_glyphs.size() * sizeof(HDrawGlyph));
+        uint32_t derivedTotalSize = gridBytes + glyphBytes;
+
+        // Deallocate old derived storage
+        if (_derivedStorage.isValid()) {
+            if (auto res = _cardMgr->deallocateStorage(_derivedStorage); !res) {
+                return Err<void>("HDraw::rebuildAndUpload: deallocateStorage failed");
+            }
+            _derivedStorage = StorageHandle::invalid();
+            _grid = nullptr;
+            _gridSize = 0;
         }
 
-        // Allocate new storage
-        auto storageResult = _cardMgr->allocateStorage(totalSize);
-        if (!storageResult) {
-            yerror("HDraw::rebuildAndUpload: failed to allocate {} bytes", totalSize);
-            return;
+        if (derivedTotalSize > 0) {
+            auto storageResult = _cardMgr->allocateStorage(derivedTotalSize);
+            if (!storageResult) {
+                return Err<void>("HDraw::rebuildAndUpload: failed to allocate derived storage");
+            }
+            _derivedStorage = *storageResult;
+
+            uint8_t* base = _derivedStorage.data;
+            uint32_t offset = 0;
+
+            // Set up grid pointer directly into buffer
+            _grid = reinterpret_cast<uint32_t*>(base + offset);
+            _gridSize = gridTotalU32;
+            _gridWidth = gridW;
+            _gridHeight = gridH;
+            _cellSize = cellSize;
+            _gridOffset = (_derivedStorage.offset + offset) / sizeof(float);
+            offset += gridBytes;
+
+            // Build grid directly into buffer
+            if (_primCount > 0) {
+                buildGrid();
+            }
+
+            // Glyphs (small data)
+            _glyphOffset = (_derivedStorage.offset + offset) / sizeof(float);
+            if (!_glyphs.empty()) {
+                std::memcpy(base + offset, _glyphs.data(), glyphBytes);
+            }
+
+            _cardMgr->markStorageDirty(_derivedStorage);
         }
-        _storageHandle = *storageResult;
 
-        yinfo("HDraw::rebuildAndUpload: allocated {} bytes at offset {} (prims={} grid={} glyphs={})",
-              totalSize, _storageHandle.offset, _primitives.size(), _grid.size(), _glyphs.size());
+        // Primitives are already in _primStorage
+        _primitiveOffset = _primStorage.isValid() ? _primStorage.offset / sizeof(float) : 0;
 
-        // Upload data
-        uint32_t offset = 0;
-
-        // Primitives
-        _primitiveOffset = _storageHandle.offset / sizeof(float);
-        if (!_primitives.empty()) {
-            _cardMgr->writeStorage(_storageHandle, _primitives.data(), primSize);
-        }
-        offset += primSize;
-
-        // Grid
-        _gridOffset = (_storageHandle.offset + offset) / sizeof(float);
-        if (!_grid.empty()) {
-            StorageHandle gridHandle = _storageHandle;
-            gridHandle.offset += offset;
-            _cardMgr->writeStorage(gridHandle, _grid.data(), gridSize);
-        }
-        offset += gridSize;
-
-        // Glyphs
-        _glyphOffset = (_storageHandle.offset + offset) / sizeof(float);
-        if (!_glyphs.empty()) {
-            StorageHandle glyphHandle = _storageHandle;
-            glyphHandle.offset += offset;
-            _cardMgr->writeStorage(glyphHandle, _glyphs.data(), glyphSize);
+        if (_primStorage.isValid()) {
+            _cardMgr->markStorageDirty(_primStorage);
         }
 
         _metadataDirty = true;
+
+        yinfo("HDraw::rebuildAndUpload: {} prims, {}x{} grid, {} glyphs, derived {} bytes",
+              _primCount, _gridWidth, _gridHeight, _glyphs.size(), derivedTotalSize);
+
+        return Ok();
     }
 
     Result<void> uploadMetadata() {
@@ -1508,7 +1539,7 @@ private:
 
         Metadata meta = {};
         meta.primitiveOffset = _primitiveOffset;
-        meta.primitiveCount = static_cast<uint32_t>(_primitives.size());
+        meta.primitiveCount = _primCount;
         meta.gridOffset = _gridOffset;
         meta.gridWidth = _gridWidth;
         meta.gridHeight = _gridHeight;
@@ -1558,15 +1589,20 @@ private:
     };
     static_assert(sizeof(Metadata) == 64, "Metadata must be 64 bytes");
 
-    // Primitive data
-    std::vector<SDFPrimitive> _primitives;
+    // Primitive data - direct buffer storage
+    SDFPrimitive* _primitives = nullptr;
+    uint32_t _primCount = 0;
+    uint32_t _primCapacity = 0;
+    StorageHandle _primStorage = StorageHandle::invalid();
 
-    // Text glyphs
+    // Grid + glyphs - built directly in derived storage
+    uint32_t* _grid = nullptr;
+    uint32_t _gridSize = 0;  // total uint32_t elements
+    StorageHandle _derivedStorage = StorageHandle::invalid();
+
+    // Glyphs (small, vector OK)
     std::vector<HDrawGlyph> _glyphs;
 
-    // Spatial hash grid
-    // Layout: for each cell [primCount][primIdx0][primIdx1]...[primIdxN]
-    std::vector<uint32_t> _grid;
     uint32_t _gridWidth = 0;
     uint32_t _gridHeight = 0;
 
@@ -1588,7 +1624,6 @@ private:
     uint32_t _bgColor = 0xFF2E1A1A;
     uint32_t _flags = 0;
 
-    StorageHandle _storageHandle = StorageHandle::invalid();
     bool _dirty = true;
     bool _metadataDirty = true;
 
