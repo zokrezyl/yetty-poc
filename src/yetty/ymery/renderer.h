@@ -1,9 +1,9 @@
 #pragma once
 
-#include "types.hpp"
-#include "data-bag.hpp"
-#include "dispatcher.hpp"
-#include "lang.hpp"
+#include "types.h"
+#include "data-bag.h"
+#include "dispatcher.h"
+#include "lang.h"
 #include <memory>
 #include <vector>
 #include <string>

@@ -1,4 +1,4 @@
-#include "lang.hpp"
+#include "lang.h"
 #include <fstream>
 #include <queue>
 #include <algorithm>

@@ -1,5 +1,5 @@
-#include "renderer.hpp"
-#include "simple-data-tree.hpp"
+#include "renderer.h"
+#include "simple-data-tree.h"
 #include <imgui.h>
 #include <ytrace/ytrace.hpp>
 

@@ -1,7 +1,7 @@
 #include <yetty/imgui-manager.h>
 #include <yetty/yetty-context.h>
 #include <yetty/base/event-loop.h>
-#include "ymery/renderer.hpp"
+#include "ymery/renderer.h"
 #include <ytrace/ytrace.hpp>
 
 #include <imgui.h>

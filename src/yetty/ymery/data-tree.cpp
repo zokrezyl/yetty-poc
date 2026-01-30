@@ -1,7 +1,7 @@
 // data-tree - tree with explicit children/metadata structure
 // Each node has { "children": {...}, "metadata": {...} } format
 // Uses native C++ structures internally (not YAML::Node) to avoid yaml-cpp mutation bugs
-#include "data-tree.hpp"
+#include "data-tree.h"
 #include <ytrace/ytrace.hpp>
 #include <sstream>
 

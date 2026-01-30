@@ -1,10 +1,10 @@
 #include "ymery.h"
 #include <yetty/yetty-context.h>
 #include <yetty/base/event-loop.h>
-#include "../../ymery/lang.hpp"
-#include "../../ymery/renderer.hpp"
-#include "../../ymery/dispatcher.hpp"
-#include "../../ymery/simple-data-tree.hpp"
+#include "../../ymery/lang.h"
+#include "../../ymery/renderer.h"
+#include "../../ymery/dispatcher.h"
+#include "../../ymery/simple-data-tree.h"
 #include <ytrace/ytrace.hpp>
 
 #include <imgui.h>
