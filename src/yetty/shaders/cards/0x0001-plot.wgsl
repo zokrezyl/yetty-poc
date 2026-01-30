@@ -34,18 +34,21 @@
 //
 // =============================================================================
 //
-// Metadata layout (48 bytes, fits in 64-byte slot):
-//   offset 0:  plotType (u32)   - 0=line, 1=bar, 2=scatter, 3=area
-//   offset 4:  dataOffset (u32) - float index into cardStorage (NOT byte offset!)
-//   offset 8:  dataCount (u32)  - number of data points
-//   offset 12: minValue (f32)   - data minimum for Y axis
-//   offset 16: maxValue (f32)   - data maximum for Y axis
-//   offset 20: lineColor (u32)  - packed RGBA for line/points
-//   offset 24: fillColor (u32)  - packed RGBA for fill/bars
-//   offset 28: flags (u32)      - bit 0: show grid, bit 1: show axes
-//   offset 32: widthCells (u32) - widget width in cells
-//   offset 36: heightCells (u32)- widget height in cells
-//   offset 40: bgColor (u32)    - packed RGBA for background
+// Metadata layout (64 bytes = 16 u32 slots):
+//   [0]  plotType(8) | flags(8) | pad(16)
+//   [1]  widthCells(16) | heightCells(16)
+//   [2]  dataOffset (u32) - float index into cardStorage
+//   [3]  dataCount (u32)
+//   [4]  minValue (f32)
+//   [5]  maxValue (f32)
+//   [6]  lineColor (u32 RGBA)
+//   [7]  fillColor (u32 RGBA)
+//   [8]  bgColor (u32 RGBA)
+//   [9]  zoom (f32)
+//   [10] centerX (f32)
+//   [11] centerY (f32)
+//   [12] glyphBase0(8) | glyphDot(8) | glyphMinus(8) | pad(8)
+//   [13-15] reserved
 
 const PLOT_TYPE_LINE: u32 = 0u;
 const PLOT_TYPE_BAR: u32 = 1u;
@@ -71,21 +74,27 @@ fn shaderGlyph_1048577(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
     let relCol = bg24 & 0xFFFu;      // Bits 0-11: column (0-4095)
     let relRow = (bg24 >> 12u) & 0xFFFu;  // Bits 12-23: row (0-4095)
 
-    // Read metadata from cardMetadata buffer
-    let plotType = cardMetadata[metaOffset + 0u];
-    let dataOffset = cardMetadata[metaOffset + 1u];
-    let dataCount = cardMetadata[metaOffset + 2u];
-    let minValue = bitcast<f32>(cardMetadata[metaOffset + 3u]);
-    let maxValue = bitcast<f32>(cardMetadata[metaOffset + 4u]);
-    let lineColorPacked = cardMetadata[metaOffset + 5u];
-    let fillColorPacked = cardMetadata[metaOffset + 6u];
-    let flags = cardMetadata[metaOffset + 7u];
-    let widthCells = cardMetadata[metaOffset + 8u];
-    let heightCells = cardMetadata[metaOffset + 9u];
-    let bgColorPacked = cardMetadata[metaOffset + 10u];
-    let zoomRaw = bitcast<f32>(cardMetadata[metaOffset + 11u]);
-    let centerXRaw = bitcast<f32>(cardMetadata[metaOffset + 12u]);
-    let centerYRaw = bitcast<f32>(cardMetadata[metaOffset + 13u]);
+    // Read metadata from cardMetadata buffer (new packed layout)
+    let slot0 = cardMetadata[metaOffset + 0u];
+    let plotType = slot0 & 0xFFu;
+    let flags = (slot0 >> 8u) & 0xFFu;
+    let slot1 = cardMetadata[metaOffset + 1u];
+    let widthCells = slot1 & 0xFFFFu;
+    let heightCells = (slot1 >> 16u) & 0xFFFFu;
+    let dataOffset = cardMetadata[metaOffset + 2u];
+    let dataCount = cardMetadata[metaOffset + 3u];
+    let minValue = bitcast<f32>(cardMetadata[metaOffset + 4u]);
+    let maxValue = bitcast<f32>(cardMetadata[metaOffset + 5u]);
+    let lineColorPacked = cardMetadata[metaOffset + 6u];
+    let fillColorPacked = cardMetadata[metaOffset + 7u];
+    let bgColorPacked = cardMetadata[metaOffset + 8u];
+    let zoomRaw = bitcast<f32>(cardMetadata[metaOffset + 9u]);
+    let centerXRaw = bitcast<f32>(cardMetadata[metaOffset + 10u]);
+    let centerYRaw = bitcast<f32>(cardMetadata[metaOffset + 11u]);
+    let glyphSlot = cardMetadata[metaOffset + 12u];
+    let glyphBase0 = glyphSlot & 0xFFu;
+    let glyphDot = (glyphSlot >> 8u) & 0xFFu;
+    let glyphMinus = (glyphSlot >> 16u) & 0xFFu;
 
     // Handle legacy (zero = no zoom metadata)
     let effectiveZoom = select(zoomRaw, 1.0, zoomRaw <= 0.0);
@@ -108,70 +117,239 @@ fn shaderGlyph_1048577(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
     var color = bgColor;
     let padding = 0.05;  // 5% padding on each side
     let plotArea = vec4<f32>(padding, padding, 1.0 - padding, 1.0 - padding);
+    let plotWidth = plotArea.z - plotArea.x;
+    let plotHeight = plotArea.w - plotArea.y;
 
-    // Check if we're inside the plot area
-    if (widgetUV.x < plotArea.x || widgetUV.x > plotArea.z ||
-        widgetUV.y < plotArea.y || widgetUV.y > plotArea.w) {
-        return color;
-    }
-
-    // Normalize UV within plot area
+    // Normalize UV within plot area (can be outside 0-1 in padding region)
     let plotUV = vec2<f32>(
-        (widgetUV.x - plotArea.x) / (plotArea.z - plotArea.x),
-        (widgetUV.y - plotArea.y) / (plotArea.w - plotArea.y)
+        (widgetUV.x - plotArea.x) / plotWidth,
+        (widgetUV.y - plotArea.y) / plotHeight
     );
 
     // Apply zoom/pan: transform plotUV through viewport
     let zoomedUV = (plotUV - vec2(0.5)) / effectiveZoom + vec2(effectiveCenterX, effectiveCenterY);
 
+    // =========================================================================
+    // Grid spacing in DATA VALUE space so labels show nice numbers
+    // =========================================================================
+    let valueRange = maxValue - minValue;
+    let safeValueRange = select(valueRange, 1.0, abs(valueRange) < 0.0001);
+
+    // Y axis: visible value range depends on zoom
+    let visibleValueRange = abs(safeValueRange) / effectiveZoom;
+    let rawYSpacing = visibleValueRange / 5.0;
+    let logYSp = log2(rawYSpacing) / 3.321928;
+    let magY = pow(10.0, floor(logYSp));
+    let resY = rawYSpacing / magY;
+    var ySpacing: f32;
+    if (resY < 1.5) { ySpacing = magY; }
+    else if (resY < 3.5) { ySpacing = 2.0 * magY; }
+    else if (resY < 7.5) { ySpacing = 5.0 * magY; }
+    else { ySpacing = 10.0 * magY; }
+
+    // X axis: visible normalized range
+    let visibleXRange = 1.0 / effectiveZoom;
+    let rawXSpacing = visibleXRange / 5.0;
+    let logXSp = log2(rawXSpacing) / 3.321928;
+    let magX = pow(10.0, floor(logXSp));
+    let resX = rawXSpacing / magX;
+    var xSpacing: f32;
+    if (resX < 1.5) { xSpacing = magX; }
+    else if (resX < 3.5) { xSpacing = 2.0 * magX; }
+    else if (resX < 7.5) { xSpacing = 5.0 * magX; }
+    else { xSpacing = 10.0 * magX; }
+
+    // Convert current position to data value for Y grid
+    // zoomedUV.y: 0=top(maxValue), 1=bottom(minValue)
+    // dataValue = maxValue - zoomedUV.y * valueRange  (i.e. plotY = 1-zoomedUV.y maps to normalized)
+    let currentYValue = maxValue - zoomedUV.y * safeValueRange;
+
     // Line thickness scales inversely with zoom so lines stay consistent on screen
-    let gridThickness = 0.003 / effectiveZoom;
-    let axisThickness = 0.005 / effectiveZoom;
+    let yGridThickValue = 0.003 * abs(safeValueRange) / effectiveZoom;
+    let xGridThickNorm = 0.003 / effectiveZoom;
+    let yAxisThickValue = 0.005 * abs(safeValueRange) / effectiveZoom;
+    let xAxisThickNorm = 0.005 / effectiveZoom;
 
-    // Draw infinite grid if enabled — spacing adapts to zoom, snapped to 1/2/5 intervals
-    // Grid is drawn before the data bounds check so it extends beyond [0,1] when zoomed out
-    if ((flags & PLOT_FLAG_GRID) != 0u) {
-        let gridColorDark = mix(bgColor, lineColor, 0.15);
+    // Snap Y to nearest nice VALUE
+    let snapYValue = round(currentYValue / ySpacing) * ySpacing;
+    // Snap X in normalized space
+    let snapXNorm = round(zoomedUV.x / xSpacing) * xSpacing;
 
-        // Compute nice grid spacing: aim for ~4-6 visible lines per axis
-        let visibleRange = 1.0 / effectiveZoom;
-        let rawSpacing = visibleRange / 5.0;
-        let logSp = log2(rawSpacing) / 3.321928;  // log10
-        let mag = pow(10.0, floor(logSp));
-        let residual = rawSpacing / mag;
-        var spacing: f32;
-        if (residual < 1.5) {
-            spacing = mag;
-        } else if (residual < 3.5) {
-            spacing = 2.0 * mag;
-        } else if (residual < 7.5) {
-            spacing = 5.0 * mag;
-        } else {
-            spacing = 10.0 * mag;
+    let insidePlot = widgetUV.x >= plotArea.x && widgetUV.x <= plotArea.z &&
+                     widgetUV.y >= plotArea.y && widgetUV.y <= plotArea.w;
+
+    // Draw grid and axes only inside plot area
+    if (insidePlot) {
+        if ((flags & PLOT_FLAG_GRID) != 0u) {
+            let gridColorDark = mix(bgColor, lineColor, 0.15);
+            // X grid lines (in normalized space)
+            if (abs(zoomedUV.x - snapXNorm) < xGridThickNorm) {
+                color = gridColorDark;
+            }
+            // Y grid lines (in value space)
+            if (abs(currentYValue - snapYValue) < yGridThickValue) {
+                color = gridColorDark;
+            }
         }
 
-        // Snap zoomedUV to nearest grid line and check distance
-        let snapX = round(zoomedUV.x / spacing) * spacing;
-        if (abs(zoomedUV.x - snapX) < gridThickness) {
-            color = gridColorDark;
-        }
-        let snapY = round(zoomedUV.y / spacing) * spacing;
-        if (abs(zoomedUV.y - snapY) < gridThickness) {
-            color = gridColorDark;
+        if ((flags & PLOT_FLAG_AXES) != 0u) {
+            let axisColor = mix(bgColor, lineColor, 0.5);
+            // Y axis (x=0 in normalized space)
+            if (abs(zoomedUV.x) < xAxisThickNorm) {
+                color = axisColor;
+            }
+            // X axis (value=0 line)
+            if (abs(currentYValue) < yAxisThickValue) {
+                color = axisColor;
+            }
         }
     }
 
-    // Draw axes if enabled (in data/zoomed space)
-    if ((flags & PLOT_FLAG_AXES) != 0u) {
-        let axisColor = mix(bgColor, lineColor, 0.5);
-        // Y axis (x=0 in data space, left edge)
-        if (abs(zoomedUV.x) < axisThickness) {
-            color = axisColor;
+    // =========================================================================
+    // Axis labels — rendered in padding area using MSDF glyphs
+    // =========================================================================
+    if (glyphBase0 > 0u) {
+        let labelColor = mix(bgColor, lineColor, 0.6);
+        let widgetPixelW = f32(widthCells) * grid.cellSize.x;
+        let widgetPixelH = f32(heightCells) * grid.cellSize.y;
+        let screenScale = widgetPixelW;
+
+        // Glyph size: one cell height in widget UV space
+        let glyphH = 1.0 / f32(heightCells);
+        let glyphW = glyphH * (grid.cellSize.x / grid.cellSize.y) * 0.6; // narrower than cell
+
+        // --- Y axis labels (left padding) ---
+        if (widgetUV.x < plotArea.x && widgetUV.y >= plotArea.y && widgetUV.y <= plotArea.w) {
+            // Convert snapped value back to widget Y
+            let snapNormY = (maxValue - snapYValue) / safeValueRange; // normalized 0-1
+            let snapPlotUVy = (snapNormY - effectiveCenterY) * effectiveZoom + 0.5;
+            let snapWidgetY = plotArea.y + snapPlotUVy * plotHeight;
+
+            let labelTop = snapWidgetY - glyphH * 0.5;
+            let labelBot = snapWidgetY + glyphH * 0.5;
+            if (widgetUV.y >= labelTop && widgetUV.y < labelBot) {
+                let dataVal = snapYValue;
+                let glyphUV_y = (widgetUV.y - labelTop) / glyphH;
+
+                var val = dataVal;
+                var hasSign = 0u;
+                if (val < 0.0) { hasSign = 1u; val = -val; }
+
+                // Decimal places based on value spacing
+                var decimals = 0u;
+                if (ySpacing < 0.01) { decimals = 3u; }
+                else if (ySpacing < 0.1) { decimals = 2u; }
+                else if (ySpacing < 1.0) { decimals = 1u; }
+
+                let intPart = u32(floor(val));
+                let fracPart = u32(round(fract(val) * pow(10.0, f32(decimals))));
+                var intDigits = 1u;
+                if (intPart >= 10u) { intDigits = 2u; }
+                if (intPart >= 100u) { intDigits = 3u; }
+                if (intPart >= 1000u) { intDigits = 4u; }
+                let totalChars = hasSign + intDigits + select(0u, 1u + decimals, decimals > 0u);
+
+                let labelRight = plotArea.x - 0.003;
+                let labelLeft = labelRight - f32(totalChars) * glyphW;
+
+                if (widgetUV.x >= labelLeft && widgetUV.x < labelRight) {
+                    let charIdx = u32(floor((widgetUV.x - labelLeft) / glyphW));
+                    let charLocalUV = vec2<f32>(
+                        fract((widgetUV.x - labelLeft) / glyphW),
+                        glyphUV_y
+                    );
+
+                    var glyphIdx = 0u;
+                    let digitStart = hasSign;
+                    if (hasSign > 0u && charIdx == 0u) {
+                        glyphIdx = glyphMinus;
+                    } else if (charIdx >= digitStart && charIdx < digitStart + intDigits) {
+                        let digitPos = charIdx - digitStart;
+                        let divisor = u32(round(pow(10.0, f32(intDigits - 1u - digitPos))));
+                        glyphIdx = glyphBase0 + (intPart / divisor) % 10u;
+                    } else if (decimals > 0u && charIdx == digitStart + intDigits) {
+                        glyphIdx = glyphDot;
+                    } else if (decimals > 0u && charIdx > digitStart + intDigits) {
+                        let decPos = charIdx - digitStart - intDigits - 1u;
+                        let divisor = u32(round(pow(10.0, f32(decimals - 1u - decPos))));
+                        glyphIdx = glyphBase0 + (fracPart / divisor) % 10u;
+                    }
+
+                    if (glyphIdx > 0u) {
+                        let r = renderMsdfGlyph(charLocalUV, glyphIdx, labelColor, color, grid.pixelRange, screenScale);
+                        if (r.alpha > 0.01) { color = r.color; }
+                    }
+                }
+            }
         }
-        // X axis (y=1 in data space, bottom edge)
-        if (abs(zoomedUV.y - 1.0) < axisThickness) {
-            color = axisColor;
+
+        // --- X axis labels (bottom padding) ---
+        if (widgetUV.y > plotArea.w && widgetUV.x >= plotArea.x && widgetUV.x <= plotArea.z) {
+            // X axis shows data index: snapXNorm * (dataCount-1)
+            let dataVal = snapXNorm * f32(dataCount - 1u);
+
+            // Convert snapped normalized X back to widget X
+            let snapPlotUVx = (snapXNorm - effectiveCenterX) * effectiveZoom + 0.5;
+            let snapWidgetX = plotArea.x + snapPlotUVx * plotWidth;
+
+            var val = dataVal;
+            var hasSign = 0u;
+            if (val < 0.0) { hasSign = 1u; val = -val; }
+
+            var decimals = 0u;
+            let xDataSpacing = xSpacing * f32(dataCount - 1u);
+            if (xDataSpacing < 0.01) { decimals = 3u; }
+            else if (xDataSpacing < 0.1) { decimals = 2u; }
+            else if (xDataSpacing < 1.0) { decimals = 1u; }
+
+            let intPart = u32(floor(val));
+            let fracPart = u32(round(fract(val) * pow(10.0, f32(decimals))));
+            var intDigits = 1u;
+            if (intPart >= 10u) { intDigits = 2u; }
+            if (intPart >= 100u) { intDigits = 3u; }
+            if (intPart >= 1000u) { intDigits = 4u; }
+            let totalChars = hasSign + intDigits + select(0u, 1u + decimals, decimals > 0u);
+
+            let labelLeft = snapWidgetX - f32(totalChars) * glyphW * 0.5;
+            let labelRight = labelLeft + f32(totalChars) * glyphW;
+            let labelTop = plotArea.w + 0.003;
+            let labelBot = labelTop + glyphH;
+
+            if (widgetUV.x >= labelLeft && widgetUV.x < labelRight &&
+                widgetUV.y >= labelTop && widgetUV.y < labelBot) {
+                let charIdx = u32(floor((widgetUV.x - labelLeft) / glyphW));
+                let charLocalUV = vec2<f32>(
+                    fract((widgetUV.x - labelLeft) / glyphW),
+                    (widgetUV.y - labelTop) / glyphH
+                );
+
+                var glyphIdx = 0u;
+                let digitStart = hasSign;
+                if (hasSign > 0u && charIdx == 0u) {
+                    glyphIdx = glyphMinus;
+                } else if (charIdx >= digitStart && charIdx < digitStart + intDigits) {
+                    let digitPos = charIdx - digitStart;
+                    let divisor = u32(round(pow(10.0, f32(intDigits - 1u - digitPos))));
+                    glyphIdx = glyphBase0 + (intPart / divisor) % 10u;
+                } else if (decimals > 0u && charIdx == digitStart + intDigits) {
+                    glyphIdx = glyphDot;
+                } else if (decimals > 0u && charIdx > digitStart + intDigits) {
+                    let decPos = charIdx - digitStart - intDigits - 1u;
+                    let divisor = u32(round(pow(10.0, f32(decimals - 1u - decPos))));
+                    glyphIdx = glyphBase0 + (fracPart / divisor) % 10u;
+                }
+
+                if (glyphIdx > 0u) {
+                    let r = renderMsdfGlyph(charLocalUV, glyphIdx, labelColor, color, grid.pixelRange, screenScale);
+                    if (r.alpha > 0.01) { color = r.color; }
+                }
+            }
         }
+    }
+
+    // If outside plot area (and not handled by labels above), return
+    if (!insidePlot) {
+        return color;
     }
 
     // If zoomed UV is outside [0,1] data range, skip data drawing (grid/axes already drawn)

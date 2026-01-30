@@ -552,8 +552,7 @@ private:
 //=============================================================================
 
 Result<CardPtr> Plot::create(
-    CardBufferManager::Ptr mgr,
-    const GPUContext& gpu,
+    const YettyContext& ctx,
     int32_t x, int32_t y,
     uint32_t widthCells, uint32_t heightCells,
     const std::string& args,
@@ -562,13 +561,13 @@ Result<CardPtr> Plot::create(
     yinfo("Plot::create: ENTERED pos=({},{}) size={}x{} args='{}' payload_len={}",
           x, y, widthCells, heightCells, args, payload.size());
 
-    if (!mgr) {
+    if (!ctx.cardBufferManager) {
         yerror("Plot::create: null CardBufferManager!");
         return Err<CardPtr>("Plot::create: null CardBufferManager");
     }
 
     auto card = std::make_shared<PlotImpl>(
-        std::move(mgr), gpu, x, y, widthCells, heightCells, args, payload);
+        ctx, x, y, widthCells, heightCells, args, payload);
 
     yinfo("Plot::create: calling init()...");
     if (auto res = card->init(); !res) {
@@ -581,21 +580,19 @@ Result<CardPtr> Plot::create(
 }
 
 Result<Plot::Ptr> Plot::createImpl(
-    ContextType& ctx,
-    CardBufferManager::Ptr mgr,
-    const GPUContext& gpu,
+    ContextType& factoryCtx,
+    const YettyContext& ctx,
     int32_t x, int32_t y,
     uint32_t widthCells, uint32_t heightCells,
     const std::string& args,
     const std::string& payload) noexcept
 {
-    (void)ctx; // ObjectFactory context marker
+    (void)factoryCtx;
 
-    auto result = create(std::move(mgr), gpu, x, y, widthCells, heightCells, args, payload);
+    auto result = create(ctx, x, y, widthCells, heightCells, args, payload);
     if (!result) {
         return Err<Ptr>("Failed to create Plot", result);
     }
-    // Dynamic cast from CardPtr to Plot::Ptr
     auto plotCard = std::dynamic_pointer_cast<Plot>(*result);
     if (!plotCard) {
         return Err<Ptr>("Created card is not a Plot");

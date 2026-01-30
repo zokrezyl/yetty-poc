@@ -30,19 +30,21 @@ namespace yetty::card {
 //     - 12 bits each → max 4096×4096 cell widgets
 //
 // =============================================================================
-// Metadata layout (48 bytes, uses 64-byte slot):
-//   offset 0:  plotType (u32)   - 0=line, 1=bar, 2=scatter, 3=area
-//   offset 4:  dataOffset (u32) - float index into cardStorage (NOT byte offset!)
-//   offset 8:  dataCount (u32)  - number of data points
-//   offset 12: minValue (f32)   - data minimum for Y axis
-//   offset 16: maxValue (f32)   - data maximum for Y axis
-//   offset 20: lineColor (u32)  - packed RGBA for line/points
-//   offset 24: fillColor (u32)  - packed RGBA for fill/bars
-//   offset 28: flags (u32)      - bit 0: show grid, bit 1: show axes
-//   offset 32: widthCells (u32) - widget width in cells
-//   offset 36: heightCells (u32)- widget height in cells
-//   offset 40: bgColor (u32)    - packed RGBA for background
-//   offset 44-63: reserved (20 bytes padding)
+// Metadata layout (64 bytes = 16 u32 slots):
+//   [0]  plotType(8) | flags(8) | pad(16)
+//   [1]  widthCells(16) | heightCells(16)
+//   [2]  dataOffset (u32) - float index into cardStorage
+//   [3]  dataCount (u32)
+//   [4]  minValue (f32)
+//   [5]  maxValue (f32)
+//   [6]  lineColor (u32 RGBA)
+//   [7]  fillColor (u32 RGBA)
+//   [8]  bgColor (u32 RGBA)
+//   [9]  zoom (f32)
+//   [10] centerX (f32)
+//   [11] centerY (f32)
+//   [12] glyphBase0(8) | glyphDot(8) | glyphMinus(8) | pad(8)
+//   [13-15] reserved
 //=============================================================================
 
 class Plot : public Card,

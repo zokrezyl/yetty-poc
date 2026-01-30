@@ -40,7 +40,7 @@ public:
                                 uint32_t w, uint32_t h,
                                 const std::string& args,
                                 const std::string& payload) {
-            return card::Plot::create(ctx.cardBufferManager, ctx.gpu, x, y, w, h, args, payload);
+            return card::Plot::create(ctx, x, y, w, h, args, payload);
         });
 
         registerCard("ydraw", [](const YettyContext& ctx,
