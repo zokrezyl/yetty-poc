@@ -4,6 +4,7 @@ add_subdirectory(plot)
 add_subdirectory(ydraw)
 add_subdirectory(hdraw)
 add_subdirectory(kdraw)
+add_subdirectory(ymery)
 
 option(YETTY_CARD_PDF "Build PDF card (requires PDFium)" OFF)
 if(YETTY_CARD_PDF)

@@ -580,6 +580,11 @@ void GPUScreenImpl::setViewport(float x, float y, float width, float height) {
   if (newCols > 0 && newRows > 0 && (newCols != _cols || newRows != _rows)) {
     resize(newCols, newRows);
   }
+
+  // Update cards with viewport origin
+  for (auto& [slotIndex, card] : _cards) {
+    card->setScreenOrigin(x, y);
+  }
 }
 
 // Helper: count non-blank cells from end of row (like screen.c line_popcount)
@@ -2516,6 +2521,7 @@ void GPUScreenImpl::registerCard(CardPtr card) {
   if (!card)
     return;
 
+  card->setScreenOrigin(_viewportX, _viewportY);
   uint32_t slotIndex = card->metadataSlotIndex();
   ydebug("GPUScreenImpl::registerCard: registered card at slotIndex {}", slotIndex);
   _cards[slotIndex] = std::move(card);
@@ -2810,12 +2816,12 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
     return Ok(false);
   }
 
-  // Handle mouse move - update statusbar with cell info
+  // Handle mouse move - update statusbar and forward to focused card
   if (event.type == base::Event::Type::MouseMove) {
     float mx = event.mouse.x;
     float my = event.mouse.y;
 
-    if (_viewportWidth > 0 && _viewportHeight > 0 && _ctx.imguiManager) {
+    if (_viewportWidth > 0 && _viewportHeight > 0) {
       if (mx >= _viewportX && mx < _viewportX + _viewportWidth &&
           my >= _viewportY && my < _viewportY + _viewportHeight) {
 
@@ -2827,15 +2833,18 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
         col = std::max(0, std::min(col, static_cast<int>(_cols) - 1));
         row = std::max(0, std::min(row, static_cast<int>(_rows) - 1));
 
-        Cell cell = getCell(row, col);
-        char statusBuf[256];
-        snprintf(statusBuf, sizeof(statusBuf),
-                 "Row:%d Col:%d Glyph:U+%04X FG:(%d,%d,%d) BG:(%d,%d,%d) Style:0x%02X",
-                 row, col, cell.glyph,
-                 cell.fgR, cell.fgG, cell.fgB,
-                 cell.bgR, cell.bgG, cell.bgB,
-                 cell.style);
-        _ctx.imguiManager->setStatusText(statusBuf);
+        if (_ctx.imguiManager) {
+          Cell cell = getCell(row, col);
+          char statusBuf[256];
+          snprintf(statusBuf, sizeof(statusBuf),
+                   "Row:%d Col:%d Glyph:U+%04X FG:(%d,%d,%d) BG:(%d,%d,%d) Style:0x%02X",
+                   row, col, cell.glyph,
+                   cell.fgR, cell.fgG, cell.fgB,
+                   cell.bgR, cell.bgG, cell.bgB,
+                   cell.style);
+          _ctx.imguiManager->setStatusText(statusBuf);
+        }
+
       }
     }
     return Ok(false);  // Don't consume

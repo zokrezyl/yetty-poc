@@ -62,6 +62,9 @@ public:
         (void)cellWidth; (void)cellHeight;
     }
 
+    // Called by gpu-screen to tell the card its viewport origin (window coordinates)
+    void setScreenOrigin(float x, float y) { _screenOriginX = x; _screenOriginY = y; }
+
     //=========================================================================
     // Accessors
     //=========================================================================
@@ -107,6 +110,8 @@ protected:
     int32_t _y;
     uint32_t _widthCells;
     uint32_t _heightCells;
+    float _screenOriginX = 0.0f;
+    float _screenOriginY = 0.0f;
 };
 
 using CardPtr = Card::Ptr;

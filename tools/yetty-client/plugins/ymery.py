@@ -1,28 +1,27 @@
-"""Ymery plugin - YAML-based ImGui widgets."""
+"""Ymery plugin - display YAML-driven ImGui widgets as a card."""
 
 import click
+from pathlib import Path
 
 
 @click.command()
-@click.option('--layouts-path', '-p', multiple=True, required=True, help='Layout search path (can specify multiple)')
-@click.option('--main', '-m', required=True, help='Main module path (e.g., demo/layouts/simple/app.yaml)')
+@click.option('--input', '-i', 'input_', required=True, help='YAML layout file or directory')
 @click.pass_context
-def ymery(ctx, layouts_path, main):
-    """Ymery ImGui widget plugin.
+def ymery(ctx, input_):
+    """Ymery widget card plugin.
 
-    Renders YAML-defined ImGui interfaces in the terminal.
+    Renders YAML-defined ImGui widgets into a terminal card.
+    Input can be a .yaml file or a layout directory (must contain app.yaml).
 
     Example:
-        yetty-client create ymery -p demo/layouts -m demo/layouts/simple/app.yaml -w 40 -H 20
+        yetty-client --new create ymery -i demo/ymery/simple -w 40 -H 20
+        yetty-client --new create ymery -i demo/ymery/simple/app.yaml -w 40 -H 20
     """
     ctx.ensure_object(dict)
 
-    # Build args string like: -p path1 -p path2 -m main_module
-    args_parts = []
-    for path in layouts_path:
-        args_parts.append(f"-p {path}")
-    args_parts.append(f"-m {main}")
+    path = Path(input_).resolve()
+    if not path.exists():
+        raise click.ClickException(f"Path not found: {input_}")
 
-    ctx.obj['plugin_args'] = ' '.join(args_parts)
-    ctx.obj['payload'] = ''  # No payload needed, args are in plugin_args
+    ctx.obj['payload'] = str(path)
     ctx.obj['plugin_name'] = 'ymery'

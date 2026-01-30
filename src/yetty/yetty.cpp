@@ -668,12 +668,15 @@ Result<void> YettyImpl::initCallbacks() noexcept {
 
     glfwSetMouseButtonCallback(_window, [](GLFWwindow* w, int button, int action, int mods) {
         (void)mods;
+        double xpos, ypos;
+        glfwGetCursorPos(w, &xpos, &ypos);
+        auto loop = *base::EventLoop::instance();
         if (action == GLFW_PRESS) {
-            double xpos, ypos;
-            glfwGetCursorPos(w, &xpos, &ypos);
-            ydebug("glfwMouseButtonCallback: button={} at ({}, {})", button, xpos, ypos);
-            auto loop = *base::EventLoop::instance();
+            ydebug("glfwMouseButtonCallback: button={} PRESS at ({}, {})", button, xpos, ypos);
             loop->dispatch(base::Event::mouseDown(static_cast<float>(xpos), static_cast<float>(ypos), button));
+        } else if (action == GLFW_RELEASE) {
+            ydebug("glfwMouseButtonCallback: button={} RELEASE at ({}, {})", button, xpos, ypos);
+            loop->dispatch(base::Event::mouseUp(static_cast<float>(xpos), static_cast<float>(ypos), button));
         }
     });
 
