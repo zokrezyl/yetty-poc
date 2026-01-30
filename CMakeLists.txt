@@ -456,7 +456,7 @@ if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
     endif()
 
     # Build plugins as shared libraries (desktop only)
-    add_subdirectory(src/yetty/plugins)
+    #add_subdirectory(src/yetty/plugins)
 endif()
 
 #-----------------------------------------------------------------------------
@@ -504,7 +504,7 @@ elseif(NOT EMSCRIPTEN)
         src/yetty/gpu-screen.cpp
         # src/yetty/widget-factory.cpp  # TODO: refactor later
         src/yetty/osc-command.cpp
-        src/yetty/custom-glyph-plugin.cpp
+        #src/yetty/custom-glyph-plugin.cpp
         src/yetty/card-buffer-manager.cpp
         src/yetty/card-factory.cpp
         src/yetty/card.cpp
@@ -520,7 +520,7 @@ elseif(NOT EMSCRIPTEN)
         src/yetty/bm-font.cpp
         src/yetty/shader-font.cpp
         src/yetty/shader-manager.cpp
-        src/yetty/ydraw.cpp
+        #src/yetty/ydraw.cpp
         src/yetty/widget-frame-renderer.cpp
         src/yetty/tile.cpp
         src/yetty/view.cpp

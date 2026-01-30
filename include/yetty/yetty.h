@@ -1,22 +1,25 @@
 #pragma once
 
-#include <yetty/result.hpp>
 #include <memory>
+#include <yetty/base/base.h>
+#include <yetty/result.hpp>
 
 namespace yetty {
 
-class Yetty {
+using namespace yetty::base;
+
+class Yetty : public virtual Object, public ObjectFactory<Yetty> {
 public:
-    using Ptr = std::shared_ptr<Yetty>;
+  using Ptr = std::shared_ptr<Yetty>;
 
-    virtual ~Yetty() = default;
+  ~Yetty() override = default;
 
-    static Result<Ptr> create(int argc, char* argv[]) noexcept;
+  static Result<Ptr> createImpl(ContextType &ctx, int argc, char *argv[]) noexcept;
 
-    virtual int run() noexcept = 0;
+  virtual int run() noexcept = 0;
 
 protected:
-    Yetty() = default;
+  Yetty() = default;
 };
 
 } // namespace yetty

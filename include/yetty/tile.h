@@ -1,120 +1,116 @@
 #pragma once
 
-#include <yetty/result.hpp>
-#include <yetty/base/base.h>
 #include <memory>
 #include <vector>
 #include <webgpu/webgpu.h>
+#include <yetty/base/base.h>
+#include <yetty/result.hpp>
 
 namespace yetty {
 
 using namespace yetty::base;
 
 class View;
+class WidgetFrameRenderer;
 
 struct Rect {
-    float x = 0, y = 0, width = 0, height = 0;
+  float x = 0, y = 0, width = 0, height = 0;
 };
 
-// Frame information for rendering tile borders
-struct FrameInfo {
-    Rect rect;
-    float r = 0.4f, g = 0.4f, b = 0.4f, a = 1.0f;  // Default gray
-    float thickness = 1.0f;
-    bool focused = false;  // For highlight color
-};
+enum class Orientation { Horizontal, Vertical };
 
-enum class Orientation {
-    Horizontal,
-    Vertical
+// Render context shared across the tile tree for frame rendering
+struct TileRenderContext {
+  WGPUQueue queue = nullptr;
+  uint32_t screenWidth = 0;
+  uint32_t screenHeight = 0;
+  std::shared_ptr<WidgetFrameRenderer> frameRenderer;
 };
 
 // Base class for tiles (Split and Pane)
-class Tile {
+class Tile : public EventListener {
 public:
-    using Ptr = std::shared_ptr<Tile>;
+  using Ptr = std::shared_ptr<Tile>;
 
-    virtual ~Tile() = default;
+  ~Tile() override = default;
 
-    virtual Result<void> render(WGPURenderPassEncoder pass) = 0;
+  virtual Result<void> render(WGPURenderPassEncoder pass) = 0;
 
-    // Collect frame rectangles for rendering (recursive)
-    virtual void collectFrames(std::vector<FrameInfo>& frames) const = 0;
+  // Default: tiles don't consume events
+  Result<bool> onEvent(const Event &event) override { return Ok(false); }
 
-    Rect bounds() const { return _bounds; }
-    virtual Result<void> setBounds(Rect r) { _bounds = r; return Ok(); }
+  Rect bounds() const { return _bounds; }
+  virtual Result<void> setBounds(Rect r) {
+    _bounds = r;
+    return Ok();
+  }
 
-    bool containsPoint(float x, float y) const {
-        return x >= _bounds.x && x < _bounds.x + _bounds.width &&
-               y >= _bounds.y && y < _bounds.y + _bounds.height;
-    }
+  bool containsPoint(float x, float y) const {
+    return x >= _bounds.x && x < _bounds.x + _bounds.width && y >= _bounds.y &&
+           y < _bounds.y + _bounds.height;
+  }
+
+  // Set render context for frame rendering (propagates to children)
+  virtual void setRenderContext(const TileRenderContext &ctx) {
+    _renderCtx = ctx;
+  }
 
 protected:
-    Rect _bounds;
-    Tile() = default;
+  Rect _bounds;
+  TileRenderContext _renderCtx;
+  Tile() = default;
+
+  // Render frame border around this tile using the render context
+  void renderFrame(WGPURenderPassEncoder pass,
+                   float r, float g, float b, float a,
+                   float thickness);
 };
 
 // Split - contains two child tiles
-class Split : public Tile {
+class Split : public Tile, public ObjectFactory<Split> {
 public:
-    using Ptr = std::shared_ptr<Split>;
+  using Ptr = std::shared_ptr<Split>;
 
-    static Result<Ptr> create(Orientation orientation);
+  static Result<Ptr> createImpl(Orientation orientation);
 
-    Result<void> render(WGPURenderPassEncoder pass) override;
-    void collectFrames(std::vector<FrameInfo>& frames) const override;
-    Result<void> setBounds(Rect r) override;
+  Result<void> render(WGPURenderPassEncoder pass) override = 0;
+  Result<void> setBounds(Rect r) override = 0;
+  void setRenderContext(const TileRenderContext &ctx) override = 0;
 
-    Result<void> setFirst(Tile::Ptr tile);
-    Result<void> setSecond(Tile::Ptr tile);
-    Tile::Ptr first() const { return _first; }
-    Tile::Ptr second() const { return _second; }
+  virtual Result<void> setFirst(Tile::Ptr tile) = 0;
+  virtual Result<void> setSecond(Tile::Ptr tile) = 0;
+  virtual Tile::Ptr first() const = 0;
+  virtual Tile::Ptr second() const = 0;
 
-    Orientation orientation() const { return _orientation; }
-    float ratio() const { return _ratio; }
-    Result<void> setRatio(float r);
+  virtual Orientation orientation() const = 0;
+  virtual float ratio() const = 0;
+  virtual Result<void> setRatio(float r) = 0;
 
-private:
-    Split(Orientation orientation);
-    Result<void> init();
-
-    Orientation _orientation;
-    float _ratio = 0.5f;
-    Tile::Ptr _first;
-    Tile::Ptr _second;
+protected:
+  Split() = default;
 };
 
 // Pane - leaf tile that holds views, handles events
-class Pane : public Tile, public EventListener {
+class Pane : public Tile, public ObjectFactory<Pane> {
 public:
-    using Ptr = std::shared_ptr<Pane>;
+  using Ptr = std::shared_ptr<Pane>;
 
-    static Result<Ptr> create();
+  static Result<Ptr> createImpl();
 
-    Result<void> render(WGPURenderPassEncoder pass) override;
-    void collectFrames(std::vector<FrameInfo>& frames) const override;
-    Result<void> setBounds(Rect r) override;
+  Result<void> render(WGPURenderPassEncoder pass) override = 0;
+  Result<void> setBounds(Rect r) override = 0;
 
-    // EventListener
-    Result<bool> onEvent(const Event& event) override;
+  // EventListener
+  Result<bool> onEvent(const Event &event) override = 0;
 
-    // id() comes from Object base class
-    bool focused() const { return _focused; }
+  virtual bool focused() const = 0;
+  virtual Rect innerBounds() const = 0;
+  virtual Result<void> pushView(std::shared_ptr<View> view) = 0;
+  virtual Result<void> popView() = 0;
+  virtual View *activeView() = 0;
 
-    Rect innerBounds() const;
-    Result<void> pushView(std::shared_ptr<View> view);
-    Result<void> popView();
-    View* activeView();
-
-private:
-    Pane();
-    Result<void> init();
-
-    void registerForEvents();
-    void handleFocusEvent(const Event& event);
-
-    bool _focused = false;
-    std::vector<std::shared_ptr<View>> _views;
+protected:
+  Pane() = default;
 };
 
 } // namespace yetty

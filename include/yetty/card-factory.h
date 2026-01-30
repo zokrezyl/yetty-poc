@@ -1,7 +1,6 @@
 #pragma once
 
 #include <yetty/card.h>
-#include <yetty/card-buffer-manager.h>
 #include <yetty/base/factory.h>
 #include <yetty/gpu-context.h>
 #include <yetty/result.hpp>
@@ -19,7 +18,7 @@ struct YettyContext;  // Forward declaration
  * Card types register themselves with a creator function.
  * GPUScreen uses this to create cards from OSC commands.
  *
- * Created via ObjectFactory with YettyContext.
+ * Created via ObjectFactory with GPUContext.
  * Stored in YettyContext for access by GPUScreen.
  */
 class CardFactory : public base::ObjectFactory<CardFactory> {
@@ -38,8 +37,7 @@ public:
     // Factory method
     static Result<Ptr> createImpl(
         ContextType& ctx,
-        const GPUContext& gpu,
-        CardBufferManager::Ptr cardMgr) noexcept;
+        const GPUContext& gpu) noexcept;
 
     virtual ~CardFactory() = default;
 
@@ -72,7 +70,6 @@ public:
     //=========================================================================
     // Accessors
     //=========================================================================
-    virtual CardBufferManager::Ptr cardBufferManager() const = 0;
     virtual const GPUContext& gpuContext() const = 0;
 
 protected:
