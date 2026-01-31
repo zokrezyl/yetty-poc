@@ -49,6 +49,7 @@ public:
             _cellWidth = cellWidth;
             _cellHeight = cellHeight;
             _needsResize = true;
+            _dirty = true;
         }
     }
 
@@ -232,6 +233,13 @@ public:
             return Ok();
         }
 
+        // First few frames: always render (ImGui needs frames to init font atlas)
+        if (_initFrames > 0) {
+            --_initFrames;
+        } else if (!_dirty && !_needsResize && !_metadataDirty) {
+            return Ok();
+        }
+
         // Handle resize
         if (_needsResize) {
             uint32_t newW = _widthCells * _cellWidth;
@@ -276,6 +284,11 @@ public:
         io.DisplaySize = ImVec2(static_cast<float>(_pixelWidth), static_cast<float>(_pixelHeight));
         io.DeltaTime = 1.0f / 60.0f;
         ImGui::NewFrame();
+
+        // Force root window to fill the card
+        ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(static_cast<float>(_pixelWidth),
+                                        static_cast<float>(_pixelHeight)), ImGuiCond_Always);
 
         // Render ymery widgets
         if (auto res = _renderer->renderFrame(); !res) {
@@ -391,6 +404,7 @@ public:
             _metadataDirty = false;
         }
 
+        _dirty = false;
         return Ok();
     }
 
@@ -406,62 +420,64 @@ public:
             if (event.setFocus.objectId == id()) {
                 if (!_focused) {
                     _focused = true;
-                    _subscribeMouseEvents();
+                    _subscribeCardMouseEvents();
                     yinfo("Ymery::onEvent: focused (id={})", id());
                 }
             } else if (_focused) {
                 _focused = false;
-                _unsubscribeMouseEvents();
+                _unsubscribeCardMouseEvents();
                 yinfo("Ymery::onEvent: unfocused (id={})", id());
             }
             return Ok(false);
         }
 
-        if (!_focused) return Ok(false);
-
-        // Convert window coords to card-local pixel coords
-        auto toLocal = [&](float wx, float wy, float& lx, float& ly) {
-            lx = wx - _screenOriginX - static_cast<float>(_x) * _cellWidth;
-            ly = wy - _screenOriginY - static_cast<float>(_y) * _cellHeight;
-        };
-
-        ImGuiContext* prev = ImGui::GetCurrentContext();
-        ImGui::SetCurrentContext(_imguiContext);
-        ImGuiIO& io = ImGui::GetIO();
-
-        if (event.type == base::Event::Type::MouseDown) {
-            float lx, ly;
-            toLocal(event.mouse.x, event.mouse.y, lx, ly);
-            io.AddMousePosEvent(lx, ly);
-            io.AddMouseButtonEvent(std::min(event.mouse.button, 4), true);
+        // Card mouse events — already have local coordinates from GPUScreen
+        if (event.type == base::Event::Type::CardMouseDown) {
+            if (event.cardMouse.targetId != id()) return Ok(false);
+            ImGuiContext* prev = ImGui::GetCurrentContext();
+            ImGui::SetCurrentContext(_imguiContext);
+            ImGuiIO& io = ImGui::GetIO();
+            io.AddMousePosEvent(event.cardMouse.x, event.cardMouse.y);
+            io.AddMouseButtonEvent(std::min(event.cardMouse.button, 4), true);
+            _dirty = true;
             ImGui::SetCurrentContext(prev);
             return Ok(true);
         }
 
-        if (event.type == base::Event::Type::MouseUp) {
-            float lx, ly;
-            toLocal(event.mouse.x, event.mouse.y, lx, ly);
-            io.AddMousePosEvent(lx, ly);
-            io.AddMouseButtonEvent(std::min(event.mouse.button, 4), false);
+        if (event.type == base::Event::Type::CardMouseUp) {
+            if (event.cardMouse.targetId != id()) return Ok(false);
+            ImGuiContext* prev = ImGui::GetCurrentContext();
+            ImGui::SetCurrentContext(_imguiContext);
+            ImGuiIO& io = ImGui::GetIO();
+            io.AddMousePosEvent(event.cardMouse.x, event.cardMouse.y);
+            io.AddMouseButtonEvent(std::min(event.cardMouse.button, 4), false);
+            _dirty = true;
             ImGui::SetCurrentContext(prev);
             return Ok(true);
         }
 
-        if (event.type == base::Event::Type::MouseMove) {
-            float lx, ly;
-            toLocal(event.mouse.x, event.mouse.y, lx, ly);
-            io.AddMousePosEvent(lx, ly);
+        if (event.type == base::Event::Type::CardMouseMove) {
+            if (event.cardMouse.targetId != id()) return Ok(false);
+            ImGuiContext* prev = ImGui::GetCurrentContext();
+            ImGui::SetCurrentContext(_imguiContext);
+            ImGuiIO& io = ImGui::GetIO();
+            io.AddMousePosEvent(event.cardMouse.x, event.cardMouse.y);
+            _dirty = true;
+            ImGui::SetCurrentContext(prev);
+            return Ok(false); // Don't consume moves
+        }
+
+        if (event.type == base::Event::Type::CardScroll) {
+            if (event.cardScroll.targetId != id()) return Ok(false);
+            ImGuiContext* prev = ImGui::GetCurrentContext();
+            ImGui::SetCurrentContext(_imguiContext);
+            ImGuiIO& io = ImGui::GetIO();
+            io.AddMouseWheelEvent(event.cardScroll.dx, event.cardScroll.dy);
+            _dirty = true;
             ImGui::SetCurrentContext(prev);
             return Ok(true);
         }
 
-        if (event.type == base::Event::Type::Scroll) {
-            io.AddMouseWheelEvent(event.scroll.dx, event.scroll.dy);
-            ImGui::SetCurrentContext(prev);
-            return Ok(true);
-        }
-
-        ImGui::SetCurrentContext(prev);
         return Ok(false);
     }
 
@@ -545,30 +561,30 @@ private:
         return Ok();
     }
 
-    void _subscribeMouseEvents() {
+    void _subscribeCardMouseEvents() {
         auto loopResult = base::EventLoop::instance();
         if (!loopResult) return;
         auto loop = *loopResult;
         auto self = sharedAs<base::EventListener>();
 
-        loop->registerListener(base::Event::Type::MouseDown, self, 1000);
-        loop->registerListener(base::Event::Type::MouseUp, self, 1000);
-        loop->registerListener(base::Event::Type::MouseMove, self, 1000);
-        loop->registerListener(base::Event::Type::Scroll, self, 1000);
-        yinfo("Ymery {} subscribed to mouse events", id());
+        loop->registerListener(base::Event::Type::CardMouseDown, self, 1000);
+        loop->registerListener(base::Event::Type::CardMouseUp, self, 1000);
+        loop->registerListener(base::Event::Type::CardMouseMove, self, 1000);
+        loop->registerListener(base::Event::Type::CardScroll, self, 1000);
+        yinfo("Ymery {} subscribed to card mouse events", id());
     }
 
-    void _unsubscribeMouseEvents() {
+    void _unsubscribeCardMouseEvents() {
         auto loopResult = base::EventLoop::instance();
         if (!loopResult) return;
         auto loop = *loopResult;
         auto self = sharedAs<base::EventListener>();
 
-        loop->deregisterListener(base::Event::Type::MouseDown, self);
-        loop->deregisterListener(base::Event::Type::MouseUp, self);
-        loop->deregisterListener(base::Event::Type::MouseMove, self);
-        loop->deregisterListener(base::Event::Type::Scroll, self);
-        yinfo("Ymery {} unsubscribed from mouse events", id());
+        loop->deregisterListener(base::Event::Type::CardMouseDown, self);
+        loop->deregisterListener(base::Event::Type::CardMouseUp, self);
+        loop->deregisterListener(base::Event::Type::CardMouseMove, self);
+        loop->deregisterListener(base::Event::Type::CardScroll, self);
+        yinfo("Ymery {} unsubscribed from card mouse events", id());
     }
 
     void _deregisterFromEvents() {
@@ -664,6 +680,8 @@ private:
     bool _needsResize = false;
     bool _metadataDirty = true;
     bool _focused = false;
+    bool _dirty = true;
+    int _initFrames = 3;
 };
 
 //=============================================================================

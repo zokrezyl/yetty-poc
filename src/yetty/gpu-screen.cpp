@@ -235,6 +235,26 @@ private:
   Card *getCardBySlotIndex(uint32_t offset) const;
   Card *getCardAtCell(int row, int col) const;
 
+  // Compute card-local pixel coords from viewport-local position and cell row/col.
+  // Uses bg encoding to find card's actual top-left corner in the grid.
+  void cardLocalCoords(float viewLocalX, float viewLocalY, int row, int col,
+                       float &cardX, float &cardY) const {
+    uint32_t cellW = getCellWidth();
+    uint32_t cellH = getCellHeight();
+    // bg encodes relative position within card: (relRow << 12) | relCol
+    size_t idx = cellIndex(row, col);
+    const Cell &cell = (*_visibleBuffer)[idx];
+    uint32_t bg24 = static_cast<uint32_t>(cell.bgR) |
+                    (static_cast<uint32_t>(cell.bgG) << 8) |
+                    (static_cast<uint32_t>(cell.bgB) << 16);
+    int relCol = bg24 & 0xFFF;
+    int relRow = (bg24 >> 12) & 0xFFF;
+    int cardTopCol = col - relCol;
+    int cardTopRow = row - relRow;
+    cardX = viewLocalX - static_cast<float>(cardTopCol) * cellW;
+    cardY = viewLocalY - static_cast<float>(cardTopRow) * cellH;
+  }
+
   // VTerm
   VTerm *_vterm = nullptr;
   VTermState *state_ = nullptr;
@@ -294,6 +314,7 @@ private:
   // Cards
   std::unordered_map<uint32_t, CardPtr> _cards;
   CardBufferManager::Ptr _cardBufferManager;
+  base::ObjectId _cardMouseTarget = 0;  // card that received last CardMouseDown
 
   // Factories
   WidgetFactory *_widgetFactory = nullptr;
@@ -2522,6 +2543,7 @@ void GPUScreenImpl::registerCard(CardPtr card) {
     return;
 
   card->setScreenOrigin(_viewportX, _viewportY);
+  card->setCellSize(getCellWidth(), getCellHeight());
   uint32_t slotIndex = card->metadataSlotIndex();
   ydebug("GPUScreenImpl::registerCard: registered card at slotIndex {}", slotIndex);
   _cards[slotIndex] = std::move(card);
@@ -2731,11 +2753,13 @@ void GPUScreenImpl::registerForFocus() {
                          sharedAs<base::EventListener>());
   loop->registerListener(base::Event::Type::MouseDown,
                          sharedAs<base::EventListener>());
+  loop->registerListener(base::Event::Type::MouseUp,
+                         sharedAs<base::EventListener>());
   loop->registerListener(base::Event::Type::MouseMove,
                          sharedAs<base::EventListener>());
   loop->registerListener(base::Event::Type::Scroll,
                          sharedAs<base::EventListener>());
-  yinfo("GPUScreen {} registered for SetFocus, MouseDown, MouseMove and Scroll events", _id);
+  yinfo("GPUScreen {} registered for SetFocus, MouseDown, MouseUp, MouseMove and Scroll events", _id);
 
   // Auto-focus on startup so keyboard works immediately
   loop->dispatch(base::Event::focusEvent(_id));
@@ -2806,6 +2830,11 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
           yinfo("GPUScreen {} clicked on card '{}' (id={}) at cell ({},{}), dispatching SetFocus",
                 _id, card->typeName(), card->id(), row, col);
           loop->dispatch(base::Event::focusEvent(card->id()));
+          // Dispatch CardMouseDown with card-local coordinates
+          float cardX, cardY;
+          cardLocalCoords(localX, localY, row, col, cardX, cardY);
+          _cardMouseTarget = card->id();
+          loop->dispatch(base::Event::cardMouseDown(card->id(), cardX, cardY, button));
         } else {
           yinfo("GPUScreen {} clicked at ({}, {}), dispatching SetFocus", _id, mx, my);
           loop->dispatch(base::Event::focusEvent(_id));
@@ -2845,9 +2874,53 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
           _ctx.imguiManager->setStatusText(statusBuf);
         }
 
+        // Forward mouse move to active card with local coordinates
+        if (_cardMouseTarget != 0) {
+          Card* card = getCardAtCell(row, col);
+          if (card && card->id() == _cardMouseTarget) {
+            float cardX, cardY;
+            cardLocalCoords(localX, localY, row, col, cardX, cardY);
+            auto loop = *base::EventLoop::instance();
+            loop->dispatch(base::Event::cardMouseMove(_cardMouseTarget, cardX, cardY));
+          } else {
+            // Mouse moved outside card bounds but still dragging - clamp to last known
+            auto loop = *base::EventLoop::instance();
+            loop->dispatch(base::Event::cardMouseMove(_cardMouseTarget, localX, localY));
+          }
+        }
+
       }
     }
     return Ok(false);  // Don't consume
+  }
+
+  // Handle mouse up - dispatch CardMouseUp to active card
+  if (event.type == base::Event::Type::MouseUp) {
+    if (_cardMouseTarget != 0) {
+      float mx = event.mouse.x;
+      float my = event.mouse.y;
+      int button = event.mouse.button;
+      float localX = mx - _viewportX;
+      float localY = my - _viewportY;
+      int col = static_cast<int>(localX / getCellWidth());
+      int row = static_cast<int>(localY / getCellHeight());
+      col = std::max(0, std::min(col, static_cast<int>(_cols) - 1));
+      row = std::max(0, std::min(row, static_cast<int>(_rows) - 1));
+
+      float cardX, cardY;
+      Card* card = getCardAtCell(row, col);
+      if (card && card->id() == _cardMouseTarget) {
+        cardLocalCoords(localX, localY, row, col, cardX, cardY);
+      } else {
+        cardX = localX;
+        cardY = localY;
+      }
+      auto loop = *base::EventLoop::instance();
+      loop->dispatch(base::Event::cardMouseUp(_cardMouseTarget, cardX, cardY, button));
+      _cardMouseTarget = 0;
+      return Ok(true);
+    }
+    return Ok(false);
   }
 
   // Handle scroll - scrollback or zoom (only when focused)
@@ -2858,6 +2931,23 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
     if (_viewportWidth > 0 && _viewportHeight > 0) {
       if (mx >= _viewportX && mx < _viewportX + _viewportWidth &&
           my >= _viewportY && my < _viewportY + _viewportHeight) {
+
+        // Check if scroll is over a card - forward as CardScroll
+        float localX = mx - _viewportX;
+        float localY = my - _viewportY;
+        int col = static_cast<int>(localX / getCellWidth());
+        int row = static_cast<int>(localY / getCellHeight());
+        col = std::max(0, std::min(col, static_cast<int>(_cols) - 1));
+        row = std::max(0, std::min(row, static_cast<int>(_rows) - 1));
+        Card* scrollCard = getCardAtCell(row, col);
+        if (scrollCard) {
+          float cardX, cardY;
+          cardLocalCoords(localX, localY, row, col, cardX, cardY);
+          auto loop = *base::EventLoop::instance();
+          loop->dispatch(base::Event::cardScrollEvent(
+              scrollCard->id(), cardX, cardY, event.scroll.dx, event.scroll.dy));
+          return Ok(true);
+        }
 
         bool ctrlPressed = (event.scroll.mods & 0x0002) != 0;  // GLFW_MOD_CONTROL
 

@@ -110,6 +110,9 @@ private:
     // Named data trees (from lang's data definitions)
     std::map<std::string, TreeLikePtr> _dataTrees;
 
+    // Root DataBag — created once from YAML, persists across frames
+    DataBagPtr _rootBag;
+
     // Event handlers parsed from statics (cached per-render)
     std::map<std::string, std::vector<Dict>> _currentEventHandlers;
 };
