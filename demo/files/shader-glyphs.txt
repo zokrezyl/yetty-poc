@@ -22,3 +22,15 @@
  􁀕 border-dots
  􁀖 orbit-dots
  􁀗 border-dots-grouped
+ 􁀘 worm
+ 􁀙 bouncing-ball
+ 􁀚 radar-sweep
+ 􁀛 hourglass
+ 􁀜 dna-helix
+ 􁀝 equalizer
+ 􁀞 pendulum
+ 􁀟 conveyor-dots
+ 􁀠 pong
+ 􁀡 rain
+ 􁀢 orbit
+ 􁀣 crosshair-pulse
