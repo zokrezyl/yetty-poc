@@ -1,4 +1,5 @@
 #include "renderer.h"
+#include "data-tree.h"
 #include "simple-data-tree.h"
 #include <imgui.h>
 #include <ytrace/ytrace.hpp>
@@ -20,12 +21,108 @@ Result<Renderer::Ptr> Renderer::create(
 
     // Determine render list from app config
     const auto& app = lang->appConfig();
+    std::string rootWidgetName;
     auto rwIt = app.find("root-widget");
     if (rwIt != app.end()) {
         if (auto name = getAs<std::string>(rwIt->second)) {
+            rootWidgetName = *name;
             r->_renderList.push_back(*name);
         }
     }
+
+    // Pre-create data trees from top-level lang data definitions
+    for (const auto& [treeName, treeDef] : lang->dataDefinitions()) {
+        auto argIt = treeDef.find("arg");
+        Dict arg;
+        if (argIt != treeDef.end()) {
+            if (auto a = getAs<Dict>(argIt->second)) arg = *a;
+        }
+        auto treeRes = DataTree::create(arg);
+        if (treeRes) {
+            r->_dataTrees[treeName] = *treeRes;
+            yinfo("Renderer: pre-created top-level data tree '{}'", treeName);
+        }
+    }
+
+    // Pre-create data trees from root widget definition so they persist across frames
+    std::string mainDataKey = "data";
+    if (!rootWidgetName.empty()) {
+        // Qualify the name: try "module.name" for all known modules
+        std::string qualifiedName;
+        const auto& defs = lang->widgetDefinitions();
+        for (const auto& [name, def] : defs) {
+            size_t dot = name.rfind('.');
+            if (dot != std::string::npos && name.substr(dot + 1) == rootWidgetName) {
+                qualifiedName = name;
+                break;
+            }
+        }
+        // Also try exact match
+        if (qualifiedName.empty() && defs.count(rootWidgetName)) {
+            qualifiedName = rootWidgetName;
+        }
+
+        if (!qualifiedName.empty()) {
+            const auto& widgetDef = defs.at(qualifiedName);
+
+            // Process "data" section to create persistent trees
+            auto dataIt = widgetDef.find("data");
+            if (dataIt != widgetDef.end()) {
+                if (auto dataDict = getAs<Dict>(dataIt->second)) {
+                    for (const auto& [treeName, treeDef] : *dataDict) {
+                        auto defDict = getAs<Dict>(treeDef);
+                        if (!defDict) continue;
+
+                        std::string treeType = "data-tree";
+                        auto typeIt = defDict->find("type");
+                        if (typeIt != defDict->end()) {
+                            if (auto t = getAs<std::string>(typeIt->second)) treeType = *t;
+                        }
+
+                        Dict arg;
+                        auto argIt = defDict->find("arg");
+                        if (argIt != defDict->end()) {
+                            if (auto a = getAs<Dict>(argIt->second)) arg = *a;
+                        }
+
+                        if (treeType == "data-tree") {
+                            auto treeRes = DataTree::create(arg);
+                            if (treeRes) {
+                                r->_dataTrees[treeName] = *treeRes;
+                                yinfo("Renderer: pre-created data tree '{}' from root widget", treeName);
+                            }
+                        } else if (treeType == "simple-data-tree") {
+                            auto treeRes = SimpleDataTree::create();
+                            if (treeRes) {
+                                r->_dataTrees[treeName] = *treeRes;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Process "main-data" to set correct main data key
+            auto mainDataIt = widgetDef.find("main-data");
+            if (mainDataIt != widgetDef.end()) {
+                if (auto key = getAs<std::string>(mainDataIt->second)) {
+                    mainDataKey = *key;
+                }
+            }
+        }
+    }
+
+    // Create root DataBag once — persists across frames
+    auto bagRes = DataBag::create(
+        dispatcher,
+        r->_dataTrees,
+        mainDataKey,
+        DataPath::root(),
+        {} // empty statics for root
+    );
+    if (!bagRes) {
+        return Err<Ptr>("Renderer::create: failed to create root DataBag", bagRes);
+    }
+    r->_rootBag = *bagRes;
 
     return r;
 }
@@ -53,20 +150,8 @@ Result<void> Renderer::renderFrame() {
 }
 
 Result<void> Renderer::renderWidget(const std::string& widgetName) {
-    // Create root DataBag
-    auto bagRes = DataBag::create(
-        _dispatcher,
-        _dataTrees,
-        "data",
-        DataPath::root(),
-        {} // empty statics for root
-    );
-    if (!bagRes) {
-        return Err<void>("renderWidget: failed to create root DataBag", bagRes);
-    }
-
-    // Render from spec
-    return _renderSpec(*bagRes, Value(widgetName), "app");
+    // Use persistent root DataBag
+    return _renderSpec(_rootBag, Value(widgetName), "app");
 }
 
 // ---- Core recursive render ----

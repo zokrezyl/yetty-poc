@@ -41,6 +41,12 @@ Result<void> DataBag::_init() {
     if (dataIt != _statics.end()) {
         if (auto dataDict = getAs<Dict>(dataIt->second)) {
             for (const auto& [treeName, treeDef] : *dataDict) {
+                // Skip if tree already exists (pre-created by Renderer for persistence)
+                if (_dataTrees.find(treeName) != _dataTrees.end()) {
+                    ydebug("DataBag::_init: tree '{}' already exists, reusing", treeName);
+                    continue;
+                }
+
                 auto defDict = getAs<Dict>(treeDef);
                 if (!defDict) continue;
 
@@ -147,13 +153,10 @@ Result<DataBag::Ptr> DataBag::inherit(
 }
 
 Result<Value> DataBag::get(const std::string& key, const Value& defaultValue) {
-    // First check statics
+    // First check statics for references — these always resolve through the tree
     auto it = _statics.find(key);
     if (it != _statics.end()) {
-        Value val = it->second;
-
-        // Check if it's a reference
-        if (auto str = getAs<std::string>(val)) {
+        if (auto str = getAs<std::string>(it->second)) {
             if (_isReference(*str)) {
                 return _resolveReference(*str);
             }
@@ -165,16 +168,20 @@ Result<Value> DataBag::get(const std::string& key, const Value& defaultValue) {
                 return Ok(Value(*interp));
             }
         }
-        return Ok(val);
     }
 
-    // Then try main data tree
+    // Then try main data tree (live data takes precedence over static literals)
     if (_mainDataTree) {
         DataPath path = _mainDataPath / key;
         auto res = _mainDataTree->get(path);
-        if (res) {
+        if (res && (*res).has_value()) {
             return res;
         }
+    }
+
+    // Fall back to static literal value (acts as default)
+    if (it != _statics.end()) {
+        return Ok(it->second);
     }
 
     // Return default

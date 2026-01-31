@@ -2,6 +2,17 @@
 
 namespace yetty::ymery {
 
+// Safe key lookup that never mutates the node (unlike operator[])
+static YAML::Node _findKeySimple(const YAML::Node& map, const std::string& key) {
+    if (!map.IsMap()) return YAML::Node();
+    for (auto it = map.begin(); it != map.end(); ++it) {
+        if (it->first.as<std::string>() == key) {
+            return it->second;
+        }
+    }
+    return YAML::Node();
+}
+
 Result<TreeLikePtr> SimpleDataTree::create() {
     auto tree = std::make_shared<SimpleDataTree>();
     tree->_root = YAML::Node(YAML::NodeType::Map);
@@ -128,6 +139,15 @@ Result<Value> SimpleDataTree::get(const DataPath& path) {
         }
     }
 
+    // Look up key directly in map node
+    if (node.IsMap()) {
+        YAML::Node child = _findKeySimple(node, key);
+        if (child.IsDefined()) {
+            return Ok(_yamlToValue(child));
+        }
+    }
+
+    // Fall back to metadata
     auto metaRes = getMetadata(nodePath);
     if (!metaRes) {
         return Ok(Value{});
@@ -233,17 +253,6 @@ Result<std::string> SimpleDataTree::asTree(const DataPath& path, int /*depth*/) 
 
 void SimpleDataTree::registerNested(const DataPath& path, TreeLikePtr tree) {
     _nestedTrees[path.toString()] = tree;
-}
-
-// Safe key lookup that never mutates the node (unlike operator[])
-static YAML::Node _findKeySimple(const YAML::Node& map, const std::string& key) {
-    if (!map.IsMap()) return YAML::Node();
-    for (auto it = map.begin(); it != map.end(); ++it) {
-        if (it->first.as<std::string>() == key) {
-            return it->second;
-        }
-    }
-    return YAML::Node();
 }
 
 Result<std::pair<YAML::Node, DataPath>> SimpleDataTree::_navigate(const DataPath& path) {

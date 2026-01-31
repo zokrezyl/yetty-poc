@@ -29,7 +29,12 @@ struct Event {
         // Timer
         Timer,
         // Context menu
-        ContextMenuAction
+        ContextMenuAction,
+        // Card-local mouse events (dispatched by GPUScreen with local coords)
+        CardMouseDown,
+        CardMouseUp,
+        CardMouseMove,
+        CardScroll
     };
 
     struct KeyEvent {
@@ -81,6 +86,21 @@ struct Event {
         char action[32];
     };
 
+    struct CardMouseEvent {
+        ObjectId targetId;
+        float x;  // card-local pixel x
+        float y;  // card-local pixel y
+        int button;
+    };
+
+    struct CardScrollEvent {
+        ObjectId targetId;
+        float x;  // card-local pixel x
+        float y;  // card-local pixel y
+        float dx;
+        float dy;
+    };
+
     Type type = Type::None;
 
     union {
@@ -93,6 +113,8 @@ struct Event {
         PollEvent poll;
         TimerEvent timer;
         ContextMenuActionEvent ctxMenu;
+        CardMouseEvent cardMouse;
+        CardScrollEvent cardScroll;
     };
 
     // Factory methods
@@ -177,6 +199,35 @@ struct Event {
         Event e;
         e.type = Type::Timer;
         e.timer = {timerId};
+        return e;
+    }
+
+    // Card-local mouse events (pre-computed local coordinates)
+    static Event cardMouseDown(ObjectId targetId, float x, float y, int button) {
+        Event e;
+        e.type = Type::CardMouseDown;
+        e.cardMouse = {targetId, x, y, button};
+        return e;
+    }
+
+    static Event cardMouseUp(ObjectId targetId, float x, float y, int button) {
+        Event e;
+        e.type = Type::CardMouseUp;
+        e.cardMouse = {targetId, x, y, button};
+        return e;
+    }
+
+    static Event cardMouseMove(ObjectId targetId, float x, float y) {
+        Event e;
+        e.type = Type::CardMouseMove;
+        e.cardMouse = {targetId, x, y, 0};
+        return e;
+    }
+
+    static Event cardScrollEvent(ObjectId targetId, float x, float y, float dx, float dy) {
+        Event e;
+        e.type = Type::CardScroll;
+        e.cardScroll = {targetId, x, y, dx, dy};
         return e;
     }
 

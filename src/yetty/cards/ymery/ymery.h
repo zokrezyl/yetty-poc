@@ -30,7 +30,8 @@ protected:
     Ymery(CardBufferManager::Ptr mgr, const GPUContext& gpu,
           int32_t x, int32_t y,
           uint32_t widthCells, uint32_t heightCells)
-        : Card(std::move(mgr), gpu, x, y, widthCells, heightCells) {}
+        : Card(std::move(mgr), gpu, x, y, widthCells, heightCells)
+    {}
 };
 
 } // namespace yetty::card
