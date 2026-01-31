@@ -1,4 +1,4 @@
-// Shader glyph: Voronoi (codepoint 1052689 / U+101011)
+// Shader glyph: Voronoi (codepoint 1114105 / U+10FFF9)
 // Correct cell interior distances for Voronoi patterns
 // Based on "Voronoi - distances" by Inigo Quilez (MIT License)
 // https://iquilezles.org/articles/voronoilines
@@ -56,7 +56,7 @@ fn voronoi_calc(x: vec2<f32>, time: f32) -> vec3<f32> {
     return vec3<f32>(md, mr);
 }
 
-fn shaderGlyph_1052689(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
+fn shaderGlyph_1114105(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>, lastChar: u32, lastCharTime: f32) -> vec3<f32> {
     let screenSize = vec2<f32>(globals.screenWidth, globals.screenHeight);
     let p = pixelPos / screenSize.x;
 

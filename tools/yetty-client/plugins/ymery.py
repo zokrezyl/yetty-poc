@@ -14,8 +14,8 @@ def ymery(ctx, input_):
     Input can be a .yaml file or a layout directory (must contain app.yaml).
 
     Example:
-        yetty-client --new create ymery -i demo/ymery/simple -w 40 -H 20
-        yetty-client --new create ymery -i demo/ymery/simple/app.yaml -w 40 -H 20
+        yetty-client create ymery -i demo/ymery/simple -w 40 -H 20
+        yetty-client create ymery -i demo/ymery/simple/app.yaml -w 40 -H 20
     """
     ctx.ensure_object(dict)
 

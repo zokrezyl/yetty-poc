@@ -44,7 +44,7 @@ fn getBVHNodeChildren(nodeOffset: u32) -> vec4<u32> {
 // Main shader function
 // =============================================================================
 
-fn shaderGlyph_1048578(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
+fn shaderGlyph_1048578(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>, lastChar: u32, lastCharTime: f32) -> vec3<f32> {
     // Decode ANSI-compatible cell encoding
     let slotIndex = fg & 0xFFFFFFu;
     let metaOffset = slotIndex * 16u;

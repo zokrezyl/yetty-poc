@@ -333,11 +333,58 @@ public:
             _metaHandle = MetadataHandle::invalid();
         }
 
+        _primStaging.clear();
+        _primStaging.shrink_to_fit();
+
         return Ok();
+    }
+
+    void suspend() override {
+        // Save primitives from GPU buffer to CPU staging
+        if (_primStorage.isValid() && _primCount > 0) {
+            _primStaging.resize(_primCount);
+            std::memcpy(_primStaging.data(), _primitives, _primCount * sizeof(SDFPrimitive));
+        }
+
+        // Deallocate derived storage (BVH, sorted indices — will be rebuilt)
+        if (_derivedStorage.isValid()) {
+            _cardMgr->deallocateStorage(_derivedStorage);
+            _derivedStorage = StorageHandle::invalid();
+            _bvhNodes = nullptr;
+            _sortedIndices = nullptr;
+            _bvhNodeCount = 0;
+        }
+
+        // Deallocate prim storage
+        if (_primStorage.isValid()) {
+            _cardMgr->deallocateStorage(_primStorage);
+            _primStorage = StorageHandle::invalid();
+            _primitives = nullptr;
+            _primCount = 0;
+            _primCapacity = 0;
+        }
+
+        yinfo("YDraw::suspend: deallocated storage, saved {} primitives to staging",
+              _primStaging.size());
     }
 
     Result<void> update(float time) override {
         (void)time;
+
+        // Reconstruct after suspend: restore primitives from staging
+        if (!_primStorage.isValid() && !_primStaging.empty()) {
+            uint32_t count = static_cast<uint32_t>(_primStaging.size());
+            if (auto res = ensurePrimCapacity(count); !res) {
+                return Err<void>("YDraw::update: failed to re-allocate prim storage");
+            }
+            _primCount = count;
+            std::memcpy(_primitives, _primStaging.data(), count * sizeof(SDFPrimitive));
+            _primStaging.clear();
+            _primStaging.shrink_to_fit();
+            _cardMgr->markStorageDirty(_primStorage);
+            _dirty = true;
+            yinfo("YDraw::update: reconstructed {} primitives from staging", count);
+        }
 
         ydebug("YDraw::update called, _dirty={} _metadataDirty={} primCount={}",
                _dirty, _metadataDirty, _primCount);
@@ -899,6 +946,9 @@ private:
     uint32_t _primCount = 0;
     uint32_t _primCapacity = 0;
     StorageHandle _primStorage = StorageHandle::invalid();
+
+    // CPU staging for primitives (used during suspend/reconstruct)
+    std::vector<SDFPrimitive> _primStaging;
 
     // BVH data - built directly in derived storage buffer
     BVHNode* _bvhNodes = nullptr;

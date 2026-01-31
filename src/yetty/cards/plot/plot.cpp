@@ -102,8 +102,31 @@ public:
         return Ok();
     }
 
+    void suspend() override {
+        if (_storageHandle.isValid() && _cardMgr) {
+            _cardMgr->deallocateStorage(_storageHandle);
+            _storageHandle = StorageHandle::invalid();
+        }
+        yinfo("Plot::suspend: deallocated storage, _data has {} floats", _data.size());
+    }
+
     Result<void> update(float time) override {
         (void)time;
+
+        // Reconstruct storage after suspend
+        if (!_storageHandle.isValid() && !_data.empty()) {
+            uint32_t storageSize = static_cast<uint32_t>(_data.size() * sizeof(float));
+            auto storageResult = _cardMgr->allocateStorage(storageSize);
+            if (!storageResult) {
+                return Err<void>("Plot::update: failed to re-allocate storage");
+            }
+            _storageHandle = *storageResult;
+            if (auto res = _cardMgr->writeStorage(_storageHandle, _data.data(), storageSize); !res) {
+                return Err<void>("Plot::update: failed to re-upload storage");
+            }
+            _metadataDirty = true;
+            yinfo("Plot::update: reconstructed storage at offset {}", _storageHandle.offset);
+        }
 
         if (_metadataDirty) {
             if (auto res = uploadMetadata(); !res) {
@@ -313,6 +336,10 @@ private:
     }
 
     Result<void> deregisterFromEvents() {
+        if (weak_from_this().expired()) {
+            return Ok();
+        }
+
         auto loopResult = base::EventLoop::instance();
         if (!loopResult) {
             return Err<void>("Plot::deregisterFromEvents: no EventLoop instance", loopResult);

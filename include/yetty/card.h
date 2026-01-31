@@ -33,6 +33,7 @@ public:
     // Lifecycle
     //=========================================================================
     virtual Result<void> dispose() = 0;
+    virtual void suspend() = 0;
 
     //=========================================================================
     // EventListener interface - for mouse/keyboard input

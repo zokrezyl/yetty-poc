@@ -1,9 +1,7 @@
 #!/bin/bash
-# Plot Card: Interactive chart using new card system (shader-glyph based)
-# Uses OSC 666666 instead of legacy plugin system (OSC 999999)
+# Plot Card: Interactive chart using the card system (shader-glyph based)
 #
-# The new card system expects simple comma-separated values in payload,
-# not the binary format used by the legacy plot plugin.
+# Expects simple comma-separated values in payload.
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR/../../.."

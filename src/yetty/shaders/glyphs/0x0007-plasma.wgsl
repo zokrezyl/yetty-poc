@@ -1,7 +1,7 @@
 // Shader glyph: Plasma (codepoint 1052679 / U+101007)
 // Classic plasma effect - seamlessly tiles across screen using pixelPos
 
-fn shaderGlyph_1052679(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
+fn shaderGlyph_1052679(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>, lastChar: u32, lastCharTime: f32) -> vec3<f32> {
     // fgColor/bgColor unused - plasma has its own colors
     // Use pixel position for seamless tiling across cells
     // Scale down for nice pattern size

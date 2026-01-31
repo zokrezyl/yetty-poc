@@ -17,7 +17,6 @@ public:
 
     virtual ~Terminal() = default;
 
-    virtual void stop() = 0;
     virtual bool isRunning() const = 0;
 
     // Rendering

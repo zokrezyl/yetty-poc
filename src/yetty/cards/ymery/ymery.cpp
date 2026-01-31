@@ -184,6 +184,22 @@ public:
     }
 
     //=========================================================================
+    // Suspend (dormancy)
+    //=========================================================================
+
+    void suspend() override {
+        _destroyOffscreenTexture();
+        _destroyReadbackBuffer();
+
+        if (_textureDataHandle.isValid() && _cardMgr) {
+            _cardMgr->deallocateTextureData(_textureDataHandle);
+            _textureDataHandle = TextureDataHandle::invalid();
+        }
+
+        yinfo("Ymery::suspend: deallocated offscreen texture + textureData");
+    }
+
+    //=========================================================================
     // Dispose
     //=========================================================================
 
@@ -231,6 +247,24 @@ public:
 
         if (!_imguiContext || !_renderer) {
             return Ok();
+        }
+
+        // Reconstruct after suspend
+        if (!_textureDataHandle.isValid() && _pixelWidth > 0 && _pixelHeight > 0) {
+            if (!_offscreenTexture) {
+                if (auto res = _createOffscreenTexture(); !res) {
+                    return Err<void>("Ymery::update: failed to recreate offscreen texture", res);
+                }
+            }
+            uint32_t dataSize = _pixelWidth * _pixelHeight * 4;
+            auto texResult = _cardMgr->allocateTextureData(dataSize);
+            if (!texResult) {
+                return Err<void>("Ymery::update: failed to re-allocate textureData", texResult);
+            }
+            _textureDataHandle = *texResult;
+            _metadataDirty = true;
+            _dirty = true;
+            yinfo("Ymery::update: reconstructed offscreen texture + textureData");
         }
 
         // First few frames: always render (ImGui needs frames to init font atlas)
@@ -588,6 +622,7 @@ private:
     }
 
     void _deregisterFromEvents() {
+        if (weak_from_this().expired()) return;
         auto loopResult = base::EventLoop::instance();
         if (!loopResult) return;
         auto loop = *loopResult;

@@ -5,7 +5,7 @@ fn pong_mod(x: f32, y: f32) -> f32 {
     return x - y * floor(x / y);
 }
 
-fn shaderGlyph_1052704(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
+fn shaderGlyph_1052704(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>, lastChar: u32, lastCharTime: f32) -> vec3<f32> {
     let fgColor = unpackColor(fg);
     let bgColor = unpackColor(bg);
 

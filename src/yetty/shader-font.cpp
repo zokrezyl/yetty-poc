@@ -8,6 +8,7 @@
 #include <regex>
 #include <algorithm>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace yetty {
 
@@ -63,6 +64,8 @@ private:
     };
     std::vector<ShaderEntry> _entries;
     std::unordered_map<uint32_t, uint32_t> _codepointToIndex;
+
+    std::unordered_set<uint32_t> _enabledCodepoints;
 
     bool _dirty = true;
     std::vector<uint8_t> _empty;
@@ -237,6 +240,10 @@ Result<void> ShaderFontImpl::reload() {
 uint32_t ShaderFontImpl::getGlyphIndex(uint32_t codepoint) {
     auto it = _codepointToIndex.find(codepoint);
     if (it != _codepointToIndex.end()) {
+        if (_enabledCodepoints.find(codepoint) == _enabledCodepoints.end()) {
+            _enabledCodepoints.insert(codepoint);
+            _dirty = true;
+        }
         return codepoint;
     }
     if (!_entries.empty()) {
@@ -263,6 +270,7 @@ std::string ShaderFontImpl::getCode() const {
     code.reserve(_entries.size() * 1024);
 
     for (const auto& entry : _entries) {
+        if (_enabledCodepoints.find(entry.codepoint) == _enabledCodepoints.end()) continue;
         code += "// Shader ";
         code += (_category == Category::Card) ? "card" : "glyph";
         code += ": ";
@@ -289,6 +297,7 @@ std::string ShaderFontImpl::getDispatchCode() const {
 
     bool first = true;
     for (const auto& entry : _entries) {
+        if (_enabledCodepoints.find(entry.codepoint) == _enabledCodepoints.end()) continue;
         if (!first) {
             dispatch += " else ";
         }
@@ -298,7 +307,7 @@ std::string ShaderFontImpl::getDispatchCode() const {
         dispatch += std::to_string(entry.codepoint);
         dispatch += "u) {\n        return shaderGlyph_";
         dispatch += std::to_string(entry.codepoint);
-        dispatch += "(localUV, time, fg, bg, pixelPos, mousePos);\n    }";
+        dispatch += "(localUV, time, fg, bg, pixelPos, mousePos, lastChar, lastCharTime);\n    }";
     }
 
     if (!dispatch.empty()) {
@@ -309,7 +318,7 @@ std::string ShaderFontImpl::getDispatchCode() const {
 }
 
 uint32_t ShaderFontImpl::getFunctionCount() const {
-    return static_cast<uint32_t>(_entries.size());
+    return static_cast<uint32_t>(_enabledCodepoints.size());
 }
 
 std::vector<std::string> ShaderFontImpl::getShaderNames() const {

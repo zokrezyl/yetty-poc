@@ -96,7 +96,7 @@ Result<OscCommand> OscCommandParser::parse(const std::string& sequence) {
         return Ok(cmd);
     }
 
-    if (vendorId != YETTY_OSC_VENDOR_ID && vendorId != YETTY_OSC_VENDOR_CARD_ID) {
+    if (vendorId != YETTY_OSC_VENDOR_ID) {
         cmd.error = "unknown vendor ID: " + std::to_string(vendorId);
         return Ok(cmd);
     }
@@ -334,16 +334,16 @@ std::string OscResponse::error(const std::string& message) {
     return "error: " + message + "\n";
 }
 
-std::string OscResponse::widgetList(const std::vector<std::tuple<std::string, std::string, int, int, int, int, bool>>& widgets) {
-    if (widgets.empty()) {
-        return "no widgets\n";
+std::string OscResponse::cardList(const std::vector<std::tuple<std::string, std::string, int, int, int, int, bool>>& cards) {
+    if (cards.empty()) {
+        return "no cards\n";
     }
 
     std::string result;
     result += "ID        PLUGIN          X     Y     W     H  STATE\n";
     result += "--------  --------------  ----  ----  ----  ----  -------\n";
 
-    for (const auto& [id, plugin, x, y, w, h, running] : widgets) {
+    for (const auto& [id, plugin, x, y, w, h, running] : cards) {
         char line[128];
         snprintf(line, sizeof(line), "%-8s  %-14s  %4d  %4d  %4d  %4d  %s\n",
                  id.c_str(), plugin.c_str(), x, y, w, h,

@@ -22,5 +22,5 @@ if [ ! -f "$LOGO" ]; then
     exit 1
 fi
 
-# Use the Python client with --new flag for card system (OSC 666666)
-cat "$LOGO" | python3 "$PROJECT_ROOT/tools/yetty-client/main.py" --new create image -i - -w "$WIDTH" -H "$HEIGHT"
+# Use the Python client for card system
+cat "$LOGO" | python3 "$PROJECT_ROOT/tools/yetty-client/main.py" create image -i - -w "$WIDTH" -H "$HEIGHT"

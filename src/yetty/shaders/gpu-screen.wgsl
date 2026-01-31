@@ -6,8 +6,8 @@ struct SharedUniforms {
     screenHeight: f32,   // 4 bytes
     mouseX: f32,         // 4 bytes
     mouseY: f32,         // 4 bytes
-    _pad1: f32,          // 4 bytes padding
-    _pad2: f32,          // 4 bytes padding
+    lastChar: u32,       // 4 bytes - last typed character glyph index
+    lastCharTime: f32,   // 4 bytes - time when last character was typed
 };
 
 // Grid uniforms (managed by renderer, group 1)
@@ -217,7 +217,7 @@ fn unpackColorAlpha(packed: u32) -> vec4<f32> {
 // pixelPos: absolute pixel coordinates on screen (for tiled effects like fractals)
 // mousePos: current mouse position in pixels
 // fg/bg: raw packed u32 from cell - cards use as metadata index, regular glyphs unpack to color
-fn renderShaderGlyph(glyphIndex: u32, localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
+fn renderShaderGlyph(glyphIndex: u32, localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>, lastChar: u32, lastCharTime: f32) -> vec3<f32> {
     // SHADER_GLYPH_DISPATCH_PLACEHOLDER
     // (loader generates: if glyphIndex == 1052672u { return shaderGlyph_1048577(...); } else if ...)
     return unpackColor(bg);  // Fallback if no shader glyph matches
@@ -317,7 +317,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
             // Card or shader glyph: render via shader function
             let localUV = localPxBase / grid.cellSize;  // Normalize to 0-1
             let mousePos = vec2<f32>(globals.mouseX, globals.mouseY);
-            finalColor = renderShaderGlyph(glyphIndex, localUV, globals.time, cell.fg, cell.bg, pixelPos, mousePos);
+            finalColor = renderShaderGlyph(glyphIndex, localUV, globals.time, cell.fg, cell.bg, pixelPos, mousePos, globals.lastChar, globals.lastCharTime);
             hasGlyph = true;
         } else if (isEmoji) {
             // Emoji rendering: glyphIndex is the emoji index in emojiMetadata array

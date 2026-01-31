@@ -1,4 +1,4 @@
-// Shader glyph: Biomine (codepoint 1052687 / U+10100F)
+// Shader glyph: Biomine (codepoint 1114107 / U+10FFFB)
 // Raymarched biocooling system / alien hatchery scene
 // Based on "Biomine" by Shane from Shadertoy
 // Uses pixelPos for seamless rendering across cells
@@ -182,7 +182,7 @@ fn biomine_eMap(rd_in: vec3<f32>, time: f32) -> vec3<f32> {
     return smoothstep(vec3<f32>(0.0), vec3<f32>(1.0), texCol);
 }
 
-fn shaderGlyph_1052687(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
+fn shaderGlyph_1114107(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>, lastChar: u32, lastCharTime: f32) -> vec3<f32> {
     let screenSize = vec2<f32>(globals.screenWidth, globals.screenHeight);
     let uv = (pixelPos - screenSize * 0.5) / screenSize.y;
 

@@ -123,6 +123,17 @@ public:
         return Ok();
     }
 
+    void suspend() override {
+        // Deallocate textureData but keep _pagePixels for reconstruction
+        if (_textureDataHandle.isValid() && _cardMgr) {
+            _cardMgr->deallocateTextureData(_textureDataHandle);
+            _textureDataHandle = TextureDataHandle::invalid();
+        }
+        _needsUpload = true;
+        _metadataDirty = true;
+        yinfo("Pdf::suspend: deallocated textureData, _pagePixels has {} bytes", _pagePixels.size());
+    }
+
     Result<void> dispose() override {
         // Deregister from events
         deregisterFromEvents();
@@ -155,6 +166,16 @@ public:
 
     Result<void> update(float time) override {
         (void)time;
+
+        // Reconstruct after suspend: _pagePixels exists but textureData is gone
+        if (!_textureDataHandle.isValid() && !_pagePixels.empty()) {
+            if (auto res = uploadPixelsToGPU(); !res) {
+                return Err<void>("Pdf::update: failed to reconstruct textureData", res);
+            }
+            _metadataDirty = true;
+            _needsUpload = false;
+            yinfo("Pdf::update: reconstructed textureData from _pagePixels");
+        }
 
         if (_needsRender) {
             if (auto res = renderCurrentPage(); !res) {
@@ -264,6 +285,12 @@ private:
     }
 
     Result<void> deregisterFromEvents() {
+        // Guard: shared_from_this() is invalid during destruction or before
+        // the shared_ptr is fully initialized (e.g. createImpl failure path).
+        if (weak_from_this().expired()) {
+            return Ok();
+        }
+
         auto loopResult = base::EventLoop::instance();
         if (!loopResult) {
             return Err<void>("Pdf::deregisterFromEvents: no EventLoop instance", loopResult);

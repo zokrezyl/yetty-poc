@@ -136,8 +136,42 @@ public:
         return Ok();
     }
 
+    void suspend() override {
+        // Release compute GPU resources
+        if (_tempSrcBuffer) { wgpuBufferRelease(_tempSrcBuffer); _tempSrcBuffer = nullptr; }
+        if (_scaleBindGroup) { wgpuBindGroupRelease(_scaleBindGroup); _scaleBindGroup = nullptr; }
+        if (_scaleUniformBuffer) { wgpuBufferRelease(_scaleUniformBuffer); _scaleUniformBuffer = nullptr; }
+        if (_scalePipeline) { wgpuComputePipelineRelease(_scalePipeline); _scalePipeline = nullptr; }
+        if (_scaleBindGroupLayout) { wgpuBindGroupLayoutRelease(_scaleBindGroupLayout); _scaleBindGroupLayout = nullptr; }
+        if (_scaleShaderModule) { wgpuShaderModuleRelease(_scaleShaderModule); _scaleShaderModule = nullptr; }
+
+        // Deallocate textureData
+        if (_textureDataHandle.isValid() && _cardMgr) {
+            _cardMgr->deallocateTextureData(_textureDataHandle);
+            _textureDataHandle = TextureDataHandle::invalid();
+        }
+        yinfo("Image::suspend: deallocated textureData + compute resources, _originalPixels has {} bytes",
+              _originalPixels.size());
+    }
+
     Result<void> update(float time) override {
         (void)time;
+
+        // Reconstruct after suspend: _originalPixels exists but textureData is gone
+        if (!_textureDataHandle.isValid() && !_originalPixels.empty()) {
+            if (!_scalePipeline) {
+                if (auto res = createScalePipeline(); !res) {
+                    return Err<void>("Image::update: failed to recreate scale pipeline", res);
+                }
+            }
+            recalculateScaledDimensions();
+            if (auto res = runScaleCompute(); !res) {
+                return Err<void>("Image::update: failed to reconstruct textureData", res);
+            }
+            _metadataDirty = true;
+            _needsScaling = false;
+            yinfo("Image::update: reconstructed textureData from _originalPixels");
+        }
 
         if (_needsScaling && !_originalPixels.empty()) {
             if (auto res = runScaleCompute(); !res) {
@@ -234,6 +268,10 @@ private:
     }
 
     Result<void> deregisterFromEvents() {
+        if (weak_from_this().expired()) {
+            return Ok();
+        }
+
         auto loopResult = base::EventLoop::instance();
         if (!loopResult) {
             return Err<void>("Image::deregisterFromEvents: no EventLoop instance", loopResult);

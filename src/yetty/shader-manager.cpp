@@ -44,6 +44,7 @@ public:
 private:
     Result<void> loadBaseShader(const std::string& path);
     Result<void> createPipelineResources();
+    Result<void> recreatePipeline();
     std::string mergeShaders() const;
 
     GPUContext _gpu = {};
@@ -304,9 +305,21 @@ Result<void> ShaderManagerImpl::compile() {
         }
     }
 
-    // Create pipeline resources if not already created
-    if (!_gridPipeline) {
+    // Recreate pipeline with new shader module
+    // The pipeline references the shader module, so it must be recreated when
+    // the shader is recompiled. Keep layouts and vertex buffer intact.
+    if (_gridPipeline) {
+        wgpuRenderPipelineRelease(_gridPipeline);
+        _gridPipeline = nullptr;
+    }
+    if (!_gridBindGroupLayout || !_pipelineLayout || !_quadVertexBuffer) {
+        // First compile — create everything
         if (auto res = createPipelineResources(); !res) {
+            return res;
+        }
+    } else {
+        // Recompile — only recreate the pipeline with new shader module
+        if (auto res = recreatePipeline(); !res) {
             return res;
         }
     }
@@ -482,6 +495,81 @@ Result<void> ShaderManagerImpl::createPipelineResources() {
     }
 
     yinfo("ShaderManager: created shared pipeline resources");
+    return Ok();
+}
+
+Result<void> ShaderManagerImpl::recreatePipeline() {
+    WGPUDevice device = _gpu.device;
+
+    WGPUVertexAttribute posAttr = {};
+    posAttr.format = WGPUVertexFormat_Float32x2;
+    posAttr.offset = 0;
+    posAttr.shaderLocation = 0;
+
+    WGPUVertexBufferLayout vertexLayout = {};
+    vertexLayout.arrayStride = 2 * sizeof(float);
+    vertexLayout.stepMode = WGPUVertexStepMode_Vertex;
+    vertexLayout.attributeCount = 1;
+    vertexLayout.attributes = &posAttr;
+
+    WGPUBlendState blendState = {};
+    blendState.color.srcFactor = WGPUBlendFactor_SrcAlpha;
+    blendState.color.dstFactor = WGPUBlendFactor_OneMinusSrcAlpha;
+    blendState.color.operation = WGPUBlendOperation_Add;
+    blendState.alpha.srcFactor = WGPUBlendFactor_One;
+    blendState.alpha.dstFactor = WGPUBlendFactor_OneMinusSrcAlpha;
+    blendState.alpha.operation = WGPUBlendOperation_Add;
+
+    WGPUColorTargetState colorTarget = {};
+    colorTarget.format = _gpu.surfaceFormat;
+    colorTarget.blend = &blendState;
+    colorTarget.writeMask = WGPUColorWriteMask_All;
+
+    WGPUFragmentState fragState = {};
+    fragState.module = _shaderModule;
+    fragState.entryPoint = WGPU_STR("fs_main");
+    fragState.targetCount = 1;
+    fragState.targets = &colorTarget;
+
+    WGPURenderPipelineDescriptor pipelineDesc = {};
+    pipelineDesc.label = WGPU_STR("grid pipeline");
+    pipelineDesc.layout = _pipelineLayout;
+    pipelineDesc.vertex.module = _shaderModule;
+    pipelineDesc.vertex.entryPoint = WGPU_STR("vs_main");
+    pipelineDesc.vertex.bufferCount = 1;
+    pipelineDesc.vertex.buffers = &vertexLayout;
+    pipelineDesc.fragment = &fragState;
+    pipelineDesc.primitive.topology = WGPUPrimitiveTopology_TriangleList;
+    pipelineDesc.primitive.frontFace = WGPUFrontFace_CCW;
+    pipelineDesc.primitive.cullMode = WGPUCullMode_None;
+    pipelineDesc.multisample.count = 1;
+    pipelineDesc.multisample.mask = 0xFFFFFFFF;
+
+    wgpuDevicePushErrorScope(device, WGPUErrorFilter_Validation);
+
+    _gridPipeline = wgpuDeviceCreateRenderPipeline(device, &pipelineDesc);
+
+    bool hadError = false;
+    std::string scopeErrorMsg;
+    WGPUPopErrorScopeCallbackInfo popInfo = {};
+    popInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+    popInfo.callback = [](WGPUPopErrorScopeStatus status, WGPUErrorType type,
+                          WGPUStringView message, void* userdata1, void* userdata2) {
+        if (type != WGPUErrorType_NoError) {
+            *static_cast<bool*>(userdata1) = true;
+            auto* msg = static_cast<std::string*>(userdata2);
+            *msg = message.data ? std::string(message.data, message.length) : "unknown";
+        }
+    };
+    popInfo.userdata1 = &hadError;
+    popInfo.userdata2 = &scopeErrorMsg;
+    wgpuDevicePopErrorScope(device, popInfo);
+
+    if (hadError || !_gridPipeline) {
+        return Err<void>("Failed to recreate grid render pipeline: " + scopeErrorMsg);
+    }
+
+    yinfo("ShaderManager: recreated pipeline after shader recompile");
     return Ok();
 }
 

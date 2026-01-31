@@ -16,7 +16,7 @@ public:
 
   static Result<Ptr> createImpl(ContextType &ctx, int argc, char *argv[]) noexcept;
 
-  virtual int run() noexcept = 0;
+  virtual Result<void> run() noexcept = 0;
 
 protected:
   Yetty() = default;

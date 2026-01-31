@@ -51,7 +51,7 @@
 const TEXTURE_FLAG_BILINEAR: u32 = 1u;
 const TEXTURE_FLAG_PRESERVE_ASPECT: u32 = 2u;
 
-fn shaderGlyph_1048576(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
+fn shaderGlyph_1048576(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>, lastChar: u32, lastCharTime: f32) -> vec3<f32> {
     // ==========================================================================
     // Decode ANSI-compatible cell encoding
     // ==========================================================================

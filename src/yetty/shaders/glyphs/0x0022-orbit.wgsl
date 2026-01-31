@@ -1,7 +1,7 @@
 // Shader glyph: Orbit (codepoint 1052706 / U+101022)
 // A small moon orbiting a larger central planet
 
-fn shaderGlyph_1052706(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
+fn shaderGlyph_1052706(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>, lastChar: u32, lastCharTime: f32) -> vec3<f32> {
     let fgColor = unpackColor(fg);
     let bgColor = unpackColor(bg);
 

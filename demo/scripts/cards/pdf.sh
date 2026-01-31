@@ -25,5 +25,5 @@ if [ ! -f "$PDF_FILE" ]; then
     exit 1
 fi
 
-# Use the Python client with --new flag for card system (OSC 666666)
-cat "$PDF_FILE" | python3 "$PROJECT_ROOT/tools/yetty-client/main.py" --new create pdf -i - -w "$WIDTH" -H "$HEIGHT"
+# Use the Python client for card system
+cat "$PDF_FILE" | python3 "$PROJECT_ROOT/tools/yetty-client/main.py" create pdf -i - -w "$WIDTH" -H "$HEIGHT"

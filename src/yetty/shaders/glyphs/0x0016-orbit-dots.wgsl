@@ -2,7 +2,7 @@
 // Dots orbiting an elliptical path, bunching up on one side
 // Inspired by the Windows loading animation
 
-fn shaderGlyph_1052694(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
+fn shaderGlyph_1052694(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>, lastChar: u32, lastCharTime: f32) -> vec3<f32> {
     let fgColor = unpackColor(fg);
     let bgColor = unpackColor(bg);
 

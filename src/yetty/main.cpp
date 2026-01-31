@@ -40,7 +40,9 @@ void android_main(struct android_app* app) {
                            result.error().message().c_str());
         return;
     }
-    (*result)->run();
+    auto yetty = *result;
+    (void)yetty->run();
+    (void)yetty->shutdown();
 }
 #else
 //-----------------------------------------------------------------------------
@@ -63,6 +65,17 @@ int main(int argc, char* argv[]) {
         yerror("Failed to initialize yetty: {}", yetty::error_msg(result));
         return 1;
     }
-    return (*result)->run();
+    auto yetty = *result;
+    auto runResult = yetty->run();
+    auto shutdownResult = yetty->shutdown();
+    if (!runResult) {
+        yerror("Yetty run failed: {}", yetty::error_msg(runResult));
+        return 1;
+    }
+    if (!shutdownResult) {
+        yerror("Yetty shutdown failed: {}", yetty::error_msg(shutdownResult));
+        return 1;
+    }
+    return 0;
 }
 #endif

@@ -21,11 +21,14 @@ namespace yetty {
 class YettyImpl : public Yetty, public base::EventListener {
 public:
     YettyImpl() = default;
-    ~YettyImpl() override { shutdown(); }
+    ~YettyImpl() override = default;
 
     Result<void> init(int argc, char* argv[]) noexcept;
-    int run() noexcept override;
+    Result<void> run() noexcept override;
     Result<bool> onEvent(const base::Event& event) override;
+
+protected:
+    Result<void> onShutdown() override;
 
 private:
     Result<void> parseArgs(int argc, char* argv[]) noexcept;
@@ -34,7 +37,6 @@ private:
     Result<void> initSharedResources() noexcept;
     Result<void> initWorkspace() noexcept;
     Result<void> initCallbacks() noexcept;
-    void shutdown() noexcept;
 
     Result<void> mainLoopIteration() noexcept;
     void handleResize(int width, int height) noexcept;
@@ -74,8 +76,8 @@ private:
         float screenHeight;
         float mouseX;
         float mouseY;
-        float _pad1;
-        float _pad2;
+        uint32_t lastChar;
+        float lastCharTime;
     };
     WGPUBuffer _sharedUniformBuffer = nullptr;
     WGPUBindGroupLayout _sharedBindGroupLayout = nullptr;
@@ -98,7 +100,6 @@ private:
     // Fatal GPU error tracking
     bool _fatalGpuError = false;
     std::string _fatalGpuErrorMsg;
-    int _exitCode = 0;
 
     // FPS tracking
     double _lastFpsTime = 0.0;
@@ -663,6 +664,15 @@ Result<void> YettyImpl::initCallbacks() noexcept {
 
     glfwSetCharCallback(_window, [](GLFWwindow* w, unsigned int codepoint) {
         ydebug("glfwCharCallback: codepoint={} ('{}')", codepoint, codepoint < 32 ? '?' : (char)codepoint);
+        auto* impl = static_cast<YettyImpl*>(glfwGetWindowUserPointer(w));
+        if (impl) {
+            uint32_t glyphIdx = codepoint;
+            if (auto font = impl->_yettyContext.fontManager->getDefaultMsMsdfFont()) {
+                glyphIdx = font->getGlyphIndex(codepoint);
+            }
+            impl->_sharedUniforms.lastChar = glyphIdx;
+            impl->_sharedUniforms.lastCharTime = static_cast<float>(glfwGetTime());
+        }
         auto loop = *base::EventLoop::instance();
         loop->dispatch(base::Event::charInput(codepoint));
     });
@@ -717,20 +727,29 @@ Result<void> YettyImpl::initCallbacks() noexcept {
     return Ok();
 }
 
-void YettyImpl::shutdown() noexcept {
+Result<void> YettyImpl::onShutdown() {
+    Result<void> result = Ok();
+
 #if !YETTY_WEB && !defined(__ANDROID__)
     shutdownEventLoop();
 #endif
 
+    // Shutdown workspaces while shared_ptrs are still alive
+    for (auto& ws : _workspaces) {
+        if (auto res = ws->shutdown(); !res) {
+            result = Err<void>("Workspace shutdown failed", res);
+        }
+    }
     _activeWorkspace.reset();
     _workspaces.clear();
 
     if (_sharedBindGroup) wgpuBindGroupRelease(_sharedBindGroup);
     if (_sharedBindGroupLayout) wgpuBindGroupLayoutRelease(_sharedBindGroupLayout);
     if (_sharedUniformBuffer) wgpuBufferRelease(_sharedUniformBuffer);
+    // Surface must be released before device — swapchain references the device
+    if (_surface) wgpuSurfaceRelease(_surface);
     if (_device) wgpuDeviceRelease(_device);
     if (_adapter) wgpuAdapterRelease(_adapter);
-    if (_surface) wgpuSurfaceRelease(_surface);
     if (_instance) wgpuInstanceRelease(_instance);
 
     if (_window) {
@@ -740,6 +759,7 @@ void YettyImpl::shutdown() noexcept {
     glfwTerminate();
 
     s_instance = nullptr;
+    return result;
 }
 
 //=============================================================================
@@ -783,7 +803,6 @@ Result<bool> YettyImpl::onEvent(const base::Event& event) {
         }
         if (auto res = mainLoopIteration(); !res) {
             yerror("Fatal render error: {}", error_msg(res));
-            _exitCode = 1;
             (*base::EventLoop::instance())->stop();
         }
         return Ok(true);
@@ -794,10 +813,10 @@ Result<bool> YettyImpl::onEvent(const base::Event& event) {
 
 static void signalHandler(int sig) {
     yinfo("Received signal {}, shutting down...", sig);
-    (*base::EventLoop::instance())->stop();
+    (void)(*base::EventLoop::instance())->stop();
 }
 
-int YettyImpl::run() noexcept {
+Result<void> YettyImpl::run() noexcept {
     yinfo("Starting render loop...");
 
     // Handle Ctrl+C from launching terminal
@@ -810,8 +829,12 @@ int YettyImpl::run() noexcept {
     loop->start();
 #endif
 
-    yinfo("Shutting down...");
-    return _exitCode;
+    yinfo("Run finished.");
+
+    if (_fatalGpuError) {
+        return Err<void>("Fatal GPU error: " + _fatalGpuErrorMsg);
+    }
+    return Ok();
 }
 
 Result<void> YettyImpl::mainLoopIteration() noexcept {

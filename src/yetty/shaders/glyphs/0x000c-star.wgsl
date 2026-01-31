@@ -16,7 +16,7 @@ fn shaderGlyph_1052684_sdStar(p: vec2<f32>, r: f32, n: i32, m: f32) -> f32 {
     return length(q) * sign(q.x);
 }
 
-fn shaderGlyph_1052684(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
+fn shaderGlyph_1052684(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>, lastChar: u32, lastCharTime: f32) -> vec3<f32> {
     let bgColor = unpackColor(bg);
     // fgColor unused - star has its own golden color
 

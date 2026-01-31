@@ -1,7 +1,7 @@
 // Shader glyph: DNA Helix (codepoint 1052700 / U+10101C)
 // Two interleaved sine waves with dots at crossing points, scrolling vertically
 
-fn shaderGlyph_1052700(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
+fn shaderGlyph_1052700(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>, lastChar: u32, lastCharTime: f32) -> vec3<f32> {
     let fgColor = unpackColor(fg);
     let bgColor = unpackColor(bg);
 

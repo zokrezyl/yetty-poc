@@ -11,14 +11,8 @@
  􁀊 smiley
  􁀋 sparkle
  􁀌 star
- 􁀍 mandelbrot
- 􁀎 julia
- 􁀏 biomine
- 􁀐 minkowski-tube
- 􁀑 voronoi
  􁀒 watch
  􁀓 spiral
- 􁀔 hg-sdf
  􁀕 border-dots
  􁀖 orbit-dots
  􁀗 border-dots-grouped
@@ -34,3 +28,19 @@
  􁀡 rain
  􁀢 orbit
  􁀣 crosshair-pulse
+ 􁀤 matrix-rain
+ 􁀥 metaballs
+ 􁀦 heartbeat
+ 􁀧 typing-dots
+ 􁀨 signal-bars
+ 􁀩 vinyl
+ 􁀪 dvd-bounce
+ 􏿽 mandelbrot
+ 􏿼 julia
+ 􏿻 biomine
+ 􏿺 minkowski-tube
+ 􏿹 voronoi
+ 􏿸 hg-sdf
+ 􏿷 mandelbrot-deco
+ 􏿶 looping-spline
+ 􏿵 butterfly-flock

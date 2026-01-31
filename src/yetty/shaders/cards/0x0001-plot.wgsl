@@ -58,7 +58,7 @@ const PLOT_TYPE_AREA: u32 = 3u;
 const PLOT_FLAG_GRID: u32 = 1u;
 const PLOT_FLAG_AXES: u32 = 2u;
 
-fn shaderGlyph_1048577(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
+fn shaderGlyph_1048577(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>, lastChar: u32, lastCharTime: f32) -> vec3<f32> {
     // ==========================================================================
     // Decode ANSI-compatible cell encoding (see header comments for design)
     // ==========================================================================

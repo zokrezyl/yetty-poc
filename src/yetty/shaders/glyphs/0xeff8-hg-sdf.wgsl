@@ -1,4 +1,4 @@
-// Shader glyph: HG SDF (codepoint 1052692 / U+101014)
+// Shader glyph: HG SDF (codepoint 1114104 / U+10FFF8)
 // Mercury's HG_SDF - GLSL library for building signed distance bounds
 // Converted to WGSL. Original: https://mercury.sexy/hg_sdf
 // Released under MIT License OR CC-BY-NC-4.0 by Mercury Demogroup
@@ -357,7 +357,7 @@ fn hg_calcAO(p: vec3<f32>, n: vec3<f32>, time: f32) -> f32 {
     return clamp(1.0 - ao * 2.0, 0.0, 1.0);
 }
 
-fn shaderGlyph_1052692(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
+fn shaderGlyph_1114104(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>, lastChar: u32, lastCharTime: f32) -> vec3<f32> {
     let screenSize = vec2<f32>(globals.screenWidth, globals.screenHeight);
     let uv = (pixelPos - screenSize * 0.5) / screenSize.y;
 

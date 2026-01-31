@@ -9,6 +9,13 @@ class WorkspaceImpl : public Workspace {
 public:
   explicit WorkspaceImpl(const YettyContext &ctx) : _ctx(ctx) {}
 
+  Result<void> onShutdown() override {
+    if (_root) {
+      return _root->shutdown();
+    }
+    return Ok();
+  }
+
   Result<void> init() {
     // Create frame renderer for tiles
     auto frameResult =

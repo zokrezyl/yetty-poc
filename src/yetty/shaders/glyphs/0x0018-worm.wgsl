@@ -60,7 +60,7 @@ fn worm_simulate(time: f32) -> vec2<f32> {
     return clamp(pos, vec2<f32>(lo), vec2<f32>(hi));
 }
 
-fn shaderGlyph_1052696(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
+fn shaderGlyph_1052696(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>, lastChar: u32, lastCharTime: f32) -> vec3<f32> {
     let fgColor = unpackColor(fg);
     let bgColor = unpackColor(bg);
 

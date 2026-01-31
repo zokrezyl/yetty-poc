@@ -5,6 +5,6 @@
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR/../../.."
 
-python3 tools/yetty-client/main.py --new create ymery -i demo/ymery/simple -w 60 -H 30
+python3 tools/yetty-client/main.py create ymery -i demo/ymery/simple -w 60 -H 30
 
 echo  # newline after the card

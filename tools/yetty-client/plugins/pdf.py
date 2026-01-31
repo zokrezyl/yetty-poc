@@ -17,8 +17,8 @@ def pdf(ctx, input_, page, zoom):
     Scroll to navigate pages, Ctrl+Scroll to zoom.
 
     Example:
-        yetty-client --new create pdf -i document.pdf -w 80 -H 40
-        cat document.pdf | yetty-client --new create pdf -i - -w 80 -H 40
+        yetty-client create pdf -i document.pdf -w 80 -H 40
+        cat document.pdf | yetty-client create pdf -i - -w 80 -H 40
     """
     ctx.ensure_object(dict)
 

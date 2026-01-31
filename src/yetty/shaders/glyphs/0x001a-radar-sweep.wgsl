@@ -1,7 +1,7 @@
 // Shader glyph: Radar Sweep (codepoint 1052698 / U+10101A)
 // A rotating line with fading trail, like a radar screen
 
-fn shaderGlyph_1052698(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
+fn shaderGlyph_1052698(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>, lastChar: u32, lastCharTime: f32) -> vec3<f32> {
     let fgColor = unpackColor(fg);
     let bgColor = unpackColor(bg);
 

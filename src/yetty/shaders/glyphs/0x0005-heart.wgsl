@@ -15,7 +15,7 @@ fn shaderGlyph_1052677_sdHeart(p: vec2<f32>) -> f32 {
     return sqrt(min(dot(b, b), dot(c, c))) * sign(q.x - q.y);
 }
 
-fn shaderGlyph_1052677(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
+fn shaderGlyph_1052677(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>, lastChar: u32, lastCharTime: f32) -> vec3<f32> {
     let bgColor = unpackColor(bg);
     // fgColor unused - heart has its own red color
 

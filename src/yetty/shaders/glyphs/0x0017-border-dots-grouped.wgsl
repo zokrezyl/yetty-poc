@@ -17,7 +17,7 @@ fn borderDotsGrouped_perimeterPos(t: f32, w: f32, h: f32) -> vec2<f32> {
     return vec2<f32>(0.0, h - (tt - 2.0 * w - h));
 }
 
-fn shaderGlyph_1052695(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
+fn shaderGlyph_1052695(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>, lastChar: u32, lastCharTime: f32) -> vec3<f32> {
     let fgColor = unpackColor(fg);
     let bgColor = unpackColor(bg);
 

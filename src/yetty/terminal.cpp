@@ -24,9 +24,7 @@ public:
     explicit TerminalImpl(const YettyContext& ctx)
         : _ctx(ctx) {}
 
-    ~TerminalImpl() override {
-        stop();
-    }
+    ~TerminalImpl() override = default;
 
     Result<void> init() {
         auto screenResult = GPUScreen::create(_ctx);
@@ -49,16 +47,18 @@ public:
         return Ok();
     }
 
-    void stop() override {
+    Result<void> onShutdown() override {
+        Result<void> result = Ok();
+
 #if !YETTY_WEB && !defined(__ANDROID__)
         _running = false;
 
-        auto loop = *base::EventLoop::instance();
-
-        // Deregister keyboard event listeners
-        loop->deregisterListener(sharedAs<base::EventListener>());
-
         if (_pollId >= 0) {
+            auto loop = *base::EventLoop::instance();
+
+            // Deregister event listeners — safe here, shared_ptr is still alive
+            loop->deregisterListener(sharedAs<base::EventListener>());
+
             loop->destroyPoll(_pollId);
             _pollId = -1;
         }
@@ -74,6 +74,14 @@ public:
             _childPid = -1;
         }
 #endif
+
+        if (_gpuScreen) {
+            if (auto res = _gpuScreen->shutdown(); !res) {
+                result = Err<void>("GPUScreen shutdown failed", res);
+            }
+        }
+
+        return result;
     }
 
     bool isRunning() const override { return _running; }

@@ -51,11 +51,12 @@ public:
 #endif
     }
 
-    void stop() override {
+    Result<void> stop() override {
 #if !YETTY_WEB && !defined(__ANDROID__)
         yinfo("EventLoop::stop");
         uv_stop(_loop);
 #endif
+        return Ok();
     }
 
     Result<void> registerListener(Event::Type type, EventListener::Ptr listener, int priority = 0) override {

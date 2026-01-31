@@ -29,6 +29,21 @@ public:
 
     Result<void> init() { return Ok(); }
 
+    Result<void> onShutdown() override {
+        Result<void> result = Ok();
+        if (_first) {
+            if (auto res = _first->shutdown(); !res) {
+                result = Err<void>("Failed to shutdown first tile", res);
+            }
+        }
+        if (_second) {
+            if (auto res = _second->shutdown(); !res) {
+                result = Err<void>("Failed to shutdown second tile", res);
+            }
+        }
+        return result;
+    }
+
     Result<void> render(WGPURenderPassEncoder pass) override {
         // Render frame around the split
         renderFrame(pass, 1.0f, 0.0f, 0.0f, 1.0f, 5.0f);
@@ -133,6 +148,22 @@ public:
     Result<void> init() {
         registerForEvents();
         return Ok();
+    }
+
+    Result<void> onShutdown() override {
+        Result<void> result = Ok();
+
+        // Deregister from EventLoop
+        auto loop = *EventLoop::instance();
+        loop->deregisterListener(sharedAs<EventListener>());
+
+        // Shutdown all views
+        for (auto& view : _views) {
+            if (auto res = view->shutdown(); !res) {
+                result = Err<void>("Failed to shutdown view", res);
+            }
+        }
+        return result;
     }
 
     Result<void> render(WGPURenderPassEncoder pass) override {

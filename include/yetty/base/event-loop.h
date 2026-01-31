@@ -24,7 +24,7 @@ public:
     virtual int start() = 0;
 
     // Stop the event loop
-    virtual void stop() = 0;
+    virtual Result<void> stop() = 0;
 
     // Event listener registration by type
     // priority: higher value = called first (default 0)

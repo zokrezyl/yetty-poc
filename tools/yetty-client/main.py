@@ -28,16 +28,12 @@ from plugins import discover_plugins, get_plugin
 @click.group()
 @click.option('--verbose', '-v', is_flag=True, help='Enable verbose output')
 @click.option('--dry-run', '-n', is_flag=True, help='Show what would be done')
-@click.option('--new', is_flag=True, help='Use new card system (OSC 666666) instead of legacy plugins (OSC 999999)')
 @click.pass_context
-def cli(ctx, verbose, dry_run, new):
-    """Yetty Client - manage yetty terminal plugins."""
+def cli(ctx, verbose, dry_run):
+    """Yetty Client - manage yetty terminal cards."""
     ctx.ensure_object(dict)
     ctx.obj['verbose'] = verbose
     ctx.obj['dry_run'] = dry_run
-    ctx.obj['use_new'] = new
-    # Set the OSC vendor ID based on --new flag
-    osc.set_use_new_system(new)
 
 
 @cli.command('create', context_settings=dict(
@@ -224,7 +220,7 @@ def cmd_decode(ctx, input_file, output, info, raw):
     vendor_id, generic_args, plugin_args, encoded_payload = parts
 
     if vendor_id != str(osc.VENDOR_ID):
-        raise click.ClickException(f"Unknown vendor ID: {vendor_id}")
+        raise click.ClickException(f"Unknown vendor ID: {vendor_id} (expected {osc.VENDOR_ID})")
 
     if info or ctx.obj['verbose']:
         click.echo(f"Generic args: {generic_args}", err=True)

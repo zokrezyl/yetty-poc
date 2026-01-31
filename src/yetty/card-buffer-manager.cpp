@@ -892,6 +892,7 @@ Result<void> CardBufferManagerImpl::flush(WGPUQueue queue) {
     if (_metadataDirty.hasDirty()) {
         auto ranges = _metadataDirty.getCoalescedRanges();
         for (const auto& [offset, size] : ranges) {
+            ydebug("CardBufMgr::flush: metadata upload offset={} size={}", offset, size);
             wgpuQueueWriteBuffer(queue, _metadataGpuBuffer, offset,
                                  metadataBytes + offset, size);
         }
@@ -902,6 +903,7 @@ Result<void> CardBufferManagerImpl::flush(WGPUQueue queue) {
     if (_storageDirty.hasDirty()) {
         auto ranges = _storageDirty.getCoalescedRanges();
         for (const auto& [offset, size] : ranges) {
+            ydebug("CardBufMgr::flush: storage upload offset={} size={}", offset, size);
             wgpuQueueWriteBuffer(queue, _storageGpuBuffer, offset,
                                  storageBytes + offset, size);
         }
@@ -912,6 +914,7 @@ Result<void> CardBufferManagerImpl::flush(WGPUQueue queue) {
     if (_textureDataDirty.hasDirty()) {
         auto ranges = _textureDataDirty.getCoalescedRanges();
         for (const auto& [offset, size] : ranges) {
+            ydebug("CardBufMgr::flush: textureData upload offset={} size={}", offset, size);
             wgpuQueueWriteBuffer(queue, _textureDataGpuBuffer, offset,
                                  textureDataBytes + offset, size);
         }

@@ -8,10 +8,11 @@ class TerminalViewImpl : public TerminalView {
 public:
     TerminalViewImpl() = default;
 
-    ~TerminalViewImpl() override {
+    Result<void> onShutdown() override {
         if (terminal_) {
-            terminal_->stop();
+            return terminal_->shutdown();
         }
+        return Ok();
     }
 
     Result<void> init(const YettyContext& ctx) {

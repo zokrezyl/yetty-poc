@@ -260,6 +260,9 @@ public:
     }
 
     Result<void> dispose() override {
+        _primStaging.clear();
+        _primStaging.shrink_to_fit();
+
         if (_derivedStorage.isValid() && _cardMgr) {
             if (auto res = _cardMgr->deallocateStorage(_derivedStorage); !res) {
                 yerror("HDraw::dispose: deallocateStorage (derived) failed: {}", error_msg(res));
@@ -289,8 +292,50 @@ public:
         return Ok();
     }
 
+    void suspend() override {
+        // Save primitives from GPU storage to CPU staging
+        if (_primStorage.isValid() && _primCount > 0) {
+            _primStaging.resize(_primCount);
+            std::memcpy(_primStaging.data(), _primitives, _primCount * sizeof(SDFPrimitive));
+        }
+
+        // Deallocate derived storage (grid + glyphs)
+        if (_derivedStorage.isValid()) {
+            _cardMgr->deallocateStorage(_derivedStorage);
+            _derivedStorage = StorageHandle::invalid();
+            _grid = nullptr;
+            _gridSize = 0;
+        }
+
+        // Deallocate primitive storage
+        if (_primStorage.isValid()) {
+            _cardMgr->deallocateStorage(_primStorage);
+            _primStorage = StorageHandle::invalid();
+            _primitives = nullptr;
+            _primCount = 0;
+            _primCapacity = 0;
+        }
+
+        yinfo("HDraw::suspend: deallocated storage, saved {} primitives to staging", _primStaging.size());
+    }
+
     Result<void> update(float time) override {
         (void)time;
+
+        // Reconstruct storage after suspend
+        if (!_primStorage.isValid() && !_primStaging.empty()) {
+            uint32_t count = static_cast<uint32_t>(_primStaging.size());
+            if (auto res = ensurePrimCapacity(count); !res) {
+                return Err<void>("HDraw::update: failed to re-allocate prim storage");
+            }
+            _primCount = count;
+            std::memcpy(_primitives, _primStaging.data(), count * sizeof(SDFPrimitive));
+            _primStaging.clear();
+            _primStaging.shrink_to_fit();
+            _cardMgr->markStorageDirty(_primStorage);
+            _dirty = true;
+            yinfo("HDraw::update: reconstructed {} primitives from staging", count);
+        }
 
         if (_dirty) {
             if (auto res = rebuildAndUpload(); !res) {
@@ -1594,6 +1639,7 @@ private:
     uint32_t _primCount = 0;
     uint32_t _primCapacity = 0;
     StorageHandle _primStorage = StorageHandle::invalid();
+    std::vector<SDFPrimitive> _primStaging;  // CPU staging for suspend/resume
 
     // Grid + glyphs - built directly in derived storage
     uint32_t* _grid = nullptr;

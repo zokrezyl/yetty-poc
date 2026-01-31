@@ -9,11 +9,8 @@
 
 namespace yetty {
 
-// Vendor ID for yetty OSC sequences (legacy plugin system)
-constexpr int YETTY_OSC_VENDOR_ID = 999999;
-
-// Vendor ID for card-based widgets (new system)
-constexpr int YETTY_OSC_VENDOR_CARD_ID = 666666;
+// Vendor ID for yetty card OSC sequences
+constexpr int YETTY_OSC_VENDOR_ID = 666666;
 
 //-----------------------------------------------------------------------------
 // OscCommand - parsed OSC command
@@ -123,8 +120,8 @@ public:
     // Build error response
     static std::string error(const std::string& message);
 
-    // Build list response (widgets)
-    static std::string widgetList(const std::vector<std::tuple<std::string, std::string, int, int, int, int, bool>>& widgets);
+    // Build list response (cards)
+    static std::string cardList(const std::vector<std::tuple<std::string, std::string, int, int, int, int, bool>>& cards);
 
     // Build plugins list response
     static std::string pluginList(const std::vector<std::string>& plugins);

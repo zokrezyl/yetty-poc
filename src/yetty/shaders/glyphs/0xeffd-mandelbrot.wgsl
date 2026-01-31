@@ -1,8 +1,8 @@
-// Shader glyph: Mandelbrot fractal (codepoint 1052685 / U+10100D)
+// Shader glyph: Mandelbrot fractal (codepoint 1114109 / U+10FFFD)
 // Tiled fractal - uses pixelPos to create seamless rendering across cells
 // Mouse position shifts the view center
 
-fn shaderGlyph_1052685(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>) -> vec3<f32> {
+fn shaderGlyph_1114109(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>, lastChar: u32, lastCharTime: f32) -> vec3<f32> {
     // fg/bg unused - fractal has its own colors
     // Normalize coordinates to 0-1
     let screenSize = vec2<f32>(globals.screenWidth, globals.screenHeight);
