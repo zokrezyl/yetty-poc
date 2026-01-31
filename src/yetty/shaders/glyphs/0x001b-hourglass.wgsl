@@ -70,23 +70,25 @@ fn shaderGlyph_1052699(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
     let inFlip = halfT >= sandTime;
     let progress = select(halfT / sandTime, 1.0, inFlip);
 
-    // Rotation angle: 0 during sand, 0->PI during flip
-    var flipProgress = 0.0;
     if (inFlip) {
+        // During flip: rotate the whole hourglass with frozen sand state
         let ft = (halfT - sandTime) / flipTime;
-        flipProgress = ft * ft * (3.0 - 2.0 * ft); // smoothstep
+        let eased = ft * ft * (3.0 - 2.0 * ft); // smoothstep
+        let baseAngle = select(0.0, 3.14159, inSecondHalf);
+        let angle = baseAngle + eased * 3.14159;
+
+        let center = vec2<f32>(0.5, 0.5);
+        let rel = localUV - center;
+        let ca = cos(angle);
+        let sa = sin(angle);
+        let rotated = vec2<f32>(rel.x * ca - rel.y * sa, rel.x * sa + rel.y * ca) + center;
+
+        // First flip: sand is at bottom (progress=1). Second flip: sand is at top (progress=0).
+        let frozenProgress = select(1.0, 0.0, inSecondHalf);
+        return hourglass_draw(rotated, frozenProgress, fgColor, bgColor);
     }
 
-    // Base rotation: second half adds PI (hourglass is upside down)
-    let baseAngle = select(0.0, 3.14159, inSecondHalf);
-    let angle = baseAngle + flipProgress * 3.14159;
-
-    // Rotate UV around center
-    let center = vec2<f32>(0.5, 0.5);
-    let rel = localUV - center;
-    let ca = cos(angle);
-    let sa = sin(angle);
-    let rotated = vec2<f32>(rel.x * ca - rel.y * sa, rel.x * sa + rel.y * ca) + center;
-
-    return hourglass_draw(rotated, progress, fgColor, bgColor);
+    // Sand phase: no rotation, sand always drains top -> bottom in screen space
+    // The glass shape is vertically symmetric so it looks the same either way
+    return hourglass_draw(localUV, progress, fgColor, bgColor);
 }

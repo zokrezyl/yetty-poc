@@ -245,6 +245,12 @@ private:
     WGPUBindGroupLayout _sharedBindGroupLayout = nullptr;
     WGPUBindGroup _sharedBindGroup = nullptr;
 
+    // Dummy atlas resources for bind group creation before atlas is initialized
+    WGPUTexture _dummyAtlasTexture = nullptr;
+    WGPUTextureView _dummyAtlasTextureView = nullptr;
+    WGPUSampler _dummyAtlasSampler = nullptr;
+    Result<void> createDummyAtlasResources();
+
     // Helper to check if atlas needs to grow and grow it
     Result<void> checkAndGrowAtlas(WGPUQueue queue);
     Result<void> growAtlas();
@@ -511,6 +517,14 @@ Result<void> CardBufferManagerImpl::init() noexcept {
         return Err<void>("Failed to create GPU buffers", res);
     }
 
+    // Create dummy atlas resources so the shared bind group can be created
+    // before any image card triggers the real atlas initialization.
+    // Without this, cards that only use metadata/storage (e.g. plot, ydraw)
+    // would never get a real bind group since atlas init is lazy.
+    if (auto res = createDummyAtlasResources(); !res) {
+        return Err<void>("Failed to create dummy atlas resources", res);
+    }
+
     if (auto res = createSharedBindGroup(); !res) {
         return Err<void>("Failed to create shared bind group", res);
     }
@@ -544,6 +558,11 @@ CardBufferManagerImpl::~CardBufferManagerImpl() {
     if (_atlasSampler) wgpuSamplerRelease(_atlasSampler);
     if (_atlasTextureView) wgpuTextureViewRelease(_atlasTextureView);
     if (_atlasTexture) wgpuTextureRelease(_atlasTexture);
+
+    // Release dummy atlas resources
+    if (_dummyAtlasSampler) wgpuSamplerRelease(_dummyAtlasSampler);
+    if (_dummyAtlasTextureView) wgpuTextureViewRelease(_dummyAtlasTextureView);
+    if (_dummyAtlasTexture) wgpuTextureRelease(_dummyAtlasTexture);
 }
 
 Result<void> CardBufferManagerImpl::createGpuBuffers() {
@@ -595,12 +614,44 @@ Result<void> CardBufferManagerImpl::createGpuBuffers() {
     return Ok();
 }
 
-Result<void> CardBufferManagerImpl::createSharedBindGroup() {
-    // Can only create bind group after atlas is initialized
-    if (!_atlasInitialized || !_atlasTextureView || !_atlasSampler) {
-        return Ok();  // Will be created when initAtlas() is called
+Result<void> CardBufferManagerImpl::createDummyAtlasResources() {
+    // 1x1 RGBA8 texture as placeholder for atlas texture binding
+    WGPUTextureDescriptor texDesc = {};
+    texDesc.label = WGPU_STR("dummy atlas");
+    texDesc.size = {1, 1, 1};
+    texDesc.format = WGPUTextureFormat_RGBA8Unorm;
+    texDesc.usage = WGPUTextureUsage_TextureBinding;
+    texDesc.dimension = WGPUTextureDimension_2D;
+    texDesc.mipLevelCount = 1;
+    texDesc.sampleCount = 1;
+    _dummyAtlasTexture = wgpuDeviceCreateTexture(_device, &texDesc);
+    if (!_dummyAtlasTexture) {
+        return Err<void>("Failed to create dummy atlas texture");
     }
 
+    WGPUTextureViewDescriptor viewDesc = {};
+    viewDesc.format = WGPUTextureFormat_RGBA8Unorm;
+    viewDesc.dimension = WGPUTextureViewDimension_2D;
+    viewDesc.mipLevelCount = 1;
+    viewDesc.arrayLayerCount = 1;
+    _dummyAtlasTextureView = wgpuTextureCreateView(_dummyAtlasTexture, &viewDesc);
+    if (!_dummyAtlasTextureView) {
+        return Err<void>("Failed to create dummy atlas texture view");
+    }
+
+    WGPUSamplerDescriptor samplerDesc = {};
+    samplerDesc.magFilter = WGPUFilterMode_Linear;
+    samplerDesc.minFilter = WGPUFilterMode_Linear;
+    samplerDesc.maxAnisotropy = 1;
+    _dummyAtlasSampler = wgpuDeviceCreateSampler(_device, &samplerDesc);
+    if (!_dummyAtlasSampler) {
+        return Err<void>("Failed to create dummy atlas sampler");
+    }
+
+    return Ok();
+}
+
+Result<void> CardBufferManagerImpl::createSharedBindGroup() {
     // Release existing resources if recreating
     if (_sharedBindGroup) {
         wgpuBindGroupRelease(_sharedBindGroup);
@@ -613,6 +664,16 @@ Result<void> CardBufferManagerImpl::createSharedBindGroup() {
         if (!_sharedBindGroupLayout) {
             return Err<void>("No shared bind group layout in GPUContext");
         }
+    }
+
+    // Use real atlas resources if available, otherwise fall back to dummies.
+    // This allows cards that don't use texture data (plot, ydraw) to have
+    // a working bind group with real metadata/storage buffers.
+    WGPUTextureView texView = _atlasTextureView ? _atlasTextureView : _dummyAtlasTextureView;
+    WGPUSampler sampler = _atlasSampler ? _atlasSampler : _dummyAtlasSampler;
+
+    if (!texView || !sampler) {
+        return Ok();  // No atlas resources available yet
     }
 
     // Create bind group with current resources
@@ -631,10 +692,10 @@ Result<void> CardBufferManagerImpl::createSharedBindGroup() {
     bindEntries[2].size = wgpuBufferGetSize(_storageGpuBuffer);
 
     bindEntries[3].binding = 3;
-    bindEntries[3].textureView = _atlasTextureView;
+    bindEntries[3].textureView = texView;
 
     bindEntries[4].binding = 4;
-    bindEntries[4].sampler = _atlasSampler;
+    bindEntries[4].sampler = sampler;
 
     bindEntries[5].binding = 5;
     bindEntries[5].buffer = _textureDataGpuBuffer;
