@@ -4,7 +4,6 @@
 #include <cstring>
 #include <array>
 #include <vector>
-#include <unordered_map>
 
 #ifndef CMAKE_SOURCE_DIR
 #define CMAKE_SOURCE_DIR "."
@@ -117,25 +116,12 @@ private:
 };
 
 // =============================================================================
-// Texture handle tracking data
-// =============================================================================
-
-struct TextureHandleData {
-    const uint8_t* pixels = nullptr;
-    uint32_t width = 0;
-    uint32_t height = 0;
-    uint32_t atlasX = 0;
-    uint32_t atlasY = 0;
-    bool packed = false;
-};
-
-// =============================================================================
 // CardBufferManagerImpl - implementation class
 // =============================================================================
 
 class CardBufferManagerImpl : public CardBufferManager {
 public:
-    CardBufferManagerImpl(GPUContext* gpuContext, WGPUBuffer uniformBuffer, uint32_t uniformSize, Config config) noexcept;
+    CardBufferManagerImpl(GPUContext* gpuContext, CardTextureManager::Ptr textureMgr, WGPUBuffer uniformBuffer, uint32_t uniformSize, Config config) noexcept;
     ~CardBufferManagerImpl() override;
 
     Result<void> init() noexcept;
@@ -146,31 +132,18 @@ public:
     Result<void> writeMetadata(MetadataHandle handle, const void* data, uint32_t size) override;
     Result<void> writeMetadataAt(MetadataHandle handle, uint32_t offset, const void* data, uint32_t size) override;
 
-    // Buffer (linear data for plot/draw cards)
+    // Buffer (linear data for plot/draw cards) - binding 2
     Result<BufferHandle> allocateBuffer(uint32_t size) override;
     Result<void> deallocateBuffer(BufferHandle handle) override;
     Result<void> writeBuffer(BufferHandle handle, const void* data, uint32_t size) override;
     Result<void> writeBufferAt(BufferHandle handle, uint32_t offset, const void* data, uint32_t size) override;
     Result<BufferHandle> allocateBufferAndLink(MetadataHandle metaHandle,
-                                                uint32_t metaFieldOffset,
-                                                uint32_t bufferSize) override;
+                                               uint32_t metaFieldOffset,
+                                               uint32_t bufferSize) override;
     void markBufferDirty(BufferHandle handle) override;
-
-    // Texture atlas
-    Result<TextureHandle> allocateTextureHandle() override;
-    Result<void> linkTextureData(TextureHandle handle,
-                                  const uint8_t* pixels,
-                                  uint32_t width, uint32_t height) override;
-    Result<void> deallocateTextureHandle(TextureHandle handle) override;
-    void invalidateAllTextureHandles() override;
-    Result<void> packAtlas(WGPUQueue queue) override;
-    Result<void> writeToAtlas(TextureHandle handle, WGPUQueue queue) override;
-    Result<void> writeAllToAtlas(WGPUQueue queue) override;
-    AtlasPosition getAtlasPosition(TextureHandle handle) const override;
 
     // GPU upload
     Result<void> flush(WGPUQueue queue) override;
-    Result<void> initAtlas() override;
 
     // Accessors
     WGPUBuffer metadataBuffer() const override { return _metadataGpuBuffer; }
@@ -179,27 +152,25 @@ public:
     uint32_t metadataHighWaterMark() const override { return _metadataAllocator.highWaterMark(); }
     uint32_t bufferHighWaterMark() const override { return _bufferAllocator.highWaterMark(); }
 
-    WGPUTexture atlasTexture() const override { return _atlasTexture; }
-    WGPUTextureView atlasTextureView() const override { return _atlasTextureView; }
-    WGPUSampler atlasSampler() const override { return _atlasSampler; }
-    bool atlasInitialized() const override { return _atlasInitialized; }
-    WGPUBindGroupLayout sharedBindGroupLayout() const override { return _sharedBindGroupLayout; }
-    WGPUBindGroup sharedBindGroup() const override { return _sharedBindGroup; }
+    bool bindGroupDirty() const override { return _bindGroupDirty; }
+    void clearBindGroupDirty() override { _bindGroupDirty = false; }
+
+    CardTextureManager::Ptr textureManager() const override { return _textureMgr; }
 
     Stats getStats() const override;
 
 private:
     Result<void> createGpuBuffers();
-    Result<void> createAtlasTexture();
-    Result<void> createSharedBindGroup();
     Result<void> growBufferGpu(uint32_t requiredSize);
-    Result<void> growAtlas();
 
     GPUContext* _gpuContext;
     WGPUDevice _device;
     Config _config;
     WGPUBuffer _uniformBuffer;
     uint32_t _uniformSize;
+
+    // Texture manager (for reference)
+    CardTextureManager::Ptr _textureMgr;
 
     // CPU buffers
     std::vector<uint32_t> _metadataCpuBuffer;
@@ -214,32 +185,12 @@ private:
     DirtyTracker _metadataDirty;
     DirtyTracker _bufferDirty;
 
-    // Atlas Resources
-    WGPUTexture _atlasTexture = nullptr;
-    WGPUTextureView _atlasTextureView = nullptr;
-    WGPUSampler _atlasSampler = nullptr;
-    bool _atlasInitialized = false;
-    uint32_t _currentAtlasSize = IMAGE_ATLAS_SIZE;
-    static constexpr uint32_t MAX_ATLAS_SIZE = 8192;
-
-    // Texture handle tracking
-    std::unordered_map<uint32_t, TextureHandleData> _textureHandles;
-    uint32_t _nextTextureHandleId = 1;  // 0 = invalid
-
-    // Current buffer capacity (can grow)
+    // Current capacity (can grow)
     uint32_t _currentBufferCapacity;
     static constexpr uint32_t MAX_BUFFER_SIZE = 32 * 1024 * 1024;  // 32 MB max
 
-    // Shared bind group for rendering
-    WGPUBindGroupLayout _sharedBindGroupLayout = nullptr;
-    WGPUBindGroup _sharedBindGroup = nullptr;
-
-    // Dummy resources for bind group creation before atlas is initialized
-    WGPUTexture _dummyAtlasTexture = nullptr;
-    WGPUTextureView _dummyAtlasTextureView = nullptr;
-    WGPUSampler _dummyAtlasSampler = nullptr;
-    WGPUBuffer _dummyBuffer = nullptr;  // Dummy for binding 5 (was textureData)
-    Result<void> createDummyResources();
+    // Set when GPU buffers are recreated - CardManager must recreate bind group
+    bool _bindGroupDirty = true;  // Start dirty to force initial bind group creation
 };
 
 // =============================================================================
@@ -456,8 +407,8 @@ std::vector<std::pair<uint32_t, uint32_t>> DirtyTracker::getCoalescedRanges(uint
 // CardBufferManager factory
 // =============================================================================
 
-Result<CardBufferManager::Ptr> CardBufferManager::create(GPUContext* gpuContext, WGPUBuffer uniformBuffer, uint32_t uniformSize, Config config) noexcept {
-    auto mgr = std::make_shared<CardBufferManagerImpl>(gpuContext, uniformBuffer, uniformSize, config);
+Result<CardBufferManager::Ptr> CardBufferManager::create(GPUContext* gpuContext, CardTextureManager::Ptr textureMgr, WGPUBuffer uniformBuffer, uint32_t uniformSize, Config config) noexcept {
+    auto mgr = std::make_shared<CardBufferManagerImpl>(gpuContext, textureMgr, uniformBuffer, uniformSize, config);
     if (auto res = mgr->init(); !res) {
         return Err<Ptr>("Failed to initialize CardBufferManager", res);
     }
@@ -468,12 +419,13 @@ Result<CardBufferManager::Ptr> CardBufferManager::create(GPUContext* gpuContext,
 // CardBufferManagerImpl implementation
 // =============================================================================
 
-CardBufferManagerImpl::CardBufferManagerImpl(GPUContext* gpuContext, WGPUBuffer uniformBuffer, uint32_t uniformSize, Config config) noexcept
+CardBufferManagerImpl::CardBufferManagerImpl(GPUContext* gpuContext, CardTextureManager::Ptr textureMgr, WGPUBuffer uniformBuffer, uint32_t uniformSize, Config config) noexcept
     : _gpuContext(gpuContext)
     , _device(gpuContext->device)
     , _config(config)
     , _uniformBuffer(uniformBuffer)
     , _uniformSize(uniformSize)
+    , _textureMgr(textureMgr)
     , _metadataAllocator(config.metadataPool32Count, config.metadataPool64Count,
                          config.metadataPool128Count, config.metadataPool256Count)
     , _bufferAllocator(4)          // Start tiny, grow on demand
@@ -488,31 +440,12 @@ Result<void> CardBufferManagerImpl::init() noexcept {
         return Err<void>("Failed to create GPU buffers", res);
     }
 
-    if (auto res = createDummyResources(); !res) {
-        return Err<void>("Failed to create dummy resources", res);
-    }
-
-    if (auto res = createSharedBindGroup(); !res) {
-        return Err<void>("Failed to create shared bind group", res);
-    }
-
     return Ok();
 }
 
 CardBufferManagerImpl::~CardBufferManagerImpl() {
     if (_metadataGpuBuffer) wgpuBufferRelease(_metadataGpuBuffer);
     if (_bufferGpuBuffer) wgpuBufferRelease(_bufferGpuBuffer);
-
-    if (_sharedBindGroup) wgpuBindGroupRelease(_sharedBindGroup);
-
-    if (_atlasSampler) wgpuSamplerRelease(_atlasSampler);
-    if (_atlasTextureView) wgpuTextureViewRelease(_atlasTextureView);
-    if (_atlasTexture) wgpuTextureRelease(_atlasTexture);
-
-    if (_dummyAtlasSampler) wgpuSamplerRelease(_dummyAtlasSampler);
-    if (_dummyAtlasTextureView) wgpuTextureViewRelease(_dummyAtlasTextureView);
-    if (_dummyAtlasTexture) wgpuTextureRelease(_dummyAtlasTexture);
-    if (_dummyBuffer) wgpuBufferRelease(_dummyBuffer);
 }
 
 Result<void> CardBufferManagerImpl::createGpuBuffers() {
@@ -546,116 +479,6 @@ Result<void> CardBufferManagerImpl::createGpuBuffers() {
         return Err("Failed to create buffer GPU buffer");
     }
 
-    return Ok();
-}
-
-Result<void> CardBufferManagerImpl::createDummyResources() {
-    // 1x1 RGBA8 texture as placeholder for atlas texture binding
-    WGPUTextureDescriptor texDesc = {};
-    texDesc.label = WGPU_STR("dummy atlas");
-    texDesc.size = {1, 1, 1};
-    texDesc.format = WGPUTextureFormat_RGBA8Unorm;
-    texDesc.usage = WGPUTextureUsage_TextureBinding;
-    texDesc.dimension = WGPUTextureDimension_2D;
-    texDesc.mipLevelCount = 1;
-    texDesc.sampleCount = 1;
-    _dummyAtlasTexture = wgpuDeviceCreateTexture(_device, &texDesc);
-    if (!_dummyAtlasTexture) {
-        return Err<void>("Failed to create dummy atlas texture");
-    }
-
-    WGPUTextureViewDescriptor viewDesc = {};
-    viewDesc.format = WGPUTextureFormat_RGBA8Unorm;
-    viewDesc.dimension = WGPUTextureViewDimension_2D;
-    viewDesc.mipLevelCount = 1;
-    viewDesc.arrayLayerCount = 1;
-    _dummyAtlasTextureView = wgpuTextureCreateView(_dummyAtlasTexture, &viewDesc);
-    if (!_dummyAtlasTextureView) {
-        return Err<void>("Failed to create dummy atlas texture view");
-    }
-
-    WGPUSamplerDescriptor samplerDesc = {};
-    samplerDesc.magFilter = WGPUFilterMode_Linear;
-    samplerDesc.minFilter = WGPUFilterMode_Linear;
-    samplerDesc.maxAnisotropy = 1;
-    _dummyAtlasSampler = wgpuDeviceCreateSampler(_device, &samplerDesc);
-    if (!_dummyAtlasSampler) {
-        return Err<void>("Failed to create dummy atlas sampler");
-    }
-
-    // Dummy buffer for binding 5 (was textureData, no longer used by shaders)
-    WGPUBufferDescriptor dummyBufDesc = {};
-    dummyBufDesc.label = WGPU_STR("DummyBinding5");
-    dummyBufDesc.size = 4;
-    dummyBufDesc.usage = WGPUBufferUsage_Storage;
-    dummyBufDesc.mappedAtCreation = false;
-    _dummyBuffer = wgpuDeviceCreateBuffer(_device, &dummyBufDesc);
-    if (!_dummyBuffer) {
-        return Err<void>("Failed to create dummy buffer");
-    }
-
-    return Ok();
-}
-
-Result<void> CardBufferManagerImpl::createSharedBindGroup() {
-    if (_sharedBindGroup) {
-        wgpuBindGroupRelease(_sharedBindGroup);
-        _sharedBindGroup = nullptr;
-    }
-
-    if (!_sharedBindGroupLayout) {
-        _sharedBindGroupLayout = _gpuContext->sharedBindGroupLayout;
-        if (!_sharedBindGroupLayout) {
-            return Err<void>("No shared bind group layout in GPUContext");
-        }
-    }
-
-    WGPUTextureView texView = _atlasTextureView ? _atlasTextureView : _dummyAtlasTextureView;
-    WGPUSampler sampler = _atlasSampler ? _atlasSampler : _dummyAtlasSampler;
-
-    if (!texView || !sampler) {
-        return Ok();
-    }
-
-    std::array<WGPUBindGroupEntry, 6> bindEntries = {};
-
-    bindEntries[0].binding = 0;
-    bindEntries[0].buffer = _uniformBuffer;
-    bindEntries[0].size = _uniformSize;
-
-    bindEntries[1].binding = 1;
-    bindEntries[1].buffer = _metadataGpuBuffer;
-    bindEntries[1].size = wgpuBufferGetSize(_metadataGpuBuffer);
-
-    bindEntries[2].binding = 2;
-    bindEntries[2].buffer = _bufferGpuBuffer;
-    bindEntries[2].size = wgpuBufferGetSize(_bufferGpuBuffer);
-
-    bindEntries[3].binding = 3;
-    bindEntries[3].textureView = texView;
-
-    bindEntries[4].binding = 4;
-    bindEntries[4].sampler = sampler;
-
-    // Binding 5: dummy buffer (was textureData, no longer needed)
-    bindEntries[5].binding = 5;
-    bindEntries[5].buffer = _dummyBuffer;
-    bindEntries[5].size = 4;
-
-    WGPUBindGroupDescriptor bindDesc = {};
-    bindDesc.label = WGPU_STR("Shared Bind Group");
-    bindDesc.layout = _sharedBindGroupLayout;
-    bindDesc.entryCount = bindEntries.size();
-    bindDesc.entries = bindEntries.data();
-
-    _sharedBindGroup = wgpuDeviceCreateBindGroup(_device, &bindDesc);
-    if (!_sharedBindGroup) {
-        return Err<void>("Failed to create shared bind group");
-    }
-
-    _gpuContext->sharedBindGroup = _sharedBindGroup;
-
-    yinfo("CardBufferManager: shared bind group created/updated");
     return Ok();
 }
 
@@ -776,212 +599,6 @@ void CardBufferManagerImpl::markBufferDirty(BufferHandle handle) {
 }
 
 // =============================================================================
-// Texture atlas operations
-// =============================================================================
-
-Result<TextureHandle> CardBufferManagerImpl::allocateTextureHandle() {
-    uint32_t id = _nextTextureHandleId++;
-    _textureHandles[id] = TextureHandleData{};
-    ydebug("CardBufferManager: allocated texture handle id={}", id);
-    return Ok(TextureHandle{id});
-}
-
-Result<void> CardBufferManagerImpl::linkTextureData(TextureHandle handle,
-                                                      const uint8_t* pixels,
-                                                      uint32_t width, uint32_t height) {
-    auto it = _textureHandles.find(handle.id);
-    if (it == _textureHandles.end()) {
-        return Err("linkTextureData: invalid handle");
-    }
-
-    it->second.pixels = pixels;
-    it->second.width = width;
-    it->second.height = height;
-    it->second.packed = false;  // Needs repacking
-
-    ydebug("CardBufferManager: linked texture data handle={} {}x{}", handle.id, width, height);
-    return Ok();
-}
-
-Result<void> CardBufferManagerImpl::deallocateTextureHandle(TextureHandle handle) {
-    auto it = _textureHandles.find(handle.id);
-    if (it == _textureHandles.end()) {
-        return Err("deallocateTextureHandle: invalid handle");
-    }
-
-    _textureHandles.erase(it);
-    ydebug("CardBufferManager: deallocated texture handle id={}", handle.id);
-    return Ok();
-}
-
-void CardBufferManagerImpl::invalidateAllTextureHandles() {
-    for (auto& [id, data] : _textureHandles) {
-        data.packed = false;
-    }
-    yinfo("CardBufferManager: invalidated all {} texture handles", _textureHandles.size());
-}
-
-Result<void> CardBufferManagerImpl::packAtlas(WGPUQueue queue) {
-    (void)queue;
-
-    // Lazily initialize atlas on first pack
-    if (!_atlasInitialized && !_textureHandles.empty()) {
-        if (auto res = initAtlas(); !res) {
-            return Err<void>("packAtlas: lazy atlas init failed", res);
-        }
-    }
-
-    if (_textureHandles.empty()) {
-        return Ok();
-    }
-
-    // Collect handles that have linked pixel data
-    struct PackEntry {
-        uint32_t id;
-        uint32_t width;
-        uint32_t height;
-    };
-    std::vector<PackEntry> entries;
-    entries.reserve(_textureHandles.size());
-
-    for (const auto& [id, data] : _textureHandles) {
-        if (data.pixels && data.width > 0 && data.height > 0) {
-            entries.push_back({id, data.width, data.height});
-        }
-    }
-
-    if (entries.empty()) {
-        return Ok();
-    }
-
-    // Sort by height descending for better strip packing
-    std::sort(entries.begin(), entries.end(), [](const PackEntry& a, const PackEntry& b) {
-        return a.height > b.height;
-    });
-
-    // Row-based strip packing
-    uint32_t currentX = 0;
-    uint32_t currentY = 0;
-    uint32_t rowHeight = 0;
-
-    for (const auto& entry : entries) {
-        if (currentX + entry.width > _currentAtlasSize) {
-            // Move to next row
-            currentY += rowHeight;
-            currentX = 0;
-            rowHeight = 0;
-        }
-
-        auto& data = _textureHandles[entry.id];
-        data.atlasX = currentX;
-        data.atlasY = currentY;
-        data.packed = true;
-
-        currentX += entry.width;
-        rowHeight = std::max(rowHeight, entry.height);
-    }
-
-    uint32_t totalHeight = currentY + rowHeight;
-
-    // Grow atlas if needed
-    while (totalHeight > _currentAtlasSize && _currentAtlasSize < MAX_ATLAS_SIZE) {
-        if (auto res = growAtlas(); !res) {
-            return res;
-        }
-
-        // Repack with new atlas size
-        currentX = 0;
-        currentY = 0;
-        rowHeight = 0;
-
-        for (const auto& entry : entries) {
-            if (currentX + entry.width > _currentAtlasSize) {
-                currentY += rowHeight;
-                currentX = 0;
-                rowHeight = 0;
-            }
-
-            auto& data = _textureHandles[entry.id];
-            data.atlasX = currentX;
-            data.atlasY = currentY;
-            data.packed = true;
-
-            currentX += entry.width;
-            rowHeight = std::max(rowHeight, entry.height);
-        }
-
-        totalHeight = currentY + rowHeight;
-    }
-
-    if (totalHeight > _currentAtlasSize) {
-        yerror("CardBufferManager: atlas overflow! need {}px height, have {}px", totalHeight, _currentAtlasSize);
-        return Err<void>("Atlas overflow - too many/large textures");
-    }
-
-    yinfo("CardBufferManager: packed {} textures into atlas (used {}px of {}px height)",
-          entries.size(), totalHeight, _currentAtlasSize);
-
-    return Ok();
-}
-
-Result<void> CardBufferManagerImpl::writeToAtlas(TextureHandle handle, WGPUQueue queue) {
-    auto it = _textureHandles.find(handle.id);
-    if (it == _textureHandles.end()) {
-        return Err("writeToAtlas: invalid handle");
-    }
-
-    const auto& data = it->second;
-    if (!data.packed) {
-        return Err("writeToAtlas: handle not packed (call packAtlas first)");
-    }
-    if (!data.pixels || data.width == 0 || data.height == 0) {
-        return Err("writeToAtlas: no pixel data linked");
-    }
-
-    // Write pixels to the assigned atlas region via wgpuQueueWriteTexture
-    WGPUTexelCopyTextureInfo destination = {};
-    destination.texture = _atlasTexture;
-    destination.mipLevel = 0;
-    destination.origin = {data.atlasX, data.atlasY, 0};
-
-    WGPUTexelCopyBufferLayout dataLayout = {};
-    dataLayout.offset = 0;
-    dataLayout.bytesPerRow = data.width * 4;  // RGBA8
-    dataLayout.rowsPerImage = data.height;
-
-    WGPUExtent3D writeSize = {data.width, data.height, 1};
-
-    uint32_t totalBytes = data.width * data.height * 4;
-    wgpuQueueWriteTexture(queue, &destination, data.pixels, totalBytes, &dataLayout, &writeSize);
-
-    ydebug("CardBufferManager: wrote {}x{} pixels to atlas at ({}, {})",
-           data.width, data.height, data.atlasX, data.atlasY);
-
-    return Ok();
-}
-
-Result<void> CardBufferManagerImpl::writeAllToAtlas(WGPUQueue queue) {
-    for (const auto& [id, data] : _textureHandles) {
-        if (data.packed && data.pixels && data.width > 0 && data.height > 0) {
-            TextureHandle h;
-            h.id = id;
-            if (auto res = writeToAtlas(h, queue); !res) {
-                return res;
-            }
-        }
-    }
-    return Ok();
-}
-
-AtlasPosition CardBufferManagerImpl::getAtlasPosition(TextureHandle handle) const {
-    auto it = _textureHandles.find(handle.id);
-    if (it == _textureHandles.end() || !it->second.packed) {
-        return {0, 0};
-    }
-    return {it->second.atlasX, it->second.atlasY};
-}
-
-// =============================================================================
 // GPU upload
 // =============================================================================
 
@@ -1011,7 +628,7 @@ Result<void> CardBufferManagerImpl::flush(WGPUQueue queue) {
         _bufferDirty.clear();
     }
 
-    // Atlas packing and writing is now driven by gpu-screen (two-pass rendering),
+    // Atlas packing and writing is now driven by CardTextureManager,
     // not by flush(). flush() only uploads metadata and buffer data.
 
     return Ok();
@@ -1023,120 +640,14 @@ CardBufferManager::Stats CardBufferManagerImpl::getStats() const {
         .metadataCapacity = _metadataAllocator.totalSize(),
         .bufferUsed = _bufferAllocator.used(),
         .bufferCapacity = _bufferAllocator.capacity(),
-        .atlasTextureCount = static_cast<uint32_t>(_textureHandles.size()),
-        .atlasWidth = _currentAtlasSize,
-        .atlasHeight = _currentAtlasSize,
         .pendingMetadataUploads = _metadataDirty.hasDirty() ? 1u : 0u,
         .pendingBufferUploads = _bufferDirty.hasDirty() ? 1u : 0u
     };
 }
 
 // =============================================================================
-// Atlas texture creation
+// Buffer growth
 // =============================================================================
-
-Result<void> CardBufferManagerImpl::initAtlas() {
-    if (auto res = createAtlasTexture(); !res) {
-        return res;
-    }
-
-    _atlasInitialized = true;
-    yinfo("CardBufferManager: atlas initialized ({}x{})", _currentAtlasSize, _currentAtlasSize);
-
-    if (auto res = createSharedBindGroup(); !res) {
-        return res;
-    }
-
-    return Ok();
-}
-
-Result<void> CardBufferManagerImpl::createAtlasTexture() {
-    size_t atlasBytes = static_cast<size_t>(_currentAtlasSize) * _currentAtlasSize * 4;
-    yinfo("GPU_ALLOC CardBufferManager: atlasTexture={}x{} RGBA8 = {} bytes ({:.2f} MB)",
-          _currentAtlasSize, _currentAtlasSize, atlasBytes, atlasBytes / (1024.0 * 1024.0));
-
-    WGPUTextureDescriptor texDesc = {};
-    texDesc.label = WGPU_STR("ImageAtlas");
-    texDesc.size.width = _currentAtlasSize;
-    texDesc.size.height = _currentAtlasSize;
-    texDesc.size.depthOrArrayLayers = 1;
-    texDesc.mipLevelCount = 1;
-    texDesc.sampleCount = 1;
-    texDesc.dimension = WGPUTextureDimension_2D;
-    texDesc.format = WGPUTextureFormat_RGBA8Unorm;
-    // No StorageBinding needed — CPU writes via wgpuQueueWriteTexture
-    texDesc.usage = WGPUTextureUsage_TextureBinding |  // Fragment shader reads
-                    WGPUTextureUsage_CopyDst;          // CPU writes
-
-    _atlasTexture = wgpuDeviceCreateTexture(_device, &texDesc);
-    if (!_atlasTexture) {
-        return Err<void>("Failed to create atlas texture");
-    }
-
-    WGPUTextureViewDescriptor viewDesc = {};
-    viewDesc.format = WGPUTextureFormat_RGBA8Unorm;
-    viewDesc.dimension = WGPUTextureViewDimension_2D;
-    viewDesc.mipLevelCount = 1;
-    viewDesc.arrayLayerCount = 1;
-
-    _atlasTextureView = wgpuTextureCreateView(_atlasTexture, &viewDesc);
-    if (!_atlasTextureView) {
-        return Err<void>("Failed to create atlas texture view");
-    }
-
-    WGPUSamplerDescriptor samplerDesc = {};
-    samplerDesc.minFilter = WGPUFilterMode_Linear;
-    samplerDesc.magFilter = WGPUFilterMode_Linear;
-    samplerDesc.addressModeU = WGPUAddressMode_ClampToEdge;
-    samplerDesc.addressModeV = WGPUAddressMode_ClampToEdge;
-    samplerDesc.addressModeW = WGPUAddressMode_ClampToEdge;
-    samplerDesc.maxAnisotropy = 1;
-
-    _atlasSampler = wgpuDeviceCreateSampler(_device, &samplerDesc);
-    if (!_atlasSampler) {
-        return Err<void>("Failed to create atlas sampler");
-    }
-
-    return Ok();
-}
-
-Result<void> CardBufferManagerImpl::growAtlas() {
-    uint32_t newSize = _currentAtlasSize * 2;
-    if (newSize > MAX_ATLAS_SIZE) {
-        yerror("CardBufferManager: cannot grow atlas beyond {} (current: {})", MAX_ATLAS_SIZE, _currentAtlasSize);
-        return Err<void>("Atlas size limit reached");
-    }
-
-    yinfo("CardBufferManager: growing atlas from {}x{} to {}x{}",
-          _currentAtlasSize, _currentAtlasSize, newSize, newSize);
-
-    if (_atlasTextureView) {
-        wgpuTextureViewRelease(_atlasTextureView);
-        _atlasTextureView = nullptr;
-    }
-    if (_atlasTexture) {
-        wgpuTextureDestroy(_atlasTexture);
-        wgpuTextureRelease(_atlasTexture);
-        _atlasTexture = nullptr;
-    }
-    if (_atlasSampler) {
-        wgpuSamplerRelease(_atlasSampler);
-        _atlasSampler = nullptr;
-    }
-
-    _currentAtlasSize = newSize;
-
-    if (auto res = createAtlasTexture(); !res) {
-        return res;
-    }
-
-    if (auto res = createSharedBindGroup(); !res) {
-        return res;
-    }
-
-    yinfo("CardBufferManager: atlas grown successfully to {}x{}", _currentAtlasSize, _currentAtlasSize);
-    return Ok();
-}
 
 Result<void> CardBufferManagerImpl::growBufferGpu(uint32_t newCapacity) {
     if (newCapacity <= _currentBufferCapacity) {
@@ -1175,10 +686,7 @@ Result<void> CardBufferManagerImpl::growBufferGpu(uint32_t newCapacity) {
     }
 
     _currentBufferCapacity = newCapacity;
-
-    if (auto res = createSharedBindGroup(); !res) {
-        return Err<void>("Failed to recreate shared bind group after buffer growth", res);
-    }
+    _bindGroupDirty = true;  // CardManager must recreate bind group
 
     yinfo("GPU_ALLOC CardBufferManager: buffer grown to {} bytes ({:.2f} MB)",
           newCapacity, newCapacity / (1024.0 * 1024.0));

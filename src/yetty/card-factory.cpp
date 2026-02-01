@@ -52,7 +52,7 @@ public:
                                  uint32_t w, uint32_t h,
                                  const std::string& args,
                                  const std::string& payload) {
-            return card::YDraw::create(ctx.cardBufferManager, ctx.gpu, x, y, w, h, args, payload);
+            return card::YDraw::create(ctx.cardManager->bufferManager(), ctx.gpu, x, y, w, h, args, payload);
         });
 
         registerCard("hdraw", [](const YettyContext& ctx,
@@ -152,8 +152,8 @@ public:
             return Err<CardPtr>("Unknown card type: " + name);
         }
 
-        if (!ctx.cardBufferManager) {
-            return Err<CardPtr>("CardFactory: no CardBufferManager in context");
+        if (!ctx.cardManager) {
+            return Err<CardPtr>("CardFactory: no CardManager in context");
         }
 
         yinfo("CardFactory: creating card '{}' at ({},{}) size {}x{}",

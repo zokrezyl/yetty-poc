@@ -26,4 +26,4 @@ if [ ! -f "$PDF_FILE" ]; then
 fi
 
 # Use the Python client for card system
-cat "$PDF_FILE" | python3 "$PROJECT_ROOT/tools/yetty-client/main.py" create pdf -i - -w "$WIDTH" -H "$HEIGHT"
+cat "$PDF_FILE" | uv run python3 "$PROJECT_ROOT/tools/yetty-client/main.py" create pdf -i - -w "$WIDTH" -H "$HEIGHT"

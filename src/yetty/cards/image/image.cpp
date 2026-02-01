@@ -29,7 +29,7 @@ public:
               int32_t x, int32_t y,
               uint32_t widthCells, uint32_t heightCells,
               const std::string& args, const std::string& payload)
-        : Image(ctx.cardBufferManager, ctx.gpu, x, y, widthCells, heightCells)
+        : Image(ctx.cardManager->bufferManager(), ctx.cardManager->textureManager(), ctx.gpu, x, y, widthCells, heightCells)
         , _ctx(ctx)
         , _argsStr(args)
         , _payloadStr(payload)
@@ -123,8 +123,8 @@ public:
         if (_scaledGpuBuffer) { wgpuBufferRelease(_scaledGpuBuffer); _scaledGpuBuffer = nullptr; }
 
         // Release texture handle
-        if (_textureHandle.isValid() && _cardMgr) {
-            _cardMgr->deallocateTextureHandle(_textureHandle);
+        if (_textureHandle.isValid() && _textureMgr) {
+            _textureMgr->deallocateTextureHandle(_textureHandle);
             _textureHandle = TextureHandle::invalid();
         }
 
@@ -156,8 +156,8 @@ public:
         if (_scaledGpuBuffer) { wgpuBufferRelease(_scaledGpuBuffer); _scaledGpuBuffer = nullptr; }
 
         // Deallocate texture handle
-        if (_textureHandle.isValid() && _cardMgr) {
-            _cardMgr->deallocateTextureHandle(_textureHandle);
+        if (_textureHandle.isValid() && _textureMgr) {
+            _textureMgr->deallocateTextureHandle(_textureHandle);
             _textureHandle = TextureHandle::invalid();
         }
         _scaledPixels.clear();
@@ -618,13 +618,13 @@ private:
 
         // Allocate texture handle if needed, link scaled pixels
         if (!_textureHandle.isValid()) {
-            auto allocResult = _cardMgr->allocateTextureHandle();
+            auto allocResult = _textureMgr->allocateTextureHandle();
             if (!allocResult) {
                 return Err<void>("Image::runScaleCompute: failed to allocate texture handle", allocResult);
             }
             _textureHandle = *allocResult;
         }
-        _cardMgr->linkTextureData(_textureHandle, _scaledPixels.data(), _scaledWidth, _scaledHeight);
+        _textureMgr->linkTextureData(_textureHandle, _scaledPixels.data(), _scaledWidth, _scaledHeight);
 
         _metadataDirty = true;
 
@@ -715,7 +715,7 @@ private:
         meta.textureHeight = _scaledHeight;
 
         if (_textureHandle.isValid()) {
-            auto pos = _cardMgr->getAtlasPosition(_textureHandle);
+            auto pos = _textureMgr->getAtlasPosition(_textureHandle);
             meta.atlasX = pos.x;
             meta.atlasY = pos.y;
         } else {
@@ -838,8 +838,8 @@ Result<Image::Ptr> Image::createImpl(
 {
     (void)ctx;
 
-    if (!yettyCtx.cardBufferManager) {
-        return Err<Ptr>("Image::createImpl: null CardBufferManager");
+    if (!yettyCtx.cardManager) {
+        return Err<Ptr>("Image::createImpl: null CardManager");
     }
 
     auto card = std::make_shared<ImageImpl>(

@@ -23,7 +23,7 @@ public:
              int32_t x, int32_t y,
              uint32_t widthCells, uint32_t heightCells,
              const std::string& args, const std::string& payload)
-        : Plot(ctx.cardBufferManager, ctx.gpu, x, y, widthCells, heightCells)
+        : Plot(ctx.cardManager->bufferManager(), ctx.gpu, x, y, widthCells, heightCells)
         , _argsStr(args)
         , _payloadStr(payload)
     {
@@ -588,7 +588,7 @@ Result<CardPtr> Plot::create(
     yinfo("Plot::create: ENTERED pos=({},{}) size={}x{} args='{}' payload_len={}",
           x, y, widthCells, heightCells, args, payload.size());
 
-    if (!ctx.cardBufferManager) {
+    if (!ctx.cardManager) {
         yerror("Plot::create: null CardBufferManager!");
         return Err<CardPtr>("Plot::create: null CardBufferManager");
     }

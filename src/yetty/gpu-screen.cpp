@@ -1,5 +1,5 @@
 #include "gpu-screen.h"
-#include <yetty/card-buffer-manager.h>
+#include <yetty/card-manager.h>
 #include <yetty/card-factory.h>
 #include <yetty/card.h>
 #include <algorithm>
@@ -200,6 +200,10 @@ private:
   bool handleCardOSCSequence(const std::string &sequence, std::string *response,
                              uint32_t *linesToAdvance);
 
+  // Text selection
+  void clearSelection();
+  std::string extractSelectedText() const;
+
   // Card registry
   void registerCard(CardPtr card);
   void unregisterCard(uint32_t metadataOffset);
@@ -277,9 +281,15 @@ private:
   // Cards — active (visible, buffers allocated) and inactive (suspended)
   std::unordered_map<uint32_t, CardPtr> _cards;
   std::unordered_map<uint32_t, CardPtr> _inactiveCards;
-  CardBufferManager::Ptr _cardBufferManager;
+  CardManager::Ptr _cardManager;
   base::ObjectId _cardMouseTarget = 0;  // card that received last CardMouseDown
   uint32_t _gcFrameCounter = 0;
+
+  // Text selection state
+  bool _selecting = false;
+  int _selStartCol = 0, _selStartRow = 0;
+  int _selEndCol = 0, _selEndRow = 0;
+  bool _hasSelection = false;
 
   // OSC parsing
   OscCommandParser _oscParser;
@@ -312,8 +322,10 @@ private:
     float cursorShape;        // 4 bytes (1=block, 2=underline, 3=bar)
     glm::vec2 viewportOrigin; // 8 bytes
     float cursorBlink;        // 4 bytes (0=no blink, 1=blink)
-    float pad2;               // 4 bytes
-  }; // Total: 128 bytes
+    float hasSelection;       // 4 bytes (0=no, 1=yes)
+    glm::vec2 selStart;       // 8 bytes (col, row)
+    glm::vec2 selEnd;         // 8 bytes (col, row)
+  }; // Total: 144 bytes
 
   Uniforms _uniforms;
 
@@ -403,20 +415,18 @@ Result<void> GPUScreenImpl::init() noexcept {
     }
   }
 
-  // Create per-screen CardBufferManager (owns GPU buffers for cards).
+  // Create per-screen CardManager (owns CardBufferManager, CardTextureManager, and bind group).
   // Starts with tiny placeholder buffers (~20KB for metadata pool + 4 bytes each
   // for buffer/atlas). Real buffers and atlas are allocated lazily
   // on first card creation, avoiding ~81MB GPU allocation when no cards are used.
   if (_ctx.gpu.device && _ctx.gpu.sharedUniformBuffer) {
-    auto cbmResult = CardBufferManager::create(
-        &_ctx.gpu, _ctx.gpu.sharedUniformBuffer, _ctx.gpu.sharedUniformSize);
-    if (!cbmResult) {
-      ywarn("GPUScreen: failed to create CardBufferManager: {}", error_msg(cbmResult));
+    auto cmResult = CardManager::create(&_ctx.gpu, _ctx.gpu.sharedUniformBuffer, _ctx.gpu.sharedUniformSize);
+    if (!cmResult) {
+      ywarn("GPUScreen: failed to create CardManager: {}", error_msg(cmResult));
     } else {
-      _cardBufferManager = *cbmResult;
-      // Set on local context so cards created from this screen use our manager
-      _ctx.cardBufferManager = _cardBufferManager;
-      yinfo("GPUScreen[{}]: created per-screen CardBufferManager (lazy)", _id);
+      _cardManager = *cmResult;
+      _ctx.cardManager = _cardManager;
+      yinfo("GPUScreen[{}]: created per-screen CardManager (lazy)", _id);
     }
   }
 
@@ -453,8 +463,8 @@ Result<void> GPUScreenImpl::onShutdown() {
   }
   _inactiveCards.clear();
 
-  // Release CardBufferManager while shared_ptrs are still alive
-  _cardBufferManager.reset();
+  // Release CardManager while shared_ptr is still alive
+  _cardManager.reset();
 
   yinfo("GPUScreen[{}]: onShutdown complete", _id);
   return result;
@@ -576,12 +586,14 @@ void GPUScreenImpl::setViewport(float x, float y, float width, float height) {
   _viewportWidth = width;
   _viewportHeight = height;
 
-  // Calculate cols/rows from viewport size and cell size
-  uint32_t cellWidth = getCellWidth();
-  uint32_t cellHeight = getCellHeight();
+  // Calculate cols/rows from viewport size and float cell size
+  // Must use the same float cell dimensions the shader uses (baseCellSize * zoom)
+  // to avoid integer truncation giving more cols than actually fit in the viewport
+  float cellWidthF = _baseCellWidth * _zoomLevel;
+  float cellHeightF = _baseCellHeight * _zoomLevel;
 
-  uint32_t newCols = cellWidth > 0 ? static_cast<uint32_t>(width) / cellWidth : 0;
-  uint32_t newRows = cellHeight > 0 ? static_cast<uint32_t>(height) / cellHeight : 0;
+  uint32_t newCols = cellWidthF > 0 ? static_cast<uint32_t>(width / cellWidthF) : 0;
+  uint32_t newRows = cellHeightF > 0 ? static_cast<uint32_t>(height / cellHeightF) : 0;
 
   // Only resize if size actually changed
   if (newCols > 0 && newRows > 0 && (newCols != _cols || newRows != _rows)) {
@@ -1139,6 +1151,94 @@ void GPUScreenImpl::pushLineToScrollback(int row) {
       _scrollOffset = static_cast<int>(_scrollback.size());
     }
   }
+}
+
+//=============================================================================
+// Text selection helpers
+//=============================================================================
+
+void GPUScreenImpl::clearSelection() {
+  _selecting = false;
+  _hasSelection = false;
+  _hasDamage = true;
+}
+
+// Encode a Unicode codepoint as UTF-8 and append to string
+static void appendUtf8(std::string& out, uint32_t cp) {
+  if (cp < 0x80) {
+    out += static_cast<char>(cp);
+  } else if (cp < 0x800) {
+    out += static_cast<char>(0xC0 | (cp >> 6));
+    out += static_cast<char>(0x80 | (cp & 0x3F));
+  } else if (cp < 0x10000) {
+    out += static_cast<char>(0xE0 | (cp >> 12));
+    out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+    out += static_cast<char>(0x80 | (cp & 0x3F));
+  } else if (cp < 0x110000) {
+    out += static_cast<char>(0xF0 | (cp >> 18));
+    out += static_cast<char>(0x80 | ((cp >> 12) & 0x3F));
+    out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+    out += static_cast<char>(0x80 | (cp & 0x3F));
+  }
+}
+
+std::string GPUScreenImpl::extractSelectedText() const {
+  if (!_hasSelection || !_msdfFont) return "";
+
+  // Normalize selection direction (start <= end)
+  int r0 = _selStartRow, c0 = _selStartCol;
+  int r1 = _selEndRow, c1 = _selEndCol;
+  if (r0 > r1 || (r0 == r1 && c0 > c1)) {
+    std::swap(r0, r1);
+    std::swap(c0, c1);
+  }
+
+  std::string result;
+  int sbSize = static_cast<int>(_scrollback.size());
+  int sbLines = std::min(_scrollOffset, sbSize);
+
+  for (int row = r0; row <= r1; row++) {
+    int startCol = (row == r0) ? c0 : 0;
+    int endCol = (row == r1) ? c1 : _cols - 1;
+    std::string line;
+
+    if (row < sbLines) {
+      // Row comes from scrollback buffer
+      int sbIdx = sbSize - sbLines + row;
+      if (sbIdx >= 0 && sbIdx < sbSize) {
+        const auto& sbLine = _scrollback[sbIdx];
+        for (int col = startCol; col <= endCol; col++) {
+          if (col < static_cast<int>(sbLine.cells.size())) {
+            uint32_t glyphIdx = sbLine.cells[col].glyph;
+            uint32_t cp = _msdfFont->getCodepoint(glyphIdx);
+            if (cp == 0) cp = ' ';
+            appendUtf8(line, cp);
+          }
+        }
+      }
+    } else if (_visibleBuffer) {
+      // Row comes from visible buffer - use cell glyph indices
+      int bufRow = row - sbLines;
+      if (bufRow >= 0 && bufRow < static_cast<int>(_rows)) {
+        size_t rowOffset = static_cast<size_t>(bufRow * _cols);
+        for (int col = startCol; col <= endCol; col++) {
+          size_t idx = rowOffset + col;
+          if (idx < _visibleBuffer->size()) {
+            uint32_t glyphIdx = (*_visibleBuffer)[idx].glyph;
+            uint32_t cp = _msdfFont->getCodepoint(glyphIdx);
+            if (cp == 0) cp = ' ';
+            appendUtf8(line, cp);
+          }
+        }
+      }
+    }
+
+    while (!line.empty() && line.back() == ' ') line.pop_back();
+    if (row > r0) result += '\n';
+    result += line;
+  }
+
+  return result;
 }
 
 //=============================================================================
@@ -2426,7 +2526,9 @@ void GPUScreenImpl::registerForFocus() {
                          sharedAs<base::EventListener>());
   loop->registerListener(base::Event::Type::Scroll,
                          sharedAs<base::EventListener>());
-  yinfo("GPUScreen {} registered for SetFocus, MouseDown, MouseUp, MouseMove and Scroll events", _id);
+  loop->registerListener(base::Event::Type::Paste,
+                         sharedAs<base::EventListener>());
+  yinfo("GPUScreen {} registered for SetFocus, Mouse, Scroll and Paste events", _id);
 
   // Auto-focus on startup so keyboard works immediately
   loop->dispatch(base::Event::focusEvent(_id));
@@ -2473,37 +2575,40 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
           return Ok(true);
         }
 
-        // Left-click: focus
+        // Left-click: focus + start selection or card interaction
         float localX = mx - _viewportX;
         float localY = my - _viewportY;
-        int col = static_cast<int>(localX / getCellWidth());
-        int row = static_cast<int>(localY / getCellHeight());
+        float cellWidthF = _baseCellWidth * _zoomLevel;
+        float cellHeightF = _baseCellHeight * _zoomLevel;
+        int col = static_cast<int>(localX / cellWidthF);
+        int row = static_cast<int>(localY / cellHeightF);
         col = std::max(0, std::min(col, static_cast<int>(_cols) - 1));
         row = std::max(0, std::min(row, static_cast<int>(_rows) - 1));
 
         auto loop = *base::EventLoop::instance();
 
         // Check if clicked cell is a card
-        {
-          size_t idx = cellIndex(row, col);
-          if (idx < _visibleBuffer->size()) {
-            const Cell& dbgCell = (*_visibleBuffer)[idx];
-            yinfo("GPUScreen {} click debug: cell({},{}) glyph={:#x} fg=({},{},{}) alpha={} style={:#x}",
-                  _id, row, col, dbgCell.glyph, dbgCell.fgR, dbgCell.fgG, dbgCell.fgB, dbgCell.alpha, dbgCell.style);
-          }
-        }
         Card* card = getCardAtCell(row, col);
         if (card) {
+          clearSelection();
           yinfo("GPUScreen {} clicked on card '{}' (id={}) at cell ({},{}), dispatching SetFocus",
                 _id, card->typeName(), card->id(), row, col);
           loop->dispatch(base::Event::focusEvent(card->id()));
-          // Dispatch CardMouseDown with card-local coordinates
           float cardX, cardY;
           cardLocalCoords(localX, localY, row, col, cardX, cardY);
           _cardMouseTarget = card->id();
           loop->dispatch(base::Event::cardMouseDown(card->id(), cardX, cardY, button));
+        } else if (button == 0) {
+          // Left-click on terminal: start text selection
+          _selecting = true;
+          _hasSelection = false;
+          _selStartCol = col;
+          _selStartRow = row;
+          _selEndCol = col;
+          _selEndRow = row;
+          _hasDamage = true;
+          loop->dispatch(base::Event::focusEvent(_id));
         } else {
-          yinfo("GPUScreen {} clicked at ({}, {}), dispatching SetFocus", _id, mx, my);
           loop->dispatch(base::Event::focusEvent(_id));
         }
         return Ok(true);
@@ -2541,6 +2646,14 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
           _ctx.imguiManager->setStatusText(statusBuf);
         }
 
+        // Extend text selection while dragging
+        if (_selecting) {
+          _selEndCol = col;
+          _selEndRow = row;
+          _hasSelection = (_selStartCol != _selEndCol || _selStartRow != _selEndRow);
+          _hasDamage = true;
+        }
+
         // Forward mouse move to active card with local coordinates
         if (_cardMouseTarget != 0) {
           Card* card = getCardAtCell(row, col);
@@ -2550,7 +2663,6 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
             auto loop = *base::EventLoop::instance();
             loop->dispatch(base::Event::cardMouseMove(_cardMouseTarget, cardX, cardY));
           } else {
-            // Mouse moved outside card bounds but still dragging - clamp to last known
             auto loop = *base::EventLoop::instance();
             loop->dispatch(base::Event::cardMouseMove(_cardMouseTarget, localX, localY));
           }
@@ -2561,8 +2673,23 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
     return Ok(false);  // Don't consume
   }
 
-  // Handle mouse up - dispatch CardMouseUp to active card
+  // Handle mouse up - finalize selection or dispatch CardMouseUp
   if (event.type == base::Event::Type::MouseUp) {
+    // Finalize text selection on left button release
+    if (_selecting && event.mouse.button == 0) {
+      _selecting = false;
+      if (_hasSelection) {
+        std::string text = extractSelectedText();
+        if (!text.empty()) {
+          auto payload = std::make_shared<std::string>(std::move(text));
+          auto loop = *base::EventLoop::instance();
+          loop->dispatch(base::Event::copyEvent(std::move(payload)));
+          ydebug("GPUScreen {}: selection copied ({} bytes)", _id, text.size());
+        }
+      }
+      return Ok(true);
+    }
+
     if (_cardMouseTarget != 0) {
       float mx = event.mouse.x;
       float my = event.mouse.y;
@@ -2677,8 +2804,33 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
     return Ok(false);
   }
 
+  // Handle Paste event — write pasted text to PTY
+  if (event.type == base::Event::Type::Paste && _focused && event.payload) {
+    auto text = std::static_pointer_cast<std::string>(event.payload);
+    if (text && !text->empty() && _outputCallback) {
+      _outputCallback(text->c_str(), text->size());
+      ydebug("GPUScreen {}: pasted {} bytes", _id, text->size());
+    }
+    return Ok(true);
+  }
+
   // Handle keyboard events (only when focused)
   if (_focused) {
+    // When scrolled back, Enter exits scrollback mode (like tmux copy mode)
+    if (_scrollOffset > 0) {
+      if (event.type == base::Event::Type::KeyDown && event.key.key == 257) {
+        ydebug("GPUScreen::onEvent: Enter pressed in scrollback - scrolling to bottom");
+        scrollToBottom();
+        return Ok(true);
+      }
+    }
+
+    // Clear selection on any keyboard input
+    if (_hasSelection &&
+        (event.type == base::Event::Type::Char || event.type == base::Event::Type::KeyDown)) {
+      clearSelection();
+    }
+
     if (event.type == base::Event::Type::Char) {
       ydebug("GPUScreen::onEvent: Char codepoint={} mods={}",
              event.chr.codepoint, event.chr.mods);
@@ -2746,23 +2898,11 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
     }
   }
 
-  // Pack atlas and write all texture data to it
-  if (_cardBufferManager) {
-    if (auto res = _cardBufferManager->packAtlas(_ctx.gpu.queue); !res) {
-      yerror("GPUScreen: atlas pack failed: {}", error_msg(res));
-      return Err<void>("GPUScreen: atlas pack failed", res);
-    }
-    if (auto res = _cardBufferManager->writeAllToAtlas(_ctx.gpu.queue); !res) {
-      yerror("GPUScreen: atlas write failed: {}", error_msg(res));
-      return Err<void>("GPUScreen: atlas write failed", res);
-    }
-  }
-
-  // Flush per-screen CardBufferManager (uploads dirty regions to GPU)
-  if (_cardBufferManager) {
-    if (auto res = _cardBufferManager->flush(_ctx.gpu.queue); !res) {
-      yerror("GPUScreen: CardBufferManager flush failed: {}", error_msg(res));
-      return Err<void>("GPUScreen: CardBufferManager flush failed", res);
+  // Flush CardManager (packs atlas, updates bind group if needed, uploads buffers)
+  if (_cardManager) {
+    if (auto res = _cardManager->flush(_ctx.gpu.queue); !res) {
+      yerror("GPUScreen: CardManager flush failed: {}", error_msg(res));
+      return Err<void>("GPUScreen: CardManager flush failed", res);
     }
   }
 
@@ -2925,6 +3065,24 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
   _uniforms.cursorShape = static_cast<float>(_cursorShape);
   _uniforms.viewportOrigin = {_viewportX, _viewportY};
   _uniforms.cursorBlink = _cursorBlink ? 1.0f : 0.0f;
+
+  // Selection uniforms — normalize direction so start <= end
+  if (_hasSelection) {
+    int r0 = _selStartRow, c0 = _selStartCol;
+    int r1 = _selEndRow, c1 = _selEndCol;
+    if (r0 > r1 || (r0 == r1 && c0 > c1)) {
+      std::swap(r0, r1);
+      std::swap(c0, c1);
+    }
+    _uniforms.hasSelection = 1.0f;
+    _uniforms.selStart = {static_cast<float>(c0), static_cast<float>(r0)};
+    _uniforms.selEnd = {static_cast<float>(c1), static_cast<float>(r1)};
+  } else {
+    _uniforms.hasSelection = 0.0f;
+    _uniforms.selStart = {0.0f, 0.0f};
+    _uniforms.selEnd = {0.0f, 0.0f};
+  }
+
   wgpuQueueWriteBuffer(queue, _uniformBuffer, 0, &_uniforms, sizeof(Uniforms));
 
   // Set viewport and scissor to this terminal's tile bounds
@@ -2939,17 +3097,17 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
 
   // Draw using shared pipeline and quad vertex buffer from ShaderManager
   wgpuRenderPassEncoderSetPipeline(pass, shaderMgr->getGridPipeline());
-  // Use per-screen CardBufferManager bind group (uniforms + card buffers),
+  // Use per-screen CardManager bind group (uniforms + card buffers),
   // falling back to the minimal shared bind group (uniforms only)
-  WGPUBindGroup bindGroup0 = _cardBufferManager
-      ? _cardBufferManager->sharedBindGroup()
+  WGPUBindGroup bindGroup0 = _cardManager
+      ? _cardManager->sharedBindGroup()
       : nullptr;
   if (!bindGroup0) bindGroup0 = _ctx.gpu.sharedBindGroup;
-  ydebug("render: bindGroup0={} (cardBufMgr={} sharedBG={} fallback={})",
+  ydebug("render: bindGroup0={} (cardMgr={} sharedBG={} fallback={})",
          (void*)bindGroup0,
-         (void*)(_cardBufferManager ? _cardBufferManager->sharedBindGroup() : nullptr),
+         (void*)(_cardManager ? _cardManager->sharedBindGroup() : nullptr),
          (void*)_ctx.gpu.sharedBindGroup,
-         !_cardBufferManager || !_cardBufferManager->sharedBindGroup());
+         !_cardManager || !_cardManager->sharedBindGroup());
   wgpuRenderPassEncoderSetBindGroup(pass, 0, bindGroup0, 0, nullptr);
   wgpuRenderPassEncoderSetBindGroup(pass, 1, _bindGroup, 0, nullptr);
   wgpuRenderPassEncoderSetVertexBuffer(

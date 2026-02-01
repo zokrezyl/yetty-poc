@@ -1,6 +1,7 @@
 #pragma once
 
 #include <yetty/card-buffer-manager.h>
+#include <yetty/card-texture-manager.h>
 #include <yetty/base/event-listener.h>
 #include <yetty/gpu-context.h>
 #include <yetty/result.hpp>
@@ -128,7 +129,7 @@ protected:
  *   Pass 1: producePixels() - card renders into its local CPU pixel buffer
  *   Pass 2: writeToAtlas()  - card writes pixels to atlas via handle
  *
- * Between passes, gpu-screen calls cardManager->packAtlas() to assign positions.
+ * Between passes, gpu-screen calls textureManager->packAtlas() to assign positions.
  */
 class TextureCard : public Card {
 public:
@@ -148,12 +149,15 @@ public:
     TextureHandle textureHandle() const { return _textureHandle; }
 
 protected:
-    TextureCard(CardBufferManager::Ptr mgr, const GPUContext& gpu,
+    TextureCard(CardBufferManager::Ptr bufMgr, CardTextureManager::Ptr texMgr,
+                const GPUContext& gpu,
                 int32_t x, int32_t y,
                 uint32_t widthCells, uint32_t heightCells)
-        : Card(std::move(mgr), gpu, x, y, widthCells, heightCells)
+        : Card(std::move(bufMgr), gpu, x, y, widthCells, heightCells)
+        , _textureMgr(std::move(texMgr))
     {}
 
+    CardTextureManager::Ptr _textureMgr;
     TextureHandle _textureHandle = TextureHandle::invalid();
     bool _metadataDirty = true;
     uint32_t _cellWidth = 0;

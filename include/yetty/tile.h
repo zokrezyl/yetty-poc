@@ -5,6 +5,7 @@
 #include <webgpu/webgpu.h>
 #include <yetty/base/base.h>
 #include <yetty/result.hpp>
+#include <yetty/ymery/types.h>
 
 namespace yetty {
 
@@ -28,7 +29,7 @@ struct TileRenderContext {
 };
 
 // Base class for tiles (Split and Pane)
-class Tile : public EventListener {
+class Tile : public EventListener, public ymery::TreeLike {
 public:
   using Ptr = std::shared_ptr<Tile>;
 
@@ -54,6 +55,18 @@ public:
   virtual void setRenderContext(const TileRenderContext &ctx) {
     _renderCtx = ctx;
   }
+
+  // TreeLike — default implementations (leaf node with no children)
+  Result<std::vector<std::string>> getChildrenNames(const ymery::DataPath& path) override;
+  Result<ymery::Dict> getMetadata(const ymery::DataPath& path) override;
+  Result<std::vector<std::string>> getMetadataKeys(const ymery::DataPath& path) override;
+  Result<ymery::Value> get(const ymery::DataPath& path) override;
+  Result<void> set(const ymery::DataPath& path, const ymery::Value& value) override;
+  Result<void> addChild(const ymery::DataPath& path, const std::string& name, const ymery::Dict& data) override;
+  Result<std::string> asTree(const ymery::DataPath& path, int depth = -1) override;
+
+  // Override in subclasses to provide type-specific metadata
+  virtual ymery::Dict tileMetadata() const;
 
 protected:
   Rect _bounds;
@@ -86,6 +99,9 @@ public:
   virtual float ratio() const = 0;
   virtual Result<void> setRatio(float r) = 0;
 
+  // Tree manipulation helpers
+  virtual Result<void> replaceTile(ObjectId targetId, Tile::Ptr replacement) = 0;
+
 protected:
   Split() = default;
 };
@@ -107,7 +123,10 @@ public:
   virtual Rect innerBounds() const = 0;
   virtual Result<void> pushView(std::shared_ptr<View> view) = 0;
   virtual Result<void> popView() = 0;
-  virtual View *activeView() = 0;
+  virtual std::shared_ptr<View> activeView() = 0;
+  virtual Result<void> closeView(ObjectId viewId) = 0;
+  virtual size_t viewCount() const = 0;
+  virtual bool hasView(ObjectId viewId) const = 0;
 
 protected:
   Pane() = default;

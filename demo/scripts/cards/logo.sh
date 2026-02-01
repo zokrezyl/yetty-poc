@@ -23,4 +23,4 @@ if [ ! -f "$LOGO" ]; then
 fi
 
 # Use the Python client for card system
-cat "$LOGO" | python3 "$PROJECT_ROOT/tools/yetty-client/main.py" create image -i - -w "$WIDTH" -H "$HEIGHT"
+cat "$LOGO" | uv run python3 "$PROJECT_ROOT/tools/yetty-client/main.py" create image -i - -w "$WIDTH" -H "$HEIGHT"

@@ -200,7 +200,7 @@ public:
               int32_t x, int32_t y,
               uint32_t widthCells, uint32_t heightCells,
               const std::string& args, const std::string& payload)
-        : HDraw(ctx.cardBufferManager, ctx.gpu, x, y, widthCells, heightCells)
+        : HDraw(ctx.cardManager->bufferManager(), ctx.gpu, x, y, widthCells, heightCells)
         , _fontManager(ctx.fontManager)
         , _argsStr(args)
         , _payloadStr(payload)
@@ -1695,7 +1695,7 @@ Result<CardPtr> HDraw::create(
     yinfo("HDraw::create: pos=({},{}) size={}x{} args='{}' payload_len={}",
           x, y, widthCells, heightCells, args, payload.size());
 
-    if (!ctx.cardBufferManager) {
+    if (!ctx.cardManager) {
         yerror("HDraw::create: null CardBufferManager!");
         return Err<CardPtr>("HDraw::create: null CardBufferManager");
     }

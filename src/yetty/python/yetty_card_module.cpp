@@ -1,4 +1,5 @@
 #include <yetty/card-buffer-manager.h>
+#include <yetty/card-texture-manager.h>
 #include <yetty/gpu-context.h>
 #include "engine.h"
 #include <ytrace/ytrace.hpp>
@@ -12,10 +13,14 @@ namespace yetty::python {
 
 // Thread-local pointers, set by the card before each Python callback
 static thread_local CardBufferManager* s_cardMgr = nullptr;
+static thread_local CardTextureManager* s_textureMgr = nullptr;
 static thread_local const GPUContext* s_gpuCtx = nullptr;
 
 void setCardBufferManager(CardBufferManager* mgr) { s_cardMgr = mgr; }
 CardBufferManager* getCardBufferManager() { return s_cardMgr; }
+
+void setCardTextureManager(CardTextureManager* mgr) { s_textureMgr = mgr; }
+CardTextureManager* getCardTextureManager() { return s_textureMgr; }
 
 void setGPUContext(const GPUContext* ctx) { s_gpuCtx = ctx; }
 const GPUContext* getGPUContext() { return s_gpuCtx; }
@@ -114,8 +119,8 @@ PYBIND11_EMBEDDED_MODULE(yetty_card, m) {
 
     // --- Texture handle functions ---
     m.def("allocate_texture_handle", [](uint32_t width, uint32_t height) -> PyTextureHandle {
-        auto* mgr = s_cardMgr;
-        if (!mgr) throw std::runtime_error("No CardBufferManager set");
+        auto* mgr = s_textureMgr;
+        if (!mgr) throw std::runtime_error("No CardTextureManager set");
         auto result = mgr->allocateTextureHandle();
         if (!result) throw std::runtime_error("allocateTextureHandle failed");
         PyTextureHandle pyh;
@@ -128,16 +133,16 @@ PYBIND11_EMBEDDED_MODULE(yetty_card, m) {
        "Allocate texture handle with local pixel buffer (RGBA8, width*height*4 bytes)");
 
     m.def("link_texture_data", [](PyTextureHandle& h) {
-        auto* mgr = s_cardMgr;
-        if (!mgr) throw std::runtime_error("No CardBufferManager set");
+        auto* mgr = s_textureMgr;
+        if (!mgr) throw std::runtime_error("No CardTextureManager set");
         if (!h.isValid()) throw std::runtime_error("Invalid texture handle");
         mgr->linkTextureData(h.handle, h.pixels.data(), h.width, h.height);
     }, py::arg("handle"),
        "Link the local pixel buffer to the texture handle for atlas packing");
 
     m.def("deallocate_texture_handle", [](PyTextureHandle& h) {
-        auto* mgr = s_cardMgr;
-        if (!mgr) throw std::runtime_error("No CardBufferManager set");
+        auto* mgr = s_textureMgr;
+        if (!mgr) throw std::runtime_error("No CardTextureManager set");
         mgr->deallocateTextureHandle(h.handle);
         h.handle = TextureHandle::invalid();
         h.pixels.clear();
