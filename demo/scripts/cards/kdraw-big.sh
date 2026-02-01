@@ -13,6 +13,6 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR/../../.."
 
 # Use the yetty-client Python tool to create the KDraw card
-python3 tools/yetty-client/main.py create kdraw -i demo/assets/cards/ydraw/big.yaml -w 80 -H 25
+uv run python3 tools/yetty-client/main.py create kdraw -i demo/assets/cards/ydraw/big.yaml -w 80 -H 25
 
 echo  # newline after the card

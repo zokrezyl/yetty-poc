@@ -23,7 +23,9 @@ struct GridUniforms {
     cursorShape: f32,          // 4 bytes (1=block, 2=underline, 3=bar)
     viewportOrigin: vec2<f32>, // 8 bytes - viewport origin in framebuffer
     cursorBlink: f32,          // 4 bytes (0=no blink, 1=blink)
-    _pad2: f32,                // 4 bytes padding for alignment
+    hasSelection: f32,         // 4 bytes (0=no, 1=yes)
+    selStart: vec2<f32>,       // 8 bytes (col, row)
+    selEnd: vec2<f32>,         // 8 bytes (col, row)
 };
 
 // Glyph metadata (40 bytes per glyph, matches C++ GlyphMetadataGPU)
@@ -225,8 +227,11 @@ fn renderShaderGlyph(glyphIndex: u32, localUV: vec2<f32>, time: f32, fg: u32, bg
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    // Convert fragment position to pixel coordinates
-    let pixelPos = input.position.xy;
+    // Convert fragment position to viewport-local pixel coordinates
+    // input.position.xy is in framebuffer space; subtract viewport origin
+    // so grid calculations start at (0,0) within the pane's client area
+    let fbPixelPos = input.position.xy;
+    let pixelPos = fbPixelPos - grid.viewportOrigin;
 
     // Calculate grid dimensions in pixels
     let gridPixelWidth = grid.gridSize.x * grid.cellSize.x;
@@ -317,7 +322,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
             // Card or shader glyph: render via shader function
             let localUV = localPxBase / grid.cellSize;  // Normalize to 0-1
             let mousePos = vec2<f32>(globals.mouseX, globals.mouseY);
-            finalColor = renderShaderGlyph(glyphIndex, localUV, globals.time, cell.fg, cell.bg, pixelPos, mousePos, globals.lastChar, globals.lastCharTime);
+            finalColor = renderShaderGlyph(glyphIndex, localUV, globals.time, cell.fg, cell.bg, fbPixelPos, mousePos, globals.lastChar, globals.lastCharTime);
             hasGlyph = true;
         } else if (isEmoji) {
             // Emoji rendering: glyphIndex is the emoji index in emojiMetadata array
@@ -448,6 +453,36 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
             if (drawCursor) {
                 finalColor = vec3<f32>(1.0, 1.0, 1.0) - finalColor;
             }
+        }
+    }
+
+    // Selection highlighting
+    if (grid.hasSelection > 0.5) {
+        let col = i32(cellCol);
+        let row = i32(cellRow);
+        let sStartCol = i32(grid.selStart.x);
+        let sStartRow = i32(grid.selStart.y);
+        let sEndCol = i32(grid.selEnd.x);
+        let sEndRow = i32(grid.selEnd.y);
+
+        var inSelection = false;
+        if (row > sStartRow && row < sEndRow) {
+            // Entire row is selected
+            inSelection = true;
+        } else if (row == sStartRow && row == sEndRow) {
+            // Single-row selection
+            inSelection = col >= sStartCol && col <= sEndCol;
+        } else if (row == sStartRow) {
+            // First row of multi-row selection
+            inSelection = col >= sStartCol;
+        } else if (row == sEndRow) {
+            // Last row of multi-row selection
+            inSelection = col <= sEndCol;
+        }
+
+        if (inSelection) {
+            // Highlight: blend with selection color (blue tint)
+            finalColor = mix(finalColor, vec3<f32>(0.3, 0.5, 0.8), 0.4);
         }
     }
 

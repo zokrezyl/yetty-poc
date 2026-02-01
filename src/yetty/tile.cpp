@@ -126,7 +126,7 @@ public:
 
     Result<void> render(WGPURenderPassEncoder pass) override {
         // Render frame around the split
-        renderFrame(pass, 1.0f, 0.0f, 0.0f, 1.0f, 5.0f);
+        renderFrame(pass, 1.0f, 0.0f, 0.0f, 1.0f, 2.0f);
 
         if (_first) {
             if (auto r = _first->render(pass); !r) {
@@ -345,9 +345,9 @@ public:
     Result<void> render(WGPURenderPassEncoder pass) override {
         // Render frame border
         if (_focused) {
-            renderFrame(pass, 1.0f, 1.0f, 0.0f, 1.0f, 5.0f);
+            renderFrame(pass, 1.0f, 1.0f, 0.0f, 1.0f, 2.0f);
         } else {
-            renderFrame(pass, 0.0f, 1.0f, 0.0f, 1.0f, 4.0f);
+            renderFrame(pass, 0.0f, 1.0f, 0.0f, 1.0f, 2.0f);
         }
 
         if (auto view = activeView()) {
@@ -394,7 +394,7 @@ public:
     bool focused() const override { return _focused; }
 
     Rect innerBounds() const override {
-        constexpr float border = 5.0f;
+        constexpr float border = 2.0f;
         return {
             _bounds.x + border,
             _bounds.y + border,

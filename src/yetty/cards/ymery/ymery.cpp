@@ -29,7 +29,7 @@ public:
               int32_t x, int32_t y,
               uint32_t widthCells, uint32_t heightCells,
               const std::string& args, const std::string& payload)
-        : Ymery(ctx.cardBufferManager, ctx.gpu, x, y, widthCells, heightCells)
+        : Ymery(ctx.cardManager->bufferManager(), ctx.cardManager->textureManager(), ctx.gpu, x, y, widthCells, heightCells)
         , _ctx(ctx)
         , _argsStr(args)
         , _payloadStr(payload)
@@ -160,7 +160,7 @@ public:
         }
 
         // Allocate texture handle and local pixel buffer
-        auto texResult = _cardMgr->allocateTextureHandle();
+        auto texResult = _textureMgr->allocateTextureHandle();
         if (!texResult) {
             return Err<void>("Ymery::init: failed to allocate texture handle", texResult);
         }
@@ -191,8 +191,8 @@ public:
         _destroyOffscreenTexture();
         _destroyReadbackBuffer();
 
-        if (_textureHandle.isValid() && _cardMgr) {
-            _cardMgr->deallocateTextureHandle(_textureHandle);
+        if (_textureHandle.isValid() && _textureMgr) {
+            _textureMgr->deallocateTextureHandle(_textureHandle);
             _textureHandle = TextureHandle::invalid();
         }
         _cpuPixels.clear();
@@ -221,8 +221,8 @@ public:
         _destroyOffscreenTexture();
         _destroyReadbackBuffer();
 
-        if (_textureHandle.isValid() && _cardMgr) {
-            _cardMgr->deallocateTextureHandle(_textureHandle);
+        if (_textureHandle.isValid() && _textureMgr) {
+            _textureMgr->deallocateTextureHandle(_textureHandle);
             _textureHandle = TextureHandle::invalid();
         }
         _cpuPixels.clear();
@@ -259,7 +259,7 @@ public:
                     return Err<void>("Ymery::update: failed to recreate offscreen texture", res);
                 }
             }
-            auto texResult = _cardMgr->allocateTextureHandle();
+            auto texResult = _textureMgr->allocateTextureHandle();
             if (!texResult) {
                 return Err<void>("Ymery::update: failed to re-allocate texture handle", texResult);
             }
@@ -418,7 +418,7 @@ public:
                 }
                 // Link CPU pixels to texture handle for atlas packing
                 if (_textureHandle.isValid()) {
-                    _cardMgr->linkTextureData(_textureHandle, _cpuPixels.data(), _pixelWidth, _pixelHeight);
+                    _textureMgr->linkTextureData(_textureHandle, _cpuPixels.data(), _pixelWidth, _pixelHeight);
                 }
             }
 
@@ -659,7 +659,7 @@ private:
         meta.textureHeight = _pixelHeight;
 
         if (_textureHandle.isValid()) {
-            auto pos = _cardMgr->getAtlasPosition(_textureHandle);
+            auto pos = _textureMgr->getAtlasPosition(_textureHandle);
             meta.atlasX = pos.x;
             meta.atlasY = pos.y;
         } else {
@@ -735,8 +735,11 @@ Result<Ymery::Ptr> Ymery::createImpl(
     const std::string& args,
     const std::string& payload) noexcept
 {
-    if (!yettyCtx.cardBufferManager) {
+    if (!yettyCtx.cardManager) {
         return Err<Ptr>("Ymery::createImpl: null CardBufferManager");
+    }
+    if (false) { // cardManager always valid
+        return Err<Ptr>("Ymery::createImpl: null CardTextureManager");
     }
 
     auto card = std::make_shared<YmeryImpl>(

@@ -240,6 +240,7 @@ uint32_t MsMsdfFont::loadGlyphFromCdb(uint32_t codepoint, Style style) {
         uint32_t glyphIndex = static_cast<uint32_t>(_glyphMetadata.size());
         _glyphMetadata.push_back(meta);
         _codepointToIndex[idx][codepoint] = glyphIndex;
+        _indexToCodepoint[glyphIndex] = codepoint;
         return glyphIndex;
     }
 
@@ -305,9 +306,18 @@ uint32_t MsMsdfFont::loadGlyphFromCdb(uint32_t codepoint, Style style) {
     uint32_t glyphIndex = static_cast<uint32_t>(_glyphMetadata.size());
     _glyphMetadata.push_back(meta);
     _codepointToIndex[idx][codepoint] = glyphIndex;
+    _indexToCodepoint[glyphIndex] = codepoint;
 
     _dirty = true;
     return glyphIndex;
+}
+
+uint32_t MsMsdfFont::getCodepoint(uint32_t glyphIndex) const {
+    auto it = _indexToCodepoint.find(glyphIndex);
+    if (it != _indexToCodepoint.end()) {
+        return it->second;
+    }
+    return 0;
 }
 
 uint32_t MsMsdfFont::getGlyphIndex(uint32_t codepoint) {

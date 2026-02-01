@@ -3,6 +3,7 @@
 #include "types.h"
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <string>
 
 namespace yetty {
@@ -37,7 +38,10 @@ struct Event {
         CardScroll,
         // Tree manipulation
         Close,
-        SplitPane
+        SplitPane,
+        // Clipboard
+        Copy,
+        Paste
     };
 
     struct KeyEvent {
@@ -131,6 +135,11 @@ struct Event {
         CloseEvent closeEv;
         SplitPaneEvent splitPane;
     };
+
+    // Optional heap-allocated payload, automatically freed when event goes out of scope.
+    // Used by Copy/Paste events to carry strings; generic enough for any data type.
+    // Handlers cast via std::static_pointer_cast<T>(event.payload).
+    std::shared_ptr<void> payload;
 
     // Factory methods
     static Event keyDown(int key, int mods, int scancode = 0) {
@@ -257,6 +266,20 @@ struct Event {
         Event e;
         e.type = Type::SplitPane;
         e.splitPane = {objectId, orientation};
+        return e;
+    }
+
+    static Event copyEvent(std::shared_ptr<std::string> text) {
+        Event e;
+        e.type = Type::Copy;
+        e.payload = std::move(text);
+        return e;
+    }
+
+    static Event pasteEvent(std::shared_ptr<std::string> text) {
+        Event e;
+        e.type = Type::Paste;
+        e.payload = std::move(text);
         return e;
     }
 

@@ -3,7 +3,7 @@
 #include <yetty/gpu-context.h>
 #include <yetty/shader-manager.h>
 #include <yetty/font-manager.h>
-#include <yetty/card-buffer-manager.h>
+#include <yetty/card-manager.h>
 #include <yetty/card-factory.h>
 #include <yetty/config.h>
 #include <yetty/imgui-manager.h>
@@ -26,8 +26,8 @@ struct YettyContext {
     CardFactory::Ptr cardFactory;
     ImguiManager::Ptr imguiManager;
 
-    // Per-screen card buffer manager (set by GPUScreen, not globally)
-    CardBufferManager::Ptr cardBufferManager;
+    // Per-screen card manager (set by GPUScreen, not globally)
+    CardManager::Ptr cardManager;
 
     // Ymery widget renderer (YAML-driven ImGui widgets)
     std::shared_ptr<ymery::Renderer> ymeryRenderer;

@@ -734,6 +734,18 @@ Result<void> YettyImpl::initCallbacks() noexcept {
         double xpos, ypos;
         glfwGetCursorPos(w, &xpos, &ypos);
         auto loop = *base::EventLoop::instance();
+
+        // Middle-click paste: read clipboard and dispatch Paste event
+        if (button == GLFW_MOUSE_BUTTON_MIDDLE && action == GLFW_PRESS) {
+            const char* clipboard = glfwGetClipboardString(w);
+            if (clipboard && clipboard[0] != '\0') {
+                auto text = std::make_shared<std::string>(clipboard);
+                loop->dispatch(base::Event::pasteEvent(std::move(text)));
+                ydebug("glfwMouseButtonCallback: middle-click paste ({} bytes)", strlen(clipboard));
+            }
+            return;
+        }
+
         if (action == GLFW_PRESS) {
             ydebug("glfwMouseButtonCallback: button={} PRESS at ({}, {})", button, xpos, ypos);
             loop->dispatch(base::Event::mouseDown(static_cast<float>(xpos), static_cast<float>(ypos), button));
@@ -830,6 +842,9 @@ void YettyImpl::initEventLoop() noexcept {
         yerror("Failed to register timer listener: {}", error_msg(res));
         return;
     }
+
+    // Register for Copy events to write to system clipboard
+    loop->registerListener(base::Event::Type::Copy, sharedAs<base::EventListener>());
 }
 
 void YettyImpl::shutdownEventLoop() noexcept {
@@ -851,6 +866,16 @@ Result<bool> YettyImpl::onEvent(const base::Event& event) {
         if (auto res = mainLoopIteration(); !res) {
             yerror("Fatal render error: {}", error_msg(res));
             (*base::EventLoop::instance())->stop();
+        }
+        return Ok(true);
+    }
+
+    // Copy event: write selected text to system clipboard
+    if (event.type == base::Event::Type::Copy && event.payload && _window) {
+        auto text = std::static_pointer_cast<std::string>(event.payload);
+        if (text && !text->empty()) {
+            glfwSetClipboardString(_window, text->c_str());
+            yinfo("Clipboard: copied {} bytes", text->size());
         }
         return Ok(true);
     }

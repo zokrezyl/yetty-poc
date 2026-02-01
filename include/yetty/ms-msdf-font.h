@@ -28,6 +28,9 @@ public:
     uint32_t getGlyphIndex(uint32_t codepoint, Style style) override;
     uint32_t getGlyphIndex(uint32_t codepoint, bool bold, bool italic) override;
 
+    // Reverse lookup: glyph index -> Unicode codepoint (0 if unknown)
+    uint32_t getCodepoint(uint32_t glyphIndex) const;
+
     void uploadToGpu() override;
     bool isDirty() const override { return _dirty; }
     void clearDirty() override { _dirty = false; }
@@ -85,6 +88,9 @@ private:
 
     // Per-style glyph tracking: codepoint -> glyph index
     std::unordered_map<uint32_t, uint32_t> _codepointToIndex[4];
+
+    // Reverse mapping: glyph index -> codepoint (shared across styles)
+    std::unordered_map<uint32_t, uint32_t> _indexToCodepoint;
 
     // GPU metadata for all loaded glyphs
     std::vector<GlyphMetadataGPU> _glyphMetadata;

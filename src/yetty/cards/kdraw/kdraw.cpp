@@ -183,7 +183,7 @@ public:
               int32_t x, int32_t y,
               uint32_t widthCells, uint32_t heightCells,
               const std::string& args, const std::string& payload)
-        : KDraw(ctx.cardBufferManager, ctx.gpu, x, y, widthCells, heightCells)
+        : KDraw(ctx.cardManager->bufferManager(), ctx.gpu, x, y, widthCells, heightCells)
         , _fontManager(ctx.fontManager)
         , _argsStr(args)
         , _payloadStr(payload)
@@ -1781,7 +1781,7 @@ Result<CardPtr> KDraw::create(
     yinfo("KDraw::create: pos=({},{}) size={}x{} args='{}' payload_len={}",
           x, y, widthCells, heightCells, args, payload.size());
 
-    if (!ctx.cardBufferManager) {
+    if (!ctx.cardManager) {
         yerror("KDraw::create: null CardBufferManager!");
         return Err<CardPtr>("KDraw::create: null CardBufferManager");
     }

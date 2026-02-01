@@ -41,7 +41,7 @@ public:
             int32_t x, int32_t y,
             uint32_t widthCells, uint32_t heightCells,
             const std::string& args, const std::string& payload)
-        : Pdf(ctx.cardBufferManager, ctx.gpu, x, y, widthCells, heightCells)
+        : Pdf(ctx.cardManager->bufferManager(), ctx.cardManager->textureManager(), ctx.gpu, x, y, widthCells, heightCells)
         , _ctx(ctx)
         , _argsStr(args)
         , _pdfData(payload.begin(), payload.end())
@@ -144,8 +144,8 @@ public:
 
     void suspend() override {
         // Deallocate texture handle but keep _pagePixels for reconstruction
-        if (_textureHandle.isValid() && _cardMgr) {
-            _cardMgr->deallocateTextureHandle(_textureHandle);
+        if (_textureHandle.isValid() && _textureMgr) {
+            _textureMgr->deallocateTextureHandle(_textureHandle);
             _textureHandle = TextureHandle::invalid();
         }
         _needsUpload = true;
@@ -158,8 +158,8 @@ public:
         deregisterFromEvents();
 
         // Release texture handle
-        if (_textureHandle.isValid() && _cardMgr) {
-            _cardMgr->deallocateTextureHandle(_textureHandle);
+        if (_textureHandle.isValid() && _textureMgr) {
+            _textureMgr->deallocateTextureHandle(_textureHandle);
             _textureHandle = TextureHandle::invalid();
         }
 
@@ -436,7 +436,7 @@ private:
 
         // Allocate texture handle if needed
         if (!_textureHandle.isValid()) {
-            auto allocResult = _cardMgr->allocateTextureHandle();
+            auto allocResult = _textureMgr->allocateTextureHandle();
             if (!allocResult) {
                 return Err<void>("Pdf::linkPixelsToHandle: failed to allocate texture handle", allocResult);
             }
@@ -445,7 +445,7 @@ private:
         }
 
         // Link our CPU pixel buffer to the handle
-        _cardMgr->linkTextureData(_textureHandle, _pagePixels.data(), _renderWidth, _renderHeight);
+        _textureMgr->linkTextureData(_textureHandle, _pagePixels.data(), _renderWidth, _renderHeight);
 
         yinfo("Pdf::linkPixelsToHandle: linked {}x{} pixels to handle id={}",
               _renderWidth, _renderHeight, _textureHandle.id);
@@ -493,7 +493,7 @@ private:
 
         // Get atlas position from handle
         if (_textureHandle.isValid()) {
-            auto pos = _cardMgr->getAtlasPosition(_textureHandle);
+            auto pos = _textureMgr->getAtlasPosition(_textureHandle);
             meta.atlasX = pos.x;
             meta.atlasY = pos.y;
         } else {
@@ -596,8 +596,11 @@ Result<Pdf::Ptr> Pdf::createImpl(
 {
     (void)ctx;
 
-    if (!yettyCtx.cardBufferManager) {
+    if (!yettyCtx.cardManager) {
         return Err<Ptr>("Pdf::createImpl: null CardBufferManager");
+    }
+    if (false) { // cardManager always valid
+        return Err<Ptr>("Pdf::createImpl: null CardTextureManager");
     }
 
     auto card = std::make_shared<PdfImpl>(

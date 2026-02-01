@@ -4,6 +4,7 @@
 #include <string>
 #include <yetty/base/factory.h>
 #include <yetty/card-buffer-manager.h>
+#include <yetty/card-texture-manager.h>
 #include <yetty/card.h>
 #include <yetty/gpu-context.h>
 
@@ -27,10 +28,11 @@ public:
     virtual ~Ymery() = default;
 
 protected:
-    Ymery(CardBufferManager::Ptr mgr, const GPUContext& gpu,
+    Ymery(CardBufferManager::Ptr bufMgr, CardTextureManager::Ptr texMgr,
+          const GPUContext& gpu,
           int32_t x, int32_t y,
           uint32_t widthCells, uint32_t heightCells)
-        : TextureCard(std::move(mgr), gpu, x, y, widthCells, heightCells)
+        : TextureCard(std::move(bufMgr), std::move(texMgr), gpu, x, y, widthCells, heightCells)
     {}
 };
 
