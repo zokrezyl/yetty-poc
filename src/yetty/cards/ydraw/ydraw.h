@@ -142,7 +142,7 @@ static_assert(sizeof(BVHNode) == 32, "BVHNode must be 32 bytes");
 // YDraw class
 //=============================================================================
 
-class YDraw : public Card,
+class YDraw : public BufferCard,
               public base::ObjectFactory<YDraw> {
 public:
     using Ptr = std::shared_ptr<YDraw>;
@@ -241,7 +241,7 @@ protected:
     YDraw(CardBufferManager::Ptr mgr, const GPUContext& gpu,
           int32_t x, int32_t y,
           uint32_t widthCells, uint32_t heightCells)
-        : Card(std::move(mgr), gpu, x, y, widthCells, heightCells)
+        : BufferCard(std::move(mgr), gpu, x, y, widthCells, heightCells)
     {}
 };
 

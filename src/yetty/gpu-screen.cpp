@@ -4,6 +4,7 @@
 #include <yetty/card.h>
 #include <algorithm>
 #include <cstdlib>
+#include <unordered_set>
 #include <cstring>
 #include <fstream>
 #include <glm/glm.hpp>
@@ -187,10 +188,11 @@ private:
     return static_cast<size_t>(row * _cols + col);
   }
 
-  // Card dormancy — SIMD scan visible buffer for a given slotIndex
-  bool isCardSlotVisibleInBuffer(uint32_t slotIndex) const;
+  // Card dormancy — scan visible buffer for a given slotIndex
+  bool isCardSlotVisibleInBuffer(uint32_t slotIndex, int excludeRow = -1) const;
   void suspendOffscreenCards(int scrolledRow);
   void reactivateVisibleCards();
+  void gcInactiveCards();
 
   // OSC handling
   bool handleOSCSequence(const std::string &sequence, std::string *response,
@@ -277,6 +279,7 @@ private:
   std::unordered_map<uint32_t, CardPtr> _inactiveCards;
   CardBufferManager::Ptr _cardBufferManager;
   base::ObjectId _cardMouseTarget = 0;  // card that received last CardMouseDown
+  uint32_t _gcFrameCounter = 0;
 
   // OSC parsing
   OscCommandParser _oscParser;
@@ -402,7 +405,7 @@ Result<void> GPUScreenImpl::init() noexcept {
 
   // Create per-screen CardBufferManager (owns GPU buffers for cards).
   // Starts with tiny placeholder buffers (~20KB for metadata pool + 4 bytes each
-  // for storage/textureData). Real buffers and atlas are allocated lazily
+  // for buffer/atlas). Real buffers and atlas are allocated lazily
   // on first card creation, avoiding ~81MB GPU allocation when no cards are used.
   if (_ctx.gpu.device && _ctx.gpu.sharedUniformBuffer) {
     auto cbmResult = CardBufferManager::create(
@@ -1705,25 +1708,27 @@ int GPUScreenImpl::onOSC(int command, VTermStringFragment frag, void *user) {
 // Card dormancy — suspend off-screen cards, reactivate when scrolled back
 //=============================================================================
 
-bool GPUScreenImpl::isCardSlotVisibleInBuffer(uint32_t slotIndex) const {
+bool GPUScreenImpl::isCardSlotVisibleInBuffer(uint32_t slotIndex, int excludeRow) const {
   if (!_visibleBuffer)
     return false;
 
-  // Scan the entire visible buffer for any cell with this card's slotIndex.
-  // Card glyphs encode slotIndex in fg RGB (24 bits).
   const Cell *cells = _visibleBuffer->data();
-  const size_t numCells = static_cast<size_t>(_rows) * _cols;
-
   const uint8_t targetR = static_cast<uint8_t>(slotIndex & 0xFF);
   const uint8_t targetG = static_cast<uint8_t>((slotIndex >> 8) & 0xFF);
   const uint8_t targetB = static_cast<uint8_t>((slotIndex >> 16) & 0xFF);
 
-  for (size_t i = 0; i < numCells; i++) {
-    if (isCardGlyph(cells[i].glyph) &&
-        cells[i].fgR == targetR &&
-        cells[i].fgG == targetG &&
-        cells[i].fgB == targetB) {
-      return true;
+  for (int row = 0; row < _rows; row++) {
+    if (row == excludeRow)
+      continue;
+    size_t base = static_cast<size_t>(row) * _cols;
+    for (int col = 0; col < _cols; col++) {
+      const Cell &c = cells[base + col];
+      if (isCardGlyph(c.glyph) &&
+          c.fgR == targetR &&
+          c.fgG == targetG &&
+          c.fgB == targetB) {
+        return true;
+      }
     }
   }
   return false;
@@ -1733,38 +1738,39 @@ void GPUScreenImpl::suspendOffscreenCards(int scrolledRow) {
   if (!_visibleBuffer)
     return;
 
-  // Scan the row being pushed to scrollback for card glyph top-left cells.
-  // Top-left is identified by bg=0 (relRow=0, relCol=0).
+  // Scan the row being pushed to scrollback for ANY card glyph cell.
+  // Collect unique slotIndices found on this row.
   size_t srcOffset = static_cast<size_t>(scrolledRow * _cols);
+  std::unordered_set<uint32_t> slotsOnRow;
 
   for (int col = 0; col < _cols; col++) {
     const Cell &cell = (*_visibleBuffer)[srcOffset + col];
     if (!isCardGlyph(cell.glyph))
       continue;
 
-    // Check if this is the top-left cell (bg encodes relative position)
-    uint32_t bg24 = static_cast<uint32_t>(cell.bgR) |
-                    (static_cast<uint32_t>(cell.bgG) << 8) |
-                    (static_cast<uint32_t>(cell.bgB) << 16);
-    if (bg24 != 0)
-      continue;  // Not top-left cell
-
     uint32_t slotIndex = static_cast<uint32_t>(cell.fgR) |
                          (static_cast<uint32_t>(cell.fgG) << 8) |
                          (static_cast<uint32_t>(cell.fgB) << 16);
+    slotsOnRow.insert(slotIndex);
+  }
 
-    // Check if this card is still visible elsewhere in the buffer
-    // (card may span multiple rows, only the top row is being scrolled out)
-    if (isCardSlotVisibleInBuffer(slotIndex)) {
+  for (uint32_t slotIndex : slotsOnRow) {
+    // Only consider cards we're actually tracking
+    if (_cards.find(slotIndex) == _cards.end())
+      continue;
+
+    // Check if this card still has cells visible on OTHER rows in the buffer
+    // (exclude the row being scrolled out — it's about to leave)
+    if (isCardSlotVisibleInBuffer(slotIndex, scrolledRow)) {
       // Card still has visible cells on other rows — don't suspend yet.
-      // It will be suspended when the last row scrolls out.
       continue;
     }
 
     // Card is fully off-screen — suspend and move to inactive
     auto it = _cards.find(slotIndex);
     if (it != _cards.end()) {
-      yinfo("GPUScreen::suspendOffscreenCards: suspending card slotIndex={}", slotIndex);
+      yinfo("GPUScreen::suspendOffscreenCards: suspending card '{}' slotIndex={}",
+            it->second->typeName(), slotIndex);
       it->second->suspend();
       _inactiveCards[slotIndex] = std::move(it->second);
       _cards.erase(it);
@@ -1807,6 +1813,81 @@ void GPUScreenImpl::reactivateVisibleCards() {
       _cards[slotIndex] = std::move(it->second);
       _inactiveCards.erase(it);
     }
+  }
+}
+
+void GPUScreenImpl::gcInactiveCards() {
+  if (_inactiveCards.empty())
+    return;
+
+  // Collect all card slotIndices referenced in visible buffer + scrollback
+  std::unordered_set<uint32_t> liveSlots;
+
+  // Scan visible buffer
+  if (_visibleBuffer) {
+    const Cell *cells = _visibleBuffer->data();
+    const size_t numCells = static_cast<size_t>(_rows) * _cols;
+    for (size_t i = 0; i < numCells; i++) {
+      if (isCardGlyph(cells[i].glyph)) {
+        uint32_t slot = static_cast<uint32_t>(cells[i].fgR) |
+                        (static_cast<uint32_t>(cells[i].fgG) << 8) |
+                        (static_cast<uint32_t>(cells[i].fgB) << 16);
+        liveSlots.insert(slot);
+      }
+    }
+  }
+
+  // Scan scrollback
+  for (const auto &line : _scrollback) {
+    for (const auto &cell : line.cells) {
+      if (isCardGlyph(cell.glyph)) {
+        uint32_t slot = static_cast<uint32_t>(cell.fgR) |
+                        (static_cast<uint32_t>(cell.fgG) << 8) |
+                        (static_cast<uint32_t>(cell.fgB) << 16);
+        liveSlots.insert(slot);
+      }
+    }
+  }
+
+  // Dispose inactive cards not referenced anywhere
+  std::vector<uint32_t> toDispose;
+  for (const auto &[slotIndex, card] : _inactiveCards) {
+    if (liveSlots.find(slotIndex) == liveSlots.end()) {
+      toDispose.push_back(slotIndex);
+    }
+  }
+
+  for (uint32_t slotIndex : toDispose) {
+    auto it = _inactiveCards.find(slotIndex);
+    if (it != _inactiveCards.end()) {
+      yinfo("GPUScreen::gcInactiveCards: disposing orphaned inactive card '{}' slotIndex={}",
+            it->second->typeName(), slotIndex);
+      it->second->dispose();
+      _inactiveCards.erase(it);
+    }
+  }
+
+  // Also dispose active cards not referenced anywhere
+  std::vector<uint32_t> toDisposeActive;
+  for (const auto &[slotIndex, card] : _cards) {
+    if (liveSlots.find(slotIndex) == liveSlots.end()) {
+      toDisposeActive.push_back(slotIndex);
+    }
+  }
+
+  for (uint32_t slotIndex : toDisposeActive) {
+    auto it = _cards.find(slotIndex);
+    if (it != _cards.end()) {
+      yinfo("GPUScreen::gcInactiveCards: disposing orphaned active card '{}' slotIndex={}",
+            it->second->typeName(), slotIndex);
+      it->second->dispose();
+      _cards.erase(it);
+    }
+  }
+
+  if (!toDispose.empty() || !toDisposeActive.empty()) {
+    yinfo("GPUScreen::gcInactiveCards: disposed {} inactive + {} active orphaned cards",
+          toDispose.size(), toDisposeActive.size());
   }
 }
 
@@ -1907,10 +1988,25 @@ bool GPUScreenImpl::handleCardOSCSequence(const std::string &sequence,
       ydebug("Card OSC Create: final position ({},{})", x, y);
     }
 
+    // Run GC before creation to free resources from orphaned inactive cards
+    gcInactiveCards();
+
+    // Resolve "stretch to edge" dimensions (0 = fill remaining terminal)
+    // vterm handles scrolling automatically when writing past the bottom
+    uint32_t widthCells = static_cast<uint32_t>(cmd.create.width);
+    uint32_t heightCells = static_cast<uint32_t>(cmd.create.height);
+    if (widthCells == 0 && _cols > 0) {
+      widthCells = static_cast<uint32_t>(_cols);
+    }
+    if (heightCells == 0 && _rows > 0) {
+      heightCells = static_cast<uint32_t>(_rows);
+    }
+    ydebug("Card OSC Create: resolved size {}x{} (terminal {}x{})", widthCells, heightCells, _cols, _rows);
+
     // Create the card (pass full YettyContext for font access etc)
     auto result = _ctx.cardFactory->createCard(
-        _ctx, cmd.create.plugin, x, y, static_cast<uint32_t>(cmd.create.width),
-        static_cast<uint32_t>(cmd.create.height), cmd.pluginArgs, cmd.payload);
+        _ctx, cmd.create.plugin, x, y, widthCells, heightCells,
+        cmd.pluginArgs, cmd.payload);
 
     if (!result) {
       yerror("GPUScreen: createCard failed: {}", error_msg(result));
@@ -2516,7 +2612,7 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
           cardLocalCoords(localX, localY, row, col, cardX, cardY);
           auto loop = *base::EventLoop::instance();
           loop->dispatch(base::Event::cardScrollEvent(
-              scrollCard->id(), cardX, cardY, event.scroll.dx, event.scroll.dy));
+              scrollCard->id(), cardX, cardY, event.scroll.dx, event.scroll.dy, event.scroll.mods));
           return Ok(true);
         }
 
@@ -2634,6 +2730,12 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
   // Reactivate any suspended cards whose cells are now visible (user scrolled back)
   reactivateVisibleCards();
 
+  // Periodic GC: dispose inactive cards no longer referenced in any buffer
+  if (!_inactiveCards.empty() && ++_gcFrameCounter >= 180) {
+    _gcFrameCounter = 0;
+    gcInactiveCards();
+  }
+
   // Update all active cards before rendering (suspended cards are in _inactiveCards)
   for (auto& [slotIndex, card] : _cards) {
     ydebug("GPUScreen::render: updating card '{}' slotIndex={} metaOffset={}",
@@ -2641,6 +2743,18 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
     if (auto res = card->update(0.0f); !res) {
       yerror("GPUScreen::render: card '{}' update failed: {}", card->typeName(), error_msg(res));
       return Err<void>("GPUScreen::render: card update failed", res);
+    }
+  }
+
+  // Pack atlas and write all texture data to it
+  if (_cardBufferManager) {
+    if (auto res = _cardBufferManager->packAtlas(_ctx.gpu.queue); !res) {
+      yerror("GPUScreen: atlas pack failed: {}", error_msg(res));
+      return Err<void>("GPUScreen: atlas pack failed", res);
+    }
+    if (auto res = _cardBufferManager->writeAllToAtlas(_ctx.gpu.queue); !res) {
+      yerror("GPUScreen: atlas write failed: {}", error_msg(res));
+      return Err<void>("GPUScreen: atlas write failed", res);
     }
   }
 

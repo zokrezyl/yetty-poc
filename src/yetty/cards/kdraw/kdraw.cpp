@@ -275,8 +275,8 @@ public:
         }
 
         if (_derivedStorage.isValid() && _cardMgr) {
-            if (auto res = _cardMgr->deallocateStorage(_derivedStorage); !res) {
-                yerror("KDraw::dispose: deallocateStorage (derived) failed: {}", error_msg(res));
+            if (auto res = _cardMgr->deallocateBuffer(_derivedStorage); !res) {
+                yerror("KDraw::dispose: deallocateBuffer (derived) failed: {}", error_msg(res));
             }
             _derivedStorage = StorageHandle::invalid();
             _tileLists = nullptr;
@@ -284,8 +284,8 @@ public:
         }
 
         if (_primStorage.isValid() && _cardMgr) {
-            if (auto res = _cardMgr->deallocateStorage(_primStorage); !res) {
-                yerror("KDraw::dispose: deallocateStorage (prims) failed: {}", error_msg(res));
+            if (auto res = _cardMgr->deallocateBuffer(_primStorage); !res) {
+                yerror("KDraw::dispose: deallocateBuffer (prims) failed: {}", error_msg(res));
             }
             _primStorage = StorageHandle::invalid();
             _primitives = nullptr;
@@ -315,7 +315,7 @@ public:
 
         // Deallocate derived storage (tile lists — will be rebuilt)
         if (_derivedStorage.isValid()) {
-            _cardMgr->deallocateStorage(_derivedStorage);
+            _cardMgr->deallocateBuffer(_derivedStorage);
             _derivedStorage = StorageHandle::invalid();
             _tileLists = nullptr;
             _tileListsSize = 0;
@@ -323,7 +323,7 @@ public:
 
         // Deallocate prim storage
         if (_primStorage.isValid()) {
-            _cardMgr->deallocateStorage(_primStorage);
+            _cardMgr->deallocateBuffer(_primStorage);
             _primStorage = StorageHandle::invalid();
             _primitives = nullptr;
             _primCount = 0;
@@ -347,7 +347,7 @@ public:
             std::memcpy(_primitives, _primStaging.data(), count * sizeof(SDFPrimitive));
             _primStaging.clear();
             _primStaging.shrink_to_fit();
-            _cardMgr->markStorageDirty(_primStorage);
+            _cardMgr->markBufferDirty(_primStorage);
             _dirty = true;
             yinfo("KDraw::update: reconstructed {} primitives from staging", count);
         }
@@ -383,7 +383,7 @@ public:
         if (_primitives[idx].aabbMinX == 0 && _primitives[idx].aabbMaxX == 0) {
             computeAABB_kdraw(_primitives[idx]);
         }
-        _cardMgr->markStorageDirty(_primStorage);
+        _cardMgr->markBufferDirty(_primStorage);
         _dirty = true;
         return idx;
     }
@@ -572,7 +572,7 @@ private:
         uint32_t newCap = std::max(required, _primCapacity == 0 ? 64u : _primCapacity * 2);
         uint32_t newSize = newCap * sizeof(SDFPrimitive);
 
-        auto newStorage = _cardMgr->allocateStorage(newSize);
+        auto newStorage = _cardMgr->allocateBuffer(newSize);
         if (!newStorage) {
             return Err<void>("KDraw: failed to allocate prim storage");
         }
@@ -581,7 +581,7 @@ private:
             std::memcpy(newStorage->data, _primStorage.data, _primCount * sizeof(SDFPrimitive));
         }
         if (_primStorage.isValid()) {
-            _cardMgr->deallocateStorage(_primStorage);
+            _cardMgr->deallocateBuffer(_primStorage);
         }
 
         _primStorage = *newStorage;
@@ -681,7 +681,7 @@ private:
         }
         _primCount = primCount;
         std::memcpy(_primitives, primData, primCount * PRIM_SIZE);
-        _cardMgr->markStorageDirty(_primStorage);
+        _cardMgr->markBufferDirty(_primStorage);
 
         _dirty = true;
         return Ok();
@@ -1588,8 +1588,8 @@ private:
 
         // Deallocate old derived storage
         if (_derivedStorage.isValid()) {
-            if (auto res = _cardMgr->deallocateStorage(_derivedStorage); !res) {
-                return Err<void>("KDraw::rebuildAndUpload: deallocateStorage failed");
+            if (auto res = _cardMgr->deallocateBuffer(_derivedStorage); !res) {
+                return Err<void>("KDraw::rebuildAndUpload: deallocateBuffer failed");
             }
             _derivedStorage = StorageHandle::invalid();
             _tileLists = nullptr;
@@ -1597,7 +1597,7 @@ private:
         }
 
         if (derivedTotalSize > 0) {
-            auto storageResult = _cardMgr->allocateStorage(derivedTotalSize);
+            auto storageResult = _cardMgr->allocateBuffer(derivedTotalSize);
             if (!storageResult) {
                 return Err<void>("KDraw::rebuildAndUpload: failed to allocate derived storage");
             }
@@ -1623,14 +1623,14 @@ private:
                 std::memcpy(base + offset, _glyphs.data(), glyphBytes);
             }
 
-            _cardMgr->markStorageDirty(_derivedStorage);
+            _cardMgr->markBufferDirty(_derivedStorage);
         }
 
         // Primitives are already in _primStorage
         _primitiveOffset = _primStorage.isValid() ? _primStorage.offset / sizeof(float) : 0;
 
         if (_primStorage.isValid()) {
-            _cardMgr->markStorageDirty(_primStorage);
+            _cardMgr->markBufferDirty(_primStorage);
         }
 
         _metadataDirty = true;

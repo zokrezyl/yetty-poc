@@ -99,6 +99,7 @@ struct Event {
         float y;  // card-local pixel y
         float dx;
         float dy;
+        int mods;
     };
 
     Type type = Type::None;
@@ -224,10 +225,10 @@ struct Event {
         return e;
     }
 
-    static Event cardScrollEvent(ObjectId targetId, float x, float y, float dx, float dy) {
+    static Event cardScrollEvent(ObjectId targetId, float x, float y, float dx, float dy, int mods = 0) {
         Event e;
         e.type = Type::CardScroll;
-        e.cardScroll = {targetId, x, y, dx, dy};
+        e.cardScroll = {targetId, x, y, dx, dy, mods};
         return e;
     }
 

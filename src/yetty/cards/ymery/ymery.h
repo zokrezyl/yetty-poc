@@ -13,7 +13,7 @@ struct YettyContext;
 
 namespace yetty::card {
 
-class Ymery : public Card, public base::ObjectFactory<Ymery> {
+class Ymery : public TextureCard, public base::ObjectFactory<Ymery> {
 public:
     using Ptr = std::shared_ptr<Ymery>;
     static constexpr uint32_t SHADER_GLYPH = 0x100000; // reuse texture shader
@@ -30,7 +30,7 @@ protected:
     Ymery(CardBufferManager::Ptr mgr, const GPUContext& gpu,
           int32_t x, int32_t y,
           uint32_t widthCells, uint32_t heightCells)
-        : Card(std::move(mgr), gpu, x, y, widthCells, heightCells)
+        : TextureCard(std::move(mgr), gpu, x, y, widthCells, heightCells)
     {}
 };
 

@@ -83,7 +83,7 @@ public:
             }
         }
 
-        // Run GPU compute shader to scale and write to textureData buffer
+        // Run GPU compute shader to scale, readback, and link to texture handle
         if (!_originalPixels.empty()) {
             recalculateScaledDimensions();
             if (auto res = runScaleCompute(); !res) {
@@ -118,10 +118,14 @@ public:
         if (_scaleBindGroupLayout) { wgpuBindGroupLayoutRelease(_scaleBindGroupLayout); _scaleBindGroupLayout = nullptr; }
         if (_scaleShaderModule) { wgpuShaderModuleRelease(_scaleShaderModule); _scaleShaderModule = nullptr; }
 
-        // Release buffer allocations
-        if (_textureDataHandle.isValid() && _cardMgr) {
-            _cardMgr->deallocateTextureData(_textureDataHandle);
-            _textureDataHandle = TextureDataHandle::invalid();
+        // Release readback resources
+        if (_readbackBuffer) { wgpuBufferRelease(_readbackBuffer); _readbackBuffer = nullptr; }
+        if (_scaledGpuBuffer) { wgpuBufferRelease(_scaledGpuBuffer); _scaledGpuBuffer = nullptr; }
+
+        // Release texture handle
+        if (_textureHandle.isValid() && _cardMgr) {
+            _cardMgr->deallocateTextureHandle(_textureHandle);
+            _textureHandle = TextureHandle::invalid();
         }
 
         if (_metaHandle.isValid() && _cardMgr) {
@@ -132,6 +136,8 @@ public:
         // Clear CPU memory
         _originalPixels.clear();
         _originalPixels.shrink_to_fit();
+        _scaledPixels.clear();
+        _scaledPixels.shrink_to_fit();
 
         return Ok();
     }
@@ -145,20 +151,26 @@ public:
         if (_scaleBindGroupLayout) { wgpuBindGroupLayoutRelease(_scaleBindGroupLayout); _scaleBindGroupLayout = nullptr; }
         if (_scaleShaderModule) { wgpuShaderModuleRelease(_scaleShaderModule); _scaleShaderModule = nullptr; }
 
-        // Deallocate textureData
-        if (_textureDataHandle.isValid() && _cardMgr) {
-            _cardMgr->deallocateTextureData(_textureDataHandle);
-            _textureDataHandle = TextureDataHandle::invalid();
+        // Release readback resources
+        if (_readbackBuffer) { wgpuBufferRelease(_readbackBuffer); _readbackBuffer = nullptr; }
+        if (_scaledGpuBuffer) { wgpuBufferRelease(_scaledGpuBuffer); _scaledGpuBuffer = nullptr; }
+
+        // Deallocate texture handle
+        if (_textureHandle.isValid() && _cardMgr) {
+            _cardMgr->deallocateTextureHandle(_textureHandle);
+            _textureHandle = TextureHandle::invalid();
         }
-        yinfo("Image::suspend: deallocated textureData + compute resources, _originalPixels has {} bytes",
+        _scaledPixels.clear();
+        _needsScaling = true;
+        yinfo("Image::suspend: deallocated texture handle + compute resources, _originalPixels has {} bytes",
               _originalPixels.size());
     }
 
     Result<void> update(float time) override {
         (void)time;
 
-        // Reconstruct after suspend: _originalPixels exists but textureData is gone
-        if (!_textureDataHandle.isValid() && !_originalPixels.empty()) {
+        // Reconstruct after suspend: _originalPixels exists but texture handle is gone
+        if (!_textureHandle.isValid() && !_originalPixels.empty()) {
             if (!_scalePipeline) {
                 if (auto res = createScalePipeline(); !res) {
                     return Err<void>("Image::update: failed to recreate scale pipeline", res);
@@ -166,11 +178,11 @@ public:
             }
             recalculateScaledDimensions();
             if (auto res = runScaleCompute(); !res) {
-                return Err<void>("Image::update: failed to reconstruct textureData", res);
+                return Err<void>("Image::update: failed to reconstruct texture", res);
             }
             _metadataDirty = true;
             _needsScaling = false;
-            yinfo("Image::update: reconstructed textureData from _originalPixels");
+            yinfo("Image::update: reconstructed texture from _originalPixels");
         }
 
         if (_needsScaling && !_originalPixels.empty()) {
@@ -422,7 +434,8 @@ private:
     }
 
     //=========================================================================
-    // GPU scaling: upload original → compute shader → textureData GPU buffer
+    // GPU scaling: upload original → compute shader → per-card GPU buffer
+    //              → readback to CPU → link to TextureHandle
     //=========================================================================
 
     Result<void> runScaleCompute() {
@@ -433,23 +446,22 @@ private:
         yinfo("Image::runScaleCompute: scaling {}x{} -> {}x{}",
               _originalWidth, _originalHeight, _scaledWidth, _scaledHeight);
 
-        // Allocate scaled-size space in textureData buffer
         uint32_t scaledDataSize = _scaledWidth * _scaledHeight * 4;
 
-        if (!_textureDataHandle.isValid() || _textureDataHandle.size != scaledDataSize) {
-            if (_textureDataHandle.isValid()) {
-                _cardMgr->deallocateTextureData(_textureDataHandle);
-                _textureDataHandle = TextureDataHandle::invalid();
-            }
+        // Create per-card destination GPU buffer (Storage + CopySrc for readback)
+        if (_scaledGpuBuffer) {
+            wgpuBufferRelease(_scaledGpuBuffer);
+            _scaledGpuBuffer = nullptr;
+        }
 
-            auto allocResult = _cardMgr->allocateTextureData(scaledDataSize);
-            if (!allocResult) {
-                return Err<void>("Image::runScaleCompute: failed to allocate textureData", allocResult);
-            }
-            _textureDataHandle = *allocResult;
+        WGPUBufferDescriptor dstBufferDesc = {};
+        dstBufferDesc.label = WGPU_STR("ImageScaledGpuBuffer");
+        dstBufferDesc.size = scaledDataSize;
+        dstBufferDesc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopySrc;
 
-            yinfo("Image::runScaleCompute: allocated {} bytes at offset {}",
-                  scaledDataSize, _textureDataHandle.offset);
+        _scaledGpuBuffer = wgpuDeviceCreateBuffer(_gpu.device, &dstBufferDesc);
+        if (!_scaledGpuBuffer) {
+            return Err<void>("Image::runScaleCompute: failed to create scaled GPU buffer");
         }
 
         // Upload original pixels to temp GPU buffer
@@ -473,14 +485,14 @@ private:
         wgpuQueueWriteBuffer(_gpu.queue, _tempSrcBuffer, 0,
                              _originalPixels.data(), srcDataSize);
 
-        // Update scale params
+        // Update scale params — dstOffset is 0 since we write to our own buffer
         ScaleParams params = {};
         params.srcWidth = _originalWidth;
         params.srcHeight = _originalHeight;
         params.dstWidth = _scaledWidth;
         params.dstHeight = _scaledHeight;
-        params.srcOffset = 0;  // Temp buffer starts at 0
-        params.dstOffset = _textureDataHandle.offset;
+        params.srcOffset = 0;
+        params.dstOffset = 0;
 
         wgpuQueueWriteBuffer(_gpu.queue, _scaleUniformBuffer, 0,
                              &params, sizeof(params));
@@ -504,9 +516,9 @@ private:
         bindEntries[1].size = srcDataSize;
 
         bindEntries[2].binding = 2;
-        bindEntries[2].buffer = _cardMgr->textureDataBuffer();
+        bindEntries[2].buffer = _scaledGpuBuffer;
         bindEntries[2].offset = 0;
-        bindEntries[2].size = _cardMgr->getStats().textureDataCapacity;
+        bindEntries[2].size = scaledDataSize;
 
         WGPUBindGroupDescriptor bindGroupDesc = {};
         bindGroupDesc.label = WGPU_STR("ImageScaleBindGroup");
@@ -519,7 +531,7 @@ private:
             return Err<void>("Image::runScaleCompute: failed to create bind group");
         }
 
-        // Dispatch compute shader
+        // Dispatch compute shader + copy to readback buffer
         WGPUCommandEncoderDescriptor encoderDesc = {};
         encoderDesc.label = WGPU_STR("ImageScaleEncoder");
         WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(_gpu.device, &encoderDesc);
@@ -538,6 +550,26 @@ private:
         wgpuComputePassEncoderEnd(pass);
         wgpuComputePassEncoderRelease(pass);
 
+        // Create readback buffer and copy scaled result
+        if (_readbackBuffer) {
+            wgpuBufferRelease(_readbackBuffer);
+            _readbackBuffer = nullptr;
+        }
+
+        WGPUBufferDescriptor rbDesc = {};
+        rbDesc.label = WGPU_STR("ImageReadback");
+        rbDesc.size = scaledDataSize;
+        rbDesc.usage = WGPUBufferUsage_CopyDst | WGPUBufferUsage_MapRead;
+
+        _readbackBuffer = wgpuDeviceCreateBuffer(_gpu.device, &rbDesc);
+        if (!_readbackBuffer) {
+            wgpuCommandEncoderRelease(encoder);
+            return Err<void>("Image::runScaleCompute: failed to create readback buffer");
+        }
+
+        wgpuCommandEncoderCopyBufferToBuffer(encoder,
+            _scaledGpuBuffer, 0, _readbackBuffer, 0, scaledDataSize);
+
         WGPUCommandBufferDescriptor cmdDesc = {};
         cmdDesc.label = WGPU_STR("ImageScaleCmd");
         WGPUCommandBuffer cmdBuffer = wgpuCommandEncoderFinish(encoder, &cmdDesc);
@@ -546,9 +578,57 @@ private:
         wgpuQueueSubmit(_gpu.queue, 1, &cmdBuffer);
         wgpuCommandBufferRelease(cmdBuffer);
 
-        yinfo("Image::runScaleCompute: dispatched ({}x{} workgroups)",
+        yinfo("Image::runScaleCompute: dispatched ({}x{} workgroups), reading back",
               workgroupsX, workgroupsY);
 
+        // Map readback buffer synchronously
+        struct MapCtx { bool done = false; WGPUMapAsyncStatus status; };
+        MapCtx mapCtx;
+        WGPUBufferMapCallbackInfo cbInfo = {};
+        cbInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+        cbInfo.callback = [](WGPUMapAsyncStatus status, WGPUStringView, void* ud1, void*) {
+            auto* ctx = static_cast<MapCtx*>(ud1);
+            ctx->status = status;
+            ctx->done = true;
+        };
+        cbInfo.userdata1 = &mapCtx;
+
+        wgpuBufferMapAsync(_readbackBuffer, WGPUMapMode_Read, 0, scaledDataSize, cbInfo);
+
+        while (!mapCtx.done) {
+            wgpuDeviceTick(_gpu.device);
+        }
+
+        if (mapCtx.status != WGPUMapAsyncStatus_Success) {
+            return Err<void>("Image::runScaleCompute: readback map failed");
+        }
+
+        const uint8_t* mapped = static_cast<const uint8_t*>(
+            wgpuBufferGetConstMappedRange(_readbackBuffer, 0, scaledDataSize));
+
+        if (!mapped) {
+            wgpuBufferUnmap(_readbackBuffer);
+            return Err<void>("Image::runScaleCompute: mapped range is null");
+        }
+
+        // Copy to CPU buffer
+        _scaledPixels.resize(scaledDataSize);
+        std::memcpy(_scaledPixels.data(), mapped, scaledDataSize);
+        wgpuBufferUnmap(_readbackBuffer);
+
+        // Allocate texture handle if needed, link scaled pixels
+        if (!_textureHandle.isValid()) {
+            auto allocResult = _cardMgr->allocateTextureHandle();
+            if (!allocResult) {
+                return Err<void>("Image::runScaleCompute: failed to allocate texture handle", allocResult);
+            }
+            _textureHandle = *allocResult;
+        }
+        _cardMgr->linkTextureData(_textureHandle, _scaledPixels.data(), _scaledWidth, _scaledHeight);
+
+        _metadataDirty = true;
+
+        yinfo("Image::runScaleCompute: done, linked to handle id={}", _textureHandle.id);
         return Ok();
     }
 
@@ -630,11 +710,18 @@ private:
         }
 
         Metadata meta = {};
-        meta.textureDataOffset = _textureDataHandle.isValid() ? _textureDataHandle.offset : 0;
-        meta.textureWidth = _scaledWidth;      // Scaled dimensions (what's in the GPU buffer)
+        meta.textureDataOffset = 0;  // No longer used
+        meta.textureWidth = _scaledWidth;
         meta.textureHeight = _scaledHeight;
-        meta.atlasX = 0;
-        meta.atlasY = 0;
+
+        if (_textureHandle.isValid()) {
+            auto pos = _cardMgr->getAtlasPosition(_textureHandle);
+            meta.atlasX = pos.x;
+            meta.atlasY = pos.y;
+        } else {
+            meta.atlasX = 0;
+            meta.atlasY = 0;
+        }
         meta.widthCells = _widthCells;
         meta.heightCells = _heightCells;
         meta.zoom = _contentZoom;
@@ -722,9 +809,14 @@ private:
     WGPUComputePipeline _scalePipeline = nullptr;
     WGPUBuffer _scaleUniformBuffer = nullptr;
     WGPUBuffer _tempSrcBuffer = nullptr;
+    WGPUBuffer _scaledGpuBuffer = nullptr;   // Per-card compute output
+    WGPUBuffer _readbackBuffer = nullptr;    // For GPU → CPU readback
 
-    // Buffer handles
-    TextureDataHandle _textureDataHandle = TextureDataHandle::invalid();
+    // Scaled image (CPU memory, linked to texture handle)
+    std::vector<uint8_t> _scaledPixels;
+
+    // Texture handle for atlas packing
+    TextureHandle _textureHandle = TextureHandle::invalid();
 
     // State
     bool _focused = false;

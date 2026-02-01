@@ -138,7 +138,7 @@ Result<void> PythonPlugin::initPython() {
     PyConfig_InitIsolatedConfig(&config);
 
     // Set Python home to the embedded Python installation
-    // This is where the stdlib (lib/python3.13/) is located
+    // This is where the stdlib (lib/pythonX.Y/) is located
     std::string pythonHome = std::string(CMAKE_BINARY_DIR) + "/python/install";
     std::wstring pythonHomeW(pythonHome.begin(), pythonHome.end());
     yinfo("Setting Python home to: {}", pythonHome);

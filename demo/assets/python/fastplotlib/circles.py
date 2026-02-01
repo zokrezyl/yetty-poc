@@ -1,30 +1,123 @@
 """
 Circles - concentric rings
 """
-import numpy as np
-import yetty_pygfx
+import os
+os.environ['RENDERCANVAS_FORCE_OFFSCREEN'] = '1'
 
-yetty_pygfx.init()
-fig = yetty_pygfx.create_figure()
+import yetty_card
+from python.result import Result, Ok, Err
 
+_tex = None
+_fig = None
+_np = None
 
-def make_circle(radius: float, n_points: int = 100) -> np.ndarray:
-    theta = np.linspace(0, 2 * np.pi, n_points)
-    xs = radius * np.cos(theta)
-    ys = radius * np.sin(theta)
-    return np.column_stack([xs, ys])
-
-
-# Create concentric circles
-colors = ["red", "orange", "yellow", "green", "cyan", "blue", "magenta"]
-for i, r in enumerate(range(10, 80, 10)):
-    circle = make_circle(r)
-    fig[0, 0].add_line(circle, thickness=5, colors=colors[i % len(colors)])
-
-fig[0, 0].axes.visible = False
+PX_PER_CELL_X = 10
+PX_PER_CELL_Y = 20
 
 
-def render(ctx, frame_num, width, height):
-    fig.show()
-    yetty_pygfx.render_frame()
-    return True
+def setup():
+    try:
+        yetty_card.ensure_packages(['numpy', 'fastplotlib', 'rendercanvas'])
+    except Exception as e:
+        return Result.error("setup: failed to install packages", e)
+    return Ok(None)
+
+
+def init(width_cells, height_cells):
+    global _tex, _fig, _np
+
+    try:
+        import numpy as np
+        import fastplotlib as fpl
+    except ImportError as e:
+        return Result.error("init: failed to import dependencies", e)
+
+    _np = np
+    px_w = max(width_cells * PX_PER_CELL_X, 64)
+    px_h = max(height_cells * PX_PER_CELL_Y, 64)
+
+    _tex = yetty_card.allocate_texture_handle(px_w, px_h)
+    _fig = fpl.Figure(size=(px_w, px_h))
+
+    def make_circle(radius, n_points=100):
+        theta = np.linspace(0, 2 * np.pi, n_points)
+        xs = radius * np.cos(theta)
+        ys = radius * np.sin(theta)
+        return np.column_stack([xs, ys])
+
+    colors = ["red", "orange", "yellow", "green", "cyan", "blue", "magenta"]
+    for i, r in enumerate(range(10, 80, 10)):
+        circle = make_circle(r)
+        _fig[0, 0].add_line(circle, thickness=5, colors=colors[i % len(colors)])
+
+    _fig[0, 0].axes.visible = False
+    _fig.show()
+    return Ok(None)
+
+
+def render(time):
+    if _fig is None or _tex is None or _np is None:
+        return Result.error("render: not initialized")
+
+    canvas = _fig.canvas
+    canvas.force_draw()
+    img = canvas.draw()
+    if img is None:
+        return Ok(None)
+
+    pixels = _np.asarray(img, dtype=_np.uint8).ravel()
+    buf = memoryview(_tex)
+    n = min(len(pixels), len(buf))
+    buf[:n] = pixels[:n]
+
+    yetty_card.link_texture_data(_tex)
+    return Ok(None)
+
+
+def suspend():
+    return Ok(None)
+
+
+# ─── Event forwarding to rendercanvas ───────────────────────────────
+_CTRL = 0x0002
+_SHIFT = 0x0001
+
+def _modifiers(mods):
+    m = []
+    if mods & _CTRL:
+        m.append("Control")
+    if mods & _SHIFT:
+        m.append("Shift")
+    return tuple(m)
+
+def _submit(ev):
+    if _fig is not None and hasattr(_fig, 'canvas'):
+        c = _fig.canvas
+        if hasattr(c, '_handle_event_and_flush'):
+            c._handle_event_and_flush(ev)
+
+def on_scroll(x, y, dx, dy, mods):
+    _submit({"event_type": "wheel", "x": x, "y": y,
+             "dx": dx * 100, "dy": -dy * 100,
+             "modifiers": _modifiers(mods)})
+
+def on_mouse_down(x, y, button):
+    _submit({"event_type": "pointer_down", "x": x, "y": y,
+             "button": button + 1, "modifiers": ()})
+
+def on_mouse_move(x, y):
+    _submit({"event_type": "pointer_move", "x": x, "y": y,
+             "button": 0, "modifiers": ()})
+
+def on_mouse_up(x, y, button):
+    _submit({"event_type": "pointer_up", "x": x, "y": y,
+             "button": button + 1, "modifiers": ()})
+
+
+def shutdown():
+    global _tex, _fig
+    if _tex and _tex.valid:
+        yetty_card.deallocate_texture_handle(_tex)
+    _tex = None
+    _fig = None
+    return Ok(None)

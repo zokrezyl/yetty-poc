@@ -8,7 +8,9 @@ add_subdirectory(ymery)
 
 add_subdirectory(thorvg)
 
-option(YETTY_CARD_PDF "Build PDF card (requires PDFium)" OFF)
+add_subdirectory(python)
+
+option(YETTY_CARD_PDF "Build PDF card (requires PDFium)" ON)
 if(YETTY_CARD_PDF)
     add_subdirectory(pdf)
 endif()

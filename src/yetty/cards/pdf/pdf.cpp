@@ -70,78 +70,97 @@ public:
     //=========================================================================
 
     Result<void> init() {
+        yerror("PDF::init: >>> ENTER  pdfData.size={} widthCells={} heightCells={} cellW={} cellH={}",
+               _pdfData.size(), _widthCells, _heightCells, _cellWidth, _cellHeight);
+
         ensurePdfiumInit();
+        yerror("PDF::init: [1] ensurePdfiumInit done");
 
         // Allocate metadata slot
         auto metaResult = _cardMgr->allocateMetadata(sizeof(Metadata));
         if (!metaResult) {
+            yerror("PDF::init: FAILED at allocateMetadata");
             return Err<void>("Pdf::init: failed to allocate metadata");
         }
         _metaHandle = *metaResult;
-
-        yinfo("Pdf::init: allocated metadata at offset {}", _metaHandle.offset);
+        yerror("PDF::init: [2] metadata allocated offset={} slotIndex={}", _metaHandle.offset, metadataSlotIndex());
 
         // Parse args
         parseArgs(_argsStr);
+        yerror("PDF::init: [3] args parsed");
 
         // Load PDF document from memory
         _doc = FPDF_LoadMemDocument(_pdfData.data(), static_cast<int>(_pdfData.size()), nullptr);
         if (!_doc) {
             unsigned long err = FPDF_GetLastError();
+            yerror("PDF::init: FAILED at FPDF_LoadMemDocument error={} pdfData.size={}", err, _pdfData.size());
             return Err<void>("Pdf::init: FPDF_LoadMemDocument failed (error " + std::to_string(err) + ")");
         }
 
         _pageCount = FPDF_GetPageCount(_doc);
-        yinfo("Pdf::init: loaded PDF with {} pages", _pageCount);
+        yerror("PDF::init: [4] loaded PDF with {} pages", _pageCount);
 
         if (_pageCount == 0) {
+            yerror("PDF::init: FAILED - zero pages");
             return Err<void>("Pdf::init: PDF has no pages");
         }
 
         // Render first page directly at card pixel size
         if (auto res = renderCurrentPage(); !res) {
+            yerror("PDF::init: FAILED at renderCurrentPage: {}", res.error().message());
             return Err<void>("Pdf::init: failed to render first page", res);
         }
+        yerror("PDF::init: [5] renderCurrentPage done, _pagePixels.size={} renderW={} renderH={}",
+               _pagePixels.size(), _renderWidth, _renderHeight);
 
         // Upload rendered pixels to GPU
         if (!_pagePixels.empty()) {
-            if (auto res = uploadPixelsToGPU(); !res) {
+            if (auto res = linkPixelsToHandle(); !res) {
+                yerror("PDF::init: FAILED at linkPixelsToHandle: {}", res.error().message());
                 return Err<void>("Pdf::init: failed to upload pixels", res);
             }
+            yerror("PDF::init: [6] linkPixelsToHandle done, textureHandle id={}",
+                   _textureHandle.id);
+        } else {
+            yerror("PDF::init: [6] SKIPPED linkPixelsToHandle - _pagePixels is EMPTY");
         }
 
         // Upload initial metadata
         if (auto res = uploadMetadata(); !res) {
+            yerror("PDF::init: FAILED at uploadMetadata: {}", res.error().message());
             return Err<void>("Pdf::init: failed to upload metadata", res);
         }
+        yerror("PDF::init: [7] uploadMetadata done");
 
         // Register for events
         if (auto res = registerForEvents(); !res) {
+            yerror("PDF::init: FAILED at registerForEvents: {}", res.error().message());
             return Err<void>("Pdf::init: failed to register for events", res);
         }
+        yerror("PDF::init: [8] registerForEvents done - SUCCESS");
 
         return Ok();
     }
 
     void suspend() override {
-        // Deallocate textureData but keep _pagePixels for reconstruction
-        if (_textureDataHandle.isValid() && _cardMgr) {
-            _cardMgr->deallocateTextureData(_textureDataHandle);
-            _textureDataHandle = TextureDataHandle::invalid();
+        // Deallocate texture handle but keep _pagePixels for reconstruction
+        if (_textureHandle.isValid() && _cardMgr) {
+            _cardMgr->deallocateTextureHandle(_textureHandle);
+            _textureHandle = TextureHandle::invalid();
         }
         _needsUpload = true;
         _metadataDirty = true;
-        yinfo("Pdf::suspend: deallocated textureData, _pagePixels has {} bytes", _pagePixels.size());
+        yinfo("Pdf::suspend: deallocated texture handle, _pagePixels has {} bytes", _pagePixels.size());
     }
 
     Result<void> dispose() override {
         // Deregister from events
         deregisterFromEvents();
 
-        // Release buffer allocations
-        if (_textureDataHandle.isValid() && _cardMgr) {
-            _cardMgr->deallocateTextureData(_textureDataHandle);
-            _textureDataHandle = TextureDataHandle::invalid();
+        // Release texture handle
+        if (_textureHandle.isValid() && _cardMgr) {
+            _cardMgr->deallocateTextureHandle(_textureHandle);
+            _textureHandle = TextureHandle::invalid();
         }
 
         if (_metaHandle.isValid() && _cardMgr) {
@@ -167,14 +186,14 @@ public:
     Result<void> update(float time) override {
         (void)time;
 
-        // Reconstruct after suspend: _pagePixels exists but textureData is gone
-        if (!_textureDataHandle.isValid() && !_pagePixels.empty()) {
-            if (auto res = uploadPixelsToGPU(); !res) {
-                return Err<void>("Pdf::update: failed to reconstruct textureData", res);
+        // Reconstruct after suspend: _pagePixels exists but texture handle is gone
+        if (!_textureHandle.isValid() && !_pagePixels.empty()) {
+            if (auto res = linkPixelsToHandle(); !res) {
+                return Err<void>("Pdf::update: failed to reconstruct texture handle", res);
             }
             _metadataDirty = true;
             _needsUpload = false;
-            yinfo("Pdf::update: reconstructed textureData from _pagePixels");
+            yinfo("Pdf::update: reconstructed texture handle from _pagePixels");
         }
 
         if (_needsRender) {
@@ -186,8 +205,8 @@ public:
         }
 
         if (_needsUpload && !_pagePixels.empty()) {
-            if (auto res = uploadPixelsToGPU(); !res) {
-                return Err<void>("Pdf::update: upload failed", res);
+            if (auto res = linkPixelsToHandle(); !res) {
+                return Err<void>("Pdf::update: link failed", res);
             }
             _needsUpload = false;
         }
@@ -407,41 +426,29 @@ private:
     }
 
     //=========================================================================
-    // Upload card-sized pixel buffer directly to GPU textureData
+    // Link CPU pixel buffer to texture handle for atlas packing
     //=========================================================================
 
-    Result<void> uploadPixelsToGPU() {
+    Result<void> linkPixelsToHandle() {
         if (_pagePixels.empty() || _renderWidth == 0 || _renderHeight == 0) {
-            return Err<void>("Pdf::uploadPixelsToGPU: no data");
+            return Err<void>("Pdf::linkPixelsToHandle: no data");
         }
 
-        uint32_t dataSize = _renderWidth * _renderHeight * 4;
-
-        // (Re)allocate textureData slot if size changed
-        if (!_textureDataHandle.isValid() || _textureDataHandle.size != dataSize) {
-            if (_textureDataHandle.isValid()) {
-                _cardMgr->deallocateTextureData(_textureDataHandle);
-                _textureDataHandle = TextureDataHandle::invalid();
-            }
-
-            auto allocResult = _cardMgr->allocateTextureData(dataSize);
+        // Allocate texture handle if needed
+        if (!_textureHandle.isValid()) {
+            auto allocResult = _cardMgr->allocateTextureHandle();
             if (!allocResult) {
-                return Err<void>("Pdf::uploadPixelsToGPU: failed to allocate textureData", allocResult);
+                return Err<void>("Pdf::linkPixelsToHandle: failed to allocate texture handle", allocResult);
             }
-            _textureDataHandle = *allocResult;
-
-            yinfo("Pdf::uploadPixelsToGPU: allocated {} bytes at offset {}",
-                  dataSize, _textureDataHandle.offset);
+            _textureHandle = *allocResult;
+            yinfo("Pdf::linkPixelsToHandle: allocated texture handle id={}", _textureHandle.id);
         }
 
-        // Copy rendered pixels into the CardBufferManager's CPU-side textureData buffer.
-        // flush() will upload dirty regions to GPU, and the atlas compute shader
-        // packs them into the atlas texture for the fragment shader to sample.
-        std::memcpy(_textureDataHandle.data, _pagePixels.data(), dataSize);
-        _cardMgr->markTextureDataDirty(_textureDataHandle);
+        // Link our CPU pixel buffer to the handle
+        _cardMgr->linkTextureData(_textureHandle, _pagePixels.data(), _renderWidth, _renderHeight);
 
-        yinfo("Pdf::uploadPixelsToGPU: copied {}x{} ({} bytes) to textureData CPU buffer",
-              _renderWidth, _renderHeight, dataSize);
+        yinfo("Pdf::linkPixelsToHandle: linked {}x{} pixels to handle id={}",
+              _renderWidth, _renderHeight, _textureHandle.id);
         return Ok();
     }
 
@@ -480,11 +487,19 @@ private:
         }
 
         Metadata meta = {};
-        meta.textureDataOffset = _textureDataHandle.isValid() ? _textureDataHandle.offset : 0;
+        meta.textureDataOffset = 0;  // No longer used (atlas position set by packAtlas)
         meta.textureWidth = _renderWidth;
         meta.textureHeight = _renderHeight;
-        meta.atlasX = 0;
-        meta.atlasY = 0;
+
+        // Get atlas position from handle
+        if (_textureHandle.isValid()) {
+            auto pos = _cardMgr->getAtlasPosition(_textureHandle);
+            meta.atlasX = pos.x;
+            meta.atlasY = pos.y;
+        } else {
+            meta.atlasX = 0;
+            meta.atlasY = 0;
+        }
         meta.widthCells = _widthCells;
         meta.heightCells = _heightCells;
         meta.zoom = 1.0f;
@@ -557,8 +572,8 @@ private:
     uint32_t _cellWidth = 10;
     uint32_t _cellHeight = 20;
 
-    // Buffer handle for GPU textureData
-    TextureDataHandle _textureDataHandle = TextureDataHandle::invalid();
+    // Texture handle for atlas packing
+    TextureHandle _textureHandle = TextureHandle::invalid();
 
     // State
     bool _focused = false;

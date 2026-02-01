@@ -47,7 +47,7 @@ namespace yetty::card {
 //   [13-15] reserved
 //=============================================================================
 
-class Plot : public Card,
+class Plot : public BufferCard,
              public base::ObjectFactory<Plot> {
 public:
     using Ptr = std::shared_ptr<Plot>;
@@ -139,7 +139,7 @@ protected:
     Plot(CardBufferManager::Ptr mgr, const GPUContext& gpu,
          int32_t x, int32_t y,
          uint32_t widthCells, uint32_t heightCells)
-        : Card(std::move(mgr), gpu, x, y, widthCells, heightCells)
+        : BufferCard(std::move(mgr), gpu, x, y, widthCells, heightCells)
     {}
 };
 

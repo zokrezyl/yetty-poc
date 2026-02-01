@@ -75,7 +75,7 @@ static_assert(sizeof(HDrawGlyph) == 32, "HDrawGlyph must be 32 bytes");
 // HDraw class
 //=============================================================================
 
-class HDraw : public Card,
+class HDraw : public BufferCard,
               public base::ObjectFactory<HDraw> {
 public:
     using Ptr = std::shared_ptr<HDraw>;
@@ -182,7 +182,7 @@ protected:
     HDraw(CardBufferManager::Ptr mgr, const GPUContext& gpu,
           int32_t x, int32_t y,
           uint32_t widthCells, uint32_t heightCells)
-        : Card(std::move(mgr), gpu, x, y, widthCells, heightCells)
+        : BufferCard(std::move(mgr), gpu, x, y, widthCells, heightCells)
     {}
 };
 

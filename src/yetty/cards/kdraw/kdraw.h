@@ -74,7 +74,7 @@ static_assert(sizeof(KDrawGlyph) == 32, "KDrawGlyph must be 32 bytes");
 // KDraw class
 //=============================================================================
 
-class KDraw : public Card,
+class KDraw : public BufferCard,
               public base::ObjectFactory<KDraw> {
 public:
     using Ptr = std::shared_ptr<KDraw>;
@@ -178,7 +178,7 @@ protected:
     KDraw(CardBufferManager::Ptr mgr, const GPUContext& gpu,
           int32_t x, int32_t y,
           uint32_t widthCells, uint32_t heightCells)
-        : Card(std::move(mgr), gpu, x, y, widthCells, heightCells)
+        : BufferCard(std::move(mgr), gpu, x, y, widthCells, heightCells)
     {}
 };
 

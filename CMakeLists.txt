@@ -245,7 +245,8 @@ if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
         ${CDB_SOURCE_DIR}/seek_set.c
         ${CDB_SOURCE_DIR}/seek_cur.c
     )
-    # Use SYSTEM to avoid cdb's 'version' file conflicting with C++20 <version> header
+    # Remove cdb's 'version' file that clashes with C++20 <version> header
+    file(REMOVE ${CDB_SOURCE_DIR}/version)
     target_include_directories(cdb SYSTEM PUBLIC ${CDB_SOURCE_DIR})
     target_compile_options(cdb PRIVATE -w)  # Suppress warnings in third-party code
     set_target_properties(cdb PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -448,15 +449,8 @@ endif()
 # Core shared library (for plugins to link against on desktop)
 #-----------------------------------------------------------------------------
 if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
-    # Python for built-in plugin (Unix only - requires ./configure + make)
-    # Must be defined before yetty so python_embedded target exists
-    option(YETTY_PLUGIN_PYTHON "Build Python plugin (requires Python build)" OFF)
-    if(UNIX AND YETTY_PLUGIN_PYTHON)
-        add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/build-tools/cmake/python python_build)
-    endif()
-
-    # Build plugins as shared libraries (desktop only)
-    #add_subdirectory(src/yetty/plugins)
+    # Python plugin option — actual build is triggered by src/yetty/python/CMakeLists.txt
+    option(YETTY_PLUGIN_PYTHON "Build Python plugin (requires Python build)" ON)
 endif()
 
 #-----------------------------------------------------------------------------
@@ -535,13 +529,6 @@ elseif(NOT EMSCRIPTEN)
         src/yetty/ymery/simple-data-tree.cpp
         src/yetty/ymery/renderer.cpp
     )
-    # Python plugin built into main executable (Unix only)
-    if(UNIX AND YETTY_PLUGIN_PYTHON)
-        list(APPEND YETTY_SOURCES
-            src/yetty/plugins/python/python.cpp
-            src/yetty/plugins/python/yetty_wgpu.cpp
-        )
-    endif()
 else()
     # Web uses main.cpp with Emscripten GLFW
     list(APPEND YETTY_SOURCES
@@ -566,12 +553,6 @@ target_include_directories(yetty PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
-
-# Python includes for built-in Python plugin (Unix only)
-if(UNIX AND NOT EMSCRIPTEN AND YETTY_PLUGIN_PYTHON)
-    target_include_directories(yetty PRIVATE ${CMAKE_BINARY_DIR}/python/install/include/python3.13)
-    target_compile_definitions(yetty PRIVATE CMAKE_BINARY_DIR="${CMAKE_BINARY_DIR}" YETTY_PLUGIN_PYTHON=1)
-endif()
 
 # Card subdirectories (desktop only - cards use CardBufferManager, ImGui, etc.)
 if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
@@ -765,8 +746,6 @@ else()
                 )
             endif()
 
-            # Link the Python widget (statically linked, instantiated via plugin system)
-            target_link_libraries(yetty PRIVATE python_widget)
         endif()
     endif()
 

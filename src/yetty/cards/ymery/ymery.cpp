@@ -159,13 +159,13 @@ public:
             return Err<void>("Ymery::init: failed to create offscreen texture", res);
         }
 
-        // Allocate texture data
-        uint32_t dataSize = _pixelWidth * _pixelHeight * 4;
-        auto texResult = _cardMgr->allocateTextureData(dataSize);
+        // Allocate texture handle and local pixel buffer
+        auto texResult = _cardMgr->allocateTextureHandle();
         if (!texResult) {
-            return Err<void>("Ymery::init: failed to allocate textureData", texResult);
+            return Err<void>("Ymery::init: failed to allocate texture handle", texResult);
         }
-        _textureDataHandle = *texResult;
+        _textureHandle = *texResult;
+        _cpuPixels.resize(static_cast<size_t>(_pixelWidth) * _pixelHeight * 4);
 
         // Upload initial metadata
         if (auto res = _uploadMetadata(); !res) {
@@ -191,12 +191,13 @@ public:
         _destroyOffscreenTexture();
         _destroyReadbackBuffer();
 
-        if (_textureDataHandle.isValid() && _cardMgr) {
-            _cardMgr->deallocateTextureData(_textureDataHandle);
-            _textureDataHandle = TextureDataHandle::invalid();
+        if (_textureHandle.isValid() && _cardMgr) {
+            _cardMgr->deallocateTextureHandle(_textureHandle);
+            _textureHandle = TextureHandle::invalid();
         }
+        _cpuPixels.clear();
 
-        yinfo("Ymery::suspend: deallocated offscreen texture + textureData");
+        yinfo("Ymery::suspend: deallocated offscreen texture + texture handle");
     }
 
     //=========================================================================
@@ -220,10 +221,12 @@ public:
         _destroyOffscreenTexture();
         _destroyReadbackBuffer();
 
-        if (_textureDataHandle.isValid() && _cardMgr) {
-            _cardMgr->deallocateTextureData(_textureDataHandle);
-            _textureDataHandle = TextureDataHandle::invalid();
+        if (_textureHandle.isValid() && _cardMgr) {
+            _cardMgr->deallocateTextureHandle(_textureHandle);
+            _textureHandle = TextureHandle::invalid();
         }
+        _cpuPixels.clear();
+        _cpuPixels.shrink_to_fit();
 
         if (_metaHandle.isValid() && _cardMgr) {
             _cardMgr->deallocateMetadata(_metaHandle);
@@ -250,21 +253,21 @@ public:
         }
 
         // Reconstruct after suspend
-        if (!_textureDataHandle.isValid() && _pixelWidth > 0 && _pixelHeight > 0) {
+        if (!_textureHandle.isValid() && _pixelWidth > 0 && _pixelHeight > 0) {
             if (!_offscreenTexture) {
                 if (auto res = _createOffscreenTexture(); !res) {
                     return Err<void>("Ymery::update: failed to recreate offscreen texture", res);
                 }
             }
-            uint32_t dataSize = _pixelWidth * _pixelHeight * 4;
-            auto texResult = _cardMgr->allocateTextureData(dataSize);
+            auto texResult = _cardMgr->allocateTextureHandle();
             if (!texResult) {
-                return Err<void>("Ymery::update: failed to re-allocate textureData", texResult);
+                return Err<void>("Ymery::update: failed to re-allocate texture handle", texResult);
             }
-            _textureDataHandle = *texResult;
+            _textureHandle = *texResult;
+            _cpuPixels.resize(static_cast<size_t>(_pixelWidth) * _pixelHeight * 4);
             _metadataDirty = true;
             _dirty = true;
-            yinfo("Ymery::update: reconstructed offscreen texture + textureData");
+            yinfo("Ymery::update: reconstructed offscreen texture + texture handle");
         }
 
         // First few frames: always render (ImGui needs frames to init font atlas)
@@ -288,17 +291,8 @@ public:
                     return Err<void>("Ymery::update: resize failed", res);
                 }
 
-                // Reallocate textureData
-                if (_textureDataHandle.isValid()) {
-                    _cardMgr->deallocateTextureData(_textureDataHandle);
-                    _textureDataHandle = TextureDataHandle::invalid();
-                }
-                uint32_t dataSize = _pixelWidth * _pixelHeight * 4;
-                auto texResult = _cardMgr->allocateTextureData(dataSize);
-                if (!texResult) {
-                    return Err<void>("Ymery::update: realloc textureData failed", texResult);
-                }
-                _textureDataHandle = *texResult;
+                // Resize local pixel buffer (handle stays valid, just re-link later)
+                _cpuPixels.resize(static_cast<size_t>(_pixelWidth) * _pixelHeight * 4);
                 _metadataDirty = true;
             }
             _needsResize = false;
@@ -415,15 +409,17 @@ public:
             const uint8_t* mapped = static_cast<const uint8_t*>(
                 wgpuBufferGetConstMappedRange(_readbackBuffer, 0, readbackSize));
 
-            if (mapped && _textureDataHandle.data) {
+            if (mapped && !_cpuPixels.empty()) {
                 // Copy rows (strip alignment padding if any)
-                uint8_t* cpuDst = reinterpret_cast<uint8_t*>(_textureDataHandle.data);
                 for (uint32_t row = 0; row < _pixelHeight; ++row) {
-                    std::memcpy(cpuDst + row * bytesPerRow,
+                    std::memcpy(_cpuPixels.data() + row * bytesPerRow,
                                 mapped + row * alignedBytesPerRow,
                                 bytesPerRow);
                 }
-                _cardMgr->markTextureDataDirty(_textureDataHandle);
+                // Link CPU pixels to texture handle for atlas packing
+                if (_textureHandle.isValid()) {
+                    _cardMgr->linkTextureData(_textureHandle, _cpuPixels.data(), _pixelWidth, _pixelHeight);
+                }
             }
 
             wgpuBufferUnmap(_readbackBuffer);
@@ -658,11 +654,18 @@ private:
         }
 
         Metadata meta = {};
-        meta.textureDataOffset = _textureDataHandle.isValid() ? _textureDataHandle.offset : 0;
+        meta.textureDataOffset = 0;  // No longer used
         meta.textureWidth = _pixelWidth;
         meta.textureHeight = _pixelHeight;
-        meta.atlasX = 0;
-        meta.atlasY = 0;
+
+        if (_textureHandle.isValid()) {
+            auto pos = _cardMgr->getAtlasPosition(_textureHandle);
+            meta.atlasX = pos.x;
+            meta.atlasY = pos.y;
+        } else {
+            meta.atlasX = 0;
+            meta.atlasY = 0;
+        }
         meta.widthCells = _widthCells;
         meta.heightCells = _heightCells;
         meta.zoom = 1.0f;
@@ -708,8 +711,9 @@ private:
     uint32_t _cellWidth = 10;
     uint32_t _cellHeight = 20;
 
-    // Texture data
-    TextureDataHandle _textureDataHandle = TextureDataHandle::invalid();
+    // CPU pixel buffer and texture handle for atlas packing
+    std::vector<uint8_t> _cpuPixels;
+    TextureHandle _textureHandle = TextureHandle::invalid();
 
     // State
     bool _needsResize = false;

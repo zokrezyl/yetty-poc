@@ -307,8 +307,8 @@ public:
 
     Result<void> dispose() override {
         if (_derivedStorage.isValid() && _cardMgr) {
-            if (auto res = _cardMgr->deallocateStorage(_derivedStorage); !res) {
-                yerror("YDraw::dispose: deallocateStorage (derived) failed: {}", error_msg(res));
+            if (auto res = _cardMgr->deallocateBuffer(_derivedStorage); !res) {
+                yerror("YDraw::dispose: deallocateBuffer (derived) failed: {}", error_msg(res));
             }
             _derivedStorage = StorageHandle::invalid();
             _bvhNodes = nullptr;
@@ -317,8 +317,8 @@ public:
         }
 
         if (_primStorage.isValid() && _cardMgr) {
-            if (auto res = _cardMgr->deallocateStorage(_primStorage); !res) {
-                yerror("YDraw::dispose: deallocateStorage (prims) failed: {}", error_msg(res));
+            if (auto res = _cardMgr->deallocateBuffer(_primStorage); !res) {
+                yerror("YDraw::dispose: deallocateBuffer (prims) failed: {}", error_msg(res));
             }
             _primStorage = StorageHandle::invalid();
             _primitives = nullptr;
@@ -348,7 +348,7 @@ public:
 
         // Deallocate derived storage (BVH, sorted indices — will be rebuilt)
         if (_derivedStorage.isValid()) {
-            _cardMgr->deallocateStorage(_derivedStorage);
+            _cardMgr->deallocateBuffer(_derivedStorage);
             _derivedStorage = StorageHandle::invalid();
             _bvhNodes = nullptr;
             _sortedIndices = nullptr;
@@ -357,7 +357,7 @@ public:
 
         // Deallocate prim storage
         if (_primStorage.isValid()) {
-            _cardMgr->deallocateStorage(_primStorage);
+            _cardMgr->deallocateBuffer(_primStorage);
             _primStorage = StorageHandle::invalid();
             _primitives = nullptr;
             _primCount = 0;
@@ -381,7 +381,7 @@ public:
             std::memcpy(_primitives, _primStaging.data(), count * sizeof(SDFPrimitive));
             _primStaging.clear();
             _primStaging.shrink_to_fit();
-            _cardMgr->markStorageDirty(_primStorage);
+            _cardMgr->markBufferDirty(_primStorage);
             _dirty = true;
             yinfo("YDraw::update: reconstructed {} primitives from staging", count);
         }
@@ -425,7 +425,7 @@ public:
             computeAABB(_primitives[idx]);
         }
 
-        _cardMgr->markStorageDirty(_primStorage);
+        _cardMgr->markBufferDirty(_primStorage);
         _dirty = true;
         return idx;
     }
@@ -640,7 +640,7 @@ private:
         }
         _primCount = primCount;
         std::memcpy(_primitives, primData, primCount * PRIM_SIZE);
-        _cardMgr->markStorageDirty(_primStorage);
+        _cardMgr->markBufferDirty(_primStorage);
 
         for (uint32_t i = 0; i < primCount; i++) {
             yinfo("YDraw::parsePayload: prim[{}] type={} layer={} fill={:#010x} aabb=[{},{},{},{}]",
@@ -772,7 +772,7 @@ private:
         uint32_t newCap = std::max(required, _primCapacity == 0 ? 64u : _primCapacity * 2);
         uint32_t newSize = newCap * sizeof(SDFPrimitive);
 
-        auto newStorage = _cardMgr->allocateStorage(newSize);
+        auto newStorage = _cardMgr->allocateBuffer(newSize);
         if (!newStorage) {
             return Err<void>("YDraw: failed to allocate prim storage");
         }
@@ -781,7 +781,7 @@ private:
             std::memcpy(newStorage->data, _primStorage.data, _primCount * sizeof(SDFPrimitive));
         }
         if (_primStorage.isValid()) {
-            _cardMgr->deallocateStorage(_primStorage);
+            _cardMgr->deallocateBuffer(_primStorage);
         }
 
         _primStorage = *newStorage;
@@ -815,8 +815,8 @@ private:
 
         // Deallocate old derived storage
         if (_derivedStorage.isValid()) {
-            if (auto res = _cardMgr->deallocateStorage(_derivedStorage); !res) {
-                return Err<void>("YDraw::rebuildAndUpload: deallocateStorage failed");
+            if (auto res = _cardMgr->deallocateBuffer(_derivedStorage); !res) {
+                return Err<void>("YDraw::rebuildAndUpload: deallocateBuffer failed");
             }
             _derivedStorage = StorageHandle::invalid();
             _bvhNodes = nullptr;
@@ -824,7 +824,7 @@ private:
         }
 
         if (derivedTotalSize > 0) {
-            auto storageResult = _cardMgr->allocateStorage(derivedTotalSize);
+            auto storageResult = _cardMgr->allocateBuffer(derivedTotalSize);
             if (!storageResult) {
                 return Err<void>("YDraw::rebuildAndUpload: failed to allocate derived storage");
             }
@@ -862,14 +862,14 @@ private:
                 std::memcpy(base + offset, _textBuffer.data(), textBufSize);
             }
 
-            _cardMgr->markStorageDirty(_derivedStorage);
+            _cardMgr->markBufferDirty(_derivedStorage);
         }
 
         // Primitives are already in _primStorage - just update offset
         _primitiveOffset = _primStorage.isValid() ? _primStorage.offset / sizeof(float) : 0;
 
         if (_primStorage.isValid()) {
-            _cardMgr->markStorageDirty(_primStorage);
+            _cardMgr->markBufferDirty(_primStorage);
         }
 
         _metadataDirty = true;

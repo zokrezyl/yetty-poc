@@ -6,6 +6,7 @@
 #include <yetty/result.hpp>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace yetty {
 
@@ -13,11 +14,13 @@ namespace yetty {
  * Card - Base class for card-based widgets rendered via shader glyphs
  *
  * Cards are lightweight widgets that:
- * - Allocate metadata/storage in CardBufferManager
- * - Are rendered entirely by GPU shaders (no texture uploads)
+ * - Allocate metadata in CardBufferManager
+ * - Are rendered entirely by GPU shaders
  * - Receive mouse/keyboard input via EventListener interface
  *
- * The metadataOffset serves as the unique identifier for the card's lifetime.
+ * Two subclasses:
+ *   TextureCard - produces RGBA pixels, written to atlas texture
+ *   BufferCard  - produces linear data, written to GPU storage buffer
  */
 class Card : public base::EventListener {
 public:
@@ -91,6 +94,9 @@ public:
     // Card type name
     virtual const char* typeName() const = 0;
 
+    // Is this a texture card? (for gpu-screen two-pass rendering)
+    virtual bool isTextureCard() const { return false; }
+
 protected:
     Card(CardBufferManager::Ptr mgr, const GPUContext& gpu,
          int32_t x, int32_t y,
@@ -113,6 +119,61 @@ protected:
     uint32_t _heightCells;
     float _screenOriginX = 0.0f;
     float _screenOriginY = 0.0f;
+};
+
+/**
+ * TextureCard - Card that produces RGBA pixels written to the atlas texture.
+ *
+ * Two-pass rendering driven by gpu-screen:
+ *   Pass 1: producePixels() - card renders into its local CPU pixel buffer
+ *   Pass 2: writeToAtlas()  - card writes pixels to atlas via handle
+ *
+ * Between passes, gpu-screen calls cardManager->packAtlas() to assign positions.
+ */
+class TextureCard : public Card {
+public:
+    bool isTextureCard() const override { return true; }
+
+    // Pass 1: Render/prepare pixels into local CPU buffer, link to texture handle.
+    // Called by gpu-screen when atlas needs rebuilding.
+    // Default: no-op (cards that do everything in update() need not override).
+    virtual Result<void> producePixels() { return Ok(); }
+
+    // Pass 2: Write pixels to atlas and update metadata with atlas position.
+    // Called by gpu-screen after packAtlas().
+    // Default: no-op (atlas writes are driven by the manager's writeAllToAtlas()).
+    virtual Result<void> writeToAtlas() { return Ok(); }
+
+    // Get the texture handle (for gpu-screen to check validity)
+    TextureHandle textureHandle() const { return _textureHandle; }
+
+protected:
+    TextureCard(CardBufferManager::Ptr mgr, const GPUContext& gpu,
+                int32_t x, int32_t y,
+                uint32_t widthCells, uint32_t heightCells)
+        : Card(std::move(mgr), gpu, x, y, widthCells, heightCells)
+    {}
+
+    TextureHandle _textureHandle = TextureHandle::invalid();
+    bool _metadataDirty = true;
+    uint32_t _cellWidth = 0;
+    uint32_t _cellHeight = 0;
+};
+
+/**
+ * BufferCard - Card that produces linear data written to GPU storage buffer.
+ * Used by plot, ydraw, kdraw, hdraw cards.
+ */
+class BufferCard : public Card {
+public:
+    bool isTextureCard() const override { return false; }
+
+protected:
+    BufferCard(CardBufferManager::Ptr mgr, const GPUContext& gpu,
+               int32_t x, int32_t y,
+               uint32_t widthCells, uint32_t heightCells)
+        : Card(std::move(mgr), gpu, x, y, widthCells, heightCells)
+    {}
 };
 
 using CardPtr = Card::Ptr;

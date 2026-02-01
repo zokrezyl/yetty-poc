@@ -5,9 +5,12 @@ include(ExternalProject)
 set(PYTHON_VERSION "3.13.2" CACHE STRING "Python version to build")
 set(PYTHON_URL "https://github.com/python/cpython/archive/refs/tags/v${PYTHON_VERSION}.tar.gz")
 
+# Derive major.minor from PYTHON_VERSION (e.g. "3.13" from "3.13.2")
+string(REGEX MATCH "^[0-9]+\\.[0-9]+" PYTHON_MAJOR_MINOR "${PYTHON_VERSION}")
+
 set(PYTHON_PREFIX "${CMAKE_BINARY_DIR}/python")
 set(PYTHON_INSTALL_DIR "${PYTHON_PREFIX}/install")
-set(PYTHON_INCLUDE_DIR "${PYTHON_INSTALL_DIR}/include/python3.13")
+set(PYTHON_INCLUDE_DIR "${PYTHON_INSTALL_DIR}/include/python${PYTHON_MAJOR_MINOR}")
 set(PYTHON_LIB_DIR "${PYTHON_INSTALL_DIR}/lib")
 
 include(ProcessorCount)
@@ -52,11 +55,11 @@ endif()
 
 # Determine library name based on platform
 if(APPLE)
-    set(PYTHON_LIB_NAME "libpython3.13.a")
+    set(PYTHON_LIB_NAME "libpython${PYTHON_MAJOR_MINOR}.a")
 elseif(WIN32)
-    set(PYTHON_LIB_NAME "libpython3.13.a")
+    set(PYTHON_LIB_NAME "libpython${PYTHON_MAJOR_MINOR}.a")
 else()
-    set(PYTHON_LIB_NAME "libpython3.13.a")
+    set(PYTHON_LIB_NAME "libpython${PYTHON_MAJOR_MINOR}.a")
 endif()
 
 set(PYTHON_LIB_PATH "${PYTHON_LIB_DIR}/${PYTHON_LIB_NAME}")
