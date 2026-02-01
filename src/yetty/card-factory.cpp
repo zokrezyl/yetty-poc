@@ -5,6 +5,7 @@
 #include "cards/ydraw/ydraw.h"
 #include "cards/hdraw/hdraw.h"
 #include "cards/kdraw/kdraw.h"
+#include "cards/jdraw/jdraw.h"
 #include "cards/ymery/ymery.h"
 #include "cards/thorvg/thorvg.h"
 #ifdef YETTY_CARD_PDF
@@ -69,6 +70,14 @@ public:
                                  const std::string& args,
                                  const std::string& payload) {
             return card::KDraw::create(ctx, x, y, w, h, args, payload);
+        });
+
+        registerCard("jdraw", [](const YettyContext& ctx,
+                                 int32_t x, int32_t y,
+                                 uint32_t w, uint32_t h,
+                                 const std::string& args,
+                                 const std::string& payload) {
+            return card::JDraw::create(ctx, x, y, w, h, args, payload);
         });
 
         registerCard("ymery", [](const YettyContext& ctx,

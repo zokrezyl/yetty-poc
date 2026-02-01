@@ -6,6 +6,7 @@
 #include <yaml-cpp/yaml.h>
 #include <sstream>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <fstream>
@@ -1508,9 +1509,8 @@ private:
     }
 
     void buildTileLists() {
-        // CPU-based tile culling (fallback when compute shader not available)
-        // This builds per-tile primitive lists on CPU
-        // _tileLists pointer and _tileListsSize are already set by rebuildAndUpload
+        // CPU-based tile culling
+        auto t0 = std::chrono::steady_clock::now();
 
         uint32_t totalTiles = _tileCountX * _tileCountY;
         uint32_t tileStride = 1 + MAX_PRIMS_PER_TILE;  // [count][idx0][idx1]...
@@ -1560,14 +1560,13 @@ private:
             if (count > 0) tilesWithPrims++;
         }
 
-        yinfo("KDraw::buildTileLists: {} primitives -> {}x{} tiles ({} total), "
-              "tilesWithPrims={}, totalPrimsInTiles={}, maxPrimsInTile={}",
-              _primCount, _tileCountX, _tileCountY, totalTiles,
-              tilesWithPrims, totalPrimsInTiles, maxPrimsInTile);
+        auto t1 = std::chrono::steady_clock::now();
+        auto us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
 
-        // Log scene bounds for debugging
-        yinfo("KDraw::buildTileLists: sceneBounds=[{},{},{},{}]",
-              _sceneMinX, _sceneMinY, _sceneMaxX, _sceneMaxY);
+        ydebug("KDraw::buildTileLists (CPU): {} prims -> {}x{} tiles, "
+               "tilesWithPrims={}, maxPrimsInTile={}, took {} us",
+               _primCount, _tileCountX, _tileCountY,
+               tilesWithPrims, maxPrimsInTile, us);
     }
 
     Result<void> rebuildAndUpload() {

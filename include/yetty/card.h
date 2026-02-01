@@ -62,6 +62,10 @@ public:
     //=========================================================================
     virtual Result<void> update(float time) { (void)time; return Ok(); }
 
+    // Called after CardBufferManager::flush() uploads CPU data to GPU.
+    // Use for GPU-side work (compute shaders) that reads/writes the storage buffer.
+    virtual Result<void> postFlush() { return Ok(); }
+
     // Called by gpu-screen when cell pixel size changes (e.g. zoom)
     virtual void setCellSize(uint32_t cellWidth, uint32_t cellHeight) {
         (void)cellWidth; (void)cellHeight;

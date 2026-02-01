@@ -4,6 +4,7 @@ add_subdirectory(plot)
 add_subdirectory(ydraw)
 add_subdirectory(hdraw)
 add_subdirectory(kdraw)
+add_subdirectory(jdraw)
 add_subdirectory(ymery)
 
 add_subdirectory(thorvg)

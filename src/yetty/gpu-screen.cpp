@@ -139,6 +139,14 @@ public:
   void scrollDown(int lines);
   void scrollToBottom();
   bool isScrolledBack() const { return _scrollOffset > 0; }
+
+  // Text search (tmux-style)
+  bool search(const std::string& query);  // Search and scroll to first match
+  bool searchNext();                       // Find next occurrence
+  bool searchPrevious();                   // Find previous occurrence
+  void clearSearch();                      // Clear search state
+  bool hasSearchMatch() const { return _searchActive && _searchMatchRow >= 0; }
+
   void sendKey(uint32_t codepoint, int mods);
   void sendSpecialKey(int key, int mods);
   base::ObjectId id() const { return _id; }
@@ -203,6 +211,11 @@ private:
   // Text selection
   void clearSelection();
   std::string extractSelectedText() const;
+
+  // Text search helpers
+  std::string extractRowText(int totalRow) const;  // Extract text from scrollback or visible row
+  bool searchInRow(int totalRow, int startCol, bool forward, int& matchCol) const;
+  void scrollToRow(int totalRow);  // Scroll to make row visible
 
   // Card registry
   void registerCard(CardPtr card);
@@ -290,6 +303,12 @@ private:
   int _selStartCol = 0, _selStartRow = 0;
   int _selEndCol = 0, _selEndRow = 0;
   bool _hasSelection = false;
+
+  // Text search state
+  std::string _searchQuery;
+  int _searchMatchRow = -1;    // Row of current match (-1 = no match)
+  int _searchMatchCol = -1;    // Column of current match
+  bool _searchActive = false;  // Whether a search is active
 
   // OSC parsing
   OscCommandParser _oscParser;
@@ -1239,6 +1258,225 @@ std::string GPUScreenImpl::extractSelectedText() const {
   }
 
   return result;
+}
+
+//=============================================================================
+// Text search (tmux-style)
+//=============================================================================
+
+std::string GPUScreenImpl::extractRowText(int totalRow) const {
+  if (!_msdfFont) return "";
+
+  int sbSize = static_cast<int>(_scrollback.size());
+  std::string result;
+
+  if (totalRow < sbSize) {
+    // Row is in scrollback buffer
+    const auto& sbLine = _scrollback[totalRow];
+    for (int col = 0; col < static_cast<int>(sbLine.cells.size()); col++) {
+      uint32_t glyphIdx = sbLine.cells[col].glyph;
+      uint32_t cp = _msdfFont->getCodepoint(glyphIdx);
+      if (cp == 0) cp = ' ';
+      appendUtf8(result, cp);
+    }
+  } else if (_visibleBuffer) {
+    // Row is in visible buffer
+    int bufRow = totalRow - sbSize;
+    if (bufRow >= 0 && bufRow < _rows) {
+      size_t rowOffset = static_cast<size_t>(bufRow * _cols);
+      for (int col = 0; col < _cols; col++) {
+        size_t idx = rowOffset + col;
+        if (idx < _visibleBuffer->size()) {
+          uint32_t glyphIdx = (*_visibleBuffer)[idx].glyph;
+          uint32_t cp = _msdfFont->getCodepoint(glyphIdx);
+          if (cp == 0) cp = ' ';
+          appendUtf8(result, cp);
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
+bool GPUScreenImpl::searchInRow(int totalRow, int startCol, bool forward, int& matchCol) const {
+  std::string rowText = extractRowText(totalRow);
+  if (rowText.empty() || _searchQuery.empty()) return false;
+
+  if (forward) {
+    size_t pos = rowText.find(_searchQuery, startCol);
+    if (pos != std::string::npos) {
+      matchCol = static_cast<int>(pos);
+      return true;
+    }
+  } else {
+    // Search backwards: find last occurrence before startCol
+    size_t searchEnd = (startCol < 0) ? std::string::npos : static_cast<size_t>(startCol);
+    size_t pos = rowText.rfind(_searchQuery, searchEnd);
+    if (pos != std::string::npos) {
+      matchCol = static_cast<int>(pos);
+      return true;
+    }
+  }
+  return false;
+}
+
+void GPUScreenImpl::scrollToRow(int totalRow) {
+  int sbSize = static_cast<int>(_scrollback.size());
+
+  if (totalRow < sbSize) {
+    // Row is in scrollback - calculate offset to show this row at top of screen
+    // _scrollOffset = N means we show scrollback lines [sbSize-N, sbSize-1] at top
+    // To show totalRow at top: sbSize - _scrollOffset = totalRow
+    // => _scrollOffset = sbSize - totalRow
+    int newOffset = sbSize - totalRow;
+    // Clamp to valid range
+    newOffset = std::max(0, std::min(newOffset, sbSize));
+    if (newOffset != _scrollOffset) {
+      _scrollOffset = newOffset;
+      viewBufferDirty_ = true;
+      _hasDamage = true;
+    }
+  } else {
+    // Row is in visible buffer - scroll to bottom
+    scrollToBottom();
+  }
+}
+
+bool GPUScreenImpl::search(const std::string& query) {
+  // Search only works in scrollback/copy mode
+  if (_scrollOffset == 0) return false;
+
+  if (query.empty()) {
+    clearSearch();
+    return false;
+  }
+
+  _searchQuery = query;
+  _searchActive = true;
+  _searchMatchRow = -1;
+  _searchMatchCol = -1;
+
+  int sbSize = static_cast<int>(_scrollback.size());
+  int totalRows = sbSize + _rows;
+
+  // Search from bottom (newest) to top (oldest), like tmux
+  for (int row = totalRows - 1; row >= 0; row--) {
+    int matchCol;
+    if (searchInRow(row, 0, true, matchCol)) {
+      _searchMatchRow = row;
+      _searchMatchCol = matchCol;
+      scrollToRow(row);
+      return true;
+    }
+  }
+
+  return false;
+}
+
+bool GPUScreenImpl::searchNext() {
+  // Search only works in scrollback/copy mode
+  if (_scrollOffset == 0) return false;
+  if (!_searchActive || _searchQuery.empty()) return false;
+
+  int sbSize = static_cast<int>(_scrollback.size());
+  int totalRows = sbSize + _rows;
+
+  // Start searching from current match position
+  int startRow = (_searchMatchRow >= 0) ? _searchMatchRow : totalRows - 1;
+  int startCol = (_searchMatchCol >= 0) ? _searchMatchCol + 1 : 0;
+
+  // Search forward (upward in terminal = older content)
+  // First, continue in current row from startCol
+  if (startRow >= 0 && startRow < totalRows) {
+    int matchCol;
+    if (searchInRow(startRow, startCol, true, matchCol)) {
+      _searchMatchRow = startRow;
+      _searchMatchCol = matchCol;
+      scrollToRow(startRow);
+      return true;
+    }
+  }
+
+  // Then search in previous rows (going up = older content)
+  for (int row = startRow - 1; row >= 0; row--) {
+    int matchCol;
+    if (searchInRow(row, 0, true, matchCol)) {
+      _searchMatchRow = row;
+      _searchMatchCol = matchCol;
+      scrollToRow(row);
+      return true;
+    }
+  }
+
+  // Wrap around: search from bottom
+  for (int row = totalRows - 1; row > startRow; row--) {
+    int matchCol;
+    if (searchInRow(row, 0, true, matchCol)) {
+      _searchMatchRow = row;
+      _searchMatchCol = matchCol;
+      scrollToRow(row);
+      return true;
+    }
+  }
+
+  return false;
+}
+
+bool GPUScreenImpl::searchPrevious() {
+  // Search only works in scrollback/copy mode
+  if (_scrollOffset == 0) return false;
+  if (!_searchActive || _searchQuery.empty()) return false;
+
+  int sbSize = static_cast<int>(_scrollback.size());
+  int totalRows = sbSize + _rows;
+
+  // Start searching from current match position
+  int startRow = (_searchMatchRow >= 0) ? _searchMatchRow : 0;
+  int startCol = (_searchMatchCol > 0) ? _searchMatchCol - 1 : -1;
+
+  // Search backward (downward in terminal = newer content)
+  // First, continue in current row before startCol
+  if (startRow >= 0 && startRow < totalRows && startCol >= 0) {
+    int matchCol;
+    if (searchInRow(startRow, startCol, false, matchCol)) {
+      _searchMatchRow = startRow;
+      _searchMatchCol = matchCol;
+      scrollToRow(startRow);
+      return true;
+    }
+  }
+
+  // Then search in next rows (going down = newer content)
+  for (int row = startRow + 1; row < totalRows; row++) {
+    int matchCol;
+    if (searchInRow(row, -1, false, matchCol)) {
+      _searchMatchRow = row;
+      _searchMatchCol = matchCol;
+      scrollToRow(row);
+      return true;
+    }
+  }
+
+  // Wrap around: search from top
+  for (int row = 0; row < startRow; row++) {
+    int matchCol;
+    if (searchInRow(row, -1, false, matchCol)) {
+      _searchMatchRow = row;
+      _searchMatchCol = matchCol;
+      scrollToRow(row);
+      return true;
+    }
+  }
+
+  return false;
+}
+
+void GPUScreenImpl::clearSearch() {
+  _searchQuery.clear();
+  _searchMatchRow = -1;
+  _searchMatchCol = -1;
+  _searchActive = false;
 }
 
 //=============================================================================
@@ -2903,6 +3141,13 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
     if (auto res = _cardManager->flush(_ctx.gpu.queue); !res) {
       yerror("GPUScreen: CardManager flush failed: {}", error_msg(res));
       return Err<void>("GPUScreen: CardManager flush failed", res);
+    }
+  }
+
+  // Post-flush: let cards do GPU-side work (compute shaders) now that buffers are uploaded
+  for (auto& [slotIndex, card] : _cards) {
+    if (auto res = card->postFlush(); !res) {
+      yerror("GPUScreen::render: card '{}' postFlush failed: {}", card->typeName(), error_msg(res));
     }
   }
 
