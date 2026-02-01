@@ -1,6 +1,7 @@
 #include "terminal.h"
 #include "gpu-screen.h"
 #include <yetty/base/event-loop.h>
+#include <yetty/ymery/types.h>
 #include <ytrace/ytrace.hpp>
 
 #if !YETTY_WEB && !defined(__ANDROID__)
@@ -167,6 +168,32 @@ private:
 
         yinfo("Terminal starting shell: {}", shellPath);
 
+        // Validate config and resolve shell/env before forking
+        if (!_ctx.config) {
+            yerror("Terminal: no config available, cannot start shell");
+            return Err<void>("Terminal: config is required to start shell");
+        }
+        auto envKeysResult = _ctx.config->getMetadataKeys(ymery::DataPath("shell/env"));
+        if (!envKeysResult) {
+            yerror("Terminal: failed to read shell/env from config: {}", error_msg(envKeysResult));
+            return Err<void>("Terminal: failed to read shell/env from config", envKeysResult);
+        }
+        if (envKeysResult->empty()) {
+            yerror("Terminal: shell/env is empty in config");
+            return Err<void>("Terminal: shell/env must not be empty");
+        }
+
+        // Resolve all env var values before forking
+        std::vector<std::pair<std::string, std::string>> envVars;
+        for (const auto& name : *envKeysResult) {
+            auto val = _ctx.config->Config::get<std::string>("shell/env/" + name);
+            if (!val) {
+                yerror("Terminal: shell/env/{} is missing or not a string", name);
+                return Err<void>("Terminal: shell/env/" + name + " is missing or not a string");
+            }
+            envVars.emplace_back(name, *val);
+        }
+
         struct winsize ws = {24, 80, 0, 0};
 
         _childPid = forkpty(&_ptyMaster, nullptr, nullptr, &ws);
@@ -176,8 +203,10 @@ private:
         }
 
         if (_childPid == 0) {
-            setenv("TERM", "xterm-256color", 1);
-            setenv("COLORTERM", "truecolor", 1);
+            // Export shell env from config (TERM, COLORTERM, YETTY_SOCKET, etc.)
+            for (const auto& [name, value] : envVars) {
+                setenv(name.c_str(), value.c_str(), 1);
+            }
 
             for (int fd = 3; fd < 1024; fd++)
                 close(fd);

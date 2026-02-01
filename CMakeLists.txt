@@ -187,6 +187,18 @@ CPMAddPackage(
         "YTRACE_ENABLE_YFUNC ON"
 )
 
+# msgpack for RPC message serialization (header-only C++ library)
+CPMAddPackage(
+    NAME msgpack-cxx
+    GITHUB_REPOSITORY msgpack/msgpack-c
+    GIT_TAG cpp-7.0.0
+    OPTIONS
+        "MSGPACK_BUILD_DOCS OFF"
+        "MSGPACK_BUILD_TESTS OFF"
+        "MSGPACK_BUILD_EXAMPLES OFF"
+        "MSGPACK_USE_BOOST OFF"
+)
+
 # LZ4 for fast font cache compression
 CPMAddPackage(
     NAME lz4
@@ -520,6 +532,9 @@ elseif(NOT EMSCRIPTEN)
         src/yetty/view.cpp
         src/yetty/workspace.cpp
         src/yetty/base/event-loop.cpp
+        src/yetty/rpc/rpc-server.cpp
+        src/yetty/rpc/event-loop-handler.cpp
+        src/yetty/rpc/socket-path.cpp
         # Ymery - YAML-driven ImGui widget system (ported from ymery-cpp)
         src/yetty/ymery/types.cpp
         src/yetty/ymery/data-bag.cpp
@@ -614,6 +629,7 @@ if(EMSCRIPTEN)
         stb
         yaml-cpp
         vterm
+        msgpack-cxx
         # ytrace disabled for Emscripten (POSIX sockets not supported)
     )
 
@@ -641,6 +657,7 @@ elseif(YETTY_ANDROID)
         stb
         yaml-cpp
         vterm
+        msgpack-cxx
         ytrace::ytrace
         lz4_static
         uv_a
@@ -695,6 +712,7 @@ else()
         yaml-cpp
         args
         vterm
+        msgpack-cxx
         msdfgen::msdfgen-core
         msdfgen::msdfgen-ext
         freetype
@@ -773,6 +791,12 @@ else()
 
     # Plugin tester disabled - was using yetty_core which is removed
     # TODO: Re-enable when needed
+
+    # RPC client library (libyetty-rpc.a)
+    add_subdirectory(src/yetty/rpc)
+
+    # yettyc CLI client
+    add_subdirectory(src/yetty/client)
 
     # Tools
     add_subdirectory(tools)

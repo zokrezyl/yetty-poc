@@ -34,7 +34,10 @@ struct Event {
         CardMouseDown,
         CardMouseUp,
         CardMouseMove,
-        CardScroll
+        CardScroll,
+        // Tree manipulation
+        Close,
+        SplitPane
     };
 
     struct KeyEvent {
@@ -102,6 +105,15 @@ struct Event {
         int mods;
     };
 
+    struct CloseEvent {
+        ObjectId objectId;
+    };
+
+    struct SplitPaneEvent {
+        ObjectId objectId;   // target pane
+        uint8_t orientation; // 0 = Horizontal, 1 = Vertical
+    };
+
     Type type = Type::None;
 
     union {
@@ -116,6 +128,8 @@ struct Event {
         ContextMenuActionEvent ctxMenu;
         CardMouseEvent cardMouse;
         CardScrollEvent cardScroll;
+        CloseEvent closeEv;
+        SplitPaneEvent splitPane;
     };
 
     // Factory methods
@@ -229,6 +243,20 @@ struct Event {
         Event e;
         e.type = Type::CardScroll;
         e.cardScroll = {targetId, x, y, dx, dy, mods};
+        return e;
+    }
+
+    static Event closeEvent(ObjectId objectId) {
+        Event e;
+        e.type = Type::Close;
+        e.closeEv = {objectId};
+        return e;
+    }
+
+    static Event splitPaneEvent(ObjectId objectId, uint8_t orientation) {
+        Event e;
+        e.type = Type::SplitPane;
+        e.splitPane = {objectId, orientation};
         return e;
     }
 

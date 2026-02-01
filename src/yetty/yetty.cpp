@@ -10,6 +10,9 @@
 #include <yetty/imgui-manager.h>
 #include <yetty/wgpu-compat.h>
 #include <yetty/base/base.h>
+#include <yetty/rpc/rpc-server.h>
+#include <yetty/rpc/event-loop-handler.h>
+#include <yetty/rpc/socket-path.h>
 #include <glfw3webgpu.h>
 #include <array>
 #include <iostream>
@@ -105,6 +108,9 @@ private:
     double _lastFpsTime = 0.0;
     uint32_t _frameCount = 0;
 
+    // RPC server
+    rpc::RpcServer::Ptr _rpcServer;
+
     // Command line options
     std::string _executeCommand;
     std::string _msdfProviderName = "cpu";  // "cpu" or "gpu"
@@ -134,6 +140,14 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     yinfo("Yetty starting...");
 
     if (auto res = parseArgs(argc, argv); !res) return res;
+
+    // Create Config early (before anything that reads it)
+    auto configResult = Config::create();
+    if (!configResult) {
+        return Err<void>("Failed to create Config", configResult);
+    }
+    _yettyContext.config = *configResult;
+
     if (auto res = initWindow(); !res) return res;
     if (auto res = initWebGPU(); !res) return res;
     if (auto res = initSharedResources(); !res) return res;
@@ -193,9 +207,38 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
 
 #if !YETTY_WEB && !defined(__ANDROID__)
     initEventLoop();
+
+    // Create RPC server and write socket path to config BEFORE workspace/terminal
+    // (Terminal reads shell/env from config when forking the shell)
+    {
+        auto socketResult = rpc::createSocketPath();
+        if (!socketResult) {
+            return Err<void>("Failed to create RPC socket path", socketResult);
+        }
+        auto rpcResult = rpc::RpcServer::create(*socketResult);
+        if (!rpcResult) {
+            return Err<void>("Failed to create RPC server", rpcResult);
+        }
+        _rpcServer = *rpcResult;
+
+        _yettyContext.config->setString("rpc/socket-path", _rpcServer->socketPath());
+        _yettyContext.config->setString("shell/env/YETTY_SOCKET", _rpcServer->socketPath());
+
+        rpc::registerEventLoopHandlers(*_rpcServer);
+    }
 #endif
 
     if (auto res = initWorkspace(); !res) return res;
+
+#if !YETTY_WEB && !defined(__ANDROID__)
+    // Register workspace handlers now that workspace exists, then start
+    rpc::registerWorkspaceHandlers(*_rpcServer, _activeWorkspace);
+    if (auto res = _rpcServer->start(); !res) {
+        return Err<void>("Failed to start RPC server", res);
+    }
+    yinfo("RPC server started on {}", _rpcServer->socketPath());
+#endif
+
     if (auto res = initCallbacks(); !res) return res;
 
     s_instance = this;
@@ -731,6 +774,10 @@ Result<void> YettyImpl::onShutdown() {
     Result<void> result = Ok();
 
 #if !YETTY_WEB && !defined(__ANDROID__)
+    if (_rpcServer) {
+        _rpcServer->stop();
+        _rpcServer.reset();
+    }
     shutdownEventLoop();
 #endif
 

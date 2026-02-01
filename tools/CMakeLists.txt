@@ -1,6 +1,7 @@
 add_subdirectory(gpu-info)
 
 # Ymery test tool - standalone ImGui/OpenGL3 app that loads YAML layouts
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/ymery/test.cpp")
 add_executable(ymery-test
     ymery/test.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/ymery/types.cpp
@@ -43,3 +44,4 @@ target_link_libraries(ymery-test PRIVATE
 )
 
 target_compile_features(ymery-test PRIVATE cxx_std_23)
+endif()

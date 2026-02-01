@@ -5,6 +5,7 @@
 #include <yetty/font-manager.h>
 #include <yetty/card-buffer-manager.h>
 #include <yetty/card-factory.h>
+#include <yetty/config.h>
 #include <yetty/imgui-manager.h>
 
 #include <memory>
@@ -30,6 +31,9 @@ struct YettyContext {
 
     // Ymery widget renderer (YAML-driven ImGui widgets)
     std::shared_ptr<ymery::Renderer> ymeryRenderer;
+
+    // Application config (tree-like, runtime writable)
+    Config::Ptr config;
 };
 
 } // namespace yetty
