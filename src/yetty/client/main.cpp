@@ -30,6 +30,11 @@ int main(int argc, const char** argv) {
     const std::vector<std::string> args(argv + 1, argv + argc);
     args::ArgumentParser parser("yettyc", "yetty RPC client");
     parser.Prog(argv[0]);
+    parser.Epilog(
+        "commands:\n"
+        "  event    Send events to the terminal (split, close, etc.)\n"
+        "  ui       Query the UI tree (ui tree)\n"
+    );
     args::HelpFlag help(parser, "help", "Show this help", {'h', "help"});
     args::ValueFlag<std::string> socketFlag(parser, "path",
         "Socket path (default: $YETTY_SOCKET)", {'s', "socket"}, defaultSocketPath());

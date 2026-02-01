@@ -34,14 +34,20 @@ static std::vector<std::string> splitPath(const std::string& path) {
     return parts;
 }
 
-// Navigate a YAML node by path components
-static YAML::Node navigateYaml(YAML::Node node, const std::vector<std::string>& parts) {
-    YAML::Node current = node;
+// Navigate a YAML node by path components (read-only, avoids operator[] side effects)
+static YAML::Node navigateYaml(const YAML::Node& node, const std::vector<std::string>& parts) {
+    YAML::Node current = YAML::Clone(node);
     for (const auto& p : parts) {
-        if (!current || !current[p]) {
-            return YAML::Node();
+        if (!current.IsMap()) return YAML::Node();
+        bool found = false;
+        for (auto it = current.begin(); it != current.end(); ++it) {
+            if (it->first.as<std::string>() == p) {
+                current = it->second;
+                found = true;
+                break;
+            }
         }
-        current = current[p];
+        if (!found) return YAML::Node();
     }
     return current;
 }
@@ -113,26 +119,22 @@ static YAML::Node dictToYaml(const Dict& dict) {
 class ConfigImpl : public Config {
 public:
     ConfigImpl(const std::string& configPath, const YAML::Node& cmdOverrides) noexcept
-        : _configPath(configPath), _cmdOverrides(cmdOverrides) {
-        // Ensure _config is a Map (default-constructed Node is Null)
-        _config = YAML::Node(YAML::NodeType::Map);
-
-        // Debug: test basic yaml-cpp assignment
-        YAML::Node test(YAML::NodeType::Map);
-        test["foo"] = "bar";
-        yinfo("yaml-cpp test: type={} size={} dump='{}'",
-            static_cast<int>(test.Type()), test.size(), YAML::Dump(test));
-        yinfo("_config type={} before defaults", static_cast<int>(_config.Type()));
-
-        // Set defaults
-        _config["plugins"]["path"] = "";
-        _config["rendering"]["damage-tracking"] = true;
-        _config["rendering"]["show-fps"] = true;
-        _config["scrollback"]["lines"] = 10000;
-        _config["debug"]["damage-rects"] = false;
-        _config["shell"]["env"]["TERM"] = "xterm-256color";
-        _config["shell"]["env"]["COLORTERM"] = "truecolor";
-        yinfo("Config constructor defaults:\n{}", YAML::Dump(_config));
+        : _configPath(configPath), _cmdOverrides(cmdOverrides),
+          _config(YAML::Load(
+            "plugins:\n"
+            "  path: ''\n"
+            "rendering:\n"
+            "  damage-tracking: true\n"
+            "  show-fps: true\n"
+            "scrollback:\n"
+            "  lines: 10000\n"
+            "debug:\n"
+            "  damage-rects: false\n"
+            "shell:\n"
+            "  env:\n"
+            "    TERM: xterm-256color\n"
+            "    COLORTERM: truecolor\n"
+          )) {
     }
 
     ~ConfigImpl() override = default;
@@ -172,24 +174,6 @@ public:
         }
 
         _initialized = true;
-
-        // Debug: dump config state
-        yinfo("Config init done. Dump:\n{}", YAML::Dump(_config));
-        auto shellNode = _config["shell"];
-        yinfo("Config shell node type={} defined={}", static_cast<int>(shellNode.Type()), shellNode.IsDefined());
-        if (shellNode && shellNode.IsMap()) {
-            auto envNode = shellNode["env"];
-            yinfo("Config shell/env node type={} defined={}", static_cast<int>(envNode.Type()), envNode.IsDefined());
-            if (envNode && envNode.IsMap()) {
-                for (auto it = envNode.begin(); it != envNode.end(); ++it) {
-                    yinfo("Config shell/env/{} = {} (type={})",
-                        it->first.as<std::string>(),
-                        it->second.as<std::string>(),
-                        static_cast<int>(it->second.Type()));
-                }
-            }
-        }
-
         return Ok();
     }
 
@@ -258,9 +242,7 @@ public:
     }
 
     Result<Dict> getMetadata(const DataPath& path) override {
-        yinfo("getMetadata path='{}' parts={}", path.toString(), path.asList().size());
         YAML::Node node = navigateYaml(_config, path.asList());
-        yinfo("getMetadata navigated: defined={} type={}", node.IsDefined(), static_cast<int>(node.Type()));
         if (!node || !node.IsMap()) return Ok(Dict{});
 
         Dict meta;
@@ -299,12 +281,21 @@ public:
         parts.pop_back();
 
         // Navigate/create intermediate YAML nodes
+        // Must avoid operator[] on non-existent keys — yaml-cpp will corrupt the node
         YAML::Node current = _config;
         for (const auto& p : parts) {
-            if (!current[p] || !current[p].IsMap()) {
-                current[p] = YAML::Node(YAML::NodeType::Map);
+            bool exists = false;
+            for (auto it = current.begin(); it != current.end(); ++it) {
+                if (it->first.as<std::string>() == p && it->second.IsMap()) {
+                    current.reset(it->second);
+                    exists = true;
+                    break;
+                }
             }
-            current = current[p];
+            if (!exists) {
+                current[p] = YAML::Node(YAML::NodeType::Map);
+                current.reset(current[p]);
+            }
         }
         setYamlFromValue(current, key, value);
         return Ok();
@@ -313,10 +304,18 @@ public:
     Result<void> addChild(const DataPath& path, const std::string& name, const Dict& data) override {
         YAML::Node current = _config;
         for (const auto& p : path.asList()) {
-            if (!current[p] || !current[p].IsMap()) {
-                current[p] = YAML::Node(YAML::NodeType::Map);
+            bool exists = false;
+            for (auto it = current.begin(); it != current.end(); ++it) {
+                if (it->first.as<std::string>() == p && it->second.IsMap()) {
+                    current.reset(it->second);
+                    exists = true;
+                    break;
+                }
             }
-            current = current[p];
+            if (!exists) {
+                current[p] = YAML::Node(YAML::NodeType::Map);
+                current.reset(current[p]);
+            }
         }
         current[name] = YAML::Node(YAML::NodeType::Map);
         YAML::Node child = current[name];
@@ -470,7 +469,7 @@ private:
         }
     }
 
-    YAML::Node _config{YAML::NodeType::Map};
+    YAML::Node _config;
     std::string _configPath;
     YAML::Node _cmdOverrides;
     bool _initialized = false;
