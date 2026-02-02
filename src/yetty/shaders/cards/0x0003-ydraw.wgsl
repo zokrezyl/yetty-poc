@@ -41,6 +41,7 @@
 const YDRAW_FLAG_SHOW_BOUNDS: u32 = 1u;
 const YDRAW_FLAG_SHOW_GRID: u32 = 2u;
 const YDRAW_FLAG_SHOW_EVAL_COUNT: u32 = 4u;
+const YDRAW_FLAG_HAS_3D: u32 = 8u;
 
 // Hardcoded max entries per cell (matches C++ DEFAULT_MAX_PRIMS_PER_CELL)
 const YDRAW_MAX_PRIMS_PER_CELL: u32 = 16u;
@@ -151,13 +152,84 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
         );
     }
 
-    // Early exit if no grid
-    if (gridWidth == 0u || gridHeight == 0u) {
-        return bgColor;
-    }
-
     var resultColor = bgColor;
     var evalCount = 0u;
+
+    // 3D raymarching pass (before 2D grid lookup)
+    if ((flags & YDRAW_FLAG_HAS_3D) != 0u) {
+        let primitiveCount = cardMetadata[metaOffset + 1u];
+        let primSize3D = 24u;  // SDFPrimitive is 96 bytes = 24 floats
+
+        // Camera setup using widget UV
+        let aspect3D = f32(widthCells) / max(f32(heightCells), 1.0);
+        let uv3D = (widgetUV - 0.5) * vec2<f32>(aspect3D, 1.0);
+        let camPos = vec3<f32>(0.0, 0.0, 3.0);
+        let camDir = normalize(vec3<f32>(uv3D.x, -uv3D.y, -1.5));
+
+        // Raymarching loop
+        var t = 0.0;
+        var hit = false;
+        var hitPos = camPos;
+
+        for (var step = 0; step < 64; step++) {
+            hitPos = camPos + camDir * t;
+            var minD = 1e10;
+            for (var pi = 0u; pi < primitiveCount; pi++) {
+                let pOff = primitiveOffset + pi * primSize3D;
+                let pType = bitcast<u32>(cardStorage[pOff]);
+                if (pType >= 100u) {
+                    let d = evaluateSDF3D(pOff, hitPos);
+                    minD = min(minD, d);
+                }
+            }
+            if (minD < 0.001) { hit = true; break; }
+            if (t > 100.0) { break; }
+            t += minD;
+        }
+
+        if (hit) {
+            // Calculate normal via finite differences (6 scene SDF evaluations)
+            let e = vec2<f32>(0.001, 0.0);
+            var sdfPX = 1e10; var sdfNX = 1e10;
+            var sdfPY = 1e10; var sdfNY = 1e10;
+            var sdfPZ = 1e10; var sdfNZ = 1e10;
+            var hitColor = vec3<f32>(0.8, 0.8, 0.8);
+            var hitMinD = 1e10;
+            for (var pi = 0u; pi < primitiveCount; pi++) {
+                let pOff = primitiveOffset + pi * primSize3D;
+                let pType = bitcast<u32>(cardStorage[pOff]);
+                if (pType >= 100u) {
+                    sdfPX = min(sdfPX, evaluateSDF3D(pOff, hitPos + vec3<f32>(e.x, e.y, e.y)));
+                    sdfNX = min(sdfNX, evaluateSDF3D(pOff, hitPos - vec3<f32>(e.x, e.y, e.y)));
+                    sdfPY = min(sdfPY, evaluateSDF3D(pOff, hitPos + vec3<f32>(e.y, e.x, e.y)));
+                    sdfNY = min(sdfNY, evaluateSDF3D(pOff, hitPos - vec3<f32>(e.y, e.x, e.y)));
+                    sdfPZ = min(sdfPZ, evaluateSDF3D(pOff, hitPos + vec3<f32>(e.y, e.y, e.x)));
+                    sdfNZ = min(sdfNZ, evaluateSDF3D(pOff, hitPos - vec3<f32>(e.y, e.y, e.x)));
+                    // Find closest primitive for material color
+                    let d = evaluateSDF3D(pOff, hitPos);
+                    if (d < hitMinD) {
+                        hitMinD = d;
+                        let fillPacked = bitcast<u32>(cardStorage[pOff + 14u]);
+                        if (fillPacked != 0u) {
+                            hitColor = unpackColor(fillPacked);
+                        }
+                    }
+                }
+            }
+            let n = normalize(vec3<f32>(sdfPX - sdfNX, sdfPY - sdfNY, sdfPZ - sdfNZ));
+
+            // Lighting: diffuse + ambient
+            let lightDir = normalize(vec3<f32>(1.0, 1.0, 1.0));
+            let diff = max(dot(n, lightDir), 0.0);
+            let amb = 0.2;
+            resultColor = hitColor * (amb + diff * 0.8);
+        }
+    }
+
+    // Early exit if no 2D grid
+    if (gridWidth == 0u || gridHeight == 0u) {
+        return resultColor;
+    }
 
     // Compute screen scale for MSDF anti-aliasing (use view width, not content width)
     let pixelWidth = f32(widthCells) * grid.cellSize.x;

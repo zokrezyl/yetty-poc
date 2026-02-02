@@ -77,7 +77,15 @@ private:
     void removeObject(uint32_t idx);
     SDFPrimitive makeRandomShape(float cx, float cy, float size,
                                  uint32_t color, uint32_t layer);
+    SDFPrimitive makeRandom3DShape(float cx, float cy, float size,
+                                   uint32_t color, uint32_t layer);
+    void update3DPrim(SDFPrimitive& prim, float cx, float cy, float size);
     uint32_t randomColor();
+
+    // Map 2D scene coordinates to 3D raymarching space
+    float scene2Dx(float cx) const { return (cx / SCENE_W - 0.5f) * 2.0f * (SCENE_W / SCENE_H); }
+    float scene2Dy(float cy) const { return -(cy / SCENE_H - 0.5f) * 2.0f; }
+    float scene2Dsize(float s) const { return s / SCENE_H * 2.0f; }
 
     std::vector<ZooObject> _objects;
     std::mt19937 _rng;

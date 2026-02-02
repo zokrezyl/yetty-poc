@@ -11,11 +11,12 @@ target_include_directories(yetty-msdf-gen PRIVATE
 target_link_libraries(yetty-msdf-gen PRIVATE
     msdfgen::msdfgen-core
     msdfgen::msdfgen-ext
-    freetype
     glm::glm
     ytrace::ytrace
     args
     cdb
+    # FreeType static libs LAST — msdfgen references FT symbols
+    ${FREETYPE_ALL_STATIC_LIBS}
 )
 
 target_compile_definitions(yetty-msdf-gen PRIVATE

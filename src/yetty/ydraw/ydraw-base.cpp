@@ -189,6 +189,227 @@ static void computeAABB(SDFPrimitive& prim) {
             prim.aabbMaxY = prim.params[1] + r + prim.params[2];
             break;
         }
+        case SDFType::ChamferBox: {
+            // center(0,1), halfSize(2,3), chamfer(4)
+            float hw = prim.params[2] + prim.params[4] + expand;
+            float hh = prim.params[3] + prim.params[4] + expand;
+            prim.aabbMinX = prim.params[0] - hw;
+            prim.aabbMinY = prim.params[1] - hh;
+            prim.aabbMaxX = prim.params[0] + hw;
+            prim.aabbMaxY = prim.params[1] + hh;
+            break;
+        }
+        case SDFType::OrientedBox: {
+            // a(0,1), b(2,3), thickness(4)
+            float maxX = std::max(prim.params[0], prim.params[2]);
+            float minX = std::min(prim.params[0], prim.params[2]);
+            float maxY = std::max(prim.params[1], prim.params[3]);
+            float minY = std::min(prim.params[1], prim.params[3]);
+            float th = prim.params[4] * 0.5f + expand;
+            prim.aabbMinX = minX - th;
+            prim.aabbMinY = minY - th;
+            prim.aabbMaxX = maxX + th;
+            prim.aabbMaxY = maxY + th;
+            break;
+        }
+        case SDFType::Trapezoid: {
+            // center(0,1), r1(2), r2(3), he(4)
+            float hw = std::max(prim.params[2], prim.params[3]) + expand;
+            float hh = prim.params[4] + expand;
+            prim.aabbMinX = prim.params[0] - hw;
+            prim.aabbMinY = prim.params[1] - hh;
+            prim.aabbMaxX = prim.params[0] + hw;
+            prim.aabbMaxY = prim.params[1] + hh;
+            break;
+        }
+        case SDFType::Parallelogram: {
+            // center(0,1), wi(2), he(3), sk(4)
+            float hw = prim.params[2] + std::fabs(prim.params[4]) + expand;
+            float hh = prim.params[3] + expand;
+            prim.aabbMinX = prim.params[0] - hw;
+            prim.aabbMinY = prim.params[1] - hh;
+            prim.aabbMaxX = prim.params[0] + hw;
+            prim.aabbMaxY = prim.params[1] + hh;
+            break;
+        }
+        case SDFType::EquilateralTriangle:
+        case SDFType::Octogon:
+        case SDFType::Hexagram:
+        case SDFType::Pentagram: {
+            // center(0,1), radius(2)
+            float r = prim.params[2] + expand;
+            prim.aabbMinX = prim.params[0] - r;
+            prim.aabbMinY = prim.params[1] - r;
+            prim.aabbMaxX = prim.params[0] + r;
+            prim.aabbMaxY = prim.params[1] + r;
+            break;
+        }
+        case SDFType::IsoscelesTriangle: {
+            // center(0,1), q(2,3) where q.x=half-width, q.y=height
+            float hw = prim.params[2] + expand;
+            float hh = prim.params[3] + expand;
+            prim.aabbMinX = prim.params[0] - hw;
+            prim.aabbMinY = prim.params[1] - expand;
+            prim.aabbMaxX = prim.params[0] + hw;
+            prim.aabbMaxY = prim.params[1] + hh;
+            break;
+        }
+        case SDFType::UnevenCapsule: {
+            // center(0,1), r1(2), r2(3), h(4)
+            float rMax = std::max(prim.params[2], prim.params[3]) + expand;
+            prim.aabbMinX = prim.params[0] - rMax;
+            prim.aabbMinY = prim.params[1] - prim.params[2] - expand;
+            prim.aabbMaxX = prim.params[0] + rMax;
+            prim.aabbMaxY = prim.params[1] + prim.params[4] + prim.params[3] + expand;
+            break;
+        }
+        case SDFType::CutDisk: {
+            // center(0,1), radius(2), h(3)
+            float r = prim.params[2] + expand;
+            prim.aabbMinX = prim.params[0] - r;
+            prim.aabbMinY = prim.params[1] - r;
+            prim.aabbMaxX = prim.params[0] + r;
+            prim.aabbMaxY = prim.params[1] + r;
+            break;
+        }
+        case SDFType::Horseshoe: {
+            // center(0,1), c(2,3), r(4), w(5,6)
+            float r = prim.params[4] + prim.params[5] + expand;
+            prim.aabbMinX = prim.params[0] - r;
+            prim.aabbMinY = prim.params[1] - r;
+            prim.aabbMaxX = prim.params[0] + r;
+            prim.aabbMaxY = prim.params[1] + r;
+            break;
+        }
+        case SDFType::Vesica: {
+            // center(0,1), w(2), h(3)
+            float hw = prim.params[2] + expand;
+            float hh = prim.params[3] + expand;
+            prim.aabbMinX = prim.params[0] - hw;
+            prim.aabbMinY = prim.params[1] - hh;
+            prim.aabbMaxX = prim.params[0] + hw;
+            prim.aabbMaxY = prim.params[1] + hh;
+            break;
+        }
+        case SDFType::OrientedVesica: {
+            // a(0,1), b(2,3), w(4)
+            float w = prim.params[4] + expand;
+            prim.aabbMinX = std::min(prim.params[0], prim.params[2]) - w;
+            prim.aabbMinY = std::min(prim.params[1], prim.params[3]) - w;
+            prim.aabbMaxX = std::max(prim.params[0], prim.params[2]) + w;
+            prim.aabbMaxY = std::max(prim.params[1], prim.params[3]) + w;
+            break;
+        }
+        case SDFType::RoundedCross: {
+            // center(0,1), h(2) — size is roughly h+1
+            float s = (prim.params[2] + 1.0f) + expand;
+            prim.aabbMinX = prim.params[0] - s;
+            prim.aabbMinY = prim.params[1] - s;
+            prim.aabbMaxX = prim.params[0] + s;
+            prim.aabbMaxY = prim.params[1] + s;
+            break;
+        }
+        case SDFType::Parabola: {
+            // center(0,1), k(2) — parabola extends, use generous bound
+            float s = 2.0f / prim.params[2] + expand;
+            prim.aabbMinX = prim.params[0] - s;
+            prim.aabbMinY = prim.params[1] - s;
+            prim.aabbMaxX = prim.params[0] + s;
+            prim.aabbMaxY = prim.params[1] + s;
+            break;
+        }
+        case SDFType::BlobbyCross: {
+            // center(0,1), he(2)
+            float s = prim.params[2] * 1.5f + expand;
+            prim.aabbMinX = prim.params[0] - s;
+            prim.aabbMinY = prim.params[1] - s;
+            prim.aabbMaxX = prim.params[0] + s;
+            prim.aabbMaxY = prim.params[1] + s;
+            break;
+        }
+        case SDFType::Tunnel: {
+            // center(0,1), wh(2,3)
+            float hw = prim.params[2] + expand;
+            float hh = prim.params[3] + expand;
+            prim.aabbMinX = prim.params[0] - hw;
+            prim.aabbMinY = prim.params[1] - hh;
+            prim.aabbMaxX = prim.params[0] + hw;
+            prim.aabbMaxY = prim.params[1] + hh;
+            break;
+        }
+        case SDFType::Stairs: {
+            // center(0,1), wh(2,3), n(4)
+            float tw = prim.params[2] * prim.params[4] + expand;
+            float th = prim.params[3] * prim.params[4] + expand;
+            prim.aabbMinX = prim.params[0] - expand;
+            prim.aabbMinY = prim.params[1] - expand;
+            prim.aabbMaxX = prim.params[0] + tw;
+            prim.aabbMaxY = prim.params[1] + th;
+            break;
+        }
+        case SDFType::QuadraticCircle: {
+            // center(0,1), scale(2)
+            float s = prim.params[2] + expand;
+            prim.aabbMinX = prim.params[0] - s;
+            prim.aabbMinY = prim.params[1] - s;
+            prim.aabbMaxX = prim.params[0] + s;
+            prim.aabbMaxY = prim.params[1] + s;
+            break;
+        }
+        case SDFType::Hyperbola: {
+            // center(0,1), k(2), he(3)
+            float s = prim.params[3] + expand + 1.0f;
+            prim.aabbMinX = prim.params[0] - s;
+            prim.aabbMinY = prim.params[1] - s;
+            prim.aabbMaxX = prim.params[0] + s;
+            prim.aabbMaxY = prim.params[1] + s;
+            break;
+        }
+        case SDFType::CoolS: {
+            // center(0,1), scale(2)
+            float s = prim.params[2] * 1.2f + expand;
+            prim.aabbMinX = prim.params[0] - s;
+            prim.aabbMinY = prim.params[1] - s;
+            prim.aabbMaxX = prim.params[0] + s;
+            prim.aabbMaxY = prim.params[1] + s;
+            break;
+        }
+        case SDFType::CircleWave: {
+            // center(0,1), tb(2), ra(3)
+            float r = prim.params[3] * 2.0f + expand;
+            prim.aabbMinX = prim.params[0] - r;
+            prim.aabbMinY = prim.params[1] - r;
+            prim.aabbMaxX = prim.params[0] + r;
+            prim.aabbMaxY = prim.params[1] + r;
+            break;
+        }
+        // 3D primitives - not used for grid, set dummy AABB
+        case SDFType::Sphere3D:
+        case SDFType::Box3D:
+        case SDFType::BoxFrame3D:
+        case SDFType::Torus3D:
+        case SDFType::CappedTorus3D:
+        case SDFType::Cylinder3D:
+        case SDFType::CappedCylinder3D:
+        case SDFType::RoundedCylinder3D:
+        case SDFType::VerticalCapsule3D:
+        case SDFType::Cone3D:
+        case SDFType::CappedCone3D:
+        case SDFType::RoundCone3D:
+        case SDFType::Plane3D:
+        case SDFType::HexPrism3D:
+        case SDFType::TriPrism3D:
+        case SDFType::Octahedron3D:
+        case SDFType::Pyramid3D:
+        case SDFType::Ellipsoid3D:
+        case SDFType::Rhombus3D:
+        case SDFType::Link3D: {
+            // 3D primitives are raymarched, not grid-culled.
+            // Set a zero-area AABB so they don't affect 2D scene bounds.
+            prim.aabbMinX = 0; prim.aabbMinY = 0;
+            prim.aabbMaxX = 0; prim.aabbMaxY = 0;
+            break;
+        }
         default:
             prim.aabbMinX = -1e10f;
             prim.aabbMinY = -1e10f;
@@ -337,14 +558,17 @@ void YDrawBase::declareBufferNeeds() {
         if (lastDerivedSize > 0) {
             _cardMgr->bufferManager()->reserve(lastDerivedSize);
         } else {
-            // First time: estimate derived size from staging data
+            // First time: estimate derived size from staging data (skip 3D prims)
             uint32_t n = static_cast<uint32_t>(_primStaging.size());
+            uint32_t n2D = 0;
             float sMinX = 1e30f, sMinY = 1e30f, sMaxX = -1e30f, sMaxY = -1e30f;
             for (uint32_t i = 0; i < n; i++) {
+                if (_primStaging[i].type >= 100) continue;
                 sMinX = std::min(sMinX, _primStaging[i].aabbMinX);
                 sMinY = std::min(sMinY, _primStaging[i].aabbMinY);
                 sMaxX = std::max(sMaxX, _primStaging[i].aabbMaxX);
                 sMaxY = std::max(sMaxY, _primStaging[i].aabbMaxY);
+                n2D++;
             }
             for (const auto& g : _glyphs) {
                 sMinX = std::min(sMinX, g.x);
@@ -360,17 +584,18 @@ void YDrawBase::declareBufferNeeds() {
             float sceneHeight = sMaxY - sMinY;
             float sceneArea = sceneWidth * sceneHeight;
             uint32_t gridW = 0, gridH = 0;
-            if ((n > 0 || !_glyphs.empty()) && sceneArea > 0) {
+            if ((n2D > 0 || !_glyphs.empty()) && sceneArea > 0) {
                 float cs = _cellSize;
                 if (cs <= 0.0f) {
-                    if (n > 0) {
+                    if (n2D > 0) {
                         float avgPrimArea = 0.0f;
                         for (uint32_t i = 0; i < n; i++) {
+                            if (_primStaging[i].type >= 100) continue;
                             float w = _primStaging[i].aabbMaxX - _primStaging[i].aabbMinX;
                             float h = _primStaging[i].aabbMaxY - _primStaging[i].aabbMinY;
                             avgPrimArea += w * h;
                         }
-                        avgPrimArea /= n;
+                        avgPrimArea /= n2D;
                         cs = std::sqrt(avgPrimArea) * 1.5f;
                     } else {
                         float avgGlyphH = 0.0f;
@@ -398,11 +623,14 @@ void YDrawBase::declareBufferNeeds() {
 
 uint32_t YDrawBase::computeDerivedSize() const {
     float sMinX = 1e30f, sMinY = 1e30f, sMaxX = -1e30f, sMaxY = -1e30f;
+    uint32_t num2D = 0;
     for (uint32_t i = 0; i < _primCount; i++) {
+        if (_primitives[i].type >= 100) continue;  // skip 3D prims
         sMinX = std::min(sMinX, _primitives[i].aabbMinX);
         sMinY = std::min(sMinY, _primitives[i].aabbMinY);
         sMaxX = std::max(sMaxX, _primitives[i].aabbMaxX);
         sMaxY = std::max(sMaxY, _primitives[i].aabbMaxY);
+        num2D++;
     }
     for (const auto& g : _glyphs) {
         sMinX = std::min(sMinX, g.x);
@@ -418,17 +646,18 @@ uint32_t YDrawBase::computeDerivedSize() const {
     float sceneHeight = sMaxY - sMinY;
     float sceneArea = sceneWidth * sceneHeight;
     uint32_t gridW = 0, gridH = 0;
-    if ((_primCount > 0 || !_glyphs.empty()) && sceneArea > 0) {
+    if ((num2D > 0 || !_glyphs.empty()) && sceneArea > 0) {
         float cs = _cellSize;
         if (cs <= 0.0f) {
-            if (_primCount > 0) {
+            if (num2D > 0) {
                 float avgPrimArea = 0.0f;
                 for (uint32_t i = 0; i < _primCount; i++) {
+                    if (_primitives[i].type >= 100) continue;
                     float w = _primitives[i].aabbMaxX - _primitives[i].aabbMinX;
                     float h = _primitives[i].aabbMaxY - _primitives[i].aabbMinY;
                     avgPrimArea += w * h;
                 }
-                avgPrimArea /= _primCount;
+                avgPrimArea /= num2D;
                 cs = std::sqrt(avgPrimArea) * 1.5f;
             } else {
                 float avgGlyphH = 0.0f;
@@ -628,6 +857,11 @@ Result<bool> YDrawBase::onEvent(const base::Event& event) {
 //=============================================================================
 
 uint32_t YDrawBase::addPrimitive(const SDFPrimitive& prim) {
+    // Auto-set FLAG_HAS_3D for 3D primitives
+    if (prim.type >= 100) {
+        _flags |= FLAG_HAS_3D;
+    }
+
     if (_initParsing) {
         SDFPrimitive p = prim;
         if (p.aabbMinX == 0 && p.aabbMaxX == 0) {
@@ -917,6 +1151,8 @@ void YDrawBase::computeSceneBounds() {
     _sceneMaxY = -1e10f;
 
     for (uint32_t i = 0; i < _primCount; i++) {
+        // Skip 3D primitives - they render in their own 3D coordinate space
+        if (_primitives[i].type >= 100) continue;
         _sceneMinX = std::min(_sceneMinX, _primitives[i].aabbMinX);
         _sceneMinY = std::min(_sceneMinY, _primitives[i].aabbMinY);
         _sceneMaxX = std::max(_sceneMaxX, _primitives[i].aabbMaxX);
@@ -960,9 +1196,10 @@ void YDrawBase::buildGrid() {
 
     std::memset(_grid, 0, _gridSize * sizeof(uint32_t));
 
-    // Assign primitives to cells
+    // Assign primitives to cells (skip 3D - they use raymarching)
     for (uint32_t primIdx = 0; primIdx < _primCount; primIdx++) {
         const auto& prim = _primitives[primIdx];
+        if (prim.type >= 100) continue;
 
         uint32_t cellMinX = static_cast<uint32_t>(
             std::clamp((prim.aabbMinX - _sceneMinX) / _cellSize, 0.0f, float(_gridWidth - 1)));
@@ -1028,17 +1265,24 @@ Result<void> YDrawBase::rebuildAndUpload() {
     uint32_t gridW = 0, gridH = 0;
     float cellSize = _cellSize;
 
-    if (_primCount > 0 || !_glyphs.empty()) {
+    // Count 2D primitives (skip 3D raymarched prims for grid computation)
+    uint32_t num2DPrims = 0;
+    for (uint32_t i = 0; i < _primCount; i++) {
+        if (_primitives[i].type < 100) num2DPrims++;
+    }
+
+    if (num2DPrims > 0 || !_glyphs.empty()) {
         float sceneArea = sceneWidth * sceneHeight;
         if (cellSize <= 0.0f) {
-            if (_primCount > 0) {
+            if (num2DPrims > 0) {
                 float avgPrimArea = 0.0f;
                 for (uint32_t i = 0; i < _primCount; i++) {
+                    if (_primitives[i].type >= 100) continue;
                     float w = _primitives[i].aabbMaxX - _primitives[i].aabbMinX;
                     float h = _primitives[i].aabbMaxY - _primitives[i].aabbMinY;
                     avgPrimArea += w * h;
                 }
-                avgPrimArea /= _primCount;
+                avgPrimArea /= num2DPrims;
                 cellSize = std::sqrt(avgPrimArea) * 1.5f;
             } else {
                 float avgGlyphH = 0.0f;

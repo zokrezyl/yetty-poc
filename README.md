@@ -6,6 +6,10 @@
 
 A WebGPU-powered terminal emulator that breaks the boundaries of what terminals can display.
 
+> **🚀 Like what you see?** We're looking for contributors! Whether it's code, documentation, or ideas - all contributions are welcome. Share your suggestions and opinions on [GitHub Discussions](https://github.com/zokrezyl/yetty/discussions).
+
+> **🛠️ Development Status:** We're developing intensively and moving fast. We admit that test coverage is still limited, but we're committed to improving it. Contributions to testing are especially welcome!
+
 ## The Problem We're Solving
 
 Traditional terminals are stuck in the 1970s. They can display text, maybe some colors, and that's about it. While the rest of computing has evolved to support rich graphics, animations, and interactive content, terminals remain fundamentally limited to a character grid.
@@ -102,6 +106,8 @@ Stay tuned for the Plugin SDK documentation.
 
 ## Technical Highlights
 
+> ⚠️ **Note:** We currently build with the **Dawn** WebGPU backend. The native wgpu-native backend may not build successfully at this time.
+
 ### Core Dependencies
 - **libvterm** - VT100/xterm terminal emulation
 - **wgpu-native/Dawn** - WebGPU abstraction layer
@@ -117,29 +123,28 @@ Stay tuned for the Plugin SDK documentation.
 
 ## Building
 
-```bash
-# Using Nix (recommended)
-nix develop
-make build-desktop-release
+Build targets are defined in the wrapper `Makefile`. The suggested build command is:
 
-# Using CMake directly
-mkdir build && cd build
-cmake ..
-cmake --build .
+```bash
+# Recommended: Debug build with Dawn backend
+make build-desktop-dawn-debug
+
+# Release build
+make build-desktop-dawn-release
+
+# List all available targets
+make help
 ```
+
 
 ## Usage
 
 ```bash
 # Run with default shell
-./yetty
+./build-desktop-dawn-relase/yetty
 
 # Run with specific command
 SHELL=/bin/zsh ./yetty
-
-# Demo mode
-./yetty --demo
-```
 
 ## License
 

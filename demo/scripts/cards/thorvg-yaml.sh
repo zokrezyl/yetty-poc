@@ -5,6 +5,6 @@
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR/../../.."
 
-python3 tools/yetty-client/main.py create thorvg --yaml demo/assets/thorvg/shapes.yaml -w 60 -H 30
+uv run python3 tools/yetty-client/main.py create thorvg --yaml demo/assets/thorvg/shapes.yaml -w 60 -H 30
 
 echo  # newline after the card

@@ -289,45 +289,62 @@ if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
     # libmagic for file type detection (ycat)
     include(build-tools/cmake/Libmagic.cmake)
 
-    # FreeType for font loading
-    # NOTE: PNG support is required for color emoji fonts (CBDT/CBLC with PNG-compressed bitmaps)
-    CPMAddPackage(
-        NAME freetype
-        GITHUB_REPOSITORY freetype/freetype
-        GIT_TAG VER-2-13-2
-        OPTIONS
-            "FT_DISABLE_ZLIB OFF"
-            "FT_DISABLE_BZIP2 ON"
-            "FT_DISABLE_PNG OFF"
-            "FT_DISABLE_HARFBUZZ ON"
-            "FT_DISABLE_BROTLI ON"
-    )
-    # Create alias for msdfgen's find_package(Freetype)
-    if(NOT TARGET Freetype::Freetype)
-        add_library(Freetype::Freetype ALIAS freetype)
-    endif()
-    # Enable PIC for shared library plugins
-    set_target_properties(freetype PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    # FreeType - system static library, linked at the end of final executables
+    find_library(FREETYPE_STATIC_LIB libfreetype.a PATHS /usr/lib/x86_64-linux-gnu /usr/lib REQUIRED)
+    find_library(PNG_STATIC_LIB libpng16.a PATHS /usr/lib/x86_64-linux-gnu /usr/lib REQUIRED)
+    find_library(BROTLIDEC_STATIC_LIB libbrotlidec.a PATHS /usr/lib/x86_64-linux-gnu /usr/lib)
+    find_library(BROTLICOMMON_STATIC_LIB libbrotlicommon.a PATHS /usr/lib/x86_64-linux-gnu /usr/lib)
+    find_library(BZ2_STATIC_LIB libbz2.a PATHS /usr/lib/x86_64-linux-gnu /usr/lib)
+    find_path(FREETYPE_INCLUDE_DIR ft2build.h PATH_SUFFIXES freetype2)
+    set(FREETYPE_ALL_STATIC_LIBS
+        "${FREETYPE_STATIC_LIB};${PNG_STATIC_LIB};${BROTLIDEC_STATIC_LIB};${BROTLICOMMON_STATIC_LIB};${BZ2_STATIC_LIB};z;m")
 
-    # msdfgen with FreeType support
+    # msdfgen — built from source, no Freetype::Freetype target games
     CPMAddPackage(
         NAME msdfgen
         GITHUB_REPOSITORY Chlumsky/msdfgen
         GIT_TAG v1.12
-        OPTIONS
-            "MSDFGEN_BUILD_STANDALONE OFF"
-            "MSDFGEN_CORE_ONLY OFF"
-            "MSDFGEN_USE_SKIA OFF"
-            "MSDFGEN_USE_VCPKG OFF"
-            "MSDFGEN_DISABLE_SVG ON"
-            "MSDFGEN_DISABLE_PNG ON"
-            "MSDFGEN_INSTALL OFF"
+        DOWNLOAD_ONLY YES
     )
-    # Enable PIC for shared library plugins
-    if(TARGET msdfgen-core)
+    CPMAddPackage(
+        NAME tinyxml2
+        GITHUB_REPOSITORY leethomason/tinyxml2
+        GIT_TAG 10.0.0
+    )
+    if(msdfgen_ADDED)
+        # Core library — pure math, no external deps
+        file(GLOB MSDFGEN_CORE_SOURCES "${msdfgen_SOURCE_DIR}/core/*.cpp")
+        file(GLOB MSDFGEN_CORE_HEADERS "${msdfgen_SOURCE_DIR}/core/*.h")
+        add_library(msdfgen-core STATIC ${MSDFGEN_CORE_SOURCES} ${MSDFGEN_CORE_HEADERS})
+        add_library(msdfgen::msdfgen-core ALIAS msdfgen-core)
+        target_include_directories(msdfgen-core PUBLIC ${msdfgen_SOURCE_DIR})
+        target_compile_features(msdfgen-core PUBLIC cxx_std_11)
+        target_compile_definitions(msdfgen-core PUBLIC
+            MSDFGEN_PUBLIC=
+            MSDFGEN_USE_CPP11
+        )
         set_target_properties(msdfgen-core PROPERTIES POSITION_INDEPENDENT_CODE ON)
-    endif()
-    if(TARGET msdfgen-ext)
+
+        # Extensions library — freetype headers for compile, tinyxml2 for SVG, no PNG
+        set(MSDFGEN_EXT_SOURCES
+            ${msdfgen_SOURCE_DIR}/ext/import-font.cpp
+            ${msdfgen_SOURCE_DIR}/ext/import-svg.cpp
+            ${msdfgen_SOURCE_DIR}/ext/resolve-shape-geometry.cpp
+        )
+        file(GLOB MSDFGEN_EXT_HEADERS "${msdfgen_SOURCE_DIR}/ext/*.h")
+        add_library(msdfgen-ext STATIC ${MSDFGEN_EXT_SOURCES} ${MSDFGEN_EXT_HEADERS})
+        add_library(msdfgen::msdfgen-ext ALIAS msdfgen-ext)
+        target_include_directories(msdfgen-ext
+            PUBLIC ${msdfgen_SOURCE_DIR}
+            PRIVATE ${FREETYPE_INCLUDE_DIR}
+        )
+        target_compile_definitions(msdfgen-ext PUBLIC
+            MSDFGEN_EXT_PUBLIC=
+            MSDFGEN_EXTENSIONS
+            MSDFGEN_USE_TINYXML2
+            MSDFGEN_DISABLE_PNG
+        )
+        target_link_libraries(msdfgen-ext PRIVATE msdfgen::msdfgen-core tinyxml2::tinyxml2)
         set_target_properties(msdfgen-ext PROPERTIES POSITION_INDEPENDENT_CODE ON)
     endif()
 
@@ -724,6 +741,11 @@ else()
         pkg_check_modules(FONTCONFIG REQUIRED fontconfig)
         target_include_directories(yetty PRIVATE ${FONTCONFIG_INCLUDE_DIRS})
         target_compile_definitions(yetty PRIVATE YETTY_USE_FONTCONFIG=1)
+
+        # Static link fontconfig and all its deps — one freetype, no .so conflicts
+        find_library(FONTCONFIG_STATIC_LIB libfontconfig.a PATHS /usr/lib/x86_64-linux-gnu /usr/lib REQUIRED)
+        find_library(EXPAT_STATIC_LIB libexpat.a PATHS /usr/lib/x86_64-linux-gnu /usr/lib REQUIRED)
+        find_library(UUID_STATIC_LIB libuuid.a PATHS /usr/lib/x86_64-linux-gnu /usr/lib REQUIRED)
     endif()
 
     target_link_libraries(yetty PRIVATE
@@ -739,13 +761,17 @@ else()
         msgpack-cxx
         msdfgen::msdfgen-core
         msdfgen::msdfgen-ext
-        freetype
         msdf::wgsl
         ytrace::ytrace
         lz4_static
         uv_a
         cdb
-        $<$<NOT:$<BOOL:${WIN32}>>:${FONTCONFIG_LIBRARIES}>
+        $<$<NOT:$<BOOL:${WIN32}>>:${FONTCONFIG_STATIC_LIB}>
+        $<$<NOT:$<BOOL:${WIN32}>>:${EXPAT_STATIC_LIB}>
+        $<$<NOT:$<BOOL:${WIN32}>>:${UUID_STATIC_LIB}>
+        # FreeType static — whole-archive to override pdfium's bundled FreeType
+        -Wl,--whole-archive ${FREETYPE_STATIC_LIB} -Wl,--no-whole-archive
+        ${PNG_STATIC_LIB} ${BROTLIDEC_STATIC_LIB} ${BROTLICOMMON_STATIC_LIB} ${BZ2_STATIC_LIB} z m
     )
 
     # Platform-specific PTY library
@@ -831,11 +857,11 @@ else()
     # ycat - cat with card rendering
     add_subdirectory(src/yetty/ycat)
 
-    # MSDFGL WebGPU port (sandbox) - abandoned, see README
-    add_subdirectory(sandbox/msdfgl)
+    # # MSDFGL WebGPU port (sandbox) - abandoned, see README
+    # add_subdirectory(sandbox/msdfgl)
 
     # MSDF-WGSL: Compute shader-based MSDF generation
-    add_subdirectory(sandbox/msdf-wgsl)
+    add_subdirectory(src/yetty/msdf-wgsl)
 endif()
 
 

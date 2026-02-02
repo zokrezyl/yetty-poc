@@ -56,6 +56,7 @@ public:
     static constexpr uint32_t FLAG_SHOW_BOUNDS = 1;
     static constexpr uint32_t FLAG_SHOW_GRID = 2;
     static constexpr uint32_t FLAG_SHOW_EVAL_COUNT = 4;
+    static constexpr uint32_t FLAG_HAS_3D = 8;
 
     virtual ~YDrawBase();
 
