@@ -89,12 +89,22 @@ public:
         parseArgs(_argsStr);
         yerror("PDF::init: [3] args parsed");
 
-        // Load PDF document from memory
-        _doc = FPDF_LoadMemDocument(_pdfData.data(), static_cast<int>(_pdfData.size()), nullptr);
+        // Load PDF — detect if payload is a file path or raw data
+        if (_pdfData.size() < 4096 && _pdfData.size() > 0 &&
+            _pdfData[0] == '/' &&
+            std::find(_pdfData.begin(), _pdfData.end(), '\n') == _pdfData.end()) {
+            // Payload is a file path
+            std::string path(_pdfData.begin(), _pdfData.end());
+            yerror("PDF::init: loading from file path: {}", path);
+            _doc = FPDF_LoadDocument(path.c_str(), nullptr);
+        } else {
+            // Payload is raw PDF data
+            _doc = FPDF_LoadMemDocument(_pdfData.data(), static_cast<int>(_pdfData.size()), nullptr);
+        }
         if (!_doc) {
             unsigned long err = FPDF_GetLastError();
-            yerror("PDF::init: FAILED at FPDF_LoadMemDocument error={} pdfData.size={}", err, _pdfData.size());
-            return Err<void>("Pdf::init: FPDF_LoadMemDocument failed (error " + std::to_string(err) + ")");
+            yerror("PDF::init: FAILED to load PDF error={} pdfData.size={}", err, _pdfData.size());
+            return Err<void>("Pdf::init: failed to load PDF (error " + std::to_string(err) + ")");
         }
 
         _pageCount = FPDF_GetPageCount(_doc);

@@ -643,10 +643,20 @@ private:
         yinfo("Image::loadImageFromPayload: payload size={}", _payloadStr.size());
 
         int width, height, channels;
-        uint8_t* pixels = stbi_load_from_memory(
-            reinterpret_cast<const uint8_t*>(_payloadStr.data()),
-            static_cast<int>(_payloadStr.size()),
-            &width, &height, &channels, 4);
+        uint8_t* pixels = nullptr;
+
+        // Detect if payload is a file path (starts with / and has no newlines)
+        if (_payloadStr.size() < 4096 &&
+            _payloadStr[0] == '/' &&
+            _payloadStr.find('\n') == std::string::npos) {
+            yinfo("Image::loadImageFromPayload: loading from file path: {}", _payloadStr);
+            pixels = stbi_load(_payloadStr.c_str(), &width, &height, &channels, 4);
+        } else {
+            pixels = stbi_load_from_memory(
+                reinterpret_cast<const uint8_t*>(_payloadStr.data()),
+                static_cast<int>(_payloadStr.size()),
+                &width, &height, &channels, 4);
+        }
 
         if (!pixels) {
             return Err<void>(std::string("Image::loadImageFromPayload: stbi_load failed: ") +

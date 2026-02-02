@@ -15,14 +15,17 @@
 //   offset 5:  cellSize (f32)
 //   offset 6:  glyphOffset (u32)   - offset of glyph data in cardStorage
 //   offset 7:  glyphCount (u32)    - number of text glyphs
-//   offset 8:  sceneMinX (f32)
+//   offset 8:  sceneMinX (f32)     - content bounds (= grid origin)
 //   offset 9:  sceneMinY (f32)
 //   offset 10: sceneMaxX (f32)
 //   offset 11: sceneMaxY (f32)
-//   offset 12: widthCells (u32)
-//   offset 13: heightCells (u32)
-//   offset 14: flags (u32)
+//   offset 12: widthCells  [15:0] = widthCells,  [31:16] = panX (i16 fixedpoint)
+//   offset 13: heightCells [15:0] = heightCells, [31:16] = panY (i16 fixedpoint)
+//   offset 14: flags       [15:0] = flags,       [31:16] = zoom (f16)
 //   offset 15: bgColor (u32)
+//
+// Pan fixedpoint: panScene = i16value / 16384.0 * sceneExtent
+// Zoom f16: IEEE 754 half-float
 // =============================================================================
 // YDrawGlyph layout (32 bytes = 8 floats):
 //   offset 0: x (f32)        - position in scene coords
@@ -68,25 +71,85 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
     let glyphOffset = cardMetadata[metaOffset + 6u];
     let glyphCount = cardMetadata[metaOffset + 7u];
     let invCellSize = select(0.0, 1.0 / cellSize, cellSize > 0.0);
-    let sceneMinX = bitcast<f32>(cardMetadata[metaOffset + 8u]);
-    let sceneMinY = bitcast<f32>(cardMetadata[metaOffset + 9u]);
-    let sceneMaxX = bitcast<f32>(cardMetadata[metaOffset + 10u]);
-    let sceneMaxY = bitcast<f32>(cardMetadata[metaOffset + 11u]);
-    let widthCells = cardMetadata[metaOffset + 12u];
-    let heightCells = cardMetadata[metaOffset + 13u];
-    let flags = cardMetadata[metaOffset + 14u];
-    let bgColorPacked = cardMetadata[metaOffset + 15u];
 
+    // Content bounds (= grid origin, never changes with zoom/pan)
+    let contentMinX = bitcast<f32>(cardMetadata[metaOffset + 8u]);
+    let contentMinY = bitcast<f32>(cardMetadata[metaOffset + 9u]);
+    let contentMaxX = bitcast<f32>(cardMetadata[metaOffset + 10u]);
+    let contentMaxY = bitcast<f32>(cardMetadata[metaOffset + 11u]);
+
+    // Unpack widthCells/heightCells (lower 16 bits) and pan (upper 16 bits)
+    let packedWC = cardMetadata[metaOffset + 12u];
+    let packedHC = cardMetadata[metaOffset + 13u];
+    let widthCells = packedWC & 0xFFFFu;
+    let heightCells = packedHC & 0xFFFFu;
+    let panXi16 = i32(packedWC >> 16u) - select(0, 65536, (packedWC >> 16u) >= 32768u);
+    let panYi16 = i32(packedHC >> 16u) - select(0, 65536, (packedHC >> 16u) >= 32768u);
+
+    // Unpack flags (lower 16 bits) and zoom f16 (upper 16 bits)
+    let packedFlags = cardMetadata[metaOffset + 14u];
+    let flags = packedFlags & 0xFFFFu;
+    let zoomF16 = packedFlags >> 16u;
+
+    // f16 → f32 conversion
+    let f16sign = (zoomF16 >> 15u) & 1u;
+    let f16exp  = (zoomF16 >> 10u) & 0x1Fu;
+    let f16mant = zoomF16 & 0x3FFu;
+    let f32bits = select(
+        (f16sign << 31u) | ((f16exp + 112u) << 23u) | (f16mant << 13u),
+        0u,
+        f16exp == 0u
+    );
+    let zoom = select(bitcast<f32>(f32bits), 1.0, f16exp == 0u);
+
+    let bgColorPacked = cardMetadata[metaOffset + 15u];
     let bgColor = unpackColor(bgColorPacked);
 
-    // Compute scene-space position
+    // Content extent
+    let contentW = contentMaxX - contentMinX;
+    let contentH = contentMaxY - contentMinY;
+
+    // Reconstruct pan in scene units: panScene = i16value / 16384.0 * extent
+    let panX = f32(panXi16) / 16384.0 * contentW;
+    let panY = f32(panYi16) / 16384.0 * contentH;
+
+    // Compute view bounds: zoom around content center, then apply pan
+    let centerX = (contentMinX + contentMaxX) * 0.5;
+    let centerY = (contentMinY + contentMaxY) * 0.5;
+    let viewHalfW = contentW * 0.5 / zoom;
+    let viewHalfH = contentH * 0.5 / zoom;
+    let viewMinX = centerX - viewHalfW + panX;
+    let viewMinY = centerY - viewHalfH + panY;
+    let viewMaxX = centerX + viewHalfW + panX;
+    let viewMaxY = centerY + viewHalfH + panY;
+    let viewW = viewMaxX - viewMinX;
+    let viewH = viewMaxY - viewMinY;
+
+    // Compute scene-space position with UNIFORM scaling (zoom-to-fit).
+    // This ensures 1 scene unit is the same physical size in both axes.
     let widgetUV = (vec2<f32>(f32(relCol), f32(relRow)) + localUV) /
                    vec2<f32>(f32(widthCells), f32(heightCells));
 
-    let scenePos = vec2<f32>(
-        sceneMinX + widgetUV.x * (sceneMaxX - sceneMinX),
-        sceneMinY + widgetUV.y * (sceneMaxY - sceneMinY)
-    );
+    let cardAspect = f32(widthCells) / max(f32(heightCells), 1.0);
+    let viewAspect = viewW / max(viewH, 1e-6);
+
+    // Use uniform scale: pick the axis that needs more zoom-out
+    var scenePos: vec2<f32>;
+    if (viewAspect < cardAspect) {
+        let visibleW = viewH * cardAspect;
+        let offsetX = (visibleW - viewW) * 0.5;
+        scenePos = vec2<f32>(
+            viewMinX - offsetX + widgetUV.x * visibleW,
+            viewMinY + widgetUV.y * viewH
+        );
+    } else {
+        let visibleH = viewW / cardAspect;
+        let offsetY = (visibleH - viewH) * 0.5;
+        scenePos = vec2<f32>(
+            viewMinX + widgetUV.x * viewW,
+            viewMinY - offsetY + widgetUV.y * visibleH
+        );
+    }
 
     // Early exit if no grid
     if (gridWidth == 0u || gridHeight == 0u) {
@@ -96,14 +159,13 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
     var resultColor = bgColor;
     var evalCount = 0u;
 
-    // Compute screen scale for MSDF anti-aliasing
-    let sceneWidth = sceneMaxX - sceneMinX;
+    // Compute screen scale for MSDF anti-aliasing (use view width, not content width)
     let pixelWidth = f32(widthCells) * grid.cellSize.x;
-    let screenScale = select(1.0, pixelWidth / sceneWidth, sceneWidth > 0.0);
+    let screenScale = select(1.0, pixelWidth / viewW, viewW > 0.0);
 
-    // O(1) GRID LOOKUP - find which cell this pixel is in
-    let cellX = u32(clamp((scenePos.x - sceneMinX) * invCellSize, 0.0, f32(gridWidth - 1u)));
-    let cellY = u32(clamp((scenePos.y - sceneMinY) * invCellSize, 0.0, f32(gridHeight - 1u)));
+    // O(1) GRID LOOKUP - use CONTENT bounds (grid origin), not view bounds
+    let cellX = u32(clamp((scenePos.x - contentMinX) * invCellSize, 0.0, f32(gridWidth - 1u)));
+    let cellY = u32(clamp((scenePos.y - contentMinY) * invCellSize, 0.0, f32(gridHeight - 1u)));
     let cellIndex = cellY * gridWidth + cellX;
 
     // Each cell stores: [entryCount][idx0][idx1]...[idxN]
@@ -188,8 +250,8 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
     // Debug: show grid lines (use floor instead of expensive modulo)
     if ((flags & YDRAW_FLAG_SHOW_GRID) != 0u) {
         let cellSize = 1.0 / invCellSize;
-        let cellPosX = (scenePos.x - sceneMinX) * invCellSize;
-        let cellPosY = (scenePos.y - sceneMinY) * invCellSize;
+        let cellPosX = (scenePos.x - contentMinX) * invCellSize;
+        let cellPosY = (scenePos.y - contentMinY) * invCellSize;
         let fracX = fract(cellPosX);
         let fracY = fract(cellPosY);
         let gridLineWidth = 0.02;

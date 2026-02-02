@@ -10,4 +10,4 @@ if [[ ! -f "$PDF_FILE" ]]; then
     exit 1
 fi
 
-uv run python3 tools/yetty-client/main.py create pdf -x 2 -y 2 -w 76 -H 35 "$PDF_FILE"
+uv run python3 tools/yetty-client/main.py create pdf -x 2 -y 2 -w 76 -H 35 -i "$PDF_FILE"
