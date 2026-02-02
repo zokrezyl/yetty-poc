@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <iostream>
 
 namespace yetty::card {
 
@@ -465,9 +466,9 @@ public:
 
         if (didRebuild || didMeta) {
             auto us = [](auto a, auto b) { return std::chrono::duration_cast<std::chrono::microseconds>(b - a).count(); };
-            yinfo("YDraw::render: rebuild={} us, metadata={} us, total={} us",
-                  us(tRenderStart, tAfterRebuild), us(tAfterRebuild, tAfterMeta),
-                  us(tRenderStart, tAfterMeta));
+            std::cout << "YDraw::render: rebuild=" << us(tRenderStart, tAfterRebuild)
+                      << " us, metadata=" << us(tAfterRebuild, tAfterMeta)
+                      << " us, total=" << us(tRenderStart, tAfterMeta) << " us" << std::endl;
         }
 
         return Ok();

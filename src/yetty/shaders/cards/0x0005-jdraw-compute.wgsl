@@ -5,7 +5,7 @@
 // of primitive indices per tile.
 //
 // Dispatch: (tileCountX, tileCountY, 1) workgroups
-// Each workgroup handles one tile.
+// Each workgroup handles one tile with 256 threads cooperating.
 //
 // Bindings:
 //   binding 0: primData (read-only)  - SDF primitives uploaded by jdraw
@@ -48,15 +48,30 @@ const AABB_MIN_Y_OFFSET: u32 = 19u;
 const AABB_MAX_X_OFFSET: u32 = 20u;
 const AABB_MAX_Y_OFFSET: u32 = 21u;
 
-@compute @workgroup_size(1, 1, 1)
-fn tileCull(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let tileX = gid.x;
-    let tileY = gid.y;
+const WG_SIZE: u32 = 256u;
+
+// Shared memory for cooperative tile culling
+var<workgroup> sharedCount: atomic<u32>;
+var<workgroup> sharedHits: array<u32, 64>;  // max prims per tile
+
+@compute @workgroup_size(256, 1, 1)
+fn tileCull(
+    @builtin(workgroup_id) wgId: vec3<u32>,
+    @builtin(local_invocation_index) lid: u32,
+) {
+    let tileX = wgId.x;
+    let tileY = wgId.y;
 
     // Bounds check
     if (tileX >= uniforms.tileCountX || tileY >= uniforms.tileCountY) {
         return;
     }
+
+    // Thread 0 initializes shared counter
+    if (lid == 0u) {
+        atomicStore(&sharedCount, 0u);
+    }
+    workgroupBarrier();
 
     // Compute tile bounds in scene coordinates
     let sceneWidth = uniforms.sceneMaxX - uniforms.sceneMinX;
@@ -69,20 +84,9 @@ fn tileCull(@builtin(global_invocation_id) gid: vec3<u32>) {
     let tileMinY = uniforms.sceneMinY + f32(tileY) * invTileCountY * sceneHeight;
     let tileMaxY = uniforms.sceneMinY + f32(tileY + 1u) * invTileCountY * sceneHeight;
 
-    // Output offset for this tile (starts at 0 in tileData)
-    let tileIndex = tileY * uniforms.tileCountX + tileX;
-    let tileStride = 1u + uniforms.maxPrimsPerTile;
-    let outOffset = tileIndex * tileStride;
-
-    var count = 0u;
-
-    // Test each primitive's AABB against tile bounds
-    for (var pi = 0u; pi < uniforms.primitiveCount; pi++) {
-        if (count >= uniforms.maxPrimsPerTile) {
-            break;
-        }
-
-        // Prims start at offset 0 in primData
+    // Each thread tests a strided subset of primitives
+    let maxPrims = uniforms.maxPrimsPerTile;
+    for (var pi = lid; pi < uniforms.primitiveCount; pi += WG_SIZE) {
         let primBase = pi * PRIM_SIZE;
 
         let primMinX = readF32(primBase + AABB_MIN_X_OFFSET);
@@ -93,11 +97,29 @@ fn tileCull(@builtin(global_invocation_id) gid: vec3<u32>) {
         // AABB overlap test
         if (primMaxX >= tileMinX && primMinX <= tileMaxX &&
             primMaxY >= tileMinY && primMinY <= tileMaxY) {
-            tileData[outOffset + 1u + count] = pi;
-            count++;
+            let slot = atomicAdd(&sharedCount, 1u);
+            if (slot < maxPrims) {
+                sharedHits[slot] = pi;
+            }
         }
     }
 
-    // Write count as first element of tile
-    tileData[outOffset] = count;
+    workgroupBarrier();
+
+    // Write results to global memory
+    let tileIndex = tileY * uniforms.tileCountX + tileX;
+    let tileStride = 1u + uniforms.maxPrimsPerTile;
+    let outOffset = tileIndex * tileStride;
+
+    let finalCount = min(atomicLoad(&sharedCount), maxPrims);
+
+    // All threads cooperate to write the hits
+    for (var i = lid; i < finalCount; i += WG_SIZE) {
+        tileData[outOffset + 1u + i] = sharedHits[i];
+    }
+
+    // Thread 0 writes the count
+    if (lid == 0u) {
+        tileData[outOffset] = finalCount;
+    }
 }
