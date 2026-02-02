@@ -5,6 +5,7 @@ add_subdirectory(hdraw)
 add_subdirectory(ydraw)
 add_subdirectory(kdraw)
 add_subdirectory(jdraw)
+add_subdirectory(ydraw-zoo)
 add_subdirectory(ymery)
 add_subdirectory(markdown)
 

@@ -150,6 +150,16 @@ protected:
     // Access to font for subclasses that need direct font metrics
     MsMsdfFont::Ptr font() const { return _font; }
 
+    // Direct access to primitive buffer for procedural cards
+    card::SDFPrimitive* primitivePtr() { return _primitives; }
+    const card::SDFPrimitive* primitivePtr() const { return _primitives; }
+
+    // Recompute AABB for a primitive
+    static void recomputeAABB(card::SDFPrimitive& prim);
+
+    // Mark primitive buffer as dirty (after direct modifications via primitivePtr)
+    void markPrimBufferDirty();
+
 private:
     // Metadata structure (matches shader layout - 64 bytes)
     struct Metadata {

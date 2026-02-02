@@ -820,6 +820,17 @@ void YDrawBase::markDirty() {
     _dirty = true;
 }
 
+/* static */ void YDrawBase::recomputeAABB(card::SDFPrimitive& prim) {
+    computeAABB(prim);
+}
+
+void YDrawBase::markPrimBufferDirty() {
+    if (_primStorage.isValid() && _cardMgr) {
+        _cardMgr->bufferManager()->markBufferDirty(_primStorage);
+    }
+}
+
+
 void YDrawBase::setBgColor(uint32_t color) {
     _bgColor = color;
     _metadataDirty = true;
@@ -1061,17 +1072,23 @@ Result<void> YDrawBase::rebuildAndUpload() {
               << " prims=" << _primCount << " glyphs=" << _glyphs.size()
               << " zoom=" << _viewZoom << std::endl;
 
-    // Reallocate derived storage if grid size changed (e.g. zoom/pan)
-    if (_derivedStorage.isValid() && derivedTotalSize > _derivedStorage.size) {
-        std::cout << "YDrawBase::rebuild: REALLOC derived " << _derivedStorage.size
-                  << " -> " << derivedTotalSize << std::endl;
-        _cardMgr->bufferManager()->deallocateBuffer(_derivedStorage);
-        auto storageResult = _cardMgr->bufferManager()->allocateBuffer(derivedTotalSize);
-        if (!storageResult) {
-            _derivedStorage = StorageHandle::invalid();
-            return Err<void>("YDrawBase::rebuild: failed to reallocate derived storage");
+    // Allocate or reallocate derived storage if needed
+    if (derivedTotalSize > 0) {
+        if (!_derivedStorage.isValid()) {
+            auto storageResult = _cardMgr->bufferManager()->allocateBuffer(derivedTotalSize);
+            if (!storageResult) {
+                return Err<void>("YDrawBase::rebuild: failed to allocate derived storage");
+            }
+            _derivedStorage = *storageResult;
+        } else if (derivedTotalSize > _derivedStorage.size) {
+            _cardMgr->bufferManager()->deallocateBuffer(_derivedStorage);
+            auto storageResult = _cardMgr->bufferManager()->allocateBuffer(derivedTotalSize);
+            if (!storageResult) {
+                _derivedStorage = StorageHandle::invalid();
+                return Err<void>("YDrawBase::rebuild: failed to reallocate derived storage");
+            }
+            _derivedStorage = *storageResult;
         }
-        _derivedStorage = *storageResult;
     }
 
     if (_derivedStorage.isValid() && derivedTotalSize > 0) {
