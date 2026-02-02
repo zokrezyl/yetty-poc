@@ -9,7 +9,6 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
-#include <iostream>
 
 namespace yetty::card {
 
@@ -211,6 +210,9 @@ public:
         // Get default MSDF font for text rendering
         if (_fontManager) {
             _font = _fontManager->getDefaultMsMsdfFont();
+            ydebug("YDraw: fontManager={} font={}", (void*)_fontManager.get(), (void*)_font.get());
+        } else {
+            ywarn("YDraw: fontManager is NULL!");
         }
     }
 
@@ -243,6 +245,7 @@ public:
             }
         }
         _initParsing = false;
+        ydebug("YDraw::init: prims={} glyphs={} payload_len={}", _primStaging.size(), _glyphs.size(), _payloadStr.size());
         yinfo("YDraw::init: parsed {} primitives into staging", _primStaging.size());
 
         _dirty = true;
@@ -335,6 +338,8 @@ public:
         if (!_primStaging.empty()) {
             uint32_t primSize = static_cast<uint32_t>(_primStaging.size()) * sizeof(SDFPrimitive);
             _cardMgr->bufferManager()->reserve(primSize);
+        }
+        if (!_primStaging.empty() || !_glyphs.empty()) {
             if (lastDerivedSize > 0) {
                 _cardMgr->bufferManager()->reserve(lastDerivedSize);
             } else {
@@ -348,6 +353,16 @@ public:
                     sMaxX = std::max(sMaxX, _primStaging[i].aabbMaxX);
                     sMaxY = std::max(sMaxY, _primStaging[i].aabbMaxY);
                 }
+                for (const auto& g : _glyphs) {
+                    sMinX = std::min(sMinX, g.x);
+                    sMinY = std::min(sMinY, g.y);
+                    sMaxX = std::max(sMaxX, g.x + g.width);
+                    sMaxY = std::max(sMaxY, g.y + g.height);
+                }
+                float padX = (sMaxX - sMinX) * 0.05f;
+                float padY = (sMaxY - sMinY) * 0.05f;
+                sMinX -= padX; sMinY -= padY;
+                sMaxX += padX; sMaxY += padY;
                 float sceneWidth = sMaxX - sMinX;
                 float sceneHeight = sMaxY - sMinY;
                 float sceneArea = sceneWidth * sceneHeight;
@@ -382,7 +397,7 @@ public:
     }
 
     uint32_t computeDerivedSize() const {
-        // Compute scene bounds from primitives
+        // Compute scene bounds from primitives AND glyphs
         float sMinX = 1e30f, sMinY = 1e30f, sMaxX = -1e30f, sMaxY = -1e30f;
         for (uint32_t i = 0; i < _primCount; i++) {
             sMinX = std::min(sMinX, _primitives[i].aabbMinX);
@@ -390,6 +405,17 @@ public:
             sMaxX = std::max(sMaxX, _primitives[i].aabbMaxX);
             sMaxY = std::max(sMaxY, _primitives[i].aabbMaxY);
         }
+        for (const auto& g : _glyphs) {
+            sMinX = std::min(sMinX, g.x);
+            sMinY = std::min(sMinY, g.y);
+            sMaxX = std::max(sMaxX, g.x + g.width);
+            sMaxY = std::max(sMaxY, g.y + g.height);
+        }
+        // Add padding (same as computeSceneBounds)
+        float padX = (sMaxX - sMinX) * 0.05f;
+        float padY = (sMaxY - sMinY) * 0.05f;
+        sMinX -= padX; sMinY -= padY;
+        sMaxX += padX; sMaxY += padY;
         float sceneWidth = sMaxX - sMinX;
         float sceneHeight = sMaxY - sMinY;
         float sceneArea = sceneWidth * sceneHeight;
@@ -432,19 +458,21 @@ public:
             _primStaging.clear();
             _primStaging.shrink_to_fit();
             _cardMgr->bufferManager()->markBufferDirty(_primStorage);
+        }
 
-            // Allocate derived storage (grid + glyphs)
+        // Allocate derived storage (grid + glyphs) if we have prims or glyphs
+        if (_primCount > 0 || !_glyphs.empty()) {
             uint32_t derivedSize = computeDerivedSize();
-            if (derivedSize > 0) {
+            if (derivedSize > 0 && !_derivedStorage.isValid()) {
                 auto storageResult = _cardMgr->bufferManager()->allocateBuffer(derivedSize);
                 if (!storageResult) {
                     return Err<void>("YDraw::allocateBuffers: failed to allocate derived storage");
                 }
                 _derivedStorage = *storageResult;
             }
-
             _dirty = true;
-            yinfo("YDraw::allocateBuffers: reconstructed {} primitives, derived {} bytes", count, derivedSize);
+            yinfo("YDraw::allocateBuffers: {} primitives, {} glyphs, derived {} bytes",
+                  _primCount, _glyphs.size(), derivedSize);
         }
         return Ok();
     }
@@ -475,9 +503,8 @@ public:
 
         if (didRebuild || didMeta) {
             auto us = [](auto a, auto b) { return std::chrono::duration_cast<std::chrono::microseconds>(b - a).count(); };
-            std::cout << "YDraw::render: rebuild=" << us(tRenderStart, tAfterRebuild)
-                      << " us, metadata=" << us(tAfterRebuild, tAfterMeta)
-                      << " us, total=" << us(tRenderStart, tAfterMeta) << " us" << std::endl;
+            yinfo("YDraw::render: rebuild={} us, metadata={} us, total={} us",
+                  us(tRenderStart, tAfterRebuild), us(tAfterRebuild, tAfterMeta), us(tRenderStart, tAfterMeta));
         }
 
         return Ok();
@@ -1661,6 +1688,9 @@ private:
         uint32_t glyphBytes = static_cast<uint32_t>(_glyphs.size() * sizeof(YDrawGlyph));
         uint32_t derivedTotalSize = gridBytes + glyphBytes;
 
+        ydebug("YDraw::rebuild: derivedTotal={} derivedStorage.size={} gridBytes={} glyphBytes={} prims={} glyphs={}",
+               derivedTotalSize, _derivedStorage.isValid() ? _derivedStorage.size : 0,
+               gridBytes, glyphBytes, _primCount, _glyphs.size());
         if (_derivedStorage.isValid() && derivedTotalSize > 0) {
             uint8_t* base = _derivedStorage.data;
             uint32_t offset = 0;
