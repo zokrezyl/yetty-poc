@@ -1,0 +1,61 @@
+background: "#1a1a2e"
+
+animation:
+  duration: 3.0
+  loop: true
+  speed: 1.0
+
+body:
+  # Bouncing red circle
+  - circle:
+      position: [150, 100]
+      radius: 25
+      fill: "#e74c3c"
+      stroke: "#c0392b"
+      stroke-width: 2
+      animate:
+        - property: position
+          keyframes:
+            - { t: 0.0, v: [150, 50] }
+            - { t: 0.75, v: [150, 250] }
+            - { t: 1.5, v: [150, 50] }
+            - { t: 2.25, v: [150, 250] }
+            - { t: 3.0, v: [150, 50] }
+        - property: fill_opacity
+          keyframes:
+            - { t: 0.0, v: 1.0 }
+            - { t: 1.5, v: 0.4 }
+            - { t: 3.0, v: 1.0 }
+
+  # Sliding blue box
+  - box:
+      position: [300, 150]
+      size: [50, 50]
+      fill: "#3498db"
+      round: 6
+      animate:
+        - property: position
+          keyframes:
+            - { t: 0.0, v: [200, 150] }
+            - { t: 1.5, v: [400, 150] }
+            - { t: 3.0, v: [200, 150] }
+
+  # Pulsing green circle
+  - circle:
+      position: [450, 150]
+      radius: 30
+      fill: "#2ecc71"
+      animate:
+        - property: scale
+          keyframes:
+            - { t: 0.0, v: 1.0 }
+            - { t: 1.0, v: 1.8 }
+            - { t: 2.0, v: 0.5 }
+            - { t: 3.0, v: 1.0 }
+
+  # Ground line
+  - segment:
+      from: [50, 280]
+      to: [550, 280]
+      stroke: "#555555"
+      stroke-width: 2

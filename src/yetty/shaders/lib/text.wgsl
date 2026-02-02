@@ -1,5 +1,5 @@
 // Text/glyph rendering utilities
-// Extracted from gpu-screen.wgsl for reuse in cards (hdraw, etc.)
+// Extracted from gpu-screen.wgsl for reuse in cards (ydraw, etc.)
 
 // MSDF median function
 fn median(r: f32, g: f32, b: f32) -> f32 {
@@ -154,7 +154,7 @@ fn renderGlyphInCell(
     return result;
 }
 
-// Simple glyph rendering for hdraw - glyph fills its entire bounds
+// Simple glyph rendering for ydraw - glyph fills its entire bounds
 // localUV: normalized position within glyph bounds (0-1)
 // glyphIndex: codepoint/index (assumes valid MSDF glyph, not emoji/shader)
 // fgColor: text color

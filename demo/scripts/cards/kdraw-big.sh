@@ -2,7 +2,7 @@
 # KDraw Big Demo: Hundreds of SDF primitives with screen-space tile culling
 # Uses the card system to create a KDraw card with many shapes
 #
-# This uses the same primitives as ydraw-big.sh but with screen-space
+# This uses the same primitives as hdraw-big.sh but with screen-space
 # tile culling for better GPU cache coherency.
 #
 # Options:

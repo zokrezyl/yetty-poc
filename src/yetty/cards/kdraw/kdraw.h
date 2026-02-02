@@ -1,7 +1,6 @@
 #pragma once
 
 #include <yetty/card.h>
-#include <yetty/card-buffer-manager.h>
 #include <yetty/base/factory.h>
 #include <yetty/gpu-context.h>
 #include <yetty/yetty-context.h>
@@ -56,10 +55,10 @@ namespace yetty::card {
 //   offset 60: bgColor (u32)
 //=============================================================================
 
-// Import SDFPrimitive from ydraw.h (same format)
-struct SDFPrimitive;  // Defined in ydraw.h
+// Import SDFPrimitive from hdraw.h (same format)
+struct SDFPrimitive;  // Defined in hdraw.h
 
-// Positioned glyph for GPU rendering (32 bytes) - same as HDraw
+// Positioned glyph for GPU rendering (32 bytes) - same as YDraw
 struct KDrawGlyph {
     float x, y;              // Position in scene coordinates
     float width, height;     // Glyph size in scene coordinates
@@ -74,7 +73,7 @@ static_assert(sizeof(KDrawGlyph) == 32, "KDrawGlyph must be 32 bytes");
 // KDraw class
 //=============================================================================
 
-class KDraw : public BufferCard,
+class KDraw : public Card,
               public base::ObjectFactory<KDraw> {
 public:
     using Ptr = std::shared_ptr<KDraw>;
@@ -116,8 +115,9 @@ public:
     // Card interface
     //=========================================================================
     Result<void> dispose() override = 0;
-    Result<void> update(float time) override = 0;
+    Result<void> render(float time) override = 0;
     const char* typeName() const override { return "kdraw"; }
+    bool needsBuffer() const override { return true; }
 
     // Override for 64-byte metadata slots
     uint32_t metadataSlotIndex() const override { return _metaHandle.offset / 64; }
@@ -175,10 +175,10 @@ public:
     virtual void runTileCulling() = 0;
 
 protected:
-    KDraw(CardBufferManager::Ptr mgr, const GPUContext& gpu,
+    KDraw(CardManager::Ptr mgr, const GPUContext& gpu,
           int32_t x, int32_t y,
           uint32_t widthCells, uint32_t heightCells)
-        : BufferCard(std::move(mgr), gpu, x, y, widthCells, heightCells)
+        : Card(std::move(mgr), gpu, x, y, widthCells, heightCells)
     {}
 };
 

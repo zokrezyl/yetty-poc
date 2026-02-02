@@ -11,7 +11,7 @@ Without BVH: Each pixel evaluates ALL 1000 shapes = slow
 With BVH:    Each pixel evaluates ~10-20 shapes = fast
 ```
 
-## Input Format (YDraw YAML)
+## Input Format (HDraw YAML)
 
 The input is a YAML-based scene description:
 

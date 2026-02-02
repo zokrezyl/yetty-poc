@@ -5,6 +5,6 @@
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR/../../.."
 
-python3 tools/yetty-client/main.py create thorvg --lottie demo/assets/thorvg/animation-long.json -w 40 -H 25
+uv run python3 tools/yetty-client/main.py create thorvg --lottie demo/assets/thorvg/animation-long.json -w 40 -H 25
 
 echo  # newline after the card

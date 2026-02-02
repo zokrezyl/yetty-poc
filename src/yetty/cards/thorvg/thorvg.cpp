@@ -235,7 +235,7 @@ public:
                int32_t x, int32_t y,
                uint32_t widthCells, uint32_t heightCells,
                const std::string& args, const std::string& payload)
-        : ThorVG(ctx.cardManager->bufferManager(), ctx.cardManager->textureManager(), ctx.gpu, x, y, widthCells, heightCells)
+        : ThorVG(ctx.cardManager, ctx.gpu, x, y, widthCells, heightCells)
         , _ctx(ctx)
         , _argsStr(args)
         , _payloadStr(payload)
@@ -299,26 +299,10 @@ public:
             ydebug("ThorVG::init: WARNING - payload is empty!");
         }
 
-        // Render initial frame
-        if (_animation) {
-            ydebug("ThorVG::init: rendering initial frame (content={}x{} cells={}x{} cell={}x{})",
-                   _contentWidth, _contentHeight, _widthCells, _heightCells, _cellWidth, _cellHeight);
-            recalculateDimensions();
-            ydebug("ThorVG::init: render dimensions={}x{}", _renderWidth, _renderHeight);
-            if (auto res = renderFrame(); !res) {
-                return Err<void>("ThorVG::init: failed to render initial frame", res);
-            }
-            ydebug("ThorVG::init: initial frame rendered OK");
-        } else {
-            ydebug("ThorVG::init: no animation, skipping initial render");
-        }
-
-        // Upload initial metadata
-        ydebug("ThorVG::init: uploading metadata");
-        if (auto res = uploadMetadata(); !res) {
-            return Err<void>("ThorVG::init: failed to upload metadata", res);
-        }
-        ydebug("ThorVG::init: metadata uploaded OK");
+        // Initial render will happen via allocateTextures() in the lifecycle.
+        // setCellSize() sets _needsRerender=true, allocateTextures() picks it up.
+        _needsRerender = true;
+        _metadataDirty = true;
 
         // Register for events
         if (auto res = registerForEvents(); !res) {
@@ -345,8 +329,8 @@ public:
         }
 
         // Release texture handle
-        if (_textureHandle.isValid() && _textureMgr) {
-            _textureMgr->deallocateTextureHandle(_textureHandle);
+        if (_textureHandle.isValid() && _cardMgr) {
+            _cardMgr->textureManager()->deallocate(_textureHandle);
             _textureHandle = TextureHandle::invalid();
         }
 
@@ -364,8 +348,8 @@ public:
 
     void suspend() override {
         // Release texture handle but keep ThorVG objects for re-render on resume
-        if (_textureHandle.isValid() && _textureMgr) {
-            _textureMgr->deallocateTextureHandle(_textureHandle);
+        if (_textureHandle.isValid() && _cardMgr) {
+            _cardMgr->textureManager()->deallocate(_textureHandle);
             _textureHandle = TextureHandle::invalid();
         }
         _renderBuffer.clear();
@@ -373,18 +357,24 @@ public:
         yinfo("ThorVG::suspend: deallocated texture handle");
     }
 
-    Result<void> update(float time) override {
-        // Reconstruct after suspend
-        if (!_textureHandle.isValid() && _animation) {
-            recalculateDimensions();
-            if (auto res = renderFrame(); !res) {
-                return Err<void>("ThorVG::update: failed to reconstruct after suspend", res);
+    Result<void> allocateTextures() override {
+        if (_animation) {
+            if (_needsRerender || !_textureHandle.isValid() || _renderBuffer.empty()) {
+                recalculateDimensions();
+                if (auto res = renderFrame(); !res) {
+                    return Err<void>("ThorVG::allocateTextures: failed to render", res);
+                }
+                _needsRerender = false;
+            } else {
+                // Re-register existing pixels with texture manager
+                _cardMgr->textureManager()->write(_textureHandle, _renderBuffer.data());
             }
             _metadataDirty = true;
-            _needsRerender = false;
-            yinfo("ThorVG::update: reconstructed after suspend");
         }
+        return Ok();
+    }
 
+    Result<void> render(float time) override {
         // Advance animation
         if (_isAnimated && _playing && _animation && _duration > 0) {
             _accumulatedTime += 0.016;  // ~60fps
@@ -764,13 +754,13 @@ private:
 
         // Allocate texture handle if needed, link our render buffer
         if (!_textureHandle.isValid()) {
-            auto allocResult = _textureMgr->allocateTextureHandle();
+            auto allocResult = _cardMgr->textureManager()->allocate(_renderWidth, _renderHeight);
             if (!allocResult) {
                 return Err<void>("ThorVG::renderFrame: failed to allocate texture handle", allocResult);
             }
             _textureHandle = *allocResult;
         }
-        _textureMgr->linkTextureData(_textureHandle, _renderBuffer.data(), _renderWidth, _renderHeight);
+        _cardMgr->textureManager()->write(_textureHandle, _renderBuffer.data());
         _metadataDirty = true;
 
         ydebug("ThorVG::renderFrame: DONE - linked to handle id={}", _textureHandle.id);
@@ -822,7 +812,7 @@ private:
         meta.textureHeight = _renderHeight;
 
         if (_textureHandle.isValid()) {
-            auto pos = _textureMgr->getAtlasPosition(_textureHandle);
+            auto pos = _cardMgr->textureManager()->getAtlasPosition(_textureHandle);
             meta.atlasX = pos.x;
             meta.atlasY = pos.y;
         } else {

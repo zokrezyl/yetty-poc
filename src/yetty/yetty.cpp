@@ -495,10 +495,9 @@ Result<void> YettyImpl::initSharedResources() noexcept {
     //   binding 2: card storage (read-only storage)
     //   binding 3: atlas texture (2D float)
     //   binding 4: atlas sampler (filtering)
-    //   binding 5: texture data (read-only storage)
     // Each GPUScreen's CardBufferManager creates a bind group matching this layout.
     // We also create a fallback bind group with dummy resources for non-card rendering.
-    std::array<WGPUBindGroupLayoutEntry, 6> layoutEntries = {};
+    std::array<WGPUBindGroupLayoutEntry, 5> layoutEntries = {};
 
     layoutEntries[0].binding = 0;
     layoutEntries[0].visibility = WGPUShaderStage_Fragment;
@@ -521,10 +520,6 @@ Result<void> YettyImpl::initSharedResources() noexcept {
     layoutEntries[4].binding = 4;
     layoutEntries[4].visibility = WGPUShaderStage_Fragment;
     layoutEntries[4].sampler.type = WGPUSamplerBindingType_Filtering;
-
-    layoutEntries[5].binding = 5;
-    layoutEntries[5].visibility = WGPUShaderStage_Fragment;
-    layoutEntries[5].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
 
     WGPUBindGroupLayoutDescriptor layoutDesc = {};
     layoutDesc.label = WGPU_STR("Shared Bind Group Layout");
@@ -562,7 +557,7 @@ Result<void> YettyImpl::initSharedResources() noexcept {
     dummySamplerDesc.maxAnisotropy = 1;
     WGPUSampler dummySampler = wgpuDeviceCreateSampler(_device, &dummySamplerDesc);
 
-    std::array<WGPUBindGroupEntry, 6> bindEntries = {};
+    std::array<WGPUBindGroupEntry, 5> bindEntries = {};
     bindEntries[0].binding = 0;
     bindEntries[0].buffer = _sharedUniformBuffer;
     bindEntries[0].size = sizeof(SharedUniforms);
@@ -576,9 +571,6 @@ Result<void> YettyImpl::initSharedResources() noexcept {
     bindEntries[3].textureView = dummyView;
     bindEntries[4].binding = 4;
     bindEntries[4].sampler = dummySampler;
-    bindEntries[5].binding = 5;
-    bindEntries[5].buffer = dummyBuffer;
-    bindEntries[5].size = 4;
 
     WGPUBindGroupDescriptor bindDesc = {};
     bindDesc.label = WGPU_STR("Fallback Shared Bind Group");

@@ -1,1012 +1,1739 @@
 #include "ydraw.h"
+#include "../../ydraw/animation.h"
+#include "../hdraw/hdraw.h"  // For SDFPrimitive, SDFType
 #include <ytrace/ytrace.hpp>
+#include <yaml-cpp/yaml.h>
 #include <sstream>
-#include <algorithm>
 #include <cmath>
 #include <cstring>
 
 namespace yetty::card {
 
 //=============================================================================
-// Morton code utilities
+// Constructor
 //=============================================================================
 
-// Expand 10-bit integer to 20-bit integer with zeros interleaved
-static uint32_t expandBits(uint32_t v) {
-    v = (v | (v << 16)) & 0x030000FF;
-    v = (v | (v <<  8)) & 0x0300F00F;
-    v = (v | (v <<  4)) & 0x030C30C3;
-    v = (v | (v <<  2)) & 0x09249249;
-    return v;
-}
-
-// Compute Morton code for 2D point (10 bits per axis = 1024x1024 grid)
-static uint32_t morton2D(float x, float y,
-                         float sceneMinX, float sceneMinY,
-                         float sceneMaxX, float sceneMaxY) {
-    // Normalize to 0-1
-    float rangeX = sceneMaxX - sceneMinX;
-    float rangeY = sceneMaxY - sceneMinY;
-    if (rangeX < 1e-6f) rangeX = 1.0f;
-    if (rangeY < 1e-6f) rangeY = 1.0f;
-
-    float nx = (x - sceneMinX) / rangeX;
-    float ny = (y - sceneMinY) / rangeY;
-
-    // Clamp and convert to integer grid
-    uint32_t ix = static_cast<uint32_t>(std::clamp(nx, 0.0f, 1.0f) * 1023.0f);
-    uint32_t iy = static_cast<uint32_t>(std::clamp(ny, 0.0f, 1.0f) * 1023.0f);
-
-    // Interleave bits
-    return (expandBits(ix) << 1) | expandBits(iy);
-}
+YDraw::YDraw(const YettyContext& ctx,
+             int32_t x, int32_t y,
+             uint32_t widthCells, uint32_t heightCells,
+             const std::string& args, const std::string& payload)
+    : YDrawBase(ctx, x, y, widthCells, heightCells)
+    , _argsStr(args)
+    , _payloadStr(payload)
+{}
 
 //=============================================================================
-// AABB utilities
+// Initialization
 //=============================================================================
 
-static void computeAABB(SDFPrimitive& prim) {
-    float expand = prim.strokeWidth * 0.5f;
-
-    switch (static_cast<SDFType>(prim.type)) {
-        case SDFType::Circle: {
-            // params: [cx, cy, radius]
-            float r = prim.params[2] + expand;
-            prim.aabbMinX = prim.params[0] - r;
-            prim.aabbMinY = prim.params[1] - r;
-            prim.aabbMaxX = prim.params[0] + r;
-            prim.aabbMaxY = prim.params[1] + r;
-            break;
-        }
-        case SDFType::Box: {
-            // params: [cx, cy, halfW, halfH]
-            float hw = prim.params[2] + prim.round + expand;
-            float hh = prim.params[3] + prim.round + expand;
-            prim.aabbMinX = prim.params[0] - hw;
-            prim.aabbMinY = prim.params[1] - hh;
-            prim.aabbMaxX = prim.params[0] + hw;
-            prim.aabbMaxY = prim.params[1] + hh;
-            break;
-        }
-        case SDFType::Segment: {
-            // params: [x0, y0, x1, y1]
-            prim.aabbMinX = std::min(prim.params[0], prim.params[2]) - expand;
-            prim.aabbMinY = std::min(prim.params[1], prim.params[3]) - expand;
-            prim.aabbMaxX = std::max(prim.params[0], prim.params[2]) + expand;
-            prim.aabbMaxY = std::max(prim.params[1], prim.params[3]) + expand;
-            break;
-        }
-        case SDFType::Triangle: {
-            // params: [x0, y0, x1, y1, x2, y2]
-            prim.aabbMinX = std::min({prim.params[0], prim.params[2], prim.params[4]}) - expand;
-            prim.aabbMinY = std::min({prim.params[1], prim.params[3], prim.params[5]}) - expand;
-            prim.aabbMaxX = std::max({prim.params[0], prim.params[2], prim.params[4]}) + expand;
-            prim.aabbMaxY = std::max({prim.params[1], prim.params[3], prim.params[5]}) + expand;
-            break;
-        }
-        case SDFType::Bezier2: {
-            // params: [x0, y0, x1, y1, x2, y2] - quadratic bezier
-            // Conservative AABB using control points
-            prim.aabbMinX = std::min({prim.params[0], prim.params[2], prim.params[4]}) - expand;
-            prim.aabbMinY = std::min({prim.params[1], prim.params[3], prim.params[5]}) - expand;
-            prim.aabbMaxX = std::max({prim.params[0], prim.params[2], prim.params[4]}) + expand;
-            prim.aabbMaxY = std::max({prim.params[1], prim.params[3], prim.params[5]}) + expand;
-            break;
-        }
-        case SDFType::Bezier3: {
-            // params: [x0, y0, x1, y1, x2, y2, x3, y3] - cubic bezier
-            prim.aabbMinX = std::min({prim.params[0], prim.params[2], prim.params[4], prim.params[6]}) - expand;
-            prim.aabbMinY = std::min({prim.params[1], prim.params[3], prim.params[5], prim.params[7]}) - expand;
-            prim.aabbMaxX = std::max({prim.params[0], prim.params[2], prim.params[4], prim.params[6]}) + expand;
-            prim.aabbMaxY = std::max({prim.params[1], prim.params[3], prim.params[5], prim.params[7]}) + expand;
-            break;
-        }
-        case SDFType::Ellipse: {
-            // params: [cx, cy, rx, ry]
-            prim.aabbMinX = prim.params[0] - prim.params[2] - expand;
-            prim.aabbMinY = prim.params[1] - prim.params[3] - expand;
-            prim.aabbMaxX = prim.params[0] + prim.params[2] + expand;
-            prim.aabbMaxY = prim.params[1] + prim.params[3] + expand;
-            break;
-        }
-        case SDFType::Arc: {
-            // params: [cx, cy, sc.x, sc.y, ra, rb]
-            float r = std::max(prim.params[4], prim.params[5]) + expand;
-            prim.aabbMinX = prim.params[0] - r;
-            prim.aabbMinY = prim.params[1] - r;
-            prim.aabbMaxX = prim.params[0] + r;
-            prim.aabbMaxY = prim.params[1] + r;
-            break;
-        }
-        case SDFType::RoundedBox: {
-            // params: [cx, cy, halfW, halfH, r0, r1, r2, r3]
-            float maxR = std::max({prim.params[4], prim.params[5],
-                                   prim.params[6], prim.params[7]});
-            float hw = prim.params[2] + maxR + expand;
-            float hh = prim.params[3] + maxR + expand;
-            prim.aabbMinX = prim.params[0] - hw;
-            prim.aabbMinY = prim.params[1] - hh;
-            prim.aabbMaxX = prim.params[0] + hw;
-            prim.aabbMaxY = prim.params[1] + hh;
-            break;
-        }
-        case SDFType::Rhombus: {
-            // params: [cx, cy, bx, by] - half diagonals
-            float hw = prim.params[2] + expand;
-            float hh = prim.params[3] + expand;
-            prim.aabbMinX = prim.params[0] - hw;
-            prim.aabbMinY = prim.params[1] - hh;
-            prim.aabbMaxX = prim.params[0] + hw;
-            prim.aabbMaxY = prim.params[1] + hh;
-            break;
-        }
-        case SDFType::Pentagon:
-        case SDFType::Hexagon: {
-            // params: [cx, cy, r]
-            float r = prim.params[2] + expand;
-            prim.aabbMinX = prim.params[0] - r;
-            prim.aabbMinY = prim.params[1] - r;
-            prim.aabbMaxX = prim.params[0] + r;
-            prim.aabbMaxY = prim.params[1] + r;
-            break;
-        }
-        case SDFType::Star: {
-            // params: [cx, cy, r, n, m]
-            float r = prim.params[2] + expand;
-            prim.aabbMinX = prim.params[0] - r;
-            prim.aabbMinY = prim.params[1] - r;
-            prim.aabbMaxX = prim.params[0] + r;
-            prim.aabbMaxY = prim.params[1] + r;
-            break;
-        }
-        case SDFType::Pie: {
-            // params: [cx, cy, sin, cos, r]
-            float r = prim.params[4] + expand;
-            prim.aabbMinX = prim.params[0] - r;
-            prim.aabbMinY = prim.params[1] - r;
-            prim.aabbMaxX = prim.params[0] + r;
-            prim.aabbMaxY = prim.params[1] + r;
-            break;
-        }
-        case SDFType::Ring: {
-            // params: [cx, cy, nx, ny, r, th]
-            float r = prim.params[4] + prim.params[5] + expand;
-            prim.aabbMinX = prim.params[0] - r;
-            prim.aabbMinY = prim.params[1] - r;
-            prim.aabbMaxX = prim.params[0] + r;
-            prim.aabbMaxY = prim.params[1] + r;
-            break;
-        }
-        case SDFType::Heart: {
-            // params: [cx, cy, scale]
-            float s = prim.params[2] * 1.5f + expand;  // Heart extends ~1.5 units
-            prim.aabbMinX = prim.params[0] - s;
-            prim.aabbMinY = prim.params[1] - s;
-            prim.aabbMaxX = prim.params[0] + s;
-            prim.aabbMaxY = prim.params[1] + s;
-            break;
-        }
-        case SDFType::Cross: {
-            // params: [cx, cy, bx, by, r]
-            float hw = std::max(prim.params[2], prim.params[3]) + expand;
-            float hh = hw;
-            prim.aabbMinX = prim.params[0] - hw;
-            prim.aabbMinY = prim.params[1] - hh;
-            prim.aabbMaxX = prim.params[0] + hw;
-            prim.aabbMaxY = prim.params[1] + hh;
-            break;
-        }
-        case SDFType::RoundedX: {
-            // params: [cx, cy, w, r]
-            float s = prim.params[2] + prim.params[3] + expand;
-            prim.aabbMinX = prim.params[0] - s;
-            prim.aabbMinY = prim.params[1] - s;
-            prim.aabbMaxX = prim.params[0] + s;
-            prim.aabbMaxY = prim.params[1] + s;
-            break;
-        }
-        case SDFType::Capsule: {
-            // params: [x0, y0, x1, y1, r]
-            float r = prim.params[4] + expand;
-            prim.aabbMinX = std::min(prim.params[0], prim.params[2]) - r;
-            prim.aabbMinY = std::min(prim.params[1], prim.params[3]) - r;
-            prim.aabbMaxX = std::max(prim.params[0], prim.params[2]) + r;
-            prim.aabbMaxY = std::max(prim.params[1], prim.params[3]) + r;
-            break;
-        }
-        case SDFType::Moon: {
-            // params: [cx, cy, d, ra, rb]
-            float r = std::max(prim.params[3], prim.params[4]) + expand;
-            prim.aabbMinX = prim.params[0] - r;
-            prim.aabbMinY = prim.params[1] - r;
-            prim.aabbMaxX = prim.params[0] + r + prim.params[2];
-            prim.aabbMaxY = prim.params[1] + r;
-            break;
-        }
-        case SDFType::Egg: {
-            // params: [cx, cy, ra, rb]
-            float r = std::max(prim.params[2], prim.params[3]) + expand;
-            prim.aabbMinX = prim.params[0] - r;
-            prim.aabbMinY = prim.params[1] - r;
-            prim.aabbMaxX = prim.params[0] + r;
-            prim.aabbMaxY = prim.params[1] + r + prim.params[2];
-            break;
-        }
-        default:
-            // Unknown type - use large bounds
-            prim.aabbMinX = -1e10f;
-            prim.aabbMinY = -1e10f;
-            prim.aabbMaxX = 1e10f;
-            prim.aabbMaxY = 1e10f;
-            break;
+Result<void> YDraw::init() {
+    if (auto res = initBase(); !res) {
+        return res;
     }
+
+    parseArgs(_argsStr);
+
+    setInitParsing(true);
+    if (!_payloadStr.empty()) {
+        if (auto res = parsePayload(_payloadStr); !res) {
+            ywarn("YDraw::init: failed to parse payload: {}", error_msg(res));
+        }
+    }
+    setInitParsing(false);
+
+    ydebug("YDraw::init: prims={} glyphs={} payload_len={}",
+           totalPendingPrimitives(), glyphCount(), _payloadStr.size());
+    yinfo("YDraw::init: parsed {} primitives, {} glyphs",
+          totalPendingPrimitives(), glyphCount());
+
+    markDirty();
+
+    // Start animation if properties were defined
+    // (startAnimation snapshots base prims — must happen after allocateBuffers,
+    //  which happens after init. So we defer to first render by calling play()
+    //  and letting render() handle the snapshot.)
+    // Actually, startAnimation needs _primitives which are set after allocateBuffers.
+    // We'll start it after first render by checking in render if animation has props but no base.
+
+    return Ok();
 }
 
 //=============================================================================
-// YDrawImpl - Implementation of YDraw
+// Args parsing
 //=============================================================================
 
-class YDrawImpl : public YDraw {
-public:
-    YDrawImpl(CardBufferManager::Ptr mgr, const GPUContext& gpu,
-              int32_t x, int32_t y,
-              uint32_t widthCells, uint32_t heightCells,
-              const std::string& args, const std::string& payload)
-        : YDraw(std::move(mgr), gpu, x, y, widthCells, heightCells)
-        , _argsStr(args)
-        , _payloadStr(payload)
-    {
-        _shaderGlyph = SHADER_GLYPH;
-    }
+void YDraw::parseArgs(const std::string& args) {
+    yinfo("YDraw::parseArgs: args='{}'", args);
 
-    ~YDrawImpl() override {
-        dispose();
-    }
+    std::istringstream iss(args);
+    std::string token;
 
-    //=========================================================================
-    // Card interface
-    //=========================================================================
-
-    Result<void> init() {
-        // Allocate metadata slot
-        auto metaResult = _cardMgr->allocateMetadata(sizeof(Metadata));
-        if (!metaResult) {
-            return Err<void>("YDraw::init: failed to allocate metadata");
-        }
-        _metaHandle = *metaResult;
-
-        yinfo("YDraw::init: allocated metadata at offset {}", _metaHandle.offset);
-
-        // Parse args
-        parseArgs(_argsStr);
-
-        // Parse payload if provided (binary format from Python)
-        if (!_payloadStr.empty()) {
-            if (auto res = parsePayload(_payloadStr); !res) {
-                ywarn("YDraw::init: failed to parse payload: {}", error_msg(res));
-            }
-        }
-
-        // Build BVH and upload primitives to GPU storage
-        if (_primCount > 0) {
-            yinfo("YDraw::init: calling rebuildAndUpload for {} primitives", _primCount);
-            if (auto res = rebuildAndUpload(); !res) {
-                return Err<void>("YDraw::init: rebuildAndUpload failed", res);
-            }
-            _dirty = false;
-        }
-
-        // Upload metadata (now with correct scene bounds and offsets)
-        if (auto res = uploadMetadata(); !res) {
-            return Err<void>("YDraw::init: failed to upload metadata");
-        }
-        _metadataDirty = false;
-
-        return Ok();
-    }
-
-    Result<void> dispose() override {
-        if (_derivedStorage.isValid() && _cardMgr) {
-            if (auto res = _cardMgr->deallocateBuffer(_derivedStorage); !res) {
-                yerror("YDraw::dispose: deallocateBuffer (derived) failed: {}", error_msg(res));
-            }
-            _derivedStorage = StorageHandle::invalid();
-            _bvhNodes = nullptr;
-            _sortedIndices = nullptr;
-            _bvhNodeCount = 0;
-        }
-
-        if (_primStorage.isValid() && _cardMgr) {
-            if (auto res = _cardMgr->deallocateBuffer(_primStorage); !res) {
-                yerror("YDraw::dispose: deallocateBuffer (prims) failed: {}", error_msg(res));
-            }
-            _primStorage = StorageHandle::invalid();
-            _primitives = nullptr;
-            _primCount = 0;
-            _primCapacity = 0;
-        }
-
-        if (_metaHandle.isValid() && _cardMgr) {
-            if (auto res = _cardMgr->deallocateMetadata(_metaHandle); !res) {
-                yerror("YDraw::dispose: deallocateMetadata failed: {}", error_msg(res));
-            }
-            _metaHandle = MetadataHandle::invalid();
-        }
-
-        _primStaging.clear();
-        _primStaging.shrink_to_fit();
-
-        return Ok();
-    }
-
-    void suspend() override {
-        // Save primitives from GPU buffer to CPU staging
-        if (_primStorage.isValid() && _primCount > 0) {
-            _primStaging.resize(_primCount);
-            std::memcpy(_primStaging.data(), _primitives, _primCount * sizeof(SDFPrimitive));
-        }
-
-        // Deallocate derived storage (BVH, sorted indices — will be rebuilt)
-        if (_derivedStorage.isValid()) {
-            _cardMgr->deallocateBuffer(_derivedStorage);
-            _derivedStorage = StorageHandle::invalid();
-            _bvhNodes = nullptr;
-            _sortedIndices = nullptr;
-            _bvhNodeCount = 0;
-        }
-
-        // Deallocate prim storage
-        if (_primStorage.isValid()) {
-            _cardMgr->deallocateBuffer(_primStorage);
-            _primStorage = StorageHandle::invalid();
-            _primitives = nullptr;
-            _primCount = 0;
-            _primCapacity = 0;
-        }
-
-        yinfo("YDraw::suspend: deallocated storage, saved {} primitives to staging",
-              _primStaging.size());
-    }
-
-    Result<void> update(float time) override {
-        (void)time;
-
-        // Reconstruct after suspend: restore primitives from staging
-        if (!_primStorage.isValid() && !_primStaging.empty()) {
-            uint32_t count = static_cast<uint32_t>(_primStaging.size());
-            if (auto res = ensurePrimCapacity(count); !res) {
-                return Err<void>("YDraw::update: failed to re-allocate prim storage");
-            }
-            _primCount = count;
-            std::memcpy(_primitives, _primStaging.data(), count * sizeof(SDFPrimitive));
-            _primStaging.clear();
-            _primStaging.shrink_to_fit();
-            _cardMgr->markBufferDirty(_primStorage);
-            _dirty = true;
-            yinfo("YDraw::update: reconstructed {} primitives from staging", count);
-        }
-
-        ydebug("YDraw::update called, _dirty={} _metadataDirty={} primCount={}",
-               _dirty, _metadataDirty, _primCount);
-
-        if (_dirty) {
-            ydebug("YDraw::update: calling rebuildAndUpload()");
-            if (auto res = rebuildAndUpload(); !res) {
-                return Err<void>("YDraw::update: rebuildAndUpload failed", res);
-            }
-            _dirty = false;
-        }
-
-        if (_metadataDirty) {
-            ydebug("YDraw::update: calling uploadMetadata()");
-            if (auto res = uploadMetadata(); !res) {
-                return Err<void>("YDraw::update: metadata upload failed", res);
-            }
-            _metadataDirty = false;
-        }
-
-        return Ok();
-    }
-
-    //=========================================================================
-    // YDraw-specific API
-    //=========================================================================
-
-    uint32_t addPrimitive(const SDFPrimitive& prim) override {
-        if (auto res = ensurePrimCapacity(_primCount + 1); !res) {
-            yerror("YDraw::addPrimitive: failed to grow storage");
-            return 0;
-        }
-        uint32_t idx = _primCount++;
-        _primitives[idx] = prim;
-
-        // Compute AABB if not set
-        if (_primitives[idx].aabbMinX == 0 && _primitives[idx].aabbMaxX == 0) {
-            computeAABB(_primitives[idx]);
-        }
-
-        _cardMgr->markBufferDirty(_primStorage);
-        _dirty = true;
-        return idx;
-    }
-
-    uint32_t addCircle(float cx, float cy, float radius,
-                       uint32_t fillColor, uint32_t strokeColor,
-                       float strokeWidth, uint32_t layer) override {
-        SDFPrimitive prim = {};
-        prim.type = static_cast<uint32_t>(SDFType::Circle);
-        prim.layer = layer;
-        prim.params[0] = cx;
-        prim.params[1] = cy;
-        prim.params[2] = radius;
-        prim.fillColor = fillColor;
-        prim.strokeColor = strokeColor;
-        prim.strokeWidth = strokeWidth;
-        return addPrimitive(prim);
-    }
-
-    uint32_t addBox(float cx, float cy, float halfW, float halfH,
-                    uint32_t fillColor, uint32_t strokeColor,
-                    float strokeWidth, float round, uint32_t layer) override {
-        SDFPrimitive prim = {};
-        prim.type = static_cast<uint32_t>(SDFType::Box);
-        prim.layer = layer;
-        prim.params[0] = cx;
-        prim.params[1] = cy;
-        prim.params[2] = halfW;
-        prim.params[3] = halfH;
-        prim.fillColor = fillColor;
-        prim.strokeColor = strokeColor;
-        prim.strokeWidth = strokeWidth;
-        prim.round = round;
-        return addPrimitive(prim);
-    }
-
-    uint32_t addSegment(float x0, float y0, float x1, float y1,
-                        uint32_t strokeColor, float strokeWidth,
-                        uint32_t layer) override {
-        SDFPrimitive prim = {};
-        prim.type = static_cast<uint32_t>(SDFType::Segment);
-        prim.layer = layer;
-        prim.params[0] = x0;
-        prim.params[1] = y0;
-        prim.params[2] = x1;
-        prim.params[3] = y1;
-        prim.strokeColor = strokeColor;
-        prim.strokeWidth = strokeWidth;
-        return addPrimitive(prim);
-    }
-
-    uint32_t addBezier2(float x0, float y0, float x1, float y1,
-                        float x2, float y2,
-                        uint32_t strokeColor, float strokeWidth,
-                        uint32_t layer) override {
-        SDFPrimitive prim = {};
-        prim.type = static_cast<uint32_t>(SDFType::Bezier2);
-        prim.layer = layer;
-        prim.params[0] = x0;
-        prim.params[1] = y0;
-        prim.params[2] = x1;
-        prim.params[3] = y1;
-        prim.params[4] = x2;
-        prim.params[5] = y2;
-        prim.strokeColor = strokeColor;
-        prim.strokeWidth = strokeWidth;
-        return addPrimitive(prim);
-    }
-
-    uint32_t addTextSpan(float x, float y, const std::string& text,
-                         float fontSize, uint32_t color,
-                         uint32_t fontId, uint32_t layer) override {
-        uint32_t idx = static_cast<uint32_t>(_textSpans.size());
-
-        TextSpan span = {};
-        span.layer = layer;
-        span.x = x;
-        span.y = y;
-        span.fontSize = fontSize;
-        span.color = color;
-        span.textOffset = static_cast<uint32_t>(_textBuffer.size());
-        span.textLength = static_cast<uint32_t>(text.size());
-        span.fontId = fontId;
-
-        _textSpans.push_back(span);
-        _textBuffer.insert(_textBuffer.end(), text.begin(), text.end());
-
-        _dirty = true;
-        return idx;
-    }
-
-    void clear() override {
-        _primCount = 0;
-        _bvhNodeCount = 0;
-        _textSpans.clear();
-        _textBuffer.clear();
-        _dirty = true;
-    }
-
-    uint32_t primitiveCount() const override {
-        return _primCount;
-    }
-
-    uint32_t textSpanCount() const override {
-        return static_cast<uint32_t>(_textSpans.size());
-    }
-
-    void markDirty() override {
-        _dirty = true;
-    }
-
-    void setBgColor(uint32_t color) override {
-        _bgColor = color;
-        _metadataDirty = true;
-    }
-
-    uint32_t bgColor() const override { return _bgColor; }
-
-    void setSceneBounds(float minX, float minY, float maxX, float maxY) override {
-        _sceneMinX = minX;
-        _sceneMinY = minY;
-        _sceneMaxX = maxX;
-        _sceneMaxY = maxY;
-        _hasExplicitBounds = true;
-        _dirty = true;
-    }
-
-    bool hasExplicitBounds() const override { return _hasExplicitBounds; }
-
-private:
-    void parseArgs(const std::string& args) {
-        yinfo("YDraw::parseArgs: args='{}'", args);
-
-        std::istringstream iss(args);
-        std::string token;
-
-        while (iss >> token) {
-            if (token == "--bg-color") {
-                std::string colorStr;
-                if (iss >> colorStr) {
-                    if (colorStr.substr(0, 2) == "0x" || colorStr.substr(0, 2) == "0X") {
-                        colorStr = colorStr.substr(2);
-                    }
-                    // Color is already in ABGR format from Python plugin
-                    _bgColor = static_cast<uint32_t>(std::stoul(colorStr, nullptr, 16));
-                    yinfo("YDraw::parseArgs: bgColor={:#010x}", _bgColor);
+    while (iss >> token) {
+        if (token == "--bg-color") {
+            std::string colorStr;
+            if (iss >> colorStr) {
+                if (colorStr.substr(0, 2) == "0x" || colorStr.substr(0, 2) == "0X") {
+                    colorStr = colorStr.substr(2);
                 }
-            } else if (token == "--show-bounds") {
-                _flags |= FLAG_SHOW_BOUNDS;
-            } else if (token == "--show-bvh") {
-                _flags |= FLAG_SHOW_BVH;
+                setBgColor(static_cast<uint32_t>(std::stoul(colorStr, nullptr, 16)));
             }
+        } else if (token == "--cell-size") {
+            std::string sizeStr;
+            if (iss >> sizeStr) {
+                setGridCellSize(std::stof(sizeStr));
+            }
+        } else if (token == "--max-prims-per-cell") {
+            std::string maxStr;
+            if (iss >> maxStr) {
+                setMaxPrimsPerCell(static_cast<uint32_t>(std::stoul(maxStr)));
+            }
+        } else if (token == "--show-bounds") {
+            addFlags(FLAG_SHOW_BOUNDS);
+        } else if (token == "--show-grid") {
+            addFlags(FLAG_SHOW_GRID);
+        } else if (token == "--show-eval-count") {
+            addFlags(FLAG_SHOW_EVAL_COUNT);
         }
-
-        _metadataDirty = true;
     }
+}
 
-    Result<void> parsePayload(const std::string& payload) {
-        yinfo("YDraw::parsePayload: payload length={}", payload.size());
+//=============================================================================
+// Payload detection
+//=============================================================================
 
-        if (payload.empty()) {
-            yinfo("YDraw::parsePayload: empty payload, nothing to parse");
-            return Ok();
-        }
+Result<void> YDraw::parsePayload(const std::string& payload) {
+    yinfo("YDraw::parsePayload: payload length={}", payload.size());
 
-        // Binary format from Python plugin:
-        // Header: [version (u32)][primitive_count (u32)][bg_color (u32)][flags (u32)]
-        // Primitives: [SDFPrimitive * primitive_count] (each 96 bytes)
-        const size_t HEADER_SIZE = 16;
-        const size_t PRIM_SIZE = sizeof(SDFPrimitive);
-
-        if (payload.size() < HEADER_SIZE) {
-            ywarn("YDraw::parsePayload: payload too small for header ({})", payload.size());
-            return Ok();
-        }
-
-        const uint8_t* data = reinterpret_cast<const uint8_t*>(payload.data());
-
-        // Read header
-        uint32_t version, primCount, bgColor, flags;
-        std::memcpy(&version, data + 0, 4);
-        std::memcpy(&primCount, data + 4, 4);
-        std::memcpy(&bgColor, data + 8, 4);
-        std::memcpy(&flags, data + 12, 4);
-
-        yinfo("YDraw::parsePayload: version={} primCount={} bgColor={:#010x} flags={}",
-              version, primCount, bgColor, flags);
-
-        if (version != 1) {
-            ywarn("YDraw::parsePayload: unknown version {}, expected 1", version);
-            return Ok();
-        }
-
-        // Update background color and flags from payload
-        _bgColor = bgColor;
-        _flags |= flags;
-        _metadataDirty = true;
-
-        // Read primitives
-        size_t expectedSize = HEADER_SIZE + primCount * PRIM_SIZE;
-        if (payload.size() < expectedSize) {
-            ywarn("YDraw::parsePayload: payload too small ({} < {})",
-                  payload.size(), expectedSize);
-            primCount = static_cast<uint32_t>((payload.size() - HEADER_SIZE) / PRIM_SIZE);
-        }
-
-        const uint8_t* primData = data + HEADER_SIZE;
-
-        // Allocate buffer and copy directly from payload (no intermediate vector)
-        if (auto res = ensurePrimCapacity(primCount); !res) {
-            return Err<void>("YDraw::parsePayload: failed to allocate prim storage");
-        }
-        _primCount = primCount;
-        std::memcpy(_primitives, primData, primCount * PRIM_SIZE);
-        _cardMgr->markBufferDirty(_primStorage);
-
-        for (uint32_t i = 0; i < primCount; i++) {
-            yinfo("YDraw::parsePayload: prim[{}] type={} layer={} fill={:#010x} aabb=[{},{},{},{}]",
-                  i, _primitives[i].type, _primitives[i].layer, _primitives[i].fillColor,
-                  _primitives[i].aabbMinX, _primitives[i].aabbMinY, _primitives[i].aabbMaxX, _primitives[i].aabbMaxY);
-        }
-
-        _dirty = true;
-        yinfo("YDraw::parsePayload: loaded {} primitives", _primCount);
-
+    if (payload.empty()) {
         return Ok();
     }
 
-    void computeSceneBounds() {
-        if (_hasExplicitBounds) return;
-
-        _sceneMinX = 1e10f;
-        _sceneMinY = 1e10f;
-        _sceneMaxX = -1e10f;
-        _sceneMaxY = -1e10f;
-
-        for (uint32_t i = 0; i < _primCount; i++) {
-            _sceneMinX = std::min(_sceneMinX, _primitives[i].aabbMinX);
-            _sceneMinY = std::min(_sceneMinY, _primitives[i].aabbMinY);
-            _sceneMaxX = std::max(_sceneMaxX, _primitives[i].aabbMaxX);
-            _sceneMaxY = std::max(_sceneMaxY, _primitives[i].aabbMaxY);
-        }
-
-        // Add padding
-        float padX = (_sceneMaxX - _sceneMinX) * 0.05f;
-        float padY = (_sceneMaxY - _sceneMinY) * 0.05f;
-        _sceneMinX -= padX;
-        _sceneMinY -= padY;
-        _sceneMaxX += padX;
-        _sceneMaxY += padY;
-
-        // Ensure valid bounds
-        if (_sceneMinX >= _sceneMaxX) {
-            _sceneMinX = 0;
-            _sceneMaxX = 100;
-        }
-        if (_sceneMinY >= _sceneMaxY) {
-            _sceneMinY = 0;
-            _sceneMaxY = 100;
+    bool isYaml = false;
+    if (payload.size() >= 4) {
+        char first = payload[0];
+        if (first == '#' || first == '-' || first == ' ' || first == '\n' ||
+            first == '\t' || (first >= 'a' && first <= 'z') ||
+            (first >= 'A' && first <= 'Z')) {
+            isYaml = true;
         }
     }
 
-    // Build BVH into temporary vectors, returning sorted indices and nodes.
-    // Called from rebuildAndUpload BEFORE buffer allocation so we know exact sizes.
-    void buildBVH(std::vector<BVHNode>& outNodes, std::vector<uint32_t>& outSortedIndices) {
-        if (_primCount == 0) return;
-
-        // Compute Morton codes for spatial sorting
-        std::vector<std::pair<uint32_t, uint32_t>> mortonPairs;
-        mortonPairs.reserve(_primCount);
-        for (uint32_t i = 0; i < _primCount; i++) {
-            float cx = (_primitives[i].aabbMinX + _primitives[i].aabbMaxX) * 0.5f;
-            float cy = (_primitives[i].aabbMinY + _primitives[i].aabbMaxY) * 0.5f;
-            uint32_t morton = morton2D(cx, cy, _sceneMinX, _sceneMinY, _sceneMaxX, _sceneMaxY);
-            mortonPairs.push_back({morton, i});
-        }
-        std::sort(mortonPairs.begin(), mortonPairs.end());
-
-        outSortedIndices.resize(_primCount);
-        for (uint32_t i = 0; i < _primCount; i++) {
-            outSortedIndices[i] = mortonPairs[i].second;
-        }
-
-        // Build BVH recursively
-        outNodes.reserve(_primCount);  // reasonable estimate
-        buildBVHRecursive(outNodes, outSortedIndices, 0, _primCount);
-
-        yinfo("YDraw::buildBVH: {} primitives -> {} BVH nodes",
-              _primCount, static_cast<uint32_t>(outNodes.size()));
+    if (isYaml) {
+        return parseYAML(payload);
+    } else {
+        return parseBinary(payload);
     }
+}
 
-    uint32_t buildBVHRecursive(std::vector<BVHNode>& nodes,
-                               const std::vector<uint32_t>& sortedIndices,
-                               uint32_t start, uint32_t end) {
-        uint32_t nodeIndex = static_cast<uint32_t>(nodes.size());
-        nodes.push_back(BVHNode{});
+//=============================================================================
+// Binary parsing
+//=============================================================================
 
-        uint32_t count = end - start;
+Result<void> YDraw::parseBinary(const std::string& payload) {
+    const size_t HEADER_SIZE = 16;
+    const size_t PRIM_SIZE = sizeof(SDFPrimitive);
 
-        if (count <= 4) {
-            // Leaf node
-            nodes[nodeIndex].primIndex = start;
-            nodes[nodeIndex].primCount = count;
-            nodes[nodeIndex].leftChild = 0xFFFFFFFF;
-            nodes[nodeIndex].rightChild = 0xFFFFFFFF;
-
-            float aabbMinX = 1e10f, aabbMinY = 1e10f;
-            float aabbMaxX = -1e10f, aabbMaxY = -1e10f;
-            for (uint32_t i = start; i < end; i++) {
-                const auto& prim = _primitives[sortedIndices[i]];
-                aabbMinX = std::min(aabbMinX, prim.aabbMinX);
-                aabbMinY = std::min(aabbMinY, prim.aabbMinY);
-                aabbMaxX = std::max(aabbMaxX, prim.aabbMaxX);
-                aabbMaxY = std::max(aabbMaxY, prim.aabbMaxY);
-            }
-            nodes[nodeIndex].aabbMinX = aabbMinX;
-            nodes[nodeIndex].aabbMinY = aabbMinY;
-            nodes[nodeIndex].aabbMaxX = aabbMaxX;
-            nodes[nodeIndex].aabbMaxY = aabbMaxY;
-        } else {
-            uint32_t mid = start + count / 2;
-            uint32_t leftChild = buildBVHRecursive(nodes, sortedIndices, start, mid);
-            uint32_t rightChild = buildBVHRecursive(nodes, sortedIndices, mid, end);
-
-            nodes[nodeIndex].leftChild = leftChild;
-            nodes[nodeIndex].rightChild = rightChild;
-            nodes[nodeIndex].primCount = 0;
-
-            const auto& left = nodes[leftChild];
-            const auto& right = nodes[rightChild];
-            nodes[nodeIndex].aabbMinX = std::min(left.aabbMinX, right.aabbMinX);
-            nodes[nodeIndex].aabbMinY = std::min(left.aabbMinY, right.aabbMinY);
-            nodes[nodeIndex].aabbMaxX = std::max(left.aabbMaxX, right.aabbMaxX);
-            nodes[nodeIndex].aabbMaxY = std::max(left.aabbMaxY, right.aabbMaxY);
-        }
-
-        return nodeIndex;
-    }
-
-    Result<void> ensurePrimCapacity(uint32_t required) {
-        if (_primStorage.isValid() && required <= _primCapacity) {
-            return Ok();
-        }
-        uint32_t newCap = std::max(required, _primCapacity == 0 ? 64u : _primCapacity * 2);
-        uint32_t newSize = newCap * sizeof(SDFPrimitive);
-
-        auto newStorage = _cardMgr->allocateBuffer(newSize);
-        if (!newStorage) {
-            return Err<void>("YDraw: failed to allocate prim storage");
-        }
-
-        if (_primCount > 0 && _primStorage.isValid()) {
-            std::memcpy(newStorage->data, _primStorage.data, _primCount * sizeof(SDFPrimitive));
-        }
-        if (_primStorage.isValid()) {
-            _cardMgr->deallocateBuffer(_primStorage);
-        }
-
-        _primStorage = *newStorage;
-        _primitives = reinterpret_cast<SDFPrimitive*>(_primStorage.data);
-        _primCapacity = newCap;
+    if (payload.size() < HEADER_SIZE) {
+        ywarn("YDraw::parseBinary: payload too small for header ({})", payload.size());
         return Ok();
     }
 
-    Result<void> rebuildAndUpload() {
-        if (_primCount == 0 && _textSpans.empty()) {
-            return Ok();
-        }
+    const uint8_t* data = reinterpret_cast<const uint8_t*>(payload.data());
 
-        // Compute scene bounds from primitives already in buffer
-        computeSceneBounds();
+    uint32_t version, primCount, bgColorVal, flagsVal;
+    std::memcpy(&version, data + 0, 4);
+    std::memcpy(&primCount, data + 4, 4);
+    std::memcpy(&bgColorVal, data + 8, 4);
+    std::memcpy(&flagsVal, data + 12, 4);
 
-        // Build BVH into temp storage first to determine exact sizes
-        std::vector<BVHNode> tempBvhNodes;
-        std::vector<uint32_t> tempSortedIndices;
-        if (_primCount > 0) {
-            buildBVH(tempBvhNodes, tempSortedIndices);
-        }
+    yinfo("YDraw::parseBinary: version={} primCount={} bgColor={:#010x} flags={}",
+          version, primCount, bgColorVal, flagsVal);
 
-        // Now we know exact sizes
-        _bvhNodeCount = static_cast<uint32_t>(tempBvhNodes.size());
-        uint32_t bvhSize = _bvhNodeCount * sizeof(BVHNode);
-        uint32_t indicesSize = _primCount * sizeof(uint32_t);
-        uint32_t textSpanSize = static_cast<uint32_t>(_textSpans.size() * sizeof(TextSpan));
-        uint32_t textBufSize = static_cast<uint32_t>(_textBuffer.size());
-        uint32_t derivedTotalSize = bvhSize + indicesSize + textSpanSize + textBufSize;
-
-        // Deallocate old derived storage
-        if (_derivedStorage.isValid()) {
-            if (auto res = _cardMgr->deallocateBuffer(_derivedStorage); !res) {
-                return Err<void>("YDraw::rebuildAndUpload: deallocateBuffer failed");
-            }
-            _derivedStorage = StorageHandle::invalid();
-            _bvhNodes = nullptr;
-            _sortedIndices = nullptr;
-        }
-
-        if (derivedTotalSize > 0) {
-            auto storageResult = _cardMgr->allocateBuffer(derivedTotalSize);
-            if (!storageResult) {
-                return Err<void>("YDraw::rebuildAndUpload: failed to allocate derived storage");
-            }
-            _derivedStorage = *storageResult;
-
-            uint8_t* base = _derivedStorage.data;
-            uint32_t offset = 0;
-
-            // Copy BVH nodes into buffer (exact fit, no wasted space)
-            _bvhNodes = reinterpret_cast<BVHNode*>(base + offset);
-            _bvhOffset = (_derivedStorage.offset + offset) / sizeof(float);
-            if (_bvhNodeCount > 0) {
-                std::memcpy(_bvhNodes, tempBvhNodes.data(), bvhSize);
-            }
-            offset += bvhSize;
-
-            // Copy sorted indices into buffer (right after BVH nodes)
-            _sortedIndices = reinterpret_cast<uint32_t*>(base + offset);
-            _sortedIndicesOffset = (_derivedStorage.offset + offset) / sizeof(float);
-            if (_primCount > 0) {
-                std::memcpy(_sortedIndices, tempSortedIndices.data(), indicesSize);
-            }
-            offset += indicesSize;
-
-            // Text spans
-            _textSpanOffset = (_derivedStorage.offset + offset) / sizeof(float);
-            if (!_textSpans.empty()) {
-                std::memcpy(base + offset, _textSpans.data(), textSpanSize);
-            }
-            offset += textSpanSize;
-
-            // Text buffer
-            _textBufferOffset = (_derivedStorage.offset + offset) / sizeof(float);
-            if (!_textBuffer.empty()) {
-                std::memcpy(base + offset, _textBuffer.data(), textBufSize);
-            }
-
-            _cardMgr->markBufferDirty(_derivedStorage);
-        }
-
-        // Primitives are already in _primStorage - just update offset
-        _primitiveOffset = _primStorage.isValid() ? _primStorage.offset / sizeof(float) : 0;
-
-        if (_primStorage.isValid()) {
-            _cardMgr->markBufferDirty(_primStorage);
-        }
-
-        _metadataDirty = true;
-
-        yinfo("YDraw::rebuildAndUpload: {} prims, {} BVH nodes, derived {} bytes",
-              _primCount, _bvhNodeCount, derivedTotalSize);
-
+    if (version != 1 && version != 2) {
+        ywarn("YDraw::parseBinary: unknown version {}", version);
         return Ok();
     }
 
-    Result<void> uploadMetadata() {
-        if (!_metaHandle.isValid()) {
-            return Err<void>("YDraw::uploadMetadata: invalid metadata handle");
-        }
+    setBgColor(bgColorVal);
+    addFlags(flagsVal);
 
-        Metadata meta = {};
-        meta.primitiveOffset = _primitiveOffset;
-        meta.primitiveCount = _primCount;
-        meta.textSpanOffset = _textSpanOffset;
-        meta.textSpanCount = static_cast<uint32_t>(_textSpans.size());
-        meta.bvhOffset = _bvhOffset;
-        meta.bvhNodeCount = _bvhNodeCount;
-        meta.glyphOffset = 0;  // TODO: positioned glyphs
-        meta.glyphCount = 0;
-        meta.sceneMinX = _sceneMinX;
-        meta.sceneMinY = _sceneMinY;
-        meta.sceneMaxX = _sceneMaxX;
-        meta.sceneMaxY = _sceneMaxY;
-        meta.widthCells = _widthCells;
-        meta.heightCells = _heightCells;
-        meta.flags = _flags;
-        meta.bgColor = _bgColor;
-
-        yinfo("YDraw::uploadMetadata: metaOffset={} slotIndex={} prims={} primOffset={} "
-              "bvhNodes={} bvhOffset={} spans={} "
-              "scene=[{},{},{},{}] size={}x{} bgColor={:#010x}",
-              _metaHandle.offset, _metaHandle.offset / 32,
-              meta.primitiveCount, meta.primitiveOffset,
-              meta.bvhNodeCount, meta.bvhOffset,
-              meta.textSpanCount, meta.sceneMinX, meta.sceneMinY,
-              meta.sceneMaxX, meta.sceneMaxY, meta.widthCells, meta.heightCells,
-              meta.bgColor);
-
-        if (auto res = _cardMgr->writeMetadata(_metaHandle, &meta, sizeof(meta)); !res) {
-            return Err<void>("YDraw::uploadMetadata: write failed");
-        }
-
-        return Ok();
+    size_t expectedSize = HEADER_SIZE + primCount * PRIM_SIZE;
+    if (payload.size() < expectedSize) {
+        ywarn("YDraw::parseBinary: payload too small ({} < {})",
+              payload.size(), expectedSize);
+        primCount = static_cast<uint32_t>((payload.size() - HEADER_SIZE) / PRIM_SIZE);
     }
 
-    // Metadata structure (matches shader layout)
-    struct Metadata {
-        uint32_t primitiveOffset;
-        uint32_t primitiveCount;
-        uint32_t textSpanOffset;
-        uint32_t textSpanCount;
-        uint32_t bvhOffset;
-        uint32_t bvhNodeCount;
-        uint32_t glyphOffset;
-        uint32_t glyphCount;
-        float sceneMinX;
-        float sceneMinY;
-        float sceneMaxX;
-        float sceneMaxY;
-        uint32_t widthCells;
-        uint32_t heightCells;
-        uint32_t flags;
-        uint32_t bgColor;
+    const uint8_t* primData = data + HEADER_SIZE;
+
+    // During init parsing, addPrimitive routes to staging
+    for (uint32_t i = 0; i < primCount; i++) {
+        SDFPrimitive prim;
+        std::memcpy(&prim, primData + i * PRIM_SIZE, PRIM_SIZE);
+        addPrimitive(prim);
+    }
+
+    yinfo("YDraw::parseBinary: loaded {} primitives", primCount);
+    return Ok();
+}
+
+//=============================================================================
+// YAML parsing
+//=============================================================================
+
+/* static */ uint32_t YDraw::parseColor(const YAML::Node& node) {
+    if (!node) return 0xFFFFFFFF;
+
+    std::string str = node.as<std::string>();
+    if (str.empty()) return 0xFFFFFFFF;
+
+    if (str[0] == '#') {
+        str = str.substr(1);
+        if (str.size() == 3) {
+            str = std::string{str[0], str[0], str[1], str[1], str[2], str[2]};
+        }
+        if (str.size() == 6) {
+            str += "FF";
+        }
+        uint32_t r = std::stoul(str.substr(0, 2), nullptr, 16);
+        uint32_t g = std::stoul(str.substr(2, 2), nullptr, 16);
+        uint32_t b = std::stoul(str.substr(4, 2), nullptr, 16);
+        uint32_t a = std::stoul(str.substr(6, 2), nullptr, 16);
+        return (a << 24) | (b << 16) | (g << 8) | r;  // ABGR
+    }
+    return 0xFFFFFFFF;
+}
+
+Result<void> YDraw::parseYAML(const std::string& yaml) {
+    try {
+        YAML::Node root = YAML::Load(yaml);
+        // IMPORTANT: check root type BEFORE any string key access on root,
+        // because yaml-cpp converts sequences to maps when you access string keys.
+        bool rootIsSequence = root.IsSequence();
+
+        // Helper: parse primitive, then check for animate block
+        auto parsePrimWithAnim = [this](const YAML::Node& item) {
+            uint32_t primBefore = totalPendingPrimitives();
+            parseYAMLPrimitive(item);
+            uint32_t primAfter = totalPendingPrimitives();
+
+            // If a primitive was added, check for animate block
+            if (primAfter > primBefore && item.IsMap()) {
+                for (auto it = item.begin(); it != item.end(); ++it) {
+                    auto shapeNode = it->second;
+                    if (shapeNode.IsMap() && shapeNode["animate"]) {
+                        parseAnimateBlock(shapeNode["animate"], primBefore);
+                    }
+                }
+            }
+        };
+
+        // Helper: parse root-level settings from a map node
+        auto parseSettings = [this](const YAML::Node& node) {
+            if (node["background"]) {
+                setBgColor(parseColor(node["background"]));
+            }
+            if (node["flags"]) {
+                auto flagsNode = node["flags"];
+                if (flagsNode.IsSequence()) {
+                    for (const auto& flag : flagsNode) {
+                        std::string f = flag.as<std::string>();
+                        if (f == "show_bounds") addFlags(FLAG_SHOW_BOUNDS);
+                        else if (f == "show_grid") addFlags(FLAG_SHOW_GRID);
+                        else if (f == "show_eval_count") addFlags(FLAG_SHOW_EVAL_COUNT);
+                    }
+                } else if (flagsNode.IsScalar()) {
+                    std::string f = flagsNode.as<std::string>();
+                    if (f == "show_bounds") addFlags(FLAG_SHOW_BOUNDS);
+                    else if (f == "show_grid") addFlags(FLAG_SHOW_GRID);
+                    else if (f == "show_eval_count") addFlags(FLAG_SHOW_EVAL_COUNT);
+                }
+            }
+            if (node["animation"]) {
+                auto animNode = node["animation"];
+                auto* anim = animation();
+                if (animNode["duration"]) anim->setDuration(animNode["duration"].as<float>());
+                if (animNode["loop"]) anim->setLoop(animNode["loop"].as<bool>());
+                if (animNode["speed"]) anim->setSpeed(animNode["speed"].as<float>());
+            }
+        };
+
+        if (rootIsSequence) {
+            for (const auto& doc : root) {
+                if (doc.IsMap()) {
+                    parseSettings(doc);
+                    if (doc["body"] && doc["body"].IsSequence()) {
+                        for (const auto& item : doc["body"]) {
+                            parsePrimWithAnim(item);
+                        }
+                    }
+                }
+            }
+        } else if (root.IsMap()) {
+            parseSettings(root);
+            if (root["body"] && root["body"].IsSequence()) {
+                for (const auto& item : root["body"]) {
+                    parsePrimWithAnim(item);
+                }
+            }
+        }
+
+        markDirty();
+        yinfo("YDraw::parseYAML: loaded {} primitives, {} glyphs",
+              primitiveCount(), glyphCount());
+
+        return Ok();
+
+    } catch (const YAML::Exception& e) {
+        return Err<void>(std::string("YAML parse error: ") + e.what());
+    }
+}
+
+void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
+    uint32_t layer = primitiveCount() + glyphCount();
+
+    // Text
+    if (item["text"]) {
+        auto t = item["text"];
+        float x = 0, y = 0, fontSize = 16;
+        uint32_t color = 0xFFFFFFFF;
+        std::string content;
+
+        if (t["position"] && t["position"].IsSequence()) {
+            x = t["position"][0].as<float>();
+            y = t["position"][1].as<float>();
+        }
+        if (t["font-size"]) fontSize = t["font-size"].as<float>();
+        if (t["fontSize"]) fontSize = t["fontSize"].as<float>();
+        if (t["color"]) color = parseColor(t["color"]);
+        if (t["content"]) content = t["content"].as<std::string>();
+
+        addText(x, y, content, fontSize, color, layer);
+        return;
+    }
+
+    // Circle
+    if (item["circle"]) {
+        auto c = item["circle"];
+        float cx = 0, cy = 0, r = 10;
+        uint32_t fill = 0, stroke = 0;
+        float strokeWidth = 0;
+
+        if (c["position"] && c["position"].IsSequence()) {
+            cx = c["position"][0].as<float>();
+            cy = c["position"][1].as<float>();
+        }
+        if (c["radius"]) r = c["radius"].as<float>();
+        if (c["fill"]) fill = parseColor(c["fill"]);
+        if (c["stroke"]) stroke = parseColor(c["stroke"]);
+        if (c["stroke-width"]) strokeWidth = c["stroke-width"].as<float>();
+
+        addCircle(cx, cy, r, fill, stroke, strokeWidth, layer);
+        return;
+    }
+
+    // Box
+    if (item["box"]) {
+        auto b = item["box"];
+        float cx = 0, cy = 0, hw = 10, hh = 10, round = 0;
+        uint32_t fill = 0, stroke = 0;
+        float strokeWidth = 0;
+
+        if (b["position"] && b["position"].IsSequence()) {
+            cx = b["position"][0].as<float>();
+            cy = b["position"][1].as<float>();
+        }
+        if (b["size"] && b["size"].IsSequence()) {
+            hw = b["size"][0].as<float>() / 2;
+            hh = b["size"][1].as<float>() / 2;
+        }
+        if (b["fill"]) fill = parseColor(b["fill"]);
+        if (b["stroke"]) stroke = parseColor(b["stroke"]);
+        if (b["stroke-width"]) strokeWidth = b["stroke-width"].as<float>();
+        if (b["round"]) round = b["round"].as<float>();
+
+        addBox(cx, cy, hw, hh, fill, stroke, strokeWidth, round, layer);
+        return;
+    }
+
+    // Segment
+    if (item["segment"]) {
+        auto s = item["segment"];
+        float x0 = 0, y0 = 0, x1 = 100, y1 = 100;
+        uint32_t stroke = 0xFFFFFFFF;
+        float strokeWidth = 1;
+
+        if (s["from"] && s["from"].IsSequence()) {
+            x0 = s["from"][0].as<float>();
+            y0 = s["from"][1].as<float>();
+        }
+        if (s["to"] && s["to"].IsSequence()) {
+            x1 = s["to"][0].as<float>();
+            y1 = s["to"][1].as<float>();
+        }
+        if (s["stroke"]) stroke = parseColor(s["stroke"]);
+        if (s["stroke-width"]) strokeWidth = s["stroke-width"].as<float>();
+
+        addSegment(x0, y0, x1, y1, stroke, strokeWidth, layer);
+        return;
+    }
+
+    // Triangle
+    if (item["triangle"]) {
+        auto t = item["triangle"];
+        float x0 = 0, y0 = 0, x1 = 50, y1 = 100, x2 = 100, y2 = 0;
+        uint32_t fill = 0, stroke = 0;
+        float strokeWidth = 0;
+
+        if (t["p0"] && t["p0"].IsSequence()) {
+            x0 = t["p0"][0].as<float>();
+            y0 = t["p0"][1].as<float>();
+        }
+        if (t["p1"] && t["p1"].IsSequence()) {
+            x1 = t["p1"][0].as<float>();
+            y1 = t["p1"][1].as<float>();
+        }
+        if (t["p2"] && t["p2"].IsSequence()) {
+            x2 = t["p2"][0].as<float>();
+            y2 = t["p2"][1].as<float>();
+        }
+        if (t["fill"]) fill = parseColor(t["fill"]);
+        if (t["stroke"]) stroke = parseColor(t["stroke"]);
+        if (t["stroke-width"]) strokeWidth = t["stroke-width"].as<float>();
+
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::Triangle);
+        prim.layer = layer;
+        prim.params[0] = x0; prim.params[1] = y0;
+        prim.params[2] = x1; prim.params[3] = y1;
+        prim.params[4] = x2; prim.params[5] = y2;
+        prim.fillColor = fill;
+        prim.strokeColor = stroke;
+        prim.strokeWidth = strokeWidth;
+        addPrimitive(prim);
+        return;
+    }
+
+    // Bezier
+    if (item["bezier"]) {
+        auto b = item["bezier"];
+        float x0 = 0, y0 = 0, x1 = 50, y1 = 50, x2 = 100, y2 = 0;
+        uint32_t stroke = 0xFFFFFFFF;
+        float strokeWidth = 1;
+
+        if (b["p0"] && b["p0"].IsSequence()) {
+            x0 = b["p0"][0].as<float>();
+            y0 = b["p0"][1].as<float>();
+        }
+        if (b["p1"] && b["p1"].IsSequence()) {
+            x1 = b["p1"][0].as<float>();
+            y1 = b["p1"][1].as<float>();
+        }
+        if (b["p2"] && b["p2"].IsSequence()) {
+            x2 = b["p2"][0].as<float>();
+            y2 = b["p2"][1].as<float>();
+        }
+        if (b["stroke"]) stroke = parseColor(b["stroke"]);
+        if (b["stroke-width"]) strokeWidth = b["stroke-width"].as<float>();
+
+        addBezier2(x0, y0, x1, y1, x2, y2, stroke, strokeWidth, layer);
+        return;
+    }
+
+    // Ellipse
+    if (item["ellipse"]) {
+        auto e = item["ellipse"];
+        float cx = 0, cy = 0, rx = 20, ry = 10;
+        uint32_t fill = 0, stroke = 0;
+        float strokeWidth = 0;
+
+        if (e["position"] && e["position"].IsSequence()) {
+            cx = e["position"][0].as<float>();
+            cy = e["position"][1].as<float>();
+        }
+        if (e["radii"] && e["radii"].IsSequence()) {
+            rx = e["radii"][0].as<float>();
+            ry = e["radii"][1].as<float>();
+        }
+        if (e["fill"]) fill = parseColor(e["fill"]);
+        if (e["stroke"]) stroke = parseColor(e["stroke"]);
+        if (e["stroke-width"]) strokeWidth = e["stroke-width"].as<float>();
+
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::Ellipse);
+        prim.layer = layer;
+        prim.params[0] = cx; prim.params[1] = cy;
+        prim.params[2] = rx; prim.params[3] = ry;
+        prim.fillColor = fill;
+        prim.strokeColor = stroke;
+        prim.strokeWidth = strokeWidth;
+        addPrimitive(prim);
+        return;
+    }
+
+    // Arc
+    if (item["arc"]) {
+        auto a = item["arc"];
+        float cx = 0, cy = 0, ra = 20, rb = 2;
+        float angle = 90.0f;
+        uint32_t fill = 0, stroke = 0xFFFFFFFF;
+        float strokeWidth = 0;
+
+        if (a["position"] && a["position"].IsSequence()) {
+            cx = a["position"][0].as<float>();
+            cy = a["position"][1].as<float>();
+        }
+        if (a["angle"]) angle = a["angle"].as<float>();
+        if (a["radius"]) ra = a["radius"].as<float>();
+        if (a["thickness"]) rb = a["thickness"].as<float>();
+        if (a["fill"]) fill = parseColor(a["fill"]);
+        if (a["stroke"]) stroke = parseColor(a["stroke"]);
+        if (a["stroke-width"]) strokeWidth = a["stroke-width"].as<float>();
+
+        float rad = angle * 3.14159265f / 180.0f;
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::Arc);
+        prim.layer = layer;
+        prim.params[0] = cx; prim.params[1] = cy;
+        prim.params[2] = std::sin(rad); prim.params[3] = std::cos(rad);
+        prim.params[4] = ra; prim.params[5] = rb;
+        prim.fillColor = fill;
+        prim.strokeColor = stroke;
+        prim.strokeWidth = strokeWidth;
+        addPrimitive(prim);
+        return;
+    }
+
+    // Pentagon
+    if (item["pentagon"]) {
+        auto p = item["pentagon"];
+        float cx = 0, cy = 0, r = 20;
+        uint32_t fill = 0, stroke = 0;
+        float strokeWidth = 0;
+
+        if (p["position"] && p["position"].IsSequence()) {
+            cx = p["position"][0].as<float>();
+            cy = p["position"][1].as<float>();
+        }
+        if (p["radius"]) r = p["radius"].as<float>();
+        if (p["fill"]) fill = parseColor(p["fill"]);
+        if (p["stroke"]) stroke = parseColor(p["stroke"]);
+        if (p["stroke-width"]) strokeWidth = p["stroke-width"].as<float>();
+
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::Pentagon);
+        prim.layer = layer;
+        prim.params[0] = cx; prim.params[1] = cy;
+        prim.params[2] = r;
+        prim.fillColor = fill;
+        prim.strokeColor = stroke;
+        prim.strokeWidth = strokeWidth;
+        addPrimitive(prim);
+        return;
+    }
+
+    // Hexagon
+    if (item["hexagon"]) {
+        auto h = item["hexagon"];
+        float cx = 0, cy = 0, r = 20;
+        uint32_t fill = 0, stroke = 0;
+        float strokeWidth = 0;
+
+        if (h["position"] && h["position"].IsSequence()) {
+            cx = h["position"][0].as<float>();
+            cy = h["position"][1].as<float>();
+        }
+        if (h["radius"]) r = h["radius"].as<float>();
+        if (h["fill"]) fill = parseColor(h["fill"]);
+        if (h["stroke"]) stroke = parseColor(h["stroke"]);
+        if (h["stroke-width"]) strokeWidth = h["stroke-width"].as<float>();
+
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::Hexagon);
+        prim.layer = layer;
+        prim.params[0] = cx; prim.params[1] = cy;
+        prim.params[2] = r;
+        prim.fillColor = fill;
+        prim.strokeColor = stroke;
+        prim.strokeWidth = strokeWidth;
+        addPrimitive(prim);
+        return;
+    }
+
+    // Star
+    if (item["star"]) {
+        auto s = item["star"];
+        float cx = 0, cy = 0, r = 20;
+        float n = 5, m = 2.5f;
+        uint32_t fill = 0, stroke = 0;
+        float strokeWidth = 0;
+
+        if (s["position"] && s["position"].IsSequence()) {
+            cx = s["position"][0].as<float>();
+            cy = s["position"][1].as<float>();
+        }
+        if (s["radius"]) r = s["radius"].as<float>();
+        if (s["points"]) n = s["points"].as<float>();
+        if (s["inner"]) m = s["inner"].as<float>();
+        if (s["fill"]) fill = parseColor(s["fill"]);
+        if (s["stroke"]) stroke = parseColor(s["stroke"]);
+        if (s["stroke-width"]) strokeWidth = s["stroke-width"].as<float>();
+
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::Star);
+        prim.layer = layer;
+        prim.params[0] = cx; prim.params[1] = cy;
+        prim.params[2] = r; prim.params[3] = n; prim.params[4] = m;
+        prim.fillColor = fill;
+        prim.strokeColor = stroke;
+        prim.strokeWidth = strokeWidth;
+        addPrimitive(prim);
+        return;
+    }
+
+    // Pie
+    if (item["pie"]) {
+        auto p = item["pie"];
+        float cx = 0, cy = 0, r = 20;
+        float angle = 45.0f;
+        uint32_t fill = 0, stroke = 0;
+        float strokeWidth = 0;
+
+        if (p["position"] && p["position"].IsSequence()) {
+            cx = p["position"][0].as<float>();
+            cy = p["position"][1].as<float>();
+        }
+        if (p["angle"]) angle = p["angle"].as<float>();
+        if (p["radius"]) r = p["radius"].as<float>();
+        if (p["fill"]) fill = parseColor(p["fill"]);
+        if (p["stroke"]) stroke = parseColor(p["stroke"]);
+        if (p["stroke-width"]) strokeWidth = p["stroke-width"].as<float>();
+
+        float rad = angle * 3.14159265f / 180.0f;
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::Pie);
+        prim.layer = layer;
+        prim.params[0] = cx; prim.params[1] = cy;
+        prim.params[2] = std::sin(rad); prim.params[3] = std::cos(rad);
+        prim.params[4] = r;
+        prim.fillColor = fill;
+        prim.strokeColor = stroke;
+        prim.strokeWidth = strokeWidth;
+        addPrimitive(prim);
+        return;
+    }
+
+    // Ring
+    if (item["ring"]) {
+        auto rg = item["ring"];
+        float cx = 0, cy = 0, r = 20, th = 4;
+        float angle = 0.0f;
+        uint32_t fill = 0, stroke = 0;
+        float strokeWidth = 0;
+
+        if (rg["position"] && rg["position"].IsSequence()) {
+            cx = rg["position"][0].as<float>();
+            cy = rg["position"][1].as<float>();
+        }
+        if (rg["angle"]) angle = rg["angle"].as<float>();
+        if (rg["radius"]) r = rg["radius"].as<float>();
+        if (rg["thickness"]) th = rg["thickness"].as<float>();
+        if (rg["fill"]) fill = parseColor(rg["fill"]);
+        if (rg["stroke"]) stroke = parseColor(rg["stroke"]);
+        if (rg["stroke-width"]) strokeWidth = rg["stroke-width"].as<float>();
+
+        float rad = angle * 3.14159265f / 180.0f;
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::Ring);
+        prim.layer = layer;
+        prim.params[0] = cx; prim.params[1] = cy;
+        prim.params[2] = std::sin(rad); prim.params[3] = std::cos(rad);
+        prim.params[4] = r; prim.params[5] = th;
+        prim.fillColor = fill;
+        prim.strokeColor = stroke;
+        prim.strokeWidth = strokeWidth;
+        addPrimitive(prim);
+        return;
+    }
+
+    // Heart
+    if (item["heart"]) {
+        auto h = item["heart"];
+        float cx = 0, cy = 0, scale = 20;
+        uint32_t fill = 0xFF0000FF, stroke = 0;
+        float strokeWidth = 0;
+
+        if (h["position"] && h["position"].IsSequence()) {
+            cx = h["position"][0].as<float>();
+            cy = h["position"][1].as<float>();
+        }
+        if (h["scale"]) scale = h["scale"].as<float>();
+        if (h["fill"]) fill = parseColor(h["fill"]);
+        if (h["stroke"]) stroke = parseColor(h["stroke"]);
+        if (h["stroke-width"]) strokeWidth = h["stroke-width"].as<float>();
+
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::Heart);
+        prim.layer = layer;
+        prim.params[0] = cx; prim.params[1] = cy;
+        prim.params[2] = scale;
+        prim.fillColor = fill;
+        prim.strokeColor = stroke;
+        prim.strokeWidth = strokeWidth;
+        addPrimitive(prim);
+        return;
+    }
+
+    // Cross
+    if (item["cross"]) {
+        auto c = item["cross"];
+        float cx = 0, cy = 0, w = 20, h = 5, r = 0;
+        uint32_t fill = 0, stroke = 0;
+        float strokeWidth = 0;
+
+        if (c["position"] && c["position"].IsSequence()) {
+            cx = c["position"][0].as<float>();
+            cy = c["position"][1].as<float>();
+        }
+        if (c["size"] && c["size"].IsSequence()) {
+            w = c["size"][0].as<float>();
+            h = c["size"][1].as<float>();
+        }
+        if (c["round"]) r = c["round"].as<float>();
+        if (c["fill"]) fill = parseColor(c["fill"]);
+        if (c["stroke"]) stroke = parseColor(c["stroke"]);
+        if (c["stroke-width"]) strokeWidth = c["stroke-width"].as<float>();
+
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::Cross);
+        prim.layer = layer;
+        prim.params[0] = cx; prim.params[1] = cy;
+        prim.params[2] = w; prim.params[3] = h; prim.params[4] = r;
+        prim.fillColor = fill;
+        prim.strokeColor = stroke;
+        prim.strokeWidth = strokeWidth;
+        addPrimitive(prim);
+        return;
+    }
+
+    // RoundedX
+    if (item["rounded_x"]) {
+        auto x = item["rounded_x"];
+        float cx = 0, cy = 0, w = 20, r = 3;
+        uint32_t fill = 0, stroke = 0;
+        float strokeWidth = 0;
+
+        if (x["position"] && x["position"].IsSequence()) {
+            cx = x["position"][0].as<float>();
+            cy = x["position"][1].as<float>();
+        }
+        if (x["width"]) w = x["width"].as<float>();
+        if (x["round"]) r = x["round"].as<float>();
+        if (x["fill"]) fill = parseColor(x["fill"]);
+        if (x["stroke"]) stroke = parseColor(x["stroke"]);
+        if (x["stroke-width"]) strokeWidth = x["stroke-width"].as<float>();
+
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::RoundedX);
+        prim.layer = layer;
+        prim.params[0] = cx; prim.params[1] = cy;
+        prim.params[2] = w; prim.params[3] = r;
+        prim.fillColor = fill;
+        prim.strokeColor = stroke;
+        prim.strokeWidth = strokeWidth;
+        addPrimitive(prim);
+        return;
+    }
+
+    // Capsule (2D or 3D - detect by checking for 'height' key or 3D position)
+    if (item["capsule"]) {
+        auto c = item["capsule"];
+
+        // 3D capsule: has 'height' key or 3-element position
+        bool is3D = c["height"].IsDefined();
+        if (!is3D && c["position"] && c["position"].IsSequence() && c["position"].size() > 2) {
+            is3D = true;
+        }
+
+        if (is3D) {
+            SDFPrimitive prim = {};
+            prim.type = static_cast<uint32_t>(SDFType::VerticalCapsule3D);
+            prim.layer = layer;
+            if (c["position"] && c["position"].IsSequence()) {
+                prim.params[0] = c["position"][0].as<float>();
+                prim.params[1] = c["position"][1].as<float>();
+                prim.params[2] = c["position"].size() > 2 ? c["position"][2].as<float>() : 0.0f;
+            }
+            if (c["height"]) prim.params[3] = c["height"].as<float>();
+            else prim.params[3] = 0.3f;
+            if (c["radius"]) prim.params[4] = c["radius"].as<float>();
+            else prim.params[4] = 0.1f;
+            if (c["fill"]) prim.fillColor = parseColor(c["fill"]);
+            if (c["stroke"]) prim.strokeColor = parseColor(c["stroke"]);
+            if (c["stroke-width"]) prim.strokeWidth = c["stroke-width"].as<float>();
+            addPrimitive(prim);
+            return;
+        }
+
+        // 2D capsule
+        float x0 = 0, y0 = 0, x1 = 100, y1 = 0, r = 10;
+        uint32_t fill = 0, stroke = 0;
+        float strokeWidth = 0;
+
+        if (c["from"] && c["from"].IsSequence()) {
+            x0 = c["from"][0].as<float>();
+            y0 = c["from"][1].as<float>();
+        }
+        if (c["to"] && c["to"].IsSequence()) {
+            x1 = c["to"][0].as<float>();
+            y1 = c["to"][1].as<float>();
+        }
+        if (c["radius"]) r = c["radius"].as<float>();
+        if (c["fill"]) fill = parseColor(c["fill"]);
+        if (c["stroke"]) stroke = parseColor(c["stroke"]);
+        if (c["stroke-width"]) strokeWidth = c["stroke-width"].as<float>();
+
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::Capsule);
+        prim.layer = layer;
+        prim.params[0] = x0; prim.params[1] = y0;
+        prim.params[2] = x1; prim.params[3] = y1;
+        prim.params[4] = r;
+        prim.fillColor = fill;
+        prim.strokeColor = stroke;
+        prim.strokeWidth = strokeWidth;
+        addPrimitive(prim);
+        return;
+    }
+
+    // Rhombus
+    if (item["rhombus"]) {
+        auto r = item["rhombus"];
+        float cx = 0, cy = 0, w = 20, h = 30;
+        uint32_t fill = 0, stroke = 0;
+        float strokeWidth = 0;
+
+        if (r["position"] && r["position"].IsSequence()) {
+            cx = r["position"][0].as<float>();
+            cy = r["position"][1].as<float>();
+        }
+        if (r["size"] && r["size"].IsSequence()) {
+            w = r["size"][0].as<float>();
+            h = r["size"][1].as<float>();
+        }
+        if (r["fill"]) fill = parseColor(r["fill"]);
+        if (r["stroke"]) stroke = parseColor(r["stroke"]);
+        if (r["stroke-width"]) strokeWidth = r["stroke-width"].as<float>();
+
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::Rhombus);
+        prim.layer = layer;
+        prim.params[0] = cx; prim.params[1] = cy;
+        prim.params[2] = w; prim.params[3] = h;
+        prim.fillColor = fill;
+        prim.strokeColor = stroke;
+        prim.strokeWidth = strokeWidth;
+        addPrimitive(prim);
+        return;
+    }
+
+    // Moon
+    if (item["moon"]) {
+        auto m = item["moon"];
+        float cx = 0, cy = 0, d = 10, ra = 20, rb = 15;
+        uint32_t fill = 0, stroke = 0;
+        float strokeWidth = 0;
+
+        if (m["position"] && m["position"].IsSequence()) {
+            cx = m["position"][0].as<float>();
+            cy = m["position"][1].as<float>();
+        }
+        if (m["distance"]) d = m["distance"].as<float>();
+        if (m["radius_outer"]) ra = m["radius_outer"].as<float>();
+        if (m["radius_inner"]) rb = m["radius_inner"].as<float>();
+        if (m["fill"]) fill = parseColor(m["fill"]);
+        if (m["stroke"]) stroke = parseColor(m["stroke"]);
+        if (m["stroke-width"]) strokeWidth = m["stroke-width"].as<float>();
+
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::Moon);
+        prim.layer = layer;
+        prim.params[0] = cx; prim.params[1] = cy;
+        prim.params[2] = d; prim.params[3] = ra; prim.params[4] = rb;
+        prim.fillColor = fill;
+        prim.strokeColor = stroke;
+        prim.strokeWidth = strokeWidth;
+        addPrimitive(prim);
+        return;
+    }
+
+    // Egg
+    if (item["egg"]) {
+        auto e = item["egg"];
+        float cx = 0, cy = 0, ra = 20, rb = 10;
+        uint32_t fill = 0, stroke = 0;
+        float strokeWidth = 0;
+
+        if (e["position"] && e["position"].IsSequence()) {
+            cx = e["position"][0].as<float>();
+            cy = e["position"][1].as<float>();
+        }
+        if (e["radius_bottom"]) ra = e["radius_bottom"].as<float>();
+        if (e["radius_top"]) rb = e["radius_top"].as<float>();
+        if (e["fill"]) fill = parseColor(e["fill"]);
+        if (e["stroke"]) stroke = parseColor(e["stroke"]);
+        if (e["stroke-width"]) strokeWidth = e["stroke-width"].as<float>();
+
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::Egg);
+        prim.layer = layer;
+        prim.params[0] = cx; prim.params[1] = cy;
+        prim.params[2] = ra; prim.params[3] = rb;
+        prim.fillColor = fill;
+        prim.strokeColor = stroke;
+        prim.strokeWidth = strokeWidth;
+        addPrimitive(prim);
+        return;
+    }
+
+    // Chamfer Box
+    if (item["chamfer_box"]) {
+        auto e = item["chamfer_box"];
+        float cx = 0, cy = 0, hx = 30, hy = 20, chamfer = 5;
+        uint32_t fill = 0, stroke = 0;
+        float strokeWidth = 0;
+        if (e["position"] && e["position"].IsSequence()) {
+            cx = e["position"][0].as<float>();
+            cy = e["position"][1].as<float>();
+        }
+        if (e["half_size"] && e["half_size"].IsSequence()) {
+            hx = e["half_size"][0].as<float>();
+            hy = e["half_size"][1].as<float>();
+        }
+        if (e["chamfer"]) chamfer = e["chamfer"].as<float>();
+        if (e["fill"]) fill = parseColor(e["fill"]);
+        if (e["stroke"]) stroke = parseColor(e["stroke"]);
+        if (e["stroke-width"]) strokeWidth = e["stroke-width"].as<float>();
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::ChamferBox);
+        prim.layer = layer;
+        prim.params[0] = cx; prim.params[1] = cy;
+        prim.params[2] = hx; prim.params[3] = hy;
+        prim.params[4] = chamfer;
+        prim.fillColor = fill;
+        prim.strokeColor = stroke;
+        prim.strokeWidth = strokeWidth;
+        addPrimitive(prim);
+        return;
+    }
+
+    // Oriented Box
+    if (item["oriented_box"]) {
+        auto e = item["oriented_box"];
+        float ax = 0, ay = 0, bx = 30, by = 20, thickness = 5;
+        uint32_t fill = 0, stroke = 0;
+        float strokeWidth = 0;
+        if (e["a"] && e["a"].IsSequence()) {
+            ax = e["a"][0].as<float>();
+            ay = e["a"][1].as<float>();
+        }
+        if (e["b"] && e["b"].IsSequence()) {
+            bx = e["b"][0].as<float>();
+            by = e["b"][1].as<float>();
+        }
+        if (e["thickness"]) thickness = e["thickness"].as<float>();
+        if (e["fill"]) fill = parseColor(e["fill"]);
+        if (e["stroke"]) stroke = parseColor(e["stroke"]);
+        if (e["stroke-width"]) strokeWidth = e["stroke-width"].as<float>();
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::OrientedBox);
+        prim.layer = layer;
+        prim.params[0] = ax; prim.params[1] = ay;
+        prim.params[2] = bx; prim.params[3] = by;
+        prim.params[4] = thickness;
+        prim.fillColor = fill;
+        prim.strokeColor = stroke;
+        prim.strokeWidth = strokeWidth;
+        addPrimitive(prim);
+        return;
+    }
+
+    // Trapezoid
+    if (item["trapezoid"]) {
+        auto e = item["trapezoid"];
+        float cx = 0, cy = 0, r1 = 30, r2 = 15, he = 20;
+        uint32_t fill = 0, stroke = 0;
+        float strokeWidth = 0;
+        if (e["position"] && e["position"].IsSequence()) {
+            cx = e["position"][0].as<float>();
+            cy = e["position"][1].as<float>();
+        }
+        if (e["r1"]) r1 = e["r1"].as<float>();
+        if (e["r2"]) r2 = e["r2"].as<float>();
+        if (e["height"]) he = e["height"].as<float>();
+        if (e["fill"]) fill = parseColor(e["fill"]);
+        if (e["stroke"]) stroke = parseColor(e["stroke"]);
+        if (e["stroke-width"]) strokeWidth = e["stroke-width"].as<float>();
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::Trapezoid);
+        prim.layer = layer;
+        prim.params[0] = cx; prim.params[1] = cy;
+        prim.params[2] = r1; prim.params[3] = r2;
+        prim.params[4] = he;
+        prim.fillColor = fill;
+        prim.strokeColor = stroke;
+        prim.strokeWidth = strokeWidth;
+        addPrimitive(prim);
+        return;
+    }
+
+    // Parallelogram
+    if (item["parallelogram"]) {
+        auto e = item["parallelogram"];
+        float cx = 0, cy = 0, wi = 30, he = 20, sk = 10;
+        uint32_t fill = 0, stroke = 0;
+        float strokeWidth = 0;
+        if (e["position"] && e["position"].IsSequence()) {
+            cx = e["position"][0].as<float>();
+            cy = e["position"][1].as<float>();
+        }
+        if (e["width"]) wi = e["width"].as<float>();
+        if (e["height"]) he = e["height"].as<float>();
+        if (e["skew"]) sk = e["skew"].as<float>();
+        if (e["fill"]) fill = parseColor(e["fill"]);
+        if (e["stroke"]) stroke = parseColor(e["stroke"]);
+        if (e["stroke-width"]) strokeWidth = e["stroke-width"].as<float>();
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::Parallelogram);
+        prim.layer = layer;
+        prim.params[0] = cx; prim.params[1] = cy;
+        prim.params[2] = wi; prim.params[3] = he;
+        prim.params[4] = sk;
+        prim.fillColor = fill;
+        prim.strokeColor = stroke;
+        prim.strokeWidth = strokeWidth;
+        addPrimitive(prim);
+        return;
+    }
+
+    // Equilateral Triangle
+    if (item["equilateral_triangle"]) {
+        auto e = item["equilateral_triangle"];
+        float cx = 0, cy = 0, r = 20;
+        uint32_t fill = 0, stroke = 0;
+        float strokeWidth = 0;
+        if (e["position"] && e["position"].IsSequence()) {
+            cx = e["position"][0].as<float>();
+            cy = e["position"][1].as<float>();
+        }
+        if (e["radius"]) r = e["radius"].as<float>();
+        if (e["fill"]) fill = parseColor(e["fill"]);
+        if (e["stroke"]) stroke = parseColor(e["stroke"]);
+        if (e["stroke-width"]) strokeWidth = e["stroke-width"].as<float>();
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::EquilateralTriangle);
+        prim.layer = layer;
+        prim.params[0] = cx; prim.params[1] = cy;
+        prim.params[2] = r;
+        prim.fillColor = fill;
+        prim.strokeColor = stroke;
+        prim.strokeWidth = strokeWidth;
+        addPrimitive(prim);
+        return;
+    }
+
+    // Isosceles Triangle
+    if (item["isosceles_triangle"]) {
+        auto e = item["isosceles_triangle"];
+        float cx = 0, cy = 0, hw = 15, he = 20;
+        uint32_t fill = 0, stroke = 0;
+        float strokeWidth = 0;
+        if (e["position"] && e["position"].IsSequence()) {
+            cx = e["position"][0].as<float>();
+            cy = e["position"][1].as<float>();
+        }
+        if (e["half_width"]) hw = e["half_width"].as<float>();
+        if (e["height"]) he = e["height"].as<float>();
+        if (e["fill"]) fill = parseColor(e["fill"]);
+        if (e["stroke"]) stroke = parseColor(e["stroke"]);
+        if (e["stroke-width"]) strokeWidth = e["stroke-width"].as<float>();
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::IsoscelesTriangle);
+        prim.layer = layer;
+        prim.params[0] = cx; prim.params[1] = cy;
+        prim.params[2] = hw; prim.params[3] = he;
+        prim.fillColor = fill;
+        prim.strokeColor = stroke;
+        prim.strokeWidth = strokeWidth;
+        addPrimitive(prim);
+        return;
+    }
+
+    // Uneven Capsule
+    if (item["uneven_capsule"]) {
+        auto e = item["uneven_capsule"];
+        float cx = 0, cy = 0, r1 = 10, r2 = 5, h = 20;
+        uint32_t fill = 0, stroke = 0;
+        float strokeWidth = 0;
+        if (e["position"] && e["position"].IsSequence()) {
+            cx = e["position"][0].as<float>();
+            cy = e["position"][1].as<float>();
+        }
+        if (e["r1"]) r1 = e["r1"].as<float>();
+        if (e["r2"]) r2 = e["r2"].as<float>();
+        if (e["height"]) h = e["height"].as<float>();
+        if (e["fill"]) fill = parseColor(e["fill"]);
+        if (e["stroke"]) stroke = parseColor(e["stroke"]);
+        if (e["stroke-width"]) strokeWidth = e["stroke-width"].as<float>();
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::UnevenCapsule);
+        prim.layer = layer;
+        prim.params[0] = cx; prim.params[1] = cy;
+        prim.params[2] = r1; prim.params[3] = r2;
+        prim.params[4] = h;
+        prim.fillColor = fill;
+        prim.strokeColor = stroke;
+        prim.strokeWidth = strokeWidth;
+        addPrimitive(prim);
+        return;
+    }
+
+    // Octogon
+    if (item["octogon"]) {
+        auto e = item["octogon"];
+        float cx = 0, cy = 0, r = 20;
+        uint32_t fill = 0, stroke = 0;
+        float strokeWidth = 0;
+        if (e["position"] && e["position"].IsSequence()) {
+            cx = e["position"][0].as<float>();
+            cy = e["position"][1].as<float>();
+        }
+        if (e["radius"]) r = e["radius"].as<float>();
+        if (e["fill"]) fill = parseColor(e["fill"]);
+        if (e["stroke"]) stroke = parseColor(e["stroke"]);
+        if (e["stroke-width"]) strokeWidth = e["stroke-width"].as<float>();
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::Octogon);
+        prim.layer = layer;
+        prim.params[0] = cx; prim.params[1] = cy;
+        prim.params[2] = r;
+        prim.fillColor = fill;
+        prim.strokeColor = stroke;
+        prim.strokeWidth = strokeWidth;
+        addPrimitive(prim);
+        return;
+    }
+
+    // Hexagram
+    if (item["hexagram"]) {
+        auto e = item["hexagram"];
+        float cx = 0, cy = 0, r = 20;
+        uint32_t fill = 0, stroke = 0;
+        float strokeWidth = 0;
+        if (e["position"] && e["position"].IsSequence()) {
+            cx = e["position"][0].as<float>();
+            cy = e["position"][1].as<float>();
+        }
+        if (e["radius"]) r = e["radius"].as<float>();
+        if (e["fill"]) fill = parseColor(e["fill"]);
+        if (e["stroke"]) stroke = parseColor(e["stroke"]);
+        if (e["stroke-width"]) strokeWidth = e["stroke-width"].as<float>();
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::Hexagram);
+        prim.layer = layer;
+        prim.params[0] = cx; prim.params[1] = cy;
+        prim.params[2] = r;
+        prim.fillColor = fill;
+        prim.strokeColor = stroke;
+        prim.strokeWidth = strokeWidth;
+        addPrimitive(prim);
+        return;
+    }
+
+    // Pentagram
+    if (item["pentagram"]) {
+        auto e = item["pentagram"];
+        float cx = 0, cy = 0, r = 20;
+        uint32_t fill = 0, stroke = 0;
+        float strokeWidth = 0;
+        if (e["position"] && e["position"].IsSequence()) {
+            cx = e["position"][0].as<float>();
+            cy = e["position"][1].as<float>();
+        }
+        if (e["radius"]) r = e["radius"].as<float>();
+        if (e["fill"]) fill = parseColor(e["fill"]);
+        if (e["stroke"]) stroke = parseColor(e["stroke"]);
+        if (e["stroke-width"]) strokeWidth = e["stroke-width"].as<float>();
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::Pentagram);
+        prim.layer = layer;
+        prim.params[0] = cx; prim.params[1] = cy;
+        prim.params[2] = r;
+        prim.fillColor = fill;
+        prim.strokeColor = stroke;
+        prim.strokeWidth = strokeWidth;
+        addPrimitive(prim);
+        return;
+    }
+
+    // Cut Disk
+    if (item["cut_disk"]) {
+        auto e = item["cut_disk"];
+        float cx = 0, cy = 0, r = 20, h = 10;
+        uint32_t fill = 0, stroke = 0;
+        float strokeWidth = 0;
+        if (e["position"] && e["position"].IsSequence()) {
+            cx = e["position"][0].as<float>();
+            cy = e["position"][1].as<float>();
+        }
+        if (e["radius"]) r = e["radius"].as<float>();
+        if (e["h"]) h = e["h"].as<float>();
+        if (e["fill"]) fill = parseColor(e["fill"]);
+        if (e["stroke"]) stroke = parseColor(e["stroke"]);
+        if (e["stroke-width"]) strokeWidth = e["stroke-width"].as<float>();
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::CutDisk);
+        prim.layer = layer;
+        prim.params[0] = cx; prim.params[1] = cy;
+        prim.params[2] = r; prim.params[3] = h;
+        prim.fillColor = fill;
+        prim.strokeColor = stroke;
+        prim.strokeWidth = strokeWidth;
+        addPrimitive(prim);
+        return;
+    }
+
+    // Horseshoe
+    if (item["horseshoe"]) {
+        auto e = item["horseshoe"];
+        float cx = 0, cy = 0, angle = 1.0f, r = 20, w1 = 5, w2 = 5;
+        uint32_t fill = 0, stroke = 0;
+        float strokeWidth = 0;
+        if (e["position"] && e["position"].IsSequence()) {
+            cx = e["position"][0].as<float>();
+            cy = e["position"][1].as<float>();
+        }
+        if (e["angle"]) angle = e["angle"].as<float>();
+        if (e["radius"]) r = e["radius"].as<float>();
+        if (e["width"] && e["width"].IsSequence()) {
+            w1 = e["width"][0].as<float>();
+            w2 = e["width"][1].as<float>();
+        }
+        if (e["fill"]) fill = parseColor(e["fill"]);
+        if (e["stroke"]) stroke = parseColor(e["stroke"]);
+        if (e["stroke-width"]) strokeWidth = e["stroke-width"].as<float>();
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::Horseshoe);
+        prim.layer = layer;
+        prim.params[0] = cx; prim.params[1] = cy;
+        prim.params[2] = std::sin(angle); prim.params[3] = std::cos(angle);
+        prim.params[4] = r;
+        prim.params[5] = w1; prim.params[6] = w2;
+        prim.fillColor = fill;
+        prim.strokeColor = stroke;
+        prim.strokeWidth = strokeWidth;
+        addPrimitive(prim);
+        return;
+    }
+
+    // Vesica
+    if (item["vesica"]) {
+        auto e = item["vesica"];
+        float cx = 0, cy = 0, w = 30, h = 20;
+        uint32_t fill = 0, stroke = 0;
+        float strokeWidth = 0;
+        if (e["position"] && e["position"].IsSequence()) {
+            cx = e["position"][0].as<float>();
+            cy = e["position"][1].as<float>();
+        }
+        if (e["width"]) w = e["width"].as<float>();
+        if (e["height"]) h = e["height"].as<float>();
+        if (e["fill"]) fill = parseColor(e["fill"]);
+        if (e["stroke"]) stroke = parseColor(e["stroke"]);
+        if (e["stroke-width"]) strokeWidth = e["stroke-width"].as<float>();
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::Vesica);
+        prim.layer = layer;
+        prim.params[0] = cx; prim.params[1] = cy;
+        prim.params[2] = w; prim.params[3] = h;
+        prim.fillColor = fill;
+        prim.strokeColor = stroke;
+        prim.strokeWidth = strokeWidth;
+        addPrimitive(prim);
+        return;
+    }
+
+    // Oriented Vesica
+    if (item["oriented_vesica"]) {
+        auto e = item["oriented_vesica"];
+        float ax = 0, ay = 0, bx = 30, by = 20, w = 10;
+        uint32_t fill = 0, stroke = 0;
+        float strokeWidth = 0;
+        if (e["a"] && e["a"].IsSequence()) {
+            ax = e["a"][0].as<float>();
+            ay = e["a"][1].as<float>();
+        }
+        if (e["b"] && e["b"].IsSequence()) {
+            bx = e["b"][0].as<float>();
+            by = e["b"][1].as<float>();
+        }
+        if (e["width"]) w = e["width"].as<float>();
+        if (e["fill"]) fill = parseColor(e["fill"]);
+        if (e["stroke"]) stroke = parseColor(e["stroke"]);
+        if (e["stroke-width"]) strokeWidth = e["stroke-width"].as<float>();
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::OrientedVesica);
+        prim.layer = layer;
+        prim.params[0] = ax; prim.params[1] = ay;
+        prim.params[2] = bx; prim.params[3] = by;
+        prim.params[4] = w;
+        prim.fillColor = fill;
+        prim.strokeColor = stroke;
+        prim.strokeWidth = strokeWidth;
+        addPrimitive(prim);
+        return;
+    }
+
+    // Rounded Cross
+    if (item["rounded_cross"]) {
+        auto e = item["rounded_cross"];
+        float cx = 0, cy = 0, h = 20;
+        uint32_t fill = 0, stroke = 0;
+        float strokeWidth = 0;
+        if (e["position"] && e["position"].IsSequence()) {
+            cx = e["position"][0].as<float>();
+            cy = e["position"][1].as<float>();
+        }
+        if (e["h"]) h = e["h"].as<float>();
+        if (e["fill"]) fill = parseColor(e["fill"]);
+        if (e["stroke"]) stroke = parseColor(e["stroke"]);
+        if (e["stroke-width"]) strokeWidth = e["stroke-width"].as<float>();
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::RoundedCross);
+        prim.layer = layer;
+        prim.params[0] = cx; prim.params[1] = cy;
+        prim.params[2] = h;
+        prim.fillColor = fill;
+        prim.strokeColor = stroke;
+        prim.strokeWidth = strokeWidth;
+        addPrimitive(prim);
+        return;
+    }
+
+    // Parabola
+    if (item["parabola"]) {
+        auto e = item["parabola"];
+        float cx = 0, cy = 0, k = 1.0f;
+        uint32_t fill = 0, stroke = 0;
+        float strokeWidth = 0;
+        if (e["position"] && e["position"].IsSequence()) {
+            cx = e["position"][0].as<float>();
+            cy = e["position"][1].as<float>();
+        }
+        if (e["k"]) k = e["k"].as<float>();
+        if (e["fill"]) fill = parseColor(e["fill"]);
+        if (e["stroke"]) stroke = parseColor(e["stroke"]);
+        if (e["stroke-width"]) strokeWidth = e["stroke-width"].as<float>();
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::Parabola);
+        prim.layer = layer;
+        prim.params[0] = cx; prim.params[1] = cy;
+        prim.params[2] = k;
+        prim.fillColor = fill;
+        prim.strokeColor = stroke;
+        prim.strokeWidth = strokeWidth;
+        addPrimitive(prim);
+        return;
+    }
+
+    // Blobby Cross
+    if (item["blobby_cross"]) {
+        auto e = item["blobby_cross"];
+        float cx = 0, cy = 0, he = 20;
+        uint32_t fill = 0, stroke = 0;
+        float strokeWidth = 0;
+        if (e["position"] && e["position"].IsSequence()) {
+            cx = e["position"][0].as<float>();
+            cy = e["position"][1].as<float>();
+        }
+        if (e["he"]) he = e["he"].as<float>();
+        if (e["fill"]) fill = parseColor(e["fill"]);
+        if (e["stroke"]) stroke = parseColor(e["stroke"]);
+        if (e["stroke-width"]) strokeWidth = e["stroke-width"].as<float>();
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::BlobbyCross);
+        prim.layer = layer;
+        prim.params[0] = cx; prim.params[1] = cy;
+        prim.params[2] = he;
+        prim.fillColor = fill;
+        prim.strokeColor = stroke;
+        prim.strokeWidth = strokeWidth;
+        addPrimitive(prim);
+        return;
+    }
+
+    // Tunnel
+    if (item["tunnel"]) {
+        auto e = item["tunnel"];
+        float cx = 0, cy = 0, w = 30, h = 20;
+        uint32_t fill = 0, stroke = 0;
+        float strokeWidth = 0;
+        if (e["position"] && e["position"].IsSequence()) {
+            cx = e["position"][0].as<float>();
+            cy = e["position"][1].as<float>();
+        }
+        if (e["width"]) w = e["width"].as<float>();
+        if (e["height"]) h = e["height"].as<float>();
+        if (e["fill"]) fill = parseColor(e["fill"]);
+        if (e["stroke"]) stroke = parseColor(e["stroke"]);
+        if (e["stroke-width"]) strokeWidth = e["stroke-width"].as<float>();
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::Tunnel);
+        prim.layer = layer;
+        prim.params[0] = cx; prim.params[1] = cy;
+        prim.params[2] = w; prim.params[3] = h;
+        prim.fillColor = fill;
+        prim.strokeColor = stroke;
+        prim.strokeWidth = strokeWidth;
+        addPrimitive(prim);
+        return;
+    }
+
+    // Stairs
+    if (item["stairs"]) {
+        auto e = item["stairs"];
+        float cx = 0, cy = 0, sw = 10, sh = 5, n = 5;
+        uint32_t fill = 0, stroke = 0;
+        float strokeWidth = 0;
+        if (e["position"] && e["position"].IsSequence()) {
+            cx = e["position"][0].as<float>();
+            cy = e["position"][1].as<float>();
+        }
+        if (e["step_width"]) sw = e["step_width"].as<float>();
+        if (e["step_height"]) sh = e["step_height"].as<float>();
+        if (e["count"]) n = e["count"].as<float>();
+        if (e["fill"]) fill = parseColor(e["fill"]);
+        if (e["stroke"]) stroke = parseColor(e["stroke"]);
+        if (e["stroke-width"]) strokeWidth = e["stroke-width"].as<float>();
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::Stairs);
+        prim.layer = layer;
+        prim.params[0] = cx; prim.params[1] = cy;
+        prim.params[2] = sw; prim.params[3] = sh;
+        prim.params[4] = n;
+        prim.fillColor = fill;
+        prim.strokeColor = stroke;
+        prim.strokeWidth = strokeWidth;
+        addPrimitive(prim);
+        return;
+    }
+
+    // Quadratic Circle
+    if (item["quadratic_circle"]) {
+        auto e = item["quadratic_circle"];
+        float cx = 0, cy = 0, scale = 20;
+        uint32_t fill = 0, stroke = 0;
+        float strokeWidth = 0;
+        if (e["position"] && e["position"].IsSequence()) {
+            cx = e["position"][0].as<float>();
+            cy = e["position"][1].as<float>();
+        }
+        if (e["scale"]) scale = e["scale"].as<float>();
+        if (e["fill"]) fill = parseColor(e["fill"]);
+        if (e["stroke"]) stroke = parseColor(e["stroke"]);
+        if (e["stroke-width"]) strokeWidth = e["stroke-width"].as<float>();
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::QuadraticCircle);
+        prim.layer = layer;
+        prim.params[0] = cx; prim.params[1] = cy;
+        prim.params[2] = scale;
+        prim.fillColor = fill;
+        prim.strokeColor = stroke;
+        prim.strokeWidth = strokeWidth;
+        addPrimitive(prim);
+        return;
+    }
+
+    // Hyperbola
+    if (item["hyperbola"]) {
+        auto e = item["hyperbola"];
+        float cx = 0, cy = 0, k = 1.0f, he = 20;
+        uint32_t fill = 0, stroke = 0;
+        float strokeWidth = 0;
+        if (e["position"] && e["position"].IsSequence()) {
+            cx = e["position"][0].as<float>();
+            cy = e["position"][1].as<float>();
+        }
+        if (e["k"]) k = e["k"].as<float>();
+        if (e["he"]) he = e["he"].as<float>();
+        if (e["fill"]) fill = parseColor(e["fill"]);
+        if (e["stroke"]) stroke = parseColor(e["stroke"]);
+        if (e["stroke-width"]) strokeWidth = e["stroke-width"].as<float>();
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::Hyperbola);
+        prim.layer = layer;
+        prim.params[0] = cx; prim.params[1] = cy;
+        prim.params[2] = k; prim.params[3] = he;
+        prim.fillColor = fill;
+        prim.strokeColor = stroke;
+        prim.strokeWidth = strokeWidth;
+        addPrimitive(prim);
+        return;
+    }
+
+    // Cool S
+    if (item["cool_s"]) {
+        auto e = item["cool_s"];
+        float cx = 0, cy = 0, scale = 20;
+        uint32_t fill = 0, stroke = 0;
+        float strokeWidth = 0;
+        if (e["position"] && e["position"].IsSequence()) {
+            cx = e["position"][0].as<float>();
+            cy = e["position"][1].as<float>();
+        }
+        if (e["scale"]) scale = e["scale"].as<float>();
+        if (e["fill"]) fill = parseColor(e["fill"]);
+        if (e["stroke"]) stroke = parseColor(e["stroke"]);
+        if (e["stroke-width"]) strokeWidth = e["stroke-width"].as<float>();
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::CoolS);
+        prim.layer = layer;
+        prim.params[0] = cx; prim.params[1] = cy;
+        prim.params[2] = scale;
+        prim.fillColor = fill;
+        prim.strokeColor = stroke;
+        prim.strokeWidth = strokeWidth;
+        addPrimitive(prim);
+        return;
+    }
+
+    // Circle Wave
+    if (item["circle_wave"]) {
+        auto e = item["circle_wave"];
+        float cx = 0, cy = 0, tb = 1.0f, ra = 20;
+        uint32_t fill = 0, stroke = 0;
+        float strokeWidth = 0;
+        if (e["position"] && e["position"].IsSequence()) {
+            cx = e["position"][0].as<float>();
+            cy = e["position"][1].as<float>();
+        }
+        if (e["tb"]) tb = e["tb"].as<float>();
+        if (e["ra"]) ra = e["ra"].as<float>();
+        if (e["fill"]) fill = parseColor(e["fill"]);
+        if (e["stroke"]) stroke = parseColor(e["stroke"]);
+        if (e["stroke-width"]) strokeWidth = e["stroke-width"].as<float>();
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::CircleWave);
+        prim.layer = layer;
+        prim.params[0] = cx; prim.params[1] = cy;
+        prim.params[2] = tb; prim.params[3] = ra;
+        prim.fillColor = fill;
+        prim.strokeColor = stroke;
+        prim.strokeWidth = strokeWidth;
+        addPrimitive(prim);
+        return;
+    }
+
+    // =========================================================================
+    // 3D Primitives (raymarched)
+    // =========================================================================
+
+    // Helper to parse 3D position
+    auto parse3DPosition = [](const YAML::Node& node, float* params) {
+        if (node["position"] && node["position"].IsSequence()) {
+            params[0] = node["position"][0].as<float>();
+            params[1] = node["position"][1].as<float>();
+            params[2] = node["position"].size() > 2 ? node["position"][2].as<float>() : 0.0f;
+        }
     };
-    static_assert(sizeof(Metadata) == 64, "Metadata must be 64 bytes");
 
-    // Primitive data - direct buffer storage (no intermediate vector)
-    SDFPrimitive* _primitives = nullptr;
-    uint32_t _primCount = 0;
-    uint32_t _primCapacity = 0;
-    StorageHandle _primStorage = StorageHandle::invalid();
+    // Sphere
+    if (item["sphere"]) {
+        auto s = item["sphere"];
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::Sphere3D);
+        prim.layer = layer;
+        parse3DPosition(s, prim.params);
+        if (s["radius"]) prim.params[3] = s["radius"].as<float>();
+        else prim.params[3] = 0.25f;
+        if (s["fill"]) prim.fillColor = parseColor(s["fill"]);
+        if (s["stroke"]) prim.strokeColor = parseColor(s["stroke"]);
+        if (s["stroke-width"]) prim.strokeWidth = s["stroke-width"].as<float>();
+        addPrimitive(prim);
+        return;
+    }
 
-    // CPU staging for primitives (used during suspend/reconstruct)
-    std::vector<SDFPrimitive> _primStaging;
+    // Box3D
+    if (item["box3d"]) {
+        auto b = item["box3d"];
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::Box3D);
+        prim.layer = layer;
+        parse3DPosition(b, prim.params);
+        if (b["size"] && b["size"].IsSequence()) {
+            prim.params[3] = b["size"][0].as<float>();
+            prim.params[4] = b["size"][1].as<float>();
+            prim.params[5] = b["size"].size() > 2 ? b["size"][2].as<float>() : b["size"][0].as<float>();
+        } else {
+            prim.params[3] = prim.params[4] = prim.params[5] = 0.2f;
+        }
+        if (b["fill"]) prim.fillColor = parseColor(b["fill"]);
+        if (b["stroke"]) prim.strokeColor = parseColor(b["stroke"]);
+        if (b["stroke-width"]) prim.strokeWidth = b["stroke-width"].as<float>();
+        addPrimitive(prim);
+        return;
+    }
 
-    // BVH data - built directly in derived storage buffer
-    BVHNode* _bvhNodes = nullptr;
-    uint32_t _bvhNodeCount = 0;
-    uint32_t* _sortedIndices = nullptr;
-    StorageHandle _derivedStorage = StorageHandle::invalid();
+    // Torus
+    if (item["torus"]) {
+        auto t = item["torus"];
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::Torus3D);
+        prim.layer = layer;
+        parse3DPosition(t, prim.params);
+        if (t["major-radius"]) prim.params[3] = t["major-radius"].as<float>();
+        else prim.params[3] = 0.2f;
+        if (t["minor-radius"]) prim.params[4] = t["minor-radius"].as<float>();
+        else prim.params[4] = 0.08f;
+        if (t["fill"]) prim.fillColor = parseColor(t["fill"]);
+        if (t["stroke"]) prim.strokeColor = parseColor(t["stroke"]);
+        if (t["stroke-width"]) prim.strokeWidth = t["stroke-width"].as<float>();
+        addPrimitive(prim);
+        return;
+    }
 
-    // Text data (small, vector OK)
-    std::vector<TextSpan> _textSpans;
-    std::vector<uint8_t> _textBuffer;
+    // Cylinder
+    if (item["cylinder"]) {
+        auto c = item["cylinder"];
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::Cylinder3D);
+        prim.layer = layer;
+        parse3DPosition(c, prim.params);
+        if (c["radius"]) prim.params[3] = c["radius"].as<float>();
+        else prim.params[3] = 0.15f;
+        if (c["height"]) prim.params[4] = c["height"].as<float>();
+        else prim.params[4] = 0.3f;
+        if (c["fill"]) prim.fillColor = parseColor(c["fill"]);
+        if (c["stroke"]) prim.strokeColor = parseColor(c["stroke"]);
+        if (c["stroke-width"]) prim.strokeWidth = c["stroke-width"].as<float>();
+        addPrimitive(prim);
+        return;
+    }
 
-    // Scene bounds
-    float _sceneMinX = 0, _sceneMinY = 0;
-    float _sceneMaxX = 100, _sceneMaxY = 100;
-    bool _hasExplicitBounds = false;
+    // Capsule (3D vertical capsule)
+    if (item["capsule3d"]) {
+        auto c = item["capsule3d"];
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::VerticalCapsule3D);
+        prim.layer = layer;
+        parse3DPosition(c, prim.params);
+        if (c["height"]) prim.params[3] = c["height"].as<float>();
+        else prim.params[3] = 0.3f;
+        if (c["radius"]) prim.params[4] = c["radius"].as<float>();
+        else prim.params[4] = 0.1f;
+        if (c["fill"]) prim.fillColor = parseColor(c["fill"]);
+        if (c["stroke"]) prim.strokeColor = parseColor(c["stroke"]);
+        if (c["stroke-width"]) prim.strokeWidth = c["stroke-width"].as<float>();
+        addPrimitive(prim);
+        return;
+    }
 
-    // GPU offsets (in float units)
-    uint32_t _primitiveOffset = 0;
-    uint32_t _bvhOffset = 0;
-    uint32_t _sortedIndicesOffset = 0;
-    uint32_t _textSpanOffset = 0;
-    uint32_t _textBufferOffset = 0;
+    // Cone (capped cone)
+    if (item["cone"]) {
+        auto c = item["cone"];
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::CappedCone3D);
+        prim.layer = layer;
+        parse3DPosition(c, prim.params);
+        if (c["height"]) prim.params[3] = c["height"].as<float>();
+        else prim.params[3] = 0.35f;
+        if (c["radius1"]) prim.params[4] = c["radius1"].as<float>();
+        else prim.params[4] = 0.2f;
+        if (c["radius2"]) prim.params[5] = c["radius2"].as<float>();
+        else prim.params[5] = 0.05f;
+        if (c["fill"]) prim.fillColor = parseColor(c["fill"]);
+        if (c["stroke"]) prim.strokeColor = parseColor(c["stroke"]);
+        if (c["stroke-width"]) prim.strokeWidth = c["stroke-width"].as<float>();
+        addPrimitive(prim);
+        return;
+    }
 
-    // Rendering
-    uint32_t _bgColor = 0xFF2E1A1A;
-    uint32_t _flags = 0;
+    // Octahedron
+    if (item["octahedron"]) {
+        auto o = item["octahedron"];
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::Octahedron3D);
+        prim.layer = layer;
+        parse3DPosition(o, prim.params);
+        if (o["size"]) prim.params[3] = o["size"].as<float>();
+        else prim.params[3] = 0.3f;
+        if (o["fill"]) prim.fillColor = parseColor(o["fill"]);
+        if (o["stroke"]) prim.strokeColor = parseColor(o["stroke"]);
+        if (o["stroke-width"]) prim.strokeWidth = o["stroke-width"].as<float>();
+        addPrimitive(prim);
+        return;
+    }
 
-    bool _dirty = true;
-    bool _metadataDirty = true;
+    // Pyramid
+    if (item["pyramid"]) {
+        auto p = item["pyramid"];
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::Pyramid3D);
+        prim.layer = layer;
+        parse3DPosition(p, prim.params);
+        if (p["height"]) prim.params[3] = p["height"].as<float>();
+        else prim.params[3] = 0.5f;
+        if (p["fill"]) prim.fillColor = parseColor(p["fill"]);
+        if (p["stroke"]) prim.strokeColor = parseColor(p["stroke"]);
+        if (p["stroke-width"]) prim.strokeWidth = p["stroke-width"].as<float>();
+        addPrimitive(prim);
+        return;
+    }
 
-    std::string _argsStr;
-    std::string _payloadStr;
-};
+    // Ellipsoid
+    if (item["ellipsoid"]) {
+        auto e = item["ellipsoid"];
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::Ellipsoid3D);
+        prim.layer = layer;
+        parse3DPosition(e, prim.params);
+        if (e["radii"] && e["radii"].IsSequence()) {
+            prim.params[3] = e["radii"][0].as<float>();
+            prim.params[4] = e["radii"][1].as<float>();
+            prim.params[5] = e["radii"].size() > 2 ? e["radii"][2].as<float>() : e["radii"][0].as<float>();
+        } else {
+            prim.params[3] = 0.3f; prim.params[4] = 0.2f; prim.params[5] = 0.15f;
+        }
+        if (e["fill"]) prim.fillColor = parseColor(e["fill"]);
+        if (e["stroke"]) prim.strokeColor = parseColor(e["stroke"]);
+        if (e["stroke-width"]) prim.strokeWidth = e["stroke-width"].as<float>();
+        addPrimitive(prim);
+        return;
+    }
+}
 
 //=============================================================================
 // Factory methods
 //=============================================================================
 
 Result<CardPtr> YDraw::create(
-    CardBufferManager::Ptr mgr,
-    const GPUContext& gpu,
+    const YettyContext& ctx,
     int32_t x, int32_t y,
     uint32_t widthCells, uint32_t heightCells,
     const std::string& args,
     const std::string& payload)
 {
-    yinfo("YDraw::create: ENTERED pos=({},{}) size={}x{} args='{}' payload_len={}",
+    yinfo("YDraw::create: pos=({},{}) size={}x{} args='{}' payload_len={}",
           x, y, widthCells, heightCells, args, payload.size());
 
-    if (!mgr) {
+    if (!ctx.cardManager) {
         yerror("YDraw::create: null CardBufferManager!");
         return Err<CardPtr>("YDraw::create: null CardBufferManager");
     }
 
-    auto card = std::make_shared<YDrawImpl>(
-        std::move(mgr), gpu, x, y, widthCells, heightCells, args, payload);
+    auto card = std::make_shared<YDraw>(
+        ctx, x, y, widthCells, heightCells, args, payload);
 
-    yinfo("YDraw::create: calling init()...");
     if (auto res = card->init(); !res) {
         yerror("YDraw::create: init FAILED: {}", error_msg(res));
         return Err<CardPtr>("YDraw::create: init failed");
@@ -1018,25 +1745,83 @@ Result<CardPtr> YDraw::create(
 
 Result<YDraw::Ptr> YDraw::createImpl(
     ContextType& ctx,
-    CardBufferManager::Ptr mgr,
-    const GPUContext& gpu,
+    const YettyContext& yettyCtx,
     int32_t x, int32_t y,
     uint32_t widthCells, uint32_t heightCells,
     const std::string& args,
     const std::string& payload) noexcept
 {
-    (void)ctx; // ObjectFactory context marker
+    (void)ctx;
 
-    auto result = create(std::move(mgr), gpu, x, y, widthCells, heightCells, args, payload);
+    auto result = create(yettyCtx, x, y, widthCells, heightCells, args, payload);
     if (!result) {
         return Err<Ptr>("Failed to create YDraw", result);
     }
-    // Dynamic cast from CardPtr to YDraw::Ptr
     auto ydraw = std::dynamic_pointer_cast<YDraw>(*result);
     if (!ydraw) {
-        return Err<Ptr>("Created card is not a YDraw");
+        return Err<Ptr>("Created card is not an YDraw");
     }
     return Ok(ydraw);
+}
+
+//=============================================================================
+// Animation parsing
+//=============================================================================
+
+void YDraw::parseAnimateBlock(const YAML::Node& animNode, uint32_t primIndex) {
+    if (!animNode.IsSequence()) return;
+
+    auto* anim = animation();
+
+    for (const auto& propNode : animNode) {
+        if (!propNode["property"] || !propNode["keyframes"]) continue;
+
+        std::string propStr = propNode["property"].as<std::string>();
+
+        animation::PropertyType propType;
+        if      (propStr == "position")       propType = animation::PropertyType::Position;
+        else if (propStr == "scale")          propType = animation::PropertyType::Scale;
+        else if (propStr == "fill_opacity")   propType = animation::PropertyType::FillOpacity;
+        else if (propStr == "fill_color")     propType = animation::PropertyType::FillColor;
+        else if (propStr == "stroke_opacity") propType = animation::PropertyType::StrokeOpacity;
+        else if (propStr == "stroke_width")   propType = animation::PropertyType::StrokeWidth;
+        else if (propStr == "radius")         propType = animation::PropertyType::Radius;
+        else {
+            ywarn("YDraw::parseAnimateBlock: unknown property '{}'", propStr);
+            continue;
+        }
+
+        animation::AnimatedProperty prop;
+        prop.type = propType;
+        prop.primitiveIndex = primIndex;
+
+        for (const auto& kfNode : propNode["keyframes"]) {
+            animation::Keyframe kf = {};
+
+            // Support both {t: 0.0, v: [x,y]} and {time: 0.0, value: [x,y]}
+            if (kfNode["t"]) kf.time = kfNode["t"].as<float>();
+            else if (kfNode["time"]) kf.time = kfNode["time"].as<float>();
+
+            YAML::Node valNode;
+            if (kfNode["v"]) valNode = kfNode["v"];
+            else if (kfNode["value"]) valNode = kfNode["value"];
+
+            if (valNode.IsSequence()) {
+                kf.componentCount = static_cast<uint8_t>(
+                    std::min(static_cast<size_t>(4), valNode.size()));
+                for (uint8_t i = 0; i < kf.componentCount; i++) {
+                    kf.value[i] = valNode[i].as<float>();
+                }
+            } else if (valNode.IsDefined()) {
+                kf.componentCount = 1;
+                kf.value[0] = valNode.as<float>();
+            }
+
+            prop.keyframes.push_back(kf);
+        }
+
+        anim->addProperty(std::move(prop));
+    }
 }
 
 } // namespace yetty::card

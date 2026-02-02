@@ -3,8 +3,6 @@
 #include <cstdint>
 #include <string>
 #include <yetty/base/factory.h>
-#include <yetty/card-buffer-manager.h>
-#include <yetty/card-texture-manager.h>
 #include <yetty/card.h>
 #include <yetty/gpu-context.h>
 
@@ -14,7 +12,7 @@ struct YettyContext;
 
 namespace yetty::card {
 
-class ThorVG : public TextureCard, public base::ObjectFactory<ThorVG> {
+class ThorVG : public Card, public base::ObjectFactory<ThorVG> {
 public:
   using Ptr = std::shared_ptr<ThorVG>;
 
@@ -26,13 +24,14 @@ public:
                                 uint32_t heightCells, const std::string &args,
                                 const std::string &payload) noexcept;
 
+  bool needsTexture() const override { return true; }
+
   virtual ~ThorVG() = default;
 
 protected:
-  ThorVG(CardBufferManager::Ptr bufMgr, CardTextureManager::Ptr texMgr,
-         const GPUContext &gpu, int32_t x, int32_t y,
+  ThorVG(CardManager::Ptr mgr, const GPUContext &gpu, int32_t x, int32_t y,
          uint32_t widthCells, uint32_t heightCells)
-      : TextureCard(std::move(bufMgr), std::move(texMgr), gpu, x, y, widthCells, heightCells) {}
+      : Card(std::move(mgr), gpu, x, y, widthCells, heightCells) {}
 };
 
 } // namespace yetty::card

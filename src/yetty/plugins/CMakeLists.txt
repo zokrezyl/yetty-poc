@@ -43,9 +43,9 @@ add_yetty_plugin(shader
     SOURCES shader/shader.cpp
 )
 
-# ydraw plugin (2D/3D SDF rendering using core library)
-add_yetty_plugin(ydraw
-    SOURCES ydraw/ydraw.cpp
+# hdraw plugin (2D/3D SDF rendering using core library)
+add_yetty_plugin(hdraw
+    SOURCES hdraw/hdraw.cpp
 )
 
 # rich-text plugin - TODO: refactor for new Font interface

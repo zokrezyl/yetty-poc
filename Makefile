@@ -104,10 +104,12 @@ test-desktop-wgpu-debug: ## Run desktop wgpu debug tests
 .PHONY: config-desktop-dawn-debug
 config-desktop-dawn-debug: ## Configure desktop dawn debug build
 	PATH="$(SYSTEM_PATH)" $(CMAKE) -B $(BUILD_DIR_DESKTOP_DAWN_DEBUG) $(CMAKE_GENERATOR) $(CMAKE_DEBUG) $(CMAKE_BACKEND_DAWN) $(CMAKE_COMPILER_LAUNCHER)
+	@ln -sfn $(BUILD_DIR_DESKTOP_DAWN_DEBUG)/compile_commands.json compile_commands.json
 
 .PHONY: config-desktop-dawn-release
 config-desktop-dawn-release: ## Configure desktop dawn release build
 	PATH="$(SYSTEM_PATH)" $(CMAKE) -B $(BUILD_DIR_DESKTOP_DAWN_RELEASE) $(CMAKE_GENERATOR) $(CMAKE_RELEASE) $(CMAKE_BACKEND_DAWN) $(CMAKE_COMPILER_LAUNCHER)
+	@ln -sfn $(BUILD_DIR_DESKTOP_DAWN_RELEASE)/compile_commands.json compile_commands.json
 
 .PHONY: build-desktop-dawn-debug
 build-desktop-dawn-debug: ## Build desktop dawn debug
@@ -140,6 +142,7 @@ test-desktop-dawn-debug: ## Run desktop dawn debug tests
 .PHONY: config-desktop-dawn-asan
 config-desktop-dawn-asan: ## Configure desktop dawn ASAN build
 	PATH="$(SYSTEM_PATH)" $(CMAKE) -B $(BUILD_DIR_DESKTOP_DAWN_ASAN) $(CMAKE_GENERATOR) $(CMAKE_DEBUG) $(CMAKE_BACKEND_DAWN) $(CMAKE_ASAN) $(CMAKE_COMPILER_LAUNCHER)
+	@ln -sfn $(BUILD_DIR_DESKTOP_DAWN_ASAN)/compile_commands.json compile_commands.json
 
 .PHONY: build-desktop-dawn-asan
 build-desktop-dawn-asan: ## Build desktop dawn ASAN

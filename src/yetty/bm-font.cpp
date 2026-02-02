@@ -313,7 +313,10 @@ Result<void> BmFont::findFont() noexcept {
 
     for (const char* pattern : fontPatterns) {
         FcPattern* fcPattern = FcNameParse(reinterpret_cast<const FcChar8*>(pattern));
-        if (!fcPattern) continue;
+        if (!fcPattern) {
+            ywarn("BmFont: FcNameParse failed for '{}'", pattern);
+            continue;
+        }
 
         FcConfigSubstitute(config, fcPattern, FcMatchPattern);
         FcDefaultSubstitute(fcPattern);
@@ -325,6 +328,8 @@ Result<void> BmFont::findFont() noexcept {
         if (match && result == FcResultMatch) {
             FcChar8* fontPath = nullptr;
             if (FcPatternGetString(match, FC_FILE, 0, &fontPath) == FcResultMatch) {
+                yinfo("BmFont: pattern '{}' matched '{}'", pattern,
+                      reinterpret_cast<const char*>(fontPath));
                 FT_Error error = FT_New_Face(library, reinterpret_cast<const char*>(fontPath),
                                               0, &face);
                 if (error == 0) {
@@ -343,8 +348,12 @@ Result<void> BmFont::findFont() noexcept {
                     FcConfigDestroy(config);
                     return Ok();
                 }
+                ywarn("BmFont: FT_New_Face failed for '{}' (error={})",
+                      reinterpret_cast<const char*>(fontPath), error);
             }
             FcPatternDestroy(match);
+        } else {
+            ywarn("BmFont: FcFontMatch failed for pattern '{}'", pattern);
         }
     }
 

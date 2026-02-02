@@ -58,13 +58,9 @@ struct Cell {
 @group(0) @binding(0) var<uniform> globals: SharedUniforms;
 @group(0) @binding(1) var<storage, read> cardMetadata: array<u32>;
 @group(0) @binding(2) var<storage, read> cardStorage: array<f32>;
-// Card image atlas - populated by compute shader from cardImageData buffer
-// Contains only visible card images, recycled per frame
+// Card image atlas texture
 @group(0) @binding(3) var cardImageAtlas: texture_2d<f32>;
 @group(0) @binding(4) var cardImageSampler: sampler;
-// Card image data buffer - raw RGBA8 pixels stored by ImageCard
-// Fragment shader can read directly from here (bypassing atlas for simplicity)
-@group(0) @binding(5) var<storage, read> cardImageData: array<u32>;
 
 // Grid bindings (group 1 - managed by renderer)
 @group(1) @binding(0) var<uniform> grid: GridUniforms;

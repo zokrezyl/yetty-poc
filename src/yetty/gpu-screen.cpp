@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <unordered_set>
+#include <chrono>
 #include <cstring>
 #include <fstream>
 #include <glm/glm.hpp>
@@ -52,6 +53,60 @@ constexpr uint32_t CARD_GLYPH_END = 0x100FFF;
 // Shader glyph range - single-cell procedural glyphs (U+101000 - U+10FFFD)
 constexpr uint32_t SHADER_GLYPH_BASE = 0x101000;
 constexpr uint32_t SHADER_GLYPH_END = 0x10FFFD;
+
+// =============================================================================
+// Copy mode key bindings (tmux vi-mode style)
+// These will be configurable in the future
+// =============================================================================
+
+// Navigation
+constexpr uint32_t KEY_COPY_LEFT = 'h';
+constexpr uint32_t KEY_COPY_DOWN = 'j';
+constexpr uint32_t KEY_COPY_UP = 'k';
+constexpr uint32_t KEY_COPY_RIGHT = 'l';
+constexpr uint32_t KEY_COPY_WORD_NEXT = 'w';
+constexpr uint32_t KEY_COPY_WORD_PREV = 'b';
+constexpr uint32_t KEY_COPY_WORD_END = 'e';
+constexpr uint32_t KEY_COPY_WORD_NEXT_BIG = 'W';   // WORD next (whitespace delimited)
+constexpr uint32_t KEY_COPY_WORD_PREV_BIG = 'B';   // WORD prev
+constexpr uint32_t KEY_COPY_WORD_END_BIG = 'E';    // WORD end
+constexpr uint32_t KEY_COPY_LINE_START = '0';
+constexpr uint32_t KEY_COPY_LINE_END = '$';
+constexpr uint32_t KEY_COPY_LINE_FIRST_NONBLANK = '^';
+constexpr uint32_t KEY_COPY_TOP = 'g';        // gg = top of buffer
+constexpr uint32_t KEY_COPY_BOTTOM = 'G';     // G = bottom of buffer
+constexpr uint32_t KEY_COPY_HALFPAGE_UP = 'u';   // Ctrl-u
+constexpr uint32_t KEY_COPY_HALFPAGE_DOWN = 'd'; // Ctrl-d
+constexpr uint32_t KEY_COPY_PAGE_UP = 'b';       // Ctrl-b (page up)
+constexpr uint32_t KEY_COPY_PAGE_DOWN = 'f';     // Ctrl-f (page down)
+constexpr uint32_t KEY_COPY_SCREEN_TOP = 'H';    // H = top of screen
+constexpr uint32_t KEY_COPY_SCREEN_MID = 'M';    // M = middle of screen
+constexpr uint32_t KEY_COPY_SCREEN_BOT = 'L';    // L = bottom of screen
+constexpr uint32_t KEY_COPY_PARA_PREV = '{';     // { = previous paragraph
+constexpr uint32_t KEY_COPY_PARA_NEXT = '}';     // } = next paragraph
+constexpr uint32_t KEY_COPY_FIND_CHAR = 'f';     // f = find char forward
+constexpr uint32_t KEY_COPY_FIND_CHAR_BACK = 'F'; // F = find char backward
+constexpr uint32_t KEY_COPY_TILL_CHAR = 't';     // t = till char forward
+constexpr uint32_t KEY_COPY_TILL_CHAR_BACK = 'T'; // T = till char backward
+constexpr uint32_t KEY_COPY_REPEAT_FIND = ';';   // ; = repeat last f/F/t/T
+constexpr uint32_t KEY_COPY_REPEAT_FIND_REV = ','; // , = repeat last f/F/t/T reverse
+
+// Search
+constexpr uint32_t KEY_COPY_SEARCH_FWD = '/';
+constexpr uint32_t KEY_COPY_SEARCH_BWD = '?';
+constexpr uint32_t KEY_COPY_SEARCH_NEXT = 'n';
+constexpr uint32_t KEY_COPY_SEARCH_PREV = 'N';
+
+// Selection and copy
+constexpr uint32_t KEY_COPY_START_SELECTION = 'v';  // v = start/toggle visual selection (like vim)
+constexpr uint32_t KEY_COPY_VISUAL_LINE = 'V';      // V = visual line mode
+constexpr uint32_t KEY_COPY_YANK = 'y';             // y = yank (copy) selection
+constexpr uint32_t KEY_COPY_RECT_TOGGLE = 22;       // Ctrl-v = rectangle mode (like vim)
+
+// Exit copy mode
+constexpr uint32_t KEY_COPY_QUIT = 'q';
+constexpr int KEY_COPY_ESCAPE = 256;  // GLFW_KEY_ESCAPE
+constexpr int KEY_COPY_ENTER = 257;   // GLFW_KEY_ENTER (also yanks in tmux)
 
 // Helper functions for glyph type detection
 inline bool isCardGlyph(uint32_t codepoint) {
@@ -139,6 +194,14 @@ public:
   void scrollDown(int lines);
   void scrollToBottom();
   bool isScrolledBack() const { return _scrollOffset > 0; }
+
+  // Text search (tmux-style)
+  bool search(const std::string& query);  // Search and scroll to first match
+  bool searchNext();                       // Find next occurrence
+  bool searchPrevious();                   // Find previous occurrence
+  void clearSearch();                      // Clear search state
+  bool hasSearchMatch() const { return _searchActive && _searchMatchRow >= 0; }
+
   void sendKey(uint32_t codepoint, int mods);
   void sendSpecialKey(int key, int mods);
   base::ObjectId id() const { return _id; }
@@ -203,6 +266,44 @@ private:
   // Text selection
   void clearSelection();
   std::string extractSelectedText() const;
+
+  // Text search helpers
+  std::string extractRowText(int totalRow) const;  // Extract text from scrollback or visible row
+  bool searchInRow(int totalRow, int startCol, bool forward, int& matchCol) const;
+  void scrollToRow(int totalRow);  // Scroll to make row visible
+  void findAllMatches();  // Populate _searchMatches with all occurrences
+  void applySearchHighlighting();  // Swap fg/bg for all match positions
+  void clearSearchHighlighting();  // Restore original colors
+
+  // Copy mode (tmux-style vi mode)
+  void enterCopyMode();
+  void exitCopyMode();
+  void updateCopyModeStatus();
+  bool handleCopyModeKey(uint32_t codepoint, int key, int mods);
+  void copyModeMoveCursor(int dRow, int dCol);
+  void copyModeStartSelection();
+  void copyModeYank();
+  void copyModeScrollHalfPage(bool up);
+  void copyModeScrollFullPage(bool up);
+  void copyModeGotoTop();
+  void copyModeGotoBottom();
+  void copyModeGotoLineStart();
+  void copyModeGotoLineEnd();
+  void copyModeWordNext();
+  void copyModeWordPrev();
+  void copyModeWordEnd();
+  void copyModeGotoScreenTop();
+  void copyModeGotoScreenMid();
+  void copyModeGotoScreenBot();
+  void copyModeParaNext();
+  void copyModeParaPrev();
+  void copyModeFindChar(char ch, bool forward, bool till);
+  int getTotalRows() const;  // scrollback + visible rows
+
+  // Status line (tmux-style bar at bottom)
+  void updateStatusLine();
+  void setStatusText(const std::string& text);
+  void clearStatusLine();
 
   // Card registry
   void registerCard(CardPtr card);
@@ -284,12 +385,46 @@ private:
   CardManager::Ptr _cardManager;
   base::ObjectId _cardMouseTarget = 0;  // card that received last CardMouseDown
   uint32_t _gcFrameCounter = 0;
+  bool _bufferLayoutChanged = false;   // A buffer card entered or left
+  bool _textureLayoutChanged = false;  // A texture card entered or left
 
   // Text selection state
   bool _selecting = false;
   int _selStartCol = 0, _selStartRow = 0;
   int _selEndCol = 0, _selEndRow = 0;
   bool _hasSelection = false;
+
+  // Copy mode state (tmux-style)
+  bool _copyMode = false;
+  bool _commandMode = false;      // Waiting for command key after Ctrl+\ prefix
+  int _copyCursorRow = 0;         // Cursor position in copy mode (view row)
+  int _copyCursorCol = 0;
+  bool _copySelecting = false;    // Selection in progress
+  bool _copyRectMode = false;     // Rectangle selection mode
+  bool _searchInputMode = false;  // Waiting for search input
+  bool _searchForward = true;     // Search direction
+  std::string _searchInputBuffer; // Buffer for search input
+  int _gPending = 0;              // For 'gg' command (g pressed count)
+  
+  // f/F/t/T char find state
+  bool _findCharMode = false;     // Waiting for char input for f/F/t/T
+  char _findCharCmd = 0;          // Which command: 'f', 'F', 't', 'T'
+  char _lastFindChar = 0;         // Last char used for f/F/t/T
+  char _lastFindCmd = 0;          // Last f/F/t/T command for ; and ,
+
+  // Text search state
+  std::string _searchQuery;
+  int _searchMatchRow = -1;    // Row of current match (-1 = no match)
+  int _searchMatchCol = -1;    // Column of current match
+  bool _searchActive = false;  // Whether a search is active
+  // Store all match positions as (row, col) pairs for highlighting
+  std::vector<std::pair<int, int>> _searchMatches;
+  int _currentMatchIndex = -1; // Index into _searchMatches for current match
+
+  // Status line (tmux-style bar at bottom, not managed by vterm)
+  std::vector<Cell> _statusLine;
+  std::string _statusText;
+  bool _statusLineEnabled = true;
 
   // OSC parsing
   OscCommandParser _oscParser;
@@ -429,6 +564,9 @@ Result<void> GPUScreenImpl::init() noexcept {
       yinfo("GPUScreen[{}]: created per-screen CardManager (lazy)", _id);
     }
   }
+
+  // Initialize status line with default text
+  _statusText = "[0] yetty";
 
   return Ok();
 }
@@ -592,12 +730,18 @@ void GPUScreenImpl::setViewport(float x, float y, float width, float height) {
   float cellWidthF = _baseCellWidth * _zoomLevel;
   float cellHeightF = _baseCellHeight * _zoomLevel;
 
-  uint32_t newCols = cellWidthF > 0 ? static_cast<uint32_t>(width / cellWidthF) : 0;
-  uint32_t newRows = cellHeightF > 0 ? static_cast<uint32_t>(height / cellHeightF) : 0;
+  uint32_t totalCols = cellWidthF > 0 ? static_cast<uint32_t>(width / cellWidthF) : 0;
+  uint32_t totalRows = cellHeightF > 0 ? static_cast<uint32_t>(height / cellHeightF) : 0;
+
+  // Reserve 1 row for status line (not managed by vterm)
+  uint32_t vtermRows = (_statusLineEnabled && totalRows > 1) ? totalRows - 1 : totalRows;
 
   // Only resize if size actually changed
-  if (newCols > 0 && newRows > 0 && (newCols != _cols || newRows != _rows)) {
-    resize(newCols, newRows);
+  if (totalCols > 0 && vtermRows > 0 && (totalCols != _cols || vtermRows != _rows)) {
+    resize(totalCols, vtermRows);
+    // Resize status line buffer to match columns
+    _statusLine.resize(totalCols);
+    updateStatusLine();
   }
 
   // Update cards with viewport origin
@@ -981,7 +1125,7 @@ void GPUScreenImpl::reset() {
 //=============================================================================
 
 const Cell *GPUScreenImpl::getCellData() const {
-  if (_scrollOffset > 0) {
+  if (_scrollOffset > 0 || (_searchActive && !_searchMatches.empty())) {
     const_cast<GPUScreenImpl *>(this)->composeViewBuffer();
     return viewBuffer_.data();
   }
@@ -1046,44 +1190,96 @@ void GPUScreenImpl::scrollToBottom() {
 //=============================================================================
 
 void GPUScreenImpl::composeViewBuffer() {
-  if (!viewBufferDirty_)
+  bool needsHighlighting = _searchActive && !_searchMatches.empty();
+  
+  // If highlighting is needed, we always need fresh data (to avoid double-swapping)
+  if (!viewBufferDirty_ && !needsHighlighting)
     return;
 
-  // _scrollOffset lines come from scrollback, rest from visible
-  // _scrollback[size-1] is newest, _scrollback[0] is oldest
-  // When _scrollOffset = N, we show scrollback lines [size-N, size-1] at top
-  // plus visible lines [0, rows-N-1] shifted down
+  // Always rebuild when highlighting is active to avoid double-swapping colors
+  {
+    // _scrollOffset lines come from scrollback, rest from visible
+    // _scrollback[size-1] is newest, _scrollback[0] is oldest
+    // When _scrollOffset = N, we show scrollback lines [size-N, size-1] at top
+    // plus visible lines [0, rows-N-1] shifted down
 
-  int sbSize = static_cast<int>(_scrollback.size());
-  int sbLinesToShow = std::min(_scrollOffset, _rows);
-  int visibleLinesToShow = _rows - sbLinesToShow;
+    int sbSize = static_cast<int>(_scrollback.size());
+    int sbLinesToShow = std::min(_scrollOffset, _rows);
 
-  // Fill top rows from scrollback (newest first in view)
-  for (int viewRow = 0; viewRow < sbLinesToShow; viewRow++) {
-    // scrollback index: newest lines are at end
-    // viewRow 0 should get _scrollback[sbSize - _scrollOffset]
-    int sbIndex = sbSize - _scrollOffset + viewRow;
-    if (sbIndex >= 0 && sbIndex < sbSize) {
-      decompressLine(_scrollback[sbIndex], viewRow);
+    // Fill top rows from scrollback (newest first in view)
+    for (int viewRow = 0; viewRow < sbLinesToShow; viewRow++) {
+      // scrollback index: newest lines are at end
+      // viewRow 0 should get _scrollback[sbSize - _scrollOffset]
+      int sbIndex = sbSize - _scrollOffset + viewRow;
+      if (sbIndex >= 0 && sbIndex < sbSize) {
+        decompressLine(_scrollback[sbIndex], viewRow);
+      }
+    }
+
+    // Fill bottom rows from visible buffer - single memcpy per row with Cell
+    // struct
+    if (_visibleBuffer) {
+      for (int viewRow = sbLinesToShow; viewRow < _rows; viewRow++) {
+        int visRow = viewRow - sbLinesToShow; // Source row in visible buffer
+        size_t numCells = static_cast<size_t>(_cols);
+        size_t srcOffset = static_cast<size_t>(visRow * _cols);
+        size_t dstOffset = static_cast<size_t>(viewRow * _cols);
+
+        // Single memcpy for entire row of cells
+        std::memcpy(&viewBuffer_[dstOffset], &(*_visibleBuffer)[srcOffset],
+                    numCells * sizeof(Cell));
+      }
+    }
+
+    viewBufferDirty_ = false;
+  }
+  
+  // Apply search highlighting to visible matches
+  if (needsHighlighting) {
+    int sbSize = static_cast<int>(_scrollback.size());
+    // Calculate which total rows are currently visible
+    // viewRow 0 = totalRow (sbSize - _scrollOffset)
+    int firstVisibleTotalRow = sbSize - _scrollOffset;
+    int lastVisibleTotalRow = firstVisibleTotalRow + _rows - 1;
+    
+    // Determine current match cells (for different highlight color)
+    int currentMatchStartCol = _searchMatchCol;
+    int currentMatchEndCol = _searchMatchCol + static_cast<int>(_searchQuery.length()) - 1;
+    
+    for (const auto& match : _searchMatches) {
+      int totalRow = match.first;
+      int col = match.second;
+      
+      // Check if this match is in visible range
+      if (totalRow >= firstVisibleTotalRow && totalRow <= lastVisibleTotalRow && col < _cols) {
+        int viewRow = totalRow - firstVisibleTotalRow;
+        size_t idx = static_cast<size_t>(viewRow * _cols + col);
+        if (idx < viewBuffer_.size()) {
+          Cell& cell = viewBuffer_[idx];
+          
+          // Check if this is part of the current match
+          bool isCurrentMatch = (totalRow == _searchMatchRow && 
+                                 col >= currentMatchStartCol && 
+                                 col <= currentMatchEndCol);
+          
+          if (isCurrentMatch) {
+            // Current match: yellow background, black foreground
+            cell.bgR = 255;
+            cell.bgG = 255;
+            cell.bgB = 0;
+            cell.fgR = 0;
+            cell.fgG = 0;
+            cell.fgB = 0;
+          } else {
+            // Other matches: swap fg and bg colors
+            std::swap(cell.fgR, cell.bgR);
+            std::swap(cell.fgG, cell.bgG);
+            std::swap(cell.fgB, cell.bgB);
+          }
+        }
+      }
     }
   }
-
-  // Fill bottom rows from visible buffer - single memcpy per row with Cell
-  // struct
-  if (_visibleBuffer) {
-    for (int viewRow = sbLinesToShow; viewRow < _rows; viewRow++) {
-      int visRow = viewRow - sbLinesToShow; // Source row in visible buffer
-      size_t numCells = static_cast<size_t>(_cols);
-      size_t srcOffset = static_cast<size_t>(visRow * _cols);
-      size_t dstOffset = static_cast<size_t>(viewRow * _cols);
-
-      // Single memcpy for entire row of cells
-      std::memcpy(&viewBuffer_[dstOffset], &(*_visibleBuffer)[srcOffset],
-                  numCells * sizeof(Cell));
-    }
-  }
-
-  viewBufferDirty_ = false;
 }
 
 void GPUScreenImpl::decompressLine(const ScrollbackLineGPU &line, int viewRow) {
@@ -1239,6 +1435,1071 @@ std::string GPUScreenImpl::extractSelectedText() const {
   }
 
   return result;
+}
+
+//=============================================================================
+// Text search (tmux-style)
+//=============================================================================
+
+std::string GPUScreenImpl::extractRowText(int totalRow) const {
+  if (!_msdfFont) return "";
+
+  int sbSize = static_cast<int>(_scrollback.size());
+  std::string result;
+
+  if (totalRow < sbSize) {
+    // Row is in scrollback buffer
+    const auto& sbLine = _scrollback[totalRow];
+    for (int col = 0; col < static_cast<int>(sbLine.cells.size()); col++) {
+      uint32_t glyphIdx = sbLine.cells[col].glyph;
+      uint32_t cp = _msdfFont->getCodepoint(glyphIdx);
+      if (cp == 0) cp = ' ';
+      appendUtf8(result, cp);
+    }
+  } else if (_visibleBuffer) {
+    // Row is in visible buffer
+    int bufRow = totalRow - sbSize;
+    if (bufRow >= 0 && bufRow < _rows) {
+      size_t rowOffset = static_cast<size_t>(bufRow * _cols);
+      for (int col = 0; col < _cols; col++) {
+        size_t idx = rowOffset + col;
+        if (idx < _visibleBuffer->size()) {
+          uint32_t glyphIdx = (*_visibleBuffer)[idx].glyph;
+          uint32_t cp = _msdfFont->getCodepoint(glyphIdx);
+          if (cp == 0) cp = ' ';
+          appendUtf8(result, cp);
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
+bool GPUScreenImpl::searchInRow(int totalRow, int startCol, bool forward, int& matchCol) const {
+  std::string rowText = extractRowText(totalRow);
+  if (rowText.empty() || _searchQuery.empty()) return false;
+
+  if (forward) {
+    size_t pos = rowText.find(_searchQuery, startCol);
+    if (pos != std::string::npos) {
+      matchCol = static_cast<int>(pos);
+      return true;
+    }
+  } else {
+    // Search backwards: find last occurrence before startCol
+    size_t searchEnd = (startCol < 0) ? std::string::npos : static_cast<size_t>(startCol);
+    size_t pos = rowText.rfind(_searchQuery, searchEnd);
+    if (pos != std::string::npos) {
+      matchCol = static_cast<int>(pos);
+      return true;
+    }
+  }
+  return false;
+}
+
+void GPUScreenImpl::scrollToRow(int totalRow) {
+  int sbSize = static_cast<int>(_scrollback.size());
+
+  if (totalRow < sbSize) {
+    // Row is in scrollback - calculate offset to show this row at top of screen
+    // _scrollOffset = N means we show scrollback lines [sbSize-N, sbSize-1] at top
+    // To show totalRow at top: sbSize - _scrollOffset = totalRow
+    // => _scrollOffset = sbSize - totalRow
+    int newOffset = sbSize - totalRow;
+    // Clamp to valid range
+    newOffset = std::max(0, std::min(newOffset, sbSize));
+    if (newOffset != _scrollOffset) {
+      _scrollOffset = newOffset;
+      viewBufferDirty_ = true;
+      _hasDamage = true;
+    }
+  } else {
+    // Row is in visible buffer - scroll to bottom
+    scrollToBottom();
+  }
+}
+
+bool GPUScreenImpl::search(const std::string& query) {
+  // Search only works in copy mode
+  if (!_copyMode) return false;
+
+  if (query.empty()) {
+    clearSearch();
+    return false;
+  }
+
+  _searchQuery = query;
+  _searchActive = true;
+  _searchMatchRow = -1;
+  _searchMatchCol = -1;
+
+  // Find all matches for highlighting
+  findAllMatches();
+  _hasDamage = true;
+
+  int sbSize = static_cast<int>(_scrollback.size());
+  int totalRows = sbSize + _rows;
+
+  ydebug("search: query='{}' totalRows={} sbSize={}", query, totalRows, sbSize);
+
+  // Search from bottom (newest) to top (oldest), like tmux
+  for (int row = totalRows - 1; row >= 0; row--) {
+    int matchCol;
+    if (searchInRow(row, 0, true, matchCol)) {
+      _searchMatchRow = row;
+      _searchMatchCol = matchCol;
+      ydebug("search: found match at row={} col={}", row, matchCol);
+      scrollToRow(row);
+      return true;
+    }
+  }
+
+  ydebug("search: no match found");
+  return false;
+}
+
+bool GPUScreenImpl::searchNext() {
+  // Search only works in copy mode
+  if (!_copyMode) return false;
+  if (!_searchActive || _searchQuery.empty()) return false;
+
+  int sbSize = static_cast<int>(_scrollback.size());
+  int totalRows = sbSize + _rows;
+
+  // Start searching from current match position
+  int startRow = (_searchMatchRow >= 0) ? _searchMatchRow : totalRows - 1;
+  int startCol = (_searchMatchCol >= 0) ? _searchMatchCol + 1 : 0;
+
+  // Search forward (upward in terminal = older content)
+  // First, continue in current row from startCol
+  if (startRow >= 0 && startRow < totalRows) {
+    int matchCol;
+    if (searchInRow(startRow, startCol, true, matchCol)) {
+      _searchMatchRow = startRow;
+      _searchMatchCol = matchCol;
+      scrollToRow(startRow);
+      return true;
+    }
+  }
+
+  // Then search in previous rows (going up = older content)
+  for (int row = startRow - 1; row >= 0; row--) {
+    int matchCol;
+    if (searchInRow(row, 0, true, matchCol)) {
+      _searchMatchRow = row;
+      _searchMatchCol = matchCol;
+      scrollToRow(row);
+      return true;
+    }
+  }
+
+  // Wrap around: search from bottom
+  for (int row = totalRows - 1; row > startRow; row--) {
+    int matchCol;
+    if (searchInRow(row, 0, true, matchCol)) {
+      _searchMatchRow = row;
+      _searchMatchCol = matchCol;
+      scrollToRow(row);
+      return true;
+    }
+  }
+
+  return false;
+}
+
+bool GPUScreenImpl::searchPrevious() {
+  // Search only works in copy mode
+  if (!_copyMode) return false;
+  if (!_searchActive || _searchQuery.empty()) return false;
+
+  int sbSize = static_cast<int>(_scrollback.size());
+  int totalRows = sbSize + _rows;
+
+  // Start searching from current match position
+  int startRow = (_searchMatchRow >= 0) ? _searchMatchRow : 0;
+  int startCol = (_searchMatchCol > 0) ? _searchMatchCol - 1 : -1;
+
+  // Search backward (downward in terminal = newer content)
+  // First, continue in current row before startCol
+  if (startRow >= 0 && startRow < totalRows && startCol >= 0) {
+    int matchCol;
+    if (searchInRow(startRow, startCol, false, matchCol)) {
+      _searchMatchRow = startRow;
+      _searchMatchCol = matchCol;
+      scrollToRow(startRow);
+      return true;
+    }
+  }
+
+  // Then search in next rows (going down = newer content)
+  for (int row = startRow + 1; row < totalRows; row++) {
+    int matchCol;
+    if (searchInRow(row, -1, false, matchCol)) {
+      _searchMatchRow = row;
+      _searchMatchCol = matchCol;
+      scrollToRow(row);
+      return true;
+    }
+  }
+
+  // Wrap around: search from top
+  for (int row = 0; row < startRow; row++) {
+    int matchCol;
+    if (searchInRow(row, -1, false, matchCol)) {
+      _searchMatchRow = row;
+      _searchMatchCol = matchCol;
+      scrollToRow(row);
+      return true;
+    }
+  }
+
+  return false;
+}
+
+void GPUScreenImpl::clearSearch() {
+  _searchQuery.clear();
+  _searchMatchRow = -1;
+  _searchMatchCol = -1;
+  _searchActive = false;
+  _searchMatches.clear();
+  _currentMatchIndex = -1;
+  _hasDamage = true;  // Need to redraw to remove highlighting
+}
+
+void GPUScreenImpl::findAllMatches() {
+  _searchMatches.clear();
+  _currentMatchIndex = -1;
+  
+  if (_searchQuery.empty()) return;
+  
+  int sbSize = static_cast<int>(_scrollback.size());
+  int totalRows = sbSize + _rows;
+  int queryLen = static_cast<int>(_searchQuery.length());
+  
+  // Find all matches in all rows
+  for (int row = 0; row < totalRows; row++) {
+    std::string rowText = extractRowText(row);
+    size_t pos = 0;
+    while ((pos = rowText.find(_searchQuery, pos)) != std::string::npos) {
+      // Store starting position of each character in the match
+      for (int i = 0; i < queryLen; i++) {
+        _searchMatches.push_back({row, static_cast<int>(pos) + i});
+      }
+      pos += 1;  // Move forward to find overlapping matches
+    }
+  }
+  
+  ydebug("findAllMatches: found {} cells to highlight for query '{}'", 
+         _searchMatches.size(), _searchQuery);
+}
+
+//=============================================================================
+// Copy mode (tmux-style vi mode)
+//=============================================================================
+
+int GPUScreenImpl::getTotalRows() const {
+  return static_cast<int>(_scrollback.size()) + _rows;
+}
+
+void GPUScreenImpl::enterCopyMode() {
+  if (_copyMode) return;
+
+  _copyMode = true;
+  _copySelecting = false;
+  _copyRectMode = false;
+  _searchInputMode = false;
+  _gPending = 0;
+
+  // Position cursor at bottom of visible area (current view)
+  int sbSize = static_cast<int>(_scrollback.size());
+  _copyCursorRow = sbSize + _rows - 1;  // Last visible row in total row space
+  _copyCursorCol = 0;
+
+  // Scroll up by 1 to enter scrollback view if not already
+  if (_scrollOffset == 0 && sbSize > 0) {
+    scrollUp(1);
+  }
+
+  updateCopyModeStatus();
+  ydebug("Entered copy mode at row={} col={}", _copyCursorRow, _copyCursorCol);
+}
+
+void GPUScreenImpl::exitCopyMode() {
+  _copyMode = false;
+  _copySelecting = false;
+  _copyRectMode = false;
+  _searchInputMode = false;
+  _gPending = 0;
+  clearSelection();
+  clearSearch();
+  scrollToBottom();
+  _statusText = "[0] yetty";
+  updateStatusLine();
+  ydebug("Exited copy mode");
+}
+
+void GPUScreenImpl::updateCopyModeStatus() {
+  if (!_copyMode) return;
+
+  std::string status;
+
+  if (_searchInputMode) {
+    // In search mode, show only the search prompt and input
+    status = _searchForward ? "/" : "?";
+    status += _searchInputBuffer;
+  } else {
+    if (_copySelecting) {
+      if (_copyRectMode) {
+        status = "-- VISUAL BLOCK --";
+      } else {
+        status = "-- VISUAL --";
+      }
+    } else {
+      status = "[copy mode]";
+    }
+
+    // Show cursor position
+    status += " [" + std::to_string(_copyCursorRow) + "," + std::to_string(_copyCursorCol) + "]";
+  }
+
+  _statusText = status;
+  updateStatusLine();
+}
+
+void GPUScreenImpl::copyModeMoveCursor(int dRow, int dCol) {
+  int totalRows = getTotalRows();
+  int sbSize = static_cast<int>(_scrollback.size());
+
+  _copyCursorRow = std::max(0, std::min(_copyCursorRow + dRow, totalRows - 1));
+  _copyCursorCol = std::max(0, std::min(_copyCursorCol + dCol, _cols - 1));
+
+  // Update selection if selecting
+  if (_copySelecting) {
+    _selEndRow = _copyCursorRow;
+    _selEndCol = _copyCursorCol;
+    _hasSelection = true;
+    _hasDamage = true;
+  }
+
+  // Calculate visible row range
+  // When _scrollOffset = N, visible rows are [sbSize - N, sbSize - N + _rows - 1] in total row space
+  int firstVisibleRow = sbSize - _scrollOffset;
+  int lastVisibleRow = firstVisibleRow + _rows - 1;
+
+  // Only scroll if cursor is outside visible area
+  if (_copyCursorRow < firstVisibleRow) {
+    // Cursor above visible area - scroll up to show it at top
+    int newOffset = sbSize - _copyCursorRow;
+    newOffset = std::max(0, std::min(newOffset, sbSize));
+    if (newOffset != _scrollOffset) {
+      _scrollOffset = newOffset;
+      viewBufferDirty_ = true;
+      _hasDamage = true;
+    }
+  } else if (_copyCursorRow > lastVisibleRow) {
+    // Cursor below visible area - scroll down to show it at bottom
+    int newOffset = sbSize - (_copyCursorRow - _rows + 1);
+    newOffset = std::max(0, std::min(newOffset, sbSize));
+    if (newOffset != _scrollOffset) {
+      _scrollOffset = newOffset;
+      viewBufferDirty_ = true;
+      _hasDamage = true;
+    }
+  }
+
+  updateCopyModeStatus();
+  _gPending = 0;
+}
+
+void GPUScreenImpl::copyModeStartSelection() {
+  _copySelecting = true;
+  _selStartRow = _copyCursorRow;
+  _selStartCol = _copyCursorCol;
+  _selEndRow = _copyCursorRow;
+  _selEndCol = _copyCursorCol;
+  _hasSelection = true;
+  _hasDamage = true;
+  updateCopyModeStatus();
+  ydebug("Started selection at row={} col={}", _copyCursorRow, _copyCursorCol);
+}
+
+void GPUScreenImpl::copyModeYank() {
+  if (!_hasSelection) return;
+
+  std::string text = extractSelectedText();
+  if (!text.empty()) {
+    auto loop = *base::EventLoop::instance();
+    loop->dispatch(base::Event::copyEvent(std::make_shared<std::string>(text)));
+    yinfo("Yanked {} bytes to clipboard", text.size());
+  }
+
+  // Exit copy mode after yank (like tmux)
+  exitCopyMode();
+}
+
+void GPUScreenImpl::copyModeScrollHalfPage(bool up) {
+  int delta = _rows / 2;
+  copyModeMoveCursor(up ? -delta : delta, 0);
+}
+
+void GPUScreenImpl::copyModeScrollFullPage(bool up) {
+  int delta = _rows - 1;
+  copyModeMoveCursor(up ? -delta : delta, 0);
+}
+
+void GPUScreenImpl::copyModeGotoTop() {
+  _copyCursorRow = 0;
+  _copyCursorCol = 0;
+  if (_copySelecting) {
+    _selEndRow = _copyCursorRow;
+    _selEndCol = _copyCursorCol;
+    _hasDamage = true;
+  }
+  scrollToRow(_copyCursorRow);
+  updateCopyModeStatus();
+}
+
+void GPUScreenImpl::copyModeGotoBottom() {
+  _copyCursorRow = getTotalRows() - 1;
+  _copyCursorCol = 0;
+  if (_copySelecting) {
+    _selEndRow = _copyCursorRow;
+    _selEndCol = _copyCursorCol;
+    _hasDamage = true;
+  }
+  scrollToRow(_copyCursorRow);
+  updateCopyModeStatus();
+}
+
+void GPUScreenImpl::copyModeGotoLineStart() {
+  _copyCursorCol = 0;
+  if (_copySelecting) {
+    _selEndCol = _copyCursorCol;
+    _hasDamage = true;
+  }
+  updateCopyModeStatus();
+}
+
+void GPUScreenImpl::copyModeGotoLineEnd() {
+  // Find last non-blank character on line
+  std::string rowText = extractRowText(_copyCursorRow);
+  int lastNonBlank = static_cast<int>(rowText.size()) - 1;
+  while (lastNonBlank >= 0 && rowText[lastNonBlank] == ' ') {
+    lastNonBlank--;
+  }
+  _copyCursorCol = std::max(0, std::min(lastNonBlank, _cols - 1));
+  if (_copySelecting) {
+    _selEndCol = _copyCursorCol;
+    _hasDamage = true;
+  }
+  updateCopyModeStatus();
+}
+
+void GPUScreenImpl::copyModeWordNext() {
+  std::string rowText = extractRowText(_copyCursorRow);
+  int col = _copyCursorCol;
+  int len = static_cast<int>(rowText.size());
+
+  // Skip current word
+  while (col < len && rowText[col] != ' ') col++;
+  // Skip whitespace
+  while (col < len && rowText[col] == ' ') col++;
+
+  if (col >= len) {
+    // Move to next line
+    if (_copyCursorRow < getTotalRows() - 1) {
+      _copyCursorRow++;
+      _copyCursorCol = 0;
+    }
+  } else {
+    _copyCursorCol = col;
+  }
+
+  if (_copySelecting) {
+    _selEndRow = _copyCursorRow;
+    _selEndCol = _copyCursorCol;
+    _hasDamage = true;
+  }
+  scrollToRow(_copyCursorRow);
+  updateCopyModeStatus();
+}
+
+void GPUScreenImpl::copyModeWordPrev() {
+  std::string rowText = extractRowText(_copyCursorRow);
+  int col = _copyCursorCol;
+
+  // Skip whitespace
+  while (col > 0 && rowText[col - 1] == ' ') col--;
+  // Skip current word
+  while (col > 0 && rowText[col - 1] != ' ') col--;
+
+  if (col == 0 && _copyCursorCol == 0) {
+    // Move to previous line
+    if (_copyCursorRow > 0) {
+      _copyCursorRow--;
+      rowText = extractRowText(_copyCursorRow);
+      col = static_cast<int>(rowText.size());
+      while (col > 0 && rowText[col - 1] == ' ') col--;
+    }
+  }
+
+  _copyCursorCol = std::max(0, col);
+
+  if (_copySelecting) {
+    _selEndRow = _copyCursorRow;
+    _selEndCol = _copyCursorCol;
+    _hasDamage = true;
+  }
+  scrollToRow(_copyCursorRow);
+  updateCopyModeStatus();
+}
+
+void GPUScreenImpl::copyModeWordEnd() {
+  std::string rowText = extractRowText(_copyCursorRow);
+  int col = _copyCursorCol;
+  int len = static_cast<int>(rowText.size());
+
+  // Move at least one character
+  if (col < len - 1) col++;
+  
+  // Skip whitespace
+  while (col < len && rowText[col] == ' ') col++;
+  // Move to end of word
+  while (col < len - 1 && rowText[col + 1] != ' ') col++;
+
+  if (col >= len) {
+    // Move to next line
+    if (_copyCursorRow < getTotalRows() - 1) {
+      _copyCursorRow++;
+      rowText = extractRowText(_copyCursorRow);
+      col = 0;
+      while (col < static_cast<int>(rowText.size()) && rowText[col] == ' ') col++;
+      while (col < static_cast<int>(rowText.size()) - 1 && rowText[col + 1] != ' ') col++;
+    }
+  }
+
+  _copyCursorCol = std::min(col, _cols - 1);
+
+  if (_copySelecting) {
+    _selEndRow = _copyCursorRow;
+    _selEndCol = _copyCursorCol;
+    _hasDamage = true;
+  }
+  scrollToRow(_copyCursorRow);
+  updateCopyModeStatus();
+}
+
+void GPUScreenImpl::copyModeGotoScreenTop() {
+  int sbSize = static_cast<int>(_scrollback.size());
+  _copyCursorRow = sbSize - _scrollOffset;
+  _copyCursorCol = 0;
+  
+  if (_copySelecting) {
+    _selEndRow = _copyCursorRow;
+    _selEndCol = _copyCursorCol;
+    _hasDamage = true;
+  }
+  updateCopyModeStatus();
+}
+
+void GPUScreenImpl::copyModeGotoScreenMid() {
+  int sbSize = static_cast<int>(_scrollback.size());
+  _copyCursorRow = sbSize - _scrollOffset + _rows / 2;
+  _copyCursorCol = 0;
+  
+  if (_copySelecting) {
+    _selEndRow = _copyCursorRow;
+    _selEndCol = _copyCursorCol;
+    _hasDamage = true;
+  }
+  updateCopyModeStatus();
+}
+
+void GPUScreenImpl::copyModeGotoScreenBot() {
+  int sbSize = static_cast<int>(_scrollback.size());
+  _copyCursorRow = sbSize - _scrollOffset + _rows - 1;
+  _copyCursorCol = 0;
+  
+  if (_copySelecting) {
+    _selEndRow = _copyCursorRow;
+    _selEndCol = _copyCursorCol;
+    _hasDamage = true;
+  }
+  updateCopyModeStatus();
+}
+
+void GPUScreenImpl::copyModeParaNext() {
+  int totalRows = getTotalRows();
+  int row = _copyCursorRow;
+  
+  // Skip current non-empty lines
+  while (row < totalRows - 1) {
+    std::string text = extractRowText(row);
+    bool empty = text.empty() || text.find_first_not_of(' ') == std::string::npos;
+    if (empty) break;
+    row++;
+  }
+  // Skip empty lines
+  while (row < totalRows - 1) {
+    std::string text = extractRowText(row);
+    bool empty = text.empty() || text.find_first_not_of(' ') == std::string::npos;
+    if (!empty) break;
+    row++;
+  }
+  
+  _copyCursorRow = row;
+  _copyCursorCol = 0;
+  
+  if (_copySelecting) {
+    _selEndRow = _copyCursorRow;
+    _selEndCol = _copyCursorCol;
+    _hasDamage = true;
+  }
+  copyModeMoveCursor(0, 0);  // This will scroll if needed
+}
+
+void GPUScreenImpl::copyModeParaPrev() {
+  int row = _copyCursorRow;
+  
+  // Skip current non-empty lines
+  while (row > 0) {
+    std::string text = extractRowText(row);
+    bool empty = text.empty() || text.find_first_not_of(' ') == std::string::npos;
+    if (empty) break;
+    row--;
+  }
+  // Skip empty lines
+  while (row > 0) {
+    std::string text = extractRowText(row);
+    bool empty = text.empty() || text.find_first_not_of(' ') == std::string::npos;
+    if (!empty) break;
+    row--;
+  }
+  
+  _copyCursorRow = row;
+  _copyCursorCol = 0;
+  
+  if (_copySelecting) {
+    _selEndRow = _copyCursorRow;
+    _selEndCol = _copyCursorCol;
+    _hasDamage = true;
+  }
+  copyModeMoveCursor(0, 0);  // This will scroll if needed
+}
+
+void GPUScreenImpl::copyModeFindChar(char ch, bool forward, bool till) {
+  std::string rowText = extractRowText(_copyCursorRow);
+  int col = _copyCursorCol;
+  int len = static_cast<int>(rowText.size());
+  
+  _lastFindChar = ch;
+  _lastFindCmd = forward ? (till ? 't' : 'f') : (till ? 'T' : 'F');
+  
+  if (forward) {
+    for (int i = col + 1; i < len; i++) {
+      if (rowText[i] == ch) {
+        _copyCursorCol = till ? i - 1 : i;
+        break;
+      }
+    }
+  } else {
+    for (int i = col - 1; i >= 0; i--) {
+      if (rowText[i] == ch) {
+        _copyCursorCol = till ? i + 1 : i;
+        break;
+      }
+    }
+  }
+  
+  _copyCursorCol = std::max(0, std::min(_copyCursorCol, _cols - 1));
+  
+  if (_copySelecting) {
+    _selEndRow = _copyCursorRow;
+    _selEndCol = _copyCursorCol;
+    _hasDamage = true;
+  }
+  updateCopyModeStatus();
+}
+
+bool GPUScreenImpl::handleCopyModeKey(uint32_t codepoint, int key, int mods) {
+  // Handle search input mode first
+  if (_searchInputMode) {
+    if (key == KEY_COPY_ENTER) {
+      // Execute search
+      _searchInputMode = false;
+      if (!_searchInputBuffer.empty()) {
+        // First search - find all matches and go to first one
+        search(_searchInputBuffer);
+        // Move cursor to match if found
+        if (_searchMatchRow >= 0) {
+          _copyCursorRow = _searchMatchRow;
+          _copyCursorCol = _searchMatchCol;
+          if (_copySelecting) {
+            _selEndRow = _copyCursorRow;
+            _selEndCol = _copyCursorCol;
+            _hasDamage = true;
+          }
+        }
+      }
+      updateCopyModeStatus();
+      return true;
+    }
+    if (key == KEY_COPY_ESCAPE) {
+      // Cancel search
+      _searchInputMode = false;
+      _searchInputBuffer.clear();
+      updateCopyModeStatus();
+      return true;
+    }
+    if (key == 259) {  // GLFW_KEY_BACKSPACE
+      if (!_searchInputBuffer.empty()) {
+        _searchInputBuffer.pop_back();
+      }
+      updateCopyModeStatus();
+      return true;
+    }
+    if (codepoint >= 32 && codepoint < 127) {
+      _searchInputBuffer += static_cast<char>(codepoint);
+      updateCopyModeStatus();
+      return true;
+    }
+    return true;  // Consume all keys in search input mode
+  }
+
+  // Handle f/F/t/T char find mode
+  if (_findCharMode) {
+    _findCharMode = false;
+    if (codepoint >= 32 && codepoint < 127) {
+      bool forward = (_findCharCmd == 'f' || _findCharCmd == 't');
+      bool till = (_findCharCmd == 't' || _findCharCmd == 'T');
+      copyModeFindChar(static_cast<char>(codepoint), forward, till);
+    }
+    return true;
+  }
+
+  // Check for Ctrl modifiers
+  bool ctrl = (mods & 0x0002) != 0;
+
+  // Ctrl+u = half page up
+  if (ctrl && codepoint == KEY_COPY_HALFPAGE_UP) {
+    copyModeScrollHalfPage(true);
+    return true;
+  }
+  // Ctrl+d = half page down
+  if (ctrl && codepoint == KEY_COPY_HALFPAGE_DOWN) {
+    copyModeScrollHalfPage(false);
+    return true;
+  }
+  // Ctrl+b = page up
+  if (ctrl && codepoint == KEY_COPY_PAGE_UP) {
+    copyModeScrollFullPage(true);
+    return true;
+  }
+  // Ctrl+f = page down
+  if (ctrl && codepoint == KEY_COPY_PAGE_DOWN) {
+    copyModeScrollFullPage(false);
+    return true;
+  }
+  // Ctrl+v = rectangle selection mode
+  if (ctrl && codepoint == 'v') {
+    if (!_copySelecting) {
+      copyModeStartSelection();
+    }
+    _copyRectMode = !_copyRectMode;
+    updateCopyModeStatus();
+    return true;
+  }
+
+  // Handle non-Ctrl keys
+  switch (codepoint) {
+    // Navigation
+    case KEY_COPY_LEFT:
+      copyModeMoveCursor(0, -1);
+      return true;
+    case KEY_COPY_DOWN:
+      copyModeMoveCursor(1, 0);
+      return true;
+    case KEY_COPY_UP:
+      copyModeMoveCursor(-1, 0);
+      return true;
+    case KEY_COPY_RIGHT:
+      copyModeMoveCursor(0, 1);
+      return true;
+
+    case KEY_COPY_WORD_NEXT:
+      copyModeWordNext();
+      return true;
+    case KEY_COPY_WORD_PREV:
+      copyModeWordPrev();
+      return true;
+    case KEY_COPY_WORD_END:
+      copyModeWordEnd();
+      return true;
+    case KEY_COPY_WORD_NEXT_BIG:  // W
+      copyModeWordNext();  // Same as w for now (whitespace-based)
+      return true;
+    case KEY_COPY_WORD_PREV_BIG:  // B
+      copyModeWordPrev();  // Same as b for now
+      return true;
+    case KEY_COPY_WORD_END_BIG:   // E
+      copyModeWordEnd();   // Same as e for now
+      return true;
+
+    case KEY_COPY_LINE_START:
+    case KEY_COPY_LINE_FIRST_NONBLANK:
+      copyModeGotoLineStart();
+      return true;
+    case KEY_COPY_LINE_END:
+      copyModeGotoLineEnd();
+      return true;
+
+    // Screen position
+    case KEY_COPY_SCREEN_TOP:  // H
+      copyModeGotoScreenTop();
+      return true;
+    case KEY_COPY_SCREEN_MID:  // M
+      copyModeGotoScreenMid();
+      return true;
+    case KEY_COPY_SCREEN_BOT:  // L
+      copyModeGotoScreenBot();
+      return true;
+
+    // Paragraph movement
+    case KEY_COPY_PARA_PREV:  // {
+      copyModeParaPrev();
+      return true;
+    case KEY_COPY_PARA_NEXT:  // }
+      copyModeParaNext();
+      return true;
+
+    // Find char in line
+    case KEY_COPY_FIND_CHAR:      // f
+    case KEY_COPY_FIND_CHAR_BACK: // F
+    case KEY_COPY_TILL_CHAR:      // t
+    case KEY_COPY_TILL_CHAR_BACK: // T
+      _findCharMode = true;
+      _findCharCmd = static_cast<char>(codepoint);
+      return true;
+    case KEY_COPY_REPEAT_FIND:    // ;
+      if (_lastFindChar != 0) {
+        bool forward = (_lastFindCmd == 'f' || _lastFindCmd == 't');
+        bool till = (_lastFindCmd == 't' || _lastFindCmd == 'T');
+        copyModeFindChar(_lastFindChar, forward, till);
+      }
+      return true;
+    case KEY_COPY_REPEAT_FIND_REV: // ,
+      if (_lastFindChar != 0) {
+        bool forward = !(_lastFindCmd == 'f' || _lastFindCmd == 't');
+        bool till = (_lastFindCmd == 't' || _lastFindCmd == 'T');
+        copyModeFindChar(_lastFindChar, forward, till);
+      }
+      return true;
+
+    case KEY_COPY_TOP:  // 'g'
+      if (_gPending > 0) {
+        // gg = go to top
+        copyModeGotoTop();
+        _gPending = 0;
+      } else {
+        _gPending = 1;
+      }
+      return true;
+
+    case KEY_COPY_BOTTOM:  // 'G'
+      copyModeGotoBottom();
+      _gPending = 0;
+      return true;
+
+    // Search
+    case KEY_COPY_SEARCH_FWD:
+      _searchInputMode = true;
+      _searchForward = true;
+      _searchInputBuffer.clear();
+      updateCopyModeStatus();
+      return true;
+    case KEY_COPY_SEARCH_BWD:
+      _searchInputMode = true;
+      _searchForward = false;
+      _searchInputBuffer.clear();
+      updateCopyModeStatus();
+      return true;
+    case KEY_COPY_SEARCH_NEXT:
+      if (_searchForward) {
+        searchNext();
+      } else {
+        searchPrevious();
+      }
+      if (_searchMatchRow >= 0) {
+        _copyCursorRow = _searchMatchRow;
+        _copyCursorCol = _searchMatchCol;
+        if (_copySelecting) {
+          _selEndRow = _copyCursorRow;
+          _selEndCol = _copyCursorCol;
+          _hasDamage = true;
+        }
+        scrollToRow(_copyCursorRow);
+      }
+      updateCopyModeStatus();
+      return true;
+    case KEY_COPY_SEARCH_PREV:
+      if (_searchForward) {
+        searchPrevious();
+      } else {
+        searchNext();
+      }
+      if (_searchMatchRow >= 0) {
+        _copyCursorRow = _searchMatchRow;
+        _copyCursorCol = _searchMatchCol;
+        if (_copySelecting) {
+          _selEndRow = _copyCursorRow;
+          _selEndCol = _copyCursorCol;
+          _hasDamage = true;
+        }
+        scrollToRow(_copyCursorRow);
+      }
+      updateCopyModeStatus();
+      return true;
+
+    // Selection
+    case KEY_COPY_START_SELECTION:  // 'v' - toggle visual selection mode
+      if (_copySelecting) {
+        // Already selecting - cancel selection
+        _copySelecting = false;
+        _hasSelection = false;
+        _hasDamage = true;
+      } else {
+        // Start selection at current cursor
+        copyModeStartSelection();
+      }
+      updateCopyModeStatus();
+      return true;
+    case KEY_COPY_VISUAL_LINE:  // 'V' - visual line mode (select whole lines)
+      if (!_copySelecting) {
+        _copySelecting = true;
+        _selStartRow = _copyCursorRow;
+        _selStartCol = 0;
+        _selEndRow = _copyCursorRow;
+        _selEndCol = _cols - 1;
+        _hasSelection = true;
+        _hasDamage = true;
+      }
+      updateCopyModeStatus();
+      return true;
+    case KEY_COPY_YANK:
+      copyModeYank();
+      return true;
+    case KEY_COPY_RECT_TOGGLE:  // Ctrl-v - rectangle mode
+      _copyRectMode = !_copyRectMode;
+      updateCopyModeStatus();
+      return true;
+
+    // Exit
+    case KEY_COPY_QUIT:
+      exitCopyMode();
+      return true;
+
+    default:
+      break;
+  }
+
+  // Handle special keys (non-character keys)
+  switch (key) {
+    case KEY_COPY_ESCAPE:
+      exitCopyMode();
+      return true;
+    case KEY_COPY_ENTER:
+      if (_hasSelection) {
+        copyModeYank();
+      } else {
+        exitCopyMode();
+      }
+      return true;
+    // Arrow keys
+    case 265:  // GLFW_KEY_UP
+      copyModeMoveCursor(-1, 0);
+      return true;
+    case 264:  // GLFW_KEY_DOWN
+      copyModeMoveCursor(1, 0);
+      return true;
+    case 263:  // GLFW_KEY_LEFT
+      copyModeMoveCursor(0, -1);
+      return true;
+    case 262:  // GLFW_KEY_RIGHT
+      copyModeMoveCursor(0, 1);
+      return true;
+    // Page Up/Down
+    case 266:  // GLFW_KEY_PAGE_UP
+      copyModeScrollFullPage(true);
+      return true;
+    case 267:  // GLFW_KEY_PAGE_DOWN
+      copyModeScrollFullPage(false);
+      return true;
+    // Home/End
+    case 268:  // GLFW_KEY_HOME
+      copyModeGotoLineStart();
+      return true;
+    case 269:  // GLFW_KEY_END
+      copyModeGotoLineEnd();
+      return true;
+    default:
+      break;
+  }
+
+  _gPending = 0;  // Reset g pending on any other key
+  return false;
+}
+
+//=============================================================================
+// Status line (tmux-style bar at bottom)
+//=============================================================================
+
+void GPUScreenImpl::updateStatusLine() {
+  if (!_statusLineEnabled || _cols == 0) return;
+
+  // Ensure status line buffer is sized correctly
+  if (_statusLine.size() != static_cast<size_t>(_cols)) {
+    _statusLine.resize(_cols);
+  }
+
+  // Default colors for status line (green on black, like tmux default)
+  uint8_t fgR = 0, fgG = 255, fgB = 0;      // Green text
+  uint8_t bgR = 0, bgG = 0, bgB = 0;        // Black background
+  uint8_t style = 0;
+
+  // Get space glyph
+  uint32_t spaceGlyph = _cachedSpaceGlyph;
+  if (spaceGlyph == 0 && _msdfFont) {
+    spaceGlyph = _msdfFont->getGlyphIndex(' ');
+  }
+
+  // Clear status line with spaces
+  for (int col = 0; col < _cols; col++) {
+    _statusLine[col] = {spaceGlyph, fgR, fgG, fgB, 255, bgR, bgG, bgB, style};
+  }
+
+  // Render status text
+  if (!_statusText.empty() && _msdfFont) {
+    int col = 0;
+    for (size_t i = 0; i < _statusText.size() && col < _cols; i++) {
+      char ch = _statusText[i];
+      uint32_t glyph = _msdfFont->getGlyphIndex(static_cast<uint32_t>(ch));
+      _statusLine[col] = {glyph, fgR, fgG, fgB, 255, bgR, bgG, bgB, style};
+      col++;
+    }
+  }
+
+  _hasDamage = true;
+}
+
+void GPUScreenImpl::setStatusText(const std::string& text) {
+  _statusText = text;
+  updateStatusLine();
+}
+
+void GPUScreenImpl::clearStatusLine() {
+  _statusText.clear();
+  updateStatusLine();
 }
 
 //=============================================================================
@@ -1871,6 +3132,8 @@ void GPUScreenImpl::suspendOffscreenCards(int scrolledRow) {
     if (it != _cards.end()) {
       yinfo("GPUScreen::suspendOffscreenCards: suspending card '{}' slotIndex={}",
             it->second->typeName(), slotIndex);
+      if (it->second->needsBuffer())  _bufferLayoutChanged = true;
+      if (it->second->needsTexture()) _textureLayoutChanged = true;
       it->second->suspend();
       _inactiveCards[slotIndex] = std::move(it->second);
       _cards.erase(it);
@@ -1910,6 +3173,8 @@ void GPUScreenImpl::reactivateVisibleCards() {
     auto it = _inactiveCards.find(slotIndex);
     if (it != _inactiveCards.end()) {
       yinfo("GPUScreen::reactivateVisibleCards: reactivating card slotIndex={}", slotIndex);
+      if (it->second->needsBuffer())  _bufferLayoutChanged = true;
+      if (it->second->needsTexture()) _textureLayoutChanged = true;
       _cards[slotIndex] = std::move(it->second);
       _inactiveCards.erase(it);
     }
@@ -2313,6 +3578,8 @@ void GPUScreenImpl::registerCard(CardPtr card) {
   card->setCellSize(getCellWidth(), getCellHeight());
   uint32_t slotIndex = card->metadataSlotIndex();
   ydebug("GPUScreenImpl::registerCard: registered card at slotIndex {}", slotIndex);
+  if (card->needsBuffer())  _bufferLayoutChanged = true;
+  if (card->needsTexture()) _textureLayoutChanged = true;
   _cards[slotIndex] = std::move(card);
 }
 
@@ -2528,7 +3795,9 @@ void GPUScreenImpl::registerForFocus() {
                          sharedAs<base::EventListener>());
   loop->registerListener(base::Event::Type::Paste,
                          sharedAs<base::EventListener>());
-  yinfo("GPUScreen {} registered for SetFocus, Mouse, Scroll and Paste events", _id);
+  loop->registerListener(base::Event::Type::CommandKey,
+                         sharedAs<base::EventListener>());
+  yinfo("GPUScreen {} registered for SetFocus, Mouse, Scroll, Paste and CommandKey events", _id);
 
   // Auto-focus on startup so keyboard works immediately
   loop->dispatch(base::Event::focusEvent(_id));
@@ -2760,7 +4029,10 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
             yinfo("GPUScreen {} zoom: {:.0f}%", _id, _zoomLevel * 100.0f);
           }
         } else {
-          // Normal scroll: scrollback
+          // Normal scroll: enter copy mode and scroll
+          if (!_copyMode && event.scroll.dy > 0) {
+            enterCopyMode();
+          }
           int lines = static_cast<int>(event.scroll.dy * 3);  // 3 lines per notch
           if (lines > 0) {
             scrollUp(lines);
@@ -2816,15 +4088,75 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
 
   // Handle keyboard events (only when focused)
   if (_focused) {
-    // When scrolled back, Enter exits scrollback mode (like tmux copy mode)
-    if (_scrollOffset > 0) {
-      if (event.type == base::Event::Type::KeyDown && event.key.key == 257) {
-        ydebug("GPUScreen::onEvent: Enter pressed in scrollback - scrolling to bottom");
-        scrollToBottom();
+    // Handle command mode (waiting for key after Ctrl+\) - check FIRST
+    if (_commandMode) {
+      if (event.type == base::Event::Type::Char) {
+        uint32_t cp = event.chr.codepoint;
+        ydebug("GPUScreen: Command mode Char: codepoint={} ('{}')", cp, (char)cp);
+        _commandMode = false;
+
+        // '[' - Enter copy mode
+        if (cp == '[') {
+          ydebug("GPUScreen: Entering copy mode via Char '[']");
+          enterCopyMode();
+          return Ok(true);
+        }
+
+        // Other commands can be added here
+        return Ok(true);  // consume unknown command
+      }
+      if (event.type == base::Event::Type::KeyDown) {
+        int key = event.key.key;
+        ydebug("GPUScreen: Command mode KeyDown: key={}", key);
+
+        // Escape cancels command mode
+        if (key == 256) {  // GLFW_KEY_ESCAPE
+          _commandMode = false;
+          return Ok(true);
+        }
+
+        // For printable keys, just consume KeyDown - the Char event will handle the command
+        // Don't reset _commandMode here, let Char event do it
         return Ok(true);
       }
     }
 
+    // Check for Ctrl+\ prefix key (enters command mode)
+    // Ctrl+\ sends ASCII 28 (File Separator) or codepoint 92 with Ctrl mod
+    if (event.type == base::Event::Type::Char) {
+      if ((event.chr.codepoint == 28) ||
+          (event.chr.codepoint == '\\' && (event.chr.mods & 0x0002))) {
+        ydebug("GPUScreen: Entering command mode (Ctrl+\\ pressed)");
+        _commandMode = true;
+        return Ok(true);  // consume
+      }
+    }
+    if (event.type == base::Event::Type::KeyDown) {
+      // Also check KeyDown for Ctrl+\ (key code 92)
+      if (event.key.key == 92 && (event.key.mods & 0x0002) && !(event.key.mods & ~0x0002)) {
+        ydebug("GPUScreen: Entering command mode (Ctrl+\\ pressed via KeyDown)");
+        _commandMode = true;
+        return Ok(true);  // consume
+      }
+    }
+
+    // Handle keyboard events in copy mode
+    if (_copyMode) {
+      if (event.type == base::Event::Type::Char) {
+        if (handleCopyModeKey(event.chr.codepoint, 0, event.chr.mods)) {
+          return Ok(true);
+        }
+      }
+      if (event.type == base::Event::Type::KeyDown) {
+        if (handleCopyModeKey(0, event.key.key, event.key.mods)) {
+          return Ok(true);
+        }
+      }
+      // Consume all keyboard input in copy mode
+      return Ok(true);
+    }
+
+    // Normal mode: send keys to vterm
     // Clear selection on any keyboard input
     if (_hasSelection &&
         (event.type == base::Event::Type::Char || event.type == base::Event::Type::KeyDown)) {
@@ -2888,20 +4220,85 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
     gcInactiveCards();
   }
 
-  // Update all active cards before rendering (suspended cards are in _inactiveCards)
+  // Loop 1+2: Buffer cards — only when a buffer card entered or left
+  if (_bufferLayoutChanged && _cardManager) {
+    ydebug("GPUScreen::render: _bufferLayoutChanged=true, {} active cards", _cards.size());
+
+    // Loop 1: Buffer cards declare their buffer needs
+    for (auto& [slotIndex, card] : _cards) {
+      if (card->needsBuffer()) {
+        ydebug("GPUScreen::render: Loop1 declareBufferNeeds card='{}' slot={}", card->typeName(), slotIndex);
+        card->declareBufferNeeds();
+      }
+    }
+    // Pre-size buffer to fit all declared needs
+    if (auto res = _cardManager->bufferManager()->commitReservations(); !res) {
+      yerror("GPUScreen::render: commitReservations failed: {}", error_msg(res));
+      return Err<void>("GPUScreen::render: commitReservations failed", res);
+    }
+
+    // Loop 2: Buffer cards allocate their buffers
+    for (auto& [slotIndex, card] : _cards) {
+      if (card->needsBuffer()) {
+        ydebug("GPUScreen::render: Loop2 allocateBuffers card='{}' slot={}", card->typeName(), slotIndex);
+        if (auto res = card->allocateBuffers(); !res) {
+          yerror("GPUScreen::render: card '{}' allocateBuffers FAILED: {}", card->typeName(), error_msg(res));
+        }
+      }
+    }
+
+    _bufferLayoutChanged = false;
+  }
+
+  // Loop 3: Texture cards — only when a texture card entered or left
+  if (_textureLayoutChanged && _cardManager) {
+    ydebug("GPUScreen::render: _textureLayoutChanged=true, {} active cards", _cards.size());
+
+    for (auto& [slotIndex, card] : _cards) {
+      if (card->needsTexture()) {
+        ydebug("GPUScreen::render: Loop3 allocateTextures card='{}' slot={}", card->typeName(), slotIndex);
+        if (auto res = card->allocateTextures(); !res) {
+          yerror("GPUScreen::render: card '{}' allocateTextures FAILED: {}", card->typeName(), error_msg(res));
+        }
+      }
+    }
+
+    // Create/repack texture atlas after all texture cards have allocated
+    if (_cardManager->textureManager()) {
+      ydebug("GPUScreen::render: calling createAtlas");
+      if (auto res = _cardManager->textureManager()->createAtlas(); !res) {
+        yerror("GPUScreen::render: createAtlas FAILED: {}", error_msg(res));
+      }
+      // Atlas texture may have been recreated (init or grow) —
+      // force bind group rebuild so it references the current texture.
+      _cardManager->invalidateBindGroup();
+    }
+
+    _textureLayoutChanged = false;
+  }
+
+  auto _loopT1 = std::chrono::steady_clock::now();
+
+  // Loop 4: Render all active cards (write data, no allocations)
   for (auto& [slotIndex, card] : _cards) {
-    ydebug("GPUScreen::render: updating card '{}' slotIndex={} metaOffset={}",
+    ydebug("GPUScreen::render: Loop4 render card='{}' slot={} metaOffset={}",
            card->typeName(), slotIndex, card->metadataOffset());
-    if (auto res = card->update(0.0f); !res) {
-      yerror("GPUScreen::render: card '{}' update failed: {}", card->typeName(), error_msg(res));
-      return Err<void>("GPUScreen::render: card update failed", res);
+    {
+      static auto t0 = std::chrono::steady_clock::now();
+      auto now = std::chrono::steady_clock::now();
+      float timeSec = std::chrono::duration<float>(now - t0).count();
+      if (auto res = card->render(timeSec); !res) {
+        yerror("GPUScreen::render: card '{}' render FAILED: {}", card->typeName(), error_msg(res));
+        return Err<void>("GPUScreen::render: card render failed", res);
+      }
     }
   }
 
   // Flush CardManager (packs atlas, updates bind group if needed, uploads buffers)
   if (_cardManager) {
+    ydebug("GPUScreen::render: calling flush");
     if (auto res = _cardManager->flush(_ctx.gpu.queue); !res) {
-      yerror("GPUScreen: CardManager flush failed: {}", error_msg(res));
+      yerror("GPUScreen: CardManager flush FAILED: {}", error_msg(res));
       return Err<void>("GPUScreen: CardManager flush failed", res);
     }
   }
@@ -2910,6 +4307,9 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
   if (!cells || _cols == 0 || _rows == 0) {
     return Ok(); // Nothing to render
   }
+
+  // Calculate total rows including status line
+  int totalRows = _statusLineEnabled ? _rows + 1 : _rows;
 
   // Initialize pipeline on first render
   if (!_pipelineInitialized) {
@@ -2925,9 +4325,9 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
   // Hot-recompile shader if providers are dirty (e.g. new glyph/card enabled)
   shaderMgr->update();
 
-  // Recreate cell buffer if grid size changed
-  size_t requiredSize = static_cast<size_t>(_cols) * _rows * sizeof(Cell);
-  if (_cols != _textureCols || _rows != _textureRows || !_cellBuffer ||
+  // Recreate cell buffer if grid size changed (include status line row)
+  size_t requiredSize = static_cast<size_t>(_cols) * totalRows * sizeof(Cell);
+  if (_cols != _textureCols || totalRows != _textureRows || !_cellBuffer ||
       _cellBufferSize < requiredSize) {
     if (_cellBuffer) {
       wgpuBufferRelease(_cellBuffer);
@@ -2944,10 +4344,10 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
     }
     _cellBufferSize = requiredSize;
     _textureCols = _cols;
-    _textureRows = _rows;
+    _textureRows = totalRows;
     _needsBindGroupRecreation = true;
     yinfo("GPUScreenImpl::render: created cell buffer {}x{} ({} bytes)", _cols,
-          _rows, requiredSize);
+          totalRows, requiredSize);
   }
 
   // Recreate bind group if needed
@@ -3017,9 +4417,16 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
     }
   }
 
-  // Upload cells to GPU
+  // Upload vterm cells to GPU
   wgpuQueueWriteBuffer(queue, _cellBuffer, 0, cells,
                        _cols * _rows * sizeof(Cell));
+
+  // Upload status line cells (appended after vterm cells)
+  if (_statusLineEnabled && !_statusLine.empty()) {
+    size_t statusOffset = static_cast<size_t>(_cols * _rows) * sizeof(Cell);
+    wgpuQueueWriteBuffer(queue, _cellBuffer, statusOffset, _statusLine.data(),
+                         _statusLine.size() * sizeof(Cell));
+  }
 
   // Debug: scan uploaded cells for card glyphs
   {
@@ -3047,21 +4454,32 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
   float cellWidthF = _baseCellWidth * _zoomLevel;
   float cellHeightF = _baseCellHeight * _zoomLevel;
 
-  // Screen size is grid * cell size
+  // Screen size is grid * cell size (including status line)
   float screenWidth = static_cast<float>(_cols) * cellWidthF;
-  float screenHeight = static_cast<float>(_rows) * cellHeightF;
+  float screenHeight = static_cast<float>(totalRows) * cellHeightF;
 
   // Update uniforms
   _uniforms.projection =
       glm::ortho(0.0f, screenWidth, screenHeight, 0.0f, -1.0f, 1.0f);
   _uniforms.screenSize = {screenWidth, screenHeight};
   _uniforms.cellSize = {cellWidthF, cellHeightF};
-  _uniforms.gridSize = {static_cast<float>(_cols), static_cast<float>(_rows)};
+  _uniforms.gridSize = {static_cast<float>(_cols), static_cast<float>(totalRows)};
   _uniforms.pixelRange = _msdfFont ? _msdfFont->getPixelRange() : 2.0f;
   _uniforms.scale = _zoomLevel;
-  _uniforms.cursorPos = {static_cast<float>(_cursorCol),
-                         static_cast<float>(_cursorRow)};
-  _uniforms.cursorVisible = _cursorVisible ? 1.0f : 0.0f;
+  
+  // In copy mode, show cursor at copy mode position (converted to view row)
+  if (_copyMode) {
+    int sbSize = static_cast<int>(_scrollback.size());
+    int firstVisibleRow = sbSize - _scrollOffset;
+    int viewRow = _copyCursorRow - firstVisibleRow;
+    _uniforms.cursorPos = {static_cast<float>(_copyCursorCol),
+                           static_cast<float>(viewRow)};
+    _uniforms.cursorVisible = 1.0f;  // Always show cursor in copy mode
+  } else {
+    _uniforms.cursorPos = {static_cast<float>(_cursorCol),
+                           static_cast<float>(_cursorRow)};
+    _uniforms.cursorVisible = _cursorVisible ? 1.0f : 0.0f;
+  }
   _uniforms.cursorShape = static_cast<float>(_cursorShape);
   _uniforms.viewportOrigin = {_viewportX, _viewportY};
   _uniforms.cursorBlink = _cursorBlink ? 1.0f : 0.0f;

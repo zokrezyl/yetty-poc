@@ -1,4 +1,4 @@
-# YDraw Big Demo with eval count heatmap debug
+# HDraw Big Demo with eval count heatmap debug
 background: "#1a1a2e"
 flags: show_eval_count
 body:

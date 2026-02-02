@@ -9,17 +9,27 @@
 
 namespace yetty {
 
+// Metadata config (moved from CardBufferConfig)
+struct MetadataConfig {
+    uint32_t pool32Count = 0;
+    uint32_t pool64Count = 1024;
+    uint32_t pool128Count = 16;
+    uint32_t pool256Count = 8;
+};
+
 /**
  * CardManager - Coordinates CardBufferManager and CardTextureManager.
  *
- * Creates both managers (as shared_ptr), creates the combined bind group
- * that includes resources from both, and handles GPU upload coordination.
+ * Owns the metadata GPU buffer (binding 1) and shared bind group.
+ * CardBufferManager owns the linear storage buffer (binding 2).
+ * CardTextureManager owns the atlas texture (binding 3,4) and texture buffer (binding 5).
  */
 class CardManager {
 public:
     using Ptr = std::shared_ptr<CardManager>;
 
     struct Config {
+        MetadataConfig metadata;
         CardBufferConfig buffer;
         CardTextureConfig texture;
     };
@@ -32,25 +42,37 @@ public:
     virtual ~CardManager() = default;
 
     // =========================================================================
+    // Metadata operations (owned by CardManager)
+    // =========================================================================
+    virtual Result<MetadataHandle> allocateMetadata(uint32_t size) = 0;
+    virtual Result<void> deallocateMetadata(MetadataHandle handle) = 0;
+    virtual Result<void> writeMetadata(MetadataHandle handle, const void* data, uint32_t size) = 0;
+    virtual Result<void> writeMetadataAt(MetadataHandle handle, uint32_t offset, const void* data, uint32_t size) = 0;
+
+    // =========================================================================
     // Manager accessors
     // =========================================================================
     virtual CardBufferManager::Ptr bufferManager() const = 0;
     virtual CardTextureManager::Ptr textureManager() const = 0;
 
     // =========================================================================
-    // Bind group (combines resources from both managers)
+    // GPU resources
     // =========================================================================
+    virtual WGPUBuffer metadataBuffer() const = 0;
     virtual WGPUBindGroupLayout sharedBindGroupLayout() const = 0;
     virtual WGPUBindGroup sharedBindGroup() const = 0;
 
     // Recreate bind group (call after atlas initialization or buffer reallocation)
     virtual Result<void> updateBindGroup() = 0;
 
+    // Force bind group recreation on next updateBindGroup() call
+    virtual void invalidateBindGroup() = 0;
+
     // =========================================================================
     // GPU upload coordination
     // =========================================================================
 
-    // Pack atlas and flush all dirty data to GPU
+    // Flush all dirty data to GPU (metadata + buffer + atlas)
     virtual Result<void> flush(WGPUQueue queue) = 0;
 
 protected:

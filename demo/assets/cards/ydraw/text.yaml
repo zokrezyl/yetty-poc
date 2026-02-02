@@ -1,0 +1,39 @@
+# YDraw Text Demo - Text with different sizes
+background: "#1a1a2e"
+
+body:
+  - text:
+      position: [20, 30]
+      content: "Small Text (12px)"
+      font-size: 12
+      color: "#ecf0f1"
+
+  - text:
+      position: [20, 60]
+      content: "Medium Text (18px)"
+      font-size: 18
+      color: "#3498db"
+
+  - text:
+      position: [20, 100]
+      content: "Large Text (24px)"
+      font-size: 24
+      color: "#2ecc71"
+
+  - text:
+      position: [20, 150]
+      content: "Extra Large (36px)"
+      font-size: 36
+      color: "#e74c3c"
+
+  - text:
+      position: [20, 220]
+      content: "Huge Title (48px)"
+      font-size: 48
+      color: "#f39c12"
+
+  - text:
+      position: [20, 290]
+      content: "Mixed: Hello World!"
+      font-size: 32
+      color: "#9b59b6"

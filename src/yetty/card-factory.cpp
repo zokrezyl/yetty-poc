@@ -2,10 +2,13 @@
 #include <yetty/yetty-context.h>
 #include "cards/image/image.h"
 #include "cards/plot/plot.h"
-#include "cards/ydraw/ydraw.h"
 #include "cards/hdraw/hdraw.h"
+#include "cards/ydraw/ydraw.h"
 #include "cards/kdraw/kdraw.h"
+#include "cards/jdraw/jdraw.h"
+#include "cards/ydraw-zoo/ydraw-zoo.h"
 #include "cards/ymery/ymery.h"
+#include "cards/markdown/markdown.h"
 #include "cards/thorvg/thorvg.h"
 #ifdef YETTY_CARD_PDF
 #include "cards/pdf/pdf.h"
@@ -47,20 +50,28 @@ public:
             return card::Plot::create(ctx, x, y, w, h, args, payload);
         });
 
-        registerCard("ydraw", [](const YettyContext& ctx,
-                                 int32_t x, int32_t y,
-                                 uint32_t w, uint32_t h,
-                                 const std::string& args,
-                                 const std::string& payload) {
-            return card::YDraw::create(ctx.cardManager->bufferManager(), ctx.gpu, x, y, w, h, args, payload);
-        });
-
         registerCard("hdraw", [](const YettyContext& ctx,
                                  int32_t x, int32_t y,
                                  uint32_t w, uint32_t h,
                                  const std::string& args,
                                  const std::string& payload) {
-            return card::HDraw::create(ctx, x, y, w, h, args, payload);
+            return card::HDraw::create(ctx.cardManager, ctx.gpu, x, y, w, h, args, payload);
+        });
+
+        registerCard("ydraw", [](const YettyContext& ctx,
+                                 int32_t x, int32_t y,
+                                 uint32_t w, uint32_t h,
+                                 const std::string& args,
+                                 const std::string& payload) {
+            return card::YDraw::create(ctx, x, y, w, h, args, payload);
+        });
+
+        registerCard("ydraw-zoo", [](const YettyContext& ctx,
+                                 int32_t x, int32_t y,
+                                 uint32_t w, uint32_t h,
+                                 const std::string& args,
+                                 const std::string& payload) {
+            return card::YDrawZoo::create(ctx, x, y, w, h, args, payload);
         });
 
         registerCard("kdraw", [](const YettyContext& ctx,
@@ -69,6 +80,22 @@ public:
                                  const std::string& args,
                                  const std::string& payload) {
             return card::KDraw::create(ctx, x, y, w, h, args, payload);
+        });
+
+        registerCard("jdraw", [](const YettyContext& ctx,
+                                 int32_t x, int32_t y,
+                                 uint32_t w, uint32_t h,
+                                 const std::string& args,
+                                 const std::string& payload) {
+            return card::JDraw::create(ctx, x, y, w, h, args, payload);
+        });
+
+        registerCard("markdown", [](const YettyContext& ctx,
+                                 int32_t x, int32_t y,
+                                 uint32_t w, uint32_t h,
+                                 const std::string& args,
+                                 const std::string& payload) {
+            return card::Markdown::create(ctx, x, y, w, h, args, payload);
         });
 
         registerCard("ymery", [](const YettyContext& ctx,

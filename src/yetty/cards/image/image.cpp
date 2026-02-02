@@ -29,7 +29,7 @@ public:
               int32_t x, int32_t y,
               uint32_t widthCells, uint32_t heightCells,
               const std::string& args, const std::string& payload)
-        : Image(ctx.cardManager->bufferManager(), ctx.cardManager->textureManager(), ctx.gpu, x, y, widthCells, heightCells)
+        : Image(ctx.cardManager, ctx.gpu, x, y, widthCells, heightCells)
         , _ctx(ctx)
         , _argsStr(args)
         , _payloadStr(payload)
@@ -83,18 +83,10 @@ public:
             }
         }
 
-        // Run GPU compute shader to scale, readback, and link to texture handle
-        if (!_originalPixels.empty()) {
-            recalculateScaledDimensions();
-            if (auto res = runScaleCompute(); !res) {
-                return Err<void>("Image::init: failed to run scale compute", res);
-            }
-        }
-
-        // Upload initial metadata
-        if (auto res = uploadMetadata(); !res) {
-            return Err<void>("Image::init: failed to upload metadata", res);
-        }
+        // Scaling + texture linking will happen via allocateTextures() in the lifecycle.
+        // setCellSize() sets _needsScaling=true, allocateTextures() picks it up.
+        _needsScaling = true;
+        _metadataDirty = true;
 
         // Register for events - cards have priority 1000, above gpu-screen
         if (auto res = registerForEvents(); !res) {
@@ -123,8 +115,8 @@ public:
         if (_scaledGpuBuffer) { wgpuBufferRelease(_scaledGpuBuffer); _scaledGpuBuffer = nullptr; }
 
         // Release texture handle
-        if (_textureHandle.isValid() && _textureMgr) {
-            _textureMgr->deallocateTextureHandle(_textureHandle);
+        if (_textureHandle.isValid() && _cardMgr) {
+            _cardMgr->textureManager()->deallocate(_textureHandle);
             _textureHandle = TextureHandle::invalid();
         }
 
@@ -156,8 +148,8 @@ public:
         if (_scaledGpuBuffer) { wgpuBufferRelease(_scaledGpuBuffer); _scaledGpuBuffer = nullptr; }
 
         // Deallocate texture handle
-        if (_textureHandle.isValid() && _textureMgr) {
-            _textureMgr->deallocateTextureHandle(_textureHandle);
+        if (_textureHandle.isValid() && _cardMgr) {
+            _cardMgr->textureManager()->deallocate(_textureHandle);
             _textureHandle = TextureHandle::invalid();
         }
         _scaledPixels.clear();
@@ -166,24 +158,31 @@ public:
               _originalPixels.size());
     }
 
-    Result<void> update(float time) override {
-        (void)time;
-
-        // Reconstruct after suspend: _originalPixels exists but texture handle is gone
-        if (!_textureHandle.isValid() && !_originalPixels.empty()) {
-            if (!_scalePipeline) {
-                if (auto res = createScalePipeline(); !res) {
-                    return Err<void>("Image::update: failed to recreate scale pipeline", res);
+    Result<void> allocateTextures() override {
+        if (!_originalPixels.empty()) {
+            // Scale if needed (first time, after suspend, or cell size changed)
+            if (_needsScaling || !_textureHandle.isValid() || _scaledPixels.empty()) {
+                if (!_scalePipeline) {
+                    if (auto res = createScalePipeline(); !res) {
+                        return Err<void>("Image::allocateTextures: failed to recreate scale pipeline", res);
+                    }
                 }
-            }
-            recalculateScaledDimensions();
-            if (auto res = runScaleCompute(); !res) {
-                return Err<void>("Image::update: failed to reconstruct texture", res);
+                recalculateScaledDimensions();
+                if (auto res = runScaleCompute(); !res) {
+                    return Err<void>("Image::allocateTextures: failed to reconstruct texture", res);
+                }
+                _needsScaling = false;
+            } else {
+                // Re-register existing pixels with texture manager
+                _cardMgr->textureManager()->write(_textureHandle, _scaledPixels.data());
             }
             _metadataDirty = true;
-            _needsScaling = false;
-            yinfo("Image::update: reconstructed texture from _originalPixels");
         }
+        return Ok();
+    }
+
+    Result<void> render(float time) override {
+        (void)time;
 
         if (_needsScaling && !_originalPixels.empty()) {
             if (auto res = runScaleCompute(); !res) {
@@ -618,13 +617,13 @@ private:
 
         // Allocate texture handle if needed, link scaled pixels
         if (!_textureHandle.isValid()) {
-            auto allocResult = _textureMgr->allocateTextureHandle();
+            auto allocResult = _cardMgr->textureManager()->allocate(_scaledWidth, _scaledHeight);
             if (!allocResult) {
                 return Err<void>("Image::runScaleCompute: failed to allocate texture handle", allocResult);
             }
             _textureHandle = *allocResult;
         }
-        _textureMgr->linkTextureData(_textureHandle, _scaledPixels.data(), _scaledWidth, _scaledHeight);
+        _cardMgr->textureManager()->write(_textureHandle, _scaledPixels.data());
 
         _metadataDirty = true;
 
@@ -644,10 +643,20 @@ private:
         yinfo("Image::loadImageFromPayload: payload size={}", _payloadStr.size());
 
         int width, height, channels;
-        uint8_t* pixels = stbi_load_from_memory(
-            reinterpret_cast<const uint8_t*>(_payloadStr.data()),
-            static_cast<int>(_payloadStr.size()),
-            &width, &height, &channels, 4);
+        uint8_t* pixels = nullptr;
+
+        // Detect if payload is a file path (starts with / and has no newlines)
+        if (_payloadStr.size() < 4096 &&
+            _payloadStr[0] == '/' &&
+            _payloadStr.find('\n') == std::string::npos) {
+            yinfo("Image::loadImageFromPayload: loading from file path: {}", _payloadStr);
+            pixels = stbi_load(_payloadStr.c_str(), &width, &height, &channels, 4);
+        } else {
+            pixels = stbi_load_from_memory(
+                reinterpret_cast<const uint8_t*>(_payloadStr.data()),
+                static_cast<int>(_payloadStr.size()),
+                &width, &height, &channels, 4);
+        }
 
         if (!pixels) {
             return Err<void>(std::string("Image::loadImageFromPayload: stbi_load failed: ") +
@@ -715,7 +724,7 @@ private:
         meta.textureHeight = _scaledHeight;
 
         if (_textureHandle.isValid()) {
-            auto pos = _textureMgr->getAtlasPosition(_textureHandle);
+            auto pos = _cardMgr->textureManager()->getAtlasPosition(_textureHandle);
             meta.atlasX = pos.x;
             meta.atlasY = pos.y;
         } else {

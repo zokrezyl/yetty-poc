@@ -1,19 +1,21 @@
 #include "kdraw.h"
-#include "../ydraw/ydraw.h"  // For SDFPrimitive definition
+#include "../hdraw/hdraw.h"  // For SDFPrimitive definition
 #include <yetty/ms-msdf-font.h>
 #include <yetty/font-manager.h>
 #include <ytrace/ytrace.hpp>
 #include <yaml-cpp/yaml.h>
 #include <sstream>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
+#include <iostream>
 #include <fstream>
 
 namespace yetty::card {
 
 //=============================================================================
-// AABB utilities (shared with ydraw/hdraw)
+// AABB utilities (shared with hdraw/ydraw)
 //=============================================================================
 
 static void computeAABB_kdraw(SDFPrimitive& prim) {
@@ -183,7 +185,7 @@ public:
               int32_t x, int32_t y,
               uint32_t widthCells, uint32_t heightCells,
               const std::string& args, const std::string& payload)
-        : KDraw(ctx.cardManager->bufferManager(), ctx.gpu, x, y, widthCells, heightCells)
+        : KDraw(ctx.cardManager, ctx.gpu, x, y, widthCells, heightCells)
         , _fontManager(ctx.fontManager)
         , _argsStr(args)
         , _payloadStr(payload)
@@ -221,28 +223,18 @@ public:
         // Parse args
         parseArgs(_argsStr);
 
-        // Parse payload if provided
+        // Parse payload into CPU staging (GPU buffers allocated by lifecycle loops)
+        _initParsing = true;
         if (!_payloadStr.empty()) {
             if (auto res = parsePayload(_payloadStr); !res) {
                 ywarn("KDraw::init: failed to parse payload: {}", error_msg(res));
             }
         }
+        _initParsing = false;
 
-        // Upload primitives to GPU storage
-        if (_primCount > 0 || !_glyphs.empty()) {
-            yinfo("KDraw::init: calling rebuildAndUpload for {} primitives, {} glyphs",
-                  _primCount, _glyphs.size());
-            if (auto res = rebuildAndUpload(); !res) {
-                return Err<void>("KDraw::init: rebuildAndUpload failed", res);
-            }
-            _dirty = false;
-        }
-
-        // Upload metadata
-        if (auto res = uploadMetadata(); !res) {
-            return Err<void>("KDraw::init: failed to upload metadata");
-        }
-        _metadataDirty = false;
+        yinfo("KDraw::init: parsed {} primitives into staging", _primStaging.size());
+        _dirty = true;
+        _metadataDirty = true;
 
         return Ok();
     }
@@ -275,7 +267,7 @@ public:
         }
 
         if (_derivedStorage.isValid() && _cardMgr) {
-            if (auto res = _cardMgr->deallocateBuffer(_derivedStorage); !res) {
+            if (auto res = _cardMgr->bufferManager()->deallocateBuffer(_derivedStorage); !res) {
                 yerror("KDraw::dispose: deallocateBuffer (derived) failed: {}", error_msg(res));
             }
             _derivedStorage = StorageHandle::invalid();
@@ -284,7 +276,7 @@ public:
         }
 
         if (_primStorage.isValid() && _cardMgr) {
-            if (auto res = _cardMgr->deallocateBuffer(_primStorage); !res) {
+            if (auto res = _cardMgr->bufferManager()->deallocateBuffer(_primStorage); !res) {
                 yerror("KDraw::dispose: deallocateBuffer (prims) failed: {}", error_msg(res));
             }
             _primStorage = StorageHandle::invalid();
@@ -315,7 +307,7 @@ public:
 
         // Deallocate derived storage (tile lists — will be rebuilt)
         if (_derivedStorage.isValid()) {
-            _cardMgr->deallocateBuffer(_derivedStorage);
+            _cardMgr->bufferManager()->deallocateBuffer(_derivedStorage);
             _derivedStorage = StorageHandle::invalid();
             _tileLists = nullptr;
             _tileListsSize = 0;
@@ -323,7 +315,7 @@ public:
 
         // Deallocate prim storage
         if (_primStorage.isValid()) {
-            _cardMgr->deallocateBuffer(_primStorage);
+            _cardMgr->bufferManager()->deallocateBuffer(_primStorage);
             _primStorage = StorageHandle::invalid();
             _primitives = nullptr;
             _primCount = 0;
@@ -334,36 +326,109 @@ public:
               _primStaging.size());
     }
 
-    Result<void> update(float time) override {
-        (void)time;
+    uint32_t computeDerivedSize() const {
+        const uint32_t ESTIMATED_CELL_PIXELS = 16;
+        uint32_t pixelWidth = _widthCells * ESTIMATED_CELL_PIXELS;
+        uint32_t pixelHeight = _heightCells * ESTIMATED_CELL_PIXELS;
+        uint32_t tcX = (pixelWidth + TILE_SIZE - 1) / TILE_SIZE;
+        uint32_t tcY = (pixelHeight + TILE_SIZE - 1) / TILE_SIZE;
+        uint32_t tileStride = 1 + MAX_PRIMS_PER_TILE;
+        uint32_t tileBytes = tcX * tcY * tileStride * sizeof(uint32_t);
+        uint32_t glyphBytes = static_cast<uint32_t>(_glyphs.size() * sizeof(KDrawGlyph));
+        return tileBytes + glyphBytes;
+    }
 
-        // Reconstruct after suspend: restore primitives from staging
-        if (!_primStorage.isValid() && !_primStaging.empty()) {
+    void declareBufferNeeds() override {
+        // Save existing GPU data to staging and deallocate
+        if (_primStorage.isValid() && _primCount > 0) {
+            _primStaging.resize(_primCount);
+            std::memcpy(_primStaging.data(), _primitives, _primCount * sizeof(SDFPrimitive));
+        }
+        if (_derivedStorage.isValid()) {
+            _cardMgr->bufferManager()->deallocateBuffer(_derivedStorage);
+            _derivedStorage = StorageHandle::invalid();
+            _tileLists = nullptr;
+            _tileListsSize = 0;
+        }
+        if (_primStorage.isValid()) {
+            _cardMgr->bufferManager()->deallocateBuffer(_primStorage);
+            _primStorage = StorageHandle::invalid();
+            _primitives = nullptr;
+            _primCount = 0;
+            _primCapacity = 0;
+        }
+        if (_tileCullBindGroup) {
+            wgpuBindGroupRelease(_tileCullBindGroup);
+            _tileCullBindGroup = nullptr;
+        }
+        // Reserve prim + derived
+        if (!_primStaging.empty()) {
+            uint32_t primSize = static_cast<uint32_t>(_primStaging.size()) * sizeof(SDFPrimitive);
+            _cardMgr->bufferManager()->reserve(primSize);
+            uint32_t derivedSize = computeDerivedSize();
+            if (derivedSize > 0) {
+                _cardMgr->bufferManager()->reserve(derivedSize);
+            }
+        }
+    }
+
+    Result<void> allocateBuffers() override {
+        if (!_primStaging.empty()) {
             uint32_t count = static_cast<uint32_t>(_primStaging.size());
             if (auto res = ensurePrimCapacity(count); !res) {
-                return Err<void>("KDraw::update: failed to re-allocate prim storage");
+                return Err<void>("KDraw::allocateBuffers: failed to allocate prim storage");
             }
             _primCount = count;
             std::memcpy(_primitives, _primStaging.data(), count * sizeof(SDFPrimitive));
             _primStaging.clear();
             _primStaging.shrink_to_fit();
-            _cardMgr->markBufferDirty(_primStorage);
+            _cardMgr->bufferManager()->markBufferDirty(_primStorage);
+
+            // Allocate derived storage (tile lists + glyphs)
+            uint32_t derivedSize = computeDerivedSize();
+            if (derivedSize > 0) {
+                auto storageResult = _cardMgr->bufferManager()->allocateBuffer(derivedSize);
+                if (!storageResult) {
+                    return Err<void>("KDraw::allocateBuffers: failed to allocate derived storage");
+                }
+                _derivedStorage = *storageResult;
+            }
+
             _dirty = true;
-            yinfo("KDraw::update: reconstructed {} primitives from staging", count);
+            yinfo("KDraw::allocateBuffers: reconstructed {} primitives, derived {} bytes", count, derivedSize);
         }
+        return Ok();
+    }
+
+    Result<void> render(float time) override {
+        (void)time;
+        using Clock = std::chrono::steady_clock;
+        auto tRenderStart = Clock::now();
+        bool didRebuild = false, didMeta = false;
 
         if (_dirty) {
             if (auto res = rebuildAndUpload(); !res) {
                 return Err<void>("KDraw::update: rebuildAndUpload failed", res);
             }
             _dirty = false;
+            didRebuild = true;
         }
+        auto tAfterRebuild = Clock::now();
 
         if (_metadataDirty) {
             if (auto res = uploadMetadata(); !res) {
                 return Err<void>("KDraw::update: metadata upload failed", res);
             }
             _metadataDirty = false;
+            didMeta = true;
+        }
+        auto tAfterMeta = Clock::now();
+
+        if (didRebuild || didMeta) {
+            auto us = [](auto a, auto b) { return std::chrono::duration_cast<std::chrono::microseconds>(b - a).count(); };
+            std::cout << "KDraw::render: rebuild=" << us(tRenderStart, tAfterRebuild)
+                      << " us, metadata=" << us(tAfterRebuild, tAfterMeta)
+                      << " us, total=" << us(tRenderStart, tAfterMeta) << " us" << std::endl;
         }
 
         return Ok();
@@ -374,6 +439,17 @@ public:
     //=========================================================================
 
     uint32_t addPrimitive(const SDFPrimitive& prim) override {
+        // During init parsing, accumulate in CPU staging (no GPU allocation)
+        if (_initParsing) {
+            SDFPrimitive p = prim;
+            if (p.aabbMinX == 0 && p.aabbMaxX == 0) {
+                computeAABB_kdraw(p);
+            }
+            uint32_t idx = static_cast<uint32_t>(_primStaging.size());
+            _primStaging.push_back(p);
+            return idx;
+        }
+
         if (auto res = ensurePrimCapacity(_primCount + 1); !res) {
             yerror("KDraw::addPrimitive: failed to grow storage");
             return 0;
@@ -383,7 +459,7 @@ public:
         if (_primitives[idx].aabbMinX == 0 && _primitives[idx].aabbMaxX == 0) {
             computeAABB_kdraw(_primitives[idx]);
         }
-        _cardMgr->markBufferDirty(_primStorage);
+        _cardMgr->bufferManager()->markBufferDirty(_primStorage);
         _dirty = true;
         return idx;
     }
@@ -572,7 +648,7 @@ private:
         uint32_t newCap = std::max(required, _primCapacity == 0 ? 64u : _primCapacity * 2);
         uint32_t newSize = newCap * sizeof(SDFPrimitive);
 
-        auto newStorage = _cardMgr->allocateBuffer(newSize);
+        auto newStorage = _cardMgr->bufferManager()->allocateBuffer(newSize);
         if (!newStorage) {
             return Err<void>("KDraw: failed to allocate prim storage");
         }
@@ -581,7 +657,7 @@ private:
             std::memcpy(newStorage->data, _primStorage.data, _primCount * sizeof(SDFPrimitive));
         }
         if (_primStorage.isValid()) {
-            _cardMgr->deallocateBuffer(_primStorage);
+            _cardMgr->bufferManager()->deallocateBuffer(_primStorage);
         }
 
         _primStorage = *newStorage;
@@ -676,19 +752,26 @@ private:
 
         const uint8_t* primData = data + HEADER_SIZE;
 
+        if (_initParsing) {
+            _primStaging.resize(primCount);
+            std::memcpy(_primStaging.data(), primData, primCount * PRIM_SIZE);
+            _dirty = true;
+            return Ok();
+        }
+
         if (auto res = ensurePrimCapacity(primCount); !res) {
             return Err<void>("KDraw::parseBinary: failed to allocate prim storage");
         }
         _primCount = primCount;
         std::memcpy(_primitives, primData, primCount * PRIM_SIZE);
-        _cardMgr->markBufferDirty(_primStorage);
+        _cardMgr->bufferManager()->markBufferDirty(_primStorage);
 
         _dirty = true;
         return Ok();
     }
 
     //=========================================================================
-    // YAML Parsing (same as hdraw)
+    // YAML Parsing (same as ydraw)
     //=========================================================================
 
     static uint32_t parseColor(const YAML::Node& node) {
@@ -1508,11 +1591,7 @@ private:
     }
 
     void buildTileLists() {
-        // CPU-based tile culling (fallback when compute shader not available)
-        // This builds per-tile primitive lists on CPU
-        // _tileLists pointer and _tileListsSize are already set by rebuildAndUpload
-
-        uint32_t totalTiles = _tileCountX * _tileCountY;
+        // CPU-based tile culling
         uint32_t tileStride = 1 + MAX_PRIMS_PER_TILE;  // [count][idx0][idx1]...
 
         std::memset(_tileLists, 0, _tileListsSize * sizeof(uint32_t));
@@ -1548,26 +1627,6 @@ private:
                 _tileLists[tileOffset] = count;
             }
         }
-
-        // Count total primitives across all tiles for debugging
-        uint32_t totalPrimsInTiles = 0;
-        uint32_t maxPrimsInTile = 0;
-        uint32_t tilesWithPrims = 0;
-        for (uint32_t t = 0; t < totalTiles; t++) {
-            uint32_t count = _tileLists[t * tileStride];
-            totalPrimsInTiles += count;
-            if (count > maxPrimsInTile) maxPrimsInTile = count;
-            if (count > 0) tilesWithPrims++;
-        }
-
-        yinfo("KDraw::buildTileLists: {} primitives -> {}x{} tiles ({} total), "
-              "tilesWithPrims={}, totalPrimsInTiles={}, maxPrimsInTile={}",
-              _primCount, _tileCountX, _tileCountY, totalTiles,
-              tilesWithPrims, totalPrimsInTiles, maxPrimsInTile);
-
-        // Log scene bounds for debugging
-        yinfo("KDraw::buildTileLists: sceneBounds=[{},{},{},{}]",
-              _sceneMinX, _sceneMinY, _sceneMaxX, _sceneMaxY);
     }
 
     Result<void> rebuildAndUpload() {
@@ -1586,23 +1645,7 @@ private:
         uint32_t glyphBytes = static_cast<uint32_t>(_glyphs.size() * sizeof(KDrawGlyph));
         uint32_t derivedTotalSize = tileBytes + glyphBytes;
 
-        // Deallocate old derived storage
-        if (_derivedStorage.isValid()) {
-            if (auto res = _cardMgr->deallocateBuffer(_derivedStorage); !res) {
-                return Err<void>("KDraw::rebuildAndUpload: deallocateBuffer failed");
-            }
-            _derivedStorage = StorageHandle::invalid();
-            _tileLists = nullptr;
-            _tileListsSize = 0;
-        }
-
-        if (derivedTotalSize > 0) {
-            auto storageResult = _cardMgr->allocateBuffer(derivedTotalSize);
-            if (!storageResult) {
-                return Err<void>("KDraw::rebuildAndUpload: failed to allocate derived storage");
-            }
-            _derivedStorage = *storageResult;
-
+        if (_derivedStorage.isValid() && derivedTotalSize > 0) {
             uint8_t* base = _derivedStorage.data;
             uint32_t offset = 0;
 
@@ -1623,20 +1666,17 @@ private:
                 std::memcpy(base + offset, _glyphs.data(), glyphBytes);
             }
 
-            _cardMgr->markBufferDirty(_derivedStorage);
+            _cardMgr->bufferManager()->markBufferDirty(_derivedStorage);
         }
 
         // Primitives are already in _primStorage
         _primitiveOffset = _primStorage.isValid() ? _primStorage.offset / sizeof(float) : 0;
 
         if (_primStorage.isValid()) {
-            _cardMgr->markBufferDirty(_primStorage);
+            _cardMgr->bufferManager()->markBufferDirty(_primStorage);
         }
 
         _metadataDirty = true;
-
-        yinfo("KDraw::rebuildAndUpload: {} prims, {}x{} tiles, {} glyphs, derived {} bytes",
-              _primCount, _tileCountX, _tileCountY, _glyphs.size(), derivedTotalSize);
 
         return Ok();
     }
@@ -1749,6 +1789,7 @@ private:
     // (storage handles are _primStorage and _derivedStorage above)
     bool _dirty = true;
     bool _metadataDirty = true;
+    bool _initParsing = false;
 
     std::string _argsStr;
     std::string _payloadStr;

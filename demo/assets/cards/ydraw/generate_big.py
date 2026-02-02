@@ -266,7 +266,7 @@ def main():
     primitives = generate_primitives()
 
     # Write YAML - single document with background and body
-    yaml_content = """# YDraw Big Demo - Hundreds of SDF shapes
+    yaml_content = """# HDraw Big Demo - Hundreds of SDF shapes
 # Generated demo showcasing all primitive types
 background: "#1a1a2e"
 body:

@@ -112,6 +112,42 @@ public:
       }
       return Ok(true);
     }
+
+    // Handle CommandKey events for workspace-level commands (tmux-style)
+    if (event.type == Event::Type::CommandKey) {
+      uint32_t cp = event.cmdKey.codepoint;
+      ydebug("Workspace received CommandKey: codepoint={}", cp);
+
+      // '%' - Split vertical (creates horizontal layout - side by side)
+      if (cp == '%') {
+        auto focusedPane = findFocusedPane(_root);
+        if (focusedPane) {
+          yinfo("Split pane {} vertically (Ctrl+b %%)", focusedPane->id());
+          auto r = splitPane(focusedPane->id(), Orientation::Vertical);
+          if (!r) {
+            ywarn("splitPane failed: {}", r.error().message());
+          }
+          return Ok(true);
+        }
+      }
+
+      // '"' - Split horizontal (creates vertical layout - top/bottom)
+      if (cp == '"') {
+        auto focusedPane = findFocusedPane(_root);
+        if (focusedPane) {
+          yinfo("Split pane {} horizontally (Ctrl+b \")", focusedPane->id());
+          auto r = splitPane(focusedPane->id(), Orientation::Horizontal);
+          if (!r) {
+            ywarn("splitPane failed: {}", r.error().message());
+          }
+          return Ok(true);
+        }
+      }
+
+      // Not handled - let other handlers try
+      return Ok(false);
+    }
+
     return Ok(false);
   }
 
@@ -211,6 +247,7 @@ private:
     auto self = sharedAs<Workspace>();
     loop->registerListener(Event::Type::Close, self);
     loop->registerListener(Event::Type::SplitPane, self);
+    loop->registerListener(Event::Type::CommandKey, self);
   }
 
   bool _bounds_valid() const {
@@ -251,6 +288,20 @@ private:
     if (auto split = std::dynamic_pointer_cast<Split>(tile)) {
       if (auto found = findPaneContainingView(split->first(), viewId)) return found;
       if (auto found = findPaneContainingView(split->second(), viewId)) return found;
+    }
+    return nullptr;
+  }
+
+  // DFS: find the focused pane
+  std::shared_ptr<Pane> findFocusedPane(Tile::Ptr tile) {
+    if (!tile) return nullptr;
+    if (auto pane = std::dynamic_pointer_cast<Pane>(tile)) {
+      if (pane->focused()) return pane;
+      return nullptr;
+    }
+    if (auto split = std::dynamic_pointer_cast<Split>(tile)) {
+      if (auto found = findFocusedPane(split->first())) return found;
+      if (auto found = findFocusedPane(split->second())) return found;
     }
     return nullptr;
   }
