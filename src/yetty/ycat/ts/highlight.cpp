@@ -120,10 +120,13 @@ static const char* lookupColor(std::string_view captureName) {
 struct Span {
     uint32_t start;
     uint32_t end;
-    const char* color; // ANSI SGR sequence
+    uint32_t patternIdx; // query pattern index — higher = higher priority
+    const char* color;   // ANSI SGR sequence
 };
 
-static std::vector<Span> computeSpans(
+// Build a flat per-byte color map. Later (higher pattern index) and more
+// specific (narrower) captures override earlier/broader ones.
+static std::vector<const char*> computeColorMap(
     const TSLanguage* lang,
     const char* queryStr, uint32_t queryLen,
     TSTree* tree,
@@ -137,6 +140,7 @@ static std::vector<Span> computeSpans(
     TSQueryCursor* cursor = ts_query_cursor_new();
     ts_query_cursor_exec(cursor, query, ts_tree_root_node(tree));
 
+    // Collect all spans with their pattern index for priority
     std::vector<Span> spans;
     TSQueryMatch match;
     while (ts_query_cursor_next_match(cursor, &match)) {
@@ -152,7 +156,7 @@ static std::vector<Span> computeSpans(
             uint32_t start = ts_node_start_byte(cap.node);
             uint32_t end = ts_node_end_byte(cap.node);
             if (start < sourceLen && end <= sourceLen) {
-                spans.push_back({start, end, color});
+                spans.push_back({start, end, match.pattern_index, color});
             }
         }
     }
@@ -160,60 +164,84 @@ static std::vector<Span> computeSpans(
     ts_query_cursor_delete(cursor);
     ts_query_delete(query);
 
-    // Sort by start position; for overlaps, prefer later (more specific) captures
+    // Sort: broader spans first, then narrower/higher-priority overwrite them
+    // This ensures more specific captures win over general ones
     std::sort(spans.begin(), spans.end(), [](const Span& a, const Span& b) {
-        return a.start < b.start || (a.start == b.start && a.end > b.end);
+        uint32_t widthA = a.end - a.start;
+        uint32_t widthB = b.end - b.start;
+        if (widthA != widthB) return widthA > widthB; // wider first
+        return a.patternIdx < b.patternIdx;            // lower priority first
     });
 
-    return spans;
+    // Paint: each span overwrites the color map, so last (narrowest/highest-priority) wins
+    std::vector<const char*> colorMap(sourceLen, nullptr);
+    for (const auto& s : spans) {
+        for (uint32_t i = s.start; i < s.end; ++i) {
+            colorMap[i] = s.color;
+        }
+    }
+
+    return colorMap;
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Emit highlighted source
 // ──────────────────────────────────────────────────────────────────────────────
 
-static void emitHighlighted(const char* source, uint32_t sourceLen,
-                            const std::vector<Span>& spans)
-{
-    uint32_t pos = 0;
-    size_t spanIdx = 0;
+static const char* LINE_NUM_COLOR = "\033[38;5;239m";
 
-    // Active span stack — we track what span we're inside
-    const Span* active = nullptr;
+static void emitHighlighted(const char* source, uint32_t sourceLen,
+                            const std::vector<const char*>& colorMap)
+{
+    // Count lines to determine padding width
+    uint32_t lineCount = 1;
+    for (uint32_t i = 0; i < sourceLen; ++i) {
+        if (source[i] == '\n') ++lineCount;
+    }
+    int width = 1;
+    for (uint32_t n = lineCount; n >= 10; n /= 10) ++width;
+
+    const char* activeColor = nullptr;
+    uint32_t pos = 0;
+    uint32_t lineNum = 1;
+    bool atLineStart = true;
 
     while (pos < sourceLen) {
-        // Skip past spans that have ended
-        while (active && pos >= active->end) {
-            std::fputs(RESET, stdout);
-            active = nullptr;
+        // Print line number at start of each line
+        if (atLineStart) {
+            if (activeColor) { std::fputs(RESET, stdout); activeColor = nullptr; }
+            std::fprintf(stdout, "%s%0*u%s ", LINE_NUM_COLOR, width, lineNum, RESET);
+            atLineStart = false;
         }
 
-        // Enter new span if one starts here
-        while (spanIdx < spans.size() && spans[spanIdx].start <= pos) {
-            if (spans[spanIdx].end > pos) {
-                // This span covers current position
-                if (active) std::fputs(RESET, stdout);
-                active = &spans[spanIdx];
-                std::fputs(active->color, stdout);
+        const char* newColor = colorMap[pos];
+
+        if (newColor != activeColor) {
+            if (activeColor) std::fputs(RESET, stdout);
+            if (newColor) std::fputs(newColor, stdout);
+            activeColor = newColor;
+        }
+
+        // Find run of same color, stopping at newlines
+        uint32_t runEnd = pos + 1;
+        while (runEnd < sourceLen && colorMap[runEnd] == activeColor && source[runEnd - 1] != '\n') {
+            ++runEnd;
+        }
+
+        std::fwrite(source + pos, 1, runEnd - pos, stdout);
+
+        // Check if we crossed a newline
+        for (uint32_t i = pos; i < runEnd; ++i) {
+            if (source[i] == '\n') {
+                ++lineNum;
+                atLineStart = true;
             }
-            ++spanIdx;
         }
 
-        // Find how far to write before next event
-        uint32_t nextEvent = sourceLen;
-        if (active && active->end < nextEvent) {
-            nextEvent = active->end;
-        }
-        if (spanIdx < spans.size() && spans[spanIdx].start < nextEvent) {
-            nextEvent = spans[spanIdx].start;
-        }
-
-        // Write chunk
-        std::fwrite(source + pos, 1, nextEvent - pos, stdout);
-        pos = nextEvent;
+        pos = runEnd;
     }
 
-    if (active) std::fputs(RESET, stdout);
+    if (activeColor) std::fputs(RESET, stdout);
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -241,11 +269,11 @@ bool highlightToStdout(std::string_view source, std::string_view grammarName) {
         return false;
     }
 
-    auto spans = computeSpans(lang, info->highlightQuery, info->highlightQueryLen,
-                              tree, source.data(),
-                              static_cast<uint32_t>(source.size()));
+    auto colorMap = computeColorMap(lang, info->highlightQuery, info->highlightQueryLen,
+                                    tree, source.data(),
+                                    static_cast<uint32_t>(source.size()));
 
-    emitHighlighted(source.data(), static_cast<uint32_t>(source.size()), spans);
+    emitHighlighted(source.data(), static_cast<uint32_t>(source.size()), colorMap);
 
     ts_tree_delete(tree);
     ts_parser_delete(parser);

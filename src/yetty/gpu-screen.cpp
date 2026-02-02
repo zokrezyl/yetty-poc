@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <unordered_set>
+#include <chrono>
 #include <cstring>
 #include <fstream>
 #include <glm/glm.hpp>
@@ -4279,9 +4280,14 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
   for (auto& [slotIndex, card] : _cards) {
     ydebug("GPUScreen::render: Loop4 render card='{}' slot={} metaOffset={}",
            card->typeName(), slotIndex, card->metadataOffset());
-    if (auto res = card->render(0.0f); !res) {
-      yerror("GPUScreen::render: card '{}' render FAILED: {}", card->typeName(), error_msg(res));
-      return Err<void>("GPUScreen::render: card render failed", res);
+    {
+      static auto t0 = std::chrono::steady_clock::now();
+      auto now = std::chrono::steady_clock::now();
+      float timeSec = std::chrono::duration<float>(now - t0).count();
+      if (auto res = card->render(timeSec); !res) {
+        yerror("GPUScreen::render: card '{}' render FAILED: {}", card->typeName(), error_msg(res));
+        return Err<void>("GPUScreen::render: card render failed", res);
+      }
     }
   }
 

@@ -1,4 +1,5 @@
 #include "ydraw.h"
+#include "../../ydraw/animation.h"
 #include "../hdraw/hdraw.h"  // For SDFPrimitive, SDFType
 #include <ytrace/ytrace.hpp>
 #include <yaml-cpp/yaml.h>
@@ -41,11 +42,19 @@ Result<void> YDraw::init() {
     setInitParsing(false);
 
     ydebug("YDraw::init: prims={} glyphs={} payload_len={}",
-           primitiveCount(), glyphCount(), _payloadStr.size());
+           totalPendingPrimitives(), glyphCount(), _payloadStr.size());
     yinfo("YDraw::init: parsed {} primitives, {} glyphs",
-          primitiveCount(), glyphCount());
+          totalPendingPrimitives(), glyphCount());
 
     markDirty();
+
+    // Start animation if properties were defined
+    // (startAnimation snapshots base prims — must happen after allocateBuffers,
+    //  which happens after init. So we defer to first render by calling play()
+    //  and letting render() handle the snapshot.)
+    // Actually, startAnimation needs _primitives which are set after allocateBuffers.
+    // We'll start it after first render by checking in render if animation has props but no base.
+
     return Ok();
 }
 
@@ -220,9 +229,35 @@ Result<void> YDraw::parseYAML(const std::string& yaml) {
             }
         }
 
+        // Parse animation settings
+        if (root["animation"]) {
+            auto animNode = root["animation"];
+            auto* anim = animation();
+            if (animNode["duration"]) anim->setDuration(animNode["duration"].as<float>());
+            if (animNode["loop"]) anim->setLoop(animNode["loop"].as<bool>());
+            if (animNode["speed"]) anim->setSpeed(animNode["speed"].as<float>());
+        }
+
+        // Helper: parse primitive, then check for animate block
+        auto parsePrimWithAnim = [this](const YAML::Node& item) {
+            uint32_t primBefore = totalPendingPrimitives();
+            parseYAMLPrimitive(item);
+            uint32_t primAfter = totalPendingPrimitives();
+
+            // If a primitive was added, check for animate block
+            if (primAfter > primBefore && item.IsMap()) {
+                for (auto it = item.begin(); it != item.end(); ++it) {
+                    auto shapeNode = it->second;
+                    if (shapeNode.IsMap() && shapeNode["animate"]) {
+                        parseAnimateBlock(shapeNode["animate"], primBefore);
+                    }
+                }
+            }
+        };
+
         if (root["body"] && root["body"].IsSequence()) {
             for (const auto& item : root["body"]) {
-                parseYAMLPrimitive(item);
+                parsePrimWithAnim(item);
             }
         }
 
@@ -230,7 +265,7 @@ Result<void> YDraw::parseYAML(const std::string& yaml) {
             for (const auto& doc : root) {
                 if (doc["body"] && doc["body"].IsSequence()) {
                     for (const auto& item : doc["body"]) {
-                        parseYAMLPrimitive(item);
+                        parsePrimWithAnim(item);
                     }
                 }
             }
@@ -877,6 +912,66 @@ Result<YDraw::Ptr> YDraw::createImpl(
         return Err<Ptr>("Created card is not an YDraw");
     }
     return Ok(ydraw);
+}
+
+//=============================================================================
+// Animation parsing
+//=============================================================================
+
+void YDraw::parseAnimateBlock(const YAML::Node& animNode, uint32_t primIndex) {
+    if (!animNode.IsSequence()) return;
+
+    auto* anim = animation();
+
+    for (const auto& propNode : animNode) {
+        if (!propNode["property"] || !propNode["keyframes"]) continue;
+
+        std::string propStr = propNode["property"].as<std::string>();
+
+        animation::PropertyType propType;
+        if      (propStr == "position")       propType = animation::PropertyType::Position;
+        else if (propStr == "scale")          propType = animation::PropertyType::Scale;
+        else if (propStr == "fill_opacity")   propType = animation::PropertyType::FillOpacity;
+        else if (propStr == "fill_color")     propType = animation::PropertyType::FillColor;
+        else if (propStr == "stroke_opacity") propType = animation::PropertyType::StrokeOpacity;
+        else if (propStr == "stroke_width")   propType = animation::PropertyType::StrokeWidth;
+        else if (propStr == "radius")         propType = animation::PropertyType::Radius;
+        else {
+            ywarn("YDraw::parseAnimateBlock: unknown property '{}'", propStr);
+            continue;
+        }
+
+        animation::AnimatedProperty prop;
+        prop.type = propType;
+        prop.primitiveIndex = primIndex;
+
+        for (const auto& kfNode : propNode["keyframes"]) {
+            animation::Keyframe kf = {};
+
+            // Support both {t: 0.0, v: [x,y]} and {time: 0.0, value: [x,y]}
+            if (kfNode["t"]) kf.time = kfNode["t"].as<float>();
+            else if (kfNode["time"]) kf.time = kfNode["time"].as<float>();
+
+            YAML::Node valNode;
+            if (kfNode["v"]) valNode = kfNode["v"];
+            else if (kfNode["value"]) valNode = kfNode["value"];
+
+            if (valNode.IsSequence()) {
+                kf.componentCount = static_cast<uint8_t>(
+                    std::min(static_cast<size_t>(4), valNode.size()));
+                for (uint8_t i = 0; i < kf.componentCount; i++) {
+                    kf.value[i] = valNode[i].as<float>();
+                }
+            } else if (valNode.IsDefined()) {
+                kf.componentCount = 1;
+                kf.value[0] = valNode.as<float>();
+            }
+
+            prop.keyframes.push_back(kf);
+        }
+
+        anim->addProperty(std::move(prop));
+    }
 }
 
 } // namespace yetty::card

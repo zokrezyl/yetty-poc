@@ -8,11 +8,15 @@
 #include <vector>
 #include <string>
 #include <cstdint>
+#include <memory>
 
 namespace yetty {
 
 // Forward declare SDFPrimitive (defined in cards/hdraw/hdraw.h)
 namespace card { struct SDFPrimitive; }
+
+// Forward declare Animation
+namespace animation { class Animation; }
 
 //=============================================================================
 // YDrawGlyph - Positioned glyph for GPU rendering (32 bytes)
@@ -120,6 +124,13 @@ public:
 
     void setMaxPrimsPerCell(uint32_t max);
 
+    //=========================================================================
+    // Public API - Animation
+    //=========================================================================
+    animation::Animation* animation();   // create on first access
+    void startAnimation();               // snapshot base prims, play
+    void stopAnimation();                // restore base prims, stop
+
 protected:
     // Constructor for subclasses
     YDrawBase(const YettyContext& ctx,
@@ -132,6 +143,9 @@ protected:
     // Init-parsing mode: when true, addPrimitive routes to CPU staging
     void setInitParsing(bool v);
     bool isInitParsing() const;
+
+    // Total primitives including staging (for use during init parsing)
+    uint32_t totalPendingPrimitives() const;
 
     // Access to font for subclasses that need direct font metrics
     MsMsdfFont::Ptr font() const { return _font; }
@@ -218,6 +232,11 @@ private:
     float _viewPanX = 0.0f;   // pan offset in scene units
     float _viewPanY = 0.0f;
     bool _focused = false;
+
+    // Animation
+    std::unique_ptr<animation::Animation> _animation;
+    std::vector<card::SDFPrimitive> _basePrimitives;  // snapshot at animation start
+    float _lastRenderTime = -1.0f;
 };
 
 } // namespace yetty

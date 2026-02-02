@@ -14,101 +14,118 @@ Traditional terminals are stuck in the 1970s. They can display text, maybe some 
 
 ## What Makes Yetty Different
 
-### Plugin-Based Rendering System
+### Card-Based Rendering System
 
-Yetty introduces a revolutionary plugin architecture that allows **anything** to be rendered within the terminal:
+Yetty introduces **Cards** - rich content widgets that live within the terminal grid and scroll with your content, just like text. Cards can display anything:
 
-- **Images** - Display inline images that scroll with your content
-- **Live Graphics** - Embed real-time GPU-accelerated visualizations
-- **Shaders** - Run ShaderToy-style WGSL shaders directly in your terminal
-- **Interactive Widgets** - ImGui-based UI elements (via ymery plugin)
-- **Custom Content** - Write your own plugins to display anything
+- **Images** - Inline images that render at native resolution
+- **PDFs** - View PDF documents directly in your terminal
+- **Plots** - Real-time GPU-accelerated data visualizations
+- **Vector Graphics** - SVG and Lottie animations via ThorVG
+- **Interactive Widgets** - ImGui-based UI elements (Ymery)
+- **2D Drawing** - SDF primitives with BVH-accelerated rendering (HDraw)
+- **Python Graphics** - matplotlib-style plots and custom visualizations
 
-The only limit is your imagination.
-
-### How It Works
-
-Plugins occupy cells in the terminal grid. When the terminal scrolls, plugin content scrolls with it - just like text in a Jupyter notebook. This enables workflows that were never possible before:
+Cards occupy cells in the terminal grid. When the terminal scrolls, card content scrolls with it - just like cells in a Jupyter notebook. This enables workflows never possible before:
 
 ```
 $ python train_model.py
 Training epoch 1/100...
-[Live loss graph rendered here, scrolling with output]
+[Live loss plot rendered here, scrolling with output]
 Training epoch 2/100...
 [Another visualization]
 ...
 ```
 
+### Multi-Layer Glyph Architecture
+
+Yetty renders text using multiple glyph types, each optimized for different use cases:
+
+| Glyph Type | Description | Use Case |
+|------------|-------------|----------|
+| **MSDF** | Multi-channel Signed Distance Field fonts | Primary text - crisp at any zoom |
+| **Monospace MSDF** | Fixed-width MSDF glyphs | Terminal grid alignment |
+| **Bitmap** | RGBA texture atlas | Color emojis 🎉 and image-based glyphs |
+| **Shader Glyphs** | Procedurally rendered via GPU | Animated spinners, progress indicators |
+| **Card Glyphs** | Multi-cell shader-rendered regions | Cards (images, plots, widgets) |
+
+The shader glyph system uses Unicode Private Use Area codepoints (Plane 16) to encode card metadata directly in terminal cells, enabling seamless integration with libvterm's scrollback buffer.
+
 ### GPU-Accelerated Everything
 
+- **WebGPU Backend** - Modern, cross-platform GPU acceleration via wgpu-native/Dawn
 - **MSDF Font Rendering** - Crisp, scalable text at any zoom level
-- **WebGPU Backend** - Modern, cross-platform GPU acceleration
 - **60fps Animations** - Smooth shader animations and transitions
+- **Compute Shaders** - BVH construction, text layout, and image scaling on GPU
 - **Runs Everywhere** - Native (Linux, macOS, Windows) and Web (WASM)
 
-## Architecture
+## Communication Protocols
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                     Terminal Grid                        │
-│  ┌─────┬─────┬─────┬─────┬─────┬─────┬─────┬─────┐     │
-│  │  H  │  e  │  l  │  l  │  o  │     │  W  │  o  │     │
-│  ├─────┼─────┼─────┴─────┴─────┼─────┼─────┼─────┤     │
-│  │  r  │  l  │ ╔═══════════╗   │  !  │     │     │     │
-│  ├─────┼─────┤ ║  Plugin   ║   ├─────┼─────┼─────┤     │
-│  │     │     │ ║  Layer    ║   │     │     │     │     │
-│  ├─────┼─────┤ ║ (shader,  ║   ├─────┼─────┼─────┤     │
-│  │     │     │ ║  image,   ║   │     │     │     │     │
-│  ├─────┼─────┤ ║  widget)  ║   ├─────┼─────┼─────┤     │
-│  │     │     │ ╚═══════════╝   │     │     │     │     │
-│  └─────┴─────┴─────────────────┴─────┴─────┴─────┘     │
-└─────────────────────────────────────────────────────────┘
+Yetty supports multiple protocols for creating and managing cards:
+
+### OSC Sequences
+Cards can be created via terminal escape sequences (OSC 666666), allowing any program to spawn cards:
+
+```bash
+# Create an image card
+printf '\033]666666;create -w 40 -h 20 -p image;;base94_encoded_png\033\\'
 ```
 
-### Rendering Pipeline
+### RPC Server
+A Unix domain socket RPC server (msgpack-rpc) enables out-of-band communication for:
+- Creating/updating cards without escape sequences
+- Streaming data to live cards
+- Integration with language servers and external tools
 
-1. **Terminal Grid** - MSDF text rendering via WebGPU
-2. **Custom Glyph Layers** - Animated glyphs (planned)
-3. **Plugin Layers** - Images, shaders, widgets rendered as overlays
+## Built-in Cards
 
-## Built-in Plugins
+| Card | Description |
+|------|-------------|
+| `image` | Display PNG, JPEG, WebP images |
+| `pdf` | Render PDF documents (via PDFium/MuPDF) |
+| `plot` | Line, bar, scatter, area plots |
+| `hdraw` | 2D vector graphics with SDF primitives |
+| `ymery` | ImGui-based interactive widgets |
+| `thorvg` | SVG and Lottie animation rendering |
+| `python` | Python-driven visualizations |
 
-### ShaderToy (`shader`)
+## Roadmap: Plugin API
 
-Run WGSL fragment shaders directly in your terminal. Supports:
-- Time-based animation
-- Mouse interaction
-- Custom parameters via scroll wheel
+We're working on a clear, stable API for third-party card plugins. The goal is to let developers create custom cards that:
 
-### Image (`image`)
+- Integrate seamlessly with the terminal grid and scrollback
+- Have access to GPU resources (buffers, textures, compute shaders)
+- Receive mouse/keyboard input
+- Can be hot-reloaded during development
 
-Display inline images with:
-- Automatic sizing to cell grid
-- Support for PNG, JPEG, etc.
-- Scrolling with terminal content
-
-### Ymery (`ymery`)
-
-ImGui-based interactive widgets:
-- Buttons, sliders, text inputs
-- Custom UI layouts
-- Full keyboard/mouse support
+Stay tuned for the Plugin SDK documentation.
 
 ## Technical Highlights
 
-- **libvterm** for VT100/xterm compatibility
-- **fontconfig** for system font discovery and fallback
-- **msdfgen** for multi-channel signed distance field font rendering
-- **wgpu-native** / Dawn for WebGPU abstraction
-- **GLFW** for windowing (native) or Emscripten (web)
+### Core Dependencies
+- **libvterm** - VT100/xterm terminal emulation
+- **wgpu-native/Dawn** - WebGPU abstraction layer
+- **FreeType + msdfgen** - Font rasterization and MSDF atlas generation
+- **GLFW** - Cross-platform windowing
+- **libuv** - Async I/O and event loop
+
+### Optional Dependencies
+- **ThorVG** - SVG and Lottie rendering
+- **PDFium/MuPDF** - PDF rendering
+- **ImGui** - Immediate-mode GUI for Ymery cards
+- **Python** - Embedded interpreter for Python cards
 
 ## Building
 
 ```bash
+# Using Nix (recommended)
+nix develop
+make build-desktop-release
+
+# Using CMake directly
 mkdir build && cd build
 cmake ..
 cmake --build .
-./yetty
 ```
 
 ## Usage
@@ -120,33 +137,17 @@ cmake --build .
 # Run with specific command
 SHELL=/bin/zsh ./yetty
 
-# Demo mode (scrolling text)
+# Demo mode
 ./yetty --demo
 ```
-
-## Future Plans
-
-- **Animated Glyphs** - Shader-based animated emoji and custom glyphs
-- **Color Emoji** - Proper emoji rendering via bitmap fallback
-- **Plugin SDK** - Easy development of custom plugins
-- **Configuration** - User-configurable themes, fonts, keybindings
 
 ## License
 
 Yetty is licensed under the **MIT License** - see [LICENSE](LICENSE) for details.
 
-### Licensing by Platform
-
-- **Desktop & Web:** Pure MIT license - fully permissive for any use
-- **Android:** Includes Apache 2.0 components (Android NDK)
-  - When distributing Android APKs, acknowledge Apache 2.0 compliance
-  - See [DEPENDENCIES.md](DEPENDENCIES.md) for full Android licensing details
-
 ### Dependencies
 
-All dependencies use MIT-compatible licenses (MIT, BSD, Zlib, Unlicense). See [DEPENDENCIES.md](DEPENDENCIES.md) for the complete dependency list and license information.
-
-For distribution, full license texts are available in the [LICENSES/](LICENSES/) directory.
+All dependencies use MIT-compatible licenses (MIT, BSD, Zlib, Apache-2.0). See [DEPENDENCIES.md](DEPENDENCIES.md) for the complete list.
 
 ---
 

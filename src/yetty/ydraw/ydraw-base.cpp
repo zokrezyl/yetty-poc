@@ -1,4 +1,5 @@
 #include "ydraw-base.h"
+#include "animation.h"
 #include "../cards/hdraw/hdraw.h"  // For SDFPrimitive, SDFType
 #include <yetty/base/event-loop.h>
 #include <ytrace/ytrace.hpp>
@@ -481,7 +482,27 @@ Result<void> YDrawBase::allocateBuffers() {
 }
 
 Result<void> YDrawBase::render(float time) {
-    (void)time;
+    // Auto-start animation if properties were added but not yet started
+    if (_animation && _animation->hasProperties() && !_animation->isPlaying()
+        && _basePrimitives.empty() && _primitives && _primCount > 0) {
+        startAnimation();
+    }
+
+    // Animation update (before dirty check)
+    if (_animation && _animation->isPlaying() && _primitives && _primCount > 0) {
+        float dt = (_lastRenderTime < 0.0f) ? 0.0f : (time - _lastRenderTime);
+        _lastRenderTime = time;
+
+        if (_animation->advance(dt)) {
+            _animation->apply(_basePrimitives.data(), _primitives, _primCount);
+            for (uint32_t i = 0; i < _primCount; i++) {
+                computeAABB(_primitives[i]);
+            }
+            _cardMgr->bufferManager()->markBufferDirty(_primStorage);
+            _dirty = true;
+        }
+    }
+
     using Clock = std::chrono::steady_clock;
     auto tRenderStart = Clock::now();
     bool didRebuild = false, didMeta = false;
@@ -785,6 +806,10 @@ void YDrawBase::clear() {
 
 uint32_t YDrawBase::primitiveCount() const {
     return _primCount;
+}
+
+uint32_t YDrawBase::totalPendingPrimitives() const {
+    return _primCount + static_cast<uint32_t>(_primStaging.size());
 }
 
 uint32_t YDrawBase::glyphCount() const {
@@ -1153,6 +1178,63 @@ Result<void> YDrawBase::uploadMetadata() {
     }
 
     return Ok();
+}
+
+//=============================================================================
+// Animation API
+//=============================================================================
+
+animation::Animation* YDrawBase::animation() {
+    if (!_animation) {
+        _animation = std::make_unique<animation::Animation>();
+    }
+    return _animation.get();
+}
+
+void YDrawBase::startAnimation() {
+    if (!_animation || !_animation->hasProperties()) return;
+    if (!_primitives || _primCount == 0) return;
+
+    // Snapshot current primitives as base values
+    _basePrimitives.assign(_primitives, _primitives + _primCount);
+    _lastRenderTime = -1.0f;
+
+    // Compute stable scene bounds that encompass all animation keyframe positions.
+    // Without this, scene bounds shift every frame as primitives move, causing
+    // the viewport to jitter.
+    if (!_hasExplicitBounds) {
+        // Start with base primitive bounds
+        float minX = 1e10f, minY = 1e10f, maxX = -1e10f, maxY = -1e10f;
+        for (uint32_t i = 0; i < _primCount; i++) {
+            minX = std::min(minX, _primitives[i].aabbMinX);
+            minY = std::min(minY, _primitives[i].aabbMinY);
+            maxX = std::max(maxX, _primitives[i].aabbMaxX);
+            maxY = std::max(maxY, _primitives[i].aabbMaxY);
+        }
+
+        // Expand bounds to include all animation keyframe positions/scales
+        _animation->expandBounds(_basePrimitives.data(), _primCount,
+                                 minX, minY, maxX, maxY);
+
+        float padX = (maxX - minX) * 0.05f;
+        float padY = (maxY - minY) * 0.05f;
+        setSceneBounds(minX - padX, minY - padY, maxX + padX, maxY + padY);
+    }
+
+    _animation->play();
+}
+
+void YDrawBase::stopAnimation() {
+    if (!_animation) return;
+    _animation->stop();
+
+    // Restore base primitives
+    if (!_basePrimitives.empty() && _primitives && _primCount > 0) {
+        uint32_t n = std::min(static_cast<uint32_t>(_basePrimitives.size()), _primCount);
+        std::memcpy(_primitives, _basePrimitives.data(), n * sizeof(card::SDFPrimitive));
+        _basePrimitives.clear();
+        _dirty = true;
+    }
 }
 
 } // namespace yetty

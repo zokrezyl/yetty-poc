@@ -56,6 +56,7 @@ public:
     Result<void> parseBinary(const std::string& payload);
     Result<void> parseYAML(const std::string& yaml);
     void parseYAMLPrimitive(const YAML::Node& item);
+    void parseAnimateBlock(const YAML::Node& animNode, uint32_t primIndex);
     static uint32_t parseColor(const YAML::Node& node);
 
     std::string _argsStr;

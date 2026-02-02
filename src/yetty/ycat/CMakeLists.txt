@@ -4,12 +4,28 @@ set(TS_GRAMMAR_NAMES
 
 set(TS_GENERATED_HEADER "${CMAKE_CURRENT_BINARY_DIR}/ts_queries_generated.h")
 
+# Query inheritance: child grammar → parent grammar
+# These grammars only define additional patterns on top of their parent's query
+set(TS_QUERY_PARENT_cpp "c")
+set(TS_QUERY_PARENT_typescript "javascript")
+
 # Generate embedded query header at configure time
 set(_TS_HEADER "// Auto-generated — do not edit\n#pragma once\n\n")
 foreach(NAME ${TS_GRAMMAR_NAMES})
     set(_QUERY_FILE "${TS_QUERIES_DIR_${NAME}}/highlights.scm")
     if(EXISTS "${_QUERY_FILE}")
-        file(READ "${_QUERY_FILE}" _QUERY_CONTENT)
+        # If this grammar inherits from a parent, prepend parent's query
+        set(_QUERY_CONTENT "")
+        if(DEFINED TS_QUERY_PARENT_${NAME})
+            set(_PARENT "${TS_QUERY_PARENT_${NAME}}")
+            set(_PARENT_FILE "${TS_QUERIES_DIR_${_PARENT}}/highlights.scm")
+            if(EXISTS "${_PARENT_FILE}")
+                file(READ "${_PARENT_FILE}" _QUERY_CONTENT)
+                string(APPEND _QUERY_CONTENT "\n")
+            endif()
+        endif()
+        file(READ "${_QUERY_FILE}" _CHILD_CONTENT)
+        string(APPEND _QUERY_CONTENT "${_CHILD_CONTENT}")
         # Escape backslashes, then double-quotes, then newlines
         string(REPLACE "\\" "\\\\" _QUERY_CONTENT "${_QUERY_CONTENT}")
         string(REPLACE "\"" "\\\"" _QUERY_CONTENT "${_QUERY_CONTENT}")
