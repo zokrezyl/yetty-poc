@@ -4269,6 +4269,9 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
       if (auto res = _cardManager->textureManager()->createAtlas(); !res) {
         yerror("GPUScreen::render: createAtlas FAILED: {}", error_msg(res));
       }
+      // Atlas texture may have been recreated (init or grow) —
+      // force bind group rebuild so it references the current texture.
+      _cardManager->invalidateBindGroup();
     }
 
     _textureLayoutChanged = false;

@@ -65,6 +65,9 @@ public:
     // Recreate bind group (call after atlas initialization or buffer reallocation)
     virtual Result<void> updateBindGroup() = 0;
 
+    // Force bind group recreation on next updateBindGroup() call
+    virtual void invalidateBindGroup() = 0;
+
     // =========================================================================
     // GPU upload coordination
     // =========================================================================

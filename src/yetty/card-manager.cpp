@@ -193,6 +193,7 @@ public:
     WGPUBindGroupLayout sharedBindGroupLayout() const override { return _sharedBindGroupLayout; }
     WGPUBindGroup sharedBindGroup() const override { return _sharedBindGroup; }
     Result<void> updateBindGroup() override;
+    void invalidateBindGroup() override { _bindGroupHasRealAtlas = false; }
 
     // GPU upload
     Result<void> flush(WGPUQueue queue) override;
