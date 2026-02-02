@@ -268,6 +268,27 @@ endif()
 # Desktop-only dependencies (font atlas generation, GLFW windowing)
 #-----------------------------------------------------------------------------
 if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
+    # Tree-sitter for syntax highlighting (ycat)
+    include(build-tools/cmake/TreeSitter.cmake)
+
+    # zlib for compression (used by libmagic)
+    CPMAddPackage(
+        NAME zlib
+        GITHUB_REPOSITORY madler/zlib
+        GIT_TAG v1.3.1.2
+        OPTIONS
+            "ZLIB_BUILD_EXAMPLES OFF"
+    )
+    if(zlib_ADDED)
+        # zlib's CMakeLists creates targets with awkward names; alias for convenience
+        # and ensure the headers are findable
+        set(ZLIB_INCLUDE_DIR ${zlib_SOURCE_DIR} ${zlib_BINARY_DIR} CACHE PATH "" FORCE)
+        set(ZLIB_LIBRARY zlibstatic CACHE STRING "" FORCE)
+    endif()
+
+    # libmagic for file type detection (ycat)
+    include(build-tools/cmake/Libmagic.cmake)
+
     # FreeType for font loading
     # NOTE: PNG support is required for color emoji fonts (CBDT/CBLC with PNG-compressed bitmaps)
     CPMAddPackage(
@@ -573,6 +594,7 @@ target_include_directories(yetty PRIVATE
 
 # Card subdirectories (desktop only - cards use CardBufferManager, ImGui, etc.)
 if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
+    add_subdirectory(src/yetty/ydraw)
     add_subdirectory(src/yetty/cards)
 endif()
 
@@ -805,6 +827,9 @@ else()
 
     # MSDF generator tool
     add_subdirectory(src/yetty/msdf-gen)
+
+    # ycat - cat with card rendering
+    add_subdirectory(src/yetty/ycat)
 
     # MSDFGL WebGPU port (sandbox) - abandoned, see README
     add_subdirectory(sandbox/msdfgl)
