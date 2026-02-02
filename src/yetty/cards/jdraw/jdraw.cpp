@@ -1,5 +1,5 @@
 #include "jdraw.h"
-#include "../ydraw/ydraw.h"  // For SDFPrimitive definition
+#include "../hdraw/hdraw.h"  // For SDFPrimitive definition
 #include <yetty/ms-msdf-font.h>
 #include <yetty/font-manager.h>
 #include <ytrace/ytrace.hpp>
@@ -15,7 +15,7 @@
 namespace yetty::card {
 
 //=============================================================================
-// AABB utilities (shared with ydraw/hdraw/kdraw)
+// AABB utilities (shared with hdraw/ydraw/kdraw)
 //=============================================================================
 
 static void computeAABB_jdraw(SDFPrimitive& prim) {

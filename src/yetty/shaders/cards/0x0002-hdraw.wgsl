@@ -1,4 +1,4 @@
-// Shader glyph: YDraw widget (codepoint 1048578 / U+100002)
+// Shader glyph: HDraw widget (codepoint 1048578 / U+100002)
 // GPU-accelerated SDF primitives with BVH acceleration
 //
 // Uses shared SDF functions from lib/distfunctions.wgsl
@@ -23,9 +23,9 @@
 //   offset 15: bgColor (u32)
 // =============================================================================
 
-const YDRAW_FLAG_SHOW_BOUNDS: u32 = 1u;
-const YDRAW_FLAG_SHOW_BVH: u32 = 2u;
-const YDRAW_FLAG_SHOW_EVAL_COUNT: u32 = 4u;
+const HDRAW_FLAG_SHOW_BOUNDS: u32 = 1u;
+const HDRAW_FLAG_SHOW_BVH: u32 = 2u;
+const HDRAW_FLAG_SHOW_EVAL_COUNT: u32 = 4u;
 
 // =============================================================================
 // BVH Traversal helpers
@@ -181,13 +181,13 @@ fn shaderGlyph_1048578(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
     }
 
     // Debug: show evaluation count heatmap
-    if ((flags & YDRAW_FLAG_SHOW_EVAL_COUNT) != 0u) {
+    if ((flags & HDRAW_FLAG_SHOW_EVAL_COUNT) != 0u) {
         let t = clamp(f32(evalCount) / 20.0, 0.0, 1.0);
         return vec3<f32>(t, 1.0 - t * 0.5, 0.0);
     }
 
     // Debug: show bounds
-    if ((flags & YDRAW_FLAG_SHOW_BOUNDS) != 0u) {
+    if ((flags & HDRAW_FLAG_SHOW_BOUNDS) != 0u) {
         let edgeDist = min(
             min(scenePos.x - sceneMinX, sceneMaxX - scenePos.x),
             min(scenePos.y - sceneMinY, sceneMaxY - scenePos.y)

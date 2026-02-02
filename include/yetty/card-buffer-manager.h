@@ -36,7 +36,7 @@ struct CardBufferConfig {
 /**
  * CardBufferManager manages the GPU linear storage buffer (binding 2).
  *
- * Buffer cards (plot, ydraw, hdraw, kdraw, jdraw) use this for float arrays.
+ * Buffer cards (plot, hdraw, ydraw, kdraw, jdraw) use this for float arrays.
  * Metadata is managed by CardManager, not here.
  */
 class CardBufferManager {

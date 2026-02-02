@@ -1,11 +1,11 @@
-# HDraw Combined Demo - Text and SDF primitives
+# YDraw Combined Demo - Text and SDF primitives
 background: "#1a1a2e"
 
 body:
   # Title
   - text:
       position: [150, 30]
-      content: "HDraw: Text + SDF"
+      content: "YDraw: Text + SDF"
       font-size: 28
       color: "#ecf0f1"
 

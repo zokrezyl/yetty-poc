@@ -1,4 +1,4 @@
-# YDraw Small Demo - Testing new SDF shapes
+# HDraw Small Demo - Testing new SDF shapes
 background: "#1a1a2e"
 body:
   - circle:

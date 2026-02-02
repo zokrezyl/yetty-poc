@@ -1,5 +1,5 @@
 #!/bin/bash
-# YDraw Giant Demo (binary): ~17,500 SDF primitives with BVH acceleration
+# YDraw Giant Demo (binary): ~17,500 SDF primitives with O(1) spatial hashing
 # Uses pre-converted binary (tools/yaml2bin) to skip slow YAML parsing
 
 DIR="$(cd "$(dirname "$0")" && pwd)"

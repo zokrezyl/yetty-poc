@@ -8,8 +8,8 @@
 
 namespace yetty::card {
 
-// Import SDFPrimitive from ydraw.h (same format)
-struct SDFPrimitive;  // Defined in ydraw.h
+// Import SDFPrimitive from hdraw.h (same format)
+struct SDFPrimitive;  // Defined in hdraw.h
 
 // Positioned glyph for GPU rendering (32 bytes)
 struct JDrawGlyph {

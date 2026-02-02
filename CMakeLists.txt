@@ -481,7 +481,7 @@ if(EMSCRIPTEN OR YETTY_ANDROID)
         src/yetty/bm-font.cpp
         src/yetty/shader-font.cpp
         src/yetty/shader-manager.cpp
-        src/yetty/ydraw.cpp
+        src/yetty/hdraw.cpp
         src/yetty/widget-frame-renderer.cpp
     )
 endif()
@@ -528,7 +528,7 @@ elseif(NOT EMSCRIPTEN)
         src/yetty/bm-font.cpp
         src/yetty/shader-font.cpp
         src/yetty/shader-manager.cpp
-        #src/yetty/ydraw.cpp
+        #src/yetty/hdraw.cpp
         src/yetty/widget-frame-renderer.cpp
         src/yetty/tile.cpp
         src/yetty/view.cpp

@@ -1,4 +1,4 @@
-// Shader glyph: HDraw widget (codepoint 1048579 / U+100003)
+// Shader glyph: YDraw widget (codepoint 1048579 / U+100003)
 // GPU-accelerated SDF primitives with O(1) UNIFORM GRID SPATIAL HASHING
 // + MSDF text rendering
 //
@@ -24,7 +24,7 @@
 //   offset 14: flags (u32)
 //   offset 15: bgColor (u32)
 // =============================================================================
-// HDrawGlyph layout (32 bytes = 8 floats):
+// YDrawGlyph layout (32 bytes = 8 floats):
 //   offset 0: x (f32)        - position in scene coords
 //   offset 1: y (f32)
 //   offset 2: width (f32)    - size in scene coords
@@ -35,12 +35,12 @@
 //   offset 7: _pad (u32)
 // =============================================================================
 
-const HDRAW_FLAG_SHOW_BOUNDS: u32 = 1u;
-const HDRAW_FLAG_SHOW_GRID: u32 = 2u;
-const HDRAW_FLAG_SHOW_EVAL_COUNT: u32 = 4u;
+const YDRAW_FLAG_SHOW_BOUNDS: u32 = 1u;
+const YDRAW_FLAG_SHOW_GRID: u32 = 2u;
+const YDRAW_FLAG_SHOW_EVAL_COUNT: u32 = 4u;
 
 // Hardcoded max primitives per cell (matches C++ DEFAULT_MAX_PRIMS_PER_CELL)
-const HDRAW_MAX_PRIMS_PER_CELL: u32 = 16u;
+const YDRAW_MAX_PRIMS_PER_CELL: u32 = 16u;
 
 // =============================================================================
 // Main shader function - O(1) GRID LOOKUP
@@ -101,7 +101,7 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
         let cellIndex = cellY * gridWidth + cellX;
 
         // Each cell stores: [primCount][primIdx0][primIdx1]...[primIdxN]
-        let cellStride = 1u + HDRAW_MAX_PRIMS_PER_CELL;
+        let cellStride = 1u + YDRAW_MAX_PRIMS_PER_CELL;
         let cellOffset = gridOffset + cellIndex * cellStride;
 
         // Read number of primitives in this cell
@@ -109,7 +109,7 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
 
         // Render primitives in this cell only
         let primSize = 24u;
-        let loopCount = min(cellPrimCount, HDRAW_MAX_PRIMS_PER_CELL);
+        let loopCount = min(cellPrimCount, YDRAW_MAX_PRIMS_PER_CELL);
 
         for (var i = 0u; i < loopCount; i++) {
             let primIdx = bitcast<u32>(cardStorage[cellOffset + 1u + i]);
@@ -157,7 +157,7 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
     // =========================================================================
     // TEXT GLYPH RENDERING (MSDF)
     // =========================================================================
-    // HDrawGlyph layout: x, y, width, height, glyphIndex, color, layer, _pad (8 floats = 32 bytes)
+    // YDrawGlyph layout: x, y, width, height, glyphIndex, color, layer, _pad (8 floats = 32 bytes)
     let glyphSize = 8u;
 
     // Compute screen scale for proper MSDF anti-aliasing
@@ -199,7 +199,7 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
     }
 
     // Debug: show grid lines (use floor instead of expensive modulo)
-    if ((flags & HDRAW_FLAG_SHOW_GRID) != 0u) {
+    if ((flags & YDRAW_FLAG_SHOW_GRID) != 0u) {
         let cellSize = 1.0 / invCellSize;
         let cellPosX = (scenePos.x - sceneMinX) * invCellSize;
         let cellPosY = (scenePos.y - sceneMinY) * invCellSize;
@@ -212,7 +212,7 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
     }
 
     // Debug: show evaluation count heatmap
-    if ((flags & HDRAW_FLAG_SHOW_EVAL_COUNT) != 0u) {
+    if ((flags & YDRAW_FLAG_SHOW_EVAL_COUNT) != 0u) {
         let t = clamp(f32(evalCount) / 4.0, 0.0, 1.0);
         return vec3<f32>(t, 1.0 - t * 0.5, 0.0);
     }

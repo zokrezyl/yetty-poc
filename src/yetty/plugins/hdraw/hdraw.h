@@ -1,26 +1,26 @@
 #pragma once
 
 #include <yetty/plugin.h>
-#include <yetty/ydraw.h>
+#include <yetty/hdraw.h>
 #include <webgpu/webgpu.h>
 #include <memory>
 
 namespace yetty {
 
 //-----------------------------------------------------------------------------
-// YDrawPlugin - Plugin wrapper for YDrawRenderer
-// Demonstrates how to use the core ydraw library in a plugin
+// HDrawPlugin - Plugin wrapper for HDrawRenderer
+// Demonstrates how to use the core hdraw library in a plugin
 //-----------------------------------------------------------------------------
 
-class YDraw;
+class HDraw;
 
-class YDrawPlugin : public Plugin {
+class HDrawPlugin : public Plugin {
 public:
-    ~YDrawPlugin() override;
+    ~HDrawPlugin() override;
 
     static Result<PluginPtr> create() noexcept;
 
-    const char* pluginName() const override { return "ydraw"; }
+    const char* pluginName() const override { return "hdraw"; }
 
     Result<void> dispose() override;
 
@@ -38,15 +38,15 @@ public:
     ) override;
 
 private:
-    YDrawPlugin() noexcept = default;
+    HDrawPlugin() noexcept = default;
     Result<void> pluginInit() noexcept;
 };
 
 //-----------------------------------------------------------------------------
-// YDraw - Plugin widget that wraps YDrawRenderer
+// HDraw - Plugin widget that wraps HDrawRenderer
 //-----------------------------------------------------------------------------
 
-class YDraw : public Widget {
+class HDraw : public Widget {
 public:
     static Result<WidgetPtr> create(
         WidgetFactory* factory,
@@ -63,18 +63,18 @@ public:
         (void)fontManager;
         (void)loop;
         (void)pluginArgs;
-        auto w = std::shared_ptr<YDraw>(new YDraw(payload));
+        auto w = std::shared_ptr<HDraw>(new HDraw(payload));
         w->_x = x;
         w->_y = y;
         w->_widthCells = widthCells;
         w->_heightCells = heightCells;
         if (auto res = w->init(); !res) {
-            return Err<WidgetPtr>("Failed to init YDraw", res);
+            return Err<WidgetPtr>("Failed to init HDraw", res);
         }
         return Ok(std::static_pointer_cast<Widget>(w));
     }
 
-    ~YDraw() override;
+    ~HDraw() override;
 
     Result<void> dispose() override;
 
@@ -89,12 +89,12 @@ public:
     bool wantsKeyboard() const override { return true; }
 
 private:
-    explicit YDraw(const std::string& payload) {
+    explicit HDraw(const std::string& payload) {
         _payload = payload;
     }
     Result<void> init() override;
 
-    std::unique_ptr<YDrawRenderer> renderer_;
+    std::unique_ptr<HDrawRenderer> renderer_;
     bool failed_ = false;
 };
 

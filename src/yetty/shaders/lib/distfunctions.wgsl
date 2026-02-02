@@ -2,7 +2,7 @@
 // distfunctions.wgsl - Shared SDF (Signed Distance Function) library
 // =============================================================================
 // Based on Inigo Quilez's 2D distance functions (iquilezles.org/articles/distfunctions2d)
-// Used by: ydraw (BVH), hdraw (spatial hashing)
+// Used by: hdraw (BVH), ydraw (spatial hashing)
 // =============================================================================
 
 // SDF primitive types

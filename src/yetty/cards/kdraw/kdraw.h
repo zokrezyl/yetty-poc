@@ -55,10 +55,10 @@ namespace yetty::card {
 //   offset 60: bgColor (u32)
 //=============================================================================
 
-// Import SDFPrimitive from ydraw.h (same format)
-struct SDFPrimitive;  // Defined in ydraw.h
+// Import SDFPrimitive from hdraw.h (same format)
+struct SDFPrimitive;  // Defined in hdraw.h
 
-// Positioned glyph for GPU rendering (32 bytes) - same as HDraw
+// Positioned glyph for GPU rendering (32 bytes) - same as YDraw
 struct KDrawGlyph {
     float x, y;              // Position in scene coordinates
     float width, height;     // Glyph size in scene coordinates

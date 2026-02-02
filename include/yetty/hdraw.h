@@ -10,10 +10,10 @@
 namespace yetty {
 
 //-----------------------------------------------------------------------------
-// YDraw Primitive Types - 2D and 3D SDFs (Inigo Quilez)
+// HDraw Primitive Types - 2D and 3D SDFs (Inigo Quilez)
 //-----------------------------------------------------------------------------
 
-enum class YDrawPrimitiveType : uint32_t {
+enum class HDrawPrimitiveType : uint32_t {
     // 2D Primitives
     Circle2D = 0,
     Box2D = 1,
@@ -49,7 +49,7 @@ enum class YDrawPrimitiveType : uint32_t {
     Link3D = 119,
 };
 
-struct YDrawStyle {
+struct HDrawStyle {
     float fill[4] = {1.0f, 1.0f, 1.0f, 1.0f};      // RGBA
     float stroke[4] = {0.0f, 0.0f, 0.0f, 0.0f};    // RGBA (alpha 0 = no stroke)
     float stroke_width = 0.0f;
@@ -59,24 +59,24 @@ struct YDrawStyle {
 };
 
 // GPU-side primitive data (padded to 16-byte alignment)
-struct YDrawPrimitiveGPU {
+struct HDrawPrimitiveGPU {
     uint32_t type;
     float params[15];  // Flexible params based on type
-    YDrawStyle style;  // 48 bytes
+    HDrawStyle style;  // 48 bytes
 };
 
 //-----------------------------------------------------------------------------
-// YAML AST Types for YDraw
+// YAML AST Types for HDraw
 //-----------------------------------------------------------------------------
 
-struct YDrawStruct {
+struct HDrawStruct {
     std::string name;
     std::vector<std::string> args;
     std::unordered_map<std::string, std::string> defaults;
     std::string body_yaml;  // Raw YAML for lazy evaluation
 };
 
-struct YDrawWidget {
+struct HDrawWidget {
     std::string name;
     std::vector<std::string> args;
     std::unordered_map<std::string, std::string> defaults;
@@ -84,15 +84,15 @@ struct YDrawWidget {
 };
 
 //-----------------------------------------------------------------------------
-// YDrawRenderer - Core 2D/3D SDF rendering
+// HDrawRenderer - Core 2D/3D SDF rendering
 //-----------------------------------------------------------------------------
 
-class YDrawRenderer {
+class HDrawRenderer {
 public:
     static constexpr size_t MAX_PRIMITIVES = 256;
 
-    YDrawRenderer();
-    ~YDrawRenderer();
+    HDrawRenderer();
+    ~HDrawRenderer();
 
     // Initialize renderer with optional YAML/SVG content
     Result<void> init(const std::string& content = "");
@@ -102,7 +102,7 @@ public:
     void clear();
 
     // Add primitives programmatically
-    void addPrimitive(const YDrawPrimitiveGPU& prim);
+    void addPrimitive(const HDrawPrimitiveGPU& prim);
 
     // Parse content (YAML or SVG)
     Result<void> parse(const std::string& content);
@@ -128,17 +128,17 @@ private:
     Result<void> parseSVG(const std::string& svg);
 
     // YAML processing helpers
-    void registerStruct(const YDrawStruct& s);
-    void registerWidget(const YDrawWidget& w);
-    YDrawStyle expandStruct(const std::string& name,
+    void registerStruct(const HDrawStruct& s);
+    void registerWidget(const HDrawWidget& w);
+    HDrawStyle expandStruct(const std::string& name,
                             const std::vector<std::string>& positional_args);
 
     // Definitions
-    std::unordered_map<std::string, YDrawStruct> _structs;
-    std::unordered_map<std::string, YDrawWidget> _widgets;
+    std::unordered_map<std::string, HDrawStruct> _structs;
+    std::unordered_map<std::string, HDrawWidget> _widgets;
 
     // Primitives to render
-    std::vector<YDrawPrimitiveGPU> _primitives;
+    std::vector<HDrawPrimitiveGPU> _primitives;
     bool _primitives_dirty = true;
 
     float _time = 0.0f;
@@ -158,29 +158,29 @@ private:
 // Helper: 2D Primitive Builders
 //-----------------------------------------------------------------------------
 
-namespace ydraw {
+namespace hdraw {
 
 // 2D primitives
-YDrawPrimitiveGPU circle(float x, float y, float radius, const YDrawStyle& style = {});
-YDrawPrimitiveGPU box(float x, float y, float halfW, float halfH, const YDrawStyle& style = {});
-YDrawPrimitiveGPU segment(float x1, float y1, float x2, float y2, const YDrawStyle& style = {});
-YDrawPrimitiveGPU triangle(float x0, float y0, float x1, float y1, float x2, float y2, const YDrawStyle& style = {});
-YDrawPrimitiveGPU ellipse(float x, float y, float rx, float ry, const YDrawStyle& style = {});
+HDrawPrimitiveGPU circle(float x, float y, float radius, const HDrawStyle& style = {});
+HDrawPrimitiveGPU box(float x, float y, float halfW, float halfH, const HDrawStyle& style = {});
+HDrawPrimitiveGPU segment(float x1, float y1, float x2, float y2, const HDrawStyle& style = {});
+HDrawPrimitiveGPU triangle(float x0, float y0, float x1, float y1, float x2, float y2, const HDrawStyle& style = {});
+HDrawPrimitiveGPU ellipse(float x, float y, float rx, float ry, const HDrawStyle& style = {});
 
 // 3D primitives (raymarched)
-YDrawPrimitiveGPU sphere(float x, float y, float z, float radius, const YDrawStyle& style = {});
-YDrawPrimitiveGPU box3d(float x, float y, float z, float hx, float hy, float hz, const YDrawStyle& style = {});
-YDrawPrimitiveGPU torus(float x, float y, float z, float majorR, float minorR, const YDrawStyle& style = {});
-YDrawPrimitiveGPU cylinder(float x, float y, float z, float radius, float height, const YDrawStyle& style = {});
-YDrawPrimitiveGPU capsule(float x, float y, float z, float radius, float height, const YDrawStyle& style = {});
-YDrawPrimitiveGPU cone(float x, float y, float z, float radius, float height, const YDrawStyle& style = {});
-YDrawPrimitiveGPU octahedron(float x, float y, float z, float size, const YDrawStyle& style = {});
-YDrawPrimitiveGPU pyramid(float x, float y, float z, float size, float height, const YDrawStyle& style = {});
+HDrawPrimitiveGPU sphere(float x, float y, float z, float radius, const HDrawStyle& style = {});
+HDrawPrimitiveGPU box3d(float x, float y, float z, float hx, float hy, float hz, const HDrawStyle& style = {});
+HDrawPrimitiveGPU torus(float x, float y, float z, float majorR, float minorR, const HDrawStyle& style = {});
+HDrawPrimitiveGPU cylinder(float x, float y, float z, float radius, float height, const HDrawStyle& style = {});
+HDrawPrimitiveGPU capsule(float x, float y, float z, float radius, float height, const HDrawStyle& style = {});
+HDrawPrimitiveGPU cone(float x, float y, float z, float radius, float height, const HDrawStyle& style = {});
+HDrawPrimitiveGPU octahedron(float x, float y, float z, float size, const HDrawStyle& style = {});
+HDrawPrimitiveGPU pyramid(float x, float y, float z, float size, float height, const HDrawStyle& style = {});
 
 // Style helpers
-YDrawStyle solid(float r, float g, float b, float a = 1.0f);
-YDrawStyle stroke(float r, float g, float b, float width, float a = 1.0f);
+HDrawStyle solid(float r, float g, float b, float a = 1.0f);
+HDrawStyle stroke(float r, float g, float b, float width, float a = 1.0f);
 
-} // namespace ydraw
+} // namespace hdraw
 
 } // namespace yetty

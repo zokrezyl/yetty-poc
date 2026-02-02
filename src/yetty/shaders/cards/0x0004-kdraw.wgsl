@@ -8,7 +8,7 @@
 // =============================================================================
 // Architecture:
 // =============================================================================
-// Unlike HDraw (scene-space grid), KDraw uses SCREEN-SPACE tiles:
+// Unlike YDraw (scene-space grid), KDraw uses SCREEN-SPACE tiles:
 // - Tiles are always 8x8 pixels regardless of zoom level
 // - Each tile has a compact list of primitives that overlap it
 // - All 64 pixels in a tile share the same primitive list

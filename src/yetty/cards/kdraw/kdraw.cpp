@@ -1,5 +1,5 @@
 #include "kdraw.h"
-#include "../ydraw/ydraw.h"  // For SDFPrimitive definition
+#include "../hdraw/hdraw.h"  // For SDFPrimitive definition
 #include <yetty/ms-msdf-font.h>
 #include <yetty/font-manager.h>
 #include <ytrace/ytrace.hpp>
@@ -15,7 +15,7 @@
 namespace yetty::card {
 
 //=============================================================================
-// AABB utilities (shared with ydraw/hdraw)
+// AABB utilities (shared with hdraw/ydraw)
 //=============================================================================
 
 static void computeAABB_kdraw(SDFPrimitive& prim) {
@@ -771,7 +771,7 @@ private:
     }
 
     //=========================================================================
-    // YAML Parsing (same as hdraw)
+    // YAML Parsing (same as ydraw)
     //=========================================================================
 
     static uint32_t parseColor(const YAML::Node& node) {

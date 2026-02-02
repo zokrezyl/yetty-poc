@@ -1,4 +1,4 @@
-#include "ydraw.h"
+#include "hdraw.h"
 #include <yetty/yetty.h>
 #include <yetty/webgpu-context.h>
 #include <yetty/wgpu-compat.h>
@@ -7,35 +7,35 @@
 namespace yetty {
 
 //-----------------------------------------------------------------------------
-// YDrawPlugin
+// HDrawPlugin
 //-----------------------------------------------------------------------------
 
-YDrawPlugin::~YDrawPlugin() {
+HDrawPlugin::~HDrawPlugin() {
     (void)dispose();
 }
 
-Result<PluginPtr> YDrawPlugin::create() noexcept {
-    auto p = PluginPtr(new YDrawPlugin());
-    if (auto res = static_cast<YDrawPlugin*>(p.get())->pluginInit(); !res) {
-        return Err<PluginPtr>("Failed to init YDrawPlugin", res);
+Result<PluginPtr> HDrawPlugin::create() noexcept {
+    auto p = PluginPtr(new HDrawPlugin());
+    if (auto res = static_cast<HDrawPlugin*>(p.get())->pluginInit(); !res) {
+        return Err<PluginPtr>("Failed to init HDrawPlugin", res);
     }
     return Ok(p);
 }
 
-Result<void> YDrawPlugin::pluginInit() noexcept {
+Result<void> HDrawPlugin::pluginInit() noexcept {
     _initialized = true;
     return Ok();
 }
 
-Result<void> YDrawPlugin::dispose() {
+Result<void> HDrawPlugin::dispose() {
     if (auto res = Plugin::dispose(); !res) {
-        return Err<void>("Failed to dispose YDrawPlugin", res);
+        return Err<void>("Failed to dispose HDrawPlugin", res);
     }
     _initialized = false;
     return Ok();
 }
 
-Result<WidgetPtr> YDrawPlugin::createWidget(
+Result<WidgetPtr> HDrawPlugin::createWidget(
     const std::string& widgetName,
     WidgetFactory* factory,
     FontManager* fontManager,
@@ -49,32 +49,32 @@ Result<WidgetPtr> YDrawPlugin::createWidget(
 ) {
     (void)widgetName;
     yinfo("payload size={} x={} y={} w={} h={}", payload.size(), x, y, widthCells, heightCells);
-    return YDraw::create(factory, fontManager, loop, x, y, widthCells, heightCells, pluginArgs, payload);
+    return HDraw::create(factory, fontManager, loop, x, y, widthCells, heightCells, pluginArgs, payload);
 }
 
 //-----------------------------------------------------------------------------
-// YDraw
+// HDraw
 //-----------------------------------------------------------------------------
 
-YDraw::~YDraw() {
+HDraw::~HDraw() {
     (void)dispose();
 }
 
-Result<void> YDraw::init() {
-    renderer_ = std::make_unique<YDrawRenderer>();
+Result<void> HDraw::init() {
+    renderer_ = std::make_unique<HDrawRenderer>();
 
     if (!_payload.empty()) {
         auto result = renderer_->parse(_payload);
         if (!result) {
-            return Err<void>("Failed to parse ydraw content", result);
+            return Err<void>("Failed to parse hdraw content", result);
         }
     }
 
-    yinfo("YDraw: initialized with {} primitives", renderer_->primitiveCount());
+    yinfo("HDraw: initialized with {} primitives", renderer_->primitiveCount());
     return Ok();
 }
 
-Result<void> YDraw::dispose() {
+Result<void> HDraw::dispose() {
     if (renderer_) {
         renderer_->dispose();
         renderer_.reset();
@@ -82,22 +82,22 @@ Result<void> YDraw::dispose() {
     return Ok();
 }
 
-bool YDraw::onMouseMove(float localX, float localY) {
+bool HDraw::onMouseMove(float localX, float localY) {
     (void)localX; (void)localY;
     return true;
 }
 
-bool YDraw::onMouseButton(int button, bool pressed) {
+bool HDraw::onMouseButton(int button, bool pressed) {
     (void)button; (void)pressed;
     return true;
 }
 
-bool YDraw::onKey(int key, int scancode, int action, int mods) {
+bool HDraw::onKey(int key, int scancode, int action, int mods) {
     (void)key; (void)scancode; (void)action; (void)mods;
     return true;
 }
 
-bool YDraw::onChar(unsigned int codepoint) {
+bool HDraw::onChar(unsigned int codepoint) {
     (void)codepoint;
     return true;
 }
@@ -106,7 +106,7 @@ bool YDraw::onChar(unsigned int codepoint) {
 // Rendering
 //-----------------------------------------------------------------------------
 
-void YDraw::prepareFrame(WebGPUContext& ctx, bool on) {
+void HDraw::prepareFrame(WebGPUContext& ctx, bool on) {
     if (!on || failed_ || !_visible) return;
     if (!renderer_ || renderer_->primitiveCount() == 0) return;
 
@@ -114,7 +114,7 @@ void YDraw::prepareFrame(WebGPUContext& ctx, bool on) {
     WGPUCommandEncoderDescriptor encoderDesc = {};
     WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(ctx.getDevice(), &encoderDesc);
     if (!encoder) {
-        yerror("YDraw: Failed to create command encoder");
+        yerror("HDraw: Failed to create command encoder");
         return;
     }
 
@@ -136,12 +136,12 @@ void YDraw::prepareFrame(WebGPUContext& ctx, bool on) {
     WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
     if (!pass) {
         wgpuCommandEncoderRelease(encoder);
-        yerror("YDraw: Failed to begin render pass");
+        yerror("HDraw: Failed to begin render pass");
         return;
     }
 
-    // Render using core YDrawRenderer
-    yinfo("YDraw::prepareFrame rendering at pixel=({},{}) size={}x{} screen={}x{}",
+    // Render using core HDrawRenderer
+    yinfo("HDraw::prepareFrame rendering at pixel=({},{}) size={}x{} screen={}x{}",
           _pixelX, _pixelY, _pixelWidth, _pixelHeight, ctx.getSurfaceWidth(), ctx.getSurfaceHeight());
     auto result = renderer_->render(ctx, pass,
                                     static_cast<float>(_pixelX), static_cast<float>(_pixelY),
@@ -155,7 +155,7 @@ void YDraw::prepareFrame(WebGPUContext& ctx, bool on) {
     WGPUCommandBuffer cmdBuffer = wgpuCommandEncoderFinish(encoder, &cmdDesc);
     if (!cmdBuffer) {
         wgpuCommandEncoderRelease(encoder);
-        yerror("YDraw: Failed to finish command encoder");
+        yerror("HDraw: Failed to finish command encoder");
         return;
     }
     wgpuQueueSubmit(ctx.getQueue(), 1, &cmdBuffer);
@@ -164,11 +164,11 @@ void YDraw::prepareFrame(WebGPUContext& ctx, bool on) {
 
     if (!result) {
         failed_ = true;
-        yerror("YDraw: render failed: {}", result.error().message());
+        yerror("HDraw: render failed: {}", result.error().message());
     }
 }
 
-Result<void> YDraw::render(WGPURenderPassEncoder pass, WebGPUContext& ctx, bool on) {
+Result<void> HDraw::render(WGPURenderPassEncoder pass, WebGPUContext& ctx, bool on) {
     if (!on || failed_ || !_visible || !renderer_) return Ok();
 
     return renderer_->render(ctx, pass,
@@ -180,8 +180,8 @@ Result<void> YDraw::render(WGPURenderPassEncoder pass, WebGPUContext& ctx, bool 
 } // namespace yetty
 
 extern "C" {
-    const char* name() { return "ydraw"; }
+    const char* name() { return "hdraw"; }
     yetty::Result<yetty::PluginPtr> create() {
-        return yetty::YDrawPlugin::create();
+        return yetty::HDrawPlugin::create();
     }
 }

@@ -1,4 +1,4 @@
-#include <yetty/ydraw.h>
+#include <yetty/hdraw.h>
 #include <yetty/wgpu-compat.h>
 #include <yaml-cpp/yaml.h>
 #include <ytrace/ytrace.hpp>
@@ -12,7 +12,7 @@ namespace yetty {
 // WGSL Shader with 2D and 3D SDF primitives (Inigo Quilez - iquilezles.org)
 //-----------------------------------------------------------------------------
 
-static const char* YDRAW_SHADER = R"(
+static const char* HDRAW_SHADER = R"(
 struct Uniforms {
     rect: vec4<f32>,
     resolution: vec2<f32>,
@@ -20,7 +20,7 @@ struct Uniforms {
     num_primitives: f32,
 }
 
-struct YDrawStyle {
+struct HDrawStyle {
     fill: vec4<f32>,
     stroke: vec4<f32>,
     stroke_width: f32,
@@ -32,7 +32,7 @@ struct YDrawStyle {
 struct Primitive {
     ptype: u32,
     params: array<f32, 15>,
-    style: YDrawStyle,
+    style: HDrawStyle,
 }
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -629,23 +629,23 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 )";
 
 //-----------------------------------------------------------------------------
-// YDrawRenderer
+// HDrawRenderer
 //-----------------------------------------------------------------------------
 
-YDrawRenderer::YDrawRenderer() = default;
+HDrawRenderer::HDrawRenderer() = default;
 
-YDrawRenderer::~YDrawRenderer() {
+HDrawRenderer::~HDrawRenderer() {
     (void)dispose();
 }
 
-Result<void> YDrawRenderer::init(const std::string& content) {
+Result<void> HDrawRenderer::init(const std::string& content) {
     if (!content.empty()) {
         return parse(content);
     }
     return Ok();
 }
 
-Result<void> YDrawRenderer::dispose() {
+Result<void> HDrawRenderer::dispose() {
     if (_bind_group) { wgpuBindGroupRelease(_bind_group); _bind_group = nullptr; }
     if (_pipeline) { wgpuRenderPipelineRelease(_pipeline); _pipeline = nullptr; }
     if (_uniform_buffer) { wgpuBufferRelease(_uniform_buffer); _uniform_buffer = nullptr; }
@@ -655,19 +655,19 @@ Result<void> YDrawRenderer::dispose() {
     return Ok();
 }
 
-void YDrawRenderer::clear() {
+void HDrawRenderer::clear() {
     _primitives.clear();
     _primitives_dirty = true;
 }
 
-void YDrawRenderer::addPrimitive(const YDrawPrimitiveGPU& prim) {
+void HDrawRenderer::addPrimitive(const HDrawPrimitiveGPU& prim) {
     if (_primitives.size() < MAX_PRIMITIVES) {
         _primitives.push_back(prim);
         _primitives_dirty = true;
     }
 }
 
-Result<void> YDrawRenderer::parse(const std::string& content) {
+Result<void> HDrawRenderer::parse(const std::string& content) {
     if (content.empty()) return Ok();
 
     // Check if SVG
@@ -687,7 +687,7 @@ Result<void> YDrawRenderer::parse(const std::string& content) {
 // Color/coordinate parsing
 //-----------------------------------------------------------------------------
 
-bool YDrawRenderer::parseColor(const std::string& color, float out[4]) {
+bool HDrawRenderer::parseColor(const std::string& color, float out[4]) {
     if (color.empty()) return false;
 
     if (color[0] == '#' && (color.size() == 7 || color.size() == 9)) {
@@ -706,12 +706,12 @@ bool YDrawRenderer::parseColor(const std::string& color, float out[4]) {
     return false;
 }
 
-bool YDrawRenderer::parseVec2(const std::string& str, float out[2]) {
+bool HDrawRenderer::parseVec2(const std::string& str, float out[2]) {
     return sscanf(str.c_str(), "[%f,%f]", &out[0], &out[1]) == 2 ||
            sscanf(str.c_str(), "[%f, %f]", &out[0], &out[1]) == 2;
 }
 
-bool YDrawRenderer::parseVec3(const std::string& str, float out[3]) {
+bool HDrawRenderer::parseVec3(const std::string& str, float out[3]) {
     return sscanf(str.c_str(), "[%f,%f,%f]", &out[0], &out[1], &out[2]) == 3 ||
            sscanf(str.c_str(), "[%f, %f, %f]", &out[0], &out[1], &out[2]) == 3;
 }
@@ -720,11 +720,11 @@ bool YDrawRenderer::parseVec3(const std::string& str, float out[3]) {
 // YAML parsing
 //-----------------------------------------------------------------------------
 
-void YDrawRenderer::registerStruct(const YDrawStruct& s) {
+void HDrawRenderer::registerStruct(const HDrawStruct& s) {
     _structs[s.name] = s;
 }
 
-void YDrawRenderer::registerWidget(const YDrawWidget& w) {
+void HDrawRenderer::registerWidget(const HDrawWidget& w) {
     _widgets[w.name] = w;
 }
 
@@ -742,9 +742,9 @@ static std::string substituteVars(const std::string& input,
     return result;
 }
 
-YDrawStyle YDrawRenderer::expandStruct(const std::string& name,
+HDrawStyle HDrawRenderer::expandStruct(const std::string& name,
                                         const std::vector<std::string>& positional_args) {
-    YDrawStyle style;
+    HDrawStyle style;
     auto it = _structs.find(name);
     if (it == _structs.end()) return style;
 
@@ -770,9 +770,9 @@ YDrawStyle YDrawRenderer::expandStruct(const std::string& name,
     return style;
 }
 
-static void parseStyleFromNode(const YAML::Node& node, YDrawStyle& style) {
-    if (node["fill"]) YDrawRenderer::parseColor(node["fill"].as<std::string>(), style.fill);
-    if (node["stroke"]) YDrawRenderer::parseColor(node["stroke"].as<std::string>(), style.stroke);
+static void parseStyleFromNode(const YAML::Node& node, HDrawStyle& style) {
+    if (node["fill"]) HDrawRenderer::parseColor(node["fill"].as<std::string>(), style.fill);
+    if (node["stroke"]) HDrawRenderer::parseColor(node["stroke"].as<std::string>(), style.stroke);
     if (node["stroke-width"]) style.stroke_width = node["stroke-width"].as<float>();
     if (node["round"]) style.round = node["round"].as<float>();
     if (node["rotate"]) style.rotate = node["rotate"].as<float>();
@@ -783,8 +783,8 @@ static void parseStyleFromNode(const YAML::Node& node, YDrawStyle& style) {
     }
 }
 
-static YDrawPrimitiveGPU parsePrimitive(const std::string& type, const YAML::Node& node) {
-    YDrawPrimitiveGPU prim = {};
+static HDrawPrimitiveGPU parsePrimitive(const std::string& type, const YAML::Node& node) {
+    HDrawPrimitiveGPU prim = {};
     memset(&prim, 0, sizeof(prim));
 
     prim.style.fill[0] = 1.0f;
@@ -796,7 +796,7 @@ static YDrawPrimitiveGPU parsePrimitive(const std::string& type, const YAML::Nod
 
     // 2D primitives
     if (type == "circle" || type == "sdCircle") {
-        prim.type = static_cast<uint32_t>(YDrawPrimitiveType::Circle2D);
+        prim.type = static_cast<uint32_t>(HDrawPrimitiveType::Circle2D);
         if (node["position"] && node["position"].IsSequence()) {
             prim.params[0] = node["position"][0].as<float>();
             prim.params[1] = node["position"][1].as<float>();
@@ -804,7 +804,7 @@ static YDrawPrimitiveGPU parsePrimitive(const std::string& type, const YAML::Nod
         if (node["radius"]) prim.params[2] = node["radius"].as<float>();
     }
     else if (type == "box" || type == "sdBox") {
-        prim.type = static_cast<uint32_t>(YDrawPrimitiveType::Box2D);
+        prim.type = static_cast<uint32_t>(HDrawPrimitiveType::Box2D);
         if (node["position"] && node["position"].IsSequence()) {
             prim.params[0] = node["position"][0].as<float>();
             prim.params[1] = node["position"][1].as<float>();
@@ -815,7 +815,7 @@ static YDrawPrimitiveGPU parsePrimitive(const std::string& type, const YAML::Nod
         }
     }
     else if (type == "segment" || type == "sdSegment") {
-        prim.type = static_cast<uint32_t>(YDrawPrimitiveType::Segment2D);
+        prim.type = static_cast<uint32_t>(HDrawPrimitiveType::Segment2D);
         if (node["from"] && node["from"].IsSequence()) {
             prim.params[2] = node["from"][0].as<float>();
             prim.params[3] = node["from"][1].as<float>();
@@ -834,7 +834,7 @@ static YDrawPrimitiveGPU parsePrimitive(const std::string& type, const YAML::Nod
         }
     }
     else if (type == "triangle" || type == "sdTriangle") {
-        prim.type = static_cast<uint32_t>(YDrawPrimitiveType::Triangle2D);
+        prim.type = static_cast<uint32_t>(HDrawPrimitiveType::Triangle2D);
         if (node["p0"] && node["p0"].IsSequence()) {
             prim.params[2] = node["p0"][0].as<float>();
             prim.params[3] = node["p0"][1].as<float>();
@@ -849,7 +849,7 @@ static YDrawPrimitiveGPU parsePrimitive(const std::string& type, const YAML::Nod
         }
     }
     else if (type == "ellipse" || type == "sdEllipse") {
-        prim.type = static_cast<uint32_t>(YDrawPrimitiveType::Ellipse2D);
+        prim.type = static_cast<uint32_t>(HDrawPrimitiveType::Ellipse2D);
         if (node["position"] && node["position"].IsSequence()) {
             prim.params[0] = node["position"][0].as<float>();
             prim.params[1] = node["position"][1].as<float>();
@@ -861,7 +861,7 @@ static YDrawPrimitiveGPU parsePrimitive(const std::string& type, const YAML::Nod
     }
     // 3D primitives
     else if (type == "sphere" || type == "sdSphere") {
-        prim.type = static_cast<uint32_t>(YDrawPrimitiveType::Sphere3D);
+        prim.type = static_cast<uint32_t>(HDrawPrimitiveType::Sphere3D);
         if (node["position"] && node["position"].IsSequence()) {
             prim.params[0] = node["position"][0].as<float>();
             prim.params[1] = node["position"][1].as<float>();
@@ -870,7 +870,7 @@ static YDrawPrimitiveGPU parsePrimitive(const std::string& type, const YAML::Nod
         if (node["radius"]) prim.params[3] = node["radius"].as<float>();
     }
     else if (type == "box3d" || type == "sdBox3D") {
-        prim.type = static_cast<uint32_t>(YDrawPrimitiveType::Box3D);
+        prim.type = static_cast<uint32_t>(HDrawPrimitiveType::Box3D);
         if (node["position"] && node["position"].IsSequence()) {
             prim.params[0] = node["position"][0].as<float>();
             prim.params[1] = node["position"][1].as<float>();
@@ -883,7 +883,7 @@ static YDrawPrimitiveGPU parsePrimitive(const std::string& type, const YAML::Nod
         }
     }
     else if (type == "torus" || type == "sdTorus") {
-        prim.type = static_cast<uint32_t>(YDrawPrimitiveType::Torus3D);
+        prim.type = static_cast<uint32_t>(HDrawPrimitiveType::Torus3D);
         if (node["position"] && node["position"].IsSequence()) {
             prim.params[0] = node["position"][0].as<float>();
             prim.params[1] = node["position"][1].as<float>();
@@ -893,7 +893,7 @@ static YDrawPrimitiveGPU parsePrimitive(const std::string& type, const YAML::Nod
         if (node["minor-radius"]) prim.params[4] = node["minor-radius"].as<float>();
     }
     else if (type == "cylinder" || type == "sdCylinder") {
-        prim.type = static_cast<uint32_t>(YDrawPrimitiveType::Cylinder3D);
+        prim.type = static_cast<uint32_t>(HDrawPrimitiveType::Cylinder3D);
         if (node["position"] && node["position"].IsSequence()) {
             prim.params[0] = node["position"][0].as<float>();
             prim.params[1] = node["position"][1].as<float>();
@@ -903,7 +903,7 @@ static YDrawPrimitiveGPU parsePrimitive(const std::string& type, const YAML::Nod
         if (node["height"]) prim.params[4] = node["height"].as<float>();
     }
     else if (type == "capsule" || type == "sdCapsule") {
-        prim.type = static_cast<uint32_t>(YDrawPrimitiveType::Capsule3D);
+        prim.type = static_cast<uint32_t>(HDrawPrimitiveType::Capsule3D);
         if (node["position"] && node["position"].IsSequence()) {
             prim.params[0] = node["position"][0].as<float>();
             prim.params[1] = node["position"][1].as<float>();
@@ -913,7 +913,7 @@ static YDrawPrimitiveGPU parsePrimitive(const std::string& type, const YAML::Nod
         if (node["radius"]) prim.params[4] = node["radius"].as<float>();
     }
     else if (type == "cone" || type == "sdCone") {
-        prim.type = static_cast<uint32_t>(YDrawPrimitiveType::CappedCone3D);
+        prim.type = static_cast<uint32_t>(HDrawPrimitiveType::CappedCone3D);
         if (node["position"] && node["position"].IsSequence()) {
             prim.params[0] = node["position"][0].as<float>();
             prim.params[1] = node["position"][1].as<float>();
@@ -924,7 +924,7 @@ static YDrawPrimitiveGPU parsePrimitive(const std::string& type, const YAML::Nod
         if (node["radius2"]) prim.params[5] = node["radius2"].as<float>();
     }
     else if (type == "octahedron" || type == "sdOctahedron") {
-        prim.type = static_cast<uint32_t>(YDrawPrimitiveType::Octahedron3D);
+        prim.type = static_cast<uint32_t>(HDrawPrimitiveType::Octahedron3D);
         if (node["position"] && node["position"].IsSequence()) {
             prim.params[0] = node["position"][0].as<float>();
             prim.params[1] = node["position"][1].as<float>();
@@ -933,7 +933,7 @@ static YDrawPrimitiveGPU parsePrimitive(const std::string& type, const YAML::Nod
         if (node["size"]) prim.params[3] = node["size"].as<float>();
     }
     else if (type == "pyramid" || type == "sdPyramid") {
-        prim.type = static_cast<uint32_t>(YDrawPrimitiveType::Pyramid3D);
+        prim.type = static_cast<uint32_t>(HDrawPrimitiveType::Pyramid3D);
         if (node["position"] && node["position"].IsSequence()) {
             prim.params[0] = node["position"][0].as<float>();
             prim.params[1] = node["position"][1].as<float>();
@@ -945,7 +945,7 @@ static YDrawPrimitiveGPU parsePrimitive(const std::string& type, const YAML::Nod
     return prim;
 }
 
-Result<void> YDrawRenderer::parseYAML(const std::string& yaml) {
+Result<void> HDrawRenderer::parseYAML(const std::string& yaml) {
     try {
         YAML::Node doc = YAML::Load(yaml);
 
@@ -958,7 +958,7 @@ Result<void> YDrawRenderer::parseYAML(const std::string& yaml) {
         for (const auto& entry : doc) {
             if (entry["struct"]) {
                 auto structNode = entry["struct"];
-                YDrawStruct s;
+                HDrawStruct s;
                 s.name = structNode["name"].as<std::string>();
                 if (structNode["args"] && structNode["args"].IsSequence()) {
                     for (const auto& arg : structNode["args"]) {
@@ -972,7 +972,7 @@ Result<void> YDrawRenderer::parseYAML(const std::string& yaml) {
             }
             else if (entry["widget"]) {
                 auto widgetNode = entry["widget"];
-                YDrawWidget w;
+                HDrawWidget w;
                 w.name = widgetNode["name"].as<std::string>();
                 if (widgetNode["args"] && widgetNode["args"].IsSequence()) {
                     for (const auto& arg : widgetNode["args"]) {
@@ -1073,7 +1073,7 @@ static float parseNumber(const std::string& s) {
     try { return std::stof(s); } catch (...) { return 0.0f; }
 }
 
-Result<void> YDrawRenderer::parseSVG(const std::string& svg) {
+Result<void> HDrawRenderer::parseSVG(const std::string& svg) {
     try {
         size_t pos = 0;
 
@@ -1098,7 +1098,7 @@ Result<void> YDrawRenderer::parseSVG(const std::string& svg) {
             }
             std::string elemName = tag.substr(nameStart, nameEnd - nameStart);
 
-            YDrawStyle style = {};
+            HDrawStyle style = {};
             std::string fillStr = getAttr(tag, "fill");
             std::string strokeStr = getAttr(tag, "stroke");
             std::string strokeWidthStr = getAttr(tag, "stroke-width");
@@ -1116,8 +1116,8 @@ Result<void> YDrawRenderer::parseSVG(const std::string& svg) {
                 float cy = parseNumber(getAttr(tag, "cy"));
                 float r = parseNumber(getAttr(tag, "r"));
 
-                YDrawPrimitiveGPU prim = {};
-                prim.type = static_cast<uint32_t>(YDrawPrimitiveType::Circle2D);
+                HDrawPrimitiveGPU prim = {};
+                prim.type = static_cast<uint32_t>(HDrawPrimitiveType::Circle2D);
                 prim.params[0] = cx; prim.params[1] = cy;
                 prim.params[2] = r;
                 prim.style = style;
@@ -1129,8 +1129,8 @@ Result<void> YDrawRenderer::parseSVG(const std::string& svg) {
                 float rx = parseNumber(getAttr(tag, "rx"));
                 float ry = parseNumber(getAttr(tag, "ry"));
 
-                YDrawPrimitiveGPU prim = {};
-                prim.type = static_cast<uint32_t>(YDrawPrimitiveType::Ellipse2D);
+                HDrawPrimitiveGPU prim = {};
+                prim.type = static_cast<uint32_t>(HDrawPrimitiveType::Ellipse2D);
                 prim.params[0] = cx; prim.params[1] = cy;
                 prim.params[2] = rx; prim.params[3] = ry;
                 prim.style = style;
@@ -1143,8 +1143,8 @@ Result<void> YDrawRenderer::parseSVG(const std::string& svg) {
                 float h = parseNumber(getAttr(tag, "height"));
                 float rx = parseNumber(getAttr(tag, "rx"));
 
-                YDrawPrimitiveGPU prim = {};
-                prim.type = static_cast<uint32_t>(YDrawPrimitiveType::Box2D);
+                HDrawPrimitiveGPU prim = {};
+                prim.type = static_cast<uint32_t>(HDrawPrimitiveType::Box2D);
                 prim.params[0] = x + w / 2; prim.params[1] = y + h / 2;
                 prim.params[2] = w / 2; prim.params[3] = h / 2;
                 prim.style = style;
@@ -1157,8 +1157,8 @@ Result<void> YDrawRenderer::parseSVG(const std::string& svg) {
                 float x2 = parseNumber(getAttr(tag, "x2"));
                 float y2 = parseNumber(getAttr(tag, "y2"));
 
-                YDrawPrimitiveGPU prim = {};
-                prim.type = static_cast<uint32_t>(YDrawPrimitiveType::Segment2D);
+                HDrawPrimitiveGPU prim = {};
+                prim.type = static_cast<uint32_t>(HDrawPrimitiveType::Segment2D);
                 prim.params[2] = x1; prim.params[3] = y1;
                 prim.params[4] = x2; prim.params[5] = y2;
                 prim.style = style;
@@ -1167,7 +1167,7 @@ Result<void> YDrawRenderer::parseSVG(const std::string& svg) {
         }
 
         _primitives_dirty = true;
-        yinfo("YDraw SVG parsed: {} primitives", _primitives.size());
+        yinfo("HDraw SVG parsed: {} primitives", _primitives.size());
     } catch (const std::exception& e) {
         return Err<void>(std::string("SVG parse error: ") + e.what());
     }
@@ -1179,12 +1179,12 @@ Result<void> YDrawRenderer::parseSVG(const std::string& svg) {
 // Rendering
 //-----------------------------------------------------------------------------
 
-Result<void> YDrawRenderer::render(WebGPUContext& ctx,
+Result<void> HDrawRenderer::render(WebGPUContext& ctx,
                                     WGPURenderPassEncoder pass,
                                     float x, float y, float width, float height,
                                     float screenWidth, float screenHeight,
                                     WGPUTextureFormat targetFormat) {
-    if (_failed) return Err<void>("YDrawRenderer already failed");
+    if (_failed) return Err<void>("HDrawRenderer already failed");
     if (_primitives.empty()) return Ok();
 
     if (!_gpu_initialized || _current_format != targetFormat) {
@@ -1194,7 +1194,7 @@ Result<void> YDrawRenderer::render(WebGPUContext& ctx,
         auto result = createPipeline(ctx, targetFormat);
         if (!result) {
             _failed = true;
-            return Err<void>("YDrawRenderer: Failed to create pipeline", result);
+            return Err<void>("HDrawRenderer: Failed to create pipeline", result);
         }
         _gpu_initialized = true;
         _current_format = targetFormat;
@@ -1202,7 +1202,7 @@ Result<void> YDrawRenderer::render(WebGPUContext& ctx,
 
     if (!_pipeline || !_uniform_buffer || !_bind_group) {
         _failed = true;
-        return Err<void>("YDrawRenderer: pipeline not initialized");
+        return Err<void>("HDrawRenderer: pipeline not initialized");
     }
 
     // Calculate NDC coordinates
@@ -1231,7 +1231,7 @@ Result<void> YDrawRenderer::render(WebGPUContext& ctx,
 
     if (_primitives_dirty && !_primitives.empty()) {
         wgpuQueueWriteBuffer(ctx.getQueue(), _primitive_buffer, 0,
-                             _primitives.data(), _primitives.size() * sizeof(YDrawPrimitiveGPU));
+                             _primitives.data(), _primitives.size() * sizeof(HDrawPrimitiveGPU));
         _primitives_dirty = false;
     }
 
@@ -1242,7 +1242,7 @@ Result<void> YDrawRenderer::render(WebGPUContext& ctx,
     return Ok();
 }
 
-Result<void> YDrawRenderer::createPipeline(WebGPUContext& ctx, WGPUTextureFormat targetFormat) {
+Result<void> HDrawRenderer::createPipeline(WebGPUContext& ctx, WGPUTextureFormat targetFormat) {
     WGPUDevice device = ctx.getDevice();
 
     // Uniform buffer
@@ -1251,20 +1251,20 @@ Result<void> YDrawRenderer::createPipeline(WebGPUContext& ctx, WGPUTextureFormat
     bufDesc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
     _uniform_buffer = wgpuDeviceCreateBuffer(device, &bufDesc);
     if (!_uniform_buffer) return Err<void>("Failed to create uniform buffer");
-    yinfo("GPU_ALLOC YDrawRenderer: uniformBuffer=32 bytes");
+    yinfo("GPU_ALLOC HDrawRenderer: uniformBuffer=32 bytes");
 
     // Primitive storage buffer
     WGPUBufferDescriptor primBufDesc = {};
-    primBufDesc.size = MAX_PRIMITIVES * sizeof(YDrawPrimitiveGPU);
+    primBufDesc.size = MAX_PRIMITIVES * sizeof(HDrawPrimitiveGPU);
     primBufDesc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
     _primitive_buffer = wgpuDeviceCreateBuffer(device, &primBufDesc);
     if (!_primitive_buffer) return Err<void>("Failed to create primitive buffer");
-    yinfo("GPU_ALLOC YDrawRenderer: primitiveBuffer={} bytes", MAX_PRIMITIVES * sizeof(YDrawPrimitiveGPU));
+    yinfo("GPU_ALLOC HDrawRenderer: primitiveBuffer={} bytes", MAX_PRIMITIVES * sizeof(HDrawPrimitiveGPU));
 
     // Shader
     WGPUShaderSourceWGSL wgslDesc = {};
     wgslDesc.chain.sType = WGPUSType_ShaderSourceWGSL;
-    wgslDesc.code = WGPU_STR(YDRAW_SHADER);
+    wgslDesc.code = WGPU_STR(HDRAW_SHADER);
     WGPUShaderModuleDescriptor shaderDesc = {};
     shaderDesc.nextInChain = &wgslDesc.chain;
     WGPUShaderModule shaderModule = wgpuDeviceCreateShaderModule(device, &shaderDesc);
@@ -1301,7 +1301,7 @@ Result<void> YDrawRenderer::createPipeline(WebGPUContext& ctx, WGPUTextureFormat
     bgE[0].size = 32;
     bgE[1].binding = 1;
     bgE[1].buffer = _primitive_buffer;
-    bgE[1].size = MAX_PRIMITIVES * sizeof(YDrawPrimitiveGPU);
+    bgE[1].size = MAX_PRIMITIVES * sizeof(HDrawPrimitiveGPU);
 
     WGPUBindGroupDescriptor bgDesc = {};
     bgDesc.layout = bgl;
@@ -1348,7 +1348,7 @@ Result<void> YDrawRenderer::createPipeline(WebGPUContext& ctx, WGPUTextureFormat
 
     if (!_pipeline) return Err<void>("Failed to create render pipeline");
 
-    yinfo("YDrawRenderer: pipeline created");
+    yinfo("HDrawRenderer: pipeline created");
     return Ok();
 }
 
@@ -1356,35 +1356,35 @@ Result<void> YDrawRenderer::createPipeline(WebGPUContext& ctx, WGPUTextureFormat
 // Helper functions for building primitives
 //-----------------------------------------------------------------------------
 
-namespace ydraw {
+namespace hdraw {
 
-YDrawPrimitiveGPU circle(float x, float y, float radius, const YDrawStyle& style) {
-    YDrawPrimitiveGPU p = {};
-    p.type = static_cast<uint32_t>(YDrawPrimitiveType::Circle2D);
+HDrawPrimitiveGPU circle(float x, float y, float radius, const HDrawStyle& style) {
+    HDrawPrimitiveGPU p = {};
+    p.type = static_cast<uint32_t>(HDrawPrimitiveType::Circle2D);
     p.params[0] = x; p.params[1] = y; p.params[2] = radius;
     p.style = style;
     return p;
 }
 
-YDrawPrimitiveGPU box(float x, float y, float halfW, float halfH, const YDrawStyle& style) {
-    YDrawPrimitiveGPU p = {};
-    p.type = static_cast<uint32_t>(YDrawPrimitiveType::Box2D);
+HDrawPrimitiveGPU box(float x, float y, float halfW, float halfH, const HDrawStyle& style) {
+    HDrawPrimitiveGPU p = {};
+    p.type = static_cast<uint32_t>(HDrawPrimitiveType::Box2D);
     p.params[0] = x; p.params[1] = y; p.params[2] = halfW; p.params[3] = halfH;
     p.style = style;
     return p;
 }
 
-YDrawPrimitiveGPU segment(float x1, float y1, float x2, float y2, const YDrawStyle& style) {
-    YDrawPrimitiveGPU p = {};
-    p.type = static_cast<uint32_t>(YDrawPrimitiveType::Segment2D);
+HDrawPrimitiveGPU segment(float x1, float y1, float x2, float y2, const HDrawStyle& style) {
+    HDrawPrimitiveGPU p = {};
+    p.type = static_cast<uint32_t>(HDrawPrimitiveType::Segment2D);
     p.params[2] = x1; p.params[3] = y1; p.params[4] = x2; p.params[5] = y2;
     p.style = style;
     return p;
 }
 
-YDrawPrimitiveGPU triangle(float x0, float y0, float x1, float y1, float x2, float y2, const YDrawStyle& style) {
-    YDrawPrimitiveGPU p = {};
-    p.type = static_cast<uint32_t>(YDrawPrimitiveType::Triangle2D);
+HDrawPrimitiveGPU triangle(float x0, float y0, float x1, float y1, float x2, float y2, const HDrawStyle& style) {
+    HDrawPrimitiveGPU p = {};
+    p.type = static_cast<uint32_t>(HDrawPrimitiveType::Triangle2D);
     p.params[2] = x0; p.params[3] = y0;
     p.params[4] = x1; p.params[5] = y1;
     p.params[6] = x2; p.params[7] = y2;
@@ -1392,97 +1392,97 @@ YDrawPrimitiveGPU triangle(float x0, float y0, float x1, float y1, float x2, flo
     return p;
 }
 
-YDrawPrimitiveGPU ellipse(float x, float y, float rx, float ry, const YDrawStyle& style) {
-    YDrawPrimitiveGPU p = {};
-    p.type = static_cast<uint32_t>(YDrawPrimitiveType::Ellipse2D);
+HDrawPrimitiveGPU ellipse(float x, float y, float rx, float ry, const HDrawStyle& style) {
+    HDrawPrimitiveGPU p = {};
+    p.type = static_cast<uint32_t>(HDrawPrimitiveType::Ellipse2D);
     p.params[0] = x; p.params[1] = y; p.params[2] = rx; p.params[3] = ry;
     p.style = style;
     return p;
 }
 
-YDrawPrimitiveGPU sphere(float x, float y, float z, float radius, const YDrawStyle& style) {
-    YDrawPrimitiveGPU p = {};
-    p.type = static_cast<uint32_t>(YDrawPrimitiveType::Sphere3D);
+HDrawPrimitiveGPU sphere(float x, float y, float z, float radius, const HDrawStyle& style) {
+    HDrawPrimitiveGPU p = {};
+    p.type = static_cast<uint32_t>(HDrawPrimitiveType::Sphere3D);
     p.params[0] = x; p.params[1] = y; p.params[2] = z; p.params[3] = radius;
     p.style = style;
     return p;
 }
 
-YDrawPrimitiveGPU box3d(float x, float y, float z, float hx, float hy, float hz, const YDrawStyle& style) {
-    YDrawPrimitiveGPU p = {};
-    p.type = static_cast<uint32_t>(YDrawPrimitiveType::Box3D);
+HDrawPrimitiveGPU box3d(float x, float y, float z, float hx, float hy, float hz, const HDrawStyle& style) {
+    HDrawPrimitiveGPU p = {};
+    p.type = static_cast<uint32_t>(HDrawPrimitiveType::Box3D);
     p.params[0] = x; p.params[1] = y; p.params[2] = z;
     p.params[3] = hx; p.params[4] = hy; p.params[5] = hz;
     p.style = style;
     return p;
 }
 
-YDrawPrimitiveGPU torus(float x, float y, float z, float majorR, float minorR, const YDrawStyle& style) {
-    YDrawPrimitiveGPU p = {};
-    p.type = static_cast<uint32_t>(YDrawPrimitiveType::Torus3D);
+HDrawPrimitiveGPU torus(float x, float y, float z, float majorR, float minorR, const HDrawStyle& style) {
+    HDrawPrimitiveGPU p = {};
+    p.type = static_cast<uint32_t>(HDrawPrimitiveType::Torus3D);
     p.params[0] = x; p.params[1] = y; p.params[2] = z;
     p.params[3] = majorR; p.params[4] = minorR;
     p.style = style;
     return p;
 }
 
-YDrawPrimitiveGPU cylinder(float x, float y, float z, float radius, float height, const YDrawStyle& style) {
-    YDrawPrimitiveGPU p = {};
-    p.type = static_cast<uint32_t>(YDrawPrimitiveType::Cylinder3D);
+HDrawPrimitiveGPU cylinder(float x, float y, float z, float radius, float height, const HDrawStyle& style) {
+    HDrawPrimitiveGPU p = {};
+    p.type = static_cast<uint32_t>(HDrawPrimitiveType::Cylinder3D);
     p.params[0] = x; p.params[1] = y; p.params[2] = z;
     p.params[3] = radius; p.params[4] = height;
     p.style = style;
     return p;
 }
 
-YDrawPrimitiveGPU capsule(float x, float y, float z, float radius, float height, const YDrawStyle& style) {
-    YDrawPrimitiveGPU p = {};
-    p.type = static_cast<uint32_t>(YDrawPrimitiveType::Capsule3D);
+HDrawPrimitiveGPU capsule(float x, float y, float z, float radius, float height, const HDrawStyle& style) {
+    HDrawPrimitiveGPU p = {};
+    p.type = static_cast<uint32_t>(HDrawPrimitiveType::Capsule3D);
     p.params[0] = x; p.params[1] = y; p.params[2] = z;
     p.params[3] = height; p.params[4] = radius;
     p.style = style;
     return p;
 }
 
-YDrawPrimitiveGPU cone(float x, float y, float z, float radius, float height, const YDrawStyle& style) {
-    YDrawPrimitiveGPU p = {};
-    p.type = static_cast<uint32_t>(YDrawPrimitiveType::CappedCone3D);
+HDrawPrimitiveGPU cone(float x, float y, float z, float radius, float height, const HDrawStyle& style) {
+    HDrawPrimitiveGPU p = {};
+    p.type = static_cast<uint32_t>(HDrawPrimitiveType::CappedCone3D);
     p.params[0] = x; p.params[1] = y; p.params[2] = z;
     p.params[3] = height; p.params[4] = radius; p.params[5] = 0.0f;
     p.style = style;
     return p;
 }
 
-YDrawPrimitiveGPU octahedron(float x, float y, float z, float size, const YDrawStyle& style) {
-    YDrawPrimitiveGPU p = {};
-    p.type = static_cast<uint32_t>(YDrawPrimitiveType::Octahedron3D);
+HDrawPrimitiveGPU octahedron(float x, float y, float z, float size, const HDrawStyle& style) {
+    HDrawPrimitiveGPU p = {};
+    p.type = static_cast<uint32_t>(HDrawPrimitiveType::Octahedron3D);
     p.params[0] = x; p.params[1] = y; p.params[2] = z; p.params[3] = size;
     p.style = style;
     return p;
 }
 
-YDrawPrimitiveGPU pyramid(float x, float y, float z, float size, float height, const YDrawStyle& style) {
-    YDrawPrimitiveGPU p = {};
-    p.type = static_cast<uint32_t>(YDrawPrimitiveType::Pyramid3D);
+HDrawPrimitiveGPU pyramid(float x, float y, float z, float size, float height, const HDrawStyle& style) {
+    HDrawPrimitiveGPU p = {};
+    p.type = static_cast<uint32_t>(HDrawPrimitiveType::Pyramid3D);
     p.params[0] = x; p.params[1] = y; p.params[2] = z; p.params[3] = height;
     p.style = style;
     return p;
 }
 
-YDrawStyle solid(float r, float g, float b, float a) {
-    YDrawStyle s = {};
+HDrawStyle solid(float r, float g, float b, float a) {
+    HDrawStyle s = {};
     s.fill[0] = r; s.fill[1] = g; s.fill[2] = b; s.fill[3] = a;
     return s;
 }
 
-YDrawStyle stroke(float r, float g, float b, float width, float a) {
-    YDrawStyle s = {};
+HDrawStyle stroke(float r, float g, float b, float width, float a) {
+    HDrawStyle s = {};
     s.fill[3] = 0;
     s.stroke[0] = r; s.stroke[1] = g; s.stroke[2] = b; s.stroke[3] = a;
     s.stroke_width = width;
     return s;
 }
 
-} // namespace ydraw
+} // namespace hdraw
 
 } // namespace yetty
