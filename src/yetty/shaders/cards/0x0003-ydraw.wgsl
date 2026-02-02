@@ -39,8 +39,12 @@ const YDRAW_FLAG_SHOW_BOUNDS: u32 = 1u;
 const YDRAW_FLAG_SHOW_GRID: u32 = 2u;
 const YDRAW_FLAG_SHOW_EVAL_COUNT: u32 = 4u;
 
-// Hardcoded max primitives per cell (matches C++ DEFAULT_MAX_PRIMS_PER_CELL)
+// Hardcoded max entries per cell (matches C++ DEFAULT_MAX_PRIMS_PER_CELL)
 const YDRAW_MAX_PRIMS_PER_CELL: u32 = 16u;
+
+// Bit 31 set = glyph index, clear = primitive index
+const GLYPH_BIT: u32 = 0x80000000u;
+const INDEX_MASK: u32 = 0x7FFFFFFFu;
 
 // =============================================================================
 // Main shader function - O(1) GRID LOOKUP
@@ -84,35 +88,65 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
         sceneMinY + widgetUV.y * (sceneMaxY - sceneMinY)
     );
 
-    // Early exit only if no primitives AND no glyphs
-    if ((gridWidth == 0u || gridHeight == 0u) && glyphCount == 0u) {
+    // Early exit if no grid
+    if (gridWidth == 0u || gridHeight == 0u) {
         return bgColor;
     }
 
     var resultColor = bgColor;
     var evalCount = 0u;
 
-    // SDF primitive rendering (only if grid exists)
-    if (gridWidth > 0u && gridHeight > 0u) {
-        // O(1) GRID LOOKUP - find which cell this pixel is in
-        // Use multiplication by invCellSize instead of division (faster!)
-        let cellX = u32(clamp((scenePos.x - sceneMinX) * invCellSize, 0.0, f32(gridWidth - 1u)));
-        let cellY = u32(clamp((scenePos.y - sceneMinY) * invCellSize, 0.0, f32(gridHeight - 1u)));
-        let cellIndex = cellY * gridWidth + cellX;
+    // Compute screen scale for MSDF anti-aliasing
+    let sceneWidth = sceneMaxX - sceneMinX;
+    let pixelWidth = f32(widthCells) * grid.cellSize.x;
+    let screenScale = select(1.0, pixelWidth / sceneWidth, sceneWidth > 0.0);
 
-        // Each cell stores: [primCount][primIdx0][primIdx1]...[primIdxN]
-        let cellStride = 1u + YDRAW_MAX_PRIMS_PER_CELL;
-        let cellOffset = gridOffset + cellIndex * cellStride;
+    // O(1) GRID LOOKUP - find which cell this pixel is in
+    let cellX = u32(clamp((scenePos.x - sceneMinX) * invCellSize, 0.0, f32(gridWidth - 1u)));
+    let cellY = u32(clamp((scenePos.y - sceneMinY) * invCellSize, 0.0, f32(gridHeight - 1u)));
+    let cellIndex = cellY * gridWidth + cellX;
 
-        // Read number of primitives in this cell
-        let cellPrimCount = bitcast<u32>(cardStorage[cellOffset]);
+    // Each cell stores: [entryCount][idx0][idx1]...[idxN]
+    // Entries with bit 31 set are glyph indices, otherwise primitive indices
+    let cellStride = 1u + YDRAW_MAX_PRIMS_PER_CELL;
+    let cellOffset = gridOffset + cellIndex * cellStride;
+    let cellEntryCount = bitcast<u32>(cardStorage[cellOffset]);
+    let loopCount = min(cellEntryCount, YDRAW_MAX_PRIMS_PER_CELL);
 
-        // Render primitives in this cell only
-        let primSize = 24u;
-        let loopCount = min(cellPrimCount, YDRAW_MAX_PRIMS_PER_CELL);
+    let primSize = 24u;
+    let glyphSize = 8u;
 
-        for (var i = 0u; i < loopCount; i++) {
-            let primIdx = bitcast<u32>(cardStorage[cellOffset + 1u + i]);
+    for (var i = 0u; i < loopCount; i++) {
+        let rawIdx = bitcast<u32>(cardStorage[cellOffset + 1u + i]);
+
+        if ((rawIdx & GLYPH_BIT) != 0u) {
+            // ---- TEXT GLYPH (MSDF) ----
+            let gi = rawIdx & INDEX_MASK;
+            let gOffset = glyphOffset + gi * glyphSize;
+
+            let gx = cardStorage[gOffset + 0u];
+            let gy = cardStorage[gOffset + 1u];
+            let gw = cardStorage[gOffset + 2u];
+            let gh = cardStorage[gOffset + 3u];
+            let gIdx = bitcast<u32>(cardStorage[gOffset + 4u]);
+            let gColorPacked = bitcast<u32>(cardStorage[gOffset + 5u]);
+
+            if (scenePos.x >= gx && scenePos.x < gx + gw &&
+                scenePos.y >= gy && scenePos.y < gy + gh) {
+
+                let glyphUV = vec2<f32>(
+                    (scenePos.x - gx) / gw,
+                    (scenePos.y - gy) / gh
+                );
+                let gColor = unpackColor(gColorPacked);
+                let glyphResult = renderMsdfGlyph(glyphUV, gIdx, gColor, resultColor, grid.pixelRange, screenScale);
+                if (glyphResult.alpha > 0.01) {
+                    resultColor = glyphResult.color;
+                }
+            }
+        } else {
+            // ---- SDF PRIMITIVE ----
+            let primIdx = rawIdx;
             let primOffset = primitiveOffset + primIdx * primSize;
 
             // Per-primitive AABB check (fast rejection)
@@ -129,10 +163,8 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
 
             evalCount++;
 
-            // Evaluate SDF
             let d = evaluateSDF(primOffset, scenePos);
 
-            // Fill (only if inside and has fill color)
             let fillColorPacked = bitcast<u32>(cardStorage[primOffset + 14u]);
             if (d < 0.0 && fillColorPacked != 0u) {
                 let fillColor = unpackColor(fillColorPacked);
@@ -140,7 +172,6 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
                 resultColor = mix(resultColor, fillColor, alpha);
             }
 
-            // Stroke (only if has stroke)
             let strokeColorPacked = bitcast<u32>(cardStorage[primOffset + 15u]);
             let strokeWidth = cardStorage[primOffset + 16u];
             if (strokeWidth > 0.0 && strokeColorPacked != 0u) {
@@ -150,50 +181,6 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
                     let alpha = clamp(-strokeDist * 2.0, 0.0, 1.0);
                     resultColor = mix(resultColor, strokeColor, alpha);
                 }
-            }
-        }
-    }
-
-    // =========================================================================
-    // TEXT GLYPH RENDERING (MSDF)
-    // =========================================================================
-    // YDrawGlyph layout: x, y, width, height, glyphIndex, color, layer, _pad (8 floats = 32 bytes)
-    let glyphSize = 8u;
-
-    // Compute screen scale for proper MSDF anti-aliasing
-    let sceneWidth = sceneMaxX - sceneMinX;
-    let pixelWidth = f32(widthCells) * grid.cellSize.x;
-    let screenScale = select(1.0, pixelWidth / sceneWidth, sceneWidth > 0.0);
-
-    for (var gi = 0u; gi < glyphCount; gi++) {
-        let gOffset = glyphOffset + gi * glyphSize;
-
-        // Read glyph data
-        let gx = cardStorage[gOffset + 0u];
-        let gy = cardStorage[gOffset + 1u];
-        let gw = cardStorage[gOffset + 2u];
-        let gh = cardStorage[gOffset + 3u];
-        let gIdx = bitcast<u32>(cardStorage[gOffset + 4u]);
-        let gColorPacked = bitcast<u32>(cardStorage[gOffset + 5u]);
-        // layer at offset 6, _pad at offset 7 - not used yet
-
-        // Check if pixel is within glyph bounds
-        if (scenePos.x >= gx && scenePos.x < gx + gw &&
-            scenePos.y >= gy && scenePos.y < gy + gh) {
-
-            // Compute local UV within glyph (0-1)
-            let localUV = vec2<f32>(
-                (scenePos.x - gx) / gw,
-                (scenePos.y - gy) / gh
-            );
-
-            let gColor = unpackColor(gColorPacked);
-
-            // Render using MSDF
-            let glyphResult = renderMsdfGlyph(localUV, gIdx, gColor, resultColor, grid.pixelRange, screenScale);
-
-            if (glyphResult.alpha > 0.01) {
-                resultColor = glyphResult.color;
             }
         }
     }

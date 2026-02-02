@@ -367,17 +367,24 @@ public:
                 float sceneHeight = sMaxY - sMinY;
                 float sceneArea = sceneWidth * sceneHeight;
                 uint32_t gridW = 0, gridH = 0;
-                if (n > 0 && sceneArea > 0) {
+                if ((n > 0 || !_glyphs.empty()) && sceneArea > 0) {
                     float cs = _cellSize;
                     if (cs <= 0.0f) {
-                        float avgPrimArea = 0.0f;
-                        for (uint32_t i = 0; i < n; i++) {
-                            float w = _primStaging[i].aabbMaxX - _primStaging[i].aabbMinX;
-                            float h = _primStaging[i].aabbMaxY - _primStaging[i].aabbMinY;
-                            avgPrimArea += w * h;
+                        if (n > 0) {
+                            float avgPrimArea = 0.0f;
+                            for (uint32_t i = 0; i < n; i++) {
+                                float w = _primStaging[i].aabbMaxX - _primStaging[i].aabbMinX;
+                                float h = _primStaging[i].aabbMaxY - _primStaging[i].aabbMinY;
+                                avgPrimArea += w * h;
+                            }
+                            avgPrimArea /= n;
+                            cs = std::sqrt(avgPrimArea) * 1.5f;
+                        } else {
+                            float avgGlyphH = 0.0f;
+                            for (const auto& g : _glyphs) avgGlyphH += g.height;
+                            avgGlyphH /= _glyphs.size();
+                            cs = avgGlyphH * 2.0f;
                         }
-                        avgPrimArea /= n;
-                        cs = std::sqrt(avgPrimArea) * 1.5f;
                         float minCS = std::sqrt(sceneArea / 65536.0f);
                         float maxCS = std::sqrt(sceneArea / 16.0f);
                         cs = std::clamp(cs, minCS, maxCS);
@@ -420,17 +427,24 @@ public:
         float sceneHeight = sMaxY - sMinY;
         float sceneArea = sceneWidth * sceneHeight;
         uint32_t gridW = 0, gridH = 0;
-        if (_primCount > 0 && sceneArea > 0) {
+        if ((_primCount > 0 || !_glyphs.empty()) && sceneArea > 0) {
             float cs = _cellSize;
             if (cs <= 0.0f) {
-                float avgPrimArea = 0.0f;
-                for (uint32_t i = 0; i < _primCount; i++) {
-                    float w = _primitives[i].aabbMaxX - _primitives[i].aabbMinX;
-                    float h = _primitives[i].aabbMaxY - _primitives[i].aabbMinY;
-                    avgPrimArea += w * h;
+                if (_primCount > 0) {
+                    float avgPrimArea = 0.0f;
+                    for (uint32_t i = 0; i < _primCount; i++) {
+                        float w = _primitives[i].aabbMaxX - _primitives[i].aabbMinX;
+                        float h = _primitives[i].aabbMaxY - _primitives[i].aabbMinY;
+                        avgPrimArea += w * h;
+                    }
+                    avgPrimArea /= _primCount;
+                    cs = std::sqrt(avgPrimArea) * 1.5f;
+                } else {
+                    float avgGlyphH = 0.0f;
+                    for (const auto& g : _glyphs) avgGlyphH += g.height;
+                    avgGlyphH /= _glyphs.size();
+                    cs = avgGlyphH * 2.0f;
                 }
-                avgPrimArea /= _primCount;
-                cs = std::sqrt(avgPrimArea) * 1.5f;
                 float minCS = std::sqrt(sceneArea / 65536.0f);
                 float maxCS = std::sqrt(sceneArea / 16.0f);
                 cs = std::clamp(cs, minCS, maxCS);
@@ -1609,11 +1623,13 @@ private:
         }
     }
 
+    static constexpr uint32_t GLYPH_BIT = 0x80000000u;
+
     void buildGrid() {
         // Grid buffer already allocated by rebuildAndUpload
         // _grid, _gridSize, _gridWidth, _gridHeight, _cellSize are set
 
-        if (_primCount == 0 || _gridSize == 0) {
+        if (_gridSize == 0) {
             return;
         }
 
@@ -1647,6 +1663,32 @@ private:
                 }
             }
         }
+
+        // Assign each glyph to cells it overlaps (bit 31 set to distinguish from prims)
+        for (uint32_t gi = 0; gi < static_cast<uint32_t>(_glyphs.size()); gi++) {
+            const auto& g = _glyphs[gi];
+
+            uint32_t cellMinX = static_cast<uint32_t>(
+                std::clamp((g.x - _sceneMinX) / _cellSize, 0.0f, float(_gridWidth - 1)));
+            uint32_t cellMaxX = static_cast<uint32_t>(
+                std::clamp((g.x + g.width - _sceneMinX) / _cellSize, 0.0f, float(_gridWidth - 1)));
+            uint32_t cellMinY = static_cast<uint32_t>(
+                std::clamp((g.y - _sceneMinY) / _cellSize, 0.0f, float(_gridHeight - 1)));
+            uint32_t cellMaxY = static_cast<uint32_t>(
+                std::clamp((g.y + g.height - _sceneMinY) / _cellSize, 0.0f, float(_gridHeight - 1)));
+
+            for (uint32_t cy = cellMinY; cy <= cellMaxY; cy++) {
+                for (uint32_t cx = cellMinX; cx <= cellMaxX; cx++) {
+                    uint32_t cellIndex = cy * _gridWidth + cx;
+                    uint32_t cellOffset = cellIndex * cellStride;
+                    uint32_t count = _grid[cellOffset];
+                    if (count < _maxPrimsPerCell) {
+                        _grid[cellOffset + 1 + count] = gi | GLYPH_BIT;
+                        _grid[cellOffset] = count + 1;
+                    }
+                }
+            }
+        }
     }
 
     Result<void> rebuildAndUpload() {
@@ -1660,17 +1702,27 @@ private:
         uint32_t gridW = 0, gridH = 0;
         float cellSize = _cellSize;
 
-        if (_primCount > 0) {
+        if (_primCount > 0 || !_glyphs.empty()) {
             float sceneArea = sceneWidth * sceneHeight;
             if (cellSize <= 0.0f) {
-                float avgPrimArea = 0.0f;
-                for (uint32_t i = 0; i < _primCount; i++) {
-                    float w = _primitives[i].aabbMaxX - _primitives[i].aabbMinX;
-                    float h = _primitives[i].aabbMaxY - _primitives[i].aabbMinY;
-                    avgPrimArea += w * h;
+                if (_primCount > 0) {
+                    float avgPrimArea = 0.0f;
+                    for (uint32_t i = 0; i < _primCount; i++) {
+                        float w = _primitives[i].aabbMaxX - _primitives[i].aabbMinX;
+                        float h = _primitives[i].aabbMaxY - _primitives[i].aabbMinY;
+                        avgPrimArea += w * h;
+                    }
+                    avgPrimArea /= _primCount;
+                    cellSize = std::sqrt(avgPrimArea) * 1.5f;
+                } else {
+                    // Text-only: use average glyph height as cell size
+                    float avgGlyphH = 0.0f;
+                    for (const auto& g : _glyphs) {
+                        avgGlyphH += g.height;
+                    }
+                    avgGlyphH /= _glyphs.size();
+                    cellSize = avgGlyphH * 2.0f;
                 }
-                avgPrimArea /= _primCount;
-                cellSize = std::sqrt(avgPrimArea) * 1.5f;
                 float minCellSize = std::sqrt(sceneArea / 65536.0f);
                 float maxCellSize = std::sqrt(sceneArea / 16.0f);
                 cellSize = std::clamp(cellSize, minCellSize, maxCellSize);
@@ -1704,10 +1756,8 @@ private:
             _gridOffset = (_derivedStorage.offset + offset) / sizeof(float);
             offset += gridBytes;
 
-            // Build grid directly into buffer
-            if (_primCount > 0) {
-                buildGrid();
-            }
+            // Build grid directly into buffer (prims and/or glyphs)
+            buildGrid();
 
             // Glyphs (small data)
             _glyphOffset = (_derivedStorage.offset + offset) / sizeof(float);
