@@ -1,23 +1,19 @@
 include(ExternalProject)
 
 set(LIBMAGIC_VERSION "5.45")
-set(LIBMAGIC_TAG "FILE5_45")
 
 # Locate the zlib static library built by CPM
 # zlibstatic is the CMake target name from zlib's own CMakeLists.txt
 set(ZLIB_STATIC_LIB "$<TARGET_FILE:zlibstatic>")
 
+# Use official distribution tarball — includes pre-generated configure script,
+# no autotools (autoconf/automake/libtool) needed on the build machine.
 ExternalProject_Add(libmagic_ext
-    GIT_REPOSITORY  https://github.com/file/file.git
-    GIT_TAG         ${LIBMAGIC_TAG}
-    GIT_SHALLOW     TRUE
+    URL             https://astron.com/pub/file/file-${LIBMAGIC_VERSION}.tar.gz
     PREFIX          ${CMAKE_BINARY_DIR}/_deps/libmagic
 
-    # After initial clone+build, skip update/patch to avoid rebuilds
+    # After initial download+build, skip update to avoid rebuilds
     UPDATE_DISCONNECTED TRUE
-
-    # autoreconf only runs once (before first configure)
-    PATCH_COMMAND   autoreconf -fi
 
     CONFIGURE_COMMAND
         <SOURCE_DIR>/configure
