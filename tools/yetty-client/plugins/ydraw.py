@@ -562,10 +562,12 @@ def parse_yaml_to_binary(yaml_content: str) -> Tuple[bytes, int]:
 
 @click.command(name='ydraw')
 @click.option('--file', '-f', type=click.Path(exists=True), help='YAML file with primitives')
+@click.option('--input', '-i', 'input_', help='YAML file (use - for stdin)')
+@click.option('--bin', '-b', 'binary', is_flag=True, help='Input is pre-converted binary format')
 @click.option('--demo', '-d', type=click.Choice(['2d', 'simple']),
               help='Run a built-in demo')
 @click.pass_context
-def ydraw(ctx, file, demo):
+def ydraw(ctx, file, input_, binary, demo):
     """YDraw plugin - 2D SDF rendering.
 
     GPU-accelerated rendering using signed distance functions.
@@ -576,26 +578,49 @@ def ydraw(ctx, file, demo):
 
     Examples:
         yetty-client create ydraw -f shapes.yaml -w 80 -H 40
+        yetty-client create ydraw -i shapes.bin --bin -w 80 -H 40
         yetty-client create ydraw --demo 2d -w 60 -H 40
     """
+    import sys
+    from pathlib import Path
+
     ctx.ensure_object(dict)
 
-    if file:
-        with open(file, 'r') as f:
-            yaml_content = f.read()
-    elif demo:
-        yaml_content = DEMOS.get(demo, DEMOS['simple'])
+    src = file or input_
+
+    if binary:
+        # Binary mode: read file as raw bytes, send directly
+        if not src:
+            raise click.ClickException("--bin requires --input/-i or --file/-f")
+        if src == '-':
+            payload_bytes = sys.stdin.buffer.read()
+        else:
+            with open(src, 'rb') as f:
+                payload_bytes = f.read()
+        ctx.obj['payload_bytes'] = payload_bytes
+        ctx.obj['plugin_name'] = 'ydraw'
+        ctx.obj['plugin_args'] = ''
     else:
-        yaml_content = DEMOS['simple']
+        # YAML mode: convert to binary in Python
+        if src:
+            if src == '-':
+                yaml_content = sys.stdin.read()
+            else:
+                with open(src, 'r') as f:
+                    yaml_content = f.read()
+        elif demo:
+            yaml_content = DEMOS.get(demo, DEMOS['simple'])
+        else:
+            yaml_content = DEMOS['simple']
 
-    try:
-        payload_bytes, bg_color = parse_yaml_to_binary(yaml_content)
-    except ValueError as e:
-        raise click.ClickException(str(e))
+        try:
+            payload_bytes, bg_color = parse_yaml_to_binary(yaml_content)
+        except ValueError as e:
+            raise click.ClickException(str(e))
 
-    ctx.obj['payload_bytes'] = payload_bytes
-    ctx.obj['plugin_name'] = 'ydraw'
-    ctx.obj['plugin_args'] = f'--bg-color 0x{bg_color:08X}'
+        ctx.obj['payload_bytes'] = payload_bytes
+        ctx.obj['plugin_name'] = 'ydraw'
+        ctx.obj['plugin_args'] = f'--bg-color 0x{bg_color:08X}'
 
 
 command = ydraw

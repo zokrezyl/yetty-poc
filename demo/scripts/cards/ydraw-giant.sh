@@ -5,4 +5,4 @@
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR/../../.."
 
-uv run python3 tools/yetty-client/main.py create ydraw -f demo/assets/cards/x-draw/giant.yaml -w 80 -H 25
+uv run python3 tools/yetty-client/main.py create ydraw -i demo/assets/cards/x-draw/giant.yaml -w 80 -H 25

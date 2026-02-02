@@ -1,4 +1,4 @@
-#include "hdraw.h"
+#include "jdraw.h"
 #include "../ydraw/ydraw.h"  // For SDFPrimitive definition
 #include <yetty/ms-msdf-font.h>
 #include <yetty/font-manager.h>
@@ -9,14 +9,15 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <fstream>
 
 namespace yetty::card {
 
 //=============================================================================
-// AABB utilities (shared with ydraw)
+// AABB utilities (shared with ydraw/hdraw/kdraw)
 //=============================================================================
 
-static void computeAABB_hdraw(SDFPrimitive& prim) {
+static void computeAABB_jdraw(SDFPrimitive& prim) {
     float expand = prim.strokeWidth * 0.5f;
 
     switch (static_cast<SDFType>(prim.type)) {
@@ -51,25 +52,18 @@ static void computeAABB_hdraw(SDFPrimitive& prim) {
             prim.aabbMaxY = std::max({prim.params[1], prim.params[3], prim.params[5]}) + expand;
             break;
         }
-        case SDFType::Bezier2: {
-            prim.aabbMinX = std::min({prim.params[0], prim.params[2], prim.params[4]}) - expand;
-            prim.aabbMinY = std::min({prim.params[1], prim.params[3], prim.params[5]}) - expand;
-            prim.aabbMaxX = std::max({prim.params[0], prim.params[2], prim.params[4]}) + expand;
-            prim.aabbMaxY = std::max({prim.params[1], prim.params[3], prim.params[5]}) + expand;
-            break;
-        }
-        case SDFType::Bezier3: {
-            prim.aabbMinX = std::min({prim.params[0], prim.params[2], prim.params[4], prim.params[6]}) - expand;
-            prim.aabbMinY = std::min({prim.params[1], prim.params[3], prim.params[5], prim.params[7]}) - expand;
-            prim.aabbMaxX = std::max({prim.params[0], prim.params[2], prim.params[4], prim.params[6]}) + expand;
-            prim.aabbMaxY = std::max({prim.params[1], prim.params[3], prim.params[5], prim.params[7]}) + expand;
-            break;
-        }
         case SDFType::Ellipse: {
             prim.aabbMinX = prim.params[0] - prim.params[2] - expand;
             prim.aabbMinY = prim.params[1] - prim.params[3] - expand;
             prim.aabbMaxX = prim.params[0] + prim.params[2] + expand;
             prim.aabbMaxY = prim.params[1] + prim.params[3] + expand;
+            break;
+        }
+        case SDFType::Bezier2: {
+            prim.aabbMinX = std::min({prim.params[0], prim.params[2], prim.params[4]}) - expand;
+            prim.aabbMinY = std::min({prim.params[1], prim.params[3], prim.params[5]}) - expand;
+            prim.aabbMaxX = std::max({prim.params[0], prim.params[2], prim.params[4]}) + expand;
+            prim.aabbMaxY = std::max({prim.params[1], prim.params[3], prim.params[5]}) + expand;
             break;
         }
         case SDFType::Arc: {
@@ -78,17 +72,6 @@ static void computeAABB_hdraw(SDFPrimitive& prim) {
             prim.aabbMinY = prim.params[1] - r;
             prim.aabbMaxX = prim.params[0] + r;
             prim.aabbMaxY = prim.params[1] + r;
-            break;
-        }
-        case SDFType::RoundedBox: {
-            float maxR = std::max({prim.params[4], prim.params[5],
-                                   prim.params[6], prim.params[7]});
-            float hw = prim.params[2] + maxR + expand;
-            float hh = prim.params[3] + maxR + expand;
-            prim.aabbMinX = prim.params[0] - hw;
-            prim.aabbMinY = prim.params[1] - hh;
-            prim.aabbMaxX = prim.params[0] + hw;
-            prim.aabbMaxY = prim.params[1] + hh;
             break;
         }
         case SDFType::Rhombus: {
@@ -143,11 +126,10 @@ static void computeAABB_hdraw(SDFPrimitive& prim) {
         }
         case SDFType::Cross: {
             float hw = std::max(prim.params[2], prim.params[3]) + expand;
-            float hh = hw;
             prim.aabbMinX = prim.params[0] - hw;
-            prim.aabbMinY = prim.params[1] - hh;
+            prim.aabbMinY = prim.params[1] - hw;
             prim.aabbMaxX = prim.params[0] + hw;
-            prim.aabbMaxY = prim.params[1] + hh;
+            prim.aabbMaxY = prim.params[1] + hw;
             break;
         }
         case SDFType::RoundedX: {
@@ -183,6 +165,7 @@ static void computeAABB_hdraw(SDFPrimitive& prim) {
             break;
         }
         default:
+            // For other types, use conservative bounds
             prim.aabbMinX = -1e10f;
             prim.aabbMinY = -1e10f;
             prim.aabbMaxX = 1e10f;
@@ -192,16 +175,16 @@ static void computeAABB_hdraw(SDFPrimitive& prim) {
 }
 
 //=============================================================================
-// HDrawImpl - Implementation of HDraw with spatial hashing
+// JDrawImpl - Implementation with GPU compute shader tile culling
 //=============================================================================
 
-class HDrawImpl : public HDraw {
+class JDrawImpl : public JDraw {
 public:
-    HDrawImpl(const YettyContext& ctx,
+    JDrawImpl(const YettyContext& ctx,
               int32_t x, int32_t y,
               uint32_t widthCells, uint32_t heightCells,
               const std::string& args, const std::string& payload)
-        : HDraw(ctx.cardManager, ctx.gpu, x, y, widthCells, heightCells)
+        : JDraw(ctx.cardManager, ctx.gpu, x, y, widthCells, heightCells)
         , _fontManager(ctx.fontManager)
         , _argsStr(args)
         , _payloadStr(payload)
@@ -213,7 +196,7 @@ public:
         }
     }
 
-    ~HDrawImpl() override {
+    ~JDrawImpl() override {
         dispose();
     }
 
@@ -225,11 +208,16 @@ public:
         // Allocate metadata slot
         auto metaResult = _cardMgr->allocateMetadata(sizeof(Metadata));
         if (!metaResult) {
-            return Err<void>("HDraw::init: failed to allocate metadata");
+            return Err<void>("JDraw::init: failed to allocate metadata");
         }
         _metaHandle = *metaResult;
 
-        yinfo("HDraw::init: allocated metadata at offset {}", _metaHandle.offset);
+        yinfo("JDraw::init: allocated metadata at offset {}", _metaHandle.offset);
+
+        // Create compute pipeline for tile culling
+        if (auto res = createComputePipeline(); !res) {
+            return Err<void>("JDraw::init: failed to create compute pipeline");
+        }
 
         // Parse args
         parseArgs(_argsStr);
@@ -238,11 +226,11 @@ public:
         _initParsing = true;
         if (!_payloadStr.empty()) {
             if (auto res = parsePayload(_payloadStr); !res) {
-                ywarn("HDraw::init: failed to parse payload: {}", error_msg(res));
+                ywarn("JDraw::init: failed to parse payload: {}", error_msg(res));
             }
         }
         _initParsing = false;
-        yinfo("HDraw::init: parsed {} primitives into staging", _primStaging.size());
+        yinfo("JDraw::init: parsed {} primitives into staging", _primStaging.size());
 
         _dirty = true;
         _metadataDirty = true;
@@ -251,21 +239,55 @@ public:
     }
 
     Result<void> dispose() override {
-        _primStaging.clear();
-        _primStaging.shrink_to_fit();
+        // Release compute resources
+        if (_tileCullPipeline) {
+            wgpuComputePipelineRelease(_tileCullPipeline);
+            _tileCullPipeline = nullptr;
+        }
+        if (_tileCullBindGroupLayout) {
+            wgpuBindGroupLayoutRelease(_tileCullBindGroupLayout);
+            _tileCullBindGroupLayout = nullptr;
+        }
+        if (_tileCullBindGroup) {
+            wgpuBindGroupRelease(_tileCullBindGroup);
+            _tileCullBindGroup = nullptr;
+        }
+        if (_primInputBuffer) {
+            wgpuBufferRelease(_primInputBuffer);
+            _primInputBuffer = nullptr;
+            _primInputBufferSize = 0;
+        }
+        if (_tileOutputBuffer) {
+            wgpuBufferRelease(_tileOutputBuffer);
+            _tileOutputBuffer = nullptr;
+            _tileOutputBufferSize = 0;
+        }
+        if (_tileReadbackBuffer) {
+            wgpuBufferRelease(_tileReadbackBuffer);
+            _tileReadbackBuffer = nullptr;
+            _tileReadbackBufferSize = 0;
+        }
+        if (_tileCullUniformBuffer) {
+            wgpuBufferRelease(_tileCullUniformBuffer);
+            _tileCullUniformBuffer = nullptr;
+        }
+        if (_tileCullShaderModule) {
+            wgpuShaderModuleRelease(_tileCullShaderModule);
+            _tileCullShaderModule = nullptr;
+        }
 
         if (_derivedStorage.isValid() && _cardMgr) {
             if (auto res = _cardMgr->bufferManager()->deallocateBuffer(_derivedStorage); !res) {
-                yerror("HDraw::dispose: deallocateBuffer (derived) failed: {}", error_msg(res));
+                yerror("JDraw::dispose: deallocateBuffer (derived) failed: {}", error_msg(res));
             }
             _derivedStorage = StorageHandle::invalid();
-            _grid = nullptr;
-            _gridSize = 0;
+            _tileLists = nullptr;
+            _tileListsSize = 0;
         }
 
         if (_primStorage.isValid() && _cardMgr) {
             if (auto res = _cardMgr->bufferManager()->deallocateBuffer(_primStorage); !res) {
-                yerror("HDraw::dispose: deallocateBuffer (prims) failed: {}", error_msg(res));
+                yerror("JDraw::dispose: deallocateBuffer (prims) failed: {}", error_msg(res));
             }
             _primStorage = StorageHandle::invalid();
             _primitives = nullptr;
@@ -275,30 +297,33 @@ public:
 
         if (_metaHandle.isValid() && _cardMgr) {
             if (auto res = _cardMgr->deallocateMetadata(_metaHandle); !res) {
-                yerror("HDraw::dispose: deallocateMetadata failed: {}", error_msg(res));
+                yerror("JDraw::dispose: deallocateMetadata failed: {}", error_msg(res));
             }
             _metaHandle = MetadataHandle::invalid();
         }
+
+        _primStaging.clear();
+        _primStaging.shrink_to_fit();
 
         return Ok();
     }
 
     void suspend() override {
-        // Save primitives from GPU storage to CPU staging
+        // Save primitives from GPU buffer to CPU staging
         if (_primStorage.isValid() && _primCount > 0) {
             _primStaging.resize(_primCount);
             std::memcpy(_primStaging.data(), _primitives, _primCount * sizeof(SDFPrimitive));
         }
 
-        // Deallocate derived storage (grid + glyphs)
+        // Deallocate derived storage (tile lists — will be rebuilt)
         if (_derivedStorage.isValid()) {
             _cardMgr->bufferManager()->deallocateBuffer(_derivedStorage);
             _derivedStorage = StorageHandle::invalid();
-            _grid = nullptr;
-            _gridSize = 0;
+            _tileLists = nullptr;
+            _tileListsSize = 0;
         }
 
-        // Deallocate primitive storage
+        // Deallocate prim storage
         if (_primStorage.isValid()) {
             _cardMgr->bufferManager()->deallocateBuffer(_primStorage);
             _primStorage = StorageHandle::invalid();
@@ -307,7 +332,26 @@ public:
             _primCapacity = 0;
         }
 
-        yinfo("HDraw::suspend: deallocated storage, saved {} primitives to staging", _primStaging.size());
+        // Invalidate bind group since buffers changed
+        if (_tileCullBindGroup) {
+            wgpuBindGroupRelease(_tileCullBindGroup);
+            _tileCullBindGroup = nullptr;
+        }
+
+        yinfo("JDraw::suspend: deallocated storage, saved {} primitives to staging",
+              _primStaging.size());
+    }
+
+    uint32_t computeDerivedSize() const {
+        const uint32_t ESTIMATED_CELL_PIXELS = 16;
+        uint32_t pixelWidth = _widthCells * ESTIMATED_CELL_PIXELS;
+        uint32_t pixelHeight = _heightCells * ESTIMATED_CELL_PIXELS;
+        uint32_t tcX = (pixelWidth + TILE_SIZE - 1) / TILE_SIZE;
+        uint32_t tcY = (pixelHeight + TILE_SIZE - 1) / TILE_SIZE;
+        uint32_t tileStride = 1 + MAX_PRIMS_PER_TILE;
+        uint32_t tileBytes = tcX * tcY * tileStride * sizeof(uint32_t);
+        uint32_t glyphBytes = static_cast<uint32_t>(_glyphs.size() * sizeof(JDrawGlyph));
+        return tileBytes + glyphBytes;
     }
 
     void declareBufferNeeds() override {
@@ -316,12 +360,11 @@ public:
             _primStaging.resize(_primCount);
             std::memcpy(_primStaging.data(), _primitives, _primCount * sizeof(SDFPrimitive));
         }
-        uint32_t lastDerivedSize = _derivedStorage.size;
         if (_derivedStorage.isValid()) {
             _cardMgr->bufferManager()->deallocateBuffer(_derivedStorage);
             _derivedStorage = StorageHandle::invalid();
-            _grid = nullptr;
-            _gridSize = 0;
+            _tileLists = nullptr;
+            _tileListsSize = 0;
         }
         if (_primStorage.isValid()) {
             _cardMgr->bufferManager()->deallocateBuffer(_primStorage);
@@ -330,101 +373,26 @@ public:
             _primCount = 0;
             _primCapacity = 0;
         }
+        if (_tileCullBindGroup) {
+            wgpuBindGroupRelease(_tileCullBindGroup);
+            _tileCullBindGroup = nullptr;
+        }
         // Reserve prim + derived
         if (!_primStaging.empty()) {
             uint32_t primSize = static_cast<uint32_t>(_primStaging.size()) * sizeof(SDFPrimitive);
             _cardMgr->bufferManager()->reserve(primSize);
-            if (lastDerivedSize > 0) {
-                _cardMgr->bufferManager()->reserve(lastDerivedSize);
-            } else {
-                // First time: estimate derived size from staging data
-                // Mirror the logic in rebuildAndUpload() exactly
-                uint32_t n = static_cast<uint32_t>(_primStaging.size());
-                float sMinX = 1e30f, sMinY = 1e30f, sMaxX = -1e30f, sMaxY = -1e30f;
-                for (uint32_t i = 0; i < n; i++) {
-                    sMinX = std::min(sMinX, _primStaging[i].aabbMinX);
-                    sMinY = std::min(sMinY, _primStaging[i].aabbMinY);
-                    sMaxX = std::max(sMaxX, _primStaging[i].aabbMaxX);
-                    sMaxY = std::max(sMaxY, _primStaging[i].aabbMaxY);
-                }
-                float sceneWidth = sMaxX - sMinX;
-                float sceneHeight = sMaxY - sMinY;
-                float sceneArea = sceneWidth * sceneHeight;
-                uint32_t gridW = 0, gridH = 0;
-                if (n > 0 && sceneArea > 0) {
-                    float cs = _cellSize;
-                    if (cs <= 0.0f) {
-                        float avgPrimArea = 0.0f;
-                        for (uint32_t i = 0; i < n; i++) {
-                            float w = _primStaging[i].aabbMaxX - _primStaging[i].aabbMinX;
-                            float h = _primStaging[i].aabbMaxY - _primStaging[i].aabbMinY;
-                            avgPrimArea += w * h;
-                        }
-                        avgPrimArea /= n;
-                        cs = std::sqrt(avgPrimArea) * 1.5f;
-                        float minCS = std::sqrt(sceneArea / 65536.0f);
-                        float maxCS = std::sqrt(sceneArea / 16.0f);
-                        cs = std::clamp(cs, minCS, maxCS);
-                    }
-                    gridW = std::max(1u, static_cast<uint32_t>(std::ceil(sceneWidth / cs)));
-                    gridH = std::max(1u, static_cast<uint32_t>(std::ceil(sceneHeight / cs)));
-                    const uint32_t MAX_GRID_DIM = 512;
-                    gridW = std::min(gridW, MAX_GRID_DIM);
-                    gridH = std::min(gridH, MAX_GRID_DIM);
-                }
-                uint32_t cellStride = 1 + _maxPrimsPerCell;
-                uint32_t estDerived = gridW * gridH * cellStride * sizeof(uint32_t)
-                    + static_cast<uint32_t>(_glyphs.size() * sizeof(HDrawGlyph));
-                _cardMgr->bufferManager()->reserve(estDerived);
+            uint32_t derivedSize = computeDerivedSize();
+            if (derivedSize > 0) {
+                _cardMgr->bufferManager()->reserve(derivedSize);
             }
         }
-    }
-
-    uint32_t computeDerivedSize() const {
-        // Compute scene bounds from primitives
-        float sMinX = 1e30f, sMinY = 1e30f, sMaxX = -1e30f, sMaxY = -1e30f;
-        for (uint32_t i = 0; i < _primCount; i++) {
-            sMinX = std::min(sMinX, _primitives[i].aabbMinX);
-            sMinY = std::min(sMinY, _primitives[i].aabbMinY);
-            sMaxX = std::max(sMaxX, _primitives[i].aabbMaxX);
-            sMaxY = std::max(sMaxY, _primitives[i].aabbMaxY);
-        }
-        float sceneWidth = sMaxX - sMinX;
-        float sceneHeight = sMaxY - sMinY;
-        float sceneArea = sceneWidth * sceneHeight;
-        uint32_t gridW = 0, gridH = 0;
-        if (_primCount > 0 && sceneArea > 0) {
-            float cs = _cellSize;
-            if (cs <= 0.0f) {
-                float avgPrimArea = 0.0f;
-                for (uint32_t i = 0; i < _primCount; i++) {
-                    float w = _primitives[i].aabbMaxX - _primitives[i].aabbMinX;
-                    float h = _primitives[i].aabbMaxY - _primitives[i].aabbMinY;
-                    avgPrimArea += w * h;
-                }
-                avgPrimArea /= _primCount;
-                cs = std::sqrt(avgPrimArea) * 1.5f;
-                float minCS = std::sqrt(sceneArea / 65536.0f);
-                float maxCS = std::sqrt(sceneArea / 16.0f);
-                cs = std::clamp(cs, minCS, maxCS);
-            }
-            gridW = std::max(1u, static_cast<uint32_t>(std::ceil(sceneWidth / cs)));
-            gridH = std::max(1u, static_cast<uint32_t>(std::ceil(sceneHeight / cs)));
-            const uint32_t MAX_GRID_DIM = 512;
-            gridW = std::min(gridW, MAX_GRID_DIM);
-            gridH = std::min(gridH, MAX_GRID_DIM);
-        }
-        uint32_t cellStride = 1 + _maxPrimsPerCell;
-        uint32_t gridBytes = gridW * gridH * cellStride * sizeof(uint32_t);
-        uint32_t glyphBytes = static_cast<uint32_t>(_glyphs.size() * sizeof(HDrawGlyph));
-        return gridBytes + glyphBytes;
     }
 
     Result<void> allocateBuffers() override {
         if (!_primStaging.empty()) {
             uint32_t count = static_cast<uint32_t>(_primStaging.size());
             if (auto res = ensurePrimCapacity(count); !res) {
-                return Err<void>("HDraw::allocateBuffers: failed to allocate prim storage");
+                return Err<void>("JDraw::allocateBuffers: failed to allocate prim storage");
             }
             _primCount = count;
             std::memcpy(_primitives, _primStaging.data(), count * sizeof(SDFPrimitive));
@@ -432,18 +400,19 @@ public:
             _primStaging.shrink_to_fit();
             _cardMgr->bufferManager()->markBufferDirty(_primStorage);
 
-            // Allocate derived storage (grid + glyphs)
+            // Allocate derived storage (tile lists + glyphs)
             uint32_t derivedSize = computeDerivedSize();
             if (derivedSize > 0) {
                 auto storageResult = _cardMgr->bufferManager()->allocateBuffer(derivedSize);
                 if (!storageResult) {
-                    return Err<void>("HDraw::allocateBuffers: failed to allocate derived storage");
+                    return Err<void>("JDraw::allocateBuffers: failed to allocate derived storage");
                 }
                 _derivedStorage = *storageResult;
+                _bindGroupStale = true;
             }
 
             _dirty = true;
-            yinfo("HDraw::allocateBuffers: reconstructed {} primitives, derived {} bytes", count, derivedSize);
+            yinfo("JDraw::allocateBuffers: reconstructed {} primitives, derived {} bytes", count, derivedSize);
         }
         return Ok();
     }
@@ -456,7 +425,7 @@ public:
 
         if (_dirty) {
             if (auto res = rebuildAndUpload(); !res) {
-                return Err<void>("HDraw::update: rebuildAndUpload failed", res);
+                return Err<void>("JDraw::render: rebuildAndUpload failed", res);
             }
             _dirty = false;
             didRebuild = true;
@@ -465,7 +434,7 @@ public:
 
         if (_metadataDirty) {
             if (auto res = uploadMetadata(); !res) {
-                return Err<void>("HDraw::update: metadata upload failed", res);
+                return Err<void>("JDraw::render: metadata upload failed", res);
             }
             _metadataDirty = false;
             didMeta = true;
@@ -474,7 +443,7 @@ public:
 
         if (didRebuild || didMeta) {
             auto us = [](auto a, auto b) { return std::chrono::duration_cast<std::chrono::microseconds>(b - a).count(); };
-            yinfo("HDraw::render: rebuild={} us, metadata={} us, total={} us",
+            yinfo("JDraw::render: rebuild={} us, metadata={} us, total={} us",
                   us(tRenderStart, tAfterRebuild), us(tAfterRebuild, tAfterMeta),
                   us(tRenderStart, tAfterMeta));
         }
@@ -483,27 +452,27 @@ public:
     }
 
     //=========================================================================
-    // HDraw-specific API
+    // JDraw-specific API
     //=========================================================================
 
-    uint32_t addPrimitive(const SDFPrimitive& prim) override {
+    uint32_t addPrimitive(const SDFPrimitive& prim) {
         if (_initParsing) {
             SDFPrimitive p = prim;
             if (p.aabbMinX == 0 && p.aabbMaxX == 0) {
-                computeAABB_hdraw(p);
+                computeAABB_jdraw(p);
             }
             uint32_t idx = static_cast<uint32_t>(_primStaging.size());
             _primStaging.push_back(p);
             return idx;
         }
         if (auto res = ensurePrimCapacity(_primCount + 1); !res) {
-            yerror("HDraw::addPrimitive: failed to grow storage");
+            yerror("JDraw::addPrimitive: failed to grow storage");
             return 0;
         }
         uint32_t idx = _primCount++;
         _primitives[idx] = prim;
         if (_primitives[idx].aabbMinX == 0 && _primitives[idx].aabbMaxX == 0) {
-            computeAABB_hdraw(_primitives[idx]);
+            computeAABB_jdraw(_primitives[idx]);
         }
         _cardMgr->bufferManager()->markBufferDirty(_primStorage);
         _dirty = true;
@@ -512,7 +481,7 @@ public:
 
     uint32_t addCircle(float cx, float cy, float radius,
                        uint32_t fillColor, uint32_t strokeColor,
-                       float strokeWidth, uint32_t layer) override {
+                       float strokeWidth, uint32_t layer) {
         SDFPrimitive prim = {};
         prim.type = static_cast<uint32_t>(SDFType::Circle);
         prim.layer = layer;
@@ -527,7 +496,7 @@ public:
 
     uint32_t addBox(float cx, float cy, float halfW, float halfH,
                     uint32_t fillColor, uint32_t strokeColor,
-                    float strokeWidth, float round, uint32_t layer) override {
+                    float strokeWidth, float round, uint32_t layer) {
         SDFPrimitive prim = {};
         prim.type = static_cast<uint32_t>(SDFType::Box);
         prim.layer = layer;
@@ -544,7 +513,7 @@ public:
 
     uint32_t addSegment(float x0, float y0, float x1, float y1,
                         uint32_t strokeColor, float strokeWidth,
-                        uint32_t layer) override {
+                        uint32_t layer) {
         SDFPrimitive prim = {};
         prim.type = static_cast<uint32_t>(SDFType::Segment);
         prim.layer = layer;
@@ -560,7 +529,7 @@ public:
     uint32_t addBezier2(float x0, float y0, float x1, float y1,
                         float x2, float y2,
                         uint32_t strokeColor, float strokeWidth,
-                        uint32_t layer) override {
+                        uint32_t layer) {
         SDFPrimitive prim = {};
         prim.type = static_cast<uint32_t>(SDFType::Bezier2);
         prim.layer = layer;
@@ -577,25 +546,21 @@ public:
 
     uint32_t addText(float x, float y, const std::string& text,
                      float fontSize, uint32_t color,
-                     uint32_t layer) override {
+                     uint32_t layer) {
         if (!_font || text.empty()) {
             return 0;
         }
 
-        // Get font metrics
-        float fontBaseSize = _font->getFontSize();  // Size the glyphs were generated at
+        float fontBaseSize = _font->getFontSize();
         float scale = fontSize / fontBaseSize;
 
-        // Layout text horizontally
         float cursorX = x;
         uint32_t glyphsAdded = 0;
 
-        // Iterate through UTF-8 text
         const uint8_t* ptr = reinterpret_cast<const uint8_t*>(text.data());
         const uint8_t* end = ptr + text.size();
 
         while (ptr < end) {
-            // Decode UTF-8 codepoint
             uint32_t codepoint = 0;
             if ((*ptr & 0x80) == 0) {
                 codepoint = *ptr++;
@@ -612,31 +577,22 @@ public:
                 if (ptr < end) codepoint |= (*ptr++ & 0x3F) << 6;
                 if (ptr < end) codepoint |= (*ptr++ & 0x3F);
             } else {
-                ptr++;  // Invalid byte, skip
+                ptr++;
                 continue;
             }
 
-            // Get glyph index from font
             uint32_t glyphIndex = _font->getGlyphIndex(codepoint);
-            if (glyphIndex == 0 && codepoint != ' ') {
-                // Try to load the glyph (triggers lazy loading)
-                glyphIndex = _font->getGlyphIndex(codepoint);
-            }
-
-            // Get glyph metrics
             const auto& metadata = _font->getGlyphMetadata();
             if (glyphIndex >= metadata.size()) {
-                // Use space advance as fallback
                 cursorX += fontSize * 0.5f;
                 continue;
             }
 
             const auto& glyph = metadata[glyphIndex];
 
-            // Create positioned glyph
-            HDrawGlyph posGlyph = {};
+            JDrawGlyph posGlyph = {};
             posGlyph.x = cursorX + glyph._bearingX * scale;
-            posGlyph.y = y - glyph._bearingY * scale;  // Y is typically from baseline
+            posGlyph.y = y - glyph._bearingY * scale;
             posGlyph.width = glyph._sizeX * scale;
             posGlyph.height = glyph._sizeY * scale;
             posGlyph.glyphIndex = glyphIndex;
@@ -646,7 +602,6 @@ public:
             _glyphs.push_back(posGlyph);
             glyphsAdded++;
 
-            // Advance cursor
             cursorX += glyph._advance * scale;
         }
 
@@ -657,33 +612,33 @@ public:
         return glyphsAdded;
     }
 
-    void clear() override {
+    void clear() {
         _primCount = 0;
-        _gridSize = 0;
+        _tileListsSize = 0;
         _glyphs.clear();
         _dirty = true;
     }
 
-    uint32_t primitiveCount() const override {
+    uint32_t primitiveCount() const {
         return _primCount;
     }
 
-    uint32_t glyphCount() const override {
+    uint32_t glyphCount() const {
         return static_cast<uint32_t>(_glyphs.size());
     }
 
-    void markDirty() override {
+    void markDirty() {
         _dirty = true;
     }
 
-    void setBgColor(uint32_t color) override {
+    void setBgColor(uint32_t color) {
         _bgColor = color;
         _metadataDirty = true;
     }
 
-    uint32_t bgColor() const override { return _bgColor; }
+    uint32_t bgColor() const { return _bgColor; }
 
-    void setSceneBounds(float minX, float minY, float maxX, float maxY) override {
+    void setSceneBounds(float minX, float minY, float maxX, float maxY) {
         _sceneMinX = minX;
         _sceneMinY = minY;
         _sceneMaxX = maxX;
@@ -692,14 +647,188 @@ public:
         _dirty = true;
     }
 
-    bool hasExplicitBounds() const override { return _hasExplicitBounds; }
+    bool hasExplicitBounds() const { return _hasExplicitBounds; }
 
-    void setCellSize(float size) override {
-        _cellSize = size;
-        _dirty = true;
+    // GPU compute tile culling with readback to CPU.
+    // Uploads prims to jdraw's own temp GPU buffer, dispatches compute shader,
+    // reads back tile list results to the CardBufferManager's CPU buffer (_tileLists).
+    void runTileCullingWithReadback(uint32_t tileBytes) {
+        if (!_tileCullPipeline || _primCount == 0 || tileBytes == 0) {
+            return;
+        }
+
+        using Clock = std::chrono::steady_clock;
+        auto us = [](auto a, auto b) { return std::chrono::duration_cast<std::chrono::microseconds>(b - a).count(); };
+        auto t0 = Clock::now();
+
+        uint32_t primBytes = _primCount * sizeof(SDFPrimitive);
+
+        // Ensure temp prim input buffer is large enough
+        if (!_primInputBuffer || _primInputBufferSize < primBytes) {
+            if (_primInputBuffer) wgpuBufferRelease(_primInputBuffer);
+            WGPUBufferDescriptor desc = {};
+            desc.label = { "JDrawPrimInput", 14 };
+            desc.size = primBytes;
+            desc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
+            _primInputBuffer = wgpuDeviceCreateBuffer(_gpu.device, &desc);
+            _primInputBufferSize = primBytes;
+            _bindGroupStale = true;
+        }
+
+        // Ensure temp tile output buffer is large enough
+        if (!_tileOutputBuffer || _tileOutputBufferSize < tileBytes) {
+            if (_tileOutputBuffer) wgpuBufferRelease(_tileOutputBuffer);
+            WGPUBufferDescriptor desc = {};
+            desc.label = { "JDrawTileOutput", 15 };
+            desc.size = tileBytes;
+            desc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopySrc;
+            _tileOutputBuffer = wgpuDeviceCreateBuffer(_gpu.device, &desc);
+            _tileOutputBufferSize = tileBytes;
+            _bindGroupStale = true;
+        }
+
+        // Ensure readback buffer is large enough
+        if (!_tileReadbackBuffer || _tileReadbackBufferSize < tileBytes) {
+            if (_tileReadbackBuffer) wgpuBufferRelease(_tileReadbackBuffer);
+            WGPUBufferDescriptor desc = {};
+            desc.label = { "JDrawTileReadback", 17 };
+            desc.size = tileBytes;
+            desc.usage = WGPUBufferUsage_CopyDst | WGPUBufferUsage_MapRead;
+            _tileReadbackBuffer = wgpuDeviceCreateBuffer(_gpu.device, &desc);
+            _tileReadbackBufferSize = tileBytes;
+        }
+        auto tBuffers = Clock::now();
+
+        // Upload primitives to temp input buffer
+        wgpuQueueWriteBuffer(_gpu.queue, _primInputBuffer, 0, _primitives, primBytes);
+        auto tPrimUpload = Clock::now();
+
+        // Upload uniforms
+        TileCullUniforms uniforms = {};
+        uniforms.primitiveCount = _primCount;
+        uniforms.tileCountX = _tileCountX;
+        uniforms.tileCountY = _tileCountY;
+        uniforms.maxPrimsPerTile = MAX_PRIMS_PER_TILE;
+        uniforms.sceneMinX = _sceneMinX;
+        uniforms.sceneMinY = _sceneMinY;
+        uniforms.sceneMaxX = _sceneMaxX;
+        uniforms.sceneMaxY = _sceneMaxY;
+
+        wgpuQueueWriteBuffer(_gpu.queue, _tileCullUniformBuffer, 0, &uniforms, sizeof(uniforms));
+        auto tUniformUpload = Clock::now();
+
+        // Recreate bind group if buffers changed
+        if (!_tileCullBindGroup || _bindGroupStale) {
+            if (_tileCullBindGroup) {
+                wgpuBindGroupRelease(_tileCullBindGroup);
+                _tileCullBindGroup = nullptr;
+            }
+
+            std::array<WGPUBindGroupEntry, 3> entries = {};
+
+            entries[0].binding = 0;
+            entries[0].buffer = _primInputBuffer;
+            entries[0].offset = 0;
+            entries[0].size = primBytes;
+
+            entries[1].binding = 1;
+            entries[1].buffer = _tileOutputBuffer;
+            entries[1].offset = 0;
+            entries[1].size = tileBytes;
+
+            entries[2].binding = 2;
+            entries[2].buffer = _tileCullUniformBuffer;
+            entries[2].offset = 0;
+            entries[2].size = sizeof(TileCullUniforms);
+
+            WGPUBindGroupDescriptor bgDesc = {};
+            bgDesc.label = { "JDrawTileCullBindGroup", 22 };
+            bgDesc.layout = _tileCullBindGroupLayout;
+            bgDesc.entryCount = entries.size();
+            bgDesc.entries = entries.data();
+
+            _tileCullBindGroup = wgpuDeviceCreateBindGroup(_gpu.device, &bgDesc);
+            if (!_tileCullBindGroup) {
+                yerror("JDraw::runTileCullingWithReadback: failed to create bind group, falling back to CPU");
+                buildTileLists();
+                return;
+            }
+            _bindGroupStale = false;
+        }
+        auto tBindGroup = Clock::now();
+
+        // Create command encoder for compute + copy
+        WGPUCommandEncoderDescriptor encDesc = {};
+        encDesc.label = { "JDrawTileCullEncoder", 21 };
+        WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(_gpu.device, &encDesc);
+
+        // Compute pass: tile culling
+        WGPUComputePassDescriptor passDesc = {};
+        passDesc.label = { "JDrawTileCullPass", 18 };
+        WGPUComputePassEncoder pass = wgpuCommandEncoderBeginComputePass(encoder, &passDesc);
+
+        wgpuComputePassEncoderSetPipeline(pass, _tileCullPipeline);
+        wgpuComputePassEncoderSetBindGroup(pass, 0, _tileCullBindGroup, 0, nullptr);
+        wgpuComputePassEncoderDispatchWorkgroups(pass, _tileCountX, _tileCountY, 1);
+
+        wgpuComputePassEncoderEnd(pass);
+        wgpuComputePassEncoderRelease(pass);
+
+        // Copy tile output → readback buffer (for CPU access)
+        wgpuCommandEncoderCopyBufferToBuffer(encoder,
+            _tileOutputBuffer, 0, _tileReadbackBuffer, 0, tileBytes);
+
+        // Submit compute + copy
+        WGPUCommandBufferDescriptor cmdDesc = {};
+        cmdDesc.label = { "JDrawTileCullCmd", 17 };
+        WGPUCommandBuffer cmdBuffer = wgpuCommandEncoderFinish(encoder, &cmdDesc);
+        wgpuQueueSubmit(_gpu.queue, 1, &cmdBuffer);
+        wgpuCommandBufferRelease(cmdBuffer);
+        wgpuCommandEncoderRelease(encoder);
+        auto tSubmit = Clock::now();
+
+        // Map readback buffer synchronously (same pattern as ymery.cpp)
+        struct MapCtx { bool done = false; WGPUMapAsyncStatus status; };
+        MapCtx mapCtx;
+        WGPUBufferMapCallbackInfo cbInfo = {};
+        cbInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+        cbInfo.callback = [](WGPUMapAsyncStatus status, WGPUStringView, void* ud1, void*) {
+            auto* ctx = static_cast<MapCtx*>(ud1);
+            ctx->status = status;
+            ctx->done = true;
+        };
+        cbInfo.userdata1 = &mapCtx;
+
+        wgpuBufferMapAsync(_tileReadbackBuffer, WGPUMapMode_Read, 0, tileBytes, cbInfo);
+
+        uint32_t pollCount = 0;
+        while (!mapCtx.done) {
+            wgpuDeviceTick(_gpu.device);
+            pollCount++;
+        }
+        auto tMap = Clock::now();
+
+        if (mapCtx.status == WGPUMapAsyncStatus_Success) {
+            const void* mapped = wgpuBufferGetConstMappedRange(_tileReadbackBuffer, 0, tileBytes);
+            if (mapped && _tileLists) {
+                std::memcpy(_tileLists, mapped, tileBytes);
+            }
+            wgpuBufferUnmap(_tileReadbackBuffer);
+        } else {
+            ywarn("JDraw::runTileCullingWithReadback: readback failed (status={}), falling back to CPU",
+                  static_cast<int>(mapCtx.status));
+            buildTileLists();
+        }
+        auto tEnd = Clock::now();
+
+        yinfo("JDraw::computeReadback: {}x{} tiles, {} prims, {} tileBytes, {} primBytes",
+               _tileCountX, _tileCountY, _primCount, tileBytes, primBytes);
+        yinfo("  timing: buffers={} us, primUpload={} us, uniformUpload={} us, bindGroup={} us, "
+              "submit={} us, mapWait={} us (polls={}), memcpy={} us, total={} us",
+              us(t0, tBuffers), us(tBuffers, tPrimUpload), us(tPrimUpload, tUniformUpload),
+              us(tUniformUpload, tBindGroup), us(tBindGroup, tSubmit),
+              us(tSubmit, tMap), pollCount, us(tMap, tEnd), us(t0, tEnd));
     }
-
-    float cellSize() const override { return _cellSize; }
 
 private:
     Result<void> ensurePrimCapacity(uint32_t required) {
@@ -711,7 +840,7 @@ private:
 
         auto newStorage = _cardMgr->bufferManager()->allocateBuffer(newSize);
         if (!newStorage) {
-            return Err<void>("HDraw: failed to allocate prim storage");
+            return Err<void>("JDraw: failed to allocate prim storage");
         }
 
         if (_primCount > 0 && _primStorage.isValid()) {
@@ -724,11 +853,12 @@ private:
         _primStorage = *newStorage;
         _primitives = reinterpret_cast<SDFPrimitive*>(_primStorage.data);
         _primCapacity = newCap;
+        _bindGroupStale = true;  // Buffer changed, need new bind group
         return Ok();
     }
 
     void parseArgs(const std::string& args) {
-        yinfo("HDraw::parseArgs: args='{}'", args);
+        yinfo("JDraw::parseArgs: args='{}'", args);
 
         std::istringstream iss(args);
         std::string token;
@@ -742,20 +872,10 @@ private:
                     }
                     _bgColor = static_cast<uint32_t>(std::stoul(colorStr, nullptr, 16));
                 }
-            } else if (token == "--cell-size") {
-                std::string sizeStr;
-                if (iss >> sizeStr) {
-                    _cellSize = std::stof(sizeStr);
-                }
-            } else if (token == "--max-prims-per-cell") {
-                std::string maxStr;
-                if (iss >> maxStr) {
-                    _maxPrimsPerCell = static_cast<uint32_t>(std::stoul(maxStr));
-                }
             } else if (token == "--show-bounds") {
                 _flags |= FLAG_SHOW_BOUNDS;
-            } else if (token == "--show-grid") {
-                _flags |= FLAG_SHOW_GRID;
+            } else if (token == "--show-tiles") {
+                _flags |= FLAG_SHOW_TILES;
             } else if (token == "--show-eval-count") {
                 _flags |= FLAG_SHOW_EVAL_COUNT;
             }
@@ -765,19 +885,20 @@ private:
     }
 
     Result<void> parsePayload(const std::string& payload) {
-        yinfo("HDraw::parsePayload: payload length={}", payload.size());
+        using Clock = std::chrono::steady_clock;
+        auto us = [](auto a, auto b) { return std::chrono::duration_cast<std::chrono::microseconds>(b - a).count(); };
+        auto t0 = Clock::now();
+
+        yinfo("JDraw::parsePayload: payload length={}", payload.size());
 
         if (payload.empty()) {
             return Ok();
         }
 
         // Detect if payload is YAML (text) or binary
-        // YAML starts with printable characters like '#', '-', or whitespace
-        // Binary starts with version number (little-endian u32)
         bool isYaml = false;
         if (payload.size() >= 4) {
             char first = payload[0];
-            // YAML typically starts with '#', '-', whitespace, or letter
             if (first == '#' || first == '-' || first == ' ' || first == '\n' ||
                 first == '\t' || (first >= 'a' && first <= 'z') ||
                 (first >= 'A' && first <= 'Z')) {
@@ -785,39 +906,43 @@ private:
             }
         }
 
+        Result<void> result;
         if (isYaml) {
-            return parseYAML(payload);
+            result = parseYAML(payload);
         } else {
-            return parseBinary(payload);
+            result = parseBinary(payload);
         }
+
+        auto t1 = Clock::now();
+        yinfo("JDraw::parsePayload: format={}, total={} us",
+              isYaml ? "YAML" : "binary", us(t0, t1));
+        return result;
     }
 
     Result<void> parseBinary(const std::string& payload) {
-        // Binary format from Python plugin:
-        // Header: [version (u32)][primitive_count (u32)][bg_color (u32)][flags (u32)]
-        // Primitives: [SDFPrimitive * primitive_count] (each 96 bytes)
+        using Clock = std::chrono::steady_clock;
+        auto us = [](auto a, auto b) { return std::chrono::duration_cast<std::chrono::microseconds>(b - a).count(); };
+        auto t0 = Clock::now();
+
         const size_t HEADER_SIZE = 16;
         const size_t PRIM_SIZE = sizeof(SDFPrimitive);
 
         if (payload.size() < HEADER_SIZE) {
-            ywarn("HDraw::parseBinary: payload too small for header ({})", payload.size());
             return Ok();
         }
 
         const uint8_t* data = reinterpret_cast<const uint8_t*>(payload.data());
 
-        // Read header
         uint32_t version, primCount, bgColor, flags;
         std::memcpy(&version, data + 0, 4);
         std::memcpy(&primCount, data + 4, 4);
         std::memcpy(&bgColor, data + 8, 4);
         std::memcpy(&flags, data + 12, 4);
 
-        yinfo("HDraw::parseBinary: version={} primCount={} bgColor={:#010x} flags={}",
+        yinfo("JDraw::parseBinary: version={} primCount={} bgColor={:#010x} flags={}",
               version, primCount, bgColor, flags);
 
         if (version != 1 && version != 2) {
-            ywarn("HDraw::parseBinary: unknown version {}", version);
             return Ok();
         }
 
@@ -825,11 +950,8 @@ private:
         _flags |= flags;
         _metadataDirty = true;
 
-        // Read primitives
         size_t expectedSize = HEADER_SIZE + primCount * PRIM_SIZE;
         if (payload.size() < expectedSize) {
-            ywarn("HDraw::parseBinary: payload too small ({} < {})",
-                  payload.size(), expectedSize);
             primCount = static_cast<uint32_t>((payload.size() - HEADER_SIZE) / PRIM_SIZE);
         }
 
@@ -839,26 +961,26 @@ private:
             _primStaging.resize(primCount);
             std::memcpy(_primStaging.data(), primData, primCount * PRIM_SIZE);
             _dirty = true;
-            yinfo("HDraw::parseBinary: loaded {} primitives into staging", primCount);
+            auto t1 = Clock::now();
+            yinfo("JDraw::parseBinary timing: {} prims, memcpy={} us", primCount, us(t0, t1));
             return Ok();
         }
 
-        // Allocate buffer and copy directly from payload
         if (auto res = ensurePrimCapacity(primCount); !res) {
-            return Err<void>("HDraw::parseBinary: failed to allocate prim storage");
+            return Err<void>("JDraw::parseBinary: failed to allocate prim storage");
         }
         _primCount = primCount;
         std::memcpy(_primitives, primData, primCount * PRIM_SIZE);
         _cardMgr->bufferManager()->markBufferDirty(_primStorage);
 
         _dirty = true;
-        yinfo("HDraw::parseBinary: loaded {} primitives", _primCount);
-
+        auto t1 = Clock::now();
+        yinfo("JDraw::parseBinary timing: {} prims, total={} us", primCount, us(t0, t1));
         return Ok();
     }
 
     //=========================================================================
-    // YAML Parsing
+    // YAML Parsing (same as kdraw)
     //=========================================================================
 
     static uint32_t parseColor(const YAML::Node& node) {
@@ -868,7 +990,6 @@ private:
         if (str.empty()) return 0xFFFFFFFF;
 
         if (str[0] == '#') {
-            // Parse #RRGGBB or #RRGGBBAA
             str = str.substr(1);
             if (str.size() == 3) {
                 str = std::string{str[0], str[0], str[1], str[1], str[2], str[2]};
@@ -880,61 +1001,61 @@ private:
             uint32_t g = std::stoul(str.substr(2, 2), nullptr, 16);
             uint32_t b = std::stoul(str.substr(4, 2), nullptr, 16);
             uint32_t a = std::stoul(str.substr(6, 2), nullptr, 16);
-            return (a << 24) | (b << 16) | (g << 8) | r;  // ABGR
+            return (a << 24) | (b << 16) | (g << 8) | r;
         }
         return 0xFFFFFFFF;
     }
 
     Result<void> parseYAML(const std::string& yaml) {
-        try {
-            YAML::Node root = YAML::Load(yaml);
+        using Clock = std::chrono::steady_clock;
+        auto us = [](auto a, auto b) { return std::chrono::duration_cast<std::chrono::microseconds>(b - a).count(); };
 
-            // Parse background color
+        try {
+            auto tYamlStart = Clock::now();
+            YAML::Node root = YAML::Load(yaml);
+            auto tYamlParsed = Clock::now();
+
             if (root["background"]) {
                 _bgColor = parseColor(root["background"]);
                 _metadataDirty = true;
             }
 
-            // Parse flags
             if (root["flags"]) {
                 auto flagsNode = root["flags"];
                 if (flagsNode.IsSequence()) {
                     for (const auto& flag : flagsNode) {
                         std::string f = flag.as<std::string>();
                         if (f == "show_bounds") _flags |= FLAG_SHOW_BOUNDS;
-                        else if (f == "show_grid") _flags |= FLAG_SHOW_GRID;
+                        else if (f == "show_tiles") _flags |= FLAG_SHOW_TILES;
                         else if (f == "show_eval_count") _flags |= FLAG_SHOW_EVAL_COUNT;
                     }
-                } else if (flagsNode.IsScalar()) {
-                    std::string f = flagsNode.as<std::string>();
-                    if (f == "show_bounds") _flags |= FLAG_SHOW_BOUNDS;
-                    else if (f == "show_grid") _flags |= FLAG_SHOW_GRID;
-                    else if (f == "show_eval_count") _flags |= FLAG_SHOW_EVAL_COUNT;
                 }
                 _metadataDirty = true;
             }
 
-            // Parse body
+            auto tFlagsAndBg = Clock::now();
+
             if (root["body"] && root["body"].IsSequence()) {
                 for (const auto& item : root["body"]) {
                     parseYAMLPrimitive(item);
                 }
             }
 
-            // Also check for list format
-            if (root.IsSequence()) {
-                for (const auto& doc : root) {
-                    if (doc["body"] && doc["body"].IsSequence()) {
-                        for (const auto& item : doc["body"]) {
-                            parseYAMLPrimitive(item);
-                        }
-                    }
-                }
-            }
+            auto tPrims = Clock::now();
 
             _dirty = true;
-            yinfo("HDraw::parseYAML: loaded {} primitives, {} glyphs",
+            yinfo("JDraw::parseYAML: loaded {} primitives, {} glyphs",
                   _primCount, _glyphs.size());
+            yinfo("JDraw::parseYAML timing: yamlLoad={} us, flagsAndBg={} us, primitives={} us, total={} us",
+                  us(tYamlStart, tYamlParsed), us(tYamlParsed, tFlagsAndBg),
+                  us(tFlagsAndBg, tPrims), us(tYamlStart, tPrims));
+
+            // Log first few primitives for debugging
+            for (size_t i = 0; i < std::min(size_t(_primCount), size_t(3)); i++) {
+                const auto& p = _primitives[i];
+                yinfo("JDraw: prim[{}] type={} aabb=[{},{},{},{}] fill={:#010x}",
+                      i, p.type, p.aabbMinX, p.aabbMinY, p.aabbMaxX, p.aabbMaxY, p.fillColor);
+            }
 
             return Ok();
 
@@ -1064,34 +1185,8 @@ private:
             prim.fillColor = fill;
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
-            computeAABB_hdraw(prim);
+            computeAABB_jdraw(prim);
             addPrimitive(prim);
-            return;
-        }
-
-        // Bezier
-        if (item["bezier"]) {
-            auto b = item["bezier"];
-            float x0 = 0, y0 = 0, x1 = 50, y1 = 50, x2 = 100, y2 = 0;
-            uint32_t stroke = 0xFFFFFFFF;
-            float strokeWidth = 1;
-
-            if (b["p0"] && b["p0"].IsSequence()) {
-                x0 = b["p0"][0].as<float>();
-                y0 = b["p0"][1].as<float>();
-            }
-            if (b["p1"] && b["p1"].IsSequence()) {
-                x1 = b["p1"][0].as<float>();
-                y1 = b["p1"][1].as<float>();
-            }
-            if (b["p2"] && b["p2"].IsSequence()) {
-                x2 = b["p2"][0].as<float>();
-                y2 = b["p2"][1].as<float>();
-            }
-            if (b["stroke"]) stroke = parseColor(b["stroke"]);
-            if (b["stroke-width"]) strokeWidth = b["stroke-width"].as<float>();
-
-            addBezier2(x0, y0, x1, y1, x2, y2, stroke, strokeWidth, layer);
             return;
         }
 
@@ -1122,7 +1217,7 @@ private:
             prim.fillColor = fill;
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
-            computeAABB_hdraw(prim);
+            computeAABB_jdraw(prim);
             addPrimitive(prim);
             return;
         }
@@ -1156,7 +1251,7 @@ private:
             prim.fillColor = fill;
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
-            computeAABB_hdraw(prim);
+            computeAABB_jdraw(prim);
             addPrimitive(prim);
             return;
         }
@@ -1185,7 +1280,7 @@ private:
             prim.fillColor = fill;
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
-            computeAABB_hdraw(prim);
+            computeAABB_jdraw(prim);
             addPrimitive(prim);
             return;
         }
@@ -1214,7 +1309,7 @@ private:
             prim.fillColor = fill;
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
-            computeAABB_hdraw(prim);
+            computeAABB_jdraw(prim);
             addPrimitive(prim);
             return;
         }
@@ -1246,7 +1341,7 @@ private:
             prim.fillColor = fill;
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
-            computeAABB_hdraw(prim);
+            computeAABB_jdraw(prim);
             addPrimitive(prim);
             return;
         }
@@ -1279,7 +1374,7 @@ private:
             prim.fillColor = fill;
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
-            computeAABB_hdraw(prim);
+            computeAABB_jdraw(prim);
             addPrimitive(prim);
             return;
         }
@@ -1313,7 +1408,7 @@ private:
             prim.fillColor = fill;
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
-            computeAABB_hdraw(prim);
+            computeAABB_jdraw(prim);
             addPrimitive(prim);
             return;
         }
@@ -1322,7 +1417,7 @@ private:
         if (item["heart"]) {
             auto h = item["heart"];
             float cx = 0, cy = 0, scale = 20;
-            uint32_t fill = 0xFF0000FF, stroke = 0;  // Default red
+            uint32_t fill = 0xFF0000FF, stroke = 0;
             float strokeWidth = 0;
 
             if (h["position"] && h["position"].IsSequence()) {
@@ -1342,7 +1437,7 @@ private:
             prim.fillColor = fill;
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
-            computeAABB_hdraw(prim);
+            computeAABB_jdraw(prim);
             addPrimitive(prim);
             return;
         }
@@ -1375,7 +1470,7 @@ private:
             prim.fillColor = fill;
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
-            computeAABB_hdraw(prim);
+            computeAABB_jdraw(prim);
             addPrimitive(prim);
             return;
         }
@@ -1405,7 +1500,7 @@ private:
             prim.fillColor = fill;
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
-            computeAABB_hdraw(prim);
+            computeAABB_jdraw(prim);
             addPrimitive(prim);
             return;
         }
@@ -1439,7 +1534,7 @@ private:
             prim.fillColor = fill;
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
-            computeAABB_hdraw(prim);
+            computeAABB_jdraw(prim);
             addPrimitive(prim);
             return;
         }
@@ -1471,7 +1566,7 @@ private:
             prim.fillColor = fill;
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
-            computeAABB_hdraw(prim);
+            computeAABB_jdraw(prim);
             addPrimitive(prim);
             return;
         }
@@ -1502,7 +1597,7 @@ private:
             prim.fillColor = fill;
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
-            computeAABB_hdraw(prim);
+            computeAABB_jdraw(prim);
             addPrimitive(prim);
             return;
         }
@@ -1532,10 +1627,149 @@ private:
             prim.fillColor = fill;
             prim.strokeColor = stroke;
             prim.strokeWidth = strokeWidth;
-            computeAABB_hdraw(prim);
+            computeAABB_jdraw(prim);
             addPrimitive(prim);
             return;
         }
+
+        // Bezier
+        if (item["bezier"]) {
+            auto b = item["bezier"];
+            float x0 = 0, y0 = 0, x1 = 50, y1 = 50, x2 = 100, y2 = 0;
+            uint32_t stroke = 0xFFFFFFFF;
+            float strokeWidth = 1;
+
+            if (b["p0"] && b["p0"].IsSequence()) {
+                x0 = b["p0"][0].as<float>();
+                y0 = b["p0"][1].as<float>();
+            }
+            if (b["p1"] && b["p1"].IsSequence()) {
+                x1 = b["p1"][0].as<float>();
+                y1 = b["p1"][1].as<float>();
+            }
+            if (b["p2"] && b["p2"].IsSequence()) {
+                x2 = b["p2"][0].as<float>();
+                y2 = b["p2"][1].as<float>();
+            }
+            if (b["stroke"]) stroke = parseColor(b["stroke"]);
+            if (b["stroke-width"]) strokeWidth = b["stroke-width"].as<float>();
+
+            addBezier2(x0, y0, x1, y1, x2, y2, stroke, strokeWidth, layer);
+            return;
+        }
+    }
+
+    //=========================================================================
+    // Compute Pipeline Setup
+    //=========================================================================
+
+    Result<void> createComputePipeline() {
+        // Load compute shader source
+        const char* shaderPath = CMAKE_SOURCE_DIR "/src/yetty/shaders/cards/0x0005-jdraw-compute.wgsl";
+        yinfo("JDraw: Loading compute shader from: {}", shaderPath);
+
+        std::ifstream file(shaderPath);
+        if (!file.is_open()) {
+            // Compute shader not found - fall back to CPU tile culling
+            ywarn("JDraw: Compute shader not found at {}, using CPU tile culling", shaderPath);
+            _useComputeShader = false;
+            return Ok();
+        }
+
+        std::stringstream buffer;
+        buffer << file.rdbuf();
+        std::string shaderSource = buffer.str();
+
+        // Create shader module
+        WGPUShaderSourceWGSL wgslDesc = {};
+        wgslDesc.chain.sType = WGPUSType_ShaderSourceWGSL;
+        wgslDesc.code = { shaderSource.c_str(), shaderSource.size() };
+
+        WGPUShaderModuleDescriptor moduleDesc = {};
+        moduleDesc.nextInChain = &wgslDesc.chain;
+        moduleDesc.label = { "JDrawTileCullShader", 20 };
+
+        _tileCullShaderModule = wgpuDeviceCreateShaderModule(_gpu.device, &moduleDesc);
+        if (!_tileCullShaderModule) {
+            ywarn("JDraw: Failed to create compute shader module, using CPU tile culling");
+            _useComputeShader = false;
+            return Ok();
+        }
+
+        // Create bind group layout for tile culling compute shader
+        // Binding 0: primData (read-only storage) - primitives input
+        // Binding 1: tileData (read-write storage) - tile list output
+        // Binding 2: uniforms (uniform buffer)
+        std::array<WGPUBindGroupLayoutEntry, 3> layoutEntries = {};
+
+        layoutEntries[0].binding = 0;
+        layoutEntries[0].visibility = WGPUShaderStage_Compute;
+        layoutEntries[0].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
+
+        layoutEntries[1].binding = 1;
+        layoutEntries[1].visibility = WGPUShaderStage_Compute;
+        layoutEntries[1].buffer.type = WGPUBufferBindingType_Storage;
+
+        layoutEntries[2].binding = 2;
+        layoutEntries[2].visibility = WGPUShaderStage_Compute;
+        layoutEntries[2].buffer.type = WGPUBufferBindingType_Uniform;
+
+        WGPUBindGroupLayoutDescriptor layoutDesc = {};
+        layoutDesc.label = { "JDrawTileCullLayout", 19 };
+        layoutDesc.entryCount = layoutEntries.size();
+        layoutDesc.entries = layoutEntries.data();
+
+        _tileCullBindGroupLayout = wgpuDeviceCreateBindGroupLayout(_gpu.device, &layoutDesc);
+        if (!_tileCullBindGroupLayout) {
+            ywarn("JDraw: Failed to create bind group layout, using CPU tile culling");
+            _useComputeShader = false;
+            return Ok();
+        }
+
+        // Create pipeline layout
+        WGPUPipelineLayoutDescriptor pipelineLayoutDesc = {};
+        pipelineLayoutDesc.bindGroupLayoutCount = 1;
+        pipelineLayoutDesc.bindGroupLayouts = &_tileCullBindGroupLayout;
+
+        WGPUPipelineLayout pipelineLayout = wgpuDeviceCreatePipelineLayout(_gpu.device, &pipelineLayoutDesc);
+        if (!pipelineLayout) {
+            ywarn("JDraw: Failed to create pipeline layout, using CPU tile culling");
+            _useComputeShader = false;
+            return Ok();
+        }
+
+        // Create compute pipeline
+        WGPUComputePipelineDescriptor pipelineDesc = {};
+        pipelineDesc.label = { "JDrawTileCullPipeline", 21 };
+        pipelineDesc.layout = pipelineLayout;
+        pipelineDesc.compute.module = _tileCullShaderModule;
+        pipelineDesc.compute.entryPoint = { "tileCull", 8 };
+
+        _tileCullPipeline = wgpuDeviceCreateComputePipeline(_gpu.device, &pipelineDesc);
+        wgpuPipelineLayoutRelease(pipelineLayout);
+
+        if (!_tileCullPipeline) {
+            ywarn("JDraw: Failed to create compute pipeline, using CPU tile culling");
+            _useComputeShader = false;
+            return Ok();
+        }
+
+        // Create uniform buffer for compute shader
+        WGPUBufferDescriptor uniformDesc = {};
+        uniformDesc.label = { "JDrawTileCullUniforms", 21 };
+        uniformDesc.size = sizeof(TileCullUniforms);
+        uniformDesc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
+
+        _tileCullUniformBuffer = wgpuDeviceCreateBuffer(_gpu.device, &uniformDesc);
+        if (!_tileCullUniformBuffer) {
+            ywarn("JDraw: Failed to create uniform buffer, using CPU tile culling");
+            _useComputeShader = false;
+            return Ok();
+        }
+
+        _useComputeShader = true;
+        yinfo("JDraw: Compute pipeline created successfully");
+        return Ok();
     }
 
     void computeSceneBounds() {
@@ -1546,7 +1780,6 @@ private:
         _sceneMaxX = -1e10f;
         _sceneMaxY = -1e10f;
 
-        // Include primitive bounds
         for (uint32_t i = 0; i < _primCount; i++) {
             _sceneMinX = std::min(_sceneMinX, _primitives[i].aabbMinX);
             _sceneMinY = std::min(_sceneMinY, _primitives[i].aabbMinY);
@@ -1554,7 +1787,6 @@ private:
             _sceneMaxY = std::max(_sceneMaxY, _primitives[i].aabbMaxY);
         }
 
-        // Include glyph bounds
         for (const auto& glyph : _glyphs) {
             _sceneMinX = std::min(_sceneMinX, glyph.x);
             _sceneMinY = std::min(_sceneMinY, glyph.y);
@@ -1562,7 +1794,6 @@ private:
             _sceneMaxY = std::max(_sceneMaxY, glyph.y + glyph.height);
         }
 
-        // Add padding
         float padX = (_sceneMaxX - _sceneMinX) * 0.05f;
         float padY = (_sceneMaxY - _sceneMinY) * 0.05f;
         _sceneMinX -= padX;
@@ -1570,7 +1801,6 @@ private:
         _sceneMaxX += padX;
         _sceneMaxY += padY;
 
-        // Ensure valid bounds
         if (_sceneMinX >= _sceneMaxX) {
             _sceneMinX = 0;
             _sceneMaxX = 100;
@@ -1581,131 +1811,114 @@ private:
         }
     }
 
-    void buildGrid() {
-        // Grid buffer already allocated by rebuildAndUpload
-        // _grid, _gridSize, _gridWidth, _gridHeight, _cellSize are set
-
-        if (_primCount == 0 || _gridSize == 0) {
-            return;
-        }
-
+    void buildTileLists() {
+        // CPU-based tile culling (fallback when compute shader not available)
         auto t0 = std::chrono::steady_clock::now();
 
-        uint32_t totalCells = _gridWidth * _gridHeight;
-        uint32_t cellStride = 1 + _maxPrimsPerCell;
+        uint32_t totalTiles = _tileCountX * _tileCountY;
+        uint32_t tileStride = 1 + MAX_PRIMS_PER_TILE;
 
-        // Zero the grid
-        std::memset(_grid, 0, _gridSize * sizeof(uint32_t));
+        std::memset(_tileLists, 0, _tileListsSize * sizeof(uint32_t));
 
-        // Assign each primitive to cells it overlaps
-        uint32_t cellsWithPrims = 0;
-        uint32_t maxPrimsInCell = 0;
-        for (uint32_t primIdx = 0; primIdx < _primCount; primIdx++) {
-            const auto& prim = _primitives[primIdx];
+        float sceneWidth = _sceneMaxX - _sceneMinX;
+        float sceneHeight = _sceneMaxY - _sceneMinY;
 
-            uint32_t cellMinX = static_cast<uint32_t>(
-                std::clamp((prim.aabbMinX - _sceneMinX) / _cellSize, 0.0f, float(_gridWidth - 1)));
-            uint32_t cellMaxX = static_cast<uint32_t>(
-                std::clamp((prim.aabbMaxX - _sceneMinX) / _cellSize, 0.0f, float(_gridWidth - 1)));
-            uint32_t cellMinY = static_cast<uint32_t>(
-                std::clamp((prim.aabbMinY - _sceneMinY) / _cellSize, 0.0f, float(_gridHeight - 1)));
-            uint32_t cellMaxY = static_cast<uint32_t>(
-                std::clamp((prim.aabbMaxY - _sceneMinY) / _cellSize, 0.0f, float(_gridHeight - 1)));
+        for (uint32_t ty = 0; ty < _tileCountY; ty++) {
+            for (uint32_t tx = 0; tx < _tileCountX; tx++) {
+                float tileMinX = _sceneMinX + (float(tx) / _tileCountX) * sceneWidth;
+                float tileMaxX = _sceneMinX + (float(tx + 1) / _tileCountX) * sceneWidth;
+                float tileMinY = _sceneMinY + (float(ty) / _tileCountY) * sceneHeight;
+                float tileMaxY = _sceneMinY + (float(ty + 1) / _tileCountY) * sceneHeight;
 
-            for (uint32_t cy = cellMinY; cy <= cellMaxY; cy++) {
-                for (uint32_t cx = cellMinX; cx <= cellMaxX; cx++) {
-                    uint32_t cellIndex = cy * _gridWidth + cx;
-                    uint32_t cellOffset = cellIndex * cellStride;
-                    uint32_t count = _grid[cellOffset];
-                    if (count < _maxPrimsPerCell) {
-                        _grid[cellOffset + 1 + count] = primIdx;
-                        _grid[cellOffset] = count + 1;
+                uint32_t tileIndex = ty * _tileCountX + tx;
+                uint32_t tileOffset = tileIndex * tileStride;
+                uint32_t count = 0;
+
+                for (uint32_t pi = 0; pi < _primCount && count < MAX_PRIMS_PER_TILE; pi++) {
+                    const auto& prim = _primitives[pi];
+
+                    if (prim.aabbMaxX >= tileMinX && prim.aabbMinX <= tileMaxX &&
+                        prim.aabbMaxY >= tileMinY && prim.aabbMinY <= tileMaxY) {
+                        _tileLists[tileOffset + 1 + count] = pi;
+                        count++;
                     }
                 }
-            }
-        }
 
-        // Count stats for debugging
-        for (uint32_t c = 0; c < totalCells; c++) {
-            uint32_t count = _grid[c * cellStride];
-            if (count > 0) cellsWithPrims++;
-            if (count > maxPrimsInCell) maxPrimsInCell = count;
+                _tileLists[tileOffset] = count;
+            }
         }
 
         auto t1 = std::chrono::steady_clock::now();
         auto us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
 
-        ydebug("HDraw::buildGrid (CPU): {} prims -> {}x{} grid, "
-               "cellsWithPrims={}, maxPrimsInCell={}, took {} us",
-               _primCount, _gridWidth, _gridHeight,
-               cellsWithPrims, maxPrimsInCell, us);
+        uint32_t totalPrimsInTiles = 0;
+        uint32_t maxPrimsInTile = 0;
+        uint32_t tilesWithPrims = 0;
+        for (uint32_t t = 0; t < totalTiles; t++) {
+            uint32_t count = _tileLists[t * tileStride];
+            totalPrimsInTiles += count;
+            if (count > maxPrimsInTile) maxPrimsInTile = count;
+            if (count > 0) tilesWithPrims++;
+        }
+
+        ydebug("JDraw::buildTileLists (CPU): {} prims -> {}x{} tiles, "
+               "tilesWithPrims={}, maxPrimsInTile={}, took {} us",
+               _primCount, _tileCountX, _tileCountY,
+               tilesWithPrims, maxPrimsInTile, us);
     }
 
     Result<void> rebuildAndUpload() {
-        auto _rebuildT0 = std::chrono::steady_clock::now();
-        // Compute scene bounds from primitives already in buffer
+        using Clock = std::chrono::steady_clock;
+        auto tStart = Clock::now();
+
         computeSceneBounds();
+        auto tBounds = Clock::now();
 
-        // Pre-calculate grid dimensions to know derived storage size
-        float sceneWidth = _sceneMaxX - _sceneMinX;
-        float sceneHeight = _sceneMaxY - _sceneMinY;
+        // Calculate tile dimensions
+        const uint32_t ESTIMATED_CELL_PIXELS = 16;
+        uint32_t pixelWidth = _widthCells * ESTIMATED_CELL_PIXELS;
+        uint32_t pixelHeight = _heightCells * ESTIMATED_CELL_PIXELS;
+        _tileCountX = (pixelWidth + TILE_SIZE - 1) / TILE_SIZE;
+        _tileCountY = (pixelHeight + TILE_SIZE - 1) / TILE_SIZE;
+        uint32_t totalTiles = _tileCountX * _tileCountY;
+        uint32_t tileStride = 1 + MAX_PRIMS_PER_TILE;
+        uint32_t tileTotalU32 = totalTiles * tileStride;
+        uint32_t tileBytes = tileTotalU32 * sizeof(uint32_t);
+        uint32_t glyphBytes = static_cast<uint32_t>(_glyphs.size() * sizeof(JDrawGlyph));
+        uint32_t derivedTotalSize = tileBytes + glyphBytes;
 
-        uint32_t gridW = 0, gridH = 0;
-        float cellSize = _cellSize;
-
-        if (_primCount > 0) {
-            float sceneArea = sceneWidth * sceneHeight;
-            if (cellSize <= 0.0f) {
-                float avgPrimArea = 0.0f;
-                for (uint32_t i = 0; i < _primCount; i++) {
-                    float w = _primitives[i].aabbMaxX - _primitives[i].aabbMinX;
-                    float h = _primitives[i].aabbMaxY - _primitives[i].aabbMinY;
-                    avgPrimArea += w * h;
-                }
-                avgPrimArea /= _primCount;
-                cellSize = std::sqrt(avgPrimArea) * 1.5f;
-                float minCellSize = std::sqrt(sceneArea / 65536.0f);
-                float maxCellSize = std::sqrt(sceneArea / 16.0f);
-                cellSize = std::clamp(cellSize, minCellSize, maxCellSize);
-            }
-            gridW = std::max(1u, static_cast<uint32_t>(std::ceil(sceneWidth / cellSize)));
-            gridH = std::max(1u, static_cast<uint32_t>(std::ceil(sceneHeight / cellSize)));
-            const uint32_t MAX_GRID_DIM = 512;
-            if (gridW > MAX_GRID_DIM) { gridW = MAX_GRID_DIM; cellSize = sceneWidth / gridW; }
-            if (gridH > MAX_GRID_DIM) { gridH = MAX_GRID_DIM; cellSize = std::max(cellSize, sceneHeight / gridH); }
-        }
-
-        uint32_t cellStride = 1 + _maxPrimsPerCell;
-        uint32_t gridTotalU32 = gridW * gridH * cellStride;
-        uint32_t gridBytes = gridTotalU32 * sizeof(uint32_t);
-        uint32_t glyphBytes = static_cast<uint32_t>(_glyphs.size() * sizeof(HDrawGlyph));
-        uint32_t derivedTotalSize = gridBytes + glyphBytes;
+        auto tTileCull = tBounds;  // will be updated after tile culling
+        auto tGlyphs = tBounds;
 
         if (_derivedStorage.isValid() && derivedTotalSize > 0) {
             uint8_t* base = _derivedStorage.data;
             uint32_t offset = 0;
 
-            // Set up grid pointer directly into buffer
-            _grid = reinterpret_cast<uint32_t*>(base + offset);
-            _gridSize = gridTotalU32;
-            _gridWidth = gridW;
-            _gridHeight = gridH;
-            _cellSize = cellSize;
-            _gridOffset = (_derivedStorage.offset + offset) / sizeof(float);
-            offset += gridBytes;
+            // Set up tile list pointer directly into buffer
+            _tileLists = reinterpret_cast<uint32_t*>(base + offset);
+            _tileListsSize = tileTotalU32;
+            _tileListOffset = (_derivedStorage.offset + offset) / sizeof(float);
+            offset += tileBytes;
 
-            // Build grid directly into buffer
+            // Build tile lists: GPU compute with readback, or CPU fallback
             if (_primCount > 0) {
-                buildGrid();
+                if (_useComputeShader) {
+                    runTileCullingWithReadback(tileBytes);
+                } else {
+                    buildTileLists();
+                }
             }
+            tTileCull = Clock::now();
 
             // Glyphs (small data)
             _glyphOffset = (_derivedStorage.offset + offset) / sizeof(float);
             if (!_glyphs.empty()) {
                 std::memcpy(base + offset, _glyphs.data(), glyphBytes);
             }
+            tGlyphs = Clock::now();
 
             _cardMgr->bufferManager()->markBufferDirty(_derivedStorage);
+            _bindGroupStale = true;
         }
 
         // Primitives are already in _primStorage
@@ -1714,29 +1927,33 @@ private:
         if (_primStorage.isValid()) {
             _cardMgr->bufferManager()->markBufferDirty(_primStorage);
         }
+        auto tMarkDirty = Clock::now();
 
         _metadataDirty = true;
 
-        auto _rebuildT1 = std::chrono::steady_clock::now();
-        auto _rebuildUs = std::chrono::duration_cast<std::chrono::microseconds>(_rebuildT1 - _rebuildT0).count();
-        yinfo("HDraw::rebuildAndUpload: {} prims, {}x{} grid, {} glyphs, derived {} bytes, took {} us",
-              _primCount, _gridWidth, _gridHeight, _glyphs.size(), derivedTotalSize, _rebuildUs);
+        auto tEnd = Clock::now();
+        auto us = [](auto a, auto b) { return std::chrono::duration_cast<std::chrono::microseconds>(b - a).count(); };
+        yinfo("JDraw::rebuildAndUpload: {} prims, {}x{} tiles, {} glyphs, compute={}",
+              _primCount, _tileCountX, _tileCountY, _glyphs.size(), _useComputeShader);
+        yinfo("  timing: bounds={} us, tileCull={} us, glyphs={} us, markDirty={} us, total={} us",
+              us(tStart, tBounds), us(tBounds, tTileCull), us(tTileCull, tGlyphs),
+              us(tGlyphs, tMarkDirty), us(tStart, tEnd));
 
         return Ok();
     }
 
     Result<void> uploadMetadata() {
         if (!_metaHandle.isValid()) {
-            return Err<void>("HDraw::uploadMetadata: invalid metadata handle");
+            return Err<void>("JDraw::uploadMetadata: invalid metadata handle");
         }
 
         Metadata meta = {};
         meta.primitiveOffset = _primitiveOffset;
         meta.primitiveCount = _primCount;
-        meta.gridOffset = _gridOffset;
-        meta.gridWidth = _gridWidth;
-        meta.gridHeight = _gridHeight;
-        std::memcpy(&meta.cellSize, &_cellSize, sizeof(float));  // Store float as u32 bits
+        meta.tileListOffset = _tileListOffset;
+        meta.tileCountX = _tileCountX;
+        meta.tileCountY = _tileCountY;
+        meta.tileSize = TILE_SIZE;
         meta.glyphOffset = _glyphOffset;
         meta.glyphCount = static_cast<uint32_t>(_glyphs.size());
         std::memcpy(&meta.sceneMinX, &_sceneMinX, sizeof(float));
@@ -1748,14 +1965,15 @@ private:
         meta.flags = _flags;
         meta.bgColor = _bgColor;
 
-        yinfo("HDraw::uploadMetadata: metaOffset={} prims={} grid={}x{} cellSize={} "
+        yinfo("JDraw::uploadMetadata: metaOffset={} slotIndex={} primOffset={} prims={} tiles={}x{} "
               "scene=[{},{},{},{}] size={}x{} bgColor={:#010x}",
-              _metaHandle.offset, meta.primitiveCount, meta.gridWidth, meta.gridHeight,
-              _cellSize, _sceneMinX, _sceneMinY, _sceneMaxX, _sceneMaxY,
+              _metaHandle.offset, _metaHandle.offset / 64, meta.primitiveOffset,
+              meta.primitiveCount, meta.tileCountX, meta.tileCountY,
+              _sceneMinX, _sceneMinY, _sceneMaxX, _sceneMaxY,
               meta.widthCells, meta.heightCells, meta.bgColor);
 
         if (auto res = _cardMgr->writeMetadata(_metaHandle, &meta, sizeof(meta)); !res) {
-            return Err<void>("HDraw::uploadMetadata: write failed");
+            return Err<void>("JDraw::uploadMetadata: write failed");
         }
 
         return Ok();
@@ -1765,12 +1983,12 @@ private:
     struct Metadata {
         uint32_t primitiveOffset;   // 0
         uint32_t primitiveCount;    // 4
-        uint32_t gridOffset;        // 8
-        uint32_t gridWidth;         // 12
-        uint32_t gridHeight;        // 16
-        uint32_t cellSize;          // 20 (f32 stored as bits)
-        uint32_t glyphOffset;       // 24 - offset of glyph data in storage
-        uint32_t glyphCount;        // 28 - number of glyphs
+        uint32_t tileListOffset;    // 8
+        uint32_t tileCountX;        // 12
+        uint32_t tileCountY;        // 16
+        uint32_t tileSize;          // 20
+        uint32_t glyphOffset;       // 24
+        uint32_t glyphCount;        // 28
         uint32_t sceneMinX;         // 32 (f32 stored as bits)
         uint32_t sceneMinY;         // 36 (f32 stored as bits)
         uint32_t sceneMaxX;         // 40 (f32 stored as bits)
@@ -1782,36 +2000,47 @@ private:
     };
     static_assert(sizeof(Metadata) == 64, "Metadata must be 64 bytes");
 
+    // Uniforms for compute shader (matches WGSL struct)
+    struct TileCullUniforms {
+        uint32_t primitiveCount;
+        uint32_t tileCountX;
+        uint32_t tileCountY;
+        uint32_t maxPrimsPerTile;
+        float sceneMinX;
+        float sceneMinY;
+        float sceneMaxX;
+        float sceneMaxY;
+    };
+
     // Primitive data - direct buffer storage
     SDFPrimitive* _primitives = nullptr;
     uint32_t _primCount = 0;
     uint32_t _primCapacity = 0;
     StorageHandle _primStorage = StorageHandle::invalid();
-    std::vector<SDFPrimitive> _primStaging;  // CPU staging for suspend/resume
 
-    // Grid + glyphs - built directly in derived storage
-    uint32_t* _grid = nullptr;
-    uint32_t _gridSize = 0;  // total uint32_t elements
+    // CPU staging for primitives (used during suspend/reconstruct)
+    std::vector<SDFPrimitive> _primStaging;
+
+    // Tile lists + glyphs - built directly in derived storage
+    uint32_t* _tileLists = nullptr;
+    uint32_t _tileListsSize = 0;  // total uint32_t elements
     StorageHandle _derivedStorage = StorageHandle::invalid();
 
     // Glyphs (small, vector OK)
-    std::vector<HDrawGlyph> _glyphs;
+    std::vector<JDrawGlyph> _glyphs;
 
-    uint32_t _gridWidth = 0;
-    uint32_t _gridHeight = 0;
+    // Tile dimensions
+    uint32_t _tileCountX = 0;
+    uint32_t _tileCountY = 0;
 
     // Scene bounds
     float _sceneMinX = 0, _sceneMinY = 0;
     float _sceneMaxX = 100, _sceneMaxY = 100;
     bool _hasExplicitBounds = false;
 
-    // Grid parameters
-    float _cellSize = DEFAULT_CELL_SIZE;
-    uint32_t _maxPrimsPerCell = DEFAULT_MAX_PRIMS_PER_CELL;
-
     // GPU offsets (in float units)
     uint32_t _primitiveOffset = 0;
-    uint32_t _gridOffset = 0;
+    uint32_t _tileListOffset = 0;
     uint32_t _glyphOffset = 0;
 
     // Rendering
@@ -1828,40 +2057,56 @@ private:
     // Font for text rendering
     FontManager::Ptr _fontManager;
     MsMsdfFont::Ptr _font;
+
+    // Compute shader resources
+    bool _useComputeShader = false;
+    bool _bindGroupStale = true;
+    WGPUShaderModule _tileCullShaderModule = nullptr;
+    WGPUBindGroupLayout _tileCullBindGroupLayout = nullptr;
+    WGPUBindGroup _tileCullBindGroup = nullptr;
+    WGPUComputePipeline _tileCullPipeline = nullptr;
+    WGPUBuffer _tileCullUniformBuffer = nullptr;
+    // Temp GPU buffers for compute shader (jdraw-owned, not in CardBufferManager)
+    WGPUBuffer _primInputBuffer = nullptr;      // prims uploaded here for compute input
+    uint32_t _primInputBufferSize = 0;
+    WGPUBuffer _tileOutputBuffer = nullptr;      // compute writes tile lists here
+    uint32_t _tileOutputBufferSize = 0;
+    WGPUBuffer _tileReadbackBuffer = nullptr;    // for GPU→CPU readback of tile lists
+    uint32_t _tileReadbackBufferSize = 0;
 };
 
 //=============================================================================
 // Factory methods
 //=============================================================================
 
-Result<CardPtr> HDraw::create(
+Result<CardPtr> JDraw::create(
     const YettyContext& ctx,
     int32_t x, int32_t y,
     uint32_t widthCells, uint32_t heightCells,
     const std::string& args,
     const std::string& payload)
 {
-    yinfo("HDraw::create: pos=({},{}) size={}x{} args='{}' payload_len={}",
+    yinfo("JDraw::create: pos=({},{}) size={}x{} args='{}' payload_len={}",
           x, y, widthCells, heightCells, args, payload.size());
 
     if (!ctx.cardManager) {
-        yerror("HDraw::create: null CardBufferManager!");
-        return Err<CardPtr>("HDraw::create: null CardBufferManager");
+        yerror("JDraw::create: null CardBufferManager!");
+        return Err<CardPtr>("JDraw::create: null CardBufferManager");
     }
 
-    auto card = std::make_shared<HDrawImpl>(
+    auto card = std::make_shared<JDrawImpl>(
         ctx, x, y, widthCells, heightCells, args, payload);
 
     if (auto res = card->init(); !res) {
-        yerror("HDraw::create: init FAILED: {}", error_msg(res));
-        return Err<CardPtr>("HDraw::create: init failed");
+        yerror("JDraw::create: init FAILED: {}", error_msg(res));
+        return Err<CardPtr>("JDraw::create: init failed");
     }
 
-    yinfo("HDraw::create: SUCCESS, shaderGlyph={:#x}", card->shaderGlyph());
+    yinfo("JDraw::create: SUCCESS, shaderGlyph={:#x}", card->shaderGlyph());
     return Ok<CardPtr>(card);
 }
 
-Result<HDraw::Ptr> HDraw::createImpl(
+Result<JDraw::Ptr> JDraw::createImpl(
     ContextType& ctx,
     const YettyContext& yettyCtx,
     int32_t x, int32_t y,
@@ -1873,13 +2118,13 @@ Result<HDraw::Ptr> HDraw::createImpl(
 
     auto result = create(yettyCtx, x, y, widthCells, heightCells, args, payload);
     if (!result) {
-        return Err<Ptr>("Failed to create HDraw", result);
+        return Err<Ptr>("Failed to create JDraw", result);
     }
-    auto hdraw = std::dynamic_pointer_cast<HDraw>(*result);
-    if (!hdraw) {
-        return Err<Ptr>("Created card is not an HDraw");
+    auto jdraw = std::dynamic_pointer_cast<JDraw>(*result);
+    if (!jdraw) {
+        return Err<Ptr>("Created card is not a JDraw");
     }
-    return Ok(hdraw);
+    return Ok(jdraw);
 }
 
 } // namespace yetty::card

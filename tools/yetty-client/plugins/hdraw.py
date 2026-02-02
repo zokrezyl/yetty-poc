@@ -571,7 +571,7 @@ def parse_yaml_to_binary(yaml_content: str) -> Tuple[bytes, int, int]:
 
 @click.command(name='hdraw')
 @click.option('--input', '-i', 'input_', help='YAML file (use - for stdin)')
-@click.option('--binary', '-b', is_flag=True, help='Convert YAML to binary format (default: pass YAML to C++)')
+@click.option('--bin', '-b', 'binary', is_flag=True, help='Input is pre-converted binary format')
 @click.option('--demo', '-d', type=click.Choice(['2d', 'simple', 'grid']),
               help='Run a built-in demo')
 @click.option('--cell-size', '-c', type=float, default=50.0,
@@ -606,21 +606,6 @@ def hdraw(ctx, input_, binary, demo, cell_size, show_grid, show_eval_count):
 
     ctx.ensure_object(dict)
 
-    # Read input
-    if input_:
-        if input_ == '-':
-            yaml_content = sys.stdin.read()
-        else:
-            path = Path(input_)
-            if not path.exists():
-                raise click.ClickException(f"File not found: {input_}")
-            with open(path, 'r') as f:
-                yaml_content = f.read()
-    elif demo:
-        yaml_content = DEMOS.get(demo, DEMOS['simple'])
-    else:
-        yaml_content = DEMOS['simple']
-
     # Build args string
     args_parts = [f'--cell-size {cell_size}']
     if show_grid:
@@ -629,15 +614,33 @@ def hdraw(ctx, input_, binary, demo, cell_size, show_grid, show_eval_count):
         args_parts.append('--show-eval-count')
 
     if binary:
-        # Binary mode: convert YAML to binary payload
-        try:
-            payload_bytes, bg_color, flags = parse_yaml_to_binary(yaml_content)
-        except ValueError as e:
-            raise click.ClickException(str(e))
-        args_parts.insert(0, f'--bg-color 0x{bg_color:08X}')
+        # Binary mode: read file as raw bytes, send directly
+        if not input_:
+            raise click.ClickException("--bin requires --input/-i")
+        if input_ == '-':
+            payload_bytes = sys.stdin.buffer.read()
+        else:
+            path = Path(input_)
+            if not path.exists():
+                raise click.ClickException(f"File not found: {input_}")
+            with open(path, 'rb') as f:
+                payload_bytes = f.read()
         ctx.obj['payload_bytes'] = payload_bytes
     else:
-        # YAML mode: pass YAML directly to C++ for parsing
+        # YAML mode: read as text, pass to C++ for parsing
+        if input_:
+            if input_ == '-':
+                yaml_content = sys.stdin.read()
+            else:
+                path = Path(input_)
+                if not path.exists():
+                    raise click.ClickException(f"File not found: {input_}")
+                with open(path, 'r') as f:
+                    yaml_content = f.read()
+        elif demo:
+            yaml_content = DEMOS.get(demo, DEMOS['simple'])
+        else:
+            yaml_content = DEMOS['simple']
         ctx.obj['payload'] = yaml_content
 
     ctx.obj['plugin_name'] = 'hdraw'

@@ -436,6 +436,9 @@ public:
 
     Result<void> render(float time) override {
         (void)time;
+        using Clock = std::chrono::steady_clock;
+        auto tRenderStart = Clock::now();
+        bool didRebuild = false, didMeta = false;
 
         ydebug("YDraw::update called, _dirty={} _metadataDirty={} primCount={}",
                _dirty, _metadataDirty, _primCount);
@@ -446,7 +449,9 @@ public:
                 return Err<void>("YDraw::update: rebuildAndUpload failed", res);
             }
             _dirty = false;
+            didRebuild = true;
         }
+        auto tAfterRebuild = Clock::now();
 
         if (_metadataDirty) {
             ydebug("YDraw::update: calling uploadMetadata()");
@@ -454,6 +459,15 @@ public:
                 return Err<void>("YDraw::update: metadata upload failed", res);
             }
             _metadataDirty = false;
+            didMeta = true;
+        }
+        auto tAfterMeta = Clock::now();
+
+        if (didRebuild || didMeta) {
+            auto us = [](auto a, auto b) { return std::chrono::duration_cast<std::chrono::microseconds>(b - a).count(); };
+            yinfo("YDraw::render: rebuild={} us, metadata={} us, total={} us",
+                  us(tRenderStart, tAfterRebuild), us(tAfterRebuild, tAfterMeta),
+                  us(tRenderStart, tAfterMeta));
         }
 
         return Ok();
