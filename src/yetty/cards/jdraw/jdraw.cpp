@@ -657,10 +657,6 @@ public:
             return;
         }
 
-        using Clock = std::chrono::steady_clock;
-        auto us = [](auto a, auto b) { return std::chrono::duration_cast<std::chrono::microseconds>(b - a).count(); };
-        auto t0 = Clock::now();
-
         uint32_t primBytes = _primCount * sizeof(SDFPrimitive);
 
         // Ensure temp prim input buffer is large enough
@@ -697,11 +693,9 @@ public:
             _tileReadbackBuffer = wgpuDeviceCreateBuffer(_gpu.device, &desc);
             _tileReadbackBufferSize = tileBytes;
         }
-        auto tBuffers = Clock::now();
 
         // Upload primitives to temp input buffer
         wgpuQueueWriteBuffer(_gpu.queue, _primInputBuffer, 0, _primitives, primBytes);
-        auto tPrimUpload = Clock::now();
 
         // Upload uniforms
         TileCullUniforms uniforms = {};
@@ -715,7 +709,6 @@ public:
         uniforms.sceneMaxY = _sceneMaxY;
 
         wgpuQueueWriteBuffer(_gpu.queue, _tileCullUniformBuffer, 0, &uniforms, sizeof(uniforms));
-        auto tUniformUpload = Clock::now();
 
         // Recreate bind group if buffers changed
         if (!_tileCullBindGroup || _bindGroupStale) {
@@ -755,7 +748,6 @@ public:
             }
             _bindGroupStale = false;
         }
-        auto tBindGroup = Clock::now();
 
         // Create command encoder for compute + copy
         WGPUCommandEncoderDescriptor encDesc = {};
@@ -785,7 +777,6 @@ public:
         wgpuQueueSubmit(_gpu.queue, 1, &cmdBuffer);
         wgpuCommandBufferRelease(cmdBuffer);
         wgpuCommandEncoderRelease(encoder);
-        auto tSubmit = Clock::now();
 
         // Map readback buffer synchronously (same pattern as ymery.cpp)
         struct MapCtx { bool done = false; WGPUMapAsyncStatus status; };
@@ -801,12 +792,9 @@ public:
 
         wgpuBufferMapAsync(_tileReadbackBuffer, WGPUMapMode_Read, 0, tileBytes, cbInfo);
 
-        uint32_t pollCount = 0;
         while (!mapCtx.done) {
             wgpuDeviceTick(_gpu.device);
-            pollCount++;
         }
-        auto tMap = Clock::now();
 
         if (mapCtx.status == WGPUMapAsyncStatus_Success) {
             const void* mapped = wgpuBufferGetConstMappedRange(_tileReadbackBuffer, 0, tileBytes);
@@ -819,15 +807,6 @@ public:
                   static_cast<int>(mapCtx.status));
             buildTileLists();
         }
-        auto tEnd = Clock::now();
-
-        yinfo("JDraw::computeReadback: {}x{} tiles, {} prims, {} tileBytes, {} primBytes",
-               _tileCountX, _tileCountY, _primCount, tileBytes, primBytes);
-        yinfo("  timing: buffers={} us, primUpload={} us, uniformUpload={} us, bindGroup={} us, "
-              "submit={} us, mapWait={} us (polls={}), memcpy={} us, total={} us",
-              us(t0, tBuffers), us(tBuffers, tPrimUpload), us(tPrimUpload, tUniformUpload),
-              us(tUniformUpload, tBindGroup), us(tBindGroup, tSubmit),
-              us(tSubmit, tMap), pollCount, us(tMap, tEnd), us(t0, tEnd));
     }
 
 private:
@@ -885,10 +864,6 @@ private:
     }
 
     Result<void> parsePayload(const std::string& payload) {
-        using Clock = std::chrono::steady_clock;
-        auto us = [](auto a, auto b) { return std::chrono::duration_cast<std::chrono::microseconds>(b - a).count(); };
-        auto t0 = Clock::now();
-
         yinfo("JDraw::parsePayload: payload length={}", payload.size());
 
         if (payload.empty()) {
@@ -906,24 +881,14 @@ private:
             }
         }
 
-        Result<void> result;
         if (isYaml) {
-            result = parseYAML(payload);
+            return parseYAML(payload);
         } else {
-            result = parseBinary(payload);
+            return parseBinary(payload);
         }
-
-        auto t1 = Clock::now();
-        yinfo("JDraw::parsePayload: format={}, total={} us",
-              isYaml ? "YAML" : "binary", us(t0, t1));
-        return result;
     }
 
     Result<void> parseBinary(const std::string& payload) {
-        using Clock = std::chrono::steady_clock;
-        auto us = [](auto a, auto b) { return std::chrono::duration_cast<std::chrono::microseconds>(b - a).count(); };
-        auto t0 = Clock::now();
-
         const size_t HEADER_SIZE = 16;
         const size_t PRIM_SIZE = sizeof(SDFPrimitive);
 
@@ -961,8 +926,6 @@ private:
             _primStaging.resize(primCount);
             std::memcpy(_primStaging.data(), primData, primCount * PRIM_SIZE);
             _dirty = true;
-            auto t1 = Clock::now();
-            yinfo("JDraw::parseBinary timing: {} prims, memcpy={} us", primCount, us(t0, t1));
             return Ok();
         }
 
@@ -974,8 +937,6 @@ private:
         _cardMgr->bufferManager()->markBufferDirty(_primStorage);
 
         _dirty = true;
-        auto t1 = Clock::now();
-        yinfo("JDraw::parseBinary timing: {} prims, total={} us", primCount, us(t0, t1));
         return Ok();
     }
 
@@ -1007,13 +968,8 @@ private:
     }
 
     Result<void> parseYAML(const std::string& yaml) {
-        using Clock = std::chrono::steady_clock;
-        auto us = [](auto a, auto b) { return std::chrono::duration_cast<std::chrono::microseconds>(b - a).count(); };
-
         try {
-            auto tYamlStart = Clock::now();
             YAML::Node root = YAML::Load(yaml);
-            auto tYamlParsed = Clock::now();
 
             if (root["background"]) {
                 _bgColor = parseColor(root["background"]);
@@ -1033,22 +989,15 @@ private:
                 _metadataDirty = true;
             }
 
-            auto tFlagsAndBg = Clock::now();
-
             if (root["body"] && root["body"].IsSequence()) {
                 for (const auto& item : root["body"]) {
                     parseYAMLPrimitive(item);
                 }
             }
 
-            auto tPrims = Clock::now();
-
             _dirty = true;
             yinfo("JDraw::parseYAML: loaded {} primitives, {} glyphs",
                   _primCount, _glyphs.size());
-            yinfo("JDraw::parseYAML timing: yamlLoad={} us, flagsAndBg={} us, primitives={} us, total={} us",
-                  us(tYamlStart, tYamlParsed), us(tYamlParsed, tFlagsAndBg),
-                  us(tFlagsAndBg, tPrims), us(tYamlStart, tPrims));
 
             // Log first few primitives for debugging
             for (size_t i = 0; i < std::min(size_t(_primCount), size_t(3)); i++) {
@@ -1813,9 +1762,6 @@ private:
 
     void buildTileLists() {
         // CPU-based tile culling (fallback when compute shader not available)
-        auto t0 = std::chrono::steady_clock::now();
-
-        uint32_t totalTiles = _tileCountX * _tileCountY;
         uint32_t tileStride = 1 + MAX_PRIMS_PER_TILE;
 
         std::memset(_tileLists, 0, _tileListsSize * sizeof(uint32_t));
@@ -1848,31 +1794,10 @@ private:
             }
         }
 
-        auto t1 = std::chrono::steady_clock::now();
-        auto us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
-
-        uint32_t totalPrimsInTiles = 0;
-        uint32_t maxPrimsInTile = 0;
-        uint32_t tilesWithPrims = 0;
-        for (uint32_t t = 0; t < totalTiles; t++) {
-            uint32_t count = _tileLists[t * tileStride];
-            totalPrimsInTiles += count;
-            if (count > maxPrimsInTile) maxPrimsInTile = count;
-            if (count > 0) tilesWithPrims++;
-        }
-
-        ydebug("JDraw::buildTileLists (CPU): {} prims -> {}x{} tiles, "
-               "tilesWithPrims={}, maxPrimsInTile={}, took {} us",
-               _primCount, _tileCountX, _tileCountY,
-               tilesWithPrims, maxPrimsInTile, us);
     }
 
     Result<void> rebuildAndUpload() {
-        using Clock = std::chrono::steady_clock;
-        auto tStart = Clock::now();
-
         computeSceneBounds();
-        auto tBounds = Clock::now();
 
         // Calculate tile dimensions
         const uint32_t ESTIMATED_CELL_PIXELS = 16;
@@ -1886,9 +1811,6 @@ private:
         uint32_t tileBytes = tileTotalU32 * sizeof(uint32_t);
         uint32_t glyphBytes = static_cast<uint32_t>(_glyphs.size() * sizeof(JDrawGlyph));
         uint32_t derivedTotalSize = tileBytes + glyphBytes;
-
-        auto tTileCull = tBounds;  // will be updated after tile culling
-        auto tGlyphs = tBounds;
 
         if (_derivedStorage.isValid() && derivedTotalSize > 0) {
             uint8_t* base = _derivedStorage.data;
@@ -1908,14 +1830,12 @@ private:
                     buildTileLists();
                 }
             }
-            tTileCull = Clock::now();
 
             // Glyphs (small data)
             _glyphOffset = (_derivedStorage.offset + offset) / sizeof(float);
             if (!_glyphs.empty()) {
                 std::memcpy(base + offset, _glyphs.data(), glyphBytes);
             }
-            tGlyphs = Clock::now();
 
             _cardMgr->bufferManager()->markBufferDirty(_derivedStorage);
             _bindGroupStale = true;
@@ -1927,17 +1847,8 @@ private:
         if (_primStorage.isValid()) {
             _cardMgr->bufferManager()->markBufferDirty(_primStorage);
         }
-        auto tMarkDirty = Clock::now();
 
         _metadataDirty = true;
-
-        auto tEnd = Clock::now();
-        auto us = [](auto a, auto b) { return std::chrono::duration_cast<std::chrono::microseconds>(b - a).count(); };
-        yinfo("JDraw::rebuildAndUpload: {} prims, {}x{} tiles, {} glyphs, compute={}",
-              _primCount, _tileCountX, _tileCountY, _glyphs.size(), _useComputeShader);
-        yinfo("  timing: bounds={} us, tileCull={} us, glyphs={} us, markDirty={} us, total={} us",
-              us(tStart, tBounds), us(tBounds, tTileCull), us(tTileCull, tGlyphs),
-              us(tGlyphs, tMarkDirty), us(tStart, tEnd));
 
         return Ok();
     }

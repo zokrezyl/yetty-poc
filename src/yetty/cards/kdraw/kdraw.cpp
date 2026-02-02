@@ -1591,9 +1591,6 @@ private:
 
     void buildTileLists() {
         // CPU-based tile culling
-        auto t0 = std::chrono::steady_clock::now();
-
-        uint32_t totalTiles = _tileCountX * _tileCountY;
         uint32_t tileStride = 1 + MAX_PRIMS_PER_TILE;  // [count][idx0][idx1]...
 
         std::memset(_tileLists, 0, _tileListsSize * sizeof(uint32_t));
@@ -1629,29 +1626,9 @@ private:
                 _tileLists[tileOffset] = count;
             }
         }
-
-        // Count total primitives across all tiles for debugging
-        uint32_t totalPrimsInTiles = 0;
-        uint32_t maxPrimsInTile = 0;
-        uint32_t tilesWithPrims = 0;
-        for (uint32_t t = 0; t < totalTiles; t++) {
-            uint32_t count = _tileLists[t * tileStride];
-            totalPrimsInTiles += count;
-            if (count > maxPrimsInTile) maxPrimsInTile = count;
-            if (count > 0) tilesWithPrims++;
-        }
-
-        auto t1 = std::chrono::steady_clock::now();
-        auto us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
-
-        ydebug("KDraw::buildTileLists (CPU): {} prims -> {}x{} tiles, "
-               "tilesWithPrims={}, maxPrimsInTile={}, took {} us",
-               _primCount, _tileCountX, _tileCountY,
-               tilesWithPrims, maxPrimsInTile, us);
     }
 
     Result<void> rebuildAndUpload() {
-        auto _rebuildT0 = std::chrono::steady_clock::now();
         computeSceneBounds();
 
         // Calculate tile dimensions
@@ -1699,11 +1676,6 @@ private:
         }
 
         _metadataDirty = true;
-
-        auto _rebuildT1 = std::chrono::steady_clock::now();
-        auto _rebuildUs = std::chrono::duration_cast<std::chrono::microseconds>(_rebuildT1 - _rebuildT0).count();
-        yinfo("KDraw::rebuildAndUpload: {} prims, {}x{} tiles, {} glyphs, derived {} bytes, took {} us",
-              _primCount, _tileCountX, _tileCountY, _glyphs.size(), derivedTotalSize, _rebuildUs);
 
         return Ok();
     }

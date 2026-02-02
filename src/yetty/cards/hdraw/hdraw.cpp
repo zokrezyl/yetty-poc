@@ -1589,17 +1589,12 @@ private:
             return;
         }
 
-        auto t0 = std::chrono::steady_clock::now();
-
-        uint32_t totalCells = _gridWidth * _gridHeight;
         uint32_t cellStride = 1 + _maxPrimsPerCell;
 
         // Zero the grid
         std::memset(_grid, 0, _gridSize * sizeof(uint32_t));
 
         // Assign each primitive to cells it overlaps
-        uint32_t cellsWithPrims = 0;
-        uint32_t maxPrimsInCell = 0;
         for (uint32_t primIdx = 0; primIdx < _primCount; primIdx++) {
             const auto& prim = _primitives[primIdx];
 
@@ -1624,25 +1619,9 @@ private:
                 }
             }
         }
-
-        // Count stats for debugging
-        for (uint32_t c = 0; c < totalCells; c++) {
-            uint32_t count = _grid[c * cellStride];
-            if (count > 0) cellsWithPrims++;
-            if (count > maxPrimsInCell) maxPrimsInCell = count;
-        }
-
-        auto t1 = std::chrono::steady_clock::now();
-        auto us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
-
-        ydebug("HDraw::buildGrid (CPU): {} prims -> {}x{} grid, "
-               "cellsWithPrims={}, maxPrimsInCell={}, took {} us",
-               _primCount, _gridWidth, _gridHeight,
-               cellsWithPrims, maxPrimsInCell, us);
     }
 
     Result<void> rebuildAndUpload() {
-        auto _rebuildT0 = std::chrono::steady_clock::now();
         // Compute scene bounds from primitives already in buffer
         computeSceneBounds();
 
@@ -1716,11 +1695,6 @@ private:
         }
 
         _metadataDirty = true;
-
-        auto _rebuildT1 = std::chrono::steady_clock::now();
-        auto _rebuildUs = std::chrono::duration_cast<std::chrono::microseconds>(_rebuildT1 - _rebuildT0).count();
-        yinfo("HDraw::rebuildAndUpload: {} prims, {}x{} grid, {} glyphs, derived {} bytes, took {} us",
-              _primCount, _gridWidth, _gridHeight, _glyphs.size(), derivedTotalSize, _rebuildUs);
 
         return Ok();
     }

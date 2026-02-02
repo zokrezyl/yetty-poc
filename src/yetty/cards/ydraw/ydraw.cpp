@@ -767,8 +767,6 @@ private:
     void buildBVH(std::vector<BVHNode>& outNodes, std::vector<uint32_t>& outSortedIndices) {
         if (_primCount == 0) return;
 
-        auto t0 = std::chrono::steady_clock::now();
-
         // Compute Morton codes for spatial sorting
         std::vector<std::pair<uint32_t, uint32_t>> mortonPairs;
         mortonPairs.reserve(_primCount);
@@ -789,11 +787,6 @@ private:
         outNodes.reserve(_primCount);  // reasonable estimate
         buildBVHRecursive(outNodes, outSortedIndices, 0, _primCount);
 
-        auto t1 = std::chrono::steady_clock::now();
-        auto us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
-
-        ydebug("YDraw::buildBVH (CPU): {} primitives -> {} BVH nodes, took {} us",
-              _primCount, static_cast<uint32_t>(outNodes.size()), us);
     }
 
     uint32_t buildBVHRecursive(std::vector<BVHNode>& nodes,
@@ -870,7 +863,6 @@ private:
     }
 
     Result<void> rebuildAndUpload() {
-        auto _rebuildT0 = std::chrono::steady_clock::now();
         if (_primCount == 0 && _textSpans.empty()) {
             return Ok();
         }
@@ -937,11 +929,6 @@ private:
         }
 
         _metadataDirty = true;
-
-        auto _rebuildT1 = std::chrono::steady_clock::now();
-        auto _rebuildUs = std::chrono::duration_cast<std::chrono::microseconds>(_rebuildT1 - _rebuildT0).count();
-        yinfo("YDraw::rebuildAndUpload: {} prims, {} BVH nodes, derived {} bytes, took {} us",
-              _primCount, _bvhNodeCount, derivedTotalSize, _rebuildUs);
 
         return Ok();
     }
