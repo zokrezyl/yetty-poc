@@ -1,7 +1,6 @@
 #pragma once
 
-#include <yetty/card-buffer-manager.h>
-#include <yetty/card-texture-manager.h>
+#include <yetty/card-manager.h>
 #include <yetty/base/event-listener.h>
 #include <yetty/gpu-context.h>
 #include <yetty/result.hpp>
@@ -15,13 +14,14 @@ namespace yetty {
  * Card - Base class for card-based widgets rendered via shader glyphs
  *
  * Cards are lightweight widgets that:
- * - Allocate metadata in CardBufferManager
+ * - Allocate metadata in CardManager
  * - Are rendered entirely by GPU shaders
  * - Receive mouse/keyboard input via EventListener interface
  *
- * Two subclasses:
- *   TextureCard - produces RGBA pixels, written to atlas texture
- *   BufferCard  - produces linear data, written to GPU storage buffer
+ * Cards declare their resource needs via needsBuffer() / needsTexture().
+ * Buffer cards use CardBufferManager for linear GPU storage.
+ * Texture cards use CardTextureManager for atlas textures.
+ * A card may need both.
  */
 class Card : public base::EventListener {
 public:
@@ -34,8 +34,25 @@ public:
     Card& operator=(const Card&) = delete;
 
     //=========================================================================
+    // Resource declarations
+    //=========================================================================
+    virtual bool needsBuffer() const { return false; }
+    virtual bool needsTexture() const { return false; }
+
+    // For gpu-screen two-pass rendering (derived from needsTexture)
+    bool isTextureCard() const { return needsTexture(); }
+
+    //=========================================================================
     // Lifecycle
     //=========================================================================
+
+    // 3-loop lifecycle (gpu-screen drives these when cards enter/leave):
+    // Loop 1: Buffer cards declare their total buffer needs via reserve()
+    virtual void declareBufferNeeds() {}
+    // Loop 2: Cards allocate/re-register their resources
+    virtual Result<void> allocateBuffers() { return Ok(); }
+    virtual Result<void> allocateTextures() { return Ok(); }
+
     virtual Result<void> dispose() = 0;
     virtual void suspend() = 0;
 
@@ -58,13 +75,9 @@ public:
     virtual void onKeyUp(uint32_t codepoint, int mods) { (void)codepoint; (void)mods; }
 
     //=========================================================================
-    // Per-frame update (called if card is visible)
+    // Per-frame render (called if card is visible, after allocateBuffers/allocateTextures)
     //=========================================================================
-    virtual Result<void> update(float time) { (void)time; return Ok(); }
-
-    // Called after CardBufferManager::flush() uploads CPU data to GPU.
-    // Use for GPU-side work (compute shaders) that reads/writes the storage buffer.
-    virtual Result<void> postFlush() { return Ok(); }
+    virtual Result<void> render(float time) { (void)time; return Ok(); }
 
     // Called by gpu-screen when cell pixel size changes (e.g. zoom)
     virtual void setCellSize(uint32_t cellWidth, uint32_t cellHeight) {
@@ -99,11 +112,8 @@ public:
     // Card type name
     virtual const char* typeName() const = 0;
 
-    // Is this a texture card? (for gpu-screen two-pass rendering)
-    virtual bool isTextureCard() const { return false; }
-
 protected:
-    Card(CardBufferManager::Ptr mgr, const GPUContext& gpu,
+    Card(CardManager::Ptr mgr, const GPUContext& gpu,
          int32_t x, int32_t y,
          uint32_t widthCells, uint32_t heightCells)
         : _cardMgr(std::move(mgr))
@@ -114,7 +124,7 @@ protected:
         , _heightCells(heightCells)
     {}
 
-    CardBufferManager::Ptr _cardMgr;
+    CardManager::Ptr _cardMgr;
     GPUContext _gpu;
     MetadataHandle _metaHandle = MetadataHandle::invalid();
     uint32_t _shaderGlyph = 0;
@@ -124,64 +134,6 @@ protected:
     uint32_t _heightCells;
     float _screenOriginX = 0.0f;
     float _screenOriginY = 0.0f;
-};
-
-/**
- * TextureCard - Card that produces RGBA pixels written to the atlas texture.
- *
- * Two-pass rendering driven by gpu-screen:
- *   Pass 1: producePixels() - card renders into its local CPU pixel buffer
- *   Pass 2: writeToAtlas()  - card writes pixels to atlas via handle
- *
- * Between passes, gpu-screen calls textureManager->packAtlas() to assign positions.
- */
-class TextureCard : public Card {
-public:
-    bool isTextureCard() const override { return true; }
-
-    // Pass 1: Render/prepare pixels into local CPU buffer, link to texture handle.
-    // Called by gpu-screen when atlas needs rebuilding.
-    // Default: no-op (cards that do everything in update() need not override).
-    virtual Result<void> producePixels() { return Ok(); }
-
-    // Pass 2: Write pixels to atlas and update metadata with atlas position.
-    // Called by gpu-screen after packAtlas().
-    // Default: no-op (atlas writes are driven by the manager's writeAllToAtlas()).
-    virtual Result<void> writeToAtlas() { return Ok(); }
-
-    // Get the texture handle (for gpu-screen to check validity)
-    TextureHandle textureHandle() const { return _textureHandle; }
-
-protected:
-    TextureCard(CardBufferManager::Ptr bufMgr, CardTextureManager::Ptr texMgr,
-                const GPUContext& gpu,
-                int32_t x, int32_t y,
-                uint32_t widthCells, uint32_t heightCells)
-        : Card(std::move(bufMgr), gpu, x, y, widthCells, heightCells)
-        , _textureMgr(std::move(texMgr))
-    {}
-
-    CardTextureManager::Ptr _textureMgr;
-    TextureHandle _textureHandle = TextureHandle::invalid();
-    bool _metadataDirty = true;
-    uint32_t _cellWidth = 0;
-    uint32_t _cellHeight = 0;
-};
-
-/**
- * BufferCard - Card that produces linear data written to GPU storage buffer.
- * Used by plot, ydraw, kdraw, hdraw cards.
- */
-class BufferCard : public Card {
-public:
-    bool isTextureCard() const override { return false; }
-
-protected:
-    BufferCard(CardBufferManager::Ptr mgr, const GPUContext& gpu,
-               int32_t x, int32_t y,
-               uint32_t widthCells, uint32_t heightCells)
-        : Card(std::move(mgr), gpu, x, y, widthCells, heightCells)
-    {}
 };
 
 using CardPtr = Card::Ptr;

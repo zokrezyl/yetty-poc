@@ -6,11 +6,14 @@
 //
 // Dispatch: (tileCountX, tileCountY, 1) workgroups
 // Each workgroup handles one tile.
+//
+// Bindings:
+//   binding 0: primData (read-only)  - SDF primitives uploaded by jdraw
+//   binding 1: tileData (read-write) - tile list output
+//   binding 2: uniforms
 
 struct TileCullUniforms {
     primitiveCount: u32,
-    primitiveOffset: u32,    // float-index offset into storage for primitives
-    tileListOffset: u32,     // u32-index offset into storage for tile lists
     tileCountX: u32,
     tileCountY: u32,
     maxPrimsPerTile: u32,
@@ -20,17 +23,18 @@ struct TileCullUniforms {
     sceneMaxY: f32,
 };
 
-// Single read_write binding for the entire cardStorage buffer.
-// We read primitive AABBs and write tile lists through the same binding.
-// Primitives are stored as f32 (accessed via bitcast), tile lists as u32.
-@group(0) @binding(0) var<storage, read_write> cardData: array<u32>;
+// Input: primitives (read-only, uploaded by jdraw to its own temp buffer)
+@group(0) @binding(0) var<storage, read> primData: array<u32>;
+
+// Output: tile lists (written by compute shader)
+@group(0) @binding(1) var<storage, read_write> tileData: array<u32>;
 
 // Uniforms
-@group(0) @binding(1) var<uniform> uniforms: TileCullUniforms;
+@group(0) @binding(2) var<uniform> uniforms: TileCullUniforms;
 
-// Helper: read f32 from cardData at a given index
+// Helper: read f32 from primData at a given index
 fn readF32(index: u32) -> f32 {
-    return bitcast<f32>(cardData[index]);
+    return bitcast<f32>(primData[index]);
 }
 
 // SDFPrimitive is 24 floats (96 bytes). AABB fields:
@@ -65,10 +69,10 @@ fn tileCull(@builtin(global_invocation_id) gid: vec3<u32>) {
     let tileMinY = uniforms.sceneMinY + f32(tileY) * invTileCountY * sceneHeight;
     let tileMaxY = uniforms.sceneMinY + f32(tileY + 1u) * invTileCountY * sceneHeight;
 
-    // Output offset for this tile
+    // Output offset for this tile (starts at 0 in tileData)
     let tileIndex = tileY * uniforms.tileCountX + tileX;
     let tileStride = 1u + uniforms.maxPrimsPerTile;
-    let outOffset = uniforms.tileListOffset + tileIndex * tileStride;
+    let outOffset = tileIndex * tileStride;
 
     var count = 0u;
 
@@ -78,7 +82,8 @@ fn tileCull(@builtin(global_invocation_id) gid: vec3<u32>) {
             break;
         }
 
-        let primBase = uniforms.primitiveOffset + pi * PRIM_SIZE;
+        // Prims start at offset 0 in primData
+        let primBase = pi * PRIM_SIZE;
 
         let primMinX = readF32(primBase + AABB_MIN_X_OFFSET);
         let primMinY = readF32(primBase + AABB_MIN_Y_OFFSET);
@@ -88,11 +93,11 @@ fn tileCull(@builtin(global_invocation_id) gid: vec3<u32>) {
         // AABB overlap test
         if (primMaxX >= tileMinX && primMinX <= tileMaxX &&
             primMaxY >= tileMinY && primMinY <= tileMaxY) {
-            cardData[outOffset + 1u + count] = pi;
+            tileData[outOffset + 1u + count] = pi;
             count++;
         }
     }
 
     // Write count as first element of tile
-    cardData[outOffset] = count;
+    tileData[outOffset] = count;
 }

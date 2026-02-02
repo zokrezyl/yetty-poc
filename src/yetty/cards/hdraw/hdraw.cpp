@@ -6,6 +6,7 @@
 #include <yaml-cpp/yaml.h>
 #include <sstream>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 
@@ -200,7 +201,7 @@ public:
               int32_t x, int32_t y,
               uint32_t widthCells, uint32_t heightCells,
               const std::string& args, const std::string& payload)
-        : HDraw(ctx.cardManager->bufferManager(), ctx.gpu, x, y, widthCells, heightCells)
+        : HDraw(ctx.cardManager, ctx.gpu, x, y, widthCells, heightCells)
         , _fontManager(ctx.fontManager)
         , _argsStr(args)
         , _payloadStr(payload)
@@ -233,28 +234,18 @@ public:
         // Parse args
         parseArgs(_argsStr);
 
-        // Parse payload if provided (binary format from Python)
+        // Parse payload into CPU staging (GPU buffers allocated via lifecycle loops)
+        _initParsing = true;
         if (!_payloadStr.empty()) {
             if (auto res = parsePayload(_payloadStr); !res) {
                 ywarn("HDraw::init: failed to parse payload: {}", error_msg(res));
             }
         }
+        _initParsing = false;
+        yinfo("HDraw::init: parsed {} primitives into staging", _primStaging.size());
 
-        // Build grid and upload primitives/glyphs to GPU storage
-        if (_primCount > 0 || !_glyphs.empty()) {
-            yinfo("HDraw::init: calling rebuildAndUpload for {} primitives, {} glyphs",
-                  _primCount, _glyphs.size());
-            if (auto res = rebuildAndUpload(); !res) {
-                return Err<void>("HDraw::init: rebuildAndUpload failed", res);
-            }
-            _dirty = false;
-        }
-
-        // Upload metadata
-        if (auto res = uploadMetadata(); !res) {
-            return Err<void>("HDraw::init: failed to upload metadata");
-        }
-        _metadataDirty = false;
+        _dirty = true;
+        _metadataDirty = true;
 
         return Ok();
     }
@@ -264,7 +255,7 @@ public:
         _primStaging.shrink_to_fit();
 
         if (_derivedStorage.isValid() && _cardMgr) {
-            if (auto res = _cardMgr->deallocateBuffer(_derivedStorage); !res) {
+            if (auto res = _cardMgr->bufferManager()->deallocateBuffer(_derivedStorage); !res) {
                 yerror("HDraw::dispose: deallocateBuffer (derived) failed: {}", error_msg(res));
             }
             _derivedStorage = StorageHandle::invalid();
@@ -273,7 +264,7 @@ public:
         }
 
         if (_primStorage.isValid() && _cardMgr) {
-            if (auto res = _cardMgr->deallocateBuffer(_primStorage); !res) {
+            if (auto res = _cardMgr->bufferManager()->deallocateBuffer(_primStorage); !res) {
                 yerror("HDraw::dispose: deallocateBuffer (prims) failed: {}", error_msg(res));
             }
             _primStorage = StorageHandle::invalid();
@@ -301,7 +292,7 @@ public:
 
         // Deallocate derived storage (grid + glyphs)
         if (_derivedStorage.isValid()) {
-            _cardMgr->deallocateBuffer(_derivedStorage);
+            _cardMgr->bufferManager()->deallocateBuffer(_derivedStorage);
             _derivedStorage = StorageHandle::invalid();
             _grid = nullptr;
             _gridSize = 0;
@@ -309,7 +300,7 @@ public:
 
         // Deallocate primitive storage
         if (_primStorage.isValid()) {
-            _cardMgr->deallocateBuffer(_primStorage);
+            _cardMgr->bufferManager()->deallocateBuffer(_primStorage);
             _primStorage = StorageHandle::invalid();
             _primitives = nullptr;
             _primCount = 0;
@@ -319,23 +310,104 @@ public:
         yinfo("HDraw::suspend: deallocated storage, saved {} primitives to staging", _primStaging.size());
     }
 
-    Result<void> update(float time) override {
-        (void)time;
+    void declareBufferNeeds() override {
+        // Save existing GPU data to staging and deallocate
+        if (_primStorage.isValid() && _primCount > 0) {
+            _primStaging.resize(_primCount);
+            std::memcpy(_primStaging.data(), _primitives, _primCount * sizeof(SDFPrimitive));
+        }
+        uint32_t lastDerivedSize = _derivedStorage.size;
+        if (_derivedStorage.isValid()) {
+            _cardMgr->bufferManager()->deallocateBuffer(_derivedStorage);
+            _derivedStorage = StorageHandle::invalid();
+            _grid = nullptr;
+            _gridSize = 0;
+        }
+        if (_primStorage.isValid()) {
+            _cardMgr->bufferManager()->deallocateBuffer(_primStorage);
+            _primStorage = StorageHandle::invalid();
+            _primitives = nullptr;
+            _primCount = 0;
+            _primCapacity = 0;
+        }
+        // Reserve prim + derived (use last known derived size)
+        if (!_primStaging.empty()) {
+            uint32_t primSize = static_cast<uint32_t>(_primStaging.size()) * sizeof(SDFPrimitive);
+            _cardMgr->bufferManager()->reserve(primSize);
+            // Use last derived size as estimate; actual computed in allocateBuffers
+            if (lastDerivedSize > 0) {
+                _cardMgr->bufferManager()->reserve(lastDerivedSize);
+            }
+        }
+    }
 
-        // Reconstruct storage after suspend
-        if (!_primStorage.isValid() && !_primStaging.empty()) {
+    uint32_t computeDerivedSize() const {
+        // Compute scene bounds from primitives
+        float sMinX = 1e30f, sMinY = 1e30f, sMaxX = -1e30f, sMaxY = -1e30f;
+        for (uint32_t i = 0; i < _primCount; i++) {
+            sMinX = std::min(sMinX, _primitives[i].aabbMinX);
+            sMinY = std::min(sMinY, _primitives[i].aabbMinY);
+            sMaxX = std::max(sMaxX, _primitives[i].aabbMaxX);
+            sMaxY = std::max(sMaxY, _primitives[i].aabbMaxY);
+        }
+        float sceneWidth = sMaxX - sMinX;
+        float sceneHeight = sMaxY - sMinY;
+        float sceneArea = sceneWidth * sceneHeight;
+        uint32_t gridW = 0, gridH = 0;
+        if (_primCount > 0 && sceneArea > 0) {
+            float avgPrimArea = 0.0f;
+            for (uint32_t i = 0; i < _primCount; i++) {
+                float w = _primitives[i].aabbMaxX - _primitives[i].aabbMinX;
+                float h = _primitives[i].aabbMaxY - _primitives[i].aabbMinY;
+                avgPrimArea += w * h;
+            }
+            avgPrimArea /= _primCount;
+            float cs = std::sqrt(avgPrimArea) * 1.5f;
+            float minCS = std::sqrt(sceneArea / 65536.0f);
+            float maxCS = std::sqrt(sceneArea / 16.0f);
+            cs = std::clamp(cs, minCS, maxCS);
+            gridW = std::max(1u, static_cast<uint32_t>(std::ceil(sceneWidth / cs)));
+            gridH = std::max(1u, static_cast<uint32_t>(std::ceil(sceneHeight / cs)));
+            const uint32_t MAX_GRID_DIM = 512;
+            gridW = std::min(gridW, MAX_GRID_DIM);
+            gridH = std::min(gridH, MAX_GRID_DIM);
+        }
+        uint32_t cellStride = 1 + _maxPrimsPerCell;
+        uint32_t gridBytes = gridW * gridH * cellStride * sizeof(uint32_t);
+        uint32_t glyphBytes = static_cast<uint32_t>(_glyphs.size() * sizeof(HDrawGlyph));
+        return gridBytes + glyphBytes;
+    }
+
+    Result<void> allocateBuffers() override {
+        if (!_primStaging.empty()) {
             uint32_t count = static_cast<uint32_t>(_primStaging.size());
             if (auto res = ensurePrimCapacity(count); !res) {
-                return Err<void>("HDraw::update: failed to re-allocate prim storage");
+                return Err<void>("HDraw::allocateBuffers: failed to allocate prim storage");
             }
             _primCount = count;
             std::memcpy(_primitives, _primStaging.data(), count * sizeof(SDFPrimitive));
             _primStaging.clear();
             _primStaging.shrink_to_fit();
-            _cardMgr->markBufferDirty(_primStorage);
+            _cardMgr->bufferManager()->markBufferDirty(_primStorage);
+
+            // Allocate derived storage (grid + glyphs)
+            uint32_t derivedSize = computeDerivedSize();
+            if (derivedSize > 0) {
+                auto storageResult = _cardMgr->bufferManager()->allocateBuffer(derivedSize);
+                if (!storageResult) {
+                    return Err<void>("HDraw::allocateBuffers: failed to allocate derived storage");
+                }
+                _derivedStorage = *storageResult;
+            }
+
             _dirty = true;
-            yinfo("HDraw::update: reconstructed {} primitives from staging", count);
+            yinfo("HDraw::allocateBuffers: reconstructed {} primitives, derived {} bytes", count, derivedSize);
         }
+        return Ok();
+    }
+
+    Result<void> render(float time) override {
+        (void)time;
 
         if (_dirty) {
             if (auto res = rebuildAndUpload(); !res) {
@@ -359,6 +431,15 @@ public:
     //=========================================================================
 
     uint32_t addPrimitive(const SDFPrimitive& prim) override {
+        if (_initParsing) {
+            SDFPrimitive p = prim;
+            if (p.aabbMinX == 0 && p.aabbMaxX == 0) {
+                computeAABB_hdraw(p);
+            }
+            uint32_t idx = static_cast<uint32_t>(_primStaging.size());
+            _primStaging.push_back(p);
+            return idx;
+        }
         if (auto res = ensurePrimCapacity(_primCount + 1); !res) {
             yerror("HDraw::addPrimitive: failed to grow storage");
             return 0;
@@ -368,7 +449,7 @@ public:
         if (_primitives[idx].aabbMinX == 0 && _primitives[idx].aabbMaxX == 0) {
             computeAABB_hdraw(_primitives[idx]);
         }
-        _cardMgr->markBufferDirty(_primStorage);
+        _cardMgr->bufferManager()->markBufferDirty(_primStorage);
         _dirty = true;
         return idx;
     }
@@ -572,7 +653,7 @@ private:
         uint32_t newCap = std::max(required, _primCapacity == 0 ? 64u : _primCapacity * 2);
         uint32_t newSize = newCap * sizeof(SDFPrimitive);
 
-        auto newStorage = _cardMgr->allocateBuffer(newSize);
+        auto newStorage = _cardMgr->bufferManager()->allocateBuffer(newSize);
         if (!newStorage) {
             return Err<void>("HDraw: failed to allocate prim storage");
         }
@@ -581,7 +662,7 @@ private:
             std::memcpy(newStorage->data, _primStorage.data, _primCount * sizeof(SDFPrimitive));
         }
         if (_primStorage.isValid()) {
-            _cardMgr->deallocateBuffer(_primStorage);
+            _cardMgr->bufferManager()->deallocateBuffer(_primStorage);
         }
 
         _primStorage = *newStorage;
@@ -698,13 +779,21 @@ private:
 
         const uint8_t* primData = data + HEADER_SIZE;
 
+        if (_initParsing) {
+            _primStaging.resize(primCount);
+            std::memcpy(_primStaging.data(), primData, primCount * PRIM_SIZE);
+            _dirty = true;
+            yinfo("HDraw::parseBinary: loaded {} primitives into staging", primCount);
+            return Ok();
+        }
+
         // Allocate buffer and copy directly from payload
         if (auto res = ensurePrimCapacity(primCount); !res) {
             return Err<void>("HDraw::parseBinary: failed to allocate prim storage");
         }
         _primCount = primCount;
         std::memcpy(_primitives, primData, primCount * PRIM_SIZE);
-        _cardMgr->markBufferDirty(_primStorage);
+        _cardMgr->bufferManager()->markBufferDirty(_primStorage);
 
         _dirty = true;
         yinfo("HDraw::parseBinary: loaded {} primitives", _primCount);
@@ -1444,6 +1533,8 @@ private:
             return;
         }
 
+        auto t0 = std::chrono::steady_clock::now();
+
         uint32_t totalCells = _gridWidth * _gridHeight;
         uint32_t cellStride = 1 + _maxPrimsPerCell;
 
@@ -1451,6 +1542,8 @@ private:
         std::memset(_grid, 0, _gridSize * sizeof(uint32_t));
 
         // Assign each primitive to cells it overlaps
+        uint32_t cellsWithPrims = 0;
+        uint32_t maxPrimsInCell = 0;
         for (uint32_t primIdx = 0; primIdx < _primCount; primIdx++) {
             const auto& prim = _primitives[primIdx];
 
@@ -1476,11 +1569,24 @@ private:
             }
         }
 
-        yinfo("HDraw::buildGrid: {} primitives -> {}x{} grid ({} cells), cellSize={}",
-              _primCount, _gridWidth, _gridHeight, totalCells, _cellSize);
+        // Count stats for debugging
+        for (uint32_t c = 0; c < totalCells; c++) {
+            uint32_t count = _grid[c * cellStride];
+            if (count > 0) cellsWithPrims++;
+            if (count > maxPrimsInCell) maxPrimsInCell = count;
+        }
+
+        auto t1 = std::chrono::steady_clock::now();
+        auto us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+
+        ydebug("HDraw::buildGrid (CPU): {} prims -> {}x{} grid, "
+               "cellsWithPrims={}, maxPrimsInCell={}, took {} us",
+               _primCount, _gridWidth, _gridHeight,
+               cellsWithPrims, maxPrimsInCell, us);
     }
 
     Result<void> rebuildAndUpload() {
+        auto _rebuildT0 = std::chrono::steady_clock::now();
         // Compute scene bounds from primitives already in buffer
         computeSceneBounds();
 
@@ -1519,23 +1625,7 @@ private:
         uint32_t glyphBytes = static_cast<uint32_t>(_glyphs.size() * sizeof(HDrawGlyph));
         uint32_t derivedTotalSize = gridBytes + glyphBytes;
 
-        // Deallocate old derived storage
-        if (_derivedStorage.isValid()) {
-            if (auto res = _cardMgr->deallocateBuffer(_derivedStorage); !res) {
-                return Err<void>("HDraw::rebuildAndUpload: deallocateBuffer failed");
-            }
-            _derivedStorage = StorageHandle::invalid();
-            _grid = nullptr;
-            _gridSize = 0;
-        }
-
-        if (derivedTotalSize > 0) {
-            auto storageResult = _cardMgr->allocateBuffer(derivedTotalSize);
-            if (!storageResult) {
-                return Err<void>("HDraw::rebuildAndUpload: failed to allocate derived storage");
-            }
-            _derivedStorage = *storageResult;
-
+        if (_derivedStorage.isValid() && derivedTotalSize > 0) {
             uint8_t* base = _derivedStorage.data;
             uint32_t offset = 0;
 
@@ -1559,20 +1649,22 @@ private:
                 std::memcpy(base + offset, _glyphs.data(), glyphBytes);
             }
 
-            _cardMgr->markBufferDirty(_derivedStorage);
+            _cardMgr->bufferManager()->markBufferDirty(_derivedStorage);
         }
 
         // Primitives are already in _primStorage
         _primitiveOffset = _primStorage.isValid() ? _primStorage.offset / sizeof(float) : 0;
 
         if (_primStorage.isValid()) {
-            _cardMgr->markBufferDirty(_primStorage);
+            _cardMgr->bufferManager()->markBufferDirty(_primStorage);
         }
 
         _metadataDirty = true;
 
-        yinfo("HDraw::rebuildAndUpload: {} prims, {}x{} grid, {} glyphs, derived {} bytes",
-              _primCount, _gridWidth, _gridHeight, _glyphs.size(), derivedTotalSize);
+        auto _rebuildT1 = std::chrono::steady_clock::now();
+        auto _rebuildUs = std::chrono::duration_cast<std::chrono::microseconds>(_rebuildT1 - _rebuildT0).count();
+        yinfo("HDraw::rebuildAndUpload: {} prims, {}x{} grid, {} glyphs, derived {} bytes, took {} us",
+              _primCount, _gridWidth, _gridHeight, _glyphs.size(), derivedTotalSize, _rebuildUs);
 
         return Ok();
     }
@@ -1672,6 +1764,7 @@ private:
 
     bool _dirty = true;
     bool _metadataDirty = true;
+    bool _initParsing = false;
 
     std::string _argsStr;
     std::string _payloadStr;

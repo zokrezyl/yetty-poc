@@ -12,8 +12,6 @@ namespace yetty {
 constexpr uint32_t IMAGE_ATLAS_SIZE = 2048;       // 2048x2048 = 16MB RGBA8
 
 // Opaque handle for texture atlas regions
-// Cards get this from allocateTextureHandle() and link their pixel buffer to it.
-// The card never sees atlas positions — the manager assigns them during packAtlas().
 struct TextureHandle {
     uint32_t id;
 
@@ -21,7 +19,7 @@ struct TextureHandle {
     static TextureHandle invalid() { return {0}; }
 };
 
-// Atlas position (returned by getAtlasPosition after packAtlas)
+// Atlas position (returned by getAtlasPosition after createAtlas)
 struct AtlasPosition {
     uint32_t x;
     uint32_t y;
@@ -36,8 +34,11 @@ struct CardTextureConfig {
 /**
  * CardTextureManager manages the texture atlas for cards.
  *
- * Texture cards use an opaque TextureHandle. They write pixels to their own CPU buffer,
- * link it to the handle, and the manager packs everything into the atlas on packAtlas().
+ * Protocol:
+ *   1. Cards call allocate(w, h) to declare their texture size → TextureHandle
+ *   2. gpu-screen calls createAtlas() when texture cards enter/exit (Loop 3)
+ *   3. Cards call write(handle, pixels) to push pixel data into the atlas
+ *   4. CardManager calls uploadAtlas(queue) during flush to upload to GPU
  */
 class CardTextureManager {
 public:
@@ -49,42 +50,31 @@ public:
     virtual ~CardTextureManager() = default;
 
     // =========================================================================
-    // Texture atlas operations
+    // Card API — called by individual cards
     // =========================================================================
 
-    // Allocate an opaque texture handle (no atlas position assigned yet)
-    virtual Result<TextureHandle> allocateTextureHandle() = 0;
+    // Allocate a texture handle with declared size (RGBA8, width * height * 4 bytes)
+    virtual Result<TextureHandle> allocate(uint32_t width, uint32_t height) = 0;
 
-    // Link a card's CPU pixel buffer to its handle (call after rendering pixels)
-    virtual Result<void> linkTextureData(TextureHandle handle,
-                                          const uint8_t* pixels,
-                                          uint32_t width, uint32_t height) = 0;
+    // Deallocate a texture handle
+    virtual Result<void> deallocate(TextureHandle handle) = 0;
 
-    // Deallocate a texture handle (frees atlas tracking, not the card's pixel buffer)
-    virtual Result<void> deallocateTextureHandle(TextureHandle handle) = 0;
+    // Write pixels into the atlas region for this handle (RGBA8, width * height * 4 bytes)
+    virtual Result<void> write(TextureHandle handle, const uint8_t* pixels) = 0;
 
-    // Invalidate all texture handles (atlas will be fully repacked)
-    virtual void invalidateAllTextureHandles() = 0;
-
-    // Pack atlas: compute optimal layout for all active handles.
-    // Must be called after all cards have linked their pixel data.
-    virtual Result<void> packAtlas(WGPUQueue queue) = 0;
-
-    // Write one handle's pixels to its assigned atlas region.
-    // Must be called after packAtlas().
-    virtual Result<void> writeToAtlas(TextureHandle handle, WGPUQueue queue) = 0;
-
-    // Write all packed handles' pixels to the atlas.
-    // Convenience method that iterates all active handles.
-    virtual Result<void> writeAllToAtlas(WGPUQueue queue) = 0;
-
-    // Get the atlas position assigned by packAtlas (for writing to card metadata)
+    // Get the atlas position assigned by createAtlas (for card metadata)
     virtual AtlasPosition getAtlasPosition(TextureHandle handle) const = 0;
 
     // =========================================================================
-    // Atlas initialization
+    // gpu-screen API — called by gpu-screen / CardManager
     // =========================================================================
-    virtual Result<void> initAtlas() = 0;
+
+    // Pack atlas layout from all allocated handles. Called by gpu-screen in Loop 3
+    // when a texture card enters or exits.
+    virtual Result<void> createAtlas() = 0;
+
+    // Upload dirty atlas regions to GPU. Called by CardManager::flush().
+    virtual Result<void> uploadAtlas(WGPUQueue queue) = 0;
 
     // =========================================================================
     // Accessors
@@ -92,7 +82,6 @@ public:
     virtual WGPUTexture atlasTexture() const = 0;
     virtual WGPUTextureView atlasTextureView() const = 0;
     virtual WGPUSampler atlasSampler() const = 0;
-    virtual WGPUBuffer textureBuffer() const = 0;  // binding 5: raw pixel data
     virtual bool atlasInitialized() const = 0;
 
     // Current atlas size

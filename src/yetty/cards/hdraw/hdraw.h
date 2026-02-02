@@ -1,7 +1,6 @@
 #pragma once
 
 #include <yetty/card.h>
-#include <yetty/card-buffer-manager.h>
 #include <yetty/base/factory.h>
 #include <yetty/gpu-context.h>
 #include <yetty/yetty-context.h>
@@ -75,7 +74,7 @@ static_assert(sizeof(HDrawGlyph) == 32, "HDrawGlyph must be 32 bytes");
 // HDraw class
 //=============================================================================
 
-class HDraw : public BufferCard,
+class HDraw : public Card,
               public base::ObjectFactory<HDraw> {
 public:
     using Ptr = std::shared_ptr<HDraw>;
@@ -117,8 +116,9 @@ public:
     // Card interface
     //=========================================================================
     Result<void> dispose() override = 0;
-    Result<void> update(float time) override = 0;
+    Result<void> render(float time) override = 0;
     const char* typeName() const override { return "hdraw"; }
+    bool needsBuffer() const override { return true; }
 
     // Override for 64-byte metadata slots (shader uses slotIndex * 16)
     uint32_t metadataSlotIndex() const override { return _metaHandle.offset / 64; }
@@ -179,10 +179,10 @@ public:
     virtual float cellSize() const = 0;
 
 protected:
-    HDraw(CardBufferManager::Ptr mgr, const GPUContext& gpu,
+    HDraw(CardManager::Ptr mgr, const GPUContext& gpu,
           int32_t x, int32_t y,
           uint32_t widthCells, uint32_t heightCells)
-        : BufferCard(std::move(mgr), gpu, x, y, widthCells, heightCells)
+        : Card(std::move(mgr), gpu, x, y, widthCells, heightCells)
     {}
 };
 

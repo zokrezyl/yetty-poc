@@ -38,7 +38,7 @@ def init(width_cells, height_cells):
     px_w = max(width_cells * PX_PER_CELL_X, 64)
     px_h = max(height_cells * PX_PER_CELL_Y, 64)
 
-    _tex = yetty_card.allocate_texture_handle(px_w, px_h)
+    _tex = yetty_card.allocate_texture(px_w, px_h)
     _fig = fpl.Figure(size=(px_w, px_h))
 
     x = np.linspace(0, 4 * np.pi, 500, dtype=np.float32)
@@ -46,6 +46,12 @@ def init(width_cells, height_cells):
     _line = _fig[0, 0].add_line(np.column_stack([x, y]), thickness=8, cmap='hot')
 
     _fig.show()
+    return Ok(None)
+
+
+def allocate_textures():
+    if _tex is not None and _tex.valid:
+        yetty_card.write_texture(_tex)
     return Ok(None)
 
 
@@ -71,7 +77,7 @@ def render(time):
     n = min(len(pixels), len(buf))
     buf[:n] = pixels[:n]
 
-    yetty_card.link_texture_data(_tex)
+    yetty_card.write_texture(_tex)
     return Ok(None)
 
 
@@ -118,7 +124,7 @@ def on_mouse_up(x, y, button):
 def shutdown():
     global _tex, _fig, _line
     if _tex and _tex.valid:
-        yetty_card.deallocate_texture_handle(_tex)
+        yetty_card.deallocate_texture(_tex)
     _tex = None
     _fig = None
     _line = None

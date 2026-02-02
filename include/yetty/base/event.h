@@ -41,7 +41,9 @@ struct Event {
         SplitPane,
         // Clipboard
         Copy,
-        Paste
+        Paste,
+        // Command mode (tmux-style prefix key sequences)
+        CommandKey
     };
 
     struct KeyEvent {
@@ -118,6 +120,12 @@ struct Event {
         uint8_t orientation; // 0 = Horizontal, 1 = Vertical
     };
 
+    struct CommandKeyEvent {
+        int key;             // GLFW key code (for special keys) or 0
+        uint32_t codepoint;  // Unicode codepoint (for character keys) or 0
+        int mods;            // Modifier keys held during command
+    };
+
     Type type = Type::None;
 
     union {
@@ -134,6 +142,7 @@ struct Event {
         CardScrollEvent cardScroll;
         CloseEvent closeEv;
         SplitPaneEvent splitPane;
+        CommandKeyEvent cmdKey;
     };
 
     // Optional heap-allocated payload, automatically freed when event goes out of scope.
@@ -292,6 +301,14 @@ struct Event {
         e.ctxMenu.col = col;
         std::strncpy(e.ctxMenu.action, action.c_str(), sizeof(e.ctxMenu.action) - 1);
         e.ctxMenu.action[sizeof(e.ctxMenu.action) - 1] = '\0';
+        return e;
+    }
+
+    // Command key event (dispatched after prefix key, e.g., Ctrl+b)
+    static Event commandKeyEvent(int key, uint32_t codepoint, int mods) {
+        Event e;
+        e.type = Type::CommandKey;
+        e.cmdKey = {key, codepoint, mods};
         return e;
     }
 };

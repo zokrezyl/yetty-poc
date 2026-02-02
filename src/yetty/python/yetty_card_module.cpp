@@ -1,3 +1,4 @@
+#include <yetty/card-manager.h>
 #include <yetty/card-buffer-manager.h>
 #include <yetty/card-texture-manager.h>
 #include <yetty/gpu-context.h>
@@ -12,12 +13,12 @@ namespace py = pybind11;
 namespace yetty::python {
 
 // Thread-local pointers, set by the card before each Python callback
-static thread_local CardBufferManager* s_cardMgr = nullptr;
+static thread_local CardManager* s_cardMgr = nullptr;
 static thread_local CardTextureManager* s_textureMgr = nullptr;
 static thread_local const GPUContext* s_gpuCtx = nullptr;
 
-void setCardBufferManager(CardBufferManager* mgr) { s_cardMgr = mgr; }
-CardBufferManager* getCardBufferManager() { return s_cardMgr; }
+void setCardManager(CardManager* mgr) { s_cardMgr = mgr; }
+CardManager* getCardManager() { return s_cardMgr; }
 
 void setCardTextureManager(CardTextureManager* mgr) { s_textureMgr = mgr; }
 CardTextureManager* getCardTextureManager() { return s_textureMgr; }
@@ -78,7 +79,7 @@ PYBIND11_EMBEDDED_MODULE(yetty_card, m) {
     }, "Get raw WGPUQueue handle as integer (for wgpu-py FFI)");
 
     // --- PyTextureHandle with buffer protocol ---
-    // Python scripts write pixels into the local buffer, then call link_texture_data()
+    // Python scripts write pixels into the local buffer, then call write_texture()
     py::class_<PyTextureHandle>(m, "TextureHandle", py::buffer_protocol())
         .def_property_readonly("valid", &PyTextureHandle::isValid)
         .def_property_readonly("id", &PyTextureHandle::getId)
@@ -118,11 +119,11 @@ PYBIND11_EMBEDDED_MODULE(yetty_card, m) {
         .def_property_readonly("size", &PyMetadataHandle::size);
 
     // --- Texture handle functions ---
-    m.def("allocate_texture_handle", [](uint32_t width, uint32_t height) -> PyTextureHandle {
+    m.def("allocate_texture", [](uint32_t width, uint32_t height) -> PyTextureHandle {
         auto* mgr = s_textureMgr;
         if (!mgr) throw std::runtime_error("No CardTextureManager set");
-        auto result = mgr->allocateTextureHandle();
-        if (!result) throw std::runtime_error("allocateTextureHandle failed");
+        auto result = mgr->allocate(width, height);
+        if (!result) throw std::runtime_error("allocate failed");
         PyTextureHandle pyh;
         pyh.handle = *result;
         pyh.width = width;
@@ -132,18 +133,18 @@ PYBIND11_EMBEDDED_MODULE(yetty_card, m) {
     }, py::arg("width"), py::arg("height"),
        "Allocate texture handle with local pixel buffer (RGBA8, width*height*4 bytes)");
 
-    m.def("link_texture_data", [](PyTextureHandle& h) {
+    m.def("write_texture", [](PyTextureHandle& h) {
         auto* mgr = s_textureMgr;
         if (!mgr) throw std::runtime_error("No CardTextureManager set");
         if (!h.isValid()) throw std::runtime_error("Invalid texture handle");
-        mgr->linkTextureData(h.handle, h.pixels.data(), h.width, h.height);
+        mgr->write(h.handle, h.pixels.data());
     }, py::arg("handle"),
-       "Link the local pixel buffer to the texture handle for atlas packing");
+       "Write the local pixel buffer to the atlas for this handle");
 
-    m.def("deallocate_texture_handle", [](PyTextureHandle& h) {
+    m.def("deallocate_texture", [](PyTextureHandle& h) {
         auto* mgr = s_textureMgr;
         if (!mgr) throw std::runtime_error("No CardTextureManager set");
-        mgr->deallocateTextureHandle(h.handle);
+        mgr->deallocate(h.handle);
         h.handle = TextureHandle::invalid();
         h.pixels.clear();
         h.width = 0;
@@ -153,37 +154,37 @@ PYBIND11_EMBEDDED_MODULE(yetty_card, m) {
     // --- Buffer functions (renamed from storage) ---
     m.def("allocate_buffer", [](uint32_t size) -> PyBufferHandle {
         auto* mgr = s_cardMgr;
-        if (!mgr) throw std::runtime_error("No CardBufferManager set");
-        auto result = mgr->allocateBuffer(size);
+        if (!mgr) throw std::runtime_error("No CardManager set");
+        auto result = mgr->bufferManager()->allocateBuffer(size);
         if (!result) throw std::runtime_error("allocateBuffer failed");
         return PyBufferHandle{*result};
     }, py::arg("size"), "Allocate buffer (float data)");
 
     m.def("mark_buffer_dirty", [](PyBufferHandle& h) {
         auto* mgr = s_cardMgr;
-        if (!mgr) throw std::runtime_error("No CardBufferManager set");
-        mgr->markBufferDirty(h.handle);
+        if (!mgr) throw std::runtime_error("No CardManager set");
+        mgr->bufferManager()->markBufferDirty(h.handle);
     }, py::arg("handle"), "Mark buffer as dirty for GPU upload");
 
     // Backward compat aliases
     m.def("allocate_storage", [](uint32_t size) -> PyBufferHandle {
         auto* mgr = s_cardMgr;
-        if (!mgr) throw std::runtime_error("No CardBufferManager set");
-        auto result = mgr->allocateBuffer(size);
+        if (!mgr) throw std::runtime_error("No CardManager set");
+        auto result = mgr->bufferManager()->allocateBuffer(size);
         if (!result) throw std::runtime_error("allocateBuffer failed");
         return PyBufferHandle{*result};
     }, py::arg("size"), "Allocate storage buffer (deprecated, use allocate_buffer)");
 
     m.def("mark_storage_dirty", [](PyBufferHandle& h) {
         auto* mgr = s_cardMgr;
-        if (!mgr) throw std::runtime_error("No CardBufferManager set");
-        mgr->markBufferDirty(h.handle);
+        if (!mgr) throw std::runtime_error("No CardManager set");
+        mgr->bufferManager()->markBufferDirty(h.handle);
     }, py::arg("handle"), "Mark storage as dirty (deprecated, use mark_buffer_dirty)");
 
     // --- Metadata functions ---
     m.def("allocate_metadata", [](uint32_t size) -> PyMetadataHandle {
         auto* mgr = s_cardMgr;
-        if (!mgr) throw std::runtime_error("No CardBufferManager set");
+        if (!mgr) throw std::runtime_error("No CardManager set");
         auto result = mgr->allocateMetadata(size);
         if (!result) throw std::runtime_error("allocateMetadata failed");
         return PyMetadataHandle{*result};
@@ -191,7 +192,7 @@ PYBIND11_EMBEDDED_MODULE(yetty_card, m) {
 
     m.def("write_metadata", [](PyMetadataHandle& h, py::bytes data) {
         auto* mgr = s_cardMgr;
-        if (!mgr) throw std::runtime_error("No CardBufferManager set");
+        if (!mgr) throw std::runtime_error("No CardManager set");
         std::string_view sv = data;
         auto result = mgr->writeMetadata(h.handle, sv.data(), static_cast<uint32_t>(sv.size()));
         if (!result) throw std::runtime_error("writeMetadata failed");
@@ -199,7 +200,7 @@ PYBIND11_EMBEDDED_MODULE(yetty_card, m) {
 
     m.def("write_metadata_at", [](PyMetadataHandle& h, uint32_t offset, py::bytes data) {
         auto* mgr = s_cardMgr;
-        if (!mgr) throw std::runtime_error("No CardBufferManager set");
+        if (!mgr) throw std::runtime_error("No CardManager set");
         std::string_view sv = data;
         auto result = mgr->writeMetadataAt(h.handle, offset, sv.data(), static_cast<uint32_t>(sv.size()));
         if (!result) throw std::runtime_error("writeMetadataAt failed");

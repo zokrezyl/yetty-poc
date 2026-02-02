@@ -115,6 +115,9 @@ private:
     std::string _executeCommand;
     std::string _msdfProviderName = "cpu";  // "cpu" or "gpu"
 
+    // Command mode state (tmux-style prefix key)
+    bool _commandMode = false;
+
     static YettyImpl* s_instance;
 };
 
@@ -495,10 +498,9 @@ Result<void> YettyImpl::initSharedResources() noexcept {
     //   binding 2: card storage (read-only storage)
     //   binding 3: atlas texture (2D float)
     //   binding 4: atlas sampler (filtering)
-    //   binding 5: texture data (read-only storage)
     // Each GPUScreen's CardBufferManager creates a bind group matching this layout.
     // We also create a fallback bind group with dummy resources for non-card rendering.
-    std::array<WGPUBindGroupLayoutEntry, 6> layoutEntries = {};
+    std::array<WGPUBindGroupLayoutEntry, 5> layoutEntries = {};
 
     layoutEntries[0].binding = 0;
     layoutEntries[0].visibility = WGPUShaderStage_Fragment;
@@ -521,10 +523,6 @@ Result<void> YettyImpl::initSharedResources() noexcept {
     layoutEntries[4].binding = 4;
     layoutEntries[4].visibility = WGPUShaderStage_Fragment;
     layoutEntries[4].sampler.type = WGPUSamplerBindingType_Filtering;
-
-    layoutEntries[5].binding = 5;
-    layoutEntries[5].visibility = WGPUShaderStage_Fragment;
-    layoutEntries[5].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
 
     WGPUBindGroupLayoutDescriptor layoutDesc = {};
     layoutDesc.label = WGPU_STR("Shared Bind Group Layout");
@@ -562,7 +560,7 @@ Result<void> YettyImpl::initSharedResources() noexcept {
     dummySamplerDesc.maxAnisotropy = 1;
     WGPUSampler dummySampler = wgpuDeviceCreateSampler(_device, &dummySamplerDesc);
 
-    std::array<WGPUBindGroupEntry, 6> bindEntries = {};
+    std::array<WGPUBindGroupEntry, 5> bindEntries = {};
     bindEntries[0].binding = 0;
     bindEntries[0].buffer = _sharedUniformBuffer;
     bindEntries[0].size = sizeof(SharedUniforms);
@@ -576,9 +574,6 @@ Result<void> YettyImpl::initSharedResources() noexcept {
     bindEntries[3].textureView = dummyView;
     bindEntries[4].binding = 4;
     bindEntries[4].sampler = dummySampler;
-    bindEntries[5].binding = 5;
-    bindEntries[5].buffer = dummyBuffer;
-    bindEntries[5].size = 4;
 
     WGPUBindGroupDescriptor bindDesc = {};
     bindDesc.label = WGPU_STR("Fallback Shared Bind Group");
@@ -845,6 +840,10 @@ void YettyImpl::initEventLoop() noexcept {
 
     // Register for Copy events to write to system clipboard
     loop->registerListener(base::Event::Type::Copy, sharedAs<base::EventListener>());
+
+    // Register for keyboard events with highest priority (0) to intercept prefix key (Ctrl+b)
+    loop->registerListener(base::Event::Type::KeyDown, sharedAs<base::EventListener>(), 0);
+    loop->registerListener(base::Event::Type::Char, sharedAs<base::EventListener>(), 0);
 }
 
 void YettyImpl::shutdownEventLoop() noexcept {
@@ -878,6 +877,38 @@ Result<bool> YettyImpl::onEvent(const base::Event& event) {
             yinfo("Clipboard: copied {} bytes", text->size());
         }
         return Ok(true);
+    }
+
+    // Command mode handling (tmux-style prefix key: Ctrl+b)
+    auto loop = *base::EventLoop::instance();
+
+    // Check for prefix key: Ctrl+b (key code 66, mod CONTROL=0x0002)
+    if (event.type == base::Event::Type::KeyDown) {
+        if (_commandMode) {
+            // In command mode: dispatch CommandKey event and exit command mode
+            ydebug("Command mode: key={} mods={}", event.key.key, event.key.mods);
+            loop->dispatch(base::Event::commandKeyEvent(event.key.key, 0, event.key.mods));
+            _commandMode = false;
+            return Ok(true);  // consume
+        }
+
+        // Check for Ctrl+b to enter command mode
+        if (event.key.key == 66 && (event.key.mods & 0x0002) && !(event.key.mods & ~0x0002)) {
+            ydebug("Entering command mode (Ctrl+b pressed)");
+            _commandMode = true;
+            return Ok(true);  // consume
+        }
+    }
+
+    if (event.type == base::Event::Type::Char) {
+        if (_commandMode) {
+            // In command mode: dispatch CommandKey event with codepoint
+            ydebug("Command mode: codepoint={} ('{}')", event.chr.codepoint,
+                   event.chr.codepoint < 32 ? '?' : static_cast<char>(event.chr.codepoint));
+            loop->dispatch(base::Event::commandKeyEvent(0, event.chr.codepoint, event.chr.mods));
+            _commandMode = false;
+            return Ok(true);  // consume
+        }
     }
 #endif
     return Ok(false);

@@ -297,6 +297,8 @@ private:
   CardManager::Ptr _cardManager;
   base::ObjectId _cardMouseTarget = 0;  // card that received last CardMouseDown
   uint32_t _gcFrameCounter = 0;
+  bool _bufferLayoutChanged = false;   // A buffer card entered or left
+  bool _textureLayoutChanged = false;  // A texture card entered or left
 
   // Text selection state
   bool _selecting = false;
@@ -2109,6 +2111,8 @@ void GPUScreenImpl::suspendOffscreenCards(int scrolledRow) {
     if (it != _cards.end()) {
       yinfo("GPUScreen::suspendOffscreenCards: suspending card '{}' slotIndex={}",
             it->second->typeName(), slotIndex);
+      if (it->second->needsBuffer())  _bufferLayoutChanged = true;
+      if (it->second->needsTexture()) _textureLayoutChanged = true;
       it->second->suspend();
       _inactiveCards[slotIndex] = std::move(it->second);
       _cards.erase(it);
@@ -2148,6 +2152,8 @@ void GPUScreenImpl::reactivateVisibleCards() {
     auto it = _inactiveCards.find(slotIndex);
     if (it != _inactiveCards.end()) {
       yinfo("GPUScreen::reactivateVisibleCards: reactivating card slotIndex={}", slotIndex);
+      if (it->second->needsBuffer())  _bufferLayoutChanged = true;
+      if (it->second->needsTexture()) _textureLayoutChanged = true;
       _cards[slotIndex] = std::move(it->second);
       _inactiveCards.erase(it);
     }
@@ -2551,6 +2557,8 @@ void GPUScreenImpl::registerCard(CardPtr card) {
   card->setCellSize(getCellWidth(), getCellHeight());
   uint32_t slotIndex = card->metadataSlotIndex();
   ydebug("GPUScreenImpl::registerCard: registered card at slotIndex {}", slotIndex);
+  if (card->needsBuffer())  _bufferLayoutChanged = true;
+  if (card->needsTexture()) _textureLayoutChanged = true;
   _cards[slotIndex] = std::move(card);
 }
 
@@ -2766,7 +2774,9 @@ void GPUScreenImpl::registerForFocus() {
                          sharedAs<base::EventListener>());
   loop->registerListener(base::Event::Type::Paste,
                          sharedAs<base::EventListener>());
-  yinfo("GPUScreen {} registered for SetFocus, Mouse, Scroll and Paste events", _id);
+  loop->registerListener(base::Event::Type::CommandKey,
+                         sharedAs<base::EventListener>());
+  yinfo("GPUScreen {} registered for SetFocus, Mouse, Scroll, Paste and CommandKey events", _id);
 
   // Auto-focus on startup so keyboard works immediately
   loop->dispatch(base::Event::focusEvent(_id));
@@ -3052,6 +3062,70 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
     return Ok(true);
   }
 
+  // Handle CommandKey events (tmux-style commands after Ctrl+b prefix)
+  if (event.type == base::Event::Type::CommandKey && _focused) {
+    uint32_t cp = event.cmdKey.codepoint;
+    int key = event.cmdKey.key;
+    ydebug("GPUScreen::onEvent: CommandKey codepoint={} key={}", cp, key);
+
+    // '[' - Enter copy/scrollback mode (scroll up by 1 to enter scrollback)
+    if (cp == '[') {
+      if (_scrollOffset == 0) {
+        scrollUp(1);
+        ydebug("Entered copy mode (scrollback)");
+      }
+      return Ok(true);
+    }
+
+    // In copy/scrollback mode only:
+    if (_scrollOffset > 0) {
+      // '/' - Search forward (will need input prompt later, for now just log)
+      if (cp == '/') {
+        // TODO: Trigger search input prompt
+        // For now, search for a test string
+        ydebug("Search forward requested (Ctrl+b /)");
+        return Ok(true);
+      }
+
+      // '?' - Search backward
+      if (cp == '?') {
+        ydebug("Search backward requested (Ctrl+b ?)");
+        return Ok(true);
+      }
+
+      // 'n' - Search next
+      if (cp == 'n') {
+        if (searchNext()) {
+          ydebug("searchNext: found match at row={} col={}", _searchMatchRow, _searchMatchCol);
+        } else {
+          ydebug("searchNext: no match found");
+        }
+        return Ok(true);
+      }
+
+      // 'N' - Search previous
+      if (cp == 'N') {
+        if (searchPrevious()) {
+          ydebug("searchPrevious: found match at row={} col={}", _searchMatchRow, _searchMatchCol);
+        } else {
+          ydebug("searchPrevious: no match found");
+        }
+        return Ok(true);
+      }
+
+      // 'q' or Escape - Exit copy mode
+      if (cp == 'q' || key == 256) {  // 256 = GLFW_KEY_ESCAPE
+        scrollToBottom();
+        clearSearch();
+        ydebug("Exited copy mode");
+        return Ok(true);
+      }
+    }
+
+    // Not handled by GPUScreen - let other handlers try
+    return Ok(false);
+  }
+
   // Handle keyboard events (only when focused)
   if (_focused) {
     // When scrolled back, Enter exits scrollback mode (like tmux copy mode)
@@ -3126,28 +3200,78 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
     gcInactiveCards();
   }
 
-  // Update all active cards before rendering (suspended cards are in _inactiveCards)
+  // Loop 1+2: Buffer cards — only when a buffer card entered or left
+  if (_bufferLayoutChanged && _cardManager) {
+    ydebug("GPUScreen::render: _bufferLayoutChanged=true, {} active cards", _cards.size());
+
+    // Loop 1: Buffer cards declare their buffer needs
+    for (auto& [slotIndex, card] : _cards) {
+      if (card->needsBuffer()) {
+        ydebug("GPUScreen::render: Loop1 declareBufferNeeds card='{}' slot={}", card->typeName(), slotIndex);
+        card->declareBufferNeeds();
+      }
+    }
+    // Pre-size buffer to fit all declared needs
+    if (auto res = _cardManager->bufferManager()->commitReservations(); !res) {
+      yerror("GPUScreen::render: commitReservations failed: {}", error_msg(res));
+      return Err<void>("GPUScreen::render: commitReservations failed", res);
+    }
+
+    // Loop 2: Buffer cards allocate their buffers
+    for (auto& [slotIndex, card] : _cards) {
+      if (card->needsBuffer()) {
+        ydebug("GPUScreen::render: Loop2 allocateBuffers card='{}' slot={}", card->typeName(), slotIndex);
+        if (auto res = card->allocateBuffers(); !res) {
+          yerror("GPUScreen::render: card '{}' allocateBuffers FAILED: {}", card->typeName(), error_msg(res));
+        }
+      }
+    }
+
+    _bufferLayoutChanged = false;
+  }
+
+  // Loop 3: Texture cards — only when a texture card entered or left
+  if (_textureLayoutChanged && _cardManager) {
+    ydebug("GPUScreen::render: _textureLayoutChanged=true, {} active cards", _cards.size());
+
+    for (auto& [slotIndex, card] : _cards) {
+      if (card->needsTexture()) {
+        ydebug("GPUScreen::render: Loop3 allocateTextures card='{}' slot={}", card->typeName(), slotIndex);
+        if (auto res = card->allocateTextures(); !res) {
+          yerror("GPUScreen::render: card '{}' allocateTextures FAILED: {}", card->typeName(), error_msg(res));
+        }
+      }
+    }
+
+    // Create/repack texture atlas after all texture cards have allocated
+    if (_cardManager->textureManager()) {
+      ydebug("GPUScreen::render: calling createAtlas");
+      if (auto res = _cardManager->textureManager()->createAtlas(); !res) {
+        yerror("GPUScreen::render: createAtlas FAILED: {}", error_msg(res));
+      }
+    }
+
+    _textureLayoutChanged = false;
+  }
+
+  auto _loopT1 = std::chrono::steady_clock::now();
+
+  // Loop 4: Render all active cards (write data, no allocations)
   for (auto& [slotIndex, card] : _cards) {
-    ydebug("GPUScreen::render: updating card '{}' slotIndex={} metaOffset={}",
+    ydebug("GPUScreen::render: Loop4 render card='{}' slot={} metaOffset={}",
            card->typeName(), slotIndex, card->metadataOffset());
-    if (auto res = card->update(0.0f); !res) {
-      yerror("GPUScreen::render: card '{}' update failed: {}", card->typeName(), error_msg(res));
-      return Err<void>("GPUScreen::render: card update failed", res);
+    if (auto res = card->render(0.0f); !res) {
+      yerror("GPUScreen::render: card '{}' render FAILED: {}", card->typeName(), error_msg(res));
+      return Err<void>("GPUScreen::render: card render failed", res);
     }
   }
 
   // Flush CardManager (packs atlas, updates bind group if needed, uploads buffers)
   if (_cardManager) {
+    ydebug("GPUScreen::render: calling flush");
     if (auto res = _cardManager->flush(_ctx.gpu.queue); !res) {
-      yerror("GPUScreen: CardManager flush failed: {}", error_msg(res));
+      yerror("GPUScreen: CardManager flush FAILED: {}", error_msg(res));
       return Err<void>("GPUScreen: CardManager flush failed", res);
-    }
-  }
-
-  // Post-flush: let cards do GPU-side work (compute shaders) now that buffers are uploaded
-  for (auto& [slotIndex, card] : _cards) {
-    if (auto res = card->postFlush(); !res) {
-      yerror("GPUScreen::render: card '{}' postFlush failed: {}", card->typeName(), error_msg(res));
     }
   }
 

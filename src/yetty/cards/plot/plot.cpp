@@ -23,7 +23,7 @@ public:
              int32_t x, int32_t y,
              uint32_t widthCells, uint32_t heightCells,
              const std::string& args, const std::string& payload)
-        : Plot(ctx.cardManager->bufferManager(), ctx.gpu, x, y, widthCells, heightCells)
+        : Plot(ctx.cardManager, ctx.gpu, x, y, widthCells, heightCells)
         , _argsStr(args)
         , _payloadStr(payload)
     {
@@ -90,7 +90,7 @@ public:
         }
 
         if (_storageHandle.isValid() && _cardMgr) {
-            _cardMgr->deallocateBuffer(_storageHandle);
+            _cardMgr->bufferManager()->deallocateBuffer(_storageHandle);
             _storageHandle = StorageHandle::invalid();
         }
 
@@ -104,29 +104,38 @@ public:
 
     void suspend() override {
         if (_storageHandle.isValid() && _cardMgr) {
-            _cardMgr->deallocateBuffer(_storageHandle);
+            _cardMgr->bufferManager()->deallocateBuffer(_storageHandle);
             _storageHandle = StorageHandle::invalid();
         }
         yinfo("Plot::suspend: deallocated storage, _data has {} floats", _data.size());
     }
 
-    Result<void> update(float time) override {
-        (void)time;
-
-        // Reconstruct storage after suspend
+    void declareBufferNeeds() override {
         if (!_storageHandle.isValid() && !_data.empty()) {
             uint32_t storageSize = static_cast<uint32_t>(_data.size() * sizeof(float));
-            auto storageResult = _cardMgr->allocateBuffer(storageSize);
+            _cardMgr->bufferManager()->reserve(storageSize);
+        }
+    }
+
+    Result<void> allocateBuffers() override {
+        if (!_storageHandle.isValid() && !_data.empty()) {
+            uint32_t storageSize = static_cast<uint32_t>(_data.size() * sizeof(float));
+            auto storageResult = _cardMgr->bufferManager()->allocateBuffer(storageSize);
             if (!storageResult) {
-                return Err<void>("Plot::update: failed to re-allocate storage");
+                return Err<void>("Plot::allocateBuffers: failed to allocate storage");
             }
             _storageHandle = *storageResult;
-            if (auto res = _cardMgr->writeBuffer(_storageHandle, _data.data(), storageSize); !res) {
-                return Err<void>("Plot::update: failed to re-upload storage");
+            if (auto res = _cardMgr->bufferManager()->writeBuffer(_storageHandle, _data.data(), storageSize); !res) {
+                return Err<void>("Plot::allocateBuffers: failed to upload storage");
             }
             _metadataDirty = true;
-            yinfo("Plot::update: reconstructed storage at offset {}", _storageHandle.offset);
+            yinfo("Plot::allocateBuffers: reconstructed storage at offset {}", _storageHandle.offset);
         }
+        return Ok();
+    }
+
+    Result<void> render(float time) override {
+        (void)time;
 
         if (_metadataDirty) {
             if (auto res = uploadMetadata(); !res) {
@@ -178,7 +187,7 @@ public:
 
         // Deallocate old storage if exists
         if (_storageHandle.isValid()) {
-            _cardMgr->deallocateBuffer(_storageHandle);
+            _cardMgr->bufferManager()->deallocateBuffer(_storageHandle);
             _storageHandle = StorageHandle::invalid();
         }
 
@@ -186,7 +195,7 @@ public:
         uint32_t storageSize = count * sizeof(float);
         yinfo("Plot::setData: allocating {} bytes for {} floats", storageSize, count);
 
-        auto storageResult = _cardMgr->allocateBuffer(storageSize);
+        auto storageResult = _cardMgr->bufferManager()->allocateBuffer(storageSize);
         if (!storageResult) {
             yerror("Plot::setData: failed to allocate storage");
             return Err<void>("Plot::setData: failed to allocate storage");
@@ -197,7 +206,7 @@ public:
               _storageHandle.offset, _storageHandle.offset / sizeof(float));
 
         // Write data to storage
-        if (auto res = _cardMgr->writeBuffer(_storageHandle, _data.data(), storageSize); !res) {
+        if (auto res = _cardMgr->bufferManager()->writeBuffer(_storageHandle, _data.data(), storageSize); !res) {
             yerror("Plot::setData: failed to write storage");
             return Err<void>("Plot::setData: failed to write storage");
         }

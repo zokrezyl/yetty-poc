@@ -53,7 +53,7 @@ public:
                                  uint32_t w, uint32_t h,
                                  const std::string& args,
                                  const std::string& payload) {
-            return card::YDraw::create(ctx.cardManager->bufferManager(), ctx.gpu, x, y, w, h, args, payload);
+            return card::YDraw::create(ctx.cardManager, ctx.gpu, x, y, w, h, args, payload);
         });
 
         registerCard("hdraw", [](const YettyContext& ctx,

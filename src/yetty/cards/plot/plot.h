@@ -1,7 +1,6 @@
 #pragma once
 
 #include <yetty/card.h>
-#include <yetty/card-buffer-manager.h>
 #include <yetty/base/factory.h>
 #include <yetty/gpu-context.h>
 #include <yetty/yetty-context.h>
@@ -47,7 +46,7 @@ namespace yetty::card {
 //   [13-15] reserved
 //=============================================================================
 
-class Plot : public BufferCard,
+class Plot : public Card,
              public base::ObjectFactory<Plot> {
 public:
     using Ptr = std::shared_ptr<Plot>;
@@ -92,8 +91,9 @@ public:
     // Card interface
     //=========================================================================
     Result<void> dispose() override = 0;
-    Result<void> update(float time) override = 0;
+    Result<void> render(float time) override = 0;
     const char* typeName() const override { return "plot"; }
+    bool needsBuffer() const override { return true; }
 
     // Override for 64-byte metadata slots (shader uses slotIndex * 16)
     uint32_t metadataSlotIndex() const override { return _metaHandle.offset / 64; }
@@ -136,10 +136,10 @@ public:
     virtual uint32_t dataCount() const = 0;
 
 protected:
-    Plot(CardBufferManager::Ptr mgr, const GPUContext& gpu,
+    Plot(CardManager::Ptr mgr, const GPUContext& gpu,
          int32_t x, int32_t y,
          uint32_t widthCells, uint32_t heightCells)
-        : BufferCard(std::move(mgr), gpu, x, y, widthCells, heightCells)
+        : Card(std::move(mgr), gpu, x, y, widthCells, heightCells)
     {}
 };
 

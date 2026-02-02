@@ -21,7 +21,7 @@ namespace py = pybind11;
 
 // Defined in yetty_card_module.cpp
 namespace yetty::python {
-void setCardBufferManager(CardBufferManager* mgr);
+void setCardManager(CardManager* mgr);
 void setCardTextureManager(CardTextureManager* mgr);
 void setGPUContext(const GPUContext* ctx);
 }
@@ -33,13 +33,13 @@ static std::unordered_set<std::string> s_setupDone;
 
 // Helper to set/clear all thread-local pointers around Python callbacks
 struct PythonCallContext {
-    PythonCallContext(CardBufferManager* bufMgr, CardTextureManager* texMgr, const GPUContext* gpu) {
-        python::setCardBufferManager(bufMgr);
+    PythonCallContext(CardManager* mgr, CardTextureManager* texMgr, const GPUContext* gpu) {
+        python::setCardManager(mgr);
         python::setCardTextureManager(texMgr);
         python::setGPUContext(gpu);
     }
     ~PythonCallContext() {
-        python::setCardBufferManager(nullptr);
+        python::setCardManager(nullptr);
         python::setCardTextureManager(nullptr);
         python::setGPUContext(nullptr);
     }
@@ -78,7 +78,7 @@ public:
                    int32_t x, int32_t y,
                    uint32_t widthCells, uint32_t heightCells,
                    const std::string& args, const std::string& payload)
-        : PythonCard(ctx.cardManager->bufferManager(), ctx.cardManager->textureManager(), ctx.gpu, x, y, widthCells, heightCells)
+        : PythonCard(ctx.cardManager, ctx.gpu, x, y, widthCells, heightCells)
         , _ctx(ctx)
         , _argsStr(args)
         , _payloadStr(payload)
@@ -94,6 +94,26 @@ public:
 
     const char* typeName() const override { return "python"; }
     uint32_t metadataSlotIndex() const override { return _metaHandle.offset / 64; }
+    bool needsTexture() const override { return true; }
+
+    Result<void> allocateTextures() override {
+        ydebug("PythonCard::allocateTextures: engineInit={} globals={} texHandle={}",
+               _engineInitialized, (bool)_globals, _textureHandle.isValid());
+        if (_engineInitialized && _globals) {
+            python::GILGuard gil;
+            PythonCallContext pcc(_cardMgr.get(), _cardMgr->textureManager().get(), &_ctx.gpu);
+
+            if (auto res = callPython("allocate_textures"); !res) {
+                yerror("PythonCard::allocateTextures: callPython failed: {}", error_msg(res));
+                return Err<void>("PythonCard::allocateTextures: failed", res);
+            }
+            updateTextureHandleFromScript();
+            ydebug("PythonCard::allocateTextures: after call, texHandle={} id={}",
+                   _textureHandle.isValid(), _textureHandle.isValid() ? _textureHandle.id : 0);
+        }
+        _metadataDirty = true;
+        return Ok();
+    }
 
     void setCellSize(uint32_t cellWidth, uint32_t cellHeight) override {
         if (_cellWidth != cellWidth || _cellHeight != cellHeight) {
@@ -217,7 +237,7 @@ public:
         // Create isolated Python namespace and execute the script
         {
             python::GILGuard gil;
-            PythonCallContext pcc(_cardMgr.get(), _textureMgr.get(), &_ctx.gpu);
+            PythonCallContext pcc(_cardMgr.get(), _cardMgr->textureManager().get(), &_ctx.gpu);
 
             // Create per-card isolated globals dict
             _globals = py::dict();
@@ -250,10 +270,8 @@ public:
             }
         }
 
-        // Upload initial metadata
-        if (auto res = uploadMetadata(); !res) {
-            return Err<void>("PythonCard::init: metadata upload failed", res);
-        }
+        // Metadata will be uploaded in update() after createAtlas() assigns atlas positions
+        _metadataDirty = true;
 
         // Register for mouse/scroll events
         if (auto res = registerForEvents(); !res) {
@@ -272,7 +290,7 @@ public:
         // Call Python shutdown()
         if (_engineInitialized && _globals) {
             python::GILGuard gil;
-            PythonCallContext pcc(_cardMgr.get(), _textureMgr.get(), &_ctx.gpu);
+            PythonCallContext pcc(_cardMgr.get(), _cardMgr->textureManager().get(), &_ctx.gpu);
 
             if (auto res = callPython("shutdown"); !res) {
                 ywarn("PythonCard::dispose: shutdown() failed: {}", error_msg(res));
@@ -282,8 +300,8 @@ public:
         }
 
         // Deallocate buffers
-        if (_textureHandle.isValid() && _textureMgr) {
-            _textureMgr->deallocateTextureHandle(_textureHandle);
+        if (_textureHandle.isValid() && _cardMgr) {
+            _cardMgr->textureManager()->deallocate(_textureHandle);
             _textureHandle = TextureHandle::invalid();
         }
 
@@ -305,7 +323,7 @@ public:
         // Call Python suspend()
         if (_engineInitialized && _globals) {
             python::GILGuard gil;
-            PythonCallContext pcc(_cardMgr.get(), _textureMgr.get(), &_ctx.gpu);
+            PythonCallContext pcc(_cardMgr.get(), _cardMgr->textureManager().get(), &_ctx.gpu);
 
             if (auto res = callPython("suspend"); !res) {
                 ywarn("PythonCard::suspend: suspend() failed: {}", error_msg(res));
@@ -313,15 +331,15 @@ public:
         }
 
         // Release texture handle
-        if (_textureHandle.isValid() && _textureMgr) {
-            _textureMgr->deallocateTextureHandle(_textureHandle);
+        if (_textureHandle.isValid() && _cardMgr) {
+            _cardMgr->textureManager()->deallocate(_textureHandle);
             _textureHandle = TextureHandle::invalid();
         }
         _needsRerender = true;
         yinfo("PythonCard::suspend: deallocated texture handle");
     }
 
-    Result<void> update(float time) override {
+    Result<void> render(float time) override {
         ydebug("PythonCard::update: time={:.3f} engineInit={} globals={} needsRerender={}",
                time, _engineInitialized, (bool)_globals, _needsRerender);
 
@@ -333,7 +351,7 @@ public:
         // Call Python render(time)
         if (_engineInitialized && _globals) {
             python::GILGuard gil;
-            PythonCallContext pcc(_cardMgr.get(), _textureMgr.get(), &_ctx.gpu);
+            PythonCallContext pcc(_cardMgr.get(), _cardMgr->textureManager().get(), &_ctx.gpu);
 
             ydebug("PythonCard::update: calling render()...");
             if (auto res = callPython("render", py::make_tuple(time)); !res) {
@@ -368,7 +386,7 @@ private:
         }
         try {
             python::GILGuard gil;
-            PythonCallContext pcc(_cardMgr.get(), _textureMgr.get(), &_ctx.gpu);
+            PythonCallContext pcc(_cardMgr.get(), _cardMgr->textureManager().get(), &_ctx.gpu);
             if (!_globals.contains(name)) return;
             _globals[name](std::forward<Args>(args)...);
         } catch (const py::error_already_set& e) {
@@ -517,7 +535,7 @@ private:
         meta.textureHeight = renderHeight;
 
         if (_textureHandle.isValid()) {
-            auto pos = _textureMgr->getAtlasPosition(_textureHandle);
+            auto pos = _cardMgr->textureManager()->getAtlasPosition(_textureHandle);
             meta.atlasX = pos.x;
             meta.atlasY = pos.y;
         } else {

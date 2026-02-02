@@ -2,6 +2,7 @@
 #include <ytrace/ytrace.hpp>
 #include <sstream>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 
@@ -248,7 +249,7 @@ static void computeAABB(SDFPrimitive& prim) {
 
 class YDrawImpl : public YDraw {
 public:
-    YDrawImpl(CardBufferManager::Ptr mgr, const GPUContext& gpu,
+    YDrawImpl(CardManager::Ptr mgr, const GPUContext& gpu,
               int32_t x, int32_t y,
               uint32_t widthCells, uint32_t heightCells,
               const std::string& args, const std::string& payload)
@@ -280,34 +281,25 @@ public:
         // Parse args
         parseArgs(_argsStr);
 
-        // Parse payload if provided (binary format from Python)
+        // Parse payload into CPU staging (GPU buffers allocated via lifecycle loops)
+        _initParsing = true;
         if (!_payloadStr.empty()) {
             if (auto res = parsePayload(_payloadStr); !res) {
                 ywarn("YDraw::init: failed to parse payload: {}", error_msg(res));
             }
         }
+        _initParsing = false;
+        yinfo("YDraw::init: parsed {} primitives into staging", _primStaging.size());
 
-        // Build BVH and upload primitives to GPU storage
-        if (_primCount > 0) {
-            yinfo("YDraw::init: calling rebuildAndUpload for {} primitives", _primCount);
-            if (auto res = rebuildAndUpload(); !res) {
-                return Err<void>("YDraw::init: rebuildAndUpload failed", res);
-            }
-            _dirty = false;
-        }
-
-        // Upload metadata (now with correct scene bounds and offsets)
-        if (auto res = uploadMetadata(); !res) {
-            return Err<void>("YDraw::init: failed to upload metadata");
-        }
-        _metadataDirty = false;
+        _dirty = true;
+        _metadataDirty = true;
 
         return Ok();
     }
 
     Result<void> dispose() override {
         if (_derivedStorage.isValid() && _cardMgr) {
-            if (auto res = _cardMgr->deallocateBuffer(_derivedStorage); !res) {
+            if (auto res = _cardMgr->bufferManager()->deallocateBuffer(_derivedStorage); !res) {
                 yerror("YDraw::dispose: deallocateBuffer (derived) failed: {}", error_msg(res));
             }
             _derivedStorage = StorageHandle::invalid();
@@ -317,7 +309,7 @@ public:
         }
 
         if (_primStorage.isValid() && _cardMgr) {
-            if (auto res = _cardMgr->deallocateBuffer(_primStorage); !res) {
+            if (auto res = _cardMgr->bufferManager()->deallocateBuffer(_primStorage); !res) {
                 yerror("YDraw::dispose: deallocateBuffer (prims) failed: {}", error_msg(res));
             }
             _primStorage = StorageHandle::invalid();
@@ -348,7 +340,7 @@ public:
 
         // Deallocate derived storage (BVH, sorted indices — will be rebuilt)
         if (_derivedStorage.isValid()) {
-            _cardMgr->deallocateBuffer(_derivedStorage);
+            _cardMgr->bufferManager()->deallocateBuffer(_derivedStorage);
             _derivedStorage = StorageHandle::invalid();
             _bvhNodes = nullptr;
             _sortedIndices = nullptr;
@@ -357,7 +349,7 @@ public:
 
         // Deallocate prim storage
         if (_primStorage.isValid()) {
-            _cardMgr->deallocateBuffer(_primStorage);
+            _cardMgr->bufferManager()->deallocateBuffer(_primStorage);
             _primStorage = StorageHandle::invalid();
             _primitives = nullptr;
             _primCount = 0;
@@ -368,23 +360,82 @@ public:
               _primStaging.size());
     }
 
-    Result<void> update(float time) override {
-        (void)time;
+    uint32_t estimateDerivedSize() const {
+        // BVH: ~2*primCount nodes, sorted indices: primCount
+        uint32_t bvhSize = (2 * _primCount + 1) * sizeof(BVHNode);
+        uint32_t indicesSize = _primCount * sizeof(uint32_t);
+        uint32_t textSpanSize = static_cast<uint32_t>(_textSpans.size() * sizeof(TextSpan));
+        uint32_t textBufSize = static_cast<uint32_t>(_textBuffer.size());
+        return bvhSize + indicesSize + textSpanSize + textBufSize;
+    }
 
-        // Reconstruct after suspend: restore primitives from staging
-        if (!_primStorage.isValid() && !_primStaging.empty()) {
+    void declareBufferNeeds() override {
+        // Save existing GPU data to staging and deallocate
+        if (_primStorage.isValid() && _primCount > 0) {
+            _primStaging.resize(_primCount);
+            std::memcpy(_primStaging.data(), _primitives, _primCount * sizeof(SDFPrimitive));
+        }
+        uint32_t lastDerivedSize = _derivedStorage.size;
+        if (_derivedStorage.isValid()) {
+            _cardMgr->bufferManager()->deallocateBuffer(_derivedStorage);
+            _derivedStorage = StorageHandle::invalid();
+            _bvhNodes = nullptr;
+            _sortedIndices = nullptr;
+        }
+        if (_primStorage.isValid()) {
+            _cardMgr->bufferManager()->deallocateBuffer(_primStorage);
+            _primStorage = StorageHandle::invalid();
+            _primitives = nullptr;
+            _primCount = 0;
+            _primCapacity = 0;
+        }
+        // Reserve prim + derived
+        if (!_primStaging.empty()) {
+            uint32_t primSize = static_cast<uint32_t>(_primStaging.size()) * sizeof(SDFPrimitive);
+            _cardMgr->bufferManager()->reserve(primSize);
+            if (lastDerivedSize > 0) {
+                _cardMgr->bufferManager()->reserve(lastDerivedSize);
+            } else {
+                // First time: estimate from staging data
+                uint32_t n = static_cast<uint32_t>(_primStaging.size());
+                uint32_t est = (2 * n + 1) * sizeof(BVHNode) + n * sizeof(uint32_t)
+                    + static_cast<uint32_t>(_textSpans.size() * sizeof(TextSpan))
+                    + static_cast<uint32_t>(_textBuffer.size());
+                _cardMgr->bufferManager()->reserve(est);
+            }
+        }
+    }
+
+    Result<void> allocateBuffers() override {
+        if (!_primStaging.empty()) {
             uint32_t count = static_cast<uint32_t>(_primStaging.size());
             if (auto res = ensurePrimCapacity(count); !res) {
-                return Err<void>("YDraw::update: failed to re-allocate prim storage");
+                return Err<void>("YDraw::allocateBuffers: failed to allocate prim storage");
             }
             _primCount = count;
             std::memcpy(_primitives, _primStaging.data(), count * sizeof(SDFPrimitive));
             _primStaging.clear();
             _primStaging.shrink_to_fit();
-            _cardMgr->markBufferDirty(_primStorage);
+            _cardMgr->bufferManager()->markBufferDirty(_primStorage);
+
+            // Allocate derived storage (BVH + indices + text)
+            uint32_t derivedSize = estimateDerivedSize();
+            if (derivedSize > 0) {
+                auto storageResult = _cardMgr->bufferManager()->allocateBuffer(derivedSize);
+                if (!storageResult) {
+                    return Err<void>("YDraw::allocateBuffers: failed to allocate derived storage");
+                }
+                _derivedStorage = *storageResult;
+            }
+
             _dirty = true;
-            yinfo("YDraw::update: reconstructed {} primitives from staging", count);
+            yinfo("YDraw::allocateBuffers: reconstructed {} primitives, derived {} bytes", count, derivedSize);
         }
+        return Ok();
+    }
+
+    Result<void> render(float time) override {
+        (void)time;
 
         ydebug("YDraw::update called, _dirty={} _metadataDirty={} primCount={}",
                _dirty, _metadataDirty, _primCount);
@@ -413,6 +464,15 @@ public:
     //=========================================================================
 
     uint32_t addPrimitive(const SDFPrimitive& prim) override {
+        if (_initParsing) {
+            SDFPrimitive p = prim;
+            if (p.aabbMinX == 0 && p.aabbMaxX == 0) {
+                computeAABB(p);
+            }
+            uint32_t idx = static_cast<uint32_t>(_primStaging.size());
+            _primStaging.push_back(p);
+            return idx;
+        }
         if (auto res = ensurePrimCapacity(_primCount + 1); !res) {
             yerror("YDraw::addPrimitive: failed to grow storage");
             return 0;
@@ -425,7 +485,7 @@ public:
             computeAABB(_primitives[idx]);
         }
 
-        _cardMgr->markBufferDirty(_primStorage);
+        _cardMgr->bufferManager()->markBufferDirty(_primStorage);
         _dirty = true;
         return idx;
     }
@@ -640,7 +700,7 @@ private:
         }
         _primCount = primCount;
         std::memcpy(_primitives, primData, primCount * PRIM_SIZE);
-        _cardMgr->markBufferDirty(_primStorage);
+        _cardMgr->bufferManager()->markBufferDirty(_primStorage);
 
         for (uint32_t i = 0; i < primCount; i++) {
             yinfo("YDraw::parsePayload: prim[{}] type={} layer={} fill={:#010x} aabb=[{},{},{},{}]",
@@ -693,6 +753,8 @@ private:
     void buildBVH(std::vector<BVHNode>& outNodes, std::vector<uint32_t>& outSortedIndices) {
         if (_primCount == 0) return;
 
+        auto t0 = std::chrono::steady_clock::now();
+
         // Compute Morton codes for spatial sorting
         std::vector<std::pair<uint32_t, uint32_t>> mortonPairs;
         mortonPairs.reserve(_primCount);
@@ -713,8 +775,11 @@ private:
         outNodes.reserve(_primCount);  // reasonable estimate
         buildBVHRecursive(outNodes, outSortedIndices, 0, _primCount);
 
-        yinfo("YDraw::buildBVH: {} primitives -> {} BVH nodes",
-              _primCount, static_cast<uint32_t>(outNodes.size()));
+        auto t1 = std::chrono::steady_clock::now();
+        auto us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+
+        ydebug("YDraw::buildBVH (CPU): {} primitives -> {} BVH nodes, took {} us",
+              _primCount, static_cast<uint32_t>(outNodes.size()), us);
     }
 
     uint32_t buildBVHRecursive(std::vector<BVHNode>& nodes,
@@ -772,7 +837,7 @@ private:
         uint32_t newCap = std::max(required, _primCapacity == 0 ? 64u : _primCapacity * 2);
         uint32_t newSize = newCap * sizeof(SDFPrimitive);
 
-        auto newStorage = _cardMgr->allocateBuffer(newSize);
+        auto newStorage = _cardMgr->bufferManager()->allocateBuffer(newSize);
         if (!newStorage) {
             return Err<void>("YDraw: failed to allocate prim storage");
         }
@@ -781,7 +846,7 @@ private:
             std::memcpy(newStorage->data, _primStorage.data, _primCount * sizeof(SDFPrimitive));
         }
         if (_primStorage.isValid()) {
-            _cardMgr->deallocateBuffer(_primStorage);
+            _cardMgr->bufferManager()->deallocateBuffer(_primStorage);
         }
 
         _primStorage = *newStorage;
@@ -791,6 +856,7 @@ private:
     }
 
     Result<void> rebuildAndUpload() {
+        auto _rebuildT0 = std::chrono::steady_clock::now();
         if (_primCount == 0 && _textSpans.empty()) {
             return Ok();
         }
@@ -813,23 +879,7 @@ private:
         uint32_t textBufSize = static_cast<uint32_t>(_textBuffer.size());
         uint32_t derivedTotalSize = bvhSize + indicesSize + textSpanSize + textBufSize;
 
-        // Deallocate old derived storage
-        if (_derivedStorage.isValid()) {
-            if (auto res = _cardMgr->deallocateBuffer(_derivedStorage); !res) {
-                return Err<void>("YDraw::rebuildAndUpload: deallocateBuffer failed");
-            }
-            _derivedStorage = StorageHandle::invalid();
-            _bvhNodes = nullptr;
-            _sortedIndices = nullptr;
-        }
-
-        if (derivedTotalSize > 0) {
-            auto storageResult = _cardMgr->allocateBuffer(derivedTotalSize);
-            if (!storageResult) {
-                return Err<void>("YDraw::rebuildAndUpload: failed to allocate derived storage");
-            }
-            _derivedStorage = *storageResult;
-
+        if (_derivedStorage.isValid() && derivedTotalSize > 0) {
             uint8_t* base = _derivedStorage.data;
             uint32_t offset = 0;
 
@@ -862,20 +912,22 @@ private:
                 std::memcpy(base + offset, _textBuffer.data(), textBufSize);
             }
 
-            _cardMgr->markBufferDirty(_derivedStorage);
+            _cardMgr->bufferManager()->markBufferDirty(_derivedStorage);
         }
 
         // Primitives are already in _primStorage - just update offset
         _primitiveOffset = _primStorage.isValid() ? _primStorage.offset / sizeof(float) : 0;
 
         if (_primStorage.isValid()) {
-            _cardMgr->markBufferDirty(_primStorage);
+            _cardMgr->bufferManager()->markBufferDirty(_primStorage);
         }
 
         _metadataDirty = true;
 
-        yinfo("YDraw::rebuildAndUpload: {} prims, {} BVH nodes, derived {} bytes",
-              _primCount, _bvhNodeCount, derivedTotalSize);
+        auto _rebuildT1 = std::chrono::steady_clock::now();
+        auto _rebuildUs = std::chrono::duration_cast<std::chrono::microseconds>(_rebuildT1 - _rebuildT0).count();
+        yinfo("YDraw::rebuildAndUpload: {} prims, {} BVH nodes, derived {} bytes, took {} us",
+              _primCount, _bvhNodeCount, derivedTotalSize, _rebuildUs);
 
         return Ok();
     }
@@ -978,6 +1030,7 @@ private:
 
     bool _dirty = true;
     bool _metadataDirty = true;
+    bool _initParsing = false;
 
     std::string _argsStr;
     std::string _payloadStr;
@@ -988,7 +1041,7 @@ private:
 //=============================================================================
 
 Result<CardPtr> YDraw::create(
-    CardBufferManager::Ptr mgr,
+    CardManager::Ptr mgr,
     const GPUContext& gpu,
     int32_t x, int32_t y,
     uint32_t widthCells, uint32_t heightCells,
@@ -1018,7 +1071,7 @@ Result<CardPtr> YDraw::create(
 
 Result<YDraw::Ptr> YDraw::createImpl(
     ContextType& ctx,
-    CardBufferManager::Ptr mgr,
+    CardManager::Ptr mgr,
     const GPUContext& gpu,
     int32_t x, int32_t y,
     uint32_t widthCells, uint32_t heightCells,
