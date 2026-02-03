@@ -2903,6 +2903,16 @@ int GPUScreenImpl::onErase(VTermRect rect, int, void *user) {
   if (self->_scrollOffset > 0) {
     self->viewBufferDirty_ = true;
   }
+
+  // On significant erase (e.g., clear screen), immediately GC orphaned cards
+  // to free up card manager resources. Cards may still be in scrollback.
+  int erasedRows = endRow - startRow;
+  int erasedCols = endCol - startCol;
+  bool isLargeErase = (erasedRows >= self->_rows / 2) && (erasedCols >= self->_cols / 2);
+  if (isLargeErase && !self->_cards.empty()) {
+    self->gcInactiveCards();
+  }
+
   return 1;
 }
 
@@ -3245,8 +3255,8 @@ void GPUScreenImpl::reactivateVisibleCards() {
 }
 
 void GPUScreenImpl::gcInactiveCards() {
-  if (_inactiveCards.empty())
-    return;
+  // Note: removed early return on _inactiveCards.empty() because we also
+  // need to GC orphaned active cards (e.g., after clear screen)
 
   // Collect all card slotIndices referenced in visible buffer + scrollback
   std::unordered_set<uint32_t> liveSlots;

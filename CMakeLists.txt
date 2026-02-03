@@ -583,6 +583,8 @@ elseif(NOT EMSCRIPTEN)
         src/yetty/ymery/lang.cpp
         src/yetty/ymery/simple-data-tree.cpp
         src/yetty/ymery/renderer.cpp
+        # YEcho - text with embedded glyphs
+        src/yetty/yecho/yecho-parser.cpp
     )
 else()
     # Web uses main.cpp with Emscripten GLFW
@@ -847,6 +849,9 @@ else()
 
     # yettyc CLI client
     add_subdirectory(src/yetty/client)
+
+    # yecho - text with embedded glyphs
+    add_subdirectory(src/yetty/yecho)
 
     # Tools
     add_subdirectory(tools)
