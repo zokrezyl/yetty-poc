@@ -469,8 +469,10 @@ private:
     uint32_t defaultFg = 0;         // 4 bytes - packed RGBA like cell.fg
     uint32_t defaultBg = 0;         // 4 bytes - packed RGB like cell.bg
     uint32_t spaceGlyph = 0;        // 4 bytes - glyph index for space character
-    uint32_t _pad2[3] = {};         // 12 bytes padding to 224 (multiple of 16)
-  }; // Total: 224 bytes
+    // Coord distortion effects
+    uint32_t effectIndex = 0;       // 4 bytes (0 = no effect)
+    float effectParams[6] = {};     // 24 bytes
+  }; // Total: 240 bytes (16-byte aligned)
 
   Uniforms _uniforms;
 
@@ -2901,6 +2903,16 @@ int GPUScreenImpl::onErase(VTermRect rect, int, void *user) {
   if (self->_scrollOffset > 0) {
     self->viewBufferDirty_ = true;
   }
+
+  // On significant erase (e.g., clear screen), immediately GC orphaned cards
+  // to free up card manager resources. Cards may still be in scrollback.
+  int erasedRows = endRow - startRow;
+  int erasedCols = endCol - startCol;
+  bool isLargeErase = (erasedRows >= self->_rows / 2) && (erasedCols >= self->_cols / 2);
+  if (isLargeErase && !self->_cards.empty()) {
+    self->gcInactiveCards();
+  }
+
   return 1;
 }
 
@@ -3023,8 +3035,50 @@ int GPUScreenImpl::onOSC(int command, VTermStringFragment frag, void *user) {
   yinfo(">>> onOSC: command={} initial={} final={} len={}", command,
          (bool)frag.initial, (bool)frag.final, (size_t)frag.len);
 
-  // Accept yetty vendor commands: 666666 (cards), 666667 (pre-effect), 666668 (post-effect)
-  if (command != YETTY_OSC_VENDOR_ID && command != 666667 && command != 666668) {
+  // Handle color query OSC commands (10=fg, 11=bg, 12=cursor)
+  // Query format: OSC 10 ; ? ST  ->  Response: OSC 10 ; rgb:RRRR/GGGG/BBBB ST
+  if (command == 10 || command == 11 || command == 12) {
+    // Check if this is a query (payload is "?")
+    if (frag.final && frag.len >= 1 && frag.str[0] == '?') {
+      VTermColor color;
+      if (command == 10) {
+        color = self->defaultFg_;
+      } else if (command == 11) {
+        color = self->defaultBg_;
+      } else {
+        // OSC 12: cursor color - use foreground as fallback
+        color = self->defaultFg_;
+      }
+
+      // Convert indexed colors to RGB if needed
+      if (VTERM_COLOR_IS_INDEXED(&color) && self->state_) {
+        vterm_state_convert_color_to_rgb(self->state_, &color);
+      }
+
+      // Format response: OSC N ; rgb:RRRR/GGGG/BBBB ST
+      // Use 4-digit hex (RRRR = RR * 257 to scale 8-bit to 16-bit)
+      char response[64];
+      snprintf(response, sizeof(response),
+               "\033]%d;rgb:%04x/%04x/%04x\033\\",
+               command,
+               color.rgb.red * 257,
+               color.rgb.green * 257,
+               color.rgb.blue * 257);
+
+      yinfo(">>> onOSC: color query {} -> rgb:{:02x}{:02x}{:02x}",
+            command, color.rgb.red, color.rgb.green, color.rgb.blue);
+
+      if (self->_outputCallback) {
+        self->_outputCallback(response, strlen(response));
+      }
+      return 1;
+    }
+    // If not a query, ignore (setting colors not implemented)
+    return 0;
+  }
+
+  // Accept yetty vendor commands: 666666 (cards), 666667 (pre-effect), 666668 (post-effect), 666669 (effect)
+  if (command != YETTY_OSC_VENDOR_ID && command != 666667 && command != 666668 && command != 666669) {
     yinfo(">>> onOSC: ignoring non-yetty command {}", command);
     return 0;
   }
@@ -3044,8 +3098,8 @@ int GPUScreenImpl::onOSC(int command, VTermStringFragment frag, void *user) {
   }
 
   if (frag.final) {
-    // Handle effect OSC commands directly (666667 = pre-effect, 666668 = post-effect)
-    if (command == 666667 || command == 666668) {
+    // Handle effect OSC commands directly (666667 = pre-effect, 666668 = post-effect, 666669 = effect)
+    if (command == 666667 || command == 666668 || command == 666669) {
       self->handleEffectOSC(command, self->_oscBuffer);
       self->_oscBuffer.clear();
       self->_oscCommand = -1;
@@ -3201,8 +3255,8 @@ void GPUScreenImpl::reactivateVisibleCards() {
 }
 
 void GPUScreenImpl::gcInactiveCards() {
-  if (_inactiveCards.empty())
-    return;
+  // Note: removed early return on _inactiveCards.empty() because we also
+  // need to GC orphaned active cards (e.g., after clear screen)
 
   // Collect all card slotIndices referenced in visible buffer + scrollback
   std::unordered_set<uint32_t> liveSlots;
@@ -3315,13 +3369,13 @@ bool GPUScreenImpl::handleOSCSequence(const std::string &sequence,
 }
 
 //=============================================================================
-// Effect OSC Handling (666667 = pre-effect, 666668 = post-effect)
+// Effect OSC Handling (666667 = pre-effect, 666668 = post-effect, 666669 = effect)
 // Payload format: INDEX:p0:p1:p2:p3:p4:p5  (params optional, 0 = disable)
 //=============================================================================
 
 void GPUScreenImpl::handleEffectOSC(int command, const std::string &payload) {
-  bool isPre = (command == 666667);
-  const char* label = isPre ? "pre-effect" : "post-effect";
+  const char* label = (command == 666667) ? "pre-effect" :
+                      (command == 666668) ? "post-effect" : "effect";
 
   // Parse colon-separated values
   std::vector<float> values;
@@ -3335,17 +3389,19 @@ void GPUScreenImpl::handleEffectOSC(int command, const std::string &payload) {
 
   if (values.empty()) {
     yinfo("Effect OSC {}: disabling {}", command, label);
-    if (isPre) {
+    if (command == 666667) {
       _uniforms.preEffectIndex = 0;
-    } else {
+    } else if (command == 666668) {
       _uniforms.postEffectIndex = 0;
+    } else {
+      _uniforms.effectIndex = 0;
     }
     return;
   }
 
   uint32_t effectIndex = static_cast<uint32_t>(values[0]);
 
-  if (isPre) {
+  if (command == 666667) {
     _uniforms.preEffectIndex = effectIndex;
     for (int i = 0; i < 6; i++) {
       _uniforms.preEffectParams[i] = (i + 1 < static_cast<int>(values.size())) ? values[i + 1] : 0.0f;
@@ -3355,7 +3411,7 @@ void GPUScreenImpl::handleEffectOSC(int command, const std::string &payload) {
           _uniforms.preEffectParams[0], _uniforms.preEffectParams[1],
           _uniforms.preEffectParams[2], _uniforms.preEffectParams[3],
           _uniforms.preEffectParams[4], _uniforms.preEffectParams[5]);
-  } else {
+  } else if (command == 666668) {
     _uniforms.postEffectIndex = effectIndex;
     for (int i = 0; i < 6; i++) {
       _uniforms.postEffectParams[i] = (i + 1 < static_cast<int>(values.size())) ? values[i + 1] : 0.0f;
@@ -3365,6 +3421,16 @@ void GPUScreenImpl::handleEffectOSC(int command, const std::string &payload) {
           _uniforms.postEffectParams[0], _uniforms.postEffectParams[1],
           _uniforms.postEffectParams[2], _uniforms.postEffectParams[3],
           _uniforms.postEffectParams[4], _uniforms.postEffectParams[5]);
+  } else {
+    _uniforms.effectIndex = effectIndex;
+    for (int i = 0; i < 6; i++) {
+      _uniforms.effectParams[i] = (i + 1 < static_cast<int>(values.size())) ? values[i + 1] : 0.0f;
+    }
+    yinfo("Effect OSC: {} index={} params=[{},{},{},{},{},{}]",
+          label, effectIndex,
+          _uniforms.effectParams[0], _uniforms.effectParams[1],
+          _uniforms.effectParams[2], _uniforms.effectParams[3],
+          _uniforms.effectParams[4], _uniforms.effectParams[5]);
   }
 }
 
