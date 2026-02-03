@@ -4007,6 +4007,11 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
           if (card && card->id() == _cardMouseTarget) {
             float cardX, cardY;
             cardLocalCoords(localX, localY, row, col, cardX, cardY);
+            // Clamp to card's pixel dimensions
+            float cardPixelW = static_cast<float>(card->widthCells() * getCellWidth());
+            float cardPixelH = static_cast<float>(card->heightCells() * getCellHeight());
+            cardX = std::max(0.0f, std::min(cardX, cardPixelW - 1.0f));
+            cardY = std::max(0.0f, std::min(cardY, cardPixelH - 1.0f));
             auto loop = *base::EventLoop::instance();
             loop->dispatch(base::Event::cardMouseMove(_cardMouseTarget, cardX, cardY));
           } else {
@@ -4052,6 +4057,11 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
       Card* card = getCardAtCell(row, col);
       if (card && card->id() == _cardMouseTarget) {
         cardLocalCoords(localX, localY, row, col, cardX, cardY);
+        // Clamp to card's pixel dimensions
+        float cardPixelW = static_cast<float>(card->widthCells() * getCellWidth());
+        float cardPixelH = static_cast<float>(card->heightCells() * getCellHeight());
+        cardX = std::max(0.0f, std::min(cardX, cardPixelW - 1.0f));
+        cardY = std::max(0.0f, std::min(cardY, cardPixelH - 1.0f));
       } else {
         cardX = localX;
         cardY = localY;
@@ -4084,6 +4094,11 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
         if (scrollCard) {
           float cardX, cardY;
           cardLocalCoords(localX, localY, row, col, cardX, cardY);
+          // Clamp to card's pixel dimensions
+          float cardPixelW = static_cast<float>(scrollCard->widthCells() * getCellWidth());
+          float cardPixelH = static_cast<float>(scrollCard->heightCells() * getCellHeight());
+          cardX = std::max(0.0f, std::min(cardX, cardPixelW - 1.0f));
+          cardY = std::max(0.0f, std::min(cardY, cardPixelH - 1.0f));
           auto loop = *base::EventLoop::instance();
           loop->dispatch(base::Event::cardScrollEvent(
               scrollCard->id(), cardX, cardY, event.scroll.dx, event.scroll.dy, event.scroll.mods));
