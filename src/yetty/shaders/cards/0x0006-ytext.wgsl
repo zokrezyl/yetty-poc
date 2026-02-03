@@ -6,11 +6,21 @@
 //   2. PROJECTION: distorts how viewport appears (flat, cylinder, sphere, wave)
 //
 // =============================================================================
-// Metadata layout (64 bytes = 16 u32s):
-//   offset 0-3:   lineOffset, lineCount, glyphOffset, glyphCount
-//   offset 4-7:   contentWidth, contentHeight, scrollSpeedX, scrollSpeedY
-//   offset 8-11:  scrollMode, widthCells, heightCells, bgColor
-//   offset 12-15: projectionMode, projectionStrength, param1, param2
+// Metadata layout (64 bytes = 16 u32s) - PACKED FORMAT:
+//   Word 0:  lineOffset(16) | lineCount(16)
+//   Word 1:  glyphOffset(16) | glyphCount(16)
+//   Word 2:  contentWidth (float)
+//   Word 3:  contentHeight (float)
+//   Word 4:  scrollSpeedX (float)
+//   Word 5:  scrollSpeedY (float)
+//   Word 6:  widthCells(12) | heightCells(12) | scrollMode(2) | effectMode(4) | reserved(2)
+//   Word 7:  effectStrength (float)
+//   Word 8:  frequency (float)
+//   Word 9:  bgColor (RGBA, 0=use default)
+//   Word 10: fgColor (RGBA, 0=use default)
+//   Word 11: tiltX (float)
+//   Word 12: tiltY (float)
+//   Word 13-15: reserved
 // =============================================================================
 
 const YTEXT_SCROLL_CLAMP: u32 = 0u;
@@ -27,6 +37,7 @@ const YTEXT_PROJ_WAVE_DISP_V: u32 = 5u; // Vertical wave displacement
 const YTEXT_PROJ_WAVE_PROJ_H: u32 = 6u; // Horizontal wave projection (foreshortening)
 const YTEXT_PROJ_WAVE_PROJ_V: u32 = 7u; // Vertical wave projection (foreshortening)
 const YTEXT_PROJ_RIPPLE: u32 = 8u;      // Concentric water ripple
+const YTEXT_PROJ_PERSPECTIVE: u32 = 9u; // Star Wars crawl perspective
 
 const PI: f32 = 3.14159265359;
 
@@ -348,9 +359,46 @@ fn projectRipple(uv: vec2<f32>, strength: f32, time: f32, frequency: f32) -> Pro
 }
 
 // =============================================================================
+// PROJECTION: Star Wars Perspective Crawl
+// Text recedes into the distance - larger at bottom, smaller at top
+// Classic opening crawl effect with vanishing point
+// =============================================================================
+fn projectPerspective(uv: vec2<f32>, strength: f32, tiltX: f32, tiltY: f32) -> ProjectionResult {
+    var r: ProjectionResult;
+    r.visible = true;
+
+    // Strength controls how extreme the perspective is
+    // tiltX controls horizontal vanishing point offset (-1 to 1)
+    // tiltY controls the perspective angle/depth
+
+    // Perspective factor: 1.0 at bottom (y=1), smaller at top (y=0)
+    // This creates the "receding into distance" effect
+    let depth = mix(0.3, 1.0, 1.0 - uv.y * strength);
+
+    // Vanishing point (default: top center)
+    let vanishX = 0.5 + tiltX * 0.3;
+
+    // Apply perspective transformation
+    // X coordinate converges toward vanishing point as we go up
+    let perspectiveX = vanishX + (uv.x - vanishX) * depth;
+
+    // Y coordinate: map through perspective (compress more at top)
+    // Use a non-linear mapping for more realistic perspective
+    let perspectiveY = 1.0 - pow(1.0 - uv.y, mix(1.0, 2.0, strength));
+
+    r.uv.x = clamp(perspectiveX, 0.0, 1.0);
+    r.uv.y = clamp(perspectiveY, 0.0, 1.0);
+
+    // Lighting: darker at the top (farther away), brighter at bottom
+    r.lighting = mix(0.4, 1.0, depth);
+
+    return r;
+}
+
+// =============================================================================
 // Projection dispatcher
 // =============================================================================
-fn applyProjection(uv: vec2<f32>, mode: u32, strength: f32, param1: f32, time: f32) -> ProjectionResult {
+fn applyProjection(uv: vec2<f32>, mode: u32, strength: f32, param1: f32, time: f32, tiltX: f32, tiltY: f32) -> ProjectionResult {
     let s = clamp(strength, 0.0, 1.0);
 
     switch mode {
@@ -362,6 +410,7 @@ fn applyProjection(uv: vec2<f32>, mode: u32, strength: f32, param1: f32, time: f
         case YTEXT_PROJ_WAVE_PROJ_H: { return projectWaveProjH(uv, s, time, param1); }
         case YTEXT_PROJ_WAVE_PROJ_V: { return projectWaveProjV(uv, s, time, param1); }
         case YTEXT_PROJ_RIPPLE: { return projectRipple(uv, s, time, param1); }
+        case YTEXT_PROJ_PERSPECTIVE: { return projectPerspective(uv, s, tiltX, tiltY); }
         default: { return projectFlat(uv); }
     }
 }
@@ -377,24 +426,45 @@ fn shaderGlyph_1048582(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
     let relCol = bg24 & 0xFFFu;
     let relRow = (bg24 >> 12u) & 0xFFFu;
 
-    // Read metadata
-    let lineOffset = cardMetadata[metaOffset + 0u];
-    let lineCount = cardMetadata[metaOffset + 1u];
-    let glyphOffset = cardMetadata[metaOffset + 2u];
-    let glyphCount = cardMetadata[metaOffset + 3u];
-    let contentWidth = bitcast<f32>(cardMetadata[metaOffset + 4u]);
-    let contentHeight = bitcast<f32>(cardMetadata[metaOffset + 5u]);
-    let scrollSpeedX = bitcast<f32>(cardMetadata[metaOffset + 6u]);
-    let scrollSpeedY = bitcast<f32>(cardMetadata[metaOffset + 7u]);
-    let scrollMode = cardMetadata[metaOffset + 8u];
-    let widthCells = cardMetadata[metaOffset + 9u];
-    let heightCells = cardMetadata[metaOffset + 10u];
-    let bgColorPacked = cardMetadata[metaOffset + 11u];
-    let projectionMode = cardMetadata[metaOffset + 12u];
-    let projectionStrength = bitcast<f32>(cardMetadata[metaOffset + 13u]);
-    let param1 = bitcast<f32>(cardMetadata[metaOffset + 14u]);
+    // Read packed metadata
+    // Word 0: lineOffset(16) | lineCount(16)
+    let word0 = cardMetadata[metaOffset + 0u];
+    let lineOffset = word0 & 0xFFFFu;
+    let lineCount = (word0 >> 16u) & 0xFFFFu;
 
-    let bgColor = unpackColor(bgColorPacked);
+    // Word 1: glyphOffset(16) | glyphCount(16)
+    let word1 = cardMetadata[metaOffset + 1u];
+    let glyphOffset = word1 & 0xFFFFu;
+    let glyphCount = (word1 >> 16u) & 0xFFFFu;
+
+    // Words 2-5: floats
+    let contentWidth = bitcast<f32>(cardMetadata[metaOffset + 2u]);
+    let contentHeight = bitcast<f32>(cardMetadata[metaOffset + 3u]);
+    let scrollSpeedX = bitcast<f32>(cardMetadata[metaOffset + 4u]);
+    let scrollSpeedY = bitcast<f32>(cardMetadata[metaOffset + 5u]);
+
+    // Word 6: widthCells(12) | heightCells(12) | scrollMode(2) | effectMode(4) | reserved(2)
+    let word6 = cardMetadata[metaOffset + 6u];
+    let widthCells = word6 & 0xFFFu;
+    let heightCells = (word6 >> 12u) & 0xFFFu;
+    let scrollMode = (word6 >> 24u) & 0x3u;
+    let projectionMode = (word6 >> 26u) & 0xFu;
+
+    // Words 7-8: effect parameters
+    let projectionStrength = bitcast<f32>(cardMetadata[metaOffset + 7u]);
+    let frequency = bitcast<f32>(cardMetadata[metaOffset + 8u]);
+
+    // Words 9-10: colors (alpha=0 means use terminal default)
+    let bgColorPacked = cardMetadata[metaOffset + 9u];
+    let fgColorPacked = cardMetadata[metaOffset + 10u];
+
+    // Words 11-12: tilt (for future Star Wars effect)
+    let tiltX = bitcast<f32>(cardMetadata[metaOffset + 11u]);
+    let tiltY = bitcast<f32>(cardMetadata[metaOffset + 12u]);
+
+    // Resolve colors: alpha=0 means use terminal default
+    let bgColor = select(unpackColor(bgColorPacked), unpackColor(grid.defaultBg), (bgColorPacked & 0xFFu) == 0u);
+    let fgColor = select(unpackColor(fgColorPacked), unpackColor(grid.defaultFg), (fgColorPacked & 0xFFu) == 0u);
 
     if (lineCount == 0u || glyphCount == 0u) {
         return bgColor;
@@ -407,8 +477,8 @@ fn shaderGlyph_1048582(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
     let screenUV = (vec2<f32>(f32(relCol), f32(relRow)) + localUV) /
                    vec2<f32>(f32(widthCells), f32(heightCells));
 
-    // Step 2: Apply PROJECTION (flat, cylinder, sphere, wave)
-    let proj = applyProjection(screenUV, projectionMode, projectionStrength, param1, time);
+    // Step 2: Apply PROJECTION (flat, cylinder, sphere, wave, perspective)
+    let proj = applyProjection(screenUV, projectionMode, projectionStrength, frequency, time, tiltX, tiltY);
 
     if (!proj.visible) {
         return bgColor;

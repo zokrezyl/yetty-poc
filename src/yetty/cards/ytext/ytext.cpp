@@ -121,9 +121,16 @@ void YText::parseArgs(const std::string& args) {
         } else if (token == "--ripple") {
             _effectMode = YTextEffectMode::Ripple;
             yinfo("YText: effect=ripple");
+        } else if (token == "--perspective" || token == "--starwars") {
+            _effectMode = YTextEffectMode::Perspective;
+            yinfo("YText: effect=perspective");
         } else if (token == "--effect-strength" || token == "-es") {
             if (iss >> _effectStrength) {
                 yinfo("YText: effectStrength={}", _effectStrength);
+            }
+        } else if (token == "--frequency" || token == "-freq") {
+            if (iss >> _frequency) {
+                yinfo("YText: frequency={}", _frequency);
             }
         } else if (token == "--tilt-x" || token == "-tx") {
             if (iss >> _tiltX) {
@@ -133,7 +140,39 @@ void YText::parseArgs(const std::string& args) {
             if (iss >> _tiltY) {
                 yinfo("YText: tiltY={}", _tiltY);
             }
+        } else if (token == "--fg-color" || token == "-fg") {
+            std::string colorStr;
+            if (iss >> colorStr) {
+                _fgColor = parseColor(colorStr);
+                yinfo("YText: fgColor=0x{:08X}", _fgColor);
+            }
+        } else if (token == "--bg-color" || token == "-bg") {
+            std::string colorStr;
+            if (iss >> colorStr) {
+                _bgColor = parseColor(colorStr);
+                yinfo("YText: bgColor=0x{:08X}", _bgColor);
+            }
         }
+    }
+}
+
+uint32_t YText::parseColor(const std::string& str) {
+    // Handle formats: "#RRGGBB", "0xRRGGBB", "RRGGBB"
+    std::string hex = str;
+    if (hex.empty()) return 0;
+
+    if (hex[0] == '#') {
+        hex = hex.substr(1);
+    } else if (hex.size() > 2 && hex[0] == '0' && (hex[1] == 'x' || hex[1] == 'X')) {
+        hex = hex.substr(2);
+    }
+
+    try {
+        uint32_t rgb = std::stoul(hex, nullptr, 16);
+        // Convert RGB to RGBA (full alpha)
+        return (rgb << 8) | 0xFF;
+    } catch (...) {
+        return 0;  // Use default on parse error
     }
 }
 
@@ -353,22 +392,43 @@ Result<void> YText::uploadMetadata() {
     }
 
     Metadata meta = {};
-    meta.lineOffset = _lineOffset;
-    meta.lineCount = static_cast<uint32_t>(_lines.size());
-    meta.glyphOffset = _glyphOffset;
-    meta.glyphCount = static_cast<uint32_t>(_glyphs.size());
+
+    // Word 0: lineOffset(16) | lineCount(16)
+    uint32_t lineCount = static_cast<uint32_t>(_lines.size());
+    meta.lineOffsetAndCount = (_lineOffset & 0xFFFF) | ((lineCount & 0xFFFF) << 16);
+
+    // Word 1: glyphOffset(16) | glyphCount(16)
+    uint32_t glyphCount = static_cast<uint32_t>(_glyphs.size());
+    meta.glyphOffsetAndCount = (_glyphOffset & 0xFFFF) | ((glyphCount & 0xFFFF) << 16);
+
+    // Words 2-5: floats
     meta.contentWidth = _contentWidth;
     meta.contentHeight = _contentHeight;
     meta.scrollSpeedX = _scrollSpeedX;
     meta.scrollSpeedY = _scrollSpeedY;
-    meta.scrollMode = static_cast<uint32_t>(_scrollMode);
-    meta.widthCells = _widthCells;
-    meta.heightCells = _heightCells;
-    meta.bgColor = _bgColor;
-    meta.effectMode = static_cast<uint32_t>(_effectMode);
+
+    // Word 6: widthCells(12) | heightCells(12) | scrollMode(2) | effectMode(4) | reserved(2)
+    meta.packedCellsAndModes = (_widthCells & 0xFFF)
+                             | ((_heightCells & 0xFFF) << 12)
+                             | ((static_cast<uint32_t>(_scrollMode) & 0x3) << 24)
+                             | ((static_cast<uint32_t>(_effectMode) & 0xF) << 26);
+
+    // Words 7-8: effect parameters
     meta.effectStrength = _effectStrength;
+    meta.frequency = _frequency;
+
+    // Words 9-10: colors (0 = use terminal default)
+    meta.bgColor = _bgColor;
+    meta.fgColor = _fgColor;
+
+    // Words 11-12: tilt
     meta.tiltX = _tiltX;
     meta.tiltY = _tiltY;
+
+    // Words 13-15: reserved
+    meta.reserved[0] = 0;
+    meta.reserved[1] = 0;
+    meta.reserved[2] = 0;
 
     if (auto res = _cardMgr->writeMetadata(_metaHandle, &meta, sizeof(meta)); !res) {
         return Err<void>("YText::uploadMetadata: write failed");

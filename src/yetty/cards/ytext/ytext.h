@@ -68,6 +68,7 @@ enum class YTextEffectMode : uint32_t {
     WaveProjH = 6,   // Horizontal wave projection (foreshortening)
     WaveProjV = 7,   // Vertical wave projection (foreshortening)
     Ripple = 8,      // Concentric water ripple projection
+    Perspective = 9, // Star Wars crawl perspective
 };
 
 class YText : public Card,
@@ -144,24 +145,31 @@ public:
     Result<void> init();
 
 private:
-    // Metadata structure (matches shader layout - 64 bytes)
+    // Metadata structure (matches shader layout - 64 bytes = 16 u32s)
+    // Packed layout to maximize space efficiency
     struct Metadata {
-        uint32_t lineOffset;        // 0: Offset to line data (in floats)
-        uint32_t lineCount;         // 4: Number of lines
-        uint32_t glyphOffset;       // 8: Offset to glyph data (in floats)
-        uint32_t glyphCount;        // 12: Total number of glyphs
-        float contentWidth;         // 16: Total content width
-        float contentHeight;        // 20: Total content height
-        float scrollSpeedX;         // 24: Horizontal scroll (pixels/sec)
-        float scrollSpeedY;         // 28: Vertical scroll (pixels/sec)
-        uint32_t scrollMode;        // 32: 0=clamp, 1=loop, 2=pingpong
-        uint32_t widthCells;        // 36
-        uint32_t heightCells;       // 40
-        uint32_t bgColor;           // 44
-        uint32_t effectMode;        // 48: 0=none, 1=cylinderH, 2=cylinderV, 3=sphere
-        float effectStrength;       // 52: 0.0-1.0 (curvature intensity)
-        float tiltX;                // 56: tilt angle around X axis (radians)
-        float tiltY;                // 60: tilt angle around Y axis (radians)
+        // Word 0: lineOffset(16) | lineCount(16)
+        uint32_t lineOffsetAndCount;
+        // Word 1: glyphOffset(16) | glyphCount(16)
+        uint32_t glyphOffsetAndCount;
+        // Words 2-5: floats that need full precision
+        float contentWidth;
+        float contentHeight;
+        float scrollSpeedX;
+        float scrollSpeedY;
+        // Word 6: widthCells(12) | heightCells(12) | scrollMode(2) | effectMode(4) | reserved(2)
+        uint32_t packedCellsAndModes;
+        // Words 7-8: effect parameters
+        float effectStrength;
+        float frequency;
+        // Words 9-10: colors (RGBA, 0 = use terminal default)
+        uint32_t bgColor;
+        uint32_t fgColor;
+        // Words 11-12: tilt for Star Wars effect
+        float tiltX;
+        float tiltY;
+        // Words 13-15: reserved for future use
+        uint32_t reserved[3];
     };
     static_assert(sizeof(Metadata) == 64, "Metadata must be 64 bytes");
 
@@ -199,11 +207,15 @@ private:
     // 3D Effects
     YTextEffectMode _effectMode = YTextEffectMode::None;
     float _effectStrength = 0.8f;   // Curvature intensity (0-1)
+    float _frequency = 3.0f;        // Wave/ripple frequency
     float _tiltX = 0.0f;            // Tilt around X axis (radians)
     float _tiltY = 0.0f;            // Tilt around Y axis (radians)
 
-    // Appearance
-    uint32_t _bgColor = 0xFF1A1A2E;  // Dark blue default
+    // Appearance (0 = use terminal default)
+    uint32_t _fgColor = 0;  // 0 = use terminal default
+    uint32_t _bgColor = 0;  // 0 = use terminal default
+
+    static uint32_t parseColor(const std::string& str);
 
     // GPU storage
     StorageHandle _dataStorage = StorageHandle::invalid();

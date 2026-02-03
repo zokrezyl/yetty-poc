@@ -87,12 +87,20 @@ uv run python3 tools/yetty-client/main.py create ytext \
     -w 35 -H 10
 sleep $DELAY
 
+echo ""
+echo "--- Demo 10: Star Wars Perspective Crawl ---"
+uv run python3 tools/yetty-client/main.py create ytext \
+    -I "A long time ago in a galaxy far,\nfar away....\n\nSTAR WARS\n\nIt is a period of civil war.\nRebel spaceships, striking\nfrom a hidden base, have won\ntheir first victory against\nthe evil Galactic Empire.\n\nDuring the battle, Rebel\nspies managed to steal secret\nplans to the Empire's\nultimate weapon, the DEATH\nSTAR, an armored space\nstation with enough power\nto destroy an entire planet." \
+    --scroll-y 25 --loop --perspective --effect-strength 0.8 \
+    -w 50 -H 15
+sleep $DELAY
+
 # ============================================================================
 # DISPLACEMENT EFFECTS (no foreshortening)
 # ============================================================================
 
 echo ""
-echo "--- Demo 10: Horizontal Wave Displacement ---"
+echo "--- Demo 11: Horizontal Wave Displacement ---"
 uv run python3 tools/yetty-client/main.py create ytext \
     -I "Wavy text effect\nRipples move along X axis\nAnimated in real-time\nPure GPU shader magic" \
     --wave-disp --effect-strength 0.6 --frequency 4.0 \
@@ -100,7 +108,7 @@ uv run python3 tools/yetty-client/main.py create ytext \
 sleep $DELAY
 
 echo ""
-echo "--- Demo 11: Vertical Wave Displacement ---"
+echo "--- Demo 12: Vertical Wave Displacement ---"
 uv run python3 tools/yetty-client/main.py create ytext \
     -I "Vertical waves\nRipples along Y\nLike a flag waving" \
     --wave-disp-v --effect-strength 0.5 --frequency 3.0 \
@@ -108,7 +116,7 @@ uv run python3 tools/yetty-client/main.py create ytext \
 sleep $DELAY
 
 echo ""
-echo "--- Demo 12: Wave Displacement with Scrolling ---"
+echo "--- Demo 13: Wave Displacement with Scrolling ---"
 uv run python3 tools/yetty-client/main.py create ytext \
     -I "Scrolling wavy text\nCombined effects\nWave + vertical scroll\nMesmerizing!" \
     --scroll-y 25 --loop --wave-disp --effect-strength 0.4 --frequency 3.0 \

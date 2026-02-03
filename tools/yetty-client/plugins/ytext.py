@@ -32,15 +32,25 @@ from pathlib import Path
               help='Vertical wave projection (text on wavy surface)')
 @click.option('--ripple', 'ripple_mode', is_flag=True,
               help='Concentric water ripple effect (text on water surface)')
+@click.option('--perspective', '--starwars', 'perspective_mode', is_flag=True,
+              help='Star Wars crawl perspective effect')
+@click.option('--tilt-x', '-tx', 'tilt_x', type=float, default=0.0,
+              help='Horizontal vanishing point offset for perspective (-1 to 1)')
+@click.option('--tilt-y', '-ty', 'tilt_y', type=float, default=0.0,
+              help='Perspective depth/angle')
 @click.option('--effect-strength', '-es', 'effect_strength', type=float, default=0.0,
               help='Effect intensity (0.0-1.0, default: 0.8)')
 @click.option('--frequency', '-freq', 'frequency', type=float, default=0.0,
               help='Wave frequency (default: 3.0)')
+@click.option('--fg-color', '-fg', 'fg_color', type=str, default=None,
+              help='Foreground color (hex: "#RRGGBB" or "RRGGBB"), default: terminal default')
+@click.option('--bg-color', '-bg', 'bg_color', type=str, default=None,
+              help='Background color (hex: "#RRGGBB" or "RRGGBB"), default: terminal default')
 @click.pass_context
 def ytext(ctx, input_, inline_, scroll_x, scroll_y, loop_mode, pingpong_mode, font_size,
           cylinder_mode, cylinder_v_mode, sphere_mode, wave_disp_mode, wave_disp_v_mode,
-          wave_proj_mode, wave_proj_v_mode, ripple_mode,
-          effect_strength, frequency):
+          wave_proj_mode, wave_proj_v_mode, ripple_mode, perspective_mode, tilt_x, tilt_y,
+          effect_strength, frequency, fg_color, bg_color):
     """GPU-animated scrolling text card with 3D effects.
 
     Animation happens entirely in the fragment shader using the time uniform -
@@ -77,6 +87,7 @@ def ytext(ctx, input_, inline_, scroll_x, scroll_y, loop_mode, pingpong_mode, fo
         --wave-proj     Horizontal wave projection
         --wave-proj-v   Vertical wave projection
         --ripple        Concentric water ripple projection
+        --perspective   Star Wars crawl perspective (use with --tilt-x, --tilt-y)
 
     Displacement Effects (no foreshortening):
         --wave-disp     Horizontal wave displacement
@@ -85,6 +96,8 @@ def ytext(ctx, input_, inline_, scroll_x, scroll_y, loop_mode, pingpong_mode, fo
     Parameters:
         --effect-strength  Effect intensity (0.0-1.0)
         --frequency        Wave/ripple frequency
+        --fg-color         Text foreground color (hex), default: terminal default
+        --bg-color         Background color (hex), default: terminal default
     """
     ctx.ensure_object(dict)
 
@@ -124,10 +137,20 @@ def ytext(ctx, input_, inline_, scroll_x, scroll_y, loop_mode, pingpong_mode, fo
         args_parts.append("--wave-proj-v")
     if ripple_mode:
         args_parts.append("--ripple")
+    if perspective_mode:
+        args_parts.append("--perspective")
+    if tilt_x != 0.0:
+        args_parts.append(f"--tilt-x {tilt_x}")
+    if tilt_y != 0.0:
+        args_parts.append(f"--tilt-y {tilt_y}")
     if effect_strength > 0.0:
         args_parts.append(f"--effect-strength {effect_strength}")
     if frequency > 0.0:
-        args_parts.append(f"--tilt-x {frequency}")  # Using tilt-x as frequency param
+        args_parts.append(f"--frequency {frequency}")
+    if fg_color:
+        args_parts.append(f"--fg-color {fg_color}")
+    if bg_color:
+        args_parts.append(f"--bg-color {bg_color}")
 
     ctx.obj['plugin_args'] = ' '.join(args_parts)
 
