@@ -12,25 +12,28 @@ from pathlib import Path
               help='Horizontal scroll speed (pixels/sec)')
 @click.option('--scroll-y', '-sy', 'scroll_y', type=float, default=0.0,
               help='Vertical scroll speed (pixels/sec)')
-@click.option('--loop', 'loop_mode', is_flag=True, help='Loop scroll mode (seamless cylinder)')
+@click.option('--loop', 'loop_mode', is_flag=True, help='Loop scroll mode (seamless)')
 @click.option('--pingpong', 'pingpong_mode', is_flag=True, help='Ping-pong scroll mode')
 @click.option('--font-size', '-fs', 'font_size', type=float, default=0.0,
               help='Base font size (default: 16)')
 @click.option('--cylinder', 'cylinder_mode', is_flag=True,
-              help='Horizontal cylinder effect (for vertical scroll)')
+              help='Horizontal cylinder effect (drum rolling vertically)')
 @click.option('--cylinder-v', 'cylinder_v_mode', is_flag=True,
-              help='Vertical cylinder effect (for horizontal scroll)')
+              help='Vertical cylinder effect (drum rolling horizontally)')
 @click.option('--sphere', 'sphere_mode', is_flag=True,
-              help='Sphere effect (for both directions)')
+              help='Sphere effect')
+@click.option('--wave', 'wave_mode', is_flag=True,
+              help='Horizontal wave effect (ripples along X)')
+@click.option('--wave-v', 'wave_v_mode', is_flag=True,
+              help='Vertical wave effect (ripples along Y)')
 @click.option('--effect-strength', '-es', 'effect_strength', type=float, default=0.0,
-              help='Effect curvature intensity (0.0-1.0, default: 0.8)')
-@click.option('--tilt-x', '-tx', 'tilt_x', type=float, default=0.0,
-              help='Tilt around X axis (radians)')
-@click.option('--tilt-y', '-ty', 'tilt_y', type=float, default=0.0,
-              help='Tilt around Y axis (radians)')
+              help='Effect intensity (0.0-1.0, default: 0.8)')
+@click.option('--frequency', '-freq', 'frequency', type=float, default=0.0,
+              help='Wave frequency (default: 3.0)')
 @click.pass_context
 def ytext(ctx, input_, inline_, scroll_x, scroll_y, loop_mode, pingpong_mode, font_size,
-          cylinder_mode, cylinder_v_mode, sphere_mode, effect_strength, tilt_x, tilt_y):
+          cylinder_mode, cylinder_v_mode, sphere_mode, wave_mode, wave_v_mode,
+          effect_strength, frequency):
     """GPU-animated scrolling text card with 3D effects.
 
     Animation happens entirely in the fragment shader using the time uniform -
@@ -39,31 +42,29 @@ def ytext(ctx, input_, inline_, scroll_x, scroll_y, loop_mode, pingpong_mode, fo
     Examples:
         # Basic scrolling
         yetty-client create ytext -I "Hello World" --scroll-y 50 --loop
-        yetty-client create ytext -i story.txt --scroll-y 30
 
-        # Horizontal marquee
-        cat text.txt | yetty-client create ytext -i - --scroll-x 60 --loop
+        # Cylinder effect (text on rotating drum)
+        yetty-client create ytext -I "Rolling..." --scroll-y 40 --loop --cylinder
 
-        # 3D cylinder effect (text on rotating drum)
-        yetty-client create ytext -I "Rolling text..." --scroll-y 40 --loop --cylinder
+        # Wave effect (animated ripples)
+        yetty-client create ytext -I "Wavy text" --wave --effect-strength 0.5
 
-        # Sphere effect (text on globe)
-        yetty-client create ytext -I "Globe" --scroll-x 30 --scroll-y 20 --loop --sphere
-
-        # Tilted cylinder
-        yetty-client create ytext -I "Tilted" --scroll-y 50 --loop --cylinder --tilt-y 0.3
+        # Sphere effect
+        yetty-client create ytext -I "Globe" --scroll-y 30 --loop --sphere
 
     Scroll modes:
         (default)   Clamp - stops at content bounds
-        --loop      Loop - seamless wrap-around (cylinder effect)
+        --loop      Loop - seamless wrap-around
         --pingpong  Ping-pong - bounces back and forth
 
     3D Effects:
         --cylinder    Horizontal cylinder (best with vertical scroll)
         --cylinder-v  Vertical cylinder (best with horizontal scroll)
-        --sphere      Spherical surface (both directions)
-        --effect-strength  Curvature intensity (0.0-1.0)
-        --tilt-x/y    Tilt the effect axis (radians)
+        --sphere      Spherical surface
+        --wave        Horizontal wave (animated ripples along X)
+        --wave-v      Vertical wave (animated ripples along Y)
+        --effect-strength  Effect intensity (0.0-1.0)
+        --frequency   Wave frequency (for wave effects)
     """
     ctx.ensure_object(dict)
 
@@ -93,24 +94,23 @@ def ytext(ctx, input_, inline_, scroll_x, scroll_y, loop_mode, pingpong_mode, fo
         args_parts.append("--cylinder-v")
     if sphere_mode:
         args_parts.append("--sphere")
+    if wave_mode:
+        args_parts.append("--wave")
+    if wave_v_mode:
+        args_parts.append("--wave-v")
     if effect_strength > 0.0:
         args_parts.append(f"--effect-strength {effect_strength}")
-    if tilt_x != 0.0:
-        args_parts.append(f"--tilt-x {tilt_x}")
-    if tilt_y != 0.0:
-        args_parts.append(f"--tilt-y {tilt_y}")
+    if frequency > 0.0:
+        args_parts.append(f"--tilt-x {frequency}")  # Using tilt-x as frequency param
 
     ctx.obj['plugin_args'] = ' '.join(args_parts)
 
     # Get content
     if inline_:
-        # Inline content - unescape \n sequences
         content = inline_.replace('\\n', '\n')
     elif input_ == '-':
-        # Read from stdin
         content = sys.stdin.read()
     else:
-        # Read from file
         path = Path(input_)
         if not path.exists():
             raise click.ClickException(f"File not found: {input_}")
