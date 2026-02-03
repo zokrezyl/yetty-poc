@@ -27,7 +27,7 @@ Yetty introduces **Cards** - rich content widgets that live within the terminal 
 - **Plots** - Real-time GPU-accelerated data visualizations
 - **Vector Graphics** - SVG and Lottie animations via ThorVG
 - **Interactive Widgets** - ImGui-based UI elements (Ymery)
-- **2D Drawing** - SDF primitives with BVH-accelerated rendering (HDraw)
+- **2D Drawing** - SDF primitives with spatial-hash-accelerated rendering (YDraw)
 - **Python Graphics** - matplotlib-style plots and custom visualizations
 
 Cards occupy cells in the terminal grid. When the terminal scrolls, card content scrolls with it - just like cells in a Jupyter notebook. This enables workflows never possible before:
@@ -60,7 +60,7 @@ The shader glyph system uses Unicode Private Use Area codepoints (Plane 16) to e
 - **WebGPU Backend** - Modern, cross-platform GPU acceleration via wgpu-native/Dawn
 - **MSDF Font Rendering** - Crisp, scalable text at any zoom level
 - **60fps Animations** - Smooth shader animations and transitions
-- **Compute Shaders** - BVH construction, text layout, and image scaling on GPU
+- **Compute Shaders** - Text layout and image scaling on GPU
 - **Runs Everywhere** - Native (Linux, macOS, Windows) and Web (WASM)
 
 ## Communication Protocols
@@ -88,7 +88,7 @@ A Unix domain socket RPC server (msgpack-rpc) enables out-of-band communication 
 | `image` | Display PNG, JPEG, WebP images |
 | `pdf` | Render PDF documents (via PDFium/MuPDF) |
 | `plot` | Line, bar, scatter, area plots |
-| `hdraw` | 2D vector graphics with SDF primitives |
+| `ydraw` | 2D vector graphics with SDF primitives and text fragments with different MSDF font sizes |
 | `ymery` | ImGui-based interactive widgets |
 | `thorvg` | SVG and Lottie animation rendering |
 | `python` | Python-driven visualizations |
@@ -103,6 +103,12 @@ We're working on a clear, stable API for third-party card plugins. The goal is t
 - Can be hot-reloaded during development
 
 Stay tuned for the Plugin SDK documentation.
+
+## Documentation
+
+- **[Font System](docs/fonts.md)** - MSDF fonts, emoji rendering, shader glyphs, and GPU text rendering
+- **[Card System](docs/cards.md)** - Card architecture, OSC sequences, texture atlas, storage buffers, and YDraw spatial hashing
+- **[Shader Effects](docs/effects.md)** - Pre/post-processing effects, CRT simulation, Matrix rain, and custom effect creation
 
 ## Technical Highlights
 

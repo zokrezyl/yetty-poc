@@ -26,6 +26,27 @@ struct GridUniforms {
     hasSelection: f32,         // 4 bytes (0=no, 1=yes)
     selStart: vec2<f32>,       // 8 bytes (col, row)
     selEnd: vec2<f32>,         // 8 bytes (col, row)
+    // Effects (per gpu-screen instance)
+    preEffectIndex: u32,       // 4 bytes (0 = no effect)
+    postEffectIndex: u32,      // 4 bytes (0 = no effect)
+    preEffectP0: f32,          // 4 bytes - pre-effect params
+    preEffectP1: f32,          // 4 bytes
+    preEffectP2: f32,          // 4 bytes
+    preEffectP3: f32,          // 4 bytes
+    preEffectP4: f32,          // 4 bytes
+    preEffectP5: f32,          // 4 bytes
+    postEffectP0: f32,         // 4 bytes - post-effect params
+    postEffectP1: f32,         // 4 bytes
+    postEffectP2: f32,         // 4 bytes
+    postEffectP3: f32,         // 4 bytes
+    postEffectP4: f32,         // 4 bytes
+    postEffectP5: f32,         // 4 bytes
+    defaultFg: u32,            // 4 bytes - packed RGBA like cell.fg
+    defaultBg: u32,            // 4 bytes - packed RGB like cell.bg
+    spaceGlyph: u32,           // 4 bytes - glyph index for space character
+    _pad2a: u32,               // padding to 224
+    _pad2b: u32,
+    _pad2c: u32,
 };
 
 // Glyph metadata (40 bytes per glyph, matches C++ GlyphMetadataGPU)
@@ -188,6 +209,12 @@ fn getFontType(attrs: u32) -> u32 {
     return (attrs >> 5u) & 0x7u;
 }
 
+// ==== PRE-EFFECT FUNCTIONS (injected by loader) ====
+// PRE_EFFECT_FUNCTIONS_PLACEHOLDER
+
+// ==== POST-EFFECT FUNCTIONS (injected by loader) ====
+// POST_EFFECT_FUNCTIONS_PLACEHOLDER
+
 // ==== SHADER GLYPH FUNCTIONS (injected by loader) ====
 // SHADER_GLYPH_FUNCTIONS_PLACEHOLDER
 
@@ -275,6 +302,9 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let fontType = getFontType(cellAttrs);
     // Backward compatible: if fontType is BITMAP or legacy emoji bit is set
     let isEmoji = fontType == FONT_TYPE_BITMAP;
+
+    // ==== PRE-EFFECT: modify cell data before rendering ====
+    // PRE_EFFECT_APPLY_PLACEHOLDER
 
     // Check if cursor should be rendered on this cell
     let cursorCol = i32(grid.cursorPos.x);
@@ -481,6 +511,9 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
             finalColor = mix(finalColor, vec3<f32>(0.3, 0.5, 0.8), 0.4);
         }
     }
+
+    // ==== POST-EFFECT: modify final pixel color ====
+    // POST_EFFECT_APPLY_PLACEHOLDER
 
     return vec4<f32>(finalColor, 1.0);
 }

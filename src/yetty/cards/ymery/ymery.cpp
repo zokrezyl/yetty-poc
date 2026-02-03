@@ -450,6 +450,9 @@ public:
             ImGuiContext* prev = ImGui::GetCurrentContext();
             ImGui::SetCurrentContext(_imguiContext);
             ImGuiIO& io = ImGui::GetIO();
+            ydebug("Ymery {} MouseDown: x={:.1f} y={:.1f} btn={} displaySize=({:.0f},{:.0f})",
+                  id(), event.cardMouse.x, event.cardMouse.y, event.cardMouse.button,
+                  io.DisplaySize.x, io.DisplaySize.y);
             io.AddMousePosEvent(event.cardMouse.x, event.cardMouse.y);
             io.AddMouseButtonEvent(std::min(event.cardMouse.button, 4), true);
             _dirty = true;

@@ -262,6 +262,7 @@ private:
                          uint32_t *linesToAdvance);
   bool handleCardOSCSequence(const std::string &sequence, std::string *response,
                              uint32_t *linesToAdvance);
+  void handleEffectOSC(int command, const std::string &payload);
 
   // Text selection
   void clearSelection();
@@ -460,7 +461,16 @@ private:
     float hasSelection;       // 4 bytes (0=no, 1=yes)
     glm::vec2 selStart;       // 8 bytes (col, row)
     glm::vec2 selEnd;         // 8 bytes (col, row)
-  }; // Total: 144 bytes
+    // Effects (per gpu-screen instance)
+    uint32_t preEffectIndex = 0;   // 4 bytes (0 = no effect)
+    uint32_t postEffectIndex = 0;  // 4 bytes (0 = no effect)
+    float preEffectParams[6] = {}; // 24 bytes
+    float postEffectParams[6] = {}; // 24 bytes
+    uint32_t defaultFg = 0;         // 4 bytes - packed RGBA like cell.fg
+    uint32_t defaultBg = 0;         // 4 bytes - packed RGB like cell.bg
+    uint32_t spaceGlyph = 0;        // 4 bytes - glyph index for space character
+    uint32_t _pad2[3] = {};         // 12 bytes padding to 224 (multiple of 16)
+  }; // Total: 224 bytes
 
   Uniforms _uniforms;
 
@@ -3013,7 +3023,8 @@ int GPUScreenImpl::onOSC(int command, VTermStringFragment frag, void *user) {
   yinfo(">>> onOSC: command={} initial={} final={} len={}", command,
          (bool)frag.initial, (bool)frag.final, (size_t)frag.len);
 
-  if (command != YETTY_OSC_VENDOR_ID) {
+  // Accept yetty vendor commands: 666666 (cards), 666667 (pre-effect), 666668 (post-effect)
+  if (command != YETTY_OSC_VENDOR_ID && command != 666667 && command != 666668) {
     yinfo(">>> onOSC: ignoring non-yetty command {}", command);
     return 0;
   }
@@ -3033,6 +3044,14 @@ int GPUScreenImpl::onOSC(int command, VTermStringFragment frag, void *user) {
   }
 
   if (frag.final) {
+    // Handle effect OSC commands directly (666667 = pre-effect, 666668 = post-effect)
+    if (command == 666667 || command == 666668) {
+      self->handleEffectOSC(command, self->_oscBuffer);
+      self->_oscBuffer.clear();
+      self->_oscCommand = -1;
+      return 1;
+    }
+
     std::string fullSeq = std::to_string(command) + ";" + self->_oscBuffer;
     yinfo("onOSC: FINAL - fullSeq len={} first100chars='{}'",
           fullSeq.size(), fullSeq.substr(0, 100));
@@ -3293,6 +3312,60 @@ bool GPUScreenImpl::handleOSCSequence(const std::string &sequence,
   }
 
   return handleCardOSCSequence(sequence, response, linesToAdvance);
+}
+
+//=============================================================================
+// Effect OSC Handling (666667 = pre-effect, 666668 = post-effect)
+// Payload format: INDEX:p0:p1:p2:p3:p4:p5  (params optional, 0 = disable)
+//=============================================================================
+
+void GPUScreenImpl::handleEffectOSC(int command, const std::string &payload) {
+  bool isPre = (command == 666667);
+  const char* label = isPre ? "pre-effect" : "post-effect";
+
+  // Parse colon-separated values
+  std::vector<float> values;
+  std::string token;
+  std::istringstream stream(payload);
+  while (std::getline(stream, token, ':')) {
+    if (!token.empty()) {
+      try { values.push_back(std::stof(token)); } catch (...) { values.push_back(0.0f); }
+    }
+  }
+
+  if (values.empty()) {
+    yinfo("Effect OSC {}: disabling {}", command, label);
+    if (isPre) {
+      _uniforms.preEffectIndex = 0;
+    } else {
+      _uniforms.postEffectIndex = 0;
+    }
+    return;
+  }
+
+  uint32_t effectIndex = static_cast<uint32_t>(values[0]);
+
+  if (isPre) {
+    _uniforms.preEffectIndex = effectIndex;
+    for (int i = 0; i < 6; i++) {
+      _uniforms.preEffectParams[i] = (i + 1 < static_cast<int>(values.size())) ? values[i + 1] : 0.0f;
+    }
+    yinfo("Effect OSC: {} index={} params=[{},{},{},{},{},{}]",
+          label, effectIndex,
+          _uniforms.preEffectParams[0], _uniforms.preEffectParams[1],
+          _uniforms.preEffectParams[2], _uniforms.preEffectParams[3],
+          _uniforms.preEffectParams[4], _uniforms.preEffectParams[5]);
+  } else {
+    _uniforms.postEffectIndex = effectIndex;
+    for (int i = 0; i < 6; i++) {
+      _uniforms.postEffectParams[i] = (i + 1 < static_cast<int>(values.size())) ? values[i + 1] : 0.0f;
+    }
+    yinfo("Effect OSC: {} index={} params=[{},{},{},{},{},{}]",
+          label, effectIndex,
+          _uniforms.postEffectParams[0], _uniforms.postEffectParams[1],
+          _uniforms.postEffectParams[2], _uniforms.postEffectParams[3],
+          _uniforms.postEffectParams[4], _uniforms.postEffectParams[5]);
+  }
 }
 
 //=============================================================================
@@ -3860,11 +3933,16 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
         Card* card = getCardAtCell(row, col);
         if (card) {
           clearSelection();
-          yinfo("GPUScreen {} clicked on card '{}' (id={}) at cell ({},{}), dispatching SetFocus",
-                _id, card->typeName(), card->id(), row, col);
           loop->dispatch(base::Event::focusEvent(card->id()));
           float cardX, cardY;
           cardLocalCoords(localX, localY, row, col, cardX, cardY);
+          // Clamp to card's pixel dimensions
+          float cardPixelW = static_cast<float>(card->widthCells() * getCellWidth());
+          float cardPixelH = static_cast<float>(card->heightCells() * getCellHeight());
+          cardX = std::max(0.0f, std::min(cardX, cardPixelW - 1.0f));
+          cardY = std::max(0.0f, std::min(cardY, cardPixelH - 1.0f));
+          ydebug("GPUScreen {} card click: localXY=({:.1f},{:.1f}) cell=({},{}) cardXY=({:.1f},{:.1f}) cellSize={}x{}",
+                _id, localX, localY, col, row, cardX, cardY, getCellWidth(), getCellHeight());
           _cardMouseTarget = card->id();
           loop->dispatch(base::Event::cardMouseDown(card->id(), cardX, cardY, button));
         } else if (button == 0) {
@@ -3929,6 +4007,11 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
           if (card && card->id() == _cardMouseTarget) {
             float cardX, cardY;
             cardLocalCoords(localX, localY, row, col, cardX, cardY);
+            // Clamp to card's pixel dimensions
+            float cardPixelW = static_cast<float>(card->widthCells() * getCellWidth());
+            float cardPixelH = static_cast<float>(card->heightCells() * getCellHeight());
+            cardX = std::max(0.0f, std::min(cardX, cardPixelW - 1.0f));
+            cardY = std::max(0.0f, std::min(cardY, cardPixelH - 1.0f));
             auto loop = *base::EventLoop::instance();
             loop->dispatch(base::Event::cardMouseMove(_cardMouseTarget, cardX, cardY));
           } else {
@@ -3974,6 +4057,11 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
       Card* card = getCardAtCell(row, col);
       if (card && card->id() == _cardMouseTarget) {
         cardLocalCoords(localX, localY, row, col, cardX, cardY);
+        // Clamp to card's pixel dimensions
+        float cardPixelW = static_cast<float>(card->widthCells() * getCellWidth());
+        float cardPixelH = static_cast<float>(card->heightCells() * getCellHeight());
+        cardX = std::max(0.0f, std::min(cardX, cardPixelW - 1.0f));
+        cardY = std::max(0.0f, std::min(cardY, cardPixelH - 1.0f));
       } else {
         cardX = localX;
         cardY = localY;
@@ -4006,6 +4094,11 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
         if (scrollCard) {
           float cardX, cardY;
           cardLocalCoords(localX, localY, row, col, cardX, cardY);
+          // Clamp to card's pixel dimensions
+          float cardPixelW = static_cast<float>(scrollCard->widthCells() * getCellWidth());
+          float cardPixelH = static_cast<float>(scrollCard->heightCells() * getCellHeight());
+          cardX = std::max(0.0f, std::min(cardX, cardPixelW - 1.0f));
+          cardY = std::max(0.0f, std::min(cardY, cardPixelH - 1.0f));
           auto loop = *base::EventLoop::instance();
           loop->dispatch(base::Event::cardScrollEvent(
               scrollCard->id(), cardX, cardY, event.scroll.dx, event.scroll.dy, event.scroll.mods));
@@ -4500,6 +4593,11 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
     _uniforms.selStart = {0.0f, 0.0f};
     _uniforms.selEnd = {0.0f, 0.0f};
   }
+
+  // Default fg/bg colors (packed as RGBA u32, same format as cell.fg/bg)
+  _uniforms.defaultFg = defaultFg_.rgb.red | (defaultFg_.rgb.green << 8) | (defaultFg_.rgb.blue << 16) | (0xFFu << 24);
+  _uniforms.defaultBg = defaultBg_.rgb.red | (defaultBg_.rgb.green << 8) | (defaultBg_.rgb.blue << 16);
+  _uniforms.spaceGlyph = _cachedSpaceGlyph;
 
   wgpuQueueWriteBuffer(queue, _uniformBuffer, 0, &_uniforms, sizeof(Uniforms));
 
