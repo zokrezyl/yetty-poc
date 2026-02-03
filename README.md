@@ -109,6 +109,7 @@ Stay tuned for the Plugin SDK documentation.
 - **[Font System](docs/fonts.md)** - MSDF fonts, emoji rendering, shader glyphs, and GPU text rendering
 - **[Card System](docs/cards.md)** - Card architecture, OSC sequences, texture atlas, storage buffers, and YDraw spatial hashing
 - **[Shader Effects](docs/effects.md)** - Pre/post-processing effects, CRT simulation, Matrix rain, and custom effect creation
+- **[Credits](docs/credits.md)** - Acknowledgments to the projects and people that made Yetty possible
 
 ## Technical Highlights
 

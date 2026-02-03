@@ -7,6 +7,7 @@
 #include "cards/kdraw/kdraw.h"
 #include "cards/jdraw/jdraw.h"
 #include "cards/ydraw-zoo/ydraw-zoo.h"
+#include "cards/ytext/ytext.h"
 #include "cards/ymery/ymery.h"
 #include "cards/markdown/markdown.h"
 #include "cards/thorvg/thorvg.h"
@@ -72,6 +73,16 @@ public:
                                  const std::string& args,
                                  const std::string& payload) {
             return card::YDrawZoo::create(ctx, x, y, w, h, args, payload);
+        });
+
+        registerCard("ytext", [](const YettyContext& ctx,
+                                int32_t x, int32_t y,
+                                uint32_t w, uint32_t h,
+                                const std::string& args,
+                                const std::string& payload) -> Result<CardPtr> {
+            auto result = card::YText::create(ctx, x, y, w, h, args, payload);
+            if (!result) return std::unexpected(result.error());
+            return Ok<CardPtr>(*result);
         });
 
         registerCard("kdraw", [](const YettyContext& ctx,
