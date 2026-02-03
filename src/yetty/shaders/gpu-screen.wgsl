@@ -44,10 +44,15 @@ struct GridUniforms {
     defaultFg: u32,            // 4 bytes - packed RGBA like cell.fg
     defaultBg: u32,            // 4 bytes - packed RGB like cell.bg
     spaceGlyph: u32,           // 4 bytes - glyph index for space character
-    _pad2a: u32,               // padding to 224
-    _pad2b: u32,
-    _pad2c: u32,
-};
+    // Coordinate distortion effects (no prefix - just "effect")
+    effectIndex: u32,          // 4 bytes (0 = no effect)
+    effectP0: f32,             // 4 bytes
+    effectP1: f32,             // 4 bytes
+    effectP2: f32,             // 4 bytes
+    effectP3: f32,             // 4 bytes
+    effectP4: f32,             // 4 bytes
+    effectP5: f32,             // 4 bytes
+};  // Total: 240 bytes (16-byte aligned)
 
 // Glyph metadata (40 bytes per glyph, matches C++ GlyphMetadataGPU)
 struct GlyphMetadata {
@@ -212,6 +217,9 @@ fn getFontType(attrs: u32) -> u32 {
 // ==== PRE-EFFECT FUNCTIONS (injected by loader) ====
 // PRE_EFFECT_FUNCTIONS_PLACEHOLDER
 
+// ==== COORD EFFECT FUNCTIONS (injected by loader) ====
+// EFFECT_FUNCTIONS_PLACEHOLDER
+
 // ==== POST-EFFECT FUNCTIONS (injected by loader) ====
 // POST_EFFECT_FUNCTIONS_PLACEHOLDER
 
@@ -265,15 +273,20 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         return vec4<f32>(0.1, 0.1, 0.1, 1.0);  // Background color
     }
 
-    // Calculate which cell we're in
-    let cellCol = floor(pixelPos.x / grid.cellSize.x);
-    let cellRow = floor(pixelPos.y / grid.cellSize.y);
+    // ==== COORD EFFECT: distort pixel position before cell lookup ====
+    // effectIndex 0 = no effect, 1+ = apply effect
+    var distortedPos = pixelPos;
+    // EFFECT_APPLY_PLACEHOLDER
+
+    // Calculate which cell we're in (clamped to valid range after effects)
+    let cellCol = clamp(floor(distortedPos.x / grid.cellSize.x), 0.0, grid.gridSize.x - 1.0);
+    let cellRow = clamp(floor(distortedPos.y / grid.cellSize.y), 0.0, grid.gridSize.y - 1.0);
     let cellCoord = vec2<i32>(i32(cellCol), i32(cellRow));
 
     // Position within the cell (pixels from top-left of cell)
     let localPxBase = vec2<f32>(
-        pixelPos.x - cellCol * grid.cellSize.x,
-        pixelPos.y - cellRow * grid.cellSize.y
+        distortedPos.x - cellCol * grid.cellSize.x,
+        distortedPos.y - cellRow * grid.cellSize.y
     );
 
     // Get cell data from storage buffer (zero-copy from CPU)

@@ -11,6 +11,7 @@
 #include <vector>
 #include <map>
 #include <filesystem>
+#include <atomic>
 
 #ifndef CMAKE_SOURCE_DIR
 #define CMAKE_SOURCE_DIR "."
@@ -18,11 +19,246 @@
 
 namespace yetty {
 
+// Stub shader preamble for validating individual effect files
+// Contains minimal declarations so effect code can reference grid.*, globals.*, and util_* functions
+static const char* VALIDATION_STUB_PREAMBLE = R"(
+// Minimal stubs for effect validation
+struct SharedUniforms {
+    time: f32,
+    deltaTime: f32,
+    screenWidth: f32,
+    screenHeight: f32,
+    mouseX: f32,
+    mouseY: f32,
+    lastChar: u32,
+    lastCharTime: f32,
+};
+
+struct GridUniforms {
+    projection: mat4x4<f32>,
+    screenSize: vec2<f32>,
+    cellSize: vec2<f32>,
+    gridSize: vec2<f32>,
+    pixelRange: f32,
+    scale: f32,
+    cursorPos: vec2<f32>,
+    cursorVisible: f32,
+    cursorShape: f32,
+    viewportOrigin: vec2<f32>,
+    cursorBlink: f32,
+    hasSelection: f32,
+    selStart: vec2<f32>,
+    selEnd: vec2<f32>,
+    preEffectIndex: u32,
+    postEffectIndex: u32,
+    preEffectP0: f32,
+    preEffectP1: f32,
+    preEffectP2: f32,
+    preEffectP3: f32,
+    preEffectP4: f32,
+    preEffectP5: f32,
+    postEffectP0: f32,
+    postEffectP1: f32,
+    postEffectP2: f32,
+    postEffectP3: f32,
+    postEffectP4: f32,
+    postEffectP5: f32,
+    defaultFg: u32,
+    defaultBg: u32,
+    spaceGlyph: u32,
+    effectIndex: u32,
+    effectP0: f32,
+    effectP1: f32,
+    effectP2: f32,
+    effectP3: f32,
+    effectP4: f32,
+    effectP5: f32,
+};
+
+@group(0) @binding(0) var<uniform> globals: SharedUniforms;
+@group(1) @binding(0) var<uniform> grid: GridUniforms;
+
+// Stub utility functions (from lib/util.wgsl)
+fn util_hash11(p_in: f32) -> f32 {
+    var p = fract(p_in * 0.1031);
+    p *= p + 33.33;
+    p *= p + p;
+    return fract(p);
+}
+
+fn util_hash21(p: vec2<f32>) -> f32 {
+    var p3 = fract(vec3<f32>(p.x, p.y, p.x) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+fn util_hash31(p: vec3<f32>) -> f32 {
+    var p3 = fract(p * 0.1031);
+    p3 += dot(p3, p3.zyx + 31.32);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+fn util_hash22(p: vec2<f32>) -> vec2<f32> {
+    var p3 = fract(vec3<f32>(p.x, p.y, p.x) * vec3<f32>(0.1031, 0.1030, 0.0973));
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.xx + p3.yz) * p3.zy);
+}
+
+fn util_hash33(p: vec3<f32>) -> vec3<f32> {
+    var p3 = fract(p * vec3<f32>(0.1031, 0.1030, 0.0973));
+    p3 += dot(p3, p3.yxz + 33.33);
+    return fract((p3.xxy + p3.yxx) * p3.zyx);
+}
+
+fn util_valueNoise(p: vec2<f32>) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let u = f * f * (3.0 - 2.0 * f);
+    return mix(
+        mix(util_hash21(i + vec2<f32>(0.0, 0.0)),
+            util_hash21(i + vec2<f32>(1.0, 0.0)), u.x),
+        mix(util_hash21(i + vec2<f32>(0.0, 1.0)),
+            util_hash21(i + vec2<f32>(1.0, 1.0)), u.x),
+        u.y
+    );
+}
+
+fn util_valueNoise3(p: vec3<f32>) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let u = f * f * (3.0 - 2.0 * f);
+    return mix(
+        mix(mix(util_hash31(i + vec3<f32>(0.0, 0.0, 0.0)),
+                util_hash31(i + vec3<f32>(1.0, 0.0, 0.0)), u.x),
+            mix(util_hash31(i + vec3<f32>(0.0, 1.0, 0.0)),
+                util_hash31(i + vec3<f32>(1.0, 1.0, 0.0)), u.x), u.y),
+        mix(mix(util_hash31(i + vec3<f32>(0.0, 0.0, 1.0)),
+                util_hash31(i + vec3<f32>(1.0, 0.0, 1.0)), u.x),
+            mix(util_hash31(i + vec3<f32>(0.0, 1.0, 1.0)),
+                util_hash31(i + vec3<f32>(1.0, 1.0, 1.0)), u.x), u.y),
+        u.z
+    );
+}
+
+fn util_colorNoise(uv: vec2<f32>) -> vec3<f32> {
+    return vec3<f32>(
+        util_valueNoise(uv * 256.0),
+        util_valueNoise(uv * 256.0 + vec2<f32>(37.0, 17.0)),
+        util_valueNoise(uv * 256.0 + vec2<f32>(59.0, 83.0))
+    );
+}
+
+// Dummy entry points (required for valid shader module)
+@vertex fn vs_validation_stub(@builtin(vertex_index) idx: u32) -> @builtin(position) vec4<f32> {
+    return vec4<f32>(0.0);
+}
+@fragment fn fs_validation_stub() -> @location(0) vec4<f32> {
+    return vec4<f32>(0.0);
+}
+
+// === EFFECT CODE BELOW ===
+)";
+
+// Validate a single shader file using WebGPU device
+// Returns true if valid, false if compilation failed
+// This catches errors early before merging all shaders together
+static bool validateShaderFile(WGPUDevice device, const std::string& code,
+                               const std::string& filename, std::string& errorMsg) {
+    if (!device) {
+        errorMsg = "No device for validation";
+        return false;
+    }
+
+    // Build complete test shader
+    std::string testShader = VALIDATION_STUB_PREAMBLE;
+    testShader += code;
+
+    WGPUShaderSourceWGSL wgslDesc = {};
+    wgslDesc.chain.sType = WGPUSType_ShaderSourceWGSL;
+    WGPU_SHADER_CODE(wgslDesc, testShader);
+
+    WGPUShaderModuleDescriptor desc = {};
+    desc.label = WGPU_STR(filename.c_str());
+    desc.nextInChain = &wgslDesc.chain;
+
+    // Use error scope to capture validation errors
+    wgpuDevicePushErrorScope(device, WGPUErrorFilter_Validation);
+
+    WGPUShaderModule module = wgpuDeviceCreateShaderModule(device, &desc);
+
+    std::atomic<bool> callbackDone{false};
+    bool hadError = false;
+    std::string scopeError;
+
+    WGPUPopErrorScopeCallbackInfo popInfo = {};
+    popInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+    popInfo.callback = [](WGPUPopErrorScopeStatus status, WGPUErrorType type,
+                          WGPUStringView message, void* userdata1, void* userdata2) {
+        if (type != WGPUErrorType_NoError) {
+            *static_cast<bool*>(userdata1) = true;
+            auto* msg = static_cast<std::string*>(userdata2);
+            if (message.data && message.length > 0) {
+                *msg = std::string(message.data, message.length);
+            } else {
+                *msg = "Unknown shader error";
+            }
+        }
+    };
+    popInfo.userdata1 = &hadError;
+    popInfo.userdata2 = &scopeError;
+
+    wgpuDevicePopErrorScope(device, popInfo);
+
+    // Clean up test module
+    if (module) {
+        wgpuShaderModuleRelease(module);
+    }
+
+    if (hadError || !module) {
+        // Adjust line numbers in error message (subtract preamble lines)
+        // Count lines in preamble
+        int preambleLines = 0;
+        for (char c : std::string(VALIDATION_STUB_PREAMBLE)) {
+            if (c == '\n') preambleLines++;
+        }
+
+        // Try to adjust line numbers in error message
+        errorMsg = scopeError;
+        // Common error format: ":123:45 error:" - adjust line number
+        size_t pos = 0;
+        while ((pos = errorMsg.find(':', pos)) != std::string::npos) {
+            size_t numStart = pos + 1;
+            size_t numEnd = numStart;
+            while (numEnd < errorMsg.size() && std::isdigit(errorMsg[numEnd])) {
+                numEnd++;
+            }
+            if (numEnd > numStart && numEnd < errorMsg.size() && errorMsg[numEnd] == ':') {
+                // Found a line number
+                int lineNum = std::stoi(errorMsg.substr(numStart, numEnd - numStart));
+                int adjustedLine = lineNum - preambleLines;
+                if (adjustedLine > 0) {
+                    errorMsg = errorMsg.substr(0, numStart) +
+                               std::to_string(adjustedLine) +
+                               errorMsg.substr(numEnd);
+                }
+                break;  // Only adjust first line number
+            }
+            pos = numEnd;
+        }
+
+        return false;
+    }
+
+    return true;
+}
+
 // Placeholder markers in the base shader
 static const char* FUNCTIONS_PLACEHOLDER = "// SHADER_GLYPH_FUNCTIONS_PLACEHOLDER";
 static const char* DISPATCH_PLACEHOLDER = "// SHADER_GLYPH_DISPATCH_PLACEHOLDER";
 static const char* PRE_EFFECT_FUNCTIONS_PLACEHOLDER = "// PRE_EFFECT_FUNCTIONS_PLACEHOLDER";
 static const char* PRE_EFFECT_APPLY_PLACEHOLDER = "// PRE_EFFECT_APPLY_PLACEHOLDER";
+static const char* EFFECT_FUNCTIONS_PLACEHOLDER = "// EFFECT_FUNCTIONS_PLACEHOLDER";
+static const char* EFFECT_APPLY_PLACEHOLDER = "// EFFECT_APPLY_PLACEHOLDER";
 static const char* POST_EFFECT_FUNCTIONS_PLACEHOLDER = "// POST_EFFECT_FUNCTIONS_PLACEHOLDER";
 static const char* POST_EFFECT_APPLY_PLACEHOLDER = "// POST_EFFECT_APPLY_PLACEHOLDER";
 
@@ -65,6 +301,7 @@ private:
         std::string code;
     };
     std::vector<EffectFile> _preEffects;
+    std::vector<EffectFile> _effects;      // coord distortion effects (no prefix)
     std::vector<EffectFile> _postEffects;
 
     // Shared GPU resources
@@ -148,7 +385,8 @@ Result<void> ShaderManagerImpl::init(const GPUContext& gpu) noexcept {
         ywarn("ShaderManager: lib directory not found at {}", libDir);
     }
 
-    // Load pre-effect and post-effect shaders
+    // Load pre-effect and post-effect shaders with optional validation
+    // Validation is enabled when WEBGPU_BACKEND_DAWN is defined (compile-time check)
     auto loadEffects = [this](const std::string& dir, std::vector<EffectFile>& dest, const std::string& prefix) {
         if (!std::filesystem::exists(dir) || !std::filesystem::is_directory(dir)) {
             yinfo("ShaderManager: no {} directory at {}", prefix, dir);
@@ -182,9 +420,10 @@ Result<void> ShaderManagerImpl::init(const GPUContext& gpu) noexcept {
                 continue;
             }
 
-            // Extract function name: find "fn <prefix>Effect_" or "fn <prefix>_"
+            // Extract function name: find "fn <prefix>Effect_" (or "fn effect_" for empty prefix)
             std::string funcName;
-            auto fnPos = code.find("fn " + prefix + "Effect_");
+            std::string searchPattern = prefix.empty() ? "fn effect_" : ("fn " + prefix + "Effect_");
+            auto fnPos = code.find(searchPattern);
             if (fnPos != std::string::npos) {
                 auto nameStart = fnPos + 3;
                 auto paren = code.find('(', nameStart);
@@ -194,6 +433,42 @@ Result<void> ShaderManagerImpl::init(const GPUContext& gpu) noexcept {
             }
 
             std::string name = entry.path().stem().string();
+            std::string filename = entry.path().filename().string();
+
+            // TODO: Per-file WGSL validation is currently disabled.
+            //
+            // The intention was to validate each effect file individually before merging,
+            // so that syntax errors would show file-specific error messages instead of
+            // cryptic line numbers in the merged shader (e.g., ":932:9 error").
+            //
+            // However, the current implementation validates files in isolation with
+            // incomplete stubs. Effects that use library functions (e.g., renderGlyphInCell
+            // from lib/text.wgsl) fail validation even though they work fine in the
+            // merged shader where all libraries are available.
+            //
+            // To fix: build validation stubs dynamically from the already-loaded _libraries
+            // map, so all library functions are available during per-file validation.
+            //
+            // See: validateShaderFile() and VALIDATION_STUB_PREAMBLE above.
+#if 0  // Disabled - needs complete library stubs
+            std::string validationError;
+            if (!validateShaderFile(_gpu.device, code, filename, validationError)) {
+                yerror("ShaderManager: WGSL validation FAILED for {}", filename);
+                yerror("  Error: {}", validationError);
+                std::istringstream iss(code);
+                std::string line;
+                int lineNum = 1;
+                yerror("  --- Source code ---");
+                while (std::getline(iss, line)) {
+                    yerror("  {:3d}: {}", lineNum++, line);
+                }
+                yerror("  --- End of source ---");
+                ywarn("ShaderManager: skipping invalid effect {}", name);
+                continue;
+            }
+            ydebug("ShaderManager: validated {} effect '{}'", prefix.empty() ? "coord" : prefix, name);
+#endif
+
             dest.push_back({idx, name, funcName, code});
             yinfo("ShaderManager: loaded {} effect '{}' index={} func={}", prefix, name, idx, funcName);
         }
@@ -204,12 +479,15 @@ Result<void> ShaderManagerImpl::init(const GPUContext& gpu) noexcept {
     };
 
     std::string preEffectsDir = std::string(CMAKE_SOURCE_DIR) + "/src/yetty/shaders/pre-effects";
+    std::string effectsDir = std::string(CMAKE_SOURCE_DIR) + "/src/yetty/shaders/effects";
     std::string postEffectsDir = std::string(CMAKE_SOURCE_DIR) + "/src/yetty/shaders/post-effects";
     loadEffects(preEffectsDir, _preEffects, "pre");
+    loadEffects(effectsDir, _effects, "");  // no prefix for coord effects
     loadEffects(postEffectsDir, _postEffects, "post");
 
     _initialized = true;
-    yinfo("ShaderManager: initialized ({} pre-effects, {} post-effects)", _preEffects.size(), _postEffects.size());
+    yinfo("ShaderManager: initialized ({} pre-effects, {} effects, {} post-effects)",
+          _preEffects.size(), _effects.size(), _postEffects.size());
     return Ok();
 }
 
@@ -358,6 +636,35 @@ std::string ShaderManagerImpl::mergeShaders() const {
     }
     if (!replacePlaceholder(result, PRE_EFFECT_APPLY_PLACEHOLDER, preEffectApply)) {
         ywarn("ShaderManager: pre-effect apply placeholder not found");
+    }
+
+    // Coord effect functions (no prefix)
+    std::string effectFunctions;
+    for (const auto& ef : _effects) {
+        effectFunctions += "// Effect: " + ef.name + "\n";
+        effectFunctions += ef.code + "\n\n";
+    }
+    if (!replacePlaceholder(result, EFFECT_FUNCTIONS_PLACEHOLDER, effectFunctions)) {
+        ywarn("ShaderManager: effect functions placeholder not found");
+    }
+
+    // Coord effect apply dispatch
+    // Effects modify distortedPos: distortedPos = effect_xxx(pixelPos)
+    std::string effectApply;
+    if (!_effects.empty()) {
+        effectApply = "if (grid.effectIndex != 0u) {\n";
+        for (size_t i = 0; i < _effects.size(); i++) {
+            const auto& ef = _effects[i];
+            if (ef.funcName.empty()) continue;
+            if (i > 0) effectApply += " else ";
+            effectApply += "    if (grid.effectIndex == " + std::to_string(ef.index) + "u) {\n";
+            effectApply += "        distortedPos = " + ef.funcName + "(pixelPos);\n";
+            effectApply += "    }";
+        }
+        effectApply += "\n    }\n";
+    }
+    if (!replacePlaceholder(result, EFFECT_APPLY_PLACEHOLDER, effectApply)) {
+        ywarn("ShaderManager: effect apply placeholder not found");
     }
 
     // Post-effect functions
