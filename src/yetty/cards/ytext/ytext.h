@@ -57,14 +57,17 @@ enum class YTextScrollMode : uint32_t {
     PingPong = 2,   // Bounce back and forth
 };
 
-// 3D effect modes
+// Effect modes
 enum class YTextEffectMode : uint32_t {
-    None = 0,       // Flat text
-    CylinderH = 1,  // Horizontal cylinder (drum rolling vertically)
-    CylinderV = 2,  // Vertical cylinder (drum rolling horizontally)
-    Sphere = 3,     // Spherical surface
-    WaveH = 4,      // Horizontal wave (ripples along X)
-    WaveV = 5,      // Vertical wave (ripples along Y)
+    None = 0,        // Flat text
+    CylinderH = 1,   // Horizontal cylinder projection
+    CylinderV = 2,   // Vertical cylinder projection
+    Sphere = 3,      // Sphere projection
+    WaveDispH = 4,   // Horizontal wave displacement (no foreshortening)
+    WaveDispV = 5,   // Vertical wave displacement (no foreshortening)
+    WaveProjH = 6,   // Horizontal wave projection (foreshortening)
+    WaveProjV = 7,   // Vertical wave projection (foreshortening)
+    Ripple = 8,      // Concentric water ripple projection
 };
 
 class YText : public Card,

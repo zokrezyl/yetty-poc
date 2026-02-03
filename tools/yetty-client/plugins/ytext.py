@@ -22,17 +22,24 @@ from pathlib import Path
               help='Vertical cylinder effect (drum rolling horizontally)')
 @click.option('--sphere', 'sphere_mode', is_flag=True,
               help='Sphere effect')
-@click.option('--wave', 'wave_mode', is_flag=True,
-              help='Horizontal wave effect (ripples along X)')
-@click.option('--wave-v', 'wave_v_mode', is_flag=True,
-              help='Vertical wave effect (ripples along Y)')
+@click.option('--wave-disp', 'wave_disp_mode', is_flag=True,
+              help='Horizontal wave displacement (no foreshortening)')
+@click.option('--wave-disp-v', 'wave_disp_v_mode', is_flag=True,
+              help='Vertical wave displacement (no foreshortening)')
+@click.option('--wave-proj', 'wave_proj_mode', is_flag=True,
+              help='Horizontal wave projection (text on wavy surface)')
+@click.option('--wave-proj-v', 'wave_proj_v_mode', is_flag=True,
+              help='Vertical wave projection (text on wavy surface)')
+@click.option('--ripple', 'ripple_mode', is_flag=True,
+              help='Concentric water ripple effect (text on water surface)')
 @click.option('--effect-strength', '-es', 'effect_strength', type=float, default=0.0,
               help='Effect intensity (0.0-1.0, default: 0.8)')
 @click.option('--frequency', '-freq', 'frequency', type=float, default=0.0,
               help='Wave frequency (default: 3.0)')
 @click.pass_context
 def ytext(ctx, input_, inline_, scroll_x, scroll_y, loop_mode, pingpong_mode, font_size,
-          cylinder_mode, cylinder_v_mode, sphere_mode, wave_mode, wave_v_mode,
+          cylinder_mode, cylinder_v_mode, sphere_mode, wave_disp_mode, wave_disp_v_mode,
+          wave_proj_mode, wave_proj_v_mode, ripple_mode,
           effect_strength, frequency):
     """GPU-animated scrolling text card with 3D effects.
 
@@ -46,8 +53,14 @@ def ytext(ctx, input_, inline_, scroll_x, scroll_y, loop_mode, pingpong_mode, fo
         # Cylinder effect (text on rotating drum)
         yetty-client create ytext -I "Rolling..." --scroll-y 40 --loop --cylinder
 
-        # Wave effect (animated ripples)
-        yetty-client create ytext -I "Wavy text" --wave --effect-strength 0.5
+        # Wave displacement (text moves with ripples, no foreshortening)
+        yetty-client create ytext -I "Wavy text" --wave-disp --effect-strength 0.5
+
+        # Wave projection (text on wavy surface, foreshortening)
+        yetty-client create ytext -I "Surface text" --wave-proj --effect-strength 0.5
+
+        # Water ripple effect
+        yetty-client create ytext -I "Water drop" --ripple --effect-strength 0.5
 
         # Sphere effect
         yetty-client create ytext -I "Globe" --scroll-y 30 --loop --sphere
@@ -57,14 +70,21 @@ def ytext(ctx, input_, inline_, scroll_x, scroll_y, loop_mode, pingpong_mode, fo
         --loop      Loop - seamless wrap-around
         --pingpong  Ping-pong - bounces back and forth
 
-    3D Effects:
-        --cylinder    Horizontal cylinder (best with vertical scroll)
-        --cylinder-v  Vertical cylinder (best with horizontal scroll)
-        --sphere      Spherical surface
-        --wave        Horizontal wave (animated ripples along X)
-        --wave-v      Vertical wave (animated ripples along Y)
+    Projection Effects (foreshortening):
+        --cylinder      Horizontal cylinder projection
+        --cylinder-v    Vertical cylinder projection
+        --sphere        Sphere projection
+        --wave-proj     Horizontal wave projection
+        --wave-proj-v   Vertical wave projection
+        --ripple        Concentric water ripple projection
+
+    Displacement Effects (no foreshortening):
+        --wave-disp     Horizontal wave displacement
+        --wave-disp-v   Vertical wave displacement
+
+    Parameters:
         --effect-strength  Effect intensity (0.0-1.0)
-        --frequency   Wave frequency (for wave effects)
+        --frequency        Wave/ripple frequency
     """
     ctx.ensure_object(dict)
 
@@ -94,10 +114,16 @@ def ytext(ctx, input_, inline_, scroll_x, scroll_y, loop_mode, pingpong_mode, fo
         args_parts.append("--cylinder-v")
     if sphere_mode:
         args_parts.append("--sphere")
-    if wave_mode:
-        args_parts.append("--wave")
-    if wave_v_mode:
-        args_parts.append("--wave-v")
+    if wave_disp_mode:
+        args_parts.append("--wave-disp")
+    if wave_disp_v_mode:
+        args_parts.append("--wave-disp-v")
+    if wave_proj_mode:
+        args_parts.append("--wave-proj")
+    if wave_proj_v_mode:
+        args_parts.append("--wave-proj-v")
+    if ripple_mode:
+        args_parts.append("--ripple")
     if effect_strength > 0.0:
         args_parts.append(f"--effect-strength {effect_strength}")
     if frequency > 0.0:

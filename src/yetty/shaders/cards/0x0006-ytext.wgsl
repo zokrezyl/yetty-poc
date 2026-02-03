@@ -1,288 +1,375 @@
 // Shader glyph: YText widget (codepoint 1048582 / U+100006)
-// GPU-animated scrolling text with time-based animation and 3D effects
+// GPU-animated scrolling text with projection effects
 //
 // Architecture:
-//   - Text organized into lines (binary search for Y)
-//   - Each line contains glyphs (linear search for X)
-//   - Scroll computed from: time * scrollSpeed
-//   - 3D effects: cylinder, sphere, wave with proper projection math
+//   1. SCROLL: moves viewport over content (seamless loop, pingpong, clamp)
+//   2. PROJECTION: distorts how viewport appears (flat, cylinder, sphere, wave)
 //
 // =============================================================================
 // Metadata layout (64 bytes = 16 u32s):
-//   offset 0:  lineOffset (u32)     - offset to line data in cardStorage
-//   offset 1:  lineCount (u32)      - number of lines
-//   offset 2:  glyphOffset (u32)    - offset to glyph data in cardStorage
-//   offset 3:  glyphCount (u32)     - total glyphs
-//   offset 4:  contentWidth (f32)   - total content width
-//   offset 5:  contentHeight (f32)  - total content height
-//   offset 6:  scrollSpeedX (f32)   - horizontal scroll (pixels/sec)
-//   offset 7:  scrollSpeedY (f32)   - vertical scroll (pixels/sec)
-//   offset 8:  scrollMode (u32)     - 0=clamp, 1=loop, 2=pingpong
-//   offset 9:  widthCells (u32)
-//   offset 10: heightCells (u32)
-//   offset 11: bgColor (u32)
-//   offset 12: effectMode (u32)     - 0=none, 1=cylinderH, 2=cylinderV, 3=sphere, 4=waveH, 5=waveV
-//   offset 13: effectStrength (f32) - effect intensity
-//   offset 14: tiltX (f32)          - tilt/frequency parameter
-//   offset 15: tiltY (f32)          - tilt/frequency parameter
-//
+//   offset 0-3:   lineOffset, lineCount, glyphOffset, glyphCount
+//   offset 4-7:   contentWidth, contentHeight, scrollSpeedX, scrollSpeedY
+//   offset 8-11:  scrollMode, widthCells, heightCells, bgColor
+//   offset 12-15: projectionMode, projectionStrength, param1, param2
 // =============================================================================
 
 const YTEXT_SCROLL_CLAMP: u32 = 0u;
 const YTEXT_SCROLL_LOOP: u32 = 1u;
 const YTEXT_SCROLL_PINGPONG: u32 = 2u;
 
-const YTEXT_EFFECT_NONE: u32 = 0u;
-const YTEXT_EFFECT_CYLINDER_H: u32 = 1u;
-const YTEXT_EFFECT_CYLINDER_V: u32 = 2u;
-const YTEXT_EFFECT_SPHERE: u32 = 3u;
-const YTEXT_EFFECT_WAVE_H: u32 = 4u;
-const YTEXT_EFFECT_WAVE_V: u32 = 5u;
+// Projection modes
+const YTEXT_PROJ_FLAT: u32 = 0u;        // Default: no distortion
+const YTEXT_PROJ_CYLINDER_H: u32 = 1u;  // Horizontal cylinder (vertical scroll)
+const YTEXT_PROJ_CYLINDER_V: u32 = 2u;  // Vertical cylinder (horizontal scroll)
+const YTEXT_PROJ_SPHERE: u32 = 3u;      // Sphere
+const YTEXT_PROJ_WAVE_DISP_H: u32 = 4u; // Horizontal wave displacement
+const YTEXT_PROJ_WAVE_DISP_V: u32 = 5u; // Vertical wave displacement
+const YTEXT_PROJ_WAVE_PROJ_H: u32 = 6u; // Horizontal wave projection (foreshortening)
+const YTEXT_PROJ_WAVE_PROJ_V: u32 = 7u; // Vertical wave projection (foreshortening)
+const YTEXT_PROJ_RIPPLE: u32 = 8u;      // Concentric water ripple
 
 const PI: f32 = 3.14159265359;
 
 // =============================================================================
-// Binary search to find line at Y position
+// Binary search for line
 // =============================================================================
 fn ytextFindLine(lineOffset: u32, lineCount: u32, y: f32) -> i32 {
-    if (lineCount == 0u) {
-        return -1;
-    }
-
+    if (lineCount == 0u) { return -1; }
     var lo = 0u;
     var hi = lineCount;
-
     while (lo < hi) {
         let mid = (lo + hi) / 2u;
         let lineOff = lineOffset + mid * 4u;
         let lineY = cardStorage[lineOff + 2u];
         let lineH = cardStorage[lineOff + 3u];
-
-        if (y < lineY) {
-            hi = mid;
-        } else if (y >= lineY + lineH) {
-            lo = mid + 1u;
-        } else {
-            return i32(mid);
-        }
+        if (y < lineY) { hi = mid; }
+        else if (y >= lineY + lineH) { lo = mid + 1u; }
+        else { return i32(mid); }
     }
     return -1;
 }
 
 // =============================================================================
-// 3D Effect Result
+// Projection result
 // =============================================================================
-struct Effect3DResult {
-    uv: vec2<f32>,
-    lighting: f32,
-    visible: bool,
+struct ProjectionResult {
+    uv: vec2<f32>,      // Distorted UV for content lookup
+    lighting: f32,      // Brightness multiplier
+    visible: bool,      // Whether this point is visible
 }
 
 // =============================================================================
-// Horizontal Cylinder Effect (drum rotating vertically)
-// Text wraps around a horizontal cylinder like a rotary drum
+// PROJECTION: Flat surface (default - no distortion)
 // =============================================================================
-fn applyCylinderH(uv: vec2<f32>, strength: f32) -> Effect3DResult {
-    var result: Effect3DResult;
-    result.visible = true;
-
-    // Map screen Y to angle on cylinder
-    // Screen Y in [0,1] maps to angle in [-PI/2 * strength, PI/2 * strength]
-    let centered_y = uv.y - 0.5;  // [-0.5, 0.5]
-
-    // The visible arc of the cylinder
-    let maxAngle = PI * 0.5 * strength;
-    let angle = centered_y * 2.0 * maxAngle;
-
-    // Visibility check - beyond visible arc
-    if (abs(angle) > PI * 0.5) {
-        result.visible = false;
-        result.uv = uv;
-        result.lighting = 0.0;
-        return result;
-    }
-
-    let cosAngle = cos(angle);
-    let sinAngle = sin(angle);
-
-    // For proper cylinder projection:
-    // - X stays the same (cylinder axis is horizontal)
-    // - Y maps through the cylinder arc
-    // The texture Y should map linearly to the angle
-    result.uv.x = uv.x;
-    result.uv.y = (angle / maxAngle) * 0.5 + 0.5;  // Back to [0,1]
-
-    // Lighting: Lambert shading - surface normal faces viewer at center
-    result.lighting = mix(1.0, cosAngle, strength * 0.7);
-
-    return result;
+fn projectFlat(uv: vec2<f32>) -> ProjectionResult {
+    var r: ProjectionResult;
+    r.uv = uv;
+    r.lighting = 1.0;
+    r.visible = true;
+    return r;
 }
 
 // =============================================================================
-// Vertical Cylinder Effect (drum rotating horizontally)
+// PROJECTION: Horizontal Cylinder (drum with horizontal axis)
+// For vertical scrolling - top/bottom edges curve away
+// Creates foreshortening: edges show more content (compressed)
 // =============================================================================
-fn applyCylinderV(uv: vec2<f32>, strength: f32) -> Effect3DResult {
-    var result: Effect3DResult;
-    result.visible = true;
+fn projectCylinderH(uv: vec2<f32>, strength: f32) -> ProjectionResult {
+    var r: ProjectionResult;
+    r.visible = true;
 
-    let centered_x = uv.x - 0.5;
+    // Map screen Y from [0,1] to [-1,1]
+    let screenY = (uv.y - 0.5) * 2.0;
+
+    // The visible arc of cylinder: strength=1 means full hemisphere (90°)
     let maxAngle = PI * 0.5 * strength;
-    let angle = centered_x * 2.0 * maxAngle;
 
-    if (abs(angle) > PI * 0.5) {
-        result.visible = false;
-        result.uv = uv;
-        result.lighting = 0.0;
-        return result;
+    // Screen Y = sin(angle) for orthographic projection of cylinder
+    // So angle = asin(screenY * sin(maxAngle))
+    let sinInput = screenY * sin(maxAngle);
+
+    if (abs(sinInput) > 0.99) {
+        r.visible = false;
+        r.uv = uv;
+        r.lighting = 0.2;
+        return r;
     }
 
-    let cosAngle = cos(angle);
+    let angle = asin(sinInput);
 
-    result.uv.x = (angle / maxAngle) * 0.5 + 0.5;
-    result.uv.y = uv.y;
-    result.lighting = mix(1.0, cosAngle, strength * 0.7);
+    // Texture Y = angle normalized to [0,1]
+    // This creates foreshortening: d(textureY)/d(screenY) = 1/cos(angle)
+    // At edges (angle near ±90°), cos→0, so derivative→∞ = compression
+    let textureY = (angle / maxAngle + 1.0) * 0.5;
 
-    return result;
+    r.uv.x = uv.x;
+    r.uv.y = textureY;
+
+    // Lighting: Lambert shading, brightest at center
+    r.lighting = mix(1.0, cos(angle), strength * 0.6);
+
+    return r;
 }
 
 // =============================================================================
-// Sphere Effect
+// PROJECTION: Vertical Cylinder (drum with vertical axis)
+// For horizontal scrolling - left/right edges curve away
 // =============================================================================
-fn applySphere(uv: vec2<f32>, strength: f32) -> Effect3DResult {
-    var result: Effect3DResult;
-    result.visible = true;
+fn projectCylinderV(uv: vec2<f32>, strength: f32) -> ProjectionResult {
+    var r: ProjectionResult;
+    r.visible = true;
 
-    let centered = uv - vec2<f32>(0.5, 0.5);
+    let screenX = (uv.x - 0.5) * 2.0;
     let maxAngle = PI * 0.5 * strength;
+    let sinInput = screenX * sin(maxAngle);
 
-    // Map to spherical angles
-    let angleX = centered.x * 2.0 * maxAngle;
-    let angleY = centered.y * 2.0 * maxAngle;
-
-    // Check if we're on the visible hemisphere
-    let r2 = (centered.x * centered.x + centered.y * centered.y) * 4.0;
-    if (r2 > 1.0 / (strength * strength + 0.01)) {
-        result.visible = false;
-        result.uv = uv;
-        result.lighting = 0.0;
-        return result;
+    if (abs(sinInput) > 0.99) {
+        r.visible = false;
+        r.uv = uv;
+        r.lighting = 0.2;
+        return r;
     }
 
-    let cosX = cos(angleX);
-    let cosY = cos(angleY);
+    let angle = asin(sinInput);
+    let textureX = (angle / maxAngle + 1.0) * 0.5;
 
-    result.uv.x = (angleX / maxAngle) * 0.5 + 0.5;
-    result.uv.y = (angleY / maxAngle) * 0.5 + 0.5;
+    r.uv.x = textureX;
+    r.uv.y = uv.y;
+    r.lighting = mix(1.0, cos(angle), strength * 0.6);
+
+    return r;
+}
+
+// =============================================================================
+// PROJECTION: Sphere
+// Both X and Y curve away at edges - like text on a globe
+// =============================================================================
+fn projectSphere(uv: vec2<f32>, strength: f32) -> ProjectionResult {
+    var r: ProjectionResult;
+    r.visible = true;
+
+    let screen = (uv - 0.5) * 2.0;  // [-1, 1]
+    let maxAngle = PI * 0.5 * strength;
+    let sinMax = sin(maxAngle);
+
+    // Check if on visible hemisphere
+    let r2 = dot(screen, screen);
+    if (r2 > 1.0) {
+        r.visible = false;
+        r.uv = uv;
+        r.lighting = 0.2;
+        return r;
+    }
+
+    // Apply spherical projection to both axes
+    let sinX = screen.x * sinMax;
+    let sinY = screen.y * sinMax;
+
+    if (abs(sinX) > 0.99 || abs(sinY) > 0.99) {
+        r.visible = false;
+        r.uv = uv;
+        r.lighting = 0.2;
+        return r;
+    }
+
+    let angleX = asin(sinX);
+    let angleY = asin(sinY);
+
+    r.uv.x = (angleX / maxAngle + 1.0) * 0.5;
+    r.uv.y = (angleY / maxAngle + 1.0) * 0.5;
 
     // Spherical lighting
-    let normalZ = cosX * cosY;
-    result.lighting = mix(1.0, max(normalZ, 0.2), strength * 0.8);
+    let cosX = cos(angleX);
+    let cosY = cos(angleY);
+    r.lighting = mix(1.0, cosX * cosY, strength * 0.7);
 
-    return result;
+    return r;
 }
 
 // =============================================================================
-// Horizontal Wave Effect (ripples propagating along X)
+// DISPLACEMENT: Horizontal Wave
+// Ripples propagate along X, displace Y (no foreshortening)
 // =============================================================================
-fn applyWaveH(uv: vec2<f32>, strength: f32, time: f32, frequency: f32) -> Effect3DResult {
-    var result: Effect3DResult;
-    result.visible = true;
+fn projectWaveDispH(uv: vec2<f32>, strength: f32, time: f32, frequency: f32) -> ProjectionResult {
+    var r: ProjectionResult;
+    r.visible = true;
 
-    // Wave parameters
+    let freq = select(3.0, frequency, frequency > 0.0);
+    let amplitude = strength * 0.08;
+
+    // Animated wave
+    let phase = uv.x * freq * PI * 2.0 + time * 4.0;
+    let wave = sin(phase);
+
+    r.uv.x = uv.x;
+    r.uv.y = uv.y + wave * amplitude;
+
+    // Clamp to valid range (content will handle wrapping)
+    r.uv.y = clamp(r.uv.y, 0.0, 1.0);
+
+    // Lighting based on wave normal
+    let slope = cos(phase) * amplitude * freq * PI * 2.0;
+    r.lighting = 1.0 - abs(slope) * 0.4;
+
+    return r;
+}
+
+// =============================================================================
+// DISPLACEMENT: Vertical Wave
+// Ripples propagate along Y, displace X (no foreshortening)
+// =============================================================================
+fn projectWaveDispV(uv: vec2<f32>, strength: f32, time: f32, frequency: f32) -> ProjectionResult {
+    var r: ProjectionResult;
+    r.visible = true;
+
+    let freq = select(3.0, frequency, frequency > 0.0);
+    let amplitude = strength * 0.08;
+
+    let phase = uv.y * freq * PI * 2.0 + time * 4.0;
+    let wave = sin(phase);
+
+    r.uv.x = uv.x + wave * amplitude;
+    r.uv.y = uv.y;
+
+    r.uv.x = clamp(r.uv.x, 0.0, 1.0);
+
+    let slope = cos(phase) * amplitude * freq * PI * 2.0;
+    r.lighting = 1.0 - abs(slope) * 0.4;
+
+    return r;
+}
+
+// =============================================================================
+// PSEUDO-PROJECTION: Horizontal Wave with Foreshortening
+// Text appears painted on a wavy surface - compressed on slopes
+// =============================================================================
+fn projectWaveProjH(uv: vec2<f32>, strength: f32, time: f32, frequency: f32) -> ProjectionResult {
+    var r: ProjectionResult;
+    r.visible = true;
+
     let freq = select(3.0, frequency, frequency > 0.0);
     let amplitude = strength * 0.15;
 
-    // Sinusoidal displacement in Y based on X position and time
-    let phase = uv.x * freq * PI * 2.0 - time * 2.0;
-    let displacement = sin(phase) * amplitude;
+    // Wave phase at this X position
+    let phase = uv.x * freq * PI * 2.0 + time * 3.0;
 
-    result.uv.x = uv.x;
-    result.uv.y = uv.y + displacement;
+    // Wave slope (derivative): dz/dx = A * freq * 2π * cos(phase)
+    let slope = amplitude * freq * PI * 2.0 * cos(phase);
 
-    // Clamp to valid range
-    if (result.uv.y < 0.0 || result.uv.y > 1.0) {
-        result.visible = false;
-        result.lighting = 1.0;
-        return result;
-    }
+    // Foreshortening factor: arc length derivative = sqrt(1 + slope²)
+    // Text compresses where slope is steep
+    let foreshorten = sqrt(1.0 + slope * slope);
 
-    // Lighting based on wave slope (normal)
-    let slope = cos(phase) * amplitude * freq * PI * 2.0;
-    let normalZ = 1.0 / sqrt(1.0 + slope * slope);
-    result.lighting = mix(1.0, normalZ, strength * 0.5);
+    // Integrate foreshortening to get texture coordinate
+    // Approximation: stretch UV.x based on local foreshortening
+    // Center the effect around 0.5
+    let centerX = uv.x - 0.5;
+    let stretchedX = centerX * foreshorten;
+    r.uv.x = clamp(stretchedX + 0.5, 0.0, 1.0);
+    r.uv.y = uv.y;
 
-    return result;
+    // Lighting based on surface normal facing viewer
+    // Normal faces viewer when slope is 0, tilts away as slope increases
+    r.lighting = 1.0 / foreshorten;
+
+    return r;
 }
 
 // =============================================================================
-// Vertical Wave Effect (ripples propagating along Y)
+// PSEUDO-PROJECTION: Vertical Wave with Foreshortening
+// Text appears painted on a wavy surface - compressed on slopes
 // =============================================================================
-fn applyWaveV(uv: vec2<f32>, strength: f32, time: f32, frequency: f32) -> Effect3DResult {
-    var result: Effect3DResult;
-    result.visible = true;
+fn projectWaveProjV(uv: vec2<f32>, strength: f32, time: f32, frequency: f32) -> ProjectionResult {
+    var r: ProjectionResult;
+    r.visible = true;
 
     let freq = select(3.0, frequency, frequency > 0.0);
     let amplitude = strength * 0.15;
 
-    let phase = uv.y * freq * PI * 2.0 - time * 2.0;
-    let displacement = sin(phase) * amplitude;
+    let phase = uv.y * freq * PI * 2.0 + time * 3.0;
+    let slope = amplitude * freq * PI * 2.0 * cos(phase);
+    let foreshorten = sqrt(1.0 + slope * slope);
 
-    result.uv.x = uv.x + displacement;
-    result.uv.y = uv.y;
+    r.uv.x = uv.x;
+    let centerY = uv.y - 0.5;
+    let stretchedY = centerY * foreshorten;
+    r.uv.y = clamp(stretchedY + 0.5, 0.0, 1.0);
 
-    if (result.uv.x < 0.0 || result.uv.x > 1.0) {
-        result.visible = false;
-        result.lighting = 1.0;
-        return result;
-    }
+    r.lighting = 1.0 / foreshorten;
 
-    let slope = cos(phase) * amplitude * freq * PI * 2.0;
-    let normalZ = 1.0 / sqrt(1.0 + slope * slope);
-    result.lighting = mix(1.0, normalZ, strength * 0.5);
-
-    return result;
+    return r;
 }
 
 // =============================================================================
-// Apply 3D Effect dispatcher
+// PSEUDO-PROJECTION: Concentric Ripple (Water Drop)
+// Radial waves emanating from center with foreshortening
 // =============================================================================
-fn applyEffect3D(
-    uv: vec2<f32>,
-    effectMode: u32,
-    effectStrength: f32,
-    param1: f32,
-    param2: f32,
-    time: f32
-) -> Effect3DResult {
-    var result: Effect3DResult;
-    result.uv = uv;
-    result.lighting = 1.0;
-    result.visible = true;
+fn projectRipple(uv: vec2<f32>, strength: f32, time: f32, frequency: f32) -> ProjectionResult {
+    var r: ProjectionResult;
+    r.visible = true;
 
-    let strength = clamp(effectStrength, 0.0, 1.0);
+    let freq = select(4.0, frequency, frequency > 0.0);
+    let amplitude = strength * 0.12;
 
-    if (effectMode == YTEXT_EFFECT_NONE) {
-        return result;
-    } else if (effectMode == YTEXT_EFFECT_CYLINDER_H) {
-        return applyCylinderH(uv, strength);
-    } else if (effectMode == YTEXT_EFFECT_CYLINDER_V) {
-        return applyCylinderV(uv, strength);
-    } else if (effectMode == YTEXT_EFFECT_SPHERE) {
-        return applySphere(uv, strength);
-    } else if (effectMode == YTEXT_EFFECT_WAVE_H) {
-        return applyWaveH(uv, strength, time, param1);
-    } else if (effectMode == YTEXT_EFFECT_WAVE_V) {
-        return applyWaveV(uv, strength, time, param1);
+    // Distance from center
+    let center = vec2<f32>(0.5, 0.5);
+    let delta = uv - center;
+    let dist = length(delta);
+
+    // Avoid division by zero at center
+    if (dist < 0.001) {
+        r.uv = uv;
+        r.lighting = 1.0;
+        return r;
     }
 
-    return result;
+    // Radial direction (normalized)
+    let radial = delta / dist;
+
+    // Ripple phase: waves move outward from center
+    let phase = dist * freq * PI * 2.0 - time * 5.0;
+
+    // Radial slope (derivative of wave height w.r.t. distance)
+    let slope = amplitude * freq * PI * 2.0 * cos(phase);
+
+    // Foreshortening in radial direction
+    let foreshorten = sqrt(1.0 + slope * slope);
+
+    // Stretch UV radially based on foreshortening
+    let stretchedDist = dist * foreshorten;
+    let stretchedDelta = radial * stretchedDist;
+
+    r.uv = clamp(center + stretchedDelta, vec2<f32>(0.0), vec2<f32>(1.0));
+
+    // Lighting - darker on slopes
+    r.lighting = 1.0 / foreshorten;
+
+    return r;
 }
 
 // =============================================================================
-// Main shader function
+// Projection dispatcher
+// =============================================================================
+fn applyProjection(uv: vec2<f32>, mode: u32, strength: f32, param1: f32, time: f32) -> ProjectionResult {
+    let s = clamp(strength, 0.0, 1.0);
+
+    switch mode {
+        case YTEXT_PROJ_CYLINDER_H: { return projectCylinderH(uv, s); }
+        case YTEXT_PROJ_CYLINDER_V: { return projectCylinderV(uv, s); }
+        case YTEXT_PROJ_SPHERE: { return projectSphere(uv, s); }
+        case YTEXT_PROJ_WAVE_DISP_H: { return projectWaveDispH(uv, s, time, param1); }
+        case YTEXT_PROJ_WAVE_DISP_V: { return projectWaveDispV(uv, s, time, param1); }
+        case YTEXT_PROJ_WAVE_PROJ_H: { return projectWaveProjH(uv, s, time, param1); }
+        case YTEXT_PROJ_WAVE_PROJ_V: { return projectWaveProjV(uv, s, time, param1); }
+        case YTEXT_PROJ_RIPPLE: { return projectRipple(uv, s, time, param1); }
+        default: { return projectFlat(uv); }
+    }
+}
+
+// =============================================================================
+// Main shader
 // =============================================================================
 fn shaderGlyph_1048582(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>, lastChar: u32, lastCharTime: f32) -> vec3<f32> {
-    // Decode cell encoding
     let slotIndex = fg & 0xFFFFFFu;
     let metaOffset = slotIndex * 16u;
 
@@ -303,10 +390,9 @@ fn shaderGlyph_1048582(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
     let widthCells = cardMetadata[metaOffset + 9u];
     let heightCells = cardMetadata[metaOffset + 10u];
     let bgColorPacked = cardMetadata[metaOffset + 11u];
-    let effectMode = cardMetadata[metaOffset + 12u];
-    let effectStrength = bitcast<f32>(cardMetadata[metaOffset + 13u]);
+    let projectionMode = cardMetadata[metaOffset + 12u];
+    let projectionStrength = bitcast<f32>(cardMetadata[metaOffset + 13u]);
     let param1 = bitcast<f32>(cardMetadata[metaOffset + 14u]);
-    let param2 = bitcast<f32>(cardMetadata[metaOffset + 15u]);
 
     let bgColor = unpackColor(bgColorPacked);
 
@@ -317,21 +403,21 @@ fn shaderGlyph_1048582(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
     let viewWidthPx = f32(widthCells) * grid.cellSize.x;
     let viewHeightPx = f32(heightCells) * grid.cellSize.y;
 
-    // Compute normalized UV within card (0-1)
-    let cardUV = (vec2<f32>(f32(relCol), f32(relRow)) + localUV) /
-                 vec2<f32>(f32(widthCells), f32(heightCells));
+    // Step 1: Screen UV (0-1 within the card)
+    let screenUV = (vec2<f32>(f32(relCol), f32(relRow)) + localUV) /
+                   vec2<f32>(f32(widthCells), f32(heightCells));
 
-    // Apply 3D effect
-    let effect = applyEffect3D(cardUV, effectMode, effectStrength, param1, param2, time);
+    // Step 2: Apply PROJECTION (flat, cylinder, sphere, wave)
+    let proj = applyProjection(screenUV, projectionMode, projectionStrength, param1, time);
 
-    if (!effect.visible) {
+    if (!proj.visible) {
         return bgColor;
     }
 
-    // Convert distorted UV to pixel position
-    let cardPixel = effect.uv * vec2<f32>(viewWidthPx, viewHeightPx);
+    // Step 3: Convert projected UV to pixel coordinates
+    let viewPixel = proj.uv * vec2<f32>(viewWidthPx, viewHeightPx);
 
-    // Compute scroll
+    // Step 4: Compute SCROLL offset
     var scrollX = time * scrollSpeedX;
     var scrollY = time * scrollSpeedY;
 
@@ -340,32 +426,25 @@ fn shaderGlyph_1048582(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
             let range = contentWidth - viewWidthPx;
             let cycle = abs(scrollX) % (range * 2.0);
             scrollX = select(cycle, range * 2.0 - cycle, cycle > range);
-        } else {
-            scrollX = 0.0;
-        }
+        } else { scrollX = 0.0; }
         if (contentHeight > viewHeightPx) {
             let range = contentHeight - viewHeightPx;
             let cycle = abs(scrollY) % (range * 2.0);
             scrollY = select(cycle, range * 2.0 - cycle, cycle > range);
-        } else {
-            scrollY = 0.0;
-        }
+        } else { scrollY = 0.0; }
     } else if (scrollMode != YTEXT_SCROLL_LOOP) {
         if (contentWidth > viewWidthPx) {
             scrollX = clamp(scrollX, 0.0, contentWidth - viewWidthPx);
-        } else {
-            scrollX = 0.0;
-        }
+        } else { scrollX = 0.0; }
         if (contentHeight > viewHeightPx) {
             scrollY = clamp(scrollY, 0.0, contentHeight - viewHeightPx);
-        } else {
-            scrollY = 0.0;
-        }
+        } else { scrollY = 0.0; }
     }
 
-    var contentPos = cardPixel + vec2<f32>(scrollX, scrollY);
+    // Step 5: Content position = view pixel + scroll
+    var contentPos = viewPixel + vec2<f32>(scrollX, scrollY);
 
-    // Seamless loop wrapping
+    // Step 6: Seamless loop wrapping
     if (scrollMode == YTEXT_SCROLL_LOOP) {
         if (contentHeight > 0.0) {
             contentPos.y = contentPos.y % contentHeight;
@@ -377,7 +456,7 @@ fn shaderGlyph_1048582(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
         }
     }
 
-    // Find line
+    // Step 7: Find line (binary search)
     let lineIdx = ytextFindLine(lineOffset, lineCount, contentPos.y);
     if (lineIdx < 0) {
         return bgColor;
@@ -389,10 +468,9 @@ fn shaderGlyph_1048582(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
     let lineY = cardStorage[lineOff + 2u];
     let lineHeight = cardStorage[lineOff + 3u];
 
-    // Find glyph
+    // Step 8: Find glyph (linear search within line)
     for (var i = 0u; i < lineGlyphCount; i++) {
         let gOff = glyphOffset + (lineStartGlyph + i) * 4u;
-
         let gXOffset = cardStorage[gOff + 0u];
         let gWidth = cardStorage[gOff + 1u];
         let gIdx = bitcast<u32>(cardStorage[gOff + 2u]);
@@ -404,7 +482,7 @@ fn shaderGlyph_1048582(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
             let scale = f32(scaleIndex) / 16.0;
 
             var gColor = unpackColor(gColorPacked | 0xFFu);
-            gColor = gColor * effect.lighting;
+            gColor = gColor * proj.lighting;  // Apply projection lighting
 
             let glyph = glyphMetadata[gIdx];
             let baseline = lineY + lineHeight * 0.75;

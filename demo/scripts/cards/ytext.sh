@@ -3,9 +3,9 @@
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR/../../.."
 
-DELAY=4
+DELAY=1
 
-echo "=== YText Demo: GPU-Animated Scrolling Text with 3D Effects ==="
+echo "=== YText Demo: GPU-Animated Scrolling Text with Effects ==="
 echo ""
 
 # ============================================================================
@@ -36,11 +36,11 @@ uv run python3 tools/yetty-client/main.py create ytext \
 sleep $DELAY
 
 # ============================================================================
-# CYLINDER EFFECT DEMOS
+# PROJECTION EFFECTS (with foreshortening)
 # ============================================================================
 
 echo ""
-echo "--- Demo 4: Horizontal Cylinder (rolling drum) ---"
+echo "--- Demo 4: Horizontal Cylinder Projection ---"
 uv run python3 tools/yetty-client/main.py create ytext \
     -I "Line 1: Text on a cylinder\nLine 2: Rolling like a drum\nLine 3: Curves at top and bottom\nLine 4: With realistic lighting\nLine 5: Seamless loop\nLine 6: GPU-powered\nLine 7: No CPU rebuild\nLine 8: Pure shader magic" \
     --scroll-y 35 --loop --cylinder --effect-strength 0.7 \
@@ -48,7 +48,7 @@ uv run python3 tools/yetty-client/main.py create ytext \
 sleep $DELAY
 
 echo ""
-echo "--- Demo 5: Vertical Cylinder (horizontal marquee) ---"
+echo "--- Demo 5: Vertical Cylinder Projection ---"
 uv run python3 tools/yetty-client/main.py create ytext \
     -I ">>> Scrolling on a vertical cylinder - text wraps around the sides! <<<" \
     --scroll-x 60 --loop --cylinder-v --effect-strength 0.6 \
@@ -56,59 +56,63 @@ uv run python3 tools/yetty-client/main.py create ytext \
 sleep $DELAY
 
 echo ""
-echo "--- Demo 6: Strong Cylinder Curvature ---"
-uv run python3 tools/yetty-client/main.py create ytext \
-    -I "EXTREME CURVE\nVery tight cylinder\nText nearly wraps\nAll the way around" \
-    --scroll-y 50 --loop --cylinder --effect-strength 0.95 \
-    -w 35 -H 10
-sleep $DELAY
-
-# ============================================================================
-# SPHERE EFFECT DEMOS
-# ============================================================================
-
-echo ""
-echo "--- Demo 7: Sphere Effect ---"
+echo "--- Demo 6: Sphere Projection ---"
 uv run python3 tools/yetty-client/main.py create ytext \
     -I "SPHERE\nText on a globe\nRotating in space\nBoth X and Y\nCurve away\nAt the edges" \
     --scroll-y 25 --loop --sphere --effect-strength 0.7 \
     -w 35 -H 12
 sleep $DELAY
 
-# ============================================================================
-# WAVE EFFECT DEMOS
-# ============================================================================
-
 echo ""
-echo "--- Demo 8: Horizontal Wave (ripples) ---"
+echo "--- Demo 7: Horizontal Wave Projection (foreshortening) ---"
 uv run python3 tools/yetty-client/main.py create ytext \
-    -I "Wavy text effect\nRipples move along X axis\nAnimated in real-time\nPure GPU shader magic" \
-    --wave --effect-strength 0.6 --frequency 4.0 \
+    -I "Text on wavy surface\nCompressed on slopes\nStretched on peaks\nTrue projection math" \
+    --scroll-y 25 --loop --wave-proj --effect-strength 0.6 --frequency 3.0 \
     -w 40 -H 8
 sleep $DELAY
 
 echo ""
-echo "--- Demo 9: Vertical Wave ---"
+echo "--- Demo 8: Vertical Wave Projection ---"
+uv run python3 tools/yetty-client/main.py create ytext \
+    -I "Vertical wave projection\nText warps with surface\nForeshortening effect" \
+    --scroll-x 40 --loop --wave-proj-v --effect-strength 0.5 --frequency 3.0 \
+    -w 40 -H 8
+sleep $DELAY
+
+echo ""
+echo "--- Demo 9: Water Ripple Projection ---"
+uv run python3 tools/yetty-client/main.py create ytext \
+    -I "RIPPLE\nWater drop effect\nConcentric waves\nRadial foreshortening\nFrom center outward" \
+    --scroll-y 20 --loop --ripple --effect-strength 0.5 --frequency 4.0 \
+    -w 35 -H 10
+sleep $DELAY
+
+# ============================================================================
+# DISPLACEMENT EFFECTS (no foreshortening)
+# ============================================================================
+
+echo ""
+echo "--- Demo 10: Horizontal Wave Displacement ---"
+uv run python3 tools/yetty-client/main.py create ytext \
+    -I "Wavy text effect\nRipples move along X axis\nAnimated in real-time\nPure GPU shader magic" \
+    --wave-disp --effect-strength 0.6 --frequency 4.0 \
+    -w 40 -H 8
+sleep $DELAY
+
+echo ""
+echo "--- Demo 11: Vertical Wave Displacement ---"
 uv run python3 tools/yetty-client/main.py create ytext \
     -I "Vertical waves\nRipples along Y\nLike a flag waving" \
-    --wave-v --effect-strength 0.5 --frequency 3.0 \
+    --wave-disp-v --effect-strength 0.5 --frequency 3.0 \
     -w 35 -H 8
 sleep $DELAY
 
 echo ""
-echo "--- Demo 10: Wave with Scrolling ---"
+echo "--- Demo 12: Wave Displacement with Scrolling ---"
 uv run python3 tools/yetty-client/main.py create ytext \
     -I "Scrolling wavy text\nCombined effects\nWave + vertical scroll\nMesmerizing!" \
-    --scroll-y 25 --loop --wave --effect-strength 0.4 --frequency 3.0 \
+    --scroll-y 25 --loop --wave-disp --effect-strength 0.4 --frequency 3.0 \
     -w 40 -H 8
-sleep $DELAY
-
-echo ""
-echo "--- Demo 11: Subtle Wave ---"
-uv run python3 tools/yetty-client/main.py create ytext \
-    -I "Subtle gentle wave\nAlmost calm water\nJust a slight ripple" \
-    --wave --effect-strength 0.2 --frequency 2.0 \
-    -w 35 -H 6
 sleep $DELAY
 
 echo ""

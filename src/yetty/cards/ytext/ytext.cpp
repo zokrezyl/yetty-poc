@@ -106,12 +106,21 @@ void YText::parseArgs(const std::string& args) {
         } else if (token == "--sphere") {
             _effectMode = YTextEffectMode::Sphere;
             yinfo("YText: effect=sphere");
-        } else if (token == "--wave" || token == "--wave-h") {
-            _effectMode = YTextEffectMode::WaveH;
-            yinfo("YText: effect=waveH");
-        } else if (token == "--wave-v") {
-            _effectMode = YTextEffectMode::WaveV;
-            yinfo("YText: effect=waveV");
+        } else if (token == "--wave-disp" || token == "--wave-disp-h") {
+            _effectMode = YTextEffectMode::WaveDispH;
+            yinfo("YText: effect=waveDispH");
+        } else if (token == "--wave-disp-v") {
+            _effectMode = YTextEffectMode::WaveDispV;
+            yinfo("YText: effect=waveDispV");
+        } else if (token == "--wave-proj" || token == "--wave-proj-h") {
+            _effectMode = YTextEffectMode::WaveProjH;
+            yinfo("YText: effect=waveProjH");
+        } else if (token == "--wave-proj-v") {
+            _effectMode = YTextEffectMode::WaveProjV;
+            yinfo("YText: effect=waveProjV");
+        } else if (token == "--ripple") {
+            _effectMode = YTextEffectMode::Ripple;
+            yinfo("YText: effect=ripple");
         } else if (token == "--effect-strength" || token == "-es") {
             if (iss >> _effectStrength) {
                 yinfo("YText: effectStrength={}", _effectStrength);
