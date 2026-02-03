@@ -21,6 +21,10 @@ namespace yetty {
 // Placeholder markers in the base shader
 static const char* FUNCTIONS_PLACEHOLDER = "// SHADER_GLYPH_FUNCTIONS_PLACEHOLDER";
 static const char* DISPATCH_PLACEHOLDER = "// SHADER_GLYPH_DISPATCH_PLACEHOLDER";
+static const char* PRE_EFFECT_FUNCTIONS_PLACEHOLDER = "// PRE_EFFECT_FUNCTIONS_PLACEHOLDER";
+static const char* PRE_EFFECT_APPLY_PLACEHOLDER = "// PRE_EFFECT_APPLY_PLACEHOLDER";
+static const char* POST_EFFECT_FUNCTIONS_PLACEHOLDER = "// POST_EFFECT_FUNCTIONS_PLACEHOLDER";
+static const char* POST_EFFECT_APPLY_PLACEHOLDER = "// POST_EFFECT_APPLY_PLACEHOLDER";
 
 class ShaderManagerImpl : public ShaderManager {
 public:
@@ -52,6 +56,16 @@ private:
     std::vector<std::shared_ptr<ShaderProvider>> _providers;
     std::map<std::string, std::string> _libraries;
     std::string _mergedSource;
+
+    // Effect files: index → {functionName, code}
+    struct EffectFile {
+        uint32_t index;
+        std::string name;       // e.g., "scanlines"
+        std::string funcName;   // e.g., "postEffect_scanlines"
+        std::string code;
+    };
+    std::vector<EffectFile> _preEffects;
+    std::vector<EffectFile> _postEffects;
 
     // Shared GPU resources
     WGPUShaderModule _shaderModule = nullptr;
@@ -134,8 +148,68 @@ Result<void> ShaderManagerImpl::init(const GPUContext& gpu) noexcept {
         ywarn("ShaderManager: lib directory not found at {}", libDir);
     }
 
+    // Load pre-effect and post-effect shaders
+    auto loadEffects = [this](const std::string& dir, std::vector<EffectFile>& dest, const std::string& prefix) {
+        if (!std::filesystem::exists(dir) || !std::filesystem::is_directory(dir)) {
+            yinfo("ShaderManager: no {} directory at {}", prefix, dir);
+            return;
+        }
+        for (const auto& entry : std::filesystem::directory_iterator(dir)) {
+            if (!entry.is_regular_file() || entry.path().extension() != ".wgsl") continue;
+            std::ifstream f(entry.path());
+            if (!f.is_open()) continue;
+            std::stringstream buf;
+            buf << f.rdbuf();
+            std::string code = buf.str();
+            if (code.empty()) continue;
+
+            // Parse "// Index: N" from file header
+            uint32_t idx = 0;
+            auto idxPos = code.find("// Index: ");
+            if (idxPos != std::string::npos) {
+                try { idx = std::stoul(code.substr(idxPos + 10, 10)); } catch (...) {}
+            }
+            if (idx == 0) {
+                // Try to parse from filename: "N-name.wgsl"
+                std::string stem = entry.path().stem().string();
+                auto dash = stem.find('-');
+                if (dash != std::string::npos) {
+                    try { idx = std::stoul(stem.substr(0, dash)); } catch (...) {}
+                }
+            }
+            if (idx == 0) {
+                ywarn("ShaderManager: skipping effect {} (no valid index)", entry.path().string());
+                continue;
+            }
+
+            // Extract function name: find "fn <prefix>Effect_" or "fn <prefix>_"
+            std::string funcName;
+            auto fnPos = code.find("fn " + prefix + "Effect_");
+            if (fnPos != std::string::npos) {
+                auto nameStart = fnPos + 3;
+                auto paren = code.find('(', nameStart);
+                if (paren != std::string::npos) {
+                    funcName = code.substr(nameStart, paren - nameStart);
+                }
+            }
+
+            std::string name = entry.path().stem().string();
+            dest.push_back({idx, name, funcName, code});
+            yinfo("ShaderManager: loaded {} effect '{}' index={} func={}", prefix, name, idx, funcName);
+        }
+        // Sort by index
+        std::sort(dest.begin(), dest.end(), [](const EffectFile& a, const EffectFile& b) {
+            return a.index < b.index;
+        });
+    };
+
+    std::string preEffectsDir = std::string(CMAKE_SOURCE_DIR) + "/src/yetty/shaders/pre-effects";
+    std::string postEffectsDir = std::string(CMAKE_SOURCE_DIR) + "/src/yetty/shaders/post-effects";
+    loadEffects(preEffectsDir, _preEffects, "pre");
+    loadEffects(postEffectsDir, _postEffects, "post");
+
     _initialized = true;
-    yinfo("ShaderManager: initialized");
+    yinfo("ShaderManager: initialized ({} pre-effects, {} post-effects)", _preEffects.size(), _postEffects.size());
     return Ok();
 }
 
@@ -253,6 +327,66 @@ std::string ShaderManagerImpl::mergeShaders() const {
 
     if (!replacePlaceholder(result, DISPATCH_PLACEHOLDER, allDispatch)) {
         ywarn("ShaderManager: dispatch placeholder not found in base shader");
+    }
+
+    // --- Effect placeholders ---
+
+    // Pre-effect functions
+    std::string preEffectFunctions;
+    for (const auto& ef : _preEffects) {
+        preEffectFunctions += "// Pre-effect: " + ef.name + "\n";
+        preEffectFunctions += ef.code + "\n\n";
+    }
+    if (!replacePlaceholder(result, PRE_EFFECT_FUNCTIONS_PLACEHOLDER, preEffectFunctions)) {
+        ywarn("ShaderManager: pre-effect functions placeholder not found");
+    }
+
+    // Pre-effect apply dispatch
+    // Pre-effects modify glyphIndex: glyphIndex = preEffect_xxx(glyphIndex, cellCol, cellRow, time, params)
+    std::string preEffectApply;
+    if (!_preEffects.empty()) {
+        preEffectApply = "if (grid.preEffectIndex != 0u) {\n";
+        for (size_t i = 0; i < _preEffects.size(); i++) {
+            const auto& ef = _preEffects[i];
+            if (ef.funcName.empty()) continue;
+            if (i > 0) preEffectApply += " else ";
+            preEffectApply += "    if (grid.preEffectIndex == " + std::to_string(ef.index) + "u) {\n";
+            preEffectApply += "        glyphIndex = " + ef.funcName + "(glyphIndex, cellCol, cellRow, globals.time, array<f32, 6>(grid.preEffectP0, grid.preEffectP1, grid.preEffectP2, grid.preEffectP3, grid.preEffectP4, grid.preEffectP5));\n";
+            preEffectApply += "    }";
+        }
+        preEffectApply += "\n    }\n";
+    }
+    if (!replacePlaceholder(result, PRE_EFFECT_APPLY_PLACEHOLDER, preEffectApply)) {
+        ywarn("ShaderManager: pre-effect apply placeholder not found");
+    }
+
+    // Post-effect functions
+    std::string postEffectFunctions;
+    for (const auto& ef : _postEffects) {
+        postEffectFunctions += "// Post-effect: " + ef.name + "\n";
+        postEffectFunctions += ef.code + "\n\n";
+    }
+    if (!replacePlaceholder(result, POST_EFFECT_FUNCTIONS_PLACEHOLDER, postEffectFunctions)) {
+        ywarn("ShaderManager: post-effect functions placeholder not found");
+    }
+
+    // Post-effect apply dispatch
+    // Post-effects modify finalColor: finalColor = postEffect_xxx(finalColor, pixelPos, screenSize, time, params)
+    std::string postEffectApply;
+    if (!_postEffects.empty()) {
+        postEffectApply = "if (grid.postEffectIndex != 0u) {\n";
+        for (size_t i = 0; i < _postEffects.size(); i++) {
+            const auto& ef = _postEffects[i];
+            if (ef.funcName.empty()) continue;
+            if (i > 0) postEffectApply += " else ";
+            postEffectApply += "    if (grid.postEffectIndex == " + std::to_string(ef.index) + "u) {\n";
+            postEffectApply += "        finalColor = " + ef.funcName + "(finalColor, fbPixelPos, vec2<f32>(globals.screenWidth, globals.screenHeight), globals.time, array<f32, 6>(grid.postEffectP0, grid.postEffectP1, grid.postEffectP2, grid.postEffectP3, grid.postEffectP4, grid.postEffectP5));\n";
+            postEffectApply += "    }";
+        }
+        postEffectApply += "\n    }\n";
+    }
+    if (!replacePlaceholder(result, POST_EFFECT_APPLY_PLACEHOLDER, postEffectApply)) {
+        ywarn("ShaderManager: post-effect apply placeholder not found");
     }
 
     return result;
