@@ -232,6 +232,8 @@ Result<void> Renderer::_render(DataBagPtr bag) {
                         type == "popup" || type == "popup-modal" || type == "tooltip" ||
                         type == "collapsing-header" || type == "composite" ||
                         type == "main-menu-bar" || type == "table" ||
+                        type == "row" || type == "column" ||
+                        type == "table-row" || type == "table-column" ||
                         type == "dockable-window" || type == "docking-main-window");
 
     if (isContainer && result.opened) {
@@ -579,6 +581,12 @@ static ImGuiWindowFlags _resolveWindowFlags(DataBagPtr bag) {
 }
 
 static std::string _getLabel(DataBagPtr bag, const std::string& fallback = "") {
+    // First try static label (most widgets have static labels)
+    auto staticRes = bag->getStatic("label");
+    if (staticRes) {
+        if (auto s = getAs<std::string>(*staticRes)) return *s;
+    }
+    // Then try dynamic label from data tree
     auto res = bag->get("label");
     if (res) {
         if (auto s = getAs<std::string>(*res)) return *s;
@@ -647,9 +655,12 @@ Result<Renderer::BeginResult> Renderer::_dispatchBegin(const std::string& type, 
         if (r.changed) bag->set("value", Value(v));
     }
     else if (type == "tree-node") {
-        // Check if this node has children in the data tree
+        // Check if this node has children in the data tree OR a static body
         auto childNames = bag->getChildrenNames();
-        bool isLeaf = !childNames || (*childNames).empty();
+        auto bodyRes = bag->getStatic("body");
+        bool hasDataChildren = childNames && !(*childNames).empty();
+        bool hasStaticBody = bodyRes && (*bodyRes).has_value();
+        bool isLeaf = !hasDataChildren && !hasStaticBody;
         if (isLeaf) {
             ImGui::TreeNodeEx(label.c_str(),
                 ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen);
@@ -810,19 +821,24 @@ Result<Renderer::BeginResult> Renderer::_dispatchBegin(const std::string& type, 
     }
     else if (type == "table-row") {
         ImGui::TableNextRow();
+        r.opened = true;  // Allow body to render
     }
     else if (type == "table-column") {
         ImGui::TableNextColumn();
+        r.opened = true;  // Allow body to render
     }
     else if (type == "next-column") {
         ImGui::NextColumn();
     }
     else if (type == "row") {
-        // Row is composite with same-line between children -- handled in body
+        // In table context, this acts as TableNextRow
+        ImGui::TableNextRow();
+        r.opened = true;
     }
     else if (type == "column") {
-        // Column is just a composite group
-        ImGui::BeginGroup();
+        // In table context, this acts as TableNextColumn
+        ImGui::TableNextColumn();
+        r.opened = true;
     }
     else if (type == "composite") {
         // No ImGui call, just render body
@@ -844,7 +860,7 @@ Result<void> Renderer::_dispatchEnd(const std::string& type, bool wasOpened) {
     else if (type == "child") {
         ImGui::EndChild();
     }
-    else if (type == "group" || type == "column") {
+    else if (type == "group") {
         ImGui::EndGroup();
     }
     // Types that only End when opened

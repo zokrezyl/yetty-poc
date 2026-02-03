@@ -116,31 +116,31 @@ widgets:
             - table:
                 columns: 3
                 body:
-                  - table-row:
+                  - row:
                       body:
-                        - table-column:
+                        - column:
                             body:
                               - text:
                                   content: "Column A"
-                        - table-column:
+                        - column:
                             body:
                               - text:
                                   content: "Column B"
-                        - table-column:
+                        - column:
                             body:
                               - text:
                                   content: "Column C"
-                  - table-row:
+                  - row:
                       body:
-                        - table-column:
+                        - column:
                             body:
                               - text:
                                   content: "Row 1"
-                        - table-column:
+                        - column:
                             body:
                               - text:
                                   content: "Data"
-                        - table-column:
+                        - column:
                             body:
                               - text:
                                   content: "Value"

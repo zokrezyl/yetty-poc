@@ -3933,11 +3933,16 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
         Card* card = getCardAtCell(row, col);
         if (card) {
           clearSelection();
-          yinfo("GPUScreen {} clicked on card '{}' (id={}) at cell ({},{}), dispatching SetFocus",
-                _id, card->typeName(), card->id(), row, col);
           loop->dispatch(base::Event::focusEvent(card->id()));
           float cardX, cardY;
           cardLocalCoords(localX, localY, row, col, cardX, cardY);
+          // Clamp to card's pixel dimensions
+          float cardPixelW = static_cast<float>(card->widthCells() * getCellWidth());
+          float cardPixelH = static_cast<float>(card->heightCells() * getCellHeight());
+          cardX = std::max(0.0f, std::min(cardX, cardPixelW - 1.0f));
+          cardY = std::max(0.0f, std::min(cardY, cardPixelH - 1.0f));
+          ydebug("GPUScreen {} card click: localXY=({:.1f},{:.1f}) cell=({},{}) cardXY=({:.1f},{:.1f}) cellSize={}x{}",
+                _id, localX, localY, col, row, cardX, cardY, getCellWidth(), getCellHeight());
           _cardMouseTarget = card->id();
           loop->dispatch(base::Event::cardMouseDown(card->id(), cardX, cardY, button));
         } else if (button == 0) {
