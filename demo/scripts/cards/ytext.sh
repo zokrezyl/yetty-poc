@@ -89,10 +89,13 @@ sleep $DELAY
 
 echo ""
 echo "--- Demo 10: Star Wars Perspective Crawl ---"
+# Full terminal width for authentic Star Wars effect
+SW_WIDTH=$(($(tput cols 2>/dev/null || echo 80) - 4))
+SW_HEIGHT=$(($(tput lines 2>/dev/null || echo 24) - 4))
 uv run python3 tools/yetty-client/main.py create ytext \
-    -I "A long time ago in a galaxy far,\nfar away....\n\nSTAR WARS\n\nIt is a period of civil war.\nRebel spaceships, striking\nfrom a hidden base, have won\ntheir first victory against\nthe evil Galactic Empire.\n\nDuring the battle, Rebel\nspies managed to steal secret\nplans to the Empire's\nultimate weapon, the DEATH\nSTAR, an armored space\nstation with enough power\nto destroy an entire planet." \
-    --scroll-y 25 --loop --perspective --effect-strength 0.8 \
-    -w 50 -H 15
+    -I "\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\nA long time ago in a galaxy far, far away....\n\n\n\n\n                         STAR WARS\n\n\nIt is a period of civil war. Rebel spaceships,\nstriking from a hidden base, have won their\nfirst victory against the evil Galactic Empire.\n\nDuring the battle, Rebel spies managed to steal\nsecret plans to the Empire's ultimate weapon,\nthe DEATH STAR, an armored space station with\nenough power to destroy an entire planet.\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n" \
+    --scroll-y 20 --loop --perspective --effect-strength 0.8 \
+    -w "$SW_WIDTH" -H "$SW_HEIGHT" -x 2 -y 2
 sleep $DELAY
 
 # ============================================================================

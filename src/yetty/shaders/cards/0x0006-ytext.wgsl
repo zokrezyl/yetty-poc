@@ -360,37 +360,61 @@ fn projectRipple(uv: vec2<f32>, strength: f32, time: f32, frequency: f32) -> Pro
 
 // =============================================================================
 // PROJECTION: Star Wars Perspective Crawl
-// Text recedes into the distance - larger at bottom, smaller at top
-// Classic opening crawl effect with vanishing point
+// Text recedes into the distance - LARGER at bottom, SMALLER at top
+// Classic opening crawl effect with vanishing point at top center
+//
+// Uses true 1/z perspective projection:
+// - Text converges to nearly zero width at vanishing point
+// - Both X and Y compressed toward vanishing point
 // =============================================================================
 fn projectPerspective(uv: vec2<f32>, strength: f32, tiltX: f32, tiltY: f32) -> ProjectionResult {
     var r: ProjectionResult;
     r.visible = true;
 
-    // Strength controls how extreme the perspective is
-    // tiltX controls horizontal vanishing point offset (-1 to 1)
-    // tiltY controls the perspective angle/depth
-
-    // Perspective factor: 1.0 at bottom (y=1), smaller at top (y=0)
-    // This creates the "receding into distance" effect
-    let depth = mix(0.3, 1.0, 1.0 - uv.y * strength);
-
     // Vanishing point (default: top center)
     let vanishX = 0.5 + tiltX * 0.3;
+    let vanishY = 0.0 + tiltY * 0.1;  // Top of screen
 
-    // Apply perspective transformation
-    // X coordinate converges toward vanishing point as we go up
-    let perspectiveX = vanishX + (uv.x - vanishX) * depth;
+    // How far from vanishing point (0 at vanish, 1 at bottom)
+    // uv.y: 0 = top, 1 = bottom
+    let normalizedY = (uv.y - vanishY) / (1.0 - vanishY);
 
-    // Y coordinate: map through perspective (compress more at top)
-    // Use a non-linear mapping for more realistic perspective
-    let perspectiveY = 1.0 - pow(1.0 - uv.y, mix(1.0, 2.0, strength));
+    // True perspective: scale = 1/z where z decreases toward vanishing point
+    // At bottom (normalizedY=1): scale = 1
+    // At top (normalizedY→0): scale → infinity (text shrinks to nothing)
+    // strength controls how aggressive the convergence is
+    let z = max(0.001, normalizedY);  // Avoid division by zero
+    let perspectivePower = 1.0 + strength * 1.5;  // 1.0 = mild, 2.5 = extreme
+    let scale = pow(1.0 / z, strength);  // Proper 1/z^strength perspective
 
-    r.uv.x = clamp(perspectiveX, 0.0, 1.0);
-    r.uv.y = clamp(perspectiveY, 0.0, 1.0);
+    // Expand X from vanishing point toward edges
+    let expandedX = vanishX + (uv.x - vanishX) * scale;
 
-    // Lighting: darker at the top (farther away), brighter at bottom
-    r.lighting = mix(0.4, 1.0, depth);
+    // Expand Y from vanishing point - lines compress toward top
+    // Use integral of 1/z to get proper texture mapping
+    let expandedY = pow(normalizedY, 1.0 / perspectivePower);
+
+    // Hide if X goes outside visible range (text converged past edges)
+    if (expandedX < 0.0 || expandedX > 1.0) {
+        r.visible = false;
+        r.uv = uv;
+        r.lighting = 0.0;
+        return r;
+    }
+
+    // Hide if too close to vanishing point (would be infinitely small)
+    if (normalizedY < 0.02) {
+        r.visible = false;
+        r.uv = uv;
+        r.lighting = 0.0;
+        return r;
+    }
+
+    r.uv.x = expandedX;
+    r.uv.y = expandedY;
+
+    // Lighting: fade to dark at vanishing point
+    r.lighting = mix(0.15, 1.0, pow(normalizedY, 0.5));
 
     return r;
 }
@@ -514,15 +538,27 @@ fn shaderGlyph_1048582(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
     // Step 5: Content position = view pixel + scroll
     var contentPos = viewPixel + vec2<f32>(scrollX, scrollY);
 
-    // Step 6: Seamless loop wrapping
+    // Step 6: Handle LOOP mode wrapping
     if (scrollMode == YTEXT_SCROLL_LOOP) {
-        if (contentHeight > 0.0) {
-            contentPos.y = contentPos.y % contentHeight;
-            if (contentPos.y < 0.0) { contentPos.y += contentHeight; }
-        }
-        if (contentWidth > 0.0) {
-            contentPos.x = contentPos.x % contentWidth;
-            if (contentPos.x < 0.0) { contentPos.x += contentWidth; }
+        if (projectionMode == YTEXT_PROJ_PERSPECTIVE) {
+            // For perspective/Star Wars: don't loop, show background when out of bounds
+            // This gives "scroll-through" behavior where content scrolls in and out
+            if (contentPos.y < 0.0 || contentPos.y >= contentHeight) {
+                return bgColor;
+            }
+            if (contentPos.x < 0.0 || contentPos.x >= contentWidth) {
+                return bgColor;
+            }
+        } else {
+            // For other effects: seamless loop wrapping with modulo
+            if (contentHeight > 0.0) {
+                contentPos.y = contentPos.y % contentHeight;
+                if (contentPos.y < 0.0) { contentPos.y += contentHeight; }
+            }
+            if (contentWidth > 0.0) {
+                contentPos.x = contentPos.x % contentWidth;
+                if (contentPos.x < 0.0) { contentPos.x += contentWidth; }
+            }
         }
     }
 
