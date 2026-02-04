@@ -615,6 +615,7 @@ target_include_directories(yetty PRIVATE
 if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
     add_subdirectory(src/yetty/ydraw)
     add_subdirectory(src/yetty/cards)
+    add_subdirectory(src/yetty/yast)
 endif()
 
 target_compile_definitions(yetty PRIVATE
@@ -839,6 +840,13 @@ else()
     if(YETTY_BUILD_TESTS)
         enable_testing()
         add_subdirectory(test/ut)
+    endif()
+    
+    # YAST tests (standalone, no heavy deps)
+    option(YETTY_BUILD_YAST_TESTS "Build YAST parser tests" ON)
+    if(YETTY_BUILD_YAST_TESTS)
+        enable_testing()
+        add_subdirectory(test/ut/yast)
     endif()
 
     # Plugin tester disabled - was using yetty_core which is removed
