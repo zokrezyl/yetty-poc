@@ -108,6 +108,11 @@ constexpr uint32_t KEY_COPY_QUIT = 'q';
 constexpr int KEY_COPY_ESCAPE = 256;  // GLFW_KEY_ESCAPE
 constexpr int KEY_COPY_ENTER = 257;   // GLFW_KEY_ENTER (also yanks in tmux)
 
+// GLFW cursor shapes (avoid including glfw3.h)
+constexpr int CURSOR_DEFAULT = 0;             // Reset to default arrow
+constexpr int CURSOR_CROSSHAIR = 0x00036003;  // GLFW_CROSSHAIR_CURSOR
+constexpr int CURSOR_MOVE = 0x00036009;       // GLFW_RESIZE_ALL_CURSOR
+
 // Helper functions for glyph type detection
 inline bool isCardGlyph(uint32_t codepoint) {
   return codepoint >= CARD_GLYPH_BASE && codepoint <= CARD_GLYPH_END;
@@ -240,6 +245,7 @@ private:
   void decompressLine(const ScrollbackLineGPU &line, int viewRow);
   void pushLineToScrollback(int row);
   void scrollToTop();
+  void clampVisualZoomOffset();  // Clamp visual zoom pan offset to valid range
 
   void setCell(int row, int col, uint32_t glyph, uint8_t fgR, uint8_t fgG,
                uint8_t fgB, uint8_t bgR, uint8_t bgG, uint8_t bgB,
@@ -472,7 +478,12 @@ private:
     // Coord distortion effects
     uint32_t effectIndex = 0;       // 4 bytes (0 = no effect)
     float effectParams[6] = {};     // 24 bytes
-  }; // Total: 240 bytes (16-byte aligned)
+    // Visual Zoom (shader-based, no terminal resize)
+    float visualZoomScale = 1.0f;   // 4 bytes: 1.0 = off, >1.0 = zoomed
+    float visualZoomOffsetX = 0.0f; // 4 bytes: pan X in pixels
+    float visualZoomOffsetY = 0.0f; // 4 bytes: pan Y in pixels
+    float _pad0 = 0.0f;             // 4 bytes: padding for 16-byte alignment
+  }; // Total: 256 bytes (16-byte aligned)
 
   Uniforms _uniforms;
 
@@ -480,6 +491,15 @@ private:
   float _baseCellWidth = 10.0f;  // from font advance
   float _baseCellHeight = 20.0f; // from font line height
   float _zoomLevel = 0.5f;       // adjustable with ctrl+wheel
+
+  // Visual Zoom state (shader-based magnification)
+  bool _visualZoomActive = false;
+  float _visualZoomScale = 1.0f;     // 1.0 to 100.0
+  float _visualZoomOffsetX = 0.0f;   // Pan in source pixels
+  float _visualZoomOffsetY = 0.0f;
+  bool _visualZoomDragging = false;   // Mouse drag-to-pan active
+  float _visualZoomDragLastX = 0.0f;  // Last drag position (screen pixels)
+  float _visualZoomDragLastY = 0.0f;
 
   // Viewport (pixel coordinates within window)
   float _viewportX = 0.0f;
@@ -1195,6 +1215,24 @@ void GPUScreenImpl::scrollToBottom() {
     viewBufferDirty_ = true;
     _hasDamage = true;
   }
+}
+
+void GPUScreenImpl::clampVisualZoomOffset() {
+  if (_visualZoomScale <= 1.0f) return;
+
+  float cellW = static_cast<float>(getCellWidth());
+  float cellH = static_cast<float>(getCellHeight());
+  int totalRows = static_cast<int>(_rows) + 1;  // +1 for status line
+  float contentW = static_cast<float>(_cols) * cellW;
+  float contentH = static_cast<float>(totalRows) * cellH;
+
+  // Shader centers zoom on content center (screenSize/2), so offset range is symmetric
+  // At zoom S, visible region is contentSize/S, max offset allows reaching edges
+  float maxOffsetX = std::max(0.0f, contentW / 2.0f * (1.0f - 1.0f / _visualZoomScale));
+  float maxOffsetY = std::max(0.0f, contentH / 2.0f * (1.0f - 1.0f / _visualZoomScale));
+
+  _visualZoomOffsetX = std::clamp(_visualZoomOffsetX, -maxOffsetX, maxOffsetX);
+  _visualZoomOffsetY = std::clamp(_visualZoomOffsetY, -maxOffsetY, maxOffsetY);
 }
 
 //=============================================================================
@@ -3983,6 +4021,16 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
           return Ok(true);
         }
 
+        // Left-click in visual zoom mode: start drag-to-pan
+        if (button == 0 && _visualZoomActive) {
+          _visualZoomDragging = true;
+          _visualZoomDragLastX = mx;
+          _visualZoomDragLastY = my;
+          auto loop = *base::EventLoop::instance();
+          loop->dispatch(base::Event::setCursorEvent(CURSOR_MOVE));
+          return Ok(true);
+        }
+
         // Left-click: focus + start selection or card interaction
         float localX = mx - _viewportX;
         float localY = my - _viewportY;
@@ -4034,6 +4082,19 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
   if (event.type == base::Event::Type::MouseMove) {
     float mx = event.mouse.x;
     float my = event.mouse.y;
+
+    // Visual zoom drag-to-pan
+    if (_visualZoomDragging) {
+      float dx = mx - _visualZoomDragLastX;
+      float dy = my - _visualZoomDragLastY;
+      // Convert screen delta to source coordinate delta (divide by zoom)
+      _visualZoomOffsetX -= dx / _visualZoomScale;
+      _visualZoomOffsetY -= dy / _visualZoomScale;
+      clampVisualZoomOffset();
+      _visualZoomDragLastX = mx;
+      _visualZoomDragLastY = my;
+      return Ok(true);
+    }
 
     if (_viewportWidth > 0 && _viewportHeight > 0) {
       if (mx >= _viewportX && mx < _viewportX + _viewportWidth &&
@@ -4093,6 +4154,13 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
 
   // Handle mouse up - finalize selection or dispatch CardMouseUp
   if (event.type == base::Event::Type::MouseUp) {
+    // End visual zoom drag
+    if (_visualZoomDragging && event.mouse.button == 0) {
+      _visualZoomDragging = false;
+      auto loop = *base::EventLoop::instance();
+      loop->dispatch(base::Event::setCursorEvent(CURSOR_CROSSHAIR));
+      return Ok(true);
+    }
     // Finalize text selection on left button release
     if (_selecting && event.mouse.button == 0) {
       _selecting = false;
@@ -4171,10 +4239,11 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
           return Ok(true);
         }
 
-        bool ctrlPressed = (event.scroll.mods & 0x0002) != 0;  // GLFW_MOD_CONTROL
+        bool ctrlPressed = (event.scroll.mods & 0x0002) != 0;   // GLFW_MOD_CONTROL
+        bool shiftPressed = (event.scroll.mods & 0x0001) != 0; // GLFW_MOD_SHIFT
 
-        if (ctrlPressed) {
-          // Ctrl+scroll: zoom
+        if (ctrlPressed && shiftPressed) {
+          // Ctrl+Shift+scroll: structural zoom (changes terminal grid)
           float newZoom = _zoomLevel + event.scroll.dy * 0.02f;
           newZoom = std::max(0.2f, std::min(newZoom, 5.0f));
           if (newZoom != _zoomLevel) {
@@ -4187,6 +4256,44 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
             }
             yinfo("GPUScreen {} zoom: {:.0f}%", _id, _zoomLevel * 100.0f);
           }
+        } else if (ctrlPressed) {
+          // Ctrl+scroll: Visual Zoom (shader-based)
+          if (!_visualZoomActive && event.scroll.dy > 0) {
+            _visualZoomActive = true;
+            _visualZoomScale = 1.0f;
+            _visualZoomOffsetX = 0.0f;
+            _visualZoomOffsetY = 0.0f;
+            auto loop = *base::EventLoop::instance();
+            loop->dispatch(base::Event::setCursorEvent(CURSOR_CROSSHAIR));
+          }
+          if (_visualZoomActive) {
+            _visualZoomScale += event.scroll.dy * 0.1f;
+            _visualZoomScale = std::clamp(_visualZoomScale, 1.0f, 100.0f);
+            if (_visualZoomScale <= 1.0f) {
+              // Exit visual zoom when zoomed all the way out
+              _visualZoomActive = false;
+              _visualZoomScale = 1.0f;
+              _visualZoomOffsetX = 0.0f;
+              _visualZoomOffsetY = 0.0f;
+              auto loop = *base::EventLoop::instance();
+              loop->dispatch(base::Event::setCursorEvent(CURSOR_DEFAULT));
+              yinfo("GPUScreen {} visual zoom: off", _id);
+            } else {
+              // Re-clamp offsets after scale change
+              clampVisualZoomOffset();
+              yinfo("GPUScreen {} visual zoom: {:.1f}x", _id, _visualZoomScale);
+            }
+          }
+        } else if (_visualZoomActive) {
+          // In visual zoom mode: scroll pans the view
+          if (shiftPressed) {
+            // Shift+scroll: horizontal pan
+            _visualZoomOffsetX -= event.scroll.dy * getCellWidth();
+          } else {
+            // Plain scroll: vertical pan
+            _visualZoomOffsetY -= event.scroll.dy * getCellHeight() * 3;
+          }
+          clampVisualZoomOffset();
         } else {
           // Normal scroll: enter copy mode and scroll
           if (!_copyMode && event.scroll.dy > 0) {
@@ -4295,6 +4402,18 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
       if (event.key.key == 92 && (event.key.mods & 0x0002) && !(event.key.mods & ~0x0002)) {
         ydebug("GPUScreen: Entering command mode (Ctrl+\\ pressed via KeyDown)");
         _commandMode = true;
+        return Ok(true);  // consume
+      }
+      // Escape or Enter exits visual zoom mode (Enter first, then copy mode on next press)
+      if ((event.key.key == 256 || event.key.key == 257) && _visualZoomActive) {  // GLFW_KEY_ESCAPE or GLFW_KEY_ENTER
+        _visualZoomActive = false;
+        _visualZoomScale = 1.0f;
+        _visualZoomOffsetX = 0.0f;
+        _visualZoomOffsetY = 0.0f;
+        _visualZoomDragging = false;
+        auto loop = *base::EventLoop::instance();
+        loop->dispatch(base::Event::setCursorEvent(CURSOR_DEFAULT));
+        yinfo("GPUScreen {} visual zoom: off", _id);
         return Ok(true);  // consume
       }
     }
@@ -4664,6 +4783,11 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
   _uniforms.defaultFg = defaultFg_.rgb.red | (defaultFg_.rgb.green << 8) | (defaultFg_.rgb.blue << 16) | (0xFFu << 24);
   _uniforms.defaultBg = defaultBg_.rgb.red | (defaultBg_.rgb.green << 8) | (defaultBg_.rgb.blue << 16);
   _uniforms.spaceGlyph = _cachedSpaceGlyph;
+
+  // Visual Zoom
+  _uniforms.visualZoomScale = _visualZoomActive ? _visualZoomScale : 1.0f;
+  _uniforms.visualZoomOffsetX = _visualZoomOffsetX;
+  _uniforms.visualZoomOffsetY = _visualZoomOffsetY;
 
   wgpuQueueWriteBuffer(queue, _uniformBuffer, 0, &_uniforms, sizeof(Uniforms));
 

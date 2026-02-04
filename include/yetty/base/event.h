@@ -43,7 +43,9 @@ struct Event {
         Copy,
         Paste,
         // Command mode (tmux-style prefix key sequences)
-        CommandKey
+        CommandKey,
+        // Cursor shape change (dispatched by GPUScreen, handled by Yetty)
+        SetCursor
     };
 
     struct KeyEvent {
@@ -126,6 +128,10 @@ struct Event {
         int mods;            // Modifier keys held during command
     };
 
+    struct SetCursorEvent {
+        int shape;           // GLFW cursor shape constant (0 = default/arrow)
+    };
+
     Type type = Type::None;
 
     union {
@@ -143,6 +149,7 @@ struct Event {
         CloseEvent closeEv;
         SplitPaneEvent splitPane;
         CommandKeyEvent cmdKey;
+        SetCursorEvent setCursor;
     };
 
     // Optional heap-allocated payload, automatically freed when event goes out of scope.
@@ -309,6 +316,14 @@ struct Event {
         Event e;
         e.type = Type::CommandKey;
         e.cmdKey = {key, codepoint, mods};
+        return e;
+    }
+
+    // Cursor shape change (shape=0 resets to default arrow)
+    static Event setCursorEvent(int shape) {
+        Event e;
+        e.type = Type::SetCursor;
+        e.setCursor = {shape};
         return e;
     }
 };

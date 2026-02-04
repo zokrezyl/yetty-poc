@@ -9,6 +9,7 @@ add_subdirectory(ydraw-zoo)
 add_subdirectory(ytext)
 add_subdirectory(ymery)
 add_subdirectory(markdown)
+add_subdirectory(qrcode)
 
 add_subdirectory(thorvg)
 

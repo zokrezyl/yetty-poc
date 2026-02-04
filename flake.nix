@@ -2,7 +2,7 @@
   description = "Yetty - WebGPU Terminal Emulator";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.11";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     rust-overlay.url = "github:oxalica/rust-overlay";
     flake-utils.url = "github:numtide/flake-utils";
   };
@@ -47,6 +47,8 @@
           ninja
           pkg-config
           git
+          llvmPackages_21.clang
+          llvmPackages_21.lld
         ];
 
         # Desktop build dependencies

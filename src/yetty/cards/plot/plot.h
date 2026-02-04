@@ -65,6 +65,7 @@ public:
     // Flags
     static constexpr uint32_t FLAG_GRID = 1;
     static constexpr uint32_t FLAG_AXES = 2;
+    static constexpr uint32_t FLAG_EXPR = 4;  // Expression mode (evaluate function instead of buffer)
 
     //=========================================================================
     // Factory method

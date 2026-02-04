@@ -254,7 +254,6 @@ static bool validateShaderFile(WGPUDevice device, const std::string& code,
 
 // Placeholder markers in the base shader
 static const char* FUNCTIONS_PLACEHOLDER = "// SHADER_GLYPH_FUNCTIONS_PLACEHOLDER";
-static const char* DISPATCH_PLACEHOLDER = "// SHADER_GLYPH_DISPATCH_PLACEHOLDER";
 static const char* PRE_EFFECT_FUNCTIONS_PLACEHOLDER = "// PRE_EFFECT_FUNCTIONS_PLACEHOLDER";
 static const char* PRE_EFFECT_APPLY_PLACEHOLDER = "// PRE_EFFECT_APPLY_PLACEHOLDER";
 static const char* EFFECT_FUNCTIONS_PLACEHOLDER = "// EFFECT_FUNCTIONS_PLACEHOLDER";
@@ -269,7 +268,7 @@ public:
 
     Result<void> init(const GPUContext& gpu) noexcept;
 
-    void addProvider(std::shared_ptr<ShaderProvider> provider) override;
+    void addProvider(std::shared_ptr<ShaderProvider> provider, const std::string& dispatchName) override;
     void addLibrary(const std::string& name, const std::string& code) override;
     bool needsRecompile() const override;
     Result<void> compile() override;
@@ -289,7 +288,11 @@ private:
 
     GPUContext _gpu = {};
     std::string _baseShader;
-    std::vector<std::shared_ptr<ShaderProvider>> _providers;
+    struct ProviderEntry {
+        std::shared_ptr<ShaderProvider> provider;
+        std::string dispatchName;
+    };
+    std::vector<ProviderEntry> _providers;
     std::map<std::string, std::string> _libraries;
     std::string _mergedSource;
 
@@ -491,10 +494,10 @@ Result<void> ShaderManagerImpl::init(const GPUContext& gpu) noexcept {
     return Ok();
 }
 
-void ShaderManagerImpl::addProvider(std::shared_ptr<ShaderProvider> provider) {
+void ShaderManagerImpl::addProvider(std::shared_ptr<ShaderProvider> provider, const std::string& dispatchName) {
     if (provider) {
-        _providers.push_back(std::move(provider));
-        ydebug("ShaderManager: provider registered ({} total)", _providers.size());
+        _providers.push_back({std::move(provider), dispatchName});
+        ydebug("ShaderManager: provider registered for '{}' ({} total)", dispatchName, _providers.size());
     }
 }
 
@@ -525,8 +528,8 @@ Result<void> ShaderManagerImpl::loadBaseShader(const std::string& path) {
 
 bool ShaderManagerImpl::needsRecompile() const {
     // Check if any provider is dirty
-    for (const auto& provider : _providers) {
-        if (provider && provider->isDirty()) {
+    for (const auto& entry : _providers) {
+        if (entry.provider && entry.provider->isDirty()) {
             return true;
         }
     }
@@ -557,24 +560,24 @@ std::string ShaderManagerImpl::mergeShaders() const {
     }
 
     // Add provider function code
-    for (const auto& provider : _providers) {
-        if (provider) {
-            allFunctions += provider->getCode();
+    for (const auto& entry : _providers) {
+        if (entry.provider) {
+            allFunctions += entry.provider->getCode();
         }
     }
 
-    // Collect all dispatch code
-    std::string allDispatch;
-    allDispatch.reserve(16 * 1024);
+    // Collect dispatch code grouped by dispatch name
+    std::map<std::string, std::string> dispatchByName;
 
-    for (const auto& provider : _providers) {
-        if (provider) {
-            std::string dispatch = provider->getDispatchCode();
+    for (const auto& entry : _providers) {
+        if (entry.provider) {
+            std::string dispatch = entry.provider->getDispatchCode();
             if (!dispatch.empty()) {
-                if (!allDispatch.empty()) {
-                    allDispatch += " else ";
+                auto& target = dispatchByName[entry.dispatchName];
+                if (!target.empty()) {
+                    target += " else ";
                 }
-                allDispatch += dispatch;
+                target += dispatch;
             }
         }
     }
@@ -594,17 +597,18 @@ std::string ShaderManagerImpl::mergeShaders() const {
         ywarn("ShaderManager: functions placeholder not found in base shader");
     }
 
-    yinfo("ShaderManager: dispatch code length={}", allDispatch.size());
-    // Log first and last parts of dispatch code to see all glyphs
-    if (allDispatch.size() > 200) {
-        yinfo("  dispatch start: '{}'", allDispatch.substr(0, 200));
-        yinfo("  dispatch end: '{}'", allDispatch.substr(allDispatch.size() - 200));
-    } else {
-        yinfo("  dispatch: '{}'", allDispatch);
-    }
-
-    if (!replacePlaceholder(result, DISPATCH_PLACEHOLDER, allDispatch)) {
-        ywarn("ShaderManager: dispatch placeholder not found in base shader");
+    // Replace dispatch placeholders for each dispatch name
+    for (const auto& [dispatchName, dispatchCode] : dispatchByName) {
+        std::string placeholder = "// " + dispatchName;
+        yinfo("ShaderManager: dispatch '{}' code length={}", dispatchName, dispatchCode.size());
+        if (dispatchCode.size() > 200) {
+            yinfo("  dispatch start: '{}'", dispatchCode.substr(0, 200));
+        } else {
+            yinfo("  dispatch: '{}'", dispatchCode);
+        }
+        if (!replacePlaceholder(result, placeholder, dispatchCode)) {
+            ywarn("ShaderManager: dispatch placeholder '{}' not found in base shader", placeholder);
+        }
     }
 
     // --- Effect placeholders ---
@@ -740,9 +744,9 @@ Result<void> ShaderManagerImpl::compile() {
     }
 
     // Clear dirty flags on all providers
-    for (auto& provider : _providers) {
-        if (provider) {
-            provider->clearDirty();
+    for (auto& entry : _providers) {
+        if (entry.provider) {
+            entry.provider->clearDirty();
         }
     }
 
@@ -767,9 +771,9 @@ Result<void> ShaderManagerImpl::compile() {
 
     // Count total functions
     uint32_t totalFunctions = 0;
-    for (const auto& provider : _providers) {
-        if (provider) {
-            totalFunctions += provider->getFunctionCount();
+    for (const auto& entry : _providers) {
+        if (entry.provider) {
+            totalFunctions += entry.provider->getFunctionCount();
         }
     }
 

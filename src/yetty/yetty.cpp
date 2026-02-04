@@ -13,6 +13,9 @@
 #include <yetty/rpc/rpc-server.h>
 #include <yetty/rpc/event-loop-handler.h>
 #include <yetty/rpc/socket-path.h>
+#include "cards/plot/plot-sampler-provider.h"
+#include "cards/plot/plot-transformer-provider.h"
+#include "cards/plot/plot-renderer-provider.h"
 #include <glfw3webgpu.h>
 #include <array>
 #include <iostream>
@@ -56,6 +59,7 @@ private:
 
     // Window
     GLFWwindow* _window = nullptr;
+    GLFWcursor* _currentCursor = nullptr;  // Cached custom cursor (null = default)
     uint32_t _initialWidth = 1024;
     uint32_t _initialHeight = 768;
 
@@ -198,9 +202,14 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
         }
         _yettyContext.cardFactory = *cardFactoryResult;
     }
+    
+    // Register plot providers with ShaderManager
+    card::PlotSamplerProvider::instance()->registerWith(shaderMgr);
+    card::PlotTransformerProvider::instance()->registerWith(shaderMgr);
+    card::PlotRendererProvider::instance()->registerWith(shaderMgr);
 #endif
 
-    // Compile shaders after all providers (fonts) are registered
+    // Compile shaders after all providers (fonts, plot) are registered
     if (auto res = shaderMgr->compile(); !res) {
         return Err<void>("Failed to compile shaders", res);
     }
@@ -803,6 +812,10 @@ Result<void> YettyImpl::onShutdown() {
     if (_adapter) wgpuAdapterRelease(_adapter);
     if (_instance) wgpuInstanceRelease(_instance);
 
+    if (_currentCursor) {
+        glfwDestroyCursor(_currentCursor);
+        _currentCursor = nullptr;
+    }
     if (_window) {
         glfwDestroyWindow(_window);
         _window = nullptr;
@@ -837,6 +850,8 @@ void YettyImpl::initEventLoop() noexcept {
 
     // Register for Copy events to write to system clipboard
     loop->registerListener(base::Event::Type::Copy, sharedAs<base::EventListener>());
+    // Register for SetCursor events from GPUScreen
+    loop->registerListener(base::Event::Type::SetCursor, sharedAs<base::EventListener>());
 }
 
 void YettyImpl::shutdownEventLoop() noexcept {
@@ -858,6 +873,24 @@ Result<bool> YettyImpl::onEvent(const base::Event& event) {
         if (auto res = mainLoopIteration(); !res) {
             yerror("Fatal render error: {}", error_msg(res));
             (*base::EventLoop::instance())->stop();
+        }
+        return Ok(true);
+    }
+
+    // SetCursor event: change mouse cursor shape
+    if (event.type == base::Event::Type::SetCursor && _window) {
+        int shape = event.setCursor.shape;
+        if (_currentCursor) {
+            glfwDestroyCursor(_currentCursor);
+            _currentCursor = nullptr;
+        }
+        if (shape == 0) {
+            glfwSetCursor(_window, nullptr);  // Reset to default arrow
+        } else {
+            _currentCursor = glfwCreateStandardCursor(shape);
+            if (_currentCursor) {
+                glfwSetCursor(_window, _currentCursor);
+            }
         }
         return Ok(true);
     }

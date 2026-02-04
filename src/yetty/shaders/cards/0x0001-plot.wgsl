@@ -48,7 +48,9 @@
 //   [10] centerX (f32)
 //   [11] centerY (f32)
 //   [12] glyphBase0(8) | glyphDot(8) | glyphMinus(8) | pad(8)
-//   [13-15] reserved
+//   [13] domainMin (f32) - for expression mode: min x value
+//   [14] domainMax (f32) - for expression mode: max x value
+//   [15] samplerIndex(8) | transformIndex(8) | renderIndex(8) | pad(8)
 
 const PLOT_TYPE_LINE: u32 = 0u;
 const PLOT_TYPE_BAR: u32 = 1u;
@@ -57,6 +59,34 @@ const PLOT_TYPE_AREA: u32 = 3u;
 
 const PLOT_FLAG_GRID: u32 = 1u;
 const PLOT_FLAG_AXES: u32 = 2u;
+const PLOT_FLAG_EXPR: u32 = 4u;
+
+// =============================================================================
+// Dispatch functions for pluggable sampling, transform, and rendering
+// =============================================================================
+
+// Sample dispatch - returns 8 sampled values based on sampler config
+fn dispatchSample(samplerIndex: u32, x: f32, t: f32, idx: u32, dataOffset: u32) -> array<f32, 8> {
+    // plotSampleDispatch
+    // Default: return x in all slots
+    var s: array<f32, 8>;
+    for (var i = 0u; i < 8u; i = i + 1u) {
+        s[i] = x;
+    }
+    return s;
+}
+
+// Transform dispatch - computes output value from sampled inputs
+fn dispatchTransform(transformIndex: u32, x: f32, t: f32, s: array<f32, 8>) -> f32 {
+    // plotTransformDispatch
+    return s[0];  // Default: identity (return first sample)
+}
+
+// Render dispatch - draws the value using specified style
+fn dispatchRender(renderIndex: u32, value: f32, plotY: f32, zoomedUV: vec2<f32>, dataIndex: u32, dataCount: u32, color: vec3<f32>, lineColor: vec3<f32>, fillColor: vec3<f32>) -> vec3<f32> {
+    // plotRenderDispatch
+    return color;  // Default: no change
+}
 
 fn shaderGlyph_1048577(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>, lastChar: u32, lastCharTime: f32) -> vec3<f32> {
     // ==========================================================================
@@ -95,6 +125,27 @@ fn shaderGlyph_1048577(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
     let glyphBase0 = glyphSlot & 0xFFu;
     let glyphDot = (glyphSlot >> 8u) & 0xFFu;
     let glyphMinus = (glyphSlot >> 16u) & 0xFFu;
+    
+    // Expression mode metadata (slots 13-15)
+    let domainMin = bitcast<f32>(cardMetadata[metaOffset + 13u]);
+    let domainMax = bitcast<f32>(cardMetadata[metaOffset + 14u]);
+    let dispatchSlot = cardMetadata[metaOffset + 15u];
+    let samplerIndex = dispatchSlot & 0xFFu;
+    let transformBase = (dispatchSlot >> 8u) & 0xFFu;
+    let transformCount = (dispatchSlot >> 16u) & 0xFFu;
+    let renderIndex = (dispatchSlot >> 24u) & 0xFFu;
+    let isExprMode = (flags & PLOT_FLAG_EXPR) != 0u;
+    
+    // Per-function colors (slots 16-23)
+    var funcColors: array<vec4<f32>, 8>;
+    funcColors[0] = unpackColorAlpha(cardMetadata[metaOffset + 16u]);
+    funcColors[1] = unpackColorAlpha(cardMetadata[metaOffset + 17u]);
+    funcColors[2] = unpackColorAlpha(cardMetadata[metaOffset + 18u]);
+    funcColors[3] = unpackColorAlpha(cardMetadata[metaOffset + 19u]);
+    funcColors[4] = unpackColorAlpha(cardMetadata[metaOffset + 20u]);
+    funcColors[5] = unpackColorAlpha(cardMetadata[metaOffset + 21u]);
+    funcColors[6] = unpackColorAlpha(cardMetadata[metaOffset + 22u]);
+    funcColors[7] = unpackColorAlpha(cardMetadata[metaOffset + 23u]);
 
     // Handle legacy (zero = no zoom metadata)
     let effectiveZoom = select(zoomRaw, 1.0, zoomRaw <= 0.0);
@@ -105,8 +156,8 @@ fn shaderGlyph_1048577(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
     let fillColor = unpackColor(fillColorPacked);
     let bgColor = unpackColor(bgColorPacked);
 
-    // If no data, just show background with optional grid
-    if (dataCount == 0u) {
+    // If no data and not expression mode, just show background
+    if (dataCount == 0u && !isExprMode) {
         return bgColor;
     }
 
@@ -357,15 +408,58 @@ fn shaderGlyph_1048577(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
         return color;
     }
 
-    // Calculate which data point(s) we're near
-    let dataX = zoomedUV.x * f32(dataCount - 1u);
-    let dataIndex = u32(floor(dataX));
-    let nextIndex = min(dataIndex + 1u, dataCount - 1u);
-    let t = fract(dataX);
+    // Get data values - either from buffer or expression via dispatch
+    var value1: f32;
+    var value2: f32;
+    var interpolatedT: f32;
+    var dataIndex: u32;
+    var nextIndex: u32;
 
-    // Get data values
-    let value1 = cardStorage[dataOffset + dataIndex];
-    let value2 = cardStorage[dataOffset + nextIndex];
+    if (isExprMode && transformCount > 0u) {
+        // Expression mode: loop over all transform functions
+        let domainRange = domainMax - domainMin;
+        let x1 = domainMin + zoomedUV.x * domainRange;
+        
+        // Sample inputs once
+        let samples = dispatchSample(samplerIndex, x1, time, 0u, dataOffset);
+        
+        // Y is inverted (0 at top, 1 at bottom in UV), but we want 0 at bottom
+        let plotY = 1.0 - zoomedUV.y;
+        let range = maxValue - minValue;
+        let safeRange = select(range, 1.0, range == 0.0);
+        
+        // Loop over all functions
+        for (var funcIdx: u32 = 0u; funcIdx < transformCount; funcIdx = funcIdx + 1u) {
+            let transformIndex = transformBase + funcIdx;
+            let value = dispatchTransform(transformIndex, x1, time, samples);
+            
+            // Normalize to 0-1 range
+            let normalizedValue = (value - minValue) / safeRange;
+            
+            // Get color for this function from metadata
+            let funcColor = funcColors[funcIdx];
+            
+            // Draw line for this function
+            let lineWidth = 0.025;
+            let dist = abs(plotY - normalizedValue);
+            if (dist < lineWidth) {
+                let alpha = 1.0 - dist / lineWidth;
+                color = mix(color, funcColor.rgb, alpha);
+            }
+        }
+        
+        return color;
+    } else if (!isExprMode) {
+        // Buffer mode: read from cardStorage directly
+        let dataX = zoomedUV.x * f32(dataCount - 1u);
+        dataIndex = u32(floor(dataX));
+        nextIndex = min(dataIndex + 1u, dataCount - 1u);
+        interpolatedT = fract(dataX);
+        value1 = cardStorage[dataOffset + dataIndex];
+        value2 = cardStorage[dataOffset + nextIndex];
+    } else {
+        return color;  // No transforms, skip
+    }
 
     // Normalize to 0-1 range
     let range = maxValue - minValue;
@@ -374,7 +468,7 @@ fn shaderGlyph_1048577(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
     let normalizedValue2 = (value2 - minValue) / safeRange;
 
     // Interpolate for smooth line
-    let interpolatedValue = mix(normalizedValue1, normalizedValue2, t);
+    let interpolatedValue = mix(normalizedValue1, normalizedValue2, interpolatedT);
 
     // Y is inverted (0 at top, 1 at bottom in UV), but we want 0 at bottom
     let plotY = 1.0 - zoomedUV.y;

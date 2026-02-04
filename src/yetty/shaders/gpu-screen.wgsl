@@ -52,7 +52,12 @@ struct GridUniforms {
     effectP3: f32,             // 4 bytes
     effectP4: f32,             // 4 bytes
     effectP5: f32,             // 4 bytes
-};  // Total: 240 bytes (16-byte aligned)
+    // Visual Zoom (shader-based magnification)
+    visualZoomScale: f32,      // 4 bytes: 1.0 = off, >1.0 = zoomed
+    visualZoomOffsetX: f32,    // 4 bytes: pan X in pixels
+    visualZoomOffsetY: f32,    // 4 bytes: pan Y in pixels
+    _pad0: f32,                // 4 bytes: alignment padding
+};  // Total: 256 bytes (16-byte aligned)
 
 // Glyph metadata (40 bytes per glyph, matches C++ GlyphMetadataGPU)
 struct GlyphMetadata {
@@ -251,7 +256,7 @@ fn unpackColorAlpha(packed: u32) -> vec4<f32> {
 // mousePos: current mouse position in pixels
 // fg/bg: raw packed u32 from cell - cards use as metadata index, regular glyphs unpack to color
 fn renderShaderGlyph(glyphIndex: u32, localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>, lastChar: u32, lastCharTime: f32) -> vec3<f32> {
-    // SHADER_GLYPH_DISPATCH_PLACEHOLDER
+    // shaderGlyphDispatch
     // (loader generates: if glyphIndex == 1052672u { return shaderGlyph_1048577(...); } else if ...)
     return unpackColor(bg);  // Fallback if no shader glyph matches
 }
@@ -262,14 +267,25 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     // input.position.xy is in framebuffer space; subtract viewport origin
     // so grid calculations start at (0,0) within the pane's client area
     let fbPixelPos = input.position.xy;
-    let pixelPos = fbPixelPos - grid.viewportOrigin;
+    var pixelPos = fbPixelPos - grid.viewportOrigin;
+
+    // ==== VISUAL ZOOM: transform coordinates before all other processing ====
+    // This is shader-based magnification that doesn't change terminal structure
+    if (grid.visualZoomScale > 1.0) {
+        // Zoom centered on viewport center, then apply pan offset
+        let viewportCenter = grid.screenSize * 0.5;
+        // Inverse transform: divide by scale (2x zoom = sample half the area)
+        pixelPos = (pixelPos - viewportCenter) / grid.visualZoomScale
+                 + viewportCenter
+                 + vec2<f32>(grid.visualZoomOffsetX, grid.visualZoomOffsetY);
+    }
 
     // Calculate grid dimensions in pixels
     let gridPixelWidth = grid.gridSize.x * grid.cellSize.x;
     let gridPixelHeight = grid.gridSize.y * grid.cellSize.y;
 
     // Check if outside the grid area
-    if (pixelPos.x >= gridPixelWidth || pixelPos.y >= gridPixelHeight) {
+    if (pixelPos.x < 0.0 || pixelPos.y < 0.0 || pixelPos.x >= gridPixelWidth || pixelPos.y >= gridPixelHeight) {
         return vec4<f32>(0.1, 0.1, 0.1, 1.0);  // Background color
     }
 

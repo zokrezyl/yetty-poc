@@ -11,6 +11,7 @@
 #include "cards/ymery/ymery.h"
 #include "cards/markdown/markdown.h"
 #include "cards/thorvg/thorvg.h"
+#include "cards/qrcode/qrcode.h"
 #ifdef YETTY_CARD_PDF
 #include "cards/pdf/pdf.h"
 #endif
@@ -125,6 +126,16 @@ public:
                                 const std::string& args,
                                 const std::string& payload) -> Result<CardPtr> {
             auto result = card::ThorVG::create(ctx, x, y, w, h, args, payload);
+            if (!result) return std::unexpected(result.error());
+            return Ok<CardPtr>(*result);
+        });
+
+        registerCard("qrcode", [](const YettyContext& ctx,
+                                int32_t x, int32_t y,
+                                uint32_t w, uint32_t h,
+                                const std::string& args,
+                                const std::string& payload) -> Result<CardPtr> {
+            auto result = card::QRCode::create(ctx, x, y, w, h, args, payload);
             if (!result) return std::unexpected(result.error());
             return Ok<CardPtr>(*result);
         });
