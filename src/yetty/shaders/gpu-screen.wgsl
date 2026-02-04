@@ -256,7 +256,7 @@ fn unpackColorAlpha(packed: u32) -> vec4<f32> {
 // mousePos: current mouse position in pixels
 // fg/bg: raw packed u32 from cell - cards use as metadata index, regular glyphs unpack to color
 fn renderShaderGlyph(glyphIndex: u32, localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos: vec2<f32>, mousePos: vec2<f32>, lastChar: u32, lastCharTime: f32) -> vec3<f32> {
-    // SHADER_GLYPH_DISPATCH_PLACEHOLDER
+    // shaderGlyphDispatch
     // (loader generates: if glyphIndex == 1052672u { return shaderGlyph_1048577(...); } else if ...)
     return unpackColor(bg);  // Fallback if no shader glyph matches
 }

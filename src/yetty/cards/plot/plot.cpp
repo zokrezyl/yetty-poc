@@ -1,7 +1,12 @@
 #include "plot.h"
+#include "plot-sampler-provider.h"
+#include "plot-transformer-provider.h"
+#include "plot-renderer-provider.h"
 #include <yetty/base/event-loop.h>
 #include <yetty/yetty-context.h>
 #include <yetty/ms-msdf-font.h>
+#include <yetty/shader-manager.h>
+#include <yetty/yast/yast.h>
 #include <ytrace/ytrace.hpp>
 #include <sstream>
 #include <algorithm>
@@ -24,6 +29,7 @@ public:
              uint32_t widthCells, uint32_t heightCells,
              const std::string& args, const std::string& payload)
         : Plot(ctx.cardManager, ctx.gpu, x, y, widthCells, heightCells)
+        , _shaderMgr(ctx.shaderManager)
         , _argsStr(args)
         , _payloadStr(payload)
     {
@@ -60,10 +66,26 @@ public:
 
         yinfo("Plot::init: allocated metadata at offset {}", _metaHandle.offset);
 
-        // Parse args
+        // Parse args (may set up expression mode)
         parseArgs(_argsStr);
 
-        // Parse payload if provided
+        // If expression mode, register transforms with provider
+        if ((_flags & FLAG_EXPR) && !_plotResult.plots.empty()) {
+            auto& transformerProv = *PlotTransformerProvider::instance();
+            _transformBase = 0xFFFFFFFF;
+            for (size_t i = 0; i < _plotResult.plots.size() && i < 8; i++) {
+                const auto& p = _plotResult.plots[i];
+                uint32_t idx = transformerProv.registerTransform(p.name, p.expr);
+                _transformIndices.push_back(idx);
+                if (_transformBase == 0xFFFFFFFF) {
+                    _transformBase = idx;
+                }
+            }
+            _transformCount = static_cast<uint32_t>(_transformIndices.size());
+            yinfo("Plot::init: expression mode, {} transforms, base={}", _transformCount, _transformBase);
+        }
+
+        // Parse payload if provided (for buffer mode)
         if (!_payloadStr.empty()) {
             if (auto res = parsePayload(_payloadStr); !res) {
                 ywarn("Plot::init: failed to parse payload: {}", error_msg(res));
@@ -84,6 +106,17 @@ public:
     }
 
     Result<void> dispose() override {
+        // Unregister all transforms from provider
+        if (!_transformIndices.empty()) {
+            auto& transformerProv = *PlotTransformerProvider::instance();
+            for (uint32_t idx : _transformIndices) {
+                transformerProv.unregisterTransform(idx);
+            }
+            _transformIndices.clear();
+            _transformBase = 0xFFFFFFFF;
+            _transformCount = 0;
+        }
+
         // Deregister from events
         if (auto res = deregisterFromEvents(); !res) {
             return Err<void>("Plot::dispose: failed to deregister", res);
@@ -384,21 +417,39 @@ private:
                 _flags |= FLAG_AXES;
             } else if (token == "--no-axes") {
                 _flags &= ~FLAG_AXES;
-            } else if (token == "--line-color") {
-                std::string colorStr;
-                if (iss >> colorStr) {
-                    if (colorStr.substr(0, 2) == "0x" || colorStr.substr(0, 2) == "0X") {
-                        colorStr = colorStr.substr(2);
+            } else if (token == "--expr" || token == "-e") {
+                // Expression mode: --expr "f1 = sin(x); @f1.color = #FF0000; f2 = cos(x)"
+                std::string expr;
+                if (iss >> std::quoted(expr) || iss >> expr) {
+                    _plotResult = yast::plotExpressionToWGSL(expr);
+                    if (!_plotResult.plots.empty()) {
+                        _flags |= FLAG_EXPR;
+                        yinfo("Plot::parseArgs: parsed {} functions", _plotResult.plots.size());
+                        for (size_t i = 0; i < _plotResult.plots.size(); i++) {
+                            const auto& p = _plotResult.plots[i];
+                            yinfo("  [{}] {} = '{}' color='{}' text='{}'", 
+                                  i, p.name, p.expr.code, p.color, p.text);
+                        }
+                    } else {
+                        ywarn("Plot::parseArgs: failed to parse expression '{}'", expr);
                     }
-                    _lineColor = static_cast<uint32_t>(std::stoul(colorStr, nullptr, 16));
                 }
-            } else if (token == "--fill-color") {
-                std::string colorStr;
-                if (iss >> colorStr) {
-                    if (colorStr.substr(0, 2) == "0x" || colorStr.substr(0, 2) == "0X") {
-                        colorStr = colorStr.substr(2);
+            } else if (token == "--domain" || token == "-d") {
+                // Domain: --domain -pi,pi or --domain -3.14,3.14
+                std::string domainStr;
+                if (iss >> domainStr) {
+                    auto comma = domainStr.find(',');
+                    if (comma != std::string::npos) {
+                        auto minStr = domainStr.substr(0, comma);
+                        auto maxStr = domainStr.substr(comma + 1);
+                        // Handle pi constants
+                        if (minStr == "-pi") _domainMin = -3.14159265f;
+                        else if (minStr == "pi") _domainMin = 3.14159265f;
+                        else _domainMin = std::stof(minStr);
+                        if (maxStr == "-pi") _domainMax = -3.14159265f;
+                        else if (maxStr == "pi") _domainMax = 3.14159265f;
+                        else _domainMax = std::stof(maxStr);
                     }
-                    _fillColor = static_cast<uint32_t>(std::stoul(colorStr, nullptr, 16));
                 }
             } else if (token == "--min") {
                 float val;
@@ -420,6 +471,39 @@ private:
                     }
                     _bgColor = static_cast<uint32_t>(std::stoul(colorStr, nullptr, 16));
                 }
+            }
+        }
+
+        // If expression mode, extract colors and set defaults
+        if ((_flags & FLAG_EXPR) && !_plotResult.plots.empty()) {
+            // Default color palette (ARGB format)
+            uint32_t defaultColors[8] = {
+                0xFFFF3333,  // Red
+                0xFF3399FF,  // Blue
+                0xFF33CC33,  // Green
+                0xFFFFCC33,  // Yellow
+                0xFFCC33CC,  // Magenta
+                0xFF33CCCC,  // Cyan
+                0xFFFF8800,  // Orange
+                0xFF9955FF   // Purple
+            };
+            
+            for (size_t i = 0; i < _plotResult.plots.size() && i < 8; i++) {
+                const auto& p = _plotResult.plots[i];
+                uint32_t color = defaultColors[i];
+                
+                // Parse hex color if provided: #RRGGBB -> 0xFFRRGGBB
+                if (!p.color.empty() && p.color[0] == '#' && p.color.size() >= 7) {
+                    uint32_t rgb = static_cast<uint32_t>(std::stoul(p.color.substr(1), nullptr, 16));
+                    color = 0xFF000000 | rgb;
+                }
+                _functionColors.push_back(color);
+            }
+            
+            // Set sensible defaults for Y range if auto
+            if (_autoRange) {
+                _minValue = -1.5f;
+                _maxValue = 1.5f;
             }
         }
 
@@ -489,6 +573,9 @@ private:
             return Err<void>("Plot::uploadMetadata: invalid metadata handle");
         }
 
+        // Map plot type to render index
+        uint32_t renderIdx = static_cast<uint32_t>(_plotType);  // Line=0, Bar=1, Scatter=2, Area=3
+
         Metadata meta = {};
         meta.plotType = static_cast<uint8_t>(_plotType);
         meta.flags = static_cast<uint8_t>(_flags);
@@ -507,12 +594,32 @@ private:
         meta.glyphBase0 = static_cast<uint8_t>(_glyphBase0);
         meta.glyphDot = static_cast<uint8_t>(_glyphDot);
         meta.glyphMinus = static_cast<uint8_t>(_glyphMinus);
+        meta.domainMin = _domainMin;
+        meta.domainMax = _domainMax;
+        // Pack dispatch indices: samplerIndex(8) | transformBase(8) | transformCount(8) | renderIndex(8)
+        uint32_t samplerIdx = (_samplerIndex == 0xFFFFFFFF) ? 0u : _samplerIndex;
+        uint32_t transformBaseIdx = (_transformBase == 0xFFFFFFFF) ? 0u : _transformBase;
+        meta.dispatchSlot = (samplerIdx & 0xFF) 
+                          | ((transformBaseIdx & 0xFF) << 8)
+                          | ((_transformCount & 0xFF) << 16)
+                          | ((renderIdx & 0xFF) << 24);
+        
+        // Copy per-function colors
+        for (size_t i = 0; i < 8; i++) {
+            if (i < _functionColors.size()) {
+                meta.functionColors[i] = _functionColors[i];
+            } else {
+                meta.functionColors[i] = 0xFFFFFFFF;  // White default
+            }
+        }
 
         yinfo("Plot::uploadMetadata: metaOffset={} plotType={} dataOffset={} "
-              "dataCount={} min={} max={} flags={} size={}x{} bgColor={:#x}",
+              "dataCount={} min={} max={} flags={} size={}x{} bgColor={:#x} domain=[{},{}] dispatch=[s={},tBase={},tCount={},r={}]",
               _metaHandle.offset, meta.plotType, meta.dataOffset,
               meta.dataCount, meta.minValue, meta.maxValue, meta.flags,
-              meta.widthCells, meta.heightCells, meta.bgColor);
+              meta.widthCells, meta.heightCells, meta.bgColor,
+              meta.domainMin, meta.domainMax,
+              samplerIdx, transformBaseIdx, _transformCount, renderIdx);
 
         if (auto res = _cardMgr->writeMetadata(_metaHandle, &meta, sizeof(meta)); !res) {
             return Err<void>("Plot::uploadMetadata: write failed");
@@ -538,7 +645,7 @@ private:
         float minValue;
         float maxValue;
         // [6-8]
-        uint32_t lineColor;     // RGBA
+        uint32_t lineColor;     // RGBA (legacy, used for single function)
         uint32_t fillColor;     // RGBA
         uint32_t bgColor;       // RGBA
         // [9-11]
@@ -550,10 +657,19 @@ private:
         uint8_t glyphDot;
         uint8_t glyphMinus;
         uint8_t _pad1;
-        // [13-15]: reserved for future data series
-        uint32_t _reserved[3];
+        // [13]: domainMin (f32) - x domain start (for expression mode)
+        float domainMin;
+        // [14]: domainMax (f32) - x domain end (for expression mode)
+        float domainMax;
+        // [15]: samplerIndex(8) | transformBase(8) | transformCount(8) | renderIndex(8)
+        uint32_t dispatchSlot;
+        // [16-23]: Per-function colors (up to 8 functions)
+        uint32_t functionColors[8];
     };
-    static_assert(sizeof(Metadata) == 64, "Metadata must be 64 bytes");
+    static_assert(sizeof(Metadata) == 96, "Metadata must be 96 bytes");
+
+    // ShaderManager reference (for registering providers once)
+    std::shared_ptr<ShaderManager> _shaderMgr;
 
     PlotType _plotType = PlotType::Line;
     std::vector<float> _data;
@@ -574,6 +690,17 @@ private:
     uint32_t _glyphBase0 = 0;
     uint32_t _glyphDot = 0;
     uint32_t _glyphMinus = 0;
+
+    // Expression mode (supports up to 8 functions)
+    yast::WGSLGenerator::MultiResult _plotResult;  // Parsed plot expressions with colors
+    std::vector<uint32_t> _transformIndices;
+    std::vector<uint32_t> _functionColors;  // Per-function colors (ARGB)
+    float _domainMin = -3.14159265f;  // Default: -pi
+    float _domainMax = 3.14159265f;   // Default: pi
+    uint32_t _samplerIndex = 0xFFFFFFFF;    // Not registered
+    uint32_t _transformBase = 0xFFFFFFFF;   // First transform index
+    uint32_t _transformCount = 0;           // Number of transforms
+    uint32_t _renderIndex = 0;              // Default: line (0)
 
     StorageHandle _storageHandle = StorageHandle::invalid();
     bool _focused = false;

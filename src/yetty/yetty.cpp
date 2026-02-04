@@ -13,6 +13,9 @@
 #include <yetty/rpc/rpc-server.h>
 #include <yetty/rpc/event-loop-handler.h>
 #include <yetty/rpc/socket-path.h>
+#include "cards/plot/plot-sampler-provider.h"
+#include "cards/plot/plot-transformer-provider.h"
+#include "cards/plot/plot-renderer-provider.h"
 #include <glfw3webgpu.h>
 #include <array>
 #include <iostream>
@@ -199,9 +202,14 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
         }
         _yettyContext.cardFactory = *cardFactoryResult;
     }
+    
+    // Register plot providers with ShaderManager
+    card::PlotSamplerProvider::instance()->registerWith(shaderMgr);
+    card::PlotTransformerProvider::instance()->registerWith(shaderMgr);
+    card::PlotRendererProvider::instance()->registerWith(shaderMgr);
 #endif
 
-    // Compile shaders after all providers (fonts) are registered
+    // Compile shaders after all providers (fonts, plot) are registered
     if (auto res = shaderMgr->compile(); !res) {
         return Err<void>("Failed to compile shaders", res);
     }

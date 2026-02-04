@@ -35,8 +35,10 @@ public:
     /**
      * Register a shader provider.
      * Providers self-register during their init via shared_from_this().
+     * @param provider The shader provider
+     * @param dispatchName Name of the dispatch placeholder (e.g., "shaderGlyphDispatch", "plotDispatch")
      */
-    virtual void addProvider(std::shared_ptr<ShaderProvider> provider) = 0;
+    virtual void addProvider(std::shared_ptr<ShaderProvider> provider, const std::string& dispatchName) = 0;
 
     /**
      * Add a shared library.

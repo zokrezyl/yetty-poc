@@ -99,7 +99,7 @@ Result<void> ShaderFontImpl::init(std::shared_ptr<ShaderManager> shaderMgr) {
 
     // Register with ShaderManager
     if (shaderMgr) {
-        shaderMgr->addProvider(shared_from_this());
+        shaderMgr->addProvider(shared_from_this(), "shaderGlyphDispatch");
     }
 
     return Ok();
