@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 ASSETS_DIR="$PROJECT_DIR/assets"
-CACHE_DIR="${HOME}/.cache/yetty/msdf-font-cache-tmp"
+CACHE_DIR="${HOME}/.cache/yetty/msdf-font-cache"
 GEN_TOOL="$PROJECT_DIR/build-desktop-dawn-debug/src/yetty/msdf-gen/yetty-msdf-gen"
 
 if [ ! -x "$GEN_TOOL" ]; then

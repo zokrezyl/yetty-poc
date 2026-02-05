@@ -19,3 +19,8 @@ option(YETTY_CARD_PDF "Build PDF card (requires PDFium)" ON)
 if(YETTY_CARD_PDF)
     add_subdirectory(pdf)
 endif()
+
+option(YETTY_CARD_YPDF "Build YPdf card (vector PDF via pdfio)" ON)
+if(YETTY_CARD_YPDF)
+    add_subdirectory(ypdf)
+endif()

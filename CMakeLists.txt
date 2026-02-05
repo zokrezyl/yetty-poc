@@ -849,6 +849,13 @@ else()
         add_subdirectory(test/ut/yast)
     endif()
 
+    # YEcho tests (standalone, no heavy deps)
+    option(YETTY_BUILD_YECHO_TESTS "Build YEcho parser tests" ON)
+    if(YETTY_BUILD_YECHO_TESTS)
+        enable_testing()
+        add_subdirectory(test/ut/yecho)
+    endif()
+
     # Plugin tester disabled - was using yetty_core which is removed
     # TODO: Re-enable when needed
 

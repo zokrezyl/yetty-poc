@@ -215,13 +215,7 @@ int main(int argc, const char** argv) {
         std::cerr << "warning: " << err << "\n";
     }
     
-    // Check if ytext card is needed (font-size specified)
-    if (echoParser.needsYtext(root)) {
-        std::cerr << "warning: font-size requires ytext card (not yet implemented)\n";
-        // TODO: emit ytext OSC sequence
-    }
-    
-    // Output with ANSI escapes for colors/styles
+    // Output with ANSI escapes for colors/styles and OSC for cards
     std::string output = echoParser.toTerminal(root);
     std::cout << output;
     

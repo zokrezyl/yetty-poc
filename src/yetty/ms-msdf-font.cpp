@@ -52,6 +52,7 @@ MsMsdfFont::~MsMsdfFont() {
     for (int i = 0; i < 4; ++i) {
         closeCdb(static_cast<Style>(i));
     }
+    closeFallbackCdb();
 
     // Clean up WebGPU resources
     if (_glyphMetadataBuffer) wgpuBufferRelease(_glyphMetadataBuffer);
@@ -197,6 +198,15 @@ uint32_t MsMsdfFont::loadGlyphFromCdb(uint32_t codepoint, Style style) {
         // Not found - fall back to regular if variant
         if (style != Style::Regular) {
             return loadGlyphFromCdb(codepoint, Style::Regular);
+        }
+        // Try fallback CDB for CJK characters
+        if (!_fallbackCdbPath.empty() && isCJKCodepoint(codepoint)) {
+            uint32_t fallbackIdx = loadGlyphFromFallbackCdb(codepoint);
+            if (fallbackIdx != 0) {
+                // Also cache in main index so we don't retry fallback
+                _codepointToIndex[idx][codepoint] = fallbackIdx;
+                return fallbackIdx;
+            }
         }
         // Mark as missing so we don't retry
         _codepointToIndex[idx][codepoint] = 0;
@@ -522,6 +532,224 @@ Result<void> MsMsdfFont::uploadPendingGlyphs(WGPUDevice device, WGPUQueue queue)
     _dirty = false;
     _resourceVersion++;
     return Ok();
+}
+
+void MsMsdfFont::setFallbackCdb(const std::string& cdbPath) {
+    _fallbackCdbPath = cdbPath;
+    // Don't open yet - will be opened lazily on first CJK request
+}
+
+Result<void> MsMsdfFont::openFallbackCdb() {
+    if (_fallbackCdb.cdb) {
+        return Ok();  // Already open
+    }
+
+    if (_fallbackCdbPath.empty()) {
+        return Err<void>("No fallback CDB path set");
+    }
+
+    int fd = open(_fallbackCdbPath.c_str(), O_RDONLY);
+    if (fd < 0) {
+        return Err<void>("Cannot open fallback CDB file: " + _fallbackCdbPath);
+    }
+
+    struct stat st;
+    if (fstat(fd, &st) < 0) {
+        close(fd);
+        return Err<void>("Cannot stat fallback CDB file: " + _fallbackCdbPath);
+    }
+
+    void* mapped = mmap(nullptr, st.st_size, PROT_READ, MAP_SHARED, fd, 0);
+    if (mapped == MAP_FAILED) {
+        close(fd);
+        return Err<void>("Cannot mmap fallback CDB file: " + _fallbackCdbPath);
+    }
+
+    auto* cdbPtr = new struct cdb;
+    cdb_init(cdbPtr, fd);
+
+    _fallbackCdb.fd = fd;
+    _fallbackCdb.mapped = mapped;
+    _fallbackCdb.size = st.st_size;
+    _fallbackCdb.cdb = cdbPtr;
+
+    yinfo("Opened fallback CDB: {} ({} bytes)", _fallbackCdbPath, st.st_size);
+    return Ok();
+}
+
+void MsMsdfFont::closeFallbackCdb() {
+    if (_fallbackCdb.cdb) {
+        cdb_free(_fallbackCdb.cdb);
+        delete _fallbackCdb.cdb;
+        _fallbackCdb.cdb = nullptr;
+    }
+
+    if (_fallbackCdb.mapped && _fallbackCdb.mapped != MAP_FAILED) {
+        munmap(_fallbackCdb.mapped, _fallbackCdb.size);
+        _fallbackCdb.mapped = nullptr;
+    }
+
+    if (_fallbackCdb.fd >= 0) {
+        close(_fallbackCdb.fd);
+        _fallbackCdb.fd = -1;
+    }
+
+    _fallbackCdb.size = 0;
+}
+
+bool MsMsdfFont::isCJKCodepoint(uint32_t cp) {
+    // CJK Unified Ideographs
+    if (cp >= 0x4E00 && cp <= 0x9FFF) return true;
+    // CJK Extension A
+    if (cp >= 0x3400 && cp <= 0x4DBF) return true;
+    // CJK Extension B-F (SIP)
+    if (cp >= 0x20000 && cp <= 0x2CEAF) return true;
+    // Hiragana
+    if (cp >= 0x3040 && cp <= 0x309F) return true;
+    // Katakana
+    if (cp >= 0x30A0 && cp <= 0x30FF) return true;
+    // Hangul Syllables
+    if (cp >= 0xAC00 && cp <= 0xD7AF) return true;
+    // Hangul Jamo
+    if (cp >= 0x1100 && cp <= 0x11FF) return true;
+    // CJK Symbols and Punctuation
+    if (cp >= 0x3000 && cp <= 0x303F) return true;
+    // Halfwidth and Fullwidth Forms
+    if (cp >= 0xFF00 && cp <= 0xFFEF) return true;
+    // Bopomofo
+    if (cp >= 0x3100 && cp <= 0x312F) return true;
+    return false;
+}
+
+uint32_t MsMsdfFont::loadGlyphFromFallbackCdb(uint32_t codepoint) {
+    // Check if already loaded from fallback
+    auto it = _fallbackCodepointToIndex.find(codepoint);
+    if (it != _fallbackCodepointToIndex.end()) {
+        return it->second;
+    }
+
+    // Try to open fallback CDB if not already open
+    if (!_fallbackCdb.cdb) {
+        auto result = openFallbackCdb();
+        if (!result) {
+            _fallbackCodepointToIndex[codepoint] = 0;
+            return 0;
+        }
+    }
+
+    // Prepare key: 4-byte little-endian codepoint
+    char key[4];
+    key[0] = codepoint & 0xFF;
+    key[1] = (codepoint >> 8) & 0xFF;
+    key[2] = (codepoint >> 16) & 0xFF;
+    key[3] = (codepoint >> 24) & 0xFF;
+
+    // Look up in fallback CDB
+    if (cdb_find(_fallbackCdb.cdb, key, 4) <= 0) {
+        _fallbackCodepointToIndex[codepoint] = 0;
+        return 0;
+    }
+
+    // Read glyph data
+    unsigned int dataLen = cdb_datalen(_fallbackCdb.cdb);
+    unsigned int dataPos = cdb_datapos(_fallbackCdb.cdb);
+
+    if (dataLen < sizeof(MsdfGlyphData)) {
+        _fallbackCodepointToIndex[codepoint] = 0;
+        return 0;
+    }
+
+    MsdfGlyphData header;
+    if (cdb_read(_fallbackCdb.cdb, reinterpret_cast<char*>(&header), sizeof(header), dataPos) < 0) {
+        _fallbackCodepointToIndex[codepoint] = 0;
+        return 0;
+    }
+
+    // Create glyph metadata
+    GlyphMetadataGPU meta{};
+    meta._sizeX = header.sizeX;
+    meta._sizeY = header.sizeY;
+    meta._bearingX = header.bearingX;
+    meta._bearingY = header.bearingY;
+    meta._advance = header.advance;
+    meta._pad = 0;
+
+    // Handle empty glyphs
+    if (header.width == 0 || header.height == 0) {
+        meta._uvMinX = 0;
+        meta._uvMinY = 0;
+        meta._uvMaxX = 0;
+        meta._uvMaxY = 0;
+
+        uint32_t glyphIndex = static_cast<uint32_t>(_glyphMetadata.size());
+        _glyphMetadata.push_back(meta);
+        _fallbackCodepointToIndex[codepoint] = glyphIndex;
+        _indexToCodepoint[glyphIndex] = codepoint;
+        return glyphIndex;
+    }
+
+    // Check atlas space
+    if (_shelfX + header.width + ATLAS_PADDING > _atlasWidth) {
+        _shelfX = ATLAS_PADDING;
+        _shelfY += _shelfHeight + ATLAS_PADDING;
+        _shelfHeight = 0;
+    }
+
+    if (_shelfY + header.height + ATLAS_PADDING > _atlasHeight) {
+        ywarn("Atlas full, cannot add fallback glyph for codepoint {}", codepoint);
+        _fallbackCodepointToIndex[codepoint] = 0;
+        return 0;
+    }
+
+    // Read pixel data
+    size_t pixelDataSize = header.width * header.height * 4;
+    size_t expectedSize = sizeof(MsdfGlyphData) + pixelDataSize;
+    if (dataLen < expectedSize) {
+        _fallbackCodepointToIndex[codepoint] = 0;
+        return 0;
+    }
+
+    std::vector<uint8_t> pixels(pixelDataSize);
+    if (cdb_read(_fallbackCdb.cdb, reinterpret_cast<char*>(pixels.data()), pixelDataSize,
+                 dataPos + sizeof(MsdfGlyphData)) < 0) {
+        _fallbackCodepointToIndex[codepoint] = 0;
+        return 0;
+    }
+
+    // Copy to atlas
+    uint32_t atlasX = _shelfX;
+    uint32_t atlasY = _shelfY;
+
+    for (uint32_t y = 0; y < header.height; ++y) {
+        for (uint32_t x = 0; x < header.width; ++x) {
+            size_t srcIdx = (y * header.width + x) * 4;
+            size_t dstIdx = ((atlasY + y) * _atlasWidth + (atlasX + x)) * 4;
+
+            _atlasData[dstIdx + 0] = pixels[srcIdx + 0];
+            _atlasData[dstIdx + 1] = pixels[srcIdx + 1];
+            _atlasData[dstIdx + 2] = pixels[srcIdx + 2];
+            _atlasData[dstIdx + 3] = pixels[srcIdx + 3];
+        }
+    }
+
+    // Update UV coordinates
+    meta._uvMinX = static_cast<float>(atlasX) / _atlasWidth;
+    meta._uvMinY = static_cast<float>(atlasY) / _atlasHeight;
+    meta._uvMaxX = static_cast<float>(atlasX + header.width) / _atlasWidth;
+    meta._uvMaxY = static_cast<float>(atlasY + header.height) / _atlasHeight;
+
+    // Update shelf packer
+    _shelfX = atlasX + header.width + ATLAS_PADDING;
+    _shelfHeight = std::max(_shelfHeight, static_cast<uint32_t>(header.height));
+
+    // Add to metadata and index
+    uint32_t glyphIndex = static_cast<uint32_t>(_glyphMetadata.size());
+    _glyphMetadata.push_back(meta);
+    _fallbackCodepointToIndex[codepoint] = glyphIndex;
+    _indexToCodepoint[glyphIndex] = codepoint;
+
+    _dirty = true;
+    return glyphIndex;
 }
 
 } // namespace yetty

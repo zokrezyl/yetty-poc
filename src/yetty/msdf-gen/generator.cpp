@@ -4,6 +4,9 @@
 #include <msdfgen-ext.h>
 #include <ytrace/ytrace.hpp>
 
+#include <ft2build.h>
+#include FT_FREETYPE_H
+
 #include <thread>
 #include <mutex>
 #include <atomic>
@@ -109,8 +112,10 @@ static GlyphResult generateGlyph(WorkerContext& ctx, uint32_t codepoint) {
         return result;
     }
 
-    // Normalize and get bounds
+    // Normalize and orient contours for consistent winding
     shape.normalize();
+    shape.orientContours();
+    
     ::msdfgen::Shape::Bounds bounds = shape.getBounds();
 
     // Calculate logical glyph size and bitmap size with padding
@@ -252,7 +257,87 @@ static bool writeCdb(const std::string& path, const std::vector<GlyphResult>& re
     return true;
 }
 
-std::vector<uint32_t> getDefaultCharset(bool includeNerdFonts) {
+std::vector<uint32_t> getCJKCharset() {
+    std::vector<uint32_t> charset;
+
+    // CJK Punctuation and Symbols
+    for (uint32_t c = 0x3000; c <= 0x303F; ++c) charset.push_back(c);
+
+    // Hiragana
+    for (uint32_t c = 0x3040; c <= 0x309F; ++c) charset.push_back(c);
+
+    // Katakana
+    for (uint32_t c = 0x30A0; c <= 0x30FF; ++c) charset.push_back(c);
+
+    // Katakana Phonetic Extensions
+    for (uint32_t c = 0x31F0; c <= 0x31FF; ++c) charset.push_back(c);
+
+    // CJK Unified Ideographs (common subset for terminal use)
+    // Full range is 0x4E00-0x9FFF (20,992 chars) - we use common subset
+    // Level 1 Kanji (~3000 most common) plus extras
+    for (uint32_t c = 0x4E00; c <= 0x9FFF; ++c) charset.push_back(c);
+
+    // CJK Unified Ideographs Extension A (rare chars, skip for terminal)
+    // 0x3400-0x4DBF - skipped
+
+    // Hangul Syllables (Korean)
+    for (uint32_t c = 0xAC00; c <= 0xD7AF; ++c) charset.push_back(c);
+
+    // Hangul Jamo
+    for (uint32_t c = 0x1100; c <= 0x11FF; ++c) charset.push_back(c);
+
+    // Hangul Compatibility Jamo
+    for (uint32_t c = 0x3130; c <= 0x318F; ++c) charset.push_back(c);
+
+    // Halfwidth and Fullwidth Forms
+    for (uint32_t c = 0xFF00; c <= 0xFFEF; ++c) charset.push_back(c);
+
+    // CJK Compatibility
+    for (uint32_t c = 0x3300; c <= 0x33FF; ++c) charset.push_back(c);
+
+    // Enclosed CJK Letters and Months
+    for (uint32_t c = 0x3200; c <= 0x32FF; ++c) charset.push_back(c);
+
+    // Bopomofo (Chinese phonetic)
+    for (uint32_t c = 0x3100; c <= 0x312F; ++c) charset.push_back(c);
+
+    return charset;
+}
+
+std::vector<uint32_t> getFontCharset(const std::string& fontPath) {
+    std::vector<uint32_t> charset;
+
+    FT_Library ftLib;
+    if (FT_Init_FreeType(&ftLib)) {
+        yerror("Failed to initialize FreeType");
+        return charset;
+    }
+
+    FT_Face face;
+    if (FT_New_Face(ftLib, fontPath.c_str(), 0, &face)) {
+        yerror("Failed to load font: {}", fontPath);
+        FT_Done_FreeType(ftLib);
+        return charset;
+    }
+
+    // Iterate through all codepoints in the font's charmap
+    FT_ULong charcode;
+    FT_UInt glyphIndex;
+
+    charcode = FT_Get_First_Char(face, &glyphIndex);
+    while (glyphIndex != 0) {
+        charset.push_back(static_cast<uint32_t>(charcode));
+        charcode = FT_Get_Next_Char(face, charcode, &glyphIndex);
+    }
+
+    FT_Done_Face(face);
+    FT_Done_FreeType(ftLib);
+
+    yinfo("Found {} glyphs in font", charset.size());
+    return charset;
+}
+
+std::vector<uint32_t> getDefaultCharset(bool includeNerdFonts, bool includeCJK) {
     std::vector<uint32_t> charset;
 
     // Basic Latin (ASCII printable)
@@ -348,8 +433,17 @@ GeneratorResult generate(const GeneratorConfig& config, ProgressCallback progres
 
     yinfo("Using {} threads for MSDF generation", threadCount);
 
-    // Get charset
-    auto charset = getDefaultCharset(config.includeNerdFonts);
+    // Get charset based on mode
+    std::vector<uint32_t> charset;
+    if (config.allGlyphs) {
+        charset = getFontCharset(config.fontPath);
+        if (charset.empty()) {
+            result.error = "Failed to enumerate font glyphs or font is empty";
+            return result;
+        }
+    } else {
+        charset = getDefaultCharset(config.includeNerdFonts, config.includeCJK);
+    }
     yinfo("Charset size: {} codepoints", charset.size());
 
     // Set up work queue

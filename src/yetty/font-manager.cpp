@@ -98,6 +98,13 @@ public:
 
     auto font = std::move(*result);
 
+    // Set CJK fallback CDB if it exists
+    std::string cjkFallbackPath = _cacheDir + "/NotoSansCJK-Regular.cdb";
+    if (std::filesystem::exists(cjkFallbackPath)) {
+      font->setFallbackCdb(cjkFallbackPath);
+      yinfo("Set CJK fallback CDB: {}", cjkFallbackPath);
+    }
+
     // Create GPU resources (texture, sampler, metadata buffer)
     if (auto res = font->createTexture(_gpu.device, _gpu.queue); !res) {
       return Err<MsMsdfFont::Ptr>("Failed to create MsMsdfFont texture", res);

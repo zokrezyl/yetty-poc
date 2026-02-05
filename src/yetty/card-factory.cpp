@@ -15,6 +15,9 @@
 #ifdef YETTY_CARD_PDF
 #include "cards/pdf/pdf.h"
 #endif
+#ifdef YETTY_CARD_YPDF
+#include "cards/ypdf/ypdf.h"
+#endif
 #ifdef YETTY_CARD_PYTHON
 #include "cards/python/python.h"
 #endif
@@ -149,6 +152,16 @@ public:
             auto result = card::Pdf::create(ctx, x, y, w, h, args, payload);
             if (!result) return std::unexpected(result.error());
             return Ok<CardPtr>(*result);
+        });
+#endif
+
+#ifdef YETTY_CARD_YPDF
+        registerCard("ypdf", [](const YettyContext& ctx,
+                                int32_t x, int32_t y,
+                                uint32_t w, uint32_t h,
+                                const std::string& args,
+                                const std::string& payload) {
+            return card::YPdf::create(ctx, x, y, w, h, args, payload);
         });
 #endif
 

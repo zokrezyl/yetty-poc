@@ -159,16 +159,110 @@ void GlyphRegistry::registerGlyph(const std::string& name, uint32_t codepoint) {
 YEchoParser::YEchoParser(const GlyphRegistry* registry)
     : registry_(registry) {}
 
-YEchoSpan YEchoParser::parse(const std::string& input) {
+std::vector<YEchoSpan> YEchoParser::parse(const std::string& input) {
     errors_.clear();
-    
-    YEchoSpan root;
-    root.type = YEchoSpan::Type::StyledBlock;
-    
+    std::vector<YEchoSpan> spans;
     size_t pos = 0;
-    parseInto(input, pos, root.children);
+    parseInto(input, pos, spans, '\0');
+    return spans;
+}
+
+std::string YEchoParser::toTerminal(const std::vector<YEchoSpan>& spans) const {
+    std::string result;
     
-    return root;
+    for (const auto& span : spans) {
+        switch (span.type) {
+            case YEchoSpan::Type::Text:
+                result += span.text;
+                break;
+                
+            case YEchoSpan::Type::Glyph: {
+                uint32_t cp = 0;
+                if (registry_) {
+                    cp = registry_->getCodepoint(span.glyphName);
+                }
+                if (cp == 0) {
+                    result += "[?" + span.glyphName + "]";
+                } else {
+                    appendUtf8(result, cp);
+                }
+                break;
+            }
+                
+            case YEchoSpan::Type::Block: {
+                // Determine card type:
+                // 1. Explicit: card=TYPE attribute
+                // 2. Implicit ytext: @font-size, @font-family, or other @font.* attributes
+                std::string cardType;
+                bool hasYtextAttrs = false;
+                
+                for (const auto& attr : span.attrs) {
+                    if (attr.key == "card") {
+                        cardType = attr.value;
+                    } else if (attr.key.starts_with("@font-") || 
+                               attr.key.starts_with("@font.")) {
+                        hasYtextAttrs = true;
+                    }
+                }
+                
+                // Implicit ytext when font attributes present
+                if (cardType.empty() && hasYtextAttrs) {
+                    cardType = "ytext";
+                }
+                
+                if (!cardType.empty()) {
+                    result += generateOSC(span, cardType);
+                } else {
+                    // ANSI styled block
+                    std::string codes;
+                    for (const auto& attr : span.attrs) {
+                        if (attr.key == "color") {
+                            if (auto color = attr.asColor()) {
+                                uint8_t r = (*color >> 16) & 0xFF;
+                                uint8_t g = (*color >> 8) & 0xFF;
+                                uint8_t b = *color & 0xFF;
+                                if (!codes.empty()) codes += ";";
+                                codes += "38;2;" + std::to_string(r) + ";" + 
+                                         std::to_string(g) + ";" + std::to_string(b);
+                            }
+                        } else if (attr.key == "bg") {
+                            if (auto color = attr.asColor()) {
+                                uint8_t r = (*color >> 16) & 0xFF;
+                                uint8_t g = (*color >> 8) & 0xFF;
+                                uint8_t b = *color & 0xFF;
+                                if (!codes.empty()) codes += ";";
+                                codes += "48;2;" + std::to_string(r) + ";" + 
+                                         std::to_string(g) + ";" + std::to_string(b);
+                            }
+                        } else if (attr.key == "style") {
+                            auto style = attr.asStyle();
+                            if (hasStyle(style, YEchoStyle::Bold)) {
+                                if (!codes.empty()) codes += ";";
+                                codes += "1";
+                            }
+                            if (hasStyle(style, YEchoStyle::Italic)) {
+                                if (!codes.empty()) codes += ";";
+                                codes += "3";
+                            }
+                            if (hasStyle(style, YEchoStyle::Underline)) {
+                                if (!codes.empty()) codes += ";";
+                                codes += "4";
+                            }
+                        }
+                    }
+                    
+                    if (!codes.empty()) {
+                        result += "\033[" + codes + "m";
+                    }
+                    result += span.content;
+                    result += "\033[0m";
+                }
+                break;
+            }
+        }
+    }
+    
+    return result;
 }
 
 void YEchoParser::parseInto(const std::string& input, size_t& pos, 
@@ -205,9 +299,9 @@ void YEchoParser::parseInto(const std::string& input, size_t& pos,
         
         // Glyph: @name
         if (c == '@') {
-            flushText();
             YEchoSpan span;
             if (parseGlyph(input, pos, span)) {
+                flushText();  // Only flush if glyph is valid
                 spans.push_back(std::move(span));
             } else {
                 // Failed to parse glyph, treat @ as literal
@@ -217,11 +311,11 @@ void YEchoParser::parseInto(const std::string& input, size_t& pos,
             continue;
         }
         
-        // Styled block: {attrs: content}
+        // Block: {statements: content}
         if (c == '{') {
-            flushText();
             YEchoSpan span;
-            if (parseStyledBlock(input, pos, span)) {
+            if (parseBlock(input, pos, span)) {
+                flushText();  // Only flush if block is valid
                 spans.push_back(std::move(span));
             } else {
                 // Failed to parse block, treat { as literal
@@ -258,16 +352,13 @@ bool YEchoParser::parseGlyph(const std::string& input, size_t& pos, YEchoSpan& s
     }
     
     if (end == start) {
-        // No name after @
         return false;
     }
     
     std::string name = input.substr(start, end - start);
     
-    // Verify glyph exists if registry available
     if (registry_ && !registry_->hasGlyph(name)) {
         errors_.push_back("Unknown glyph: @" + name);
-        // Still parse it, but mark as unknown
     }
     
     span.type = YEchoSpan::Type::Glyph;
@@ -277,203 +368,218 @@ bool YEchoParser::parseGlyph(const std::string& input, size_t& pos, YEchoSpan& s
     return true;
 }
 
-bool YEchoParser::parseStyledBlock(const std::string& input, size_t& pos, YEchoSpan& span) {
-    // {attrs: content}
+bool YEchoParser::parseBlock(const std::string& input, size_t& pos, YEchoSpan& span) {
+    // {statements: content}
+    // Statements on left side separated by semicolons
+    // Content on right side (raw string)
+    
     if (pos >= input.size() || input[pos] != '{') {
         return false;
     }
     
     size_t start = pos + 1;
     
-    // Find the first ':' which separates attrs from content
-    size_t colonPos = input.find(':', start);
+    // Find the first ':' at depth 0, respecting quotes
+    int braceDepth = 0;
+    bool inQuotes = false;
+    char quoteChar = 0;
+    size_t colonPos = std::string::npos;
+    
+    for (size_t i = start; i < input.size(); ++i) {
+        char c = input[i];
+        
+        if (!inQuotes) {
+            if (c == '"' || c == '\'') {
+                inQuotes = true;
+                quoteChar = c;
+            } else if (c == '{') {
+                braceDepth++;
+            } else if (c == '}') {
+                if (braceDepth == 0) {
+                    errors_.push_back("Missing ':' in block");
+                    return false;
+                }
+                braceDepth--;
+            } else if (c == ':' && braceDepth == 0) {
+                colonPos = i;
+                break;
+            }
+        } else {
+            if (c == quoteChar) {
+                inQuotes = false;
+            }
+        }
+    }
+    
     if (colonPos == std::string::npos) {
-        errors_.push_back("Missing ':' in styled block");
+        errors_.push_back("Missing ':' in block");
         return false;
     }
     
-    // Parse attributes
-    std::string attrsStr = input.substr(start, colonPos - start);
-    size_t attrPos = 0;
-    if (!parseAttributes(attrsStr, attrPos, span.attrs)) {
-        return false;
-    }
+    // Parse left side (statements separated by semicolons)
+    std::string leftSide = input.substr(start, colonPos - start);
+    parseStatements(leftSide, span.attrs);
     
-    // Skip ':' and optional single space
+    // Find closing '}' for content
     size_t contentStart = colonPos + 1;
     if (contentStart < input.size() && input[contentStart] == ' ') {
         contentStart++;
     }
     
-    // Parse content until '}'
-    pos = contentStart;
-    span.type = YEchoSpan::Type::StyledBlock;
-    parseInto(input, pos, span.children, '}');
+    braceDepth = 0;
+    inQuotes = false;
+    size_t endPos = std::string::npos;
     
-    if (pos >= input.size() || input[pos] != '}') {
-        errors_.push_back("Unclosed styled block");
+    for (size_t i = contentStart; i < input.size(); ++i) {
+        char c = input[i];
+        
+        if (!inQuotes) {
+            if (c == '"' || c == '\'') {
+                inQuotes = true;
+                quoteChar = c;
+            } else if (c == '{') {
+                braceDepth++;
+            } else if (c == '}') {
+                if (braceDepth == 0) {
+                    endPos = i;
+                    break;
+                }
+                braceDepth--;
+            }
+        } else {
+            if (c == quoteChar) {
+                inQuotes = false;
+            }
+        }
+    }
+    
+    if (endPos == std::string::npos) {
+        errors_.push_back("Unclosed block");
         return false;
     }
     
-    pos++;  // Skip '}'
-    return true;
-}
-
-bool YEchoParser::parseAttributes(const std::string& input, size_t& pos,
-                                   std::vector<YEchoAttribute>& attrs) {
-    // Attributes separated by whitespace: "font=32 color=#ff0000 bold"
-    
-    while (pos < input.size()) {
-        // Skip whitespace
-        while (pos < input.size() && std::isspace(input[pos])) {
-            pos++;
-        }
-        
-        if (pos >= input.size()) break;
-        
-        // Parse key
-        size_t keyStart = pos;
-        while (pos < input.size() && input[pos] != '=' && !std::isspace(input[pos])) {
-            pos++;
-        }
-        
-        if (pos == keyStart) break;
-        
-        YEchoAttribute attr;
-        attr.key = input.substr(keyStart, pos - keyStart);
-        
-        // Check for '=' and value
-        if (pos < input.size() && input[pos] == '=') {
-            pos++;  // Skip '='
-            
-            size_t valStart = pos;
-            while (pos < input.size() && !std::isspace(input[pos])) {
-                pos++;
-            }
-            
-            attr.value = input.substr(valStart, pos - valStart);
-        }
-        
-        attrs.push_back(std::move(attr));
-    }
+    span.type = YEchoSpan::Type::Block;
+    span.content = input.substr(contentStart, endPos - contentStart);
+    pos = endPos + 1;
     
     return true;
 }
 
-std::string YEchoParser::toTerminal(const YEchoSpan& root) const {
-    std::string result;
+void YEchoParser::parseStatements(const std::string& str, std::vector<YEchoAttribute>& attrs) {
+    // Semicolon-separated statements: "card=plot; w=80; h=20; @view=-3.14..3.14,-1..1"
+    std::string current;
+    bool inQuotes = false;
+    char quoteChar = 0;
     
-    // Helper to build ANSI escape for styled block
-    auto emitAnsiStart = [&](const std::vector<YEchoAttribute>& attrs) {
-        std::string codes;
+    auto processStatement = [&](const std::string& stmt) {
+        // Trim
+        size_t start = stmt.find_first_not_of(" \t");
+        size_t end = stmt.find_last_not_of(" \t");
+        if (start == std::string::npos) return;
         
-        for (const auto& attr : attrs) {
-            if (attr.key == "color") {
-                if (auto color = attr.asColor()) {
-                    uint8_t r = (*color >> 16) & 0xFF;
-                    uint8_t g = (*color >> 8) & 0xFF;
-                    uint8_t b = *color & 0xFF;
-                    if (!codes.empty()) codes += ";";
-                    codes += "38;2;" + std::to_string(r) + ";" + 
-                             std::to_string(g) + ";" + std::to_string(b);
-                }
-            } else if (attr.key == "bg") {
-                if (auto color = attr.asColor()) {
-                    uint8_t r = (*color >> 16) & 0xFF;
-                    uint8_t g = (*color >> 8) & 0xFF;
-                    uint8_t b = *color & 0xFF;
-                    if (!codes.empty()) codes += ";";
-                    codes += "48;2;" + std::to_string(r) + ";" + 
-                             std::to_string(g) + ";" + std::to_string(b);
-                }
-            } else if (attr.key == "style") {
-                auto style = attr.asStyle();
-                if (hasStyle(style, YEchoStyle::Bold)) {
-                    if (!codes.empty()) codes += ";";
-                    codes += "1";
-                }
-                if (hasStyle(style, YEchoStyle::Italic)) {
-                    if (!codes.empty()) codes += ";";
-                    codes += "3";
-                }
-                if (hasStyle(style, YEchoStyle::Underline)) {
-                    if (!codes.empty()) codes += ";";
-                    codes += "4";
-                }
-            }
-        }
+        std::string trimmed = stmt.substr(start, end - start + 1);
+        if (trimmed.empty()) return;
         
-        if (!codes.empty()) {
-            result += "\033[" + codes + "m";
+        // Split on first '='
+        size_t eqPos = trimmed.find('=');
+        if (eqPos == std::string::npos) {
+            // No '=', treat as key with empty value
+            YEchoAttribute attr;
+            attr.key = trimmed;
+            attrs.push_back(std::move(attr));
+        } else {
+            YEchoAttribute attr;
+            attr.key = trimmed.substr(0, eqPos);
+            attr.value = trimmed.substr(eqPos + 1);
+            attrs.push_back(std::move(attr));
         }
     };
     
-    std::function<void(const YEchoSpan&)> visit = [&](const YEchoSpan& span) {
-        switch (span.type) {
-            case YEchoSpan::Type::Text:
-                result += span.text;
-                break;
-                
-            case YEchoSpan::Type::Glyph: {
-                uint32_t cp = 0;
-                if (registry_) {
-                    cp = registry_->getCodepoint(span.glyphName);
-                }
-                if (cp == 0) {
-                    // Unknown glyph - output placeholder
-                    result += "[?";
-                    result += span.glyphName;
-                    result += "]";
-                } else {
-                    appendUtf8(result, cp);
-                }
-                break;
+    for (size_t i = 0; i < str.size(); ++i) {
+        char c = str[i];
+        
+        if (!inQuotes) {
+            if (c == '"' || c == '\'') {
+                inQuotes = true;
+                quoteChar = c;
+                current += c;
+            } else if (c == ';') {
+                processStatement(current);
+                current.clear();
+            } else {
+                current += c;
             }
-                
-            case YEchoSpan::Type::StyledBlock: {
-                // Emit ANSI start codes
-                emitAnsiStart(span.attrs);
-                
-                // Render children
-                for (const auto& child : span.children) {
-                    visit(child);
-                }
-                
-                // Reset ANSI
-                result += "\033[0m";
-                break;
+        } else {
+            current += c;
+            if (c == quoteChar) {
+                inQuotes = false;
             }
         }
-    };
-    
-    if (root.type == YEchoSpan::Type::StyledBlock && root.attrs.empty()) {
-        // Root container - just process children
-        for (const auto& child : root.children) {
-            visit(child);
-        }
-    } else {
-        visit(root);
     }
     
-    return result;
+    // Process last statement
+    processStatement(current);
 }
 
-bool YEchoParser::needsYtext(const YEchoSpan& root) const {
-    std::function<bool(const YEchoSpan&)> check = [&](const YEchoSpan& span) -> bool {
-        if (span.type == YEchoSpan::Type::StyledBlock) {
-            for (const auto& attr : span.attrs) {
-                if (attr.key == "font-size") {
-                    return true;
-                }
-            }
-            for (const auto& child : span.children) {
-                if (check(child)) return true;
+std::string YEchoParser::generateOSC(const YEchoSpan& span, const std::string& cardType) const {
+    // Generate OSC 666666 escape sequence for card
+    // Format: ESC ] 666666 ; generic-args ; plugin-args ; payload ESC \
+    
+    int width = 0;
+    int height = 0;
+    std::string pluginArgs;
+    
+    for (const auto& attr : span.attrs) {
+        if (attr.key == "card") {
+            // Skip, we already have cardType
+        } else if (attr.key == "w") {
+            try { width = std::stoi(attr.value); } catch (...) {}
+        } else if (attr.key == "h") {
+            try { height = std::stoi(attr.value); } catch (...) {}
+        } else {
+            // Build plugin args
+            if (!pluginArgs.empty()) pluginArgs += " ";
+            if (attr.key[0] == '@') {
+                // @view, @font-size, etc. -> --view, --font-size
+                pluginArgs += "--" + attr.key.substr(1) + " " + attr.value;
+            } else {
+                pluginArgs += "--" + attr.key + " " + attr.value;
             }
         }
-        return false;
-    };
+    }
     
-    return check(root);
+    // Build generic args
+    std::string genericArgs = "create -p " + cardType;
+    if (width > 0) genericArgs += " -w " + std::to_string(width);
+    if (height > 0) genericArgs += " -h " + std::to_string(height);
+    genericArgs += " -r";  // relative positioning
+    
+    // Handle content based on card type
+    if (!span.content.empty()) {
+        if (!pluginArgs.empty()) pluginArgs += " ";
+        if (cardType == "plot") {
+            // Plot: content is the expression
+            pluginArgs += "--expr \"" + span.content + "\"";
+        } else if (cardType == "ytext") {
+            // Ytext: content is the text
+            pluginArgs += "--text \"" + span.content + "\"";
+        } else if (cardType == "qr") {
+            // QR: content is the data
+            pluginArgs += "--data \"" + span.content + "\"";
+        } else {
+            // Generic: pass as --content
+            pluginArgs += "--content \"" + span.content + "\"";
+        }
+    }
+    
+    // Build OSC sequence
+    std::string osc = "\033]666666;";
+    osc += genericArgs;
+    osc += ";";
+    osc += pluginArgs;
+    osc += ";\033\\";
+    
+    return osc;
 }
 
 void YEchoParser::appendUtf8(std::string& out, uint32_t cp) const {

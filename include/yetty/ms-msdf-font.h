@@ -23,6 +23,9 @@ public:
 
     ~MsMsdfFont() override;
 
+    // Set fallback CDB for CJK characters (loaded lazily on demand)
+    void setFallbackCdb(const std::string& cdbPath);
+
     // Font interface
     uint32_t getGlyphIndex(uint32_t codepoint) override;
     uint32_t getGlyphIndex(uint32_t codepoint, Style style) override;
@@ -79,12 +82,17 @@ private:
     // One CDB per style variant
     CdbFile _cdbFiles[4];  // Regular, Bold, Italic, BoldItalic
 
+    // Fallback CDB for CJK characters (loaded lazily)
+    CdbFile _fallbackCdb;
+    std::string _fallbackCdbPath;
+    std::unordered_map<uint32_t, uint32_t> _fallbackCodepointToIndex;
+
     std::string _cdbBasePath;
 
     // Runtime atlas (built on demand from CDB)
     std::vector<uint8_t> _atlasData;
-    uint32_t _atlasWidth = 2048;
-    uint32_t _atlasHeight = 512;
+    uint32_t _atlasWidth = 4096;
+    uint32_t _atlasHeight = 4096;
 
     // Per-style glyph tracking: codepoint -> glyph index
     std::unordered_map<uint32_t, uint32_t> _codepointToIndex[4];
@@ -128,6 +136,12 @@ private:
 
     // Close CDB file
     void closeCdb(Style style);
+
+    // Fallback CDB support
+    Result<void> openFallbackCdb();
+    void closeFallbackCdb();
+    uint32_t loadGlyphFromFallbackCdb(uint32_t codepoint);
+    static bool isCJKCodepoint(uint32_t codepoint);
 
     // Helper to get style index
     static int styleIndex(Style style) { return static_cast<int>(style); }
