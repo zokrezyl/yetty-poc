@@ -4007,14 +4007,10 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
           col = std::max(0, std::min(col, static_cast<int>(_cols) - 1));
           row = std::max(0, std::min(row, static_cast<int>(_rows) - 1));
 
-          // Add context menu items - menu opens automatically on render
-          _ctx.imguiManager->addContextMenuItem({
-            "Copy cell info",
-            base::Event::contextMenuAction(_id, "copy_cell_info", row, col)
-          });
-          _ctx.imguiManager->addContextMenuItem({
-            "Inspect glyph",
-            base::Event::contextMenuAction(_id, "inspect_glyph", row, col)
+          // Open context menu at mouse position with items
+          _ctx.imguiManager->openContextMenu(mx, my, {
+            {"Copy cell info", base::Event::contextMenuAction(_id, "copy_cell_info", row, col)},
+            {"Inspect glyph", base::Event::contextMenuAction(_id, "inspect_glyph", row, col)}
           });
 
           yinfo("GPUScreen {} right-click at cell ({}, {}), opening context menu", _id, row, col);

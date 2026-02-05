@@ -368,6 +368,13 @@ float YPdf::placeGlyphs(const std::string& text,
         fontId = it->second;
     }
 
+    ydebug("placeGlyphs: text='{}' len={} pos=({:.1f},{:.1f}) effSize={:.1f} "
+           "fontSize={:.1f} fontBase={:.1f} scaleScene={:.4f} scaleText={:.4f} "
+           "hScale={:.2f} fontId={} font='{}'",
+           text.substr(0, 20), text.size(), posX, posY, effectiveSize,
+           textState.fontSize, fontBaseSize, scaleScene, scaleText,
+           hScale, fontId, textState.fontName);
+
     float cursorX = posX;
     float totalTextAdvance = 0.0f;
 
@@ -442,6 +449,10 @@ float YPdf::placeGlyphs(const std::string& text,
         cursorX += sceneAdvance * hScale;
         totalTextAdvance += textAdvance * hScale;
     }
+
+    ydebug("placeGlyphs: result totalAdvance={:.2f} cursorX={:.1f} (startX={:.1f} delta={:.1f}) "
+           "glyphsNow={}",
+           totalTextAdvance, cursorX, posX, cursorX - posX, _glyphs.size());
 
     return totalTextAdvance;
 }
@@ -639,6 +650,10 @@ void YPdf::buildGrid() {
 
     std::memset(grid, 0, gridTotalU32 * sizeof(uint32_t));
 
+    uint32_t glyphsPlaced = 0;
+    uint32_t glyphsDropped = 0;
+    uint32_t maxCellCount = 0;
+
     for (uint32_t gi = 0; gi < static_cast<uint32_t>(_glyphs.size()); gi++) {
         const auto& g = _glyphs[gi];
 
@@ -651,6 +666,7 @@ void YPdf::buildGrid() {
         uint32_t cellMaxY = static_cast<uint32_t>(
             std::clamp((g.y + g.height - _sceneMinY) / _cellSize, 0.0f, float(_gridHeight - 1)));
 
+        bool placed = false;
         for (uint32_t cy = cellMinY; cy <= cellMaxY; cy++) {
             for (uint32_t cx = cellMinX; cx <= cellMaxX; cx++) {
                 uint32_t cellIndex = cy * _gridWidth + cx;
@@ -659,10 +675,19 @@ void YPdf::buildGrid() {
                 if (count < MAX_ENTRIES_PER_CELL) {
                     grid[cellOffset + 1 + count] = gi | GLYPH_BIT;
                     grid[cellOffset] = count + 1;
+                    placed = true;
+                    if (count + 1 > maxCellCount) maxCellCount = count + 1;
                 }
             }
         }
+        if (placed) glyphsPlaced++;
+        else glyphsDropped++;
     }
+
+    yinfo("YPdf::buildGrid: grid={}x{} cellSize={:.1f} glyphs={} placed={} "
+          "DROPPED={} maxCellCount={}/{}",
+          _gridWidth, _gridHeight, _cellSize, _glyphs.size(),
+          glyphsPlaced, glyphsDropped, maxCellCount, MAX_ENTRIES_PER_CELL);
 }
 
 //=============================================================================

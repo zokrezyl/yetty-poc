@@ -27,7 +27,7 @@ public:
 
     // ImguiManager interface
     void updateDisplaySize(uint32_t width, uint32_t height) override;
-    void addContextMenuItem(const ContextMenuItem& item) override;
+    void openContextMenu(float x, float y, std::vector<ContextMenuItem> items) override;
     void clearContextMenu() override;
     void setStatusText(const std::string& text) override;
     float getStatusbarHeight() const override { return STATUSBAR_HEIGHT; }
@@ -135,14 +135,7 @@ Result<bool> ImguiManagerImpl::onEvent(const base::Event& event) {
         io.AddMousePosEvent(event.mouse.x, event.mouse.y);
         io.AddMouseButtonEvent(event.mouse.button, true);
 
-        if (event.mouse.button == 1) {  // GLFW_MOUSE_BUTTON_RIGHT
-            // Right-click: clear old items and store position
-            clearContextMenu();
-            _menuX = event.mouse.x;
-            _menuY = event.mouse.y;
-            _rightClickPending = true;
-            ydebug("ImguiManager: Right-click at ({}, {}), cleared menu items", _menuX, _menuY);
-        } else if (event.mouse.button == 0 && _menuOpen) {  // GLFW_MOUSE_BUTTON_LEFT
+        if (event.mouse.button == 0 && _menuOpen) {  // GLFW_MOUSE_BUTTON_LEFT
             // Left-click while menu is open: close the menu
             clearContextMenu();
             ydebug("ImguiManager: Left-click, closing menu");
@@ -161,8 +154,12 @@ void ImguiManagerImpl::updateDisplaySize(uint32_t width, uint32_t height) {
     _displayHeight = height;
 }
 
-void ImguiManagerImpl::addContextMenuItem(const ContextMenuItem& item) {
-    _menuItems.push_back(item);
+void ImguiManagerImpl::openContextMenu(float x, float y, std::vector<ContextMenuItem> items) {
+    clearContextMenu();
+    _menuX = x;
+    _menuY = y;
+    _menuItems = std::move(items);
+    ydebug("ImguiManager: Opening menu at ({}, {}) with {} items", x, y, _menuItems.size());
 }
 
 void ImguiManagerImpl::clearContextMenu() {
