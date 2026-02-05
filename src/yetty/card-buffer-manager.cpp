@@ -269,25 +269,40 @@ void CardBufferManagerImpl::reserve(uint32_t size) {
 }
 
 Result<void> CardBufferManagerImpl::commitReservations() {
-    if (_pendingReservation == 0) return Ok();
-
-    uint32_t totalNeeded = _bufferAllocator.used() + _pendingReservation;
+    uint32_t totalNeeded = std::max(_pendingReservation, 4u);  // minimum 4 bytes
     _pendingReservation = 0;
 
-    if (totalNeeded > _currentBufferCapacity) {
-        uint32_t newCapacity = std::max(_config.bufferCapacity, _currentBufferCapacity * 2);
-        while (newCapacity < totalNeeded && newCapacity < MAX_BUFFER_SIZE) {
-            newCapacity *= 2;
+    // Reset allocator — all old allocations are invalid
+    _bufferAllocator = BufferAllocator(totalNeeded);
+
+    if (totalNeeded != _currentBufferCapacity) {
+        // Recreate GPU buffer at exactly the needed size
+        if (_bufferGpuBuffer) {
+            wgpuBufferRelease(_bufferGpuBuffer);
+            _bufferGpuBuffer = nullptr;
         }
-        newCapacity = std::min(newCapacity, MAX_BUFFER_SIZE);
-        if (newCapacity < totalNeeded) {
-            return Err("Buffer reservations would exceed maximum size");
+
+        uint32_t newU32Count = (totalNeeded + 3) / 4;
+        _bufferCpuBuffer.resize(newU32Count, 0);
+        _bufferCpuBuffer.shrink_to_fit();
+
+        WGPUBufferDescriptor bufDesc = {};
+        bufDesc.label = WGPU_STR("CardBuffer");
+        bufDesc.size = newU32Count * sizeof(uint32_t);
+        bufDesc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
+        bufDesc.mappedAtCreation = false;
+
+        _bufferGpuBuffer = wgpuDeviceCreateBuffer(_device, &bufDesc);
+        if (!_bufferGpuBuffer) {
+            _currentBufferCapacity = 0;
+            return Err<void>("Failed to create GPU buffer");
         }
-        if (auto res = growBufferGpu(newCapacity); !res) {
-            return Err<void>("Failed to grow buffer for reservations", res);
-        }
-        yinfo("CardBufferManager::commitReservations: grew to {} bytes ({:.2f} MB) for {} bytes needed",
-              newCapacity, newCapacity / (1024.0 * 1024.0), totalNeeded);
+
+        _currentBufferCapacity = totalNeeded;
+        _bindGroupDirty = true;
+
+        yinfo("CardBufferManager::commitReservations: recreated GPU buffer at {} bytes ({:.2f} MB)",
+              totalNeeded, totalNeeded / (1024.0 * 1024.0));
     }
 
     return Ok();

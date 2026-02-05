@@ -53,7 +53,7 @@ public:
     static constexpr uint32_t SHADER_GLYPH = 0x100008;
 
     // Grid constants
-    static constexpr uint32_t MAX_ENTRIES_PER_CELL = 16;
+    static constexpr uint32_t MAX_ENTRIES_PER_CELL = 128;
     static constexpr uint32_t GLYPH_BIT = 0x80000000u;
 
     static Result<CardPtr> create(
@@ -70,10 +70,12 @@ public:
     //=========================================================================
     const char* typeName() const override { return "ypdf"; }
     bool needsBuffer() const override { return true; }
+    bool needsTexture() const override { return true; }
     uint32_t metadataSlotIndex() const override { return _metaHandle.offset / 64; }
 
     void declareBufferNeeds() override;
     Result<void> allocateBuffers() override;
+    Result<void> allocateTextures() override;
     Result<void> render(float time) override;
     Result<void> dispose() override;
     void suspend() override;
@@ -92,13 +94,13 @@ public:
 private:
     // Metadata structure (matches shader layout - 64 bytes)
     struct Metadata {
-        uint32_t primitiveOffset;   // 0  (always 0 for ypdf)
-        uint32_t primitiveCount;    // 4  (always 0 for ypdf)
+        uint32_t atlasXW;           // 0  [15:0]=atlasX, [31:16]=msdfAtlasWidth
+        uint32_t atlasYH;           // 4  [15:0]=atlasY, [31:16]=msdfAtlasHeight
         uint32_t gridOffset;        // 8
         uint32_t gridWidth;         // 12
         uint32_t gridHeight;        // 16
         uint32_t cellSize;          // 20 (f32 stored as bits)
-        uint32_t glyphOffset;       // 24
+        uint32_t glyphOffset;       // 24 - offset of PdfGlyph array
         uint32_t glyphCount;        // 28
         uint32_t sceneMinX;         // 32 (f32 stored as bits)
         uint32_t sceneMinY;         // 36 (f32 stored as bits)
@@ -172,11 +174,13 @@ private:
 
     // Font / atlas (own instances, not shared with ydraw)
     FontManager::Ptr _fontManager;
-    MsMsdfFont::Ptr _font;
     MsdfAtlas::Ptr _atlas;
     std::unordered_map<std::string, int> _pdfFontMap;   // PDF font name → fontId
     std::unordered_map<std::string, int> _fontIdCache;   // cdbPath → fontId
     std::string _rawFontCacheDir;
+
+    // Atlas texture handle for cardTextureManager
+    TextureHandle _atlasTextureHandle = TextureHandle::invalid();
 
     // Glyph data
     std::vector<PdfGlyph> _glyphs;
@@ -188,6 +192,7 @@ private:
     float _cellSize = 0.0f;
     uint32_t _gridOffset = 0;
     uint32_t _glyphOffset = 0;
+    uint32_t _glyphMetaOffset = 0;
 
     // Scene bounds
     float _sceneMinX = 0, _sceneMinY = 0;

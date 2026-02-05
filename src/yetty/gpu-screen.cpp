@@ -260,6 +260,7 @@ private:
   // Card dormancy — scan visible buffer for a given slotIndex
   bool isCardSlotVisibleInBuffer(uint32_t slotIndex, int excludeRow = -1) const;
   void suspendOffscreenCards(int scrolledRow);
+  void suspendNonVisibleCards();
   void reactivateVisibleCards();
   void gcInactiveCards();
 
@@ -3292,6 +3293,49 @@ void GPUScreenImpl::reactivateVisibleCards() {
   }
 }
 
+void GPUScreenImpl::suspendNonVisibleCards() {
+  if (_cards.empty())
+    return;
+
+  // Collect all card slotIndices visible in the composed view
+  const Cell *cells = getCellData();
+  if (!cells)
+    return;
+
+  const size_t numCells = static_cast<size_t>(_rows) * _cols;
+  std::unordered_set<uint32_t> visibleSlots;
+
+  for (size_t i = 0; i < numCells; i++) {
+    if (!isCardGlyph(cells[i].glyph))
+      continue;
+    uint32_t slotIndex = static_cast<uint32_t>(cells[i].fgR) |
+                         (static_cast<uint32_t>(cells[i].fgG) << 8) |
+                         (static_cast<uint32_t>(cells[i].fgB) << 16);
+    visibleSlots.insert(slotIndex);
+  }
+
+  // Suspend active cards not in the composed view
+  std::vector<uint32_t> toSuspend;
+  for (const auto& [slotIndex, card] : _cards) {
+    if (visibleSlots.find(slotIndex) == visibleSlots.end()) {
+      toSuspend.push_back(slotIndex);
+    }
+  }
+
+  for (uint32_t slotIndex : toSuspend) {
+    auto it = _cards.find(slotIndex);
+    if (it != _cards.end()) {
+      yinfo("GPUScreen::suspendNonVisibleCards: suspending card '{}' slotIndex={}",
+            it->second->typeName(), slotIndex);
+      if (it->second->needsBuffer())  _bufferLayoutChanged = true;
+      if (it->second->needsTexture()) _textureLayoutChanged = true;
+      it->second->suspend();
+      _inactiveCards[slotIndex] = std::move(it->second);
+      _cards.erase(it);
+    }
+  }
+}
+
 void GPUScreenImpl::gcInactiveCards() {
   // Note: removed early return on _inactiveCards.empty() because we also
   // need to GC orphaned active cards (e.g., after clear screen)
@@ -3776,14 +3820,12 @@ Card *GPUScreenImpl::getCardAtCell(int row, int col) const {
     return nullptr;
   }
 
-  if (!_visibleBuffer)
+  const Cell *cells = getCellData();
+  if (!cells)
     return nullptr;
 
   size_t idx = cellIndex(row, col);
-  if (idx >= _visibleBuffer->size())
-    return nullptr;
-
-  const Cell &cell = (*_visibleBuffer)[idx];
+  const Cell &cell = cells[idx];
 
   // Check if this cell has a shader glyph (Plane 16 PUA-B: U+100000 - U+10FFFD)
   if (cell.glyph < 0x100000 || cell.glyph > 0x10FFFD) {
@@ -4007,10 +4049,15 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
           col = std::max(0, std::min(col, static_cast<int>(_cols) - 1));
           row = std::max(0, std::min(row, static_cast<int>(_rows) - 1));
 
-          // Open context menu at mouse position with items
-          _ctx.imguiManager->openContextMenu(mx, my, {
-            {"Copy cell info", base::Event::contextMenuAction(_id, "copy_cell_info", row, col)},
-            {"Inspect glyph", base::Event::contextMenuAction(_id, "inspect_glyph", row, col)}
+          // Begin context menu at mouse position, then add items
+          _ctx.imguiManager->beginContextMenu(mx, my);
+          _ctx.imguiManager->addContextMenuItem({
+            "Copy cell info",
+            base::Event::contextMenuAction(_id, "copy_cell_info", row, col)
+          });
+          _ctx.imguiManager->addContextMenuItem({
+            "Inspect glyph",
+            base::Event::contextMenuAction(_id, "inspect_glyph", row, col)
           });
 
           yinfo("GPUScreen {} right-click at cell ({}, {}), opening context menu", _id, row, col);
@@ -4485,6 +4532,9 @@ Result<void> GPUScreenImpl::initPipeline() {
 }
 
 Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
+  // Suspend active cards no longer in the composed view (e.g., scrolled away in scrollback)
+  suspendNonVisibleCards();
+
   // Reactivate any suspended cards whose cells are now visible (user scrolled back)
   reactivateVisibleCards();
 

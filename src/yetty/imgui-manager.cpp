@@ -27,7 +27,8 @@ public:
 
     // ImguiManager interface
     void updateDisplaySize(uint32_t width, uint32_t height) override;
-    void openContextMenu(float x, float y, std::vector<ContextMenuItem> items) override;
+    void beginContextMenu(float x, float y) override;
+    void addContextMenuItem(const ContextMenuItem& item) override;
     void clearContextMenu() override;
     void setStatusText(const std::string& text) override;
     float getStatusbarHeight() const override { return STATUSBAR_HEIGHT; }
@@ -119,8 +120,11 @@ void ImguiManagerImpl::registerForEvents() {
     loop->registerListener(base::Event::Type::MouseDown, sharedAs<base::EventListener>());
     loop->registerListener(base::Event::Type::MouseUp, sharedAs<base::EventListener>());
     loop->registerListener(base::Event::Type::MouseMove, sharedAs<base::EventListener>());
-    yinfo("ImguiManager registered for mouse events");
+    loop->registerListener(base::Event::Type::KeyDown, sharedAs<base::EventListener>());
+    yinfo("ImguiManager registered for mouse and key events");
 }
+
+constexpr int GLFW_KEY_ESCAPE = 256;
 
 Result<bool> ImguiManagerImpl::onEvent(const base::Event& event) {
     if (!_imguiContext) return Ok(false);
@@ -135,15 +139,20 @@ Result<bool> ImguiManagerImpl::onEvent(const base::Event& event) {
         io.AddMousePosEvent(event.mouse.x, event.mouse.y);
         io.AddMouseButtonEvent(event.mouse.button, true);
 
-        if (event.mouse.button == 0 && _menuOpen) {  // GLFW_MOUSE_BUTTON_LEFT
-            // Left-click while menu is open: close the menu
-            clearContextMenu();
-            ydebug("ImguiManager: Left-click, closing menu");
-        }
+        // Any click while menu is open: let ImGui handle it, but if click is outside
+        // the popup, ImGui will close it (handled in render via BeginPopup returning false)
     }
     else if (event.type == base::Event::Type::MouseUp) {
         io.AddMousePosEvent(event.mouse.x, event.mouse.y);
         io.AddMouseButtonEvent(event.mouse.button, false);
+    }
+    else if (event.type == base::Event::Type::KeyDown) {
+        // ESC closes the context menu
+        if (event.key.key == GLFW_KEY_ESCAPE && _menuOpen) {
+            ydebug("ImguiManager: ESC pressed, closing menu");
+            clearContextMenu();
+            return Ok(true);  // Consume the event
+        }
     }
 
     return Ok(false);  // Don't consume - let other listeners handle
@@ -154,12 +163,16 @@ void ImguiManagerImpl::updateDisplaySize(uint32_t width, uint32_t height) {
     _displayHeight = height;
 }
 
-void ImguiManagerImpl::openContextMenu(float x, float y, std::vector<ContextMenuItem> items) {
+void ImguiManagerImpl::beginContextMenu(float x, float y) {
     clearContextMenu();
     _menuX = x;
     _menuY = y;
-    _menuItems = std::move(items);
-    ydebug("ImguiManager: Opening menu at ({}, {}) with {} items", x, y, _menuItems.size());
+    _rightClickPending = true;
+    ydebug("ImguiManager: beginContextMenu at ({}, {})", x, y);
+}
+
+void ImguiManagerImpl::addContextMenuItem(const ContextMenuItem& item) {
+    _menuItems.push_back(item);
 }
 
 void ImguiManagerImpl::clearContextMenu() {
