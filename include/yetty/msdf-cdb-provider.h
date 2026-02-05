@@ -6,14 +6,11 @@
 
 #include <memory>
 #include <string>
-#include <vector>
-
 namespace yetty {
 
 struct MsdfCdbConfig {
-    std::string fontName;                // e.g. "DejaVuSansMNerdFontMono"
-    std::vector<std::string> ttfPaths;   // one per style [Regular, Bold, Oblique, BoldOblique]
-    std::string outputDir;               // e.g. ~/.cache/yetty/msdf-font-cache
+    std::string ttfPath;                 // single input TTF file
+    std::string cdbPath;                 // single output CDB file (exact path)
     float fontSize = 32.0f;
     float pixelRange = 4.0f;
 };

@@ -76,14 +76,19 @@ public:
         yinfo("CDB missing for {}, generating via {} provider...", fontName,
               _cdbProvider->name());
 
-        MsdfCdbConfig cfg;
-        cfg.fontName = fontName;
-        cfg.ttfPaths = ttfPaths;
-        cfg.outputDir = _cacheDir;
+        for (size_t i = 0; i < styleSuffixes.size(); ++i) {
+          if (i >= ttfPaths.size() || ttfPaths[i].empty()) continue;
+          std::string cdbPath = cdbBasePath + "-" + styleSuffixes[i] + ".cdb";
+          if (std::filesystem::exists(cdbPath)) continue;
 
-        if (auto res = _cdbProvider->generate(cfg); !res) {
-          return Err<MsMsdfFont::Ptr>("CDB generation failed for " + fontName,
-                                      res);
+          MsdfCdbConfig cfg;
+          cfg.ttfPath = ttfPaths[i];
+          cfg.cdbPath = cdbPath;
+
+          if (auto res = _cdbProvider->generate(cfg); !res) {
+            return Err<MsMsdfFont::Ptr>("CDB generation failed for " + fontName,
+                                        res);
+          }
         }
 
         yinfo("CDB generation complete for {}", fontName);
@@ -105,12 +110,12 @@ public:
       yinfo("Set CJK fallback CDB: {}", cjkFallbackPath);
     }
 
-    // Create GPU resources (texture, sampler, metadata buffer)
-    if (auto res = font->createTexture(_gpu.device, _gpu.queue); !res) {
-      return Err<MsMsdfFont::Ptr>("Failed to create MsMsdfFont texture", res);
+    // Create GPU resources (texture, sampler, metadata buffer) on the atlas
+    if (auto res = font->atlas()->createTexture(_gpu.device, _gpu.queue); !res) {
+      return Err<MsMsdfFont::Ptr>("Failed to create MsdfAtlas texture", res);
     }
-    if (auto res = font->createGlyphMetadataBuffer(_gpu.device); !res) {
-      return Err<MsMsdfFont::Ptr>("Failed to create MsMsdfFont metadata buffer",
+    if (auto res = font->atlas()->createGlyphMetadataBuffer(_gpu.device); !res) {
+      return Err<MsMsdfFont::Ptr>("Failed to create MsdfAtlas metadata buffer",
                                   res);
     }
 
@@ -162,6 +167,10 @@ public:
   }
 
   const std::string &getCacheDir() const noexcept override { return _cacheDir; }
+
+  MsdfCdbProvider::Ptr getCdbProvider() const noexcept override {
+    return _cdbProvider;
+  }
 
 private:
   Result<void> initMsMsdfFonts() noexcept {

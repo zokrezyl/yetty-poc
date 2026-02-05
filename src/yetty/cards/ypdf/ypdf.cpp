@@ -1,12 +1,23 @@
 #include "ypdf.h"
 #include "pdf-content-parser.h"
+#include <yetty/base/event-loop.h>
 #include <ytrace/ytrace.hpp>
 #include <sstream>
 #include <algorithm>
 #include <cmath>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
 
 extern "C" {
 #include <pdfio.h>
+}
+
+namespace {
+constexpr int GLFW_MOD_SHIFT   = 0x0001;
+constexpr int GLFW_MOD_CONTROL = 0x0002;
+constexpr float PAGE_MARGIN = 20.0f;  // Points between pages
 }
 
 namespace yetty::card {
@@ -19,12 +30,24 @@ YPdf::YPdf(const YettyContext& ctx,
            int32_t x, int32_t y,
            uint32_t widthCells, uint32_t heightCells,
            const std::string& args, const std::string& payload)
-    : YDrawBase(ctx, x, y, widthCells, heightCells)
+    : Card(ctx.cardManager, ctx.gpu, x, y, widthCells, heightCells)
     , _argsStr(args)
     , _payloadStr(payload)
-{}
+    , _fontManager(ctx.fontManager)
+{
+    _shaderGlyph = SHADER_GLYPH;
+    if (_fontManager) {
+        _font = _fontManager->getDefaultMsMsdfFont();
+        if (_font) {
+            _atlas = _font->atlas();
+        }
+    } else {
+        ywarn("YPdf: fontManager is NULL!");
+    }
+}
 
 YPdf::~YPdf() {
+    dispose();
     if (_pdfFile) {
         pdfioFileClose(_pdfFile);
         _pdfFile = nullptr;
@@ -53,9 +76,8 @@ Result<CardPtr> YPdf::create(
         return Err<CardPtr>("YPdf::create: init failed");
     }
 
-    yinfo("YPdf::create: SUCCESS, shaderGlyph={:#x} pages={} prims={} glyphs={}",
-          card->shaderGlyph(), card->_pageCount,
-          card->primitiveCount(), card->glyphCount());
+    yinfo("YPdf::create: SUCCESS, shaderGlyph={:#x} pages={} glyphs={}",
+          card->shaderGlyph(), card->_pageCount, card->_glyphs.size());
     return Ok<CardPtr>(card);
 }
 
@@ -64,8 +86,17 @@ Result<CardPtr> YPdf::create(
 //=============================================================================
 
 Result<void> YPdf::init() {
-    if (auto res = initBase(); !res) {
-        return res;
+    // Allocate metadata slot
+    auto metaResult = _cardMgr->allocateMetadata(sizeof(Metadata));
+    if (!metaResult) {
+        return Err<void>("YPdf::init: failed to allocate metadata");
+    }
+    _metaHandle = *metaResult;
+    _dirty = true;
+    _metadataDirty = true;
+
+    if (auto res = registerForEvents(); !res) {
+        ywarn("YPdf::init: event registration failed: {}", error_msg(res));
     }
 
     parseArgs(_argsStr);
@@ -74,14 +105,19 @@ Result<void> YPdf::init() {
         return res;
     }
 
-    setInitParsing(true);
-    if (auto res = renderPage(_currentPage); !res) {
-        ywarn("YPdf::init: failed to render page {}: {}", _currentPage,
-              error_msg(res));
+    // Set up raw-font cache directory for extracted PDF fonts
+    if (_fontManager) {
+        auto parentDir = std::filesystem::path(_fontManager->getCacheDir()).parent_path();
+        _rawFontCacheDir = (parentDir / "raw-fonts").string();
+        std::filesystem::create_directories(_rawFontCacheDir);
     }
-    setInitParsing(false);
 
-    markDirty();
+    if (auto res = renderAllPages(); !res) {
+        ywarn("YPdf::init: failed to render pages: {}", error_msg(res));
+    }
+
+    _dirty = true;
+    _metadataDirty = true;
     return Ok();
 }
 
@@ -123,8 +159,8 @@ void YPdf::parseArgs(const std::string& args) {
                     (colorStr.substr(0, 2) == "0x" || colorStr.substr(0, 2) == "0X")) {
                     colorStr = colorStr.substr(2);
                 }
-                setBgColor(static_cast<uint32_t>(
-                    std::stoul(colorStr, nullptr, 16)));
+                _bgColor = static_cast<uint32_t>(
+                    std::stoul(colorStr, nullptr, 16));
             }
         }
     }
@@ -145,7 +181,6 @@ Result<void> YPdf::loadPdf() {
         return Err<void>("YPdf::loadPdf: empty payload");
     }
 
-    // Payload is a file path
     _pdfFile = pdfioFileOpen(_payloadStr.c_str(), /*password_cb=*/nullptr,
                               /*password_data=*/nullptr,
                               pdfioErrorHandler, /*error_data=*/nullptr);
@@ -172,11 +207,83 @@ Result<void> YPdf::loadPdf() {
 // Page rendering
 //=============================================================================
 
-Result<void> YPdf::renderPage(int pageIndex) {
+Result<void> YPdf::renderAllPages() {
     if (!_pdfFile) {
-        return Err<void>("YPdf::renderPage: no document");
+        return Err<void>("YPdf::renderAllPages: no document");
     }
 
+    struct PageInfo {
+        float x, y, w, h;
+    };
+    std::vector<PageInfo> pages;
+    pages.reserve(static_cast<size_t>(_pageCount));
+
+    float maxWidth = 0.0f;
+    float totalHeight = 0.0f;
+
+    for (int i = 0; i < _pageCount; i++) {
+        pdfio_obj_t* pageObj = pdfioFileGetPage(
+            _pdfFile, static_cast<size_t>(i));
+        if (!pageObj) continue;
+
+        pdfio_dict_t* pageDict = pdfioObjGetDict(pageObj);
+        pdfio_rect_t mediaBox = {};
+        if (!pdfioDictGetRect(pageDict, "MediaBox", &mediaBox)) {
+            mediaBox = {0.0, 0.0, 612.0, 792.0};  // Default US Letter
+        }
+
+        float pw = static_cast<float>(mediaBox.x2 - mediaBox.x1);
+        float ph = static_cast<float>(mediaBox.y2 - mediaBox.y1);
+
+        pages.push_back({static_cast<float>(mediaBox.x1),
+                         static_cast<float>(mediaBox.y1), pw, ph});
+        maxWidth = std::max(maxWidth, pw);
+        if (i > 0) totalHeight += PAGE_MARGIN;
+        totalHeight += ph;
+    }
+
+    if (pages.empty()) {
+        return Err<void>("YPdf::renderAllPages: no valid pages");
+    }
+
+    // Set explicit scene bounds
+    _sceneMinX = 0.0f;
+    _sceneMinY = 0.0f;
+    _sceneMaxX = maxWidth;
+    _sceneMaxY = totalHeight;
+    _hasExplicitBounds = true;
+
+    // Initial zoom: fit first page width (show one page, not entire document)
+    if (!pages.empty() && totalHeight > 0.0f) {
+        float firstPageH = pages[0].h;
+        float cardAspect = static_cast<float>(_widthCells) / std::max(static_cast<float>(_heightCells), 1.0f);
+        float viewableH = maxWidth / cardAspect;  // scene height visible at width-fit
+        float fitZoom = totalHeight / std::max(viewableH, 1.0f);
+        _viewZoom = std::max(fitZoom, 1.0f);
+        // Pan to top of first page
+        _viewPanY = -(totalHeight * 0.5f - firstPageH * 0.5f / _viewZoom);
+    }
+
+    yinfo("YPdf::renderAllPages: {} pages, scene={}x{} initialZoom={:.2f}",
+          _pageCount, maxWidth, totalHeight, _viewZoom);
+
+    // Render each page at its vertical offset
+    float yOffset = 0.0f;
+    for (int i = 0; i < _pageCount; i++) {
+        if (static_cast<size_t>(i) >= pages.size()) break;
+
+        if (auto res = renderPage(i, yOffset); !res) {
+            ywarn("YPdf::renderAllPages: page {} failed: {}", i,
+                  error_msg(res));
+        }
+
+        yOffset += pages[static_cast<size_t>(i)].h + PAGE_MARGIN;
+    }
+
+    return Ok();
+}
+
+Result<void> YPdf::renderPage(int pageIndex, float yOffset) {
     pdfio_obj_t* pageObj = pdfioFileGetPage(
         _pdfFile, static_cast<size_t>(pageIndex));
     if (!pageObj) {
@@ -184,30 +291,39 @@ Result<void> YPdf::renderPage(int pageIndex) {
                           std::to_string(pageIndex));
     }
 
-    // Get page MediaBox for scene bounds
     pdfio_dict_t* pageDict = pdfioObjGetDict(pageObj);
     pdfio_rect_t mediaBox = {};
-
     if (!pdfioDictGetRect(pageDict, "MediaBox", &mediaBox)) {
-        // Default to US Letter
         mediaBox = {0.0, 0.0, 612.0, 792.0};
     }
 
-    float pageW = static_cast<float>(mediaBox.x2 - mediaBox.x1);
     float pageH = static_cast<float>(mediaBox.y2 - mediaBox.y1);
 
-    // Scene bounds: PDF Y-up → scene Y-down (flip at emission)
-    setSceneBounds(
-        static_cast<float>(mediaBox.x1), 0.0f,
-        static_cast<float>(mediaBox.x2), pageH);
+    // Extract embedded fonts from this page's resources
+    extractFonts(pageObj);
 
-    // Parse content streams
+    // Parse content streams with TextEmitCallback for CDB-based glyph placement
     PdfContentParser parser;
     parser.setPageHeight(pageH);
 
+    // Set the callback that uses CDB glyph advances for correct spacing
+    parser.setTextEmitCallback(
+        [this, yOffset, pageH](const std::string& text,
+                                float posX, float posY,
+                                float effectiveSize,
+                                const PdfTextState& textState) -> float {
+            // Flip Y: PDF origin is bottom-left, scene origin is top-left
+            float sceneX = posX;
+            float sceneY = yOffset + (pageH - posY);
+
+            float fontSize = (_fontSize > 0.0f) ? _fontSize : effectiveSize;
+
+            return placeGlyphs(text, sceneX, sceneY, fontSize, textState);
+        });
+
     size_t numStreams = pdfioPageGetNumStreams(pageObj);
-    yinfo("YPdf::renderPage: page {} has {} content streams",
-          pageIndex, numStreams);
+    yinfo("YPdf::renderPage: page {} has {} content streams, yOffset={}",
+          pageIndex, numStreams, yOffset);
 
     for (size_t i = 0; i < numStreams; i++) {
         pdfio_stream_t* stream = pdfioPageOpenStream(
@@ -218,22 +334,692 @@ Result<void> YPdf::renderPage(int pageIndex) {
         pdfioStreamClose(stream);
     }
 
-    // Emit text spans as MSDF glyphs
-    const auto& spans = parser.textSpans();
-    yinfo("YPdf::renderPage: extracted {} text spans", spans.size());
+    return Ok();
+}
 
-    for (const auto& span : spans) {
-        // Flip Y: PDF origin is bottom-left, scene origin is top-left
-        float sceneX = span.x;
-        float sceneY = pageH - span.y;
+//=============================================================================
+// Glyph placement (CDB-based) — the core method
+//
+// Places glyphs using real CDB advance/bearing/size data.
+// Returns total advance in text-matrix units for parser text matrix update.
+//=============================================================================
 
-        // Use the span's font size, or override if user specified
-        float fontSize = (_fontSize > 0.0f) ? _fontSize : span.fontSize;
+float YPdf::placeGlyphs(const std::string& text,
+                         float posX, float posY,
+                         float effectiveSize,
+                         const PdfTextState& textState) {
+    if (!_atlas || text.empty()) return 0.0f;
 
-        addText(sceneX, sceneY, span.text, fontSize, _textColor, 0);
+    float fontBaseSize = _atlas->getFontSize();
+    if (fontBaseSize <= 0.0f) fontBaseSize = 1.0f;
+
+    // Two scales:
+    // scaleScene: for visual glyph placement in scene coordinates
+    // scaleText: for text matrix advance return value
+    float scaleScene = effectiveSize / fontBaseSize;
+    float scaleText = textState.fontSize / fontBaseSize;
+
+    float hScale = textState.horizontalScaling / 100.0f;
+
+    // Lookup fontId from PDF font name
+    int fontId = 0;
+    auto it = _pdfFontMap.find(textState.fontName);
+    if (it != _pdfFontMap.end()) {
+        fontId = it->second;
+    }
+
+    float cursorX = posX;
+    float totalTextAdvance = 0.0f;
+
+    const uint8_t* ptr = reinterpret_cast<const uint8_t*>(text.data());
+    const uint8_t* end = ptr + text.size();
+
+    while (ptr < end) {
+        // Decode UTF-8 codepoint
+        uint32_t codepoint = 0;
+        if ((*ptr & 0x80) == 0) {
+            codepoint = *ptr++;
+        } else if ((*ptr & 0xE0) == 0xC0) {
+            codepoint = (*ptr++ & 0x1F) << 6;
+            if (ptr < end) codepoint |= (*ptr++ & 0x3F);
+        } else if ((*ptr & 0xF0) == 0xE0) {
+            codepoint = (*ptr++ & 0x0F) << 12;
+            if (ptr < end) codepoint |= (*ptr++ & 0x3F) << 6;
+            if (ptr < end) codepoint |= (*ptr++ & 0x3F);
+        } else if ((*ptr & 0xF8) == 0xF0) {
+            codepoint = (*ptr++ & 0x07) << 18;
+            if (ptr < end) codepoint |= (*ptr++ & 0x3F) << 12;
+            if (ptr < end) codepoint |= (*ptr++ & 0x3F) << 6;
+            if (ptr < end) codepoint |= (*ptr++ & 0x3F);
+        } else {
+            ptr++;
+            continue;
+        }
+
+        // Load glyph from atlas
+        uint32_t glyphIndex;
+        if (fontId == 0 && _font) {
+            glyphIndex = _font->getGlyphIndex(codepoint);
+        } else if (fontId > 0) {
+            glyphIndex = _atlas->loadGlyph(fontId, codepoint);
+        } else {
+            continue;
+        }
+
+        const auto& metadata = _atlas->getGlyphMetadata();
+        if (glyphIndex >= metadata.size()) {
+            // Fallback advance for missing glyphs
+            float fallbackAdv = effectiveSize * 0.5f;
+            cursorX += fallbackAdv * hScale;
+            totalTextAdvance += (textState.fontSize * 0.5f) * hScale;
+            continue;
+        }
+
+        const auto& glyph = metadata[glyphIndex];
+
+        // Place glyph in scene coordinates
+        PdfGlyph g = {};
+        g.x = cursorX + glyph._bearingX * scaleScene;
+        g.y = posY - glyph._bearingY * scaleScene;
+        g.width = glyph._sizeX * scaleScene;
+        g.height = glyph._sizeY * scaleScene;
+        g.glyphIndex = glyphIndex;
+        g.color = _textColor;
+        g.layer = 0;
+        _glyphs.push_back(g);
+
+        // Advance cursor in scene coords
+        float sceneAdvance = glyph._advance * scaleScene + textState.charSpacing;
+        // Advance for text matrix return
+        float textAdvance = glyph._advance * scaleText + textState.charSpacing;
+
+        // Word spacing for space character
+        if (codepoint == 0x20) {
+            sceneAdvance += textState.wordSpacing;
+            textAdvance += textState.wordSpacing;
+        }
+
+        cursorX += sceneAdvance * hScale;
+        totalTextAdvance += textAdvance * hScale;
+    }
+
+    return totalTextAdvance;
+}
+
+//=============================================================================
+// Font extraction from PDF resources
+//=============================================================================
+
+void YPdf::extractFonts(pdfio_obj_t* pageObj) {
+    if (_rawFontCacheDir.empty() || !pageObj) return;
+
+    pdfio_dict_t* pageDict = pdfioObjGetDict(pageObj);
+    if (!pageDict) return;
+
+    pdfio_dict_t* resources = pdfioDictGetDict(pageDict, "Resources");
+    if (!resources) {
+        pdfio_obj_t* resObj = pdfioDictGetObj(pageDict, "Resources");
+        if (resObj) resources = pdfioObjGetDict(resObj);
+    }
+    if (!resources) return;
+
+    pdfio_dict_t* fontDict = pdfioDictGetDict(resources, "Font");
+    if (!fontDict) {
+        pdfio_obj_t* fontDictObj = pdfioDictGetObj(resources, "Font");
+        if (fontDictObj) fontDict = pdfioObjGetDict(fontDictObj);
+    }
+    if (!fontDict) return;
+
+    auto pdfStem = std::filesystem::path(_payloadStr).stem().string();
+
+    size_t numFonts = pdfioDictGetNumPairs(fontDict);
+    yinfo("YPdf::extractFonts: found {} font entries in page resources", numFonts);
+    for (size_t i = 0; i < numFonts; i++) {
+        const char* fontTag = pdfioDictGetKey(fontDict, i);
+        if (!fontTag) continue;
+
+        std::string tag(fontTag);
+        if (_pdfFontMap.count(tag) || _pdfFontMap.count("/" + tag)) continue;
+
+        pdfio_obj_t* fontObj = pdfioDictGetObj(fontDict, fontTag);
+        if (!fontObj) continue;
+
+        pdfio_dict_t* fontObjDict = pdfioObjGetDict(fontObj);
+        if (!fontObjDict) continue;
+
+        pdfio_obj_t* fontDescObj = pdfioDictGetObj(fontObjDict, "FontDescriptor");
+        if (!fontDescObj) {
+            ydebug("YPdf::extractFonts: font {} has no FontDescriptor", tag);
+            continue;
+        }
+
+        pdfio_dict_t* fontDescDict = pdfioObjGetDict(fontDescObj);
+        if (!fontDescDict) continue;
+
+        pdfio_obj_t* fontFileObj = pdfioDictGetObj(fontDescDict, "FontFile2");
+        if (!fontFileObj) {
+            fontFileObj = pdfioDictGetObj(fontDescDict, "FontFile3");
+        }
+        if (!fontFileObj) {
+            ydebug("YPdf::extractFonts: font {} has no embedded font file", tag);
+            continue;
+        }
+
+        std::string ttfPath = _rawFontCacheDir + "/" + pdfStem + "-" + tag + ".ttf";
+
+        if (!std::filesystem::exists(ttfPath)) {
+            pdfio_stream_t* stream = pdfioObjOpenStream(fontFileObj, /*decode=*/true);
+            if (!stream) {
+                ywarn("YPdf::extractFonts: failed to open stream for font {}", tag);
+                continue;
+            }
+
+            std::vector<uint8_t> fontData;
+            uint8_t buf[8192];
+            ssize_t bytesRead;
+            while ((bytesRead = pdfioStreamRead(stream, buf, sizeof(buf))) > 0) {
+                fontData.insert(fontData.end(), buf, buf + bytesRead);
+            }
+            pdfioStreamClose(stream);
+
+            if (fontData.empty()) {
+                ywarn("YPdf::extractFonts: empty font stream for {}", tag);
+                continue;
+            }
+
+            std::ofstream out(ttfPath, std::ios::binary);
+            if (!out) {
+                ywarn("YPdf::extractFonts: failed to write {}", ttfPath);
+                continue;
+            }
+            out.write(reinterpret_cast<const char*>(fontData.data()),
+                      static_cast<std::streamsize>(fontData.size()));
+            out.close();
+
+            yinfo("YPdf::extractFonts: extracted font {} -> {} ({} bytes)",
+                  tag, ttfPath, fontData.size());
+        }
+
+        int fontId = addFont(ttfPath);
+        if (fontId >= 0) {
+            _pdfFontMap[tag] = fontId;
+            _pdfFontMap["/" + tag] = fontId;
+            yinfo("YPdf::extractFonts: registered font {} as fontId={}", tag, fontId);
+        } else {
+            ywarn("YPdf::extractFonts: addFont failed for {}", ttfPath);
+        }
+    }
+}
+
+//=============================================================================
+// Font registration
+//=============================================================================
+
+int YPdf::addFont(const std::string& ttfPath) {
+    if (!_atlas || !_fontManager) return -1;
+
+    auto stem = std::filesystem::path(ttfPath).stem().string();
+    auto cacheDir = _fontManager->getCacheDir();
+    auto cdbPath = cacheDir + "/" + stem + ".cdb";
+
+    // Check local cache
+    auto it = _fontIdCache.find(cdbPath);
+    if (it != _fontIdCache.end()) return it->second;
+
+    // Generate CDB if missing
+    if (!std::filesystem::exists(cdbPath)) {
+        auto provider = _fontManager->getCdbProvider();
+        if (!provider) {
+            yerror("YPdf::addFont: no CDB provider available");
+            return -1;
+        }
+
+        MsdfCdbConfig cfg;
+        cfg.ttfPath = ttfPath;
+        cfg.cdbPath = cdbPath;
+
+        if (auto res = provider->generate(cfg); !res) {
+            yerror("YPdf::addFont: CDB generation failed for {}: {}",
+                   ttfPath, res.error().message());
+            return -1;
+        }
+    }
+
+    int fontId = _atlas->openCdb(cdbPath);
+    if (fontId >= 0) {
+        _fontIdCache[cdbPath] = fontId;
+    }
+    return fontId;
+}
+
+//=============================================================================
+// Scene bounds computation
+//=============================================================================
+
+void YPdf::computeSceneBounds() {
+    if (_hasExplicitBounds) return;
+
+    _sceneMinX = 1e10f;
+    _sceneMinY = 1e10f;
+    _sceneMaxX = -1e10f;
+    _sceneMaxY = -1e10f;
+
+    for (const auto& g : _glyphs) {
+        _sceneMinX = std::min(_sceneMinX, g.x);
+        _sceneMinY = std::min(_sceneMinY, g.y);
+        _sceneMaxX = std::max(_sceneMaxX, g.x + g.width);
+        _sceneMaxY = std::max(_sceneMaxY, g.y + g.height);
+    }
+
+    float padX = (_sceneMaxX - _sceneMinX) * 0.05f;
+    float padY = (_sceneMaxY - _sceneMinY) * 0.05f;
+    _sceneMinX -= padX;
+    _sceneMinY -= padY;
+    _sceneMaxX += padX;
+    _sceneMaxY += padY;
+
+    if (_sceneMinX >= _sceneMaxX) {
+        _sceneMinX = 0; _sceneMaxX = 100;
+    }
+    if (_sceneMinY >= _sceneMaxY) {
+        _sceneMinY = 0; _sceneMaxY = 100;
+    }
+}
+
+//=============================================================================
+// Grid building — glyphs only (no SDF primitives)
+//=============================================================================
+
+void YPdf::buildGrid() {
+    if (!_derivedStorage.isValid() || _gridWidth == 0 || _gridHeight == 0) return;
+
+    uint32_t cellStride = 1 + MAX_ENTRIES_PER_CELL;
+    uint32_t gridTotalU32 = _gridWidth * _gridHeight * cellStride;
+    uint32_t* grid = reinterpret_cast<uint32_t*>(_derivedStorage.data);
+
+    std::memset(grid, 0, gridTotalU32 * sizeof(uint32_t));
+
+    for (uint32_t gi = 0; gi < static_cast<uint32_t>(_glyphs.size()); gi++) {
+        const auto& g = _glyphs[gi];
+
+        uint32_t cellMinX = static_cast<uint32_t>(
+            std::clamp((g.x - _sceneMinX) / _cellSize, 0.0f, float(_gridWidth - 1)));
+        uint32_t cellMaxX = static_cast<uint32_t>(
+            std::clamp((g.x + g.width - _sceneMinX) / _cellSize, 0.0f, float(_gridWidth - 1)));
+        uint32_t cellMinY = static_cast<uint32_t>(
+            std::clamp((g.y - _sceneMinY) / _cellSize, 0.0f, float(_gridHeight - 1)));
+        uint32_t cellMaxY = static_cast<uint32_t>(
+            std::clamp((g.y + g.height - _sceneMinY) / _cellSize, 0.0f, float(_gridHeight - 1)));
+
+        for (uint32_t cy = cellMinY; cy <= cellMaxY; cy++) {
+            for (uint32_t cx = cellMinX; cx <= cellMaxX; cx++) {
+                uint32_t cellIndex = cy * _gridWidth + cx;
+                uint32_t cellOffset = cellIndex * cellStride;
+                uint32_t count = grid[cellOffset];
+                if (count < MAX_ENTRIES_PER_CELL) {
+                    grid[cellOffset + 1 + count] = gi | GLYPH_BIT;
+                    grid[cellOffset] = count + 1;
+                }
+            }
+        }
+    }
+}
+
+//=============================================================================
+// Compute derived storage size (grid + glyphs)
+//=============================================================================
+
+uint32_t YPdf::computeDerivedSize() const {
+    if (_glyphs.empty()) return 0;
+
+    // Estimate grid dimensions from current scene bounds
+    float sceneWidth = _sceneMaxX - _sceneMinX;
+    float sceneHeight = _sceneMaxY - _sceneMinY;
+    float sceneArea = sceneWidth * sceneHeight;
+
+    uint32_t gridW = 0, gridH = 0;
+    if (!_glyphs.empty() && sceneArea > 0) {
+        float cs = _cellSize;
+        if (cs <= 0.0f) {
+            float avgGlyphH = 0.0f;
+            for (const auto& g : _glyphs) avgGlyphH += g.height;
+            avgGlyphH /= _glyphs.size();
+            cs = avgGlyphH * 2.0f;
+            float minCS = std::sqrt(sceneArea / 65536.0f);
+            float maxCS = std::sqrt(sceneArea / 16.0f);
+            cs = std::clamp(cs, minCS, maxCS);
+        }
+        gridW = std::max(1u, static_cast<uint32_t>(std::ceil(sceneWidth / cs)));
+        gridH = std::max(1u, static_cast<uint32_t>(std::ceil(sceneHeight / cs)));
+        const uint32_t MAX_GRID_DIM = 512;
+        gridW = std::min(gridW, MAX_GRID_DIM);
+        gridH = std::min(gridH, MAX_GRID_DIM);
+    }
+
+    uint32_t cellStride = 1 + MAX_ENTRIES_PER_CELL;
+    uint32_t gridBytes = gridW * gridH * cellStride * sizeof(uint32_t);
+    uint32_t glyphBytes = static_cast<uint32_t>(_glyphs.size() * sizeof(PdfGlyph));
+    return gridBytes + glyphBytes;
+}
+
+//=============================================================================
+// Rebuild and upload — compute grid, copy data to GPU buffer
+//=============================================================================
+
+Result<void> YPdf::rebuildAndUpload() {
+    computeSceneBounds();
+
+    float sceneWidth = _sceneMaxX - _sceneMinX;
+    float sceneHeight = _sceneMaxY - _sceneMinY;
+
+    uint32_t gridW = 0, gridH = 0;
+    float cellSize = _cellSize;
+
+    if (!_glyphs.empty()) {
+        float sceneArea = sceneWidth * sceneHeight;
+        if (cellSize <= 0.0f) {
+            float avgGlyphH = 0.0f;
+            for (const auto& g : _glyphs) {
+                avgGlyphH += g.height;
+            }
+            avgGlyphH /= _glyphs.size();
+            cellSize = avgGlyphH * 2.0f;
+            float minCellSize = std::sqrt(sceneArea / 65536.0f);
+            float maxCellSize = std::sqrt(sceneArea / 16.0f);
+            cellSize = std::clamp(cellSize, minCellSize, maxCellSize);
+        }
+        gridW = std::max(1u, static_cast<uint32_t>(std::ceil(sceneWidth / cellSize)));
+        gridH = std::max(1u, static_cast<uint32_t>(std::ceil(sceneHeight / cellSize)));
+        const uint32_t MAX_GRID_DIM = 512;
+        if (gridW > MAX_GRID_DIM) { gridW = MAX_GRID_DIM; cellSize = sceneWidth / gridW; }
+        if (gridH > MAX_GRID_DIM) { gridH = MAX_GRID_DIM; cellSize = std::max(cellSize, sceneHeight / gridH); }
+    }
+
+    uint32_t cellStride = 1 + MAX_ENTRIES_PER_CELL;
+    uint32_t gridTotalU32 = gridW * gridH * cellStride;
+    uint32_t gridBytes = gridTotalU32 * sizeof(uint32_t);
+    uint32_t glyphBytes = static_cast<uint32_t>(_glyphs.size() * sizeof(PdfGlyph));
+    uint32_t derivedTotalSize = gridBytes + glyphBytes;
+
+    yinfo("YPdf::rebuild: grid={}x{} cellSize={:.1f} derivedTotal={} "
+          "allocated={} glyphs={} zoom={:.2f}",
+          gridW, gridH, cellSize, derivedTotalSize,
+          _derivedStorage.isValid() ? _derivedStorage.size : 0,
+          _glyphs.size(), _viewZoom);
+
+    // Allocate or reallocate derived storage if needed
+    if (derivedTotalSize > 0) {
+        if (!_derivedStorage.isValid()) {
+            auto storageResult = _cardMgr->bufferManager()->allocateBuffer(derivedTotalSize);
+            if (!storageResult) {
+                return Err<void>("YPdf::rebuild: failed to allocate derived storage");
+            }
+            _derivedStorage = *storageResult;
+        } else if (derivedTotalSize > _derivedStorage.size) {
+            _cardMgr->bufferManager()->deallocateBuffer(_derivedStorage);
+            auto storageResult = _cardMgr->bufferManager()->allocateBuffer(derivedTotalSize);
+            if (!storageResult) {
+                _derivedStorage = StorageHandle::invalid();
+                return Err<void>("YPdf::rebuild: failed to reallocate derived storage");
+            }
+            _derivedStorage = *storageResult;
+        }
+    }
+
+    if (_derivedStorage.isValid() && derivedTotalSize > 0) {
+        uint8_t* base = _derivedStorage.data;
+        uint32_t offset = 0;
+
+        // Zero entire buffer
+        std::memset(base, 0, _derivedStorage.size);
+
+        _gridWidth = gridW;
+        _gridHeight = gridH;
+        _cellSize = cellSize;
+        _gridOffset = (_derivedStorage.offset + offset) / sizeof(float);
+        offset += gridBytes;
+
+        buildGrid();
+
+        _glyphOffset = (_derivedStorage.offset + offset) / sizeof(float);
+        if (!_glyphs.empty()) {
+            std::memcpy(base + offset, _glyphs.data(), glyphBytes);
+        }
+
+        _cardMgr->bufferManager()->markBufferDirty(_derivedStorage);
+    }
+
+    _metadataDirty = true;
+    return Ok();
+}
+
+//=============================================================================
+// Metadata upload — 64-byte struct with f16 zoom, i16 pan encoding
+//=============================================================================
+
+Result<void> YPdf::uploadMetadata() {
+    if (!_metaHandle.isValid()) {
+        return Err<void>("YPdf::uploadMetadata: invalid metadata handle");
+    }
+
+    // Pack zoom as IEEE 754 half-float
+    uint32_t zoomBits;
+    {
+        uint32_t f32bits;
+        std::memcpy(&f32bits, &_viewZoom, sizeof(float));
+        uint32_t sign = (f32bits >> 16) & 0x8000;
+        int32_t  exp  = ((f32bits >> 23) & 0xFF) - 127 + 15;
+        uint32_t mant = (f32bits >> 13) & 0x3FF;
+        if (exp <= 0) { exp = 0; mant = 0; }
+        else if (exp >= 31) { exp = 31; mant = 0; }
+        zoomBits = sign | (static_cast<uint32_t>(exp) << 10) | mant;
+    }
+
+    float contentW = _sceneMaxX - _sceneMinX;
+    float contentH = _sceneMaxY - _sceneMinY;
+    int16_t panXi16 = static_cast<int16_t>(std::clamp(
+        _viewPanX / std::max(contentW, 1e-6f) * 16384.0f, -32768.0f, 32767.0f));
+    int16_t panYi16 = static_cast<int16_t>(std::clamp(
+        _viewPanY / std::max(contentH, 1e-6f) * 16384.0f, -32768.0f, 32767.0f));
+
+    Metadata meta = {};
+    meta.primitiveOffset = 0;  // ypdf has no SDF primitives
+    meta.primitiveCount = 0;
+    meta.gridOffset = _gridOffset;
+    meta.gridWidth = _gridWidth;
+    meta.gridHeight = _gridHeight;
+    std::memcpy(&meta.cellSize, &_cellSize, sizeof(float));
+    meta.glyphOffset = _glyphOffset;
+    meta.glyphCount = static_cast<uint32_t>(_glyphs.size());
+    std::memcpy(&meta.sceneMinX, &_sceneMinX, sizeof(float));
+    std::memcpy(&meta.sceneMinY, &_sceneMinY, sizeof(float));
+    std::memcpy(&meta.sceneMaxX, &_sceneMaxX, sizeof(float));
+    std::memcpy(&meta.sceneMaxY, &_sceneMaxY, sizeof(float));
+    meta.widthCells  = (_widthCells & 0xFFFF) | (static_cast<uint32_t>(static_cast<uint16_t>(panXi16)) << 16);
+    meta.heightCells = (_heightCells & 0xFFFF) | (static_cast<uint32_t>(static_cast<uint16_t>(panYi16)) << 16);
+    meta.flags = (_flags & 0xFFFF) | (zoomBits << 16);
+    meta.bgColor = _bgColor;
+
+    ydebug("YPdf::uploadMetadata: grid={}x{} cellSize={} "
+           "scene=[{},{},{},{}] zoom={:.2f} pan=({:.1f},{:.1f}) size={}x{} bgColor={:#010x}",
+           meta.gridWidth, meta.gridHeight, _cellSize,
+           _sceneMinX, _sceneMinY, _sceneMaxX, _sceneMaxY,
+           _viewZoom, _viewPanX, _viewPanY,
+           _widthCells, _heightCells, meta.bgColor);
+
+    if (auto res = _cardMgr->writeMetadata(_metaHandle, &meta, sizeof(meta)); !res) {
+        return Err<void>("YPdf::uploadMetadata: write failed");
     }
 
     return Ok();
+}
+
+//=============================================================================
+// Card lifecycle
+//=============================================================================
+
+void YPdf::declareBufferNeeds() {
+    // Save derived storage size before deallocation
+    uint32_t lastDerivedSize = _derivedStorage.size;
+
+    if (_derivedStorage.isValid()) {
+        _cardMgr->bufferManager()->deallocateBuffer(_derivedStorage);
+        _derivedStorage = StorageHandle::invalid();
+    }
+
+    // Reserve derived storage (grid + glyphs)
+    if (!_glyphs.empty()) {
+        if (lastDerivedSize > 0) {
+            _cardMgr->bufferManager()->reserve(lastDerivedSize);
+        } else {
+            uint32_t estDerived = computeDerivedSize();
+            _cardMgr->bufferManager()->reserve(estDerived);
+        }
+    }
+}
+
+Result<void> YPdf::allocateBuffers() {
+    if (!_glyphs.empty()) {
+        uint32_t derivedSize = computeDerivedSize();
+        if (derivedSize > 0 && !_derivedStorage.isValid()) {
+            auto storageResult = _cardMgr->bufferManager()->allocateBuffer(derivedSize);
+            if (!storageResult) {
+                return Err<void>("YPdf::allocateBuffers: failed to allocate derived storage");
+            }
+            _derivedStorage = *storageResult;
+        }
+        _dirty = true;
+        yinfo("YPdf::allocateBuffers: {} glyphs, derived {} bytes",
+              _glyphs.size(), derivedSize);
+    }
+    return Ok();
+}
+
+Result<void> YPdf::render(float /*time*/) {
+    if (_dirty) {
+        if (auto res = rebuildAndUpload(); !res) {
+            return Err<void>("YPdf::render: rebuildAndUpload failed", res);
+        }
+        _dirty = false;
+    }
+
+    if (_metadataDirty) {
+        if (auto res = uploadMetadata(); !res) {
+            return Err<void>("YPdf::render: metadata upload failed", res);
+        }
+        _metadataDirty = false;
+    }
+
+    return Ok();
+}
+
+Result<void> YPdf::dispose() {
+    deregisterFromEvents();
+
+    if (_derivedStorage.isValid() && _cardMgr) {
+        if (auto res = _cardMgr->bufferManager()->deallocateBuffer(_derivedStorage); !res) {
+            yerror("YPdf::dispose: deallocateBuffer failed: {}", error_msg(res));
+        }
+        _derivedStorage = StorageHandle::invalid();
+    }
+
+    if (_metaHandle.isValid() && _cardMgr) {
+        if (auto res = _cardMgr->deallocateMetadata(_metaHandle); !res) {
+            yerror("YPdf::dispose: deallocateMetadata failed: {}", error_msg(res));
+        }
+        _metaHandle = MetadataHandle::invalid();
+    }
+
+    return Ok();
+}
+
+void YPdf::suspend() {
+    if (_derivedStorage.isValid()) {
+        _cardMgr->bufferManager()->deallocateBuffer(_derivedStorage);
+        _derivedStorage = StorageHandle::invalid();
+    }
+}
+
+//=============================================================================
+// Event handling - zoom/pan
+//=============================================================================
+
+Result<void> YPdf::registerForEvents() {
+    auto loopResult = base::EventLoop::instance();
+    if (!loopResult) {
+        return Err<void>("YPdf::registerForEvents: no EventLoop instance", loopResult);
+    }
+    auto loop = *loopResult;
+    auto self = sharedAs<base::EventListener>();
+
+    if (auto res = loop->registerListener(base::Event::Type::SetFocus, self, 1000); !res) {
+        return Err<void>("YPdf::registerForEvents: failed to register SetFocus", res);
+    }
+    if (auto res = loop->registerListener(base::Event::Type::CardScroll, self, 1000); !res) {
+        return Err<void>("YPdf::registerForEvents: failed to register CardScroll", res);
+    }
+    yinfo("YPdf card {} registered for events (priority 1000)", id());
+    return Ok();
+}
+
+Result<void> YPdf::deregisterFromEvents() {
+    if (weak_from_this().expired()) {
+        return Ok();
+    }
+    auto loopResult = base::EventLoop::instance();
+    if (!loopResult) {
+        return Ok();
+    }
+    auto loop = *loopResult;
+    if (auto res = loop->deregisterListener(sharedAs<base::EventListener>()); !res) {
+        ywarn("YPdf::deregisterFromEvents: {}", error_msg(res));
+    }
+    return Ok();
+}
+
+Result<bool> YPdf::onEvent(const base::Event& event) {
+    if (event.type == base::Event::Type::SetFocus) {
+        if (event.setFocus.objectId == id()) {
+            if (!_focused) {
+                _focused = true;
+                ydebug("YPdf::onEvent: focused (id={})", id());
+            }
+            return Ok(true);
+        } else if (_focused) {
+            _focused = false;
+            ydebug("YPdf::onEvent: unfocused (id={})", id());
+        }
+        return Ok(false);
+    }
+
+    if (event.type == base::Event::Type::CardScroll &&
+        event.cardScroll.targetId == id()) {
+
+        float sceneW = _sceneMaxX - _sceneMinX;
+        float sceneH = _sceneMaxY - _sceneMinY;
+
+        if (event.cardScroll.mods & GLFW_MOD_CONTROL) {
+            float zoomDelta = event.cardScroll.dy * 0.1f * _viewZoom;
+            float newZoom = std::clamp(_viewZoom + zoomDelta, 0.1f, 500.0f);
+            if (newZoom != _viewZoom) {
+                _viewZoom = newZoom;
+                _metadataDirty = true;
+            }
+            return Ok(true);
+        } else if (event.cardScroll.mods & GLFW_MOD_SHIFT) {
+            float dx = event.cardScroll.dy * 0.05f * sceneW / _viewZoom;
+            _viewPanX += dx;
+            _metadataDirty = true;
+            return Ok(true);
+        } else {
+            float dy = event.cardScroll.dy * 0.05f * sceneH / _viewZoom;
+            _viewPanY += dy;
+            _metadataDirty = true;
+            return Ok(true);
+        }
+    }
+
+    return Ok(false);
 }
 
 } // namespace yetty::card

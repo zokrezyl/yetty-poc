@@ -40,6 +40,7 @@ public:
     virtual void setDefaultFont(const std::string& fontName) noexcept = 0;
     virtual bool hasFont(const std::string& fontName) const noexcept = 0;
     virtual const std::string& getCacheDir() const noexcept = 0;
+    virtual MsdfCdbProvider::Ptr getCdbProvider() const noexcept = 0;
 
 protected:
     FontManager() = default;

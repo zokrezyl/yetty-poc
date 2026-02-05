@@ -223,15 +223,8 @@ void PdfContentParser::handleTstar() {
 void PdfContentParser::handleTj() {
     if (_operands.empty()) return;
 
-    // Find the last string operand
-    std::string raw = _operands.back();
-
-    // Strip parentheses if present (pdfio may include them)
-    if (raw.size() >= 2 && raw.front() == '(' && raw.back() == ')') {
-        raw = raw.substr(1, raw.size() - 2);
-    }
-
-    emitText(decodePdfString(raw));
+    const auto& token = _operands.back();
+    emitText(decodePdfString(token));
 }
 
 void PdfContentParser::handleTJ() {
@@ -245,11 +238,7 @@ void PdfContentParser::handleTJ() {
 
         if (!op.empty() && (op.front() == '(' || op.front() == '<')) {
             // String element
-            std::string raw = op;
-            if (raw.size() >= 2 && raw.front() == '(' && raw.back() == ')') {
-                raw = raw.substr(1, raw.size() - 2);
-            }
-            emitText(decodePdfString(raw));
+            emitText(decodePdfString(op));
         } else {
             // Numeric adjustment (thousandths of text space unit)
             // Negative values move right, positive move left
@@ -350,114 +339,128 @@ void PdfContentParser::emitText(const std::string& decoded) {
     float effectiveSize = std::sqrt(trm.b * trm.b + trm.d * trm.d);
     if (effectiveSize < 0.5f) effectiveSize = _textState.fontSize;
 
-    PdfTextSpan span;
-    span.x = posX;
-    span.y = posY;
-    span.fontSize = effectiveSize;
-    span.text = decoded;
-    _spans.push_back(span);
+    if (_textEmitCallback) {
+        // CDB-based path: callback places glyphs and returns accurate advance
+        float totalAdvance = _textEmitCallback(decoded, posX, posY, effectiveSize, _textState);
+        _textMatrix.e += totalAdvance * _textMatrix.a;
+        _textMatrix.f += totalAdvance * _textMatrix.b;
+    } else {
+        // Legacy path: collect spans, use 0.6 approximation
+        PdfTextSpan span;
+        span.x = posX;
+        span.y = posY;
+        span.fontSize = effectiveSize;
+        span.text = decoded;
+        span.fontName = _textState.fontName;
+        _spans.push_back(span);
 
-    // Advance text matrix by text width
-    // Monospace approximation: each character advances by fontSize * 0.6
-    float hScale = _textState.horizontalScaling / 100.0f;
+        // Advance text matrix with 0.6 approximation
+        float hScale = _textState.horizontalScaling / 100.0f;
 
-    // Count UTF-8 characters (not bytes)
-    size_t charCount = 0;
-    for (size_t i = 0; i < decoded.size(); ) {
-        uint8_t ch = static_cast<uint8_t>(decoded[i]);
-        if (ch < 0x80) i += 1;
-        else if (ch < 0xE0) i += 2;
-        else if (ch < 0xF0) i += 3;
-        else i += 4;
-        charCount++;
-    }
-
-    for (size_t i = 0; i < charCount; i++) {
-        float charWidth = _textState.fontSize * 0.6f;
-        float advance = (charWidth + _textState.charSpacing) * hScale;
-
-        // Extra word spacing for space characters (approximate: check first char)
-        if (i < decoded.size() && decoded[i] == ' ') {
-            advance += _textState.wordSpacing * hScale;
+        size_t charCount = 0;
+        for (size_t i = 0; i < decoded.size(); ) {
+            uint8_t ch = static_cast<uint8_t>(decoded[i]);
+            if (ch < 0x80) i += 1;
+            else if (ch < 0xE0) i += 2;
+            else if (ch < 0xF0) i += 3;
+            else i += 4;
+            charCount++;
         }
 
-        _textMatrix.e += advance * _textMatrix.a;
-        _textMatrix.f += advance * _textMatrix.b;
+        for (size_t i = 0; i < charCount; i++) {
+            float charWidth = _textState.fontSize * 0.6f;
+            float advance = (charWidth + _textState.charSpacing) * hScale;
+
+            if (i < decoded.size() && decoded[i] == ' ') {
+                advance += _textState.wordSpacing * hScale;
+            }
+
+            _textMatrix.e += advance * _textMatrix.a;
+            _textMatrix.f += advance * _textMatrix.b;
+        }
     }
 }
 
 //=============================================================================
-// WinAnsi/Latin1 to UTF-8 decoder
+// Decode pdfio string token to UTF-8
+//
+// pdfio returns string tokens as:
+//   "(content"  - literal string with leading '(', no trailing ')',
+//                 escapes already resolved
+//   "<hexchars" - hex string with leading '<', no trailing '>',
+//                 whitespace already removed
 //=============================================================================
 
-std::string PdfContentParser::decodePdfString(const std::string& raw) {
-    // Windows-1252 (WinAnsi) high byte mapping to Unicode
+static int hexVal(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+static void appendWinAnsiToUtf8(std::string& out, uint8_t ch) {
+    // Windows-1252 (WinAnsi) 0x80-0x9F mapping to Unicode
     static const uint16_t winAnsiHigh[32] = {
-        0x20AC, 0x0081, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021,  // 80-87
-        0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0x008D, 0x017D, 0x008F,  // 88-8F
-        0x0090, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,  // 90-97
-        0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x009D, 0x017E, 0x0178,  // 98-9F
+        0x20AC, 0x0081, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021,
+        0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0x008D, 0x017D, 0x008F,
+        0x0090, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,
+        0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x009D, 0x017E, 0x0178,
     };
 
+    uint32_t codepoint;
+    if (ch < 0x80) {
+        codepoint = ch;
+    } else if (ch <= 0x9F) {
+        codepoint = winAnsiHigh[ch - 0x80];
+    } else {
+        codepoint = ch;  // 0xA0-0xFF: same as Unicode Latin-1 Supplement
+    }
+
+    if (codepoint < 0x80) {
+        out += static_cast<char>(codepoint);
+    } else if (codepoint < 0x800) {
+        out += static_cast<char>(0xC0 | (codepoint >> 6));
+        out += static_cast<char>(0x80 | (codepoint & 0x3F));
+    } else {
+        out += static_cast<char>(0xE0 | (codepoint >> 12));
+        out += static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F));
+        out += static_cast<char>(0x80 | (codepoint & 0x3F));
+    }
+}
+
+std::string PdfContentParser::decodePdfString(const std::string& token) {
+    if (token.empty()) return {};
+
     std::string result;
-    result.reserve(raw.size());
 
-    for (size_t i = 0; i < raw.size(); i++) {
-        uint8_t ch = static_cast<uint8_t>(raw[i]);
-
-        // Handle PDF escape sequences
-        if (raw[i] == '\\' && i + 1 < raw.size()) {
-            char next = raw[i + 1];
-            switch (next) {
-                case 'n':  result += '\n'; i++; continue;
-                case 'r':  result += '\r'; i++; continue;
-                case 't':  result += '\t'; i++; continue;
-                case 'b':  result += '\b'; i++; continue;
-                case 'f':  result += '\f'; i++; continue;
-                case '(':  result += '(';  i++; continue;
-                case ')':  result += ')';  i++; continue;
-                case '\\': result += '\\'; i++; continue;
-                default:
-                    // Octal escape: \NNN
-                    if (next >= '0' && next <= '7') {
-                        unsigned val = next - '0';
-                        i++;
-                        if (i + 1 < raw.size() && raw[i + 1] >= '0' && raw[i + 1] <= '7') {
-                            val = val * 8 + (raw[++i] - '0');
-                            if (i + 1 < raw.size() && raw[i + 1] >= '0' && raw[i + 1] <= '7') {
-                                val = val * 8 + (raw[++i] - '0');
-                            }
-                        }
-                        ch = static_cast<uint8_t>(val & 0xFF);
-                    } else {
-                        i++;
-                        continue;
-                    }
+    if (token[0] == '(') {
+        // Literal string: pdfio already resolved all escapes.
+        // Content starts at index 1, no trailing ')'.
+        result.reserve(token.size());
+        for (size_t i = 1; i < token.size(); i++) {
+            appendWinAnsiToUtf8(result, static_cast<uint8_t>(token[i]));
+        }
+    } else if (token[0] == '<') {
+        // Hex string: pairs of hex digits, pdfio removed whitespace.
+        // Content starts at index 1, no trailing '>'.
+        result.reserve(token.size() / 2);
+        for (size_t i = 1; i + 1 < token.size(); i += 2) {
+            int hi = hexVal(token[i]);
+            int lo = hexVal(token[i + 1]);
+            if (hi >= 0 && lo >= 0) {
+                appendWinAnsiToUtf8(result, static_cast<uint8_t>((hi << 4) | lo));
             }
         }
-
-        // Map byte to Unicode codepoint
-        uint32_t codepoint;
-        if (ch < 0x80) {
-            codepoint = ch;
-        } else if (ch <= 0x9F) {
-            codepoint = winAnsiHigh[ch - 0x80];
-        } else {
-            // 0xA0-0xFF: same as Unicode Latin-1 Supplement
-            codepoint = ch;
+        // Odd trailing nibble: pad with 0
+        if ((token.size() - 1) % 2 == 1) {
+            int hi = hexVal(token[token.size() - 1]);
+            if (hi >= 0) {
+                appendWinAnsiToUtf8(result, static_cast<uint8_t>(hi << 4));
+            }
         }
-
-        // Encode as UTF-8
-        if (codepoint < 0x80) {
-            result += static_cast<char>(codepoint);
-        } else if (codepoint < 0x800) {
-            result += static_cast<char>(0xC0 | (codepoint >> 6));
-            result += static_cast<char>(0x80 | (codepoint & 0x3F));
-        } else {
-            result += static_cast<char>(0xE0 | (codepoint >> 12));
-            result += static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F));
-            result += static_cast<char>(0x80 | (codepoint & 0x3F));
-        }
+    } else {
+        // Unknown format, pass through
+        result = token;
     }
 
     return result;

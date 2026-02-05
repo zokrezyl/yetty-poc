@@ -348,7 +348,8 @@ Result<void> YettyImpl::initWebGPU() noexcept {
     // Request device with limits capped to adapter support
     WGPULimits limits = {};
     limits.maxTextureDimension1D = WGPU_LIMIT_U32_UNDEFINED;
-    limits.maxTextureDimension2D = WGPU_LIMIT_U32_UNDEFINED;
+    // Request higher texture size for large font atlases (CJK support needs >8192)
+    limits.maxTextureDimension2D = std::min(16384u, adapterLimits.maxTextureDimension2D);
     limits.maxTextureDimension3D = WGPU_LIMIT_U32_UNDEFINED;
     limits.maxTextureArrayLayers = WGPU_LIMIT_U32_UNDEFINED;
     limits.maxBindGroups = WGPU_LIMIT_U32_UNDEFINED;
@@ -366,7 +367,7 @@ Result<void> YettyImpl::initWebGPU() noexcept {
     limits.minUniformBufferOffsetAlignment = WGPU_LIMIT_U32_UNDEFINED;
     limits.minStorageBufferOffsetAlignment = WGPU_LIMIT_U32_UNDEFINED;
     limits.maxVertexBuffers = WGPU_LIMIT_U32_UNDEFINED;
-    limits.maxBufferSize = WGPU_LIMIT_U64_UNDEFINED;
+    limits.maxBufferSize = std::min(static_cast<uint64_t>(1024) * 1024 * 1024, adapterLimits.maxBufferSize);
     limits.maxVertexAttributes = WGPU_LIMIT_U32_UNDEFINED;
     limits.maxVertexBufferArrayStride = WGPU_LIMIT_U32_UNDEFINED;
     limits.maxInterStageShaderVariables = WGPU_LIMIT_U32_UNDEFINED;
@@ -967,8 +968,8 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
 
     // Upload any pending font glyphs (e.g., bold/italic loaded on demand)
     if (auto msdfFont = _yettyContext.fontManager->getDefaultMsMsdfFont()) {
-        if (msdfFont->hasPendingGlyphs()) {
-            auto uploadResult = msdfFont->uploadPendingGlyphs(_device, _queue);
+        if (msdfFont->atlas()->hasPendingGlyphs()) {
+            auto uploadResult = msdfFont->atlas()->uploadPendingGlyphs(_device, _queue);
             if (!uploadResult) {
                 ywarn("Failed to upload pending glyphs: {}", uploadResult.error().message());
             }

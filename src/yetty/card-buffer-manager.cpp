@@ -107,7 +107,7 @@ private:
 
     uint32_t _currentBufferCapacity;
     uint32_t _pendingReservation = 0;
-    static constexpr uint32_t MAX_BUFFER_SIZE = 32 * 1024 * 1024;
+    static constexpr uint32_t MAX_BUFFER_SIZE = 1024 * 1024 * 1024;
 
     bool _bindGroupDirty = true;
 };

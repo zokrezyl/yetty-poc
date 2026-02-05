@@ -536,7 +536,7 @@ public:
             return 0;
         }
 
-        float fontBaseSize = _font->getFontSize();
+        float fontBaseSize = _font->atlas()->getFontSize();
         float scale = fontSize / fontBaseSize;
 
         float cursorX = x;
@@ -567,7 +567,7 @@ public:
             }
 
             uint32_t glyphIndex = _font->getGlyphIndex(codepoint);
-            const auto& metadata = _font->getGlyphMetadata();
+            const auto& metadata = _font->atlas()->getGlyphMetadata();
             if (glyphIndex >= metadata.size()) {
                 cursorX += fontSize * 0.5f;
                 continue;

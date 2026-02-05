@@ -203,13 +203,14 @@ Result<void> ImguiManagerImpl::render(WGPURenderPassEncoder pass) {
     // Handle context menu - if there are items, show popup
     if (!_menuItems.empty()) {
         if (!_menuOpen) {
-            // First frame with items - open popup at stored mouse position
-            ImGui::SetNextWindowPos(ImVec2(_menuX, _menuY), ImGuiCond_Always);
+            // First frame with items - open popup
             ImGui::OpenPopup("ContextMenu");
             _menuOpen = true;
             _rightClickPending = false;
         }
 
+        // SetNextWindowPos must be called immediately before BeginPopup
+        ImGui::SetNextWindowPos(ImVec2(_menuX, _menuY), ImGuiCond_Appearing);
         if (ImGui::BeginPopup("ContextMenu")) {
             for (const auto& item : _menuItems) {
                 if (ImGui::MenuItem(item.label.c_str())) {

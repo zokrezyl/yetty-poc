@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <cstdint>
+#include <functional>
 
 // Forward declare pdfio types (pdfio uses _pdfio_*_s naming)
 struct _pdfio_stream_s;
@@ -18,6 +19,7 @@ struct PdfTextSpan {
     float y;            // Y position in PDF user space
     float fontSize;     // Effective font size (from Tf and text matrix)
     std::string text;   // Decoded text (UTF-8)
+    std::string fontName;  // PDF font name (e.g. "/F1", "/Helv")
 };
 
 //=============================================================================
@@ -66,11 +68,23 @@ struct PdfGraphicsState {
 //   parser.parseStream(stream);
 //   for (const auto& span : parser.textSpans()) { ... }
 //=============================================================================
+// Callback for glyph placement during text emission.
+// Called from emitText() for each Tj/TJ text string.
+// Parameters: decoded text, position from Trm, effective font size, text state.
+// Returns: total advance in text-matrix units for text matrix update.
+using TextEmitCallback = std::function<float(
+    const std::string& text,
+    float posX, float posY,
+    float effectiveSize,
+    const PdfTextState& textState
+)>;
+
 class PdfContentParser {
 public:
     PdfContentParser();
 
     void setPageHeight(float h) { _pageHeight = h; }
+    void setTextEmitCallback(TextEmitCallback cb) { _textEmitCallback = std::move(cb); }
     void parseStream(pdfio_stream_t* stream);
     const std::vector<PdfTextSpan>& textSpans() const { return _spans; }
 
@@ -125,6 +139,9 @@ private:
     bool _inTextObject = false;
 
     float _pageHeight = 792.0f;
+
+    // Callback for CDB-based glyph placement
+    TextEmitCallback _textEmitCallback;
 
     // Output
     std::vector<PdfTextSpan> _spans;

@@ -558,6 +558,7 @@ elseif(NOT EMSCRIPTEN)
         # Card sources added via add_subdirectory(src/yetty/cards)
         # Core sources (previously in yetty_core)
         # src/yetty/font.cpp  # Moved to obsolete
+        src/yetty/msdf-atlas.cpp
         src/yetty/ms-msdf-font.cpp
         src/yetty/font-manager.cpp
         src/yetty/msdf-cdb-provider.cpp
@@ -854,6 +855,13 @@ else()
     if(YETTY_BUILD_YECHO_TESTS)
         enable_testing()
         add_subdirectory(test/ut/yecho)
+    endif()
+
+    # YPdf tests (PDF font extraction)
+    option(YETTY_BUILD_YPDF_TESTS "Build YPdf font extraction tests" ON)
+    if(YETTY_BUILD_YPDF_TESTS)
+        enable_testing()
+        add_subdirectory(test/ut/ypdf)
     endif()
 
     # Plugin tester disabled - was using yetty_core which is removed

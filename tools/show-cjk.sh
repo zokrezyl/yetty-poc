@@ -50,64 +50,11 @@ print_range 0x3200 0x32FF "Enclosed CJK Letters and Months"
 # CJK Compatibility
 print_range 0x3300 0x33FF "CJK Compatibility"
 
-# CJK Unified Ideographs (first 2000 only for demo - full range is huge)
-echo ""
-echo "=== CJK Unified Ideographs (U+4E00 - U+9FFF) - showing first 2000 ==="
-count=0
-for ((cp=0x4E00; cp<=0x4E00+1999 && cp<=0x9FFF; cp++)); do
-    printf "\\U$(printf '%08X' $cp)"
-    ((count++))
-    if ((count % CHARS_PER_LINE == 0)); then
-        echo ""
-    fi
-done
-echo ""
-echo "($count of 20992 characters shown)"
+# CJK Unified Ideographs - ALL
+print_range 0x4E00 0x9FFF "CJK Unified Ideographs"
 
-# Hangul Syllables (first 2000 only - full range is 11172 chars)
-echo ""
-echo "=== Hangul Syllables (U+AC00 - U+D7AF) - showing first 2000 ==="
-count=0
-for ((cp=0xAC00; cp<=0xAC00+1999 && cp<=0xD7AF; cp++)); do
-    printf "\\U$(printf '%08X' $cp)"
-    ((count++))
-    if ((count % CHARS_PER_LINE == 0)); then
-        echo ""
-    fi
-done
-echo ""
-echo "($count of 11172 characters shown)"
+# Hangul Syllables - ALL
+print_range 0xAC00 0xD7AF "Hangul Syllables"
 
 # Halfwidth and Fullwidth Forms
 print_range 0xFF00 0xFFEF "Halfwidth and Fullwidth Forms"
-
-echo ""
-echo "Use --all flag to show all CJK Unified Ideographs and Hangul Syllables"
-
-if [[ "$1" == "--all" ]]; then
-    echo ""
-    echo "=== CJK Unified Ideographs (U+4E00 - U+9FFF) - ALL ==="
-    count=0
-    for ((cp=0x4E00; cp<=0x9FFF; cp++)); do
-        printf "\\U$(printf '%08X' $cp)"
-        ((count++))
-        if ((count % CHARS_PER_LINE == 0)); then
-            echo ""
-        fi
-    done
-    echo ""
-    echo "($count characters)"
-
-    echo ""
-    echo "=== Hangul Syllables (U+AC00 - U+D7AF) - ALL ==="
-    count=0
-    for ((cp=0xAC00; cp<=0xD7AF; cp++)); do
-        printf "\\U$(printf '%08X' $cp)"
-        ((count++))
-        if ((count % CHARS_PER_LINE == 0)); then
-            echo ""
-        fi
-    done
-    echo ""
-    echo "($count characters)"
-fi

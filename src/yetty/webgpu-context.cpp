@@ -190,7 +190,7 @@ Result<void> WebGPUContext::init() noexcept {
     limits.minUniformBufferOffsetAlignment = WGPU_LIMIT_U32_UNDEFINED;
     limits.minStorageBufferOffsetAlignment = WGPU_LIMIT_U32_UNDEFINED;
     limits.maxVertexBuffers = WGPU_LIMIT_U32_UNDEFINED;
-    limits.maxBufferSize = WGPU_LIMIT_U64_UNDEFINED;
+    limits.maxBufferSize = 512 * 1024 * 1024;  // 512MB for large atlas textures
     limits.maxVertexAttributes = WGPU_LIMIT_U32_UNDEFINED;
     limits.maxVertexBufferArrayStride = WGPU_LIMIT_U32_UNDEFINED;
     limits.maxInterStageShaderVariables = WGPU_LIMIT_U32_UNDEFINED;
@@ -297,7 +297,7 @@ Result<void> WebGPUContext::init() noexcept {
     limits.minUniformBufferOffsetAlignment = WGPU_LIMIT_U32_UNDEFINED;
     limits.minStorageBufferOffsetAlignment = WGPU_LIMIT_U32_UNDEFINED;
     limits.maxVertexBuffers = WGPU_LIMIT_U32_UNDEFINED;
-    limits.maxBufferSize = WGPU_LIMIT_U64_UNDEFINED;
+    limits.maxBufferSize = 1024 * 1024 * 1024;  // 1GB for large atlas textures
     limits.maxVertexAttributes = WGPU_LIMIT_U32_UNDEFINED;
     limits.maxVertexBufferArrayStride = WGPU_LIMIT_U32_UNDEFINED;
     limits.maxInterStageShaderVariables = WGPU_LIMIT_U32_UNDEFINED;
