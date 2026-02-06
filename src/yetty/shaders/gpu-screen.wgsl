@@ -241,15 +241,15 @@ fn unpackPoint(packed: u32) -> vec2<f32> {
     return vec2<f32>(x, y);
 }
 
-// Signed distance to a quadratic Bezier curve (p0 -> p1 -> p2)
-// Based on Inigo Quilez's approach
+// ==== SDF BEZIER RENDERING ====
+
+// Unsigned distance to a quadratic Bezier curve (Inigo Quilez)
 fn sdQuadraticBezier(pos: vec2<f32>, p0: vec2<f32>, p1: vec2<f32>, p2: vec2<f32>) -> f32 {
     let a = p1 - p0;
     let b = p0 - 2.0 * p1 + p2;
     let c = a * 2.0;
     let d = p0 - pos;
 
-    // Cubic coefficients for solving t
     let kk = 1.0 / dot(b, b);
     let kx = kk * dot(a, b);
     let ky = kk * (2.0 * dot(a, a) + dot(d, b)) / 3.0;
@@ -258,12 +258,10 @@ fn sdQuadraticBezier(pos: vec2<f32>, p0: vec2<f32>, p1: vec2<f32>, p2: vec2<f32>
     let p = ky - kx * kx;
     let q = kx * (2.0 * kx * kx - 3.0 * ky) + kz;
     let p3 = p * p * p;
-    let q2 = q * q;
-    let h = q2 + 4.0 * p3;
+    let h = q * q + 4.0 * p3;
 
     var res: f32;
     if (h >= 0.0) {
-        // One root
         let sqrtH = sqrt(h);
         let x = (vec2<f32>(sqrtH, -sqrtH) - q) / 2.0;
         let uv = sign(x) * pow(abs(x), vec2<f32>(1.0 / 3.0));
@@ -271,11 +269,10 @@ fn sdQuadraticBezier(pos: vec2<f32>, p0: vec2<f32>, p1: vec2<f32>, p2: vec2<f32>
         let qpos = d + (c + b * t) * t;
         res = dot(qpos, qpos);
     } else {
-        // Three roots - use trigonometric solution
         let z = sqrt(-p);
         let v = acos(q / (p * z * 2.0)) / 3.0;
         let m = cos(v);
-        let n = sin(v) * 1.732050808;  // sqrt(3)
+        let n = sin(v) * 1.732050808;
         let t0 = clamp((m + m) * z - kx, 0.0, 1.0);
         let t1 = clamp((-n - m) * z - kx, 0.0, 1.0);
         let t2 = clamp((n - m) * z - kx, 0.0, 1.0);
@@ -287,64 +284,74 @@ fn sdQuadraticBezier(pos: vec2<f32>, p0: vec2<f32>, p1: vec2<f32>, p2: vec2<f32>
     return sqrt(res);
 }
 
-// Compute winding number contribution from a quadratic Bezier
-fn windingQuadratic(pos: vec2<f32>, p0: vec2<f32>, p1: vec2<f32>, p2: vec2<f32>) -> f32 {
-    // Simplified winding: count crossings of horizontal ray from pos
-    let e0 = p1 - p0;
-    let e1 = p2 - p1;
+// Ray-cast winding number for inside/outside test
+fn windingNumber(glyphIndex: u32, pos: vec2<f32>) -> i32 {
+    let codepoint = glyphIndex - VECTOR_GLYPH_BASE;
+    let offset = vectorOffsetTable[codepoint];
+    if (offset == 0xFFFFFFFFu) { return 0; }
 
-    // Check if curve crosses the horizontal line y = pos.y
-    let y0 = p0.y - pos.y;
-    let y1 = p1.y - pos.y;
-    let y2 = p2.y - pos.y;
+    let header = vectorGlyphBuffer[offset];
+    let curveCount = (header >> 16u) & 0xFFFFu;
+    if (curveCount == 0u) { return 0; }
 
-    // Quadratic: solve for t where y(t) = 0
-    // y(t) = (1-t)^2*y0 + 2*(1-t)*t*y1 + t^2*y2
-    // = y0 - 2*y0*t + y0*t^2 + 2*y1*t - 2*y1*t^2 + y2*t^2
-    // = y0 + t*(-2*y0 + 2*y1) + t^2*(y0 - 2*y1 + y2)
-    let aa = y0 - 2.0 * y1 + y2;
-    let bb = -2.0 * y0 + 2.0 * y1;
-    let cc = y0;
+    var crossings = 0;
+    let curveBase = offset + 1u;
 
-    var winding = 0.0;
+    for (var i = 0u; i < curveCount; i++) {
+        let curveOffset = curveBase + i * 3u;
+        let p0 = unpackPoint(vectorGlyphBuffer[curveOffset]);
+        let p1 = unpackPoint(vectorGlyphBuffer[curveOffset + 1u]);
+        let p2 = unpackPoint(vectorGlyphBuffer[curveOffset + 2u]);
 
-    if (abs(aa) < 0.0001) {
-        // Linear case
-        if (abs(bb) > 0.0001) {
-            let t = -cc / bb;
-            if (t >= 0.0 && t <= 1.0) {
-                let x = (1.0 - t) * (1.0 - t) * p0.x + 2.0 * (1.0 - t) * t * p1.x + t * t * p2.x;
-                if (x > pos.x) {
-                    let dy = 2.0 * (1.0 - t) * e0.y + 2.0 * t * e1.y;
-                    winding += sign(dy);
+        // Solve for t where curve.y = pos.y
+        let y0 = p0.y - pos.y;
+        let y1 = p1.y - pos.y;
+        let y2 = p2.y - pos.y;
+
+        let aa = y0 - 2.0 * y1 + y2;
+        let bb = 2.0 * (y1 - y0);
+        let cc = y0;
+
+        if (abs(aa) < 1e-6) {
+            // Linear case
+            if (abs(bb) > 1e-6) {
+                let t = -cc / bb;
+                if (t >= 0.0 && t < 1.0) {
+                    let mt = 1.0 - t;
+                    let x = mt * mt * p0.x + 2.0 * mt * t * p1.x + t * t * p2.x;
+                    if (x > pos.x) {
+                        let dy = 2.0 * mt * (p1.y - p0.y) + 2.0 * t * (p2.y - p1.y);
+                        crossings += select(-1, 1, dy > 0.0);
+                    }
                 }
             }
-        }
-    } else {
-        let disc = bb * bb - 4.0 * aa * cc;
-        if (disc >= 0.0) {
-            let sqrtDisc = sqrt(disc);
-            let t1 = (-bb - sqrtDisc) / (2.0 * aa);
-            let t2 = (-bb + sqrtDisc) / (2.0 * aa);
+        } else {
+            let disc = bb * bb - 4.0 * aa * cc;
+            if (disc >= 0.0) {
+                let sqrtDisc = sqrt(disc);
+                let t1 = (-bb - sqrtDisc) / (2.0 * aa);
+                let t2 = (-bb + sqrtDisc) / (2.0 * aa);
 
-            if (t1 >= 0.0 && t1 <= 1.0) {
-                let x = (1.0 - t1) * (1.0 - t1) * p0.x + 2.0 * (1.0 - t1) * t1 * p1.x + t1 * t1 * p2.x;
-                if (x > pos.x) {
-                    let dy = 2.0 * (1.0 - t1) * e0.y + 2.0 * t1 * e1.y;
-                    winding += sign(dy);
+                if (t1 >= 0.0 && t1 < 1.0) {
+                    let mt = 1.0 - t1;
+                    let x = mt * mt * p0.x + 2.0 * mt * t1 * p1.x + t1 * t1 * p2.x;
+                    if (x > pos.x) {
+                        let dy = 2.0 * mt * (p1.y - p0.y) + 2.0 * t1 * (p2.y - p1.y);
+                        crossings += select(-1, 1, dy > 0.0);
+                    }
                 }
-            }
-            if (t2 >= 0.0 && t2 <= 1.0 && abs(t2 - t1) > 0.0001) {
-                let x = (1.0 - t2) * (1.0 - t2) * p0.x + 2.0 * (1.0 - t2) * t2 * p1.x + t2 * t2 * p2.x;
-                if (x > pos.x) {
-                    let dy = 2.0 * (1.0 - t2) * e0.y + 2.0 * t2 * e1.y;
-                    winding += sign(dy);
+                if (t2 >= 0.0 && t2 < 1.0 && abs(t2 - t1) > 1e-6) {
+                    let mt = 1.0 - t2;
+                    let x = mt * mt * p0.x + 2.0 * mt * t2 * p1.x + t2 * t2 * p2.x;
+                    if (x > pos.x) {
+                        let dy = 2.0 * mt * (p1.y - p0.y) + 2.0 * t2 * (p2.y - p1.y);
+                        crossings += select(-1, 1, dy > 0.0);
+                    }
                 }
             }
         }
     }
-
-    return winding;
+    return crossings;
 }
 
 // Render a vector glyph using SDF curves
@@ -369,30 +376,23 @@ fn sampleVectorGlyph(glyphIndex: u32, localUV: vec2<f32>) -> f32 {
         return 1.0;  // No curves, empty glyph
     }
 
-    // Find minimum distance to all curves and compute winding
+    // Find minimum distance to all curves
     var minDist = 1000.0;
-    var winding = 0.0;
-
-    let curveBase = offset + 1u;  // Curves start after header
+    let curveBase = offset + 1u;
 
     for (var i = 0u; i < curveCount; i = i + 1u) {
-        // Each curve is 3 packed points (3 u32s)
         let curveOffset = curveBase + i * 3u;
         let p0 = unpackPoint(vectorGlyphBuffer[curveOffset]);
         let p1 = unpackPoint(vectorGlyphBuffer[curveOffset + 1u]);
         let p2 = unpackPoint(vectorGlyphBuffer[curveOffset + 2u]);
 
-        // Distance to curve
         let dist = sdQuadraticBezier(localUV, p0, p1, p2);
         minDist = min(minDist, dist);
-
-        // Winding contribution
-        winding += windingQuadratic(localUV, p0, p1, p2);
     }
 
-    // Sign based on winding number (non-zero = inside)
-    let inside = abs(winding) > 0.5;
-    if (inside) {
+    // Use winding number for inside/outside (non-zero = inside)
+    let winding = windingNumber(glyphIndex, localUV);
+    if (winding != 0) {
         return -minDist;
     }
     return minDist;
@@ -568,12 +568,12 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 
             let sd = sampleVectorGlyph(glyphIndex, localUV);
 
-            // Convert signed distance from UV space to pixels for anti-aliasing
-            // sd is in [0,1] UV space, multiply by cell size to get pixel distance
-            let sdPixels = sd * min(grid.cellSize.x, grid.cellSize.y);
+            // Anti-aliasing: compute pixel width in UV space from cell size
+            // One pixel in UV space = 1.0 / cellSize
+            let pixelWidth = 1.0 / min(grid.cellSize.x, grid.cellSize.y);
 
-            // Smooth anti-aliasing: 1 pixel transition zone
-            let alpha = clamp(0.5 - sdPixels, 0.0, 1.0);
+            // Smooth anti-aliasing with ~1.5 pixel transition zone
+            let alpha = clamp(0.5 - sd / (pixelWidth * 1.5), 0.0, 1.0);
 
             finalColor = mix(bgColor.rgb, fgColor.rgb, alpha);
             hasGlyph = alpha > 0.01;
