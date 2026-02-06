@@ -559,27 +559,21 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         // Check for vector glyph first (Plane 15 PUA-A range: U+F0000+)
         if (isVectorGlyph(glyphIndex)) {
             // Vector font: render using SDF curves
-            // Scale to ~80% of cell, baseline at 80% from top
-            let glyphScale = 0.75;
-            let baselineY = 0.8;  // Baseline at 80% down from top
-            let padX = (1.0 - glyphScale) * 0.5;  // Center horizontally
-            let padY = baselineY - glyphScale;    // Position above baseline
-
-            // Transform pixel position to glyph UV space
-            let normX = localPxBase.x / grid.cellSize.x;
-            let normY = localPxBase.y / grid.cellSize.y;
-
-            // Map to glyph space: subtract padding, scale up, flip Y
-            let glyphU = (normX - padX) / glyphScale;
-            let glyphV = 1.0 - (normY - padY) / glyphScale;
-            let localUV = vec2<f32>(glyphU, glyphV);
+            // Curves are normalized to font metrics (ascender/descender/advance)
+            // Just flip Y for screen coordinates
+            let localUV = vec2<f32>(
+                localPxBase.x / grid.cellSize.x,
+                1.0 - localPxBase.y / grid.cellSize.y
+            );
 
             let sd = sampleVectorGlyph(glyphIndex, localUV);
 
-            // Convert signed distance to alpha (anti-aliased edge)
-            // Use pixelRange for consistent anti-aliasing across scales
-            let pxRange = grid.pixelRange * grid.scale / min(grid.cellSize.x, grid.cellSize.y);
-            let alpha = clamp(0.5 - sd * pxRange * 32.0, 0.0, 1.0);
+            // Convert signed distance from UV space to pixels for anti-aliasing
+            // sd is in [0,1] UV space, multiply by cell size to get pixel distance
+            let sdPixels = sd * min(grid.cellSize.x, grid.cellSize.y);
+
+            // Smooth anti-aliasing: 1 pixel transition zone
+            let alpha = clamp(0.5 - sdPixels, 0.0, 1.0);
 
             finalColor = mix(bgColor.rgb, fgColor.rgb, alpha);
             hasGlyph = alpha > 0.01;
