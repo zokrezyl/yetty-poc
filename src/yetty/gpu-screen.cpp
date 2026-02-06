@@ -17,6 +17,7 @@
 #include <yetty/shader-manager.h>
 #include <yetty/wgpu-compat.h>
 #include <yetty/font-manager.h>
+#include <yetty/vector-font.h>
 #include <ytrace/ytrace.hpp>
 
 #ifndef CMAKE_SOURCE_DIR
@@ -45,6 +46,7 @@ constexpr uint8_t FONT_TYPE_MSDF = 0;   // Default text rendering
 constexpr uint8_t FONT_TYPE_BITMAP = 1; // Bitmap fonts (emoji, color fonts)
 constexpr uint8_t FONT_TYPE_SHADER = 2; // Single-cell shader glyphs
 constexpr uint8_t FONT_TYPE_CARD = 3;   // Multi-cell card glyphs
+constexpr uint8_t FONT_TYPE_VECTOR = 4; // Vector font (SDF curves)
 
 // Card glyph range - multi-cell widgets (U+100000 - U+100FFF)
 constexpr uint32_t CARD_GLYPH_BASE = 0x100000;
@@ -53,6 +55,10 @@ constexpr uint32_t CARD_GLYPH_END = 0x100FFF;
 // Shader glyph range - single-cell procedural glyphs (U+101000 - U+10FFFD)
 constexpr uint32_t SHADER_GLYPH_BASE = 0x101000;
 constexpr uint32_t SHADER_GLYPH_END = 0x10FFFD;
+
+// Vector font glyph range - Plane 15 PUA-A (U+F0000 - U+FFFFD)
+constexpr uint32_t VECTOR_GLYPH_BASE = 0xF0000;
+constexpr uint32_t VECTOR_GLYPH_END = 0xFFFFD;
 
 // =============================================================================
 // Copy mode key bindings (tmux vi-mode style)
@@ -120,6 +126,10 @@ inline bool isCardGlyph(uint32_t codepoint) {
 
 inline bool isShaderGlyph(uint32_t codepoint) {
   return codepoint >= SHADER_GLYPH_BASE && codepoint <= SHADER_GLYPH_END;
+}
+
+inline bool isVectorGlyph(uint32_t codepoint) {
+  return codepoint >= VECTOR_GLYPH_BASE && codepoint <= VECTOR_GLYPH_END;
 }
 
 // Check if codepoint is an emoji (common ranges)
@@ -379,6 +389,7 @@ private:
   BmFont::Ptr _bitmapFont;
   ShaderFont::Ptr _shaderGlyphFont;
   ShaderFont::Ptr _cardFont;
+  VectorFont::Ptr _vectorFont;
   uint32_t _cachedSpaceGlyph = 0;
 
   // Callbacks
@@ -566,6 +577,7 @@ Result<void> GPUScreenImpl::init() noexcept {
     _bitmapFont = _ctx.fontManager->getDefaultBmFont();
     _shaderGlyphFont = _ctx.fontManager->getDefaultShaderGlyphFont();
     _cardFont = _ctx.fontManager->getDefaultCardFont();
+    _vectorFont = _ctx.fontManager->getDefaultVectorFont();
   }
 
   // Cache space glyph index to avoid repeated lookups in hot paths
@@ -2657,7 +2669,11 @@ int GPUScreenImpl::onPutglyph(VTermGlyphInfo *info, VTermPos pos, void *user) {
   uint32_t glyphIdx = 0;
   uint8_t fontType = FONT_TYPE_MSDF; // Default to MSDF text
 
-  if (isCardGlyph(cp)) {
+  if (isVectorGlyph(cp)) {
+    // Vector font glyphs (SDF curves)
+    fontType = FONT_TYPE_VECTOR;
+    glyphIdx = cp;  // Shader uses codepoint directly
+  } else if (isCardGlyph(cp)) {
     // Card glyphs (multi-cell widgets)
     fontType = FONT_TYPE_CARD;
     glyphIdx = self->_cardFont ? self->_cardFont->getGlyphIndex(cp) : cp;
@@ -4692,7 +4708,7 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
       return Err<void>("Bitmap font resources not ready");
     }
 
-    WGPUBindGroupEntry bgEntries[8] = {};
+    WGPUBindGroupEntry bgEntries[10] = {};
 
     bgEntries[0].binding = 0;
     bgEntries[0].buffer = _uniformBuffer;
@@ -4726,9 +4742,22 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
     bgEntries[7].size =
         glyphsPerRow * glyphsPerRow * sizeof(BitmapGlyphMetadata);
 
+    // Vector font bindings (8 and 9)
+    if (!_vectorFont || !_vectorFont->getGlyphBuffer() || !_vectorFont->getOffsetBuffer()) {
+      return Err<void>("Vector font resources not ready");
+    }
+
+    bgEntries[8].binding = 8;
+    bgEntries[8].buffer = _vectorFont->getGlyphBuffer();
+    bgEntries[8].size = _vectorFont->bufferSize();
+
+    bgEntries[9].binding = 9;
+    bgEntries[9].buffer = _vectorFont->getOffsetBuffer();
+    bgEntries[9].size = _vectorFont->offsetTableSize();
+
     WGPUBindGroupDescriptor bindGroupDesc = {};
     bindGroupDesc.layout = shaderMgr->getGridBindGroupLayout();
-    bindGroupDesc.entryCount = 8;
+    bindGroupDesc.entryCount = 10;
     bindGroupDesc.entries = bgEntries;
     _bindGroup = wgpuDeviceCreateBindGroup(device, &bindGroupDesc);
     if (!_bindGroup) {

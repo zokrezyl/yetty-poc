@@ -21,7 +21,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 import click
-from core import osc, base94
+from core import osc, encoding
 from plugins import discover_plugins, get_plugin
 
 
@@ -225,13 +225,13 @@ def cmd_decode(ctx, input_file, output, info, raw):
     if info or ctx.obj['verbose']:
         click.echo(f"Generic args: {generic_args}", err=True)
         click.echo(f"Plugin args:  {plugin_args or '(none)'}", err=True)
-        click.echo(f"Payload:      {len(encoded_payload)} chars (base94)", err=True)
+        click.echo(f"Payload:      {len(encoded_payload)} chars (base64)", err=True)
 
     if info:
         return
 
     try:
-        decoded_bytes = base94.decode(encoded_payload)
+        decoded_bytes = encoding.decode(encoded_payload)
         if not raw:
             decoded_text = decoded_bytes.decode('utf-8')
     except UnicodeDecodeError:

@@ -200,7 +200,7 @@ static bool processFile(
             return writeStdout(data.data(), data.size());
         }
 
-        // Stdin: send binary payload (base94-encoded bytes)
+        // Stdin: send binary payload (base64-encoded bytes)
         auto seq = ycat::createSequenceBytes(
             mapping->plugin, 0, 0, width, height, !absolute, data);
         auto out = ycat::maybeWrapForTmux(seq);
@@ -236,7 +236,7 @@ static bool processFile(
         return catFile(path);
     }
 
-    // File: send absolute path as payload (base94-encoded text)
+    // File: send absolute path as payload (base64-encoded text)
     // The card plugin is responsible for loading from this path
     auto seq = ycat::createSequence(
         mapping->plugin, 0, 0, width, height, !absolute, path.string());

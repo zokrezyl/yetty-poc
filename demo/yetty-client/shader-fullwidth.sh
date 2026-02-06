@@ -9,21 +9,8 @@ SHADER='fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> {
     return vec4<f32>(color, 1.0);
 }'
 
-# Base94 encode function
-base94_encode() {
-    local input="$1"
-    local output=""
-    for ((i=0; i<${#input}; i++)); do
-        local byte=$(printf '%d' "'${input:$i:1}")
-        local c1=$((byte / 94 + 33))
-        local c2=$((byte % 94 + 33))
-        output+=$(printf "\\x$(printf '%x' $c1)")
-        output+=$(printf "\\x$(printf '%x' $c2)")
-    done
-    echo -n "$output"
-}
-
-ENCODED=$(base94_encode "$SHADER")
+# Base64 encode the shader
+ENCODED=$(echo -n "$SHADER" | base64 -w 0)
 
 # OSC format: ESC ] 99999 ; <plugin> ; <mode> ; <x> ; <y> ; <w> ; <h> ; <payload> ST
 #

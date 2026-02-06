@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Encode a file to base94 and output the OSC sequence for yetty plugins.
+"""Encode a file to base64 and output the OSC sequence for yetty plugins.
 
-OSC Format: ESC ] 99999;<plugin>;<mode>;<x>;<y>;<w>;<h>;<base94_payload> BEL
+OSC Format: ESC ] 99999;<plugin>;<mode>;<x>;<y>;<w>;<h>;<base64_payload> BEL
 
 Where:
 - 99999 is YETTY_OSC_VENDOR_ID
@@ -9,26 +9,23 @@ Where:
 - mode: A (absolute), R (relative to cursor)
 - x, y: position in cells
 - w, h: size in cells
-- base94_payload: file content encoded in base94
+- base64_payload: file content encoded in base64
 """
 
 import sys
 import os
 
-def base94_encode(data: bytes) -> str:
-    """Encode bytes to base94 (2 chars per byte)."""
-    result = []
-    for byte in data:
-        result.append(chr(33 + (byte // 94)))
-        result.append(chr(33 + (byte % 94)))
-    return ''.join(result)
+def base64_encode(data: bytes) -> str:
+    """Encode bytes to base64."""
+    import base64
+    return base64.b64encode(data).decode('ascii')
 
 def main():
     if len(sys.argv) < 2:
         print(f"Usage: {sys.argv[0]} <file> [options]", file=sys.stderr)
         print("Options:", file=sys.stderr)
         print("  --plugin=X  Plugin name: shader, image. Default: auto-detect", file=sys.stderr)
-        print("  --raw       Output only the base94 encoded string (no OSC wrapper)", file=sys.stderr)
+        print("  --raw       Output only the base64 encoded string (no OSC wrapper)", file=sys.stderr)
         print("  --mode=X    Position mode: A (absolute) or R (relative). Default: R", file=sys.stderr)
         print("  --x=N       X position in cells. Default: 0", file=sys.stderr)
         print("  --y=N       Y position in cells. Default: 0", file=sys.stderr)
@@ -72,7 +69,7 @@ def main():
     with open(input_file, 'rb') as f:
         data = f.read()
 
-    encoded = base94_encode(data)
+    encoded = base64_encode(data)
 
     if raw_mode:
         print(encoded)

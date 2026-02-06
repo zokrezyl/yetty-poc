@@ -6,20 +6,19 @@
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR/../../.."
 
-# Generate sine wave data and emit OSC sequence with base94-encoded payload
+# Generate sine wave data and emit OSC sequence with base64-encoded payload
 python3 -c "
 import sys
 import math
-sys.path.insert(0, 'tools/yetty-client')
-from core import base94
+import base64
 
 # Generate sine wave data
 points = 100
 values = [math.sin(x * math.pi * 2 / points) for x in range(points)]
 payload = ','.join(f'{v:.3f}' for v in values)
 
-# Base94 encode the payload
-encoded = base94.encode_string(payload)
+# Base64 encode the payload
+encoded = base64.b64encode(payload.encode('utf-8')).decode('ascii')
 
 # Plugin args
 plugin_args = '--type line --grid --axes'

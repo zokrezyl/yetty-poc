@@ -1,4 +1,5 @@
 #include <yetty/font-manager.h>
+#include <yetty/vector-font.h>
 #include <yetty/shader-manager.h>
 #include <ytrace/ytrace.hpp>
 
@@ -39,6 +40,10 @@ public:
     if (auto res = initShaderFonts(); !res) {
       ywarn("Failed to initialize ShaderFonts: {} - shader glyphs disabled",
             res.error().message());
+    }
+
+    if (auto res = initVectorFont(); !res) {
+      return Err<void>("Failed to initialize VectorFont", res);
     }
 
     _initialized = true;
@@ -158,6 +163,40 @@ public:
 
   ShaderFont::Ptr getDefaultCardFont() noexcept override { return _cardFont; }
 
+  Result<VectorFont::Ptr> getVectorFont(const std::string &ttfPath) noexcept override {
+    auto it = _vectorFontCache.find(ttfPath);
+    if (it != _vectorFontCache.end()) {
+      return Ok(it->second);
+    }
+
+    auto result = VectorFont::create(_gpu, ttfPath);
+    if (!result) {
+      return Err<VectorFont::Ptr>("Failed to create VectorFont: " + ttfPath, result);
+    }
+
+    auto font = std::move(*result);
+
+    // Load basic Latin glyphs
+    if (auto res = font->loadBasicLatin(); !res) {
+      ywarn("Failed to load basic Latin for VectorFont: {}", res.error().message());
+    }
+
+    _vectorFontCache[ttfPath] = font;
+
+    if (!_defaultVectorFont) {
+      _defaultVectorFont = font;
+    }
+
+    yinfo("Created VectorFont: {} ({} glyphs, {} curves, {} bytes)",
+          ttfPath, font->glyphCount(), font->totalCurves(), font->bufferSize());
+
+    return Ok(font);
+  }
+
+  VectorFont::Ptr getDefaultVectorFont() noexcept override {
+    return _defaultVectorFont;
+  }
+
   void setDefaultFont(const std::string &fontName) noexcept override {
     _defaultFontName = fontName;
   }
@@ -235,6 +274,35 @@ private:
     return Ok();
   }
 
+  Result<void> initVectorFont() noexcept {
+    // Use the default monospace font TTF
+    std::string ttfPath = std::string(CMAKE_SOURCE_DIR) +
+                          "/assets/DejaVuSansMNerdFontMono-Regular.ttf";
+
+    if (!std::filesystem::exists(ttfPath)) {
+      return Err<void>("Default TTF not found: " + ttfPath);
+    }
+
+    auto result = VectorFont::create(_gpu, ttfPath);
+    if (!result) {
+      return Err<void>("Failed to create VectorFont", result);
+    }
+
+    _defaultVectorFont = std::move(*result);
+
+    // Load basic Latin glyphs for testing
+    if (auto res = _defaultVectorFont->loadBasicLatin(); !res) {
+      return Err<void>("Failed to load basic Latin glyphs", res);
+    }
+
+    yinfo("VectorFont initialized: {} glyphs, {} curves, {} bytes",
+          _defaultVectorFont->glyphCount(),
+          _defaultVectorFont->totalCurves(),
+          _defaultVectorFont->bufferSize());
+
+    return Ok();
+  }
+
   // Discover TTF paths for a font name in assets/ directory
   // Returns [Regular, Bold, Oblique, BoldOblique] paths (empty string if not
   // found)
@@ -266,6 +334,8 @@ private:
   BmFont::Ptr _bitmapFont;
   ShaderFont::Ptr _shaderGlyphFont;
   ShaderFont::Ptr _cardFont;
+  std::unordered_map<std::string, VectorFont::Ptr> _vectorFontCache;
+  VectorFont::Ptr _defaultVectorFont;
   bool _initialized = false;
 };
 

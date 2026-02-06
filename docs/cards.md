@@ -17,7 +17,7 @@ Where:
 - `666666` = Yetty vendor ID
 - `generic-args` = Command and positioning (Unix-style flags)
 - `plugin-args` = Plugin-specific options
-- `payload` = Base94-encoded data (file contents, YAML, binary)
+- `payload` = Base64-encoded data (file contents, YAML, binary)
 - `ST` = `\033\\` (String Terminator)
 
 ### Generic Arguments
@@ -54,25 +54,33 @@ Each plugin accepts specific arguments in the second field:
 
 ### Payload Encoding
 
-Payloads are **Base94 encoded** to be safe within escape sequences. Base94 uses printable ASCII characters (`!` to `~`, codes 33-126) to encode binary data:
+Payloads are **Base64 encoded** to be safe within escape sequences. Base64 is a standard encoding available in most programming languages and via the `base64` command-line tool:
 
 ```python
-# Encoding: each byte → 2 characters
-def encode(byte):
-    c1 = '!' + (byte // 94)
-    c2 = '!' + (byte % 94)
-    return c1 + c2
+import base64
 
-# Decoding: 2 characters → 1 byte
-def decode(c1, c2):
-    return (ord(c1) - ord('!')) * 94 + (ord(c2) - ord('!'))
+# Encoding
+encoded = base64.b64encode(data).decode('ascii')
+
+# Decoding
+data = base64.b64decode(encoded)
+```
+
+```bash
+# Command line encoding
+echo -n "Hello" | base64
+# SGVsbG8=
+
+# Command line decoding
+echo "SGVsbG8=" | base64 -d
+# Hello
 ```
 
 ### Payload Content
 
 The payload can be:
 
-1. **File contents** - Raw image bytes, PDF bytes, etc. (base94 encoded)
+1. **File contents** - Raw image bytes, PDF bytes, etc. (base64 encoded)
 2. **YAML definition** - For structured cards like YDraw, Plot
 3. **Pre-compiled binary** - For performance (YDraw binary format)
 
@@ -86,11 +94,10 @@ yetty-client create image -i logo.png -w 40 -H 20
 # Raw escape sequence
 python3 -c "
 import sys
-sys.path.insert(0, 'tools/yetty-client')
-from core import base94
+import base64
 
 data = open('logo.png', 'rb').read()
-encoded = base94.encode(data)
+encoded = base64.b64encode(data).decode('ascii')
 sys.stdout.write(f'\033]666666;create -p image -w 40 -h 20 -r;;{encoded}\033\\\\')
 "
 ```
@@ -104,13 +111,11 @@ EOF
 
 # Or with inline Python
 python3 -c "
-import math, sys
-sys.path.insert(0, 'tools/yetty-client')
-from core import base94
+import math, sys, base64
 
 values = [math.sin(x * math.pi / 50) for x in range(100)]
 payload = ','.join(f'{v:.3f}' for v in values)
-encoded = base94.encode_string(payload)
+encoded = base64.b64encode(payload.encode('utf-8')).decode('ascii')
 
 args = '--type line --grid --axes'
 sys.stdout.write(f'\033]666666;create -p plot -w 60 -h 20 -r;{args};{encoded}\033\\\\')
