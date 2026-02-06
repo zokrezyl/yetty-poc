@@ -1,4 +1,4 @@
-#include <yetty/vector-font.h>
+#include <yetty/vector-coverage-font.h>
 #include <yetty/wgpu-compat.h>
 #include <ytrace/ytrace.hpp>
 
@@ -219,15 +219,15 @@ int curveCubicTo(const FT_Vector* c1, const FT_Vector* c2, const FT_Vector* to, 
 } // anonymous namespace
 
 //=============================================================================
-// VectorFontImpl
+// VectorCoverageFontImpl
 //=============================================================================
 
-class VectorFontImpl : public VectorFont {
+class VectorCoverageFontImpl : public VectorCoverageFont {
 public:
-    VectorFontImpl(const GPUContext& gpu, const std::string& ttfPath)
+    VectorCoverageFontImpl(const GPUContext& gpu, const std::string& ttfPath)
         : _gpu(gpu), _ttfPath(ttfPath) {}
 
-    ~VectorFontImpl() override {
+    ~VectorCoverageFontImpl() override {
         cleanup();
     }
 
@@ -235,7 +235,7 @@ public:
     // Initialization
     //=========================================================================
 
-    Result<void> init() override {
+    Result<void> init() noexcept {
         // Initialize FreeType
         if (FT_Init_FreeType(&_ftLibrary)) {
             return Err<void>("Failed to initialize FreeType");
@@ -262,7 +262,7 @@ public:
             _advanceWidth = static_cast<float>(_unitsPerEM) / FT_SCALE;
         }
 
-        yinfo("VectorFont loaded: {} (units_per_EM={} ascender={:.1f} descender={:.1f} advance={:.1f})",
+        yinfo("VectorCoverageFont loaded: {} (units_per_EM={} ascender={:.1f} descender={:.1f} advance={:.1f})",
               _ttfPath, _unitsPerEM, _ascender, _descender, _advanceWidth);
 
         return Ok();
@@ -465,7 +465,7 @@ private:
 
         // Create glyph data buffer
         WGPUBufferDescriptor bufDesc = {};
-        bufDesc.label = WGPU_STR("VectorFont Glyph Buffer");
+        bufDesc.label = WGPU_STR("VectorCoverageFont Glyph Buffer");
         bufDesc.size = _glyphData.size() * sizeof(uint32_t);
         bufDesc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
 
@@ -487,7 +487,7 @@ private:
             }
         }
 
-        bufDesc.label = WGPU_STR("VectorFont Offset Buffer");
+        bufDesc.label = WGPU_STR("VectorCoverageFont Offset Buffer");
         bufDesc.size = offsetTable.size() * sizeof(uint32_t);
 
         _offsetBuffer = wgpuDeviceCreateBuffer(device, &bufDesc);
@@ -498,7 +498,7 @@ private:
         wgpuQueueWriteBuffer(queue, _offsetBuffer, 0,
                              offsetTable.data(), offsetTable.size() * sizeof(uint32_t));
 
-        yinfo("VectorFont uploaded: {} glyphs, {} curves, {} bytes",
+        yinfo("VectorCoverageFont uploaded: {} glyphs, {} curves, {} bytes",
               _glyphOffsets.size(), _totalCurves, bufferSize());
 
         _dirty = false;
@@ -560,15 +560,15 @@ private:
 };
 
 //=============================================================================
-// VectorFont::createImpl - ObjectFactory entry point
+// VectorCoverageFont::createImpl - ObjectFactory entry point
 //=============================================================================
 
-Result<VectorFont::Ptr> VectorFont::createImpl(ContextType&,
+Result<VectorCoverageFont::Ptr> VectorCoverageFont::createImpl(ContextType&,
                                                 const GPUContext& gpu,
                                                 const std::string& ttfPath) {
-    auto font = Ptr(new VectorFontImpl(gpu, ttfPath));
-    if (auto res = static_cast<VectorFontImpl*>(font.get())->init(); !res) {
-        return Err<Ptr>("Failed to initialize VectorFont", res);
+    auto font = Ptr(new VectorCoverageFontImpl(gpu, ttfPath));
+    if (auto res = static_cast<VectorCoverageFontImpl*>(font.get())->init(); !res) {
+        return Err<Ptr>("Failed to initialize VectorCoverageFont", res);
     }
     return Ok(std::move(font));
 }

@@ -17,7 +17,8 @@
 #include <yetty/shader-manager.h>
 #include <yetty/wgpu-compat.h>
 #include <yetty/font-manager.h>
-#include <yetty/vector-font.h>
+#include <yetty/vector-sdf-font.h>
+#include <yetty/vector-coverage-font.h>
 #include <ytrace/ytrace.hpp>
 
 #ifndef CMAKE_SOURCE_DIR
@@ -46,7 +47,8 @@ constexpr uint8_t FONT_TYPE_MSDF = 0;   // Default text rendering
 constexpr uint8_t FONT_TYPE_BITMAP = 1; // Bitmap fonts (emoji, color fonts)
 constexpr uint8_t FONT_TYPE_SHADER = 2; // Single-cell shader glyphs
 constexpr uint8_t FONT_TYPE_CARD = 3;   // Multi-cell card glyphs
-constexpr uint8_t FONT_TYPE_VECTOR = 4; // Vector font (SDF curves)
+constexpr uint8_t FONT_TYPE_VECTOR = 4;   // Vector font (SDF curves)
+constexpr uint8_t FONT_TYPE_COVERAGE = 5; // Vector font (coverage-based)
 
 // Card glyph range - multi-cell widgets (U+100000 - U+100FFF)
 constexpr uint32_t CARD_GLYPH_BASE = 0x100000;
@@ -56,9 +58,13 @@ constexpr uint32_t CARD_GLYPH_END = 0x100FFF;
 constexpr uint32_t SHADER_GLYPH_BASE = 0x101000;
 constexpr uint32_t SHADER_GLYPH_END = 0x10FFFD;
 
-// Vector font glyph range - Plane 15 PUA-A (U+F0000 - U+FFFFD)
+// Vector SDF font glyph range - Plane 15 PUA-A (U+F0000 - U+F0FFF)
 constexpr uint32_t VECTOR_GLYPH_BASE = 0xF0000;
-constexpr uint32_t VECTOR_GLYPH_END = 0xFFFFD;
+constexpr uint32_t VECTOR_GLYPH_END = 0xF0FFF;
+
+// Vector Coverage font glyph range - Plane 15 PUA-A (U+F1000 - U+F1FFF)
+constexpr uint32_t COVERAGE_GLYPH_BASE = 0xF1000;
+constexpr uint32_t COVERAGE_GLYPH_END = 0xF1FFF;
 
 // =============================================================================
 // Copy mode key bindings (tmux vi-mode style)
@@ -130,6 +136,10 @@ inline bool isShaderGlyph(uint32_t codepoint) {
 
 inline bool isVectorGlyph(uint32_t codepoint) {
   return codepoint >= VECTOR_GLYPH_BASE && codepoint <= VECTOR_GLYPH_END;
+}
+
+inline bool isCoverageGlyph(uint32_t codepoint) {
+  return codepoint >= COVERAGE_GLYPH_BASE && codepoint <= COVERAGE_GLYPH_END;
 }
 
 // Check if codepoint is an emoji (common ranges)
@@ -389,7 +399,8 @@ private:
   BmFont::Ptr _bitmapFont;
   ShaderFont::Ptr _shaderGlyphFont;
   ShaderFont::Ptr _cardFont;
-  VectorFont::Ptr _vectorFont;
+  VectorSdfFont::Ptr _vectorFont;
+  VectorCoverageFont::Ptr _coverageFont;
   uint32_t _cachedSpaceGlyph = 0;
 
   // Callbacks
@@ -577,7 +588,8 @@ Result<void> GPUScreenImpl::init() noexcept {
     _bitmapFont = _ctx.fontManager->getDefaultBmFont();
     _shaderGlyphFont = _ctx.fontManager->getDefaultShaderGlyphFont();
     _cardFont = _ctx.fontManager->getDefaultCardFont();
-    _vectorFont = _ctx.fontManager->getDefaultVectorFont();
+    _vectorFont = _ctx.fontManager->getDefaultVectorSdfFont();
+    _coverageFont = _ctx.fontManager->getDefaultVectorCoverageFont();
   }
 
   // Cache space glyph index to avoid repeated lookups in hot paths
@@ -2670,8 +2682,12 @@ int GPUScreenImpl::onPutglyph(VTermGlyphInfo *info, VTermPos pos, void *user) {
   uint8_t fontType = FONT_TYPE_MSDF; // Default to MSDF text
 
   if (isVectorGlyph(cp)) {
-    // Vector font glyphs (SDF curves)
+    // Vector SDF font glyphs
     fontType = FONT_TYPE_VECTOR;
+    glyphIdx = cp;  // Shader uses codepoint directly
+  } else if (isCoverageGlyph(cp)) {
+    // Vector Coverage font glyphs
+    fontType = FONT_TYPE_COVERAGE;
     glyphIdx = cp;  // Shader uses codepoint directly
   } else if (isCardGlyph(cp)) {
     // Card glyphs (multi-cell widgets)
@@ -4708,7 +4724,7 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
       return Err<void>("Bitmap font resources not ready");
     }
 
-    WGPUBindGroupEntry bgEntries[10] = {};
+    WGPUBindGroupEntry bgEntries[12] = {};
 
     bgEntries[0].binding = 0;
     bgEntries[0].buffer = _uniformBuffer;
@@ -4755,9 +4771,24 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
     bgEntries[9].buffer = _vectorFont->getOffsetBuffer();
     bgEntries[9].size = _vectorFont->offsetTableSize();
 
+    // Coverage font bindings (10 and 11)
+    // Note: coverage font is optional, use vector font buffers as fallback if not available
+    WGPUBuffer coverageGlyphBuffer = _coverageFont ? _coverageFont->getGlyphBuffer() : _vectorFont->getGlyphBuffer();
+    WGPUBuffer coverageOffsetBuffer = _coverageFont ? _coverageFont->getOffsetBuffer() : _vectorFont->getOffsetBuffer();
+    size_t coverageGlyphSize = _coverageFont ? _coverageFont->bufferSize() : _vectorFont->bufferSize();
+    size_t coverageOffsetSize = _coverageFont ? _coverageFont->offsetTableSize() : _vectorFont->offsetTableSize();
+
+    bgEntries[10].binding = 10;
+    bgEntries[10].buffer = coverageGlyphBuffer;
+    bgEntries[10].size = coverageGlyphSize;
+
+    bgEntries[11].binding = 11;
+    bgEntries[11].buffer = coverageOffsetBuffer;
+    bgEntries[11].size = coverageOffsetSize;
+
     WGPUBindGroupDescriptor bindGroupDesc = {};
     bindGroupDesc.layout = shaderMgr->getGridBindGroupLayout();
-    bindGroupDesc.entryCount = 10;
+    bindGroupDesc.entryCount = 12;
     bindGroupDesc.entries = bgEntries;
     _bindGroup = wgpuDeviceCreateBindGroup(device, &bindGroupDesc);
     if (!_bindGroup) {

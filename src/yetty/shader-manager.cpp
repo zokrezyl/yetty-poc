@@ -806,8 +806,8 @@ Result<void> ShaderManagerImpl::createPipelineResources() {
     memcpy(mapped, quadVertices, sizeof(quadVertices));
     wgpuBufferUnmap(_quadVertexBuffer);
 
-    // 2. Create grid bind group layout (10 bindings)
-    WGPUBindGroupLayoutEntry entries[10] = {};
+    // 2. Create grid bind group layout (12 bindings)
+    WGPUBindGroupLayoutEntry entries[12] = {};
 
     // 0: Grid uniforms
     entries[0].binding = 0;
@@ -861,8 +861,18 @@ Result<void> ShaderManagerImpl::createPipelineResources() {
     entries[9].visibility = WGPUShaderStage_Fragment;
     entries[9].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
 
+    // 10: Coverage font glyph buffer SSBO
+    entries[10].binding = 10;
+    entries[10].visibility = WGPUShaderStage_Fragment;
+    entries[10].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
+
+    // 11: Coverage font offset table SSBO
+    entries[11].binding = 11;
+    entries[11].visibility = WGPUShaderStage_Fragment;
+    entries[11].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
+
     WGPUBindGroupLayoutDescriptor layoutDesc = {};
-    layoutDesc.entryCount = 10;
+    layoutDesc.entryCount = 12;
     layoutDesc.entries = entries;
     _gridBindGroupLayout = wgpuDeviceCreateBindGroupLayout(device, &layoutDesc);
     if (!_gridBindGroupLayout) {

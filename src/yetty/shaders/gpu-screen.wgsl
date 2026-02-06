@@ -105,13 +105,18 @@ struct Cell {
 @group(1) @binding(6) var emojiSampler: sampler;
 @group(1) @binding(7) var<storage, read> emojiMetadata: array<EmojiGlyphMetadata>;
 
-// Vector font bindings (group 1 continued)
+// Vector SDF font bindings (group 1 continued)
 // Glyph buffer: [header:u32][curve0.p0][curve0.p1][curve0.p2][curve1...]
 // Header: curveCount[16] | flags[16]
 // Each point: x[16] | y[16] packed as u32, normalized to [0,1]
 @group(1) @binding(8) var<storage, read> vectorGlyphBuffer: array<u32>;
 // Offset table: codepoint -> offset in vectorGlyphBuffer (0xFFFFFFFF = not present)
 @group(1) @binding(9) var<storage, read> vectorOffsetTable: array<u32>;
+
+// Vector Coverage font bindings (group 1 continued)
+// Same buffer format as SDF, but rendered with coverage-based anti-aliasing
+@group(1) @binding(10) var<storage, read> coverageGlyphBuffer: array<u32>;
+@group(1) @binding(11) var<storage, read> coverageOffsetTable: array<u32>;
 
 // Attribute bit masks (matches CellAttrs in grid.h)
 const ATTR_BOLD: u32 = 0x01u;           // Bit 0
@@ -138,9 +143,13 @@ const SHADER_GLYPH_BASE: u32 = 0x101000u;   // 1052672 decimal - shader glyph ra
 const SHADER_GLYPH_END: u32 = 0x10FFFDu;    // 1114109 decimal - shader glyph range end
 const SHADER_GLYPH_START: u32 = 0x100000u;  // Legacy alias
 
-// Vector font glyph range - Plane 15 PUA-A: U+F0000 - U+FFFFD
-const VECTOR_GLYPH_BASE: u32 = 0xF0000u;    // Vector font range start
-const VECTOR_GLYPH_END: u32 = 0xFFFFDu;     // Vector font range end
+// Vector SDF font glyph range - Plane 15 PUA-A: U+F0000 - U+F0FFF
+const VECTOR_GLYPH_BASE: u32 = 0xF0000u;    // Vector SDF font range start
+const VECTOR_GLYPH_END: u32 = 0xF0FFFu;     // Vector SDF font range end
+
+// Vector Coverage font glyph range - Plane 15 PUA-A: U+F1000 - U+F1FFF
+const COVERAGE_GLYPH_BASE: u32 = 0xF1000u;  // Vector coverage font range start
+const COVERAGE_GLYPH_END: u32 = 0xF1FFFu;   // Vector coverage font range end
 
 // Vertex input/output
 struct VertexInput {
@@ -227,9 +236,14 @@ fn isProceduralGlyph(glyphIndex: u32) -> bool {
     return glyphIndex >= CARD_GLYPH_BASE && glyphIndex <= SHADER_GLYPH_END;
 }
 
-// Check if glyph is a vector font glyph (Plane 15 PUA-A range)
+// Check if glyph is a vector SDF font glyph (Plane 15 PUA-A range: U+F0000-U+F0FFF)
 fn isVectorGlyph(glyphIndex: u32) -> bool {
     return glyphIndex >= VECTOR_GLYPH_BASE && glyphIndex <= VECTOR_GLYPH_END;
+}
+
+// Check if glyph is a vector coverage font glyph (Plane 15 PUA-A range: U+F1000-U+F1FFF)
+fn isCoverageGlyph(glyphIndex: u32) -> bool {
+    return glyphIndex >= COVERAGE_GLYPH_BASE && glyphIndex <= COVERAGE_GLYPH_END;
 }
 
 // ==== VECTOR FONT SDF RENDERING ====
@@ -396,6 +410,118 @@ fn sampleVectorGlyph(glyphIndex: u32, localUV: vec2<f32>) -> f32 {
         return -minDist;
     }
     return minDist;
+}
+
+// ==== VECTOR COVERAGE FONT RENDERING ====
+
+// Winding number for coverage font (uses coverageGlyphBuffer)
+fn coverageWindingNumber(glyphIndex: u32, pos: vec2<f32>) -> i32 {
+    let codepoint = glyphIndex - COVERAGE_GLYPH_BASE;
+    let offset = coverageOffsetTable[codepoint];
+    if (offset == 0xFFFFFFFFu) { return 0; }
+
+    let header = coverageGlyphBuffer[offset];
+    let curveCount = (header >> 16u) & 0xFFFFu;
+    if (curveCount == 0u) { return 0; }
+
+    var crossings = 0;
+    let curveBase = offset + 1u;
+
+    for (var i = 0u; i < curveCount; i++) {
+        let curveOffset = curveBase + i * 3u;
+        let p0 = unpackPoint(coverageGlyphBuffer[curveOffset]);
+        let p1 = unpackPoint(coverageGlyphBuffer[curveOffset + 1u]);
+        let p2 = unpackPoint(coverageGlyphBuffer[curveOffset + 2u]);
+
+        // Solve for t where curve.y = pos.y
+        let y0 = p0.y - pos.y;
+        let y1 = p1.y - pos.y;
+        let y2 = p2.y - pos.y;
+
+        let aa = y0 - 2.0 * y1 + y2;
+        let bb = 2.0 * (y1 - y0);
+        let cc = y0;
+
+        if (abs(aa) < 1e-6) {
+            // Linear case
+            if (abs(bb) > 1e-6) {
+                let t = -cc / bb;
+                if (t >= 0.0 && t < 1.0) {
+                    let mt = 1.0 - t;
+                    let x = mt * mt * p0.x + 2.0 * mt * t * p1.x + t * t * p2.x;
+                    if (x > pos.x) {
+                        let dy = 2.0 * mt * (p1.y - p0.y) + 2.0 * t * (p2.y - p1.y);
+                        crossings += select(-1, 1, dy > 0.0);
+                    }
+                }
+            }
+        } else {
+            let disc = bb * bb - 4.0 * aa * cc;
+            if (disc >= 0.0) {
+                let sqrtDisc = sqrt(disc);
+                let t1 = (-bb - sqrtDisc) / (2.0 * aa);
+                let t2 = (-bb + sqrtDisc) / (2.0 * aa);
+
+                if (t1 >= 0.0 && t1 < 1.0) {
+                    let mt = 1.0 - t1;
+                    let x = mt * mt * p0.x + 2.0 * mt * t1 * p1.x + t1 * t1 * p2.x;
+                    if (x > pos.x) {
+                        let dy = 2.0 * mt * (p1.y - p0.y) + 2.0 * t1 * (p2.y - p1.y);
+                        crossings += select(-1, 1, dy > 0.0);
+                    }
+                }
+                if (t2 >= 0.0 && t2 < 1.0 && abs(t2 - t1) > 1e-6) {
+                    let mt = 1.0 - t2;
+                    let x = mt * mt * p0.x + 2.0 * mt * t2 * p1.x + t2 * t2 * p2.x;
+                    if (x > pos.x) {
+                        let dy = 2.0 * mt * (p1.y - p0.y) + 2.0 * t2 * (p2.y - p1.y);
+                        crossings += select(-1, 1, dy > 0.0);
+                    }
+                }
+            }
+        }
+    }
+    return crossings;
+}
+
+// Sample coverage glyph using multi-sample anti-aliasing (4x4 grid)
+// Returns coverage value [0,1] where 1 = fully inside glyph
+fn sampleCoverageGlyph(glyphIndex: u32, localUV: vec2<f32>, pixelSize: vec2<f32>) -> f32 {
+    let codepoint = glyphIndex - COVERAGE_GLYPH_BASE;
+    let offset = coverageOffsetTable[codepoint];
+    if (offset == 0xFFFFFFFFu) {
+        return 0.0;  // Glyph not present
+    }
+
+    let header = coverageGlyphBuffer[offset];
+    let curveCount = (header >> 16u) & 0xFFFFu;
+    if (curveCount == 0u) {
+        return 0.0;  // Empty glyph
+    }
+
+    // 4x4 supersampling for coverage calculation
+    var coverage = 0.0;
+    let samples = 4;
+    let sampleWeight = 1.0 / f32(samples * samples);
+
+    for (var sy = 0; sy < samples; sy++) {
+        for (var sx = 0; sx < samples; sx++) {
+            // Jittered sample position within pixel
+            let sampleOffset = vec2<f32>(
+                (f32(sx) + 0.5) / f32(samples) - 0.5,
+                (f32(sy) + 0.5) / f32(samples) - 0.5
+            );
+            let samplePos = localUV + sampleOffset * pixelSize;
+
+            // Check if sample is inside glyph using winding number
+            let winding = coverageWindingNumber(glyphIndex, samplePos);
+            if (winding != 0) {
+                coverage += sampleWeight;
+            }
+        }
+    }
+
+    return coverage;
 }
 
 // Extract font type from cell attrs (bits 5-7)
@@ -577,6 +703,21 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 
             finalColor = mix(bgColor.rgb, fgColor.rgb, alpha);
             hasGlyph = alpha > 0.01;
+        } else if (isCoverageGlyph(glyphIndex)) {
+            // Coverage font: render using multi-sample coverage calculation
+            let localUV = vec2<f32>(
+                localPxBase.x / grid.cellSize.x,
+                1.0 - localPxBase.y / grid.cellSize.y
+            );
+
+            // Pixel size in UV space
+            let pixelSize = vec2<f32>(1.0 / grid.cellSize.x, 1.0 / grid.cellSize.y);
+
+            // Get coverage value (0-1)
+            let coverage = sampleCoverageGlyph(glyphIndex, localUV, pixelSize);
+
+            finalColor = mix(bgColor.rgb, fgColor.rgb, coverage);
+            hasGlyph = coverage > 0.01;
         } else if (isCardGlyph(glyphIndex) || isShaderGlyph(glyphIndex)) {
             // Card or shader glyph: render via shader function
             let localUV = localPxBase / grid.cellSize;  // Normalize to 0-1

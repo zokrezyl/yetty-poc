@@ -1,5 +1,6 @@
 #include <yetty/font-manager.h>
-#include <yetty/vector-font.h>
+#include <yetty/vector-sdf-font.h>
+#include <yetty/vector-coverage-font.h>
 #include <yetty/shader-manager.h>
 #include <ytrace/ytrace.hpp>
 
@@ -42,8 +43,8 @@ public:
             res.error().message());
     }
 
-    if (auto res = initVectorFont(); !res) {
-      return Err<void>("Failed to initialize VectorFont", res);
+    if (auto res = initVectorSdfFont(); !res) {
+      return Err<void>("Failed to initialize VectorSdfFont", res);
     }
 
     _initialized = true;
@@ -163,38 +164,72 @@ public:
 
   ShaderFont::Ptr getDefaultCardFont() noexcept override { return _cardFont; }
 
-  Result<VectorFont::Ptr> getVectorFont(const std::string &ttfPath) noexcept override {
+  Result<VectorSdfFont::Ptr> getVectorSdfFont(const std::string &ttfPath) noexcept override {
     auto it = _vectorFontCache.find(ttfPath);
     if (it != _vectorFontCache.end()) {
       return Ok(it->second);
     }
 
-    auto result = VectorFont::create(_gpu, ttfPath);
+    auto result = VectorSdfFont::create(_gpu, ttfPath);
     if (!result) {
-      return Err<VectorFont::Ptr>("Failed to create VectorFont: " + ttfPath, result);
+      return Err<VectorSdfFont::Ptr>("Failed to create VectorSdfFont: " + ttfPath, result);
     }
 
     auto font = std::move(*result);
 
     // Load basic Latin glyphs
     if (auto res = font->loadBasicLatin(); !res) {
-      ywarn("Failed to load basic Latin for VectorFont: {}", res.error().message());
+      ywarn("Failed to load basic Latin for VectorSdfFont: {}", res.error().message());
     }
 
     _vectorFontCache[ttfPath] = font;
 
-    if (!_defaultVectorFont) {
-      _defaultVectorFont = font;
+    if (!_defaultVectorSdfFont) {
+      _defaultVectorSdfFont = font;
     }
 
-    yinfo("Created VectorFont: {} ({} glyphs, {} curves, {} bytes)",
+    yinfo("Created VectorSdfFont: {} ({} glyphs, {} curves, {} bytes)",
           ttfPath, font->glyphCount(), font->totalCurves(), font->bufferSize());
 
     return Ok(font);
   }
 
-  VectorFont::Ptr getDefaultVectorFont() noexcept override {
-    return _defaultVectorFont;
+  VectorSdfFont::Ptr getDefaultVectorSdfFont() noexcept override {
+    return _defaultVectorSdfFont;
+  }
+
+  Result<VectorCoverageFont::Ptr> getVectorCoverageFont(const std::string &ttfPath) noexcept override {
+    auto it = _vectorCoverageFontCache.find(ttfPath);
+    if (it != _vectorCoverageFontCache.end()) {
+      return Ok(it->second);
+    }
+
+    auto result = VectorCoverageFont::create(_gpu, ttfPath);
+    if (!result) {
+      return Err<VectorCoverageFont::Ptr>("Failed to create VectorCoverageFont: " + ttfPath, result);
+    }
+
+    auto font = std::move(*result);
+
+    // Load basic Latin glyphs
+    if (auto res = font->loadBasicLatin(); !res) {
+      ywarn("Failed to load basic Latin for VectorCoverageFont: {}", res.error().message());
+    }
+
+    _vectorCoverageFontCache[ttfPath] = font;
+
+    if (!_defaultVectorCoverageFont) {
+      _defaultVectorCoverageFont = font;
+    }
+
+    yinfo("Created VectorCoverageFont: {} ({} glyphs, {} curves, {} bytes)",
+          ttfPath, font->glyphCount(), font->totalCurves(), font->bufferSize());
+
+    return Ok(font);
+  }
+
+  VectorCoverageFont::Ptr getDefaultVectorCoverageFont() noexcept override {
+    return _defaultVectorCoverageFont;
   }
 
   void setDefaultFont(const std::string &fontName) noexcept override {
@@ -274,7 +309,7 @@ private:
     return Ok();
   }
 
-  Result<void> initVectorFont() noexcept {
+  Result<void> initVectorSdfFont() noexcept {
     // Use the default monospace font TTF
     std::string ttfPath = std::string(CMAKE_SOURCE_DIR) +
                           "/assets/DejaVuSansMNerdFontMono-Regular.ttf";
@@ -283,22 +318,22 @@ private:
       return Err<void>("Default TTF not found: " + ttfPath);
     }
 
-    auto result = VectorFont::create(_gpu, ttfPath);
+    auto result = VectorSdfFont::create(_gpu, ttfPath);
     if (!result) {
-      return Err<void>("Failed to create VectorFont", result);
+      return Err<void>("Failed to create VectorSdfFont", result);
     }
 
-    _defaultVectorFont = std::move(*result);
+    _defaultVectorSdfFont = std::move(*result);
 
     // Load basic Latin glyphs for testing
-    if (auto res = _defaultVectorFont->loadBasicLatin(); !res) {
+    if (auto res = _defaultVectorSdfFont->loadBasicLatin(); !res) {
       return Err<void>("Failed to load basic Latin glyphs", res);
     }
 
-    yinfo("VectorFont initialized: {} glyphs, {} curves, {} bytes",
-          _defaultVectorFont->glyphCount(),
-          _defaultVectorFont->totalCurves(),
-          _defaultVectorFont->bufferSize());
+    yinfo("VectorSdfFont initialized: {} glyphs, {} curves, {} bytes",
+          _defaultVectorSdfFont->glyphCount(),
+          _defaultVectorSdfFont->totalCurves(),
+          _defaultVectorSdfFont->bufferSize());
 
     return Ok();
   }
@@ -334,8 +369,10 @@ private:
   BmFont::Ptr _bitmapFont;
   ShaderFont::Ptr _shaderGlyphFont;
   ShaderFont::Ptr _cardFont;
-  std::unordered_map<std::string, VectorFont::Ptr> _vectorFontCache;
-  VectorFont::Ptr _defaultVectorFont;
+  std::unordered_map<std::string, VectorSdfFont::Ptr> _vectorFontCache;
+  VectorSdfFont::Ptr _defaultVectorSdfFont;
+  std::unordered_map<std::string, VectorCoverageFont::Ptr> _vectorCoverageFontCache;
+  VectorCoverageFont::Ptr _defaultVectorCoverageFont;
   bool _initialized = false;
 };
 

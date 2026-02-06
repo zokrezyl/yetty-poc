@@ -359,7 +359,7 @@ Result<void> YettyImpl::initWebGPU() noexcept {
     limits.maxDynamicStorageBuffersPerPipelineLayout = WGPU_LIMIT_U32_UNDEFINED;
     limits.maxSampledTexturesPerShaderStage = WGPU_LIMIT_U32_UNDEFINED;
     limits.maxSamplersPerShaderStage = WGPU_LIMIT_U32_UNDEFINED;
-    limits.maxStorageBuffersPerShaderStage = WGPU_LIMIT_U32_UNDEFINED;
+    limits.maxStorageBuffersPerShaderStage = 10;  // Need 9 for grid shader (vector + coverage fonts)
     limits.maxStorageTexturesPerShaderStage = WGPU_LIMIT_U32_UNDEFINED;
     limits.maxUniformBuffersPerShaderStage = WGPU_LIMIT_U32_UNDEFINED;
     limits.maxUniformBufferBindingSize = WGPU_LIMIT_U64_UNDEFINED;
