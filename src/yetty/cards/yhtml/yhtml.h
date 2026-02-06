@@ -91,10 +91,12 @@ public:
     //=========================================================================
     const char* typeName() const override { return "yhtml"; }
     bool needsBuffer() const override { return true; }
+    bool needsTexture() const override { return true; }
     uint32_t metadataSlotIndex() const override { return _metaHandle.offset / 64; }
 
     void declareBufferNeeds() override;
     Result<void> allocateBuffers() override;
+    Result<void> allocateTextures() override;
     Result<void> render(float time) override;
     Result<void> dispose() override;
     void suspend() override;
@@ -128,8 +130,6 @@ public:
     void setSceneBounds(float minX, float minY, float maxX, float maxY);
 
     MsdfAtlas::Ptr atlas() const { return _atlas; }
-    MsMsdfFont::Ptr font() const { return _font; }
-    FontManager::Ptr fontManager() const { return _fontManager; }
     int addFont(const std::string& ttfPath);
 
     void clear();
@@ -148,15 +148,16 @@ public:
           const std::string& args, const std::string& payload);
 
 private:
-    // Metadata structure (matches shader layout - 64 bytes)
+    // Metadata structure (matches ypdf shader layout - 64 bytes)
+    // Layout identical to ypdf for consistency, with primitiveCount in flags field
     struct Metadata {
-        uint32_t primitiveOffset;   // 0
-        uint32_t primitiveCount;    // 4
+        uint32_t atlasXW;           // 0  [15:0]=atlasX, [31:16]=msdfAtlasWidth
+        uint32_t atlasYH;           // 4  [15:0]=atlasY, [31:16]=msdfAtlasHeight
         uint32_t gridOffset;        // 8
         uint32_t gridWidth;         // 12
         uint32_t gridHeight;        // 16
         uint32_t cellSize;          // 20 (f32 stored as bits)
-        uint32_t glyphOffset;       // 24
+        uint32_t glyphOffset;       // 24 - offset of HtmlGlyph array
         uint32_t glyphCount;        // 28
         uint32_t sceneMinX;         // 32 (f32 stored as bits)
         uint32_t sceneMinY;         // 36 (f32 stored as bits)
@@ -164,7 +165,7 @@ private:
         uint32_t sceneMaxY;         // 44 (f32 stored as bits)
         uint32_t widthCells;        // 48 [15:0]=widthCells, [31:16]=panX (i16)
         uint32_t heightCells;       // 52 [15:0]=heightCells, [31:16]=panY (i16)
-        uint32_t flags;             // 56 [15:0]=flags, [31:16]=zoom (f16)
+        uint32_t flags;             // 56 [15:0]=primitiveCount, [31:16]=zoom (f16)
         uint32_t bgColor;           // 60
     };
     static_assert(sizeof(Metadata) == 64, "Metadata must be 64 bytes");
@@ -226,11 +227,14 @@ private:
     uint32_t _cellHeightPx = 0;
     bool _needsHtmlRender = false;
 
-    // Font / atlas (own instances)
-    FontManager::Ptr _fontManager;
-    MsMsdfFont::Ptr _font;
+    // Font / atlas (own instances - NO fontManager dependency)
+    std::string _cacheDir;
+    MsdfCdbProvider::Ptr _cdbProvider;
     MsdfAtlas::Ptr _atlas;
     std::unordered_map<std::string, int> _fontIdCache;   // cdbPath -> fontId
+
+    // Atlas texture handle for cardTextureManager
+    TextureHandle _atlasTextureHandle = TextureHandle::invalid();
 
     // Primitive and glyph data
     std::vector<HtmlSDFPrimitive> _primitives;
@@ -244,6 +248,7 @@ private:
     uint32_t _gridOffset = 0;
     uint32_t _primitiveOffset = 0;
     uint32_t _glyphOffset = 0;
+    uint32_t _glyphMetaOffset = 0;
 
     // Scene bounds
     float _sceneMinX = 0, _sceneMinY = 0;

@@ -3,17 +3,17 @@
 // O(1) UNIFORM GRID SPATIAL HASHING
 //
 // Uses shared SDF functions from lib/distfunctions.wgsl
-// Uses text rendering from lib/text.wgsl
+// Samples MSDF text from cardImageAtlas (card's own MSDF atlas)
 //
 // =============================================================================
-// Metadata layout (64 bytes = 16 u32s):
-//   offset 0:  primitiveOffset (u32)
-//   offset 1:  primitiveCount (u32)
+// Metadata layout (64 bytes = 16 u32s) - matches yhtml.h Metadata struct:
+//   offset 0:  atlasXW (u32)       [15:0]=atlasX, [31:16]=msdfAtlasWidth
+//   offset 1:  atlasYH (u32)       [15:0]=atlasY, [31:16]=msdfAtlasHeight
 //   offset 2:  gridOffset (u32)
 //   offset 3:  gridWidth (u32)
 //   offset 4:  gridHeight (u32)
 //   offset 5:  cellSize (f32)
-//   offset 6:  glyphOffset (u32)   - offset of glyph data in cardStorage
+//   offset 6:  glyphOffset (u32)   - offset of HtmlGlyph array in cardStorage
 //   offset 7:  glyphCount (u32)    - number of text glyphs
 //   offset 8:  sceneMinX (f32)     - content bounds (= grid origin)
 //   offset 9:  sceneMinY (f32)
@@ -21,21 +21,37 @@
 //   offset 11: sceneMaxY (f32)
 //   offset 12: widthCells  [15:0] = widthCells,  [31:16] = panX (i16 fixedpoint)
 //   offset 13: heightCells [15:0] = heightCells, [31:16] = panY (i16 fixedpoint)
-//   offset 14: flags       [15:0] = flags,       [31:16] = zoom (f16)
+//   offset 14: flags       [15:0] = primitiveCount, [31:16] = zoom (f16)
 //   offset 15: bgColor (u32)
 //
 // Pan fixedpoint: panScene = i16value / 16384.0 * sceneExtent
 // Zoom f16: IEEE 754 half-float
+// primitiveOffset computed from: gridOffset - primitiveCount * 24 (SDF prim = 96 bytes = 24 floats)
 // =============================================================================
 // HtmlGlyph layout (32 bytes = 8 floats):
 //   offset 0: x (f32)        - position in scene coords
 //   offset 1: y (f32)
 //   offset 2: width (f32)    - size in scene coords
 //   offset 3: height (f32)
-//   offset 4: glyphIndex (u32) - index in glyphMetadata
+//   offset 4: glyphIndex (u32) - index in GlyphMetadataGPU array
 //   offset 5: color (u32)    - packed RGBA
 //   offset 6: layer (u32)
 //   offset 7: _pad (u32)
+// =============================================================================
+// GlyphMetadataGPU layout (40 bytes = 10 floats, at glyphOffset + glyphCount * 8):
+//   offset 0: uvMinX (f32)
+//   offset 1: uvMinY (f32)
+//   offset 2: uvMaxX (f32)
+//   offset 3: uvMaxY (f32)
+//   offset 4: sizeX (f32)
+//   offset 5: sizeY (f32)
+//   offset 6: bearingX (f32)
+//   offset 7: bearingY (f32)
+//   offset 8: advance (f32)
+//   offset 9: _pad (f32)
+// =============================================================================
+// Note: SDF primitives are stored at primitiveOffset. The grid comes after
+// primitives in cardStorage.
 // =============================================================================
 
 // Max entries per cell (matches C++ MAX_ENTRIES_PER_CELL)
@@ -58,8 +74,13 @@ fn shaderGlyph_1048585(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
     let relCol = bg24 & 0xFFFu;
     let relRow = (bg24 >> 12u) & 0xFFFu;
 
-    // Read metadata
-    let primitiveOffset = cardMetadata[metaOffset + 0u];
+    // Read metadata (matching yhtml.h Metadata struct layout - same as ypdf)
+    let atlasXW = cardMetadata[metaOffset + 0u];
+    let atlasYH = cardMetadata[metaOffset + 1u];
+    let atlasX = atlasXW & 0xFFFFu;
+    let atlasY = atlasYH & 0xFFFFu;
+    let msdfAtlasW = atlasXW >> 16u;
+    let msdfAtlasH = atlasYH >> 16u;
     let gridOffset = cardMetadata[metaOffset + 2u];
     let gridWidth = cardMetadata[metaOffset + 3u];
     let gridHeight = cardMetadata[metaOffset + 4u];
@@ -67,6 +88,10 @@ fn shaderGlyph_1048585(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
     let glyphOffset = cardMetadata[metaOffset + 6u];
     let glyphCount = cardMetadata[metaOffset + 7u];
     let invCellSize = select(0.0, 1.0 / cellSize, cellSize > 0.0);
+
+    // Compute glyph metadata offset (after HtmlGlyph array)
+    // HtmlGlyph = 32 bytes = 8 floats, GlyphMetadataGPU = 40 bytes = 10 floats
+    let glyphMetaOffset = glyphOffset + glyphCount * 8u;
 
     // Content bounds (= grid origin)
     let contentMinX = bitcast<f32>(cardMetadata[metaOffset + 8u]);
@@ -82,11 +107,17 @@ fn shaderGlyph_1048585(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
     let panXi16 = i32(packedWC >> 16u) - select(0, 65536, (packedWC >> 16u) >= 32768u);
     let panYi16 = i32(packedHC >> 16u) - select(0, 65536, (packedHC >> 16u) >= 32768u);
 
-    // Unpack flags and zoom f16
+    // Unpack flags and zoom f16 (same as ypdf)
     let packedFlags = cardMetadata[metaOffset + 14u];
+    let primitiveCount = packedFlags & 0xFFFFu;
     let zoomF16 = packedFlags >> 16u;
 
-    // f16 -> f32 conversion
+    // Compute primitiveOffset from gridOffset and primitiveCount
+    // Buffer layout: [primitives][grid][glyphs][glyphMeta]
+    // SDFPrimitive = 96 bytes = 24 floats
+    let primitiveOffset = gridOffset - primitiveCount * 24u;
+
+    // f16 -> f32 conversion (same as ypdf)
     let f16sign = (zoomF16 >> 15u) & 1u;
     let f16exp  = (zoomF16 >> 10u) & 0x1Fu;
     let f16mant = zoomF16 & 0x3FFu;
@@ -167,6 +198,10 @@ fn shaderGlyph_1048585(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
 
     let primSize = 24u;   // SDFPrimitive = 96 bytes = 24 floats
     let glyphSize = 8u;   // HtmlGlyph = 32 bytes = 8 floats
+    let metaSize = 10u;   // GlyphMetadataGPU = 40 bytes = 10 floats
+
+    // Get card atlas size for UV computation
+    let cardAtlasSize = vec2<f32>(textureDimensions(cardImageAtlas));
 
     for (var i = 0u; i < loopCount; i++) {
         let rawIdx = bitcast<u32>(cardStorage[cellOffset + 1u + i]);
@@ -186,14 +221,46 @@ fn shaderGlyph_1048585(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
             if (scenePos.x >= gx && scenePos.x < gx + gw &&
                 scenePos.y >= gy && scenePos.y < gy + gh) {
 
-                let glyphUV = vec2<f32>(
+                // Compute local UV within glyph quad
+                let localGlyphUV = vec2<f32>(
                     (scenePos.x - gx) / gw,
                     (scenePos.y - gy) / gh
                 );
-                let gColor = unpackColor(gColorPacked);
-                let glyphResult = renderMsdfGlyph(glyphUV, gIdx, gColor, resultColor, grid.pixelRange, screenScale);
-                if (glyphResult.alpha > 0.01) {
-                    resultColor = glyphResult.color;
+
+                // Read glyph metadata from cardStorage
+                let metaOff = glyphMetaOffset + gIdx * metaSize;
+                let uvMinX = cardStorage[metaOff + 0u];
+                let uvMinY = cardStorage[metaOff + 1u];
+                let uvMaxX = cardStorage[metaOff + 2u];
+                let uvMaxY = cardStorage[metaOff + 3u];
+
+                // Interpolate UV within glyph's UV rect in the MSDF atlas (normalized [0,1])
+                let msdfUV = vec2<f32>(
+                    mix(uvMinX, uvMaxX, localGlyphUV.x),
+                    mix(uvMinY, uvMaxY, localGlyphUV.y)
+                );
+
+                // Convert to cardImageAtlas UV:
+                // 1. msdfUV is [0,1] normalized within MSDF atlas
+                // 2. Convert to pixels in MSDF atlas: msdfPixel = msdfUV * msdfAtlasSize
+                // 3. Add atlas offset in cardImageAtlas: cardPixel = (atlasX, atlasY) + msdfPixel
+                // 4. Normalize to cardImageAtlas: finalUV = cardPixel / cardAtlasSize
+                let msdfPixel = msdfUV * vec2<f32>(f32(msdfAtlasW), f32(msdfAtlasH));
+                let cardPixel = vec2<f32>(f32(atlasX), f32(atlasY)) + msdfPixel;
+                let sampleUV = cardPixel / cardAtlasSize;
+
+                // Sample MSDF from card atlas
+                let msdf = textureSampleLevel(cardImageAtlas, cardImageSampler, sampleUV, 0.0);
+
+                // MSDF distance calculation
+                let sd = median(msdf.r, msdf.g, msdf.b);
+                let pxRange = grid.pixelRange;
+                let pxDist = pxRange * (sd - 0.5);
+                let alpha = clamp(pxDist * screenScale + 0.5, 0.0, 1.0);
+
+                if (alpha > 0.01) {
+                    let gColor = unpackColor(gColorPacked);
+                    resultColor = mix(resultColor, gColor, alpha);
                 }
             }
         } else {

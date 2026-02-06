@@ -18,10 +18,9 @@ namespace yetty::card {
 
 class HtmlContainerImpl : public HtmlContainer {
 public:
-    HtmlContainerImpl(YHtml* htmlCard, MsMsdfFont::Ptr font,
+    HtmlContainerImpl(YHtml* htmlCard, MsMsdfFont::Ptr /*font*/,
                       float defaultFontSize, HttpFetcher* fetcher)
         : _htmlCard(htmlCard)
-        , _font(std::move(font))
         , _fetcher(fetcher)
         , _defaultFontSize(defaultFontSize)
     {}
@@ -77,12 +76,12 @@ public:
             uint32_t capIdx = atlas->loadGlyph(fi->fontId, 'H');
             uint32_t descIdx = atlas->loadGlyph(fi->fontId, 'p');
 
-            if (capIdx < metadata.size()) {
+            if (capIdx < metadata.size() && metadata[capIdx]._bearingY > 0) {
                 fi->ascent = metadata[capIdx]._bearingY * scale;
             } else {
                 fi->ascent = fontSize * 0.8f;
             }
-            if (descIdx < metadata.size()) {
+            if (descIdx < metadata.size() && metadata[descIdx]._sizeY > 0) {
                 fi->descent = (metadata[descIdx]._sizeY - metadata[descIdx]._bearingY) * scale;
             } else {
                 fi->descent = fontSize * 0.2f;
@@ -134,7 +133,13 @@ public:
         if (!fi || !text || !*text || !_htmlCard) return;
 
         uint32_t packed = packColor(color);
-        float baseline = static_cast<float>(pos.bottom()) - fi->descent;
+        // Baseline = top of position box + ascent (standard text rendering)
+        float baseline = static_cast<float>(pos.y) + fi->ascent;
+
+        yinfo("draw_text: '{}' pos=({},{} {}x{}) ascent={:.1f} descent={:.1f} baseline={:.1f}",
+              std::string(text).substr(0, 20), pos.x, pos.y, pos.width, pos.height,
+              fi->ascent, fi->descent, baseline);
+
         _htmlCard->addText(static_cast<float>(pos.x), baseline,
                            text, fi->size, packed, _layer, fi->fontId);
 
@@ -503,21 +508,15 @@ private:
                 continue;
             }
 
-            uint32_t glyphIdx;
-            if (fi.fontId > 0) {
-                glyphIdx = atlas->loadGlyph(fi.fontId, cp);
-            } else if (_font) {
-                Font::Style style = Font::Style::Regular;
-                if (fi.bold && fi.italic) style = Font::Style::BoldItalic;
-                else if (fi.bold) style = Font::Style::Bold;
-                else if (fi.italic) style = Font::Style::Italic;
-                glyphIdx = _font->getGlyphIndex(cp, style);
-            } else {
-                continue;
-            }
+            // fontId 0 is the default sans-serif font loaded in yhtml::init()
+            // Note: glyphIdx 0 is the placeholder with advance=0, use fallback
+            uint32_t glyphIdx = atlas->loadGlyph(fi.fontId, cp);
 
-            if (glyphIdx < metadata.size()) {
+            if (glyphIdx > 0 && glyphIdx < metadata.size()) {
                 width += metadata[glyphIdx]._advance * scale;
+            } else {
+                // Fallback for missing glyphs - use half em width
+                width += fi.size * 0.5f;
             }
         }
 
@@ -532,7 +531,6 @@ private:
     }
 
     YHtml* _htmlCard;
-    MsMsdfFont::Ptr _font;
     HttpFetcher* _fetcher;
     float _defaultFontSize;
     int _viewWidth = 600;

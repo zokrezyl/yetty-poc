@@ -78,7 +78,8 @@ YHtml::YHtml(const YettyContext& ctx,
     : Card(ctx.cardManager, ctx.gpu, x, y, widthCells, heightCells)
     , _argsStr(args)
     , _payloadStr(payload)
-    , _fontManager(ctx.fontManager)
+    , _cacheDir(ctx.fontManager ? ctx.fontManager->getCacheDir() : "/tmp")
+    , _cdbProvider(ctx.fontManager ? ctx.fontManager->getCdbProvider() : nullptr)
 {
     _shaderGlyph = SHADER_GLYPH;
 }
@@ -288,6 +289,33 @@ Result<void> YHtml::allocateBuffers() {
 }
 
 //=============================================================================
+// allocateTextures — write atlas to cardTextureManager
+//=============================================================================
+
+Result<void> YHtml::allocateTextures() {
+    uint32_t atlasW = _atlas->getAtlasWidth();
+    uint32_t atlasH = _atlas->getAtlasHeight();
+    const auto& atlasData = _atlas->getAtlasData();
+
+    if (atlasData.empty() || atlasW == 0 || atlasH == 0) {
+        return Ok();
+    }
+
+    // Allocate handle
+    auto allocResult = _cardMgr->textureManager()->allocate(atlasW, atlasH);
+    if (!allocResult) {
+        return Err<void>("YHtml::allocateTextures: failed to allocate texture handle", allocResult);
+    }
+    _atlasTextureHandle = *allocResult;
+
+    // Write atlas pixel data
+    _cardMgr->textureManager()->write(_atlasTextureHandle, atlasData.data());
+    yinfo("YHtml::allocateTextures: atlas {}x{} -> handle id={}", atlasW, atlasH, _atlasTextureHandle.id);
+
+    return Ok();
+}
+
+//=============================================================================
 // HTML rendering via litehtml
 //=============================================================================
 
@@ -373,18 +401,13 @@ void YHtml::addText(float x, float y, const char* text,
             continue;
         }
 
-        // Load glyph from atlas
-        uint32_t glyphIndex;
-        if (fontId > 0) {
-            glyphIndex = _atlas->loadGlyph(fontId, codepoint);
-        } else if (_font) {
-            glyphIndex = _font->getGlyphIndex(codepoint);
-        } else {
-            continue;
-        }
+        // Load glyph from atlas (fontId 0 is the default sans-serif font)
+        // Note: glyphIndex 0 is the placeholder with sizeX=sizeY=advance=0
+        uint32_t glyphIndex = _atlas->loadGlyph(fontId, codepoint);
 
         const auto& metadata = _atlas->getGlyphMetadata();
-        if (glyphIndex >= metadata.size()) {
+        if (glyphIndex == 0 || glyphIndex >= metadata.size()) {
+            // Missing glyph - advance cursor but don't render
             cursorX += fontSize * 0.5f;
             continue;
         }
@@ -397,13 +420,17 @@ void YHtml::addText(float x, float y, const char* text,
         g.y = y - glyph._bearingY * scale;
         g.width = glyph._sizeX * scale;
         g.height = glyph._sizeY * scale;
-        if (codepoint == 'H' || codepoint == 'g' || codepoint == 'y' || codepoint == 'j') {
-            ydebug("YHtml::addText glyph='{}' baseline={:.1f} bearingY={:.1f} sizeY={:.1f} scale={:.3f} -> g.y={:.1f} g.h={:.1f} bottom={:.1f}",
-                   static_cast<char>(codepoint), y, glyph._bearingY, glyph._sizeY, scale, g.y, g.height, g.y + g.height);
-        }
         g.glyphIndex = glyphIndex;
         g.color = color;
         g.layer = layer;
+
+        // Debug: show positioning for descender chars
+        if (codepoint == 'y' || codepoint == 'g' || codepoint == 'p' || codepoint == 'j') {
+            yinfo("addText descender '{}': baseline={:.1f} bearingY={:.1f} sizeY={:.1f} scale={:.3f} -> g.y={:.1f} bottom={:.1f}",
+                  static_cast<char>(codepoint), y, glyph._bearingY, glyph._sizeY, scale,
+                  g.y, g.y + g.height);
+        }
+
         _glyphs.push_back(g);
 
         cursorX += glyph._advance * scale;
@@ -545,11 +572,10 @@ void YHtml::clear() {
 //=============================================================================
 
 int YHtml::addFont(const std::string& ttfPath) {
-    if (!_atlas || !_fontManager) return -1;
+    if (!_atlas) return -1;
 
     auto stem = std::filesystem::path(ttfPath).stem().string();
-    auto cacheDir = _fontManager->getCacheDir();
-    auto cdbPath = cacheDir + "/" + stem + ".cdb";
+    auto cdbPath = _cacheDir + "/" + stem + ".cdb";
 
     // Check local cache
     auto it = _fontIdCache.find(cdbPath);
@@ -557,8 +583,7 @@ int YHtml::addFont(const std::string& ttfPath) {
 
     // Generate CDB if missing
     if (!std::filesystem::exists(cdbPath)) {
-        auto provider = _fontManager->getCdbProvider();
-        if (!provider) {
+        if (!_cdbProvider) {
             yerror("YHtml::addFont: no CDB provider available");
             return -1;
         }
@@ -567,7 +592,7 @@ int YHtml::addFont(const std::string& ttfPath) {
         cfg.ttfPath = ttfPath;
         cfg.cdbPath = cdbPath;
 
-        if (auto res = provider->generate(cfg); !res) {
+        if (auto res = _cdbProvider->generate(cfg); !res) {
             yerror("YHtml::addFont: CDB generation failed for {}: {}",
                    ttfPath, res.error().message());
             return -1;
@@ -741,7 +766,8 @@ uint32_t YHtml::computeDerivedSize() const {
     uint32_t primBytes = static_cast<uint32_t>(_primitives.size() * sizeof(HtmlSDFPrimitive));
     uint32_t gridBytes = gridW * gridH * cellStride * sizeof(uint32_t);
     uint32_t glyphBytes = static_cast<uint32_t>(_glyphs.size() * sizeof(HtmlGlyph));
-    return primBytes + gridBytes + glyphBytes;
+    uint32_t glyphMetaBytes = static_cast<uint32_t>(_atlas->getGlyphMetadata().size() * sizeof(GlyphMetadataGPU));
+    return primBytes + gridBytes + glyphBytes + glyphMetaBytes;
 }
 
 //=============================================================================
@@ -781,12 +807,14 @@ Result<void> YHtml::rebuildAndUpload() {
     uint32_t gridTotalU32 = gridW * gridH * cellStride;
     uint32_t gridBytes = gridTotalU32 * sizeof(uint32_t);
     uint32_t glyphBytes = static_cast<uint32_t>(_glyphs.size() * sizeof(HtmlGlyph));
-    uint32_t derivedTotalSize = primBytes + gridBytes + glyphBytes;
+    const auto& glyphMeta = _atlas->getGlyphMetadata();
+    uint32_t glyphMetaBytes = static_cast<uint32_t>(glyphMeta.size() * sizeof(GlyphMetadataGPU));
+    uint32_t derivedTotalSize = primBytes + gridBytes + glyphBytes + glyphMetaBytes;
 
     yinfo("YHtml::rebuild: grid={}x{} cellSize={:.1f} derivedTotal={} "
-          "prims={} glyphs={} zoom={:.2f}",
+          "prims={} glyphs={} glyphMeta={} zoom={:.2f}",
           gridW, gridH, cellSize, derivedTotalSize,
-          _primitives.size(), _glyphs.size(), _viewZoom);
+          _primitives.size(), _glyphs.size(), glyphMeta.size(), _viewZoom);
 
     // Allocate or reallocate derived storage if needed
     if (derivedTotalSize > 0) {
@@ -835,6 +863,13 @@ Result<void> YHtml::rebuildAndUpload() {
         if (!_glyphs.empty()) {
             std::memcpy(base + offset, _glyphs.data(), glyphBytes);
         }
+        offset += glyphBytes;
+
+        // Copy glyph metadata (uvMin, uvMax, etc.) for shader
+        _glyphMetaOffset = (_derivedStorage.offset + offset) / sizeof(float);
+        if (!glyphMeta.empty()) {
+            std::memcpy(base + offset, glyphMeta.data(), glyphMetaBytes);
+        }
 
         _cardMgr->bufferManager()->markBufferDirty(_derivedStorage);
     }
@@ -872,9 +907,20 @@ Result<void> YHtml::uploadMetadata() {
     int16_t panYi16 = static_cast<int16_t>(std::clamp(
         _viewPanY / std::max(contentH, 1e-6f) * 16384.0f, -32768.0f, 32767.0f));
 
+    // Get atlas position from texture manager
+    AtlasPosition atlasPos = {0, 0};
+    if (_atlasTextureHandle.isValid()) {
+        atlasPos = _cardMgr->textureManager()->getAtlasPosition(_atlasTextureHandle);
+    }
+    uint32_t msdfAtlasW = _atlas->getAtlasWidth();
+    uint32_t msdfAtlasH = _atlas->getAtlasHeight();
+
+    // Pack primitiveCount in flags[15:0], zoom in flags[31:16] (same as ypdf)
+    uint32_t primitiveCount = static_cast<uint32_t>(_primitives.size());
+
     Metadata meta = {};
-    meta.primitiveOffset = _primitiveOffset;
-    meta.primitiveCount = static_cast<uint32_t>(_primitives.size());
+    meta.atlasXW = (atlasPos.x & 0xFFFF) | ((msdfAtlasW & 0xFFFF) << 16);
+    meta.atlasYH = (atlasPos.y & 0xFFFF) | ((msdfAtlasH & 0xFFFF) << 16);
     meta.gridOffset = _gridOffset;
     meta.gridWidth = _gridWidth;
     meta.gridHeight = _gridHeight;
@@ -887,15 +933,15 @@ Result<void> YHtml::uploadMetadata() {
     std::memcpy(&meta.sceneMaxY, &_sceneMaxY, sizeof(float));
     meta.widthCells  = (_widthCells & 0xFFFF) | (static_cast<uint32_t>(static_cast<uint16_t>(panXi16)) << 16);
     meta.heightCells = (_heightCells & 0xFFFF) | (static_cast<uint32_t>(static_cast<uint16_t>(panYi16)) << 16);
-    meta.flags = (_flags & 0xFFFF) | (zoomBits << 16);
+    meta.flags = (primitiveCount & 0xFFFF) | (zoomBits << 16);
     meta.bgColor = _bgColor;
 
-    ydebug("YHtml::uploadMetadata: grid={}x{} cellSize={} "
-           "scene=[{},{},{},{}] zoom={:.2f} pan=({:.1f},{:.1f}) size={}x{} bgColor={:#010x}",
-           meta.gridWidth, meta.gridHeight, _cellSize,
-           _sceneMinX, _sceneMinY, _sceneMaxX, _sceneMaxY,
-           _viewZoom, _viewPanX, _viewPanY,
-           _widthCells, _heightCells, meta.bgColor);
+    yinfo("YHtml::uploadMetadata: atlas=({},{}) msdfSize={}x{} grid={}x{} cellSize={} "
+          "scene=[{},{},{},{}] zoom={:.2f} pan=({:.1f},{:.1f}) size={}x{} prims={} bgColor={:#010x}",
+          atlasPos.x, atlasPos.y, msdfAtlasW, msdfAtlasH, meta.gridWidth, meta.gridHeight, _cellSize,
+          _sceneMinX, _sceneMinY, _sceneMaxX, _sceneMaxY,
+          _viewZoom, _viewPanX, _viewPanY,
+          _widthCells, _heightCells, primitiveCount, meta.bgColor);
 
     if (auto res = _cardMgr->writeMetadata(_metaHandle, &meta, sizeof(meta)); !res) {
         return Err<void>("YHtml::uploadMetadata: write failed");
