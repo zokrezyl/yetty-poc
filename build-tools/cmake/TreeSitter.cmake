@@ -1,9 +1,7 @@
 # Tree-sitter core library
 CPMAddPackage(
     NAME tree-sitter
-    GITHUB_REPOSITORY tree-sitter/tree-sitter
-    GIT_TAG v0.26.5
-    GIT_SHALLOW TRUE
+    URL https://github.com/tree-sitter/tree-sitter/archive/refs/tags/v0.26.5.tar.gz
     DOWNLOAD_ONLY YES
 )
 
@@ -26,9 +24,7 @@ function(add_ts_grammar)
 
     CPMAddPackage(
         NAME tree-sitter-${G_NAME}
-        GITHUB_REPOSITORY ${G_REPO}
-        GIT_TAG ${G_TAG}
-        GIT_SHALLOW TRUE
+        URL https://github.com/${G_REPO}/archive/refs/tags/${G_TAG}.tar.gz
         DOWNLOAD_ONLY YES
     )
 
