@@ -10,7 +10,7 @@
 namespace yetty {
 
 /**
- * VectorFont - SDF curve-based font rendering
+ * VectorSdfFont - SDF curve-based font rendering
  *
  * Instead of pre-rendered MSDF textures, stores actual Bezier curves
  * and evaluates signed distance analytically in the shader.
@@ -20,7 +20,7 @@ namespace yetty {
  *   - Resolution independent
  *   - No atlas texture management
  *
- * Codepoint range for testing: Plane 15 PUA-A (0xF0000 - 0xFFFFD)
+ * Codepoint range for testing: Plane 15 PUA-A (0xF0000 - 0xF0FFF)
  *
  * GPU buffer layout (per glyph):
  *   [u32: curveCount | flags]
@@ -30,19 +30,19 @@ namespace yetty {
  *
  * Each point packed as: x[16] | y[16] normalized to cell space [0,1]
  */
-class VectorFont : public Font,
-                   public base::Object,
-                   public base::ObjectFactory<VectorFont> {
+class VectorSdfFont : public Font,
+                      public base::Object,
+                      public base::ObjectFactory<VectorSdfFont> {
 public:
-    using Ptr = std::shared_ptr<VectorFont>;
-    using base::ObjectFactory<VectorFont>::create;
+    using Ptr = std::shared_ptr<VectorSdfFont>;
+    using base::ObjectFactory<VectorSdfFont>::create;
 
     // Factory: loads font from TTF path
     static Result<Ptr> createImpl(ContextType& ctx,
                                   const GPUContext& gpu,
                                   const std::string& ttfPath);
 
-    ~VectorFont() override = default;
+    ~VectorSdfFont() override = default;
 
     // Load glyphs for codepoints (extracts curves from TTF)
     virtual Result<void> loadGlyphs(const std::vector<uint32_t>& codepoints) = 0;
@@ -60,13 +60,13 @@ public:
     virtual size_t bufferSize() const = 0;
     virtual size_t offsetTableSize() const = 0;
 
-    // PUA-A range for testing (Plane 15)
-    static constexpr uint32_t TEST_CODEPOINT_BASE = 0xF0000;
-    static constexpr uint32_t TEST_CODEPOINT_MAX  = 0xFFFFD;
+    // PUA-A range for SDF vector font (0xF0000 - 0xF0FFF)
+    static constexpr uint32_t CODEPOINT_BASE = 0xF0000;
+    static constexpr uint32_t CODEPOINT_END  = 0xF0FFF;
 
-    // Map ASCII to test range: 'A' (65) -> 0xF0041
-    static constexpr uint32_t toTestCodepoint(uint32_t ascii) {
-        return TEST_CODEPOINT_BASE + ascii;
+    // Map ASCII to SDF range: 'A' (65) -> 0xF0041
+    static constexpr uint32_t toCodepoint(uint32_t ascii) {
+        return CODEPOINT_BASE + ascii;
     }
 };
 

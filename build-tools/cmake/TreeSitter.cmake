@@ -1,4 +1,4 @@
-# Tree-sitter core library
+# Tree-sitter core library - download tarball instead of cloning
 CPMAddPackage(
     NAME tree-sitter
     URL https://github.com/tree-sitter/tree-sitter/archive/refs/tags/v0.26.5.tar.gz
@@ -19,9 +19,12 @@ endif()
 # ─── Helper: add a tree-sitter grammar ──────────────────────────────────────
 # Usage: add_ts_grammar(NAME c REPO tree-sitter/tree-sitter-c TAG v0.24.1)
 #        add_ts_grammar(NAME cpp REPO tree-sitter/tree-sitter-cpp TAG v0.23.4 SCANNER)
+#
+# Downloads release tarballs instead of cloning git repos for faster builds.
 function(add_ts_grammar)
     cmake_parse_arguments(G "SCANNER" "NAME;REPO;TAG;SUBDIR" "" ${ARGN})
 
+    # Download tarball from GitHub releases instead of git clone
     CPMAddPackage(
         NAME tree-sitter-${G_NAME}
         URL https://github.com/${G_REPO}/archive/refs/tags/${G_TAG}.tar.gz
