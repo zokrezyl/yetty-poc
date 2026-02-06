@@ -289,15 +289,8 @@ if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
     # libmagic for file type detection (ycat)
     include(build-tools/cmake/Libmagic.cmake)
 
-    # FreeType - system static library, linked at the end of final executables
-    find_library(FREETYPE_STATIC_LIB libfreetype.a PATHS /usr/lib/x86_64-linux-gnu /usr/lib REQUIRED)
-    find_library(PNG_STATIC_LIB libpng16.a PATHS /usr/lib/x86_64-linux-gnu /usr/lib REQUIRED)
-    find_library(BROTLIDEC_STATIC_LIB libbrotlidec.a PATHS /usr/lib/x86_64-linux-gnu /usr/lib)
-    find_library(BROTLICOMMON_STATIC_LIB libbrotlicommon.a PATHS /usr/lib/x86_64-linux-gnu /usr/lib)
-    find_library(BZ2_STATIC_LIB libbz2.a PATHS /usr/lib/x86_64-linux-gnu /usr/lib)
-    find_path(FREETYPE_INCLUDE_DIR ft2build.h PATH_SUFFIXES freetype2)
-    set(FREETYPE_ALL_STATIC_LIBS
-        "${FREETYPE_STATIC_LIB};${PNG_STATIC_LIB};${BROTLIDEC_STATIC_LIB};${BROTLICOMMON_STATIC_LIB};${BZ2_STATIC_LIB};z;m")
+    # FreeType and all dependencies - built from source for all platforms
+    include(build-tools/cmake/FreeType.cmake)
 
     # msdfgen — built from source, no Freetype::Freetype target games
     CPMAddPackage(
@@ -382,8 +375,8 @@ if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
     #-------------------------------------------------------------------------
     CPMAddPackage(
         NAME imgui
-        GITHUB_REPOSITORY ocornut/imgui
-        GIT_TAG docking
+        URL https://github.com/ocornut/imgui/archive/refs/tags/v1.92.5.tar.gz
+        VERSION 1.92.5
         DOWNLOAD_ONLY YES
     )
 
@@ -775,9 +768,8 @@ else()
         $<$<NOT:$<BOOL:${WIN32}>>:${FONTCONFIG_STATIC_LIB}>
         $<$<NOT:$<BOOL:${WIN32}>>:${EXPAT_STATIC_LIB}>
         $<$<NOT:$<BOOL:${WIN32}>>:${UUID_STATIC_LIB}>
-        # FreeType static — whole-archive to override pdfium's bundled FreeType
-        -Wl,--whole-archive ${FREETYPE_STATIC_LIB} -Wl,--no-whole-archive
-        ${PNG_STATIC_LIB} ${BROTLIDEC_STATIC_LIB} ${BROTLICOMMON_STATIC_LIB} ${BZ2_STATIC_LIB} z m
+        # FreeType and all its dependencies (built from source)
+        ${FREETYPE_ALL_LIBS}
     )
 
     # Platform-specific PTY library

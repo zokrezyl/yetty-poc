@@ -5,7 +5,7 @@ target_link_libraries(msdf-gen-cdb PRIVATE
     glfw
     glfw3webgpu
     cdb
-    ${FREETYPE_ALL_STATIC_LIBS}
+    ${FREETYPE_ALL_LIBS}
 )
 
 target_include_directories(msdf-gen-cdb PRIVATE

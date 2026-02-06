@@ -2,11 +2,12 @@
 # Builds a minimal Python interpreter for embedding
 include(ExternalProject)
 
-set(PYTHON_VERSION "3.13.2" CACHE STRING "Python version to build")
-set(PYTHON_URL "https://github.com/python/cpython/archive/refs/tags/v${PYTHON_VERSION}.tar.gz")
+# Use CPYTHON_BUILD_VERSION to avoid conflict with pybind11's PYTHON_VERSION variable
+set(CPYTHON_BUILD_VERSION "3.13.2" CACHE STRING "Python version to build from source")
+set(PYTHON_URL "https://github.com/python/cpython/archive/refs/tags/v${CPYTHON_BUILD_VERSION}.tar.gz")
 
-# Derive major.minor from PYTHON_VERSION (e.g. "3.13" from "3.13.2")
-string(REGEX MATCH "^[0-9]+\\.[0-9]+" PYTHON_MAJOR_MINOR "${PYTHON_VERSION}")
+# Derive major.minor from version (e.g. "3.13" from "3.13.2")
+string(REGEX MATCH "^[0-9]+\\.[0-9]+" PYTHON_MAJOR_MINOR "${CPYTHON_BUILD_VERSION}")
 
 set(PYTHON_PREFIX "${CMAKE_BINARY_DIR}/python")
 set(PYTHON_INSTALL_DIR "${PYTHON_PREFIX}/install")
@@ -99,5 +100,5 @@ set(PYTHON_EMBEDDED_LIB_DIR ${PYTHON_LIB_DIR} CACHE INTERNAL "")
 set(PYTHON_EMBEDDED_BIN_DIR ${PYTHON_INSTALL_DIR}/bin CACHE INTERNAL "")
 set(PYTHON_EMBEDDED_EXECUTABLE ${PYTHON_INSTALL_DIR}/bin/python3 CACHE INTERNAL "")
 
-message(STATUS "Python ${PYTHON_VERSION} will be built from source")
+message(STATUS "Python ${CPYTHON_BUILD_VERSION} will be built from source")
 message(STATUS "  Install dir: ${PYTHON_INSTALL_DIR}")

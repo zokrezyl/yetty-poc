@@ -17,7 +17,7 @@ target_link_libraries(yetty-msdf-gen PRIVATE
     args
     cdb
     # FreeType static libs LAST — msdfgen references FT symbols
-    ${FREETYPE_ALL_STATIC_LIBS}
+    ${FREETYPE_ALL_LIBS}
 )
 
 target_compile_definitions(yetty-msdf-gen PRIVATE

@@ -5,7 +5,7 @@ target_link_libraries(msdf-render-atlas PRIVATE
     glfw
     glfw3webgpu
     webgpu
-    ${FREETYPE_ALL_STATIC_LIBS}
+    ${FREETYPE_ALL_LIBS}
 )
 
 target_include_directories(msdf-render-atlas PRIVATE

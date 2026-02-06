@@ -25,6 +25,7 @@ CPMAddPackage(
     GIT_TAG 1.14.1
     OPTIONS
         "CPR_USE_SYSTEM_CURL OFF"
+        "CPR_CURL_USE_LIBPSL OFF"
         "BUILD_SHARED_LIBS OFF"
         "CPR_ENABLE_SSL ON"
         "CPR_BUILD_TESTS OFF"
