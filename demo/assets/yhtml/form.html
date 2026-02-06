@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Form Layout Test</title>
+  <style>
+    body {
+      font-size: 13px;
+      color: #cdd6f4;
+      margin: 15px;
+    }
+    h2 { color: #89b4fa; margin-bottom: 10px; }
+    .form-group {
+      margin-bottom: 10px;
+    }
+    label {
+      display: block;
+      color: #a6adc8;
+      margin-bottom: 3px;
+      font-size: 12px;
+    }
+    .input-field {
+      background-color: #1e1e2e;
+      border: 1px solid #45475a;
+      border-radius: 4px;
+      padding: 8px 10px;
+      color: #cdd6f4;
+      width: 90%;
+    }
+    .row {
+      margin-bottom: 8px;
+    }
+    .btn {
+      display: inline-block;
+      padding: 8px 16px;
+      border-radius: 4px;
+      color: #ffffff;
+      margin-right: 8px;
+    }
+    .btn-primary {
+      background-color: #6c63ff;
+      border: 1px solid #7c73ff;
+    }
+    .btn-secondary {
+      background-color: #45475a;
+      border: 1px solid #585b70;
+    }
+    .divider {
+      border-top: 1px solid #313244;
+      margin: 15px 0;
+    }
+    .note {
+      background-color: #1e1e2e;
+      border-left: 3px solid #f9e2af;
+      padding: 8px 12px;
+      color: #a6adc8;
+      font-size: 12px;
+      margin-top: 10px;
+    }
+    blockquote {
+      border-left: 3px solid #6c63ff;
+      margin: 10px 0;
+      padding: 5px 15px;
+      color: #9399b2;
+    }
+  </style>
+</head>
+<body>
+  <h2>Contact Form</h2>
+
+  <div class="form-group">
+    <label>Full Name</label>
+    <div class="input-field">John Doe</div>
+  </div>
+
+  <div class="form-group">
+    <label>Email Address</label>
+    <div class="input-field">john@example.com</div>
+  </div>
+
+  <div class="form-group">
+    <label>Subject</label>
+    <div class="input-field">HTML rendering in terminal</div>
+  </div>
+
+  <div class="form-group">
+    <label>Message</label>
+    <div class="input-field" style="min-height: 60px;">
+      This is a test of CSS layout rendering using litehtml
+      within the yetty terminal emulator. The form elements
+      are pure HTML/CSS styled boxes.
+    </div>
+  </div>
+
+  <div class="row">
+    <span class="btn btn-primary">Send Message</span>
+    <span class="btn btn-secondary">Cancel</span>
+  </div>
+
+  <div class="divider"></div>
+
+  <blockquote>
+    Forms are rendered as styled boxes. Interactive input requires
+    JavaScript integration (planned via QuickJS).
+  </blockquote>
+
+  <div class="note">
+    Note: This demonstrates CSS box model rendering including padding,
+    margins, borders, border-radius, and background colors.
+  </div>
+</body>
+</html>

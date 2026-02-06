@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Table Demo</title>
+  <style>
+    body { font-size: 13px; color: #d0d0d0; margin: 10px; }
+    h2 { color: #89b4fa; }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      margin-bottom: 15px;
+    }
+    th {
+      background-color: #313244;
+      color: #cdd6f4;
+      padding: 8px 12px;
+      border: 1px solid #45475a;
+      text-align: left;
+    }
+    td {
+      padding: 6px 12px;
+      border: 1px solid #45475a;
+    }
+    tr:nth-child(even) td {
+      background-color: #1e1e2e;
+    }
+    tr:nth-child(odd) td {
+      background-color: #181825;
+    }
+    .status-ok { color: #a6e3a1; }
+    .status-warn { color: #f9e2af; }
+    .status-err { color: #f38ba8; }
+    .mono { font-family: monospace; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <h2>System Status</h2>
+  <table>
+    <tr>
+      <th>Service</th>
+      <th>Port</th>
+      <th>Status</th>
+      <th>Uptime</th>
+    </tr>
+    <tr>
+      <td>Web Server</td>
+      <td class="mono">8080</td>
+      <td class="status-ok">Running</td>
+      <td>14d 6h 23m</td>
+    </tr>
+    <tr>
+      <td>Database</td>
+      <td class="mono">5432</td>
+      <td class="status-ok">Running</td>
+      <td>14d 6h 20m</td>
+    </tr>
+    <tr>
+      <td>Cache</td>
+      <td class="mono">6379</td>
+      <td class="status-warn">Degraded</td>
+      <td>2d 11h 45m</td>
+    </tr>
+    <tr>
+      <td>Worker</td>
+      <td class="mono">9090</td>
+      <td class="status-err">Stopped</td>
+      <td>-</td>
+    </tr>
+    <tr>
+      <td>Monitor</td>
+      <td class="mono">3000</td>
+      <td class="status-ok">Running</td>
+      <td>7d 3h 12m</td>
+    </tr>
+  </table>
+
+  <h2>Resource Usage</h2>
+  <table>
+    <tr>
+      <th>Resource</th>
+      <th>Used</th>
+      <th>Total</th>
+      <th>Percent</th>
+    </tr>
+    <tr>
+      <td>CPU</td>
+      <td>4 cores</td>
+      <td>8 cores</td>
+      <td class="status-warn">50%</td>
+    </tr>
+    <tr>
+      <td>Memory</td>
+      <td>12.4 GB</td>
+      <td>32 GB</td>
+      <td class="status-ok">39%</td>
+    </tr>
+    <tr>
+      <td>Disk</td>
+      <td>186 GB</td>
+      <td>512 GB</td>
+      <td class="status-ok">36%</td>
+    </tr>
+    <tr>
+      <td>Network</td>
+      <td>824 Mbps</td>
+      <td>1 Gbps</td>
+      <td class="status-err">82%</td>
+    </tr>
+  </table>
+</body>
+</html>

@@ -4,11 +4,14 @@
 #include <yetty/gpu-context.h>
 #include <yetty/yetty-context.h>
 #include <yetty/ms-msdf-font.h>
+#include <yetty/msdf-atlas.h>
+#include <yetty/msdf-cdb-provider.h>
 #include <yetty/font-manager.h>
 #include <vector>
 #include <string>
 #include <cstdint>
 #include <memory>
+#include <unordered_map>
 
 namespace yetty {
 
@@ -100,7 +103,20 @@ public:
     //=========================================================================
     uint32_t addText(float x, float y, const std::string& text,
                      float fontSize, uint32_t color,
-                     uint32_t layer = 0);
+                     uint32_t layer = 0, int fontId = 0);
+
+    //=========================================================================
+    // Public API - Font registration
+    //=========================================================================
+    int addFont(const std::string& ttfPath);
+    int registerFont(const std::string& cdbPath,
+                     const std::string& ttfPath = "",
+                     MsdfCdbProvider::Ptr provider = nullptr);
+
+    //=========================================================================
+    // Public API - Atlas access
+    //=========================================================================
+    MsdfAtlas::Ptr atlas() const { return _atlas; }
 
     //=========================================================================
     // Public API - state management
@@ -148,8 +164,9 @@ protected:
     // Total primitives including staging (for use during init parsing)
     uint32_t totalPendingPrimitives() const;
 
-    // Access to font for subclasses that need direct font metrics
+    // Access to font and font manager for subclasses
     MsMsdfFont::Ptr font() const { return _font; }
+    FontManager::Ptr fontManager() const { return _fontManager; }
 
     // Direct access to primitive buffer for procedural cards
     card::SDFPrimitive* primitivePtr() { return _primitives; }
@@ -237,6 +254,8 @@ private:
     // Font for text rendering
     FontManager::Ptr _fontManager;
     MsMsdfFont::Ptr _font;
+    MsdfAtlas::Ptr _atlas;  // shared with _font
+    std::unordered_map<std::string, int> _fontIdCache;  // cdbPath → fontId
 
     // View zoom/pan (applied to metadata scene bounds, not to grid)
     float _viewZoom = 1.0f;

@@ -105,3 +105,7 @@ add_custom_target(run_tests
     DEPENDS yetty_tests
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
 )
+
+# Add subdirectory tests
+add_subdirectory(yast)
+add_subdirectory(yecho)

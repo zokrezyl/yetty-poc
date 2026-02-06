@@ -27,6 +27,7 @@ public:
 
     // ImguiManager interface
     void updateDisplaySize(uint32_t width, uint32_t height) override;
+    void beginContextMenu(float x, float y) override;
     void addContextMenuItem(const ContextMenuItem& item) override;
     void clearContextMenu() override;
     void setStatusText(const std::string& text) override;
@@ -119,8 +120,11 @@ void ImguiManagerImpl::registerForEvents() {
     loop->registerListener(base::Event::Type::MouseDown, sharedAs<base::EventListener>());
     loop->registerListener(base::Event::Type::MouseUp, sharedAs<base::EventListener>());
     loop->registerListener(base::Event::Type::MouseMove, sharedAs<base::EventListener>());
-    yinfo("ImguiManager registered for mouse events");
+    loop->registerListener(base::Event::Type::KeyDown, sharedAs<base::EventListener>());
+    yinfo("ImguiManager registered for mouse and key events");
 }
+
+constexpr int GLFW_KEY_ESCAPE = 256;
 
 Result<bool> ImguiManagerImpl::onEvent(const base::Event& event) {
     if (!_imguiContext) return Ok(false);
@@ -135,22 +139,20 @@ Result<bool> ImguiManagerImpl::onEvent(const base::Event& event) {
         io.AddMousePosEvent(event.mouse.x, event.mouse.y);
         io.AddMouseButtonEvent(event.mouse.button, true);
 
-        if (event.mouse.button == 1) {  // GLFW_MOUSE_BUTTON_RIGHT
-            // Right-click: clear old items and store position
-            clearContextMenu();
-            _menuX = event.mouse.x;
-            _menuY = event.mouse.y;
-            _rightClickPending = true;
-            ydebug("ImguiManager: Right-click at ({}, {}), cleared menu items", _menuX, _menuY);
-        } else if (event.mouse.button == 0 && _menuOpen) {  // GLFW_MOUSE_BUTTON_LEFT
-            // Left-click while menu is open: close the menu
-            clearContextMenu();
-            ydebug("ImguiManager: Left-click, closing menu");
-        }
+        // Any click while menu is open: let ImGui handle it, but if click is outside
+        // the popup, ImGui will close it (handled in render via BeginPopup returning false)
     }
     else if (event.type == base::Event::Type::MouseUp) {
         io.AddMousePosEvent(event.mouse.x, event.mouse.y);
         io.AddMouseButtonEvent(event.mouse.button, false);
+    }
+    else if (event.type == base::Event::Type::KeyDown) {
+        // ESC closes the context menu
+        if (event.key.key == GLFW_KEY_ESCAPE && _menuOpen) {
+            ydebug("ImguiManager: ESC pressed, closing menu");
+            clearContextMenu();
+            return Ok(true);  // Consume the event
+        }
     }
 
     return Ok(false);  // Don't consume - let other listeners handle
@@ -159,6 +161,14 @@ Result<bool> ImguiManagerImpl::onEvent(const base::Event& event) {
 void ImguiManagerImpl::updateDisplaySize(uint32_t width, uint32_t height) {
     _displayWidth = width;
     _displayHeight = height;
+}
+
+void ImguiManagerImpl::beginContextMenu(float x, float y) {
+    clearContextMenu();
+    _menuX = x;
+    _menuY = y;
+    _rightClickPending = true;
+    ydebug("ImguiManager: beginContextMenu at ({}, {})", x, y);
 }
 
 void ImguiManagerImpl::addContextMenuItem(const ContextMenuItem& item) {
@@ -203,13 +213,14 @@ Result<void> ImguiManagerImpl::render(WGPURenderPassEncoder pass) {
     // Handle context menu - if there are items, show popup
     if (!_menuItems.empty()) {
         if (!_menuOpen) {
-            // First frame with items - open popup at stored mouse position
-            ImGui::SetNextWindowPos(ImVec2(_menuX, _menuY), ImGuiCond_Always);
+            // First frame with items - open popup
             ImGui::OpenPopup("ContextMenu");
             _menuOpen = true;
             _rightClickPending = false;
         }
 
+        // SetNextWindowPos must be called immediately before BeginPopup
+        ImGui::SetNextWindowPos(ImVec2(_menuX, _menuY), ImGuiCond_Appearing);
         if (ImGui::BeginPopup("ContextMenu")) {
             for (const auto& item : _menuItems) {
                 if (ImGui::MenuItem(item.label.c_str())) {

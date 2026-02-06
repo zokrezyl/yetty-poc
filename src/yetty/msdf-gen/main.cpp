@@ -30,6 +30,12 @@ int main(int argc, char* argv[]) {
     args::Flag noNerdFonts(parser, "no-nerd-fonts",
         "Exclude Nerd Font symbols from generation", {"no-nerd-fonts"});
 
+    args::Flag cjk(parser, "cjk",
+        "Include CJK characters (Chinese/Japanese/Korean) - large charset", {"cjk"});
+
+    args::Flag allGlyphs(parser, "all",
+        "Generate all glyphs found in the font (ignores charset flags)", {'a', "all"});
+
     args::Flag verbose(parser, "verbose",
         "Enable verbose output", {'v', "verbose"});
 
@@ -56,6 +62,8 @@ int main(int argc, char* argv[]) {
     config.pixelRange = args::get(pixelRange);
     config.threadCount = args::get(threads);
     config.includeNerdFonts = !noNerdFonts;
+    config.includeCJK = cjk;
+    config.allGlyphs = allGlyphs;
     config.verbose = verbose;
 
     std::cout << "MSDF Generator" << std::endl;
@@ -63,7 +71,12 @@ int main(int argc, char* argv[]) {
     std::cout << "  Output: " << config.outputDir << std::endl;
     std::cout << "  Size: " << config.fontSize << "px" << std::endl;
     std::cout << "  Pixel range: " << config.pixelRange << std::endl;
-    std::cout << "  Nerd Fonts: " << (config.includeNerdFonts ? "yes" : "no") << std::endl;
+    if (config.allGlyphs) {
+        std::cout << "  Mode: all glyphs in font" << std::endl;
+    } else {
+        std::cout << "  Nerd Fonts: " << (config.includeNerdFonts ? "yes" : "no") << std::endl;
+        std::cout << "  CJK: " << (config.includeCJK ? "yes" : "no") << std::endl;
+    }
     std::cout << std::endl;
 
     // Progress callback

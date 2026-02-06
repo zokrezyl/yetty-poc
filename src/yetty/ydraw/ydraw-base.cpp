@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <filesystem>
 #include <iostream>
 
 namespace {
@@ -432,7 +433,10 @@ YDrawBase::YDrawBase(const YettyContext& ctx,
     _shaderGlyph = SHADER_GLYPH;
     if (_fontManager) {
         _font = _fontManager->getDefaultMsMsdfFont();
-        ydebug("YDrawBase: fontManager={} font={}", (void*)_fontManager.get(), (void*)_font.get());
+        if (_font) {
+            _atlas = _font->atlas();
+        }
+        ydebug("YDrawBase: fontManager={} font={} atlas={}", (void*)_fontManager.get(), (void*)_font.get(), (void*)_atlas.get());
     } else {
         ywarn("YDrawBase: fontManager is NULL!");
     }
@@ -956,12 +960,12 @@ uint32_t YDrawBase::addBezier2(float x0, float y0, float x1, float y1,
 
 uint32_t YDrawBase::addText(float x, float y, const std::string& text,
                             float fontSize, uint32_t color,
-                            uint32_t layer) {
-    if (!_font || text.empty()) {
+                            uint32_t layer, int fontId) {
+    if (!_atlas || text.empty()) {
         return 0;
     }
 
-    float fontBaseSize = _font->getFontSize();
+    float fontBaseSize = _atlas->getFontSize();
     float scale = fontSize / fontBaseSize;
 
     float cursorX = x;
@@ -992,18 +996,32 @@ uint32_t YDrawBase::addText(float x, float y, const std::string& text,
             continue;
         }
 
-        uint32_t glyphIndex = _font->getGlyphIndex(codepoint);
-        if (glyphIndex == 0 && codepoint != ' ') {
+        uint32_t glyphIndex;
+        if (fontId == 0 && _font) {
+            // Default font — use MsMsdfFont style dispatch
             glyphIndex = _font->getGlyphIndex(codepoint);
+        } else if (fontId > 0) {
+            // Registered font — direct atlas CDB lookup
+            glyphIndex = _atlas->loadGlyph(fontId, codepoint);
+        } else {
+            continue;
         }
 
-        const auto& metadata = _font->getGlyphMetadata();
+        const auto& metadata = _atlas->getGlyphMetadata();
         if (glyphIndex >= metadata.size()) {
             cursorX += fontSize * 0.5f;
             continue;
         }
 
         const auto& glyph = metadata[glyphIndex];
+
+        if (codepoint == 'p' || codepoint == 'A' || codepoint == 'y') {
+            yinfo("addText glyph '{}': bearingY={:.2f} sizeY={:.2f} scale={:.3f} "
+                  "y={:.2f} → top={:.2f} bot={:.2f} (baseline=y)",
+                  (char)codepoint, glyph._bearingY, glyph._sizeY, scale,
+                  y, y - glyph._bearingY * scale,
+                  y - glyph._bearingY * scale + glyph._sizeY * scale);
+        }
 
         YDrawGlyph posGlyph = {};
         posGlyph.x = cursorX + glyph._bearingX * scale;
@@ -1025,6 +1043,57 @@ uint32_t YDrawBase::addText(float x, float y, const std::string& text,
     }
 
     return glyphsAdded;
+}
+
+//=============================================================================
+// Public API - Font registration
+//=============================================================================
+
+int YDrawBase::registerFont(const std::string& cdbPath,
+                            const std::string& ttfPath,
+                            MsdfCdbProvider::Ptr provider) {
+    if (!_atlas) return -1;
+    return _atlas->registerCdb(cdbPath, ttfPath, std::move(provider));
+}
+
+int YDrawBase::addFont(const std::string& ttfPath) {
+    if (!_atlas || !_fontManager) return -1;
+
+    // Derive CDB path from TTF filename
+    auto stem = std::filesystem::path(ttfPath).stem().string();
+    auto cacheDir = _fontManager->getCacheDir();
+    auto cdbPath = cacheDir + "/" + stem + ".cdb";
+
+    // Check local cache (avoid re-opening same CDB)
+    auto it = _fontIdCache.find(cdbPath);
+    if (it != _fontIdCache.end()) return it->second;
+
+    // Generate CDB if missing
+    if (!std::filesystem::exists(cdbPath)) {
+        auto provider = _fontManager->getCdbProvider();
+        if (!provider) {
+            yerror("addFont: no CDB provider available");
+            return -1;
+        }
+
+        MsdfCdbConfig cfg;
+        cfg.ttfPath = ttfPath;
+        cfg.cdbPath = cdbPath;
+
+        if (auto res = provider->generate(cfg); !res) {
+            yerror("addFont: CDB generation failed for {}: {}",
+                   ttfPath, res.error().message());
+            return -1;
+        }
+
+    }
+
+    // Open CDB on shared atlas
+    int fontId = _atlas->openCdb(cdbPath);
+    if (fontId >= 0) {
+        _fontIdCache[cdbPath] = fontId;
+    }
+    return fontId;
 }
 
 //=============================================================================

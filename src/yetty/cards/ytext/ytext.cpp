@@ -203,11 +203,11 @@ void YText::beginLine() {
 void YText::addGlyph(uint32_t codepoint, float fontSize, uint32_t color) {
     if (!_font) return;
 
-    float fontBaseSize = _font->getFontSize();
+    float fontBaseSize = _font->atlas()->getFontSize();
     float scale = fontSize / fontBaseSize;
 
     uint32_t glyphIndex = _font->getGlyphIndex(codepoint);
-    const auto& metadata = _font->getGlyphMetadata();
+    const auto& metadata = _font->atlas()->getGlyphMetadata();
     if (glyphIndex >= metadata.size()) {
         // Unknown glyph - use space width
         _curLineX += fontSize * 0.5f;

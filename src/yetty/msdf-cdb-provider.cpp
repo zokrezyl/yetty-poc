@@ -5,8 +5,6 @@
 #include <filesystem>
 #include <cmath>
 #include <cstring>
-#include <array>
-
 // CPU provider — msdfgen library
 #include "msdf-gen/generator.h"
 
@@ -23,50 +21,45 @@ extern "C" {
 
 namespace yetty {
 
-static const std::array<std::string, 4> kStyleSuffixes = {
-    "Regular", "Bold", "Oblique", "BoldOblique"
-};
-
 // ---------------------------------------------------------------------------
 // CpuMsdfCdbProvider
 // ---------------------------------------------------------------------------
 
 Result<void> CpuMsdfCdbProvider::generate(const MsdfCdbConfig& config) {
-    std::filesystem::create_directories(config.outputDir);
-
-    for (size_t i = 0; i < config.ttfPaths.size() && i < kStyleSuffixes.size(); ++i) {
-        const auto& ttf = config.ttfPaths[i];
-        if (ttf.empty() || !std::filesystem::exists(ttf)) continue;
-
-        std::string cdbPath = config.outputDir + "/" + config.fontName
-                            + "-" + kStyleSuffixes[i] + ".cdb";
-        if (std::filesystem::exists(cdbPath)) {
-            yinfo("CpuMsdfCdbProvider: CDB already exists: {}", cdbPath);
-            continue;
-        }
-
-        yinfo("CpuMsdfCdbProvider: generating {} from {}", cdbPath, ttf);
-
-        msdfgen::GeneratorConfig genCfg;
-        genCfg.fontPath   = ttf;
-        genCfg.outputDir  = config.outputDir;
-        genCfg.fontSize   = config.fontSize;
-        genCfg.pixelRange = config.pixelRange;
-
-        auto result = msdfgen::generate(genCfg, [](size_t cur, size_t total, const std::string&) {
-            if (cur % 1000 == 0 || cur == total) {
-                yinfo("  progress: {}/{}", cur, total);
-            }
-        });
-
-        if (!result.success) {
-            return Err<void>("CPU MSDF generation failed for " + ttf + ": " + result.error);
-        }
-
-        yinfo("CpuMsdfCdbProvider: generated {} glyphs for {}",
-              result.glyphsGenerated, kStyleSuffixes[i]);
+    if (std::filesystem::exists(config.cdbPath)) {
+        yinfo("CpuMsdfCdbProvider: CDB already exists: {}", config.cdbPath);
+        return Ok();
     }
 
+    auto outputDir = std::filesystem::path(config.cdbPath).parent_path().string();
+    std::filesystem::create_directories(outputDir);
+
+    yinfo("CpuMsdfCdbProvider: generating {} from {}", config.cdbPath, config.ttfPath);
+
+    msdfgen::GeneratorConfig genCfg;
+    genCfg.fontPath   = config.ttfPath;
+    genCfg.outputDir  = outputDir;
+    genCfg.fontSize   = config.fontSize;
+    genCfg.pixelRange = config.pixelRange;
+
+    auto result = msdfgen::generate(genCfg, [](size_t cur, size_t total, const std::string&) {
+        if (cur % 1000 == 0 || cur == total) {
+            yinfo("  progress: {}/{}", cur, total);
+        }
+    });
+
+    if (!result.success) {
+        return Err<void>("CPU MSDF generation failed for " + config.ttfPath + ": " + result.error);
+    }
+
+    // msdfgen names output from TTF stem; rename to requested cdbPath if different
+    auto msdfgenOutput = outputDir + "/"
+        + std::filesystem::path(config.ttfPath).stem().string() + ".cdb";
+    if (msdfgenOutput != config.cdbPath && std::filesystem::exists(msdfgenOutput)) {
+        std::filesystem::rename(msdfgenOutput, config.cdbPath);
+    }
+
+    yinfo("CpuMsdfCdbProvider: generated {} glyphs", result.glyphsGenerated);
     return Ok();
 }
 
@@ -170,7 +163,13 @@ void GpuMsdfCdbProvider::releaseDevice() {
 }
 
 Result<void> GpuMsdfCdbProvider::generate(const MsdfCdbConfig& config) {
-    std::filesystem::create_directories(config.outputDir);
+    if (std::filesystem::exists(config.cdbPath)) {
+        yinfo("GpuMsdfCdbProvider: CDB already exists: {}", config.cdbPath);
+        return Ok();
+    }
+
+    auto outputDir = std::filesystem::path(config.cdbPath).parent_path().string();
+    std::filesystem::create_directories(outputDir);
 
     // Create dedicated device with high buffer limits
     if (auto res = initDevice(); !res) {
@@ -183,111 +182,102 @@ Result<void> GpuMsdfCdbProvider::generate(const MsdfCdbConfig& config) {
 
     msdf::Context ctx(_device, _instance);
 
-    for (size_t i = 0; i < config.ttfPaths.size() && i < kStyleSuffixes.size(); ++i) {
-        const auto& ttf = config.ttfPaths[i];
-        if (ttf.empty() || !std::filesystem::exists(ttf)) continue;
+    yinfo("GpuMsdfCdbProvider: generating {} from {}", config.cdbPath, config.ttfPath);
 
-        std::string cdbPath = config.outputDir + "/" + config.fontName
-                            + "-" + kStyleSuffixes[i] + ".cdb";
-        if (std::filesystem::exists(cdbPath)) {
-            yinfo("GpuMsdfCdbProvider: CDB already exists: {}", cdbPath);
-            continue;
-        }
+    // Compute correct scale: fontSize * 64 / unitsPerEm
+    // so atlas pixel dimensions match display pixel dimensions
+    FT_Library ftLib;
+    FT_Face ftFace;
+    FT_Init_FreeType(&ftLib);
+    FT_New_Face(ftLib, config.ttfPath.c_str(), 0, &ftFace);
+    float unitsPerEm = static_cast<float>(ftFace->units_per_EM);
+    FT_Done_Face(ftFace);
+    FT_Done_FreeType(ftLib);
 
-        yinfo("GpuMsdfCdbProvider: generating {} from {}", cdbPath, ttf);
+    msdf::FontConfig fontCfg;
+    fontCfg.scale = config.fontSize * 64.0f / unitsPerEm;
+    fontCfg.range = config.pixelRange;
 
-        // Compute correct scale: fontSize * 64 / unitsPerEm
-        // so atlas pixel dimensions match display pixel dimensions
-        FT_Library ftLib;
-        FT_Face ftFace;
-        FT_Init_FreeType(&ftLib);
-        FT_New_Face(ftLib, ttf.c_str(), 0, &ftFace);
-        float unitsPerEm = static_cast<float>(ftFace->units_per_EM);
-        FT_Done_Face(ftFace);
-        FT_Done_FreeType(ftLib);
+    yinfo("GpuMsdfCdbProvider: unitsPerEm={} scale={}", unitsPerEm, fontCfg.scale);
 
-        msdf::FontConfig fontCfg;
-        fontCfg.scale = config.fontSize * 64.0f / unitsPerEm;
-        fontCfg.range = config.pixelRange;
-
-        yinfo("GpuMsdfCdbProvider: unitsPerEm={} scale={}", unitsPerEm, fontCfg.scale);
-
-        auto font = ctx.loadFont(ttf, fontCfg);
-        if (!font) {
-            return Err<void>("Failed to load font: " + ttf);
-        }
-
-        auto charset = font->getAllCodepoints();
-        yinfo("GpuMsdfCdbProvider: generating {} glyphs for {}", charset.size(), kStyleSuffixes[i]);
-
-        int generated = ctx.generateGlyphs(*font, charset);
-        yinfo("GpuMsdfCdbProvider: generated {} glyphs", generated);
-
-        // Read atlas back to CPU
-        auto atlasData = ctx.readAtlasToRGBA8(*font->getAtlas());
-        if (atlasData.empty()) {
-            return Err<void>("Failed to read atlas from GPU for " + ttf);
-        }
-
-        // Write CDB
-        std::string tmpPath = cdbPath + ".tmp";
-        int fd = open(tmpPath.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0644);
-        if (fd < 0) {
-            return Err<void>("Failed to create CDB file: " + tmpPath);
-        }
-
-        struct cdb_make cdbm;
-        cdb_make_start(&cdbm, fd);
-
-        const auto& glyphs = font->getGlyphs();
-        int atlasW = font->getAtlas()->getWidth();
-        int written = 0;
-
-        // Convert from FreeType font design units to scaled pixel values
-        float fontScale = config.fontSize / unitsPerEm;
-        int padding = static_cast<int>(std::ceil(config.pixelRange));
-
-        for (const auto& glyph : glyphs) {
-            char key[4];
-            key[0] = glyph.codepoint & 0xFF;
-            key[1] = (glyph.codepoint >> 8) & 0xFF;
-            key[2] = (glyph.codepoint >> 16) & 0xFF;
-            key[3] = (glyph.codepoint >> 24) & 0xFF;
-
-            MsdfGlyphData header{};
-            header.codepoint = glyph.codepoint;
-            header.width     = glyph.atlasW;
-            header.height    = glyph.atlasH;
-            header.bearingX  = static_cast<float>(glyph.bearingX) * fontScale - padding;
-            header.bearingY  = static_cast<float>(glyph.bearingY) * fontScale + padding;
-            // With scale = fontSize*64/unitsPerEm, atlas dimensions match display dimensions
-            header.sizeX     = static_cast<float>(glyph.atlasW);
-            header.sizeY     = static_cast<float>(glyph.atlasH);
-            header.advance   = glyph.advance * fontScale;
-
-            size_t pixelBytes = glyph.atlasW * glyph.atlasH * 4;
-            std::vector<char> value(sizeof(MsdfGlyphData) + pixelBytes);
-            std::memcpy(value.data(), &header, sizeof(MsdfGlyphData));
-
-            for (int y = 0; y < glyph.atlasH; y++) {
-                const uint8_t* src = atlasData.data()
-                    + ((glyph.atlasY + y) * atlasW + glyph.atlasX) * 4;
-                char* dst = value.data() + sizeof(MsdfGlyphData) + y * glyph.atlasW * 4;
-                std::memcpy(dst, src, glyph.atlasW * 4);
-            }
-
-            cdb_make_add(&cdbm, key, 4, value.data(), value.size());
-            written++;
-        }
-
-        cdb_make_finish(&cdbm);
-        close(fd);
-
-        std::filesystem::rename(tmpPath, cdbPath);
-        auto fileSize = std::filesystem::file_size(cdbPath);
-        yinfo("GpuMsdfCdbProvider: wrote {} glyphs to {} ({} MB)",
-              written, cdbPath, fileSize / 1024 / 1024);
+    auto font = ctx.loadFont(config.ttfPath, fontCfg);
+    if (!font) {
+        releaseDevice();
+        return Err<void>("Failed to load font: " + config.ttfPath);
     }
+
+    auto charset = font->getAllCodepoints();
+    yinfo("GpuMsdfCdbProvider: generating {} glyphs", charset.size());
+
+    int generated = ctx.generateGlyphs(*font, charset);
+    yinfo("GpuMsdfCdbProvider: generated {} glyphs", generated);
+
+    // Read atlas back to CPU
+    auto atlasData = ctx.readAtlasToRGBA8(*font->getAtlas());
+    if (atlasData.empty()) {
+        releaseDevice();
+        return Err<void>("Failed to read atlas from GPU for " + config.ttfPath);
+    }
+
+    // Write CDB
+    std::string tmpPath = config.cdbPath + ".tmp";
+    int fd = open(tmpPath.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) {
+        releaseDevice();
+        return Err<void>("Failed to create CDB file: " + tmpPath);
+    }
+
+    struct cdb_make cdbm;
+    cdb_make_start(&cdbm, fd);
+
+    const auto& glyphs = font->getGlyphs();
+    int atlasW = font->getAtlas()->getWidth();
+    int written = 0;
+
+    // Convert from FreeType font design units to scaled pixel values
+    float fontScale = config.fontSize / unitsPerEm;
+    int padding = static_cast<int>(std::ceil(config.pixelRange));
+
+    for (const auto& glyph : glyphs) {
+        char key[4];
+        key[0] = glyph.codepoint & 0xFF;
+        key[1] = (glyph.codepoint >> 8) & 0xFF;
+        key[2] = (glyph.codepoint >> 16) & 0xFF;
+        key[3] = (glyph.codepoint >> 24) & 0xFF;
+
+        MsdfGlyphData header{};
+        header.codepoint = glyph.codepoint;
+        header.width     = glyph.atlasW;
+        header.height    = glyph.atlasH;
+        header.bearingX  = static_cast<float>(glyph.bearingX) * fontScale - padding;
+        header.bearingY  = static_cast<float>(glyph.bearingY) * fontScale + padding;
+        // With scale = fontSize*64/unitsPerEm, atlas dimensions match display dimensions
+        header.sizeX     = static_cast<float>(glyph.atlasW);
+        header.sizeY     = static_cast<float>(glyph.atlasH);
+        header.advance   = glyph.advance * fontScale;
+
+        size_t pixelBytes = glyph.atlasW * glyph.atlasH * 4;
+        std::vector<char> value(sizeof(MsdfGlyphData) + pixelBytes);
+        std::memcpy(value.data(), &header, sizeof(MsdfGlyphData));
+
+        for (int y = 0; y < glyph.atlasH; y++) {
+            const uint8_t* src = atlasData.data()
+                + ((glyph.atlasY + y) * atlasW + glyph.atlasX) * 4;
+            char* dst = value.data() + sizeof(MsdfGlyphData) + y * glyph.atlasW * 4;
+            std::memcpy(dst, src, glyph.atlasW * 4);
+        }
+
+        cdb_make_add(&cdbm, key, 4, value.data(), value.size());
+        written++;
+    }
+
+    cdb_make_finish(&cdbm);
+    close(fd);
+
+    std::filesystem::rename(tmpPath, config.cdbPath);
+    auto fileSize = std::filesystem::file_size(config.cdbPath);
+    yinfo("GpuMsdfCdbProvider: wrote {} glyphs to {} ({} MB)",
+          written, config.cdbPath, fileSize / 1024 / 1024);
 
     // Release dedicated device after generation
     releaseDevice();

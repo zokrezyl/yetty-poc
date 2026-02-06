@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>CSS Styled Page</title>
+  <style>
+    body {
+      font-size: 14px;
+      color: #e0e0e0;
+      margin: 10px;
+    }
+    .header {
+      background-color: #2d2d4e;
+      color: #ffffff;
+      padding: 15px;
+      margin-bottom: 10px;
+      border: 2px solid #6c63ff;
+      border-radius: 5px;
+    }
+    .header h1 {
+      margin: 0;
+      font-size: 22px;
+    }
+    .header p {
+      margin: 5px 0 0 0;
+      color: #b0b0d0;
+    }
+    .card {
+      background-color: #1e1e2e;
+      border: 1px solid #444466;
+      border-radius: 4px;
+      padding: 10px;
+      margin-bottom: 8px;
+    }
+    .card h3 {
+      color: #89b4fa;
+      margin: 0 0 5px 0;
+    }
+    .highlight {
+      background-color: #3a3a5c;
+      padding: 2px 5px;
+      border-radius: 2px;
+      color: #f0c674;
+    }
+    .tag {
+      display: inline-block;
+      background-color: #45475a;
+      color: #a6e3a1;
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-size: 11px;
+      margin-right: 5px;
+    }
+    .footer {
+      margin-top: 15px;
+      padding-top: 8px;
+      border-top: 1px solid #444466;
+      color: #888888;
+      font-size: 11px;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>Styled Dashboard</h1>
+    <p>CSS layout with backgrounds, borders, and colors</p>
+  </div>
+
+  <div class="card">
+    <h3>GPU Rendering</h3>
+    <p>All elements are rendered as <span class="highlight">SDF primitives</span>
+       directly on the GPU. No CPU rasterization needed.</p>
+    <span class="tag">WebGPU</span>
+    <span class="tag">WGSL</span>
+    <span class="tag">SDF</span>
+  </div>
+
+  <div class="card">
+    <h3>Text Engine</h3>
+    <p>Text uses <span class="highlight">Multi-channel Signed Distance Fields</span>
+       for crisp rendering at any scale. Supports bold and italic styles.</p>
+    <span class="tag">MSDF</span>
+    <span class="tag">Font Atlas</span>
+  </div>
+
+  <div class="card">
+    <h3>Layout Engine</h3>
+    <p>HTML/CSS layout powered by litehtml. Supports the box model with
+       margins, padding, borders, and CSS selectors.</p>
+    <span class="tag">litehtml</span>
+    <span class="tag">CSS 2.1</span>
+  </div>
+
+  <div class="footer">
+    yetty terminal &mdash; HTML card demo
+  </div>
+</body>
+</html>

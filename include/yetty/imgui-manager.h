@@ -5,6 +5,7 @@
 #include <webgpu/webgpu.h>
 #include <memory>
 #include <string>
+#include <vector>
 
 struct ImGuiContext;
 
@@ -38,8 +39,9 @@ public:
     // Update display size (call on window resize)
     virtual void updateDisplaySize(uint32_t width, uint32_t height) = 0;
 
-    // Context menu API - just add items, menu opens automatically on render
-    virtual void addContextMenuItem(const ContextMenuItem& item) = 0;
+    // Context menu API - multiple sources add items during render, menu opens automatically
+    virtual void beginContextMenu(float x, float y) = 0;  // Called on right-click to set position and clear items
+    virtual void addContextMenuItem(const ContextMenuItem& item) = 0;  // Add item (call during render cycle)
     virtual void clearContextMenu() = 0;
 
     // Statusbar API

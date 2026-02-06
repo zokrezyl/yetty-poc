@@ -260,6 +260,7 @@ private:
   // Card dormancy — scan visible buffer for a given slotIndex
   bool isCardSlotVisibleInBuffer(uint32_t slotIndex, int excludeRow = -1) const;
   void suspendOffscreenCards(int scrolledRow);
+  void suspendNonVisibleCards();
   void reactivateVisibleCards();
   void gcInactiveCards();
 
@@ -572,8 +573,8 @@ Result<void> GPUScreenImpl::init() noexcept {
 
   // Calculate base cell size from font metrics
   if (_msdfFont) {
-    _baseCellHeight = _msdfFont->getLineHeight();
-    const auto &metadata = _msdfFont->getGlyphMetadata();
+    _baseCellHeight = _msdfFont->atlas()->getLineHeight();
+    const auto &metadata = _msdfFont->atlas()->getGlyphMetadata();
     uint32_t mIndex = _msdfFont->getGlyphIndex('M');
     if (mIndex > 0 && mIndex < metadata.size()) {
       _baseCellWidth = metadata[mIndex]._advance;
@@ -1456,7 +1457,7 @@ std::string GPUScreenImpl::extractSelectedText() const {
         for (int col = startCol; col <= endCol; col++) {
           if (col < static_cast<int>(sbLine.cells.size())) {
             uint32_t glyphIdx = sbLine.cells[col].glyph;
-            uint32_t cp = _msdfFont->getCodepoint(glyphIdx);
+            uint32_t cp = _msdfFont->atlas()->getCodepoint(glyphIdx);
             if (cp == 0) cp = ' ';
             appendUtf8(line, cp);
           }
@@ -1471,7 +1472,7 @@ std::string GPUScreenImpl::extractSelectedText() const {
           size_t idx = rowOffset + col;
           if (idx < _visibleBuffer->size()) {
             uint32_t glyphIdx = (*_visibleBuffer)[idx].glyph;
-            uint32_t cp = _msdfFont->getCodepoint(glyphIdx);
+            uint32_t cp = _msdfFont->atlas()->getCodepoint(glyphIdx);
             if (cp == 0) cp = ' ';
             appendUtf8(line, cp);
           }
@@ -1502,7 +1503,7 @@ std::string GPUScreenImpl::extractRowText(int totalRow) const {
     const auto& sbLine = _scrollback[totalRow];
     for (int col = 0; col < static_cast<int>(sbLine.cells.size()); col++) {
       uint32_t glyphIdx = sbLine.cells[col].glyph;
-      uint32_t cp = _msdfFont->getCodepoint(glyphIdx);
+      uint32_t cp = _msdfFont->atlas()->getCodepoint(glyphIdx);
       if (cp == 0) cp = ' ';
       appendUtf8(result, cp);
     }
@@ -1515,7 +1516,7 @@ std::string GPUScreenImpl::extractRowText(int totalRow) const {
         size_t idx = rowOffset + col;
         if (idx < _visibleBuffer->size()) {
           uint32_t glyphIdx = (*_visibleBuffer)[idx].glyph;
-          uint32_t cp = _msdfFont->getCodepoint(glyphIdx);
+          uint32_t cp = _msdfFont->atlas()->getCodepoint(glyphIdx);
           if (cp == 0) cp = ' ';
           appendUtf8(result, cp);
         }
@@ -3292,6 +3293,49 @@ void GPUScreenImpl::reactivateVisibleCards() {
   }
 }
 
+void GPUScreenImpl::suspendNonVisibleCards() {
+  if (_cards.empty())
+    return;
+
+  // Collect all card slotIndices visible in the composed view
+  const Cell *cells = getCellData();
+  if (!cells)
+    return;
+
+  const size_t numCells = static_cast<size_t>(_rows) * _cols;
+  std::unordered_set<uint32_t> visibleSlots;
+
+  for (size_t i = 0; i < numCells; i++) {
+    if (!isCardGlyph(cells[i].glyph))
+      continue;
+    uint32_t slotIndex = static_cast<uint32_t>(cells[i].fgR) |
+                         (static_cast<uint32_t>(cells[i].fgG) << 8) |
+                         (static_cast<uint32_t>(cells[i].fgB) << 16);
+    visibleSlots.insert(slotIndex);
+  }
+
+  // Suspend active cards not in the composed view
+  std::vector<uint32_t> toSuspend;
+  for (const auto& [slotIndex, card] : _cards) {
+    if (visibleSlots.find(slotIndex) == visibleSlots.end()) {
+      toSuspend.push_back(slotIndex);
+    }
+  }
+
+  for (uint32_t slotIndex : toSuspend) {
+    auto it = _cards.find(slotIndex);
+    if (it != _cards.end()) {
+      yinfo("GPUScreen::suspendNonVisibleCards: suspending card '{}' slotIndex={}",
+            it->second->typeName(), slotIndex);
+      if (it->second->needsBuffer())  _bufferLayoutChanged = true;
+      if (it->second->needsTexture()) _textureLayoutChanged = true;
+      it->second->suspend();
+      _inactiveCards[slotIndex] = std::move(it->second);
+      _cards.erase(it);
+    }
+  }
+}
+
 void GPUScreenImpl::gcInactiveCards() {
   // Note: removed early return on _inactiveCards.empty() because we also
   // need to GC orphaned active cards (e.g., after clear screen)
@@ -3776,14 +3820,12 @@ Card *GPUScreenImpl::getCardAtCell(int row, int col) const {
     return nullptr;
   }
 
-  if (!_visibleBuffer)
+  const Cell *cells = getCellData();
+  if (!cells)
     return nullptr;
 
   size_t idx = cellIndex(row, col);
-  if (idx >= _visibleBuffer->size())
-    return nullptr;
-
-  const Cell &cell = (*_visibleBuffer)[idx];
+  const Cell &cell = cells[idx];
 
   // Check if this cell has a shader glyph (Plane 16 PUA-B: U+100000 - U+10FFFD)
   if (cell.glyph < 0x100000 || cell.glyph > 0x10FFFD) {
@@ -4007,7 +4049,8 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
           col = std::max(0, std::min(col, static_cast<int>(_cols) - 1));
           row = std::max(0, std::min(row, static_cast<int>(_rows) - 1));
 
-          // Add context menu items - menu opens automatically on render
+          // Begin context menu at mouse position, then add items
+          _ctx.imguiManager->beginContextMenu(mx, my);
           _ctx.imguiManager->addContextMenuItem({
             "Copy cell info",
             base::Event::contextMenuAction(_id, "copy_cell_info", row, col)
@@ -4489,6 +4532,9 @@ Result<void> GPUScreenImpl::initPipeline() {
 }
 
 Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
+  // Suspend active cards no longer in the composed view (e.g., scrolled away in scrollback)
+  suspendNonVisibleCards();
+
   // Reactivate any suspended cards whose cells are now visible (user scrolled back)
   reactivateVisibleCards();
 
@@ -4631,14 +4677,14 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
   // Recreate bind group if needed
   if (_needsBindGroupRecreation || !_bindGroup ||
       (_msdfFont &&
-       _msdfFont->getResourceVersion() != _lastFontResourceVersion)) {
+       _msdfFont->atlas()->getResourceVersion() != _lastFontResourceVersion)) {
     if (_bindGroup) {
       wgpuBindGroupRelease(_bindGroup);
       _bindGroup = nullptr;
     }
 
-    if (!_msdfFont || !_msdfFont->getTextureView() ||
-        !_msdfFont->getSampler() || !_msdfFont->getGlyphMetadataBuffer()) {
+    if (!_msdfFont || !_msdfFont->atlas()->getTextureView() ||
+        !_msdfFont->atlas()->getSampler() || !_msdfFont->atlas()->getGlyphMetadataBuffer()) {
       return Err<void>("MSDF font resources not ready");
     }
     if (!_bitmapFont || !_bitmapFont->getTextureView() ||
@@ -4653,15 +4699,15 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
     bgEntries[0].size = sizeof(Uniforms);
 
     bgEntries[1].binding = 1;
-    bgEntries[1].textureView = _msdfFont->getTextureView();
+    bgEntries[1].textureView = _msdfFont->atlas()->getTextureView();
 
     bgEntries[2].binding = 2;
-    bgEntries[2].sampler = _msdfFont->getSampler();
+    bgEntries[2].sampler = _msdfFont->atlas()->getSampler();
 
     bgEntries[3].binding = 3;
-    bgEntries[3].buffer = _msdfFont->getGlyphMetadataBuffer();
+    bgEntries[3].buffer = _msdfFont->atlas()->getGlyphMetadataBuffer();
     bgEntries[3].size =
-        _msdfFont->getBufferGlyphCount() * sizeof(GlyphMetadataGPU);
+        _msdfFont->atlas()->getBufferGlyphCount() * sizeof(GlyphMetadataGPU);
 
     bgEntries[4].binding = 4;
     bgEntries[4].buffer = _cellBuffer;
@@ -4691,7 +4737,7 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
 
     _needsBindGroupRecreation = false;
     if (_msdfFont) {
-      _lastFontResourceVersion = _msdfFont->getResourceVersion();
+      _lastFontResourceVersion = _msdfFont->atlas()->getResourceVersion();
     }
   }
 
@@ -4742,7 +4788,7 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
   _uniforms.screenSize = {screenWidth, screenHeight};
   _uniforms.cellSize = {cellWidthF, cellHeightF};
   _uniforms.gridSize = {static_cast<float>(_cols), static_cast<float>(totalRows)};
-  _uniforms.pixelRange = _msdfFont ? _msdfFont->getPixelRange() : 2.0f;
+  _uniforms.pixelRange = _msdfFont ? _msdfFont->atlas()->getPixelRange() : 2.0f;
   _uniforms.scale = _zoomLevel;
   
   // In copy mode, show cursor at copy mode position (converted to view row)
