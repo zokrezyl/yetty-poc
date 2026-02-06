@@ -39,7 +39,7 @@ option(YETTY_ANDROID "Build for Android" OFF)
 # WebGPU backend selection: "wgpu" (default) or "dawn"
 # - wgpu: wgpu-native (Rust implementation, required for pygfx integration)
 # - dawn: Dawn (Google's C++ WebGPU implementation)
-set(WEBGPU_BACKEND "wgpu" CACHE STRING "WebGPU backend to use (wgpu or dawn)")
+set(WEBGPU_BACKEND "dawn" CACHE STRING "WebGPU backend to use (wgpu or dawn)")
 set_property(CACHE WEBGPU_BACKEND PROPERTY STRINGS "wgpu" "dawn")
 
 # Toybox - BSD-licensed shell utilities (used on all platforms)
