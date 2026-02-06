@@ -249,7 +249,21 @@ public:
         }
 
         _unitsPerEM = _ftFace->units_per_EM;
-        yinfo("VectorFont loaded: {} (units_per_EM={})", _ttfPath, _unitsPerEM);
+
+        // Capture font-wide metrics for consistent glyph normalization
+        // These are in font units, we'll normalize to [0,1] based on these
+        _ascender = static_cast<float>(_ftFace->ascender) / FT_SCALE;
+        _descender = static_cast<float>(_ftFace->descender) / FT_SCALE;
+
+        // Get advance width from a representative glyph ('M' or '0')
+        if (FT_Load_Char(_ftFace, 'M', FT_LOAD_NO_SCALE | FT_LOAD_NO_BITMAP) == 0) {
+            _advanceWidth = static_cast<float>(_ftFace->glyph->advance.x) / FT_SCALE;
+        } else {
+            _advanceWidth = static_cast<float>(_unitsPerEM) / FT_SCALE;
+        }
+
+        yinfo("VectorFont loaded: {} (units_per_EM={} ascender={:.1f} descender={:.1f} advance={:.1f})",
+              _ttfPath, _unitsPerEM, _ascender, _descender, _advanceWidth);
 
         return Ok();
     }
@@ -382,14 +396,16 @@ private:
             return Ok();
         }
 
-        // Second pass: extract normalized curves
+        // Second pass: extract normalized curves using FONT-WIDE metrics
+        // This ensures 'a' is smaller than 'H', proper baseline, etc.
         std::vector<PackedCurve> curves;
         CurveCtx curveCtx;
         curveCtx.curves = &curves;
-        curveCtx.minX = boundsCtx.minX;
-        curveCtx.minY = boundsCtx.minY;
-        curveCtx.maxX = boundsCtx.maxX;
-        curveCtx.maxY = boundsCtx.maxY;
+        // Use font metrics for normalization, not per-glyph bounds
+        curveCtx.minX = 0;
+        curveCtx.minY = _descender;
+        curveCtx.maxX = _advanceWidth;
+        curveCtx.maxY = _ascender;
 
         FT_Outline_Funcs curveFuncs = {};
         curveFuncs.move_to = curveMoveTo;
@@ -525,6 +541,11 @@ private:
     FT_Library _ftLibrary = nullptr;
     FT_Face _ftFace = nullptr;
     int _unitsPerEM = 0;
+
+    // Font-wide metrics for consistent glyph sizing
+    float _ascender = 0;    // Top of em-square (positive)
+    float _descender = 0;   // Bottom of em-square (negative typically)
+    float _advanceWidth = 0; // Monospace advance width
 
     // Glyph data
     std::vector<uint32_t> _glyphData;                    // Packed glyph buffer
