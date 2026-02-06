@@ -6,7 +6,7 @@ add_executable(yetty-msdf-gen
 target_include_directories(yetty-msdf-gen PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/src
-    ${FREETYPE_INCLUDE_DIRS}
+    ${FREETYPE_INCLUDE_DIR}
 )
 
 target_link_libraries(yetty-msdf-gen PRIVATE
