@@ -400,8 +400,17 @@ fn sampleVectorGlyph(glyphIndex: u32, localUV: vec2<f32>) -> f32 {
         let p1 = unpackPoint(vectorGlyphBuffer[curveOffset + 1u]);
         let p2 = unpackPoint(vectorGlyphBuffer[curveOffset + 2u]);
 
-        let dist = sdQuadraticBezier(localUV, p0, p1, p2);
-        minDist = min(minDist, dist);
+        // Early-out: compute distance to curve bounding box
+        // If box is farther than current minDist, skip expensive SDF calculation
+        let boxMin = min(min(p0, p1), p2);
+        let boxMax = max(max(p0, p1), p2);
+        let dBox = max(boxMin - localUV, localUV - boxMax);
+        let distToBox = length(max(dBox, vec2<f32>(0.0)));
+
+        if (distToBox < minDist) {
+            let dist = sdQuadraticBezier(localUV, p0, p1, p2);
+            minDist = min(minDist, dist);
+        }
     }
 
     // Use winding number for inside/outside (non-zero = inside)
