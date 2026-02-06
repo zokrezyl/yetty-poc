@@ -10,9 +10,9 @@ namespace ycat {
 // Yetty OSC vendor ID (matches yetty/osc-command.h)
 constexpr int VENDOR_ID = 666666;
 
-// Base94 encode binary data (2 chars per byte, printable ASCII 33-126)
-std::string base94Encode(const std::vector<uint8_t>& data);
-std::string base94Encode(std::string_view data);
+// Base64 encode binary data
+std::string base64Encode(const std::vector<uint8_t>& data);
+std::string base64Encode(std::string_view data);
 
 // Build an OSC create sequence with a text payload (e.g., file path)
 std::string createSequence(
@@ -22,7 +22,7 @@ std::string createSequence(
     std::string_view payload,
     std::string_view pluginArgs = "");
 
-// Build an OSC create sequence with a binary payload (base94-encoded)
+// Build an OSC create sequence with a binary payload (base64-encoded)
 std::string createSequenceBytes(
     std::string_view plugin,
     int x, int y, int w, int h,

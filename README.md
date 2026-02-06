@@ -72,7 +72,7 @@ Cards can be created via terminal escape sequences (OSC 666666), allowing any pr
 
 ```bash
 # Create an image card
-printf '\033]666666;create -w 40 -h 20 -p image;;base94_encoded_png\033\\'
+printf '\033]666666;create -w 40 -h 20 -p image;;base64_encoded_png\033\\'
 ```
 
 ### RPC Server

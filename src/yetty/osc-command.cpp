@@ -126,9 +126,9 @@ Result<OscCommand> OscCommandParser::parse(const std::string& sequence) {
         cmd.pluginArgs = fields[2];
     }
 
-    // Payload (field 3, optional, base94 encoded)
+    // Payload (field 3, optional, base64 encoded)
     if (fields.size() > 3 && !fields[3].empty()) {
-        cmd.payload = base94Decode(fields[3]);
+        cmd.payload = base64Decode(fields[3]);
     }
 
     return Ok(cmd);
@@ -286,42 +286,87 @@ Result<TargetArgs> OscCommandParser::parseTargetArgs(const std::vector<std::stri
 }
 
 //-----------------------------------------------------------------------------
-// Base94 encoding/decoding
+// Base64 encoding/decoding
 //-----------------------------------------------------------------------------
 
-std::string OscCommandParser::base94Encode(const std::string& data) {
-    std::string result;
-    result.reserve(data.size() * 2);
+static constexpr char BASE64_CHARS[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-    for (unsigned char byte : data) {
-        int value = byte;
-        char c1 = '!' + (value / 94);
-        char c2 = '!' + (value % 94);
-        result.push_back(c1);
-        result.push_back(c2);
+static constexpr unsigned char BASE64_DECODE_TABLE[128] = {
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,  62, 255, 255, 255,  63,
+     52,  53,  54,  55,  56,  57,  58,  59,  60,  61, 255, 255, 255, 255, 255, 255,
+    255,   0,   1,   2,   3,   4,   5,   6,   7,   8,   9,  10,  11,  12,  13,  14,
+     15,  16,  17,  18,  19,  20,  21,  22,  23,  24,  25, 255, 255, 255, 255, 255,
+    255,  26,  27,  28,  29,  30,  31,  32,  33,  34,  35,  36,  37,  38,  39,  40,
+     41,  42,  43,  44,  45,  46,  47,  48,  49,  50,  51, 255, 255, 255, 255, 255
+};
+
+std::string OscCommandParser::base64Encode(const std::string& data) {
+    std::string result;
+    result.reserve(((data.size() + 2) / 3) * 4);
+
+    size_t i = 0;
+    const size_t len = data.size();
+
+    while (i + 2 < len) {
+        uint32_t triple = (static_cast<unsigned char>(data[i]) << 16) |
+                          (static_cast<unsigned char>(data[i + 1]) << 8) |
+                          static_cast<unsigned char>(data[i + 2]);
+        result.push_back(BASE64_CHARS[(triple >> 18) & 0x3F]);
+        result.push_back(BASE64_CHARS[(triple >> 12) & 0x3F]);
+        result.push_back(BASE64_CHARS[(triple >> 6) & 0x3F]);
+        result.push_back(BASE64_CHARS[triple & 0x3F]);
+        i += 3;
+    }
+
+    if (i + 1 == len) {
+        uint32_t val = static_cast<unsigned char>(data[i]) << 16;
+        result.push_back(BASE64_CHARS[(val >> 18) & 0x3F]);
+        result.push_back(BASE64_CHARS[(val >> 12) & 0x3F]);
+        result.push_back('=');
+        result.push_back('=');
+    } else if (i + 2 == len) {
+        uint32_t val = (static_cast<unsigned char>(data[i]) << 16) |
+                       (static_cast<unsigned char>(data[i + 1]) << 8);
+        result.push_back(BASE64_CHARS[(val >> 18) & 0x3F]);
+        result.push_back(BASE64_CHARS[(val >> 12) & 0x3F]);
+        result.push_back(BASE64_CHARS[(val >> 6) & 0x3F]);
+        result.push_back('=');
     }
 
     return result;
 }
 
-std::string OscCommandParser::base94Decode(const std::string& encoded) {
+std::string OscCommandParser::base64Decode(const std::string& encoded) {
     if (encoded.empty()) return "";
 
-    const size_t len = encoded.size();
-    std::string result;
-    result.resize(len / 2);
-
-    const char* src = encoded.data();
-    char* dst = &result[0];
-    size_t outIdx = 0;
-
-    for (size_t i = 0; i + 1 < len; i += 2) {
-        unsigned char c1 = src[i] - '!';
-        unsigned char c2 = src[i + 1] - '!';
-        dst[outIdx++] = static_cast<char>(c1 * 94 + c2);
+    // Find actual length (excluding padding)
+    size_t len = encoded.size();
+    while (len > 0 && encoded[len - 1] == '=') {
+        --len;
     }
 
-    result.resize(outIdx);
+    std::string result;
+    result.reserve((len * 3) / 4);
+
+    uint32_t buffer = 0;
+    int bits = 0;
+
+    for (size_t i = 0; i < len; ++i) {
+        unsigned char c = encoded[i];
+        if (c >= 128 || BASE64_DECODE_TABLE[c] == 255) {
+            continue;  // Skip invalid characters
+        }
+        buffer = (buffer << 6) | BASE64_DECODE_TABLE[c];
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            result.push_back(static_cast<char>((buffer >> bits) & 0xFF));
+        }
+    }
+
     return result;
 }
 

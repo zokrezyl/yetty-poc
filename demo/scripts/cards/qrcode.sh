@@ -12,11 +12,10 @@ TEXT="${1:-https://github.com/zokrezyl/yetty}"
 # Use the yetty-client to create a QR code card
 python3 -c "
 import sys
-sys.path.insert(0, 'tools/yetty-client')
-from core import base94
+import base64
 
 text = '''$TEXT'''
-encoded = base94.encode_string(text)
+encoded = base64.b64encode(text.encode('utf-8')).decode('ascii')
 
 # Emit OSC sequence
 # Format: ESC ] 666666 ; create -p plugin -x X -y Y -w W -h H -r ; plugin-args ; payload ST

@@ -3,6 +3,7 @@
 #include <yetty/ms-msdf-font.h>
 #include <yetty/bm-font.h>
 #include <yetty/shader-font.h>
+#include <yetty/vector-font.h>
 #include <yetty/gpu-context.h>
 #include <yetty/shader-manager.h>
 #include <yetty/msdf-cdb-provider.h>
@@ -36,6 +37,10 @@ public:
     virtual BmFont::Ptr getDefaultBmFont() noexcept = 0;
     virtual ShaderFont::Ptr getDefaultShaderGlyphFont() noexcept = 0;
     virtual ShaderFont::Ptr getDefaultCardFont() noexcept = 0;
+
+    // Vector font (SDF curve-based rendering)
+    virtual Result<VectorFont::Ptr> getVectorFont(const std::string& ttfPath) noexcept = 0;
+    virtual VectorFont::Ptr getDefaultVectorFont() noexcept = 0;
 
     virtual void setDefaultFont(const std::string& fontName) noexcept = 0;
     virtual bool hasFont(const std::string& fontName) const noexcept = 0;

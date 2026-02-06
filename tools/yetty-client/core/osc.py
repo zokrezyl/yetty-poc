@@ -12,13 +12,15 @@ Generic args (Unix-like command line):
   - start --id ID | --plugin NAME
   - update --id ID
 
+Payload is base64 encoded for safe transmission through escape sequences.
+
 When running inside tmux, sequences are wrapped in DCS passthrough:
   ESC P tmux; <escaped_content> ESC \\
 Where ESC characters in content are doubled (ESC -> ESC ESC).
 """
 
 import os
-from . import base94
+from . import encoding
 
 # Card system vendor ID
 VENDOR_ID = 666666
@@ -59,7 +61,7 @@ def create_sequence(
         x, y: Position in cells
         w, h: Size in cells (0 = stretch to edge)
         relative: If True, position relative to cursor; else absolute
-        payload: Raw payload string (will be base94 encoded)
+        payload: Raw payload string (will be base64 encoded)
         plugin_args: Plugin-specific args (passed as-is)
 
     Returns:
@@ -69,7 +71,7 @@ def create_sequence(
     if relative:
         args += " -r"
 
-    encoded_payload = base94.encode_string(payload) if payload else ""
+    encoded_payload = encoding.encode_string(payload) if payload else ""
     return f"\033]{VENDOR_ID};{args};{plugin_args};{encoded_payload}\033\\"
 
 
@@ -88,7 +90,7 @@ def create_sequence_bytes(
     if relative:
         args += " -r"
 
-    encoded_payload = base94.encode(payload_bytes) if payload_bytes else ""
+    encoded_payload = encoding.encode(payload_bytes) if payload_bytes else ""
     return f"\033]{VENDOR_ID};{args};{plugin_args};{encoded_payload}\033\\"
 
 
@@ -139,5 +141,5 @@ def start_sequence(id: str = None, plugin: str = None) -> str:
 def update_sequence(id: str, payload: str = "", plugin_args: str = "") -> str:
     """Create an OSC sequence to update a layer."""
     args = f"update --id {id}"
-    encoded_payload = base94.encode_string(payload) if payload else ""
+    encoded_payload = encoding.encode_string(payload) if payload else ""
     return f"\033]{VENDOR_ID};{args};{plugin_args};{encoded_payload}\033\\"

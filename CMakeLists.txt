@@ -560,6 +560,7 @@ elseif(NOT EMSCRIPTEN)
         # src/yetty/font.cpp  # Moved to obsolete
         src/yetty/msdf-atlas.cpp
         src/yetty/ms-msdf-font.cpp
+        src/yetty/vector-font.cpp
         src/yetty/font-manager.cpp
         src/yetty/msdf-cdb-provider.cpp
         src/yetty/msdf-gen/generator.cpp

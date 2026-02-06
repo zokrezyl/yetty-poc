@@ -105,6 +105,14 @@ struct Cell {
 @group(1) @binding(6) var emojiSampler: sampler;
 @group(1) @binding(7) var<storage, read> emojiMetadata: array<EmojiGlyphMetadata>;
 
+// Vector font bindings (group 1 continued)
+// Glyph buffer: [header:u32][curve0.p0][curve0.p1][curve0.p2][curve1...]
+// Header: curveCount[16] | flags[16]
+// Each point: x[16] | y[16] packed as u32, normalized to [0,1]
+@group(1) @binding(8) var<storage, read> vectorGlyphBuffer: array<u32>;
+// Offset table: codepoint -> offset in vectorGlyphBuffer (0xFFFFFFFF = not present)
+@group(1) @binding(9) var<storage, read> vectorOffsetTable: array<u32>;
+
 // Attribute bit masks (matches CellAttrs in grid.h)
 const ATTR_BOLD: u32 = 0x01u;           // Bit 0
 const ATTR_ITALIC: u32 = 0x02u;         // Bit 1
@@ -117,6 +125,7 @@ const FONT_TYPE_MSDF: u32 = 0u;     // Default text rendering
 const FONT_TYPE_BITMAP: u32 = 1u;   // Bitmap fonts (emoji, color fonts)
 const FONT_TYPE_SHADER: u32 = 2u;   // Single-cell shader glyphs
 const FONT_TYPE_CARD: u32 = 3u;     // Multi-cell card glyphs
+const FONT_TYPE_VECTOR: u32 = 4u;   // Vector font (SDF curves)
 
 // Legacy alias for backward compatibility
 const ATTR_EMOJI: u32 = 0x20u;      // Bit 5 - same position as FONT_TYPE_BITMAP
@@ -128,6 +137,10 @@ const CARD_GLYPH_END: u32 = 0x100FFFu;      // 1052671 decimal - card range end
 const SHADER_GLYPH_BASE: u32 = 0x101000u;   // 1052672 decimal - shader glyph range start
 const SHADER_GLYPH_END: u32 = 0x10FFFDu;    // 1114109 decimal - shader glyph range end
 const SHADER_GLYPH_START: u32 = 0x100000u;  // Legacy alias
+
+// Vector font glyph range - Plane 15 PUA-A: U+F0000 - U+FFFFD
+const VECTOR_GLYPH_BASE: u32 = 0xF0000u;    // Vector font range start
+const VECTOR_GLYPH_END: u32 = 0xFFFFDu;     // Vector font range end
 
 // Vertex input/output
 struct VertexInput {
@@ -212,6 +225,177 @@ fn isCardGlyph(glyphIndex: u32) -> bool {
 // Check if glyph is any procedural glyph (card or shader)
 fn isProceduralGlyph(glyphIndex: u32) -> bool {
     return glyphIndex >= CARD_GLYPH_BASE && glyphIndex <= SHADER_GLYPH_END;
+}
+
+// Check if glyph is a vector font glyph (Plane 15 PUA-A range)
+fn isVectorGlyph(glyphIndex: u32) -> bool {
+    return glyphIndex >= VECTOR_GLYPH_BASE && glyphIndex <= VECTOR_GLYPH_END;
+}
+
+// ==== VECTOR FONT SDF RENDERING ====
+
+// Unpack a normalized coordinate from u32 (x in high 16 bits, y in low 16 bits)
+fn unpackPoint(packed: u32) -> vec2<f32> {
+    let x = f32((packed >> 16u) & 0xFFFFu) / 65535.0;
+    let y = f32(packed & 0xFFFFu) / 65535.0;
+    return vec2<f32>(x, y);
+}
+
+// Signed distance to a quadratic Bezier curve (p0 -> p1 -> p2)
+// Based on Inigo Quilez's approach
+fn sdQuadraticBezier(pos: vec2<f32>, p0: vec2<f32>, p1: vec2<f32>, p2: vec2<f32>) -> f32 {
+    let a = p1 - p0;
+    let b = p0 - 2.0 * p1 + p2;
+    let c = a * 2.0;
+    let d = p0 - pos;
+
+    // Cubic coefficients for solving t
+    let kk = 1.0 / dot(b, b);
+    let kx = kk * dot(a, b);
+    let ky = kk * (2.0 * dot(a, a) + dot(d, b)) / 3.0;
+    let kz = kk * dot(d, a);
+
+    let p = ky - kx * kx;
+    let q = kx * (2.0 * kx * kx - 3.0 * ky) + kz;
+    let p3 = p * p * p;
+    let q2 = q * q;
+    let h = q2 + 4.0 * p3;
+
+    var res: f32;
+    if (h >= 0.0) {
+        // One root
+        let sqrtH = sqrt(h);
+        let x = (vec2<f32>(sqrtH, -sqrtH) - q) / 2.0;
+        let uv = sign(x) * pow(abs(x), vec2<f32>(1.0 / 3.0));
+        let t = clamp(uv.x + uv.y - kx, 0.0, 1.0);
+        let qpos = d + (c + b * t) * t;
+        res = dot(qpos, qpos);
+    } else {
+        // Three roots - use trigonometric solution
+        let z = sqrt(-p);
+        let v = acos(q / (p * z * 2.0)) / 3.0;
+        let m = cos(v);
+        let n = sin(v) * 1.732050808;  // sqrt(3)
+        let t0 = clamp((m + m) * z - kx, 0.0, 1.0);
+        let t1 = clamp((-n - m) * z - kx, 0.0, 1.0);
+        let t2 = clamp((n - m) * z - kx, 0.0, 1.0);
+        let qpos0 = d + (c + b * t0) * t0;
+        let qpos1 = d + (c + b * t1) * t1;
+        let qpos2 = d + (c + b * t2) * t2;
+        res = min(min(dot(qpos0, qpos0), dot(qpos1, qpos1)), dot(qpos2, qpos2));
+    }
+    return sqrt(res);
+}
+
+// Compute winding number contribution from a quadratic Bezier
+fn windingQuadratic(pos: vec2<f32>, p0: vec2<f32>, p1: vec2<f32>, p2: vec2<f32>) -> f32 {
+    // Simplified winding: count crossings of horizontal ray from pos
+    let e0 = p1 - p0;
+    let e1 = p2 - p1;
+
+    // Check if curve crosses the horizontal line y = pos.y
+    let y0 = p0.y - pos.y;
+    let y1 = p1.y - pos.y;
+    let y2 = p2.y - pos.y;
+
+    // Quadratic: solve for t where y(t) = 0
+    // y(t) = (1-t)^2*y0 + 2*(1-t)*t*y1 + t^2*y2
+    // = y0 - 2*y0*t + y0*t^2 + 2*y1*t - 2*y1*t^2 + y2*t^2
+    // = y0 + t*(-2*y0 + 2*y1) + t^2*(y0 - 2*y1 + y2)
+    let aa = y0 - 2.0 * y1 + y2;
+    let bb = -2.0 * y0 + 2.0 * y1;
+    let cc = y0;
+
+    var winding = 0.0;
+
+    if (abs(aa) < 0.0001) {
+        // Linear case
+        if (abs(bb) > 0.0001) {
+            let t = -cc / bb;
+            if (t >= 0.0 && t <= 1.0) {
+                let x = (1.0 - t) * (1.0 - t) * p0.x + 2.0 * (1.0 - t) * t * p1.x + t * t * p2.x;
+                if (x > pos.x) {
+                    let dy = 2.0 * (1.0 - t) * e0.y + 2.0 * t * e1.y;
+                    winding += sign(dy);
+                }
+            }
+        }
+    } else {
+        let disc = bb * bb - 4.0 * aa * cc;
+        if (disc >= 0.0) {
+            let sqrtDisc = sqrt(disc);
+            let t1 = (-bb - sqrtDisc) / (2.0 * aa);
+            let t2 = (-bb + sqrtDisc) / (2.0 * aa);
+
+            if (t1 >= 0.0 && t1 <= 1.0) {
+                let x = (1.0 - t1) * (1.0 - t1) * p0.x + 2.0 * (1.0 - t1) * t1 * p1.x + t1 * t1 * p2.x;
+                if (x > pos.x) {
+                    let dy = 2.0 * (1.0 - t1) * e0.y + 2.0 * t1 * e1.y;
+                    winding += sign(dy);
+                }
+            }
+            if (t2 >= 0.0 && t2 <= 1.0 && abs(t2 - t1) > 0.0001) {
+                let x = (1.0 - t2) * (1.0 - t2) * p0.x + 2.0 * (1.0 - t2) * t2 * p1.x + t2 * t2 * p2.x;
+                if (x > pos.x) {
+                    let dy = 2.0 * (1.0 - t2) * e0.y + 2.0 * t2 * e1.y;
+                    winding += sign(dy);
+                }
+            }
+        }
+    }
+
+    return winding;
+}
+
+// Render a vector glyph using SDF curves
+// glyphIndex: codepoint in PUA-A range (U+F0000+)
+// localUV: position within cell, normalized [0,1]
+// Returns: signed distance (negative = inside, positive = outside)
+fn sampleVectorGlyph(glyphIndex: u32, localUV: vec2<f32>) -> f32 {
+    // Map from PUA-A to actual codepoint (for testing: maps to ASCII)
+    let codepoint = glyphIndex - VECTOR_GLYPH_BASE;
+
+    // Look up offset in the offset table
+    let offset = vectorOffsetTable[codepoint];
+    if (offset == 0xFFFFFFFFu) {
+        return 1.0;  // Glyph not present, return "outside"
+    }
+
+    // Read header: curveCount (upper 16 bits) | flags (lower 16 bits)
+    let header = vectorGlyphBuffer[offset];
+    let curveCount = (header >> 16u) & 0xFFFFu;
+
+    if (curveCount == 0u) {
+        return 1.0;  // No curves, empty glyph
+    }
+
+    // Find minimum distance to all curves and compute winding
+    var minDist = 1000.0;
+    var winding = 0.0;
+
+    let curveBase = offset + 1u;  // Curves start after header
+
+    for (var i = 0u; i < curveCount; i = i + 1u) {
+        // Each curve is 3 packed points (3 u32s)
+        let curveOffset = curveBase + i * 3u;
+        let p0 = unpackPoint(vectorGlyphBuffer[curveOffset]);
+        let p1 = unpackPoint(vectorGlyphBuffer[curveOffset + 1u]);
+        let p2 = unpackPoint(vectorGlyphBuffer[curveOffset + 2u]);
+
+        // Distance to curve
+        let dist = sdQuadraticBezier(localUV, p0, p1, p2);
+        minDist = min(minDist, dist);
+
+        // Winding contribution
+        winding += windingQuadratic(localUV, p0, p1, p2);
+    }
+
+    // Sign based on winding number (non-zero = inside)
+    let inside = abs(winding) > 0.5;
+    if (inside) {
+        return -minDist;
+    }
+    return minDist;
 }
 
 // Extract font type from cell attrs (bits 5-7)
@@ -372,8 +556,34 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
                     (glyphIndex >= 0xF000u && glyphIndex <= 0xFFFDu);
 
     if (!skipGlyph) {
-        // Check for card/shader glyph first (Plane 16 PUA-B range)
-        if (isCardGlyph(glyphIndex) || isShaderGlyph(glyphIndex)) {
+        // Check for vector glyph first (Plane 15 PUA-A range: U+F0000+)
+        if (isVectorGlyph(glyphIndex)) {
+            // Vector font: render using SDF curves
+            // Scale to ~80% of cell, baseline at 80% from top
+            let glyphScale = 0.75;
+            let baselineY = 0.8;  // Baseline at 80% down from top
+            let padX = (1.0 - glyphScale) * 0.5;  // Center horizontally
+            let padY = baselineY - glyphScale;    // Position above baseline
+
+            // Transform pixel position to glyph UV space
+            let normX = localPxBase.x / grid.cellSize.x;
+            let normY = localPxBase.y / grid.cellSize.y;
+
+            // Map to glyph space: subtract padding, scale up, flip Y
+            let glyphU = (normX - padX) / glyphScale;
+            let glyphV = 1.0 - (normY - padY) / glyphScale;
+            let localUV = vec2<f32>(glyphU, glyphV);
+
+            let sd = sampleVectorGlyph(glyphIndex, localUV);
+
+            // Convert signed distance to alpha (anti-aliased edge)
+            // Use pixelRange for consistent anti-aliasing across scales
+            let pxRange = grid.pixelRange * grid.scale / min(grid.cellSize.x, grid.cellSize.y);
+            let alpha = clamp(0.5 - sd * pxRange * 32.0, 0.0, 1.0);
+
+            finalColor = mix(bgColor.rgb, fgColor.rgb, alpha);
+            hasGlyph = alpha > 0.01;
+        } else if (isCardGlyph(glyphIndex) || isShaderGlyph(glyphIndex)) {
             // Card or shader glyph: render via shader function
             let localUV = localPxBase / grid.cellSize;  // Normalize to 0-1
             let mousePos = vec2<f32>(globals.mouseX, globals.mouseY);

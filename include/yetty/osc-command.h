@@ -55,7 +55,7 @@ struct OscCommand {
     // Plugin-specific args (raw string, passed to plugin)
     std::string pluginArgs;
 
-    // Payload (base94 decoded)
+    // Payload (base64 decoded)
     std::string payload;
 
     // Error message if parsing failed
@@ -79,9 +79,9 @@ public:
     // Generate a unique 8-character hash ID
     std::string generateId();
 
-    // Base94 encoding/decoding
-    static std::string base94Encode(const std::string& data);
-    static std::string base94Decode(const std::string& encoded);
+    // Base64 encoding/decoding
+    static std::string base64Encode(const std::string& data);
+    static std::string base64Decode(const std::string& encoded);
 
 private:
     // Tokenize a string respecting quoted strings
