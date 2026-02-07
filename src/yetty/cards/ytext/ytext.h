@@ -174,6 +174,7 @@ private:
     static_assert(sizeof(Metadata) == 64, "Metadata must be 64 bytes");
 
     void parseArgs(const std::string& args);
+    bool parseBracedArgs(const std::string& args);
     Result<void> parsePayload(const std::string& payload);
     void computeLayout();
     Result<void> uploadData();

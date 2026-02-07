@@ -24,7 +24,7 @@ Line 8
 Line 9
 Line 10"
 PAYLOAD=$(echo -n "$TEXT" | base64 -w0)
-printf '\033]666666;run -c ytext -x 0 -y 0 -w 45 -h 8 -r;scroll-y=30,loop;%s\033\\' "$PAYLOAD"
+printf '\033]666666;run -c ytext -x 0 -y 0 -w 45 -h 8 -r;--scroll-y 30 --loop;%s\033\\' "$PAYLOAD"
 echo
 sleep $DELAY
 
@@ -32,7 +32,7 @@ echo ""
 echo "--- Demo 2: Horizontal Marquee (seamless loop) ---"
 TEXT=">>> Breaking News: YText card now supports GPU-accelerated text scrolling with zero CPU overhead! <<<"
 PAYLOAD=$(echo -n "$TEXT" | base64 -w0)
-printf '\033]666666;run -c ytext -x 0 -y 0 -w 50 -h 3 -r;scroll-x=80,loop;%s\033\\' "$PAYLOAD"
+printf '\033]666666;run -c ytext -x 0 -y 0 -w 50 -h 3 -r;--scroll-x 80 --loop;%s\033\\' "$PAYLOAD"
 echo
 sleep $DELAY
 
@@ -43,7 +43,7 @@ Watch it go!
 Ping...
 Pong..."
 PAYLOAD=$(echo -n "$TEXT" | base64 -w0)
-printf '\033]666666;run -c ytext -x 0 -y 0 -w 35 -h 6 -r;scroll-y=40,pingpong;%s\033\\' "$PAYLOAD"
+printf '\033]666666;run -c ytext -x 0 -y 0 -w 35 -h 6 -r;--scroll-y 40 --pingpong;%s\033\\' "$PAYLOAD"
 echo
 sleep $DELAY
 
@@ -62,7 +62,7 @@ Line 6: GPU-powered
 Line 7: No CPU rebuild
 Line 8: Pure shader magic"
 PAYLOAD=$(echo -n "$TEXT" | base64 -w0)
-printf '\033]666666;run -c ytext -x 0 -y 0 -w 40 -h 10 -r;scroll-y=35,loop,cylinder,effect-strength=0.7;%s\033\\' "$PAYLOAD"
+printf '\033]666666;run -c ytext -x 0 -y 0 -w 40 -h 10 -r;--scroll-y 35 --loop --cylinder --effect-strength 0.7;%s\033\\' "$PAYLOAD"
 echo
 sleep $DELAY
 
@@ -70,7 +70,7 @@ echo ""
 echo "--- Demo 5: Vertical Cylinder Projection ---"
 TEXT=">>> Scrolling on a vertical cylinder - text wraps around the sides! <<<"
 PAYLOAD=$(echo -n "$TEXT" | base64 -w0)
-printf '\033]666666;run -c ytext -x 0 -y 0 -w 50 -h 5 -r;scroll-x=60,loop,cylinder-v,effect-strength=0.6;%s\033\\' "$PAYLOAD"
+printf '\033]666666;run -c ytext -x 0 -y 0 -w 50 -h 5 -r;--scroll-x 60 --loop --cylinder-v --effect-strength 0.6;%s\033\\' "$PAYLOAD"
 echo
 sleep $DELAY
 
@@ -83,7 +83,7 @@ Both X and Y
 Curve away
 At the edges"
 PAYLOAD=$(echo -n "$TEXT" | base64 -w0)
-printf '\033]666666;run -c ytext -x 0 -y 0 -w 35 -h 12 -r;scroll-y=25,loop,sphere,effect-strength=0.7;%s\033\\' "$PAYLOAD"
+printf '\033]666666;run -c ytext -x 0 -y 0 -w 35 -h 12 -r;--scroll-y 25 --loop --sphere --effect-strength 0.7;%s\033\\' "$PAYLOAD"
 echo
 sleep $DELAY
 
@@ -94,7 +94,7 @@ Compressed on slopes
 Stretched on peaks
 True projection math"
 PAYLOAD=$(echo -n "$TEXT" | base64 -w0)
-printf '\033]666666;run -c ytext -x 0 -y 0 -w 40 -h 8 -r;scroll-y=25,loop,wave-proj,effect-strength=0.6,frequency=3.0;%s\033\\' "$PAYLOAD"
+printf '\033]666666;run -c ytext -x 0 -y 0 -w 40 -h 8 -r;--scroll-y 25 --loop --wave-proj --effect-strength 0.6 --frequency 3.0;%s\033\\' "$PAYLOAD"
 echo
 sleep $DELAY
 
@@ -104,7 +104,7 @@ TEXT="Vertical wave projection
 Text warps with surface
 Foreshortening effect"
 PAYLOAD=$(echo -n "$TEXT" | base64 -w0)
-printf '\033]666666;run -c ytext -x 0 -y 0 -w 40 -h 8 -r;scroll-x=40,loop,wave-proj-v,effect-strength=0.5,frequency=3.0;%s\033\\' "$PAYLOAD"
+printf '\033]666666;run -c ytext -x 0 -y 0 -w 40 -h 8 -r;--scroll-x 40 --loop --wave-proj-v --effect-strength 0.5 --frequency 3.0;%s\033\\' "$PAYLOAD"
 echo
 sleep $DELAY
 
@@ -116,7 +116,7 @@ Concentric waves
 Radial foreshortening
 From center outward"
 PAYLOAD=$(echo -n "$TEXT" | base64 -w0)
-printf '\033]666666;run -c ytext -x 0 -y 0 -w 35 -h 10 -r;scroll-y=20,loop,ripple,effect-strength=0.5,frequency=4.0;%s\033\\' "$PAYLOAD"
+printf '\033]666666;run -c ytext -x 0 -y 0 -w 35 -h 10 -r;--scroll-y 20 --loop --ripple --effect-strength 0.5 --frequency 4.0;%s\033\\' "$PAYLOAD"
 echo
 sleep $DELAY
 
@@ -148,10 +148,9 @@ enough power to destroy an entire planet.
 
 
 
-
 "
 PAYLOAD=$(echo -n "$TEXT" | base64 -w0)
-printf '\033]666666;run -c ytext -x 2 -y 2 -w %d -h %d -r;scroll-y=20,loop,perspective,effect-strength=0.8;%s\033\\' "$SW_WIDTH" "$SW_HEIGHT" "$PAYLOAD"
+printf '\033]666666;run -c ytext -x 2 -y 2 -w %d -h %d -r;--scroll-y 20 --loop --perspective --effect-strength 0.8;%s\033\\' "$SW_WIDTH" "$SW_HEIGHT" "$PAYLOAD"
 echo
 sleep $DELAY
 
@@ -166,7 +165,7 @@ Ripples move along X axis
 Animated in real-time
 Pure GPU shader magic"
 PAYLOAD=$(echo -n "$TEXT" | base64 -w0)
-printf '\033]666666;run -c ytext -x 0 -y 0 -w 40 -h 8 -r;wave-disp,effect-strength=0.6,frequency=4.0;%s\033\\' "$PAYLOAD"
+printf '\033]666666;run -c ytext -x 0 -y 0 -w 40 -h 8 -r;--wave-disp --effect-strength 0.6 --frequency 4.0;%s\033\\' "$PAYLOAD"
 echo
 sleep $DELAY
 
@@ -176,7 +175,7 @@ TEXT="Vertical waves
 Ripples along Y
 Like a flag waving"
 PAYLOAD=$(echo -n "$TEXT" | base64 -w0)
-printf '\033]666666;run -c ytext -x 0 -y 0 -w 35 -h 8 -r;wave-disp-v,effect-strength=0.5,frequency=3.0;%s\033\\' "$PAYLOAD"
+printf '\033]666666;run -c ytext -x 0 -y 0 -w 35 -h 8 -r;--wave-disp-v --effect-strength 0.5 --frequency 3.0;%s\033\\' "$PAYLOAD"
 echo
 sleep $DELAY
 
@@ -187,7 +186,7 @@ Combined effects
 Wave + vertical scroll
 Mesmerizing!"
 PAYLOAD=$(echo -n "$TEXT" | base64 -w0)
-printf '\033]666666;run -c ytext -x 0 -y 0 -w 40 -h 8 -r;scroll-y=25,loop,wave-disp,effect-strength=0.4,frequency=3.0;%s\033\\' "$PAYLOAD"
+printf '\033]666666;run -c ytext -x 0 -y 0 -w 40 -h 8 -r;--scroll-y 25 --loop --wave-disp --effect-strength 0.4 --frequency 3.0;%s\033\\' "$PAYLOAD"
 echo
 sleep $DELAY
 

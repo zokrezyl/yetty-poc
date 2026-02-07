@@ -1,4 +1,5 @@
 #include "ytext.h"
+#include <yetty/yecho/yecho-parser.h>
 #include <ytrace/ytrace.hpp>
 #include <algorithm>
 #include <cstring>
@@ -59,12 +60,14 @@ Result<void> YText::init() {
     }
     _metaHandle = *metaResult;
 
-    // Parse arguments
+    // Parse arguments (may set content if braced notation used)
     parseArgs(_argsStr);
 
-    // Parse payload
-    if (auto res = parsePayload(_payloadStr); !res) {
-        return Err<void>("YText::init: payload parse failed", res);
+    // Parse payload only if content wasn't already set by braced notation
+    if (_glyphs.empty()) {
+        if (auto res = parsePayload(_payloadStr); !res) {
+            return Err<void>("YText::init: payload parse failed", res);
+        }
     }
 
     yinfo("YText::init: {} lines, {} glyphs, content={}x{}, scroll=({}, {})",
@@ -78,7 +81,148 @@ Result<void> YText::init() {
 // Argument parsing
 //=============================================================================
 
+bool YText::parseBracedArgs(const std::string& args) {
+    // Parse braced notation: {statements: content}
+    // Variables prefixed with @, statements separated with ;
+    // Content after : is the text
+
+    YEchoParser parser;
+    auto spans = parser.parse(args);
+
+    if (spans.empty()) {
+        return false;
+    }
+
+    // We expect a single Block span
+    const YEchoSpan* block = nullptr;
+    for (const auto& span : spans) {
+        if (span.type == YEchoSpan::Type::Block) {
+            block = &span;
+            break;
+        }
+    }
+
+    if (!block) {
+        return false;
+    }
+
+    // Process attributes (@ prefixed variables)
+    for (const auto& attr : block->attrs) {
+        const std::string& key = attr.key;
+        const std::string& value = attr.value;
+
+        if (key == "@scroll-x" || key == "@sx") {
+            try { _scrollSpeedX = std::stof(value); } catch (...) {}
+            yinfo("YText: scrollSpeedX={}", _scrollSpeedX);
+        }
+        else if (key == "@scroll-y" || key == "@sy") {
+            try { _scrollSpeedY = std::stof(value); } catch (...) {}
+            yinfo("YText: scrollSpeedY={}", _scrollSpeedY);
+        }
+        else if (key == "@loop") {
+            _scrollMode = YTextScrollMode::Loop;
+            yinfo("YText: scrollMode=loop");
+        }
+        else if (key == "@pingpong") {
+            _scrollMode = YTextScrollMode::PingPong;
+            yinfo("YText: scrollMode=pingpong");
+        }
+        else if (key == "@font-size" || key == "@fs") {
+            try { _baseFontSize = std::stof(value); } catch (...) {}
+            yinfo("YText: fontSize={}", _baseFontSize);
+        }
+        else if (key == "@font-family") {
+            // TODO: font family support
+            yinfo("YText: fontFamily={}", value);
+        }
+        else if (key == "@effect") {
+            if (value == "cylinder" || value == "cylinder-h") {
+                _effectMode = YTextEffectMode::CylinderH;
+            } else if (value == "cylinder-v") {
+                _effectMode = YTextEffectMode::CylinderV;
+            } else if (value == "sphere") {
+                _effectMode = YTextEffectMode::Sphere;
+            } else if (value == "wave-disp" || value == "wave-disp-h") {
+                _effectMode = YTextEffectMode::WaveDispH;
+            } else if (value == "wave-disp-v") {
+                _effectMode = YTextEffectMode::WaveDispV;
+            } else if (value == "wave-proj" || value == "wave-proj-h") {
+                _effectMode = YTextEffectMode::WaveProjH;
+            } else if (value == "wave-proj-v") {
+                _effectMode = YTextEffectMode::WaveProjV;
+            } else if (value == "ripple") {
+                _effectMode = YTextEffectMode::Ripple;
+            } else if (value == "perspective" || value == "starwars") {
+                _effectMode = YTextEffectMode::Perspective;
+            }
+            yinfo("YText: effect={}", value);
+        }
+        else if (key == "@effect-strength" || key == "@es") {
+            try { _effectStrength = std::stof(value); } catch (...) {}
+            yinfo("YText: effectStrength={}", _effectStrength);
+        }
+        else if (key == "@frequency" || key == "@freq") {
+            try { _frequency = std::stof(value); } catch (...) {}
+            yinfo("YText: frequency={}", _frequency);
+        }
+        else if (key == "@tilt-x" || key == "@tx") {
+            try { _tiltX = std::stof(value); } catch (...) {}
+            yinfo("YText: tiltX={}", _tiltX);
+        }
+        else if (key == "@tilt-y" || key == "@ty") {
+            try { _tiltY = std::stof(value); } catch (...) {}
+            yinfo("YText: tiltY={}", _tiltY);
+        }
+        else if (key == "@fg-color" || key == "@fg" || key == "@color") {
+            _fgColor = parseColor(value);
+            yinfo("YText: fgColor=0x{:08X}", _fgColor);
+        }
+        else if (key == "@bg-color" || key == "@bg") {
+            _bgColor = parseColor(value);
+            yinfo("YText: bgColor=0x{:08X}", _bgColor);
+        }
+    }
+
+    // The content after ':' is the text - unescape \n sequences
+    if (!block->content.empty()) {
+        std::string text;
+        text.reserve(block->content.size());
+        for (size_t i = 0; i < block->content.size(); ++i) {
+            if (block->content[i] == '\\' && i + 1 < block->content.size()) {
+                char next = block->content[i + 1];
+                if (next == 'n') {
+                    text += '\n';
+                    ++i;
+                    continue;
+                } else if (next == 't') {
+                    text += '\t';
+                    ++i;
+                    continue;
+                } else if (next == '\\') {
+                    text += '\\';
+                    ++i;
+                    continue;
+                }
+            }
+            text += block->content[i];
+        }
+        setText(text, _baseFontSize, _fgColor ? _fgColor : 0xFFFFFFFF);
+        yinfo("YText: content from braced notation: '{}'", text);
+    }
+
+    return true;
+}
+
 void YText::parseArgs(const std::string& args) {
+    // Check for braced notation: {statements: content}
+    size_t firstNonSpace = args.find_first_not_of(" \t\n\r");
+    if (firstNonSpace != std::string::npos && args[firstNonSpace] == '{') {
+        if (parseBracedArgs(args)) {
+            return;  // Successfully parsed braced notation
+        }
+    }
+
+    // Legacy command-line style parsing
     std::istringstream iss(args);
     std::string token;
 
