@@ -4,6 +4,6 @@
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR/../../.."
 
-uv run python3 tools/yetty-client/main.py create ydraw -i demo/assets/cards/x-draw/bouncing.yaml -w 80 -H 20
-
-echo  # newline after the card
+PAYLOAD=$(base64 -w0 < demo/assets/cards/x-draw/bouncing.yaml)
+printf '\033]666666;run -c ydraw -x 0 -y 0 -w 80 -h 20 -r;;%s\033\\' "$PAYLOAD"
+echo

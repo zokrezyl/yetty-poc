@@ -1,4 +1,4 @@
 #!/bin/bash
 # Demo: Plot expression - sin(x)/x (sinc function)
 
-printf '\033]666666;create -p plot -x 0 -y 0 -w 60 -h 20 -r;--expr "sin(x)/x" --domain -10,10 --min -0.5 --max 1.2 --grid --axes;\033\\'
+printf '\033]666666;run -c plot -w 60 -h 20 -r;{x=-10..10; @range=-10..10,-0.5..1.2; @axes=on; @grid=on: sin(x)/x};\033\\'

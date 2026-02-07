@@ -523,62 +523,62 @@ void YEchoParser::parseStatements(const std::string& str, std::vector<YEchoAttri
 
 std::string YEchoParser::generateOSC(const YEchoSpan& span, const std::string& cardType) const {
     // Generate OSC 666666 escape sequence for card
-    // Format: ESC ] 666666 ; generic-args ; plugin-args ; payload ESC \
-    
+    // Format: ESC ] 666666 ; generic-args ; card-args ; payload ESC \
+
     int width = 0;
     int height = 0;
-    std::string pluginArgs;
-    
+
+    // Extract dimensions from @view=W,H or legacy w=/h=
     for (const auto& attr : span.attrs) {
-        if (attr.key == "card") {
-            // Skip, we already have cardType
+        if (attr.key == "@view") {
+            // Parse @view=W,H format
+            auto comma = attr.value.find(',');
+            if (comma != std::string::npos) {
+                try {
+                    width = std::stoi(attr.value.substr(0, comma));
+                    height = std::stoi(attr.value.substr(comma + 1));
+                } catch (...) {}
+            }
         } else if (attr.key == "w") {
             try { width = std::stoi(attr.value); } catch (...) {}
         } else if (attr.key == "h") {
             try { height = std::stoi(attr.value); } catch (...) {}
-        } else {
-            // Build plugin args
-            if (!pluginArgs.empty()) pluginArgs += " ";
-            if (attr.key[0] == '@') {
-                // @view, @font-size, etc. -> --view, --font-size
-                pluginArgs += "--" + attr.key.substr(1) + " " + attr.value;
-            } else {
-                pluginArgs += "--" + attr.key + " " + attr.value;
-            }
         }
     }
-    
+
     // Build generic args
-    std::string genericArgs = "create -p " + cardType;
+    std::string genericArgs = "run -c " + cardType;
     if (width > 0) genericArgs += " -w " + std::to_string(width);
     if (height > 0) genericArgs += " -h " + std::to_string(height);
     genericArgs += " -r";  // relative positioning
-    
-    // Handle content based on card type
-    if (!span.content.empty()) {
-        if (!pluginArgs.empty()) pluginArgs += " ";
-        if (cardType == "plot") {
-            // Plot: content is the expression
-            pluginArgs += "--expr \"" + span.content + "\"";
-        } else if (cardType == "ytext") {
-            // Ytext: content is the text
-            pluginArgs += "--text \"" + span.content + "\"";
-        } else if (cardType == "qr") {
-            // QR: content is the data
-            pluginArgs += "--data \"" + span.content + "\"";
+
+    // Build card args: reconstruct braced notation without extracted attrs
+    std::string cardArgs = "{";
+    bool first = true;
+    for (const auto& attr : span.attrs) {
+        // Skip attrs that go into generic args
+        if (attr.key == "card" || attr.key == "@view" || attr.key == "w" || attr.key == "h") {
+            continue;
+        }
+        if (!first) cardArgs += "; ";
+        first = false;
+        if (attr.value.empty()) {
+            cardArgs += attr.key;
         } else {
-            // Generic: pass as --content
-            pluginArgs += "--content \"" + span.content + "\"";
+            cardArgs += attr.key + "=" + attr.value;
         }
     }
-    
+    cardArgs += ": ";
+    cardArgs += span.content;
+    cardArgs += "}";
+
     // Build OSC sequence
     std::string osc = "\033]666666;";
     osc += genericArgs;
     osc += ";";
-    osc += pluginArgs;
+    osc += cardArgs;
     osc += ";\033\\";
-    
+
     return osc;
 }
 

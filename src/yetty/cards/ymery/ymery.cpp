@@ -113,8 +113,12 @@ public:
         }
         _dataTree = *treeRes;
 
-        // Create renderer
-        auto rendererRes = ymery::Renderer::create(_lang, _dispatcher, _dataTree);
+        // Create renderer with external trees (config from YettyContext)
+        std::map<std::string, ymery::TreeLikePtr> externalTrees;
+        if (_ctx.config) {
+            externalTrees["config"] = _ctx.config;
+        }
+        auto rendererRes = ymery::Renderer::create(_lang, _dispatcher, _dataTree, std::move(externalTrees));
         if (!rendererRes) {
             return Err<void>("Ymery::init: failed to create renderer", rendererRes);
         }

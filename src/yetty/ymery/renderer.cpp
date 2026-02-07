@@ -11,13 +11,20 @@ namespace yetty::ymery {
 Result<Renderer::Ptr> Renderer::create(
     LangPtr lang,
     DispatcherPtr dispatcher,
-    TreeLikePtr dataTree
+    TreeLikePtr dataTree,
+    std::map<std::string, TreeLikePtr> externalTrees
 ) {
     auto r = Ptr(new Renderer());
     r->_lang = lang;
     r->_dispatcher = dispatcher;
     r->_dataTree = dataTree;
     r->_dataTrees["data"] = dataTree;
+
+    // Merge external trees (e.g., config from YettyContext)
+    for (auto& [name, tree] : externalTrees) {
+        r->_dataTrees[name] = std::move(tree);
+        yinfo("Renderer: registered external tree '{}'", name);
+    }
 
     // Determine render list from app config
     const auto& app = lang->appConfig();

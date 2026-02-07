@@ -1,7 +1,6 @@
 #!/bin/bash
 # Demo: Plot expression - sin(x)
 
-# OSC format: ESC ] 666666;create -p plot -x X -y Y -w W -h H -r;plugin-args;payload ESC \
-# For expression mode, no payload needed
+# OSC format: ESC ] 666666;run -c plot -w W -h H -r;{card-args: expression};payload ESC \
 
-printf '\033]666666;create -p plot -x 0 -y 0 -w 60 -h 20 -r;--expr "sin(x)" --grid --axes;\033\\'
+printf '\033]666666;run -c plot -w 60 -h 20 -r;{x=-pi..pi; @axes=on; @grid=on: sin(x)};\033\\'

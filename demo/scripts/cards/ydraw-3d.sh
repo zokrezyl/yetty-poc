@@ -4,6 +4,6 @@
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR/../../.."
 
-uv run python3 tools/yetty-client/main.py create ydraw -w 80 -H 30 -i demo/files/sdf/3d-primitives.yaml
-
-echo  # newline after the card
+PAYLOAD=$(base64 -w0 < demo/files/sdf/3d-primitives.yaml)
+printf '\033]666666;run -c ydraw -x 0 -y 0 -w 80 -h 30 -r;;%s\033\\' "$PAYLOAD"
+echo

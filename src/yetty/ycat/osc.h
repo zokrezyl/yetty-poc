@@ -30,6 +30,9 @@ std::string createSequenceBytes(
     const std::vector<uint8_t>& payloadBytes,
     std::string_view pluginArgs = "");
 
+// Build an OSC help sequence for a card
+std::string createHelpSequence(std::string_view card);
+
 // Wrap an OSC sequence for tmux DCS passthrough if $TMUX is set
 std::string maybeWrapForTmux(const std::string& sequence);
 

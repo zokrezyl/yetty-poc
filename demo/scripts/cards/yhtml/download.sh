@@ -10,7 +10,6 @@
 # Requires: yetty built with -DYETTY_CARD_YHTML=ON
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 
 URL="${1:-https://news.google.com}"
 WIDTH="${2:-80}"
@@ -18,6 +17,6 @@ HEIGHT="${3:-40}"
 
 echo "Rendering: $URL"
 
-uv run python3 "$PROJECT_ROOT/tools/yetty-client/main.py" create yhtml \
-    -i "$URL" \
-    -w "$WIDTH" -H "$HEIGHT"
+PAYLOAD=$(echo -n "$URL" | base64 -w0)
+printf '\033]666666;run -c yhtml -x 0 -y 0 -w %d -h %d -r;url;%s\033\\' "$WIDTH" "$HEIGHT" "$PAYLOAD"
+echo

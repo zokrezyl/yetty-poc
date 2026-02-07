@@ -31,20 +31,27 @@ std::string OscCommandParser::generateId() {
 std::vector<std::string> OscCommandParser::splitFields(const std::string& sequence) {
     // Split into exactly 4 fields: vendor-id;generic-args;plugin-args;payload
     // Only split on first 3 semicolons - payload may contain semicolons
-    // Respect quoted strings (semicolons inside quotes don't count as separators)
+    // Respect quoted strings and braces (semicolons inside don't count as separators)
     std::vector<std::string> fields;
     size_t start = 0;
     bool inQuotes = false;
+    int braceDepth = 0;
     int fieldCount = 0;
 
     for (size_t i = 0; i < sequence.size() && fieldCount < 3; ++i) {
         char c = sequence[i];
         if (c == '"' || c == '\'') {
             inQuotes = !inQuotes;
-        } else if (c == ';' && !inQuotes) {
-            fields.push_back(sequence.substr(start, i - start));
-            start = i + 1;
-            fieldCount++;
+        } else if (!inQuotes) {
+            if (c == '{') {
+                braceDepth++;
+            } else if (c == '}') {
+                braceDepth--;
+            } else if (c == ';' && braceDepth == 0) {
+                fields.push_back(sequence.substr(start, i - start));
+                start = i + 1;
+                fieldCount++;
+            }
         }
     }
 
@@ -121,9 +128,9 @@ Result<OscCommand> OscCommandParser::parse(const std::string& sequence) {
     }
     cmd = *parseResult;
 
-    // Plugin args (field 2, optional)
+    // Card args (field 2, optional)
     if (fields.size() > 2) {
-        cmd.pluginArgs = fields[2];
+        cmd.cardArgs = fields[2];
     }
 
     // Payload (field 3, optional, base64 encoded)
@@ -143,13 +150,14 @@ Result<OscCommand> OscCommandParser::parseGenericArgs(const std::vector<std::str
 
     const std::string& command = tokens[0];
 
-    if (command == "create") {
-        cmd.type = OscCommandType::Create;
-        auto result = parseCreateArgs(tokens);
+    if (command == "run" || command == "create") {
+        // "create" is accepted for backwards compatibility but "run" is preferred
+        cmd.type = OscCommandType::Run;
+        auto result = parseRunArgs(tokens);
         if (!result) {
-            return Err<OscCommand>("create: " + error_msg(result));
+            return Err<OscCommand>("run: " + error_msg(result));
         }
-        cmd.create = *result;
+        cmd.run = *result;
     }
     else if (command == "ls" || command == "list") {
         cmd.type = OscCommandType::List;
@@ -159,8 +167,9 @@ Result<OscCommand> OscCommandParser::parseGenericArgs(const std::vector<std::str
         }
         cmd.list = *result;
     }
-    else if (command == "plugins") {
-        cmd.type = OscCommandType::Plugins;
+    else if (command == "cards" || command == "plugins") {
+        // "plugins" accepted for backwards compatibility
+        cmd.type = OscCommandType::Cards;
     }
     else if (command == "kill") {
         cmd.type = OscCommandType::Kill;
@@ -194,6 +203,14 @@ Result<OscCommand> OscCommandParser::parseGenericArgs(const std::vector<std::str
         }
         cmd.target = *result;
     }
+    else if (command == "help") {
+        cmd.type = OscCommandType::Help;
+        auto result = parseHelpArgs(tokens);
+        if (!result) {
+            return Err<OscCommand>("help: " + error_msg(result));
+        }
+        cmd.help = *result;
+    }
     else {
         return Err<OscCommand>("unknown command: " + command);
     }
@@ -201,42 +218,43 @@ Result<OscCommand> OscCommandParser::parseGenericArgs(const std::vector<std::str
     return Ok(cmd);
 }
 
-Result<CreateArgs> OscCommandParser::parseCreateArgs(const std::vector<std::string>& tokens) {
-    CreateArgs args;
+Result<RunArgs> OscCommandParser::parseRunArgs(const std::vector<std::string>& tokens) {
+    RunArgs args;
 
     for (size_t i = 1; i < tokens.size(); ++i) {
         const auto& token = tokens[i];
 
         if (token == "-x" || token == "--x-pos") {
-            if (++i >= tokens.size()) return Err<CreateArgs>("missing value for " + token);
+            if (++i >= tokens.size()) return Err<RunArgs>("missing value for " + token);
             args.x = std::stoi(tokens[i]);
         }
         else if (token == "-y" || token == "--y-pos") {
-            if (++i >= tokens.size()) return Err<CreateArgs>("missing value for " + token);
+            if (++i >= tokens.size()) return Err<RunArgs>("missing value for " + token);
             args.y = std::stoi(tokens[i]);
         }
         else if (token == "-w" || token == "--width") {
-            if (++i >= tokens.size()) return Err<CreateArgs>("missing value for " + token);
+            if (++i >= tokens.size()) return Err<RunArgs>("missing value for " + token);
             args.width = std::stoi(tokens[i]);
         }
         else if (token == "-h" || token == "--height") {
-            if (++i >= tokens.size()) return Err<CreateArgs>("missing value for " + token);
+            if (++i >= tokens.size()) return Err<RunArgs>("missing value for " + token);
             args.height = std::stoi(tokens[i]);
         }
-        else if (token == "-p" || token == "--plugin") {
-            if (++i >= tokens.size()) return Err<CreateArgs>("missing value for " + token);
-            args.plugin = tokens[i];
+        else if (token == "-c" || token == "--card" || token == "-p" || token == "--plugin") {
+            // -p/--plugin accepted for backwards compatibility
+            if (++i >= tokens.size()) return Err<RunArgs>("missing value for " + token);
+            args.card = tokens[i];
         }
         else if (token == "-r" || token == "--relative") {
             args.relative = true;
         }
         else {
-            return Err<CreateArgs>("unknown option: " + token);
+            return Err<RunArgs>("unknown option: " + token);
         }
     }
 
-    if (args.plugin.empty()) {
-        return Err<CreateArgs>("--plugin/-p is required");
+    if (args.card.empty()) {
+        return Err<RunArgs>("--card/-c is required");
     }
 
     return Ok(args);
@@ -269,17 +287,41 @@ Result<TargetArgs> OscCommandParser::parseTargetArgs(const std::vector<std::stri
             if (++i >= tokens.size()) return Err<TargetArgs>("missing value for --id");
             args.id = tokens[i];
         }
-        else if (token == "--plugin" || token == "-p") {
-            if (++i >= tokens.size()) return Err<TargetArgs>("missing value for --plugin");
-            args.plugin = tokens[i];
+        else if (token == "--card" || token == "-c" || token == "--plugin" || token == "-p") {
+            // --plugin/-p accepted for backwards compatibility
+            if (++i >= tokens.size()) return Err<TargetArgs>("missing value for --card");
+            args.card = tokens[i];
         }
         else {
             return Err<TargetArgs>("unknown option: " + token);
         }
     }
 
-    if (args.id.empty() && args.plugin.empty()) {
-        return Err<TargetArgs>("--id or --plugin is required");
+    if (args.id.empty() && args.card.empty()) {
+        return Err<TargetArgs>("--id or --card is required");
+    }
+
+    return Ok(args);
+}
+
+Result<HelpArgs> OscCommandParser::parseHelpArgs(const std::vector<std::string>& tokens) {
+    HelpArgs args;
+
+    for (size_t i = 1; i < tokens.size(); ++i) {
+        const auto& token = tokens[i];
+
+        if (token == "--card" || token == "-c" || token == "--plugin" || token == "-p") {
+            // --plugin/-p accepted for backwards compatibility
+            if (++i >= tokens.size()) return Err<HelpArgs>("missing value for --card");
+            args.card = tokens[i];
+        }
+        else {
+            return Err<HelpArgs>("unknown option: " + token);
+        }
+    }
+
+    if (args.card.empty()) {
+        return Err<HelpArgs>("--card/-c is required");
     }
 
     return Ok(args);

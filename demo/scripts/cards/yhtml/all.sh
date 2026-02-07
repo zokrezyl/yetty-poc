@@ -7,6 +7,7 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+cd "$PROJECT_ROOT"
 
 DELAY=1
 
@@ -14,49 +15,47 @@ echo "=== YHtml Demo: HTML/CSS Rendering via litehtml + YDraw SDF ==="
 echo ""
 
 echo "--- Demo 1: Basic HTML (headings, lists, text styles) ---"
-uv run python3 "$PROJECT_ROOT/tools/yetty-client/main.py" create yhtml \
-    -i "$PROJECT_ROOT/demo/assets/yhtml/basic.html" \
-    -w 50 -H 25
+PAYLOAD=$(base64 -w0 < demo/assets/yhtml/basic.html)
+printf '\033]666666;run -c yhtml -x 0 -y 0 -w 50 -h 25 -r;;%s\033\\' "$PAYLOAD"
+echo
 sleep $DELAY
 
 echo ""
 echo "--- Demo 2: CSS Styled Dashboard ---"
-uv run python3 "$PROJECT_ROOT/tools/yetty-client/main.py" create yhtml \
-    -i "$PROJECT_ROOT/demo/assets/yhtml/styled.html" \
-    --bg-color 11111b \
-    -w 50 -H 30
+PAYLOAD=$(base64 -w0 < demo/assets/yhtml/styled.html)
+printf '\033]666666;run -c yhtml -x 0 -y 0 -w 50 -h 30 -r;bg-color=11111b;%s\033\\' "$PAYLOAD"
+echo
 sleep $DELAY
 
 echo ""
 echo "--- Demo 3: Table Layout ---"
-uv run python3 "$PROJECT_ROOT/tools/yetty-client/main.py" create yhtml \
-    -i "$PROJECT_ROOT/demo/assets/yhtml/table.html" \
-    --bg-color 11111b \
-    -w 60 -H 30
+PAYLOAD=$(base64 -w0 < demo/assets/yhtml/table.html)
+printf '\033]666666;run -c yhtml -x 0 -y 0 -w 60 -h 30 -r;bg-color=11111b;%s\033\\' "$PAYLOAD"
+echo
 sleep $DELAY
 
 echo ""
 echo "--- Demo 4: Form Layout ---"
-uv run python3 "$PROJECT_ROOT/tools/yetty-client/main.py" create yhtml \
-    -i "$PROJECT_ROOT/demo/assets/yhtml/form.html" \
-    --bg-color 1e1e2e \
-    -w 50 -H 30
+PAYLOAD=$(base64 -w0 < demo/assets/yhtml/form.html)
+printf '\033]666666;run -c yhtml -x 0 -y 0 -w 50 -h 30 -r;bg-color=1e1e2e;%s\033\\' "$PAYLOAD"
+echo
 sleep $DELAY
 
 echo ""
 echo "--- Demo 5: Landing Page ---"
-uv run python3 "$PROJECT_ROOT/tools/yetty-client/main.py" create yhtml \
-    -i "$PROJECT_ROOT/demo/assets/yhtml/landing.html" \
-    -w 80 -H 45
+PAYLOAD=$(base64 -w0 < demo/assets/yhtml/landing.html)
+printf '\033]666666;run -c yhtml -x 0 -y 0 -w 80 -h 45 -r;;%s\033\\' "$PAYLOAD"
+echo
 sleep $DELAY
 
 echo ""
 echo "--- Demo 6: Inline HTML ---"
-uv run python3 "$PROJECT_ROOT/tools/yetty-client/main.py" create yhtml \
-    -I '<h1 style="color:#89b4fa">Inline</h1><p>Quick HTML without a file</p>' \
-    -w 40 -H 10
+HTML_CONTENT='<h1 style="color:#89b4fa">Inline</h1><p>Quick HTML without a file</p>'
+PAYLOAD=$(echo -n "$HTML_CONTENT" | base64 -w0)
+printf '\033]666666;run -c yhtml -x 0 -y 0 -w 40 -h 10 -r;;%s\033\\' "$PAYLOAD"
+echo
 sleep $DELAY
 
 echo ""
 echo "=== All demos loaded ==="
-echo "Kill with: yetty-client kill --plugin yhtml"
+echo "Kill with: printf '\\033]666666;kill -c yhtml\\033\\\\'"

@@ -18,6 +18,6 @@ if [ ! -f "$HTML_FILE" ]; then
     exit 1
 fi
 
-uv run python3 "$PROJECT_ROOT/tools/yetty-client/main.py" create yhtml \
-    -i "$HTML_FILE" \
-    -w "$WIDTH" -H "$HEIGHT"
+PAYLOAD=$(base64 -w0 < "$HTML_FILE")
+printf '\033]666666;run -c yhtml -x 0 -y 0 -w %d -h %d -r;;%s\033\\' "$WIDTH" "$HEIGHT" "$PAYLOAD"
+echo

@@ -1,10 +1,9 @@
 #!/bin/bash
 # ThorVG Card: YAML-defined vector graphics with shapes and colors
-# Uses the card system to create a ThorVG card via SwCanvas software renderer
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR/../../.."
 
-uv run python3 tools/yetty-client/main.py create thorvg --yaml demo/assets/thorvg/shapes.yaml -w 60 -H 30
-
-echo  # newline after the card
+PAYLOAD=$(base64 -w0 < demo/assets/thorvg/shapes.yaml)
+printf '\033]666666;run -c thorvg -x 0 -y 0 -w 60 -h 30 -r;;%s\033\\' "$PAYLOAD"
+echo

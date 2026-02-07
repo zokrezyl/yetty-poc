@@ -16,44 +16,50 @@ constexpr int YETTY_OSC_VENDOR_ID = 666666;
 // OscCommand - parsed OSC command
 //-----------------------------------------------------------------------------
 enum class OscCommandType {
-    Create,     // create -x 0 -y 0 -w 100 -h 100 -p image
+    Run,        // run -x 0 -y 0 -w 100 -h 100 -c image (creates + renders card)
     List,       // ls [--all]
-    Plugins,    // plugins
-    Kill,       // kill --id <id> | --plugin <name>
-    Stop,       // stop --id <id> | --plugin <name>
-    Start,      // start --id <id> | --plugin <name>
+    Cards,      // cards (list available card types)
+    Kill,       // kill --id <id> | --card <name>
+    Stop,       // stop --id <id> | --card <name>
+    Start,      // start --id <id> | --card <name>
     Update,     // update --id <id>
+    Help,       // help -c <card>
     Unknown
 };
 
-struct CreateArgs {
+struct RunArgs {
     int32_t x = 0;
     int32_t y = 0;
     int32_t width = 0;      // 0 = stretch to edge
     int32_t height = 0;     // 0 = stretch to edge
-    std::string plugin;
+    std::string card;
     bool relative = false;  // Position relative to cursor
 };
 
 struct ListArgs {
-    bool all = false;       // Include stopped layers
+    bool all = false;       // Include stopped cards
 };
 
 struct TargetArgs {
-    std::string id;         // Target specific layer by ID
-    std::string plugin;     // Target all layers of a plugin type
+    std::string id;         // Target specific card by ID
+    std::string card;       // Target all cards of a type
+};
+
+struct HelpArgs {
+    std::string card;       // Card type to get help for
 };
 
 struct OscCommand {
     OscCommandType type = OscCommandType::Unknown;
 
     // Command-specific args (use appropriate one based on type)
-    CreateArgs create;
+    RunArgs run;
     ListArgs list;
     TargetArgs target;      // For kill, stop, start, update
+    HelpArgs help;
 
-    // Plugin-specific args (raw string, passed to plugin)
-    std::string pluginArgs;
+    // Card-specific args (raw string, passed to card)
+    std::string cardArgs;
 
     // Payload (base64 decoded)
     std::string payload;
@@ -91,14 +97,17 @@ private:
     // Parse generic args into command
     Result<OscCommand> parseGenericArgs(const std::vector<std::string>& tokens);
 
-    // Parse create command args
-    Result<CreateArgs> parseCreateArgs(const std::vector<std::string>& tokens);
+    // Parse run command args
+    Result<RunArgs> parseRunArgs(const std::vector<std::string>& tokens);
 
     // Parse list command args
     Result<ListArgs> parseListArgs(const std::vector<std::string>& tokens);
 
     // Parse target args (for kill, stop, start, update)
     Result<TargetArgs> parseTargetArgs(const std::vector<std::string>& tokens);
+
+    // Parse help command args
+    Result<HelpArgs> parseHelpArgs(const std::vector<std::string>& tokens);
 
     // Split sequence by semicolon into fields
     std::vector<std::string> splitFields(const std::string& sequence);

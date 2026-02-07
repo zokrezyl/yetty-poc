@@ -1,23 +1,14 @@
 #!/bin/bash
-# Demo script to display a PDF file using the new card system (PdfCard)
+# Display a PDF file using the old pdf card (PDFium-based)
 #
 # Usage: ./pdf.sh [width] [height]
-#   Default: 80x40 cells
-#
-# This uses the new card system with shader glyph U+100000 (same as image card)
-# which renders PDF pages via PDFium + GPU texture atlas.
-# Scroll to navigate pages, Ctrl+Scroll to zoom.
-#
-# Requires: yetty built with -DYETTY_CARD_PDF=ON
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
-# Default size
 WIDTH="${1:-80}"
 HEIGHT="${2:-40}"
 
-# Sample PDF bundled with the project
 PDF_FILE="$PROJECT_ROOT/demo/assets/sample-local-pdf.pdf"
 
 if [ ! -f "$PDF_FILE" ]; then
@@ -25,5 +16,5 @@ if [ ! -f "$PDF_FILE" ]; then
     exit 1
 fi
 
-# Use the Python client for card system
-cat "$PDF_FILE" | uv run python3 "$PROJECT_ROOT/tools/yetty-client/main.py" create pdf -i - -w "$WIDTH" -H "$HEIGHT"
+PAYLOAD=$(base64 -w0 < "$PDF_FILE")
+printf '\033]666666;run -c pdf -x 0 -y 0 -w %d -h %d -r;-i -;%s\033\\' "$WIDTH" "$HEIGHT" "$PAYLOAD"

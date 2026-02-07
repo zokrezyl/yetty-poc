@@ -1,10 +1,9 @@
 #!/bin/bash
 # ThorVG Card: Lottie animation - bouncing ball vector animation
-# Uses the card system to create a ThorVG card via SwCanvas software renderer
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR/../../.."
 
-uv run python3 tools/yetty-client/main.py create thorvg --lottie demo/assets/thorvg/bouncing-ball.json -w 40 -H 25
-
-echo  # newline after the card
+PAYLOAD=$(base64 -w0 < demo/assets/thorvg/bouncing-ball.json)
+printf '\033]666666;run -c thorvg -x 0 -y 0 -w 40 -h 25 -r;;%s\033\\' "$PAYLOAD"
+echo

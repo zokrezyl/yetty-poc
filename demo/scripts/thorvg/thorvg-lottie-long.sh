@@ -1,5 +1,8 @@
 #!/bin/bash
-# ThorVG Plugin: Long Lottie animation - 14 second confetti celebration
+# ThorVG Card: Long Lottie animation - 14 second confetti celebration
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR/../../.."
-uv run python3 tools/yetty-client/main.py create thorvg --lottie demo/files/thorvg/animation-long.json -w 40 -H 25
+
+PAYLOAD=$(base64 -w0 < demo/files/thorvg/animation-long.json)
+printf '\033]666666;run -c thorvg -x 0 -y 0 -w 40 -h 25 -r;lottie;%s\033\\' "$PAYLOAD"
+echo

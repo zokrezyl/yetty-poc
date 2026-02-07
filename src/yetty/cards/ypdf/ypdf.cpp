@@ -93,6 +93,11 @@ YPdf::~YPdf() {
         pdfioFileClose(_pdfFile);
         _pdfFile = nullptr;
     }
+    // Clean up temp file if created
+    if (!_tempPdfPath.empty() && std::filesystem::exists(_tempPdfPath)) {
+        std::error_code ec;
+        std::filesystem::remove(_tempPdfPath, ec);
+    }
 }
 
 //=============================================================================
@@ -196,7 +201,12 @@ void YPdf::parseArgs(const std::string& args) {
     std::string token;
 
     while (iss >> token) {
-        if (token == "--page" || token == "-p") {
+        if (token == "--input" || token == "-i") {
+            std::string val;
+            if (iss >> val) {
+                _inputSource = val;
+            }
+        } else if (token == "--page" || token == "-p") {
             int val;
             if (iss >> val) {
                 _currentPage = std::max(0, val);
@@ -241,16 +251,42 @@ static bool pdfioErrorHandler(pdfio_file_t* /*pdf*/, const char* message,
 }
 
 Result<void> YPdf::loadPdf() {
-    if (_payloadStr.empty()) {
-        return Err<void>("YPdf::loadPdf: empty payload");
+    std::string pdfPath;
+
+    // Determine PDF source based on -i/--input argument
+    if (_inputSource == "-" || _inputSource.empty()) {
+        // Read from payload (base64-decoded data passed via OSC)
+        if (_payloadStr.empty()) {
+            return Err<void>("YPdf::loadPdf: empty payload (use -i - to read from payload)");
+        }
+
+        // pdfio requires a file path, so write payload to a temp file
+        _tempPdfPath = std::filesystem::temp_directory_path() /
+                       ("ypdf_" + std::to_string(id()) + ".pdf");
+        std::ofstream out(_tempPdfPath, std::ios::binary);
+        if (!out) {
+            return Err<void>("YPdf::loadPdf: failed to create temp file: " + _tempPdfPath.string());
+        }
+        out.write(_payloadStr.data(), static_cast<std::streamsize>(_payloadStr.size()));
+        out.close();
+
+        pdfPath = _tempPdfPath.string();
+        yinfo("YPdf::loadPdf: wrote {} bytes to temp file '{}'", _payloadStr.size(), pdfPath);
+    } else {
+        // Read from file path specified via -i <path>
+        if (!std::filesystem::exists(_inputSource)) {
+            return Err<void>("YPdf::loadPdf: file not found: " + _inputSource);
+        }
+        pdfPath = _inputSource;
+        yinfo("YPdf::loadPdf: loading from file '{}'", pdfPath);
     }
 
-    _pdfFile = pdfioFileOpen(_payloadStr.c_str(), /*password_cb=*/nullptr,
+    _pdfFile = pdfioFileOpen(pdfPath.c_str(), /*password_cb=*/nullptr,
                               /*password_data=*/nullptr,
                               pdfioErrorHandler, /*error_data=*/nullptr);
 
     if (!_pdfFile) {
-        return Err<void>("YPdf::loadPdf: failed to open: " + _payloadStr);
+        return Err<void>("YPdf::loadPdf: failed to open: " + pdfPath);
     }
 
     _pageCount = static_cast<int>(pdfioFileGetNumPages(_pdfFile));
@@ -262,8 +298,7 @@ Result<void> YPdf::loadPdf() {
 
     _currentPage = std::clamp(_currentPage, 0, _pageCount - 1);
 
-    yinfo("YPdf::loadPdf: opened '{}' with {} pages",
-          _payloadStr, _pageCount);
+    yinfo("YPdf::loadPdf: opened '{}' with {} pages", pdfPath, _pageCount);
     return Ok();
 }
 

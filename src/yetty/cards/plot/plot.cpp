@@ -7,6 +7,7 @@
 #include <yetty/ms-msdf-font.h>
 #include <yetty/shader-manager.h>
 #include <yetty/yast/yast.h>
+#include "../../yecho/yecho-parser.h"
 #include <ytrace/ytrace.hpp>
 #include <sstream>
 #include <algorithm>
@@ -394,9 +395,130 @@ private:
         return Ok();
     }
 
+    // Parse a value that might contain pi constants
+    float parseValue(const std::string& str) {
+        if (str == "pi") return 3.14159265f;
+        if (str == "-pi") return -3.14159265f;
+        try {
+            return std::stof(str);
+        } catch (...) {
+            return 0.0f;
+        }
+    }
+
+    // Parse a range value: min..max
+    void parseDomainRange(const std::string& value, float& minVal, float& maxVal) {
+        auto dots = value.find("..");
+        if (dots != std::string::npos) {
+            minVal = parseValue(value.substr(0, dots));
+            maxVal = parseValue(value.substr(dots + 2));
+        }
+    }
+
+    // Parse braced notation using YEchoParser
+    void parseBracedArgs(const std::string& args) {
+        yinfo("Plot::parseBracedArgs: args='{}'", args);
+
+        YEchoParser parser;
+        auto spans = parser.parse(args);
+
+        if (spans.empty() || spans[0].type != YEchoSpan::Type::Block) {
+            ywarn("Plot::parseBracedArgs: failed to parse braced notation");
+            return;
+        }
+
+        const auto& span = spans[0];
+
+        // Process attributes
+        for (const auto& attr : span.attrs) {
+            if (attr.key == "@range") {
+                // @range=xmin..xmax,ymin..ymax
+                auto comma = attr.value.find(',');
+                if (comma != std::string::npos) {
+                    parseDomainRange(attr.value.substr(0, comma), _domainMin, _domainMax);
+                    float ymin = _minValue, ymax = _maxValue;
+                    parseDomainRange(attr.value.substr(comma + 1), ymin, ymax);
+                    _minValue = ymin;
+                    _maxValue = ymax;
+                    _autoRange = false;
+                }
+            } else if (attr.key == "x") {
+                // x=-pi..pi (x domain)
+                parseDomainRange(attr.value, _domainMin, _domainMax);
+            } else if (attr.key == "@axes") {
+                if (attr.value == "on" || attr.value == "true" || attr.value == "1") {
+                    _flags |= FLAG_AXES;
+                } else {
+                    _flags &= ~FLAG_AXES;
+                }
+            } else if (attr.key == "@grid") {
+                if (attr.value == "on" || attr.value == "true" || attr.value == "1") {
+                    _flags |= FLAG_GRID;
+                } else {
+                    _flags &= ~FLAG_GRID;
+                }
+            }
+        }
+
+        // Parse content as expression
+        if (!span.content.empty()) {
+            _plotResult = yast::plotExpressionToWGSL(span.content);
+            if (!_plotResult.plots.empty()) {
+                _flags |= FLAG_EXPR;
+                yinfo("Plot::parseBracedArgs: parsed {} functions", _plotResult.plots.size());
+                for (size_t i = 0; i < _plotResult.plots.size(); i++) {
+                    const auto& p = _plotResult.plots[i];
+                    yinfo("  [{}] {} = '{}' color='{}' text='{}'",
+                          i, p.name, p.expr.code, p.color, p.text);
+                }
+
+                // Extract colors for each function
+                uint32_t defaultColors[8] = {
+                    0xFFFF3333,  // Red
+                    0xFF3399FF,  // Blue
+                    0xFF33CC33,  // Green
+                    0xFFFFCC33,  // Yellow
+                    0xFFCC33CC,  // Magenta
+                    0xFF33CCCC,  // Cyan
+                    0xFFFF8800,  // Orange
+                    0xFF9955FF   // Purple
+                };
+
+                for (size_t i = 0; i < _plotResult.plots.size() && i < 8; i++) {
+                    const auto& p = _plotResult.plots[i];
+                    uint32_t color = defaultColors[i];
+
+                    // Parse hex color if provided: #RRGGBB -> 0xFFRRGGBB
+                    if (!p.color.empty() && p.color[0] == '#' && p.color.size() >= 7) {
+                        uint32_t rgb = static_cast<uint32_t>(std::stoul(p.color.substr(1), nullptr, 16));
+                        color = 0xFF000000 | rgb;
+                    }
+                    _functionColors.push_back(color);
+                }
+
+                // Set sensible defaults for Y range if auto
+                if (_autoRange) {
+                    _minValue = -1.5f;
+                    _maxValue = 1.5f;
+                }
+            } else {
+                ywarn("Plot::parseBracedArgs: failed to parse expression '{}'", span.content);
+            }
+        }
+
+        _metadataDirty = true;
+    }
+
     void parseArgs(const std::string& args) {
         yinfo("Plot::parseArgs: args='{}'", args);
 
+        // Check for braced notation
+        if (!args.empty() && args.front() == '{') {
+            parseBracedArgs(args);
+            return;
+        }
+
+        // Legacy flag-based parsing
         std::istringstream iss(args);
         std::string token;
 
@@ -427,7 +549,7 @@ private:
                         yinfo("Plot::parseArgs: parsed {} functions", _plotResult.plots.size());
                         for (size_t i = 0; i < _plotResult.plots.size(); i++) {
                             const auto& p = _plotResult.plots[i];
-                            yinfo("  [{}] {} = '{}' color='{}' text='{}'", 
+                            yinfo("  [{}] {} = '{}' color='{}' text='{}'",
                                   i, p.name, p.expr.code, p.color, p.text);
                         }
                     } else {
@@ -442,13 +564,8 @@ private:
                     if (comma != std::string::npos) {
                         auto minStr = domainStr.substr(0, comma);
                         auto maxStr = domainStr.substr(comma + 1);
-                        // Handle pi constants
-                        if (minStr == "-pi") _domainMin = -3.14159265f;
-                        else if (minStr == "pi") _domainMin = 3.14159265f;
-                        else _domainMin = std::stof(minStr);
-                        if (maxStr == "-pi") _domainMax = -3.14159265f;
-                        else if (maxStr == "pi") _domainMax = 3.14159265f;
-                        else _domainMax = std::stof(maxStr);
+                        _domainMin = parseValue(minStr);
+                        _domainMax = parseValue(maxStr);
                     }
                 }
             } else if (token == "--min") {
@@ -546,7 +663,16 @@ private:
             return Err<void>("No valid data points in payload");
         }
 
-        return setData(values);
+        // Just store data locally - allocation happens in allocateBuffers() lifecycle
+        _data = std::move(values);
+
+        // Calculate range if auto
+        if (_autoRange) {
+            calculateRange();
+        }
+
+        _metadataDirty = true;
+        return Ok();
     }
 
     void calculateRange() {
@@ -599,19 +725,10 @@ private:
         // Pack dispatch indices: samplerIndex(8) | transformBase(8) | transformCount(8) | renderIndex(8)
         uint32_t samplerIdx = (_samplerIndex == 0xFFFFFFFF) ? 0u : _samplerIndex;
         uint32_t transformBaseIdx = (_transformBase == 0xFFFFFFFF) ? 0u : _transformBase;
-        meta.dispatchSlot = (samplerIdx & 0xFF) 
+        meta.dispatchSlot = (samplerIdx & 0xFF)
                           | ((transformBaseIdx & 0xFF) << 8)
                           | ((_transformCount & 0xFF) << 16)
                           | ((renderIdx & 0xFF) << 24);
-        
-        // Copy per-function colors
-        for (size_t i = 0; i < 8; i++) {
-            if (i < _functionColors.size()) {
-                meta.functionColors[i] = _functionColors[i];
-            } else {
-                meta.functionColors[i] = 0xFFFFFFFF;  // White default
-            }
-        }
 
         yinfo("Plot::uploadMetadata: metaOffset={} plotType={} dataOffset={} "
               "dataCount={} min={} max={} flags={} size={}x{} bgColor={:#x} domain=[{},{}] dispatch=[s={},tBase={},tCount={},r={}]",
@@ -630,6 +747,7 @@ private:
 
     // Metadata structure (64 bytes = 16 u32 slots)
     // Shader reads as cardMetadata[metaOffset + N] (raw u32s).
+    // Extended data (function colors) goes in cardStorage via dataOffset.
     struct Metadata {
         // [0]: plotType(8) | flags(8) | padding(16)
         uint8_t plotType;
@@ -639,7 +757,7 @@ private:
         uint16_t widthCells;
         uint16_t heightCells;
         // [2-3]
-        uint32_t dataOffset;    // float index into cardStorage
+        uint32_t dataOffset;    // float index into cardStorage (data OR colors)
         uint32_t dataCount;
         // [4-5]
         float minValue;
@@ -663,10 +781,8 @@ private:
         float domainMax;
         // [15]: samplerIndex(8) | transformBase(8) | transformCount(8) | renderIndex(8)
         uint32_t dispatchSlot;
-        // [16-23]: Per-function colors (up to 8 functions)
-        uint32_t functionColors[8];
     };
-    static_assert(sizeof(Metadata) == 96, "Metadata must be 96 bytes");
+    static_assert(sizeof(Metadata) == 64, "Metadata must be 64 bytes");
 
     // ShaderManager reference (for registering providers once)
     std::shared_ptr<ShaderManager> _shaderMgr;

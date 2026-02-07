@@ -1,8 +1,8 @@
 #!/bin/bash
-# Python Plugin: GPU-accelerated 3D graphics using pygfx/wgpu (fastplotlib sine wave)
+# Python Card: GPU-accelerated 3D graphics using pygfx/wgpu (fastplotlib sine wave)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+cd "$SCRIPT_DIR/../.."
 
-cd "$ROOT_DIR"
-~/.local/bin/uv run python tools/yetty-client/main.py create python \
-    -i demo/assets/python/fastplotlib/sine.py -w 60 -H 30
+PAYLOAD=$(base64 -w0 < demo/assets/python/fastplotlib/sine.py)
+printf '\033]666666;run -c python -x 0 -y 0 -w 60 -h 30 -r;;%s\033\\' "$PAYLOAD"
+echo

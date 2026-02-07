@@ -1,5 +1,5 @@
 #!/bin/bash
-# PDF Plugin: Renders PDF documents with page navigation and zoom
+# PDF Card: Renders PDF documents with page navigation and zoom
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR/../.."
 
@@ -10,4 +10,6 @@ if [[ ! -f "$PDF_FILE" ]]; then
     exit 1
 fi
 
-uv run python3 tools/yetty-client/main.py create pdf -x 2 -y 2 -w 76 -H 35 -i "$PDF_FILE"
+PAYLOAD=$(base64 -w0 < "$PDF_FILE")
+printf '\033]666666;run -c pdf -x 2 -y 2 -w 76 -h 35 -r;-i -;%s\033\\' "$PAYLOAD"
+echo

@@ -1,10 +1,9 @@
 #!/bin/bash
 # Ymery Card: YAML-driven ImGui widget demo
-# Creates a card that renders ymery widgets from a YAML layout
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR/../../.."
 
-uv run python3 tools/yetty-client/main.py create ymery -i demo/assets/ymery/simple.yaml -w 60 -H 30
-
-echo  # newline after the card
+PAYLOAD=$(base64 -w0 < demo/assets/ymery/simple.yaml)
+printf '\033]666666;run -c ymery -x 0 -y 0 -w 60 -h 30 -r;;%s\033\\' "$PAYLOAD"
+echo

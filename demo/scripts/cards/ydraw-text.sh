@@ -2,4 +2,7 @@
 # YDraw: Text rendering demo
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR/../../.."
-uv run python3 tools/yetty-client/main.py create ydraw -i demo/assets/cards/ydraw/text.yaml -w 50 -H 20
+
+PAYLOAD=$(base64 -w0 < demo/assets/cards/ydraw/text.yaml)
+printf '\033]666666;run -c ydraw -x 0 -y 0 -w 50 -h 20 -r;;%s\033\\' "$PAYLOAD"
+echo

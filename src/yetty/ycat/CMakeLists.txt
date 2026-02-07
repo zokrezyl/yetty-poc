@@ -1,5 +1,24 @@
+# HTTP fetching via cpr (shares build with yhtml if enabled)
+find_package(OpenSSL REQUIRED)
+set(CURL_ZLIB OFF CACHE BOOL "" FORCE)
+set(CURL_USE_LIBPSL OFF CACHE BOOL "" FORCE)
+set(CURL_BROTLI OFF CACHE BOOL "" FORCE)
+set(CURL_ZSTD OFF CACHE BOOL "" FORCE)
+
+CPMAddPackage(
+    NAME cpr
+    GITHUB_REPOSITORY libcpr/cpr
+    GIT_TAG 1.14.1
+    OPTIONS
+        "CPR_USE_SYSTEM_CURL OFF"
+        "BUILD_SHARED_LIBS OFF"
+        "CPR_ENABLE_SSL ON"
+        "CPR_BUILD_TESTS OFF"
+        "CPR_BUILD_TESTS_SSL OFF"
+)
+
 set(TS_GRAMMAR_NAMES
-    c cpp python javascript typescript rust go java bash json yaml toml
+    c cpp python javascript typescript rust go java bash json yaml toml html xml
 )
 
 set(TS_GENERATED_HEADER "${CMAKE_CURRENT_BINARY_DIR}/ts_queries_generated.h")
@@ -56,6 +75,7 @@ endif()
 target_link_libraries(ycat PRIVATE
     args
     ${YCAT_MAGIC_LIBS}
+    cpr::cpr
     tree-sitter-core
     ts-grammar-c
     ts-grammar-cpp
@@ -69,6 +89,8 @@ target_link_libraries(ycat PRIVATE
     ts-grammar-json
     ts-grammar-yaml
     ts-grammar-toml
+    ts-grammar-html
+    ts-grammar-xml
 )
 
 target_include_directories(ycat PRIVATE

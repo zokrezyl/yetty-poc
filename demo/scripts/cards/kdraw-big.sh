@@ -4,15 +4,10 @@
 #
 # This uses the same primitives as hdraw-big.sh but with screen-space
 # tile culling for better GPU cache coherency.
-#
-# Options:
-#   --show-tiles       Show 8x8 pixel tile boundaries
-#   --show-eval-count  Show heatmap of SDF evaluations per pixel
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR/../../.."
 
-# Use the yetty-client Python tool to create the KDraw card
-uv run python3 tools/yetty-client/main.py create kdraw -i demo/assets/cards/ydraw/big.yaml -w 80 -H 25
-
-echo  # newline after the card
+PAYLOAD=$(base64 -w0 < demo/assets/cards/ydraw/big.yaml)
+printf '\033]666666;run -c kdraw -x 0 -y 0 -w 80 -h 25 -r;;%s\033\\' "$PAYLOAD"
+echo
