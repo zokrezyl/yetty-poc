@@ -225,7 +225,12 @@ endif()
 #   - howerj/cdb: Portable C implementation (default, works on all platforms)
 #   - djb/cdb: Original D.J. Bernstein implementation (Unix only)
 #-----------------------------------------------------------------------------
-option(YETTY_USE_HOWERJ_CDB "Use portable howerj/cdb instead of djb cdb (required for Windows)" ON)
+# Default to howerj/cdb on Windows (required), djb cdb on Unix (faster, uses mmap)
+if(WIN32)
+    option(YETTY_USE_HOWERJ_CDB "Use portable howerj/cdb instead of djb cdb (required for Windows)" ON)
+else()
+    option(YETTY_USE_HOWERJ_CDB "Use portable howerj/cdb instead of djb cdb (required for Windows)" OFF)
+endif()
 
 if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
     if(YETTY_USE_HOWERJ_CDB)
