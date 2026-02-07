@@ -33,9 +33,22 @@ set(PYTHON_CONFIGURE_OPTS
 )
 
 # Set environment variables for configure
+# Use -O3 without -g to avoid 25MB of debug info in final binary
+# Use ccache if available for faster rebuilds
+find_program(CCACHE_PROGRAM ccache)
+if(CCACHE_PROGRAM)
+    set(PYTHON_CC "ccache ${CMAKE_C_COMPILER}")
+    set(PYTHON_CXX "ccache ${CMAKE_CXX_COMPILER}")
+else()
+    set(PYTHON_CC "${CMAKE_C_COMPILER}")
+    set(PYTHON_CXX "${CMAKE_CXX_COMPILER}")
+endif()
+
 set(PYTHON_CONFIGURE_ENV
-    "CFLAGS=-fPIC"
-    "CXXFLAGS=-fPIC"
+    "CC=${PYTHON_CC}"
+    "CXX=${PYTHON_CXX}"
+    "CFLAGS=-fPIC -O3 -DNDEBUG"
+    "CXXFLAGS=-fPIC -O3 -DNDEBUG"
 )
 
 if(APPLE)

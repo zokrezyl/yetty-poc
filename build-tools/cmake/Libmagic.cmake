@@ -1,4 +1,18 @@
 include(ExternalProject)
+include(ProcessorCount)
+
+ProcessorCount(NPROC)
+if(NPROC EQUAL 0)
+    set(NPROC 4)
+endif()
+
+# Use ccache if available
+find_program(CCACHE_PROGRAM ccache)
+if(CCACHE_PROGRAM)
+    set(LIBMAGIC_CC "ccache ${CMAKE_C_COMPILER}")
+else()
+    set(LIBMAGIC_CC "${CMAKE_C_COMPILER}")
+endif()
 
 set(LIBMAGIC_VERSION "5.45")
 
@@ -26,6 +40,7 @@ ExternalProject_Add(libmagic_ext
     # Configure without our custom paths - let it find system zlib for detection
     # --disable-maintainer-mode prevents make from trying to regenerate aclocal.m4
     CONFIGURE_COMMAND
+        ${CMAKE_COMMAND} -E env "CC=${LIBMAGIC_CC}"
         <SOURCE_DIR>/configure
             --prefix=<INSTALL_DIR>
             --disable-shared
@@ -34,15 +49,16 @@ ExternalProject_Add(libmagic_ext
             --disable-bzlib
             --disable-xzlib
             --disable-zstdlib
+            --disable-lzlib
             --disable-maintainer-mode
-            "CFLAGS=-fPIC"
+            "CFLAGS=-fPIC -O3 -DNDEBUG"
 
     # Override with our static zlib during build
     BUILD_COMMAND
         ${CMAKE_COMMAND} -E env
             "CPPFLAGS=-I${zlib_SOURCE_DIR} -I${zlib_BINARY_DIR}"
             "LDFLAGS=-L${zlib_BINARY_DIR}"
-        make -j1 LIBS=-lz
+        make -j${NPROC} LIBS=-lz
     INSTALL_COMMAND   make install
     BUILD_IN_SOURCE   TRUE
 
