@@ -286,8 +286,10 @@ if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
         set(ZLIB_LIBRARY zlibstatic CACHE STRING "" FORCE)
     endif()
 
-    # libmagic for file type detection (ycat)
-    include(build-tools/cmake/Libmagic.cmake)
+    # libmagic for file type detection (ycat) - Unix only, uses autotools
+    if(NOT WIN32)
+        include(build-tools/cmake/Libmagic.cmake)
+    endif()
 
     # FreeType and all dependencies - built from source for all platforms
     include(build-tools/cmake/FreeType.cmake)
@@ -735,7 +737,14 @@ else()
     if(WIN32)
         target_compile_definitions(yetty PRIVATE YETTY_USE_DIRECTWRITE=1)
         target_link_libraries(yetty PRIVATE dwrite)
+    elseif(APPLE)
+        # macOS: Use Core Text for font discovery
+        target_compile_definitions(yetty PRIVATE YETTY_USE_CORETEXT=1)
+        find_library(CORETEXT_LIBRARY CoreText REQUIRED)
+        find_library(COREFOUNDATION_LIBRARY CoreFoundation REQUIRED)
+        target_link_libraries(yetty PRIVATE ${CORETEXT_LIBRARY} ${COREFOUNDATION_LIBRARY})
     else()
+        # Linux: Use fontconfig
         find_package(PkgConfig REQUIRED)
         pkg_check_modules(FONTCONFIG REQUIRED fontconfig)
         target_include_directories(yetty PRIVATE ${FONTCONFIG_INCLUDE_DIRS})
@@ -765,9 +774,10 @@ else()
         lz4_static
         uv_a
         cdb
-        $<$<NOT:$<BOOL:${WIN32}>>:${FONTCONFIG_STATIC_LIB}>
-        $<$<NOT:$<BOOL:${WIN32}>>:${EXPAT_STATIC_LIB}>
-        $<$<NOT:$<BOOL:${WIN32}>>:${UUID_STATIC_LIB}>
+        # Fontconfig and deps (Linux only)
+        $<$<AND:$<NOT:$<BOOL:${WIN32}>>,$<NOT:$<BOOL:${APPLE}>>>:${FONTCONFIG_STATIC_LIB}>
+        $<$<AND:$<NOT:$<BOOL:${WIN32}>>,$<NOT:$<BOOL:${APPLE}>>>:${EXPAT_STATIC_LIB}>
+        $<$<AND:$<NOT:$<BOOL:${WIN32}>>,$<NOT:$<BOOL:${APPLE}>>>:${UUID_STATIC_LIB}>
         # FreeType and all its dependencies (built from source)
         ${FREETYPE_ALL_LIBS}
     )

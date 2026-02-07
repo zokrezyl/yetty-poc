@@ -46,7 +46,7 @@ add_executable(ycat
 
 target_link_libraries(ycat PRIVATE
     args
-    magic
+    $<$<NOT:$<BOOL:${WIN32}>>:magic>
     tree-sitter-core
     ts-grammar-c
     ts-grammar-cpp
@@ -69,7 +69,9 @@ target_include_directories(ycat PRIVATE
 
 target_compile_features(ycat PRIVATE cxx_std_23)
 
-# Compiled magic database path (built by Libmagic.cmake)
-target_compile_definitions(ycat PRIVATE
-    YCAT_MAGIC_MGC_PATH="${LIBMAGIC_MGC_PATH}"
-)
+# Compiled magic database path (built by Libmagic.cmake) - Unix only
+if(NOT WIN32)
+    target_compile_definitions(ycat PRIVATE
+        YCAT_MAGIC_MGC_PATH="${LIBMAGIC_MGC_PATH}"
+    )
+endif()
