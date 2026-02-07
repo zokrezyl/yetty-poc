@@ -77,7 +77,7 @@ static int terminalColumns() {
 // ──────────────────────────────────────────────────────────────────────────────
 
 #ifdef YCAT_HAS_LIBMAGIC
-// Full libmagic-based MIME detection (Unix: Linux/macOS)
+// Full libmagic-based MIME detection (Linux only)
 class MagicDetector {
 public:
     MagicDetector() {
@@ -117,7 +117,7 @@ private:
     magic_t cookie_ = nullptr;
 };
 #else
-// Fallback: extension-based detection only (Windows)
+// Fallback: extension-based detection only (Windows/macOS)
 class MagicDetector {
 public:
     MagicDetector() = default;

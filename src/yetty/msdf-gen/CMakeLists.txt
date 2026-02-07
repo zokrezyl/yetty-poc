@@ -23,4 +23,5 @@ target_link_libraries(yetty-msdf-gen PRIVATE
 
 target_compile_definitions(yetty-msdf-gen PRIVATE
     CMAKE_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    $<$<BOOL:${WIN32}>:NOMINMAX>
 )

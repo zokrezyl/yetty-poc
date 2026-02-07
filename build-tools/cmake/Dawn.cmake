@@ -137,11 +137,12 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
         INTERFACE_LINK_LIBRARIES "${COCOA_LIBRARY};${METAL_LIBRARY};${QUARTZCORE_LIBRARY};${IOKIT_LIBRARY};${IOSURFACE_LIBRARY}"
     )
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-    # Dawn on Windows needs D3D12, DXGI, and kernel32 for CompareObjectHandles
+    # Dawn on Windows needs D3D12, DXGI, and various Windows libraries
+    # CompareObjectHandles requires kernelbase.lib (Windows 10+)
     set_target_properties(webgpu PROPERTIES
         IMPORTED_LOCATION "${DAWN_LIB_PATH}"
         INTERFACE_INCLUDE_DIRECTORIES "${DAWN_INCLUDE_DIR}"
-        INTERFACE_LINK_LIBRARIES "d3d12;dxgi;dxguid;d3dcompiler;user32;gdi32;ole32;shell32;kernel32"
+        INTERFACE_LINK_LIBRARIES "d3d12;dxgi;dxguid;d3dcompiler;user32;gdi32;ole32;shell32;kernel32;kernelbase"
     )
 else()
     set_target_properties(webgpu PROPERTIES

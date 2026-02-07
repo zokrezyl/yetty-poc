@@ -44,8 +44,8 @@ add_executable(ycat
     ts/highlight.cpp
 )
 
-# libmagic is available on Unix (Linux/macOS), not Windows
-if(NOT WIN32)
+# libmagic is only available on Linux
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(YCAT_MAGIC_LIBS magic)
     set(YCAT_HAS_LIBMAGIC TRUE)
 else()
@@ -78,7 +78,7 @@ target_include_directories(ycat PRIVATE
 
 target_compile_features(ycat PRIVATE cxx_std_23)
 
-# libmagic support - Unix only (Linux/macOS)
+# libmagic support - Linux only
 if(YCAT_HAS_LIBMAGIC)
     target_compile_definitions(ycat PRIVATE
         YCAT_HAS_LIBMAGIC=1

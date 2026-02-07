@@ -1,13 +1,18 @@
 cmake_minimum_required(VERSION 3.16)
 project(msdf-wgsl VERSION 1.0.0 LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Main library
 add_library(msdf-wgsl
     src/msdf-wgsl.cpp
 )
+
+# Windows: prevent min/max macros from conflicting with std::numeric_limits
+if(WIN32)
+    target_compile_definitions(msdf-wgsl PRIVATE NOMINMAX)
+endif()
 
 add_library(msdf::wgsl ALIAS msdf-wgsl)
 
