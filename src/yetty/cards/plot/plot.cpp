@@ -725,19 +725,10 @@ private:
         // Pack dispatch indices: samplerIndex(8) | transformBase(8) | transformCount(8) | renderIndex(8)
         uint32_t samplerIdx = (_samplerIndex == 0xFFFFFFFF) ? 0u : _samplerIndex;
         uint32_t transformBaseIdx = (_transformBase == 0xFFFFFFFF) ? 0u : _transformBase;
-        meta.dispatchSlot = (samplerIdx & 0xFF) 
+        meta.dispatchSlot = (samplerIdx & 0xFF)
                           | ((transformBaseIdx & 0xFF) << 8)
                           | ((_transformCount & 0xFF) << 16)
                           | ((renderIdx & 0xFF) << 24);
-        
-        // Copy per-function colors
-        for (size_t i = 0; i < 8; i++) {
-            if (i < _functionColors.size()) {
-                meta.functionColors[i] = _functionColors[i];
-            } else {
-                meta.functionColors[i] = 0xFFFFFFFF;  // White default
-            }
-        }
 
         yinfo("Plot::uploadMetadata: metaOffset={} plotType={} dataOffset={} "
               "dataCount={} min={} max={} flags={} size={}x{} bgColor={:#x} domain=[{},{}] dispatch=[s={},tBase={},tCount={},r={}]",
@@ -756,6 +747,7 @@ private:
 
     // Metadata structure (64 bytes = 16 u32 slots)
     // Shader reads as cardMetadata[metaOffset + N] (raw u32s).
+    // Extended data (function colors) goes in cardStorage via dataOffset.
     struct Metadata {
         // [0]: plotType(8) | flags(8) | padding(16)
         uint8_t plotType;
@@ -765,7 +757,7 @@ private:
         uint16_t widthCells;
         uint16_t heightCells;
         // [2-3]
-        uint32_t dataOffset;    // float index into cardStorage
+        uint32_t dataOffset;    // float index into cardStorage (data OR colors)
         uint32_t dataCount;
         // [4-5]
         float minValue;
@@ -789,10 +781,8 @@ private:
         float domainMax;
         // [15]: samplerIndex(8) | transformBase(8) | transformCount(8) | renderIndex(8)
         uint32_t dispatchSlot;
-        // [16-23]: Per-function colors (up to 8 functions)
-        uint32_t functionColors[8];
     };
-    static_assert(sizeof(Metadata) == 96, "Metadata must be 96 bytes");
+    static_assert(sizeof(Metadata) == 64, "Metadata must be 64 bytes");
 
     // ShaderManager reference (for registering providers once)
     std::shared_ptr<ShaderManager> _shaderMgr;

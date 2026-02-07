@@ -290,25 +290,90 @@ std::shared_ptr<PlotExprNode> Parser::parsePlotExpression() {
             result->attributes.push_back(
                 std::make_shared<PlotAttrNode>(std::move(plotName), std::move(attrName), std::move(value)));
         } else if (check(TokenType::Identifier)) {
-            // Plot definition: name = expr
+            // Could be: name = expr  OR  bare expression like sin(x)
+            // Look ahead to distinguish
             std::string name(current_.text);
             advance();
-            
-            if (!match(TokenType::Equals)) {
-                error("expected '=' after plot name");
-                break;
+
+            if (match(TokenType::Equals)) {
+                // Plot definition: name = expr
+                auto expr = parseExpr();
+                if (!expr) {
+                    error("expected expression after '='");
+                    break;
+                }
+
+                result->definitions.push_back(
+                    std::make_shared<PlotDefNode>(std::move(name), std::move(expr)));
+            } else {
+                // Bare expression: sin(x), x*x, etc.
+                // Put back the identifier and parse as full expression
+                // We already consumed the identifier, so handle function call or just identifier
+                NodePtr expr;
+                if (check(TokenType::LParen)) {
+                    // Function call: sin(x)
+                    advance(); // consume '('
+                    std::vector<NodePtr> args;
+                    if (!check(TokenType::RParen)) {
+                        args.push_back(parseExpr());
+                        while (match(TokenType::Comma)) {
+                            args.push_back(parseExpr());
+                        }
+                    }
+                    if (!match(TokenType::RParen)) {
+                        error("expected ')' after function arguments");
+                        break;
+                    }
+                    expr = std::make_shared<CallNode>(std::move(name), std::move(args));
+
+                    // Handle any operators after the function call
+                    while (check(TokenType::Plus) || check(TokenType::Minus) ||
+                           check(TokenType::Star) || check(TokenType::Slash)) {
+                        BinaryOpNode::Op op;
+                        if (check(TokenType::Plus)) op = BinaryOpNode::Op::Add;
+                        else if (check(TokenType::Minus)) op = BinaryOpNode::Op::Sub;
+                        else if (check(TokenType::Star)) op = BinaryOpNode::Op::Mul;
+                        else op = BinaryOpNode::Op::Div;
+                        advance();
+                        auto right = parseTerm();
+                        expr = std::make_shared<BinaryOpNode>(op, std::move(expr), std::move(right));
+                    }
+                } else {
+                    // Just an identifier or identifier with operators (x*x)
+                    expr = std::make_shared<IdentifierNode>(std::move(name));
+
+                    // Handle operators after the identifier
+                    while (check(TokenType::Plus) || check(TokenType::Minus) ||
+                           check(TokenType::Star) || check(TokenType::Slash)) {
+                        BinaryOpNode::Op op;
+                        if (check(TokenType::Plus)) op = BinaryOpNode::Op::Add;
+                        else if (check(TokenType::Minus)) op = BinaryOpNode::Op::Sub;
+                        else if (check(TokenType::Star)) op = BinaryOpNode::Op::Mul;
+                        else op = BinaryOpNode::Op::Div;
+                        advance();
+                        auto right = parseTerm();
+                        expr = std::make_shared<BinaryOpNode>(op, std::move(expr), std::move(right));
+                    }
+                }
+
+                // Auto-generate name for bare expression
+                std::string autoName = "plot" + std::to_string(result->definitions.size() + 1);
+                result->definitions.push_back(
+                    std::make_shared<PlotDefNode>(std::move(autoName), std::move(expr)));
             }
-            
+        } else if (check(TokenType::Number) || check(TokenType::LParen) || check(TokenType::Minus)) {
+            // Bare expression starting with number, parenthesis, or unary minus
             auto expr = parseExpr();
             if (!expr) {
-                error("expected expression after '='");
+                error("expected expression");
                 break;
             }
-            
+
+            std::string autoName = "plot" + std::to_string(result->definitions.size() + 1);
             result->definitions.push_back(
-                std::make_shared<PlotDefNode>(std::move(name), std::move(expr)));
+                std::make_shared<PlotDefNode>(std::move(autoName), std::move(expr)));
         } else {
-            error("expected plot definition or attribute");
+            error("expected plot definition or expression");
             break;
         }
         

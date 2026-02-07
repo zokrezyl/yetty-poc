@@ -31,20 +31,27 @@ std::string OscCommandParser::generateId() {
 std::vector<std::string> OscCommandParser::splitFields(const std::string& sequence) {
     // Split into exactly 4 fields: vendor-id;generic-args;plugin-args;payload
     // Only split on first 3 semicolons - payload may contain semicolons
-    // Respect quoted strings (semicolons inside quotes don't count as separators)
+    // Respect quoted strings and braces (semicolons inside don't count as separators)
     std::vector<std::string> fields;
     size_t start = 0;
     bool inQuotes = false;
+    int braceDepth = 0;
     int fieldCount = 0;
 
     for (size_t i = 0; i < sequence.size() && fieldCount < 3; ++i) {
         char c = sequence[i];
         if (c == '"' || c == '\'') {
             inQuotes = !inQuotes;
-        } else if (c == ';' && !inQuotes) {
-            fields.push_back(sequence.substr(start, i - start));
-            start = i + 1;
-            fieldCount++;
+        } else if (!inQuotes) {
+            if (c == '{') {
+                braceDepth++;
+            } else if (c == '}') {
+                braceDepth--;
+            } else if (c == ';' && braceDepth == 0) {
+                fields.push_back(sequence.substr(start, i - start));
+                start = i + 1;
+                fieldCount++;
+            }
         }
     }
 
