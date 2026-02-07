@@ -19,6 +19,7 @@ ExternalProject_Add(libmagic_ext
     UPDATE_DISCONNECTED TRUE
 
     # Configure without our custom paths - let it find system zlib for detection
+    # --disable-maintainer-mode prevents make from trying to regenerate aclocal.m4
     CONFIGURE_COMMAND
         <SOURCE_DIR>/configure
             --prefix=<INSTALL_DIR>
@@ -28,6 +29,7 @@ ExternalProject_Add(libmagic_ext
             --disable-bzlib
             --disable-xzlib
             --disable-zstdlib
+            --disable-maintainer-mode
             "CFLAGS=-fPIC"
 
     # Override with our static zlib during build
