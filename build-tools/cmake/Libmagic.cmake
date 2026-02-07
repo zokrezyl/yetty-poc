@@ -18,6 +18,11 @@ ExternalProject_Add(libmagic_ext
     # After initial download+build, skip update to avoid rebuilds
     UPDATE_DISCONNECTED TRUE
 
+    # Touch auto-generated files to prevent make from trying to regenerate them
+    # This is needed because the tarball timestamps may trigger regeneration
+    PATCH_COMMAND
+        find <SOURCE_DIR> -name "aclocal.m4" -o -name "configure" -o -name "Makefile.in" -o -name "config.h.in" | xargs touch
+
     # Configure without our custom paths - let it find system zlib for detection
     # --disable-maintainer-mode prevents make from trying to regenerate aclocal.m4
     CONFIGURE_COMMAND
