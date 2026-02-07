@@ -49,13 +49,13 @@ std::string base64Encode(std::string_view data) {
     return base64Encode(bytes);
 }
 
-static std::string buildCreateArgs(
-    std::string_view plugin,
+static std::string buildRunArgs(
+    std::string_view card,
     int x, int y, int w, int h,
     bool relative)
 {
     std::ostringstream ss;
-    ss << "create -p " << plugin
+    ss << "run -c " << card
        << " -x " << x << " -y " << y
        << " -w " << w << " -h " << h;
     if (relative) ss << " -r";
@@ -69,7 +69,7 @@ std::string createSequence(
     std::string_view payload,
     std::string_view pluginArgs)
 {
-    auto args = buildCreateArgs(plugin, x, y, w, h, relative);
+    auto args = buildRunArgs(plugin, x, y, w, h, relative);
     auto encoded = base64Encode(payload);
     std::string seq;
     seq.reserve(10 + args.size() + pluginArgs.size() + encoded.size());
@@ -92,7 +92,7 @@ std::string createSequenceBytes(
     const std::vector<uint8_t>& payloadBytes,
     std::string_view pluginArgs)
 {
-    auto args = buildCreateArgs(plugin, x, y, w, h, relative);
+    auto args = buildRunArgs(plugin, x, y, w, h, relative);
     auto encoded = base64Encode(payloadBytes);
     std::string seq;
     seq.reserve(10 + args.size() + pluginArgs.size() + encoded.size());
@@ -104,6 +104,16 @@ std::string createSequenceBytes(
     seq += pluginArgs;
     seq += ';';
     seq += encoded;
+    seq += "\033\\";
+    return seq;
+}
+
+std::string createHelpSequence(std::string_view card) {
+    std::string seq;
+    seq += "\033]";
+    seq += std::to_string(VENDOR_ID);
+    seq += ";help -c ";
+    seq += card;
     seq += "\033\\";
     return seq;
 }

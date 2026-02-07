@@ -87,19 +87,21 @@ public:
 
         // Parse args
         parseArgs(_argsStr);
-        yerror("PDF::init: [3] args parsed");
+        yerror("PDF::init: [3] args parsed, inputSource='{}'", _inputSource);
 
-        // Load PDF — detect if payload is a file path or raw data
-        if (_pdfData.size() < 4096 && _pdfData.size() > 0 &&
-            _pdfData[0] == '/' &&
-            std::find(_pdfData.begin(), _pdfData.end(), '\n') == _pdfData.end()) {
-            // Payload is a file path
-            std::string path(_pdfData.begin(), _pdfData.end());
-            yerror("PDF::init: loading from file path: {}", path);
-            _doc = FPDF_LoadDocument(path.c_str(), nullptr);
-        } else {
-            // Payload is raw PDF data
+        // Load PDF based on -i/--input argument
+        if (_inputSource == "-" || _inputSource.empty()) {
+            // Read from payload (base64-decoded data passed via OSC)
+            if (_pdfData.empty()) {
+                yerror("PDF::init: FAILED - empty payload (use -i - to read from payload)");
+                return Err<void>("Pdf::init: empty payload");
+            }
+            yerror("PDF::init: loading {} bytes from payload", _pdfData.size());
             _doc = FPDF_LoadMemDocument(_pdfData.data(), static_cast<int>(_pdfData.size()), nullptr);
+        } else {
+            // Read from file path specified via -i <path>
+            yerror("PDF::init: loading from file path: {}", _inputSource);
+            _doc = FPDF_LoadDocument(_inputSource.c_str(), nullptr);
         }
         if (!_doc) {
             unsigned long err = FPDF_GetLastError();
@@ -472,7 +474,12 @@ private:
         std::string token;
 
         while (iss >> token) {
-            if (token == "--zoom" || token == "-z") {
+            if (token == "--input" || token == "-i") {
+                std::string val;
+                if (iss >> val) {
+                    _inputSource = val;
+                }
+            } else if (token == "--zoom" || token == "-z") {
                 float val;
                 if (iss >> val) {
                     _contentZoom = std::clamp(val, 0.1f, 10.0f);
@@ -560,6 +567,7 @@ private:
 
     const YettyContext& _ctx;
     std::string _argsStr;
+    std::string _inputSource;  // "-" for payload, or file path
 
     // PDF document (PDFium)
     std::vector<uint8_t> _pdfData;         // Keep payload alive for PDFium

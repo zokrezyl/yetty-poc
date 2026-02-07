@@ -1,8 +1,10 @@
 #!/bin/bash
-# Shader Plugin: Sinusoidal warp - texture deformation effect by Shane
+# Shader Card: Sinusoidal warp - texture deformation effect by Shane
+# Note: This shader requires a texture (channel0) which needs special handling
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CLIENT_DIR="$SCRIPT_DIR/../../../tools/yetty-client"
-SHADER_FILE="$SCRIPT_DIR/../../assets/shader/sinusoidal-warp.wgsl"
-TEXTURE_FILE="$SCRIPT_DIR/../../../docs/logo.jpeg"
+cd "$SCRIPT_DIR/../../.."
 
-cd "$CLIENT_DIR" && uv run python main.py create shadertoy -i "$SHADER_FILE" --channel0="$TEXTURE_FILE" -w 60 -H 30
+PAYLOAD=$(base64 -w0 < demo/assets/shader/sinusoidal-warp.wgsl)
+# TODO: channel0 texture support via card args
+printf '\033]666666;run -c shadertoy -x 0 -y 0 -w 60 -h 30 -r;;%s\033\\' "$PAYLOAD"
+echo

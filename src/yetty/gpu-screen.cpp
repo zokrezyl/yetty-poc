@@ -3586,24 +3586,24 @@ bool GPUScreenImpl::handleCardOSCSequence(const std::string &sequence,
       *response = OscResponse::error(cmd.error);
     return false;
   }
-  yinfo("GPUScreenImpl::handleCardOSCSequence: cmd valid, type={}, plugin='{}'",
-        static_cast<int>(cmd.type), cmd.create.plugin);
+  yinfo("GPUScreenImpl::handleCardOSCSequence: cmd valid, type={}, card='{}'",
+        static_cast<int>(cmd.type), cmd.run.card);
 
   switch (cmd.type) {
-  case OscCommandType::Create: {
+  case OscCommandType::Run: {
     yinfo(
-        "GPUScreenImpl::handleCardOSCSequence: CREATE command for plugin '{}'",
-        cmd.create.plugin);
-    int32_t x = cmd.create.x;
-    int32_t y = cmd.create.y;
+        "GPUScreenImpl::handleCardOSCSequence: RUN command for card '{}'",
+        cmd.run.card);
+    int32_t x = cmd.run.x;
+    int32_t y = cmd.run.y;
 
-    ydebug("Card OSC Create: cmd.x={} cmd.y={} relative={}", x, y,
-           cmd.create.relative);
+    ydebug("Card OSC Run: cmd.x={} cmd.y={} relative={}", x, y,
+           cmd.run.relative);
 
-    if (cmd.create.relative) {
+    if (cmd.run.relative) {
       x += getCursorCol();
       y += getCursorRow();
-      ydebug("Card OSC Create: final position ({},{})", x, y);
+      ydebug("Card OSC Run: final position ({},{})", x, y);
     }
 
     // Run GC before creation to free resources from orphaned inactive cards
@@ -3611,20 +3611,20 @@ bool GPUScreenImpl::handleCardOSCSequence(const std::string &sequence,
 
     // Resolve "stretch to edge" dimensions (0 = fill remaining terminal)
     // vterm handles scrolling automatically when writing past the bottom
-    uint32_t widthCells = static_cast<uint32_t>(cmd.create.width);
-    uint32_t heightCells = static_cast<uint32_t>(cmd.create.height);
+    uint32_t widthCells = static_cast<uint32_t>(cmd.run.width);
+    uint32_t heightCells = static_cast<uint32_t>(cmd.run.height);
     if (widthCells == 0 && _cols > 0) {
       widthCells = static_cast<uint32_t>(_cols);
     }
     if (heightCells == 0 && _rows > 0) {
       heightCells = static_cast<uint32_t>(_rows);
     }
-    ydebug("Card OSC Create: resolved size {}x{} (terminal {}x{})", widthCells, heightCells, _cols, _rows);
+    ydebug("Card OSC Run: resolved size {}x{} (terminal {}x{})", widthCells, heightCells, _cols, _rows);
 
     // Create the card (pass full YettyContext for font access etc)
     auto result = _ctx.cardFactory->createCard(
-        _ctx, cmd.create.plugin, x, y, widthCells, heightCells,
-        cmd.pluginArgs, cmd.payload);
+        _ctx, cmd.run.card, x, y, widthCells, heightCells,
+        cmd.cardArgs, cmd.payload);
 
     if (!result) {
       yerror("GPUScreen: createCard failed: {}", error_msg(result));
@@ -3743,7 +3743,7 @@ bool GPUScreenImpl::handleCardOSCSequence(const std::string &sequence,
     return true;
   }
 
-  case OscCommandType::Plugins: {
+  case OscCommandType::Cards: {
     if (response) {
       *response = OscResponse::pluginList(_ctx.cardFactory->getRegisteredCards());
     }

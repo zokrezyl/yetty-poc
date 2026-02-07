@@ -4,6 +4,6 @@
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR/../../.."
 
-uv run python3 tools/yetty-client/main.py create ydraw-zoo -w 80 -H 30
-
-echo  # newline after the card
+# ydraw-zoo doesn't need a payload - it generates random shapes
+printf '\033]666666;run -c ydraw-zoo -x 0 -y 0 -w 80 -h 30 -r;;\033\\'
+echo

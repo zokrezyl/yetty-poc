@@ -379,7 +379,7 @@ static bool processFile(
         // Use forced card type if specified
         if (!forceCard.empty()) {
             auto seq = ycat::createSequenceBytes(
-                forceCard, 0, 0, width, height, !absolute, data);
+                forceCard, 0, 0, width, height, !absolute, data, "-i -");
             auto out = ycat::maybeWrapForTmux(seq);
             return writeStdout(out.data(), out.size());
         }
@@ -403,9 +403,9 @@ static bool processFile(
             return writeStdout(data.data(), data.size());
         }
 
-        // Stdin: send binary payload (base64-encoded bytes)
+        // Stdin: send binary payload (base64-encoded bytes) with -i - to indicate payload input
         auto seq = ycat::createSequenceBytes(
-            mapping->card, 0, 0, width, height, !absolute, data);
+            mapping->card, 0, 0, width, height, !absolute, data, "-i -");
         auto out = ycat::maybeWrapForTmux(seq);
         return writeStdout(out.data(), out.size());
     }
@@ -439,7 +439,7 @@ static bool processFile(
         // Use forced card type if specified
         if (!forceCard.empty()) {
             auto seq = ycat::createSequenceBytes(
-                forceCard, 0, 0, width, height, !absolute, fetched->data);
+                forceCard, 0, 0, width, height, !absolute, fetched->data, "-i -");
             auto out = ycat::maybeWrapForTmux(seq);
             return writeStdout(out.data(), out.size());
         }
@@ -469,9 +469,9 @@ static bool processFile(
             return writeStdout(fetched->data.data(), fetched->data.size());
         }
 
-        // URL: send binary payload (base64-encoded bytes)
+        // URL: send binary payload (base64-encoded bytes) with -i - to indicate payload input
         auto seq = ycat::createSequenceBytes(
-            mapping->card, 0, 0, width, height, !absolute, fetched->data);
+            mapping->card, 0, 0, width, height, !absolute, fetched->data, "-i -");
         auto out = ycat::maybeWrapForTmux(seq);
         return writeStdout(out.data(), out.size());
     }
@@ -501,8 +501,9 @@ static bool processFile(
 
     // Use forced card type if specified
     if (!forceCard.empty()) {
+        std::string forcePluginArgs = "-i " + path.string();
         auto seq = ycat::createSequence(
-            forceCard, 0, 0, width, height, !absolute, path.string());
+            forceCard, 0, 0, width, height, !absolute, "", forcePluginArgs);
         auto out = ycat::maybeWrapForTmux(seq);
         return writeStdout(out.data(), out.size());
     }
@@ -561,10 +562,10 @@ static bool processFile(
         return catFile(path);
     }
 
-    // File: send absolute path as payload (base64-encoded text)
-    // The card plugin is responsible for loading from this path
+    // File: pass -i <path> to tell the card to load from this file path
+    std::string pluginArgs = "-i " + path.string();
     auto seq = ycat::createSequence(
-        mapping->card, 0, 0, width, height, !absolute, path.string());
+        mapping->card, 0, 0, width, height, !absolute, "", pluginArgs);
     auto out = ycat::maybeWrapForTmux(seq);
     return writeStdout(out.data(), out.size());
 }
@@ -577,7 +578,7 @@ int main(int argc, const char** argv) {
     args::ArgumentParser parser("ycat", "Cat with yetty card rendering for images, PDFs, and more.");
     parser.Prog("ycat");
 
-    args::HelpFlag help(parser, "help", "Show this help", {'h', "help"});
+    args::Flag helpFlag(parser, "help", "Show this help (or card help with --card)", {'h', "help"});
 
     args::ValueFlag<int> widthFlag(parser, "cols",
         "Card width in columns (default: terminal width)", {'w', "width"});
@@ -597,13 +598,25 @@ int main(int argc, const char** argv) {
 
     try {
         parser.ParseCLI(argc, argv);
-    } catch (const args::Help&) {
-        std::cout << parser;
-        return 0;
     } catch (const args::Error& e) {
         std::cerr << e.what() << "\n";
         std::cerr << parser;
         return 1;
+    }
+
+    std::string forceCard = cardFlag ? args::get(cardFlag) : "";
+
+    // Handle --help: with --card emit card help OSC, otherwise show ycat help
+    if (helpFlag) {
+        if (!forceCard.empty()) {
+            // Emit help OSC for the specified card
+            auto seq = ycat::createHelpSequence(forceCard);
+            auto out = ycat::maybeWrapForTmux(seq);
+            writeStdout(out.data(), out.size());
+            return 0;
+        }
+        std::cout << parser;
+        return 0;
     }
 
     int width = widthFlag ? args::get(widthFlag) : terminalColumns();
@@ -611,7 +624,6 @@ int main(int argc, const char** argv) {
     bool absolute = absoluteFlag;
     bool forceRaw = rawFlag;
     bool forceShow = showFlag;
-    std::string forceCard = cardFlag ? args::get(cardFlag) : "";
 
     auto fileList = args::get(files);
     if (fileList.empty()) {

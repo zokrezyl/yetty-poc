@@ -8,13 +8,11 @@
 # Requires: yetty built with -DYETTY_CARD_YHTML=ON
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 
 WIDTH="${1:-60}"
 HEIGHT="${2:-20}"
 
-uv run python3 "$PROJECT_ROOT/tools/yetty-client/main.py" create yhtml \
-    -I '<html><head><style>
+HTML_CONTENT='<html><head><style>
 body { color: #cdd6f4; font-size: 14px; margin: 15px; }
 h1 { color: #89b4fa; border-bottom: 2px solid #45475a; padding-bottom: 5px; }
 .box { background-color: #313244; border: 1px solid #585b70; border-radius: 6px; padding: 10px; margin: 8px 0; }
@@ -29,5 +27,8 @@ not loaded from a file.</p>
    Mode: <span class="yellow">Inline</span></p>
 </div>
 <p><i>Useful for quick cards without creating files.</i></p>
-</body></html>' \
-    -w "$WIDTH" -H "$HEIGHT"
+</body></html>'
+
+PAYLOAD=$(echo -n "$HTML_CONTENT" | base64 -w0)
+printf '\033]666666;run -c yhtml -x 0 -y 0 -w %d -h %d -r;;%s\033\\' "$WIDTH" "$HEIGHT" "$PAYLOAD"
+echo

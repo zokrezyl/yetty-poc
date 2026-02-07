@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <memory>
 #include <unordered_map>
+#include <filesystem>
 
 // Forward declarations for pdfio (pdfio uses _pdfio_*_s naming)
 struct _pdfio_file_s;
@@ -162,6 +163,8 @@ private:
     // Args / payload
     std::string _argsStr;
     std::string _payloadStr;
+    std::string _inputSource;  // "-" for payload, or file path
+    std::filesystem::path _tempPdfPath;  // temp file when loading from payload
 
     // pdfio state
     pdfio_file_t* _pdfFile = nullptr;

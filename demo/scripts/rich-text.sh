@@ -1,7 +1,8 @@
 #!/bin/bash
-# Rich-Text Plugin: Styled text with fonts, colors, sizes from YAML configuration
+# Rich-Text Card: Styled text with fonts, colors, sizes from YAML configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CLIENT_DIR="$SCRIPT_DIR/../../tools/yetty-client"
-DEMO_FILE="$SCRIPT_DIR/../assets/rich-text/simple.yaml"
+cd "$SCRIPT_DIR/../.."
 
-cd "$CLIENT_DIR" && uv run python main.py create rich-text -x 2 -y 2 -w 76 -H 30 -i "$DEMO_FILE"
+PAYLOAD=$(base64 -w0 < demo/assets/rich-text/simple.yaml)
+printf '\033]666666;run -c rich-text -x 2 -y 2 -w 76 -h 30 -r;;%s\033\\' "$PAYLOAD"
+echo
