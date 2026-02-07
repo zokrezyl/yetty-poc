@@ -21,8 +21,8 @@
 include(FetchContent)
 
 # Dawn release version (date-based versioning)
-set(DAWN_VERSION "20260206.101712" CACHE STRING "Dawn version to use")
-set(DAWN_COMMIT "6cb839138a48fe868e879a629aee893b05238991" CACHE STRING "Dawn commit hash")
+set(DAWN_VERSION "20260117.152313" CACHE STRING "Dawn version to use")
+set(DAWN_COMMIT "d14ae3d97ad74100e9f382efef5e9c0872ddbeb2" CACHE STRING "Dawn commit hash")
 
 # Determine platform and download URL
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
