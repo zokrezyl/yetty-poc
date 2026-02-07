@@ -172,18 +172,13 @@ CPMAddPackage(
 )
 
 # ytrace for logging with runtime control (will use existing spdlog)
-# Disable ytrace-ctl on Windows (uses Unix sockets)
-if(WIN32)
-    set(YTRACE_BUILD_TOOLS_OPTION "YTRACE_BUILD_TOOLS OFF")
-else()
-    set(YTRACE_BUILD_TOOLS_OPTION "YTRACE_BUILD_TOOLS ON")
-endif()
+# v0.0.6 has Windows socket fixes
 CPMAddPackage(
     NAME ytrace
     GITHUB_REPOSITORY zokrezyl/ytrace
-    GIT_TAG main
+    GIT_TAG v0.0.6
     OPTIONS
-        ${YTRACE_BUILD_TOOLS_OPTION}
+        "YTRACE_BUILD_TOOLS ON"
         "YTRACE_BUILD_EXAMPLES OFF"
         "YTRACE_ENABLE_YLOG ON"
         "YTRACE_ENABLE_YTRACE ON"
@@ -384,9 +379,8 @@ if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
     # FreeType and remaining dependencies (brotli, bzip2) - uses our zlib/libpng
     include(build-tools/cmake/FreeType.cmake)
 
-    # libmagic for file type detection (ycat) - Linux only
-    # macOS has dynamic zlib linking issues with autotools configure
-    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # libmagic for file type detection (ycat) - Unix only (requires autotools)
+    if(NOT WIN32)
         include(build-tools/cmake/Libmagic.cmake)
     endif()
 
