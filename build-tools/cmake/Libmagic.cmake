@@ -2,6 +2,13 @@ include(ExternalProject)
 
 set(LIBMAGIC_VERSION "5.45")
 
+# macOS: use x86_64 host triplet (Intel for now)
+if(APPLE)
+    set(LIBMAGIC_HOST_FLAG "--host=x86_64-apple-darwin")
+else()
+    set(LIBMAGIC_HOST_FLAG "")
+endif()
+
 # Use official distribution tarball — includes pre-generated configure script,
 # no autotools (autoconf/automake/libtool) needed on the build machine.
 #
@@ -17,6 +24,7 @@ ExternalProject_Add(libmagic_ext
     CONFIGURE_COMMAND
         <SOURCE_DIR>/configure
             --prefix=<INSTALL_DIR>
+            ${LIBMAGIC_HOST_FLAG}
             --disable-shared
             --enable-static
             --disable-libseccomp
