@@ -1,3 +1,4 @@
+# MSDF generator tool - works on all platforms via CdbWriter wrapper
 add_executable(yetty-msdf-gen
     main.cpp
     generator.cpp
@@ -15,7 +16,7 @@ target_link_libraries(yetty-msdf-gen PRIVATE
     glm::glm
     ytrace::ytrace
     args
-    cdb
+    cdb-wrapper
     # FreeType static libs LAST — msdfgen references FT symbols
     ${FREETYPE_ALL_LIBS}
 )

@@ -145,9 +145,11 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     )
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
     # Dawn on Windows needs various Windows libs
+    # kernel32 required for CompareObjectHandles
     target_link_libraries(webgpu INTERFACE
         d3d12 dxgi dxguid d3dcompiler
         user32 gdi32 ole32 shell32
+        kernel32
     )
 endif()
 

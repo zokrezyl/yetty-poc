@@ -1,10 +1,11 @@
+# CDB-based MSDF generator tool - works on all platforms via CdbWriter wrapper
 add_executable(msdf-gen-cdb main.cpp)
 
 target_link_libraries(msdf-gen-cdb PRIVATE
     msdf-wgsl
     glfw
     glfw3webgpu
-    cdb
+    cdb-wrapper
     ${FREETYPE_ALL_LIBS}
 )
 

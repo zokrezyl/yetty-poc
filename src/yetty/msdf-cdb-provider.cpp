@@ -1,28 +1,22 @@
 #include <yetty/msdf-cdb-provider.h>
+#include <yetty/cdb-wrapper.h>
 #include <yetty/msdf-glyph-data.h>
 #include <ytrace/ytrace.hpp>
 
 #include <filesystem>
 #include <cmath>
 #include <cstring>
-// CPU provider — msdfgen library
+
+// CPU provider — msdfgen library (internal, not CDB-dependent)
 #include "msdf-gen/generator.h"
 
 // GPU provider — msdf-wgsl library
 #include <msdf-wgsl.h>
 
-extern "C" {
-#include <cdb.h>
-#include <cdb_make.h>
-}
-
-#include <fcntl.h>
-#include <unistd.h>
-
 namespace yetty {
 
 // ---------------------------------------------------------------------------
-// CpuMsdfCdbProvider
+// CpuMsdfCdbProvider - uses msdfgen library (which handles CDB writing internally)
 // ---------------------------------------------------------------------------
 
 Result<void> CpuMsdfCdbProvider::generate(const MsdfCdbConfig& config) {
@@ -64,7 +58,7 @@ Result<void> CpuMsdfCdbProvider::generate(const MsdfCdbConfig& config) {
 }
 
 // ---------------------------------------------------------------------------
-// GpuMsdfCdbProvider
+// GpuMsdfCdbProvider - uses msdf-wgsl compute shaders + CdbWriter
 // ---------------------------------------------------------------------------
 
 GpuMsdfCdbProvider::GpuMsdfCdbProvider(WGPUInstance instance)
@@ -219,16 +213,13 @@ Result<void> GpuMsdfCdbProvider::generate(const MsdfCdbConfig& config) {
         return Err<void>("Failed to read atlas from GPU for " + config.ttfPath);
     }
 
-    // Write CDB
+    // Write CDB using the wrapper (works on all platforms)
     std::string tmpPath = config.cdbPath + ".tmp";
-    int fd = open(tmpPath.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0644);
-    if (fd < 0) {
+    auto writer = CdbWriter::create(tmpPath);
+    if (!writer) {
         releaseDevice();
         return Err<void>("Failed to create CDB file: " + tmpPath);
     }
-
-    struct cdb_make cdbm;
-    cdb_make_start(&cdbm, fd);
 
     const auto& glyphs = font->getGlyphs();
     int atlasW = font->getAtlas()->getWidth();
@@ -239,12 +230,6 @@ Result<void> GpuMsdfCdbProvider::generate(const MsdfCdbConfig& config) {
     int padding = static_cast<int>(std::ceil(config.pixelRange));
 
     for (const auto& glyph : glyphs) {
-        char key[4];
-        key[0] = glyph.codepoint & 0xFF;
-        key[1] = (glyph.codepoint >> 8) & 0xFF;
-        key[2] = (glyph.codepoint >> 16) & 0xFF;
-        key[3] = (glyph.codepoint >> 24) & 0xFF;
-
         MsdfGlyphData header{};
         header.codepoint = glyph.codepoint;
         header.width     = glyph.atlasW;
@@ -267,12 +252,17 @@ Result<void> GpuMsdfCdbProvider::generate(const MsdfCdbConfig& config) {
             std::memcpy(dst, src, glyph.atlasW * 4);
         }
 
-        cdb_make_add(&cdbm, key, 4, value.data(), value.size());
+        if (!writer->add(glyph.codepoint, value.data(), value.size())) {
+            releaseDevice();
+            return Err<void>("Failed to add glyph to CDB: " + std::to_string(glyph.codepoint));
+        }
         written++;
     }
 
-    cdb_make_finish(&cdbm);
-    close(fd);
+    if (!writer->finish()) {
+        releaseDevice();
+        return Err<void>("Failed to finalize CDB file: " + tmpPath);
+    }
 
     std::filesystem::rename(tmpPath, config.cdbPath);
     auto fileSize = std::filesystem::file_size(config.cdbPath);

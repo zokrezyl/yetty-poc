@@ -27,14 +27,22 @@ if(pdfio_ADDED)
         ${pdfio_SOURCE_DIR}/pdfio-token.c
         ${pdfio_SOURCE_DIR}/pdfio-value.c
     )
-    target_include_directories(pdfio_lib PUBLIC ${pdfio_SOURCE_DIR})
-    target_link_libraries(pdfio_lib PRIVATE z)
+    target_include_directories(pdfio_lib
+        PUBLIC ${pdfio_SOURCE_DIR}
+        PRIVATE ${ZLIB_INCLUDE_DIR}
+    )
+    # Use ZLIB::ZLIB alias (works on all platforms, set by FreeType.cmake)
+    target_link_libraries(pdfio_lib PRIVATE ZLIB::ZLIB)
     set_target_properties(pdfio_lib PROPERTIES
         C_STANDARD 99
         POSITION_INDEPENDENT_CODE ON
     )
     # Suppress warnings in third-party code
-    target_compile_options(pdfio_lib PRIVATE -w)
+    if(MSVC)
+        target_compile_options(pdfio_lib PRIVATE /w)
+    else()
+        target_compile_options(pdfio_lib PRIVATE -w)
+    endif()
 endif()
 
 target_sources(yetty PRIVATE

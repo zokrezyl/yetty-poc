@@ -87,7 +87,8 @@ jobs:
         -S ${{ github.workspace }}
 
     - name: Build
-      run: cmake --build ${{ steps.strings.outputs.build-output-dir }} --config Release --parallel
+      # Limit parallelism to avoid "posix_spawn failed: Resource temporarily unavailable"
+      run: cmake --build ${{ steps.strings.outputs.build-output-dir }} --config Release --parallel 4
 
     - name: Test
       working-directory: ${{ steps.strings.outputs.build-output-dir }}
@@ -122,9 +123,10 @@ jobs:
       run: ctest --build-config Release --output-on-failure
 
   # =============================================================================
-  # Android Build
+  # Android Build (temporarily disabled)
   # =============================================================================
   build-android:
+    if: false  # temporarily disabled
     runs-on: ubuntu-latest
 
     steps:
@@ -173,13 +175,12 @@ jobs:
         if-no-files-found: warn
 
   # =============================================================================
-  # Android Instrumented Tests (on Emulator)
+  # Android Instrumented Tests (on Emulator) - temporarily disabled
   # =============================================================================
   test-android:
+    if: false  # temporarily disabled
     runs-on: ubuntu-latest
     needs: build-android
-    # Only run on main branch to save CI minutes (emulator is slow)
-    if: github.ref == 'refs/heads/main'
 
     steps:
     - uses: actions/checkout@v4

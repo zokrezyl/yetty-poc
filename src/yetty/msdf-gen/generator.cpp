@@ -1,5 +1,6 @@
 #include "generator.h"
 
+#include <yetty/cdb-wrapper.h>
 #include <msdfgen.h>
 #include <msdfgen-ext.h>
 #include <ytrace/ytrace.hpp>
@@ -17,13 +18,6 @@
 #include <cstring>
 #include <algorithm>
 #include <cmath>
-#include <fcntl.h>
-#include <unistd.h>
-
-extern "C" {
-#include <cdb.h>
-#include <cdb_make.h>
-}
 
 namespace yetty {
 namespace msdfgen {
@@ -207,30 +201,16 @@ static void workerThread(
     ::msdfgen::deinitializeFreetype(ft);
 }
 
-// Write results to CDB file
+// Write results to CDB file using cross-platform CdbWriter
 static bool writeCdb(const std::string& path, const std::vector<GlyphResult>& results) {
-    int fd = open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd < 0) {
+    auto writer = yetty::CdbWriter::create(path);
+    if (!writer) {
         yerror("Failed to create CDB file: {}", path);
-        return false;
-    }
-
-    struct cdb_make cdbm;
-    if (cdb_make_start(&cdbm, fd) < 0) {
-        yerror("cdb_make_start failed");
-        close(fd);
         return false;
     }
 
     for (const auto& r : results) {
         if (!r.success) continue;
-
-        // Key: 4-byte codepoint (little-endian)
-        char key[4];
-        key[0] = r.codepoint & 0xFF;
-        key[1] = (r.codepoint >> 8) & 0xFF;
-        key[2] = (r.codepoint >> 16) & 0xFF;
-        key[3] = (r.codepoint >> 24) & 0xFF;
 
         // Value: MsdfGlyphData header + pixel data
         size_t valueSize = sizeof(MsdfGlyphData) + r.pixels.size();
@@ -240,20 +220,17 @@ static bool writeCdb(const std::string& path, const std::vector<GlyphResult>& re
             std::memcpy(value.data() + sizeof(MsdfGlyphData), r.pixels.data(), r.pixels.size());
         }
 
-        if (cdb_make_add(&cdbm, key, 4, value.data(), valueSize) < 0) {
-            yerror("cdb_make_add failed for codepoint {}", r.codepoint);
-            close(fd);
+        if (!writer->add(r.codepoint, value.data(), valueSize)) {
+            yerror("Failed to add codepoint {} to CDB", r.codepoint);
             return false;
         }
     }
 
-    if (cdb_make_finish(&cdbm) < 0) {
-        yerror("cdb_make_finish failed");
-        close(fd);
+    if (!writer->finish()) {
+        yerror("Failed to finalize CDB file");
         return false;
     }
 
-    close(fd);
     return true;
 }
 

@@ -13,11 +13,20 @@ CPMAddPackage(
 # that pull in system libraries curl can't cleanly export.
 # These must be set before CPMAddPackage(cpr) because cpr adds curl as
 # a subdirectory — CPM OPTIONS only apply to the direct package.
-find_package(OpenSSL REQUIRED)
+#
+# NOTE: We disable SSL and ZLIB to avoid dependency mess.
+# Save and restore ZLIB state to hide our zlib from curl.
+set(_SAVE_ZLIB_FOUND ${ZLIB_FOUND})
+set(_SAVE_ZLIB_LIBRARY ${ZLIB_LIBRARY})
+set(ZLIB_FOUND FALSE CACHE BOOL "" FORCE)
+unset(ZLIB_LIBRARY CACHE)
+
 set(CURL_ZLIB OFF CACHE BOOL "" FORCE)
 set(CURL_USE_LIBPSL OFF CACHE BOOL "" FORCE)
 set(CURL_BROTLI OFF CACHE BOOL "" FORCE)
 set(CURL_ZSTD OFF CACHE BOOL "" FORCE)
+set(CURL_USE_OPENSSL OFF CACHE BOOL "" FORCE)
+set(CURL_USE_LIBSSH2 OFF CACHE BOOL "" FORCE)
 
 CPMAddPackage(
     NAME cpr
@@ -27,10 +36,16 @@ CPMAddPackage(
         "CPR_USE_SYSTEM_CURL OFF"
         "CPR_CURL_USE_LIBPSL OFF"
         "BUILD_SHARED_LIBS OFF"
-        "CPR_ENABLE_SSL ON"
+        "CPR_ENABLE_SSL OFF"
         "CPR_BUILD_TESTS OFF"
         "CPR_BUILD_TESTS_SSL OFF"
 )
+
+# Restore ZLIB state after curl configuration
+set(ZLIB_FOUND ${_SAVE_ZLIB_FOUND} CACHE BOOL "" FORCE)
+if(_SAVE_ZLIB_LIBRARY)
+    set(ZLIB_LIBRARY ${_SAVE_ZLIB_LIBRARY} CACHE STRING "" FORCE)
+endif()
 
 target_sources(yetty PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/yhtml.h

@@ -87,7 +87,11 @@ if(thorvg_ADDED)
         )
 
         # Suppress warnings in third-party code
-        target_compile_options(thorvg_sw_lib PRIVATE -w)
+        if(MSVC)
+            target_compile_options(thorvg_sw_lib PRIVATE /w)
+        else()
+            target_compile_options(thorvg_sw_lib PRIVATE -w)
+        endif()
     endif()
 
     # Add card sources to yetty target

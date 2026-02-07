@@ -1,19 +1,12 @@
 #include <yetty/msdf-atlas.h>
+#include <yetty/cdb-wrapper.h>
 #include <yetty/wgpu-compat.h>
 #include <ytrace/ytrace.hpp>
 
-#include <fcntl.h>
-#include <unistd.h>
-#include <sys/mman.h>
-#include <sys/stat.h>
 #include <cstring>
 #include <algorithm>
 #include <filesystem>
 #include <unordered_map>
-
-extern "C" {
-#include <cdb.h>
-}
 
 namespace yetty {
 
@@ -60,71 +53,27 @@ public:
     //=========================================================================
 
     int openCdb(const std::string& path) override {
-        int fd = open(path.c_str(), O_RDONLY);
-        if (fd < 0) {
+        auto reader = CdbReader::open(path);
+        if (!reader) {
             ywarn("MsdfAtlas: Cannot open CDB file: {}", path);
             return -1;
         }
 
-        struct stat st;
-        if (fstat(fd, &st) < 0) {
-            close(fd);
-            ywarn("MsdfAtlas: Cannot stat CDB file: {}", path);
-            return -1;
-        }
-
-        void* mapped = mmap(nullptr, st.st_size, PROT_READ, MAP_SHARED, fd, 0);
-        if (mapped == MAP_FAILED) {
-            close(fd);
-            ywarn("MsdfAtlas: Cannot mmap CDB file: {}", path);
-            return -1;
-        }
-
-        auto* cdbPtr = new struct cdb;
-        cdb_init(cdbPtr, fd);
-
-        CdbFile cf;
-        cf.fd = fd;
-        cf.mapped = mapped;
-        cf.size = st.st_size;
-        cf.cdb = cdbPtr;
-
         int fontId = static_cast<int>(_cdbFiles.size());
-        _cdbFiles.push_back(cf);
+        _cdbFiles.push_back(std::move(reader));
         _codepointToIndex.emplace_back();  // New empty map for this fontId
 
-        yinfo("MsdfAtlas: Opened CDB [fontId={}]: {} ({} bytes)", fontId, path, st.st_size);
+        yinfo("MsdfAtlas: Opened CDB [fontId={}]: {}", fontId, path);
         return fontId;
     }
 
     void closeCdb(int fontId) override {
         if (fontId < 0 || fontId >= static_cast<int>(_cdbFiles.size())) return;
-
-        auto& cf = _cdbFiles[fontId];
-
-        if (cf.cdb) {
-            cdb_free(cf.cdb);
-            delete cf.cdb;
-            cf.cdb = nullptr;
-        }
-
-        if (cf.mapped && cf.mapped != MAP_FAILED) {
-            munmap(cf.mapped, cf.size);
-            cf.mapped = nullptr;
-        }
-
-        if (cf.fd >= 0) {
-            close(cf.fd);
-            cf.fd = -1;
-        }
-
-        cf.size = 0;
+        _cdbFiles[fontId].reset();
     }
 
     void closeAllCdbs() override {
-        for (int i = 0; i < static_cast<int>(_cdbFiles.size()); ++i) {
-            closeCdb(i);
-        }
+        _cdbFiles.clear();
     }
 
     //=========================================================================
@@ -143,30 +92,21 @@ public:
         }
 
         // Check if CDB is available
-        struct cdb* cdbPtr = _cdbFiles[fontId].cdb;
-        if (!cdbPtr) {
+        auto& reader = _cdbFiles[fontId];
+        if (!reader) {
             _codepointToIndex[fontId][codepoint] = 0;
             return 0;
         }
-
-        // Prepare key: 4-byte little-endian codepoint
-        char key[4];
-        key[0] = codepoint & 0xFF;
-        key[1] = (codepoint >> 8) & 0xFF;
-        key[2] = (codepoint >> 16) & 0xFF;
-        key[3] = (codepoint >> 24) & 0xFF;
 
         // Look up in CDB
-        if (cdb_find(cdbPtr, key, 4) <= 0) {
+        auto data = reader->get(codepoint);
+        if (!data) {
             _codepointToIndex[fontId][codepoint] = 0;
             return 0;
         }
 
-        // Read glyph data
-        unsigned int dataLen = cdb_datalen(cdbPtr);
-        unsigned int dataPos = cdb_datapos(cdbPtr);
-
-        if (dataLen < sizeof(MsdfGlyphData)) {
+        // Validate data size
+        if (data->size() < sizeof(MsdfGlyphData)) {
             ywarn("Invalid glyph data size for codepoint {}", codepoint);
             _codepointToIndex[fontId][codepoint] = 0;
             return 0;
@@ -174,11 +114,7 @@ public:
 
         // Read header
         MsdfGlyphData header;
-        if (cdb_read(cdbPtr, reinterpret_cast<char*>(&header), sizeof(header), dataPos) < 0) {
-            yerror("Failed to read glyph header for codepoint {}", codepoint);
-            _codepointToIndex[fontId][codepoint] = 0;
-            return 0;
-        }
+        std::memcpy(&header, data->data(), sizeof(header));
 
         // Create glyph metadata - CDB stores final values, use directly
         GlyphMetadataGPU meta{};
@@ -215,22 +151,17 @@ public:
             growAtlas();
         }
 
-        // Read pixel data
+        // Validate pixel data size
         size_t pixelDataSize = header.width * header.height * 4;
         size_t expectedSize = sizeof(MsdfGlyphData) + pixelDataSize;
-        if (dataLen < expectedSize) {
+        if (data->size() < expectedSize) {
             ywarn("Glyph data truncated for codepoint {}", codepoint);
             _codepointToIndex[fontId][codepoint] = 0;
             return 0;
         }
 
-        std::vector<uint8_t> pixels(pixelDataSize);
-        if (cdb_read(cdbPtr, reinterpret_cast<char*>(pixels.data()), pixelDataSize,
-                     dataPos + sizeof(MsdfGlyphData)) < 0) {
-            yerror("Failed to read pixel data for codepoint {}", codepoint);
-            _codepointToIndex[fontId][codepoint] = 0;
-            return 0;
-        }
+        // Get pixel data pointer
+        const uint8_t* pixels = data->data() + sizeof(MsdfGlyphData);
 
         // Copy to atlas
         uint32_t atlasX = _shelfX;
@@ -577,16 +508,8 @@ private:
     // Private data
     //=========================================================================
 
-    // CDB file handle
-    struct CdbFile {
-        int fd = -1;
-        void* mapped = nullptr;
-        size_t size = 0;
-        struct cdb* cdb = nullptr;
-    };
-
-    // CDB files (indexed by fontId)
-    std::vector<CdbFile> _cdbFiles;
+    // CDB readers (indexed by fontId)
+    std::vector<CdbReader::Ptr> _cdbFiles;
 
     // Per-font codepoint-to-glyph-index cache (indexed by fontId)
     std::vector<std::unordered_map<uint32_t, uint32_t>> _codepointToIndex;

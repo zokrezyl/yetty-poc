@@ -6,6 +6,7 @@
 #include <msdf-wgsl.h>
 #include <yetty/wgpu-compat.h>
 #include <yetty/msdf-glyph-data.h>
+#include <yetty/cdb-wrapper.h>
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -18,13 +19,6 @@
 #include <vector>
 #include <fstream>
 #include <filesystem>
-#include <fcntl.h>
-#include <unistd.h>
-
-extern "C" {
-#include <cdb.h>
-#include <cdb_make.h>
-}
 
 using yetty::MsdfGlyphData;
 
@@ -246,18 +240,15 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        // Write CDB
+        // Write CDB using cross-platform wrapper
         std::cout << "[CDB] Writing to: " << outputPath << "\n";
 
         std::string tmpPath = outputPath + ".tmp";
-        int fd = open(tmpPath.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0644);
-        if (fd < 0) {
+        auto writer = yetty::CdbWriter::create(tmpPath);
+        if (!writer) {
             std::cerr << "Failed to create output file\n";
             return 1;
         }
-
-        struct cdb_make cdbm;
-        cdb_make_start(&cdbm, fd);
 
         const auto& glyphs = font->getGlyphs();
         int atlasW = font->getAtlas()->getWidth();
@@ -268,13 +259,6 @@ int main(int argc, char* argv[]) {
         int padding = static_cast<int>(std::ceil(config.range));
 
         for (const auto& glyph : glyphs) {
-            // Build CDB key (4-byte little-endian codepoint)
-            char key[4];
-            key[0] = glyph.codepoint & 0xFF;
-            key[1] = (glyph.codepoint >> 8) & 0xFF;
-            key[2] = (glyph.codepoint >> 16) & 0xFF;
-            key[3] = (glyph.codepoint >> 24) & 0xFF;
-
             // Build value: header + pixel data
             MsdfGlyphData header{};
             header.codepoint = glyph.codepoint;
@@ -298,12 +282,14 @@ int main(int argc, char* argv[]) {
                 memcpy(dst, src, glyph.atlasW * 4);
             }
 
-            cdb_make_add(&cdbm, key, 4, value.data(), value.size());
+            writer->add(glyph.codepoint, value.data(), value.size());
             written++;
         }
 
-        cdb_make_finish(&cdbm);
-        close(fd);
+        if (!writer->finish()) {
+            std::cerr << "Failed to finalize CDB file\n";
+            return 1;
+        }
 
         // Rename temp to final
         std::filesystem::rename(tmpPath, outputPath);

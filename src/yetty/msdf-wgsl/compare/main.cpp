@@ -3,71 +3,37 @@
  */
 
 #include <yetty/msdf-glyph-data.h>
-
-extern "C" {
-#include <cdb.h>
-}
+#include <yetty/cdb-wrapper.h>
 
 #include <cstdio>
 #include <cstring>
-#include <fcntl.h>
-#include <unistd.h>
 #include <vector>
 #include <string>
-#include <sys/stat.h>
-#include <sys/mman.h>
 
 using yetty::MsdfGlyphData;
 
-struct CdbReader {
-    int fd = -1;
-    void* mapped = nullptr;
-    size_t size = 0;
-    struct cdb cdb = {};
+struct CdbFileReader {
+    yetty::CdbReader::Ptr reader;
 
     bool open(const char* path) {
-        fd = ::open(path, O_RDONLY);
-        if (fd < 0) { perror(path); return false; }
-
-        struct stat st;
-        fstat(fd, &st);
-        size = st.st_size;
-
-        mapped = mmap(nullptr, size, PROT_READ, MAP_SHARED, fd, 0);
-        if (mapped == MAP_FAILED) { close(fd); return false; }
-
-        cdb_init(&cdb, fd);
-        return true;
+        reader = yetty::CdbReader::open(path);
+        return reader != nullptr;
     }
 
     bool readGlyph(uint32_t codepoint, MsdfGlyphData& header, std::vector<uint8_t>& pixels) {
-        char key[4];
-        key[0] = codepoint & 0xFF;
-        key[1] = (codepoint >> 8) & 0xFF;
-        key[2] = (codepoint >> 16) & 0xFF;
-        key[3] = (codepoint >> 24) & 0xFF;
+        auto data = reader->get(codepoint);
+        if (!data) return false;
 
-        if (cdb_find(&cdb, key, 4) <= 0) return false;
+        if (data->size() < sizeof(MsdfGlyphData)) return false;
 
-        unsigned int dlen = cdb_datalen(&cdb);
-        unsigned int dpos = cdb_datapos(&cdb);
+        std::memcpy(&header, data->data(), sizeof(header));
 
-        if (dlen < sizeof(MsdfGlyphData)) return false;
-
-        cdb_read(&cdb, reinterpret_cast<char*>(&header), sizeof(header), dpos);
-
-        size_t pixelBytes = dlen - sizeof(MsdfGlyphData);
+        size_t pixelBytes = data->size() - sizeof(MsdfGlyphData);
         pixels.resize(pixelBytes);
         if (pixelBytes > 0) {
-            cdb_read(&cdb, reinterpret_cast<char*>(pixels.data()), pixelBytes,
-                     dpos + sizeof(MsdfGlyphData));
+            std::memcpy(pixels.data(), data->data() + sizeof(MsdfGlyphData), pixelBytes);
         }
         return true;
-    }
-
-    ~CdbReader() {
-        if (mapped && mapped != MAP_FAILED) munmap(mapped, size);
-        if (fd >= 0) ::close(fd);
     }
 };
 
@@ -95,7 +61,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    CdbReader a, b;
+    CdbFileReader a, b;
     if (!a.open(argv[1])) { fprintf(stderr, "Failed to open: %s\n", argv[1]); return 1; }
     if (!b.open(argv[2])) { fprintf(stderr, "Failed to open: %s\n", argv[2]); return 1; }
 

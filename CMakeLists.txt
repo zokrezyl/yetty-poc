@@ -217,51 +217,96 @@ endif()
 
 #-----------------------------------------------------------------------------
 # CDB (Constant Database) for fast key-value lookups
-# Downloads from https://cdb.cr.yp.to (public domain)
+# Two implementations available:
+#   - howerj/cdb: Portable C implementation (default, works on all platforms)
+#   - djb/cdb: Original D.J. Bernstein implementation (Unix only)
 #-----------------------------------------------------------------------------
-if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
-    set(CDB_VERSION "20251021")
-    set(CDB_URL "https://cdb.cr.yp.to/cdb-${CDB_VERSION}.tar.gz")
-    set(CDB_SOURCE_DIR "${CMAKE_BINARY_DIR}/_deps/cdb-${CDB_VERSION}")
+option(YETTY_USE_HOWERJ_CDB "Use portable howerj/cdb instead of djb cdb (required for Windows)" ON)
 
-    if(NOT EXISTS "${CDB_SOURCE_DIR}/cdb.c")
-        message(STATUS "Downloading CDB ${CDB_VERSION}...")
-        file(DOWNLOAD ${CDB_URL} "${CMAKE_BINARY_DIR}/_deps/cdb-${CDB_VERSION}.tar.gz"
-             STATUS CDB_DOWNLOAD_STATUS)
-        list(GET CDB_DOWNLOAD_STATUS 0 CDB_DOWNLOAD_ERROR)
-        if(CDB_DOWNLOAD_ERROR)
-            message(FATAL_ERROR "Failed to download CDB: ${CDB_DOWNLOAD_STATUS}")
-        endif()
-        execute_process(
-            COMMAND ${CMAKE_COMMAND} -E tar xzf "${CMAKE_BINARY_DIR}/_deps/cdb-${CDB_VERSION}.tar.gz"
-            WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/_deps"
+if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
+    if(YETTY_USE_HOWERJ_CDB)
+        # Portable CDB implementation - works on Windows, Linux, macOS
+        CPMAddPackage(
+            NAME howerj_cdb
+            URL https://github.com/howerj/cdb/archive/refs/tags/v4.3.2.tar.gz
+            VERSION 4.3.2
+            DOWNLOAD_ONLY YES
         )
+        if(howerj_cdb_ADDED)
+            add_library(cdb STATIC
+                ${howerj_cdb_SOURCE_DIR}/cdb.c
+            )
+            target_include_directories(cdb PUBLIC ${howerj_cdb_SOURCE_DIR})
+            target_compile_definitions(cdb PUBLIC YETTY_USE_HOWERJ_CDB=1)
+            if(MSVC)
+                target_compile_options(cdb PRIVATE /w)
+            else()
+                target_compile_options(cdb PRIVATE -w)
+            endif()
+            set_target_properties(cdb PROPERTIES POSITION_INDEPENDENT_CODE ON)
+            message(STATUS "CDB: Using portable howerj/cdb v4.3.2")
+        endif()
+    elseif(NOT WIN32)
+        # Original djb CDB - Unix only (uses mmap, unistd.h)
+        set(CDB_VERSION "20251021")
+        set(CDB_URL "https://cdb.cr.yp.to/cdb-${CDB_VERSION}.tar.gz")
+        set(CDB_SOURCE_DIR "${CMAKE_BINARY_DIR}/_deps/cdb-${CDB_VERSION}")
+
+        if(NOT EXISTS "${CDB_SOURCE_DIR}/cdb.c")
+            message(STATUS "Downloading CDB ${CDB_VERSION}...")
+            file(DOWNLOAD ${CDB_URL} "${CMAKE_BINARY_DIR}/_deps/cdb-${CDB_VERSION}.tar.gz"
+                 STATUS CDB_DOWNLOAD_STATUS)
+            list(GET CDB_DOWNLOAD_STATUS 0 CDB_DOWNLOAD_ERROR)
+            if(CDB_DOWNLOAD_ERROR)
+                message(FATAL_ERROR "Failed to download CDB: ${CDB_DOWNLOAD_STATUS}")
+            endif()
+            execute_process(
+                COMMAND ${CMAKE_COMMAND} -E tar xzf "${CMAKE_BINARY_DIR}/_deps/cdb-${CDB_VERSION}.tar.gz"
+                WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/_deps"
+            )
+        endif()
+
+        add_library(cdb STATIC
+            ${CDB_SOURCE_DIR}/cdb.c
+            ${CDB_SOURCE_DIR}/cdb_hash.c
+            ${CDB_SOURCE_DIR}/cdb_make.c
+            ${CDB_SOURCE_DIR}/byte_copy.c
+            ${CDB_SOURCE_DIR}/byte_diff.c
+            ${CDB_SOURCE_DIR}/num_from4bytes.c
+            ${CDB_SOURCE_DIR}/num_to4bytes.c
+            ${CDB_SOURCE_DIR}/outbuf_init.c
+            ${CDB_SOURCE_DIR}/outbuf_put.c
+            ${CDB_SOURCE_DIR}/outbuf_write.c
+            ${CDB_SOURCE_DIR}/inbuf_0.c
+            ${CDB_SOURCE_DIR}/inbuf_init.c
+            ${CDB_SOURCE_DIR}/inbuf_get.c
+            ${CDB_SOURCE_DIR}/inbuf_read.c
+            ${CDB_SOURCE_DIR}/seek_set.c
+            ${CDB_SOURCE_DIR}/seek_cur.c
+        )
+        # Remove cdb's 'version' file that clashes with C++20 <version> header
+        file(REMOVE ${CDB_SOURCE_DIR}/version)
+        target_include_directories(cdb SYSTEM PUBLIC ${CDB_SOURCE_DIR})
+        target_compile_options(cdb PRIVATE -w)
+        set_target_properties(cdb PROPERTIES POSITION_INDEPENDENT_CODE ON)
+        message(STATUS "CDB: Using original djb cdb (Unix only)")
+    else()
+        message(FATAL_ERROR "Windows requires YETTY_USE_HOWERJ_CDB=ON")
     endif()
 
-    # Build CDB as a static library
-    add_library(cdb STATIC
-        ${CDB_SOURCE_DIR}/cdb.c
-        ${CDB_SOURCE_DIR}/cdb_hash.c
-        ${CDB_SOURCE_DIR}/cdb_make.c
-        ${CDB_SOURCE_DIR}/byte_copy.c
-        ${CDB_SOURCE_DIR}/byte_diff.c
-        ${CDB_SOURCE_DIR}/num_from4bytes.c
-        ${CDB_SOURCE_DIR}/num_to4bytes.c
-        ${CDB_SOURCE_DIR}/outbuf_init.c
-        ${CDB_SOURCE_DIR}/outbuf_put.c
-        ${CDB_SOURCE_DIR}/outbuf_write.c
-        ${CDB_SOURCE_DIR}/inbuf_0.c
-        ${CDB_SOURCE_DIR}/inbuf_init.c
-        ${CDB_SOURCE_DIR}/inbuf_get.c
-        ${CDB_SOURCE_DIR}/inbuf_read.c
-        ${CDB_SOURCE_DIR}/seek_set.c
-        ${CDB_SOURCE_DIR}/seek_cur.c
+    # CDB wrapper library - provides unified C++ API for both implementations
+    add_library(cdb-wrapper STATIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/yetty/cdb-wrapper.cpp
     )
-    # Remove cdb's 'version' file that clashes with C++20 <version> header
-    file(REMOVE ${CDB_SOURCE_DIR}/version)
-    target_include_directories(cdb SYSTEM PUBLIC ${CDB_SOURCE_DIR})
-    target_compile_options(cdb PRIVATE -w)  # Suppress warnings in third-party code
-    set_target_properties(cdb PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    target_include_directories(cdb-wrapper PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(cdb-wrapper PUBLIC cdb ytrace::ytrace)
+    # Propagate the YETTY_USE_HOWERJ_CDB definition
+    if(YETTY_USE_HOWERJ_CDB)
+        target_compile_definitions(cdb-wrapper PUBLIC YETTY_USE_HOWERJ_CDB=1)
+    endif()
+    set_target_properties(cdb-wrapper PROPERTIES POSITION_INDEPENDENT_CODE ON)
 endif()
 
 #-----------------------------------------------------------------------------
@@ -271,28 +316,72 @@ if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
     # Tree-sitter for syntax highlighting (ycat)
     include(build-tools/cmake/TreeSitter.cmake)
 
-    # zlib for compression (used by libmagic)
+    #-------------------------------------------------------------------------
+    # zlib - built from source, used by: libpng, freetype, pdfio, libmagic
+    #-------------------------------------------------------------------------
     CPMAddPackage(
         NAME zlib
         GITHUB_REPOSITORY madler/zlib
-        GIT_TAG v1.3.1.2
+        GIT_TAG v1.3.1
         OPTIONS
             "ZLIB_BUILD_EXAMPLES OFF"
+            "SKIP_INSTALL_ALL ON"
     )
     if(zlib_ADDED)
-        # zlib's CMakeLists creates targets with awkward names; alias for convenience
-        # and ensure the headers are findable
-        set(ZLIB_INCLUDE_DIR ${zlib_SOURCE_DIR} ${zlib_BINARY_DIR} CACHE PATH "" FORCE)
+        # Set up all standard CMake variables so downstream find_package(ZLIB) works
+        set_target_properties(zlibstatic PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+        # Create ZLIB::ZLIB imported target alias (standard CMake convention)
+        if(NOT TARGET ZLIB::ZLIB)
+            add_library(ZLIB::ZLIB ALIAS zlibstatic)
+        endif()
+
+        # Set variables for find_package(ZLIB) compatibility
+        set(ZLIB_FOUND TRUE CACHE BOOL "" FORCE)
+        set(ZLIB_INCLUDE_DIR "${zlib_SOURCE_DIR};${zlib_BINARY_DIR}" CACHE PATH "" FORCE)
+        set(ZLIB_INCLUDE_DIRS "${zlib_SOURCE_DIR};${zlib_BINARY_DIR}" CACHE PATH "" FORCE)
         set(ZLIB_LIBRARY zlibstatic CACHE STRING "" FORCE)
+        set(ZLIB_LIBRARIES zlibstatic CACHE STRING "" FORCE)
+
+        # For libpng's FindZLIB
+        set(ZLIB_ROOT "${zlib_SOURCE_DIR}" CACHE PATH "" FORCE)
+        set(CMAKE_INCLUDE_PATH "${zlib_SOURCE_DIR};${zlib_BINARY_DIR}" CACHE PATH "" FORCE)
+
+        message(STATUS "zlib: Built from source v1.3.1")
     endif()
 
-    # libmagic for file type detection (ycat) - Unix only, uses autotools
+    #-------------------------------------------------------------------------
+    # libpng - built from source, uses our zlib
+    #-------------------------------------------------------------------------
+    CPMAddPackage(
+        NAME libpng
+        GITHUB_REPOSITORY pnggroup/libpng
+        GIT_TAG v1.6.43
+        EXCLUDE_FROM_ALL YES
+        OPTIONS
+            "PNG_SHARED OFF"
+            "PNG_STATIC ON"
+            "PNG_TESTS OFF"
+            "PNG_TOOLS OFF"
+            "SKIP_INSTALL_ALL ON"
+    )
+    if(libpng_ADDED)
+        set_target_properties(png_static PROPERTIES POSITION_INDEPENDENT_CODE ON)
+        set(PNG_FOUND TRUE CACHE BOOL "" FORCE)
+        set(PNG_INCLUDE_DIRS "${libpng_SOURCE_DIR};${libpng_BINARY_DIR}" CACHE PATH "" FORCE)
+        set(PNG_PNG_INCLUDE_DIR "${libpng_SOURCE_DIR}" CACHE PATH "" FORCE)
+        set(PNG_LIBRARY png_static CACHE STRING "" FORCE)
+        set(PNG_LIBRARIES png_static CACHE STRING "" FORCE)
+        message(STATUS "libpng: Built from source v1.6.43")
+    endif()
+
+    # FreeType and remaining dependencies (brotli, bzip2) - uses our zlib/libpng
+    include(build-tools/cmake/FreeType.cmake)
+
+    # libmagic for file type detection (ycat) - Unix only, uses our zlib
     if(NOT WIN32)
         include(build-tools/cmake/Libmagic.cmake)
     endif()
-
-    # FreeType and all dependencies - built from source for all platforms
-    include(build-tools/cmake/FreeType.cmake)
 
     # msdfgen — built from source, no Freetype::Freetype target games
     CPMAddPackage(
@@ -773,7 +862,7 @@ else()
         ytrace::ytrace
         lz4_static
         uv_a
-        cdb
+        cdb-wrapper
         # Fontconfig and deps (Linux only)
         $<$<AND:$<NOT:$<BOOL:${WIN32}>>,$<NOT:$<BOOL:${APPLE}>>>:${FONTCONFIG_STATIC_LIB}>
         $<$<AND:$<NOT:$<BOOL:${WIN32}>>,$<NOT:$<BOOL:${APPLE}>>>:${EXPAT_STATIC_LIB}>

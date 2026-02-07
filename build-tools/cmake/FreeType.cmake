@@ -1,72 +1,23 @@
 #=============================================================================
-# FreeType.cmake - Build FreeType and all dependencies from source
+# FreeType.cmake - Build FreeType and remaining dependencies from source
 #=============================================================================
-# Builds: zlib, libpng, brotli, bzip2, freetype
+# Builds: brotli, bzip2, freetype
+# Expects: zlib and libpng to be already configured in parent CMakeLists.txt
 # All as STATIC libraries with PIC enabled.
 #=============================================================================
 
 include_guard(GLOBAL)
 
+# Verify zlib and libpng are available (built by parent CMakeLists.txt)
+if(NOT TARGET ZLIB::ZLIB)
+    message(FATAL_ERROR "FreeType.cmake requires ZLIB::ZLIB target. Add zlib before including this file.")
+endif()
+if(NOT TARGET png_static)
+    message(FATAL_ERROR "FreeType.cmake requires png_static target. Add libpng before including this file.")
+endif()
+
 # We don't need install targets for any of these deps
 set(SKIP_INSTALL_ALL ON CACHE BOOL "" FORCE)
-
-# --- zlib ---
-CPMAddPackage(
-    NAME zlib
-    GITHUB_REPOSITORY madler/zlib
-    GIT_TAG v1.3.1
-    EXCLUDE_FROM_ALL YES
-    OPTIONS
-        "ZLIB_BUILD_EXAMPLES OFF"
-        "SKIP_INSTALL_ALL ON"
-)
-if(zlib_ADDED)
-    if(TARGET zlibstatic)
-        set_target_properties(zlibstatic PROPERTIES
-            POSITION_INDEPENDENT_CODE ON
-            EXCLUDE_FROM_ALL ON
-        )
-        if(NOT TARGET ZLIB::ZLIB)
-            add_library(ZLIB::ZLIB ALIAS zlibstatic)
-        endif()
-    endif()
-    set(ZLIB_INCLUDE_DIR "${zlib_SOURCE_DIR};${zlib_BINARY_DIR}" CACHE INTERNAL "")
-    set(ZLIB_INCLUDE_DIRS "${zlib_SOURCE_DIR};${zlib_BINARY_DIR}" CACHE INTERNAL "")
-    set(ZLIB_LIBRARY zlibstatic CACHE INTERNAL "")
-    set(ZLIB_LIBRARIES zlibstatic CACHE INTERNAL "")
-    set(ZLIB_FOUND TRUE CACHE BOOL "" FORCE)
-endif()
-
-# --- libpng ---
-# Set variables libpng needs to find zlib
-set(ZLIB_ROOT "${zlib_SOURCE_DIR}" CACHE PATH "" FORCE)
-set(CMAKE_INCLUDE_PATH "${zlib_SOURCE_DIR};${zlib_BINARY_DIR}" CACHE STRING "" FORCE)
-
-CPMAddPackage(
-    NAME libpng
-    GITHUB_REPOSITORY pnggroup/libpng
-    GIT_TAG v1.6.43
-    EXCLUDE_FROM_ALL YES
-    OPTIONS
-        "PNG_SHARED OFF"
-        "PNG_STATIC ON"
-        "PNG_TESTS OFF"
-        "PNG_TOOLS OFF"
-)
-if(libpng_ADDED)
-    if(TARGET png_static)
-        set_target_properties(png_static PROPERTIES
-            POSITION_INDEPENDENT_CODE ON
-            EXCLUDE_FROM_ALL ON
-        )
-    endif()
-    set(PNG_INCLUDE_DIRS "${libpng_SOURCE_DIR};${libpng_BINARY_DIR}" CACHE INTERNAL "")
-    set(PNG_PNG_INCLUDE_DIR "${libpng_SOURCE_DIR}" CACHE PATH "" FORCE)
-    set(PNG_LIBRARY png_static CACHE INTERNAL "")
-    set(PNG_LIBRARY_RELEASE "${libpng_BINARY_DIR}/libpng16.a" CACHE FILEPATH "" FORCE)
-    set(PNG_LIBRARIES png_static CACHE INTERNAL "")
-    set(PNG_FOUND TRUE CACHE BOOL "" FORCE)
-endif()
 
 # --- brotli ---
 CPMAddPackage(
@@ -87,6 +38,7 @@ if(brotli_ADDED)
     endforeach()
     set(BROTLIDEC_LIBRARIES brotlidec brotlicommon CACHE INTERNAL "")
     set(BROTLI_INCLUDE_DIR "${brotli_SOURCE_DIR}/c/include" CACHE INTERNAL "")
+    message(STATUS "brotli: Built from source v1.1.0")
 endif()
 
 # --- bzip2 ---
@@ -115,11 +67,12 @@ if(bzip2_ADDED)
     endif()
     set(BZIP2_LIBRARIES bz2_static CACHE INTERNAL "")
     set(BZIP2_INCLUDE_DIR "${bzip2_SOURCE_DIR}" CACHE INTERNAL "")
+    message(STATUS "bzip2: Built from source v1.0.8")
 endif()
 
 # --- FreeType ---
 # Disable optional deps that FreeType tries to find via pkg-config/find_package
-# We want it to use ONLY what we provide
+# We want it to use ONLY what we provide (zlib from parent)
 set(FT_DISABLE_HARFBUZZ ON CACHE BOOL "" FORCE)
 set(FT_DISABLE_BROTLI ON CACHE BOOL "" FORCE)
 set(FT_DISABLE_BZIP2 ON CACHE BOOL "" FORCE)
@@ -162,6 +115,5 @@ if(freetype_ADDED)
         $<$<NOT:$<BOOL:${WIN32}>>:m>
         CACHE INTERNAL "All FreeType static libs in link order"
     )
+    message(STATUS "freetype: Built from source v2.13.2")
 endif()
-
-message(STATUS "FreeType.cmake: All dependencies built from source (static)")
