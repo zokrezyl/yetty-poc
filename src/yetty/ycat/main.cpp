@@ -2,6 +2,7 @@
 #include "ts/highlight.h"
 
 #include <args.hxx>
+#include <cpr/cpr.h>
 
 #ifdef YCAT_HAS_LIBMAGIC
 #include <magic.h>
@@ -13,6 +14,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -25,6 +27,59 @@
 namespace fs = std::filesystem;
 
 // ──────────────────────────────────────────────────────────────────────────────
+// URL detection and fetching
+// ──────────────────────────────────────────────────────────────────────────────
+
+static bool isUrl(const std::string& str) {
+    return str.size() > 8 &&
+           (str.substr(0, 7) == "http://" || str.substr(0, 8) == "https://");
+}
+
+struct FetchResult {
+    std::vector<uint8_t> data;
+    std::string contentType;  // MIME type from Content-Type header
+    std::string url;          // Final URL after redirects
+};
+
+static std::optional<FetchResult> fetchUrl(const std::string& url) {
+    cpr::Response r = cpr::Get(
+        cpr::Url{url},
+        cpr::Header{{"User-Agent", "ycat/1.0"}},
+        cpr::Timeout{30000},
+        cpr::Redirect{10L}
+    );
+
+    if (r.status_code == 0) {
+        std::cerr << "ycat: " << url << ": " << r.error.message << "\n";
+        return std::nullopt;
+    }
+    if (r.status_code >= 400) {
+        std::cerr << "ycat: " << url << ": HTTP " << r.status_code << "\n";
+        return std::nullopt;
+    }
+
+    FetchResult result;
+    result.data.assign(r.text.begin(), r.text.end());
+    result.url = r.url.str();
+
+    // Extract MIME type from Content-Type header (strip charset etc.)
+    auto ctIt = r.header.find("Content-Type");
+    if (ctIt != r.header.end()) {
+        result.contentType = ctIt->second;
+        auto semicolon = result.contentType.find(';');
+        if (semicolon != std::string::npos) {
+            result.contentType = result.contentType.substr(0, semicolon);
+        }
+        // Trim whitespace
+        while (!result.contentType.empty() && result.contentType.back() == ' ') {
+            result.contentType.pop_back();
+        }
+    }
+
+    return result;
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 // MIME → plugin mapping
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -33,6 +88,11 @@ struct PluginMapping {
 };
 
 static const PluginMapping* mimeToPlugin(std::string_view mime) {
+    // SVG must be checked before generic image/*
+    if (mime == "image/svg+xml") {
+        static const PluginMapping m{"thorvg"};
+        return &m;
+    }
     if (mime.starts_with("image/")) {
         static const PluginMapping m{"image"};
         return &m;
@@ -49,6 +109,11 @@ static const PluginMapping* mimeToPlugin(std::string_view mime) {
         static const PluginMapping m{"ymery"};
         return &m;
     }
+    // HTML → yhtml
+    if (mime == "text/html") {
+        static const PluginMapping m{"yhtml"};
+        return &m;
+    }
     return nullptr;
 }
 
@@ -61,6 +126,14 @@ static const PluginMapping* extensionToPlugin(const fs::path& path) {
     }
     if (ext == ".ymery") {
         static const PluginMapping m{"ymery"};
+        return &m;
+    }
+    if (ext == ".svg") {
+        static const PluginMapping m{"thorvg"};
+        return &m;
+    }
+    if (ext == ".html" || ext == ".htm") {
+        static const PluginMapping m{"yhtml"};
         return &m;
     }
     return nullptr;
@@ -226,7 +299,8 @@ static bool processFile(
     const MagicDetector& magic,
     int width, int height,
     bool absolute,
-    bool forceRaw)
+    bool forceRaw,
+    bool forceShow)
 {
     const bool isStdin = (fileArg == "-");
 
@@ -244,12 +318,26 @@ static bool processFile(
         auto data = readAllStdin();
         if (data.empty()) return true;
 
+        mime = magic.detectBuffer(data.data(), data.size());
+
+        // --show: force syntax highlighting, skip card rendering
+        if (forceShow) {
+            auto grammar = ycat::ts::resolveGrammar(mime, "");
+            if (!grammar.empty()) {
+                std::string source(data.begin(), data.end());
+                if (ycat::ts::highlightToStdout(source, grammar)) {
+                    return true;
+                }
+            }
+            // Fallback to plain cat
+            return writeStdout(data.data(), data.size());
+        }
+
         // Check for #!ymery shebang first
         if (hasYmeryShebang(data.data(), data.size())) {
             static const PluginMapping m{"ymery"};
             mapping = &m;
         } else {
-            mime = magic.detectBuffer(data.data(), data.size());
             mapping = mimeToPlugin(mime);
         }
 
@@ -265,12 +353,79 @@ static bool processFile(
         return writeStdout(out.data(), out.size());
     }
 
+    // ── URL ───────────────────────────────────────────────────────────────
+
+    if (isUrl(fileArg)) {
+        auto fetched = fetchUrl(fileArg);
+        if (!fetched) return false;
+
+        // Use Content-Type from HTTP headers as primary MIME source
+        if (!fetched->contentType.empty()) {
+            mime = fetched->contentType;
+        } else {
+            mime = magic.detectBuffer(fetched->data.data(), fetched->data.size());
+        }
+
+        // --show: force syntax highlighting, skip card rendering
+        if (forceShow) {
+            auto grammar = ycat::ts::resolveGrammar(mime, "");
+            if (!grammar.empty()) {
+                std::string source(fetched->data.begin(), fetched->data.end());
+                if (ycat::ts::highlightToStdout(source, grammar)) {
+                    return true;
+                }
+            }
+            // Fallback to plain cat
+            return writeStdout(fetched->data.data(), fetched->data.size());
+        }
+
+        mapping = mimeToPlugin(mime);
+
+        // Fall back to magic detection on content
+        if (!mapping) {
+            // Check for #!ymery shebang
+            if (hasYmeryShebang(fetched->data.data(), fetched->data.size())) {
+                static const PluginMapping m{"ymery"};
+                mapping = &m;
+            } else {
+                mime = magic.detectBuffer(fetched->data.data(), fetched->data.size());
+                mapping = mimeToPlugin(mime);
+            }
+        }
+
+        if (!mapping) {
+            // Plain cat fallback — write raw bytes to stdout
+            return writeStdout(fetched->data.data(), fetched->data.size());
+        }
+
+        // URL: send binary payload (base64-encoded bytes)
+        auto seq = ycat::createSequenceBytes(
+            mapping->plugin, 0, 0, width, height, !absolute, fetched->data);
+        auto out = ycat::maybeWrapForTmux(seq);
+        return writeStdout(out.data(), out.size());
+    }
+
     // ── File path ──────────────────────────────────────────────────────────
 
     auto path = fs::absolute(fileArg);
     if (!fs::exists(path)) {
         std::cerr << "ycat: " << fileArg << ": No such file or directory\n";
         return false;
+    }
+
+    mime = magic.detectFile(path);
+
+    // --show: force syntax highlighting, skip card rendering
+    if (forceShow) {
+        auto grammar = ycat::ts::resolveGrammar(mime, path.extension().string());
+        if (!grammar.empty()) {
+            auto source = readFileAsString(path);
+            if (!source.empty() && ycat::ts::highlightToStdout(source, grammar)) {
+                return true;
+            }
+        }
+        // Fallback to plain cat
+        return catFile(path);
     }
 
     // Check for #!ymery shebang first (read first 8 bytes)
@@ -285,7 +440,6 @@ static bool processFile(
     }
 
     if (!mapping) {
-        mime = magic.detectFile(path);
         mapping = mimeToPlugin(mime);
     }
 
@@ -339,6 +493,8 @@ int main(int argc, const char** argv) {
         "Use absolute positioning (default: relative to cursor)", {'a', "absolute"});
     args::Flag rawFlag(parser, "raw",
         "Force plain cat (no card rendering)", {'r', "raw"});
+    args::Flag showFlag(parser, "show",
+        "Show source with syntax highlighting (skip card rendering)", {'s', "show"});
 
     args::PositionalList<std::string> files(parser, "files",
         "Files to display (use - for stdin)");
@@ -358,6 +514,7 @@ int main(int argc, const char** argv) {
     int height = args::get(heightFlag);
     bool absolute = absoluteFlag;
     bool forceRaw = rawFlag;
+    bool forceShow = showFlag;
 
     auto fileList = args::get(files);
     if (fileList.empty()) {
@@ -369,7 +526,7 @@ int main(int argc, const char** argv) {
 
     bool ok = true;
     for (const auto& file : fileList) {
-        if (!processFile(file, magic, width, height, absolute, forceRaw)) {
+        if (!processFile(file, magic, width, height, absolute, forceRaw, forceShow)) {
             ok = false;
         }
     }

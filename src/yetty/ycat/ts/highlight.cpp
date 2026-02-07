@@ -310,6 +310,10 @@ std::string resolveGrammar(std::string_view mime, std::string_view ext) {
         return "toml";
     if (mime == "application/typescript" || mime == "text/x-typescript")
         return "typescript";
+    if (mime == "text/html" || mime == "application/xhtml+xml")
+        return "html";
+    if (mime == "text/xml" || mime == "application/xml" || mime == "image/svg+xml")
+        return "xml";
 
     // Extension-based fallback
     if (ext == ".c" || ext == ".h")
@@ -337,6 +341,10 @@ std::string resolveGrammar(std::string_view mime, std::string_view ext) {
         return "yaml";
     if (ext == ".toml")
         return "toml";
+    if (ext == ".html" || ext == ".htm" || ext == ".xhtml")
+        return "html";
+    if (ext == ".xml" || ext == ".xsl" || ext == ".xslt" || ext == ".svg")
+        return "xml";
 
     return "";
 }
