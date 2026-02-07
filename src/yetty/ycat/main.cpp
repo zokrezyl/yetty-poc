@@ -2,7 +2,10 @@
 #include "ts/highlight.h"
 
 #include <args.hxx>
+
+#ifdef YCAT_HAS_LIBMAGIC
 #include <magic.h>
+#endif
 
 #include <cstdio>
 #include <cstdlib>
@@ -70,9 +73,11 @@ static int terminalColumns() {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// libmagic wrapper
+// MIME type detection
 // ──────────────────────────────────────────────────────────────────────────────
 
+#ifdef YCAT_HAS_LIBMAGIC
+// Full libmagic-based MIME detection (Linux only)
 class MagicDetector {
 public:
     MagicDetector() {
@@ -111,6 +116,38 @@ public:
 private:
     magic_t cookie_ = nullptr;
 };
+#else
+// Fallback: extension-based detection only (Windows, macOS)
+class MagicDetector {
+public:
+    MagicDetector() = default;
+
+    std::string detectFile(const fs::path& path) const {
+        return detectByExtension(path.extension().string());
+    }
+
+    std::string detectBuffer(const void* /*data*/, size_t /*len*/) const {
+        return "application/octet-stream";
+    }
+
+private:
+    static std::string detectByExtension(const std::string& ext) {
+        // Common extensions
+        if (ext == ".png") return "image/png";
+        if (ext == ".jpg" || ext == ".jpeg") return "image/jpeg";
+        if (ext == ".gif") return "image/gif";
+        if (ext == ".webp") return "image/webp";
+        if (ext == ".svg") return "image/svg+xml";
+        if (ext == ".pdf") return "application/pdf";
+        if (ext == ".md" || ext == ".markdown") return "text/markdown";
+        if (ext == ".txt") return "text/plain";
+        if (ext == ".html" || ext == ".htm") return "text/html";
+        if (ext == ".json") return "application/json";
+        if (ext == ".xml") return "application/xml";
+        return "application/octet-stream";
+    }
+};
+#endif
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Output helpers

@@ -44,9 +44,18 @@ add_executable(ycat
     ts/highlight.cpp
 )
 
+# libmagic is only available on Linux (see main CMakeLists.txt)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(YCAT_MAGIC_LIBS magic)
+    set(YCAT_HAS_LIBMAGIC TRUE)
+else()
+    set(YCAT_MAGIC_LIBS "")
+    set(YCAT_HAS_LIBMAGIC FALSE)
+endif()
+
 target_link_libraries(ycat PRIVATE
     args
-    $<$<NOT:$<BOOL:${WIN32}>>:magic>
+    ${YCAT_MAGIC_LIBS}
     tree-sitter-core
     ts-grammar-c
     ts-grammar-cpp
@@ -69,9 +78,10 @@ target_include_directories(ycat PRIVATE
 
 target_compile_features(ycat PRIVATE cxx_std_23)
 
-# Compiled magic database path (built by Libmagic.cmake) - Unix only
-if(NOT WIN32)
+# libmagic support - Linux only
+if(YCAT_HAS_LIBMAGIC)
     target_compile_definitions(ycat PRIVATE
+        YCAT_HAS_LIBMAGIC=1
         YCAT_MAGIC_MGC_PATH="${LIBMAGIC_MGC_PATH}"
     )
 endif()

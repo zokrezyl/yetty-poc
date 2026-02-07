@@ -172,12 +172,18 @@ CPMAddPackage(
 )
 
 # ytrace for logging with runtime control (will use existing spdlog)
+# Disable ytrace-ctl on Windows (uses Unix sockets)
+if(WIN32)
+    set(YTRACE_BUILD_TOOLS_OPTION "YTRACE_BUILD_TOOLS OFF")
+else()
+    set(YTRACE_BUILD_TOOLS_OPTION "YTRACE_BUILD_TOOLS ON")
+endif()
 CPMAddPackage(
     NAME ytrace
     GITHUB_REPOSITORY zokrezyl/ytrace
     GIT_TAG main
     OPTIONS
-        "YTRACE_BUILD_TOOLS ON"
+        ${YTRACE_BUILD_TOOLS_OPTION}
         "YTRACE_BUILD_EXAMPLES OFF"
         "YTRACE_ENABLE_YLOG ON"
         "YTRACE_ENABLE_YTRACE ON"
@@ -378,8 +384,9 @@ if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
     # FreeType and remaining dependencies (brotli, bzip2) - uses our zlib/libpng
     include(build-tools/cmake/FreeType.cmake)
 
-    # libmagic for file type detection (ycat) - Unix only, uses our zlib
-    if(NOT WIN32)
+    # libmagic for file type detection (ycat) - Linux only
+    # macOS has dynamic zlib linking issues with autotools configure
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         include(build-tools/cmake/Libmagic.cmake)
     endif()
 
@@ -936,35 +943,38 @@ else()
         add_subdirectory(test/ut)
     endif()
     
-    # YAST tests (standalone, no heavy deps)
-    option(YETTY_BUILD_YAST_TESTS "Build YAST parser tests" ON)
-    if(YETTY_BUILD_YAST_TESTS)
-        enable_testing()
-        add_subdirectory(test/ut/yast)
-    endif()
+    # boost.ut has module issues on MSVC, disable all ut-based tests
+    if(NOT MSVC)
+        # YAST tests (standalone, no heavy deps)
+        option(YETTY_BUILD_YAST_TESTS "Build YAST parser tests" ON)
+        if(YETTY_BUILD_YAST_TESTS)
+            enable_testing()
+            add_subdirectory(test/ut/yast)
+        endif()
 
-    # YEcho tests (standalone, no heavy deps)
-    option(YETTY_BUILD_YECHO_TESTS "Build YEcho parser tests" ON)
-    if(YETTY_BUILD_YECHO_TESTS)
-        enable_testing()
-        add_subdirectory(test/ut/yecho)
-    endif()
+        # YEcho tests (standalone, no heavy deps)
+        option(YETTY_BUILD_YECHO_TESTS "Build YEcho parser tests" ON)
+        if(YETTY_BUILD_YECHO_TESTS)
+            enable_testing()
+            add_subdirectory(test/ut/yecho)
+        endif()
 
-    # YPdf tests (PDF font extraction)
-    option(YETTY_BUILD_YPDF_TESTS "Build YPdf font extraction tests" ON)
-    if(YETTY_BUILD_YPDF_TESTS)
-        enable_testing()
-        add_subdirectory(test/ut/ypdf)
+        # YPdf tests (PDF font extraction)
+        option(YETTY_BUILD_YPDF_TESTS "Build YPdf font extraction tests" ON)
+        if(YETTY_BUILD_YPDF_TESTS)
+            enable_testing()
+            add_subdirectory(test/ut/ypdf)
+        endif()
     endif()
 
     # Plugin tester disabled - was using yetty_core which is removed
     # TODO: Re-enable when needed
 
-    # RPC client library (libyetty-rpc.a)
-    add_subdirectory(src/yetty/rpc)
-
-    # yettyc CLI client
-    add_subdirectory(src/yetty/client)
+    # RPC client library and CLI client - Unix only (uses Unix sockets)
+    if(NOT WIN32)
+        add_subdirectory(src/yetty/rpc)
+        add_subdirectory(src/yetty/client)
+    endif()
 
     # yecho - text with embedded glyphs
     add_subdirectory(src/yetty/yecho)
