@@ -80,60 +80,73 @@ static std::optional<FetchResult> fetchUrl(const std::string& url) {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// MIME → plugin mapping
+// MIME → card mapping
 // ──────────────────────────────────────────────────────────────────────────────
 
-struct PluginMapping {
-    std::string_view plugin;     // yetty card plugin name
+struct CardMapping {
+    std::string_view card;     // yetty card type name
 };
 
-static const PluginMapping* mimeToPlugin(std::string_view mime) {
+static const CardMapping* mimeToCard(std::string_view mime) {
     // SVG must be checked before generic image/*
     if (mime == "image/svg+xml") {
-        static const PluginMapping m{"thorvg"};
+        static const CardMapping m{"thorvg"};
         return &m;
     }
     if (mime.starts_with("image/")) {
-        static const PluginMapping m{"image"};
+        static const CardMapping m{"image"};
         return &m;
     }
     if (mime == "application/pdf") {
-        static const PluginMapping m{"pdf"};
+        static const CardMapping m{"ypdf"};
         return &m;
     }
     if (mime == "text/markdown" || mime == "text/x-markdown") {
-        static const PluginMapping m{"markdown"};
+        static const CardMapping m{"markdown"};
         return &m;
     }
     if (mime == "text/x-ymery") {
-        static const PluginMapping m{"ymery"};
+        static const CardMapping m{"ymery"};
         return &m;
     }
     // HTML → yhtml
     if (mime == "text/html") {
-        static const PluginMapping m{"yhtml"};
+        static const CardMapping m{"yhtml"};
+        return &m;
+    }
+    // Python scripts
+    if (mime == "text/x-python" || mime == "text/x-script.python") {
+        static const CardMapping m{"python"};
         return &m;
     }
     return nullptr;
 }
 
 // Try extension when libmagic returns generic text/*
-static const PluginMapping* extensionToPlugin(const fs::path& path) {
+static const CardMapping* extensionToCard(const fs::path& path) {
     auto ext = path.extension().string();
     if (ext == ".md" || ext == ".markdown" || ext == ".mdown" || ext == ".mkd") {
-        static const PluginMapping m{"markdown"};
+        static const CardMapping m{"markdown"};
         return &m;
     }
     if (ext == ".ymery") {
-        static const PluginMapping m{"ymery"};
+        static const CardMapping m{"ymery"};
         return &m;
     }
     if (ext == ".svg") {
-        static const PluginMapping m{"thorvg"};
+        static const CardMapping m{"thorvg"};
         return &m;
     }
     if (ext == ".html" || ext == ".htm") {
-        static const PluginMapping m{"yhtml"};
+        static const CardMapping m{"yhtml"};
+        return &m;
+    }
+    if (ext == ".py") {
+        static const CardMapping m{"python"};
+        return &m;
+    }
+    if (ext == ".lottie") {
+        static const CardMapping m{"thorvg"};
         return &m;
     }
     return nullptr;
@@ -144,6 +157,35 @@ static bool hasYmeryShebang(const void* data, size_t len) {
     constexpr std::string_view magic = "#!ymery";
     if (len < magic.size()) return false;
     return std::string_view(static_cast<const char*>(data), magic.size()) == magic;
+}
+
+// Check if buffer looks like ydraw YAML (has "body:" key with shape primitives)
+static bool looksLikeYdraw(const void* data, size_t len) {
+    std::string_view sv(static_cast<const char*>(data), len);
+    // Must have "body:" at start of line
+    auto bodyPos = sv.find("\nbody:");
+    if (bodyPos == std::string_view::npos) {
+        // Check if it starts with "body:"
+        if (!sv.starts_with("body:")) return false;
+    }
+    // Should have at least one shape primitive
+    return sv.find("circle:") != std::string_view::npos ||
+           sv.find("box:") != std::string_view::npos ||
+           sv.find("ellipse:") != std::string_view::npos ||
+           sv.find("triangle:") != std::string_view::npos ||
+           sv.find("line:") != std::string_view::npos ||
+           sv.find("polygon:") != std::string_view::npos ||
+           sv.find("text:") != std::string_view::npos;
+}
+
+// Check if buffer looks like Lottie JSON animation
+static bool looksLikeLottie(const void* data, size_t len) {
+    std::string_view sv(static_cast<const char*>(data), len);
+    // Lottie files have "v" (version), "fr" (framerate), "layers" keys
+    return sv.find("\"layers\"") != std::string_view::npos &&
+           sv.find("\"v\"") != std::string_view::npos &&
+           (sv.find("\"fr\"") != std::string_view::npos ||
+            sv.find("\"ip\"") != std::string_view::npos);
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -300,7 +342,8 @@ static bool processFile(
     int width, int height,
     bool absolute,
     bool forceRaw,
-    bool forceShow)
+    bool forceShow,
+    const std::string& forceCard)
 {
     const bool isStdin = (fileArg == "-");
 
@@ -311,7 +354,7 @@ static bool processFile(
     }
 
     std::string mime;
-    const PluginMapping* mapping = nullptr;
+    const CardMapping* mapping = nullptr;
 
     if (isStdin) {
         // Must read all data to detect type
@@ -333,12 +376,26 @@ static bool processFile(
             return writeStdout(data.data(), data.size());
         }
 
+        // Use forced card type if specified
+        if (!forceCard.empty()) {
+            auto seq = ycat::createSequenceBytes(
+                forceCard, 0, 0, width, height, !absolute, data);
+            auto out = ycat::maybeWrapForTmux(seq);
+            return writeStdout(out.data(), out.size());
+        }
+
         // Check for #!ymery shebang first
         if (hasYmeryShebang(data.data(), data.size())) {
-            static const PluginMapping m{"ymery"};
+            static const CardMapping m{"ymery"};
+            mapping = &m;
+        } else if (looksLikeLottie(data.data(), data.size())) {
+            static const CardMapping m{"thorvg"};
+            mapping = &m;
+        } else if (looksLikeYdraw(data.data(), data.size())) {
+            static const CardMapping m{"ydraw"};
             mapping = &m;
         } else {
-            mapping = mimeToPlugin(mime);
+            mapping = mimeToCard(mime);
         }
 
         if (!mapping) {
@@ -348,7 +405,7 @@ static bool processFile(
 
         // Stdin: send binary payload (base64-encoded bytes)
         auto seq = ycat::createSequenceBytes(
-            mapping->plugin, 0, 0, width, height, !absolute, data);
+            mapping->card, 0, 0, width, height, !absolute, data);
         auto out = ycat::maybeWrapForTmux(seq);
         return writeStdout(out.data(), out.size());
     }
@@ -379,17 +436,31 @@ static bool processFile(
             return writeStdout(fetched->data.data(), fetched->data.size());
         }
 
-        mapping = mimeToPlugin(mime);
+        // Use forced card type if specified
+        if (!forceCard.empty()) {
+            auto seq = ycat::createSequenceBytes(
+                forceCard, 0, 0, width, height, !absolute, fetched->data);
+            auto out = ycat::maybeWrapForTmux(seq);
+            return writeStdout(out.data(), out.size());
+        }
 
-        // Fall back to magic detection on content
+        mapping = mimeToCard(mime);
+
+        // Fall back to content-based detection
         if (!mapping) {
             // Check for #!ymery shebang
             if (hasYmeryShebang(fetched->data.data(), fetched->data.size())) {
-                static const PluginMapping m{"ymery"};
+                static const CardMapping m{"ymery"};
+                mapping = &m;
+            } else if (looksLikeLottie(fetched->data.data(), fetched->data.size())) {
+                static const CardMapping m{"thorvg"};
+                mapping = &m;
+            } else if (looksLikeYdraw(fetched->data.data(), fetched->data.size())) {
+                static const CardMapping m{"ydraw"};
                 mapping = &m;
             } else {
                 mime = magic.detectBuffer(fetched->data.data(), fetched->data.size());
-                mapping = mimeToPlugin(mime);
+                mapping = mimeToCard(mime);
             }
         }
 
@@ -400,7 +471,7 @@ static bool processFile(
 
         // URL: send binary payload (base64-encoded bytes)
         auto seq = ycat::createSequenceBytes(
-            mapping->plugin, 0, 0, width, height, !absolute, fetched->data);
+            mapping->card, 0, 0, width, height, !absolute, fetched->data);
         auto out = ycat::maybeWrapForTmux(seq);
         return writeStdout(out.data(), out.size());
     }
@@ -428,29 +499,52 @@ static bool processFile(
         return catFile(path);
     }
 
+    // Use forced card type if specified
+    if (!forceCard.empty()) {
+        auto seq = ycat::createSequence(
+            forceCard, 0, 0, width, height, !absolute, path.string());
+        auto out = ycat::maybeWrapForTmux(seq);
+        return writeStdout(out.data(), out.size());
+    }
+
     // Check for #!ymery shebang first (read first 8 bytes)
     {
         std::ifstream f(path, std::ios::binary);
         char buf[8] = {};
         f.read(buf, sizeof(buf));
         if (hasYmeryShebang(buf, static_cast<size_t>(f.gcount()))) {
-            static const PluginMapping m{"ymery"};
+            static const CardMapping m{"ymery"};
             mapping = &m;
         }
     }
 
     if (!mapping) {
-        mapping = mimeToPlugin(mime);
+        mapping = mimeToCard(mime);
     }
 
-    // For text/plain, try extension-based detection
-    // Also check extension for .ymery files regardless of detected MIME
+    // For text/plain or YAML, try content-based detection
     if (!mapping) {
         if (mime == "text/plain" || mime.starts_with("text/")) {
-            mapping = extensionToPlugin(path);
+            mapping = extensionToCard(path);
         } else if (path.extension() == ".ymery") {
-            static const PluginMapping m{"ymery"};
+            static const CardMapping m{"ymery"};
             mapping = &m;
+        }
+    }
+
+    // Content-based detection for ydraw YAML and Lottie JSON
+    if (!mapping && (mime == "text/plain" || mime == "application/json" ||
+                     path.extension() == ".yaml" || path.extension() == ".yml" ||
+                     path.extension() == ".json")) {
+        auto content = readFileAsString(path);
+        if (!content.empty()) {
+            if (looksLikeLottie(content.data(), content.size())) {
+                static const CardMapping m{"thorvg"};
+                mapping = &m;
+            } else if (looksLikeYdraw(content.data(), content.size())) {
+                static const CardMapping m{"ydraw"};
+                mapping = &m;
+            }
         }
     }
 
@@ -470,7 +564,7 @@ static bool processFile(
     // File: send absolute path as payload (base64-encoded text)
     // The card plugin is responsible for loading from this path
     auto seq = ycat::createSequence(
-        mapping->plugin, 0, 0, width, height, !absolute, path.string());
+        mapping->card, 0, 0, width, height, !absolute, path.string());
     auto out = ycat::maybeWrapForTmux(seq);
     return writeStdout(out.data(), out.size());
 }
@@ -495,6 +589,8 @@ int main(int argc, const char** argv) {
         "Force plain cat (no card rendering)", {'r', "raw"});
     args::Flag showFlag(parser, "show",
         "Show source with syntax highlighting (skip card rendering)", {'s', "show"});
+    args::ValueFlag<std::string> cardFlag(parser, "type",
+        "Force card type (e.g., image, pdf, ypdf, ydraw, thorvg, ymery, python)", {'c', "card"});
 
     args::PositionalList<std::string> files(parser, "files",
         "Files to display (use - for stdin)");
@@ -515,6 +611,7 @@ int main(int argc, const char** argv) {
     bool absolute = absoluteFlag;
     bool forceRaw = rawFlag;
     bool forceShow = showFlag;
+    std::string forceCard = cardFlag ? args::get(cardFlag) : "";
 
     auto fileList = args::get(files);
     if (fileList.empty()) {
@@ -526,7 +623,7 @@ int main(int argc, const char** argv) {
 
     bool ok = true;
     for (const auto& file : fileList) {
-        if (!processFile(file, magic, width, height, absolute, forceRaw, forceShow)) {
+        if (!processFile(file, magic, width, height, absolute, forceRaw, forceShow, forceCard)) {
             ok = false;
         }
     }
