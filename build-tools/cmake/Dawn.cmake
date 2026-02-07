@@ -116,40 +116,37 @@ endif()
 
 # Create imported STATIC library target
 add_library(webgpu STATIC IMPORTED GLOBAL)
-set_target_properties(webgpu PROPERTIES
-    IMPORTED_LOCATION "${DAWN_LIB_PATH}"
-    INTERFACE_INCLUDE_DIRECTORIES "${DAWN_INCLUDE_DIR}"
-)
 
-# Dawn requires additional system libraries
+# Dawn requires additional system libraries - set all properties together
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    # Dawn on Linux needs X11 and other system libs
     find_package(X11 REQUIRED)
-    target_link_libraries(webgpu INTERFACE ${X11_LIBRARIES})
-
-    # Also need dl and pthread
-    target_link_libraries(webgpu INTERFACE ${CMAKE_DL_LIBS} pthread)
+    set_target_properties(webgpu PROPERTIES
+        IMPORTED_LOCATION "${DAWN_LIB_PATH}"
+        INTERFACE_INCLUDE_DIRECTORIES "${DAWN_INCLUDE_DIR}"
+        INTERFACE_LINK_LIBRARIES "${X11_LIBRARIES};${CMAKE_DL_LIBS};pthread"
+    )
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-    # Dawn on macOS needs Cocoa, Metal, QuartzCore
     find_library(COCOA_LIBRARY Cocoa REQUIRED)
     find_library(METAL_LIBRARY Metal REQUIRED)
     find_library(QUARTZCORE_LIBRARY QuartzCore REQUIRED)
     find_library(IOKIT_LIBRARY IOKit REQUIRED)
     find_library(IOSURFACE_LIBRARY IOSurface REQUIRED)
-    target_link_libraries(webgpu INTERFACE
-        ${COCOA_LIBRARY}
-        ${METAL_LIBRARY}
-        ${QUARTZCORE_LIBRARY}
-        ${IOKIT_LIBRARY}
-        ${IOSURFACE_LIBRARY}
+    set_target_properties(webgpu PROPERTIES
+        IMPORTED_LOCATION "${DAWN_LIB_PATH}"
+        INTERFACE_INCLUDE_DIRECTORIES "${DAWN_INCLUDE_DIR}"
+        INTERFACE_LINK_LIBRARIES "${COCOA_LIBRARY};${METAL_LIBRARY};${QUARTZCORE_LIBRARY};${IOKIT_LIBRARY};${IOSURFACE_LIBRARY}"
     )
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-    # Dawn on Windows needs various Windows libs
-    # kernel32 required for CompareObjectHandles
-    target_link_libraries(webgpu INTERFACE
-        d3d12 dxgi dxguid d3dcompiler
-        user32 gdi32 ole32 shell32
-        kernel32
+    # Dawn on Windows needs D3D12, DXGI, and kernel32 for CompareObjectHandles
+    set_target_properties(webgpu PROPERTIES
+        IMPORTED_LOCATION "${DAWN_LIB_PATH}"
+        INTERFACE_INCLUDE_DIRECTORIES "${DAWN_INCLUDE_DIR}"
+        INTERFACE_LINK_LIBRARIES "d3d12;dxgi;dxguid;d3dcompiler;user32;gdi32;ole32;shell32;kernel32"
+    )
+else()
+    set_target_properties(webgpu PROPERTIES
+        IMPORTED_LOCATION "${DAWN_LIB_PATH}"
+        INTERFACE_INCLUDE_DIRECTORIES "${DAWN_INCLUDE_DIR}"
     )
 endif()
 

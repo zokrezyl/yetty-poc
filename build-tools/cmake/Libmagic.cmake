@@ -27,7 +27,8 @@ ExternalProject_Add(libmagic_ext
             "CFLAGS=-fPIC -I${zlib_SOURCE_DIR} -I${zlib_BINARY_DIR}"
             "LDFLAGS=-L${zlib_BINARY_DIR}"
 
-    BUILD_COMMAND     make -j${CMAKE_BUILD_PARALLEL_LEVEL}
+    # Use single-threaded make to avoid race conditions in autotools build
+    BUILD_COMMAND     make -j1
     INSTALL_COMMAND   make install
     BUILD_IN_SOURCE   TRUE
 

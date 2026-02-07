@@ -11,7 +11,10 @@ add_subdirectory(ymery)
 add_subdirectory(markdown)
 add_subdirectory(qrcode)
 
-add_subdirectory(thorvg)
+# ThorVG uses C++ features not fully supported by MSVC
+if(NOT MSVC)
+    add_subdirectory(thorvg)
+endif()
 
 add_subdirectory(python)
 
