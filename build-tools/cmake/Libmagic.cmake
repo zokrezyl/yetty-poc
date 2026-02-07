@@ -2,18 +2,15 @@ include(ExternalProject)
 
 set(LIBMAGIC_VERSION "5.45")
 
-# macOS: use x86_64 host triplet (Intel for now)
-if(APPLE)
-    set(LIBMAGIC_HOST_FLAG "--host=x86_64-apple-darwin")
-else()
-    set(LIBMAGIC_HOST_FLAG "")
-endif()
-
 # Use official distribution tarball — includes pre-generated configure script,
 # no autotools (autoconf/automake/libtool) needed on the build machine.
 #
-# Key: Use -lz instead of full path to avoid libtool embedding issues on macOS.
-# Our zlib builds libz.a in the binary dir, so -L points there.
+# Note: Do NOT use --host flag - that triggers cross-compile mode which requires
+# a pre-installed file binary of the exact same version. Native builds work fine.
+#
+# Note: Do NOT pass LDFLAGS/LIBS to configure - it breaks the "can run C programs"
+# test because the linker paths affect the test binary execution.
+# Configure detects system zlib, then we override paths during make.
 ExternalProject_Add(libmagic_ext
     URL             https://astron.com/pub/file/file-${LIBMAGIC_VERSION}.tar.gz
     PREFIX          ${CMAKE_BINARY_DIR}/_deps/libmagic
@@ -21,22 +18,31 @@ ExternalProject_Add(libmagic_ext
     # After initial download+build, skip update to avoid rebuilds
     UPDATE_DISCONNECTED TRUE
 
+    # Touch auto-generated files to prevent make from trying to regenerate them
+    # Tarball timestamps can trigger aclocal.m4 regeneration otherwise
+    PATCH_COMMAND
+        find <SOURCE_DIR> -name "aclocal.m4" -o -name "configure" -o -name "Makefile.in" -o -name "config.h.in" | xargs touch
+
+    # Configure without our custom paths - let it find system zlib for detection
+    # --disable-maintainer-mode prevents make from trying to regenerate aclocal.m4
     CONFIGURE_COMMAND
         <SOURCE_DIR>/configure
             --prefix=<INSTALL_DIR>
-            ${LIBMAGIC_HOST_FLAG}
             --disable-shared
             --enable-static
             --disable-libseccomp
             --disable-bzlib
             --disable-xzlib
             --disable-zstdlib
-            "CFLAGS=-fPIC -I${zlib_SOURCE_DIR} -I${zlib_BINARY_DIR}"
-            "LDFLAGS=-L${zlib_BINARY_DIR}"
-            "LIBS=-lz"
+            --disable-maintainer-mode
+            "CFLAGS=-fPIC"
 
-    # Use single-threaded make to avoid race conditions in autotools build
-    BUILD_COMMAND     make -j1
+    # Override with our static zlib during build
+    BUILD_COMMAND
+        ${CMAKE_COMMAND} -E env
+            "CPPFLAGS=-I${zlib_SOURCE_DIR} -I${zlib_BINARY_DIR}"
+            "LDFLAGS=-L${zlib_BINARY_DIR}"
+        make -j1 LIBS=-lz
     INSTALL_COMMAND   make install
     BUILD_IN_SOURCE   TRUE
 

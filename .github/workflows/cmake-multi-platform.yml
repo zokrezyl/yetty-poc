@@ -39,6 +39,7 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y \
+          automake autoconf libtool \
           libfontconfig1-dev \
           libxrandr-dev \
           libxinerama-dev \
@@ -65,6 +66,20 @@ jobs:
       working-directory: ${{ steps.strings.outputs.build-output-dir }}
       run: ctest --build-config ${{ matrix.build_type }} --output-on-failure
 
+    - name: Upload Linux artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: yetty-linux
+        path: |
+          ${{ steps.strings.outputs.build-output-dir }}/yetty
+          ${{ steps.strings.outputs.build-output-dir }}/yettyc
+          ${{ steps.strings.outputs.build-output-dir }}/ycat
+          ${{ steps.strings.outputs.build-output-dir }}/yecho
+          assets/*.ttf
+          src/yetty/shaders/
+          demo/
+        if-no-files-found: warn
+
   # =============================================================================
   # Desktop Build (macOS Intel)
   # =============================================================================
@@ -80,13 +95,8 @@ jobs:
       run: |
         echo "build-output-dir=${{ github.workspace }}/build-macos" >> "$GITHUB_OUTPUT"
 
-    - name: Install libmagic (for magic.mgc generation)
-      run: |
-        brew install libmagic
-        # Add Homebrew bin to PATH so brew's file (5.45+) is used instead of system file (5.41)
-        echo "$(brew --prefix)/bin" >> $GITHUB_PATH
-        # Verify version
-        $(brew --prefix)/bin/file --version || file --version
+    - name: Install autotools
+      run: brew install automake autoconf libtool
 
     - name: Configure CMake
       run: >
@@ -101,6 +111,20 @@ jobs:
     - name: Test
       working-directory: ${{ steps.strings.outputs.build-output-dir }}
       run: ctest --build-config Release --output-on-failure
+
+    - name: Upload macOS artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: yetty-macos
+        path: |
+          ${{ steps.strings.outputs.build-output-dir }}/yetty
+          ${{ steps.strings.outputs.build-output-dir }}/yettyc
+          ${{ steps.strings.outputs.build-output-dir }}/ycat
+          ${{ steps.strings.outputs.build-output-dir }}/yecho
+          assets/*.ttf
+          src/yetty/shaders/
+          demo/
+        if-no-files-found: warn
 
   # =============================================================================
   # Desktop Build (Windows)
@@ -129,6 +153,20 @@ jobs:
     - name: Test
       working-directory: ${{ steps.strings.outputs.build-output-dir }}
       run: ctest --build-config Release --output-on-failure
+
+    - name: Upload Windows artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: yetty-windows
+        path: |
+          ${{ steps.strings.outputs.build-output-dir }}/Release/yetty.exe
+          ${{ steps.strings.outputs.build-output-dir }}/Release/yettyc.exe
+          ${{ steps.strings.outputs.build-output-dir }}/Release/ycat.exe
+          ${{ steps.strings.outputs.build-output-dir }}/Release/yecho.exe
+          assets/*.ttf
+          src/yetty/shaders/
+          demo/
+        if-no-files-found: warn
 
   # =============================================================================
   # Android Build (temporarily disabled)
@@ -233,3 +271,33 @@ jobs:
           adb shell pidof com.yetty.terminal || echo "App may have crashed"
           # Capture logcat for debugging
           adb logcat -d | grep -i yetty | tail -50
+
+  # =============================================================================
+  # Upload to GitHub Release
+  # =============================================================================
+  release:
+    runs-on: ubuntu-latest
+    needs: [build-desktop, build-macos, build-windows]
+    permissions:
+      contents: write
+
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+
+    - name: Create release archives
+      run: |
+        cd artifacts
+        tar -czvf yetty-linux.tar.gz -C yetty-linux .
+        tar -czvf yetty-macos.tar.gz -C yetty-macos .
+        zip -r yetty-windows.zip yetty-windows
+
+    - name: Upload to GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: |
+          artifacts/yetty-linux.tar.gz
+          artifacts/yetty-macos.tar.gz
+          artifacts/yetty-windows.zip
