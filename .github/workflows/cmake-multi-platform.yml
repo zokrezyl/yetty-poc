@@ -39,6 +39,7 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y \
+          automake autoconf libtool \
           libfontconfig1-dev \
           libxrandr-dev \
           libxinerama-dev \
@@ -79,6 +80,9 @@ jobs:
       shell: bash
       run: |
         echo "build-output-dir=${{ github.workspace }}/build-macos" >> "$GITHUB_OUTPUT"
+
+    - name: Install autotools
+      run: brew install automake autoconf libtool
 
     - name: Configure CMake
       run: >
