@@ -10,7 +10,9 @@
 #include "cards/ytext/ytext.h"
 #include "cards/ymery/ymery.h"
 #include "cards/markdown/markdown.h"
+#ifndef _MSC_VER
 #include "cards/thorvg/thorvg.h"
+#endif
 #include "cards/qrcode/qrcode.h"
 #ifdef YETTY_CARD_PDF
 #include "cards/pdf/pdf.h"
@@ -126,6 +128,7 @@ public:
             return Ok<CardPtr>(*result);
         });
 
+#ifndef _MSC_VER
         registerCard("thorvg", [](const YettyContext& ctx,
                                 int32_t x, int32_t y,
                                 uint32_t w, uint32_t h,
@@ -135,6 +138,7 @@ public:
             if (!result) return std::unexpected(result.error());
             return Ok<CardPtr>(*result);
         });
+#endif
 
         registerCard("qrcode", [](const YettyContext& ctx,
                                 int32_t x, int32_t y,

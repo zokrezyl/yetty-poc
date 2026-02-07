@@ -80,14 +80,6 @@ jobs:
       run: |
         echo "build-output-dir=${{ github.workspace }}/build-macos" >> "$GITHUB_OUTPUT"
 
-    - name: Install libmagic (for magic.mgc generation)
-      run: |
-        brew install libmagic
-        # Add Homebrew bin to PATH so brew's file (5.45+) is used instead of system file (5.41)
-        echo "$(brew --prefix)/bin" >> $GITHUB_PATH
-        # Verify version
-        $(brew --prefix)/bin/file --version || file --version
-
     - name: Configure CMake
       run: >
         cmake -B ${{ steps.strings.outputs.build-output-dir }}

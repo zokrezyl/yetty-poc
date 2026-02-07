@@ -2,18 +2,14 @@ include(ExternalProject)
 
 set(LIBMAGIC_VERSION "5.45")
 
-# macOS: use x86_64 host triplet (Intel for now)
-if(APPLE)
-    set(LIBMAGIC_HOST_FLAG "--host=x86_64-apple-darwin")
-else()
-    set(LIBMAGIC_HOST_FLAG "")
-endif()
-
 # Use official distribution tarball — includes pre-generated configure script,
 # no autotools (autoconf/automake/libtool) needed on the build machine.
 #
 # Key: Use -lz instead of full path to avoid libtool embedding issues on macOS.
 # Our zlib builds libz.a in the binary dir, so -L points there.
+#
+# Note: Do NOT use --host flag - that triggers cross-compile mode which requires
+# a pre-installed file binary of the exact same version. Native builds work fine.
 ExternalProject_Add(libmagic_ext
     URL             https://astron.com/pub/file/file-${LIBMAGIC_VERSION}.tar.gz
     PREFIX          ${CMAKE_BINARY_DIR}/_deps/libmagic
@@ -24,7 +20,6 @@ ExternalProject_Add(libmagic_ext
     CONFIGURE_COMMAND
         <SOURCE_DIR>/configure
             --prefix=<INSTALL_DIR>
-            ${LIBMAGIC_HOST_FLAG}
             --disable-shared
             --enable-static
             --disable-libseccomp
