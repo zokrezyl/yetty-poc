@@ -66,6 +66,17 @@ jobs:
       working-directory: ${{ steps.strings.outputs.build-output-dir }}
       run: ctest --build-config ${{ matrix.build_type }} --output-on-failure
 
+    - name: Upload Linux artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: yetty-linux
+        path: |
+          ${{ steps.strings.outputs.build-output-dir }}/yetty
+          ${{ steps.strings.outputs.build-output-dir }}/yettyc
+          ${{ steps.strings.outputs.build-output-dir }}/ycat
+          ${{ steps.strings.outputs.build-output-dir }}/yecho
+        if-no-files-found: warn
+
   # =============================================================================
   # Desktop Build (macOS Intel)
   # =============================================================================
@@ -98,6 +109,17 @@ jobs:
       working-directory: ${{ steps.strings.outputs.build-output-dir }}
       run: ctest --build-config Release --output-on-failure
 
+    - name: Upload macOS artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: yetty-macos
+        path: |
+          ${{ steps.strings.outputs.build-output-dir }}/yetty
+          ${{ steps.strings.outputs.build-output-dir }}/yettyc
+          ${{ steps.strings.outputs.build-output-dir }}/ycat
+          ${{ steps.strings.outputs.build-output-dir }}/yecho
+        if-no-files-found: warn
+
   # =============================================================================
   # Desktop Build (Windows)
   # =============================================================================
@@ -125,6 +147,17 @@ jobs:
     - name: Test
       working-directory: ${{ steps.strings.outputs.build-output-dir }}
       run: ctest --build-config Release --output-on-failure
+
+    - name: Upload Windows artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: yetty-windows
+        path: |
+          ${{ steps.strings.outputs.build-output-dir }}/Release/yetty.exe
+          ${{ steps.strings.outputs.build-output-dir }}/Release/yettyc.exe
+          ${{ steps.strings.outputs.build-output-dir }}/Release/ycat.exe
+          ${{ steps.strings.outputs.build-output-dir }}/Release/yecho.exe
+        if-no-files-found: warn
 
   # =============================================================================
   # Android Build (temporarily disabled)
