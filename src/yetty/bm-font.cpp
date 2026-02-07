@@ -63,7 +63,9 @@ constexpr size_t COMMON_EMOJI_COUNT = sizeof(COMMON_EMOJIS) / sizeof(COMMON_EMOJ
 #include FT_BITMAP_H
 #include FT_SFNT_NAMES_H
 
+#ifdef YETTY_USE_FONTCONFIG
 #include <fontconfig/fontconfig.h>
+#endif
 #endif // !YETTY_BM_FONT_STUB
 
 #include <cstring>
@@ -292,7 +294,8 @@ Result<void> BmFont::findFont() noexcept {
         return Err<void>("Failed to load font: " + _fontPath);
     }
 
-    // Use fontconfig to find an emoji font
+#ifdef YETTY_USE_FONTCONFIG
+    // Use fontconfig to find an emoji font (Linux)
     FcConfig* config = FcInitLoadConfigAndFonts();
     if (!config) {
         return Err<void>("Failed to initialize fontconfig");
@@ -359,6 +362,10 @@ Result<void> BmFont::findFont() noexcept {
 
     FcConfigDestroy(config);
     return Err<void>("No suitable font found");
+#else
+    // macOS/Windows: font path must be specified explicitly
+    return Err<void>("No font path specified and fontconfig not available");
+#endif
 }
 
 Result<void> BmFont::loadCommonGlyphs() noexcept {

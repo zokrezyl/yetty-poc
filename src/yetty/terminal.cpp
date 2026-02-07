@@ -4,7 +4,7 @@
 #include <yetty/ymery/types.h>
 #include <ytrace/ytrace.hpp>
 
-#if !YETTY_WEB && !defined(__ANDROID__)
+#if !YETTY_WEB && !defined(__ANDROID__) && !defined(_WIN32) && !defined(_WIN32)
 #include <fcntl.h>
 #include <signal.h>
 #include <sys/ioctl.h>
@@ -38,7 +38,7 @@ public:
             writeToPty(data, len);
         });
 
-#if !YETTY_WEB && !defined(__ANDROID__)
+#if !YETTY_WEB && !defined(__ANDROID__) && !defined(_WIN32)
         if (auto res = startShell(); !res) {
             return Err<void>("Failed to start shell", res);
         }
@@ -51,7 +51,7 @@ public:
     Result<void> onShutdown() override {
         Result<void> result = Ok();
 
-#if !YETTY_WEB && !defined(__ANDROID__)
+#if !YETTY_WEB && !defined(__ANDROID__) && !defined(_WIN32)
         _running = false;
 
         if (_pollId >= 0) {
@@ -122,7 +122,7 @@ public:
     }
 
     Result<bool> onEvent(const base::Event& event) override {
-#if !YETTY_WEB && !defined(__ANDROID__)
+#if !YETTY_WEB && !defined(__ANDROID__) && !defined(_WIN32)
         if (event.type == base::Event::Type::PollReadable && event.poll.fd == _ptyMaster) {
             ydebug("Terminal::onEvent: PollReadable on PTY");
             readPty();
@@ -135,7 +135,7 @@ public:
 
 private:
     void writeToPty(const char* data, size_t len) {
-#if !YETTY_WEB && !defined(__ANDROID__)
+#if !YETTY_WEB && !defined(__ANDROID__) && !defined(_WIN32)
         if (_ptyMaster >= 0 && len > 0) {
             ssize_t written = ::write(_ptyMaster, data, len);
             (void)written;
@@ -147,7 +147,7 @@ private:
     }
 
     void resizePty(uint32_t cols, uint32_t rows) {
-#if !YETTY_WEB && !defined(__ANDROID__)
+#if !YETTY_WEB && !defined(__ANDROID__) && !defined(_WIN32)
         if (_ptyMaster >= 0) {
             struct winsize ws = {
                 static_cast<unsigned short>(rows),
@@ -161,7 +161,7 @@ private:
 #endif
     }
 
-#if !YETTY_WEB && !defined(__ANDROID__)
+#if !YETTY_WEB && !defined(__ANDROID__) && !defined(_WIN32)
     Result<void> startShell() {
         const char* shellEnv = getenv("SHELL");
         std::string shellPath = shellEnv ? shellEnv : "/bin/sh";

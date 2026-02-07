@@ -826,7 +826,8 @@ else()
 
     # Platform-specific font discovery
     if(WIN32)
-        target_compile_definitions(yetty PRIVATE YETTY_USE_DIRECTWRITE=1)
+        # NOMINMAX prevents Windows.h from defining min/max macros that conflict with std::
+        target_compile_definitions(yetty PRIVATE YETTY_USE_DIRECTWRITE=1 NOMINMAX WIN32_LEAN_AND_MEAN)
         target_link_libraries(yetty PRIVATE dwrite)
     elseif(APPLE)
         # macOS: Use Core Text for font discovery
