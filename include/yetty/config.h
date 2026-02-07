@@ -45,6 +45,9 @@ public:
   // Runtime write by slash path
   virtual Result<void> setString(const std::string &path, const std::string &value) = 0;
 
+  // Save config to YAML file
+  virtual Result<void> saveFile(const std::string &path) = 0;
+
   // Helper to get executable directory
   static std::filesystem::path getExecutableDir();
 

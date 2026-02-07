@@ -1,0 +1,80 @@
+#!ymery
+# Yetty Config Viewer/Editor
+# Renders the application config using the TreeLike interface
+
+widgets:
+  config-window:
+    type: window
+    title: "Yetty Configuration"
+    body:
+      - collapsing-header:
+          label: "Rendering"
+          flags: [default-open]
+          body:
+            - checkbox:
+                label: "Damage Tracking"
+                data-path: $config@/rendering/damage-tracking
+            - checkbox:
+                label: "Show FPS"
+                data-path: $config@/rendering/show-fps
+
+      - collapsing-header:
+          label: "Debug"
+          flags: [default-open]
+          body:
+            - checkbox:
+                label: "Show Damage Rects"
+                data-path: $config@/debug/damage-rects
+
+      - collapsing-header:
+          label: "Scrollback"
+          flags: [default-open]
+          body:
+            - slider-int:
+                label: "Lines"
+                min: 1000
+                max: 100000
+                data-path: $config@/scrollback/lines
+
+      - collapsing-header:
+          label: "Font"
+          body:
+            - text:
+                content: "Family:"
+            - same-line
+            - text:
+                content: $config@/font/family
+
+      - collapsing-header:
+          label: "Plugins"
+          body:
+            - text:
+                content: "Path:"
+            - same-line
+            - text:
+                content: $config@/plugins/path
+
+      - collapsing-header:
+          label: "Shell Environment"
+          body:
+            - text:
+                content: "TERM:"
+            - same-line
+            - text:
+                content: $config@/shell/env/TERM
+            - text:
+                content: "COLORTERM:"
+            - same-line
+            - text:
+                content: $config@/shell/env/COLORTERM
+
+      - separator
+
+      - button:
+          label: "Save Config"
+          event-handlers:
+            on-click:
+              - action: save-config
+
+app:
+  root-widget: config.config-window

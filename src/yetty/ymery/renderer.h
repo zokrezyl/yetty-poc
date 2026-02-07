@@ -31,7 +31,8 @@ public:
     static Result<Ptr> create(
         LangPtr lang,
         DispatcherPtr dispatcher,
-        TreeLikePtr dataTree
+        TreeLikePtr dataTree,
+        std::map<std::string, TreeLikePtr> externalTrees = {}
     );
 
     // Set render list (top-level widgets to render each frame)

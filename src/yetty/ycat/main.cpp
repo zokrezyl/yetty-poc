@@ -45,6 +45,10 @@ static const PluginMapping* mimeToPlugin(std::string_view mime) {
         static const PluginMapping m{"markdown"};
         return &m;
     }
+    if (mime == "text/x-ymery") {
+        static const PluginMapping m{"ymery"};
+        return &m;
+    }
     return nullptr;
 }
 
@@ -55,7 +59,18 @@ static const PluginMapping* extensionToPlugin(const fs::path& path) {
         static const PluginMapping m{"markdown"};
         return &m;
     }
+    if (ext == ".ymery") {
+        static const PluginMapping m{"ymery"};
+        return &m;
+    }
     return nullptr;
+}
+
+// Check for #!ymery shebang at start of buffer
+static bool hasYmeryShebang(const void* data, size_t len) {
+    constexpr std::string_view magic = "#!ymery";
+    if (len < magic.size()) return false;
+    return std::string_view(static_cast<const char*>(data), magic.size()) == magic;
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -229,8 +244,14 @@ static bool processFile(
         auto data = readAllStdin();
         if (data.empty()) return true;
 
-        mime = magic.detectBuffer(data.data(), data.size());
-        mapping = mimeToPlugin(mime);
+        // Check for #!ymery shebang first
+        if (hasYmeryShebang(data.data(), data.size())) {
+            static const PluginMapping m{"ymery"};
+            mapping = &m;
+        } else {
+            mime = magic.detectBuffer(data.data(), data.size());
+            mapping = mimeToPlugin(mime);
+        }
 
         if (!mapping) {
             // Plain cat fallback — write raw bytes to stdout
@@ -252,12 +273,31 @@ static bool processFile(
         return false;
     }
 
-    mime = magic.detectFile(path);
-    mapping = mimeToPlugin(mime);
+    // Check for #!ymery shebang first (read first 8 bytes)
+    {
+        std::ifstream f(path, std::ios::binary);
+        char buf[8] = {};
+        f.read(buf, sizeof(buf));
+        if (hasYmeryShebang(buf, static_cast<size_t>(f.gcount()))) {
+            static const PluginMapping m{"ymery"};
+            mapping = &m;
+        }
+    }
+
+    if (!mapping) {
+        mime = magic.detectFile(path);
+        mapping = mimeToPlugin(mime);
+    }
 
     // For text/plain, try extension-based detection
-    if (!mapping && (mime == "text/plain" || mime.starts_with("text/"))) {
-        mapping = extensionToPlugin(path);
+    // Also check extension for .ymery files regardless of detected MIME
+    if (!mapping) {
+        if (mime == "text/plain" || mime.starts_with("text/")) {
+            mapping = extensionToPlugin(path);
+        } else if (path.extension() == ".ymery") {
+            static const PluginMapping m{"ymery"};
+            mapping = &m;
+        }
     }
 
     if (!mapping) {

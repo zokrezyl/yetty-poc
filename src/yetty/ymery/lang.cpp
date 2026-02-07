@@ -1,4 +1,5 @@
 #include "lang.h"
+#include <array>
 #include <fstream>
 #include <queue>
 #include <algorithm>
@@ -206,13 +207,17 @@ Result<std::filesystem::path> Lang::_resolveModulePath(const std::string& module
     // Convert dots to path separators
     std::string pathStr = moduleName;
     std::replace(pathStr.begin(), pathStr.end(), '.', '/');
-    pathStr += ".yaml";
+
+    // Try both .ymery and .yaml extensions
+    static const std::array<const char*, 2> extensions = {".ymery", ".yaml"};
 
     for (const auto& basePath : _layoutPaths) {
-        auto fullPath = basePath / pathStr;
-        std::error_code ec;
-        if (std::filesystem::exists(fullPath, ec) && !ec) {
-            return Ok(fullPath);
+        for (const auto& ext : extensions) {
+            auto fullPath = basePath / (pathStr + ext);
+            std::error_code ec;
+            if (std::filesystem::exists(fullPath, ec) && !ec) {
+                return Ok(fullPath);
+            }
         }
     }
 
