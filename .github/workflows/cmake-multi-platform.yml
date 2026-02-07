@@ -75,6 +75,9 @@ jobs:
           ${{ steps.strings.outputs.build-output-dir }}/yettyc
           ${{ steps.strings.outputs.build-output-dir }}/ycat
           ${{ steps.strings.outputs.build-output-dir }}/yecho
+          assets/*.ttf
+          src/yetty/shaders/
+          demo/
         if-no-files-found: warn
 
   # =============================================================================
@@ -118,6 +121,9 @@ jobs:
           ${{ steps.strings.outputs.build-output-dir }}/yettyc
           ${{ steps.strings.outputs.build-output-dir }}/ycat
           ${{ steps.strings.outputs.build-output-dir }}/yecho
+          assets/*.ttf
+          src/yetty/shaders/
+          demo/
         if-no-files-found: warn
 
   # =============================================================================
@@ -157,6 +163,9 @@ jobs:
           ${{ steps.strings.outputs.build-output-dir }}/Release/yettyc.exe
           ${{ steps.strings.outputs.build-output-dir }}/Release/ycat.exe
           ${{ steps.strings.outputs.build-output-dir }}/Release/yecho.exe
+          assets/*.ttf
+          src/yetty/shaders/
+          demo/
         if-no-files-found: warn
 
   # =============================================================================
@@ -262,3 +271,33 @@ jobs:
           adb shell pidof com.yetty.terminal || echo "App may have crashed"
           # Capture logcat for debugging
           adb logcat -d | grep -i yetty | tail -50
+
+  # =============================================================================
+  # Upload to GitHub Release
+  # =============================================================================
+  release:
+    runs-on: ubuntu-latest
+    needs: [build-desktop, build-macos, build-windows]
+    permissions:
+      contents: write
+
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+
+    - name: Create release archives
+      run: |
+        cd artifacts
+        tar -czvf yetty-linux.tar.gz -C yetty-linux .
+        tar -czvf yetty-macos.tar.gz -C yetty-macos .
+        zip -r yetty-windows.zip yetty-windows
+
+    - name: Upload to GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: |
+          artifacts/yetty-linux.tar.gz
+          artifacts/yetty-macos.tar.gz
+          artifacts/yetty-windows.zip
