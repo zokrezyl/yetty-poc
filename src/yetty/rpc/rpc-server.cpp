@@ -4,6 +4,13 @@
 #include <unordered_map>
 #include <uv.h>
 
+#ifdef _WIN32
+#include <io.h>
+#define unlink _unlink
+#else
+#include <unistd.h>
+#endif
+
 namespace yetty {
 namespace rpc {
 
