@@ -379,10 +379,9 @@ if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
     # FreeType and remaining dependencies (brotli, bzip2) - uses our zlib/libpng
     include(build-tools/cmake/FreeType.cmake)
 
-    # libmagic for file type detection (ycat) - Linux only
-    # macOS: libtool has issues with static zlib linking
+    # libmagic for file type detection (ycat) - Unix only (Linux/macOS)
     # Windows: autotools not available
-    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    if(NOT WIN32)
         include(build-tools/cmake/Libmagic.cmake)
     endif()
 

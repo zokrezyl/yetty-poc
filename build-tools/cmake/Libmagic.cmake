@@ -2,15 +2,11 @@ include(ExternalProject)
 
 set(LIBMAGIC_VERSION "5.45")
 
-# Get the path to our static zlib library
-# On macOS, we must force static linking to avoid dylib issues
-set(ZLIB_STATIC_PATH "${zlib_BINARY_DIR}/libz.a")
-if(WIN32)
-    set(ZLIB_STATIC_PATH "${zlib_BINARY_DIR}/Release/zlibstatic.lib")
-endif()
-
 # Use official distribution tarball — includes pre-generated configure script,
 # no autotools (autoconf/automake/libtool) needed on the build machine.
+#
+# Key: Use -lz instead of full path to avoid libtool embedding issues on macOS.
+# Our zlib builds libz.a in the binary dir, so -L points there.
 ExternalProject_Add(libmagic_ext
     URL             https://astron.com/pub/file/file-${LIBMAGIC_VERSION}.tar.gz
     PREFIX          ${CMAKE_BINARY_DIR}/_deps/libmagic
@@ -19,10 +15,6 @@ ExternalProject_Add(libmagic_ext
     UPDATE_DISCONNECTED TRUE
 
     CONFIGURE_COMMAND
-        ${CMAKE_COMMAND} -E env
-            # Force configure to use our zlib by setting these variables
-            "ZLIB_CFLAGS=-I${zlib_SOURCE_DIR} -I${zlib_BINARY_DIR}"
-            "ZLIB_LIBS=${ZLIB_STATIC_PATH}"
         <SOURCE_DIR>/configure
             --prefix=<INSTALL_DIR>
             --disable-shared
@@ -33,7 +25,7 @@ ExternalProject_Add(libmagic_ext
             --disable-zstdlib
             "CFLAGS=-fPIC -I${zlib_SOURCE_DIR} -I${zlib_BINARY_DIR}"
             "LDFLAGS=-L${zlib_BINARY_DIR}"
-            "LIBS=${ZLIB_STATIC_PATH}"
+            "LIBS=-lz"
 
     # Use single-threaded make to avoid race conditions in autotools build
     BUILD_COMMAND     make -j1
