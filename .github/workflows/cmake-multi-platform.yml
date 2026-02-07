@@ -69,7 +69,7 @@ jobs:
   # Desktop Build (macOS Intel)
   # =============================================================================
   build-macos:
-    runs-on: macos-13  # Intel, macos-latest is ARM64
+    runs-on: macos-15-intel
 
     steps:
     - uses: actions/checkout@v4
