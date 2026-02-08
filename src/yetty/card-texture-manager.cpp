@@ -328,7 +328,7 @@ Result<void> CardTextureManagerImpl::createAtlasTexture() {
     }
 
     WGPUTextureDescriptor texDesc = {};
-    texDesc.label = WGPU_STR("ImageAtlas");
+    texDesc.label = WGPU_STR("CardTextureAtlas");
     texDesc.size.width = _currentAtlasSize;
     texDesc.size.height = _currentAtlasSize;
     texDesc.size.depthOrArrayLayers = 1;

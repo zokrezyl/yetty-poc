@@ -6,6 +6,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <functional>
 
 struct ImGuiContext;
 
@@ -18,7 +19,8 @@ struct YettyContext;
 //-----------------------------------------------------------------------------
 struct ContextMenuItem {
     std::string label;
-    base::Event event;  // The event to dispatch when this item is clicked
+    base::Event event;                    // The event to dispatch when this item is clicked
+    std::function<void()> callback;       // Optional: direct callback instead of event dispatch
 };
 
 //-----------------------------------------------------------------------------
@@ -50,6 +52,9 @@ public:
 
     // Render ImGui - call after main scene render, in same render pass
     virtual Result<void> render(WGPURenderPassEncoder pass) = 0;
+
+    // GPU Stats dialog - provider is called every frame for live data
+    virtual void showGpuStatsDialog(std::function<std::string()> provider) = 0;
 
     // Check if context menu is open
     virtual bool isContextMenuOpen() const = 0;

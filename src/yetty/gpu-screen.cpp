@@ -4193,6 +4193,19 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
             "Inspect glyph",
             base::Event::contextMenuAction(_id, "inspect_glyph", row, col)
           });
+          _ctx.imguiManager->addContextMenuItem({
+            "GPU Stats", {}, [this]() {
+              _ctx.imguiManager->showGpuStatsDialog([this]() -> std::string {
+                std::string stats = buildGpuStatsText();
+                std::string cleaned;
+                cleaned.reserve(stats.size());
+                for (size_t i = 0; i < stats.size(); i++) {
+                  if (stats[i] != '\r') cleaned += stats[i];
+                }
+                return cleaned;
+              });
+            }
+          });
 
           yinfo("GPUScreen {} right-click at cell ({}, {}), opening context menu", _id, row, col);
           return Ok(true);
@@ -4811,6 +4824,12 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
     _needsBindGroupRecreation = true;
     yinfo("GPUScreenImpl::render: created cell buffer {}x{} ({} bytes)", _cols,
           totalRows, requiredSize);
+  }
+
+  // Upload lazily-loaded bitmap font glyphs to GPU
+  if (_bitmapFont && _bitmapFont->isDirty()) {
+    _bitmapFont->uploadToGpu();
+    _needsBindGroupRecreation = true;
   }
 
   // Recreate bind group if needed
