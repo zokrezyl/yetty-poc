@@ -43,6 +43,10 @@ public:
     using OutputCallback = std::function<void(const char*, size_t)>;
     virtual void setOutputCallback(OutputCallback cb) = 0;
 
+    // Callback when terminal grid dimensions change (for PTY TIOCSWINSZ)
+    using ResizeCallback = std::function<void(uint32_t cols, uint32_t rows)>;
+    virtual void setResizeCallback(ResizeCallback cb) = 0;
+
     // Rendering
     virtual Result<void> render(WGPURenderPassEncoder pass) = 0;
 

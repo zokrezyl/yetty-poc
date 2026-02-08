@@ -213,6 +213,7 @@ public:
   bool hasDamage() const override { return _hasDamage; }
   void clearDamage() override { _hasDamage = false; }
   void setOutputCallback(OutputCallback cb) override;
+  void setResizeCallback(ResizeCallback cb) override;
   Result<void> render(WGPURenderPassEncoder pass) override;
   void setViewport(float x, float y, float width, float height) override;
   uint32_t getCellWidth() const override { return static_cast<uint32_t>(_baseCellWidth * _zoomLevel); }
@@ -419,6 +420,7 @@ private:
 
   // Callbacks
   OutputCallback _outputCallback;
+  ResizeCallback _resizeCallback;
   std::function<void(VTermProp, VTermValue *)> termPropCallback_;
   std::function<void()> bellCallback_;
   std::function<void(const char *, size_t)> vtermInputCallback_;
@@ -798,6 +800,10 @@ void GPUScreenImpl::resize(uint32_t cols, uint32_t rows) {
   if (static_cast<int>(rows) != _rows || static_cast<int>(cols) != _cols) {
     // vterm_set_size triggers our onResize callback which handles everything
     vterm_set_size(_vterm, static_cast<int>(rows), static_cast<int>(cols));
+    // Notify Terminal so it can update PTY window size (TIOCSWINSZ)
+    if (_resizeCallback) {
+      _resizeCallback(cols, rows);
+    }
   }
 }
 
@@ -4122,6 +4128,10 @@ void GPUScreenImpl::setOutputCallback(OutputCallback cb) {
         },
         this);
   }
+}
+
+void GPUScreenImpl::setResizeCallback(ResizeCallback cb) {
+  _resizeCallback = std::move(cb);
 }
 
 void GPUScreenImpl::registerForFocus() {

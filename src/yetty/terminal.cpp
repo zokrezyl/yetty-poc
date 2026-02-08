@@ -37,6 +37,9 @@ public:
         _gpuScreen->setOutputCallback([this](const char* data, size_t len) {
             writeToPty(data, len);
         });
+        _gpuScreen->setResizeCallback([this](uint32_t cols, uint32_t rows) {
+            resizePty(cols, rows);
+        });
 
 #if !YETTY_WEB && !defined(__ANDROID__) && !defined(_WIN32)
         if (auto res = startShell(); !res) {
