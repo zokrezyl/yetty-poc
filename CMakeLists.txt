@@ -656,6 +656,7 @@ elseif(NOT EMSCRIPTEN)
         src/yetty/ms-msdf-font.cpp
         src/yetty/vector-sdf-font.cpp
         src/yetty/vector-coverage-font.cpp
+        src/yetty/raster-font.cpp
         src/yetty/font-manager.cpp
         src/yetty/msdf-cdb-provider.cpp
         src/yetty/msdf-gen/generator.cpp

@@ -77,6 +77,12 @@ struct EmojiGlyphMetadata {
     _pad: vec2<f32>,       // 8 bytes padding
 };
 
+// Raster glyph UV (8 bytes per glyph) - minimal for monospace terminal
+// uvMax = uvMin + glyphSizeUV (computed from uniform)
+struct RasterGlyphUV {
+    uv: vec2<f32>,         // 8 bytes (UV top-left corner)
+};
+
 // Cell structure - matches C++ Cell struct (12 bytes)
 // Uploaded directly from CPU, zero-copy
 struct Cell {
@@ -118,6 +124,12 @@ struct Cell {
 @group(1) @binding(10) var<storage, read> coverageGlyphBuffer: array<u32>;
 @group(1) @binding(11) var<storage, read> coverageOffsetTable: array<u32>;
 
+// Raster font bindings (group 1 continued)
+// R8Unorm texture atlas with grayscale glyph bitmaps
+@group(1) @binding(12) var rasterTexture: texture_2d<f32>;
+@group(1) @binding(13) var rasterSampler: sampler;
+@group(1) @binding(14) var<storage, read> rasterMetadata: array<RasterGlyphUV>;
+
 // Attribute bit masks (matches CellAttrs in grid.h)
 const ATTR_BOLD: u32 = 0x01u;           // Bit 0
 const ATTR_ITALIC: u32 = 0x02u;         // Bit 1
@@ -131,6 +143,8 @@ const FONT_TYPE_BITMAP: u32 = 1u;   // Bitmap fonts (emoji, color fonts)
 const FONT_TYPE_SHADER: u32 = 2u;   // Single-cell shader glyphs
 const FONT_TYPE_CARD: u32 = 3u;     // Multi-cell card glyphs
 const FONT_TYPE_VECTOR: u32 = 4u;   // Vector font (SDF curves)
+const FONT_TYPE_COVERAGE: u32 = 5u; // Vector font (coverage-based)
+const FONT_TYPE_RASTER: u32 = 6u;   // Raster font (texture atlas)
 
 // Legacy alias for backward compatibility
 const ATTR_EMOJI: u32 = 0x20u;      // Bit 5 - same position as FONT_TYPE_BITMAP
@@ -150,6 +164,10 @@ const VECTOR_GLYPH_END: u32 = 0xF0FFFu;     // Vector SDF font range end
 // Vector Coverage font glyph range - Plane 15 PUA-A: U+F1000 - U+F1FFF
 const COVERAGE_GLYPH_BASE: u32 = 0xF1000u;  // Vector coverage font range start
 const COVERAGE_GLYPH_END: u32 = 0xF1FFFu;   // Vector coverage font range end
+
+// Raster font glyph range - Plane 15 PUA-A: U+F2000 - U+F2FFF
+const RASTER_GLYPH_BASE: u32 = 0xF2000u;    // Raster font range start
+const RASTER_GLYPH_END: u32 = 0xF2FFFu;     // Raster font range end
 
 // Vertex input/output
 struct VertexInput {
@@ -244,6 +262,11 @@ fn isVectorGlyph(glyphIndex: u32) -> bool {
 // Check if glyph is a vector coverage font glyph (Plane 15 PUA-A range: U+F1000-U+F1FFF)
 fn isCoverageGlyph(glyphIndex: u32) -> bool {
     return glyphIndex >= COVERAGE_GLYPH_BASE && glyphIndex <= COVERAGE_GLYPH_END;
+}
+
+// Check if glyph is a raster font glyph (Plane 15 PUA-A range: U+F2000-U+F2FFF)
+fn isRasterGlyph(glyphIndex: u32) -> bool {
+    return glyphIndex >= RASTER_GLYPH_BASE && glyphIndex <= RASTER_GLYPH_END;
 }
 
 // ==== VECTOR FONT SDF RENDERING ====
@@ -727,6 +750,25 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 
             finalColor = mix(bgColor.rgb, fgColor.rgb, coverage);
             hasGlyph = coverage > 0.01;
+        } else if (isRasterGlyph(glyphIndex)) {
+            // Raster font: sample from texture atlas
+            let rasterIdx = glyphIndex - RASTER_GLYPH_BASE;
+            let glyphUV = rasterMetadata[rasterIdx].uv;
+
+            // Skip empty glyphs (marked with negative UV)
+            if (glyphUV.x >= 0.0) {
+                // Compute UV within the glyph cell
+                // glyphSizeUV should be passed as uniform, for now assume square cells
+                let glyphSizeUV = vec2<f32>(grid.cellSize.x / 1024.0, grid.cellSize.y / 1024.0);
+                let localUV = localPxBase / grid.cellSize;
+                let sampleUV = glyphUV + localUV * glyphSizeUV;
+
+                // Sample grayscale texture (R channel) - use Level to avoid non-uniform control flow issue
+                let alpha = textureSampleLevel(rasterTexture, rasterSampler, sampleUV, 0.0).r;
+
+                finalColor = mix(bgColor.rgb, fgColor.rgb, alpha);
+                hasGlyph = alpha > 0.01;
+            }
         } else if (isCardGlyph(glyphIndex) || isShaderGlyph(glyphIndex)) {
             // Card or shader glyph: render via shader function
             let localUV = localPxBase / grid.cellSize;  // Normalize to 0-1

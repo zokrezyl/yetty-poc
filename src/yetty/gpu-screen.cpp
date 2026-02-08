@@ -19,6 +19,7 @@
 #include <yetty/font-manager.h>
 #include <yetty/vector-sdf-font.h>
 #include <yetty/vector-coverage-font.h>
+#include <yetty/raster-font.h>
 #include <ytrace/ytrace.hpp>
 
 #ifndef CMAKE_SOURCE_DIR
@@ -49,6 +50,7 @@ constexpr uint8_t FONT_TYPE_SHADER = 2; // Single-cell shader glyphs
 constexpr uint8_t FONT_TYPE_CARD = 3;   // Multi-cell card glyphs
 constexpr uint8_t FONT_TYPE_VECTOR = 4;   // Vector font (SDF curves)
 constexpr uint8_t FONT_TYPE_COVERAGE = 5; // Vector font (coverage-based)
+constexpr uint8_t FONT_TYPE_RASTER = 6;   // Raster font (texture atlas)
 
 // Card glyph range - multi-cell widgets (U+100000 - U+100FFF)
 constexpr uint32_t CARD_GLYPH_BASE = 0x100000;
@@ -65,6 +67,10 @@ constexpr uint32_t VECTOR_GLYPH_END = 0xF0FFF;
 // Vector Coverage font glyph range - Plane 15 PUA-A (U+F1000 - U+F1FFF)
 constexpr uint32_t COVERAGE_GLYPH_BASE = 0xF1000;
 constexpr uint32_t COVERAGE_GLYPH_END = 0xF1FFF;
+
+// Raster font glyph range - Plane 15 PUA-A (U+F2000 - U+F2FFF)
+constexpr uint32_t RASTER_GLYPH_BASE = 0xF2000;
+constexpr uint32_t RASTER_GLYPH_END = 0xF2FFF;
 
 // =============================================================================
 // Copy mode key bindings (tmux vi-mode style)
@@ -140,6 +146,10 @@ inline bool isVectorGlyph(uint32_t codepoint) {
 
 inline bool isCoverageGlyph(uint32_t codepoint) {
   return codepoint >= COVERAGE_GLYPH_BASE && codepoint <= COVERAGE_GLYPH_END;
+}
+
+inline bool isRasterGlyph(uint32_t codepoint) {
+  return codepoint >= RASTER_GLYPH_BASE && codepoint <= RASTER_GLYPH_END;
 }
 
 // Check if codepoint is an emoji (common ranges)
@@ -401,6 +411,7 @@ private:
   ShaderFont::Ptr _cardFont;
   VectorSdfFont::Ptr _vectorFont;
   VectorCoverageFont::Ptr _coverageFont;
+  RasterFont::Ptr _rasterFont;
   uint32_t _cachedSpaceGlyph = 0;
 
   // Callbacks
@@ -590,6 +601,7 @@ Result<void> GPUScreenImpl::init() noexcept {
     _cardFont = _ctx.fontManager->getDefaultCardFont();
     _vectorFont = _ctx.fontManager->getDefaultVectorSdfFont();
     _coverageFont = _ctx.fontManager->getDefaultVectorCoverageFont();
+    _rasterFont = _ctx.fontManager->getDefaultRasterFont();
   }
 
   // Cache space glyph index to avoid repeated lookups in hot paths
@@ -605,6 +617,12 @@ Result<void> GPUScreenImpl::init() noexcept {
     } else {
       _baseCellWidth = _baseCellHeight * 0.5f;
     }
+  }
+
+  // Update raster font with actual cell size
+  if (_rasterFont) {
+    _rasterFont->setCellSize(getCellWidth(), getCellHeight());
+    _rasterFont->uploadToGpu();
   }
 
   // Create per-screen CardManager (owns CardBufferManager, CardTextureManager, and bind group).
@@ -2689,6 +2707,10 @@ int GPUScreenImpl::onPutglyph(VTermGlyphInfo *info, VTermPos pos, void *user) {
     // Vector Coverage font glyphs
     fontType = FONT_TYPE_COVERAGE;
     glyphIdx = cp;  // Shader uses codepoint directly
+  } else if (isRasterGlyph(cp)) {
+    // Raster font glyphs (texture atlas)
+    fontType = FONT_TYPE_RASTER;
+    glyphIdx = cp;  // Shader uses codepoint directly, converts to index
   } else if (isCardGlyph(cp)) {
     // Card glyphs (multi-cell widgets)
     fontType = FONT_TYPE_CARD;
@@ -4329,6 +4351,11 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
             for (auto& [slotIndex, card] : _cards) {
               card->setCellSize(getCellWidth(), getCellHeight());
             }
+            // Update raster font cell size (triggers re-rasterization)
+            if (_rasterFont) {
+              _rasterFont->setCellSize(getCellWidth(), getCellHeight());
+              _rasterFont->uploadToGpu();
+            }
             yinfo("GPUScreen {} zoom: {:.0f}%", _id, _zoomLevel * 100.0f);
           }
         } else if (ctrlPressed) {
@@ -4724,7 +4751,7 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
       return Err<void>("Bitmap font resources not ready");
     }
 
-    WGPUBindGroupEntry bgEntries[12] = {};
+    WGPUBindGroupEntry bgEntries[15] = {};  // 12 + 3 for raster font
 
     bgEntries[0].binding = 0;
     bgEntries[0].buffer = _uniformBuffer;
@@ -4786,9 +4813,34 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
     bgEntries[11].buffer = coverageOffsetBuffer;
     bgEntries[11].size = coverageOffsetSize;
 
+    // Raster font bindings (12, 13, 14)
+    // Use dummy resources if raster font not available
+    if (_rasterFont && _rasterFont->getTextureView() && _rasterFont->getSampler() && _rasterFont->getMetadataBuffer()) {
+        bgEntries[12].binding = 12;
+        bgEntries[12].textureView = _rasterFont->getTextureView();
+
+        bgEntries[13].binding = 13;
+        bgEntries[13].sampler = _rasterFont->getSampler();
+
+        bgEntries[14].binding = 14;
+        bgEntries[14].buffer = _rasterFont->getMetadataBuffer();
+        bgEntries[14].size = _rasterFont->getMetadataBufferSize();
+    } else {
+        // Fallback: use bitmap font resources as placeholder
+        bgEntries[12].binding = 12;
+        bgEntries[12].textureView = _bitmapFont->getTextureView();
+
+        bgEntries[13].binding = 13;
+        bgEntries[13].sampler = _bitmapFont->getSampler();
+
+        bgEntries[14].binding = 14;
+        bgEntries[14].buffer = _bitmapFont->getMetadataBuffer();
+        bgEntries[14].size = 8;  // Minimum size
+    }
+
     WGPUBindGroupDescriptor bindGroupDesc = {};
     bindGroupDesc.layout = shaderMgr->getGridBindGroupLayout();
-    bindGroupDesc.entryCount = 12;
+    bindGroupDesc.entryCount = 15;
     bindGroupDesc.entries = bgEntries;
     _bindGroup = wgpuDeviceCreateBindGroup(device, &bindGroupDesc);
     if (!_bindGroup) {

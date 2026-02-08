@@ -5,6 +5,7 @@
 #include <yetty/shader-font.h>
 #include <yetty/vector-sdf-font.h>
 #include <yetty/vector-coverage-font.h>
+#include <yetty/raster-font.h>
 #include <yetty/gpu-context.h>
 #include <yetty/shader-manager.h>
 #include <yetty/msdf-cdb-provider.h>
@@ -46,6 +47,13 @@ public:
     // Vector font (coverage-based rendering)
     virtual Result<VectorCoverageFont::Ptr> getVectorCoverageFont(const std::string& ttfPath) noexcept = 0;
     virtual VectorCoverageFont::Ptr getDefaultVectorCoverageFont() noexcept = 0;
+
+    // Raster font (texture atlas rendering)
+    // Cell size defaults are placeholder - caller should use setCellSize() once actual size is known
+    virtual Result<RasterFont::Ptr> getRasterFont(const std::string& ttfPath,
+                                                  uint32_t cellWidth = 16,
+                                                  uint32_t cellHeight = 32) noexcept = 0;
+    virtual RasterFont::Ptr getDefaultRasterFont() noexcept = 0;
 
     virtual void setDefaultFont(const std::string& fontName) noexcept = 0;
     virtual bool hasFont(const std::string& fontName) const noexcept = 0;

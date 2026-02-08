@@ -1,6 +1,7 @@
 #include <yetty/font-manager.h>
 #include <yetty/vector-sdf-font.h>
 #include <yetty/vector-coverage-font.h>
+#include <yetty/raster-font.h>
 #include <yetty/shader-manager.h>
 #include <ytrace/ytrace.hpp>
 
@@ -45,6 +46,11 @@ public:
 
     if (auto res = initVectorSdfFont(); !res) {
       return Err<void>("Failed to initialize VectorSdfFont", res);
+    }
+
+    if (auto res = initRasterFont(); !res) {
+      ywarn("Failed to initialize RasterFont: {} - raster font disabled",
+            res.error().message());
     }
 
     _initialized = true;
@@ -232,6 +238,46 @@ public:
     return _defaultVectorCoverageFont;
   }
 
+  Result<RasterFont::Ptr> getRasterFont(const std::string &ttfPath,
+                                        uint32_t cellWidth,
+                                        uint32_t cellHeight) noexcept override {
+    // Cache by path only - cell size changes are handled via setCellSize()
+    auto it = _rasterFontCache.find(ttfPath);
+    if (it != _rasterFontCache.end()) {
+      return Ok(it->second);
+    }
+
+    auto result = RasterFont::create(_gpu, ttfPath, cellWidth, cellHeight);
+    if (!result) {
+      return Err<RasterFont::Ptr>("Failed to create RasterFont: " + ttfPath, result);
+    }
+
+    auto font = std::move(*result);
+
+    // Load basic Latin glyphs
+    if (auto res = font->loadBasicLatin(); !res) {
+      ywarn("Failed to load basic Latin for RasterFont: {}", res.error().message());
+    }
+
+    // Upload to GPU
+    font->uploadToGpu();
+
+    _rasterFontCache[ttfPath] = font;
+
+    if (!_defaultRasterFont) {
+      _defaultRasterFont = font;
+    }
+
+    yinfo("Created RasterFont: {} (cell={}x{}, {} glyphs)",
+          ttfPath, cellWidth, cellHeight, font->glyphCount());
+
+    return Ok(font);
+  }
+
+  RasterFont::Ptr getDefaultRasterFont() noexcept override {
+    return _defaultRasterFont;
+  }
+
   void setDefaultFont(const std::string &fontName) noexcept override {
     _defaultFontName = fontName;
   }
@@ -338,6 +384,39 @@ private:
     return Ok();
   }
 
+  Result<void> initRasterFont() noexcept {
+    // Use the default monospace font TTF
+    std::string ttfPath = std::string(CMAKE_SOURCE_DIR) +
+                          "/assets/DejaVuSansMNerdFontMono-Regular.ttf";
+
+    if (!std::filesystem::exists(ttfPath)) {
+      return Err<void>("Default TTF not found: " + ttfPath);
+    }
+
+    // Create with placeholder cell size - gpu-screen will call setCellSize() with actual size
+    auto result = RasterFont::create(_gpu, ttfPath, 16, 32);
+    if (!result) {
+      return Err<void>("Failed to create RasterFont", result);
+    }
+
+    _defaultRasterFont = std::move(*result);
+
+    // Load basic Latin glyphs for testing
+    if (auto res = _defaultRasterFont->loadBasicLatin(); !res) {
+      return Err<void>("Failed to load basic Latin glyphs", res);
+    }
+
+    // Upload to GPU
+    _defaultRasterFont->uploadToGpu();
+
+    yinfo("RasterFont initialized: {} glyphs, cell={}x{}",
+          _defaultRasterFont->glyphCount(),
+          _defaultRasterFont->getCellWidth(),
+          _defaultRasterFont->getCellHeight());
+
+    return Ok();
+  }
+
   // Discover TTF paths for a font name in assets/ directory
   // Returns [Regular, Bold, Oblique, BoldOblique] paths (empty string if not
   // found)
@@ -373,6 +452,8 @@ private:
   VectorSdfFont::Ptr _defaultVectorSdfFont;
   std::unordered_map<std::string, VectorCoverageFont::Ptr> _vectorCoverageFontCache;
   VectorCoverageFont::Ptr _defaultVectorCoverageFont;
+  std::unordered_map<std::string, RasterFont::Ptr> _rasterFontCache;
+  RasterFont::Ptr _defaultRasterFont;
   bool _initialized = false;
 };
 

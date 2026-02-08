@@ -806,8 +806,8 @@ Result<void> ShaderManagerImpl::createPipelineResources() {
     memcpy(mapped, quadVertices, sizeof(quadVertices));
     wgpuBufferUnmap(_quadVertexBuffer);
 
-    // 2. Create grid bind group layout (12 bindings)
-    WGPUBindGroupLayoutEntry entries[12] = {};
+    // 2. Create grid bind group layout (15 bindings)
+    WGPUBindGroupLayoutEntry entries[15] = {};
 
     // 0: Grid uniforms
     entries[0].binding = 0;
@@ -871,8 +871,24 @@ Result<void> ShaderManagerImpl::createPipelineResources() {
     entries[11].visibility = WGPUShaderStage_Fragment;
     entries[11].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
 
+    // 12: Raster font texture (R8Unorm)
+    entries[12].binding = 12;
+    entries[12].visibility = WGPUShaderStage_Fragment;
+    entries[12].texture.sampleType = WGPUTextureSampleType_Float;
+    entries[12].texture.viewDimension = WGPUTextureViewDimension_2D;
+
+    // 13: Raster font sampler
+    entries[13].binding = 13;
+    entries[13].visibility = WGPUShaderStage_Fragment;
+    entries[13].sampler.type = WGPUSamplerBindingType_Filtering;
+
+    // 14: Raster font UV metadata SSBO
+    entries[14].binding = 14;
+    entries[14].visibility = WGPUShaderStage_Fragment;
+    entries[14].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
+
     WGPUBindGroupLayoutDescriptor layoutDesc = {};
-    layoutDesc.entryCount = 12;
+    layoutDesc.entryCount = 15;
     layoutDesc.entries = entries;
     _gridBindGroupLayout = wgpuDeviceCreateBindGroupLayout(device, &layoutDesc);
     if (!_gridBindGroupLayout) {
