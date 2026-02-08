@@ -2,6 +2,7 @@
 
 #include <yetty/font.h>
 #include <yetty/gpu-context.h>
+#include <yetty/gpu-allocator.h>
 #include <yetty/base/base.h>
 
 #include <string>
@@ -43,6 +44,7 @@ public:
     // Factory: loads font from TTF path
     static Result<Ptr> createImpl(ContextType& ctx,
                                   const GPUContext& gpu,
+                                  GpuAllocator::Ptr allocator,
                                   const std::string& ttfPath,
                                   uint32_t cellWidth,
                                   uint32_t cellHeight);

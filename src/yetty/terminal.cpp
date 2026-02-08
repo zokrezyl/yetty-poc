@@ -248,16 +248,19 @@ private:
             return;
         }
 
-        char buf[4096];
+        static constexpr size_t PTY_READ_MAX = 40960; // 40KB
+        char buf[PTY_READ_MAX];
+        size_t totalRead = 0;
         ssize_t n;
 
-        while ((n = read(_ptyMaster, buf, sizeof(buf))) > 0) {
-            ydebug("Terminal::readPty: read {} bytes", n);
-            if (_gpuScreen) {
-                _gpuScreen->write(buf, static_cast<size_t>(n));
-            }
+        while ((n = read(_ptyMaster, buf + totalRead, PTY_READ_MAX - totalRead)) > 0) {
+            totalRead += n;
+            if (totalRead >= PTY_READ_MAX) break;
         }
-        ydebug("Terminal::readPty: done reading");
+
+        if (totalRead > 0 && _gpuScreen) {
+            _gpuScreen->write(buf, totalRead);
+        }
     }
 
     int _ptyMaster = -1;

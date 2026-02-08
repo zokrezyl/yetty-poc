@@ -249,7 +249,7 @@ public:
       return Ok(it->second);
     }
 
-    auto result = RasterFont::create(_gpu, ttfPath, cellWidth, cellHeight);
+    auto result = RasterFont::create(_gpu, _allocator, ttfPath, cellWidth, cellHeight);
     if (!result) {
       return Err<RasterFont::Ptr>("Failed to create RasterFont: " + ttfPath, result);
     }
@@ -396,7 +396,7 @@ private:
     }
 
     // Create with placeholder cell size - gpu-screen will call setCellSize() with actual size
-    auto result = RasterFont::create(_gpu, ttfPath, 16, 32);
+    auto result = RasterFont::create(_gpu, _allocator, ttfPath, 16, 32);
     if (!result) {
       return Err<void>("Failed to create RasterFont", result);
     }
