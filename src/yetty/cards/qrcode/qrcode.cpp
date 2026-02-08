@@ -3,10 +3,9 @@
 #include <yetty/yetty-context.h>
 #include <ytrace/ytrace.hpp>
 
+#include <yetty/wgpu-compat.h>
 #include <cstring>
 #include <sstream>
-
-#define WGPU_STR(s) WGPUStringView{.data = s, .length = WGPU_STRLEN}
 
 namespace yetty::card {
 
@@ -65,7 +64,7 @@ public:
 
     Result<void> dispose() override {
         if (_bufferHandle.isValid() && _cardMgr) {
-            _cardMgr->bufferManager()->deallocateBuffer(_bufferHandle);
+            _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "data");
             _bufferHandle = BufferHandle::invalid();
         }
         
@@ -80,7 +79,7 @@ public:
 
     void suspend() override {
         if (_bufferHandle.isValid() && _cardMgr) {
-            _cardMgr->bufferManager()->deallocateBuffer(_bufferHandle);
+            _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "data");
             _bufferHandle = BufferHandle::invalid();
         }
         _bufferDirty = true;
@@ -104,7 +103,7 @@ public:
             
             // Allocate buffer
             size_t bufferSize = numWords * sizeof(uint32_t);
-            auto bufResult = _cardMgr->bufferManager()->allocateBuffer(bufferSize);
+            auto bufResult = _cardMgr->bufferManager()->allocateBuffer(metadataSlotIndex(), "data", bufferSize);
             if (!bufResult) {
                 return Err<void>("QRCode::allocateBuffers: failed to allocate buffer");
             }

@@ -1,4 +1,5 @@
 #include <yetty/vector-sdf-font.h>
+#include <yetty/gpu-allocator.h>
 #include <yetty/wgpu-compat.h>
 #include <ytrace/ytrace.hpp>
 
@@ -224,8 +225,8 @@ int curveCubicTo(const FT_Vector* c1, const FT_Vector* c2, const FT_Vector* to, 
 
 class VectorSdfFontImpl : public VectorSdfFont {
 public:
-    VectorSdfFontImpl(const GPUContext& gpu, const std::string& ttfPath)
-        : _gpu(gpu), _ttfPath(ttfPath) {}
+    VectorSdfFontImpl(const GPUContext& gpu, GpuAllocator::Ptr allocator, const std::string& ttfPath)
+        : _gpu(gpu), _allocator(std::move(allocator)), _ttfPath(ttfPath) {}
 
     ~VectorSdfFontImpl() override {
         cleanup();
@@ -448,18 +449,15 @@ private:
             return Ok();  // Nothing to upload
         }
 
-        WGPUDevice device = _gpu.device;
         WGPUQueue queue = _gpu.queue;
 
         // Destroy old buffers
         if (_glyphBuffer) {
-            wgpuBufferDestroy(_glyphBuffer);
-            wgpuBufferRelease(_glyphBuffer);
+            _allocator->releaseBuffer(_glyphBuffer);
             _glyphBuffer = nullptr;
         }
         if (_offsetBuffer) {
-            wgpuBufferDestroy(_offsetBuffer);
-            wgpuBufferRelease(_offsetBuffer);
+            _allocator->releaseBuffer(_offsetBuffer);
             _offsetBuffer = nullptr;
         }
 
@@ -469,7 +467,7 @@ private:
         bufDesc.size = _glyphData.size() * sizeof(uint32_t);
         bufDesc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
 
-        _glyphBuffer = wgpuDeviceCreateBuffer(device, &bufDesc);
+        _glyphBuffer = _allocator->createBuffer(bufDesc);
         if (!_glyphBuffer) {
             return Err<void>("Failed to create glyph buffer");
         }
@@ -490,7 +488,7 @@ private:
         bufDesc.label = WGPU_STR("VectorSdfFont Offset Buffer");
         bufDesc.size = offsetTable.size() * sizeof(uint32_t);
 
-        _offsetBuffer = wgpuDeviceCreateBuffer(device, &bufDesc);
+        _offsetBuffer = _allocator->createBuffer(bufDesc);
         if (!_offsetBuffer) {
             return Err<void>("Failed to create offset buffer");
         }
@@ -511,13 +509,11 @@ private:
 
     void cleanup() {
         if (_glyphBuffer) {
-            wgpuBufferDestroy(_glyphBuffer);
-            wgpuBufferRelease(_glyphBuffer);
+            _allocator->releaseBuffer(_glyphBuffer);
             _glyphBuffer = nullptr;
         }
         if (_offsetBuffer) {
-            wgpuBufferDestroy(_offsetBuffer);
-            wgpuBufferRelease(_offsetBuffer);
+            _allocator->releaseBuffer(_offsetBuffer);
             _offsetBuffer = nullptr;
         }
         if (_ftFace) {
@@ -535,6 +531,7 @@ private:
     //=========================================================================
 
     const GPUContext& _gpu;
+    GpuAllocator::Ptr _allocator;
     std::string _ttfPath;
 
     // FreeType
@@ -565,8 +562,9 @@ private:
 
 Result<VectorSdfFont::Ptr> VectorSdfFont::createImpl(ContextType&,
                                                 const GPUContext& gpu,
+                                                GpuAllocator::Ptr allocator,
                                                 const std::string& ttfPath) {
-    auto font = Ptr(new VectorSdfFontImpl(gpu, ttfPath));
+    auto font = Ptr(new VectorSdfFontImpl(gpu, std::move(allocator), ttfPath));
     if (auto res = static_cast<VectorSdfFontImpl*>(font.get())->init(); !res) {
         return Err<Ptr>("Failed to initialize VectorSdfFont", res);
     }

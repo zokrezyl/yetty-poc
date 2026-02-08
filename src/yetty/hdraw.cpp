@@ -1,4 +1,5 @@
 #include <yetty/hdraw.h>
+#include <yetty/gpu-allocator.h>
 #include <yetty/wgpu-compat.h>
 #include <yaml-cpp/yaml.h>
 #include <ytrace/ytrace.hpp>
@@ -648,8 +649,8 @@ Result<void> HDrawRenderer::init(const std::string& content) {
 Result<void> HDrawRenderer::dispose() {
     if (_bind_group) { wgpuBindGroupRelease(_bind_group); _bind_group = nullptr; }
     if (_pipeline) { wgpuRenderPipelineRelease(_pipeline); _pipeline = nullptr; }
-    if (_uniform_buffer) { wgpuBufferRelease(_uniform_buffer); _uniform_buffer = nullptr; }
-    if (_primitive_buffer) { wgpuBufferRelease(_primitive_buffer); _primitive_buffer = nullptr; }
+    if (_uniform_buffer) { if (_allocator) _allocator->releaseBuffer(_uniform_buffer); _uniform_buffer = nullptr; }
+    if (_primitive_buffer) { if (_allocator) _allocator->releaseBuffer(_primitive_buffer); _primitive_buffer = nullptr; }
     _gpu_initialized = false;
     _current_format = WGPUTextureFormat_Undefined;
     return Ok();
@@ -1180,6 +1181,7 @@ Result<void> HDrawRenderer::parseSVG(const std::string& svg) {
 //-----------------------------------------------------------------------------
 
 Result<void> HDrawRenderer::render(WebGPUContext& ctx,
+                                    GpuAllocator::Ptr allocator,
                                     WGPURenderPassEncoder pass,
                                     float x, float y, float width, float height,
                                     float screenWidth, float screenHeight,
@@ -1191,7 +1193,7 @@ Result<void> HDrawRenderer::render(WebGPUContext& ctx,
         if (_gpu_initialized) {
             (void)dispose();
         }
-        auto result = createPipeline(ctx, targetFormat);
+        auto result = createPipeline(ctx, allocator, targetFormat);
         if (!result) {
             _failed = true;
             return Err<void>("HDrawRenderer: Failed to create pipeline", result);
@@ -1242,24 +1244,25 @@ Result<void> HDrawRenderer::render(WebGPUContext& ctx,
     return Ok();
 }
 
-Result<void> HDrawRenderer::createPipeline(WebGPUContext& ctx, WGPUTextureFormat targetFormat) {
+Result<void> HDrawRenderer::createPipeline(WebGPUContext& ctx, GpuAllocator::Ptr allocator, WGPUTextureFormat targetFormat) {
+    _allocator = allocator;
     WGPUDevice device = ctx.getDevice();
 
     // Uniform buffer
     WGPUBufferDescriptor bufDesc = {};
+    bufDesc.label = WGPU_STR("HDrawRenderer uniform");
     bufDesc.size = 32;
     bufDesc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
-    _uniform_buffer = wgpuDeviceCreateBuffer(device, &bufDesc);
+    _uniform_buffer = _allocator->createBuffer(bufDesc);
     if (!_uniform_buffer) return Err<void>("Failed to create uniform buffer");
-    yinfo("GPU_ALLOC HDrawRenderer: uniformBuffer=32 bytes");
 
     // Primitive storage buffer
     WGPUBufferDescriptor primBufDesc = {};
+    primBufDesc.label = WGPU_STR("HDrawRenderer primitives");
     primBufDesc.size = MAX_PRIMITIVES * sizeof(HDrawPrimitiveGPU);
     primBufDesc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
-    _primitive_buffer = wgpuDeviceCreateBuffer(device, &primBufDesc);
+    _primitive_buffer = _allocator->createBuffer(primBufDesc);
     if (!_primitive_buffer) return Err<void>("Failed to create primitive buffer");
-    yinfo("GPU_ALLOC HDrawRenderer: primitiveBuffer={} bytes", MAX_PRIMITIVES * sizeof(HDrawPrimitiveGPU));
 
     // Shader
     WGPUShaderSourceWGSL wgslDesc = {};

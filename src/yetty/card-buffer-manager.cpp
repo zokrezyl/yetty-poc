@@ -1,10 +1,12 @@
 #include <yetty/card-buffer-manager.h>
+#include <yetty/gpu-allocator.h>
 #include <ytrace/ytrace.hpp>
 #include <algorithm>
 #include <cstring>
+#include <iomanip>
+#include <map>
+#include <sstream>
 #include <vector>
-
-#define WGPU_STR(s) WGPUStringView{.data = s, .length = WGPU_STRLEN}
 
 namespace yetty {
 
@@ -24,14 +26,6 @@ public:
     uint32_t used() const { return _used; }
     uint32_t fragmentCount() const { return static_cast<uint32_t>(_freeBlocks.size()); }
     uint32_t highWaterMark() const { return _highWaterMark; }
-
-    void grow(uint32_t newCapacity) {
-        if (newCapacity <= _capacity) return;
-        uint32_t extraSpace = newCapacity - _capacity;
-        _freeBlocks.push_back({_capacity, extraSpace});
-        _capacity = newCapacity;
-        mergeFreeBlocks();
-    }
 
 private:
     struct FreeBlock {
@@ -59,13 +53,16 @@ private:
     std::vector<std::pair<uint32_t, uint32_t>> _dirtyRanges;
 };
 
+// Sub-allocation key: (slotIndex, scope)
+using SubAllocKey = std::pair<uint32_t, std::string>;
+
 // =============================================================================
 // CardBufferManagerImpl
 // =============================================================================
 
 class CardBufferManagerImpl : public CardBufferManager {
 public:
-    CardBufferManagerImpl(GPUContext* gpuContext, Config config) noexcept;
+    CardBufferManagerImpl(GPUContext* gpuContext, GpuAllocator::Ptr allocator) noexcept;
     ~CardBufferManagerImpl() override;
 
     Result<void> init() noexcept;
@@ -75,8 +72,11 @@ public:
     Result<void> commitReservations() override;
 
     // Buffer operations
-    Result<BufferHandle> allocateBuffer(uint32_t size) override;
-    Result<void> deallocateBuffer(BufferHandle handle) override;
+    Result<BufferHandle> allocateBuffer(uint32_t slotIndex,
+                                        const std::string& scope,
+                                        uint32_t size) override;
+    Result<void> deallocateBuffer(uint32_t slotIndex,
+                                  const std::string& scope) override;
     Result<void> writeBuffer(BufferHandle handle, const void* data, uint32_t size) override;
     Result<void> writeBufferAt(BufferHandle handle, uint32_t offset, const void* data, uint32_t size) override;
     void markBufferDirty(BufferHandle handle) override;
@@ -90,14 +90,15 @@ public:
     void clearBindGroupDirty() override { _bindGroupDirty = false; }
 
     Stats getStats() const override;
+    void dumpSubAllocations() const override;
+    std::string dumpSubAllocationsToString() const override;
 
 private:
     Result<void> createGpuBuffer();
-    Result<void> growBufferGpu(uint32_t requiredSize);
 
     GPUContext* _gpuContext;
     WGPUDevice _device;
-    Config _config;
+    GpuAllocator::Ptr _allocator;
 
     std::vector<uint32_t> _bufferCpuBuffer;
     WGPUBuffer _bufferGpuBuffer = nullptr;
@@ -107,9 +108,11 @@ private:
 
     uint32_t _currentBufferCapacity;
     uint32_t _pendingReservation = 0;
-    static constexpr uint32_t MAX_BUFFER_SIZE = 1024 * 1024 * 1024;
 
     bool _bindGroupDirty = true;
+
+    // Keyed sub-allocation tracking: (slotIndex, scope) -> BufferHandle
+    std::map<SubAllocKey, BufferHandle> _subAllocations;
 };
 
 // =============================================================================
@@ -209,8 +212,9 @@ std::vector<std::pair<uint32_t, uint32_t>> DirtyTracker::getCoalescedRanges(uint
 // Factory
 // =============================================================================
 
-Result<CardBufferManager::Ptr> CardBufferManager::create(GPUContext* gpuContext, Config config) noexcept {
-    auto mgr = std::make_shared<CardBufferManagerImpl>(gpuContext, config);
+Result<CardBufferManager::Ptr> CardBufferManager::create(GPUContext* gpuContext,
+                                                          GpuAllocator::Ptr allocator) noexcept {
+    auto mgr = std::make_shared<CardBufferManagerImpl>(gpuContext, std::move(allocator));
     if (auto res = mgr->init(); !res) {
         return Err<Ptr>("Failed to initialize CardBufferManager", res);
     }
@@ -221,10 +225,11 @@ Result<CardBufferManager::Ptr> CardBufferManager::create(GPUContext* gpuContext,
 // CardBufferManagerImpl
 // =============================================================================
 
-CardBufferManagerImpl::CardBufferManagerImpl(GPUContext* gpuContext, Config config) noexcept
+CardBufferManagerImpl::CardBufferManagerImpl(GPUContext* gpuContext,
+                                               GpuAllocator::Ptr allocator) noexcept
     : _gpuContext(gpuContext)
     , _device(gpuContext->device)
-    , _config(config)
+    , _allocator(std::move(allocator))
     , _bufferAllocator(4)
     , _currentBufferCapacity(4) {
 }
@@ -238,14 +243,11 @@ Result<void> CardBufferManagerImpl::init() noexcept {
 }
 
 CardBufferManagerImpl::~CardBufferManagerImpl() {
-    if (_bufferGpuBuffer) wgpuBufferRelease(_bufferGpuBuffer);
+    if (_bufferGpuBuffer) _allocator->releaseBuffer(_bufferGpuBuffer);
 }
 
 Result<void> CardBufferManagerImpl::createGpuBuffer() {
     size_t bufferBytes = _bufferCpuBuffer.size() * sizeof(uint32_t);
-
-    yinfo("GPU_ALLOC CardBufferManager: bufferGpu={} bytes ({:.2f} MB)",
-          bufferBytes, bufferBytes / (1024.0 * 1024.0));
 
     WGPUBufferDescriptor bufDesc = {};
     bufDesc.label = WGPU_STR("CardBuffer");
@@ -253,7 +255,7 @@ Result<void> CardBufferManagerImpl::createGpuBuffer() {
     bufDesc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
     bufDesc.mappedAtCreation = false;
 
-    _bufferGpuBuffer = wgpuDeviceCreateBuffer(_device, &bufDesc);
+    _bufferGpuBuffer = _allocator->createBuffer(bufDesc);
     if (!_bufferGpuBuffer) {
         return Err("Failed to create buffer GPU buffer");
     }
@@ -274,11 +276,12 @@ Result<void> CardBufferManagerImpl::commitReservations() {
 
     // Reset allocator — all old allocations are invalid
     _bufferAllocator = BufferAllocator(totalNeeded);
+    _subAllocations.clear();
 
     if (totalNeeded != _currentBufferCapacity) {
         // Recreate GPU buffer at exactly the needed size
         if (_bufferGpuBuffer) {
-            wgpuBufferRelease(_bufferGpuBuffer);
+            _allocator->releaseBuffer(_bufferGpuBuffer);
             _bufferGpuBuffer = nullptr;
         }
 
@@ -292,7 +295,7 @@ Result<void> CardBufferManagerImpl::commitReservations() {
         bufDesc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
         bufDesc.mappedAtCreation = false;
 
-        _bufferGpuBuffer = wgpuDeviceCreateBuffer(_device, &bufDesc);
+        _bufferGpuBuffer = _allocator->createBuffer(bufDesc);
         if (!_bufferGpuBuffer) {
             _currentBufferCapacity = 0;
             return Err<void>("Failed to create GPU buffer");
@@ -300,9 +303,6 @@ Result<void> CardBufferManagerImpl::commitReservations() {
 
         _currentBufferCapacity = totalNeeded;
         _bindGroupDirty = true;
-
-        yinfo("CardBufferManager::commitReservations: recreated GPU buffer at {} bytes ({:.2f} MB)",
-              totalNeeded, totalNeeded / (1024.0 * 1024.0));
     }
 
     return Ok();
@@ -312,31 +312,48 @@ Result<void> CardBufferManagerImpl::commitReservations() {
 // Buffer operations
 // =============================================================================
 
-Result<BufferHandle> CardBufferManagerImpl::allocateBuffer(uint32_t size) {
+Result<BufferHandle> CardBufferManagerImpl::allocateBuffer(uint32_t slotIndex,
+                                                            const std::string& scope,
+                                                            uint32_t size) {
+    SubAllocKey key{slotIndex, scope};
+
+    // Check for duplicate allocation
+    if (_subAllocations.count(key)) {
+        return Err<BufferHandle>("allocateBuffer: duplicate allocation");
+    }
+
     auto result = _bufferAllocator.allocate(size);
     if (!result) {
-        uint32_t requiredCapacity = _bufferAllocator.used() + size;
-        uint32_t newCapacity = std::max(_config.bufferCapacity, _currentBufferCapacity * 2);
-        while (newCapacity < requiredCapacity && newCapacity < MAX_BUFFER_SIZE) {
-            newCapacity *= 2;
-        }
-        newCapacity = std::min(newCapacity, MAX_BUFFER_SIZE);
-        if (newCapacity < requiredCapacity) {
-            return Err<BufferHandle>("Buffer would exceed maximum size");
-        }
-        if (auto res = growBufferGpu(newCapacity); !res) {
-            return Err<BufferHandle>("Failed to grow buffer", res);
-        }
-        result = _bufferAllocator.allocate(size);
-        if (!result) return result;
+        return Err<BufferHandle>("allocateBuffer: out of reserved space");
     }
+
     BufferHandle handle = *result;
     uint8_t* bufferBytes = reinterpret_cast<uint8_t*>(_bufferCpuBuffer.data());
     handle.data = bufferBytes + handle.offset;
+
+    _subAllocations[key] = handle;
+
+    ydebug("CardBufferManager: allocated slot={} scope='{}' size={} offset={}",
+           slotIndex, scope, handle.size, handle.offset);
+
     return Ok(handle);
 }
 
-Result<void> CardBufferManagerImpl::deallocateBuffer(BufferHandle handle) {
+Result<void> CardBufferManagerImpl::deallocateBuffer(uint32_t slotIndex,
+                                                      const std::string& scope) {
+    SubAllocKey key{slotIndex, scope};
+
+    auto it = _subAllocations.find(key);
+    if (it == _subAllocations.end()) {
+        return Err("deallocateBuffer: not found");
+    }
+
+    BufferHandle handle = it->second;
+    _subAllocations.erase(it);
+
+    ydebug("CardBufferManager: deallocated slot={} scope='{}' size={} offset={}",
+           slotIndex, scope, handle.size, handle.offset);
+
     return _bufferAllocator.deallocate(handle);
 }
 
@@ -389,49 +406,32 @@ CardBufferManager::Stats CardBufferManagerImpl::getStats() const {
     };
 }
 
-// =============================================================================
-// Buffer growth
-// =============================================================================
+void CardBufferManagerImpl::dumpSubAllocations() const {
+    yinfo("=== CardBufferManager Sub-Allocations ({} entries, {}/{} bytes used) ===",
+          _subAllocations.size(),
+          _bufferAllocator.used(), _bufferAllocator.capacity());
 
-Result<void> CardBufferManagerImpl::growBufferGpu(uint32_t newCapacity) {
-    if (newCapacity <= _currentBufferCapacity) return Ok();
+    for (const auto& [key, handle] : _subAllocations) {
+        yinfo("  slot={:>4} scope={:<12} offset={:>8} size={:>8} ({:.2f} KB)",
+              key.first, key.second,
+              handle.offset, handle.size, handle.size / 1024.0);
+    }
+}
 
-    yinfo("CardBufferManager: growing buffer from {} to {} bytes ({:.2f} MB to {:.2f} MB)",
-          _currentBufferCapacity, newCapacity,
-          _currentBufferCapacity / (1024.0 * 1024.0),
-          newCapacity / (1024.0 * 1024.0));
+std::string CardBufferManagerImpl::dumpSubAllocationsToString() const {
+    std::ostringstream ss;
+    ss << std::fixed << std::setprecision(2);
+    ss << "  " << _subAllocations.size() << " sub-allocs, "
+       << _bufferAllocator.used() << "/" << _bufferAllocator.capacity() << " bytes used\n";
 
-    uint32_t newU32Count = (newCapacity + 3) / 4;
-    _bufferCpuBuffer.resize(newU32Count, 0);
-    _bufferAllocator.grow(newCapacity);
-
-    if (_bufferGpuBuffer) {
-        wgpuBufferRelease(_bufferGpuBuffer);
-        _bufferGpuBuffer = nullptr;
+    for (const auto& [key, handle] : _subAllocations) {
+        ss << "    slot=" << std::setw(4) << key.first
+           << " scope=" << std::left << std::setw(12) << key.second << std::right
+           << "  " << std::setw(8) << handle.size << " B ("
+           << std::setw(8) << (handle.size / 1024.0) << " KB)\n";
     }
 
-    WGPUBufferDescriptor bufDesc = {};
-    bufDesc.label = WGPU_STR("CardBuffer");
-    bufDesc.size = newU32Count * sizeof(uint32_t);
-    bufDesc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
-    bufDesc.mappedAtCreation = false;
-
-    _bufferGpuBuffer = wgpuDeviceCreateBuffer(_device, &bufDesc);
-    if (!_bufferGpuBuffer) {
-        return Err<void>("Failed to create larger buffer GPU buffer");
-    }
-
-    uint32_t usedBytes = _bufferAllocator.highWaterMark();
-    if (usedBytes > 0) {
-        _bufferDirty.markDirty(0, usedBytes);
-    }
-
-    _currentBufferCapacity = newCapacity;
-    _bindGroupDirty = true;
-
-    yinfo("GPU_ALLOC CardBufferManager: buffer grown to {} bytes ({:.2f} MB)",
-          newCapacity, newCapacity / (1024.0 * 1024.0));
-    return Ok();
+    return ss.str();
 }
 
 }  // namespace yetty

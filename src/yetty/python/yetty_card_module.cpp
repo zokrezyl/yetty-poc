@@ -16,6 +16,7 @@ namespace yetty::python {
 static thread_local CardManager* s_cardMgr = nullptr;
 static thread_local CardTextureManager* s_textureMgr = nullptr;
 static thread_local const GPUContext* s_gpuCtx = nullptr;
+static thread_local uint32_t s_slotIndex = 0;
 
 void setCardManager(CardManager* mgr) { s_cardMgr = mgr; }
 CardManager* getCardManager() { return s_cardMgr; }
@@ -25,6 +26,9 @@ CardTextureManager* getCardTextureManager() { return s_textureMgr; }
 
 void setGPUContext(const GPUContext* ctx) { s_gpuCtx = ctx; }
 const GPUContext* getGPUContext() { return s_gpuCtx; }
+
+void setMetadataSlotIndex(uint32_t idx) { s_slotIndex = idx; }
+uint32_t getMetadataSlotIndex() { return s_slotIndex; }
 
 //=============================================================================
 // Handle wrappers with buffer protocol
@@ -152,13 +156,13 @@ PYBIND11_EMBEDDED_MODULE(yetty_card, m) {
     }, py::arg("handle"), "Deallocate texture handle and free pixel buffer");
 
     // --- Buffer functions (renamed from storage) ---
-    m.def("allocate_buffer", [](uint32_t size) -> PyBufferHandle {
+    m.def("allocate_buffer", [](const std::string& scope, uint32_t size) -> PyBufferHandle {
         auto* mgr = s_cardMgr;
         if (!mgr) throw std::runtime_error("No CardManager set");
-        auto result = mgr->bufferManager()->allocateBuffer(size);
+        auto result = mgr->bufferManager()->allocateBuffer(s_slotIndex, scope, size);
         if (!result) throw std::runtime_error("allocateBuffer failed");
         return PyBufferHandle{*result};
-    }, py::arg("size"), "Allocate buffer (float data)");
+    }, py::arg("scope"), py::arg("size"), "Allocate buffer (float data)");
 
     m.def("mark_buffer_dirty", [](PyBufferHandle& h) {
         auto* mgr = s_cardMgr;
@@ -167,13 +171,13 @@ PYBIND11_EMBEDDED_MODULE(yetty_card, m) {
     }, py::arg("handle"), "Mark buffer as dirty for GPU upload");
 
     // Backward compat aliases
-    m.def("allocate_storage", [](uint32_t size) -> PyBufferHandle {
+    m.def("allocate_storage", [](const std::string& scope, uint32_t size) -> PyBufferHandle {
         auto* mgr = s_cardMgr;
         if (!mgr) throw std::runtime_error("No CardManager set");
-        auto result = mgr->bufferManager()->allocateBuffer(size);
+        auto result = mgr->bufferManager()->allocateBuffer(s_slotIndex, scope, size);
         if (!result) throw std::runtime_error("allocateBuffer failed");
         return PyBufferHandle{*result};
-    }, py::arg("size"), "Allocate storage buffer (deprecated, use allocate_buffer)");
+    }, py::arg("scope"), py::arg("size"), "Allocate storage buffer (deprecated, use allocate_buffer)");
 
     m.def("mark_storage_dirty", [](PyBufferHandle& h) {
         auto* mgr = s_cardMgr;

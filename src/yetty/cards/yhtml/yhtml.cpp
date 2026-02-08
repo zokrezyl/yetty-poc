@@ -78,6 +78,7 @@ YHtml::YHtml(const YettyContext& ctx,
     : Card(ctx.cardManager, ctx.gpu, x, y, widthCells, heightCells)
     , _argsStr(args)
     , _payloadStr(payload)
+    , _globalAllocator(ctx.globalAllocator)
     , _cacheDir(ctx.fontManager ? ctx.fontManager->getCacheDir() : "/tmp")
     , _cdbProvider(ctx.fontManager ? ctx.fontManager->getCdbProvider() : nullptr)
 {
@@ -120,8 +121,7 @@ Result<YHtml::Ptr> YHtml::createImpl(
 
 Result<void> YHtml::init() {
     // Create own atlas for HTML fonts (NOT the terminal monospace font)
-    base::ObjectFactoryContext factoryCtx;
-    auto atlasRes = MsdfAtlas::create(factoryCtx);
+    auto atlasRes = MsdfAtlas::create(_globalAllocator);
     if (!atlasRes) {
         return Err<void>("YHtml::init: failed to create atlas");
     }
@@ -275,7 +275,7 @@ Result<void> YHtml::allocateBuffers() {
     if (!_primitives.empty() || !_glyphs.empty()) {
         uint32_t derivedSize = computeDerivedSize();
         if (derivedSize > 0 && !_derivedStorage.isValid()) {
-            auto storageResult = _cardMgr->bufferManager()->allocateBuffer(derivedSize);
+            auto storageResult = _cardMgr->bufferManager()->allocateBuffer(metadataSlotIndex(), "derived", derivedSize);
             if (!storageResult) {
                 return Err<void>("YHtml::allocateBuffers: failed to allocate derived storage");
             }
@@ -819,14 +819,14 @@ Result<void> YHtml::rebuildAndUpload() {
     // Allocate or reallocate derived storage if needed
     if (derivedTotalSize > 0) {
         if (!_derivedStorage.isValid()) {
-            auto storageResult = _cardMgr->bufferManager()->allocateBuffer(derivedTotalSize);
+            auto storageResult = _cardMgr->bufferManager()->allocateBuffer(metadataSlotIndex(), "derived", derivedTotalSize);
             if (!storageResult) {
                 return Err<void>("YHtml::rebuild: failed to allocate derived storage");
             }
             _derivedStorage = *storageResult;
         } else if (derivedTotalSize > _derivedStorage.size) {
-            _cardMgr->bufferManager()->deallocateBuffer(_derivedStorage);
-            auto storageResult = _cardMgr->bufferManager()->allocateBuffer(derivedTotalSize);
+            _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "derived");
+            auto storageResult = _cardMgr->bufferManager()->allocateBuffer(metadataSlotIndex(), "derived", derivedTotalSize);
             if (!storageResult) {
                 _derivedStorage = StorageHandle::invalid();
                 return Err<void>("YHtml::rebuild: failed to reallocate derived storage");
@@ -958,7 +958,7 @@ void YHtml::declareBufferNeeds() {
     uint32_t lastDerivedSize = _derivedStorage.size;
 
     if (_derivedStorage.isValid()) {
-        _cardMgr->bufferManager()->deallocateBuffer(_derivedStorage);
+        _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "derived");
         _derivedStorage = StorageHandle::invalid();
     }
 
@@ -994,7 +994,7 @@ Result<void> YHtml::dispose() {
     deregisterFromEvents();
 
     if (_derivedStorage.isValid() && _cardMgr) {
-        if (auto res = _cardMgr->bufferManager()->deallocateBuffer(_derivedStorage); !res) {
+        if (auto res = _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "derived"); !res) {
             yerror("YHtml::dispose: deallocateBuffer failed: {}", error_msg(res));
         }
         _derivedStorage = StorageHandle::invalid();
@@ -1012,7 +1012,7 @@ Result<void> YHtml::dispose() {
 
 void YHtml::suspend() {
     if (_derivedStorage.isValid()) {
-        _cardMgr->bufferManager()->deallocateBuffer(_derivedStorage);
+        _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "derived");
         _derivedStorage = StorageHandle::invalid();
     }
 }

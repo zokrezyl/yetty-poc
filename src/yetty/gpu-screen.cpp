@@ -1,4 +1,5 @@
 #include "gpu-screen.h"
+#include <yetty/gpu-allocator.h>
 #include <yetty/card-manager.h>
 #include <yetty/card-factory.h>
 #include <yetty/card.h>
@@ -10,6 +11,7 @@
 #include <fstream>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <iomanip>
 #include <sstream>
 #include <string>
 #include <yetty/osc-command.h>
@@ -211,6 +213,7 @@ public:
   bool hasDamage() const override { return _hasDamage; }
   void clearDamage() override { _hasDamage = false; }
   void setOutputCallback(OutputCallback cb) override;
+  void setResizeCallback(ResizeCallback cb) override;
   Result<void> render(WGPURenderPassEncoder pass) override;
   void setViewport(float x, float y, float width, float height) override;
   uint32_t getCellWidth() const override { return static_cast<uint32_t>(_baseCellWidth * _zoomLevel); }
@@ -300,6 +303,7 @@ private:
   bool handleCardOSCSequence(const std::string &sequence, std::string *response,
                              uint32_t *linesToAdvance);
   void handleEffectOSC(int command, const std::string &payload);
+  std::string buildGpuStatsText();
 
   // Text selection
   void clearSelection();
@@ -416,6 +420,7 @@ private:
 
   // Callbacks
   OutputCallback _outputCallback;
+  ResizeCallback _resizeCallback;
   std::function<void(VTermProp, VTermValue *)> termPropCallback_;
   std::function<void()> bellCallback_;
   std::function<void(const char *, size_t)> vtermInputCallback_;
@@ -474,6 +479,7 @@ private:
 
   // Rendering - GPU resources (shared resources come from ShaderManager)
   YettyContext _ctx;
+  GpuAllocator::Ptr _allocator;
   // Per-instance resources only:
   WGPUBindGroup _bindGroup = nullptr;
   WGPUBuffer _uniformBuffer = nullptr;
@@ -625,12 +631,17 @@ Result<void> GPUScreenImpl::init() noexcept {
     _rasterFont->uploadToGpu();
   }
 
+  // Create per-screen GpuAllocator for tracking per-terminal GPU resources
+  if (_ctx.gpu.device) {
+    _allocator = std::make_shared<GpuAllocator>(_ctx.gpu.device);
+  }
+
   // Create per-screen CardManager (owns CardBufferManager, CardTextureManager, and bind group).
   // Starts with tiny placeholder buffers (~20KB for metadata pool + 4 bytes each
   // for buffer/atlas). Real buffers and atlas are allocated lazily
   // on first card creation, avoiding ~81MB GPU allocation when no cards are used.
-  if (_ctx.gpu.device && _ctx.gpu.sharedUniformBuffer) {
-    auto cmResult = CardManager::create(&_ctx.gpu, _ctx.gpu.sharedUniformBuffer, _ctx.gpu.sharedUniformSize);
+  if (_ctx.gpu.device && _ctx.gpu.sharedUniformBuffer && _allocator) {
+    auto cmResult = CardManager::create(&_ctx.gpu, _allocator, _ctx.gpu.sharedUniformBuffer, _ctx.gpu.sharedUniformSize);
     if (!cmResult) {
       ywarn("GPUScreen: failed to create CardManager: {}", error_msg(cmResult));
     } else {
@@ -789,6 +800,10 @@ void GPUScreenImpl::resize(uint32_t cols, uint32_t rows) {
   if (static_cast<int>(rows) != _rows || static_cast<int>(cols) != _cols) {
     // vterm_set_size triggers our onResize callback which handles everything
     vterm_set_size(_vterm, static_cast<int>(rows), static_cast<int>(cols));
+    // Notify Terminal so it can update PTY window size (TIOCSWINSZ)
+    if (_resizeCallback) {
+      _resizeCallback(cols, rows);
+    }
   }
 }
 
@@ -3170,8 +3185,8 @@ int GPUScreenImpl::onOSC(int command, VTermStringFragment frag, void *user) {
     return 0;
   }
 
-  // Accept yetty vendor commands: 666666 (cards), 666667 (pre-effect), 666668 (post-effect), 666669 (effect)
-  if (command != YETTY_OSC_VENDOR_ID && command != 666667 && command != 666668 && command != 666669) {
+  // Accept yetty vendor commands: 666666 (cards), 666667-669 (effects), 666670 (gpu stats)
+  if (command != YETTY_OSC_VENDOR_ID && command != 666667 && command != 666668 && command != 666669 && command != 666670) {
     yinfo(">>> onOSC: ignoring non-yetty command {}", command);
     return 0;
   }
@@ -3194,6 +3209,17 @@ int GPUScreenImpl::onOSC(int command, VTermStringFragment frag, void *user) {
     // Handle effect OSC commands directly (666667 = pre-effect, 666668 = post-effect, 666669 = effect)
     if (command == 666667 || command == 666668 || command == 666669) {
       self->handleEffectOSC(command, self->_oscBuffer);
+      self->_oscBuffer.clear();
+      self->_oscCommand = -1;
+      return 1;
+    }
+
+    // Handle GPU stats OSC command (666670)
+    if (command == 666670) {
+      std::string stats = self->buildGpuStatsText();
+      if (self->_outputCallback) {
+        self->_outputCallback(stats.c_str(), stats.size());
+      }
       self->_oscBuffer.clear();
       self->_oscCommand = -1;
       return 1;
@@ -3568,6 +3594,56 @@ void GPUScreenImpl::handleEffectOSC(int command, const std::string &payload) {
           _uniforms.effectParams[2], _uniforms.effectParams[3],
           _uniforms.effectParams[4], _uniforms.effectParams[5]);
   }
+}
+
+//=============================================================================
+// GPU Stats (OSC 666670)
+//=============================================================================
+
+std::string GPUScreenImpl::buildGpuStatsText() {
+  std::ostringstream ss;
+  ss << "\r\n=== GPU Memory Stats ===\r\n";
+
+  // Global allocator
+  if (_ctx.globalAllocator) {
+    ss << "\r\n[Global Allocator]\r\n";
+    ss << _ctx.globalAllocator->dumpAllocationsToString();
+  }
+
+  // Per-terminal allocator
+  if (_allocator) {
+    ss << "\r\n[Terminal Allocator]\r\n";
+    ss << _allocator->dumpAllocationsToString();
+  }
+
+  // CardBufferManager sub-allocations
+  if (_cardManager && _cardManager->bufferManager()) {
+    auto stats = _cardManager->bufferManager()->getStats();
+    ss << "\r\n[Card Buffer]\r\n";
+    ss << "  used=" << stats.bufferUsed
+       << " capacity=" << stats.bufferCapacity
+       << " pending_uploads=" << stats.pendingBufferUploads << "\r\n";
+    ss << _cardManager->bufferManager()->dumpSubAllocationsToString();
+  }
+
+  // CardTextureManager stats
+  if (_cardManager && _cardManager->textureManager()) {
+    auto stats = _cardManager->textureManager()->getStats();
+    ss << "\r\n[Card Texture Atlas]\r\n";
+    ss << "  textures=" << stats.textureCount
+       << " atlas=" << stats.atlasWidth << "x" << stats.atlasHeight
+       << " used_pixels=" << stats.usedPixels << "\r\n";
+  }
+
+  // Summary
+  uint64_t globalBytes = _ctx.globalAllocator ? _ctx.globalAllocator->totalAllocatedBytes() : 0;
+  uint64_t terminalBytes = _allocator ? _allocator->totalAllocatedBytes() : 0;
+  uint64_t totalBytes = globalBytes + terminalBytes;
+  ss << "\r\n[Total] " << totalBytes << " bytes ("
+     << std::fixed << std::setprecision(2) << (totalBytes / (1024.0 * 1024.0))
+     << " MB)\r\n";
+
+  return ss.str();
 }
 
 //=============================================================================
@@ -4052,6 +4128,10 @@ void GPUScreenImpl::setOutputCallback(OutputCallback cb) {
         },
         this);
   }
+}
+
+void GPUScreenImpl::setResizeCallback(ResizeCallback cb) {
+  _resizeCallback = std::move(cb);
 }
 
 void GPUScreenImpl::registerForFocus() {
@@ -4580,7 +4660,7 @@ Result<void> GPUScreenImpl::initPipeline() {
   uniformDesc.label = WGPU_STR("grid uniforms");
   uniformDesc.size = sizeof(Uniforms);
   uniformDesc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
-  _uniformBuffer = wgpuDeviceCreateBuffer(device, &uniformDesc);
+  _uniformBuffer = _allocator->createBuffer(uniformDesc);
   if (!_uniformBuffer) {
     return Err<void>("Failed to create uniform buffer");
   }
@@ -4713,7 +4793,7 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
   if (_cols != _textureCols || totalRows != _textureRows || !_cellBuffer ||
       _cellBufferSize < requiredSize) {
     if (_cellBuffer) {
-      wgpuBufferRelease(_cellBuffer);
+      _allocator->releaseBuffer(_cellBuffer);
       _cellBuffer = nullptr;
     }
 
@@ -4721,7 +4801,7 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
     bufferDesc.label = WGPU_STR("cell buffer");
     bufferDesc.size = requiredSize;
     bufferDesc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
-    _cellBuffer = wgpuDeviceCreateBuffer(device, &bufferDesc);
+    _cellBuffer = _allocator->createBuffer(bufferDesc);
     if (!_cellBuffer) {
       return Err<void>("Failed to create cell buffer");
     }

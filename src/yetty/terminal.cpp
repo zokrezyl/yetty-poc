@@ -37,6 +37,9 @@ public:
         _gpuScreen->setOutputCallback([this](const char* data, size_t len) {
             writeToPty(data, len);
         });
+        _gpuScreen->setResizeCallback([this](uint32_t cols, uint32_t rows) {
+            resizePty(cols, rows);
+        });
 
 #if !YETTY_WEB && !defined(__ANDROID__) && !defined(_WIN32)
         if (auto res = startShell(); !res) {
@@ -248,16 +251,19 @@ private:
             return;
         }
 
-        char buf[4096];
+        static constexpr size_t PTY_READ_MAX = 40960; // 40KB
+        char buf[PTY_READ_MAX];
+        size_t totalRead = 0;
         ssize_t n;
 
-        while ((n = read(_ptyMaster, buf, sizeof(buf))) > 0) {
-            ydebug("Terminal::readPty: read {} bytes", n);
-            if (_gpuScreen) {
-                _gpuScreen->write(buf, static_cast<size_t>(n));
-            }
+        while ((n = read(_ptyMaster, buf + totalRead, PTY_READ_MAX - totalRead)) > 0) {
+            totalRead += n;
+            if (totalRead >= PTY_READ_MAX) break;
         }
-        ydebug("Terminal::readPty: done reading");
+
+        if (totalRead > 0 && _gpuScreen) {
+            _gpuScreen->write(buf, totalRead);
+        }
     }
 
     int _ptyMaster = -1;

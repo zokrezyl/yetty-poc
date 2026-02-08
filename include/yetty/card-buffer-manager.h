@@ -2,9 +2,11 @@
 
 #include <yetty/result.hpp>
 #include <yetty/gpu-context.h>
+#include <yetty/gpu-allocator.h>
 #include <webgpu/webgpu.h>
 #include <cstdint>
 #include <memory>
+#include <string>
 
 namespace yetty {
 
@@ -28,24 +30,20 @@ struct BufferHandle {
     static BufferHandle invalid() { return {nullptr, 0, 0}; }
 };
 
-// Configuration for CardBufferManager (buffer only, no metadata)
-struct CardBufferConfig {
-    uint32_t bufferCapacity = 1 * 1024 * 1024;  // 1MB for buffer (array<f32>) - plot/draw
-};
-
 /**
  * CardBufferManager manages the GPU linear storage buffer (binding 2).
  *
  * Buffer cards (plot, hdraw, ydraw, kdraw, jdraw) use this for float arrays.
  * Metadata is managed by CardManager, not here.
+ *
+ * Sub-allocations are tracked by (slotIndex, scope) for per-card visibility.
  */
 class CardBufferManager {
 public:
-    using Config = CardBufferConfig;
     using Ptr = std::shared_ptr<CardBufferManager>;
 
     static Result<Ptr> create(GPUContext* gpuContext,
-                              Config config = {}) noexcept;
+                              GpuAllocator::Ptr allocator) noexcept;
 
     virtual ~CardBufferManager() = default;
 
@@ -60,10 +58,16 @@ public:
     virtual Result<void> commitReservations() = 0;
 
     // =========================================================================
-    // Buffer operations (linear data: floats for plot/draw cards) - binding 2
+    // Buffer operations — keyed by (slotIndex, scope) for tracking
     // =========================================================================
-    virtual Result<BufferHandle> allocateBuffer(uint32_t size) = 0;
-    virtual Result<void> deallocateBuffer(BufferHandle handle) = 0;
+    // slotIndex = card's metadataSlotIndex() (unique per card)
+    // scope = logical name (e.g. "prims", "derived", "storage", "data")
+    virtual Result<BufferHandle> allocateBuffer(uint32_t slotIndex,
+                                                const std::string& scope,
+                                                uint32_t size) = 0;
+    virtual Result<void> deallocateBuffer(uint32_t slotIndex,
+                                          const std::string& scope) = 0;
+
     virtual Result<void> writeBuffer(BufferHandle handle, const void* data, uint32_t size) = 0;
     virtual Result<void> writeBufferAt(BufferHandle handle, uint32_t offset, const void* data, uint32_t size) = 0;
 
@@ -91,6 +95,12 @@ public:
         uint32_t pendingBufferUploads;
     };
     virtual Stats getStats() const = 0;
+
+    // Log per-card sub-allocation breakdown
+    virtual void dumpSubAllocations() const = 0;
+
+    // Return per-card sub-allocation breakdown as text
+    virtual std::string dumpSubAllocationsToString() const = 0;
 
 protected:
     CardBufferManager() = default;

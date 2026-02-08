@@ -643,6 +643,7 @@ elseif(NOT EMSCRIPTEN)
         # src/yetty/widget-factory.cpp  # TODO: refactor later
         src/yetty/osc-command.cpp
         #src/yetty/custom-glyph-plugin.cpp
+        src/yetty/gpu-allocator.cpp
         src/yetty/card-manager.cpp
         src/yetty/card-buffer-manager.cpp
         src/yetty/card-texture-manager.cpp

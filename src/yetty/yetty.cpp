@@ -1,5 +1,6 @@
 #include <yetty/yetty.h>
 #include <yetty/gpu-context.h>
+#include <yetty/gpu-allocator.h>
 #include <yetty/yetty-context.h>
 #include <yetty/terminal-view.h>
 #include <yetty/workspace.h>
@@ -86,6 +87,7 @@ private:
         uint32_t lastChar;
         float lastCharTime;
     };
+    GpuAllocator::Ptr _globalAllocator;
     WGPUBuffer _sharedUniformBuffer = nullptr;
     WGPUBindGroupLayout _sharedBindGroupLayout = nullptr;
     WGPUBindGroup _sharedBindGroup = nullptr;
@@ -156,8 +158,8 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     if (auto res = initWebGPU(); !res) return res;
     if (auto res = initSharedResources(); !res) return res;
 
-    // Create ShaderManager with GPUContext
-    auto shaderMgrResult = ShaderManager::create(_gpuContext);
+    // Create ShaderManager with GPUContext and allocator
+    auto shaderMgrResult = ShaderManager::create(_gpuContext, _globalAllocator);
     if (!shaderMgrResult) {
         return Err<void>("Failed to create ShaderManager", shaderMgrResult);
     }
@@ -174,7 +176,7 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     }
 
     // Create FontManager with GPUContext, ShaderManager, and CDB provider
-    auto fontMgrResult = FontManager::create(_gpuContext, shaderMgr, cdbProvider);
+    auto fontMgrResult = FontManager::create(_gpuContext, _globalAllocator, shaderMgr, cdbProvider);
     if (!fontMgrResult) {
         return Err<void>("Failed to create FontManager", fontMgrResult);
     }
@@ -182,6 +184,7 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
 
     // Build YettyContext
     _yettyContext.gpu = _gpuContext;
+    _yettyContext.globalAllocator = _globalAllocator;
     _yettyContext.shaderManager = shaderMgr;
     _yettyContext.fontManager = fontMgr;
 
@@ -490,12 +493,15 @@ Result<void> YettyImpl::initSharedResources() noexcept {
     _gpuContext.queue = _queue;
     _gpuContext.surfaceFormat = _surfaceFormat;
 
+    // Create global GPU allocator for shared resources (fonts, shaders, etc.)
+    _globalAllocator = std::make_shared<GpuAllocator>(_device);
+
     // Create shared uniform buffer FIRST (needed by CardBufferManager)
     WGPUBufferDescriptor bufDesc = {};
     bufDesc.label = WGPU_STR("Shared Uniforms");
     bufDesc.size = sizeof(SharedUniforms);
     bufDesc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
-    _sharedUniformBuffer = wgpuDeviceCreateBuffer(_device, &bufDesc);
+    _sharedUniformBuffer = _globalAllocator->createBuffer(bufDesc);
     _gpuContext.sharedUniformBuffer = _sharedUniformBuffer;
     _gpuContext.sharedUniformSize = sizeof(SharedUniforms);
 
@@ -542,7 +548,7 @@ Result<void> YettyImpl::initSharedResources() noexcept {
     dummyBufDesc.label = WGPU_STR("dummy storage");
     dummyBufDesc.size = 4;
     dummyBufDesc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
-    WGPUBuffer dummyBuffer = wgpuDeviceCreateBuffer(_device, &dummyBufDesc);
+    WGPUBuffer dummyBuffer = _globalAllocator->createBuffer(dummyBufDesc);
 
     WGPUTextureDescriptor dummyTexDesc = {};
     dummyTexDesc.label = WGPU_STR("dummy texture");
@@ -552,7 +558,7 @@ Result<void> YettyImpl::initSharedResources() noexcept {
     dummyTexDesc.dimension = WGPUTextureDimension_2D;
     dummyTexDesc.mipLevelCount = 1;
     dummyTexDesc.sampleCount = 1;
-    WGPUTexture dummyTexture = wgpuDeviceCreateTexture(_device, &dummyTexDesc);
+    WGPUTexture dummyTexture = _globalAllocator->createTexture(dummyTexDesc);
 
     WGPUTextureViewDescriptor dummyViewDesc = {};
     dummyViewDesc.format = WGPUTextureFormat_RGBA8Unorm;
@@ -806,7 +812,7 @@ Result<void> YettyImpl::onShutdown() {
 
     if (_sharedBindGroup) wgpuBindGroupRelease(_sharedBindGroup);
     if (_sharedBindGroupLayout) wgpuBindGroupLayoutRelease(_sharedBindGroupLayout);
-    if (_sharedUniformBuffer) wgpuBufferRelease(_sharedUniformBuffer);
+    if (_sharedUniformBuffer && _globalAllocator) _globalAllocator->releaseBuffer(_sharedUniformBuffer);
     // Surface must be released before device — swapchain references the device
     if (_surface) wgpuSurfaceRelease(_surface);
     if (_device) wgpuDeviceRelease(_device);

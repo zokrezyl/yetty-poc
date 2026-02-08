@@ -482,7 +482,7 @@ Result<void> YText::allocateBuffers() {
     }
 
     // Allocate storage
-    auto storageResult = _cardMgr->bufferManager()->allocateBuffer(totalBytes);
+    auto storageResult = _cardMgr->bufferManager()->allocateBuffer(metadataSlotIndex(), "data", totalBytes);
     if (!storageResult) {
         return Err<void>("YText::allocateBuffers: failed to allocate storage");
     }
@@ -596,7 +596,7 @@ Result<void> YText::render(float time) {
 
 void YText::suspend() {
     if (_dataStorage.isValid()) {
-        _cardMgr->bufferManager()->deallocateBuffer(_dataStorage);
+        _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "data");
         _dataStorage = StorageHandle::invalid();
     }
     _dirty = true;
@@ -604,7 +604,7 @@ void YText::suspend() {
 
 Result<void> YText::dispose() {
     if (_dataStorage.isValid() && _cardMgr) {
-        _cardMgr->bufferManager()->deallocateBuffer(_dataStorage);
+        _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "data");
         _dataStorage = StorageHandle::invalid();
     }
 

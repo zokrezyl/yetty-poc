@@ -34,9 +34,11 @@ static_assert(sizeof(RasterGlyphUV) == 8, "RasterGlyphUV must be 8 bytes");
 
 class RasterFontImpl : public RasterFont {
 public:
-    RasterFontImpl(const GPUContext& gpu, const std::string& ttfPath,
+    RasterFontImpl(const GPUContext& gpu, GpuAllocator::Ptr allocator,
+                   const std::string& ttfPath,
                    uint32_t cellWidth, uint32_t cellHeight)
-        : _gpu(gpu), _ttfPath(ttfPath), _cellWidth(cellWidth), _cellHeight(cellHeight) {}
+        : _gpu(gpu), _allocator(std::move(allocator))
+        , _ttfPath(ttfPath), _cellWidth(cellWidth), _cellHeight(cellHeight) {}
 
     ~RasterFontImpl() override {
         cleanup();
@@ -422,14 +424,10 @@ private:
         texDesc.format = WGPUTextureFormat_R8Unorm;
         texDesc.usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst;
 
-        _texture = wgpuDeviceCreateTexture(device, &texDesc);
+        _texture = _allocator->createTexture(texDesc);
         if (!_texture) {
             return Err<void>("Failed to create RasterFont texture");
         }
-
-        size_t texBytes = static_cast<size_t>(_atlasSize) * _atlasSize;
-        yinfo("GPU_ALLOC RasterFont: texture={}x{} R8 = {} bytes ({:.2f} KB)",
-              _atlasSize, _atlasSize, texBytes, texBytes / 1024.0);
 
         // Create texture view
         WGPUTextureViewDescriptor viewDesc = {};
@@ -468,14 +466,10 @@ private:
         bufDesc.size = maxCodepoint * sizeof(RasterGlyphUV);
         bufDesc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
 
-        _metadataBuffer = wgpuDeviceCreateBuffer(device, &bufDesc);
+        _metadataBuffer = _allocator->createBuffer(bufDesc);
         if (!_metadataBuffer) {
             return Err<void>("Failed to create RasterFont metadata buffer");
         }
-
-        size_t metaBytes = maxCodepoint * sizeof(RasterGlyphUV);
-        yinfo("GPU_ALLOC RasterFont: metadataBuffer={} bytes ({:.2f} KB) for codepoints up to U+{:04X}",
-              metaBytes, metaBytes / 1024.0, maxCodepoint);
 
         _gpuResourcesCreated = true;
         return Ok();
@@ -487,8 +481,7 @@ private:
 
     void cleanup() {
         if (_metadataBuffer) {
-            wgpuBufferDestroy(_metadataBuffer);
-            wgpuBufferRelease(_metadataBuffer);
+            _allocator->releaseBuffer(_metadataBuffer);
             _metadataBuffer = nullptr;
         }
         if (_sampler) {
@@ -500,8 +493,7 @@ private:
             _textureView = nullptr;
         }
         if (_texture) {
-            wgpuTextureDestroy(_texture);
-            wgpuTextureRelease(_texture);
+            _allocator->releaseTexture(_texture);
             _texture = nullptr;
         }
         if (_ftFace) {
@@ -519,6 +511,7 @@ private:
     //=========================================================================
 
     const GPUContext& _gpu;
+    GpuAllocator::Ptr _allocator;
     std::string _ttfPath;
     uint32_t _cellWidth;
     uint32_t _cellHeight;
@@ -556,10 +549,11 @@ private:
 
 Result<RasterFont::Ptr> RasterFont::createImpl(ContextType&,
                                                const GPUContext& gpu,
+                                               GpuAllocator::Ptr allocator,
                                                const std::string& ttfPath,
                                                uint32_t cellWidth,
                                                uint32_t cellHeight) {
-    auto font = Ptr(new RasterFontImpl(gpu, ttfPath, cellWidth, cellHeight));
+    auto font = Ptr(new RasterFontImpl(gpu, std::move(allocator), ttfPath, cellWidth, cellHeight));
     if (auto res = static_cast<RasterFontImpl*>(font.get())->init(); !res) {
         return Err<Ptr>("Failed to initialize RasterFont", res);
     }

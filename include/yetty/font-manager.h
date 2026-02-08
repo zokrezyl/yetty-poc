@@ -6,6 +6,7 @@
 #include <yetty/vector-sdf-font.h>
 #include <yetty/vector-coverage-font.h>
 #include <yetty/raster-font.h>
+#include <yetty/gpu-allocator.h>
 #include <yetty/gpu-context.h>
 #include <yetty/shader-manager.h>
 #include <yetty/msdf-cdb-provider.h>
@@ -31,6 +32,7 @@ public:
     // Factory - creates FontManagerImpl
     static Result<Ptr> createImpl(ContextType& ctx,
                                   const GPUContext& gpu,
+                                  GpuAllocator::Ptr allocator,
                                   ShaderManager::Ptr shaderMgr,
                                   MsdfCdbProvider::Ptr cdbProvider = nullptr) noexcept;
 

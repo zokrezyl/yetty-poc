@@ -2,6 +2,7 @@
 
 #include <yetty/msdf-glyph-data.h>
 #include <yetty/msdf-cdb-provider.h>
+#include <yetty/gpu-allocator.h>
 #include <yetty/base/base.h>
 #include <webgpu/webgpu.h>
 
@@ -26,7 +27,7 @@ public:
     using Ptr = std::shared_ptr<MsdfAtlas>;
     using base::ObjectFactory<MsdfAtlas>::create;
 
-    static Result<Ptr> createImpl(ContextType& ctx);
+    static Result<Ptr> createImpl(ContextType& ctx, GpuAllocator::Ptr allocator);
 
     ~MsdfAtlas() override = default;
 

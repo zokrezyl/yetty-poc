@@ -267,7 +267,7 @@ public:
         }
 
         if (_derivedStorage.isValid() && _cardMgr) {
-            if (auto res = _cardMgr->bufferManager()->deallocateBuffer(_derivedStorage); !res) {
+            if (auto res = _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "derived"); !res) {
                 yerror("KDraw::dispose: deallocateBuffer (derived) failed: {}", error_msg(res));
             }
             _derivedStorage = StorageHandle::invalid();
@@ -276,7 +276,7 @@ public:
         }
 
         if (_primStorage.isValid() && _cardMgr) {
-            if (auto res = _cardMgr->bufferManager()->deallocateBuffer(_primStorage); !res) {
+            if (auto res = _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "prims"); !res) {
                 yerror("KDraw::dispose: deallocateBuffer (prims) failed: {}", error_msg(res));
             }
             _primStorage = StorageHandle::invalid();
@@ -307,7 +307,7 @@ public:
 
         // Deallocate derived storage (tile lists — will be rebuilt)
         if (_derivedStorage.isValid()) {
-            _cardMgr->bufferManager()->deallocateBuffer(_derivedStorage);
+            _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "derived");
             _derivedStorage = StorageHandle::invalid();
             _tileLists = nullptr;
             _tileListsSize = 0;
@@ -315,7 +315,7 @@ public:
 
         // Deallocate prim storage
         if (_primStorage.isValid()) {
-            _cardMgr->bufferManager()->deallocateBuffer(_primStorage);
+            _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "prims");
             _primStorage = StorageHandle::invalid();
             _primitives = nullptr;
             _primCount = 0;
@@ -345,13 +345,13 @@ public:
             std::memcpy(_primStaging.data(), _primitives, _primCount * sizeof(SDFPrimitive));
         }
         if (_derivedStorage.isValid()) {
-            _cardMgr->bufferManager()->deallocateBuffer(_derivedStorage);
+            _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "derived");
             _derivedStorage = StorageHandle::invalid();
             _tileLists = nullptr;
             _tileListsSize = 0;
         }
         if (_primStorage.isValid()) {
-            _cardMgr->bufferManager()->deallocateBuffer(_primStorage);
+            _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "prims");
             _primStorage = StorageHandle::invalid();
             _primitives = nullptr;
             _primCount = 0;
@@ -387,7 +387,7 @@ public:
             // Allocate derived storage (tile lists + glyphs)
             uint32_t derivedSize = computeDerivedSize();
             if (derivedSize > 0) {
-                auto storageResult = _cardMgr->bufferManager()->allocateBuffer(derivedSize);
+                auto storageResult = _cardMgr->bufferManager()->allocateBuffer(metadataSlotIndex(), "derived", derivedSize);
                 if (!storageResult) {
                     return Err<void>("KDraw::allocateBuffers: failed to allocate derived storage");
                 }
@@ -648,7 +648,7 @@ private:
         uint32_t newCap = std::max(required, _primCapacity == 0 ? 64u : _primCapacity * 2);
         uint32_t newSize = newCap * sizeof(SDFPrimitive);
 
-        auto newStorage = _cardMgr->bufferManager()->allocateBuffer(newSize);
+        auto newStorage = _cardMgr->bufferManager()->allocateBuffer(metadataSlotIndex(), "prims", newSize);
         if (!newStorage) {
             return Err<void>("KDraw: failed to allocate prim storage");
         }
@@ -657,7 +657,7 @@ private:
             std::memcpy(newStorage->data, _primStorage.data, _primCount * sizeof(SDFPrimitive));
         }
         if (_primStorage.isValid()) {
-            _cardMgr->bufferManager()->deallocateBuffer(_primStorage);
+            _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "prims");
         }
 
         _primStorage = *newStorage;

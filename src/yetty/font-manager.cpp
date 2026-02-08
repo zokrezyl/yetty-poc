@@ -21,12 +21,14 @@ public:
   FontManagerImpl() = default;
   ~FontManagerImpl() override = default;
 
-  Result<void> init(const GPUContext &gpu, ShaderManager::Ptr shaderMgr,
+  Result<void> init(const GPUContext &gpu, GpuAllocator::Ptr allocator,
+                    ShaderManager::Ptr shaderMgr,
                     MsdfCdbProvider::Ptr cdbProvider) noexcept {
     if (_initialized)
       return Ok();
 
     _gpu = gpu;
+    _allocator = std::move(allocator);
     _shaderMgr = shaderMgr;
     _cdbProvider = cdbProvider;
 
@@ -107,7 +109,7 @@ public:
       }
     }
 
-    auto result = MsMsdfFont::create(cdbBasePath);
+    auto result = MsMsdfFont::create(cdbBasePath, _allocator);
     if (!result) {
       return Err<MsMsdfFont::Ptr>("Failed to load MsMsdfFont: " + fontName,
                                   result);
@@ -176,7 +178,7 @@ public:
       return Ok(it->second);
     }
 
-    auto result = VectorSdfFont::create(_gpu, ttfPath);
+    auto result = VectorSdfFont::create(_gpu, _allocator, ttfPath);
     if (!result) {
       return Err<VectorSdfFont::Ptr>("Failed to create VectorSdfFont: " + ttfPath, result);
     }
@@ -210,7 +212,7 @@ public:
       return Ok(it->second);
     }
 
-    auto result = VectorCoverageFont::create(_gpu, ttfPath);
+    auto result = VectorCoverageFont::create(_gpu, _allocator, ttfPath);
     if (!result) {
       return Err<VectorCoverageFont::Ptr>("Failed to create VectorCoverageFont: " + ttfPath, result);
     }
@@ -247,7 +249,7 @@ public:
       return Ok(it->second);
     }
 
-    auto result = RasterFont::create(_gpu, ttfPath, cellWidth, cellHeight);
+    auto result = RasterFont::create(_gpu, _allocator, ttfPath, cellWidth, cellHeight);
     if (!result) {
       return Err<RasterFont::Ptr>("Failed to create RasterFont: " + ttfPath, result);
     }
@@ -311,7 +313,7 @@ private:
   }
 
   Result<void> initBmFont() noexcept {
-    auto bmFontResult = BmFont::create(_gpu.device);
+    auto bmFontResult = BmFont::create(_gpu.device, _allocator);
     if (!bmFontResult) {
       return Err<void>("Failed to create BmFont", bmFontResult);
     }
@@ -364,7 +366,7 @@ private:
       return Err<void>("Default TTF not found: " + ttfPath);
     }
 
-    auto result = VectorSdfFont::create(_gpu, ttfPath);
+    auto result = VectorSdfFont::create(_gpu, _allocator, ttfPath);
     if (!result) {
       return Err<void>("Failed to create VectorSdfFont", result);
     }
@@ -394,7 +396,7 @@ private:
     }
 
     // Create with placeholder cell size - gpu-screen will call setCellSize() with actual size
-    auto result = RasterFont::create(_gpu, ttfPath, 16, 32);
+    auto result = RasterFont::create(_gpu, _allocator, ttfPath, 16, 32);
     if (!result) {
       return Err<void>("Failed to create RasterFont", result);
     }
@@ -440,6 +442,7 @@ private:
   }
 
   GPUContext _gpu = {};
+  GpuAllocator::Ptr _allocator;
   ShaderManager::Ptr _shaderMgr;
   MsdfCdbProvider::Ptr _cdbProvider;
   std::string _cacheDir;
@@ -460,11 +463,12 @@ private:
 // Factory implementation
 Result<FontManager::Ptr>
 FontManager::createImpl(ContextType &, const GPUContext &gpu,
+                        GpuAllocator::Ptr allocator,
                         ShaderManager::Ptr shaderMgr,
                         MsdfCdbProvider::Ptr cdbProvider) noexcept {
   auto impl = Ptr(new FontManagerImpl());
   if (auto res = static_cast<FontManagerImpl *>(impl.get())
-                     ->init(gpu, shaderMgr, cdbProvider);
+                     ->init(gpu, std::move(allocator), shaderMgr, cdbProvider);
       !res) {
     return Err<Ptr>("FontManager init failed", res);
   }

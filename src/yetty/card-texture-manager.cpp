@@ -1,12 +1,11 @@
 #include <yetty/card-texture-manager.h>
+#include <yetty/gpu-allocator.h>
+#include <yetty/wgpu-compat.h>
 #include <ytrace/ytrace.hpp>
 #include <algorithm>
 #include <cstring>
 #include <vector>
 #include <unordered_map>
-
-// WebGPU string helper
-#define WGPU_STR(s) WGPUStringView{.data = s, .length = WGPU_STRLEN}
 
 namespace yetty {
 
@@ -30,7 +29,7 @@ struct TextureHandleData {
 
 class CardTextureManagerImpl : public CardTextureManager {
 public:
-    CardTextureManagerImpl(GPUContext* gpuContext, Config config) noexcept;
+    CardTextureManagerImpl(GPUContext* gpuContext, GpuAllocator::Ptr allocator, Config config) noexcept;
     ~CardTextureManagerImpl() override;
 
     Result<void> init() noexcept;
@@ -60,6 +59,7 @@ private:
 
     GPUContext* _gpuContext;
     WGPUDevice _device;
+    GpuAllocator::Ptr _allocator;
     Config _config;
 
     // Atlas GPU resources
@@ -79,8 +79,10 @@ private:
 // Factory
 // =============================================================================
 
-Result<CardTextureManager::Ptr> CardTextureManager::create(GPUContext* gpuContext, Config config) noexcept {
-    auto mgr = std::make_shared<CardTextureManagerImpl>(gpuContext, config);
+Result<CardTextureManager::Ptr> CardTextureManager::create(GPUContext* gpuContext,
+                                                              GpuAllocator::Ptr allocator,
+                                                              Config config) noexcept {
+    auto mgr = std::make_shared<CardTextureManagerImpl>(gpuContext, std::move(allocator), config);
     if (auto res = mgr->init(); !res) {
         return Err<Ptr>("Failed to initialize CardTextureManager", res);
     }
@@ -91,9 +93,11 @@ Result<CardTextureManager::Ptr> CardTextureManager::create(GPUContext* gpuContex
 // Implementation
 // =============================================================================
 
-CardTextureManagerImpl::CardTextureManagerImpl(GPUContext* gpuContext, Config config) noexcept
+CardTextureManagerImpl::CardTextureManagerImpl(GPUContext* gpuContext, GpuAllocator::Ptr allocator,
+                                                 Config config) noexcept
     : _gpuContext(gpuContext)
     , _device(gpuContext->device)
+    , _allocator(std::move(allocator))
     , _config(config)
     , _currentAtlasSize(config.initialAtlasSize)
     , _maxAtlasSize(config.maxAtlasSize) {
@@ -107,7 +111,7 @@ Result<void> CardTextureManagerImpl::init() noexcept {
 CardTextureManagerImpl::~CardTextureManagerImpl() {
     if (_atlasSampler) wgpuSamplerRelease(_atlasSampler);
     if (_atlasTextureView) wgpuTextureViewRelease(_atlasTextureView);
-    if (_atlasTexture) wgpuTextureRelease(_atlasTexture);
+    if (_atlasTexture) _allocator->releaseTexture(_atlasTexture);
 }
 
 // =============================================================================
@@ -315,18 +319,13 @@ Result<void> CardTextureManagerImpl::createAtlasTexture() {
         _atlasTextureView = nullptr;
     }
     if (_atlasTexture) {
-        wgpuTextureDestroy(_atlasTexture);
-        wgpuTextureRelease(_atlasTexture);
+        _allocator->releaseTexture(_atlasTexture);
         _atlasTexture = nullptr;
     }
     if (_atlasSampler) {
         wgpuSamplerRelease(_atlasSampler);
         _atlasSampler = nullptr;
     }
-
-    size_t atlasBytes = static_cast<size_t>(_currentAtlasSize) * _currentAtlasSize * 4;
-    yinfo("GPU_ALLOC CardTextureManager: atlasTexture={}x{} RGBA8 = {} bytes ({:.2f} MB)",
-          _currentAtlasSize, _currentAtlasSize, atlasBytes, atlasBytes / (1024.0 * 1024.0));
 
     WGPUTextureDescriptor texDesc = {};
     texDesc.label = WGPU_STR("ImageAtlas");
@@ -340,7 +339,7 @@ Result<void> CardTextureManagerImpl::createAtlasTexture() {
     texDesc.usage = WGPUTextureUsage_TextureBinding |
                     WGPUTextureUsage_CopyDst;
 
-    _atlasTexture = wgpuDeviceCreateTexture(_device, &texDesc);
+    _atlasTexture = _allocator->createTexture(texDesc);
     if (!_atlasTexture) {
         return Err<void>("Failed to create atlas texture");
     }
