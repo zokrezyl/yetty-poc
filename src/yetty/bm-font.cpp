@@ -1,4 +1,5 @@
 #include <yetty/bm-font.h>
+#include <yetty/gpu-allocator.h>
 #include <yetty/wgpu-compat.h>
 #include <ytrace/ytrace.hpp>
 
@@ -78,25 +79,28 @@ namespace yetty {
 // =============================================================================
 #if YETTY_BM_FONT_STUB
 
-Result<BmFont::Ptr> BmFont::create(WGPUDevice device, const std::string& fontPath,
+Result<BmFont::Ptr> BmFont::create(WGPUDevice device, GpuAllocator::Ptr allocator,
+                                   const std::string& fontPath,
                                    uint32_t glyphSize) noexcept {
-    auto font = Ptr(new BmFont(device, fontPath, glyphSize));
+    auto font = Ptr(new BmFont(device, std::move(allocator), fontPath, glyphSize));
     if (auto res = font->init(); !res) {
         return Err<Ptr>("Failed to initialize BmFont", res);
     }
     return Ok(std::move(font));
 }
 
-BmFont::BmFont(WGPUDevice device, const std::string& fontPath, uint32_t glyphSize) noexcept
-    : _device(device), _fontPath(fontPath), _glyphSize(glyphSize) {
+BmFont::BmFont(WGPUDevice device, GpuAllocator::Ptr allocator, const std::string& fontPath,
+               uint32_t glyphSize) noexcept
+    : _device(device), _allocator(std::move(allocator)), _fontPath(fontPath),
+      _glyphSize(glyphSize) {
     _glyphsPerRow = _atlasSize / _glyphSize;
 }
 
 BmFont::~BmFont() {
-    if (_metadataBuffer) wgpuBufferRelease(_metadataBuffer);
+    if (_metadataBuffer) _allocator->releaseBuffer(_metadataBuffer);
     if (_sampler) wgpuSamplerRelease(_sampler);
     if (_textureView) wgpuTextureViewRelease(_textureView);
-    if (_texture) wgpuTextureRelease(_texture);
+    if (_texture) _allocator->releaseTexture(_texture);
 }
 
 Result<void> BmFont::init() {
@@ -161,7 +165,7 @@ Result<void> BmFont::createGPUResources() noexcept {
     texDesc.format = WGPUTextureFormat_RGBA8Unorm;
     texDesc.usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst;
 
-    _texture = wgpuDeviceCreateTexture(_device, &texDesc);
+    _texture = _allocator->createTexture(texDesc);
     if (!_texture) {
         return Err<void>("Failed to create BmFont texture");
     }
@@ -198,7 +202,7 @@ Result<void> BmFont::createGPUResources() noexcept {
     bufDesc.size = maxGlyphs * sizeof(BitmapGlyphMetadata);
     bufDesc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
 
-    _metadataBuffer = wgpuDeviceCreateBuffer(_device, &bufDesc);
+    _metadataBuffer = _allocator->createBuffer(bufDesc);
     if (!_metadataBuffer) {
         return Err<void>("Failed to create BmFont metadata buffer");
     }
@@ -218,25 +222,28 @@ Result<void> BmFont::renderGlyph(uint32_t, int, int) noexcept {
 // =============================================================================
 #else // !YETTY_BM_FONT_STUB
 
-Result<BmFont::Ptr> BmFont::create(WGPUDevice device, const std::string& fontPath,
+Result<BmFont::Ptr> BmFont::create(WGPUDevice device, GpuAllocator::Ptr allocator,
+                                   const std::string& fontPath,
                                    uint32_t glyphSize) noexcept {
-    auto font = Ptr(new BmFont(device, fontPath, glyphSize));
+    auto font = Ptr(new BmFont(device, std::move(allocator), fontPath, glyphSize));
     if (auto res = font->init(); !res) {
         return Err<Ptr>("Failed to initialize BmFont", res);
     }
     return Ok(std::move(font));
 }
 
-BmFont::BmFont(WGPUDevice device, const std::string& fontPath, uint32_t glyphSize) noexcept
-    : _device(device), _fontPath(fontPath), _glyphSize(glyphSize) {
+BmFont::BmFont(WGPUDevice device, GpuAllocator::Ptr allocator, const std::string& fontPath,
+               uint32_t glyphSize) noexcept
+    : _device(device), _allocator(std::move(allocator)), _fontPath(fontPath),
+      _glyphSize(glyphSize) {
     _glyphsPerRow = _atlasSize / _glyphSize;
 }
 
 BmFont::~BmFont() {
-    if (_metadataBuffer) wgpuBufferRelease(_metadataBuffer);
+    if (_metadataBuffer) _allocator->releaseBuffer(_metadataBuffer);
     if (_sampler) wgpuSamplerRelease(_sampler);
     if (_textureView) wgpuTextureViewRelease(_textureView);
-    if (_texture) wgpuTextureRelease(_texture);
+    if (_texture) _allocator->releaseTexture(_texture);
 
     if (_ftFace) {
         FT_Done_Face(static_cast<FT_Face>(_ftFace));
@@ -588,7 +595,7 @@ Result<void> BmFont::createGPUResources() noexcept {
     texDesc.format = WGPUTextureFormat_RGBA8Unorm;
     texDesc.usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst;
 
-    _texture = wgpuDeviceCreateTexture(_device, &texDesc);
+    _texture = _allocator->createTexture(texDesc);
     if (!_texture) {
         return Err<void>("Failed to create BmFont texture");
     }
@@ -631,7 +638,7 @@ Result<void> BmFont::createGPUResources() noexcept {
     bufDesc.size = maxGlyphs * sizeof(BitmapGlyphMetadata);
     bufDesc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
 
-    _metadataBuffer = wgpuDeviceCreateBuffer(_device, &bufDesc);
+    _metadataBuffer = _allocator->createBuffer(bufDesc);
     if (!_metadataBuffer) {
         return Err<void>("Failed to create BmFont metadata buffer");
     }

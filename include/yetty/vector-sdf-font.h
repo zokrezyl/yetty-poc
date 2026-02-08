@@ -1,6 +1,7 @@
 #pragma once
 
 #include <yetty/font.h>
+#include <yetty/gpu-allocator.h>
 #include <yetty/gpu-context.h>
 #include <yetty/base/base.h>
 
@@ -40,6 +41,7 @@ public:
     // Factory: loads font from TTF path
     static Result<Ptr> createImpl(ContextType& ctx,
                                   const GPUContext& gpu,
+                                  GpuAllocator::Ptr allocator,
                                   const std::string& ttfPath);
 
     ~VectorSdfFont() override = default;

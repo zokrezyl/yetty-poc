@@ -1,5 +1,6 @@
 #pragma once
 
+#include <yetty/gpu-allocator.h>
 #include <yetty/result.hpp>
 #include <yetty/widget.h>
 #include <webgpu/webgpu.h>
@@ -22,7 +23,8 @@ class WidgetFrameRenderer {
 public:
     static Result<std::unique_ptr<WidgetFrameRenderer>> create(
         WGPUDevice device,
-        WGPUTextureFormat format
+        WGPUTextureFormat format,
+        GpuAllocator::Ptr allocator
     );
 
     ~WidgetFrameRenderer();
@@ -69,11 +71,12 @@ public:
 
 private:
     WidgetFrameRenderer() = default;
-    Result<void> init(WGPUDevice device, WGPUTextureFormat format);
+    Result<void> init(WGPUDevice device, WGPUTextureFormat format, GpuAllocator::Ptr allocator);
 
     // Get next uniform buffer/bind group for drawing
     std::pair<WGPUBuffer, WGPUBindGroup> getNextUniformBuffer();
 
+    GpuAllocator::Ptr allocator_;
     WGPUDevice device_ = nullptr;
     WGPURenderPipeline framePipeline_ = nullptr;
     WGPURenderPipeline iconPipeline_ = nullptr;

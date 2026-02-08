@@ -2,6 +2,7 @@
 
 #include <yetty/card.h>
 #include <yetty/gpu-context.h>
+#include <yetty/gpu-allocator.h>
 #include <yetty/yetty-context.h>
 #include <yetty/ms-msdf-font.h>
 #include <yetty/msdf-atlas.h>
@@ -176,6 +177,7 @@ private:
     uint32_t _textColor = 0xFF000000;  // Black (ABGR packed)
 
     // Font / atlas (own instances, not shared with ydraw)
+    GpuAllocator::Ptr _globalAllocator;
     FontManager::Ptr _fontManager;
     MsdfAtlas::Ptr _atlas;
     std::unordered_map<std::string, int> _pdfFontMap;   // PDF font name → fontId

@@ -82,6 +82,7 @@ YPdf::YPdf(const YettyContext& ctx,
     : Card(ctx.cardManager, ctx.gpu, x, y, widthCells, heightCells)
     , _argsStr(args)
     , _payloadStr(payload)
+    , _globalAllocator(ctx.globalAllocator)
     , _fontManager(ctx.fontManager)
 {
     _shaderGlyph = SHADER_GLYPH;
@@ -135,8 +136,7 @@ Result<void> YPdf::init() {
     ydebug("YPdf::init: START");
 
     // Create own atlas for PDF fonts
-    base::ObjectFactoryContext factoryCtx;
-    auto atlasRes = MsdfAtlas::create(factoryCtx);
+    auto atlasRes = MsdfAtlas::create(_globalAllocator);
     if (!atlasRes) {
         return Err<void>("YPdf::init: failed to create atlas");
     }
@@ -877,14 +877,14 @@ Result<void> YPdf::rebuildAndUpload() {
     // Allocate or reallocate derived storage if needed
     if (derivedTotalSize > 0) {
         if (!_derivedStorage.isValid()) {
-            auto storageResult = _cardMgr->bufferManager()->allocateBuffer(derivedTotalSize);
+            auto storageResult = _cardMgr->bufferManager()->allocateBuffer(metadataSlotIndex(), "derived", derivedTotalSize);
             if (!storageResult) {
                 return Err<void>("YPdf::rebuild: failed to allocate derived storage");
             }
             _derivedStorage = *storageResult;
         } else if (derivedTotalSize > _derivedStorage.size) {
-            _cardMgr->bufferManager()->deallocateBuffer(_derivedStorage);
-            auto storageResult = _cardMgr->bufferManager()->allocateBuffer(derivedTotalSize);
+            _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "derived");
+            auto storageResult = _cardMgr->bufferManager()->allocateBuffer(metadataSlotIndex(), "derived", derivedTotalSize);
             if (!storageResult) {
                 _derivedStorage = StorageHandle::invalid();
                 return Err<void>("YPdf::rebuild: failed to reallocate derived storage");
@@ -1012,7 +1012,7 @@ Result<void> YPdf::allocateBuffers() {
     if (!_glyphs.empty()) {
         uint32_t derivedSize = computeDerivedSize();
         if (derivedSize > 0 && !_derivedStorage.isValid()) {
-            auto storageResult = _cardMgr->bufferManager()->allocateBuffer(derivedSize);
+            auto storageResult = _cardMgr->bufferManager()->allocateBuffer(metadataSlotIndex(), "derived", derivedSize);
             if (!storageResult) {
                 return Err<void>("YPdf::allocateBuffers: failed to allocate derived storage");
             }
@@ -1074,7 +1074,7 @@ Result<void> YPdf::dispose() {
     deregisterFromEvents();
 
     if (_derivedStorage.isValid() && _cardMgr) {
-        if (auto res = _cardMgr->bufferManager()->deallocateBuffer(_derivedStorage); !res) {
+        if (auto res = _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "derived"); !res) {
             yerror("YPdf::dispose: deallocateBuffer failed: {}", error_msg(res));
         }
         _derivedStorage = StorageHandle::invalid();
@@ -1092,7 +1092,7 @@ Result<void> YPdf::dispose() {
 
 void YPdf::suspend() {
     if (_derivedStorage.isValid()) {
-        _cardMgr->bufferManager()->deallocateBuffer(_derivedStorage);
+        _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "derived");
         _derivedStorage = StorageHandle::invalid();
     }
 }

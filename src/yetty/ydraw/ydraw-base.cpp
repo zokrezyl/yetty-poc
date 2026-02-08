@@ -478,7 +478,7 @@ Result<void> YDrawBase::dispose() {
     _primStaging.shrink_to_fit();
 
     if (_derivedStorage.isValid() && _cardMgr) {
-        if (auto res = _cardMgr->bufferManager()->deallocateBuffer(_derivedStorage); !res) {
+        if (auto res = _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "derived"); !res) {
             yerror("YDrawBase::dispose: deallocateBuffer (derived) failed: {}", error_msg(res));
         }
         _derivedStorage = StorageHandle::invalid();
@@ -487,7 +487,7 @@ Result<void> YDrawBase::dispose() {
     }
 
     if (_primStorage.isValid() && _cardMgr) {
-        if (auto res = _cardMgr->bufferManager()->deallocateBuffer(_primStorage); !res) {
+        if (auto res = _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "prims"); !res) {
             yerror("YDrawBase::dispose: deallocateBuffer (prims) failed: {}", error_msg(res));
         }
         _primStorage = StorageHandle::invalid();
@@ -513,14 +513,14 @@ void YDrawBase::suspend() {
     }
 
     if (_derivedStorage.isValid()) {
-        _cardMgr->bufferManager()->deallocateBuffer(_derivedStorage);
+        _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "derived");
         _derivedStorage = StorageHandle::invalid();
         _grid = nullptr;
         _gridSize = 0;
     }
 
     if (_primStorage.isValid()) {
-        _cardMgr->bufferManager()->deallocateBuffer(_primStorage);
+        _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "prims");
         _primStorage = StorageHandle::invalid();
         _primitives = nullptr;
         _primCount = 0;
@@ -538,13 +538,13 @@ void YDrawBase::declareBufferNeeds() {
     }
     uint32_t lastDerivedSize = _derivedStorage.size;
     if (_derivedStorage.isValid()) {
-        _cardMgr->bufferManager()->deallocateBuffer(_derivedStorage);
+        _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "derived");
         _derivedStorage = StorageHandle::invalid();
         _grid = nullptr;
         _gridSize = 0;
     }
     if (_primStorage.isValid()) {
-        _cardMgr->bufferManager()->deallocateBuffer(_primStorage);
+        _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "prims");
         _primStorage = StorageHandle::invalid();
         _primitives = nullptr;
         _primCount = 0;
@@ -701,7 +701,7 @@ Result<void> YDrawBase::allocateBuffers() {
     if (_primCount > 0 || !_glyphs.empty()) {
         uint32_t derivedSize = computeDerivedSize();
         if (derivedSize > 0 && !_derivedStorage.isValid()) {
-            auto storageResult = _cardMgr->bufferManager()->allocateBuffer(derivedSize);
+            auto storageResult = _cardMgr->bufferManager()->allocateBuffer(metadataSlotIndex(), "derived", derivedSize);
             if (!storageResult) {
                 return Err<void>("YDrawBase::allocateBuffers: failed to allocate derived storage");
             }
@@ -1189,7 +1189,7 @@ Result<void> YDrawBase::ensurePrimCapacity(uint32_t required) {
     uint32_t newCap = std::max(required, _primCapacity == 0 ? 64u : _primCapacity * 2);
     uint32_t newSize = newCap * sizeof(SDFPrimitive);
 
-    auto newStorage = _cardMgr->bufferManager()->allocateBuffer(newSize);
+    auto newStorage = _cardMgr->bufferManager()->allocateBuffer(metadataSlotIndex(), "prims", newSize);
     if (!newStorage) {
         return Err<void>("YDrawBase: failed to allocate prim storage");
     }
@@ -1198,7 +1198,7 @@ Result<void> YDrawBase::ensurePrimCapacity(uint32_t required) {
         std::memcpy(newStorage->data, _primStorage.data, _primCount * sizeof(SDFPrimitive));
     }
     if (_primStorage.isValid()) {
-        _cardMgr->bufferManager()->deallocateBuffer(_primStorage);
+        _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "prims");
     }
 
     _primStorage = *newStorage;
@@ -1388,14 +1388,14 @@ Result<void> YDrawBase::rebuildAndUpload() {
     // Allocate or reallocate derived storage if needed
     if (derivedTotalSize > 0) {
         if (!_derivedStorage.isValid()) {
-            auto storageResult = _cardMgr->bufferManager()->allocateBuffer(derivedTotalSize);
+            auto storageResult = _cardMgr->bufferManager()->allocateBuffer(metadataSlotIndex(), "derived", derivedTotalSize);
             if (!storageResult) {
                 return Err<void>("YDrawBase::rebuild: failed to allocate derived storage");
             }
             _derivedStorage = *storageResult;
         } else if (derivedTotalSize > _derivedStorage.size) {
-            _cardMgr->bufferManager()->deallocateBuffer(_derivedStorage);
-            auto storageResult = _cardMgr->bufferManager()->allocateBuffer(derivedTotalSize);
+            _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "derived");
+            auto storageResult = _cardMgr->bufferManager()->allocateBuffer(metadataSlotIndex(), "derived", derivedTotalSize);
             if (!storageResult) {
                 _derivedStorage = StorageHandle::invalid();
                 return Err<void>("YDrawBase::rebuild: failed to reallocate derived storage");

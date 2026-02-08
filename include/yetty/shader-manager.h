@@ -2,6 +2,7 @@
 
 #include <yetty/shader-provider.h>
 #include <yetty/gpu-context.h>
+#include <yetty/gpu-allocator.h>
 #include <yetty/result.hpp>
 #include <yetty/base/base.h>
 #include <webgpu/webgpu.h>
@@ -30,7 +31,7 @@ public:
     virtual ~ShaderManager() = default;
 
     // Factory - creates ShaderManagerImpl
-    static Result<Ptr> createImpl(ContextType& ctx, const GPUContext& gpu) noexcept;
+    static Result<Ptr> createImpl(ContextType& ctx, const GPUContext& gpu, GpuAllocator::Ptr allocator) noexcept;
 
     /**
      * Register a shader provider.

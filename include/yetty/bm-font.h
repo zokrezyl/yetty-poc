@@ -1,6 +1,7 @@
 #pragma once
 
 #include <yetty/font.h>
+#include <yetty/gpu-allocator.h>
 #include <yetty/result.hpp>
 #include <webgpu/webgpu.h>
 #include <cstdint>
@@ -30,7 +31,8 @@ public:
     using Ptr = std::shared_ptr<BmFont>;
 
     // Factory method
-    static Result<Ptr> create(WGPUDevice device, const std::string& fontPath = "",
+    static Result<Ptr> create(WGPUDevice device, GpuAllocator::Ptr allocator,
+                              const std::string& fontPath = "",
                               uint32_t glyphSize = 64) noexcept;
 
     ~BmFont() override;
@@ -83,13 +85,15 @@ protected:
     Result<void> init() override;
 
 private:
-    BmFont(WGPUDevice device, const std::string& fontPath, uint32_t glyphSize) noexcept;
+    BmFont(WGPUDevice device, GpuAllocator::Ptr allocator, const std::string& fontPath,
+           uint32_t glyphSize) noexcept;
 
     Result<void> findFont() noexcept;
     Result<void> createGPUResources() noexcept;
     Result<void> renderGlyph(uint32_t codepoint, int atlasX, int atlasY) noexcept;
 
     WGPUDevice _device = nullptr;
+    GpuAllocator::Ptr _allocator;
 
     // FreeType handles
     void* _ftLibrary = nullptr;

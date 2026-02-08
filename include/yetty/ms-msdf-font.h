@@ -2,6 +2,7 @@
 
 #include <yetty/font.h>
 #include <yetty/msdf-atlas.h>
+#include <yetty/gpu-allocator.h>
 #include <yetty/base/base.h>
 
 #include <string>
@@ -25,7 +26,8 @@ public:
     using base::ObjectFactory<MsMsdfFont>::create;
 
     static Result<Ptr> createImpl(ContextType& ctx,
-                                   const std::string& cdbBasePath);
+                                   const std::string& cdbBasePath,
+                                   GpuAllocator::Ptr allocator);
 
     ~MsMsdfFont() override = default;
 

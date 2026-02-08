@@ -17,8 +17,8 @@ static const char* STYLE_SUFFIXES[] = {
 
 class MsMsdfFontImpl : public MsMsdfFont {
 public:
-    explicit MsMsdfFontImpl(const std::string& cdbBasePath)
-        : _cdbBasePath(cdbBasePath) {}
+    MsMsdfFontImpl(const std::string& cdbBasePath, GpuAllocator::Ptr allocator)
+        : _cdbBasePath(cdbBasePath), _allocator(std::move(allocator)) {}
 
     //=========================================================================
     // Initialization
@@ -26,7 +26,7 @@ public:
 
     Result<void> init() override {
         // Create atlas
-        auto atlasResult = MsdfAtlas::create();
+        auto atlasResult = MsdfAtlas::create(_allocator);
         if (!atlasResult) {
             return Err<void>("Failed to create MsdfAtlas", atlasResult);
         }
@@ -173,6 +173,7 @@ private:
     //=========================================================================
 
     MsdfAtlas::Ptr _atlas;
+    GpuAllocator::Ptr _allocator;
     int _styleFontId[4] = {-1, -1, -1, -1};  // Regular, Bold, Italic, BoldItalic
     int _fallbackFontId = -1;
     std::string _cdbBasePath;
@@ -184,8 +185,9 @@ private:
 //=============================================================================
 
 Result<MsMsdfFont::Ptr> MsMsdfFont::createImpl(ContextType&,
-                                                 const std::string& cdbBasePath) {
-    auto font = Ptr(new MsMsdfFontImpl(cdbBasePath));
+                                                 const std::string& cdbBasePath,
+                                                 GpuAllocator::Ptr allocator) {
+    auto font = Ptr(new MsMsdfFontImpl(cdbBasePath, std::move(allocator)));
     if (auto res = static_cast<MsMsdfFontImpl*>(font.get())->init(); !res) {
         return Err<Ptr>("Failed to initialize MsMsdfFont", res);
     }

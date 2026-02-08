@@ -2,6 +2,7 @@
 
 #include <yetty/card.h>
 #include <yetty/gpu-context.h>
+#include <yetty/gpu-allocator.h>
 #include <yetty/yetty-context.h>
 #include <yetty/ms-msdf-font.h>
 #include <yetty/msdf-atlas.h>
@@ -228,6 +229,7 @@ private:
     bool _needsHtmlRender = false;
 
     // Font / atlas (own instances - NO fontManager dependency)
+    GpuAllocator::Ptr _globalAllocator;
     std::string _cacheDir;
     MsdfCdbProvider::Ptr _cdbProvider;
     MsdfAtlas::Ptr _atlas;

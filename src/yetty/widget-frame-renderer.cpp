@@ -1,4 +1,5 @@
 #include <yetty/widget-frame-renderer.h>
+#include <yetty/gpu-allocator.h>
 #include <yetty/webgpu-context.h>
 #include <yetty/wgpu-compat.h>
 #include <ytrace/ytrace.hpp>
@@ -147,10 +148,11 @@ struct VertexOutput {
 
 Result<std::unique_ptr<WidgetFrameRenderer>> WidgetFrameRenderer::create(
     WGPUDevice device,
-    WGPUTextureFormat format
+    WGPUTextureFormat format,
+    GpuAllocator::Ptr allocator
 ) {
     auto renderer = std::unique_ptr<WidgetFrameRenderer>(new WidgetFrameRenderer());
-    if (auto res = renderer->init(device, format); !res) {
+    if (auto res = renderer->init(device, format, std::move(allocator)); !res) {
         return Err<std::unique_ptr<WidgetFrameRenderer>>("Failed to init WidgetFrameRenderer", res);
     }
     return Ok(std::move(renderer));
@@ -162,7 +164,7 @@ WidgetFrameRenderer::~WidgetFrameRenderer() {
     }
     if (bindGroupLayout_) wgpuBindGroupLayoutRelease(bindGroupLayout_);
     for (auto buf : uniformBuffers_) {
-        if (buf) wgpuBufferRelease(buf);
+        if (buf) allocator_->releaseBuffer(buf);
     }
     if (framePipeline_) wgpuRenderPipelineRelease(framePipeline_);
 }
@@ -173,7 +175,8 @@ std::pair<WGPUBuffer, WGPUBindGroup> WidgetFrameRenderer::getNextUniformBuffer()
     return {uniformBuffers_[idx], bindGroups_[idx]};
 }
 
-Result<void> WidgetFrameRenderer::init(WGPUDevice device, WGPUTextureFormat format) {
+Result<void> WidgetFrameRenderer::init(WGPUDevice device, WGPUTextureFormat format, GpuAllocator::Ptr allocator) {
+    allocator_ = std::move(allocator);
     device_ = device;
 
     // Create shader module
@@ -209,9 +212,10 @@ Result<void> WidgetFrameRenderer::init(WGPUDevice device, WGPUTextureFormat form
     for (size_t i = 0; i < MAX_DRAWS_PER_FRAME; i++) {
         // Create uniform buffer (48 bytes: rect(16) + color(16) + screenSize(8) + thickness(4) + iconType(4))
         WGPUBufferDescriptor bufDesc = {};
+        bufDesc.label = WGPU_STR("WidgetFrame uniform");
         bufDesc.size = 48;
         bufDesc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
-        uniformBuffers_[i] = wgpuDeviceCreateBuffer(device, &bufDesc);
+        uniformBuffers_[i] = allocator_->createBuffer(bufDesc);
         if (!uniformBuffers_[i]) {
             wgpuShaderModuleRelease(shaderModule);
             return Err<void>("Failed to create frame uniform buffer");
@@ -233,8 +237,6 @@ Result<void> WidgetFrameRenderer::init(WGPUDevice device, WGPUTextureFormat form
             return Err<void>("Failed to create frame bind group");
         }
     }
-    yinfo("GPU_ALLOC WidgetFrameRenderer: {} uniformBuffers of 48 bytes each = {} bytes total",
-          MAX_DRAWS_PER_FRAME, MAX_DRAWS_PER_FRAME * 48);
 
     // Create pipeline layout
     WGPUPipelineLayoutDescriptor pipelineLayoutDesc = {};

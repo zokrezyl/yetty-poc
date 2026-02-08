@@ -124,7 +124,7 @@ public:
         }
 
         if (_storageHandle.isValid() && _cardMgr) {
-            _cardMgr->bufferManager()->deallocateBuffer(_storageHandle);
+            _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "storage");
             _storageHandle = StorageHandle::invalid();
         }
 
@@ -138,7 +138,7 @@ public:
 
     void suspend() override {
         if (_storageHandle.isValid() && _cardMgr) {
-            _cardMgr->bufferManager()->deallocateBuffer(_storageHandle);
+            _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "storage");
             _storageHandle = StorageHandle::invalid();
         }
         yinfo("Plot::suspend: deallocated storage, _data has {} floats", _data.size());
@@ -154,7 +154,7 @@ public:
     Result<void> allocateBuffers() override {
         if (!_storageHandle.isValid() && !_data.empty()) {
             uint32_t storageSize = static_cast<uint32_t>(_data.size() * sizeof(float));
-            auto storageResult = _cardMgr->bufferManager()->allocateBuffer(storageSize);
+            auto storageResult = _cardMgr->bufferManager()->allocateBuffer(metadataSlotIndex(), "storage", storageSize);
             if (!storageResult) {
                 return Err<void>("Plot::allocateBuffers: failed to allocate storage");
             }
@@ -221,7 +221,7 @@ public:
 
         // Deallocate old storage if exists
         if (_storageHandle.isValid()) {
-            _cardMgr->bufferManager()->deallocateBuffer(_storageHandle);
+            _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "storage");
             _storageHandle = StorageHandle::invalid();
         }
 
@@ -229,7 +229,7 @@ public:
         uint32_t storageSize = count * sizeof(float);
         yinfo("Plot::setData: allocating {} bytes for {} floats", storageSize, count);
 
-        auto storageResult = _cardMgr->bufferManager()->allocateBuffer(storageSize);
+        auto storageResult = _cardMgr->bufferManager()->allocateBuffer(metadataSlotIndex(), "storage", storageSize);
         if (!storageResult) {
             yerror("Plot::setData: failed to allocate storage");
             return Err<void>("Plot::setData: failed to allocate storage");

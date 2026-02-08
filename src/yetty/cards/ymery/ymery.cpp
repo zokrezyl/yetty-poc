@@ -12,8 +12,7 @@
 
 #include <filesystem>
 #include <cstring>
-
-#define WGPU_STR(s) WGPUStringView{.data = s, .length = WGPU_STRLEN}
+#include <yetty/wgpu-compat.h>
 
 namespace fs = std::filesystem;
 

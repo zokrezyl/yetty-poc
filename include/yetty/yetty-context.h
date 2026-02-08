@@ -1,6 +1,7 @@
 #pragma once
 
 #include <yetty/gpu-context.h>
+#include <yetty/gpu-allocator.h>
 #include <yetty/shader-manager.h>
 #include <yetty/font-manager.h>
 #include <yetty/card-manager.h>
@@ -19,6 +20,9 @@ namespace yetty {
 struct YettyContext {
     // Low-level GPU handles
     GPUContext gpu;
+
+    // Global GPU allocator (tracks all shared GPU resource allocations)
+    GpuAllocator::Ptr globalAllocator;
 
     // Shared managers
     ShaderManager::Ptr shaderManager;

@@ -1,4 +1,5 @@
 #include <yetty/rich-text.h>
+#include <yetty/gpu-allocator.h>
 #include <yetty/webgpu-context.h>
 #include <yetty/wgpu-compat.h>
 #include <ytrace/ytrace.hpp>
@@ -112,22 +113,22 @@ fn fs_main() -> @location(0) vec4<f32> {
 // RichText Implementation
 //-----------------------------------------------------------------------------
 
-Result<RichText::Ptr> RichText::create(WebGPUContext* ctx, WGPUTextureFormat targetFormat, FontManager* fontMgr) noexcept {
+Result<RichText::Ptr> RichText::create(WebGPUContext* ctx, WGPUTextureFormat targetFormat, FontManager* fontMgr, GpuAllocator::Ptr allocator) noexcept {
     if (!ctx) {
         return Err<Ptr>("RichText::create: null context");
     }
     if (!fontMgr) {
         return Err<Ptr>("RichText::create: null FontManager");
     }
-    auto rt = Ptr(new RichText(ctx, targetFormat, fontMgr));
+    auto rt = Ptr(new RichText(ctx, targetFormat, fontMgr, std::move(allocator)));
     if (auto res = rt->init(); !res) {
         return Err<Ptr>("Failed to initialize RichText", res);
     }
     return Ok(std::move(rt));
 }
 
-RichText::RichText(WebGPUContext* ctx, WGPUTextureFormat targetFormat, FontManager* fontMgr) noexcept
-    : _ctx(ctx), targetFormat_(targetFormat), fontMgr_(fontMgr) {}
+RichText::RichText(WebGPUContext* ctx, WGPUTextureFormat targetFormat, FontManager* fontMgr, GpuAllocator::Ptr allocator) noexcept
+    : _ctx(ctx), allocator_(std::move(allocator)), targetFormat_(targetFormat), fontMgr_(fontMgr) {}
 
 RichText::~RichText() {
     dispose();
@@ -153,13 +154,13 @@ void RichText::dispose() noexcept {
 
     if (bindGroupLayout_) { wgpuBindGroupLayoutRelease(bindGroupLayout_); bindGroupLayout_ = nullptr; }
     if (pipeline_) { wgpuRenderPipelineRelease(pipeline_); pipeline_ = nullptr; }
-    if (uniformBuffer_) { wgpuBufferRelease(uniformBuffer_); uniformBuffer_ = nullptr; }
+    if (uniformBuffer_) { allocator_->releaseBuffer(uniformBuffer_); uniformBuffer_ = nullptr; }
 
     // Background resources
     if (bgBindGroup_) { wgpuBindGroupRelease(bgBindGroup_); bgBindGroup_ = nullptr; }
     if (bgPipeline_) { wgpuRenderPipelineRelease(bgPipeline_); bgPipeline_ = nullptr; }
-    if (bgUniformBuffer_) { wgpuBufferRelease(bgUniformBuffer_); bgUniformBuffer_ = nullptr; }
-    if (glyphBuffer_) { wgpuBufferRelease(glyphBuffer_); glyphBuffer_ = nullptr; }
+    if (bgUniformBuffer_) { allocator_->releaseBuffer(bgUniformBuffer_); bgUniformBuffer_ = nullptr; }
+    if (glyphBuffer_) { allocator_->releaseBuffer(glyphBuffer_); glyphBuffer_ = nullptr; }
     if (sampler_) { wgpuSamplerRelease(sampler_); sampler_ = nullptr; }
 
     fontBatches_.clear();
@@ -579,9 +580,10 @@ Result<void> RichText::createPipeline(WebGPUContext& ctx, WGPUTextureFormat targ
 
     // Create uniform buffer
     WGPUBufferDescriptor bufDesc = {};
+    bufDesc.label = WGPU_STR("RichText uniform");
     bufDesc.size = 48;  // vec4 rect + vec2 screenSize + f32 scroll + f32 pixelRange + padding
     bufDesc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
-    uniformBuffer_ = wgpuDeviceCreateBuffer(device, &bufDesc);
+    uniformBuffer_ = allocator_->createBuffer(bufDesc);
     if (!uniformBuffer_) return Err<void>("Failed to create uniform buffer");
 
     // Create shader module
@@ -668,9 +670,10 @@ Result<void> RichText::createPipeline(WebGPUContext& ctx, WGPUTextureFormat targ
     {
         // Background uniform buffer (32 bytes: vec4 rect + vec4 color)
         WGPUBufferDescriptor bgBufDesc = {};
+        bgBufDesc.label = WGPU_STR("RichText bg uniform");
         bgBufDesc.size = 32;
         bgBufDesc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
-        bgUniformBuffer_ = wgpuDeviceCreateBuffer(device, &bgBufDesc);
+        bgUniformBuffer_ = allocator_->createBuffer(bgBufDesc);
         if (!bgUniformBuffer_) return Err<void>("Failed to create bg uniform buffer");
 
         // Background shader module
@@ -839,15 +842,16 @@ Result<void> RichText::render(WGPURenderPassEncoder pass, WebGPUContext& ctx,
     // Ensure glyph buffer is large enough for any batch
     if (maxBatchSize > glyphBufferCapacity_) {
         if (glyphBuffer_) {
-            wgpuBufferRelease(glyphBuffer_);
+            allocator_->releaseBuffer(glyphBuffer_);
         }
         glyphBufferCapacity_ = std::max(static_cast<uint32_t>(maxBatchSize), glyphBufferCapacity_ * 2);
         if (glyphBufferCapacity_ < 256) glyphBufferCapacity_ = 256;
 
         WGPUBufferDescriptor bufDesc = {};
+        bufDesc.label = WGPU_STR("RichText glyphs");
         bufDesc.size = glyphBufferCapacity_ * sizeof(GlyphInstance);
         bufDesc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
-        glyphBuffer_ = device ? wgpuDeviceCreateBuffer(device, &bufDesc) : nullptr;
+        glyphBuffer_ = device ? allocator_->createBuffer(bufDesc) : nullptr;
         if (!glyphBuffer_) return Err<void>("RichText: failed to create glyph buffer");
 
         // Invalidate cached bind groups since buffer changed

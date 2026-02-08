@@ -2,6 +2,7 @@
 
 #include <yetty/result.hpp>
 #include <yetty/gpu-context.h>
+#include <yetty/gpu-allocator.h>
 #include <yetty/card-buffer-manager.h>
 #include <yetty/card-texture-manager.h>
 #include <webgpu/webgpu.h>
@@ -30,11 +31,11 @@ public:
 
     struct Config {
         MetadataConfig metadata;
-        CardBufferConfig buffer;
         CardTextureConfig texture;
     };
 
     static Result<Ptr> create(GPUContext* gpuContext,
+                              GpuAllocator::Ptr allocator,
                               WGPUBuffer uniformBuffer,
                               uint32_t uniformSize,
                               Config config = {}) noexcept;

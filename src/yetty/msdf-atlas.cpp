@@ -1,4 +1,5 @@
 #include <yetty/msdf-atlas.h>
+#include <yetty/gpu-allocator.h>
 #include <yetty/cdb-wrapper.h>
 #include <yetty/wgpu-compat.h>
 #include <ytrace/ytrace.hpp>
@@ -16,7 +17,8 @@ namespace yetty {
 
 class MsdfAtlasImpl : public MsdfAtlas {
 public:
-    MsdfAtlasImpl() {
+    explicit MsdfAtlasImpl(GpuAllocator::Ptr allocator)
+        : _allocator(std::move(allocator)) {
         // Initialize atlas
         _atlasData.resize(_atlasWidth * _atlasHeight * 4, 0);
 
@@ -42,10 +44,10 @@ public:
         closeAllCdbs();
 
         // Clean up WebGPU resources
-        if (_glyphMetadataBuffer) wgpuBufferRelease(_glyphMetadataBuffer);
+        if (_glyphMetadataBuffer) _allocator->releaseBuffer(_glyphMetadataBuffer);
         if (_sampler) wgpuSamplerRelease(_sampler);
         if (_textureView) wgpuTextureViewRelease(_textureView);
-        if (_texture) wgpuTextureRelease(_texture);
+        if (_texture) _allocator->releaseTexture(_texture);
     }
 
     //=========================================================================
@@ -243,7 +245,7 @@ public:
             _textureView = nullptr;
         }
         if (_texture) {
-            wgpuTextureRelease(_texture);
+            _allocator->releaseTexture(_texture);
             _texture = nullptr;
         }
         if (_sampler) {
@@ -264,7 +266,7 @@ public:
         texDesc.mipLevelCount = 1;
         texDesc.sampleCount = 1;
 
-        _texture = wgpuDeviceCreateTexture(device, &texDesc);
+        _texture = _allocator->createTexture(texDesc);
         if (!_texture) {
             return Err<void>("Failed to create MsdfAtlas texture");
         }
@@ -330,7 +332,7 @@ public:
 
     Result<void> createGlyphMetadataBuffer(WGPUDevice device) override {
         if (_glyphMetadataBuffer) {
-            wgpuBufferRelease(_glyphMetadataBuffer);
+            _allocator->releaseBuffer(_glyphMetadataBuffer);
             _glyphMetadataBuffer = nullptr;
         }
 
@@ -346,14 +348,14 @@ public:
         bufDesc.size = bufferSize;
         bufDesc.mappedAtCreation = true;
 
-        _glyphMetadataBuffer = wgpuDeviceCreateBuffer(device, &bufDesc);
+        _glyphMetadataBuffer = _allocator->createBuffer(bufDesc);
         if (!_glyphMetadataBuffer) {
             return Err<void>("Failed to create MsdfAtlas metadata buffer");
         }
 
         void* mapped = wgpuBufferGetMappedRange(_glyphMetadataBuffer, 0, bufferSize);
         if (!mapped) {
-            wgpuBufferRelease(_glyphMetadataBuffer);
+            _allocator->releaseBuffer(_glyphMetadataBuffer);
             _glyphMetadataBuffer = nullptr;
             return Err<void>("Failed to map glyph metadata buffer");
         }
@@ -508,6 +510,9 @@ private:
     // Private data
     //=========================================================================
 
+    // GPU allocator
+    GpuAllocator::Ptr _allocator;
+
     // CDB readers (indexed by fontId)
     std::vector<CdbReader::Ptr> _cdbFiles;
 
@@ -557,8 +562,8 @@ private:
 // MsdfAtlas::createImpl - ObjectFactory entry point
 //=============================================================================
 
-Result<MsdfAtlas::Ptr> MsdfAtlas::createImpl(ContextType&) {
-    return Ok(Ptr(new MsdfAtlasImpl()));
+Result<MsdfAtlas::Ptr> MsdfAtlas::createImpl(ContextType&, GpuAllocator::Ptr allocator) {
+    return Ok(Ptr(new MsdfAtlasImpl(std::move(allocator))));
 }
 
 } // namespace yetty

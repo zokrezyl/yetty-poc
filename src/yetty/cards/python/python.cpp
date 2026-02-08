@@ -24,6 +24,7 @@ namespace yetty::python {
 void setCardManager(CardManager* mgr);
 void setCardTextureManager(CardTextureManager* mgr);
 void setGPUContext(const GPUContext* ctx);
+void setMetadataSlotIndex(uint32_t idx);
 }
 
 namespace yetty::card {
@@ -33,15 +34,17 @@ static std::unordered_set<std::string> s_setupDone;
 
 // Helper to set/clear all thread-local pointers around Python callbacks
 struct PythonCallContext {
-    PythonCallContext(CardManager* mgr, CardTextureManager* texMgr, const GPUContext* gpu) {
+    PythonCallContext(CardManager* mgr, CardTextureManager* texMgr, const GPUContext* gpu, uint32_t slotIndex) {
         python::setCardManager(mgr);
         python::setCardTextureManager(texMgr);
         python::setGPUContext(gpu);
+        python::setMetadataSlotIndex(slotIndex);
     }
     ~PythonCallContext() {
         python::setCardManager(nullptr);
         python::setCardTextureManager(nullptr);
         python::setGPUContext(nullptr);
+        python::setMetadataSlotIndex(0);
     }
 };
 
@@ -101,7 +104,7 @@ public:
                _engineInitialized, (bool)_globals, _textureHandle.isValid());
         if (_engineInitialized && _globals) {
             python::GILGuard gil;
-            PythonCallContext pcc(_cardMgr.get(), _cardMgr->textureManager().get(), &_ctx.gpu);
+            PythonCallContext pcc(_cardMgr.get(), _cardMgr->textureManager().get(), &_ctx.gpu, metadataSlotIndex());
 
             if (auto res = callPython("allocate_textures"); !res) {
                 yerror("PythonCard::allocateTextures: callPython failed: {}", error_msg(res));
@@ -237,7 +240,7 @@ public:
         // Create isolated Python namespace and execute the script
         {
             python::GILGuard gil;
-            PythonCallContext pcc(_cardMgr.get(), _cardMgr->textureManager().get(), &_ctx.gpu);
+            PythonCallContext pcc(_cardMgr.get(), _cardMgr->textureManager().get(), &_ctx.gpu, metadataSlotIndex());
 
             // Create per-card isolated globals dict
             _globals = py::dict();
@@ -290,7 +293,7 @@ public:
         // Call Python shutdown()
         if (_engineInitialized && _globals) {
             python::GILGuard gil;
-            PythonCallContext pcc(_cardMgr.get(), _cardMgr->textureManager().get(), &_ctx.gpu);
+            PythonCallContext pcc(_cardMgr.get(), _cardMgr->textureManager().get(), &_ctx.gpu, metadataSlotIndex());
 
             if (auto res = callPython("shutdown"); !res) {
                 ywarn("PythonCard::dispose: shutdown() failed: {}", error_msg(res));
@@ -323,7 +326,7 @@ public:
         // Call Python suspend()
         if (_engineInitialized && _globals) {
             python::GILGuard gil;
-            PythonCallContext pcc(_cardMgr.get(), _cardMgr->textureManager().get(), &_ctx.gpu);
+            PythonCallContext pcc(_cardMgr.get(), _cardMgr->textureManager().get(), &_ctx.gpu, metadataSlotIndex());
 
             if (auto res = callPython("suspend"); !res) {
                 ywarn("PythonCard::suspend: suspend() failed: {}", error_msg(res));
@@ -351,7 +354,7 @@ public:
         // Call Python render(time)
         if (_engineInitialized && _globals) {
             python::GILGuard gil;
-            PythonCallContext pcc(_cardMgr.get(), _cardMgr->textureManager().get(), &_ctx.gpu);
+            PythonCallContext pcc(_cardMgr.get(), _cardMgr->textureManager().get(), &_ctx.gpu, metadataSlotIndex());
 
             ydebug("PythonCard::update: calling render()...");
             if (auto res = callPython("render", py::make_tuple(time)); !res) {
@@ -386,7 +389,7 @@ private:
         }
         try {
             python::GILGuard gil;
-            PythonCallContext pcc(_cardMgr.get(), _cardMgr->textureManager().get(), &_ctx.gpu);
+            PythonCallContext pcc(_cardMgr.get(), _cardMgr->textureManager().get(), &_ctx.gpu, metadataSlotIndex());
             if (!_globals.contains(name)) return;
             _globals[name](std::forward<Args>(args)...);
         } catch (const py::error_already_set& e) {

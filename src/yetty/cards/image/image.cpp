@@ -9,13 +9,11 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <yetty/wgpu-compat.h>
 
 // GLFW modifier constants
 constexpr int GLFW_MOD_SHIFT   = 0x0001;
 constexpr int GLFW_MOD_CONTROL = 0x0002;
-
-// WebGPU string helper
-#define WGPU_STR(s) WGPUStringView{.data = s, .length = WGPU_STRLEN}
 
 namespace yetty::card {
 

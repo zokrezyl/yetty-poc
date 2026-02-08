@@ -1,4 +1,5 @@
 #include <yetty/shader-manager.h>
+#include <yetty/gpu-allocator.h>
 #include <yetty/wgpu-compat.h>
 #include <yetty/ms-msdf-font.h>
 #include <yetty/bm-font.h>
@@ -266,7 +267,7 @@ public:
     ShaderManagerImpl() = default;
     ~ShaderManagerImpl() override;
 
-    Result<void> init(const GPUContext& gpu) noexcept;
+    Result<void> init(const GPUContext& gpu, GpuAllocator::Ptr allocator) noexcept;
 
     void addProvider(std::shared_ptr<ShaderProvider> provider, const std::string& dispatchName) override;
     void addLibrary(const std::string& name, const std::string& code) override;
@@ -287,6 +288,7 @@ private:
     std::string mergeShaders() const;
 
     GPUContext _gpu = {};
+    GpuAllocator::Ptr _allocator;
     std::string _baseShader;
     struct ProviderEntry {
         std::shared_ptr<ShaderProvider> provider;
@@ -318,9 +320,9 @@ private:
 };
 
 // Factory implementation
-Result<ShaderManager::Ptr> ShaderManager::createImpl(ContextType&, const GPUContext& gpu) noexcept {
+Result<ShaderManager::Ptr> ShaderManager::createImpl(ContextType&, const GPUContext& gpu, GpuAllocator::Ptr allocator) noexcept {
     auto impl = Ptr(new ShaderManagerImpl());
-    if (auto res = static_cast<ShaderManagerImpl*>(impl.get())->init(gpu); !res) {
+    if (auto res = static_cast<ShaderManagerImpl*>(impl.get())->init(gpu, std::move(allocator)); !res) {
         return Err<Ptr>("ShaderManager init failed", res);
     }
     return Ok(std::move(impl));
@@ -344,12 +346,12 @@ ShaderManagerImpl::~ShaderManagerImpl() {
         _gridBindGroupLayout = nullptr;
     }
     if (_quadVertexBuffer) {
-        wgpuBufferRelease(_quadVertexBuffer);
+        _allocator->releaseBuffer(_quadVertexBuffer);
         _quadVertexBuffer = nullptr;
     }
 }
 
-Result<void> ShaderManagerImpl::init(const GPUContext& gpu) noexcept {
+Result<void> ShaderManagerImpl::init(const GPUContext& gpu, GpuAllocator::Ptr allocator) noexcept {
     if (_initialized) {
         return Ok();
     }
@@ -359,6 +361,7 @@ Result<void> ShaderManagerImpl::init(const GPUContext& gpu) noexcept {
     }
 
     _gpu = gpu;
+    _allocator = std::move(allocator);
 
     // Load base shader
     std::string shaderPath = std::string(CMAKE_SOURCE_DIR) + "/src/yetty/shaders/gpu-screen.wgsl";
@@ -798,7 +801,7 @@ Result<void> ShaderManagerImpl::createPipelineResources() {
     quadDesc.size = sizeof(quadVertices);
     quadDesc.usage = WGPUBufferUsage_Vertex;
     quadDesc.mappedAtCreation = true;
-    _quadVertexBuffer = wgpuDeviceCreateBuffer(device, &quadDesc);
+    _quadVertexBuffer = _allocator->createBuffer(quadDesc);
     if (!_quadVertexBuffer) {
         return Err<void>("Failed to create quad vertex buffer");
     }

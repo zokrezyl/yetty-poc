@@ -2,6 +2,7 @@
 
 #include <yetty/result.hpp>
 #include <yetty/webgpu-context.h>
+#include <yetty/gpu-allocator.h>
 #include <webgpu/webgpu.h>
 #include <vector>
 #include <string>
@@ -109,6 +110,7 @@ public:
 
     // Render to the given pass
     Result<void> render(WebGPUContext& ctx,
+                        GpuAllocator::Ptr allocator,
                         WGPURenderPassEncoder pass,
                         float x, float y, float width, float height,
                         float screenWidth, float screenHeight,
@@ -123,7 +125,7 @@ public:
     static bool parseVec3(const std::string& str, float out[3]);
 
 private:
-    Result<void> createPipeline(WebGPUContext& ctx, WGPUTextureFormat targetFormat);
+    Result<void> createPipeline(WebGPUContext& ctx, GpuAllocator::Ptr allocator, WGPUTextureFormat targetFormat);
     Result<void> parseYAML(const std::string& yaml);
     Result<void> parseSVG(const std::string& svg);
 
@@ -144,6 +146,7 @@ private:
     float _time = 0.0f;
 
     // GPU resources
+    GpuAllocator::Ptr _allocator;
     WGPURenderPipeline _pipeline = nullptr;
     WGPUBindGroup _bind_group = nullptr;
     WGPUBuffer _uniform_buffer = nullptr;

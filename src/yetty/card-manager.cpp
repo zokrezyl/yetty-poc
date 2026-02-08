@@ -1,11 +1,11 @@
 #include <yetty/card-manager.h>
+#include <yetty/gpu-allocator.h>
+#include <yetty/wgpu-compat.h>
 #include <ytrace/ytrace.hpp>
 #include <algorithm>
 #include <cstring>
 #include <array>
 #include <vector>
-
-#define WGPU_STR(s) WGPUStringView{.data = s, .length = WGPU_STRLEN}
 
 namespace yetty {
 
@@ -166,9 +166,11 @@ Result<void> MetadataAllocator::deallocate(MetadataHandle handle) {
 
 class CardManagerImpl : public CardManager {
 public:
-    CardManagerImpl(GPUContext* gpuContext, WGPUBuffer uniformBuffer, uint32_t uniformSize, Config config)
+    CardManagerImpl(GPUContext* gpuContext, GpuAllocator::Ptr allocator,
+                    WGPUBuffer uniformBuffer, uint32_t uniformSize, Config config)
         : _gpuContext(gpuContext)
         , _device(gpuContext->device)
+        , _allocator(std::move(allocator))
         , _uniformBuffer(uniformBuffer)
         , _uniformSize(uniformSize)
         , _config(config)
@@ -205,6 +207,7 @@ private:
 
     GPUContext* _gpuContext;
     WGPUDevice _device;
+    GpuAllocator::Ptr _allocator;
     WGPUBuffer _uniformBuffer;
     uint32_t _uniformSize;
     Config _config;
@@ -234,10 +237,11 @@ private:
 // =============================================================================
 
 Result<CardManager::Ptr> CardManager::create(GPUContext* gpuContext,
+                                              GpuAllocator::Ptr allocator,
                                               WGPUBuffer uniformBuffer,
                                               uint32_t uniformSize,
                                               Config config) noexcept {
-    auto mgr = std::make_shared<CardManagerImpl>(gpuContext, uniformBuffer, uniformSize, config);
+    auto mgr = std::make_shared<CardManagerImpl>(gpuContext, std::move(allocator), uniformBuffer, uniformSize, config);
     if (auto res = mgr->init(); !res) {
         return Err<Ptr>("CardManager init failed", res);
     }
@@ -250,12 +254,12 @@ Result<CardManager::Ptr> CardManager::create(GPUContext* gpuContext,
 
 Result<void> CardManagerImpl::init() noexcept {
     // Create texture manager
-    auto texRes = CardTextureManager::create(_gpuContext, _config.texture);
+    auto texRes = CardTextureManager::create(_gpuContext, _allocator, _config.texture);
     if (!texRes) return Err<void>("Failed to create CardTextureManager", texRes);
     _textureMgr = *texRes;
 
-    // Create buffer manager (no longer takes texture manager or uniform buffer)
-    auto bufRes = CardBufferManager::create(_gpuContext, _config.buffer);
+    // Create buffer manager
+    auto bufRes = CardBufferManager::create(_gpuContext, _allocator);
     if (!bufRes) return Err<void>("Failed to create CardBufferManager", bufRes);
     _bufferMgr = *bufRes;
 
@@ -281,10 +285,10 @@ Result<void> CardManagerImpl::init() noexcept {
 
 CardManagerImpl::~CardManagerImpl() {
     if (_sharedBindGroup) wgpuBindGroupRelease(_sharedBindGroup);
-    if (_metadataGpuBuffer) wgpuBufferRelease(_metadataGpuBuffer);
+    if (_metadataGpuBuffer) _allocator->releaseBuffer(_metadataGpuBuffer);
     if (_dummyAtlasSampler) wgpuSamplerRelease(_dummyAtlasSampler);
     if (_dummyAtlasTextureView) wgpuTextureViewRelease(_dummyAtlasTextureView);
-    if (_dummyAtlasTexture) wgpuTextureRelease(_dummyAtlasTexture);
+    if (_dummyAtlasTexture) _allocator->releaseTexture(_dummyAtlasTexture);
 }
 
 // =============================================================================
@@ -294,16 +298,13 @@ CardManagerImpl::~CardManagerImpl() {
 Result<void> CardManagerImpl::createMetadataGpuBuffer() {
     size_t metadataBytes = _metadataCpuBuffer.size() * sizeof(uint32_t);
 
-    yinfo("GPU_ALLOC CardManager: metadataBuffer={} bytes ({:.2f} MB)",
-          metadataBytes, metadataBytes / (1024.0 * 1024.0));
-
     WGPUBufferDescriptor metaDesc = {};
     metaDesc.label = WGPU_STR("CardMetadataBuffer");
     metaDesc.size = metadataBytes;
     metaDesc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
     metaDesc.mappedAtCreation = false;
 
-    _metadataGpuBuffer = wgpuDeviceCreateBuffer(_device, &metaDesc);
+    _metadataGpuBuffer = _allocator->createBuffer(metaDesc);
     if (!_metadataGpuBuffer) {
         return Err("Failed to create metadata GPU buffer");
     }
@@ -351,7 +352,7 @@ Result<void> CardManagerImpl::createDummyResources() {
     texDesc.dimension = WGPUTextureDimension_2D;
     texDesc.mipLevelCount = 1;
     texDesc.sampleCount = 1;
-    _dummyAtlasTexture = wgpuDeviceCreateTexture(_device, &texDesc);
+    _dummyAtlasTexture = _allocator->createTexture(texDesc);
     if (!_dummyAtlasTexture) return Err<void>("Failed to create dummy atlas texture");
 
     WGPUTextureViewDescriptor viewDesc = {};

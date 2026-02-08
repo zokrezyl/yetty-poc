@@ -2,6 +2,7 @@
 
 #include <yetty/result.hpp>
 #include <yetty/gpu-context.h>
+#include <yetty/gpu-allocator.h>
 #include <webgpu/webgpu.h>
 #include <cstdint>
 #include <memory>
@@ -45,7 +46,8 @@ public:
     using Config = CardTextureConfig;
     using Ptr = std::shared_ptr<CardTextureManager>;
 
-    static Result<Ptr> create(GPUContext* gpuContext, Config config = {}) noexcept;
+    static Result<Ptr> create(GPUContext* gpuContext, GpuAllocator::Ptr allocator,
+                              Config config = {}) noexcept;
 
     virtual ~CardTextureManager() = default;
 

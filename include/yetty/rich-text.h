@@ -2,6 +2,7 @@
 
 #include <yetty/font.h>
 #include <yetty/font-manager.h>
+#include <yetty/gpu-allocator.h>
 #include <yetty/result.hpp>
 #include <webgpu/webgpu.h>
 #include <string>
@@ -67,7 +68,7 @@ class RichText {
 public:
     using Ptr = std::shared_ptr<RichText>;
 
-    static Result<Ptr> create(WebGPUContext* ctx, WGPUTextureFormat targetFormat, FontManager* fontMgr) noexcept;
+    static Result<Ptr> create(WebGPUContext* ctx, WGPUTextureFormat targetFormat, FontManager* fontMgr, GpuAllocator::Ptr allocator) noexcept;
 
     ~RichText();
 
@@ -136,7 +137,7 @@ public:
     bool isEmpty() const { return spans_.empty() && chars_.empty(); }
 
 private:
-    RichText(WebGPUContext* ctx, WGPUTextureFormat targetFormat, FontManager* fontMgr) noexcept;
+    RichText(WebGPUContext* ctx, WGPUTextureFormat targetFormat, FontManager* fontMgr, GpuAllocator::Ptr allocator) noexcept;
     Result<void> init() noexcept;
 
     Result<void> createPipeline(WebGPUContext& ctx, WGPUTextureFormat targetFormat);
@@ -186,6 +187,7 @@ private:
     // GPU resources (shared across all fonts)
     //-------------------------------------------------------------------------
     WebGPUContext* _ctx = nullptr;
+    GpuAllocator::Ptr allocator_;
     WGPUTextureFormat targetFormat_ = WGPUTextureFormat_Undefined;
     WGPURenderPipeline pipeline_ = nullptr;
     WGPUBindGroupLayout bindGroupLayout_ = nullptr;
