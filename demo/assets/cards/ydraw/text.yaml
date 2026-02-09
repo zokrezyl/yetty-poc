@@ -1,4 +1,4 @@
-# YDraw Text Demo - Text with different sizes
+# YDraw Text Demo - Text with different sizes and fonts
 background: "#1a1a2e"
 
 body:
@@ -34,6 +34,7 @@ body:
 
   - text:
       position: [20, 290]
-      content: "Mixed: Hello World!"
+      content: "Custom Font: Liberation Sans: abcdefghijklmnoprst"
       font-size: 32
+      font: "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"
       color: "#9b59b6"
