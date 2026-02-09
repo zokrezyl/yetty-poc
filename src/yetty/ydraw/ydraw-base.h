@@ -222,6 +222,7 @@ private:
     uint32_t* _grid = nullptr;
     uint32_t _gridSize = 0;
     StorageHandle _derivedStorage = StorageHandle::invalid();
+    std::vector<uint32_t> _gridStaging;  // Pre-built grid from declareBufferNeeds
 
     // Text glyphs
     std::vector<YDrawGlyph> _glyphs;
