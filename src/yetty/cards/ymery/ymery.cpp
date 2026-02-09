@@ -11,6 +11,7 @@
 #include <imgui_impl_wgpu.h>
 
 #include <filesystem>
+#include <sstream>
 #include <cstring>
 #include <yetty/wgpu-compat.h>
 
@@ -64,39 +65,55 @@ public:
         }
         _metaHandle = *metaResult;
 
-        // Parse payload as YAML path
-        if (_payloadStr.empty()) {
-            return Err<void>("Ymery::init: empty payload (need YAML path)");
-        }
+        // Parse args for -i/--input flag
+        parseArgs(_argsStr);
 
-        fs::path inputPath = fs::absolute(_payloadStr);
-        if (!fs::exists(inputPath)) {
-            return Err<void>("Ymery::init: path not found: " + inputPath.string());
-        }
-
-        // Determine search paths and main module (same logic as ymery-test)
-        std::string mainModule = "app";
-        std::vector<fs::path> searchPaths;
-
-        if (fs::is_regular_file(inputPath)) {
-            mainModule = inputPath.stem().string();
-            fs::path moduleDir = inputPath.parent_path();
-            fs::path parentDir = moduleDir.parent_path();
-            searchPaths = {moduleDir, parentDir};
+        // Load YAML via Lang
+        if (_inputSource == "-") {
+            // Inline content: payload contains YAML data
+            if (_payloadStr.empty()) {
+                return Err<void>("Ymery::init: empty payload (use -i - to read from payload)");
+            }
+            auto langRes = ymery::Lang::createFromString(_payloadStr);
+            if (!langRes) {
+                return Err<void>("Ymery::init: failed to load inline YAML", langRes);
+            }
+            _lang = *langRes;
+            yinfo("Ymery::init: loaded {} bytes of inline YAML", _payloadStr.size());
         } else {
-            fs::path parentDir = inputPath.parent_path();
-            searchPaths = {inputPath, parentDir};
-        }
+            // File path: from -i <path> or legacy payload-as-path
+            std::string pathStr = !_inputSource.empty() ? _inputSource : _payloadStr;
+            if (pathStr.empty()) {
+                return Err<void>("Ymery::init: no input specified (use -i - or -i <path>)");
+            }
 
-        yinfo("Ymery::init: searchPaths={}, mainModule='{}'",
-              searchPaths.size(), mainModule);
+            fs::path inputPath = fs::absolute(pathStr);
+            if (!fs::exists(inputPath)) {
+                return Err<void>("Ymery::init: path not found: " + inputPath.string());
+            }
 
-        // Load YAML
-        auto langRes = ymery::Lang::create(searchPaths, mainModule);
-        if (!langRes) {
-            return Err<void>("Ymery::init: failed to load YAML", langRes);
+            std::string mainModule = "app";
+            std::vector<fs::path> searchPaths;
+
+            if (fs::is_regular_file(inputPath)) {
+                mainModule = inputPath.stem().string();
+                fs::path moduleDir = inputPath.parent_path();
+                fs::path parentDir = moduleDir.parent_path();
+                searchPaths = {moduleDir, parentDir};
+            } else {
+                fs::path parentDir = inputPath.parent_path();
+                searchPaths = {inputPath, parentDir};
+            }
+
+            yinfo("Ymery::init: searchPaths={}, mainModule='{}'",
+                  searchPaths.size(), mainModule);
+
+            auto langRes = ymery::Lang::create(searchPaths, mainModule);
+            if (!langRes) {
+                return Err<void>("Ymery::init: failed to load YAML", langRes);
+            }
+            _lang = *langRes;
         }
-        _lang = *langRes;
 
         // Create dispatcher
         auto dispRes = ymery::Dispatcher::create();
@@ -617,6 +634,24 @@ private:
     }
 
     //=========================================================================
+    // Args parsing
+    //=========================================================================
+
+    void parseArgs(const std::string& args) {
+        std::istringstream iss(args);
+        std::string token;
+
+        while (iss >> token) {
+            if (token == "--input" || token == "-i") {
+                std::string val;
+                if (iss >> val) {
+                    _inputSource = val;
+                }
+            }
+        }
+    }
+
+    //=========================================================================
     // Metadata
     //=========================================================================
 
@@ -677,6 +712,7 @@ private:
     const YettyContext& _ctx;
     std::string _argsStr;
     std::string _payloadStr;
+    std::string _inputSource;  // "-" for payload, or file path
 
     // Ymery
     ymery::LangPtr _lang;

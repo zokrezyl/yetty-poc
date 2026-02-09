@@ -66,6 +66,58 @@ Result<std::shared_ptr<Lang>> Lang::create(
     return lang;
 }
 
+Result<std::shared_ptr<Lang>> Lang::createFromString(
+    const std::string& yamlContent
+) {
+    // Pre-parse to extract module name from app.root-widget
+    std::string moduleName = "app";
+    try {
+        YAML::Node root = YAML::Load(yamlContent);
+        if (root["app"] && root["app"]["root-widget"]) {
+            std::string rootWidget = root["app"]["root-widget"].as<std::string>();
+            size_t dot = rootWidget.find('.');
+            if (dot != std::string::npos) {
+                moduleName = rootWidget.substr(0, dot);
+            }
+        }
+    } catch (const YAML::Exception&) {
+        return Err<std::shared_ptr<Lang>>("Lang::createFromString: YAML parse error");
+    }
+
+    auto lang = std::shared_ptr<Lang>(new Lang());
+    lang->_mainModule = moduleName;
+
+    std::queue<std::pair<std::string, std::string>> toLoad;
+
+    // Load inline content first so its app config takes priority
+    // (_loadModuleFromString only sets _appConfig when empty)
+    if (auto res = lang->_loadModuleFromString(yamlContent, moduleName, toLoad); !res) {
+        return Err<std::shared_ptr<Lang>>("Lang::createFromString: failed to load inline YAML", res);
+    }
+    lang->_loadedModules.insert(moduleName);
+
+    // Load builtin (its app config won't overwrite since _appConfig is now set)
+    if (auto res = lang->_loadModuleFromString(BUILTIN_YAML, "builtin", toLoad); res) {
+        lang->_loadedModules.insert("builtin");
+    }
+
+    // Process remaining imports (file-based, need layout paths)
+    while (!toLoad.empty()) {
+        auto [mod, ns] = toLoad.front();
+        toLoad.pop();
+        if (lang->_loadedModules.count(mod)) continue;
+
+        auto res = lang->_loadModule(mod, ns, toLoad);
+        if (!res) {
+            return Err<std::shared_ptr<Lang>>(
+                "Lang::createFromString: cannot resolve import '" + mod + "'", res);
+        }
+        lang->_loadedModules.insert(mod);
+    }
+
+    return lang;
+}
+
 const char* Lang::_getBuiltinYaml() {
     return BUILTIN_YAML;
 }

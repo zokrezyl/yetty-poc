@@ -13,10 +13,15 @@ namespace yetty::ymery {
 // Lang - YAML loader and module resolver
 class Lang {
 public:
-    // Factory method
+    // Factory: load from file search paths
     static Result<std::shared_ptr<Lang>> create(
         const std::vector<std::filesystem::path>& layoutPaths,
         const std::string& mainModule = "app"
+    );
+
+    // Factory: load from inline YAML content (module name extracted from app.root-widget)
+    static Result<std::shared_ptr<Lang>> createFromString(
+        const std::string& yamlContent
     );
 
     // Access loaded definitions
