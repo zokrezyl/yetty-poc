@@ -34,7 +34,7 @@ body:
 
   - text:
       position: [20, 290]
-      content: "Custom Font: Liberation Sans: jpqrst"
+      content: "Custom Font: Liberation Sans: abcdefghijklmnoprst"
       font-size: 32
       font: "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"
       color: "#9b59b6"
