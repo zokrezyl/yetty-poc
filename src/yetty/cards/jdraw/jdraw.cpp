@@ -277,24 +277,14 @@ public:
             _tileCullShaderModule = nullptr;
         }
 
-        if (_derivedStorage.isValid() && _cardMgr) {
-            if (auto res = _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "derived"); !res) {
-                yerror("JDraw::dispose: deallocateBuffer (derived) failed: {}", error_msg(res));
-            }
-            _derivedStorage = StorageHandle::invalid();
-            _tileLists = nullptr;
-            _tileListsSize = 0;
-        }
+        _derivedStorage = StorageHandle::invalid();
+        _tileLists = nullptr;
+        _tileListsSize = 0;
 
-        if (_primStorage.isValid() && _cardMgr) {
-            if (auto res = _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "prims"); !res) {
-                yerror("JDraw::dispose: deallocateBuffer (prims) failed: {}", error_msg(res));
-            }
-            _primStorage = StorageHandle::invalid();
-            _primitives = nullptr;
-            _primCount = 0;
-            _primCapacity = 0;
-        }
+        _primStorage = StorageHandle::invalid();
+        _primitives = nullptr;
+        _primCount = 0;
+        _primCapacity = 0;
 
         if (_metaHandle.isValid() && _cardMgr) {
             if (auto res = _cardMgr->deallocateMetadata(_metaHandle); !res) {
@@ -316,22 +306,16 @@ public:
             std::memcpy(_primStaging.data(), _primitives, _primCount * sizeof(SDFPrimitive));
         }
 
-        // Deallocate derived storage (tile lists — will be rebuilt)
-        if (_derivedStorage.isValid()) {
-            _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "derived");
-            _derivedStorage = StorageHandle::invalid();
-            _tileLists = nullptr;
-            _tileListsSize = 0;
-        }
+        // Invalidate derived storage (tile lists — will be rebuilt)
+        _derivedStorage = StorageHandle::invalid();
+        _tileLists = nullptr;
+        _tileListsSize = 0;
 
-        // Deallocate prim storage
-        if (_primStorage.isValid()) {
-            _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "prims");
-            _primStorage = StorageHandle::invalid();
-            _primitives = nullptr;
-            _primCount = 0;
-            _primCapacity = 0;
-        }
+        // Invalidate prim storage
+        _primStorage = StorageHandle::invalid();
+        _primitives = nullptr;
+        _primCount = 0;
+        _primCapacity = 0;
 
         // Invalidate bind group since buffers changed
         if (_tileCullBindGroup) {
@@ -361,19 +345,14 @@ public:
             _primStaging.resize(_primCount);
             std::memcpy(_primStaging.data(), _primitives, _primCount * sizeof(SDFPrimitive));
         }
-        if (_derivedStorage.isValid()) {
-            _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "derived");
-            _derivedStorage = StorageHandle::invalid();
-            _tileLists = nullptr;
-            _tileListsSize = 0;
-        }
-        if (_primStorage.isValid()) {
-            _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "prims");
-            _primStorage = StorageHandle::invalid();
-            _primitives = nullptr;
-            _primCount = 0;
-            _primCapacity = 0;
-        }
+        _derivedStorage = StorageHandle::invalid();
+        _tileLists = nullptr;
+        _tileListsSize = 0;
+
+        _primStorage = StorageHandle::invalid();
+        _primitives = nullptr;
+        _primCount = 0;
+        _primCapacity = 0;
         if (_tileCullBindGroup) {
             wgpuBindGroupRelease(_tileCullBindGroup);
             _tileCullBindGroup = nullptr;
@@ -825,9 +804,6 @@ private:
 
         if (_primCount > 0 && _primStorage.isValid()) {
             std::memcpy(newStorage->data, _primStorage.data, _primCount * sizeof(SDFPrimitive));
-        }
-        if (_primStorage.isValid()) {
-            _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "prims");
         }
 
         _primStorage = *newStorage;

@@ -477,24 +477,14 @@ Result<void> YDrawBase::dispose() {
     _primStaging.clear();
     _primStaging.shrink_to_fit();
 
-    if (_derivedStorage.isValid() && _cardMgr) {
-        if (auto res = _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "derived"); !res) {
-            yerror("YDrawBase::dispose: deallocateBuffer (derived) failed: {}", error_msg(res));
-        }
-        _derivedStorage = StorageHandle::invalid();
-        _grid = nullptr;
-        _gridSize = 0;
-    }
+    _derivedStorage = StorageHandle::invalid();
+    _grid = nullptr;
+    _gridSize = 0;
 
-    if (_primStorage.isValid() && _cardMgr) {
-        if (auto res = _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "prims"); !res) {
-            yerror("YDrawBase::dispose: deallocateBuffer (prims) failed: {}", error_msg(res));
-        }
-        _primStorage = StorageHandle::invalid();
-        _primitives = nullptr;
-        _primCount = 0;
-        _primCapacity = 0;
-    }
+    _primStorage = StorageHandle::invalid();
+    _primitives = nullptr;
+    _primCount = 0;
+    _primCapacity = 0;
 
     if (_metaHandle.isValid() && _cardMgr) {
         if (auto res = _cardMgr->deallocateMetadata(_metaHandle); !res) {
@@ -512,20 +502,14 @@ void YDrawBase::suspend() {
         std::memcpy(_primStaging.data(), _primitives, _primCount * sizeof(SDFPrimitive));
     }
 
-    if (_derivedStorage.isValid()) {
-        _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "derived");
-        _derivedStorage = StorageHandle::invalid();
-        _grid = nullptr;
-        _gridSize = 0;
-    }
+    _derivedStorage = StorageHandle::invalid();
+    _grid = nullptr;
+    _gridSize = 0;
 
-    if (_primStorage.isValid()) {
-        _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "prims");
-        _primStorage = StorageHandle::invalid();
-        _primitives = nullptr;
-        _primCount = 0;
-        _primCapacity = 0;
-    }
+    _primStorage = StorageHandle::invalid();
+    _primitives = nullptr;
+    _primCount = 0;
+    _primCapacity = 0;
 
     yinfo("YDrawBase::suspend: deallocated storage, saved {} primitives to staging", _primStaging.size());
 }
@@ -537,19 +521,14 @@ void YDrawBase::declareBufferNeeds() {
         std::memcpy(_primStaging.data(), _primitives, _primCount * sizeof(SDFPrimitive));
     }
     uint32_t lastDerivedSize = _derivedStorage.size;
-    if (_derivedStorage.isValid()) {
-        _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "derived");
-        _derivedStorage = StorageHandle::invalid();
-        _grid = nullptr;
-        _gridSize = 0;
-    }
-    if (_primStorage.isValid()) {
-        _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "prims");
-        _primStorage = StorageHandle::invalid();
-        _primitives = nullptr;
-        _primCount = 0;
-        _primCapacity = 0;
-    }
+    _derivedStorage = StorageHandle::invalid();
+    _grid = nullptr;
+    _gridSize = 0;
+
+    _primStorage = StorageHandle::invalid();
+    _primitives = nullptr;
+    _primCount = 0;
+    _primCapacity = 0;
 
     // Reserve prim storage
     if (!_primStaging.empty()) {
@@ -1197,10 +1176,6 @@ Result<void> YDrawBase::ensurePrimCapacity(uint32_t required) {
     if (_primCount > 0 && _primStorage.isValid()) {
         std::memcpy(newStorage->data, _primStorage.data, _primCount * sizeof(SDFPrimitive));
     }
-    if (_primStorage.isValid()) {
-        _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "prims");
-    }
-
     _primStorage = *newStorage;
     _primitives = reinterpret_cast<SDFPrimitive*>(_primStorage.data);
     _primCapacity = newCap;
@@ -1394,7 +1369,6 @@ Result<void> YDrawBase::rebuildAndUpload() {
             }
             _derivedStorage = *storageResult;
         } else if (derivedTotalSize > _derivedStorage.size) {
-            _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "derived");
             auto storageResult = _cardMgr->bufferManager()->allocateBuffer(metadataSlotIndex(), "derived", derivedTotalSize);
             if (!storageResult) {
                 _derivedStorage = StorageHandle::invalid();

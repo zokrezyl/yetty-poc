@@ -328,12 +328,6 @@ public:
             _engineInitialized = false;
         }
 
-        // Release texture handle
-        if (_textureHandle.isValid() && _cardMgr) {
-            _cardMgr->textureManager()->deallocate(_textureHandle);
-            _textureHandle = TextureHandle::invalid();
-        }
-
         if (_metaHandle.isValid() && _cardMgr) {
             _cardMgr->deallocateMetadata(_metaHandle);
             _metaHandle = MetadataHandle::invalid();
@@ -347,29 +341,38 @@ public:
     }
 
     void suspend() override {
-        // Release texture handle but keep ThorVG objects for re-render on resume
-        if (_textureHandle.isValid() && _cardMgr) {
-            _cardMgr->textureManager()->deallocate(_textureHandle);
-            _textureHandle = TextureHandle::invalid();
-        }
         _renderBuffer.clear();
         _needsRerender = true;
         yinfo("ThorVG::suspend: deallocated texture handle");
     }
 
     Result<void> allocateTextures() override {
+        _textureHandle = TextureHandle::invalid();
         if (_animation) {
-            if (_needsRerender || !_textureHandle.isValid() || _renderBuffer.empty()) {
+            if (_needsRerender || _renderBuffer.empty()) {
                 recalculateDimensions();
                 if (auto res = renderFrame(); !res) {
                     return Err<void>("ThorVG::allocateTextures: failed to render", res);
                 }
                 _needsRerender = false;
             } else {
-                // Re-register existing pixels with texture manager
-                _cardMgr->textureManager()->write(_textureHandle, _renderBuffer.data());
+                // Re-allocate handle for existing rendered pixels
+                auto allocResult = _cardMgr->textureManager()->allocate(_renderWidth, _renderHeight);
+                if (!allocResult) {
+                    return Err<void>("ThorVG::allocateTextures: failed to allocate texture handle", allocResult);
+                }
+                _textureHandle = *allocResult;
             }
             _metadataDirty = true;
+        }
+        return Ok();
+    }
+
+    Result<void> writeTextures() override {
+        if (_textureHandle.isValid() && !_renderBuffer.empty()) {
+            if (auto res = _cardMgr->textureManager()->write(_textureHandle, _renderBuffer.data()); !res) {
+                return Err<void>("ThorVG::writeTextures: write failed", res);
+            }
         }
         return Ok();
     }
@@ -398,10 +401,14 @@ public:
             }
         }
 
-        // Re-render if content changed
+        // Re-render if content changed (animation frame update)
         if (_needsRerender && _animation) {
             if (auto res = renderFrame(); !res) {
                 return Err<void>("ThorVG::update: render failed", res);
+            }
+            // Write updated pixels to atlas (atlas exists by render time)
+            if (_textureHandle.isValid() && !_renderBuffer.empty()) {
+                _cardMgr->textureManager()->write(_textureHandle, _renderBuffer.data());
             }
             _needsRerender = false;
         }
@@ -752,7 +759,7 @@ private:
         // Reset canvas (picture lifetime managed by _animation)
         _canvas.reset();
 
-        // Allocate texture handle if needed, link our render buffer
+        // Allocate texture handle if needed
         if (!_textureHandle.isValid()) {
             auto allocResult = _cardMgr->textureManager()->allocate(_renderWidth, _renderHeight);
             if (!allocResult) {
@@ -760,10 +767,9 @@ private:
             }
             _textureHandle = *allocResult;
         }
-        _cardMgr->textureManager()->write(_textureHandle, _renderBuffer.data());
         _metadataDirty = true;
 
-        ydebug("ThorVG::renderFrame: DONE - linked to handle id={}", _textureHandle.id);
+        ydebug("ThorVG::renderFrame: DONE - handle id={}", _textureHandle.id);
         return Ok();
     }
 

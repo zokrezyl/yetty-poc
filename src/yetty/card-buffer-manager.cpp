@@ -75,8 +75,6 @@ public:
     Result<BufferHandle> allocateBuffer(uint32_t slotIndex,
                                         const std::string& scope,
                                         uint32_t size) override;
-    Result<void> deallocateBuffer(uint32_t slotIndex,
-                                  const std::string& scope) override;
     Result<void> writeBuffer(BufferHandle handle, const void* data, uint32_t size) override;
     Result<void> writeBufferAt(BufferHandle handle, uint32_t offset, const void* data, uint32_t size) override;
     void markBufferDirty(BufferHandle handle) override;
@@ -317,9 +315,11 @@ Result<BufferHandle> CardBufferManagerImpl::allocateBuffer(uint32_t slotIndex,
                                                             uint32_t size) {
     SubAllocKey key{slotIndex, scope};
 
-    // Check for duplicate allocation
-    if (_subAllocations.count(key)) {
-        return Err<BufferHandle>("allocateBuffer: duplicate allocation");
+    // Auto-replace: if key already exists, free old allocation first
+    auto it = _subAllocations.find(key);
+    if (it != _subAllocations.end()) {
+        _bufferAllocator.deallocate(it->second);
+        _subAllocations.erase(it);
     }
 
     auto result = _bufferAllocator.allocate(size);
@@ -337,24 +337,6 @@ Result<BufferHandle> CardBufferManagerImpl::allocateBuffer(uint32_t slotIndex,
            slotIndex, scope, handle.size, handle.offset);
 
     return Ok(handle);
-}
-
-Result<void> CardBufferManagerImpl::deallocateBuffer(uint32_t slotIndex,
-                                                      const std::string& scope) {
-    SubAllocKey key{slotIndex, scope};
-
-    auto it = _subAllocations.find(key);
-    if (it == _subAllocations.end()) {
-        return Err("deallocateBuffer: not found");
-    }
-
-    BufferHandle handle = it->second;
-    _subAllocations.erase(it);
-
-    ydebug("CardBufferManager: deallocated slot={} scope='{}' size={} offset={}",
-           slotIndex, scope, handle.size, handle.offset);
-
-    return _bufferAllocator.deallocate(handle);
 }
 
 Result<void> CardBufferManagerImpl::writeBuffer(BufferHandle handle, const void* data, uint32_t size) {

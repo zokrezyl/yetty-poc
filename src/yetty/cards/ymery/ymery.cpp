@@ -178,10 +178,6 @@ public:
         _destroyOffscreenTexture();
         _destroyReadbackBuffer();
 
-        if (_textureHandle.isValid() && _cardMgr) {
-            _cardMgr->textureManager()->deallocate(_textureHandle);
-            _textureHandle = TextureHandle::invalid();
-        }
         _cpuPixels.clear();
 
         yinfo("Ymery::suspend: deallocated offscreen texture + texture handle");
@@ -208,10 +204,6 @@ public:
         _destroyOffscreenTexture();
         _destroyReadbackBuffer();
 
-        if (_textureHandle.isValid() && _cardMgr) {
-            _cardMgr->textureManager()->deallocate(_textureHandle);
-            _textureHandle = TextureHandle::invalid();
-        }
         _cpuPixels.clear();
         _cpuPixels.shrink_to_fit();
 
@@ -233,6 +225,7 @@ public:
     //=========================================================================
 
     Result<void> allocateTextures() override {
+        _textureHandle = TextureHandle::invalid();
         // Recompute pixel dimensions if cell size changed
         if (_needsResize) {
             uint32_t newW = _widthCells * _cellWidth;
@@ -266,6 +259,15 @@ public:
                 _dirty = true;
             }
             _metadataDirty = true;
+        }
+        return Ok();
+    }
+
+    Result<void> writeTextures() override {
+        if (_textureHandle.isValid() && !_cpuPixels.empty()) {
+            if (auto res = _cardMgr->textureManager()->write(_textureHandle, _cpuPixels.data()); !res) {
+                return Err<void>("Ymery::writeTextures: write failed", res);
+            }
         }
         return Ok();
     }

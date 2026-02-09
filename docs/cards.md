@@ -207,19 +207,21 @@ Where ESC characters in content are doubled (`ESC` → `ESC ESC`). The `yetty-cl
               ▼                                    ▼
 ┌─────────────────────────────┐      ┌─────────────────────────────┐
 │    CardBufferManager        │      │   CardTextureManager        │
-│  - Linear storage buffer    │      │  - Dynamic texture atlas    │
-│  - Free-list allocator      │      │  - Strip packing algorithm  │
-│  - Direct CPU write access  │      │  - Auto-grow (2K→8K)        │
-│  - Dirty region coalescing  │      │  - Rebuild on card change   │
+│  - Linear GPU storage buf   │      │  - Dynamic texture atlas    │
+│  - Free-list sub-allocator  │      │  - Strip packing algorithm  │
+│  - Direct CPU write access  │      │  - Right-sized per frame    │
+│  - Dirty region coalescing  │      │  - Released when empty      │
+│  - Fully cleared on realloc │      │  - Fully cleared on realloc │
 └─────────────────────────────┘      └─────────────────────────────┘
               │                                    │
               ▼                                    ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │                          Card Base Class                             │
-│  - needsBuffer() / needsTexture() - declare resource type           │
-│  - declareBufferNeeds() → allocateBuffers() → allocateTextures()    │
-│  - render(time) - per-frame update                                   │
-│  - suspend() / dispose() - lifecycle management                      │
+│  - needsBuffer() / needsTexture() — declare resource type           │
+│  - declareBufferNeeds() → allocateBuffers()                         │
+│  - allocateTextures() → writeTextures()                             │
+│  - render(time) — per-frame update                                   │
+│  - suspend() / dispose() — lifecycle management                      │
 └─────────────────────────────────────────────────────────────────────┘
               │
     ┌─────────┴─────────┬─────────────┬─────────────┬────────────┐
@@ -234,100 +236,131 @@ Where ESC characters in content are doubled (`ESC` → `ESC ESC`). The `yetty-cl
 
 Cards declare which resources they need via `needsBuffer()` and `needsTexture()`. A card can use one or both.
 
+Both managers follow the same core principle: **when any card enters or leaves the visible viewport, ALL resources are cleared and ALL visible cards must re-declare their needs from scratch**. There is no per-handle deallocation. This ensures the GPU buffer/atlas is always right-sized to exactly what is currently needed, and resources are released to zero when no cards of that type are visible.
+
 ### Storage Buffer (CardBufferManager)
 
 Used by cards that store structured data: plots (float arrays), YDraw (SDF primitives, spatial hash grid).
 
 **Characteristics:**
-- Linear GPU storage buffer (SSBO)
-- Direct CPU write access via raw pointers
-- 16-byte alignment, max 32MB
-- Dirty region tracking with coalesced uploads
+- Linear GPU storage buffer (SSBO), binding 2 in the card shader
+- Direct CPU write access via raw pointers (`handle.data`)
+- 16-byte alignment
+- Dirty region tracking with coalesced GPU uploads
+- No per-handle deallocation — `commitReservations()` clears everything
+- `allocateBuffer()` auto-replaces existing keys (for mid-cycle resizing)
+
+**Why a storage buffer (not a texture)?** Buffer cards store structured numeric data (float arrays, primitive structs, grid indices) that the shader reads by offset. A linear buffer is the natural fit — cards get a raw pointer to write floats directly, and the shader indexes into it with `storage[offset]`. There is no 2D spatial locality, so a texture would add unnecessary complexity.
 
 **Three-Phase Allocation Protocol:**
 
-```cpp
-// Phase 1: Cards declare total space needed
-card->declareBufferNeeds();     // calls bufferMgr->reserve(size)
+When a buffer card enters or leaves the viewport, `_bufferLayoutChanged` is set, triggering a full reallocation cycle on the next frame:
 
-// Phase 2: Buffer pre-allocated to fit all needs
-bufferMgr->commitReservations();
+```
+Phase 1: declareBufferNeeds()
+  Each buffer card calls bufferMgr->reserve(size) to declare its total need.
+  Cards save existing GPU data to CPU staging before this phase.
 
-// Phase 3: Cards receive stable pointers
-StorageHandle handle = bufferMgr->allocateBuffer(size);
-memcpy(handle.data, myData, size);  // Write directly to CPU buffer
-bufferMgr->markBufferDirty(handle);
+Phase 2: commitReservations()
+  The buffer manager clears ALL sub-allocations and recreates the internal
+  allocator sized to exactly the total reserved bytes. The GPU buffer is
+  recreated if the size changed. All previous BufferHandle pointers are
+  now invalid.
+
+Phase 3: allocateBuffers()
+  Each buffer card calls bufferMgr->allocateBuffer(slotIndex, scope, size)
+  to get a fresh handle with a stable CPU pointer. Cards restore data from
+  staging into the new allocation.
 ```
 
-**Why Three Phases:**
-- Ensures buffer grows exactly once to fit all needs
-- Pointers remain stable after Phase 2 (no reallocation)
-- Cards can write directly without intermediate copies
+**Why three phases?**
+- Phase 1 computes the exact total size needed across all visible cards
+- Phase 2 creates a single GPU buffer of that exact size (right-sized, no waste)
+- Phase 3 gives cards stable pointers that won't move (no reallocation after this)
+- When all buffer cards leave, the total is zero and the GPU buffer shrinks to minimum
 
-**StorageHandle Structure:**
+**BufferHandle Structure:**
 ```cpp
-struct StorageHandle {
-    uint8_t* data;      // Direct CPU pointer - write here
+struct BufferHandle {
+    uint8_t* data;      // Direct CPU pointer — write here
     uint32_t offset;    // Offset in GPU buffer (bytes)
     uint32_t size;      // Allocation size
 };
 ```
 
+**Mid-cycle resizing:** If a card needs to grow its buffer during render (e.g., adding primitives), it can call `allocateBuffer()` with the same `(slotIndex, scope)` key and a larger size. The manager auto-replaces the old allocation internally — no explicit deallocation needed.
+
 ### Texture Atlas (CardTextureManager)
 
-Used by cards that render images: Image, PDF, ThorVG.
+Used by cards that render pixel data: Image, PDF, ThorVG, YHtml, Ymery.
 
 **Characteristics:**
-- Single RGBA8 texture atlas
-- Initial size: 2048×2048, grows to 8192×8192
-- Strip packing algorithm (sort by height)
-- Rebuilt when cards enter/leave viewport
+- Single RGBA8 texture atlas, binding 2-3 in the card shader
+- Right-sized: smallest power-of-2 that fits all current textures (e.g., 256, 512, 2048)
+- Strip packing algorithm (sort entries by height descending)
+- Fully released when no texture cards are visible (GPU memory goes to zero)
+- No per-handle deallocation — `clearHandles()` wipes everything
+- `write()` only works after `createAtlas()` — enforced with error check
 
-**Allocation Protocol:**
+**Why a texture atlas (not a buffer)?** Texture cards provide 2D RGBA pixel data (rendered images, PDF pages, SVG frames). The GPU samples this data with `textureSample()` using 2D UV coordinates, getting hardware bilinear filtering for free. A buffer would require manual 2D indexing and lose filtering support.
 
+**Four-Phase Allocation Protocol:**
+
+When a texture card enters or leaves the viewport, `_textureLayoutChanged` is set, triggering a full reallocation cycle on the next frame:
+
+```
+Phase 1: clearHandles()
+  The texture manager wipes ALL texture handles. Every card's handle
+  is now invalid. This is the equivalent of commitReservations() for buffers.
+
+Phase 2: allocateTextures()
+  Each texture card calls textureMgr->allocate(width, height) to declare
+  the size of its texture. This returns a TextureHandle but does NOT write
+  any pixel data yet. Cards prepare their pixels in CPU memory.
+
+Phase 3: createAtlas()
+  The texture manager packs all declared handles using strip packing,
+  finds the smallest power-of-2 atlas size that fits, and creates (or
+  recreates) the GPU texture. Atlas positions are now assigned.
+
+Phase 4: writeTextures()
+  Each texture card calls textureMgr->write(handle, pixels) to push its
+  pixel data into the atlas. This only works AFTER createAtlas() — calling
+  write() before the atlas is created returns an error.
+```
+
+**Why four phases?**
+- Phase 1 ensures a clean slate — no stale handles from departed cards
+- Phase 2 collects all size requirements without touching the GPU
+- Phase 3 computes the optimal atlas layout and creates the GPU texture at exactly the right size
+- Phase 4 writes pixels now that atlas positions are known and the GPU texture exists
+- The split between allocate (phase 2) and write (phase 4) prevents cards from writing to a texture that doesn't exist yet
+
+**Right-sizing behavior:**
+- If two 512x512 texture cards are visible, the atlas is 1024x512 (or 1024x1024 power-of-2)
+- If one leaves, the atlas shrinks to 512x512 on the next reallocation
+- If all leave, the atlas GPU resources are fully released (zero GPU memory)
+
+**TextureHandle:**
 ```cpp
-// Allocate space in atlas
-TextureHandle handle = textureMgr->allocate(width, height);
-
-// Write pixel data
-textureMgr->write(handle, pixelData);
-
-// Query position after atlas is built
-AtlasPosition pos = textureMgr->getAtlasPosition(handle);
+struct TextureHandle {
+    uint32_t id;      // Opaque handle ID (0 = invalid)
+};
 ```
 
-**Dynamic Atlas Rebuilding:**
+### Key Difference: Buffer vs Texture
 
-When texture cards enter or leave the visible viewport:
-
-1. GPU-screen sets `_textureLayoutChanged = true`
-2. On next frame, all texture cards call `allocateTextures()`
-3. `CardTextureManager::createAtlas()` repacks the atlas
-4. Cards query their new atlas positions
-5. Old deallocated textures are excluded from new packing
-
-```
-┌─────────────────────────────────────────┐
-│  Card A enters viewport                 │
-│  ─────────────────────────────────────  │
-│  1. card->allocateTextures()            │
-│  2. textureMgr->allocate(w, h)          │
-│  3. textureMgr->write(handle, pixels)   │
-│  4. gpu-screen: createAtlas()           │
-│  5. Strip packing runs                  │
-│  6. Atlas texture uploaded to GPU       │
-└─────────────────────────────────────────┘
-
-┌─────────────────────────────────────────┐
-│  Card B leaves viewport                 │
-│  ─────────────────────────────────────  │
-│  1. card->suspend() called              │
-│  2. Later: card->dispose()              │
-│  3. textureMgr->deallocate(handle)      │
-│  4. Next texture change: createAtlas()  │
-│  5. Repacking excludes Card B           │
-└─────────────────────────────────────────┘
-```
+| Aspect | CardBufferManager | CardTextureManager |
+|--------|-------------------|---------------------|
+| GPU resource | Storage buffer (SSBO) | RGBA8 2D texture |
+| Data type | Structured (floats, u32s) | Pixel data (RGBA8) |
+| Shader access | `storage[offset]` | `textureSample(uv)` |
+| Card writes via | Direct pointer (`handle.data`) | `write(handle, pixels)` |
+| Sizing | Exact byte count | Power-of-2 atlas |
+| Clear trigger | `commitReservations()` | `clearHandles()` |
+| Write timing | During `allocateBuffers()` | During `writeTextures()` (after atlas) |
+| Mid-cycle resize | `allocateBuffer()` auto-replaces | Not supported (full rebuild) |
+| When empty | Shrinks to 4 bytes minimum | Fully released (zero GPU memory) |
 
 ## Card Lifecycle
 
@@ -336,68 +369,86 @@ When texture cards enter or leave the visible viewport:
 ```cpp
 class Card : public base::EventListener {
 public:
-    // Resource declaration (called once during init)
+    // Resource declaration
     virtual bool needsBuffer() const { return false; }
     virtual bool needsTexture() const { return false; }
 
-    // Three-loop allocation (called when cards enter viewport)
-    virtual void declareBufferNeeds() {}           // Loop 1: reserve space
-    virtual Result<void> allocateBuffers() {}      // Loop 2: get pointers
-    virtual Result<void> allocateTextures() {}     // Loop 3: texture handles
+    // Buffer allocation (Loops 1-2, when buffer cards change)
+    virtual void declareBufferNeeds() {}
+    virtual Result<void> allocateBuffers() { return Ok(); }
 
-    // Per-frame rendering
-    virtual Result<void> render(float time) = 0;
+    // Texture allocation (Loops 3a-3b, when texture cards change)
+    virtual Result<void> allocateTextures() { return Ok(); }
+    virtual Result<void> writeTextures() { return Ok(); }
+
+    // Per-frame rendering (every frame, after allocation)
+    virtual Result<void> render(float time) { return Ok(); }
 
     // Lifecycle termination
-    virtual void suspend() {}                      // Pause, keep resources
-    virtual Result<void> dispose() = 0;            // Release all resources
+    virtual void suspend();              // Card scrolled off-screen
+    virtual Result<void> dispose() = 0;  // Card destroyed
 };
 ```
 
-### GPU-Screen Integration
+### What Happens When a Card Enters or Leaves
 
-The three-loop lifecycle runs in `gpu-screen.cpp` when cards change:
+When a card enters or leaves the visible viewport (scroll, creation, destruction), gpu-screen sets `_bufferLayoutChanged` and/or `_textureLayoutChanged` depending on the card's resource type. On the next render frame, the full reallocation cycle runs for the affected resource type. **All visible cards** of that type must re-declare their needs — not just the card that changed.
+
+This means:
+- **Card enters:** Its resources are allocated alongside all existing cards
+- **Card leaves:** Its resources are gone. Remaining cards get fresh allocations in a right-sized buffer/atlas
+- **No card visible:** GPU resources shrink to minimum (buffer) or are fully released (texture)
+
+### GPU-Screen Render Loop
 
 ```cpp
 void GPUScreen::render() {
+    // === Buffer reallocation (when any buffer card enters/leaves) ===
     if (_bufferLayoutChanged) {
-        // Loop 1: Declare buffer needs
-        for (auto& card : _cards) {
+        // Loop 1: All buffer cards declare their total needs
+        for (auto& card : _cards)
             if (card->needsBuffer())
-                card->declareBufferNeeds();
-        }
+                card->declareBufferNeeds();  // calls reserve()
 
-        // Pre-allocate total buffer
+        // commitReservations: CLEARS all sub-allocations, recreates
+        // allocator at exactly the total reserved size
         _bufferMgr->commitReservations();
 
-        // Loop 2: Allocate buffers
-        for (auto& card : _cards) {
+        // Loop 2: All buffer cards allocate fresh handles
+        for (auto& card : _cards)
             if (card->needsBuffer())
-                card->allocateBuffers();
-        }
+                card->allocateBuffers();     // calls allocateBuffer()
 
         _bufferLayoutChanged = false;
     }
 
+    // === Texture reallocation (when any texture card enters/leaves) ===
     if (_textureLayoutChanged) {
-        // Loop 3: Allocate textures
-        for (auto& card : _cards) {
-            if (card->needsTexture())
-                card->allocateTextures();
-        }
+        // Phase 1: Clear all texture handles
+        _textureMgr->clearHandles();
 
-        // Pack atlas
+        // Phase 2: All texture cards declare their sizes
+        for (auto& card : _cards)
+            if (card->needsTexture())
+                card->allocateTextures();    // calls allocate(w, h)
+
+        // Phase 3: Pack atlas and create GPU texture
         _textureMgr->createAtlas();
+
+        // Phase 4: All texture cards write pixel data
+        for (auto& card : _cards)
+            if (card->needsTexture())
+                card->writeTextures();       // calls write(handle, pixels)
 
         _textureLayoutChanged = false;
     }
 
-    // Per-frame render
+    // === Per-frame render (every frame) ===
     for (auto& card : _cards)
         card->render(time);
 
-    // Upload dirty regions to GPU
-    _cardMgr->flush(queue);
+    // === GPU upload ===
+    _cardMgr->flush(queue);  // uploads dirty buffer regions + atlas pixels
 }
 ```
 

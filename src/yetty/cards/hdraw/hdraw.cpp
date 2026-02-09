@@ -299,25 +299,15 @@ public:
     }
 
     Result<void> dispose() override {
-        if (_derivedStorage.isValid() && _cardMgr) {
-            if (auto res = _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "derived"); !res) {
-                yerror("HDraw::dispose: deallocateBuffer (derived) failed: {}", error_msg(res));
-            }
-            _derivedStorage = StorageHandle::invalid();
-            _bvhNodes = nullptr;
-            _sortedIndices = nullptr;
-            _bvhNodeCount = 0;
-        }
+        _derivedStorage = StorageHandle::invalid();
+        _bvhNodes = nullptr;
+        _sortedIndices = nullptr;
+        _bvhNodeCount = 0;
 
-        if (_primStorage.isValid() && _cardMgr) {
-            if (auto res = _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "prims"); !res) {
-                yerror("HDraw::dispose: deallocateBuffer (prims) failed: {}", error_msg(res));
-            }
-            _primStorage = StorageHandle::invalid();
-            _primitives = nullptr;
-            _primCount = 0;
-            _primCapacity = 0;
-        }
+        _primStorage = StorageHandle::invalid();
+        _primitives = nullptr;
+        _primCount = 0;
+        _primCapacity = 0;
 
         if (_metaHandle.isValid() && _cardMgr) {
             if (auto res = _cardMgr->deallocateMetadata(_metaHandle); !res) {
@@ -339,23 +329,17 @@ public:
             std::memcpy(_primStaging.data(), _primitives, _primCount * sizeof(SDFPrimitive));
         }
 
-        // Deallocate derived storage (BVH, sorted indices — will be rebuilt)
-        if (_derivedStorage.isValid()) {
-            _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "derived");
-            _derivedStorage = StorageHandle::invalid();
-            _bvhNodes = nullptr;
-            _sortedIndices = nullptr;
-            _bvhNodeCount = 0;
-        }
+        // Invalidate derived storage (BVH, sorted indices — will be rebuilt)
+        _derivedStorage = StorageHandle::invalid();
+        _bvhNodes = nullptr;
+        _sortedIndices = nullptr;
+        _bvhNodeCount = 0;
 
-        // Deallocate prim storage
-        if (_primStorage.isValid()) {
-            _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "prims");
-            _primStorage = StorageHandle::invalid();
-            _primitives = nullptr;
-            _primCount = 0;
-            _primCapacity = 0;
-        }
+        // Invalidate prim storage
+        _primStorage = StorageHandle::invalid();
+        _primitives = nullptr;
+        _primCount = 0;
+        _primCapacity = 0;
 
         yinfo("HDraw::suspend: deallocated storage, saved {} primitives to staging",
               _primStaging.size());
@@ -377,19 +361,14 @@ public:
             std::memcpy(_primStaging.data(), _primitives, _primCount * sizeof(SDFPrimitive));
         }
         uint32_t lastDerivedSize = _derivedStorage.size;
-        if (_derivedStorage.isValid()) {
-            _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "derived");
-            _derivedStorage = StorageHandle::invalid();
-            _bvhNodes = nullptr;
-            _sortedIndices = nullptr;
-        }
-        if (_primStorage.isValid()) {
-            _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "prims");
-            _primStorage = StorageHandle::invalid();
-            _primitives = nullptr;
-            _primCount = 0;
-            _primCapacity = 0;
-        }
+        _derivedStorage = StorageHandle::invalid();
+        _bvhNodes = nullptr;
+        _sortedIndices = nullptr;
+
+        _primStorage = StorageHandle::invalid();
+        _primitives = nullptr;
+        _primCount = 0;
+        _primCapacity = 0;
         // Reserve prim + derived
         if (!_primStaging.empty()) {
             uint32_t primSize = static_cast<uint32_t>(_primStaging.size()) * sizeof(SDFPrimitive);
@@ -852,9 +831,6 @@ private:
 
         if (_primCount > 0 && _primStorage.isValid()) {
             std::memcpy(newStorage->data, _primStorage.data, _primCount * sizeof(SDFPrimitive));
-        }
-        if (_primStorage.isValid()) {
-            _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "prims");
         }
 
         _primStorage = *newStorage;

@@ -145,16 +145,6 @@ PYBIND11_EMBEDDED_MODULE(yetty_card, m) {
     }, py::arg("handle"),
        "Write the local pixel buffer to the atlas for this handle");
 
-    m.def("deallocate_texture", [](PyTextureHandle& h) {
-        auto* mgr = s_textureMgr;
-        if (!mgr) throw std::runtime_error("No CardTextureManager set");
-        mgr->deallocate(h.handle);
-        h.handle = TextureHandle::invalid();
-        h.pixels.clear();
-        h.width = 0;
-        h.height = 0;
-    }, py::arg("handle"), "Deallocate texture handle and free pixel buffer");
-
     // --- Buffer functions (renamed from storage) ---
     m.def("allocate_buffer", [](const std::string& scope, uint32_t size) -> PyBufferHandle {
         auto* mgr = s_cardMgr;

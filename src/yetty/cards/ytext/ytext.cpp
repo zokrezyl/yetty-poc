@@ -595,18 +595,12 @@ Result<void> YText::render(float time) {
 }
 
 void YText::suspend() {
-    if (_dataStorage.isValid()) {
-        _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "data");
-        _dataStorage = StorageHandle::invalid();
-    }
+    _dataStorage = StorageHandle::invalid();
     _dirty = true;
 }
 
 Result<void> YText::dispose() {
-    if (_dataStorage.isValid() && _cardMgr) {
-        _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "data");
-        _dataStorage = StorageHandle::invalid();
-    }
+    _dataStorage = StorageHandle::invalid();
 
     if (_metaHandle.isValid() && _cardMgr) {
         _cardMgr->deallocateMetadata(_metaHandle);

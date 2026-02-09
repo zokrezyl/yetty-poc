@@ -136,11 +136,6 @@ public:
     }
 
     void suspend() override {
-        // Deallocate texture handle but keep _pagePixels for reconstruction
-        if (_textureHandle.isValid() && _cardMgr) {
-            _cardMgr->textureManager()->deallocate(_textureHandle);
-            _textureHandle = TextureHandle::invalid();
-        }
         _needsUpload = true;
         _metadataDirty = true;
         yinfo("Pdf::suspend: deallocated texture handle, _pagePixels has {} bytes", _pagePixels.size());
@@ -149,12 +144,6 @@ public:
     Result<void> dispose() override {
         // Deregister from events
         deregisterFromEvents();
-
-        // Release texture handle
-        if (_textureHandle.isValid() && _cardMgr) {
-            _cardMgr->textureManager()->deallocate(_textureHandle);
-            _textureHandle = TextureHandle::invalid();
-        }
 
         if (_metaHandle.isValid() && _cardMgr) {
             _cardMgr->deallocateMetadata(_metaHandle);
@@ -177,8 +166,9 @@ public:
     }
 
     Result<void> allocateTextures() override {
-        ydebug("Pdf::allocateTextures: pixels={} texHandle={} needsRender={} renderW={} renderH={}",
-               _pagePixels.size(), _textureHandle.isValid(), _needsRender, _renderWidth, _renderHeight);
+        _textureHandle = TextureHandle::invalid();
+        ydebug("Pdf::allocateTextures: pixels={} needsRender={} renderW={} renderH={}",
+               _pagePixels.size(), _needsRender, _renderWidth, _renderHeight);
 
         // Render page if needed (first time or page change) so pixels are ready for createAtlas
         if (_needsRender) {
@@ -196,6 +186,15 @@ public:
             _needsUpload = false;
             ydebug("Pdf::allocateTextures: linked ok, texHandle id={} renderW={} renderH={}",
                    _textureHandle.id, _renderWidth, _renderHeight);
+        }
+        return Ok();
+    }
+
+    Result<void> writeTextures() override {
+        if (_textureHandle.isValid() && !_pagePixels.empty()) {
+            if (auto res = _cardMgr->textureManager()->write(_textureHandle, _pagePixels.data()); !res) {
+                return Err<void>("Pdf::writeTextures: write failed", res);
+            }
         }
         return Ok();
     }
@@ -454,9 +453,6 @@ private:
             _textureHandle = *allocResult;
             yinfo("Pdf::linkPixelsToHandle: allocated texture handle id={}", _textureHandle.id);
         }
-
-        // Write our CPU pixel buffer to the atlas
-        _cardMgr->textureManager()->write(_textureHandle, _pagePixels.data());
 
         yinfo("Pdf::linkPixelsToHandle: linked {}x{} pixels to handle id={}",
               _renderWidth, _renderHeight, _textureHandle.id);

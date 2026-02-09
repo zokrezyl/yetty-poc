@@ -295,23 +295,32 @@ Result<void> YHtml::allocateBuffers() {
 Result<void> YHtml::allocateTextures() {
     uint32_t atlasW = _atlas->getAtlasWidth();
     uint32_t atlasH = _atlas->getAtlasHeight();
-    const auto& atlasData = _atlas->getAtlasData();
 
-    if (atlasData.empty() || atlasW == 0 || atlasH == 0) {
+    if (atlasW == 0 || atlasH == 0) {
         return Ok();
     }
 
-    // Allocate handle
+    // Allocate handle (write happens in writeTextures)
     auto allocResult = _cardMgr->textureManager()->allocate(atlasW, atlasH);
     if (!allocResult) {
         return Err<void>("YHtml::allocateTextures: failed to allocate texture handle", allocResult);
     }
     _atlasTextureHandle = *allocResult;
 
-    // Write atlas pixel data
-    _cardMgr->textureManager()->write(_atlasTextureHandle, atlasData.data());
     yinfo("YHtml::allocateTextures: atlas {}x{} -> handle id={}", atlasW, atlasH, _atlasTextureHandle.id);
 
+    return Ok();
+}
+
+Result<void> YHtml::writeTextures() {
+    if (_atlasTextureHandle.isValid() && _atlas) {
+        const auto& atlasData = _atlas->getAtlasData();
+        if (!atlasData.empty()) {
+            if (auto res = _cardMgr->textureManager()->write(_atlasTextureHandle, atlasData.data()); !res) {
+                return Err<void>("YHtml::writeTextures: write failed", res);
+            }
+        }
+    }
     return Ok();
 }
 
@@ -825,7 +834,6 @@ Result<void> YHtml::rebuildAndUpload() {
             }
             _derivedStorage = *storageResult;
         } else if (derivedTotalSize > _derivedStorage.size) {
-            _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "derived");
             auto storageResult = _cardMgr->bufferManager()->allocateBuffer(metadataSlotIndex(), "derived", derivedTotalSize);
             if (!storageResult) {
                 _derivedStorage = StorageHandle::invalid();
@@ -957,10 +965,7 @@ Result<void> YHtml::uploadMetadata() {
 void YHtml::declareBufferNeeds() {
     uint32_t lastDerivedSize = _derivedStorage.size;
 
-    if (_derivedStorage.isValid()) {
-        _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "derived");
-        _derivedStorage = StorageHandle::invalid();
-    }
+    _derivedStorage = StorageHandle::invalid();
 
     if (!_primitives.empty() || !_glyphs.empty()) {
         if (lastDerivedSize > 0) {
@@ -993,12 +998,7 @@ Result<void> YHtml::render(float /*time*/) {
 Result<void> YHtml::dispose() {
     deregisterFromEvents();
 
-    if (_derivedStorage.isValid() && _cardMgr) {
-        if (auto res = _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "derived"); !res) {
-            yerror("YHtml::dispose: deallocateBuffer failed: {}", error_msg(res));
-        }
-        _derivedStorage = StorageHandle::invalid();
-    }
+    _derivedStorage = StorageHandle::invalid();
 
     if (_metaHandle.isValid() && _cardMgr) {
         if (auto res = _cardMgr->deallocateMetadata(_metaHandle); !res) {
@@ -1011,10 +1011,7 @@ Result<void> YHtml::dispose() {
 }
 
 void YHtml::suspend() {
-    if (_derivedStorage.isValid()) {
-        _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "derived");
-        _derivedStorage = StorageHandle::invalid();
-    }
+    _derivedStorage = StorageHandle::invalid();
 }
 
 //=============================================================================

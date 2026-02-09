@@ -4727,9 +4727,13 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
   }
 
   // Loop 3: Texture cards — only when a texture card entered or left
-  if (_textureLayoutChanged && _cardManager) {
+  if (_textureLayoutChanged && _cardManager && _cardManager->textureManager()) {
     ydebug("GPUScreen::render: _textureLayoutChanged=true, {} active cards", _cards.size());
 
+    // Clear all old texture handles — cards will re-allocate fresh
+    _cardManager->textureManager()->clearHandles();
+
+    // All active texture cards re-allocate
     for (auto& [slotIndex, card] : _cards) {
       if (card->needsTexture()) {
         ydebug("GPUScreen::render: Loop3 allocateTextures card='{}' slot={}", card->typeName(), slotIndex);
@@ -4739,16 +4743,21 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
       }
     }
 
-    // Create/repack texture atlas after all texture cards have allocated
-    if (_cardManager->textureManager()) {
-      ydebug("GPUScreen::render: calling createAtlas");
-      if (auto res = _cardManager->textureManager()->createAtlas(); !res) {
-        yerror("GPUScreen::render: createAtlas FAILED: {}", error_msg(res));
-      }
-      // Atlas texture may have been recreated (init or grow) —
-      // force bind group rebuild so it references the current texture.
-      _cardManager->invalidateBindGroup();
+    // Pack and create atlas sized to current needs
+    if (auto res = _cardManager->textureManager()->createAtlas(); !res) {
+      yerror("GPUScreen::render: createAtlas FAILED: {}", error_msg(res));
     }
+
+    // Write pixel data into the atlas (now that it exists)
+    for (auto& [slotIndex, card] : _cards) {
+      if (card->needsTexture()) {
+        if (auto res = card->writeTextures(); !res) {
+          yerror("GPUScreen::render: card '{}' writeTextures FAILED: {}", card->typeName(), error_msg(res));
+        }
+      }
+    }
+
+    _cardManager->invalidateBindGroup();
 
     _textureLayoutChanged = false;
   }

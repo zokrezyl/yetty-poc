@@ -123,10 +123,7 @@ public:
             return Err<void>("Plot::dispose: failed to deregister", res);
         }
 
-        if (_storageHandle.isValid() && _cardMgr) {
-            _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "storage");
-            _storageHandle = StorageHandle::invalid();
-        }
+        _storageHandle = StorageHandle::invalid();
 
         if (_metaHandle.isValid() && _cardMgr) {
             _cardMgr->deallocateMetadata(_metaHandle);
@@ -137,10 +134,7 @@ public:
     }
 
     void suspend() override {
-        if (_storageHandle.isValid() && _cardMgr) {
-            _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "storage");
-            _storageHandle = StorageHandle::invalid();
-        }
+        _storageHandle = StorageHandle::invalid();
         yinfo("Plot::suspend: deallocated storage, _data has {} floats", _data.size());
     }
 
@@ -217,12 +211,6 @@ public:
         // Calculate range if auto
         if (_autoRange) {
             calculateRange();
-        }
-
-        // Deallocate old storage if exists
-        if (_storageHandle.isValid()) {
-            _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "storage");
-            _storageHandle = StorageHandle::invalid();
         }
 
         // Allocate new storage

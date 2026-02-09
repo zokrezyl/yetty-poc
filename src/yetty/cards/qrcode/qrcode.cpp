@@ -63,11 +63,8 @@ public:
     }
 
     Result<void> dispose() override {
-        if (_bufferHandle.isValid() && _cardMgr) {
-            _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "data");
-            _bufferHandle = BufferHandle::invalid();
-        }
-        
+        _bufferHandle = BufferHandle::invalid();
+
         if (_metaHandle.isValid() && _cardMgr) {
             _cardMgr->deallocateMetadata(_metaHandle);
             _metaHandle = MetadataHandle::invalid();
@@ -78,10 +75,7 @@ public:
     }
 
     void suspend() override {
-        if (_bufferHandle.isValid() && _cardMgr) {
-            _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "data");
-            _bufferHandle = BufferHandle::invalid();
-        }
+        _bufferHandle = BufferHandle::invalid();
         _bufferDirty = true;
     }
 

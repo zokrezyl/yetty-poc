@@ -883,7 +883,6 @@ Result<void> YPdf::rebuildAndUpload() {
             }
             _derivedStorage = *storageResult;
         } else if (derivedTotalSize > _derivedStorage.size) {
-            _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "derived");
             auto storageResult = _cardMgr->bufferManager()->allocateBuffer(metadataSlotIndex(), "derived", derivedTotalSize);
             if (!storageResult) {
                 _derivedStorage = StorageHandle::invalid();
@@ -1045,10 +1044,20 @@ Result<void> YPdf::allocateTextures() {
     }
     _atlasTextureHandle = *allocResult;
 
-    // Write atlas pixel data
-    _cardMgr->textureManager()->write(_atlasTextureHandle, atlasData.data());
     yinfo("YPdf::allocateTextures: atlas {}x{} -> handle id={}", atlasW, atlasH, _atlasTextureHandle.id);
 
+    return Ok();
+}
+
+Result<void> YPdf::writeTextures() {
+    if (_atlasTextureHandle.isValid() && _atlas) {
+        const auto& atlasData = _atlas->getAtlasData();
+        if (!atlasData.empty()) {
+            if (auto res = _cardMgr->textureManager()->write(_atlasTextureHandle, atlasData.data()); !res) {
+                return Err<void>("YPdf::writeTextures: write failed", res);
+            }
+        }
+    }
     return Ok();
 }
 
@@ -1073,10 +1082,7 @@ Result<void> YPdf::render(float /*time*/) {
 Result<void> YPdf::dispose() {
     deregisterFromEvents();
 
-    if (_derivedStorage.isValid() && _cardMgr) {
-        if (auto res = _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "derived"); !res) {
-            yerror("YPdf::dispose: deallocateBuffer failed: {}", error_msg(res));
-        }
+    if (_derivedStorage.isValid()) {
         _derivedStorage = StorageHandle::invalid();
     }
 
@@ -1092,7 +1098,6 @@ Result<void> YPdf::dispose() {
 
 void YPdf::suspend() {
     if (_derivedStorage.isValid()) {
-        _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "derived");
         _derivedStorage = StorageHandle::invalid();
     }
 }
