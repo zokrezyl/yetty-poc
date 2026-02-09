@@ -212,9 +212,11 @@ Result<void> YDraw::parseYAML(const std::string& yaml) {
         bool rootIsSequence = root.IsSequence();
 
         // Helper: parse primitive, then check for animate block
-        auto parsePrimWithAnim = [this](const YAML::Node& item) {
+        auto parsePrimWithAnim = [this](const YAML::Node& item) -> Result<void> {
             uint32_t primBefore = totalPendingPrimitives();
-            parseYAMLPrimitive(item);
+            if (auto res = parseYAMLPrimitive(item); !res) {
+                return res;
+            }
             uint32_t primAfter = totalPendingPrimitives();
 
             // If a primitive was added, check for animate block
@@ -226,6 +228,7 @@ Result<void> YDraw::parseYAML(const std::string& yaml) {
                     }
                 }
             }
+            return Ok();
         };
 
         // Helper: parse root-level settings from a map node
@@ -264,7 +267,9 @@ Result<void> YDraw::parseYAML(const std::string& yaml) {
                     parseSettings(doc);
                     if (doc["body"] && doc["body"].IsSequence()) {
                         for (const auto& item : doc["body"]) {
-                            parsePrimWithAnim(item);
+                            if (auto res = parsePrimWithAnim(item); !res) {
+                                return res;
+                            }
                         }
                     }
                 }
@@ -273,7 +278,9 @@ Result<void> YDraw::parseYAML(const std::string& yaml) {
             parseSettings(root);
             if (root["body"] && root["body"].IsSequence()) {
                 for (const auto& item : root["body"]) {
-                    parsePrimWithAnim(item);
+                    if (auto res = parsePrimWithAnim(item); !res) {
+                        return res;
+                    }
                 }
             }
         }
@@ -289,7 +296,7 @@ Result<void> YDraw::parseYAML(const std::string& yaml) {
     }
 }
 
-void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
+Result<void> YDraw::parseYAMLPrimitive(const YAML::Node& item) {
     uint32_t layer = primitiveCount() + glyphCount();
 
     // Text
@@ -298,6 +305,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         float x = 0, y = 0, fontSize = 16;
         uint32_t color = 0xFFFFFFFF;
         std::string content;
+        int fontId = 0;
 
         if (t["position"] && t["position"].IsSequence()) {
             x = t["position"][0].as<float>();
@@ -307,9 +315,16 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         if (t["fontSize"]) fontSize = t["fontSize"].as<float>();
         if (t["color"]) color = parseColor(t["color"]);
         if (t["content"]) content = t["content"].as<std::string>();
+        if (t["font"]) {
+            auto ttfPath = t["font"].as<std::string>();
+            fontId = addFont(ttfPath);
+            if (fontId < 0) {
+                return Err<void>("failed to load font: " + ttfPath);
+            }
+        }
 
-        addText(x, y, content, fontSize, color, layer);
-        return;
+        addText(x, y, content, fontSize, color, layer, fontId);
+        return Ok();
     }
 
     // Circle
@@ -329,7 +344,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         if (c["stroke-width"]) strokeWidth = c["stroke-width"].as<float>();
 
         addCircle(cx, cy, r, fill, stroke, strokeWidth, layer);
-        return;
+        return Ok();
     }
 
     // Box
@@ -353,7 +368,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         if (b["round"]) round = b["round"].as<float>();
 
         addBox(cx, cy, hw, hh, fill, stroke, strokeWidth, round, layer);
-        return;
+        return Ok();
     }
 
     // Segment
@@ -375,7 +390,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         if (s["stroke-width"]) strokeWidth = s["stroke-width"].as<float>();
 
         addSegment(x0, y0, x1, y1, stroke, strokeWidth, layer);
-        return;
+        return Ok();
     }
 
     // Triangle
@@ -411,7 +426,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         prim.strokeColor = stroke;
         prim.strokeWidth = strokeWidth;
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // Bezier
@@ -437,7 +452,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         if (b["stroke-width"]) strokeWidth = b["stroke-width"].as<float>();
 
         addBezier2(x0, y0, x1, y1, x2, y2, stroke, strokeWidth, layer);
-        return;
+        return Ok();
     }
 
     // Ellipse
@@ -468,7 +483,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         prim.strokeColor = stroke;
         prim.strokeWidth = strokeWidth;
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // Arc
@@ -501,7 +516,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         prim.strokeColor = stroke;
         prim.strokeWidth = strokeWidth;
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // Pentagon
@@ -529,7 +544,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         prim.strokeColor = stroke;
         prim.strokeWidth = strokeWidth;
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // Hexagon
@@ -557,7 +572,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         prim.strokeColor = stroke;
         prim.strokeWidth = strokeWidth;
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // Star
@@ -588,7 +603,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         prim.strokeColor = stroke;
         prim.strokeWidth = strokeWidth;
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // Pie
@@ -620,7 +635,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         prim.strokeColor = stroke;
         prim.strokeWidth = strokeWidth;
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // Ring
@@ -653,7 +668,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         prim.strokeColor = stroke;
         prim.strokeWidth = strokeWidth;
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // Heart
@@ -681,7 +696,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         prim.strokeColor = stroke;
         prim.strokeWidth = strokeWidth;
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // Cross
@@ -713,7 +728,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         prim.strokeColor = stroke;
         prim.strokeWidth = strokeWidth;
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // RoundedX
@@ -742,7 +757,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         prim.strokeColor = stroke;
         prim.strokeWidth = strokeWidth;
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // Capsule (2D or 3D - detect by checking for 'height' key or 3D position)
@@ -772,7 +787,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
             if (c["stroke"]) prim.strokeColor = parseColor(c["stroke"]);
             if (c["stroke-width"]) prim.strokeWidth = c["stroke-width"].as<float>();
             addPrimitive(prim);
-            return;
+            return Ok();
         }
 
         // 2D capsule
@@ -803,7 +818,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         prim.strokeColor = stroke;
         prim.strokeWidth = strokeWidth;
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // Rhombus
@@ -834,7 +849,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         prim.strokeColor = stroke;
         prim.strokeWidth = strokeWidth;
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // Moon
@@ -864,7 +879,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         prim.strokeColor = stroke;
         prim.strokeWidth = strokeWidth;
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // Egg
@@ -893,7 +908,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         prim.strokeColor = stroke;
         prim.strokeWidth = strokeWidth;
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // Chamfer Box
@@ -924,7 +939,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         prim.strokeColor = stroke;
         prim.strokeWidth = strokeWidth;
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // Oriented Box
@@ -955,7 +970,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         prim.strokeColor = stroke;
         prim.strokeWidth = strokeWidth;
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // Trapezoid
@@ -984,7 +999,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         prim.strokeColor = stroke;
         prim.strokeWidth = strokeWidth;
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // Parallelogram
@@ -1013,7 +1028,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         prim.strokeColor = stroke;
         prim.strokeWidth = strokeWidth;
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // Equilateral Triangle
@@ -1039,7 +1054,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         prim.strokeColor = stroke;
         prim.strokeWidth = strokeWidth;
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // Isosceles Triangle
@@ -1066,7 +1081,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         prim.strokeColor = stroke;
         prim.strokeWidth = strokeWidth;
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // Uneven Capsule
@@ -1095,7 +1110,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         prim.strokeColor = stroke;
         prim.strokeWidth = strokeWidth;
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // Octogon
@@ -1121,7 +1136,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         prim.strokeColor = stroke;
         prim.strokeWidth = strokeWidth;
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // Hexagram
@@ -1147,7 +1162,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         prim.strokeColor = stroke;
         prim.strokeWidth = strokeWidth;
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // Pentagram
@@ -1173,7 +1188,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         prim.strokeColor = stroke;
         prim.strokeWidth = strokeWidth;
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // Cut Disk
@@ -1200,7 +1215,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         prim.strokeColor = stroke;
         prim.strokeWidth = strokeWidth;
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // Horseshoe
@@ -1233,7 +1248,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         prim.strokeColor = stroke;
         prim.strokeWidth = strokeWidth;
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // Vesica
@@ -1260,7 +1275,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         prim.strokeColor = stroke;
         prim.strokeWidth = strokeWidth;
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // Oriented Vesica
@@ -1291,7 +1306,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         prim.strokeColor = stroke;
         prim.strokeWidth = strokeWidth;
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // Rounded Cross
@@ -1317,7 +1332,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         prim.strokeColor = stroke;
         prim.strokeWidth = strokeWidth;
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // Parabola
@@ -1343,7 +1358,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         prim.strokeColor = stroke;
         prim.strokeWidth = strokeWidth;
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // Blobby Cross
@@ -1369,7 +1384,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         prim.strokeColor = stroke;
         prim.strokeWidth = strokeWidth;
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // Tunnel
@@ -1396,7 +1411,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         prim.strokeColor = stroke;
         prim.strokeWidth = strokeWidth;
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // Stairs
@@ -1425,7 +1440,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         prim.strokeColor = stroke;
         prim.strokeWidth = strokeWidth;
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // Quadratic Circle
@@ -1451,7 +1466,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         prim.strokeColor = stroke;
         prim.strokeWidth = strokeWidth;
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // Hyperbola
@@ -1478,7 +1493,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         prim.strokeColor = stroke;
         prim.strokeWidth = strokeWidth;
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // Cool S
@@ -1504,7 +1519,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         prim.strokeColor = stroke;
         prim.strokeWidth = strokeWidth;
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // Circle Wave
@@ -1531,7 +1546,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         prim.strokeColor = stroke;
         prim.strokeWidth = strokeWidth;
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // =========================================================================
@@ -1560,7 +1575,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         if (s["stroke"]) prim.strokeColor = parseColor(s["stroke"]);
         if (s["stroke-width"]) prim.strokeWidth = s["stroke-width"].as<float>();
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // Box3D
@@ -1581,7 +1596,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         if (b["stroke"]) prim.strokeColor = parseColor(b["stroke"]);
         if (b["stroke-width"]) prim.strokeWidth = b["stroke-width"].as<float>();
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // Torus
@@ -1599,7 +1614,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         if (t["stroke"]) prim.strokeColor = parseColor(t["stroke"]);
         if (t["stroke-width"]) prim.strokeWidth = t["stroke-width"].as<float>();
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // Cylinder
@@ -1617,7 +1632,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         if (c["stroke"]) prim.strokeColor = parseColor(c["stroke"]);
         if (c["stroke-width"]) prim.strokeWidth = c["stroke-width"].as<float>();
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // Capsule (3D vertical capsule)
@@ -1635,7 +1650,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         if (c["stroke"]) prim.strokeColor = parseColor(c["stroke"]);
         if (c["stroke-width"]) prim.strokeWidth = c["stroke-width"].as<float>();
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // Cone (capped cone)
@@ -1655,7 +1670,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         if (c["stroke"]) prim.strokeColor = parseColor(c["stroke"]);
         if (c["stroke-width"]) prim.strokeWidth = c["stroke-width"].as<float>();
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // Octahedron
@@ -1671,7 +1686,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         if (o["stroke"]) prim.strokeColor = parseColor(o["stroke"]);
         if (o["stroke-width"]) prim.strokeWidth = o["stroke-width"].as<float>();
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // Pyramid
@@ -1687,7 +1702,7 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         if (p["stroke"]) prim.strokeColor = parseColor(p["stroke"]);
         if (p["stroke-width"]) prim.strokeWidth = p["stroke-width"].as<float>();
         addPrimitive(prim);
-        return;
+        return Ok();
     }
 
     // Ellipsoid
@@ -1708,8 +1723,10 @@ void YDraw::parseYAMLPrimitive(const YAML::Node& item) {
         if (e["stroke"]) prim.strokeColor = parseColor(e["stroke"]);
         if (e["stroke-width"]) prim.strokeWidth = e["stroke-width"].as<float>();
         addPrimitive(prim);
-        return;
+        return Ok();
     }
+
+    return Ok();
 }
 
 //=============================================================================

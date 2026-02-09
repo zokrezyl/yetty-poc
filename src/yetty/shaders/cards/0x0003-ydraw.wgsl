@@ -35,7 +35,15 @@
 //   offset 4: glyphIndex (u32) - index in glyphMetadata
 //   offset 5: color (u32)    - packed RGBA
 //   offset 6: layer (u32)
-//   offset 7: _pad (u32)
+//   offset 7: flags (u32)    - bit 0: use custom atlas (cardImageAtlas)
+// =============================================================================
+// When FLAG_CUSTOM_ATLAS is set, after the glyph array in cardStorage:
+//   [atlasHeader: 4 u32s] [GlyphMetadataGPU: 10 floats each]
+//   atlasHeader[0] = (atlasX & 0xFFFF) | (msdfAtlasW << 16)
+//   atlasHeader[1] = (atlasY & 0xFFFF) | (msdfAtlasH << 16)
+//   atlasHeader[2] = glyphMetaCount
+//   atlasHeader[3] = reserved
+// GlyphMetadataGPU: uvMinX, uvMinY, uvMaxX, uvMaxY, sizeX, sizeY, bearingX, bearingY, advance, pad
 // =============================================================================
 
 const YDRAW_FLAG_SHOW_BOUNDS: u32 = 1u;
@@ -43,6 +51,7 @@ const YDRAW_FLAG_SHOW_GRID: u32 = 2u;
 const YDRAW_FLAG_SHOW_EVAL_COUNT: u32 = 4u;
 const YDRAW_FLAG_HAS_3D: u32 = 8u;
 const YDRAW_FLAG_UNIFORM_SCALE: u32 = 16u;
+const YDRAW_FLAG_CUSTOM_ATLAS: u32 = 32u;
 
 // Hardcoded max entries per cell (matches C++ DEFAULT_MAX_PRIMS_PER_CELL)
 const YDRAW_MAX_PRIMS_PER_CELL: u32 = 16u;
@@ -243,6 +252,22 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
     let pixelWidth = f32(widthCells) * grid.cellSize.x;
     let screenScale = select(1.0, pixelWidth / viewW, viewW > 0.0);
 
+    // Read custom atlas header if flag is set
+    let hasCustomAtlas = (flags & YDRAW_FLAG_CUSTOM_ATLAS) != 0u;
+    var atlasX = 0u; var atlasY = 0u;
+    var msdfAtlasW = 0u; var msdfAtlasH = 0u;
+    var glyphMetaOff = 0u;
+    if (hasCustomAtlas) {
+        let atlasHeaderOff = glyphOffset + glyphCount * 8u;
+        let atlasXW = bitcast<u32>(cardStorage[atlasHeaderOff]);
+        let atlasYH = bitcast<u32>(cardStorage[atlasHeaderOff + 1u]);
+        atlasX = atlasXW & 0xFFFFu;
+        atlasY = atlasYH & 0xFFFFu;
+        msdfAtlasW = atlasXW >> 16u;
+        msdfAtlasH = atlasYH >> 16u;
+        glyphMetaOff = atlasHeaderOff + 4u;
+    }
+
     // O(1) GRID LOOKUP - use CONTENT bounds (grid origin), not view bounds
     let cellX = u32(clamp((scenePos.x - contentMinX) * invCellSize, 0.0, f32(gridWidth - 1u)));
     let cellY = u32(clamp((scenePos.y - contentMinY) * invCellSize, 0.0, f32(gridHeight - 1u)));
@@ -272,6 +297,7 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
             let gh = cardStorage[gOffset + 3u];
             let gIdx = bitcast<u32>(cardStorage[gOffset + 4u]);
             let gColorPacked = bitcast<u32>(cardStorage[gOffset + 5u]);
+            let gFlags = bitcast<u32>(cardStorage[gOffset + 7u]);
 
             if (scenePos.x >= gx && scenePos.x < gx + gw &&
                 scenePos.y >= gy && scenePos.y < gy + gh) {
@@ -281,9 +307,36 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
                     (scenePos.y - gy) / gh
                 );
                 let gColor = unpackColor(gColorPacked);
-                let glyphResult = renderMsdfGlyph(glyphUV, gIdx, gColor, resultColor, grid.pixelRange, screenScale);
-                if (glyphResult.alpha > 0.01) {
-                    resultColor = glyphResult.color;
+
+                if ((gFlags & 1u) != 0u && hasCustomAtlas) {
+                    // Custom atlas glyph — read UV from local glyph metadata in cardStorage
+                    let metaOff = glyphMetaOff + gIdx * 10u;
+                    let uvMinX = cardStorage[metaOff + 0u];
+                    let uvMinY = cardStorage[metaOff + 1u];
+                    let uvMaxX = cardStorage[metaOff + 2u];
+                    let uvMaxY = cardStorage[metaOff + 3u];
+
+                    let msdfUV = vec2<f32>(
+                        mix(uvMinX, uvMaxX, glyphUV.x),
+                        mix(uvMinY, uvMaxY, glyphUV.y)
+                    );
+                    let msdfPixel = msdfUV * vec2<f32>(f32(msdfAtlasW), f32(msdfAtlasH));
+                    let cardPixel = vec2<f32>(f32(atlasX), f32(atlasY)) + msdfPixel;
+                    let sampleUV = cardPixel / vec2<f32>(textureDimensions(cardImageAtlas));
+                    let msdf = textureSampleLevel(cardImageAtlas, cardImageSampler, sampleUV, 0.0);
+
+                    let sd = median(msdf.r, msdf.g, msdf.b);
+                    let pxDist = grid.pixelRange * (sd - 0.5);
+                    let alpha = clamp(pxDist * screenScale + 0.5, 0.0, 1.0);
+                    if (alpha > 0.01) {
+                        resultColor = mix(resultColor, gColor, alpha);
+                    }
+                } else {
+                    // Shared atlas glyph — use existing renderMsdfGlyph
+                    let glyphResult = renderMsdfGlyph(glyphUV, gIdx, gColor, resultColor, grid.pixelRange, screenScale);
+                    if (glyphResult.alpha > 0.01) {
+                        resultColor = glyphResult.color;
+                    }
                 }
             }
         } else {

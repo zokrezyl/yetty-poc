@@ -6,6 +6,7 @@
 #include <yetty/ms-msdf-font.h>
 #include <yetty/msdf-atlas.h>
 #include <yetty/msdf-cdb-provider.h>
+#include <yetty/card-texture-manager.h>
 #include <yetty/font-manager.h>
 #include <vector>
 #include <string>
@@ -61,6 +62,7 @@ public:
     static constexpr uint32_t FLAG_SHOW_EVAL_COUNT = 4;
     static constexpr uint32_t FLAG_HAS_3D = 8;
     static constexpr uint32_t FLAG_UNIFORM_SCALE = 16;
+    static constexpr uint32_t FLAG_CUSTOM_ATLAS = 32;
 
     virtual ~YDrawBase();
 
@@ -68,11 +70,14 @@ public:
     // Card interface overrides
     //=========================================================================
     bool needsBuffer() const override { return true; }
+    bool needsTexture() const override { return _customAtlas != nullptr; }
     uint32_t metadataSlotIndex() const override { return _metaHandle.offset / 64; }
     Result<void> dispose() override;
     void suspend() override;
     void declareBufferNeeds() override;
     Result<void> allocateBuffers() override;
+    Result<void> allocateTextures() override;
+    Result<void> writeTextures() override;
     Result<void> render(float time) override;
 
     //=========================================================================
@@ -266,6 +271,11 @@ private:
     MsMsdfFont::Ptr _font;
     MsdfAtlas::Ptr _atlas;  // shared with _font
     std::unordered_map<std::string, int> _fontIdCache;  // cdbPath → fontId
+
+    // Custom atlas (per-card, created on first addFont() call)
+    MsdfAtlas::Ptr _customAtlas;
+    TextureHandle _atlasTextureHandle = TextureHandle::invalid();
+    GpuAllocator::Ptr _globalAllocator;
 
     // View zoom/pan (applied to metadata scene bounds, not to grid)
     float _viewZoom = 1.0f;
