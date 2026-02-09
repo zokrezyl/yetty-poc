@@ -327,16 +327,69 @@ public:
               _primStaging.size());
     }
 
-    uint32_t computeDerivedSize() const {
+    void calculate() {
+        // Compute scene bounds from staging
+        if (!_hasExplicitBounds) {
+            _sceneMinX = 1e10f; _sceneMinY = 1e10f;
+            _sceneMaxX = -1e10f; _sceneMaxY = -1e10f;
+            for (const auto& prim : _primStaging) {
+                _sceneMinX = std::min(_sceneMinX, prim.aabbMinX);
+                _sceneMinY = std::min(_sceneMinY, prim.aabbMinY);
+                _sceneMaxX = std::max(_sceneMaxX, prim.aabbMaxX);
+                _sceneMaxY = std::max(_sceneMaxY, prim.aabbMaxY);
+            }
+            for (const auto& g : _glyphs) {
+                _sceneMinX = std::min(_sceneMinX, g.x);
+                _sceneMinY = std::min(_sceneMinY, g.y);
+                _sceneMaxX = std::max(_sceneMaxX, g.x + g.width);
+                _sceneMaxY = std::max(_sceneMaxY, g.y + g.height);
+            }
+            float padX = (_sceneMaxX - _sceneMinX) * 0.05f;
+            float padY = (_sceneMaxY - _sceneMinY) * 0.05f;
+            _sceneMinX -= padX; _sceneMinY -= padY;
+            _sceneMaxX += padX; _sceneMaxY += padY;
+            if (_sceneMinX >= _sceneMaxX) { _sceneMinX = 0; _sceneMaxX = 100; }
+            if (_sceneMinY >= _sceneMaxY) { _sceneMinY = 0; _sceneMaxY = 100; }
+        }
+
+        // Compute tile dimensions
         const uint32_t ESTIMATED_CELL_PIXELS = 16;
         uint32_t pixelWidth = _widthCells * ESTIMATED_CELL_PIXELS;
         uint32_t pixelHeight = _heightCells * ESTIMATED_CELL_PIXELS;
-        uint32_t tcX = (pixelWidth + TILE_SIZE - 1) / TILE_SIZE;
-        uint32_t tcY = (pixelHeight + TILE_SIZE - 1) / TILE_SIZE;
+        _tileCountX = (pixelWidth + TILE_SIZE - 1) / TILE_SIZE;
+        _tileCountY = (pixelHeight + TILE_SIZE - 1) / TILE_SIZE;
+        uint32_t totalTiles = _tileCountX * _tileCountY;
         uint32_t tileStride = 1 + MAX_PRIMS_PER_TILE;
-        uint32_t tileBytes = tcX * tcY * tileStride * sizeof(uint32_t);
-        uint32_t glyphBytes = static_cast<uint32_t>(_glyphs.size() * sizeof(JDrawGlyph));
-        return tileBytes + glyphBytes;
+        uint32_t tileTotalU32 = totalTiles * tileStride;
+
+        // Build tile lists into staging from _primStaging
+        _tileListsStaging.assign(tileTotalU32, 0);
+
+        float sceneWidth = _sceneMaxX - _sceneMinX;
+        float sceneHeight = _sceneMaxY - _sceneMinY;
+
+        for (uint32_t ty = 0; ty < _tileCountY; ty++) {
+            for (uint32_t tx = 0; tx < _tileCountX; tx++) {
+                float tileMinX = _sceneMinX + (float(tx) / _tileCountX) * sceneWidth;
+                float tileMaxX = _sceneMinX + (float(tx + 1) / _tileCountX) * sceneWidth;
+                float tileMinY = _sceneMinY + (float(ty) / _tileCountY) * sceneHeight;
+                float tileMaxY = _sceneMinY + (float(ty + 1) / _tileCountY) * sceneHeight;
+
+                uint32_t tileIndex = ty * _tileCountX + tx;
+                uint32_t tileOffset = tileIndex * tileStride;
+                uint32_t count = 0;
+
+                for (uint32_t pi = 0; pi < static_cast<uint32_t>(_primStaging.size()) && count < MAX_PRIMS_PER_TILE; pi++) {
+                    const auto& prim = _primStaging[pi];
+                    if (prim.aabbMaxX >= tileMinX && prim.aabbMinX <= tileMaxX &&
+                        prim.aabbMaxY >= tileMinY && prim.aabbMinY <= tileMaxY) {
+                        _tileListsStaging[tileOffset + 1 + count] = pi;
+                        count++;
+                    }
+                }
+                _tileListsStaging[tileOffset] = count;
+            }
+        }
     }
 
     void declareBufferNeeds() override {
@@ -357,18 +410,42 @@ public:
             wgpuBindGroupRelease(_tileCullBindGroup);
             _tileCullBindGroup = nullptr;
         }
-        // Reserve prim + derived
+
+        if (_primStaging.empty() && _glyphs.empty()) {
+            _tileListsStaging.clear();
+            return;
+        }
+
+        // Reserve prim storage
         if (!_primStaging.empty()) {
             uint32_t primSize = static_cast<uint32_t>(_primStaging.size()) * sizeof(SDFPrimitive);
             _cardMgr->bufferManager()->reserve(primSize);
-            uint32_t derivedSize = computeDerivedSize();
-            if (derivedSize > 0) {
-                _cardMgr->bufferManager()->reserve(derivedSize);
-            }
+        }
+
+        // Only calculate if derived staging is empty (first time or data changed)
+        if (_tileListsStaging.empty()) {
+            using Clock = std::chrono::steady_clock;
+            auto t0 = Clock::now();
+            calculate();
+            auto t1 = Clock::now();
+            auto calcUs = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+
+            std::cout << "JDraw::calculate: " << calcUs << " us ("
+                      << _primStaging.size() << " prims, " << _glyphs.size() << " glyphs, tiles="
+                      << _tileCountX << "x" << _tileCountY << ")" << std::endl;
+        }
+
+        // Reserve exact derived size (tile lists + glyphs)
+        uint32_t tileBytes = static_cast<uint32_t>(_tileListsStaging.size()) * sizeof(uint32_t);
+        uint32_t glyphBytes = static_cast<uint32_t>(_glyphs.size() * sizeof(JDrawGlyph));
+        uint32_t derivedSize = tileBytes + glyphBytes;
+        if (derivedSize > 0) {
+            _cardMgr->bufferManager()->reserve(derivedSize);
         }
     }
 
     Result<void> allocateBuffers() override {
+        // Restore primitives from staging
         if (!_primStaging.empty()) {
             uint32_t count = static_cast<uint32_t>(_primStaging.size());
             if (auto res = ensurePrimCapacity(count); !res) {
@@ -379,53 +456,70 @@ public:
             _primStaging.clear();
             _primStaging.shrink_to_fit();
             _cardMgr->bufferManager()->markBufferDirty(_primStorage);
+        }
 
-            // Allocate derived storage (tile lists + glyphs)
-            uint32_t derivedSize = computeDerivedSize();
-            if (derivedSize > 0) {
-                auto storageResult = _cardMgr->bufferManager()->allocateBuffer(metadataSlotIndex(), "derived", derivedSize);
-                if (!storageResult) {
-                    return Err<void>("JDraw::allocateBuffers: failed to allocate derived storage");
-                }
-                _derivedStorage = *storageResult;
-                _bindGroupStale = true;
+        // Allocate derived storage and copy pre-built tile lists + glyphs
+        uint32_t tileBytes = static_cast<uint32_t>(_tileListsStaging.size()) * sizeof(uint32_t);
+        uint32_t glyphBytes = static_cast<uint32_t>(_glyphs.size() * sizeof(JDrawGlyph));
+        uint32_t derivedSize = tileBytes + glyphBytes;
+
+        if (derivedSize > 0) {
+            auto storageResult = _cardMgr->bufferManager()->allocateBuffer(metadataSlotIndex(), "derived", derivedSize);
+            if (!storageResult) {
+                return Err<void>("JDraw::allocateBuffers: failed to allocate derived storage");
+            }
+            _derivedStorage = *storageResult;
+            _bindGroupStale = true;
+
+            uint8_t* base = _derivedStorage.data;
+            uint32_t offset = 0;
+
+            // Copy pre-built tile lists
+            _tileLists = reinterpret_cast<uint32_t*>(base + offset);
+            _tileListsSize = static_cast<uint32_t>(_tileListsStaging.size());
+            _tileListOffset = (_derivedStorage.offset + offset) / sizeof(float);
+            if (!_tileListsStaging.empty()) {
+                std::memcpy(base + offset, _tileListsStaging.data(), tileBytes);
+            }
+            offset += tileBytes;
+
+            // Copy glyphs
+            _glyphOffset = (_derivedStorage.offset + offset) / sizeof(float);
+            if (!_glyphs.empty()) {
+                std::memcpy(base + offset, _glyphs.data(), glyphBytes);
             }
 
-            _dirty = true;
-            yinfo("JDraw::allocateBuffers: reconstructed {} primitives, derived {} bytes", count, derivedSize);
+            _cardMgr->bufferManager()->markBufferDirty(_derivedStorage);
         }
+
+        _primitiveOffset = _primStorage.isValid() ? _primStorage.offset / sizeof(float) : 0;
+        if (_primStorage.isValid()) {
+            _cardMgr->bufferManager()->markBufferDirty(_primStorage);
+        }
+
+        _metadataDirty = true;
+        _dirty = false;  // Tile lists already built in calculate()
+
+        yinfo("JDraw::allocateBuffers: {} primitives, {} glyphs, derived {} bytes",
+              _primCount, _glyphs.size(), derivedSize);
         return Ok();
     }
 
     Result<void> render(float time) override {
         (void)time;
-        using Clock = std::chrono::steady_clock;
-        auto tRenderStart = Clock::now();
-        bool didRebuild = false, didMeta = false;
 
         if (_dirty) {
             if (auto res = rebuildAndUpload(); !res) {
                 return Err<void>("JDraw::render: rebuildAndUpload failed", res);
             }
             _dirty = false;
-            didRebuild = true;
         }
-        auto tAfterRebuild = Clock::now();
 
         if (_metadataDirty) {
             if (auto res = uploadMetadata(); !res) {
                 return Err<void>("JDraw::render: metadata upload failed", res);
             }
             _metadataDirty = false;
-            didMeta = true;
-        }
-        auto tAfterMeta = Clock::now();
-
-        if (didRebuild || didMeta) {
-            auto us = [](auto a, auto b) { return std::chrono::duration_cast<std::chrono::microseconds>(b - a).count(); };
-            std::cout << "JDraw::render: rebuild=" << us(tRenderStart, tAfterRebuild)
-                      << " us, metadata=" << us(tAfterRebuild, tAfterMeta)
-                      << " us, total=" << us(tRenderStart, tAfterMeta) << " us" << std::endl;
         }
 
         return Ok();
@@ -456,6 +550,7 @@ public:
         }
         _cardMgr->bufferManager()->markBufferDirty(_primStorage);
         _dirty = true;
+        _tileListsStaging.clear();  // Invalidate — will recalculate on next recompaction
         return idx;
     }
 
@@ -1913,6 +2008,7 @@ private:
     uint32_t* _tileLists = nullptr;
     uint32_t _tileListsSize = 0;  // total uint32_t elements
     StorageHandle _derivedStorage = StorageHandle::invalid();
+    std::vector<uint32_t> _tileListsStaging;  // Pre-built tile lists from calculate()
 
     // Glyphs (small, vector OK)
     std::vector<JDrawGlyph> _glyphs;

@@ -514,32 +514,8 @@ void YDrawBase::suspend() {
     yinfo("YDrawBase::suspend: deallocated storage, saved {} primitives to staging", _primStaging.size());
 }
 
-void YDrawBase::declareBufferNeeds() {
-    // Save existing GPU data to staging and deallocate
-    if (_primStorage.isValid() && _primCount > 0) {
-        _primStaging.resize(_primCount);
-        std::memcpy(_primStaging.data(), _primitives, _primCount * sizeof(SDFPrimitive));
-    }
-    _derivedStorage = StorageHandle::invalid();
-    _grid = nullptr;
-    _gridSize = 0;
-    _primStorage = StorageHandle::invalid();
-    _primitives = nullptr;
-    _primCount = 0;
-    _primCapacity = 0;
-
-    if (_primStaging.empty() && _glyphs.empty()) {
-        _gridStaging.clear();
-        return;
-    }
-
-    // Reserve prim storage
-    if (!_primStaging.empty()) {
-        uint32_t primSize = static_cast<uint32_t>(_primStaging.size()) * sizeof(SDFPrimitive);
-        _cardMgr->bufferManager()->reserve(primSize);
-    }
-
-    // --- Compute scene bounds from staging ---
+void YDrawBase::calculate() {
+    // Compute scene bounds from staging
     if (!_hasExplicitBounds) {
         _sceneMinX = 1e10f; _sceneMinY = 1e10f;
         _sceneMaxX = -1e10f; _sceneMaxY = -1e10f;
@@ -564,7 +540,7 @@ void YDrawBase::declareBufferNeeds() {
         if (_sceneMinY >= _sceneMaxY) { _sceneMinY = 0; _sceneMaxY = 100; }
     }
 
-    // --- Compute grid dimensions ---
+    // Compute grid dimensions
     float sceneWidth = _sceneMaxX - _sceneMinX;
     float sceneHeight = _sceneMaxY - _sceneMinY;
     uint32_t gridW = 0, gridH = 0;
@@ -609,7 +585,7 @@ void YDrawBase::declareBufferNeeds() {
     _gridHeight = gridH;
     _cellSize = cellSize;
 
-    // --- Build grid into staging ---
+    // Build grid into staging
     uint32_t cellStride = 1 + _maxPrimsPerCell;
     uint32_t gridTotalU32 = gridW * gridH * cellStride;
     _gridStaging.assign(gridTotalU32, 0);
@@ -650,82 +626,58 @@ void YDrawBase::declareBufferNeeds() {
             }
         }
     }
+}
+
+void YDrawBase::declareBufferNeeds() {
+    // Save existing GPU data to staging and deallocate
+    if (_primStorage.isValid() && _primCount > 0) {
+        _primStaging.resize(_primCount);
+        std::memcpy(_primStaging.data(), _primitives, _primCount * sizeof(SDFPrimitive));
+    }
+    _derivedStorage = StorageHandle::invalid();
+    _grid = nullptr;
+    _gridSize = 0;
+    _primStorage = StorageHandle::invalid();
+    _primitives = nullptr;
+    _primCount = 0;
+    _primCapacity = 0;
+
+    if (_primStaging.empty() && _glyphs.empty()) {
+        _gridStaging.clear();
+        return;
+    }
+
+    // Reserve prim storage
+    if (!_primStaging.empty()) {
+        uint32_t primSize = static_cast<uint32_t>(_primStaging.size()) * sizeof(SDFPrimitive);
+        _cardMgr->bufferManager()->reserve(primSize);
+    }
+
+    // Only calculate if derived staging is empty (first time or data changed)
+    if (_gridStaging.empty()) {
+        using Clock = std::chrono::steady_clock;
+        auto t0 = Clock::now();
+        calculate();
+        auto t1 = Clock::now();
+        auto calcUs = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+
+        std::cout << "YDrawBase::calculate: " << calcUs << " us ("
+                  << _primStaging.size() << " prims, " << _glyphs.size() << " glyphs, grid="
+                  << _gridWidth << "x" << _gridHeight << " cellSize=" << _cellSize << ")" << std::endl;
+    }
 
     // Reserve exact derived size (grid + glyphs)
-    uint32_t gridBytes = gridTotalU32 * sizeof(uint32_t);
+    uint32_t gridBytes = static_cast<uint32_t>(_gridStaging.size()) * sizeof(uint32_t);
     uint32_t glyphBytes = static_cast<uint32_t>(_glyphs.size() * sizeof(YDrawGlyph));
     uint32_t derivedSize = gridBytes + glyphBytes;
     if (derivedSize > 0) {
         _cardMgr->bufferManager()->reserve(derivedSize);
     }
-
-    std::cout << "YDrawBase::declareBufferNeeds: grid=" << gridW << "x" << gridH
-              << " cellSize=" << cellSize
-              << " prims=" << _primStaging.size() << " glyphs=" << _glyphs.size()
-              << " derived=" << derivedSize << std::endl;
 }
 
-uint32_t YDrawBase::computeDerivedSize() const {
-    float sMinX = 1e30f, sMinY = 1e30f, sMaxX = -1e30f, sMaxY = -1e30f;
-    uint32_t num2D = 0;
-    for (uint32_t i = 0; i < _primCount; i++) {
-        if (_primitives[i].type >= 100) continue;  // skip 3D prims
-        sMinX = std::min(sMinX, _primitives[i].aabbMinX);
-        sMinY = std::min(sMinY, _primitives[i].aabbMinY);
-        sMaxX = std::max(sMaxX, _primitives[i].aabbMaxX);
-        sMaxY = std::max(sMaxY, _primitives[i].aabbMaxY);
-        num2D++;
-    }
-    for (const auto& g : _glyphs) {
-        sMinX = std::min(sMinX, g.x);
-        sMinY = std::min(sMinY, g.y);
-        sMaxX = std::max(sMaxX, g.x + g.width);
-        sMaxY = std::max(sMaxY, g.y + g.height);
-    }
-    float padX = (sMaxX - sMinX) * 0.05f;
-    float padY = (sMaxY - sMinY) * 0.05f;
-    sMinX -= padX; sMinY -= padY;
-    sMaxX += padX; sMaxY += padY;
-    float sceneWidth = sMaxX - sMinX;
-    float sceneHeight = sMaxY - sMinY;
-    float sceneArea = sceneWidth * sceneHeight;
-    uint32_t gridW = 0, gridH = 0;
-    if ((num2D > 0 || !_glyphs.empty()) && sceneArea > 0) {
-        float cs = _cellSize;
-        if (cs <= 0.0f) {
-            if (num2D > 0) {
-                float avgPrimArea = 0.0f;
-                for (uint32_t i = 0; i < _primCount; i++) {
-                    if (_primitives[i].type >= 100) continue;
-                    float w = _primitives[i].aabbMaxX - _primitives[i].aabbMinX;
-                    float h = _primitives[i].aabbMaxY - _primitives[i].aabbMinY;
-                    avgPrimArea += w * h;
-                }
-                avgPrimArea /= num2D;
-                cs = std::sqrt(avgPrimArea) * 1.5f;
-            } else {
-                float avgGlyphH = 0.0f;
-                for (const auto& g : _glyphs) avgGlyphH += g.height;
-                avgGlyphH /= _glyphs.size();
-                cs = avgGlyphH * 2.0f;
-            }
-            float minCS = std::sqrt(sceneArea / 65536.0f);
-            float maxCS = std::sqrt(sceneArea / 16.0f);
-            cs = std::clamp(cs, minCS, maxCS);
-        }
-        gridW = std::max(1u, static_cast<uint32_t>(std::ceil(sceneWidth / cs)));
-        gridH = std::max(1u, static_cast<uint32_t>(std::ceil(sceneHeight / cs)));
-        const uint32_t MAX_GRID_DIM = 512;
-        gridW = std::min(gridW, MAX_GRID_DIM);
-        gridH = std::min(gridH, MAX_GRID_DIM);
-    }
-    uint32_t cellStride = 1 + _maxPrimsPerCell;
-    uint32_t gridBytes = gridW * gridH * cellStride * sizeof(uint32_t);
-    uint32_t glyphBytes = static_cast<uint32_t>(_glyphs.size() * sizeof(YDrawGlyph));
-    return gridBytes + glyphBytes;
-}
 
 Result<void> YDrawBase::allocateBuffers() {
+    // Restore primitives from staging
     if (!_primStaging.empty()) {
         uint32_t count = static_cast<uint32_t>(_primStaging.size());
         if (auto res = ensurePrimCapacity(count); !res) {
@@ -738,19 +690,49 @@ Result<void> YDrawBase::allocateBuffers() {
         _cardMgr->bufferManager()->markBufferDirty(_primStorage);
     }
 
-    if (_primCount > 0 || !_glyphs.empty()) {
-        uint32_t derivedSize = computeDerivedSize();
-        if (derivedSize > 0 && !_derivedStorage.isValid()) {
-            auto storageResult = _cardMgr->bufferManager()->allocateBuffer(metadataSlotIndex(), "derived", derivedSize);
-            if (!storageResult) {
-                return Err<void>("YDrawBase::allocateBuffers: failed to allocate derived storage");
-            }
-            _derivedStorage = *storageResult;
+    // Allocate derived storage and copy pre-built grid + glyphs
+    uint32_t gridBytes = static_cast<uint32_t>(_gridStaging.size()) * sizeof(uint32_t);
+    uint32_t glyphBytes = static_cast<uint32_t>(_glyphs.size() * sizeof(YDrawGlyph));
+    uint32_t derivedSize = gridBytes + glyphBytes;
+
+    if (derivedSize > 0) {
+        auto storageResult = _cardMgr->bufferManager()->allocateBuffer(metadataSlotIndex(), "derived", derivedSize);
+        if (!storageResult) {
+            return Err<void>("YDrawBase::allocateBuffers: failed to allocate derived storage");
         }
-        _dirty = true;
-        yinfo("YDrawBase::allocateBuffers: {} primitives, {} glyphs, derived {} bytes",
-              _primCount, _glyphs.size(), derivedSize);
+        _derivedStorage = *storageResult;
+
+        uint8_t* base = _derivedStorage.data;
+        uint32_t offset = 0;
+
+        // Copy pre-built grid
+        _grid = reinterpret_cast<uint32_t*>(base + offset);
+        _gridSize = static_cast<uint32_t>(_gridStaging.size());
+        _gridOffset = (_derivedStorage.offset + offset) / sizeof(float);
+        if (!_gridStaging.empty()) {
+            std::memcpy(base + offset, _gridStaging.data(), gridBytes);
+        }
+        offset += gridBytes;
+
+        // Copy glyphs
+        _glyphOffset = (_derivedStorage.offset + offset) / sizeof(float);
+        if (!_glyphs.empty()) {
+            std::memcpy(base + offset, _glyphs.data(), glyphBytes);
+        }
+
+        _cardMgr->bufferManager()->markBufferDirty(_derivedStorage);
     }
+
+    _primitiveOffset = _primStorage.isValid() ? _primStorage.offset / sizeof(float) : 0;
+    if (_primStorage.isValid()) {
+        _cardMgr->bufferManager()->markBufferDirty(_primStorage);
+    }
+
+    _metadataDirty = true;
+    _dirty = false;  // Grid already built in calculate()
+
+    yinfo("YDrawBase::allocateBuffers: {} primitives, {} glyphs, derived {} bytes",
+          _primCount, _glyphs.size(), derivedSize);
     return Ok();
 }
 
@@ -776,33 +758,18 @@ Result<void> YDrawBase::render(float time) {
         }
     }
 
-    using Clock = std::chrono::steady_clock;
-    auto tRenderStart = Clock::now();
-    bool didRebuild = false, didMeta = false;
-
     if (_dirty) {
         if (auto res = rebuildAndUpload(); !res) {
             return Err<void>("YDrawBase::render: rebuildAndUpload failed", res);
         }
         _dirty = false;
-        didRebuild = true;
     }
-    auto tAfterRebuild = Clock::now();
 
     if (_metadataDirty) {
         if (auto res = uploadMetadata(); !res) {
             return Err<void>("YDrawBase::render: metadata upload failed", res);
         }
         _metadataDirty = false;
-        didMeta = true;
-    }
-    auto tAfterMeta = Clock::now();
-
-    if (didRebuild || didMeta) {
-        auto us = [](auto a, auto b) { return std::chrono::duration_cast<std::chrono::microseconds>(b - a).count(); };
-        std::cout << "YDrawBase::render: rebuild=" << us(tRenderStart, tAfterRebuild)
-                  << " us, metadata=" << us(tAfterRebuild, tAfterMeta)
-                  << " us, total=" << us(tRenderStart, tAfterMeta) << " us" << std::endl;
     }
 
     return Ok();
@@ -926,6 +893,7 @@ uint32_t YDrawBase::addPrimitive(const SDFPrimitive& prim) {
     }
     _cardMgr->bufferManager()->markBufferDirty(_primStorage);
     _dirty = true;
+    _gridStaging.clear();  // Invalidate — will recalculate on next recompaction
     return idx;
 }
 
@@ -1144,6 +1112,7 @@ void YDrawBase::clear() {
     _primCount = 0;
     _gridSize = 0;
     _glyphs.clear();
+    _gridStaging.clear();
     _dirty = true;
 }
 
@@ -1413,13 +1382,6 @@ Result<void> YDrawBase::rebuildAndUpload() {
     uint32_t gridBytes = gridTotalU32 * sizeof(uint32_t);
     uint32_t glyphBytes = static_cast<uint32_t>(_glyphs.size() * sizeof(YDrawGlyph));
     uint32_t derivedTotalSize = gridBytes + glyphBytes;
-
-    std::cout << "YDrawBase::rebuild: grid=" << gridW << "x" << gridH
-              << " cellSize=" << cellSize
-              << " derivedTotal=" << derivedTotalSize
-              << " allocated=" << (_derivedStorage.isValid() ? _derivedStorage.size : 0)
-              << " prims=" << _primCount << " glyphs=" << _glyphs.size()
-              << " zoom=" << _viewZoom << std::endl;
 
     // Allocate or reallocate derived storage if needed
     if (derivedTotalSize > 0) {

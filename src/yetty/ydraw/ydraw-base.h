@@ -203,11 +203,11 @@ private:
     static constexpr uint32_t GLYPH_BIT = 0x80000000u;
 
     Result<void> ensurePrimCapacity(uint32_t required);
+    void calculate();
     void computeSceneBounds();
     void buildGrid();
     Result<void> rebuildAndUpload();
     Result<void> uploadMetadata();
-    uint32_t computeDerivedSize() const;
     Result<void> registerForEvents();
     Result<void> deregisterFromEvents();
 
