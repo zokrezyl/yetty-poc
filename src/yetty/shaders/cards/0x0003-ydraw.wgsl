@@ -126,31 +126,14 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
     let viewW = viewMaxX - viewMinX;
     let viewH = viewMaxY - viewMinY;
 
-    // Compute scene-space position with UNIFORM scaling (zoom-to-fit).
-    // This ensures 1 scene unit is the same physical size in both axes.
+    // Compute scene-space position (non-uniform, matches JDraw/KDraw/HDraw)
     let widgetUV = (vec2<f32>(f32(relCol), f32(relRow)) + localUV) /
                    vec2<f32>(f32(widthCells), f32(heightCells));
 
-    let cardAspect = f32(widthCells) / max(f32(heightCells), 1.0);
-    let viewAspect = viewW / max(viewH, 1e-6);
-
-    // Use uniform scale: pick the axis that needs more zoom-out
-    var scenePos: vec2<f32>;
-    if (viewAspect < cardAspect) {
-        let visibleW = viewH * cardAspect;
-        let offsetX = (visibleW - viewW) * 0.5;
-        scenePos = vec2<f32>(
-            viewMinX - offsetX + widgetUV.x * visibleW,
-            viewMinY + widgetUV.y * viewH
-        );
-    } else {
-        let visibleH = viewW / cardAspect;
-        let offsetY = (visibleH - viewH) * 0.5;
-        scenePos = vec2<f32>(
-            viewMinX + widgetUV.x * viewW,
-            viewMinY - offsetY + widgetUV.y * visibleH
-        );
-    }
+    let scenePos = vec2<f32>(
+        viewMinX + widgetUV.x * viewW,
+        viewMinY + widgetUV.y * viewH
+    );
 
     var resultColor = bgColor;
     var evalCount = 0u;
@@ -161,7 +144,7 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
         let primSize3D = 24u;  // SDFPrimitive is 96 bytes = 24 floats
 
         // Camera setup using widget UV
-        let aspect3D = f32(widthCells) / max(f32(heightCells), 1.0);
+        let aspect3D = (f32(widthCells) * grid.cellSize.x) / max(f32(heightCells) * grid.cellSize.y, 1.0);
         let uv3D = (widgetUV - 0.5) * vec2<f32>(aspect3D, 1.0);
         let camPos = vec3<f32>(0.0, 0.0, 3.0);
         let camDir = normalize(vec3<f32>(uv3D.x, -uv3D.y, -1.5));
