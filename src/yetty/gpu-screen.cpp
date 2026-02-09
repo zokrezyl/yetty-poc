@@ -647,6 +647,7 @@ Result<void> GPUScreenImpl::init() noexcept {
     } else {
       _cardManager = *cmResult;
       _ctx.cardManager = _cardManager;
+      _ctx.screenId = _id;
       yinfo("GPUScreen[{}]: created per-screen CardManager (lazy)", _id);
     }
   }
@@ -4150,13 +4151,27 @@ void GPUScreenImpl::registerForFocus() {
                          sharedAs<base::EventListener>());
   loop->registerListener(base::Event::Type::CommandKey,
                          sharedAs<base::EventListener>());
-  yinfo("GPUScreen {} registered for SetFocus, Mouse, Scroll, Paste and CommandKey events", _id);
+  loop->registerListener(base::Event::Type::CardBufferRepack,
+                         sharedAs<base::EventListener>());
+  loop->registerListener(base::Event::Type::CardTextureRepack,
+                         sharedAs<base::EventListener>());
+  yinfo("GPUScreen {} registered for SetFocus, Mouse, Scroll, Paste, CommandKey and CardRepack events", _id);
 
   // Auto-focus on startup so keyboard works immediately
   loop->dispatch(base::Event::focusEvent(_id));
 }
 
 Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
+  // Handle card buffer/texture repack requests
+  if (event.type == base::Event::Type::CardBufferRepack) {
+    if (event.cardRepack.targetId == _id) _bufferLayoutChanged = true;
+    return Ok(true);
+  }
+  if (event.type == base::Event::Type::CardTextureRepack) {
+    if (event.cardRepack.targetId == _id) _textureLayoutChanged = true;
+    return Ok(true);
+  }
+
   // Handle mouse click - dispatch SetFocus if clicked on our surface
   if (event.type == base::Event::Type::MouseDown) {
     float mx = event.mouse.x;

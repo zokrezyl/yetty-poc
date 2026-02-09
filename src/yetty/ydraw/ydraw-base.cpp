@@ -428,6 +428,7 @@ YDrawBase::YDrawBase(const YettyContext& ctx,
                      int32_t x, int32_t y,
                      uint32_t widthCells, uint32_t heightCells)
     : Card(ctx.cardManager, ctx.gpu, x, y, widthCells, heightCells)
+    , _screenId(ctx.screenId)
     , _fontManager(ctx.fontManager)
 {
     _shaderGlyph = SHADER_GLYPH;
@@ -631,8 +632,16 @@ void YDrawBase::calculate() {
 void YDrawBase::declareBufferNeeds() {
     // Save existing GPU data to staging and deallocate
     if (_primStorage.isValid() && _primCount > 0) {
-        _primStaging.resize(_primCount);
-        std::memcpy(_primStaging.data(), _primitives, _primCount * sizeof(SDFPrimitive));
+        if (_primStaging.empty()) {
+            _primStaging.resize(_primCount);
+            std::memcpy(_primStaging.data(), _primitives, _primCount * sizeof(SDFPrimitive));
+        } else {
+            // Merge: prepend GPU prims before staging additions (from failed mid-cycle adds)
+            std::vector<SDFPrimitive> merged(_primCount);
+            std::memcpy(merged.data(), _primitives, _primCount * sizeof(SDFPrimitive));
+            merged.insert(merged.end(), _primStaging.begin(), _primStaging.end());
+            _primStaging = std::move(merged);
+        }
     }
     _derivedStorage = StorageHandle::invalid();
     _grid = nullptr;
@@ -647,9 +656,10 @@ void YDrawBase::declareBufferNeeds() {
         return;
     }
 
-    // Reserve prim storage
-    if (!_primStaging.empty()) {
-        uint32_t primSize = static_cast<uint32_t>(_primStaging.size()) * sizeof(SDFPrimitive);
+    // Reserve prim storage (use capacity hint for greedy pre-allocation)
+    if (!_primStaging.empty() || _primCapacityHint > 0) {
+        uint32_t reserveCount = std::max(static_cast<uint32_t>(_primStaging.size()), _primCapacityHint);
+        uint32_t primSize = reserveCount * sizeof(SDFPrimitive);
         _cardMgr->bufferManager()->reserve(primSize);
     }
 
@@ -677,14 +687,26 @@ void YDrawBase::declareBufferNeeds() {
 
 
 Result<void> YDrawBase::allocateBuffers() {
-    // Restore primitives from staging
-    if (!_primStaging.empty()) {
+    // Restore primitives from staging, with greedy headroom from capacity hint
+    if (!_primStaging.empty() || _primCapacityHint > 0) {
         uint32_t count = static_cast<uint32_t>(_primStaging.size());
-        if (auto res = ensurePrimCapacity(count); !res) {
+        uint32_t allocCount = std::max(count, _primCapacityHint);
+        uint32_t allocBytes = allocCount * sizeof(SDFPrimitive);
+        auto primResult = _cardMgr->bufferManager()->allocateBuffer(metadataSlotIndex(), "prims", allocBytes);
+        if (!primResult) {
             return Err<void>("YDrawBase::allocateBuffers: failed to allocate prim storage");
         }
+        _primStorage = *primResult;
+        _primitives = reinterpret_cast<SDFPrimitive*>(_primStorage.data);
+        _primCapacity = allocCount;
         _primCount = count;
-        std::memcpy(_primitives, _primStaging.data(), count * sizeof(SDFPrimitive));
+        if (count > 0) {
+            std::memcpy(_primitives, _primStaging.data(), count * sizeof(SDFPrimitive));
+        }
+        // Zero the headroom so unused slots don't contain garbage
+        if (allocCount > count) {
+            std::memset(_primitives + count, 0, (allocCount - count) * sizeof(SDFPrimitive));
+        }
         _primStaging.clear();
         _primStaging.shrink_to_fit();
         _cardMgr->bufferManager()->markBufferDirty(_primStorage);
@@ -883,8 +905,27 @@ uint32_t YDrawBase::addPrimitive(const SDFPrimitive& prim) {
         return idx;
     }
     if (auto res = ensurePrimCapacity(_primCount + 1); !res) {
-        yerror("YDrawBase::addPrimitive: failed to grow storage");
-        return 0;
+        // Buffer full — save GPU prims to staging, request repack for next frame
+        if (_primStorage.isValid() && _primCount > 0 && _primStaging.empty()) {
+            _primStaging.resize(_primCount);
+            std::memcpy(_primStaging.data(), _primitives, _primCount * sizeof(SDFPrimitive));
+        }
+        _primStorage = StorageHandle::invalid();
+        _primitives = nullptr;
+        _primCount = 0;
+        _primCapacity = 0;
+
+        SDFPrimitive p = prim;
+        if (p.aabbMinX == 0 && p.aabbMaxX == 0) computeAABB(p);
+        uint32_t idx = static_cast<uint32_t>(_primStaging.size());
+        _primStaging.push_back(p);
+        _gridStaging.clear();
+
+        auto loopResult = base::EventLoop::instance();
+        if (loopResult) {
+            (*loopResult)->dispatch(base::Event::cardBufferRepackEvent(_screenId));
+        }
+        return idx;
     }
     uint32_t idx = _primCount++;
     _primitives[idx] = prim;
@@ -1182,6 +1223,10 @@ uint32_t YDrawBase::flags() const { return _flags; }
 
 void YDrawBase::setMaxPrimsPerCell(uint32_t max) {
     _maxPrimsPerCell = max;
+}
+
+void YDrawBase::setPrimCapacityHint(uint32_t n) {
+    _primCapacityHint = n;
 }
 
 void YDrawBase::setInitParsing(bool v) { _initParsing = v; }

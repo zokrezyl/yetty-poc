@@ -60,6 +60,7 @@ public:
     static constexpr uint32_t FLAG_SHOW_GRID = 2;
     static constexpr uint32_t FLAG_SHOW_EVAL_COUNT = 4;
     static constexpr uint32_t FLAG_HAS_3D = 8;
+    static constexpr uint32_t FLAG_UNIFORM_SCALE = 16;
 
     virtual ~YDrawBase();
 
@@ -140,6 +141,10 @@ public:
     uint32_t flags() const;
 
     void setMaxPrimsPerCell(uint32_t max);
+
+    // Greedy allocation: reserve capacity for at least `n` primitives
+    // so mid-render addPrimitive() calls succeed without triggering repack.
+    void setPrimCapacityHint(uint32_t n);
 
     //=========================================================================
     // Public API - Animation
@@ -239,6 +244,7 @@ private:
     // Grid parameters
     float _cellSize = DEFAULT_CELL_SIZE;
     uint32_t _maxPrimsPerCell = DEFAULT_MAX_PRIMS_PER_CELL;
+    uint32_t _primCapacityHint = 0;  // Greedy pre-allocation hint
 
     // GPU offsets (in float units)
     uint32_t _primitiveOffset = 0;
@@ -251,6 +257,9 @@ private:
     bool _dirty = true;
     bool _metadataDirty = true;
     bool _initParsing = false;
+
+    // Screen ID for repack events
+    base::ObjectId _screenId = 0;
 
     // Font for text rendering
     FontManager::Ptr _fontManager;
