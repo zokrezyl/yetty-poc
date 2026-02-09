@@ -112,12 +112,6 @@ public:
         if (_readbackBuffer) { wgpuBufferRelease(_readbackBuffer); _readbackBuffer = nullptr; }
         if (_scaledGpuBuffer) { wgpuBufferRelease(_scaledGpuBuffer); _scaledGpuBuffer = nullptr; }
 
-        // Release texture handle
-        if (_textureHandle.isValid() && _cardMgr) {
-            _cardMgr->textureManager()->deallocate(_textureHandle);
-            _textureHandle = TextureHandle::invalid();
-        }
-
         if (_metaHandle.isValid() && _cardMgr) {
             _cardMgr->deallocateMetadata(_metaHandle);
             _metaHandle = MetadataHandle::invalid();
@@ -145,11 +139,6 @@ public:
         if (_readbackBuffer) { wgpuBufferRelease(_readbackBuffer); _readbackBuffer = nullptr; }
         if (_scaledGpuBuffer) { wgpuBufferRelease(_scaledGpuBuffer); _scaledGpuBuffer = nullptr; }
 
-        // Deallocate texture handle
-        if (_textureHandle.isValid() && _cardMgr) {
-            _cardMgr->textureManager()->deallocate(_textureHandle);
-            _textureHandle = TextureHandle::invalid();
-        }
         _scaledPixels.clear();
         _needsScaling = true;
         yinfo("Image::suspend: deallocated texture handle + compute resources, _originalPixels has {} bytes",
@@ -157,9 +146,9 @@ public:
     }
 
     Result<void> allocateTextures() override {
+        _textureHandle = TextureHandle::invalid();
         if (!_originalPixels.empty()) {
-            // Scale if needed (first time, after suspend, or cell size changed)
-            if (_needsScaling || !_textureHandle.isValid() || _scaledPixels.empty()) {
+            if (_needsScaling || _scaledPixels.empty()) {
                 if (!_scalePipeline) {
                     if (auto res = createScalePipeline(); !res) {
                         return Err<void>("Image::allocateTextures: failed to recreate scale pipeline", res);
@@ -167,14 +156,27 @@ public:
                 }
                 recalculateScaledDimensions();
                 if (auto res = runScaleCompute(); !res) {
-                    return Err<void>("Image::allocateTextures: failed to reconstruct texture", res);
+                    return Err<void>("Image::allocateTextures: failed to scale", res);
                 }
                 _needsScaling = false;
             } else {
-                // Re-register existing pixels with texture manager
-                _cardMgr->textureManager()->write(_textureHandle, _scaledPixels.data());
+                // Re-allocate handle for existing scaled pixels
+                auto allocResult = _cardMgr->textureManager()->allocate(_scaledWidth, _scaledHeight);
+                if (!allocResult) {
+                    return Err<void>("Image::allocateTextures: failed to allocate texture handle", allocResult);
+                }
+                _textureHandle = *allocResult;
             }
             _metadataDirty = true;
+        }
+        return Ok();
+    }
+
+    Result<void> writeTextures() override {
+        if (_textureHandle.isValid() && !_scaledPixels.empty()) {
+            if (auto res = _cardMgr->textureManager()->write(_textureHandle, _scaledPixels.data()); !res) {
+                return Err<void>("Image::writeTextures: write failed", res);
+            }
         }
         return Ok();
     }
@@ -613,19 +615,16 @@ private:
         std::memcpy(_scaledPixels.data(), mapped, scaledDataSize);
         wgpuBufferUnmap(_readbackBuffer);
 
-        // Allocate texture handle if needed, link scaled pixels
-        if (!_textureHandle.isValid()) {
-            auto allocResult = _cardMgr->textureManager()->allocate(_scaledWidth, _scaledHeight);
-            if (!allocResult) {
-                return Err<void>("Image::runScaleCompute: failed to allocate texture handle", allocResult);
-            }
-            _textureHandle = *allocResult;
+        // Allocate texture handle (write happens in writeTextures after atlas creation)
+        auto allocResult = _cardMgr->textureManager()->allocate(_scaledWidth, _scaledHeight);
+        if (!allocResult) {
+            return Err<void>("Image::runScaleCompute: failed to allocate texture handle", allocResult);
         }
-        _cardMgr->textureManager()->write(_textureHandle, _scaledPixels.data());
+        _textureHandle = *allocResult;
 
         _metadataDirty = true;
 
-        yinfo("Image::runScaleCompute: done, linked to handle id={}", _textureHandle.id);
+        yinfo("Image::runScaleCompute: done, handle id={}", _textureHandle.id);
         return Ok();
     }
 

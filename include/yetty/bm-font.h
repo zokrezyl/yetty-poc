@@ -90,6 +90,8 @@ private:
 
     Result<void> findFont() noexcept;
     Result<void> createGPUResources() noexcept;
+    void releaseGPUResources() noexcept;
+    void growAtlas();
     Result<void> renderGlyph(uint32_t codepoint, int atlasX, int atlasY) noexcept;
 
     WGPUDevice _device = nullptr;
@@ -100,10 +102,11 @@ private:
     void* _ftFace = nullptr;
     std::string _fontPath;
 
-    // Atlas data
+    // Atlas data (starts small, grows on demand)
     uint32_t _glyphSize = 64;       // Size of each glyph cell
-    uint32_t _atlasSize = 2048;     // Atlas texture size
-    uint32_t _glyphsPerRow = 32;    // atlasSize / glyphSize
+    uint32_t _atlasSize = 256;      // Current atlas texture size (grows: 256→512→1024→2048)
+    uint32_t _glyphsPerRow = 4;     // atlasSize / glyphSize
+    static constexpr uint32_t ATLAS_MAX_SIZE = 4096;
     std::vector<uint8_t> _atlasData; // RGBA pixel data
 
     // Metadata
@@ -119,6 +122,7 @@ private:
     WGPUTextureView _textureView = nullptr;
     WGPUSampler _sampler = nullptr;
     WGPUBuffer _metadataBuffer = nullptr;
+    uint32_t _gpuAtlasSize = 0;     // Size of currently allocated GPU texture
     bool _gpuResourcesCreated = false;
     bool _needsUpload = false;
 };

@@ -165,5 +165,5 @@ data:
       color-value: [0.8, 0.2, 0.4, 1.0]
 
 app:
-  root-widget: simple.demo-window
+  root-widget: demo-window
   data-tree: demo-data

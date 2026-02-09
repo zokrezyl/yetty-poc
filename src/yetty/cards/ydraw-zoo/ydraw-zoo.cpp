@@ -31,8 +31,15 @@ Result<void> YDrawZoo::init() {
     // Fixed scene bounds — viewport never shifts
     setSceneBounds(0, 0, SCENE_W, SCENE_H);
 
+    // Greedy pre-allocation: reserve headroom so mid-render addPrimitive() calls
+    // succeed without triggering buffer repack events every frame.
+    setPrimCapacityHint(TARGET_OBJECTS * 3);
+
     // Dark background
     setBgColor(0xFF1A1A2E);  // ABGR: dark navy
+
+    // Uniform scaling so SDF shapes (circles, stars, etc.) aren't distorted
+    addFlags(FLAG_UNIFORM_SCALE);
 
     markDirty();
     return Ok();

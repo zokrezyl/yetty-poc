@@ -36,11 +36,11 @@ public:
 
     // Card API
     Result<TextureHandle> allocate(uint32_t width, uint32_t height) override;
-    Result<void> deallocate(TextureHandle handle) override;
     Result<void> write(TextureHandle handle, const uint8_t* pixels) override;
     AtlasPosition getAtlasPosition(TextureHandle handle) const override;
 
     // gpu-screen / CardManager API
+    void clearHandles() override;
     Result<void> createAtlas() override;
     Result<void> uploadAtlas(WGPUQueue queue) override;
 
@@ -55,7 +55,6 @@ public:
 
 private:
     Result<void> createAtlasTexture();
-    Result<void> growAtlas();
 
     GPUContext* _gpuContext;
     WGPUDevice _device;
@@ -133,21 +132,16 @@ Result<TextureHandle> CardTextureManagerImpl::allocate(uint32_t width, uint32_t 
     return Ok(TextureHandle{id});
 }
 
-Result<void> CardTextureManagerImpl::deallocate(TextureHandle handle) {
-    auto it = _textureHandles.find(handle.id);
-    if (it == _textureHandles.end()) {
-        return Err("deallocate: invalid handle");
-    }
-
-    _textureHandles.erase(it);
-    ydebug("CardTextureManager: deallocated handle id={}", handle.id);
-    return Ok();
-}
-
 Result<void> CardTextureManagerImpl::write(TextureHandle handle, const uint8_t* pixels) {
+    if (!_atlasInitialized) {
+        return Err("write: atlas not created yet (call createAtlas first)");
+    }
     auto it = _textureHandles.find(handle.id);
     if (it == _textureHandles.end()) {
         return Err("write: invalid handle");
+    }
+    if (!it->second.packed) {
+        return Err("write: handle not packed (call createAtlas first)");
     }
     if (!pixels) {
         return Err("write: null pixels");
@@ -173,18 +167,24 @@ AtlasPosition CardTextureManagerImpl::getAtlasPosition(TextureHandle handle) con
 // gpu-screen / CardManager API
 // =============================================================================
 
-Result<void> CardTextureManagerImpl::createAtlas() {
-    if (_textureHandles.empty()) {
-        return Ok();
-    }
+void CardTextureManagerImpl::clearHandles() {
+    _textureHandles.clear();
+    _nextTextureHandleId = 1;
+}
 
-    // Lazily initialize atlas GPU resources
-    if (!_atlasInitialized) {
-        if (auto res = createAtlasTexture(); !res) {
-            return Err<void>("createAtlas: atlas texture init failed", res);
+Result<void> CardTextureManagerImpl::createAtlas() {
+    // No textures — release atlas GPU resources and reset size
+    if (_textureHandles.empty()) {
+        if (_atlasInitialized) {
+            yinfo("CardTextureManager: no textures, releasing atlas (was {}x{})",
+                  _currentAtlasSize, _currentAtlasSize);
+            if (_atlasSampler) { wgpuSamplerRelease(_atlasSampler); _atlasSampler = nullptr; }
+            if (_atlasTextureView) { wgpuTextureViewRelease(_atlasTextureView); _atlasTextureView = nullptr; }
+            if (_atlasTexture) { _allocator->releaseTexture(_atlasTexture); _atlasTexture = nullptr; }
+            _atlasInitialized = false;
+            _currentAtlasSize = _config.initialAtlasSize;
         }
-        _atlasInitialized = true;
-        yinfo("CardTextureManager: atlas initialized ({}x{})", _currentAtlasSize, _currentAtlasSize);
+        return Ok();
     }
 
     // Collect handles for packing
@@ -211,7 +211,7 @@ Result<void> CardTextureManagerImpl::createAtlas() {
         return a.height > b.height;
     });
 
-    // Row-based strip packing
+    // Row-based strip packing — assigns atlas positions to each handle
     auto packWithSize = [&](uint32_t atlasSize) -> uint32_t {
         uint32_t currentX = 0;
         uint32_t currentY = 0;
@@ -228,7 +228,7 @@ Result<void> CardTextureManagerImpl::createAtlas() {
             data.atlasX = currentX;
             data.atlasY = currentY;
             data.packed = true;
-            data.dirty = true;  // needs re-upload after repack
+            data.dirty = true;
 
             currentX += entry.width;
             rowHeight = std::max(rowHeight, entry.height);
@@ -237,23 +237,37 @@ Result<void> CardTextureManagerImpl::createAtlas() {
         return currentY + rowHeight;
     };
 
-    uint32_t totalHeight = packWithSize(_currentAtlasSize);
-
-    // Grow atlas if needed
-    while (totalHeight > _currentAtlasSize && _currentAtlasSize < _maxAtlasSize) {
-        if (auto res = growAtlas(); !res) {
-            return res;
-        }
-        totalHeight = packWithSize(_currentAtlasSize);
+    // Find smallest power-of-2 atlas size that fits
+    uint32_t maxWidth = 0;
+    for (const auto& entry : entries) {
+        maxWidth = std::max(maxWidth, entry.width);
+    }
+    uint32_t neededSize = std::max(_config.initialAtlasSize, maxWidth);
+    while (neededSize <= _maxAtlasSize) {
+        uint32_t h = packWithSize(neededSize);
+        if (h <= neededSize) break;
+        neededSize *= 2;
     }
 
-    if (totalHeight > _currentAtlasSize) {
-        yerror("CardTextureManager: atlas overflow! need {}px height, have {}px", totalHeight, _currentAtlasSize);
+    if (neededSize > _maxAtlasSize) {
+        yerror("CardTextureManager: atlas overflow, cannot fit textures in {}x{}", _maxAtlasSize, _maxAtlasSize);
         return Err<void>("Atlas overflow - too many/large textures");
     }
 
-    yinfo("CardTextureManager: packed {} textures into atlas (used {}px of {}px height)",
-          entries.size(), totalHeight, _currentAtlasSize);
+    // Recreate GPU texture if size changed
+    if (neededSize != _currentAtlasSize || !_atlasInitialized) {
+        yinfo("CardTextureManager: atlas {}x{} -> {}x{}", _currentAtlasSize, _currentAtlasSize, neededSize, neededSize);
+        _currentAtlasSize = neededSize;
+        if (auto res = createAtlasTexture(); !res) {
+            return res;
+        }
+        _atlasInitialized = true;
+        // Re-pack with final size (positions may differ after resize)
+        packWithSize(_currentAtlasSize);
+    }
+
+    yinfo("CardTextureManager: packed {} textures into {}x{} atlas",
+          entries.size(), _currentAtlasSize, _currentAtlasSize);
 
     return Ok();
 }
@@ -328,7 +342,7 @@ Result<void> CardTextureManagerImpl::createAtlasTexture() {
     }
 
     WGPUTextureDescriptor texDesc = {};
-    texDesc.label = WGPU_STR("ImageAtlas");
+    texDesc.label = WGPU_STR("CardTextureAtlas");
     texDesc.size.width = _currentAtlasSize;
     texDesc.size.height = _currentAtlasSize;
     texDesc.size.depthOrArrayLayers = 1;
@@ -368,26 +382,6 @@ Result<void> CardTextureManagerImpl::createAtlasTexture() {
         return Err<void>("Failed to create atlas sampler");
     }
 
-    return Ok();
-}
-
-Result<void> CardTextureManagerImpl::growAtlas() {
-    uint32_t newSize = _currentAtlasSize * 2;
-    if (newSize > _maxAtlasSize) {
-        yerror("CardTextureManager: cannot grow atlas beyond {} (current: {})", _maxAtlasSize, _currentAtlasSize);
-        return Err<void>("Atlas size limit reached");
-    }
-
-    yinfo("CardTextureManager: growing atlas from {}x{} to {}x{}",
-          _currentAtlasSize, _currentAtlasSize, newSize, newSize);
-
-    _currentAtlasSize = newSize;
-
-    if (auto res = createAtlasTexture(); !res) {
-        return res;
-    }
-
-    yinfo("CardTextureManager: atlas grown successfully to {}x{}", _currentAtlasSize, _currentAtlasSize);
     return Ok();
 }
 

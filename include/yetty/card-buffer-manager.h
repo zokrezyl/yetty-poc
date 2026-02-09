@@ -65,8 +65,6 @@ public:
     virtual Result<BufferHandle> allocateBuffer(uint32_t slotIndex,
                                                 const std::string& scope,
                                                 uint32_t size) = 0;
-    virtual Result<void> deallocateBuffer(uint32_t slotIndex,
-                                          const std::string& scope) = 0;
 
     virtual Result<void> writeBuffer(BufferHandle handle, const void* data, uint32_t size) = 0;
     virtual Result<void> writeBufferAt(BufferHandle handle, uint32_t offset, const void* data, uint32_t size) = 0;

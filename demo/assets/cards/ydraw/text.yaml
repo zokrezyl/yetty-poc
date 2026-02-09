@@ -4,19 +4,19 @@ background: "#1a1a2e"
 body:
   - text:
       position: [20, 30]
-      content: "Small Text (12px)"
+      content: "Small Text (12px) abcdefghijklmnoprst"
       font-size: 12
       color: "#ecf0f1"
 
   - text:
       position: [20, 60]
-      content: "Medium Text (18px)"
+      content: "Medium Text (18px) abcdefghijklmnoprst"
       font-size: 18
       color: "#3498db"
 
   - text:
       position: [20, 100]
-      content: "Large Text (24px)"
+      content: "Large Text (24px) abcdefghijklmnoprst"
       font-size: 24
       color: "#2ecc71"
 

@@ -45,7 +45,10 @@ struct Event {
         // Command mode (tmux-style prefix key sequences)
         CommandKey,
         // Cursor shape change (dispatched by GPUScreen, handled by Yetty)
-        SetCursor
+        SetCursor,
+        // Card resource recompaction requests (dispatched by cards, handled by GPUScreen)
+        CardBufferRepack,
+        CardTextureRepack
     };
 
     struct KeyEvent {
@@ -132,6 +135,10 @@ struct Event {
         int shape;           // GLFW cursor shape constant (0 = default/arrow)
     };
 
+    struct CardRepackEvent {
+        ObjectId targetId;   // GPUScreen to repack
+    };
+
     Type type = Type::None;
 
     union {
@@ -150,6 +157,7 @@ struct Event {
         SplitPaneEvent splitPane;
         CommandKeyEvent cmdKey;
         SetCursorEvent setCursor;
+        CardRepackEvent cardRepack;
     };
 
     // Optional heap-allocated payload, automatically freed when event goes out of scope.
@@ -324,6 +332,21 @@ struct Event {
         Event e;
         e.type = Type::SetCursor;
         e.setCursor = {shape};
+        return e;
+    }
+
+    // Card resource recompaction requests
+    static Event cardBufferRepackEvent(ObjectId targetId) {
+        Event e;
+        e.type = Type::CardBufferRepack;
+        e.cardRepack = {targetId};
+        return e;
+    }
+
+    static Event cardTextureRepackEvent(ObjectId targetId) {
+        Event e;
+        e.type = Type::CardTextureRepack;
+        e.cardRepack = {targetId};
         return e;
     }
 };

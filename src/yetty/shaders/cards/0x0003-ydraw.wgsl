@@ -42,6 +42,7 @@ const YDRAW_FLAG_SHOW_BOUNDS: u32 = 1u;
 const YDRAW_FLAG_SHOW_GRID: u32 = 2u;
 const YDRAW_FLAG_SHOW_EVAL_COUNT: u32 = 4u;
 const YDRAW_FLAG_HAS_3D: u32 = 8u;
+const YDRAW_FLAG_UNIFORM_SCALE: u32 = 16u;
 
 // Hardcoded max entries per cell (matches C++ DEFAULT_MAX_PRIMS_PER_CELL)
 const YDRAW_MAX_PRIMS_PER_CELL: u32 = 16u;
@@ -126,29 +127,36 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
     let viewW = viewMaxX - viewMinX;
     let viewH = viewMaxY - viewMinY;
 
-    // Compute scene-space position with UNIFORM scaling (zoom-to-fit).
-    // This ensures 1 scene unit is the same physical size in both axes.
+    // Compute widget UV (position within entire card widget)
     let widgetUV = (vec2<f32>(f32(relCol), f32(relRow)) + localUV) /
                    vec2<f32>(f32(widthCells), f32(heightCells));
 
-    let cardAspect = f32(widthCells) / max(f32(heightCells), 1.0);
-    let viewAspect = viewW / max(viewH, 1e-6);
-
-    // Use uniform scale: pick the axis that needs more zoom-out
+    // Compute scene-space position
     var scenePos: vec2<f32>;
-    if (viewAspect < cardAspect) {
-        let visibleW = viewH * cardAspect;
-        let offsetX = (visibleW - viewW) * 0.5;
-        scenePos = vec2<f32>(
-            viewMinX - offsetX + widgetUV.x * visibleW,
-            viewMinY + widgetUV.y * viewH
-        );
+    if ((flags & YDRAW_FLAG_UNIFORM_SCALE) != 0u) {
+        // Uniform scaling: preserves aspect ratio (circles stay circular)
+        let cardAspect = (f32(widthCells) * grid.cellSize.x) / max(f32(heightCells) * grid.cellSize.y, 1.0);
+        let viewAspect = viewW / max(viewH, 1e-6);
+        if (viewAspect < cardAspect) {
+            let visibleW = viewH * cardAspect;
+            let offsetX = (visibleW - viewW) * 0.5;
+            scenePos = vec2<f32>(
+                viewMinX - offsetX + widgetUV.x * visibleW,
+                viewMinY + widgetUV.y * viewH
+            );
+        } else {
+            let visibleH = viewW / cardAspect;
+            let offsetY = (visibleH - viewH) * 0.5;
+            scenePos = vec2<f32>(
+                viewMinX + widgetUV.x * viewW,
+                viewMinY - offsetY + widgetUV.y * visibleH
+            );
+        }
     } else {
-        let visibleH = viewW / cardAspect;
-        let offsetY = (visibleH - viewH) * 0.5;
+        // Non-uniform: stretch to fill (matches JDraw/KDraw/HDraw)
         scenePos = vec2<f32>(
             viewMinX + widgetUV.x * viewW,
-            viewMinY - offsetY + widgetUV.y * visibleH
+            viewMinY + widgetUV.y * viewH
         );
     }
 
@@ -161,7 +169,7 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
         let primSize3D = 24u;  // SDFPrimitive is 96 bytes = 24 floats
 
         // Camera setup using widget UV
-        let aspect3D = f32(widthCells) / max(f32(heightCells), 1.0);
+        let aspect3D = (f32(widthCells) * grid.cellSize.x) / max(f32(heightCells) * grid.cellSize.y, 1.0);
         let uv3D = (widgetUV - 0.5) * vec2<f32>(aspect3D, 1.0);
         let camPos = vec3<f32>(0.0, 0.0, 3.0);
         let camDir = normalize(vec3<f32>(uv3D.x, -uv3D.y, -1.5));

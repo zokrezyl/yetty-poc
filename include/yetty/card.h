@@ -52,6 +52,8 @@ public:
     // Loop 2: Cards allocate/re-register their resources
     virtual Result<void> allocateBuffers() { return Ok(); }
     virtual Result<void> allocateTextures() { return Ok(); }
+    // Loop 3b: After createAtlas(), texture cards write pixel data into the atlas
+    virtual Result<void> writeTextures() { return Ok(); }
 
     virtual Result<void> dispose() = 0;
     virtual void suspend() = 0;

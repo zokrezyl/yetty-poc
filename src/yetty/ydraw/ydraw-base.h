@@ -60,6 +60,7 @@ public:
     static constexpr uint32_t FLAG_SHOW_GRID = 2;
     static constexpr uint32_t FLAG_SHOW_EVAL_COUNT = 4;
     static constexpr uint32_t FLAG_HAS_3D = 8;
+    static constexpr uint32_t FLAG_UNIFORM_SCALE = 16;
 
     virtual ~YDrawBase();
 
@@ -141,6 +142,10 @@ public:
 
     void setMaxPrimsPerCell(uint32_t max);
 
+    // Greedy allocation: reserve capacity for at least `n` primitives
+    // so mid-render addPrimitive() calls succeed without triggering repack.
+    void setPrimCapacityHint(uint32_t n);
+
     //=========================================================================
     // Public API - Animation
     //=========================================================================
@@ -203,11 +208,11 @@ private:
     static constexpr uint32_t GLYPH_BIT = 0x80000000u;
 
     Result<void> ensurePrimCapacity(uint32_t required);
+    void calculate();
     void computeSceneBounds();
     void buildGrid();
     Result<void> rebuildAndUpload();
     Result<void> uploadMetadata();
-    uint32_t computeDerivedSize() const;
     Result<void> registerForEvents();
     Result<void> deregisterFromEvents();
 
@@ -222,6 +227,7 @@ private:
     uint32_t* _grid = nullptr;
     uint32_t _gridSize = 0;
     StorageHandle _derivedStorage = StorageHandle::invalid();
+    std::vector<uint32_t> _gridStaging;  // Pre-built grid from declareBufferNeeds
 
     // Text glyphs
     std::vector<YDrawGlyph> _glyphs;
@@ -238,6 +244,7 @@ private:
     // Grid parameters
     float _cellSize = DEFAULT_CELL_SIZE;
     uint32_t _maxPrimsPerCell = DEFAULT_MAX_PRIMS_PER_CELL;
+    uint32_t _primCapacityHint = 0;  // Greedy pre-allocation hint
 
     // GPU offsets (in float units)
     uint32_t _primitiveOffset = 0;
@@ -250,6 +257,9 @@ private:
     bool _dirty = true;
     bool _metadataDirty = true;
     bool _initParsing = false;
+
+    // Screen ID for repack events
+    base::ObjectId _screenId = 0;
 
     // Font for text rendering
     FontManager::Ptr _fontManager;

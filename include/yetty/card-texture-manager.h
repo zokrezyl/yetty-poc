@@ -58,9 +58,6 @@ public:
     // Allocate a texture handle with declared size (RGBA8, width * height * 4 bytes)
     virtual Result<TextureHandle> allocate(uint32_t width, uint32_t height) = 0;
 
-    // Deallocate a texture handle
-    virtual Result<void> deallocate(TextureHandle handle) = 0;
-
     // Write pixels into the atlas region for this handle (RGBA8, width * height * 4 bytes)
     virtual Result<void> write(TextureHandle handle, const uint8_t* pixels) = 0;
 
@@ -71,8 +68,11 @@ public:
     // gpu-screen API — called by gpu-screen / CardManager
     // =========================================================================
 
-    // Pack atlas layout from all allocated handles. Called by gpu-screen in Loop 3
-    // when a texture card enters or exits.
+    // Clear all texture handles. Called before cards re-allocate on layout change.
+    virtual void clearHandles() = 0;
+
+    // Pack atlas layout from all allocated handles and right-size the atlas.
+    // Called after all cards have re-allocated.
     virtual Result<void> createAtlas() = 0;
 
     // Upload dirty atlas regions to GPU. Called by CardManager::flush().

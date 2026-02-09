@@ -100,8 +100,9 @@ public:
     bool needsTexture() const override { return true; }
 
     Result<void> allocateTextures() override {
-        ydebug("PythonCard::allocateTextures: engineInit={} globals={} texHandle={}",
-               _engineInitialized, (bool)_globals, _textureHandle.isValid());
+        _textureHandle = TextureHandle::invalid();
+        ydebug("PythonCard::allocateTextures: engineInit={} globals={}",
+               _engineInitialized, (bool)_globals);
         if (_engineInitialized && _globals) {
             python::GILGuard gil;
             PythonCallContext pcc(_cardMgr.get(), _cardMgr->textureManager().get(), &_ctx.gpu, metadataSlotIndex());
@@ -115,6 +116,19 @@ public:
                    _textureHandle.isValid(), _textureHandle.isValid() ? _textureHandle.id : 0);
         }
         _metadataDirty = true;
+        return Ok();
+    }
+
+    Result<void> writeTextures() override {
+        if (_engineInitialized && _globals && _textureHandle.isValid()) {
+            python::GILGuard gil;
+            PythonCallContext pcc(_cardMgr.get(), _cardMgr->textureManager().get(), &_ctx.gpu, metadataSlotIndex());
+
+            if (auto res = callPython("write_textures"); !res) {
+                // Not an error if the callback doesn't exist — Python card may not need textures
+                ydebug("PythonCard::writeTextures: no write_textures callback or failed: {}", error_msg(res));
+            }
+        }
         return Ok();
     }
 
@@ -302,12 +316,6 @@ public:
             _globals = py::object();  // Release reference
         }
 
-        // Deallocate buffers
-        if (_textureHandle.isValid() && _cardMgr) {
-            _cardMgr->textureManager()->deallocate(_textureHandle);
-            _textureHandle = TextureHandle::invalid();
-        }
-
         if (_metaHandle.isValid() && _cardMgr) {
             _cardMgr->deallocateMetadata(_metaHandle);
             _metaHandle = MetadataHandle::invalid();
@@ -333,11 +341,6 @@ public:
             }
         }
 
-        // Release texture handle
-        if (_textureHandle.isValid() && _cardMgr) {
-            _cardMgr->textureManager()->deallocate(_textureHandle);
-            _textureHandle = TextureHandle::invalid();
-        }
         _needsRerender = true;
         yinfo("PythonCard::suspend: deallocated texture handle");
     }

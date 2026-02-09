@@ -34,6 +34,8 @@ public:
     float getStatusbarHeight() const override { return STATUSBAR_HEIGHT; }
     Result<void> render(WGPURenderPassEncoder pass) override;
 
+    void showGpuStatsDialog(std::function<std::string()> provider) override;
+
     static constexpr float STATUSBAR_HEIGHT = 22.0f;
     bool isContextMenuOpen() const override { return _menuOpen; }
     ImGuiContext* context() const override { return _imguiContext; }
@@ -43,6 +45,7 @@ private:
 
     const YettyContext& _ctx;
     ImGuiContext* _imguiContext = nullptr;
+    base::ObjectId _id;
     uint32_t _displayWidth = 0;
     uint32_t _displayHeight = 0;
 
@@ -53,6 +56,10 @@ private:
     bool _menuOpen = false;
     bool _rightClickPending = false;
 
+    // GPU Stats dialog
+    bool _showGpuStats = false;
+    std::function<std::string()> _gpuStatsProvider;
+
     // Statusbar
     std::string _statusText;
 };
@@ -61,8 +68,10 @@ private:
 // Implementation
 //-----------------------------------------------------------------------------
 
+static base::ObjectId s_nextImguiId = 0xFFFF0000;
+
 ImguiManagerImpl::ImguiManagerImpl(const YettyContext& ctx)
-    : _ctx(ctx) {
+    : _ctx(ctx), _id(s_nextImguiId++) {
 }
 
 ImguiManagerImpl::~ImguiManagerImpl() {
@@ -117,10 +126,12 @@ void ImguiManagerImpl::registerForEvents() {
         return;
     }
     auto loop = *loopResult;
-    loop->registerListener(base::Event::Type::MouseDown, sharedAs<base::EventListener>());
-    loop->registerListener(base::Event::Type::MouseUp, sharedAs<base::EventListener>());
-    loop->registerListener(base::Event::Type::MouseMove, sharedAs<base::EventListener>());
-    loop->registerListener(base::Event::Type::KeyDown, sharedAs<base::EventListener>());
+    // Priority 100: ImguiManager must see mouse events BEFORE GPUScreen (priority 0)
+    // so it can forward them to ImGui and consume them when ImGui wants the mouse
+    loop->registerListener(base::Event::Type::MouseDown, sharedAs<base::EventListener>(), 100);
+    loop->registerListener(base::Event::Type::MouseUp, sharedAs<base::EventListener>(), 100);
+    loop->registerListener(base::Event::Type::MouseMove, sharedAs<base::EventListener>(), 100);
+    loop->registerListener(base::Event::Type::KeyDown, sharedAs<base::EventListener>(), 100);
     yinfo("ImguiManager registered for mouse and key events");
 }
 
@@ -136,26 +147,35 @@ Result<bool> ImguiManagerImpl::onEvent(const base::Event& event) {
         io.AddMousePosEvent(event.mouse.x, event.mouse.y);
     }
     else if (event.type == base::Event::Type::MouseDown) {
+        ydebug("ImguiManager::onEvent: MouseDown button={} at ({}, {}) WantCaptureMouse={}",
+              event.mouse.button, event.mouse.x, event.mouse.y, io.WantCaptureMouse);
         io.AddMousePosEvent(event.mouse.x, event.mouse.y);
         io.AddMouseButtonEvent(event.mouse.button, true);
-
-        // Any click while menu is open: let ImGui handle it, but if click is outside
-        // the popup, ImGui will close it (handled in render via BeginPopup returning false)
     }
     else if (event.type == base::Event::Type::MouseUp) {
+        ydebug("ImguiManager::onEvent: MouseUp button={} at ({}, {}) WantCaptureMouse={}",
+              event.mouse.button, event.mouse.x, event.mouse.y, io.WantCaptureMouse);
         io.AddMousePosEvent(event.mouse.x, event.mouse.y);
         io.AddMouseButtonEvent(event.mouse.button, false);
     }
     else if (event.type == base::Event::Type::KeyDown) {
-        // ESC closes the context menu
-        if (event.key.key == GLFW_KEY_ESCAPE && _menuOpen) {
-            ydebug("ImguiManager: ESC pressed, closing menu");
+        if (event.key.key == GLFW_KEY_ESCAPE && (_menuOpen || _showGpuStats)) {
             clearContextMenu();
-            return Ok(true);  // Consume the event
+            _showGpuStats = false;
+            return Ok(true);
         }
     }
 
-    return Ok(false);  // Don't consume - let other listeners handle
+    // When ImGui wants the mouse (popup/dialog open), consume the event
+    // so GPUScreen doesn't process it (focus, selection, etc.)
+    if (io.WantCaptureMouse &&
+        (event.type == base::Event::Type::MouseDown ||
+         event.type == base::Event::Type::MouseUp ||
+         event.type == base::Event::Type::MouseMove)) {
+        return Ok(true);
+    }
+
+    return Ok(false);
 }
 
 void ImguiManagerImpl::updateDisplaySize(uint32_t width, uint32_t height) {
@@ -168,6 +188,11 @@ void ImguiManagerImpl::beginContextMenu(float x, float y) {
     _menuX = x;
     _menuY = y;
     _rightClickPending = true;
+    // Steal focus from GPUScreen so it stops processing mouse/keyboard events
+    auto loopResult = base::EventLoop::instance();
+    if (loopResult) {
+        (*loopResult)->dispatch(base::Event::focusEvent(_id));
+    }
     ydebug("ImguiManager: beginContextMenu at ({}, {})", x, y);
 }
 
@@ -183,6 +208,11 @@ void ImguiManagerImpl::clearContextMenu() {
 
 void ImguiManagerImpl::setStatusText(const std::string& text) {
     _statusText = text;
+}
+
+void ImguiManagerImpl::showGpuStatsDialog(std::function<std::string()> provider) {
+    _gpuStatsProvider = std::move(provider);
+    _showGpuStats = true;
 }
 
 void ImguiManagerImpl::dispatchEvent(const base::Event& event) {
@@ -212,19 +242,31 @@ Result<void> ImguiManagerImpl::render(WGPURenderPassEncoder pass) {
 
     // Handle context menu - if there are items, show popup
     if (!_menuItems.empty()) {
+        ydebug("ImguiManager::render: _menuItems.size()={} _menuOpen={}", _menuItems.size(), _menuOpen);
         if (!_menuOpen) {
-            // First frame with items - open popup
+            ydebug("ImguiManager::render: calling OpenPopup at ({}, {})", _menuX, _menuY);
             ImGui::OpenPopup("ContextMenu");
             _menuOpen = true;
             _rightClickPending = false;
         }
 
-        // SetNextWindowPos must be called immediately before BeginPopup
         ImGui::SetNextWindowPos(ImVec2(_menuX, _menuY), ImGuiCond_Appearing);
         if (ImGui::BeginPopup("ContextMenu")) {
-            for (const auto& item : _menuItems) {
-                if (ImGui::MenuItem(item.label.c_str())) {
-                    dispatchEvent(item.event);
+            ydebug("ImguiManager::render: BeginPopup returned true, rendering {} items", _menuItems.size());
+            for (size_t i = 0; i < _menuItems.size(); i++) {
+                const auto& item = _menuItems[i];
+                bool clicked = ImGui::MenuItem(item.label.c_str());
+                ydebug("ImguiManager::render: MenuItem '{}' clicked={} hasCallback={}", item.label, clicked, (bool)item.callback);
+                if (clicked) {
+                    ydebug("ImguiManager::render: CLICKED '{}'", item.label);
+                    if (item.callback) {
+                        ydebug("ImguiManager::render: calling callback for '{}'", item.label);
+                        item.callback();
+                        ydebug("ImguiManager::render: callback done, _showGpuStats={}", _showGpuStats);
+                    } else {
+                        ydebug("ImguiManager::render: dispatching event for '{}'", item.label);
+                        dispatchEvent(item.event);
+                    }
                     clearContextMenu();
                     ImGui::CloseCurrentPopup();
                     break;
@@ -232,8 +274,21 @@ Result<void> ImguiManagerImpl::render(WGPURenderPassEncoder pass) {
             }
             ImGui::EndPopup();
         } else {
-            // Popup was closed (clicked outside)
+            ydebug("ImguiManager::render: BeginPopup returned false, closing menu");
             clearContextMenu();
+        }
+    }
+
+    // GPU Stats dialog - call provider every frame for live data
+    if (_showGpuStats && _gpuStatsProvider) {
+        std::string stats = _gpuStatsProvider();
+        ImGui::SetNextWindowSize(ImVec2(600, 500), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("GPU Memory Stats", &_showGpuStats)) {
+            ImGui::TextUnformatted(stats.c_str());
+        }
+        ImGui::End();
+        if (!_showGpuStats) {
+            _gpuStatsProvider = nullptr;
         }
     }
 

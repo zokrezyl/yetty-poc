@@ -647,6 +647,7 @@ Result<void> GPUScreenImpl::init() noexcept {
     } else {
       _cardManager = *cmResult;
       _ctx.cardManager = _cardManager;
+      _ctx.screenId = _id;
       yinfo("GPUScreen[{}]: created per-screen CardManager (lazy)", _id);
     }
   }
@@ -4150,13 +4151,27 @@ void GPUScreenImpl::registerForFocus() {
                          sharedAs<base::EventListener>());
   loop->registerListener(base::Event::Type::CommandKey,
                          sharedAs<base::EventListener>());
-  yinfo("GPUScreen {} registered for SetFocus, Mouse, Scroll, Paste and CommandKey events", _id);
+  loop->registerListener(base::Event::Type::CardBufferRepack,
+                         sharedAs<base::EventListener>());
+  loop->registerListener(base::Event::Type::CardTextureRepack,
+                         sharedAs<base::EventListener>());
+  yinfo("GPUScreen {} registered for SetFocus, Mouse, Scroll, Paste, CommandKey and CardRepack events", _id);
 
   // Auto-focus on startup so keyboard works immediately
   loop->dispatch(base::Event::focusEvent(_id));
 }
 
 Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
+  // Handle card buffer/texture repack requests
+  if (event.type == base::Event::Type::CardBufferRepack) {
+    if (event.cardRepack.targetId == _id) _bufferLayoutChanged = true;
+    return Ok(true);
+  }
+  if (event.type == base::Event::Type::CardTextureRepack) {
+    if (event.cardRepack.targetId == _id) _textureLayoutChanged = true;
+    return Ok(true);
+  }
+
   // Handle mouse click - dispatch SetFocus if clicked on our surface
   if (event.type == base::Event::Type::MouseDown) {
     float mx = event.mouse.x;
@@ -4192,6 +4207,19 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
           _ctx.imguiManager->addContextMenuItem({
             "Inspect glyph",
             base::Event::contextMenuAction(_id, "inspect_glyph", row, col)
+          });
+          _ctx.imguiManager->addContextMenuItem({
+            "GPU Stats", {}, [this]() {
+              _ctx.imguiManager->showGpuStatsDialog([this]() -> std::string {
+                std::string stats = buildGpuStatsText();
+                std::string cleaned;
+                cleaned.reserve(stats.size());
+                for (size_t i = 0; i < stats.size(); i++) {
+                  if (stats[i] != '\r') cleaned += stats[i];
+                }
+                return cleaned;
+              });
+            }
           });
 
           yinfo("GPUScreen {} right-click at cell ({}, {}), opening context menu", _id, row, col);
@@ -4714,9 +4742,13 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
   }
 
   // Loop 3: Texture cards — only when a texture card entered or left
-  if (_textureLayoutChanged && _cardManager) {
+  if (_textureLayoutChanged && _cardManager && _cardManager->textureManager()) {
     ydebug("GPUScreen::render: _textureLayoutChanged=true, {} active cards", _cards.size());
 
+    // Clear all old texture handles — cards will re-allocate fresh
+    _cardManager->textureManager()->clearHandles();
+
+    // All active texture cards re-allocate
     for (auto& [slotIndex, card] : _cards) {
       if (card->needsTexture()) {
         ydebug("GPUScreen::render: Loop3 allocateTextures card='{}' slot={}", card->typeName(), slotIndex);
@@ -4726,16 +4758,21 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
       }
     }
 
-    // Create/repack texture atlas after all texture cards have allocated
-    if (_cardManager->textureManager()) {
-      ydebug("GPUScreen::render: calling createAtlas");
-      if (auto res = _cardManager->textureManager()->createAtlas(); !res) {
-        yerror("GPUScreen::render: createAtlas FAILED: {}", error_msg(res));
-      }
-      // Atlas texture may have been recreated (init or grow) —
-      // force bind group rebuild so it references the current texture.
-      _cardManager->invalidateBindGroup();
+    // Pack and create atlas sized to current needs
+    if (auto res = _cardManager->textureManager()->createAtlas(); !res) {
+      yerror("GPUScreen::render: createAtlas FAILED: {}", error_msg(res));
     }
+
+    // Write pixel data into the atlas (now that it exists)
+    for (auto& [slotIndex, card] : _cards) {
+      if (card->needsTexture()) {
+        if (auto res = card->writeTextures(); !res) {
+          yerror("GPUScreen::render: card '{}' writeTextures FAILED: {}", card->typeName(), error_msg(res));
+        }
+      }
+    }
+
+    _cardManager->invalidateBindGroup();
 
     _textureLayoutChanged = false;
   }
@@ -4811,6 +4848,12 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
     _needsBindGroupRecreation = true;
     yinfo("GPUScreenImpl::render: created cell buffer {}x{} ({} bytes)", _cols,
           totalRows, requiredSize);
+  }
+
+  // Upload lazily-loaded bitmap font glyphs to GPU
+  if (_bitmapFont && _bitmapFont->isDirty()) {
+    _bitmapFont->uploadToGpu();
+    _needsBindGroupRecreation = true;
   }
 
   // Recreate bind group if needed

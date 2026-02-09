@@ -78,6 +78,7 @@ public:
     void declareBufferNeeds() override;
     Result<void> allocateBuffers() override;
     Result<void> allocateTextures() override;
+    Result<void> writeTextures() override;
     Result<void> render(float time) override;
     Result<void> dispose() override;
     void suspend() override;

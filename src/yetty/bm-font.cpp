@@ -10,52 +10,7 @@
 #define YETTY_BM_FONT_STUB 0
 #endif
 
-// Common emoji list for preloading (top ~200 most used)
-// These are loaded into the bitmap font atlas for fast rendering
-namespace {
-constexpr uint32_t COMMON_EMOJIS[] = {
-    // Smileys & Emotion (most used)
-    0x1F600, 0x1F601, 0x1F602, 0x1F603, 0x1F604, 0x1F605, 0x1F606, 0x1F607,
-    0x1F608, 0x1F609, 0x1F60A, 0x1F60B, 0x1F60C, 0x1F60D, 0x1F60E, 0x1F60F,
-    0x1F610, 0x1F611, 0x1F612, 0x1F613, 0x1F614, 0x1F615, 0x1F616, 0x1F617,
-    0x1F618, 0x1F619, 0x1F61A, 0x1F61B, 0x1F61C, 0x1F61D, 0x1F61E, 0x1F61F,
-    0x1F620, 0x1F621, 0x1F622, 0x1F623, 0x1F624, 0x1F625, 0x1F626, 0x1F627,
-    0x1F628, 0x1F629, 0x1F62A, 0x1F62B, 0x1F62C, 0x1F62D, 0x1F62E, 0x1F62F,
-    0x1F630, 0x1F631, 0x1F632, 0x1F633, 0x1F634, 0x1F635, 0x1F636, 0x1F637,
-    // Hearts
-    0x2764, 0x1F493, 0x1F494, 0x1F495, 0x1F496, 0x1F497, 0x1F498, 0x1F499,
-    0x1F49A, 0x1F49B, 0x1F49C, 0x1F49D, 0x1F49E, 0x1F49F, 0x1F5A4, 0x1F90D,
-    0x1F90E, 0x1F9E1,
-    // Gestures
-    0x1F44D, 0x1F44E, 0x1F44A, 0x1F44B, 0x1F44C, 0x1F44F, 0x1F64F, 0x1F4AA,
-    0x270B, 0x270C, 0x1F91E, 0x1F91F, 0x1F918, 0x1F919,
-    // Objects & Symbols
-    0x2B50, 0x1F31F, 0x1F4A5, 0x1F4A6, 0x1F4A8, 0x1F4AB, 0x1F4AC, 0x1F4AD,
-    0x1F4AF, 0x1F525, 0x26A1, 0x2728,
-    // Animals
-    0x1F436, 0x1F431, 0x1F42D, 0x1F439, 0x1F430, 0x1F98A, 0x1F43B, 0x1F43C,
-    0x1F428, 0x1F42F, 0x1F981, 0x1F42E, 0x1F437, 0x1F438, 0x1F412, 0x1F414,
-    0x1F427, 0x1F426, 0x1F40D, 0x1F422, 0x1F41D, 0x1F41B, 0x1F98B,
-    // Food & Drink
-    0x1F34E, 0x1F34F, 0x1F350, 0x1F34A, 0x1F34B, 0x1F34C, 0x1F349, 0x1F347,
-    0x1F353, 0x1F352, 0x1F351, 0x1F355, 0x1F354, 0x1F35F, 0x1F32D, 0x1F32E,
-    0x1F37A, 0x1F377, 0x2615,
-    // Weather & Nature
-    0x2600, 0x1F31E, 0x1F31D, 0x1F31A, 0x1F319, 0x1F308, 0x2601, 0x26C5,
-    0x1F327, 0x1F4A7,
-    // Checkmarks & Status
-    0x2705, 0x274C, 0x2714, 0x2716, 0x1F6AB, 0x26A0, 0x2139, 0x1F4A1,
-    0x1F512, 0x1F513,
-    // Arrows
-    0x2B06, 0x2B07, 0x27A1, 0x2B05, 0x2194, 0x2195,
-    // Tech
-    0x1F4BB, 0x1F4F1, 0x2328, 0x1F5A5, 0x1F3AE, 0x1F680,
-    // Misc
-    0x1F389, 0x1F38A, 0x1F381, 0x1F4E7, 0x1F4DD, 0x1F4DA, 0x1F4D6, 0x1F4CC,
-    0x1F4CE, 0x1F4C1, 0x1F4C2,
-};
-constexpr size_t COMMON_EMOJI_COUNT = sizeof(COMMON_EMOJIS) / sizeof(COMMON_EMOJIS[0]);
-} // anonymous namespace
+// BmFont atlas is built progressively - glyphs loaded on demand via getGlyphIndex()
 
 #if !YETTY_BM_FONT_STUB
 #include <ft2build.h>
@@ -115,10 +70,7 @@ Result<void> BmFont::findFont() noexcept {
 }
 
 Result<void> BmFont::loadCommonGlyphs() noexcept {
-    yinfo("BmFont: no glyph support on this platform");
-    if (auto res = createGPUResources(); !res) {
-        return res;
-    }
+    yinfo("BmFont: stub - GPU resources created lazily");
     return Ok();
 }
 
@@ -208,10 +160,22 @@ Result<void> BmFont::createGPUResources() noexcept {
     }
 
     _gpuResourcesCreated = true;
+    _gpuAtlasSize = _atlasSize;
     yinfo("BmFont: stub GPU resources created");
 
     return Ok();
 }
+
+void BmFont::releaseGPUResources() noexcept {
+    if (_metadataBuffer) { _allocator->releaseBuffer(_metadataBuffer); _metadataBuffer = nullptr; }
+    if (_sampler) { wgpuSamplerRelease(_sampler); _sampler = nullptr; }
+    if (_textureView) { wgpuTextureViewRelease(_textureView); _textureView = nullptr; }
+    if (_texture) { _allocator->releaseTexture(_texture); _texture = nullptr; }
+    _gpuResourcesCreated = false;
+    _gpuAtlasSize = 0;
+}
+
+void BmFont::growAtlas() {}
 
 Result<void> BmFont::renderGlyph(uint32_t, int, int) noexcept {
     return Ok();
@@ -376,25 +340,13 @@ Result<void> BmFont::findFont() noexcept {
 }
 
 Result<void> BmFont::loadCommonGlyphs() noexcept {
-    yinfo("BmFont: loading {} common emojis", COMMON_EMOJI_COUNT);
-
-    int loaded = 0;
-    for (size_t i = 0; i < COMMON_EMOJI_COUNT; ++i) {
-        if (auto res = loadGlyph(COMMON_EMOJIS[i]); res && *res >= 0) {
-            loaded++;
-        }
-    }
-
-    yinfo("BmFont: loaded {}/{} common glyphs", loaded, COMMON_EMOJI_COUNT);
-
-    // Create GPU resources and upload
+    // Atlas is built progressively - glyphs loaded on demand via getGlyphIndex()
     if (!_gpuResourcesCreated) {
         if (auto res = createGPUResources(); !res) {
             return res;
         }
     }
-
-    uploadToGpu();
+    yinfo("BmFont: progressive atlas ready (glyphs loaded on demand)");
     return Ok();
 }
 
@@ -443,9 +395,13 @@ Result<int> BmFont::loadGlyph(uint32_t codepoint) noexcept {
         return Ok(-1);
     }
 
-    // Check if we have space in the atlas
+    // Check if we have space in the atlas - grow if needed
     if (_nextGlyphY * static_cast<int>(_glyphSize) + static_cast<int>(_glyphSize) > static_cast<int>(_atlasSize)) {
-        return Err<int>("Atlas is full");
+        if (_atlasSize >= ATLAS_MAX_SIZE) {
+            yerror("BmFont: atlas at maximum size {}x{}, cannot grow", _atlasSize, _atlasSize);
+            return Ok(-1);
+        }
+        growAtlas();
     }
 
     // Calculate position in atlas
@@ -545,6 +501,13 @@ bool BmFont::hasGlyph(uint32_t codepoint) const noexcept {
 void BmFont::uploadToGpu() {
     if (!_needsUpload && _gpuResourcesCreated) {
         return;
+    }
+
+    // Atlas grew beyond current GPU texture - recreate
+    if (_gpuResourcesCreated && _atlasSize > _gpuAtlasSize) {
+        yinfo("BmFont: atlas grew {}->{}x{}, recreating GPU resources",
+              _gpuAtlasSize, _atlasSize, _atlasSize);
+        releaseGPUResources();
     }
 
     if (!_gpuResourcesCreated) {
@@ -647,10 +610,47 @@ Result<void> BmFont::createGPUResources() noexcept {
           metaBytes, metaBytes / (1024.0 * 1024.0), maxGlyphs);
 
     _gpuResourcesCreated = true;
+    _gpuAtlasSize = _atlasSize;
     yinfo("BmFont: created GPU resources ({}x{} texture, {} max glyphs)",
           _atlasSize, _atlasSize, maxGlyphs);
 
     return Ok();
+}
+
+void BmFont::releaseGPUResources() noexcept {
+    if (_metadataBuffer) { _allocator->releaseBuffer(_metadataBuffer); _metadataBuffer = nullptr; }
+    if (_sampler) { wgpuSamplerRelease(_sampler); _sampler = nullptr; }
+    if (_textureView) { wgpuTextureViewRelease(_textureView); _textureView = nullptr; }
+    if (_texture) { _allocator->releaseTexture(_texture); _texture = nullptr; }
+    _gpuResourcesCreated = false;
+    _gpuAtlasSize = 0;
+}
+
+void BmFont::growAtlas() {
+    uint32_t oldSize = _atlasSize;
+    uint32_t newSize = std::min(_atlasSize * 2, ATLAS_MAX_SIZE);
+
+    yinfo("BmFont: growing atlas {}x{} -> {}x{}", oldSize, oldSize, newSize, newSize);
+
+    // Create new atlas data and copy old rows
+    std::vector<uint8_t> newData(static_cast<size_t>(newSize) * newSize * 4, 0);
+    for (uint32_t y = 0; y < oldSize; ++y) {
+        std::memcpy(&newData[y * newSize * 4], &_atlasData[y * oldSize * 4], oldSize * 4);
+    }
+    _atlasData = std::move(newData);
+
+    // Rescale UV coordinates for all existing glyphs
+    float scale = static_cast<float>(oldSize) / static_cast<float>(newSize);
+    for (auto& meta : _glyphMetadata) {
+        meta.uvMinX *= scale;
+        meta.uvMinY *= scale;
+        meta.uvMaxX *= scale;
+        meta.uvMaxY *= scale;
+    }
+
+    _atlasSize = newSize;
+    _glyphsPerRow = _atlasSize / _glyphSize;
+    _needsUpload = true;
 }
 
 Result<void> BmFont::renderGlyph(uint32_t, int, int) noexcept {

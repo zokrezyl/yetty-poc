@@ -299,25 +299,15 @@ public:
     }
 
     Result<void> dispose() override {
-        if (_derivedStorage.isValid() && _cardMgr) {
-            if (auto res = _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "derived"); !res) {
-                yerror("HDraw::dispose: deallocateBuffer (derived) failed: {}", error_msg(res));
-            }
-            _derivedStorage = StorageHandle::invalid();
-            _bvhNodes = nullptr;
-            _sortedIndices = nullptr;
-            _bvhNodeCount = 0;
-        }
+        _derivedStorage = StorageHandle::invalid();
+        _bvhNodes = nullptr;
+        _sortedIndices = nullptr;
+        _bvhNodeCount = 0;
 
-        if (_primStorage.isValid() && _cardMgr) {
-            if (auto res = _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "prims"); !res) {
-                yerror("HDraw::dispose: deallocateBuffer (prims) failed: {}", error_msg(res));
-            }
-            _primStorage = StorageHandle::invalid();
-            _primitives = nullptr;
-            _primCount = 0;
-            _primCapacity = 0;
-        }
+        _primStorage = StorageHandle::invalid();
+        _primitives = nullptr;
+        _primCount = 0;
+        _primCapacity = 0;
 
         if (_metaHandle.isValid() && _cardMgr) {
             if (auto res = _cardMgr->deallocateMetadata(_metaHandle); !res) {
@@ -339,35 +329,114 @@ public:
             std::memcpy(_primStaging.data(), _primitives, _primCount * sizeof(SDFPrimitive));
         }
 
-        // Deallocate derived storage (BVH, sorted indices — will be rebuilt)
-        if (_derivedStorage.isValid()) {
-            _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "derived");
-            _derivedStorage = StorageHandle::invalid();
-            _bvhNodes = nullptr;
-            _sortedIndices = nullptr;
-            _bvhNodeCount = 0;
-        }
+        // Invalidate derived storage (BVH, sorted indices — will be rebuilt)
+        _derivedStorage = StorageHandle::invalid();
+        _bvhNodes = nullptr;
+        _sortedIndices = nullptr;
+        _bvhNodeCount = 0;
 
-        // Deallocate prim storage
-        if (_primStorage.isValid()) {
-            _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "prims");
-            _primStorage = StorageHandle::invalid();
-            _primitives = nullptr;
-            _primCount = 0;
-            _primCapacity = 0;
-        }
+        // Invalidate prim storage
+        _primStorage = StorageHandle::invalid();
+        _primitives = nullptr;
+        _primCount = 0;
+        _primCapacity = 0;
 
         yinfo("HDraw::suspend: deallocated storage, saved {} primitives to staging",
               _primStaging.size());
     }
 
-    uint32_t estimateDerivedSize() const {
-        // BVH: ~2*primCount nodes, sorted indices: primCount
-        uint32_t bvhSize = (2 * _primCount + 1) * sizeof(BVHNode);
-        uint32_t indicesSize = _primCount * sizeof(uint32_t);
-        uint32_t textSpanSize = static_cast<uint32_t>(_textSpans.size() * sizeof(TextSpan));
-        uint32_t textBufSize = static_cast<uint32_t>(_textBuffer.size());
-        return bvhSize + indicesSize + textSpanSize + textBufSize;
+    void calculate() {
+        // Compute scene bounds from staging
+        if (!_hasExplicitBounds) {
+            _sceneMinX = 1e10f; _sceneMinY = 1e10f;
+            _sceneMaxX = -1e10f; _sceneMaxY = -1e10f;
+            for (const auto& prim : _primStaging) {
+                _sceneMinX = std::min(_sceneMinX, prim.aabbMinX);
+                _sceneMinY = std::min(_sceneMinY, prim.aabbMinY);
+                _sceneMaxX = std::max(_sceneMaxX, prim.aabbMaxX);
+                _sceneMaxY = std::max(_sceneMaxY, prim.aabbMaxY);
+            }
+            float padX = (_sceneMaxX - _sceneMinX) * 0.05f;
+            float padY = (_sceneMaxY - _sceneMinY) * 0.05f;
+            _sceneMinX -= padX; _sceneMinY -= padY;
+            _sceneMaxX += padX; _sceneMaxY += padY;
+            if (_sceneMinX >= _sceneMaxX) { _sceneMinX = 0; _sceneMaxX = 100; }
+            if (_sceneMinY >= _sceneMaxY) { _sceneMinY = 0; _sceneMaxY = 100; }
+        }
+
+        // Build BVH from staging data
+        _bvhStaging.clear();
+        _sortedIndicesStaging.clear();
+        uint32_t primCount = static_cast<uint32_t>(_primStaging.size());
+        if (primCount == 0) return;
+
+        // Compute Morton codes for spatial sorting
+        std::vector<std::pair<uint32_t, uint32_t>> mortonPairs;
+        mortonPairs.reserve(primCount);
+        for (uint32_t i = 0; i < primCount; i++) {
+            float cx = (_primStaging[i].aabbMinX + _primStaging[i].aabbMaxX) * 0.5f;
+            float cy = (_primStaging[i].aabbMinY + _primStaging[i].aabbMaxY) * 0.5f;
+            uint32_t morton = morton2D(cx, cy, _sceneMinX, _sceneMinY, _sceneMaxX, _sceneMaxY);
+            mortonPairs.push_back({morton, i});
+        }
+        std::sort(mortonPairs.begin(), mortonPairs.end());
+
+        _sortedIndicesStaging.resize(primCount);
+        for (uint32_t i = 0; i < primCount; i++) {
+            _sortedIndicesStaging[i] = mortonPairs[i].second;
+        }
+
+        // Build BVH recursively using staging data
+        _bvhStaging.reserve(primCount);
+        buildBVHFromStaging(_bvhStaging, _sortedIndicesStaging, 0, primCount);
+    }
+
+    uint32_t buildBVHFromStaging(std::vector<BVHNode>& nodes,
+                                  const std::vector<uint32_t>& sortedIndices,
+                                  uint32_t start, uint32_t end) {
+        uint32_t nodeIndex = static_cast<uint32_t>(nodes.size());
+        nodes.push_back(BVHNode{});
+
+        uint32_t count = end - start;
+
+        if (count <= 4) {
+            // Leaf node
+            nodes[nodeIndex].primIndex = start;
+            nodes[nodeIndex].primCount = count;
+            nodes[nodeIndex].leftChild = 0xFFFFFFFF;
+            nodes[nodeIndex].rightChild = 0xFFFFFFFF;
+
+            float aabbMinX = 1e10f, aabbMinY = 1e10f;
+            float aabbMaxX = -1e10f, aabbMaxY = -1e10f;
+            for (uint32_t i = start; i < end; i++) {
+                const auto& prim = _primStaging[sortedIndices[i]];
+                aabbMinX = std::min(aabbMinX, prim.aabbMinX);
+                aabbMinY = std::min(aabbMinY, prim.aabbMinY);
+                aabbMaxX = std::max(aabbMaxX, prim.aabbMaxX);
+                aabbMaxY = std::max(aabbMaxY, prim.aabbMaxY);
+            }
+            nodes[nodeIndex].aabbMinX = aabbMinX;
+            nodes[nodeIndex].aabbMinY = aabbMinY;
+            nodes[nodeIndex].aabbMaxX = aabbMaxX;
+            nodes[nodeIndex].aabbMaxY = aabbMaxY;
+        } else {
+            uint32_t mid = start + count / 2;
+            uint32_t leftChild = buildBVHFromStaging(nodes, sortedIndices, start, mid);
+            uint32_t rightChild = buildBVHFromStaging(nodes, sortedIndices, mid, end);
+
+            nodes[nodeIndex].leftChild = leftChild;
+            nodes[nodeIndex].rightChild = rightChild;
+            nodes[nodeIndex].primCount = 0;
+
+            const auto& left = nodes[leftChild];
+            const auto& right = nodes[rightChild];
+            nodes[nodeIndex].aabbMinX = std::min(left.aabbMinX, right.aabbMinX);
+            nodes[nodeIndex].aabbMinY = std::min(left.aabbMinY, right.aabbMinY);
+            nodes[nodeIndex].aabbMaxX = std::max(left.aabbMaxX, right.aabbMaxX);
+            nodes[nodeIndex].aabbMaxY = std::max(left.aabbMaxY, right.aabbMaxY);
+        }
+
+        return nodeIndex;
     }
 
     void declareBufferNeeds() override {
@@ -376,38 +445,55 @@ public:
             _primStaging.resize(_primCount);
             std::memcpy(_primStaging.data(), _primitives, _primCount * sizeof(SDFPrimitive));
         }
-        uint32_t lastDerivedSize = _derivedStorage.size;
-        if (_derivedStorage.isValid()) {
-            _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "derived");
-            _derivedStorage = StorageHandle::invalid();
-            _bvhNodes = nullptr;
-            _sortedIndices = nullptr;
+        _derivedStorage = StorageHandle::invalid();
+        _bvhNodes = nullptr;
+        _sortedIndices = nullptr;
+        _bvhNodeCount = 0;
+
+        _primStorage = StorageHandle::invalid();
+        _primitives = nullptr;
+        _primCount = 0;
+        _primCapacity = 0;
+
+        if (_primStaging.empty() && _textSpans.empty()) {
+            _bvhStaging.clear();
+            _sortedIndicesStaging.clear();
+            return;
         }
-        if (_primStorage.isValid()) {
-            _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "prims");
-            _primStorage = StorageHandle::invalid();
-            _primitives = nullptr;
-            _primCount = 0;
-            _primCapacity = 0;
-        }
-        // Reserve prim + derived
+
+        // Reserve prim storage
         if (!_primStaging.empty()) {
             uint32_t primSize = static_cast<uint32_t>(_primStaging.size()) * sizeof(SDFPrimitive);
             _cardMgr->bufferManager()->reserve(primSize);
-            if (lastDerivedSize > 0) {
-                _cardMgr->bufferManager()->reserve(lastDerivedSize);
-            } else {
-                // First time: estimate from staging data
-                uint32_t n = static_cast<uint32_t>(_primStaging.size());
-                uint32_t est = (2 * n + 1) * sizeof(BVHNode) + n * sizeof(uint32_t)
-                    + static_cast<uint32_t>(_textSpans.size() * sizeof(TextSpan))
-                    + static_cast<uint32_t>(_textBuffer.size());
-                _cardMgr->bufferManager()->reserve(est);
-            }
+        }
+
+        // Only calculate if derived staging is empty (first time or data changed)
+        if (_bvhStaging.empty() && !_primStaging.empty()) {
+            using Clock = std::chrono::steady_clock;
+            auto t0 = Clock::now();
+            calculate();
+            auto t1 = Clock::now();
+            auto calcUs = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+
+            std::cout << "HDraw::calculate: " << calcUs << " us ("
+                      << _primStaging.size() << " prims, "
+                      << _bvhStaging.size() << " BVH nodes, "
+                      << _textSpans.size() << " text spans)" << std::endl;
+        }
+
+        // Reserve exact derived size
+        uint32_t bvhSize = static_cast<uint32_t>(_bvhStaging.size()) * sizeof(BVHNode);
+        uint32_t indicesSize = static_cast<uint32_t>(_sortedIndicesStaging.size()) * sizeof(uint32_t);
+        uint32_t textSpanSize = static_cast<uint32_t>(_textSpans.size() * sizeof(TextSpan));
+        uint32_t textBufSize = static_cast<uint32_t>(_textBuffer.size());
+        uint32_t derivedSize = bvhSize + indicesSize + textSpanSize + textBufSize;
+        if (derivedSize > 0) {
+            _cardMgr->bufferManager()->reserve(derivedSize);
         }
     }
 
     Result<void> allocateBuffers() override {
+        // Restore primitives from staging
         if (!_primStaging.empty()) {
             uint32_t count = static_cast<uint32_t>(_primStaging.size());
             if (auto res = ensurePrimCapacity(count); !res) {
@@ -418,57 +504,86 @@ public:
             _primStaging.clear();
             _primStaging.shrink_to_fit();
             _cardMgr->bufferManager()->markBufferDirty(_primStorage);
+        }
 
-            // Allocate derived storage (BVH + indices + text)
-            uint32_t derivedSize = estimateDerivedSize();
-            if (derivedSize > 0) {
-                auto storageResult = _cardMgr->bufferManager()->allocateBuffer(metadataSlotIndex(), "derived", derivedSize);
-                if (!storageResult) {
-                    return Err<void>("HDraw::allocateBuffers: failed to allocate derived storage");
-                }
-                _derivedStorage = *storageResult;
+        // Allocate derived storage and copy pre-built BVH + indices + text
+        uint32_t bvhSize = static_cast<uint32_t>(_bvhStaging.size()) * sizeof(BVHNode);
+        uint32_t indicesSize = static_cast<uint32_t>(_sortedIndicesStaging.size()) * sizeof(uint32_t);
+        uint32_t textSpanSize = static_cast<uint32_t>(_textSpans.size() * sizeof(TextSpan));
+        uint32_t textBufSize = static_cast<uint32_t>(_textBuffer.size());
+        uint32_t derivedSize = bvhSize + indicesSize + textSpanSize + textBufSize;
+
+        if (derivedSize > 0) {
+            auto storageResult = _cardMgr->bufferManager()->allocateBuffer(metadataSlotIndex(), "derived", derivedSize);
+            if (!storageResult) {
+                return Err<void>("HDraw::allocateBuffers: failed to allocate derived storage");
+            }
+            _derivedStorage = *storageResult;
+
+            uint8_t* base = _derivedStorage.data;
+            uint32_t offset = 0;
+
+            // Copy pre-built BVH nodes
+            _bvhNodes = reinterpret_cast<BVHNode*>(base + offset);
+            _bvhNodeCount = static_cast<uint32_t>(_bvhStaging.size());
+            _bvhOffset = (_derivedStorage.offset + offset) / sizeof(float);
+            if (!_bvhStaging.empty()) {
+                std::memcpy(base + offset, _bvhStaging.data(), bvhSize);
+            }
+            offset += bvhSize;
+
+            // Copy pre-built sorted indices
+            _sortedIndices = reinterpret_cast<uint32_t*>(base + offset);
+            _sortedIndicesOffset = (_derivedStorage.offset + offset) / sizeof(float);
+            if (!_sortedIndicesStaging.empty()) {
+                std::memcpy(base + offset, _sortedIndicesStaging.data(), indicesSize);
+            }
+            offset += indicesSize;
+
+            // Text spans
+            _textSpanOffset = (_derivedStorage.offset + offset) / sizeof(float);
+            if (!_textSpans.empty()) {
+                std::memcpy(base + offset, _textSpans.data(), textSpanSize);
+            }
+            offset += textSpanSize;
+
+            // Text buffer
+            _textBufferOffset = (_derivedStorage.offset + offset) / sizeof(float);
+            if (!_textBuffer.empty()) {
+                std::memcpy(base + offset, _textBuffer.data(), textBufSize);
             }
 
-            _dirty = true;
-            yinfo("HDraw::allocateBuffers: reconstructed {} primitives, derived {} bytes", count, derivedSize);
+            _cardMgr->bufferManager()->markBufferDirty(_derivedStorage);
         }
+
+        _primitiveOffset = _primStorage.isValid() ? _primStorage.offset / sizeof(float) : 0;
+        if (_primStorage.isValid()) {
+            _cardMgr->bufferManager()->markBufferDirty(_primStorage);
+        }
+
+        _metadataDirty = true;
+        _dirty = false;  // BVH already built in calculate()
+
+        yinfo("HDraw::allocateBuffers: {} primitives, {} BVH nodes, derived {} bytes",
+              _primCount, _bvhNodeCount, derivedSize);
         return Ok();
     }
 
     Result<void> render(float time) override {
         (void)time;
-        using Clock = std::chrono::steady_clock;
-        auto tRenderStart = Clock::now();
-        bool didRebuild = false, didMeta = false;
-
-        ydebug("HDraw::update called, _dirty={} _metadataDirty={} primCount={}",
-               _dirty, _metadataDirty, _primCount);
 
         if (_dirty) {
-            ydebug("HDraw::update: calling rebuildAndUpload()");
             if (auto res = rebuildAndUpload(); !res) {
-                return Err<void>("HDraw::update: rebuildAndUpload failed", res);
+                return Err<void>("HDraw::render: rebuildAndUpload failed", res);
             }
             _dirty = false;
-            didRebuild = true;
         }
-        auto tAfterRebuild = Clock::now();
 
         if (_metadataDirty) {
-            ydebug("HDraw::update: calling uploadMetadata()");
             if (auto res = uploadMetadata(); !res) {
-                return Err<void>("HDraw::update: metadata upload failed", res);
+                return Err<void>("HDraw::render: metadata upload failed", res);
             }
             _metadataDirty = false;
-            didMeta = true;
-        }
-        auto tAfterMeta = Clock::now();
-
-        if (didRebuild || didMeta) {
-            auto us = [](auto a, auto b) { return std::chrono::duration_cast<std::chrono::microseconds>(b - a).count(); };
-            std::cout << "HDraw::render: rebuild=" << us(tRenderStart, tAfterRebuild)
-                      << " us, metadata=" << us(tAfterRebuild, tAfterMeta)
-                      << " us, total=" << us(tRenderStart, tAfterMeta) << " us" << std::endl;
         }
 
         return Ok();
@@ -502,6 +617,8 @@ public:
 
         _cardMgr->bufferManager()->markBufferDirty(_primStorage);
         _dirty = true;
+        _bvhStaging.clear();  // Invalidate — will recalculate on next recompaction
+        _sortedIndicesStaging.clear();
         return idx;
     }
 
@@ -597,6 +714,8 @@ public:
         _bvhNodeCount = 0;
         _textSpans.clear();
         _textBuffer.clear();
+        _bvhStaging.clear();
+        _sortedIndicesStaging.clear();
         _dirty = true;
     }
 
@@ -709,19 +828,20 @@ private:
 
         const uint8_t* primData = data + HEADER_SIZE;
 
-        // Allocate buffer and copy directly from payload (no intermediate vector)
+        if (_initParsing) {
+            _primStaging.resize(primCount);
+            std::memcpy(_primStaging.data(), primData, primCount * PRIM_SIZE);
+            yinfo("HDraw::parsePayload: loaded {} primitives into staging", primCount);
+            return Ok();
+        }
+
+        // Mid-cycle: allocate GPU buffer directly
         if (auto res = ensurePrimCapacity(primCount); !res) {
             return Err<void>("HDraw::parsePayload: failed to allocate prim storage");
         }
         _primCount = primCount;
         std::memcpy(_primitives, primData, primCount * PRIM_SIZE);
         _cardMgr->bufferManager()->markBufferDirty(_primStorage);
-
-        for (uint32_t i = 0; i < primCount; i++) {
-            yinfo("HDraw::parsePayload: prim[{}] type={} layer={} fill={:#010x} aabb=[{},{},{},{}]",
-                  i, _primitives[i].type, _primitives[i].layer, _primitives[i].fillColor,
-                  _primitives[i].aabbMinX, _primitives[i].aabbMinY, _primitives[i].aabbMaxX, _primitives[i].aabbMaxY);
-        }
 
         _dirty = true;
         yinfo("HDraw::parsePayload: loaded {} primitives", _primCount);
@@ -852,9 +972,6 @@ private:
 
         if (_primCount > 0 && _primStorage.isValid()) {
             std::memcpy(newStorage->data, _primStorage.data, _primCount * sizeof(SDFPrimitive));
-        }
-        if (_primStorage.isValid()) {
-            _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "prims");
         }
 
         _primStorage = *newStorage;
@@ -1009,6 +1126,8 @@ private:
     uint32_t _bvhNodeCount = 0;
     uint32_t* _sortedIndices = nullptr;
     StorageHandle _derivedStorage = StorageHandle::invalid();
+    std::vector<BVHNode> _bvhStaging;             // Pre-built BVH from calculate()
+    std::vector<uint32_t> _sortedIndicesStaging;   // Pre-built sorted indices from calculate()
 
     // Text data (small, vector OK)
     std::vector<TextSpan> _textSpans;

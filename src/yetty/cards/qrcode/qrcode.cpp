@@ -63,11 +63,8 @@ public:
     }
 
     Result<void> dispose() override {
-        if (_bufferHandle.isValid() && _cardMgr) {
-            _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "data");
-            _bufferHandle = BufferHandle::invalid();
-        }
-        
+        _bufferHandle = BufferHandle::invalid();
+
         if (_metaHandle.isValid() && _cardMgr) {
             _cardMgr->deallocateMetadata(_metaHandle);
             _metaHandle = MetadataHandle::invalid();
@@ -78,47 +75,47 @@ public:
     }
 
     void suspend() override {
-        if (_bufferHandle.isValid() && _cardMgr) {
-            _cardMgr->bufferManager()->deallocateBuffer(metadataSlotIndex(), "data");
-            _bufferHandle = BufferHandle::invalid();
+        _bufferHandle = BufferHandle::invalid();
+    }
+
+    void declareBufferNeeds() override {
+        if (!_qrModules.empty()) {
+            size_t numWords = (_qrModules.size() + 31) / 32;
+            _cardMgr->bufferManager()->reserve(numWords * sizeof(uint32_t));
         }
-        _bufferDirty = true;
     }
 
     Result<void> allocateBuffers() override {
         if (_qrModules.empty()) {
-            return Ok();  // No QR data yet
+            return Ok();
         }
-        
-        if (!_bufferHandle.isValid() || _bufferDirty) {
-            // Pack QR modules as u32 (32 modules per word)
-            size_t numWords = (_qrModules.size() + 31) / 32;
-            std::vector<uint32_t> packedData(numWords, 0);
-            
-            for (size_t i = 0; i < _qrModules.size(); ++i) {
-                if (_qrModules[i]) {
-                    packedData[i / 32] |= (1u << (i % 32));
-                }
+
+        // Pack QR modules as u32 (32 modules per word)
+        size_t numWords = (_qrModules.size() + 31) / 32;
+        std::vector<uint32_t> packedData(numWords, 0);
+
+        for (size_t i = 0; i < _qrModules.size(); ++i) {
+            if (_qrModules[i]) {
+                packedData[i / 32] |= (1u << (i % 32));
             }
-            
-            // Allocate buffer
-            size_t bufferSize = numWords * sizeof(uint32_t);
-            auto bufResult = _cardMgr->bufferManager()->allocateBuffer(metadataSlotIndex(), "data", bufferSize);
-            if (!bufResult) {
-                return Err<void>("QRCode::allocateBuffers: failed to allocate buffer");
-            }
-            _bufferHandle = *bufResult;
-            
-            // Write packed data
-            _cardMgr->bufferManager()->writeBuffer(_bufferHandle, packedData.data(), bufferSize);
-            
-            _bufferDirty = false;
-            _metadataDirty = true;
-            
-            yinfo("QRCode::allocateBuffers: allocated {} bytes at offset {}", 
-                  bufferSize, _bufferHandle.offset);
         }
-        
+
+        // Allocate buffer (commitReservations cleared all handles, must re-allocate)
+        size_t bufferSize = numWords * sizeof(uint32_t);
+        auto bufResult = _cardMgr->bufferManager()->allocateBuffer(metadataSlotIndex(), "data", bufferSize);
+        if (!bufResult) {
+            return Err<void>("QRCode::allocateBuffers: failed to allocate buffer");
+        }
+        _bufferHandle = *bufResult;
+
+        // Write packed data
+        _cardMgr->bufferManager()->writeBuffer(_bufferHandle, packedData.data(), bufferSize);
+
+        _metadataDirty = true;
+
+        yinfo("QRCode::allocateBuffers: allocated {} bytes at offset {}",
+              bufferSize, _bufferHandle.offset);
+
         return Ok();
     }
 
@@ -163,7 +160,6 @@ private:
     uint32_t _bgColor = 0xFFFFFFFF;  // White, opaque
     
     bool _metadataDirty = true;
-    bool _bufferDirty = true;
 
     void parseArgs(const std::string& args) {
         std::istringstream iss(args);
@@ -215,7 +211,6 @@ private:
         }
         
         _qrSize = encoder.size();
-        _bufferDirty = true;
         
         yinfo("QRCode::encodeQR: encoded '{}' as v{} {}x{} QR code",
               data.substr(0, 20), encoder.version(), _qrSize, _qrSize);

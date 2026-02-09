@@ -1,5 +1,6 @@
 #pragma once
 
+#include <yetty/base/types.h>
 #include <yetty/gpu-context.h>
 #include <yetty/gpu-allocator.h>
 #include <yetty/shader-manager.h>
@@ -32,6 +33,9 @@ struct YettyContext {
 
     // Per-screen card manager (set by GPUScreen, not globally)
     CardManager::Ptr cardManager;
+
+    // ID of owning GPUScreen (set by GPUScreen, used for targeted events)
+    base::ObjectId screenId = 0;
 
     // Ymery widget renderer (YAML-driven ImGui widgets)
     std::shared_ptr<ymery::Renderer> ymeryRenderer;
