@@ -1,4 +1,6 @@
 #include "commands.h"
+#include "buffers.h"
+#include "cards.h"
 #include "event.h"
 #include "ui.h"
 
@@ -23,8 +25,10 @@ static std::string defaultSocketPath() {
 
 int main(int argc, const char** argv) {
     const std::unordered_map<std::string, CmdFn> commands = {
-        {"event", cmdEvent},
-        {"ui",    cmdUi},
+        {"buffers", cmdBuffers},
+        {"cards",   cmdCards},
+        {"event",   cmdEvent},
+        {"ui",      cmdUi},
     };
 
     const std::vector<std::string> args(argv + 1, argv + argc);
@@ -32,6 +36,8 @@ int main(int argc, const char** argv) {
     parser.Prog(argv[0]);
     parser.Epilog(
         "commands:\n"
+        "  buffers  List card buffers (buffers [-c card])\n"
+        "  cards    List cards (cards list)\n"
         "  event    Send events to the terminal (split, close, etc.)\n"
         "  ui       Query the UI tree (ui tree)\n"
     );

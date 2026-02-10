@@ -196,6 +196,11 @@ public:
     // Card type name
     virtual const char* typeName() const = 0;
 
+    // User-assigned name for RPC identification (optional)
+    const std::string& name() const { return _name; }
+    void setName(const std::string& name) { _name = name; }
+    bool hasName() const { return !_name.empty(); }
+
 protected:
     Card(CardManager::Ptr mgr, const GPUContext& gpu,
          int32_t x, int32_t y,
@@ -218,6 +223,7 @@ protected:
     uint32_t _heightCells;
     float _screenOriginX = 0.0f;
     float _screenOriginY = 0.0f;
+    std::string _name;  // User-assigned name for RPC identification
 };
 
 using CardPtr = Card::Ptr;

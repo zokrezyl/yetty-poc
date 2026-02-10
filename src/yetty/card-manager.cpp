@@ -1,11 +1,14 @@
 #include <yetty/card-manager.h>
 #include <yetty/gpu-allocator.h>
+#include <yetty/shared-memory.h>
 #include <yetty/wgpu-compat.h>
 #include <ytrace/ytrace.hpp>
+#include <unistd.h>
 #include <algorithm>
 #include <cstring>
 #include <array>
 #include <vector>
+#include <unordered_map>
 
 namespace yetty {
 
@@ -200,6 +203,30 @@ public:
     // GPU upload
     Result<void> flush(WGPUQueue queue) override;
 
+    // Named card registry
+    void registerNamedCard(const std::string& name, uint32_t slotIndex) override {
+        if (!name.empty()) {
+            _namedCards[name] = slotIndex;
+            _slotToName[slotIndex] = name;
+            ydebug("CardManager: registered named card '{}' <-> slot {}", name, slotIndex);
+        }
+    }
+    void unregisterNamedCard(const std::string& name) override {
+        auto it = _namedCards.find(name);
+        if (it != _namedCards.end()) {
+            _slotToName.erase(it->second);
+            _namedCards.erase(it);
+        }
+    }
+    uint32_t getSlotIndexByName(const std::string& name) const override {
+        auto it = _namedCards.find(name);
+        return (it != _namedCards.end()) ? it->second : 0;
+    }
+    std::string getNameBySlotIndex(uint32_t slotIndex) const override {
+        auto it = _slotToName.find(slotIndex);
+        return (it != _slotToName.end()) ? it->second : "";
+    }
+
 private:
     Result<void> createMetadataGpuBuffer();
     Result<void> createDummyResources();
@@ -230,6 +257,13 @@ private:
     WGPUTexture _dummyAtlasTexture = nullptr;
     WGPUTextureView _dummyAtlasTextureView = nullptr;
     WGPUSampler _dummyAtlasSampler = nullptr;
+
+    // Named card registry (bidirectional)
+    std::unordered_map<std::string, uint32_t> _namedCards;   // name -> slotIndex
+    std::unordered_map<uint32_t, std::string> _slotToName;   // slotIndex -> name
+
+    // Shared memory for buffer data streaming
+    SharedMemoryRegion::Ptr _shmData;
 };
 
 // =============================================================================
@@ -258,8 +292,21 @@ Result<void> CardManagerImpl::init() noexcept {
     if (!texRes) return Err<void>("Failed to create CardTextureManager", texRes);
     _textureMgr = *texRes;
 
-    // Create buffer manager
-    auto bufRes = CardBufferManager::create(_gpuContext, _allocator);
+    // Create shared memory for buffer data (for client streaming)
+    constexpr size_t INITIAL_SHM_SIZE = 1024 * 1024;  // 1MB initial
+    std::string shmName = "yetty-data-" + std::to_string(getpid());
+    auto shmRes = SharedMemoryRegion::create(shmName, INITIAL_SHM_SIZE);
+    if (!shmRes) {
+        ywarn("CardManager: failed to create shared memory, streaming disabled: {}",
+              shmRes.error().message());
+        // Continue without shm - streaming won't work but local cards will
+    } else {
+        _shmData = *shmRes;
+        yinfo("CardManager: created shared memory '{}' ({} bytes)", shmName, INITIAL_SHM_SIZE);
+    }
+
+    // Create buffer manager with shm backing
+    auto bufRes = CardBufferManager::create(_gpuContext, _allocator, _shmData);
     if (!bufRes) return Err<void>("Failed to create CardBufferManager", bufRes);
     _bufferMgr = *bufRes;
 

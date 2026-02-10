@@ -108,8 +108,9 @@ public:
         }
         _bufferHandle = *bufResult;
 
-        // Write packed data
-        _cardMgr->bufferManager()->writeBuffer(_bufferHandle, packedData.data(), bufferSize);
+        // Write packed data directly to buffer
+        std::memcpy(_bufferHandle.data, packedData.data(), bufferSize);
+        _cardMgr->bufferManager()->markBufferDirty(_bufferHandle);
 
         _metadataDirty = true;
 

@@ -33,6 +33,7 @@ struct RunArgs {
     int32_t width = 0;      // 0 = stretch to edge
     int32_t height = 0;     // 0 = stretch to edge
     std::string card;
+    std::string name;       // User-assigned card name for RPC lookup
     bool relative = false;  // Position relative to cursor
 };
 

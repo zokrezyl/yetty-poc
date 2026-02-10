@@ -12,6 +12,7 @@
 #include <sstream>
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 // GLFW modifier constants
 constexpr int GLFW_MOD_SHIFT   = 0x0001;
@@ -153,9 +154,8 @@ public:
                 return Err<void>("Plot::allocateBuffers: failed to allocate storage");
             }
             _storageHandle = *storageResult;
-            if (auto res = _cardMgr->bufferManager()->writeBuffer(_storageHandle, _data.data(), storageSize); !res) {
-                return Err<void>("Plot::allocateBuffers: failed to upload storage");
-            }
+            std::memcpy(_storageHandle.data, _data.data(), storageSize);
+            _cardMgr->bufferManager()->markBufferDirty(_storageHandle);
             _metadataDirty = true;
             yinfo("Plot::allocateBuffers: reconstructed storage at offset {}", _storageHandle.offset);
         }
@@ -225,11 +225,9 @@ public:
         yinfo("Plot::setData: storage allocated at byte offset {}, float index {}",
               _storageHandle.offset, _storageHandle.offset / sizeof(float));
 
-        // Write data to storage
-        if (auto res = _cardMgr->bufferManager()->writeBuffer(_storageHandle, _data.data(), storageSize); !res) {
-            yerror("Plot::setData: failed to write storage");
-            return Err<void>("Plot::setData: failed to write storage");
-        }
+        // Write data directly to buffer
+        std::memcpy(_storageHandle.data, _data.data(), storageSize);
+        _cardMgr->bufferManager()->markBufferDirty(_storageHandle);
 
         yinfo("Plot::setData: {} floats written to storage", count);
 
@@ -443,6 +441,15 @@ private:
                 } else {
                     _flags &= ~FLAG_GRID;
                 }
+            } else if (attr.key == "@buffer") {
+                // Pre-allocate buffer for external streaming: @buffer=<count>
+                try {
+                    uint32_t bufferCount = static_cast<uint32_t>(std::stoul(attr.value));
+                    _data.resize(bufferCount, 0.0f);
+                    yinfo("Plot::parseBracedArgs: pre-allocated buffer for {} floats", bufferCount);
+                } catch (...) {
+                    ywarn("Plot::parseBracedArgs: invalid buffer count '{}'", attr.value);
+                }
             }
         }
 
@@ -573,6 +580,13 @@ private:
                         colorStr = colorStr.substr(2);
                     }
                     _bgColor = static_cast<uint32_t>(std::stoul(colorStr, nullptr, 16));
+                }
+            } else if (token == "--buffer" || token == "-b") {
+                // Pre-allocate buffer for external streaming: --buffer <count>
+                uint32_t bufferCount;
+                if (iss >> bufferCount) {
+                    _data.resize(bufferCount, 0.0f);
+                    yinfo("Plot::parseArgs: pre-allocated buffer for {} floats", bufferCount);
                 }
             }
         }

@@ -2,14 +2,39 @@
 
 ## Overview
 
-This document describes enhancements to the plot card to support mathematical expressions, animated plots with time-based uniforms, and hybrid buffer/function plotting.
+This document describes enhancements to the plot card to support mathematical expressions, animated plots with time-based uniforms, named buffer declarations, and external data streaming.
 
 **Goals:**
 - Support mathematical expressions like `sin(x)`, `x^2 + 2*x - 1`
 - Allow animated plots using `time` uniform
-- Combine buffer data with expressions: `sin(@buffer1)`
+- Named buffer declarations for external streaming clients
+- Combine buffer data with expressions: `data(x) * sin(x)`
 - Maintain backward compatibility with existing buffer-only plots
 - Leverage ShaderManager for dynamic WGSL code generation
+
+## Quick Reference
+
+### Buffer Declaration Syntax
+
+```
+Left side (inputs):              Right side (outputs):
+  f=buffer                         label=f(x)
+  @f.size=400                      @label.color=#00FF00
+  @f.values=
+
+Full example:
+{card=plot; audio=buffer; @audio.size=1k: waveform=audio(x); @waveform.color=#00FF00}
+```
+
+### Buffer Properties
+
+| Property | Description |
+|----------|-------------|
+| `f=buffer` | Declare buffer-backed function |
+| `@f.size=N` | Capacity in floats (required unless file) |
+| `@f.values=` | Initialize from payload |
+| `@f.values="file"` | Initialize from file (size deduced) |
+| `@f.values=1,2,3` | Inline initialization |
 
 ## Current Architecture
 
@@ -54,7 +79,51 @@ Output: fn plot_expr_0(x: f32, time: f32, b: array<f32>) -> f32 {
 | `y=A..B` | Y domain (for 2D heatmaps) | `y=-2..2` |
 | `@view=X1..X2,Y1..Y2` | Initial viewport (zoomable) | `@view=-1..1,-0.5..1.5` |
 
-### Buffer References
+### Buffer Declarations (Input Side)
+
+Buffers are declared on the **left side** of `:` as named input functions:
+
+```
+{card=plot; f=buffer; @f.size=400: waveform=f(x)}
+            ^^^^^^^^  ^^^^^^^^^^^  ^^^^^^^^^^^^^
+            declare   properties   output (uses f)
+```
+
+| Syntax | Meaning |
+|--------|---------|
+| `f=buffer` | Declare `f` as a buffer-backed function |
+| `@f.size=N` | Buffer capacity (N floats) |
+| `@f.size=1k` | Size with suffix (1k=1024, 1m=1048576) |
+| `@f.values=` | Initialize from payload (empty = payload) |
+| `@f.values="file.csv"` | Initialize from file |
+| `@f.values=1.0,2.0,3.0` | Inline initialization |
+
+#### Size Resolution Rules
+
+| Declaration | Size Source |
+|-------------|-------------|
+| `@f.size=400` | Explicit size |
+| `@f.values="file"` | Deduced from file |
+| `@f.values="file"; @f.size=100` | Explicit overrides (truncate/limit) |
+| `@f.values=` (payload) | Requires `@f.size` |
+| (streaming, no values) | Requires `@f.size` |
+
+#### Payload Ordering
+
+When multiple buffers use `@*.values=`, the declaration order defines payload layout:
+
+```bash
+{card=plot; bx=buffer; by=buffer; @bx.size=3; @by.size=3; @bx.values=; @by.values=: scatter(bx,by)}
+1.0,2.0,3.0,4.0,5.0,6.0
+```
+
+Maps to:
+- `bx = [1.0, 2.0, 3.0]` (first `@*.values=`)
+- `by = [4.0, 5.0, 6.0]` (second `@*.values=`)
+
+### Buffer References (Legacy)
+
+For backward compatibility, anonymous buffer references are still supported:
 
 | Syntax | Meaning |
 |--------|---------|
@@ -140,6 +209,41 @@ NUMBER      = [0-9]+ ('.' [0-9]+)?
 
 ### Buffer-Based Plots
 
+#### Named Buffers (New Syntax)
+
+```bash
+# Single buffer with payload data
+{card=plot; f=buffer; @f.size=100; @f.values=: wave=f(x)}
+0.1,0.2,0.3,...
+
+# Buffer from file (size deduced)
+{card=plot; data=buffer; @data.values="signal.csv": amplitude=data(x)}
+
+# Buffer from file with size limit
+{card=plot; data=buffer; @data.values="signal.csv"; @data.size=256: amplitude=data(x)}
+
+# Two buffers for scatter plot
+{card=plot; bx=buffer; by=buffer; @bx.size=100; @by.size=100; @bx.values=; @by.values=: points=scatter(bx,by)}
+# payload: x0,x1,...,x99,y0,y1,...,y99
+
+# Streaming buffer (pre-allocated, no initial values)
+{card=plot; audio=buffer; @audio.size=1k: signal=audio(x)}
+
+# Transform buffer values
+{card=plot; raw=buffer; @raw.size=256; @raw.values=: normalized=raw(x)*2-1}
+
+# Buffer combined with function
+{card=plot; data=buffer; @data.size=100; @data.values=: modulated=data(x)*sin(x*10)}
+
+# Animated buffer
+{card=plot; data=buffer; @data.size=100; @data.values=: pulsing=data(x)*(1+0.5*sin(time))}
+
+# Buffer + computed function overlaid
+{card=plot; measured=buffer; @measured.size=100; @measured.values=: raw=measured(x); @raw.color=#FF0000; ideal=sin(x); @ideal.color=#00FF00}
+```
+
+#### Anonymous Buffers (Legacy Syntax)
+
 ```bash
 # Direct buffer plot (existing behavior)
 {plot: @buffer1}
@@ -156,6 +260,76 @@ NUMBER      = [0-9]+ ('.' [0-9]+)?
 
 # Animated buffer
 {plot: @buffer1 * (1 + 0.5 * sin(time))}
+```
+
+### External Streaming
+
+Named buffers enable external clients to stream data to plot cards via shared memory.
+
+#### Workflow
+
+1. **Create card with pre-allocated buffer:**
+   ```bash
+   {card=plot; audio=buffer; @audio.size=400: waveform=audio(x)}
+   ```
+
+2. **Client connects via RPC:**
+   ```cpp
+   client.call("stream_connect");  // Get shared memory info
+   ```
+
+3. **Client queries buffer location:**
+   ```cpp
+   client.call("stream_get_buffer", {
+       {"name", "my-plot-card"},   // Card name
+       {"scope", "audio"}          // Buffer name
+   });
+   // Returns: {offset: 1024, size: 1600}
+   ```
+
+4. **Client writes directly to shared memory:**
+   ```cpp
+   float* data = (float*)(shm_base + offset);
+   for (int i = 0; i < 400; i++) {
+       data[i] = generate_sample(i);
+   }
+   ```
+
+#### Example: Audio Visualization
+
+```bash
+# Terminal command - create plot with streaming buffer
+yecho "{card=plot; w=80; h=20; audio=buffer; @audio.size=1024; x=0..1: waveform=audio(x); @waveform.color=#00FF00}"
+```
+
+```cpp
+// External client
+void stream_audio() {
+    auto shm = open_shared_memory(shm_name);
+    auto buf = rpc.call("stream_get_buffer", {{"name", card_name}, {"scope", "audio"}});
+
+    float* samples = (float*)((char*)shm->data() + buf.offset);
+
+    while (running) {
+        capture_audio(samples, 1024);
+        std::this_thread::sleep_for(16ms);  // ~60 fps
+    }
+}
+```
+
+#### Flag-Based Syntax
+
+For OSC/CLI, the equivalent syntax:
+
+```bash
+# Create streaming buffer
+printf '\033]666666;run -c plot -w 80 -h 20 --name my-plot;--buffer audio=1024\033\\'
+
+# With file initialization
+printf '\033]666666;run -c plot;--buffer data="initial.csv"\033\\'
+
+# Multiple buffers
+printf '\033]666666;run -c plot;--buffer x=100,y=100\033\\'
 ```
 
 ### 2D Heatmaps (Future)
@@ -267,11 +441,36 @@ Extend OSC plugin args:
 # Existing
 --type line --grid --line-color 0xff0000
 
-# New
+# New expression options
 --expr "sin(x)"           # Expression to evaluate
 --domain -pi,pi           # X domain (or parsed from x=A..B)
 --view -1,1,-2,2          # Viewport (x1,x2,y1,y2)
 --animated                # Enable time uniform updates
+
+# New buffer declaration options
+--buffer name=size        # Declare named buffer: --buffer audio=1024
+--buffer name=size,...    # Multiple buffers: --buffer x=100,y=100
+--buffer name="file"      # From file (size deduced): --buffer data="signal.csv"
+--buffer.name.prop=val    # Buffer properties: --buffer.audio.values=
+```
+
+#### Buffer Declaration Examples
+
+```bash
+# Pre-allocated for streaming
+--buffer audio=1024
+
+# Multiple buffers
+--buffer x=100,y=100
+
+# From file
+--buffer data="waveform.csv"
+
+# From file with size limit
+--buffer data="waveform.csv" --buffer.data.size=256
+
+# From payload (requires explicit size)
+--buffer signal=512 --buffer.signal.values=
 ```
 
 ### Phase 6: yecho Integration
@@ -330,4 +529,5 @@ fn sampleBuffer(offset: u32, count: u32, x: f32) -> f32 {
 3. **Vector fields**: `{plot x=-2..2 y=-2..2 mode=vector: -y, x}`
 4. **Custom colormaps**: `--colormap viridis|plasma|magma`
 5. **Multiple y-axes**: Different scales for different series
-6. **Data streaming**: Real-time buffer updates for live data
+6. **Buffer element types**: `@f.type=f32|i32|u8` for different data formats
+7. **Ring buffers**: `@f.mode=ring` for continuous streaming with wrap-around

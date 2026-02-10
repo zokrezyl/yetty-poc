@@ -2,6 +2,7 @@
 
 #include <yetty/result.hpp>
 #include <yetty/yetty-context.h>
+#include <yetty/card.h>
 #include <yetty/base/event-loop.h>
 #include <memory>
 #include <functional>
@@ -60,6 +61,16 @@ public:
     // Test interface - access cell data
     virtual const Cell* getCellData() const = 0;
     virtual Cell getCell(int row, int col) const = 0;
+
+    // Card lookup by name (for RPC streaming)
+    virtual Card* getCardByName(const std::string& name) const = 0;
+    virtual Card* getCardBySlotIndex(uint32_t slotIndex) const = 0;
+
+    // Get all active cards (for RPC listing)
+    virtual std::vector<Card*> getAllCards() const = 0;
+
+    // CardManager access (for RPC streaming)
+    virtual CardManager::Ptr cardManager() const = 0;
 
 protected:
     GPUScreen() = default;

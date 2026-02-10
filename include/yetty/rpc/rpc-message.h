@@ -9,10 +9,8 @@ namespace rpc {
 
 // Channel IDs for multiplexing RPC messages across subsystems
 enum class Channel : uint32_t {
-    EventLoop = 0,   // Post events to the event loop
-    // Future channels:
-    // Window   = 1, // Window/rendering control
-    // Terminal = 2, // Terminal instance management
+    EventLoop  = 0,   // Post events to the event loop
+    CardStream = 1,   // Card buffer/texture streaming
 };
 
 // Message types following msgpack-rpc spec (like nvim)
