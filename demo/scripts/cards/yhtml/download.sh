@@ -17,6 +17,5 @@ HEIGHT="${3:-40}"
 
 echo "Rendering: $URL"
 
-PAYLOAD=$(echo -n "$URL" | base64 -w0)
-printf '\033]666666;run -c yhtml -x 0 -y 0 -w %d -h %d -r;url;%s\033\\' "$WIDTH" "$HEIGHT" "$PAYLOAD"
+printf '\033]666666;run -c yhtml -x 0 -y 0 -w %d -h %d -r;-i %s;\033\\' "$WIDTH" "$HEIGHT" "$URL"
 echo

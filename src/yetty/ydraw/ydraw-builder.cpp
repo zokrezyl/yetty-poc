@@ -892,6 +892,7 @@ public:
         if (num2DPrims > 0 || !_glyphs.empty()) {
             float sceneArea = sceneWidth * sceneHeight;
             if (cs <= 0.0f) {
+                float primCs = 0.0f, glyphCs = 0.0f;
                 if (num2DPrims > 0) {
                     float avgPrimArea = 0.0f;
                     for (const auto& prim : _primStaging) {
@@ -901,12 +902,21 @@ public:
                         avgPrimArea += w * h;
                     }
                     avgPrimArea /= num2DPrims;
-                    cs = std::sqrt(avgPrimArea) * 1.5f;
-                } else {
+                    primCs = std::sqrt(avgPrimArea) * 1.5f;
+                }
+                uint32_t glyphCount = static_cast<uint32_t>(_glyphs.size());
+                if (glyphCount > 0) {
                     float avgGlyphH = 0.0f;
                     for (const auto& g : _glyphs) avgGlyphH += g.height;
-                    avgGlyphH /= _glyphs.size();
-                    cs = avgGlyphH * 2.0f;
+                    avgGlyphH /= glyphCount;
+                    glyphCs = avgGlyphH * 2.0f;
+                }
+                if (num2DPrims > 0 && glyphCount > 0) {
+                    cs = (num2DPrims * primCs + glyphCount * glyphCs) / (num2DPrims + glyphCount);
+                } else if (num2DPrims > 0) {
+                    cs = primCs;
+                } else {
+                    cs = glyphCs;
                 }
                 float minCellSize = std::sqrt(sceneArea / 65536.0f);
                 float maxCellSize = std::sqrt(sceneArea / 16.0f);
@@ -922,6 +932,10 @@ public:
         _gridWidth = gridW;
         _gridHeight = gridH;
         _cellSize = cs;
+
+        yinfo("YDrawBuilder::calculate: grid={}x{} cellSize={:.1f} prims={} glyphs={} scene=[{:.0f},{:.0f}]-[{:.0f},{:.0f}]",
+              gridW, gridH, cs, _primStaging.size(), _glyphs.size(),
+              _sceneMinX, _sceneMinY, _sceneMaxX, _sceneMaxY);
 
         // Build variable-length grid into staging
         // Layout: [off0][off1]...[offN] [count0,e,e,...] [count1,e,...] ...
@@ -995,6 +1009,19 @@ public:
                 }
             }
         }
+
+        // Grid stats
+        uint32_t maxEntries = 0, totalEntries = 0, nonEmptyCells = 0;
+        for (uint32_t i = 0; i < numCells; i++) {
+            uint32_t cnt = _gridStaging[_gridStaging[i]];
+            totalEntries += cnt;
+            if (cnt > 0) nonEmptyCells++;
+            if (cnt > maxEntries) maxEntries = cnt;
+        }
+        yinfo("YDrawBuilder::calculate: gridSize={} u32s ({} KB) cells={} nonEmpty={} totalEntries={} maxPerCell={} avgPerNonEmpty={:.1f}",
+              _gridStaging.size(), _gridStaging.size() * 4 / 1024,
+              numCells, nonEmptyCells, totalEntries, maxEntries,
+              nonEmptyCells > 0 ? float(totalEntries) / nonEmptyCells : 0.0f);
     }
 
     //=========================================================================
@@ -1049,6 +1076,7 @@ public:
         if (num2DPrims > 0 || !_glyphs.empty()) {
             float sceneArea = sceneWidth * sceneHeight;
             if (cs <= 0.0f) {
+                float primCs = 0.0f, glyphCs = 0.0f;
                 if (num2DPrims > 0) {
                     float avgPrimArea = 0.0f;
                     for (uint32_t i = 0; i < count; i++) {
@@ -1058,12 +1086,21 @@ public:
                         avgPrimArea += w * h;
                     }
                     avgPrimArea /= num2DPrims;
-                    cs = std::sqrt(avgPrimArea) * 1.5f;
-                } else {
+                    primCs = std::sqrt(avgPrimArea) * 1.5f;
+                }
+                uint32_t glyphCount = static_cast<uint32_t>(_glyphs.size());
+                if (glyphCount > 0) {
                     float avgGlyphH = 0.0f;
                     for (const auto& g : _glyphs) avgGlyphH += g.height;
-                    avgGlyphH /= _glyphs.size();
-                    cs = avgGlyphH * 2.0f;
+                    avgGlyphH /= glyphCount;
+                    glyphCs = avgGlyphH * 2.0f;
+                }
+                if (num2DPrims > 0 && glyphCount > 0) {
+                    cs = (num2DPrims * primCs + glyphCount * glyphCs) / (num2DPrims + glyphCount);
+                } else if (num2DPrims > 0) {
+                    cs = primCs;
+                } else {
+                    cs = glyphCs;
                 }
                 float minCellSize = std::sqrt(sceneArea / 65536.0f);
                 float maxCellSize = std::sqrt(sceneArea / 16.0f);

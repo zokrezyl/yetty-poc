@@ -22,5 +22,5 @@ if [ ! -f "$HTML_FILE" ]; then
 fi
 
 PAYLOAD=$(base64 -w0 < "$HTML_FILE")
-printf '\033]666666;run -c yhtml -x 0 -y 0 -w %d -h %d -r;;%s\033\\' "$WIDTH" "$HEIGHT" "$PAYLOAD"
+printf '\033]666666;run -c yhtml -x 0 -y 0 -w %d -h %d -r;-i -;%s\033\\' "$WIDTH" "$HEIGHT" "$PAYLOAD"
 echo

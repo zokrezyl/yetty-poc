@@ -169,6 +169,16 @@ public:
 
         if (primStaging.empty() && glyphs.empty()) {
             _builder->clearGridStaging();
+            // Still need to reserve atlas space if atlas exists
+            if (_builder->hasCustomAtlas()) {
+                uint32_t atlasHeaderBytes = 4 * sizeof(uint32_t);
+                uint32_t glyphMetaBytes = static_cast<uint32_t>(
+                    _builder->customAtlas()->getGlyphMetadata().size() * sizeof(GlyphMetadataGPU));
+                uint32_t atlasSize = atlasHeaderBytes + glyphMetaBytes;
+                if (atlasSize > 0) {
+                    _cardMgr->bufferManager()->reserve(atlasSize);
+                }
+            }
             return;
         }
 
@@ -194,6 +204,10 @@ public:
                 _builder->customAtlas()->getGlyphMetadata().size() * sizeof(GlyphMetadataGPU));
             derivedSize += atlasHeaderBytes + glyphMetaBytes;
         }
+
+        yinfo("YHtmlImpl::declareBufferNeeds: primStaging={} gridStaging={} glyphs={} derivedSize={} gridBytes={} glyphBytes={}",
+              primStaging.size(), _builder->gridStaging().size(), glyphs.size(),
+              derivedSize, gridBytes, glyphBytes);
 
         if (derivedSize > 0) {
             _cardMgr->bufferManager()->reserve(derivedSize);
@@ -238,10 +252,14 @@ public:
             derivedSize += atlasHeaderBytes + glyphMetaBytes;
         }
 
+        yinfo("YHtmlImpl::allocateBuffers: gridStaging={} glyphs={} derivedSize={} gridBytes={} glyphBytes={}",
+              gridStaging.size(), glyphs.size(), derivedSize, gridBytes, glyphBytes);
+
         if (derivedSize > 0) {
             auto storageResult = _cardMgr->bufferManager()->allocateBuffer(
                 metadataSlotIndex(), "derived", derivedSize);
             if (!storageResult) {
+                yerror("YHtmlImpl::allocateBuffers: derived alloc FAILED: derivedSize={}", derivedSize);
                 return Err<void>("YHtmlImpl::allocateBuffers: derived alloc failed");
             }
             _derivedStorage = *storageResult;
@@ -606,7 +624,7 @@ private:
         std::string token;
 
         while (iss >> token) {
-            if (token == "--input") {
+            if (token == "-i" || token == "--input") {
                 std::string val;
                 if (iss >> val) _inputSource = val;
             } else if (token == "--font-size") {
@@ -632,27 +650,30 @@ private:
     //=========================================================================
 
     Result<void> loadContent() {
-        if (!_inputSource.empty()) {
-            if (HttpFetcher::isUrl(_inputSource)) {
-                _fetcher->setBaseUrl(_inputSource);
-                yinfo("YHtmlImpl::loadContent: fetching URL: {}", _inputSource);
-                auto body = _fetcher->fetch(_inputSource);
-                if (!body) {
-                    return Err<void>("YHtmlImpl::loadContent: failed to fetch URL");
-                }
-                _htmlContent = std::move(*body);
-            } else {
-                yinfo("YHtmlImpl::loadContent: reading file: {}", _inputSource);
-                std::ifstream file(_inputSource);
-                if (!file) {
-                    return Err<void>("YHtmlImpl::loadContent: failed to open file");
-                }
-                std::stringstream buffer;
-                buffer << file.rdbuf();
-                _htmlContent = buffer.str();
+        if (_inputSource == "-" || _inputSource.empty()) {
+            // "-" means payload, empty also falls back to payload
+            if (_payloadStr.empty()) {
+                return Err<void>("YHtmlImpl::loadContent: no payload");
             }
-        } else if (!_payloadStr.empty()) {
+            yinfo("YHtmlImpl::loadContent: using payload ({} bytes)", _payloadStr.size());
             _htmlContent = _payloadStr;
+        } else if (HttpFetcher::isUrl(_inputSource)) {
+            _fetcher->setBaseUrl(_inputSource);
+            yinfo("YHtmlImpl::loadContent: fetching URL: {}", _inputSource);
+            auto body = _fetcher->fetch(_inputSource);
+            if (!body) {
+                return Err<void>("YHtmlImpl::loadContent: failed to fetch URL");
+            }
+            _htmlContent = std::move(*body);
+        } else {
+            yinfo("YHtmlImpl::loadContent: reading file: {}", _inputSource);
+            std::ifstream file(_inputSource);
+            if (!file) {
+                return Err<void>("YHtmlImpl::loadContent: failed to open file");
+            }
+            std::stringstream buffer;
+            buffer << file.rdbuf();
+            _htmlContent = buffer.str();
         }
 
         if (_htmlContent.empty()) {
