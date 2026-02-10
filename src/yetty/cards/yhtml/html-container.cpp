@@ -111,9 +111,10 @@ public:
         // Baseline = bottom of position box - descent (matches litehtml reference containers)
         float baseline = static_cast<float>(pos.y + pos.height) - fi->descent;
 
-        ydebug("draw_text: '{}' pos=({},{} {}x{}) size={:.1f} fontId={} ascent={:.1f} descent={:.1f} height={:.1f} baseline={:.1f}",
+        ydebug("draw_text: '{}' pos=({},{} {}x{}) size={:.1f} fontId={} ascent={:.1f} descent={:.1f} height={:.1f} baseline={:.1f} color=({},{},{},{})",
               text, pos.x, pos.y, pos.width, pos.height,
-              fi->size, fi->fontId, fi->ascent, fi->descent, fi->height, baseline);
+              fi->size, fi->fontId, fi->ascent, fi->descent, fi->height, baseline,
+              color.red, color.green, color.blue, color.alpha);
 
         _builder->addText(static_cast<float>(pos.x), baseline,
                            text, fi->size, packed, _layer, fi->fontId);
@@ -144,6 +145,14 @@ public:
         if (!_builder) return;
 
         for (const auto& paint : bg) {
+            ydebug("draw_background: color=({},{},{},{}) clip=({},{} {}x{}) origin=({},{} {}x{}) radius=({},{},{},{}) image='{}'",
+                   paint.color.red, paint.color.green, paint.color.blue, paint.color.alpha,
+                   paint.clip_box.x, paint.clip_box.y, paint.clip_box.width, paint.clip_box.height,
+                   paint.origin_box.x, paint.origin_box.y, paint.origin_box.width, paint.origin_box.height,
+                   paint.border_radius.top_left_x, paint.border_radius.top_right_x,
+                   paint.border_radius.bottom_left_x, paint.border_radius.bottom_right_x,
+                   paint.image.empty() ? "(none)" : paint.image);
+
             if (paint.color.alpha == 0) continue;
 
             uint32_t color = packColor(paint.color);
@@ -154,6 +163,7 @@ public:
 
             // Root/body background: covers full viewport width -> set card bg
             if (w >= static_cast<float>(_viewWidth) && x <= 0.0f) {
+                ydebug("draw_background: -> setBgColor (full viewport width)");
                 _builder->setBgColor(color);
                 continue;
             }
@@ -162,6 +172,8 @@ public:
                 float cx = x + w * 0.5f;
                 float cy = y + h * 0.5f;
                 float round = static_cast<float>(paint.border_radius.top_left_x);
+                ydebug("draw_background: -> addBox center=({:.1f},{:.1f}) half=({:.1f},{:.1f}) round={:.1f}",
+                       cx, cy, w * 0.5f, h * 0.5f, round);
                 _builder->addBox(cx, cy, w * 0.5f, h * 0.5f,
                                   color, 0, 0, round, _layer);
             }
@@ -180,6 +192,13 @@ public:
         float y = static_cast<float>(draw_pos.y);
         float w = static_cast<float>(draw_pos.width);
         float h = static_cast<float>(draw_pos.height);
+
+        ydebug("draw_borders: pos=({},{} {}x{}) top=({},w={}) right=({},w={}) bottom=({},w={}) left=({},w={})",
+               draw_pos.x, draw_pos.y, draw_pos.width, draw_pos.height,
+               borders.top.color.alpha, borders.top.width,
+               borders.right.color.alpha, borders.right.width,
+               borders.bottom.color.alpha, borders.bottom.width,
+               borders.left.color.alpha, borders.left.width);
 
         if (borders.top.width > 0 && borders.top.color.alpha > 0) {
             uint32_t c = packColor(borders.top.color);
@@ -218,6 +237,11 @@ public:
         float y = static_cast<float>(marker.pos.y);
         float w = static_cast<float>(marker.pos.width);
         float h = static_cast<float>(marker.pos.height);
+
+        ydebug("draw_list_marker: type={} pos=({},{} {}x{}) color=({},{},{},{})",
+               static_cast<int>(marker.marker_type),
+               marker.pos.x, marker.pos.y, marker.pos.width, marker.pos.height,
+               marker.color.red, marker.color.green, marker.color.blue, marker.color.alpha);
 
         if (marker.marker_type == litehtml::list_style_type_disc) {
             float r = std::min(w, h) * 0.3f;
@@ -315,8 +339,9 @@ public:
         }
     }
 
-    void set_clip(const litehtml::position& /*pos*/,
+    void set_clip(const litehtml::position& pos,
                   const litehtml::border_radiuses& /*bdr_radius*/) override {
+        ydebug("set_clip: pos=({},{} {}x{})", pos.x, pos.y, pos.width, pos.height);
     }
 
     void del_clip() override {

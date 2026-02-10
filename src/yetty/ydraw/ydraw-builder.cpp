@@ -908,6 +908,14 @@ public:
                     avgGlyphH /= _glyphs.size();
                     cs = avgGlyphH * 2.0f;
                 }
+                // When glyphs are present alongside large primitives, limit cell
+                // size to avoid exceeding MAX_PRIMS_PER_CELL entries per cell.
+                if (!_glyphs.empty() && num2DPrims > 0) {
+                    float avgGlyphH = 0.0f;
+                    for (const auto& g : _glyphs) avgGlyphH += g.height;
+                    avgGlyphH /= _glyphs.size();
+                    cs = std::min(cs, avgGlyphH * 3.0f);
+                }
                 float minCellSize = std::sqrt(sceneArea / 65536.0f);
                 float maxCellSize = std::sqrt(sceneArea / 16.0f);
                 cs = std::clamp(cs, minCellSize, maxCellSize);
@@ -963,6 +971,19 @@ public:
                     }
                 }
             }
+        }
+
+        // Detect cell overflow
+        uint32_t overflowCells = 0;
+        uint32_t maxCount = 0;
+        for (uint32_t ci = 0; ci < gridW * gridH; ci++) {
+            uint32_t cnt = _gridStaging[ci * cellStride];
+            maxCount = std::max(maxCount, cnt);
+            if (cnt >= _maxPrimsPerCell) overflowCells++;
+        }
+        if (overflowCells > 0) {
+            ywarn("calculate: {} cells overflowed (max={}, limit={}), grid={}x{} cellSize={:.1f}",
+                  overflowCells, maxCount, _maxPrimsPerCell, gridW, gridH, cs);
         }
     }
 
@@ -1033,6 +1054,14 @@ public:
                     for (const auto& g : _glyphs) avgGlyphH += g.height;
                     avgGlyphH /= _glyphs.size();
                     cs = avgGlyphH * 2.0f;
+                }
+                // When glyphs are present alongside large primitives, limit cell
+                // size to avoid exceeding MAX_PRIMS_PER_CELL entries per cell.
+                if (!_glyphs.empty() && num2DPrims > 0) {
+                    float avgGlyphH = 0.0f;
+                    for (const auto& g : _glyphs) avgGlyphH += g.height;
+                    avgGlyphH /= _glyphs.size();
+                    cs = std::min(cs, avgGlyphH * 3.0f);
                 }
                 float minCellSize = std::sqrt(sceneArea / 65536.0f);
                 float maxCellSize = std::sqrt(sceneArea / 16.0f);
