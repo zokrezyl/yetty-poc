@@ -53,8 +53,8 @@ const YDRAW_FLAG_HAS_3D: u32 = 8u;
 const YDRAW_FLAG_UNIFORM_SCALE: u32 = 16u;
 const YDRAW_FLAG_CUSTOM_ATLAS: u32 = 32u;
 
-// Hardcoded max entries per cell (matches C++ DEFAULT_MAX_PRIMS_PER_CELL)
-const YDRAW_MAX_PRIMS_PER_CELL: u32 = 16u;
+// Safety cap for entries per cell (variable-length grid has no hard limit)
+const YDRAW_MAX_ENTRIES_PER_CELL: u32 = 128u;
 
 // Bit 31 set = glyph index, clear = primitive index
 const GLYPH_BIT: u32 = 0x80000000u;
@@ -273,18 +273,17 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
     let cellY = u32(clamp((scenePos.y - contentMinY) * invCellSize, 0.0, f32(gridHeight - 1u)));
     let cellIndex = cellY * gridWidth + cellX;
 
-    // Each cell stores: [entryCount][idx0][idx1]...[idxN]
-    // Entries with bit 31 set are glyph indices, otherwise primitive indices
-    let cellStride = 1u + YDRAW_MAX_PRIMS_PER_CELL;
-    let cellOffset = gridOffset + cellIndex * cellStride;
-    let cellEntryCount = bitcast<u32>(cardStorage[cellOffset]);
-    let loopCount = min(cellEntryCount, YDRAW_MAX_PRIMS_PER_CELL);
+    // Variable-length grid: [off0][off1]...[offN] [count,entries...] ...
+    // offsets[cellIndex] points to packed [count][idx0][idx1]... for that cell
+    let packedStart = bitcast<u32>(cardStorage[gridOffset + cellIndex]);
+    let cellEntryCount = bitcast<u32>(cardStorage[gridOffset + packedStart]);
+    let loopCount = min(cellEntryCount, YDRAW_MAX_ENTRIES_PER_CELL);
 
     let primSize = 24u;
     let glyphSize = 8u;
 
     for (var i = 0u; i < loopCount; i++) {
-        let rawIdx = bitcast<u32>(cardStorage[cellOffset + 1u + i]);
+        let rawIdx = bitcast<u32>(cardStorage[gridOffset + packedStart + 1u + i]);
 
         if ((rawIdx & GLYPH_BIT) != 0u) {
             // ---- TEXT GLYPH (MSDF) ----

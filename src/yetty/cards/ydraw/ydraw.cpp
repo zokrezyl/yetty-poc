@@ -384,14 +384,11 @@ private:
         float sceneW = _builder->sceneMaxX() - _builder->sceneMinX();
         float sceneH = _builder->sceneMaxY() - _builder->sceneMinY();
 
-        auto dims = _builder->computeGridDims(_primitives, _primCount);
-        uint32_t gridW = dims.width;
-        uint32_t gridH = dims.height;
-        float cellSize = dims.cellSize;
+        _builder->computeGridDims(_primitives, _primCount);
+        _builder->buildGridFromPrims(_primitives, _primCount);
 
-        uint32_t cellStride = 1 + _builder->maxPrimsPerCell();
-        uint32_t gridTotalU32 = gridW * gridH * cellStride;
-        uint32_t gridBytes = gridTotalU32 * sizeof(uint32_t);
+        const auto& gridData = _builder->gridStaging();
+        uint32_t gridBytes = static_cast<uint32_t>(gridData.size()) * sizeof(uint32_t);
         uint32_t glyphBytes = static_cast<uint32_t>(
             _builder->glyphs().size() * sizeof(YDrawGlyph));
         uint32_t derivedTotalSize = gridBytes + glyphBytes;
@@ -420,15 +417,12 @@ private:
             uint32_t offset = 0;
 
             _grid = reinterpret_cast<uint32_t*>(base + offset);
-            _gridSize = gridTotalU32;
-            _gridWidth = gridW;
-            _gridHeight = gridH;
+            _gridSize = static_cast<uint32_t>(gridData.size());
+            _gridWidth = _builder->gridWidth();
+            _gridHeight = _builder->gridHeight();
             _gridOffset = (_derivedStorage.offset + offset) / sizeof(float);
+            std::memcpy(base + offset, gridData.data(), gridBytes);
             offset += gridBytes;
-
-            _builder->buildGridFromPrims(
-                _primitives, _primCount,
-                _grid, gridTotalU32, gridW, gridH, cellSize);
 
             _glyphOffset = (_derivedStorage.offset + offset) / sizeof(float);
             const auto& glyphs = _builder->glyphs();

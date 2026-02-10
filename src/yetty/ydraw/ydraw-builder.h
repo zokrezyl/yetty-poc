@@ -199,11 +199,9 @@ public:
     virtual void computeSceneBoundsFromPrims(
         const card::SDFPrimitive* prims, uint32_t count) = 0;
 
-    // Build grid into pre-allocated GPU-mapped buffer
+    // Build variable-length grid into internal staging from GPU-mapped prims
     virtual void buildGridFromPrims(
-        const card::SDFPrimitive* prims, uint32_t count,
-        uint32_t* gridOut, uint32_t gridTotalU32,
-        uint32_t gridW, uint32_t gridH, float cellSz) = 0;
+        const card::SDFPrimitive* prims, uint32_t count) = 0;
 
     // Compute optimal grid dimensions from GPU-mapped primitives
     struct GridDims {

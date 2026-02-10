@@ -908,14 +908,6 @@ public:
                     avgGlyphH /= _glyphs.size();
                     cs = avgGlyphH * 2.0f;
                 }
-                // When glyphs are present alongside large primitives, limit cell
-                // size to avoid exceeding MAX_PRIMS_PER_CELL entries per cell.
-                if (!_glyphs.empty() && num2DPrims > 0) {
-                    float avgGlyphH = 0.0f;
-                    for (const auto& g : _glyphs) avgGlyphH += g.height;
-                    avgGlyphH /= _glyphs.size();
-                    cs = std::min(cs, avgGlyphH * 3.0f);
-                }
                 float minCellSize = std::sqrt(sceneArea / 65536.0f);
                 float maxCellSize = std::sqrt(sceneArea / 16.0f);
                 cs = std::clamp(cs, minCellSize, maxCellSize);
@@ -931,11 +923,47 @@ public:
         _gridHeight = gridH;
         _cellSize = cs;
 
-        // Build grid into staging
-        uint32_t cellStride = 1 + _maxPrimsPerCell;
-        uint32_t gridTotalU32 = gridW * gridH * cellStride;
-        _gridStaging.assign(gridTotalU32, 0);
+        // Build variable-length grid into staging
+        // Layout: [off0][off1]...[offN] [count0,e,e,...] [count1,e,...] ...
+        // Pass 1: count entries per cell
+        uint32_t numCells = gridW * gridH;
+        std::vector<uint32_t> cellCounts(numCells, 0);
 
+        for (const auto& prim : _primStaging) {
+            if (prim.type >= 100) continue;
+            uint32_t cMinX = static_cast<uint32_t>(std::clamp((prim.aabbMinX - _sceneMinX) / cs, 0.0f, float(gridW - 1)));
+            uint32_t cMaxX = static_cast<uint32_t>(std::clamp((prim.aabbMaxX - _sceneMinX) / cs, 0.0f, float(gridW - 1)));
+            uint32_t cMinY = static_cast<uint32_t>(std::clamp((prim.aabbMinY - _sceneMinY) / cs, 0.0f, float(gridH - 1)));
+            uint32_t cMaxY = static_cast<uint32_t>(std::clamp((prim.aabbMaxY - _sceneMinY) / cs, 0.0f, float(gridH - 1)));
+            for (uint32_t cy = cMinY; cy <= cMaxY; cy++)
+                for (uint32_t cx = cMinX; cx <= cMaxX; cx++)
+                    cellCounts[cy * gridW + cx]++;
+        }
+        for (const auto& g : _glyphs) {
+            uint32_t cMinX = static_cast<uint32_t>(std::clamp((g.x - _sceneMinX) / cs, 0.0f, float(gridW - 1)));
+            uint32_t cMaxX = static_cast<uint32_t>(std::clamp((g.x + g.width - _sceneMinX) / cs, 0.0f, float(gridW - 1)));
+            uint32_t cMinY = static_cast<uint32_t>(std::clamp((g.y - _sceneMinY) / cs, 0.0f, float(gridH - 1)));
+            uint32_t cMaxY = static_cast<uint32_t>(std::clamp((g.y + g.height - _sceneMinY) / cs, 0.0f, float(gridH - 1)));
+            for (uint32_t cy = cMinY; cy <= cMaxY; cy++)
+                for (uint32_t cx = cMinX; cx <= cMaxX; cx++)
+                    cellCounts[cy * gridW + cx]++;
+        }
+
+        // Compute offsets (prefix sum)
+        uint32_t pos = numCells; // packed data starts after offset table
+        _gridStaging.resize(numCells); // will grow below
+        for (uint32_t i = 0; i < numCells; i++) {
+            _gridStaging[i] = pos;
+            pos += 1 + cellCounts[i]; // count + entries
+        }
+        _gridStaging.resize(pos, 0);
+
+        // Initialize packed counts to 0
+        for (uint32_t i = 0; i < numCells; i++) {
+            _gridStaging[_gridStaging[i]] = 0;
+        }
+
+        // Pass 2: fill entries
         for (uint32_t primIdx = 0; primIdx < static_cast<uint32_t>(_primStaging.size()); primIdx++) {
             const auto& prim = _primStaging[primIdx];
             if (prim.type >= 100) continue;
@@ -945,16 +973,13 @@ public:
             uint32_t cMaxY = static_cast<uint32_t>(std::clamp((prim.aabbMaxY - _sceneMinY) / cs, 0.0f, float(gridH - 1)));
             for (uint32_t cy = cMinY; cy <= cMaxY; cy++) {
                 for (uint32_t cx = cMinX; cx <= cMaxX; cx++) {
-                    uint32_t cellOffset = (cy * gridW + cx) * cellStride;
-                    uint32_t count = _gridStaging[cellOffset];
-                    if (count < _maxPrimsPerCell) {
-                        _gridStaging[cellOffset + 1 + count] = primIdx;
-                        _gridStaging[cellOffset] = count + 1;
-                    }
+                    uint32_t off = _gridStaging[cy * gridW + cx];
+                    uint32_t cnt = _gridStaging[off];
+                    _gridStaging[off + 1 + cnt] = primIdx;
+                    _gridStaging[off] = cnt + 1;
                 }
             }
         }
-
         for (uint32_t gi = 0; gi < static_cast<uint32_t>(_glyphs.size()); gi++) {
             const auto& g = _glyphs[gi];
             uint32_t cMinX = static_cast<uint32_t>(std::clamp((g.x - _sceneMinX) / cs, 0.0f, float(gridW - 1)));
@@ -963,27 +988,12 @@ public:
             uint32_t cMaxY = static_cast<uint32_t>(std::clamp((g.y + g.height - _sceneMinY) / cs, 0.0f, float(gridH - 1)));
             for (uint32_t cy = cMinY; cy <= cMaxY; cy++) {
                 for (uint32_t cx = cMinX; cx <= cMaxX; cx++) {
-                    uint32_t cellOffset = (cy * gridW + cx) * cellStride;
-                    uint32_t count = _gridStaging[cellOffset];
-                    if (count < _maxPrimsPerCell) {
-                        _gridStaging[cellOffset + 1 + count] = gi | GLYPH_BIT;
-                        _gridStaging[cellOffset] = count + 1;
-                    }
+                    uint32_t off = _gridStaging[cy * gridW + cx];
+                    uint32_t cnt = _gridStaging[off];
+                    _gridStaging[off + 1 + cnt] = gi | GLYPH_BIT;
+                    _gridStaging[off] = cnt + 1;
                 }
             }
-        }
-
-        // Detect cell overflow
-        uint32_t overflowCells = 0;
-        uint32_t maxCount = 0;
-        for (uint32_t ci = 0; ci < gridW * gridH; ci++) {
-            uint32_t cnt = _gridStaging[ci * cellStride];
-            maxCount = std::max(maxCount, cnt);
-            if (cnt >= _maxPrimsPerCell) overflowCells++;
-        }
-        if (overflowCells > 0) {
-            ywarn("calculate: {} cells overflowed (max={}, limit={}), grid={}x{} cellSize={:.1f}",
-                  overflowCells, maxCount, _maxPrimsPerCell, gridW, gridH, cs);
         }
     }
 
@@ -1055,14 +1065,6 @@ public:
                     avgGlyphH /= _glyphs.size();
                     cs = avgGlyphH * 2.0f;
                 }
-                // When glyphs are present alongside large primitives, limit cell
-                // size to avoid exceeding MAX_PRIMS_PER_CELL entries per cell.
-                if (!_glyphs.empty() && num2DPrims > 0) {
-                    float avgGlyphH = 0.0f;
-                    for (const auto& g : _glyphs) avgGlyphH += g.height;
-                    avgGlyphH /= _glyphs.size();
-                    cs = std::min(cs, avgGlyphH * 3.0f);
-                }
                 float minCellSize = std::sqrt(sceneArea / 65536.0f);
                 float maxCellSize = std::sqrt(sceneArea / 16.0f);
                 cs = std::clamp(cs, minCellSize, maxCellSize);
@@ -1079,62 +1081,78 @@ public:
     }
 
     void buildGridFromPrims(
-        const card::SDFPrimitive* prims, uint32_t count,
-        uint32_t* gridOut, uint32_t gridTotalU32,
-        uint32_t gridW, uint32_t gridH, float cs) override
+        const card::SDFPrimitive* prims, uint32_t count) override
     {
-        if (gridTotalU32 == 0) return;
+        uint32_t gridW = _gridWidth;
+        uint32_t gridH = _gridHeight;
+        float cs = _cellSize;
+        if (gridW == 0 || gridH == 0) return;
 
-        uint32_t cellStride = 1 + _maxPrimsPerCell;
-        std::memset(gridOut, 0, gridTotalU32 * sizeof(uint32_t));
+        uint32_t numCells = gridW * gridH;
+        std::vector<uint32_t> cellCounts(numCells, 0);
 
-        // Assign primitives to cells
+        // Pass 1: count entries per cell
+        for (uint32_t i = 0; i < count; i++) {
+            if (prims[i].type >= 100) continue;
+            uint32_t cMinX = static_cast<uint32_t>(std::clamp((prims[i].aabbMinX - _sceneMinX) / cs, 0.0f, float(gridW - 1)));
+            uint32_t cMaxX = static_cast<uint32_t>(std::clamp((prims[i].aabbMaxX - _sceneMinX) / cs, 0.0f, float(gridW - 1)));
+            uint32_t cMinY = static_cast<uint32_t>(std::clamp((prims[i].aabbMinY - _sceneMinY) / cs, 0.0f, float(gridH - 1)));
+            uint32_t cMaxY = static_cast<uint32_t>(std::clamp((prims[i].aabbMaxY - _sceneMinY) / cs, 0.0f, float(gridH - 1)));
+            for (uint32_t cy = cMinY; cy <= cMaxY; cy++)
+                for (uint32_t cx = cMinX; cx <= cMaxX; cx++)
+                    cellCounts[cy * gridW + cx]++;
+        }
+        for (const auto& g : _glyphs) {
+            uint32_t cMinX = static_cast<uint32_t>(std::clamp((g.x - _sceneMinX) / cs, 0.0f, float(gridW - 1)));
+            uint32_t cMaxX = static_cast<uint32_t>(std::clamp((g.x + g.width - _sceneMinX) / cs, 0.0f, float(gridW - 1)));
+            uint32_t cMinY = static_cast<uint32_t>(std::clamp((g.y - _sceneMinY) / cs, 0.0f, float(gridH - 1)));
+            uint32_t cMaxY = static_cast<uint32_t>(std::clamp((g.y + g.height - _sceneMinY) / cs, 0.0f, float(gridH - 1)));
+            for (uint32_t cy = cMinY; cy <= cMaxY; cy++)
+                for (uint32_t cx = cMinX; cx <= cMaxX; cx++)
+                    cellCounts[cy * gridW + cx]++;
+        }
+
+        // Compute offsets
+        uint32_t pos = numCells;
+        _gridStaging.resize(numCells);
+        for (uint32_t i = 0; i < numCells; i++) {
+            _gridStaging[i] = pos;
+            pos += 1 + cellCounts[i];
+        }
+        _gridStaging.resize(pos, 0);
+
+        for (uint32_t i = 0; i < numCells; i++) {
+            _gridStaging[_gridStaging[i]] = 0;
+        }
+
+        // Pass 2: fill entries
         for (uint32_t primIdx = 0; primIdx < count; primIdx++) {
-            const auto& prim = prims[primIdx];
-            if (prim.type >= 100) continue;
-
-            uint32_t cellMinX = static_cast<uint32_t>(
-                std::clamp((prim.aabbMinX - _sceneMinX) / cs, 0.0f, float(gridW - 1)));
-            uint32_t cellMaxX = static_cast<uint32_t>(
-                std::clamp((prim.aabbMaxX - _sceneMinX) / cs, 0.0f, float(gridW - 1)));
-            uint32_t cellMinY = static_cast<uint32_t>(
-                std::clamp((prim.aabbMinY - _sceneMinY) / cs, 0.0f, float(gridH - 1)));
-            uint32_t cellMaxY = static_cast<uint32_t>(
-                std::clamp((prim.aabbMaxY - _sceneMinY) / cs, 0.0f, float(gridH - 1)));
-
-            for (uint32_t cy = cellMinY; cy <= cellMaxY; cy++) {
-                for (uint32_t cx = cellMinX; cx <= cellMaxX; cx++) {
-                    uint32_t cellOffset = (cy * gridW + cx) * cellStride;
-                    uint32_t cnt = gridOut[cellOffset];
-                    if (cnt < _maxPrimsPerCell) {
-                        gridOut[cellOffset + 1 + cnt] = primIdx;
-                        gridOut[cellOffset] = cnt + 1;
-                    }
+            if (prims[primIdx].type >= 100) continue;
+            uint32_t cMinX = static_cast<uint32_t>(std::clamp((prims[primIdx].aabbMinX - _sceneMinX) / cs, 0.0f, float(gridW - 1)));
+            uint32_t cMaxX = static_cast<uint32_t>(std::clamp((prims[primIdx].aabbMaxX - _sceneMinX) / cs, 0.0f, float(gridW - 1)));
+            uint32_t cMinY = static_cast<uint32_t>(std::clamp((prims[primIdx].aabbMinY - _sceneMinY) / cs, 0.0f, float(gridH - 1)));
+            uint32_t cMaxY = static_cast<uint32_t>(std::clamp((prims[primIdx].aabbMaxY - _sceneMinY) / cs, 0.0f, float(gridH - 1)));
+            for (uint32_t cy = cMinY; cy <= cMaxY; cy++) {
+                for (uint32_t cx = cMinX; cx <= cMaxX; cx++) {
+                    uint32_t off = _gridStaging[cy * gridW + cx];
+                    uint32_t cnt = _gridStaging[off];
+                    _gridStaging[off + 1 + cnt] = primIdx;
+                    _gridStaging[off] = cnt + 1;
                 }
             }
         }
-
-        // Assign glyphs to cells
         for (uint32_t gi = 0; gi < static_cast<uint32_t>(_glyphs.size()); gi++) {
             const auto& g = _glyphs[gi];
-
-            uint32_t cellMinX = static_cast<uint32_t>(
-                std::clamp((g.x - _sceneMinX) / cs, 0.0f, float(gridW - 1)));
-            uint32_t cellMaxX = static_cast<uint32_t>(
-                std::clamp((g.x + g.width - _sceneMinX) / cs, 0.0f, float(gridW - 1)));
-            uint32_t cellMinY = static_cast<uint32_t>(
-                std::clamp((g.y - _sceneMinY) / cs, 0.0f, float(gridH - 1)));
-            uint32_t cellMaxY = static_cast<uint32_t>(
-                std::clamp((g.y + g.height - _sceneMinY) / cs, 0.0f, float(gridH - 1)));
-
-            for (uint32_t cy = cellMinY; cy <= cellMaxY; cy++) {
-                for (uint32_t cx = cellMinX; cx <= cellMaxX; cx++) {
-                    uint32_t cellOffset = (cy * gridW + cx) * cellStride;
-                    uint32_t cnt = gridOut[cellOffset];
-                    if (cnt < _maxPrimsPerCell) {
-                        gridOut[cellOffset + 1 + cnt] = gi | GLYPH_BIT;
-                        gridOut[cellOffset] = cnt + 1;
-                    }
+            uint32_t cMinX = static_cast<uint32_t>(std::clamp((g.x - _sceneMinX) / cs, 0.0f, float(gridW - 1)));
+            uint32_t cMaxX = static_cast<uint32_t>(std::clamp((g.x + g.width - _sceneMinX) / cs, 0.0f, float(gridW - 1)));
+            uint32_t cMinY = static_cast<uint32_t>(std::clamp((g.y - _sceneMinY) / cs, 0.0f, float(gridH - 1)));
+            uint32_t cMaxY = static_cast<uint32_t>(std::clamp((g.y + g.height - _sceneMinY) / cs, 0.0f, float(gridH - 1)));
+            for (uint32_t cy = cMinY; cy <= cMaxY; cy++) {
+                for (uint32_t cx = cMinX; cx <= cMaxX; cx++) {
+                    uint32_t off = _gridStaging[cy * gridW + cx];
+                    uint32_t cnt = _gridStaging[off];
+                    _gridStaging[off + 1 + cnt] = gi | GLYPH_BIT;
+                    _gridStaging[off] = cnt + 1;
                 }
             }
         }
