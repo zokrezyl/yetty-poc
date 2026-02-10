@@ -137,8 +137,8 @@ static GlyphResult generateGlyph(WorkerContext& ctx, uint32_t codepoint) {
     // Generate MSDF bitmap
     ::msdfgen::Bitmap<float, 3> msdf(bitmapW, bitmapH);
     ::msdfgen::Vector2 translate(
-        padding - bounds.l * fontScale,
-        padding - bounds.b * fontScale
+        padding / fontScale - bounds.l,
+        padding / fontScale - bounds.b
     );
     ::msdfgen::generateMSDF(msdf, shape, ctx.pixelRange, fontScale, translate);
 

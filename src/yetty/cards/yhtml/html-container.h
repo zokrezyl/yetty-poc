@@ -7,15 +7,18 @@
 #include <string>
 #include <cstdint>
 
+namespace yetty {
+class YDrawBuilder;
+}
+
 namespace yetty::card {
 
-class YHtml;
 class HttpFetcher;
 
 //=============================================================================
-// HtmlContainer - litehtml v0.9 document_container that emits YHtml primitives
+// HtmlContainer - litehtml v0.9 document_container that emits SDF primitives
 //
-// Bridges litehtml's CSS layout callbacks to YHtml SDF + MSDF rendering:
+// Bridges litehtml's CSS layout callbacks to YDrawBuilder:
 //   draw_background() → addBox()
 //   draw_borders()    → addSegment()
 //   draw_text()       → addText()
@@ -29,7 +32,7 @@ class HtmlContainer : public litehtml::document_container,
 public:
     using Ptr = std::shared_ptr<HtmlContainer>;
 
-    static Result<Ptr> createImpl(YHtml* htmlCard, MsMsdfFont::Ptr font,
+    static Result<Ptr> createImpl(YDrawBuilder* builder, MsMsdfFont::Ptr font,
                                   float defaultFontSize,
                                   HttpFetcher* fetcher);
 

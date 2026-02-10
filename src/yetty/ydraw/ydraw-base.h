@@ -107,14 +107,17 @@ public:
     //=========================================================================
     // Public API - MSDF text
     //=========================================================================
-    uint32_t addText(float x, float y, const std::string& text,
-                     float fontSize, uint32_t color,
-                     uint32_t layer = 0, int fontId = 0);
+    Result<void> addText(float x, float y, const std::string& text,
+                         float fontSize, uint32_t color,
+                         uint32_t layer = 0);
+    Result<void> addText(float x, float y, const std::string& text,
+                         float fontSize, uint32_t color,
+                         uint32_t layer, int fontId);
 
     //=========================================================================
     // Public API - Font registration
     //=========================================================================
-    int addFont(const std::string& ttfPath);
+    Result<int> addFont(const std::string& ttfPath);
     int registerFont(const std::string& cdbPath,
                      const std::string& ttfPath = "",
                      MsdfCdbProvider::Ptr provider = nullptr);
@@ -275,6 +278,8 @@ private:
     // Custom atlas (per-card, created on first addFont() call)
     MsdfAtlas::Ptr _customAtlas;
     TextureHandle _atlasTextureHandle = TextureHandle::invalid();
+    bool _atlasTextureDirty = false;
+    uint32_t _atlasHeaderOffset = 0;  // byte offset in derived buffer for atlas header
     GpuAllocator::Ptr _globalAllocator;
 
     // View zoom/pan (applied to metadata scene bounds, not to grid)
