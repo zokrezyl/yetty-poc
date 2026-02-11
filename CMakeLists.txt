@@ -713,6 +713,7 @@ target_include_directories(yetty PRIVATE
 # Card subdirectories (desktop only - cards use CardBufferManager, ImGui, etc.)
 if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
     add_subdirectory(src/yetty/ydraw)
+    add_subdirectory(src/yetty/diagram)
     add_subdirectory(src/yetty/cards)
     add_subdirectory(src/yetty/yast)
 endif()
