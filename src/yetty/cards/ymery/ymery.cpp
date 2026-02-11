@@ -289,23 +289,19 @@ public:
         return Ok();
     }
 
-    Result<void> render(float time) override {
+    void renderToStaging(float time) override {
         (void)time;
 
-        if (!_imguiContext || !_renderer) {
-            return Ok();
-        }
+        if (!_imguiContext || !_renderer) return;
 
         // First few frames: always render (ImGui needs frames to init font atlas)
         if (_initFrames > 0) {
             --_initFrames;
         } else if (!_dirty && !_metadataDirty) {
-            return Ok();
+            return;
         }
 
-        if (_pixelWidth == 0 || _pixelHeight == 0) {
-            return Ok();
-        }
+        if (_pixelWidth == 0 || _pixelHeight == 0) return;
 
         // Save current ImGui context and switch to ours
         ImGuiContext* prevCtx = ImGui::GetCurrentContext();
@@ -325,7 +321,7 @@ public:
 
         // Render ymery widgets
         if (auto res = _renderer->renderFrame(); !res) {
-            ydebug("Ymery::update: renderFrame failed: {}", res.error().to_string());
+            ydebug("Ymery::renderToStaging: renderFrame failed: {}", res.error().to_string());
         }
 
         ImGui::Render();
@@ -391,7 +387,7 @@ public:
         // Restore ImGui context
         ImGui::SetCurrentContext(prevCtx);
 
-        // Map readback buffer synchronously
+        // Map readback buffer synchronously → _cpuPixels staging
         struct MapCtx { bool done = false; WGPUMapAsyncStatus status; };
         MapCtx mapCtx;
         WGPUBufferMapCallbackInfo cbInfo = {};
@@ -421,25 +417,31 @@ public:
                                 mapped + row * alignedBytesPerRow,
                                 bytesPerRow);
                 }
-                // Link CPU pixels to texture handle for atlas packing
-                if (_textureHandle.isValid()) {
-                    _cardMgr->textureManager()->write(_textureHandle, _cpuPixels.data());
-                }
             }
 
             wgpuBufferUnmap(_readbackBuffer);
         } else {
-            ydebug("Ymery::update: readback map failed (status={})", static_cast<int>(mapCtx.status));
+            ydebug("Ymery::renderToStaging: readback map failed (status={})", static_cast<int>(mapCtx.status));
+        }
+
+        _dirty = false;
+    }
+
+    Result<void> render() override {
+        // Write CPU pixels to card texture atlas
+        if (_textureHandle.isValid() && !_cpuPixels.empty()) {
+            if (auto res = _cardMgr->textureManager()->write(_textureHandle, _cpuPixels.data()); !res) {
+                return Err<void>("Ymery::render: texture write failed", res);
+            }
         }
 
         if (_metadataDirty) {
             if (auto res = _uploadMetadata(); !res) {
-                return Err<void>("Ymery::update: metadata upload failed", res);
+                return Err<void>("Ymery::render: metadata upload failed", res);
             }
             _metadataDirty = false;
         }
 
-        _dirty = false;
         return Ok();
     }
 

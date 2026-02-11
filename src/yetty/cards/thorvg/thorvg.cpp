@@ -377,8 +377,10 @@ public:
         return Ok();
     }
 
-    Result<void> render(float time) override {
-        // Advance animation
+    void renderToStaging(float time) override {
+        (void)time;
+
+        // Advance animation — compute next frame, render to CPU pixel buffer
         if (_isAnimated && _playing && _animation && _duration > 0) {
             _accumulatedTime += 0.016;  // ~60fps
 
@@ -401,21 +403,26 @@ public:
             }
         }
 
-        // Re-render if content changed (animation frame update)
+        // Re-render animation frame to CPU pixel buffer
         if (_needsRerender && _animation) {
             if (auto res = renderFrame(); !res) {
-                return Err<void>("ThorVG::update: render failed", res);
-            }
-            // Write updated pixels to atlas (atlas exists by render time)
-            if (_textureHandle.isValid() && !_renderBuffer.empty()) {
-                _cardMgr->textureManager()->write(_textureHandle, _renderBuffer.data());
+                yerror("ThorVG::renderToStaging: renderFrame failed: {}", error_msg(res));
             }
             _needsRerender = false;
+        }
+    }
+
+    Result<void> render() override {
+        // Write updated pixels to atlas texture
+        if (_textureHandle.isValid() && !_renderBuffer.empty()) {
+            if (auto res = _cardMgr->textureManager()->write(_textureHandle, _renderBuffer.data()); !res) {
+                return Err<void>("ThorVG::render: texture write failed", res);
+            }
         }
 
         if (_metadataDirty) {
             if (auto res = uploadMetadata(); !res) {
-                return Err<void>("ThorVG::update: metadata upload failed", res);
+                return Err<void>("ThorVG::render: metadata upload failed", res);
             }
             _metadataDirty = false;
         }

@@ -103,7 +103,7 @@ public:
     void suspend() override;
     void declareBufferNeeds() override;
     Result<void> allocateBuffers() override;
-    Result<void> render(float time) override;
+    Result<void> render() override;
 
     //=========================================================================
     // Text building API

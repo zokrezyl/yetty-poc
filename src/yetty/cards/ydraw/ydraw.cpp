@@ -263,8 +263,8 @@ public:
         return Ok();
     }
 
-    Result<void> render(float time) override {
-        if (!_builder) return Ok();
+    void renderToStaging(float time) override {
+        if (!_builder) return;
 
         // Auto-start animation
         if (_animation && _animation->hasProperties() && !_animation->isPlaying()
@@ -272,7 +272,7 @@ public:
             startAnimation();
         }
 
-        // Animation update
+        // Animation update — advance time, apply to primitives, recompute AABBs
         if (_animation && _animation->isPlaying() && _primitives && _primCount > 0) {
             float dt = (_lastRenderTime < 0.0f) ? 0.0f : (time - _lastRenderTime);
             _lastRenderTime = time;
@@ -285,6 +285,10 @@ public:
                 _dirty = true;
             }
         }
+    }
+
+    Result<void> render() override {
+        if (!_builder) return Ok();
 
         if (_dirty) {
             if (auto res = rebuildAndUpload(); !res) return res;

@@ -4747,7 +4747,20 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
     gcInactiveCards();
   }
 
-  // Ask cards if they need reallocation (independent of enter/leave)
+  // ===================================================================
+  // Phase 1: renderToStaging — all active cards compute into staging
+  // ===================================================================
+  {
+    static auto t0 = std::chrono::steady_clock::now();
+    auto now = std::chrono::steady_clock::now();
+    float timeSec = std::chrono::duration<float>(now - t0).count();
+    for (auto& [slotIndex, card] : _cards) {
+      ydebug("GPUScreen::render: Phase1 renderToStaging card='{}' slot={}", card->typeName(), slotIndex);
+      card->renderToStaging(timeSec);
+    }
+  }
+
+  // After staging, ask cards if they need reallocation
   for (auto& [slotIndex, card] : _cards) {
     if (card->needsBuffer() && card->needsBufferRealloc())
       _bufferLayoutChanged = true;
@@ -4755,27 +4768,28 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
       _textureLayoutChanged = true;
   }
 
-  // Loop 1+2: Buffer cards — when layout changed or a card requested realloc
+  // ===================================================================
+  // Phase 2: Allocation — only when layout changes
+  // ===================================================================
+
+  // Buffer repack: declareBufferNeeds → commitReservations → allocateBuffers
   if (_bufferLayoutChanged && _cardManager) {
     ydebug("GPUScreen::render: _bufferLayoutChanged=true, {} active cards", _cards.size());
 
-    // Loop 1: Buffer cards declare their buffer needs
     for (auto& [slotIndex, card] : _cards) {
       if (card->needsBuffer()) {
-        ydebug("GPUScreen::render: Loop1 declareBufferNeeds card='{}' slot={}", card->typeName(), slotIndex);
+        ydebug("GPUScreen::render: Phase2 declareBufferNeeds card='{}' slot={}", card->typeName(), slotIndex);
         card->declareBufferNeeds();
       }
     }
-    // Pre-size buffer to fit all declared needs
     if (auto res = _cardManager->bufferManager()->commitReservations(); !res) {
       yerror("GPUScreen::render: commitReservations failed: {}", error_msg(res));
       return Err<void>("GPUScreen::render: commitReservations failed", res);
     }
 
-    // Loop 2: Buffer cards allocate their buffers
     for (auto& [slotIndex, card] : _cards) {
       if (card->needsBuffer()) {
-        ydebug("GPUScreen::render: Loop2 allocateBuffers card='{}' slot={}", card->typeName(), slotIndex);
+        ydebug("GPUScreen::render: Phase2 allocateBuffers card='{}' slot={}", card->typeName(), slotIndex);
         if (auto res = card->allocateBuffers(); !res) {
           yerror("GPUScreen::render: card '{}' allocateBuffers FAILED: {}", card->typeName(), error_msg(res));
         }
@@ -4785,29 +4799,25 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
     _bufferLayoutChanged = false;
   }
 
-  // Loop 3: Texture cards — only when a texture card entered or left
+  // Texture repack: clearHandles → allocateTextures → createAtlas → writeTextures
   if (_textureLayoutChanged && _cardManager && _cardManager->textureManager()) {
     ydebug("GPUScreen::render: _textureLayoutChanged=true, {} active cards", _cards.size());
 
-    // Clear all old texture handles — cards will re-allocate fresh
     _cardManager->textureManager()->clearHandles();
 
-    // All active texture cards re-allocate
     for (auto& [slotIndex, card] : _cards) {
       if (card->needsTexture()) {
-        ydebug("GPUScreen::render: Loop3 allocateTextures card='{}' slot={}", card->typeName(), slotIndex);
+        ydebug("GPUScreen::render: Phase2 allocateTextures card='{}' slot={}", card->typeName(), slotIndex);
         if (auto res = card->allocateTextures(); !res) {
           yerror("GPUScreen::render: card '{}' allocateTextures FAILED: {}", card->typeName(), error_msg(res));
         }
       }
     }
 
-    // Pack and create atlas sized to current needs
     if (auto res = _cardManager->textureManager()->createAtlas(); !res) {
       yerror("GPUScreen::render: createAtlas FAILED: {}", error_msg(res));
     }
 
-    // Write pixel data into the atlas (now that it exists)
     for (auto& [slotIndex, card] : _cards) {
       if (card->needsTexture()) {
         if (auto res = card->writeTextures(); !res) {
@@ -4823,18 +4833,15 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
 
   auto _loopT1 = std::chrono::steady_clock::now();
 
-  // Loop 4: Render all active cards (write data, no allocations)
+  // ===================================================================
+  // Phase 3: render — per-frame GPU writes (metadata + dirty data)
+  // ===================================================================
   for (auto& [slotIndex, card] : _cards) {
-    ydebug("GPUScreen::render: Loop4 render card='{}' slot={} metaOffset={}",
+    ydebug("GPUScreen::render: Phase3 render card='{}' slot={} metaOffset={}",
            card->typeName(), slotIndex, card->metadataOffset());
-    {
-      static auto t0 = std::chrono::steady_clock::now();
-      auto now = std::chrono::steady_clock::now();
-      float timeSec = std::chrono::duration<float>(now - t0).count();
-      if (auto res = card->render(timeSec); !res) {
-        yerror("GPUScreen::render: card '{}' render FAILED: {}", card->typeName(), error_msg(res));
-        return Err<void>("GPUScreen::render: card render failed", res);
-      }
+    if (auto res = card->render(); !res) {
+      yerror("GPUScreen::render: card '{}' render FAILED: {}", card->typeName(), error_msg(res));
+      return Err<void>("GPUScreen::render: card render failed", res);
     }
   }
 

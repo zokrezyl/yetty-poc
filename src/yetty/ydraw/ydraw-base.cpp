@@ -784,14 +784,14 @@ Result<void> YDrawBase::allocateBuffers() {
     return Ok();
 }
 
-Result<void> YDrawBase::render(float time) {
+void YDrawBase::renderToStaging(float time) {
     // Auto-start animation if properties were added but not yet started
     if (_animation && _animation->hasProperties() && !_animation->isPlaying()
         && _basePrimitives.empty() && _primitives && _primCount > 0) {
         startAnimation();
     }
 
-    // Animation update (before dirty check)
+    // Animation update — advance time, apply to primitives, recompute AABBs
     if (_animation && _animation->isPlaying() && _primitives && _primCount > 0) {
         float dt = (_lastRenderTime < 0.0f) ? 0.0f : (time - _lastRenderTime);
         _lastRenderTime = time;
@@ -805,7 +805,9 @@ Result<void> YDrawBase::render(float time) {
             _dirty = true;
         }
     }
+}
 
+Result<void> YDrawBase::render() {
     // Write custom atlas pixel data after allocateTextures provides a handle
     if (_customAtlas && _atlasTextureDirty) {
         if (!_atlasTextureHandle.isValid()) {

@@ -345,8 +345,8 @@ public:
         yinfo("PythonCard::suspend: deallocated texture handle");
     }
 
-    Result<void> render(float time) override {
-        ydebug("PythonCard::update: time={:.3f} engineInit={} globals={} needsRerender={}",
+    void renderToStaging(float time) override {
+        ydebug("PythonCard::renderToStaging: time={:.3f} engineInit={} globals={} needsRerender={}",
                time, _engineInitialized, (bool)_globals, _needsRerender);
 
         // Reconstruct after suspend — call render to re-populate buffers
@@ -354,25 +354,27 @@ public:
             _needsRerender = false;
         }
 
-        // Call Python render(time)
+        // Call Python render(time) — script populates staging buffers/textures
         if (_engineInitialized && _globals) {
             python::GILGuard gil;
             PythonCallContext pcc(_cardMgr.get(), _cardMgr->textureManager().get(), &_ctx.gpu, metadataSlotIndex());
 
-            ydebug("PythonCard::update: calling render()...");
+            ydebug("PythonCard::renderToStaging: calling render()...");
             if (auto res = callPython("render", py::make_tuple(time)); !res) {
-                return Err<void>("PythonCard::update: render() failed", res);
+                yerror("PythonCard::renderToStaging: render() failed: {}", error_msg(res));
             }
-            ydebug("PythonCard::update: render() returned ok, texHandle valid={}", _textureHandle.isValid());
+            ydebug("PythonCard::renderToStaging: render() returned ok, texHandle valid={}", _textureHandle.isValid());
 
             // Check if script allocated texture data we need to track
             updateTextureHandleFromScript();
         }
+    }
 
+    Result<void> render() override {
         if (_metadataDirty) {
-            ydebug("PythonCard::update: uploading metadata");
+            ydebug("PythonCard::render: uploading metadata");
             if (auto res = uploadMetadata(); !res) {
-                return Err<void>("PythonCard::update: metadata upload failed", res);
+                return Err<void>("PythonCard::render: metadata upload failed", res);
             }
             _metadataDirty = false;
         }
