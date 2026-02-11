@@ -7,7 +7,6 @@
 #include <yetty/card-texture-manager.h>
 #include <webgpu/webgpu.h>
 #include <memory>
-#include <optional>
 
 namespace yetty {
 
@@ -76,14 +75,6 @@ public:
 
     // Flush all dirty data to GPU (metadata + buffer + atlas)
     virtual Result<void> flush(WGPUQueue queue) = 0;
-
-    // =========================================================================
-    // Named card registry (for RPC streaming)
-    // =========================================================================
-    virtual void registerNamedCard(const std::string& name, uint32_t slotIndex) = 0;
-    virtual void unregisterNamedCard(const std::string& name) = 0;
-    virtual std::optional<uint32_t> getSlotIndexByName(const std::string& name) const = 0;
-    virtual std::string getNameBySlotIndex(uint32_t slotIndex) const = 0;  // returns "" if not found
 
 protected:
     CardManager() = default;

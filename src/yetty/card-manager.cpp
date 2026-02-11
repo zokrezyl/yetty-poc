@@ -203,33 +203,6 @@ public:
     // GPU upload
     Result<void> flush(WGPUQueue queue) override;
 
-    // Named card registry
-    void registerNamedCard(const std::string& name, uint32_t slotIndex) override {
-        if (!name.empty()) {
-            _namedCards[name] = slotIndex;
-            _slotToName[slotIndex] = name;
-            ydebug("CardManager: registered named card '{}' <-> slot {}", name, slotIndex);
-        }
-    }
-    void unregisterNamedCard(const std::string& name) override {
-        auto it = _namedCards.find(name);
-        if (it != _namedCards.end()) {
-            _slotToName.erase(it->second);
-            _namedCards.erase(it);
-        }
-    }
-    std::optional<uint32_t> getSlotIndexByName(const std::string& name) const override {
-        auto it = _namedCards.find(name);
-        if (it != _namedCards.end()) {
-            return it->second;
-        }
-        return std::nullopt;
-    }
-    std::string getNameBySlotIndex(uint32_t slotIndex) const override {
-        auto it = _slotToName.find(slotIndex);
-        return (it != _slotToName.end()) ? it->second : "";
-    }
-
 private:
     Result<void> createMetadataGpuBuffer();
     Result<void> createDummyResources();
@@ -260,10 +233,6 @@ private:
     WGPUTexture _dummyAtlasTexture = nullptr;
     WGPUTextureView _dummyAtlasTextureView = nullptr;
     WGPUSampler _dummyAtlasSampler = nullptr;
-
-    // Named card registry (bidirectional)
-    std::unordered_map<std::string, uint32_t> _namedCards;   // name -> slotIndex
-    std::unordered_map<uint32_t, std::string> _slotToName;   // slotIndex -> name
 
     // Shared memory for buffer data streaming
     SharedMemoryRegion::Ptr _shmData;
