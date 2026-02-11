@@ -430,6 +430,7 @@ private:
   std::unordered_map<uint32_t, CardPtr> _inactiveCards;
   CardManager::Ptr _cardManager;
   base::ObjectId _cardMouseTarget = 0;  // card that received last CardMouseDown
+  base::ObjectId _focusedCardId = 0;    // card that has keyboard focus (0 = terminal)
   uint32_t _gcFrameCounter = 0;
   bool _bufferLayoutChanged = false;   // A buffer card entered or left
   bool _textureLayoutChanged = false;  // A texture card entered or left
@@ -4524,22 +4525,35 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
 
   if (event.type == base::Event::Type::SetFocus) {
     auto loop = *base::EventLoop::instance();
-    if (event.setFocus.objectId == _id) {
-      // This GPUScreen is being focused
+
+    // Check if focus target is one of our cards
+    bool isOurCard = false;
+    for (const auto& [slot, card] : _cards) {
+      if (card->id() == event.setFocus.objectId) {
+        isOurCard = true;
+        break;
+      }
+    }
+
+    if (event.setFocus.objectId == _id || isOurCard) {
+      // This GPUScreen or one of its cards is being focused
+      _focusedCardId = isOurCard ? event.setFocus.objectId : 0;
       if (!_focused) {
         _focused = true;
-        // Register for keyboard events
         loop->registerListener(base::Event::Type::Char,
                                sharedAs<base::EventListener>());
         loop->registerListener(base::Event::Type::KeyDown,
                                sharedAs<base::EventListener>());
-        yinfo("GPUScreen {} gained focus, registered for keyboard events", _id);
+        yinfo("GPUScreen {} gained focus (card={}), registered for keyboard events",
+              _id, _focusedCardId);
+      } else if (isOurCard) {
+        yinfo("GPUScreen {} card {} gained focus", _id, _focusedCardId);
       }
     } else {
       // Another element is being focused, we lose focus
+      _focusedCardId = 0;
       if (_focused) {
         _focused = false;
-        // Deregister from keyboard events (but keep SetFocus registration)
         loop->deregisterListener(base::Event::Type::Char,
                                  sharedAs<base::EventListener>());
         loop->deregisterListener(base::Event::Type::KeyDown,
@@ -4644,13 +4658,35 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
       return Ok(true);
     }
 
-    // Normal mode: send keys to vterm
     // Clear selection on any keyboard input
     if (_hasSelection &&
         (event.type == base::Event::Type::Char || event.type == base::Event::Type::KeyDown)) {
       clearSelection();
     }
 
+    // If a card has focus, forward keyboard to it instead of vterm
+    if (_focusedCardId != 0) {
+      auto loop = *base::EventLoop::instance();
+      if (event.type == base::Event::Type::KeyDown) {
+        // Escape unfocuses the card
+        if (event.key.key == 256 /* GLFW_KEY_ESCAPE */) {
+          yinfo("GPUScreen {}: Escape pressed, unfocusing card {}", _id, _focusedCardId);
+          _focusedCardId = 0;
+          loop->dispatch(base::Event::focusEvent(_id));
+          return Ok(true);
+        }
+        ydebug("GPUScreen {}: forwarding KeyDown key={} mods={} to card {}", _id, event.key.key, event.key.mods, _focusedCardId);
+        loop->dispatch(base::Event::cardKeyDown(_focusedCardId, event.key.key, event.key.mods, event.key.scancode));
+        return Ok(true);
+      }
+      if (event.type == base::Event::Type::Char) {
+        ydebug("GPUScreen {}: forwarding Char cp={} to card {}", _id, event.chr.codepoint, _focusedCardId);
+        loop->dispatch(base::Event::cardCharInput(_focusedCardId, event.chr.codepoint, event.chr.mods));
+        return Ok(true);
+      }
+    }
+
+    // Normal mode: send keys to vterm
     if (event.type == base::Event::Type::Char) {
       ydebug("GPUScreen::onEvent: Char codepoint={} mods={}",
              event.chr.codepoint, event.chr.mods);
@@ -4711,7 +4747,15 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
     gcInactiveCards();
   }
 
-  // Loop 1+2: Buffer cards — only when a buffer card entered or left
+  // Ask cards if they need reallocation (independent of enter/leave)
+  for (auto& [slotIndex, card] : _cards) {
+    if (card->needsBuffer() && card->needsBufferRealloc())
+      _bufferLayoutChanged = true;
+    if (card->needsTexture() && card->needsTextureRealloc())
+      _textureLayoutChanged = true;
+  }
+
+  // Loop 1+2: Buffer cards — when layout changed or a card requested realloc
   if (_bufferLayoutChanged && _cardManager) {
     ydebug("GPUScreen::render: _bufferLayoutChanged=true, {} active cards", _cards.size());
 

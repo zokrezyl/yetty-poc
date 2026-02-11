@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../../ydraw/ydraw-base.h"
+#include <yetty/card.h>
+#include <yetty/yetty-context.h>
 #include <string>
 #include <vector>
 
@@ -27,14 +28,17 @@ struct ParsedLine {
 };
 
 //=============================================================================
-// Markdown - SDF card that renders markdown content using YDrawBase
+// Markdown - SDF card that renders markdown content via YDrawBuilder
 //
 // Parses markdown text and generates addText() / addBox() calls for
 // headers, bold, italic, code, bullet lists.
+// Implementation (GPU buffers, parsing) is in MarkdownImpl.
 //=============================================================================
-class Markdown : public yetty::YDrawBase {
+class Markdown : public Card {
 public:
     using Ptr = std::shared_ptr<Markdown>;
+
+    static constexpr uint32_t SHADER_GLYPH = 0x100003;
 
     static Result<CardPtr> create(
         const YettyContext& ctx,
@@ -44,33 +48,11 @@ public:
         const std::string& payload);
 
     ~Markdown() override = default;
-
     const char* typeName() const override { return "markdown"; }
+    bool needsBuffer() const override { return true; }
 
-    // Constructor is public for make_shared, use create() factory instead
-    Markdown(const YettyContext& ctx,
-             int32_t x, int32_t y,
-             uint32_t widthCells, uint32_t heightCells,
-             const std::string& args, const std::string& payload);
-
-private:
-    Result<void> init();
-
-    void parseArgs(const std::string& args);
-    void parseMarkdown(const std::string& content);
-    void generatePrimitives();
-
-    std::string _argsStr;
-    std::string _payloadStr;
-    std::vector<ParsedLine> _parsedLines;
-
-    float _fontSize = 14.0f;
-    float _lineSpacing = 1.4f;
-    uint32_t _textColor = 0xFFE6E6E6;      // Light gray (ABGR)
-    uint32_t _boldColor = 0xFFFFFFFF;       // White
-    uint32_t _codeColor = 0xFF66CC99;       // Green
-    uint32_t _headerColor = 0xFFFFFFFF;     // White
-    uint32_t _codeBgColor = 0xFF3D3D3D;     // Dark gray background
+protected:
+    using Card::Card;
 };
 
 } // namespace yetty::card

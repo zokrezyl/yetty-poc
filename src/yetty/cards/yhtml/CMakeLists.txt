@@ -13,8 +13,8 @@ CPMAddPackage(
 # that pull in system libraries curl can't cleanly export.
 # These must be set before CPMAddPackage(cpr) because cpr adds curl as
 # a subdirectory — CPM OPTIONS only apply to the direct package.
-#
-# NOTE: We disable SSL and ZLIB to avoid dependency mess.
+find_package(OpenSSL REQUIRED)
+
 # Save and restore ZLIB state to hide our zlib from curl.
 set(_SAVE_ZLIB_FOUND ${ZLIB_FOUND})
 set(_SAVE_ZLIB_LIBRARY ${ZLIB_LIBRARY})
@@ -25,7 +25,6 @@ set(CURL_ZLIB OFF CACHE BOOL "" FORCE)
 set(CURL_USE_LIBPSL OFF CACHE BOOL "" FORCE)
 set(CURL_BROTLI OFF CACHE BOOL "" FORCE)
 set(CURL_ZSTD OFF CACHE BOOL "" FORCE)
-set(CURL_USE_OPENSSL OFF CACHE BOOL "" FORCE)
 set(CURL_USE_LIBSSH2 OFF CACHE BOOL "" FORCE)
 
 CPMAddPackage(
@@ -36,7 +35,7 @@ CPMAddPackage(
         "CPR_USE_SYSTEM_CURL OFF"
         "CPR_CURL_USE_LIBPSL OFF"
         "BUILD_SHARED_LIBS OFF"
-        "CPR_ENABLE_SSL OFF"
+        "CPR_ENABLE_SSL ON"
         "CPR_BUILD_TESTS OFF"
         "CPR_BUILD_TESTS_SSL OFF"
 )

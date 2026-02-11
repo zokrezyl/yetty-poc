@@ -46,7 +46,11 @@ public:
     // Lifecycle
     //=========================================================================
 
-    // 3-loop lifecycle (gpu-screen drives these when cards enter/leave):
+    // Called every frame before allocation loops. Returns true if the card's
+    // resource needs have changed and the corresponding allocation loop must re-run.
+    virtual bool needsBufferRealloc() { return false; }
+    virtual bool needsTextureRealloc() { return false; }
+
     // Loop 1: Buffer cards declare their total buffer needs via reserve()
     virtual void declareBufferNeeds() {}
     // Loop 2: Cards allocate/re-register their resources

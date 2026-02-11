@@ -1,15 +1,17 @@
 #include "yhtml.h"
 #include "html-container.h"
 #include "http-fetcher.h"
-#include <litehtml.h>
+#include "../../ydraw/ydraw-builder.h"
+#include "../hdraw/hdraw.h"  // For SDFPrimitive
 #include <yetty/base/event-loop.h>
+#include <yetty/msdf-glyph-data.h>
+#include <yetty/card-texture-manager.h>
 #include <ytrace/ytrace.hpp>
+#include <litehtml.h>
 #include <sstream>
 #include <fstream>
-#include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <filesystem>
 
 #ifdef YETTY_USE_FONTCONFIG
 #include <fontconfig/fontconfig.h>
@@ -68,26 +70,944 @@ std::string resolveFontPath(const char* family, int weight = 400, bool italic = 
 namespace yetty::card {
 
 //=============================================================================
-// Constructor / Destructor
+// YHtmlImpl - full implementation with builder, GPU buffers, litehtml
 //=============================================================================
 
-YHtml::YHtml(const YettyContext& ctx,
-             int32_t x, int32_t y,
-             uint32_t widthCells, uint32_t heightCells,
-             const std::string& args, const std::string& payload)
-    : Card(ctx.cardManager, ctx.gpu, x, y, widthCells, heightCells)
-    , _argsStr(args)
-    , _payloadStr(payload)
-    , _globalAllocator(ctx.globalAllocator)
-    , _cacheDir(ctx.fontManager ? ctx.fontManager->getCacheDir() : "/tmp")
-    , _cdbProvider(ctx.fontManager ? ctx.fontManager->getCdbProvider() : nullptr)
-{
-    _shaderGlyph = SHADER_GLYPH;
-}
+class YHtmlImpl : public YHtml {
+public:
+    YHtmlImpl(const YettyContext& ctx,
+              int32_t x, int32_t y,
+              uint32_t widthCells, uint32_t heightCells,
+              const std::string& args, const std::string& payload)
+        : YHtml(ctx.cardManager, ctx.gpu, x, y, widthCells, heightCells)
+        , _screenId(ctx.screenId)
+        , _argsStr(args)
+        , _payloadStr(payload)
+    {
+        _shaderGlyph = SHADER_GLYPH;
+        auto builderRes = YDrawBuilder::create(ctx.fontManager, ctx.globalAllocator);
+        if (builderRes) {
+            _builder = *builderRes;
+        } else {
+            yerror("YHtmlImpl: failed to create builder");
+        }
+    }
 
-YHtml::~YHtml() {
-    dispose();
-}
+    ~YHtmlImpl() override { dispose(); }
+
+    //=========================================================================
+    // Card lifecycle
+    //=========================================================================
+
+    bool needsBuffer() const override { return true; }
+
+    bool needsTexture() const override {
+        return _builder && _builder->hasCustomAtlas();
+    }
+
+    bool needsBufferRealloc() override {
+        if (_needsBufferRealloc) {
+            _needsBufferRealloc = false;
+            return true;
+        }
+        return false;
+    }
+
+    bool needsTextureRealloc() override {
+        if (_needsTextureRealloc) {
+            _needsTextureRealloc = false;
+            return true;
+        }
+        return false;
+    }
+
+    uint32_t metadataSlotIndex() const override {
+        return _metaHandle.offset / 64;
+    }
+
+    Result<void> dispose() override {
+        deregisterFromEvents();
+        _derivedStorage = StorageHandle::invalid();
+        _grid = nullptr;
+        _gridSize = 0;
+        _primStorage = StorageHandle::invalid();
+        _primitives = nullptr;
+        _primCount = 0;
+        _primCapacity = 0;
+        if (_metaHandle.isValid() && _cardMgr) {
+            if (auto res = _cardMgr->deallocateMetadata(_metaHandle); !res) {
+                yerror("YHtmlImpl::dispose: deallocateMetadata failed: {}", error_msg(res));
+            }
+            _metaHandle = MetadataHandle::invalid();
+        }
+        return Ok();
+    }
+
+    void suspend() override {
+        if (_primStorage.isValid() && _primCount > 0 && _builder) {
+            auto& staging = _builder->primStagingMut();
+            staging.resize(_primCount);
+            std::memcpy(staging.data(), _primitives, _primCount * sizeof(SDFPrimitive));
+        }
+        _derivedStorage = StorageHandle::invalid();
+        _grid = nullptr;
+        _gridSize = 0;
+        _primStorage = StorageHandle::invalid();
+        _primitives = nullptr;
+        _primCount = 0;
+        _primCapacity = 0;
+    }
+
+    void declareBufferNeeds() override {
+        if (!_builder) return;
+
+        // Save GPU prims back to builder staging before dealloc
+        if (_primStorage.isValid() && _primCount > 0) {
+            auto& staging = _builder->primStagingMut();
+            if (staging.empty()) {
+                staging.resize(_primCount);
+                std::memcpy(staging.data(), _primitives, _primCount * sizeof(SDFPrimitive));
+            } else {
+                std::vector<SDFPrimitive> merged(_primCount);
+                std::memcpy(merged.data(), _primitives, _primCount * sizeof(SDFPrimitive));
+                merged.insert(merged.end(), staging.begin(), staging.end());
+                staging = std::move(merged);
+            }
+        }
+        _derivedStorage = StorageHandle::invalid();
+        _grid = nullptr;
+        _gridSize = 0;
+        _primStorage = StorageHandle::invalid();
+        _primitives = nullptr;
+        _primCount = 0;
+        _primCapacity = 0;
+
+        const auto& primStaging = _builder->primStaging();
+        const auto& glyphs = _builder->glyphs();
+
+        if (primStaging.empty() && glyphs.empty()) {
+            _builder->clearGridStaging();
+            // Still need to reserve atlas space if atlas exists
+            if (_builder->hasCustomAtlas()) {
+                uint32_t atlasHeaderBytes = 4 * sizeof(uint32_t);
+                uint32_t glyphMetaBytes = static_cast<uint32_t>(
+                    _builder->customAtlas()->getGlyphMetadata().size() * sizeof(GlyphMetadataGPU));
+                uint32_t atlasSize = atlasHeaderBytes + glyphMetaBytes;
+                if (atlasSize > 0) {
+                    _cardMgr->bufferManager()->reserve(atlasSize);
+                }
+            }
+            return;
+        }
+
+        // Reserve prim storage
+        if (!primStaging.empty()) {
+            uint32_t primSize = static_cast<uint32_t>(primStaging.size()) * sizeof(SDFPrimitive);
+            _cardMgr->bufferManager()->reserve(primSize);
+        }
+
+        // Calculate grid if needed
+        if (_builder->gridStaging().empty()) {
+            _builder->calculate();
+        }
+
+        // Reserve derived size (grid + glyphs + optional atlas)
+        uint32_t gridBytes = static_cast<uint32_t>(_builder->gridStaging().size()) * sizeof(uint32_t);
+        uint32_t glyphBytes = static_cast<uint32_t>(glyphs.size() * sizeof(YDrawGlyph));
+        uint32_t derivedSize = gridBytes + glyphBytes;
+
+        if (_builder->hasCustomAtlas()) {
+            uint32_t atlasHeaderBytes = 4 * sizeof(uint32_t);
+            uint32_t glyphMetaBytes = static_cast<uint32_t>(
+                _builder->customAtlas()->getGlyphMetadata().size() * sizeof(GlyphMetadataGPU));
+            derivedSize += atlasHeaderBytes + glyphMetaBytes;
+        }
+
+        yinfo("YHtmlImpl::declareBufferNeeds: primStaging={} gridStaging={} glyphs={} derivedSize={} gridBytes={} glyphBytes={}",
+              primStaging.size(), _builder->gridStaging().size(), glyphs.size(),
+              derivedSize, gridBytes, glyphBytes);
+
+        if (derivedSize > 0) {
+            _cardMgr->bufferManager()->reserve(derivedSize);
+        }
+    }
+
+    Result<void> allocateBuffers() override {
+        if (!_builder) return Ok();
+
+        const auto& primStaging = _builder->primStaging();
+        const auto& gridStaging = _builder->gridStaging();
+        const auto& glyphs = _builder->glyphs();
+
+        // Restore primitives from staging
+        if (!primStaging.empty()) {
+            uint32_t count = static_cast<uint32_t>(primStaging.size());
+            uint32_t allocBytes = count * sizeof(SDFPrimitive);
+            auto primResult = _cardMgr->bufferManager()->allocateBuffer(
+                metadataSlotIndex(), "prims", allocBytes);
+            if (!primResult) {
+                return Err<void>("YHtmlImpl::allocateBuffers: prim alloc failed");
+            }
+            _primStorage = *primResult;
+            _primitives = reinterpret_cast<SDFPrimitive*>(_primStorage.data);
+            _primCapacity = count;
+            _primCount = count;
+            std::memcpy(_primitives, primStaging.data(), count * sizeof(SDFPrimitive));
+            _builder->primStagingMut().clear();
+            _builder->primStagingMut().shrink_to_fit();
+            _cardMgr->bufferManager()->markBufferDirty(_primStorage);
+        }
+
+        // Allocate derived storage (grid + glyphs + atlas)
+        uint32_t gridBytes = static_cast<uint32_t>(gridStaging.size()) * sizeof(uint32_t);
+        uint32_t glyphBytes = static_cast<uint32_t>(glyphs.size() * sizeof(YDrawGlyph));
+        uint32_t derivedSize = gridBytes + glyphBytes;
+
+        if (_builder->hasCustomAtlas()) {
+            uint32_t atlasHeaderBytes = 4 * sizeof(uint32_t);
+            uint32_t glyphMetaBytes = static_cast<uint32_t>(
+                _builder->customAtlas()->getGlyphMetadata().size() * sizeof(GlyphMetadataGPU));
+            derivedSize += atlasHeaderBytes + glyphMetaBytes;
+        }
+
+        yinfo("YHtmlImpl::allocateBuffers: gridStaging={} glyphs={} derivedSize={} gridBytes={} glyphBytes={}",
+              gridStaging.size(), glyphs.size(), derivedSize, gridBytes, glyphBytes);
+
+        if (derivedSize > 0) {
+            auto storageResult = _cardMgr->bufferManager()->allocateBuffer(
+                metadataSlotIndex(), "derived", derivedSize);
+            if (!storageResult) {
+                yerror("YHtmlImpl::allocateBuffers: derived alloc FAILED: derivedSize={}", derivedSize);
+                return Err<void>("YHtmlImpl::allocateBuffers: derived alloc failed");
+            }
+            _derivedStorage = *storageResult;
+
+            uint8_t* base = _derivedStorage.data;
+            uint32_t offset = 0;
+
+            // Copy grid
+            _grid = reinterpret_cast<uint32_t*>(base + offset);
+            _gridSize = static_cast<uint32_t>(gridStaging.size());
+            _gridOffset = (_derivedStorage.offset + offset) / sizeof(float);
+            if (!gridStaging.empty()) {
+                std::memcpy(base + offset, gridStaging.data(), gridBytes);
+            }
+            offset += gridBytes;
+
+            // Copy glyphs
+            _glyphOffset = (_derivedStorage.offset + offset) / sizeof(float);
+            if (!glyphs.empty()) {
+                std::memcpy(base + offset, glyphs.data(), glyphBytes);
+            }
+            offset += glyphBytes;
+
+            if (_builder->hasCustomAtlas()) {
+                _atlasHeaderOffset = offset;
+            }
+
+            _cardMgr->bufferManager()->markBufferDirty(_derivedStorage);
+        }
+
+        _primitiveOffset = _primStorage.isValid() ? _primStorage.offset / sizeof(float) : 0;
+        _gridWidth = _builder->gridWidth();
+        _gridHeight = _builder->gridHeight();
+        _metadataDirty = true;
+        _dirty = false;
+
+        return Ok();
+    }
+
+    Result<void> allocateTextures() override {
+        if (!_builder || !_builder->hasCustomAtlas()) return Ok();
+
+        auto atlas = _builder->customAtlas();
+        uint32_t atlasW = atlas->getAtlasWidth();
+        uint32_t atlasH = atlas->getAtlasHeight();
+        const auto& atlasData = atlas->getAtlasData();
+
+        if (atlasData.empty() || atlasW == 0 || atlasH == 0) return Ok();
+
+        auto allocResult = _cardMgr->textureManager()->allocate(atlasW, atlasH);
+        if (!allocResult) {
+            return Err<void>("YHtmlImpl::allocateTextures: failed", allocResult);
+        }
+        _atlasTextureHandle = *allocResult;
+        _dirty = true;
+        return Ok();
+    }
+
+    Result<void> writeTextures() override {
+        if (_atlasTextureHandle.isValid() && _builder && _builder->hasCustomAtlas()) {
+            const auto& atlasData = _builder->customAtlas()->getAtlasData();
+            if (!atlasData.empty()) {
+                if (auto res = _cardMgr->textureManager()->write(
+                        _atlasTextureHandle, atlasData.data()); !res) {
+                    return Err<void>("YHtmlImpl::writeTextures: write failed", res);
+                }
+            }
+        }
+        return Ok();
+    }
+
+    Result<void> render(float /*time*/) override {
+        if (!_builder) return Ok();
+
+        // Process deferred navigation (avoid re-entrancy in litehtml callbacks)
+        if (!_pendingNavigateUrl.empty()) {
+            std::string url = std::move(_pendingNavigateUrl);
+            _pendingNavigateUrl.clear();
+            navigateTo(url);
+            // needsBufferRealloc/needsTextureRealloc will return true next frame
+            return Ok();
+        }
+
+        if (_dirty) {
+            if (auto res = rebuildAndUpload(); !res) return res;
+            _dirty = false;
+        }
+
+        if (_metadataDirty) {
+            if (auto res = uploadMetadata(); !res) return res;
+            _metadataDirty = false;
+        }
+
+        return Ok();
+    }
+
+    //=========================================================================
+    // Events - zoom/pan
+    //=========================================================================
+
+    Result<bool> onEvent(const base::Event& event) override {
+        if (event.type == base::Event::Type::SetFocus) {
+            if (event.setFocus.objectId == id()) {
+                _focused = true;
+            } else if (_focused) {
+                _focused = false;
+            }
+            // Don't consume — GPUScreen needs SetFocus to track _focusedCardId
+            return Ok(false);
+        }
+
+        // Mouse events → litehtml
+        if ((event.type == base::Event::Type::CardMouseDown ||
+             event.type == base::Event::Type::CardMouseUp ||
+             event.type == base::Event::Type::CardMouseMove) &&
+            event.cardMouse.targetId == id() && _document) {
+            int docX, docY;
+            cardPixelToDocCoords(event.cardMouse.x, event.cardMouse.y, docX, docY);
+
+            litehtml::position::vector redrawBoxes;
+            if (event.type == base::Event::Type::CardMouseMove) {
+                _document->on_mouse_over(docX, docY, docX, docY, redrawBoxes);
+            } else if (event.type == base::Event::Type::CardMouseDown && event.cardMouse.button == 0) {
+                _document->on_lbutton_down(docX, docY, docX, docY, redrawBoxes);
+            } else if (event.type == base::Event::Type::CardMouseUp && event.cardMouse.button == 0) {
+                _document->on_lbutton_up(docX, docY, docX, docY, redrawBoxes);
+            }
+
+            if (!redrawBoxes.empty()) {
+                yinfo("YHtmlImpl: mouse event at doc({},{}) triggered redraw ({} boxes)",
+                      docX, docY, redrawBoxes.size());
+                redrawHtml();
+            }
+            return Ok(true);
+        }
+
+        // Keyboard events
+        if (event.type == base::Event::Type::CardKeyDown &&
+            event.cardKey.targetId == id()) {
+            return handleCardKey(event.cardKey.key, event.cardKey.mods);
+        }
+        if (event.type == base::Event::Type::CardChar &&
+            event.cardChar.targetId == id()) {
+            return handleCardChar(event.cardChar.codepoint, event.cardChar.mods);
+        }
+
+        if (event.type == base::Event::Type::CardScroll &&
+            event.cardScroll.targetId == id()) {
+            float sceneW = _builder->sceneMaxX() - _builder->sceneMinX();
+            float sceneH = _builder->sceneMaxY() - _builder->sceneMinY();
+
+            if (event.cardScroll.mods & GLFW_MOD_CONTROL) {
+                float zoomDelta = event.cardScroll.dy * 0.1f;
+                float newZoom = std::clamp(_viewZoom + zoomDelta, 0.1f, 20.0f);
+                if (newZoom != _viewZoom) {
+                    _viewZoom = newZoom;
+                    _metadataDirty = true;
+                }
+                return Ok(true);
+            } else if (event.cardScroll.mods & GLFW_MOD_SHIFT) {
+                _viewPanX += event.cardScroll.dy * 0.05f * sceneW / _viewZoom;
+                _metadataDirty = true;
+                return Ok(true);
+            } else {
+                _viewPanY += event.cardScroll.dy * 0.05f * sceneH / _viewZoom;
+                _metadataDirty = true;
+                return Ok(true);
+            }
+        }
+
+        return Ok(false);
+    }
+
+    //=========================================================================
+    // Init
+    //=========================================================================
+
+    Result<void> init() {
+        auto metaResult = _cardMgr->allocateMetadata(sizeof(YDrawMetadata));
+        if (!metaResult) {
+            return Err<void>("YHtmlImpl::init: failed to allocate metadata");
+        }
+        _metaHandle = *metaResult;
+
+        if (auto res = registerForEvents(); !res) {
+            ywarn("YHtmlImpl::init: event registration failed: {}", error_msg(res));
+        }
+
+        // White background for HTML
+        _builder->setBgColor(0xFFFFFFFF);
+
+        // Load default sans-serif font (creates custom atlas via builder)
+        std::string defaultFontPath = "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf";
+        auto fontResult = _builder->addFont(defaultFontPath);
+        if (!fontResult) {
+            return Err<void>("YHtmlImpl::init: failed to load default sans-serif font");
+        }
+        yinfo("YHtmlImpl::init: loaded default sans-serif font: {} -> fontId={}", defaultFontPath, *fontResult);
+
+        // Create HTTP fetcher
+        auto fetcherResult = HttpFetcher::create();
+        if (!fetcherResult) {
+            return Err<void>("YHtmlImpl: failed to create HttpFetcher");
+        }
+        _fetcher = std::move(*fetcherResult);
+
+        parseArgs(_argsStr);
+
+        // Load HTML content
+        if (auto res = loadContent(); !res) {
+            ywarn("YHtmlImpl::init: failed to load content: {}", error_msg(res));
+        }
+
+        // Render HTML immediately
+        if (!_htmlContent.empty()) {
+            if (auto res = renderHtml(); !res) {
+                ywarn("YHtmlImpl::init: render failed: {}", error_msg(res));
+            }
+        }
+
+        yinfo("YHtmlImpl::init: {} prims, {} glyphs",
+              _builder->primitiveCount(), _builder->glyphCount());
+
+        _dirty = true;
+        _metadataDirty = true;
+        return Ok();
+    }
+
+private:
+    //=========================================================================
+    // GPU rebuild
+    //=========================================================================
+
+    Result<void> rebuildAndUpload() {
+        _builder->computeSceneBoundsFromPrims(_primitives, _primCount);
+
+        _builder->computeGridDims(_primitives, _primCount);
+        _builder->buildGridFromPrims(_primitives, _primCount);
+
+        const auto& gridData = _builder->gridStaging();
+        uint32_t gridBytes = static_cast<uint32_t>(gridData.size()) * sizeof(uint32_t);
+        uint32_t glyphBytes = static_cast<uint32_t>(
+            _builder->glyphs().size() * sizeof(YDrawGlyph));
+        uint32_t derivedTotalSize = gridBytes + glyphBytes;
+
+        if (_builder->hasCustomAtlas()) {
+            uint32_t atlasHeaderBytes = 4 * sizeof(uint32_t);
+            uint32_t glyphMetaBytes = static_cast<uint32_t>(
+                _builder->customAtlas()->getGlyphMetadata().size() * sizeof(GlyphMetadataGPU));
+            derivedTotalSize += atlasHeaderBytes + glyphMetaBytes;
+        }
+
+        if (derivedTotalSize > 0) {
+            if (!_derivedStorage.isValid() || derivedTotalSize > _derivedStorage.size) {
+                auto storageResult = _cardMgr->bufferManager()->allocateBuffer(
+                    metadataSlotIndex(), "derived", derivedTotalSize);
+                if (!storageResult) {
+                    return Err<void>("YHtmlImpl::rebuild: derived alloc failed");
+                }
+                _derivedStorage = *storageResult;
+            }
+        }
+
+        if (_derivedStorage.isValid() && derivedTotalSize > 0) {
+            uint8_t* base = _derivedStorage.data;
+            std::memset(base, 0, _derivedStorage.size);
+            uint32_t offset = 0;
+
+            _grid = reinterpret_cast<uint32_t*>(base + offset);
+            _gridSize = static_cast<uint32_t>(gridData.size());
+            _gridWidth = _builder->gridWidth();
+            _gridHeight = _builder->gridHeight();
+            _gridOffset = (_derivedStorage.offset + offset) / sizeof(float);
+            std::memcpy(base + offset, gridData.data(), gridBytes);
+            offset += gridBytes;
+
+            _glyphOffset = (_derivedStorage.offset + offset) / sizeof(float);
+            const auto& glyphs = _builder->glyphs();
+            if (!glyphs.empty()) {
+                std::memcpy(base + offset, glyphs.data(), glyphBytes);
+            }
+            offset += glyphBytes;
+
+            if (_builder->hasCustomAtlas() && _atlasTextureHandle.isValid()) {
+                auto atlas = _builder->customAtlas();
+                auto atlasPos = _cardMgr->textureManager()->getAtlasPosition(_atlasTextureHandle);
+                uint32_t msdfAtlasW = atlas->getAtlasWidth();
+                uint32_t msdfAtlasH = atlas->getAtlasHeight();
+                const auto& glyphMeta = atlas->getGlyphMetadata();
+
+                uint32_t atlasHeader[4] = {
+                    (atlasPos.x & 0xFFFF) | ((msdfAtlasW & 0xFFFF) << 16),
+                    (atlasPos.y & 0xFFFF) | ((msdfAtlasH & 0xFFFF) << 16),
+                    static_cast<uint32_t>(glyphMeta.size()),
+                    0
+                };
+                std::memcpy(base + offset, atlasHeader, sizeof(atlasHeader));
+                offset += sizeof(atlasHeader);
+
+                if (!glyphMeta.empty()) {
+                    uint32_t metaBytes = static_cast<uint32_t>(
+                        glyphMeta.size() * sizeof(GlyphMetadataGPU));
+                    std::memcpy(base + offset, glyphMeta.data(), metaBytes);
+                }
+            }
+
+            _cardMgr->bufferManager()->markBufferDirty(_derivedStorage);
+        }
+
+        _primitiveOffset = _primStorage.isValid() ? _primStorage.offset / sizeof(float) : 0;
+        if (_primStorage.isValid()) {
+            _cardMgr->bufferManager()->markBufferDirty(_primStorage);
+        }
+        _metadataDirty = true;
+        return Ok();
+    }
+
+    Result<void> uploadMetadata() {
+        if (!_metaHandle.isValid()) {
+            return Err<void>("YHtmlImpl::uploadMetadata: invalid handle");
+        }
+
+        // Pack zoom as f16 in upper 16 bits of flags
+        uint32_t zoomBits;
+        {
+            uint32_t f32bits;
+            std::memcpy(&f32bits, &_viewZoom, sizeof(float));
+            uint32_t sign = (f32bits >> 16) & 0x8000;
+            int32_t  exp  = ((f32bits >> 23) & 0xFF) - 127 + 15;
+            uint32_t mant = (f32bits >> 13) & 0x3FF;
+            if (exp <= 0) { exp = 0; mant = 0; }
+            else if (exp >= 31) { exp = 31; mant = 0; }
+            zoomBits = sign | (static_cast<uint32_t>(exp) << 10) | mant;
+        }
+
+        float sceneMinX = _builder->sceneMinX();
+        float sceneMinY = _builder->sceneMinY();
+        float sceneMaxX = _builder->sceneMaxX();
+        float sceneMaxY = _builder->sceneMaxY();
+        float contentW = sceneMaxX - sceneMinX;
+        float contentH = sceneMaxY - sceneMinY;
+
+        int16_t panXi16 = static_cast<int16_t>(std::clamp(
+            _viewPanX / std::max(contentW, 1e-6f) * 16384.0f, -32768.0f, 32767.0f));
+        int16_t panYi16 = static_cast<int16_t>(std::clamp(
+            _viewPanY / std::max(contentH, 1e-6f) * 16384.0f, -32768.0f, 32767.0f));
+
+        float cellSize = _builder->cellSize();
+
+        YDrawMetadata meta = {};
+        meta.primitiveOffset = _primitiveOffset;
+        meta.primitiveCount = _primCount;
+        meta.gridOffset = _gridOffset;
+        meta.gridWidth = _gridWidth;
+        meta.gridHeight = _gridHeight;
+        std::memcpy(&meta.cellSize, &cellSize, sizeof(float));
+        meta.glyphOffset = _glyphOffset;
+        meta.glyphCount = static_cast<uint32_t>(_builder->glyphs().size());
+        std::memcpy(&meta.sceneMinX, &sceneMinX, sizeof(float));
+        std::memcpy(&meta.sceneMinY, &sceneMinY, sizeof(float));
+        std::memcpy(&meta.sceneMaxX, &sceneMaxX, sizeof(float));
+        std::memcpy(&meta.sceneMaxY, &sceneMaxY, sizeof(float));
+        meta.widthCells  = (_widthCells & 0xFFFF) |
+                           (static_cast<uint32_t>(static_cast<uint16_t>(panXi16)) << 16);
+        meta.heightCells = (_heightCells & 0xFFFF) |
+                           (static_cast<uint32_t>(static_cast<uint16_t>(panYi16)) << 16);
+        meta.flags = (_builder->flags() & 0xFFFF) | (zoomBits << 16);
+        meta.bgColor = _builder->bgColor();
+
+        if (auto res = _cardMgr->writeMetadata(_metaHandle, &meta, sizeof(meta)); !res) {
+            return Err<void>("YHtmlImpl::uploadMetadata: write failed");
+        }
+        return Ok();
+    }
+
+    //=========================================================================
+    // Events
+    //=========================================================================
+
+    Result<void> registerForEvents() {
+        auto loopResult = base::EventLoop::instance();
+        if (!loopResult) return Err<void>("no EventLoop", loopResult);
+        auto loop = *loopResult;
+        auto self = sharedAs<base::EventListener>();
+        if (auto res = loop->registerListener(base::Event::Type::SetFocus, self, 1000); !res) return res;
+        if (auto res = loop->registerListener(base::Event::Type::CardScroll, self, 1000); !res) return res;
+        if (auto res = loop->registerListener(base::Event::Type::CardMouseDown, self, 1000); !res) return res;
+        if (auto res = loop->registerListener(base::Event::Type::CardMouseUp, self, 1000); !res) return res;
+        if (auto res = loop->registerListener(base::Event::Type::CardMouseMove, self, 1000); !res) return res;
+        if (auto res = loop->registerListener(base::Event::Type::CardKeyDown, self, 1000); !res) return res;
+        if (auto res = loop->registerListener(base::Event::Type::CardChar, self, 1000); !res) return res;
+        return Ok();
+    }
+
+    Result<void> deregisterFromEvents() {
+        if (weak_from_this().expired()) return Ok();
+        auto loopResult = base::EventLoop::instance();
+        if (!loopResult) return Ok();
+        (*loopResult)->deregisterListener(sharedAs<base::EventListener>());
+        return Ok();
+    }
+
+    //=========================================================================
+    // Input helpers
+    //=========================================================================
+
+    void setCellSize(uint32_t cellWidth, uint32_t cellHeight) override {
+        _cellWidth = cellWidth;
+        _cellHeight = cellHeight;
+    }
+
+    void cardPixelToDocCoords(float cardX, float cardY, int& docX, int& docY) {
+        // Card pixel dimensions from actual cell size
+        float cardPixelW = static_cast<float>(_widthCells * _cellWidth);
+        float cardPixelH = static_cast<float>(_heightCells * _cellHeight);
+
+        float contentMinX = _builder->sceneMinX();
+        float contentMinY = _builder->sceneMinY();
+        float contentW = _builder->sceneMaxX() - contentMinX;
+        float contentH = _builder->sceneMaxY() - contentMinY;
+
+        // Match shader's view computation exactly
+        float centerX = contentMinX + contentW * 0.5f;
+        float centerY = contentMinY + contentH * 0.5f;
+        float viewHalfW = contentW * 0.5f / _viewZoom;
+        float viewHalfH = contentH * 0.5f / _viewZoom;
+        float viewMinX = centerX - viewHalfW + _viewPanX;
+        float viewMinY = centerY - viewHalfH + _viewPanY;
+        float viewW = contentW / _viewZoom;
+        float viewH = contentH / _viewZoom;
+
+        // Match shader's uniform scaling (aspect ratio correction)
+        float cardAspect = cardPixelW / std::max(cardPixelH, 1.0f);
+        float viewAspect = viewW / std::max(viewH, 1e-6f);
+
+        float uvX = cardX / cardPixelW;
+        float uvY = cardY / cardPixelH;
+
+        float sceneX, sceneY;
+        if (viewAspect < cardAspect) {
+            // Tall view: fits height, horizontal padding
+            float visibleW = viewH * cardAspect;
+            float offsetX = (visibleW - viewW) * 0.5f;
+            sceneX = viewMinX - offsetX + uvX * visibleW;
+            sceneY = viewMinY + uvY * viewH;
+        } else {
+            // Wide view: fits width, vertical padding
+            float visibleH = viewW / cardAspect;
+            float offsetY = (visibleH - viewH) * 0.5f;
+            sceneX = viewMinX + uvX * viewW;
+            sceneY = viewMinY - offsetY + uvY * visibleH;
+        }
+
+        docX = static_cast<int>(sceneX);
+        docY = static_cast<int>(sceneY);
+    }
+
+    void redrawHtml() {
+        if (!_document || !_builder) return;
+
+        // Clear builder content and re-render
+        _builder->clear();
+        int viewW = static_cast<int>(_viewWidth);
+        int docHeight = _document->height();
+        litehtml::position clip(0, 0, viewW, docHeight);
+        _document->draw(0, 0, 0, &clip);
+
+        _dirty = true;
+        _metadataDirty = true;
+    }
+
+    void navigateTo(const std::string& url) {
+        if (!_fetcher) return;
+
+        // Resolve relative URLs against current base
+        std::string resolvedUrl = _fetcher->resolveUrl(url);
+        yinfo("YHtmlImpl::navigateTo: {} -> {}", url, resolvedUrl);
+
+        // Fetch the new page
+        _fetcher->setBaseUrl(resolvedUrl);
+        auto body = _fetcher->fetch(resolvedUrl);
+        if (!body) {
+            ywarn("YHtmlImpl::navigateTo: failed to fetch {}", resolvedUrl);
+            return;
+        }
+
+        // Reset view state
+        _viewZoom = 1.0f;
+        _viewPanX = 0.0f;
+        _viewPanY = 0.0f;
+
+        // Destroy old document before old container (document holds raw ptr to container)
+        _document.reset();
+        _container.reset();
+
+        // Re-render with new content
+        _htmlContent = std::move(*body);
+        _builder->clear();
+
+        if (auto res = renderHtml(); !res) {
+            ywarn("YHtmlImpl::navigateTo: render failed: {}", error_msg(res));
+            return;
+        }
+
+        _dirty = true;
+        _metadataDirty = true;
+        _needsBufferRealloc = true;
+        _needsTextureRealloc = true;
+        yinfo("YHtmlImpl::navigateTo: rendered {} prims, {} glyphs",
+              _builder->primitiveCount(), _builder->glyphCount());
+    }
+
+    Result<bool> handleCardKey(int key, int mods) {
+        constexpr int GLFW_KEY_UP = 265;
+        constexpr int GLFW_KEY_DOWN = 264;
+        constexpr int GLFW_KEY_LEFT = 263;
+        constexpr int GLFW_KEY_RIGHT = 262;
+
+        float sceneW = _builder->sceneMaxX() - _builder->sceneMinX();
+        float sceneH = _builder->sceneMaxY() - _builder->sceneMinY();
+        float scrollStep = 0.05f;
+
+        if (key == GLFW_KEY_UP) {
+            _viewPanY -= scrollStep * sceneH / _viewZoom;
+            _metadataDirty = true;
+            return Ok(true);
+        } else if (key == GLFW_KEY_DOWN) {
+            _viewPanY += scrollStep * sceneH / _viewZoom;
+            _metadataDirty = true;
+            return Ok(true);
+        } else if (key == GLFW_KEY_LEFT) {
+            _viewPanX -= scrollStep * sceneW / _viewZoom;
+            _metadataDirty = true;
+            return Ok(true);
+        } else if (key == GLFW_KEY_RIGHT) {
+            _viewPanX += scrollStep * sceneW / _viewZoom;
+            _metadataDirty = true;
+            return Ok(true);
+        }
+        return Ok(false);
+    }
+
+    Result<bool> handleCardChar(uint32_t /*codepoint*/, int /*mods*/) {
+        // Future: text input for form fields
+        return Ok(false);
+    }
+
+    //=========================================================================
+    // Args parsing
+    //=========================================================================
+
+    void parseArgs(const std::string& args) {
+        if (args.empty()) return;
+
+        std::istringstream iss(args);
+        std::string token;
+
+        while (iss >> token) {
+            if (token == "-i" || token == "--input") {
+                std::string val;
+                if (iss >> val) _inputSource = val;
+            } else if (token == "--font-size") {
+                float val;
+                if (iss >> val) _fontSize = val;
+            } else if (token == "--bg-color") {
+                std::string colorStr;
+                if (iss >> colorStr) {
+                    if (colorStr.size() > 2 &&
+                        (colorStr.substr(0, 2) == "0x" ||
+                         colorStr.substr(0, 2) == "0X")) {
+                        colorStr = colorStr.substr(2);
+                    }
+                    _builder->setBgColor(static_cast<uint32_t>(
+                        std::stoul(colorStr, nullptr, 16)));
+                }
+            }
+        }
+    }
+
+    //=========================================================================
+    // Content loading
+    //=========================================================================
+
+    Result<void> loadContent() {
+        if (_inputSource == "-" || _inputSource.empty()) {
+            // "-" means payload, empty also falls back to payload
+            if (_payloadStr.empty()) {
+                return Err<void>("YHtmlImpl::loadContent: no payload");
+            }
+            yinfo("YHtmlImpl::loadContent: using payload ({} bytes)", _payloadStr.size());
+            _htmlContent = _payloadStr;
+        } else if (HttpFetcher::isUrl(_inputSource)) {
+            _fetcher->setBaseUrl(_inputSource);
+            yinfo("YHtmlImpl::loadContent: fetching URL: {}", _inputSource);
+            auto body = _fetcher->fetch(_inputSource);
+            if (!body) {
+                return Err<void>("YHtmlImpl::loadContent: failed to fetch URL");
+            }
+            _htmlContent = std::move(*body);
+        } else {
+            yinfo("YHtmlImpl::loadContent: reading file: {}", _inputSource);
+            std::ifstream file(_inputSource);
+            if (!file) {
+                return Err<void>("YHtmlImpl::loadContent: failed to open file");
+            }
+            std::stringstream buffer;
+            buffer << file.rdbuf();
+            _htmlContent = buffer.str();
+        }
+
+        if (_htmlContent.empty()) {
+            return Err<void>("YHtmlImpl::loadContent: empty content");
+        }
+
+        yinfo("YHtmlImpl::loadContent: {} bytes", _htmlContent.size());
+        return Ok();
+    }
+
+    //=========================================================================
+    // HTML rendering via litehtml
+    //=========================================================================
+
+    Result<void> renderHtml() {
+        if (_htmlContent.empty()) {
+            return Err<void>("YHtmlImpl::renderHtml: no content loaded");
+        }
+
+        // Create container that targets the builder
+        auto containerResult = HtmlContainer::create(
+            _builder.get(), nullptr, _fontSize, _fetcher.get());
+        if (!containerResult) {
+            return Err<void>("YHtmlImpl::renderHtml: failed to create HtmlContainer");
+        }
+        _container = std::move(*containerResult);
+
+        // Wire up navigation callback for link clicks (deferred to avoid re-entrancy)
+        _container->setNavigateCallback([this](const std::string& url) {
+            _pendingNavigateUrl = url;
+        });
+
+        // Wire up cursor callback for hover feedback
+        _container->setCursorCallback([this](const std::string& cursor) {
+            auto loop = base::EventLoop::instance();
+            if (!loop) return;
+            // "pointer" = hand cursor over links, "" = default
+            int shape = 0;  // default arrow
+            if (cursor == "pointer") {
+                shape = 0x00036004;  // GLFW_POINTING_HAND_CURSOR
+            }
+            (*loop)->dispatch(base::Event::setCursorEvent(shape));
+        });
+
+        int viewW = static_cast<int>(_viewWidth);
+        int viewH = static_cast<int>(_viewWidth * 1.5f);
+        _container->setViewportSize(viewW, viewH);
+
+        _document = litehtml::document::createFromString(
+            _htmlContent.c_str(), _container.get());
+
+        if (!_document) {
+            return Err<void>("YHtmlImpl::renderHtml: failed to parse HTML");
+        }
+
+        _document->render(viewW);
+
+        int docHeight = _document->height();
+        _container->setViewportSize(viewW, docHeight);
+
+        yinfo("YHtmlImpl::renderHtml: BEFORE draw: viewW={} docHeight={} prims={} glyphs={}",
+              viewW, docHeight, _builder->primitiveCount(), _builder->glyphCount());
+
+        litehtml::position clip(0, 0, viewW, docHeight);
+        _document->draw(0, 0, 0, &clip);
+
+        yinfo("YHtmlImpl::renderHtml: AFTER draw: prims={} glyphs={}",
+              _builder->primitiveCount(), _builder->glyphCount());
+
+        return Ok();
+    }
+
+    //=========================================================================
+    // Members
+    //=========================================================================
+
+    // Builder
+    YDrawBuilder::Ptr _builder;
+    base::ObjectId _screenId = 0;
+    std::string _argsStr;
+    std::string _payloadStr;
+
+    // GPU state
+    StorageHandle _primStorage = StorageHandle::invalid();
+    SDFPrimitive* _primitives = nullptr;
+    uint32_t _primCount = 0;
+    uint32_t _primCapacity = 0;
+    StorageHandle _derivedStorage = StorageHandle::invalid();
+    uint32_t* _grid = nullptr;
+    uint32_t _gridSize = 0;
+    uint32_t _primitiveOffset = 0;
+    uint32_t _gridOffset = 0;
+    uint32_t _glyphOffset = 0;
+    uint32_t _gridWidth = 0;
+    uint32_t _gridHeight = 0;
+    TextureHandle _atlasTextureHandle = TextureHandle::invalid();
+    uint32_t _atlasHeaderOffset = 0;
+    bool _dirty = true;
+    bool _metadataDirty = true;
+    bool _needsBufferRealloc = false;
+    bool _needsTextureRealloc = false;
+
+    // View zoom/pan
+    float _viewZoom = 1.0f;
+    float _viewPanX = 0.0f;
+    float _viewPanY = 0.0f;
+    bool _focused = false;
+    uint32_t _cellWidth = 9;
+    uint32_t _cellHeight = 20;
+
+    // HTTP client
+    std::shared_ptr<HttpFetcher> _fetcher;
+
+    // HTML state
+    std::string _htmlContent;
+    std::string _inputSource;
+    std::string _pendingNavigateUrl;
+    std::shared_ptr<HtmlContainer> _container;
+    std::shared_ptr<litehtml::document> _document;
+    float _fontSize = 16.0f;
+    float _viewWidth = 600.0f;
+};
 
 //=============================================================================
 // Factory
@@ -103,8 +1023,8 @@ Result<YHtml::Ptr> YHtml::createImpl(
     yinfo("YHtml::create: pos=({},{}) size={}x{} payload_len={}",
           x, y, widthCells, heightCells, payload.size());
 
-    auto card = std::make_shared<YHtml>(ctx, x, y, widthCells, heightCells,
-                                         args, payload);
+    auto card = std::make_shared<YHtmlImpl>(ctx, x, y, widthCells, heightCells,
+                                             args, payload);
 
     if (auto res = card->init(); !res) {
         yerror("YHtml::create: init FAILED: {}", error_msg(res));
@@ -113,987 +1033,6 @@ Result<YHtml::Ptr> YHtml::createImpl(
 
     yinfo("YHtml::create: SUCCESS");
     return Ok(std::move(card));
-}
-
-//=============================================================================
-// Initialization
-//=============================================================================
-
-Result<void> YHtml::init() {
-    // Create own atlas for HTML fonts (NOT the terminal monospace font)
-    auto atlasRes = MsdfAtlas::create(_globalAllocator);
-    if (!atlasRes) {
-        return Err<void>("YHtml::init: failed to create atlas");
-    }
-    _atlas = *atlasRes;
-
-    // Load default sans-serif font as fontId=0
-    std::string defaultFontPath = resolveFontPath("sans-serif");
-    if (defaultFontPath.empty()) {
-        return Err<void>("YHtml::init: fontconfig could not resolve 'sans-serif'");
-    }
-    int fontId = addFont(defaultFontPath);
-    if (fontId < 0) {
-        return Err<void>("YHtml::init: failed to load default sans-serif font");
-    }
-    yinfo("YHtml::init: loaded default sans-serif font: {} -> fontId={}", defaultFontPath, fontId);
-
-    // Allocate metadata slot
-    auto metaResult = _cardMgr->allocateMetadata(sizeof(Metadata));
-    if (!metaResult) {
-        return Err<void>("YHtml::init: failed to allocate metadata");
-    }
-    _metaHandle = *metaResult;
-    _dirty = true;
-    _metadataDirty = true;
-
-    if (auto res = registerForEvents(); !res) {
-        ywarn("YHtml::init: event registration failed: {}", error_msg(res));
-    }
-
-    // Create HTTP fetcher
-    auto fetcherResult = HttpFetcher::create();
-    if (!fetcherResult) {
-        return Err<void>("YHtml: failed to create HttpFetcher");
-    }
-    _fetcher = std::move(*fetcherResult);
-
-    parseArgs(_argsStr);
-
-    // Default to white background
-    _bgColor = 0xFFFFFFFF;
-
-    // Load HTML content now, but defer rendering until setCellSize()
-    if (auto res = loadContent(); !res) {
-        ywarn("YHtml::init: failed to load content: {}", error_msg(res));
-    }
-
-    markDirty();
-    return Ok();
-}
-
-//=============================================================================
-// Args parsing
-//=============================================================================
-
-void YHtml::parseArgs(const std::string& args) {
-    if (args.empty()) return;
-
-    std::istringstream iss(args);
-    std::string token;
-
-    while (iss >> token) {
-        if (token == "--input") {
-            std::string val;
-            if (iss >> val) _inputSource = val;
-        } else if (token == "--font-size") {
-            float val;
-            if (iss >> val) _fontSize = val;
-        } else if (token == "--bg-color") {
-            std::string colorStr;
-            if (iss >> colorStr) {
-                if (colorStr.size() > 2 &&
-                    (colorStr.substr(0, 2) == "0x" ||
-                     colorStr.substr(0, 2) == "0X")) {
-                    colorStr = colorStr.substr(2);
-                }
-                _bgColor = static_cast<uint32_t>(
-                    std::stoul(colorStr, nullptr, 16));
-            }
-        }
-    }
-}
-
-//=============================================================================
-// Content loading
-//=============================================================================
-
-Result<void> YHtml::loadContent() {
-    if (!_inputSource.empty()) {
-        if (HttpFetcher::isUrl(_inputSource)) {
-            _fetcher->setBaseUrl(_inputSource);
-            yinfo("YHtml::loadContent: fetching URL: {}", _inputSource);
-            auto body = _fetcher->fetch(_inputSource);
-            if (!body) {
-                return Err<void>("YHtml::loadContent: failed to fetch URL");
-            }
-            _htmlContent = std::move(*body);
-        } else {
-            yinfo("YHtml::loadContent: reading file: {}", _inputSource);
-            std::ifstream file(_inputSource);
-            if (!file) {
-                return Err<void>("YHtml::loadContent: failed to open file");
-            }
-            std::stringstream buffer;
-            buffer << file.rdbuf();
-            _htmlContent = buffer.str();
-        }
-    } else if (!_payloadStr.empty()) {
-        _htmlContent = _payloadStr;
-    }
-
-    if (_htmlContent.empty()) {
-        return Err<void>("YHtml::loadContent: empty content");
-    }
-
-    yinfo("YHtml::loadContent: {} bytes", _htmlContent.size());
-    return Ok();
-}
-
-//=============================================================================
-// setCellSize — called by GPUScreen at registration and on zoom
-//=============================================================================
-
-void YHtml::setCellSize(uint32_t cellWidth, uint32_t cellHeight) {
-    if (_cellWidthPx == cellWidth && _cellHeightPx == cellHeight) return;
-    _cellWidthPx = cellWidth;
-    _cellHeightPx = cellHeight;
-
-    float pixelWidth = static_cast<float>(widthCells() * cellWidth);
-    if (pixelWidth > 0 && !_htmlContent.empty()) {
-        _viewWidth = pixelWidth;
-        _needsHtmlRender = true;
-        yinfo("YHtml::setCellSize: {}x{} -> viewport {}px",
-              cellWidth, cellHeight, _viewWidth);
-    }
-}
-
-//=============================================================================
-// allocateBuffers — render HTML here (after setCellSize provides px dims)
-//=============================================================================
-
-Result<void> YHtml::allocateBuffers() {
-    if (_needsHtmlRender) {
-        clear();
-        if (auto res = renderHtml(); !res) {
-            ywarn("YHtml::allocateBuffers: render failed: {}", error_msg(res));
-        }
-        _needsHtmlRender = false;
-        markDirty();
-    }
-
-    if (!_primitives.empty() || !_glyphs.empty()) {
-        uint32_t derivedSize = computeDerivedSize();
-        if (derivedSize > 0 && !_derivedStorage.isValid()) {
-            auto storageResult = _cardMgr->bufferManager()->allocateBuffer(metadataSlotIndex(), "derived", derivedSize);
-            if (!storageResult) {
-                return Err<void>("YHtml::allocateBuffers: failed to allocate derived storage");
-            }
-            _derivedStorage = *storageResult;
-        }
-        _dirty = true;
-        yinfo("YHtml::allocateBuffers: {} prims, {} glyphs, derived {} bytes",
-              _primitives.size(), _glyphs.size(), derivedSize);
-    }
-    return Ok();
-}
-
-//=============================================================================
-// allocateTextures — write atlas to cardTextureManager
-//=============================================================================
-
-Result<void> YHtml::allocateTextures() {
-    uint32_t atlasW = _atlas->getAtlasWidth();
-    uint32_t atlasH = _atlas->getAtlasHeight();
-
-    if (atlasW == 0 || atlasH == 0) {
-        return Ok();
-    }
-
-    // Allocate handle (write happens in writeTextures)
-    auto allocResult = _cardMgr->textureManager()->allocate(atlasW, atlasH);
-    if (!allocResult) {
-        return Err<void>("YHtml::allocateTextures: failed to allocate texture handle", allocResult);
-    }
-    _atlasTextureHandle = *allocResult;
-
-    yinfo("YHtml::allocateTextures: atlas {}x{} -> handle id={}", atlasW, atlasH, _atlasTextureHandle.id);
-
-    return Ok();
-}
-
-Result<void> YHtml::writeTextures() {
-    if (_atlasTextureHandle.isValid() && _atlas) {
-        const auto& atlasData = _atlas->getAtlasData();
-        if (!atlasData.empty()) {
-            if (auto res = _cardMgr->textureManager()->write(_atlasTextureHandle, atlasData.data()); !res) {
-                return Err<void>("YHtml::writeTextures: write failed", res);
-            }
-        }
-    }
-    return Ok();
-}
-
-//=============================================================================
-// HTML rendering via litehtml
-//=============================================================================
-
-Result<void> YHtml::renderHtml() {
-    if (_htmlContent.empty()) {
-        return Err<void>("YHtml::renderHtml: no content loaded");
-    }
-
-    // Create container that targets this YHtml card
-    auto containerResult = HtmlContainer::create(
-        this, nullptr, _fontSize, _fetcher.get());
-    if (!containerResult) {
-        return Err<void>("YHtml::renderHtml: failed to create HtmlContainer");
-    }
-    _container = std::move(*containerResult);
-
-    int viewW = static_cast<int>(_viewWidth);
-    int viewH = static_cast<int>(_viewWidth * 1.5f);
-    _container->setViewportSize(viewW, viewH);
-
-    _document = litehtml::document::createFromString(
-        _htmlContent.c_str(), _container.get());
-
-    if (!_document) {
-        return Err<void>("YHtml::renderHtml: failed to parse HTML");
-    }
-
-    _document->render(viewW);
-
-    int docHeight = _document->height();
-    _container->setViewportSize(viewW, docHeight);
-
-    // Scene bounds cover full document
-    setSceneBounds(0.0f, 0.0f,
-                   static_cast<float>(viewW),
-                   static_cast<float>(docHeight));
-
-    litehtml::position clip(0, 0, viewW, docHeight);
-    _document->draw(0, 0, 0, &clip);
-
-    yinfo("YHtml::renderHtml: layout {}x{}, prims={} glyphs={}",
-          viewW, docHeight, _primitives.size(), _glyphs.size());
-
-    return Ok();
-}
-
-//=============================================================================
-// Public API - Text (ypdf-style glyph placement)
-//=============================================================================
-
-void YHtml::addText(float x, float y, const char* text,
-                    float fontSize, uint32_t color, uint32_t layer, int fontId) {
-    if (!_atlas || !text || !*text) return;
-
-    float fontBaseSize = _atlas->getFontSize();
-    if (fontBaseSize <= 0.0f) fontBaseSize = 1.0f;
-
-    float scale = fontSize / fontBaseSize;
-    float cursorX = x;
-
-    const uint8_t* ptr = reinterpret_cast<const uint8_t*>(text);
-    const uint8_t* end = ptr + std::strlen(text);
-
-    while (ptr < end) {
-        // Decode UTF-8 codepoint
-        uint32_t codepoint = 0;
-        if ((*ptr & 0x80) == 0) {
-            codepoint = *ptr++;
-        } else if ((*ptr & 0xE0) == 0xC0) {
-            codepoint = (*ptr++ & 0x1F) << 6;
-            if (ptr < end) codepoint |= (*ptr++ & 0x3F);
-        } else if ((*ptr & 0xF0) == 0xE0) {
-            codepoint = (*ptr++ & 0x0F) << 12;
-            if (ptr < end) codepoint |= (*ptr++ & 0x3F) << 6;
-            if (ptr < end) codepoint |= (*ptr++ & 0x3F);
-        } else if ((*ptr & 0xF8) == 0xF0) {
-            codepoint = (*ptr++ & 0x07) << 18;
-            if (ptr < end) codepoint |= (*ptr++ & 0x3F) << 12;
-            if (ptr < end) codepoint |= (*ptr++ & 0x3F) << 6;
-            if (ptr < end) codepoint |= (*ptr++ & 0x3F);
-        } else {
-            ptr++;
-            continue;
-        }
-
-        // Load glyph from atlas (fontId 0 is the default sans-serif font)
-        // Note: glyphIndex 0 is the placeholder with sizeX=sizeY=advance=0
-        uint32_t glyphIndex = _atlas->loadGlyph(fontId, codepoint);
-
-        const auto& metadata = _atlas->getGlyphMetadata();
-        if (glyphIndex == 0 || glyphIndex >= metadata.size()) {
-            // Missing glyph - advance cursor but don't render
-            cursorX += fontSize * 0.5f;
-            continue;
-        }
-
-        const auto& glyph = metadata[glyphIndex];
-
-        // Place glyph in scene coordinates using atlas bearingX/Y
-        HtmlGlyph g = {};
-        g.x = cursorX + glyph._bearingX * scale;
-        g.y = y - glyph._bearingY * scale;
-        g.width = glyph._sizeX * scale;
-        g.height = glyph._sizeY * scale;
-        g.glyphIndex = glyphIndex;
-        g.color = color;
-        g.layer = layer;
-
-        // Debug: show positioning for descender chars
-        if (codepoint == 'y' || codepoint == 'g' || codepoint == 'p' || codepoint == 'j') {
-            yinfo("addText descender '{}': baseline={:.1f} bearingY={:.1f} sizeY={:.1f} scale={:.3f} -> g.y={:.1f} bottom={:.1f}",
-                  static_cast<char>(codepoint), y, glyph._bearingY, glyph._sizeY, scale,
-                  g.y, g.y + g.height);
-        }
-
-        _glyphs.push_back(g);
-
-        cursorX += glyph._advance * scale;
-    }
-}
-
-//=============================================================================
-// Public API - SDF Primitives
-//=============================================================================
-
-void YHtml::computeAABB(HtmlSDFPrimitive& prim) {
-    float expand = prim.strokeWidth * 0.5f;
-
-    switch (static_cast<SDFType>(prim.type)) {
-        case SDFType::Circle: {
-            float r = prim.params[2] + expand;
-            prim.aabbMinX = prim.params[0] - r;
-            prim.aabbMinY = prim.params[1] - r;
-            prim.aabbMaxX = prim.params[0] + r;
-            prim.aabbMaxY = prim.params[1] + r;
-            break;
-        }
-        case SDFType::Box: {
-            float hw = prim.params[2] + prim.round + expand;
-            float hh = prim.params[3] + prim.round + expand;
-            prim.aabbMinX = prim.params[0] - hw;
-            prim.aabbMinY = prim.params[1] - hh;
-            prim.aabbMaxX = prim.params[0] + hw;
-            prim.aabbMaxY = prim.params[1] + hh;
-            break;
-        }
-        case SDFType::Segment: {
-            prim.aabbMinX = std::min(prim.params[0], prim.params[2]) - expand;
-            prim.aabbMinY = std::min(prim.params[1], prim.params[3]) - expand;
-            prim.aabbMaxX = std::max(prim.params[0], prim.params[2]) + expand;
-            prim.aabbMaxY = std::max(prim.params[1], prim.params[3]) + expand;
-            break;
-        }
-        case SDFType::RoundedBox: {
-            float maxR = std::max({prim.params[4], prim.params[5],
-                                   prim.params[6], prim.params[7]});
-            float hw = prim.params[2] + maxR + expand;
-            float hh = prim.params[3] + maxR + expand;
-            prim.aabbMinX = prim.params[0] - hw;
-            prim.aabbMinY = prim.params[1] - hh;
-            prim.aabbMaxX = prim.params[0] + hw;
-            prim.aabbMaxY = prim.params[1] + hh;
-            break;
-        }
-        default: {
-            // Generic AABB from first two params (center) + some size
-            float size = expand + 10.0f;
-            prim.aabbMinX = prim.params[0] - size;
-            prim.aabbMinY = prim.params[1] - size;
-            prim.aabbMaxX = prim.params[0] + size;
-            prim.aabbMaxY = prim.params[1] + size;
-            break;
-        }
-    }
-}
-
-uint32_t YHtml::addPrimitive(HtmlSDFPrimitive& prim) {
-    if (prim.aabbMinX == 0 && prim.aabbMaxX == 0) {
-        computeAABB(prim);
-    }
-    uint32_t idx = static_cast<uint32_t>(_primitives.size());
-    _primitives.push_back(prim);
-    return idx;
-}
-
-uint32_t YHtml::addBox(float cx, float cy, float halfW, float halfH,
-                       uint32_t fillColor, uint32_t strokeColor,
-                       float strokeWidth, float round, uint32_t layer) {
-    HtmlSDFPrimitive prim = {};
-    prim.type = static_cast<uint32_t>(SDFType::Box);
-    prim.layer = layer;
-    prim.params[0] = cx;
-    prim.params[1] = cy;
-    prim.params[2] = halfW;
-    prim.params[3] = halfH;
-    prim.fillColor = fillColor;
-    prim.strokeColor = strokeColor;
-    prim.strokeWidth = strokeWidth;
-    prim.round = round;
-    return addPrimitive(prim);
-}
-
-uint32_t YHtml::addSegment(float x0, float y0, float x1, float y1,
-                           uint32_t strokeColor, float strokeWidth,
-                           uint32_t layer) {
-    HtmlSDFPrimitive prim = {};
-    prim.type = static_cast<uint32_t>(SDFType::Segment);
-    prim.layer = layer;
-    prim.params[0] = x0;
-    prim.params[1] = y0;
-    prim.params[2] = x1;
-    prim.params[3] = y1;
-    prim.strokeColor = strokeColor;
-    prim.strokeWidth = strokeWidth;
-    return addPrimitive(prim);
-}
-
-uint32_t YHtml::addCircle(float cx, float cy, float radius,
-                          uint32_t fillColor, uint32_t strokeColor,
-                          float strokeWidth, uint32_t layer) {
-    HtmlSDFPrimitive prim = {};
-    prim.type = static_cast<uint32_t>(SDFType::Circle);
-    prim.layer = layer;
-    prim.params[0] = cx;
-    prim.params[1] = cy;
-    prim.params[2] = radius;
-    prim.fillColor = fillColor;
-    prim.strokeColor = strokeColor;
-    prim.strokeWidth = strokeWidth;
-    return addPrimitive(prim);
-}
-
-void YHtml::setBgColor(uint32_t color) {
-    _bgColor = color;
-    _metadataDirty = true;
-}
-
-void YHtml::setSceneBounds(float minX, float minY, float maxX, float maxY) {
-    _sceneMinX = minX;
-    _sceneMinY = minY;
-    _sceneMaxX = maxX;
-    _sceneMaxY = maxY;
-    _hasExplicitBounds = true;
-}
-
-void YHtml::clear() {
-    _primitives.clear();
-    _glyphs.clear();
-    _hasExplicitBounds = false;
-}
-
-//=============================================================================
-// Font registration
-//=============================================================================
-
-int YHtml::addFont(const std::string& ttfPath) {
-    if (!_atlas) return -1;
-
-    auto stem = std::filesystem::path(ttfPath).stem().string();
-    auto cdbPath = _cacheDir + "/" + stem + ".cdb";
-
-    // Check local cache
-    auto it = _fontIdCache.find(cdbPath);
-    if (it != _fontIdCache.end()) return it->second;
-
-    // Generate CDB if missing
-    if (!std::filesystem::exists(cdbPath)) {
-        if (!_cdbProvider) {
-            yerror("YHtml::addFont: no CDB provider available");
-            return -1;
-        }
-
-        MsdfCdbConfig cfg;
-        cfg.ttfPath = ttfPath;
-        cfg.cdbPath = cdbPath;
-
-        if (auto res = _cdbProvider->generate(cfg); !res) {
-            yerror("YHtml::addFont: CDB generation failed for {}: {}",
-                   ttfPath, res.error().message());
-            return -1;
-        }
-    }
-
-    int fontId = _atlas->openCdb(cdbPath);
-    if (fontId >= 0) {
-        _fontIdCache[cdbPath] = fontId;
-    }
-    return fontId;
-}
-
-//=============================================================================
-// Scene bounds computation
-//=============================================================================
-
-void YHtml::computeSceneBounds() {
-    if (_hasExplicitBounds) return;
-
-    _sceneMinX = 1e10f;
-    _sceneMinY = 1e10f;
-    _sceneMaxX = -1e10f;
-    _sceneMaxY = -1e10f;
-
-    for (const auto& p : _primitives) {
-        _sceneMinX = std::min(_sceneMinX, p.aabbMinX);
-        _sceneMinY = std::min(_sceneMinY, p.aabbMinY);
-        _sceneMaxX = std::max(_sceneMaxX, p.aabbMaxX);
-        _sceneMaxY = std::max(_sceneMaxY, p.aabbMaxY);
-    }
-    for (const auto& g : _glyphs) {
-        _sceneMinX = std::min(_sceneMinX, g.x);
-        _sceneMinY = std::min(_sceneMinY, g.y);
-        _sceneMaxX = std::max(_sceneMaxX, g.x + g.width);
-        _sceneMaxY = std::max(_sceneMaxY, g.y + g.height);
-    }
-
-    float padX = (_sceneMaxX - _sceneMinX) * 0.05f;
-    float padY = (_sceneMaxY - _sceneMinY) * 0.05f;
-    _sceneMinX -= padX;
-    _sceneMinY -= padY;
-    _sceneMaxX += padX;
-    _sceneMaxY += padY;
-
-    if (_sceneMinX >= _sceneMaxX) { _sceneMinX = 0; _sceneMaxX = 100; }
-    if (_sceneMinY >= _sceneMaxY) { _sceneMinY = 0; _sceneMaxY = 100; }
-}
-
-//=============================================================================
-// Grid building — both SDF primitives and MSDF glyphs
-//=============================================================================
-
-void YHtml::buildGrid() {
-    if (!_derivedStorage.isValid() || _gridWidth == 0 || _gridHeight == 0) return;
-
-    uint32_t cellStride = 1 + MAX_ENTRIES_PER_CELL;
-    uint32_t primBytes = static_cast<uint32_t>(_primitives.size() * sizeof(HtmlSDFPrimitive));
-    uint32_t gridTotalU32 = _gridWidth * _gridHeight * cellStride;
-
-    // Grid starts after primitives in derived storage
-    uint32_t* grid = reinterpret_cast<uint32_t*>(_derivedStorage.data + primBytes);
-    std::memset(grid, 0, gridTotalU32 * sizeof(uint32_t));
-
-    uint32_t primsPlaced = 0, primsDropped = 0;
-    uint32_t glyphsPlaced = 0, glyphsDropped = 0;
-    uint32_t maxCellCount = 0;
-
-    // Insert SDF primitives (bit 31 clear)
-    for (uint32_t pi = 0; pi < static_cast<uint32_t>(_primitives.size()); pi++) {
-        const auto& p = _primitives[pi];
-
-        uint32_t cellMinX = static_cast<uint32_t>(
-            std::clamp((p.aabbMinX - _sceneMinX) / _cellSize, 0.0f, float(_gridWidth - 1)));
-        uint32_t cellMaxX = static_cast<uint32_t>(
-            std::clamp((p.aabbMaxX - _sceneMinX) / _cellSize, 0.0f, float(_gridWidth - 1)));
-        uint32_t cellMinY = static_cast<uint32_t>(
-            std::clamp((p.aabbMinY - _sceneMinY) / _cellSize, 0.0f, float(_gridHeight - 1)));
-        uint32_t cellMaxY = static_cast<uint32_t>(
-            std::clamp((p.aabbMaxY - _sceneMinY) / _cellSize, 0.0f, float(_gridHeight - 1)));
-
-        bool placed = false;
-        for (uint32_t cy = cellMinY; cy <= cellMaxY; cy++) {
-            for (uint32_t cx = cellMinX; cx <= cellMaxX; cx++) {
-                uint32_t cellIndex = cy * _gridWidth + cx;
-                uint32_t cellOffset = cellIndex * cellStride;
-                uint32_t count = grid[cellOffset];
-                if (count < MAX_ENTRIES_PER_CELL) {
-                    grid[cellOffset + 1 + count] = pi;  // No GLYPH_BIT
-                    grid[cellOffset] = count + 1;
-                    placed = true;
-                    if (count + 1 > maxCellCount) maxCellCount = count + 1;
-                }
-            }
-        }
-        if (placed) primsPlaced++;
-        else primsDropped++;
-    }
-
-    // Insert MSDF glyphs (bit 31 set)
-    for (uint32_t gi = 0; gi < static_cast<uint32_t>(_glyphs.size()); gi++) {
-        const auto& g = _glyphs[gi];
-
-        uint32_t cellMinX = static_cast<uint32_t>(
-            std::clamp((g.x - _sceneMinX) / _cellSize, 0.0f, float(_gridWidth - 1)));
-        uint32_t cellMaxX = static_cast<uint32_t>(
-            std::clamp((g.x + g.width - _sceneMinX) / _cellSize, 0.0f, float(_gridWidth - 1)));
-        uint32_t cellMinY = static_cast<uint32_t>(
-            std::clamp((g.y - _sceneMinY) / _cellSize, 0.0f, float(_gridHeight - 1)));
-        uint32_t cellMaxY = static_cast<uint32_t>(
-            std::clamp((g.y + g.height - _sceneMinY) / _cellSize, 0.0f, float(_gridHeight - 1)));
-
-        bool placed = false;
-        for (uint32_t cy = cellMinY; cy <= cellMaxY; cy++) {
-            for (uint32_t cx = cellMinX; cx <= cellMaxX; cx++) {
-                uint32_t cellIndex = cy * _gridWidth + cx;
-                uint32_t cellOffset = cellIndex * cellStride;
-                uint32_t count = grid[cellOffset];
-                if (count < MAX_ENTRIES_PER_CELL) {
-                    grid[cellOffset + 1 + count] = gi | GLYPH_BIT;
-                    grid[cellOffset] = count + 1;
-                    placed = true;
-                    if (count + 1 > maxCellCount) maxCellCount = count + 1;
-                }
-            }
-        }
-        if (placed) glyphsPlaced++;
-        else glyphsDropped++;
-    }
-
-    yinfo("YHtml::buildGrid: grid={}x{} cellSize={:.1f} prims={}/{} glyphs={}/{} "
-          "maxCellCount={}/{}",
-          _gridWidth, _gridHeight, _cellSize,
-          primsPlaced, _primitives.size(), glyphsPlaced, _glyphs.size(),
-          maxCellCount, MAX_ENTRIES_PER_CELL);
-}
-
-//=============================================================================
-// Compute derived storage size (primitives + grid + glyphs)
-//=============================================================================
-
-uint32_t YHtml::computeDerivedSize() const {
-    if (_primitives.empty() && _glyphs.empty()) return 0;
-
-    float sceneWidth = _sceneMaxX - _sceneMinX;
-    float sceneHeight = _sceneMaxY - _sceneMinY;
-    float sceneArea = sceneWidth * sceneHeight;
-
-    uint32_t gridW = 0, gridH = 0;
-    if ((!_primitives.empty() || !_glyphs.empty()) && sceneArea > 0) {
-        float cs = _cellSize;
-        if (cs <= 0.0f) {
-            // Estimate from average glyph height
-            float avgH = 0.0f;
-            for (const auto& g : _glyphs) avgH += g.height;
-            if (!_glyphs.empty()) avgH /= _glyphs.size();
-            else avgH = 10.0f;
-            cs = avgH * 2.0f;
-            float minCS = std::sqrt(sceneArea / 65536.0f);
-            float maxCS = std::sqrt(sceneArea / 16.0f);
-            cs = std::clamp(cs, minCS, maxCS);
-        }
-        gridW = std::max(1u, static_cast<uint32_t>(std::ceil(sceneWidth / cs)));
-        gridH = std::max(1u, static_cast<uint32_t>(std::ceil(sceneHeight / cs)));
-        const uint32_t MAX_GRID_DIM = 2048;
-        gridW = std::min(gridW, MAX_GRID_DIM);
-        gridH = std::min(gridH, MAX_GRID_DIM);
-    }
-
-    uint32_t cellStride = 1 + MAX_ENTRIES_PER_CELL;
-    uint32_t primBytes = static_cast<uint32_t>(_primitives.size() * sizeof(HtmlSDFPrimitive));
-    uint32_t gridBytes = gridW * gridH * cellStride * sizeof(uint32_t);
-    uint32_t glyphBytes = static_cast<uint32_t>(_glyphs.size() * sizeof(HtmlGlyph));
-    uint32_t glyphMetaBytes = static_cast<uint32_t>(_atlas->getGlyphMetadata().size() * sizeof(GlyphMetadataGPU));
-    return primBytes + gridBytes + glyphBytes + glyphMetaBytes;
-}
-
-//=============================================================================
-// Rebuild and upload — compute grid, copy data to GPU buffer
-//=============================================================================
-
-Result<void> YHtml::rebuildAndUpload() {
-    computeSceneBounds();
-
-    float sceneWidth = _sceneMaxX - _sceneMinX;
-    float sceneHeight = _sceneMaxY - _sceneMinY;
-
-    uint32_t gridW = 0, gridH = 0;
-    float cellSize = _cellSize;
-
-    if (!_primitives.empty() || !_glyphs.empty()) {
-        float sceneArea = sceneWidth * sceneHeight;
-        if (cellSize <= 0.0f) {
-            float avgH = 0.0f;
-            for (const auto& g : _glyphs) avgH += g.height;
-            if (!_glyphs.empty()) avgH /= _glyphs.size();
-            else avgH = 10.0f;
-            cellSize = avgH * 2.0f;
-            float minCellSize = std::sqrt(sceneArea / 65536.0f);
-            float maxCellSize = std::sqrt(sceneArea / 16.0f);
-            cellSize = std::clamp(cellSize, minCellSize, maxCellSize);
-        }
-        gridW = std::max(1u, static_cast<uint32_t>(std::ceil(sceneWidth / cellSize)));
-        gridH = std::max(1u, static_cast<uint32_t>(std::ceil(sceneHeight / cellSize)));
-        const uint32_t MAX_GRID_DIM = 2048;
-        if (gridW > MAX_GRID_DIM) { gridW = MAX_GRID_DIM; cellSize = sceneWidth / gridW; }
-        if (gridH > MAX_GRID_DIM) { gridH = MAX_GRID_DIM; cellSize = std::max(cellSize, sceneHeight / gridH); }
-    }
-
-    uint32_t cellStride = 1 + MAX_ENTRIES_PER_CELL;
-    uint32_t primBytes = static_cast<uint32_t>(_primitives.size() * sizeof(HtmlSDFPrimitive));
-    uint32_t gridTotalU32 = gridW * gridH * cellStride;
-    uint32_t gridBytes = gridTotalU32 * sizeof(uint32_t);
-    uint32_t glyphBytes = static_cast<uint32_t>(_glyphs.size() * sizeof(HtmlGlyph));
-    const auto& glyphMeta = _atlas->getGlyphMetadata();
-    uint32_t glyphMetaBytes = static_cast<uint32_t>(glyphMeta.size() * sizeof(GlyphMetadataGPU));
-    uint32_t derivedTotalSize = primBytes + gridBytes + glyphBytes + glyphMetaBytes;
-
-    yinfo("YHtml::rebuild: grid={}x{} cellSize={:.1f} derivedTotal={} "
-          "prims={} glyphs={} glyphMeta={} zoom={:.2f}",
-          gridW, gridH, cellSize, derivedTotalSize,
-          _primitives.size(), _glyphs.size(), glyphMeta.size(), _viewZoom);
-
-    // Allocate or reallocate derived storage if needed
-    if (derivedTotalSize > 0) {
-        if (!_derivedStorage.isValid()) {
-            auto storageResult = _cardMgr->bufferManager()->allocateBuffer(metadataSlotIndex(), "derived", derivedTotalSize);
-            if (!storageResult) {
-                return Err<void>("YHtml::rebuild: failed to allocate derived storage");
-            }
-            _derivedStorage = *storageResult;
-        } else if (derivedTotalSize > _derivedStorage.size) {
-            auto storageResult = _cardMgr->bufferManager()->allocateBuffer(metadataSlotIndex(), "derived", derivedTotalSize);
-            if (!storageResult) {
-                _derivedStorage = StorageHandle::invalid();
-                return Err<void>("YHtml::rebuild: failed to reallocate derived storage");
-            }
-            _derivedStorage = *storageResult;
-        }
-    }
-
-    if (_derivedStorage.isValid() && derivedTotalSize > 0) {
-        uint8_t* base = _derivedStorage.data;
-        uint32_t offset = 0;
-
-        // Zero entire buffer
-        std::memset(base, 0, _derivedStorage.size);
-
-        // Copy primitives
-        _primitiveOffset = (_derivedStorage.offset + offset) / sizeof(float);
-        if (!_primitives.empty()) {
-            std::memcpy(base + offset, _primitives.data(), primBytes);
-        }
-        offset += primBytes;
-
-        // Build grid
-        _gridWidth = gridW;
-        _gridHeight = gridH;
-        _cellSize = cellSize;
-        _gridOffset = (_derivedStorage.offset + offset) / sizeof(float);
-        offset += gridBytes;
-
-        buildGrid();
-
-        // Copy glyphs
-        _glyphOffset = (_derivedStorage.offset + offset) / sizeof(float);
-        if (!_glyphs.empty()) {
-            std::memcpy(base + offset, _glyphs.data(), glyphBytes);
-        }
-        offset += glyphBytes;
-
-        // Copy glyph metadata (uvMin, uvMax, etc.) for shader
-        _glyphMetaOffset = (_derivedStorage.offset + offset) / sizeof(float);
-        if (!glyphMeta.empty()) {
-            std::memcpy(base + offset, glyphMeta.data(), glyphMetaBytes);
-        }
-
-        _cardMgr->bufferManager()->markBufferDirty(_derivedStorage);
-    }
-
-    _metadataDirty = true;
-    return Ok();
-}
-
-//=============================================================================
-// Metadata upload — 64-byte struct with f16 zoom, i16 pan encoding
-//=============================================================================
-
-Result<void> YHtml::uploadMetadata() {
-    if (!_metaHandle.isValid()) {
-        return Err<void>("YHtml::uploadMetadata: invalid metadata handle");
-    }
-
-    // Pack zoom as IEEE 754 half-float
-    uint32_t zoomBits;
-    {
-        uint32_t f32bits;
-        std::memcpy(&f32bits, &_viewZoom, sizeof(float));
-        uint32_t sign = (f32bits >> 16) & 0x8000;
-        int32_t  exp  = ((f32bits >> 23) & 0xFF) - 127 + 15;
-        uint32_t mant = (f32bits >> 13) & 0x3FF;
-        if (exp <= 0) { exp = 0; mant = 0; }
-        else if (exp >= 31) { exp = 31; mant = 0; }
-        zoomBits = sign | (static_cast<uint32_t>(exp) << 10) | mant;
-    }
-
-    float contentW = _sceneMaxX - _sceneMinX;
-    float contentH = _sceneMaxY - _sceneMinY;
-    int16_t panXi16 = static_cast<int16_t>(std::clamp(
-        _viewPanX / std::max(contentW, 1e-6f) * 16384.0f, -32768.0f, 32767.0f));
-    int16_t panYi16 = static_cast<int16_t>(std::clamp(
-        _viewPanY / std::max(contentH, 1e-6f) * 16384.0f, -32768.0f, 32767.0f));
-
-    // Get atlas position from texture manager
-    AtlasPosition atlasPos = {0, 0};
-    if (_atlasTextureHandle.isValid()) {
-        atlasPos = _cardMgr->textureManager()->getAtlasPosition(_atlasTextureHandle);
-    }
-    uint32_t msdfAtlasW = _atlas->getAtlasWidth();
-    uint32_t msdfAtlasH = _atlas->getAtlasHeight();
-
-    // Pack primitiveCount in flags[15:0], zoom in flags[31:16] (same as ypdf)
-    uint32_t primitiveCount = static_cast<uint32_t>(_primitives.size());
-
-    Metadata meta = {};
-    meta.atlasXW = (atlasPos.x & 0xFFFF) | ((msdfAtlasW & 0xFFFF) << 16);
-    meta.atlasYH = (atlasPos.y & 0xFFFF) | ((msdfAtlasH & 0xFFFF) << 16);
-    meta.gridOffset = _gridOffset;
-    meta.gridWidth = _gridWidth;
-    meta.gridHeight = _gridHeight;
-    std::memcpy(&meta.cellSize, &_cellSize, sizeof(float));
-    meta.glyphOffset = _glyphOffset;
-    meta.glyphCount = static_cast<uint32_t>(_glyphs.size());
-    std::memcpy(&meta.sceneMinX, &_sceneMinX, sizeof(float));
-    std::memcpy(&meta.sceneMinY, &_sceneMinY, sizeof(float));
-    std::memcpy(&meta.sceneMaxX, &_sceneMaxX, sizeof(float));
-    std::memcpy(&meta.sceneMaxY, &_sceneMaxY, sizeof(float));
-    meta.widthCells  = (_widthCells & 0xFFFF) | (static_cast<uint32_t>(static_cast<uint16_t>(panXi16)) << 16);
-    meta.heightCells = (_heightCells & 0xFFFF) | (static_cast<uint32_t>(static_cast<uint16_t>(panYi16)) << 16);
-    meta.flags = (primitiveCount & 0xFFFF) | (zoomBits << 16);
-    meta.bgColor = _bgColor;
-
-    yinfo("YHtml::uploadMetadata: atlas=({},{}) msdfSize={}x{} grid={}x{} cellSize={} "
-          "scene=[{},{},{},{}] zoom={:.2f} pan=({:.1f},{:.1f}) size={}x{} prims={} bgColor={:#010x}",
-          atlasPos.x, atlasPos.y, msdfAtlasW, msdfAtlasH, meta.gridWidth, meta.gridHeight, _cellSize,
-          _sceneMinX, _sceneMinY, _sceneMaxX, _sceneMaxY,
-          _viewZoom, _viewPanX, _viewPanY,
-          _widthCells, _heightCells, primitiveCount, meta.bgColor);
-
-    if (auto res = _cardMgr->writeMetadata(_metaHandle, &meta, sizeof(meta)); !res) {
-        return Err<void>("YHtml::uploadMetadata: write failed");
-    }
-
-    return Ok();
-}
-
-//=============================================================================
-// Card lifecycle
-//=============================================================================
-
-void YHtml::declareBufferNeeds() {
-    uint32_t lastDerivedSize = _derivedStorage.size;
-
-    _derivedStorage = StorageHandle::invalid();
-
-    if (!_primitives.empty() || !_glyphs.empty()) {
-        if (lastDerivedSize > 0) {
-            _cardMgr->bufferManager()->reserve(lastDerivedSize);
-        } else {
-            uint32_t estDerived = computeDerivedSize();
-            _cardMgr->bufferManager()->reserve(estDerived);
-        }
-    }
-}
-
-Result<void> YHtml::render(float /*time*/) {
-    if (_dirty) {
-        if (auto res = rebuildAndUpload(); !res) {
-            return Err<void>("YHtml::render: rebuildAndUpload failed", res);
-        }
-        _dirty = false;
-    }
-
-    if (_metadataDirty) {
-        if (auto res = uploadMetadata(); !res) {
-            return Err<void>("YHtml::render: metadata upload failed", res);
-        }
-        _metadataDirty = false;
-    }
-
-    return Ok();
-}
-
-Result<void> YHtml::dispose() {
-    deregisterFromEvents();
-
-    _derivedStorage = StorageHandle::invalid();
-
-    if (_metaHandle.isValid() && _cardMgr) {
-        if (auto res = _cardMgr->deallocateMetadata(_metaHandle); !res) {
-            yerror("YHtml::dispose: deallocateMetadata failed: {}", error_msg(res));
-        }
-        _metaHandle = MetadataHandle::invalid();
-    }
-
-    return Ok();
-}
-
-void YHtml::suspend() {
-    _derivedStorage = StorageHandle::invalid();
-}
-
-//=============================================================================
-// Event handling - zoom/pan
-//=============================================================================
-
-Result<void> YHtml::registerForEvents() {
-    auto loopResult = base::EventLoop::instance();
-    if (!loopResult) {
-        return Err<void>("YHtml::registerForEvents: no EventLoop instance", loopResult);
-    }
-    auto loop = *loopResult;
-    auto self = sharedAs<base::EventListener>();
-
-    if (auto res = loop->registerListener(base::Event::Type::SetFocus, self, 1000); !res) {
-        return Err<void>("YHtml::registerForEvents: failed to register SetFocus", res);
-    }
-    if (auto res = loop->registerListener(base::Event::Type::CardScroll, self, 1000); !res) {
-        return Err<void>("YHtml::registerForEvents: failed to register CardScroll", res);
-    }
-    yinfo("YHtml card {} registered for events (priority 1000)", id());
-    return Ok();
-}
-
-Result<void> YHtml::deregisterFromEvents() {
-    if (weak_from_this().expired()) {
-        return Ok();
-    }
-    auto loopResult = base::EventLoop::instance();
-    if (!loopResult) {
-        return Ok();
-    }
-    auto loop = *loopResult;
-    if (auto res = loop->deregisterListener(sharedAs<base::EventListener>()); !res) {
-        ywarn("YHtml::deregisterFromEvents: {}", error_msg(res));
-    }
-    return Ok();
-}
-
-Result<bool> YHtml::onEvent(const base::Event& event) {
-    if (event.type == base::Event::Type::SetFocus) {
-        if (event.setFocus.objectId == id()) {
-            if (!_focused) {
-                _focused = true;
-                ydebug("YHtml::onEvent: focused (id={})", id());
-            }
-            return Ok(true);
-        } else if (_focused) {
-            _focused = false;
-            ydebug("YHtml::onEvent: unfocused (id={})", id());
-        }
-        return Ok(false);
-    }
-
-    if (event.type == base::Event::Type::CardScroll &&
-        event.cardScroll.targetId == id()) {
-
-        float sceneW = _sceneMaxX - _sceneMinX;
-        float sceneH = _sceneMaxY - _sceneMinY;
-
-        if (event.cardScroll.mods & GLFW_MOD_CONTROL) {
-            float zoomFactor = std::exp(event.cardScroll.dy * 0.1f);
-            float newZoom = std::clamp(_viewZoom * zoomFactor, 0.1f, 5000.0f);
-            if (newZoom != _viewZoom) {
-                _viewZoom = newZoom;
-                _metadataDirty = true;
-            }
-            return Ok(true);
-        } else if (event.cardScroll.mods & GLFW_MOD_SHIFT) {
-            float dx = event.cardScroll.dy * 0.05f * sceneW / _viewZoom;
-            _viewPanX += dx;
-            _metadataDirty = true;
-            return Ok(true);
-        } else {
-            float dy = event.cardScroll.dy * 0.05f * sceneH / _viewZoom;
-            _viewPanY += dy;
-            _metadataDirty = true;
-            return Ok(true);
-        }
-    }
-
-    return Ok(false);
 }
 
 } // namespace yetty::card

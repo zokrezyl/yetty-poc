@@ -762,30 +762,10 @@ Result<void> YDrawBase::allocateBuffers() {
         }
         offset += glyphBytes;
 
-        // Copy custom atlas header + glyph metadata
-        if (_customAtlas && _atlasTextureHandle.isValid()) {
-            auto atlasPos = _cardMgr->textureManager()->getAtlasPosition(_atlasTextureHandle);
-            uint32_t msdfAtlasW = _customAtlas->getAtlasWidth();
-            uint32_t msdfAtlasH = _customAtlas->getAtlasHeight();
-            const auto& glyphMeta = _customAtlas->getGlyphMetadata();
-
-            uint32_t atlasHeader[4] = {
-                (atlasPos.x & 0xFFFF) | ((msdfAtlasW & 0xFFFF) << 16),
-                (atlasPos.y & 0xFFFF) | ((msdfAtlasH & 0xFFFF) << 16),
-                static_cast<uint32_t>(glyphMeta.size()),
-                0  // reserved
-            };
-            std::memcpy(base + offset, atlasHeader, sizeof(atlasHeader));
-            offset += sizeof(atlasHeader);
-
-            if (!glyphMeta.empty()) {
-                uint32_t metaBytes = static_cast<uint32_t>(glyphMeta.size() * sizeof(GlyphMetadataGPU));
-                std::memcpy(base + offset, glyphMeta.data(), metaBytes);
-                offset += metaBytes;
-            }
-
-            yinfo("YDrawBase::allocateBuffers: custom atlas {}x{} at ({},{}), {} glyph metadata entries",
-                  msdfAtlasW, msdfAtlasH, atlasPos.x, atlasPos.y, glyphMeta.size());
+        // Remember offset for custom atlas header + glyph metadata
+        // (written later in writeTextures, after allocateTextures provides a valid handle)
+        if (_customAtlas) {
+            _atlasHeaderOffset = offset;
         }
 
         _cardMgr->bufferManager()->markBufferDirty(_derivedStorage);
@@ -824,6 +804,21 @@ Result<void> YDrawBase::render(float time) {
             _cardMgr->bufferManager()->markBufferDirty(_primStorage);
             _dirty = true;
         }
+    }
+
+    // Write custom atlas pixel data after allocateTextures provides a handle
+    if (_customAtlas && _atlasTextureDirty) {
+        if (!_atlasTextureHandle.isValid()) {
+            return Err<void>("YDrawBase::render: custom atlas exists but texture handle is invalid");
+        }
+        const auto& atlasData = _customAtlas->getAtlasData();
+        if (!atlasData.empty()) {
+            if (auto res = _cardMgr->textureManager()->write(_atlasTextureHandle, atlasData.data()); !res) {
+                return Err<void>("YDrawBase::render: atlas texture write failed", res);
+            }
+        }
+        _atlasTextureDirty = false;
+        _dirty = true;  // rebuild to fill in atlasPos in derived buffer
     }
 
     if (_dirty) {
@@ -865,6 +860,7 @@ Result<void> YDrawBase::allocateTextures() {
     _atlasTextureHandle = *allocResult;
 
     yinfo("YDrawBase::allocateTextures: atlas {}x{} -> handle id={}", atlasW, atlasH, _atlasTextureHandle.id);
+    _dirty = true;  // trigger rebuildAndUpload to write atlas header into derived buffer
     return Ok();
 }
 
@@ -1090,14 +1086,23 @@ uint32_t YDrawBase::addBezier2(float x0, float y0, float x1, float y1,
 // Public API - Text
 //=============================================================================
 
-uint32_t YDrawBase::addText(float x, float y, const std::string& text,
-                            float fontSize, uint32_t color,
-                            uint32_t layer, int fontId) {
-    // fontId==0 → shared atlas (default font), fontId>0 → custom atlas
-    bool useCustom = (fontId > 0 && _customAtlas);
+Result<void> YDrawBase::addText(float x, float y, const std::string& text,
+                                float fontSize, uint32_t color,
+                                uint32_t layer) {
+    return addText(x, y, text, fontSize, color, layer, -1);
+}
+
+Result<void> YDrawBase::addText(float x, float y, const std::string& text,
+                                float fontSize, uint32_t color,
+                                uint32_t layer, int fontId) {
+    // fontId<0 → shared atlas (default font), fontId>=0 → custom atlas
+    bool useCustom = (fontId >= 0 && _customAtlas);
     MsdfAtlas* activeAtlas = useCustom ? _customAtlas.get() : _atlas.get();
-    if (!activeAtlas || text.empty()) {
-        return 0;
+    if (!activeAtlas) {
+        return Err<void>("addText: no atlas available");
+    }
+    if (text.empty()) {
+        return Ok();
     }
 
     float fontBaseSize = activeAtlas->getFontSize();
@@ -1135,12 +1140,9 @@ uint32_t YDrawBase::addText(float x, float y, const std::string& text,
         if (useCustom) {
             // Custom font → custom atlas
             glyphIndex = _customAtlas->loadGlyph(fontId, codepoint);
-        } else if (fontId == 0 && _font) {
+        } else if (_font) {
             // Default font → shared atlas via MsMsdfFont dispatch
             glyphIndex = _font->getGlyphIndex(codepoint);
-        } else if (_atlas) {
-            // Registered font on shared atlas
-            glyphIndex = _atlas->loadGlyph(fontId, codepoint);
         } else {
             continue;
         }
@@ -1181,7 +1183,7 @@ uint32_t YDrawBase::addText(float x, float y, const std::string& text,
         _dirty = true;
     }
 
-    return glyphsAdded;
+    return Ok();
 }
 
 //=============================================================================
@@ -1206,8 +1208,8 @@ int YDrawBase::registerFont(const std::string& cdbPath,
     return _customAtlas->registerCdb(cdbPath, ttfPath, std::move(provider));
 }
 
-int YDrawBase::addFont(const std::string& ttfPath) {
-    if (!_fontManager) return -1;
+Result<int> YDrawBase::addFont(const std::string& ttfPath) {
+    if (!_fontManager) return Err<int>("addFont: no font manager");
 
     // Derive CDB path from TTF filename
     auto stem = std::filesystem::path(ttfPath).stem().string();
@@ -1216,14 +1218,13 @@ int YDrawBase::addFont(const std::string& ttfPath) {
 
     // Check local cache (avoid re-opening same CDB)
     auto it = _fontIdCache.find(cdbPath);
-    if (it != _fontIdCache.end()) return it->second;
+    if (it != _fontIdCache.end()) return Ok(it->second);
 
     // Generate CDB if missing
     if (!std::filesystem::exists(cdbPath)) {
         auto provider = _fontManager->getCdbProvider();
         if (!provider) {
-            yerror("addFont: no CDB provider available");
-            return -1;
+            return Err<int>("addFont: no CDB provider available");
         }
 
         MsdfCdbConfig cfg;
@@ -1231,9 +1232,7 @@ int YDrawBase::addFont(const std::string& ttfPath) {
         cfg.cdbPath = cdbPath;
 
         if (auto res = provider->generate(cfg); !res) {
-            yerror("addFont: CDB generation failed for {}: {}",
-                   ttfPath, res.error().message());
-            return -1;
+            return Err<int>("addFont: CDB generation failed for " + ttfPath);
         }
     }
 
@@ -1241,8 +1240,7 @@ int YDrawBase::addFont(const std::string& ttfPath) {
     if (!_customAtlas) {
         auto atlasRes = MsdfAtlas::create(_globalAllocator);
         if (!atlasRes) {
-            yerror("addFont: failed to create custom atlas");
-            return -1;
+            return Err<int>("addFont: failed to create custom atlas");
         }
         _customAtlas = *atlasRes;
         _flags |= FLAG_CUSTOM_ATLAS;
@@ -1251,11 +1249,12 @@ int YDrawBase::addFont(const std::string& ttfPath) {
 
     // Open CDB on custom atlas
     int fontId = _customAtlas->openCdb(cdbPath);
-    if (fontId >= 0) {
-        _fontIdCache[cdbPath] = fontId;
-        yinfo("addFont: registered '{}' on custom atlas (fontId={})", stem, fontId);
+    if (fontId < 0) {
+        return Err<int>("addFont: failed to open CDB: " + cdbPath);
     }
-    return fontId;
+    _fontIdCache[cdbPath] = fontId;
+    yinfo("addFont: registered '{}' on custom atlas (fontId={})", stem, fontId);
+    return Ok(fontId);
 }
 
 //=============================================================================

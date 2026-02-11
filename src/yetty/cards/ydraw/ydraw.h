@@ -1,28 +1,25 @@
 #pragma once
 
-#include "../../ydraw/ydraw-base.h"
+#include <yetty/card.h>
 #include <yetty/base/factory.h>
+#include <yetty/yetty-context.h>
 #include <string>
-
-// Forward declarations for YAML
-namespace YAML { class Node; }
 
 namespace yetty::card {
 
 //=============================================================================
 // YDraw - SDF card with YAML/binary payload parsing
 //
-// Subclasses YDrawBase to add YAML and binary format parsing.
-// All rendering is handled by the base class.
+// Uses YDrawBuilder for content generation.
+// Implementation (GPU buffers, parsing, animation) is in YDrawImpl.
 //=============================================================================
-class YDraw : public yetty::YDrawBase,
+class YDraw : public Card,
               public base::ObjectFactory<YDraw> {
 public:
     using Ptr = std::shared_ptr<YDraw>;
 
-    //=========================================================================
-    // Factory methods
-    //=========================================================================
+    static constexpr uint32_t SHADER_GLYPH = 0x100003;
+
     static Result<CardPtr> create(
         const YettyContext& ctx,
         int32_t x, int32_t y,
@@ -39,28 +36,11 @@ public:
         const std::string& payload) noexcept;
 
     ~YDraw() override = default;
-
     const char* typeName() const override { return "ydraw"; }
+    bool needsBuffer() const override { return true; }
 
-    // Constructor is public for make_shared, use create() factory instead
-    YDraw(const YettyContext& ctx,
-          int32_t x, int32_t y,
-          uint32_t widthCells, uint32_t heightCells,
-          const std::string& args, const std::string& payload);
-
-    Result<void> init();
-
-    // Payload parsing
-    void parseArgs(const std::string& args);
-    Result<void> parsePayload(const std::string& payload);
-    Result<void> parseBinary(const std::string& payload);
-    Result<void> parseYAML(const std::string& yaml);
-    Result<void> parseYAMLPrimitive(const YAML::Node& item);
-    void parseAnimateBlock(const YAML::Node& animNode, uint32_t primIndex);
-    static uint32_t parseColor(const YAML::Node& node);
-
-    std::string _argsStr;
-    std::string _payloadStr;
+protected:
+    using Card::Card;
 };
 
 } // namespace yetty::card
