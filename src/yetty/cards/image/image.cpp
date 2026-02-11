@@ -181,19 +181,21 @@ public:
         return Ok();
     }
 
-    Result<void> render(float time) override {
+    void renderToStaging(float time) override {
         (void)time;
 
         if (_needsScaling && !_originalPixels.empty()) {
             if (auto res = runScaleCompute(); !res) {
-                return Err<void>("Image::update: scaling failed", res);
+                yerror("Image::renderToStaging: scaling failed: {}", error_msg(res));
             }
             _needsScaling = false;
         }
+    }
 
+    Result<void> render() override {
         if (_metadataDirty) {
             if (auto res = uploadMetadata(); !res) {
-                return Err<void>("Image::update: metadata upload failed", res);
+                return Err<void>("Image::render: metadata upload failed", res);
             }
             _metadataDirty = false;
         }

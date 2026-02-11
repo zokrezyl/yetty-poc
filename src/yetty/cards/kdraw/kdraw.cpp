@@ -491,16 +491,18 @@ public:
         return Ok();
     }
 
-    Result<void> render(float time) override {
+    void renderToStaging(float time) override {
         (void)time;
 
         if (_dirty) {
             if (auto res = rebuildAndUpload(); !res) {
-                return Err<void>("KDraw::render: rebuildAndUpload failed", res);
+                yerror("KDraw::renderToStaging: rebuildAndUpload failed: {}", error_msg(res));
             }
             _dirty = false;
         }
+    }
 
+    Result<void> render() override {
         if (_metadataDirty) {
             if (auto res = uploadMetadata(); !res) {
                 return Err<void>("KDraw::render: metadata upload failed", res);

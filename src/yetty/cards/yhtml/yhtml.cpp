@@ -349,7 +349,7 @@ public:
         return Ok();
     }
 
-    Result<void> render(float /*time*/) override {
+    Result<void> render() override {
         if (!_builder) return Ok();
 
         // Process deferred navigation (avoid re-entrancy in litehtml callbacks)

@@ -569,16 +569,18 @@ public:
         return Ok();
     }
 
-    Result<void> render(float time) override {
+    void renderToStaging(float time) override {
         (void)time;
 
         if (_dirty) {
             if (auto res = rebuildAndUpload(); !res) {
-                return Err<void>("HDraw::render: rebuildAndUpload failed", res);
+                yerror("HDraw::renderToStaging: rebuildAndUpload failed: {}", error_msg(res));
             }
             _dirty = false;
         }
+    }
 
+    Result<void> render() override {
         if (_metadataDirty) {
             if (auto res = uploadMetadata(); !res) {
                 return Err<void>("HDraw::render: metadata upload failed", res);

@@ -200,9 +200,14 @@ public:
         _gridWidth = _builder->gridWidth();
         _gridHeight = _builder->gridHeight();
         _metadataDirty = true;
-        _dirty = false;
 
         return Ok();
+    }
+
+    bool needsBufferRealloc() override {
+        if (!_builder) return false;
+        if (!_primStorage.isValid() && !_builder->primStaging().empty()) return true;
+        return false;
     }
 
     Result<void> allocateTextures() override {
@@ -213,14 +218,8 @@ public:
         return Ok();
     }
 
-    Result<void> render(float time) override {
-        (void)time;
+    Result<void> render() override {
         if (!_builder) return Ok();
-
-        if (_dirty) {
-            if (auto res = rebuildAndUpload(); !res) return res;
-            _dirty = false;
-        }
 
         if (_metadataDirty) {
             if (auto res = uploadMetadata(); !res) return res;
@@ -306,7 +305,6 @@ public:
         yinfo("DiagramImpl::init: {} prims, {} glyphs",
               _builder->primitiveCount(), _builder->glyphCount());
 
-        _dirty = true;
         _metadataDirty = true;
         return Ok();
     }
@@ -371,62 +369,6 @@ private:
         _builder->setSceneBounds(graph.minX, graph.minY, graph.maxX, graph.maxY);
         _builder->setBgColor(0xFF2E1A1A);
 
-        return Ok();
-    }
-
-    //=========================================================================
-    // GPU rebuild
-    //=========================================================================
-
-    Result<void> rebuildAndUpload() {
-        _builder->computeSceneBoundsFromPrims(_primitives, _primCount);
-        _builder->computeGridDims(_primitives, _primCount);
-        _builder->buildGridFromPrims(_primitives, _primCount);
-
-        const auto& gridData = _builder->gridStaging();
-        uint32_t gridBytes = static_cast<uint32_t>(gridData.size()) * sizeof(uint32_t);
-        uint32_t glyphBytes = static_cast<uint32_t>(
-            _builder->glyphs().size() * sizeof(YDrawGlyph));
-        uint32_t derivedTotalSize = gridBytes + glyphBytes;
-
-        if (derivedTotalSize > 0) {
-            if (!_derivedStorage.isValid() || derivedTotalSize > _derivedStorage.size) {
-                auto storageResult = _cardMgr->bufferManager()->allocateBuffer(
-                    metadataSlotIndex(), "derived", derivedTotalSize);
-                if (!storageResult) {
-                    return Err<void>("DiagramImpl::rebuild: derived alloc failed");
-                }
-                _derivedStorage = *storageResult;
-            }
-        }
-
-        if (_derivedStorage.isValid() && derivedTotalSize > 0) {
-            uint8_t* base = _derivedStorage.data;
-            std::memset(base, 0, _derivedStorage.size);
-            uint32_t offset = 0;
-
-            _grid = reinterpret_cast<uint32_t*>(base + offset);
-            _gridSize = static_cast<uint32_t>(gridData.size());
-            _gridWidth = _builder->gridWidth();
-            _gridHeight = _builder->gridHeight();
-            _gridOffset = (_derivedStorage.offset + offset) / sizeof(float);
-            std::memcpy(base + offset, gridData.data(), gridBytes);
-            offset += gridBytes;
-
-            _glyphOffset = (_derivedStorage.offset + offset) / sizeof(float);
-            const auto& glyphs = _builder->glyphs();
-            if (!glyphs.empty()) {
-                std::memcpy(base + offset, glyphs.data(), glyphBytes);
-            }
-
-            _cardMgr->bufferManager()->markBufferDirty(_derivedStorage);
-        }
-
-        _primitiveOffset = _primStorage.isValid() ? _primStorage.offset / sizeof(float) : 0;
-        if (_primStorage.isValid()) {
-            _cardMgr->bufferManager()->markBufferDirty(_primStorage);
-        }
-        _metadataDirty = true;
         return Ok();
     }
 
@@ -575,7 +517,6 @@ private:
     uint32_t _glyphOffset = 0;
     uint32_t _gridWidth = 0;
     uint32_t _gridHeight = 0;
-    bool _dirty = true;
     bool _metadataDirty = true;
 
     // View

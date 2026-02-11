@@ -119,9 +119,7 @@ public:
         return Ok();
     }
 
-    Result<void> render(float time) override {
-        (void)time;
-        
+    Result<void> render() override {
         if (_metadataDirty) {
             if (auto res = uploadMetadata(); !res) {
                 return Err<void>("QRCode::render: metadata upload failed", res);

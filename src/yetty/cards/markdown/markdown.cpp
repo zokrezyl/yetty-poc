@@ -196,7 +196,7 @@ public:
     Result<void> allocateTextures() override { return Ok(); }
     Result<void> writeTextures() override { return Ok(); }
 
-    Result<void> render(float /*time*/) override {
+    Result<void> render() override {
         if (!_builder) return Ok();
 
         if (_dirty) {

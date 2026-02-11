@@ -22,6 +22,13 @@ namespace yetty {
  * Buffer cards use CardBufferManager for linear GPU storage.
  * Texture cards use CardTextureManager for atlas textures.
  * A card may need both.
+ *
+ * Per-frame lifecycle (orchestrated by gpu-screen):
+ *
+ *   Phase 1 — renderToStaging(time)    [every frame, all active cards]
+ *   Phase 2 — allocation loops          [only when layout changes]
+ *   Phase 3 — render()            [every frame, all active cards]
+ *   Flush   — manager uploads to GPU
  */
 class Card : public base::EventListener {
 public:
@@ -36,30 +43,106 @@ public:
     //=========================================================================
     // Resource declarations
     //=========================================================================
+
+    /// Returns true if this card uses buffer storage (CardBufferManager).
+    /// Buffer cards participate in the buffer allocation loops.
+    /// Examples: ydraw (SDF primitives), plot (float data), qrcode (packed bits).
     virtual bool needsBuffer() const { return false; }
+
+    /// Returns true if this card uses texture storage (CardTextureManager).
+    /// Texture cards participate in the atlas allocation and packing loops.
+    /// Examples: image (pixel data), pdf (rendered pages), thorvg (SVG renders).
     virtual bool needsTexture() const { return false; }
 
-    // For gpu-screen two-pass rendering (derived from needsTexture)
-    bool isTextureCard() const { return needsTexture(); }
+    //=========================================================================
+    // Phase 1: Per-frame staging (called every frame for all active cards)
+    //=========================================================================
+
+    /// Perform all per-frame computation into card-owned staging data.
+    ///
+    /// This is the card's "think" phase — advance animations, recompute layouts,
+    /// rebuild spatial structures, process external input, etc. All work happens
+    /// in card-private memory; this method must NOT touch GPU handles or call
+    /// any CardBufferManager/CardTextureManager write methods.
+    ///
+    /// After this call, the card knows:
+    ///   - What its staging data looks like for this frame
+    ///   - Whether its buffer/texture allocation needs changed (reported via
+    ///     needsBufferRealloc/needsTextureRealloc)
+    ///
+    /// @param time  Wall-clock time in seconds since an arbitrary epoch,
+    ///              consistent across all cards in a frame.
+    virtual void renderToStaging(float time) { (void)time; }
+
+    //=========================================================================
+    // Phase 2: Allocation (runs only when buffer/texture layout changes)
+    //=========================================================================
+
+    /// Returns true if this card's buffer size needs changed since last allocation.
+    /// Checked every frame after renderToStaging(). If any card returns true,
+    /// the full buffer repack (declareBufferNeeds → commitReservations →
+    /// allocateBuffers) is triggered for ALL buffer cards.
+    virtual bool needsBufferRealloc() { return false; }
+
+    /// Returns true if this card's texture size needs changed since last allocation.
+    /// Checked every frame after renderToStaging(). If any card returns true,
+    /// the full texture repack (clearHandles → allocateTextures → createAtlas →
+    /// writeTextures) is triggered for ALL texture cards.
+    virtual bool needsTextureRealloc() { return false; }
+
+    /// Declare total buffer byte needs via bufferManager()->reserve().
+    /// Called during buffer repack. The card should reserve space for all its
+    /// sub-allocations (e.g., primitives, derived data, grid).
+    /// Must NOT allocate — only call reserve().
+    virtual void declareBufferNeeds() {}
+
+    /// Obtain buffer handles from bufferManager()->allocateBuffer().
+    /// Called after commitReservations() has sized the GPU buffer.
+    /// The card receives BufferHandle with direct CPU pointers — it should
+    /// copy staging data into these handles and call markBufferDirty().
+    /// Handles remain valid until the next buffer repack or explicit release.
+    virtual Result<void> allocateBuffers() { return Ok(); }
+
+    /// Obtain texture handles from textureManager()->allocate().
+    /// Called during texture repack after clearHandles(). The card declares
+    /// the width/height it needs. Atlas positions are NOT yet assigned —
+    /// that happens in createAtlas() after all cards have allocated.
+    virtual Result<void> allocateTextures() { return Ok(); }
+
+    /// Write pixel data into the atlas after createAtlas() has assigned positions.
+    /// Called during texture repack. The card should call textureManager()->write()
+    /// with its pixel data. Atlas positions are now final.
+    virtual Result<void> writeTextures() { return Ok(); }
+
+    //=========================================================================
+    // Phase 3: Per-frame GPU writes (called every frame for all active cards)
+    //=========================================================================
+
+    /// Write per-frame data to GPU through allocated handles.
+    ///
+    /// This is where the card writes metadata (buffer offsets, scene bounds,
+    /// grid dimensions, animation state, zoom/pan, etc.) and any per-frame
+    /// buffer updates that don't require reallocation.
+    ///
+    /// For cards with stable allocations (e.g., plot with external writers),
+    /// this may only write metadata. For animated cards, this may also
+    /// mark buffer regions dirty after in-place updates.
+    ///
+    /// Called after allocation is settled — handles are guaranteed valid.
+    virtual Result<void> render() { return Ok(); }
 
     //=========================================================================
     // Lifecycle
     //=========================================================================
 
-    // Called every frame before allocation loops. Returns true if the card's
-    // resource needs have changed and the corresponding allocation loop must re-run.
-    virtual bool needsBufferRealloc() { return false; }
-    virtual bool needsTextureRealloc() { return false; }
-
-    // Loop 1: Buffer cards declare their total buffer needs via reserve()
-    virtual void declareBufferNeeds() {}
-    // Loop 2: Cards allocate/re-register their resources
-    virtual Result<void> allocateBuffers() { return Ok(); }
-    virtual Result<void> allocateTextures() { return Ok(); }
-    // Loop 3b: After createAtlas(), texture cards write pixel data into the atlas
-    virtual Result<void> writeTextures() { return Ok(); }
-
+    /// Release all resources (metadata, buffer handles, texture handles, events).
+    /// Called when the card is permanently removed.
     virtual Result<void> dispose() = 0;
+
+    /// Save GPU-resident data back to card-owned staging and release handles.
+    /// Called when the card scrolls off-screen. The card must be able to
+    /// fully reconstruct its GPU state from staging when reactivated
+    /// (via the normal declareBufferNeeds → allocateBuffers path).
     virtual void suspend() = 0;
 
     //=========================================================================
@@ -79,11 +162,6 @@ public:
     }
     virtual void onKeyDown(uint32_t codepoint, int mods) { (void)codepoint; (void)mods; }
     virtual void onKeyUp(uint32_t codepoint, int mods) { (void)codepoint; (void)mods; }
-
-    //=========================================================================
-    // Per-frame render (called if card is visible, after allocateBuffers/allocateTextures)
-    //=========================================================================
-    virtual Result<void> render(float time) { (void)time; return Ok(); }
 
     // Called by gpu-screen when cell pixel size changes (e.g. zoom)
     virtual void setCellSize(uint32_t cellWidth, uint32_t cellHeight) {

@@ -1061,7 +1061,7 @@ Result<void> YPdf::writeTextures() {
     return Ok();
 }
 
-Result<void> YPdf::render(float /*time*/) {
+Result<void> YPdf::render() {
     if (_dirty) {
         if (auto res = rebuildAndUpload(); !res) {
             return Err<void>("YPdf::render: rebuildAndUpload failed", res);

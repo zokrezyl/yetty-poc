@@ -225,7 +225,8 @@ public:
     // Card interface
     //=========================================================================
     Result<void> dispose() override = 0;
-    Result<void> render(float time) override = 0;
+    void renderToStaging(float time) override = 0;
+    Result<void> render() override = 0;
     const char* typeName() const override { return "hdraw"; }
     bool needsBuffer() const override { return true; }
 

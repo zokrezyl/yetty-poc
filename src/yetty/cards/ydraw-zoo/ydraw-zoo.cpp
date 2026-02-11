@@ -1,74 +1,468 @@
 #include "ydraw-zoo.h"
+#include "../../ydraw/ydraw-builder.h"
 #include "../hdraw/hdraw.h"  // SDFPrimitive, SDFType
+#include <yetty/msdf-glyph-data.h>
 #include <ytrace/ytrace.hpp>
 #include <cmath>
+#include <cstring>
 #include <chrono>
+#include <sstream>
 
 namespace yetty::card {
 
 //=============================================================================
-// Constructor
+// Constructor / Destructor
 //=============================================================================
 
 YDrawZoo::YDrawZoo(const YettyContext& ctx,
                    int32_t x, int32_t y,
-                   uint32_t widthCells, uint32_t heightCells)
-    : YDrawBase(ctx, x, y, widthCells, heightCells)
+                   uint32_t widthCells, uint32_t heightCells,
+                   const std::string& args)
+    : Card(ctx.cardManager, ctx.gpu, x, y, widthCells, heightCells)
+    , _argsStr(args)
+    , _screenId(ctx.screenId)
 {
+    _shaderGlyph = SHADER_GLYPH;
     auto seed = std::chrono::high_resolution_clock::now().time_since_epoch().count();
     _rng.seed(static_cast<uint32_t>(seed));
+
+    auto builderRes = YDrawBuilder::create(ctx.fontManager, ctx.globalAllocator);
+    if (builderRes) {
+        _builder = *builderRes;
+    } else {
+        yerror("YDrawZoo: failed to create builder");
+    }
 }
+
+YDrawZoo::~YDrawZoo() { dispose(); }
 
 //=============================================================================
 // Initialization
 //=============================================================================
 
 Result<void> YDrawZoo::init() {
-    if (auto res = initBase(); !res) {
-        return res;
+    auto metaResult = _cardMgr->allocateMetadata(sizeof(YDrawMetadata));
+    if (!metaResult) {
+        return Err<void>("YDrawZoo::init: failed to allocate metadata");
     }
+    _metaHandle = *metaResult;
 
-    // Fixed scene bounds — viewport never shifts
-    setSceneBounds(0, 0, SCENE_W, SCENE_H);
+    parseArgs(_argsStr);
 
-    // Greedy pre-allocation: reserve headroom so mid-render addPrimitive() calls
-    // succeed without triggering buffer repack events every frame.
-    setPrimCapacityHint(TARGET_OBJECTS * 3);
+    _builder->setSceneBounds(0, 0, SCENE_W, SCENE_H);
+    _builder->setBgColor(_bgColor);
+    _builder->addFlags(YDrawBuilder::FLAG_UNIFORM_SCALE);
 
-    // Dark background
-    setBgColor(0xFF1A1A2E);  // ABGR: dark navy
-
-    // Uniform scaling so SDF shapes (circles, stars, etc.) aren't distorted
-    addFlags(FLAG_UNIFORM_SCALE);
-
-    markDirty();
+    _dirty = true;
+    _metadataDirty = true;
     return Ok();
 }
 
 //=============================================================================
-// Render — procedural update each frame
+// Argument parsing
 //=============================================================================
 
-Result<void> YDrawZoo::render(float time) {
-    // First frame: seed initial objects with staggered ages
+void YDrawZoo::parseArgs(const std::string& args) {
+    if (args.empty()) return;
+
+    std::istringstream iss(args);
+    std::string token;
+
+    while (iss >> token) {
+        if (token == "--points" || token == "-n") {
+            uint32_t v; if (iss >> v) _targetPoints = std::max(2u, std::min(v, 100u));
+        } else if (token == "--connections" || token == "-k") {
+            uint32_t v; if (iss >> v) _targetConnsPerCP = std::max(1u, std::min(v, 10u));
+        } else if (token == "--growth" || token == "-g") {
+            float v; if (iss >> v) _growthRate = std::max(0.05f, std::min(v, 3.0f));
+        } else if (token == "--max-dist") {
+            float v; if (iss >> v) _maxConnectionDist = std::max(20.0f, std::min(v, 600.0f));
+        } else if (token == "--marker-size") {
+            float v; if (iss >> v) _cpMarkerSize = std::max(0.5f, std::min(v, 20.0f));
+        } else if (token == "--stroke-min") {
+            float v; if (iss >> v) _strokeMin = std::max(0.1f, std::min(v, 10.0f));
+        } else if (token == "--stroke-max") {
+            float v; if (iss >> v) _strokeMax = std::max(_strokeMin, std::min(v, 20.0f));
+        } else if (token == "--curve-ratio") {
+            float v; if (iss >> v) _curveRatio = std::max(0.0f, std::min(v, 1.0f));
+        } else if (token == "--spawn-radius") {
+            std::string s;
+            if (iss >> s) {
+                auto comma = s.find(',');
+                if (comma != std::string::npos) {
+                    try {
+                        _spawnRadiusMin = std::stof(s.substr(0, comma));
+                        _spawnRadiusMax = std::stof(s.substr(comma + 1));
+                        if (_spawnRadiusMax < _spawnRadiusMin)
+                            std::swap(_spawnRadiusMin, _spawnRadiusMax);
+                    } catch (...) {}
+                }
+            }
+        } else if (token == "--bg-color") {
+            std::string s;
+            if (iss >> s) {
+                if (s.substr(0, 2) == "0x" || s.substr(0, 2) == "0X")
+                    s = s.substr(2);
+                try {
+                    _bgColor = static_cast<uint32_t>(std::stoul(s, nullptr, 16));
+                } catch (...) {}
+            }
+        }
+    }
+}
+
+//=============================================================================
+// Card lifecycle
+//=============================================================================
+
+bool YDrawZoo::needsBufferRealloc() {
+    if (!_primStorage.isValid()) return true;
+    if (_primBuffer.size() > _primCapacity) return true;
+    if (!_builder) return false;
+    uint32_t gridBytes = static_cast<uint32_t>(_builder->gridStaging().size()) * sizeof(uint32_t);
+    if (gridBytes > 0 && (!_derivedStorage.isValid() || gridBytes > _derivedStorage.size))
+        return true;
+    return false;
+}
+
+void YDrawZoo::renderToStaging(float time) {
+    if (!_builder) return;
+
+    // First frame: seed initial control points with staggered ages
     if (!_initialized) {
         _lastTime = time;
-        for (uint32_t i = 0; i < TARGET_OBJECTS; i++) {
-            spawnObject(time - std::uniform_real_distribution<float>(0.0f, 3.0f)(_rng));
+        for (uint32_t i = 0; i < _targetPoints; i++) {
+            spawnControlPoint(time - std::uniform_real_distribution<float>(0.0f, 3.0f)(_rng));
         }
         _initialized = true;
     }
 
     _lastTime = time;
 
-    updateObjects(time);
-
-    // Spawn replacements for removed objects
-    while (_objects.size() < TARGET_OBJECTS) {
-        spawnObject(time);
+    // Cull control points outside scene
+    for (int i = static_cast<int>(_controlPoints.size()) - 1; i >= 0; i--) {
+        auto pos = cpPosition(_controlPoints[i], time);
+        float age = time - _controlPoints[i].spawnTime;
+        if (age < 0.0f) age = 0.0f;
+        float scale = std::exp(_growthRate * age);
+        float margin = _cpMarkerSize * scale * 2.0f;
+        if (pos.x - margin > SCENE_W || pos.x + margin < 0 ||
+            pos.y - margin > SCENE_H || pos.y + margin < 0) {
+            removeControlPoint(static_cast<uint32_t>(i));
+        }
     }
 
-    return YDrawBase::render(time);
+    // Spawn replacements
+    while (_controlPoints.size() < _targetPoints) {
+        spawnControlPoint(time);
+    }
+
+    // Update connections (remove broken, add new)
+    updateConnections(time);
+
+    // Generate prims
+    _primBuffer.clear();
+    uint32_t layer = 0;
+
+    // 1. Connection prims (curves/lines/shapes) — lower layers
+    for (const auto& conn : _connections) {
+        if (conn.cpA >= _controlPoints.size() || conn.cpB >= _controlPoints.size())
+            continue;
+
+        auto posA = cpPosition(_controlPoints[conn.cpA], time);
+        auto posB = cpPosition(_controlPoints[conn.cpB], time);
+
+        // Animated curvature
+        float curv = conn.curvature
+                   + 0.15f * std::sin(time * conn.curveAnimFreq + conn.curveAnimPhase);
+
+        // Breathing alpha
+        float breathe = 0.6f + 0.4f * std::sin(time * 1.5f + conn.curveAnimPhase);
+        uint8_t alpha = static_cast<uint8_t>(breathe * 200.0f);
+        uint32_t color = (conn.color & 0x00FFFFFFu)
+                       | (static_cast<uint32_t>(alpha) << 24);
+
+        SDFPrimitive prim = {};
+
+        switch (conn.type) {
+        case 0: { // Bezier curve (dominant)
+            float dx = posB.x - posA.x;
+            float dy = posB.y - posA.y;
+            float len = std::sqrt(dx * dx + dy * dy);
+            if (len < 0.001f) continue;
+            float perpX = -dy / len;
+            float perpY = dx / len;
+            float midX = (posA.x + posB.x) * 0.5f;
+            float midY = (posA.y + posB.y) * 0.5f;
+            float ctrlX = midX + perpX * curv * len * 0.5f;
+            float ctrlY = midY + perpY * curv * len * 0.5f;
+
+            prim.type = static_cast<uint32_t>(SDFType::Bezier2);
+            prim.params[0] = posA.x;
+            prim.params[1] = posA.y;
+            prim.params[2] = ctrlX;
+            prim.params[3] = ctrlY;
+            prim.params[4] = posB.x;
+            prim.params[5] = posB.y;
+            prim.fillColor = 0;
+            prim.strokeColor = color;
+            prim.strokeWidth = conn.strokeWidth;
+            prim.layer = layer++;
+            break;
+        }
+        case 1: { // Straight segment
+            prim.type = static_cast<uint32_t>(SDFType::Segment);
+            prim.params[0] = posA.x;
+            prim.params[1] = posA.y;
+            prim.params[2] = posB.x;
+            prim.params[3] = posB.y;
+            prim.fillColor = 0;
+            prim.strokeColor = color;
+            prim.strokeWidth = conn.strokeWidth;
+            prim.layer = layer++;
+            break;
+        }
+        case 2: { // Shape at midpoint
+            float midX = (posA.x + posB.x) * 0.5f;
+            float midY = (posA.y + posB.y) * 0.5f;
+            float dx = posB.x - posA.x;
+            float dy = posB.y - posA.y;
+            float dist = std::sqrt(dx * dx + dy * dy);
+            float size = std::max(3.0f, dist * 0.12f);
+            prim = makeShape(conn.shapeChoice, midX, midY, size, color, layer++);
+            break;
+        }
+        }
+
+        YDrawBuilder::recomputeAABB(prim);
+        _primBuffer.push_back(prim);
+    }
+
+    // 2. Control point markers (small circles, higher layers)
+    for (uint32_t i = 0; i < static_cast<uint32_t>(_controlPoints.size()); i++) {
+        auto& cp = _controlPoints[i];
+        auto pos = cpPosition(cp, time);
+
+        float breathe = 0.7f + 0.3f * std::sin(time * cp.animFreq + cp.animPhase);
+        uint8_t alpha = static_cast<uint8_t>(breathe * 255.0f);
+        uint32_t color = (cp.color & 0x00FFFFFFu)
+                       | (static_cast<uint32_t>(alpha) << 24);
+
+        // Scale marker with zoom effect
+        float age = time - cp.spawnTime;
+        if (age < 0.0f) age = 0.0f;
+        float scale = std::exp(_growthRate * age);
+        float markerSize = std::min(_cpMarkerSize * scale, 12.0f);
+
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::Circle);
+        prim.params[0] = pos.x;
+        prim.params[1] = pos.y;
+        prim.params[2] = markerSize;
+        prim.fillColor = color;
+        prim.strokeColor = 0;
+        prim.strokeWidth = 0;
+        prim.layer = layer++;
+
+        YDrawBuilder::recomputeAABB(prim);
+        _primBuffer.push_back(prim);
+    }
+
+    // Feed to builder staging and compute grid
+    _builder->clear();
+    for (const auto& prim : _primBuffer) {
+        _builder->addPrimitive(prim);
+    }
+    _builder->calculate();
+
+    _dirty = true;
+}
+
+void YDrawZoo::declareBufferNeeds() {
+    if (!_builder) return;
+
+    // Release current GPU storage
+    _derivedStorage = StorageHandle::invalid();
+    _grid = nullptr;
+    _gridSize = 0;
+    _primStorage = StorageHandle::invalid();
+    _primitives = nullptr;
+    _primCount = 0;
+    _primCapacity = 0;
+
+    const auto& primStaging = _builder->primStaging();
+    if (primStaging.empty()) {
+        _builder->clearGridStaging();
+        return;
+    }
+
+    // Reserve prim storage
+    uint32_t primSize = static_cast<uint32_t>(primStaging.size()) * sizeof(SDFPrimitive);
+    _cardMgr->bufferManager()->reserve(primSize);
+
+    // Grid is already computed in renderToStaging via builder->calculate()
+    // Reserve with 2x headroom since grid size can vary frame-to-frame
+    uint32_t gridBytes = static_cast<uint32_t>(_builder->gridStaging().size()) * sizeof(uint32_t);
+    if (gridBytes > 0) {
+        _cardMgr->bufferManager()->reserve(gridBytes * 2);
+    }
+}
+
+Result<void> YDrawZoo::allocateBuffers() {
+    if (!_builder) return Ok();
+
+    const auto& primStaging = _builder->primStaging();
+    const auto& gridStaging = _builder->gridStaging();
+
+    // Allocate and copy primitives
+    if (!primStaging.empty()) {
+        uint32_t count = static_cast<uint32_t>(primStaging.size());
+        uint32_t allocBytes = count * sizeof(SDFPrimitive);
+        auto primResult = _cardMgr->bufferManager()->allocateBuffer(
+            metadataSlotIndex(), "prims", allocBytes);
+        if (!primResult) {
+            return Err<void>("YDrawZoo::allocateBuffers: prim alloc failed");
+        }
+        _primStorage = *primResult;
+        _primitives = reinterpret_cast<SDFPrimitive*>(_primStorage.data);
+        _primCapacity = count;
+        _primCount = count;
+        std::memcpy(_primitives, primStaging.data(), count * sizeof(SDFPrimitive));
+        _cardMgr->bufferManager()->markBufferDirty(_primStorage);
+    }
+
+    // Allocate and copy grid (with 2x headroom matching reserve)
+    uint32_t gridBytes = static_cast<uint32_t>(gridStaging.size()) * sizeof(uint32_t);
+    if (gridBytes > 0) {
+        uint32_t allocSize = gridBytes * 2;
+        auto storageResult = _cardMgr->bufferManager()->allocateBuffer(
+            metadataSlotIndex(), "derived", allocSize);
+        if (!storageResult) {
+            return Err<void>("YDrawZoo::allocateBuffers: derived alloc failed");
+        }
+        _derivedStorage = *storageResult;
+
+        uint8_t* base = _derivedStorage.data;
+        std::memset(base, 0, _derivedStorage.size);
+        _grid = reinterpret_cast<uint32_t*>(base);
+        _gridSize = static_cast<uint32_t>(gridStaging.size());
+        _gridOffset = _derivedStorage.offset / sizeof(float);
+        std::memcpy(base, gridStaging.data(), gridBytes);
+        _cardMgr->bufferManager()->markBufferDirty(_derivedStorage);
+    }
+
+    _primitiveOffset = _primStorage.isValid() ? _primStorage.offset / sizeof(float) : 0;
+    _gridWidth = _builder->gridWidth();
+    _gridHeight = _builder->gridHeight();
+    _metadataDirty = true;
+    _dirty = false;  // allocation already copied staging
+
+    return Ok();
+}
+
+Result<void> YDrawZoo::render() {
+    if (!_builder) return Ok();
+
+    if (_dirty) {
+        // Copy prims to GPU
+        if (_primitives && !_primBuffer.empty()) {
+            uint32_t count = std::min(static_cast<uint32_t>(_primBuffer.size()), _primCapacity);
+            std::memcpy(_primitives, _primBuffer.data(), count * sizeof(SDFPrimitive));
+            _primCount = count;
+            _cardMgr->bufferManager()->markBufferDirty(_primStorage);
+        }
+
+        // Copy pre-computed grid to GPU
+        if (_derivedStorage.isValid()) {
+            const auto& gridData = _builder->gridStaging();
+            uint32_t gridBytes = static_cast<uint32_t>(gridData.size()) * sizeof(uint32_t);
+            if (gridBytes > 0 && gridBytes <= _derivedStorage.size) {
+                uint8_t* base = _derivedStorage.data;
+                std::memset(base, 0, _derivedStorage.size);
+                std::memcpy(base, gridData.data(), gridBytes);
+                _grid = reinterpret_cast<uint32_t*>(base);
+                _gridSize = static_cast<uint32_t>(gridData.size());
+                _gridWidth = _builder->gridWidth();
+                _gridHeight = _builder->gridHeight();
+                _gridOffset = _derivedStorage.offset / sizeof(float);
+                _cardMgr->bufferManager()->markBufferDirty(_derivedStorage);
+            }
+        }
+
+        _primitiveOffset = _primStorage.isValid() ? _primStorage.offset / sizeof(float) : 0;
+        _metadataDirty = true;
+        _dirty = false;
+    }
+
+    if (_metadataDirty) {
+        if (auto res = uploadMetadata(); !res) return res;
+        _metadataDirty = false;
+    }
+
+    return Ok();
+}
+
+Result<void> YDrawZoo::dispose() {
+    _derivedStorage = StorageHandle::invalid();
+    _grid = nullptr;
+    _gridSize = 0;
+    _primStorage = StorageHandle::invalid();
+    _primitives = nullptr;
+    _primCount = 0;
+    _primCapacity = 0;
+    if (_metaHandle.isValid() && _cardMgr) {
+        if (auto res = _cardMgr->deallocateMetadata(_metaHandle); !res) {
+            yerror("YDrawZoo::dispose: deallocateMetadata failed: {}", error_msg(res));
+        }
+        _metaHandle = MetadataHandle::invalid();
+    }
+    return Ok();
+}
+
+void YDrawZoo::suspend() {
+    _derivedStorage = StorageHandle::invalid();
+    _grid = nullptr;
+    _gridSize = 0;
+    _primStorage = StorageHandle::invalid();
+    _primitives = nullptr;
+    _primCount = 0;
+    _primCapacity = 0;
+}
+
+Result<void> YDrawZoo::uploadMetadata() {
+    if (!_metaHandle.isValid()) {
+        return Err<void>("YDrawZoo::uploadMetadata: invalid handle");
+    }
+
+    float cellSize = _builder->cellSize();
+
+    YDrawMetadata meta = {};
+    meta.primitiveOffset = _primitiveOffset;
+    meta.primitiveCount = _primCount;
+    meta.gridOffset = _gridOffset;
+    meta.gridWidth = _gridWidth;
+    meta.gridHeight = _gridHeight;
+    std::memcpy(&meta.cellSize, &cellSize, sizeof(float));
+    meta.glyphOffset = 0;
+    meta.glyphCount = 0;
+    float sceneMinX = _builder->sceneMinX();
+    float sceneMinY = _builder->sceneMinY();
+    float sceneMaxX = _builder->sceneMaxX();
+    float sceneMaxY = _builder->sceneMaxY();
+    std::memcpy(&meta.sceneMinX, &sceneMinX, sizeof(float));
+    std::memcpy(&meta.sceneMinY, &sceneMinY, sizeof(float));
+    std::memcpy(&meta.sceneMaxX, &sceneMaxX, sizeof(float));
+    std::memcpy(&meta.sceneMaxY, &sceneMaxY, sizeof(float));
+    meta.widthCells = _widthCells & 0xFFFF;
+    meta.heightCells = _heightCells & 0xFFFF;
+    // zoom = 1.0f → f16 = 0x3C00
+    meta.flags = (_builder->flags() & 0xFFFF) | (0x3C00u << 16);
+    meta.bgColor = _builder->bgColor();
+
+    if (auto res = _cardMgr->writeMetadata(_metaHandle, &meta, sizeof(meta)); !res) {
+        return Err<void>("YDrawZoo::uploadMetadata: write failed");
+    }
+    return Ok();
 }
 
 //=============================================================================
@@ -102,18 +496,16 @@ uint32_t YDrawZoo::randomColor() {
 }
 
 //=============================================================================
-// Shape generation
+// Shape generation (unchanged — creates SDFPrimitive structs)
 //=============================================================================
 
-SDFPrimitive YDrawZoo::makeRandomShape(float cx, float cy, float size,
-                                        uint32_t color, uint32_t layer) {
+SDFPrimitive YDrawZoo::makeShape(int choice, float cx, float cy, float size,
+                                  uint32_t color, uint32_t layer) {
     SDFPrimitive prim = {};
     prim.layer = layer;
     prim.fillColor = color;
     prim.strokeColor = 0;
     prim.strokeWidth = 0;
-
-    int choice = std::uniform_int_distribution<int>(0, 42)(_rng);
 
     switch (choice) {
     case 0: // Circle
@@ -446,404 +838,136 @@ SDFPrimitive YDrawZoo::makeRandomShape(float cx, float cy, float size,
     return prim;
 }
 
-SDFPrimitive YDrawZoo::makeRandom3DShape(float cx, float cy, float size,
-                                          uint32_t color, uint32_t layer) {
-    SDFPrimitive prim = {};
-    prim.layer = layer;
-    prim.fillColor = color;
-    prim.strokeColor = 0;
-    prim.strokeWidth = 0;
-
-    float x3d = scene2Dx(cx);
-    float y3d = scene2Dy(cy);
-    float s3d = scene2Dsize(size);
-
-    int choice = std::uniform_int_distribution<int>(0, 5)(_rng);
-
-    switch (choice) {
-    case 0: // Sphere
-        prim.type = static_cast<uint32_t>(SDFType::Sphere3D);
-        prim.params[0] = x3d;
-        prim.params[1] = y3d;
-        prim.params[2] = 0.0f;
-        prim.params[3] = s3d;
-        break;
-    case 1: // Box3D
-        prim.type = static_cast<uint32_t>(SDFType::Box3D);
-        prim.params[0] = x3d;
-        prim.params[1] = y3d;
-        prim.params[2] = 0.0f;
-        prim.params[3] = s3d;
-        prim.params[4] = s3d * 0.8f;
-        prim.params[5] = s3d * 0.6f;
-        break;
-    case 2: // Torus
-        prim.type = static_cast<uint32_t>(SDFType::Torus3D);
-        prim.params[0] = x3d;
-        prim.params[1] = y3d;
-        prim.params[2] = 0.0f;
-        prim.params[3] = s3d * 0.8f;  // major radius
-        prim.params[4] = s3d * 0.3f;  // minor radius
-        break;
-    case 3: // Octahedron
-        prim.type = static_cast<uint32_t>(SDFType::Octahedron3D);
-        prim.params[0] = x3d;
-        prim.params[1] = y3d;
-        prim.params[2] = 0.0f;
-        prim.params[3] = s3d;
-        break;
-    case 4: // Pyramid
-        prim.type = static_cast<uint32_t>(SDFType::Pyramid3D);
-        prim.params[0] = x3d;
-        prim.params[1] = y3d;
-        prim.params[2] = 0.0f;
-        prim.params[3] = s3d * 1.5f;  // height
-        break;
-    case 5: // Cylinder
-        prim.type = static_cast<uint32_t>(SDFType::Cylinder3D);
-        prim.params[0] = x3d;
-        prim.params[1] = y3d;
-        prim.params[2] = 0.0f;
-        prim.params[3] = s3d * 0.7f;  // radius
-        prim.params[4] = s3d;          // height
-        break;
-    }
-
-    return prim;
-}
-
-void YDrawZoo::update3DPrim(SDFPrimitive& prim, float cx, float cy, float size) {
-    float x3d = scene2Dx(cx);
-    float y3d = scene2Dy(cy);
-    float s3d = scene2Dsize(size);
-
-    prim.params[0] = x3d;
-    prim.params[1] = y3d;
-    // params[2] stays at 0 (z position)
-
-    auto sdfType = static_cast<SDFType>(prim.type);
-    switch (sdfType) {
-    case SDFType::Sphere3D:
-    case SDFType::Octahedron3D:
-        prim.params[3] = s3d;
-        break;
-    case SDFType::Box3D:
-        prim.params[3] = s3d;
-        prim.params[4] = s3d * 0.8f;
-        prim.params[5] = s3d * 0.6f;
-        break;
-    case SDFType::Torus3D:
-        prim.params[3] = s3d * 0.8f;
-        prim.params[4] = s3d * 0.3f;
-        break;
-    case SDFType::Pyramid3D:
-        prim.params[3] = s3d * 1.5f;
-        break;
-    case SDFType::Cylinder3D:
-        prim.params[3] = s3d * 0.7f;
-        prim.params[4] = s3d;
-        break;
-    default:
-        break;
-    }
-}
-
 //=============================================================================
-// Object lifecycle
+// Control point + connection lifecycle
 //=============================================================================
 
-void YDrawZoo::spawnObject(float time) {
-    float angle = std::uniform_real_distribution<float>(0.0f, 6.2831853f)(_rng);
-    float dist = std::uniform_real_distribution<float>(SPAWN_RADIUS_MIN, SPAWN_RADIUS_MAX)(_rng);
-    float cx = CENTER_X + dist * std::cos(angle);
-    float cy = CENTER_Y + dist * std::sin(angle);
-
-    uint32_t color = randomColor();
-    uint32_t layer = primitiveCount();
-
-    SDFPrimitive prim = makeRandomShape(cx, cy, SPAWN_SIZE, color, layer);
-    recomputeAABB(prim);
-    uint32_t idx = addPrimitive(prim);
-
-    ZooObject obj = {};
-    obj.primIndex = idx;
-    obj.angle = angle;
-    obj.spawnTime = time;
-    obj.baseRadius = dist;
-    obj.animPhase = std::uniform_real_distribution<float>(0.0f, 6.2831853f)(_rng);
-    obj.animFreq = std::uniform_real_distribution<float>(0.8f, 2.5f)(_rng);
-    obj.baseColor = color;
-    obj.active = true;
-
-    _objects.push_back(obj);
+YDrawZoo::Vec2f YDrawZoo::cpPosition(const ControlPoint& cp, float time) const {
+    float age = time - cp.spawnTime;
+    if (age < 0.0f) age = 0.0f;
+    float scale = std::exp(_growthRate * age);
+    float dist = cp.baseRadius * scale;
+    return { CENTER_X + dist * std::cos(cp.angle),
+             CENTER_Y + dist * std::sin(cp.angle) };
 }
 
-void YDrawZoo::updateObjects(float time) {
-    bool anyChanged = false;
+uint32_t YDrawZoo::blendColors(uint32_t a, uint32_t b) {
+    uint32_t r = ((a & 0xFF) + (b & 0xFF)) / 2;
+    uint32_t g = (((a >> 8) & 0xFF) + ((b >> 8) & 0xFF)) / 2;
+    uint32_t bl = (((a >> 16) & 0xFF) + ((b >> 16) & 0xFF)) / 2;
+    return 0xFF000000u | (bl << 16) | (g << 8) | r;
+}
 
-    for (int i = static_cast<int>(_objects.size()) - 1; i >= 0; i--) {
-        auto& obj = _objects[i];
-        if (!obj.active) continue;
+void YDrawZoo::spawnControlPoint(float time) {
+    ControlPoint cp = {};
+    cp.angle = std::uniform_real_distribution<float>(0.0f, 6.2831853f)(_rng);
+    cp.spawnTime = time;
+    cp.baseRadius = std::uniform_real_distribution<float>(_spawnRadiusMin, _spawnRadiusMax)(_rng);
+    cp.animPhase = std::uniform_real_distribution<float>(0.0f, 6.2831853f)(_rng);
+    cp.animFreq = std::uniform_real_distribution<float>(0.8f, 2.5f)(_rng);
+    cp.color = randomColor();
+    _controlPoints.push_back(cp);
+}
 
-        float age = time - obj.spawnTime;
-        if (age < 0.0f) age = 0.0f;
+void YDrawZoo::removeControlPoint(uint32_t idx) {
+    // Remove connections referencing this control point
+    for (int i = static_cast<int>(_connections.size()) - 1; i >= 0; i--) {
+        if (_connections[i].cpA == idx || _connections[i].cpB == idx) {
+            _connections.erase(_connections.begin() + i);
+        }
+    }
+    // Fix indices in remaining connections
+    for (auto& conn : _connections) {
+        if (conn.cpA > idx) conn.cpA--;
+        if (conn.cpB > idx) conn.cpB--;
+    }
+    _controlPoints.erase(_controlPoints.begin() + idx);
+}
 
-        // Exponential growth
-        float scale = std::exp(GROWTH_RATE * age);
-        float size = SPAWN_SIZE * scale;
-        float dist = obj.baseRadius * scale;
-
-        float cx = CENTER_X + dist * std::cos(obj.angle);
-        float cy = CENTER_Y + dist * std::sin(obj.angle);
-
-        // Cull if fully outside scene
-        float margin = size * 2.0f;
-        if (cx - margin > SCENE_W || cx + margin < 0 ||
-            cy - margin > SCENE_H || cy + margin < 0 ||
-            size > SCENE_W) {
-            removeObject(static_cast<uint32_t>(i));
+void YDrawZoo::updateConnections(float time) {
+    // Remove connections where endpoints drifted too far apart
+    for (int i = static_cast<int>(_connections.size()) - 1; i >= 0; i--) {
+        auto& conn = _connections[i];
+        if (conn.cpA >= _controlPoints.size() || conn.cpB >= _controlPoints.size()) {
+            _connections.erase(_connections.begin() + i);
             continue;
         }
+        auto posA = cpPosition(_controlPoints[conn.cpA], time);
+        auto posB = cpPosition(_controlPoints[conn.cpB], time);
+        float dx = posB.x - posA.x;
+        float dy = posB.y - posA.y;
+        if (std::sqrt(dx * dx + dy * dy) > _maxConnectionDist) {
+            _connections.erase(_connections.begin() + i);
+        }
+    }
 
-        // Decorative: opacity breathing
-        float breathe = 0.7f + 0.3f * std::sin(time * obj.animFreq + obj.animPhase);
-        uint8_t alpha = static_cast<uint8_t>(breathe * 255.0f);
-        uint32_t animatedColor = (obj.baseColor & 0x00FFFFFFu)
-                               | (static_cast<uint32_t>(alpha) << 24);
+    // Count connections per control point
+    uint32_t cpCount = static_cast<uint32_t>(_controlPoints.size());
+    std::vector<uint32_t> connCount(cpCount, 0);
+    for (const auto& conn : _connections) {
+        if (conn.cpA < cpCount) connCount[conn.cpA]++;
+        if (conn.cpB < cpCount) connCount[conn.cpB]++;
+    }
 
-        if (obj.primIndex < primitiveCount()) {
-            auto& prim = primitivePtr()[obj.primIndex];
+    // Connect under-connected control points to nearest neighbors
+    for (uint32_t i = 0; i < cpCount; i++) {
+        if (connCount[i] >= _targetConnsPerCP) continue;
 
-            if (prim.type >= 100) {
-                // 3D shape: map 2D scene coords to 3D space
-                update3DPrim(prim, cx, cy, size);
-            } else {
-                // 2D shape: update based on type
-                auto sdfType = static_cast<SDFType>(prim.type);
-                switch (sdfType) {
-                // Endpoint-based shapes: recompute all points from cx/cy/size
-                case SDFType::Segment:
-                    prim.params[0] = cx - size;
-                    prim.params[1] = cy;
-                    prim.params[2] = cx + size;
-                    prim.params[3] = cy;
-                    prim.strokeWidth = size * 0.15f;
-                    break;
-                case SDFType::Bezier2:
-                    prim.params[0] = cx - size;
-                    prim.params[1] = cy;
-                    prim.params[2] = cx;
-                    prim.params[3] = cy - size;
-                    prim.params[4] = cx + size;
-                    prim.params[5] = cy;
-                    prim.strokeWidth = size * 0.15f;
-                    break;
-                case SDFType::Triangle:
-                    prim.params[0] = cx;
-                    prim.params[1] = cy - size;
-                    prim.params[2] = cx - size;
-                    prim.params[3] = cy + size * 0.7f;
-                    prim.params[4] = cx + size;
-                    prim.params[5] = cy + size * 0.7f;
-                    break;
-                case SDFType::Capsule:
-                    prim.params[0] = cx - size * 0.7f;
-                    prim.params[1] = cy;
-                    prim.params[2] = cx + size * 0.7f;
-                    prim.params[3] = cy;
-                    prim.params[4] = size * 0.3f;
-                    prim.strokeWidth = size * 0.1f;
-                    break;
-                case SDFType::OrientedBox:
-                    prim.params[0] = cx - size;
-                    prim.params[1] = cy - size * 0.3f;
-                    prim.params[2] = cx + size;
-                    prim.params[3] = cy + size * 0.3f;
-                    prim.params[4] = size * 0.4f;
-                    break;
-                case SDFType::OrientedVesica:
-                    prim.params[0] = cx - size * 0.5f;
-                    prim.params[1] = cy;
-                    prim.params[2] = cx + size * 0.5f;
-                    prim.params[3] = cy;
-                    prim.params[4] = size * 0.3f;
-                    break;
+        auto posI = cpPosition(_controlPoints[i], time);
 
-                // Center-based shapes: set cx/cy then size params
-                default:
-                    prim.params[0] = cx;
-                    prim.params[1] = cy;
+        float bestDist = _maxConnectionDist;
+        int bestJ = -1;
 
-                    switch (sdfType) {
-                    // Simple radius shapes: params[2] = size
-                    case SDFType::Circle:
-                    case SDFType::Pentagon:
-                    case SDFType::Hexagon:
-                    case SDFType::Heart:
-                    case SDFType::EquilateralTriangle:
-                    case SDFType::Octogon:
-                    case SDFType::Hexagram:
-                    case SDFType::Pentagram:
-                    case SDFType::QuadraticCircle:
-                    case SDFType::CoolS:
-                        prim.params[2] = size;
-                        break;
-                    case SDFType::Star:
-                        prim.params[2] = size;
-                        // params[3]=5.0, params[4]=2.5 stay fixed
-                        break;
-                    case SDFType::Box:
-                        prim.params[2] = size;
-                        prim.params[3] = size * 0.8f;
-                        prim.round = size * 0.15f;
-                        break;
-                    case SDFType::Rhombus:
-                        prim.params[2] = size;
-                        prim.params[3] = size * 1.4f;
-                        break;
-                    case SDFType::Egg:
-                    case SDFType::Ellipse:
-                        prim.params[2] = size;
-                        prim.params[3] = size * 0.6f;
-                        break;
-                    case SDFType::Arc:
-                        // params[2],[3] = sin/cos stay fixed
-                        prim.params[4] = size;
-                        prim.params[5] = size * 0.2f;
-                        break;
-                    case SDFType::RoundedBox:
-                        prim.params[2] = size;
-                        prim.params[3] = size * 0.7f;
-                        prim.params[4] = size * 0.2f;
-                        prim.params[5] = size * 0.2f;
-                        prim.params[6] = size * 0.2f;
-                        prim.params[7] = size * 0.2f;
-                        break;
-                    case SDFType::ChamferBox:
-                        prim.params[2] = size;
-                        prim.params[3] = size * 0.8f;
-                        prim.params[4] = size * 0.2f;
-                        break;
-                    case SDFType::Trapezoid:
-                        prim.params[2] = size * 0.8f;
-                        prim.params[3] = size * 0.5f;
-                        prim.params[4] = size;
-                        break;
-                    case SDFType::Parallelogram:
-                        prim.params[2] = size;
-                        prim.params[3] = size * 0.6f;
-                        prim.params[4] = size * 0.3f;
-                        break;
-                    case SDFType::IsoscelesTriangle:
-                        prim.params[2] = size * 0.7f;
-                        prim.params[3] = size * 1.2f;
-                        break;
-                    case SDFType::UnevenCapsule:
-                        prim.params[2] = size * 0.5f;
-                        prim.params[3] = size * 0.3f;
-                        prim.params[4] = size * 1.2f;
-                        break;
-                    case SDFType::CutDisk:
-                        prim.params[2] = size;
-                        prim.params[3] = size * 0.3f;
-                        break;
-                    case SDFType::Horseshoe:
-                        // params[2],[3] = sin/cos stay fixed
-                        prim.params[4] = size * 0.8f;
-                        prim.params[5] = size * 0.3f;
-                        prim.params[6] = size * 0.15f;
-                        break;
-                    case SDFType::Vesica:
-                        prim.params[2] = size * 0.6f;
-                        prim.params[3] = size;
-                        break;
-                    case SDFType::RoundedCross:
-                    case SDFType::BlobbyCross:
-                        prim.params[2] = size * 0.5f;
-                        break;
-                    case SDFType::Parabola:
-                        // params[2] stays fixed at 0.5
-                        break;
-                    case SDFType::Tunnel:
-                        prim.params[2] = size;
-                        prim.params[3] = size * 0.7f;
-                        break;
-                    case SDFType::Stairs:
-                        prim.params[2] = size * 0.3f;
-                        prim.params[3] = size * 0.2f;
-                        // params[4]=5.0 stays fixed
-                        break;
-                    case SDFType::Hyperbola:
-                        // params[2] stays fixed at 0.5
-                        prim.params[3] = size;
-                        break;
-                    case SDFType::CircleWave:
-                        // params[2] stays fixed at 0.5
-                        prim.params[3] = size;
-                        break;
-                    case SDFType::Cross:
-                        prim.params[2] = size;
-                        prim.params[3] = size * 0.3f;
-                        prim.params[4] = size * 0.1f;
-                        break;
-                    case SDFType::RoundedX:
-                        prim.params[2] = size;
-                        prim.params[3] = size * 0.2f;
-                        break;
-                    case SDFType::Pie:
-                        // params[2],[3] = sin/cos stay fixed
-                        prim.params[4] = size;
-                        break;
-                    case SDFType::Ring:
-                        // params[2],[3] = sin/cos stay fixed
-                        prim.params[4] = size;
-                        prim.params[5] = size * 0.2f;
-                        break;
-                    case SDFType::Moon:
-                        prim.params[2] = size * 0.5f;
-                        prim.params[3] = size;
-                        prim.params[4] = size * 0.8f;
-                        break;
-                    default:
-                        prim.params[2] = size;
-                        break;
-                    }
+        for (uint32_t j = 0; j < cpCount; j++) {
+            if (j == i) continue;
+            if (connCount[j] >= _targetConnsPerCP) continue;
+
+            // Check if already connected
+            bool already = false;
+            for (const auto& conn : _connections) {
+                if ((conn.cpA == i && conn.cpB == j) ||
+                    (conn.cpA == j && conn.cpB == i)) {
+                    already = true;
                     break;
                 }
             }
+            if (already) continue;
 
-            // Stroke-only shapes: animate strokeColor instead of fillColor
-            if (prim.fillColor == 0 && prim.strokeColor != 0) {
-                prim.strokeColor = animatedColor;
-            } else {
-                prim.fillColor = animatedColor;
+            auto posJ = cpPosition(_controlPoints[j], time);
+            float dx = posJ.x - posI.x;
+            float dy = posJ.y - posI.y;
+            float dist = std::sqrt(dx * dx + dy * dy);
+            if (dist < bestDist) {
+                bestDist = dist;
+                bestJ = static_cast<int>(j);
             }
-            recomputeAABB(prim);
-            anyChanged = true;
+        }
+
+        if (bestJ >= 0) {
+            Connection conn = {};
+            conn.cpA = i;
+            conn.cpB = static_cast<uint32_t>(bestJ);
+
+            // Type distribution: curves dominate based on _curveRatio
+            float r = std::uniform_real_distribution<float>(0.0f, 1.0f)(_rng);
+            float segThresh = _curveRatio + (1.0f - _curveRatio) * 0.5f;
+            if (r < _curveRatio) conn.type = 0;       // bezier
+            else if (r < segThresh) conn.type = 1;    // segment
+            else conn.type = 2;                        // shape
+
+            conn.shapeChoice = std::uniform_int_distribution<int>(0, 42)(_rng);
+            conn.curvature = std::uniform_real_distribution<float>(-0.8f, 0.8f)(_rng);
+            conn.curveAnimPhase = std::uniform_real_distribution<float>(0.0f, 6.2831853f)(_rng);
+            conn.curveAnimFreq = std::uniform_real_distribution<float>(0.3f, 1.2f)(_rng);
+            conn.strokeWidth = std::uniform_real_distribution<float>(_strokeMin, _strokeMax)(_rng);
+            conn.color = blendColors(_controlPoints[i].color,
+                                     _controlPoints[static_cast<uint32_t>(bestJ)].color);
+
+            _connections.push_back(conn);
+            connCount[i]++;
+            connCount[static_cast<uint32_t>(bestJ)]++;
         }
     }
-
-    if (anyChanged) {
-        markPrimBufferDirty();
-        markDirty();
-    }
-}
-
-void YDrawZoo::removeObject(uint32_t idx) {
-    if (idx >= _objects.size()) return;
-
-    auto& obj = _objects[idx];
-    if (obj.primIndex < primitiveCount()) {
-        auto& prim = primitivePtr()[obj.primIndex];
-        prim.fillColor = 0;
-        prim.strokeColor = 0;
-        prim.params[2] = 0;
-        prim.params[3] = 0;
-        prim.aabbMinX = prim.aabbMinY = 0;
-        prim.aabbMaxX = prim.aabbMaxY = 0;
-    }
-
-    _objects.erase(_objects.begin() + idx);
 }
 
 //=============================================================================
@@ -857,16 +981,15 @@ Result<CardPtr> YDrawZoo::create(
     const std::string& args,
     const std::string& payload)
 {
-    (void)args;
     (void)payload;
 
-    yinfo("YDrawZoo::create: pos=({},{}) size={}x{}", x, y, widthCells, heightCells);
+    yinfo("YDrawZoo::create: pos=({},{}) size={}x{} args='{}'", x, y, widthCells, heightCells, args);
 
     if (!ctx.cardManager) {
         return Err<CardPtr>("YDrawZoo::create: null CardBufferManager");
     }
 
-    auto card = std::make_shared<YDrawZoo>(ctx, x, y, widthCells, heightCells);
+    auto card = std::make_shared<YDrawZoo>(ctx, x, y, widthCells, heightCells, args);
 
     if (auto res = card->init(); !res) {
         yerror("YDrawZoo::create: init FAILED: {}", error_msg(res));

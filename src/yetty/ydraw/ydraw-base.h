@@ -78,7 +78,8 @@ public:
     Result<void> allocateBuffers() override;
     Result<void> allocateTextures() override;
     Result<void> writeTextures() override;
-    Result<void> render(float time) override;
+    void renderToStaging(float time) override;
+    Result<void> render() override;
 
     //=========================================================================
     // EventListener - zoom/pan via mouse wheel

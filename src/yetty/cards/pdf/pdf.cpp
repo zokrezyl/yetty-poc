@@ -199,19 +199,21 @@ public:
         return Ok();
     }
 
-    Result<void> render(float time) override {
+    void renderToStaging(float time) override {
         (void)time;
-        ydebug("Pdf::render: needsRender={} needsUpload={} metadataDirty={} pixels={} texHandle={}",
-               _needsRender, _needsUpload, _metadataDirty, _pagePixels.size(), _textureHandle.isValid());
 
+        // Rasterize current page to CPU pixel buffer
         if (_needsRender) {
             if (auto res = renderCurrentPage(); !res) {
-                return Err<void>("Pdf::render: render failed", res);
+                yerror("Pdf::renderToStaging: render failed: {}", error_msg(res));
             }
             _needsRender = false;
             _needsUpload = true;
         }
+    }
 
+    Result<void> render() override {
+        // Upload rasterized pixels to texture handle
         if (_needsUpload && !_pagePixels.empty()) {
             if (auto res = linkPixelsToHandle(); !res) {
                 return Err<void>("Pdf::render: link failed", res);
@@ -220,12 +222,10 @@ public:
         }
 
         if (_metadataDirty) {
-            ydebug("Pdf::render: uploading metadata");
             if (auto res = uploadMetadata(); !res) {
                 return Err<void>("Pdf::render: metadata upload failed", res);
             }
             _metadataDirty = false;
-            ydebug("Pdf::render: metadata uploaded ok");
         }
 
         return Ok();
