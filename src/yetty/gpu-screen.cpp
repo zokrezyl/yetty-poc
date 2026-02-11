@@ -3747,12 +3747,15 @@ bool GPUScreenImpl::handleCardOSCSequence(const std::string &sequence,
     Card *card = cardPtr.get();
 
     // Set card name: user-provided or auto-generated
+    ydebug("GPUScreen: cmd.run.name='{}'", cmd.run.name);
     if (!cmd.run.name.empty()) {
       card->setName(cmd.run.name);
+      yinfo("GPUScreen: Set user-provided card name='{}'", cmd.run.name);
     } else {
       // Auto-generate a name for RPC discoverability
       if (auto genResult = NameGenerator::instance(); genResult) {
         card->setName((*genResult)->generate());
+        yinfo("GPUScreen: Set auto-generated card name='{}'", card->name());
       }
     }
 
@@ -3854,7 +3857,11 @@ bool GPUScreenImpl::handleCardOSCSequence(const std::string &sequence,
 
     // Register named card with CardManager for RPC lookup
     if (!card->name().empty()) {
+      yinfo("GPUScreen: Registering named card '{}' with slotIndex={}",
+            card->name(), card->metadataSlotIndex());
       _cardManager->registerNamedCard(card->name(), card->metadataSlotIndex());
+    } else {
+      ywarn("GPUScreen: Card has no name, skipping RPC registration");
     }
 
     // Store and register the card (transfer ownership)

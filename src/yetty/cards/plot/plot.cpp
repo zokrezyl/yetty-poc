@@ -136,17 +136,35 @@ public:
 
     void suspend() override {
         _storageHandle = StorageHandle::invalid();
-        yinfo("Plot::suspend: deallocated storage, _data has {} floats", _data.size());
+
+        // Invalidate declared buffer handles (data is preserved in buf.data)
+        for (auto& buf : _bufferDecls) {
+            buf.handle = StorageHandle::invalid();
+        }
+
+        yinfo("Plot::suspend: deallocated storage, _data has {} floats, {} declared buffers",
+              _data.size(), _bufferDecls.size());
     }
 
     void declareBufferNeeds() override {
+        // Reserve for legacy _data buffer
         if (!_storageHandle.isValid() && !_data.empty()) {
             uint32_t storageSize = static_cast<uint32_t>(_data.size() * sizeof(float));
             _cardMgr->bufferManager()->reserve(storageSize);
         }
+
+        // Reserve for declared buffers
+        for (auto& buf : _bufferDecls) {
+            if (!buf.handle.isValid() && buf.size > 0) {
+                uint32_t storageSize = buf.size * sizeof(float);
+                _cardMgr->bufferManager()->reserve(storageSize);
+                yinfo("Plot::declareBufferNeeds: reserved {} bytes for buffer '{}'", storageSize, buf.name);
+            }
+        }
     }
 
     Result<void> allocateBuffers() override {
+        // Allocate legacy _data buffer
         if (!_storageHandle.isValid() && !_data.empty()) {
             uint32_t storageSize = static_cast<uint32_t>(_data.size() * sizeof(float));
             auto storageResult = _cardMgr->bufferManager()->allocateBuffer(metadataSlotIndex(), "storage", storageSize);
@@ -159,6 +177,31 @@ public:
             _metadataDirty = true;
             yinfo("Plot::allocateBuffers: reconstructed storage at offset {}", _storageHandle.offset);
         }
+
+        // Allocate declared buffers
+        for (auto& buf : _bufferDecls) {
+            if (!buf.handle.isValid() && buf.size > 0) {
+                uint32_t storageSize = buf.size * sizeof(float);
+                auto storageResult = _cardMgr->bufferManager()->allocateBuffer(metadataSlotIndex(), buf.name, storageSize);
+                if (!storageResult) {
+                    return Err<void>("Plot::allocateBuffers: failed to allocate buffer '" + buf.name + "'");
+                }
+                buf.handle = *storageResult;
+
+                // Initialize with data if available
+                if (!buf.data.empty()) {
+                    size_t copySize = std::min(buf.data.size(), static_cast<size_t>(buf.size)) * sizeof(float);
+                    std::memcpy(buf.handle.data, buf.data.data(), copySize);
+                } else {
+                    // Zero-initialize for streaming
+                    std::memset(buf.handle.data, 0, storageSize);
+                }
+                _cardMgr->bufferManager()->markBufferDirty(buf.handle);
+                yinfo("Plot::allocateBuffers: allocated buffer '{}' at offset {}, size={}",
+                      buf.name, buf.handle.offset, buf.size);
+            }
+        }
+
         return Ok();
     }
 
@@ -441,14 +484,37 @@ private:
                 } else {
                     _flags &= ~FLAG_GRID;
                 }
-            } else if (attr.key == "@buffer") {
-                // Pre-allocate buffer for external streaming: @buffer=<count>
-                try {
-                    uint32_t bufferCount = static_cast<uint32_t>(std::stoul(attr.value));
-                    _data.resize(bufferCount, 0.0f);
-                    yinfo("Plot::parseBracedArgs: pre-allocated buffer for {} floats", bufferCount);
-                } catch (...) {
-                    ywarn("Plot::parseBracedArgs: invalid buffer count '{}'", attr.value);
+            } else if (attr.value == "buffer") {
+                // f=buffer declares a buffer named 'f'
+                auto* buf = findOrCreateBuffer(attr.key);
+                yinfo("Plot::parseBracedArgs: declared buffer '{}'", attr.key);
+            } else if (attr.key.size() > 1 && attr.key[0] == '@') {
+                // Check for @name.property pattern
+                std::string fullKey = attr.key.substr(1);  // Remove leading @
+                auto dotPos = fullKey.find('.');
+                if (dotPos != std::string::npos) {
+                    std::string bufName = fullKey.substr(0, dotPos);
+                    std::string prop = fullKey.substr(dotPos + 1);
+
+                    auto* buf = findOrCreateBuffer(bufName);
+                    if (prop == "size") {
+                        buf->size = parseSizeWithSuffix(attr.value);
+                        yinfo("Plot::parseBracedArgs: buffer '{}' size={}", bufName, buf->size);
+                    } else if (prop == "values") {
+                        if (attr.value.empty()) {
+                            // @f.values= means take from payload
+                            buf->valuesFromPayload = true;
+                            yinfo("Plot::parseBracedArgs: buffer '{}' values from payload", bufName);
+                        } else if (attr.value.front() == '"' || attr.value.front() == '\'') {
+                            // @f.values="file.csv" means load from file
+                            buf->valuesSource = attr.value.substr(1, attr.value.size() - 2);
+                            yinfo("Plot::parseBracedArgs: buffer '{}' values from file '{}'", bufName, buf->valuesSource);
+                        } else {
+                            // @f.values=1,2,3 means inline values
+                            buf->valuesSource = attr.value;
+                            yinfo("Plot::parseBracedArgs: buffer '{}' inline values", bufName);
+                        }
+                    }
                 }
             }
         }
@@ -582,11 +648,60 @@ private:
                     _bgColor = static_cast<uint32_t>(std::stoul(colorStr, nullptr, 16));
                 }
             } else if (token == "--buffer" || token == "-b") {
-                // Pre-allocate buffer for external streaming: --buffer <count>
-                uint32_t bufferCount;
-                if (iss >> bufferCount) {
-                    _data.resize(bufferCount, 0.0f);
-                    yinfo("Plot::parseArgs: pre-allocated buffer for {} floats", bufferCount);
+                // Buffer declaration: --buffer name=size or --buffer name=size,name2=size2
+                // Also: --buffer name="file.csv"
+                std::string bufSpec;
+                if (iss >> bufSpec) {
+                    // Split by comma for multiple buffers
+                    std::istringstream bufStream(bufSpec);
+                    std::string singleBuf;
+                    while (std::getline(bufStream, singleBuf, ',')) {
+                        auto eqPos = singleBuf.find('=');
+                        if (eqPos != std::string::npos) {
+                            std::string bufName = singleBuf.substr(0, eqPos);
+                            std::string bufValue = singleBuf.substr(eqPos + 1);
+
+                            auto* buf = findOrCreateBuffer(bufName);
+
+                            if (!bufValue.empty() && (bufValue.front() == '"' || bufValue.front() == '\'')) {
+                                // File source: name="file.csv"
+                                buf->valuesSource = bufValue.substr(1, bufValue.size() - 2);
+                                yinfo("Plot::parseArgs: buffer '{}' from file '{}'", bufName, buf->valuesSource);
+                            } else {
+                                // Size: name=1024 or name=1k
+                                buf->size = parseSizeWithSuffix(bufValue);
+                                yinfo("Plot::parseArgs: buffer '{}' size={}", bufName, buf->size);
+                            }
+                        }
+                    }
+                }
+            } else if (token.rfind("--buffer.", 0) == 0) {
+                // Buffer property: --buffer.name.prop=value
+                std::string rest = token.substr(9);  // Remove "--buffer."
+                auto dotPos = rest.find('.');
+                if (dotPos != std::string::npos) {
+                    std::string bufName = rest.substr(0, dotPos);
+                    std::string propAndValue = rest.substr(dotPos + 1);
+                    auto eqPos = propAndValue.find('=');
+
+                    std::string prop = (eqPos != std::string::npos) ?
+                        propAndValue.substr(0, eqPos) : propAndValue;
+                    std::string value = (eqPos != std::string::npos) ?
+                        propAndValue.substr(eqPos + 1) : "";
+
+                    auto* buf = findOrCreateBuffer(bufName);
+                    if (prop == "size") {
+                        buf->size = parseSizeWithSuffix(value);
+                        yinfo("Plot::parseArgs: buffer '{}' size={}", bufName, buf->size);
+                    } else if (prop == "values") {
+                        if (value.empty()) {
+                            buf->valuesFromPayload = true;
+                            yinfo("Plot::parseArgs: buffer '{}' values from payload", bufName);
+                        } else {
+                            buf->valuesSource = value;
+                            yinfo("Plot::parseArgs: buffer '{}' values='{}'", bufName, value);
+                        }
+                    }
                 }
             }
         }
@@ -663,12 +778,33 @@ private:
             return Err<void>("No valid data points in payload");
         }
 
-        // Just store data locally - allocation happens in allocateBuffers() lifecycle
-        _data = std::move(values);
+        // Distribute payload across buffers that have valuesFromPayload=true
+        // The order of buffer declarations determines payload order
+        size_t payloadOffset = 0;
+        bool usedByDeclaredBuffers = false;
 
-        // Calculate range if auto
-        if (_autoRange) {
-            calculateRange();
+        for (auto& buf : _bufferDecls) {
+            if (buf.valuesFromPayload && buf.size > 0) {
+                usedByDeclaredBuffers = true;
+                size_t count = std::min(static_cast<size_t>(buf.size), values.size() - payloadOffset);
+                if (count > 0) {
+                    buf.data.assign(values.begin() + payloadOffset, values.begin() + payloadOffset + count);
+                    yinfo("Plot::parsePayload: buffer '{}' got {} values from offset {}",
+                          buf.name, count, payloadOffset);
+                    payloadOffset += count;
+                }
+                if (payloadOffset >= values.size()) break;
+            }
+        }
+
+        // If no declared buffers consumed the payload, use legacy _data
+        if (!usedByDeclaredBuffers) {
+            _data = std::move(values);
+
+            // Calculate range if auto
+            if (_autoRange) {
+                calculateRange();
+            }
         }
 
         _metadataDirty = true;
@@ -707,8 +843,21 @@ private:
         meta.flags = static_cast<uint8_t>(_flags);
         meta.widthCells = static_cast<uint16_t>(_widthCells);
         meta.heightCells = static_cast<uint16_t>(_heightCells);
-        meta.dataOffset = _storageHandle.isValid() ? (_storageHandle.offset / sizeof(float)) : 0;
-        meta.dataCount = static_cast<uint32_t>(_data.size());
+
+        // Determine data offset and count from:
+        // 1. Declared buffers (streaming mode) - use first valid buffer
+        // 2. Legacy _storageHandle and _data
+        if (!_bufferDecls.empty() && _bufferDecls[0].handle.isValid()) {
+            // Use first declared buffer for data
+            meta.dataOffset = _bufferDecls[0].handle.offset / sizeof(float);
+            meta.dataCount = _bufferDecls[0].size;
+        } else if (_storageHandle.isValid()) {
+            meta.dataOffset = _storageHandle.offset / sizeof(float);
+            meta.dataCount = static_cast<uint32_t>(_data.size());
+        } else {
+            meta.dataOffset = 0;
+            meta.dataCount = 0;
+        }
         meta.minValue = _minValue;
         meta.maxValue = _maxValue;
         meta.lineColor = _lineColor;
@@ -824,6 +973,52 @@ private:
 
     std::string _argsStr;
     std::string _payloadStr;
+
+    //=========================================================================
+    // Buffer declarations
+    //=========================================================================
+    struct BufferDeclaration {
+        std::string name;           // Buffer name (e.g., "audio", "x", "y")
+        uint32_t size = 0;          // Size in floats (0 = deduce from source)
+        std::string valuesSource;   // "" = streaming, "=" = payload, "file.csv" = file
+        bool valuesFromPayload = false;  // True if @name.values= was specified
+        StorageHandle handle = StorageHandle::invalid();
+        std::vector<float> data;    // Local copy of buffer data
+    };
+    std::vector<BufferDeclaration> _bufferDecls;
+
+    // Parse size with optional suffix (1k=1024, 1m=1048576)
+    uint32_t parseSizeWithSuffix(const std::string& str) {
+        if (str.empty()) return 0;
+
+        size_t len = str.size();
+        uint32_t multiplier = 1;
+        std::string numPart = str;
+
+        char suffix = std::tolower(str.back());
+        if (suffix == 'k') {
+            multiplier = 1024;
+            numPart = str.substr(0, len - 1);
+        } else if (suffix == 'm') {
+            multiplier = 1024 * 1024;
+            numPart = str.substr(0, len - 1);
+        }
+
+        try {
+            return static_cast<uint32_t>(std::stoul(numPart)) * multiplier;
+        } catch (...) {
+            return 0;
+        }
+    }
+
+    // Find or create buffer declaration by name
+    BufferDeclaration* findOrCreateBuffer(const std::string& name) {
+        for (auto& buf : _bufferDecls) {
+            if (buf.name == name) return &buf;
+        }
+        _bufferDecls.push_back({name, 0, "", false, StorageHandle::invalid(), {}});
+        return &_bufferDecls.back();
+    }
 };
 
 //=============================================================================

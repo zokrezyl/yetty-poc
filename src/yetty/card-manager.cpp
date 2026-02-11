@@ -218,9 +218,12 @@ public:
             _namedCards.erase(it);
         }
     }
-    uint32_t getSlotIndexByName(const std::string& name) const override {
+    std::optional<uint32_t> getSlotIndexByName(const std::string& name) const override {
         auto it = _namedCards.find(name);
-        return (it != _namedCards.end()) ? it->second : 0;
+        if (it != _namedCards.end()) {
+            return it->second;
+        }
+        return std::nullopt;
     }
     std::string getNameBySlotIndex(uint32_t slotIndex) const override {
         auto it = _slotToName.find(slotIndex);
