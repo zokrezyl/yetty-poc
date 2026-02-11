@@ -99,8 +99,26 @@ public:
     // Card lifecycle
     //=========================================================================
 
+    bool needsBuffer() const override { return true; }
+
     bool needsTexture() const override {
         return _builder && _builder->hasCustomAtlas();
+    }
+
+    bool needsBufferRealloc() override {
+        if (_needsBufferRealloc) {
+            _needsBufferRealloc = false;
+            return true;
+        }
+        return false;
+    }
+
+    bool needsTextureRealloc() override {
+        if (_needsTextureRealloc) {
+            _needsTextureRealloc = false;
+            return true;
+        }
+        return false;
     }
 
     uint32_t metadataSlotIndex() const override {
@@ -334,6 +352,15 @@ public:
     Result<void> render(float /*time*/) override {
         if (!_builder) return Ok();
 
+        // Process deferred navigation (avoid re-entrancy in litehtml callbacks)
+        if (!_pendingNavigateUrl.empty()) {
+            std::string url = std::move(_pendingNavigateUrl);
+            _pendingNavigateUrl.clear();
+            navigateTo(url);
+            // needsBufferRealloc/needsTextureRealloc will return true next frame
+            return Ok();
+        }
+
         if (_dirty) {
             if (auto res = rebuildAndUpload(); !res) return res;
             _dirty = false;
@@ -355,11 +382,46 @@ public:
         if (event.type == base::Event::Type::SetFocus) {
             if (event.setFocus.objectId == id()) {
                 _focused = true;
-                return Ok(true);
             } else if (_focused) {
                 _focused = false;
             }
+            // Don't consume — GPUScreen needs SetFocus to track _focusedCardId
             return Ok(false);
+        }
+
+        // Mouse events → litehtml
+        if ((event.type == base::Event::Type::CardMouseDown ||
+             event.type == base::Event::Type::CardMouseUp ||
+             event.type == base::Event::Type::CardMouseMove) &&
+            event.cardMouse.targetId == id() && _document) {
+            int docX, docY;
+            cardPixelToDocCoords(event.cardMouse.x, event.cardMouse.y, docX, docY);
+
+            litehtml::position::vector redrawBoxes;
+            if (event.type == base::Event::Type::CardMouseMove) {
+                _document->on_mouse_over(docX, docY, docX, docY, redrawBoxes);
+            } else if (event.type == base::Event::Type::CardMouseDown && event.cardMouse.button == 0) {
+                _document->on_lbutton_down(docX, docY, docX, docY, redrawBoxes);
+            } else if (event.type == base::Event::Type::CardMouseUp && event.cardMouse.button == 0) {
+                _document->on_lbutton_up(docX, docY, docX, docY, redrawBoxes);
+            }
+
+            if (!redrawBoxes.empty()) {
+                yinfo("YHtmlImpl: mouse event at doc({},{}) triggered redraw ({} boxes)",
+                      docX, docY, redrawBoxes.size());
+                redrawHtml();
+            }
+            return Ok(true);
+        }
+
+        // Keyboard events
+        if (event.type == base::Event::Type::CardKeyDown &&
+            event.cardKey.targetId == id()) {
+            return handleCardKey(event.cardKey.key, event.cardKey.mods);
+        }
+        if (event.type == base::Event::Type::CardChar &&
+            event.cardChar.targetId == id()) {
+            return handleCardChar(event.cardChar.codepoint, event.cardChar.mods);
         }
 
         if (event.type == base::Event::Type::CardScroll &&
@@ -602,6 +664,11 @@ private:
         auto self = sharedAs<base::EventListener>();
         if (auto res = loop->registerListener(base::Event::Type::SetFocus, self, 1000); !res) return res;
         if (auto res = loop->registerListener(base::Event::Type::CardScroll, self, 1000); !res) return res;
+        if (auto res = loop->registerListener(base::Event::Type::CardMouseDown, self, 1000); !res) return res;
+        if (auto res = loop->registerListener(base::Event::Type::CardMouseUp, self, 1000); !res) return res;
+        if (auto res = loop->registerListener(base::Event::Type::CardMouseMove, self, 1000); !res) return res;
+        if (auto res = loop->registerListener(base::Event::Type::CardKeyDown, self, 1000); !res) return res;
+        if (auto res = loop->registerListener(base::Event::Type::CardChar, self, 1000); !res) return res;
         return Ok();
     }
 
@@ -611,6 +678,151 @@ private:
         if (!loopResult) return Ok();
         (*loopResult)->deregisterListener(sharedAs<base::EventListener>());
         return Ok();
+    }
+
+    //=========================================================================
+    // Input helpers
+    //=========================================================================
+
+    void setCellSize(uint32_t cellWidth, uint32_t cellHeight) override {
+        _cellWidth = cellWidth;
+        _cellHeight = cellHeight;
+    }
+
+    void cardPixelToDocCoords(float cardX, float cardY, int& docX, int& docY) {
+        // Card pixel dimensions from actual cell size
+        float cardPixelW = static_cast<float>(_widthCells * _cellWidth);
+        float cardPixelH = static_cast<float>(_heightCells * _cellHeight);
+
+        float contentMinX = _builder->sceneMinX();
+        float contentMinY = _builder->sceneMinY();
+        float contentW = _builder->sceneMaxX() - contentMinX;
+        float contentH = _builder->sceneMaxY() - contentMinY;
+
+        // Match shader's view computation exactly
+        float centerX = contentMinX + contentW * 0.5f;
+        float centerY = contentMinY + contentH * 0.5f;
+        float viewHalfW = contentW * 0.5f / _viewZoom;
+        float viewHalfH = contentH * 0.5f / _viewZoom;
+        float viewMinX = centerX - viewHalfW + _viewPanX;
+        float viewMinY = centerY - viewHalfH + _viewPanY;
+        float viewW = contentW / _viewZoom;
+        float viewH = contentH / _viewZoom;
+
+        // Match shader's uniform scaling (aspect ratio correction)
+        float cardAspect = cardPixelW / std::max(cardPixelH, 1.0f);
+        float viewAspect = viewW / std::max(viewH, 1e-6f);
+
+        float uvX = cardX / cardPixelW;
+        float uvY = cardY / cardPixelH;
+
+        float sceneX, sceneY;
+        if (viewAspect < cardAspect) {
+            // Tall view: fits height, horizontal padding
+            float visibleW = viewH * cardAspect;
+            float offsetX = (visibleW - viewW) * 0.5f;
+            sceneX = viewMinX - offsetX + uvX * visibleW;
+            sceneY = viewMinY + uvY * viewH;
+        } else {
+            // Wide view: fits width, vertical padding
+            float visibleH = viewW / cardAspect;
+            float offsetY = (visibleH - viewH) * 0.5f;
+            sceneX = viewMinX + uvX * viewW;
+            sceneY = viewMinY - offsetY + uvY * visibleH;
+        }
+
+        docX = static_cast<int>(sceneX);
+        docY = static_cast<int>(sceneY);
+    }
+
+    void redrawHtml() {
+        if (!_document || !_builder) return;
+
+        // Clear builder content and re-render
+        _builder->clear();
+        int viewW = static_cast<int>(_viewWidth);
+        int docHeight = _document->height();
+        litehtml::position clip(0, 0, viewW, docHeight);
+        _document->draw(0, 0, 0, &clip);
+
+        _dirty = true;
+        _metadataDirty = true;
+    }
+
+    void navigateTo(const std::string& url) {
+        if (!_fetcher) return;
+
+        // Resolve relative URLs against current base
+        std::string resolvedUrl = _fetcher->resolveUrl(url);
+        yinfo("YHtmlImpl::navigateTo: {} -> {}", url, resolvedUrl);
+
+        // Fetch the new page
+        _fetcher->setBaseUrl(resolvedUrl);
+        auto body = _fetcher->fetch(resolvedUrl);
+        if (!body) {
+            ywarn("YHtmlImpl::navigateTo: failed to fetch {}", resolvedUrl);
+            return;
+        }
+
+        // Reset view state
+        _viewZoom = 1.0f;
+        _viewPanX = 0.0f;
+        _viewPanY = 0.0f;
+
+        // Destroy old document before old container (document holds raw ptr to container)
+        _document.reset();
+        _container.reset();
+
+        // Re-render with new content
+        _htmlContent = std::move(*body);
+        _builder->clear();
+
+        if (auto res = renderHtml(); !res) {
+            ywarn("YHtmlImpl::navigateTo: render failed: {}", error_msg(res));
+            return;
+        }
+
+        _dirty = true;
+        _metadataDirty = true;
+        _needsBufferRealloc = true;
+        _needsTextureRealloc = true;
+        yinfo("YHtmlImpl::navigateTo: rendered {} prims, {} glyphs",
+              _builder->primitiveCount(), _builder->glyphCount());
+    }
+
+    Result<bool> handleCardKey(int key, int mods) {
+        constexpr int GLFW_KEY_UP = 265;
+        constexpr int GLFW_KEY_DOWN = 264;
+        constexpr int GLFW_KEY_LEFT = 263;
+        constexpr int GLFW_KEY_RIGHT = 262;
+
+        float sceneW = _builder->sceneMaxX() - _builder->sceneMinX();
+        float sceneH = _builder->sceneMaxY() - _builder->sceneMinY();
+        float scrollStep = 0.05f;
+
+        if (key == GLFW_KEY_UP) {
+            _viewPanY -= scrollStep * sceneH / _viewZoom;
+            _metadataDirty = true;
+            return Ok(true);
+        } else if (key == GLFW_KEY_DOWN) {
+            _viewPanY += scrollStep * sceneH / _viewZoom;
+            _metadataDirty = true;
+            return Ok(true);
+        } else if (key == GLFW_KEY_LEFT) {
+            _viewPanX -= scrollStep * sceneW / _viewZoom;
+            _metadataDirty = true;
+            return Ok(true);
+        } else if (key == GLFW_KEY_RIGHT) {
+            _viewPanX += scrollStep * sceneW / _viewZoom;
+            _metadataDirty = true;
+            return Ok(true);
+        }
+        return Ok(false);
+    }
+
+    Result<bool> handleCardChar(uint32_t /*codepoint*/, int /*mods*/) {
+        // Future: text input for form fields
+        return Ok(false);
     }
 
     //=========================================================================
@@ -701,6 +913,23 @@ private:
         }
         _container = std::move(*containerResult);
 
+        // Wire up navigation callback for link clicks (deferred to avoid re-entrancy)
+        _container->setNavigateCallback([this](const std::string& url) {
+            _pendingNavigateUrl = url;
+        });
+
+        // Wire up cursor callback for hover feedback
+        _container->setCursorCallback([this](const std::string& cursor) {
+            auto loop = base::EventLoop::instance();
+            if (!loop) return;
+            // "pointer" = hand cursor over links, "" = default
+            int shape = 0;  // default arrow
+            if (cursor == "pointer") {
+                shape = 0x00036004;  // GLFW_POINTING_HAND_CURSOR
+            }
+            (*loop)->dispatch(base::Event::setCursorEvent(shape));
+        });
+
         int viewW = static_cast<int>(_viewWidth);
         int viewH = static_cast<int>(_viewWidth * 1.5f);
         _container->setViewportSize(viewW, viewH);
@@ -756,12 +985,16 @@ private:
     uint32_t _atlasHeaderOffset = 0;
     bool _dirty = true;
     bool _metadataDirty = true;
+    bool _needsBufferRealloc = false;
+    bool _needsTextureRealloc = false;
 
     // View zoom/pan
     float _viewZoom = 1.0f;
     float _viewPanX = 0.0f;
     float _viewPanY = 0.0f;
     bool _focused = false;
+    uint32_t _cellWidth = 9;
+    uint32_t _cellHeight = 20;
 
     // HTTP client
     std::shared_ptr<HttpFetcher> _fetcher;
@@ -769,6 +1002,7 @@ private:
     // HTML state
     std::string _htmlContent;
     std::string _inputSource;
+    std::string _pendingNavigateUrl;
     std::shared_ptr<HtmlContainer> _container;
     std::shared_ptr<litehtml::document> _document;
     float _fontSize = 16.0f;

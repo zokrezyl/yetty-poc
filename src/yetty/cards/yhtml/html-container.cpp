@@ -34,6 +34,14 @@ public:
         _viewHeight = height;
     }
 
+    void setNavigateCallback(NavigateCallback cb) override {
+        _navigateCb = std::move(cb);
+    }
+
+    void setCursorCallback(CursorCallback cb) override {
+        _cursorCb = std::move(cb);
+    }
+
     //=========================================================================
     // Font handling
     //=========================================================================
@@ -303,10 +311,19 @@ public:
     void link(const std::shared_ptr<litehtml::document>& /*doc*/,
               const litehtml::element::ptr& /*el*/) override {}
 
-    void on_anchor_click(const char* /*url*/,
-                         const litehtml::element::ptr& /*el*/) override {}
+    void on_anchor_click(const char* url,
+                         const litehtml::element::ptr& /*el*/) override {
+        if (url && _navigateCb) {
+            yinfo("HtmlContainer::on_anchor_click: {}", url);
+            _navigateCb(url);
+        }
+    }
 
-    void set_cursor(const char* /*cursor*/) override {}
+    void set_cursor(const char* cursor) override {
+        if (cursor && _cursorCb) {
+            _cursorCb(cursor);
+        }
+    }
 
     void transform_text(litehtml::string& text,
                         litehtml::text_transform tt) override {
@@ -491,6 +508,9 @@ private:
     int _viewWidth = 600;
     int _viewHeight = 800;
     uint32_t _layer = 0;
+
+    NavigateCallback _navigateCb;
+    CursorCallback _cursorCb;
 
     std::vector<FontInfo*> _fonts;
     std::unordered_map<std::string, std::string> _fontPathCache;  // key -> ttf path

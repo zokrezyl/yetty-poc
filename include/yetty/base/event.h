@@ -36,6 +36,9 @@ struct Event {
         CardMouseUp,
         CardMouseMove,
         CardScroll,
+        // Card-local keyboard events (dispatched by GPUScreen when card has focus)
+        CardKeyDown,
+        CardChar,
         // Tree manipulation
         Close,
         SplitPane,
@@ -116,6 +119,19 @@ struct Event {
         int mods;
     };
 
+    struct CardKeyEvent {
+        ObjectId targetId;
+        int key;
+        int mods;
+        int scancode;
+    };
+
+    struct CardCharEvent {
+        ObjectId targetId;
+        uint32_t codepoint;
+        int mods;
+    };
+
     struct CloseEvent {
         ObjectId objectId;
     };
@@ -153,6 +169,8 @@ struct Event {
         ContextMenuActionEvent ctxMenu;
         CardMouseEvent cardMouse;
         CardScrollEvent cardScroll;
+        CardKeyEvent cardKey;
+        CardCharEvent cardChar;
         CloseEvent closeEv;
         SplitPaneEvent splitPane;
         CommandKeyEvent cmdKey;
@@ -276,6 +294,20 @@ struct Event {
         Event e;
         e.type = Type::CardScroll;
         e.cardScroll = {targetId, x, y, dx, dy, mods};
+        return e;
+    }
+
+    static Event cardKeyDown(ObjectId targetId, int key, int mods, int scancode = 0) {
+        Event e;
+        e.type = Type::CardKeyDown;
+        e.cardKey = {targetId, key, mods, scancode};
+        return e;
+    }
+
+    static Event cardCharInput(ObjectId targetId, uint32_t codepoint, int mods = 0) {
+        Event e;
+        e.type = Type::CardChar;
+        e.cardChar = {targetId, codepoint, mods};
         return e;
     }
 
