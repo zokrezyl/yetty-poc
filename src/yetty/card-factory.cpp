@@ -14,6 +14,7 @@
 #include "cards/thorvg/thorvg.h"
 #endif
 #include "cards/qrcode/qrcode.h"
+#include "cards/diagram/diagram.h"
 #ifdef YETTY_CARD_PDF
 #include "cards/pdf/pdf.h"
 #endif
@@ -148,6 +149,23 @@ public:
             auto result = card::QRCode::create(ctx, x, y, w, h, args, payload);
             if (!result) return std::unexpected(result.error());
             return Ok<CardPtr>(*result);
+        });
+
+        registerCard("diagram", [](const YettyContext& ctx,
+                                int32_t x, int32_t y,
+                                uint32_t w, uint32_t h,
+                                const std::string& args,
+                                const std::string& payload) {
+            return card::Diagram::create(ctx, x, y, w, h, args, payload);
+        });
+
+        // Alias "mermaid" for convenience
+        registerCard("mermaid", [](const YettyContext& ctx,
+                                int32_t x, int32_t y,
+                                uint32_t w, uint32_t h,
+                                const std::string& args,
+                                const std::string& payload) {
+            return card::Diagram::create(ctx, x, y, w, h, args, payload);
         });
 
 #ifdef YETTY_CARD_PDF
