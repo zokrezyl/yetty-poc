@@ -647,8 +647,11 @@ elseif(NOT EMSCRIPTEN)
         src/yetty/card-manager.cpp
         src/yetty/card-buffer-manager.cpp
         src/yetty/card-texture-manager.cpp
+        src/yetty/shared-memory.cpp
+        src/yetty/gpu-screen-manager.cpp
         src/yetty/card-factory.cpp
         src/yetty/card.cpp
+        src/yetty/name-generator.cpp
         src/yetty/imgui-manager.cpp
         # Card sources added via add_subdirectory(src/yetty/cards)
         # Core sources (previously in yetty_core)
@@ -673,6 +676,7 @@ elseif(NOT EMSCRIPTEN)
         src/yetty/base/event-loop.cpp
         src/yetty/rpc/rpc-server.cpp
         src/yetty/rpc/event-loop-handler.cpp
+        src/yetty/rpc/stream-handler.cpp
         src/yetty/rpc/socket-path.cpp
         # Ymery - YAML-driven ImGui widget system (ported from ymery-cpp)
         src/yetty/ymery/types.cpp
@@ -881,6 +885,8 @@ else()
         $<$<AND:$<NOT:$<BOOL:${WIN32}>>,$<NOT:$<BOOL:${APPLE}>>>:${FONTCONFIG_STATIC_LIB}>
         $<$<AND:$<NOT:$<BOOL:${WIN32}>>,$<NOT:$<BOOL:${APPLE}>>>:${EXPAT_STATIC_LIB}>
         $<$<AND:$<NOT:$<BOOL:${WIN32}>>,$<NOT:$<BOOL:${APPLE}>>>:${UUID_STATIC_LIB}>
+        # POSIX shared memory (Linux only - macOS has shm_open in libc)
+        $<$<AND:$<NOT:$<BOOL:${WIN32}>>,$<NOT:$<BOOL:${APPLE}>>>:rt>
         # FreeType and all its dependencies (built from source)
         ${FREETYPE_ALL_LIBS}
     )
@@ -994,6 +1000,9 @@ else()
 
     # ycat - cat with card rendering
     add_subdirectory(src/yetty/ycat)
+
+    # Demos
+    add_subdirectory(demo/plot-client)
 
     # # MSDFGL WebGPU port (sandbox) - abandoned, see README
     # add_subdirectory(sandbox/msdfgl)

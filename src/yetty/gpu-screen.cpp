@@ -1,6 +1,7 @@
 #include "gpu-screen.h"
 #include <yetty/gpu-allocator.h>
 #include <yetty/card-manager.h>
+#include <yetty/gpu-screen-manager.h>
 #include <yetty/card-factory.h>
 #include <yetty/card.h>
 #include <algorithm>
@@ -22,6 +23,7 @@
 #include <yetty/vector-sdf-font.h>
 #include <yetty/vector-coverage-font.h>
 #include <yetty/raster-font.h>
+#include <yetty/name-generator.h>
 #include <ytrace/ytrace.hpp>
 
 #ifndef CMAKE_SOURCE_DIR
@@ -350,7 +352,17 @@ private:
   // Card registry
   void registerCard(CardPtr card);
   void unregisterCard(uint32_t metadataOffset);
-  Card *getCardBySlotIndex(uint32_t offset) const;
+  Card *getCardBySlotIndex(uint32_t slotIndex) const override;
+  Card *getCardByName(const std::string& name) const override;
+  std::vector<Card*> getAllCards() const override;
+  CardManager::Ptr cardManager() const override { return _cardManager; }
+
+  // Named card registry
+  void registerNamedCard(const std::string& name, uint32_t slotIndex) override;
+  void unregisterNamedCard(const std::string& name) override;
+  std::optional<uint32_t> getSlotIndexByName(const std::string& name) const override;
+  std::string getNameBySlotIndex(uint32_t slotIndex) const override;
+
   Card *getCardAtCell(int row, int col) const;
 
   // Compute card-local pixel coords from viewport-local position and cell row/col.
@@ -429,6 +441,11 @@ private:
   std::unordered_map<uint32_t, CardPtr> _cards;
   std::unordered_map<uint32_t, CardPtr> _inactiveCards;
   CardManager::Ptr _cardManager;
+
+  // Named card registry (for RPC streaming)
+  std::unordered_map<std::string, uint32_t> _namedCards;   // name -> slotIndex
+  std::unordered_map<uint32_t, std::string> _slotToName;   // slotIndex -> name
+
   base::ObjectId _cardMouseTarget = 0;  // card that received last CardMouseDown
   base::ObjectId _focusedCardId = 0;    // card that has keyboard focus (0 = terminal)
   uint32_t _gcFrameCounter = 0;
@@ -668,6 +685,11 @@ GPUScreenImpl::~GPUScreenImpl() {
 
 Result<void> GPUScreenImpl::onShutdown() {
   Result<void> result = Ok();
+
+  // Unregister from GPUScreenManager
+  if (auto mgr = GPUScreenManager::instance(); mgr) {
+    (*mgr)->unregisterScreen(this);
+  }
 
   // Deregister from all EventLoop events while shared_ptr is still alive
   auto loop = *base::EventLoop::instance();
@@ -3736,6 +3758,19 @@ bool GPUScreenImpl::handleCardOSCSequence(const std::string &sequence,
     CardPtr cardPtr = std::move(*result);
     Card *card = cardPtr.get();
 
+    // Set card name: user-provided or auto-generated
+    ydebug("GPUScreen: cmd.run.name='{}'", cmd.run.name);
+    if (!cmd.run.name.empty()) {
+      card->setName(cmd.run.name);
+      yinfo("GPUScreen: Set user-provided card name='{}'", cmd.run.name);
+    } else {
+      // Auto-generate a name for RPC discoverability
+      if (auto genResult = NameGenerator::instance(); genResult) {
+        card->setName((*genResult)->generate());
+        yinfo("GPUScreen: Set auto-generated card name='{}'", card->name());
+      }
+    }
+
     // =====================================================================
     // Generate ANSI escape sequences for card cells
     // =====================================================================
@@ -3831,6 +3866,15 @@ bool GPUScreenImpl::handleCardOSCSequence(const std::string &sequence,
           "shaderGlyph={:#x}",
           card->typeName(), x, y, card->widthCells(), card->heightCells(),
           card->metadataSlotIndex(), card->shaderGlyph());
+
+    // Register named card with CardManager for RPC lookup
+    if (!card->name().empty()) {
+      yinfo("GPUScreen: Registering named card '{}' with slotIndex={}",
+            card->name(), card->metadataSlotIndex());
+      registerNamedCard(card->name(), card->metadataSlotIndex());
+    } else {
+      ywarn("GPUScreen: Card has no name, skipping RPC registration");
+    }
 
     // Store and register the card (transfer ownership)
     registerCard(std::move(cardPtr));
@@ -3942,9 +3986,66 @@ void GPUScreenImpl::unregisterCard(uint32_t slotIndex) {
          slotIndex);
 }
 
-Card *GPUScreenImpl::getCardBySlotIndex(uint32_t offset) const {
-  auto it = _cards.find(offset);
-  return (it != _cards.end()) ? it->second.get() : nullptr;
+Card *GPUScreenImpl::getCardBySlotIndex(uint32_t slotIndex) const {
+  auto it = _cards.find(slotIndex);
+  if (it != _cards.end()) return it->second.get();
+  // Also check inactive cards
+  auto iit = _inactiveCards.find(slotIndex);
+  return (iit != _inactiveCards.end()) ? iit->second.get() : nullptr;
+}
+
+Card *GPUScreenImpl::getCardByName(const std::string& name) const {
+  if (name.empty()) return nullptr;
+  // Search active cards
+  for (const auto& [slotIndex, card] : _cards) {
+    if (card->name() == name) return card.get();
+  }
+  // Search inactive cards
+  for (const auto& [slotIndex, card] : _inactiveCards) {
+    if (card->name() == name) return card.get();
+  }
+  return nullptr;
+}
+
+std::vector<Card*> GPUScreenImpl::getAllCards() const {
+  std::vector<Card*> result;
+  result.reserve(_cards.size() + _inactiveCards.size());
+  for (const auto& [slotIndex, card] : _cards) {
+    result.push_back(card.get());
+  }
+  for (const auto& [slotIndex, card] : _inactiveCards) {
+    result.push_back(card.get());
+  }
+  return result;
+}
+
+void GPUScreenImpl::registerNamedCard(const std::string& name, uint32_t slotIndex) {
+  if (!name.empty()) {
+    _namedCards[name] = slotIndex;
+    _slotToName[slotIndex] = name;
+    ydebug("GPUScreen: registered named card '{}' <-> slot {}", name, slotIndex);
+  }
+}
+
+void GPUScreenImpl::unregisterNamedCard(const std::string& name) {
+  auto it = _namedCards.find(name);
+  if (it != _namedCards.end()) {
+    _slotToName.erase(it->second);
+    _namedCards.erase(it);
+  }
+}
+
+std::optional<uint32_t> GPUScreenImpl::getSlotIndexByName(const std::string& name) const {
+  auto it = _namedCards.find(name);
+  if (it != _namedCards.end()) {
+    return it->second;
+  }
+  return std::nullopt;
+}
+
+std::string GPUScreenImpl::getNameBySlotIndex(uint32_t slotIndex) const {
+  auto it = _slotToName.find(slotIndex);
+  return (it != _slotToName.end()) ? it->second : "";
 }
 
 Card *GPUScreenImpl::getCardAtCell(int row, int col) const {
@@ -5166,6 +5267,12 @@ GPUScreen::create(const YettyContext &ctx) noexcept {
     return Err<Ptr>("GPUScreen init failed", res);
   }
   screen->registerForFocus();
+
+  // Register with GPUScreenManager singleton
+  if (auto mgr = GPUScreenManager::instance(); mgr) {
+    (*mgr)->registerScreen(screen);
+  }
+
   return Ok<Ptr>(screen);
 }
 

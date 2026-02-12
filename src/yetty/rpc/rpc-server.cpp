@@ -266,11 +266,11 @@ private:
             return;
         }
 
-        try {
-            auto result = it->second(msg);
-            sendResult(conn, msg.msgid, result.get());
-        } catch (const std::exception& e) {
-            sendError(conn, msg.msgid, e.what());
+        auto result = it->second(msg);
+        if (!result) {
+            sendError(conn, msg.msgid, error_msg(result));
+        } else {
+            sendResult(conn, msg.msgid, result->get());
         }
     }
 
@@ -285,10 +285,9 @@ private:
             return;
         }
 
-        try {
-            it->second(msg);
-        } catch (const std::exception& e) {
-            yerror("RpcServer: notification handler threw: {}", e.what());
+        auto result = it->second(msg);
+        if (!result) {
+            yerror("RpcServer: notification handler error: {}", error_msg(result));
         }
     }
 

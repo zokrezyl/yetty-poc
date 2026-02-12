@@ -30,6 +30,7 @@
 #endif
 #include <ytrace/ytrace.hpp>
 #include <unordered_map>
+#include <regex>
 
 namespace yetty {
 
@@ -260,22 +261,46 @@ public:
             return Err<CardPtr>("Unknown card type: " + name);
         }
 
-        if (!ctx.cardManager) {
-            return Err<CardPtr>("CardFactory: no CardManager in context");
+        // Parse --name=xxx or -n=xxx from args (and strip it for the card)
+        std::string cardName;
+        std::string filteredArgs = args;
+
+        // Match --name=value or -n=value (value can be quoted or unquoted)
+        std::regex nameRegex(R"((?:--name|-n)=([^\s;]+|"[^"]*"|'[^']*'))");
+        std::smatch match;
+        if (std::regex_search(args, match, nameRegex)) {
+            cardName = match[1].str();
+            // Remove quotes if present
+            if ((cardName.front() == '"' && cardName.back() == '"') ||
+                (cardName.front() == '\'' && cardName.back() == '\'')) {
+                cardName = cardName.substr(1, cardName.size() - 2);
+            }
+            // Remove the --name/-n from args passed to card
+            filteredArgs = std::regex_replace(args, nameRegex, "");
+            // Clean up any leftover semicolons or spaces
+            filteredArgs = std::regex_replace(filteredArgs, std::regex(R"(^\s*;\s*|\s*;\s*$)"), "");
+            filteredArgs = std::regex_replace(filteredArgs, std::regex(R"(\s*;\s*;\s*)"), ";");
         }
 
-        yinfo("CardFactory: creating card '{}' at ({},{}) size {}x{}",
-              name, x, y, widthCells, heightCells);
+        yinfo("CardFactory: creating card '{}' at ({},{}) size {}x{}{}",
+              name, x, y, widthCells, heightCells,
+              cardName.empty() ? "" : " name='" + cardName + "'");
 
         // Call the creator function with full context
-        auto result = it->second(ctx, x, y, widthCells, heightCells, args, payload);
+        auto result = it->second(ctx, x, y, widthCells, heightCells, filteredArgs, payload);
         if (!result) {
             yerror("CardFactory: failed to create card '{}': {}", name, error_msg(result));
             return result;
         }
 
-        yinfo("CardFactory: created card '{}' with metadataOffset={}",
-              name, (*result)->metadataOffset());
+        // Set user-assigned name if provided
+        if (!cardName.empty()) {
+            (*result)->setName(cardName);
+        }
+
+        yinfo("CardFactory: created card '{}' with metadataOffset={}{}",
+              name, (*result)->metadataOffset(),
+              cardName.empty() ? "" : " name='" + cardName + "'");
 
         return result;
     }

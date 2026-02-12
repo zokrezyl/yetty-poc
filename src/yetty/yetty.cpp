@@ -13,6 +13,7 @@
 #include <yetty/base/base.h>
 #include <yetty/rpc/rpc-server.h>
 #include <yetty/rpc/event-loop-handler.h>
+#include <yetty/rpc/stream-handler.h>
 #include <yetty/rpc/socket-path.h>
 #include "cards/plot/plot-sampler-provider.h"
 #include "cards/plot/plot-transformer-provider.h"
@@ -243,8 +244,12 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     if (auto res = initWorkspace(); !res) return res;
 
 #if !YETTY_WEB && !defined(__ANDROID__)
-    // Register workspace handlers now that workspace exists, then start
+    // Register workspace handlers now that workspace exists
     rpc::registerWorkspaceHandlers(*_rpcServer, _activeWorkspace);
+
+    // Register stream handlers (uses GPUScreenManager singleton)
+    rpc::registerStreamHandlers(*_rpcServer);
+
     if (auto res = _rpcServer->start(); !res) {
         return Err<void>("Failed to start RPC server", res);
     }

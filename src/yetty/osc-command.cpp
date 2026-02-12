@@ -248,6 +248,10 @@ Result<RunArgs> OscCommandParser::parseRunArgs(const std::vector<std::string>& t
         else if (token == "-r" || token == "--relative") {
             args.relative = true;
         }
+        else if (token == "-n" || token == "--name") {
+            if (++i >= tokens.size()) return Err<RunArgs>("missing value for " + token);
+            args.name = tokens[i];
+        }
         else {
             return Err<RunArgs>("unknown option: " + token);
         }

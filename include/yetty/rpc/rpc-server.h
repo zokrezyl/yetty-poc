@@ -9,9 +9,9 @@ namespace yetty {
 namespace rpc {
 
 // Handler callback for incoming RPC requests/notifications.
-// For requests: return a packable result (serialized via msgpack).
+// For requests: return Ok(result) or Err(message).
 // For notifications: return value is ignored.
-using RpcHandler = std::function<msgpack::object_handle(const RpcMessage& msg)>;
+using RpcHandler = std::function<Result<msgpack::object_handle>(const RpcMessage& msg)>;
 
 // RPC server that listens on a Unix domain socket and multiplexes
 // messages to registered channel handlers via the EventLoop.

@@ -1,5 +1,7 @@
 add_executable(yettyc
     main.cpp
+    buffers.cpp
+    cards.cpp
     event.cpp
     ui.cpp
 )

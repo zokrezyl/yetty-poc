@@ -3,6 +3,7 @@
 #include <yetty/result.hpp>
 #include <yetty/gpu-context.h>
 #include <yetty/gpu-allocator.h>
+#include <yetty/shared-memory.h>
 #include <webgpu/webgpu.h>
 #include <cstdint>
 #include <memory>
@@ -42,8 +43,19 @@ class CardBufferManager {
 public:
     using Ptr = std::shared_ptr<CardBufferManager>;
 
+    /**
+     * Create a CardBufferManager.
+     *
+     * @param gpuContext GPU context
+     * @param allocator GPU allocator
+     * @param shm Optional shared memory region for backing storage. If provided,
+     *            the shm IS the CPU buffer (no double copy). Clients can write
+     *            directly to shm and changes go to GPU on flush. If nullptr,
+     *            an internal std::vector is used (original behavior).
+     */
     static Result<Ptr> create(GPUContext* gpuContext,
-                              GpuAllocator::Ptr allocator) noexcept;
+                              GpuAllocator::Ptr allocator,
+                              SharedMemoryRegion::Ptr shm = nullptr) noexcept;
 
     virtual ~CardBufferManager() = default;
 
@@ -66,10 +78,8 @@ public:
                                                 const std::string& scope,
                                                 uint32_t size) = 0;
 
-    virtual Result<void> writeBuffer(BufferHandle handle, const void* data, uint32_t size) = 0;
-    virtual Result<void> writeBufferAt(BufferHandle handle, uint32_t offset, const void* data, uint32_t size) = 0;
-
     // Mark buffer region as dirty (after direct writes to handle.data)
+    // Cards should write directly to handle.data, then call this.
     virtual void markBufferDirty(BufferHandle handle) = 0;
 
     // =========================================================================
@@ -87,6 +97,19 @@ public:
     virtual bool bindGroupDirty() const = 0;
     virtual void clearBindGroupDirty() = 0;
 
+    // =========================================================================
+    // Shared memory (for streaming clients)
+    // =========================================================================
+    // Returns the backing shared memory region, or nullptr if not using shm.
+    virtual SharedMemoryRegion::Ptr shm() const = 0;
+
+    // Check if using shared memory backing
+    virtual bool usesSharedMemory() const = 0;
+
+    // Get buffer handle for a card's allocation (for RPC streaming)
+    // Returns invalid handle if not found
+    virtual BufferHandle getBufferHandle(uint32_t slotIndex, const std::string& scope) const = 0;
+
     struct Stats {
         uint32_t bufferUsed;
         uint32_t bufferCapacity;
@@ -99,6 +122,15 @@ public:
 
     // Return per-card sub-allocation breakdown as text
     virtual std::string dumpSubAllocationsToString() const = 0;
+
+    // Return all buffer allocations as structured data for RPC
+    struct BufferInfo {
+        uint32_t slotIndex;
+        std::string scope;
+        uint32_t offset;
+        uint32_t size;
+    };
+    virtual std::vector<BufferInfo> getAllBuffers() const = 0;
 
 protected:
     CardBufferManager() = default;
