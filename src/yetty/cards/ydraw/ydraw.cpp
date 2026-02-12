@@ -263,6 +263,14 @@ public:
         return Ok();
     }
 
+    bool needsBufferRealloc() override {
+        if (_needsBufferRealloc) {
+            _needsBufferRealloc = false;
+            return true;
+        }
+        return false;
+    }
+
     void renderToStaging(float time) override {
         if (!_builder) return;
 
@@ -285,13 +293,92 @@ public:
                 _dirty = true;
             }
         }
+
+        // If dirty, pre-compute grid to check if derived storage needs to grow
+        if (_dirty && _primitives && _primCount > 0) {
+            _builder->computeSceneBoundsFromPrims(_primitives, _primCount);
+            _builder->computeGridDims(_primitives, _primCount);
+            _builder->buildGridFromPrims(_primitives, _primCount);
+
+            uint32_t needed = computeDerivedSize();
+            if (!_derivedStorage.isValid() || needed > _derivedStorage.size) {
+                _needsBufferRealloc = true;
+            }
+        }
     }
 
     Result<void> render() override {
         if (!_builder) return Ok();
 
-        if (_dirty) {
-            if (auto res = rebuildAndUpload(); !res) return res;
+        if (_dirty && _primitives && _primCount > 0) {
+            uint32_t derivedSize = computeDerivedSize();
+
+            if (derivedSize > 0) {
+                if (!_derivedStorage.isValid()) {
+                    return Err<void>("YDrawImpl::render: derived storage not allocated");
+                }
+                if (derivedSize > _derivedStorage.size) {
+                    return Err<void>("YDrawImpl::render: derived storage too small ("
+                        + std::to_string(derivedSize) + " > "
+                        + std::to_string(_derivedStorage.size) + ")");
+                }
+
+                uint8_t* base = _derivedStorage.data;
+                std::memset(base, 0, _derivedStorage.size);
+                uint32_t offset = 0;
+
+                const auto& gridData = _builder->gridStaging();
+                uint32_t gridBytes = static_cast<uint32_t>(gridData.size()) * sizeof(uint32_t);
+                _grid = reinterpret_cast<uint32_t*>(base + offset);
+                _gridSize = static_cast<uint32_t>(gridData.size());
+                _gridWidth = _builder->gridWidth();
+                _gridHeight = _builder->gridHeight();
+                _gridOffset = (_derivedStorage.offset + offset) / sizeof(float);
+                std::memcpy(base + offset, gridData.data(), gridBytes);
+                offset += gridBytes;
+
+                uint32_t glyphBytes = static_cast<uint32_t>(
+                    _builder->glyphs().size() * sizeof(YDrawGlyph));
+                _glyphOffset = (_derivedStorage.offset + offset) / sizeof(float);
+                const auto& glyphs = _builder->glyphs();
+                if (!glyphs.empty()) {
+                    std::memcpy(base + offset, glyphs.data(), glyphBytes);
+                }
+                offset += glyphBytes;
+
+                if (_builder->hasCustomAtlas() && _atlasTextureHandle.isValid()) {
+                    auto atlas = _builder->customAtlas();
+                    auto atlasPos = _cardMgr->textureManager()->getAtlasPosition(
+                        _atlasTextureHandle);
+                    uint32_t msdfAtlasW = atlas->getAtlasWidth();
+                    uint32_t msdfAtlasH = atlas->getAtlasHeight();
+                    const auto& glyphMeta = atlas->getGlyphMetadata();
+
+                    uint32_t atlasHeader[4] = {
+                        (atlasPos.x & 0xFFFF) | ((msdfAtlasW & 0xFFFF) << 16),
+                        (atlasPos.y & 0xFFFF) | ((msdfAtlasH & 0xFFFF) << 16),
+                        static_cast<uint32_t>(glyphMeta.size()),
+                        0
+                    };
+                    std::memcpy(base + offset, atlasHeader, sizeof(atlasHeader));
+                    offset += sizeof(atlasHeader);
+
+                    if (!glyphMeta.empty()) {
+                        uint32_t metaBytes = static_cast<uint32_t>(
+                            glyphMeta.size() * sizeof(GlyphMetadataGPU));
+                        std::memcpy(base + offset, glyphMeta.data(), metaBytes);
+                    }
+                }
+
+                _cardMgr->bufferManager()->markBufferDirty(_derivedStorage);
+            }
+
+            _primitiveOffset = _primStorage.isValid()
+                ? _primStorage.offset / sizeof(float) : 0;
+            if (_primStorage.isValid()) {
+                _cardMgr->bufferManager()->markBufferDirty(_primStorage);
+            }
+            _metadataDirty = true;
             _dirty = false;
         }
 
@@ -378,95 +465,22 @@ public:
 
 private:
     //=========================================================================
-    // GPU rebuild
+    // Helpers
     //=========================================================================
 
-    Result<void> rebuildAndUpload() {
-        // Compute scene bounds from GPU-resident prims
-        _builder->computeSceneBoundsFromPrims(_primitives, _primCount);
-
-        float sceneW = _builder->sceneMaxX() - _builder->sceneMinX();
-        float sceneH = _builder->sceneMaxY() - _builder->sceneMinY();
-
-        _builder->computeGridDims(_primitives, _primCount);
-        _builder->buildGridFromPrims(_primitives, _primCount);
-
+    uint32_t computeDerivedSize() const {
         const auto& gridData = _builder->gridStaging();
         uint32_t gridBytes = static_cast<uint32_t>(gridData.size()) * sizeof(uint32_t);
         uint32_t glyphBytes = static_cast<uint32_t>(
             _builder->glyphs().size() * sizeof(YDrawGlyph));
-        uint32_t derivedTotalSize = gridBytes + glyphBytes;
-
+        uint32_t total = gridBytes + glyphBytes;
         if (_builder->hasCustomAtlas()) {
             uint32_t atlasHeaderBytes = 4 * sizeof(uint32_t);
             uint32_t glyphMetaBytes = static_cast<uint32_t>(
                 _builder->customAtlas()->getGlyphMetadata().size() * sizeof(GlyphMetadataGPU));
-            derivedTotalSize += atlasHeaderBytes + glyphMetaBytes;
+            total += atlasHeaderBytes + glyphMetaBytes;
         }
-
-        if (derivedTotalSize > 0) {
-            if (!_derivedStorage.isValid() || derivedTotalSize > _derivedStorage.size) {
-                auto storageResult = _cardMgr->bufferManager()->allocateBuffer(
-                    metadataSlotIndex(), "derived", derivedTotalSize);
-                if (!storageResult) {
-                    return Err<void>("YDrawImpl::rebuild: derived alloc failed");
-                }
-                _derivedStorage = *storageResult;
-            }
-        }
-
-        if (_derivedStorage.isValid() && derivedTotalSize > 0) {
-            uint8_t* base = _derivedStorage.data;
-            std::memset(base, 0, _derivedStorage.size);
-            uint32_t offset = 0;
-
-            _grid = reinterpret_cast<uint32_t*>(base + offset);
-            _gridSize = static_cast<uint32_t>(gridData.size());
-            _gridWidth = _builder->gridWidth();
-            _gridHeight = _builder->gridHeight();
-            _gridOffset = (_derivedStorage.offset + offset) / sizeof(float);
-            std::memcpy(base + offset, gridData.data(), gridBytes);
-            offset += gridBytes;
-
-            _glyphOffset = (_derivedStorage.offset + offset) / sizeof(float);
-            const auto& glyphs = _builder->glyphs();
-            if (!glyphs.empty()) {
-                std::memcpy(base + offset, glyphs.data(), glyphBytes);
-            }
-            offset += glyphBytes;
-
-            if (_builder->hasCustomAtlas() && _atlasTextureHandle.isValid()) {
-                auto atlas = _builder->customAtlas();
-                auto atlasPos = _cardMgr->textureManager()->getAtlasPosition(_atlasTextureHandle);
-                uint32_t msdfAtlasW = atlas->getAtlasWidth();
-                uint32_t msdfAtlasH = atlas->getAtlasHeight();
-                const auto& glyphMeta = atlas->getGlyphMetadata();
-
-                uint32_t atlasHeader[4] = {
-                    (atlasPos.x & 0xFFFF) | ((msdfAtlasW & 0xFFFF) << 16),
-                    (atlasPos.y & 0xFFFF) | ((msdfAtlasH & 0xFFFF) << 16),
-                    static_cast<uint32_t>(glyphMeta.size()),
-                    0
-                };
-                std::memcpy(base + offset, atlasHeader, sizeof(atlasHeader));
-                offset += sizeof(atlasHeader);
-
-                if (!glyphMeta.empty()) {
-                    uint32_t metaBytes = static_cast<uint32_t>(
-                        glyphMeta.size() * sizeof(GlyphMetadataGPU));
-                    std::memcpy(base + offset, glyphMeta.data(), metaBytes);
-                }
-            }
-
-            _cardMgr->bufferManager()->markBufferDirty(_derivedStorage);
-        }
-
-        _primitiveOffset = _primStorage.isValid() ? _primStorage.offset / sizeof(float) : 0;
-        if (_primStorage.isValid()) {
-            _cardMgr->bufferManager()->markBufferDirty(_primStorage);
-        }
-        _metadataDirty = true;
-        return Ok();
+        return total;
     }
 
     Result<void> uploadMetadata() {
@@ -1479,6 +1493,7 @@ private:
     uint32_t _atlasHeaderOffset = 0;
     bool _dirty = true;
     bool _metadataDirty = true;
+    bool _needsBufferRealloc = false;
 
     // View
     float _viewZoom = 1.0f;
