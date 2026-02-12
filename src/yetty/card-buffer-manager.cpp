@@ -318,10 +318,8 @@ Result<void> CardBufferManagerImpl::commitReservations() {
     _subAllocations.clear();
 
     if (_shm) {
-        // Using shared memory - check if we need to grow
+        // Using shared memory - grow only if buffers don't fit
         if (totalNeeded > _shm->size()) {
-            // Need to grow shared memory
-            // Round up to next power of 2 for growth efficiency
             uint32_t newSize = totalNeeded;
             newSize--;
             newSize |= newSize >> 1;
@@ -337,26 +335,28 @@ Result<void> CardBufferManagerImpl::commitReservations() {
             yinfo("CardBufferManager: grew shared memory to {} bytes", newSize);
         }
 
-        _bufferAllocator = BufferAllocator(static_cast<uint32_t>(_shm->size()));
-        _currentBufferCapacity = static_cast<uint32_t>(_shm->size());
+        // Allocator spans only what cards need, not entire shm
+        _bufferAllocator = BufferAllocator(totalNeeded);
 
-        // Recreate GPU buffer if size changed
-        if (_bufferGpuBuffer) {
-            _allocator->releaseBuffer(_bufferGpuBuffer);
-            _bufferGpuBuffer = nullptr;
+        if (totalNeeded != _currentBufferCapacity) {
+            if (_bufferGpuBuffer) {
+                _allocator->releaseBuffer(_bufferGpuBuffer);
+                _bufferGpuBuffer = nullptr;
+            }
+
+            WGPUBufferDescriptor bufDesc = {};
+            bufDesc.label = WGPU_STR("CardBuffer");
+            bufDesc.size = totalNeeded;
+            bufDesc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
+            bufDesc.mappedAtCreation = false;
+
+            _bufferGpuBuffer = _allocator->createBuffer(bufDesc);
+            if (!_bufferGpuBuffer) {
+                return Err<void>("Failed to create GPU buffer");
+            }
+            _currentBufferCapacity = totalNeeded;
+            _bindGroupDirty = true;
         }
-
-        WGPUBufferDescriptor bufDesc = {};
-        bufDesc.label = WGPU_STR("CardBuffer");
-        bufDesc.size = _shm->size();
-        bufDesc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
-        bufDesc.mappedAtCreation = false;
-
-        _bufferGpuBuffer = _allocator->createBuffer(bufDesc);
-        if (!_bufferGpuBuffer) {
-            return Err<void>("Failed to create GPU buffer");
-        }
-        _bindGroupDirty = true;
     } else {
         // Using internal vector
         _bufferAllocator = BufferAllocator(totalNeeded);

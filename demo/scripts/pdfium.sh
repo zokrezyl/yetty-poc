@@ -1,6 +1,6 @@
 #!/bin/bash
 # PDFium Card: Renders PDF documents with page navigation and zoom
-# Uses PDFium library (BSD-3-Clause license) - MIT compatible alternative to MuPDF
+# Uses PDFium library (BSD-3-Clause license)
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR/../.."
 

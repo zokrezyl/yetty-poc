@@ -14,8 +14,7 @@ def pdfium(ctx, file, page):
     Renders PDF documents using PDFium and MSDF text rendering.
     Text is extracted from the PDF and rendered using the terminal font.
 
-    This plugin uses PDFium (BSD-3-Clause licensed) which is MIT-compatible,
-    unlike the 'pdf' plugin which uses MuPDF (AGPL licensed).
+    This plugin uses PDFium (BSD-3-Clause licensed).
 
     Navigation:
         PageUp/PageDown - Previous/next page

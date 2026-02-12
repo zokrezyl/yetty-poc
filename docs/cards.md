@@ -552,7 +552,7 @@ Renders PDF pages as textures.
 - Renders PDF page to offscreen framebuffer
 - Uploads rendered pixels to texture atlas
 - Supports page navigation
-- Uses PDFium or MuPDF backend
+- Uses PDFium backend
 
 ### YDraw Card
 
