@@ -299,4 +299,4 @@ For licensing questions or concerns, please open an issue on the Yetty GitHub re
 
 ---
 
-Last updated: 2025-01-07
+Last updated: 2026-02-12
