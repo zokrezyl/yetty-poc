@@ -11,5 +11,5 @@ if [[ ! -f "$MARKDOWN_FILE" ]]; then
 fi
 
 PAYLOAD=$(base64 -w0 < "$MARKDOWN_FILE")
-printf '\033]666666;run -c markdown -x 2 -y 2 -w 76 -h 35 -r;;%s\033\\' "$PAYLOAD"
+printf '\033]666666;run -c markdown -x 2 -y 2 -w 76 -h 35 -r;-i -;%s\033\\' "$PAYLOAD"
 echo
