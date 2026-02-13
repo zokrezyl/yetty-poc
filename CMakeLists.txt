@@ -720,6 +720,7 @@ if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
     add_subdirectory(src/yetty/diagram)
     add_subdirectory(src/yetty/cards)
     add_subdirectory(src/yetty/yast)
+    add_subdirectory(src/yetty/gpu)
 endif()
 
 target_compile_definitions(yetty PRIVATE
@@ -881,6 +882,7 @@ else()
         lz4_static
         uv_a
         cdb-wrapper
+        yetty_gpu
         # Fontconfig and deps (Linux only)
         $<$<AND:$<NOT:$<BOOL:${WIN32}>>,$<NOT:$<BOOL:${APPLE}>>>:${FONTCONFIG_STATIC_LIB}>
         $<$<AND:$<NOT:$<BOOL:${WIN32}>>,$<NOT:$<BOOL:${APPLE}>>>:${EXPAT_STATIC_LIB}>

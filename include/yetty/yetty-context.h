@@ -3,6 +3,7 @@
 #include <yetty/base/types.h>
 #include <yetty/gpu-context.h>
 #include <yetty/gpu-allocator.h>
+#include <yetty/gpu-monitor.h>
 #include <yetty/shader-manager.h>
 #include <yetty/font-manager.h>
 #include <yetty/card-manager.h>
@@ -24,6 +25,9 @@ struct YettyContext {
 
     // Global GPU allocator (tracks all shared GPU resource allocations)
     GpuAllocator::Ptr globalAllocator;
+
+    // GPU usage monitor (queries vendor-specific GPU utilization)
+    gpu::GpuMonitor::Ptr gpuMonitor;
 
     // Shared managers
     ShaderManager::Ptr shaderManager;
