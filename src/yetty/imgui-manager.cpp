@@ -1,5 +1,6 @@
 #include <yetty/imgui-manager.h>
 #include <yetty/yetty-context.h>
+#include <yetty/gpu-monitor.h>
 #include <yetty/base/event-loop.h>
 #include "ymery/renderer.h"
 #include <ytrace/ytrace.hpp>
@@ -8,6 +9,7 @@
 #include <imgui_impl_wgpu.h>
 
 #include <vector>
+#include <chrono>
 
 namespace yetty {
 
@@ -62,6 +64,11 @@ private:
 
     // Statusbar
     std::string _statusText;
+
+    // GPU usage monitoring (sampled periodically, not every frame)
+    gpu::GpuStats _gpuUsageStats;
+    std::chrono::steady_clock::time_point _lastGpuSample;
+    static constexpr auto GPU_SAMPLE_INTERVAL = std::chrono::milliseconds(500);
 };
 
 //-----------------------------------------------------------------------------
@@ -299,6 +306,13 @@ Result<void> ImguiManagerImpl::render(WGPURenderPassEncoder pass) {
         }
     }
 
+    // Sample GPU usage periodically (not every frame)
+    auto now = std::chrono::steady_clock::now();
+    if (_ctx.gpuMonitor && (now - _lastGpuSample >= GPU_SAMPLE_INTERVAL)) {
+        _gpuUsageStats = _ctx.gpuMonitor->sample();
+        _lastGpuSample = now;
+    }
+
     // Statusbar at bottom of screen
     {
         float yPos = static_cast<float>(_displayHeight) - STATUSBAR_HEIGHT;
@@ -312,10 +326,34 @@ Result<void> ImguiManagerImpl::render(WGPURenderPassEncoder pass) {
                                  ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
                                  ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing;
         if (ImGui::Begin("##Statusbar", nullptr, flags)) {
+            // Left side: status text
             if (_statusText.empty()) {
                 ImGui::Text("Ready");
             } else {
                 ImGui::Text("%s", _statusText.c_str());
+            }
+
+            // Right side: GPU usage
+            if (_gpuUsageStats.available) {
+                // Calculate position for right-aligned GPU text
+                char gpuText[64];
+                snprintf(gpuText, sizeof(gpuText), "GPU: %.0f%%", _gpuUsageStats.utilization);
+                float textWidth = ImGui::CalcTextSize(gpuText).x;
+                float windowWidth = ImGui::GetWindowWidth();
+                float rightPadding = 8.0f;
+
+                ImGui::SameLine(windowWidth - textWidth - rightPadding);
+
+                // Color based on utilization: green < 50%, yellow 50-80%, red > 80%
+                ImVec4 color;
+                if (_gpuUsageStats.utilization < 50.0f) {
+                    color = ImVec4(0.4f, 0.9f, 0.4f, 1.0f);  // Green
+                } else if (_gpuUsageStats.utilization < 80.0f) {
+                    color = ImVec4(0.9f, 0.9f, 0.4f, 1.0f);  // Yellow
+                } else {
+                    color = ImVec4(0.9f, 0.4f, 0.4f, 1.0f);  // Red
+                }
+                ImGui::TextColored(color, "%s", gpuText);
             }
         }
         ImGui::End();

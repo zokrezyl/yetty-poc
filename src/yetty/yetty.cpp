@@ -186,6 +186,7 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     // Build YettyContext
     _yettyContext.gpu = _gpuContext;
     _yettyContext.globalAllocator = _globalAllocator;
+    _yettyContext.gpuMonitor = gpu::GpuMonitor::create();
     _yettyContext.shaderManager = shaderMgr;
     _yettyContext.fontManager = fontMgr;
 
