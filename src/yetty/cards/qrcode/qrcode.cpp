@@ -120,6 +120,14 @@ public:
         return Ok();
     }
 
+    void setCellSize(uint32_t cellWidth, uint32_t cellHeight) override {
+        if (_cellWidth != cellWidth || _cellHeight != cellHeight) {
+            _cellWidth = cellWidth;
+            _cellHeight = cellHeight;
+            _metadataDirty = true;
+        }
+    }
+
     Result<void> render() override {
         if (_metadataDirty) {
             if (auto res = uploadMetadata(); !res) {
@@ -127,7 +135,7 @@ public:
             }
             _metadataDirty = false;
         }
-        
+
         return Ok();
     }
 
@@ -140,7 +148,9 @@ private:
         uint32_t bgColor;        // Background (white modules) RGBA
         uint32_t widthCells;     // Card width in cells
         uint32_t heightCells;    // Card height in cells
-        uint32_t reserved[10];   // Padding to 64 bytes
+        uint32_t cellWidth;      // Cell pixel width
+        uint32_t cellHeight;     // Cell pixel height
+        uint32_t reserved[8];    // Padding to 64 bytes
     };
     static_assert(sizeof(Metadata) == 64, "Metadata must be 64 bytes");
 
@@ -153,11 +163,14 @@ private:
     
     std::vector<bool> _qrModules;
     uint8_t _qrSize = 0;
-    
+
     qr::ECLevel _ecLevel = qr::ECLevel::M;
     uint32_t _fgColor = 0x000000FF;  // Black, opaque
     uint32_t _bgColor = 0xFFFFFFFF;  // White, opaque
-    
+
+    uint32_t _cellWidth = 0;
+    uint32_t _cellHeight = 0;
+
     bool _metadataDirty = true;
 
     void parseArgs(const std::string& args) {
@@ -225,7 +238,9 @@ private:
         meta.bgColor = _bgColor;
         meta.widthCells = _widthCells;
         meta.heightCells = _heightCells;
-        
+        meta.cellWidth = _cellWidth;
+        meta.cellHeight = _cellHeight;
+
         _cardMgr->writeMetadata(_metaHandle, &meta, sizeof(meta));
         return Ok();
     }

@@ -73,7 +73,6 @@ step() {
         echo -e "  ${YELLOW}Demo:${NC} ${GREEN}${demo_hint}${NC}"
     fi
 
-    echo -e "  ${DIM}Type 'exit' when done to continue to next step${NC}"
     echo -e "${DIM}────────────────────────────────────────────────────────────────${NC}"
     echo ""
 
@@ -417,7 +416,6 @@ if step "Closing" \
     "that any language can use, and a rendering pipeline" \
     "that treats the terminal as a first-class GPU surface." \
     "" \
-    "It is MIT licensed and we welcome contributions." \
     "" \
     "${CYAN}github.com/zokrezyl/yetty${NC}" \
     "" \

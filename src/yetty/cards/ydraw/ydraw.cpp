@@ -226,7 +226,9 @@ public:
         _gridWidth = _builder->gridWidth();
         _gridHeight = _builder->gridHeight();
         _metadataDirty = true;
-        _dirty = false;
+        // Keep _dirty = true so render() writes the full derived storage
+        // (including atlas header which needs the texture handle from Phase 2 textures)
+        _dirty = true;
 
         return Ok();
     }
@@ -310,7 +312,7 @@ public:
     Result<void> render() override {
         if (!_builder) return Ok();
 
-        if (_dirty && _primitives && _primCount > 0) {
+        if (_dirty) {
             uint32_t derivedSize = computeDerivedSize();
 
             if (derivedSize > 0) {
