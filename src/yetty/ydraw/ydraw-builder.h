@@ -127,6 +127,9 @@ public:
     // Font API
     //=========================================================================
     virtual Result<int> addFont(const std::string& ttfPath) = 0;
+    // Caller-specified font ID: registers font at the given ID.
+    // addText(..., fontId) will resolve through this mapping.
+    virtual Result<void> addFont(int fontId, const std::string& ttfPath) = 0;
     virtual int registerFont(const std::string& cdbPath,
                              const std::string& ttfPath = "",
                              MsdfCdbProvider::Ptr provider = nullptr) = 0;

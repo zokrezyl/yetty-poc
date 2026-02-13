@@ -555,7 +555,15 @@ public:
     Result<void> addText(float x, float y, const std::string& text,
                          float fontSize, uint32_t color,
                          uint32_t layer, int fontId) override {
-        bool useCustom = (fontId >= 0 && _customAtlas);
+        // Resolve user-specified fontId to atlas-internal fontId
+        int resolvedFontId = fontId;
+        if (fontId >= 0) {
+            auto it = _userFontIdMap.find(fontId);
+            if (it != _userFontIdMap.end()) {
+                resolvedFontId = it->second;
+            }
+        }
+        bool useCustom = (resolvedFontId >= 0 && _customAtlas);
         MsdfAtlas* activeAtlas = useCustom ? _customAtlas.get() : _atlas.get();
         if (!activeAtlas) {
             return Err<void>("addText: no atlas available");
@@ -597,7 +605,7 @@ public:
 
             uint32_t glyphIndex;
             if (useCustom) {
-                glyphIndex = _customAtlas->loadGlyph(fontId, codepoint);
+                glyphIndex = _customAtlas->loadGlyph(resolvedFontId, codepoint);
             } else if (_font) {
                 glyphIndex = _font->getGlyphIndex(codepoint);
             } else {
@@ -641,7 +649,12 @@ public:
 
     float measureTextWidth(const std::string& text,
                            float fontSize, int fontId) override {
-        bool useCustom = (fontId >= 0 && _customAtlas);
+        int resolvedFontId = fontId;
+        if (fontId >= 0) {
+            auto it = _userFontIdMap.find(fontId);
+            if (it != _userFontIdMap.end()) resolvedFontId = it->second;
+        }
+        bool useCustom = (resolvedFontId >= 0 && _customAtlas);
         MsdfAtlas* activeAtlas = useCustom ? _customAtlas.get() : _atlas.get();
         if (!activeAtlas || text.empty()) return 0.0f;
 
@@ -675,7 +688,7 @@ public:
 
             uint32_t glyphIndex;
             if (useCustom) {
-                glyphIndex = _customAtlas->loadGlyph(fontId, codepoint);
+                glyphIndex = _customAtlas->loadGlyph(resolvedFontId, codepoint);
             } else if (_font) {
                 glyphIndex = _font->getGlyphIndex(codepoint);
             } else {
@@ -778,6 +791,18 @@ public:
 
         yinfo("addFont: registered '{}' on custom atlas (fontId={})", stem, fontId);
         return Ok(fontId);
+    }
+
+    Result<void> addFont(int userFontId, const std::string& ttfPath) override {
+        auto result = addFont(ttfPath);
+        if (!result) {
+            return Err<void>("addFont(id=" + std::to_string(userFontId) + "): " +
+                             result.error().message());
+        }
+        int atlasId = *result;
+        _userFontIdMap[userFontId] = atlasId;
+        yinfo("addFont: mapped user fontId {} -> atlas fontId {}", userFontId, atlasId);
+        return Ok();
     }
 
     //=========================================================================
@@ -890,7 +915,6 @@ public:
         }
 
         if (num2DPrims > 0 || !_glyphs.empty()) {
-            float sceneArea = sceneWidth * sceneHeight;
             if (cs <= 0.0f) {
                 float primCs = 0.0f, glyphCs = 0.0f;
                 if (num2DPrims > 0) {
@@ -918,15 +942,20 @@ public:
                 } else {
                     cs = glyphCs;
                 }
-                float minCellSize = std::sqrt(sceneArea / 65536.0f);
-                float maxCellSize = std::sqrt(sceneArea / 16.0f);
-                cs = std::clamp(cs, minCellSize, maxCellSize);
+                if (cs <= 0.0f) cs = 1.0f;
             }
+            // Grid dimensions derived from content — no arbitrary per-axis cap.
+            // Only cap total cell count to keep memory bounded (offset table = cells * 4 bytes).
             gridW = std::max(1u, static_cast<uint32_t>(std::ceil(sceneWidth / cs)));
             gridH = std::max(1u, static_cast<uint32_t>(std::ceil(sceneHeight / cs)));
-            const uint32_t MAX_GRID_DIM = 512;
-            if (gridW > MAX_GRID_DIM) { gridW = MAX_GRID_DIM; cs = sceneWidth / gridW; }
-            if (gridH > MAX_GRID_DIM) { gridH = MAX_GRID_DIM; cs = std::max(cs, sceneHeight / gridH); }
+            constexpr uint32_t MAX_TOTAL_CELLS = 4u * 1024u * 1024u; // 4M cells = 16MB offset table
+            uint64_t totalCells = static_cast<uint64_t>(gridW) * gridH;
+            if (totalCells > MAX_TOTAL_CELLS) {
+                float scale = std::sqrt(static_cast<float>(totalCells) / MAX_TOTAL_CELLS);
+                cs *= scale;
+                gridW = std::max(1u, static_cast<uint32_t>(std::ceil(sceneWidth / cs)));
+                gridH = std::max(1u, static_cast<uint32_t>(std::ceil(sceneHeight / cs)));
+            }
         }
 
         _gridWidth = gridW;
@@ -1074,7 +1103,6 @@ public:
         }
 
         if (num2DPrims > 0 || !_glyphs.empty()) {
-            float sceneArea = sceneWidth * sceneHeight;
             if (cs <= 0.0f) {
                 float primCs = 0.0f, glyphCs = 0.0f;
                 if (num2DPrims > 0) {
@@ -1102,15 +1130,18 @@ public:
                 } else {
                     cs = glyphCs;
                 }
-                float minCellSize = std::sqrt(sceneArea / 65536.0f);
-                float maxCellSize = std::sqrt(sceneArea / 16.0f);
-                cs = std::clamp(cs, minCellSize, maxCellSize);
+                if (cs <= 0.0f) cs = 1.0f;
             }
             gridW = std::max(1u, static_cast<uint32_t>(std::ceil(sceneWidth / cs)));
             gridH = std::max(1u, static_cast<uint32_t>(std::ceil(sceneHeight / cs)));
-            const uint32_t MAX_GRID_DIM = 512;
-            if (gridW > MAX_GRID_DIM) { gridW = MAX_GRID_DIM; cs = sceneWidth / gridW; }
-            if (gridH > MAX_GRID_DIM) { gridH = MAX_GRID_DIM; cs = std::max(cs, sceneHeight / gridH); }
+            constexpr uint32_t MAX_TOTAL_CELLS = 4u * 1024u * 1024u;
+            uint64_t totalCells = static_cast<uint64_t>(gridW) * gridH;
+            if (totalCells > MAX_TOTAL_CELLS) {
+                float scale = std::sqrt(static_cast<float>(totalCells) / MAX_TOTAL_CELLS);
+                cs *= scale;
+                gridW = std::max(1u, static_cast<uint32_t>(std::ceil(sceneWidth / cs)));
+                gridH = std::max(1u, static_cast<uint32_t>(std::ceil(sceneHeight / cs)));
+            }
         }
 
         _cellSize = cs;
@@ -1230,6 +1261,9 @@ private:
 
     // TTF font metrics cache (fontId -> hhea ascender/descender)
     std::unordered_map<int, TtfMetrics> _ttfMetricsCache;
+
+    // User-specified font ID mapping (user fontId -> atlas fontId)
+    std::unordered_map<int, int> _userFontIdMap;
 };
 
 //=============================================================================

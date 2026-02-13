@@ -1,5 +1,10 @@
 add_subdirectory(gpu-info)
 
+# PDF to YDraw binary converter (requires pdfio from ypdf card)
+if(YETTY_CARD_YPDF)
+    add_subdirectory(pdf2ydraw)
+endif()
+
 # Ymery test tool - standalone ImGui/OpenGL3 app that loads YAML layouts
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/ymery/test.cpp")
 add_executable(ymery-test

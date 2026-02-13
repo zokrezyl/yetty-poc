@@ -10,6 +10,8 @@
 #include <sstream>
 #include <cmath>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 
 namespace {
 constexpr int GLFW_MOD_SHIFT   = 0x0001;
@@ -131,6 +133,22 @@ public:
         // Calculate grid if needed
         if (_builder->gridStaging().empty()) {
             _builder->calculate();
+
+            // Auto-compute zoom/pan to fit one page height after scene bounds are known
+            if (_fitPageHeight > 0.0f) {
+                float sceneMinY = _builder->sceneMinY();
+                float sceneMaxY = _builder->sceneMaxY();
+                float sceneH = sceneMaxY - sceneMinY;
+                if (sceneH > _fitPageHeight) {
+                    _viewZoom = sceneH / _fitPageHeight;
+                    // Pan so viewMinY = 0 (first page top)
+                    // viewMinY = centerY - viewHalfH + panY = 0
+                    // panY = viewHalfH - centerY = fitPageH/2 - (min+max)/2
+                    float centerY = (sceneMinY + sceneMaxY) * 0.5f;
+                    _viewPanY = _fitPageHeight * 0.5f - centerY;
+                }
+                _fitPageHeight = 0.0f; // only apply once
+            }
         }
 
         // Reserve derived size (grid + glyphs + optional atlas)
@@ -413,8 +431,8 @@ public:
             float sceneH = _builder->sceneMaxY() - _builder->sceneMinY();
 
             if (event.cardScroll.mods & GLFW_MOD_CONTROL) {
-                float zoomDelta = event.cardScroll.dy * 0.1f;
-                float newZoom = std::clamp(_viewZoom + zoomDelta, 0.1f, 20.0f);
+                float zoomDelta = event.cardScroll.dy * 0.1f * _viewZoom;
+                float newZoom = std::clamp(_viewZoom + zoomDelta, 0.1f, 1000.0f);
                 if (newZoom != _viewZoom) {
                     _viewZoom = newZoom;
                     _metadataDirty = true;
@@ -626,6 +644,15 @@ private:
                 _builder->addFlags(YDrawBuilder::FLAG_SHOW_GRID);
             } else if (token == "--show-eval-count") {
                 _builder->addFlags(YDrawBuilder::FLAG_SHOW_EVAL_COUNT);
+            } else if (token == "--zoom") {
+                std::string s;
+                if (iss >> s) _viewZoom = std::clamp(std::stof(s), 0.1f, 1000.0f);
+            } else if (token == "--pan-y") {
+                std::string s;
+                if (iss >> s) _viewPanY = std::stof(s);
+            } else if (token == "--fit-page-height") {
+                std::string s;
+                if (iss >> s) _fitPageHeight = std::stof(s);
             }
         }
     }
@@ -673,6 +700,137 @@ private:
             std::memcpy(&prim, primData + i * PRIM_SIZE, PRIM_SIZE);
             _builder->addPrimitive(prim);
         }
+
+        // v2: fonts + text after primitives
+        if (version >= 2) {
+            size_t offset = HEADER_SIZE + primCount * PRIM_SIZE;
+            if (auto res = parseBinaryV2(data, payload.size(), offset); !res) {
+                ywarn("parseBinary: v2 section failed: {}", error_msg(res));
+            }
+        }
+
+        return Ok();
+    }
+
+    Result<void> parseBinaryV2(const uint8_t* data, size_t totalSize, size_t offset) {
+        auto read32 = [&](uint32_t& val) -> bool {
+            if (offset + 4 > totalSize) return false;
+            std::memcpy(&val, data + offset, 4);
+            offset += 4;
+            return true;
+        };
+        auto readF32 = [&](float& val) -> bool {
+            if (offset + 4 > totalSize) return false;
+            std::memcpy(&val, data + offset, 4);
+            offset += 4;
+            return true;
+        };
+
+        // --- Font Section ---
+        uint32_t fontCount = 0;
+        if (!read32(fontCount)) return Ok();
+
+        std::vector<int> fontIdMap(fontCount, -1);
+        auto tempDir = std::filesystem::temp_directory_path();
+
+        for (uint32_t i = 0; i < fontCount; i++) {
+            uint32_t fontDataSize = 0;
+            if (!read32(fontDataSize)) return Ok();
+
+            uint32_t paddedSize = (fontDataSize + 3) & ~3u;
+            if (offset + paddedSize > totalSize) return Ok();
+
+            // Hash font data for stable filename (enables CDB caching)
+            uint32_t hash = 0x811c9dc5u; // FNV-1a
+            for (uint32_t j = 0; j < fontDataSize; j++) {
+                hash ^= data[offset + j];
+                hash *= 0x01000193u;
+            }
+
+            auto tempPath = tempDir / ("ydraw_font_" + std::to_string(hash) +
+                                       "_" + std::to_string(i) + ".ttf");
+            if (!std::filesystem::exists(tempPath)) {
+                std::ofstream out(tempPath, std::ios::binary);
+                if (!out) {
+                    ywarn("parseBinaryV2: failed to write temp font {}", tempPath.string());
+                    offset += paddedSize;
+                    continue;
+                }
+                out.write(reinterpret_cast<const char*>(data + offset),
+                          static_cast<std::streamsize>(fontDataSize));
+            }
+
+            auto res = _builder->addFont(static_cast<int>(i), tempPath.string());
+            if (res) {
+                fontIdMap[i] = static_cast<int>(i);
+                yinfo("parseBinaryV2: registered font {} from {} bytes", i, fontDataSize);
+            } else {
+                ywarn("parseBinaryV2: addFont failed for font {}: {}",
+                      i, res.error().message());
+            }
+
+            offset += paddedSize;
+        }
+
+        // --- Text Section ---
+        uint32_t defaultSpanCount = 0, customSpanCount = 0, textDataSize = 0;
+        if (!read32(defaultSpanCount)) return Ok();
+        if (!read32(customSpanCount)) return Ok();
+        if (!read32(textDataSize)) return Ok();
+
+        // Remember where span arrays and text data start
+        size_t defaultSpansStart = offset;
+        size_t customSpansStart = defaultSpansStart + defaultSpanCount * 32;
+        size_t textDataStart = customSpansStart + customSpanCount * 32;
+        uint32_t paddedTextSize = (textDataSize + 3) & ~3u;
+
+        if (textDataStart + paddedTextSize > totalSize) {
+            ywarn("parseBinaryV2: text section truncated");
+            return Ok();
+        }
+
+        const char* textBlob = reinterpret_cast<const char*>(data + textDataStart);
+
+        // Parse default text spans (use default MsMsdfFont)
+        offset = defaultSpansStart;
+        for (uint32_t i = 0; i < defaultSpanCount; i++) {
+            float x, y, fontSize;
+            uint32_t color, layer, textOffset, textLength, pad;
+            if (!readF32(x) || !readF32(y) || !readF32(fontSize) ||
+                !read32(color) || !read32(layer) ||
+                !read32(textOffset) || !read32(textLength) || !read32(pad))
+                break;
+
+            if (textOffset + textLength > textDataSize) continue;
+            std::string text(textBlob + textOffset, textLength);
+            _builder->addText(x, y, text, fontSize, color, layer);
+        }
+
+        // Parse custom text spans (use uploaded fonts)
+        offset = customSpansStart;
+        for (uint32_t i = 0; i < customSpanCount; i++) {
+            float x, y, fontSize;
+            uint32_t color, fontIndex, layer, textOffset, textLength;
+            if (!readF32(x) || !readF32(y) || !readF32(fontSize) ||
+                !read32(color) || !read32(fontIndex) || !read32(layer) ||
+                !read32(textOffset) || !read32(textLength))
+                break;
+
+            if (textOffset + textLength > textDataSize) continue;
+            std::string text(textBlob + textOffset, textLength);
+
+            if (fontIndex < fontCount && fontIdMap[fontIndex] >= 0) {
+                _builder->addText(x, y, text, fontSize, color, layer,
+                                  static_cast<int>(fontIndex));
+            } else {
+                // Fallback to default font
+                _builder->addText(x, y, text, fontSize, color, layer);
+            }
+        }
+
+        yinfo("parseBinaryV2: {} fonts, {} default spans, {} custom spans, {} text bytes",
+              fontCount, defaultSpanCount, customSpanCount, textDataSize);
+
         return Ok();
     }
 
@@ -1500,6 +1658,7 @@ private:
     // View
     float _viewZoom = 1.0f;
     float _viewPanX = 0.0f;
+    float _fitPageHeight = 0.0f; // if set, compute zoom/pan to fit one page
     float _viewPanY = 0.0f;
     bool _focused = false;
 
