@@ -2,10 +2,12 @@
 
 #include "gpu-monitor.h"
 #include <filesystem>
+#include <chrono>
 
 namespace yetty::gpu {
 
-// Intel GPU monitor using sysfs/fdinfo
+// Intel GPU monitor using sysfs
+// Uses RC6 residency counters to calculate actual GPU busy percentage
 class IntelMonitor : public GpuMonitor {
 public:
     // Try to create an Intel monitor for a specific DRM card path.
@@ -18,11 +20,16 @@ public:
 private:
     explicit IntelMonitor(const std::filesystem::path& cardPath, const std::string& deviceName);
 
-    // Read aggregate GPU busy from all clients
-    float readClientsBusy();
+    // Read RC6 residency in milliseconds (time spent idle)
+    bool readRc6Residency(uint64_t& rc6Ms, uint64_t& totalMs);
 
     std::filesystem::path _cardPath;
     std::string _deviceName;
+
+    // For delta-based RC6 calculation
+    std::chrono::steady_clock::time_point _lastSampleTime;
+    uint64_t _lastRc6Ms = 0;
+    bool _firstSample = true;
 };
 
 } // namespace yetty::gpu

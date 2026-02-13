@@ -1,7 +1,6 @@
 #include "intel-monitor.h"
 #include <ytrace/ytrace.hpp>
 #include <fstream>
-#include <sstream>
 
 namespace yetty::gpu {
 
@@ -9,7 +8,8 @@ namespace fs = std::filesystem;
 
 IntelMonitor::IntelMonitor(const fs::path& cardPath, const std::string& deviceName)
     : _cardPath(cardPath)
-    , _deviceName(deviceName) {}
+    , _deviceName(deviceName)
+    , _lastSampleTime(std::chrono::steady_clock::now()) {}
 
 std::shared_ptr<IntelMonitor> IntelMonitor::tryCreate(const fs::path& cardPath) {
     // Check if this is an Intel GPU by verifying i915 driver
@@ -21,6 +21,14 @@ std::shared_ptr<IntelMonitor> IntelMonitor::tryCreate(const fs::path& cardPath) 
             ytrace("Intel monitor: driver is {}, not i915/xe", driverName);
             return nullptr;
         }
+    }
+
+    // Check if RC6 residency is available (our primary metric)
+    auto rc6Path = cardPath / "gt" / "gt0" / "rc6_residency_ms";
+    auto rc6PathAlt = cardPath / "power" / "rc6_residency_ms";
+    if (!fs::exists(rc6Path) && !fs::exists(rc6PathAlt)) {
+        ytrace("Intel monitor: RC6 residency not available at {}", cardPath.string());
+        // Still create the monitor, but it will report unavailable
     }
 
     // Try to read device name
@@ -41,87 +49,87 @@ std::shared_ptr<IntelMonitor> IntelMonitor::tryCreate(const fs::path& cardPath) 
     return std::shared_ptr<IntelMonitor>(new IntelMonitor(cardPath, deviceName));
 }
 
-float IntelMonitor::readClientsBusy() {
-    // Try to read from clients/* (kernel 5.19+)
-    auto clientsPath = _cardPath / "clients";
-    if (!fs::exists(clientsPath)) {
-        return 0.0f;
-    }
+bool IntelMonitor::readRc6Residency(uint64_t& rc6Ms, uint64_t& /*totalMs*/) {
+    // Try multiple possible paths for RC6 residency
+    std::vector<fs::path> rc6Paths = {
+        _cardPath / "gt" / "gt0" / "rc6_residency_ms",
+        _cardPath / "power" / "rc6_residency_ms",
+    };
 
-    float totalBusy = 0.0f;
-    int clientCount = 0;
+    for (const auto& path : rc6Paths) {
+        if (!fs::exists(path)) continue;
 
-    for (const auto& entry : fs::directory_iterator(clientsPath)) {
-        auto busyPath = entry.path() / "busy";
-        if (!fs::exists(busyPath)) continue;
-
-        std::ifstream file(busyPath);
+        std::ifstream file(path);
         if (!file) continue;
 
-        // Format: "render: X ns\nvideo: Y ns\n..."
-        std::string line;
-        while (std::getline(file, line)) {
-            if (line.find("render:") == 0 || line.find("rcs0:") == 0) {
-                // Parse percentage or nanoseconds
-                std::istringstream iss(line);
-                std::string label;
-                float value;
-                iss >> label >> value;
-                totalBusy += value;
-                clientCount++;
-            }
+        file >> rc6Ms;
+        if (!file.fail()) {
+            return true;
         }
     }
 
-    // Return average if we found clients
-    if (clientCount > 0) {
-        // Note: this is a rough approximation since values are cumulative ns
-        // For a proper implementation, we'd track deltas over time
-        return totalBusy / static_cast<float>(clientCount);
-    }
-
-    return 0.0f;
+    return false;
 }
 
 GpuStats IntelMonitor::sample() {
     GpuStats stats;
     stats.vendor = "intel";
     stats.deviceName = _deviceName;
+    stats.available = false;
 
-    // Try the gt/gt0/rps_cur_freq_mhz approach for frequency-based estimation
-    // This isn't true utilization but indicates GPU activity
-    auto freqPath = _cardPath / "gt" / "gt0" / "rps_cur_freq_mhz";
-    auto maxFreqPath = _cardPath / "gt" / "gt0" / "rps_max_freq_mhz";
+    auto now = std::chrono::steady_clock::now();
 
-    if (fs::exists(freqPath) && fs::exists(maxFreqPath)) {
-        std::ifstream curFile(freqPath);
-        std::ifstream maxFile(maxFreqPath);
-
-        int curFreq = 0, maxFreq = 0;
-        curFile >> curFreq;
-        maxFile >> maxFreq;
-
-        if (maxFreq > 0) {
-            // Estimate utilization from frequency scaling
-            // This is a rough approximation
-            stats.utilization = (static_cast<float>(curFreq) / static_cast<float>(maxFreq)) * 100.0f;
-            stats.available = true;
-            return stats;
-        }
+    // Read current RC6 residency (cumulative idle time in ms)
+    uint64_t rc6Ms = 0, totalMs = 0;
+    if (!readRc6Residency(rc6Ms, totalMs)) {
+        // RC6 not available - can't measure utilization accurately
+        ytrace("Intel monitor: RC6 residency read failed");
+        return stats;
     }
 
-    // Try reading from clients (kernel 5.19+)
-    float clientsBusy = readClientsBusy();
-    if (clientsBusy > 0) {
-        stats.utilization = clientsBusy;
+    if (_firstSample) {
+        // First sample - just store baseline, can't calculate yet
+        _lastRc6Ms = rc6Ms;
+        _lastSampleTime = now;
+        _firstSample = false;
+        // Return 0% for first sample
+        stats.utilization = 0.0f;
         stats.available = true;
         return stats;
     }
 
-    // Fallback: Intel GPU detected but no utilization available
-    // User should use intel_gpu_top for accurate readings
-    stats.available = false;
-    ytrace("Intel monitor: no utilization source available (try intel_gpu_top)");
+    // Calculate delta since last sample
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - _lastSampleTime);
+    uint64_t elapsedMs = static_cast<uint64_t>(elapsed.count());
+
+    if (elapsedMs == 0) {
+        // Too fast, return last value
+        stats.utilization = 0.0f;
+        stats.available = true;
+        return stats;
+    }
+
+    // RC6 is idle time, so busy = elapsed - idle_delta
+    uint64_t rc6Delta = rc6Ms - _lastRc6Ms;
+
+    // Clamp rc6Delta to elapsed time (can exceed due to timing)
+    if (rc6Delta > elapsedMs) {
+        rc6Delta = elapsedMs;
+    }
+
+    // Busy percentage = (elapsed - idle) / elapsed * 100
+    float busyMs = static_cast<float>(elapsedMs - rc6Delta);
+    stats.utilization = (busyMs / static_cast<float>(elapsedMs)) * 100.0f;
+    stats.available = true;
+
+    // Clamp to valid range
+    if (stats.utilization < 0.0f) stats.utilization = 0.0f;
+    if (stats.utilization > 100.0f) stats.utilization = 100.0f;
+
+    // Store for next sample
+    _lastRc6Ms = rc6Ms;
+    _lastSampleTime = now;
+
     return stats;
 }
 
