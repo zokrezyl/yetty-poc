@@ -8,6 +8,7 @@
 
 #include "pdf-content-parser.h"
 #include <ytrace/ytrace.hpp>
+#include <spdlog/sinks/basic_file_sink.h>
 
 extern "C" {
 #include <pdfio.h>
@@ -58,6 +59,8 @@ static_assert(sizeof(CustomTextSpan) == 32);
 struct FontData {
     std::string tag;
     std::vector<uint8_t> data;
+    bool isIdentityH = false;  // True for Type0/Identity-H (2-byte CID encoding)
+    std::unordered_map<uint16_t, uint32_t> toUnicode; // CID → Unicode codepoint
 };
 
 //=============================================================================
@@ -239,12 +242,171 @@ static uint32_t decodeUtf8(const uint8_t*& ptr, const uint8_t* end) {
     return cp;
 }
 
+// Re-decode Identity-H CID text using ToUnicode map.
+// The content parser decoded 2-byte CIDs as individual WinAnsi bytes,
+// producing pairs like {0x00, 0x51} for CID 0x0051.
+// We reconstruct the CIDs and map them to Unicode via ToUnicode.
+static std::string remapCidText(const std::string& text,
+                                 const std::unordered_map<uint16_t, uint32_t>& toUnicode) {
+    std::string out;
+    out.reserve(text.size());
+    const uint8_t* p = reinterpret_cast<const uint8_t*>(text.data());
+    size_t len = text.size();
+
+    // The WinAnsi decoder may have expanded some bytes to multi-byte UTF-8.
+    // We need to get back to the original byte values.
+    // For 0x00-0x7F: passed through as-is (single byte in UTF-8)
+    // For 0x80-0x9F: expanded to 2-3 byte UTF-8 sequences (WinAnsi special chars)
+    // For 0xA0-0xFF: expanded to 2-byte UTF-8 (Latin-1 supplement)
+    // We need to reverse this to get original PDF bytes, then pair them as CIDs.
+
+    // First: decode UTF-8 back to original byte values
+    std::vector<uint8_t> rawBytes;
+    rawBytes.reserve(len);
+    size_t i = 0;
+    while (i < len) {
+        uint32_t cp = 0;
+        uint8_t b = p[i];
+        if ((b & 0x80) == 0) {
+            cp = b; i++;
+        } else if ((b & 0xE0) == 0xC0) {
+            cp = (b & 0x1F) << 6;
+            if (i + 1 < len) cp |= (p[i+1] & 0x3F);
+            i += 2;
+        } else if ((b & 0xF0) == 0xE0) {
+            cp = (b & 0x0F) << 12;
+            if (i + 1 < len) cp |= (p[i+1] & 0x3F) << 6;
+            if (i + 2 < len) cp |= (p[i+2] & 0x3F);
+            i += 3;
+        } else {
+            cp = b; i++;
+        }
+        // Reverse WinAnsi mapping: find original byte value
+        // For codepoints 0-0x7F: same as byte value
+        // For codepoints 0xA0-0xFF: same as byte value (Latin-1)
+        // For WinAnsi specials (0x80-0x9F mapped): need reverse lookup
+        if (cp < 0x100) {
+            rawBytes.push_back(static_cast<uint8_t>(cp));
+        } else {
+            // WinAnsi special: reverse map. Just store 0 as placeholder.
+            // These shouldn't appear in CID high bytes anyway.
+            rawBytes.push_back(0);
+        }
+    }
+
+    // Now pair raw bytes as 2-byte CIDs and map through ToUnicode
+    for (size_t j = 0; j + 1 < rawBytes.size(); j += 2) {
+        uint16_t cid = (static_cast<uint16_t>(rawBytes[j]) << 8) | rawBytes[j + 1];
+        uint32_t uni = cid; // fallback: use CID as codepoint
+        auto it = toUnicode.find(cid);
+        if (it != toUnicode.end()) uni = it->second;
+
+        // Encode as UTF-8
+        if (uni < 0x80) {
+            out += static_cast<char>(uni);
+        } else if (uni < 0x800) {
+            out += static_cast<char>(0xC0 | (uni >> 6));
+            out += static_cast<char>(0x80 | (uni & 0x3F));
+        } else if (uni < 0x10000) {
+            out += static_cast<char>(0xE0 | (uni >> 12));
+            out += static_cast<char>(0x80 | ((uni >> 6) & 0x3F));
+            out += static_cast<char>(0x80 | (uni & 0x3F));
+        } else {
+            out += static_cast<char>(0xF0 | (uni >> 18));
+            out += static_cast<char>(0x80 | ((uni >> 12) & 0x3F));
+            out += static_cast<char>(0x80 | ((uni >> 6) & 0x3F));
+            out += static_cast<char>(0x80 | (uni & 0x3F));
+        }
+    }
+    return out;
+}
+
 // Align to 4 bytes
 static uint32_t align4(uint32_t n) { return (n + 3) & ~3u; }
 
 static bool pdfioErrorHandler(pdfio_file_t*, const char* message, void*) {
     ywarn("pdfio: {}", message);
     return true;
+}
+
+// Parse a ToUnicode CMap stream into a CID→Unicode mapping
+static void parseToUnicodeCMap(pdfio_obj_t* cmapObj,
+                                std::unordered_map<uint16_t, uint32_t>& mapping) {
+    pdfio_stream_t* stream = pdfioObjOpenStream(cmapObj, true);
+    if (!stream) return;
+
+    std::string data;
+    uint8_t buf[4096];
+    ssize_t n;
+    while ((n = pdfioStreamRead(stream, buf, sizeof(buf))) > 0)
+        data.append(reinterpret_cast<char*>(buf), static_cast<size_t>(n));
+    pdfioStreamClose(stream);
+
+    // Parse hex value from "<XXXX>" format
+    auto parseHex = [](const char* s, size_t len) -> uint32_t {
+        uint32_t v = 0;
+        for (size_t i = 0; i < len; i++) {
+            char c = s[i];
+            v <<= 4;
+            if (c >= '0' && c <= '9') v |= c - '0';
+            else if (c >= 'a' && c <= 'f') v |= c - 'a' + 10;
+            else if (c >= 'A' && c <= 'F') v |= c - 'A' + 10;
+        }
+        return v;
+    };
+
+    // Find hex tokens between < and >
+    auto nextHex = [&](size_t& pos) -> uint32_t {
+        while (pos < data.size() && data[pos] != '<') pos++;
+        if (pos >= data.size()) return 0;
+        pos++; // skip '<'
+        size_t start = pos;
+        while (pos < data.size() && data[pos] != '>') pos++;
+        uint32_t v = parseHex(data.c_str() + start, pos - start);
+        if (pos < data.size()) pos++; // skip '>'
+        return v;
+    };
+
+    size_t pos = 0;
+    while (pos < data.size()) {
+        // Find "beginbfchar" or "beginbfrange"
+        size_t bfchar = data.find("beginbfchar", pos);
+        size_t bfrange = data.find("beginbfrange", pos);
+
+        if (bfchar == std::string::npos && bfrange == std::string::npos) break;
+
+        if (bfchar != std::string::npos &&
+            (bfrange == std::string::npos || bfchar < bfrange)) {
+            // beginbfchar: pairs of <CID> <Unicode>
+            pos = bfchar + 11;
+            size_t endPos = data.find("endbfchar", pos);
+            if (endPos == std::string::npos) endPos = data.size();
+            while (pos < endPos) {
+                uint32_t cid = nextHex(pos);
+                if (pos >= endPos) break;
+                uint32_t uni = nextHex(pos);
+                mapping[static_cast<uint16_t>(cid)] = uni;
+            }
+            pos = endPos + 9;
+        } else {
+            // beginbfrange: triples of <start> <end> <startUnicode>
+            pos = bfrange + 12;
+            size_t endPos = data.find("endbfrange", pos);
+            if (endPos == std::string::npos) endPos = data.size();
+            while (pos < endPos) {
+                uint32_t startCid = nextHex(pos);
+                if (pos >= endPos) break;
+                uint32_t endCid = nextHex(pos);
+                if (pos >= endPos) break;
+                uint32_t startUni = nextHex(pos);
+                for (uint32_t cid = startCid; cid <= endCid; cid++) {
+                    mapping[static_cast<uint16_t>(cid)] =
+                        startUni + (cid - startCid);
+                }
+            }
+            pos = endPos + 10;
+        }
+    }
 }
 
 // Extract embedded fonts from a page's resources
@@ -283,7 +445,47 @@ static void extractPageFonts(pdfio_obj_t* pageObj,
         pdfio_dict_t* fontObjDict = pdfioObjGetDict(fontObj);
         if (!fontObjDict) continue;
 
+        // Find FontDescriptor — either directly on font or via DescendantFonts
         pdfio_obj_t* fontDescObj = pdfioDictGetObj(fontObjDict, "FontDescriptor");
+        bool isIdentityH = false;
+        pdfio_obj_t* toUnicodeObj = pdfioDictGetObj(fontObjDict, "ToUnicode");
+
+        // Check encoding — Encoding is a Name value in PDF
+        const char* encoding = pdfioDictGetName(fontObjDict, "Encoding");
+        if (encoding) {
+            std::string enc(encoding);
+            if (enc == "Identity-H" || enc == "/Identity-H")
+                isIdentityH = true;
+        }
+
+        const char* subtype = pdfioDictGetName(fontObjDict, "Subtype");
+
+        if (!fontDescObj) {
+            // Type0 (composite) fonts: FontDescriptor is in DescendantFonts[0]
+            pdfio_array_t* descFonts = pdfioDictGetArray(fontObjDict, "DescendantFonts");
+            if (!descFonts) {
+                // Try as object reference
+                pdfio_obj_t* dfObj = pdfioDictGetObj(fontObjDict, "DescendantFonts");
+                if (dfObj) {
+                    // The object might contain an array
+                    descFonts = pdfioObjGetArray(dfObj);
+                }
+            }
+            if (descFonts) {
+                size_t arrSize = pdfioArrayGetSize(descFonts);
+                if (arrSize > 0) {
+                    pdfio_obj_t* cidFontObj = pdfioArrayGetObj(descFonts, 0);
+                    if (cidFontObj) {
+                        pdfio_dict_t* cidFontDict = pdfioObjGetDict(cidFontObj);
+                        if (cidFontDict)
+                            fontDescObj = pdfioDictGetObj(cidFontDict, "FontDescriptor");
+                    }
+                }
+            }
+            yinfo("Font '{}': subtype={} encoding={} descFonts={} fontDescObj={}",
+                  tag, subtype ? subtype : "?", encoding ? encoding : "?",
+                  descFonts != nullptr, fontDescObj != nullptr);
+        }
         if (!fontDescObj) continue;
 
         pdfio_dict_t* fontDescDict = pdfioObjGetDict(fontDescObj);
@@ -310,10 +512,20 @@ static void extractPageFonts(pdfio_obj_t* pageObj,
         uint32_t fontIndex = static_cast<uint32_t>(fonts.size());
         fontTagToIndex[tag] = fontIndex;
         fontTagToIndex["/" + tag] = fontIndex;
-        fonts.push_back({tag, std::move(fontBytes)});
 
-        yinfo("Extracted font '{}' ({} bytes) -> fontIndex {}",
-              tag, fonts.back().data.size(), fontIndex);
+        FontData fd{tag, std::move(fontBytes), isIdentityH, {}};
+
+        // Parse ToUnicode CMap if present
+        if (toUnicodeObj) {
+            parseToUnicodeCMap(toUnicodeObj, fd.toUnicode);
+            yinfo("Font '{}': parsed ToUnicode CMap with {} mappings",
+                  tag, fd.toUnicode.size());
+        }
+
+        fonts.push_back(std::move(fd));
+
+        yinfo("Extracted font '{}' ({} bytes) identityH={} -> fontIndex {}",
+              tag, fonts.back().data.size(), isIdentityH, fontIndex);
     }
 }
 
@@ -435,13 +647,12 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // Suppress logging in OSC mode — log output on stderr corrupts the terminal
-    // Write diagnostics to /tmp/pdf2ydraw.log instead
-    FILE* logFile = nullptr;
-    if (oscFlag) {
-        ydisable_all();
-        logFile = fopen("/tmp/pdf2ydraw.log", "w");
-    }
+    // In OSC mode, redirect all spdlog output to a file instead of stderr
+    // (stderr output corrupts the terminal when mixed with OSC escapes)
+    auto fileLogger = spdlog::basic_logger_mt("pdf2ydraw", "/tmp/pdf2ydraw.log", true);
+    spdlog::set_default_logger(fileLogger);
+    spdlog::set_level(spdlog::level::info);
+    spdlog::flush_on(spdlog::level::info);
 
     std::string path = args::get(pdfFile);
     if (!std::filesystem::exists(path)) {
@@ -515,14 +726,24 @@ int main(int argc, char** argv) {
                 float sx = posX;
                 float sy = yOffset + (pageH - posY);
 
+                // Check if this font has an embedded TTF
+                auto it = fontTagToIndex.find(textState.fontName);
+
+                // For Identity-H fonts, remap CID values to Unicode
+                std::string actualText = text;
+                if (it != fontTagToIndex.end()) {
+                    const auto& fontData = fonts[it->second];
+                    if (fontData.isIdentityH && !fontData.toUnicode.empty()) {
+                        actualText = remapCidText(text, fontData.toUnicode);
+                    }
+                }
+
                 uint32_t textOffset = static_cast<uint32_t>(textBlob.size());
-                uint32_t textLength = static_cast<uint32_t>(text.size());
-                textBlob += text;
+                uint32_t textLength = static_cast<uint32_t>(actualText.size());
+                textBlob += actualText;
 
                 uint32_t color = 0xFF000000; // black
 
-                // Check if this font has an embedded TTF
-                auto it = fontTagToIndex.find(textState.fontName);
                 if (it != fontTagToIndex.end()) {
                     CustomTextSpan cs = {};
                     cs.x = sx;
@@ -556,8 +777,8 @@ int main(int argc, char** argv) {
                     metrics = &fontMetrics[it->second];
                 }
 
-                const uint8_t* ptr = reinterpret_cast<const uint8_t*>(text.data());
-                const uint8_t* end = ptr + text.size();
+                const uint8_t* ptr = reinterpret_cast<const uint8_t*>(actualText.data());
+                const uint8_t* end = ptr + actualText.size();
                 while (ptr < end) {
                     uint32_t cp = decodeUtf8(ptr, end);
                     float charAdvance = metrics
@@ -585,26 +806,22 @@ int main(int argc, char** argv) {
 
     pdfioFileClose(pdf);
 
-    yinfo("pdf2ydraw: {} fonts, {} default spans, {} custom spans, {} text bytes",
-          fonts.size(), defaultSpans.size(), customSpans.size(), textBlob.size());
-    if (logFile) {
-        fprintf(logFile, "pages=%d fonts=%zu defaultSpans=%zu customSpans=%zu textBytes=%zu yOffset=%.1f firstPageH=%.1f\n",
-                pageCount, fonts.size(), defaultSpans.size(), customSpans.size(),
-                textBlob.size(), yOffset, firstPageH);
-        for (size_t i = 0; i < fonts.size(); i++)
-            fprintf(logFile, "  font[%zu] tag='%s' bytes=%zu cmap=%zu\n",
-                    i, fonts[i].tag.c_str(), fonts[i].data.size(), fontMetrics[i].cmapTable.size());
-        if (!customSpans.empty()) {
-            auto& s = customSpans[0];
-            fprintf(logFile, "  first custom span: x=%.1f y=%.1f fontSize=%.1f fontIndex=%u textOff=%u textLen=%u\n",
-                    s.x, s.y, s.fontSize, s.fontIndex, s.textOffset, s.textLength);
-        }
-        if (!defaultSpans.empty()) {
-            auto& s = defaultSpans[0];
-            fprintf(logFile, "  first default span: x=%.1f y=%.1f fontSize=%.1f textOff=%u textLen=%u\n",
-                    s.x, s.y, s.fontSize, s.textOffset, s.textLength);
-        }
-        fflush(logFile);
+    yinfo("pdf2ydraw: pages={} fonts={} defaultSpans={} customSpans={} textBytes={} yOffset={:.1f} firstPageH={:.1f}",
+          pageCount, fonts.size(), defaultSpans.size(), customSpans.size(),
+          textBlob.size(), yOffset, firstPageH);
+    for (size_t i = 0; i < fonts.size(); i++)
+        yinfo("  font[{}] tag='{}' bytes={} cmap={} identityH={}",
+              i, fonts[i].tag, fonts[i].data.size(), fontMetrics[i].cmapTable.size(),
+              fonts[i].isIdentityH);
+    if (!customSpans.empty()) {
+        auto& s = customSpans[0];
+        yinfo("  first custom span: x={:.1f} y={:.1f} fontSize={:.1f} fontIndex={} textOff={} textLen={}",
+              s.x, s.y, s.fontSize, s.fontIndex, s.textOffset, s.textLength);
+    }
+    if (!defaultSpans.empty()) {
+        auto& s = defaultSpans[0];
+        yinfo("  first default span: x={:.1f} y={:.1f} fontSize={:.1f} textOff={} textLen={}",
+              s.x, s.y, s.fontSize, s.textOffset, s.textLength);
     }
 
     // Build binary
@@ -623,12 +840,8 @@ int main(int argc, char** argv) {
                  args::get(wFlag), args::get(hFlag),
                  pageH);
 
-        if (logFile) {
-            fprintf(logFile, "binary=%zu bytes, b64=%zu bytes, header='%s'\n",
-                    binary.size(), b64.size(), header + 1); // skip ESC
-            fclose(logFile);
-            logFile = nullptr;
-        }
+        yinfo("binary={} bytes, b64={} bytes, header='{}'",
+              binary.size(), b64.size(), std::string(header + 1));
         std::cout << header << b64 << "\033\\" << std::endl;
     } else {
         // Raw binary to stdout
