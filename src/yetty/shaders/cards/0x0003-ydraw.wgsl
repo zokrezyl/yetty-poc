@@ -53,8 +53,8 @@ const YDRAW_FLAG_HAS_3D: u32 = 8u;
 const YDRAW_FLAG_UNIFORM_SCALE: u32 = 16u;
 const YDRAW_FLAG_CUSTOM_ATLAS: u32 = 32u;
 
-// Safety cap for entries per cell (variable-length grid has no hard limit)
-const YDRAW_MAX_ENTRIES_PER_CELL: u32 = 128u;
+// Safety cap for entries per cell (variable-length grid stores actual count)
+const YDRAW_MAX_ENTRIES_PER_CELL: u32 = 4096u;
 
 // Bit 31 set = glyph index, clear = primitive index
 const GLYPH_BIT: u32 = 0x80000000u;
