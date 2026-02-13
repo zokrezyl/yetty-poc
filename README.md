@@ -4,6 +4,8 @@
 
 # Yetty - Next-Generation Terminal Emulator
 
+> **License Change:** Yetty has moved from MIT to **AGPL-3.0 / dual license**. As the project grows and depending on adoption and where things go, we want to keep our options open while ensuring Yetty remains fully open source — a commercial license may be offered in the future for proprietary use.
+
 A WebGPU-powered terminal emulator that breaks the boundaries of what terminals can display.
 
 > **🚀 Like what you see?** We're looking for contributors! Whether it's code, documentation, or ideas - all contributions are welcome. Share your suggestions and opinions on [GitHub Discussions](https://github.com/zokrezyl/yetty/discussions).
@@ -86,7 +88,7 @@ A Unix domain socket RPC server (msgpack-rpc) enables out-of-band communication 
 | Card | Description |
 |------|-------------|
 | `image` | Display PNG, JPEG, WebP images |
-| `pdf` | Render PDF documents (via PDFium/MuPDF) |
+| `pdf` | Render PDF documents (via PDFium) |
 | `plot` | Line, bar, scatter, area plots |
 | `ydraw` | 2D vector graphics with SDF primitives and text fragments with different MSDF font sizes |
 | `ymery` | ImGui-based interactive widgets |
@@ -125,7 +127,7 @@ Stay tuned for the Plugin SDK documentation.
 
 ### Optional Dependencies
 - **ThorVG** - SVG and Lottie rendering
-- **PDFium/MuPDF** - PDF rendering
+- **PDFium** - PDF rendering
 - **ImGui** - Immediate-mode GUI for Ymery cards
 - **Python** - Embedded interpreter for Python cards
 
@@ -156,11 +158,11 @@ SHELL=/bin/zsh ./yetty
 
 ## License
 
-Yetty is licensed under the **MIT License** - see [LICENSE](LICENSE) for details.
+Yetty is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)** with a dual-licensing option — see [LICENSE](LICENSE) for details.
 
 ### Dependencies
 
-All dependencies use MIT-compatible licenses (MIT, BSD, Zlib, Apache-2.0). See [DEPENDENCIES.md](DEPENDENCIES.md) for the complete list.
+All dependencies use AGPL-compatible permissive licenses (MIT, BSD, Zlib, Apache-2.0). See [DEPENDENCIES.md](DEPENDENCIES.md) for the complete list.
 
 ---
 

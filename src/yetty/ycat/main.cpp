@@ -519,18 +519,18 @@ static bool processFile(
         }
     }
 
+    // Extension-based detection first (libmagic often misidentifies text files)
+    if (!mapping) {
+        mapping = extensionToCard(path);
+    }
+
     if (!mapping) {
         mapping = mimeToCard(mime);
     }
 
-    // For text/plain or YAML, try content-based detection
-    if (!mapping) {
-        if (mime == "text/plain" || mime.starts_with("text/")) {
-            mapping = extensionToCard(path);
-        } else if (path.extension() == ".ymery") {
-            static const CardMapping m{"ymery"};
-            mapping = &m;
-        }
+    if (!mapping && path.extension() == ".ymery") {
+        static const CardMapping m{"ymery"};
+        mapping = &m;
     }
 
     // Content-based detection for ydraw YAML and Lottie JSON

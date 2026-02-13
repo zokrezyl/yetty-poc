@@ -1302,14 +1302,16 @@ void GPUScreenImpl::scrollToBottom() {
 void GPUScreenImpl::clampVisualZoomOffset() {
   if (_visualZoomScale <= 1.0f) return;
 
-  float cellW = static_cast<float>(getCellWidth());
-  float cellH = static_cast<float>(getCellHeight());
+  // Must use the same precise float cell size as the shader (screenSize uniform),
+  // NOT getCellWidth()/getCellHeight() which truncate to uint32_t.
+  float cellW = _baseCellWidth * _zoomLevel;
+  float cellH = _baseCellHeight * _zoomLevel;
   int totalRows = static_cast<int>(_rows) + 1;  // +1 for status line
   float contentW = static_cast<float>(_cols) * cellW;
   float contentH = static_cast<float>(totalRows) * cellH;
 
-  // Shader centers zoom on content center (screenSize/2), so offset range is symmetric
-  // At zoom S, visible region is contentSize/S, max offset allows reaching edges
+  // Shader zooms centered on screenSize/2 = contentSize/2.
+  // maxOffset lets the content edge reach the screen edge.
   float maxOffsetX = std::max(0.0f, contentW / 2.0f * (1.0f - 1.0f / _visualZoomScale));
   float maxOffsetY = std::max(0.0f, contentH / 2.0f * (1.0f - 1.0f / _visualZoomScale));
 

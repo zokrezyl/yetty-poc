@@ -147,25 +147,37 @@ public:
     }
 
     void declareBufferNeeds() override {
+        // Save live data from GPU handles back to local storage before repack
+        // (_data is always kept in sync for legacy buffer, no save needed)
+        _storageHandle = StorageHandle::invalid();
+
+        for (auto& buf : _bufferDecls) {
+            if (buf.handle.isValid() && buf.size > 0) {
+                // Save streaming data from GPU buffer back to local storage
+                buf.data.resize(buf.size);
+                std::memcpy(buf.data.data(), buf.handle.data, buf.size * sizeof(float));
+            }
+            buf.handle = StorageHandle::invalid();
+        }
+
         // Reserve for legacy _data buffer
-        if (!_storageHandle.isValid() && !_data.empty()) {
+        if (!_data.empty()) {
             uint32_t storageSize = static_cast<uint32_t>(_data.size() * sizeof(float));
             _cardMgr->bufferManager()->reserve(storageSize);
         }
 
         // Reserve for declared buffers
         for (auto& buf : _bufferDecls) {
-            if (!buf.handle.isValid() && buf.size > 0) {
+            if (buf.size > 0) {
                 uint32_t storageSize = buf.size * sizeof(float);
                 _cardMgr->bufferManager()->reserve(storageSize);
-                yinfo("Plot::declareBufferNeeds: reserved {} bytes for buffer '{}'", storageSize, buf.name);
             }
         }
     }
 
     Result<void> allocateBuffers() override {
         // Allocate legacy _data buffer
-        if (!_storageHandle.isValid() && !_data.empty()) {
+        if (!_data.empty()) {
             uint32_t storageSize = static_cast<uint32_t>(_data.size() * sizeof(float));
             auto storageResult = _cardMgr->bufferManager()->allocateBuffer(metadataSlotIndex(), "storage", storageSize);
             if (!storageResult) {
@@ -175,12 +187,12 @@ public:
             std::memcpy(_storageHandle.data, _data.data(), storageSize);
             _cardMgr->bufferManager()->markBufferDirty(_storageHandle);
             _metadataDirty = true;
-            yinfo("Plot::allocateBuffers: reconstructed storage at offset {}", _storageHandle.offset);
+            yinfo("Plot::allocateBuffers: allocated storage at offset {}", _storageHandle.offset);
         }
 
         // Allocate declared buffers
         for (auto& buf : _bufferDecls) {
-            if (!buf.handle.isValid() && buf.size > 0) {
+            if (buf.size > 0) {
                 uint32_t storageSize = buf.size * sizeof(float);
                 auto storageResult = _cardMgr->bufferManager()->allocateBuffer(metadataSlotIndex(), buf.name, storageSize);
                 if (!storageResult) {
@@ -188,7 +200,7 @@ public:
                 }
                 buf.handle = *storageResult;
 
-                // Initialize with data if available
+                // Restore data saved during declareBufferNeeds
                 if (!buf.data.empty()) {
                     size_t copySize = std::min(buf.data.size(), static_cast<size_t>(buf.size)) * sizeof(float);
                     std::memcpy(buf.handle.data, buf.data.data(), copySize);

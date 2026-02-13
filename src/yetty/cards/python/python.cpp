@@ -107,6 +107,10 @@ public:
             python::GILGuard gil;
             PythonCallContext pcc(_cardMgr.get(), _cardMgr->textureManager().get(), &_ctx.gpu, metadataSlotIndex());
 
+            // Re-allocate existing Python texture handles (their GPU handles are
+            // stale after clearHandles). The local CPU pixel buffer is preserved.
+            reallocatePythonTexture();
+
             if (auto res = callPython("allocate_textures"); !res) {
                 yerror("PythonCard::allocateTextures: callPython failed: {}", error_msg(res));
                 return Err<void>("PythonCard::allocateTextures: failed", res);
@@ -120,9 +124,12 @@ public:
     }
 
     Result<void> writeTextures() override {
-        if (_engineInitialized && _globals && _textureHandle.isValid()) {
+        if (_engineInitialized && _globals) {
             python::GILGuard gil;
             PythonCallContext pcc(_cardMgr.get(), _cardMgr->textureManager().get(), &_ctx.gpu, metadataSlotIndex());
+
+            // Write pixel data from Python handle's CPU buffer to the new atlas position
+            writePythonTexturePixels();
 
             if (auto res = callPython("write_textures"); !res) {
                 // Not an error if the callback doesn't exist — Python card may not need textures
@@ -459,8 +466,12 @@ private:
         if (_payloadStr.compare(0, 7, "inline:") == 0) {
             _source = _payloadStr.substr(7);
             yinfo("PythonCard: inline source ({} bytes)", _source.size());
+        } else if (_payloadStr.find('\n') != std::string::npos) {
+            // Contains newlines — this is source code (e.g. base64-decoded from OSC payload)
+            _source = _payloadStr;
+            yinfo("PythonCard: decoded source ({} bytes)", _source.size());
         } else {
-            // Treat as file path
+            // Single line without "inline:" prefix — treat as file path
             std::ifstream file(_payloadStr);
             if (!file.is_open()) {
                 return Err<void>("PythonCard::loadSource: failed to open: " + _payloadStr);
@@ -476,6 +487,55 @@ private:
         _payloadStr.shrink_to_fit();
 
         return Ok();
+    }
+
+    //=========================================================================
+    // Texture repack helpers
+    //=========================================================================
+
+    /// Find the Python texture handle object (_tex or _yetty_texture global)
+    py::object findPythonTextureObj() {
+        if (_globals.contains("_tex")) return _globals["_tex"];
+        if (_globals.contains("_yetty_texture")) return _globals["_yetty_texture"];
+        return py::none();
+    }
+
+    /// Re-allocate the Python texture handle via _reallocate_texture().
+    /// Called during texture repack before the Python allocate_textures() callback.
+    /// The GPU handle is stale after clearHandles() — this gets a fresh one
+    /// while preserving the CPU pixel buffer.
+    void reallocatePythonTexture() {
+        try {
+            py::object texObj = findPythonTextureObj();
+            if (texObj.is_none() || !py::hasattr(texObj, "width")) return;
+
+            uint32_t w = texObj.attr("width").cast<uint32_t>();
+            uint32_t h = texObj.attr("height").cast<uint32_t>();
+            if (w == 0 || h == 0) return;
+
+            auto yettyCard = py::module_::import("yetty_card");
+            yettyCard.attr("_reallocate_texture")(texObj);
+            ydebug("PythonCard: re-allocated texture {}x{}", w, h);
+        } catch (const py::error_already_set& e) {
+            yerror("PythonCard: failed to re-allocate texture: {}", e.what());
+        }
+    }
+
+    /// Write the Python texture handle's CPU pixel buffer to the atlas.
+    /// Called during writeTextures() to ensure pixel data reaches the new atlas
+    /// position after repack.
+    void writePythonTexturePixels() {
+        try {
+            py::object texObj = findPythonTextureObj();
+            if (texObj.is_none() || !py::hasattr(texObj, "valid")) return;
+            if (!texObj.attr("valid").cast<bool>()) return;
+
+            auto yettyCard = py::module_::import("yetty_card");
+            yettyCard.attr("write_texture")(texObj);
+            ydebug("PythonCard: wrote texture pixels to atlas");
+        } catch (const py::error_already_set& e) {
+            yerror("PythonCard: failed to write texture pixels: {}", e.what());
+        }
     }
 
     //=========================================================================

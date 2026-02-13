@@ -217,7 +217,7 @@ WGPUTexture fontAtlasArray;  // texture_2d_array
 ## PDF Integration Consideration
 
 The PDF plugin currently:
-1. Extracts embedded fonts via MuPDF → FreeType
+1. Extracts embedded fonts via PDFium → FreeType
 2. Generates MSDF atlas on-the-fly
 3. Renders with its own pipeline
 
@@ -225,7 +225,7 @@ To unify with RichTextRenderer:
 
 **Option 1: PDF → Internal Representation → RichTextRenderer**
 ```
-PDF (MuPDF) → PDFTextChar[] → TextSpan[] → RichTextRenderer
+PDF (PDFium) → PDFTextChar[] → TextSpan[] → RichTextRenderer
 ```
 - PDF extracts text with positions, sizes, styles
 - Convert to TextSpan array

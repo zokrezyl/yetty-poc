@@ -21,7 +21,7 @@ namespace yetty::card {
 //
 // Examples of providers:
 //   - ImageProvider: loads images via stb_image (PNG, JPEG, etc.)
-//   - PdfProvider: renders PDF pages via mupdf
+//   - PdfProvider: renders PDF pages via PDFium
 //   - VideoProvider: decodes video frames
 //   - GeneratedProvider: procedurally generated textures
 //

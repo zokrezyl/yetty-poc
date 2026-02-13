@@ -2,6 +2,7 @@
 #include "../../ydraw/ydraw-builder.h"
 #include "../hdraw/hdraw.h"  // For SDFPrimitive
 #include <yetty/msdf-glyph-data.h>
+#include <yetty/base/event-loop.h>
 #include <ytrace/ytrace.hpp>
 #include <sstream>
 #include <algorithm>
@@ -10,6 +11,9 @@
 #include <fstream>
 
 namespace yetty::card {
+
+constexpr int GLFW_MOD_SHIFT   = 0x0001;
+constexpr int GLFW_MOD_CONTROL = 0x0002;
 
 //=============================================================================
 // MarkdownImpl - full implementation with builder and GPU buffers
@@ -29,6 +33,7 @@ public:
         auto builderRes = YDrawBuilder::create(ctx.fontManager, ctx.globalAllocator);
         if (builderRes) {
             _builder = *builderRes;
+            _builder->addFlags(YDrawBuilder::FLAG_UNIFORM_SCALE);
         } else {
             yerror("MarkdownImpl: failed to create builder");
         }
@@ -46,7 +51,78 @@ public:
         return _metaHandle.offset / 64;
     }
 
+    void setCellSize(uint32_t cellWidth, uint32_t cellHeight) override {
+        if (cellWidth == _cellWidth && cellHeight == _cellHeight) return;
+        _cellWidth = cellWidth;
+        _cellHeight = cellHeight;
+        _needsLayout = true;
+    }
+
+    void renderToStaging(float time) override {
+        (void)time;
+        if (!_needsLayout) return;
+        _needsLayout = false;
+
+        if (!_userFontSize) {
+            _fontSize = static_cast<float>(_cellHeight);
+        }
+
+        float sceneW = static_cast<float>(_widthCells * _cellWidth);
+        float sceneH = static_cast<float>(_heightCells * _cellHeight);
+        _builder->setSceneBounds(0, 0, sceneW, sceneH);
+
+        _builder->clear();
+        generatePrimitives();
+
+        _dirty = true;
+        _metadataDirty = true;
+    }
+
+    Result<bool> onEvent(const base::Event& event) override {
+        if (event.type == base::Event::Type::SetFocus) {
+            if (event.setFocus.objectId == id()) {
+                _focused = true;
+                return Ok(true);
+            }
+            _focused = false;
+            return Ok(false);
+        }
+
+        if (event.type == base::Event::Type::CardScroll &&
+            event.cardScroll.targetId == id()) {
+
+            float sceneW = _builder->sceneMaxX() - _builder->sceneMinX();
+            float sceneH = _builder->sceneMaxY() - _builder->sceneMinY();
+
+            if (event.cardScroll.mods & GLFW_MOD_CONTROL) {
+                // Ctrl+wheel = zoom
+                float zoomFactor = std::exp(event.cardScroll.dy * 0.1f);
+                _viewZoom = std::clamp(_viewZoom * zoomFactor, 0.1f, 50.0f);
+                _metadataDirty = true;
+                return Ok(true);
+            } else if (event.cardScroll.mods & GLFW_MOD_SHIFT) {
+                // Shift+wheel = horizontal scroll
+                _viewPanX += event.cardScroll.dy * 0.05f * sceneW / _viewZoom;
+                _metadataDirty = true;
+                return Ok(true);
+            } else {
+                // Wheel = vertical scroll
+                _viewPanY += event.cardScroll.dy * 0.05f * sceneH / _viewZoom;
+                _metadataDirty = true;
+                return Ok(true);
+            }
+        }
+
+        return Ok(false);
+    }
+
     Result<void> dispose() override {
+        if (!weak_from_this().expired()) {
+            auto loopResult = base::EventLoop::instance();
+            if (loopResult) {
+                (*loopResult)->deregisterListener(sharedAs<base::EventListener>());
+            }
+        }
         _derivedStorage = StorageHandle::invalid();
         _grid = nullptr;
         _gridSize = 0;
@@ -227,29 +303,31 @@ public:
 
         std::string content;
 
-        // Check if payload is inline content or file path
-        if (_payloadStr.substr(0, 7) == "inline:") {
-            content = _payloadStr.substr(7);
-        } else if (_payloadStr.size() > 0 && _payloadStr[0] != '#' &&
-                   _payloadStr[0] != '*' && _payloadStr[0] != '-' &&
-                   _payloadStr[0] != '\n' && _payloadStr.find('\n') == std::string::npos) {
-            std::ifstream file(_payloadStr);
+        if (_inputArg == "-") {
+            content = _payloadStr;
+        } else if (!_inputArg.empty()) {
+            std::ifstream file(_inputArg);
             if (file) {
                 std::stringstream buffer;
                 buffer << file.rdbuf();
                 content = buffer.str();
             } else {
-                content = _payloadStr;
+                return Err<void>("MarkdownImpl::init: failed to open: " + _inputArg);
             }
-        } else {
-            content = _payloadStr;
         }
 
         parseMarkdown(content);
-        generatePrimitives();
 
-        yinfo("MarkdownImpl::init: parsed {} lines, prims={} glyphs={}",
-              _parsedLines.size(), _builder->primitiveCount(), _builder->glyphCount());
+        // Primitives are generated in setCellSize() once we know the cell dimensions.
+        // setCellSize() is called by GPUScreen right after card creation.
+
+        // Register for scroll/focus events
+        auto loopResult = base::EventLoop::instance();
+        if (loopResult) {
+            auto self = sharedAs<base::EventListener>();
+            (*loopResult)->registerListener(base::Event::Type::SetFocus, self, 1000);
+            (*loopResult)->registerListener(base::Event::Type::CardScroll, self, 1000);
+        }
 
         _dirty = true;
         _metadataDirty = true;
@@ -319,8 +397,26 @@ private:
             return Err<void>("MarkdownImpl::uploadMetadata: invalid handle");
         }
 
-        // No zoom/pan for markdown - zoom=1.0 -> f16 = 0x3C00
-        uint32_t zoomBits = 0x3C00;
+        // Pack zoom as f16
+        uint32_t zoomBits;
+        {
+            uint32_t f32bits;
+            std::memcpy(&f32bits, &_viewZoom, sizeof(float));
+            uint32_t sign = (f32bits >> 16) & 0x8000;
+            int32_t  exp  = ((f32bits >> 23) & 0xFF) - 127 + 15;
+            uint32_t mant = (f32bits >> 13) & 0x3FF;
+            if (exp <= 0) { exp = 0; mant = 0; }
+            else if (exp >= 31) { exp = 31; mant = 0; }
+            zoomBits = sign | (static_cast<uint32_t>(exp) << 10) | mant;
+        }
+
+        // Pack pan as normalized i16
+        float contentW = _builder->sceneMaxX() - _builder->sceneMinX();
+        float contentH = _builder->sceneMaxY() - _builder->sceneMinY();
+        int16_t panXi16 = static_cast<int16_t>(std::clamp(
+            _viewPanX / std::max(contentW, 1e-6f) * 16384.0f, -32768.0f, 32767.0f));
+        int16_t panYi16 = static_cast<int16_t>(std::clamp(
+            _viewPanY / std::max(contentH, 1e-6f) * 16384.0f, -32768.0f, 32767.0f));
 
         float sceneMinX = _builder->sceneMinX();
         float sceneMinY = _builder->sceneMinY();
@@ -341,8 +437,8 @@ private:
         std::memcpy(&meta.sceneMinY, &sceneMinY, sizeof(float));
         std::memcpy(&meta.sceneMaxX, &sceneMaxX, sizeof(float));
         std::memcpy(&meta.sceneMaxY, &sceneMaxY, sizeof(float));
-        meta.widthCells  = _widthCells & 0xFFFF;
-        meta.heightCells = _heightCells & 0xFFFF;
+        meta.widthCells  = (_widthCells & 0xFFFF) | (static_cast<uint32_t>(static_cast<uint16_t>(panXi16)) << 16);
+        meta.heightCells = (_heightCells & 0xFFFF) | (static_cast<uint32_t>(static_cast<uint16_t>(panYi16)) << 16);
         meta.flags = (_builder->flags() & 0xFFFF) | (zoomBits << 16);
         meta.bgColor = _builder->bgColor();
 
@@ -363,8 +459,14 @@ private:
         std::string token;
 
         while (iss >> token) {
-            if (token.substr(0, 12) == "--font-size=") {
+            if (token == "-i" || token == "--input") {
+                std::string val;
+                if (iss >> val) {
+                    _inputArg = val;
+                }
+            } else if (token.substr(0, 12) == "--font-size=") {
                 _fontSize = std::stof(token.substr(12));
+                _userFontSize = true;
             } else if (token.substr(0, 11) == "--bg-color=") {
                 std::string hex = token.substr(11);
                 if (hex[0] == '#') hex = hex.substr(1);
@@ -553,6 +655,7 @@ private:
     YDrawBuilder::Ptr _builder;
     std::string _argsStr;
     std::string _payloadStr;
+    std::string _inputArg;  // -i/--input: "-" = payload is content, else file path
     std::vector<ParsedLine> _parsedLines;
 
     // GPU state
@@ -572,8 +675,16 @@ private:
     bool _metadataDirty = true;
 
     // Rendering parameters
+    uint32_t _cellWidth = 0;
+    uint32_t _cellHeight = 0;
+    bool _needsLayout = true;
+    bool _userFontSize = false;
+    bool _focused = false;
     float _fontSize = 14.0f;
     float _lineSpacing = 1.4f;
+    float _viewZoom = 1.0f;
+    float _viewPanX = 0.0f;
+    float _viewPanY = 0.0f;
     uint32_t _textColor = 0xFFE6E6E6;
     uint32_t _boldColor = 0xFFFFFFFF;
     uint32_t _codeColor = 0xFF66CC99;

@@ -145,6 +145,18 @@ PYBIND11_EMBEDDED_MODULE(yetty_card, m) {
     }, py::arg("handle"),
        "Write the local pixel buffer to the atlas for this handle");
 
+    // Re-allocate an existing texture handle (used during texture repack).
+    // Preserves the local pixel buffer, only refreshes the GPU-side handle.
+    m.def("_reallocate_texture", [](PyTextureHandle& h) {
+        auto* mgr = s_textureMgr;
+        if (!mgr) throw std::runtime_error("No CardTextureManager set");
+        if (h.width == 0 || h.height == 0) return;
+        auto result = mgr->allocate(h.width, h.height);
+        if (!result) throw std::runtime_error("reallocate failed");
+        h.handle = *result;
+    }, py::arg("handle"),
+       "Re-allocate texture handle during repack (internal)");
+
     // --- Buffer functions (renamed from storage) ---
     m.def("allocate_buffer", [](const std::string& scope, uint32_t size) -> PyBufferHandle {
         auto* mgr = s_cardMgr;

@@ -9,7 +9,8 @@
 //   offset 3: bgColor (u32)       - background color (white modules) RGBA
 //   offset 4: widthCells (u32)    - card width in terminal cells
 //   offset 5: heightCells (u32)   - card height in terminal cells
-//   offset 6-7: reserved
+//   offset 6: cellWidth (u32)     - cell pixel width
+//   offset 7: cellHeight (u32)    - cell pixel height
 //
 // Buffer data: bit-packed modules (32 modules per u32, row-major)
 // =============================================================================
@@ -43,9 +44,9 @@ fn shaderGlyph_1048583(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
         f32((bgColorPacked >> 8u) & 0xFFu) / 255.0
     );
     
-    // Calculate UV across entire card
-    let cellWidth = grid.cellSize.x;
-    let cellHeight = grid.cellSize.y;
+    // Calculate UV across entire card (cell dimensions from per-card metadata)
+    let cellWidth = f32(cardMetadata[metaOffset + 6u]);
+    let cellHeight = f32(cardMetadata[metaOffset + 7u]);
     
     let cardPixelWidth = f32(widthCells) * cellWidth;
     let cardPixelHeight = f32(heightCells) * cellHeight;

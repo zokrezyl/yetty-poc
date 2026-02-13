@@ -4,9 +4,9 @@ This document lists all third-party dependencies and their licenses.
 
 ## Overview
 
-Yetty is licensed under the **MIT License**. All dependencies use MIT-compatible licenses.
+Yetty is licensed under the **AGPL-3.0** (dual license). All dependencies use permissive licenses fully compatible with AGPL-3.0.
 
-- **Desktop & Web builds:** 100% MIT/MIT-compatible
+- **Desktop & Web builds:** 100% permissive (MIT, BSD, Zlib, Apache-2.0)
 - **Android builds:** Include Apache 2.0 (Android NDK components)
 
 ## Dependency License Summary
@@ -31,38 +31,50 @@ Yetty is licensed under the **MIT License**. All dependencies use MIT-compatible
 | Fontconfig | system | MIT | System | Font fallback (Unix only) |
 | Python | optional | PSF License | Optional | Plugin support |
 | DirectWrite/GDI | system | Proprietary | System | Font discovery (Windows) |
+| msgpack-c | 7.0.0 | BSL-1.0 (Boost) | External | RPC serialization |
+| Dawn | 20260117 | BSD-3-Clause | External | WebGPU backend |
+| ThorVG | 1.0-pre34 | MIT | External | SVG/Lottie rendering |
+| pdfio | 1.4.0 | Apache-2.0 | External | PDF rendering |
+| PDFium | optional | BSD-3-Clause | Optional | PDF rendering (alt) |
+| ImGui | 1.92.5 | MIT | External | GUI widgets (Ymery) |
+| litehtml | 0.9 | BSD-3-Clause | External | HTML/CSS rendering |
+| cpr | 1.14.1 | MIT | External | HTTP client |
+| libcurl | system | MIT/X11 | System | HTTP transport |
+| OpenSSL | system | Apache-2.0 | System | TLS |
+| tree-sitter | 0.26.5 | MIT | External | Syntax highlighting |
+| tinyxml2 | 10.0.0 | Zlib | External | XML parsing |
+| libmagic | 5.45 | BSD-2-Clause | External | File type detection |
+| Boost.UT | 2.1.0 | BSL-1.0 (Boost) | External | Testing framework |
 
 ## Platform-Specific Licensing
 
 ### Desktop (Linux/macOS/Windows)
 
-**All MIT-compatible licenses:**
-- Core: MIT
-- All dependencies: MIT, BSD-2-Clause, Zlib
-- System libraries: MIT (fontconfig), proprietary (Windows fonts)
+**All permissive licenses, AGPL-3.0 compatible:**
+- Core: AGPL-3.0
+- All dependencies: MIT, BSD, Zlib, Apache-2.0, BSL-1.0
 
 **Risk Level:** ✅ None
 
 ### Web (Emscripten/WASM)
 
-**All MIT-compatible licenses:**
-- Core: MIT
-- All dependencies: MIT, BSD-2-Clause, Zlib
+**All permissive licenses, AGPL-3.0 compatible:**
+- Core: AGPL-3.0
+- All dependencies: MIT, BSD, Zlib
 
 **Risk Level:** ✅ None
 
 ### Android
 
-**Includes Apache 2.0:**
-- Core Yetty code: MIT
-- Most dependencies: MIT, BSD-2-Clause
+**All AGPL-3.0 compatible:**
+- Core Yetty code: AGPL-3.0
+- All dependencies: MIT, BSD, Apache 2.0
 - Android NDK components: Apache 2.0 (native_app_glue)
 
-**Risk Level:** ⚠️ Moderate - Apache 2.0 compatibility required for distribution
+**Risk Level:** ✅ None
 
 **Compliance Requirements:**
-- Include Apache 2.0 license text when distributing APKs
-- Add notice that Android builds use Apache 2.0-licensed components
+- Include AGPL-3.0 and Apache 2.0 license texts when distributing APKs
 - See [Apache 2.0 License](LICENSES/Apache-2.0)
 
 ## Detailed Dependency Information
@@ -191,20 +203,24 @@ Yetty is licensed under the **MIT License**. All dependencies use MIT-compatible
 
 ## License Compatibility Analysis
 
-### MIT Project with Permissive Dependencies
+### AGPL-3.0 Project with Permissive Dependencies
+
+All dependency licenses are permissive and fully compatible with AGPL-3.0.
 
 | License Type | Count | Compatibility | Notes |
 |------------|-------|--------------|-------|
-| MIT | 13 | ✅ Perfect | Same license |
-| MIT/Unlicense (dual) | 2 | ✅ Perfect | Can use MIT variant |
-| MIT/Apache-2.0 (dual) | 2 | ✅ Good | Can use MIT variant |
-| BSD-2-Clause | 1 | ✅ Perfect | Permissive like MIT |
-| BSD-like (FreeType) | 1 | ✅ Perfect | GPL-free, MIT-compatible |
-| Zlib | 1 | ✅ Perfect | MIT-compatible |
-| Apache 2.0 | 1 | ⚠️ Android only | Requires disclosure |
-| PSF License | 1 | ✅ Good | MIT-compatible |
+| MIT | 30+ | ✅ Perfect | Permissive, compatible |
+| MIT/Unlicense (dual) | 2 | ✅ Perfect | Permissive |
+| MIT/Apache-2.0 (dual) | 2 | ✅ Perfect | Both compatible |
+| BSD-2-Clause | 2 | ✅ Perfect | Permissive |
+| BSD-3-Clause | 3 | ✅ Perfect | Permissive |
+| BSD-like (FreeType) | 1 | ✅ Perfect | Permissive |
+| Zlib | 3 | ✅ Perfect | Permissive |
+| Apache 2.0 | 4 | ✅ Perfect | Compatible with AGPL-3.0 |
+| BSL-1.0 (Boost) | 2 | ✅ Perfect | Permissive |
+| PSF License | 1 | ✅ Perfect | Permissive |
 
-**Total Risk:** ✅ LOW (Apache 2.0 is expected for Android NDK)
+**Total Risk:** ✅ NONE — all dependencies use permissive licenses compatible with AGPL-3.0
 
 ## Building and Licensing Implications
 
@@ -213,36 +229,36 @@ Yetty is licensed under the **MIT License**. All dependencies use MIT-compatible
 make build-desktop-release
 ```
 - **Output:** `./yetty` executable
-- **Licensing:** MIT
-- **Redistribution:** No additional license notices required beyond MIT
+- **Licensing:** AGPL-3.0
+- **Redistribution:** Must comply with AGPL-3.0 (source disclosure)
 
 ### Android Release
 ```bash
 make build-android-release
 ```
 - **Output:** `app-release.apk`
-- **Licensing:** MIT + Apache 2.0 (NDK components)
-- **Redistribution:** Must include Apache 2.0 notice
+- **Licensing:** AGPL-3.0 + Apache 2.0 (NDK components)
+- **Redistribution:** Must comply with AGPL-3.0 and include Apache 2.0 notice
 
 ### Web Release
 ```bash
 make build-webasm-release
 ```
 - **Output:** `yetty.js` WebAssembly binary
-- **Licensing:** MIT
-- **Redistribution:** No additional license notices required beyond MIT
+- **Licensing:** AGPL-3.0
+- **Redistribution:** Must comply with AGPL-3.0 (source disclosure)
 
 ## Distribution Checklist
 
 ### All Platforms
-- ✅ Include MIT License file
+- ✅ Include AGPL-3.0 License file
 - ✅ List all dependencies and their licenses
 - ✅ Link to dependency source repositories
+- ✅ Provide source code access per AGPL-3.0
 
 ### Android APK Distribution
-- ⚠️ **Must include** Apache 2.0 license text
-- ⚠️ **Must add** notice about NDK components
-- ⚠️ **Should provide** DEPENDENCIES.md with this file
+- ✅ Include AGPL-3.0 and Apache 2.0 license texts
+- ✅ Provide source code access per AGPL-3.0
 
 ### Source Code Distribution
 - ✅ Include LICENSE file
@@ -252,7 +268,8 @@ make build-webasm-release
 ## License Texts
 
 Full license texts are available in the `LICENSES/` directory:
-- `LICENSES/MIT` - MIT License (Yetty and most dependencies)
+- `LICENSES/AGPL-3.0` - GNU Affero General Public License v3.0 (Yetty)
+- `LICENSES/MIT` - MIT License (most dependencies)
 - `LICENSES/Apache-2.0` - Apache License 2.0 (Android NDK)
 - `LICENSES/BSD-2-Clause` - BSD 2-Clause License (lz4)
 - `LICENSES/FreeType` - FreeType License
@@ -262,9 +279,9 @@ Full license texts are available in the `LICENSES/` directory:
 
 When adding or updating dependencies:
 
-1. **Check the license** - Must be MIT or MIT-compatible
+1. **Check the license** - Must be AGPL-3.0 compatible (permissive licenses like MIT, BSD, Apache-2.0 are fine; GPL/LGPL are also compatible)
 2. **Update this file** - Add to appropriate section
-3. **Verify no GPL** - Use `grep -r "GPL" <dependency>` or check license file
+3. **Avoid proprietary-only licenses** - These are incompatible with AGPL-3.0
 4. **Test build** - Ensure no unexpected dependencies are pulled in
 5. **Document usage** - Why is this dependency needed?
 
@@ -282,4 +299,4 @@ For licensing questions or concerns, please open an issue on the Yetty GitHub re
 
 ---
 
-Last updated: 2025-01-07
+Last updated: 2026-02-12
