@@ -52,6 +52,11 @@ public:
     virtual float addText(float x, float y, const std::string& text,
                           float fontSize, uint32_t color, int fontId = 0) = 0;
 
+    // Place text with explicit layer (for z-ordering in HTML rendering).
+    virtual float addText(float x, float y, const std::string& text,
+                          float fontSize, uint32_t color,
+                          uint32_t layer, int fontId) = 0;
+
     // Measure text width without placing glyphs.
     virtual float measureText(const std::string& text,
                               float fontSize, int fontId = 0) = 0;
@@ -61,13 +66,18 @@ public:
                                   float fontSize, uint32_t color,
                                   float rotationRadians, int fontId = 0) = 0;
 
+    // Font metrics (for text layout — ascent/descent from baseline).
+    virtual float fontAscent(float fontSize, int fontId = 0) = 0;
+    virtual float fontDescent(float fontSize, int fontId = 0) = 0;
+
     //=========================================================================
     // Primitives
     //=========================================================================
 
     virtual void addBox(float cx, float cy, float halfW, float halfH,
                         uint32_t fillColor, uint32_t strokeColor = 0,
-                        float strokeWidth = 0) = 0;
+                        float strokeWidth = 0, float round = 0,
+                        uint32_t layer = 0) = 0;
 
     // Rounded box with uniform corner radius
     virtual void addRoundedBox(float cx, float cy, float halfW, float halfH,
@@ -85,7 +95,12 @@ public:
                            float strokeWidth = 0) = 0;
 
     virtual void addSegment(float x0, float y0, float x1, float y1,
-                            uint32_t strokeColor, float strokeWidth = 1) = 0;
+                            uint32_t strokeColor, float strokeWidth = 1,
+                            uint32_t layer = 0) = 0;
+
+    virtual void addCircle(float cx, float cy, float radius,
+                           uint32_t fillColor, uint32_t strokeColor = 0,
+                           float strokeWidth = 0, uint32_t layer = 0) = 0;
 
     // Color wheel for color picker (specialized primitive)
     virtual void addColorWheel(float cx, float cy, float outerR, float innerR,

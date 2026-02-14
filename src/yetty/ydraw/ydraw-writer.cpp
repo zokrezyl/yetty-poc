@@ -43,15 +43,21 @@ public:
 
     float addText(float x, float y, const std::string& text,
                   float fontSize, uint32_t color, int fontId) override {
+        return addText(x, y, text, fontSize, color, 0u, fontId);
+    }
+
+    float addText(float x, float y, const std::string& text,
+                  float fontSize, uint32_t color,
+                  uint32_t layer, int fontId) override {
         if (text.empty()) return 0.0f;
 
         // If we have a custom atlas and fontId, use per-glyph placement
         if (_builder->hasCustomAtlas()) {
-            return placeGlyphsCustom(x, y, text, fontSize, color, fontId);
+            return placeGlyphsCustom(x, y, text, fontSize, color, fontId, layer);
         }
 
         // Fallback: use builder's default addText (no advance returned)
-        _builder->addText(x, y, text, fontSize, color, 0, fontId);
+        _builder->addText(x, y, text, fontSize, color, layer, fontId);
         return _builder->measureTextWidth(text, fontSize, fontId);
     }
 
@@ -68,14 +74,26 @@ public:
     }
 
     //=========================================================================
+    // Font metrics — delegate to builder
+    //=========================================================================
+
+    float fontAscent(float fontSize, int fontId) override {
+        return _builder->fontAscent(fontSize, fontId);
+    }
+
+    float fontDescent(float fontSize, int fontId) override {
+        return _builder->fontDescent(fontSize, fontId);
+    }
+
+    //=========================================================================
     // Primitives — delegate to builder
     //=========================================================================
 
     void addBox(float cx, float cy, float halfW, float halfH,
                 uint32_t fillColor, uint32_t strokeColor,
-                float strokeWidth) override {
+                float strokeWidth, float round, uint32_t layer) override {
         _builder->addBox(cx, cy, halfW, halfH,
-                         fillColor, strokeColor, strokeWidth);
+                         fillColor, strokeColor, strokeWidth, round, layer);
     }
 
     void addRoundedBox(float cx, float cy, float halfW, float halfH,
@@ -117,8 +135,16 @@ public:
     }
 
     void addSegment(float x0, float y0, float x1, float y1,
-                    uint32_t strokeColor, float strokeWidth) override {
-        _builder->addSegment(x0, y0, x1, y1, strokeColor, strokeWidth);
+                    uint32_t strokeColor, float strokeWidth,
+                    uint32_t layer) override {
+        _builder->addSegment(x0, y0, x1, y1, strokeColor, strokeWidth, layer);
+    }
+
+    void addCircle(float cx, float cy, float radius,
+                   uint32_t fillColor, uint32_t strokeColor,
+                   float strokeWidth, uint32_t layer) override {
+        _builder->addCircle(cx, cy, radius,
+                            fillColor, strokeColor, strokeWidth, layer);
     }
 
     void addColorWheel(float cx, float cy, float outerR, float innerR,
@@ -215,7 +241,7 @@ private:
     float placeGlyphsCustom(float posX, float posY,
                              const std::string& text,
                              float fontSize, uint32_t color,
-                             int fontId) {
+                             int fontId, uint32_t layer = 0) {
         auto atlas = _builder->customAtlas();
         if (!atlas) return 0.0f;
 
@@ -247,7 +273,8 @@ private:
             g.x = cursorX + glyph._bearingX * scale;
             g.y = posY - glyph._bearingY * scale;
             g.setSize(glyph._sizeX * scale, glyph._sizeY * scale);
-            g.setGlyphLayerFlags(static_cast<uint16_t>(glyphIndex), 0,
+            g.setGlyphLayerFlags(static_cast<uint16_t>(glyphIndex),
+                                 static_cast<uint8_t>(layer),
                                  YDrawBuilder::GLYPH_FLAG_CUSTOM_ATLAS);
             g.color = color;
             _builder->glyphsMut().push_back(g);

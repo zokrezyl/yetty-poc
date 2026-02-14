@@ -923,8 +923,34 @@ private:
             }
         }
 
-        yinfo("parseBinaryV2: {} fonts, {} default spans, {} custom spans, {} text bytes",
-              fontCount, defaultSpanCount, customSpanCount, textDataSize);
+        // --- Rotated Text Spans (optional, after text blob) ---
+        offset = textDataStart + paddedTextSize;
+        uint32_t rotatedSpanCount = 0;
+        if (read32(rotatedSpanCount) && rotatedSpanCount > 0) {
+            for (uint32_t i = 0; i < rotatedSpanCount; i++) {
+                float rx, ry, rFontSize, rRotation;
+                uint32_t rColor, rFontIndex, rTextOffset, rTextLength;
+                if (!readF32(rx) || !readF32(ry) || !readF32(rFontSize) ||
+                    !readF32(rRotation) || !read32(rColor) || !read32(rFontIndex) ||
+                    !read32(rTextOffset) || !read32(rTextLength))
+                    break;
+
+                if (rTextOffset + rTextLength > textDataSize) continue;
+                std::string text(textBlob + rTextOffset, rTextLength);
+
+                int fid = (rFontIndex < fontCount && fontIdMap[rFontIndex] >= 0)
+                          ? static_cast<int>(rFontIndex) : -1;
+                if (fid >= 0) {
+                    _builder->addRotatedText(rx, ry, text, rFontSize,
+                                             rColor, rRotation, fid);
+                }
+            }
+        }
+
+        yinfo("parseBinaryV2: {} fonts, {} default spans, {} custom spans, "
+              "{} rotated spans, {} text bytes",
+              fontCount, defaultSpanCount, customSpanCount,
+              rotatedSpanCount, textDataSize);
 
         return Ok();
     }

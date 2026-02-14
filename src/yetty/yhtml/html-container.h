@@ -9,7 +9,7 @@
 #include <cstdint>
 
 namespace yetty {
-class YDrawBuilder;
+class YDrawWriter;
 }
 
 namespace yetty::card {
@@ -19,7 +19,7 @@ class HttpFetcher;
 //=============================================================================
 // HtmlContainer - litehtml v0.9 document_container that emits SDF primitives
 //
-// Bridges litehtml's CSS layout callbacks to YDrawBuilder:
+// Bridges litehtml's CSS layout callbacks to YDrawWriter:
 //   draw_background() → addBox()
 //   draw_borders()    → addSegment()
 //   draw_text()       → addText()
@@ -33,7 +33,7 @@ class HtmlContainer : public litehtml::document_container,
 public:
     using Ptr = std::shared_ptr<HtmlContainer>;
 
-    static Result<Ptr> createImpl(YDrawBuilder* builder, MsMsdfFont::Ptr font,
+    static Result<Ptr> createImpl(YDrawWriter* writer, MsMsdfFont::Ptr font,
                                   float defaultFontSize,
                                   HttpFetcher* fetcher);
 

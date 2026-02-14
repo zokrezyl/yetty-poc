@@ -40,6 +40,16 @@ struct CustomTextSpan {
 };
 static_assert(sizeof(CustomTextSpan) == 32);
 
+struct RotatedTextSpan {
+    float x, y, fontSize;
+    float rotation;       // radians
+    uint32_t color;
+    uint32_t fontIndex;
+    uint32_t textOffset;
+    uint32_t textLength;
+};
+static_assert(sizeof(RotatedTextSpan) == 32);
+
 //=============================================================================
 // SDFPrimitive — local definition matching hdraw.h (96 bytes)
 // We define it here to avoid pulling in hdraw.h's heavy deps.
@@ -73,6 +83,8 @@ constexpr uint32_t SDF_COLOR_WHEEL = 64;
 
 struct TtfFontMetrics {
     uint16_t unitsPerEm = 1000;
+    int16_t ascender = 800;   // from hhea table (design units)
+    int16_t descender = -200; // from hhea table (negative = below baseline)
     std::vector<uint16_t> advanceWidths;
     std::unordered_map<uint32_t, uint16_t> cmapTable;
 
@@ -83,6 +95,14 @@ struct TtfFontMetrics {
         uint16_t aw = (gid < advanceWidths.size()) ? advanceWidths[gid]
                      : static_cast<uint16_t>(unitsPerEm / 2);
         return static_cast<float>(aw) / static_cast<float>(unitsPerEm) * fontSize;
+    }
+
+    float getAscent(float fontSize) const {
+        return static_cast<float>(ascender) / static_cast<float>(unitsPerEm) * fontSize;
+    }
+
+    float getDescent(float fontSize) const {
+        return static_cast<float>(-descender) / static_cast<float>(unitsPerEm) * fontSize;
     }
 };
 
@@ -118,6 +138,10 @@ bool parseTtfMetrics(const uint8_t* data, size_t size, TtfFontMetrics& m) {
 
     m.unitsPerEm = r16(headOff + 18);
     if (m.unitsPerEm == 0) m.unitsPerEm = 1000;
+
+    // hhea table: ascender at offset 4, descender at offset 6
+    m.ascender = static_cast<int16_t>(r16(hheaOff + 4));
+    m.descender = static_cast<int16_t>(r16(hheaOff + 6));
 
     uint16_t numberOfHMetrics = r16(hheaOff + 34);
     uint16_t numGlyphs = maxpOff ? r16(maxpOff + 4) : numberOfHMetrics;
@@ -327,6 +351,12 @@ public:
 
     float addText(float x, float y, const std::string& text,
                   float fontSize, uint32_t color, int fontId) override {
+        return addText(x, y, text, fontSize, color, 0u, fontId);
+    }
+
+    float addText(float x, float y, const std::string& text,
+                  float fontSize, uint32_t color,
+                  uint32_t layer, int fontId) override {
         if (text.empty()) return 0.0f;
 
         uint32_t textOffset = static_cast<uint32_t>(_textBlob.size());
@@ -343,7 +373,7 @@ public:
             span.fontSize = fontSize;
             span.color = color;
             span.fontIndex = static_cast<uint32_t>(fontId);
-            span.layer = 0;
+            span.layer = layer;
             span.textOffset = textOffset;
             span.textLength = textLength;
             _customSpans.push_back(span);
@@ -353,7 +383,7 @@ public:
             span.y = y;
             span.fontSize = fontSize;
             span.color = color;
-            span.layer = 0;
+            span.layer = layer;
             span.textOffset = textOffset;
             span.textLength = textLength;
             span._pad = 0;
@@ -369,15 +399,33 @@ public:
     }
 
     //=========================================================================
+    // Font metrics
+    //=========================================================================
+
+    float fontAscent(float fontSize, int fontId) override {
+        if (fontId >= 0 && fontId < static_cast<int>(_fonts.size())) {
+            return _fonts[static_cast<size_t>(fontId)].metrics.getAscent(fontSize);
+        }
+        return fontSize * 0.8f; // reasonable fallback
+    }
+
+    float fontDescent(float fontSize, int fontId) override {
+        if (fontId >= 0 && fontId < static_cast<int>(_fonts.size())) {
+            return _fonts[static_cast<size_t>(fontId)].metrics.getDescent(fontSize);
+        }
+        return fontSize * 0.2f; // reasonable fallback
+    }
+
+    //=========================================================================
     // Primitives — accumulate for binary output
     //=========================================================================
 
     void addBox(float cx, float cy, float halfW, float halfH,
                 uint32_t fillColor, uint32_t strokeColor,
-                float strokeWidth) override {
+                float strokeWidth, float round, uint32_t layer) override {
         BinSDFPrimitive prim = {};
         prim.type = SDF_BOX;
-        prim.layer = 0;
+        prim.layer = layer;
         prim.params[0] = cx;
         prim.params[1] = cy;
         prim.params[2] = halfW;
@@ -385,6 +433,7 @@ public:
         prim.fillColor = fillColor;
         prim.strokeColor = strokeColor;
         prim.strokeWidth = strokeWidth;
+        prim.round = round;
         prim.aabbMinX = cx - halfW - strokeWidth;
         prim.aabbMinY = cy - halfH - strokeWidth;
         prim.aabbMaxX = cx + halfW + strokeWidth;
@@ -460,10 +509,11 @@ public:
     }
 
     void addSegment(float x0, float y0, float x1, float y1,
-                    uint32_t strokeColor, float strokeWidth) override {
+                    uint32_t strokeColor, float strokeWidth,
+                    uint32_t layer) override {
         BinSDFPrimitive prim = {};
         prim.type = SDF_SEGMENT;
-        prim.layer = 0;
+        prim.layer = layer;
         prim.params[0] = x0;
         prim.params[1] = y0;
         prim.params[2] = x1;
@@ -477,14 +527,34 @@ public:
         _primitives.push_back(prim);
     }
 
+    void addCircle(float cx, float cy, float radius,
+                   uint32_t fillColor, uint32_t strokeColor,
+                   float strokeWidth, uint32_t layer) override {
+        BinSDFPrimitive prim = {};
+        prim.type = SDF_CIRCLE;
+        prim.layer = layer;
+        prim.params[0] = cx;
+        prim.params[1] = cy;
+        prim.params[2] = radius;
+        prim.fillColor = fillColor;
+        prim.strokeColor = strokeColor;
+        prim.strokeWidth = strokeWidth;
+        float extent = radius + strokeWidth;
+        prim.aabbMinX = cx - extent;
+        prim.aabbMinY = cy - extent;
+        prim.aabbMaxX = cx + extent;
+        prim.aabbMaxY = cy + extent;
+        _primitives.push_back(prim);
+    }
+
     void addColorWheel(float cx, float cy, float outerR, float innerR,
                        float hue, float sat, float val,
                        float selectorRadius) override {
         BinSDFPrimitive prim = {};
         prim.type = SDF_COLOR_WHEEL;
         prim.layer = 0;
-        prim.params[0] = static_cast<float>(_primitives.size()); // layer/index
-        prim.params[1] = 0; // reserved
+        prim.params[0] = static_cast<float>(_primitives.size());
+        prim.params[1] = 0;
         prim.params[2] = cx;
         prim.params[3] = cy;
         prim.params[4] = outerR;
@@ -541,70 +611,20 @@ public:
             fontId >= static_cast<int>(_fonts.size()))
             return 0.0f;
 
-        const auto& font = _fonts[fontId];
-        float scale = fontSize / static_cast<float>(font.metrics.unitsPerEm);
-        float cosA = std::cos(rotationRadians);
-        float sinA = std::sin(rotationRadians);
-        float cursorAdvance = 0.0f;
+        // Store as a span — the ydraw card resolves glyphs via builder
+        RotatedTextSpan span;
+        span.x = x;
+        span.y = y;
+        span.fontSize = fontSize;
+        span.rotation = rotationRadians;
+        span.color = color;
+        span.fontIndex = static_cast<uint32_t>(fontId);
+        span.textOffset = static_cast<uint32_t>(_textBlob.size());
+        span.textLength = static_cast<uint32_t>(text.size());
+        _textBlob += text;
+        _rotatedSpans.push_back(span);
 
-        constexpr uint32_t SDF_ROTATED_GLYPH = 65;
-
-        const uint8_t* ptr = reinterpret_cast<const uint8_t*>(text.data());
-        const uint8_t* end = ptr + text.size();
-
-        while (ptr < end) {
-            uint32_t cp = decodeUtf8(ptr, end);
-            if (cp == 0 && ptr >= end) break;
-
-            // Look up advance from TTF metrics
-            float advance = fontSize * 0.5f; // fallback
-            auto cmapIt = font.metrics.cmapTable.find(cp);
-            if (cmapIt != font.metrics.cmapTable.end()) {
-                uint16_t gid = cmapIt->second;
-                if (gid < font.metrics.advanceWidths.size()) {
-                    advance = font.metrics.advanceWidths[gid] * scale;
-                }
-            }
-
-            // Glyph origin along rotated direction
-            float gx = x + cursorAdvance * cosA;
-            float gy = y + cursorAdvance * sinA;
-            float gw = advance;  // approximate glyph width
-            float gh = fontSize; // approximate glyph height
-
-            BinSDFPrimitive prim = {};
-            prim.type = SDF_ROTATED_GLYPH;
-            prim.params[0] = gx;
-            prim.params[1] = gy;
-            prim.params[2] = gw;
-            prim.params[3] = gh;
-            prim.params[4] = rotationRadians;
-            // glyphIndex not meaningful for binary path (no atlas yet),
-            // store fontId + codepoint for receiver to resolve
-            uint32_t packed = (static_cast<uint32_t>(fontId) << 16) |
-                              (cp & 0xFFFF);
-            std::memcpy(&prim.params[5], &packed, sizeof(float));
-            prim.fillColor = color;
-
-            // Compute AABB of rotated quad
-            float cx[4] = {0, gw, gw, 0};
-            float cy[4] = {0, 0, gh, gh};
-            prim.aabbMinX = gx; prim.aabbMaxX = gx;
-            prim.aabbMinY = gy; prim.aabbMaxY = gy;
-            for (int i = 0; i < 4; i++) {
-                float rx = gx + cx[i] * cosA - cy[i] * sinA;
-                float ry = gy + cx[i] * sinA + cy[i] * cosA;
-                prim.aabbMinX = std::min(prim.aabbMinX, rx);
-                prim.aabbMaxX = std::max(prim.aabbMaxX, rx);
-                prim.aabbMinY = std::min(prim.aabbMinY, ry);
-                prim.aabbMaxY = std::max(prim.aabbMaxY, ry);
-            }
-            _primitives.push_back(prim);
-
-            cursorAdvance += advance;
-        }
-
-        return cursorAdvance;
+        return computeAdvance(text, fontSize, fontId);
     }
 
     //=========================================================================
@@ -677,6 +697,16 @@ public:
             std::memcpy(out.data() + start, _textBlob.data(), textDataSize);
         }
 
+        // Rotated text spans (appended after text blob)
+        uint32_t rotCount = static_cast<uint32_t>(_rotatedSpans.size());
+        appendU32(out, rotCount);
+        if (!_rotatedSpans.empty()) {
+            size_t start = out.size();
+            out.resize(out.size() + _rotatedSpans.size() * 32);
+            std::memcpy(out.data() + start, _rotatedSpans.data(),
+                        _rotatedSpans.size() * 32);
+        }
+
         return out;
     }
 
@@ -719,6 +749,7 @@ private:
     std::vector<FontEntry> _fonts;
     std::vector<DefaultTextSpan> _defaultSpans;
     std::vector<CustomTextSpan> _customSpans;
+    std::vector<RotatedTextSpan> _rotatedSpans;
     std::string _textBlob;
     std::vector<BinSDFPrimitive> _primitives;
     uint32_t _bgColor = 0xFFFFFFFF;

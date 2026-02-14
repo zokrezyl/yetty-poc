@@ -1,6 +1,8 @@
 #include "yhtml.h"
 #include "html-container.h"
+#include "html-renderer.h"
 #include "http-fetcher.h"
+#include <yetty/ydraw-writer.h>
 #include <yetty/ydraw-builder.h>
 #include "../hdraw/hdraw.h"  // For SDFPrimitive
 #include <yetty/base/event-loop.h>
@@ -85,11 +87,12 @@ public:
         , _payloadStr(payload)
     {
         _shaderGlyph = SHADER_GLYPH;
-        auto builderRes = YDrawBuilder::create(ctx.fontManager, ctx.globalAllocator);
-        if (builderRes) {
-            _builder = *builderRes;
+        auto writerRes = YDrawWriterInternal::create(ctx.fontManager, ctx.globalAllocator);
+        if (writerRes) {
+            _writer = *writerRes;
+            _builder = _writer->builder();
         } else {
-            yerror("YHtmlImpl: failed to create builder");
+            yerror("YHtmlImpl: failed to create writer");
         }
     }
 
@@ -467,11 +470,11 @@ public:
         }
 
         // White background for HTML
-        _builder->setBgColor(0xFFFFFFFF);
+        _writer->setBgColor(0xFFFFFFFF);
 
-        // Load default sans-serif font (creates custom atlas via builder)
+        // Load default sans-serif font (creates custom atlas via writer)
         std::string defaultFontPath = "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf";
-        auto fontResult = _builder->addFont(defaultFontPath);
+        auto fontResult = _writer->addFont(defaultFontPath);
         if (!fontResult) {
             return Err<void>("YHtmlImpl::init: failed to load default sans-serif font");
         }
@@ -493,7 +496,7 @@ public:
 
         // Render HTML immediately
         if (!_htmlContent.empty()) {
-            if (auto res = renderHtml(); !res) {
+            if (auto res = renderHtmlInternal(); !res) {
                 ywarn("YHtmlImpl::init: render failed: {}", error_msg(res));
             }
         }
@@ -777,7 +780,7 @@ private:
         _htmlContent = std::move(*body);
         _builder->clear();
 
-        if (auto res = renderHtml(); !res) {
+        if (auto res = renderHtmlInternal(); !res) {
             ywarn("YHtmlImpl::navigateTo: render failed: {}", error_msg(res));
             return;
         }
@@ -850,7 +853,7 @@ private:
                          colorStr.substr(0, 2) == "0X")) {
                         colorStr = colorStr.substr(2);
                     }
-                    _builder->setBgColor(static_cast<uint32_t>(
+                    _writer->setBgColor(static_cast<uint32_t>(
                         std::stoul(colorStr, nullptr, 16)));
                 }
             }
@@ -900,18 +903,20 @@ private:
     // HTML rendering via litehtml
     //=========================================================================
 
-    Result<void> renderHtml() {
+    Result<void> renderHtmlInternal() {
         if (_htmlContent.empty()) {
             return Err<void>("YHtmlImpl::renderHtml: no content loaded");
         }
 
-        // Create container that targets the builder
-        auto containerResult = HtmlContainer::create(
-            _builder.get(), nullptr, _fontSize, _fetcher.get());
-        if (!containerResult) {
-            return Err<void>("YHtmlImpl::renderHtml: failed to create HtmlContainer");
+        auto result = renderHtmlToWriter(
+            _htmlContent, _writer.get(), _fontSize, _viewWidth, _fetcher.get());
+
+        if (!result.document) {
+            return Err<void>("YHtmlImpl::renderHtml: render failed");
         }
-        _container = std::move(*containerResult);
+
+        _container = result.container;
+        _document = result.document;
 
         // Wire up navigation callback for link clicks (deferred to avoid re-entrancy)
         _container->setNavigateCallback([this](const std::string& url) {
@@ -922,37 +927,15 @@ private:
         _container->setCursorCallback([this](const std::string& cursor) {
             auto loop = base::EventLoop::instance();
             if (!loop) return;
-            // "pointer" = hand cursor over links, "" = default
-            int shape = 0;  // default arrow
+            int shape = 0;
             if (cursor == "pointer") {
                 shape = 0x00036004;  // GLFW_POINTING_HAND_CURSOR
             }
             (*loop)->dispatch(base::Event::setCursorEvent(shape));
         });
 
-        int viewW = static_cast<int>(_viewWidth);
-        int viewH = static_cast<int>(_viewWidth * 1.5f);
-        _container->setViewportSize(viewW, viewH);
-
-        _document = litehtml::document::createFromString(
-            _htmlContent.c_str(), _container.get());
-
-        if (!_document) {
-            return Err<void>("YHtmlImpl::renderHtml: failed to parse HTML");
-        }
-
-        _document->render(viewW);
-
-        int docHeight = _document->height();
-        _container->setViewportSize(viewW, docHeight);
-
-        yinfo("YHtmlImpl::renderHtml: BEFORE draw: viewW={} docHeight={} prims={} glyphs={}",
-              viewW, docHeight, _builder->primitiveCount(), _builder->glyphCount());
-
-        litehtml::position clip(0, 0, viewW, docHeight);
-        _document->draw(0, 0, 0, &clip);
-
-        yinfo("YHtmlImpl::renderHtml: AFTER draw: prims={} glyphs={}",
+        yinfo("YHtmlImpl::renderHtml: {}x{} prims={} glyphs={}",
+              result.documentWidth, result.documentHeight,
               _builder->primitiveCount(), _builder->glyphCount());
 
         return Ok();
@@ -962,7 +945,8 @@ private:
     // Members
     //=========================================================================
 
-    // Builder
+    // Writer + Builder
+    YDrawWriterInternal::Ptr _writer;
     YDrawBuilder::Ptr _builder;
     base::ObjectId _screenId = 0;
     std::string _argsStr;
