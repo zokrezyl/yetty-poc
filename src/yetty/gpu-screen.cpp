@@ -4711,6 +4711,9 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
   }
 
   // Handle keyboard events (only when focused)
+  if (!_focused && (event.type == base::Event::Type::Char || event.type == base::Event::Type::KeyDown)) {
+    ydebug("GPUScreen {}: keyboard event arrived but NOT focused, ignoring", _id);
+  }
   if (_focused) {
     // Handle command mode (waiting for key after Ctrl+\) - check FIRST
     if (_commandMode) {

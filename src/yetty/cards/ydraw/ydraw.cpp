@@ -16,6 +16,7 @@
 namespace {
 constexpr int GLFW_MOD_SHIFT   = 0x0001;
 constexpr int GLFW_MOD_CONTROL = 0x0002;
+constexpr int GLFW_KEY_C       = 67;
 }
 
 namespace yetty::card {
@@ -411,8 +412,56 @@ public:
     }
 
     //=========================================================================
-    // Events - zoom/pan
+    // Events - zoom/pan + text selection
     //=========================================================================
+
+    void setCellSize(uint32_t cellWidth, uint32_t cellHeight) override {
+        _cellWidth = cellWidth;
+        _cellHeight = cellHeight;
+    }
+
+    void cardPixelToScene(float cardX, float cardY, float& sceneX, float& sceneY) {
+        float cardPixelW = static_cast<float>(_widthCells * _cellWidth);
+        float cardPixelH = static_cast<float>(_heightCells * _cellHeight);
+        if (cardPixelW <= 0 || cardPixelH <= 0) { sceneX = sceneY = 0; return; }
+
+        float contentW = _builder->sceneMaxX() - _builder->sceneMinX();
+        float contentH = _builder->sceneMaxY() - _builder->sceneMinY();
+        float centerX = _builder->sceneMinX() + contentW * 0.5f;
+        float centerY = _builder->sceneMinY() + contentH * 0.5f;
+        float viewHalfW = contentW * 0.5f / _viewZoom;
+        float viewHalfH = contentH * 0.5f / _viewZoom;
+        float viewMinX = centerX - viewHalfW + _viewPanX;
+        float viewMinY = centerY - viewHalfH + _viewPanY;
+        float viewW = contentW / _viewZoom;
+        float viewH = contentH / _viewZoom;
+
+        float cardAspect = cardPixelW / std::max(cardPixelH, 1.0f);
+        float viewAspect = viewW / std::max(viewH, 1e-6f);
+        float uvX = cardX / cardPixelW;
+        float uvY = cardY / cardPixelH;
+
+        if (viewAspect < cardAspect) {
+            float visibleW = viewH * cardAspect;
+            float offsetX = (visibleW - viewW) * 0.5f;
+            sceneX = viewMinX - offsetX + uvX * visibleW;
+            sceneY = viewMinY + uvY * viewH;
+        } else {
+            float visibleH = viewW / cardAspect;
+            float offsetY = (visibleH - viewH) * 0.5f;
+            sceneX = viewMinX + uvX * viewW;
+            sceneY = viewMinY - offsetY + uvY * visibleH;
+        }
+    }
+
+    void uploadGlyphData() {
+        if (!_derivedStorage.isValid() || _builder->glyphs().empty()) return;
+        uint32_t localOff = _glyphOffset * sizeof(float) - _derivedStorage.offset;
+        auto& glyphs = _builder->glyphsMut();
+        std::memcpy(_derivedStorage.data + localOff, glyphs.data(),
+                    glyphs.size() * sizeof(YDrawGlyph));
+        _cardMgr->bufferManager()->markBufferDirty(_derivedStorage);
+    }
 
     Result<bool> onEvent(const base::Event& event) override {
         if (event.type == base::Event::Type::SetFocus) {
@@ -447,6 +496,66 @@ public:
                 _metadataDirty = true;
                 return Ok(true);
             }
+        }
+
+        // Mouse selection
+        if (event.type == base::Event::Type::CardMouseDown &&
+            event.cardMouse.targetId == id() && event.cardMouse.button == 0) {
+            if (_builder->glyphCount() == 0) return Ok(false);
+            if (!_sortedOrderBuilt) {
+                _builder->buildGlyphSortedOrder();
+                _sortedOrderBuilt = true;
+            }
+            float sx, sy;
+            cardPixelToScene(event.cardMouse.x, event.cardMouse.y, sx, sy);
+            int32_t idx = _builder->findNearestGlyphSorted(sx, sy);
+            _selStartSorted = idx;
+            _selEndSorted = idx;
+            _selecting = true;
+            _builder->setSelectionRange(_selStartSorted, _selEndSorted);
+            uploadGlyphData();
+            return Ok(true);
+        }
+
+        if (event.type == base::Event::Type::CardMouseMove &&
+            event.cardMouse.targetId == id() && _selecting) {
+            float sx, sy;
+            cardPixelToScene(event.cardMouse.x, event.cardMouse.y, sx, sy);
+            int32_t idx = _builder->findNearestGlyphSorted(sx, sy);
+            if (idx != _selEndSorted) {
+                _selEndSorted = idx;
+                _builder->setSelectionRange(_selStartSorted, _selEndSorted);
+                uploadGlyphData();
+            }
+            return Ok(true);
+        }
+
+        if (event.type == base::Event::Type::CardMouseUp &&
+            event.cardMouse.targetId == id() && event.cardMouse.button == 0) {
+            if (_selecting) {
+                float sx, sy;
+                cardPixelToScene(event.cardMouse.x, event.cardMouse.y, sx, sy);
+                _selEndSorted = _builder->findNearestGlyphSorted(sx, sy);
+                _selecting = false;
+                _builder->setSelectionRange(_selStartSorted, _selEndSorted);
+                uploadGlyphData();
+            }
+            return Ok(true);
+        }
+
+        // Ctrl+C: copy selected text
+        if (event.type == base::Event::Type::CardKeyDown &&
+            event.cardKey.targetId == id() &&
+            event.cardKey.key == GLFW_KEY_C &&
+            (event.cardKey.mods & GLFW_MOD_CONTROL)) {
+            std::string text = _builder->getSelectedText();
+            if (!text.empty()) {
+                auto loop = *base::EventLoop::instance();
+                loop->dispatch(base::Event::copyEvent(
+                    std::make_shared<std::string>(text)));
+                yinfo("YDraw: copied {} bytes to clipboard", text.size());
+            }
+            return Ok(true);
         }
 
         return Ok(false);
@@ -572,6 +681,10 @@ private:
         auto self = sharedAs<base::EventListener>();
         if (auto res = loop->registerListener(base::Event::Type::SetFocus, self, 1000); !res) return res;
         if (auto res = loop->registerListener(base::Event::Type::CardScroll, self, 1000); !res) return res;
+        if (auto res = loop->registerListener(base::Event::Type::CardMouseDown, self, 1000); !res) return res;
+        if (auto res = loop->registerListener(base::Event::Type::CardMouseUp, self, 1000); !res) return res;
+        if (auto res = loop->registerListener(base::Event::Type::CardMouseMove, self, 1000); !res) return res;
+        if (auto res = loop->registerListener(base::Event::Type::CardKeyDown, self, 1000); !res) return res;
         return Ok();
     }
 
@@ -1661,6 +1774,16 @@ private:
     float _fitPageHeight = 0.0f; // if set, compute zoom/pan to fit one page
     float _viewPanY = 0.0f;
     bool _focused = false;
+
+    // Cell pixel size (from setCellSize)
+    uint32_t _cellWidth = 0;
+    uint32_t _cellHeight = 0;
+
+    // Text selection
+    bool _selecting = false;
+    int32_t _selStartSorted = -1;
+    int32_t _selEndSorted = -1;
+    bool _sortedOrderBuilt = false;
 
     // Animation
     std::unique_ptr<animation::Animation> _animation;
