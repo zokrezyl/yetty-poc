@@ -2,7 +2,9 @@
 #include <yetty/ydraw-builder.h>
 #include <yetty/font-manager.h>
 #include <yetty/gpu-allocator.h>
+#include "../cards/hdraw/hdraw.h" // For SDFPrimitive, SDFType
 #include <ytrace/ytrace.hpp>
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 
@@ -76,14 +78,63 @@ public:
                          fillColor, strokeColor, strokeWidth);
     }
 
+    void addRoundedBox(float cx, float cy, float halfW, float halfH,
+                       float radius, uint32_t fillColor,
+                       uint32_t strokeColor, float strokeWidth) override {
+        // YDrawBuilder::addBox has 'round' parameter for corner radius
+        _builder->addBox(cx, cy, halfW, halfH, fillColor,
+                         strokeColor, strokeWidth, radius);
+    }
+
+    void addTriangle(float x0, float y0, float x1, float y1,
+                     float x2, float y2, uint32_t fillColor,
+                     uint32_t strokeColor, float strokeWidth) override {
+        // Create triangle primitive directly
+        card::SDFPrimitive p = {};
+        p.type = static_cast<uint32_t>(card::SDFType::Triangle);
+        p.layer = _builder->primitiveCount();
+        p.params[0] = x0;
+        p.params[1] = y0;
+        p.params[2] = x1;
+        p.params[3] = y1;
+        p.params[4] = x2;
+        p.params[5] = y2;
+        p.fillColor = fillColor;
+        p.strokeColor = strokeColor;
+        p.strokeWidth = strokeWidth;
+        p.round = 0;
+        p.aabbMinX = std::min({x0, x1, x2});
+        p.aabbMinY = std::min({y0, y1, y2});
+        p.aabbMaxX = std::max({x0, x1, x2});
+        p.aabbMaxY = std::max({y0, y1, y2});
+        _builder->addPrimitive(p);
+    }
+
+    void addCircle(float cx, float cy, float radius,
+                   uint32_t fillColor, uint32_t strokeColor,
+                   float strokeWidth) override {
+        _builder->addCircle(cx, cy, radius, fillColor, strokeColor, strokeWidth);
+    }
+
     void addSegment(float x0, float y0, float x1, float y1,
                     uint32_t strokeColor, float strokeWidth) override {
         _builder->addSegment(x0, y0, x1, y1, strokeColor, strokeWidth);
     }
 
+    void addColorWheel(float cx, float cy, float outerR, float innerR,
+                       float hue, float sat, float val,
+                       float selectorRadius) override {
+        _builder->addColorWheel(cx, cy, outerR, innerR, hue, sat, val,
+                                selectorRadius, _builder->primitiveCount());
+    }
+
     //=========================================================================
     // Scene — delegate to builder
     //=========================================================================
+
+    void clear() override {
+        _builder->clear();
+    }
 
     void setSceneBounds(float minX, float minY,
                         float maxX, float maxY) override {
