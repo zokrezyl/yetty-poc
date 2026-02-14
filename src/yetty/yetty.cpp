@@ -689,6 +689,10 @@ Result<Workspace::Ptr> YettyImpl::createWorkspace() noexcept {
 Result<void> YettyImpl::initCallbacks() noexcept {
     glfwSetWindowUserPointer(_window, this);
 
+    glfwSetWindowFocusCallback(_window, [](GLFWwindow* w, int focused) {
+        ydebug("glfwWindowFocusCallback: focused={}", focused);
+    });
+
     glfwSetKeyCallback(_window, [](GLFWwindow* w, int key, int scancode, int action, int mods) {
         ydebug("glfwKeyCallback: key={} scancode={} action={} mods={}", key, scancode, action, mods);
         if (action != GLFW_PRESS && action != GLFW_REPEAT) return;
@@ -716,6 +720,7 @@ Result<void> YettyImpl::initCallbacks() noexcept {
         }
 
         // For special keys (Enter, Backspace, arrows, etc.), dispatch keyDown
+        ydebug("glfwKeyCallback: dispatching keyDown key={} mods={}", key, mods);
         loop->dispatch(base::Event::keyDown(key, mods, scancode));
     });
 

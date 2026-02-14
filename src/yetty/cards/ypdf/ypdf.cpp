@@ -1,6 +1,8 @@
 #include "ypdf.h"
 #include "pdf-content-parser.h"
 #include <yetty/base/event-loop.h>
+#include <yetty/msdf-glyph-data.h>
+#include <yetty/card-texture-manager.h>
 #include <ytrace/ytrace.hpp>
 #include <sstream>
 #include <algorithm>
@@ -21,6 +23,7 @@ extern "C" {
 namespace {
 constexpr int GLFW_MOD_SHIFT   = 0x0001;
 constexpr int GLFW_MOD_CONTROL = 0x0002;
+constexpr int GLFW_KEY_C       = 67;
 constexpr float PAGE_MARGIN = 20.0f;  // Points between pages
 
 // Resolve a font family to TTF path via fontconfig
@@ -82,10 +85,18 @@ YPdf::YPdf(const YettyContext& ctx,
     : Card(ctx.cardManager, ctx.gpu, x, y, widthCells, heightCells)
     , _argsStr(args)
     , _payloadStr(payload)
-    , _globalAllocator(ctx.globalAllocator)
     , _fontManager(ctx.fontManager)
 {
     _shaderGlyph = SHADER_GLYPH;
+
+    auto builderRes = YDrawBuilder::create(ctx.fontManager, ctx.globalAllocator);
+    if (builderRes) {
+        _builder = *builderRes;
+        _builder->addFlags(YDrawBuilder::FLAG_UNIFORM_SCALE | YDrawBuilder::FLAG_CUSTOM_ATLAS);
+        _builder->setBgColor(0xFFFFFFFF);  // White background for PDF
+    } else {
+        yerror("YPdf: failed to create YDrawBuilder");
+    }
 }
 
 YPdf::~YPdf() {
@@ -124,7 +135,8 @@ Result<CardPtr> YPdf::create(
     }
 
     yinfo("YPdf::create: SUCCESS, shaderGlyph={:#x} pages={} glyphs={}",
-          card->shaderGlyph(), card->_pageCount, card->_glyphs.size());
+          card->shaderGlyph(), card->_pageCount,
+          card->_builder ? card->_builder->glyphCount() : 0);
     return Ok<CardPtr>(card);
 }
 
@@ -135,28 +147,23 @@ Result<CardPtr> YPdf::create(
 Result<void> YPdf::init() {
     ydebug("YPdf::init: START");
 
-    // Create own atlas for PDF fonts
-    auto atlasRes = MsdfAtlas::create(_globalAllocator);
-    if (!atlasRes) {
-        return Err<void>("YPdf::init: failed to create atlas");
+    if (!_builder) {
+        return Err<void>("YPdf::init: no builder");
     }
-    _atlas = *atlasRes;
-    ydebug("YPdf::init: atlas created, {}x{}",
-           _atlas->getAtlasWidth(), _atlas->getAtlasHeight());
 
-    // Load default serif font as fontId=0
+    // Load default serif font via builder
     std::string defaultFontPath = resolveFontPath("serif");
     if (defaultFontPath.empty()) {
         return Err<void>("YPdf::init: fontconfig could not resolve 'serif'");
     }
-    int fontId = addFont(defaultFontPath);
-    if (fontId < 0) {
+    auto fontRes = _builder->addFont(defaultFontPath);
+    if (!fontRes) {
         return Err<void>("YPdf::init: failed to load default serif font");
     }
-    yinfo("YPdf::init: loaded default serif font: {} -> fontId={}", defaultFontPath, fontId);
+    yinfo("YPdf::init: loaded default serif font: {} -> fontId={}", defaultFontPath, *fontRes);
 
     // Allocate metadata slot
-    auto metaResult = _cardMgr->allocateMetadata(sizeof(Metadata));
+    auto metaResult = _cardMgr->allocateMetadata(sizeof(YDrawMetadata));
     if (!metaResult) {
         return Err<void>("YPdf::init: failed to allocate metadata");
     }
@@ -233,8 +240,8 @@ void YPdf::parseArgs(const std::string& args) {
                     (colorStr.substr(0, 2) == "0x" || colorStr.substr(0, 2) == "0X")) {
                     colorStr = colorStr.substr(2);
                 }
-                _bgColor = static_cast<uint32_t>(
-                    std::stoul(colorStr, nullptr, 16));
+                _builder->setBgColor(static_cast<uint32_t>(
+                    std::stoul(colorStr, nullptr, 16)));
             }
         }
     }
@@ -307,8 +314,8 @@ Result<void> YPdf::loadPdf() {
 //=============================================================================
 
 Result<void> YPdf::renderAllPages() {
-    if (!_pdfFile) {
-        return Err<void>("YPdf::renderAllPages: no document");
+    if (!_pdfFile || !_builder) {
+        return Err<void>("YPdf::renderAllPages: no document or builder");
     }
 
     struct PageInfo {
@@ -345,26 +352,18 @@ Result<void> YPdf::renderAllPages() {
         return Err<void>("YPdf::renderAllPages: no valid pages");
     }
 
-    // Set explicit scene bounds
-    _sceneMinX = 0.0f;
-    _sceneMinY = 0.0f;
-    _sceneMaxX = maxWidth;
-    _sceneMaxY = totalHeight;
-    _hasExplicitBounds = true;
+    // Set explicit scene bounds on builder
+    _builder->setSceneBounds(0.0f, 0.0f, maxWidth, totalHeight);
 
-    // Initial zoom: fit first page width (show one page, not entire document)
+    // Initial zoom: fit first page via _fitPageHeight mechanism
     if (!pages.empty() && totalHeight > 0.0f) {
         float firstPageH = pages[0].h;
         float cardAspect = static_cast<float>(_widthCells) / std::max(static_cast<float>(_heightCells), 1.0f);
-        float viewableH = maxWidth / cardAspect;  // scene height visible at width-fit
-        float fitZoom = totalHeight / std::max(viewableH, 1.0f);
-        _viewZoom = std::max(fitZoom, 1.0f);
-        // Pan to top of first page
-        _viewPanY = -(totalHeight * 0.5f - firstPageH * 0.5f / _viewZoom);
+        float viewableH = maxWidth / cardAspect;
+        _fitPageHeight = viewableH;
     }
 
-    yinfo("YPdf::renderAllPages: {} pages, scene={}x{} initialZoom={:.2f}",
-          _pageCount, maxWidth, totalHeight, _viewZoom);
+    yinfo("YPdf::renderAllPages: {} pages, scene={}x{}", _pageCount, maxWidth, totalHeight);
 
     // Render each page at its vertical offset
     float yOffset = 0.0f;
@@ -447,9 +446,10 @@ float YPdf::placeGlyphs(const std::string& text,
                          float posX, float posY,
                          float effectiveSize,
                          const PdfTextState& textState) {
-    if (!_atlas || text.empty()) return 0.0f;
+    if (!_builder || !_builder->hasCustomAtlas() || text.empty()) return 0.0f;
 
-    float fontBaseSize = _atlas->getFontSize();
+    auto atlas = _builder->customAtlas();
+    float fontBaseSize = atlas->getFontSize();
     if (fontBaseSize <= 0.0f) fontBaseSize = 1.0f;
 
     // Two scales:
@@ -502,10 +502,10 @@ float YPdf::placeGlyphs(const std::string& text,
             continue;
         }
 
-        // Load glyph from atlas
-        uint32_t glyphIndex = _atlas->loadGlyph(fontId, codepoint);
+        // Load glyph from custom atlas
+        uint32_t glyphIndex = atlas->loadGlyph(fontId, codepoint);
 
-        const auto& metadata = _atlas->getGlyphMetadata();
+        const auto& metadata = atlas->getGlyphMetadata();
         if (glyphIndex >= metadata.size()) {
             ydebug("YPdf::placeGlyphs: MISSING glyph cp={} fontId={} glyphIdx={} metaSize={}",
                    codepoint, fontId, glyphIndex, metadata.size());
@@ -517,22 +517,16 @@ float YPdf::placeGlyphs(const std::string& text,
         }
 
         const auto& glyph = metadata[glyphIndex];
-        if (_glyphs.size() < 5) {
-            ydebug("YPdf::placeGlyphs: cp='{}' fontId={} glyphIdx={} bearing=({:.1f},{:.1f}) size=({:.1f},{:.1f}) advance={:.1f}",
-                   static_cast<char>(codepoint), fontId, glyphIndex,
-                   glyph._bearingX, glyph._bearingY, glyph._sizeX, glyph._sizeY, glyph._advance);
-        }
 
-        // Place glyph in scene coordinates
-        PdfGlyph g = {};
+        // Place glyph via YDrawGlyph into builder
+        YDrawGlyph g = {};
         g.x = cursorX + glyph._bearingX * scaleScene;
         g.y = posY - glyph._bearingY * scaleScene;
-        g.width = glyph._sizeX * scaleScene;
-        g.height = glyph._sizeY * scaleScene;
-        g.glyphIndex = glyphIndex;
+        g.setSize(glyph._sizeX * scaleScene, glyph._sizeY * scaleScene);
+        g.setGlyphLayerFlags(static_cast<uint16_t>(glyphIndex), 0,
+                             YDrawBuilder::GLYPH_FLAG_CUSTOM_ATLAS);
         g.color = _textColor;
-        g.layer = 0;
-        _glyphs.push_back(g);
+        _builder->glyphsMut().push_back(g);
 
         // Advance cursor in scene coords
         float sceneAdvance = glyph._advance * scaleScene + textState.charSpacing;
@@ -551,7 +545,7 @@ float YPdf::placeGlyphs(const std::string& text,
 
     ydebug("placeGlyphs: result totalAdvance={:.2f} cursorX={:.1f} (startX={:.1f} delta={:.1f}) "
            "glyphsNow={}",
-           totalTextAdvance, cursorX, posX, cursorX - posX, _glyphs.size());
+           totalTextAdvance, cursorX, posX, cursorX - posX, _builder->glyphCount());
 
     return totalTextAdvance;
 }
@@ -662,280 +656,89 @@ void YPdf::extractFonts(pdfio_obj_t* pageObj) {
 }
 
 //=============================================================================
-// Font registration
+// Font registration — delegates to builder
 //=============================================================================
 
 int YPdf::addFont(const std::string& ttfPath) {
-    if (!_atlas || !_fontManager) return -1;
+    if (!_builder) return -1;
 
-    auto stem = std::filesystem::path(ttfPath).stem().string();
-    auto cacheDir = _fontManager->getCacheDir();
-    auto cdbPath = cacheDir + "/" + stem + ".cdb";
-
-    // Check local cache
-    auto it = _fontIdCache.find(cdbPath);
-    if (it != _fontIdCache.end()) return it->second;
-
-    // Generate CDB if missing
-    if (!std::filesystem::exists(cdbPath)) {
-        auto provider = _fontManager->getCdbProvider();
-        if (!provider) {
-            yerror("YPdf::addFont: no CDB provider available");
-            return -1;
-        }
-
-        MsdfCdbConfig cfg;
-        cfg.ttfPath = ttfPath;
-        cfg.cdbPath = cdbPath;
-
-        if (auto res = provider->generate(cfg); !res) {
-            yerror("YPdf::addFont: CDB generation failed for {}: {}",
-                   ttfPath, res.error().message());
-            return -1;
-        }
+    auto result = _builder->addFont(ttfPath);
+    if (!result) {
+        yerror("YPdf::addFont: failed for {}", ttfPath);
+        return -1;
     }
-
-    int fontId = _atlas->openCdb(cdbPath);
-    if (fontId >= 0) {
-        _fontIdCache[cdbPath] = fontId;
-    }
-    return fontId;
+    return *result;
 }
 
 //=============================================================================
-// Scene bounds computation
-//=============================================================================
-
-void YPdf::computeSceneBounds() {
-    if (_hasExplicitBounds) return;
-
-    _sceneMinX = 1e10f;
-    _sceneMinY = 1e10f;
-    _sceneMaxX = -1e10f;
-    _sceneMaxY = -1e10f;
-
-    for (const auto& g : _glyphs) {
-        _sceneMinX = std::min(_sceneMinX, g.x);
-        _sceneMinY = std::min(_sceneMinY, g.y);
-        _sceneMaxX = std::max(_sceneMaxX, g.x + g.width);
-        _sceneMaxY = std::max(_sceneMaxY, g.y + g.height);
-    }
-
-    float padX = (_sceneMaxX - _sceneMinX) * 0.05f;
-    float padY = (_sceneMaxY - _sceneMinY) * 0.05f;
-    _sceneMinX -= padX;
-    _sceneMinY -= padY;
-    _sceneMaxX += padX;
-    _sceneMaxY += padY;
-
-    if (_sceneMinX >= _sceneMaxX) {
-        _sceneMinX = 0; _sceneMaxX = 100;
-    }
-    if (_sceneMinY >= _sceneMaxY) {
-        _sceneMinY = 0; _sceneMaxY = 100;
-    }
-}
-
-//=============================================================================
-// Grid building — glyphs only (no SDF primitives)
-//=============================================================================
-
-void YPdf::buildGrid() {
-    if (!_derivedStorage.isValid() || _gridWidth == 0 || _gridHeight == 0) return;
-
-    uint32_t cellStride = 1 + MAX_ENTRIES_PER_CELL;
-    uint32_t gridTotalU32 = _gridWidth * _gridHeight * cellStride;
-    uint32_t* grid = reinterpret_cast<uint32_t*>(_derivedStorage.data);
-
-    std::memset(grid, 0, gridTotalU32 * sizeof(uint32_t));
-
-    uint32_t glyphsPlaced = 0;
-    uint32_t glyphsDropped = 0;
-    uint32_t maxCellCount = 0;
-
-    for (uint32_t gi = 0; gi < static_cast<uint32_t>(_glyphs.size()); gi++) {
-        const auto& g = _glyphs[gi];
-
-        uint32_t cellMinX = static_cast<uint32_t>(
-            std::clamp((g.x - _sceneMinX) / _cellSize, 0.0f, float(_gridWidth - 1)));
-        uint32_t cellMaxX = static_cast<uint32_t>(
-            std::clamp((g.x + g.width - _sceneMinX) / _cellSize, 0.0f, float(_gridWidth - 1)));
-        uint32_t cellMinY = static_cast<uint32_t>(
-            std::clamp((g.y - _sceneMinY) / _cellSize, 0.0f, float(_gridHeight - 1)));
-        uint32_t cellMaxY = static_cast<uint32_t>(
-            std::clamp((g.y + g.height - _sceneMinY) / _cellSize, 0.0f, float(_gridHeight - 1)));
-
-        bool placed = false;
-        for (uint32_t cy = cellMinY; cy <= cellMaxY; cy++) {
-            for (uint32_t cx = cellMinX; cx <= cellMaxX; cx++) {
-                uint32_t cellIndex = cy * _gridWidth + cx;
-                uint32_t cellOffset = cellIndex * cellStride;
-                uint32_t count = grid[cellOffset];
-                if (count < MAX_ENTRIES_PER_CELL) {
-                    grid[cellOffset + 1 + count] = gi | GLYPH_BIT;
-                    grid[cellOffset] = count + 1;
-                    placed = true;
-                    if (count + 1 > maxCellCount) maxCellCount = count + 1;
-                }
-            }
-        }
-        if (placed) glyphsPlaced++;
-        else glyphsDropped++;
-    }
-
-    yinfo("YPdf::buildGrid: grid={}x{} cellSize={:.1f} glyphs={} placed={} "
-          "DROPPED={} maxCellCount={}/{}",
-          _gridWidth, _gridHeight, _cellSize, _glyphs.size(),
-          glyphsPlaced, glyphsDropped, maxCellCount, MAX_ENTRIES_PER_CELL);
-}
-
-//=============================================================================
-// Compute derived storage size (grid + glyphs)
+// GPU helpers
 //=============================================================================
 
 uint32_t YPdf::computeDerivedSize() const {
-    if (_glyphs.empty()) return 0;
-
-    // Estimate grid dimensions from current scene bounds
-    float sceneWidth = _sceneMaxX - _sceneMinX;
-    float sceneHeight = _sceneMaxY - _sceneMinY;
-    float sceneArea = sceneWidth * sceneHeight;
-
-    uint32_t gridW = 0, gridH = 0;
-    if (!_glyphs.empty() && sceneArea > 0) {
-        float cs = _cellSize;
-        if (cs <= 0.0f) {
-            float avgGlyphH = 0.0f;
-            for (const auto& g : _glyphs) avgGlyphH += g.height;
-            avgGlyphH /= _glyphs.size();
-            cs = avgGlyphH * 2.0f;
-            float minCS = std::sqrt(sceneArea / 65536.0f);
-            float maxCS = std::sqrt(sceneArea / 16.0f);
-            cs = std::clamp(cs, minCS, maxCS);
-        }
-        gridW = std::max(1u, static_cast<uint32_t>(std::ceil(sceneWidth / cs)));
-        gridH = std::max(1u, static_cast<uint32_t>(std::ceil(sceneHeight / cs)));
-        const uint32_t MAX_GRID_DIM = 2048;
-        gridW = std::min(gridW, MAX_GRID_DIM);
-        gridH = std::min(gridH, MAX_GRID_DIM);
+    if (!_builder) return 0;
+    const auto& gridData = _builder->gridStaging();
+    uint32_t gridBytes = static_cast<uint32_t>(gridData.size()) * sizeof(uint32_t);
+    uint32_t glyphBytes = static_cast<uint32_t>(
+        _builder->glyphs().size() * sizeof(YDrawGlyph));
+    uint32_t total = gridBytes + glyphBytes;
+    if (_builder->hasCustomAtlas()) {
+        uint32_t atlasHeaderBytes = 4 * sizeof(uint32_t);
+        uint32_t glyphMetaBytes = static_cast<uint32_t>(
+            _builder->customAtlas()->getGlyphMetadata().size() * sizeof(GlyphMetadataGPU));
+        total += atlasHeaderBytes + glyphMetaBytes;
     }
-
-    uint32_t cellStride = 1 + MAX_ENTRIES_PER_CELL;
-    uint32_t gridBytes = gridW * gridH * cellStride * sizeof(uint32_t);
-    uint32_t glyphBytes = static_cast<uint32_t>(_glyphs.size() * sizeof(PdfGlyph));
-    uint32_t glyphMetaBytes = static_cast<uint32_t>(_atlas->getGlyphMetadata().size() * sizeof(GlyphMetadataGPU));
-    return gridBytes + glyphBytes + glyphMetaBytes;
+    return total;
 }
 
-//=============================================================================
-// Rebuild and upload — compute grid, copy data to GPU buffer
-//=============================================================================
-
-Result<void> YPdf::rebuildAndUpload() {
-    computeSceneBounds();
-
-    float sceneWidth = _sceneMaxX - _sceneMinX;
-    float sceneHeight = _sceneMaxY - _sceneMinY;
-
-    uint32_t gridW = 0, gridH = 0;
-    float cellSize = _cellSize;
-
-    if (!_glyphs.empty()) {
-        float sceneArea = sceneWidth * sceneHeight;
-        if (cellSize <= 0.0f) {
-            float avgGlyphH = 0.0f;
-            for (const auto& g : _glyphs) {
-                avgGlyphH += g.height;
-            }
-            avgGlyphH /= _glyphs.size();
-            cellSize = avgGlyphH * 2.0f;
-            float minCellSize = std::sqrt(sceneArea / 65536.0f);
-            float maxCellSize = std::sqrt(sceneArea / 16.0f);
-            cellSize = std::clamp(cellSize, minCellSize, maxCellSize);
-        }
-        gridW = std::max(1u, static_cast<uint32_t>(std::ceil(sceneWidth / cellSize)));
-        gridH = std::max(1u, static_cast<uint32_t>(std::ceil(sceneHeight / cellSize)));
-        const uint32_t MAX_GRID_DIM = 2048;
-        if (gridW > MAX_GRID_DIM) { gridW = MAX_GRID_DIM; cellSize = sceneWidth / gridW; }
-        if (gridH > MAX_GRID_DIM) { gridH = MAX_GRID_DIM; cellSize = std::max(cellSize, sceneHeight / gridH); }
-    }
-
-    uint32_t cellStride = 1 + MAX_ENTRIES_PER_CELL;
-    uint32_t gridTotalU32 = gridW * gridH * cellStride;
-    uint32_t gridBytes = gridTotalU32 * sizeof(uint32_t);
-    uint32_t glyphBytes = static_cast<uint32_t>(_glyphs.size() * sizeof(PdfGlyph));
-    const auto& glyphMeta = _atlas->getGlyphMetadata();
-    uint32_t glyphMetaBytes = static_cast<uint32_t>(glyphMeta.size() * sizeof(GlyphMetadataGPU));
-    uint32_t derivedTotalSize = gridBytes + glyphBytes + glyphMetaBytes;
-
-    yinfo("YPdf::rebuild: grid={}x{} cellSize={:.1f} derivedTotal={} "
-          "allocated={} glyphs={} glyphMeta={} zoom={:.2f}",
-          gridW, gridH, cellSize, derivedTotalSize,
-          _derivedStorage.isValid() ? _derivedStorage.size : 0,
-          _glyphs.size(), glyphMeta.size(), _viewZoom);
-
-    // Allocate or reallocate derived storage if needed
-    if (derivedTotalSize > 0) {
-        if (!_derivedStorage.isValid()) {
-            auto storageResult = _cardMgr->bufferManager()->allocateBuffer(metadataSlotIndex(), "derived", derivedTotalSize);
-            if (!storageResult) {
-                return Err<void>("YPdf::rebuild: failed to allocate derived storage");
-            }
-            _derivedStorage = *storageResult;
-        } else if (derivedTotalSize > _derivedStorage.size) {
-            auto storageResult = _cardMgr->bufferManager()->allocateBuffer(metadataSlotIndex(), "derived", derivedTotalSize);
-            if (!storageResult) {
-                _derivedStorage = StorageHandle::invalid();
-                return Err<void>("YPdf::rebuild: failed to reallocate derived storage");
-            }
-            _derivedStorage = *storageResult;
-        }
-    }
-
-    if (_derivedStorage.isValid() && derivedTotalSize > 0) {
-        uint8_t* base = _derivedStorage.data;
-        uint32_t offset = 0;
-
-        // Zero entire buffer
-        std::memset(base, 0, _derivedStorage.size);
-
-        _gridWidth = gridW;
-        _gridHeight = gridH;
-        _cellSize = cellSize;
-        _gridOffset = (_derivedStorage.offset + offset) / sizeof(float);
-        offset += gridBytes;
-
-        buildGrid();
-
-        _glyphOffset = (_derivedStorage.offset + offset) / sizeof(float);
-        if (!_glyphs.empty()) {
-            std::memcpy(base + offset, _glyphs.data(), glyphBytes);
-        }
-        offset += glyphBytes;
-
-        // Upload glyph metadata (uvMin, uvMax, etc.) for shader
-        _glyphMetaOffset = (_derivedStorage.offset + offset) / sizeof(float);
-        if (!glyphMeta.empty()) {
-            std::memcpy(base + offset, glyphMeta.data(), glyphMetaBytes);
-        }
-
-        _cardMgr->bufferManager()->markBufferDirty(_derivedStorage);
-    }
-
-    _metadataDirty = true;
-    return Ok();
+void YPdf::uploadGlyphData() {
+    if (!_derivedStorage.isValid() || !_builder || _builder->glyphs().empty()) return;
+    uint32_t localOff = _glyphOffset * sizeof(float) - _derivedStorage.offset;
+    auto& glyphs = _builder->glyphsMut();
+    std::memcpy(_derivedStorage.data + localOff, glyphs.data(),
+                glyphs.size() * sizeof(YDrawGlyph));
+    _cardMgr->bufferManager()->markBufferDirty(_derivedStorage);
 }
 
-//=============================================================================
-// Metadata upload — 64-byte struct with f16 zoom, i16 pan encoding
-//=============================================================================
+void YPdf::cardPixelToScene(float cardX, float cardY, float& sceneX, float& sceneY) {
+    float cardPixelW = static_cast<float>(_widthCells * _cellWidth);
+    float cardPixelH = static_cast<float>(_heightCells * _cellHeight);
+    if (cardPixelW <= 0 || cardPixelH <= 0) { sceneX = sceneY = 0; return; }
+
+    float contentW = _builder->sceneMaxX() - _builder->sceneMinX();
+    float contentH = _builder->sceneMaxY() - _builder->sceneMinY();
+    float centerX = _builder->sceneMinX() + contentW * 0.5f;
+    float centerY = _builder->sceneMinY() + contentH * 0.5f;
+    float viewHalfW = contentW * 0.5f / _viewZoom;
+    float viewHalfH = contentH * 0.5f / _viewZoom;
+    float viewMinX = centerX - viewHalfW + _viewPanX;
+    float viewMinY = centerY - viewHalfH + _viewPanY;
+    float viewW = contentW / _viewZoom;
+    float viewH = contentH / _viewZoom;
+
+    float cardAspect = cardPixelW / std::max(cardPixelH, 1.0f);
+    float viewAspect = viewW / std::max(viewH, 1e-6f);
+    float uvX = cardX / cardPixelW;
+    float uvY = cardY / cardPixelH;
+
+    if (viewAspect < cardAspect) {
+        float visibleW = viewH * cardAspect;
+        float offsetX = (visibleW - viewW) * 0.5f;
+        sceneX = viewMinX - offsetX + uvX * visibleW;
+        sceneY = viewMinY + uvY * viewH;
+    } else {
+        float visibleH = viewW / cardAspect;
+        float offsetY = (visibleH - viewH) * 0.5f;
+        sceneX = viewMinX + uvX * viewW;
+        sceneY = viewMinY - offsetY + uvY * visibleH;
+    }
+}
 
 Result<void> YPdf::uploadMetadata() {
-    if (!_metaHandle.isValid()) {
-        return Err<void>("YPdf::uploadMetadata: invalid metadata handle");
+    if (!_metaHandle.isValid() || !_builder) {
+        return Err<void>("YPdf::uploadMetadata: invalid handle or builder");
     }
 
-    // Pack zoom as IEEE 754 half-float
+    // Pack zoom as f16 in upper 16 bits of flags
     uint32_t zoomBits;
     {
         uint32_t f32bits;
@@ -948,112 +751,164 @@ Result<void> YPdf::uploadMetadata() {
         zoomBits = sign | (static_cast<uint32_t>(exp) << 10) | mant;
     }
 
-    float contentW = _sceneMaxX - _sceneMinX;
-    float contentH = _sceneMaxY - _sceneMinY;
+    float sceneMinX = _builder->sceneMinX();
+    float sceneMinY = _builder->sceneMinY();
+    float sceneMaxX = _builder->sceneMaxX();
+    float sceneMaxY = _builder->sceneMaxY();
+    float contentW = sceneMaxX - sceneMinX;
+    float contentH = sceneMaxY - sceneMinY;
+
     int16_t panXi16 = static_cast<int16_t>(std::clamp(
         _viewPanX / std::max(contentW, 1e-6f) * 16384.0f, -32768.0f, 32767.0f));
     int16_t panYi16 = static_cast<int16_t>(std::clamp(
         _viewPanY / std::max(contentH, 1e-6f) * 16384.0f, -32768.0f, 32767.0f));
 
-    // Get atlas position from texture manager
-    AtlasPosition atlasPos = {0, 0};
-    if (_atlasTextureHandle.isValid()) {
-        atlasPos = _cardMgr->textureManager()->getAtlasPosition(_atlasTextureHandle);
-    }
-    uint32_t msdfAtlasW = _atlas->getAtlasWidth();
-    uint32_t msdfAtlasH = _atlas->getAtlasHeight();
+    float cellSize = _builder->cellSize();
 
-    Metadata meta = {};
-    meta.atlasXW = (atlasPos.x & 0xFFFF) | ((msdfAtlasW & 0xFFFF) << 16);
-    meta.atlasYH = (atlasPos.y & 0xFFFF) | ((msdfAtlasH & 0xFFFF) << 16);
+    YDrawMetadata meta = {};
+    meta.primitiveOffset = 0;
+    meta.primitiveCount = 0;
     meta.gridOffset = _gridOffset;
     meta.gridWidth = _gridWidth;
     meta.gridHeight = _gridHeight;
-    std::memcpy(&meta.cellSize, &_cellSize, sizeof(float));
+    std::memcpy(&meta.cellSize, &cellSize, sizeof(float));
     meta.glyphOffset = _glyphOffset;
-    meta.glyphCount = static_cast<uint32_t>(_glyphs.size());
-    std::memcpy(&meta.sceneMinX, &_sceneMinX, sizeof(float));
-    std::memcpy(&meta.sceneMinY, &_sceneMinY, sizeof(float));
-    std::memcpy(&meta.sceneMaxX, &_sceneMaxX, sizeof(float));
-    std::memcpy(&meta.sceneMaxY, &_sceneMaxY, sizeof(float));
-    meta.widthCells  = (_widthCells & 0xFFFF) | (static_cast<uint32_t>(static_cast<uint16_t>(panXi16)) << 16);
-    meta.heightCells = (_heightCells & 0xFFFF) | (static_cast<uint32_t>(static_cast<uint16_t>(panYi16)) << 16);
-    meta.flags = (_flags & 0xFFFF) | (zoomBits << 16);
-    meta.bgColor = _bgColor;
-
-    yinfo("YPdf::uploadMetadata: atlas=({},{}) msdfSize={}x{} grid={}x{} cellSize={} "
-          "scene=[{},{},{},{}] zoom={:.2f} pan=({:.1f},{:.1f}) size={}x{} bgColor={:#010x}",
-          atlasPos.x, atlasPos.y, msdfAtlasW, msdfAtlasH, meta.gridWidth, meta.gridHeight, _cellSize,
-          _sceneMinX, _sceneMinY, _sceneMaxX, _sceneMaxY,
-          _viewZoom, _viewPanX, _viewPanY,
-          _widthCells, _heightCells, meta.bgColor);
+    meta.glyphCount = static_cast<uint32_t>(_builder->glyphs().size());
+    std::memcpy(&meta.sceneMinX, &sceneMinX, sizeof(float));
+    std::memcpy(&meta.sceneMinY, &sceneMinY, sizeof(float));
+    std::memcpy(&meta.sceneMaxX, &sceneMaxX, sizeof(float));
+    std::memcpy(&meta.sceneMaxY, &sceneMaxY, sizeof(float));
+    meta.widthCells  = (_widthCells & 0xFFFF) |
+                       (static_cast<uint32_t>(static_cast<uint16_t>(panXi16)) << 16);
+    meta.heightCells = (_heightCells & 0xFFFF) |
+                       (static_cast<uint32_t>(static_cast<uint16_t>(panYi16)) << 16);
+    meta.flags = (_builder->flags() & 0xFFFF) | (zoomBits << 16);
+    meta.bgColor = _builder->bgColor();
 
     if (auto res = _cardMgr->writeMetadata(_metaHandle, &meta, sizeof(meta)); !res) {
         return Err<void>("YPdf::uploadMetadata: write failed");
     }
-
     return Ok();
 }
 
 //=============================================================================
-// Card lifecycle
+// Card lifecycle — follows YDrawImpl pattern
 //=============================================================================
 
 void YPdf::declareBufferNeeds() {
     _derivedStorage = StorageHandle::invalid();
+    if (!_builder) return;
 
-    if (!_glyphs.empty()) {
-        _cardMgr->bufferManager()->reserve(computeDerivedSize());
+    const auto& glyphs = _builder->glyphs();
+    if (glyphs.empty()) {
+        _builder->clearGridStaging();
+        return;
+    }
+
+    // Calculate grid if needed
+    if (_builder->gridStaging().empty()) {
+        _builder->calculate();
+
+        // Auto-compute zoom/pan to fit one page height after scene bounds are known
+        if (_fitPageHeight > 0.0f) {
+            float sceneMinY = _builder->sceneMinY();
+            float sceneMaxY = _builder->sceneMaxY();
+            float sceneH = sceneMaxY - sceneMinY;
+            if (sceneH > _fitPageHeight) {
+                _viewZoom = sceneH / _fitPageHeight;
+                float centerY = (sceneMinY + sceneMaxY) * 0.5f;
+                _viewPanY = _fitPageHeight * 0.5f - centerY;
+            }
+            _fitPageHeight = 0.0f;  // only apply once
+        }
+    }
+
+    // Reserve derived size (grid + glyphs + optional atlas)
+    uint32_t derivedSize = computeDerivedSize();
+    if (derivedSize > 0) {
+        _cardMgr->bufferManager()->reserve(derivedSize);
     }
 }
 
 Result<void> YPdf::allocateBuffers() {
-    if (!_glyphs.empty()) {
-        uint32_t derivedSize = computeDerivedSize();
-        if (derivedSize > 0 && !_derivedStorage.isValid()) {
-            auto storageResult = _cardMgr->bufferManager()->allocateBuffer(metadataSlotIndex(), "derived", derivedSize);
-            if (!storageResult) {
-                return Err<void>("YPdf::allocateBuffers: failed to allocate derived storage");
-            }
-            _derivedStorage = *storageResult;
-        }
-        _dirty = true;
-        yinfo("YPdf::allocateBuffers: {} glyphs, derived {} bytes",
-              _glyphs.size(), derivedSize);
+    if (!_builder) return Ok();
+
+    const auto& gridStaging = _builder->gridStaging();
+    const auto& glyphs = _builder->glyphs();
+
+    // Allocate derived storage (grid + glyphs + atlas)
+    uint32_t gridBytes = static_cast<uint32_t>(gridStaging.size()) * sizeof(uint32_t);
+    uint32_t glyphBytes = static_cast<uint32_t>(glyphs.size() * sizeof(YDrawGlyph));
+    uint32_t derivedSize = gridBytes + glyphBytes;
+
+    if (_builder->hasCustomAtlas()) {
+        uint32_t atlasHeaderBytes = 4 * sizeof(uint32_t);
+        uint32_t glyphMetaBytes = static_cast<uint32_t>(
+            _builder->customAtlas()->getGlyphMetadata().size() * sizeof(GlyphMetadataGPU));
+        derivedSize += atlasHeaderBytes + glyphMetaBytes;
     }
+
+    if (derivedSize > 0) {
+        auto storageResult = _cardMgr->bufferManager()->allocateBuffer(
+            metadataSlotIndex(), "derived", derivedSize);
+        if (!storageResult) {
+            return Err<void>("YPdf::allocateBuffers: derived alloc failed");
+        }
+        _derivedStorage = *storageResult;
+
+        uint8_t* base = _derivedStorage.data;
+        uint32_t offset = 0;
+
+        // Copy grid
+        _gridOffset = (_derivedStorage.offset + offset) / sizeof(float);
+        if (!gridStaging.empty()) {
+            std::memcpy(base + offset, gridStaging.data(), gridBytes);
+        }
+        offset += gridBytes;
+
+        // Copy glyphs
+        _glyphOffset = (_derivedStorage.offset + offset) / sizeof(float);
+        if (!glyphs.empty()) {
+            std::memcpy(base + offset, glyphs.data(), glyphBytes);
+        }
+        offset += glyphBytes;
+
+        _cardMgr->bufferManager()->markBufferDirty(_derivedStorage);
+    }
+
+    _gridWidth = _builder->gridWidth();
+    _gridHeight = _builder->gridHeight();
+    _metadataDirty = true;
+    _dirty = true;
+
     return Ok();
 }
 
 Result<void> YPdf::allocateTextures() {
-    if (!_atlas) {
-        return Ok();
-    }
+    if (!_builder || !_builder->hasCustomAtlas()) return Ok();
 
-    uint32_t atlasW = _atlas->getAtlasWidth();
-    uint32_t atlasH = _atlas->getAtlasHeight();
-    const auto& atlasData = _atlas->getAtlasData();
+    auto atlas = _builder->customAtlas();
+    uint32_t atlasW = atlas->getAtlasWidth();
+    uint32_t atlasH = atlas->getAtlasHeight();
+    const auto& atlasData = atlas->getAtlasData();
 
-    if (atlasData.empty() || atlasW == 0 || atlasH == 0) {
-        return Ok();
-    }
+    if (atlasData.empty() || atlasW == 0 || atlasH == 0) return Ok();
 
-    // Allocate handle
     auto allocResult = _cardMgr->textureManager()->allocate(atlasW, atlasH);
     if (!allocResult) {
-        return Err<void>("YPdf::allocateTextures: failed to allocate texture handle", allocResult);
+        return Err<void>("YPdf::allocateTextures: failed", allocResult);
     }
     _atlasTextureHandle = *allocResult;
-
-    yinfo("YPdf::allocateTextures: atlas {}x{} -> handle id={}", atlasW, atlasH, _atlasTextureHandle.id);
-
+    _dirty = true;
     return Ok();
 }
 
 Result<void> YPdf::writeTextures() {
-    if (_atlasTextureHandle.isValid() && _atlas) {
-        const auto& atlasData = _atlas->getAtlasData();
+    if (_atlasTextureHandle.isValid() && _builder && _builder->hasCustomAtlas()) {
+        const auto& atlasData = _builder->customAtlas()->getAtlasData();
         if (!atlasData.empty()) {
-            if (auto res = _cardMgr->textureManager()->write(_atlasTextureHandle, atlasData.data()); !res) {
+            if (auto res = _cardMgr->textureManager()->write(
+                    _atlasTextureHandle, atlasData.data()); !res) {
                 return Err<void>("YPdf::writeTextures: write failed", res);
             }
         }
@@ -1062,17 +917,70 @@ Result<void> YPdf::writeTextures() {
 }
 
 Result<void> YPdf::render() {
+    if (!_builder) return Ok();
+
     if (_dirty) {
-        if (auto res = rebuildAndUpload(); !res) {
-            return Err<void>("YPdf::render: rebuildAndUpload failed", res);
+        uint32_t derivedSize = computeDerivedSize();
+
+        if (derivedSize > 0) {
+            if (!_derivedStorage.isValid()) {
+                return Err<void>("YPdf::render: derived storage not allocated");
+            }
+
+            uint8_t* base = _derivedStorage.data;
+            std::memset(base, 0, _derivedStorage.size);
+            uint32_t offset = 0;
+
+            const auto& gridData = _builder->gridStaging();
+            uint32_t gridBytes = static_cast<uint32_t>(gridData.size()) * sizeof(uint32_t);
+            _gridWidth = _builder->gridWidth();
+            _gridHeight = _builder->gridHeight();
+            _gridOffset = (_derivedStorage.offset + offset) / sizeof(float);
+            std::memcpy(base + offset, gridData.data(), gridBytes);
+            offset += gridBytes;
+
+            uint32_t glyphBytes = static_cast<uint32_t>(
+                _builder->glyphs().size() * sizeof(YDrawGlyph));
+            _glyphOffset = (_derivedStorage.offset + offset) / sizeof(float);
+            const auto& glyphs = _builder->glyphs();
+            if (!glyphs.empty()) {
+                std::memcpy(base + offset, glyphs.data(), glyphBytes);
+            }
+            offset += glyphBytes;
+
+            if (_builder->hasCustomAtlas() && _atlasTextureHandle.isValid()) {
+                auto atlas = _builder->customAtlas();
+                auto atlasPos = _cardMgr->textureManager()->getAtlasPosition(
+                    _atlasTextureHandle);
+                uint32_t msdfAtlasW = atlas->getAtlasWidth();
+                uint32_t msdfAtlasH = atlas->getAtlasHeight();
+                const auto& glyphMeta = atlas->getGlyphMetadata();
+
+                uint32_t atlasHeader[4] = {
+                    (atlasPos.x & 0xFFFF) | ((msdfAtlasW & 0xFFFF) << 16),
+                    (atlasPos.y & 0xFFFF) | ((msdfAtlasH & 0xFFFF) << 16),
+                    static_cast<uint32_t>(glyphMeta.size()),
+                    0
+                };
+                std::memcpy(base + offset, atlasHeader, sizeof(atlasHeader));
+                offset += sizeof(atlasHeader);
+
+                if (!glyphMeta.empty()) {
+                    uint32_t metaBytes = static_cast<uint32_t>(
+                        glyphMeta.size() * sizeof(GlyphMetadataGPU));
+                    std::memcpy(base + offset, glyphMeta.data(), metaBytes);
+                }
+            }
+
+            _cardMgr->bufferManager()->markBufferDirty(_derivedStorage);
         }
+
+        _metadataDirty = true;
         _dirty = false;
     }
 
     if (_metadataDirty) {
-        if (auto res = uploadMetadata(); !res) {
-            return Err<void>("YPdf::render: metadata upload failed", res);
-        }
+        if (auto res = uploadMetadata(); !res) return res;
         _metadataDirty = false;
     }
 
@@ -1081,10 +989,7 @@ Result<void> YPdf::render() {
 
 Result<void> YPdf::dispose() {
     deregisterFromEvents();
-
-    if (_derivedStorage.isValid()) {
-        _derivedStorage = StorageHandle::invalid();
-    }
+    _derivedStorage = StorageHandle::invalid();
 
     if (_metaHandle.isValid() && _cardMgr) {
         if (auto res = _cardMgr->deallocateMetadata(_metaHandle); !res) {
@@ -1097,88 +1002,128 @@ Result<void> YPdf::dispose() {
 }
 
 void YPdf::suspend() {
-    if (_derivedStorage.isValid()) {
-        _derivedStorage = StorageHandle::invalid();
-    }
+    _derivedStorage = StorageHandle::invalid();
 }
 
 //=============================================================================
-// Event handling - zoom/pan
+// Event handling - zoom/pan + text selection
 //=============================================================================
 
 Result<void> YPdf::registerForEvents() {
     auto loopResult = base::EventLoop::instance();
-    if (!loopResult) {
-        return Err<void>("YPdf::registerForEvents: no EventLoop instance", loopResult);
-    }
+    if (!loopResult) return Err<void>("no EventLoop", loopResult);
     auto loop = *loopResult;
     auto self = sharedAs<base::EventListener>();
-
-    if (auto res = loop->registerListener(base::Event::Type::SetFocus, self, 1000); !res) {
-        return Err<void>("YPdf::registerForEvents: failed to register SetFocus", res);
-    }
-    if (auto res = loop->registerListener(base::Event::Type::CardScroll, self, 1000); !res) {
-        return Err<void>("YPdf::registerForEvents: failed to register CardScroll", res);
-    }
-    yinfo("YPdf card {} registered for events (priority 1000)", id());
+    if (auto res = loop->registerListener(base::Event::Type::SetFocus, self, 1000); !res) return res;
+    if (auto res = loop->registerListener(base::Event::Type::CardScroll, self, 1000); !res) return res;
+    if (auto res = loop->registerListener(base::Event::Type::CardMouseDown, self, 1000); !res) return res;
+    if (auto res = loop->registerListener(base::Event::Type::CardMouseUp, self, 1000); !res) return res;
+    if (auto res = loop->registerListener(base::Event::Type::CardMouseMove, self, 1000); !res) return res;
+    if (auto res = loop->registerListener(base::Event::Type::CardKeyDown, self, 1000); !res) return res;
     return Ok();
 }
 
 Result<void> YPdf::deregisterFromEvents() {
-    if (weak_from_this().expired()) {
-        return Ok();
-    }
+    if (weak_from_this().expired()) return Ok();
     auto loopResult = base::EventLoop::instance();
-    if (!loopResult) {
-        return Ok();
-    }
-    auto loop = *loopResult;
-    if (auto res = loop->deregisterListener(sharedAs<base::EventListener>()); !res) {
-        ywarn("YPdf::deregisterFromEvents: {}", error_msg(res));
-    }
+    if (!loopResult) return Ok();
+    (*loopResult)->deregisterListener(sharedAs<base::EventListener>());
     return Ok();
 }
 
 Result<bool> YPdf::onEvent(const base::Event& event) {
     if (event.type == base::Event::Type::SetFocus) {
         if (event.setFocus.objectId == id()) {
-            if (!_focused) {
-                _focused = true;
-                ydebug("YPdf::onEvent: focused (id={})", id());
-            }
+            _focused = true;
             return Ok(true);
         } else if (_focused) {
             _focused = false;
-            ydebug("YPdf::onEvent: unfocused (id={})", id());
         }
         return Ok(false);
     }
 
     if (event.type == base::Event::Type::CardScroll &&
         event.cardScroll.targetId == id()) {
-
-        float sceneW = _sceneMaxX - _sceneMinX;
-        float sceneH = _sceneMaxY - _sceneMinY;
+        float sceneW = _builder->sceneMaxX() - _builder->sceneMinX();
+        float sceneH = _builder->sceneMaxY() - _builder->sceneMinY();
 
         if (event.cardScroll.mods & GLFW_MOD_CONTROL) {
-            float zoomFactor = std::exp(event.cardScroll.dy * 0.1f);
-            float newZoom = std::clamp(_viewZoom * zoomFactor, 0.1f, 5000.0f);
+            float zoomDelta = event.cardScroll.dy * 0.1f * _viewZoom;
+            float newZoom = std::clamp(_viewZoom + zoomDelta, 0.1f, 1000.0f);
             if (newZoom != _viewZoom) {
                 _viewZoom = newZoom;
                 _metadataDirty = true;
             }
             return Ok(true);
         } else if (event.cardScroll.mods & GLFW_MOD_SHIFT) {
-            float dx = event.cardScroll.dy * 0.05f * sceneW / _viewZoom;
-            _viewPanX += dx;
+            _viewPanX += event.cardScroll.dy * 0.05f * sceneW / _viewZoom;
             _metadataDirty = true;
             return Ok(true);
         } else {
-            float dy = event.cardScroll.dy * 0.05f * sceneH / _viewZoom;
-            _viewPanY += dy;
+            _viewPanY += event.cardScroll.dy * 0.05f * sceneH / _viewZoom;
             _metadataDirty = true;
             return Ok(true);
         }
+    }
+
+    // Mouse selection
+    if (event.type == base::Event::Type::CardMouseDown &&
+        event.cardMouse.targetId == id() && event.cardMouse.button == 0) {
+        if (!_builder || _builder->glyphCount() == 0) return Ok(false);
+        if (!_sortedOrderBuilt) {
+            _builder->buildGlyphSortedOrder();
+            _sortedOrderBuilt = true;
+        }
+        float sx, sy;
+        cardPixelToScene(event.cardMouse.x, event.cardMouse.y, sx, sy);
+        int32_t idx = _builder->findNearestGlyphSorted(sx, sy);
+        _selStartSorted = idx;
+        _selEndSorted = idx;
+        _selecting = true;
+        _builder->setSelectionRange(_selStartSorted, _selEndSorted);
+        uploadGlyphData();
+        return Ok(true);
+    }
+
+    if (event.type == base::Event::Type::CardMouseMove &&
+        event.cardMouse.targetId == id() && _selecting) {
+        float sx, sy;
+        cardPixelToScene(event.cardMouse.x, event.cardMouse.y, sx, sy);
+        int32_t idx = _builder->findNearestGlyphSorted(sx, sy);
+        if (idx != _selEndSorted) {
+            _selEndSorted = idx;
+            _builder->setSelectionRange(_selStartSorted, _selEndSorted);
+            uploadGlyphData();
+        }
+        return Ok(true);
+    }
+
+    if (event.type == base::Event::Type::CardMouseUp &&
+        event.cardMouse.targetId == id() && event.cardMouse.button == 0) {
+        if (_selecting) {
+            float sx, sy;
+            cardPixelToScene(event.cardMouse.x, event.cardMouse.y, sx, sy);
+            _selEndSorted = _builder->findNearestGlyphSorted(sx, sy);
+            _selecting = false;
+            _builder->setSelectionRange(_selStartSorted, _selEndSorted);
+            uploadGlyphData();
+        }
+        return Ok(true);
+    }
+
+    // Ctrl+C: copy selected text
+    if (event.type == base::Event::Type::CardKeyDown &&
+        event.cardKey.targetId == id() &&
+        event.cardKey.key == GLFW_KEY_C &&
+        (event.cardKey.mods & GLFW_MOD_CONTROL)) {
+        std::string text = _builder->getSelectedText();
+        if (!text.empty()) {
+            auto loop = *base::EventLoop::instance();
+            loop->dispatch(base::Event::copyEvent(
+                std::make_shared<std::string>(text)));
+            yinfo("YPdf: copied {} bytes to clipboard", text.size());
+        }
+        return Ok(true);
     }
 
     return Ok(false);

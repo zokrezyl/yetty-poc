@@ -27,15 +27,12 @@
 // Pan fixedpoint: panScene = i16value / 16384.0 * sceneExtent
 // Zoom f16: IEEE 754 half-float
 // =============================================================================
-// YDrawGlyph layout (32 bytes = 8 floats):
+// YDrawGlyph layout (20 bytes = 5 u32s):
 //   offset 0: x (f32)        - position in scene coords
 //   offset 1: y (f32)
-//   offset 2: width (f32)    - size in scene coords
-//   offset 3: height (f32)
-//   offset 4: glyphIndex (u32) - index in glyphMetadata
-//   offset 5: color (u32)    - packed RGBA
-//   offset 6: layer (u32)
-//   offset 7: flags (u32)    - bit 0: use custom atlas (cardImageAtlas)
+//   offset 2: width (f16 low) | height (f16 high)
+//   offset 3: glyphIndex (u16 low) | layer (u8) | flags (u8)
+//   offset 4: color (u32)    - packed RGBA
 // =============================================================================
 // When FLAG_CUSTOM_ATLAS is set, after the glyph array in cardStorage:
 //   [atlasHeader: 4 u32s] [GlyphMetadataGPU: 10 floats each]
@@ -53,8 +50,13 @@ const YDRAW_FLAG_HAS_3D: u32 = 8u;
 const YDRAW_FLAG_UNIFORM_SCALE: u32 = 16u;
 const YDRAW_FLAG_CUSTOM_ATLAS: u32 = 32u;
 
-// Safety cap for entries per cell (variable-length grid has no hard limit)
-const YDRAW_MAX_ENTRIES_PER_CELL: u32 = 128u;
+// Per-glyph flag bits (in flags byte = bits 24-31 of glyphLayerFlags)
+const GLYPH_FLAG_CUSTOM_ATLAS: u32 = 1u;
+const GLYPH_FLAG_SELECTED: u32 = 2u;
+const SELECTION_COLOR: vec3<f32> = vec3<f32>(0.2, 0.56, 1.0);  // #3390FF
+
+// Safety cap for entries per cell (variable-length grid stores actual count)
+const YDRAW_MAX_ENTRIES_PER_CELL: u32 = 4096u;
 
 // Bit 31 set = glyph index, clear = primitive index
 const GLYPH_BIT: u32 = 0x80000000u;
@@ -258,7 +260,7 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
     var msdfAtlasW = 0u; var msdfAtlasH = 0u;
     var glyphMetaOff = 0u;
     if (hasCustomAtlas) {
-        let atlasHeaderOff = glyphOffset + glyphCount * 8u;
+        let atlasHeaderOff = glyphOffset + glyphCount * 5u;
         let atlasXW = bitcast<u32>(cardStorage[atlasHeaderOff]);
         let atlasYH = bitcast<u32>(cardStorage[atlasHeaderOff + 1u]);
         atlasX = atlasXW & 0xFFFFu;
@@ -280,7 +282,7 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
     let loopCount = min(cellEntryCount, YDRAW_MAX_ENTRIES_PER_CELL);
 
     let primSize = 24u;
-    let glyphSize = 8u;
+    let glyphSize = 5u;
 
     for (var i = 0u; i < loopCount; i++) {
         let rawIdx = bitcast<u32>(cardStorage[gridOffset + packedStart + 1u + i]);
@@ -292,14 +294,23 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
 
             let gx = cardStorage[gOffset + 0u];
             let gy = cardStorage[gOffset + 1u];
-            let gw = cardStorage[gOffset + 2u];
-            let gh = cardStorage[gOffset + 3u];
-            let gIdx = bitcast<u32>(cardStorage[gOffset + 4u]);
-            let gColorPacked = bitcast<u32>(cardStorage[gOffset + 5u]);
-            let gFlags = bitcast<u32>(cardStorage[gOffset + 7u]);
+            // Decode f16 width/height from packed u32
+            let whPacked = bitcast<u32>(cardStorage[gOffset + 2u]);
+            let gw = unpack2x16float(whPacked).x;
+            let gh = unpack2x16float(whPacked).y;
+            // Decode glyphIndex (u16), layer (u8), flags (u8)
+            let glfPacked = bitcast<u32>(cardStorage[gOffset + 3u]);
+            let gIdx = glfPacked & 0xFFFFu;
+            let gFlags = (glfPacked >> 24u) & 0xFFu;
+            let gColorPacked = bitcast<u32>(cardStorage[gOffset + 4u]);
 
             if (scenePos.x >= gx && scenePos.x < gx + gw &&
                 scenePos.y >= gy && scenePos.y < gy + gh) {
+
+                // Selection highlight (drawn behind glyph)
+                if ((gFlags & GLYPH_FLAG_SELECTED) != 0u) {
+                    resultColor = mix(resultColor, SELECTION_COLOR, 0.3);
+                }
 
                 let glyphUV = vec2<f32>(
                     (scenePos.x - gx) / gw,
@@ -307,7 +318,7 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
                 );
                 let gColor = unpackColor(gColorPacked);
 
-                if ((gFlags & 1u) != 0u && hasCustomAtlas) {
+                if ((gFlags & GLYPH_FLAG_CUSTOM_ATLAS) != 0u && hasCustomAtlas) {
                     // Custom atlas glyph — read UV from local glyph metadata in cardStorage
                     let metaOff = glyphMetaOff + gIdx * 10u;
                     let uvMinX = cardStorage[metaOff + 0u];

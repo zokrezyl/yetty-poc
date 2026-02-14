@@ -9,6 +9,7 @@
 #include <vector>
 #include <string>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 
 namespace yetty {
@@ -17,17 +18,66 @@ namespace yetty {
 namespace card { struct SDFPrimitive; }
 
 //=============================================================================
-// YDrawGlyph - Positioned glyph for GPU rendering (32 bytes)
+// YDrawGlyph - Positioned glyph for GPU rendering (20 bytes)
+//
+// Layout (5 u32s):
+//   u32 0: x (f32)           - position in scene coordinates
+//   u32 1: y (f32)
+//   u32 2: width (f16) | height (f16)  - glyph size as half-floats
+//   u32 3: glyphIndex (u16) | layer (u8) | flags (u8)
+//   u32 4: color (u32)       - RGBA packed
 //=============================================================================
 struct YDrawGlyph {
     float x, y;              // Position in scene coordinates
-    float width, height;     // Glyph size in scene coordinates
-    uint32_t glyphIndex;     // Index in glyphMetadata buffer
+    uint32_t widthHeight;    // width (f16 low) | height (f16 high)
+    uint32_t glyphLayerFlags; // glyphIndex (u16 low) | layer (u8) | flags (u8)
     uint32_t color;          // RGBA packed color
-    uint32_t layer;          // Draw order
-    uint32_t _pad;           // Padding for alignment
+
+    // Helpers for setting packed fields
+    void setSize(float w, float h) {
+        auto toF16 = [](float f) -> uint16_t {
+            uint32_t b;
+            std::memcpy(&b, &f, 4);
+            uint16_t sign = (b >> 16) & 0x8000;
+            int32_t  exp  = ((b >> 23) & 0xFF) - 127 + 15;
+            uint16_t mant = (b >> 13) & 0x3FF;
+            if (exp <= 0) { exp = 0; mant = 0; }
+            else if (exp >= 31) { exp = 31; mant = 0; }
+            return sign | (static_cast<uint16_t>(exp) << 10) | mant;
+        };
+        widthHeight = static_cast<uint32_t>(toF16(w)) |
+                      (static_cast<uint32_t>(toF16(h)) << 16);
+    }
+    void setGlyphLayerFlags(uint16_t glyphIdx, uint8_t layer, uint8_t flags) {
+        glyphLayerFlags = static_cast<uint32_t>(glyphIdx) |
+                          (static_cast<uint32_t>(layer) << 16) |
+                          (static_cast<uint32_t>(flags) << 24);
+    }
+    float width() const {
+        // Decode f16 from lower 16 bits
+        uint16_t h16 = static_cast<uint16_t>(widthHeight & 0xFFFF);
+        uint32_t sign = (h16 & 0x8000u) << 16;
+        uint32_t exp  = (h16 >> 10) & 0x1F;
+        uint32_t mant = h16 & 0x3FF;
+        uint32_t f32bits;
+        if (exp == 0) f32bits = sign; // zero/denorm→0
+        else if (exp == 31) f32bits = sign | 0x7F800000; // inf
+        else f32bits = sign | ((exp + 112) << 23) | (mant << 13);
+        float r; std::memcpy(&r, &f32bits, 4); return r;
+    }
+    float height() const {
+        uint16_t h16 = static_cast<uint16_t>((widthHeight >> 16) & 0xFFFF);
+        uint32_t sign = (h16 & 0x8000u) << 16;
+        uint32_t exp  = (h16 >> 10) & 0x1F;
+        uint32_t mant = h16 & 0x3FF;
+        uint32_t f32bits;
+        if (exp == 0) f32bits = sign;
+        else if (exp == 31) f32bits = sign | 0x7F800000;
+        else f32bits = sign | ((exp + 112) << 23) | (mant << 13);
+        float r; std::memcpy(&r, &f32bits, 4); return r;
+    }
 };
-static_assert(sizeof(YDrawGlyph) == 32, "YDrawGlyph must be 32 bytes");
+static_assert(sizeof(YDrawGlyph) == 20, "YDrawGlyph must be 20 bytes");
 
 //=============================================================================
 // YDrawMetadata - GPU metadata layout (64 bytes, matches shader)
@@ -127,6 +177,9 @@ public:
     // Font API
     //=========================================================================
     virtual Result<int> addFont(const std::string& ttfPath) = 0;
+    // Caller-specified font ID: registers font at the given ID.
+    // addText(..., fontId) will resolve through this mapping.
+    virtual Result<void> addFont(int fontId, const std::string& ttfPath) = 0;
     virtual int registerFont(const std::string& cdbPath,
                              const std::string& ttfPath = "",
                              MsdfCdbProvider::Ptr provider = nullptr) = 0;
@@ -172,6 +225,28 @@ public:
     virtual const std::vector<uint32_t>& gridStaging() const = 0;
     virtual void clearGridStaging() = 0;
     virtual const std::vector<YDrawGlyph>& glyphs() const = 0;
+    virtual std::vector<YDrawGlyph>& glyphsMut() = 0;
+
+    //=========================================================================
+    // Text selection
+    //=========================================================================
+
+    // Per-glyph flag bits (in flags byte = bits 24-31 of glyphLayerFlags)
+    static constexpr uint32_t GLYPH_FLAG_CUSTOM_ATLAS = 1;
+    static constexpr uint32_t GLYPH_FLAG_SELECTED = 2;
+
+    // Build sorted reading order (by Y then X). Call once after content is finalized.
+    virtual void buildGlyphSortedOrder() = 0;
+
+    // Find glyph nearest to scene position. Returns index in sorted order, or -1.
+    virtual int32_t findNearestGlyphSorted(float sceneX, float sceneY) = 0;
+
+    // Set selection range (sorted-order indices). Sets GLYPH_FLAG_SELECTED on glyphs.
+    // Pass (-1, -1) to clear.
+    virtual void setSelectionRange(int32_t startSorted, int32_t endSorted) = 0;
+
+    // Extract selected text as UTF-8 using atlas reverse lookup.
+    virtual std::string getSelectedText() = 0;
 
     //=========================================================================
     // Grid computation
