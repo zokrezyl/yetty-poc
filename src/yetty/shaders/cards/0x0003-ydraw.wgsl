@@ -4,6 +4,7 @@
 //
 // Uses shared SDF functions from lib/distfunctions.wgsl
 // Uses text rendering from lib/text.wgsl
+// Uses custom ydraw extensions from lib/ydraw.wgsl (color wheel, etc.)
 //
 // =============================================================================
 // Metadata layout (64 bytes = 16 u32s):
@@ -61,6 +62,90 @@ const YDRAW_MAX_ENTRIES_PER_CELL: u32 = 4096u;
 // Bit 31 set = glyph index, clear = primitive index
 const GLYPH_BIT: u32 = 0x80000000u;
 const INDEX_MASK: u32 = 0x7FFFFFFFu;
+
+// =============================================================================
+// Color Wheel Support
+// =============================================================================
+
+fn hsv2rgb(hsv: vec3<f32>) -> vec3<f32> {
+    let h = hsv.x * 6.0;
+    let s = hsv.y;
+    let v = hsv.z;
+    let i = floor(h);
+    let f = h - i;
+    let p = v * (1.0 - s);
+    let q = v * (1.0 - s * f);
+    let t = v * (1.0 - s * (1.0 - f));
+    let ii = i32(i) % 6;
+    if (ii == 0) { return vec3<f32>(v, t, p); }
+    if (ii == 1) { return vec3<f32>(q, v, p); }
+    if (ii == 2) { return vec3<f32>(p, v, t); }
+    if (ii == 3) { return vec3<f32>(p, q, v); }
+    if (ii == 4) { return vec3<f32>(t, p, v); }
+    return vec3<f32>(v, p, q);
+}
+
+fn renderColorWheel(p: vec2<f32>, center: vec2<f32>, outerR: f32, innerR: f32,
+                    hue: f32, sat: f32, val: f32, indicatorSize: f32) -> vec4<f32> {
+    let d = p - center;
+    let dist = length(d);
+    let angle = atan2(d.y, d.x);
+    let normAngle = (angle + 3.14159265) / (2.0 * 3.14159265);
+    let aa = 1.5;
+    let ringWidth = outerR - innerR;
+
+    // Hue ring
+    if (dist >= innerR && dist <= outerR) {
+        let color = hsv2rgb(vec3<f32>(normAngle, 1.0, 1.0));
+        let ringDist = min(dist - innerR, outerR - dist);
+        let alpha = clamp(ringDist / aa + 0.5, 0.0, 1.0);
+
+        // Hue indicator
+        let hueAngle = hue * 2.0 * 3.14159265 - 3.14159265;
+        let indPos = center + vec2<f32>(cos(hueAngle), sin(hueAngle)) * (innerR + ringWidth * 0.5);
+        let indDist = length(p - indPos);
+        if (indDist < indicatorSize) {
+            if (indDist < indicatorSize - 2.0) { return vec4<f32>(1.0, 1.0, 1.0, 1.0); }
+            return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+        }
+        return vec4<f32>(color, alpha);
+    }
+
+    // SV triangle
+    let triR = innerR * 0.85;
+    let hueAng = hue * 2.0 * 3.14159265;
+    let v0 = center + vec2<f32>(cos(hueAng), sin(hueAng)) * triR;
+    let v1 = center + vec2<f32>(cos(hueAng + 2.094395), sin(hueAng + 2.094395)) * triR;
+    let v2 = center + vec2<f32>(cos(hueAng + 4.18879), sin(hueAng + 4.18879)) * triR;
+
+    let d0 = v1 - v0; let d1 = v2 - v0; let d2 = p - v0;
+    let dot00 = dot(d0, d0); let dot01 = dot(d0, d1);
+    let dot02 = dot(d0, d2); let dot11 = dot(d1, d1); let dot12 = dot(d1, d2);
+    let invD = 1.0 / (dot00 * dot11 - dot01 * dot01);
+    let u = (dot11 * dot02 - dot01 * dot12) * invD;
+    let v = (dot00 * dot12 - dot01 * dot02) * invD;
+
+    if (u >= 0.0 && v >= 0.0 && u + v <= 1.0) {
+        let svS = clamp(1.0 - v - u * 0.5, 0.0, 1.0);
+        let svV = clamp(1.0 - v, 0.0, 1.0);
+        let color = hsv2rgb(vec3<f32>(hue, svS, svV));
+        let edge = min(u, min(v, 1.0 - u - v)) * triR * 2.0;
+        let alpha = clamp(edge / aa + 0.5, 0.0, 1.0);
+
+        // SV indicator
+        let selU = (1.0 - val) * 2.0 / 3.0 + val * (1.0 - sat) / 3.0;
+        let selV = 1.0 - val;
+        let selPos = v0 + d0 * selU + d1 * selV;
+        let selDist = length(p - selPos);
+        if (selDist < indicatorSize) {
+            if (selDist < indicatorSize - 2.0) { return vec4<f32>(1.0, 1.0, 1.0, 1.0); }
+            return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+        }
+        return vec4<f32>(color, alpha);
+    }
+
+    return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+}
 
 // =============================================================================
 // Main shader function - O(1) GRID LOOKUP
@@ -368,7 +453,25 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
 
             evalCount++;
 
+            // Check for special primitives (ColorWheel) that return color directly
             let primType = bitcast<u32>(cardStorage[primOffset + 0u]);
+            if (primType == SDF_COLOR_WHEEL) {
+                // ColorWheel: params[0-1]=center, [2]=outerR, [3]=innerR, [4]=hue, [5]=sat, [6]=val, [7]=indicatorSize
+                let cwCenter = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
+                let cwOuterR = cardStorage[primOffset + 4u];
+                let cwInnerR = cardStorage[primOffset + 5u];
+                let cwHue = cardStorage[primOffset + 6u];
+                let cwSat = cardStorage[primOffset + 7u];
+                let cwVal = cardStorage[primOffset + 8u];
+                let cwIndicator = cardStorage[primOffset + 9u];
+
+                let cwColor = renderColorWheel(scenePos, cwCenter, cwOuterR, cwInnerR,
+                                               cwHue, cwSat, cwVal, cwIndicator);
+                if (cwColor.a > 0.01) {
+                    resultColor = mix(resultColor, cwColor.rgb, cwColor.a);
+                }
+                continue;
+            }
 
             if (primType == 65u && hasCustomAtlas) {
                 // ---- ROTATED MSDF GLYPH (type 65) ----

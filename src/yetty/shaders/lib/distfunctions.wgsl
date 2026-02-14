@@ -50,6 +50,7 @@ const SDF_QUADRATIC_CIRCLE: u32 = 40u;
 const SDF_HYPERBOLA: u32 = 41u;
 const SDF_COOL_S: u32 = 42u;
 const SDF_CIRCLE_WAVE: u32 = 43u;
+const SDF_COLOR_WHEEL: u32 = 44u;
 
 // =============================================================================
 // SDF Functions
@@ -1162,6 +1163,20 @@ fn evaluateSDF(primOffset: u32, p: vec2<f32>) -> f32 {
             let tb = cardStorage[primOffset + 4u];
             let ra = cardStorage[primOffset + 5u];
             return sdCircleWave(p, center, tb, ra);
+        }
+        case SDF_COLOR_WHEEL: {
+            // ColorWheel: params[0-1]=center, [2]=outerR, [3]=innerR, [4]=hue
+            let center = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
+            let outerR = cardStorage[primOffset + 4u];
+            let innerR = cardStorage[primOffset + 5u];
+            let hue = cardStorage[primOffset + 6u];
+            // Return distance to nearest part (ring or triangle)
+            let d = p - center;
+            let dist = length(d);
+            // Distance to hue ring
+            let ringDist = abs(dist - (innerR + outerR) * 0.5) - (outerR - innerR) * 0.5;
+            // Simplified: just use ring for now (triangle handled in full evaluateColorWheel)
+            return ringDist;
         }
         default: {
             return 1e10;

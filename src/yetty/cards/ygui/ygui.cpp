@@ -331,6 +331,25 @@ public:
             }
         }
 
+        // Update hover for listbox items
+        _hoverListIdx = -1;
+        _hoverListWidget = nullptr;
+        for (auto& w : _widgets) {
+            auto hit = findListBoxAt(w, wx, wy);
+            if (hit.widget) {
+                Widget* listbox = hit.widget;
+                float itemH = listbox->rowHeight > 0 ? listbox->rowHeight : 24;
+                // hitY is in content coordinates, listbox->y is widget position
+                float localY = hit.hitY - listbox->y + listbox->scrollY;
+                int idx = static_cast<int>(localY / itemH);
+                if (idx >= 0 && idx < static_cast<int>(listbox->options.size())) {
+                    _hoverListIdx = idx;
+                    _hoverListWidget = listbox;
+                }
+                break;
+            }
+        }
+
         _dirty = true;
     }
 
@@ -369,15 +388,20 @@ public:
             _dirty = true;
         }
 
-        // Find clicked widget
-        Widget* clicked = nullptr;
+        // Find clicked widget (returns widget and effective hit coordinates)
+        HitResult hit = {nullptr, 0, 0};
         for (auto& w : _widgets) {
-            clicked = findWidgetAt(w, wx, wy);
-            if (clicked) {
-                ydebug("YGui: clicked widget id={} type={}", clicked->id, static_cast<int>(clicked->type));
+            hit = findWidgetAt(w, wx, wy);
+            if (hit.widget) {
+                ydebug("YGui: clicked widget id={} type={} at hitX={:.1f} hitY={:.1f}",
+                       hit.widget->id, static_cast<int>(hit.widget->type), hit.hitX, hit.hitY);
                 break;
             }
         }
+
+        Widget* clicked = hit.widget;
+        float hitX = hit.hitX;  // Use these for position-dependent click handling
+        float hitY = hit.hitY;
 
         if (!clicked) return;
 
@@ -414,21 +438,21 @@ public:
                 break;
 
             case WidgetType::Slider:
-                updateSliderValue(clicked, wx);
+                updateSliderValue(clicked, hitX);
                 break;
 
             case WidgetType::VScrollbar:
-                updateVScrollValue(clicked, wy);
+                updateVScrollValue(clicked, hitY);
                 break;
 
             case WidgetType::HScrollbar:
-                updateHScrollValue(clicked, wx);
+                updateHScrollValue(clicked, hitX);
                 break;
 
             case WidgetType::ChoiceBox: {
                 // Find which radio button was clicked
                 float optH = 24;
-                int optIdx = static_cast<int>((wy - clicked->y) / optH);
+                int optIdx = static_cast<int>((hitY - clicked->y) / optH);
                 if (optIdx >= 0 && optIdx < static_cast<int>(clicked->options.size())) {
                     clicked->selectedIndex = optIdx;
                     emitEvent(clicked, "change");
@@ -455,8 +479,8 @@ public:
                 float contentW = clicked->contentW > 0 ? clicked->contentW : viewW;
                 float contentH = clicked->contentH > 0 ? clicked->contentH : viewH;
 
-                float localX = wx - clicked->x;
-                float localY = wy - clicked->y;
+                float localX = hitX - clicked->x;
+                float localY = hitY - clicked->y;
 
                 // Vertical scrollbar region
                 if (localX >= viewW && contentH > viewH) {
@@ -483,6 +507,49 @@ public:
                     _dirty = true;
                     break;
                 }
+                break;
+            }
+
+            case WidgetType::TabBar: {
+                // Find which tab was clicked
+                float tabX = clicked->x + 4;
+                int tabIdx = 0;
+                for (auto& child : clicked->children) {
+                    float tabW = child->w > 0 ? child->w : 80;
+                    if (hitX >= tabX && hitX < tabX + tabW) {
+                        clicked->activeTab = tabIdx;
+                        emitEvent(clicked, "change");
+                        break;
+                    }
+                    tabX += tabW + 4;
+                    tabIdx++;
+                }
+                break;
+            }
+
+            case WidgetType::Popup: {
+                // Toggle popup open state (or close button handling)
+                clicked->flags ^= WIDGET_OPEN;
+                emitEvent(clicked, "click");
+                break;
+            }
+
+            case WidgetType::ListBox: {
+                // Find which item was clicked
+                float itemH = clicked->rowHeight;
+                float localY = hitY - clicked->y + clicked->scrollY;
+                int itemIdx = static_cast<int>(localY / itemH);
+                if (itemIdx >= 0 && itemIdx < static_cast<int>(clicked->options.size())) {
+                    clicked->selectedIndex = itemIdx;
+                    emitEvent(clicked, "change");
+                }
+                break;
+            }
+
+            case WidgetType::TableRow: {
+                // Row click - could be used for selection
+                clicked->flags ^= WIDGET_CHECKED;
+                emitEvent(clicked, "click");
                 break;
             }
 
@@ -516,11 +583,18 @@ public:
     void handleMouseScroll(float px, float py, float deltaX, float deltaY) {
         (void)deltaX;
 
+        // Convert to widget coordinate system
+        float wx = toWidgetX(px);
+        float wy = toWidgetY(py);
+
         // Find widget under cursor
         Widget* target = nullptr;
         for (auto& w : _widgets) {
-            target = findWidgetAt(w, px, py);
-            if (target) break;
+            auto hit = findWidgetAt(w, wx, wy);
+            if (hit.widget) {
+                target = hit.widget;
+                break;
+            }
         }
 
         if (target) {
@@ -545,6 +619,13 @@ public:
                 target->scrollY = std::clamp(target->scrollY - deltaY * 20.0f, 0.0f, maxScrollY);
                 target->scrollX = std::clamp(target->scrollX - deltaX * 20.0f, 0.0f, maxScrollX);
                 emitEvent(target, "scroll");
+                _dirty = true;
+            } else if (target->type == WidgetType::ListBox) {
+                // Scroll the listbox
+                float itemH = target->rowHeight;
+                float contentH = target->options.size() * itemH;
+                float maxScroll = std::max(0.0f, contentH - target->h);
+                target->scrollY = std::clamp(target->scrollY - deltaY * itemH, 0.0f, maxScroll);
                 _dirty = true;
             }
         }
@@ -654,6 +735,17 @@ private:
             else if (t == "vscrollbar" || t == "vscroll") w->type = WidgetType::VScrollbar;
             else if (t == "hscrollbar" || t == "hscroll") w->type = WidgetType::HScrollbar;
             else if (t == "scrollarea" || t == "scroll") w->type = WidgetType::ScrollArea;
+            // Table widgets
+            else if (t == "table") w->type = WidgetType::Table;
+            else if (t == "row" || t == "tr") w->type = WidgetType::TableRow;
+            else if (t == "cell" || t == "td") w->type = WidgetType::TableCell;
+            else if (t == "header" || t == "th") w->type = WidgetType::TableHeader;
+            // Additional widgets
+            else if (t == "tabbar" || t == "tabs") w->type = WidgetType::TabBar;
+            else if (t == "tab" || t == "tabitem") w->type = WidgetType::TabItem;
+            else if (t == "popup" || t == "dialog" || t == "modal") w->type = WidgetType::Popup;
+            else if (t == "listbox" || t == "list") w->type = WidgetType::ListBox;
+            else if (t == "tooltip") w->type = WidgetType::Tooltip;
         }
 
         if (node["x"]) w->x = node["x"].as<float>();
@@ -713,6 +805,41 @@ private:
         // ScrollArea content size
         if (node["content_w"]) w->contentW = node["content_w"].as<float>();
         if (node["content_h"]) w->contentH = node["content_h"].as<float>();
+
+        // Table properties
+        if (node["columns"] && node["columns"].IsSequence()) {
+            for (const auto& col : node["columns"]) {
+                w->columnWidths.push_back(col.as<float>());
+            }
+        }
+        if (node["row_height"]) w->rowHeight = node["row_height"].as<float>();
+
+        // Tab properties
+        if (node["active_tab"]) w->activeTab = node["active_tab"].as<int>();
+        if (node["active"]) w->activeTab = node["active"].as<int>();
+
+        // Tooltip
+        if (node["tooltip"]) w->tooltip = node["tooltip"].as<std::string>();
+
+        // Popup properties
+        if (node["modal"] && node["modal"].as<bool>()) w->modal = true;
+
+        // Header color
+        if (node["header_color"]) {
+            std::string colorStr = node["header_color"].as<std::string>();
+            if (colorStr[0] == '#') {
+                uint32_t rgb = static_cast<uint32_t>(std::stoul(colorStr.substr(1), nullptr, 16));
+                uint8_t r = (rgb >> 16) & 0xFF;
+                uint8_t g = (rgb >> 8) & 0xFF;
+                uint8_t b = rgb & 0xFF;
+                w->headerColor = 0xFF000000 | (b << 16) | (g << 8) | r;
+            }
+        }
+
+        // Auto-calculate ListBox height
+        if (w->type == WidgetType::ListBox && !w->options.empty() && w->h == 24) {
+            w->h = std::min(static_cast<float>(w->options.size()), 5.0f) * w->rowHeight;
+        }
 
         return w;
     }
@@ -937,14 +1064,37 @@ private:
             }
 
             case WidgetType::ColorPicker: {
-                // Color preview box + label
-                float boxSize = 20;
-                addBox(x, y + 2, boxSize, boxSize, w->colorValue, 2);
-                addBoxOutline(x, y + 2, boxSize, boxSize, 0xFF666666, 2);
-                if (!w->label.empty()) {
-                    addText(w->label, x + boxSize + 8, y + 4, w->fgColor);
+                // Full color wheel if widget is large enough, otherwise just preview box
+                if (w->w >= 80 && w->h >= 80) {
+                    // Convert ABGR color to HSV
+                    uint8_t r = w->colorValue & 0xFF;
+                    uint8_t g = (w->colorValue >> 8) & 0xFF;
+                    uint8_t b = (w->colorValue >> 16) & 0xFF;
+                    float rf = r / 255.0f, gf = g / 255.0f, bf = b / 255.0f;
+                    float cmax = std::max({rf, gf, bf});
+                    float cmin = std::min({rf, gf, bf});
+                    float delta = cmax - cmin;
+                    float hue = 0, sat = 0, val = cmax;
+                    if (delta > 0) {
+                        sat = delta / cmax;
+                        if (cmax == rf) hue = std::fmod((gf - bf) / delta + 6.0f, 6.0f) / 6.0f;
+                        else if (cmax == gf) hue = ((bf - rf) / delta + 2.0f) / 6.0f;
+                        else hue = ((rf - gf) / delta + 4.0f) / 6.0f;
+                    }
+                    float radius = std::min(w->w, w->h) / 2.0f - 4.0f;
+                    float cx = x + w->w / 2.0f;
+                    float cy = y + w->h / 2.0f;
+                    _builder->addColorWheel(cx, cy, radius, radius * 0.7f, hue, sat, val, 6.0f, _builder->primitiveCount());
+                } else {
+                    // Small preview box + label
+                    float boxSize = 20;
+                    addBox(x, y + 2, boxSize, boxSize, w->colorValue, 2);
+                    addBoxOutline(x, y + 2, boxSize, boxSize, 0xFF666666, 2);
+                    if (!w->label.empty()) {
+                        addText(w->label, x + boxSize + 8, y + 4, w->fgColor);
+                    }
+                    if (w->isHover()) addBoxOutline(x, y + 2, boxSize, boxSize, w->accentColor, 2);
                 }
-                if (w->isHover()) addBoxOutline(x, y + 2, boxSize, boxSize, w->accentColor, 2);
                 break;
             }
 
@@ -1085,6 +1235,201 @@ private:
                 }
                 break;
             }
+
+            case WidgetType::Table: {
+                // Table container with header and rows
+                addBox(x, y, w->w, w->h, w->bgColor, 2);
+                addBoxOutline(x, y, w->w, w->h, 0xFF555566, 2);
+
+                float rowH = w->rowHeight > 0 ? w->rowHeight : 24;
+                float cy = y;
+                for (auto& child : w->children) {
+                    // Render header/row inline with proper column handling
+                    float childH = child->h > 0 ? child->h : rowH;
+                    bool isHeader = (child->type == WidgetType::TableHeader);
+
+                    // Row background
+                    if (isHeader) {
+                        addBox(x, cy, w->w, childH, w->headerColor, 0);
+                    } else if (child->isHover()) {
+                        addBox(x, cy, w->w, childH, 0xFF333344, 0);
+                    }
+
+                    // Bottom border
+                    uint32_t borderColor = isHeader ? 0xFF555566 : 0xFF444455;
+                    addBox(x, cy + childH - 1, w->w, 1, borderColor, 0);
+
+                    // Render cells
+                    float cx = x;
+                    size_t colIdx = 0;
+                    for (auto& cell : child->children) {
+                        float colW = (colIdx < w->columnWidths.size()) ? w->columnWidths[colIdx] : 80;
+                        // Vertical separator
+                        if (colIdx > 0) {
+                            addBox(cx, cy, 1, childH, borderColor, 0);
+                        }
+                        // Cell text
+                        uint32_t textColor = isHeader ? 0xFFFFFFFF : w->fgColor;
+                        if (!cell->label.empty()) {
+                            addText(cell->label, cx + 6, cy + 4, textColor);
+                        }
+                        cx += colW;
+                        colIdx++;
+                    }
+
+                    cy += childH;
+                }
+                break;
+            }
+
+            case WidgetType::TableHeader:
+            case WidgetType::TableRow:
+            case WidgetType::TableCell: {
+                // These are now handled inline in Table case
+                // But keep this for standalone use
+                if (w->type == WidgetType::TableCell) {
+                    addText(w->label, x, y, w->fgColor);
+                }
+                break;
+            }
+
+            case WidgetType::TabBar: {
+                // Tab bar with horizontal tabs
+                addBox(x, y, w->w, w->h, w->bgColor, 4);
+
+                float tabX = x + 4;
+                int tabIdx = 0;
+                for (auto& child : w->children) {
+                    bool isActive = (tabIdx == w->activeTab);
+                    float tabW = child->w > 0 ? child->w : 80;
+                    float tabH = w->h - 4;
+
+                    // Tab background
+                    if (isActive) {
+                        addBox(tabX, y + 2, tabW, tabH, w->accentColor, 4);
+                    } else if (child->isHover()) {
+                        addBox(tabX, y + 2, tabW, tabH, 0xFF333344, 4);
+                    }
+
+                    // Tab label
+                    addText(child->label, tabX + 8, y + 6, isActive ? 0xFFFFFFFF : 0xFFAAAAAA);
+
+                    tabX += tabW + 4;
+                    tabIdx++;
+                }
+                break;
+            }
+
+            case WidgetType::TabItem: {
+                // Tab content panel (rendered when active)
+                if (w->isOpen()) {
+                    addBox(x, y, w->w, w->h, w->bgColor, 4);
+                    float cy = y + 4;
+                    for (auto& child : w->children) {
+                        renderWidget(child.get(), x + 4, cy);
+                        cy += child->h + 4;
+                    }
+                }
+                break;
+            }
+
+            case WidgetType::Popup: {
+                // Modal popup/dialog
+                if (w->isOpen()) {
+                    // Semi-transparent overlay if modal
+                    if (w->modal) {
+                        addBox(0, 0, _pixelWidth, _pixelHeight, 0x80000000, 0);
+                    }
+                    // Popup background with shadow effect
+                    addBox(x + 4, y + 4, w->w, w->h, 0x40000000, 8);  // Shadow
+                    addBox(x, y, w->w, w->h, w->bgColor, 8);
+                    addBoxOutline(x, y, w->w, w->h, w->accentColor, 8);
+
+                    // Title bar if label is set
+                    if (!w->label.empty()) {
+                        addBox(x, y, w->w, 28, w->headerColor, 8);
+                        addText(w->label, x + 8, y + 6, w->fgColor);
+                    }
+
+                    // Render children
+                    float contentY = y + (w->label.empty() ? 8 : 32);
+                    for (auto& child : w->children) {
+                        renderWidget(child.get(), x + 8, contentY);
+                        contentY += child->h + 4;
+                    }
+                }
+                break;
+            }
+
+            case WidgetType::ListBox: {
+                // Scrollable list of selectable items
+                addBox(x, y, w->w, w->h, w->bgColor, 4);
+                addBoxOutline(x, y, w->w, w->h, 0xFF444455, 4);
+
+                float itemH = w->rowHeight > 0 ? w->rowHeight : 24;
+                float contentH = w->options.size() * itemH;
+                bool needsScroll = contentH > w->h;
+                float scrollbarW = needsScroll ? 10 : 0;
+                float contentW = w->w - scrollbarW - 4;  // Account for scrollbar
+                float maxScroll = std::max(0.0f, contentH - w->h);
+
+                // Clamp scroll position
+                w->scrollY = std::clamp(w->scrollY, 0.0f, maxScroll);
+
+                int startIdx = static_cast<int>(w->scrollY / itemH);
+                int visibleCount = static_cast<int>(std::ceil(w->h / itemH)) + 1;
+                int endIdx = std::min(startIdx + visibleCount, static_cast<int>(w->options.size()));
+
+                for (int i = startIdx; i < endIdx; i++) {
+                    float itemY = y + i * itemH - w->scrollY;
+                    // Clip to widget bounds
+                    if (itemY + itemH <= y || itemY >= y + w->h) continue;
+
+                    bool isSelected = (i == w->selectedIndex);
+                    bool isHovered = (_hoverListWidget == w && i == _hoverListIdx);
+
+                    if (isSelected) {
+                        addBox(x + 2, itemY + 1, contentW, itemH - 2, w->accentColor, 2);
+                    } else if (isHovered) {
+                        addBox(x + 2, itemY + 1, contentW, itemH - 2, 0xFF333344, 2);
+                    }
+
+                    addText(w->options[i], x + 8, itemY + 4, w->fgColor);
+                }
+
+                // Scrollbar
+                if (needsScroll) {
+                    float trackH = w->h - 4;
+                    float thumbH = std::max(20.0f, trackH * w->h / contentH);
+                    float thumbY = y + 2 + (maxScroll > 0 ? (w->scrollY / maxScroll) * (trackH - thumbH) : 0);
+
+                    addBox(x + w->w - scrollbarW, y + 2, scrollbarW - 2, trackH, 0xFF222233, 4);
+                    addBox(x + w->w - scrollbarW + 1, thumbY, scrollbarW - 4, thumbH, 0xFF555566, 3);
+                }
+                break;
+            }
+
+            case WidgetType::Tooltip: {
+                // Tooltip is rendered separately when hovering
+                // This case handles if tooltip is used as a standalone widget
+                if (!w->label.empty()) {
+                    addBox(x, y, w->w, w->h, 0xF0222233, 4);
+                    addBoxOutline(x, y, w->w, w->h, 0xFF666677, 4);
+                    addText(w->label, x + 6, y + 4, w->fgColor);
+                }
+                break;
+            }
+        }
+
+        // Render tooltip on hover (for any widget with tooltip set)
+        if (w->isHover() && !w->tooltip.empty()) {
+            float tipX = x + w->w + 4;
+            float tipY = y;
+            float tipW = static_cast<float>(w->tooltip.length()) * 7 + 12;
+            float tipH = 22;
+            addBox(tipX, tipY, tipW, tipH, 0xF0222233, 4);
+            addBoxOutline(tipX, tipY, tipW, tipH, 0xFF666677, 4);
+            addText(w->tooltip, tipX + 6, tipY + 4, 0xFFFFFFFF);
         }
     }
 
@@ -1258,19 +1603,88 @@ private:
         if (hover) w->flags |= WIDGET_HOVER;
         else w->flags &= ~WIDGET_HOVER;
 
-        for (auto& child : w->children) {
-            updateHoverRecursive(child, px, py);
+        // For ScrollArea, transform coords to content space for children
+        if (w->type == WidgetType::ScrollArea && hover) {
+            float contentX = (px - w->x) + w->scrollX;
+            float contentY = (py - w->y) + w->scrollY;
+            for (auto& child : w->children) {
+                updateHoverContent(child, contentX, contentY);
+            }
+        } else {
+            for (auto& child : w->children) {
+                updateHoverRecursive(child, px, py);
+            }
         }
     }
 
-    Widget* findWidgetAt(WidgetPtr& w, float px, float py) {
+    void updateHoverContent(WidgetPtr& w, float contentX, float contentY) {
+        bool hover = w->contains(contentX, contentY);
+        if (hover) w->flags |= WIDGET_HOVER;
+        else w->flags &= ~WIDGET_HOVER;
+
+        // Handle nested ScrollArea
+        if (w->type == WidgetType::ScrollArea && hover) {
+            float nestedX = (contentX - w->x) + w->scrollX;
+            float nestedY = (contentY - w->y) + w->scrollY;
+            for (auto& child : w->children) {
+                updateHoverContent(child, nestedX, nestedY);
+            }
+        } else {
+            for (auto& child : w->children) {
+                updateHoverContent(child, contentX, contentY);
+            }
+        }
+    }
+
+    struct HitResult {
+        Widget* widget = nullptr;
+        float hitX = 0;  // Coordinates in the widget's coordinate space
+        float hitY = 0;
+    };
+
+    HitResult findWidgetAt(WidgetPtr& w, float px, float py) {
+        // For ScrollArea, transform mouse coords to content coords and check children
+        if (w->type == WidgetType::ScrollArea && w->contains(px, py)) {
+            // Convert to content coordinates (relative to ScrollArea content)
+            float contentX = (px - w->x) + w->scrollX;
+            float contentY = (py - w->y) + w->scrollY;
+            // Check children first (they're on top)
+            for (auto& child : w->children) {
+                auto hit = findWidgetAtContent(child, contentX, contentY);
+                if (hit.widget) return hit;
+            }
+            return {w.get(), px, py};
+        }
+
         // Check children first (they're on top)
         for (auto& child : w->children) {
-            Widget* found = findWidgetAt(child, px, py);
-            if (found) return found;
+            auto hit = findWidgetAt(child, px, py);
+            if (hit.widget) return hit;
         }
-        if (w->contains(px, py)) return w.get();
-        return nullptr;
+        if (w->contains(px, py)) return {w.get(), px, py};
+        return {nullptr, 0, 0};
+    }
+
+    // Helper for checking widgets in content coordinates (inside ScrollArea)
+    HitResult findWidgetAtContent(WidgetPtr& w, float contentX, float contentY) {
+        // For nested ScrollAreas, recurse with content coordinate transform
+        if (w->type == WidgetType::ScrollArea && w->contains(contentX, contentY)) {
+            float nestedX = (contentX - w->x) + w->scrollX;
+            float nestedY = (contentY - w->y) + w->scrollY;
+            for (auto& child : w->children) {
+                auto hit = findWidgetAtContent(child, nestedX, nestedY);
+                if (hit.widget) return hit;
+            }
+            return {w.get(), contentX, contentY};
+        }
+
+        // Check children first
+        for (auto& child : w->children) {
+            auto hit = findWidgetAtContent(child, contentX, contentY);
+            if (hit.widget) return hit;
+        }
+        if (w->contains(contentX, contentY)) return {w.get(), contentX, contentY};
+        return {nullptr, 0, 0};
     }
 
     Widget* findWidgetById(const std::string& id) {
@@ -1320,6 +1734,58 @@ private:
             }
         }
         return -1;
+    }
+
+    struct ListBoxHit {
+        Widget* widget = nullptr;
+        float hitY = 0;  // Y coordinate in widget's coordinate space
+    };
+
+    // Find a ListBox widget at the given coordinates, recursively searching through ScrollAreas
+    ListBoxHit findListBoxAt(WidgetPtr& w, float wx, float wy) {
+        // Handle ScrollArea - adjust coordinates for scroll offset
+        if (w->type == WidgetType::ScrollArea && w->contains(wx, wy)) {
+            // Convert to content coordinates
+            float contentX = (wx - w->x) + w->scrollX;
+            float contentY = (wy - w->y) + w->scrollY;
+            for (auto& child : w->children) {
+                auto hit = findListBoxAtContent(child, contentX, contentY);
+                if (hit.widget) return hit;
+            }
+        }
+        // Check children (not inside ScrollArea)
+        for (auto& child : w->children) {
+            auto hit = findListBoxAt(child, wx, wy);
+            if (hit.widget) return hit;
+        }
+        // Check this widget
+        if (w->type == WidgetType::ListBox && w->contains(wx, wy)) {
+            return {w.get(), wy};
+        }
+        return {nullptr, 0};
+    }
+
+    // Helper for finding ListBox in content coordinates (inside ScrollArea)
+    ListBoxHit findListBoxAtContent(WidgetPtr& w, float contentX, float contentY) {
+        // Handle nested ScrollArea
+        if (w->type == WidgetType::ScrollArea && w->contains(contentX, contentY)) {
+            float nestedX = (contentX - w->x) + w->scrollX;
+            float nestedY = (contentY - w->y) + w->scrollY;
+            for (auto& child : w->children) {
+                auto hit = findListBoxAtContent(child, nestedX, nestedY);
+                if (hit.widget) return hit;
+            }
+        }
+        // Check children
+        for (auto& child : w->children) {
+            auto hit = findListBoxAtContent(child, contentX, contentY);
+            if (hit.widget) return hit;
+        }
+        // Check this widget
+        if (w->type == WidgetType::ListBox && w->contains(contentX, contentY)) {
+            return {w.get(), contentY};
+        }
+        return {nullptr, 0};
     }
 
     void updateSliderValue(Widget* w, float wx) {
@@ -1563,10 +2029,12 @@ private:
     Widget* _pressed = nullptr;
     Widget* _openDropdown = nullptr;
     Widget* _hoverChoiceWidget = nullptr;
+    Widget* _hoverListWidget = nullptr;   // ListBox being hovered
     Widget* _scrollDragWidget = nullptr;  // ScrollArea being dragged
     bool _scrollDragVertical = false;     // true=vertical, false=horizontal
     int _hoverOptionIdx = -1;
     int _hoverChoiceIdx = -1;
+    int _hoverListIdx = -1;               // ListBox item hover index
 
     bool _dirty = true;
     bool _metadataDirty = true;

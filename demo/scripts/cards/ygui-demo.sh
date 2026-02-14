@@ -10,7 +10,7 @@ widgets:
     w: 440
     h: 380
     content_w: 500
-    content_h: 550
+    content_h: 900
     children:
       - type: button
         id: btn1
@@ -88,14 +88,13 @@ widgets:
         x: 230
         y: 100
         w: 150
-        h: 24
-        label: "Accent Color"
+        h: 150
         color: "#4488FF"
 
       - type: colorpicker
         id: bg
         x: 230
-        y: 130
+        y: 260
         w: 150
         h: 24
         label: "Background"
@@ -167,18 +166,122 @@ widgets:
                     h: 24
                     label: "Unstable API"
 
-      - type: label
+      # TabBar with content panels
+      - type: tabbar
+        id: tabs1
+        x: 10
+        y: 420
+        w: 300
+        h: 28
+        active: 0
+        children:
+          - type: tab
+            label: "General"
+            w: 80
+          - type: tab
+            label: "Display"
+            w: 80
+          - type: tab
+            label: "About"
+            w: 80
+
+      # Tab content panels (positioned below tabbar)
+      - type: panel
+        id: tab_panel_0
         x: 10
         y: 450
-        label: "Scroll down to see more! YGui Demo v1.0"
+        w: 300
+        h: 120
+        children:
+          - type: checkbox
+            id: auto_save
+            x: 10
+            y: 10
+            w: 200
+            h: 24
+            label: "Auto-save enabled"
+            checked: true
+          - type: slider
+            id: volume
+            x: 10
+            y: 40
+            w: 200
+            h: 24
+            label: "Volume"
+            value: 75
+            min: 0
+            max: 100
+          - type: button
+            id: reset_btn
+            x: 10
+            y: 80
+            w: 100
+            h: 28
+            label: "Reset"
 
+      # ListBox example (moved down)
+      - type: listbox
+        id: list1
+        x: 10
+        y: 580
+        w: 180
+        h: 120
+        row_height: 24
+        options:
+          - "Item One"
+          - "Item Two"
+          - "Item Three"
+          - "Item Four"
+          - "Item Five"
+          - "Item Six"
+          - "Item Seven"
+        selected: 1
+
+      # Table example
+      - type: table
+        id: tbl1
+        x: 10
+        y: 710
+        w: 300
+        h: 80
+        columns: [100, 100, 100]
+        row_height: 24
+        children:
+          - type: header
+            h: 24
+            children:
+              - type: cell
+                label: "Name"
+              - type: cell
+                label: "Value"
+              - type: cell
+                label: "Status"
+          - type: row
+            children:
+              - type: cell
+                label: "Alpha"
+              - type: cell
+                label: "123"
+              - type: cell
+                label: "OK"
+          - type: row
+            children:
+              - type: cell
+                label: "Beta"
+              - type: cell
+                label: "456"
+              - type: cell
+                label: "Warn"
+
+      # Button with tooltip
       - type: button
         id: btn_bottom
         x: 10
-        y: 480
+        y: 800
         w: 150
         h: 30
-        label: "Bottom Button"
+        label: "Hover Me"
+        tooltip: "This is a tooltip!"
 '
 
 PAYLOAD=$(echo -n "$YAML" | base64 -w0)

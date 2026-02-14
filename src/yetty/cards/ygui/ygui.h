@@ -33,6 +33,17 @@ enum class WidgetType : uint8_t {
     VScrollbar,       // Vertical scrollbar
     HScrollbar,       // Horizontal scrollbar
     ScrollArea,       // Scrollable container with children
+    // Table widgets
+    Table,            // Table container
+    TableRow,         // Table row
+    TableCell,        // Table cell
+    TableHeader,      // Table header row
+    // Additional widgets
+    TabBar,           // Tab container (horizontal tabs)
+    TabItem,          // Individual tab
+    Popup,            // Modal popup/dialog
+    ListBox,          // Scrollable list of selectable items
+    Tooltip,          // Hover tooltip
 };
 
 //=============================================================================
@@ -70,10 +81,24 @@ struct Widget {
     float scrollX = 0, scrollY = 0;     // Current scroll offset
     float contentW = 0, contentH = 0;   // Content size (for scroll range)
 
+    // Table properties
+    std::vector<float> columnWidths;    // Column widths for Table
+    float rowHeight = 24;               // Row height for Table/ListBox
+
+    // Tab properties
+    int activeTab = 0;                  // Active tab index for TabBar
+
+    // Tooltip
+    std::string tooltip;                // Tooltip text (shown on hover)
+
+    // Popup properties
+    bool modal = false;                 // Modal popup blocks input to other widgets
+
     // Styling
     uint32_t bgColor = 0xFF2A2A3E;
     uint32_t fgColor = 0xFFFFFFFF;
     uint32_t accentColor = 0xFF4488FF;
+    uint32_t headerColor = 0xFF3A3A4E; // Header background for tables
 
     // Children (for layout widgets)
     std::vector<std::shared_ptr<Widget>> children;

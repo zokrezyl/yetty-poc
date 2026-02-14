@@ -424,6 +424,15 @@ static void computeAABB(SDFPrimitive& prim) {
             prim.aabbMaxY = maxY;
             break;
         }
+        case SDFType::ColorWheel: {
+            // params[0-1]=center, params[2]=outerR
+            float r = prim.params[2] + expand;
+            prim.aabbMinX = prim.params[0] - r;
+            prim.aabbMinY = prim.params[1] - r;
+            prim.aabbMaxX = prim.params[0] + r;
+            prim.aabbMaxY = prim.params[1] + r;
+            break;
+        }
         // 3D primitives - not used for grid, set dummy AABB
         case SDFType::Sphere3D:
         case SDFType::Box3D:
@@ -580,6 +589,23 @@ public:
         std::memcpy(&glyphIdxF, &glyphIndex, sizeof(float));
         prim.params[5] = glyphIdxF;
         prim.fillColor = color;
+        return addPrimitive(prim);
+    }
+
+    uint32_t addColorWheel(float cx, float cy, float outerR, float innerR,
+                           float hue, float sat, float val,
+                           float indicatorSize, uint32_t layer) override {
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::ColorWheel);
+        prim.layer = layer;
+        prim.params[0] = cx;
+        prim.params[1] = cy;
+        prim.params[2] = outerR;
+        prim.params[3] = innerR;
+        prim.params[4] = hue;
+        prim.params[5] = sat;
+        prim.params[6] = val;
+        prim.params[7] = indicatorSize;
         return addPrimitive(prim);
     }
 
