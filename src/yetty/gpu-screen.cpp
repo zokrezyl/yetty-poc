@@ -3958,6 +3958,37 @@ bool GPUScreenImpl::handleCardOSCSequence(const std::string &sequence,
     return true;
   }
 
+  case OscCommandType::Update: {
+    // Find card by id or name
+    Card* card = nullptr;
+    if (!cmd.target.id.empty()) {
+      try {
+        uint32_t slotIndex = static_cast<uint32_t>(std::stoul(cmd.target.id));
+        card = getCardBySlotIndex(slotIndex);
+      } catch (...) {
+        // Try as name
+        card = getCardByName(cmd.target.id);
+      }
+    }
+    if (!card && !cmd.target.card.empty()) {
+      // --card can also be a name
+      card = getCardByName(cmd.target.card);
+    }
+    if (!card) {
+      if (response)
+        *response = OscResponse::error("update: card not found");
+      return false;
+    }
+
+    // Call the card's update method with args and payload
+    if (auto res = card->update(cmd.cardArgs, cmd.payload); !res) {
+      if (response)
+        *response = OscResponse::error("update failed: " + error_msg(res));
+      return false;
+    }
+    return true;
+  }
+
   default:
     if (response)
       *response = OscResponse::error("Card: unknown or unsupported command");
