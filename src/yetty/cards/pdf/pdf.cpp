@@ -56,7 +56,7 @@ public:
     const char* typeName() const override { return "pdf"; }
     uint32_t metadataSlotIndex() const override { return _metaHandle.offset / 64; }
 
-    void setCellSize(uint32_t cellWidth, uint32_t cellHeight) override {
+    void setCellSize(float cellWidth, float cellHeight) override {
         if (_cellWidth != cellWidth || _cellHeight != cellHeight) {
             _cellWidth = cellWidth;
             _cellHeight = cellHeight;
@@ -212,7 +212,7 @@ public:
         }
     }
 
-    Result<void> render() override {
+    Result<void> finalize() override {
         // Upload rasterized pixels to texture handle
         if (_needsUpload && !_pagePixels.empty()) {
             if (auto res = linkPixelsToHandle(); !res) {

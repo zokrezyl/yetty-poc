@@ -158,6 +158,13 @@ public:
                                       float angle, uint32_t glyphIndex,
                                       uint32_t color) = 0;
 
+    // Color wheel (HSV color picker)
+    // params: center, outerRadius, innerRadius, hue(0-1), sat(0-1), val(0-1), indicatorSize
+    virtual uint32_t addColorWheel(float cx, float cy, float outerR, float innerR,
+                                   float hue, float sat, float val,
+                                   float indicatorSize = 6.0f,
+                                   uint32_t layer = 0) = 0;
+
     //=========================================================================
     // Text API
     //=========================================================================

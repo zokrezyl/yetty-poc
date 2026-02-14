@@ -106,6 +106,7 @@ enum class SDFType : uint32_t {
     Hyperbola = 41,
     CoolS = 42,
     CircleWave = 43,
+    ColorWheel = 44,    // HSV color picker (hue ring + SV triangle)
     // Text glyph (handled specially)
     TextGlyph = 64,
     // Rotated MSDF glyph (as SDF primitive, for rare rotated text)
@@ -230,7 +231,7 @@ public:
     //=========================================================================
     Result<void> dispose() override = 0;
     void renderToStaging(float time) override = 0;
-    Result<void> render() override = 0;
+    Result<void> finalize() override = 0;
     const char* typeName() const override { return "hdraw"; }
     bool needsBuffer() const override { return true; }
 

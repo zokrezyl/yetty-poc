@@ -218,7 +218,7 @@ public:
         return Ok();
     }
 
-    Result<void> render() override {
+    Result<void> finalize() override {
         if (!_builder) return Ok();
 
         if (_metadataDirty) {

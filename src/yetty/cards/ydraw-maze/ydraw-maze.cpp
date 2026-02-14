@@ -521,7 +521,7 @@ Result<void> YDrawMaze::allocateBuffers() {
     return Ok();
 }
 
-Result<void> YDrawMaze::render() {
+Result<void> YDrawMaze::finalize() {
     if (!_builder) return Ok();
 
     if (_dirty) {

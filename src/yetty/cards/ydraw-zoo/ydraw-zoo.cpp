@@ -360,7 +360,7 @@ Result<void> YDrawZoo::allocateBuffers() {
     return Ok();
 }
 
-Result<void> YDrawZoo::render() {
+Result<void> YDrawZoo::finalize() {
     if (!_builder) return Ok();
 
     if (_dirty) {

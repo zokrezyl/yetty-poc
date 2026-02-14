@@ -581,7 +581,7 @@ Result<void> YText::uploadMetadata() {
     return Ok();
 }
 
-Result<void> YText::render() {
+Result<void> YText::finalize() {
     if (_metadataDirty) {
         if (auto res = uploadMetadata(); !res) {
             return Err<void>("YText::render: metadata upload failed", res);

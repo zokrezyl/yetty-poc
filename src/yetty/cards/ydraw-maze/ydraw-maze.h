@@ -74,7 +74,7 @@ public:
     void renderToStaging(float time) override;
     void declareBufferNeeds() override;
     Result<void> allocateBuffers() override;
-    Result<void> render() override;
+    Result<void> finalize() override;
     Result<void> dispose() override;
     void suspend() override;
 

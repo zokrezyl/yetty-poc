@@ -139,7 +139,7 @@ public:
         return Ok();
     }
 
-    void setCellSize(uint32_t cellWidth, uint32_t cellHeight) override {
+    void setCellSize(float cellWidth, float cellHeight) override {
         if (_cellWidth != cellWidth || _cellHeight != cellHeight) {
             _cellWidth = cellWidth;
             _cellHeight = cellHeight;
@@ -377,7 +377,7 @@ public:
         }
     }
 
-    Result<void> render() override {
+    Result<void> finalize() override {
         if (_metadataDirty) {
             ydebug("PythonCard::render: uploading metadata");
             if (auto res = uploadMetadata(); !res) {

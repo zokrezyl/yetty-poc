@@ -51,7 +51,7 @@ public:
         return _metaHandle.offset / 64;
     }
 
-    void setCellSize(uint32_t cellWidth, uint32_t cellHeight) override {
+    void setCellSize(float cellWidth, float cellHeight) override {
         if (cellWidth == _cellWidth && cellHeight == _cellHeight) return;
         _cellWidth = cellWidth;
         _cellHeight = cellHeight;
@@ -272,7 +272,7 @@ public:
     Result<void> allocateTextures() override { return Ok(); }
     Result<void> writeTextures() override { return Ok(); }
 
-    Result<void> render() override {
+    Result<void> finalize() override {
         if (!_builder) return Ok();
 
         if (_dirty) {

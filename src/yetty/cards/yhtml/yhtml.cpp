@@ -349,7 +349,7 @@ public:
         return Ok();
     }
 
-    Result<void> render() override {
+    Result<void> finalize() override {
         if (!_builder) return Ok();
 
         // Process deferred navigation (avoid re-entrancy in litehtml callbacks)
@@ -684,7 +684,7 @@ private:
     // Input helpers
     //=========================================================================
 
-    void setCellSize(uint32_t cellWidth, uint32_t cellHeight) override {
+    void setCellSize(float cellWidth, float cellHeight) override {
         _cellWidth = cellWidth;
         _cellHeight = cellHeight;
     }

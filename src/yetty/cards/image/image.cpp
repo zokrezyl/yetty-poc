@@ -42,7 +42,7 @@ public:
     const char* typeName() const override { return "image"; }
     uint32_t metadataSlotIndex() const override { return _metaHandle.offset / 64; }
 
-    void setCellSize(uint32_t cellWidth, uint32_t cellHeight) override {
+    void setCellSize(float cellWidth, float cellHeight) override {
         if (_cellWidth != cellWidth || _cellHeight != cellHeight) {
             _cellWidth = cellWidth;
             _cellHeight = cellHeight;
@@ -192,7 +192,7 @@ public:
         }
     }
 
-    Result<void> render() override {
+    Result<void> finalize() override {
         if (_metadataDirty) {
             if (auto res = uploadMetadata(); !res) {
                 return Err<void>("Image::render: metadata upload failed", res);

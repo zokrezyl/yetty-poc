@@ -502,7 +502,7 @@ public:
         }
     }
 
-    Result<void> render() override {
+    Result<void> finalize() override {
         if (_metadataDirty) {
             if (auto res = uploadMetadata(); !res) {
                 return Err<void>("KDraw::render: metadata upload failed", res);
