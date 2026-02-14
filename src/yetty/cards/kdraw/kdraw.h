@@ -116,7 +116,7 @@ public:
     //=========================================================================
     Result<void> dispose() override = 0;
     void renderToStaging(float time) override = 0;
-    Result<void> render() override = 0;
+    Result<void> finalize() override = 0;
     const char* typeName() const override { return "kdraw"; }
     bool needsBuffer() const override { return true; }
 

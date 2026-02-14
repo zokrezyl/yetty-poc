@@ -24,6 +24,15 @@ enum class WidgetType : uint8_t {
     Panel,
     VBox,
     HBox,
+    // New widgets matching ymery/imgui
+    ChoiceBox,        // Radio button group (shows all options)
+    Separator,        // Horizontal line
+    ColorPicker,      // RGBA color selector
+    Selectable,       // Clickable/toggleable row
+    CollapsingHeader, // Expandable section header
+    VScrollbar,       // Vertical scrollbar
+    HScrollbar,       // Horizontal scrollbar
+    ScrollArea,       // Scrollable container with children
 };
 
 //=============================================================================
@@ -51,10 +60,15 @@ struct Widget {
     // Type-specific data
     float value = 0;                    // Slider value, progress
     float minValue = 0, maxValue = 1;   // Slider range
-    std::vector<std::string> options;   // Dropdown options
-    int selectedIndex = 0;              // Dropdown selection
+    std::vector<std::string> options;   // Dropdown/ChoiceBox options
+    int selectedIndex = 0;              // Dropdown/ChoiceBox selection
     std::string text;                   // TextInput content
     uint32_t cursorPos = 0;             // TextInput cursor
+    uint32_t colorValue = 0xFFFFFFFF;   // ColorPicker ABGR value
+
+    // ScrollArea properties
+    float scrollX = 0, scrollY = 0;     // Current scroll offset
+    float contentW = 0, contentH = 0;   // Content size (for scroll range)
 
     // Styling
     uint32_t bgColor = 0xFF2A2A3E;

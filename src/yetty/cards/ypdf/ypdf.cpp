@@ -604,7 +604,7 @@ Result<void> YPdf::writeTextures() {
     return Ok();
 }
 
-Result<void> YPdf::render() {
+Result<void> YPdf::finalize() {
     if (!_builder) return Ok();
 
     if (_dirty) {

@@ -452,6 +452,8 @@ private:
 
   base::ObjectId _cardMouseTarget = 0;  // card that received last CardMouseDown
   base::ObjectId _focusedCardId = 0;    // card that has keyboard focus (0 = terminal)
+  float _focusedCardOriginX = 0.0f;     // viewport-local X of focused card's top-left
+  float _focusedCardOriginY = 0.0f;     // viewport-local Y of focused card's top-left
   uint32_t _gcFrameCounter = 0;
   bool _bufferLayoutChanged = false;   // A buffer card entered or left
   bool _textureLayoutChanged = false;  // A texture card entered or left
@@ -4394,13 +4396,26 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
           loop->dispatch(base::Event::focusEvent(card->id()));
           float cardX, cardY;
           cardLocalCoords(localX, localY, row, col, cardX, cardY);
+          // Store card origin for mouse move tracking (even outside card cells)
+          size_t idx = cellIndex(row, col);
+          const Cell &cell = (*_visibleBuffer)[idx];
+          uint32_t bg24 = static_cast<uint32_t>(cell.bgR) |
+                          (static_cast<uint32_t>(cell.bgG) << 8) |
+                          (static_cast<uint32_t>(cell.bgB) << 16);
+          int relCol = bg24 & 0xFFF;
+          int relRow = (bg24 >> 12) & 0xFFF;
+          int cardTopCol = col - relCol;
+          int cardTopRow = row - relRow;
+          _focusedCardOriginX = static_cast<float>(cardTopCol) * getCellWidthF();
+          _focusedCardOriginY = static_cast<float>(cardTopRow) * getCellHeightF();
+          _focusedCardId = card->id();
           // Clamp to card's pixel dimensions
           float cardPixelW = static_cast<float>(card->widthCells()) * getCellWidthF();
           float cardPixelH = static_cast<float>(card->heightCells()) * getCellHeightF();
           cardX = std::max(0.0f, std::min(cardX, cardPixelW - 1.0f));
           cardY = std::max(0.0f, std::min(cardY, cardPixelH - 1.0f));
-          ydebug("GPUScreen {} card click: localXY=({:.1f},{:.1f}) cell=({},{}) cardXY=({:.1f},{:.1f}) cellSize={:.1f}x{:.1f}",
-                _id, localX, localY, col, row, cardX, cardY, getCellWidthF(), getCellHeightF());
+          ydebug("GPUScreen {} card click: localXY=({:.1f},{:.1f}) cell=({},{}) cardXY=({:.1f},{:.1f}) origin=({:.1f},{:.1f})",
+                _id, localX, localY, col, row, cardX, cardY, _focusedCardOriginX, _focusedCardOriginY);
           _cardMouseTarget = card->id();
           loop->dispatch(base::Event::cardMouseDown(card->id(), cardX, cardY, button));
         } else if (button == 0) {
@@ -4412,8 +4427,10 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
           _selEndCol = col;
           _selEndRow = row;
           _hasDamage = true;
+          _focusedCardId = 0;  // Clear card focus
           loop->dispatch(base::Event::focusEvent(_id));
         } else {
+          _focusedCardId = 0;  // Clear card focus
           loop->dispatch(base::Event::focusEvent(_id));
         }
         return Ok(true);
@@ -4472,23 +4489,14 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
           _hasDamage = true;
         }
 
-        // Forward mouse move to active card with local coordinates
-        if (_cardMouseTarget != 0) {
-          Card* card = getCardAtCell(row, col);
-          if (card && card->id() == _cardMouseTarget) {
-            float cardX, cardY;
-            cardLocalCoords(localX, localY, row, col, cardX, cardY);
-            // Clamp to card's pixel dimensions
-            float cardPixelW = static_cast<float>(card->widthCells()) * getCellWidthF();
-            float cardPixelH = static_cast<float>(card->heightCells()) * getCellHeightF();
-            cardX = std::max(0.0f, std::min(cardX, cardPixelW - 1.0f));
-            cardY = std::max(0.0f, std::min(cardY, cardPixelH - 1.0f));
-            auto loop = *base::EventLoop::instance();
-            loop->dispatch(base::Event::cardMouseMove(_cardMouseTarget, cardX, cardY));
-          } else {
-            auto loop = *base::EventLoop::instance();
-            loop->dispatch(base::Event::cardMouseMove(_cardMouseTarget, localX, localY));
-          }
+        // Forward mouse move to focused card with local coordinates
+        // Use stored origin to compute card-local coords even when mouse is outside
+        // the card's cells (e.g., dropdown options extending below card bounds)
+        if (_focusedCardId != 0) {
+          float cardX = localX - _focusedCardOriginX;
+          float cardY = localY - _focusedCardOriginY;
+          auto loop = *base::EventLoop::instance();
+          loop->dispatch(base::Event::cardMouseMove(_focusedCardId, cardX, cardY));
         }
 
       }
@@ -4521,31 +4529,13 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
     }
 
     if (_cardMouseTarget != 0) {
-      float mx = event.mouse.x;
-      float my = event.mouse.y;
-      int button = event.mouse.button;
-      float localX = mx - _viewportX;
-      float localY = my - _viewportY;
-      int col = static_cast<int>(localX / getCellWidthF());
-      int row = static_cast<int>(localY / getCellHeightF());
-      col = std::max(0, std::min(col, static_cast<int>(_cols) - 1));
-      row = std::max(0, std::min(row, static_cast<int>(_rows) - 1));
-
-      float cardX, cardY;
-      Card* card = getCardAtCell(row, col);
-      if (card && card->id() == _cardMouseTarget) {
-        cardLocalCoords(localX, localY, row, col, cardX, cardY);
-        // Clamp to card's pixel dimensions
-        float cardPixelW = static_cast<float>(card->widthCells()) * getCellWidthF();
-        float cardPixelH = static_cast<float>(card->heightCells()) * getCellHeightF();
-        cardX = std::max(0.0f, std::min(cardX, cardPixelW - 1.0f));
-        cardY = std::max(0.0f, std::min(cardY, cardPixelH - 1.0f));
-      } else {
-        cardX = localX;
-        cardY = localY;
-      }
+      float localX = event.mouse.x - _viewportX;
+      float localY = event.mouse.y - _viewportY;
+      // Use stored origin to compute card-local coords
+      float cardX = localX - _focusedCardOriginX;
+      float cardY = localY - _focusedCardOriginY;
       auto loop = *base::EventLoop::instance();
-      loop->dispatch(base::Event::cardMouseUp(_cardMouseTarget, cardX, cardY, button));
+      loop->dispatch(base::Event::cardMouseUp(_cardMouseTarget, cardX, cardY, event.mouse.button));
       _cardMouseTarget = 0;
       return Ok(true);
     }
@@ -4975,14 +4965,14 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
   auto _loopT1 = std::chrono::steady_clock::now();
 
   // ===================================================================
-  // Phase 3: render — per-frame GPU writes (metadata + dirty data)
+  // Phase 3: finalize — pack data into staging buffers (no GPU write yet)
   // ===================================================================
   for (auto& [slotIndex, card] : _cards) {
-    ydebug("GPUScreen::render: Phase3 render card='{}' slot={} metaOffset={}",
+    ydebug("GPUScreen::render: Phase3 finalize card='{}' slot={} metaOffset={}",
            card->typeName(), slotIndex, card->metadataOffset());
-    if (auto res = card->render(); !res) {
-      yerror("GPUScreen::render: card '{}' render FAILED: {}", card->typeName(), error_msg(res));
-      return Err<void>("GPUScreen::render: card render failed", res);
+    if (auto res = card->finalize(); !res) {
+      yerror("GPUScreen::render: card '{}' finalize FAILED: {}", card->typeName(), error_msg(res));
+      return Err<void>("GPUScreen::render: card finalize failed", res);
     }
   }
 

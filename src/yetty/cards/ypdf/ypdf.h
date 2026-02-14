@@ -58,7 +58,7 @@ public:
     Result<void> allocateBuffers() override;
     Result<void> allocateTextures() override;
     Result<void> writeTextures() override;
-    Result<void> render() override;
+    Result<void> finalize() override;
     Result<void> dispose() override;
     void suspend() override;
     void setCellSize(float cellWidth, float cellHeight) override {

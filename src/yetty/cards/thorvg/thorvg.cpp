@@ -412,7 +412,7 @@ public:
         }
     }
 
-    Result<void> render() override {
+    Result<void> finalize() override {
         // Write updated pixels to atlas texture
         if (_textureHandle.isValid() && !_renderBuffer.empty()) {
             if (auto res = _cardMgr->textureManager()->write(_textureHandle, _renderBuffer.data()); !res) {

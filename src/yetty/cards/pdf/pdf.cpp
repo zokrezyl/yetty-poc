@@ -212,7 +212,7 @@ public:
         }
     }
 
-    Result<void> render() override {
+    Result<void> finalize() override {
         // Upload rasterized pixels to texture handle
         if (_needsUpload && !_pagePixels.empty()) {
             if (auto res = linkPixelsToHandle(); !res) {

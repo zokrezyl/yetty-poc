@@ -427,7 +427,7 @@ public:
         _dirty = false;
     }
 
-    Result<void> render() override {
+    Result<void> finalize() override {
         // Write CPU pixels to card texture atlas
         if (_textureHandle.isValid() && !_cpuPixels.empty()) {
             if (auto res = _cardMgr->textureManager()->write(_textureHandle, _cpuPixels.data()); !res) {

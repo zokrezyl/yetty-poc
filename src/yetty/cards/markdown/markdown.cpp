@@ -272,7 +272,7 @@ public:
     Result<void> allocateTextures() override { return Ok(); }
     Result<void> writeTextures() override { return Ok(); }
 
-    Result<void> render() override {
+    Result<void> finalize() override {
         if (!_builder) return Ok();
 
         if (_dirty) {

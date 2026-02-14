@@ -115,21 +115,28 @@ public:
     virtual Result<void> writeTextures() { return Ok(); }
 
     //=========================================================================
-    // Phase 3: Per-frame GPU writes (called every frame for all active cards)
+    // Phase 3: Finalize (called every frame for all active cards)
     //=========================================================================
 
-    /// Write per-frame data to GPU through allocated handles.
+    /// Finalize staged data before the batch GPU write.
     ///
-    /// This is where the card writes metadata (buffer offsets, scene bounds,
-    /// grid dimensions, animation state, zoom/pan, etc.) and any per-frame
-    /// buffer updates that don't require reallocation.
+    /// IMPORTANT: This method does NOT write to GPU. It finalizes/packs data
+    /// into CPU staging buffers. The actual GPU write happens later when
+    /// gpu-screen calls CardManager::flush() after ALL cards have finalized.
+    ///
+    /// Typical work done here:
+    ///   - Pack metadata (buffer offsets, scene bounds, grid dimensions, etc.)
+    ///   - Copy primitives/glyphs into staging buffers
+    ///   - Mark buffer regions as dirty for upcoming GPU upload
+    ///   - Update animation state, zoom/pan values
     ///
     /// For cards with stable allocations (e.g., plot with external writers),
-    /// this may only write metadata. For animated cards, this may also
-    /// mark buffer regions dirty after in-place updates.
+    /// this may only pack metadata. For animated cards, this may also
+    /// update buffer contents in-place.
     ///
     /// Called after allocation is settled — handles are guaranteed valid.
-    virtual Result<void> render() { return Ok(); }
+    /// Called every frame, even if nothing changed (card should track _dirty).
+    virtual Result<void> finalize() { return Ok(); }
 
     //=========================================================================
     // Updates (OSC update command)

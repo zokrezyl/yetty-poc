@@ -218,7 +218,7 @@ public:
     // Rendering
     //=========================================================================
 
-    Result<void> render() override {
+    Result<void> finalize() override {
         if (!_builder) return Ok();
 
         if (_dirty) {
@@ -271,14 +271,64 @@ public:
             updateHoverRecursive(w, wx, wy);
         }
 
-        // Track slider drag while pressed
-        if (_pressed && _pressed->type == WidgetType::Slider) {
-            updateSliderValue(_pressed, wx);
+        // Track slider/scrollbar drag while pressed
+        if (_pressed) {
+            if (_pressed->type == WidgetType::Slider) {
+                updateSliderValue(_pressed, wx);
+            } else if (_pressed->type == WidgetType::VScrollbar) {
+                updateVScrollValue(_pressed, wy);
+            } else if (_pressed->type == WidgetType::HScrollbar) {
+                updateHScrollValue(_pressed, wx);
+            }
+        }
+
+        // Handle ScrollArea scrollbar drag
+        if (_scrollDragWidget) {
+            Widget* w = _scrollDragWidget;
+            float scrollbarW = 12;
+            float scrollbarH = 12;
+            float viewW = w->w - scrollbarW;
+            float viewH = w->h - scrollbarH;
+            float contentW = w->contentW > 0 ? w->contentW : viewW;
+            float contentH = w->contentH > 0 ? w->contentH : viewH;
+
+            if (_scrollDragVertical && contentH > viewH) {
+                float maxScrollY = contentH - viewH;
+                float trackH = w->h - scrollbarH;
+                float thumbH = std::max(20.0f, trackH * viewH / contentH);
+                float localY = wy - w->y;
+                float clickRatio = (localY - thumbH/2) / (trackH - thumbH);
+                w->scrollY = std::clamp(clickRatio * maxScrollY, 0.0f, maxScrollY);
+            } else if (!_scrollDragVertical && contentW > viewW) {
+                float maxScrollX = contentW - viewW;
+                float trackW = w->w - scrollbarW;
+                float thumbW = std::max(20.0f, trackW * viewW / contentW);
+                float localX = wx - w->x;
+                float clickRatio = (localX - thumbW/2) / (trackW - thumbW);
+                w->scrollX = std::clamp(clickRatio * maxScrollX, 0.0f, maxScrollX);
+            }
+            _dirty = true;
         }
 
         // Update hover option for open dropdown
         if (_openDropdown && _openDropdown->isOpen()) {
             _hoverOptionIdx = getDropdownOptionAt(_openDropdown, wx, wy);
+            ydebug("YGui::handleMouseMove dropdown open, px={:.1f} py={:.1f} -> wx={:.1f} wy={:.1f} hoverIdx={}",
+                   px, py, wx, wy, _hoverOptionIdx);
+        }
+
+        // Update hover for choicebox options
+        _hoverChoiceIdx = -1;
+        _hoverChoiceWidget = nullptr;
+        for (auto& w : _widgets) {
+            if (w->type == WidgetType::ChoiceBox && w->isHover()) {
+                int idx = getChoiceBoxOptionAt(w.get(), wx, wy);
+                if (idx >= 0) {
+                    _hoverChoiceIdx = idx;
+                    _hoverChoiceWidget = w.get();
+                }
+                break;
+            }
         }
 
         _dirty = true;
@@ -305,7 +355,15 @@ public:
                 _dirty = true;
                 return;
             }
-            // Clicked outside dropdown - close it
+            // Check if clicking on the dropdown button itself (to close it)
+            if (_openDropdown->contains(wx, wy)) {
+                ydebug("YGui: closing dropdown by clicking on button");
+                _openDropdown->flags &= ~WIDGET_OPEN;
+                _openDropdown = nullptr;
+                _dirty = true;
+                return;  // Don't reopen it
+            }
+            // Clicked outside dropdown and button - close it
             _openDropdown->flags &= ~WIDGET_OPEN;
             _openDropdown = nullptr;
             _dirty = true;
@@ -346,13 +404,87 @@ public:
 
             case WidgetType::Dropdown:
                 clicked->flags ^= WIDGET_OPEN;
-                _openDropdown = clicked->isOpen() ? clicked : nullptr;
+                if (clicked->isOpen()) {
+                    _openDropdown = clicked;
+                    _hoverOptionIdx = -1;  // Reset hover, will update on mouse move
+                } else {
+                    _openDropdown = nullptr;
+                }
                 ydebug("YGui: dropdown {} open={}", clicked->id, clicked->isOpen());
                 break;
 
             case WidgetType::Slider:
                 updateSliderValue(clicked, wx);
                 break;
+
+            case WidgetType::VScrollbar:
+                updateVScrollValue(clicked, wy);
+                break;
+
+            case WidgetType::HScrollbar:
+                updateHScrollValue(clicked, wx);
+                break;
+
+            case WidgetType::ChoiceBox: {
+                // Find which radio button was clicked
+                float optH = 24;
+                int optIdx = static_cast<int>((wy - clicked->y) / optH);
+                if (optIdx >= 0 && optIdx < static_cast<int>(clicked->options.size())) {
+                    clicked->selectedIndex = optIdx;
+                    emitEvent(clicked, "change");
+                }
+                break;
+            }
+
+            case WidgetType::Selectable:
+                clicked->flags ^= WIDGET_CHECKED;
+                emitEvent(clicked, "click");
+                break;
+
+            case WidgetType::CollapsingHeader:
+                clicked->flags ^= WIDGET_OPEN;
+                emitEvent(clicked, "click");
+                break;
+
+            case WidgetType::ScrollArea: {
+                // Check if clicking on scrollbars
+                float scrollbarW = 12;
+                float scrollbarH = 12;
+                float viewW = clicked->w - scrollbarW;
+                float viewH = clicked->h - scrollbarH;
+                float contentW = clicked->contentW > 0 ? clicked->contentW : viewW;
+                float contentH = clicked->contentH > 0 ? clicked->contentH : viewH;
+
+                float localX = wx - clicked->x;
+                float localY = wy - clicked->y;
+
+                // Vertical scrollbar region
+                if (localX >= viewW && contentH > viewH) {
+                    float maxScrollY = contentH - viewH;
+                    float trackH = clicked->h - scrollbarH;
+                    float thumbH = std::max(20.0f, trackH * viewH / contentH);
+                    float clickRatio = (localY - thumbH/2) / (trackH - thumbH);
+                    clicked->scrollY = std::clamp(clickRatio * maxScrollY, 0.0f, maxScrollY);
+                    _scrollDragWidget = clicked;
+                    _scrollDragVertical = true;
+                    _dirty = true;
+                    break;
+                }
+
+                // Horizontal scrollbar region
+                if (localY >= viewH && contentW > viewW) {
+                    float maxScrollX = contentW - viewW;
+                    float trackW = clicked->w - scrollbarW;
+                    float thumbW = std::max(20.0f, trackW * viewW / contentW);
+                    float clickRatio = (localX - thumbW/2) / (trackW - thumbW);
+                    clicked->scrollX = std::clamp(clickRatio * maxScrollX, 0.0f, maxScrollX);
+                    _scrollDragWidget = clicked;
+                    _scrollDragVertical = false;
+                    _dirty = true;
+                    break;
+                }
+                break;
+            }
 
             default:
                 break;
@@ -376,6 +508,9 @@ public:
             _pressed = nullptr;
             _dirty = true;
         }
+
+        // Clear ScrollArea drag state
+        _scrollDragWidget = nullptr;
     }
 
     void handleMouseScroll(float px, float py, float deltaX, float deltaY) {
@@ -388,12 +523,30 @@ public:
             if (target) break;
         }
 
-        if (target && target->type == WidgetType::Slider) {
-            float range = target->maxValue - target->minValue;
-            float delta = deltaY * range * 0.05f;
-            target->value = std::clamp(target->value + delta, target->minValue, target->maxValue);
-            emitEvent(target, "change");
-            _dirty = true;
+        if (target) {
+            if (target->type == WidgetType::Slider) {
+                float range = target->maxValue - target->minValue;
+                float delta = deltaY * range * 0.05f;
+                target->value = std::clamp(target->value + delta, target->minValue, target->maxValue);
+                emitEvent(target, "change");
+                _dirty = true;
+            } else if (target->type == WidgetType::ScrollArea) {
+                // Scroll the scroll area
+                float scrollbarW = 12;
+                float scrollbarH = 12;
+                float viewW = target->w - scrollbarW;
+                float viewH = target->h - scrollbarH;
+                float contentW = target->contentW > 0 ? target->contentW : viewW;
+                float contentH = target->contentH > 0 ? target->contentH : viewH;
+                float maxScrollX = std::max(0.0f, contentW - viewW);
+                float maxScrollY = std::max(0.0f, contentH - viewH);
+
+                // Scroll 20 pixels per wheel tick
+                target->scrollY = std::clamp(target->scrollY - deltaY * 20.0f, 0.0f, maxScrollY);
+                target->scrollX = std::clamp(target->scrollX - deltaX * 20.0f, 0.0f, maxScrollX);
+                emitEvent(target, "scroll");
+                _dirty = true;
+            }
         }
     }
 
@@ -493,6 +646,14 @@ private:
             else if (t == "panel") w->type = WidgetType::Panel;
             else if (t == "vbox") w->type = WidgetType::VBox;
             else if (t == "hbox") w->type = WidgetType::HBox;
+            else if (t == "choicebox" || t == "choice" || t == "radio") w->type = WidgetType::ChoiceBox;
+            else if (t == "separator" || t == "sep") w->type = WidgetType::Separator;
+            else if (t == "colorpicker" || t == "color") w->type = WidgetType::ColorPicker;
+            else if (t == "selectable") w->type = WidgetType::Selectable;
+            else if (t == "collapsing" || t == "header") w->type = WidgetType::CollapsingHeader;
+            else if (t == "vscrollbar" || t == "vscroll") w->type = WidgetType::VScrollbar;
+            else if (t == "hscrollbar" || t == "hscroll") w->type = WidgetType::HScrollbar;
+            else if (t == "scrollarea" || t == "scroll") w->type = WidgetType::ScrollArea;
         }
 
         if (node["x"]) w->x = node["x"].as<float>();
@@ -514,6 +675,24 @@ private:
         }
         if (node["selected"]) w->selectedIndex = node["selected"].as<int>();
 
+        // ColorPicker color value (hex string like "0xFFRRGGBB" or "#RRGGBB")
+        if (node["color"]) {
+            std::string colorStr = node["color"].as<std::string>();
+            if (colorStr.size() > 2 && colorStr[0] == '0' && (colorStr[1] == 'x' || colorStr[1] == 'X')) {
+                w->colorValue = static_cast<uint32_t>(std::stoul(colorStr, nullptr, 16));
+            } else if (colorStr.size() > 0 && colorStr[0] == '#') {
+                // #RRGGBB -> 0xFFBBGGRR (ABGR)
+                uint32_t rgb = static_cast<uint32_t>(std::stoul(colorStr.substr(1), nullptr, 16));
+                uint8_t r = (rgb >> 16) & 0xFF;
+                uint8_t g = (rgb >> 8) & 0xFF;
+                uint8_t b = rgb & 0xFF;
+                w->colorValue = 0xFF000000 | (b << 16) | (g << 8) | r;
+            }
+        }
+
+        // CollapsingHeader initial state
+        if (node["open"] && node["open"].as<bool>()) w->flags |= WIDGET_OPEN;
+
         if (node["on_click"]) w->onClick = node["on_click"].as<std::string>();
         if (node["on_change"]) w->onChange = node["on_change"].as<std::string>();
 
@@ -524,6 +703,16 @@ private:
                 if (cw) w->children.push_back(cw);
             }
         }
+
+        // Auto-calculate height for widgets with options
+        if (w->type == WidgetType::ChoiceBox && !w->options.empty()) {
+            // Each option is 24 pixels tall
+            w->h = static_cast<float>(w->options.size()) * 24.0f;
+        }
+
+        // ScrollArea content size
+        if (node["content_w"]) w->contentW = node["content_w"].as<float>();
+        if (node["content_h"]) w->contentH = node["content_h"].as<float>();
 
         return w;
     }
@@ -637,21 +826,21 @@ private:
                 std::string text = w->selectedIndex < static_cast<int>(w->options.size())
                     ? w->options[w->selectedIndex] : "";
                 addText(text, x + 8, y + 4, w->fgColor);
-                // Chevron arrow using SDF triangle
-                float arrowX = x + w->w - 20;
+                // Chevron arrow - size proportional to font (14px -> ~8px arrow)
+                float arrowSize = 8;
+                float arrowX = x + w->w - 16 - arrowSize/2;
                 float arrowY = y + w->h / 2;
-                float arrowSize = 5;
                 if (w->isOpen()) {
                     // Up arrow (chevron pointing up)
-                    addTriangle(arrowX, arrowY + arrowSize/2,
-                               arrowX + arrowSize, arrowY + arrowSize/2,
-                               arrowX + arrowSize/2, arrowY - arrowSize/2,
+                    addTriangle(arrowX, arrowY + arrowSize/3,
+                               arrowX + arrowSize, arrowY + arrowSize/3,
+                               arrowX + arrowSize/2, arrowY - arrowSize/3,
                                w->fgColor);
                 } else {
                     // Down arrow (chevron pointing down)
-                    addTriangle(arrowX, arrowY - arrowSize/2,
-                               arrowX + arrowSize, arrowY - arrowSize/2,
-                               arrowX + arrowSize/2, arrowY + arrowSize/2,
+                    addTriangle(arrowX, arrowY - arrowSize/3,
+                               arrowX + arrowSize, arrowY - arrowSize/3,
+                               arrowX + arrowSize/2, arrowY + arrowSize/3,
                                w->fgColor);
                 }
                 if (w->isHover()) addBoxOutline(x, y, w->w, w->h, w->accentColor, 4);
@@ -705,6 +894,197 @@ private:
                 }
                 break;
             }
+
+            case WidgetType::ChoiceBox: {
+                // Radio button group - shows all options vertically
+                float optH = 24;
+                float cy = y;
+                for (size_t i = 0; i < w->options.size(); i++) {
+                    bool isSelected = (static_cast<int>(i) == w->selectedIndex);
+                    bool isHovered = (_hoverChoiceWidget == w && static_cast<int>(i) == _hoverChoiceIdx);
+                    float radioX = x;
+                    float radioY = cy + 4;
+                    float radioSize = 14;
+                    float centerX = radioX + radioSize/2;
+                    float centerY = radioY + radioSize/2;
+
+                    // Outer circle (always visible)
+                    addCircleOutline(centerX, centerY, radioSize/2,
+                                    isHovered ? w->accentColor : 0xFF666677);
+
+                    // Inner dot if selected
+                    if (isSelected) {
+                        addCircle(centerX, centerY, radioSize/4, w->accentColor);
+                    }
+
+                    // Hover highlight (smaller dot when hovering non-selected)
+                    if (isHovered && !isSelected) {
+                        addCircle(centerX, centerY, radioSize/6, 0xFF555566);
+                    }
+
+                    // Label
+                    addText(w->options[i], x + radioSize + 8, cy + 4, w->fgColor);
+                    cy += optH;
+                }
+                break;
+            }
+
+            case WidgetType::Separator: {
+                // Horizontal line
+                float lineY = y + w->h / 2;
+                addBox(x, lineY - 1, w->w, 2, 0xFF444455, 0);
+                break;
+            }
+
+            case WidgetType::ColorPicker: {
+                // Color preview box + label
+                float boxSize = 20;
+                addBox(x, y + 2, boxSize, boxSize, w->colorValue, 2);
+                addBoxOutline(x, y + 2, boxSize, boxSize, 0xFF666666, 2);
+                if (!w->label.empty()) {
+                    addText(w->label, x + boxSize + 8, y + 4, w->fgColor);
+                }
+                if (w->isHover()) addBoxOutline(x, y + 2, boxSize, boxSize, w->accentColor, 2);
+                break;
+            }
+
+            case WidgetType::Selectable: {
+                // Clickable row that can be selected
+                if (w->isChecked()) {
+                    addBox(x, y, w->w, w->h, w->accentColor, 2);
+                } else if (w->isHover()) {
+                    addBox(x, y, w->w, w->h, 0xFF333344, 2);
+                }
+                addText(w->label, x + 8, y + 4, w->fgColor);
+                break;
+            }
+
+            case WidgetType::CollapsingHeader: {
+                // Expandable section header with arrow
+                addBox(x, y, w->w, w->h, w->bgColor, 4);
+
+                // Arrow indicator - size proportional to font (14px -> ~8px arrow)
+                float arrowSize = 8;
+                float arrowX = x + 10;
+                float arrowY = y + w->h / 2;
+                if (w->isOpen()) {
+                    // Down arrow (expanded)
+                    addTriangle(arrowX, arrowY - arrowSize/3,
+                               arrowX + arrowSize, arrowY - arrowSize/3,
+                               arrowX + arrowSize/2, arrowY + arrowSize/3,
+                               w->fgColor);
+                } else {
+                    // Right arrow (collapsed)
+                    addTriangle(arrowX, arrowY - arrowSize/2,
+                               arrowX, arrowY + arrowSize/2,
+                               arrowX + arrowSize*0.7f, arrowY,
+                               w->fgColor);
+                }
+
+                addText(w->label, x + 26, y + 4, w->fgColor);
+                if (w->isHover()) addBoxOutline(x, y, w->w, w->h, w->accentColor, 4);
+
+                // Render children if open
+                if (w->isOpen()) {
+                    float cy = y + w->h + 4;
+                    for (auto& child : w->children) {
+                        child->x = x + 16;  // Indent children
+                        child->y = cy;
+                        renderWidget(child.get(), 0, 0);
+                        cy += child->h + 4;
+                    }
+                }
+                break;
+            }
+
+            case WidgetType::VScrollbar: {
+                // Vertical scrollbar: track + thumb
+                float trackW = w->w > 0 ? w->w : 12;
+                addBox(x, y, trackW, w->h, 0xFF222233, trackW/2);  // Track
+
+                // Thumb position based on value (0-1 range)
+                float thumbH = std::max(20.0f, w->h * 0.2f);  // Min 20px or 20% of track
+                float trackRange = w->h - thumbH;
+                float thumbY = y + w->value * trackRange;
+                uint32_t thumbColor = w->isPressed() ? w->accentColor :
+                                     (w->isHover() ? 0xFF555566 : 0xFF444455);
+                addBox(x + 2, thumbY, trackW - 4, thumbH, thumbColor, (trackW-4)/2);
+                break;
+            }
+
+            case WidgetType::HScrollbar: {
+                // Horizontal scrollbar: track + thumb
+                float trackH = w->h > 0 ? w->h : 12;
+                addBox(x, y, w->w, trackH, 0xFF222233, trackH/2);  // Track
+
+                // Thumb position based on value (0-1 range)
+                float thumbW = std::max(20.0f, w->w * 0.2f);  // Min 20px or 20% of track
+                float trackRange = w->w - thumbW;
+                float thumbX = x + w->value * trackRange;
+                uint32_t thumbColor = w->isPressed() ? w->accentColor :
+                                     (w->isHover() ? 0xFF555566 : 0xFF444455);
+                addBox(thumbX, y + 2, thumbW, trackH - 4, thumbColor, (trackH-4)/2);
+                break;
+            }
+
+            case WidgetType::ScrollArea: {
+                // Scrollable container - render background
+                addBox(x, y, w->w, w->h, w->bgColor, 4);
+
+                // Calculate scroll ranges
+                float scrollbarW = 12;
+                float scrollbarH = 12;
+                float viewW = w->w - scrollbarW;
+                float viewH = w->h - scrollbarH;
+                float contentW = w->contentW > 0 ? w->contentW : viewW;
+                float contentH = w->contentH > 0 ? w->contentH : viewH;
+                float maxScrollX = std::max(0.0f, contentW - viewW);
+                float maxScrollY = std::max(0.0f, contentH - viewH);
+
+                // Render children with scroll offset
+                for (auto& child : w->children) {
+                    // Position children relative to scroll area, offset by scroll
+                    float childX = x + child->x - w->scrollX;
+                    float childY = y + child->y - w->scrollY;
+
+                    // Simple clipping: only render if at least partially visible
+                    if (childX + child->w > x && childX < x + viewW &&
+                        childY + child->h > y && childY < y + viewH) {
+                        renderWidget(child.get(), x - w->scrollX, y - w->scrollY);
+                    }
+                }
+
+                // Render vertical scrollbar if content is taller than view
+                if (contentH > viewH) {
+                    float trackX = x + w->w - scrollbarW;
+                    float trackH = w->h - scrollbarH;
+                    addBox(trackX, y, scrollbarW, trackH, 0xFF222233, scrollbarW/2);
+
+                    float thumbH = std::max(20.0f, trackH * viewH / contentH);
+                    float thumbRange = trackH - thumbH;
+                    float thumbY = y + (maxScrollY > 0 ? (w->scrollY / maxScrollY) * thumbRange : 0);
+                    addBox(trackX + 2, thumbY, scrollbarW - 4, thumbH, 0xFF444455, (scrollbarW-4)/2);
+                }
+
+                // Render horizontal scrollbar if content is wider than view
+                if (contentW > viewW) {
+                    float trackY = y + w->h - scrollbarH;
+                    float trackW = w->w - scrollbarW;
+                    addBox(x, trackY, trackW, scrollbarH, 0xFF222233, scrollbarH/2);
+
+                    float thumbW = std::max(20.0f, trackW * viewW / contentW);
+                    float thumbRange = trackW - thumbW;
+                    float thumbX = x + (maxScrollX > 0 ? (w->scrollX / maxScrollX) * thumbRange : 0);
+                    addBox(thumbX, trackY + 2, thumbW, scrollbarH - 4, 0xFF444455, (scrollbarH-4)/2);
+                }
+
+                // Corner fill
+                if (contentW > viewW && contentH > viewH) {
+                    addBox(x + w->w - scrollbarW, y + w->h - scrollbarH,
+                           scrollbarW, scrollbarH, 0xFF1A1A2E, 0);
+                }
+                break;
+            }
         }
     }
 
@@ -713,18 +1093,30 @@ private:
         float y = w->y + w->h;
         float optH = 24;
 
-        yinfo("YGui: rendering {} dropdown options at y={}", w->options.size(), y);
-
         // Draw dropdown list background
         float listH = static_cast<float>(w->options.size()) * optH;
         addBox(x, y, w->w, listH, 0xFF1E1E2E, 4);  // Darker background
 
         for (size_t i = 0; i < w->options.size(); i++) {
-            uint32_t bg = (i == static_cast<size_t>(_hoverOptionIdx)) ? w->accentColor : 0x00000000;
-            if (bg != 0) {
-                addBox(x + 2, y + i * optH + 2, w->w - 4, optH - 4, bg, 2);
+            float optY = y + i * optH;
+            bool isSelected = (static_cast<int>(i) == w->selectedIndex);
+            bool isHovered = (static_cast<int>(i) == _hoverOptionIdx);
+
+            // Background: hover takes priority, then selected
+            if (isHovered) {
+                addBox(x + 2, optY + 2, w->w - 4, optH - 4, w->accentColor, 2);
+            } else if (isSelected) {
+                // Subtle highlight for currently selected item
+                addBox(x + 2, optY + 2, w->w - 4, optH - 4, 0xFF2A2A3E, 2);
             }
-            addText(w->options[i], x + 8, y + i * optH + 4, w->fgColor);
+
+            // Text
+            addText(w->options[i], x + 8, optY + 4, w->fgColor);
+
+            // Checkmark for selected item
+            if (isSelected) {
+                addText("\xE2\x9C\x93", x + w->w - 20, optY + 4, w->accentColor);  // ✓
+            }
         }
     }
 
@@ -817,6 +1209,46 @@ private:
         _builder->addPrimitive(p);
     }
 
+    void addCircle(float cx, float cy, float radius, uint32_t color) {
+        if (!_builder) return;
+
+        SDFPrimitive p = {};
+        p.type = static_cast<uint32_t>(SDFType::Circle);
+        p.layer = _builder->primitiveCount();
+        p.params[0] = cx;
+        p.params[1] = cy;
+        p.params[2] = radius;
+        p.fillColor = color;
+        p.strokeColor = 0;
+        p.strokeWidth = 0;
+        p.round = 0;
+        p.aabbMinX = cx - radius;
+        p.aabbMinY = cy - radius;
+        p.aabbMaxX = cx + radius;
+        p.aabbMaxY = cy + radius;
+        _builder->addPrimitive(p);
+    }
+
+    void addCircleOutline(float cx, float cy, float radius, uint32_t color) {
+        if (!_builder) return;
+
+        SDFPrimitive p = {};
+        p.type = static_cast<uint32_t>(SDFType::Circle);
+        p.layer = _builder->primitiveCount();
+        p.params[0] = cx;
+        p.params[1] = cy;
+        p.params[2] = radius;
+        p.fillColor = 0;          // No fill
+        p.strokeColor = color;
+        p.strokeWidth = 1.5f;
+        p.round = 0;
+        p.aabbMinX = cx - radius - 2;
+        p.aabbMinY = cy - radius - 2;
+        p.aabbMaxX = cx + radius + 2;
+        p.aabbMaxY = cy + radius + 2;
+        _builder->addPrimitive(p);
+    }
+
     //=========================================================================
     // Event helpers
     //=========================================================================
@@ -858,14 +1290,32 @@ private:
         return nullptr;
     }
 
-    int getDropdownOptionAt(Widget* w, float px, float py) {
+    int getDropdownOptionAt(Widget* w, float wx, float wy) {
         float x = w->x;
-        float y = w->y + w->h;
+        float y = w->y + w->h;  // Options start below the dropdown button
+        float optH = 24;
+
+        ydebug("getDropdownOptionAt: wx={:.1f} wy={:.1f} dropdown at x={:.1f} y={:.1f} w={:.1f}",
+               wx, wy, x, y, w->w);
+
+        for (size_t i = 0; i < w->options.size(); i++) {
+            float oy = y + i * optH;
+            if (wx >= x && wx < x + w->w && wy >= oy && wy < oy + optH) {
+                ydebug("  -> option {} hit (oy={:.1f})", i, oy);
+                return static_cast<int>(i);
+            }
+        }
+        return -1;
+    }
+
+    int getChoiceBoxOptionAt(Widget* w, float wx, float wy) {
+        float x = w->x;
+        float y = w->y;
         float optH = 24;
 
         for (size_t i = 0; i < w->options.size(); i++) {
             float oy = y + i * optH;
-            if (px >= x && px < x + w->w && py >= oy && py < oy + optH) {
+            if (wx >= x && wx < x + w->w && wy >= oy && wy < oy + optH) {
                 return static_cast<int>(i);
             }
         }
@@ -878,6 +1328,28 @@ private:
                wx, w->x, w->w, pct, _cellWidthF);
         pct = std::clamp(pct, 0.0f, 1.0f);
         w->value = w->minValue + pct * (w->maxValue - w->minValue);
+        emitEvent(w, "change");
+    }
+
+    void updateVScrollValue(Widget* w, float wy) {
+        // Account for thumb size (20% of track or min 20px)
+        float thumbH = std::max(20.0f, w->h * 0.2f);
+        float trackRange = w->h - thumbH;
+        if (trackRange <= 0) return;
+        float pct = (wy - w->y - thumbH/2) / trackRange;
+        pct = std::clamp(pct, 0.0f, 1.0f);
+        w->value = pct;  // Scrollbars use 0-1 range
+        emitEvent(w, "change");
+    }
+
+    void updateHScrollValue(Widget* w, float wx) {
+        // Account for thumb size (20% of track or min 20px)
+        float thumbW = std::max(20.0f, w->w * 0.2f);
+        float trackRange = w->w - thumbW;
+        if (trackRange <= 0) return;
+        float pct = (wx - w->x - thumbW/2) / trackRange;
+        pct = std::clamp(pct, 0.0f, 1.0f);
+        w->value = pct;  // Scrollbars use 0-1 range
         emitEvent(w, "change");
     }
 
@@ -913,17 +1385,22 @@ private:
            << ";widget=" << w->id
            << ";type=" << eventType;
 
-        if (w->type == WidgetType::Slider || w->type == WidgetType::Progress) {
+        if (w->type == WidgetType::Slider || w->type == WidgetType::Progress ||
+            w->type == WidgetType::VScrollbar || w->type == WidgetType::HScrollbar) {
             ss << ";value=" << w->value;
-        } else if (w->type == WidgetType::Checkbox) {
+        } else if (w->type == WidgetType::Checkbox || w->type == WidgetType::Selectable) {
             ss << ";checked=" << (w->isChecked() ? "true" : "false");
-        } else if (w->type == WidgetType::Dropdown) {
+        } else if (w->type == WidgetType::Dropdown || w->type == WidgetType::ChoiceBox) {
             ss << ";selected=" << w->selectedIndex;
             if (w->selectedIndex < static_cast<int>(w->options.size())) {
                 ss << ";value=" << w->options[w->selectedIndex];
             }
         } else if (w->type == WidgetType::TextInput) {
             ss << ";text=" << w->text;
+        } else if (w->type == WidgetType::CollapsingHeader) {
+            ss << ";open=" << (w->isOpen() ? "true" : "false");
+        } else if (w->type == WidgetType::ColorPicker) {
+            ss << ";color=0x" << std::hex << w->colorValue;
         }
 
         ss << "\033\\";
@@ -1085,7 +1562,11 @@ private:
     Widget* _focused = nullptr;
     Widget* _pressed = nullptr;
     Widget* _openDropdown = nullptr;
+    Widget* _hoverChoiceWidget = nullptr;
+    Widget* _scrollDragWidget = nullptr;  // ScrollArea being dragged
+    bool _scrollDragVertical = false;     // true=vertical, false=horizontal
     int _hoverOptionIdx = -1;
+    int _hoverChoiceIdx = -1;
 
     bool _dirty = true;
     bool _metadataDirty = true;
