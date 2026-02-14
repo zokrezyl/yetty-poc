@@ -132,6 +132,26 @@ public:
     virtual Result<void> render() { return Ok(); }
 
     //=========================================================================
+    // Updates (OSC update command)
+    //=========================================================================
+
+    /// Update the card with new arguments and/or payload data.
+    /// Called when an OSC "update" command targets this card.
+    ///
+    /// For streaming cards like plot, the args can include:
+    ///   - advance=N: Shift buffer left by N elements, append payload at end
+    ///   - buffer=name: Target a specific named buffer
+    ///
+    /// @param args    Card-specific arguments string
+    /// @param payload Decoded payload data (e.g., comma-separated floats)
+    /// @return Ok() on success, Err on failure
+    virtual Result<void> update(const std::string& args, const std::string& payload) {
+        (void)args;
+        (void)payload;
+        return Ok();  // Default: no-op
+    }
+
+    //=========================================================================
     // Lifecycle
     //=========================================================================
 

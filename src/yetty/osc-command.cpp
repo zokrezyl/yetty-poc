@@ -291,6 +291,11 @@ Result<TargetArgs> OscCommandParser::parseTargetArgs(const std::vector<std::stri
             if (++i >= tokens.size()) return Err<TargetArgs>("missing value for --id");
             args.id = tokens[i];
         }
+        else if (token == "--name" || token == "-n") {
+            // --name targets card by user-assigned name (stored in args.id for lookup)
+            if (++i >= tokens.size()) return Err<TargetArgs>("missing value for --name");
+            args.id = tokens[i];
+        }
         else if (token == "--card" || token == "-c" || token == "--plugin" || token == "-p") {
             // --plugin/-p accepted for backwards compatibility
             if (++i >= tokens.size()) return Err<TargetArgs>("missing value for --card");
@@ -302,7 +307,7 @@ Result<TargetArgs> OscCommandParser::parseTargetArgs(const std::vector<std::stri
     }
 
     if (args.id.empty() && args.card.empty()) {
-        return Err<TargetArgs>("--id or --card is required");
+        return Err<TargetArgs>("--id, --name, or --card is required");
     }
 
     return Ok(args);

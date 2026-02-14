@@ -1003,6 +1003,9 @@ else()
     # ycat - cat with card rendering
     add_subdirectory(src/yetty/ycat)
 
+    # ytop - top-like CPU monitor using yetty plots
+    add_subdirectory(src/yetty/ytop)
+
     # Demos
     add_subdirectory(demo/plot-client)
 

@@ -55,7 +55,25 @@ public:
     }
 
     //=========================================================================
-    // Card interface
+    // Card interface - resource declarations
+    //=========================================================================
+
+    bool needsBuffer() const override {
+        // Plot needs buffer storage for data
+        return true;
+    }
+
+    bool needsBufferRealloc() override {
+        // Request realloc if we have data/buffers but no valid handle yet
+        if (!_data.empty() && !_storageHandle.isValid()) return true;
+        for (const auto& buf : _bufferDecls) {
+            if (buf.size > 0 && !buf.handle.isValid()) return true;
+        }
+        return false;
+    }
+
+    //=========================================================================
+    // Card interface - lifecycle
     //=========================================================================
 
     Result<void> init() {
@@ -225,6 +243,84 @@ public:
             _metadataDirty = false;
         }
 
+        return Ok();
+    }
+
+    //=========================================================================
+    // Update API (OSC update command)
+    //=========================================================================
+
+    Result<void> update(const std::string& args, const std::string& payload) override {
+        yinfo("Plot::update: args='{}' payload_len={}", args, payload.size());
+
+        // Parse args for advance=N and buffer=name
+        uint32_t advanceCount = 0;
+        std::string targetBuffer;
+
+        std::istringstream iss(args);
+        std::string token;
+        while (iss >> token) {
+            if (token.rfind("advance=", 0) == 0) {
+                advanceCount = static_cast<uint32_t>(std::stoul(token.substr(8)));
+            } else if (token.rfind("buffer=", 0) == 0) {
+                targetBuffer = token.substr(7);
+            }
+        }
+
+        // Parse payload as comma-separated floats
+        std::vector<float> newValues;
+        if (!payload.empty()) {
+            std::istringstream payloadStream(payload);
+            std::string valToken;
+            while (std::getline(payloadStream, valToken, ',')) {
+                size_t start = valToken.find_first_not_of(" \t\n\r");
+                size_t end = valToken.find_last_not_of(" \t\n\r");
+                if (start != std::string::npos && end != std::string::npos) {
+                    try {
+                        newValues.push_back(std::stof(valToken.substr(start, end - start + 1)));
+                    } catch (...) {}
+                }
+            }
+        }
+
+        yinfo("Plot::update: advance={} buffer='{}' newValues={}",
+              advanceCount, targetBuffer, newValues.size());
+
+        // Resolve target buffer - named buffer, first declared buffer, or default storage
+        StorageHandle* targetHandle = nullptr;
+        uint32_t bufferSize = 0;
+
+        if (!targetBuffer.empty()) {
+            auto* buf = findBuffer(targetBuffer);
+            if (!buf || !buf->handle.isValid()) {
+                return Err<void>("Plot::update: buffer '" + targetBuffer + "' not found or not allocated");
+            }
+            targetHandle = &buf->handle;
+            bufferSize = buf->size;
+        } else if (!_bufferDecls.empty() && _bufferDecls[0].handle.isValid()) {
+            targetHandle = &_bufferDecls[0].handle;
+            bufferSize = _bufferDecls[0].size;
+        } else if (_storageHandle.isValid()) {
+            targetHandle = &_storageHandle;
+            bufferSize = static_cast<uint32_t>(_data.size());
+        }
+
+        if (!targetHandle || !targetHandle->isValid() || bufferSize == 0) {
+            return Err<void>("Plot::update: no buffer available");
+        }
+
+        // Apply advance+append to the buffer
+        applyBufferUpdate(*targetHandle, bufferSize, advanceCount, newValues);
+
+        // Recalculate range if auto and this affects the default buffer
+        if (_autoRange && targetHandle == &_storageHandle) {
+            // Sync GPU data back to _data for range calculation
+            float* bufData = reinterpret_cast<float*>(_storageHandle.data);
+            _data.assign(bufData, bufData + bufferSize);
+            calculateRange();
+        }
+
+        _metadataDirty = true;
         return Ok();
     }
 
@@ -1030,6 +1126,40 @@ private:
         }
         _bufferDecls.push_back({name, 0, "", false, StorageHandle::invalid(), {}});
         return &_bufferDecls.back();
+    }
+
+    // Find buffer declaration by name (read-only)
+    BufferDeclaration* findBuffer(const std::string& name) {
+        for (auto& buf : _bufferDecls) {
+            if (buf.name == name) return &buf;
+        }
+        return nullptr;
+    }
+
+    // Apply advance+append to a buffer
+    // Shifts existing data left by advanceCount, appends newValues at end
+    void applyBufferUpdate(StorageHandle& handle, uint32_t bufferSize,
+                           uint32_t advanceCount, const std::vector<float>& newValues) {
+        if (!handle.isValid() || bufferSize == 0) return;
+
+        float* data = reinterpret_cast<float*>(handle.data);
+
+        if (advanceCount > 0 && advanceCount < bufferSize) {
+            // Shift data left by advanceCount
+            std::memmove(data, data + advanceCount, (bufferSize - advanceCount) * sizeof(float));
+        }
+
+        // Append new values at the end
+        if (!newValues.empty()) {
+            uint32_t writeStart = (advanceCount > 0) ? (bufferSize - advanceCount) : 0;
+            uint32_t writeCount = std::min(static_cast<uint32_t>(newValues.size()),
+                                           bufferSize - writeStart);
+            std::memcpy(data + writeStart, newValues.data(), writeCount * sizeof(float));
+        }
+
+        _cardMgr->bufferManager()->markBufferDirty(handle);
+        yinfo("Plot::applyBufferUpdate: shifted by {}, appended {} values",
+              advanceCount, newValues.size());
     }
 };
 
