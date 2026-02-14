@@ -1,5 +1,5 @@
 #include "ydraw-zoo.h"
-#include "../../ydraw/ydraw-builder.h"
+#include <yetty/ydraw-builder.h>
 #include "../hdraw/hdraw.h"  // SDFPrimitive, SDFType
 #include <yetty/msdf-glyph-data.h>
 #include <ytrace/ytrace.hpp>

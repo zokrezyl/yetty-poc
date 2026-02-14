@@ -2,6 +2,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <cmath>
+#include <algorithm>
 
 extern "C" {
 #include <pdfio.h>
@@ -116,8 +117,33 @@ void PdfContentParser::dispatchOperator(const char* op) {
     if (std::strcmp(op, "cm") == 0) { handleCm(); return; }
     if (std::strcmp(op, "q") == 0)  { handleQ(); return; }
     if (std::strcmp(op, "Q") == 0)  { handleQr(); return; }
+    if (std::strcmp(op, "w") == 0)  { handleW(); return; }
 
-    // All other operators silently ignored for MVP
+    // Color operators
+    if (std::strcmp(op, "RG") == 0) { handleRG(); return; }
+    if (std::strcmp(op, "rg") == 0) { handleRg(); return; }
+    if (std::strcmp(op, "G") == 0)  { handleG(); return; }
+    if (std::strcmp(op, "g") == 0)  { handleGg(); return; }
+    if (std::strcmp(op, "K") == 0)  { handleK(); return; }
+    if (std::strcmp(op, "k") == 0)  { handleKk(); return; }
+
+    // Path construction
+    if (std::strcmp(op, "m") == 0)  { handleMoveTo(); return; }
+    if (std::strcmp(op, "l") == 0)  { handleLineTo(); return; }
+    if (std::strcmp(op, "c") == 0)  { handleCurveTo(); return; }
+    if (std::strcmp(op, "v") == 0)  { handleCurveToV(); return; }
+    if (std::strcmp(op, "y") == 0)  { handleCurveToY(); return; }
+    if (std::strcmp(op, "re") == 0) { handleRect(); return; }
+    if (std::strcmp(op, "h") == 0)  { handleClosePath(); return; }
+
+    // Path painting
+    if (std::strcmp(op, "S") == 0)  { handleStroke(); return; }
+    if (std::strcmp(op, "s") == 0)  { handleCloseStroke(); return; }
+    if (std::strcmp(op, "f") == 0 || std::strcmp(op, "F") == 0) { handleFill(); return; }
+    if (std::strcmp(op, "f*") == 0) { handleFill(); return; }
+    if (std::strcmp(op, "B") == 0 || std::strcmp(op, "B*") == 0) { handleFillAndStroke(); return; }
+    if (std::strcmp(op, "b") == 0 || std::strcmp(op, "b*") == 0) { handleCloseFillAndStroke(); return; }
+    if (std::strcmp(op, "n") == 0)  { handleEndPath(); return; }
 }
 
 //=============================================================================
@@ -302,20 +328,314 @@ void PdfContentParser::handleCm() {
 }
 
 void PdfContentParser::handleQ() {
-    // Save graphics state
-    PdfGraphicsState saved;
-    saved.ctm = _ctm;
-    saved.textState = _textState;
-    _stateStack.push_back(saved);
+    // Save full graphics state
+    _gstate.ctm = _ctm;
+    _gstate.textState = _textState;
+    _stateStack.push_back(_gstate);
 }
 
 void PdfContentParser::handleQr() {
-    // Restore graphics state
+    // Restore full graphics state
     if (!_stateStack.empty()) {
-        const auto& saved = _stateStack.back();
-        _ctm = saved.ctm;
-        _textState = saved.textState;
+        _gstate = _stateStack.back();
+        _ctm = _gstate.ctm;
+        _textState = _gstate.textState;
         _stateStack.pop_back();
+    }
+}
+
+//=============================================================================
+// Line width
+//=============================================================================
+
+void PdfContentParser::handleW() {
+    if (!_operands.empty())
+        _gstate.lineWidth = std::stof(_operands.back());
+}
+
+//=============================================================================
+// Color operators
+//=============================================================================
+
+void PdfContentParser::handleRG() {
+    if (_operands.size() >= 3) {
+        size_t base = _operands.size() - 3;
+        _gstate.strokeR = std::stof(_operands[base]);
+        _gstate.strokeG = std::stof(_operands[base + 1]);
+        _gstate.strokeB = std::stof(_operands[base + 2]);
+    }
+}
+
+void PdfContentParser::handleRg() {
+    if (_operands.size() >= 3) {
+        size_t base = _operands.size() - 3;
+        _gstate.fillR = std::stof(_operands[base]);
+        _gstate.fillG = std::stof(_operands[base + 1]);
+        _gstate.fillB = std::stof(_operands[base + 2]);
+    }
+}
+
+void PdfContentParser::handleG() {
+    if (!_operands.empty()) {
+        float g = std::stof(_operands.back());
+        _gstate.strokeR = _gstate.strokeG = _gstate.strokeB = g;
+    }
+}
+
+void PdfContentParser::handleGg() {
+    if (!_operands.empty()) {
+        float g = std::stof(_operands.back());
+        _gstate.fillR = _gstate.fillG = _gstate.fillB = g;
+    }
+}
+
+static void cmykToRgb(float c, float m, float y, float k,
+                       float& r, float& g, float& b) {
+    r = (1.0f - c) * (1.0f - k);
+    g = (1.0f - m) * (1.0f - k);
+    b = (1.0f - y) * (1.0f - k);
+}
+
+void PdfContentParser::handleK() {
+    if (_operands.size() >= 4) {
+        size_t base = _operands.size() - 4;
+        cmykToRgb(std::stof(_operands[base]),
+                  std::stof(_operands[base + 1]),
+                  std::stof(_operands[base + 2]),
+                  std::stof(_operands[base + 3]),
+                  _gstate.strokeR, _gstate.strokeG, _gstate.strokeB);
+    }
+}
+
+void PdfContentParser::handleKk() {
+    if (_operands.size() >= 4) {
+        size_t base = _operands.size() - 4;
+        cmykToRgb(std::stof(_operands[base]),
+                  std::stof(_operands[base + 1]),
+                  std::stof(_operands[base + 2]),
+                  std::stof(_operands[base + 3]),
+                  _gstate.fillR, _gstate.fillG, _gstate.fillB);
+    }
+}
+
+//=============================================================================
+// Path construction operators
+//=============================================================================
+
+void PdfContentParser::handleMoveTo() {
+    if (_operands.size() >= 2) {
+        float y = std::stof(_operands[_operands.size() - 1]);
+        float x = std::stof(_operands[_operands.size() - 2]);
+        _currentPath.push_back({PdfPathOp::MoveTo, x, y, 0, 0, 0, 0});
+        _currentX = x; _currentY = y;
+        _subpathStartX = x; _subpathStartY = y;
+    }
+}
+
+void PdfContentParser::handleLineTo() {
+    if (_operands.size() >= 2) {
+        float y = std::stof(_operands[_operands.size() - 1]);
+        float x = std::stof(_operands[_operands.size() - 2]);
+        _currentPath.push_back({PdfPathOp::LineTo, x, y, 0, 0, 0, 0});
+        _currentX = x; _currentY = y;
+    }
+}
+
+void PdfContentParser::handleCurveTo() {
+    if (_operands.size() >= 6) {
+        size_t base = _operands.size() - 6;
+        float x1 = std::stof(_operands[base]);
+        float y1 = std::stof(_operands[base + 1]);
+        float x2 = std::stof(_operands[base + 2]);
+        float y2 = std::stof(_operands[base + 3]);
+        float x3 = std::stof(_operands[base + 4]);
+        float y3 = std::stof(_operands[base + 5]);
+        _currentPath.push_back({PdfPathOp::CurveTo, x3, y3, x1, y1, x2, y2});
+        _currentX = x3; _currentY = y3;
+    }
+}
+
+void PdfContentParser::handleCurveToV() {
+    // v: x2 y2 x3 y3 — first control point = current point
+    if (_operands.size() >= 4) {
+        size_t base = _operands.size() - 4;
+        float x2 = std::stof(_operands[base]);
+        float y2 = std::stof(_operands[base + 1]);
+        float x3 = std::stof(_operands[base + 2]);
+        float y3 = std::stof(_operands[base + 3]);
+        _currentPath.push_back({PdfPathOp::CurveTo, x3, y3,
+                                _currentX, _currentY, x2, y2});
+        _currentX = x3; _currentY = y3;
+    }
+}
+
+void PdfContentParser::handleCurveToY() {
+    // y: x1 y1 x3 y3 — second control point = final point
+    if (_operands.size() >= 4) {
+        size_t base = _operands.size() - 4;
+        float x1 = std::stof(_operands[base]);
+        float y1 = std::stof(_operands[base + 1]);
+        float x3 = std::stof(_operands[base + 2]);
+        float y3 = std::stof(_operands[base + 3]);
+        _currentPath.push_back({PdfPathOp::CurveTo, x3, y3, x1, y1, x3, y3});
+        _currentX = x3; _currentY = y3;
+    }
+}
+
+void PdfContentParser::handleRect() {
+    // re: x y w h — appends complete rectangle subpath
+    if (_operands.size() >= 4) {
+        size_t base = _operands.size() - 4;
+        float x = std::stof(_operands[base]);
+        float y = std::stof(_operands[base + 1]);
+        float w = std::stof(_operands[base + 2]);
+        float h = std::stof(_operands[base + 3]);
+
+        _currentPath.push_back({PdfPathOp::MoveTo, x, y, 0, 0, 0, 0});
+        _currentPath.push_back({PdfPathOp::LineTo, x + w, y, 0, 0, 0, 0});
+        _currentPath.push_back({PdfPathOp::LineTo, x + w, y + h, 0, 0, 0, 0});
+        _currentPath.push_back({PdfPathOp::LineTo, x, y + h, 0, 0, 0, 0});
+        _currentPath.push_back({PdfPathOp::ClosePath, x, y, 0, 0, 0, 0});
+
+        _currentX = x; _currentY = y;
+        _subpathStartX = x; _subpathStartY = y;
+    }
+}
+
+void PdfContentParser::handleClosePath() {
+    _currentPath.push_back({PdfPathOp::ClosePath,
+                            _subpathStartX, _subpathStartY, 0, 0, 0, 0});
+    _currentX = _subpathStartX;
+    _currentY = _subpathStartY;
+}
+
+//=============================================================================
+// Path painting operators
+//=============================================================================
+
+void PdfContentParser::handleStroke() {
+    paintPath(PdfPaintMode::Stroke);
+    _currentPath.clear();
+}
+
+void PdfContentParser::handleCloseStroke() {
+    handleClosePath();
+    paintPath(PdfPaintMode::Stroke);
+    _currentPath.clear();
+}
+
+void PdfContentParser::handleFill() {
+    paintPath(PdfPaintMode::Fill);
+    _currentPath.clear();
+}
+
+void PdfContentParser::handleFillAndStroke() {
+    paintPath(PdfPaintMode::FillAndStroke);
+    _currentPath.clear();
+}
+
+void PdfContentParser::handleCloseFillAndStroke() {
+    handleClosePath();
+    paintPath(PdfPaintMode::FillAndStroke);
+    _currentPath.clear();
+}
+
+void PdfContentParser::handleEndPath() {
+    _currentPath.clear();
+}
+
+//=============================================================================
+// paintPath — emit rectangles or line segments via callbacks
+//=============================================================================
+
+void PdfContentParser::paintPath(PdfPaintMode mode) {
+    if (_currentPath.empty()) return;
+
+    // Detect axis-aligned rectangle (5 ops from 're': M L L L h)
+    if (_currentPath.size() == 5 &&
+        _currentPath[0].op == PdfPathOp::MoveTo &&
+        _currentPath[1].op == PdfPathOp::LineTo &&
+        _currentPath[2].op == PdfPathOp::LineTo &&
+        _currentPath[3].op == PdfPathOp::LineTo &&
+        _currentPath[4].op == PdfPathOp::ClosePath) {
+
+        float x0 = _currentPath[0].x, y0 = _currentPath[0].y;
+        float x1 = _currentPath[1].x, y1 = _currentPath[1].y;
+        float x2 = _currentPath[2].x, y2 = _currentPath[2].y;
+        float x3 = _currentPath[3].x, y3 = _currentPath[3].y;
+
+        // Check axis-aligned rect pattern
+        if ((y0 == y1 && x1 == x2 && y2 == y3 && x3 == x0) ||
+            (x0 == x1 && y1 == y2 && x2 == x3 && y3 == y0)) {
+
+            float minX = std::min({x0, x1, x2, x3});
+            float minY = std::min({y0, y1, y2, y3});
+            float maxX = std::max({x0, x1, x2, x3});
+            float maxY = std::max({y0, y1, y2, y3});
+
+            // Transform corners through CTM
+            float tMinX, tMinY, tMaxX, tMaxY;
+            _ctm.transformPoint(minX, minY, tMinX, tMinY);
+            _ctm.transformPoint(maxX, maxY, tMaxX, tMaxY);
+            if (tMinX > tMaxX) std::swap(tMinX, tMaxX);
+            if (tMinY > tMaxY) std::swap(tMinY, tMaxY);
+
+            PdfRect rect = {tMinX, tMinY, tMaxX - tMinX, tMaxY - tMinY};
+
+            if (_rectPaintCallback) {
+                _rectPaintCallback(rect, mode,
+                    _gstate.strokeR, _gstate.strokeG, _gstate.strokeB,
+                    _gstate.fillR, _gstate.fillG, _gstate.fillB,
+                    _gstate.lineWidth);
+            }
+            return;
+        }
+    }
+
+    // General path: emit line segments for stroke modes
+    if (mode != PdfPaintMode::Fill && _linePaintCallback) {
+        float prevX = 0, prevY = 0;
+        float moveX = 0, moveY = 0;
+
+        for (const auto& pt : _currentPath) {
+            switch (pt.op) {
+                case PdfPathOp::MoveTo: {
+                    float tx, ty;
+                    _ctm.transformPoint(pt.x, pt.y, tx, ty);
+                    prevX = tx; prevY = ty;
+                    moveX = tx; moveY = ty;
+                    break;
+                }
+                case PdfPathOp::LineTo: {
+                    float tx, ty;
+                    _ctm.transformPoint(pt.x, pt.y, tx, ty);
+                    _linePaintCallback(prevX, prevY, tx, ty,
+                        _gstate.strokeR, _gstate.strokeG, _gstate.strokeB,
+                        _gstate.lineWidth);
+                    prevX = tx; prevY = ty;
+                    break;
+                }
+                case PdfPathOp::CurveTo: {
+                    // Approximate cubic bezier as line to endpoint
+                    float tx, ty;
+                    _ctm.transformPoint(pt.x, pt.y, tx, ty);
+                    _linePaintCallback(prevX, prevY, tx, ty,
+                        _gstate.strokeR, _gstate.strokeG, _gstate.strokeB,
+                        _gstate.lineWidth);
+                    prevX = tx; prevY = ty;
+                    break;
+                }
+                case PdfPathOp::ClosePath: {
+                    if (prevX != moveX || prevY != moveY) {
+                        _linePaintCallback(prevX, prevY, moveX, moveY,
+                            _gstate.strokeR, _gstate.strokeG, _gstate.strokeB,
+                            _gstate.lineWidth);
+                    }
+                    prevX = moveX; prevY = moveY;
+                    break;
+                }
+            }
+        }
     }
 }
 
@@ -340,8 +660,12 @@ void PdfContentParser::emitText(const std::string& decoded) {
     if (effectiveSize < 0.5f) effectiveSize = _textState.fontSize;
 
     if (_textEmitCallback) {
+        // Compute rotation from text rendering matrix
+        float rotationRadians = std::atan2(trm.b, trm.a);
+        if (std::abs(rotationRadians) < 0.001f) rotationRadians = 0.0f;
+
         // CDB-based path: callback places glyphs and returns accurate advance
-        float totalAdvance = _textEmitCallback(decoded, posX, posY, effectiveSize, _textState);
+        float totalAdvance = _textEmitCallback(decoded, posX, posY, effectiveSize, rotationRadians, _textState);
         _textMatrix.e += totalAdvance * _textMatrix.a;
         _textMatrix.f += totalAdvance * _textMatrix.b;
     } else {

@@ -1,5 +1,5 @@
 #include "diagram.h"
-#include "../../ydraw/ydraw-builder.h"
+#include <yetty/ydraw-builder.h>
 #include "../../diagram/graph-ir.h"
 #include "../../diagram/mermaid-parser.h"
 #include "../../diagram/sugiyama-layout.h"

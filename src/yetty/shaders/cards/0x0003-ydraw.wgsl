@@ -368,23 +368,68 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
 
             evalCount++;
 
-            let d = evaluateSDF(primOffset, scenePos);
+            let primType = bitcast<u32>(cardStorage[primOffset + 0u]);
 
-            let fillColorPacked = bitcast<u32>(cardStorage[primOffset + 14u]);
-            if (d < 0.0 && fillColorPacked != 0u) {
-                let fillColor = unpackColor(fillColorPacked);
-                let alpha = clamp(-d * 2.0, 0.0, 1.0);
-                resultColor = mix(resultColor, fillColor, alpha);
-            }
+            if (primType == 65u && hasCustomAtlas) {
+                // ---- ROTATED MSDF GLYPH (type 65) ----
+                let gx = cardStorage[primOffset + 2u];
+                let gy = cardStorage[primOffset + 3u];
+                let gw = cardStorage[primOffset + 4u];
+                let gh = cardStorage[primOffset + 5u];
+                let angle = cardStorage[primOffset + 6u];
+                let gIdx = bitcast<u32>(cardStorage[primOffset + 7u]);
+                let gColor = unpackColor(bitcast<u32>(cardStorage[primOffset + 14u]));
 
-            let strokeColorPacked = bitcast<u32>(cardStorage[primOffset + 15u]);
-            let strokeWidth = cardStorage[primOffset + 16u];
-            if (strokeWidth > 0.0 && strokeColorPacked != 0u) {
-                let strokeDist = abs(d) - strokeWidth * 0.5;
-                if (strokeDist < 0.0) {
-                    let strokeColor = unpackColor(strokeColorPacked);
-                    let alpha = clamp(-strokeDist * 2.0, 0.0, 1.0);
-                    resultColor = mix(resultColor, strokeColor, alpha);
+                // Inverse-rotate scene point into glyph-local space
+                let dx = scenePos.x - gx;
+                let dy = scenePos.y - gy;
+                let ca = cos(-angle);
+                let sa = sin(-angle);
+                let lx = dx * ca - dy * sa;
+                let ly = dx * sa + dy * ca;
+
+                if (lx >= 0.0 && lx < gw && ly >= 0.0 && ly < gh) {
+                    let glyphUV = vec2<f32>(lx / gw, ly / gh);
+                    let metaOff = glyphMetaOff + gIdx * 10u;
+                    let uvMinX = cardStorage[metaOff + 0u];
+                    let uvMinY = cardStorage[metaOff + 1u];
+                    let uvMaxX = cardStorage[metaOff + 2u];
+                    let uvMaxY = cardStorage[metaOff + 3u];
+                    let msdfUV = vec2<f32>(
+                        mix(uvMinX, uvMaxX, glyphUV.x),
+                        mix(uvMinY, uvMaxY, glyphUV.y)
+                    );
+                    let msdfPixel = msdfUV * vec2<f32>(f32(msdfAtlasW), f32(msdfAtlasH));
+                    let cardPixel = vec2<f32>(f32(atlasX), f32(atlasY)) + msdfPixel;
+                    let sampleUV = cardPixel / vec2<f32>(textureDimensions(cardImageAtlas));
+                    let msdf = textureSampleLevel(cardImageAtlas, cardImageSampler, sampleUV, 0.0);
+                    let sd = median(msdf.r, msdf.g, msdf.b);
+                    let pxDist = grid.pixelRange * (sd - 0.5);
+                    let alpha = clamp(pxDist * screenScale + 0.5, 0.0, 1.0);
+                    if (alpha > 0.01) {
+                        resultColor = mix(resultColor, gColor, alpha);
+                    }
+                }
+            } else {
+                // ---- REGULAR SDF PRIMITIVE ----
+                let d = evaluateSDF(primOffset, scenePos);
+
+                let fillColorPacked = bitcast<u32>(cardStorage[primOffset + 14u]);
+                if (d < 0.0 && fillColorPacked != 0u) {
+                    let fillColor = unpackColor(fillColorPacked);
+                    let alpha = clamp(-d * 2.0, 0.0, 1.0);
+                    resultColor = mix(resultColor, fillColor, alpha);
+                }
+
+                let strokeColorPacked = bitcast<u32>(cardStorage[primOffset + 15u]);
+                let strokeWidth = cardStorage[primOffset + 16u];
+                if (strokeWidth > 0.0 && strokeColorPacked != 0u) {
+                    let strokeDist = abs(d) - strokeWidth * 0.5;
+                    if (strokeDist < 0.0) {
+                        let strokeColor = unpackColor(strokeColorPacked);
+                        let alpha = clamp(-strokeDist * 2.0, 0.0, 1.0);
+                        resultColor = mix(resultColor, strokeColor, alpha);
+                    }
                 }
             }
         }

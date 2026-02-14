@@ -1,5 +1,7 @@
 #include "ypdf.h"
-#include "pdf-content-parser.h"
+#include "pdf-renderer.h"
+#include "../hdraw/hdraw.h"  // For SDFPrimitive
+#include <yetty/ydraw-writer.h>
 #include <yetty/base/event-loop.h>
 #include <yetty/msdf-glyph-data.h>
 #include <yetty/card-texture-manager.h>
@@ -24,7 +26,6 @@ namespace {
 constexpr int GLFW_MOD_SHIFT   = 0x0001;
 constexpr int GLFW_MOD_CONTROL = 0x0002;
 constexpr int GLFW_KEY_C       = 67;
-constexpr float PAGE_MARGIN = 20.0f;  // Points between pages
 
 // Resolve a font family to TTF path via fontconfig
 std::string resolveFontPath(const char* family, int weight = 400, bool italic = false) {
@@ -89,13 +90,12 @@ YPdf::YPdf(const YettyContext& ctx,
 {
     _shaderGlyph = SHADER_GLYPH;
 
-    auto builderRes = YDrawBuilder::create(ctx.fontManager, ctx.globalAllocator);
-    if (builderRes) {
-        _builder = *builderRes;
-        _builder->addFlags(YDrawBuilder::FLAG_UNIFORM_SCALE | YDrawBuilder::FLAG_CUSTOM_ATLAS);
-        _builder->setBgColor(0xFFFFFFFF);  // White background for PDF
+    auto writerRes = YDrawWriterInternal::create(ctx.fontManager, ctx.globalAllocator);
+    if (writerRes) {
+        _writer = *writerRes;
+        _builder = _writer->builder();
     } else {
-        yerror("YPdf: failed to create YDrawBuilder");
+        yerror("YPdf: failed to create YDrawWriterInternal");
     }
 }
 
@@ -147,16 +147,16 @@ Result<CardPtr> YPdf::create(
 Result<void> YPdf::init() {
     ydebug("YPdf::init: START");
 
-    if (!_builder) {
-        return Err<void>("YPdf::init: no builder");
+    if (!_writer || !_builder) {
+        return Err<void>("YPdf::init: no writer/builder");
     }
 
-    // Load default serif font via builder
+    // Load default serif font via writer
     std::string defaultFontPath = resolveFontPath("serif");
     if (defaultFontPath.empty()) {
         return Err<void>("YPdf::init: fontconfig could not resolve 'serif'");
     }
-    auto fontRes = _builder->addFont(defaultFontPath);
+    auto fontRes = _writer->addFont(defaultFontPath);
     if (!fontRes) {
         return Err<void>("YPdf::init: failed to load default serif font");
     }
@@ -179,13 +179,6 @@ Result<void> YPdf::init() {
 
     if (auto res = loadPdf(); !res) {
         return res;
-    }
-
-    // Set up raw-font cache directory for extracted PDF fonts
-    if (_fontManager) {
-        auto parentDir = std::filesystem::path(_fontManager->getCacheDir()).parent_path();
-        _rawFontCacheDir = (parentDir / "raw-fonts").string();
-        std::filesystem::create_directories(_rawFontCacheDir);
     }
 
     if (auto res = renderAllPages(); !res) {
@@ -314,360 +307,27 @@ Result<void> YPdf::loadPdf() {
 //=============================================================================
 
 Result<void> YPdf::renderAllPages() {
-    if (!_pdfFile || !_builder) {
-        return Err<void>("YPdf::renderAllPages: no document or builder");
+    if (!_pdfFile || !_writer) {
+        return Err<void>("YPdf::renderAllPages: no document or writer");
     }
 
-    struct PageInfo {
-        float x, y, w, h;
-    };
-    std::vector<PageInfo> pages;
-    pages.reserve(static_cast<size_t>(_pageCount));
+    // Shared renderer does everything: font extraction, text, graphics
+    auto result = renderPdfToWriter(_pdfFile, _writer.get());
 
-    float maxWidth = 0.0f;
-    float totalHeight = 0.0f;
-
-    for (int i = 0; i < _pageCount; i++) {
-        pdfio_obj_t* pageObj = pdfioFileGetPage(
-            _pdfFile, static_cast<size_t>(i));
-        if (!pageObj) continue;
-
-        pdfio_dict_t* pageDict = pdfioObjGetDict(pageObj);
-        pdfio_rect_t mediaBox = {};
-        if (!pdfioDictGetRect(pageDict, "MediaBox", &mediaBox)) {
-            mediaBox = {0.0, 0.0, 612.0, 792.0};  // Default US Letter
-        }
-
-        float pw = static_cast<float>(mediaBox.x2 - mediaBox.x1);
-        float ph = static_cast<float>(mediaBox.y2 - mediaBox.y1);
-
-        pages.push_back({static_cast<float>(mediaBox.x1),
-                         static_cast<float>(mediaBox.y1), pw, ph});
-        maxWidth = std::max(maxWidth, pw);
-        if (i > 0) totalHeight += PAGE_MARGIN;
-        totalHeight += ph;
-    }
-
-    if (pages.empty()) {
+    if (result.pageCount == 0) {
         return Err<void>("YPdf::renderAllPages: no valid pages");
     }
 
-    // Set explicit scene bounds on builder
-    _builder->setSceneBounds(0.0f, 0.0f, maxWidth, totalHeight);
+    // Compute initial zoom to fit one page height
+    float maxWidth = _builder->sceneMaxX() - _builder->sceneMinX();
+    float cardAspect = static_cast<float>(_widthCells) /
+                       std::max(static_cast<float>(_heightCells), 1.0f);
+    _fitPageHeight = maxWidth / cardAspect;
 
-    // Initial zoom: fit first page via _fitPageHeight mechanism
-    if (!pages.empty() && totalHeight > 0.0f) {
-        float firstPageH = pages[0].h;
-        float cardAspect = static_cast<float>(_widthCells) / std::max(static_cast<float>(_heightCells), 1.0f);
-        float viewableH = maxWidth / cardAspect;
-        _fitPageHeight = viewableH;
-    }
-
-    yinfo("YPdf::renderAllPages: {} pages, scene={}x{}", _pageCount, maxWidth, totalHeight);
-
-    // Render each page at its vertical offset
-    float yOffset = 0.0f;
-    for (int i = 0; i < _pageCount; i++) {
-        if (static_cast<size_t>(i) >= pages.size()) break;
-
-        if (auto res = renderPage(i, yOffset); !res) {
-            ywarn("YPdf::renderAllPages: page {} failed: {}", i,
-                  error_msg(res));
-        }
-
-        yOffset += pages[static_cast<size_t>(i)].h + PAGE_MARGIN;
-    }
+    yinfo("YPdf::renderAllPages: {} pages, totalHeight={:.1f}",
+          result.pageCount, result.totalHeight);
 
     return Ok();
-}
-
-Result<void> YPdf::renderPage(int pageIndex, float yOffset) {
-    pdfio_obj_t* pageObj = pdfioFileGetPage(
-        _pdfFile, static_cast<size_t>(pageIndex));
-    if (!pageObj) {
-        return Err<void>("YPdf::renderPage: failed to get page " +
-                          std::to_string(pageIndex));
-    }
-
-    pdfio_dict_t* pageDict = pdfioObjGetDict(pageObj);
-    pdfio_rect_t mediaBox = {};
-    if (!pdfioDictGetRect(pageDict, "MediaBox", &mediaBox)) {
-        mediaBox = {0.0, 0.0, 612.0, 792.0};
-    }
-
-    float pageH = static_cast<float>(mediaBox.y2 - mediaBox.y1);
-
-    // Extract embedded fonts from this page's resources
-    extractFonts(pageObj);
-
-    // Parse content streams with TextEmitCallback for CDB-based glyph placement
-    PdfContentParser parser;
-    parser.setPageHeight(pageH);
-
-    // Set the callback that uses CDB glyph advances for correct spacing
-    parser.setTextEmitCallback(
-        [this, yOffset, pageH](const std::string& text,
-                                float posX, float posY,
-                                float effectiveSize,
-                                const PdfTextState& textState) -> float {
-            // Flip Y: PDF origin is bottom-left, scene origin is top-left
-            float sceneX = posX;
-            float sceneY = yOffset + (pageH - posY);
-
-            float fontSize = (_fontSize > 0.0f) ? _fontSize : effectiveSize;
-
-            return placeGlyphs(text, sceneX, sceneY, fontSize, textState);
-        });
-
-    size_t numStreams = pdfioPageGetNumStreams(pageObj);
-    yinfo("YPdf::renderPage: page {} has {} content streams, yOffset={}",
-          pageIndex, numStreams, yOffset);
-
-    for (size_t i = 0; i < numStreams; i++) {
-        pdfio_stream_t* stream = pdfioPageOpenStream(
-            pageObj, i, /*decode=*/true);
-        if (!stream) continue;
-
-        parser.parseStream(stream);
-        pdfioStreamClose(stream);
-    }
-
-    return Ok();
-}
-
-//=============================================================================
-// Glyph placement (CDB-based) — the core method
-//
-// Places glyphs using real CDB advance/bearing/size data.
-// Returns total advance in text-matrix units for parser text matrix update.
-//=============================================================================
-
-float YPdf::placeGlyphs(const std::string& text,
-                         float posX, float posY,
-                         float effectiveSize,
-                         const PdfTextState& textState) {
-    if (!_builder || !_builder->hasCustomAtlas() || text.empty()) return 0.0f;
-
-    auto atlas = _builder->customAtlas();
-    float fontBaseSize = atlas->getFontSize();
-    if (fontBaseSize <= 0.0f) fontBaseSize = 1.0f;
-
-    // Two scales:
-    // scaleScene: for visual glyph placement in scene coordinates
-    // scaleText: for text matrix advance return value
-    float scaleScene = effectiveSize / fontBaseSize;
-    float scaleText = textState.fontSize / fontBaseSize;
-
-    float hScale = textState.horizontalScaling / 100.0f;
-
-    // Lookup fontId from PDF font name
-    int fontId = 0;
-    auto it = _pdfFontMap.find(textState.fontName);
-    if (it != _pdfFontMap.end()) {
-        fontId = it->second;
-    }
-
-    ydebug("placeGlyphs: text='{}' len={} pos=({:.1f},{:.1f}) effSize={:.1f} "
-           "fontSize={:.1f} fontBase={:.1f} scaleScene={:.4f} scaleText={:.4f} "
-           "hScale={:.2f} fontId={} font='{}'",
-           text.substr(0, 20), text.size(), posX, posY, effectiveSize,
-           textState.fontSize, fontBaseSize, scaleScene, scaleText,
-           hScale, fontId, textState.fontName);
-
-    float cursorX = posX;
-    float totalTextAdvance = 0.0f;
-
-    const uint8_t* ptr = reinterpret_cast<const uint8_t*>(text.data());
-    const uint8_t* end = ptr + text.size();
-
-    while (ptr < end) {
-        // Decode UTF-8 codepoint
-        uint32_t codepoint = 0;
-        if ((*ptr & 0x80) == 0) {
-            codepoint = *ptr++;
-        } else if ((*ptr & 0xE0) == 0xC0) {
-            codepoint = (*ptr++ & 0x1F) << 6;
-            if (ptr < end) codepoint |= (*ptr++ & 0x3F);
-        } else if ((*ptr & 0xF0) == 0xE0) {
-            codepoint = (*ptr++ & 0x0F) << 12;
-            if (ptr < end) codepoint |= (*ptr++ & 0x3F) << 6;
-            if (ptr < end) codepoint |= (*ptr++ & 0x3F);
-        } else if ((*ptr & 0xF8) == 0xF0) {
-            codepoint = (*ptr++ & 0x07) << 18;
-            if (ptr < end) codepoint |= (*ptr++ & 0x3F) << 12;
-            if (ptr < end) codepoint |= (*ptr++ & 0x3F) << 6;
-            if (ptr < end) codepoint |= (*ptr++ & 0x3F);
-        } else {
-            ptr++;
-            continue;
-        }
-
-        // Load glyph from custom atlas
-        uint32_t glyphIndex = atlas->loadGlyph(fontId, codepoint);
-
-        const auto& metadata = atlas->getGlyphMetadata();
-        if (glyphIndex >= metadata.size()) {
-            ydebug("YPdf::placeGlyphs: MISSING glyph cp={} fontId={} glyphIdx={} metaSize={}",
-                   codepoint, fontId, glyphIndex, metadata.size());
-            // Fallback advance for missing glyphs
-            float fallbackAdv = effectiveSize * 0.5f;
-            cursorX += fallbackAdv * hScale;
-            totalTextAdvance += (textState.fontSize * 0.5f) * hScale;
-            continue;
-        }
-
-        const auto& glyph = metadata[glyphIndex];
-
-        // Place glyph via YDrawGlyph into builder
-        YDrawGlyph g = {};
-        g.x = cursorX + glyph._bearingX * scaleScene;
-        g.y = posY - glyph._bearingY * scaleScene;
-        g.setSize(glyph._sizeX * scaleScene, glyph._sizeY * scaleScene);
-        g.setGlyphLayerFlags(static_cast<uint16_t>(glyphIndex), 0,
-                             YDrawBuilder::GLYPH_FLAG_CUSTOM_ATLAS);
-        g.color = _textColor;
-        _builder->glyphsMut().push_back(g);
-
-        // Advance cursor in scene coords
-        float sceneAdvance = glyph._advance * scaleScene + textState.charSpacing;
-        // Advance for text matrix return
-        float textAdvance = glyph._advance * scaleText + textState.charSpacing;
-
-        // Word spacing for space character
-        if (codepoint == 0x20) {
-            sceneAdvance += textState.wordSpacing;
-            textAdvance += textState.wordSpacing;
-        }
-
-        cursorX += sceneAdvance * hScale;
-        totalTextAdvance += textAdvance * hScale;
-    }
-
-    ydebug("placeGlyphs: result totalAdvance={:.2f} cursorX={:.1f} (startX={:.1f} delta={:.1f}) "
-           "glyphsNow={}",
-           totalTextAdvance, cursorX, posX, cursorX - posX, _builder->glyphCount());
-
-    return totalTextAdvance;
-}
-
-//=============================================================================
-// Font extraction from PDF resources
-//=============================================================================
-
-void YPdf::extractFonts(pdfio_obj_t* pageObj) {
-    if (_rawFontCacheDir.empty() || !pageObj) return;
-
-    pdfio_dict_t* pageDict = pdfioObjGetDict(pageObj);
-    if (!pageDict) return;
-
-    pdfio_dict_t* resources = pdfioDictGetDict(pageDict, "Resources");
-    if (!resources) {
-        pdfio_obj_t* resObj = pdfioDictGetObj(pageDict, "Resources");
-        if (resObj) resources = pdfioObjGetDict(resObj);
-    }
-    if (!resources) return;
-
-    pdfio_dict_t* fontDict = pdfioDictGetDict(resources, "Font");
-    if (!fontDict) {
-        pdfio_obj_t* fontDictObj = pdfioDictGetObj(resources, "Font");
-        if (fontDictObj) fontDict = pdfioObjGetDict(fontDictObj);
-    }
-    if (!fontDict) return;
-
-    auto pdfStem = std::filesystem::path(_payloadStr).stem().string();
-
-    size_t numFonts = pdfioDictGetNumPairs(fontDict);
-    yinfo("YPdf::extractFonts: found {} font entries in page resources", numFonts);
-    for (size_t i = 0; i < numFonts; i++) {
-        const char* fontTag = pdfioDictGetKey(fontDict, i);
-        if (!fontTag) continue;
-
-        std::string tag(fontTag);
-        if (_pdfFontMap.count(tag) || _pdfFontMap.count("/" + tag)) continue;
-
-        pdfio_obj_t* fontObj = pdfioDictGetObj(fontDict, fontTag);
-        if (!fontObj) continue;
-
-        pdfio_dict_t* fontObjDict = pdfioObjGetDict(fontObj);
-        if (!fontObjDict) continue;
-
-        pdfio_obj_t* fontDescObj = pdfioDictGetObj(fontObjDict, "FontDescriptor");
-        if (!fontDescObj) {
-            ydebug("YPdf::extractFonts: font {} has no FontDescriptor", tag);
-            continue;
-        }
-
-        pdfio_dict_t* fontDescDict = pdfioObjGetDict(fontDescObj);
-        if (!fontDescDict) continue;
-
-        pdfio_obj_t* fontFileObj = pdfioDictGetObj(fontDescDict, "FontFile2");
-        if (!fontFileObj) {
-            fontFileObj = pdfioDictGetObj(fontDescDict, "FontFile3");
-        }
-        if (!fontFileObj) {
-            ydebug("YPdf::extractFonts: font {} has no embedded font file", tag);
-            continue;
-        }
-
-        std::string ttfPath = _rawFontCacheDir + "/" + pdfStem + "-" + tag + ".ttf";
-
-        if (!std::filesystem::exists(ttfPath)) {
-            pdfio_stream_t* stream = pdfioObjOpenStream(fontFileObj, /*decode=*/true);
-            if (!stream) {
-                ywarn("YPdf::extractFonts: failed to open stream for font {}", tag);
-                continue;
-            }
-
-            std::vector<uint8_t> fontData;
-            uint8_t buf[8192];
-            ssize_t bytesRead;
-            while ((bytesRead = pdfioStreamRead(stream, buf, sizeof(buf))) > 0) {
-                fontData.insert(fontData.end(), buf, buf + bytesRead);
-            }
-            pdfioStreamClose(stream);
-
-            if (fontData.empty()) {
-                ywarn("YPdf::extractFonts: empty font stream for {}", tag);
-                continue;
-            }
-
-            std::ofstream out(ttfPath, std::ios::binary);
-            if (!out) {
-                ywarn("YPdf::extractFonts: failed to write {}", ttfPath);
-                continue;
-            }
-            out.write(reinterpret_cast<const char*>(fontData.data()),
-                      static_cast<std::streamsize>(fontData.size()));
-            out.close();
-
-            yinfo("YPdf::extractFonts: extracted font {} -> {} ({} bytes)",
-                  tag, ttfPath, fontData.size());
-        }
-
-        int fontId = addFont(ttfPath);
-        if (fontId >= 0) {
-            _pdfFontMap[tag] = fontId;
-            _pdfFontMap["/" + tag] = fontId;
-            yinfo("YPdf::extractFonts: registered font {} as fontId={}", tag, fontId);
-        } else {
-            ywarn("YPdf::extractFonts: addFont failed for {}", ttfPath);
-        }
-    }
-}
-
-//=============================================================================
-// Font registration — delegates to builder
-//=============================================================================
-
-int YPdf::addFont(const std::string& ttfPath) {
-    if (!_builder) return -1;
-
-    auto result = _builder->addFont(ttfPath);
-    if (!result) {
-        yerror("YPdf::addFont: failed for {}", ttfPath);
-        return -1;
-    }
-    return *result;
 }
 
 //=============================================================================
@@ -766,8 +426,8 @@ Result<void> YPdf::uploadMetadata() {
     float cellSize = _builder->cellSize();
 
     YDrawMetadata meta = {};
-    meta.primitiveOffset = 0;
-    meta.primitiveCount = 0;
+    meta.primitiveOffset = _primStorage.isValid() ? _primStorage.offset / sizeof(float) : 0;
+    meta.primitiveCount = _primCount;
     meta.gridOffset = _gridOffset;
     meta.gridWidth = _gridWidth;
     meta.gridHeight = _gridHeight;
@@ -797,12 +457,22 @@ Result<void> YPdf::uploadMetadata() {
 
 void YPdf::declareBufferNeeds() {
     _derivedStorage = StorageHandle::invalid();
+    _primStorage = StorageHandle::invalid();
+    _primCount = 0;
     if (!_builder) return;
 
     const auto& glyphs = _builder->glyphs();
-    if (glyphs.empty()) {
+    const auto& primStaging = _builder->primStaging();
+
+    if (glyphs.empty() && primStaging.empty()) {
         _builder->clearGridStaging();
         return;
+    }
+
+    // Reserve prim storage
+    if (!primStaging.empty()) {
+        uint32_t primSize = static_cast<uint32_t>(primStaging.size()) * sizeof(SDFPrimitive);
+        _cardMgr->bufferManager()->reserve(primSize);
     }
 
     // Calculate grid if needed
@@ -833,8 +503,26 @@ void YPdf::declareBufferNeeds() {
 Result<void> YPdf::allocateBuffers() {
     if (!_builder) return Ok();
 
+    const auto& primStaging = _builder->primStaging();
     const auto& gridStaging = _builder->gridStaging();
     const auto& glyphs = _builder->glyphs();
+
+    // Allocate and copy primitives
+    if (!primStaging.empty()) {
+        uint32_t count = static_cast<uint32_t>(primStaging.size());
+        uint32_t allocBytes = count * sizeof(SDFPrimitive);
+        auto primResult = _cardMgr->bufferManager()->allocateBuffer(
+            metadataSlotIndex(), "prims", allocBytes);
+        if (!primResult) {
+            return Err<void>("YPdf::allocateBuffers: prim alloc failed");
+        }
+        _primStorage = *primResult;
+        _primCount = count;
+        std::memcpy(_primStorage.data, primStaging.data(), count * sizeof(SDFPrimitive));
+        _builder->primStagingMut().clear();
+        _builder->primStagingMut().shrink_to_fit();
+        _cardMgr->bufferManager()->markBufferDirty(_primStorage);
+    }
 
     // Allocate derived storage (grid + glyphs + atlas)
     uint32_t gridBytes = static_cast<uint32_t>(gridStaging.size()) * sizeof(uint32_t);
@@ -989,6 +677,7 @@ Result<void> YPdf::render() {
 
 Result<void> YPdf::dispose() {
     deregisterFromEvents();
+    _primStorage = StorageHandle::invalid();
     _derivedStorage = StorageHandle::invalid();
 
     if (_metaHandle.isValid() && _cardMgr) {
@@ -1002,6 +691,7 @@ Result<void> YPdf::dispose() {
 }
 
 void YPdf::suspend() {
+    _primStorage = StorageHandle::invalid();
     _derivedStorage = StorageHandle::invalid();
 }
 

@@ -1,9 +1,10 @@
-#include "ydraw-builder.h"
+#include <yetty/ydraw-builder.h>
 #include "../cards/hdraw/hdraw.h"  // For SDFPrimitive, SDFType
 #include <yetty/msdf-glyph-data.h>  // For GlyphMetadataGPU
 #include <ytrace/ytrace.hpp>
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -402,6 +403,27 @@ static void computeAABB(SDFPrimitive& prim) {
             prim.aabbMaxY = prim.params[1] + r;
             break;
         }
+        case SDFType::RotatedGlyph: {
+            float gx = prim.params[0], gy = prim.params[1];
+            float gw = prim.params[2], gh = prim.params[3];
+            float angle = prim.params[4];
+            float ca = std::cos(angle), sa = std::sin(angle);
+            // Rotate 4 corners of the glyph quad, take AABB
+            float cx[4] = {0, gw, gw, 0};
+            float cy[4] = {0, 0, gh, gh};
+            float minX = gx, maxX = gx, minY = gy, maxY = gy;
+            for (int i = 0; i < 4; i++) {
+                float rx = gx + cx[i] * ca - cy[i] * sa;
+                float ry = gy + cx[i] * sa + cy[i] * ca;
+                minX = std::min(minX, rx); maxX = std::max(maxX, rx);
+                minY = std::min(minY, ry); maxY = std::max(maxY, ry);
+            }
+            prim.aabbMinX = minX;
+            prim.aabbMinY = minY;
+            prim.aabbMaxX = maxX;
+            prim.aabbMaxY = maxY;
+            break;
+        }
         // 3D primitives - not used for grid, set dummy AABB
         case SDFType::Sphere3D:
         case SDFType::Box3D:
@@ -544,6 +566,23 @@ public:
         return addPrimitive(prim);
     }
 
+    uint32_t addRotatedGlyph(float x, float y, float w, float h,
+                             float angle, uint32_t glyphIndex,
+                             uint32_t color) override {
+        SDFPrimitive prim = {};
+        prim.type = static_cast<uint32_t>(SDFType::RotatedGlyph);
+        prim.params[0] = x;
+        prim.params[1] = y;
+        prim.params[2] = w;
+        prim.params[3] = h;
+        prim.params[4] = angle;
+        float glyphIdxF;
+        std::memcpy(&glyphIdxF, &glyphIndex, sizeof(float));
+        prim.params[5] = glyphIdxF;
+        prim.fillColor = color;
+        return addPrimitive(prim);
+    }
+
     //=========================================================================
     // Text API
     //=========================================================================
@@ -640,6 +679,76 @@ public:
 
         if (glyphsAdded > 0) {
             _gridStaging.clear();  // invalidate grid
+        }
+
+        return Ok();
+    }
+
+    Result<void> addRotatedText(float x, float y, const std::string& text,
+                                 float fontSize, uint32_t color,
+                                 float angleRadians, int fontId) override {
+        // Rotated glyphs require the custom atlas (shader type 65 only
+        // supports custom atlas sampling). Shared atlas is not supported.
+        int resolvedFontId = fontId;
+        if (fontId >= 0) {
+            auto it = _userFontIdMap.find(fontId);
+            if (it != _userFontIdMap.end()) resolvedFontId = it->second;
+        }
+        if (resolvedFontId < 0 || !_customAtlas) {
+            return Err<void>("addRotatedText: requires a custom font (rotated "
+                             "glyphs only work with custom atlas)");
+        }
+        if (text.empty()) return Ok();
+        MsdfAtlas* activeAtlas = _customAtlas.get();
+
+        float fontBaseSize = activeAtlas->getFontSize();
+        float scale = fontSize / fontBaseSize;
+        float cosA = std::cos(angleRadians);
+        float sinA = std::sin(angleRadians);
+        float cursorAdvance = 0.0f;
+
+        const uint8_t* ptr = reinterpret_cast<const uint8_t*>(text.data());
+        const uint8_t* end = ptr + text.size();
+
+        while (ptr < end) {
+            uint32_t codepoint = 0;
+            if ((*ptr & 0x80) == 0) {
+                codepoint = *ptr++;
+            } else if ((*ptr & 0xE0) == 0xC0) {
+                codepoint = (*ptr++ & 0x1F) << 6;
+                if (ptr < end) codepoint |= (*ptr++ & 0x3F);
+            } else if ((*ptr & 0xF0) == 0xE0) {
+                codepoint = (*ptr++ & 0x0F) << 12;
+                if (ptr < end) codepoint |= (*ptr++ & 0x3F) << 6;
+                if (ptr < end) codepoint |= (*ptr++ & 0x3F);
+            } else if ((*ptr & 0xF8) == 0xF0) {
+                codepoint = (*ptr++ & 0x07) << 18;
+                if (ptr < end) codepoint |= (*ptr++ & 0x3F) << 12;
+                if (ptr < end) codepoint |= (*ptr++ & 0x3F) << 6;
+                if (ptr < end) codepoint |= (*ptr++ & 0x3F);
+            } else {
+                ptr++;
+                continue;
+            }
+
+            uint32_t glyphIndex = _customAtlas->loadGlyph(resolvedFontId, codepoint);
+            const auto& metadata = activeAtlas->getGlyphMetadata();
+            if (glyphIndex >= metadata.size()) {
+                cursorAdvance += fontSize * 0.5f;
+                continue;
+            }
+
+            const auto& glyph = metadata[glyphIndex];
+            float bx = glyph._bearingX * scale;
+            float by = -glyph._bearingY * scale;
+            float gw = glyph._sizeX * scale;
+            float gh = glyph._sizeY * scale;
+
+            float gx = x + (cursorAdvance + bx) * cosA - by * sinA;
+            float gy = y + (cursorAdvance + bx) * sinA + by * cosA;
+
+            addRotatedGlyph(gx, gy, gw, gh, angleRadians, glyphIndex, color);
+            cursorAdvance += glyph._advance * scale;
         }
 
         return Ok();
@@ -805,6 +914,36 @@ public:
         _userFontIdMap[userFontId] = atlasId;
         yinfo("addFont: mapped user fontId {} -> atlas fontId {}", userFontId, atlasId);
         return Ok();
+    }
+
+    Result<int> addFontData(const uint8_t* data, size_t size,
+                             const std::string& /*name*/) override {
+        // FNV-1a content hash → stable temp filename → stable CDB cache key
+        uint64_t h = 14695981039346656037ULL;
+        for (size_t i = 0; i < size; i++) {
+            h ^= data[i];
+            h *= 1099511628211ULL;
+        }
+        char hex[17];
+        std::snprintf(hex, sizeof(hex), "%016llx",
+                      static_cast<unsigned long long>(h));
+
+        auto cacheDir = _fontManager->getCacheDir();
+        auto ttfPath = cacheDir + "/pdf_font_" + hex + ".ttf";
+
+        if (!std::filesystem::exists(ttfPath)) {
+            std::ofstream out(ttfPath, std::ios::binary);
+            if (!out)
+                return Err<int>("addFontData: failed to write " + ttfPath);
+            out.write(reinterpret_cast<const char*>(data),
+                      static_cast<std::streamsize>(size));
+        }
+
+        return addFont(ttfPath);
+    }
+
+    void mapFontId(int userId, int atlasId) override {
+        _userFontIdMap[userId] = atlasId;
     }
 
     //=========================================================================

@@ -81,3 +81,19 @@ body:
       font: "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"
       color: "#f39c12"
 
+  - text:
+      position: [500, 100]
+      content: "Vertical Text (90°)"
+      font-size: 20
+      font: "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+      color: "#1abc9c"
+      rotation: 90
+
+  - text:
+      position: [350, 350]
+      content: "Diagonal Text (45°)"
+      font-size: 24
+      font: "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+      color: "#e67e22"
+      rotation: 45
+
