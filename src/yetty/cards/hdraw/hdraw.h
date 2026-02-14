@@ -33,7 +33,8 @@ namespace yetty::card {
 //   5 = Bezier3:    params[0-7]=p0,p1,p2,p3 (cubic)
 //   6 = Ellipse:    params[0-1]=center, params[2-3]=radii
 //   7 = Arc:        params[0-1]=center, params[2-3]=sc, params[4-5]=ra,rb
-//  64 = TextGlyph:  params[0-1]=position, params[2]=glyphIndex, params[3]=fontSize
+//  64 = TextGlyph:      params[0-1]=position, params[2]=glyphIndex, params[3]=fontSize
+//  65 = RotatedGlyph:   params[0-1]=position, params[2-3]=size, params[4]=angle(rad), params[5]=glyphIndex(bitcast)
 //
 // =============================================================================
 // Metadata layout (64 bytes):
@@ -107,6 +108,9 @@ enum class SDFType : uint32_t {
     CircleWave = 43,
     // Text glyph (handled specially)
     TextGlyph = 64,
+    // Rotated MSDF glyph (as SDF primitive, for rare rotated text)
+    // params[0-1]=position, params[2-3]=size, params[4]=angle, params[5]=glyphIndex(bitcast)
+    RotatedGlyph = 65,
 
     // 3D primitives (raymarched)
     Sphere3D = 100,

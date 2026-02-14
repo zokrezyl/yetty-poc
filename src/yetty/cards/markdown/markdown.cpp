@@ -1,5 +1,5 @@
 #include "markdown.h"
-#include "../../ydraw/ydraw-builder.h"
+#include <yetty/ydraw-builder.h>
 #include "../hdraw/hdraw.h"  // For SDFPrimitive
 #include <yetty/msdf-glyph-data.h>
 #include <yetty/base/event-loop.h>

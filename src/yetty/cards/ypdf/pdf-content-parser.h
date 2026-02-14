@@ -52,39 +52,84 @@ struct PdfTextState {
 };
 
 //=============================================================================
+// Path types for graphics rendering
+//=============================================================================
+enum class PdfPathOp : uint8_t {
+    MoveTo,
+    LineTo,
+    CurveTo,    // cubic bezier (c operator)
+    ClosePath,
+};
+
+struct PdfPathPoint {
+    PdfPathOp op;
+    float x, y;
+    float x1, y1, x2, y2;  // control points for CurveTo
+};
+
+enum class PdfPaintMode : uint8_t {
+    Stroke,
+    Fill,
+    FillAndStroke,
+};
+
+//=============================================================================
 // PdfGraphicsState - saved/restored by q/Q operators
 //=============================================================================
 struct PdfGraphicsState {
     PdfMatrix ctm;
     PdfTextState textState;
+    // Graphics drawing state
+    float strokeR = 0, strokeG = 0, strokeB = 0;  // Stroke color (default black)
+    float fillR = 0, fillG = 0, fillB = 0;        // Fill color (default black)
+    float lineWidth = 1.0f;
 };
 
 //=============================================================================
-// PdfContentParser - extracts positioned text from PDF content streams
-//
-// Usage:
-//   PdfContentParser parser;
-//   parser.setPageHeight(792.0f);
-//   parser.parseStream(stream);
-//   for (const auto& span : parser.textSpans()) { ... }
+// Callbacks
 //=============================================================================
+
 // Callback for glyph placement during text emission.
-// Called from emitText() for each Tj/TJ text string.
-// Parameters: decoded text, position from Trm, effective font size, text state.
-// Returns: total advance in text-matrix units for text matrix update.
 using TextEmitCallback = std::function<float(
     const std::string& text,
     float posX, float posY,
     float effectiveSize,
+    float rotationRadians,
     const PdfTextState& textState
 )>;
 
+// Callback for painting a rectangle (optimized path for re+S/f/B).
+// Coordinates are in PDF user space (before page flip).
+// mode: Stroke=borders only, Fill=solid fill, FillAndStroke=both.
+struct PdfRect {
+    float x, y, w, h;
+};
+using RectPaintCallback = std::function<void(
+    const PdfRect& rect,
+    PdfPaintMode mode,
+    float strokeR, float strokeG, float strokeB,
+    float fillR, float fillG, float fillB,
+    float lineWidth
+)>;
+
+// Callback for painting a line segment (for m/l/S paths).
+using LinePaintCallback = std::function<void(
+    float x0, float y0, float x1, float y1,
+    float r, float g, float b,
+    float lineWidth
+)>;
+
+//=============================================================================
+// PdfContentParser
+//=============================================================================
 class PdfContentParser {
 public:
     PdfContentParser();
 
     void setPageHeight(float h) { _pageHeight = h; }
     void setTextEmitCallback(TextEmitCallback cb) { _textEmitCallback = std::move(cb); }
+    void setRectPaintCallback(RectPaintCallback cb) { _rectPaintCallback = std::move(cb); }
+    void setLinePaintCallback(LinePaintCallback cb) { _linePaintCallback = std::move(cb); }
     void parseStream(pdfio_stream_t* stream);
     const std::vector<PdfTextSpan>& textSpans() const { return _spans; }
 
@@ -118,6 +163,35 @@ private:
     void handleCm();
     void handleQ();   // save
     void handleQr();  // restore
+    void handleW();   // line width
+
+    // Color operators
+    void handleRG();  // stroke RGB
+    void handleRg();  // fill RGB
+    void handleG();   // stroke gray
+    void handleGg();  // fill gray
+    void handleK();   // stroke CMYK
+    void handleKk();  // fill CMYK
+
+    // Path construction operators
+    void handleMoveTo();
+    void handleLineTo();
+    void handleCurveTo();
+    void handleCurveToV();
+    void handleCurveToY();
+    void handleRect();
+    void handleClosePath();
+
+    // Path painting operators
+    void handleStroke();
+    void handleCloseStroke();
+    void handleFill();
+    void handleFillAndStroke();
+    void handleCloseFillAndStroke();
+    void handleEndPath();
+
+    // Paint the current path
+    void paintPath(PdfPaintMode mode);
 
     // Helpers
     std::string decodePdfString(const std::string& raw);
@@ -129,7 +203,8 @@ private:
     std::vector<std::string> _operands;
 
     // Graphics state
-    PdfMatrix _ctm;
+    PdfGraphicsState _gstate;
+    PdfMatrix _ctm;  // shortcut alias for _gstate.ctm
     std::vector<PdfGraphicsState> _stateStack;
 
     // Text state
@@ -138,10 +213,17 @@ private:
     PdfMatrix _textLineMatrix;
     bool _inTextObject = false;
 
+    // Path state
+    std::vector<PdfPathPoint> _currentPath;
+    float _currentX = 0, _currentY = 0;
+    float _subpathStartX = 0, _subpathStartY = 0;
+
     float _pageHeight = 792.0f;
 
-    // Callback for CDB-based glyph placement
+    // Callbacks
     TextEmitCallback _textEmitCallback;
+    RectPaintCallback _rectPaintCallback;
+    LinePaintCallback _linePaintCallback;
 
     // Output
     std::vector<PdfTextSpan> _spans;

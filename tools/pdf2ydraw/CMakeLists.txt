@@ -1,6 +1,8 @@
 add_executable(pdf2ydraw
     main.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/cards/ypdf/pdf-content-parser.cpp
+    ${CMAKE_SOURCE_DIR}/src/yetty/cards/ypdf/pdf-renderer.cpp
+    ${CMAKE_SOURCE_DIR}/src/yetty/ydraw/ydraw-writer-binary.cpp
 )
 
 target_include_directories(pdf2ydraw PRIVATE

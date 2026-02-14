@@ -1,5 +1,5 @@
 #include "sugiyama-layout.h"
-#include <yetty/ydraw/ydraw-builder.h>
+#include <yetty/ydraw-builder.h>
 #include <algorithm>
 #include <cmath>
 #include <functional>

@@ -1,6 +1,6 @@
 #include "html-container.h"
 #include "http-fetcher.h"
-#include "../../ydraw/ydraw-builder.h"
+#include <yetty/ydraw-builder.h>
 #include <ytrace/ytrace.hpp>
 #include <algorithm>
 #include <cctype>

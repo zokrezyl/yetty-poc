@@ -5,13 +5,14 @@
 #include <yetty/gpu-allocator.h>
 #include <yetty/yetty-context.h>
 #include <yetty/font-manager.h>
-#include "../../ydraw/ydraw-builder.h"
+#include <yetty/ydraw-builder.h>
+#include <yetty/ydraw-writer.h>
 #include <string>
 #include <vector>
 #include <cstdint>
 #include <cstring>
 #include <memory>
-#include <unordered_map>
+#include <map>
 #include <filesystem>
 
 // Forward declarations for pdfio (pdfio uses _pdfio_*_s naming)
@@ -85,24 +86,9 @@ private:
     Result<void> loadPdf();
 
     //=========================================================================
-    // Page rendering
+    // Page rendering (delegates to shared renderPdfToWriter)
     //=========================================================================
     Result<void> renderAllPages();
-    Result<void> renderPage(int pageIndex, float yOffset);
-
-    //=========================================================================
-    // Glyph placement (CDB-based)
-    //=========================================================================
-    float placeGlyphs(const std::string& text,
-                      float posX, float posY,
-                      float effectiveSize,
-                      const struct PdfTextState& textState);
-
-    //=========================================================================
-    // Font management
-    //=========================================================================
-    void extractFonts(pdfio_obj_t* pageObj);
-    int addFont(const std::string& ttfPath);
 
     //=========================================================================
     // GPU helpers
@@ -122,7 +108,8 @@ private:
     // State
     //=========================================================================
 
-    // YDrawBuilder - handles grid, glyph storage, metadata, atlas
+    // Writer wraps YDrawBuilder for shared PDF rendering
+    std::shared_ptr<yetty::YDrawWriterInternal> _writer;
     YDrawBuilder::Ptr _builder;
 
     // Args / payload
@@ -142,11 +129,14 @@ private:
 
     // Font management
     FontManager::Ptr _fontManager;
-    std::unordered_map<std::string, int> _pdfFontMap;   // PDF font name → fontId
-    std::string _rawFontCacheDir;
 
     // Atlas texture handle for cardTextureManager
     TextureHandle _atlasTextureHandle = TextureHandle::invalid();
+
+    // Primitive storage (SDF segments/boxes for table borders/fills)
+    StorageHandle _primStorage = StorageHandle::invalid();
+    uint32_t _primitiveOffset = 0;
+    uint32_t _primCount = 0;
 
     // Derived storage
     StorageHandle _derivedStorage = StorageHandle::invalid();

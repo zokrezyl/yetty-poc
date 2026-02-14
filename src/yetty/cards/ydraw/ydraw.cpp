@@ -1,5 +1,5 @@
 #include "ydraw.h"
-#include "../../ydraw/ydraw-builder.h"
+#include <yetty/ydraw-builder.h>
 #include "../../ydraw/animation.h"
 #include "../hdraw/hdraw.h"  // For SDFPrimitive, SDFType
 #include <yetty/base/event-loop.h>
@@ -844,7 +844,6 @@ private:
         if (!read32(fontCount)) return Ok();
 
         std::vector<int> fontIdMap(fontCount, -1);
-        auto tempDir = std::filesystem::temp_directory_path();
 
         for (uint32_t i = 0; i < fontCount; i++) {
             uint32_t fontDataSize = 0;
@@ -853,32 +852,15 @@ private:
             uint32_t paddedSize = (fontDataSize + 3) & ~3u;
             if (offset + paddedSize > totalSize) return Ok();
 
-            // Hash font data for stable filename (enables CDB caching)
-            uint32_t hash = 0x811c9dc5u; // FNV-1a
-            for (uint32_t j = 0; j < fontDataSize; j++) {
-                hash ^= data[offset + j];
-                hash *= 0x01000193u;
-            }
-
-            auto tempPath = tempDir / ("ydraw_font_" + std::to_string(hash) +
-                                       "_" + std::to_string(i) + ".ttf");
-            if (!std::filesystem::exists(tempPath)) {
-                std::ofstream out(tempPath, std::ios::binary);
-                if (!out) {
-                    ywarn("parseBinaryV2: failed to write temp font {}", tempPath.string());
-                    offset += paddedSize;
-                    continue;
-                }
-                out.write(reinterpret_cast<const char*>(data + offset),
-                          static_cast<std::streamsize>(fontDataSize));
-            }
-
-            auto res = _builder->addFont(static_cast<int>(i), tempPath.string());
+            auto res = _builder->addFontData(
+                data + offset, fontDataSize,
+                "font_" + std::to_string(i));
             if (res) {
-                fontIdMap[i] = static_cast<int>(i);
+                fontIdMap[i] = *res;
+                _builder->mapFontId(static_cast<int>(i), *res);
                 yinfo("parseBinaryV2: registered font {} from {} bytes", i, fontDataSize);
             } else {
-                ywarn("parseBinaryV2: addFont failed for font {}: {}",
+                ywarn("parseBinaryV2: addFontData failed for font {}: {}",
                       i, res.error().message());
             }
 
@@ -1030,6 +1012,7 @@ private:
         if (item["text"]) {
             auto t = item["text"];
             float x = 0, y = 0, fontSize = 16;
+            float rotation = 0;
             uint32_t color = 0xFFFFFFFF;
             std::string content;
             if (t["position"] && t["position"].IsSequence()) {
@@ -1040,11 +1023,21 @@ private:
             if (t["fontSize"]) fontSize = t["fontSize"].as<float>();
             if (t["color"]) color = parseColor(t["color"]);
             if (t["content"]) content = t["content"].as<std::string>();
+            if (t["rotation"]) rotation = t["rotation"].as<float>();
+
+            int fontId = -1;
             if (t["font"]) {
                 auto ttfPath = t["font"].as<std::string>();
                 auto fontResult = _builder->addFont(ttfPath);
                 if (!fontResult) return Err<void>("failed to load font: " + ttfPath);
-                _builder->addText(x, y, content, fontSize, color, layer, *fontResult);
+                fontId = *fontResult;
+            }
+
+            if (std::abs(rotation) > 0.001f) {
+                float angleRadians = rotation * (3.14159265358979323846f / 180.0f);
+                _builder->addRotatedText(x, y, content, fontSize, color, angleRadians, fontId);
+            } else if (fontId >= 0) {
+                _builder->addText(x, y, content, fontSize, color, layer, fontId);
             } else {
                 _builder->addText(x, y, content, fontSize, color, layer);
             }

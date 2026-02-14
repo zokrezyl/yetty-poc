@@ -154,6 +154,9 @@ public:
                                 float x2, float y2,
                                 uint32_t strokeColor, float strokeWidth = 1,
                                 uint32_t layer = 0) = 0;
+    virtual uint32_t addRotatedGlyph(float x, float y, float w, float h,
+                                      float angle, uint32_t glyphIndex,
+                                      uint32_t color) = 0;
 
     //=========================================================================
     // Text API
@@ -164,6 +167,9 @@ public:
     virtual Result<void> addText(float x, float y, const std::string& text,
                                   float fontSize, uint32_t color,
                                   uint32_t layer, int fontId) = 0;
+    virtual Result<void> addRotatedText(float x, float y, const std::string& text,
+                                         float fontSize, uint32_t color,
+                                         float angleRadians, int fontId = -1) = 0;
 
     // Measure text width without adding glyphs (for layout)
     virtual float measureTextWidth(const std::string& text,
@@ -180,6 +186,12 @@ public:
     // Caller-specified font ID: registers font at the given ID.
     // addText(..., fontId) will resolve through this mapping.
     virtual Result<void> addFont(int fontId, const std::string& ttfPath) = 0;
+    // Add font from raw TTF data. Content-hashes the data for a stable
+    // temp filename → stable CDB cache key across runs.
+    virtual Result<int> addFontData(const uint8_t* data, size_t size,
+                                     const std::string& name) = 0;
+    // Map a user-chosen fontId to an atlas fontId (returned by addFont/addFontData)
+    virtual void mapFontId(int userId, int atlasId) = 0;
     virtual int registerFont(const std::string& cdbPath,
                              const std::string& ttfPath = "",
                              MsdfCdbProvider::Ptr provider = nullptr) = 0;
