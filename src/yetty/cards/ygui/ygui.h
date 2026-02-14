@@ -1,0 +1,118 @@
+#pragma once
+
+#include <yetty/card.h>
+#include <yetty/base/factory.h>
+#include <yetty/yetty-context.h>
+#include <string>
+#include <vector>
+#include <memory>
+#include <functional>
+
+namespace yetty::card {
+
+//=============================================================================
+// Widget types
+//=============================================================================
+enum class WidgetType : uint8_t {
+    Label,
+    Button,
+    Checkbox,
+    Slider,
+    Dropdown,
+    TextInput,
+    Progress,
+    Panel,
+    VBox,
+    HBox,
+};
+
+//=============================================================================
+// Widget state flags
+//=============================================================================
+enum WidgetFlags : uint32_t {
+    WIDGET_HOVER    = 1 << 0,
+    WIDGET_PRESSED  = 1 << 1,
+    WIDGET_FOCUSED  = 1 << 2,
+    WIDGET_DISABLED = 1 << 3,
+    WIDGET_CHECKED  = 1 << 4,   // For checkbox
+    WIDGET_OPEN     = 1 << 5,   // For dropdown
+};
+
+//=============================================================================
+// Widget base
+//=============================================================================
+struct Widget {
+    std::string id;
+    WidgetType type;
+    float x = 0, y = 0, w = 100, h = 24;
+    uint32_t flags = 0;
+    std::string label;
+
+    // Type-specific data
+    float value = 0;                    // Slider value, progress
+    float minValue = 0, maxValue = 1;   // Slider range
+    std::vector<std::string> options;   // Dropdown options
+    int selectedIndex = 0;              // Dropdown selection
+    std::string text;                   // TextInput content
+    uint32_t cursorPos = 0;             // TextInput cursor
+
+    // Styling
+    uint32_t bgColor = 0xFF2A2A3E;
+    uint32_t fgColor = 0xFFFFFFFF;
+    uint32_t accentColor = 0xFF4488FF;
+
+    // Children (for layout widgets)
+    std::vector<std::shared_ptr<Widget>> children;
+
+    // Events (callbacks stored as event names to emit via OSC)
+    std::string onClick;
+    std::string onChange;
+
+    bool contains(float px, float py) const {
+        return px >= x && px < x + w && py >= y && py < y + h;
+    }
+
+    bool isHover() const { return flags & WIDGET_HOVER; }
+    bool isPressed() const { return flags & WIDGET_PRESSED; }
+    bool isFocused() const { return flags & WIDGET_FOCUSED; }
+    bool isDisabled() const { return flags & WIDGET_DISABLED; }
+    bool isChecked() const { return flags & WIDGET_CHECKED; }
+    bool isOpen() const { return flags & WIDGET_OPEN; }
+};
+
+using WidgetPtr = std::shared_ptr<Widget>;
+
+//=============================================================================
+// YGui - Retained mode UI card using SDF rendering
+//=============================================================================
+class YGui : public Card,
+             public base::ObjectFactory<YGui> {
+public:
+    using Ptr = std::shared_ptr<YGui>;
+
+    static constexpr uint32_t SHADER_GLYPH = 0x100003;  // Same as ydraw
+
+    static Result<CardPtr> create(
+        const YettyContext& ctx,
+        int32_t x, int32_t y,
+        uint32_t widthCells, uint32_t heightCells,
+        const std::string& args,
+        const std::string& payload);
+
+    static Result<Ptr> createImpl(
+        ContextType& ctx,
+        const YettyContext& yettyCtx,
+        int32_t x, int32_t y,
+        uint32_t widthCells, uint32_t heightCells,
+        const std::string& args,
+        const std::string& payload) noexcept;
+
+    ~YGui() override = default;
+    const char* typeName() const override { return "ygui"; }
+    bool needsBuffer() const override { return true; }
+
+protected:
+    using Card::Card;
+};
+
+} // namespace yetty::card

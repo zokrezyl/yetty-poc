@@ -4,6 +4,7 @@
 #include "cards/plot/plot.h"
 #include "cards/hdraw/hdraw.h"
 #include "cards/ydraw/ydraw.h"
+#include "cards/ygui/ygui.h"
 #include "cards/kdraw/kdraw.h"
 #include "cards/jdraw/jdraw.h"
 #include "cards/ydraw-zoo/ydraw-zoo.h"
@@ -77,6 +78,14 @@ public:
                                  const std::string& args,
                                  const std::string& payload) {
             return card::YDraw::create(ctx, x, y, w, h, args, payload);
+        });
+
+        registerCard("ygui", [](const YettyContext& ctx,
+                                 int32_t x, int32_t y,
+                                 uint32_t w, uint32_t h,
+                                 const std::string& args,
+                                 const std::string& payload) {
+            return card::YGui::create(ctx, x, y, w, h, args, payload);
         });
 
         registerCard("ydraw-zoo", [](const YettyContext& ctx,
