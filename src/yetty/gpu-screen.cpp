@@ -221,6 +221,10 @@ public:
   uint32_t getCellWidth() const override { return static_cast<uint32_t>(_baseCellWidth * _zoomLevel); }
   uint32_t getCellHeight() const override { return static_cast<uint32_t>(_baseCellHeight * _zoomLevel); }
 
+  // Float cell size for hit testing (must match shader's grid.cellSize)
+  float getCellWidthF() const { return _baseCellWidth * _zoomLevel; }
+  float getCellHeightF() const { return _baseCellHeight * _zoomLevel; }
+
   // EventListener interface
   Result<bool> onEvent(const base::Event &event) override;
 
@@ -369,8 +373,8 @@ private:
   // Uses bg encoding to find card's actual top-left corner in the grid.
   void cardLocalCoords(float viewLocalX, float viewLocalY, int row, int col,
                        float &cardX, float &cardY) const {
-    uint32_t cellW = getCellWidth();
-    uint32_t cellH = getCellHeight();
+    float cellW = getCellWidthF();
+    float cellH = getCellHeightF();
     // bg encodes relative position within card: (relRow << 12) | relCol
     size_t idx = cellIndex(row, col);
     const Cell &cell = (*_visibleBuffer)[idx];
@@ -4005,7 +4009,7 @@ void GPUScreenImpl::registerCard(CardPtr card) {
     return;
 
   card->setScreenOrigin(_viewportX, _viewportY);
-  card->setCellSize(getCellWidth(), getCellHeight());
+  card->setCellSize(getCellWidthF(), getCellHeightF());
   uint32_t slotIndex = card->metadataSlotIndex();
   ydebug("GPUScreenImpl::registerCard: registered card at slotIndex {}", slotIndex);
   if (card->needsBuffer())  _bufferLayoutChanged = true;
@@ -4326,8 +4330,8 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
           // Calculate cell position from mouse coordinates
           float localX = mx - _viewportX;
           float localY = my - _viewportY;
-          int col = static_cast<int>(localX / getCellWidth());
-          int row = static_cast<int>(localY / getCellHeight());
+          int col = static_cast<int>(localX / getCellWidthF());
+          int row = static_cast<int>(localY / getCellHeightF());
 
           // Clamp to valid range
           col = std::max(0, std::min(col, static_cast<int>(_cols) - 1));
@@ -4391,12 +4395,12 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
           float cardX, cardY;
           cardLocalCoords(localX, localY, row, col, cardX, cardY);
           // Clamp to card's pixel dimensions
-          float cardPixelW = static_cast<float>(card->widthCells() * getCellWidth());
-          float cardPixelH = static_cast<float>(card->heightCells() * getCellHeight());
+          float cardPixelW = static_cast<float>(card->widthCells()) * getCellWidthF();
+          float cardPixelH = static_cast<float>(card->heightCells()) * getCellHeightF();
           cardX = std::max(0.0f, std::min(cardX, cardPixelW - 1.0f));
           cardY = std::max(0.0f, std::min(cardY, cardPixelH - 1.0f));
-          ydebug("GPUScreen {} card click: localXY=({:.1f},{:.1f}) cell=({},{}) cardXY=({:.1f},{:.1f}) cellSize={}x{}",
-                _id, localX, localY, col, row, cardX, cardY, getCellWidth(), getCellHeight());
+          ydebug("GPUScreen {} card click: localXY=({:.1f},{:.1f}) cell=({},{}) cardXY=({:.1f},{:.1f}) cellSize={:.1f}x{:.1f}",
+                _id, localX, localY, col, row, cardX, cardY, getCellWidthF(), getCellHeightF());
           _cardMouseTarget = card->id();
           loop->dispatch(base::Event::cardMouseDown(card->id(), cardX, cardY, button));
         } else if (button == 0) {
@@ -4442,8 +4446,8 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
 
         float localX = mx - _viewportX;
         float localY = my - _viewportY;
-        int col = static_cast<int>(localX / getCellWidth());
-        int row = static_cast<int>(localY / getCellHeight());
+        int col = static_cast<int>(localX / getCellWidthF());
+        int row = static_cast<int>(localY / getCellHeightF());
 
         col = std::max(0, std::min(col, static_cast<int>(_cols) - 1));
         row = std::max(0, std::min(row, static_cast<int>(_rows) - 1));
@@ -4475,8 +4479,8 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
             float cardX, cardY;
             cardLocalCoords(localX, localY, row, col, cardX, cardY);
             // Clamp to card's pixel dimensions
-            float cardPixelW = static_cast<float>(card->widthCells() * getCellWidth());
-            float cardPixelH = static_cast<float>(card->heightCells() * getCellHeight());
+            float cardPixelW = static_cast<float>(card->widthCells()) * getCellWidthF();
+            float cardPixelH = static_cast<float>(card->heightCells()) * getCellHeightF();
             cardX = std::max(0.0f, std::min(cardX, cardPixelW - 1.0f));
             cardY = std::max(0.0f, std::min(cardY, cardPixelH - 1.0f));
             auto loop = *base::EventLoop::instance();
@@ -4522,8 +4526,8 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
       int button = event.mouse.button;
       float localX = mx - _viewportX;
       float localY = my - _viewportY;
-      int col = static_cast<int>(localX / getCellWidth());
-      int row = static_cast<int>(localY / getCellHeight());
+      int col = static_cast<int>(localX / getCellWidthF());
+      int row = static_cast<int>(localY / getCellHeightF());
       col = std::max(0, std::min(col, static_cast<int>(_cols) - 1));
       row = std::max(0, std::min(row, static_cast<int>(_rows) - 1));
 
@@ -4532,8 +4536,8 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
       if (card && card->id() == _cardMouseTarget) {
         cardLocalCoords(localX, localY, row, col, cardX, cardY);
         // Clamp to card's pixel dimensions
-        float cardPixelW = static_cast<float>(card->widthCells() * getCellWidth());
-        float cardPixelH = static_cast<float>(card->heightCells() * getCellHeight());
+        float cardPixelW = static_cast<float>(card->widthCells()) * getCellWidthF();
+        float cardPixelH = static_cast<float>(card->heightCells()) * getCellHeightF();
         cardX = std::max(0.0f, std::min(cardX, cardPixelW - 1.0f));
         cardY = std::max(0.0f, std::min(cardY, cardPixelH - 1.0f));
       } else {
@@ -4560,8 +4564,8 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
         // Check if scroll is over a card - forward as CardScroll
         float localX = mx - _viewportX;
         float localY = my - _viewportY;
-        int col = static_cast<int>(localX / getCellWidth());
-        int row = static_cast<int>(localY / getCellHeight());
+        int col = static_cast<int>(localX / getCellWidthF());
+        int row = static_cast<int>(localY / getCellHeightF());
         col = std::max(0, std::min(col, static_cast<int>(_cols) - 1));
         row = std::max(0, std::min(row, static_cast<int>(_rows) - 1));
         Card* scrollCard = getCardAtCell(row, col);
@@ -4569,8 +4573,8 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
           float cardX, cardY;
           cardLocalCoords(localX, localY, row, col, cardX, cardY);
           // Clamp to card's pixel dimensions
-          float cardPixelW = static_cast<float>(scrollCard->widthCells() * getCellWidth());
-          float cardPixelH = static_cast<float>(scrollCard->heightCells() * getCellHeight());
+          float cardPixelW = static_cast<float>(scrollCard->widthCells()) * getCellWidthF();
+          float cardPixelH = static_cast<float>(scrollCard->heightCells()) * getCellHeightF();
           cardX = std::max(0.0f, std::min(cardX, cardPixelW - 1.0f));
           cardY = std::max(0.0f, std::min(cardY, cardPixelH - 1.0f));
           auto loop = *base::EventLoop::instance();
@@ -4592,7 +4596,7 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
             setViewport(_viewportX, _viewportY, _viewportWidth, _viewportHeight);
             // Notify cards of new cell size
             for (auto& [slotIndex, card] : _cards) {
-              card->setCellSize(getCellWidth(), getCellHeight());
+              card->setCellSize(getCellWidthF(), getCellHeightF());
             }
             // Update raster font cell size (triggers re-rasterization)
             if (_rasterFont) {

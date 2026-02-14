@@ -61,7 +61,7 @@ public:
     Result<void> render() override;
     Result<void> dispose() override;
     void suspend() override;
-    void setCellSize(uint32_t cellWidth, uint32_t cellHeight) override {
+    void setCellSize(float cellWidth, float cellHeight) override {
         _cellWidth = cellWidth;
         _cellHeight = cellHeight;
     }

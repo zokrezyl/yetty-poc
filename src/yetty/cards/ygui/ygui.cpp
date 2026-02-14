@@ -62,9 +62,14 @@ public:
             parseWidgets(_payloadStr);
         }
 
+        yinfo("YGui::init: parsed {} widgets", _widgets.size());
+
         // Calculate pixel dimensions (use cell sizes approx 10x20)
         _pixelWidth = static_cast<float>(_widthCells * 10);
         _pixelHeight = static_cast<float>(_heightCells * 20);
+
+        yinfo("YGui::init: size {}x{} cells, {}x{} pixels",
+              _widthCells, _heightCells, _pixelWidth, _pixelHeight);
 
         // Set scene bounds for builder
         _builder->setSceneBounds(0, 0, _pixelWidth, _pixelHeight);
@@ -73,8 +78,13 @@ public:
         // Build initial primitives
         rebuildPrimitives();
 
+        yinfo("YGui::init: built {} prims, {} glyphs",
+              _builder->primitiveCount(), _builder->glyphCount());
+
         // Register for events
-        registerForEvents();
+        if (auto res = registerForEvents(); !res) {
+            yerror("YGui::init: failed to register events: {}", error_msg(res));
+        }
 
         return Ok();
     }
@@ -195,7 +205,13 @@ public:
     bool needsBufferRealloc() override {
         if (!_builder) return false;
         const auto& primStaging = _builder->primStaging();
-        return !primStaging.empty() && !_primStorage.isValid();
+        // Need realloc if no storage or storage too small
+        if (!primStaging.empty() && !_primStorage.isValid()) return true;
+        if (_primStorage.isValid()) {
+            uint32_t needed = static_cast<uint32_t>(primStaging.size() * sizeof(SDFPrimitive));
+            if (needed > _primStorage.size) return true;
+        }
+        return false;
     }
 
     //=========================================================================
@@ -220,37 +236,68 @@ public:
     }
 
     //=========================================================================
-    // Event handling
+    // Cell size for coordinate conversion
     //=========================================================================
 
-    void onMouseMove(float u, float v) override {
-        float px = u * _pixelWidth;
-        float py = v * _pixelHeight;
-
-        // Update hover state
-        for (auto& w : _widgets) {
-            updateHoverRecursive(w, px, py);
-        }
+    void setCellSize(float cellWidth, float cellHeight) override {
+        _cellWidthF = cellWidth;
+        _cellHeightF = cellHeight;
+        // Keep scene bounds in YAML/widget coordinate space (10x20 cell size)
+        // Don't update _pixelWidth/_pixelHeight or scene bounds here
+        // The coordinate conversion in toWidgetX/toWidgetY handles the mapping
         _dirty = true;
     }
 
-    void onMouseDown(float u, float v, int button) override {
+    //=========================================================================
+    // Event handling - receives pixel coordinates directly
+    //=========================================================================
+
+    // Convert actual pixel coordinates to nominal widget coordinates
+    // (widgets are defined assuming 10x20 cell size)
+    float toWidgetX(float px) const {
+        return px * 10.0f / _cellWidthF;
+    }
+    float toWidgetY(float py) const {
+        return py * 20.0f / _cellHeightF;
+    }
+
+    void handleMouseMove(float px, float py) {
+        // Convert to widget coordinate system
+        float wx = toWidgetX(px);
+        float wy = toWidgetY(py);
+
+        // Update hover state
+        for (auto& w : _widgets) {
+            updateHoverRecursive(w, wx, wy);
+        }
+
+        // Track slider drag while pressed
+        if (_pressed && _pressed->type == WidgetType::Slider) {
+            updateSliderValue(_pressed, wx);
+        }
+
+        // Update hover option for open dropdown
+        if (_openDropdown && _openDropdown->isOpen()) {
+            _hoverOptionIdx = getDropdownOptionAt(_openDropdown, wx, wy);
+        }
+
+        _dirty = true;
+    }
+
+    void handleMouseDown(float px, float py, int button) {
         if (button != 0) return;  // Left click only
 
-        float px = u * _pixelWidth;
-        float py = v * _pixelHeight;
+        // Convert to widget coordinate system
+        float wx = toWidgetX(px);
+        float wy = toWidgetY(py);
 
-        // Find clicked widget
-        Widget* clicked = nullptr;
-        for (auto& w : _widgets) {
-            clicked = findWidgetAt(w, px, py);
-            if (clicked) break;
-        }
+        ydebug("YGui::handleMouseDown px={:.1f} py={:.1f} -> wx={:.1f} wy={:.1f}", px, py, wx, wy);
 
         // Handle dropdown: check if clicking on open dropdown's options
         if (_openDropdown && _openDropdown->isOpen()) {
-            int optionIdx = getDropdownOptionAt(_openDropdown, px, py);
+            int optionIdx = getDropdownOptionAt(_openDropdown, wx, wy);
             if (optionIdx >= 0) {
+                ydebug("YGui: selected dropdown option {}", optionIdx);
                 _openDropdown->selectedIndex = optionIdx;
                 _openDropdown->flags &= ~WIDGET_OPEN;
                 emitEvent(_openDropdown, "change");
@@ -261,6 +308,17 @@ public:
             // Clicked outside dropdown - close it
             _openDropdown->flags &= ~WIDGET_OPEN;
             _openDropdown = nullptr;
+            _dirty = true;
+        }
+
+        // Find clicked widget
+        Widget* clicked = nullptr;
+        for (auto& w : _widgets) {
+            clicked = findWidgetAt(w, wx, wy);
+            if (clicked) {
+                ydebug("YGui: clicked widget id={} type={}", clicked->id, static_cast<int>(clicked->type));
+                break;
+            }
         }
 
         if (!clicked) return;
@@ -289,10 +347,11 @@ public:
             case WidgetType::Dropdown:
                 clicked->flags ^= WIDGET_OPEN;
                 _openDropdown = clicked->isOpen() ? clicked : nullptr;
+                ydebug("YGui: dropdown {} open={}", clicked->id, clicked->isOpen());
                 break;
 
             case WidgetType::Slider:
-                updateSliderValue(clicked, px);
+                updateSliderValue(clicked, wx);
                 break;
 
             default:
@@ -302,14 +361,15 @@ public:
         _dirty = true;
     }
 
-    void onMouseUp(float u, float v, int button) override {
+    void handleMouseUp(float px, float py, int button) {
         if (button != 0) return;
 
-        float px = u * _pixelWidth;
-        float py = v * _pixelHeight;
+        // Convert to widget coordinate system
+        float wx = toWidgetX(px);
+        float wy = toWidgetY(py);
 
         if (_pressed) {
-            if (_pressed->type == WidgetType::Button && _pressed->contains(px, py)) {
+            if (_pressed->type == WidgetType::Button && _pressed->contains(wx, wy)) {
                 emitEvent(_pressed, "click");
             }
             _pressed->flags &= ~WIDGET_PRESSED;
@@ -318,9 +378,8 @@ public:
         }
     }
 
-    void onMouseScroll(float u, float v, float deltaX, float deltaY) override {
-        float px = u * _pixelWidth;
-        float py = v * _pixelHeight;
+    void handleMouseScroll(float px, float py, float deltaX, float deltaY) {
+        (void)deltaX;
 
         // Find widget under cursor
         Widget* target = nullptr;
@@ -338,11 +397,11 @@ public:
         }
     }
 
-    void onKeyDown(uint32_t codepoint, int mods) override {
+    void handleKeyDown(uint32_t key, int mods) {
         if (!_focused) return;
 
         if (_focused->type == WidgetType::TextInput) {
-            handleTextInput(_focused, codepoint, mods);
+            handleTextInput(_focused, key, mods);
             _dirty = true;
         }
     }
@@ -578,8 +637,23 @@ private:
                 std::string text = w->selectedIndex < static_cast<int>(w->options.size())
                     ? w->options[w->selectedIndex] : "";
                 addText(text, x + 8, y + 4, w->fgColor);
-                // Arrow
-                addText(w->isOpen() ? "^" : "v", x + w->w - 16, y + 4, w->fgColor);
+                // Chevron arrow using SDF triangle
+                float arrowX = x + w->w - 20;
+                float arrowY = y + w->h / 2;
+                float arrowSize = 5;
+                if (w->isOpen()) {
+                    // Up arrow (chevron pointing up)
+                    addTriangle(arrowX, arrowY + arrowSize/2,
+                               arrowX + arrowSize, arrowY + arrowSize/2,
+                               arrowX + arrowSize/2, arrowY - arrowSize/2,
+                               w->fgColor);
+                } else {
+                    // Down arrow (chevron pointing down)
+                    addTriangle(arrowX, arrowY - arrowSize/2,
+                               arrowX + arrowSize, arrowY - arrowSize/2,
+                               arrowX + arrowSize/2, arrowY + arrowSize/2,
+                               w->fgColor);
+                }
                 if (w->isHover()) addBoxOutline(x, y, w->w, w->h, w->accentColor, 4);
                 break;
             }
@@ -639,9 +713,17 @@ private:
         float y = w->y + w->h;
         float optH = 24;
 
+        yinfo("YGui: rendering {} dropdown options at y={}", w->options.size(), y);
+
+        // Draw dropdown list background
+        float listH = static_cast<float>(w->options.size()) * optH;
+        addBox(x, y, w->w, listH, 0xFF1E1E2E, 4);  // Darker background
+
         for (size_t i = 0; i < w->options.size(); i++) {
-            uint32_t bg = (i == static_cast<size_t>(_hoverOptionIdx)) ? w->accentColor : w->bgColor;
-            addBox(x, y + i * optH, w->w, optH, bg, 0);
+            uint32_t bg = (i == static_cast<size_t>(_hoverOptionIdx)) ? w->accentColor : 0x00000000;
+            if (bg != 0) {
+                addBox(x + 2, y + i * optH + 2, w->w - 4, optH - 4, bg, 2);
+            }
             addText(w->options[i], x + 8, y + i * optH + 4, w->fgColor);
         }
     }
@@ -711,6 +793,30 @@ private:
         }
     }
 
+    void addTriangle(float x0, float y0, float x1, float y1, float x2, float y2, uint32_t color) {
+        if (!_builder) return;
+
+        SDFPrimitive p = {};
+        p.type = static_cast<uint32_t>(SDFType::Triangle);
+        p.layer = _builder->primitiveCount();
+        p.params[0] = x0;
+        p.params[1] = y0;
+        p.params[2] = x1;
+        p.params[3] = y1;
+        p.params[4] = x2;
+        p.params[5] = y2;
+        p.fillColor = color;
+        p.strokeColor = 0;
+        p.strokeWidth = 0;
+        p.round = 0;
+        // Compute AABB
+        p.aabbMinX = std::min({x0, x1, x2});
+        p.aabbMinY = std::min({y0, y1, y2});
+        p.aabbMaxX = std::max({x0, x1, x2});
+        p.aabbMaxY = std::max({y0, y1, y2});
+        _builder->addPrimitive(p);
+    }
+
     //=========================================================================
     // Event helpers
     //=========================================================================
@@ -766,8 +872,10 @@ private:
         return -1;
     }
 
-    void updateSliderValue(Widget* w, float px) {
-        float pct = (px - w->x) / w->w;
+    void updateSliderValue(Widget* w, float wx) {
+        float pct = (wx - w->x) / w->w;
+        ydebug("Slider update: wx={:.1f} w->x={:.1f} w->w={:.1f} pct={:.3f} cellW={:.1f}",
+               wx, w->x, w->w, pct, _cellWidthF);
         pct = std::clamp(pct, 0.0f, 1.0f);
         w->value = w->minValue + pct * (w->maxValue - w->minValue);
         emitEvent(w, "change");
@@ -865,6 +973,66 @@ private:
     }
 
     //=========================================================================
+    // Event dispatch - receives events from EventLoop
+    //=========================================================================
+
+    Result<bool> onEvent(const base::Event& event) override {
+        switch (event.type) {
+            case base::Event::Type::SetFocus:
+                if (event.setFocus.objectId == id()) {
+                    _isFocused = true;
+                    yinfo("YGui: got focus");
+                    return Ok(true);
+                } else if (_isFocused) {
+                    _isFocused = false;
+                }
+                return Ok(false);
+
+            case base::Event::Type::CardMouseDown:
+                if (event.cardMouse.targetId == id()) {
+                    yinfo("YGui::onEvent CardMouseDown x={:.1f} y={:.1f}",
+                          event.cardMouse.x, event.cardMouse.y);
+                    handleMouseDown(event.cardMouse.x, event.cardMouse.y, event.cardMouse.button);
+                    return Ok(true);
+                }
+                break;
+
+            case base::Event::Type::CardMouseUp:
+                if (event.cardMouse.targetId == id()) {
+                    handleMouseUp(event.cardMouse.x, event.cardMouse.y, event.cardMouse.button);
+                    return Ok(true);
+                }
+                break;
+
+            case base::Event::Type::CardMouseMove:
+                if (event.cardMouse.targetId == id()) {
+                    handleMouseMove(event.cardMouse.x, event.cardMouse.y);
+                    return Ok(true);
+                }
+                break;
+
+            case base::Event::Type::CardScroll:
+                if (event.cardScroll.targetId == id()) {
+                    handleMouseScroll(event.cardScroll.x, event.cardScroll.y,
+                                      event.cardScroll.dx, event.cardScroll.dy);
+                    return Ok(true);
+                }
+                break;
+
+            case base::Event::Type::CardKeyDown:
+                if (event.cardKey.targetId == id()) {
+                    handleKeyDown(static_cast<uint32_t>(event.cardKey.key), event.cardKey.mods);
+                    return Ok(true);
+                }
+                break;
+
+            default:
+                break;
+        }
+        return Ok(false);
+    }
+
+    //=========================================================================
     // Event registration
     //=========================================================================
 
@@ -873,7 +1041,12 @@ private:
         if (!loopRes) return Ok();  // No event loop
         auto loop = *loopRes;
         auto self = sharedAs<base::EventListener>();
-        loop->registerListener(base::Event::Type::SetFocus, self, 1000);
+        if (auto res = loop->registerListener(base::Event::Type::SetFocus, self, 1000); !res) return res;
+        if (auto res = loop->registerListener(base::Event::Type::CardMouseDown, self, 1000); !res) return res;
+        if (auto res = loop->registerListener(base::Event::Type::CardMouseUp, self, 1000); !res) return res;
+        if (auto res = loop->registerListener(base::Event::Type::CardMouseMove, self, 1000); !res) return res;
+        if (auto res = loop->registerListener(base::Event::Type::CardScroll, self, 1000); !res) return res;
+        if (auto res = loop->registerListener(base::Event::Type::CardKeyDown, self, 1000); !res) return res;
         return Ok();
     }
 
@@ -916,6 +1089,11 @@ private:
 
     bool _dirty = true;
     bool _metadataDirty = true;
+    bool _isFocused = false;
+
+    // Cell size for coordinate conversion (float for precision)
+    float _cellWidthF = 10.0f;
+    float _cellHeightF = 20.0f;
 };
 
 //=============================================================================

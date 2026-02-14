@@ -184,7 +184,7 @@ public:
     virtual void onKeyUp(uint32_t codepoint, int mods) { (void)codepoint; (void)mods; }
 
     // Called by gpu-screen when cell pixel size changes (e.g. zoom)
-    virtual void setCellSize(uint32_t cellWidth, uint32_t cellHeight) {
+    virtual void setCellSize(float cellWidth, float cellHeight) {
         (void)cellWidth; (void)cellHeight;
     }
 

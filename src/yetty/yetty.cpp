@@ -65,6 +65,10 @@ private:
     uint32_t _initialWidth = 1024;
     uint32_t _initialHeight = 768;
 
+    // Content scale for mouse coordinate conversion (framebuffer / window)
+    float _contentScaleX = 1.0f;
+    float _contentScaleY = 1.0f;
+
     // WebGPU handles
     WGPUInstance _instance = nullptr;
     WGPUAdapter _adapter = nullptr;
@@ -750,8 +754,14 @@ Result<void> YettyImpl::initCallbacks() noexcept {
 
     glfwSetMouseButtonCallback(_window, [](GLFWwindow* w, int button, int action, int mods) {
         (void)mods;
+        auto* impl = static_cast<YettyImpl*>(glfwGetWindowUserPointer(w));
         double xpos, ypos;
         glfwGetCursorPos(w, &xpos, &ypos);
+
+        // Scale mouse coordinates from window to framebuffer space
+        float mx = static_cast<float>(xpos) * (impl ? impl->_contentScaleX : 1.0f);
+        float my = static_cast<float>(ypos) * (impl ? impl->_contentScaleY : 1.0f);
+
         auto loop = *base::EventLoop::instance();
 
         // Middle-click paste: read clipboard and dispatch Paste event
@@ -766,23 +776,31 @@ Result<void> YettyImpl::initCallbacks() noexcept {
         }
 
         if (action == GLFW_PRESS) {
-            ydebug("glfwMouseButtonCallback: button={} PRESS at ({}, {})", button, xpos, ypos);
-            loop->dispatch(base::Event::mouseDown(static_cast<float>(xpos), static_cast<float>(ypos), button));
+            ydebug("glfwMouseButtonCallback: button={} PRESS at ({}, {}) scaled=({}, {})",
+                   button, xpos, ypos, mx, my);
+            loop->dispatch(base::Event::mouseDown(mx, my, button));
         } else if (action == GLFW_RELEASE) {
             ydebug("glfwMouseButtonCallback: button={} RELEASE at ({}, {})", button, xpos, ypos);
-            loop->dispatch(base::Event::mouseUp(static_cast<float>(xpos), static_cast<float>(ypos), button));
+            loop->dispatch(base::Event::mouseUp(mx, my, button));
         }
     });
 
     glfwSetCursorPosCallback(_window, [](GLFWwindow* w, double xpos, double ypos) {
-        (void)w;
+        auto* impl = static_cast<YettyImpl*>(glfwGetWindowUserPointer(w));
+        // Scale mouse coordinates from window to framebuffer space
+        float mx = static_cast<float>(xpos) * (impl ? impl->_contentScaleX : 1.0f);
+        float my = static_cast<float>(ypos) * (impl ? impl->_contentScaleY : 1.0f);
         auto loop = *base::EventLoop::instance();
-        loop->dispatch(base::Event::mouseMove(static_cast<float>(xpos), static_cast<float>(ypos)));
+        loop->dispatch(base::Event::mouseMove(mx, my));
     });
 
     glfwSetScrollCallback(_window, [](GLFWwindow* w, double xoffset, double yoffset) {
+        auto* impl = static_cast<YettyImpl*>(glfwGetWindowUserPointer(w));
         double xpos, ypos;
         glfwGetCursorPos(w, &xpos, &ypos);
+        // Scale mouse coordinates from window to framebuffer space
+        float mx = static_cast<float>(xpos) * (impl ? impl->_contentScaleX : 1.0f);
+        float my = static_cast<float>(ypos) * (impl ? impl->_contentScaleY : 1.0f);
         int mods = 0;
         if (glfwGetKey(w, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ||
             glfwGetKey(w, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS) {
@@ -794,9 +812,20 @@ Result<void> YettyImpl::initCallbacks() noexcept {
         }
         auto loop = *base::EventLoop::instance();
         loop->dispatch(base::Event::scrollEvent(
-            static_cast<float>(xpos), static_cast<float>(ypos),
+            mx, my,
             static_cast<float>(xoffset), static_cast<float>(yoffset), mods));
     });
+
+    // Initialize content scale at startup (framebuffer callback only fires on changes)
+    int fbWidth, fbHeight, winWidth, winHeight;
+    glfwGetFramebufferSize(_window, &fbWidth, &fbHeight);
+    glfwGetWindowSize(_window, &winWidth, &winHeight);
+    if (winWidth > 0 && winHeight > 0) {
+        _contentScaleX = static_cast<float>(fbWidth) / static_cast<float>(winWidth);
+        _contentScaleY = static_cast<float>(fbHeight) / static_cast<float>(winHeight);
+        yinfo("Initial content scale: {}x{} (fb {}x{} / win {}x{})",
+              _contentScaleX, _contentScaleY, fbWidth, fbHeight, winWidth, winHeight);
+    }
 
     return Ok();
 }
@@ -1059,6 +1088,16 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
 
 void YettyImpl::handleResize(int newWidth, int newHeight) noexcept {
     if (newWidth == 0 || newHeight == 0) return;
+
+    // Update content scale (framebuffer / window)
+    int windowWidth, windowHeight;
+    glfwGetWindowSize(_window, &windowWidth, &windowHeight);
+    if (windowWidth > 0 && windowHeight > 0) {
+        _contentScaleX = static_cast<float>(newWidth) / static_cast<float>(windowWidth);
+        _contentScaleY = static_cast<float>(newHeight) / static_cast<float>(windowHeight);
+        yinfo("Content scale updated: {}x{} (fb {}x{} / win {}x{})",
+              _contentScaleX, _contentScaleY, newWidth, newHeight, windowWidth, windowHeight);
+    }
 
     configureSurface(static_cast<uint32_t>(newWidth), static_cast<uint32_t>(newHeight));
 
