@@ -3217,8 +3217,8 @@ int GPUScreenImpl::onOSC(int command, VTermStringFragment frag, void *user) {
     return 0;
   }
 
-  // Accept yetty vendor commands: 666666 (cards), 666667-669 (effects), 666670 (gpu stats)
-  if (command != YETTY_OSC_VENDOR_ID && command != 666667 && command != 666668 && command != 666669 && command != 666670) {
+  // Accept yetty vendor commands: 666666 (cards), 666667-669 (effects), 666670 (gpu stats), 666671 (fps)
+  if (command != YETTY_OSC_VENDOR_ID && command != 666667 && command != 666668 && command != 666669 && command != 666670 && command != 666671) {
     yinfo(">>> onOSC: ignoring non-yetty command {}", command);
     return 0;
   }
@@ -3252,6 +3252,16 @@ int GPUScreenImpl::onOSC(int command, VTermStringFragment frag, void *user) {
       if (self->_outputCallback) {
         self->_outputCallback(stats.c_str(), stats.size());
       }
+      self->_oscBuffer.clear();
+      self->_oscCommand = -1;
+      return 1;
+    }
+
+    // Handle FPS OSC command (666671)
+    if (command == 666671) {
+      uint32_t fps = std::clamp(std::stoi(self->_oscBuffer), 1, 240);
+      yinfo("OSC 666671: Setting frame rate to {} FPS", fps);
+      (*base::EventLoop::instance())->dispatch(base::Event::setFrameRateEvent(fps));
       self->_oscBuffer.clear();
       self->_oscCommand = -1;
       return 1;

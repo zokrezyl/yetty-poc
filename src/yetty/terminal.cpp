@@ -263,6 +263,10 @@ private:
 
         if (totalRead > 0 && _gpuScreen) {
             _gpuScreen->write(buf, totalRead);
+            // Trigger immediate screen refresh
+            if (auto loop = base::EventLoop::instance(); loop) {
+                (*loop)->dispatch(base::Event::screenUpdateEvent());
+            }
         }
     }
 

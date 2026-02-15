@@ -51,7 +51,11 @@ struct Event {
         SetCursor,
         // Card resource recompaction requests (dispatched by cards, handled by GPUScreen)
         CardBufferRepack,
-        CardTextureRepack
+        CardTextureRepack,
+        // Frame rate change (dispatched by GPUScreen via OSC 666671, handled by Yetty)
+        SetFrameRate,
+        // Screen update request (dispatched on PTY activity, handled by Yetty)
+        ScreenUpdate
     };
 
     struct KeyEvent {
@@ -155,6 +159,10 @@ struct Event {
         ObjectId targetId;   // GPUScreen to repack
     };
 
+    struct SetFrameRateEvent {
+        uint32_t fps;        // Target frames per second (e.g., 30, 60, 120)
+    };
+
     Type type = Type::None;
 
     union {
@@ -176,6 +184,7 @@ struct Event {
         CommandKeyEvent cmdKey;
         SetCursorEvent setCursor;
         CardRepackEvent cardRepack;
+        SetFrameRateEvent setFrameRate;
     };
 
     // Optional heap-allocated payload, automatically freed when event goes out of scope.
@@ -379,6 +388,21 @@ struct Event {
         Event e;
         e.type = Type::CardTextureRepack;
         e.cardRepack = {targetId};
+        return e;
+    }
+
+    // Frame rate change (OSC 666671)
+    static Event setFrameRateEvent(uint32_t fps) {
+        Event e;
+        e.type = Type::SetFrameRate;
+        e.setFrameRate = {fps};
+        return e;
+    }
+
+    // Screen update request
+    static Event screenUpdateEvent() {
+        Event e;
+        e.type = Type::ScreenUpdate;
         return e;
     }
 };

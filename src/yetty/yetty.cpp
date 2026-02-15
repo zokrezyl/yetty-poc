@@ -108,7 +108,8 @@ private:
     // Grid dimensions
 
 #if !YETTY_WEB && !defined(__ANDROID__)
-    base::TimerId _frameTimerId = -1;
+    base::TimerId _frameTimerId = -1;   // Render timer (configurable FPS)
+    base::TimerId _inputTimerId = -1;   // Input poll timer (always fast)
 #endif
 
     // Fatal GPU error tracking
@@ -880,18 +881,36 @@ Result<void> YettyImpl::onShutdown() {
 #if !YETTY_WEB && !defined(__ANDROID__)
 void YettyImpl::initEventLoop() noexcept {
     auto loop = *base::EventLoop::instance();
-    auto timerResult = loop->createTimer();
-    if (!timerResult) {
-        yerror("Failed to create frame timer: {}", error_msg(timerResult));
+
+    // Input poll timer - always fast (8ms = 120Hz) for responsive UI
+    auto inputTimerResult = loop->createTimer();
+    if (!inputTimerResult) {
+        yerror("Failed to create input timer: {}", error_msg(inputTimerResult));
         return;
     }
-    _frameTimerId = *timerResult;
+    _inputTimerId = *inputTimerResult;
+    if (auto res = loop->configTimer(_inputTimerId, 8); !res) {
+        yerror("Failed to configure input timer: {}", error_msg(res));
+        return;
+    }
+    if (auto res = loop->registerTimerListener(_inputTimerId, sharedAs<base::EventListener>()); !res) {
+        yerror("Failed to register input timer listener: {}", error_msg(res));
+        return;
+    }
+
+    // Frame render timer - configurable FPS (default 60)
+    auto frameTimerResult = loop->createTimer();
+    if (!frameTimerResult) {
+        yerror("Failed to create frame timer: {}", error_msg(frameTimerResult));
+        return;
+    }
+    _frameTimerId = *frameTimerResult;
     if (auto res = loop->configTimer(_frameTimerId, 16); !res) {
         yerror("Failed to configure frame timer: {}", error_msg(res));
         return;
     }
     if (auto res = loop->registerTimerListener(_frameTimerId, sharedAs<base::EventListener>()); !res) {
-        yerror("Failed to register timer listener: {}", error_msg(res));
+        yerror("Failed to register frame timer listener: {}", error_msg(res));
         return;
     }
 
@@ -899,11 +918,20 @@ void YettyImpl::initEventLoop() noexcept {
     loop->registerListener(base::Event::Type::Copy, sharedAs<base::EventListener>());
     // Register for SetCursor events from GPUScreen
     loop->registerListener(base::Event::Type::SetCursor, sharedAs<base::EventListener>());
+    // Register for SetFrameRate events (OSC 666671)
+    loop->registerListener(base::Event::Type::SetFrameRate, sharedAs<base::EventListener>());
+    // Register for ScreenUpdate events (PTY activity)
+    loop->registerListener(base::Event::Type::ScreenUpdate, sharedAs<base::EventListener>());
 }
 
 void YettyImpl::shutdownEventLoop() noexcept {
+    auto loop = *base::EventLoop::instance();
+    if (_inputTimerId >= 0) {
+        loop->destroyTimer(_inputTimerId);
+        _inputTimerId = -1;
+    }
     if (_frameTimerId >= 0) {
-        (*base::EventLoop::instance())->destroyTimer(_frameTimerId);
+        loop->destroyTimer(_frameTimerId);
         _frameTimerId = -1;
     }
 }
@@ -911,12 +939,18 @@ void YettyImpl::shutdownEventLoop() noexcept {
 
 Result<bool> YettyImpl::onEvent(const base::Event& event) {
 #if !YETTY_WEB && !defined(__ANDROID__)
-    if (event.type == base::Event::Type::Timer && event.timer.timerId == _frameTimerId) {
+    // Input timer: poll events only (fast, always responsive)
+    if (event.type == base::Event::Type::Timer && event.timer.timerId == _inputTimerId) {
         glfwPollEvents();
         if (glfwWindowShouldClose(_window)) {
             (*base::EventLoop::instance())->stop();
-            return Ok(true);
         }
+        return Ok(true);
+    }
+
+    // Frame timer or ScreenUpdate: render
+    if ((event.type == base::Event::Type::Timer && event.timer.timerId == _frameTimerId) ||
+        event.type == base::Event::Type::ScreenUpdate) {
         if (auto res = mainLoopIteration(); !res) {
             yerror("Fatal render error: {}", error_msg(res));
             (*base::EventLoop::instance())->stop();
@@ -951,6 +985,20 @@ Result<bool> YettyImpl::onEvent(const base::Event& event) {
         }
         return Ok(true);
     }
+
+    // SetFrameRate event: reconfigure frame timer (OSC 666671)
+    if (event.type == base::Event::Type::SetFrameRate) {
+        uint32_t fps = event.setFrameRate.fps;
+        uint32_t intervalMs = (fps > 0) ? (1000 / fps) : 16;
+        if (intervalMs < 1) intervalMs = 1;
+        auto loop = *base::EventLoop::instance();
+        if (auto res = loop->configTimer(_frameTimerId, intervalMs); !res) {
+            yerror("Failed to reconfigure frame timer: {}", error_msg(res));
+        } else {
+            yinfo("Frame rate changed to {} FPS ({}ms interval)", fps, intervalMs);
+        }
+        return Ok(true);
+    }
 #endif
     return Ok(false);
 }
@@ -969,6 +1017,7 @@ Result<void> YettyImpl::run() noexcept {
 
 #if !YETTY_WEB && !defined(__ANDROID__)
     auto loop = *base::EventLoop::instance();
+    loop->startTimer(_inputTimerId);
     loop->startTimer(_frameTimerId);
     loop->start();
 #endif
@@ -1079,6 +1128,9 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
     double fpsNow = glfwGetTime();
     if (fpsNow - _lastFpsTime >= 1.0) {
         yinfo("FPS: {}", _frameCount);
+        if (_yettyContext.imguiManager) {
+            _yettyContext.imguiManager->setFps(_frameCount);
+        }
         _frameCount = 0;
         _lastFpsTime = fpsNow;
     }
