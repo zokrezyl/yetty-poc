@@ -33,6 +33,7 @@ public:
   void addContextMenuItem(const ContextMenuItem &item) override;
   void clearContextMenu() override;
   void setStatusText(const std::string &text) override;
+  void setFps(uint32_t fps) override;
   float getStatusbarHeight() const override { return STATUSBAR_HEIGHT; }
   Result<void> render(WGPURenderPassEncoder pass) override;
 
@@ -64,6 +65,7 @@ private:
 
   // Statusbar
   std::string _statusText;
+  uint32_t _fps = 0;
 
   // GPU usage monitoring (sampled periodically, not every frame)
   gpu::GpuStats _gpuUsageStats;
@@ -222,6 +224,10 @@ void ImguiManagerImpl::setStatusText(const std::string &text) {
   _statusText = text;
 }
 
+void ImguiManagerImpl::setFps(uint32_t fps) {
+  _fps = fps;
+}
+
 void ImguiManagerImpl::showGpuStatsDialog(
     std::function<std::string()> provider) {
   _gpuStatsProvider = std::move(provider);
@@ -350,6 +356,16 @@ Result<void> ImguiManagerImpl::render(WGPURenderPassEncoder pass) {
         ImGui::Text("Ready");
       } else {
         ImGui::Text("%s", _statusText.c_str());
+      }
+
+      // Right side: FPS
+      if (_fps > 0) {
+        char fpsText[32];
+        snprintf(fpsText, sizeof(fpsText), "%u FPS", _fps);
+        float textWidth = ImGui::CalcTextSize(fpsText).x;
+        float windowWidth = ImGui::GetWindowWidth();
+        ImGui::SameLine(windowWidth - textWidth - 8.0f);
+        ImGui::Text("%s", fpsText);
       }
 
       // Right side: GPU usage

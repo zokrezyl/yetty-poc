@@ -69,13 +69,34 @@ public:
                         uint32_t fillColor, uint32_t strokeColor = 0,
                         float strokeWidth = 0) = 0;
 
+    // Rounded box with uniform corner radius
+    virtual void addRoundedBox(float cx, float cy, float halfW, float halfH,
+                               float radius, uint32_t fillColor,
+                               uint32_t strokeColor = 0,
+                               float strokeWidth = 0) = 0;
+
+    virtual void addTriangle(float x0, float y0, float x1, float y1,
+                             float x2, float y2, uint32_t fillColor,
+                             uint32_t strokeColor = 0,
+                             float strokeWidth = 0) = 0;
+
+    virtual void addCircle(float cx, float cy, float radius,
+                           uint32_t fillColor, uint32_t strokeColor = 0,
+                           float strokeWidth = 0) = 0;
+
     virtual void addSegment(float x0, float y0, float x1, float y1,
                             uint32_t strokeColor, float strokeWidth = 1) = 0;
+
+    // Color wheel for color picker (specialized primitive)
+    virtual void addColorWheel(float cx, float cy, float outerR, float innerR,
+                               float hue, float sat, float val,
+                               float selectorRadius) = 0;
 
     //=========================================================================
     // Scene configuration
     //=========================================================================
 
+    virtual void clear() = 0;  // Clear all accumulated content
     virtual void setSceneBounds(float minX, float minY,
                                 float maxX, float maxY) = 0;
     virtual void setBgColor(uint32_t color) = 0;

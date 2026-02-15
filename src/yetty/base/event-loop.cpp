@@ -249,7 +249,12 @@ public:
             return Err<void>("Timer not found");
         }
 
-        it->second->timeout = timeoutMs;
+        auto& th = it->second;
+        th->timeout = timeoutMs;
+        // Restart timer if it's already running
+        if (uv_is_active(reinterpret_cast<uv_handle_t*>(&th->timer))) {
+            uv_timer_start(&th->timer, onTimerCallback, timeoutMs, timeoutMs);
+        }
         ydebug("EventLoop::configTimer: id={} timeout={}", id, timeoutMs);
         return Ok();
 #else

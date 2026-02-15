@@ -60,8 +60,11 @@ struct BinSDFPrimitive {
 static_assert(sizeof(BinSDFPrimitive) == 96);
 
 // SDFType values matching hdraw.h
+constexpr uint32_t SDF_CIRCLE = 0;
 constexpr uint32_t SDF_BOX = 1;
 constexpr uint32_t SDF_SEGMENT = 2;
+constexpr uint32_t SDF_TRIANGLE = 3;
+constexpr uint32_t SDF_COLOR_WHEEL = 64;
 
 //=============================================================================
 // TTF font metrics — parse cmap + hmtx + head for glyph advances
@@ -389,6 +392,73 @@ public:
         _primitives.push_back(prim);
     }
 
+    void addRoundedBox(float cx, float cy, float halfW, float halfH,
+                       float radius, uint32_t fillColor,
+                       uint32_t strokeColor, float strokeWidth) override {
+        BinSDFPrimitive prim = {};
+        prim.type = SDF_BOX;
+        prim.layer = 0;
+        prim.params[0] = cx;
+        prim.params[1] = cy;
+        prim.params[2] = halfW;
+        prim.params[3] = halfH;
+        // RoundedBox params: radii in params[4-7]
+        prim.params[4] = radius;
+        prim.params[5] = radius;
+        prim.params[6] = radius;
+        prim.params[7] = radius;
+        prim.fillColor = fillColor;
+        prim.strokeColor = strokeColor;
+        prim.strokeWidth = strokeWidth;
+        prim.round = radius;
+        prim.aabbMinX = cx - halfW - strokeWidth;
+        prim.aabbMinY = cy - halfH - strokeWidth;
+        prim.aabbMaxX = cx + halfW + strokeWidth;
+        prim.aabbMaxY = cy + halfH + strokeWidth;
+        _primitives.push_back(prim);
+    }
+
+    void addTriangle(float x0, float y0, float x1, float y1,
+                     float x2, float y2, uint32_t fillColor,
+                     uint32_t strokeColor, float strokeWidth) override {
+        BinSDFPrimitive prim = {};
+        prim.type = SDF_TRIANGLE;
+        prim.layer = 0;
+        prim.params[0] = x0;
+        prim.params[1] = y0;
+        prim.params[2] = x1;
+        prim.params[3] = y1;
+        prim.params[4] = x2;
+        prim.params[5] = y2;
+        prim.fillColor = fillColor;
+        prim.strokeColor = strokeColor;
+        prim.strokeWidth = strokeWidth;
+        prim.aabbMinX = std::min({x0, x1, x2}) - strokeWidth;
+        prim.aabbMinY = std::min({y0, y1, y2}) - strokeWidth;
+        prim.aabbMaxX = std::max({x0, x1, x2}) + strokeWidth;
+        prim.aabbMaxY = std::max({y0, y1, y2}) + strokeWidth;
+        _primitives.push_back(prim);
+    }
+
+    void addCircle(float cx, float cy, float radius,
+                   uint32_t fillColor, uint32_t strokeColor,
+                   float strokeWidth) override {
+        BinSDFPrimitive prim = {};
+        prim.type = SDF_CIRCLE;
+        prim.layer = 0;
+        prim.params[0] = cx;
+        prim.params[1] = cy;
+        prim.params[2] = radius;
+        prim.fillColor = fillColor;
+        prim.strokeColor = strokeColor;
+        prim.strokeWidth = strokeWidth;
+        prim.aabbMinX = cx - radius - strokeWidth;
+        prim.aabbMinY = cy - radius - strokeWidth;
+        prim.aabbMaxX = cx + radius + strokeWidth;
+        prim.aabbMaxY = cy + radius + strokeWidth;
+        _primitives.push_back(prim);
+    }
+
     void addSegment(float x0, float y0, float x1, float y1,
                     uint32_t strokeColor, float strokeWidth) override {
         BinSDFPrimitive prim = {};
@@ -407,9 +477,40 @@ public:
         _primitives.push_back(prim);
     }
 
+    void addColorWheel(float cx, float cy, float outerR, float innerR,
+                       float hue, float sat, float val,
+                       float selectorRadius) override {
+        BinSDFPrimitive prim = {};
+        prim.type = SDF_COLOR_WHEEL;
+        prim.layer = 0;
+        prim.params[0] = static_cast<float>(_primitives.size()); // layer/index
+        prim.params[1] = 0; // reserved
+        prim.params[2] = cx;
+        prim.params[3] = cy;
+        prim.params[4] = outerR;
+        prim.params[5] = innerR;
+        prim.params[6] = hue;
+        prim.params[7] = sat;
+        prim.params[8] = val;
+        prim.params[9] = selectorRadius;
+        prim.fillColor = 0xFFFFFFFF;
+        prim.aabbMinX = cx - outerR - selectorRadius;
+        prim.aabbMinY = cy - outerR - selectorRadius;
+        prim.aabbMaxX = cx + outerR + selectorRadius;
+        prim.aabbMaxY = cy + outerR + selectorRadius;
+        _primitives.push_back(prim);
+    }
+
     //=========================================================================
     // Scene
     //=========================================================================
+
+    void clear() override {
+        _primitives.clear();
+        _defaultSpans.clear();
+        _customSpans.clear();
+        _textBlob.clear();
+    }
 
     void setSceneBounds(float minX, float minY,
                         float maxX, float maxY) override {
