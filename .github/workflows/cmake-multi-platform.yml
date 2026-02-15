@@ -178,8 +178,8 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      ANDROID_BUILD_DIR: ${{ github.workspace }}/build-android-wgpu-debug
-      WEBGPU_BACKEND: wgpu
+      ANDROID_BUILD_DIR: ${{ github.workspace }}/build-android-dawn-release
+      WEBGPU_BACKEND: dawn
 
     steps:
     - uses: actions/checkout@v4
@@ -199,8 +199,8 @@ jobs:
         echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.1.10909125" >> $GITHUB_ENV
         echo "NDK_HOME=$ANDROID_HOME/ndk/26.1.10909125" >> $GITHUB_ENV
 
-    - name: Download wgpu-native for Android
-      run: bash build-tools/android/build-wgpu.sh
+    - name: Download Dawn for Android
+      run: bash build-tools/android/build-dawn.sh
 
     - name: Download Toybox for Android
       run: bash build-tools/android/build-toybox.sh
@@ -210,13 +210,13 @@ jobs:
 
     - name: Build Android APK
       working-directory: build-tools/android
-      run: ./gradlew assembleDebug
+      run: ./gradlew assembleRelease
 
     - name: Upload Android APK
       uses: actions/upload-artifact@v4
       with:
         name: yetty-android-apk
-        path: ${{ env.ANDROID_BUILD_DIR }}/app/outputs/apk/debug/*.apk
+        path: ${{ env.ANDROID_BUILD_DIR }}/app/outputs/apk/release/*.apk
         if-no-files-found: warn
 
   # =============================================================================
