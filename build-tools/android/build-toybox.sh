@@ -7,7 +7,10 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
-OUTPUT_DIR="$PROJECT_ROOT/build-android/wgpu-libs"
+
+# Use ANDROID_BUILD_DIR env var or default
+BUILD_DIR="${ANDROID_BUILD_DIR:-$PROJECT_ROOT/build-android-wgpu}"
+OUTPUT_DIR="$BUILD_DIR/wgpu-libs"
 
 mkdir -p "$OUTPUT_DIR/arm64-v8a"
 

@@ -50,10 +50,9 @@ android {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
             version = "3.22.1"
-            // Redirect CMake build output to build-android-{backend}/cxx at project root
-            // Go up two levels: build-tools/android -> root
-            val webgpuBackend = System.getenv("WEBGPU_BACKEND") ?: "wgpu"
-            buildStagingDirectory = File(rootProject.projectDir.parentFile.parentFile, "build-android-${webgpuBackend}/cxx")
+            // Redirect CMake build output to ANDROID_BUILD_DIR/cxx
+            val buildDir = System.getenv("ANDROID_BUILD_DIR") ?: "${rootProject.projectDir.parentFile.parentFile}/build-android"
+            buildStagingDirectory = File(buildDir, "cxx")
         }
     }
 
@@ -72,12 +71,14 @@ android {
         }
     }
 
-    // Include pre-built wgpu-native library and assets from build-android
-    // Go up two levels: build-tools/android -> root
+    // Include pre-built libraries and assets from ANDROID_BUILD_DIR
+    val buildDir = System.getenv("ANDROID_BUILD_DIR") ?: "${rootProject.projectDir.parentFile.parentFile}/build-android"
+    val webgpuBackend = System.getenv("WEBGPU_BACKEND") ?: "wgpu"
+    val libsDir = if (webgpuBackend == "dawn") "dawn-libs" else "wgpu-libs"
     sourceSets {
         getByName("main") {
-            jniLibs.srcDirs(File(rootProject.projectDir.parentFile.parentFile, "build-android/wgpu-libs"))
-            assets.srcDirs(File(rootProject.projectDir.parentFile.parentFile, "build-android/assets"))
+            jniLibs.srcDirs(File(buildDir, libsDir))
+            assets.srcDirs(File(buildDir, "assets"))
         }
     }
 }
@@ -86,25 +87,5 @@ dependencies {
     // No Java dependencies needed - pure native app
 }
 
-// Copy APK to build-android-{backend}-{buildType} at repo root
-val repoRoot = rootProject.projectDir.parentFile.parentFile
-val webgpuBackend = System.getenv("WEBGPU_BACKEND") ?: "wgpu"
-android.applicationVariants.all {
-    val variant = this
-    val buildType = variant.buildType.name
-    val outputDir = File(repoRoot, "build-android-${webgpuBackend}-${buildType}")
-
-    variant.assembleProvider.get().doLast {
-        outputDir.mkdirs()
-        variant.outputs.all {
-            val apkFile = outputFile
-            if (apkFile.exists()) {
-                copy {
-                    from(apkFile)
-                    into(outputDir)
-                }
-                println("APK copied to: ${outputDir}/${apkFile.name}")
-            }
-        }
-    }
-}
+// APK is already in the correct directory (ANDROID_BUILD_DIR/app/outputs/apk/)
+// No additional copy needed since layout.buildDirectory is set to ANDROID_BUILD_DIR

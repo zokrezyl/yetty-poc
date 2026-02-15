@@ -7,9 +7,12 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
-OUTPUT_DIR="$PROJECT_ROOT/build-android/wgpu-libs"
-INCLUDE_DIR="$PROJECT_ROOT/build-android/wgpu-include"
-ASSETS_DIR="$PROJECT_ROOT/build-android/assets"
+
+# Use ANDROID_BUILD_DIR env var or default
+BUILD_DIR="${ANDROID_BUILD_DIR:-$PROJECT_ROOT/build-android-wgpu}"
+OUTPUT_DIR="$BUILD_DIR/wgpu-libs"
+INCLUDE_DIR="$BUILD_DIR/wgpu-include"
+ASSETS_DIR="$BUILD_DIR/assets"
 
 # Versions
 WGPU_VERSION="v27.0.4.0"

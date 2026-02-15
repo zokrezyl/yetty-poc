@@ -11,9 +11,12 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
-OUTPUT_DIR="$PROJECT_ROOT/build-android/dawn-libs"
-INCLUDE_DIR="$PROJECT_ROOT/build-android/dawn-include"
-ASSETS_DIR="$PROJECT_ROOT/build-android/assets"
+
+# Use ANDROID_BUILD_DIR env var or default
+BUILD_DIR="${ANDROID_BUILD_DIR:-$PROJECT_ROOT/build-android-dawn}"
+OUTPUT_DIR="$BUILD_DIR/dawn-libs"
+INCLUDE_DIR="$BUILD_DIR/dawn-include"
+ASSETS_DIR="$BUILD_DIR/assets"
 
 # Versions - must match Dawn.cmake
 DAWN_VERSION="20260214.164635"
