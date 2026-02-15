@@ -12,7 +12,7 @@
 #include "cards/ytext/ytext.h"
 #include "cards/ymery/ymery.h"
 #include "cards/markdown/markdown.h"
-#ifndef _MSC_VER
+#if !defined(_MSC_VER) && !defined(__ANDROID__)
 #include "cards/thorvg/thorvg.h"
 #endif
 #include "cards/qrcode/qrcode.h"
@@ -148,7 +148,7 @@ public:
             return Ok<CardPtr>(*result);
         });
 
-#ifndef _MSC_VER
+#if !defined(_MSC_VER) && !defined(__ANDROID__)
         registerCard("thorvg", [](const YettyContext& ctx,
                                 int32_t x, int32_t y,
                                 uint32_t w, uint32_t h,

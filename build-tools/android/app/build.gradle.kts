@@ -20,9 +20,13 @@ android {
 
         externalNativeBuild {
             cmake {
+                val webgpuBackend = System.getenv("WEBGPU_BACKEND") ?: "wgpu"
+                val buildDir = System.getenv("ANDROID_BUILD_DIR") ?: "${rootProject.projectDir.parentFile.parentFile}/build-android"
                 arguments += listOf(
                     "-DYETTY_ANDROID=ON",
-                    "-DCMAKE_BUILD_TYPE=Release"
+                    "-DCMAKE_BUILD_TYPE=Release",
+                    "-DWEBGPU_BACKEND=${webgpuBackend}",
+                    "-DANDROID_BUILD_DIR=${buildDir}"
                 )
             }
         }
@@ -41,6 +45,7 @@ android {
             externalNativeBuild {
                 cmake {
                     arguments += "-DCMAKE_BUILD_TYPE=Debug"
+                    // WEBGPU_BACKEND and ANDROID_BUILD_DIR already set in defaultConfig
                 }
             }
         }
@@ -50,9 +55,9 @@ android {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
             version = "3.22.1"
-            // Redirect CMake build output to build-android/cxx at project root
-            // Go up two levels: build-tools/android -> root
-            buildStagingDirectory = File(rootProject.projectDir.parentFile.parentFile, "build-android/cxx")
+            // Redirect CMake build output to ANDROID_BUILD_DIR/cxx
+            val buildDir = System.getenv("ANDROID_BUILD_DIR") ?: "${rootProject.projectDir.parentFile.parentFile}/build-android"
+            buildStagingDirectory = File(buildDir, "cxx")
         }
     }
 
@@ -71,12 +76,14 @@ android {
         }
     }
 
-    // Include pre-built wgpu-native library and assets from build-android
-    // Go up two levels: build-tools/android -> root
+    // Include pre-built libraries and assets from ANDROID_BUILD_DIR
+    val buildDir = System.getenv("ANDROID_BUILD_DIR") ?: "${rootProject.projectDir.parentFile.parentFile}/build-android"
+    val webgpuBackend = System.getenv("WEBGPU_BACKEND") ?: "wgpu"
+    val libsDir = if (webgpuBackend == "dawn") "dawn-libs" else "wgpu-libs"
     sourceSets {
         getByName("main") {
-            jniLibs.srcDirs(File(rootProject.projectDir.parentFile.parentFile, "build-android/wgpu-libs"))
-            assets.srcDirs(File(rootProject.projectDir.parentFile.parentFile, "build-android/assets"))
+            jniLibs.srcDirs(File(buildDir, libsDir))
+            assets.srcDirs(File(buildDir, "assets"))
         }
     }
 }
@@ -85,24 +92,5 @@ dependencies {
     // No Java dependencies needed - pure native app
 }
 
-// Copy APK to build-android-{buildType} at repo root
-val repoRoot = rootProject.projectDir.parentFile.parentFile
-android.applicationVariants.all {
-    val variant = this
-    val buildType = variant.buildType.name
-    val outputDir = File(repoRoot, "build-android-${buildType}")
-
-    variant.assembleProvider.get().doLast {
-        outputDir.mkdirs()
-        variant.outputs.all {
-            val apkFile = outputFile
-            if (apkFile.exists()) {
-                copy {
-                    from(apkFile)
-                    into(outputDir)
-                }
-                println("APK copied to: ${outputDir}/${apkFile.name}")
-            }
-        }
-    }
-}
+// APK is already in the correct directory (ANDROID_BUILD_DIR/app/outputs/apk/)
+// No additional copy needed since layout.buildDirectory is set to ANDROID_BUILD_DIR

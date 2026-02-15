@@ -9,8 +9,6 @@
 
 namespace yetty {
 
-class WebGPUContext;
-
 // Toolbox button types
 enum class ToolboxButton {
     None,

@@ -10,6 +10,7 @@
 #include <yetty/card-factory.h>
 #include <yetty/imgui-manager.h>
 #include <yetty/wgpu-compat.h>
+#include <yetty/platform.h>
 #include <yetty/base/base.h>
 #include <yetty/rpc/rpc-server.h>
 #include <yetty/rpc/event-loop-handler.h>
@@ -18,7 +19,6 @@
 #include "cards/plot/plot-sampler-provider.h"
 #include "cards/plot/plot-transformer-provider.h"
 #include "cards/plot/plot-renderer-provider.h"
-#include <glfw3webgpu.h>
 #include <array>
 #include <iostream>
 #include <csignal>
@@ -59,15 +59,18 @@ private:
 
     Result<Workspace::Ptr> createWorkspace() noexcept;
 
-    // Window
-    GLFWwindow* _window = nullptr;
-    GLFWcursor* _currentCursor = nullptr;  // Cached custom cursor (null = default)
+    // Platform abstraction (window, input, etc.)
+    Platform::Ptr _platform;
     uint32_t _initialWidth = 1024;
     uint32_t _initialHeight = 768;
 
     // Content scale for mouse coordinate conversion (framebuffer / window)
     float _contentScaleX = 1.0f;
     float _contentScaleY = 1.0f;
+
+    // Track mouse position for button events
+    float _lastMouseX = 0.0f;
+    float _lastMouseY = 0.0f;
 
     // WebGPU handles
     WGPUInstance _instance = nullptr;
@@ -144,6 +147,18 @@ Result<Yetty::Ptr> Yetty::createImpl(ContextType&, int argc, char* argv[]) noexc
     return Ok(std::move(impl));
 }
 
+#if defined(__ANDROID__)
+Result<Yetty::Ptr> Yetty::createImpl(ContextType&, struct android_app* app) noexcept {
+    (void)app;  // TODO: Store app pointer for platform initialization
+    auto impl = Ptr(new YettyImpl());
+    // Android init without argc/argv - use defaults
+    if (auto res = static_cast<YettyImpl*>(impl.get())->init(0, nullptr); !res) {
+        return Err<Ptr>("Failed to init Yetty", res);
+    }
+    return Ok(std::move(impl));
+}
+#endif
+
 //=============================================================================
 // Initialization
 //=============================================================================
@@ -191,7 +206,9 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     // Build YettyContext
     _yettyContext.gpu = _gpuContext;
     _yettyContext.globalAllocator = _globalAllocator;
+#if !defined(__ANDROID__)
     _yettyContext.gpuMonitor = gpu::GpuMonitor::create();
+#endif
     _yettyContext.shaderManager = shaderMgr;
     _yettyContext.fontManager = fontMgr;
 
@@ -265,7 +282,7 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     if (auto res = initCallbacks(); !res) return res;
 
     s_instance = this;
-    _lastFpsTime = glfwGetTime();
+    _lastFpsTime = _platform->getTime();
 
     return Ok();
 }
@@ -285,17 +302,14 @@ Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
 }
 
 Result<void> YettyImpl::initWindow() noexcept {
-    if (!glfwInit()) {
-        return Err<void>("Failed to initialize GLFW");
+    auto platformResult = Platform::create();
+    if (!platformResult) {
+        return Err<void>("Failed to create platform", platformResult);
     }
+    _platform = *platformResult;
 
-    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
-
-    _window = glfwCreateWindow(_initialWidth, _initialHeight, "yetty", nullptr, nullptr);
-    if (!_window) {
-        glfwTerminate();
-        return Err<void>("Failed to create window");
+    if (auto res = _platform->createWindow(_initialWidth, _initialHeight, "yetty"); !res) {
+        return Err<void>("Failed to create window", res);
     }
 
     return Ok();
@@ -309,8 +323,8 @@ Result<void> YettyImpl::initWebGPU() noexcept {
         return Err<void>("Failed to create WebGPU instance");
     }
 
-    // Create surface
-    _surface = glfwCreateWindowWGPUSurface(_instance, _window);
+    // Create surface via platform
+    _surface = _platform->createWGPUSurface(_instance);
     if (!_surface) {
         return Err<void>("Failed to create WebGPU surface");
     }
@@ -692,30 +706,30 @@ Result<Workspace::Ptr> YettyImpl::createWorkspace() noexcept {
 }
 
 Result<void> YettyImpl::initCallbacks() noexcept {
-    glfwSetWindowUserPointer(_window, this);
-
-    glfwSetWindowFocusCallback(_window, [](GLFWwindow* w, int focused) {
-        ydebug("glfwWindowFocusCallback: focused={}", focused);
+    // Focus callback
+    _platform->setFocusCallback([](bool focused) {
+        ydebug("FocusCallback: focused={}", focused);
     });
 
-    glfwSetKeyCallback(_window, [](GLFWwindow* w, int key, int scancode, int action, int mods) {
-        ydebug("glfwKeyCallback: key={} scancode={} action={} mods={}", key, scancode, action, mods);
-        if (action != GLFW_PRESS && action != GLFW_REPEAT) return;
+    // Key callback
+    _platform->setKeyCallback([this](int key, int scancode, KeyAction action, int mods) {
+        ydebug("KeyCallback: key={} scancode={} action={} mods={}", key, scancode, static_cast<int>(action), mods);
+        if (action != KeyAction::Press && action != KeyAction::Repeat) return;
 
         auto loop = *base::EventLoop::instance();
 
-        // Handle Ctrl/Alt + character combinations using glfwGetKeyName
-        // This is how the old InputHandler::onKey did it
-        if (mods & (GLFW_MOD_CONTROL | GLFW_MOD_ALT)) {
-            // Special case for space key - glfwGetKeyName may return NULL for it
-            if (key == GLFW_KEY_SPACE) {
+        // Handle Ctrl/Alt + character combinations using platform key name lookup
+        // GLFW_MOD_CONTROL = 0x0002, GLFW_MOD_ALT = 0x0004
+        if (mods & (0x0002 | 0x0004)) {
+            // Special case for space key (GLFW_KEY_SPACE = 32)
+            if (key == 32) {
                 ydebug("Sending Ctrl/Alt+Space");
                 loop->dispatch(base::Event::keyDown(key, mods, scancode));
                 return;
             }
 
-            const char* keyName = glfwGetKeyName(key, scancode);
-            if (keyName && keyName[0] != '\0' && keyName[1] == '\0') {
+            std::string keyName = _platform->getKeyName(key, scancode);
+            if (!keyName.empty() && keyName.size() == 1) {
                 // Single character key - dispatch as char with mods
                 uint32_t ch = static_cast<uint32_t>(keyName[0]);
                 ydebug("Ctrl/Alt+char: keyName='{}' -> dispatching charInput with mods", keyName);
@@ -725,102 +739,86 @@ Result<void> YettyImpl::initCallbacks() noexcept {
         }
 
         // For special keys (Enter, Backspace, arrows, etc.), dispatch keyDown
-        ydebug("glfwKeyCallback: dispatching keyDown key={} mods={}", key, mods);
+        ydebug("KeyCallback: dispatching keyDown key={} mods={}", key, mods);
         loop->dispatch(base::Event::keyDown(key, mods, scancode));
     });
 
-    glfwSetCharCallback(_window, [](GLFWwindow* w, unsigned int codepoint) {
-        ydebug("glfwCharCallback: codepoint={} ('{}')", codepoint, codepoint < 32 ? '?' : (char)codepoint);
-        auto* impl = static_cast<YettyImpl*>(glfwGetWindowUserPointer(w));
-        if (impl) {
-            uint32_t glyphIdx = codepoint;
-            if (auto font = impl->_yettyContext.fontManager->getDefaultMsMsdfFont()) {
-                glyphIdx = font->getGlyphIndex(codepoint);
-            }
-            impl->_sharedUniforms.lastChar = glyphIdx;
-            impl->_sharedUniforms.lastCharTime = static_cast<float>(glfwGetTime());
+    // Char callback
+    _platform->setCharCallback([this](unsigned int codepoint) {
+        ydebug("CharCallback: codepoint={} ('{}')", codepoint, codepoint < 32 ? '?' : (char)codepoint);
+        uint32_t glyphIdx = codepoint;
+        if (auto font = _yettyContext.fontManager->getDefaultMsMsdfFont()) {
+            glyphIdx = font->getGlyphIndex(codepoint);
         }
+        _sharedUniforms.lastChar = glyphIdx;
+        _sharedUniforms.lastCharTime = static_cast<float>(_platform->getTime());
+
         auto loop = *base::EventLoop::instance();
         loop->dispatch(base::Event::charInput(codepoint));
     });
 
-    glfwSetFramebufferSizeCallback(_window, [](GLFWwindow* w, int newWidth, int newHeight) {
-        auto* impl = static_cast<YettyImpl*>(glfwGetWindowUserPointer(w));
-        if (impl) impl->handleResize(newWidth, newHeight);
+    // Resize callback
+    _platform->setResizeCallback([this](int newWidth, int newHeight) {
+        handleResize(newWidth, newHeight);
     });
 
-    glfwSetWindowCloseCallback(_window, [](GLFWwindow* w) {
-        ydebug("glfwWindowCloseCallback triggered!");
-    });
-
-    glfwSetMouseButtonCallback(_window, [](GLFWwindow* w, int button, int action, int mods) {
+    // Mouse button callback
+    _platform->setMouseButtonCallback([this](MouseButton button, bool pressed, int mods) {
         (void)mods;
-        auto* impl = static_cast<YettyImpl*>(glfwGetWindowUserPointer(w));
-        double xpos, ypos;
-        glfwGetCursorPos(w, &xpos, &ypos);
-
-        // Scale mouse coordinates from window to framebuffer space
-        float mx = static_cast<float>(xpos) * (impl ? impl->_contentScaleX : 1.0f);
-        float my = static_cast<float>(ypos) * (impl ? impl->_contentScaleY : 1.0f);
-
+        // Get current mouse position for event dispatch
+        // Note: we track mouse position via move callback, but for now get from window size
+        // The actual position is tracked in mouse move events
         auto loop = *base::EventLoop::instance();
 
         // Middle-click paste: read clipboard and dispatch Paste event
-        if (button == GLFW_MOUSE_BUTTON_MIDDLE && action == GLFW_PRESS) {
-            const char* clipboard = glfwGetClipboardString(w);
-            if (clipboard && clipboard[0] != '\0') {
-                auto text = std::make_shared<std::string>(clipboard);
+        if (button == MouseButton::Middle && pressed) {
+            std::string clipboard = _platform->getClipboardText();
+            if (!clipboard.empty()) {
+                auto text = std::make_shared<std::string>(std::move(clipboard));
                 loop->dispatch(base::Event::pasteEvent(std::move(text)));
-                ydebug("glfwMouseButtonCallback: middle-click paste ({} bytes)", strlen(clipboard));
+                ydebug("MouseButtonCallback: middle-click paste");
             }
             return;
         }
 
-        if (action == GLFW_PRESS) {
-            ydebug("glfwMouseButtonCallback: button={} PRESS at ({}, {}) scaled=({}, {})",
-                   button, xpos, ypos, mx, my);
-            loop->dispatch(base::Event::mouseDown(mx, my, button));
-        } else if (action == GLFW_RELEASE) {
-            ydebug("glfwMouseButtonCallback: button={} RELEASE at ({}, {})", button, xpos, ypos);
-            loop->dispatch(base::Event::mouseUp(mx, my, button));
+        int buttonInt = static_cast<int>(button);
+        if (pressed) {
+            ydebug("MouseButtonCallback: button={} PRESS at ({}, {})",
+                   buttonInt, _lastMouseX, _lastMouseY);
+            loop->dispatch(base::Event::mouseDown(_lastMouseX, _lastMouseY, buttonInt));
+        } else {
+            ydebug("MouseButtonCallback: button={} RELEASE at ({}, {})",
+                   buttonInt, _lastMouseX, _lastMouseY);
+            loop->dispatch(base::Event::mouseUp(_lastMouseX, _lastMouseY, buttonInt));
         }
     });
 
-    glfwSetCursorPosCallback(_window, [](GLFWwindow* w, double xpos, double ypos) {
-        auto* impl = static_cast<YettyImpl*>(glfwGetWindowUserPointer(w));
+    // Mouse move callback
+    _platform->setMouseMoveCallback([this](double xpos, double ypos) {
         // Scale mouse coordinates from window to framebuffer space
-        float mx = static_cast<float>(xpos) * (impl ? impl->_contentScaleX : 1.0f);
-        float my = static_cast<float>(ypos) * (impl ? impl->_contentScaleY : 1.0f);
+        float mx = static_cast<float>(xpos) * _contentScaleX;
+        float my = static_cast<float>(ypos) * _contentScaleY;
+        _lastMouseX = mx;
+        _lastMouseY = my;
         auto loop = *base::EventLoop::instance();
         loop->dispatch(base::Event::mouseMove(mx, my));
     });
 
-    glfwSetScrollCallback(_window, [](GLFWwindow* w, double xoffset, double yoffset) {
-        auto* impl = static_cast<YettyImpl*>(glfwGetWindowUserPointer(w));
-        double xpos, ypos;
-        glfwGetCursorPos(w, &xpos, &ypos);
-        // Scale mouse coordinates from window to framebuffer space
-        float mx = static_cast<float>(xpos) * (impl ? impl->_contentScaleX : 1.0f);
-        float my = static_cast<float>(ypos) * (impl ? impl->_contentScaleY : 1.0f);
+    // Scroll callback
+    _platform->setScrollCallback([this](double xoffset, double yoffset) {
+        // Note: Platform doesn't give us modifier state in scroll callback
+        // We'd need to track key state separately or extend Platform API
         int mods = 0;
-        if (glfwGetKey(w, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ||
-            glfwGetKey(w, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS) {
-            mods |= GLFW_MOD_CONTROL;
-        }
-        if (glfwGetKey(w, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
-            glfwGetKey(w, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS) {
-            mods |= GLFW_MOD_SHIFT;
-        }
         auto loop = *base::EventLoop::instance();
         loop->dispatch(base::Event::scrollEvent(
-            mx, my,
+            _lastMouseX, _lastMouseY,
             static_cast<float>(xoffset), static_cast<float>(yoffset), mods));
     });
 
-    // Initialize content scale at startup (framebuffer callback only fires on changes)
+    // Initialize content scale at startup
     int fbWidth, fbHeight, winWidth, winHeight;
-    glfwGetFramebufferSize(_window, &fbWidth, &fbHeight);
-    glfwGetWindowSize(_window, &winWidth, &winHeight);
+    _platform->getFramebufferSize(fbWidth, fbHeight);
+    _platform->getWindowSize(winWidth, winHeight);
     if (winWidth > 0 && winHeight > 0) {
         _contentScaleX = static_cast<float>(fbWidth) / static_cast<float>(winWidth);
         _contentScaleY = static_cast<float>(fbHeight) / static_cast<float>(winHeight);
@@ -860,15 +858,8 @@ Result<void> YettyImpl::onShutdown() {
     if (_adapter) wgpuAdapterRelease(_adapter);
     if (_instance) wgpuInstanceRelease(_instance);
 
-    if (_currentCursor) {
-        glfwDestroyCursor(_currentCursor);
-        _currentCursor = nullptr;
-    }
-    if (_window) {
-        glfwDestroyWindow(_window);
-        _window = nullptr;
-    }
-    glfwTerminate();
+    // Platform handles window destruction
+    _platform.reset();
 
     s_instance = nullptr;
     return result;
@@ -941,8 +932,8 @@ Result<bool> YettyImpl::onEvent(const base::Event& event) {
 #if !YETTY_WEB && !defined(__ANDROID__)
     // Input timer: poll events only (fast, always responsive)
     if (event.type == base::Event::Type::Timer && event.timer.timerId == _inputTimerId) {
-        glfwPollEvents();
-        if (glfwWindowShouldClose(_window)) {
+        _platform->pollEvents();
+        if (_platform->shouldClose()) {
             (*base::EventLoop::instance())->stop();
         }
         return Ok(true);
@@ -959,28 +950,27 @@ Result<bool> YettyImpl::onEvent(const base::Event& event) {
     }
 
     // SetCursor event: change mouse cursor shape
-    if (event.type == base::Event::Type::SetCursor && _window) {
+    if (event.type == base::Event::Type::SetCursor && _platform) {
         int shape = event.setCursor.shape;
-        if (_currentCursor) {
-            glfwDestroyCursor(_currentCursor);
-            _currentCursor = nullptr;
+        // Map GLFW cursor constants to CursorType
+        CursorType cursorType = CursorType::Arrow;
+        switch (shape) {
+            case 0: cursorType = CursorType::Arrow; break;       // Default
+            case 0x00036002: cursorType = CursorType::IBeam; break;  // GLFW_IBEAM_CURSOR
+            case 0x00036004: cursorType = CursorType::Hand; break;   // GLFW_POINTING_HAND_CURSOR
+            case 0x00036005: cursorType = CursorType::ResizeH; break; // GLFW_RESIZE_EW_CURSOR
+            case 0x00036006: cursorType = CursorType::ResizeV; break; // GLFW_RESIZE_NS_CURSOR
+            default: cursorType = CursorType::Arrow; break;
         }
-        if (shape == 0) {
-            glfwSetCursor(_window, nullptr);  // Reset to default arrow
-        } else {
-            _currentCursor = glfwCreateStandardCursor(shape);
-            if (_currentCursor) {
-                glfwSetCursor(_window, _currentCursor);
-            }
-        }
+        _platform->setCursor(cursorType);
         return Ok(true);
     }
 
     // Copy event: write selected text to system clipboard
-    if (event.type == base::Event::Type::Copy && event.payload && _window) {
+    if (event.type == base::Event::Type::Copy && event.payload && _platform) {
         auto text = std::static_pointer_cast<std::string>(event.payload);
         if (text && !text->empty()) {
-            glfwSetClipboardString(_window, text->c_str());
+            _platform->setClipboardText(*text);
             yinfo("Clipboard: copied {} bytes", text->size());
         }
         return Ok(true);
@@ -1040,23 +1030,20 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
     WGPUTextureView targetView = *viewResult;
 
     // Update shared uniforms
-    static double lastTime = glfwGetTime();
-    double now = glfwGetTime();
+    static double lastTime = _platform->getTime();
+    double now = _platform->getTime();
     float deltaTime = static_cast<float>(now - lastTime);
     lastTime = now;
 
     int windowWidth, windowHeight;
-    glfwGetWindowSize(_window, &windowWidth, &windowHeight);
-
-    double mouseXd, mouseYd;
-    glfwGetCursorPos(_window, &mouseXd, &mouseYd);
+    _platform->getWindowSize(windowWidth, windowHeight);
 
     _sharedUniforms.time = static_cast<float>(now);
     _sharedUniforms.deltaTime = deltaTime;
     _sharedUniforms.screenWidth = static_cast<float>(windowWidth);
     _sharedUniforms.screenHeight = static_cast<float>(windowHeight);
-    _sharedUniforms.mouseX = static_cast<float>(mouseXd);
-    _sharedUniforms.mouseY = static_cast<float>(mouseYd);
+    _sharedUniforms.mouseX = _lastMouseX;
+    _sharedUniforms.mouseY = _lastMouseY;
     wgpuQueueWriteBuffer(_queue, _sharedUniformBuffer, 0, &_sharedUniforms, sizeof(SharedUniforms));
 
     // Each GPUScreen flushes its own CardBufferManager during render
@@ -1125,7 +1112,7 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
     }
 
     _frameCount++;
-    double fpsNow = glfwGetTime();
+    double fpsNow = _platform->getTime();
     if (fpsNow - _lastFpsTime >= 1.0) {
         yinfo("FPS: {}", _frameCount);
         if (_yettyContext.imguiManager) {
@@ -1143,7 +1130,7 @@ void YettyImpl::handleResize(int newWidth, int newHeight) noexcept {
 
     // Update content scale (framebuffer / window)
     int windowWidth, windowHeight;
-    glfwGetWindowSize(_window, &windowWidth, &windowHeight);
+    _platform->getWindowSize(windowWidth, windowHeight);
     if (windowWidth > 0 && windowHeight > 0) {
         _contentScaleX = static_cast<float>(newWidth) / static_cast<float>(windowWidth);
         _contentScaleY = static_cast<float>(newHeight) / static_cast<float>(windowHeight);

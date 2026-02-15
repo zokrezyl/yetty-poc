@@ -1,7 +1,10 @@
 #include "gpu-monitor.h"
+
+#ifndef _WIN32
 #include "nvidia-monitor.h"
 #include "amd-monitor.h"
 #include "intel-monitor.h"
+#endif
 
 #include <ytrace/ytrace.hpp>
 #include <filesystem>
@@ -11,6 +14,7 @@ namespace yetty::gpu {
 
 namespace fs = std::filesystem;
 
+#ifndef _WIN32
 // PCI vendor IDs
 constexpr uint16_t VENDOR_AMD = 0x1002;
 constexpr uint16_t VENDOR_INTEL = 0x8086;
@@ -54,8 +58,14 @@ static std::string readDeviceName(const fs::path& cardPath) {
 
     return "Unknown GPU";
 }
+#endif
 
 GpuMonitor::Ptr GpuMonitor::create() {
+#ifdef _WIN32
+    // GPU monitoring not yet implemented on Windows
+    ywarn("GPU monitor: not supported on Windows");
+    return std::make_shared<NullMonitor>();
+#else
     yinfo("GPU monitor: detecting GPU vendor...");
 
     // 1. Try NVIDIA first (uses dlopen, independent of DRM)
@@ -96,6 +106,7 @@ GpuMonitor::Ptr GpuMonitor::create() {
 
     ywarn("GPU monitor: no supported GPU found");
     return std::make_shared<NullMonitor>();
+#endif
 }
 
 } // namespace yetty::gpu

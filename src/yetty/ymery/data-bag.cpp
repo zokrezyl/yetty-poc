@@ -175,7 +175,7 @@ Result<Value> DataBag::get(const std::string& key, const Value& defaultValue) {
         DataPath path = _mainDataPath / key;
         auto res = _mainDataTree->get(path);
         if (res && (*res).has_value()) {
-            return res;
+            return Ok(*res);
         }
     }
 

@@ -159,30 +159,30 @@ run-desktop-dawn-asan: build-desktop-dawn-asan ## Run desktop dawn ASAN build
 
 .PHONY: config-android-wgpu-debug
 config-android-wgpu-debug: ## Configure Android wgpu debug build
-	@$(MAKE) _android-wgpu-deps
+	@$(MAKE) _android-wgpu-deps-debug
 
 .PHONY: config-android-wgpu-release
 config-android-wgpu-release: ## Configure Android wgpu release build
-	@$(MAKE) _android-wgpu-deps
+	@$(MAKE) _android-wgpu-deps-release
 
 .PHONY: build-android-wgpu-debug
 build-android-wgpu-debug: ## Build Android wgpu debug APK
-	@$(MAKE) _android-wgpu-deps
-	WEBGPU_BACKEND=wgpu nix develop .#android --command bash -c "cd build-tools/android && ./gradlew $(GRADLE_OPTS_WGPU_DEBUG) assembleDebug"
+	@$(MAKE) _android-wgpu-deps-debug
+	WEBGPU_BACKEND=wgpu ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_WGPU_DEBUG) nix develop .#android --command bash -c "cd build-tools/android && ./gradlew $(GRADLE_OPTS_WGPU_DEBUG) assembleDebug"
 
 .PHONY: build-android-wgpu-release
 build-android-wgpu-release: ## Build Android wgpu release APK
-	@$(MAKE) _android-wgpu-deps
-	WEBGPU_BACKEND=wgpu nix develop .#android --command bash -c "cd build-tools/android && ./gradlew $(GRADLE_OPTS_WGPU_RELEASE) assembleRelease"
+	@$(MAKE) _android-wgpu-deps-release
+	WEBGPU_BACKEND=wgpu ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_WGPU_RELEASE) nix develop .#android --command bash -c "cd build-tools/android && ./gradlew $(GRADLE_OPTS_WGPU_RELEASE) assembleRelease"
 
 .PHONY: test-android-wgpu-debug
 test-android-wgpu-debug: build-android-wgpu-debug ## Install and run Android wgpu debug build
-	adb install -r build-tools/android/app/build/outputs/apk/debug/app-debug.apk
+	adb install -r $(BUILD_DIR_ANDROID_WGPU_DEBUG)/app/outputs/apk/debug/app-debug.apk
 	adb shell am start -n com.yetty.terminal/android.app.NativeActivity
 
 .PHONY: test-android-wgpu-release
 test-android-wgpu-release: build-android-wgpu-release ## Install and run Android wgpu release build
-	adb install -r build-tools/android/app/build/outputs/apk/release/app-release.apk
+	adb install -r $(BUILD_DIR_ANDROID_WGPU_RELEASE)/app/outputs/apk/release/app-release-unsigned.apk
 	adb shell am start -n com.yetty.terminal/android.app.NativeActivity
 
 #=============================================================================
@@ -191,30 +191,30 @@ test-android-wgpu-release: build-android-wgpu-release ## Install and run Android
 
 .PHONY: config-android-dawn-debug
 config-android-dawn-debug: ## Configure Android dawn debug build
-	@$(MAKE) _android-dawn-deps
+	@$(MAKE) _android-dawn-deps-debug
 
 .PHONY: config-android-dawn-release
 config-android-dawn-release: ## Configure Android dawn release build
-	@$(MAKE) _android-dawn-deps
+	@$(MAKE) _android-dawn-deps-release
 
 .PHONY: build-android-dawn-debug
 build-android-dawn-debug: ## Build Android dawn debug APK
-	@$(MAKE) _android-dawn-deps
-	WEBGPU_BACKEND=dawn nix develop .#android --command bash -c "cd build-tools/android && ./gradlew $(GRADLE_OPTS_DAWN_DEBUG) assembleDebug"
+	@$(MAKE) _android-dawn-deps-debug
+	WEBGPU_BACKEND=dawn ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_DAWN_DEBUG) nix develop .#android --command bash -c "cd build-tools/android && ./gradlew $(GRADLE_OPTS_DAWN_DEBUG) assembleDebug"
 
 .PHONY: build-android-dawn-release
 build-android-dawn-release: ## Build Android dawn release APK
-	@$(MAKE) _android-dawn-deps
-	WEBGPU_BACKEND=dawn nix develop .#android --command bash -c "cd build-tools/android && ./gradlew $(GRADLE_OPTS_DAWN_RELEASE) assembleRelease"
+	@$(MAKE) _android-dawn-deps-release
+	WEBGPU_BACKEND=dawn ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_DAWN_RELEASE) nix develop .#android --command bash -c "cd build-tools/android && ./gradlew $(GRADLE_OPTS_DAWN_RELEASE) assembleRelease"
 
 .PHONY: test-android-dawn-debug
 test-android-dawn-debug: build-android-dawn-debug ## Install and run Android dawn debug build
-	adb install -r build-tools/android/app/build/outputs/apk/debug/app-debug.apk
+	adb install -r $(BUILD_DIR_ANDROID_DAWN_DEBUG)/app/outputs/apk/debug/app-debug.apk
 	adb shell am start -n com.yetty.terminal/android.app.NativeActivity
 
 .PHONY: test-android-dawn-release
 test-android-dawn-release: build-android-dawn-release ## Install and run Android dawn release build
-	adb install -r build-tools/android/app/build/outputs/apk/release/app-release.apk
+	adb install -r $(BUILD_DIR_ANDROID_DAWN_RELEASE)/app/outputs/apk/release/app-release-unsigned.apk
 	adb shell am start -n com.yetty.terminal/android.app.NativeActivity
 
 #=============================================================================
@@ -277,13 +277,23 @@ clean: ## Clean all build directories
 # Internal targets (not shown in help)
 #=============================================================================
 
-.PHONY: _android-wgpu-deps
-_android-wgpu-deps:
-	@cd $(CURDIR) && WEBGPU_BACKEND=wgpu bash build-tools/android/build-wgpu.sh
+.PHONY: _android-wgpu-deps-debug
+_android-wgpu-deps-debug:
+	@cd $(CURDIR) && ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_WGPU_DEBUG) bash build-tools/android/build-wgpu.sh
+	@cd $(CURDIR) && ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_WGPU_DEBUG) bash build-tools/android/build-toybox.sh
 
-.PHONY: _android-dawn-deps
-_android-dawn-deps:
-	@cd $(CURDIR) && WEBGPU_BACKEND=dawn bash build-tools/android/build-dawn.sh
+.PHONY: _android-wgpu-deps-release
+_android-wgpu-deps-release:
+	@cd $(CURDIR) && ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_WGPU_RELEASE) bash build-tools/android/build-wgpu.sh
+	@cd $(CURDIR) && ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_WGPU_RELEASE) bash build-tools/android/build-toybox.sh
+
+.PHONY: _android-dawn-deps-debug
+_android-dawn-deps-debug:
+	@cd $(CURDIR) && ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_DAWN_DEBUG) bash build-tools/android/build-dawn.sh
+
+.PHONY: _android-dawn-deps-release
+_android-dawn-deps-release:
+	@cd $(CURDIR) && ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_DAWN_RELEASE) bash build-tools/android/build-dawn.sh
 
 #=============================================================================
 # Help

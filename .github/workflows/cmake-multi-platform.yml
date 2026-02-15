@@ -6,6 +6,8 @@ on:
   push:
     tags:
       - '*'
+    branches:
+      - android
 
 jobs:
   # =============================================================================
@@ -172,8 +174,12 @@ jobs:
   # Android Build (temporarily disabled)
   # =============================================================================
   build-android:
-    if: false  # temporarily disabled
+    #if: false  # temporarily disabled
     runs-on: ubuntu-latest
+
+    env:
+      ANDROID_BUILD_DIR: ${{ github.workspace }}/build-android-dawn-release
+      WEBGPU_BACKEND: dawn
 
     steps:
     - uses: actions/checkout@v4
@@ -193,31 +199,24 @@ jobs:
         echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.1.10909125" >> $GITHUB_ENV
         echo "NDK_HOME=$ANDROID_HOME/ndk/26.1.10909125" >> $GITHUB_ENV
 
-    - name: Download wgpu-native for Android
-      run: bash build-tools/android/build-wgpu.sh
+    - name: Download Dawn for Android
+      run: bash build-tools/android/build-dawn.sh
 
-    - name: Build BusyBox for Android
-      run: |
-        export PATH="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
-        bash build-tools/android/build-busybox.sh
-
-    - name: Copy font assets
-      run: |
-        mkdir -p build-android/assets
-        cp -f assets/*.ttf assets/*.png assets/*.json build-android/assets/
+    - name: Download Toybox for Android
+      run: bash build-tools/android/build-toybox.sh
 
     - name: Setup Gradle
       uses: gradle/actions/setup-gradle@v3
 
     - name: Build Android APK
       working-directory: build-tools/android
-      run: ./gradlew --project-cache-dir=../../build-android/.gradle assembleDebug
+      run: ./gradlew assembleRelease
 
     - name: Upload Android APK
       uses: actions/upload-artifact@v4
       with:
         name: yetty-android-apk
-        path: build-android-debug/*.apk
+        path: ${{ env.ANDROID_BUILD_DIR }}/app/outputs/apk/release/*.apk
         if-no-files-found: warn
 
   # =============================================================================

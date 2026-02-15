@@ -60,13 +60,24 @@ include(build-tools/cmake/CPM.cmake)
 message(STATUS "WebGPU backend: ${WEBGPU_BACKEND}")
 
 if(YETTY_ANDROID)
-    # Android: Use pre-built WebGPU library
+    # Android: Use pre-built WebGPU library from ANDROID_BUILD_DIR
+    # ANDROID_BUILD_DIR is passed as CMake argument from Gradle
+    if(NOT DEFINED ANDROID_BUILD_DIR)
+        # Fall back to environment variable if not set via CMake
+        if(DEFINED ENV{ANDROID_BUILD_DIR})
+            set(ANDROID_BUILD_DIR $ENV{ANDROID_BUILD_DIR})
+        else()
+            message(FATAL_ERROR "ANDROID_BUILD_DIR not set (pass via -DANDROID_BUILD_DIR=...)")
+        endif()
+    endif()
+
     if(WEBGPU_BACKEND STREQUAL "dawn")
-        # Dawn backend for Android
-        set(WEBGPU_LIB "${CMAKE_CURRENT_SOURCE_DIR}/build-android/dawn-libs/arm64-v8a/libwebgpu_dawn.so")
-        set(WEBGPU_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/build-android/dawn-include")
+        # Dawn backend for Android (static library)
+        set(WEBGPU_LIB "${ANDROID_BUILD_DIR}/dawn-libs/arm64-v8a/libwebgpu_dawn.a")
+        set(WEBGPU_INCLUDE "${ANDROID_BUILD_DIR}/dawn-include")
         set(WEBGPU_BACKEND_DEFINE "WEBGPU_BACKEND_DAWN")
-        set(WEBGPU_VERSION "20260117")
+        set(WEBGPU_VERSION "20260214")
+        set(WEBGPU_IS_STATIC TRUE)
 
         if(NOT EXISTS "${WEBGPU_LIB}")
             message(FATAL_ERROR
@@ -82,11 +93,12 @@ if(YETTY_ANDROID)
 
         message(STATUS "Using Dawn (Android):")
     else()
-        # wgpu-native backend for Android (default)
-        set(WEBGPU_LIB "${CMAKE_CURRENT_SOURCE_DIR}/build-android/wgpu-libs/arm64-v8a/libwgpu_native.so")
-        set(WEBGPU_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/build-android/wgpu-include")
+        # wgpu-native backend for Android (shared library)
+        set(WEBGPU_LIB "${ANDROID_BUILD_DIR}/wgpu-libs/arm64-v8a/libwgpu_native.so")
+        set(WEBGPU_INCLUDE "${ANDROID_BUILD_DIR}/wgpu-include")
         set(WEBGPU_BACKEND_DEFINE "WEBGPU_BACKEND_WGPU")
         set(WEBGPU_VERSION "27.0.4.0")
+        set(WEBGPU_IS_STATIC FALSE)
 
         if(NOT EXISTS "${WEBGPU_LIB}")
             message(FATAL_ERROR
@@ -104,12 +116,20 @@ if(YETTY_ANDROID)
     endif()
 
     # Create imported library target for Android
-    add_library(webgpu SHARED IMPORTED GLOBAL)
-    set_target_properties(webgpu PROPERTIES
-        IMPORTED_LOCATION "${WEBGPU_LIB}"
-        IMPORTED_NO_SONAME TRUE
-        INTERFACE_INCLUDE_DIRECTORIES "${WEBGPU_INCLUDE}"
-    )
+    if(WEBGPU_IS_STATIC)
+        add_library(webgpu STATIC IMPORTED GLOBAL)
+        set_target_properties(webgpu PROPERTIES
+            IMPORTED_LOCATION "${WEBGPU_LIB}"
+            INTERFACE_INCLUDE_DIRECTORIES "${WEBGPU_INCLUDE}"
+        )
+    else()
+        add_library(webgpu SHARED IMPORTED GLOBAL)
+        set_target_properties(webgpu PROPERTIES
+            IMPORTED_LOCATION "${WEBGPU_LIB}"
+            IMPORTED_NO_SONAME TRUE
+            INTERFACE_INCLUDE_DIRECTORIES "${WEBGPU_INCLUDE}"
+        )
+    endif()
     target_compile_definitions(webgpu INTERFACE ${WEBGPU_BACKEND_DEFINE})
 
     # Mark webgpu as already added so CPM won't try to fetch it again
@@ -225,14 +245,14 @@ endif()
 #   - howerj/cdb: Portable C implementation (default, works on all platforms)
 #   - djb/cdb: Original D.J. Bernstein implementation (Unix only)
 #-----------------------------------------------------------------------------
-# Default to howerj/cdb on Windows (required), djb cdb on Unix (faster, uses mmap)
-if(WIN32)
-    option(YETTY_USE_HOWERJ_CDB "Use portable howerj/cdb instead of djb cdb (required for Windows)" ON)
+# Default to howerj/cdb on Windows and Android (portable), djb cdb on Unix desktop (faster, uses mmap)
+if(WIN32 OR YETTY_ANDROID)
+    option(YETTY_USE_HOWERJ_CDB "Use portable howerj/cdb instead of djb cdb (required for Windows/Android)" ON)
 else()
-    option(YETTY_USE_HOWERJ_CDB "Use portable howerj/cdb instead of djb cdb (required for Windows)" OFF)
+    option(YETTY_USE_HOWERJ_CDB "Use portable howerj/cdb instead of djb cdb (required for Windows/Android)" OFF)
 endif()
 
-if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
+if(NOT EMSCRIPTEN)
     if(YETTY_USE_HOWERJ_CDB)
         # Portable CDB implementation - works on Windows, Linux, macOS
         CPMAddPackage(
@@ -563,6 +583,132 @@ if(YETTY_ANDROID)
     else()
         message(STATUS "TOYBOX_PATH not set - will look for toybox at runtime")
     endif()
+
+    #-------------------------------------------------------------------------
+    # ImGui for Android (WebGPU backend only, no GLFW)
+    #-------------------------------------------------------------------------
+    CPMAddPackage(
+        NAME imgui
+        URL https://github.com/ocornut/imgui/archive/refs/tags/v1.92.5.tar.gz
+        VERSION 1.92.5
+        DOWNLOAD_ONLY YES
+    )
+
+    if(imgui_ADDED)
+        set(IMGUI_SOURCES
+            ${imgui_SOURCE_DIR}/imgui.cpp
+            ${imgui_SOURCE_DIR}/imgui_demo.cpp
+            ${imgui_SOURCE_DIR}/imgui_draw.cpp
+            ${imgui_SOURCE_DIR}/imgui_tables.cpp
+            ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+            ${imgui_SOURCE_DIR}/backends/imgui_impl_wgpu.cpp
+        )
+
+        add_library(imgui STATIC ${IMGUI_SOURCES})
+        target_include_directories(imgui PUBLIC
+            ${imgui_SOURCE_DIR}
+            ${imgui_SOURCE_DIR}/backends
+        )
+        target_link_libraries(imgui PUBLIC webgpu)
+
+        if(WEBGPU_BACKEND STREQUAL "wgpu")
+            target_compile_definitions(imgui PUBLIC IMGUI_IMPL_WEBGPU_BACKEND_WGPU=1)
+        else()
+            target_compile_definitions(imgui PUBLIC IMGUI_IMPL_WEBGPU_BACKEND_DAWN=1)
+        endif()
+
+        set_target_properties(imgui PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    endif()
+
+    #-------------------------------------------------------------------------
+    # zlib for Android
+    #-------------------------------------------------------------------------
+    CPMAddPackage(
+        NAME zlib
+        GITHUB_REPOSITORY madler/zlib
+        GIT_TAG v1.3.1
+        OPTIONS
+            "ZLIB_BUILD_EXAMPLES OFF"
+            "SKIP_INSTALL_ALL ON"
+    )
+    if(zlib_ADDED)
+        set_target_properties(zlibstatic PROPERTIES POSITION_INDEPENDENT_CODE ON)
+        if(NOT TARGET ZLIB::ZLIB)
+            add_library(ZLIB::ZLIB ALIAS zlibstatic)
+        endif()
+        set(ZLIB_FOUND TRUE CACHE BOOL "" FORCE)
+        set(ZLIB_LIBRARIES zlibstatic CACHE STRING "" FORCE)
+        set(ZLIB_INCLUDE_DIRS "${zlib_SOURCE_DIR};${zlib_BINARY_DIR}" CACHE STRING "" FORCE)
+        set(ZLIB_INCLUDE_DIR "${zlib_SOURCE_DIR}" CACHE PATH "" FORCE)
+    endif()
+
+    #-------------------------------------------------------------------------
+    # libpng for Android
+    #-------------------------------------------------------------------------
+    CPMAddPackage(
+        NAME libpng
+        GITHUB_REPOSITORY glennrp/libpng
+        GIT_TAG v1.6.43
+        OPTIONS
+            "PNG_SHARED OFF"
+            "PNG_STATIC ON"
+            "PNG_TESTS OFF"
+            "PNG_TOOLS OFF"
+            "SKIP_INSTALL_ALL ON"
+    )
+    if(libpng_ADDED)
+        set_target_properties(png_static PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    endif()
+
+    #-------------------------------------------------------------------------
+    # FreeType for Android
+    #-------------------------------------------------------------------------
+    include(build-tools/cmake/FreeType.cmake)
+
+    #-------------------------------------------------------------------------
+    # msdfgen for Android
+    #-------------------------------------------------------------------------
+    CPMAddPackage(
+        NAME msdfgen
+        GITHUB_REPOSITORY Chlumsky/msdfgen
+        GIT_TAG v1.12
+        DOWNLOAD_ONLY YES
+    )
+
+    if(msdfgen_ADDED)
+        file(GLOB MSDFGEN_CORE_SOURCES "${msdfgen_SOURCE_DIR}/core/*.cpp")
+        file(GLOB MSDFGEN_CORE_HEADERS "${msdfgen_SOURCE_DIR}/core/*.h")
+        add_library(msdfgen-core STATIC ${MSDFGEN_CORE_SOURCES} ${MSDFGEN_CORE_HEADERS})
+        add_library(msdfgen::msdfgen-core ALIAS msdfgen-core)
+        target_include_directories(msdfgen-core PUBLIC ${msdfgen_SOURCE_DIR})
+        target_compile_features(msdfgen-core PUBLIC cxx_std_11)
+        target_compile_definitions(msdfgen-core PUBLIC
+            MSDFGEN_PUBLIC=
+            MSDFGEN_USE_CPP11
+        )
+        set_target_properties(msdfgen-core PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+        # Extensions library
+        set(MSDFGEN_EXT_SOURCES
+            ${msdfgen_SOURCE_DIR}/ext/import-font.cpp
+            ${msdfgen_SOURCE_DIR}/ext/import-svg.cpp
+            ${msdfgen_SOURCE_DIR}/ext/resolve-shape-geometry.cpp
+        )
+        file(GLOB MSDFGEN_EXT_HEADERS "${msdfgen_SOURCE_DIR}/ext/*.h")
+        add_library(msdfgen-ext STATIC ${MSDFGEN_EXT_SOURCES} ${MSDFGEN_EXT_HEADERS})
+        add_library(msdfgen::msdfgen-ext ALIAS msdfgen-ext)
+        target_include_directories(msdfgen-ext
+            PUBLIC ${msdfgen_SOURCE_DIR}
+            PRIVATE ${FREETYPE_INCLUDE_DIR}
+        )
+        target_compile_definitions(msdfgen-ext PUBLIC
+            MSDFGEN_PUBLIC=
+            MSDFGEN_USE_CPP11
+            MSDFGEN_EXT_PUBLIC=
+        )
+        target_link_libraries(msdfgen-ext PRIVATE msdfgen::msdfgen-core)
+        set_target_properties(msdfgen-ext PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    endif()
 endif()
 
 #-----------------------------------------------------------------------------
@@ -614,21 +760,62 @@ if(EMSCRIPTEN OR YETTY_ANDROID)
         src/yetty/shader-font.cpp
         src/yetty/shader-manager.cpp
         src/yetty/hdraw.cpp
-        src/yetty/widget-frame-renderer.cpp
     )
 endif()
 
+# Platform abstraction layer
+list(APPEND YETTY_SOURCES
+    src/yetty/platform/glfw-platform.cpp
+    src/yetty/platform/android-platform.cpp
+    src/yetty/platform/web-platform.cpp
+)
+
 # Platform-specific entry point and sources
 if(YETTY_ANDROID)
-    # Android uses unified main.cpp with android_main() entry point
+    # Android - same features as desktop, using pre-built dependencies
     list(APPEND YETTY_SOURCES
         src/yetty/main.cpp
         src/yetty/yetty.cpp
         src/yetty/config.cpp
         src/yetty/terminal.cpp
+        src/yetty/terminal-view.cpp
         src/yetty/gpu-screen.cpp
         src/yetty/osc-command.cpp
-        # src/yetty/widget-factory.cpp  # TODO: refactor later
+        src/yetty/gpu-allocator.cpp
+        src/yetty/card-manager.cpp
+        src/yetty/card-buffer-manager.cpp
+        src/yetty/card-texture-manager.cpp
+        src/yetty/gpu-screen-manager.cpp
+        src/yetty/card-factory.cpp
+        src/yetty/card.cpp
+        src/yetty/name-generator.cpp
+        src/yetty/imgui-manager.cpp
+        src/yetty/workspace.cpp
+        src/yetty/tile.cpp
+        src/yetty/view.cpp
+        src/yetty/frame-renderer.cpp
+        # Font system
+        src/yetty/msdf-atlas.cpp
+        src/yetty/ms-msdf-font.cpp
+        src/yetty/vector-sdf-font.cpp
+        src/yetty/vector-coverage-font.cpp
+        src/yetty/raster-font.cpp
+        src/yetty/msdf-cdb-provider.cpp
+        src/yetty/msdf-gen/generator.cpp
+        # Base system
+        src/yetty/base/event-loop.cpp
+        # Shared memory (POSIX - works on Android)
+        src/yetty/shared-memory.cpp
+        # Ymery - YAML-driven ImGui widget system
+        src/yetty/ymery/types.cpp
+        src/yetty/ymery/data-bag.cpp
+        src/yetty/ymery/data-tree.cpp
+        src/yetty/ymery/dispatcher.cpp
+        src/yetty/ymery/lang.cpp
+        src/yetty/ymery/simple-data-tree.cpp
+        src/yetty/ymery/renderer.cpp
+        # YEcho - text with embedded glyphs
+        src/yetty/yecho/yecho-parser.cpp
     )
 elseif(NOT EMSCRIPTEN)
     # Desktop uses main.cpp with GLFW
@@ -668,8 +855,8 @@ elseif(NOT EMSCRIPTEN)
         src/yetty/bm-font.cpp
         src/yetty/shader-font.cpp
         src/yetty/shader-manager.cpp
+        src/yetty/frame-renderer.cpp
         #src/yetty/hdraw.cpp
-        src/yetty/widget-frame-renderer.cpp
         src/yetty/tile.cpp
         src/yetty/view.cpp
         src/yetty/workspace.cpp
@@ -714,14 +901,17 @@ target_include_directories(yetty PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-# Card subdirectories (desktop only - cards use CardBufferManager, ImGui, etc.)
-if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
+# Card subdirectories (desktop and Android - use target_sources to add to yetty)
+if(NOT EMSCRIPTEN)
     add_subdirectory(src/yetty/ydraw)
     add_subdirectory(src/yetty/ygui)
     add_subdirectory(src/yetty/diagram)
     add_subdirectory(src/yetty/cards)
     add_subdirectory(src/yetty/yast)
-    add_subdirectory(src/yetty/gpu)
+    # GPU library only for desktop (uses NVML dlopen, sysfs - Linux-specific)
+    if(NOT YETTY_ANDROID)
+        add_subdirectory(src/yetty/gpu)
+    endif()
 endif()
 
 target_compile_definitions(yetty PRIVATE
@@ -798,6 +988,9 @@ elseif(YETTY_ANDROID)
         LIBRARY_OUTPUT_NAME "yetty"
     )
 
+    # Add msdf-wgsl subdirectory for Android
+    add_subdirectory(src/yetty/msdf-wgsl)
+
     target_link_libraries(yetty PRIVATE
         webgpu
         -Wl,--whole-archive
@@ -811,12 +1004,18 @@ elseif(YETTY_ANDROID)
         ytrace::ytrace
         lz4_static
         uv_a
+        imgui
+        msdfgen::msdfgen-core
+        msdfgen::msdfgen-ext
+        msdf::wgsl
+        cdb-wrapper
+        ${FREETYPE_ALL_LIBS}
         android
         log
     )
 
     # Copy assets to Android assets directory (where Gradle expects them)
-    set(ANDROID_ASSETS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/build-android/assets")
+    set(ANDROID_ASSETS_DIR "${ANDROID_BUILD_DIR}/assets")
     file(MAKE_DIRECTORY ${ANDROID_ASSETS_DIR})
     file(GLOB ASSET_FILES "${CMAKE_CURRENT_SOURCE_DIR}/assets/*")
     file(COPY ${ASSET_FILES} DESTINATION ${ANDROID_ASSETS_DIR})
@@ -1004,8 +1203,10 @@ else()
     # ycat - cat with card rendering
     add_subdirectory(src/yetty/ycat)
 
-    # ytop - top-like CPU monitor using yetty plots
-    add_subdirectory(src/yetty/ytop)
+    # ytop - top-like CPU monitor using yetty plots (Unix only - uses /proc)
+    if(NOT WIN32)
+        add_subdirectory(src/yetty/ytop)
+    endif()
 
     # Demos (Unix only - uses Unix sockets)
     if(NOT WIN32)

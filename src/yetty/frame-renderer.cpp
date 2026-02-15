@@ -1,6 +1,5 @@
 #include <yetty/widget-frame-renderer.h>
 #include <yetty/gpu-allocator.h>
-#include <yetty/webgpu-context.h>
 #include <yetty/wgpu-compat.h>
 #include <ytrace/ytrace.hpp>
 #include <cstring>

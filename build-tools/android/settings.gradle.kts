@@ -6,11 +6,12 @@ pluginManagement {
     }
 }
 
-// Redirect Gradle cache to build-android (go up two levels: build-tools/android -> root)
+// Redirect Gradle build to ANDROID_BUILD_DIR (go up two levels: build-tools/android -> root)
 rootProject.projectDir.parentFile.parentFile.let { projectRoot ->
+    val buildDir = System.getenv("ANDROID_BUILD_DIR") ?: "${projectRoot}/build-android"
     gradle.projectsLoaded {
         allprojects {
-            layout.buildDirectory.set(File(projectRoot, "build-android/${project.name}"))
+            layout.buildDirectory.set(File(buildDir, project.name))
         }
     }
 }

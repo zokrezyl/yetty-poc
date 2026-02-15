@@ -3,16 +3,14 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    rust-overlay.url = "github:oxalica/rust-overlay";
     flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = { self, nixpkgs, rust-overlay, flake-utils }:
+  outputs = { self, nixpkgs, flake-utils }:
     flake-utils.lib.eachDefaultSystem (system:
       let
-        overlays = [ (import rust-overlay) ];
         pkgs = import nixpkgs {
-          inherit system overlays;
+          inherit system;
           config = {
             allowUnfree = true;
             android_sdk.accept_license = true;
@@ -35,11 +33,6 @@
 
         androidSdk = androidComposition.androidsdk;
         androidNdk = "${androidSdk}/libexec/android-sdk/ndk/26.1.10909125";
-
-        # Rust with Android target
-        rustToolchain = pkgs.rust-bin.stable.latest.default.override {
-          targets = [ "aarch64-linux-android" ];
-        };
 
         # Common build dependencies
         commonDeps = with pkgs; [
@@ -77,7 +70,6 @@
 
         # Android build dependencies
         androidDeps = [
-          rustToolchain
           androidSdk
           pkgs.llvmPackages.libclang
           pkgs.llvmPackages.clang
@@ -152,14 +144,12 @@
             ANDROID_NDK_HOME = androidNdk;
             NDK_HOME = androidNdk;
             JAVA_HOME = "${pkgs.jdk17}";
-            LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
 
             shellHook = ''
               # Add NDK toolchain to PATH for cross-compilation
               export PATH="${androidNdk}/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
 
               echo "Yetty Android build environment"
-              echo "  Rust: $(rustc --version)"
               echo "  Android SDK: $ANDROID_HOME"
               echo "  Android NDK: $ANDROID_NDK_HOME"
               echo "  NDK clang: $(which aarch64-linux-android26-clang 2>/dev/null || echo 'not in PATH')"

@@ -30,7 +30,10 @@ static yetty::Yetty::Ptr g_yetty;
 //-----------------------------------------------------------------------------
 // Android Entry Point
 //-----------------------------------------------------------------------------
-void android_main(struct android_app* app) {
+#include <android/log.h>
+#include <android_native_app_glue.h>
+
+extern "C" void android_main(struct android_app* app) {
     __android_log_print(ANDROID_LOG_INFO, "yetty", "Yetty Android starting...");
 
     auto result = yetty::Yetty::create(app);
