@@ -20,9 +20,13 @@ android {
 
         externalNativeBuild {
             cmake {
+                val webgpuBackend = System.getenv("WEBGPU_BACKEND") ?: "wgpu"
+                val buildDir = System.getenv("ANDROID_BUILD_DIR") ?: "${rootProject.projectDir.parentFile.parentFile}/build-android"
                 arguments += listOf(
                     "-DYETTY_ANDROID=ON",
-                    "-DCMAKE_BUILD_TYPE=Release"
+                    "-DCMAKE_BUILD_TYPE=Release",
+                    "-DWEBGPU_BACKEND=${webgpuBackend}",
+                    "-DANDROID_BUILD_DIR=${buildDir}"
                 )
             }
         }
@@ -41,6 +45,7 @@ android {
             externalNativeBuild {
                 cmake {
                     arguments += "-DCMAKE_BUILD_TYPE=Debug"
+                    // WEBGPU_BACKEND and ANDROID_BUILD_DIR already set in defaultConfig
                 }
             }
         }

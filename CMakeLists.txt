@@ -61,11 +61,15 @@ message(STATUS "WebGPU backend: ${WEBGPU_BACKEND}")
 
 if(YETTY_ANDROID)
     # Android: Use pre-built WebGPU library from ANDROID_BUILD_DIR
-    # ANDROID_BUILD_DIR is set by the build system (Makefile/Gradle)
-    if(NOT DEFINED ENV{ANDROID_BUILD_DIR})
-        message(FATAL_ERROR "ANDROID_BUILD_DIR environment variable not set")
+    # ANDROID_BUILD_DIR is passed as CMake argument from Gradle
+    if(NOT DEFINED ANDROID_BUILD_DIR)
+        # Fall back to environment variable if not set via CMake
+        if(DEFINED ENV{ANDROID_BUILD_DIR})
+            set(ANDROID_BUILD_DIR $ENV{ANDROID_BUILD_DIR})
+        else()
+            message(FATAL_ERROR "ANDROID_BUILD_DIR not set (pass via -DANDROID_BUILD_DIR=...)")
+        endif()
     endif()
-    set(ANDROID_BUILD_DIR $ENV{ANDROID_BUILD_DIR})
 
     if(WEBGPU_BACKEND STREQUAL "dawn")
         # Dawn backend for Android (static library)
