@@ -1007,8 +1007,10 @@ else()
     # ytop - top-like CPU monitor using yetty plots
     add_subdirectory(src/yetty/ytop)
 
-    # Demos
-    add_subdirectory(demo/plot-client)
+    # Demos (Unix only - uses Unix sockets)
+    if(NOT WIN32)
+        add_subdirectory(demo/plot-client)
+    endif()
 
     # # MSDFGL WebGPU port (sandbox) - abandoned, see README
     # add_subdirectory(sandbox/msdfgl)

@@ -1,13 +1,18 @@
 #include <yetty/shared-memory.h>
 
+#include <cstring>
+
+#if !defined(_WIN32)
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <cerrno>
-#include <cstring>
+#endif
 
 namespace yetty {
+
+#if !defined(_WIN32)
 
 SharedMemoryRegion::SharedMemoryRegion(std::string name, int fd, void* mapping, size_t size, bool isOwner)
     : _name(std::move(name))
@@ -149,5 +154,36 @@ Result<void> SharedMemoryRegion::remap() noexcept {
     _size = newSize;
     return Ok();
 }
+
+#else // _WIN32
+
+// Windows stub implementations - shared memory not yet supported on Windows
+
+SharedMemoryRegion::SharedMemoryRegion(std::string name, int fd, void* mapping, size_t size, bool isOwner)
+    : _name(std::move(name))
+    , _fd(fd)
+    , _mapping(mapping)
+    , _size(size)
+    , _isOwner(isOwner) {}
+
+SharedMemoryRegion::~SharedMemoryRegion() {}
+
+Result<SharedMemoryRegion::Ptr> SharedMemoryRegion::create(const std::string& /*name*/, size_t /*initialSize*/) noexcept {
+    return Err<SharedMemoryRegion::Ptr>("SharedMemory not supported on Windows");
+}
+
+Result<SharedMemoryRegion::Ptr> SharedMemoryRegion::open(const std::string& /*name*/) noexcept {
+    return Err<SharedMemoryRegion::Ptr>("SharedMemory not supported on Windows");
+}
+
+Result<void> SharedMemoryRegion::grow(size_t /*newSize*/) noexcept {
+    return Err<void>("SharedMemory not supported on Windows");
+}
+
+Result<void> SharedMemoryRegion::remap() noexcept {
+    return Err<void>("SharedMemory not supported on Windows");
+}
+
+#endif // _WIN32
 
 } // namespace yetty

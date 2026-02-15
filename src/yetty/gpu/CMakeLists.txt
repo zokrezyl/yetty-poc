@@ -5,12 +5,17 @@
 #       The library is loaded dynamically at runtime via dlopen.
 # AMD/Intel: Use sysfs, no external dependencies.
 
-add_library(yetty_gpu STATIC
-    gpu-monitor.cpp
-    nvidia-monitor.cpp
-    amd-monitor.cpp
-    intel-monitor.cpp
-)
+set(GPU_SOURCES gpu-monitor.cpp)
+
+if(NOT WIN32)
+    list(APPEND GPU_SOURCES
+        nvidia-monitor.cpp
+        amd-monitor.cpp
+        intel-monitor.cpp
+    )
+endif()
+
+add_library(yetty_gpu STATIC ${GPU_SOURCES})
 
 target_include_directories(yetty_gpu PUBLIC
     ${CMAKE_SOURCE_DIR}/include           # For include/yetty/gpu-monitor.h
