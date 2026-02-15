@@ -1,6 +1,9 @@
 #include "http-fetcher.h"
 #include <cpr/cpr.h>
+#include <curl/curl.h>
 #include <ytrace/ytrace.hpp>
+#include <cstdlib>
+#include <filesystem>
 
 namespace yetty::card {
 
@@ -10,7 +13,19 @@ namespace yetty::card {
 
 class HttpFetcherImpl : public HttpFetcher {
 public:
-    HttpFetcherImpl() = default;
+    HttpFetcherImpl() {
+        _session.SetUserAgent(cpr::UserAgent{"yetty/1.0"});
+        _session.SetTimeout(cpr::Timeout{10000});
+        _session.SetRedirect(cpr::Redirect{10L});
+
+        // Enable persistent cookie storage in XDG cache directory
+        _cookiePath = cookiePath();
+        if (!_cookiePath.empty()) {
+            auto holder = _session.GetCurlHolder();
+            curl_easy_setopt(holder->handle, CURLOPT_COOKIEFILE, _cookiePath.c_str());
+            curl_easy_setopt(holder->handle, CURLOPT_COOKIEJAR, _cookiePath.c_str());
+        }
+    }
     ~HttpFetcherImpl() override = default;
 
     void setBaseUrl(const std::string& baseUrl) override {
@@ -49,12 +64,8 @@ public:
 
         yinfo("HttpFetcher::fetch: {}", resolved);
 
-        cpr::Response r = cpr::Get(
-            cpr::Url{resolved},
-            cpr::Header{{"User-Agent", "yetty/1.0"}},
-            cpr::Timeout{10000},
-            cpr::Redirect{10L}
-        );
+        _session.SetUrl(cpr::Url{resolved});
+        cpr::Response r = _session.Get();
 
         if (r.status_code == 0) {
             yerror("HttpFetcher::fetch: connection failed: {}", r.error.message);
@@ -69,8 +80,51 @@ public:
         return r.text;
     }
 
+    std::optional<std::string> post(const std::string& url,
+                                    const std::string& formData) const override {
+        std::string resolved = resolveUrl(url);
+        if (resolved.empty()) return std::nullopt;
+
+        yinfo("HttpFetcher::post: {}", resolved);
+
+        _session.SetUrl(cpr::Url{resolved});
+        _session.SetBody(cpr::Body{formData});
+        _session.SetHeader(cpr::Header{{"Content-Type", "application/x-www-form-urlencoded"}});
+        cpr::Response r = _session.Post();
+
+        // Clear body for subsequent GET requests
+        _session.SetBody(cpr::Body{});
+        _session.SetHeader(cpr::Header{});
+
+        if (r.status_code == 0) {
+            yerror("HttpFetcher::post: connection failed: {}", r.error.message);
+            return std::nullopt;
+        }
+        if (r.status_code >= 400) {
+            ywarn("HttpFetcher::post: HTTP {}: {}", r.status_code, resolved);
+            return std::nullopt;
+        }
+
+        yinfo("HttpFetcher::post: OK {} ({} bytes)", r.status_code, r.text.size());
+        return r.text;
+    }
+
 private:
     std::string _baseUrl;
+    std::string _cookiePath;
+    mutable cpr::Session _session;
+
+    static std::string cookiePath() {
+        const char* home = std::getenv("HOME");
+        if (!home) return {};
+
+        std::filesystem::path dir = std::filesystem::path(home) / ".cache" / "yetty" / "yhtml";
+        std::error_code ec;
+        std::filesystem::create_directories(dir, ec);
+        if (ec) return {};
+
+        return (dir / "cookies.txt").string();
+    }
 };
 
 //=============================================================================

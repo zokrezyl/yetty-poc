@@ -2,6 +2,7 @@
 #include <yetty/ydraw-builder.h>
 #include "../../ydraw/animation.h"
 #include "../hdraw/hdraw.h"  // For SDFPrimitive, SDFType
+#include "../../ydraw/ydraw-prim-writer.gen.h"
 #include <yetty/base/event-loop.h>
 #include <yetty/msdf-glyph-data.h>
 #include <yetty/card-texture-manager.h>
@@ -65,9 +66,9 @@ public:
         _grid = nullptr;
         _gridSize = 0;
         _primStorage = StorageHandle::invalid();
-        _primitives = nullptr;
         _primCount = 0;
-        _primCapacity = 0;
+        _cpuPrims.clear();
+        _primWordOffsets.clear();
         if (_metaHandle.isValid() && _cardMgr) {
             if (auto res = _cardMgr->deallocateMetadata(_metaHandle); !res) {
                 yerror("YDrawImpl::dispose: deallocateMetadata failed: {}", error_msg(res));
@@ -78,33 +79,30 @@ public:
     }
 
     void suspend() override {
-        if (_primStorage.isValid() && _primCount > 0 && _builder) {
-            // Save GPU prims back to builder staging
+        if (_primCount > 0 && _builder && !_cpuPrims.empty()) {
+            // Save CPU prims back to builder staging
             auto& staging = _builder->primStagingMut();
-            staging.resize(_primCount);
-            std::memcpy(staging.data(), _primitives, _primCount * sizeof(SDFPrimitive));
+            staging = _cpuPrims;
         }
         _derivedStorage = StorageHandle::invalid();
         _grid = nullptr;
         _gridSize = 0;
         _primStorage = StorageHandle::invalid();
-        _primitives = nullptr;
         _primCount = 0;
-        _primCapacity = 0;
+        _cpuPrims.clear();
+        _primWordOffsets.clear();
     }
 
     void declareBufferNeeds() override {
         if (!_builder) return;
 
-        // Save GPU prims back to builder staging before dealloc
-        if (_primStorage.isValid() && _primCount > 0) {
+        // Save CPU prims back to builder staging before dealloc
+        if (_primCount > 0 && !_cpuPrims.empty()) {
             auto& staging = _builder->primStagingMut();
             if (staging.empty()) {
-                staging.resize(_primCount);
-                std::memcpy(staging.data(), _primitives, _primCount * sizeof(SDFPrimitive));
+                staging = _cpuPrims;
             } else {
-                std::vector<SDFPrimitive> merged(_primCount);
-                std::memcpy(merged.data(), _primitives, _primCount * sizeof(SDFPrimitive));
+                std::vector<SDFPrimitive> merged = _cpuPrims;
                 merged.insert(merged.end(), staging.begin(), staging.end());
                 staging = std::move(merged);
             }
@@ -113,9 +111,9 @@ public:
         _grid = nullptr;
         _gridSize = 0;
         _primStorage = StorageHandle::invalid();
-        _primitives = nullptr;
         _primCount = 0;
-        _primCapacity = 0;
+        _cpuPrims.clear();
+        _primWordOffsets.clear();
 
         const auto& primStaging = _builder->primStaging();
         const auto& glyphs = _builder->glyphs();
@@ -125,10 +123,11 @@ public:
             return;
         }
 
-        // Reserve prim storage
+        // Reserve compact prim storage: offset table + compact data
         if (!primStaging.empty()) {
-            uint32_t primSize = static_cast<uint32_t>(primStaging.size()) * sizeof(SDFPrimitive);
-            _cardMgr->bufferManager()->reserve(primSize);
+            uint32_t compactBytes = sdf::computeCompactSize(primStaging.data(),
+                static_cast<uint32_t>(primStaging.size()));
+            _cardMgr->bufferManager()->reserve(compactBytes);
         }
 
         // Calculate grid if needed
@@ -176,20 +175,24 @@ public:
         const auto& gridStaging = _builder->gridStaging();
         const auto& glyphs = _builder->glyphs();
 
-        // Restore primitives from staging
+        // Convert primitives from staging to compact format
         if (!primStaging.empty()) {
             uint32_t count = static_cast<uint32_t>(primStaging.size());
-            uint32_t allocBytes = count * sizeof(SDFPrimitive);
+            uint32_t allocBytes = sdf::computeCompactSize(primStaging.data(), count);
             auto primResult = _cardMgr->bufferManager()->allocateBuffer(
                 metadataSlotIndex(), "prims", allocBytes);
             if (!primResult) {
                 return Err<void>("YDrawImpl::allocateBuffers: prim alloc failed");
             }
             _primStorage = *primResult;
-            _primitives = reinterpret_cast<SDFPrimitive*>(_primStorage.data);
-            _primCapacity = count;
             _primCount = count;
-            std::memcpy(_primitives, primStaging.data(), count * sizeof(SDFPrimitive));
+
+            // Keep CPU copy for animation/grid rebuild
+            _cpuPrims.assign(primStaging.begin(), primStaging.end());
+
+            // Write compact format to GPU buffer
+            writeCompactToBuffer();
+
             _builder->primStagingMut().clear();
             _builder->primStagingMut().shrink_to_fit();
             _cardMgr->bufferManager()->markBufferDirty(_primStorage);
@@ -218,12 +221,14 @@ public:
             uint8_t* base = _derivedStorage.data;
             uint32_t offset = 0;
 
-            // Copy grid
+            // Copy grid and translate prim indices to word offsets
             _grid = reinterpret_cast<uint32_t*>(base + offset);
             _gridSize = static_cast<uint32_t>(gridStaging.size());
             _gridOffset = (_derivedStorage.offset + offset) / sizeof(float);
             if (!gridStaging.empty()) {
                 std::memcpy(base + offset, gridStaging.data(), gridBytes);
+                translateGridEntries(_grid, _gridSize,
+                                    _builder->gridWidth(), _builder->gridHeight());
             }
             offset += gridBytes;
 
@@ -297,29 +302,31 @@ public:
 
         // Auto-start animation
         if (_animation && _animation->hasProperties() && !_animation->isPlaying()
-            && _basePrimitives.empty() && _primitives && _primCount > 0) {
+            && _basePrimitives.empty() && _primCount > 0 && !_cpuPrims.empty()) {
             startAnimation();
         }
 
-        // Animation update — advance time, apply to primitives, recompute AABBs
-        if (_animation && _animation->isPlaying() && _primitives && _primCount > 0) {
+        // Animation update — advance time, apply to CPU prims, recompute AABBs
+        if (_animation && _animation->isPlaying() && _primCount > 0 && !_cpuPrims.empty()) {
             float dt = (_lastRenderTime < 0.0f) ? 0.0f : (time - _lastRenderTime);
             _lastRenderTime = time;
             if (_animation->advance(dt)) {
-                _animation->apply(_basePrimitives.data(), _primitives, _primCount);
+                _animation->apply(_basePrimitives.data(), _cpuPrims.data(), _primCount);
                 for (uint32_t i = 0; i < _primCount; i++) {
-                    YDrawBuilder::recomputeAABB(_primitives[i]);
+                    YDrawBuilder::recomputeAABB(_cpuPrims[i]);
                 }
+                // Re-convert compact and upload
+                writeCompactToBuffer();
                 _cardMgr->bufferManager()->markBufferDirty(_primStorage);
                 _dirty = true;
             }
         }
 
         // If dirty, pre-compute grid to check if derived storage needs to grow
-        if (_dirty && _primitives && _primCount > 0) {
-            _builder->computeSceneBoundsFromPrims(_primitives, _primCount);
-            _builder->computeGridDims(_primitives, _primCount);
-            _builder->buildGridFromPrims(_primitives, _primCount);
+        if (_dirty && _primCount > 0 && !_cpuPrims.empty()) {
+            _builder->computeSceneBoundsFromPrims(_cpuPrims.data(), _primCount);
+            _builder->computeGridDims(_cpuPrims.data(), _primCount);
+            _builder->buildGridFromPrims(_cpuPrims.data(), _primCount);
 
             uint32_t needed = computeDerivedSize();
             if (!_derivedStorage.isValid() || needed > _derivedStorage.size) {
@@ -356,6 +363,8 @@ public:
                 _gridHeight = _builder->gridHeight();
                 _gridOffset = (_derivedStorage.offset + offset) / sizeof(float);
                 std::memcpy(base + offset, gridData.data(), gridBytes);
+                // Translate prim indices to word offsets in grid entries
+                translateGridEntries(_grid, _gridSize, _gridWidth, _gridHeight);
                 offset += gridBytes;
 
                 uint32_t glyphBytes = static_cast<uint32_t>(
@@ -597,6 +606,21 @@ private:
     // Helpers
     //=========================================================================
 
+    // computeCompactSize, writeCompactToBuffer, translateGridEntries
+    // are now shared via sdf:: namespace in ydraw-prim-writer.gen.h
+
+    void writeCompactToBuffer() {
+        if (!_primStorage.isValid() || _cpuPrims.empty()) return;
+        float* buf = reinterpret_cast<float*>(_primStorage.data);
+        sdf::writeCompactToBuffer(buf, _primStorage.size,
+                                  _cpuPrims.data(), _primCount, _primWordOffsets);
+    }
+
+    void translateGridEntries(uint32_t* grid, uint32_t gridSize,
+                              uint32_t gridW, uint32_t gridH) {
+        sdf::translateGridEntries(grid, gridSize, gridW, gridH, _primWordOffsets);
+    }
+
     uint32_t computeDerivedSize() const {
         const auto& gridData = _builder->gridStaging();
         uint32_t gridBytes = static_cast<uint32_t>(gridData.size()) * sizeof(uint32_t);
@@ -709,18 +733,18 @@ private:
 
     void startAnimation() {
         if (!_animation || !_animation->hasProperties()) return;
-        if (!_primitives || _primCount == 0) return;
+        if (_cpuPrims.empty() || _primCount == 0) return;
 
-        _basePrimitives.assign(_primitives, _primitives + _primCount);
+        _basePrimitives = _cpuPrims;
         _lastRenderTime = -1.0f;
 
         if (!_builder->hasExplicitBounds()) {
             float minX = 1e10f, minY = 1e10f, maxX = -1e10f, maxY = -1e10f;
             for (uint32_t i = 0; i < _primCount; i++) {
-                minX = std::min(minX, _primitives[i].aabbMinX);
-                minY = std::min(minY, _primitives[i].aabbMinY);
-                maxX = std::max(maxX, _primitives[i].aabbMaxX);
-                maxY = std::max(maxY, _primitives[i].aabbMaxY);
+                minX = std::min(minX, _cpuPrims[i].aabbMinX);
+                minY = std::min(minY, _cpuPrims[i].aabbMinY);
+                maxX = std::max(maxX, _cpuPrims[i].aabbMaxX);
+                maxY = std::max(maxY, _cpuPrims[i].aabbMaxY);
             }
             _animation->expandBounds(_basePrimitives.data(), _primCount,
                                      minX, minY, maxX, maxY);
@@ -786,7 +810,6 @@ private:
 
     Result<void> parseBinary(const std::string& payload) {
         const size_t HEADER_SIZE = 16;
-        const size_t PRIM_SIZE = sizeof(SDFPrimitive);
 
         if (payload.size() < HEADER_SIZE) return Ok();
 
@@ -797,35 +820,40 @@ private:
         std::memcpy(&bgColorVal, data + 8, 4);
         std::memcpy(&flagsVal, data + 12, 4);
 
-        if (version != 1 && version != 2) return Ok();
+        if (version != 3) return Ok();
 
         _builder->setBgColor(bgColorVal);
         _builder->addFlags(flagsVal);
 
-        size_t expectedSize = HEADER_SIZE + primCount * PRIM_SIZE;
-        if (payload.size() < expectedSize) {
-            primCount = static_cast<uint32_t>((payload.size() - HEADER_SIZE) / PRIM_SIZE);
-        }
+        // Read totalCompactWords + compact prim data
+        if (payload.size() < HEADER_SIZE + 4) return Ok();
+        uint32_t totalCompactWords;
+        std::memcpy(&totalCompactWords, data + HEADER_SIZE, 4);
 
-        const uint8_t* primData = data + HEADER_SIZE;
-        for (uint32_t i = 0; i < primCount; i++) {
+        size_t primDataStart = HEADER_SIZE + 4;
+        size_t primDataBytes = static_cast<size_t>(totalCompactWords) * sizeof(float);
+        if (payload.size() < primDataStart + primDataBytes) return Ok();
+
+        const float* buf = reinterpret_cast<const float*>(data + primDataStart);
+        uint32_t wordPos = 0;
+        for (uint32_t i = 0; i < primCount && wordPos < totalCompactWords; i++) {
             SDFPrimitive prim;
-            std::memcpy(&prim, primData + i * PRIM_SIZE, PRIM_SIZE);
+            uint32_t wc = sdf::readPrimitive(buf + wordPos, prim);
+            if (wc == 0) break;
             _builder->addPrimitive(prim);
+            wordPos += wc;
         }
 
-        // v2: fonts + text after primitives
-        if (version >= 2) {
-            size_t offset = HEADER_SIZE + primCount * PRIM_SIZE;
-            if (auto res = parseBinaryV2(data, payload.size(), offset); !res) {
-                ywarn("parseBinary: v2 section failed: {}", error_msg(res));
-            }
+        // Font + text sections follow the prim data
+        size_t textSectionOffset = primDataStart + primDataBytes;
+        if (auto res = parseFontAndText(data, payload.size(), textSectionOffset); !res) {
+            ywarn("parseBinary: text section failed: {}", error_msg(res));
         }
 
         return Ok();
     }
 
-    Result<void> parseBinaryV2(const uint8_t* data, size_t totalSize, size_t offset) {
+    Result<void> parseFontAndText(const uint8_t* data, size_t totalSize, size_t offset) {
         auto read32 = [&](uint32_t& val) -> bool {
             if (offset + 4 > totalSize) return false;
             std::memcpy(&val, data + offset, 4);
@@ -858,9 +886,9 @@ private:
             if (res) {
                 fontIdMap[i] = *res;
                 _builder->mapFontId(static_cast<int>(i), *res);
-                yinfo("parseBinaryV2: registered font {} from {} bytes", i, fontDataSize);
+                yinfo("parseFontAndText: registered font {} from {} bytes", i, fontDataSize);
             } else {
-                ywarn("parseBinaryV2: addFontData failed for font {}: {}",
+                ywarn("parseFontAndText: addFontData failed for font {}: {}",
                       i, res.error().message());
             }
 
@@ -880,7 +908,7 @@ private:
         uint32_t paddedTextSize = (textDataSize + 3) & ~3u;
 
         if (textDataStart + paddedTextSize > totalSize) {
-            ywarn("parseBinaryV2: text section truncated");
+            ywarn("parseFontAndText: text section truncated");
             return Ok();
         }
 
@@ -947,7 +975,7 @@ private:
             }
         }
 
-        yinfo("parseBinaryV2: {} fonts, {} default spans, {} custom spans, "
+        yinfo("parseFontAndText: {} fonts, {} default spans, {} custom spans, "
               "{} rotated spans, {} text bytes",
               fontCount, defaultSpanCount, customSpanCount,
               rotatedSpanCount, textDataSize);
@@ -1768,11 +1796,14 @@ private:
     std::string _argsStr;
     std::string _payloadStr;
 
-    // GPU
+    // GPU compact prim storage: [offset_table (primCount words)] [compact_prim_data]
     StorageHandle _primStorage = StorageHandle::invalid();
-    SDFPrimitive* _primitives = nullptr;
     uint32_t _primCount = 0;
-    uint32_t _primCapacity = 0;
+
+    // CPU-side SDFPrimitive copy (for animation, grid rebuild, AABB)
+    std::vector<SDFPrimitive> _cpuPrims;
+    // Prim index → word offset relative to primDataBase (for grid translation)
+    std::vector<uint32_t> _primWordOffsets;
     StorageHandle _derivedStorage = StorageHandle::invalid();
     uint32_t* _grid = nullptr;
     uint32_t _gridSize = 0;

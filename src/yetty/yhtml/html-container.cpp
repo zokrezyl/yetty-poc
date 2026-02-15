@@ -4,6 +4,7 @@
 #include <ytrace/ytrace.hpp>
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 #include <unordered_map>
 
 #ifdef YETTY_USE_FONTCONFIG
@@ -11,6 +12,81 @@
 #endif
 
 namespace yetty::card {
+
+//=============================================================================
+// Image dimension parsers — extract width/height from raw image data
+//=============================================================================
+
+static bool parsePngSize(const std::string& data, int& w, int& h) {
+    if (data.size() < 24) return false;
+    auto* d = reinterpret_cast<const uint8_t*>(data.data());
+    if (d[0] != 0x89 || d[1] != 'P' || d[2] != 'N' || d[3] != 'G') return false;
+    w = static_cast<int>((d[16] << 24) | (d[17] << 16) | (d[18] << 8) | d[19]);
+    h = static_cast<int>((d[20] << 24) | (d[21] << 16) | (d[22] << 8) | d[23]);
+    return w > 0 && h > 0;
+}
+
+static bool parseGifSize(const std::string& data, int& w, int& h) {
+    if (data.size() < 10) return false;
+    if (data[0] != 'G' || data[1] != 'I' || data[2] != 'F') return false;
+    auto* d = reinterpret_cast<const uint8_t*>(data.data());
+    w = d[6] | (d[7] << 8);
+    h = d[8] | (d[9] << 8);
+    return w > 0 && h > 0;
+}
+
+static bool parseJpegSize(const std::string& data, int& w, int& h) {
+    if (data.size() < 4) return false;
+    auto* d = reinterpret_cast<const uint8_t*>(data.data());
+    if (d[0] != 0xFF || d[1] != 0xD8) return false;
+    size_t pos = 2;
+    while (pos + 4 < data.size()) {
+        if (d[pos] != 0xFF) { pos++; continue; }
+        uint8_t marker = d[pos + 1];
+        if (marker == 0 || marker == 0xFF) { pos++; continue; }
+        // SOF markers
+        if (marker >= 0xC0 && marker <= 0xCF && marker != 0xC4 && marker != 0xC8) {
+            if (pos + 9 < data.size()) {
+                h = (d[pos + 5] << 8) | d[pos + 6];
+                w = (d[pos + 7] << 8) | d[pos + 8];
+                return w > 0 && h > 0;
+            }
+            return false;
+        }
+        if (pos + 3 < data.size()) {
+            uint16_t len = static_cast<uint16_t>((d[pos + 2] << 8) | d[pos + 3]);
+            pos += 2 + len;
+        } else break;
+    }
+    return false;
+}
+
+static bool parseWebpSize(const std::string& data, int& w, int& h) {
+    if (data.size() < 30) return false;
+    if (data.substr(0, 4) != "RIFF" || data.substr(8, 4) != "WEBP") return false;
+    auto* d = reinterpret_cast<const uint8_t*>(data.data());
+    if (data.substr(12, 4) == "VP8 " && data.size() >= 30) {
+        // Lossy VP8: width at 26, height at 28 (little-endian, 14-bit)
+        w = (d[26] | (d[27] << 8)) & 0x3FFF;
+        h = (d[28] | (d[29] << 8)) & 0x3FFF;
+        return w > 0 && h > 0;
+    }
+    if (data.substr(12, 4) == "VP8L" && data.size() >= 25) {
+        // Lossless VP8L: packed in 4 bytes starting at offset 21
+        uint32_t bits = d[21] | (d[22] << 8) | (d[23] << 16) | (d[24] << 24);
+        w = static_cast<int>((bits & 0x3FFF) + 1);
+        h = static_cast<int>(((bits >> 14) & 0x3FFF) + 1);
+        return w > 0 && h > 0;
+    }
+    return false;
+}
+
+static bool parseImageSize(const std::string& data, int& w, int& h) {
+    return parsePngSize(data, w, h) ||
+           parseJpegSize(data, w, h) ||
+           parseGifSize(data, w, h) ||
+           parseWebpSize(data, w, h);
+}
 
 //=============================================================================
 // HtmlContainerImpl
@@ -153,25 +229,28 @@ public:
         if (!_writer) return;
 
         for (const auto& paint : bg) {
-            ydebug("draw_background: color=({},{},{},{}) clip=({},{} {}x{}) origin=({},{} {}x{}) radius=({},{},{},{}) image='{}'",
-                   paint.color.red, paint.color.green, paint.color.blue, paint.color.alpha,
-                   paint.clip_box.x, paint.clip_box.y, paint.clip_box.width, paint.clip_box.height,
-                   paint.origin_box.x, paint.origin_box.y, paint.origin_box.width, paint.origin_box.height,
-                   paint.border_radius.top_left_x, paint.border_radius.top_right_x,
-                   paint.border_radius.bottom_left_x, paint.border_radius.bottom_right_x,
-                   paint.image.empty() ? "(none)" : paint.image);
-
-            if (paint.color.alpha == 0) continue;
-
-            uint32_t color = packColor(paint.color);
             float x = static_cast<float>(paint.clip_box.x);
             float y = static_cast<float>(paint.clip_box.y);
             float w = static_cast<float>(paint.clip_box.width);
             float h = static_cast<float>(paint.clip_box.height);
 
+            // Draw background image placeholder
+            if (!paint.image.empty() && w > 0 && h > 0) {
+                // Light gray placeholder box for images
+                uint32_t placeholderColor = 0xFFE0E0E0;  // ABGR light gray
+                float cx = x + w * 0.5f;
+                float cy = y + h * 0.5f;
+                float round = static_cast<float>(paint.border_radius.top_left_x);
+                _writer->addBox(cx, cy, w * 0.5f, h * 0.5f,
+                                  placeholderColor, 0, 0, round, _layer);
+            }
+
+            if (paint.color.alpha == 0) continue;
+
+            uint32_t color = packColor(paint.color);
+
             // Root/body background: covers full viewport width -> set card bg
             if (w >= static_cast<float>(_viewWidth) && x <= 0.0f) {
-                ydebug("draw_background: -> setBgColor (full viewport width)");
                 _writer->setBgColor(color);
                 continue;
             }
@@ -180,8 +259,6 @@ public:
                 float cx = x + w * 0.5f;
                 float cy = y + h * 0.5f;
                 float round = static_cast<float>(paint.border_radius.top_left_x);
-                ydebug("draw_background: -> addBox center=({:.1f},{:.1f}) half=({:.1f},{:.1f}) round={:.1f}",
-                       cx, cy, w * 0.5f, h * 0.5f, round);
                 _writer->addBox(cx, cy, w * 0.5f, h * 0.5f,
                                   color, 0, 0, round, _layer);
             }
@@ -290,14 +367,42 @@ public:
         return nullptr;
     }
 
-    void get_image_size(const char* /*src*/, const char* /*baseurl*/,
+    void get_image_size(const char* src, const char* /*baseurl*/,
                         litehtml::size& sz) override {
         sz.width = 0;
         sz.height = 0;
+        if (!src || !*src) return;
+        auto it = _imageCache.find(src);
+        if (it != _imageCache.end()) {
+            sz.width = it->second.width;
+            sz.height = it->second.height;
+        }
     }
 
-    void load_image(const char* /*src*/, const char* /*baseurl*/,
+    void load_image(const char* src, const char* /*baseurl*/,
                     bool /*redraw_on_ready*/) override {
+        if (!src || !*src || !_fetcher) return;
+        if (_imageCache.count(src)) return;  // already loaded
+        if (_imageCache.size() >= 200) return;  // limit per page
+
+        std::string url(src);
+        // Skip data: URIs for now
+        if (url.substr(0, 5) == "data:") return;
+
+        auto body = _fetcher->fetch(url);
+        if (!body || body->empty()) {
+            _imageCache[url] = {0, 0};
+            return;
+        }
+
+        int w = 0, h = 0;
+        if (parseImageSize(*body, w, h)) {
+            // Cap to reasonable dimensions
+            w = std::min(w, 4096);
+            h = std::min(h, 4096);
+            yinfo("HtmlContainer::load_image: {} -> {}x{}", url, w, h);
+        }
+        _imageCache[url] = {w, h};
     }
 
     void set_caption(const char* /*caption*/) override {}
@@ -502,6 +607,11 @@ private:
              | (static_cast<uint32_t>(c.alpha) << 24);
     }
 
+    struct ImageInfo {
+        int width = 0;
+        int height = 0;
+    };
+
     YDrawWriter* _writer;
     HttpFetcher* _fetcher;
     float _defaultFontSize;
@@ -514,6 +624,7 @@ private:
 
     std::vector<FontInfo*> _fonts;
     std::unordered_map<std::string, std::string> _fontPathCache;  // key -> ttf path
+    std::unordered_map<std::string, ImageInfo> _imageCache;
 };
 
 //=============================================================================

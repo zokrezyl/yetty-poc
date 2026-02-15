@@ -17,5 +17,5 @@ HEIGHT="${3:-40}"
 
 echo "Rendering: $URL"
 
-printf '\033]666666;run -c yhtml -x 0 -y 0 -w %d -h %d -r;-i %s;\033\\' "$WIDTH" "$HEIGHT" "$URL"
+printf '\033]666666;run -c yhtml -x 0 -y 0 -h %d -r;-i %s;\033\\' "$HEIGHT" "$URL"
 echo

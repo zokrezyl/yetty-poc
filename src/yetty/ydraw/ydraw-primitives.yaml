@@ -1,0 +1,1024 @@
+# ydraw-primitives.yaml — Single source of truth for all YDraw primitive types
+#
+# Each primitive fully enumerates its fields. No shared/common field concept.
+# Field order = GPU buffer layout. Offsets are in u32 words (4 bytes each).
+# All fields are u32 or f32 (both 4 bytes).
+#
+# The Python generator (tools/gen-ydraw-types.py) reads this and produces:
+#   - C++ enum + per-type info    (hdraw-types.gen.h)
+#   - WGSL constants + dispatch   (sdf-types.gen.wgsl)
+#
+# In eval blocks, {fieldName} is replaced with cardStorage[primOffset + N]
+# where N is the field's word offset.
+
+# =============================================================================
+# 2D SDF Primitives
+# =============================================================================
+
+primitives:
+
+  - name: Circle
+    id: 0
+    category: sdf2d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: cx,          type: f32 }
+      - { name: cy,          type: f32 }
+      - { name: r,           type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let center = vec2<f32>({cx}, {cy});
+      let radius = {r};
+      return sdCircle(p, center, radius);
+
+  - name: Box
+    id: 1
+    category: sdf2d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: cx,          type: f32 }
+      - { name: cy,          type: f32 }
+      - { name: hw,          type: f32 }
+      - { name: hh,          type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let center = vec2<f32>({cx}, {cy});
+      let halfSize = vec2<f32>({hw}, {hh});
+      let round = {round};
+      return sdBox(p, center, halfSize, round);
+
+  - name: Segment
+    id: 2
+    category: sdf2d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: x0,          type: f32 }
+      - { name: y0,          type: f32 }
+      - { name: x1,          type: f32 }
+      - { name: y1,          type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let p0 = vec2<f32>({x0}, {y0});
+      let p1 = vec2<f32>({x1}, {y1});
+      return sdSegment(p, p0, p1);
+
+  - name: Triangle
+    id: 3
+    category: sdf2d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: ax,          type: f32 }
+      - { name: ay,          type: f32 }
+      - { name: bx,          type: f32 }
+      - { name: by,          type: f32 }
+      - { name: vx,          type: f32 }
+      - { name: vy,          type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let v0 = vec2<f32>({ax}, {ay});
+      let v1 = vec2<f32>({bx}, {by});
+      let v2 = vec2<f32>({vx}, {vy});
+      return sdTriangle(p, v0, v1, v2);
+
+  - name: Bezier2
+    id: 4
+    category: sdf2d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: ax,          type: f32 }
+      - { name: ay,          type: f32 }
+      - { name: bx,          type: f32 }
+      - { name: by,          type: f32 }
+      - { name: cx,          type: f32 }
+      - { name: cy,          type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let v0 = vec2<f32>({ax}, {ay});
+      let v1 = vec2<f32>({bx}, {by});
+      let v2 = vec2<f32>({cx}, {cy});
+      return sdBezier2(p, v0, v1, v2);
+
+  - name: Bezier3
+    id: 5
+    category: sdf2d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: ax,          type: f32 }
+      - { name: ay,          type: f32 }
+      - { name: bx,          type: f32 }
+      - { name: by,          type: f32 }
+      - { name: cx,          type: f32 }
+      - { name: cy,          type: f32 }
+      - { name: dx,          type: f32 }
+      - { name: dy,          type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let v0 = vec2<f32>({ax}, {ay});
+      let v1 = vec2<f32>({bx}, {by});
+      let v2 = vec2<f32>({cx}, {cy});
+      let v3 = vec2<f32>({dx}, {dy});
+      return sdBezier3(p, v0, v1, v2, v3);
+
+  - name: Ellipse
+    id: 6
+    category: sdf2d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: cx,          type: f32 }
+      - { name: cy,          type: f32 }
+      - { name: rx,          type: f32 }
+      - { name: ry,          type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let center = vec2<f32>({cx}, {cy});
+      let radii = vec2<f32>({rx}, {ry});
+      return sdEllipse(p, center, radii);
+
+  - name: Arc
+    id: 7
+    category: sdf2d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: cx,          type: f32 }
+      - { name: cy,          type: f32 }
+      - { name: sc_x,        type: f32 }
+      - { name: sc_y,        type: f32 }
+      - { name: ra,          type: f32 }
+      - { name: rb,          type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let center = vec2<f32>({cx}, {cy});
+      let sc = vec2<f32>({sc_x}, {sc_y});
+      let ra = {ra};
+      let rb = {rb};
+      return sdArc(p, center, sc, ra, rb);
+
+  - name: RoundedBox
+    id: 8
+    category: sdf2d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: cx,          type: f32 }
+      - { name: cy,          type: f32 }
+      - { name: hw,          type: f32 }
+      - { name: hh,          type: f32 }
+      - { name: r0,          type: f32 }
+      - { name: r1,          type: f32 }
+      - { name: r2,          type: f32 }
+      - { name: r3,          type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let center = vec2<f32>({cx}, {cy});
+      let halfSize = vec2<f32>({hw}, {hh});
+      let radii = vec4<f32>({r0}, {r1}, {r2}, {r3});
+      return sdRoundedBox(p, center, halfSize, radii);
+
+  - name: Rhombus
+    id: 9
+    category: sdf2d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: cx,          type: f32 }
+      - { name: cy,          type: f32 }
+      - { name: bx,          type: f32 }
+      - { name: by,          type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let center = vec2<f32>({cx}, {cy});
+      let b = vec2<f32>({bx}, {by});
+      return sdRhombus(p, center, b);
+
+  - name: Pentagon
+    id: 10
+    category: sdf2d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: cx,          type: f32 }
+      - { name: cy,          type: f32 }
+      - { name: r,           type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let center = vec2<f32>({cx}, {cy});
+      return sdPentagon(p, center, {r});
+
+  - name: Hexagon
+    id: 11
+    category: sdf2d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: cx,          type: f32 }
+      - { name: cy,          type: f32 }
+      - { name: r,           type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let center = vec2<f32>({cx}, {cy});
+      return sdHexagon(p, center, {r});
+
+  - name: Star
+    id: 12
+    category: sdf2d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: cx,          type: f32 }
+      - { name: cy,          type: f32 }
+      - { name: r,           type: f32 }
+      - { name: n,           type: f32 }
+      - { name: m,           type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let center = vec2<f32>({cx}, {cy});
+      return sdStar(p, center, {r}, {n}, {m});
+
+  - name: Pie
+    id: 13
+    category: sdf2d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: cx,          type: f32 }
+      - { name: cy,          type: f32 }
+      - { name: sc_x,        type: f32 }
+      - { name: sc_y,        type: f32 }
+      - { name: r,           type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let center = vec2<f32>({cx}, {cy});
+      let c = vec2<f32>({sc_x}, {sc_y});
+      return sdPie(p, center, c, {r});
+
+  - name: Ring
+    id: 14
+    category: sdf2d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: cx,          type: f32 }
+      - { name: cy,          type: f32 }
+      - { name: nx,          type: f32 }
+      - { name: ny,          type: f32 }
+      - { name: r,           type: f32 }
+      - { name: th,          type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let center = vec2<f32>({cx}, {cy});
+      let n = vec2<f32>({nx}, {ny});
+      return sdRing(p, center, n, {r}, {th});
+
+  - name: Heart
+    id: 15
+    category: sdf2d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: cx,          type: f32 }
+      - { name: cy,          type: f32 }
+      - { name: scale,       type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let center = vec2<f32>({cx}, {cy});
+      return sdHeart(p, center, {scale});
+
+  - name: Cross
+    id: 16
+    category: sdf2d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: cx,          type: f32 }
+      - { name: cy,          type: f32 }
+      - { name: bx,          type: f32 }
+      - { name: by,          type: f32 }
+      - { name: r,           type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let center = vec2<f32>({cx}, {cy});
+      let b = vec2<f32>({bx}, {by});
+      return sdCross(p, center, b, {r});
+
+  - name: RoundedX
+    id: 17
+    category: sdf2d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: cx,          type: f32 }
+      - { name: cy,          type: f32 }
+      - { name: w,           type: f32 }
+      - { name: r,           type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let center = vec2<f32>({cx}, {cy});
+      return sdRoundedX(p, center, {w}, {r});
+
+  - name: Capsule
+    id: 18
+    category: sdf2d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: ax,          type: f32 }
+      - { name: ay,          type: f32 }
+      - { name: bx,          type: f32 }
+      - { name: by,          type: f32 }
+      - { name: r,           type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let a = vec2<f32>({ax}, {ay});
+      let b = vec2<f32>({bx}, {by});
+      return sdCapsule(p, a, b, {r});
+
+  - name: Moon
+    id: 19
+    category: sdf2d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: cx,          type: f32 }
+      - { name: cy,          type: f32 }
+      - { name: d,           type: f32 }
+      - { name: ra,          type: f32 }
+      - { name: rb,          type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let center = vec2<f32>({cx}, {cy});
+      return sdMoon(p, center, {d}, {ra}, {rb});
+
+  - name: Egg
+    id: 20
+    category: sdf2d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: cx,          type: f32 }
+      - { name: cy,          type: f32 }
+      - { name: ra,          type: f32 }
+      - { name: rb,          type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let center = vec2<f32>({cx}, {cy});
+      return sdEgg(p, center, {ra}, {rb});
+
+  - name: ChamferBox
+    id: 21
+    category: sdf2d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: cx,          type: f32 }
+      - { name: cy,          type: f32 }
+      - { name: hw,          type: f32 }
+      - { name: hh,          type: f32 }
+      - { name: chamfer,     type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let center = vec2<f32>({cx}, {cy});
+      let halfSize = vec2<f32>({hw}, {hh});
+      return sdChamferBox(p, center, halfSize, {chamfer});
+
+  - name: OrientedBox
+    id: 22
+    category: sdf2d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: ax,          type: f32 }
+      - { name: ay,          type: f32 }
+      - { name: bx,          type: f32 }
+      - { name: by,          type: f32 }
+      - { name: th,          type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let a = vec2<f32>({ax}, {ay});
+      let b = vec2<f32>({bx}, {by});
+      return sdOrientedBox(p, a, b, {th});
+
+  - name: Trapezoid
+    id: 23
+    category: sdf2d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: cx,          type: f32 }
+      - { name: cy,          type: f32 }
+      - { name: r1,          type: f32 }
+      - { name: r2,          type: f32 }
+      - { name: he,          type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let center = vec2<f32>({cx}, {cy});
+      return sdTrapezoid(p, center, {r1}, {r2}, {he});
+
+  - name: Parallelogram
+    id: 24
+    category: sdf2d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: cx,          type: f32 }
+      - { name: cy,          type: f32 }
+      - { name: wi,          type: f32 }
+      - { name: he,          type: f32 }
+      - { name: sk,          type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let center = vec2<f32>({cx}, {cy});
+      return sdParallelogram(p, center, {wi}, {he}, {sk});
+
+  - name: EquilateralTriangle
+    id: 25
+    category: sdf2d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: cx,          type: f32 }
+      - { name: cy,          type: f32 }
+      - { name: r,           type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let center = vec2<f32>({cx}, {cy});
+      return sdEquilateralTriangle(p, center, {r});
+
+  - name: IsoscelesTriangle
+    id: 26
+    category: sdf2d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: cx,          type: f32 }
+      - { name: cy,          type: f32 }
+      - { name: qx,          type: f32 }
+      - { name: qy,          type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let center = vec2<f32>({cx}, {cy});
+      let q = vec2<f32>({qx}, {qy});
+      return sdTriangleIsosceles(p, center, q);
+
+  - name: UnevenCapsule
+    id: 27
+    category: sdf2d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: cx,          type: f32 }
+      - { name: cy,          type: f32 }
+      - { name: r1,          type: f32 }
+      - { name: r2,          type: f32 }
+      - { name: h,           type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let center = vec2<f32>({cx}, {cy});
+      return sdUnevenCapsule(p, center, {r1}, {r2}, {h});
+
+  - name: Octogon
+    id: 28
+    category: sdf2d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: cx,          type: f32 }
+      - { name: cy,          type: f32 }
+      - { name: r,           type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let center = vec2<f32>({cx}, {cy});
+      return sdOctogon(p, center, {r});
+
+  - name: Hexagram
+    id: 29
+    category: sdf2d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: cx,          type: f32 }
+      - { name: cy,          type: f32 }
+      - { name: r,           type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let center = vec2<f32>({cx}, {cy});
+      return sdHexagram(p, center, {r});
+
+  - name: Pentagram
+    id: 30
+    category: sdf2d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: cx,          type: f32 }
+      - { name: cy,          type: f32 }
+      - { name: r,           type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let center = vec2<f32>({cx}, {cy});
+      return sdPentagram(p, center, {r});
+
+  - name: CutDisk
+    id: 31
+    category: sdf2d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: cx,          type: f32 }
+      - { name: cy,          type: f32 }
+      - { name: r,           type: f32 }
+      - { name: h,           type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let center = vec2<f32>({cx}, {cy});
+      return sdCutDisk(p, center, {r}, {h});
+
+  - name: Horseshoe
+    id: 32
+    category: sdf2d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: cx,          type: f32 }
+      - { name: cy,          type: f32 }
+      - { name: sc_x,        type: f32 }
+      - { name: sc_y,        type: f32 }
+      - { name: r,           type: f32 }
+      - { name: wx,          type: f32 }
+      - { name: wy,          type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let center = vec2<f32>({cx}, {cy});
+      let c = vec2<f32>({sc_x}, {sc_y});
+      let w = vec2<f32>({wx}, {wy});
+      return sdHorseshoe(p, center, c, {r}, w);
+
+  - name: Vesica
+    id: 33
+    category: sdf2d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: cx,          type: f32 }
+      - { name: cy,          type: f32 }
+      - { name: w,           type: f32 }
+      - { name: h,           type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let center = vec2<f32>({cx}, {cy});
+      return sdVesica(p, center, {w}, {h});
+
+  - name: OrientedVesica
+    id: 34
+    category: sdf2d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: ax,          type: f32 }
+      - { name: ay,          type: f32 }
+      - { name: bx,          type: f32 }
+      - { name: by,          type: f32 }
+      - { name: w,           type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let a = vec2<f32>({ax}, {ay});
+      let b = vec2<f32>({bx}, {by});
+      return sdOrientedVesica(p, a, b, {w});
+
+  - name: RoundedCross
+    id: 35
+    category: sdf2d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: cx,          type: f32 }
+      - { name: cy,          type: f32 }
+      - { name: h,           type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let center = vec2<f32>({cx}, {cy});
+      return sdRoundedCross(p, center, {h});
+
+  - name: Parabola
+    id: 36
+    category: sdf2d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: cx,          type: f32 }
+      - { name: cy,          type: f32 }
+      - { name: k,           type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let center = vec2<f32>({cx}, {cy});
+      return sdParabola(p, center, {k});
+
+  - name: BlobbyCross
+    id: 37
+    category: sdf2d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: cx,          type: f32 }
+      - { name: cy,          type: f32 }
+      - { name: he,          type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let center = vec2<f32>({cx}, {cy});
+      return sdBlobbyCross(p, center, {he});
+
+  - name: Tunnel
+    id: 38
+    category: sdf2d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: cx,          type: f32 }
+      - { name: cy,          type: f32 }
+      - { name: wh_x,        type: f32 }
+      - { name: wh_y,        type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let center = vec2<f32>({cx}, {cy});
+      let wh = vec2<f32>({wh_x}, {wh_y});
+      return sdTunnel(p, center, wh);
+
+  - name: Stairs
+    id: 39
+    category: sdf2d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: cx,          type: f32 }
+      - { name: cy,          type: f32 }
+      - { name: wh_x,        type: f32 }
+      - { name: wh_y,        type: f32 }
+      - { name: n,           type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let center = vec2<f32>({cx}, {cy});
+      let wh = vec2<f32>({wh_x}, {wh_y});
+      return sdStairs(p, center, wh, {n});
+
+  - name: QuadraticCircle
+    id: 40
+    category: sdf2d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: cx,          type: f32 }
+      - { name: cy,          type: f32 }
+      - { name: scale,       type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let center = vec2<f32>({cx}, {cy});
+      return sdQuadraticCircle(p, center, {scale});
+
+  - name: Hyperbola
+    id: 41
+    category: sdf2d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: cx,          type: f32 }
+      - { name: cy,          type: f32 }
+      - { name: k,           type: f32 }
+      - { name: he,          type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let center = vec2<f32>({cx}, {cy});
+      return sdHyperbola(p, center, {k}, {he});
+
+  - name: CoolS
+    id: 42
+    category: sdf2d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: cx,          type: f32 }
+      - { name: cy,          type: f32 }
+      - { name: scale,       type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let center = vec2<f32>({cx}, {cy});
+      return sdCoolS(p, center, {scale});
+
+  - name: CircleWave
+    id: 43
+    category: sdf2d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: cx,          type: f32 }
+      - { name: cy,          type: f32 }
+      - { name: tb,          type: f32 }
+      - { name: ra,          type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let center = vec2<f32>({cx}, {cy});
+      return sdCircleWave(p, center, {tb}, {ra});
+
+  - name: ColorWheel
+    id: 44
+    category: sdf2d
+    fields:
+      - { name: type,          type: u32 }
+      - { name: layer,         type: u32 }
+      - { name: cx,            type: f32 }
+      - { name: cy,            type: f32 }
+      - { name: outerR,        type: f32 }
+      - { name: innerR,        type: f32 }
+      - { name: hue,           type: f32 }
+      - { name: sat,           type: f32 }
+      - { name: val,           type: f32 }
+      - { name: indicatorSize, type: f32 }
+      - { name: fillColor,     type: u32 }
+      - { name: strokeColor,   type: u32 }
+      - { name: strokeWidth,   type: f32 }
+      - { name: round,         type: f32 }
+    eval: |
+      let center = vec2<f32>({cx}, {cy});
+      let d = p - center;
+      let dist = length(d);
+      let ringDist = abs(dist - ({innerR} + {outerR}) * 0.5) - ({outerR} - {innerR}) * 0.5;
+      return ringDist;
+
+  # =========================================================================
+  # Text glyphs
+  # =========================================================================
+
+  - name: TextGlyph
+    id: 64
+    category: glyph
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: x,           type: f32 }
+      - { name: y,           type: f32 }
+      - { name: scaleX,      type: f32 }
+      - { name: scaleY,      type: f32 }
+      - { name: glyphIndex,  type: u32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+
+  - name: RotatedGlyph
+    id: 65
+    category: glyph
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: x,           type: f32 }
+      - { name: y,           type: f32 }
+      - { name: scaleX,      type: f32 }
+      - { name: scaleY,      type: f32 }
+      - { name: angle,       type: f32 }
+      - { name: glyphIndex,  type: u32 }
+      - { name: cosAngle,    type: f32 }
+      - { name: sinAngle,    type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+
+  # =========================================================================
+  # 3D SDF Primitives — all share pos(xyz) then type-specific params
+  # =========================================================================
+
+  - name: Sphere3D
+    id: 100
+    category: sdf3d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: px,          type: f32 }
+      - { name: py,          type: f32 }
+      - { name: pz,          type: f32 }
+      - { name: r,           type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let pos = vec3<f32>({px}, {py}, {pz});
+      return sdSphere3D(p - pos, {r});
+
+  - name: Box3D
+    id: 101
+    category: sdf3d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: px,          type: f32 }
+      - { name: py,          type: f32 }
+      - { name: pz,          type: f32 }
+      - { name: bx,          type: f32 }
+      - { name: by,          type: f32 }
+      - { name: bz,          type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let pos = vec3<f32>({px}, {py}, {pz});
+      return sdBox3D(p - pos, vec3<f32>({bx}, {by}, {bz}));
+
+  # Remaining 3D types — constants only (dispatch handled by distfunctions.wgsl)
+  - { name: BoxFrame3D,        id: 102, category: sdf3d }
+  - { name: Torus3D,           id: 103, category: sdf3d }
+  - { name: CappedTorus3D,     id: 104, category: sdf3d }
+  - { name: Cylinder3D,        id: 105, category: sdf3d }
+  - { name: CappedCylinder3D,  id: 106, category: sdf3d }
+  - { name: RoundedCylinder3D, id: 107, category: sdf3d }
+  - { name: VerticalCapsule3D, id: 108, category: sdf3d }
+  - { name: Cone3D,            id: 109, category: sdf3d }
+  - { name: CappedCone3D,      id: 110, category: sdf3d }
+  - { name: RoundCone3D,       id: 111, category: sdf3d }
+  - { name: Plane3D,           id: 112, category: sdf3d }
+  - { name: HexPrism3D,        id: 113, category: sdf3d }
+  - { name: TriPrism3D,        id: 114, category: sdf3d }
+  - { name: Octahedron3D,      id: 115, category: sdf3d }
+  - { name: Pyramid3D,         id: 116, category: sdf3d }
+  - { name: Ellipsoid3D,       id: 117, category: sdf3d }
+  - { name: Rhombus3D,         id: 118, category: sdf3d }
+  - { name: Link3D,            id: 119, category: sdf3d }
+
+  # =========================================================================
+  # Composite primitives — variable-length data
+  # =========================================================================
+
+  - name: Plot
+    id: 128
+    category: composite
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: x,           type: f32 }
+      - { name: y,           type: f32 }
+      - { name: w,           type: f32 }
+      - { name: h,           type: f32 }
+      - { name: dataCount,   type: u32 }
+      - { name: minVal,      type: f32 }
+      - { name: maxVal,      type: f32 }
+      - { name: flags,       type: u32 }
+      - { name: lineColor,   type: u32 }
+      - { name: bgColor,     type: u32 }
+    variable_data:
+      name: data
+      type: f32
+      count_field: dataCount
+
+  - name: Image
+    id: 129
+    category: composite
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: x,           type: f32 }
+      - { name: y,           type: f32 }
+      - { name: w,           type: f32 }
+      - { name: h,           type: f32 }
+      - { name: atlasX,      type: u32 }
+      - { name: atlasY,      type: u32 }
+      - { name: texW,        type: u32 }
+      - { name: texH,        type: u32 }

@@ -21,7 +21,7 @@ class GpuAllocator;
 // Content producers (PDF renderer, etc.) target this interface.
 // Two implementations:
 //   - YDrawWriterInternal: wraps YDrawBuilder for in-process GPU rendering
-//   - YDrawWriterBinary: serializes to binary v2 for external tools
+//   - YDrawWriterBinary: serializes to compact binary for external tools
 //=============================================================================
 class YDrawWriter : public base::Object {
 public:
@@ -146,7 +146,7 @@ protected:
 };
 
 //=============================================================================
-// YDrawWriterBinary — Serializes ydraw content to binary v2 format
+// YDrawWriterBinary — Serializes ydraw content to binary v3 compact format
 //
 // External tools (pdf2ydraw, etc.) use this to produce binary blobs
 // that ydraw cards can parse. No yetty/GPU dependencies.
@@ -160,7 +160,7 @@ public:
 
     const char* typeName() const override { return "YDrawWriterBinary"; }
 
-    // Serialize accumulated content to binary v2 format
+    // Serialize accumulated content to binary v3 compact format
     virtual std::vector<uint8_t> buildBinary() const = 0;
 
     // Convenience: base64-encode the binary output

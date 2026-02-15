@@ -1,4 +1,5 @@
 #include <yetty/ydraw-writer.h>
+#include "ydraw-prim-writer.gen.h"
 #include <cmath>
 #include <cstring>
 #include <filesystem>
@@ -14,7 +15,7 @@ namespace {
 //=============================================================================
 
 struct BinHeader {
-    uint32_t version = 2;
+    uint32_t version = 3;
     uint32_t primCount = 0;
     uint32_t bgColor = 0xFFFFFFFF;
     uint32_t flags = 16; // FLAG_UNIFORM_SCALE
@@ -50,31 +51,8 @@ struct RotatedTextSpan {
 };
 static_assert(sizeof(RotatedTextSpan) == 32);
 
-//=============================================================================
-// SDFPrimitive — local definition matching hdraw.h (96 bytes)
-// We define it here to avoid pulling in hdraw.h's heavy deps.
-//=============================================================================
-
-struct BinSDFPrimitive {
-    uint32_t type;
-    uint32_t layer;
-    float params[12];
-    uint32_t fillColor;
-    uint32_t strokeColor;
-    float strokeWidth;
-    float round;
-    float aabbMinX, aabbMinY;
-    float aabbMaxX, aabbMaxY;
-    uint32_t _pad[2];
-};
-static_assert(sizeof(BinSDFPrimitive) == 96);
-
-// SDFType values matching hdraw.h
-constexpr uint32_t SDF_CIRCLE = 0;
-constexpr uint32_t SDF_BOX = 1;
-constexpr uint32_t SDF_SEGMENT = 2;
-constexpr uint32_t SDF_TRIANGLE = 3;
-constexpr uint32_t SDF_COLOR_WHEEL = 64;
+// SDFPrimitive and SDF type IDs now come from ydraw-prim-writer.gen.h
+// (generated from ydraw-primitives.yaml)
 
 //=============================================================================
 // TTF font metrics — parse cmap + hmtx + head for glyph advances
@@ -423,164 +401,36 @@ public:
     void addBox(float cx, float cy, float halfW, float halfH,
                 uint32_t fillColor, uint32_t strokeColor,
                 float strokeWidth, float round, uint32_t layer) override {
-        BinSDFPrimitive prim = {};
-        prim.type = SDF_BOX;
-        prim.layer = layer;
-        prim.params[0] = cx;
-        prim.params[1] = cy;
-        prim.params[2] = halfW;
-        prim.params[3] = halfH;
-        prim.fillColor = fillColor;
-        prim.strokeColor = strokeColor;
-        prim.strokeWidth = strokeWidth;
-        prim.round = round;
-        prim.aabbMinX = cx - halfW - strokeWidth;
-        prim.aabbMinY = cy - halfH - strokeWidth;
-        prim.aabbMaxX = cx + halfW + strokeWidth;
-        prim.aabbMaxY = cy + halfH + strokeWidth;
-        _primitives.push_back(prim);
-    }
-
-    void addRoundedBox(float cx, float cy, float halfW, float halfH,
-                       float radius, uint32_t fillColor,
-                       uint32_t strokeColor, float strokeWidth) override {
-        BinSDFPrimitive prim = {};
-        prim.type = SDF_BOX;
-        prim.layer = 0;
-        prim.params[0] = cx;
-        prim.params[1] = cy;
-        prim.params[2] = halfW;
-        prim.params[3] = halfH;
-        // RoundedBox params: radii in params[4-7]
-        prim.params[4] = radius;
-        prim.params[5] = radius;
-        prim.params[6] = radius;
-        prim.params[7] = radius;
-        prim.fillColor = fillColor;
-        prim.strokeColor = strokeColor;
-        prim.strokeWidth = strokeWidth;
-        prim.round = radius;
-        prim.aabbMinX = cx - halfW - strokeWidth;
-        prim.aabbMinY = cy - halfH - strokeWidth;
-        prim.aabbMaxX = cx + halfW + strokeWidth;
-        prim.aabbMaxY = cy + halfH + strokeWidth;
-        _primitives.push_back(prim);
-    }
-
-    void addTriangle(float x0, float y0, float x1, float y1,
-                     float x2, float y2, uint32_t fillColor,
-                     uint32_t strokeColor, float strokeWidth) override {
-        BinSDFPrimitive prim = {};
-        prim.type = SDF_TRIANGLE;
-        prim.layer = 0;
-        prim.params[0] = x0;
-        prim.params[1] = y0;
-        prim.params[2] = x1;
-        prim.params[3] = y1;
-        prim.params[4] = x2;
-        prim.params[5] = y2;
-        prim.fillColor = fillColor;
-        prim.strokeColor = strokeColor;
-        prim.strokeWidth = strokeWidth;
-        prim.aabbMinX = std::min({x0, x1, x2}) - strokeWidth;
-        prim.aabbMinY = std::min({y0, y1, y2}) - strokeWidth;
-        prim.aabbMaxX = std::max({x0, x1, x2}) + strokeWidth;
-        prim.aabbMaxY = std::max({y0, y1, y2}) + strokeWidth;
-        _primitives.push_back(prim);
-    }
-
-    void addCircle(float cx, float cy, float radius,
-                   uint32_t fillColor, uint32_t strokeColor,
-                   float strokeWidth) override {
-        BinSDFPrimitive prim = {};
-        prim.type = SDF_CIRCLE;
-        prim.layer = 0;
-        prim.params[0] = cx;
-        prim.params[1] = cy;
-        prim.params[2] = radius;
-        prim.fillColor = fillColor;
-        prim.strokeColor = strokeColor;
-        prim.strokeWidth = strokeWidth;
-        prim.aabbMinX = cx - radius - strokeWidth;
-        prim.aabbMinY = cy - radius - strokeWidth;
-        prim.aabbMaxX = cx + radius + strokeWidth;
-        prim.aabbMaxY = cy + radius + strokeWidth;
-        _primitives.push_back(prim);
+        size_t off = _compactData.size();
+        _compactData.resize(off + 10);
+        sdf::writeBox(_compactData.data() + off, layer, cx, cy, halfW, halfH,
+                      fillColor, strokeColor, strokeWidth, round);
+        _primCount++;
     }
 
     void addSegment(float x0, float y0, float x1, float y1,
                     uint32_t strokeColor, float strokeWidth,
                     uint32_t layer) override {
-        BinSDFPrimitive prim = {};
-        prim.type = SDF_SEGMENT;
-        prim.layer = layer;
-        prim.params[0] = x0;
-        prim.params[1] = y0;
-        prim.params[2] = x1;
-        prim.params[3] = y1;
-        prim.strokeColor = strokeColor;
-        prim.strokeWidth = strokeWidth;
-        prim.aabbMinX = std::min(x0, x1) - strokeWidth;
-        prim.aabbMinY = std::min(y0, y1) - strokeWidth;
-        prim.aabbMaxX = std::max(x0, x1) + strokeWidth;
-        prim.aabbMaxY = std::max(y0, y1) + strokeWidth;
-        _primitives.push_back(prim);
+        size_t off = _compactData.size();
+        _compactData.resize(off + 10);
+        sdf::writeSegment(_compactData.data() + off, layer, x0, y0, x1, y1,
+                          0, strokeColor, strokeWidth, 0);
+        _primCount++;
     }
 
     void addCircle(float cx, float cy, float radius,
                    uint32_t fillColor, uint32_t strokeColor,
                    float strokeWidth, uint32_t layer) override {
-        BinSDFPrimitive prim = {};
-        prim.type = SDF_CIRCLE;
-        prim.layer = layer;
-        prim.params[0] = cx;
-        prim.params[1] = cy;
-        prim.params[2] = radius;
-        prim.fillColor = fillColor;
-        prim.strokeColor = strokeColor;
-        prim.strokeWidth = strokeWidth;
-        float extent = radius + strokeWidth;
-        prim.aabbMinX = cx - extent;
-        prim.aabbMinY = cy - extent;
-        prim.aabbMaxX = cx + extent;
-        prim.aabbMaxY = cy + extent;
-        _primitives.push_back(prim);
-    }
-
-    void addColorWheel(float cx, float cy, float outerR, float innerR,
-                       float hue, float sat, float val,
-                       float selectorRadius) override {
-        BinSDFPrimitive prim = {};
-        prim.type = SDF_COLOR_WHEEL;
-        prim.layer = 0;
-        prim.params[0] = static_cast<float>(_primitives.size());
-        prim.params[1] = 0;
-        prim.params[2] = cx;
-        prim.params[3] = cy;
-        prim.params[4] = outerR;
-        prim.params[5] = innerR;
-        prim.params[6] = hue;
-        prim.params[7] = sat;
-        prim.params[8] = val;
-        prim.params[9] = selectorRadius;
-        prim.fillColor = 0xFFFFFFFF;
-        prim.aabbMinX = cx - outerR - selectorRadius;
-        prim.aabbMinY = cy - outerR - selectorRadius;
-        prim.aabbMaxX = cx + outerR + selectorRadius;
-        prim.aabbMaxY = cy + outerR + selectorRadius;
-        _primitives.push_back(prim);
+        size_t off = _compactData.size();
+        _compactData.resize(off + 9);
+        sdf::writeCircle(_compactData.data() + off, layer, cx, cy, radius,
+                         fillColor, strokeColor, strokeWidth, 0);
+        _primCount++;
     }
 
     //=========================================================================
     // Scene
     //=========================================================================
-
-    void clear() override {
-        _primitives.clear();
-        _defaultSpans.clear();
-        _customSpans.clear();
-        _textBlob.clear();
-    }
 
     void setSceneBounds(float minX, float minY,
                         float maxX, float maxY) override {
@@ -634,20 +484,23 @@ public:
     std::vector<uint8_t> buildBinary() const override {
         std::vector<uint8_t> out;
 
-        // Header
+        // Header (v3)
         BinHeader header;
-        header.primCount = static_cast<uint32_t>(_primitives.size());
+        header.primCount = _primCount;
         header.bgColor = _bgColor;
         header.flags = _flags;
         out.resize(sizeof(header));
         std::memcpy(out.data(), &header, sizeof(header));
 
-        // Primitive section (primCount * 96 bytes, right after header)
-        if (!_primitives.empty()) {
+        // totalCompactWords (u32) + compact prim data
+        uint32_t totalCompactWords = static_cast<uint32_t>(_compactData.size());
+        appendU32(out, totalCompactWords);
+
+        if (!_compactData.empty()) {
             size_t primStart = out.size();
-            size_t primBytes = _primitives.size() * sizeof(BinSDFPrimitive);
+            size_t primBytes = _compactData.size() * sizeof(float);
             out.resize(primStart + primBytes);
-            std::memcpy(out.data() + primStart, _primitives.data(), primBytes);
+            std::memcpy(out.data() + primStart, _compactData.data(), primBytes);
         }
 
         // Font section
@@ -751,7 +604,8 @@ private:
     std::vector<CustomTextSpan> _customSpans;
     std::vector<RotatedTextSpan> _rotatedSpans;
     std::string _textBlob;
-    std::vector<BinSDFPrimitive> _primitives;
+    std::vector<float> _compactData;
+    uint32_t _primCount = 0;
     uint32_t _bgColor = 0xFFFFFFFF;
     uint32_t _flags = 16; // FLAG_UNIFORM_SCALE
 };

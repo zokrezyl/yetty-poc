@@ -29,8 +29,12 @@ public:
     // Resolve a possibly-relative URL against the base
     virtual std::string resolveUrl(const std::string& url) const = 0;
 
-    // Fetch a URL, returns body or nullopt on failure
+    // Fetch a URL (GET), returns body or nullopt on failure
     virtual std::optional<std::string> fetch(const std::string& url) const = 0;
+
+    // POST form data to a URL, returns body or nullopt on failure
+    virtual std::optional<std::string> post(const std::string& url,
+                                            const std::string& formData) const = 0;
 
     // Returns true if the string looks like a URL (http:// or https://)
     static bool isUrl(const std::string& str);

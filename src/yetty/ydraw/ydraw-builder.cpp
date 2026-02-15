@@ -588,6 +588,8 @@ public:
         float glyphIdxF;
         std::memcpy(&glyphIdxF, &glyphIndex, sizeof(float));
         prim.params[5] = glyphIdxF;
+        prim.params[6] = std::cos(angle);
+        prim.params[7] = std::sin(angle);
         prim.fillColor = color;
         return addPrimitive(prim);
     }

@@ -5,52 +5,7 @@
 // Used by: hdraw (BVH), ydraw (spatial hashing)
 // =============================================================================
 
-// SDF primitive types
-const SDF_CIRCLE: u32 = 0u;
-const SDF_BOX: u32 = 1u;
-const SDF_SEGMENT: u32 = 2u;
-const SDF_TRIANGLE: u32 = 3u;
-const SDF_BEZIER2: u32 = 4u;
-const SDF_BEZIER3: u32 = 5u;
-const SDF_ELLIPSE: u32 = 6u;
-const SDF_ARC: u32 = 7u;
-const SDF_ROUNDED_BOX: u32 = 8u;
-const SDF_RHOMBUS: u32 = 9u;
-const SDF_PENTAGON: u32 = 10u;
-const SDF_HEXAGON: u32 = 11u;
-const SDF_STAR: u32 = 12u;
-const SDF_PIE: u32 = 13u;
-const SDF_RING: u32 = 14u;
-const SDF_HEART: u32 = 15u;
-const SDF_CROSS: u32 = 16u;
-const SDF_ROUNDED_X: u32 = 17u;
-const SDF_CAPSULE: u32 = 18u;
-const SDF_MOON: u32 = 19u;
-const SDF_EGG: u32 = 20u;
-const SDF_CHAMFER_BOX: u32 = 21u;
-const SDF_ORIENTED_BOX: u32 = 22u;
-const SDF_TRAPEZOID: u32 = 23u;
-const SDF_PARALLELOGRAM: u32 = 24u;
-const SDF_EQUILATERAL_TRIANGLE: u32 = 25u;
-const SDF_ISOSCELES_TRIANGLE: u32 = 26u;
-const SDF_UNEVEN_CAPSULE: u32 = 27u;
-const SDF_OCTOGON: u32 = 28u;
-const SDF_HEXAGRAM: u32 = 29u;
-const SDF_PENTAGRAM: u32 = 30u;
-const SDF_CUT_DISK: u32 = 31u;
-const SDF_HORSESHOE: u32 = 32u;
-const SDF_VESICA: u32 = 33u;
-const SDF_ORIENTED_VESICA: u32 = 34u;
-const SDF_ROUNDED_CROSS: u32 = 35u;
-const SDF_PARABOLA: u32 = 36u;
-const SDF_BLOBBY_CROSS: u32 = 37u;
-const SDF_TUNNEL: u32 = 38u;
-const SDF_STAIRS: u32 = 39u;
-const SDF_QUADRATIC_CIRCLE: u32 = 40u;
-const SDF_HYPERBOLA: u32 = 41u;
-const SDF_COOL_S: u32 = 42u;
-const SDF_CIRCLE_WAVE: u32 = 43u;
-const SDF_COLOR_WHEEL: u32 = 44u;
+// SDF primitive type constants are now in sdf-types.gen.wgsl (auto-generated)
 
 // =============================================================================
 // SDF Functions
@@ -123,6 +78,41 @@ fn sdBezier2(p: vec2<f32>, A: vec2<f32>, B: vec2<f32>, C: vec2<f32>) -> f32 {
                   dot(d + (c + b * t.y) * t.y, d + (c + b * t.y) * t.y));
     }
     return sqrt(res);
+}
+
+fn sdBezier3(p: vec2<f32>, A: vec2<f32>, B: vec2<f32>, C: vec2<f32>, D: vec2<f32>) -> f32 {
+    // Cubic bezier SDF via Newton refinement on squared distance.
+    // 5 starting samples, 3 Newton iterations each.
+    var minDist2 = 1e20;
+
+    for (var i = 0u; i <= 4u; i = i + 1u) {
+        var t = f32(i) * 0.25;
+
+        for (var j = 0u; j < 3u; j = j + 1u) {
+            let u = 1.0 - t;
+            // P(t)
+            let pt = u*u*u*A + 3.0*u*u*t*B + 3.0*u*t*t*C + t*t*t*D;
+            // P'(t) = 3[(1-t)²(B-A) + 2(1-t)t(C-B) + t²(D-C)]
+            let dt = 3.0*(u*u*(B-A) + 2.0*u*t*(C-B) + t*t*(D-C));
+            // P''(t) = 6[(1-t)(C-2B+A) + t(D-2C+B)]
+            let ddt = 6.0*(u*(C - 2.0*B + A) + t*(D - 2.0*C + B));
+
+            let dd = pt - p;
+            let num = dot(dd, dt);
+            let den = dot(dt, dt) + dot(dd, ddt);
+
+            if (abs(den) > 1e-10) {
+                t = clamp(t - num / den, 0.0, 1.0);
+            }
+        }
+
+        let u = 1.0 - t;
+        let pt = u*u*u*A + 3.0*u*u*t*B + 3.0*u*t*t*C + t*t*t*D;
+        let dd = p - pt;
+        minDist2 = min(minDist2, dot(dd, dd));
+    }
+
+    return sqrt(minDist2);
 }
 
 fn sdEllipse(p: vec2<f32>, center: vec2<f32>, ab: vec2<f32>) -> f32 {
@@ -619,29 +609,7 @@ fn sdCircleWave(p: vec2<f32>, center: vec2<f32>, tb: f32, ra: f32) -> f32 {
     return min(d1, d2);
 }
 
-// =============================================================================
-// 3D SDF Types
-// =============================================================================
-const SDF_SPHERE_3D: u32 = 100u;
-const SDF_BOX_3D: u32 = 101u;
-const SDF_BOX_FRAME_3D: u32 = 102u;
-const SDF_TORUS_3D: u32 = 103u;
-const SDF_CAPPED_TORUS_3D: u32 = 104u;
-const SDF_CYLINDER_3D: u32 = 105u;
-const SDF_CAPPED_CYLINDER_3D: u32 = 106u;
-const SDF_ROUNDED_CYLINDER_3D: u32 = 107u;
-const SDF_VERTICAL_CAPSULE_3D: u32 = 108u;
-const SDF_CONE_3D: u32 = 109u;
-const SDF_CAPPED_CONE_3D: u32 = 110u;
-const SDF_ROUND_CONE_3D: u32 = 111u;
-const SDF_PLANE_3D: u32 = 112u;
-const SDF_HEX_PRISM_3D: u32 = 113u;
-const SDF_TRI_PRISM_3D: u32 = 114u;
-const SDF_OCTAHEDRON_3D: u32 = 115u;
-const SDF_PYRAMID_3D: u32 = 116u;
-const SDF_ELLIPSOID_3D: u32 = 117u;
-const SDF_RHOMBUS_3D: u32 = 118u;
-const SDF_LINK_3D: u32 = 119u;
+// 3D SDF type constants are now in sdf-types.gen.wgsl (auto-generated)
 
 // =============================================================================
 // 3D SDF Distance Functions (iquilezles.org/articles/distfunctions)

@@ -133,7 +133,11 @@ enum class SDFType : uint32_t {
     Pyramid3D = 116,
     Ellipsoid3D = 117,
     Rhombus3D = 118,
-    Link3D = 119
+    Link3D = 119,
+
+    // Plot & image
+    Plot = 128,
+    Image = 129,
 };
 
 // SDF primitive (96 bytes, 24 floats - GPU aligned)
@@ -151,6 +155,7 @@ struct SDFPrimitive {
     uint32_t _pad[2];        // Padding to 96 bytes (multiple of 16 for GPU)
 };
 static_assert(sizeof(SDFPrimitive) == 96, "SDFPrimitive must be 96 bytes");
+#define YETTY_CARD_SDF_PRIMITIVE_DEFINED
 
 // Text span (input format, 64 bytes)
 struct TextSpan {
