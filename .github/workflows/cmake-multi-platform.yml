@@ -174,7 +174,7 @@ jobs:
   # Android Build (temporarily disabled)
   # =============================================================================
   build-android:
-    if: false  # temporarily disabled
+    #if: false  # temporarily disabled
     runs-on: ubuntu-latest
 
     steps:
