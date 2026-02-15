@@ -6,11 +6,12 @@ pluginManagement {
     }
 }
 
-// Redirect Gradle cache to build-android (go up two levels: build-tools/android -> root)
+// Redirect Gradle build to build-android-{backend} (go up two levels: build-tools/android -> root)
 rootProject.projectDir.parentFile.parentFile.let { projectRoot ->
+    val webgpuBackend = System.getenv("WEBGPU_BACKEND") ?: "wgpu"
     gradle.projectsLoaded {
         allprojects {
-            layout.buildDirectory.set(File(projectRoot, "build-android/${project.name}"))
+            layout.buildDirectory.set(File(projectRoot, "build-android-${webgpuBackend}/${project.name}"))
         }
     }
 }

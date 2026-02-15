@@ -50,9 +50,10 @@ android {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
             version = "3.22.1"
-            // Redirect CMake build output to build-android/cxx at project root
+            // Redirect CMake build output to build-android-{backend}/cxx at project root
             // Go up two levels: build-tools/android -> root
-            buildStagingDirectory = File(rootProject.projectDir.parentFile.parentFile, "build-android/cxx")
+            val webgpuBackend = System.getenv("WEBGPU_BACKEND") ?: "wgpu"
+            buildStagingDirectory = File(rootProject.projectDir.parentFile.parentFile, "build-android-${webgpuBackend}/cxx")
         }
     }
 
@@ -85,12 +86,13 @@ dependencies {
     // No Java dependencies needed - pure native app
 }
 
-// Copy APK to build-android-{buildType} at repo root
+// Copy APK to build-android-{backend}-{buildType} at repo root
 val repoRoot = rootProject.projectDir.parentFile.parentFile
+val webgpuBackend = System.getenv("WEBGPU_BACKEND") ?: "wgpu"
 android.applicationVariants.all {
     val variant = this
     val buildType = variant.buildType.name
-    val outputDir = File(repoRoot, "build-android-${buildType}")
+    val outputDir = File(repoRoot, "build-android-${webgpuBackend}-${buildType}")
 
     variant.assembleProvider.get().doLast {
         outputDir.mkdirs()
