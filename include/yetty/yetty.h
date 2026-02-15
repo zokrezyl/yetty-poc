@@ -4,6 +4,10 @@
 #include <yetty/base/base.h>
 #include <yetty/result.hpp>
 
+#if defined(__ANDROID__)
+struct android_app;
+#endif
+
 namespace yetty {
 
 using namespace yetty::base;
@@ -15,6 +19,10 @@ public:
   ~Yetty() override = default;
 
   static Result<Ptr> createImpl(ContextType &ctx, int argc, char *argv[]) noexcept;
+
+#if defined(__ANDROID__)
+  static Result<Ptr> createImpl(ContextType &ctx, struct android_app* app) noexcept;
+#endif
 
   virtual Result<void> run() noexcept = 0;
 

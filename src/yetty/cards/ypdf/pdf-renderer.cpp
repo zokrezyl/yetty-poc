@@ -1,6 +1,11 @@
 // Shared PDF → YDrawWriter rendering.
 // Used by both the internal ypdf card and the external pdf2ydraw tool.
 
+// Windows: prevent min/max macros from conflicting with std::min/max
+#ifdef _WIN32
+#define NOMINMAX
+#endif
+
 #include "pdf-renderer.h"
 #include "pdf-content-parser.h"
 #include <yetty/ydraw-writer.h>

@@ -16,13 +16,16 @@ endif()
 
 add_library(msdf::wgsl ALIAS msdf-wgsl)
 
+# Get the yetty root directory (3 levels up from src/yetty/msdf-wgsl)
+get_filename_component(YETTY_ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../.." ABSOLUTE)
+
 target_include_directories(msdf-wgsl
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
-        ${CMAKE_SOURCE_DIR}/include
+        ${YETTY_ROOT_DIR}/include
 )
 
 # Link dependencies
@@ -43,11 +46,14 @@ set(MSDF_WGSL_SHADER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shaders PARENT_SCOPE)
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/shaders/msdf_gen.wgsl
                ${CMAKE_CURRENT_BINARY_DIR}/shaders/msdf_gen.wgsl COPYONLY)
 
-# CDB generator
-add_subdirectory(gen-cdb)
+# Desktop-only tools (not needed on Android which uses pre-built atlases)
+if(NOT YETTY_ANDROID)
+    # CDB generator
+    add_subdirectory(gen-cdb)
 
-# Atlas viewer
-add_subdirectory(render-atlas)
+    # Atlas viewer
+    add_subdirectory(render-atlas)
 
-# CDB comparison tool
-add_subdirectory(compare)
+    # CDB comparison tool
+    add_subdirectory(compare)
+endif()

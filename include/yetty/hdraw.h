@@ -1,7 +1,7 @@
 #pragma once
 
 #include <yetty/result.hpp>
-#include <yetty/webgpu-context.h>
+#include <yetty/gpu-context.h>
 #include <yetty/gpu-allocator.h>
 #include <webgpu/webgpu.h>
 #include <vector>
@@ -109,7 +109,7 @@ public:
     Result<void> parse(const std::string& content);
 
     // Render to the given pass
-    Result<void> render(WebGPUContext& ctx,
+    Result<void> render(const GPUContext& ctx,
                         GpuAllocator::Ptr allocator,
                         WGPURenderPassEncoder pass,
                         float x, float y, float width, float height,
@@ -125,7 +125,7 @@ public:
     static bool parseVec3(const std::string& str, float out[3]);
 
 private:
-    Result<void> createPipeline(WebGPUContext& ctx, GpuAllocator::Ptr allocator, WGPUTextureFormat targetFormat);
+    Result<void> createPipeline(const GPUContext& ctx, GpuAllocator::Ptr allocator, WGPUTextureFormat targetFormat);
     Result<void> parseYAML(const std::string& yaml);
     Result<void> parseSVG(const std::string& svg);
 

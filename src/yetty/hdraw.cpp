@@ -1180,7 +1180,7 @@ Result<void> HDrawRenderer::parseSVG(const std::string& svg) {
 // Rendering
 //-----------------------------------------------------------------------------
 
-Result<void> HDrawRenderer::render(WebGPUContext& ctx,
+Result<void> HDrawRenderer::render(const GPUContext& ctx,
                                     GpuAllocator::Ptr allocator,
                                     WGPURenderPassEncoder pass,
                                     float x, float y, float width, float height,
@@ -1229,10 +1229,10 @@ Result<void> HDrawRenderer::render(WebGPUContext& ctx,
     uniforms.time = _time;
     uniforms.num_primitives = static_cast<float>(_primitives.size());
 
-    wgpuQueueWriteBuffer(ctx.getQueue(), _uniform_buffer, 0, &uniforms, sizeof(uniforms));
+    wgpuQueueWriteBuffer(ctx.queue, _uniform_buffer, 0, &uniforms, sizeof(uniforms));
 
     if (_primitives_dirty && !_primitives.empty()) {
-        wgpuQueueWriteBuffer(ctx.getQueue(), _primitive_buffer, 0,
+        wgpuQueueWriteBuffer(ctx.queue, _primitive_buffer, 0,
                              _primitives.data(), _primitives.size() * sizeof(HDrawPrimitiveGPU));
         _primitives_dirty = false;
     }
@@ -1244,9 +1244,9 @@ Result<void> HDrawRenderer::render(WebGPUContext& ctx,
     return Ok();
 }
 
-Result<void> HDrawRenderer::createPipeline(WebGPUContext& ctx, GpuAllocator::Ptr allocator, WGPUTextureFormat targetFormat) {
+Result<void> HDrawRenderer::createPipeline(const GPUContext& ctx, GpuAllocator::Ptr allocator, WGPUTextureFormat targetFormat) {
     _allocator = allocator;
-    WGPUDevice device = ctx.getDevice();
+    WGPUDevice device = ctx.device;
 
     // Uniform buffer
     WGPUBufferDescriptor bufDesc = {};

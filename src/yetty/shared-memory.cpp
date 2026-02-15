@@ -2,7 +2,7 @@
 
 #include <cstring>
 
-#if !defined(_WIN32)
+#if !defined(_WIN32) && !defined(__ANDROID__)
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -12,7 +12,7 @@
 
 namespace yetty {
 
-#if !defined(_WIN32)
+#if !defined(_WIN32) && !defined(__ANDROID__)
 
 SharedMemoryRegion::SharedMemoryRegion(std::string name, int fd, void* mapping, size_t size, bool isOwner)
     : _name(std::move(name))
@@ -155,9 +155,9 @@ Result<void> SharedMemoryRegion::remap() noexcept {
     return Ok();
 }
 
-#else // _WIN32
+#else // _WIN32 || __ANDROID__
 
-// Windows stub implementations - shared memory not yet supported on Windows
+// Windows/Android stub implementations - shared memory not yet supported
 
 SharedMemoryRegion::SharedMemoryRegion(std::string name, int fd, void* mapping, size_t size, bool isOwner)
     : _name(std::move(name))
@@ -169,21 +169,21 @@ SharedMemoryRegion::SharedMemoryRegion(std::string name, int fd, void* mapping, 
 SharedMemoryRegion::~SharedMemoryRegion() {}
 
 Result<SharedMemoryRegion::Ptr> SharedMemoryRegion::create(const std::string& /*name*/, size_t /*initialSize*/) noexcept {
-    return Err<SharedMemoryRegion::Ptr>("SharedMemory not supported on Windows");
+    return Err<SharedMemoryRegion::Ptr>("SharedMemory not supported on this platform");
 }
 
 Result<SharedMemoryRegion::Ptr> SharedMemoryRegion::open(const std::string& /*name*/) noexcept {
-    return Err<SharedMemoryRegion::Ptr>("SharedMemory not supported on Windows");
+    return Err<SharedMemoryRegion::Ptr>("SharedMemory not supported on this platform");
 }
 
 Result<void> SharedMemoryRegion::grow(size_t /*newSize*/) noexcept {
-    return Err<void>("SharedMemory not supported on Windows");
+    return Err<void>("SharedMemory not supported on this platform");
 }
 
 Result<void> SharedMemoryRegion::remap() noexcept {
-    return Err<void>("SharedMemory not supported on Windows");
+    return Err<void>("SharedMemory not supported on this platform");
 }
 
-#endif // _WIN32
+#endif // _WIN32 || __ANDROID__
 
 } // namespace yetty
