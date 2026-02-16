@@ -1148,6 +1148,11 @@ public:
     uint32_t gridHeight() const override { return _gridHeight; }
 
     void calculate() override {
+        // Clear builder-owned staging data — will be rebuilt from buffer state
+        _primBounds.clear();
+        _gridStaging.clear();
+        _glyphs.clear();
+
         // Step 0: Ingest buffer metadata — fonts, text spans, scene bounds
         // The buffer may carry font blobs and text spans (e.g. from PDF renderer).
         // Register fonts with the builder's MSDF atlas, then convert text spans
@@ -1195,7 +1200,6 @@ public:
         }
 
         // Step 1: Read all prims from buffer, compute AABB for each
-        _primBounds.clear();
         _buffer->forEachPrim([this](uint32_t /*id*/, const float* data, uint32_t wc) {
             uint32_t type = sdf::detail::read_u32(data, 0);
             float minX, minY, maxX, maxY;
