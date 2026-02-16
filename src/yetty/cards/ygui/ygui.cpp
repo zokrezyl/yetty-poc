@@ -237,6 +237,24 @@ public:
     return false;
   }
 
+  bool needsTexture() const override {
+    return _builder && _builder->hasCustomAtlas();
+  }
+
+  bool needsTextureRealloc() override {
+    return _builder && _builder->needsTextureRealloc();
+  }
+
+  Result<void> allocateTextures() override {
+    if (!_builder) return Ok();
+    return _builder->allocateTextures();
+  }
+
+  Result<void> writeTextures() override {
+    if (!_builder) return Ok();
+    return _builder->writeTextures();
+  }
+
   //=========================================================================
   // Rendering
   //=========================================================================

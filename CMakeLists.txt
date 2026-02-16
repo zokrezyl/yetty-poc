@@ -1181,6 +1181,20 @@ else()
             enable_testing()
             add_subdirectory(test/ut/ypdf)
         endif()
+
+        # YDraw tests (buffer, AABB, grid, lifecycle)
+        option(YETTY_BUILD_YDRAW_TESTS "Build YDraw buffer/builder tests" ON)
+        if(YETTY_BUILD_YDRAW_TESTS)
+            enable_testing()
+            add_subdirectory(test/ut/ydraw)
+        endif()
+
+        # YGui tests (widget rendering pipeline)
+        option(YETTY_BUILD_YGUI_TESTS "Build YGui widget rendering tests" ON)
+        if(YETTY_BUILD_YGUI_TESTS)
+            enable_testing()
+            add_subdirectory(test/ut/ygui)
+        endif()
     endif()
 
     # Plugin tester disabled - was using yetty_core which is removed

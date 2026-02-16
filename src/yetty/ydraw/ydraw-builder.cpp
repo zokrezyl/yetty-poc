@@ -764,13 +764,6 @@ public:
     // State management
     //=========================================================================
 
-    void clear() override {
-        _primBounds.clear();
-        _gridStaging.clear();
-        _glyphs.clear();
-        _buffer->clear();
-    }
-
     uint32_t primitiveCount() const override {
         return _buffer->primCount();
     }
@@ -832,9 +825,10 @@ public:
             return Ok();
         }
 
-        // Reserve compact prim storage
-        if (!_buffer->empty()) {
-            bufMgr->reserve(_buffer->gpuBufferSize());
+        // Reserve compact prim storage (only if there are actual prims)
+        uint32_t primBytes = _buffer->gpuBufferSize();
+        if (primBytes > 0) {
+            bufMgr->reserve(primBytes);
         }
 
         // Build grid if not already computed
@@ -855,16 +849,19 @@ public:
         if (!_cardMgr) return Err<void>("allocateBuffers: no CardManager");
         auto bufMgr = _cardMgr->bufferManager();
 
-        // Allocate and write compact prim data
-        if (!_buffer->empty()) {
+        // Allocate and write compact prim data (skip if no prims — text-only buffers
+        // have gpuBufferSize()==0 even though empty()==false due to text spans)
+        {
             uint32_t allocBytes = _buffer->gpuBufferSize();
-            auto primResult = bufMgr->allocateBuffer(_metaSlotIndex, "prims", allocBytes);
-            if (!primResult) return Err<void>("allocateBuffers: prim alloc failed", primResult);
-            _primHandle = *primResult;
+            if (allocBytes > 0) {
+                auto primResult = bufMgr->allocateBuffer(_metaSlotIndex, "prims", allocBytes);
+                if (!primResult) return Err<void>("allocateBuffers: prim alloc failed", primResult);
+                _primHandle = *primResult;
 
-            float* buf = reinterpret_cast<float*>(_primHandle.data);
-            _buffer->writeGPU(buf, _primHandle.size, _primWordOffsets);
-            bufMgr->markBufferDirty(_primHandle);
+                float* buf = reinterpret_cast<float*>(_primHandle.data);
+                _buffer->writeGPU(buf, _primHandle.size, _primWordOffsets);
+                bufMgr->markBufferDirty(_primHandle);
+            }
         }
 
         // Allocate derived storage (grid + glyphs + atlas header)
@@ -968,10 +965,10 @@ public:
 
     bool needsBufferRealloc() const override {
         if (!_cardMgr) return false;
+        uint32_t primNeeded = _buffer->gpuBufferSize();
         if (_primHandle.isValid()) {
-            uint32_t needed = _buffer->gpuBufferSize();
-            if (needed != _primHandle.size) return true;
-        } else if (!_buffer->empty()) {
+            if (primNeeded != _primHandle.size) return true;
+        } else if (primNeeded > 0) {
             return true;
         }
         uint32_t derivedNeeded = computeDerivedSize();

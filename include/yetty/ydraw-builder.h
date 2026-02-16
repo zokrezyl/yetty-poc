@@ -159,7 +159,6 @@ public:
     //=========================================================================
     // State management
     //=========================================================================
-    virtual void clear() = 0;
     virtual uint32_t primitiveCount() const = 0;
     virtual uint32_t glyphCount() const = 0;
 

@@ -155,6 +155,7 @@ Result<void> YPdf::init() {
     }
     _builder = *builderRes;
 
+    _builder->addFlags(YDrawBuilder::FLAG_UNIFORM_SCALE);
     _builder->setViewport(_widthCells, _heightCells);
     _builder->setView(_viewZoom, _viewPanX, _viewPanY);
     _dirty = true;
@@ -356,6 +357,30 @@ void YPdf::cardPixelToScene(float cardX, float cardY, float& sceneX, float& scen
 void YPdf::renderToStaging(float /*time*/) {
     if (_builder && _dirty) {
         _builder->calculate();
+
+        // First-time zoom: fit page width to card width with uniform scaling
+        if (_needsInitialZoom && _cellWidth > 0 && _cellHeight > 0) {
+            float contentW = _builder->sceneMaxX() - _builder->sceneMinX();
+            float contentH = _builder->sceneMaxY() - _builder->sceneMinY();
+            if (contentW > 0 && contentH > 0) {
+                float cardAspect = (_widthCells * _cellWidth) /
+                                   std::max(_heightCells * _cellHeight, 1.0f);
+                // With UNIFORM_SCALE and tall content (viewAspect < cardAspect):
+                //   visibleW = (contentH / zoom) * cardAspect
+                // To fill card width with page width:
+                //   zoom = contentH * cardAspect / contentW
+                _viewZoom = contentH * cardAspect / contentW;
+
+                // Pan to show top of document
+                float centerY = (_builder->sceneMinY() + _builder->sceneMaxY()) * 0.5f;
+                float viewHalfH = contentH * 0.5f / _viewZoom;
+                _viewPanY = _builder->sceneMinY() - centerY + viewHalfH;
+
+                _builder->setView(_viewZoom, _viewPanX, _viewPanY);
+                _needsInitialZoom = false;
+            }
+        }
+
         _dirty = false;
     }
 }

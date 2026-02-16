@@ -154,11 +154,12 @@ private:
     bool _sortedOrderBuilt = false;
     int32_t _selStartSorted = -1;
     int32_t _selEndSorted = -1;
-    uint32_t _cellWidth = 0;
-    uint32_t _cellHeight = 0;
+    float _cellWidth = 0;
+    float _cellHeight = 0;
 
     // Dirty flags
     bool _dirty = true;
+    bool _needsInitialZoom = true;
 
     // Common card state (was in Card base class)
     CardManager::Ptr _cardMgr;

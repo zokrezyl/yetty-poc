@@ -68,7 +68,7 @@ public:
         float sceneH = static_cast<float>(_heightCells * _cellHeight);
         _builder->setSceneBounds(0, 0, sceneW, sceneH);
 
-        _builder->clear();
+        _buffer->clear();
         generatePrimitives();
         _builder->calculate();
     }

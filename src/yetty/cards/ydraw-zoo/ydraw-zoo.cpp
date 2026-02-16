@@ -163,7 +163,7 @@ void YDrawZoo::renderToStaging(float time) {
     updateConnections(time);
 
     // Generate prims directly into buffer
-    _builder->clear();
+    _buffer->clear();
     uint32_t layer = 0;
 
     // 1. Connection prims (curves/lines/shapes) — lower layers

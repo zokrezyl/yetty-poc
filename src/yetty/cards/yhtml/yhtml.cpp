@@ -138,7 +138,6 @@ public:
         // Process deferred redraw (from mouse events etc.)
         if (_needsRedraw && _document) {
             _needsRedraw = false;
-            _builder->clear();
             _buffer->clear();
             int viewW = static_cast<int>(_viewWidth);
             int docHeight = _document->height();
@@ -711,7 +710,6 @@ private:
 
         // Re-render with new content
         _htmlContent = std::move(*body);
-        _builder->clear();
         _buffer->clear();
 
         if (auto res = renderHtmlInternal(); !res) {

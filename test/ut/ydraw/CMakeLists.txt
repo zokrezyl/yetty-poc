@@ -1,5 +1,5 @@
 #=============================================================================
-# YPdf Unit Tests - Font extraction + full rendering pipeline
+# YDraw Unit Tests - Buffer, AABB, GPU layout, builder grid + lifecycle
 #=============================================================================
 
 if(POLICY CMP0175)
@@ -15,46 +15,9 @@ CPMAddPackage(
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(FONTCONFIG REQUIRED fontconfig)
 
-# pdfio sources are already downloaded by the ypdf card.
-# Reuse pdfio_lib if it exists, otherwise build our own.
-if(NOT TARGET pdfio_lib)
-    CPMAddPackage(
-        NAME pdfio
-        GITHUB_REPOSITORY michaelrsweet/pdfio
-        GIT_TAG v1.4.0
-        DOWNLOAD_ONLY YES
-    )
-    add_library(pdfio_lib STATIC
-        ${pdfio_SOURCE_DIR}/pdfio-aes.c
-        ${pdfio_SOURCE_DIR}/pdfio-array.c
-        ${pdfio_SOURCE_DIR}/pdfio-common.c
-        ${pdfio_SOURCE_DIR}/pdfio-content.c
-        ${pdfio_SOURCE_DIR}/pdfio-crypto.c
-        ${pdfio_SOURCE_DIR}/pdfio-dict.c
-        ${pdfio_SOURCE_DIR}/pdfio-file.c
-        ${pdfio_SOURCE_DIR}/pdfio-md5.c
-        ${pdfio_SOURCE_DIR}/pdfio-object.c
-        ${pdfio_SOURCE_DIR}/pdfio-page.c
-        ${pdfio_SOURCE_DIR}/pdfio-rc4.c
-        ${pdfio_SOURCE_DIR}/pdfio-sha256.c
-        ${pdfio_SOURCE_DIR}/pdfio-stream.c
-        ${pdfio_SOURCE_DIR}/pdfio-string.c
-        ${pdfio_SOURCE_DIR}/pdfio-token.c
-        ${pdfio_SOURCE_DIR}/pdfio-value.c
-    )
-    target_include_directories(pdfio_lib PUBLIC ${pdfio_SOURCE_DIR})
-    target_link_libraries(pdfio_lib PRIVATE z)
-    set_target_properties(pdfio_lib PROPERTIES C_STANDARD 99 POSITION_INDEPENDENT_CODE ON)
-    target_compile_options(pdfio_lib PRIVATE -w)
-endif()
-
-add_executable(ypdf_tests
+add_executable(ydraw_tests
     main.cpp
-    ypdf_font_test.cpp
-    ypdf_render_test.cpp
-    # PDF renderer
-    ${CMAKE_SOURCE_DIR}/src/yetty/ypdf/pdf-renderer.cpp
-    ${CMAKE_SOURCE_DIR}/src/yetty/ypdf/pdf-content-parser.cpp
+    ydraw_test.cpp
     # YDraw core
     ${CMAKE_SOURCE_DIR}/src/yetty/ydraw/ydraw-buffer.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/ydraw/ydraw-builder.cpp
@@ -79,19 +42,17 @@ add_executable(ypdf_tests
     ${CMAKE_SOURCE_DIR}/src/yetty/font/util.cpp
 )
 
-target_include_directories(ypdf_tests PRIVATE
+target_include_directories(ydraw_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/yetty/cards/ypdf
     ${CMAKE_SOURCE_DIR}/include
 )
 
-target_compile_definitions(ypdf_tests PRIVATE
+target_compile_definitions(ydraw_tests PRIVATE
     CMAKE_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
 )
 
-target_link_libraries(ypdf_tests PRIVATE
+target_link_libraries(ydraw_tests PRIVATE
     ut
-    pdfio_lib
     webgpu
     cdb-wrapper
     msdf::wgsl
@@ -103,4 +64,4 @@ target_link_libraries(ypdf_tests PRIVATE
     ${FONTCONFIG_LIBRARIES}
 )
 
-add_test(NAME ypdf_tests COMMAND ypdf_tests)
+add_test(NAME ydraw_tests COMMAND ydraw_tests)

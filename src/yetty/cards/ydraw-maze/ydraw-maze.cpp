@@ -370,7 +370,7 @@ void YDrawMaze::renderToStaging(float time) {
     }
 
     // Build all primitives directly into buffer
-    _builder->clear();
+    _buffer->clear();
     buildPrims(time);
     _builder->calculate();
 }
