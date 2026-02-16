@@ -57,7 +57,6 @@ public:
 
     Result<void> dispose() override {
         deregisterFromEvents();
-        if (_builder) _builder->releaseBuffers();
         if (_metaHandle.isValid() && _cardMgr) {
             if (auto res = _cardMgr->deallocateMetadata(_metaHandle); !res) {
                 yerror("DiagramImpl::dispose: deallocateMetadata failed: {}", error_msg(res));
@@ -68,7 +67,6 @@ public:
     }
 
     void suspend() override {
-        if (_builder) _builder->releaseBuffers();
     }
 
     void declareBufferNeeds() override {
@@ -100,13 +98,7 @@ public:
 
     Result<void> finalize() override {
         if (!_builder) return Ok();
-        if (auto res = _builder->writeBuffers(); !res) return res;
-        if (_metadataDirty) {
-            if (auto res = _builder->writeMetadata(_widthCells, _heightCells,
-                                                    _viewZoom, _viewPanX, _viewPanY); !res) return res;
-            _metadataDirty = false;
-        }
-        return Ok();
+        return _builder->writeBuffers();
     }
 
     //=========================================================================
@@ -134,16 +126,16 @@ public:
                 float newZoom = std::clamp(_viewZoom + zoomDelta, 0.1f, 20.0f);
                 if (newZoom != _viewZoom) {
                     _viewZoom = newZoom;
-                    _metadataDirty = true;
+                    _builder->setView(_viewZoom, _viewPanX, _viewPanY);
                 }
                 return Ok(true);
             } else if (event.cardScroll.mods & GLFW_MOD_SHIFT) {
                 _viewPanX += event.cardScroll.dy * 0.05f * sceneW / _viewZoom;
-                _metadataDirty = true;
+                _builder->setView(_viewZoom, _viewPanX, _viewPanY);
                 return Ok(true);
             } else {
                 _viewPanY += event.cardScroll.dy * 0.05f * sceneH / _viewZoom;
-                _metadataDirty = true;
+                _builder->setView(_viewZoom, _viewPanX, _viewPanY);
                 return Ok(true);
             }
         }
@@ -168,6 +160,8 @@ public:
             return Err<void>("DiagramImpl::init: failed to create builder", builderRes);
         }
         _builder = *builderRes;
+        _builder->setViewport(_widthCells, _heightCells);
+        _builder->setView(_viewZoom, _viewPanX, _viewPanY);
 
         if (auto res = registerForEvents(); !res) {
             ywarn("DiagramImpl::init: event registration failed: {}", error_msg(res));
@@ -192,7 +186,6 @@ public:
         yinfo("DiagramImpl::init: {} prims, {} glyphs",
               _builder->primitiveCount(), _builder->glyphCount());
 
-        _metadataDirty = true;
         return Ok();
     }
 
@@ -340,8 +333,6 @@ private:
     std::string _argsStr;
     std::string _payloadStr;
     std::string _inputFile;
-    bool _metadataDirty = true;
-
     // View
     float _viewZoom = 1.0f;
     float _viewPanX = 0.0f;

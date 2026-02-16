@@ -51,7 +51,6 @@ public:
     /// Texture cards participate in the atlas allocation and packing loops.
     /// Examples: image (pixel data), pdf (rendered pages), thorvg (SVG renders).
     virtual bool needsTexture() const { return false; }
-
     //=========================================================================
     // Phase 1: Per-frame staging (called every frame for all active cards)
     //=========================================================================

@@ -257,12 +257,9 @@ public:
     /// Write atlas pixel data into allocated texture.
     virtual Result<void> writeTextures() = 0;
 
-    /// Re-write dirty prim/grid/glyph data into allocated handles.
-    /// Called every frame from Card::finalize(). Only writes if dirty.
+    /// Finalize: re-write dirty buffers and metadata.
+    /// Called every frame from Card::finalize().
     virtual Result<void> writeBuffers() = 0;
-
-    /// Release all GPU handles (for suspend/dispose).
-    virtual Result<void> releaseBuffers() = 0;
 
     /// Whether buffer sizes changed and realloc is needed.
     virtual bool needsBufferRealloc() const = 0;
@@ -270,11 +267,11 @@ public:
     /// Whether texture sizes changed and realloc is needed.
     virtual bool needsTextureRealloc() const = 0;
 
-    /// Pack metadata and write to GPU. Call from Card::finalize().
-    virtual Result<void> writeMetadata(uint32_t widthCells, uint32_t heightCells,
-                                       float viewZoom = 1.0f,
-                                       float viewPanX = 0.0f,
-                                       float viewPanY = 0.0f) = 0;
+    /// Set card viewport dimensions (marks metadata dirty).
+    virtual void setViewport(uint32_t widthCells, uint32_t heightCells) = 0;
+
+    /// Set view zoom/pan (marks metadata dirty).
+    virtual void setView(float zoom, float panX, float panY) = 0;
 
 protected:
     YDrawBuilder() = default;

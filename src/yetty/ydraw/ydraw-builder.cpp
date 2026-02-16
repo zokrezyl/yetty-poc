@@ -879,6 +879,7 @@ public:
         }
 
         _bufferDirty = false;
+        _metadataDirty = true;
         return Ok();
     }
 
@@ -894,6 +895,8 @@ public:
         auto allocResult = texMgr->allocate(atlasW, atlasH);
         if (!allocResult) return Err<void>("allocateTextures: failed", allocResult);
         _atlasTextureHandle = *allocResult;
+        _allocatedAtlasW = atlasW;
+        _allocatedAtlasH = atlasH;
         return Ok();
     }
 
@@ -907,37 +910,59 @@ public:
         if (auto res = texMgr->write(_atlasTextureHandle, atlasData.data()); !res) {
             return Err<void>("writeTextures: write failed", res);
         }
+
+        // Now that the atlas is packed, write the atlas header into derived buffer
+        if (_derivedHandle.isValid() && _gpuAtlasHeaderOffset > 0) {
+            auto atlasPos = texMgr->getAtlasPosition(_atlasTextureHandle);
+            uint32_t msdfAtlasW = _customAtlas->getAtlasWidth();
+            uint32_t msdfAtlasH = _customAtlas->getAtlasHeight();
+            const auto& glyphMeta = _customAtlas->getGlyphMetadata();
+
+            uint32_t headerLocalOff = _gpuAtlasHeaderOffset * sizeof(float) - _derivedHandle.offset;
+            uint8_t* base = _derivedHandle.data + headerLocalOff;
+
+            uint32_t atlasHeader[4] = {
+                (atlasPos.x & 0xFFFF) | ((msdfAtlasW & 0xFFFF) << 16),
+                (atlasPos.y & 0xFFFF) | ((msdfAtlasH & 0xFFFF) << 16),
+                static_cast<uint32_t>(glyphMeta.size()),
+                0
+            };
+            std::memcpy(base, atlasHeader, sizeof(atlasHeader));
+
+            _cardMgr->bufferManager()->markBufferDirty(_derivedHandle);
+        }
+
         return Ok();
     }
 
     Result<void> writeBuffers() override {
         if (!_cardMgr) return Err<void>("writeBuffers: no CardManager");
-        if (!_bufferDirty) return Ok();
-        auto bufMgr = _cardMgr->bufferManager();
 
-        // Re-write prims
-        if (_primHandle.isValid() && !_buffer->empty()) {
-            float* buf = reinterpret_cast<float*>(_primHandle.data);
-            _buffer->writeGPU(buf, _primHandle.size, _primWordOffsets);
-            bufMgr->markBufferDirty(_primHandle);
+        if (_bufferDirty) {
+            auto bufMgr = _cardMgr->bufferManager();
+
+            // Re-write prims
+            if (_primHandle.isValid() && !_buffer->empty()) {
+                float* buf = reinterpret_cast<float*>(_primHandle.data);
+                _buffer->writeGPU(buf, _primHandle.size, _primWordOffsets);
+                bufMgr->markBufferDirty(_primHandle);
+            }
+
+            // Re-write derived (grid + glyphs + atlas header)
+            if (_derivedHandle.isValid()) {
+                if (auto res = writeDerived(); !res) return res;
+                bufMgr->markBufferDirty(_derivedHandle);
+            }
+
+            _bufferDirty = false;
+            _metadataDirty = true;
         }
 
-        // Re-write derived (grid + glyphs + atlas header)
-        if (_derivedHandle.isValid()) {
-            if (auto res = writeDerived(); !res) return res;
-            bufMgr->markBufferDirty(_derivedHandle);
+        if (_metadataDirty) {
+            if (auto res = flushMetadata(); !res) return res;
+            _metadataDirty = false;
         }
 
-        _bufferDirty = false;
-        return Ok();
-    }
-
-    Result<void> releaseBuffers() override {
-        _primHandle = BufferHandle::invalid();
-        _derivedHandle = BufferHandle::invalid();
-        _primWordOffsets.clear();
-        _atlasTextureHandle = TextureHandle::invalid();
-        _bufferDirty = true;
         return Ok();
     }
 
@@ -960,64 +985,33 @@ public:
 
     bool needsTextureRealloc() const override {
         if (!_customAtlas) return false;
+        uint32_t atlasW = _customAtlas->getAtlasWidth();
+        uint32_t atlasH = _customAtlas->getAtlasHeight();
+        const auto& atlasData = _customAtlas->getAtlasData();
         if (!_atlasTextureHandle.isValid()) {
-            return !_customAtlas->getAtlasData().empty();
+            return !atlasData.empty();
         }
+        // Compare current atlas size against what was allocated
+        if (atlasW != _allocatedAtlasW || atlasH != _allocatedAtlasH) return true;
         return false;
     }
 
-    Result<void> writeMetadata(uint32_t widthCells, uint32_t heightCells,
-                               float viewZoom, float viewPanX, float viewPanY) override {
-        if (!_cardMgr) return Err<void>("writeMetadata: no CardManager");
-
-        // Pack zoom as f16 in upper 16 bits of flags
-        uint32_t zoomBits;
-        {
-            uint32_t f32bits;
-            std::memcpy(&f32bits, &viewZoom, sizeof(float));
-            uint32_t sign = (f32bits >> 16) & 0x8000;
-            int32_t  exp  = ((f32bits >> 23) & 0xFF) - 127 + 15;
-            uint32_t mant = (f32bits >> 13) & 0x3FF;
-            if (exp <= 0) { exp = 0; mant = 0; }
-            else if (exp >= 31) { exp = 31; mant = 0; }
-            zoomBits = sign | (static_cast<uint32_t>(exp) << 10) | mant;
+    void setViewport(uint32_t widthCells, uint32_t heightCells) override {
+        if (_viewWidthCells != widthCells || _viewHeightCells != heightCells) {
+            _viewWidthCells = widthCells;
+            _viewHeightCells = heightCells;
+            _metadataDirty = true;
         }
-
-        float contentW = _sceneMaxX - _sceneMinX;
-        float contentH = _sceneMaxY - _sceneMinY;
-        int16_t panXi16 = static_cast<int16_t>(std::clamp(
-            viewPanX / std::max(contentW, 1e-6f) * 16384.0f, -32768.0f, 32767.0f));
-        int16_t panYi16 = static_cast<int16_t>(std::clamp(
-            viewPanY / std::max(contentH, 1e-6f) * 16384.0f, -32768.0f, 32767.0f));
-
-        uint32_t primOffset = _primHandle.isValid()
-            ? _primHandle.offset / sizeof(float) : 0;
-
-        YDrawMetadata meta = {};
-        meta.primitiveOffset = primOffset;
-        meta.primitiveCount = _buffer->primCount();
-        meta.gridOffset = _gpuGridOffset;
-        meta.gridWidth = _gridWidth;
-        meta.gridHeight = _gridHeight;
-        std::memcpy(&meta.cellSize, &_cellSize, sizeof(float));
-        meta.glyphOffset = _gpuGlyphOffset;
-        meta.glyphCount = static_cast<uint32_t>(_glyphs.size());
-        std::memcpy(&meta.sceneMinX, &_sceneMinX, sizeof(float));
-        std::memcpy(&meta.sceneMinY, &_sceneMinY, sizeof(float));
-        std::memcpy(&meta.sceneMaxX, &_sceneMaxX, sizeof(float));
-        std::memcpy(&meta.sceneMaxY, &_sceneMaxY, sizeof(float));
-        meta.widthCells  = (widthCells & 0xFFFF) |
-                           (static_cast<uint32_t>(static_cast<uint16_t>(panXi16)) << 16);
-        meta.heightCells = (heightCells & 0xFFFF) |
-                           (static_cast<uint32_t>(static_cast<uint16_t>(panYi16)) << 16);
-        meta.flags = (_flags & 0xFFFF) | (zoomBits << 16);
-        meta.bgColor = _bgColor;
-
-        return _cardMgr->writeMetadata(
-            MetadataHandle{_metaSlotIndex * 64, 64}, &meta, sizeof(meta));
     }
 
-    void markBufferDirty() { _bufferDirty = true; }
+    void setView(float zoom, float panX, float panY) override {
+        if (_viewZoom != zoom || _viewPanX != panX || _viewPanY != panY) {
+            _viewZoom = zoom;
+            _viewPanX = panX;
+            _viewPanY = panY;
+            _metadataDirty = true;
+        }
+    }
 
     //=========================================================================
     // Text selection
@@ -1067,7 +1061,10 @@ public:
             g.glyphLayerFlags &= ~(static_cast<uint32_t>(GLYPH_FLAG_SELECTED) << 24);
         }
 
-        if (startSorted < 0 || endSorted < 0 || _glyphSortedOrder.empty()) return;
+        if (startSorted < 0 || endSorted < 0 || _glyphSortedOrder.empty()) {
+            _bufferDirty = true;
+            return;
+        }
 
         int32_t lo = std::min(startSorted, endSorted);
         int32_t hi = std::min(std::max(startSorted, endSorted),
@@ -1077,6 +1074,7 @@ public:
             _glyphs[_glyphSortedOrder[i]].glyphLayerFlags |=
                 (static_cast<uint32_t>(GLYPH_FLAG_SELECTED) << 24);
         }
+        _bufferDirty = true;
     }
 
     std::string getSelectedText() override {
@@ -1376,12 +1374,62 @@ public:
               _gridStaging.size(), _gridStaging.size() * 4 / 1024,
               numCells, nonEmptyCells, totalEntries, maxEntries,
               nonEmptyCells > 0 ? float(totalEntries) / nonEmptyCells : 0.0f);
+
+        _bufferDirty = true;
     }
 
 private:
     //=========================================================================
     // GPU helpers
     //=========================================================================
+
+    Result<void> flushMetadata() {
+        // Pack zoom as f16 in upper 16 bits of flags
+        uint32_t zoomBits;
+        {
+            uint32_t f32bits;
+            std::memcpy(&f32bits, &_viewZoom, sizeof(float));
+            uint32_t sign = (f32bits >> 16) & 0x8000;
+            int32_t  exp  = ((f32bits >> 23) & 0xFF) - 127 + 15;
+            uint32_t mant = (f32bits >> 13) & 0x3FF;
+            if (exp <= 0) { exp = 0; mant = 0; }
+            else if (exp >= 31) { exp = 31; mant = 0; }
+            zoomBits = sign | (static_cast<uint32_t>(exp) << 10) | mant;
+        }
+
+        float contentW = _sceneMaxX - _sceneMinX;
+        float contentH = _sceneMaxY - _sceneMinY;
+        int16_t panXi16 = static_cast<int16_t>(std::clamp(
+            _viewPanX / std::max(contentW, 1e-6f) * 16384.0f, -32768.0f, 32767.0f));
+        int16_t panYi16 = static_cast<int16_t>(std::clamp(
+            _viewPanY / std::max(contentH, 1e-6f) * 16384.0f, -32768.0f, 32767.0f));
+
+        uint32_t primOffset = _primHandle.isValid()
+            ? _primHandle.offset / sizeof(float) : 0;
+
+        YDrawMetadata meta = {};
+        meta.primitiveOffset = primOffset;
+        meta.primitiveCount = _buffer->primCount();
+        meta.gridOffset = _gpuGridOffset;
+        meta.gridWidth = _gridWidth;
+        meta.gridHeight = _gridHeight;
+        std::memcpy(&meta.cellSize, &_cellSize, sizeof(float));
+        meta.glyphOffset = _gpuGlyphOffset;
+        meta.glyphCount = static_cast<uint32_t>(_glyphs.size());
+        std::memcpy(&meta.sceneMinX, &_sceneMinX, sizeof(float));
+        std::memcpy(&meta.sceneMinY, &_sceneMinY, sizeof(float));
+        std::memcpy(&meta.sceneMaxX, &_sceneMaxX, sizeof(float));
+        std::memcpy(&meta.sceneMaxY, &_sceneMaxY, sizeof(float));
+        meta.widthCells  = (_viewWidthCells & 0xFFFF) |
+                           (static_cast<uint32_t>(static_cast<uint16_t>(panXi16)) << 16);
+        meta.heightCells = (_viewHeightCells & 0xFFFF) |
+                           (static_cast<uint32_t>(static_cast<uint16_t>(panYi16)) << 16);
+        meta.flags = (_flags & 0xFFFF) | (zoomBits << 16);
+        meta.bgColor = _bgColor;
+
+        return _cardMgr->writeMetadata(
+            MetadataHandle{_metaSlotIndex * 64, 64}, &meta, sizeof(meta));
+    }
 
     uint32_t computeDerivedSize() const {
         uint32_t gridBytes = static_cast<uint32_t>(_gridStaging.size()) * sizeof(uint32_t);
@@ -1441,14 +1489,28 @@ private:
         offset += glyphBytes;
 
         // Custom atlas header + glyph metadata
-        if (_customAtlas && _atlasTextureHandle.isValid()) {
-            // Note: atlas position requires texMgr which we don't store.
-            // The atlas header is written by the card in finalize() after
-            // it obtains the texture handle position. For now, reserve space.
+        if (_customAtlas) {
             _gpuAtlasHeaderOffset = (_derivedHandle.offset + offset) / sizeof(float);
-            // Zero-fill — card will overwrite with actual atlas position
             uint32_t atlasHeaderBytes = 4 * sizeof(uint32_t);
-            std::memset(base + offset, 0, atlasHeaderBytes);
+
+            if (_atlasTextureHandle.isValid()) {
+                // Texture already allocated — write actual atlas position
+                auto texMgr = _cardMgr->textureManager();
+                auto atlasPos = texMgr->getAtlasPosition(_atlasTextureHandle);
+                uint32_t msdfAtlasW = _customAtlas->getAtlasWidth();
+                uint32_t msdfAtlasH = _customAtlas->getAtlasHeight();
+                const auto& glyphMeta = _customAtlas->getGlyphMetadata();
+                uint32_t atlasHeader[4] = {
+                    (atlasPos.x & 0xFFFF) | ((msdfAtlasW & 0xFFFF) << 16),
+                    (atlasPos.y & 0xFFFF) | ((msdfAtlasH & 0xFFFF) << 16),
+                    static_cast<uint32_t>(glyphMeta.size()),
+                    0
+                };
+                std::memcpy(base + offset, atlasHeader, sizeof(atlasHeader));
+            } else {
+                // Texture not yet allocated — zero-fill, writeTextures() will fill later
+                std::memset(base + offset, 0, atlasHeaderBytes);
+            }
             offset += atlasHeaderBytes;
 
             const auto& glyphMeta = _customAtlas->getGlyphMetadata();
@@ -1526,7 +1588,17 @@ private:
     uint32_t _gpuGlyphOffset = 0;
     uint32_t _gpuAtlasHeaderOffset = 0;
     TextureHandle _atlasTextureHandle = TextureHandle::invalid();
+    uint32_t _allocatedAtlasW = 0;
+    uint32_t _allocatedAtlasH = 0;
     bool _bufferDirty = true;
+    bool _metadataDirty = true;
+
+    // View state (set by card via setViewport/setView)
+    uint32_t _viewWidthCells = 0;
+    uint32_t _viewHeightCells = 0;
+    float _viewZoom = 1.0f;
+    float _viewPanX = 0.0f;
+    float _viewPanY = 0.0f;
 };
 
 //=============================================================================

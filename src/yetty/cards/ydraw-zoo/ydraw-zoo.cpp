@@ -60,9 +60,8 @@ Result<void> YDrawZoo::init() {
     _builder->setSceneBounds(0, 0, SCENE_W, SCENE_H);
     _builder->setBgColor(_bgColor);
     _builder->addFlags(YDrawBuilder::FLAG_UNIFORM_SCALE);
+    _builder->setViewport(_widthCells, _heightCells);
 
-    _dirty = true;
-    _metadataDirty = true;
     return Ok();
 }
 
@@ -237,8 +236,6 @@ void YDrawZoo::renderToStaging(float time) {
     }
 
     _builder->calculate();
-
-    _dirty = true;
 }
 
 void YDrawZoo::declareBufferNeeds() {
@@ -253,23 +250,10 @@ Result<void> YDrawZoo::allocateBuffers() {
 
 Result<void> YDrawZoo::finalize() {
     if (!_builder) return Ok();
-
-    if (_dirty) {
-        if (auto res = _builder->writeBuffers(); !res) return res;
-        _metadataDirty = true;
-        _dirty = false;
-    }
-
-    if (_metadataDirty) {
-        if (auto res = _builder->writeMetadata(_widthCells, _heightCells); !res) return res;
-        _metadataDirty = false;
-    }
-
-    return Ok();
+    return _builder->writeBuffers();
 }
 
 Result<void> YDrawZoo::dispose() {
-    if (_builder) _builder->releaseBuffers();
     if (_metaHandle.isValid() && _cardMgr) {
         if (auto res = _cardMgr->deallocateMetadata(_metaHandle); !res) {
             yerror("YDrawZoo::dispose: deallocateMetadata failed: {}", error_msg(res));
@@ -280,7 +264,6 @@ Result<void> YDrawZoo::dispose() {
 }
 
 void YDrawZoo::suspend() {
-    if (_builder) _builder->releaseBuffers();
 }
 
 //=============================================================================

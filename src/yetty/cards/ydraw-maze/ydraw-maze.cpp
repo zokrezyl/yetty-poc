@@ -62,9 +62,8 @@ Result<void> YDrawMaze::init() {
     _builder->setSceneBounds(0, 0, SCENE_W, SCENE_H);
     _builder->setBgColor(_bgColor);
     _builder->addFlags(YDrawBuilder::FLAG_UNIFORM_SCALE);
+    _builder->setViewport(_widthCells, _heightCells);
 
-    _dirty = true;
-    _metadataDirty = true;
     return Ok();
 }
 
@@ -374,8 +373,6 @@ void YDrawMaze::renderToStaging(float time) {
     _builder->clear();
     buildPrims(time);
     _builder->calculate();
-
-    _dirty = true;
 }
 
 void YDrawMaze::declareBufferNeeds() {
@@ -392,23 +389,10 @@ Result<void> YDrawMaze::allocateBuffers() {
 
 Result<void> YDrawMaze::finalize() {
     if (!_builder) return Ok();
-
-    if (_dirty) {
-        if (auto res = _builder->writeBuffers(); !res) return res;
-        _metadataDirty = true;
-        _dirty = false;
-    }
-
-    if (_metadataDirty) {
-        if (auto res = _builder->writeMetadata(_widthCells, _heightCells); !res) return res;
-        _metadataDirty = false;
-    }
-
-    return Ok();
+    return _builder->writeBuffers();
 }
 
 Result<void> YDrawMaze::dispose() {
-    if (_builder) _builder->releaseBuffers();
     if (_metaHandle.isValid() && _cardMgr) {
         if (auto res = _cardMgr->deallocateMetadata(_metaHandle); !res) {
             yerror("YDrawMaze::dispose: deallocateMetadata failed: {}", error_msg(res));
@@ -419,7 +403,6 @@ Result<void> YDrawMaze::dispose() {
 }
 
 void YDrawMaze::suspend() {
-    if (_builder) _builder->releaseBuffers();
 }
 
 //=============================================================================

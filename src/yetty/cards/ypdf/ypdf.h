@@ -66,6 +66,9 @@ public:
     bool hasName() const override { return !_name.empty(); }
     void setScreenOrigin(float sx, float sy) override { _screenOriginX = sx; _screenOriginY = sy; }
 
+    void renderToStaging(float time) override;
+    bool needsBufferRealloc() override;
+    bool needsTextureRealloc() override;
     void declareBufferNeeds() override;
     Result<void> allocateBuffers() override;
     Result<void> allocateTextures() override;
@@ -103,11 +106,8 @@ private:
     Result<void> renderAllPages();
 
     //=========================================================================
-    // GPU helpers
+    // Helpers
     //=========================================================================
-    uint32_t computeDerivedSize() const;
-    Result<void> uploadMetadata();
-    void uploadGlyphData();
     void cardPixelToScene(float cardX, float cardY, float& sceneX, float& sceneY);
 
     //=========================================================================
@@ -142,20 +142,6 @@ private:
     FontManager::Ptr _fontManager;
     GpuAllocator::Ptr _gpuAllocator;
 
-    // Atlas texture handle for cardTextureManager
-    TextureHandle _atlasTextureHandle = TextureHandle::invalid();
-
-    // Primitive storage (SDF segments/boxes for table borders/fills)
-    StorageHandle _primStorage = StorageHandle::invalid();
-    uint32_t _primitiveOffset = 0;
-    uint32_t _primCount = 0;
-
-    // Derived storage
-    StorageHandle _derivedStorage = StorageHandle::invalid();
-    uint32_t _gridOffset = 0;
-    uint32_t _glyphOffset = 0;
-    uint32_t _gridWidth = 0;
-    uint32_t _gridHeight = 0;
 
     // View zoom/pan
     float _viewZoom = 1.0f;
@@ -173,7 +159,6 @@ private:
 
     // Dirty flags
     bool _dirty = true;
-    bool _metadataDirty = true;
 
     // Common card state (was in Card base class)
     CardManager::Ptr _cardMgr;

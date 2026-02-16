@@ -155,10 +155,6 @@ private:
     float _lastTime = -1.0f;
     bool _initialized = false;
 
-    // Dirty flags
-    bool _dirty = true;
-    bool _metadataDirty = true;
-
     // Screen ID
     base::ObjectId _screenId = 0;
 

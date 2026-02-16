@@ -70,9 +70,7 @@ public:
 
         _builder->clear();
         generatePrimitives();
-
-        _dirty = true;
-        _metadataDirty = true;
+        _builder->calculate();
     }
 
     Result<bool> onEvent(const base::Event& event) override {
@@ -95,17 +93,17 @@ public:
                 // Ctrl+wheel = zoom
                 float zoomFactor = std::exp(event.cardScroll.dy * 0.1f);
                 _viewZoom = std::clamp(_viewZoom * zoomFactor, 0.1f, 50.0f);
-                _metadataDirty = true;
+                _builder->setView(_viewZoom, _viewPanX, _viewPanY);
                 return Ok(true);
             } else if (event.cardScroll.mods & GLFW_MOD_SHIFT) {
                 // Shift+wheel = horizontal scroll
                 _viewPanX += event.cardScroll.dy * 0.05f * sceneW / _viewZoom;
-                _metadataDirty = true;
+                _builder->setView(_viewZoom, _viewPanX, _viewPanY);
                 return Ok(true);
             } else {
                 // Wheel = vertical scroll
                 _viewPanY += event.cardScroll.dy * 0.05f * sceneH / _viewZoom;
-                _metadataDirty = true;
+                _builder->setView(_viewZoom, _viewPanX, _viewPanY);
                 return Ok(true);
             }
         }
@@ -120,7 +118,6 @@ public:
                 (*loopResult)->deregisterListener(sharedAs<base::EventListener>());
             }
         }
-        if (_builder) _builder->releaseBuffers();
         if (_metaHandle.isValid() && _cardMgr) {
             if (auto res = _cardMgr->deallocateMetadata(_metaHandle); !res) {
                 yerror("MarkdownImpl::dispose: deallocateMetadata failed: {}", error_msg(res));
@@ -131,7 +128,6 @@ public:
     }
 
     void suspend() override {
-        if (_builder) _builder->releaseBuffers();
     }
 
     void declareBufferNeeds() override {
@@ -151,13 +147,7 @@ public:
 
     Result<void> finalize() override {
         if (!_builder) return Ok();
-        if (auto res = _builder->writeBuffers(); !res) return res;
-        if (_metadataDirty) {
-            if (auto res = _builder->writeMetadata(_widthCells, _heightCells,
-                                                    _viewZoom, _viewPanX, _viewPanY); !res) return res;
-            _metadataDirty = false;
-        }
-        return Ok();
+        return _builder->writeBuffers();
     }
 
     //=========================================================================
@@ -178,6 +168,8 @@ public:
         }
         _builder = *builderRes;
         _builder->addFlags(YDrawBuilder::FLAG_UNIFORM_SCALE);
+        _builder->setViewport(_widthCells, _heightCells);
+        _builder->setView(_viewZoom, _viewPanX, _viewPanY);
 
         parseArgs(_argsStr);
 
@@ -209,8 +201,6 @@ public:
             (*loopResult)->registerListener(base::Event::Type::CardScroll, self, 1000);
         }
 
-        _dirty = true;
-        _metadataDirty = true;
         return Ok();
     }
 
@@ -432,9 +422,6 @@ private:
     std::string _payloadStr;
     std::string _inputArg;  // -i/--input: "-" = payload is content, else file path
     std::vector<ParsedLine> _parsedLines;
-    bool _dirty = true;
-    bool _metadataDirty = true;
-
     // Rendering parameters
     uint32_t _cellWidth = 0;
     uint32_t _cellHeight = 0;

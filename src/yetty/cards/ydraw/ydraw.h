@@ -4,6 +4,9 @@
 #include <yetty/base/factory.h>
 #include <yetty/yetty-context.h>
 #include <string>
+#include <memory>
+
+namespace yetty { class YDrawBuffer; }
 
 namespace yetty::card {
 
