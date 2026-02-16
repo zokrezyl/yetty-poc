@@ -903,6 +903,7 @@ target_include_directories(yetty PRIVATE
 
 # Card subdirectories (desktop and Android - use target_sources to add to yetty)
 if(NOT EMSCRIPTEN)
+    add_subdirectory(src/yetty/font)
     add_subdirectory(src/yetty/ydraw)
     add_subdirectory(src/yetty/ygui)
     add_subdirectory(src/yetty/diagram)

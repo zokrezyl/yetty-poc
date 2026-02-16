@@ -2,14 +2,14 @@
 
 #include <litehtml.h>
 #include <yetty/base/factory.h>
-#include <yetty/ms-msdf-font.h>
 #include <functional>
 #include <vector>
 #include <string>
 #include <cstdint>
+#include <memory>
 
 namespace yetty {
-class YDrawWriter;
+class YDrawBuffer;
 }
 
 namespace yetty::card {
@@ -17,23 +17,23 @@ namespace yetty::card {
 class HttpFetcher;
 
 //=============================================================================
-// HtmlContainer - litehtml v0.9 document_container that emits SDF primitives
+// HtmlContainer - litehtml v0.9 document_container that emits primitives
 //
-// Bridges litehtml's CSS layout callbacks to YDrawWriter:
-//   draw_background() → addBox()
-//   draw_borders()    → addSegment()
-//   draw_text()       → addText()
-//   draw_list_marker() → addCircle() / addText()
+// Bridges litehtml's CSS layout callbacks to YDrawBuffer:
+//   draw_background() → buffer->addBox()
+//   draw_borders()    → buffer->addSegment()
+//   draw_text()       → buffer->addText()
+//   draw_list_marker() → buffer->addCircle() / buffer->addText()
 //
 // Uses HttpFetcher (cpr) to download external CSS via import_css().
-// Font metrics are derived from atlas glyph data.
+// Font metrics provided by internal FontUtil (FreeType singleton).
 //=============================================================================
 class HtmlContainer : public litehtml::document_container,
                       public base::ObjectFactory<HtmlContainer> {
 public:
     using Ptr = std::shared_ptr<HtmlContainer>;
 
-    static Result<Ptr> createImpl(YDrawWriter* writer, MsMsdfFont::Ptr font,
+    static Result<Ptr> createImpl(std::shared_ptr<YDrawBuffer> buffer,
                                   float defaultFontSize,
                                   HttpFetcher* fetcher);
 

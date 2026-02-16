@@ -1,11 +1,9 @@
 // pdf2ydraw: Convert PDF to YDraw binary v2 format
 //
 // Uses the shared PdfRenderer to convert PDF pages, targeting
-// YDrawWriterBinary for serialization. Outputs raw binary or
-// base64-wrapped OSC escape sequence.
+// YDrawBuilder/YDrawBuffer. Serializes buffer data for output.
 
 #include "pdf-renderer.h"
-#include <yetty/ydraw-writer.h>
 #include <ytrace/ytrace.hpp>
 #include <spdlog/sinks/basic_file_sink.h>
 
@@ -18,6 +16,10 @@ extern "C" {
 #include <filesystem>
 #include <iostream>
 #include <string>
+
+// Internal header for buffer
+namespace yetty { class YDrawBuffer; }
+#include "../../src/yetty/ydraw/ydraw-buffer.h"
 
 using namespace yetty;
 using namespace yetty::card;
@@ -72,27 +74,33 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // Create binary writer and render PDF into it
-    auto writerRes = YDrawWriterBinary::create();
-    if (!writerRes) {
-        std::cerr << "Error: failed to create writer: "
-                  << writerRes.error().message() << "\n";
-        pdfioFileClose(pdf);
-        return 1;
-    }
-    auto writer = *writerRes;
+    // Create buffer for rendering (builder=nullptr skips text ops)
+    auto buffer = *YDrawBuffer::create();
 
-    auto result = renderPdfToWriter(pdf, writer.get());
+    auto result = renderPdfToBuffer(pdf, buffer.get());
     pdfioFileClose(pdf);
 
     yinfo("pdf2ydraw: {} pages, totalHeight={:.1f}, firstPageH={:.1f}",
           result.pageCount, result.totalHeight, result.firstPageHeight);
 
-    // Build binary output
-    auto binary = writer->buildBinary();
+    // Serialize buffer data
+    auto binary = buffer->serialize();
 
     if (oscFlag) {
-        auto b64 = writer->buildBase64();
+        // Base64-encode for OSC
+        // Simple base64 encoding
+        static const char b64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        std::string b64str;
+        b64str.reserve((binary.size() + 2) / 3 * 4);
+        for (size_t i = 0; i < binary.size(); i += 3) {
+            uint32_t n = static_cast<uint32_t>(binary[i]) << 16;
+            if (i + 1 < binary.size()) n |= static_cast<uint32_t>(binary[i + 1]) << 8;
+            if (i + 2 < binary.size()) n |= static_cast<uint32_t>(binary[i + 2]);
+            b64str += b64[(n >> 18) & 0x3F];
+            b64str += b64[(n >> 12) & 0x3F];
+            b64str += (i + 1 < binary.size()) ? b64[(n >> 6) & 0x3F] : '=';
+            b64str += (i + 2 < binary.size()) ? b64[n & 0x3F] : '=';
+        }
 
         float pageH = result.firstPageHeight > 0.0f
                       ? result.firstPageHeight : 792.0f;
@@ -104,8 +112,8 @@ int main(int argc, char** argv) {
                  args::get(wFlag), args::get(hFlag),
                  pageH);
 
-        yinfo("binary={} bytes, b64={} bytes", binary.size(), b64.size());
-        std::cout << header << b64 << "\033\\" << std::endl;
+        yinfo("binary={} bytes, b64={} bytes", binary.size(), b64str.size());
+        std::cout << header << b64str << "\033\\" << std::endl;
     } else {
         std::cout.write(reinterpret_cast<const char*>(binary.data()),
                         static_cast<std::streamsize>(binary.size()));

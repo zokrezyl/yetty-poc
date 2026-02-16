@@ -1,6 +1,7 @@
 #include "ydraw-maze.h"
 #include <yetty/ydraw-builder.h>
-#include "../hdraw/hdraw.h"  // SDFPrimitive, SDFType
+#include "../../ydraw/ydraw-types.gen.h"
+#include "../../ydraw/ydraw-buffer.h"
 #include <yetty/msdf-glyph-data.h>
 #include <ytrace/ytrace.hpp>
 #include <cmath>
@@ -21,20 +22,19 @@ YDrawMaze::YDrawMaze(const YettyContext& ctx,
                      int32_t x, int32_t y,
                      uint32_t widthCells, uint32_t heightCells,
                      const std::string& args)
-    : Card(ctx.cardManager, ctx.gpu, x, y, widthCells, heightCells)
-    , _argsStr(args)
+    : _argsStr(args)
     , _screenId(ctx.screenId)
+    , _cardMgr(ctx.cardManager)
+    , _gpu(ctx.gpu)
+    , _fontManager(ctx.fontManager)
+    , _gpuAllocator(ctx.gpuAllocator)
+    , _x(x), _y(y)
+    , _widthCells(widthCells), _heightCells(heightCells)
 {
     _shaderGlyph = SHADER_GLYPH;
     auto seed = std::chrono::high_resolution_clock::now().time_since_epoch().count();
     _rng.seed(static_cast<uint32_t>(seed));
-
-    auto builderRes = YDrawBuilder::create(ctx.fontManager, ctx.globalAllocator);
-    if (builderRes) {
-        _builder = *builderRes;
-    } else {
-        yerror("YDrawMaze: failed to create builder");
-    }
+    _buffer = *yetty::YDrawBuffer::create();
 }
 
 YDrawMaze::~YDrawMaze() { dispose(); }
@@ -49,6 +49,13 @@ Result<void> YDrawMaze::init() {
         return Err<void>("YDrawMaze::init: failed to allocate metadata");
     }
     _metaHandle = *metaResult;
+
+    auto builderRes = YDrawBuilder::create(
+        _fontManager, _gpuAllocator, _buffer, _cardMgr, metadataSlotIndex());
+    if (!builderRes) {
+        return Err<void>("YDrawMaze::init: failed to create builder", builderRes);
+    }
+    _builder = *builderRes;
 
     parseArgs(_argsStr);
 
@@ -255,7 +262,6 @@ float YDrawMaze::cellY(uint32_t row) const {
 //=============================================================================
 
 void YDrawMaze::buildPrims(float time) {
-    _primBuffer.clear();
     uint32_t layer = 0;
 
     // 1. Wall segments
@@ -268,27 +274,12 @@ void YDrawMaze::buildPrims(float time) {
             float y1 = y0 + _cellH;
 
             auto addWall = [&](float ax, float ay, float bx, float by) {
-                SDFPrimitive prim = {};
-                prim.type = static_cast<uint32_t>(SDFType::Segment);
-                prim.params[0] = ax;
-                prim.params[1] = ay;
-                prim.params[2] = bx;
-                prim.params[3] = by;
-                prim.fillColor = 0;
-                prim.strokeColor = _wallColor;
-                prim.strokeWidth = _wallWidth;
-                prim.layer = layer++;
-                YDrawBuilder::recomputeAABB(prim);
-                _primBuffer.push_back(prim);
+                _buffer->addSegment(layer++, ax, ay, bx, by, 0, _wallColor, _wallWidth, 0.0f);
             };
 
-            // North wall (only draw for row 0 to avoid doubles)
             if ((w & WALL_N) && row == 0) addWall(x0, y0, x1, y0);
-            // South wall
             if (w & WALL_S) addWall(x0, y1, x1, y1);
-            // West wall (only draw for col 0 to avoid doubles)
             if ((w & WALL_W) && col == 0) addWall(x0, y0, x0, y1);
-            // East wall
             if (w & WALL_E) addWall(x1, y0, x1, y1);
         }
     }
@@ -296,35 +287,13 @@ void YDrawMaze::buildPrims(float time) {
     // 2. Start marker (circle)
     {
         float markerR = std::min(_cellW, _cellH) * 0.3f;
-        SDFPrimitive prim = {};
-        prim.type = static_cast<uint32_t>(SDFType::Circle);
-        prim.params[0] = cellX(_startCol);
-        prim.params[1] = cellY(_startRow);
-        prim.params[2] = markerR;
-        prim.fillColor = _startColor;
-        prim.strokeColor = 0;
-        prim.strokeWidth = 0;
-        prim.layer = layer++;
-        YDrawBuilder::recomputeAABB(prim);
-        _primBuffer.push_back(prim);
+        _buffer->addCircle(layer++, cellX(_startCol), cellY(_startRow), markerR, _startColor, 0, 0.0f, 0.0f);
     }
 
     // 3. End marker (star)
     {
         float markerR = std::min(_cellW, _cellH) * 0.35f;
-        SDFPrimitive prim = {};
-        prim.type = static_cast<uint32_t>(SDFType::Star);
-        prim.params[0] = cellX(_endCol);
-        prim.params[1] = cellY(_endRow);
-        prim.params[2] = markerR;
-        prim.params[3] = 5.0f;   // 5 points
-        prim.params[4] = 2.2f;   // inner/outer ratio
-        prim.fillColor = _endColor;
-        prim.strokeColor = 0;
-        prim.strokeWidth = 0;
-        prim.layer = layer++;
-        YDrawBuilder::recomputeAABB(prim);
-        _primBuffer.push_back(prim);
+        _buffer->addStar(layer++, cellX(_endCol), cellY(_endRow), markerR, 5.0f, 2.2f, _endColor, 0, 0.0f, 0.0f);
     }
 
     // 4. Trail — draw visited portion of solution path
@@ -334,24 +303,12 @@ void YDrawMaze::buildPrims(float time) {
         uint32_t cellsTraversed = static_cast<uint32_t>(totalCells);
         cellsTraversed = std::min(cellsTraversed, static_cast<uint32_t>(_solutionPath.size() - 1));
 
-        // Draw trail segments
-        uint32_t trailColor = (_actorColor & 0x00FFFFFFu) | 0x60000000u; // semi-transparent
+        uint32_t trailColor = (_actorColor & 0x00FFFFFFu) | 0x60000000u;
+        float trailWidth = std::min(_cellW, _cellH) * 0.15f;
         for (uint32_t i = 0; i < cellsTraversed && i + 1 < _solutionPath.size(); i++) {
             auto [c0, r0] = _solutionPath[i];
             auto [c1, r1] = _solutionPath[i + 1];
-
-            SDFPrimitive prim = {};
-            prim.type = static_cast<uint32_t>(SDFType::Segment);
-            prim.params[0] = cellX(c0);
-            prim.params[1] = cellY(r0);
-            prim.params[2] = cellX(c1);
-            prim.params[3] = cellY(r1);
-            prim.fillColor = 0;
-            prim.strokeColor = trailColor;
-            prim.strokeWidth = std::min(_cellW, _cellH) * 0.15f;
-            prim.layer = layer++;
-            YDrawBuilder::recomputeAABB(prim);
-            _primBuffer.push_back(prim);
+            _buffer->addSegment(layer++, cellX(c0), cellY(r0), cellX(c1), cellY(r1), 0, trailColor, trailWidth, 0.0f);
         }
     }
 
@@ -364,12 +321,10 @@ void YDrawMaze::buildPrims(float time) {
 
         float ax, ay;
         if (idx >= _solutionPath.size() - 1) {
-            // Arrived at end
             auto [c, r] = _solutionPath.back();
             ax = cellX(c);
             ay = cellY(r);
         } else {
-            // Interpolate between cells
             auto [c0, r0] = _solutionPath[idx];
             auto [c1, r1] = _solutionPath[idx + 1];
             ax = cellX(c0) + (cellX(c1) - cellX(c0)) * frac;
@@ -377,19 +332,7 @@ void YDrawMaze::buildPrims(float time) {
         }
 
         float actorR = std::min(_cellW, _cellH) * 0.28f;
-
-        // Actor body (circle)
-        SDFPrimitive prim = {};
-        prim.type = static_cast<uint32_t>(SDFType::Circle);
-        prim.params[0] = ax;
-        prim.params[1] = ay;
-        prim.params[2] = actorR;
-        prim.fillColor = _actorColor;
-        prim.strokeColor = 0;
-        prim.strokeWidth = 0;
-        prim.layer = layer++;
-        YDrawBuilder::recomputeAABB(prim);
-        _primBuffer.push_back(prim);
+        _buffer->addCircle(layer++, ax, ay, actorR, _actorColor, 0, 0.0f, 0.0f);
     }
 }
 
@@ -398,13 +341,8 @@ void YDrawMaze::buildPrims(float time) {
 //=============================================================================
 
 bool YDrawMaze::needsBufferRealloc() {
-    if (!_primStorage.isValid()) return true;
-    if (_primBuffer.size() > _primCapacity) return true;
     if (!_builder) return false;
-    uint32_t gridBytes = static_cast<uint32_t>(_builder->gridStaging().size()) * sizeof(uint32_t);
-    if (gridBytes > 0 && (!_derivedStorage.isValid() || gridBytes > _derivedStorage.size))
-        return true;
-    return false;
+    return _builder->needsBufferRealloc();
 }
 
 void YDrawMaze::renderToStaging(float time) {
@@ -425,21 +363,16 @@ void YDrawMaze::renderToStaging(float time) {
     if (_mazeReady && !_solutionPath.empty()) {
         float elapsed = time - _solveStartTime;
         float totalTime = static_cast<float>(_solutionPath.size() - 1) / _actorSpeed;
-        if (elapsed > totalTime + 1.0f) {  // 1 second pause at the end
+        if (elapsed > totalTime + 1.0f) {
             generateMaze();
             solveMaze();
             _solveStartTime = time;
         }
     }
 
-    // Build all primitives
-    buildPrims(time);
-
-    // Feed to builder staging and compute grid
+    // Build all primitives directly into buffer
     _builder->clear();
-    for (const auto& prim : _primBuffer) {
-        _builder->addPrimitive(prim);
-    }
+    buildPrims(time);
     _builder->calculate();
 
     _dirty = true;
@@ -447,114 +380,27 @@ void YDrawMaze::renderToStaging(float time) {
 
 void YDrawMaze::declareBufferNeeds() {
     if (!_builder) return;
-
-    _derivedStorage = StorageHandle::invalid();
-    _gridBuf = nullptr;
-    _gridBufSize = 0;
-    _primStorage = StorageHandle::invalid();
-    _primitives = nullptr;
-    _primCount = 0;
-    _primCapacity = 0;
-
-    const auto& primStaging = _builder->primStaging();
-    if (primStaging.empty()) {
-        _builder->clearGridStaging();
-        return;
-    }
-
-    uint32_t primSize = static_cast<uint32_t>(primStaging.size()) * sizeof(SDFPrimitive);
-    _cardMgr->bufferManager()->reserve(primSize);
-
-    uint32_t gridBytes = static_cast<uint32_t>(_builder->gridStaging().size()) * sizeof(uint32_t);
-    if (gridBytes > 0) {
-        _cardMgr->bufferManager()->reserve(gridBytes * 2);
+    if (auto res = _builder->declareBufferNeeds(); !res) {
+        yerror("YDrawMaze::declareBufferNeeds: {}", error_msg(res));
     }
 }
 
 Result<void> YDrawMaze::allocateBuffers() {
     if (!_builder) return Ok();
-
-    const auto& primStaging = _builder->primStaging();
-    const auto& gridStaging = _builder->gridStaging();
-
-    if (!primStaging.empty()) {
-        uint32_t count = static_cast<uint32_t>(primStaging.size());
-        uint32_t allocBytes = count * sizeof(SDFPrimitive);
-        auto primResult = _cardMgr->bufferManager()->allocateBuffer(
-            metadataSlotIndex(), "prims", allocBytes);
-        if (!primResult) {
-            return Err<void>("YDrawMaze::allocateBuffers: prim alloc failed");
-        }
-        _primStorage = *primResult;
-        _primitives = reinterpret_cast<SDFPrimitive*>(_primStorage.data);
-        _primCapacity = count;
-        _primCount = count;
-        std::memcpy(_primitives, primStaging.data(), count * sizeof(SDFPrimitive));
-        _cardMgr->bufferManager()->markBufferDirty(_primStorage);
-    }
-
-    uint32_t gridBytes = static_cast<uint32_t>(gridStaging.size()) * sizeof(uint32_t);
-    if (gridBytes > 0) {
-        uint32_t allocSize = gridBytes * 2;
-        auto storageResult = _cardMgr->bufferManager()->allocateBuffer(
-            metadataSlotIndex(), "derived", allocSize);
-        if (!storageResult) {
-            return Err<void>("YDrawMaze::allocateBuffers: derived alloc failed");
-        }
-        _derivedStorage = *storageResult;
-
-        uint8_t* base = _derivedStorage.data;
-        std::memset(base, 0, _derivedStorage.size);
-        _gridBuf = reinterpret_cast<uint32_t*>(base);
-        _gridBufSize = static_cast<uint32_t>(gridStaging.size());
-        _gridOffset = _derivedStorage.offset / sizeof(float);
-        std::memcpy(base, gridStaging.data(), gridBytes);
-        _cardMgr->bufferManager()->markBufferDirty(_derivedStorage);
-    }
-
-    _primitiveOffset = _primStorage.isValid() ? _primStorage.offset / sizeof(float) : 0;
-    _gridWidth = _builder->gridWidth();
-    _gridHeight = _builder->gridHeight();
-    _metadataDirty = true;
-    _dirty = false;
-
-    return Ok();
+    return _builder->allocateBuffers();
 }
 
 Result<void> YDrawMaze::finalize() {
     if (!_builder) return Ok();
 
     if (_dirty) {
-        if (_primitives && !_primBuffer.empty()) {
-            uint32_t count = std::min(static_cast<uint32_t>(_primBuffer.size()), _primCapacity);
-            std::memcpy(_primitives, _primBuffer.data(), count * sizeof(SDFPrimitive));
-            _primCount = count;
-            _cardMgr->bufferManager()->markBufferDirty(_primStorage);
-        }
-
-        if (_derivedStorage.isValid()) {
-            const auto& gridData = _builder->gridStaging();
-            uint32_t gridBytes = static_cast<uint32_t>(gridData.size()) * sizeof(uint32_t);
-            if (gridBytes > 0 && gridBytes <= _derivedStorage.size) {
-                uint8_t* base = _derivedStorage.data;
-                std::memset(base, 0, _derivedStorage.size);
-                std::memcpy(base, gridData.data(), gridBytes);
-                _gridBuf = reinterpret_cast<uint32_t*>(base);
-                _gridBufSize = static_cast<uint32_t>(gridData.size());
-                _gridWidth = _builder->gridWidth();
-                _gridHeight = _builder->gridHeight();
-                _gridOffset = _derivedStorage.offset / sizeof(float);
-                _cardMgr->bufferManager()->markBufferDirty(_derivedStorage);
-            }
-        }
-
-        _primitiveOffset = _primStorage.isValid() ? _primStorage.offset / sizeof(float) : 0;
+        if (auto res = _builder->writeBuffers(); !res) return res;
         _metadataDirty = true;
         _dirty = false;
     }
 
     if (_metadataDirty) {
-        if (auto res = uploadMetadata(); !res) return res;
+        if (auto res = _builder->writeMetadata(_widthCells, _heightCells); !res) return res;
         _metadataDirty = false;
     }
 
@@ -562,13 +408,7 @@ Result<void> YDrawMaze::finalize() {
 }
 
 Result<void> YDrawMaze::dispose() {
-    _derivedStorage = StorageHandle::invalid();
-    _gridBuf = nullptr;
-    _gridBufSize = 0;
-    _primStorage = StorageHandle::invalid();
-    _primitives = nullptr;
-    _primCount = 0;
-    _primCapacity = 0;
+    if (_builder) _builder->releaseBuffers();
     if (_metaHandle.isValid() && _cardMgr) {
         if (auto res = _cardMgr->deallocateMetadata(_metaHandle); !res) {
             yerror("YDrawMaze::dispose: deallocateMetadata failed: {}", error_msg(res));
@@ -579,52 +419,7 @@ Result<void> YDrawMaze::dispose() {
 }
 
 void YDrawMaze::suspend() {
-    _derivedStorage = StorageHandle::invalid();
-    _gridBuf = nullptr;
-    _gridBufSize = 0;
-    _primStorage = StorageHandle::invalid();
-    _primitives = nullptr;
-    _primCount = 0;
-    _primCapacity = 0;
-}
-
-//=============================================================================
-// GPU metadata upload
-//=============================================================================
-
-Result<void> YDrawMaze::uploadMetadata() {
-    if (!_metaHandle.isValid()) {
-        return Err<void>("YDrawMaze::uploadMetadata: invalid handle");
-    }
-
-    float cellSize = _builder->cellSize();
-
-    YDrawMetadata meta = {};
-    meta.primitiveOffset = _primitiveOffset;
-    meta.primitiveCount = _primCount;
-    meta.gridOffset = _gridOffset;
-    meta.gridWidth = _gridWidth;
-    meta.gridHeight = _gridHeight;
-    std::memcpy(&meta.cellSize, &cellSize, sizeof(float));
-    meta.glyphOffset = 0;
-    meta.glyphCount = 0;
-    float sceneMinX = _builder->sceneMinX();
-    float sceneMinY = _builder->sceneMinY();
-    float sceneMaxX = _builder->sceneMaxX();
-    float sceneMaxY = _builder->sceneMaxY();
-    std::memcpy(&meta.sceneMinX, &sceneMinX, sizeof(float));
-    std::memcpy(&meta.sceneMinY, &sceneMinY, sizeof(float));
-    std::memcpy(&meta.sceneMaxX, &sceneMaxX, sizeof(float));
-    std::memcpy(&meta.sceneMaxY, &sceneMaxY, sizeof(float));
-    meta.widthCells = _widthCells & 0xFFFF;
-    meta.heightCells = _heightCells & 0xFFFF;
-    meta.flags = (_builder->flags() & 0xFFFF) | (0x3C00u << 16);
-    meta.bgColor = _builder->bgColor();
-
-    if (auto res = _cardMgr->writeMetadata(_metaHandle, &meta, sizeof(meta)); !res) {
-        return Err<void>("YDrawMaze::uploadMetadata: write failed");
-    }
-    return Ok();
+    if (_builder) _builder->releaseBuffers();
 }
 
 //=============================================================================

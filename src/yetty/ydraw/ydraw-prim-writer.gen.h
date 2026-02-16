@@ -6,7 +6,7 @@
 #include <cstring>
 #include <vector>
 
-// Forward declaration — include hdraw-types.gen.h for full enum
+// Forward declaration — include ydraw-types.gen.h for full enum
 namespace yetty::card { enum class SDFType : uint32_t; struct SDFPrimitive; }
 
 namespace yetty::sdf {
@@ -784,6 +784,118 @@ inline uint32_t writeBox3D(float* buf, uint32_t layer, float px, float py, float
     return 12;
 }
 
+/// Write Torus3D (11 words). Returns word count.
+inline uint32_t writeTorus3D(float* buf, uint32_t layer, float px, float py, float pz, float majorR, float minorR, uint32_t fillColor, uint32_t strokeColor, float strokeWidth, float round_) {
+    detail::write_u32(buf, 0, 103u);
+    detail::write_u32(buf, 1, layer);
+    buf[2] = px;
+    buf[3] = py;
+    buf[4] = pz;
+    buf[5] = majorR;
+    buf[6] = minorR;
+    detail::write_u32(buf, 7, fillColor);
+    detail::write_u32(buf, 8, strokeColor);
+    buf[9] = strokeWidth;
+    buf[10] = round_;
+    return 11;
+}
+
+/// Write Cylinder3D (11 words). Returns word count.
+inline uint32_t writeCylinder3D(float* buf, uint32_t layer, float px, float py, float pz, float r, float h, uint32_t fillColor, uint32_t strokeColor, float strokeWidth, float round_) {
+    detail::write_u32(buf, 0, 105u);
+    detail::write_u32(buf, 1, layer);
+    buf[2] = px;
+    buf[3] = py;
+    buf[4] = pz;
+    buf[5] = r;
+    buf[6] = h;
+    detail::write_u32(buf, 7, fillColor);
+    detail::write_u32(buf, 8, strokeColor);
+    buf[9] = strokeWidth;
+    buf[10] = round_;
+    return 11;
+}
+
+/// Write VerticalCapsule3D (11 words). Returns word count.
+inline uint32_t writeVerticalCapsule3D(float* buf, uint32_t layer, float px, float py, float pz, float h, float r, uint32_t fillColor, uint32_t strokeColor, float strokeWidth, float round_) {
+    detail::write_u32(buf, 0, 108u);
+    detail::write_u32(buf, 1, layer);
+    buf[2] = px;
+    buf[3] = py;
+    buf[4] = pz;
+    buf[5] = h;
+    buf[6] = r;
+    detail::write_u32(buf, 7, fillColor);
+    detail::write_u32(buf, 8, strokeColor);
+    buf[9] = strokeWidth;
+    buf[10] = round_;
+    return 11;
+}
+
+/// Write CappedCone3D (12 words). Returns word count.
+inline uint32_t writeCappedCone3D(float* buf, uint32_t layer, float px, float py, float pz, float h, float r1, float r2, uint32_t fillColor, uint32_t strokeColor, float strokeWidth, float round_) {
+    detail::write_u32(buf, 0, 110u);
+    detail::write_u32(buf, 1, layer);
+    buf[2] = px;
+    buf[3] = py;
+    buf[4] = pz;
+    buf[5] = h;
+    buf[6] = r1;
+    buf[7] = r2;
+    detail::write_u32(buf, 8, fillColor);
+    detail::write_u32(buf, 9, strokeColor);
+    buf[10] = strokeWidth;
+    buf[11] = round_;
+    return 12;
+}
+
+/// Write Octahedron3D (10 words). Returns word count.
+inline uint32_t writeOctahedron3D(float* buf, uint32_t layer, float px, float py, float pz, float s, uint32_t fillColor, uint32_t strokeColor, float strokeWidth, float round_) {
+    detail::write_u32(buf, 0, 115u);
+    detail::write_u32(buf, 1, layer);
+    buf[2] = px;
+    buf[3] = py;
+    buf[4] = pz;
+    buf[5] = s;
+    detail::write_u32(buf, 6, fillColor);
+    detail::write_u32(buf, 7, strokeColor);
+    buf[8] = strokeWidth;
+    buf[9] = round_;
+    return 10;
+}
+
+/// Write Pyramid3D (10 words). Returns word count.
+inline uint32_t writePyramid3D(float* buf, uint32_t layer, float px, float py, float pz, float h, uint32_t fillColor, uint32_t strokeColor, float strokeWidth, float round_) {
+    detail::write_u32(buf, 0, 116u);
+    detail::write_u32(buf, 1, layer);
+    buf[2] = px;
+    buf[3] = py;
+    buf[4] = pz;
+    buf[5] = h;
+    detail::write_u32(buf, 6, fillColor);
+    detail::write_u32(buf, 7, strokeColor);
+    buf[8] = strokeWidth;
+    buf[9] = round_;
+    return 10;
+}
+
+/// Write Ellipsoid3D (12 words). Returns word count.
+inline uint32_t writeEllipsoid3D(float* buf, uint32_t layer, float px, float py, float pz, float rx, float ry, float rz, uint32_t fillColor, uint32_t strokeColor, float strokeWidth, float round_) {
+    detail::write_u32(buf, 0, 117u);
+    detail::write_u32(buf, 1, layer);
+    buf[2] = px;
+    buf[3] = py;
+    buf[4] = pz;
+    buf[5] = rx;
+    buf[6] = ry;
+    buf[7] = rz;
+    detail::write_u32(buf, 8, fillColor);
+    detail::write_u32(buf, 9, strokeColor);
+    buf[10] = strokeWidth;
+    buf[11] = round_;
+    return 12;
+}
+
 /// Write Plot (12 words). Returns word count.
 inline uint32_t writePlot(float* buf, uint32_t layer, float x, float y, float w, float h, uint32_t dataCount, float minVal, float maxVal, uint32_t flags, uint32_t lineColor, uint32_t bgColor) {
     detail::write_u32(buf, 0, 128u);
@@ -868,9 +980,42 @@ inline uint32_t wordCountForType(uint32_t type) {
     case 65u: return 14; // RotatedGlyph
     case 100u: return 10; // Sphere3D
     case 101u: return 12; // Box3D
+    case 103u: return 11; // Torus3D
+    case 105u: return 11; // Cylinder3D
+    case 108u: return 11; // VerticalCapsule3D
+    case 110u: return 12; // CappedCone3D
+    case 115u: return 10; // Octahedron3D
+    case 116u: return 10; // Pyramid3D
+    case 117u: return 12; // Ellipsoid3D
     case 128u: return 12; // Plot
     case 129u: return 10; // Image
     default: return 0;
+    }
+}
+
+/// Translate grid entries from primitive indices to word offsets.
+/// Grid layout: [off0..offN-1][packed_cells...] where cell = [count][e0][e1]...
+/// Non-glyph entries (prim indices) are replaced with word offsets.
+inline void translateGridEntries(
+        uint32_t* grid, uint32_t gridSize,
+        uint32_t gridW, uint32_t gridH,
+        const std::vector<uint32_t>& wordOffsets) {
+    if (wordOffsets.empty() || gridSize == 0) return;
+    uint32_t numCells = gridW * gridH;
+    if (numCells > gridSize) return;
+    for (uint32_t ci = 0; ci < numCells; ci++) {
+        uint32_t packedOff = grid[ci];
+        if (packedOff >= gridSize) continue;
+        uint32_t cnt = grid[packedOff];
+        for (uint32_t j = 0; j < cnt; j++) {
+            uint32_t idx = packedOff + 1 + j;
+            if (idx >= gridSize) break;
+            uint32_t rawVal = grid[idx];
+            if ((rawVal & 0x80000000u) != 0) continue;
+            if (rawVal < static_cast<uint32_t>(wordOffsets.size())) {
+                grid[idx] = wordOffsets[rawVal];
+            }
+        }
     }
 }
 
@@ -1533,6 +1678,104 @@ inline uint32_t readPrimitive(const float* buf, card::SDFPrimitive& prim) {
         return 10;
     }
     case card::SDFType::Box3D: {
+        prim.type = detail::read_u32(buf, 0);
+        prim.layer = detail::read_u32(buf, 1);
+        prim.params[0] = buf[2];
+        prim.params[1] = buf[3];
+        prim.params[2] = buf[4];
+        prim.params[3] = buf[5];
+        prim.params[4] = buf[6];
+        prim.params[5] = buf[7];
+        prim.fillColor = detail::read_u32(buf, 8);
+        prim.strokeColor = detail::read_u32(buf, 9);
+        prim.strokeWidth = buf[10];
+        prim.round = buf[11];
+        return 12;
+    }
+    case card::SDFType::Torus3D: {
+        prim.type = detail::read_u32(buf, 0);
+        prim.layer = detail::read_u32(buf, 1);
+        prim.params[0] = buf[2];
+        prim.params[1] = buf[3];
+        prim.params[2] = buf[4];
+        prim.params[3] = buf[5];
+        prim.params[4] = buf[6];
+        prim.fillColor = detail::read_u32(buf, 7);
+        prim.strokeColor = detail::read_u32(buf, 8);
+        prim.strokeWidth = buf[9];
+        prim.round = buf[10];
+        return 11;
+    }
+    case card::SDFType::Cylinder3D: {
+        prim.type = detail::read_u32(buf, 0);
+        prim.layer = detail::read_u32(buf, 1);
+        prim.params[0] = buf[2];
+        prim.params[1] = buf[3];
+        prim.params[2] = buf[4];
+        prim.params[3] = buf[5];
+        prim.params[4] = buf[6];
+        prim.fillColor = detail::read_u32(buf, 7);
+        prim.strokeColor = detail::read_u32(buf, 8);
+        prim.strokeWidth = buf[9];
+        prim.round = buf[10];
+        return 11;
+    }
+    case card::SDFType::VerticalCapsule3D: {
+        prim.type = detail::read_u32(buf, 0);
+        prim.layer = detail::read_u32(buf, 1);
+        prim.params[0] = buf[2];
+        prim.params[1] = buf[3];
+        prim.params[2] = buf[4];
+        prim.params[3] = buf[5];
+        prim.params[4] = buf[6];
+        prim.fillColor = detail::read_u32(buf, 7);
+        prim.strokeColor = detail::read_u32(buf, 8);
+        prim.strokeWidth = buf[9];
+        prim.round = buf[10];
+        return 11;
+    }
+    case card::SDFType::CappedCone3D: {
+        prim.type = detail::read_u32(buf, 0);
+        prim.layer = detail::read_u32(buf, 1);
+        prim.params[0] = buf[2];
+        prim.params[1] = buf[3];
+        prim.params[2] = buf[4];
+        prim.params[3] = buf[5];
+        prim.params[4] = buf[6];
+        prim.params[5] = buf[7];
+        prim.fillColor = detail::read_u32(buf, 8);
+        prim.strokeColor = detail::read_u32(buf, 9);
+        prim.strokeWidth = buf[10];
+        prim.round = buf[11];
+        return 12;
+    }
+    case card::SDFType::Octahedron3D: {
+        prim.type = detail::read_u32(buf, 0);
+        prim.layer = detail::read_u32(buf, 1);
+        prim.params[0] = buf[2];
+        prim.params[1] = buf[3];
+        prim.params[2] = buf[4];
+        prim.params[3] = buf[5];
+        prim.fillColor = detail::read_u32(buf, 6);
+        prim.strokeColor = detail::read_u32(buf, 7);
+        prim.strokeWidth = buf[8];
+        prim.round = buf[9];
+        return 10;
+    }
+    case card::SDFType::Pyramid3D: {
+        prim.type = detail::read_u32(buf, 0);
+        prim.layer = detail::read_u32(buf, 1);
+        prim.params[0] = buf[2];
+        prim.params[1] = buf[3];
+        prim.params[2] = buf[4];
+        prim.params[3] = buf[5];
+        prim.fillColor = detail::read_u32(buf, 6);
+        prim.strokeColor = detail::read_u32(buf, 7);
+        prim.strokeWidth = buf[8];
+        prim.round = buf[9];
+        return 10;
+    }
+    case card::SDFType::Ellipsoid3D: {
         prim.type = detail::read_u32(buf, 0);
         prim.layer = detail::read_u32(buf, 1);
         prim.params[0] = buf[2];
@@ -2249,6 +2492,104 @@ inline uint32_t writePrimitive(float* buf, const card::SDFPrimitive& prim) {
         buf[11] = prim.round;
         return 12;
     }
+    case card::SDFType::Torus3D: {
+        detail::write_u32(buf, 0, prim.type);
+        detail::write_u32(buf, 1, prim.layer);
+        buf[2] = prim.params[0];
+        buf[3] = prim.params[1];
+        buf[4] = prim.params[2];
+        buf[5] = prim.params[3];
+        buf[6] = prim.params[4];
+        detail::write_u32(buf, 7, prim.fillColor);
+        detail::write_u32(buf, 8, prim.strokeColor);
+        buf[9] = prim.strokeWidth;
+        buf[10] = prim.round;
+        return 11;
+    }
+    case card::SDFType::Cylinder3D: {
+        detail::write_u32(buf, 0, prim.type);
+        detail::write_u32(buf, 1, prim.layer);
+        buf[2] = prim.params[0];
+        buf[3] = prim.params[1];
+        buf[4] = prim.params[2];
+        buf[5] = prim.params[3];
+        buf[6] = prim.params[4];
+        detail::write_u32(buf, 7, prim.fillColor);
+        detail::write_u32(buf, 8, prim.strokeColor);
+        buf[9] = prim.strokeWidth;
+        buf[10] = prim.round;
+        return 11;
+    }
+    case card::SDFType::VerticalCapsule3D: {
+        detail::write_u32(buf, 0, prim.type);
+        detail::write_u32(buf, 1, prim.layer);
+        buf[2] = prim.params[0];
+        buf[3] = prim.params[1];
+        buf[4] = prim.params[2];
+        buf[5] = prim.params[3];
+        buf[6] = prim.params[4];
+        detail::write_u32(buf, 7, prim.fillColor);
+        detail::write_u32(buf, 8, prim.strokeColor);
+        buf[9] = prim.strokeWidth;
+        buf[10] = prim.round;
+        return 11;
+    }
+    case card::SDFType::CappedCone3D: {
+        detail::write_u32(buf, 0, prim.type);
+        detail::write_u32(buf, 1, prim.layer);
+        buf[2] = prim.params[0];
+        buf[3] = prim.params[1];
+        buf[4] = prim.params[2];
+        buf[5] = prim.params[3];
+        buf[6] = prim.params[4];
+        buf[7] = prim.params[5];
+        detail::write_u32(buf, 8, prim.fillColor);
+        detail::write_u32(buf, 9, prim.strokeColor);
+        buf[10] = prim.strokeWidth;
+        buf[11] = prim.round;
+        return 12;
+    }
+    case card::SDFType::Octahedron3D: {
+        detail::write_u32(buf, 0, prim.type);
+        detail::write_u32(buf, 1, prim.layer);
+        buf[2] = prim.params[0];
+        buf[3] = prim.params[1];
+        buf[4] = prim.params[2];
+        buf[5] = prim.params[3];
+        detail::write_u32(buf, 6, prim.fillColor);
+        detail::write_u32(buf, 7, prim.strokeColor);
+        buf[8] = prim.strokeWidth;
+        buf[9] = prim.round;
+        return 10;
+    }
+    case card::SDFType::Pyramid3D: {
+        detail::write_u32(buf, 0, prim.type);
+        detail::write_u32(buf, 1, prim.layer);
+        buf[2] = prim.params[0];
+        buf[3] = prim.params[1];
+        buf[4] = prim.params[2];
+        buf[5] = prim.params[3];
+        detail::write_u32(buf, 6, prim.fillColor);
+        detail::write_u32(buf, 7, prim.strokeColor);
+        buf[8] = prim.strokeWidth;
+        buf[9] = prim.round;
+        return 10;
+    }
+    case card::SDFType::Ellipsoid3D: {
+        detail::write_u32(buf, 0, prim.type);
+        detail::write_u32(buf, 1, prim.layer);
+        buf[2] = prim.params[0];
+        buf[3] = prim.params[1];
+        buf[4] = prim.params[2];
+        buf[5] = prim.params[3];
+        buf[6] = prim.params[4];
+        buf[7] = prim.params[5];
+        detail::write_u32(buf, 8, prim.fillColor);
+        detail::write_u32(buf, 9, prim.strokeColor);
+        buf[10] = prim.strokeWidth;
+        buf[11] = prim.round;
+        return 12;
+    }
     case card::SDFType::Plot: {
         detail::write_u32(buf, 0, prim.type);
         detail::write_u32(buf, 1, prim.layer);
@@ -2311,32 +2652,6 @@ inline void writeCompactToBuffer(
         uint32_t wc = writePrimitive(dataBase + dataOffset, prims[i]);
         if (wc == 0) wc = 1;
         dataOffset += wc;
-    }
-}
-
-/// Translate grid entries from primitive indices to word offsets.
-/// Grid layout: [off0..offN-1][packed_cells...] where cell = [count][e0][e1]...
-/// Non-glyph entries (prim indices) are replaced with word offsets.
-inline void translateGridEntries(
-        uint32_t* grid, uint32_t gridSize,
-        uint32_t gridW, uint32_t gridH,
-        const std::vector<uint32_t>& wordOffsets) {
-    if (wordOffsets.empty() || gridSize == 0) return;
-    uint32_t numCells = gridW * gridH;
-    if (numCells > gridSize) return;
-    for (uint32_t ci = 0; ci < numCells; ci++) {
-        uint32_t packedOff = grid[ci];
-        if (packedOff >= gridSize) continue;
-        uint32_t cnt = grid[packedOff];
-        for (uint32_t j = 0; j < cnt; j++) {
-            uint32_t idx = packedOff + 1 + j;
-            if (idx >= gridSize) break;
-            uint32_t rawVal = grid[idx];
-            if ((rawVal & 0x80000000u) != 0) continue;
-            if (rawVal < static_cast<uint32_t>(wordOffsets.size())) {
-                grid[idx] = wordOffsets[rawVal];
-            }
-        }
     }
 }
 

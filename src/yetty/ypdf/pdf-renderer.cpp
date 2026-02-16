@@ -1,5 +1,5 @@
-// Shared PDF → YDrawWriter rendering.
-// Used by both the internal ypdf card and the external pdf2ydraw tool.
+// Shared PDF → YDrawBuffer rendering.
+// Buffer-only: no builder dependency. Self-contained for remote use.
 
 // Windows: prevent min/max macros from conflicting with std::min/max
 #ifdef _WIN32
@@ -8,7 +8,8 @@
 
 #include "pdf-renderer.h"
 #include "pdf-content-parser.h"
-#include <yetty/ydraw-writer.h>
+#include "../ydraw/ydraw-buffer.h"
+#include "../font/util.h"
 
 extern "C" {
 #include <pdfio.h>
@@ -32,7 +33,8 @@ namespace {
 
 struct PdfFontInfo {
     std::string tag;
-    int writerId = -1;
+    int bufferFontId = -1;   // font ID in the buffer
+    int utilFontId = -1;     // font ID in the FontUtil (for measurement)
     bool isIdentityH = false;
     std::unordered_map<uint16_t, uint32_t> toUnicode;
 };
@@ -193,13 +195,14 @@ std::string remapCidText(const std::string& text,
 }
 
 //=============================================================================
-// Font extraction — find embedded TTF fonts in a page and register with writer
+// Font extraction — find embedded TTF fonts and register with buffer + FontUtil
 //=============================================================================
 
 void extractPageFonts(pdfio_obj_t* pageObj,
                       std::unordered_map<std::string, size_t>& fontTagToIndex,
                       std::vector<PdfFontInfo>& fonts,
-                      yetty::YDrawWriter* writer) {
+                      yetty::YDrawBuffer* buffer,
+                      yetty::font::FontUtil& fontUtil) {
     pdfio_dict_t* pageDict = pdfioObjGetDict(pageObj);
     if (!pageDict) return;
 
@@ -284,11 +287,14 @@ void extractPageFonts(pdfio_obj_t* pageObj,
 
         if (fontBytes.empty()) continue;
 
-        // Register font with writer
-        auto res = writer->addFontData(fontBytes.data(), fontBytes.size(), tag);
-        if (!res) {
-            ywarn("extractPageFonts: addFontData failed for '{}': {}",
-                  tag, res.error().message());
+        // Store font blob in buffer (for serialization/transfer)
+        int bufFontId = buffer->addFontBlob(fontBytes.data(), fontBytes.size(), tag);
+
+        // Load font in FontUtil (for text measurement)
+        auto utilRes = fontUtil.addFontData(fontBytes.data(), fontBytes.size(), tag);
+        if (!utilRes) {
+            ywarn("extractPageFonts: FontUtil::addFontData failed for '{}': {}",
+                  tag, utilRes.error().message());
             continue;
         }
 
@@ -298,7 +304,8 @@ void extractPageFonts(pdfio_obj_t* pageObj,
 
         PdfFontInfo info;
         info.tag = tag;
-        info.writerId = *res;
+        info.bufferFontId = bufFontId;
+        info.utilFontId = *utilRes;
         info.isIdentityH = isIdentityH;
 
         // Parse ToUnicode CMap if present
@@ -309,25 +316,29 @@ void extractPageFonts(pdfio_obj_t* pageObj,
 
         fonts.push_back(std::move(info));
 
-        yinfo("Extracted font '{}' ({} bytes) identityH={} → writerId {}",
-              tag, fontBytes.size(), isIdentityH, *res);
+        yinfo("Extracted font '{}' ({} bytes) identityH={} → bufFontId={} utilFontId={}",
+              tag, fontBytes.size(), isIdentityH, bufFontId, *utilRes);
     }
 }
 
 } // anonymous namespace
 
 //=============================================================================
-// renderPdfToWriter — the shared PDF → YDrawWriter conversion
+// renderPdfToBuffer — PDF → YDrawBuffer (self-contained, no builder)
 //=============================================================================
 
 namespace yetty::card {
 
-PdfRenderResult renderPdfToWriter(pdfio_file_t* pdf, yetty::YDrawWriter* writer) {
+PdfRenderResult renderPdfToBuffer(pdfio_file_t* pdf,
+                                   yetty::YDrawBuffer* buffer) {
     PdfRenderResult result;
 
     int pageCount = static_cast<int>(pdfioFileGetNumPages(pdf));
     result.pageCount = pageCount;
     if (pageCount == 0) return result;
+
+    // FontUtil for text measurement (uses thread-local FreeType singleton)
+    yetty::font::FontUtil fontUtil;
 
     std::vector<PdfFontInfo> fonts;
     std::unordered_map<std::string, size_t> fontTagToIndex;
@@ -351,9 +362,9 @@ PdfRenderResult renderPdfToWriter(pdfio_file_t* pdf, yetty::YDrawWriter* writer)
         maxWidth = std::max(maxWidth, pageW);
 
         // Extract embedded fonts from this page
-        extractPageFonts(pageObj, fontTagToIndex, fonts, writer);
+        extractPageFonts(pageObj, fontTagToIndex, fonts, buffer, fontUtil);
 
-        // Set up parser with callbacks targeting the writer
+        // Set up parser with callbacks
         PdfContentParser parser;
         parser.setPageHeight(pageH);
 
@@ -366,10 +377,13 @@ PdfRenderResult renderPdfToWriter(pdfio_file_t* pdf, yetty::YDrawWriter* writer)
                 float sy = yOffset + (pageH - posY);
 
                 // Resolve font
-                int fontId = -1;
+                int bufFontId = -1;
+                int utilFontId = -1;
                 auto it = fontTagToIndex.find(textState.fontName);
-                if (it != fontTagToIndex.end())
-                    fontId = fonts[it->second].writerId;
+                if (it != fontTagToIndex.end()) {
+                    bufFontId = fonts[it->second].bufferFontId;
+                    utilFontId = fonts[it->second].utilFontId;
+                }
 
                 // CID remapping for Identity-H fonts
                 std::string actualText = text;
@@ -381,23 +395,20 @@ PdfRenderResult renderPdfToWriter(pdfio_file_t* pdf, yetty::YDrawWriter* writer)
 
                 uint32_t color = 0xFF000000; // black
 
-                // Visual placement at effectiveSize
+                // Store text in buffer
                 if (std::abs(rotationRadians) > 0.001f) {
-                    // Negate rotation: PDF Y-up → screen Y-down flips angles
                     float screenRotation = -rotationRadians;
-                    writer->addRotatedText(sx, sy, actualText,
+                    buffer->addRotatedText(sx, sy, actualText,
                                            effectiveSize, color,
-                                           screenRotation, fontId);
+                                           screenRotation, bufFontId);
                 } else {
-                    writer->addText(sx, sy, actualText,
-                                    effectiveSize, color, fontId);
+                    buffer->addText(sx, sy, actualText,
+                                    effectiveSize, color, 0, bufFontId);
                 }
 
-                // Advance for text matrix tracking uses textState.fontSize
-                // (effectiveSize includes text matrix scaling, which the parser
-                // applies separately via _textMatrix.a/b)
-                float rawAdvance = writer->measureText(
-                    actualText, textState.fontSize, fontId);
+                // Measure advance using FontUtil
+                float rawAdvance = fontUtil.measureTextWidth(
+                    actualText, textState.fontSize, utilFontId);
 
                 // Apply PDF text state adjustments (charSpacing, wordSpacing,
                 // horizontalScaling) per PDF spec 9.3
@@ -436,16 +447,16 @@ PdfRenderResult renderPdfToWriter(pdfio_file_t* pdf, yetty::YDrawWriter* writer)
                 if (mode == PdfPaintMode::Fill ||
                     mode == PdfPaintMode::FillAndStroke) {
                     uint32_t fc = rgbToABGR(fr, fg, fb);
-                    writer->addBox(x + w * 0.5f, y + h * 0.5f,
-                                   w * 0.5f, h * 0.5f, fc, 0, 0);
+                    buffer->addBox(0, x + w * 0.5f, y + h * 0.5f,
+                                   w * 0.5f, h * 0.5f, fc, 0, 0, 0);
                 }
                 if (mode == PdfPaintMode::Stroke ||
                     mode == PdfPaintMode::FillAndStroke) {
                     uint32_t sc = rgbToABGR(sr, sg, sb);
-                    writer->addSegment(x,     y,     x + w, y,     sc, lineWidth);
-                    writer->addSegment(x + w, y,     x + w, y + h, sc, lineWidth);
-                    writer->addSegment(x + w, y + h, x,     y + h, sc, lineWidth);
-                    writer->addSegment(x,     y + h, x,     y,     sc, lineWidth);
+                    buffer->addSegment(0, x,     y,     x + w, y,     0, sc, lineWidth, 0);
+                    buffer->addSegment(0, x + w, y,     x + w, y + h, 0, sc, lineWidth, 0);
+                    buffer->addSegment(0, x + w, y + h, x,     y + h, 0, sc, lineWidth, 0);
+                    buffer->addSegment(0, x,     y + h, x,     y,     0, sc, lineWidth, 0);
                 }
             });
 
@@ -456,7 +467,7 @@ PdfRenderResult renderPdfToWriter(pdfio_file_t* pdf, yetty::YDrawWriter* writer)
                 float sy0 = yOffset + (pageH - y0);
                 float sy1 = yOffset + (pageH - y1);
                 uint32_t color = rgbToABGR(r, g, b);
-                writer->addSegment(x0, sy0, x1, sy1, color, lineWidth);
+                buffer->addSegment(0, x0, sy0, x1, sy1, 0, color, lineWidth, 0);
             });
 
         // Parse all content streams for this page
@@ -473,10 +484,10 @@ PdfRenderResult renderPdfToWriter(pdfio_file_t* pdf, yetty::YDrawWriter* writer)
     }
 
     result.totalHeight = yOffset;
-    writer->setSceneBounds(0, 0, maxWidth, yOffset);
-    writer->setBgColor(0xFFFFFFFF);
+    buffer->setSceneBounds(0, 0, maxWidth, yOffset);
+    buffer->setBgColor(0xFFFFFFFF);
 
-    yinfo("renderPdfToWriter: {} pages, {} fonts, totalHeight={:.1f}",
+    yinfo("renderPdfToBuffer: {} pages, {} fonts, totalHeight={:.1f}",
           pageCount, fonts.size(), yOffset);
 
     return result;

@@ -11,7 +11,7 @@
 
 namespace yetty {
 class YDrawBuilder;
-namespace card { struct SDFPrimitive; }
+class YDrawBuffer;
 }
 
 namespace yetty::card {
@@ -69,7 +69,20 @@ public:
     // Card lifecycle
     //=========================================================================
     bool needsBuffer() const override { return true; }
+
+    // Card accessors
+    uint32_t metadataOffset() const override { return _metaHandle.offset; }
     uint32_t metadataSlotIndex() const override { return _metaHandle.offset / 64; }
+    uint32_t shaderGlyph() const override { return _shaderGlyph; }
+    int32_t x() const override { return _x; }
+    int32_t y() const override { return _y; }
+    void setPosition(int32_t x, int32_t y) override { _x = x; _y = y; }
+    uint32_t widthCells() const override { return _widthCells; }
+    uint32_t heightCells() const override { return _heightCells; }
+    const std::string& name() const override { return _name; }
+    void setName(const std::string& n) override { _name = n; }
+    bool hasName() const override { return !_name.empty(); }
+    void setScreenOrigin(float sx, float sy) override { _screenOriginX = sx; _screenOriginY = sy; }
     bool needsBufferRealloc() override;
     void renderToStaging(float time) override;
     void declareBufferNeeds() override;
@@ -119,14 +132,11 @@ private:
     float cellX(uint32_t col) const;
     float cellY(uint32_t row) const;
 
-    // GPU upload
-    Result<void> uploadMetadata();
-
-    // Builder (CPU staging)
+    // Builder (owns GPU buffers)
+    FontManager::Ptr _fontManager;
+    GpuAllocator::Ptr _gpuAllocator;
+    std::shared_ptr<yetty::YDrawBuffer> _buffer;
     std::shared_ptr<YDrawBuilder> _builder;
-
-    // CPU primitive buffer
-    std::vector<SDFPrimitive> _primBuffer;
 
     // Maze state
     std::vector<uint8_t> _grid;     // walls per cell (_mazeCols * _mazeRows)
@@ -140,21 +150,6 @@ private:
     float _solveStartTime = 0.0f;
     bool _mazeReady = false;
 
-    // GPU state
-    StorageHandle _primStorage = StorageHandle::invalid();
-    SDFPrimitive* _primitives = nullptr;
-    uint32_t _primCount = 0;
-    uint32_t _primCapacity = 0;
-
-    StorageHandle _derivedStorage = StorageHandle::invalid();
-    uint32_t* _gridBuf = nullptr;
-    uint32_t _gridBufSize = 0;
-    uint32_t _gridWidth = 0;
-    uint32_t _gridHeight = 0;
-    uint32_t _primitiveOffset = 0;
-    uint32_t _gridOffset = 0;
-    uint32_t _glyphOffset = 0;
-
     // RNG
     std::mt19937 _rng;
     float _lastTime = -1.0f;
@@ -166,6 +161,16 @@ private:
 
     // Screen ID
     base::ObjectId _screenId = 0;
+
+    // Common card state (was in Card base class)
+    CardManager::Ptr _cardMgr;
+    GPUContext _gpu;
+    MetadataHandle _metaHandle = MetadataHandle::invalid();
+    uint32_t _shaderGlyph = 0;
+    int32_t _x = 0, _y = 0;
+    uint32_t _widthCells = 0, _heightCells = 0;
+    float _screenOriginX = 0.0f, _screenOriginY = 0.0f;
+    std::string _name;
 };
 
 } // namespace yetty::card

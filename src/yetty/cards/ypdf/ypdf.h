@@ -6,7 +6,6 @@
 #include <yetty/yetty-context.h>
 #include <yetty/font-manager.h>
 #include <yetty/ydraw-builder.h>
-#include <yetty/ydraw-writer.h>
 #include <string>
 #include <vector>
 #include <cstdint>
@@ -52,7 +51,20 @@ public:
     const char* typeName() const override { return "ypdf"; }
     bool needsBuffer() const override { return true; }
     bool needsTexture() const override { return _builder && _builder->hasCustomAtlas(); }
+
+    // Card accessors
+    uint32_t metadataOffset() const override { return _metaHandle.offset; }
     uint32_t metadataSlotIndex() const override { return _metaHandle.offset / 64; }
+    uint32_t shaderGlyph() const override { return _shaderGlyph; }
+    int32_t x() const override { return _x; }
+    int32_t y() const override { return _y; }
+    void setPosition(int32_t x, int32_t y) override { _x = x; _y = y; }
+    uint32_t widthCells() const override { return _widthCells; }
+    uint32_t heightCells() const override { return _heightCells; }
+    const std::string& name() const override { return _name; }
+    void setName(const std::string& n) override { _name = n; }
+    bool hasName() const override { return !_name.empty(); }
+    void setScreenOrigin(float sx, float sy) override { _screenOriginX = sx; _screenOriginY = sy; }
 
     void declareBufferNeeds() override;
     Result<void> allocateBuffers() override;
@@ -86,7 +98,7 @@ private:
     Result<void> loadPdf();
 
     //=========================================================================
-    // Page rendering (delegates to shared renderPdfToWriter)
+    // Page rendering (delegates to shared renderPdfToBuffer)
     //=========================================================================
     Result<void> renderAllPages();
 
@@ -108,9 +120,8 @@ private:
     // State
     //=========================================================================
 
-    // Writer wraps YDrawBuilder for shared PDF rendering
-    std::shared_ptr<yetty::YDrawWriterInternal> _writer;
     YDrawBuilder::Ptr _builder;
+    std::shared_ptr<YDrawBuffer> _buffer;
 
     // Args / payload
     std::string _argsStr;
@@ -129,6 +140,7 @@ private:
 
     // Font management
     FontManager::Ptr _fontManager;
+    GpuAllocator::Ptr _gpuAllocator;
 
     // Atlas texture handle for cardTextureManager
     TextureHandle _atlasTextureHandle = TextureHandle::invalid();
@@ -149,7 +161,6 @@ private:
     float _viewZoom = 1.0f;
     float _viewPanX = 0.0f;
     float _viewPanY = 0.0f;
-    float _fitPageHeight = 0.0f;  // if set, compute zoom/pan to fit one page
     bool _focused = false;
 
     // Text selection
@@ -163,6 +174,16 @@ private:
     // Dirty flags
     bool _dirty = true;
     bool _metadataDirty = true;
+
+    // Common card state (was in Card base class)
+    CardManager::Ptr _cardMgr;
+    GPUContext _gpu;
+    MetadataHandle _metaHandle = MetadataHandle::invalid();
+    uint32_t _shaderGlyph = 0;
+    int32_t _x = 0, _y = 0;
+    uint32_t _widthCells = 0, _heightCells = 0;
+    float _screenOriginX = 0.0f, _screenOriginY = 0.0f;
+    std::string _name;
 };
 
 } // namespace yetty::card

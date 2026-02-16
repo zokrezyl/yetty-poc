@@ -655,6 +655,55 @@ fn primColors(primOffset: u32) -> vec4<u32> {
                 bitcast<u32>(cardStorage[primOffset + 1u]),
                 0u);
         }
+        case SDF_TORUS_3D: {
+            return vec4<u32>(
+                bitcast<u32>(cardStorage[primOffset + 7u]),
+                bitcast<u32>(cardStorage[primOffset + 8u]),
+                bitcast<u32>(cardStorage[primOffset + 1u]),
+                0u);
+        }
+        case SDF_CYLINDER_3D: {
+            return vec4<u32>(
+                bitcast<u32>(cardStorage[primOffset + 7u]),
+                bitcast<u32>(cardStorage[primOffset + 8u]),
+                bitcast<u32>(cardStorage[primOffset + 1u]),
+                0u);
+        }
+        case SDF_VERTICAL_CAPSULE_3D: {
+            return vec4<u32>(
+                bitcast<u32>(cardStorage[primOffset + 7u]),
+                bitcast<u32>(cardStorage[primOffset + 8u]),
+                bitcast<u32>(cardStorage[primOffset + 1u]),
+                0u);
+        }
+        case SDF_CAPPED_CONE_3D: {
+            return vec4<u32>(
+                bitcast<u32>(cardStorage[primOffset + 8u]),
+                bitcast<u32>(cardStorage[primOffset + 9u]),
+                bitcast<u32>(cardStorage[primOffset + 1u]),
+                0u);
+        }
+        case SDF_OCTAHEDRON_3D: {
+            return vec4<u32>(
+                bitcast<u32>(cardStorage[primOffset + 6u]),
+                bitcast<u32>(cardStorage[primOffset + 7u]),
+                bitcast<u32>(cardStorage[primOffset + 1u]),
+                0u);
+        }
+        case SDF_PYRAMID_3D: {
+            return vec4<u32>(
+                bitcast<u32>(cardStorage[primOffset + 6u]),
+                bitcast<u32>(cardStorage[primOffset + 7u]),
+                bitcast<u32>(cardStorage[primOffset + 1u]),
+                0u);
+        }
+        case SDF_ELLIPSOID_3D: {
+            return vec4<u32>(
+                bitcast<u32>(cardStorage[primOffset + 8u]),
+                bitcast<u32>(cardStorage[primOffset + 9u]),
+                bitcast<u32>(cardStorage[primOffset + 1u]),
+                0u);
+        }
         default: { return vec4<u32>(0u); }
     }
 }
@@ -711,6 +760,13 @@ fn primStrokeWidth(primOffset: u32) -> f32 {
         case SDF_ROTATED_GLYPH: { return cardStorage[primOffset + 12u]; }
         case SDF_SPHERE_3D: { return cardStorage[primOffset + 8u]; }
         case SDF_BOX_3D: { return cardStorage[primOffset + 10u]; }
+        case SDF_TORUS_3D: { return cardStorage[primOffset + 9u]; }
+        case SDF_CYLINDER_3D: { return cardStorage[primOffset + 9u]; }
+        case SDF_VERTICAL_CAPSULE_3D: { return cardStorage[primOffset + 9u]; }
+        case SDF_CAPPED_CONE_3D: { return cardStorage[primOffset + 10u]; }
+        case SDF_OCTAHEDRON_3D: { return cardStorage[primOffset + 8u]; }
+        case SDF_PYRAMID_3D: { return cardStorage[primOffset + 8u]; }
+        case SDF_ELLIPSOID_3D: { return cardStorage[primOffset + 10u]; }
         default: { return 0.0; }
     }
 }

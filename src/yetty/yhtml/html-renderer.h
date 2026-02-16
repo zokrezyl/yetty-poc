@@ -5,7 +5,7 @@
 #include <string>
 
 namespace yetty {
-class YDrawWriter;
+class YDrawBuffer;
 }
 
 namespace yetty::card {
@@ -20,10 +20,10 @@ struct HtmlRenderResult {
     std::shared_ptr<litehtml::document> document;
 };
 
-// Render HTML content through a YDrawWriter.
+// Render HTML content into a YDrawBuffer.
 // Returns the container and document (kept alive for interactive use).
-HtmlRenderResult renderHtmlToWriter(
-    const std::string& html, YDrawWriter* writer,
+HtmlRenderResult renderHtmlToBuffer(
+    const std::string& html, std::shared_ptr<YDrawBuffer> buffer,
     float fontSize, float viewWidth,
     HttpFetcher* fetcher = nullptr);
 

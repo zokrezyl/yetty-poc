@@ -9,7 +9,7 @@ Run:  uv run src/yetty/ydraw/gen-ydraw-types.py
 
 Reads:    src/yetty/ydraw/ydraw-primitives.yaml
 Generates:
-  src/yetty/cards/hdraw/hdraw-types.gen.h   — C++ enum + field offsets
+  src/yetty/cards/hdraw/ydraw-types.gen.h   — C++ enum + field offsets
   src/yetty/shaders/lib/sdf-types.gen.wgsl  — WGSL constants + compact dispatch
   src/yetty/ydraw/ydraw-prim-writer.gen.h   — C++ per-type writer functions
 """
@@ -24,9 +24,10 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent.parent.parent  # src/yetty/ydraw -> project root
 
 YAML_PATH = SCRIPT_DIR / "ydraw-primitives.yaml"
-CPP_OUT = PROJECT_ROOT / "src" / "yetty" / "cards" / "hdraw" / "hdraw-types.gen.h"
+CPP_OUT = SCRIPT_DIR / "ydraw-types.gen.h"
 WGSL_OUT = PROJECT_ROOT / "src" / "yetty" / "shaders" / "lib" / "sdf-types.gen.wgsl"
 WRITER_OUT = SCRIPT_DIR / "ydraw-prim-writer.gen.h"
+BUFFER_OUT = SCRIPT_DIR / "ydraw-buffer.gen.inc"
 
 HEADER = "// Auto-generated from ydraw-primitives.yaml — DO NOT EDIT\n"
 
@@ -251,7 +252,7 @@ def generate_writer(primitives: list[dict], out: Path) -> None:
     L.append("#include <cstdint>")
     L.append("#include <cstring>")
     L.append("#include <vector>\n")
-    L.append("// Forward declaration — include hdraw-types.gen.h for full enum")
+    L.append("// Forward declaration — include ydraw-types.gen.h for full enum")
     L.append("namespace yetty::card { enum class SDFType : uint32_t; struct SDFPrimitive; }\n")
     L.append("namespace yetty::sdf {\n")
     L.append("namespace detail {")
@@ -312,6 +313,33 @@ def generate_writer(primitives: list[dict], out: Path) -> None:
             continue
         L.append(f"    case {prim['id']}u: return {prim['_word_count']}; // {prim['name']}")
     L.append("    default: return 0;")
+    L.append("    }")
+    L.append("}\n")
+
+    # --- translateGridEntries: does NOT use SDFPrimitive, always available ---
+    L.append("/// Translate grid entries from primitive indices to word offsets.")
+    L.append("/// Grid layout: [off0..offN-1][packed_cells...] where cell = [count][e0][e1]...")
+    L.append("/// Non-glyph entries (prim indices) are replaced with word offsets.")
+    L.append("inline void translateGridEntries(")
+    L.append("        uint32_t* grid, uint32_t gridSize,")
+    L.append("        uint32_t gridW, uint32_t gridH,")
+    L.append("        const std::vector<uint32_t>& wordOffsets) {")
+    L.append("    if (wordOffsets.empty() || gridSize == 0) return;")
+    L.append("    uint32_t numCells = gridW * gridH;")
+    L.append("    if (numCells > gridSize) return;")
+    L.append("    for (uint32_t ci = 0; ci < numCells; ci++) {")
+    L.append("        uint32_t packedOff = grid[ci];")
+    L.append("        if (packedOff >= gridSize) continue;")
+    L.append("        uint32_t cnt = grid[packedOff];")
+    L.append("        for (uint32_t j = 0; j < cnt; j++) {")
+    L.append("            uint32_t idx = packedOff + 1 + j;")
+    L.append("            if (idx >= gridSize) break;")
+    L.append("            uint32_t rawVal = grid[idx];")
+    L.append("            if ((rawVal & 0x80000000u) != 0) continue;")
+    L.append("            if (rawVal < static_cast<uint32_t>(wordOffsets.size())) {")
+    L.append("                grid[idx] = wordOffsets[rawVal];")
+    L.append("            }")
+    L.append("        }")
     L.append("    }")
     L.append("}\n")
 
@@ -438,36 +466,61 @@ def generate_writer(primitives: list[dict], out: Path) -> None:
     L.append("    }")
     L.append("}\n")
 
-    L.append("/// Translate grid entries from primitive indices to word offsets.")
-    L.append("/// Grid layout: [off0..offN-1][packed_cells...] where cell = [count][e0][e1]...")
-    L.append("/// Non-glyph entries (prim indices) are replaced with word offsets.")
-    L.append("inline void translateGridEntries(")
-    L.append("        uint32_t* grid, uint32_t gridSize,")
-    L.append("        uint32_t gridW, uint32_t gridH,")
-    L.append("        const std::vector<uint32_t>& wordOffsets) {")
-    L.append("    if (wordOffsets.empty() || gridSize == 0) return;")
-    L.append("    uint32_t numCells = gridW * gridH;")
-    L.append("    if (numCells > gridSize) return;")
-    L.append("    for (uint32_t ci = 0; ci < numCells; ci++) {")
-    L.append("        uint32_t packedOff = grid[ci];")
-    L.append("        if (packedOff >= gridSize) continue;")
-    L.append("        uint32_t cnt = grid[packedOff];")
-    L.append("        for (uint32_t j = 0; j < cnt; j++) {")
-    L.append("            uint32_t idx = packedOff + 1 + j;")
-    L.append("            if (idx >= gridSize) break;")
-    L.append("            uint32_t rawVal = grid[idx];")
-    L.append("            if ((rawVal & 0x80000000u) != 0) continue;")
-    L.append("            if (rawVal < static_cast<uint32_t>(wordOffsets.size())) {")
-    L.append("                grid[idx] = wordOffsets[rawVal];")
-    L.append("            }")
-    L.append("        }")
-    L.append("    }")
-    L.append("}\n")
-
     L.append("#endif // YETTY_CARD_SDF_PRIMITIVE_DEFINED\n")
 
     L.append("} // namespace yetty::sdf")
     L.append("")
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text("\n".join(L))
+
+
+# =============================================================================
+# YDrawBuffer method generation — add/update per type
+# =============================================================================
+
+def generate_buffer(primitives: list[dict], out: Path) -> None:
+    L = []
+    L.append(HEADER)
+    L.append("// Included inside YDrawBuffer class body.\n")
+
+    for prim in primitives:
+        fields = prim.get("fields", [])
+        if not fields:
+            continue
+
+        name = prim["name"]
+        wc = prim["_word_count"]
+        writer_fn = "sdf::write" + name
+
+        # Build parameter list (skip 'type' — implicit in writer)
+        params = []
+        param_names = []
+        for field in fields:
+            if field["name"] == "type":
+                continue
+            pname = field["name"] + "_" if field["name"] in ("round",) else field["name"]
+            ctype = "uint32_t" if field["type"] == "u32" else "float"
+            params.append(f"{ctype} {pname}")
+            param_names.append(pname)
+
+        param_str = ", ".join(params)
+        arg_str = ", ".join(param_names)
+
+        # --- add method: creates new prim, error if user id exists ---
+        L.append(f"Result<uint32_t> add{name}({param_str},")
+        L.append(f"        uint32_t id = AUTO_ID) {{")
+        L.append(f"    float data[{wc}];")
+        L.append(f"    {writer_fn}(data, {arg_str});")
+        L.append(f"    return addPrim(id, data, {wc});")
+        L.append("}\n")
+
+        # --- update method: replaces existing, error if not found ---
+        L.append(f"Result<void> update{name}(uint32_t id, {param_str}) {{")
+        L.append(f"    float data[{wc}];")
+        L.append(f"    {writer_fn}(data, {arg_str});")
+        L.append(f"    return updatePrim(id, data, {wc});")
+        L.append("}\n")
 
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text("\n".join(L))
@@ -487,6 +540,7 @@ def main() -> None:
     generate_cpp(primitives, CPP_OUT)
     generate_wgsl(primitives, WGSL_OUT)
     generate_writer(primitives, WRITER_OUT)
+    generate_buffer(primitives, BUFFER_OUT)
 
     # Summary
     cats = {}
@@ -498,6 +552,7 @@ def main() -> None:
     print(f"Generated {CPP_OUT.relative_to(PROJECT_ROOT)}")
     print(f"Generated {WGSL_OUT.relative_to(PROJECT_ROOT)}")
     print(f"Generated {WRITER_OUT.relative_to(PROJECT_ROOT)}")
+    print(f"Generated {BUFFER_OUT.relative_to(PROJECT_ROOT)}")
 
 
 if __name__ == "__main__":

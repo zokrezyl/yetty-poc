@@ -1,5 +1,7 @@
 #include <yetty/ydraw-builder.h>
-#include "../cards/hdraw/hdraw.h"  // For SDFPrimitive, SDFType
+#include <yetty/card-texture-manager.h>
+#include "ydraw-types.gen.h"
+#include "ydraw-buffer.h"
 #include <yetty/msdf-glyph-data.h>  // For GlyphMetadataGPU
 #include <ytrace/ytrace.hpp>
 #include <algorithm>
@@ -56,421 +58,313 @@ static TtfMetrics readTtfMetrics(const std::string& path, float fontSize) {
     return {asc * scale, std::abs(desc) * scale};
 }
 
-using card::SDFPrimitive;
 using card::SDFType;
 
 //=============================================================================
 // AABB utilities
 //=============================================================================
 
-static void computeAABB(SDFPrimitive& prim) {
-    float expand = prim.strokeWidth * 0.5f;
+// Compute AABB directly from variable-length buffer words.
+// Layout: word[0]=type, word[1]=layer, word[2..wc-5]=geometry params,
+//         word[wc-4]=fillColor, word[wc-3]=strokeColor, word[wc-2]=strokeWidth, word[wc-1]=round
+// p[i] aliases data[2+i] (geometry params).
+static void computeAABB(const float* data, uint32_t wc,
+                        float& aabbMinX, float& aabbMinY,
+                        float& aabbMaxX, float& aabbMaxY) {
+    uint32_t type = sdf::detail::read_u32(data, 0);
+    const float* p = data + 2;  // geometry params
+    float strokeWidth = data[wc - 2];
+    float round_ = data[wc - 1];
+    float expand = strokeWidth * 0.5f;
 
-    switch (static_cast<SDFType>(prim.type)) {
+    switch (static_cast<SDFType>(type)) {
         case SDFType::Circle: {
-            float r = prim.params[2] + expand;
-            prim.aabbMinX = prim.params[0] - r;
-            prim.aabbMinY = prim.params[1] - r;
-            prim.aabbMaxX = prim.params[0] + r;
-            prim.aabbMaxY = prim.params[1] + r;
+            float r = p[2] + expand;
+            aabbMinX = p[0] - r; aabbMinY = p[1] - r;
+            aabbMaxX = p[0] + r; aabbMaxY = p[1] + r;
             break;
         }
         case SDFType::Box: {
-            float hw = prim.params[2] + prim.round + expand;
-            float hh = prim.params[3] + prim.round + expand;
-            prim.aabbMinX = prim.params[0] - hw;
-            prim.aabbMinY = prim.params[1] - hh;
-            prim.aabbMaxX = prim.params[0] + hw;
-            prim.aabbMaxY = prim.params[1] + hh;
+            float hw = p[2] + round_ + expand;
+            float hh = p[3] + round_ + expand;
+            aabbMinX = p[0] - hw; aabbMinY = p[1] - hh;
+            aabbMaxX = p[0] + hw; aabbMaxY = p[1] + hh;
             break;
         }
         case SDFType::Segment: {
-            prim.aabbMinX = std::min(prim.params[0], prim.params[2]) - expand;
-            prim.aabbMinY = std::min(prim.params[1], prim.params[3]) - expand;
-            prim.aabbMaxX = std::max(prim.params[0], prim.params[2]) + expand;
-            prim.aabbMaxY = std::max(prim.params[1], prim.params[3]) + expand;
+            aabbMinX = std::min(p[0], p[2]) - expand;
+            aabbMinY = std::min(p[1], p[3]) - expand;
+            aabbMaxX = std::max(p[0], p[2]) + expand;
+            aabbMaxY = std::max(p[1], p[3]) + expand;
             break;
         }
         case SDFType::Triangle: {
-            prim.aabbMinX = std::min({prim.params[0], prim.params[2], prim.params[4]}) - expand;
-            prim.aabbMinY = std::min({prim.params[1], prim.params[3], prim.params[5]}) - expand;
-            prim.aabbMaxX = std::max({prim.params[0], prim.params[2], prim.params[4]}) + expand;
-            prim.aabbMaxY = std::max({prim.params[1], prim.params[3], prim.params[5]}) + expand;
+            aabbMinX = std::min({p[0], p[2], p[4]}) - expand;
+            aabbMinY = std::min({p[1], p[3], p[5]}) - expand;
+            aabbMaxX = std::max({p[0], p[2], p[4]}) + expand;
+            aabbMaxY = std::max({p[1], p[3], p[5]}) + expand;
             break;
         }
         case SDFType::Bezier2: {
-            prim.aabbMinX = std::min({prim.params[0], prim.params[2], prim.params[4]}) - expand;
-            prim.aabbMinY = std::min({prim.params[1], prim.params[3], prim.params[5]}) - expand;
-            prim.aabbMaxX = std::max({prim.params[0], prim.params[2], prim.params[4]}) + expand;
-            prim.aabbMaxY = std::max({prim.params[1], prim.params[3], prim.params[5]}) + expand;
+            aabbMinX = std::min({p[0], p[2], p[4]}) - expand;
+            aabbMinY = std::min({p[1], p[3], p[5]}) - expand;
+            aabbMaxX = std::max({p[0], p[2], p[4]}) + expand;
+            aabbMaxY = std::max({p[1], p[3], p[5]}) + expand;
             break;
         }
         case SDFType::Bezier3: {
-            prim.aabbMinX = std::min({prim.params[0], prim.params[2], prim.params[4], prim.params[6]}) - expand;
-            prim.aabbMinY = std::min({prim.params[1], prim.params[3], prim.params[5], prim.params[7]}) - expand;
-            prim.aabbMaxX = std::max({prim.params[0], prim.params[2], prim.params[4], prim.params[6]}) + expand;
-            prim.aabbMaxY = std::max({prim.params[1], prim.params[3], prim.params[5], prim.params[7]}) + expand;
+            aabbMinX = std::min({p[0], p[2], p[4], p[6]}) - expand;
+            aabbMinY = std::min({p[1], p[3], p[5], p[7]}) - expand;
+            aabbMaxX = std::max({p[0], p[2], p[4], p[6]}) + expand;
+            aabbMaxY = std::max({p[1], p[3], p[5], p[7]}) + expand;
             break;
         }
         case SDFType::Ellipse: {
-            prim.aabbMinX = prim.params[0] - prim.params[2] - expand;
-            prim.aabbMinY = prim.params[1] - prim.params[3] - expand;
-            prim.aabbMaxX = prim.params[0] + prim.params[2] + expand;
-            prim.aabbMaxY = prim.params[1] + prim.params[3] + expand;
+            aabbMinX = p[0] - p[2] - expand; aabbMinY = p[1] - p[3] - expand;
+            aabbMaxX = p[0] + p[2] + expand; aabbMaxY = p[1] + p[3] + expand;
             break;
         }
         case SDFType::Arc: {
-            float r = std::max(prim.params[4], prim.params[5]) + expand;
-            prim.aabbMinX = prim.params[0] - r;
-            prim.aabbMinY = prim.params[1] - r;
-            prim.aabbMaxX = prim.params[0] + r;
-            prim.aabbMaxY = prim.params[1] + r;
+            float r = std::max(p[4], p[5]) + expand;
+            aabbMinX = p[0] - r; aabbMinY = p[1] - r;
+            aabbMaxX = p[0] + r; aabbMaxY = p[1] + r;
             break;
         }
         case SDFType::RoundedBox: {
-            float maxR = std::max({prim.params[4], prim.params[5],
-                                   prim.params[6], prim.params[7]});
-            float hw = prim.params[2] + maxR + expand;
-            float hh = prim.params[3] + maxR + expand;
-            prim.aabbMinX = prim.params[0] - hw;
-            prim.aabbMinY = prim.params[1] - hh;
-            prim.aabbMaxX = prim.params[0] + hw;
-            prim.aabbMaxY = prim.params[1] + hh;
+            float maxR = std::max({p[4], p[5], p[6], p[7]});
+            float hw = p[2] + maxR + expand;
+            float hh = p[3] + maxR + expand;
+            aabbMinX = p[0] - hw; aabbMinY = p[1] - hh;
+            aabbMaxX = p[0] + hw; aabbMaxY = p[1] + hh;
             break;
         }
         case SDFType::Rhombus: {
-            float hw = prim.params[2] + expand;
-            float hh = prim.params[3] + expand;
-            prim.aabbMinX = prim.params[0] - hw;
-            prim.aabbMinY = prim.params[1] - hh;
-            prim.aabbMaxX = prim.params[0] + hw;
-            prim.aabbMaxY = prim.params[1] + hh;
+            float hw = p[2] + expand; float hh = p[3] + expand;
+            aabbMinX = p[0] - hw; aabbMinY = p[1] - hh;
+            aabbMaxX = p[0] + hw; aabbMaxY = p[1] + hh;
             break;
         }
         case SDFType::Pentagon:
         case SDFType::Hexagon: {
-            float r = prim.params[2] + expand;
-            prim.aabbMinX = prim.params[0] - r;
-            prim.aabbMinY = prim.params[1] - r;
-            prim.aabbMaxX = prim.params[0] + r;
-            prim.aabbMaxY = prim.params[1] + r;
+            float r = p[2] + expand;
+            aabbMinX = p[0] - r; aabbMinY = p[1] - r;
+            aabbMaxX = p[0] + r; aabbMaxY = p[1] + r;
             break;
         }
         case SDFType::Star: {
-            float r = prim.params[2] + expand;
-            prim.aabbMinX = prim.params[0] - r;
-            prim.aabbMinY = prim.params[1] - r;
-            prim.aabbMaxX = prim.params[0] + r;
-            prim.aabbMaxY = prim.params[1] + r;
+            float r = p[2] + expand;
+            aabbMinX = p[0] - r; aabbMinY = p[1] - r;
+            aabbMaxX = p[0] + r; aabbMaxY = p[1] + r;
             break;
         }
         case SDFType::Pie: {
-            float r = prim.params[4] + expand;
-            prim.aabbMinX = prim.params[0] - r;
-            prim.aabbMinY = prim.params[1] - r;
-            prim.aabbMaxX = prim.params[0] + r;
-            prim.aabbMaxY = prim.params[1] + r;
+            float r = p[4] + expand;
+            aabbMinX = p[0] - r; aabbMinY = p[1] - r;
+            aabbMaxX = p[0] + r; aabbMaxY = p[1] + r;
             break;
         }
         case SDFType::Ring: {
-            float r = prim.params[4] + prim.params[5] + expand;
-            prim.aabbMinX = prim.params[0] - r;
-            prim.aabbMinY = prim.params[1] - r;
-            prim.aabbMaxX = prim.params[0] + r;
-            prim.aabbMaxY = prim.params[1] + r;
+            float r = p[4] + p[5] + expand;
+            aabbMinX = p[0] - r; aabbMinY = p[1] - r;
+            aabbMaxX = p[0] + r; aabbMaxY = p[1] + r;
             break;
         }
         case SDFType::Heart: {
-            float s = prim.params[2] * 1.5f + expand;
-            prim.aabbMinX = prim.params[0] - s;
-            prim.aabbMinY = prim.params[1] - s;
-            prim.aabbMaxX = prim.params[0] + s;
-            prim.aabbMaxY = prim.params[1] + s;
+            float s = p[2] * 1.5f + expand;
+            aabbMinX = p[0] - s; aabbMinY = p[1] - s;
+            aabbMaxX = p[0] + s; aabbMaxY = p[1] + s;
             break;
         }
         case SDFType::Cross: {
-            float hw = std::max(prim.params[2], prim.params[3]) + expand;
-            float hh = hw;
-            prim.aabbMinX = prim.params[0] - hw;
-            prim.aabbMinY = prim.params[1] - hh;
-            prim.aabbMaxX = prim.params[0] + hw;
-            prim.aabbMaxY = prim.params[1] + hh;
+            float hw = std::max(p[2], p[3]) + expand;
+            aabbMinX = p[0] - hw; aabbMinY = p[1] - hw;
+            aabbMaxX = p[0] + hw; aabbMaxY = p[1] + hw;
             break;
         }
         case SDFType::RoundedX: {
-            float s = prim.params[2] + prim.params[3] + expand;
-            prim.aabbMinX = prim.params[0] - s;
-            prim.aabbMinY = prim.params[1] - s;
-            prim.aabbMaxX = prim.params[0] + s;
-            prim.aabbMaxY = prim.params[1] + s;
+            float s = p[2] + p[3] + expand;
+            aabbMinX = p[0] - s; aabbMinY = p[1] - s;
+            aabbMaxX = p[0] + s; aabbMaxY = p[1] + s;
             break;
         }
         case SDFType::Capsule: {
-            float r = prim.params[4] + expand;
-            prim.aabbMinX = std::min(prim.params[0], prim.params[2]) - r;
-            prim.aabbMinY = std::min(prim.params[1], prim.params[3]) - r;
-            prim.aabbMaxX = std::max(prim.params[0], prim.params[2]) + r;
-            prim.aabbMaxY = std::max(prim.params[1], prim.params[3]) + r;
+            float r = p[4] + expand;
+            aabbMinX = std::min(p[0], p[2]) - r; aabbMinY = std::min(p[1], p[3]) - r;
+            aabbMaxX = std::max(p[0], p[2]) + r; aabbMaxY = std::max(p[1], p[3]) + r;
             break;
         }
         case SDFType::Moon: {
-            float r = std::max(prim.params[3], prim.params[4]) + expand;
-            prim.aabbMinX = prim.params[0] - r;
-            prim.aabbMinY = prim.params[1] - r;
-            prim.aabbMaxX = prim.params[0] + r + prim.params[2];
-            prim.aabbMaxY = prim.params[1] + r;
+            float r = std::max(p[3], p[4]) + expand;
+            aabbMinX = p[0] - r; aabbMinY = p[1] - r;
+            aabbMaxX = p[0] + r + p[2]; aabbMaxY = p[1] + r;
             break;
         }
         case SDFType::Egg: {
-            float r = std::max(prim.params[2], prim.params[3]) + expand;
-            prim.aabbMinX = prim.params[0] - r;
-            prim.aabbMinY = prim.params[1] - r;
-            prim.aabbMaxX = prim.params[0] + r;
-            prim.aabbMaxY = prim.params[1] + r + prim.params[2];
+            float r = std::max(p[2], p[3]) + expand;
+            aabbMinX = p[0] - r; aabbMinY = p[1] - r;
+            aabbMaxX = p[0] + r; aabbMaxY = p[1] + r + p[2];
             break;
         }
         case SDFType::ChamferBox: {
-            float hw = prim.params[2] + prim.params[4] + expand;
-            float hh = prim.params[3] + prim.params[4] + expand;
-            prim.aabbMinX = prim.params[0] - hw;
-            prim.aabbMinY = prim.params[1] - hh;
-            prim.aabbMaxX = prim.params[0] + hw;
-            prim.aabbMaxY = prim.params[1] + hh;
+            float hw = p[2] + p[4] + expand; float hh = p[3] + p[4] + expand;
+            aabbMinX = p[0] - hw; aabbMinY = p[1] - hh;
+            aabbMaxX = p[0] + hw; aabbMaxY = p[1] + hh;
             break;
         }
         case SDFType::OrientedBox: {
-            float maxX = std::max(prim.params[0], prim.params[2]);
-            float minX = std::min(prim.params[0], prim.params[2]);
-            float maxY = std::max(prim.params[1], prim.params[3]);
-            float minY = std::min(prim.params[1], prim.params[3]);
-            float th = prim.params[4] * 0.5f + expand;
-            prim.aabbMinX = minX - th;
-            prim.aabbMinY = minY - th;
-            prim.aabbMaxX = maxX + th;
-            prim.aabbMaxY = maxY + th;
+            float th = p[4] * 0.5f + expand;
+            aabbMinX = std::min(p[0], p[2]) - th; aabbMinY = std::min(p[1], p[3]) - th;
+            aabbMaxX = std::max(p[0], p[2]) + th; aabbMaxY = std::max(p[1], p[3]) + th;
             break;
         }
         case SDFType::Trapezoid: {
-            float hw = std::max(prim.params[2], prim.params[3]) + expand;
-            float hh = prim.params[4] + expand;
-            prim.aabbMinX = prim.params[0] - hw;
-            prim.aabbMinY = prim.params[1] - hh;
-            prim.aabbMaxX = prim.params[0] + hw;
-            prim.aabbMaxY = prim.params[1] + hh;
+            float hw = std::max(p[2], p[3]) + expand; float hh = p[4] + expand;
+            aabbMinX = p[0] - hw; aabbMinY = p[1] - hh;
+            aabbMaxX = p[0] + hw; aabbMaxY = p[1] + hh;
             break;
         }
         case SDFType::Parallelogram: {
-            float hw = prim.params[2] + std::fabs(prim.params[4]) + expand;
-            float hh = prim.params[3] + expand;
-            prim.aabbMinX = prim.params[0] - hw;
-            prim.aabbMinY = prim.params[1] - hh;
-            prim.aabbMaxX = prim.params[0] + hw;
-            prim.aabbMaxY = prim.params[1] + hh;
+            float hw = p[2] + std::fabs(p[4]) + expand; float hh = p[3] + expand;
+            aabbMinX = p[0] - hw; aabbMinY = p[1] - hh;
+            aabbMaxX = p[0] + hw; aabbMaxY = p[1] + hh;
             break;
         }
         case SDFType::EquilateralTriangle:
         case SDFType::Octogon:
         case SDFType::Hexagram:
         case SDFType::Pentagram: {
-            float r = prim.params[2] + expand;
-            prim.aabbMinX = prim.params[0] - r;
-            prim.aabbMinY = prim.params[1] - r;
-            prim.aabbMaxX = prim.params[0] + r;
-            prim.aabbMaxY = prim.params[1] + r;
+            float r = p[2] + expand;
+            aabbMinX = p[0] - r; aabbMinY = p[1] - r;
+            aabbMaxX = p[0] + r; aabbMaxY = p[1] + r;
             break;
         }
         case SDFType::IsoscelesTriangle: {
-            float hw = prim.params[2] + expand;
-            float hh = prim.params[3] + expand;
-            prim.aabbMinX = prim.params[0] - hw;
-            prim.aabbMinY = prim.params[1] - expand;
-            prim.aabbMaxX = prim.params[0] + hw;
-            prim.aabbMaxY = prim.params[1] + hh;
+            float hw = p[2] + expand; float hh = p[3] + expand;
+            aabbMinX = p[0] - hw; aabbMinY = p[1] - expand;
+            aabbMaxX = p[0] + hw; aabbMaxY = p[1] + hh;
             break;
         }
         case SDFType::UnevenCapsule: {
-            float rMax = std::max(prim.params[2], prim.params[3]) + expand;
-            prim.aabbMinX = prim.params[0] - rMax;
-            prim.aabbMinY = prim.params[1] - prim.params[2] - expand;
-            prim.aabbMaxX = prim.params[0] + rMax;
-            prim.aabbMaxY = prim.params[1] + prim.params[4] + prim.params[3] + expand;
+            float rMax = std::max(p[2], p[3]) + expand;
+            aabbMinX = p[0] - rMax; aabbMinY = p[1] - p[2] - expand;
+            aabbMaxX = p[0] + rMax; aabbMaxY = p[1] + p[4] + p[3] + expand;
             break;
         }
         case SDFType::CutDisk: {
-            float r = prim.params[2] + expand;
-            prim.aabbMinX = prim.params[0] - r;
-            prim.aabbMinY = prim.params[1] - r;
-            prim.aabbMaxX = prim.params[0] + r;
-            prim.aabbMaxY = prim.params[1] + r;
+            float r = p[2] + expand;
+            aabbMinX = p[0] - r; aabbMinY = p[1] - r;
+            aabbMaxX = p[0] + r; aabbMaxY = p[1] + r;
             break;
         }
         case SDFType::Horseshoe: {
-            float r = prim.params[4] + prim.params[5] + expand;
-            prim.aabbMinX = prim.params[0] - r;
-            prim.aabbMinY = prim.params[1] - r;
-            prim.aabbMaxX = prim.params[0] + r;
-            prim.aabbMaxY = prim.params[1] + r;
+            float r = p[4] + p[5] + expand;
+            aabbMinX = p[0] - r; aabbMinY = p[1] - r;
+            aabbMaxX = p[0] + r; aabbMaxY = p[1] + r;
             break;
         }
         case SDFType::Vesica: {
-            float hw = prim.params[2] + expand;
-            float hh = prim.params[3] + expand;
-            prim.aabbMinX = prim.params[0] - hw;
-            prim.aabbMinY = prim.params[1] - hh;
-            prim.aabbMaxX = prim.params[0] + hw;
-            prim.aabbMaxY = prim.params[1] + hh;
+            float hw = p[2] + expand; float hh = p[3] + expand;
+            aabbMinX = p[0] - hw; aabbMinY = p[1] - hh;
+            aabbMaxX = p[0] + hw; aabbMaxY = p[1] + hh;
             break;
         }
         case SDFType::OrientedVesica: {
-            float w = prim.params[4] + expand;
-            prim.aabbMinX = std::min(prim.params[0], prim.params[2]) - w;
-            prim.aabbMinY = std::min(prim.params[1], prim.params[3]) - w;
-            prim.aabbMaxX = std::max(prim.params[0], prim.params[2]) + w;
-            prim.aabbMaxY = std::max(prim.params[1], prim.params[3]) + w;
+            float w = p[4] + expand;
+            aabbMinX = std::min(p[0], p[2]) - w; aabbMinY = std::min(p[1], p[3]) - w;
+            aabbMaxX = std::max(p[0], p[2]) + w; aabbMaxY = std::max(p[1], p[3]) + w;
             break;
         }
         case SDFType::RoundedCross: {
-            float s = (prim.params[2] + 1.0f) + expand;
-            prim.aabbMinX = prim.params[0] - s;
-            prim.aabbMinY = prim.params[1] - s;
-            prim.aabbMaxX = prim.params[0] + s;
-            prim.aabbMaxY = prim.params[1] + s;
+            float s = (p[2] + 1.0f) + expand;
+            aabbMinX = p[0] - s; aabbMinY = p[1] - s;
+            aabbMaxX = p[0] + s; aabbMaxY = p[1] + s;
             break;
         }
         case SDFType::Parabola: {
-            float s = 2.0f / prim.params[2] + expand;
-            prim.aabbMinX = prim.params[0] - s;
-            prim.aabbMinY = prim.params[1] - s;
-            prim.aabbMaxX = prim.params[0] + s;
-            prim.aabbMaxY = prim.params[1] + s;
+            float s = 2.0f / p[2] + expand;
+            aabbMinX = p[0] - s; aabbMinY = p[1] - s;
+            aabbMaxX = p[0] + s; aabbMaxY = p[1] + s;
             break;
         }
         case SDFType::BlobbyCross: {
-            float s = prim.params[2] * 1.5f + expand;
-            prim.aabbMinX = prim.params[0] - s;
-            prim.aabbMinY = prim.params[1] - s;
-            prim.aabbMaxX = prim.params[0] + s;
-            prim.aabbMaxY = prim.params[1] + s;
+            float s = p[2] * 1.5f + expand;
+            aabbMinX = p[0] - s; aabbMinY = p[1] - s;
+            aabbMaxX = p[0] + s; aabbMaxY = p[1] + s;
             break;
         }
         case SDFType::Tunnel: {
-            float hw = prim.params[2] + expand;
-            float hh = prim.params[3] + expand;
-            prim.aabbMinX = prim.params[0] - hw;
-            prim.aabbMinY = prim.params[1] - hh;
-            prim.aabbMaxX = prim.params[0] + hw;
-            prim.aabbMaxY = prim.params[1] + hh;
+            float hw = p[2] + expand; float hh = p[3] + expand;
+            aabbMinX = p[0] - hw; aabbMinY = p[1] - hh;
+            aabbMaxX = p[0] + hw; aabbMaxY = p[1] + hh;
             break;
         }
         case SDFType::Stairs: {
-            float tw = prim.params[2] * prim.params[4] + expand;
-            float th = prim.params[3] * prim.params[4] + expand;
-            prim.aabbMinX = prim.params[0] - expand;
-            prim.aabbMinY = prim.params[1] - expand;
-            prim.aabbMaxX = prim.params[0] + tw;
-            prim.aabbMaxY = prim.params[1] + th;
+            float tw = p[2] * p[4] + expand; float th = p[3] * p[4] + expand;
+            aabbMinX = p[0] - expand; aabbMinY = p[1] - expand;
+            aabbMaxX = p[0] + tw; aabbMaxY = p[1] + th;
             break;
         }
         case SDFType::QuadraticCircle: {
-            float s = prim.params[2] + expand;
-            prim.aabbMinX = prim.params[0] - s;
-            prim.aabbMinY = prim.params[1] - s;
-            prim.aabbMaxX = prim.params[0] + s;
-            prim.aabbMaxY = prim.params[1] + s;
+            float s = p[2] + expand;
+            aabbMinX = p[0] - s; aabbMinY = p[1] - s;
+            aabbMaxX = p[0] + s; aabbMaxY = p[1] + s;
             break;
         }
         case SDFType::Hyperbola: {
-            float s = prim.params[3] + expand + 1.0f;
-            prim.aabbMinX = prim.params[0] - s;
-            prim.aabbMinY = prim.params[1] - s;
-            prim.aabbMaxX = prim.params[0] + s;
-            prim.aabbMaxY = prim.params[1] + s;
+            float s = p[3] + expand + 1.0f;
+            aabbMinX = p[0] - s; aabbMinY = p[1] - s;
+            aabbMaxX = p[0] + s; aabbMaxY = p[1] + s;
             break;
         }
         case SDFType::CoolS: {
-            float s = prim.params[2] * 1.2f + expand;
-            prim.aabbMinX = prim.params[0] - s;
-            prim.aabbMinY = prim.params[1] - s;
-            prim.aabbMaxX = prim.params[0] + s;
-            prim.aabbMaxY = prim.params[1] + s;
+            float s = p[2] * 1.2f + expand;
+            aabbMinX = p[0] - s; aabbMinY = p[1] - s;
+            aabbMaxX = p[0] + s; aabbMaxY = p[1] + s;
             break;
         }
         case SDFType::CircleWave: {
-            float r = prim.params[3] * 2.0f + expand;
-            prim.aabbMinX = prim.params[0] - r;
-            prim.aabbMinY = prim.params[1] - r;
-            prim.aabbMaxX = prim.params[0] + r;
-            prim.aabbMaxY = prim.params[1] + r;
+            float r = p[3] * 2.0f + expand;
+            aabbMinX = p[0] - r; aabbMinY = p[1] - r;
+            aabbMaxX = p[0] + r; aabbMaxY = p[1] + r;
             break;
         }
         case SDFType::RotatedGlyph: {
-            float gx = prim.params[0], gy = prim.params[1];
-            float gw = prim.params[2], gh = prim.params[3];
-            float angle = prim.params[4];
+            float gx = p[0], gy = p[1], gw = p[2], gh = p[3], angle = p[4];
             float ca = std::cos(angle), sa = std::sin(angle);
-            // Rotate 4 corners of the glyph quad, take AABB
-            float cx[4] = {0, gw, gw, 0};
-            float cy[4] = {0, 0, gh, gh};
-            float minX = gx, maxX = gx, minY = gy, maxY = gy;
+            float cx[4] = {0, gw, gw, 0}, cy[4] = {0, 0, gh, gh};
+            aabbMinX = gx; aabbMaxX = gx; aabbMinY = gy; aabbMaxY = gy;
             for (int i = 0; i < 4; i++) {
                 float rx = gx + cx[i] * ca - cy[i] * sa;
                 float ry = gy + cx[i] * sa + cy[i] * ca;
-                minX = std::min(minX, rx); maxX = std::max(maxX, rx);
-                minY = std::min(minY, ry); maxY = std::max(maxY, ry);
+                aabbMinX = std::min(aabbMinX, rx); aabbMaxX = std::max(aabbMaxX, rx);
+                aabbMinY = std::min(aabbMinY, ry); aabbMaxY = std::max(aabbMaxY, ry);
             }
-            prim.aabbMinX = minX;
-            prim.aabbMinY = minY;
-            prim.aabbMaxX = maxX;
-            prim.aabbMaxY = maxY;
             break;
         }
         case SDFType::ColorWheel: {
-            // params[0-1]=center, params[2]=outerR
-            float r = prim.params[2] + expand;
-            prim.aabbMinX = prim.params[0] - r;
-            prim.aabbMinY = prim.params[1] - r;
-            prim.aabbMaxX = prim.params[0] + r;
-            prim.aabbMaxY = prim.params[1] + r;
+            float r = p[2] + expand;
+            aabbMinX = p[0] - r; aabbMinY = p[1] - r;
+            aabbMaxX = p[0] + r; aabbMaxY = p[1] + r;
             break;
         }
         // 3D primitives - not used for grid, set dummy AABB
-        case SDFType::Sphere3D:
-        case SDFType::Box3D:
-        case SDFType::BoxFrame3D:
-        case SDFType::Torus3D:
-        case SDFType::CappedTorus3D:
-        case SDFType::Cylinder3D:
-        case SDFType::CappedCylinder3D:
-        case SDFType::RoundedCylinder3D:
-        case SDFType::VerticalCapsule3D:
-        case SDFType::Cone3D:
-        case SDFType::CappedCone3D:
-        case SDFType::RoundCone3D:
-        case SDFType::Plane3D:
-        case SDFType::HexPrism3D:
-        case SDFType::TriPrism3D:
-        case SDFType::Octahedron3D:
-        case SDFType::Pyramid3D:
-        case SDFType::Ellipsoid3D:
-        case SDFType::Rhombus3D:
-        case SDFType::Link3D: {
-            prim.aabbMinX = 0; prim.aabbMinY = 0;
-            prim.aabbMaxX = 0; prim.aabbMaxY = 0;
+        case SDFType::Sphere3D: case SDFType::Box3D: case SDFType::BoxFrame3D:
+        case SDFType::Torus3D: case SDFType::CappedTorus3D: case SDFType::Cylinder3D:
+        case SDFType::CappedCylinder3D: case SDFType::RoundedCylinder3D:
+        case SDFType::VerticalCapsule3D: case SDFType::Cone3D: case SDFType::CappedCone3D:
+        case SDFType::RoundCone3D: case SDFType::Plane3D: case SDFType::HexPrism3D:
+        case SDFType::TriPrism3D: case SDFType::Octahedron3D: case SDFType::Pyramid3D:
+        case SDFType::Ellipsoid3D: case SDFType::Rhombus3D: case SDFType::Link3D: {
+            aabbMinX = 0; aabbMinY = 0; aabbMaxX = 0; aabbMaxY = 0;
             break;
         }
         default:
-            prim.aabbMinX = -1e10f;
-            prim.aabbMinY = -1e10f;
-            prim.aabbMaxX = 1e10f;
-            prim.aabbMaxY = 1e10f;
+            aabbMinX = -1e10f; aabbMinY = -1e10f;
+            aabbMaxX = 1e10f; aabbMaxY = 1e10f;
             break;
     }
 }
 
-// Static public API
-/* static */ void YDrawBuilder::recomputeAABB(card::SDFPrimitive& prim) {
-    computeAABB(prim);
-}
 
 //=============================================================================
 // YDrawBuilderImpl
@@ -478,9 +372,14 @@ static void computeAABB(SDFPrimitive& prim) {
 
 class YDrawBuilderImpl : public YDrawBuilder {
 public:
-    YDrawBuilderImpl(FontManager::Ptr fontManager, GpuAllocator::Ptr allocator)
+    YDrawBuilderImpl(FontManager::Ptr fontManager, GpuAllocator::Ptr allocator,
+                     YDrawBuffer::Ptr buffer, CardManager::Ptr cardMgr,
+                     uint32_t metaSlotIndex)
         : _fontManager(std::move(fontManager))
-        , _globalAllocator(std::move(allocator))
+        , _gpuAllocator(std::move(allocator))
+        , _buffer(std::move(buffer))
+        , _cardMgr(std::move(cardMgr))
+        , _metaSlotIndex(metaSlotIndex)
     {
         if (_fontManager) {
             _font = _fontManager->getDefaultMsMsdfFont();
@@ -493,138 +392,18 @@ public:
     ~YDrawBuilderImpl() override = default;
 
     //=========================================================================
-    // Primitive API
-    //=========================================================================
-
-    uint32_t addPrimitive(const card::SDFPrimitive& prim) override {
-        if (prim.type >= 100) {
-            _flags |= FLAG_HAS_3D;
-        }
-        SDFPrimitive p = prim;
-        if (p.aabbMinX == 0 && p.aabbMaxX == 0) {
-            computeAABB(p);
-        }
-        uint32_t idx = static_cast<uint32_t>(_primStaging.size());
-        _primStaging.push_back(p);
-        _gridStaging.clear();  // invalidate grid
-        return idx;
-    }
-
-    uint32_t addCircle(float cx, float cy, float radius,
-                       uint32_t fillColor, uint32_t strokeColor,
-                       float strokeWidth, uint32_t layer) override {
-        SDFPrimitive prim = {};
-        prim.type = static_cast<uint32_t>(SDFType::Circle);
-        prim.layer = layer;
-        prim.params[0] = cx;
-        prim.params[1] = cy;
-        prim.params[2] = radius;
-        prim.fillColor = fillColor;
-        prim.strokeColor = strokeColor;
-        prim.strokeWidth = strokeWidth;
-        return addPrimitive(prim);
-    }
-
-    uint32_t addBox(float cx, float cy, float halfW, float halfH,
-                    uint32_t fillColor, uint32_t strokeColor,
-                    float strokeWidth, float round, uint32_t layer) override {
-        SDFPrimitive prim = {};
-        prim.type = static_cast<uint32_t>(SDFType::Box);
-        prim.layer = layer;
-        prim.params[0] = cx;
-        prim.params[1] = cy;
-        prim.params[2] = halfW;
-        prim.params[3] = halfH;
-        prim.fillColor = fillColor;
-        prim.strokeColor = strokeColor;
-        prim.strokeWidth = strokeWidth;
-        prim.round = round;
-        return addPrimitive(prim);
-    }
-
-    uint32_t addSegment(float x0, float y0, float x1, float y1,
-                        uint32_t strokeColor, float strokeWidth,
-                        uint32_t layer) override {
-        SDFPrimitive prim = {};
-        prim.type = static_cast<uint32_t>(SDFType::Segment);
-        prim.layer = layer;
-        prim.params[0] = x0;
-        prim.params[1] = y0;
-        prim.params[2] = x1;
-        prim.params[3] = y1;
-        prim.strokeColor = strokeColor;
-        prim.strokeWidth = strokeWidth;
-        return addPrimitive(prim);
-    }
-
-    uint32_t addBezier2(float x0, float y0, float x1, float y1,
-                        float x2, float y2,
-                        uint32_t strokeColor, float strokeWidth,
-                        uint32_t layer) override {
-        SDFPrimitive prim = {};
-        prim.type = static_cast<uint32_t>(SDFType::Bezier2);
-        prim.layer = layer;
-        prim.params[0] = x0;
-        prim.params[1] = y0;
-        prim.params[2] = x1;
-        prim.params[3] = y1;
-        prim.params[4] = x2;
-        prim.params[5] = y2;
-        prim.strokeColor = strokeColor;
-        prim.strokeWidth = strokeWidth;
-        return addPrimitive(prim);
-    }
-
-    uint32_t addRotatedGlyph(float x, float y, float w, float h,
-                             float angle, uint32_t glyphIndex,
-                             uint32_t color) override {
-        SDFPrimitive prim = {};
-        prim.type = static_cast<uint32_t>(SDFType::RotatedGlyph);
-        prim.params[0] = x;
-        prim.params[1] = y;
-        prim.params[2] = w;
-        prim.params[3] = h;
-        prim.params[4] = angle;
-        float glyphIdxF;
-        std::memcpy(&glyphIdxF, &glyphIndex, sizeof(float));
-        prim.params[5] = glyphIdxF;
-        prim.params[6] = std::cos(angle);
-        prim.params[7] = std::sin(angle);
-        prim.fillColor = color;
-        return addPrimitive(prim);
-    }
-
-    uint32_t addColorWheel(float cx, float cy, float outerR, float innerR,
-                           float hue, float sat, float val,
-                           float indicatorSize, uint32_t layer) override {
-        SDFPrimitive prim = {};
-        prim.type = static_cast<uint32_t>(SDFType::ColorWheel);
-        prim.layer = layer;
-        prim.params[0] = cx;
-        prim.params[1] = cy;
-        prim.params[2] = outerR;
-        prim.params[3] = innerR;
-        prim.params[4] = hue;
-        prim.params[5] = sat;
-        prim.params[6] = val;
-        prim.params[7] = indicatorSize;
-        return addPrimitive(prim);
-    }
-
-    //=========================================================================
     // Text API
     //=========================================================================
 
     Result<void> addText(float x, float y, const std::string& text,
                          float fontSize, uint32_t color,
-                         uint32_t layer) override {
+                         uint32_t layer) {
         return addText(x, y, text, fontSize, color, layer, -1);
     }
 
     Result<void> addText(float x, float y, const std::string& text,
                          float fontSize, uint32_t color,
-                         uint32_t layer, int fontId) override {
-        // Resolve user-specified fontId to atlas-internal fontId
+                         uint32_t layer, int fontId) {
         int resolvedFontId = fontId;
         if (fontId >= 0) {
             auto it = _userFontIdMap.find(fontId);
@@ -651,7 +430,6 @@ public:
         const uint8_t* end = ptr + text.size();
 
         while (ptr < end) {
-            // Decode UTF-8 codepoint
             uint32_t codepoint = 0;
             if ((*ptr & 0x80) == 0) {
                 codepoint = *ptr++;
@@ -714,9 +492,7 @@ public:
 
     Result<void> addRotatedText(float x, float y, const std::string& text,
                                  float fontSize, uint32_t color,
-                                 float angleRadians, int fontId) override {
-        // Rotated glyphs require the custom atlas (shader type 65 only
-        // supports custom atlas sampling). Shared atlas is not supported.
+                                 float angleRadians, int fontId) {
         int resolvedFontId = fontId;
         if (fontId >= 0) {
             auto it = _userFontIdMap.find(fontId);
@@ -775,7 +551,9 @@ public:
             float gx = x + (cursorAdvance + bx) * cosA - by * sinA;
             float gy = y + (cursorAdvance + bx) * sinA + by * cosA;
 
-            addRotatedGlyph(gx, gy, gw, gh, angleRadians, glyphIndex, color);
+            // Write RotatedGlyph prim to buffer
+            _buffer->addRotatedGlyph(0, gx, gy, gw, gh, angleRadians,
+                                    glyphIndex, cosA, sinA, color, 0, 0, 0);
             cursorAdvance += glyph._advance * scale;
         }
 
@@ -787,7 +565,7 @@ public:
     //=========================================================================
 
     float measureTextWidth(const std::string& text,
-                           float fontSize, int fontId) override {
+                           float fontSize, int fontId) {
         int resolvedFontId = fontId;
         if (fontId >= 0) {
             auto it = _userFontIdMap.find(fontId);
@@ -845,7 +623,7 @@ public:
         return width;
     }
 
-    float fontAscent(float fontSize, int fontId) override {
+    float fontAscent(float fontSize, int fontId) {
         auto it = _ttfMetricsCache.find(fontId);
         if (it != _ttfMetricsCache.end()) {
             bool useCustom = (fontId >= 0 && _customAtlas);
@@ -856,7 +634,7 @@ public:
         return fontSize * 0.8f;
     }
 
-    float fontDescent(float fontSize, int fontId) override {
+    float fontDescent(float fontSize, int fontId) {
         auto it = _ttfMetricsCache.find(fontId);
         if (it != _ttfMetricsCache.end()) {
             bool useCustom = (fontId >= 0 && _customAtlas);
@@ -873,9 +651,9 @@ public:
 
     int registerFont(const std::string& cdbPath,
                      const std::string& ttfPath,
-                     MsdfCdbProvider::Ptr provider) override {
+                     MsdfCdbProvider::Ptr provider) {
         if (!_customAtlas) {
-            auto atlasRes = MsdfAtlas::create(_globalAllocator);
+            auto atlasRes = MsdfAtlas::create(_gpuAllocator);
             if (!atlasRes) {
                 yerror("registerFont: failed to create custom atlas");
                 return -1;
@@ -886,7 +664,7 @@ public:
         return _customAtlas->registerCdb(cdbPath, ttfPath, std::move(provider));
     }
 
-    Result<int> addFont(const std::string& ttfPath) override {
+    Result<int> addFont(const std::string& ttfPath) {
         if (!_fontManager) return Err<int>("addFont: no font manager");
 
         auto stem = std::filesystem::path(ttfPath).stem().string();
@@ -910,7 +688,7 @@ public:
         }
 
         if (!_customAtlas) {
-            auto atlasRes = MsdfAtlas::create(_globalAllocator);
+            auto atlasRes = MsdfAtlas::create(_gpuAllocator);
             if (!atlasRes) {
                 return Err<int>("addFont: failed to create custom atlas");
             }
@@ -924,7 +702,6 @@ public:
         }
         _fontIdCache[cdbPath] = fontId;
 
-        // Cache TTF hhea metrics for correct ascent/descent
         float atlasSize = _customAtlas->getFontSize();
         _ttfMetricsCache[fontId] = readTtfMetrics(ttfPath, atlasSize);
 
@@ -932,7 +709,7 @@ public:
         return Ok(fontId);
     }
 
-    Result<void> addFont(int userFontId, const std::string& ttfPath) override {
+    Result<void> addFont(int userFontId, const std::string& ttfPath) {
         auto result = addFont(ttfPath);
         if (!result) {
             return Err<void>("addFont(id=" + std::to_string(userFontId) + "): " +
@@ -945,8 +722,7 @@ public:
     }
 
     Result<int> addFontData(const uint8_t* data, size_t size,
-                             const std::string& /*name*/) override {
-        // FNV-1a content hash → stable temp filename → stable CDB cache key
+                             const std::string& /*name*/) {
         uint64_t h = 14695981039346656037ULL;
         for (size_t i = 0; i < size; i++) {
             h ^= data[i];
@@ -970,7 +746,7 @@ public:
         return addFont(ttfPath);
     }
 
-    void mapFontId(int userId, int atlasId) override {
+    void mapFontId(int userId, int atlasId) {
         _userFontIdMap[userId] = atlasId;
     }
 
@@ -989,13 +765,14 @@ public:
     //=========================================================================
 
     void clear() override {
-        _primStaging.clear();
+        _primBounds.clear();
         _gridStaging.clear();
         _glyphs.clear();
+        _buffer->clear();
     }
 
     uint32_t primitiveCount() const override {
-        return static_cast<uint32_t>(_primStaging.size());
+        return _buffer->primCount();
     }
 
     uint32_t glyphCount() const override {
@@ -1028,12 +805,219 @@ public:
     // Staging data access
     //=========================================================================
 
-    const std::vector<card::SDFPrimitive>& primStaging() const override { return _primStaging; }
-    std::vector<card::SDFPrimitive>& primStagingMut() override { return _primStaging; }
     const std::vector<uint32_t>& gridStaging() const override { return _gridStaging; }
     void clearGridStaging() override { _gridStaging.clear(); }
     const std::vector<YDrawGlyph>& glyphs() const override { return _glyphs; }
     std::vector<YDrawGlyph>& glyphsMut() override { return _glyphs; }
+
+    //=========================================================================
+    // Buffer access
+    //=========================================================================
+
+    //=========================================================================
+    // GPU buffer lifecycle
+    //=========================================================================
+
+    Result<void> declareBufferNeeds() override {
+        if (!_cardMgr) return Err<void>("declareBufferNeeds: no CardManager");
+        auto bufMgr = _cardMgr->bufferManager();
+
+        // Reset handles — they will be re-allocated
+        _primHandle = BufferHandle::invalid();
+        _derivedHandle = BufferHandle::invalid();
+        _primWordOffsets.clear();
+
+        if (_buffer->empty() && _glyphs.empty()) {
+            clearGridStaging();
+            return Ok();
+        }
+
+        // Reserve compact prim storage
+        if (!_buffer->empty()) {
+            bufMgr->reserve(_buffer->gpuBufferSize());
+        }
+
+        // Build grid if not already computed
+        if (_gridStaging.empty()) {
+            calculate();
+        }
+
+        // Reserve derived size (grid + glyphs + optional atlas metadata)
+        uint32_t derivedSize = computeDerivedSize();
+        if (derivedSize > 0) {
+            bufMgr->reserve(derivedSize);
+        }
+
+        return Ok();
+    }
+
+    Result<void> allocateBuffers() override {
+        if (!_cardMgr) return Err<void>("allocateBuffers: no CardManager");
+        auto bufMgr = _cardMgr->bufferManager();
+
+        // Allocate and write compact prim data
+        if (!_buffer->empty()) {
+            uint32_t allocBytes = _buffer->gpuBufferSize();
+            auto primResult = bufMgr->allocateBuffer(_metaSlotIndex, "prims", allocBytes);
+            if (!primResult) return Err<void>("allocateBuffers: prim alloc failed", primResult);
+            _primHandle = *primResult;
+
+            float* buf = reinterpret_cast<float*>(_primHandle.data);
+            _buffer->writeGPU(buf, _primHandle.size, _primWordOffsets);
+            bufMgr->markBufferDirty(_primHandle);
+        }
+
+        // Allocate derived storage (grid + glyphs + atlas header)
+        uint32_t derivedSize = computeDerivedSize();
+        if (derivedSize > 0) {
+            auto derivedResult = bufMgr->allocateBuffer(_metaSlotIndex, "derived", derivedSize);
+            if (!derivedResult) return Err<void>("allocateBuffers: derived alloc failed", derivedResult);
+            _derivedHandle = *derivedResult;
+
+            if (auto res = writeDerived(); !res) return res;
+            bufMgr->markBufferDirty(_derivedHandle);
+        }
+
+        _bufferDirty = false;
+        return Ok();
+    }
+
+    Result<void> allocateTextures() override {
+        if (!_cardMgr || !_customAtlas) return Ok();
+
+        uint32_t atlasW = _customAtlas->getAtlasWidth();
+        uint32_t atlasH = _customAtlas->getAtlasHeight();
+        const auto& atlasData = _customAtlas->getAtlasData();
+        if (atlasData.empty() || atlasW == 0 || atlasH == 0) return Ok();
+
+        auto texMgr = _cardMgr->textureManager();
+        auto allocResult = texMgr->allocate(atlasW, atlasH);
+        if (!allocResult) return Err<void>("allocateTextures: failed", allocResult);
+        _atlasTextureHandle = *allocResult;
+        return Ok();
+    }
+
+    Result<void> writeTextures() override {
+        if (!_cardMgr || !_atlasTextureHandle.isValid() || !_customAtlas) return Ok();
+
+        const auto& atlasData = _customAtlas->getAtlasData();
+        if (atlasData.empty()) return Ok();
+
+        auto texMgr = _cardMgr->textureManager();
+        if (auto res = texMgr->write(_atlasTextureHandle, atlasData.data()); !res) {
+            return Err<void>("writeTextures: write failed", res);
+        }
+        return Ok();
+    }
+
+    Result<void> writeBuffers() override {
+        if (!_cardMgr) return Err<void>("writeBuffers: no CardManager");
+        if (!_bufferDirty) return Ok();
+        auto bufMgr = _cardMgr->bufferManager();
+
+        // Re-write prims
+        if (_primHandle.isValid() && !_buffer->empty()) {
+            float* buf = reinterpret_cast<float*>(_primHandle.data);
+            _buffer->writeGPU(buf, _primHandle.size, _primWordOffsets);
+            bufMgr->markBufferDirty(_primHandle);
+        }
+
+        // Re-write derived (grid + glyphs + atlas header)
+        if (_derivedHandle.isValid()) {
+            if (auto res = writeDerived(); !res) return res;
+            bufMgr->markBufferDirty(_derivedHandle);
+        }
+
+        _bufferDirty = false;
+        return Ok();
+    }
+
+    Result<void> releaseBuffers() override {
+        _primHandle = BufferHandle::invalid();
+        _derivedHandle = BufferHandle::invalid();
+        _primWordOffsets.clear();
+        _atlasTextureHandle = TextureHandle::invalid();
+        _bufferDirty = true;
+        return Ok();
+    }
+
+    bool needsBufferRealloc() const override {
+        if (!_cardMgr) return false;
+        if (_primHandle.isValid()) {
+            uint32_t needed = _buffer->gpuBufferSize();
+            if (needed != _primHandle.size) return true;
+        } else if (!_buffer->empty()) {
+            return true;
+        }
+        uint32_t derivedNeeded = computeDerivedSize();
+        if (_derivedHandle.isValid()) {
+            if (derivedNeeded > _derivedHandle.size) return true;
+        } else if (derivedNeeded > 0) {
+            return true;
+        }
+        return false;
+    }
+
+    bool needsTextureRealloc() const override {
+        if (!_customAtlas) return false;
+        if (!_atlasTextureHandle.isValid()) {
+            return !_customAtlas->getAtlasData().empty();
+        }
+        return false;
+    }
+
+    Result<void> writeMetadata(uint32_t widthCells, uint32_t heightCells,
+                               float viewZoom, float viewPanX, float viewPanY) override {
+        if (!_cardMgr) return Err<void>("writeMetadata: no CardManager");
+
+        // Pack zoom as f16 in upper 16 bits of flags
+        uint32_t zoomBits;
+        {
+            uint32_t f32bits;
+            std::memcpy(&f32bits, &viewZoom, sizeof(float));
+            uint32_t sign = (f32bits >> 16) & 0x8000;
+            int32_t  exp  = ((f32bits >> 23) & 0xFF) - 127 + 15;
+            uint32_t mant = (f32bits >> 13) & 0x3FF;
+            if (exp <= 0) { exp = 0; mant = 0; }
+            else if (exp >= 31) { exp = 31; mant = 0; }
+            zoomBits = sign | (static_cast<uint32_t>(exp) << 10) | mant;
+        }
+
+        float contentW = _sceneMaxX - _sceneMinX;
+        float contentH = _sceneMaxY - _sceneMinY;
+        int16_t panXi16 = static_cast<int16_t>(std::clamp(
+            viewPanX / std::max(contentW, 1e-6f) * 16384.0f, -32768.0f, 32767.0f));
+        int16_t panYi16 = static_cast<int16_t>(std::clamp(
+            viewPanY / std::max(contentH, 1e-6f) * 16384.0f, -32768.0f, 32767.0f));
+
+        uint32_t primOffset = _primHandle.isValid()
+            ? _primHandle.offset / sizeof(float) : 0;
+
+        YDrawMetadata meta = {};
+        meta.primitiveOffset = primOffset;
+        meta.primitiveCount = _buffer->primCount();
+        meta.gridOffset = _gpuGridOffset;
+        meta.gridWidth = _gridWidth;
+        meta.gridHeight = _gridHeight;
+        std::memcpy(&meta.cellSize, &_cellSize, sizeof(float));
+        meta.glyphOffset = _gpuGlyphOffset;
+        meta.glyphCount = static_cast<uint32_t>(_glyphs.size());
+        std::memcpy(&meta.sceneMinX, &_sceneMinX, sizeof(float));
+        std::memcpy(&meta.sceneMinY, &_sceneMinY, sizeof(float));
+        std::memcpy(&meta.sceneMaxX, &_sceneMaxX, sizeof(float));
+        std::memcpy(&meta.sceneMaxY, &_sceneMaxY, sizeof(float));
+        meta.widthCells  = (widthCells & 0xFFFF) |
+                           (static_cast<uint32_t>(static_cast<uint16_t>(panXi16)) << 16);
+        meta.heightCells = (heightCells & 0xFFFF) |
+                           (static_cast<uint32_t>(static_cast<uint16_t>(panYi16)) << 16);
+        meta.flags = (_flags & 0xFFFF) | (zoomBits << 16);
+        meta.bgColor = _bgColor;
+
+        return _cardMgr->writeMetadata(
+            MetadataHandle{_metaSlotIndex * 64, 64}, &meta, sizeof(meta));
+    }
+
+    void markBufferDirty() { _bufferDirty = true; }
 
     //=========================================================================
     // Text selection
@@ -1166,16 +1150,74 @@ public:
     uint32_t gridHeight() const override { return _gridHeight; }
 
     void calculate() override {
-        // Compute scene bounds from staging
+        // Step 0: Ingest buffer metadata — fonts, text spans, scene bounds
+        // The buffer may carry font blobs and text spans (e.g. from PDF renderer).
+        // Register fonts with the builder's MSDF atlas, then convert text spans
+        // into glyphs via the builder's existing addText/addRotatedText.
+        _buffer->forEachFont([this](int bufFontId, const uint8_t* data,
+                                     size_t size, const std::string& name) {
+            if (_bufferFontIdMap.count(bufFontId)) return;
+            auto res = addFontData(data, size, name);
+            if (res) {
+                _bufferFontIdMap[bufFontId] = *res;
+            } else {
+                ywarn("calculate: addFontData failed for '{}': {}", name, res.error().message());
+            }
+        });
+
+        _buffer->forEachTextSpan([this](const TextSpanData& span) {
+            int atlasFontId = -1;
+            auto it = _bufferFontIdMap.find(span.fontId);
+            if (it != _bufferFontIdMap.end()) atlasFontId = it->second;
+
+            if (std::abs(span.rotation) > 0.001f) {
+                addRotatedText(span.x, span.y, span.text,
+                               span.fontSize, span.color,
+                               span.rotation, atlasFontId);
+            } else {
+                addText(span.x, span.y, span.text,
+                        span.fontSize, span.color, span.layer, atlasFontId);
+            }
+        });
+
+        if (_buffer->hasSceneBounds() && !_hasExplicitBounds) {
+            _sceneMinX = _buffer->sceneMinX();
+            _sceneMinY = _buffer->sceneMinY();
+            _sceneMaxX = _buffer->sceneMaxX();
+            _sceneMaxY = _buffer->sceneMaxY();
+            _hasExplicitBounds = true;
+        }
+
+        if (_buffer->bgColor() != 0) {
+            _bgColor = _buffer->bgColor();
+        }
+
+        if (_buffer->flags() != 0) {
+            _flags |= _buffer->flags();
+        }
+
+        // Step 1: Read all prims from buffer, compute AABB for each
+        _primBounds.clear();
+        _buffer->forEachPrim([this](uint32_t /*id*/, const float* data, uint32_t wc) {
+            uint32_t type = sdf::detail::read_u32(data, 0);
+            float minX, minY, maxX, maxY;
+            computeAABB(data, wc, minX, minY, maxX, maxY);
+            if (type >= 100) {
+                _flags |= FLAG_HAS_3D;
+            }
+            _primBounds.push_back({minX, minY, maxX, maxY, type});
+        });
+
+        // Step 2: Compute scene bounds from prim AABBs
         if (!_hasExplicitBounds) {
             _sceneMinX = 1e10f; _sceneMinY = 1e10f;
             _sceneMaxX = -1e10f; _sceneMaxY = -1e10f;
-            for (const auto& prim : _primStaging) {
-                if (prim.type >= 100) continue;
-                _sceneMinX = std::min(_sceneMinX, prim.aabbMinX);
-                _sceneMinY = std::min(_sceneMinY, prim.aabbMinY);
-                _sceneMaxX = std::max(_sceneMaxX, prim.aabbMaxX);
-                _sceneMaxY = std::max(_sceneMaxY, prim.aabbMaxY);
+            for (const auto& pb : _primBounds) {
+                if (pb.type >= 100) continue;
+                _sceneMinX = std::min(_sceneMinX, pb.minX);
+                _sceneMinY = std::min(_sceneMinY, pb.minY);
+                _sceneMaxX = std::max(_sceneMaxX, pb.maxX);
+                _sceneMaxY = std::max(_sceneMaxY, pb.maxY);
             }
             for (const auto& g : _glyphs) {
                 _sceneMinX = std::min(_sceneMinX, g.x);
@@ -1191,15 +1233,15 @@ public:
             if (_sceneMinY >= _sceneMaxY) { _sceneMinY = 0; _sceneMaxY = 100; }
         }
 
-        // Compute grid dimensions
+        // Step 3: Compute grid dimensions
         float sceneWidth = _sceneMaxX - _sceneMinX;
         float sceneHeight = _sceneMaxY - _sceneMinY;
         uint32_t gridW = 0, gridH = 0;
         float cs = _cellSize;
 
         uint32_t num2DPrims = 0;
-        for (const auto& prim : _primStaging) {
-            if (prim.type < 100) num2DPrims++;
+        for (const auto& pb : _primBounds) {
+            if (pb.type < 100) num2DPrims++;
         }
 
         if (num2DPrims > 0 || !_glyphs.empty()) {
@@ -1207,10 +1249,10 @@ public:
                 float primCs = 0.0f, glyphCs = 0.0f;
                 if (num2DPrims > 0) {
                     float avgPrimArea = 0.0f;
-                    for (const auto& prim : _primStaging) {
-                        if (prim.type >= 100) continue;
-                        float w = prim.aabbMaxX - prim.aabbMinX;
-                        float h = prim.aabbMaxY - prim.aabbMinY;
+                    for (const auto& pb : _primBounds) {
+                        if (pb.type >= 100) continue;
+                        float w = pb.maxX - pb.minX;
+                        float h = pb.maxY - pb.minY;
                         avgPrimArea += w * h;
                     }
                     avgPrimArea /= num2DPrims;
@@ -1232,11 +1274,9 @@ public:
                 }
                 if (cs <= 0.0f) cs = 1.0f;
             }
-            // Grid dimensions derived from content — no arbitrary per-axis cap.
-            // Only cap total cell count to keep memory bounded (offset table = cells * 4 bytes).
             gridW = std::max(1u, static_cast<uint32_t>(std::ceil(sceneWidth / cs)));
             gridH = std::max(1u, static_cast<uint32_t>(std::ceil(sceneHeight / cs)));
-            constexpr uint32_t MAX_TOTAL_CELLS = 4u * 1024u * 1024u; // 4M cells = 16MB offset table
+            constexpr uint32_t MAX_TOTAL_CELLS = 4u * 1024u * 1024u;
             uint64_t totalCells = static_cast<uint64_t>(gridW) * gridH;
             if (totalCells > MAX_TOTAL_CELLS) {
                 float scale = std::sqrt(static_cast<float>(totalCells) / MAX_TOTAL_CELLS);
@@ -1251,21 +1291,19 @@ public:
         _cellSize = cs;
 
         yinfo("YDrawBuilder::calculate: grid={}x{} cellSize={:.1f} prims={} glyphs={} scene=[{:.0f},{:.0f}]-[{:.0f},{:.0f}]",
-              gridW, gridH, cs, _primStaging.size(), _glyphs.size(),
+              gridW, gridH, cs, _primBounds.size(), _glyphs.size(),
               _sceneMinX, _sceneMinY, _sceneMaxX, _sceneMaxY);
 
-        // Build variable-length grid into staging
-        // Layout: [off0][off1]...[offN] [count0,e,e,...] [count1,e,...] ...
-        // Pass 1: count entries per cell
+        // Step 4: Build variable-length grid into staging
         uint32_t numCells = gridW * gridH;
         std::vector<uint32_t> cellCounts(numCells, 0);
 
-        for (const auto& prim : _primStaging) {
-            if (prim.type >= 100) continue;
-            uint32_t cMinX = static_cast<uint32_t>(std::clamp((prim.aabbMinX - _sceneMinX) / cs, 0.0f, float(gridW - 1)));
-            uint32_t cMaxX = static_cast<uint32_t>(std::clamp((prim.aabbMaxX - _sceneMinX) / cs, 0.0f, float(gridW - 1)));
-            uint32_t cMinY = static_cast<uint32_t>(std::clamp((prim.aabbMinY - _sceneMinY) / cs, 0.0f, float(gridH - 1)));
-            uint32_t cMaxY = static_cast<uint32_t>(std::clamp((prim.aabbMaxY - _sceneMinY) / cs, 0.0f, float(gridH - 1)));
+        for (const auto& pb : _primBounds) {
+            if (pb.type >= 100) continue;
+            uint32_t cMinX = static_cast<uint32_t>(std::clamp((pb.minX - _sceneMinX) / cs, 0.0f, float(gridW - 1)));
+            uint32_t cMaxX = static_cast<uint32_t>(std::clamp((pb.maxX - _sceneMinX) / cs, 0.0f, float(gridW - 1)));
+            uint32_t cMinY = static_cast<uint32_t>(std::clamp((pb.minY - _sceneMinY) / cs, 0.0f, float(gridH - 1)));
+            uint32_t cMaxY = static_cast<uint32_t>(std::clamp((pb.maxY - _sceneMinY) / cs, 0.0f, float(gridH - 1)));
             for (uint32_t cy = cMinY; cy <= cMaxY; cy++)
                 for (uint32_t cx = cMinX; cx <= cMaxX; cx++)
                     cellCounts[cy * gridW + cx]++;
@@ -1281,27 +1319,26 @@ public:
         }
 
         // Compute offsets (prefix sum)
-        uint32_t pos = numCells; // packed data starts after offset table
-        _gridStaging.resize(numCells); // will grow below
+        uint32_t pos = numCells;
+        _gridStaging.resize(numCells);
         for (uint32_t i = 0; i < numCells; i++) {
             _gridStaging[i] = pos;
-            pos += 1 + cellCounts[i]; // count + entries
+            pos += 1 + cellCounts[i];
         }
         _gridStaging.resize(pos, 0);
 
-        // Initialize packed counts to 0
         for (uint32_t i = 0; i < numCells; i++) {
             _gridStaging[_gridStaging[i]] = 0;
         }
 
         // Pass 2: fill entries
-        for (uint32_t primIdx = 0; primIdx < static_cast<uint32_t>(_primStaging.size()); primIdx++) {
-            const auto& prim = _primStaging[primIdx];
-            if (prim.type >= 100) continue;
-            uint32_t cMinX = static_cast<uint32_t>(std::clamp((prim.aabbMinX - _sceneMinX) / cs, 0.0f, float(gridW - 1)));
-            uint32_t cMaxX = static_cast<uint32_t>(std::clamp((prim.aabbMaxX - _sceneMinX) / cs, 0.0f, float(gridW - 1)));
-            uint32_t cMinY = static_cast<uint32_t>(std::clamp((prim.aabbMinY - _sceneMinY) / cs, 0.0f, float(gridH - 1)));
-            uint32_t cMaxY = static_cast<uint32_t>(std::clamp((prim.aabbMaxY - _sceneMinY) / cs, 0.0f, float(gridH - 1)));
+        for (uint32_t primIdx = 0; primIdx < static_cast<uint32_t>(_primBounds.size()); primIdx++) {
+            const auto& pb = _primBounds[primIdx];
+            if (pb.type >= 100) continue;
+            uint32_t cMinX = static_cast<uint32_t>(std::clamp((pb.minX - _sceneMinX) / cs, 0.0f, float(gridW - 1)));
+            uint32_t cMaxX = static_cast<uint32_t>(std::clamp((pb.maxX - _sceneMinX) / cs, 0.0f, float(gridW - 1)));
+            uint32_t cMinY = static_cast<uint32_t>(std::clamp((pb.minY - _sceneMinY) / cs, 0.0f, float(gridH - 1)));
+            uint32_t cMaxY = static_cast<uint32_t>(std::clamp((pb.maxY - _sceneMinY) / cs, 0.0f, float(gridH - 1)));
             for (uint32_t cy = cMinY; cy <= cMaxY; cy++) {
                 for (uint32_t cx = cMinX; cx <= cMaxX; cx++) {
                     uint32_t off = _gridStaging[cy * gridW + cx];
@@ -1341,182 +1378,104 @@ public:
               nonEmptyCells > 0 ? float(totalEntries) / nonEmptyCells : 0.0f);
     }
 
-    //=========================================================================
-    // GPU-resident primitive operations
-    //=========================================================================
-
-    void computeSceneBoundsFromPrims(
-        const card::SDFPrimitive* prims, uint32_t count) override
-    {
-        if (_hasExplicitBounds) return;
-
-        _sceneMinX = 1e10f; _sceneMinY = 1e10f;
-        _sceneMaxX = -1e10f; _sceneMaxY = -1e10f;
-
-        for (uint32_t i = 0; i < count; i++) {
-            if (prims[i].type >= 100) continue;
-            _sceneMinX = std::min(_sceneMinX, prims[i].aabbMinX);
-            _sceneMinY = std::min(_sceneMinY, prims[i].aabbMinY);
-            _sceneMaxX = std::max(_sceneMaxX, prims[i].aabbMaxX);
-            _sceneMaxY = std::max(_sceneMaxY, prims[i].aabbMaxY);
-        }
-
-        for (const auto& glyph : _glyphs) {
-            _sceneMinX = std::min(_sceneMinX, glyph.x);
-            _sceneMinY = std::min(_sceneMinY, glyph.y);
-            _sceneMaxX = std::max(_sceneMaxX, glyph.x + glyph.width());
-            _sceneMaxY = std::max(_sceneMaxY, glyph.y + glyph.height());
-        }
-
-        float padX = (_sceneMaxX - _sceneMinX) * 0.05f;
-        float padY = (_sceneMaxY - _sceneMinY) * 0.05f;
-        _sceneMinX -= padX; _sceneMinY -= padY;
-        _sceneMaxX += padX; _sceneMaxY += padY;
-
-        if (_sceneMinX >= _sceneMaxX) { _sceneMinX = 0; _sceneMaxX = 100; }
-        if (_sceneMinY >= _sceneMaxY) { _sceneMinY = 0; _sceneMaxY = 100; }
-    }
-
-    GridDims computeGridDims(
-        const card::SDFPrimitive* prims, uint32_t count) override
-    {
-        float sceneWidth = _sceneMaxX - _sceneMinX;
-        float sceneHeight = _sceneMaxY - _sceneMinY;
-        uint32_t gridW = 0, gridH = 0;
-        float cs = _cellSize;
-
-        uint32_t num2DPrims = 0;
-        for (uint32_t i = 0; i < count; i++) {
-            if (prims[i].type < 100) num2DPrims++;
-        }
-
-        if (num2DPrims > 0 || !_glyphs.empty()) {
-            if (cs <= 0.0f) {
-                float primCs = 0.0f, glyphCs = 0.0f;
-                if (num2DPrims > 0) {
-                    float avgPrimArea = 0.0f;
-                    for (uint32_t i = 0; i < count; i++) {
-                        if (prims[i].type >= 100) continue;
-                        float w = prims[i].aabbMaxX - prims[i].aabbMinX;
-                        float h = prims[i].aabbMaxY - prims[i].aabbMinY;
-                        avgPrimArea += w * h;
-                    }
-                    avgPrimArea /= num2DPrims;
-                    primCs = std::sqrt(avgPrimArea) * 1.5f;
-                }
-                uint32_t glyphCount = static_cast<uint32_t>(_glyphs.size());
-                if (glyphCount > 0) {
-                    float avgGlyphH = 0.0f;
-                    for (const auto& g : _glyphs) avgGlyphH += g.height();
-                    avgGlyphH /= glyphCount;
-                    glyphCs = avgGlyphH * 2.0f;
-                }
-                if (num2DPrims > 0 && glyphCount > 0) {
-                    cs = (num2DPrims * primCs + glyphCount * glyphCs) / (num2DPrims + glyphCount);
-                } else if (num2DPrims > 0) {
-                    cs = primCs;
-                } else {
-                    cs = glyphCs;
-                }
-                if (cs <= 0.0f) cs = 1.0f;
-            }
-            gridW = std::max(1u, static_cast<uint32_t>(std::ceil(sceneWidth / cs)));
-            gridH = std::max(1u, static_cast<uint32_t>(std::ceil(sceneHeight / cs)));
-            constexpr uint32_t MAX_TOTAL_CELLS = 4u * 1024u * 1024u;
-            uint64_t totalCells = static_cast<uint64_t>(gridW) * gridH;
-            if (totalCells > MAX_TOTAL_CELLS) {
-                float scale = std::sqrt(static_cast<float>(totalCells) / MAX_TOTAL_CELLS);
-                cs *= scale;
-                gridW = std::max(1u, static_cast<uint32_t>(std::ceil(sceneWidth / cs)));
-                gridH = std::max(1u, static_cast<uint32_t>(std::ceil(sceneHeight / cs)));
-            }
-        }
-
-        _cellSize = cs;
-        return {gridW, gridH, cs};
-    }
-
-    void buildGridFromPrims(
-        const card::SDFPrimitive* prims, uint32_t count) override
-    {
-        uint32_t gridW = _gridWidth;
-        uint32_t gridH = _gridHeight;
-        float cs = _cellSize;
-        if (gridW == 0 || gridH == 0) return;
-
-        uint32_t numCells = gridW * gridH;
-        std::vector<uint32_t> cellCounts(numCells, 0);
-
-        // Pass 1: count entries per cell
-        for (uint32_t i = 0; i < count; i++) {
-            if (prims[i].type >= 100) continue;
-            uint32_t cMinX = static_cast<uint32_t>(std::clamp((prims[i].aabbMinX - _sceneMinX) / cs, 0.0f, float(gridW - 1)));
-            uint32_t cMaxX = static_cast<uint32_t>(std::clamp((prims[i].aabbMaxX - _sceneMinX) / cs, 0.0f, float(gridW - 1)));
-            uint32_t cMinY = static_cast<uint32_t>(std::clamp((prims[i].aabbMinY - _sceneMinY) / cs, 0.0f, float(gridH - 1)));
-            uint32_t cMaxY = static_cast<uint32_t>(std::clamp((prims[i].aabbMaxY - _sceneMinY) / cs, 0.0f, float(gridH - 1)));
-            for (uint32_t cy = cMinY; cy <= cMaxY; cy++)
-                for (uint32_t cx = cMinX; cx <= cMaxX; cx++)
-                    cellCounts[cy * gridW + cx]++;
-        }
-        for (const auto& g : _glyphs) {
-            uint32_t cMinX = static_cast<uint32_t>(std::clamp((g.x - _sceneMinX) / cs, 0.0f, float(gridW - 1)));
-            uint32_t cMaxX = static_cast<uint32_t>(std::clamp((g.x + g.width() - _sceneMinX) / cs, 0.0f, float(gridW - 1)));
-            uint32_t cMinY = static_cast<uint32_t>(std::clamp((g.y - _sceneMinY) / cs, 0.0f, float(gridH - 1)));
-            uint32_t cMaxY = static_cast<uint32_t>(std::clamp((g.y + g.height() - _sceneMinY) / cs, 0.0f, float(gridH - 1)));
-            for (uint32_t cy = cMinY; cy <= cMaxY; cy++)
-                for (uint32_t cx = cMinX; cx <= cMaxX; cx++)
-                    cellCounts[cy * gridW + cx]++;
-        }
-
-        // Compute offsets
-        uint32_t pos = numCells;
-        _gridStaging.resize(numCells);
-        for (uint32_t i = 0; i < numCells; i++) {
-            _gridStaging[i] = pos;
-            pos += 1 + cellCounts[i];
-        }
-        _gridStaging.resize(pos, 0);
-
-        for (uint32_t i = 0; i < numCells; i++) {
-            _gridStaging[_gridStaging[i]] = 0;
-        }
-
-        // Pass 2: fill entries
-        for (uint32_t primIdx = 0; primIdx < count; primIdx++) {
-            if (prims[primIdx].type >= 100) continue;
-            uint32_t cMinX = static_cast<uint32_t>(std::clamp((prims[primIdx].aabbMinX - _sceneMinX) / cs, 0.0f, float(gridW - 1)));
-            uint32_t cMaxX = static_cast<uint32_t>(std::clamp((prims[primIdx].aabbMaxX - _sceneMinX) / cs, 0.0f, float(gridW - 1)));
-            uint32_t cMinY = static_cast<uint32_t>(std::clamp((prims[primIdx].aabbMinY - _sceneMinY) / cs, 0.0f, float(gridH - 1)));
-            uint32_t cMaxY = static_cast<uint32_t>(std::clamp((prims[primIdx].aabbMaxY - _sceneMinY) / cs, 0.0f, float(gridH - 1)));
-            for (uint32_t cy = cMinY; cy <= cMaxY; cy++) {
-                for (uint32_t cx = cMinX; cx <= cMaxX; cx++) {
-                    uint32_t off = _gridStaging[cy * gridW + cx];
-                    uint32_t cnt = _gridStaging[off];
-                    _gridStaging[off + 1 + cnt] = primIdx;
-                    _gridStaging[off] = cnt + 1;
-                }
-            }
-        }
-        for (uint32_t gi = 0; gi < static_cast<uint32_t>(_glyphs.size()); gi++) {
-            const auto& g = _glyphs[gi];
-            uint32_t cMinX = static_cast<uint32_t>(std::clamp((g.x - _sceneMinX) / cs, 0.0f, float(gridW - 1)));
-            uint32_t cMaxX = static_cast<uint32_t>(std::clamp((g.x + g.width() - _sceneMinX) / cs, 0.0f, float(gridW - 1)));
-            uint32_t cMinY = static_cast<uint32_t>(std::clamp((g.y - _sceneMinY) / cs, 0.0f, float(gridH - 1)));
-            uint32_t cMaxY = static_cast<uint32_t>(std::clamp((g.y + g.height() - _sceneMinY) / cs, 0.0f, float(gridH - 1)));
-            for (uint32_t cy = cMinY; cy <= cMaxY; cy++) {
-                for (uint32_t cx = cMinX; cx <= cMaxX; cx++) {
-                    uint32_t off = _gridStaging[cy * gridW + cx];
-                    uint32_t cnt = _gridStaging[off];
-                    _gridStaging[off + 1 + cnt] = gi | GLYPH_BIT;
-                    _gridStaging[off] = cnt + 1;
-                }
-            }
-        }
-    }
-
 private:
-    // Staging vectors
-    std::vector<card::SDFPrimitive> _primStaging;
+    //=========================================================================
+    // GPU helpers
+    //=========================================================================
+
+    uint32_t computeDerivedSize() const {
+        uint32_t gridBytes = static_cast<uint32_t>(_gridStaging.size()) * sizeof(uint32_t);
+        uint32_t glyphBytes = static_cast<uint32_t>(_glyphs.size() * sizeof(YDrawGlyph));
+        uint32_t total = gridBytes + glyphBytes;
+        if (_customAtlas) {
+            uint32_t atlasHeaderBytes = 4 * sizeof(uint32_t);
+            uint32_t glyphMetaBytes = static_cast<uint32_t>(
+                _customAtlas->getGlyphMetadata().size() * sizeof(GlyphMetadataGPU));
+            total += atlasHeaderBytes + glyphMetaBytes;
+        }
+        return total;
+    }
+
+    Result<void> writeDerived() {
+        if (!_derivedHandle.isValid()) {
+            return Err<void>("writeDerived: derived handle not allocated");
+        }
+
+        uint8_t* base = _derivedHandle.data;
+        uint32_t offset = 0;
+
+        // Copy grid and translate prim indices to word offsets
+        uint32_t gridBytes = static_cast<uint32_t>(_gridStaging.size()) * sizeof(uint32_t);
+        _gpuGridOffset = (_derivedHandle.offset + offset) / sizeof(float);
+        if (!_gridStaging.empty()) {
+            std::memcpy(base + offset, _gridStaging.data(), gridBytes);
+            // Translate prim indices in grid entries to word offsets
+            uint32_t* gridPtr = reinterpret_cast<uint32_t*>(base + offset);
+            uint32_t gridSize = static_cast<uint32_t>(_gridStaging.size());
+            uint32_t numCells = _gridWidth * _gridHeight;
+            if (!_primWordOffsets.empty() && numCells <= gridSize) {
+                for (uint32_t ci = 0; ci < numCells; ci++) {
+                    uint32_t packedOff = gridPtr[ci];
+                    if (packedOff >= gridSize) continue;
+                    uint32_t cnt = gridPtr[packedOff];
+                    for (uint32_t j = 0; j < cnt; j++) {
+                        uint32_t idx = packedOff + 1 + j;
+                        if (idx >= gridSize) break;
+                        uint32_t rawVal = gridPtr[idx];
+                        if ((rawVal & 0x80000000u) != 0) continue;
+                        if (rawVal < static_cast<uint32_t>(_primWordOffsets.size())) {
+                            gridPtr[idx] = _primWordOffsets[rawVal];
+                        }
+                    }
+                }
+            }
+        }
+        offset += gridBytes;
+
+        // Copy glyphs
+        uint32_t glyphBytes = static_cast<uint32_t>(_glyphs.size() * sizeof(YDrawGlyph));
+        _gpuGlyphOffset = (_derivedHandle.offset + offset) / sizeof(float);
+        if (!_glyphs.empty()) {
+            std::memcpy(base + offset, _glyphs.data(), glyphBytes);
+        }
+        offset += glyphBytes;
+
+        // Custom atlas header + glyph metadata
+        if (_customAtlas && _atlasTextureHandle.isValid()) {
+            // Note: atlas position requires texMgr which we don't store.
+            // The atlas header is written by the card in finalize() after
+            // it obtains the texture handle position. For now, reserve space.
+            _gpuAtlasHeaderOffset = (_derivedHandle.offset + offset) / sizeof(float);
+            // Zero-fill — card will overwrite with actual atlas position
+            uint32_t atlasHeaderBytes = 4 * sizeof(uint32_t);
+            std::memset(base + offset, 0, atlasHeaderBytes);
+            offset += atlasHeaderBytes;
+
+            const auto& glyphMeta = _customAtlas->getGlyphMetadata();
+            if (!glyphMeta.empty()) {
+                uint32_t metaBytes = static_cast<uint32_t>(
+                    glyphMeta.size() * sizeof(GlyphMetadataGPU));
+                std::memcpy(base + offset, glyphMeta.data(), metaBytes);
+            }
+        }
+
+        return Ok();
+    }
+
+    //=========================================================================
+    // Data
+    //=========================================================================
+
+    // Lightweight AABB data for grid computation (populated by calculate from buffer)
+    struct PrimBounds {
+        float minX, minY, maxX, maxY;
+        uint32_t type;
+    };
+    std::vector<PrimBounds> _primBounds;
+
+    // The buffer holding all primitives (shared with card)
+    YDrawBuffer::Ptr _buffer;
+
     std::vector<uint32_t> _gridStaging;
     std::vector<YDrawGlyph> _glyphs;
     std::vector<uint32_t> _glyphSortedOrder;
@@ -1546,13 +1505,28 @@ private:
 
     // Custom atlas
     MsdfAtlas::Ptr _customAtlas;
-    GpuAllocator::Ptr _globalAllocator;
+    GpuAllocator::Ptr _gpuAllocator;
 
     // TTF font metrics cache (fontId -> hhea ascender/descender)
     std::unordered_map<int, TtfMetrics> _ttfMetricsCache;
 
     // User-specified font ID mapping (user fontId -> atlas fontId)
     std::unordered_map<int, int> _userFontIdMap;
+
+    // Buffer font ID -> atlas font ID mapping (populated during calculate())
+    std::unordered_map<int, int> _bufferFontIdMap;
+
+    // GPU state (managed by lifecycle methods)
+    CardManager::Ptr _cardMgr;
+    uint32_t _metaSlotIndex = 0;
+    BufferHandle _primHandle = BufferHandle::invalid();
+    BufferHandle _derivedHandle = BufferHandle::invalid();
+    std::vector<uint32_t> _primWordOffsets;
+    uint32_t _gpuGridOffset = 0;
+    uint32_t _gpuGlyphOffset = 0;
+    uint32_t _gpuAtlasHeaderOffset = 0;
+    TextureHandle _atlasTextureHandle = TextureHandle::invalid();
+    bool _bufferDirty = true;
 };
 
 //=============================================================================
@@ -1560,10 +1534,26 @@ private:
 //=============================================================================
 
 Result<YDrawBuilder::Ptr> YDrawBuilder::createImpl(
-    FontManager::Ptr fontManager, GpuAllocator::Ptr allocator)
+    FontManager::Ptr fontManager, GpuAllocator::Ptr allocator,
+    std::shared_ptr<YDrawBuffer> buffer,
+    CardManager::Ptr cardMgr, uint32_t metaSlotIndex)
+{
+    // cardMgr may be null for transitional cards that still manage their own GPU state.
+    // Lifecycle methods (declareBufferNeeds, allocateBuffers, etc.) validate it at call time.
+    return Ok(Ptr(new YDrawBuilderImpl(std::move(fontManager),
+                                        std::move(allocator),
+                                        std::move(buffer),
+                                        std::move(cardMgr), metaSlotIndex)));
+}
+
+Result<YDrawBuilder::Ptr> YDrawBuilder::createImpl(
+    FontManager::Ptr fontManager, GpuAllocator::Ptr allocator,
+    std::shared_ptr<YDrawBuffer> buffer)
 {
     return Ok(Ptr(new YDrawBuilderImpl(std::move(fontManager),
-                                        std::move(allocator))));
+                                        std::move(allocator),
+                                        std::move(buffer),
+                                        CardManager::Ptr{}, 0)));
 }
 
 } // namespace yetty

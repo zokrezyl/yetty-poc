@@ -1,5 +1,4 @@
 #include "sugiyama-layout.h"
-#include <yetty/ydraw-builder.h>
 #include <algorithm>
 #include <cmath>
 #include <functional>
@@ -11,7 +10,7 @@ Result<SugiyamaLayout::Ptr> SugiyamaLayout::create() {
     return Ok(Ptr(new SugiyamaLayout()));
 }
 
-Result<void> SugiyamaLayout::layout(Graph& graph, YDrawBuilder* builder) {
+Result<void> SugiyamaLayout::layout(Graph& graph, MeasureTextFn measureText) {
     if (graph.nodes.empty()) {
         return Ok();
     }
@@ -33,7 +32,7 @@ Result<void> SugiyamaLayout::layout(Graph& graph, YDrawBuilder* builder) {
     reduceCrossings(graph);
 
     // Phase 5: Position nodes
-    positionNodes(graph, builder);
+    positionNodes(graph, measureText);
 
     // Phase 6: Route edges
     routeEdges(graph);
@@ -295,7 +294,7 @@ float SugiyamaLayout::barycenter(const std::string& nodeId, const Graph& graph,
 //=============================================================================
 // Phase 5: Node Positioning
 //=============================================================================
-void SugiyamaLayout::positionNodes(Graph& graph, YDrawBuilder* builder) {
+void SugiyamaLayout::positionNodes(Graph& graph, MeasureTextFn measureText) {
     // First, compute node sizes based on labels
     float defaultWidth = 80.0f;
     float defaultHeight = 40.0f;
@@ -307,9 +306,9 @@ void SugiyamaLayout::positionNodes(Graph& graph, YDrawBuilder* builder) {
             continue;
         }
 
-        // Measure text if builder is available
-        if (builder && !node.label.empty()) {
-            float textWidth = builder->measureTextWidth(node.label, node.style.fontSize);
+        // Measure text if measurement function is available
+        if (measureText && !node.label.empty()) {
+            float textWidth = measureText(node.label, node.style.fontSize);
             node.width = textWidth + _params.nodePaddingX * 2;
             node.height = node.style.fontSize + _params.nodePaddingY * 2;
 

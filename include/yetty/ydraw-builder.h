@@ -2,6 +2,7 @@
 
 #include <yetty/base/object.h>
 #include <yetty/base/factory.h>
+#include <yetty/card-manager.h>
 #include <yetty/ms-msdf-font.h>
 #include <yetty/msdf-atlas.h>
 #include <yetty/msdf-cdb-provider.h>
@@ -14,8 +15,8 @@
 
 namespace yetty {
 
-// Forward declare SDFPrimitive (defined in cards/hdraw/hdraw.h)
-namespace card { struct SDFPrimitive; }
+// Forward declarations
+class YDrawBuffer;
 
 //=============================================================================
 // YDrawGlyph - Positioned glyph for GPU rendering (20 bytes)
@@ -60,7 +61,7 @@ struct YDrawGlyph {
         uint32_t exp  = (h16 >> 10) & 0x1F;
         uint32_t mant = h16 & 0x3FF;
         uint32_t f32bits;
-        if (exp == 0) f32bits = sign; // zero/denorm→0
+        if (exp == 0) f32bits = sign; // zero/denorm->0
         else if (exp == 31) f32bits = sign | 0x7F800000; // inf
         else f32bits = sign | ((exp + 112) << 23) | (mant << 13);
         float r; std::memcpy(&r, &f32bits, 4); return r;
@@ -103,13 +104,13 @@ struct YDrawMetadata {
 static_assert(sizeof(YDrawMetadata) == 64, "YDrawMetadata must be 64 bytes");
 
 //=============================================================================
-// YDrawBuilder - Content generation and spatial grid builder
+// YDrawBuilder - AABB computation and spatial grid builder
 //
-// Accumulates SDF primitives and MSDF text glyphs into staging buffers,
-// computes scene bounds, and builds a spatial hash grid for GPU culling.
+// Takes a YDrawBuffer at creation time. The buffer holds all primitives.
+// calculate() reads the buffer, computes AABB per prim, builds the spatial
+// hash grid for GPU culling.
 //
-// This is a pure content builder with no GPU or Card dependencies.
-// Cards copy the staging data to GPU buffers.
+// Cards add primitives to the YDrawBuffer directly, then call calculate().
 //=============================================================================
 class YDrawBuilder : public base::Object,
                      public base::ObjectFactory<YDrawBuilder> {
@@ -129,79 +130,22 @@ public:
     static constexpr uint32_t FLAG_UNIFORM_SCALE = 16;
     static constexpr uint32_t FLAG_CUSTOM_ATLAS = 32;
 
-    // Factory
+    // Factory — buffer is shared between card and builder.
+    // cardMgr provides access to buffer/texture managers for GPU allocation.
+    // Full factory — with GPU card manager for buffer lifecycle.
     static Result<Ptr> createImpl(FontManager::Ptr fontManager,
-                                  GpuAllocator::Ptr allocator);
+                                  GpuAllocator::Ptr allocator,
+                                  std::shared_ptr<YDrawBuffer> buffer,
+                                  CardManager::Ptr cardMgr,
+                                  uint32_t metaSlotIndex);
+
+    // Lightweight factory — no GPU card manager (for offline/file writers).
+    static Result<Ptr> createImpl(FontManager::Ptr fontManager,
+                                  GpuAllocator::Ptr allocator,
+                                  std::shared_ptr<YDrawBuffer> buffer);
 
     ~YDrawBuilder() override = default;
     const char* typeName() const override { return "YDrawBuilder"; }
-
-    //=========================================================================
-    // Primitive API
-    //=========================================================================
-    virtual uint32_t addPrimitive(const card::SDFPrimitive& prim) = 0;
-    virtual uint32_t addCircle(float cx, float cy, float radius,
-                               uint32_t fillColor, uint32_t strokeColor = 0,
-                               float strokeWidth = 0, uint32_t layer = 0) = 0;
-    virtual uint32_t addBox(float cx, float cy, float halfW, float halfH,
-                            uint32_t fillColor, uint32_t strokeColor = 0,
-                            float strokeWidth = 0, float round = 0,
-                            uint32_t layer = 0) = 0;
-    virtual uint32_t addSegment(float x0, float y0, float x1, float y1,
-                                uint32_t strokeColor, float strokeWidth = 1,
-                                uint32_t layer = 0) = 0;
-    virtual uint32_t addBezier2(float x0, float y0, float x1, float y1,
-                                float x2, float y2,
-                                uint32_t strokeColor, float strokeWidth = 1,
-                                uint32_t layer = 0) = 0;
-    virtual uint32_t addRotatedGlyph(float x, float y, float w, float h,
-                                      float angle, uint32_t glyphIndex,
-                                      uint32_t color) = 0;
-
-    // Color wheel (HSV color picker)
-    // params: center, outerRadius, innerRadius, hue(0-1), sat(0-1), val(0-1), indicatorSize
-    virtual uint32_t addColorWheel(float cx, float cy, float outerR, float innerR,
-                                   float hue, float sat, float val,
-                                   float indicatorSize = 6.0f,
-                                   uint32_t layer = 0) = 0;
-
-    //=========================================================================
-    // Text API
-    //=========================================================================
-    virtual Result<void> addText(float x, float y, const std::string& text,
-                                  float fontSize, uint32_t color,
-                                  uint32_t layer = 0) = 0;
-    virtual Result<void> addText(float x, float y, const std::string& text,
-                                  float fontSize, uint32_t color,
-                                  uint32_t layer, int fontId) = 0;
-    virtual Result<void> addRotatedText(float x, float y, const std::string& text,
-                                         float fontSize, uint32_t color,
-                                         float angleRadians, int fontId = -1) = 0;
-
-    // Measure text width without adding glyphs (for layout)
-    virtual float measureTextWidth(const std::string& text,
-                                   float fontSize, int fontId = -1) = 0;
-
-    // Font metrics (for layout - ascent/descent from baseline)
-    virtual float fontAscent(float fontSize, int fontId = -1) = 0;
-    virtual float fontDescent(float fontSize, int fontId = -1) = 0;
-
-    //=========================================================================
-    // Font API
-    //=========================================================================
-    virtual Result<int> addFont(const std::string& ttfPath) = 0;
-    // Caller-specified font ID: registers font at the given ID.
-    // addText(..., fontId) will resolve through this mapping.
-    virtual Result<void> addFont(int fontId, const std::string& ttfPath) = 0;
-    // Add font from raw TTF data. Content-hashes the data for a stable
-    // temp filename → stable CDB cache key across runs.
-    virtual Result<int> addFontData(const uint8_t* data, size_t size,
-                                     const std::string& name) = 0;
-    // Map a user-chosen fontId to an atlas fontId (returned by addFont/addFontData)
-    virtual void mapFontId(int userId, int atlasId) = 0;
-    virtual int registerFont(const std::string& cdbPath,
-                             const std::string& ttfPath = "",
-                             MsdfCdbProvider::Ptr provider = nullptr) = 0;
 
     //=========================================================================
     // Atlas access
@@ -239,8 +183,6 @@ public:
     //=========================================================================
     // Staging data access (for GPU upload by card)
     //=========================================================================
-    virtual const std::vector<card::SDFPrimitive>& primStaging() const = 0;
-    virtual std::vector<card::SDFPrimitive>& primStagingMut() = 0;
     virtual const std::vector<uint32_t>& gridStaging() const = 0;
     virtual void clearGridStaging() = 0;
     virtual const std::vector<YDrawGlyph>& glyphs() const = 0;
@@ -271,7 +213,8 @@ public:
     // Grid computation
     //=========================================================================
 
-    // Compute scene bounds + build spatial hash grid from staging vectors.
+    // Reads all prims from the YDrawBuffer, computes AABB per prim,
+    // computes scene bounds + builds spatial hash grid.
     // Call after all primitives/glyphs have been added.
     virtual void calculate() = 0;
 
@@ -285,33 +228,53 @@ public:
     virtual uint32_t gridHeight() const = 0;
 
     //=========================================================================
-    // GPU-resident primitive operations
-    // (for rebuildAndUpload path where prims live in mapped GPU memory)
+    // GPU buffer lifecycle
+    //
+    // Cards forward their Card:: overrides to these methods.
+    // Call calculate() before declareBufferNeeds().
+    //
+    // Flow:
+    //   renderToStaging: card populates buffer, calls calculate()
+    //   declareBufferNeeds: builder reserves space for prims + derived
+    //   allocateBuffers: builder gets handles, writes prim/grid/glyph data
+    //   allocateTextures: builder allocates custom atlas texture (if any)
+    //   writeTextures: builder writes atlas pixel data
+    //   finalize: builder re-writes dirty regions, returns metadata
+    //   suspend/dispose: builder releases handles
     //=========================================================================
 
-    // Compute scene bounds from a GPU-mapped primitive array
-    virtual void computeSceneBoundsFromPrims(
-        const card::SDFPrimitive* prims, uint32_t count) = 0;
+    /// Reserve buffer space for prims + derived (grid + glyphs + atlas).
+    /// Call after calculate().
+    virtual Result<void> declareBufferNeeds() = 0;
 
-    // Build variable-length grid into internal staging from GPU-mapped prims
-    virtual void buildGridFromPrims(
-        const card::SDFPrimitive* prims, uint32_t count) = 0;
+    /// Allocate handles and write prim/grid/glyph data into them.
+    /// Call after commitReservations().
+    virtual Result<void> allocateBuffers() = 0;
 
-    // Compute optimal grid dimensions from GPU-mapped primitives
-    struct GridDims {
-        uint32_t width;
-        uint32_t height;
-        float cellSize;
-    };
-    virtual GridDims computeGridDims(
-        const card::SDFPrimitive* prims, uint32_t count) = 0;
+    /// Allocate custom atlas texture handle (if hasCustomAtlas).
+    virtual Result<void> allocateTextures() = 0;
 
-    //=========================================================================
-    // Static utilities
-    //=========================================================================
+    /// Write atlas pixel data into allocated texture.
+    virtual Result<void> writeTextures() = 0;
 
-    // Recompute AABB for a single primitive
-    static void recomputeAABB(card::SDFPrimitive& prim);
+    /// Re-write dirty prim/grid/glyph data into allocated handles.
+    /// Called every frame from Card::finalize(). Only writes if dirty.
+    virtual Result<void> writeBuffers() = 0;
+
+    /// Release all GPU handles (for suspend/dispose).
+    virtual Result<void> releaseBuffers() = 0;
+
+    /// Whether buffer sizes changed and realloc is needed.
+    virtual bool needsBufferRealloc() const = 0;
+
+    /// Whether texture sizes changed and realloc is needed.
+    virtual bool needsTextureRealloc() const = 0;
+
+    /// Pack metadata and write to GPU. Call from Card::finalize().
+    virtual Result<void> writeMetadata(uint32_t widthCells, uint32_t heightCells,
+                                       float viewZoom = 1.0f,
+                                       float viewPanX = 0.0f,
+                                       float viewPanY = 0.0f) = 0;
 
 protected:
     YDrawBuilder() = default;

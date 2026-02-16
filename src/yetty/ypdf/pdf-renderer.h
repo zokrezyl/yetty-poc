@@ -4,7 +4,7 @@ struct _pdfio_file_s;
 typedef struct _pdfio_file_s pdfio_file_t;
 
 namespace yetty {
-class YDrawWriter;
+class YDrawBuffer;
 }
 
 namespace yetty::card {
@@ -15,9 +15,10 @@ struct PdfRenderResult {
     int pageCount = 0;
 };
 
-/// Render all pages of a PDF to the given YDrawWriter.
-/// Handles font extraction, text placement, and vector graphics.
-/// Works with any YDrawWriter implementation (internal GPU or binary).
-PdfRenderResult renderPdfToWriter(pdfio_file_t* pdf, yetty::YDrawWriter* writer);
+/// Render all pages of a PDF into the given buffer.
+/// Fonts, text, geometry, and scene metadata all go into the buffer.
+/// No builder dependency — the buffer is self-contained.
+PdfRenderResult renderPdfToBuffer(pdfio_file_t* pdf,
+                                   yetty::YDrawBuffer* buffer);
 
 } // namespace yetty::card

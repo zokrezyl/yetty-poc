@@ -1,23 +1,23 @@
 #include "html-renderer.h"
 #include "html-container.h"
-#include <yetty/ydraw-writer.h>
+#include "../ydraw/ydraw-buffer.h"
 #include <ytrace/ytrace.hpp>
 
 namespace yetty::card {
 
-HtmlRenderResult renderHtmlToWriter(
-    const std::string& html, YDrawWriter* writer,
+HtmlRenderResult renderHtmlToBuffer(
+    const std::string& html, std::shared_ptr<YDrawBuffer> buffer,
     float fontSize, float viewWidth,
     HttpFetcher* fetcher)
 {
     HtmlRenderResult result;
 
-    if (html.empty() || !writer) return result;
+    if (html.empty() || !buffer) return result;
 
     auto containerResult = HtmlContainer::create(
-        writer, nullptr, fontSize, fetcher);
+        buffer, fontSize, fetcher);
     if (!containerResult) {
-        ywarn("renderHtmlToWriter: failed to create HtmlContainer");
+        ywarn("renderHtmlToBuffer: failed to create HtmlContainer");
         return result;
     }
     result.container = std::move(*containerResult);
@@ -30,7 +30,7 @@ HtmlRenderResult renderHtmlToWriter(
         html.c_str(), result.container.get());
 
     if (!result.document) {
-        ywarn("renderHtmlToWriter: failed to parse HTML");
+        ywarn("renderHtmlToBuffer: failed to parse HTML");
         return result;
     }
 

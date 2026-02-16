@@ -1,6 +1,8 @@
 #include "html-container.h"
 #include "http-fetcher.h"
-#include <yetty/ydraw-writer.h>
+#include "../font/util.h"
+#include "../ydraw/ydraw-buffer.h"
+#include <fstream>
 #include <ytrace/ytrace.hpp>
 #include <algorithm>
 #include <cctype>
@@ -94,9 +96,9 @@ static bool parseImageSize(const std::string& data, int& w, int& h) {
 
 class HtmlContainerImpl : public HtmlContainer {
 public:
-    HtmlContainerImpl(YDrawWriter* writer, MsMsdfFont::Ptr /*font*/,
+    HtmlContainerImpl(YDrawBuffer::Ptr buffer,
                       float defaultFontSize, HttpFetcher* fetcher)
-        : _writer(writer)
+        : _buffer(std::move(buffer))
         , _fetcher(fetcher)
         , _defaultFontSize(defaultFontSize)
     {}
@@ -134,23 +136,22 @@ public:
         fi->decoration = decoration;
         fi->fontId = 0;  // default font
 
-        // Resolve font via fontconfig and register with builder
-        if (faceName && *faceName && _writer) {
+        // Resolve font via fontconfig and load into buffer + fontUtil
+        if (faceName && *faceName) {
             std::string ttfPath = resolveFontPath(
                 faceName, weight, fi->italic);
             if (!ttfPath.empty()) {
-                auto fontResult = _writer->addFont(ttfPath);
-                if (fontResult) {
-                    fi->fontId = *fontResult;
+                fi->fontId = loadFont(ttfPath);
+                if (fi->fontId >= 0) {
                     yinfo("HtmlContainer: font '{}' w={} i={} -> fontId={}",
-                          faceName, weight, fi->italic, *fontResult);
+                          faceName, weight, fi->italic, fi->fontId);
                 }
             }
         }
 
-        // Get font metrics from builder (centralized atlas logic)
-        fi->ascent = _writer->fontAscent(fi->size, fi->fontId);
-        fi->descent = _writer->fontDescent(fi->size, fi->fontId);
+        // Get font metrics from FontUtil
+        fi->ascent = _fontUtil.fontAscent(fi->size, fi->fontId);
+        fi->descent = _fontUtil.fontDescent(fi->size, fi->fontId);
         fi->height = fi->ascent + fi->descent;
         fi->xHeight = fi->ascent * 0.65f;
 
@@ -189,7 +190,7 @@ public:
         litehtml::uint_ptr hFont, litehtml::web_color color,
         const litehtml::position& pos) override {
         auto* fi = reinterpret_cast<FontInfo*>(hFont);
-        if (!fi || !text || !*text || !_writer) return;
+        if (!fi || !text || !*text || !_buffer) return;
 
         uint32_t packed = packColor(color);
         // Baseline = bottom of position box - descent (matches litehtml reference containers)
@@ -200,25 +201,25 @@ public:
               fi->size, fi->fontId, fi->ascent, fi->descent, fi->height, baseline,
               color.red, color.green, color.blue, color.alpha);
 
-        _writer->addText(static_cast<float>(pos.x), baseline,
-                           text, fi->size, packed, _layer, fi->fontId);
+        _buffer->addText(static_cast<float>(pos.x), baseline,
+                         text, fi->size, packed, _layer, fi->fontId);
 
         if (fi->decoration & litehtml::font_decoration_underline) {
             float y = baseline + 2.0f;
             float w = measureTextWidth(text, *fi);
-            _writer->addSegment(
+            _buffer->addSegment(_layer,
                 static_cast<float>(pos.x), y,
                 static_cast<float>(pos.x) + w, y,
-                packed, 1.0f, _layer);
+                0, packed, 1.0f, 0);
         }
 
         if (fi->decoration & litehtml::font_decoration_linethrough) {
             float y = static_cast<float>(pos.y) + fi->xHeight;
             float w = measureTextWidth(text, *fi);
-            _writer->addSegment(
+            _buffer->addSegment(_layer,
                 static_cast<float>(pos.x), y,
                 static_cast<float>(pos.x) + w, y,
-                packed, 1.0f, _layer);
+                0, packed, 1.0f, 0);
         }
     }
 
@@ -226,7 +227,7 @@ public:
         litehtml::uint_ptr /*hdc*/,
         const std::vector<litehtml::background_paint>& bg) override
     {
-        if (!_writer) return;
+        if (!_buffer) return;
 
         for (const auto& paint : bg) {
             float x = static_cast<float>(paint.clip_box.x);
@@ -241,8 +242,8 @@ public:
                 float cx = x + w * 0.5f;
                 float cy = y + h * 0.5f;
                 float round = static_cast<float>(paint.border_radius.top_left_x);
-                _writer->addBox(cx, cy, w * 0.5f, h * 0.5f,
-                                  placeholderColor, 0, 0, round, _layer);
+                _buffer->addBox(_layer, cx, cy, w * 0.5f, h * 0.5f,
+                                placeholderColor, 0, 0, round);
             }
 
             if (paint.color.alpha == 0) continue;
@@ -251,7 +252,7 @@ public:
 
             // Root/body background: covers full viewport width -> set card bg
             if (w >= static_cast<float>(_viewWidth) && x <= 0.0f) {
-                _writer->setBgColor(color);
+                _buffer->setBgColor(color);
                 continue;
             }
 
@@ -259,8 +260,8 @@ public:
                 float cx = x + w * 0.5f;
                 float cy = y + h * 0.5f;
                 float round = static_cast<float>(paint.border_radius.top_left_x);
-                _writer->addBox(cx, cy, w * 0.5f, h * 0.5f,
-                                  color, 0, 0, round, _layer);
+                _buffer->addBox(_layer, cx, cy, w * 0.5f, h * 0.5f,
+                                color, 0, 0, round);
             }
         }
     }
@@ -271,7 +272,7 @@ public:
         const litehtml::position& draw_pos,
         bool /*root*/) override
     {
-        if (!_writer) return;
+        if (!_buffer) return;
 
         float x = static_cast<float>(draw_pos.x);
         float y = static_cast<float>(draw_pos.y);
@@ -288,26 +289,26 @@ public:
         if (borders.top.width > 0 && borders.top.color.alpha > 0) {
             uint32_t c = packColor(borders.top.color);
             float bw = static_cast<float>(borders.top.width);
-            _writer->addSegment(x, y + bw * 0.5f,
-                                  x + w, y + bw * 0.5f, c, bw, _layer);
+            _buffer->addSegment(_layer, x, y + bw * 0.5f,
+                                x + w, y + bw * 0.5f, 0, c, bw, 0);
         }
         if (borders.bottom.width > 0 && borders.bottom.color.alpha > 0) {
             uint32_t c = packColor(borders.bottom.color);
             float bw = static_cast<float>(borders.bottom.width);
-            _writer->addSegment(x, y + h - bw * 0.5f,
-                                  x + w, y + h - bw * 0.5f, c, bw, _layer);
+            _buffer->addSegment(_layer, x, y + h - bw * 0.5f,
+                                x + w, y + h - bw * 0.5f, 0, c, bw, 0);
         }
         if (borders.left.width > 0 && borders.left.color.alpha > 0) {
             uint32_t c = packColor(borders.left.color);
             float bw = static_cast<float>(borders.left.width);
-            _writer->addSegment(x + bw * 0.5f, y,
-                                  x + bw * 0.5f, y + h, c, bw, _layer);
+            _buffer->addSegment(_layer, x + bw * 0.5f, y,
+                                x + bw * 0.5f, y + h, 0, c, bw, 0);
         }
         if (borders.right.width > 0 && borders.right.color.alpha > 0) {
             uint32_t c = packColor(borders.right.color);
             float bw = static_cast<float>(borders.right.width);
-            _writer->addSegment(x + w - bw * 0.5f, y,
-                                  x + w - bw * 0.5f, y + h, c, bw, _layer);
+            _buffer->addSegment(_layer, x + w - bw * 0.5f, y,
+                                x + w - bw * 0.5f, y + h, 0, c, bw, 0);
         }
     }
 
@@ -315,7 +316,7 @@ public:
         litehtml::uint_ptr /*hdc*/,
         const litehtml::list_marker& marker) override
     {
-        if (!_writer) return;
+        if (!_buffer) return;
 
         uint32_t color = packColor(marker.color);
         float x = static_cast<float>(marker.pos.x);
@@ -330,16 +331,16 @@ public:
 
         if (marker.marker_type == litehtml::list_style_type_disc) {
             float r = std::min(w, h) * 0.3f;
-            _writer->addCircle(x + w * 0.5f, y + h * 0.5f, r,
-                                 color, 0, 0, _layer);
+            _buffer->addCircle(_layer, x + w * 0.5f, y + h * 0.5f, r,
+                               color, 0, 0, 0);
         } else if (marker.marker_type == litehtml::list_style_type_square) {
             float s = std::min(w, h) * 0.3f;
-            _writer->addBox(x + w * 0.5f, y + h * 0.5f, s, s,
-                              color, 0, 0, 0, _layer);
+            _buffer->addBox(_layer, x + w * 0.5f, y + h * 0.5f, s, s,
+                            color, 0, 0, 0);
         } else if (marker.marker_type == litehtml::list_style_type_circle) {
             float r = std::min(w, h) * 0.3f;
-            _writer->addCircle(x + w * 0.5f, y + h * 0.5f, r,
-                                 0, color, 1.0f, _layer);
+            _buffer->addCircle(_layer, x + w * 0.5f, y + h * 0.5f, r,
+                               0, color, 1.0f, 0);
         }
     }
 
@@ -504,8 +505,45 @@ private:
         float descent;
         float height;
         float xHeight;
-        int fontId;  // builder font ID (0 = default)
+        int fontId;  // buffer font ID (0 = default)
     };
+
+    //=========================================================================
+    // Font loading — reads TTF, registers with both buffer and fontUtil
+    //=========================================================================
+
+    int loadFont(const std::string& ttfPath) {
+        // Check cache — avoid loading the same TTF twice
+        auto it = _fontIdCache.find(ttfPath);
+        if (it != _fontIdCache.end()) return it->second;
+
+        // Read TTF file
+        std::ifstream file(ttfPath, std::ios::binary);
+        if (!file) {
+            ywarn("HtmlContainer::loadFont: failed to open {}", ttfPath);
+            return 0;
+        }
+        std::vector<uint8_t> data((std::istreambuf_iterator<char>(file)),
+                                   std::istreambuf_iterator<char>());
+        if (data.empty()) return 0;
+
+        // Extract font name from path
+        std::string name = ttfPath;
+        auto slash = name.rfind('/');
+        if (slash != std::string::npos) name = name.substr(slash + 1);
+
+        // Add to buffer (for serialization and builder's MSDF atlas)
+        int bufferFontId = _buffer->addFontBlob(data.data(), data.size(), name);
+
+        // Add to FontUtil (for text measurement)
+        auto utilResult = _fontUtil.addFontData(data.data(), data.size(), name);
+        if (!utilResult) {
+            ywarn("HtmlContainer::loadFont: FontUtil failed for {}", ttfPath);
+        }
+
+        _fontIdCache[ttfPath] = bufferFontId;
+        return bufferFontId;
+    }
 
     //=========================================================================
     // Fontconfig resolution
@@ -595,9 +633,9 @@ private:
     // Text measurement
     //=========================================================================
 
-    float measureTextWidth(const char* text, const FontInfo& fi) const {
-        if (!text || !*text || !_writer) return 0.0f;
-        return _writer->measureText(text, fi.size, fi.fontId);
+    float measureTextWidth(const char* text, const FontInfo& fi) {
+        if (!text || !*text) return 0.0f;
+        return _fontUtil.measureTextWidth(text, fi.size, fi.fontId);
     }
 
     static uint32_t packColor(litehtml::web_color c) {
@@ -612,7 +650,8 @@ private:
         int height = 0;
     };
 
-    YDrawWriter* _writer;
+    YDrawBuffer::Ptr _buffer;
+    font::FontUtil _fontUtil;
     HttpFetcher* _fetcher;
     float _defaultFontSize;
     int _viewWidth = 600;
@@ -624,6 +663,7 @@ private:
 
     std::vector<FontInfo*> _fonts;
     std::unordered_map<std::string, std::string> _fontPathCache;  // key -> ttf path
+    std::unordered_map<std::string, int> _fontIdCache;            // ttf path -> fontId
     std::unordered_map<std::string, ImageInfo> _imageCache;
 };
 
@@ -632,10 +672,10 @@ private:
 //=============================================================================
 
 Result<HtmlContainer::Ptr> HtmlContainer::createImpl(
-    YDrawWriter* writer, MsMsdfFont::Ptr font,
+    std::shared_ptr<YDrawBuffer> buffer,
     float defaultFontSize, HttpFetcher* fetcher)
 {
-    return Ok(Ptr(new HtmlContainerImpl(writer, std::move(font),
+    return Ok(Ptr(new HtmlContainerImpl(std::move(buffer),
                                          defaultFontSize, fetcher)));
 }
 

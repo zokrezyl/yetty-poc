@@ -2,11 +2,8 @@
 #include <yetty/yetty-context.h>
 #include "cards/image/image.h"
 #include "cards/plot/plot.h"
-#include "cards/hdraw/hdraw.h"
 #include "cards/ydraw/ydraw.h"
 #include "cards/ygui/ygui.h"
-#include "cards/kdraw/kdraw.h"
-#include "cards/jdraw/jdraw.h"
 #include "cards/ydraw-zoo/ydraw-zoo.h"
 #include "cards/ydraw-maze/ydraw-maze.h"
 #include "cards/ytext/ytext.h"
@@ -64,14 +61,6 @@ public:
             return card::Plot::create(ctx, x, y, w, h, args, payload);
         });
 
-        registerCard("hdraw", [](const YettyContext& ctx,
-                                 int32_t x, int32_t y,
-                                 uint32_t w, uint32_t h,
-                                 const std::string& args,
-                                 const std::string& payload) {
-            return card::HDraw::create(ctx.cardManager, ctx.gpu, x, y, w, h, args, payload);
-        });
-
         registerCard("ydraw", [](const YettyContext& ctx,
                                  int32_t x, int32_t y,
                                  uint32_t w, uint32_t h,
@@ -112,22 +101,6 @@ public:
             auto result = card::YText::create(ctx, x, y, w, h, args, payload);
             if (!result) return std::unexpected(result.error());
             return Ok<CardPtr>(*result);
-        });
-
-        registerCard("kdraw", [](const YettyContext& ctx,
-                                 int32_t x, int32_t y,
-                                 uint32_t w, uint32_t h,
-                                 const std::string& args,
-                                 const std::string& payload) {
-            return card::KDraw::create(ctx, x, y, w, h, args, payload);
-        });
-
-        registerCard("jdraw", [](const YettyContext& ctx,
-                                 int32_t x, int32_t y,
-                                 uint32_t w, uint32_t h,
-                                 const std::string& args,
-                                 const std::string& payload) {
-            return card::JDraw::create(ctx, x, y, w, h, args, payload);
         });
 
         registerCard("markdown", [](const YettyContext& ctx,

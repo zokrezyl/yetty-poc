@@ -2,9 +2,10 @@
 #include "html-container.h"
 #include "html-renderer.h"
 #include "http-fetcher.h"
-#include <yetty/ydraw-writer.h>
 #include <yetty/ydraw-builder.h>
-#include "../hdraw/hdraw.h"  // For SDFPrimitive
+#include "../../ydraw/ydraw-buffer.h"
+#include "../../ydraw/ydraw-types.gen.h"
+using yetty::YDrawBuffer;
 #include <yetty/base/event-loop.h>
 #include <yetty/msdf-glyph-data.h>
 #include <yetty/card-texture-manager.h>
@@ -85,15 +86,11 @@ public:
         , _screenId(ctx.screenId)
         , _argsStr(args)
         , _payloadStr(payload)
+        , _fontManager(ctx.fontManager)
+        , _gpuAllocator(ctx.gpuAllocator)
     {
         _shaderGlyph = SHADER_GLYPH;
-        auto writerRes = YDrawWriterInternal::create(ctx.fontManager, ctx.globalAllocator);
-        if (writerRes) {
-            _writer = *writerRes;
-            _builder = _writer->builder();
-        } else {
-            yerror("YHtmlImpl: failed to create writer");
-        }
+        _buffer = *YDrawBuffer::create();
         // Default viewWidth from card pixel dimensions
         _viewWidth = static_cast<float>(_widthCells * _cellWidth);
     }
@@ -142,6 +139,7 @@ public:
         if (_needsRedraw && _document) {
             _needsRedraw = false;
             _builder->clear();
+            _buffer->clear();
             int viewW = static_cast<int>(_viewWidth);
             int docHeight = _document->height();
             litehtml::position clip(0, 0, viewW, docHeight);
@@ -158,12 +156,8 @@ public:
     Result<void> dispose() override {
         deregisterFromEvents();
         _derivedStorage = StorageHandle::invalid();
-        _grid = nullptr;
-        _gridSize = 0;
         _primStorage = StorageHandle::invalid();
-        _primitives = nullptr;
         _primCount = 0;
-        _primCapacity = 0;
         if (_metaHandle.isValid() && _cardMgr) {
             if (auto res = _cardMgr->deallocateMetadata(_metaHandle); !res) {
                 yerror("YHtmlImpl::dispose: deallocateMetadata failed: {}", error_msg(res));
@@ -174,52 +168,29 @@ public:
     }
 
     void suspend() override {
-        if (_primStorage.isValid() && _primCount > 0 && _builder) {
-            auto& staging = _builder->primStagingMut();
-            staging.resize(_primCount);
-            std::memcpy(staging.data(), _primitives, _primCount * sizeof(SDFPrimitive));
-        }
         _derivedStorage = StorageHandle::invalid();
-        _grid = nullptr;
-        _gridSize = 0;
         _primStorage = StorageHandle::invalid();
-        _primitives = nullptr;
         _primCount = 0;
-        _primCapacity = 0;
     }
 
     void declareBufferNeeds() override {
-        // Save GPU prims back to staging if staging is empty (repack case)
-        // If staging already has data (navigation), use new data, ignore old GPU prims
-        if (_builder && _primStorage.isValid() && _primCount > 0 &&
-            _builder->primStaging().empty()) {
-            auto& staging = _builder->primStagingMut();
-            staging.resize(_primCount);
-            std::memcpy(staging.data(), _primitives, _primCount * sizeof(SDFPrimitive));
-        }
-
-        // Invalidate all handles (matching ypdf pattern)
+        // Invalidate all handles
         _derivedStorage = StorageHandle::invalid();
-        _grid = nullptr;
-        _gridSize = 0;
         _primStorage = StorageHandle::invalid();
-        _primitives = nullptr;
         _primCount = 0;
-        _primCapacity = 0;
 
         if (!_builder) return;
 
         const auto& glyphs = _builder->glyphs();
-        const auto& primStaging = _builder->primStaging();
 
-        if (glyphs.empty() && primStaging.empty()) {
+        if (glyphs.empty() && _buffer->empty()) {
             _builder->clearGridStaging();
             return;
         }
 
         // Reserve prim storage
-        if (!primStaging.empty()) {
-            uint32_t primSize = static_cast<uint32_t>(primStaging.size()) * sizeof(SDFPrimitive);
+        if (!_buffer->empty()) {
+            uint32_t primSize = _buffer->gpuBufferSize();
             _cardMgr->bufferManager()->reserve(primSize);
         }
 
@@ -262,26 +233,22 @@ public:
     Result<void> allocateBuffers() override {
         if (!_builder) return Ok();
 
-        const auto& primStaging = _builder->primStaging();
         const auto& gridStaging = _builder->gridStaging();
         const auto& glyphs = _builder->glyphs();
 
-        // Restore primitives from staging
-        if (!primStaging.empty()) {
-            uint32_t count = static_cast<uint32_t>(primStaging.size());
-            uint32_t allocBytes = count * sizeof(SDFPrimitive);
+        // Allocate and copy primitives from buffer
+        if (!_buffer->empty()) {
+            uint32_t count = _buffer->primCount();
+            uint32_t allocBytes = _buffer->gpuBufferSize();
             auto primResult = _cardMgr->bufferManager()->allocateBuffer(
                 metadataSlotIndex(), "prims", allocBytes);
             if (!primResult) {
                 return Err<void>("YHtmlImpl::allocateBuffers: prim alloc failed");
             }
             _primStorage = *primResult;
-            _primitives = reinterpret_cast<SDFPrimitive*>(_primStorage.data);
-            _primCapacity = count;
             _primCount = count;
-            std::memcpy(_primitives, primStaging.data(), count * sizeof(SDFPrimitive));
-            _builder->primStagingMut().clear();
-            _builder->primStagingMut().shrink_to_fit();
+            std::vector<uint32_t> wordOffsets;
+            _buffer->writeGPU(reinterpret_cast<float*>(_primStorage.data), _primStorage.size, wordOffsets);
             _cardMgr->bufferManager()->markBufferDirty(_primStorage);
         }
 
@@ -313,8 +280,6 @@ public:
             uint32_t offset = 0;
 
             // Copy grid
-            _grid = reinterpret_cast<uint32_t*>(base + offset);
-            _gridSize = static_cast<uint32_t>(gridStaging.size());
             _gridOffset = (_derivedStorage.offset + offset) / sizeof(float);
             if (!gridStaging.empty()) {
                 std::memcpy(base + offset, gridStaging.data(), gridBytes);
@@ -524,20 +489,20 @@ public:
         }
         _metaHandle = *metaResult;
 
+        // Create builder with buffer
+        auto builderRes = YDrawBuilder::create(
+            _fontManager, _gpuAllocator, _buffer, _cardMgr, metadataSlotIndex());
+        if (!builderRes) {
+            return Err<void>("YHtmlImpl::init: failed to create builder", builderRes);
+        }
+        _builder = *builderRes;
+
         if (auto res = registerForEvents(); !res) {
             ywarn("YHtmlImpl::init: event registration failed: {}", error_msg(res));
         }
 
         // White background for HTML
-        _writer->setBgColor(0xFFFFFFFF);
-
-        // Load default sans-serif font (creates custom atlas via writer)
-        std::string defaultFontPath = "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf";
-        auto fontResult = _writer->addFont(defaultFontPath);
-        if (!fontResult) {
-            return Err<void>("YHtmlImpl::init: failed to load default sans-serif font");
-        }
-        yinfo("YHtmlImpl::init: loaded default sans-serif font: {} -> fontId={}", defaultFontPath, *fontResult);
+        _buffer->setBgColor(0xFFFFFFFF);
 
         // Create HTTP fetcher
         auto fetcherResult = HttpFetcher::create();
@@ -747,6 +712,7 @@ private:
         // Re-render with new content
         _htmlContent = std::move(*body);
         _builder->clear();
+        _buffer->clear();
 
         if (auto res = renderHtmlInternal(); !res) {
             ywarn("YHtmlImpl::navigateTo: render failed: {}", error_msg(res));
@@ -821,7 +787,7 @@ private:
                          colorStr.substr(0, 2) == "0X")) {
                         colorStr = colorStr.substr(2);
                     }
-                    _writer->setBgColor(static_cast<uint32_t>(
+                    _buffer->setBgColor(static_cast<uint32_t>(
                         std::stoul(colorStr, nullptr, 16)));
                 }
             }
@@ -876,8 +842,8 @@ private:
             return Err<void>("YHtmlImpl::renderHtml: no content loaded");
         }
 
-        auto result = renderHtmlToWriter(
-            _htmlContent, _writer.get(), _fontSize, _viewWidth, _fetcher.get());
+        auto result = renderHtmlToBuffer(
+            _htmlContent, _buffer, _fontSize, _viewWidth, _fetcher.get());
 
         if (!result.document) {
             return Err<void>("YHtmlImpl::renderHtml: render failed");
@@ -920,21 +886,19 @@ private:
     // Members
     //=========================================================================
 
-    // Writer + Builder
-    YDrawWriterInternal::Ptr _writer;
+    // Builder + Buffer
     YDrawBuilder::Ptr _builder;
+    YDrawBuffer::Ptr _buffer;
+    FontManager::Ptr _fontManager;
+    GpuAllocator::Ptr _gpuAllocator;
     base::ObjectId _screenId = 0;
     std::string _argsStr;
     std::string _payloadStr;
 
     // GPU state
     StorageHandle _primStorage = StorageHandle::invalid();
-    SDFPrimitive* _primitives = nullptr;
     uint32_t _primCount = 0;
-    uint32_t _primCapacity = 0;
     StorageHandle _derivedStorage = StorageHandle::invalid();
-    uint32_t* _grid = nullptr;
-    uint32_t _gridSize = 0;
     uint32_t _gridOffset = 0;
     uint32_t _glyphOffset = 0;
     uint32_t _gridWidth = 0;

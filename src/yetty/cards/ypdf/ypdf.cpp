@@ -1,7 +1,7 @@
 #include "ypdf.h"
-#include "pdf-renderer.h"
-#include "../hdraw/hdraw.h"  // For SDFPrimitive
-#include <yetty/ydraw-writer.h>
+#include "../../ypdf/pdf-renderer.h"
+#include "../../ydraw/ydraw-buffer.h"
+#include <yetty/ydraw-builder.h>
 #include <yetty/base/event-loop.h>
 #include <yetty/msdf-glyph-data.h>
 #include <yetty/card-texture-manager.h>
@@ -83,20 +83,17 @@ YPdf::YPdf(const YettyContext& ctx,
            int32_t x, int32_t y,
            uint32_t widthCells, uint32_t heightCells,
            const std::string& args, const std::string& payload)
-    : Card(ctx.cardManager, ctx.gpu, x, y, widthCells, heightCells)
-    , _argsStr(args)
+    : _argsStr(args)
     , _payloadStr(payload)
     , _fontManager(ctx.fontManager)
+    , _gpuAllocator(ctx.gpuAllocator)
+    , _cardMgr(ctx.cardManager)
+    , _gpu(ctx.gpu)
+    , _x(x), _y(y)
+    , _widthCells(widthCells), _heightCells(heightCells)
 {
     _shaderGlyph = SHADER_GLYPH;
-
-    auto writerRes = YDrawWriterInternal::create(ctx.fontManager, ctx.globalAllocator);
-    if (writerRes) {
-        _writer = *writerRes;
-        _builder = _writer->builder();
-    } else {
-        yerror("YPdf: failed to create YDrawWriterInternal");
-    }
+    _buffer = *YDrawBuffer::create();
 }
 
 YPdf::~YPdf() {
@@ -147,27 +144,21 @@ Result<CardPtr> YPdf::create(
 Result<void> YPdf::init() {
     ydebug("YPdf::init: START");
 
-    if (!_writer || !_builder) {
-        return Err<void>("YPdf::init: no writer/builder");
-    }
-
-    // Load default serif font via writer
-    std::string defaultFontPath = resolveFontPath("serif");
-    if (defaultFontPath.empty()) {
-        return Err<void>("YPdf::init: fontconfig could not resolve 'serif'");
-    }
-    auto fontRes = _writer->addFont(defaultFontPath);
-    if (!fontRes) {
-        return Err<void>("YPdf::init: failed to load default serif font");
-    }
-    yinfo("YPdf::init: loaded default serif font: {} -> fontId={}", defaultFontPath, *fontRes);
-
     // Allocate metadata slot
     auto metaResult = _cardMgr->allocateMetadata(sizeof(YDrawMetadata));
     if (!metaResult) {
         return Err<void>("YPdf::init: failed to allocate metadata");
     }
     _metaHandle = *metaResult;
+
+    // Create builder with buffer
+    auto builderRes = YDrawBuilder::create(
+        _fontManager, _gpuAllocator, _buffer, _cardMgr, metadataSlotIndex());
+    if (!builderRes) {
+        return Err<void>("YPdf::init: failed to create builder", builderRes);
+    }
+    _builder = *builderRes;
+
     _dirty = true;
     _metadataDirty = true;
 
@@ -233,7 +224,7 @@ void YPdf::parseArgs(const std::string& args) {
                     (colorStr.substr(0, 2) == "0x" || colorStr.substr(0, 2) == "0X")) {
                     colorStr = colorStr.substr(2);
                 }
-                _builder->setBgColor(static_cast<uint32_t>(
+                _buffer->setBgColor(static_cast<uint32_t>(
                     std::stoul(colorStr, nullptr, 16)));
             }
         }
@@ -307,22 +298,16 @@ Result<void> YPdf::loadPdf() {
 //=============================================================================
 
 Result<void> YPdf::renderAllPages() {
-    if (!_pdfFile || !_writer) {
-        return Err<void>("YPdf::renderAllPages: no document or writer");
+    if (!_pdfFile || !_builder) {
+        return Err<void>("YPdf::renderAllPages: no document or builder");
     }
 
-    // Shared renderer does everything: font extraction, text, graphics
-    auto result = renderPdfToWriter(_pdfFile, _writer.get());
+    // Render PDF into buffer (fonts, text, geometry, scene metadata)
+    auto result = renderPdfToBuffer(_pdfFile, _buffer.get());
 
     if (result.pageCount == 0) {
         return Err<void>("YPdf::renderAllPages: no valid pages");
     }
-
-    // Compute initial zoom to fit one page height
-    float maxWidth = _builder->sceneMaxX() - _builder->sceneMinX();
-    float cardAspect = static_cast<float>(_widthCells) /
-                       std::max(static_cast<float>(_heightCells), 1.0f);
-    _fitPageHeight = maxWidth / cardAspect;
 
     yinfo("YPdf::renderAllPages: {} pages, totalHeight={:.1f}",
           result.pageCount, result.totalHeight);
@@ -462,35 +447,21 @@ void YPdf::declareBufferNeeds() {
     if (!_builder) return;
 
     const auto& glyphs = _builder->glyphs();
-    const auto& primStaging = _builder->primStaging();
 
-    if (glyphs.empty() && primStaging.empty()) {
+    if (glyphs.empty() && _buffer->empty()) {
         _builder->clearGridStaging();
         return;
     }
 
     // Reserve prim storage
-    if (!primStaging.empty()) {
-        uint32_t primSize = static_cast<uint32_t>(primStaging.size()) * sizeof(SDFPrimitive);
+    if (!_buffer->empty()) {
+        uint32_t primSize = _buffer->gpuBufferSize();
         _cardMgr->bufferManager()->reserve(primSize);
     }
 
     // Calculate grid if needed
     if (_builder->gridStaging().empty()) {
         _builder->calculate();
-
-        // Auto-compute zoom/pan to fit one page height after scene bounds are known
-        if (_fitPageHeight > 0.0f) {
-            float sceneMinY = _builder->sceneMinY();
-            float sceneMaxY = _builder->sceneMaxY();
-            float sceneH = sceneMaxY - sceneMinY;
-            if (sceneH > _fitPageHeight) {
-                _viewZoom = sceneH / _fitPageHeight;
-                float centerY = (sceneMinY + sceneMaxY) * 0.5f;
-                _viewPanY = _fitPageHeight * 0.5f - centerY;
-            }
-            _fitPageHeight = 0.0f;  // only apply once
-        }
     }
 
     // Reserve derived size (grid + glyphs + optional atlas)
@@ -503,14 +474,13 @@ void YPdf::declareBufferNeeds() {
 Result<void> YPdf::allocateBuffers() {
     if (!_builder) return Ok();
 
-    const auto& primStaging = _builder->primStaging();
     const auto& gridStaging = _builder->gridStaging();
     const auto& glyphs = _builder->glyphs();
 
     // Allocate and copy primitives
-    if (!primStaging.empty()) {
-        uint32_t count = static_cast<uint32_t>(primStaging.size());
-        uint32_t allocBytes = count * sizeof(SDFPrimitive);
+    if (!_buffer->empty()) {
+        uint32_t count = _buffer->primCount();
+        uint32_t allocBytes = _buffer->gpuBufferSize();
         auto primResult = _cardMgr->bufferManager()->allocateBuffer(
             metadataSlotIndex(), "prims", allocBytes);
         if (!primResult) {
@@ -518,9 +488,8 @@ Result<void> YPdf::allocateBuffers() {
         }
         _primStorage = *primResult;
         _primCount = count;
-        std::memcpy(_primStorage.data, primStaging.data(), count * sizeof(SDFPrimitive));
-        _builder->primStagingMut().clear();
-        _builder->primStagingMut().shrink_to_fit();
+        std::vector<uint32_t> wordOffsets;
+        _buffer->writeGPU(reinterpret_cast<float*>(_primStorage.data), _primStorage.size, wordOffsets);
         _cardMgr->bufferManager()->markBufferDirty(_primStorage);
     }
 

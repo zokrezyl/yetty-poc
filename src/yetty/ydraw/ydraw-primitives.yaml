@@ -5,7 +5,7 @@
 # All fields are u32 or f32 (both 4 bytes).
 #
 # The Python generator (tools/gen-ydraw-types.py) reads this and produces:
-#   - C++ enum + per-type info    (hdraw-types.gen.h)
+#   - C++ enum + per-type info    (ydraw-types.gen.h)
 #   - WGSL constants + dispatch   (sdf-types.gen.wgsl)
 #
 # In eval blocks, {fieldName} is replaced with cardStorage[primOffset + N]
@@ -965,21 +965,131 @@ primitives:
 
   # Remaining 3D types — constants only (dispatch handled by distfunctions.wgsl)
   - { name: BoxFrame3D,        id: 102, category: sdf3d }
-  - { name: Torus3D,           id: 103, category: sdf3d }
+
+  - name: Torus3D
+    id: 103
+    category: sdf3d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: px,          type: f32 }
+      - { name: py,          type: f32 }
+      - { name: pz,          type: f32 }
+      - { name: majorR,      type: f32 }
+      - { name: minorR,      type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+
   - { name: CappedTorus3D,     id: 104, category: sdf3d }
-  - { name: Cylinder3D,        id: 105, category: sdf3d }
+
+  - name: Cylinder3D
+    id: 105
+    category: sdf3d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: px,          type: f32 }
+      - { name: py,          type: f32 }
+      - { name: pz,          type: f32 }
+      - { name: r,           type: f32 }
+      - { name: h,           type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+
   - { name: CappedCylinder3D,  id: 106, category: sdf3d }
   - { name: RoundedCylinder3D, id: 107, category: sdf3d }
-  - { name: VerticalCapsule3D, id: 108, category: sdf3d }
+
+  - name: VerticalCapsule3D
+    id: 108
+    category: sdf3d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: px,          type: f32 }
+      - { name: py,          type: f32 }
+      - { name: pz,          type: f32 }
+      - { name: h,           type: f32 }
+      - { name: r,           type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+
   - { name: Cone3D,            id: 109, category: sdf3d }
-  - { name: CappedCone3D,      id: 110, category: sdf3d }
+
+  - name: CappedCone3D
+    id: 110
+    category: sdf3d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: px,          type: f32 }
+      - { name: py,          type: f32 }
+      - { name: pz,          type: f32 }
+      - { name: h,           type: f32 }
+      - { name: r1,          type: f32 }
+      - { name: r2,          type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+
   - { name: RoundCone3D,       id: 111, category: sdf3d }
   - { name: Plane3D,           id: 112, category: sdf3d }
   - { name: HexPrism3D,        id: 113, category: sdf3d }
   - { name: TriPrism3D,        id: 114, category: sdf3d }
-  - { name: Octahedron3D,      id: 115, category: sdf3d }
-  - { name: Pyramid3D,         id: 116, category: sdf3d }
-  - { name: Ellipsoid3D,       id: 117, category: sdf3d }
+
+  - name: Octahedron3D
+    id: 115
+    category: sdf3d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: px,          type: f32 }
+      - { name: py,          type: f32 }
+      - { name: pz,          type: f32 }
+      - { name: s,           type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+
+  - name: Pyramid3D
+    id: 116
+    category: sdf3d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: px,          type: f32 }
+      - { name: py,          type: f32 }
+      - { name: pz,          type: f32 }
+      - { name: h,           type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+
+  - name: Ellipsoid3D
+    id: 117
+    category: sdf3d
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: px,          type: f32 }
+      - { name: py,          type: f32 }
+      - { name: pz,          type: f32 }
+      - { name: rx,          type: f32 }
+      - { name: ry,          type: f32 }
+      - { name: rz,          type: f32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+
   - { name: Rhombus3D,         id: 118, category: sdf3d }
   - { name: Link3D,            id: 119, category: sdf3d }
 

@@ -3647,9 +3647,9 @@ std::string GPUScreenImpl::buildGpuStatsText() {
   ss << "\r\n=== GPU Memory Stats ===\r\n";
 
   // Global allocator
-  if (_ctx.globalAllocator) {
+  if (_ctx.gpuAllocator) {
     ss << "\r\n[Global Allocator]\r\n";
-    ss << _ctx.globalAllocator->dumpAllocationsToString();
+    ss << _ctx.gpuAllocator->dumpAllocationsToString();
   }
 
   // Per-terminal allocator
@@ -3678,7 +3678,7 @@ std::string GPUScreenImpl::buildGpuStatsText() {
   }
 
   // Summary
-  uint64_t globalBytes = _ctx.globalAllocator ? _ctx.globalAllocator->totalAllocatedBytes() : 0;
+  uint64_t globalBytes = _ctx.gpuAllocator ? _ctx.gpuAllocator->totalAllocatedBytes() : 0;
   uint64_t terminalBytes = _allocator ? _allocator->totalAllocatedBytes() : 0;
   uint64_t totalBytes = globalBytes + terminalBytes;
   ss << "\r\n[Total] " << totalBytes << " bytes ("

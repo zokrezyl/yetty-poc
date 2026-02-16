@@ -1,8 +1,6 @@
 #pragma once
 
-#include <yetty/card-manager.h>
 #include <yetty/base/event-listener.h>
-#include <yetty/gpu-context.h>
 #include <yetty/result.hpp>
 #include <memory>
 #include <string>
@@ -176,7 +174,10 @@ public:
     // EventListener interface - for mouse/keyboard input
     // Default implementation returns Ok(false) - event not handled
     //=========================================================================
-    Result<bool> onEvent(const base::Event& event) override;
+    Result<bool> onEvent(const base::Event& event) override {
+        (void)event;
+        return Ok(false);
+    }
 
     //=========================================================================
     // Input handling (coordinates in local UV space 0-1)
@@ -196,61 +197,40 @@ public:
     }
 
     // Called by gpu-screen to tell the card its viewport origin (window coordinates)
-    void setScreenOrigin(float x, float y) { _screenOriginX = x; _screenOriginY = y; }
+    virtual void setScreenOrigin(float x, float y) = 0;
 
     //=========================================================================
     // Accessors
     //=========================================================================
 
     // Raw byte offset in metadata buffer
-    uint32_t metadataOffset() const { return _metaHandle.offset; }
+    virtual uint32_t metadataOffset() const = 0;
 
     // Slot index for ANSI encoding - must be implemented by each card
     virtual uint32_t metadataSlotIndex() const = 0;
 
     // Shader glyph codepoint
-    uint32_t shaderGlyph() const { return _shaderGlyph; }
+    virtual uint32_t shaderGlyph() const = 0;
 
     // Position in grid cells
-    int32_t x() const { return _x; }
-    int32_t y() const { return _y; }
-    void setPosition(int32_t x, int32_t y) { _x = x; _y = y; }
+    virtual int32_t x() const = 0;
+    virtual int32_t y() const = 0;
+    virtual void setPosition(int32_t x, int32_t y) = 0;
 
     // Size in grid cells
-    uint32_t widthCells() const { return _widthCells; }
-    uint32_t heightCells() const { return _heightCells; }
+    virtual uint32_t widthCells() const = 0;
+    virtual uint32_t heightCells() const = 0;
 
     // Card type name
     virtual const char* typeName() const = 0;
 
     // User-assigned name for RPC identification (optional)
-    const std::string& name() const { return _name; }
-    void setName(const std::string& name) { _name = name; }
-    bool hasName() const { return !_name.empty(); }
+    virtual const std::string& name() const = 0;
+    virtual void setName(const std::string& name) = 0;
+    virtual bool hasName() const = 0;
 
 protected:
-    Card(CardManager::Ptr mgr, const GPUContext& gpu,
-         int32_t x, int32_t y,
-         uint32_t widthCells, uint32_t heightCells)
-        : _cardMgr(std::move(mgr))
-        , _gpu(gpu)
-        , _x(x)
-        , _y(y)
-        , _widthCells(widthCells)
-        , _heightCells(heightCells)
-    {}
-
-    CardManager::Ptr _cardMgr;
-    GPUContext _gpu;
-    MetadataHandle _metaHandle = MetadataHandle::invalid();
-    uint32_t _shaderGlyph = 0;
-    int32_t _x;
-    int32_t _y;
-    uint32_t _widthCells;
-    uint32_t _heightCells;
-    float _screenOriginX = 0.0f;
-    float _screenOriginY = 0.0f;
-    std::string _name;  // User-assigned name for RPC identification
+    Card() = default;
 };
 
 using CardPtr = Card::Ptr;
