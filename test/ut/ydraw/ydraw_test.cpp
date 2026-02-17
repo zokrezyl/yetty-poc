@@ -428,6 +428,215 @@ suite ydraw_buffer_tests = [] {
 };
 
 //=============================================================================
+// Serialization / Deserialization Tests
+//=============================================================================
+
+suite serialize_tests = [] {
+
+    "serialize empty buffer"_test = [] {
+        auto buf = *YDrawBuffer::create();
+        auto data = buf->serialize();
+
+        // Should at least have magic + version + counts
+        expect(data.size() >= 8_u) << "empty buffer should still have header";
+
+        // Check magic "YDRF" = 0x59445246
+        uint32_t magic;
+        std::memcpy(&magic, data.data(), 4);
+        expect(magic == 0x59445246u) << "magic should be YDRF";
+
+        // Check version
+        uint32_t version;
+        std::memcpy(&version, data.data() + 4, 4);
+        expect(version == 1_u) << "version should be 1";
+    };
+
+    "serialize and deserialize prims"_test = [] {
+        auto buf = *YDrawBuffer::create();
+        buf->addCircle(0, 50.0f, 60.0f, 25.0f, 0xFFFF0000, 0, 0.0f, 0.0f);
+        buf->addBox(1, 100.0f, 100.0f, 30.0f, 20.0f, 0xFF00FF00, 0, 0.0f, 0.0f);
+        buf->addRoundedBox(2, 200.0f, 150.0f, 40.0f, 30.0f,
+                           5.0f, 5.0f, 5.0f, 5.0f, 0xFF0000FF, 0, 0.0f, 0.0f);
+
+        auto data = buf->serialize();
+        expect(data.size() > 100_u) << "serialized data should be substantial";
+
+        // Deserialize into new buffer
+        auto buf2 = *YDrawBuffer::create();
+        auto res = buf2->deserialize(data.data(), data.size());
+        expect(res.has_value()) << "deserialize should succeed";
+
+        expect(buf2->primCount() == 3_u) << "should have 3 prims after deserialize";
+    };
+
+    "serialize and deserialize scene metadata"_test = [] {
+        auto buf = *YDrawBuffer::create();
+        buf->setSceneBounds(10.0f, 20.0f, 300.0f, 400.0f);
+        buf->setBgColor(0xFF112233);
+        buf->setFlags(YDrawBuffer::FLAG_SHOW_BOUNDS | YDrawBuffer::FLAG_SHOW_GRID);
+        buf->addCircle(0, 50.0f, 50.0f, 10.0f, 0xFFFFFFFF, 0, 0.0f, 0.0f);
+
+        auto data = buf->serialize();
+
+        auto buf2 = *YDrawBuffer::create();
+        auto res = buf2->deserialize(data.data(), data.size());
+        expect(res.has_value());
+
+        expect(buf2->hasSceneBounds()) << "should have scene bounds";
+        expect(std::abs(buf2->sceneMinX() - 10.0f) < 0.01f) << "sceneMinX";
+        expect(std::abs(buf2->sceneMinY() - 20.0f) < 0.01f) << "sceneMinY";
+        expect(std::abs(buf2->sceneMaxX() - 300.0f) < 0.01f) << "sceneMaxX";
+        expect(std::abs(buf2->sceneMaxY() - 400.0f) < 0.01f) << "sceneMaxY";
+        expect(buf2->bgColor() == 0xFF112233u) << "bgColor";
+        expect(buf2->flags() == (YDrawBuffer::FLAG_SHOW_BOUNDS | YDrawBuffer::FLAG_SHOW_GRID))
+            << "flags";
+    };
+
+    "serialize and deserialize fonts"_test = [] {
+        auto buf = *YDrawBuffer::create();
+
+        // Add some dummy font data
+        std::vector<uint8_t> fontData1 = {0x00, 0x01, 0x00, 0x00, 0x12, 0x34};
+        std::vector<uint8_t> fontData2 = {0x00, 0x01, 0x00, 0x00, 0x56, 0x78, 0x9A};
+
+        int fontId1 = buf->addFontBlob(fontData1.data(), fontData1.size(), "TestFont1");
+        int fontId2 = buf->addFontBlob(fontData2.data(), fontData2.size(), "TestFont2");
+
+        expect(fontId1 == 0) << "first font id should be 0";
+        expect(fontId2 == 1) << "second font id should be 1";
+
+        auto data = buf->serialize();
+
+        auto buf2 = *YDrawBuffer::create();
+        auto res = buf2->deserialize(data.data(), data.size());
+        expect(res.has_value());
+
+        // Count fonts
+        int fontCount = 0;
+        buf2->forEachFont([&](int id, const uint8_t* fdata, size_t size, const std::string& name) {
+            fontCount++;
+            if (id == 0) {
+                expect(size == 6_u) << "font 0 size";
+                expect(name == "TestFont1") << "font 0 name";
+            } else if (id == 1) {
+                expect(size == 7_u) << "font 1 size";
+                expect(name == "TestFont2") << "font 1 name";
+            }
+        });
+        expect(fontCount == 2) << "should have 2 fonts";
+    };
+
+    "serialize and deserialize text spans"_test = [] {
+        auto buf = *YDrawBuffer::create();
+        buf->addText(10.0f, 20.0f, "Hello", 14.0f, 0xFFFF0000, 0, -1);
+        buf->addText(50.0f, 80.0f, "World", 18.0f, 0xFF00FF00, 1, 0);
+        buf->addRotatedText(100.0f, 100.0f, "Rotated", 12.0f, 0xFF0000FF, 1.57f, -1);
+
+        expect(buf->textSpanCount() == 3_u);
+
+        auto data = buf->serialize();
+
+        auto buf2 = *YDrawBuffer::create();
+        auto res = buf2->deserialize(data.data(), data.size());
+        expect(res.has_value());
+
+        expect(buf2->textSpanCount() == 3_u) << "should have 3 text spans";
+
+        int spanIdx = 0;
+        buf2->forEachTextSpan([&](const TextSpanData& s) {
+            if (spanIdx == 0) {
+                expect(std::abs(s.x - 10.0f) < 0.01f) << "span 0 x";
+                expect(std::abs(s.y - 20.0f) < 0.01f) << "span 0 y";
+                expect(s.text == "Hello") << "span 0 text";
+                expect(std::abs(s.fontSize - 14.0f) < 0.01f) << "span 0 fontSize";
+                expect(s.color == 0xFFFF0000u) << "span 0 color";
+            } else if (spanIdx == 1) {
+                expect(s.text == "World") << "span 1 text";
+                expect(s.fontId == 0) << "span 1 fontId";
+            } else if (spanIdx == 2) {
+                expect(s.text == "Rotated") << "span 2 text";
+                expect(std::abs(s.rotation - 1.57f) < 0.01f) << "span 2 rotation";
+            }
+            spanIdx++;
+        });
+    };
+
+    "deserialize rejects invalid magic"_test = [] {
+        std::vector<uint8_t> badData = {0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00};
+        auto buf = *YDrawBuffer::create();
+        auto res = buf->deserialize(badData.data(), badData.size());
+        expect(!res.has_value()) << "should reject invalid magic";
+    };
+
+    "deserialize rejects truncated data"_test = [] {
+        auto buf = *YDrawBuffer::create();
+        buf->addCircle(0, 50.0f, 50.0f, 10.0f, 0xFFFFFFFF, 0, 0.0f, 0.0f);
+        auto data = buf->serialize();
+
+        // Truncate data
+        auto buf2 = *YDrawBuffer::create();
+        auto res = buf2->deserialize(data.data(), 4);  // Too small
+        expect(!res.has_value()) << "should reject truncated data";
+    };
+
+    "full roundtrip with all data types"_test = [] {
+        auto buf = *YDrawBuffer::create();
+
+        // Prims
+        buf->addCircle(0, 50.0f, 60.0f, 25.0f, 0xFFFF0000, 0, 0.0f, 0.0f);
+        buf->addBox(1, 100.0f, 100.0f, 30.0f, 20.0f, 0xFF00FF00, 0, 1.0f, 0.0f);
+        buf->addTriangle(2, 10.0f, 10.0f, 50.0f, 10.0f, 30.0f, 50.0f,
+                         0xFF0000FF, 0, 0.0f, 0.0f);
+
+        // Fonts
+        std::vector<uint8_t> fontData = {0x00, 0x01, 0x00, 0x00, 'T', 'T', 'F'};
+        buf->addFontBlob(fontData.data(), fontData.size(), "MyFont");
+
+        // Text
+        buf->addText(20.0f, 30.0f, "Test text", 16.0f, 0xFFCCCCCC, 0, 0);
+        buf->addRotatedText(100.0f, 100.0f, "Rotated", 12.0f, 0xFFAAAAAA, 0.5f, 0);
+
+        // Scene metadata
+        buf->setSceneBounds(0.0f, 0.0f, 200.0f, 150.0f);
+        buf->setBgColor(0xFF1A1A2E);
+        buf->setFlags(YDrawBuffer::FLAG_SHOW_BOUNDS);
+
+        auto data = buf->serialize();
+        expect(data.size() > 200_u) << "full buffer should be substantial";
+
+        // Deserialize
+        auto buf2 = *YDrawBuffer::create();
+        auto res = buf2->deserialize(data.data(), data.size());
+        expect(res.has_value()) << "deserialize should succeed";
+
+        // Verify everything
+        expect(buf2->primCount() == 3_u) << "prims";
+        expect(buf2->textSpanCount() == 2_u) << "text spans";
+        expect(buf2->bgColor() == 0xFF1A1A2Eu) << "bgColor";
+        expect(buf2->flags() == YDrawBuffer::FLAG_SHOW_BOUNDS) << "flags";
+        expect(buf2->hasSceneBounds()) << "scene bounds";
+        expect(std::abs(buf2->sceneMaxX() - 200.0f) < 0.01f) << "sceneMaxX";
+
+        int fontCount = 0;
+        buf2->forEachFont([&](int, const uint8_t*, size_t sz, const std::string& name) {
+            fontCount++;
+            expect(sz == 7_u) << "font size";
+            expect(name == "MyFont") << "font name";
+        });
+        expect(fontCount == 1) << "font count";
+    };
+
+    "serialize enters delta mode"_test = [] {
+        auto buf = *YDrawBuffer::create();
+        buf->addCircle(0, 50.0f, 50.0f, 10.0f, 0xFFFFFFFF, 0, 0.0f, 0.0f);
+
+        expect(!buf->isDeltaMode()) << "should not be in delta mode initially";
+        buf->serialize();
+        expect(buf->isDeltaMode()) << "should be in delta mode after serialize";
+    };
+};
+
+//=============================================================================
 // AABB Tests
 //=============================================================================
 

@@ -133,7 +133,7 @@ public:
 
     // --- Serialization (wire format) ---
 
-    // Full serialize — returns binary blob, enters delta mode.
+    // Full serialize — prims, fonts, text spans, scene metadata. Enters delta mode.
     std::vector<uint8_t> serialize();
 
     // Delta serialize — returns delta blob, applies to main, clears delta.
@@ -142,7 +142,7 @@ public:
     // Whether in delta mode (after first serialize).
     bool isDeltaMode() const { return _deltaMode; }
 
-    // Deserialize prim data (reverse of serialize).
+    // Deserialize full buffer (reverse of serialize).
     Result<void> deserialize(const uint8_t* data, size_t size);
 
     // Update an existing primitive's word data.

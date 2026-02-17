@@ -102,15 +102,11 @@ int main(int argc, char** argv) {
             b64str += (i + 2 < binary.size()) ? b64[n & 0x3F] : '=';
         }
 
-        float pageH = result.firstPageHeight > 0.0f
-                      ? result.firstPageHeight : 792.0f;
         char header[512];
         std::snprintf(header, sizeof(header),
-                 "\033]666666;run -c ydraw -x %d -y %d -w %d -h %d -r"
-                 ";bin --fit-page-height %.1f;",
+                 "\033]666666;run -c ydraw -x %d -y %d -w %d -h %d -r;bin;",
                  args::get(xFlag), args::get(yFlag),
-                 args::get(wFlag), args::get(hFlag),
-                 pageH);
+                 args::get(wFlag), args::get(hFlag));
 
         yinfo("binary={} bytes, b64={} bytes", binary.size(), b64str.size());
         std::cout << header << b64str << "\033\\" << std::endl;
