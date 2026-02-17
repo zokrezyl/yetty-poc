@@ -905,7 +905,6 @@ target_include_directories(yetty PRIVATE
 if(NOT EMSCRIPTEN)
     add_subdirectory(src/yetty/font)
     add_subdirectory(src/yetty/ydraw)
-    add_subdirectory(src/yetty/ygui)
     add_subdirectory(src/yetty/diagram)
     add_subdirectory(src/yetty/cards)
     add_subdirectory(src/yetty/yast)

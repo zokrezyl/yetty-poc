@@ -6,32 +6,20 @@
 #include <string>
 #include <memory>
 
-// Re-export widget types from ygui library
-#include "../../ygui/ygui-widgets.h"
-
 namespace yetty::card {
-
-// Re-export from ygui library namespace
-using ygui::Widget;
-using ygui::WidgetPtr;
-using ygui::WidgetType;
-using ygui::WidgetFlags;
-using ygui::WIDGET_HOVER;
-using ygui::WIDGET_PRESSED;
-using ygui::WIDGET_FOCUSED;
-using ygui::WIDGET_DISABLED;
-using ygui::WIDGET_CHECKED;
-using ygui::WIDGET_OPEN;
 
 //=============================================================================
 // YGui - Retained mode UI card using SDF rendering
+//
+// Thin wrapper around yetty::ygui::YGuiEngine. The engine handles all widget
+// logic; this card handles buffer lifecycle, builder, and event dispatch.
 //=============================================================================
 class YGui : public Card,
              public base::ObjectFactory<YGui> {
 public:
     using Ptr = std::shared_ptr<YGui>;
 
-    static constexpr uint32_t SHADER_GLYPH = 0x100003;  // Same as ydraw
+    static constexpr uint32_t SHADER_GLYPH = 0x100003;
 
     static Result<CardPtr> create(
         const YettyContext& ctx,
