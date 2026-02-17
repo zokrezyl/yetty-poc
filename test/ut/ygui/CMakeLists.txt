@@ -18,6 +18,9 @@ pkg_check_modules(FONTCONFIG REQUIRED fontconfig)
 add_executable(ygui_tests
     main.cpp
     ygui_render_test.cpp
+    ygui_widget_test.cpp
+    # YGui engine
+    ${CMAKE_SOURCE_DIR}/src/yetty/ygui/ygui-engine.cpp
     # YDraw core
     ${CMAKE_SOURCE_DIR}/src/yetty/ydraw/ydraw-buffer.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/ydraw/ydraw-builder.cpp

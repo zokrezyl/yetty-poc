@@ -9,7 +9,7 @@
 #include <functional>
 #include <memory>
 #include <string>
-#include <unordered_map>
+#include <map>
 #include <vector>
 
 namespace yetty {
@@ -158,7 +158,7 @@ private:
     struct PrimData {
         std::vector<float> words;
     };
-    std::unordered_map<uint32_t, PrimData> _prims;
+    std::map<uint32_t, PrimData> _prims;
     uint32_t _nextAutoId = AUTO_ID_BASE;
 
     // Delta mode
