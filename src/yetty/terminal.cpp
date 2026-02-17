@@ -243,7 +243,8 @@ private:
     }
 
     void readPty() {
-        ydebug("Terminal::readPty: _ptyMaster={} _childPid={}", _ptyMaster, _childPid);
+        ydebug("Terminal::readPty: _ptyMaster={} _childPid={}, pendingBuf={}",
+               _ptyMaster, _childPid, _ptyBuffer.size());
         int status;
         if (waitpid(_childPid, &status, WNOHANG) > 0) {
             _running = false;
@@ -251,28 +252,258 @@ private:
             return;
         }
 
-        static constexpr size_t PTY_READ_MAX = 40960; // 40KB
-        char buf[PTY_READ_MAX];
-        size_t totalRead = 0;
+        static constexpr size_t PTY_READ_CHUNK = 65536; // 64KB
         ssize_t n;
 
-        while ((n = read(_ptyMaster, buf + totalRead, PTY_READ_MAX - totalRead)) > 0) {
-            totalRead += n;
-            if (totalRead >= PTY_READ_MAX) break;
+        // Read and scan for OSC in a loop
+        // - Normal text: stop at PTY_READ_CHUNK to allow rendering
+        // - Inside OSC: keep reading until terminator found
+        int loopCount = 0;
+        while (true) {
+            size_t oldSize = _ptyBuffer.size();
+            _ptyBuffer.resize(oldSize + PTY_READ_CHUNK);
+
+            n = read(_ptyMaster, _ptyBuffer.data() + oldSize, PTY_READ_CHUNK);
+            if (n <= 0) {
+                _ptyBuffer.resize(oldSize); // Remove unused space
+                ydebug("readPty: read returned {}, isInOsc={}", n, isInOsc());
+                if (isInOsc()) {
+                    // Still inside OSC but no more data - wait for next poll
+                    ydebug("readPty: incomplete OSC, keeping {} bytes for next call", _ptyBuffer.size());
+                    return;
+                }
+                break;
+            }
+            _ptyBuffer.resize(oldSize + n);
+
+            // Scan this chunk to update OSC state
+            scanForOsc(_ptyBuffer.data() + oldSize, n);
+            ydebug("readPty loop {}: read {} bytes, totalBuf={}, isInOsc={}",
+                   loopCount, n, _ptyBuffer.size(), isInOsc());
+
+            // If not inside an OSC, stop after first chunk to allow rendering
+            if (!isInOsc() && _ptyBuffer.size() >= PTY_READ_CHUNK) {
+                break;
+            }
+            // If inside OSC, keep reading until terminator found
+            loopCount++;
         }
 
-        if (totalRead > 0 && _gpuScreen) {
-            _gpuScreen->write(buf, totalRead);
-            // Trigger immediate screen refresh
-            if (auto loop = base::EventLoop::instance(); loop) {
-                (*loop)->dispatch(base::Event::screenUpdateEvent());
+        ydebug("readPty: processing {} bytes in {} loops", _ptyBuffer.size(), loopCount);
+        if (_ptyBuffer.empty() || !_gpuScreen) return;
+
+        // Reset scan state before processing (processPtyData has its own state)
+        resetOscScan();
+
+        // Process the complete buffer and clear it
+        processPtyData(_ptyBuffer.data(), _ptyBuffer.size());
+        _ptyBuffer.clear();
+    }
+
+    // Lightweight scan: just detect if we're inside ANY OSC (ESC ] ... until BEL or ST)
+    void scanForOsc(const char* data, size_t len) {
+        for (size_t i = 0; i < len; i++) {
+            char c = data[i];
+            int prev = _oscScanState;
+            switch (_oscScanState) {
+            case 0: // Normal
+                if (c == '\033') _oscScanState = 1; // Esc
+                break;
+            case 1: // Esc
+                _oscScanState = (c == ']') ? 2 : 0; // InOsc or Normal
+                break;
+            case 2: // InOsc
+                if (c == '\007') {
+                    _oscScanState = 0; // BEL terminator
+                } else if (c == '\033') {
+                    _oscScanState = 3; // OscEscEnd
+                }
+                break;
+            case 3: // OscEscEnd (checking for \)
+                _oscScanState = (c == '\\') ? 0 : 2; // Normal or back to InOsc
+                break;
             }
+            if (prev != _oscScanState && (_oscScanState == 2 || prev == 2 || _oscScanState == 0 && prev >= 2)) {
+                ydebug("scanForOsc: state {} -> {} at pos {} (char 0x{:02x})",
+                       prev, _oscScanState, i, (unsigned char)c);
+            }
+        }
+    }
+
+    bool isInOsc() const {
+        return _oscScanState >= 2; // InOsc or OscEscEnd
+    }
+
+    void resetOscScan() {
+        _oscScanState = 0;
+    }
+
+    // OSC parsing states
+    enum class OscState {
+        Normal,      // Not in OSC
+        Esc,         // Saw ESC
+        OscStart,    // Saw ESC ]
+        OscCmd,      // Parsing command number
+        OscBody,     // In OSC body (for yetty OSC)
+        OscEscEnd    // Saw ESC in body (looking for \)
+    };
+
+    void processPtyData(const char* data, size_t len) {
+        size_t i = 0;
+        size_t normalStart = 0;  // Start of normal (non-OSC) data
+
+        auto flushNormal = [&](size_t end) {
+            if (end > normalStart) {
+                _gpuScreen->write(data + normalStart, end - normalStart);
+            }
+        };
+
+        auto flushYettyOsc = [&]() {
+            if (!_oscBuffer.empty()) {
+                // Build full sequence: "cmd;body"
+                std::string fullSeq = std::to_string(_oscCmd) + ";" + _oscBuffer;
+                std::string response;
+                uint32_t linesToAdvance = 0;
+                bool handled = _gpuScreen->handleOSCSequence(fullSeq, &response, &linesToAdvance);
+                if (handled) {
+                    if (!response.empty()) {
+                        writeToPty(response.c_str(), response.size());
+                    }
+                    if (linesToAdvance > 0) {
+                        std::string nl(linesToAdvance, '\n');
+                        _gpuScreen->write(nl.c_str(), nl.size());
+                    }
+                }
+                _oscBuffer.clear();
+            }
+            _oscState = OscState::Normal;
+            _oscCmd = 0;
+        };
+
+        while (i < len) {
+            char c = data[i];
+
+            switch (_oscState) {
+            case OscState::Normal:
+                if (c == '\033') {
+                    _oscState = OscState::Esc;
+                    _oscEscPos = i;
+                }
+                i++;
+                break;
+
+            case OscState::Esc:
+                if (c == ']') {
+                    _oscState = OscState::OscStart;
+                    _oscCmd = 0;
+                    _oscCmdStr.clear();
+                } else {
+                    // Not OSC, stay normal
+                    _oscState = OscState::Normal;
+                }
+                i++;
+                break;
+
+            case OscState::OscStart:
+            case OscState::OscCmd:
+                if (c >= '0' && c <= '9') {
+                    _oscCmdStr += c;
+                    _oscState = OscState::OscCmd;
+                    i++;
+                } else if (c == ';') {
+                    // End of command number
+                    if (!_oscCmdStr.empty()) {
+                        _oscCmd = std::stoi(_oscCmdStr);
+                    }
+                    if (_oscCmd >= 666666) {
+                        // Yetty OSC - bypass vterm
+                        flushNormal(_oscEscPos);
+                        _oscBuffer.clear();
+                        _oscState = OscState::OscBody;
+                    } else {
+                        // Standard OSC - let vterm handle
+                        _oscState = OscState::Normal;
+                    }
+                    i++;
+                } else if (c == '\007' || c == '\033') {
+                    // Terminator without body
+                    _oscState = OscState::Normal;
+                    if (c == '\033') {
+                        // Stay at this position to check for backslash
+                    } else {
+                        i++;
+                    }
+                } else {
+                    // Invalid OSC
+                    _oscState = OscState::Normal;
+                    i++;
+                }
+                break;
+
+            case OscState::OscBody:
+                if (c == '\007') {
+                    // BEL terminator
+                    flushYettyOsc();
+                    normalStart = i + 1;
+                    i++;
+                } else if (c == '\033') {
+                    _oscState = OscState::OscEscEnd;
+                    i++;
+                } else {
+                    _oscBuffer += c;
+                    i++;
+                }
+                break;
+
+            case OscState::OscEscEnd:
+                if (c == '\\') {
+                    // ST terminator (ESC \)
+                    flushYettyOsc();
+                    normalStart = i + 1;
+                } else {
+                    // Not a terminator, ESC is part of body
+                    _oscBuffer += '\033';
+                    _oscBuffer += c;
+                    _oscState = OscState::OscBody;
+                }
+                i++;
+                break;
+            }
+        }
+
+        // Flush remaining normal data
+        if (_oscState == OscState::Normal) {
+            flushNormal(len);
+        } else if (_oscState == OscState::Esc || _oscState == OscState::OscStart || _oscState == OscState::OscCmd) {
+            // Incomplete standard OSC start - flush everything, vterm will handle
+            flushNormal(len);
+            _oscState = OscState::Normal;
+        }
+        // If in OscBody or OscEscEnd, keep accumulating (waiting for more data)
+
+        // Trigger screen refresh
+        if (auto loop = base::EventLoop::instance(); loop) {
+            (*loop)->dispatch(base::Event::screenUpdateEvent());
         }
     }
 
     int _ptyMaster = -1;
     pid_t _childPid = -1;
     base::PollId _pollId = -1;
+
+    // OSC parsing state (for processPtyData)
+    OscState _oscState = OscState::Normal;
+    int _oscCmd = 0;
+    std::string _oscCmdStr;
+    std::string _oscBuffer;
+    size_t _oscEscPos = 0;
+
+    // OSC scan state (for readPty to decide read length)
+    // 0=Normal, 1=Esc, 2=InOsc, 3=OscEscEnd
+    int _oscScanState = 0;
+
+    // Persistent buffer for incomplete OSC sequences
+    std::vector<char> _ptyBuffer;
 #endif
 
     bool _running = false;

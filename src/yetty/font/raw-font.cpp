@@ -4,6 +4,7 @@
 #include <ft2build.h>
 #include FT_FREETYPE_H
 
+#include <unordered_map>
 #include <vector>
 
 namespace yetty::font {
@@ -63,10 +64,21 @@ public:
                 continue;
             }
 
+            // Check cache first
+            auto it = _advanceCache.find(cp);
+            if (it != _advanceCache.end()) {
+                width += it->second * scale;
+                continue;
+            }
+
+            // Load glyph with NO_HINTING to skip expensive TT bytecode interpreter
             FT_UInt glyphIndex = FT_Get_Char_Index(_face, cp);
-            if (FT_Load_Glyph(_face, glyphIndex, FT_LOAD_NO_BITMAP) == 0) {
-                width += (_face->glyph->advance.x / 64.0f) * scale;
+            if (FT_Load_Glyph(_face, glyphIndex, FT_LOAD_NO_BITMAP | FT_LOAD_NO_HINTING) == 0) {
+                float advance = _face->glyph->advance.x / 64.0f;
+                _advanceCache[cp] = advance;
+                width += advance * scale;
             } else {
+                _advanceCache[cp] = 16.0f;  // fallback
                 width += fontSize * 0.5f;
             }
         }
@@ -90,6 +102,7 @@ private:
     std::vector<uint8_t> _data;
     std::string _name;
     FT_Face _face = nullptr;
+    mutable std::unordered_map<uint32_t, float> _advanceCache;
 };
 
 Result<RawFont::Ptr> RawFont::createImpl(const uint8_t* data, size_t size,

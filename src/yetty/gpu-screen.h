@@ -79,6 +79,10 @@ public:
     virtual std::optional<uint32_t> getSlotIndexByName(const std::string& name) const = 0;
     virtual std::string getNameBySlotIndex(uint32_t slotIndex) const = 0;
 
+    // OSC sequence handling (bypasses vterm for yetty OSC)
+    virtual bool handleOSCSequence(const std::string& sequence, std::string* response,
+                                   uint32_t* linesToAdvance) = 0;
+
 protected:
     GPUScreen() = default;
 };
