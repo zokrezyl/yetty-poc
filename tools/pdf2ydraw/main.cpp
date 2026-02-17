@@ -77,7 +77,7 @@ int main(int argc, char** argv) {
     // Create buffer for rendering (builder=nullptr skips text ops)
     auto buffer = *YDrawBuffer::create();
 
-    auto result = renderPdfToBuffer(pdf, buffer.get());
+    auto result = renderPdfToBuffer(pdf, buffer);
     pdfioFileClose(pdf);
 
     yinfo("pdf2ydraw: {} pages, totalHeight={:.1f}, firstPageH={:.1f}",

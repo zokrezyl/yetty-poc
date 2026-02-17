@@ -300,7 +300,7 @@ Result<void> YPdf::renderAllPages() {
     }
 
     // Render PDF into buffer (fonts, text, geometry, scene metadata)
-    auto result = renderPdfToBuffer(_pdfFile, _buffer.get());
+    auto result = renderPdfToBuffer(_pdfFile, _buffer);
 
     if (result.pageCount == 0) {
         return Err<void>("YPdf::renderAllPages: no valid pages");

@@ -1,6 +1,7 @@
 #include "html-container.h"
 #include "http-fetcher.h"
-#include "../font/util.h"
+#include <yetty/font/raw-font.h>
+#include <yetty/font/raw-font-manager.h>
 #include "../ydraw/ydraw-buffer.h"
 #include <fstream>
 #include <ytrace/ytrace.hpp>
@@ -136,12 +137,12 @@ public:
         fi->decoration = decoration;
         fi->fontId = 0;  // default font
 
-        // Resolve font via fontconfig and load into buffer + fontUtil
+        // Resolve font via fontconfig and load into buffer + RawFont
         if (faceName && *faceName) {
             std::string ttfPath = resolveFontPath(
                 faceName, weight, fi->italic);
             if (!ttfPath.empty()) {
-                fi->fontId = loadFont(ttfPath);
+                fi->rawFont = loadFont(ttfPath, fi->fontId);
                 if (fi->fontId >= 0) {
                     yinfo("HtmlContainer: font '{}' w={} i={} -> fontId={}",
                           faceName, weight, fi->italic, fi->fontId);
@@ -149,9 +150,14 @@ public:
             }
         }
 
-        // Get font metrics from FontUtil
-        fi->ascent = _fontUtil.fontAscent(fi->size, fi->fontId);
-        fi->descent = _fontUtil.fontDescent(fi->size, fi->fontId);
+        // Get font metrics from RawFont
+        if (fi->rawFont) {
+            fi->ascent = fi->rawFont->fontAscent(fi->size);
+            fi->descent = fi->rawFont->fontDescent(fi->size);
+        } else {
+            fi->ascent = fi->size * 0.8f;
+            fi->descent = fi->size * 0.2f;
+        }
         fi->height = fi->ascent + fi->descent;
         fi->xHeight = fi->ascent * 0.65f;
 
@@ -506,26 +512,34 @@ private:
         float height;
         float xHeight;
         int fontId;  // buffer font ID (0 = default)
+        font::RawFont::Ptr rawFont;  // for text measurement
     };
 
     //=========================================================================
     // Font loading — reads TTF, registers with both buffer and fontUtil
     //=========================================================================
 
-    int loadFont(const std::string& ttfPath) {
+    font::RawFont::Ptr loadFont(const std::string& ttfPath, int& fontId) {
         // Check cache — avoid loading the same TTF twice
-        auto it = _fontIdCache.find(ttfPath);
-        if (it != _fontIdCache.end()) return it->second;
+        auto it = _fontCache.find(ttfPath);
+        if (it != _fontCache.end()) {
+            fontId = it->second.first;
+            return it->second.second;
+        }
 
         // Read TTF file
         std::ifstream file(ttfPath, std::ios::binary);
         if (!file) {
             ywarn("HtmlContainer::loadFont: failed to open {}", ttfPath);
-            return 0;
+            fontId = 0;
+            return nullptr;
         }
         std::vector<uint8_t> data((std::istreambuf_iterator<char>(file)),
                                    std::istreambuf_iterator<char>());
-        if (data.empty()) return 0;
+        if (data.empty()) {
+            fontId = 0;
+            return nullptr;
+        }
 
         // Extract font name from path
         std::string name = ttfPath;
@@ -535,14 +549,21 @@ private:
         // Add to buffer (for serialization and builder's MSDF atlas)
         int bufferFontId = _buffer->addFontBlob(data.data(), data.size(), name);
 
-        // Add to FontUtil (for text measurement)
-        auto utilResult = _fontUtil.addFontData(data.data(), data.size(), name);
-        if (!utilResult) {
-            ywarn("HtmlContainer::loadFont: FontUtil failed for {}", ttfPath);
+        // Create RawFont for text measurement
+        font::RawFont::Ptr rawFont;
+        auto fontMgr = font::RawFontManager::instance();
+        if (fontMgr) {
+            auto rawFontRes = fontMgr.value()->createFromData(data.data(), data.size(), name);
+            if (rawFontRes) {
+                rawFont = rawFontRes.value();
+            } else {
+                ywarn("HtmlContainer::loadFont: RawFont failed for {}", ttfPath);
+            }
         }
 
-        _fontIdCache[ttfPath] = bufferFontId;
-        return bufferFontId;
+        _fontCache[ttfPath] = {bufferFontId, rawFont};
+        fontId = bufferFontId;
+        return rawFont;
     }
 
     //=========================================================================
@@ -635,7 +656,11 @@ private:
 
     float measureTextWidth(const char* text, const FontInfo& fi) {
         if (!text || !*text) return 0.0f;
-        return _fontUtil.measureTextWidth(text, fi.size, fi.fontId);
+        if (fi.rawFont) {
+            return fi.rawFont->measureTextWidth(text, fi.size);
+        }
+        // Fallback: estimate based on font size
+        return fi.size * 0.5f * static_cast<float>(strlen(text));
     }
 
     static uint32_t packColor(litehtml::web_color c) {
@@ -651,7 +676,6 @@ private:
     };
 
     YDrawBuffer::Ptr _buffer;
-    font::FontUtil _fontUtil;
     HttpFetcher* _fetcher;
     float _defaultFontSize;
     int _viewWidth = 600;
@@ -663,7 +687,7 @@ private:
 
     std::vector<FontInfo*> _fonts;
     std::unordered_map<std::string, std::string> _fontPathCache;  // key -> ttf path
-    std::unordered_map<std::string, int> _fontIdCache;            // ttf path -> fontId
+    std::unordered_map<std::string, std::pair<int, font::RawFont::Ptr>> _fontCache;  // ttf path -> (fontId, rawFont)
     std::unordered_map<std::string, ImageInfo> _imageCache;
 };
 

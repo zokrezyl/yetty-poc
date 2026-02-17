@@ -3,7 +3,8 @@ add_executable(pdf2ydraw
     ${CMAKE_SOURCE_DIR}/src/yetty/ypdf/pdf-content-parser.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/ypdf/pdf-renderer.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/ydraw/ydraw-buffer.cpp
-    ${CMAKE_SOURCE_DIR}/src/yetty/font/util.cpp
+    ${CMAKE_SOURCE_DIR}/src/yetty/font/raw-font.cpp
+    ${CMAKE_SOURCE_DIR}/src/yetty/font/raw-font-manager.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/font/freetype.cpp
 )
 
