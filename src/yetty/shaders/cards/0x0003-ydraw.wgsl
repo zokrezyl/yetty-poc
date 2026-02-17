@@ -259,11 +259,13 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
     var resultColor = bgColor;
     var evalCount = 0u;
 
+    // Compact primitive layout: offset table + variable-length prim data
+    // primitiveOffset → [wordOff_0]...[wordOff_{N-1}] → [prim0_data][prim1_data]...
+    let primitiveCount = cardMetadata[metaOffset + 1u];
+    let primDataBase = primitiveOffset + primitiveCount;
+
     // 3D raymarching pass (before 2D grid lookup)
     if ((flags & YDRAW_FLAG_HAS_3D) != 0u) {
-        let primitiveCount = cardMetadata[metaOffset + 1u];
-        let primSize3D = 24u;  // SDFPrimitive is 96 bytes = 24 floats
-
         // Camera setup using widget UV
         let aspect3D = (f32(widthCells) * grid.cellSize.x) / max(f32(heightCells) * grid.cellSize.y, 1.0);
         let uv3D = (widgetUV - 0.5) * vec2<f32>(aspect3D, 1.0);
@@ -279,10 +281,10 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
             hitPos = camPos + camDir * t;
             var minD = 1e10;
             for (var pi = 0u; pi < primitiveCount; pi++) {
-                let pOff = primitiveOffset + pi * primSize3D;
+                let pOff = primDataBase + bitcast<u32>(cardStorage[primitiveOffset + pi]);
                 let pType = bitcast<u32>(cardStorage[pOff]);
                 if (pType >= 100u) {
-                    let d = evaluateSDF3D(pOff, hitPos);
+                    let d = evalSDF3D(pOff, hitPos);
                     minD = min(minD, d);
                 }
             }
@@ -300,22 +302,22 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
             var hitColor = vec3<f32>(0.8, 0.8, 0.8);
             var hitMinD = 1e10;
             for (var pi = 0u; pi < primitiveCount; pi++) {
-                let pOff = primitiveOffset + pi * primSize3D;
+                let pOff = primDataBase + bitcast<u32>(cardStorage[primitiveOffset + pi]);
                 let pType = bitcast<u32>(cardStorage[pOff]);
                 if (pType >= 100u) {
-                    sdfPX = min(sdfPX, evaluateSDF3D(pOff, hitPos + vec3<f32>(e.x, e.y, e.y)));
-                    sdfNX = min(sdfNX, evaluateSDF3D(pOff, hitPos - vec3<f32>(e.x, e.y, e.y)));
-                    sdfPY = min(sdfPY, evaluateSDF3D(pOff, hitPos + vec3<f32>(e.y, e.x, e.y)));
-                    sdfNY = min(sdfNY, evaluateSDF3D(pOff, hitPos - vec3<f32>(e.y, e.x, e.y)));
-                    sdfPZ = min(sdfPZ, evaluateSDF3D(pOff, hitPos + vec3<f32>(e.y, e.y, e.x)));
-                    sdfNZ = min(sdfNZ, evaluateSDF3D(pOff, hitPos - vec3<f32>(e.y, e.y, e.x)));
+                    sdfPX = min(sdfPX, evalSDF3D(pOff, hitPos + vec3<f32>(e.x, e.y, e.y)));
+                    sdfNX = min(sdfNX, evalSDF3D(pOff, hitPos - vec3<f32>(e.x, e.y, e.y)));
+                    sdfPY = min(sdfPY, evalSDF3D(pOff, hitPos + vec3<f32>(e.y, e.x, e.y)));
+                    sdfNY = min(sdfNY, evalSDF3D(pOff, hitPos - vec3<f32>(e.y, e.x, e.y)));
+                    sdfPZ = min(sdfPZ, evalSDF3D(pOff, hitPos + vec3<f32>(e.y, e.y, e.x)));
+                    sdfNZ = min(sdfNZ, evalSDF3D(pOff, hitPos - vec3<f32>(e.y, e.y, e.x)));
                     // Find closest primitive for material color
-                    let d = evaluateSDF3D(pOff, hitPos);
+                    let d = evalSDF3D(pOff, hitPos);
                     if (d < hitMinD) {
                         hitMinD = d;
-                        let fillPacked = bitcast<u32>(cardStorage[pOff + 14u]);
-                        if (fillPacked != 0u) {
-                            hitColor = unpackColor(fillPacked);
+                        let colors = primColors(pOff);
+                        if (colors.x != 0u) {
+                            hitColor = unpackColor(colors.x);
                         }
                     }
                 }
@@ -366,7 +368,6 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
     let cellEntryCount = bitcast<u32>(cardStorage[gridOffset + packedStart]);
     let loopCount = min(cellEntryCount, YDRAW_MAX_ENTRIES_PER_CELL);
 
-    let primSize = 24u;
     let glyphSize = 5u;
 
     for (var i = 0u; i < loopCount; i++) {
@@ -435,35 +436,23 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
                 }
             }
         } else {
-            // ---- SDF PRIMITIVE ----
-            let primIdx = rawIdx;
-            let primOffset = primitiveOffset + primIdx * primSize;
-
-            // Per-primitive AABB check (fast rejection)
-            let primMinX = cardStorage[primOffset + 18u];
-            let primMaxX = cardStorage[primOffset + 20u];
-            if (scenePos.x < primMinX || scenePos.x > primMaxX) {
-                continue;
-            }
-            let primMinY = cardStorage[primOffset + 19u];
-            let primMaxY = cardStorage[primOffset + 21u];
-            if (scenePos.y < primMinY || scenePos.y > primMaxY) {
-                continue;
-            }
+            // ---- SDF PRIMITIVE (compact variable-length layout) ----
+            // Grid entries store word offsets relative to primDataBase
+            let primOff = primDataBase + rawIdx;
 
             evalCount++;
 
             // Check for special primitives (ColorWheel) that return color directly
-            let primType = bitcast<u32>(cardStorage[primOffset + 0u]);
+            let primType = bitcast<u32>(cardStorage[primOff + 0u]);
             if (primType == SDF_COLOR_WHEEL) {
-                // ColorWheel: params[0-1]=center, [2]=outerR, [3]=innerR, [4]=hue, [5]=sat, [6]=val, [7]=indicatorSize
-                let cwCenter = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-                let cwOuterR = cardStorage[primOffset + 4u];
-                let cwInnerR = cardStorage[primOffset + 5u];
-                let cwHue = cardStorage[primOffset + 6u];
-                let cwSat = cardStorage[primOffset + 7u];
-                let cwVal = cardStorage[primOffset + 8u];
-                let cwIndicator = cardStorage[primOffset + 9u];
+                // Compact ColorWheel: cx=2, cy=3, outerR=4, innerR=5, hue=6, sat=7, val=8, indicatorSize=9
+                let cwCenter = vec2<f32>(cardStorage[primOff + 2u], cardStorage[primOff + 3u]);
+                let cwOuterR = cardStorage[primOff + 4u];
+                let cwInnerR = cardStorage[primOff + 5u];
+                let cwHue = cardStorage[primOff + 6u];
+                let cwSat = cardStorage[primOff + 7u];
+                let cwVal = cardStorage[primOff + 8u];
+                let cwIndicator = cardStorage[primOff + 9u];
 
                 let cwColor = renderColorWheel(scenePos, cwCenter, cwOuterR, cwInnerR,
                                                cwHue, cwSat, cwVal, cwIndicator);
@@ -474,22 +463,24 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
             }
 
             if (primType == 65u && hasCustomAtlas) {
-                // ---- ROTATED MSDF GLYPH (type 65) ----
-                let gx = cardStorage[primOffset + 2u];
-                let gy = cardStorage[primOffset + 3u];
-                let gw = cardStorage[primOffset + 4u];
-                let gh = cardStorage[primOffset + 5u];
-                let angle = cardStorage[primOffset + 6u];
-                let gIdx = bitcast<u32>(cardStorage[primOffset + 7u]);
-                let gColor = unpackColor(bitcast<u32>(cardStorage[primOffset + 14u]));
+                // ---- ROTATED MSDF GLYPH (type 65, compact layout) ----
+                // x=2, y=3, scaleX=4, scaleY=5, angle=6, glyphIndex=7, cosAngle=8, sinAngle=9, fillColor=10
+                let gx = cardStorage[primOff + 2u];
+                let gy = cardStorage[primOff + 3u];
+                let gw = cardStorage[primOff + 4u];
+                let gh = cardStorage[primOff + 5u];
+                let gIdx = bitcast<u32>(cardStorage[primOff + 7u]);
+                let gColor = unpackColor(bitcast<u32>(cardStorage[primOff + 10u]));
+
+                // Use pre-computed cos/sin from compact layout
+                let ca = cardStorage[primOff + 8u];   // cosAngle
+                let sa = cardStorage[primOff + 9u];   // sinAngle
 
                 // Inverse-rotate scene point into glyph-local space
                 let dx = scenePos.x - gx;
                 let dy = scenePos.y - gy;
-                let ca = cos(-angle);
-                let sa = sin(-angle);
-                let lx = dx * ca - dy * sa;
-                let ly = dx * sa + dy * ca;
+                let lx = dx * ca + dy * sa;
+                let ly = -dx * sa + dy * ca;
 
                 if (lx >= 0.0 && lx < gw && ly >= 0.0 && ly < gh) {
                     let glyphUV = vec2<f32>(lx / gw, ly / gh);
@@ -514,18 +505,19 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
                     }
                 }
             } else {
-                // ---- REGULAR SDF PRIMITIVE ----
-                let d = evaluateSDF(primOffset, scenePos);
+                // ---- REGULAR SDF PRIMITIVE (compact layout) ----
+                let d = evalSDF(primOff, scenePos);
 
-                let fillColorPacked = bitcast<u32>(cardStorage[primOffset + 14u]);
+                let colors = primColors(primOff);
+                let fillColorPacked = colors.x;
                 if (d < 0.0 && fillColorPacked != 0u) {
                     let fillColor = unpackColor(fillColorPacked);
                     let alpha = clamp(-d * 2.0, 0.0, 1.0);
                     resultColor = mix(resultColor, fillColor, alpha);
                 }
 
-                let strokeColorPacked = bitcast<u32>(cardStorage[primOffset + 15u]);
-                let strokeWidth = cardStorage[primOffset + 16u];
+                let strokeColorPacked = colors.y;
+                let strokeWidth = primStrokeWidth(primOff);
                 if (strokeWidth > 0.0 && strokeColorPacked != 0u) {
                     let strokeDist = abs(d) - strokeWidth * 0.5;
                     if (strokeDist < 0.0) {

@@ -1,44 +1,18 @@
 #pragma once
 
+#include "ygui-io.h"
 #include <cstdint>
+#include <cmath>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
-namespace yetty::ygui {
+namespace yetty {
+class YDrawBuffer;
+}
 
-//=============================================================================
-// Widget types
-//=============================================================================
-enum class WidgetType : uint8_t {
-    Label,
-    Button,
-    Checkbox,
-    Slider,
-    Dropdown,
-    TextInput,
-    Progress,
-    Panel,
-    VBox,
-    HBox,
-    ChoiceBox,        // Radio button group (shows all options)
-    Separator,        // Horizontal line
-    ColorPicker,      // RGBA color selector
-    Selectable,       // Clickable/toggleable row
-    CollapsingHeader, // Expandable section header
-    VScrollbar,       // Vertical scrollbar
-    HScrollbar,       // Horizontal scrollbar
-    ScrollArea,       // Scrollable container with children
-    Table,            // Table container
-    TableRow,         // Table row
-    TableCell,        // Table cell
-    TableHeader,      // Table header row
-    TabBar,           // Tab container (horizontal tabs)
-    TabItem,          // Individual tab
-    Popup,            // Modal popup/dialog
-    ListBox,          // Scrollable list of selectable items
-    Tooltip,          // Hover tooltip
-};
+namespace yetty::ygui {
 
 //=============================================================================
 // Widget state flags
@@ -53,66 +27,129 @@ enum WidgetFlags : uint32_t {
 };
 
 //=============================================================================
-// Widget base
+// RenderContext — convenience wrapper around YDrawBuffer with offset stack
 //=============================================================================
-struct Widget {
+class RenderContext {
+public:
+    explicit RenderContext(YDrawBuffer* buffer) : _buffer(buffer) {}
+
+    void box(float x, float y, float w, float h, uint32_t color, float radius = 0);
+    void boxOutline(float x, float y, float w, float h, uint32_t color,
+                    float radius = 0, float strokeWidth = 2.0f);
+    void text(const std::string& text, float x, float y, uint32_t color,
+              float fontSize = 14.0f);
+    void triangle(float x0, float y0, float x1, float y1,
+                  float x2, float y2, uint32_t color);
+    void circle(float cx, float cy, float radius, uint32_t color);
+    void circleOutline(float cx, float cy, float radius, uint32_t color,
+                       float strokeWidth = 1.5f);
+    void colorWheel(float cx, float cy, float outerR, float innerR,
+                    float hue, float sat, float val, float indicatorSize);
+
+    // Offset stack for layout widgets (ScrollArea, CollapsingHeader, etc.)
+    void pushOffset(float dx, float dy) {
+        _offsetStack.push_back({_offsetX, _offsetY});
+        _offsetX += dx;
+        _offsetY += dy;
+    }
+    void popOffset() {
+        if (!_offsetStack.empty()) {
+            _offsetX = _offsetStack.back().first;
+            _offsetY = _offsetStack.back().second;
+            _offsetStack.pop_back();
+        }
+    }
+    float offsetX() const { return _offsetX; }
+    float offsetY() const { return _offsetY; }
+
+    YDrawBuffer* buffer() const { return _buffer; }
+
+private:
+    YDrawBuffer* _buffer;
+    float _offsetX = 0, _offsetY = 0;
+    std::vector<std::pair<float, float>> _offsetStack;
+};
+
+//=============================================================================
+// Widget — polymorphic base class
+//
+// Subclass to create custom widget types. The engine calls renderAll() which
+// by default calls render() then recurses into children. Layout widgets
+// override renderAll() to position children or apply offsets.
+//=============================================================================
+class Widget : public std::enable_shared_from_this<Widget> {
+public:
+    using Ptr = std::shared_ptr<Widget>;
+
+    virtual ~Widget() = default;
+
+    // Identity
     std::string id;
-    WidgetType type = WidgetType::Label;
+
+    // Geometry (local coordinates — relative to parent container)
     float x = 0, y = 0, w = 100, h = 24;
+
+    // Effective screen position (computed during renderAll from offsets)
+    float effectiveX = 0, effectiveY = 0;
+    bool wasRendered = false;
+
+    // State
     uint32_t flags = 0;
-    std::string label;
 
-    // Type-specific data
-    float value = 0;                    // Slider value, progress
-    float minValue = 0, maxValue = 1;   // Slider range
-    std::vector<std::string> options;   // Dropdown/ChoiceBox options
-    int selectedIndex = 0;              // Dropdown/ChoiceBox selection
-    std::string text;                   // TextInput content
-    uint32_t cursorPos = 0;             // TextInput cursor
-    uint32_t colorValue = 0xFFFFFFFF;   // ColorPicker ABGR value
+    bool isHover() const    { return flags & WIDGET_HOVER; }
+    bool isPressed() const  { return flags & WIDGET_PRESSED; }
+    bool isFocused() const  { return flags & WIDGET_FOCUSED; }
+    bool isDisabled() const { return flags & WIDGET_DISABLED; }
+    bool isChecked() const  { return flags & WIDGET_CHECKED; }
+    bool isOpen() const     { return flags & WIDGET_OPEN; }
 
-    // ScrollArea properties
-    float scrollX = 0, scrollY = 0;     // Current scroll offset
-    float contentW = 0, contentH = 0;   // Content size (for scroll range)
+    bool contains(float px, float py) const {
+        return px >= effectiveX && px < effectiveX + w
+            && py >= effectiveY && py < effectiveY + h;
+    }
 
-    // Table properties
-    std::vector<float> columnWidths;    // Column widths for Table
-    float rowHeight = 24;               // Row height for Table/ListBox
-
-    // Tab properties
-    int activeTab = 0;                  // Active tab index for TabBar
-
-    // Tooltip
-    std::string tooltip;                // Tooltip text (shown on hover)
-
-    // Popup properties
-    bool modal = false;                 // Modal popup blocks input
+    // Children
+    std::vector<Ptr> children;
 
     // Styling
     uint32_t bgColor = 0xFF2A2A3E;
     uint32_t fgColor = 0xFFFFFFFF;
     uint32_t accentColor = 0xFF4488FF;
-    uint32_t headerColor = 0xFF3A3A4E;
 
-    // Children (for layout widgets)
-    std::vector<std::shared_ptr<Widget>> children;
-
-    // Events (callbacks stored as event names to emit via OSC)
+    // Event names (emitted via IO when triggered)
     std::string onClick;
     std::string onChange;
 
-    bool contains(float px, float py) const {
-        return px >= x && px < x + w && py >= y && py < y + h;
+    //=========================================================================
+    // Virtual interface — override in subclasses
+    //=========================================================================
+
+    // Render this widget into the buffer
+    virtual void render(RenderContext& ctx) {}
+
+    // Render self + children. Override for layout widgets that need to
+    // reposition children or apply scroll offsets.
+    virtual void renderAll(RenderContext& ctx) {
+        effectiveX = x + ctx.offsetX();
+        effectiveY = y + ctx.offsetY();
+        wasRendered = true;
+        render(ctx);
+        for (auto& child : children)
+            child->renderAll(ctx);
     }
 
-    bool isHover() const { return flags & WIDGET_HOVER; }
-    bool isPressed() const { return flags & WIDGET_PRESSED; }
-    bool isFocused() const { return flags & WIDGET_FOCUSED; }
-    bool isDisabled() const { return flags & WIDGET_DISABLED; }
-    bool isChecked() const { return flags & WIDGET_CHECKED; }
-    bool isOpen() const { return flags & WIDGET_OPEN; }
+    // Input handlers — return an event to emit, or nullopt
+    virtual std::optional<WidgetEvent> onPress(float localX, float localY) { return {}; }
+    virtual std::optional<WidgetEvent> onRelease(float localX, float localY) { return {}; }
+    virtual std::optional<WidgetEvent> onDrag(float localX, float localY) { return {}; }
+    virtual std::optional<WidgetEvent> onScroll(float dx, float dy) { return {}; }
+    virtual std::optional<WidgetEvent> onKey(uint32_t key, int mods) { return {}; }
+
+    // Hover (no events, just state changes)
+    virtual void onHoverEnter() { flags |= WIDGET_HOVER; }
+    virtual void onHoverLeave() { flags &= ~WIDGET_HOVER; }
 };
 
-using WidgetPtr = std::shared_ptr<Widget>;
+using WidgetPtr = Widget::Ptr;
 
 } // namespace yetty::ygui

@@ -1,10 +1,11 @@
 #include "diagram.h"
 #include <yetty/ydraw-builder.h>
+#include "../../ydraw/ydraw-buffer.h"
 #include "../../diagram/graph-ir.h"
 #include "../../diagram/mermaid-parser.h"
 #include "../../diagram/sugiyama-layout.h"
 #include "../../diagram/diagram-renderer.h"
-#include "../hdraw/hdraw.h"
+#include "../../ydraw/ydraw-types.gen.h"
 #include <yetty/base/event-loop.h>
 #include <ytrace/ytrace.hpp>
 #include <sstream>
@@ -33,14 +34,11 @@ public:
         , _screenId(ctx.screenId)
         , _argsStr(args)
         , _payloadStr(payload)
+        , _fontManager(ctx.fontManager)
+        , _gpuAllocator(ctx.gpuAllocator)
     {
         _shaderGlyph = SHADER_GLYPH;
-        auto builderRes = YDrawBuilder::create(ctx.fontManager, ctx.globalAllocator);
-        if (builderRes) {
-            _builder = *builderRes;
-        } else {
-            yerror("DiagramImpl: failed to create builder");
-        }
+        _buffer = *yetty::YDrawBuffer::create();
     }
 
     ~DiagramImpl() override { dispose(); }
@@ -59,13 +57,6 @@ public:
 
     Result<void> dispose() override {
         deregisterFromEvents();
-        _derivedStorage = StorageHandle::invalid();
-        _grid = nullptr;
-        _gridSize = 0;
-        _primStorage = StorageHandle::invalid();
-        _primitives = nullptr;
-        _primCount = 0;
-        _primCapacity = 0;
         if (_metaHandle.isValid() && _cardMgr) {
             if (auto res = _cardMgr->deallocateMetadata(_metaHandle); !res) {
                 yerror("DiagramImpl::dispose: deallocateMetadata failed: {}", error_msg(res));
@@ -76,157 +67,38 @@ public:
     }
 
     void suspend() override {
-        if (_primStorage.isValid() && _primCount > 0 && _builder) {
-            auto& staging = _builder->primStagingMut();
-            staging.resize(_primCount);
-            std::memcpy(staging.data(), _primitives, _primCount * sizeof(SDFPrimitive));
-        }
-        _derivedStorage = StorageHandle::invalid();
-        _grid = nullptr;
-        _gridSize = 0;
-        _primStorage = StorageHandle::invalid();
-        _primitives = nullptr;
-        _primCount = 0;
-        _primCapacity = 0;
     }
 
     void declareBufferNeeds() override {
         if (!_builder) return;
-
-        // Save GPU prims back to builder staging before dealloc
-        if (_primStorage.isValid() && _primCount > 0) {
-            auto& staging = _builder->primStagingMut();
-            if (staging.empty()) {
-                staging.resize(_primCount);
-                std::memcpy(staging.data(), _primitives, _primCount * sizeof(SDFPrimitive));
-            }
-        }
-        _derivedStorage = StorageHandle::invalid();
-        _grid = nullptr;
-        _gridSize = 0;
-        _primStorage = StorageHandle::invalid();
-        _primitives = nullptr;
-        _primCount = 0;
-        _primCapacity = 0;
-
-        const auto& primStaging = _builder->primStaging();
-        const auto& glyphs = _builder->glyphs();
-
-        if (primStaging.empty() && glyphs.empty()) {
-            _builder->clearGridStaging();
-            return;
-        }
-
-        // Reserve prim storage
-        if (!primStaging.empty()) {
-            uint32_t primSize = static_cast<uint32_t>(primStaging.size()) * sizeof(SDFPrimitive);
-            _cardMgr->bufferManager()->reserve(primSize);
-        }
-
-        // Calculate grid
-        if (_builder->gridStaging().empty()) {
-            _builder->calculate();
-        }
-
-        // Reserve derived size (grid + glyphs)
-        uint32_t gridBytes = static_cast<uint32_t>(_builder->gridStaging().size()) * sizeof(uint32_t);
-        uint32_t glyphBytes = static_cast<uint32_t>(glyphs.size() * sizeof(YDrawGlyph));
-        uint32_t derivedSize = gridBytes + glyphBytes;
-
-        if (derivedSize > 0) {
-            _cardMgr->bufferManager()->reserve(derivedSize);
+        if (auto res = _builder->declareBufferNeeds(); !res) {
+            yerror("DiagramImpl::declareBufferNeeds: {}", error_msg(res));
         }
     }
 
     Result<void> allocateBuffers() override {
         if (!_builder) return Ok();
-
-        const auto& primStaging = _builder->primStaging();
-        const auto& gridStaging = _builder->gridStaging();
-        const auto& glyphs = _builder->glyphs();
-
-        // Allocate primitives
-        if (!primStaging.empty()) {
-            uint32_t count = static_cast<uint32_t>(primStaging.size());
-            uint32_t allocBytes = count * sizeof(SDFPrimitive);
-            auto primResult = _cardMgr->bufferManager()->allocateBuffer(
-                metadataSlotIndex(), "prims", allocBytes);
-            if (!primResult) {
-                return Err<void>("DiagramImpl::allocateBuffers: prim alloc failed");
-            }
-            _primStorage = *primResult;
-            _primitives = reinterpret_cast<SDFPrimitive*>(_primStorage.data);
-            _primCapacity = count;
-            _primCount = count;
-            std::memcpy(_primitives, primStaging.data(), count * sizeof(SDFPrimitive));
-            _builder->primStagingMut().clear();
-            _builder->primStagingMut().shrink_to_fit();
-            _cardMgr->bufferManager()->markBufferDirty(_primStorage);
-        }
-
-        // Allocate derived storage (grid + glyphs)
-        uint32_t gridBytes = static_cast<uint32_t>(gridStaging.size()) * sizeof(uint32_t);
-        uint32_t glyphBytes = static_cast<uint32_t>(glyphs.size() * sizeof(YDrawGlyph));
-        uint32_t derivedSize = gridBytes + glyphBytes;
-
-        if (derivedSize > 0) {
-            auto storageResult = _cardMgr->bufferManager()->allocateBuffer(
-                metadataSlotIndex(), "derived", derivedSize);
-            if (!storageResult) {
-                return Err<void>("DiagramImpl::allocateBuffers: derived alloc failed");
-            }
-            _derivedStorage = *storageResult;
-
-            uint8_t* base = _derivedStorage.data;
-            uint32_t offset = 0;
-
-            _grid = reinterpret_cast<uint32_t*>(base + offset);
-            _gridSize = static_cast<uint32_t>(gridStaging.size());
-            _gridOffset = (_derivedStorage.offset + offset) / sizeof(float);
-            if (!gridStaging.empty()) {
-                std::memcpy(base + offset, gridStaging.data(), gridBytes);
-            }
-            offset += gridBytes;
-
-            _glyphOffset = (_derivedStorage.offset + offset) / sizeof(float);
-            if (!glyphs.empty()) {
-                std::memcpy(base + offset, glyphs.data(), glyphBytes);
-            }
-
-            _cardMgr->bufferManager()->markBufferDirty(_derivedStorage);
-        }
-
-        _primitiveOffset = _primStorage.isValid() ? _primStorage.offset / sizeof(float) : 0;
-        _gridWidth = _builder->gridWidth();
-        _gridHeight = _builder->gridHeight();
-        _metadataDirty = true;
-
-        return Ok();
+        return _builder->allocateBuffers();
     }
 
     bool needsBufferRealloc() override {
         if (!_builder) return false;
-        if (!_primStorage.isValid() && !_builder->primStaging().empty()) return true;
-        return false;
+        return _builder->needsBufferRealloc();
     }
 
     Result<void> allocateTextures() override {
-        return Ok();
+        if (!_builder) return Ok();
+        return _builder->allocateTextures();
     }
 
     Result<void> writeTextures() override {
-        return Ok();
+        if (!_builder) return Ok();
+        return _builder->writeTextures();
     }
 
     Result<void> finalize() override {
         if (!_builder) return Ok();
-
-        if (_metadataDirty) {
-            if (auto res = uploadMetadata(); !res) return res;
-            _metadataDirty = false;
-        }
-
-        return Ok();
+        return _builder->writeBuffers();
     }
 
     //=========================================================================
@@ -254,16 +126,16 @@ public:
                 float newZoom = std::clamp(_viewZoom + zoomDelta, 0.1f, 20.0f);
                 if (newZoom != _viewZoom) {
                     _viewZoom = newZoom;
-                    _metadataDirty = true;
+                    _builder->setView(_viewZoom, _viewPanX, _viewPanY);
                 }
                 return Ok(true);
             } else if (event.cardScroll.mods & GLFW_MOD_SHIFT) {
                 _viewPanX += event.cardScroll.dy * 0.05f * sceneW / _viewZoom;
-                _metadataDirty = true;
+                _builder->setView(_viewZoom, _viewPanX, _viewPanY);
                 return Ok(true);
             } else {
                 _viewPanY += event.cardScroll.dy * 0.05f * sceneH / _viewZoom;
-                _metadataDirty = true;
+                _builder->setView(_viewZoom, _viewPanX, _viewPanY);
                 return Ok(true);
             }
         }
@@ -281,6 +153,15 @@ public:
             return Err<void>("DiagramImpl::init: failed to allocate metadata");
         }
         _metaHandle = *metaResult;
+
+        auto builderRes = YDrawBuilder::create(
+            _fontManager, _gpuAllocator, _buffer, _cardMgr, metadataSlotIndex());
+        if (!builderRes) {
+            return Err<void>("DiagramImpl::init: failed to create builder", builderRes);
+        }
+        _builder = *builderRes;
+        _builder->setViewport(_widthCells, _heightCells);
+        _builder->setView(_viewZoom, _viewPanX, _viewPanY);
 
         if (auto res = registerForEvents(); !res) {
             ywarn("DiagramImpl::init: event registration failed: {}", error_msg(res));
@@ -305,7 +186,6 @@ public:
         yinfo("DiagramImpl::init: {} prims, {} glyphs",
               _builder->primitiveCount(), _builder->glyphCount());
 
-        _metadataDirty = true;
         return Ok();
     }
 
@@ -349,84 +229,31 @@ private:
             .nodePaddingY = 10.0f
         });
 
+        // Measurement function using builder's atlas font
+        diagram::MeasureTextFn measureText = [this](const std::string& text, float fontSize) -> float {
+            return fontSize * 0.6f * static_cast<float>(text.size());
+        };
+
         // Layout the graph
-        if (auto res = layout->layout(graph, _builder.get()); !res) {
+        if (auto res = layout->layout(graph, measureText); !res) {
             return Err<void>("Layout failed", res);
         }
 
         // Create renderer
-        auto rendererResult = diagram::DiagramRenderer::create(_builder);
+        auto rendererResult = diagram::DiagramRenderer::create(_builder, _buffer, measureText);
         if (!rendererResult) {
             return Err<void>("Failed to create renderer");
         }
 
-        // Render to builder
+        // Render to buffer
         if (auto res = (*rendererResult)->render(graph); !res) {
             return Err<void>("Render failed", res);
         }
 
-        // Set scene bounds
-        _builder->setSceneBounds(graph.minX, graph.minY, graph.maxX, graph.maxY);
-        _builder->setBgColor(0xFF2E1A1A);
+        // Set scene bounds on buffer
+        _buffer->setSceneBounds(graph.minX, graph.minY, graph.maxX, graph.maxY);
+        _buffer->setBgColor(0xFF2E1A1A);
 
-        return Ok();
-    }
-
-    Result<void> uploadMetadata() {
-        if (!_metaHandle.isValid()) {
-            return Err<void>("DiagramImpl::uploadMetadata: invalid handle");
-        }
-
-        // Pack zoom as f16
-        uint32_t zoomBits;
-        {
-            uint32_t f32bits;
-            std::memcpy(&f32bits, &_viewZoom, sizeof(float));
-            uint32_t sign = (f32bits >> 16) & 0x8000;
-            int32_t  exp  = ((f32bits >> 23) & 0xFF) - 127 + 15;
-            uint32_t mant = (f32bits >> 13) & 0x3FF;
-            if (exp <= 0) { exp = 0; mant = 0; }
-            else if (exp >= 31) { exp = 31; mant = 0; }
-            zoomBits = sign | (static_cast<uint32_t>(exp) << 10) | mant;
-        }
-
-        float sceneMinX = _builder->sceneMinX();
-        float sceneMinY = _builder->sceneMinY();
-        float sceneMaxX = _builder->sceneMaxX();
-        float sceneMaxY = _builder->sceneMaxY();
-        float contentW = sceneMaxX - sceneMinX;
-        float contentH = sceneMaxY - sceneMinY;
-
-        int16_t panXi16 = static_cast<int16_t>(std::clamp(
-            _viewPanX / std::max(contentW, 1e-6f) * 16384.0f, -32768.0f, 32767.0f));
-        int16_t panYi16 = static_cast<int16_t>(std::clamp(
-            _viewPanY / std::max(contentH, 1e-6f) * 16384.0f, -32768.0f, 32767.0f));
-
-        float cellSize = _builder->cellSize();
-
-        YDrawMetadata meta = {};
-        meta.primitiveOffset = _primitiveOffset;
-        meta.primitiveCount = _primCount;
-        meta.gridOffset = _gridOffset;
-        meta.gridWidth = _gridWidth;
-        meta.gridHeight = _gridHeight;
-        std::memcpy(&meta.cellSize, &cellSize, sizeof(float));
-        meta.glyphOffset = _glyphOffset;
-        meta.glyphCount = static_cast<uint32_t>(_builder->glyphs().size());
-        std::memcpy(&meta.sceneMinX, &sceneMinX, sizeof(float));
-        std::memcpy(&meta.sceneMinY, &sceneMinY, sizeof(float));
-        std::memcpy(&meta.sceneMaxX, &sceneMaxX, sizeof(float));
-        std::memcpy(&meta.sceneMaxY, &sceneMaxY, sizeof(float));
-        meta.widthCells  = (_widthCells & 0xFFFF) |
-                           (static_cast<uint32_t>(static_cast<uint16_t>(panXi16)) << 16);
-        meta.heightCells = (_heightCells & 0xFFFF) |
-                           (static_cast<uint32_t>(static_cast<uint16_t>(panYi16)) << 16);
-        meta.flags = (_builder->flags() & 0xFFFF) | (zoomBits << 16);
-        meta.bgColor = _builder->bgColor();
-
-        if (auto res = _cardMgr->writeMetadata(_metaHandle, &meta, sizeof(meta)); !res) {
-            return Err<void>("DiagramImpl::uploadMetadata: write failed");
-        }
         return Ok();
     }
 
@@ -498,27 +325,14 @@ private:
     // State
     //=========================================================================
 
+    yetty::YDrawBuffer::Ptr _buffer;
     YDrawBuilder::Ptr _builder;
+    FontManager::Ptr _fontManager;
+    GpuAllocator::Ptr _gpuAllocator;
     base::ObjectId _screenId = 0;
     std::string _argsStr;
     std::string _payloadStr;
     std::string _inputFile;
-
-    // GPU
-    StorageHandle _primStorage = StorageHandle::invalid();
-    SDFPrimitive* _primitives = nullptr;
-    uint32_t _primCount = 0;
-    uint32_t _primCapacity = 0;
-    StorageHandle _derivedStorage = StorageHandle::invalid();
-    uint32_t* _grid = nullptr;
-    uint32_t _gridSize = 0;
-    uint32_t _primitiveOffset = 0;
-    uint32_t _gridOffset = 0;
-    uint32_t _glyphOffset = 0;
-    uint32_t _gridWidth = 0;
-    uint32_t _gridHeight = 0;
-    bool _metadataDirty = true;
-
     // View
     float _viewZoom = 1.0f;
     float _viewPanX = 0.0f;

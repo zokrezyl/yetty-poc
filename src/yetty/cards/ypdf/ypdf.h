@@ -6,7 +6,6 @@
 #include <yetty/yetty-context.h>
 #include <yetty/font-manager.h>
 #include <yetty/ydraw-builder.h>
-#include <yetty/ydraw-writer.h>
 #include <string>
 #include <vector>
 #include <cstdint>
@@ -52,8 +51,24 @@ public:
     const char* typeName() const override { return "ypdf"; }
     bool needsBuffer() const override { return true; }
     bool needsTexture() const override { return _builder && _builder->hasCustomAtlas(); }
-    uint32_t metadataSlotIndex() const override { return _metaHandle.offset / 64; }
 
+    // Card accessors
+    uint32_t metadataOffset() const override { return _metaHandle.offset; }
+    uint32_t metadataSlotIndex() const override { return _metaHandle.offset / 64; }
+    uint32_t shaderGlyph() const override { return _shaderGlyph; }
+    int32_t x() const override { return _x; }
+    int32_t y() const override { return _y; }
+    void setPosition(int32_t x, int32_t y) override { _x = x; _y = y; }
+    uint32_t widthCells() const override { return _widthCells; }
+    uint32_t heightCells() const override { return _heightCells; }
+    const std::string& name() const override { return _name; }
+    void setName(const std::string& n) override { _name = n; }
+    bool hasName() const override { return !_name.empty(); }
+    void setScreenOrigin(float sx, float sy) override { _screenOriginX = sx; _screenOriginY = sy; }
+
+    void renderToStaging(float time) override;
+    bool needsBufferRealloc() override;
+    bool needsTextureRealloc() override;
     void declareBufferNeeds() override;
     Result<void> allocateBuffers() override;
     Result<void> allocateTextures() override;
@@ -86,16 +101,13 @@ private:
     Result<void> loadPdf();
 
     //=========================================================================
-    // Page rendering (delegates to shared renderPdfToWriter)
+    // Page rendering (delegates to shared renderPdfToBuffer)
     //=========================================================================
     Result<void> renderAllPages();
 
     //=========================================================================
-    // GPU helpers
+    // Helpers
     //=========================================================================
-    uint32_t computeDerivedSize() const;
-    Result<void> uploadMetadata();
-    void uploadGlyphData();
     void cardPixelToScene(float cardX, float cardY, float& sceneX, float& sceneY);
 
     //=========================================================================
@@ -108,9 +120,8 @@ private:
     // State
     //=========================================================================
 
-    // Writer wraps YDrawBuilder for shared PDF rendering
-    std::shared_ptr<yetty::YDrawWriterInternal> _writer;
     YDrawBuilder::Ptr _builder;
+    std::shared_ptr<YDrawBuffer> _buffer;
 
     // Args / payload
     std::string _argsStr;
@@ -129,27 +140,13 @@ private:
 
     // Font management
     FontManager::Ptr _fontManager;
+    GpuAllocator::Ptr _gpuAllocator;
 
-    // Atlas texture handle for cardTextureManager
-    TextureHandle _atlasTextureHandle = TextureHandle::invalid();
-
-    // Primitive storage (SDF segments/boxes for table borders/fills)
-    StorageHandle _primStorage = StorageHandle::invalid();
-    uint32_t _primitiveOffset = 0;
-    uint32_t _primCount = 0;
-
-    // Derived storage
-    StorageHandle _derivedStorage = StorageHandle::invalid();
-    uint32_t _gridOffset = 0;
-    uint32_t _glyphOffset = 0;
-    uint32_t _gridWidth = 0;
-    uint32_t _gridHeight = 0;
 
     // View zoom/pan
     float _viewZoom = 1.0f;
     float _viewPanX = 0.0f;
     float _viewPanY = 0.0f;
-    float _fitPageHeight = 0.0f;  // if set, compute zoom/pan to fit one page
     bool _focused = false;
 
     // Text selection
@@ -157,12 +154,22 @@ private:
     bool _sortedOrderBuilt = false;
     int32_t _selStartSorted = -1;
     int32_t _selEndSorted = -1;
-    uint32_t _cellWidth = 0;
-    uint32_t _cellHeight = 0;
+    float _cellWidth = 0;
+    float _cellHeight = 0;
 
     // Dirty flags
     bool _dirty = true;
-    bool _metadataDirty = true;
+    bool _needsInitialZoom = true;
+
+    // Common card state (was in Card base class)
+    CardManager::Ptr _cardMgr;
+    GPUContext _gpu;
+    MetadataHandle _metaHandle = MetadataHandle::invalid();
+    uint32_t _shaderGlyph = 0;
+    int32_t _x = 0, _y = 0;
+    uint32_t _widthCells = 0, _heightCells = 0;
+    float _screenOriginX = 0.0f, _screenOriginY = 0.0f;
+    std::string _name;
 };
 
 } // namespace yetty::card

@@ -5,6 +5,12 @@ if(YETTY_CARD_YPDF)
     add_subdirectory(pdf2ydraw)
 endif()
 
+# HTML to YDraw binary converter (requires litehtml from yhtml card)
+if(YETTY_CARD_YHTML)
+    add_subdirectory(html2ydraw)
+    add_subdirectory(yhtml-machine)
+endif()
+
 # Ymery test tool - standalone ImGui/OpenGL3 app that loads YAML layouts
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/ymery/test.cpp")
 add_executable(ymery-test

@@ -2,12 +2,12 @@
 
 #include "graph-ir.h"
 #include <memory>
-
-namespace yetty {
-class YDrawBuilder;
-}
+#include <functional>
 
 namespace yetty::diagram {
+
+// Text measurement callback: (text, fontSize) -> width
+using MeasureTextFn = std::function<float(const std::string& text, float fontSize)>;
 
 //=============================================================================
 // Layout Engine Interface
@@ -19,7 +19,7 @@ public:
     virtual ~LayoutEngine() = default;
 
     // Layout the graph, filling node positions and edge control points
-    virtual Result<void> layout(Graph& graph, YDrawBuilder* builder = nullptr) = 0;
+    virtual Result<void> layout(Graph& graph, MeasureTextFn measureText = nullptr) = 0;
 
     // Layout parameters
     struct Params {

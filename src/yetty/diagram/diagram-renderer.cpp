@@ -1,19 +1,26 @@
 #include "diagram-renderer.h"
 #include <yetty/ydraw-builder.h>
-#include "../cards/hdraw/hdraw.h"  // For SDFPrimitive, SDFType
+#include "../ydraw/ydraw-types.gen.h"
+#include "../ydraw/ydraw-buffer.h"
 #include <cmath>
 
 namespace yetty::diagram {
 
-Result<DiagramRenderer::Ptr> DiagramRenderer::create(std::shared_ptr<YDrawBuilder> builder) {
+Result<DiagramRenderer::Ptr> DiagramRenderer::create(std::shared_ptr<YDrawBuilder> builder,
+                                                     std::shared_ptr<YDrawBuffer> buffer,
+                                                     MeasureTextFn measureText) {
     if (!builder) {
         return Err<Ptr>("DiagramRenderer: null builder");
     }
-    return Ok(Ptr(new DiagramRenderer(std::move(builder))));
+    return Ok(Ptr(new DiagramRenderer(std::move(builder), std::move(buffer), std::move(measureText))));
 }
 
-DiagramRenderer::DiagramRenderer(std::shared_ptr<YDrawBuilder> builder)
+DiagramRenderer::DiagramRenderer(std::shared_ptr<YDrawBuilder> builder,
+                                 std::shared_ptr<YDrawBuffer> buffer,
+                                 MeasureTextFn measureText)
     : _builder(std::move(builder))
+    , _buffer(std::move(buffer))
+    , _measureText(std::move(measureText))
 {}
 
 Result<void> DiagramRenderer::render(const Graph& graph) {
@@ -22,7 +29,8 @@ Result<void> DiagramRenderer::render(const Graph& graph) {
     // Render clusters first (background)
     for (const auto& [id, cluster] : graph.clusters) {
         if (cluster.width > 0 && cluster.height > 0) {
-            _builder->addBox(
+            _buffer->addBox(
+                _layer++,
                 cluster.x + cluster.width / 2,
                 cluster.y + cluster.height / 2,
                 cluster.width / 2,
@@ -30,8 +38,7 @@ Result<void> DiagramRenderer::render(const Graph& graph) {
                 cluster.fillColor,
                 cluster.strokeColor,
                 1.0f,
-                5.0f,
-                _layer++
+                5.0f
             );
         }
     }
@@ -94,95 +101,64 @@ void DiagramRenderer::renderNode(const GraphNode& node) {
 }
 
 void DiagramRenderer::renderRectangle(const GraphNode& node) {
-    _builder->addBox(
+    _buffer->addBox(
+        _layer++,
         node.x, node.y,
         node.width / 2, node.height / 2,
         node.style.fillColor,
         node.style.strokeColor,
         node.style.strokeWidth,
-        0.0f,  // No rounding
-        _layer++
+        0.0f  // No rounding
     );
 }
 
 void DiagramRenderer::renderRoundedRect(const GraphNode& node) {
-    _builder->addBox(
+    _buffer->addBox(
+        _layer++,
         node.x, node.y,
         node.width / 2, node.height / 2,
         node.style.fillColor,
         node.style.strokeColor,
         node.style.strokeWidth,
-        node.style.cornerRadius,
-        _layer++
+        node.style.cornerRadius
     );
 }
 
 void DiagramRenderer::renderCircle(const GraphNode& node) {
     float radius = std::min(node.width, node.height) / 2;
-    _builder->addCircle(
+    _buffer->addCircle(
+        _layer++,
         node.x, node.y,
         radius,
         node.style.fillColor,
         node.style.strokeColor,
         node.style.strokeWidth,
-        _layer++
+        0.0f
     );
 }
 
 void DiagramRenderer::renderDiamond(const GraphNode& node) {
-    card::SDFPrimitive prim = {};
-    prim.type = static_cast<uint32_t>(card::SDFType::Rhombus);
-    prim.layer = _layer++;
-    prim.params[0] = node.x;
-    prim.params[1] = node.y;
-    prim.params[2] = node.width / 2;
-    prim.params[3] = node.height / 2;
-    prim.fillColor = node.style.fillColor;
-    prim.strokeColor = node.style.strokeColor;
-    prim.strokeWidth = node.style.strokeWidth;
-    _builder->addPrimitive(prim);
+    _buffer->addRhombus(
+        _layer++, node.x, node.y, node.width / 2, node.height / 2,
+        node.style.fillColor, node.style.strokeColor, node.style.strokeWidth, 0.0f);
 }
 
 void DiagramRenderer::renderEllipse(const GraphNode& node) {
-    card::SDFPrimitive prim = {};
-    prim.type = static_cast<uint32_t>(card::SDFType::Ellipse);
-    prim.layer = _layer++;
-    prim.params[0] = node.x;
-    prim.params[1] = node.y;
-    prim.params[2] = node.width / 2;
-    prim.params[3] = node.height / 2;
-    prim.fillColor = node.style.fillColor;
-    prim.strokeColor = node.style.strokeColor;
-    prim.strokeWidth = node.style.strokeWidth;
-    _builder->addPrimitive(prim);
+    _buffer->addEllipse(
+        _layer++, node.x, node.y, node.width / 2, node.height / 2,
+        node.style.fillColor, node.style.strokeColor, node.style.strokeWidth, 0.0f);
 }
 
 void DiagramRenderer::renderHexagon(const GraphNode& node) {
-    card::SDFPrimitive prim = {};
-    prim.type = static_cast<uint32_t>(card::SDFType::Hexagon);
-    prim.layer = _layer++;
-    prim.params[0] = node.x;
-    prim.params[1] = node.y;
-    prim.params[2] = std::min(node.width, node.height) / 2;
-    prim.fillColor = node.style.fillColor;
-    prim.strokeColor = node.style.strokeColor;
-    prim.strokeWidth = node.style.strokeWidth;
-    _builder->addPrimitive(prim);
+    _buffer->addHexagon(
+        _layer++, node.x, node.y, std::min(node.width, node.height) / 2,
+        node.style.fillColor, node.style.strokeColor, node.style.strokeWidth, 0.0f);
 }
 
 void DiagramRenderer::renderParallelogram(const GraphNode& node) {
-    card::SDFPrimitive prim = {};
-    prim.type = static_cast<uint32_t>(card::SDFType::Parallelogram);
-    prim.layer = _layer++;
-    prim.params[0] = node.x;
-    prim.params[1] = node.y;
-    prim.params[2] = node.width / 2;
-    prim.params[3] = node.height / 2;
-    prim.params[4] = node.width * 0.2f;  // Skew
-    prim.fillColor = node.style.fillColor;
-    prim.strokeColor = node.style.strokeColor;
-    prim.strokeWidth = node.style.strokeWidth;
-    _builder->addPrimitive(prim);
+    _buffer->addParallelogram(
+        _layer++, node.x, node.y, node.width / 2, node.height / 2, node.width * 0.2f,
+        node.style.fillColor, node.style.strokeColor, node.style.strokeWidth, 0.0f);
 }
 
 void DiagramRenderer::renderCylinder(const GraphNode& node) {
@@ -191,74 +167,55 @@ void DiagramRenderer::renderCylinder(const GraphNode& node) {
     float bodyHeight = node.height - ellipseHeight;
 
     // Body (rectangle)
-    _builder->addBox(
+    _buffer->addBox(
+        _layer++,
         node.x, node.y,
         node.width / 2, bodyHeight / 2,
         node.style.fillColor,
         0,  // No stroke on body
         0,
-        0,
-        _layer++
+        0
     );
 
     // Top ellipse
-    card::SDFPrimitive topEllipse = {};
-    topEllipse.type = static_cast<uint32_t>(card::SDFType::Ellipse);
-    topEllipse.layer = _layer++;
-    topEllipse.params[0] = node.x;
-    topEllipse.params[1] = node.y - bodyHeight / 2;
-    topEllipse.params[2] = node.width / 2;
-    topEllipse.params[3] = ellipseHeight;
-    topEllipse.fillColor = node.style.fillColor;
-    topEllipse.strokeColor = node.style.strokeColor;
-    topEllipse.strokeWidth = node.style.strokeWidth;
-    _builder->addPrimitive(topEllipse);
+    _buffer->addEllipse(
+        _layer++, node.x, node.y - bodyHeight / 2, node.width / 2, ellipseHeight,
+        node.style.fillColor, node.style.strokeColor, node.style.strokeWidth, 0.0f);
 
     // Bottom ellipse (partial, just the visible part)
-    card::SDFPrimitive bottomEllipse = {};
-    bottomEllipse.type = static_cast<uint32_t>(card::SDFType::Ellipse);
-    bottomEllipse.layer = _layer++;
-    bottomEllipse.params[0] = node.x;
-    bottomEllipse.params[1] = node.y + bodyHeight / 2;
-    bottomEllipse.params[2] = node.width / 2;
-    bottomEllipse.params[3] = ellipseHeight;
-    bottomEllipse.fillColor = node.style.fillColor;
-    bottomEllipse.strokeColor = node.style.strokeColor;
-    bottomEllipse.strokeWidth = node.style.strokeWidth;
-    _builder->addPrimitive(bottomEllipse);
+    _buffer->addEllipse(
+        _layer++, node.x, node.y + bodyHeight / 2, node.width / 2, ellipseHeight,
+        node.style.fillColor, node.style.strokeColor, node.style.strokeWidth, 0.0f);
 
     // Side lines
-    _builder->addSegment(
+    _buffer->addSegment(
+        _layer++,
         node.x - node.width / 2, node.y - bodyHeight / 2,
         node.x - node.width / 2, node.y + bodyHeight / 2,
+        0,
         node.style.strokeColor,
         node.style.strokeWidth,
-        _layer++
+        0.0f
     );
-    _builder->addSegment(
+    _buffer->addSegment(
+        _layer++,
         node.x + node.width / 2, node.y - bodyHeight / 2,
         node.x + node.width / 2, node.y + bodyHeight / 2,
+        0,
         node.style.strokeColor,
         node.style.strokeWidth,
-        _layer++
+        0.0f
     );
 }
 
 void DiagramRenderer::renderStadium(const GraphNode& node) {
-    // Stadium (pill shape) - using capsule
-    card::SDFPrimitive prim = {};
-    prim.type = static_cast<uint32_t>(card::SDFType::Capsule);
-    prim.layer = _layer++;
     float radius = node.height / 2;
-    prim.params[0] = node.x - node.width / 2 + radius;  // Left center x
-    prim.params[1] = node.y;                             // y
-    prim.params[2] = node.x + node.width / 2 - radius;  // Right center x
-    prim.params[3] = node.y;                             // y
-    prim.params[4] = radius;                             // Radius
-    prim.fillColor = node.style.fillColor;
-    prim.strokeColor = node.style.strokeColor;
-    prim.strokeWidth = node.style.strokeWidth;
-    _builder->addPrimitive(prim);
+    _buffer->addCapsule(
+        _layer++,
+        node.x - node.width / 2 + radius, node.y,
+        node.x + node.width / 2 - radius, node.y,
+        radius,
+        node.style.fillColor, node.style.strokeColor, node.style.strokeWidth, 0.0f);
 }
 
 //=============================================================================
@@ -280,11 +237,13 @@ void DiagramRenderer::renderEdge(const GraphEdge& edge, const Graph& graph) {
         renderDashedLine(startX, startY, endX, endY,
                          edge.style.strokeColor, edge.style.strokeWidth);
     } else {
-        _builder->addSegment(
+        _buffer->addSegment(
+            _layer++,
             startX, startY, endX, endY,
+            0,
             edge.style.strokeColor,
             edge.style.strokeWidth,
-            _layer++
+            0.0f
         );
     }
 
@@ -335,19 +294,9 @@ void DiagramRenderer::renderArrowhead(float x, float y, float angle,
     float rightY = backCenterY - perpY;
 
     // Render as filled triangle
-    card::SDFPrimitive prim = {};
-    prim.type = static_cast<uint32_t>(card::SDFType::Triangle);
-    prim.layer = _layer++;
-    prim.params[0] = tipX;
-    prim.params[1] = tipY;
-    prim.params[2] = leftX;
-    prim.params[3] = leftY;
-    prim.params[4] = rightX;
-    prim.params[5] = rightY;
-    prim.fillColor = color;
-    prim.strokeColor = 0;
-    prim.strokeWidth = 0;
-    _builder->addPrimitive(prim);
+    _buffer->addTriangle(
+        _layer++, tipX, tipY, leftX, leftY, rightX, rightY,
+        color, 0, 0.0f, 0.0f);
 }
 
 void DiagramRenderer::renderDashedLine(float x0, float y0, float x1, float y1,
@@ -368,10 +317,11 @@ void DiagramRenderer::renderDashedLine(float x0, float y0, float x1, float y1,
     float pos = 0;
     while (pos < length) {
         float dashEnd = std::min(pos + dashLen, length);
-        _builder->addSegment(
+        _buffer->addSegment(
+            _layer,
             x0 + unitX * pos, y0 + unitY * pos,
             x0 + unitX * dashEnd, y0 + unitY * dashEnd,
-            color, width, _layer
+            0, color, width, 0.0f
         );
         pos += segmentLen;
     }
@@ -386,34 +336,36 @@ void DiagramRenderer::renderNodeLabel(const GraphNode& node) {
     if (node.label.empty()) return;
 
     // Center the text in the node
-    float textWidth = _builder->measureTextWidth(node.label, node.style.fontSize);
+    float textWidth = _measureText ? _measureText(node.label, node.style.fontSize)
+                                   : node.style.fontSize * 0.6f * node.label.size();
     float textX = node.x - textWidth / 2;
     float textY = node.y + node.style.fontSize / 3;  // Approximate vertical centering
 
-    _builder->addText(textX, textY, node.label, node.style.fontSize,
-                      node.style.textColor, _layer++);
+    _buffer->addText(textX, textY, node.label, node.style.fontSize,
+                     node.style.textColor, _layer++, -1);
 }
 
 void DiagramRenderer::renderEdgeLabel(const GraphEdge& edge) {
     if (edge.label.empty()) return;
 
     // Render label at the midpoint
-    float textWidth = _builder->measureTextWidth(edge.label, edge.style.labelFontSize);
+    float textWidth = _measureText ? _measureText(edge.label, edge.style.labelFontSize)
+                                   : edge.style.labelFontSize * 0.6f * edge.label.size();
     float textX = edge.labelPosition.x - textWidth / 2;
     float textY = edge.labelPosition.y + edge.style.labelFontSize / 3;
 
     // Add a small background box
     float padding = 3.0f;
-    _builder->addBox(
+    _buffer->addBox(
+        _layer++,
         edge.labelPosition.x, edge.labelPosition.y,
         textWidth / 2 + padding, edge.style.labelFontSize / 2 + padding,
         0xFF1A1A2E,  // Dark background
-        0, 0, 2.0f,
-        _layer++
+        0, 0, 2.0f
     );
 
-    _builder->addText(textX, textY, edge.label, edge.style.labelFontSize,
-                      edge.style.labelColor, _layer++);
+    _buffer->addText(textX, textY, edge.label, edge.style.labelFontSize,
+                     edge.style.labelColor, _layer++, -1);
 }
 
 //=============================================================================

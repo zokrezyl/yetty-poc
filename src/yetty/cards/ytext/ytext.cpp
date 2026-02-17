@@ -41,10 +41,13 @@ YText::YText(const YettyContext& ctx,
              int32_t x, int32_t y,
              uint32_t widthCells, uint32_t heightCells,
              const std::string& args, const std::string& payload)
-    : Card(ctx.cardManager, ctx.gpu, x, y, widthCells, heightCells)
-    , _fontManager(ctx.fontManager)
+    : _fontManager(ctx.fontManager)
     , _argsStr(args)
     , _payloadStr(payload)
+    , _cardMgr(ctx.cardManager)
+    , _gpu(ctx.gpu)
+    , _x(x), _y(y)
+    , _widthCells(widthCells), _heightCells(heightCells)
 {
     _shaderGlyph = SHADER_GLYPH;
     if (_fontManager) {

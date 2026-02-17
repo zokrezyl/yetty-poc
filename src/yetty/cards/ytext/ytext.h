@@ -98,7 +98,20 @@ public:
     // Card interface
     //=========================================================================
     bool needsBuffer() const override { return true; }
+
+    // Card accessors
+    uint32_t metadataOffset() const override { return _metaHandle.offset; }
     uint32_t metadataSlotIndex() const override { return _metaHandle.offset / 64; }
+    uint32_t shaderGlyph() const override { return _shaderGlyph; }
+    int32_t x() const override { return _x; }
+    int32_t y() const override { return _y; }
+    void setPosition(int32_t px, int32_t py) override { _x = px; _y = py; }
+    uint32_t widthCells() const override { return _widthCells; }
+    uint32_t heightCells() const override { return _heightCells; }
+    const std::string& name() const override { return _name; }
+    void setName(const std::string& n) override { _name = n; }
+    bool hasName() const override { return !_name.empty(); }
+    void setScreenOrigin(float sx, float sy) override { _screenOriginX = sx; _screenOriginY = sy; }
     Result<void> dispose() override;
     void suspend() override;
     void declareBufferNeeds() override;
@@ -229,6 +242,16 @@ private:
 
     std::string _argsStr;
     std::string _payloadStr;
+
+    // Common card state (was in Card base class)
+    CardManager::Ptr _cardMgr;
+    GPUContext _gpu;
+    MetadataHandle _metaHandle = MetadataHandle::invalid();
+    uint32_t _shaderGlyph = 0;
+    int32_t _x = 0, _y = 0;
+    uint32_t _widthCells = 0, _heightCells = 0;
+    float _screenOriginX = 0.0f, _screenOriginY = 0.0f;
+    std::string _name;
 };
 
 } // namespace yetty::card

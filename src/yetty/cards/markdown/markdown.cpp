@@ -1,6 +1,7 @@
 #include "markdown.h"
 #include <yetty/ydraw-builder.h>
-#include "../hdraw/hdraw.h"  // For SDFPrimitive
+#include "../../ydraw/ydraw-buffer.h"
+#include "../../ydraw/ydraw-types.gen.h"
 #include <yetty/msdf-glyph-data.h>
 #include <yetty/base/event-loop.h>
 #include <ytrace/ytrace.hpp>
@@ -28,15 +29,11 @@ public:
         : Markdown(ctx.cardManager, ctx.gpu, x, y, widthCells, heightCells)
         , _argsStr(args)
         , _payloadStr(payload)
+        , _fontManager(ctx.fontManager)
+        , _gpuAllocator(ctx.gpuAllocator)
     {
         _shaderGlyph = SHADER_GLYPH;
-        auto builderRes = YDrawBuilder::create(ctx.fontManager, ctx.globalAllocator);
-        if (builderRes) {
-            _builder = *builderRes;
-            _builder->addFlags(YDrawBuilder::FLAG_UNIFORM_SCALE);
-        } else {
-            yerror("MarkdownImpl: failed to create builder");
-        }
+        _buffer = *yetty::YDrawBuffer::create();
     }
 
     ~MarkdownImpl() override { dispose(); }
@@ -71,11 +68,9 @@ public:
         float sceneH = static_cast<float>(_heightCells * _cellHeight);
         _builder->setSceneBounds(0, 0, sceneW, sceneH);
 
-        _builder->clear();
+        _buffer->clear();
         generatePrimitives();
-
-        _dirty = true;
-        _metadataDirty = true;
+        _builder->calculate();
     }
 
     Result<bool> onEvent(const base::Event& event) override {
@@ -98,17 +93,17 @@ public:
                 // Ctrl+wheel = zoom
                 float zoomFactor = std::exp(event.cardScroll.dy * 0.1f);
                 _viewZoom = std::clamp(_viewZoom * zoomFactor, 0.1f, 50.0f);
-                _metadataDirty = true;
+                _builder->setView(_viewZoom, _viewPanX, _viewPanY);
                 return Ok(true);
             } else if (event.cardScroll.mods & GLFW_MOD_SHIFT) {
                 // Shift+wheel = horizontal scroll
                 _viewPanX += event.cardScroll.dy * 0.05f * sceneW / _viewZoom;
-                _metadataDirty = true;
+                _builder->setView(_viewZoom, _viewPanX, _viewPanY);
                 return Ok(true);
             } else {
                 // Wheel = vertical scroll
                 _viewPanY += event.cardScroll.dy * 0.05f * sceneH / _viewZoom;
-                _metadataDirty = true;
+                _builder->setView(_viewZoom, _viewPanX, _viewPanY);
                 return Ok(true);
             }
         }
@@ -123,13 +118,6 @@ public:
                 (*loopResult)->deregisterListener(sharedAs<base::EventListener>());
             }
         }
-        _derivedStorage = StorageHandle::invalid();
-        _grid = nullptr;
-        _gridSize = 0;
-        _primStorage = StorageHandle::invalid();
-        _primitives = nullptr;
-        _primCount = 0;
-        _primCapacity = 0;
         if (_metaHandle.isValid() && _cardMgr) {
             if (auto res = _cardMgr->deallocateMetadata(_metaHandle); !res) {
                 yerror("MarkdownImpl::dispose: deallocateMetadata failed: {}", error_msg(res));
@@ -140,133 +128,18 @@ public:
     }
 
     void suspend() override {
-        if (_primStorage.isValid() && _primCount > 0 && _builder) {
-            auto& staging = _builder->primStagingMut();
-            staging.resize(_primCount);
-            std::memcpy(staging.data(), _primitives, _primCount * sizeof(SDFPrimitive));
-        }
-        _derivedStorage = StorageHandle::invalid();
-        _grid = nullptr;
-        _gridSize = 0;
-        _primStorage = StorageHandle::invalid();
-        _primitives = nullptr;
-        _primCount = 0;
-        _primCapacity = 0;
     }
 
     void declareBufferNeeds() override {
         if (!_builder) return;
-
-        if (_primStorage.isValid() && _primCount > 0) {
-            auto& staging = _builder->primStagingMut();
-            if (staging.empty()) {
-                staging.resize(_primCount);
-                std::memcpy(staging.data(), _primitives, _primCount * sizeof(SDFPrimitive));
-            } else {
-                std::vector<SDFPrimitive> merged(_primCount);
-                std::memcpy(merged.data(), _primitives, _primCount * sizeof(SDFPrimitive));
-                merged.insert(merged.end(), staging.begin(), staging.end());
-                staging = std::move(merged);
-            }
-        }
-        _derivedStorage = StorageHandle::invalid();
-        _grid = nullptr;
-        _gridSize = 0;
-        _primStorage = StorageHandle::invalid();
-        _primitives = nullptr;
-        _primCount = 0;
-        _primCapacity = 0;
-
-        const auto& primStaging = _builder->primStaging();
-        const auto& glyphs = _builder->glyphs();
-
-        if (primStaging.empty() && glyphs.empty()) {
-            _builder->clearGridStaging();
-            return;
-        }
-
-        if (!primStaging.empty()) {
-            uint32_t primSize = static_cast<uint32_t>(primStaging.size()) * sizeof(SDFPrimitive);
-            _cardMgr->bufferManager()->reserve(primSize);
-        }
-
-        if (_builder->gridStaging().empty()) {
-            _builder->calculate();
-        }
-
-        uint32_t gridBytes = static_cast<uint32_t>(_builder->gridStaging().size()) * sizeof(uint32_t);
-        uint32_t glyphBytes = static_cast<uint32_t>(glyphs.size() * sizeof(YDrawGlyph));
-        uint32_t derivedSize = gridBytes + glyphBytes;
-
-        if (derivedSize > 0) {
-            _cardMgr->bufferManager()->reserve(derivedSize);
+        if (auto res = _builder->declareBufferNeeds(); !res) {
+            yerror("MarkdownImpl::declareBufferNeeds: {}", error_msg(res));
         }
     }
 
     Result<void> allocateBuffers() override {
         if (!_builder) return Ok();
-
-        const auto& primStaging = _builder->primStaging();
-        const auto& gridStaging = _builder->gridStaging();
-        const auto& glyphs = _builder->glyphs();
-
-        if (!primStaging.empty()) {
-            uint32_t count = static_cast<uint32_t>(primStaging.size());
-            uint32_t allocBytes = count * sizeof(SDFPrimitive);
-            auto primResult = _cardMgr->bufferManager()->allocateBuffer(
-                metadataSlotIndex(), "prims", allocBytes);
-            if (!primResult) {
-                return Err<void>("MarkdownImpl::allocateBuffers: prim alloc failed");
-            }
-            _primStorage = *primResult;
-            _primitives = reinterpret_cast<SDFPrimitive*>(_primStorage.data);
-            _primCapacity = count;
-            _primCount = count;
-            std::memcpy(_primitives, primStaging.data(), count * sizeof(SDFPrimitive));
-            _builder->primStagingMut().clear();
-            _builder->primStagingMut().shrink_to_fit();
-            _cardMgr->bufferManager()->markBufferDirty(_primStorage);
-        }
-
-        uint32_t gridBytes = static_cast<uint32_t>(gridStaging.size()) * sizeof(uint32_t);
-        uint32_t glyphBytes = static_cast<uint32_t>(glyphs.size() * sizeof(YDrawGlyph));
-        uint32_t derivedSize = gridBytes + glyphBytes;
-
-        if (derivedSize > 0) {
-            auto storageResult = _cardMgr->bufferManager()->allocateBuffer(
-                metadataSlotIndex(), "derived", derivedSize);
-            if (!storageResult) {
-                return Err<void>("MarkdownImpl::allocateBuffers: derived alloc failed");
-            }
-            _derivedStorage = *storageResult;
-
-            uint8_t* base = _derivedStorage.data;
-            uint32_t offset = 0;
-
-            _grid = reinterpret_cast<uint32_t*>(base + offset);
-            _gridSize = static_cast<uint32_t>(gridStaging.size());
-            _gridOffset = (_derivedStorage.offset + offset) / sizeof(float);
-            if (!gridStaging.empty()) {
-                std::memcpy(base + offset, gridStaging.data(), gridBytes);
-            }
-            offset += gridBytes;
-
-            _glyphOffset = (_derivedStorage.offset + offset) / sizeof(float);
-            if (!glyphs.empty()) {
-                std::memcpy(base + offset, glyphs.data(), glyphBytes);
-            }
-            offset += glyphBytes;
-
-            _cardMgr->bufferManager()->markBufferDirty(_derivedStorage);
-        }
-
-        _primitiveOffset = _primStorage.isValid() ? _primStorage.offset / sizeof(float) : 0;
-        _gridWidth = _builder->gridWidth();
-        _gridHeight = _builder->gridHeight();
-        _metadataDirty = true;
-        _dirty = false;
-
-        return Ok();
+        return _builder->allocateBuffers();
     }
 
     Result<void> allocateTextures() override { return Ok(); }
@@ -274,18 +147,7 @@ public:
 
     Result<void> finalize() override {
         if (!_builder) return Ok();
-
-        if (_dirty) {
-            if (auto res = rebuildAndUpload(); !res) return res;
-            _dirty = false;
-        }
-
-        if (_metadataDirty) {
-            if (auto res = uploadMetadata(); !res) return res;
-            _metadataDirty = false;
-        }
-
-        return Ok();
+        return _builder->writeBuffers();
     }
 
     //=========================================================================
@@ -298,6 +160,16 @@ public:
             return Err<void>("MarkdownImpl::init: failed to allocate metadata");
         }
         _metaHandle = *metaResult;
+
+        auto builderRes = YDrawBuilder::create(
+            _fontManager, _gpuAllocator, _buffer, _cardMgr, metadataSlotIndex());
+        if (!builderRes) {
+            return Err<void>("MarkdownImpl::init: failed to create builder", builderRes);
+        }
+        _builder = *builderRes;
+        _builder->addFlags(YDrawBuilder::FLAG_UNIFORM_SCALE);
+        _builder->setViewport(_widthCells, _heightCells);
+        _builder->setView(_viewZoom, _viewPanX, _viewPanY);
 
         parseArgs(_argsStr);
 
@@ -329,8 +201,6 @@ public:
             (*loopResult)->registerListener(base::Event::Type::CardScroll, self, 1000);
         }
 
-        _dirty = true;
-        _metadataDirty = true;
         return Ok();
     }
 
@@ -338,115 +208,6 @@ private:
     //=========================================================================
     // GPU rebuild
     //=========================================================================
-
-    Result<void> rebuildAndUpload() {
-        _builder->computeSceneBoundsFromPrims(_primitives, _primCount);
-
-        _builder->computeGridDims(_primitives, _primCount);
-        _builder->buildGridFromPrims(_primitives, _primCount);
-
-        const auto& gridData = _builder->gridStaging();
-        uint32_t gridBytes = static_cast<uint32_t>(gridData.size()) * sizeof(uint32_t);
-        uint32_t glyphBytes = static_cast<uint32_t>(
-            _builder->glyphs().size() * sizeof(YDrawGlyph));
-        uint32_t derivedTotalSize = gridBytes + glyphBytes;
-
-        if (derivedTotalSize > 0) {
-            if (!_derivedStorage.isValid() || derivedTotalSize > _derivedStorage.size) {
-                auto storageResult = _cardMgr->bufferManager()->allocateBuffer(
-                    metadataSlotIndex(), "derived", derivedTotalSize);
-                if (!storageResult) {
-                    return Err<void>("MarkdownImpl::rebuild: derived alloc failed");
-                }
-                _derivedStorage = *storageResult;
-            }
-        }
-
-        if (_derivedStorage.isValid() && derivedTotalSize > 0) {
-            uint8_t* base = _derivedStorage.data;
-            std::memset(base, 0, _derivedStorage.size);
-            uint32_t offset = 0;
-
-            _grid = reinterpret_cast<uint32_t*>(base + offset);
-            _gridSize = static_cast<uint32_t>(gridData.size());
-            _gridWidth = _builder->gridWidth();
-            _gridHeight = _builder->gridHeight();
-            _gridOffset = (_derivedStorage.offset + offset) / sizeof(float);
-            std::memcpy(base + offset, gridData.data(), gridBytes);
-            offset += gridBytes;
-
-            _glyphOffset = (_derivedStorage.offset + offset) / sizeof(float);
-            const auto& glyphs = _builder->glyphs();
-            if (!glyphs.empty()) {
-                std::memcpy(base + offset, glyphs.data(), glyphBytes);
-            }
-
-            _cardMgr->bufferManager()->markBufferDirty(_derivedStorage);
-        }
-
-        _primitiveOffset = _primStorage.isValid() ? _primStorage.offset / sizeof(float) : 0;
-        if (_primStorage.isValid()) {
-            _cardMgr->bufferManager()->markBufferDirty(_primStorage);
-        }
-        _metadataDirty = true;
-        return Ok();
-    }
-
-    Result<void> uploadMetadata() {
-        if (!_metaHandle.isValid()) {
-            return Err<void>("MarkdownImpl::uploadMetadata: invalid handle");
-        }
-
-        // Pack zoom as f16
-        uint32_t zoomBits;
-        {
-            uint32_t f32bits;
-            std::memcpy(&f32bits, &_viewZoom, sizeof(float));
-            uint32_t sign = (f32bits >> 16) & 0x8000;
-            int32_t  exp  = ((f32bits >> 23) & 0xFF) - 127 + 15;
-            uint32_t mant = (f32bits >> 13) & 0x3FF;
-            if (exp <= 0) { exp = 0; mant = 0; }
-            else if (exp >= 31) { exp = 31; mant = 0; }
-            zoomBits = sign | (static_cast<uint32_t>(exp) << 10) | mant;
-        }
-
-        // Pack pan as normalized i16
-        float contentW = _builder->sceneMaxX() - _builder->sceneMinX();
-        float contentH = _builder->sceneMaxY() - _builder->sceneMinY();
-        int16_t panXi16 = static_cast<int16_t>(std::clamp(
-            _viewPanX / std::max(contentW, 1e-6f) * 16384.0f, -32768.0f, 32767.0f));
-        int16_t panYi16 = static_cast<int16_t>(std::clamp(
-            _viewPanY / std::max(contentH, 1e-6f) * 16384.0f, -32768.0f, 32767.0f));
-
-        float sceneMinX = _builder->sceneMinX();
-        float sceneMinY = _builder->sceneMinY();
-        float sceneMaxX = _builder->sceneMaxX();
-        float sceneMaxY = _builder->sceneMaxY();
-        float cellSize = _builder->cellSize();
-
-        YDrawMetadata meta = {};
-        meta.primitiveOffset = _primitiveOffset;
-        meta.primitiveCount = _primCount;
-        meta.gridOffset = _gridOffset;
-        meta.gridWidth = _gridWidth;
-        meta.gridHeight = _gridHeight;
-        std::memcpy(&meta.cellSize, &cellSize, sizeof(float));
-        meta.glyphOffset = _glyphOffset;
-        meta.glyphCount = static_cast<uint32_t>(_builder->glyphs().size());
-        std::memcpy(&meta.sceneMinX, &sceneMinX, sizeof(float));
-        std::memcpy(&meta.sceneMinY, &sceneMinY, sizeof(float));
-        std::memcpy(&meta.sceneMaxX, &sceneMaxX, sizeof(float));
-        std::memcpy(&meta.sceneMaxY, &sceneMaxY, sizeof(float));
-        meta.widthCells  = (_widthCells & 0xFFFF) | (static_cast<uint32_t>(static_cast<uint16_t>(panXi16)) << 16);
-        meta.heightCells = (_heightCells & 0xFFFF) | (static_cast<uint32_t>(static_cast<uint16_t>(panYi16)) << 16);
-        meta.flags = (_builder->flags() & 0xFFFF) | (zoomBits << 16);
-        meta.bgColor = _builder->bgColor();
-
-        if (auto res = _cardMgr->writeMetadata(_metaHandle, &meta, sizeof(meta)); !res) {
-            return Err<void>("MarkdownImpl::uploadMetadata: write failed");
-        }
-        return Ok();
-    }
 
     //=========================================================================
     // Args parsing
@@ -632,14 +393,15 @@ private:
 
                 if (span.isCode) {
                     float textWidth = span.text.size() * scaledSize * 0.6f;
-                    _builder->addBox(cursorX + textWidth * 0.5f,
-                                     cursorY + scaledSize * 0.4f,
-                                     textWidth * 0.5f + 1.0f,
-                                     scaledSize * 0.5f + 0.5f,
-                                     _codeBgColor, 0, 0, 1.0f, 0);
+                    _buffer->addBox(0,
+                                    cursorX + textWidth * 0.5f,
+                                    cursorY + scaledSize * 0.4f,
+                                    textWidth * 0.5f + 1.0f,
+                                    scaledSize * 0.5f + 0.5f,
+                                    _codeBgColor, 0, 0, 1.0f);
                 }
 
-                _builder->addText(cursorX, cursorY, span.text, scaledSize, color, 0);
+                _buffer->addText(cursorX, cursorY, span.text, scaledSize, color, 0, -1);
 
                 cursorX += span.text.size() * scaledSize * 0.6f;
             }
@@ -653,27 +415,13 @@ private:
     //=========================================================================
 
     YDrawBuilder::Ptr _builder;
+    yetty::YDrawBuffer::Ptr _buffer;
+    FontManager::Ptr _fontManager;
+    GpuAllocator::Ptr _gpuAllocator;
     std::string _argsStr;
     std::string _payloadStr;
     std::string _inputArg;  // -i/--input: "-" = payload is content, else file path
     std::vector<ParsedLine> _parsedLines;
-
-    // GPU state
-    StorageHandle _primStorage = StorageHandle::invalid();
-    SDFPrimitive* _primitives = nullptr;
-    uint32_t _primCount = 0;
-    uint32_t _primCapacity = 0;
-    StorageHandle _derivedStorage = StorageHandle::invalid();
-    uint32_t* _grid = nullptr;
-    uint32_t _gridSize = 0;
-    uint32_t _primitiveOffset = 0;
-    uint32_t _gridOffset = 0;
-    uint32_t _glyphOffset = 0;
-    uint32_t _gridWidth = 0;
-    uint32_t _gridHeight = 0;
-    bool _dirty = true;
-    bool _metadataDirty = true;
-
     // Rendering parameters
     uint32_t _cellWidth = 0;
     uint32_t _cellHeight = 0;

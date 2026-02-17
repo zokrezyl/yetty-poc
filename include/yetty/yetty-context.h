@@ -23,8 +23,8 @@ struct YettyContext {
     // Low-level GPU handles
     GPUContext gpu;
 
-    // Global GPU allocator (tracks all shared GPU resource allocations)
-    GpuAllocator::Ptr globalAllocator;
+    // GPU allocator (tracks all shared GPU resource allocations)
+    GpuAllocator::Ptr gpuAllocator;
 
     // GPU usage monitor (queries vendor-specific GPU utilization)
     gpu::GpuMonitor::Ptr gpuMonitor;

@@ -20,7 +20,7 @@ public:
   Result<void> init() {
     // Create frame renderer for tiles
     auto frameResult =
-        WidgetFrameRenderer::create(_ctx.gpu.device, _ctx.gpu.surfaceFormat, _ctx.globalAllocator);
+        WidgetFrameRenderer::create(_ctx.gpu.device, _ctx.gpu.surfaceFormat, _ctx.gpuAllocator);
     if (!frameResult) {
       ywarn("Failed to create frame renderer for workspace: {}",
             frameResult.error().message());

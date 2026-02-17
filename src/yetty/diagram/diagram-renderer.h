@@ -1,22 +1,26 @@
 #pragma once
 
 #include "graph-ir.h"
+#include "layout-engine.h"
 #include <memory>
 
 namespace yetty {
 class YDrawBuilder;
+class YDrawBuffer;
 }
 
 namespace yetty::diagram {
 
 //=============================================================================
-// DiagramRenderer - Converts Graph IR to YDrawBuilder primitives
+// DiagramRenderer - Converts Graph IR to YDrawBuffer primitives
 //=============================================================================
 class DiagramRenderer {
 public:
     using Ptr = std::shared_ptr<DiagramRenderer>;
 
-    static Result<Ptr> create(std::shared_ptr<YDrawBuilder> builder);
+    static Result<Ptr> create(std::shared_ptr<YDrawBuilder> builder,
+                              std::shared_ptr<YDrawBuffer> buffer,
+                              MeasureTextFn measureText = nullptr);
 
     // Render the graph to YDrawBuilder primitives
     Result<void> render(const Graph& graph);
@@ -36,9 +40,13 @@ public:
     Options options() const { return _options; }
 
 private:
-    DiagramRenderer(std::shared_ptr<YDrawBuilder> builder);
+    DiagramRenderer(std::shared_ptr<YDrawBuilder> builder,
+                    std::shared_ptr<YDrawBuffer> buffer,
+                    MeasureTextFn measureText);
 
     std::shared_ptr<YDrawBuilder> _builder;
+    std::shared_ptr<YDrawBuffer> _buffer;
+    MeasureTextFn _measureText;
     Options _options;
     uint32_t _layer = 0;  // Current layer counter
 

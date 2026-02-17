@@ -2,7 +2,7 @@
 
 #include <yetty/card.h>
 #include <yetty/base/factory.h>
-#include <yetty/gpu-context.h>
+#include <yetty/yetty-context.h>
 #include <vector>
 #include <string>
 
@@ -133,7 +133,11 @@ enum class SDFType : uint32_t {
     Pyramid3D = 116,
     Ellipsoid3D = 117,
     Rhombus3D = 118,
-    Link3D = 119
+    Link3D = 119,
+
+    // Plot & image
+    Plot = 128,
+    Image = 129,
 };
 
 // SDF primitive (96 bytes, 24 floats - GPU aligned)
@@ -151,6 +155,7 @@ struct SDFPrimitive {
     uint32_t _pad[2];        // Padding to 96 bytes (multiple of 16 for GPU)
 };
 static_assert(sizeof(SDFPrimitive) == 96, "SDFPrimitive must be 96 bytes");
+#define YETTY_CARD_SDF_PRIMITIVE_DEFINED
 
 // Text span (input format, 64 bytes)
 struct TextSpan {
@@ -235,8 +240,19 @@ public:
     const char* typeName() const override { return "hdraw"; }
     bool needsBuffer() const override { return true; }
 
-    // Override for 64-byte metadata slots (shader uses slotIndex * 16)
+    // Card accessors
+    uint32_t metadataOffset() const override { return _metaHandle.offset; }
     uint32_t metadataSlotIndex() const override { return _metaHandle.offset / 64; }
+    uint32_t shaderGlyph() const override { return _shaderGlyph; }
+    int32_t x() const override { return _x; }
+    int32_t y() const override { return _y; }
+    void setPosition(int32_t x, int32_t y) override { _x = x; _y = y; }
+    uint32_t widthCells() const override { return _widthCells; }
+    uint32_t heightCells() const override { return _heightCells; }
+    const std::string& name() const override { return _name; }
+    void setName(const std::string& n) override { _name = n; }
+    bool hasName() const override { return !_name.empty(); }
+    void setScreenOrigin(float sx, float sy) override { _screenOriginX = sx; _screenOriginY = sy; }
 
     //=========================================================================
     // HDraw-specific API
@@ -292,8 +308,18 @@ protected:
     HDraw(CardManager::Ptr mgr, const GPUContext& gpu,
           int32_t x, int32_t y,
           uint32_t widthCells, uint32_t heightCells)
-        : Card(std::move(mgr), gpu, x, y, widthCells, heightCells)
+        : _cardMgr(std::move(mgr)), _gpu(gpu)
+        , _x(x), _y(y), _widthCells(widthCells), _heightCells(heightCells)
     {}
+
+    CardManager::Ptr _cardMgr;
+    GPUContext _gpu;
+    MetadataHandle _metaHandle = MetadataHandle::invalid();
+    uint32_t _shaderGlyph = 0;
+    int32_t _x, _y;
+    uint32_t _widthCells, _heightCells;
+    float _screenOriginX = 0.0f, _screenOriginY = 0.0f;
+    std::string _name;
 };
 
 } // namespace yetty::card

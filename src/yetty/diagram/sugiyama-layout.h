@@ -23,7 +23,7 @@ public:
 
     static Result<Ptr> create();
 
-    Result<void> layout(Graph& graph, YDrawBuilder* builder = nullptr) override;
+    Result<void> layout(Graph& graph, MeasureTextFn measureText = nullptr) override;
 
     void setParams(const Params& params) override { _params = params; }
     Params params() const override { return _params; }
@@ -52,7 +52,7 @@ private:
                      bool downward);
 
     // Phase 5: Node positioning
-    void positionNodes(Graph& graph, YDrawBuilder* builder);
+    void positionNodes(Graph& graph, MeasureTextFn measureText);
 
     // Phase 6: Edge routing
     void routeEdges(Graph& graph);
