@@ -4,6 +4,7 @@
 #include "../../ydraw/yaml2ydraw.h"
 #include <yetty/base/event-loop.h>
 #include <ytrace/ytrace.hpp>
+#include <lz4frame.h>
 #include <sstream>
 #include <cmath>
 #include <cstring>
@@ -441,12 +442,75 @@ private:
                    (uint8_t)payload[0], (uint8_t)payload[1], (uint8_t)payload[2], (uint8_t)payload[3],
                    (uint8_t)payload[4], (uint8_t)payload[5], (uint8_t)payload[6], (uint8_t)payload[7]);
         }
-        auto res = _buffer->deserialize(
-            reinterpret_cast<const uint8_t*>(payload.data()), payload.size());
+
+        const uint8_t* data = reinterpret_cast<const uint8_t*>(payload.data());
+        size_t size = payload.size();
+
+        // Check for LZ4 frame magic (0x184D2204 little-endian)
+        std::vector<uint8_t> decompressed;
+        if (size >= 4) {
+            uint32_t magic = data[0] | (data[1] << 8) | (data[2] << 16) | (data[3] << 24);
+            if (magic == LZ4F_MAGICNUMBER) {
+                ydebug("parseBinary: detected LZ4 compressed data");
+                auto res = decompressLZ4(data, size, decompressed);
+                if (!res) return res;
+                data = decompressed.data();
+                size = decompressed.size();
+                yinfo("parseBinary: decompressed {} -> {} bytes", payload.size(), size);
+            }
+        }
+
+        auto res = _buffer->deserialize(data, size);
         if (!res) {
             yerror("parseBinary: deserialize failed: {}", error_msg(res));
         }
         return res;
+    }
+
+    Result<void> decompressLZ4(const uint8_t* src, size_t srcSize, std::vector<uint8_t>& dst) {
+        LZ4F_dctx* dctx = nullptr;
+        LZ4F_errorCode_t err = LZ4F_createDecompressionContext(&dctx, LZ4F_VERSION);
+        if (LZ4F_isError(err)) {
+            return Err<void>(std::string("LZ4F_createDecompressionContext: ") + LZ4F_getErrorName(err));
+        }
+
+        // Get frame info to know uncompressed size (if available)
+        LZ4F_frameInfo_t info;
+        size_t srcConsumed = srcSize;
+        err = LZ4F_getFrameInfo(dctx, &info, src, &srcConsumed);
+        if (LZ4F_isError(err)) {
+            LZ4F_freeDecompressionContext(dctx);
+            return Err<void>(std::string("LZ4F_getFrameInfo: ") + LZ4F_getErrorName(err));
+        }
+
+        // Allocate output buffer (use content size if known, else estimate)
+        size_t dstCapacity = info.contentSize ? info.contentSize : srcSize * 4;
+        dst.resize(dstCapacity);
+
+        size_t dstPos = 0;
+        size_t srcPos = srcConsumed;
+
+        while (srcPos < srcSize) {
+            size_t dstRemaining = dst.size() - dstPos;
+            size_t srcRemaining = srcSize - srcPos;
+            size_t ret = LZ4F_decompress(dctx, dst.data() + dstPos, &dstRemaining,
+                                          src + srcPos, &srcRemaining, nullptr);
+            if (LZ4F_isError(ret)) {
+                LZ4F_freeDecompressionContext(dctx);
+                return Err<void>(std::string("LZ4F_decompress: ") + LZ4F_getErrorName(ret));
+            }
+            dstPos += dstRemaining;
+            srcPos += srcRemaining;
+
+            // Grow buffer if needed
+            if (dstPos >= dst.size() && srcPos < srcSize) {
+                dst.resize(dst.size() * 2);
+            }
+        }
+
+        dst.resize(dstPos);
+        LZ4F_freeDecompressionContext(dctx);
+        return Ok();
     }
 
     // Old parseYAML/parseYAMLPrimitive/parseColor removed — now in yaml2ydraw.cpp

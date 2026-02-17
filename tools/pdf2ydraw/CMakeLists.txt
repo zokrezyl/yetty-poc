@@ -14,5 +14,5 @@ target_include_directories(pdf2ydraw PRIVATE
     ${FREETYPE_INCLUDE_DIR}
 )
 
-target_link_libraries(pdf2ydraw PRIVATE pdfio_lib freetype args ytrace::ytrace)
+target_link_libraries(pdf2ydraw PRIVATE pdfio_lib freetype args ytrace::ytrace lz4_static)
 target_compile_features(pdf2ydraw PRIVATE cxx_std_20)
