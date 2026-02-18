@@ -365,7 +365,7 @@ static PipelineResult runFullPipeline(const std::string& pdfPath) {
     if (!pdf) return r;
 
     r.buffer = *YDrawBuffer::create();
-    renderPdfToBuffer(pdf, r.buffer.get());
+    renderPdfToBuffer(pdf, r.buffer);
     pdfioFileClose(pdf);
 
     auto fm = testFontManager();
@@ -412,7 +412,7 @@ suite ypdf_render_buffer_tests = [] {
         if (!pdf) return;
 
         auto buf = *YDrawBuffer::create();
-        auto result = renderPdfToBuffer(pdf, buf.get());
+        auto result = renderPdfToBuffer(pdf, buf);
         pdfioFileClose(pdf);
 
         expect(result.pageCount == 3) << "sample PDF has 3 pages";
@@ -450,7 +450,7 @@ suite ypdf_render_buffer_tests = [] {
         if (!pdf) return;
 
         auto buf = *YDrawBuffer::create();
-        renderPdfToBuffer(pdf, buf.get());
+        renderPdfToBuffer(pdf, buf);
         pdfioFileClose(pdf);
 
         // Collect valid font IDs
@@ -480,7 +480,7 @@ suite ypdf_render_buffer_tests = [] {
         if (!pdf) return;
 
         auto buf = *YDrawBuffer::create();
-        renderPdfToBuffer(pdf, buf.get());
+        renderPdfToBuffer(pdf, buf);
         pdfioFileClose(pdf);
 
         buf->forEachFont([&](int fontId, const uint8_t* data, size_t size,

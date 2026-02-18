@@ -529,11 +529,15 @@ public:
         switch (event.type) {
         case base::Event::Type::SetFocus:
             if (event.setFocus.objectId == id()) {
-                _isFocused = true;
-                return Ok(true);
+                if (!_isFocused) {
+                    _isFocused = true;
+                    registerInputEvents();
+                }
             } else if (_isFocused) {
                 _isFocused = false;
+                deregisterInputEvents();
             }
+            // Don't consume — GPUScreen needs SetFocus to track _focusedCardId
             return Ok(false);
 
         case base::Event::Type::CardMouseDown:
@@ -590,13 +594,33 @@ public:
         if (!loopRes) return Ok();
         auto loop = *loopRes;
         auto self = sharedAs<base::EventListener>();
+        // Only register for SetFocus initially - input events registered on focus
         if (auto res = loop->registerListener(base::Event::Type::SetFocus, self, 1000); !res) return res;
-        if (auto res = loop->registerListener(base::Event::Type::CardMouseDown, self, 1000); !res) return res;
-        if (auto res = loop->registerListener(base::Event::Type::CardMouseUp, self, 1000); !res) return res;
-        if (auto res = loop->registerListener(base::Event::Type::CardMouseMove, self, 1000); !res) return res;
-        if (auto res = loop->registerListener(base::Event::Type::CardScroll, self, 1000); !res) return res;
-        if (auto res = loop->registerListener(base::Event::Type::CardKeyDown, self, 1000); !res) return res;
         return Ok();
+    }
+
+    void registerInputEvents() {
+        auto loopRes = base::EventLoop::instance();
+        if (!loopRes) return;
+        auto loop = *loopRes;
+        auto self = sharedAs<base::EventListener>();
+        loop->registerListener(base::Event::Type::CardMouseDown, self, 1000);
+        loop->registerListener(base::Event::Type::CardMouseUp, self, 1000);
+        loop->registerListener(base::Event::Type::CardMouseMove, self, 1000);
+        loop->registerListener(base::Event::Type::CardScroll, self, 1000);
+        loop->registerListener(base::Event::Type::CardKeyDown, self, 1000);
+    }
+
+    void deregisterInputEvents() {
+        auto loopRes = base::EventLoop::instance();
+        if (!loopRes) return;
+        auto loop = *loopRes;
+        auto self = sharedAs<base::EventListener>();
+        loop->deregisterListener(base::Event::Type::CardMouseDown, self);
+        loop->deregisterListener(base::Event::Type::CardMouseUp, self);
+        loop->deregisterListener(base::Event::Type::CardMouseMove, self);
+        loop->deregisterListener(base::Event::Type::CardScroll, self);
+        loop->deregisterListener(base::Event::Type::CardKeyDown, self);
     }
 
     void deregisterFromEvents() {

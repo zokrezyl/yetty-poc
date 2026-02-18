@@ -9,7 +9,8 @@
 #include "pdf-renderer.h"
 #include "pdf-content-parser.h"
 #include "../ydraw/ydraw-buffer.h"
-#include "../font/util.h"
+#include <yetty/font/raw-font.h>
+#include <yetty/font/raw-font-manager.h>
 
 extern "C" {
 #include <pdfio.h>
@@ -34,7 +35,7 @@ namespace {
 struct PdfFontInfo {
     std::string tag;
     int bufferFontId = -1;   // font ID in the buffer
-    int utilFontId = -1;     // font ID in the FontUtil (for measurement)
+    yetty::font::RawFont::Ptr rawFont;  // for text measurement
     bool isIdentityH = false;
     std::unordered_map<uint16_t, uint32_t> toUnicode;
 };
@@ -195,14 +196,13 @@ std::string remapCidText(const std::string& text,
 }
 
 //=============================================================================
-// Font extraction — find embedded TTF fonts and register with buffer + FontUtil
+// Font extraction — find embedded TTF fonts and register with buffer + RawFontManager
 //=============================================================================
 
 void extractPageFonts(pdfio_obj_t* pageObj,
                       std::unordered_map<std::string, size_t>& fontTagToIndex,
                       std::vector<PdfFontInfo>& fonts,
-                      yetty::YDrawBuffer* buffer,
-                      yetty::font::FontUtil& fontUtil) {
+                      yetty::YDrawBuffer::Ptr buffer) {
     pdfio_dict_t* pageDict = pdfioObjGetDict(pageObj);
     if (!pageDict) return;
 
@@ -290,11 +290,16 @@ void extractPageFonts(pdfio_obj_t* pageObj,
         // Store font blob in buffer (for serialization/transfer)
         int bufFontId = buffer->addFontBlob(fontBytes.data(), fontBytes.size(), tag);
 
-        // Load font in FontUtil (for text measurement)
-        auto utilRes = fontUtil.addFontData(fontBytes.data(), fontBytes.size(), tag);
-        if (!utilRes) {
-            ywarn("extractPageFonts: FontUtil::addFontData failed for '{}': {}",
-                  tag, utilRes.error().message());
+        // Create RawFont for text measurement
+        auto fontMgr = yetty::font::RawFontManager::instance();
+        if (!fontMgr) {
+            ywarn("extractPageFonts: RawFontManager not available");
+            continue;
+        }
+        auto rawFontRes = fontMgr.value()->createFromData(fontBytes.data(), fontBytes.size(), tag);
+        if (!rawFontRes) {
+            ywarn("extractPageFonts: RawFont creation failed for '{}': {}",
+                  tag, rawFontRes.error().message());
             continue;
         }
 
@@ -305,7 +310,7 @@ void extractPageFonts(pdfio_obj_t* pageObj,
         PdfFontInfo info;
         info.tag = tag;
         info.bufferFontId = bufFontId;
-        info.utilFontId = *utilRes;
+        info.rawFont = rawFontRes.value();
         info.isIdentityH = isIdentityH;
 
         // Parse ToUnicode CMap if present
@@ -316,8 +321,8 @@ void extractPageFonts(pdfio_obj_t* pageObj,
 
         fonts.push_back(std::move(info));
 
-        yinfo("Extracted font '{}' ({} bytes) identityH={} → bufFontId={} utilFontId={}",
-              tag, fontBytes.size(), isIdentityH, bufFontId, *utilRes);
+        yinfo("Extracted font '{}' ({} bytes) identityH={} → bufFontId={}",
+              tag, fontBytes.size(), isIdentityH, bufFontId);
     }
 }
 
@@ -330,15 +335,12 @@ void extractPageFonts(pdfio_obj_t* pageObj,
 namespace yetty::card {
 
 PdfRenderResult renderPdfToBuffer(pdfio_file_t* pdf,
-                                   yetty::YDrawBuffer* buffer) {
+                                   std::shared_ptr<YDrawBuffer> buffer) {
     PdfRenderResult result;
 
     int pageCount = static_cast<int>(pdfioFileGetNumPages(pdf));
     result.pageCount = pageCount;
     if (pageCount == 0) return result;
-
-    // FontUtil for text measurement (uses thread-local FreeType singleton)
-    yetty::font::FontUtil fontUtil;
 
     std::vector<PdfFontInfo> fonts;
     std::unordered_map<std::string, size_t> fontTagToIndex;
@@ -362,7 +364,7 @@ PdfRenderResult renderPdfToBuffer(pdfio_file_t* pdf,
         maxWidth = std::max(maxWidth, pageW);
 
         // Extract embedded fonts from this page
-        extractPageFonts(pageObj, fontTagToIndex, fonts, buffer, fontUtil);
+        extractPageFonts(pageObj, fontTagToIndex, fonts, buffer);
 
         // Set up parser with callbacks
         PdfContentParser parser;
@@ -378,11 +380,11 @@ PdfRenderResult renderPdfToBuffer(pdfio_file_t* pdf,
 
                 // Resolve font
                 int bufFontId = -1;
-                int utilFontId = -1;
+                yetty::font::RawFont::Ptr rawFont;
                 auto it = fontTagToIndex.find(textState.fontName);
                 if (it != fontTagToIndex.end()) {
                     bufFontId = fonts[it->second].bufferFontId;
-                    utilFontId = fonts[it->second].utilFontId;
+                    rawFont = fonts[it->second].rawFont;
                 }
 
                 // CID remapping for Identity-H fonts
@@ -406,9 +408,10 @@ PdfRenderResult renderPdfToBuffer(pdfio_file_t* pdf,
                                     effectiveSize, color, 0, bufFontId);
                 }
 
-                // Measure advance using FontUtil
-                float rawAdvance = fontUtil.measureTextWidth(
-                    actualText, textState.fontSize, utilFontId);
+                // Measure advance using RawFont
+                float rawAdvance = rawFont
+                    ? rawFont->measureTextWidth(actualText, textState.fontSize)
+                    : textState.fontSize * 0.5f * static_cast<float>(actualText.size());
 
                 // Apply PDF text state adjustments (charSpacing, wordSpacing,
                 // horizontalScaling) per PDF spec 9.3

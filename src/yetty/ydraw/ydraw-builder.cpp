@@ -881,52 +881,93 @@ public:
     }
 
     Result<void> allocateTextures() override {
-        if (!_cardMgr || !_customAtlas) return Ok();
-
-        uint32_t atlasW = _customAtlas->getAtlasWidth();
-        uint32_t atlasH = _customAtlas->getAtlasHeight();
-        const auto& atlasData = _customAtlas->getAtlasData();
-        if (atlasData.empty() || atlasW == 0 || atlasH == 0) return Ok();
+        if (!_cardMgr) return Ok();
 
         auto texMgr = _cardMgr->textureManager();
-        auto allocResult = texMgr->allocate(atlasW, atlasH);
-        if (!allocResult) return Err<void>("allocateTextures: failed", allocResult);
-        _atlasTextureHandle = *allocResult;
-        _allocatedAtlasW = atlasW;
-        _allocatedAtlasH = atlasH;
+
+        // Allocate custom MSDF atlas if present
+        if (_customAtlas) {
+            uint32_t atlasW = _customAtlas->getAtlasWidth();
+            uint32_t atlasH = _customAtlas->getAtlasHeight();
+            const auto& atlasData = _customAtlas->getAtlasData();
+            if (!atlasData.empty() && atlasW > 0 && atlasH > 0) {
+                auto allocResult = texMgr->allocate(atlasW, atlasH);
+                if (!allocResult) return Err<void>("allocateTextures: msdf atlas failed", allocResult);
+                _atlasTextureHandle = *allocResult;
+                _allocatedAtlasW = atlasW;
+                _allocatedAtlasH = atlasH;
+            }
+        }
+
+        // Allocate texture space for each pending image
+        for (auto& pi : _pendingImages) {
+            if (pi.pixelWidth == 0 || pi.pixelHeight == 0 || pi.pixels.empty()) continue;
+            auto allocResult = texMgr->allocate(pi.pixelWidth, pi.pixelHeight);
+            if (!allocResult) {
+                ywarn("allocateTextures: image {}x{} failed: {}", pi.pixelWidth, pi.pixelHeight, allocResult.error().message());
+                continue;
+            }
+            pi.texHandle = *allocResult;
+        }
+
         return Ok();
     }
 
     Result<void> writeTextures() override {
-        if (!_cardMgr || !_atlasTextureHandle.isValid() || !_customAtlas) return Ok();
-
-        const auto& atlasData = _customAtlas->getAtlasData();
-        if (atlasData.empty()) return Ok();
+        if (!_cardMgr) return Ok();
 
         auto texMgr = _cardMgr->textureManager();
-        if (auto res = texMgr->write(_atlasTextureHandle, atlasData.data()); !res) {
-            return Err<void>("writeTextures: write failed", res);
+
+        // Write custom MSDF atlas
+        if (_atlasTextureHandle.isValid() && _customAtlas) {
+            const auto& atlasData = _customAtlas->getAtlasData();
+            if (!atlasData.empty()) {
+                if (auto res = texMgr->write(_atlasTextureHandle, atlasData.data()); !res) {
+                    return Err<void>("writeTextures: msdf atlas write failed", res);
+                }
+            }
+
+            // Now that the atlas is packed, write the atlas header into derived buffer
+            if (_derivedHandle.isValid() && _gpuAtlasHeaderOffset > 0) {
+                auto atlasPos = texMgr->getAtlasPosition(_atlasTextureHandle);
+                uint32_t msdfAtlasW = _customAtlas->getAtlasWidth();
+                uint32_t msdfAtlasH = _customAtlas->getAtlasHeight();
+                const auto& glyphMeta = _customAtlas->getGlyphMetadata();
+
+                uint32_t headerLocalOff = _gpuAtlasHeaderOffset * sizeof(float) - _derivedHandle.offset;
+                uint8_t* base = _derivedHandle.data + headerLocalOff;
+
+                uint32_t atlasHeader[4] = {
+                    (atlasPos.x & 0xFFFF) | ((msdfAtlasW & 0xFFFF) << 16),
+                    (atlasPos.y & 0xFFFF) | ((msdfAtlasH & 0xFFFF) << 16),
+                    static_cast<uint32_t>(glyphMeta.size()),
+                    0
+                };
+                std::memcpy(base, atlasHeader, sizeof(atlasHeader));
+
+                _cardMgr->bufferManager()->markBufferDirty(_derivedHandle);
+            }
         }
 
-        // Now that the atlas is packed, write the atlas header into derived buffer
-        if (_derivedHandle.isValid() && _gpuAtlasHeaderOffset > 0) {
-            auto atlasPos = texMgr->getAtlasPosition(_atlasTextureHandle);
-            uint32_t msdfAtlasW = _customAtlas->getAtlasWidth();
-            uint32_t msdfAtlasH = _customAtlas->getAtlasHeight();
-            const auto& glyphMeta = _customAtlas->getGlyphMetadata();
+        // Write image pixels and update Image primitives with atlas coords
+        for (auto& pi : _pendingImages) {
+            if (!pi.texHandle.isValid() || pi.primId == 0) continue;
 
-            uint32_t headerLocalOff = _gpuAtlasHeaderOffset * sizeof(float) - _derivedHandle.offset;
-            uint8_t* base = _derivedHandle.data + headerLocalOff;
+            // Write pixel data to atlas
+            if (auto res = texMgr->write(pi.texHandle, pi.pixels.data()); !res) {
+                ywarn("writeTextures: image write failed: {}", res.error().message());
+                continue;
+            }
 
-            uint32_t atlasHeader[4] = {
-                (atlasPos.x & 0xFFFF) | ((msdfAtlasW & 0xFFFF) << 16),
-                (atlasPos.y & 0xFFFF) | ((msdfAtlasH & 0xFFFF) << 16),
-                static_cast<uint32_t>(glyphMeta.size()),
-                0
-            };
-            std::memcpy(base, atlasHeader, sizeof(atlasHeader));
+            // Update Image primitive with real atlas coordinates
+            auto atlasPos = texMgr->getAtlasPosition(pi.texHandle);
+            _buffer->updateImage(pi.primId, pi.layer, pi.x, pi.y, pi.w, pi.h,
+                                 atlasPos.x, atlasPos.y, pi.pixelWidth, pi.pixelHeight);
+        }
 
-            _cardMgr->bufferManager()->markBufferDirty(_derivedHandle);
+        // Mark buffer dirty so writeBuffers re-uploads with updated atlas coords
+        if (!_pendingImages.empty()) {
+            _bufferDirty = true;
         }
 
         return Ok();
@@ -981,15 +1022,23 @@ public:
     }
 
     bool needsTextureRealloc() const override {
-        if (!_customAtlas) return false;
-        uint32_t atlasW = _customAtlas->getAtlasWidth();
-        uint32_t atlasH = _customAtlas->getAtlasHeight();
-        const auto& atlasData = _customAtlas->getAtlasData();
-        if (!_atlasTextureHandle.isValid()) {
-            return !atlasData.empty();
+        // Check custom atlas
+        if (_customAtlas) {
+            uint32_t atlasW = _customAtlas->getAtlasWidth();
+            uint32_t atlasH = _customAtlas->getAtlasHeight();
+            const auto& atlasData = _customAtlas->getAtlasData();
+            if (!_atlasTextureHandle.isValid()) {
+                if (!atlasData.empty()) return true;
+            } else if (atlasW != _allocatedAtlasW || atlasH != _allocatedAtlasH) {
+                return true;
+            }
         }
-        // Compare current atlas size against what was allocated
-        if (atlasW != _allocatedAtlasW || atlasH != _allocatedAtlasH) return true;
+
+        // Check pending images
+        for (const auto& pi : _pendingImages) {
+            if (!pi.pixels.empty() && !pi.texHandle.isValid()) return true;
+        }
+
         return false;
     }
 
@@ -1195,6 +1244,28 @@ public:
         if (_buffer->flags() != 0) {
             _flags |= _buffer->flags();
         }
+
+        // Ingest images from buffer into pending list and add Image primitives
+        _pendingImages.clear();
+        _buffer->forEachImage([this](const ImageData& img) {
+            PendingImage pi;
+            pi.x = img.x;
+            pi.y = img.y;
+            pi.w = img.w;
+            pi.h = img.h;
+            pi.pixelWidth = img.pixelWidth;
+            pi.pixelHeight = img.pixelHeight;
+            pi.layer = img.layer;
+            pi.pixels = img.pixels;
+            pi.texHandle = TextureHandle::invalid();
+            // Add Image primitive with placeholder atlas coords (will be updated in writeTextures)
+            auto res = _buffer->addImage(img.layer, img.x, img.y, img.w, img.h,
+                                         0, 0, img.pixelWidth, img.pixelHeight);
+            if (res) {
+                pi.primId = *res;
+            }
+            _pendingImages.push_back(std::move(pi));
+        });
 
         // Step 1: Read all prims from buffer, compute AABB for each
         _buffer->forEachPrim([this](uint32_t /*id*/, const float* data, uint32_t wc) {
@@ -1591,6 +1662,18 @@ private:
     TextureHandle _atlasTextureHandle = TextureHandle::invalid();
     uint32_t _allocatedAtlasW = 0;
     uint32_t _allocatedAtlasH = 0;
+
+    // Pending images (from buffer, to be allocated in texture atlas)
+    struct PendingImage {
+        float x, y, w, h;
+        uint32_t pixelWidth, pixelHeight;
+        uint32_t layer;
+        std::vector<uint8_t> pixels;
+        TextureHandle texHandle = TextureHandle::invalid();
+        uint32_t primId = 0;  // ID of Image primitive in buffer
+    };
+    std::vector<PendingImage> _pendingImages;
+
     bool _bufferDirty = true;
     bool _metadataDirty = true;
 

@@ -76,7 +76,8 @@ add_executable(ypdf_tests
     ${CMAKE_SOURCE_DIR}/src/yetty/raster-font.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/msdf-gen/generator.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/font/freetype.cpp
-    ${CMAKE_SOURCE_DIR}/src/yetty/font/util.cpp
+    ${CMAKE_SOURCE_DIR}/src/yetty/font/raw-font.cpp
+    ${CMAKE_SOURCE_DIR}/src/yetty/font/raw-font-manager.cpp
 )
 
 target_include_directories(ypdf_tests PRIVATE

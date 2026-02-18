@@ -1194,6 +1194,13 @@ else()
             enable_testing()
             add_subdirectory(test/ut/ygui)
         endif()
+
+        # YHtml tests (HTML rendering to buffer)
+        option(YETTY_BUILD_YHTML_TESTS "Build YHtml HTML rendering tests" ON)
+        if(YETTY_BUILD_YHTML_TESTS)
+            enable_testing()
+            add_subdirectory(test/ut/yhtml)
+        endif()
     endif()
 
     # Plugin tester disabled - was using yetty_core which is removed

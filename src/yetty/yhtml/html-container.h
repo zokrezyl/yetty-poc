@@ -26,7 +26,7 @@ class HttpFetcher;
 //   draw_list_marker() → buffer->addCircle() / buffer->addText()
 //
 // Uses HttpFetcher (cpr) to download external CSS via import_css().
-// Font metrics provided by internal FontUtil (FreeType singleton).
+// Font metrics provided by RawFont (via RawFontManager thread singleton).
 //=============================================================================
 class HtmlContainer : public litehtml::document_container,
                       public base::ObjectFactory<HtmlContainer> {

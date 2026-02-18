@@ -1,6 +1,7 @@
 #include "html-container.h"
 #include "http-fetcher.h"
-#include "../font/util.h"
+#include <yetty/font/raw-font.h>
+#include <yetty/font/raw-font-manager.h>
 #include "../ydraw/ydraw-buffer.h"
 #include <fstream>
 #include <ytrace/ytrace.hpp>
@@ -8,6 +9,7 @@
 #include <cctype>
 #include <cstring>
 #include <unordered_map>
+#include <stb_image.h>
 
 #ifdef YETTY_USE_FONTCONFIG
 #include <fontconfig/fontconfig.h>
@@ -136,12 +138,12 @@ public:
         fi->decoration = decoration;
         fi->fontId = 0;  // default font
 
-        // Resolve font via fontconfig and load into buffer + fontUtil
+        // Resolve font via fontconfig and load into buffer + RawFont
         if (faceName && *faceName) {
             std::string ttfPath = resolveFontPath(
                 faceName, weight, fi->italic);
             if (!ttfPath.empty()) {
-                fi->fontId = loadFont(ttfPath);
+                fi->rawFont = loadFont(ttfPath, fi->fontId);
                 if (fi->fontId >= 0) {
                     yinfo("HtmlContainer: font '{}' w={} i={} -> fontId={}",
                           faceName, weight, fi->italic, fi->fontId);
@@ -149,9 +151,14 @@ public:
             }
         }
 
-        // Get font metrics from FontUtil
-        fi->ascent = _fontUtil.fontAscent(fi->size, fi->fontId);
-        fi->descent = _fontUtil.fontDescent(fi->size, fi->fontId);
+        // Get font metrics from RawFont
+        if (fi->rawFont) {
+            fi->ascent = fi->rawFont->fontAscent(fi->size);
+            fi->descent = fi->rawFont->fontDescent(fi->size);
+        } else {
+            fi->ascent = fi->size * 0.8f;
+            fi->descent = fi->size * 0.2f;
+        }
         fi->height = fi->ascent + fi->descent;
         fi->xHeight = fi->ascent * 0.65f;
 
@@ -227,7 +234,10 @@ public:
         litehtml::uint_ptr /*hdc*/,
         const std::vector<litehtml::background_paint>& bg) override
     {
-        if (!_buffer) return;
+        if (!_buffer) {
+            yerror("draw_background: _buffer is null!");
+            return;
+        }
 
         for (const auto& paint : bg) {
             float x = static_cast<float>(paint.clip_box.x);
@@ -235,23 +245,43 @@ public:
             float w = static_cast<float>(paint.clip_box.width);
             float h = static_cast<float>(paint.clip_box.height);
 
-            // Draw background image placeholder
+            // Draw background image if available
             if (!paint.image.empty() && w > 0 && h > 0) {
-                // Light gray placeholder box for images
-                uint32_t placeholderColor = 0xFFE0E0E0;  // ABGR light gray
-                float cx = x + w * 0.5f;
-                float cy = y + h * 0.5f;
-                float round = static_cast<float>(paint.border_radius.top_left_x);
-                _buffer->addBox(_layer, cx, cy, w * 0.5f, h * 0.5f,
-                                placeholderColor, 0, 0, round);
+                auto it = _imageCache.find(paint.image);
+                if (it != _imageCache.end() && !it->second.pixels.empty()) {
+                    // Image position: origin_box + position offset
+                    float imgX = static_cast<float>(paint.origin_box.x + paint.position_x);
+                    float imgY = static_cast<float>(paint.origin_box.y + paint.position_y);
+                    // Image size: use computed image_size, fallback to actual pixels
+                    float imgW = paint.image_size.width > 0
+                        ? static_cast<float>(paint.image_size.width)
+                        : static_cast<float>(it->second.width);
+                    float imgH = paint.image_size.height > 0
+                        ? static_cast<float>(paint.image_size.height)
+                        : static_cast<float>(it->second.height);
+
+                    _buffer->addImage(imgX, imgY, imgW, imgH,
+                                      it->second.pixels.data(),
+                                      static_cast<uint32_t>(it->second.width),
+                                      static_cast<uint32_t>(it->second.height),
+                                      _layer);
+                } else {
+                    // Fallback: light gray placeholder box
+                    uint32_t placeholderColor = 0xFFE0E0E0;
+                    float cx = x + w * 0.5f;
+                    float cy = y + h * 0.5f;
+                    float round = static_cast<float>(paint.border_radius.top_left_x);
+                    _buffer->addBox(_layer, cx, cy, w * 0.5f, h * 0.5f,
+                                    placeholderColor, 0, 0, round);
+                }
             }
 
             if (paint.color.alpha == 0) continue;
 
             uint32_t color = packColor(paint.color);
 
-            // Root/body background: covers full viewport width -> set card bg
-            if (w >= static_cast<float>(_viewWidth) && x <= 0.0f) {
+            // Root/body background: use is_root flag (not width comparison)
+            if (paint.is_root) {
                 _buffer->setBgColor(color);
                 continue;
             }
@@ -279,7 +309,7 @@ public:
         float w = static_cast<float>(draw_pos.width);
         float h = static_cast<float>(draw_pos.height);
 
-        ydebug("draw_borders: pos=({},{} {}x{}) top=({},w={}) right=({},w={}) bottom=({},w={}) left=({},w={})",
+        yinfo("draw_borders: pos=({},{} {}x{}) top=({},w={}) right=({},w={}) bottom=({},w={}) left=({},w={})",
                draw_pos.x, draw_pos.y, draw_pos.width, draw_pos.height,
                borders.top.color.alpha, borders.top.width,
                borders.right.color.alpha, borders.right.width,
@@ -289,26 +319,30 @@ public:
         if (borders.top.width > 0 && borders.top.color.alpha > 0) {
             uint32_t c = packColor(borders.top.color);
             float bw = static_cast<float>(borders.top.width);
-            _buffer->addSegment(_layer, x, y + bw * 0.5f,
+            auto res = _buffer->addSegment(_layer, x, y + bw * 0.5f,
                                 x + w, y + bw * 0.5f, 0, c, bw, 0);
+            yinfo("draw_borders: top segment res={}", res ? "ok" : "fail");
         }
         if (borders.bottom.width > 0 && borders.bottom.color.alpha > 0) {
             uint32_t c = packColor(borders.bottom.color);
             float bw = static_cast<float>(borders.bottom.width);
-            _buffer->addSegment(_layer, x, y + h - bw * 0.5f,
+            auto res = _buffer->addSegment(_layer, x, y + h - bw * 0.5f,
                                 x + w, y + h - bw * 0.5f, 0, c, bw, 0);
+            yinfo("draw_borders: bottom segment res={}", res ? "ok" : "fail");
         }
         if (borders.left.width > 0 && borders.left.color.alpha > 0) {
             uint32_t c = packColor(borders.left.color);
             float bw = static_cast<float>(borders.left.width);
-            _buffer->addSegment(_layer, x + bw * 0.5f, y,
+            auto res = _buffer->addSegment(_layer, x + bw * 0.5f, y,
                                 x + bw * 0.5f, y + h, 0, c, bw, 0);
+            yinfo("draw_borders: left segment res={}", res ? "ok" : "fail");
         }
         if (borders.right.width > 0 && borders.right.color.alpha > 0) {
             uint32_t c = packColor(borders.right.color);
             float bw = static_cast<float>(borders.right.width);
-            _buffer->addSegment(_layer, x + w - bw * 0.5f, y,
+            auto res = _buffer->addSegment(_layer, x + w - bw * 0.5f, y,
                                 x + w - bw * 0.5f, y + h, 0, c, bw, 0);
+            yinfo("draw_borders: right segment res={}", res ? "ok" : "fail");
         }
     }
 
@@ -392,18 +426,42 @@ public:
 
         auto body = _fetcher->fetch(url);
         if (!body || body->empty()) {
-            _imageCache[url] = {0, 0};
+            _imageCache[url] = {0, 0, {}};
             return;
         }
 
-        int w = 0, h = 0;
-        if (parseImageSize(*body, w, h)) {
-            // Cap to reasonable dimensions
-            w = std::min(w, 4096);
-            h = std::min(h, 4096);
-            yinfo("HtmlContainer::load_image: {} -> {}x{}", url, w, h);
+        // Decode image to RGBA using stb_image
+        int w = 0, h = 0, channels = 0;
+        uint8_t* decoded = stbi_load_from_memory(
+            reinterpret_cast<const uint8_t*>(body->data()),
+            static_cast<int>(body->size()),
+            &w, &h, &channels, 4);  // force RGBA
+
+        if (!decoded || w <= 0 || h <= 0) {
+            if (decoded) stbi_image_free(decoded);
+            _imageCache[url] = {0, 0, {}};
+            ywarn("HtmlContainer::load_image: failed to decode {}", url);
+            return;
         }
-        _imageCache[url] = {w, h};
+
+        // Cap to reasonable dimensions
+        if (w > 4096 || h > 4096) {
+            stbi_image_free(decoded);
+            _imageCache[url] = {0, 0, {}};
+            ywarn("HtmlContainer::load_image: image too large {}x{}", w, h);
+            return;
+        }
+
+        // Store decoded pixels
+        ImageInfo info;
+        info.width = w;
+        info.height = h;
+        info.pixels.assign(decoded, decoded + w * h * 4);
+        stbi_image_free(decoded);
+
+        yinfo("HtmlContainer::load_image: {} -> {}x{} ({} KB)",
+              url, w, h, info.pixels.size() / 1024);
+        _imageCache[url] = std::move(info);
     }
 
     void set_caption(const char* /*caption*/) override {}
@@ -506,26 +564,34 @@ private:
         float height;
         float xHeight;
         int fontId;  // buffer font ID (0 = default)
+        font::RawFont::Ptr rawFont;  // for text measurement
     };
 
     //=========================================================================
     // Font loading — reads TTF, registers with both buffer and fontUtil
     //=========================================================================
 
-    int loadFont(const std::string& ttfPath) {
+    font::RawFont::Ptr loadFont(const std::string& ttfPath, int& fontId) {
         // Check cache — avoid loading the same TTF twice
-        auto it = _fontIdCache.find(ttfPath);
-        if (it != _fontIdCache.end()) return it->second;
+        auto it = _fontCache.find(ttfPath);
+        if (it != _fontCache.end()) {
+            fontId = it->second.first;
+            return it->second.second;
+        }
 
         // Read TTF file
         std::ifstream file(ttfPath, std::ios::binary);
         if (!file) {
             ywarn("HtmlContainer::loadFont: failed to open {}", ttfPath);
-            return 0;
+            fontId = 0;
+            return nullptr;
         }
         std::vector<uint8_t> data((std::istreambuf_iterator<char>(file)),
                                    std::istreambuf_iterator<char>());
-        if (data.empty()) return 0;
+        if (data.empty()) {
+            fontId = 0;
+            return nullptr;
+        }
 
         // Extract font name from path
         std::string name = ttfPath;
@@ -535,14 +601,21 @@ private:
         // Add to buffer (for serialization and builder's MSDF atlas)
         int bufferFontId = _buffer->addFontBlob(data.data(), data.size(), name);
 
-        // Add to FontUtil (for text measurement)
-        auto utilResult = _fontUtil.addFontData(data.data(), data.size(), name);
-        if (!utilResult) {
-            ywarn("HtmlContainer::loadFont: FontUtil failed for {}", ttfPath);
+        // Create RawFont for text measurement
+        font::RawFont::Ptr rawFont;
+        auto fontMgr = font::RawFontManager::instance();
+        if (fontMgr) {
+            auto rawFontRes = fontMgr.value()->createFromData(data.data(), data.size(), name);
+            if (rawFontRes) {
+                rawFont = rawFontRes.value();
+            } else {
+                ywarn("HtmlContainer::loadFont: RawFont failed for {}", ttfPath);
+            }
         }
 
-        _fontIdCache[ttfPath] = bufferFontId;
-        return bufferFontId;
+        _fontCache[ttfPath] = {bufferFontId, rawFont};
+        fontId = bufferFontId;
+        return rawFont;
     }
 
     //=========================================================================
@@ -635,7 +708,11 @@ private:
 
     float measureTextWidth(const char* text, const FontInfo& fi) {
         if (!text || !*text) return 0.0f;
-        return _fontUtil.measureTextWidth(text, fi.size, fi.fontId);
+        if (fi.rawFont) {
+            return fi.rawFont->measureTextWidth(text, fi.size);
+        }
+        // Fallback: estimate based on font size
+        return fi.size * 0.5f * static_cast<float>(strlen(text));
     }
 
     static uint32_t packColor(litehtml::web_color c) {
@@ -648,10 +725,10 @@ private:
     struct ImageInfo {
         int width = 0;
         int height = 0;
+        std::vector<uint8_t> pixels;  // RGBA8 data
     };
 
     YDrawBuffer::Ptr _buffer;
-    font::FontUtil _fontUtil;
     HttpFetcher* _fetcher;
     float _defaultFontSize;
     int _viewWidth = 600;
@@ -663,7 +740,7 @@ private:
 
     std::vector<FontInfo*> _fonts;
     std::unordered_map<std::string, std::string> _fontPathCache;  // key -> ttf path
-    std::unordered_map<std::string, int> _fontIdCache;            // ttf path -> fontId
+    std::unordered_map<std::string, std::pair<int, font::RawFont::Ptr>> _fontCache;  // ttf path -> (fontId, rawFont)
     std::unordered_map<std::string, ImageInfo> _imageCache;
 };
 

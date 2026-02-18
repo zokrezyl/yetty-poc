@@ -4561,25 +4561,15 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
       if (mx >= _viewportX && mx < _viewportX + _viewportWidth &&
           my >= _viewportY && my < _viewportY + _viewportHeight) {
 
-        // Check if scroll is over a card - forward as CardScroll
-        float localX = mx - _viewportX;
-        float localY = my - _viewportY;
-        int col = static_cast<int>(localX / getCellWidthF());
-        int row = static_cast<int>(localY / getCellHeightF());
-        col = std::max(0, std::min(col, static_cast<int>(_cols) - 1));
-        row = std::max(0, std::min(row, static_cast<int>(_rows) - 1));
-        Card* scrollCard = getCardAtCell(row, col);
-        if (scrollCard) {
-          float cardX, cardY;
-          cardLocalCoords(localX, localY, row, col, cardX, cardY);
-          // Clamp to card's pixel dimensions
-          float cardPixelW = static_cast<float>(scrollCard->widthCells()) * getCellWidthF();
-          float cardPixelH = static_cast<float>(scrollCard->heightCells()) * getCellHeightF();
-          cardX = std::max(0.0f, std::min(cardX, cardPixelW - 1.0f));
-          cardY = std::max(0.0f, std::min(cardY, cardPixelH - 1.0f));
+        // Only forward scroll to the focused card (not just any card under mouse)
+        if (_focusedCardId != 0) {
+          float localX = mx - _viewportX;
+          float localY = my - _viewportY;
+          float cardX = localX - _focusedCardOriginX;
+          float cardY = localY - _focusedCardOriginY;
           auto loop = *base::EventLoop::instance();
           loop->dispatch(base::Event::cardScrollEvent(
-              scrollCard->id(), cardX, cardY, event.scroll.dx, event.scroll.dy, event.scroll.mods));
+              _focusedCardId, cardX, cardY, event.scroll.dx, event.scroll.dy, event.scroll.mods));
           return Ok(true);
         }
 

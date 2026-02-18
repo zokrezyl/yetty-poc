@@ -3,7 +3,8 @@ add_executable(pdf2ydraw
     ${CMAKE_SOURCE_DIR}/src/yetty/ypdf/pdf-content-parser.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/ypdf/pdf-renderer.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/ydraw/ydraw-buffer.cpp
-    ${CMAKE_SOURCE_DIR}/src/yetty/font/util.cpp
+    ${CMAKE_SOURCE_DIR}/src/yetty/font/raw-font.cpp
+    ${CMAKE_SOURCE_DIR}/src/yetty/font/raw-font-manager.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/font/freetype.cpp
 )
 
@@ -13,5 +14,5 @@ target_include_directories(pdf2ydraw PRIVATE
     ${FREETYPE_INCLUDE_DIR}
 )
 
-target_link_libraries(pdf2ydraw PRIVATE pdfio_lib freetype args ytrace::ytrace)
+target_link_libraries(pdf2ydraw PRIVATE pdfio_lib freetype args ytrace::ytrace lz4_static)
 target_compile_features(pdf2ydraw PRIVATE cxx_std_20)
