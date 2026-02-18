@@ -72,6 +72,10 @@ private:
     float _lastMouseX = 0.0f;
     float _lastMouseY = 0.0f;
 
+    // Track modifier key state for scroll events
+    bool _ctrlPressed = false;
+    bool _shiftPressed = false;
+
     // WebGPU handles
     WGPUInstance _instance = nullptr;
     WGPUAdapter _adapter = nullptr;
@@ -714,6 +718,17 @@ Result<void> YettyImpl::initCallbacks() noexcept {
     // Key callback
     _platform->setKeyCallback([this](int key, int scancode, KeyAction action, int mods) {
         ydebug("KeyCallback: key={} scancode={} action={} mods={}", key, scancode, static_cast<int>(action), mods);
+
+        // Track modifier key state for scroll events
+        // GLFW_KEY_LEFT_CONTROL=341, GLFW_KEY_RIGHT_CONTROL=345
+        // GLFW_KEY_LEFT_SHIFT=340, GLFW_KEY_RIGHT_SHIFT=344
+        if (key == 341 || key == 345) {
+            _ctrlPressed = (action == KeyAction::Press || action == KeyAction::Repeat);
+        }
+        if (key == 340 || key == 344) {
+            _shiftPressed = (action == KeyAction::Press || action == KeyAction::Repeat);
+        }
+
         if (action != KeyAction::Press && action != KeyAction::Repeat) return;
 
         auto loop = *base::EventLoop::instance();
@@ -806,9 +821,11 @@ Result<void> YettyImpl::initCallbacks() noexcept {
 
     // Scroll callback
     _platform->setScrollCallback([this](double xoffset, double yoffset) {
-        // Note: Platform doesn't give us modifier state in scroll callback
-        // We'd need to track key state separately or extend Platform API
+        // Build modifier state from tracked key presses
+        // GLFW_MOD_SHIFT = 0x0001, GLFW_MOD_CONTROL = 0x0002
         int mods = 0;
+        if (_shiftPressed) mods |= 0x0001;
+        if (_ctrlPressed) mods |= 0x0002;
         auto loop = *base::EventLoop::instance();
         loop->dispatch(base::Event::scrollEvent(
             _lastMouseX, _lastMouseY,

@@ -443,13 +443,33 @@ Result<void> YPdf::registerForEvents() {
     if (!loopResult) return Err<void>("no EventLoop", loopResult);
     auto loop = *loopResult;
     auto self = sharedAs<base::EventListener>();
+    // Only register for SetFocus initially - input events registered on focus
     if (auto res = loop->registerListener(base::Event::Type::SetFocus, self, 1000); !res) return res;
-    if (auto res = loop->registerListener(base::Event::Type::CardScroll, self, 1000); !res) return res;
-    if (auto res = loop->registerListener(base::Event::Type::CardMouseDown, self, 1000); !res) return res;
-    if (auto res = loop->registerListener(base::Event::Type::CardMouseUp, self, 1000); !res) return res;
-    if (auto res = loop->registerListener(base::Event::Type::CardMouseMove, self, 1000); !res) return res;
-    if (auto res = loop->registerListener(base::Event::Type::CardKeyDown, self, 1000); !res) return res;
     return Ok();
+}
+
+void YPdf::registerInputEvents() {
+    auto loopResult = base::EventLoop::instance();
+    if (!loopResult) return;
+    auto loop = *loopResult;
+    auto self = sharedAs<base::EventListener>();
+    loop->registerListener(base::Event::Type::CardScroll, self, 1000);
+    loop->registerListener(base::Event::Type::CardMouseDown, self, 1000);
+    loop->registerListener(base::Event::Type::CardMouseUp, self, 1000);
+    loop->registerListener(base::Event::Type::CardMouseMove, self, 1000);
+    loop->registerListener(base::Event::Type::CardKeyDown, self, 1000);
+}
+
+void YPdf::deregisterInputEvents() {
+    auto loopResult = base::EventLoop::instance();
+    if (!loopResult) return;
+    auto loop = *loopResult;
+    auto self = sharedAs<base::EventListener>();
+    loop->deregisterListener(base::Event::Type::CardScroll, self);
+    loop->deregisterListener(base::Event::Type::CardMouseDown, self);
+    loop->deregisterListener(base::Event::Type::CardMouseUp, self);
+    loop->deregisterListener(base::Event::Type::CardMouseMove, self);
+    loop->deregisterListener(base::Event::Type::CardKeyDown, self);
 }
 
 Result<void> YPdf::deregisterFromEvents() {
@@ -463,11 +483,15 @@ Result<void> YPdf::deregisterFromEvents() {
 Result<bool> YPdf::onEvent(const base::Event& event) {
     if (event.type == base::Event::Type::SetFocus) {
         if (event.setFocus.objectId == id()) {
-            _focused = true;
-            return Ok(true);
+            if (!_focused) {
+                _focused = true;
+                registerInputEvents();
+            }
         } else if (_focused) {
             _focused = false;
+            deregisterInputEvents();
         }
+        // Don't consume — GPUScreen needs SetFocus to track _focusedCardId
         return Ok(false);
     }
 

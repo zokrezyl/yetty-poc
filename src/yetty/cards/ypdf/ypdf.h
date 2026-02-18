@@ -114,6 +114,8 @@ private:
     // Event handling helpers
     //=========================================================================
     Result<void> registerForEvents();
+    void registerInputEvents();
+    void deregisterInputEvents();
     Result<void> deregisterFromEvents();
 
     //=========================================================================
