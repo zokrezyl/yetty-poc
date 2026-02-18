@@ -9,6 +9,7 @@
 #include <cctype>
 #include <cstring>
 #include <unordered_map>
+#include <stb_image.h>
 
 #ifdef YETTY_USE_FONTCONFIG
 #include <fontconfig/fontconfig.h>
@@ -233,7 +234,10 @@ public:
         litehtml::uint_ptr /*hdc*/,
         const std::vector<litehtml::background_paint>& bg) override
     {
-        if (!_buffer) return;
+        if (!_buffer) {
+            yerror("draw_background: _buffer is null!");
+            return;
+        }
 
         for (const auto& paint : bg) {
             float x = static_cast<float>(paint.clip_box.x);
@@ -241,23 +245,43 @@ public:
             float w = static_cast<float>(paint.clip_box.width);
             float h = static_cast<float>(paint.clip_box.height);
 
-            // Draw background image placeholder
+            // Draw background image if available
             if (!paint.image.empty() && w > 0 && h > 0) {
-                // Light gray placeholder box for images
-                uint32_t placeholderColor = 0xFFE0E0E0;  // ABGR light gray
-                float cx = x + w * 0.5f;
-                float cy = y + h * 0.5f;
-                float round = static_cast<float>(paint.border_radius.top_left_x);
-                _buffer->addBox(_layer, cx, cy, w * 0.5f, h * 0.5f,
-                                placeholderColor, 0, 0, round);
+                auto it = _imageCache.find(paint.image);
+                if (it != _imageCache.end() && !it->second.pixels.empty()) {
+                    // Image position: origin_box + position offset
+                    float imgX = static_cast<float>(paint.origin_box.x + paint.position_x);
+                    float imgY = static_cast<float>(paint.origin_box.y + paint.position_y);
+                    // Image size: use computed image_size, fallback to actual pixels
+                    float imgW = paint.image_size.width > 0
+                        ? static_cast<float>(paint.image_size.width)
+                        : static_cast<float>(it->second.width);
+                    float imgH = paint.image_size.height > 0
+                        ? static_cast<float>(paint.image_size.height)
+                        : static_cast<float>(it->second.height);
+
+                    _buffer->addImage(imgX, imgY, imgW, imgH,
+                                      it->second.pixels.data(),
+                                      static_cast<uint32_t>(it->second.width),
+                                      static_cast<uint32_t>(it->second.height),
+                                      _layer);
+                } else {
+                    // Fallback: light gray placeholder box
+                    uint32_t placeholderColor = 0xFFE0E0E0;
+                    float cx = x + w * 0.5f;
+                    float cy = y + h * 0.5f;
+                    float round = static_cast<float>(paint.border_radius.top_left_x);
+                    _buffer->addBox(_layer, cx, cy, w * 0.5f, h * 0.5f,
+                                    placeholderColor, 0, 0, round);
+                }
             }
 
             if (paint.color.alpha == 0) continue;
 
             uint32_t color = packColor(paint.color);
 
-            // Root/body background: covers full viewport width -> set card bg
-            if (w >= static_cast<float>(_viewWidth) && x <= 0.0f) {
+            // Root/body background: use is_root flag (not width comparison)
+            if (paint.is_root) {
                 _buffer->setBgColor(color);
                 continue;
             }
@@ -285,7 +309,7 @@ public:
         float w = static_cast<float>(draw_pos.width);
         float h = static_cast<float>(draw_pos.height);
 
-        ydebug("draw_borders: pos=({},{} {}x{}) top=({},w={}) right=({},w={}) bottom=({},w={}) left=({},w={})",
+        yinfo("draw_borders: pos=({},{} {}x{}) top=({},w={}) right=({},w={}) bottom=({},w={}) left=({},w={})",
                draw_pos.x, draw_pos.y, draw_pos.width, draw_pos.height,
                borders.top.color.alpha, borders.top.width,
                borders.right.color.alpha, borders.right.width,
@@ -295,26 +319,30 @@ public:
         if (borders.top.width > 0 && borders.top.color.alpha > 0) {
             uint32_t c = packColor(borders.top.color);
             float bw = static_cast<float>(borders.top.width);
-            _buffer->addSegment(_layer, x, y + bw * 0.5f,
+            auto res = _buffer->addSegment(_layer, x, y + bw * 0.5f,
                                 x + w, y + bw * 0.5f, 0, c, bw, 0);
+            yinfo("draw_borders: top segment res={}", res ? "ok" : "fail");
         }
         if (borders.bottom.width > 0 && borders.bottom.color.alpha > 0) {
             uint32_t c = packColor(borders.bottom.color);
             float bw = static_cast<float>(borders.bottom.width);
-            _buffer->addSegment(_layer, x, y + h - bw * 0.5f,
+            auto res = _buffer->addSegment(_layer, x, y + h - bw * 0.5f,
                                 x + w, y + h - bw * 0.5f, 0, c, bw, 0);
+            yinfo("draw_borders: bottom segment res={}", res ? "ok" : "fail");
         }
         if (borders.left.width > 0 && borders.left.color.alpha > 0) {
             uint32_t c = packColor(borders.left.color);
             float bw = static_cast<float>(borders.left.width);
-            _buffer->addSegment(_layer, x + bw * 0.5f, y,
+            auto res = _buffer->addSegment(_layer, x + bw * 0.5f, y,
                                 x + bw * 0.5f, y + h, 0, c, bw, 0);
+            yinfo("draw_borders: left segment res={}", res ? "ok" : "fail");
         }
         if (borders.right.width > 0 && borders.right.color.alpha > 0) {
             uint32_t c = packColor(borders.right.color);
             float bw = static_cast<float>(borders.right.width);
-            _buffer->addSegment(_layer, x + w - bw * 0.5f, y,
+            auto res = _buffer->addSegment(_layer, x + w - bw * 0.5f, y,
                                 x + w - bw * 0.5f, y + h, 0, c, bw, 0);
+            yinfo("draw_borders: right segment res={}", res ? "ok" : "fail");
         }
     }
 
@@ -398,18 +426,42 @@ public:
 
         auto body = _fetcher->fetch(url);
         if (!body || body->empty()) {
-            _imageCache[url] = {0, 0};
+            _imageCache[url] = {0, 0, {}};
             return;
         }
 
-        int w = 0, h = 0;
-        if (parseImageSize(*body, w, h)) {
-            // Cap to reasonable dimensions
-            w = std::min(w, 4096);
-            h = std::min(h, 4096);
-            yinfo("HtmlContainer::load_image: {} -> {}x{}", url, w, h);
+        // Decode image to RGBA using stb_image
+        int w = 0, h = 0, channels = 0;
+        uint8_t* decoded = stbi_load_from_memory(
+            reinterpret_cast<const uint8_t*>(body->data()),
+            static_cast<int>(body->size()),
+            &w, &h, &channels, 4);  // force RGBA
+
+        if (!decoded || w <= 0 || h <= 0) {
+            if (decoded) stbi_image_free(decoded);
+            _imageCache[url] = {0, 0, {}};
+            ywarn("HtmlContainer::load_image: failed to decode {}", url);
+            return;
         }
-        _imageCache[url] = {w, h};
+
+        // Cap to reasonable dimensions
+        if (w > 4096 || h > 4096) {
+            stbi_image_free(decoded);
+            _imageCache[url] = {0, 0, {}};
+            ywarn("HtmlContainer::load_image: image too large {}x{}", w, h);
+            return;
+        }
+
+        // Store decoded pixels
+        ImageInfo info;
+        info.width = w;
+        info.height = h;
+        info.pixels.assign(decoded, decoded + w * h * 4);
+        stbi_image_free(decoded);
+
+        yinfo("HtmlContainer::load_image: {} -> {}x{} ({} KB)",
+              url, w, h, info.pixels.size() / 1024);
+        _imageCache[url] = std::move(info);
     }
 
     void set_caption(const char* /*caption*/) override {}
@@ -673,6 +725,7 @@ private:
     struct ImageInfo {
         int width = 0;
         int height = 0;
+        std::vector<uint8_t> pixels;  // RGBA8 data
     };
 
     YDrawBuffer::Ptr _buffer;

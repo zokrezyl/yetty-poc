@@ -109,3 +109,4 @@ add_custom_target(run_tests
 # Add subdirectory tests
 add_subdirectory(yast)
 add_subdirectory(yecho)
+add_subdirectory(yhtml)

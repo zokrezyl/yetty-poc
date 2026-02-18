@@ -38,6 +38,25 @@ void YDrawBuffer::addRotatedText(float x, float y, const std::string& text,
 }
 
 //=============================================================================
+// Image storage
+//=============================================================================
+
+void YDrawBuffer::addImage(float x, float y, float w, float h,
+                           const uint8_t* pixels, uint32_t pixelWidth, uint32_t pixelHeight,
+                           uint32_t layer) {
+    ImageData img;
+    img.x = x;
+    img.y = y;
+    img.w = w;
+    img.h = h;
+    img.pixelWidth = pixelWidth;
+    img.pixelHeight = pixelHeight;
+    img.layer = layer;
+    img.pixels.assign(pixels, pixels + pixelWidth * pixelHeight * 4);
+    _images.push_back(std::move(img));
+}
+
+//=============================================================================
 // Scene metadata
 //=============================================================================
 

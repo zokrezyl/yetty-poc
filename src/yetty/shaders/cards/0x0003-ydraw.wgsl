@@ -437,7 +437,7 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
             }
         } else {
             // ---- SDF PRIMITIVE (compact variable-length layout) ----
-            // Grid entries store word offsets relative to primDataBase
+            // Grid entries store word offsets relative to primDataBase (translated by CPU)
             let primOff = primDataBase + rawIdx;
 
             evalCount++;
@@ -458,6 +458,42 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
                                                cwHue, cwSat, cwVal, cwIndicator);
                 if (cwColor.a > 0.01) {
                     resultColor = mix(resultColor, cwColor.rgb, cwColor.a);
+                }
+                continue;
+            }
+
+            if (primType == SDF_IMAGE) {
+                // ---- IMAGE PRIMITIVE (type 129) ----
+                // x=2, y=3, w=4, h=5, atlasX=6, atlasY=7, texW=8, texH=9
+                let imgX = cardStorage[primOff + 2u];
+                let imgY = cardStorage[primOff + 3u];
+                let imgW = cardStorage[primOff + 4u];
+                let imgH = cardStorage[primOff + 5u];
+                let imgAtlasX = bitcast<u32>(cardStorage[primOff + 6u]);
+                let imgAtlasY = bitcast<u32>(cardStorage[primOff + 7u]);
+                let imgTexW = bitcast<u32>(cardStorage[primOff + 8u]);
+                let imgTexH = bitcast<u32>(cardStorage[primOff + 9u]);
+
+                // Check if inside image bounds
+                if (scenePos.x >= imgX && scenePos.x < imgX + imgW &&
+                    scenePos.y >= imgY && scenePos.y < imgY + imgH) {
+                    // Compute UV within image (0-1)
+                    let imgUV = vec2<f32>(
+                        (scenePos.x - imgX) / imgW,
+                        (scenePos.y - imgY) / imgH
+                    );
+                    // Map to atlas pixel coordinates
+                    let atlasPixel = vec2<f32>(
+                        f32(imgAtlasX) + imgUV.x * f32(imgTexW),
+                        f32(imgAtlasY) + imgUV.y * f32(imgTexH)
+                    );
+                    // Sample from atlas
+                    let atlasDims = vec2<f32>(textureDimensions(cardImageAtlas));
+                    let sampleUV = atlasPixel / atlasDims;
+                    let imgColor = textureSampleLevel(cardImageAtlas, cardImageSampler, sampleUV, 0.0);
+                    if (imgColor.a > 0.01) {
+                        resultColor = mix(resultColor, imgColor.rgb, imgColor.a);
+                    }
                 }
                 continue;
             }

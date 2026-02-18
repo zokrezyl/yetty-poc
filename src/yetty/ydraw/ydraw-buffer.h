@@ -28,6 +28,19 @@ struct TextSpanData {
 };
 
 //=============================================================================
+// ImageData — image primitive stored in the buffer (pixels + position)
+//=============================================================================
+struct ImageData {
+    float x, y, w, h;           // Scene position and size
+    uint32_t pixelWidth;        // Original image width in pixels
+    uint32_t pixelHeight;       // Original image height in pixels
+    uint32_t layer;
+    std::vector<uint8_t> pixels; // RGBA8 data (pixelWidth * pixelHeight * 4)
+    // Atlas coordinates filled by builder during processing
+    uint32_t atlasX = 0, atlasY = 0;
+};
+
+//=============================================================================
 // YDrawBuffer — pure data container for primitives, text, fonts, scene metadata
 //=============================================================================
 class YDrawBuffer : public base::Object,
@@ -90,6 +103,29 @@ public:
     }
 
     uint32_t textSpanCount() const { return static_cast<uint32_t>(_textSpans.size()); }
+
+    // --- Image storage ---
+
+    void addImage(float x, float y, float w, float h,
+                  const uint8_t* pixels, uint32_t pixelWidth, uint32_t pixelHeight,
+                  uint32_t layer = 0);
+
+    // Iterate images. Callback: fn(ImageData& img) — mutable for atlas coords
+    template<typename F>
+    void forEachImage(F&& fn) {
+        for (auto& img : _images) {
+            fn(img);
+        }
+    }
+
+    template<typename F>
+    void forEachImage(F&& fn) const {
+        for (const auto& img : _images) {
+            fn(img);
+        }
+    }
+
+    uint32_t imageCount() const { return static_cast<uint32_t>(_images.size()); }
 
     // --- Font iteration (for card-side MSDF registration) ---
 
@@ -182,6 +218,9 @@ private:
 
     // Text spans
     std::vector<TextSpanData> _textSpans;
+
+    // Images
+    std::vector<ImageData> _images;
 
     // Scene metadata
     uint32_t _bgColor = 0;
