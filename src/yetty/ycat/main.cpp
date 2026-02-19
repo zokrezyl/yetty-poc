@@ -501,9 +501,14 @@ static bool processFile(
 
     // Use forced card type if specified
     if (!forceCard.empty()) {
-        std::string forcePluginArgs = "-i " + path.string();
-        auto seq = ycat::createSequence(
-            forceCard, 0, 0, width, height, !absolute, "", forcePluginArgs);
+        auto content = readFileAsString(path);
+        if (content.empty()) {
+            std::cerr << "ycat: " << fileArg << ": Failed to read file\n";
+            return false;
+        }
+        std::vector<uint8_t> data(content.begin(), content.end());
+        auto seq = ycat::createSequenceBytes(
+            forceCard, 0, 0, width, height, !absolute, data, "-i -");
         auto out = ycat::maybeWrapForTmux(seq);
         return writeStdout(out.data(), out.size());
     }
@@ -562,10 +567,15 @@ static bool processFile(
         return catFile(path);
     }
 
-    // File: pass -i <path> to tell the card to load from this file path
-    std::string pluginArgs = "-i " + path.string();
-    auto seq = ycat::createSequence(
-        mapping->card, 0, 0, width, height, !absolute, "", pluginArgs);
+    // Read file and send as payload (works both locally and remotely)
+    auto content = readFileAsString(path);
+    if (content.empty()) {
+        std::cerr << "ycat: " << fileArg << ": Failed to read file\n";
+        return false;
+    }
+    std::vector<uint8_t> data(content.begin(), content.end());
+    auto seq = ycat::createSequenceBytes(
+        mapping->card, 0, 0, width, height, !absolute, data, "-i -");
     auto out = ycat::maybeWrapForTmux(seq);
     return writeStdout(out.data(), out.size());
 }

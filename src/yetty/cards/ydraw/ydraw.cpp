@@ -285,6 +285,34 @@ public:
     }
 
     //=========================================================================
+    // Update (OSC update command — replaces buffer content)
+    //=========================================================================
+
+    Result<void> update(const std::string& args, const std::string& payload) override {
+        if (payload.empty()) return Ok();
+
+        yinfo("YDrawImpl::update: payload={} bytes", payload.size());
+
+        // Deserialize new buffer data (same path as initial payload)
+        if (auto res = parseBinary(payload); !res) {
+            yerror("YDrawImpl::update: parseBinary failed: {}", error_msg(res));
+            return res;
+        }
+
+        // Reset view state for new content
+        _needsInitialZoom = true;
+        _sortedOrderBuilt = false;
+        _selStartSorted = -1;
+        _selEndSorted = -1;
+        _selecting = false;
+        _dirty = true;
+
+        yinfo("YDrawImpl::update: {} prims, {} text spans",
+              _buffer->primCount(), _buffer->textSpanCount());
+        return Ok();
+    }
+
+    //=========================================================================
     // Init
     //=========================================================================
 

@@ -87,19 +87,39 @@ public:
 
         yinfo("HttpFetcher::post: {}", resolved);
 
+        // Disable redirect following for POST — handle redirects manually
+        // (cpr can misbehave with POST → 303 → GET chains)
+        _session.SetRedirect(cpr::Redirect{0L});
         _session.SetUrl(cpr::Url{resolved});
         _session.SetBody(cpr::Body{formData});
         _session.SetHeader(cpr::Header{{"Content-Type", "application/x-www-form-urlencoded"}});
         cpr::Response r = _session.Post();
 
-        // Clear body for subsequent GET requests
+        // Clear body and restore redirect following for subsequent GET requests
         _session.SetBody(cpr::Body{});
         _session.SetHeader(cpr::Header{});
+        _session.SetRedirect(cpr::Redirect{10L});
+
+        yinfo("HttpFetcher::post: status={} url={} redirect_count={}",
+              r.status_code, r.url.str(), r.redirect_count);
 
         if (r.status_code == 0) {
             yerror("HttpFetcher::post: connection failed: {}", r.error.message);
             return std::nullopt;
         }
+
+        // Handle redirect responses (301, 302, 303, 307, 308)
+        if (r.status_code >= 300 && r.status_code < 400) {
+            auto it = r.header.find("Location");
+            if (it == r.header.end()) it = r.header.find("location");
+            if (it != r.header.end()) {
+                std::string location = it->second;
+                yinfo("HttpFetcher::post: redirect {} -> {}", r.status_code, location);
+                // Follow with GET
+                return fetch(location);
+            }
+        }
+
         if (r.status_code >= 400) {
             ywarn("HttpFetcher::post: HTTP {}: {}", r.status_code, resolved);
             return std::nullopt;

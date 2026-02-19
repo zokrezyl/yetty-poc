@@ -342,9 +342,7 @@ private:
     enum class OscState {
         Normal,      // Not in OSC
         Esc,         // Saw ESC
-        OscStart,    // Saw ESC ]
-        OscCmd,      // Parsing command number
-        OscBody,     // In OSC body (for yetty OSC)
+        InOsc,       // Inside OSC (accumulating body)
         OscEscEnd    // Saw ESC in body (looking for \)
     };
 
@@ -358,26 +356,28 @@ private:
             }
         };
 
-        auto flushYettyOsc = [&]() {
-            if (!_oscBuffer.empty()) {
-                // Build full sequence: "cmd;body"
-                std::string fullSeq = std::to_string(_oscCmd) + ";" + _oscBuffer;
-                std::string response;
-                uint32_t linesToAdvance = 0;
-                bool handled = _gpuScreen->handleOSCSequence(fullSeq, &response, &linesToAdvance);
-                if (handled) {
-                    if (!response.empty()) {
-                        writeToPty(response.c_str(), response.size());
-                    }
-                    if (linesToAdvance > 0) {
-                        std::string nl(linesToAdvance, '\n');
-                        _gpuScreen->write(nl.c_str(), nl.size());
-                    }
+        auto handleOsc = [&](size_t terminatorEnd, bool isST) {
+            std::string response;
+            uint32_t linesToAdvance = 0;
+            bool handled = _gpuScreen->handleOSCSequence(_oscBuffer, &response, &linesToAdvance);
+            if (handled) {
+                if (!response.empty()) {
+                    writeToPty(response.c_str(), response.size());
                 }
-                _oscBuffer.clear();
+                if (linesToAdvance > 0) {
+                    std::string nl(linesToAdvance, '\n');
+                    _gpuScreen->write(nl.c_str(), nl.size());
+                }
+            } else {
+                // Not handled - reconstruct and forward to vterm
+                std::string reconstructed = "\033]";
+                reconstructed += _oscBuffer;
+                reconstructed += isST ? "\033\\" : "\007";
+                _gpuScreen->write(reconstructed.data(), reconstructed.size());
             }
+            _oscBuffer.clear();
             _oscState = OscState::Normal;
-            _oscCmd = 0;
+            normalStart = terminatorEnd;
         };
 
         while (i < len) {
@@ -394,58 +394,19 @@ private:
 
             case OscState::Esc:
                 if (c == ']') {
-                    _oscState = OscState::OscStart;
-                    _oscCmd = 0;
-                    _oscCmdStr.clear();
+                    flushNormal(_oscEscPos);
+                    _oscBuffer.clear();
+                    _oscState = OscState::InOsc;
                 } else {
-                    // Not OSC, stay normal
                     _oscState = OscState::Normal;
                 }
                 i++;
                 break;
 
-            case OscState::OscStart:
-            case OscState::OscCmd:
-                if (c >= '0' && c <= '9') {
-                    _oscCmdStr += c;
-                    _oscState = OscState::OscCmd;
-                    i++;
-                } else if (c == ';') {
-                    // End of command number
-                    if (!_oscCmdStr.empty()) {
-                        _oscCmd = std::stoi(_oscCmdStr);
-                    }
-                    if (_oscCmd >= 666666) {
-                        // Yetty OSC - bypass vterm
-                        flushNormal(_oscEscPos);
-                        _oscBuffer.clear();
-                        _oscState = OscState::OscBody;
-                    } else {
-                        // Standard OSC - let vterm handle
-                        _oscState = OscState::Normal;
-                    }
-                    i++;
-                } else if (c == '\007' || c == '\033') {
-                    // Terminator without body
-                    _oscState = OscState::Normal;
-                    if (c == '\033') {
-                        // Stay at this position to check for backslash
-                    } else {
-                        i++;
-                    }
-                } else {
-                    // Invalid OSC
-                    _oscState = OscState::Normal;
-                    i++;
-                }
-                break;
-
-            case OscState::OscBody:
+            case OscState::InOsc:
                 if (c == '\007') {
-                    // BEL terminator
-                    flushYettyOsc();
-                    normalStart = i + 1;
                     i++;
+                    handleOsc(i, false);
                 } else if (c == '\033') {
                     _oscState = OscState::OscEscEnd;
                     i++;
@@ -457,16 +418,15 @@ private:
 
             case OscState::OscEscEnd:
                 if (c == '\\') {
-                    // ST terminator (ESC \)
-                    flushYettyOsc();
-                    normalStart = i + 1;
+                    i++;
+                    handleOsc(i, true);
                 } else {
                     // Not a terminator, ESC is part of body
                     _oscBuffer += '\033';
                     _oscBuffer += c;
-                    _oscState = OscState::OscBody;
+                    _oscState = OscState::InOsc;
+                    i++;
                 }
-                i++;
                 break;
             }
         }
@@ -474,12 +434,12 @@ private:
         // Flush remaining normal data
         if (_oscState == OscState::Normal) {
             flushNormal(len);
-        } else if (_oscState == OscState::Esc || _oscState == OscState::OscStart || _oscState == OscState::OscCmd) {
-            // Incomplete standard OSC start - flush everything, vterm will handle
+        } else if (_oscState == OscState::Esc) {
+            // Incomplete ESC at end of chunk - flush everything
             flushNormal(len);
             _oscState = OscState::Normal;
         }
-        // If in OscBody or OscEscEnd, keep accumulating (waiting for more data)
+        // If in InOsc or OscEscEnd, keep accumulating (waiting for more data)
 
         // Trigger screen refresh
         if (auto loop = base::EventLoop::instance(); loop) {
@@ -493,8 +453,6 @@ private:
 
     // OSC parsing state (for processPtyData)
     OscState _oscState = OscState::Normal;
-    int _oscCmd = 0;
-    std::string _oscCmdStr;
     std::string _oscBuffer;
     size_t _oscEscPos = 0;
 

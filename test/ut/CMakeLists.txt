@@ -110,3 +110,4 @@ add_custom_target(run_tests
 add_subdirectory(yast)
 add_subdirectory(yecho)
 add_subdirectory(yhtml)
+add_subdirectory(ybrowser)

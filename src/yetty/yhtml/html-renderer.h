@@ -22,9 +22,11 @@ struct HtmlRenderResult {
 
 // Render HTML content into a YDrawBuffer.
 // Returns the container and document (kept alive for interactive use).
+// userStyles: optional CSS applied with highest priority (user stylesheet).
 HtmlRenderResult renderHtmlToBuffer(
     const std::string& html, std::shared_ptr<YDrawBuffer> buffer,
     float fontSize, float viewWidth,
-    HttpFetcher* fetcher = nullptr);
+    HttpFetcher* fetcher = nullptr,
+    const char* userStyles = nullptr);
 
 } // namespace yetty::card
