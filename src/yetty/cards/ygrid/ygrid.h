@@ -2,27 +2,40 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 #include <yetty/base/factory.h>
 #include <yetty/card.h>
 #include <yetty/yetty-context.h>
 
 namespace yetty::card {
 
-class PythonCard : public Card, public base::ObjectFactory<PythonCard> {
-public:
-    using Ptr = std::shared_ptr<PythonCard>;
+// Wire protocol cell (12 bytes) - same layout as Cell but glyph = UTF codepoint
+struct GridCell {
+    uint32_t codepoint;    // Unicode codepoint (NOT glyph index)
+    uint8_t fgR, fgG, fgB, alpha;
+    uint8_t bgR, bgG, bgB, style;
+};
+static_assert(sizeof(GridCell) == 12, "GridCell must be 12 bytes");
 
-    // Reuse the texture card shader glyph — renders pixels just like Image/ThorVG
-    static constexpr uint32_t SHADER_GLYPH = 0x100000;
+// YGRD wire format magic
+static constexpr uint32_t YGRD_MAGIC = 0x59475244; // "YGRD"
+
+// YGRD flags
+static constexpr uint16_t YGRD_FLAG_FULL = 0x0001;
+
+class YGrid : public Card, public base::ObjectFactory<YGrid> {
+public:
+    using Ptr = std::shared_ptr<YGrid>;
+    static constexpr uint32_t SHADER_GLYPH = 0x100008;
 
     static Result<Ptr> createImpl(ContextType& ctx, const YettyContext& yettyCtx,
                                   int32_t x, int32_t y, uint32_t widthCells,
                                   uint32_t heightCells, const std::string& args,
                                   const std::string& payload) noexcept;
 
-    bool needsTexture() const override { return true; }
+    bool needsBuffer() const override { return true; }
 
-    virtual ~PythonCard() = default;
+    virtual ~YGrid() = default;
 
     // Card accessors
     uint32_t metadataOffset() const override { return _metaHandle.offset; }
@@ -33,15 +46,15 @@ public:
     void setPosition(int32_t x, int32_t y) override { _x = x; _y = y; }
     uint32_t widthCells() const override { return _widthCells; }
     uint32_t heightCells() const override { return _heightCells; }
-    const char* typeName() const override { return "python"; }
+    const char* typeName() const override { return "ygrid"; }
     const std::string& name() const override { return _name; }
     void setName(const std::string& n) override { _name = n; }
     bool hasName() const override { return !_name.empty(); }
     void setScreenOrigin(float sx, float sy) override { _screenOriginX = sx; _screenOriginY = sy; }
 
 protected:
-    PythonCard(CardManager::Ptr mgr, const GPUContext& gpu, int32_t x, int32_t y,
-               uint32_t widthCells, uint32_t heightCells)
+    YGrid(CardManager::Ptr mgr, const GPUContext& gpu, int32_t x, int32_t y,
+          uint32_t widthCells, uint32_t heightCells)
         : _cardMgr(std::move(mgr)), _gpu(gpu)
         , _x(x), _y(y), _widthCells(widthCells), _heightCells(heightCells) {}
 
@@ -55,4 +68,4 @@ protected:
     std::string _name;
 };
 
-}  // namespace yetty::card
+} // namespace yetty::card

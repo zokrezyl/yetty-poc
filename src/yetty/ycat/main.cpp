@@ -114,11 +114,6 @@ static const CardMapping* mimeToCard(std::string_view mime) {
         static const CardMapping m{"yhtml"};
         return &m;
     }
-    // Python scripts
-    if (mime == "text/x-python" || mime == "text/x-script.python") {
-        static const CardMapping m{"python"};
-        return &m;
-    }
     return nullptr;
 }
 
@@ -139,10 +134,6 @@ static const CardMapping* extensionToCard(const fs::path& path) {
     }
     if (ext == ".html" || ext == ".htm") {
         static const CardMapping m{"yhtml"};
-        return &m;
-    }
-    if (ext == ".py") {
-        static const CardMapping m{"python"};
         return &m;
     }
     if (ext == ".lottie") {
@@ -601,7 +592,7 @@ int main(int argc, const char** argv) {
     args::Flag showFlag(parser, "show",
         "Show source with syntax highlighting (skip card rendering)", {'s', "show"});
     args::ValueFlag<std::string> cardFlag(parser, "type",
-        "Force card type (e.g., image, pdf, ypdf, ydraw, thorvg, ymery, python)", {'c', "card"});
+        "Force card type (e.g., image, pdf, ypdf, ydraw, thorvg, ymery)", {'c', "card"});
 
     args::PositionalList<std::string> files(parser, "files",
         "Files to display (use - for stdin)");

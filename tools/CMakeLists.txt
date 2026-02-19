@@ -1,6 +1,7 @@
 add_subdirectory(gpu-info)
 add_subdirectory(ydraw-maze)
 add_subdirectory(ydraw-zoo)
+add_subdirectory(ymux)
 
 # PDF to YDraw binary converter (requires pdfio from ypdf card)
 if(YETTY_CARD_YPDF)
