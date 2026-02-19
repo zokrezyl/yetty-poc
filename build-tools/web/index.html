@@ -349,6 +349,7 @@
 
         var Module = {
             canvas: document.getElementById('canvas'),
+            ENV: { YTRACE_DEFAULT_ON: 'yes' },
             print: function(text) { console.log('[yetty]', text); },
             printErr: function(text) { console.error('[yetty]', text); },
             onRuntimeInitialized: function() {

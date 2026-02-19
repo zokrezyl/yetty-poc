@@ -1,4 +1,9 @@
-target_sources(yetty PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/yast.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/yast.cpp
+# yast library
+add_library(yetty_yast STATIC
+    yast.cpp
+)
+
+target_include_directories(yetty_yast PUBLIC
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src
 )

@@ -192,6 +192,7 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
 
     // Create MSDF CDB provider based on CLI flag
     MsdfCdbProvider::Ptr cdbProvider;
+#if !YETTY_WEB
     if (_msdfProviderName == "cpu") {
         cdbProvider = std::make_shared<CpuMsdfCdbProvider>();
         yinfo("Using CPU MSDF CDB provider");
@@ -199,6 +200,7 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
         cdbProvider = std::make_shared<GpuMsdfCdbProvider>(_instance);
         yinfo("Using GPU MSDF CDB provider");
     }
+#endif
 
     // Create FontManager with GPUContext, ShaderManager, and CDB provider
     auto fontMgrResult = FontManager::create(_gpuContext, _gpuAllocator, shaderMgr, cdbProvider);
@@ -210,7 +212,7 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     // Build YettyContext
     _yettyContext.gpu = _gpuContext;
     _yettyContext.gpuAllocator = _gpuAllocator;
-#if !defined(__ANDROID__)
+#if !YETTY_WEB && !defined(__ANDROID__)
     _yettyContext.gpuMonitor = gpu::GpuMonitor::create();
 #endif
     _yettyContext.shaderManager = shaderMgr;

@@ -1,5 +1,4 @@
 # YPdf Card - vector PDF rendering via pdfio (lightweight C library)
-# Gated behind YETTY_CARD_YPDF option (set in parent CMakeLists.txt)
 
 CPMAddPackage(
     NAME pdfio
@@ -31,13 +30,11 @@ if(pdfio_ADDED)
         PUBLIC ${pdfio_SOURCE_DIR}
         PRIVATE ${ZLIB_INCLUDE_DIR}
     )
-    # Use ZLIB::ZLIB alias (works on all platforms, set by FreeType.cmake)
     target_link_libraries(pdfio_lib PRIVATE ZLIB::ZLIB)
     set_target_properties(pdfio_lib PROPERTIES
         C_STANDARD 99
         POSITION_INDEPENDENT_CODE ON
     )
-    # Suppress warnings in third-party code
     if(MSVC)
         target_compile_options(pdfio_lib PRIVATE /w)
     else()
@@ -47,10 +44,7 @@ endif()
 
 add_subdirectory(${CMAKE_SOURCE_DIR}/src/yetty/ypdf ypdf)
 
-target_sources(yetty PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/ypdf.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/ypdf.cpp
-)
-
-target_link_libraries(yetty PRIVATE pdfio_lib)
-target_compile_definitions(yetty PRIVATE YETTY_CARD_YPDF=1)
+add_library(yetty_card_ypdf STATIC ypdf.cpp)
+target_include_directories(yetty_card_ypdf PUBLIC ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(yetty_card_ypdf PUBLIC glm::glm webgpu yaml-cpp ytrace::ytrace yetty_ypdf pdfio_lib)
+target_compile_definitions(yetty_card_ypdf PUBLIC YETTY_CARD_YPDF=1)
