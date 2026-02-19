@@ -9,7 +9,7 @@ target_link_libraries(yetty-rpc PUBLIC
 )
 
 target_include_directories(yetty-rpc PUBLIC
-    ${CMAKE_SOURCE_DIR}/include
+    ${YETTY_ROOT}/include
 )
 
 target_compile_features(yetty-rpc PUBLIC cxx_std_23)

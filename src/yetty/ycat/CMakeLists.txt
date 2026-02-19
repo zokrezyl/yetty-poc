@@ -94,7 +94,7 @@ target_link_libraries(ycat PRIVATE
 )
 
 target_include_directories(ycat PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
+    ${YETTY_ROOT}/include
     ${CMAKE_CURRENT_BINARY_DIR}   # for ts_queries_generated.h
 )
 

@@ -1,24 +1,24 @@
 # WebAssembly (Emscripten) build target
 
-include(${CMAKE_SOURCE_DIR}/build-tools/cmake/targets/shared.cmake)
+include(${YETTY_ROOT}/build-tools/cmake/targets/shared.cmake)
 
 # WebAssembly-specific libraries
-include(${CMAKE_SOURCE_DIR}/build-tools/cmake/libs/imgui.cmake)
-include(${CMAKE_SOURCE_DIR}/build-tools/cmake/libs/lz4.cmake)
+include(${YETTY_ROOT}/build-tools/cmake/libs/imgui.cmake)
+include(${YETTY_ROOT}/build-tools/cmake/libs/lz4.cmake)
 
 # CDB font generation (builds host tools automatically)
-include(${CMAKE_SOURCE_DIR}/build-tools/cmake/cdb-gen.cmake)
+include(${YETTY_ROOT}/build-tools/cmake/cdb-gen.cmake)
 
 # Global definitions for all webasm targets (applied before add_subdirectory)
 add_compile_definitions(YETTY_WEB=1 YETTY_ANDROID=0)
 
 # Add src/yetty (builds libraries)
-add_subdirectory(${CMAKE_SOURCE_DIR}/src/yetty ${CMAKE_BINARY_DIR}/src/yetty)
+add_subdirectory(${YETTY_ROOT}/src/yetty ${CMAKE_BINARY_DIR}/src/yetty)
 
 # Create executable with core sources + web platform
 add_executable(yetty
     ${YETTY_CORE_SOURCES}
-    ${CMAKE_SOURCE_DIR}/src/yetty/platform/web-platform.cpp
+    ${YETTY_ROOT}/src/yetty/platform/web-platform.cpp
 )
 
 target_include_directories(yetty PRIVATE ${YETTY_INCLUDES})
@@ -45,11 +45,11 @@ target_link_options(yetty PRIVATE
     -sALLOW_MEMORY_GROWTH
     -sWASM_BIGINT
     -sFILESYSTEM=1
-    "--preload-file=${CMAKE_SOURCE_DIR}/src/yetty/shaders/gpu-screen.wgsl@/gpu-screen.wgsl"
-    "--preload-file=${CMAKE_SOURCE_DIR}/src/yetty/shaders@/src/yetty/shaders"
-    "--preload-file=${CMAKE_SOURCE_DIR}/assets@/assets"
+    "--preload-file=${YETTY_ROOT}/src/yetty/shaders/gpu-screen.wgsl@/gpu-screen.wgsl"
+    "--preload-file=${YETTY_ROOT}/src/yetty/shaders@/src/yetty/shaders"
+    "--preload-file=${YETTY_ROOT}/assets@/assets"
     "--preload-file=${CMAKE_BINARY_DIR}/fonts-cdb@/assets/fonts-cdb"
-    "--preload-file=${CMAKE_SOURCE_DIR}/demo@/demo"
+    "--preload-file=${YETTY_ROOT}/demo@/demo"
     "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','UTF8ToString','stringToUTF8','FS','ENV','HEAPU8']"
     "-sEXPORTED_FUNCTIONS=['_main','_malloc','_free','_yetty_write','_yetty_key','_yetty_special_key','_yetty_read_input','_yetty_sync','_yetty_set_scale','_yetty_resize','_yetty_get_cols','_yetty_get_rows']"
 )
@@ -66,14 +66,14 @@ target_link_libraries(yetty PRIVATE
 
 # Copy web files
 add_custom_command(TARGET yetty POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_SOURCE_DIR}/build-tools/web/index.html ${CMAKE_BINARY_DIR}/index.html
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_SOURCE_DIR}/build-tools/web/serve.py ${CMAKE_BINARY_DIR}/serve.py
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${YETTY_ROOT}/build-tools/web/index.html ${CMAKE_BINARY_DIR}/index.html
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${YETTY_ROOT}/build-tools/web/serve.py ${CMAKE_BINARY_DIR}/serve.py
 )
 
 # Build toybox if source exists
-if(EXISTS "${CMAKE_SOURCE_DIR}/tmp/toybox")
+if(EXISTS "${YETTY_ROOT}/tmp/toybox")
     add_custom_command(TARGET yetty POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E env BUILD_DIR=${CMAKE_BINARY_DIR} bash ${CMAKE_SOURCE_DIR}/build-tools/web/build-toybox-minimal.sh
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        COMMAND ${CMAKE_COMMAND} -E env BUILD_DIR=${CMAKE_BINARY_DIR} bash ${YETTY_ROOT}/build-tools/web/build-toybox-minimal.sh
+        WORKING_DIRECTORY ${YETTY_ROOT}
     )
 endif()

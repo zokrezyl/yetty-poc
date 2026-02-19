@@ -4,8 +4,8 @@ add_library(yetty_base STATIC
 )
 
 target_include_directories(yetty_base PUBLIC
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/src
+    ${YETTY_ROOT}/include
+    ${YETTY_ROOT}/src
 )
 
 target_link_libraries(yetty_base PUBLIC ytrace::ytrace yaml-cpp)

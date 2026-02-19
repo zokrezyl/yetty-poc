@@ -6,8 +6,8 @@ add_library(yetty_font STATIC
 )
 
 target_include_directories(yetty_font PUBLIC
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/src
+    ${YETTY_ROOT}/include
+    ${YETTY_ROOT}/src
     ${FREETYPE_INCLUDE_DIR}
 )
 

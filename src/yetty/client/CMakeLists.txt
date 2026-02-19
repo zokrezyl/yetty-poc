@@ -12,7 +12,7 @@ target_link_libraries(yettyc PRIVATE
 )
 
 target_include_directories(yettyc PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
+    ${YETTY_ROOT}/include
 )
 
 target_compile_features(yettyc PRIVATE cxx_std_23)

@@ -3,7 +3,7 @@
 
 # Generate glyph registry header at configure time
 set(GLYPH_REGISTRY_HEADER "${CMAKE_CURRENT_BINARY_DIR}/glyph-registry-generated.h")
-set(SHADER_DIR "${CMAKE_SOURCE_DIR}/src/yetty/shaders")
+set(SHADER_DIR "${YETTY_ROOT}/src/yetty/shaders")
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
@@ -30,8 +30,8 @@ add_library(yetty_yecho STATIC
 )
 
 target_include_directories(yetty_yecho PUBLIC
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/src
+    ${YETTY_ROOT}/include
+    ${YETTY_ROOT}/src
     ${CMAKE_CURRENT_BINARY_DIR}
 )
 
@@ -43,8 +43,8 @@ if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
     )
 
     target_include_directories(yecho PRIVATE
-        ${CMAKE_SOURCE_DIR}/include
-        ${CMAKE_SOURCE_DIR}/src/yetty/yecho
+        ${YETTY_ROOT}/include
+        ${YETTY_ROOT}/src/yetty/yecho
         ${CMAKE_CURRENT_BINARY_DIR}
     )
 

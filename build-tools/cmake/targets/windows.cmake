@@ -1,23 +1,23 @@
 # Windows desktop build target
 
-include(${CMAKE_SOURCE_DIR}/build-tools/cmake/targets/shared.cmake)
+include(${YETTY_ROOT}/build-tools/cmake/targets/shared.cmake)
 
 # Windows-specific libraries
-include(${CMAKE_SOURCE_DIR}/build-tools/cmake/libs/args.cmake)
-include(${CMAKE_SOURCE_DIR}/build-tools/cmake/libs/lz4.cmake)
-include(${CMAKE_SOURCE_DIR}/build-tools/cmake/libs/libuv.cmake)
-include(${CMAKE_SOURCE_DIR}/build-tools/cmake/libs/glfw.cmake)
-include(${CMAKE_SOURCE_DIR}/build-tools/cmake/libs/imgui.cmake)
+include(${YETTY_ROOT}/build-tools/cmake/libs/args.cmake)
+include(${YETTY_ROOT}/build-tools/cmake/libs/lz4.cmake)
+include(${YETTY_ROOT}/build-tools/cmake/libs/libuv.cmake)
+include(${YETTY_ROOT}/build-tools/cmake/libs/glfw.cmake)
+include(${YETTY_ROOT}/build-tools/cmake/libs/imgui.cmake)
 
 # Add src/yetty (builds libraries)
-add_subdirectory(${CMAKE_SOURCE_DIR}/src/yetty ${CMAKE_BINARY_DIR}/src/yetty)
+add_subdirectory(${YETTY_ROOT}/src/yetty ${CMAKE_BINARY_DIR}/src/yetty)
 
 # Create executable with core sources + platform
 add_executable(yetty
     ${YETTY_CORE_SOURCES}
     ${YETTY_DESKTOP_SOURCES}
-    ${CMAKE_SOURCE_DIR}/src/yetty/platform/glfw-platform.cpp
-    ${CMAKE_SOURCE_DIR}/src/yetty/msdf-gen/generator.cpp
+    ${YETTY_ROOT}/src/yetty/platform/glfw-platform.cpp
+    ${YETTY_ROOT}/src/yetty/msdf-gen/generator.cpp
 )
 
 target_include_directories(yetty PRIVATE ${YETTY_INCLUDES})
@@ -50,10 +50,10 @@ target_link_libraries(yetty PRIVATE
 )
 
 # CDB font generation
-include(${CMAKE_SOURCE_DIR}/build-tools/cmake/cdb-gen.cmake)
+include(${YETTY_ROOT}/build-tools/cmake/cdb-gen.cmake)
 
 # Copy assets
 add_custom_command(TARGET yetty POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/assets ${CMAKE_BINARY_DIR}/assets
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${YETTY_ROOT}/assets ${CMAKE_BINARY_DIR}/assets
 )
-configure_file(${CMAKE_SOURCE_DIR}/src/yetty/shaders/gpu-screen.wgsl ${CMAKE_BINARY_DIR}/gpu-screen.wgsl COPYONLY)
+configure_file(${YETTY_ROOT}/src/yetty/shaders/gpu-screen.wgsl ${CMAKE_BINARY_DIR}/gpu-screen.wgsl COPYONLY)

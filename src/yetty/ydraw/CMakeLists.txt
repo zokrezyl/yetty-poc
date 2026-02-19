@@ -7,8 +7,8 @@ add_library(yetty_ydraw STATIC
 )
 
 target_include_directories(yetty_ydraw PUBLIC
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/src
+    ${YETTY_ROOT}/include
+    ${YETTY_ROOT}/src
 )
 
 target_link_libraries(yetty_ydraw PUBLIC yaml-cpp glm::glm webgpu ytrace::ytrace)

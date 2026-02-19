@@ -5,7 +5,7 @@ if(TARGET msdfgen::msdfgen-core)
 endif()
 
 include(${CMAKE_CURRENT_LIST_DIR}/tinyxml2.cmake)
-include(${CMAKE_SOURCE_DIR}/build-tools/cmake/FreeType.cmake)
+include(${YETTY_ROOT}/build-tools/cmake/FreeType.cmake)
 
 CPMAddPackage(
     NAME msdfgen

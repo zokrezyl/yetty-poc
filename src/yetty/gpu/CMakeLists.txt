@@ -18,7 +18,7 @@ endif()
 add_library(yetty_gpu STATIC ${GPU_SOURCES})
 
 target_include_directories(yetty_gpu PUBLIC
-    ${CMAKE_SOURCE_DIR}/include           # For include/yetty/gpu-monitor.h
+    ${YETTY_ROOT}/include           # For include/yetty/gpu-monitor.h
     ${CMAKE_CURRENT_SOURCE_DIR}           # For internal headers
 )
 

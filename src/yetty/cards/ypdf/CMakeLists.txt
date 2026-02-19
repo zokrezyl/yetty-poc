@@ -42,9 +42,9 @@ if(pdfio_ADDED)
     endif()
 endif()
 
-add_subdirectory(${CMAKE_SOURCE_DIR}/src/yetty/ypdf ypdf)
+add_subdirectory(${YETTY_ROOT}/src/yetty/ypdf ypdf)
 
 add_library(yetty_card_ypdf STATIC ypdf.cpp)
-target_include_directories(yetty_card_ypdf PUBLIC ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src)
+target_include_directories(yetty_card_ypdf PUBLIC ${YETTY_ROOT}/include ${YETTY_ROOT}/src)
 target_link_libraries(yetty_card_ypdf PUBLIC glm::glm webgpu yaml-cpp ytrace::ytrace yetty_ypdf pdfio_lib)
 target_compile_definitions(yetty_card_ypdf PUBLIC YETTY_CARD_YPDF=1)

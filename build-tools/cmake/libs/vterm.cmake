@@ -3,7 +3,7 @@ if(TARGET vterm)
     return()
 endif()
 
-set(LIBVTERM_DIR ${CMAKE_SOURCE_DIR}/src/libvterm-0.3.3)
+set(LIBVTERM_DIR ${YETTY_ROOT}/src/libvterm-0.3.3)
 if(EXISTS ${LIBVTERM_DIR})
     add_library(vterm STATIC
         ${LIBVTERM_DIR}/src/encoding.c

@@ -42,9 +42,9 @@ if(_SAVE_ZLIB_LIBRARY)
     set(ZLIB_LIBRARY ${_SAVE_ZLIB_LIBRARY} CACHE STRING "" FORCE)
 endif()
 
-add_subdirectory(${CMAKE_SOURCE_DIR}/src/yetty/yhtml yhtml)
+add_subdirectory(${YETTY_ROOT}/src/yetty/yhtml yhtml)
 
 add_library(yetty_card_yhtml STATIC yhtml.cpp)
-target_include_directories(yetty_card_yhtml PUBLIC ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src)
+target_include_directories(yetty_card_yhtml PUBLIC ${YETTY_ROOT}/include ${YETTY_ROOT}/src)
 target_link_libraries(yetty_card_yhtml PUBLIC glm::glm webgpu yaml-cpp ytrace::ytrace yetty_yhtml litehtml cpr::cpr)
 target_compile_definitions(yetty_card_yhtml PUBLIC YETTY_CARD_YHTML=1)

@@ -7,11 +7,15 @@ add_subdirectory(diagram)
 add_subdirectory(ydraw-zoo)
 add_subdirectory(ydraw-maze)
 add_subdirectory(ytext)
-add_subdirectory(ypdf)
-add_subdirectory(yhtml)
 add_subdirectory(ygui)
 add_subdirectory(markdown)
 add_subdirectory(qrcode)
+
+# Cards with system dependencies not available on Android/WebAssembly
+if(NOT YETTY_ANDROID AND NOT EMSCRIPTEN)
+    add_subdirectory(ypdf)   # Requires ZLIB
+    add_subdirectory(yhtml)  # Requires OpenSSL for cpr
+endif()
 
 # Aggregate library linking all cards
 add_library(yetty_cards INTERFACE)
@@ -24,9 +28,19 @@ target_link_libraries(yetty_cards INTERFACE
     yetty_card_ydraw_zoo
     yetty_card_ydraw_maze
     yetty_card_ytext
-    yetty_card_ypdf
-    yetty_card_yhtml
     yetty_card_ygui
     yetty_card_markdown
     yetty_card_qrcode
 )
+
+# Add platform-specific cards
+if(NOT YETTY_ANDROID AND NOT EMSCRIPTEN)
+    target_link_libraries(yetty_cards INTERFACE
+        yetty_card_ypdf
+        yetty_card_yhtml
+    )
+    target_compile_definitions(yetty_cards INTERFACE
+        YETTY_CARD_YPDF=1
+        YETTY_CARD_YHTML=1
+    )
+endif()

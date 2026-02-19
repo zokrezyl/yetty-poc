@@ -7,11 +7,15 @@
 #include "cards/ydraw-zoo/ydraw-zoo.h"
 #include "cards/ydraw/ydraw.h"
 #include "cards/ygui/ygui.h"
+#if YETTY_CARD_YHTML
 #include "cards/yhtml/yhtml.h"
+#endif
 #if 0
 #include "cards/ymery/ymery.h"
 #endif
+#if YETTY_CARD_YPDF
 #include "cards/ypdf/ypdf.h"
+#endif
 #include "cards/ytext/ytext.h"
 #include <regex>
 #include <unordered_map>
@@ -127,12 +131,15 @@ public:
       return card::Diagram::create(ctx, x, y, w, h, args, payload);
     });
 
+#if YETTY_CARD_YPDF
     registerCard("ypdf", [](const YettyContext &ctx, int32_t x, int32_t y,
                             uint32_t w, uint32_t h, const std::string &args,
                             const std::string &payload) {
       return card::YPdf::create(ctx, x, y, w, h, args, payload);
     });
+#endif
 
+#if YETTY_CARD_YHTML
     registerCard("yhtml",
                  [](const YettyContext &ctx, int32_t x, int32_t y, uint32_t w,
                     uint32_t h, const std::string &args,
@@ -143,6 +150,7 @@ public:
                      return std::unexpected(result.error());
                    return Ok<CardPtr>(*result);
                  });
+#endif
 
     return Ok();
   }

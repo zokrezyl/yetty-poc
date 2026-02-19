@@ -78,8 +78,8 @@ endif()
 
 # CDB wrapper library
 if(NOT TARGET cdb-wrapper)
-    add_library(cdb-wrapper STATIC ${CMAKE_SOURCE_DIR}/src/yetty/cdb-wrapper.cpp)
-    target_include_directories(cdb-wrapper PUBLIC ${CMAKE_SOURCE_DIR}/include)
+    add_library(cdb-wrapper STATIC ${YETTY_ROOT}/src/yetty/cdb-wrapper.cpp)
+    target_include_directories(cdb-wrapper PUBLIC ${YETTY_ROOT}/include)
     if(EMSCRIPTEN)
         target_link_libraries(cdb-wrapper PUBLIC cdb)
         target_include_directories(cdb-wrapper PRIVATE ${ytrace_SOURCE_DIR}/include ${spdlog_SOURCE_DIR}/include)

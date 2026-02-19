@@ -30,7 +30,7 @@ CPMAddPackage(
 )
 
 if(pdfium_ADDED)
-    include(${CMAKE_SOURCE_DIR}/build-tools/cmake/pdfium/CMakeLists.txt)
+    include(${YETTY_ROOT}/build-tools/cmake/pdfium/CMakeLists.txt)
 endif()
 
 target_sources(yetty PRIVATE

@@ -10,8 +10,8 @@ add_library(yetty_ymery STATIC
 )
 
 target_include_directories(yetty_ymery PUBLIC
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/src
+    ${YETTY_ROOT}/include
+    ${YETTY_ROOT}/src
 )
 
 target_link_libraries(yetty_ymery PUBLIC yaml-cpp imgui ytrace::ytrace)
