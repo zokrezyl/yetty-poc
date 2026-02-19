@@ -739,8 +739,6 @@ endif()
 # Core shared library (for plugins to link against on desktop)
 #-----------------------------------------------------------------------------
 if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
-    # Python plugin option — actual build is triggered by src/yetty/python/CMakeLists.txt
-    option(YETTY_PLUGIN_PYTHON "Build Python plugin (requires Python build)" ON)
 endif()
 
 #-----------------------------------------------------------------------------
@@ -1104,36 +1102,6 @@ else()
         endif()
         target_compile_definitions(yetty PRIVATE YETTY_USE_FORKPTY=1)
 
-        # Link Python into main executable so symbols are globally visible to numpy extensions
-        # Use --whole-archive (Linux) or -force_load (macOS) to export all Python symbols
-        if(TARGET python_embedded)
-            add_dependencies(yetty python_embedded)
-            if(APPLE)
-                # On macOS, also need libintl and iconv for Python's locale module
-                if(EXISTS "/usr/local/lib/libintl.a")
-                    set(INTL_LIBRARY "/usr/local/lib/libintl.a")
-                elseif(EXISTS "/opt/homebrew/lib/libintl.a")
-                    set(INTL_LIBRARY "/opt/homebrew/lib/libintl.a")
-                elseif(EXISTS "/opt/local/lib/libintl.a")
-                    set(INTL_LIBRARY "/opt/local/lib/libintl.a")
-                endif()
-
-                target_link_libraries(yetty PRIVATE
-                    -Wl,-force_load,$<TARGET_FILE:python_embedded>
-                    ${INTL_LIBRARY}
-                    iconv
-                    m pthread
-                )
-            else()
-                target_link_libraries(yetty PRIVATE
-                    -Wl,--whole-archive
-                    python_embedded
-                    -Wl,--no-whole-archive
-                    m dl pthread
-                )
-            endif()
-
-        endif()
     endif()
 
     # Copy assets at build time (not just configure time)
@@ -1208,6 +1176,13 @@ else()
             enable_testing()
             add_subdirectory(test/ut/ybrowser)
         endif()
+
+        # YMux tests (pane payload, OSC sequence, damage tracking)
+        option(YETTY_BUILD_YMUX_TESTS "Build YMux multiplexer tests" ON)
+        if(YETTY_BUILD_YMUX_TESTS)
+            enable_testing()
+            add_subdirectory(test/ut/ymux)
+        endif()
     endif()
 
     # Plugin tester disabled - was using yetty_core which is removed
@@ -1249,5 +1224,4 @@ else()
 endif()
 
 
-# Python subdirectory moved earlier in file (before yetty target)
 

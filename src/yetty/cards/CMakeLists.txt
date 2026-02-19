@@ -11,6 +11,7 @@ add_subdirectory(ytext)
 add_subdirectory(ymery)
 add_subdirectory(markdown)
 add_subdirectory(qrcode)
+add_subdirectory(ygrid)
 
 # Desktop-only cards (require desktop libraries or features)
 if(NOT YETTY_ANDROID)
@@ -18,9 +19,6 @@ if(NOT YETTY_ANDROID)
     if(NOT MSVC)
         add_subdirectory(thorvg)
     endif()
-
-    # Python plugin requires desktop Python
-    add_subdirectory(python)
 
     option(YETTY_CARD_PDF "Build PDF card (requires PDFium)" OFF)
     if(YETTY_CARD_PDF)
