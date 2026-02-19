@@ -15,6 +15,7 @@ using yetty::YDrawBuffer;
 #include <fstream>
 #include <cmath>
 #include <cstring>
+#include <optional>
 
 #ifdef YETTY_USE_FONTCONFIG
 #include <fontconfig/fontconfig.h>
@@ -136,6 +137,14 @@ public:
             _pendingNavigateUrl.clear();
             navigateTo(url);
             return;  // navigation supersedes redraw
+        }
+
+        // Process deferred form submission
+        if (_pendingFormSubmit) {
+            auto fs = std::move(*_pendingFormSubmit);
+            _pendingFormSubmit.reset();
+            handleFormSubmit(fs.action, fs.method, fs.formData);
+            return;
         }
 
         // Process deferred redraw (from mouse events etc.)
@@ -699,6 +708,13 @@ private:
             (*loop)->dispatch(base::Event::setCursorEvent(shape));
         });
 
+        // Wire up form submit callback for <input type="submit"> / <button> in forms
+        _container->setFormSubmitCallback(
+            [this](const std::string& action, const std::string& method,
+                   const std::string& formData) {
+                _pendingFormSubmit = PendingFormSubmit{action, method, formData};
+            });
+
         yinfo("YHtmlImpl::renderHtml: {}x{} prims={} glyphs={}",
               result.documentWidth, result.documentHeight,
               _builder->primitiveCount(), _builder->glyphCount());
@@ -753,6 +769,47 @@ private:
     std::shared_ptr<litehtml::document> _document;
     float _fontSize = 16.0f;
     float _viewWidth = 720.0f;
+
+    // Form submission
+    struct PendingFormSubmit {
+        std::string action;
+        std::string method;
+        std::string formData;
+    };
+    std::optional<PendingFormSubmit> _pendingFormSubmit;
+
+    void handleFormSubmit(const std::string& action,
+                          const std::string& method,
+                          const std::string& formData) {
+        if (!_fetcher) return;
+        std::string resolvedAction = _fetcher->resolveUrl(action);
+        yinfo("YHtmlImpl::handleFormSubmit: {} {} data={}bytes",
+              method, resolvedAction, formData.size());
+
+        if (method == "GET") {
+            std::string url = resolvedAction;
+            if (!formData.empty()) {
+                url += (url.find('?') != std::string::npos ? "&" : "?");
+                url += formData;
+            }
+            navigateTo(url);
+        } else {
+            auto body = _fetcher->post(resolvedAction, formData);
+            if (!body) {
+                ywarn("YHtmlImpl::handleFormSubmit: POST failed");
+                return;
+            }
+            yinfo("YHtmlImpl::handleFormSubmit: POST response {} bytes", body->size());
+            _htmlContent = std::move(*body);
+            _document.reset();
+            _container.reset();
+            _buffer->clear();
+            if (auto res = renderHtmlInternal(); !res) {
+                ywarn("YHtmlImpl::handleFormSubmit: render failed");
+            }
+            _dirty = true;
+        }
+    }
 };
 
 //=============================================================================

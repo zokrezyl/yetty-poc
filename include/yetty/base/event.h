@@ -73,6 +73,7 @@ struct Event {
         float x;
         float y;
         int button;
+        int mods;
     };
 
     struct ScrollEvent {
@@ -221,31 +222,31 @@ struct Event {
         return e;
     }
 
-    static Event mouseDown(float x, float y, int button) {
+    static Event mouseDown(float x, float y, int button, int mods = 0) {
         Event e;
         e.type = Type::MouseDown;
-        e.mouse = {x, y, button};
+        e.mouse = {x, y, button, mods};
         return e;
     }
 
-    static Event mouseUp(float x, float y, int button) {
+    static Event mouseUp(float x, float y, int button, int mods = 0) {
         Event e;
         e.type = Type::MouseUp;
-        e.mouse = {x, y, button};
+        e.mouse = {x, y, button, mods};
         return e;
     }
 
-    static Event mouseMove(float x, float y) {
+    static Event mouseMove(float x, float y, int mods = 0) {
         Event e;
         e.type = Type::MouseMove;
-        e.mouse = {x, y, 0};
+        e.mouse = {x, y, 0, mods};
         return e;
     }
 
-    static Event mouseDrag(float x, float y, int button) {
+    static Event mouseDrag(float x, float y, int button, int mods = 0) {
         Event e;
         e.type = Type::MouseDrag;
-        e.mouse = {x, y, button};
+        e.mouse = {x, y, button, mods};
         return e;
     }
 

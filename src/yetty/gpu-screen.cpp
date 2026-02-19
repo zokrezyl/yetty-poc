@@ -450,6 +450,8 @@ private:
   std::unordered_map<std::string, uint32_t> _namedCards;   // name -> slotIndex
   std::unordered_map<uint32_t, std::string> _slotToName;   // slotIndex -> name
 
+  int _mouseTrackingMode = 0;           // VTERM_PROP_MOUSE_NONE/CLICK/DRAG/MOVE
+
   base::ObjectId _cardMouseTarget = 0;  // card that received last CardMouseDown
   base::ObjectId _focusedCardId = 0;    // card that has keyboard focus (0 = terminal)
   float _focusedCardOriginX = 0.0f;     // viewport-local X of focused card's top-left
@@ -3132,6 +3134,9 @@ int GPUScreenImpl::onSetTermProp(VTermProp prop, VTermValue *val, void *user) {
     self->_cursorBlink = val->boolean != 0;
   } else if (prop == VTERM_PROP_CURSORSHAPE) {
     self->_cursorShape = val->number;
+  } else if (prop == VTERM_PROP_MOUSE) {
+    self->_mouseTrackingMode = val->number;
+    ydebug("GPUScreen {}: mouse tracking mode = {}", self->_id, val->number);
   } else if (prop == VTERM_PROP_ALTSCREEN) {
     // Switch between primary and alternate screen
     self->switchToScreen(val->boolean != 0);
@@ -3560,6 +3565,37 @@ bool GPUScreenImpl::handleOSCSequence(const std::string &sequence,
     if (response)
       *response = OscResponse::error("Invalid vendor ID");
     return false;
+  }
+
+  // Handle vendor-specific commands (666667-666671) directly
+  if (vendorId >= 666667 && vendorId <= 666671) {
+    std::string payload = sequence.substr(semicolon + 1);
+
+    // Effect commands (666667 = pre-effect, 666668 = post-effect, 666669 = effect)
+    if (vendorId == 666667 || vendorId == 666668 || vendorId == 666669) {
+      handleEffectOSC(vendorId, payload);
+      return true;
+    }
+
+    // GPU stats command (666670)
+    if (vendorId == 666670) {
+      if (response) {
+        *response = buildGpuStatsText();
+      }
+      return true;
+    }
+
+    // FPS command (666671)
+    if (vendorId == 666671) {
+      try {
+        uint32_t fps = std::clamp(std::stoi(payload), 1, 240);
+        yinfo("OSC 666671: Setting frame rate to {} FPS", fps);
+        (*base::EventLoop::instance())->dispatch(base::Event::setFrameRateEvent(fps));
+      } catch (...) {
+        yerror("OSC 666671: Invalid FPS value '{}'", payload);
+      }
+      return true;
+    }
   }
 
   if (vendorId != YETTY_OSC_VENDOR_ID) {
@@ -4337,6 +4373,28 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
       if (mx >= _viewportX && mx < _viewportX + _viewportWidth &&
           my >= _viewportY && my < _viewportY + _viewportHeight) {
 
+        // Forward mouse to vterm if app has enabled mouse tracking
+        if (_mouseTrackingMode != 0 && _vterm) {
+          float localX = mx - _viewportX;
+          float localY = my - _viewportY;
+          int col = static_cast<int>(localX / getCellWidthF());
+          int row = static_cast<int>(localY / getCellHeightF());
+          col = std::max(0, std::min(col, static_cast<int>(_cols) - 1));
+          row = std::max(0, std::min(row, static_cast<int>(_rows) - 1));
+          // GLFW: 0=left,1=right,2=middle → vterm: 1=left,2=middle,3=right
+          int vtButton = (button == 0) ? 1 : (button == 1) ? 3 : 2;
+          VTermModifier vtMods = VTERM_MOD_NONE;
+          if (event.mouse.mods & 0x0001)
+            vtMods = static_cast<VTermModifier>(vtMods | VTERM_MOD_SHIFT);
+          if (event.mouse.mods & 0x0002)
+            vtMods = static_cast<VTermModifier>(vtMods | VTERM_MOD_CTRL);
+          if (event.mouse.mods & 0x0004)
+            vtMods = static_cast<VTermModifier>(vtMods | VTERM_MOD_ALT);
+          vterm_mouse_move(_vterm, row, col, vtMods);
+          vterm_mouse_button(_vterm, vtButton, true, vtMods);
+          return Ok(true);
+        }
+
         // Right-click: open context menu
         if (button == 1 && _ctx.imguiManager) {  // GLFW_MOUSE_BUTTON_RIGHT = 1
           // Calculate cell position from mouse coordinates
@@ -4479,6 +4537,13 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
         col = std::max(0, std::min(col, static_cast<int>(_cols) - 1));
         row = std::max(0, std::min(row, static_cast<int>(_rows) - 1));
 
+        // Forward mouse move to vterm if app has enabled mouse tracking
+        if (_mouseTrackingMode != 0 && _vterm) {
+          VTermModifier vtMods = VTERM_MOD_NONE;
+          vterm_mouse_move(_vterm, row, col, vtMods);
+          return Ok(true);
+        }
+
         if (_ctx.imguiManager) {
           Cell cell = getCell(row, col);
           char statusBuf[256];
@@ -4523,6 +4588,27 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
       loop->dispatch(base::Event::setCursorEvent(CURSOR_CROSSHAIR));
       return Ok(true);
     }
+    // Forward mouse up to vterm if app has enabled mouse tracking
+    if (_mouseTrackingMode != 0 && _vterm) {
+      float localX = event.mouse.x - _viewportX;
+      float localY = event.mouse.y - _viewportY;
+      int col = static_cast<int>(localX / getCellWidthF());
+      int row = static_cast<int>(localY / getCellHeightF());
+      col = std::max(0, std::min(col, static_cast<int>(_cols) - 1));
+      row = std::max(0, std::min(row, static_cast<int>(_rows) - 1));
+      int vtButton = (event.mouse.button == 0) ? 1 : (event.mouse.button == 1) ? 3 : 2;
+      VTermModifier vtMods = VTERM_MOD_NONE;
+      if (event.mouse.mods & 0x0001)
+        vtMods = static_cast<VTermModifier>(vtMods | VTERM_MOD_SHIFT);
+      if (event.mouse.mods & 0x0002)
+        vtMods = static_cast<VTermModifier>(vtMods | VTERM_MOD_CTRL);
+      if (event.mouse.mods & 0x0004)
+        vtMods = static_cast<VTermModifier>(vtMods | VTERM_MOD_ALT);
+      vterm_mouse_move(_vterm, row, col, vtMods);
+      vterm_mouse_button(_vterm, vtButton, false, vtMods);
+      return Ok(true);
+    }
+
     // Finalize text selection on left button release
     if (_selecting && event.mouse.button == 0) {
       _selecting = false;
@@ -4560,6 +4646,38 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
     if (_viewportWidth > 0 && _viewportHeight > 0) {
       if (mx >= _viewportX && mx < _viewportX + _viewportWidth &&
           my >= _viewportY && my < _viewportY + _viewportHeight) {
+
+        // Forward scroll to vterm if app has enabled mouse tracking
+        if (_mouseTrackingMode != 0 && _vterm) {
+          float localX = mx - _viewportX;
+          float localY = my - _viewportY;
+          int col = static_cast<int>(localX / getCellWidthF());
+          int row = static_cast<int>(localY / getCellHeightF());
+          col = std::max(0, std::min(col, static_cast<int>(_cols) - 1));
+          row = std::max(0, std::min(row, static_cast<int>(_rows) - 1));
+          VTermModifier vtMods = VTERM_MOD_NONE;
+          if (event.scroll.mods & 0x0001)
+            vtMods = static_cast<VTermModifier>(vtMods | VTERM_MOD_SHIFT);
+          if (event.scroll.mods & 0x0002)
+            vtMods = static_cast<VTermModifier>(vtMods | VTERM_MOD_CTRL);
+          if (event.scroll.mods & 0x0004)
+            vtMods = static_cast<VTermModifier>(vtMods | VTERM_MOD_ALT);
+          vterm_mouse_move(_vterm, row, col, vtMods);
+          // vterm button 4=scroll up, 5=scroll down
+          int scrollLines = static_cast<int>(event.scroll.dy);
+          if (scrollLines > 0) {
+            for (int i = 0; i < scrollLines; i++) {
+              vterm_mouse_button(_vterm, 4, true, vtMods);
+              vterm_mouse_button(_vterm, 4, false, vtMods);
+            }
+          } else if (scrollLines < 0) {
+            for (int i = 0; i < -scrollLines; i++) {
+              vterm_mouse_button(_vterm, 5, true, vtMods);
+              vterm_mouse_button(_vterm, 5, false, vtMods);
+            }
+          }
+          return Ok(true);
+        }
 
         // Only forward scroll to the focused card (not just any card under mouse)
         if (_focusedCardId != 0) {

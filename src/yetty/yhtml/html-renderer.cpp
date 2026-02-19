@@ -8,7 +8,8 @@ namespace yetty::card {
 HtmlRenderResult renderHtmlToBuffer(
     const std::string& html, std::shared_ptr<YDrawBuffer> buffer,
     float fontSize, float viewWidth,
-    HttpFetcher* fetcher)
+    HttpFetcher* fetcher,
+    const char* userStyles)
 {
     HtmlRenderResult result;
 
@@ -27,7 +28,8 @@ HtmlRenderResult renderHtmlToBuffer(
     result.container->setViewportSize(viewW, viewH);
 
     result.document = litehtml::document::createFromString(
-        html.c_str(), result.container.get());
+        html.c_str(), result.container.get(), litehtml::master_css,
+        userStyles ? userStyles : "");
 
     if (!result.document) {
         ywarn("renderHtmlToBuffer: failed to parse HTML");

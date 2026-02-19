@@ -1201,6 +1201,13 @@ else()
             enable_testing()
             add_subdirectory(test/ut/yhtml)
         endif()
+
+        # YBrowser tests (mouse click chain, form submission, viewport)
+        option(YETTY_BUILD_YBROWSER_TESTS "Build YBrowser click chain tests" ON)
+        if(YETTY_BUILD_YBROWSER_TESTS)
+            enable_testing()
+            add_subdirectory(test/ut/ybrowser)
+        endif()
     endif()
 
     # Plugin tester disabled - was using yetty_core which is removed

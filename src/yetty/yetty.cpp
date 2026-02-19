@@ -779,7 +779,6 @@ Result<void> YettyImpl::initCallbacks() noexcept {
 
     // Mouse button callback
     _platform->setMouseButtonCallback([this](MouseButton button, bool pressed, int mods) {
-        (void)mods;
         // Get current mouse position for event dispatch
         // Note: we track mouse position via move callback, but for now get from window size
         // The actual position is tracked in mouse move events
@@ -800,11 +799,11 @@ Result<void> YettyImpl::initCallbacks() noexcept {
         if (pressed) {
             ydebug("MouseButtonCallback: button={} PRESS at ({}, {})",
                    buttonInt, _lastMouseX, _lastMouseY);
-            loop->dispatch(base::Event::mouseDown(_lastMouseX, _lastMouseY, buttonInt));
+            loop->dispatch(base::Event::mouseDown(_lastMouseX, _lastMouseY, buttonInt, mods));
         } else {
             ydebug("MouseButtonCallback: button={} RELEASE at ({}, {})",
                    buttonInt, _lastMouseX, _lastMouseY);
-            loop->dispatch(base::Event::mouseUp(_lastMouseX, _lastMouseY, buttonInt));
+            loop->dispatch(base::Event::mouseUp(_lastMouseX, _lastMouseY, buttonInt, mods));
         }
     });
 

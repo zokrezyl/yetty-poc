@@ -1,4 +1,6 @@
 add_subdirectory(gpu-info)
+add_subdirectory(ydraw-maze)
+add_subdirectory(ydraw-zoo)
 
 # PDF to YDraw binary converter (requires pdfio from ypdf card)
 if(YETTY_CARD_YPDF)
@@ -9,6 +11,7 @@ endif()
 if(YETTY_CARD_YHTML)
     add_subdirectory(html2ydraw)
     add_subdirectory(yhtml-machine)
+    add_subdirectory(ybrowser)
 endif()
 
 # Ymery test tool - standalone ImGui/OpenGL3 app that loads YAML layouts

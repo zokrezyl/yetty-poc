@@ -49,6 +49,12 @@ public:
     using CursorCallback = std::function<void(const std::string& cursor)>;
     virtual void setCursorCallback(CursorCallback cb) = 0;
 
+    // Callback when a form is submitted (e.g. <input type="submit"> clicked)
+    using FormSubmitCallback = std::function<void(const std::string& action,
+                                                   const std::string& method,
+                                                   const std::string& formData)>;
+    virtual void setFormSubmitCallback(FormSubmitCallback cb) = 0;
+
 protected:
     HtmlContainer() = default;
 };

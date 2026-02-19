@@ -10,12 +10,85 @@
 #include <cstring>
 #include <unordered_map>
 #include <stb_image.h>
+#include <litehtml/html_tag.h>
 
 #ifdef YETTY_USE_FONTCONFIG
 #include <fontconfig/fontconfig.h>
 #endif
 
 namespace yetty::card {
+
+//=============================================================================
+// Forward declare so el_form_submit can reference it
+//=============================================================================
+class HtmlContainerImpl;
+
+//=============================================================================
+// URL-encode a string for form data
+//=============================================================================
+static std::string urlEncode(const std::string& s) {
+    std::string encoded;
+    for (unsigned char c : s) {
+        if (std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
+            encoded += static_cast<char>(c);
+        } else if (c == ' ') {
+            encoded += '+';
+        } else {
+            char hex[4];
+            std::snprintf(hex, sizeof(hex), "%%%02X", c);
+            encoded += hex;
+        }
+    }
+    return encoded;
+}
+
+//=============================================================================
+// Collect form data from all <input> children of a <form> element
+//=============================================================================
+static void collectFormFields(const std::shared_ptr<litehtml::element>& el,
+                              const litehtml::element* clickedSubmit,
+                              std::string& out) {
+    if (el->tag() == litehtml::_input_) {
+        const char* name = el->get_attr("name");
+        if (!name || !*name) return;  // skip unnamed inputs
+
+        const char* type = el->get_attr("type");
+        std::string typeStr = type ? type : "text";
+        for (auto& c : typeStr) c = static_cast<char>(std::tolower(c));
+
+        if (typeStr == "submit") {
+            // Only include the clicked submit button's name=value
+            if (el.get() == clickedSubmit) {
+                const char* value = el->get_attr("value");
+                if (!out.empty()) out += '&';
+                out += urlEncode(name) + "=" + urlEncode(value ? value : "");
+            }
+        } else if (typeStr == "hidden" || typeStr == "text" ||
+                   typeStr == "email" || typeStr == "password") {
+            const char* value = el->get_attr("value");
+            if (!out.empty()) out += '&';
+            out += urlEncode(name) + "=" + urlEncode(value ? value : "");
+        }
+        return;  // <input> elements don't have children to traverse
+    }
+
+    for (auto& child : el->children()) {
+        collectFormFields(child, clickedSubmit, out);
+    }
+}
+
+//=============================================================================
+// Custom element for form submit: <button> and <input type="submit">
+// On click, collects parent <form> data and triggers form submit callback.
+//=============================================================================
+class el_form_submit : public litehtml::html_tag {
+public:
+    explicit el_form_submit(const std::shared_ptr<litehtml::document>& doc)
+        : litehtml::html_tag(doc) {}
+
+    // Defined after HtmlContainerImpl so we can call submitForm()
+    void on_click() override;
+};
 
 //=============================================================================
 // Image dimension parsers — extract width/height from raw image data
@@ -120,6 +193,20 @@ public:
 
     void setCursorCallback(CursorCallback cb) override {
         _cursorCb = std::move(cb);
+    }
+
+    void setFormSubmitCallback(FormSubmitCallback cb) override {
+        _formSubmitCb = std::move(cb);
+    }
+
+    // Called by el_form_submit::on_click()
+    void submitForm(const std::string& action, const std::string& method,
+                    const std::string& formData) {
+        yinfo("HtmlContainer::submitForm: action={} method={} data={}bytes",
+              action, method, formData.size());
+        if (_formSubmitCb) {
+            _formSubmitCb(action, method, formData);
+        }
     }
 
     //=========================================================================
@@ -395,10 +482,25 @@ public:
     }
 
     std::shared_ptr<litehtml::element> create_element(
-        const char* /*tag_name*/,
-        const litehtml::string_map& /*attributes*/,
-        const std::shared_ptr<litehtml::document>& /*doc*/) override
+        const char* tag_name,
+        const litehtml::string_map& attributes,
+        const std::shared_ptr<litehtml::document>& doc) override
     {
+        if (!tag_name) return nullptr;
+
+        if (strcmp(tag_name, "button") == 0) {
+            return std::make_shared<el_form_submit>(doc);
+        }
+        if (strcmp(tag_name, "input") == 0) {
+            auto it = attributes.find("type");
+            if (it != attributes.end()) {
+                std::string type = it->second;
+                for (auto& c : type) c = static_cast<char>(std::tolower(c));
+                if (type == "submit") {
+                    return std::make_shared<el_form_submit>(doc);
+                }
+            }
+        }
         return nullptr;
     }
 
@@ -737,12 +839,62 @@ private:
 
     NavigateCallback _navigateCb;
     CursorCallback _cursorCb;
+    FormSubmitCallback _formSubmitCb;
 
     std::vector<FontInfo*> _fonts;
     std::unordered_map<std::string, std::string> _fontPathCache;  // key -> ttf path
     std::unordered_map<std::string, std::pair<int, font::RawFont::Ptr>> _fontCache;  // ttf path -> (fontId, rawFont)
     std::unordered_map<std::string, ImageInfo> _imageCache;
 };
+
+//=============================================================================
+// el_form_submit::on_click — defined here because it needs HtmlContainerImpl
+//=============================================================================
+
+void el_form_submit::on_click() {
+    // Find parent <form>
+    std::shared_ptr<litehtml::element> formEl;
+    auto el = parent();
+    while (el) {
+        if (el->tag() == litehtml::_form_) {
+            formEl = el;
+            break;
+        }
+        el = el->parent();
+    }
+
+    if (!formEl) {
+        yinfo("el_form_submit: no parent <form> found");
+        // Check for formaction attribute on the element itself
+        const char* formaction = get_attr("formaction");
+        if (formaction && *formaction) {
+            get_document()->container()->on_anchor_click(formaction, shared_from_this());
+            return;
+        }
+        html_tag::on_click();
+        return;
+    }
+
+    const char* action = formEl->get_attr("action");
+    if (!action || !*action) {
+        yinfo("el_form_submit: form has no action");
+        html_tag::on_click();
+        return;
+    }
+
+    const char* method = formEl->get_attr("method");
+    std::string methodStr = method ? method : "GET";
+    for (auto& c : methodStr) c = static_cast<char>(std::toupper(c));
+
+    // Collect all form field data
+    std::string formData;
+    collectFormFields(formEl, this, formData);
+
+    yinfo("el_form_submit: action={} method={} data={}", action, methodStr, formData);
+
+    auto* ctr = static_cast<HtmlContainerImpl*>(get_document()->container());
+    ctr->submitForm(action, methodStr, formData);
+}
 
 //=============================================================================
 // Factory
