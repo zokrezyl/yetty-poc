@@ -9,7 +9,11 @@ set -e
 cd "$(dirname "$0")/../.."
 PROJECT_ROOT="$(pwd)"
 TOYBOX_SRC="$PROJECT_ROOT/tmp/toybox"
-BUILD_DIR="$PROJECT_ROOT/build-webasm-release"
+
+if [ -z "$BUILD_DIR" ]; then
+    echo "Error: BUILD_DIR not set. Must be called from CMake."
+    exit 1
+fi
 
 if [ ! -d "$TOYBOX_SRC" ]; then
     echo "Error: Toybox source not found at $TOYBOX_SRC"

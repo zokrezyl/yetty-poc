@@ -28,9 +28,9 @@ BUILD_DIR_ANDROID_WGPU_RELEASE := build-android-wgpu-release
 BUILD_DIR_ANDROID_DAWN_DEBUG := build-android-dawn-debug
 BUILD_DIR_ANDROID_DAWN_RELEASE := build-android-dawn-release
 
-# WebAssembly uses browser native WebGPU (no backend choice)
-BUILD_DIR_WEBASM_DEBUG := build-webasm-debug
-BUILD_DIR_WEBASM_RELEASE := build-webasm-release
+# WebAssembly uses browser native WebGPU (Dawn in Chrome)
+BUILD_DIR_WEBASM_DAWN_DEBUG := build-webasm-dawn-debug
+BUILD_DIR_WEBASM_DAWN_RELEASE := build-webasm-dawn-release
 
 # Parallel jobs (override with: make build-... PARALLEL_JOBS=30)
 PARALLEL_JOBS ?=
@@ -218,43 +218,48 @@ test-android-dawn-release: build-android-dawn-release ## Install and run Android
 	adb shell am start -n com.yetty.terminal/android.app.NativeActivity
 
 #=============================================================================
-# WebAssembly (browser native WebGPU - no backend choice)
+# WebAssembly (browser native WebGPU - Dawn in Chrome)
 #=============================================================================
 
-.PHONY: config-webasm-debug
-config-webasm-debug: ## Configure WebAssembly debug build
+.PHONY: config-webasm-dawn-debug
+config-webasm-dawn-debug: ## Configure WebAssembly debug build
 	nix develop .#web --command bash -c '\
 		export EMCC_SKIP_SANITY_CHECK=1 && \
-		emcmake cmake -B $(BUILD_DIR_WEBASM_DEBUG) $(CMAKE_GENERATOR) \
+		emcmake cmake -B $(BUILD_DIR_WEBASM_DAWN_DEBUG) $(CMAKE_GENERATOR) \
 			-DCMAKE_BUILD_TYPE=Debug'
 
-.PHONY: config-webasm-release
-config-webasm-release: ## Configure WebAssembly release build
+.PHONY: config-webasm-dawn-release
+config-webasm-dawn-release: ## Configure WebAssembly release build
 	nix develop .#web --command bash -c '\
 		export EMCC_SKIP_SANITY_CHECK=1 && \
-		emcmake cmake -B $(BUILD_DIR_WEBASM_RELEASE) $(CMAKE_GENERATOR) \
-			-DCMAKE_BUILD_TYPE=Release \
-			-DCMAKE_EXE_LINKER_FLAGS="-O2"'
+		emcmake cmake -B $(BUILD_DIR_WEBASM_DAWN_RELEASE) $(CMAKE_GENERATOR) \
+			-DCMAKE_BUILD_TYPE=MinSizeRel'
 
-.PHONY: build-webasm-debug
-build-webasm-debug: ## Build WebAssembly debug
-	@if [ ! -f "$(BUILD_DIR_WEBASM_DEBUG)/build.ninja" ]; then $(MAKE) config-webasm-debug; fi
-	nix develop .#web --command bash -c 'cmake --build $(BUILD_DIR_WEBASM_DEBUG) $(CMAKE_PARALLEL)'
-	@cp build-tools/web/index.html build-tools/web/serve.py $(BUILD_DIR_WEBASM_DEBUG)/
+.PHONY: build-webasm-dawn-debug
+build-webasm-dawn-debug: ## Build WebAssembly debug
+	@if [ ! -f "$(BUILD_DIR_WEBASM_DAWN_DEBUG)/build.ninja" ]; then $(MAKE) config-webasm-dawn-debug; fi
+	nix develop .#web --command bash -c 'cmake --build $(BUILD_DIR_WEBASM_DAWN_DEBUG) --target yetty $(CMAKE_PARALLEL)'
+	@if [ ! -f "$(BUILD_DIR_WEBASM_DAWN_DEBUG)/toybox.js" ]; then \
+		nix develop .#web --command bash -c 'BUILD_DIR=$(CURDIR)/$(BUILD_DIR_WEBASM_DAWN_DEBUG) bash build-tools/web/build-toybox-minimal.sh'; \
+	fi
+	@cp build-tools/web/index.html build-tools/web/serve.py $(BUILD_DIR_WEBASM_DAWN_DEBUG)/
 
-.PHONY: build-webasm-release
-build-webasm-release: ## Build WebAssembly release
-	@if [ ! -f "$(BUILD_DIR_WEBASM_RELEASE)/build.ninja" ]; then $(MAKE) config-webasm-release; fi
-	nix develop .#web --command bash -c 'cmake --build $(BUILD_DIR_WEBASM_RELEASE) $(CMAKE_PARALLEL)'
-	@cp build-tools/web/index.html build-tools/web/serve.py $(BUILD_DIR_WEBASM_RELEASE)/
+.PHONY: build-webasm-dawn-release
+build-webasm-dawn-release: ## Build WebAssembly release (CDB generation handled by CMake)
+	@if [ ! -f "$(BUILD_DIR_WEBASM_DAWN_RELEASE)/build.ninja" ]; then $(MAKE) config-webasm-dawn-release; fi
+	nix develop .#web --command bash -c 'cmake --build $(BUILD_DIR_WEBASM_DAWN_RELEASE) --target yetty $(CMAKE_PARALLEL)'
+	@if [ ! -f "$(BUILD_DIR_WEBASM_DAWN_RELEASE)/toybox.js" ]; then \
+		nix develop .#web --command bash -c 'BUILD_DIR=$(CURDIR)/$(BUILD_DIR_WEBASM_DAWN_RELEASE) bash build-tools/web/build-toybox-minimal.sh'; \
+	fi
+	@cp build-tools/web/index.html build-tools/web/serve.py $(BUILD_DIR_WEBASM_DAWN_RELEASE)/
 
-.PHONY: run-webasm-debug
-run-webasm-debug: build-webasm-debug ## Serve WebAssembly debug build
-	python3 $(BUILD_DIR_WEBASM_DEBUG)/serve.py 8000 $(BUILD_DIR_WEBASM_DEBUG)
+.PHONY: run-webasm-dawn-debug
+run-webasm-dawn-debug: build-webasm-dawn-debug ## Serve WebAssembly debug build
+	python3 $(BUILD_DIR_WEBASM_DAWN_DEBUG)/serve.py 8000 $(BUILD_DIR_WEBASM_DAWN_DEBUG)
 
-.PHONY: run-webasm-release
-run-webasm-release: build-webasm-release ## Serve WebAssembly release build
-	python3 $(BUILD_DIR_WEBASM_RELEASE)/serve.py 8000 $(BUILD_DIR_WEBASM_RELEASE)
+.PHONY: run-webasm-dawn-release
+run-webasm-dawn-release: build-webasm-dawn-release ## Serve WebAssembly release build
+	python3 $(BUILD_DIR_WEBASM_DAWN_RELEASE)/serve.py 8000 $(BUILD_DIR_WEBASM_DAWN_RELEASE)
 
 
 #=============================================================================
@@ -268,7 +273,7 @@ clean: ## Clean all build directories
 	       $(BUILD_DIR_DESKTOP_DAWN_ASAN) \
 	       $(BUILD_DIR_ANDROID_WGPU_DEBUG) $(BUILD_DIR_ANDROID_WGPU_RELEASE) \
 	       $(BUILD_DIR_ANDROID_DAWN_DEBUG) $(BUILD_DIR_ANDROID_DAWN_RELEASE) \
-	       $(BUILD_DIR_WEBASM_DEBUG) $(BUILD_DIR_WEBASM_RELEASE) \
+	       $(BUILD_DIR_WEBASM_DAWN_DEBUG) $(BUILD_DIR_WEBASM_DAWN_RELEASE) \
 	       build-desktop build-android build-webasm \
 	       build-desktop-debug build-desktop-release \
 	       build-android-debug build-android-release

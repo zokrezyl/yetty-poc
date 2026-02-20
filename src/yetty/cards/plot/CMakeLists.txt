@@ -1,10 +1,8 @@
-target_sources(yetty PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/plot.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/plot.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/plot-sampler-provider.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/plot-sampler-provider.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/plot-transformer-provider.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/plot-transformer-provider.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/plot-renderer-provider.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/plot-renderer-provider.cpp
+add_library(yetty_card_plot STATIC
+    plot.cpp
+    plot-sampler-provider.cpp
+    plot-transformer-provider.cpp
+    plot-renderer-provider.cpp
 )
+target_include_directories(yetty_card_plot PUBLIC ${YETTY_ROOT}/include ${YETTY_ROOT}/src)
+target_link_libraries(yetty_card_plot PUBLIC glm::glm webgpu yaml-cpp ytrace::ytrace yetty_yecho yetty_yast)

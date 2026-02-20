@@ -54,7 +54,7 @@
 </head>
 <body>
     <div id="canvas-container">
-        <canvas id="canvas"></canvas>
+        <canvas id="canvas" width="1024" height="768"></canvas>
         <div id="loading">
             <div class="spinner"></div>
             <div>Loading WebGPU...</div>
@@ -313,7 +313,12 @@
                 }
 
                 status.textContent = 'Requesting WebGPU device...';
-                const device = await adapter.requestDevice();
+                const device = await adapter.requestDevice({
+                    requiredLimits: {
+                        maxStorageBuffersPerShaderStage: 10,
+                        maxTextureDimension2D: Math.min(16384, adapter.limits.maxTextureDimension2D),
+                    }
+                });
                 if (!device) {
                     status.textContent = 'Failed to get WebGPU device';
                     return false;
@@ -349,6 +354,7 @@
 
         var Module = {
             canvas: document.getElementById('canvas'),
+            ENV: { YTRACE_DEFAULT_ON: 'yes' },
             print: function(text) { console.log('[yetty]', text); },
             printErr: function(text) { console.error('[yetty]', text); },
             onRuntimeInitialized: function() {

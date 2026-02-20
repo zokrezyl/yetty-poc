@@ -3,12 +3,12 @@
 
 # Generate glyph registry header at configure time
 set(GLYPH_REGISTRY_HEADER "${CMAKE_CURRENT_BINARY_DIR}/glyph-registry-generated.h")
-set(SHADER_DIR "${CMAKE_SOURCE_DIR}/src/yetty/shaders")
+set(SHADER_DIR "${YETTY_ROOT}/src/yetty/shaders")
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
 execute_process(
-    COMMAND ${Python3_EXECUTABLE} 
+    COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/gen-glyph-registry.py
         ${SHADER_DIR}
         ${GLYPH_REGISTRY_HEADER}
@@ -24,19 +24,30 @@ else()
     message(STATUS "Glyph registry: ${GEN_OUTPUT}")
 endif()
 
-add_executable(yecho
-    yecho.cpp
+# Library for use by yetty
+add_library(yetty_yecho STATIC
     yecho-parser.cpp
 )
 
-target_include_directories(yecho PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/src/yetty/yecho
-    ${CMAKE_CURRENT_BINARY_DIR}  # For generated header
+target_include_directories(yetty_yecho PUBLIC
+    ${YETTY_ROOT}/include
+    ${YETTY_ROOT}/src
+    ${CMAKE_CURRENT_BINARY_DIR}
 )
 
-target_link_libraries(yecho PRIVATE
-    args
-)
+# Standalone yecho executable (desktop only)
+if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
+    add_executable(yecho
+        yecho.cpp
+        yecho-parser.cpp
+    )
 
-target_compile_features(yecho PRIVATE cxx_std_23)
+    target_include_directories(yecho PRIVATE
+        ${YETTY_ROOT}/include
+        ${YETTY_ROOT}/src/yetty/yecho
+        ${CMAKE_CURRENT_BINARY_DIR}
+    )
+
+    target_link_libraries(yecho PRIVATE args)
+    target_compile_features(yecho PRIVATE cxx_std_23)
+endif()

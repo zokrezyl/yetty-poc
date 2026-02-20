@@ -1,4 +1,3 @@
-target_sources(yetty PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/ydraw.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/ydraw.cpp
-)
+add_library(yetty_card_ydraw STATIC ydraw.cpp)
+target_include_directories(yetty_card_ydraw PUBLIC ${YETTY_ROOT}/include ${YETTY_ROOT}/src)
+target_link_libraries(yetty_card_ydraw PUBLIC glm::glm webgpu yaml-cpp ytrace::ytrace lz4_static yetty_ydraw)

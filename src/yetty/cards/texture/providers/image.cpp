@@ -2,7 +2,6 @@
 #include <yetty/yetty-context.h>
 #include <ytrace/ytrace.hpp>
 
-#define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
 #include <cstring>

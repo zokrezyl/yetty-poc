@@ -1,9 +1,7 @@
-# Shared PDF rendering logic (used by ypdf card and pdf2ydraw tool)
-target_sources(yetty PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/pdf-content-parser.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/pdf-content-parser.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/pdf-renderer.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/pdf-renderer.cpp
+# Shared PDF rendering logic (used by ypdf card)
+add_library(yetty_ypdf STATIC
+    pdf-content-parser.cpp
+    pdf-renderer.cpp
 )
-
-target_include_directories(yetty PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(yetty_ypdf PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${YETTY_ROOT}/include ${YETTY_ROOT}/src)
+target_link_libraries(yetty_ypdf PUBLIC ytrace::ytrace yetty_ydraw yetty_font pdfio_lib)

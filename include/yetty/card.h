@@ -221,7 +221,7 @@ public:
     virtual uint32_t heightCells() const = 0;
 
     // Card type name
-    virtual const char* typeName() const = 0;
+    const char* typeName() const override = 0;
 
     // User-assigned name for RPC identification (optional)
     virtual const std::string& name() const = 0;

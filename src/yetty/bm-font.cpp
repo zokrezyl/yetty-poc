@@ -70,7 +70,13 @@ Result<void> BmFont::findFont() noexcept {
 }
 
 Result<void> BmFont::loadCommonGlyphs() noexcept {
-    yinfo("BmFont: stub - GPU resources created lazily");
+    // Create GPU resources immediately for stub (no font to load, but still need valid resources)
+    if (!_gpuResourcesCreated) {
+        if (auto res = createGPUResources(); !res) {
+            return res;
+        }
+    }
+    yinfo("BmFont: stub - GPU resources created");
     return Ok();
 }
 

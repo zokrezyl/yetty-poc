@@ -10,7 +10,7 @@ target_link_libraries(msdf-gen-cdb PRIVATE
 )
 
 target_include_directories(msdf-gen-cdb PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
+    ${YETTY_ROOT}/include
 )
 
 # Copy shader next to executable

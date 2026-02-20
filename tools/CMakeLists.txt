@@ -3,20 +3,17 @@ add_subdirectory(ydraw-maze)
 add_subdirectory(ydraw-zoo)
 add_subdirectory(ymux)
 
-# PDF to YDraw binary converter (requires pdfio from ypdf card)
-if(YETTY_CARD_YPDF)
+# PDF and HTML tools (desktop only - require pdfio, litehtml)
+if(NOT YETTY_ANDROID AND NOT EMSCRIPTEN)
     add_subdirectory(pdf2ydraw)
-endif()
-
-# HTML to YDraw binary converter (requires litehtml from yhtml card)
-if(YETTY_CARD_YHTML)
     add_subdirectory(html2ydraw)
     add_subdirectory(yhtml-machine)
     add_subdirectory(ybrowser)
 endif()
 
-# Ymery test tool - standalone ImGui/OpenGL3 app that loads YAML layouts
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/ymery/test.cpp")
+# Ymery test tool - standalone ImGui/OpenGL3 app that loads YAML layouts (optional)
+find_package(OpenGL QUIET)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/ymery/test.cpp" AND OpenGL_FOUND)
 add_executable(ymery-test
     ymery/test.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/ymery/types.cpp
@@ -48,8 +45,6 @@ target_include_directories(ymery-test PRIVATE
     ${imgui_SOURCE_DIR}
     ${imgui_SOURCE_DIR}/backends
 )
-
-find_package(OpenGL REQUIRED)
 
 target_link_libraries(ymery-test PRIVATE
     glfw

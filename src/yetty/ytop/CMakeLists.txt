@@ -9,7 +9,7 @@ target_link_libraries(ytop PRIVATE
 )
 
 target_include_directories(ytop PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
+    ${YETTY_ROOT}/include
 )
 
 target_compile_features(ytop PRIVATE cxx_std_23)

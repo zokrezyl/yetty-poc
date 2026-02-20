@@ -1,8 +1,14 @@
-target_sources(yetty PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/ydraw-builder.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ydraw-buffer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/animation.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/animation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/yaml2ydraw.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/yaml2ydraw.cpp
+# ydraw library
+add_library(yetty_ydraw STATIC
+    ydraw-builder.cpp
+    ydraw-buffer.cpp
+    animation.cpp
+    yaml2ydraw.cpp
 )
+
+target_include_directories(yetty_ydraw PUBLIC
+    ${YETTY_ROOT}/include
+    ${YETTY_ROOT}/src
+)
+
+target_link_libraries(yetty_ydraw PUBLIC yaml-cpp glm::glm webgpu ytrace::ytrace)

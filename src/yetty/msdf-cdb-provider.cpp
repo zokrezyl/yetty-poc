@@ -7,6 +7,14 @@
 #include <cmath>
 #include <cstring>
 
+#ifndef CMAKE_SOURCE_DIR
+#define CMAKE_SOURCE_DIR "."
+#endif
+
+#ifndef YETTY_SHADERS_DIR
+#define YETTY_SHADERS_DIR CMAKE_SOURCE_DIR "/src/yetty/shaders"
+#endif
+
 // CPU provider — msdfgen library (internal, not CDB-dependent)
 #include "msdf-gen/generator.h"
 
@@ -171,7 +179,7 @@ Result<void> GpuMsdfCdbProvider::generate(const MsdfCdbConfig& config) {
     }
 
     // Set shader path
-    std::string shaderPath = std::string(CMAKE_SOURCE_DIR) + "/src/yetty/shaders/msdf_gen.wgsl";
+    std::string shaderPath = std::string(YETTY_SHADERS_DIR) + "/msdf_gen.wgsl";
     msdf::setShaderPath(shaderPath);
 
     msdf::Context ctx(_device, _instance);

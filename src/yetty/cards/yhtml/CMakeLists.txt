@@ -1,5 +1,4 @@
 # YHtml Card - HTML/CSS rendering via litehtml + YDrawBase SDF primitives
-# Gated behind YETTY_CARD_YHTML option (set in parent CMakeLists.txt)
 
 CPMAddPackage(
     NAME litehtml
@@ -10,12 +9,9 @@ CPMAddPackage(
 )
 
 # cpr builds libcurl from source. Force-disable optional curl features
-# that pull in system libraries curl can't cleanly export.
-# These must be set before CPMAddPackage(cpr) because cpr adds curl as
-# a subdirectory — CPM OPTIONS only apply to the direct package.
 find_package(OpenSSL REQUIRED)
 
-# Save and restore ZLIB state to hide our zlib from curl.
+# Save and restore ZLIB state to hide our zlib from curl
 set(_SAVE_ZLIB_FOUND ${ZLIB_FOUND})
 set(_SAVE_ZLIB_LIBRARY ${ZLIB_LIBRARY})
 set(ZLIB_FOUND FALSE CACHE BOOL "" FORCE)
@@ -46,12 +42,9 @@ if(_SAVE_ZLIB_LIBRARY)
     set(ZLIB_LIBRARY ${_SAVE_ZLIB_LIBRARY} CACHE STRING "" FORCE)
 endif()
 
-add_subdirectory(${CMAKE_SOURCE_DIR}/src/yetty/yhtml yhtml)
+add_subdirectory(${YETTY_ROOT}/src/yetty/yhtml yhtml)
 
-target_sources(yetty PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/yhtml.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/yhtml.cpp
-)
-
-target_link_libraries(yetty PRIVATE litehtml cpr::cpr)
-target_compile_definitions(yetty PRIVATE YETTY_CARD_YHTML=1)
+add_library(yetty_card_yhtml STATIC yhtml.cpp)
+target_include_directories(yetty_card_yhtml PUBLIC ${YETTY_ROOT}/include ${YETTY_ROOT}/src)
+target_link_libraries(yetty_card_yhtml PUBLIC glm::glm webgpu yaml-cpp ytrace::ytrace yetty_yhtml litehtml cpr::cpr)
+target_compile_definitions(yetty_card_yhtml PUBLIC YETTY_CARD_YHTML=1)

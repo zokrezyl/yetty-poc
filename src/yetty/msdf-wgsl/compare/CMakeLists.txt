@@ -6,5 +6,5 @@ target_link_libraries(msdf-compare-cdb PRIVATE
 )
 
 target_include_directories(msdf-compare-cdb PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
+    ${YETTY_ROOT}/include
 )

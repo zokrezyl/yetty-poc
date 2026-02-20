@@ -9,7 +9,7 @@ target_link_libraries(msdf-render-atlas PRIVATE
 )
 
 target_include_directories(msdf-render-atlas PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
+    ${YETTY_ROOT}/include
 )
 
 # Copy shader next to executable

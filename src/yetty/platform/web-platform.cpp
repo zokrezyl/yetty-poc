@@ -1,4 +1,6 @@
 #include <yetty/platform.h>
+#include <yetty/gpu-screen-manager.h>
+#include <yetty/gpu-screen.h>
 #include <ytrace/ytrace.hpp>
 
 #if defined(__EMSCRIPTEN__)
@@ -63,9 +65,9 @@ public:
     }
 
     WGPUSurface createWGPUSurface(WGPUInstance instance) override {
-        WGPUSurfaceSourceCanvasHTMLSelector_Emscripten canvasSource = {};
-        canvasSource.chain.sType = WGPUSType_SurfaceSourceCanvasHTMLSelector_Emscripten;
-        canvasSource.selector = "#canvas";
+        WGPUEmscriptenSurfaceSourceCanvasHTMLSelector canvasSource = {};
+        canvasSource.chain.sType = WGPUSType_EmscriptenSurfaceSourceCanvasHTMLSelector;
+        canvasSource.selector = { .data = "#canvas", .length = 7 };
 
         WGPUSurfaceDescriptor surfaceDesc = {};
         surfaceDesc.nextInChain = &canvasSource.chain;
@@ -80,6 +82,26 @@ public:
     double getTime() const override {
         return emscripten_get_now() / 1000.0;
     }
+
+    void runMainLoop(MainLoopCallback callback) override {
+        _mainLoopCallback = std::move(callback);
+        // Use emscripten_set_main_loop_arg instead of request_animation_frame_loop
+        // 0 = use browser's requestAnimationFrame, false = don't simulate infinite loop
+        emscripten_set_main_loop_arg(mainLoopTrampoline, this, 0, true);
+    }
+
+private:
+    static void mainLoopTrampoline(void* userData) {
+        auto* self = static_cast<WebPlatform*>(userData);
+        if (self->_mainLoopCallback) {
+            bool continueLoop = self->_mainLoopCallback();
+            if (!continueLoop) {
+                emscripten_cancel_main_loop();
+            }
+        }
+    }
+
+    MainLoopCallback _mainLoopCallback;
 
     void setKeyCallback(KeyCallback cb) override { _keyCallback = std::move(cb); }
     void setCharCallback(CharCallback cb) override { _charCallback = std::move(cb); }
@@ -121,6 +143,18 @@ public:
         (void)scancode;
         return "";
     }
+
+    // Shell stubs - web doesn't have PTY, uses toybox via JS
+    // Note: These are not virtual in Platform base class, so no override
+    Result<void> startShell(const std::vector<std::string>& envVars, int cols, int rows) {
+        (void)envVars; (void)cols; (void)rows;
+        return Ok();
+    }
+    void stopShell() {}
+    void writeToShell(const char* data, size_t len) { (void)data; (void)len; }
+    void resizeShell(int cols, int rows) { (void)cols; (void)rows; }
+    void setShellOutputCallback(std::function<void(const char*, size_t)> cb) { (void)cb; }
+    bool isShellRunning() const { return false; }
 
 private:
     static EM_BOOL keyCallback(int eventType, const EmscriptenKeyboardEvent* e, void* userData) {
@@ -204,5 +238,98 @@ Result<Platform::Ptr> Platform::create() {
 }
 
 } // namespace yetty
+
+// =============================================================================
+// Exported C functions for JavaScript interop
+// Write to GPUScreen via GPUScreenManager (no globals needed)
+// =============================================================================
+
+extern "C" {
+
+// Write data to terminal (from JavaScript)
+EMSCRIPTEN_KEEPALIVE
+void yetty_write(const char* data, int len) {
+    if (len <= 0) return;
+
+    auto mgrResult = yetty::GPUScreenManager::instance();
+    if (!mgrResult) return;
+
+    auto screens = (*mgrResult)->screens();
+    if (screens.empty()) return;
+
+    // Write to first screen (typically only one on web)
+    screens[0]->write(data, static_cast<size_t>(len));
+}
+
+// Handle key press
+EMSCRIPTEN_KEEPALIVE 
+void yetty_key(int key, int mods) {
+    (void)key; (void)mods;
+    // TODO: Connect to input handling
+}
+
+// Handle special key (arrow keys, etc.)
+EMSCRIPTEN_KEEPALIVE
+void yetty_special_key(int key, int mods) {
+    (void)key; (void)mods;
+    // TODO: Connect to input handling
+}
+
+// Read input from terminal (for toybox stdin)
+EMSCRIPTEN_KEEPALIVE
+int yetty_read_input(char* buffer, int maxLen) {
+    (void)buffer; (void)maxLen;
+    return 0;
+}
+
+// Sync terminal display
+EMSCRIPTEN_KEEPALIVE
+void yetty_sync() {
+    // Render loop handles display updates
+}
+
+// Set content scale
+EMSCRIPTEN_KEEPALIVE
+void yetty_set_scale(float scaleX, float scaleY) {
+    (void)scaleX; (void)scaleY;
+}
+
+// Resize terminal
+EMSCRIPTEN_KEEPALIVE
+void yetty_resize(int cols, int rows) {
+    auto mgr = yetty::GPUScreenManager::instance();
+    if (!mgr) return;
+    
+    auto screens = (*mgr)->screens();
+    if (!screens.empty()) {
+        screens[0]->resize(static_cast<uint32_t>(cols), static_cast<uint32_t>(rows));
+    }
+}
+
+// Get terminal columns
+EMSCRIPTEN_KEEPALIVE
+int yetty_get_cols() {
+    auto mgr = yetty::GPUScreenManager::instance();
+    if (!mgr) return 80;
+    
+    auto screens = (*mgr)->screens();
+    if (screens.empty()) return 80;
+    
+    return static_cast<int>(screens[0]->getCols());
+}
+
+// Get terminal rows
+EMSCRIPTEN_KEEPALIVE
+int yetty_get_rows() {
+    auto mgr = yetty::GPUScreenManager::instance();
+    if (!mgr) return 24;
+    
+    auto screens = (*mgr)->screens();
+    if (screens.empty()) return 24;
+    
+    return static_cast<int>(screens[0]->getRows());
+}
+
+} // extern "C"
 
 #endif // __EMSCRIPTEN__

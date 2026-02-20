@@ -148,10 +148,6 @@ Result<void> ShaderFontImpl::loadShaders() {
     _entries.clear();
     _codepointToIndex.clear();
 
-#if defined(__EMSCRIPTEN__) || defined(__ANDROID__)
-    yinfo("ShaderFont: filesystem limited on this platform, using embedded shaders");
-    return Ok();
-#else
     if (_shaderDir.empty()) {
         yinfo("ShaderFont: no shader directory specified");
         return Ok();
@@ -229,7 +225,6 @@ Result<void> ShaderFontImpl::loadShaders() {
 
     _dirty = true;
     return Ok();
-#endif
 }
 
 Result<void> ShaderFontImpl::reload() {
