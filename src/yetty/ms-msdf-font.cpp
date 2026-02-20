@@ -25,25 +25,34 @@ public:
     //=========================================================================
 
     Result<void> init() override {
+        yinfo("MsMsdfFontImpl::init: entered");
         // Create atlas
+        yinfo("MsMsdfFontImpl::init: creating MsdfAtlas");
         auto atlasResult = MsdfAtlas::create(_allocator);
+        yinfo("MsMsdfFontImpl::init: MsdfAtlas::create returned");
         if (!atlasResult) {
             return Err<void>("Failed to create MsdfAtlas", atlasResult);
         }
         _atlas = std::move(*atlasResult);
+        yinfo("MsMsdfFontImpl::init: atlas created");
 
         // Open all style CDBs on the atlas
+        yinfo("MsMsdfFontImpl::init: opening CDBs, cdbBasePath={}", _cdbBasePath);
         for (int i = 0; i < 4; ++i) {
             std::string path = _cdbBasePath + STYLE_SUFFIXES[i];
+            yinfo("MsMsdfFontImpl::init: opening CDB[{}] path={}", i, path);
             int fontId = _atlas->openCdb(path);
+            yinfo("MsMsdfFontImpl::init: openCdb returned fontId={}", fontId);
             if (fontId < 0) {
                 return Err<void>("Failed to open CDB: " + path);
             }
             _styleFontId[i] = fontId;
         }
 
+        yinfo("MsMsdfFontImpl::init: all CDBs opened, pre-loading basic Latin");
         // Pre-load basic Latin
         initBasicLatin();
+        yinfo("MsMsdfFontImpl::init: done");
 
         return Ok();
     }
@@ -187,7 +196,9 @@ private:
 Result<MsMsdfFont::Ptr> MsMsdfFont::createImpl(ContextType&,
                                                  const std::string& cdbBasePath,
                                                  GpuAllocator::Ptr allocator) {
+    yinfo("MsMsdfFont::createImpl: entered cdbBasePath={}", cdbBasePath);
     auto font = Ptr(new MsMsdfFontImpl(cdbBasePath, std::move(allocator)));
+    yinfo("MsMsdfFont::createImpl: font created");
     if (auto res = static_cast<MsMsdfFontImpl*>(font.get())->init(); !res) {
         return Err<Ptr>("Failed to initialize MsMsdfFont", res);
     }

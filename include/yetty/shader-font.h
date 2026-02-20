@@ -61,25 +61,25 @@ public:
     // YettyFont interface
     // =========================================================================
 
-    virtual uint32_t getGlyphIndex(uint32_t codepoint) = 0;
-    virtual uint32_t getGlyphIndex(uint32_t codepoint, Style style) = 0;
-    virtual uint32_t getGlyphIndex(uint32_t codepoint, bool bold, bool italic) = 0;
+    uint32_t getGlyphIndex(uint32_t codepoint) override = 0;
+    uint32_t getGlyphIndex(uint32_t codepoint, Style style) override = 0;
+    uint32_t getGlyphIndex(uint32_t codepoint, bool bold, bool italic) override = 0;
 
-    virtual void uploadToGpu() = 0;
-    virtual bool isDirty() const = 0;
-    virtual void clearDirty() = 0;
+    void uploadToGpu() override = 0;
+    bool isDirty() const override = 0;
+    void clearDirty() override = 0;
 
-    virtual uint32_t getAtlasWidth() const = 0;
-    virtual uint32_t getAtlasHeight() const = 0;
-    virtual const std::vector<uint8_t>& getAtlasData() const = 0;
+    uint32_t getAtlasWidth() const override = 0;
+    uint32_t getAtlasHeight() const override = 0;
+    const std::vector<uint8_t>& getAtlasData() const override = 0;
 
     // =========================================================================
     // ShaderProvider interface
     // =========================================================================
 
-    virtual std::string getCode() const = 0;
-    virtual std::string getDispatchCode() const = 0;
-    virtual uint32_t getFunctionCount() const = 0;
+    std::string getCode() const override = 0;
+    std::string getDispatchCode() const override = 0;
+    uint32_t getFunctionCount() const override = 0;
 
     // =========================================================================
     // ShaderFont specific methods

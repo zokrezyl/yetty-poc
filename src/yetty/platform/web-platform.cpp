@@ -83,6 +83,26 @@ public:
         return emscripten_get_now() / 1000.0;
     }
 
+    void runMainLoop(MainLoopCallback callback) override {
+        _mainLoopCallback = std::move(callback);
+        // Use emscripten_set_main_loop_arg instead of request_animation_frame_loop
+        // 0 = use browser's requestAnimationFrame, false = don't simulate infinite loop
+        emscripten_set_main_loop_arg(mainLoopTrampoline, this, 0, true);
+    }
+
+private:
+    static void mainLoopTrampoline(void* userData) {
+        auto* self = static_cast<WebPlatform*>(userData);
+        if (self->_mainLoopCallback) {
+            bool continueLoop = self->_mainLoopCallback();
+            if (!continueLoop) {
+                emscripten_cancel_main_loop();
+            }
+        }
+    }
+
+    MainLoopCallback _mainLoopCallback;
+
     void setKeyCallback(KeyCallback cb) override { _keyCallback = std::move(cb); }
     void setCharCallback(CharCallback cb) override { _charCallback = std::move(cb); }
     void setMouseButtonCallback(MouseButtonCallback cb) override { _mouseButtonCallback = std::move(cb); }

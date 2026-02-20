@@ -58,6 +58,7 @@ add_subdirectory(diagram)
 add_subdirectory(cards)
 add_subdirectory(yast)
 add_subdirectory(msdf-wgsl)
+add_subdirectory(shaders)
 
 # Desktop-only subdirectories
 if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)

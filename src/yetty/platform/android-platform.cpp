@@ -125,6 +125,11 @@ public:
         return "";
     }
 
+    void runMainLoop(MainLoopCallback callback) override {
+        // Android: Not used - android_main handles the loop
+        (void)callback;
+    }
+
     // Called from android_main to dispatch touch events
     void dispatchTouchEvent(int action, float x, float y) {
         // Map touch to mouse events

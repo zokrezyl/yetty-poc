@@ -14,6 +14,10 @@
 #define CMAKE_SOURCE_DIR "."
 #endif
 
+#ifndef YETTY_SHADERS_DIR
+#define YETTY_SHADERS_DIR CMAKE_SOURCE_DIR "/src/yetty/shaders"
+#endif
+
 namespace yetty {
 
 class FontManagerImpl : public FontManager {
@@ -62,14 +66,22 @@ public:
 
   Result<MsMsdfFont::Ptr>
   getMsMsdfFont(const std::string &fontName) noexcept override {
+    yinfo("getMsMsdfFont: entered with fontName={}", fontName);
+    yinfo("getMsMsdfFont: checking cache, size={}", _msdfFontCache.size());
     auto it = _msdfFontCache.find(fontName);
+    yinfo("getMsMsdfFont: find completed");
     if (it != _msdfFontCache.end()) {
+      yinfo("getMsMsdfFont: found in cache");
       return Ok(it->second);
     }
+    yinfo("getMsMsdfFont: not in cache, loading");
 
+    yinfo("getMsMsdfFont: _cacheDir={}", _cacheDir);
     std::string cdbBasePath = _cacheDir + "/" + fontName;
+    yinfo("getMsMsdfFont: cdbBasePath={}", cdbBasePath);
 
     // Check if all required CDB files exist; generate any missing ones
+    yinfo("getMsMsdfFont: checking _cdbProvider={}", (void*)_cdbProvider.get());
     if (_cdbProvider) {
       static const std::array<std::string, 4> styleSuffixes = {
           "Regular", "Bold", "Oblique", "BoldOblique"};
@@ -109,7 +121,9 @@ public:
       }
     }
 
+    yinfo("getMsMsdfFont: calling MsMsdfFont::create");
     auto result = MsMsdfFont::create(cdbBasePath, _allocator);
+    yinfo("getMsMsdfFont: MsMsdfFont::create returned");
     if (!result) {
       return Err<MsMsdfFont::Ptr>("Failed to load MsMsdfFont: " + fontName,
                                   result);
@@ -144,19 +158,27 @@ public:
   }
 
   MsMsdfFont::Ptr getDefaultMsMsdfFont() noexcept override {
+    yinfo("getDefaultMsMsdfFont: entered, _defaultFontName.empty()={}", _defaultFontName.empty());
     if (!_defaultFontName.empty()) {
+      yinfo("getDefaultMsMsdfFont: checking cache for {}", _defaultFontName);
       auto it = _msdfFontCache.find(_defaultFontName);
       if (it != _msdfFontCache.end()) {
+        yinfo("getDefaultMsMsdfFont: found in cache");
         return it->second;
       }
     }
 
+    yinfo("getDefaultMsMsdfFont: calling getMsMsdfFont");
     auto result = getMsMsdfFont("DejaVuSansMNerdFontMono");
+    yinfo("getDefaultMsMsdfFont: getMsMsdfFont returned");
     if (result) {
+      yinfo("getDefaultMsMsdfFont: returning result");
       return *result;
     }
 
+    yinfo("getDefaultMsMsdfFont: checking if cache is empty");
     if (!_msdfFontCache.empty()) {
+      yinfo("getDefaultMsMsdfFont: returning first from cache");
       return _msdfFontCache.begin()->second;
     }
 
@@ -296,6 +318,11 @@ public:
 
 private:
   Result<void> initMsMsdfFonts() noexcept {
+#ifdef YETTY_ASSETS_DIR
+    // Use prebuilt CDB files from build assets directory
+    _cacheDir = std::string(YETTY_ASSETS_DIR) + "/fonts-cdb";
+    yinfo("MSDF font cache dir (prebuilt): {}", _cacheDir);
+#else
     const char *home = std::getenv("HOME");
     if (!home) {
       return Err<void>("HOME environment variable not set");
@@ -309,6 +336,7 @@ private:
     }
 
     yinfo("MSDF font cache dir: {}", _cacheDir);
+#endif
     return Ok();
   }
 
@@ -329,8 +357,7 @@ private:
   }
 
   Result<void> initShaderFonts() noexcept {
-    std::string shaderDir =
-        std::string(CMAKE_SOURCE_DIR) + "/src/yetty/shaders/";
+    std::string shaderDir = std::string(YETTY_SHADERS_DIR) + "/";
 
     auto shaderGlyphResult =
         ShaderFont::create(_shaderMgr, ShaderFont::Category::Glyph, shaderDir);
@@ -359,8 +386,13 @@ private:
 
   Result<void> initVectorSdfFont() noexcept {
     // Use the default monospace font TTF
+#ifdef YETTY_ASSETS_DIR
+    std::string ttfPath = std::string(YETTY_ASSETS_DIR) +
+                          "/DejaVuSansMNerdFontMono-Regular.ttf";
+#else
     std::string ttfPath = std::string(CMAKE_SOURCE_DIR) +
                           "/assets/DejaVuSansMNerdFontMono-Regular.ttf";
+#endif
 
     if (!std::filesystem::exists(ttfPath)) {
       return Err<void>("Default TTF not found: " + ttfPath);
@@ -388,8 +420,13 @@ private:
 
   Result<void> initRasterFont() noexcept {
     // Use the default monospace font TTF
+#ifdef YETTY_ASSETS_DIR
+    std::string ttfPath = std::string(YETTY_ASSETS_DIR) +
+                          "/DejaVuSansMNerdFontMono-Regular.ttf";
+#else
     std::string ttfPath = std::string(CMAKE_SOURCE_DIR) +
                           "/assets/DejaVuSansMNerdFontMono-Regular.ttf";
+#endif
 
     if (!std::filesystem::exists(ttfPath)) {
       return Err<void>("Default TTF not found: " + ttfPath);

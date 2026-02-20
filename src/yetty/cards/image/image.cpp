@@ -11,6 +11,14 @@
 #include <cstring>
 #include <yetty/wgpu-compat.h>
 
+#ifndef CMAKE_SOURCE_DIR
+#define CMAKE_SOURCE_DIR "."
+#endif
+
+#ifndef YETTY_SHADERS_DIR
+#define YETTY_SHADERS_DIR CMAKE_SOURCE_DIR "/src/yetty/shaders"
+#endif
+
 // GLFW modifier constants
 constexpr int GLFW_MOD_SHIFT   = 0x0001;
 constexpr int GLFW_MOD_CONTROL = 0x0002;
@@ -342,10 +350,10 @@ private:
     //=========================================================================
 
     Result<void> createScalePipeline() {
-        const char* shaderPath = CMAKE_SOURCE_DIR "/src/yetty/shaders/scale-image.wgsl";
-        yinfo("Image: Loading scale shader from: {}", shaderPath);
+        std::string shaderPath = std::string(YETTY_SHADERS_DIR) + "/scale-image.wgsl";
+        yinfo("Image: Loading scale shader from: {}", shaderPath.c_str());
 
-        std::ifstream file(shaderPath);
+        std::ifstream file(shaderPath.c_str());
         if (!file.is_open()) {
             return Err<void>("Image: Failed to open scale shader file");
         }
@@ -597,7 +605,7 @@ private:
         wgpuBufferMapAsync(_readbackBuffer, WGPUMapMode_Read, 0, scaledDataSize, cbInfo);
 
         while (!mapCtx.done) {
-            wgpuDeviceTick(_gpu.device);
+            WGPU_DEVICE_TICK(_gpu.device);
         }
 
         if (mapCtx.status != WGPUMapAsyncStatus_Success) {

@@ -18,6 +18,11 @@
 #define CMAKE_SOURCE_DIR "."
 #endif
 
+// Shader directory path - can be overridden per platform
+#ifndef YETTY_SHADERS_DIR
+#define YETTY_SHADERS_DIR CMAKE_SOURCE_DIR "/src/yetty/shaders"
+#endif
+
 namespace yetty {
 
 // Stub shader preamble for validating individual effect files
@@ -364,13 +369,13 @@ Result<void> ShaderManagerImpl::init(const GPUContext& gpu, GpuAllocator::Ptr al
     _allocator = std::move(allocator);
 
     // Load base shader
-    std::string shaderPath = std::string(CMAKE_SOURCE_DIR) + "/src/yetty/shaders/gpu-screen.wgsl";
+    std::string shaderPath = std::string(YETTY_SHADERS_DIR) + "/gpu-screen.wgsl";
     if (auto res = loadBaseShader(shaderPath); !res) {
         return res;
     }
 
     // Load all shader libraries from lib directory
-    std::string libDir = std::string(CMAKE_SOURCE_DIR) + "/src/yetty/shaders/lib";
+    std::string libDir = std::string(YETTY_SHADERS_DIR) + "/lib";
     if (std::filesystem::exists(libDir) && std::filesystem::is_directory(libDir)) {
         for (const auto& entry : std::filesystem::directory_iterator(libDir)) {
             if (entry.is_regular_file() && entry.path().extension() == ".wgsl") {
@@ -484,9 +489,9 @@ Result<void> ShaderManagerImpl::init(const GPUContext& gpu, GpuAllocator::Ptr al
         });
     };
 
-    std::string preEffectsDir = std::string(CMAKE_SOURCE_DIR) + "/src/yetty/shaders/pre-effects";
-    std::string effectsDir = std::string(CMAKE_SOURCE_DIR) + "/src/yetty/shaders/effects";
-    std::string postEffectsDir = std::string(CMAKE_SOURCE_DIR) + "/src/yetty/shaders/post-effects";
+    std::string preEffectsDir = std::string(YETTY_SHADERS_DIR) + "/pre-effects";
+    std::string effectsDir = std::string(YETTY_SHADERS_DIR) + "/effects";
+    std::string postEffectsDir = std::string(YETTY_SHADERS_DIR) + "/post-effects";
     loadEffects(preEffectsDir, _preEffects, "pre");
     loadEffects(effectsDir, _effects, "");  // no prefix for coord effects
     loadEffects(postEffectsDir, _postEffects, "post");

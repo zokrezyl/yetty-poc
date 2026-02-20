@@ -24,6 +24,10 @@
 #include <csignal>
 #include <ytrace/ytrace.hpp>
 
+#if defined(__EMSCRIPTEN__)
+#include <emscripten.h>
+#endif
+
 namespace yetty {
 
 class YettyImpl : public Yetty, public base::EventListener {
@@ -322,18 +326,22 @@ Result<void> YettyImpl::initWindow() noexcept {
 }
 
 Result<void> YettyImpl::initWebGPU() noexcept {
+    yinfo("initWebGPU: Creating instance...");
+
     // Create instance
     WGPUInstanceDescriptor instanceDesc = {};
     _instance = wgpuCreateInstance(&instanceDesc);
     if (!_instance) {
         return Err<void>("Failed to create WebGPU instance");
     }
+    yinfo("initWebGPU: Instance created");
 
     // Create surface via platform
     _surface = _platform->createWGPUSurface(_instance);
     if (!_surface) {
         return Err<void>("Failed to create WebGPU surface");
     }
+    yinfo("initWebGPU: Surface created");
 
     // Request adapter
     WGPURequestAdapterOptions adapterOpts = {};
@@ -349,11 +357,21 @@ Result<void> YettyImpl::initWebGPU() noexcept {
         }
     };
     adapterCallbackInfo.userdata1 = &_adapter;
+
+    yinfo("initWebGPU: Requesting adapter...");
     wgpuInstanceRequestAdapter(_instance, &adapterOpts, adapterCallbackInfo);
+
+#if defined(__EMSCRIPTEN__)
+    // On Emscripten, WebGPU operations are async - poll until callback fires
+    while (!_adapter) {
+        emscripten_sleep(1);
+    }
+#endif
 
     if (!_adapter) {
         return Err<void>("Failed to get WebGPU adapter");
     }
+    yinfo("initWebGPU: Adapter obtained");
 
     // Log adapter info
     {
@@ -443,13 +461,24 @@ Result<void> YettyImpl::initWebGPU() noexcept {
     };
     deviceCallbackInfo.userdata1 = &_device;
     deviceCallbackInfo.userdata2 = &deviceError;
+
+    yinfo("initWebGPU: Requesting device...");
     wgpuAdapterRequestDevice(_adapter, &deviceDesc, deviceCallbackInfo);
+
+#if defined(__EMSCRIPTEN__)
+    // On Emscripten, WebGPU operations are async - poll until callback fires
+    while (!_device && deviceError.empty()) {
+        emscripten_sleep(1);
+    }
+#endif
 
     if (!_device) {
         return Err<void>("Failed to get WebGPU device: " + deviceError);
     }
+    yinfo("initWebGPU: Device obtained");
 
     _queue = wgpuDeviceGetQueue(_device);
+    yinfo("initWebGPU: Queue obtained");
 
     // Configure surface
     WGPUSurfaceCapabilities caps = {};
@@ -479,15 +508,20 @@ void YettyImpl::configureSurface(uint32_t width, uint32_t height) noexcept {
     config.alphaMode = WGPUCompositeAlphaMode_Auto;
 
     wgpuSurfaceConfigure(_surface, &config);
+    yinfo("Surface configured: {}x{} format={}", width, height, static_cast<int>(_surfaceFormat));
 }
 
 Result<WGPUTextureView> YettyImpl::getCurrentTextureView() noexcept {
+    yinfo("getCurrentTextureView: entered, _currentTextureView={}", (void*)_currentTextureView);
     if (_currentTextureView) {
         return Ok(_currentTextureView);
     }
 
-    WGPUSurfaceTexture surfaceTexture;
+    yinfo("getCurrentTextureView: getting current texture, surface={}", (void*)_surface);
+    WGPUSurfaceTexture surfaceTexture = {};
+    yinfo("getCurrentTextureView: calling wgpuSurfaceGetCurrentTexture");
     wgpuSurfaceGetCurrentTexture(_surface, &surfaceTexture);
+    yinfo("getCurrentTextureView: got texture, status={}", static_cast<int>(surfaceTexture.status));
 
     if (surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal &&
         surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessSuboptimal) {
@@ -495,6 +529,7 @@ Result<WGPUTextureView> YettyImpl::getCurrentTextureView() noexcept {
     }
 
     _currentTexture = surfaceTexture.texture;
+    yinfo("getCurrentTextureView: creating view from texture={}", (void*)_currentTexture);
 
     WGPUTextureViewDescriptor viewDesc = {};
     viewDesc.format = _surfaceFormat;
@@ -503,6 +538,7 @@ Result<WGPUTextureView> YettyImpl::getCurrentTextureView() noexcept {
     viewDesc.arrayLayerCount = 1;
 
     _currentTextureView = wgpuTextureCreateView(_currentTexture, &viewDesc);
+    yinfo("getCurrentTextureView: created view={}", (void*)_currentTextureView);
     return Ok(_currentTextureView);
 }
 
@@ -515,7 +551,10 @@ void YettyImpl::present() noexcept {
         wgpuTextureRelease(_currentTexture);
         _currentTexture = nullptr;
     }
+#if !defined(__EMSCRIPTEN__)
+    // wgpuSurfacePresent is not needed on Emscripten - browser handles via requestAnimationFrame
     wgpuSurfacePresent(_surface);
+#endif
 }
 
 Result<void> YettyImpl::initSharedResources() noexcept {
@@ -693,7 +732,6 @@ Result<Workspace::Ptr> YettyImpl::createWorkspace() noexcept {
     float statusbarHeight = _yettyContext.imguiManager ? _yettyContext.imguiManager->getStatusbarHeight() : 0.0f;
     workspace->resize(static_cast<float>(_initialWidth), static_cast<float>(_initialHeight) - statusbarHeight);
 
-#if !YETTY_WEB && !defined(__ANDROID__)
     // Create single pane for debugging
     auto paneResult = workspace->createPane();
     if (!paneResult) {
@@ -701,7 +739,6 @@ Result<Workspace::Ptr> YettyImpl::createWorkspace() noexcept {
     }
     workspace->setRoot(*paneResult);
     yinfo("Created single terminal pane");
-#endif
 
     _workspaces.push_back(workspace);
     if (_workspaces.size() == 1) {
@@ -1023,12 +1060,23 @@ Result<void> YettyImpl::run() noexcept {
     std::signal(SIGINT, signalHandler);
     std::signal(SIGTERM, signalHandler);
 
-#if !YETTY_WEB && !defined(__ANDROID__)
+#if YETTY_WEB
+    // For web builds, use platform's main loop (emscripten_set_main_loop_arg)
+    _platform->runMainLoop([this]() -> bool {
+        auto result = mainLoopIteration();
+        if (!result) {
+            yerror("Main loop iteration failed: {}", result.error().message());
+            return false;
+        }
+        return !_fatalGpuError;
+    });
+    // Note: runMainLoop doesn't return on web (emscripten takes over)
+    return Ok();
+#elif !defined(__ANDROID__)
     auto loop = *base::EventLoop::instance();
     loop->startTimer(_inputTimerId);
     loop->startTimer(_frameTimerId);
     loop->start();
-#endif
 
     yinfo("Run finished.");
 
@@ -1036,18 +1084,27 @@ Result<void> YettyImpl::run() noexcept {
         return Err<void>("Fatal GPU error: " + _fatalGpuErrorMsg);
     }
     return Ok();
+#else
+    // Android: main loop is handled externally
+    return Ok();
+#endif
 }
 
 Result<void> YettyImpl::mainLoopIteration() noexcept {
+    yinfo("mainLoopIteration: start");
+
     if (_fatalGpuError) {
         return Err<void>("Fatal GPU error: " + _fatalGpuErrorMsg);
     }
 
+    yinfo("mainLoopIteration: getting texture view");
     auto viewResult = getCurrentTextureView();
     if (!viewResult) return Err<void>("Failed to get texture view");
     WGPUTextureView targetView = *viewResult;
+    yinfo("mainLoopIteration: got texture view={}", (void*)targetView);
 
     // Update shared uniforms
+    yinfo("mainLoopIteration: updating shared uniforms");
     static double lastTime = _platform->getTime();
     double now = _platform->getTime();
     float deltaTime = static_cast<float>(now - lastTime);
@@ -1055,6 +1112,7 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
 
     int windowWidth, windowHeight;
     _platform->getWindowSize(windowWidth, windowHeight);
+    yinfo("mainLoopIteration: window size {}x{}", windowWidth, windowHeight);
 
     _sharedUniforms.time = static_cast<float>(now);
     _sharedUniforms.deltaTime = deltaTime;
@@ -1062,24 +1120,35 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
     _sharedUniforms.screenHeight = static_cast<float>(windowHeight);
     _sharedUniforms.mouseX = _lastMouseX;
     _sharedUniforms.mouseY = _lastMouseY;
+    yinfo("mainLoopIteration: calling wgpuQueueWriteBuffer");
     wgpuQueueWriteBuffer(_queue, _sharedUniformBuffer, 0, &_sharedUniforms, sizeof(SharedUniforms));
+    yinfo("mainLoopIteration: wgpuQueueWriteBuffer done");
 
     // Each GPUScreen flushes its own CardBufferManager during render
 
     // Upload any pending font glyphs (e.g., bold/italic loaded on demand)
-    if (auto msdfFont = _yettyContext.fontManager->getDefaultMsMsdfFont()) {
-        if (msdfFont->atlas()->hasPendingGlyphs()) {
-            auto uploadResult = msdfFont->atlas()->uploadPendingGlyphs(_device, _queue);
-            if (!uploadResult) {
-                ywarn("Failed to upload pending glyphs: {}", uploadResult.error().message());
+    yinfo("mainLoopIteration: checking font glyphs, fontManager={}", (void*)_yettyContext.fontManager.get());
+    if (_yettyContext.fontManager) {
+        yinfo("mainLoopIteration: fontManager is valid, calling getDefaultMsMsdfFont");
+        if (auto msdfFont = _yettyContext.fontManager->getDefaultMsMsdfFont()) {
+            yinfo("mainLoopIteration: got msdfFont, checking pending glyphs");
+            if (msdfFont->atlas()->hasPendingGlyphs()) {
+                auto uploadResult = msdfFont->atlas()->uploadPendingGlyphs(_device, _queue);
+                if (!uploadResult) {
+                    ywarn("Failed to upload pending glyphs: {}", uploadResult.error().message());
+                }
             }
         }
     }
+    yinfo("mainLoopIteration: font glyphs check done");
 
+    yinfo("mainLoopIteration: creating command encoder");
     WGPUCommandEncoderDescriptor encoderDesc = {};
     WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(_device, &encoderDesc);
+    yinfo("mainLoopIteration: command encoder created={}", (void*)encoder);
     if (!encoder) return Err<void>("Failed to create command encoder");
 
+    yinfo("mainLoopIteration: creating render pass");
     WGPURenderPassColorAttachment colorAttachment = {};
     colorAttachment.view = targetView;
     colorAttachment.loadOp = WGPULoadOp_Clear;
@@ -1091,7 +1160,9 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
     passDesc.colorAttachmentCount = 1;
     passDesc.colorAttachments = &colorAttachment;
 
+    yinfo("mainLoopIteration: calling wgpuCommandEncoderBeginRenderPass");
     WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
+    yinfo("mainLoopIteration: render pass created={}", (void*)pass);
     if (pass) {
         if (_activeWorkspace) {
             if (auto res = _activeWorkspace->render(pass); !res) {

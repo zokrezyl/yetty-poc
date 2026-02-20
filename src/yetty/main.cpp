@@ -15,6 +15,7 @@
 #include <iostream>
 #include <cstring>
 #include <signal.h>
+#include <cstdlib>
 
 static void sigint_handler(int sig) {
     yinfo("SIGINT received! (signal {})", sig);
@@ -52,8 +53,16 @@ extern "C" void android_main(struct android_app* app) {
 // Desktop Entry Point
 //-----------------------------------------------------------------------------
 int main(int argc, char* argv[]) {
-    // Set default log level to trace, can be overridden by SPDLOG_LEVEL env var
+#if YETTY_WEB
+    // Enable ytrace for WebASM debugging
+    setenv("YTRACE_DEFAULT_ON", "yes", 1);
+#endif
+
+    // Set default log level to trace for maximum debug output
     spdlog::set_level(spdlog::level::trace);
+
+    // VERSION MARKER - change this number to verify fresh wasm loaded
+    yinfo("=== YETTY BUILD VERSION 001 ===");
     spdlog::cfg::load_env_levels();
 
     // Debug: catch SIGINT to see if process receives it

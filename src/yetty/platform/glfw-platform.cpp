@@ -167,6 +167,12 @@ public:
         return name ? name : "";
     }
 
+    void runMainLoop(MainLoopCallback callback) override {
+        // Desktop: Not used - yetty uses EventLoop for desktop builds
+        // This is here for interface completeness
+        (void)callback;
+    }
+
 private:
     // Static callback trampolines
     static void keyCallbackStatic(GLFWwindow* window, int key, int scancode, int action, int mods) {

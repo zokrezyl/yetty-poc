@@ -305,7 +305,7 @@ private:
 
   // OSC handling
   bool handleOSCSequence(const std::string &sequence, std::string *response,
-                         uint32_t *linesToAdvance);
+                         uint32_t *linesToAdvance) override;
   bool handleCardOSCSequence(const std::string &sequence, std::string *response,
                              uint32_t *linesToAdvance);
   void handleEffectOSC(int command, const std::string &payload);
@@ -5165,13 +5165,29 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
       _bindGroup = nullptr;
     }
 
-    if (!_msdfFont || !_msdfFont->atlas()->getTextureView() ||
-        !_msdfFont->atlas()->getSampler() || !_msdfFont->atlas()->getGlyphMetadataBuffer()) {
-      return Err<void>("MSDF font resources not ready");
+    if (!_msdfFont) {
+      return Err<void>("MSDF font not initialized (_msdfFont is null)");
     }
-    if (!_bitmapFont || !_bitmapFont->getTextureView() ||
-        !_bitmapFont->getSampler() || !_bitmapFont->getMetadataBuffer()) {
-      return Err<void>("Bitmap font resources not ready");
+    if (!_msdfFont->atlas()->getTextureView()) {
+      return Err<void>("MSDF font texture view not ready");
+    }
+    if (!_msdfFont->atlas()->getSampler()) {
+      return Err<void>("MSDF font sampler not ready");
+    }
+    if (!_msdfFont->atlas()->getGlyphMetadataBuffer()) {
+      return Err<void>("MSDF font glyph metadata buffer not ready");
+    }
+    if (!_bitmapFont) {
+      return Err<void>("Bitmap font not initialized (_bitmapFont is null)");
+    }
+    if (!_bitmapFont->getTextureView()) {
+      return Err<void>("Bitmap font texture view not ready");
+    }
+    if (!_bitmapFont->getSampler()) {
+      return Err<void>("Bitmap font sampler not ready");
+    }
+    if (!_bitmapFont->getMetadataBuffer()) {
+      return Err<void>("Bitmap font metadata buffer not ready");
     }
 
     WGPUBindGroupEntry bgEntries[15] = {};  // 12 + 3 for raster font
@@ -5209,8 +5225,14 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
         glyphsPerRow * glyphsPerRow * sizeof(BitmapGlyphMetadata);
 
     // Vector font bindings (8 and 9)
-    if (!_vectorFont || !_vectorFont->getGlyphBuffer() || !_vectorFont->getOffsetBuffer()) {
-      return Err<void>("Vector font resources not ready");
+    if (!_vectorFont) {
+      return Err<void>("Vector font not initialized (_vectorFont is null)");
+    }
+    if (!_vectorFont->getGlyphBuffer()) {
+      return Err<void>("Vector font glyph buffer not ready");
+    }
+    if (!_vectorFont->getOffsetBuffer()) {
+      return Err<void>("Vector font offset buffer not ready");
     }
 
     bgEntries[8].binding = 8;

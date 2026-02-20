@@ -2,6 +2,7 @@
 #include <ytrace/ytrace.hpp>
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 #ifdef YETTY_USE_HOWERJ_CDB
@@ -41,8 +42,21 @@ static int file_flush(void* file) {
     return fflush(static_cast<FILE*>(file));
 }
 
+// Allocator callback for howerj/cdb (realloc-style)
+// ptr=NULL: allocate newsz bytes
+// newsz=0: free ptr
+// otherwise: reallocate ptr from oldsz to newsz
+static void* cdb_allocator(void* /*arena*/, void* ptr, size_t /*oldsz*/, size_t newsz) {
+    if (newsz == 0) {
+        free(ptr);
+        return nullptr;
+    }
+    return realloc(ptr, newsz);
+}
+
 static cdb_options_t make_options() {
     cdb_options_t opts = {};
+    opts.allocator = cdb_allocator;
     opts.read = file_read;
     opts.write = file_write;
     opts.seek = file_seek;
@@ -71,7 +85,9 @@ public:
 
         reader->_opts = make_options();
         int result = cdb_open(&reader->_cdb, &reader->_opts, CDB_RO_MODE, path.c_str());
-        if (result < 0 || !reader->_cdb) {
+        if (result < 0) {
+            // cdb_open already calls cdb_close on failure, so _cdb is dangling
+            reader->_cdb = nullptr;
             ywarn("CdbReader: Cannot open file: {}", path);
             return nullptr;
         }
@@ -126,7 +142,9 @@ public:
 
         writer->_opts = make_options();
         int result = cdb_open(&writer->_cdb, &writer->_opts, CDB_RW_MODE, path.c_str());
-        if (result < 0 || !writer->_cdb) {
+        if (result < 0) {
+            // cdb_open already calls cdb_close on failure, so _cdb is dangling
+            writer->_cdb = nullptr;
             ywarn("CdbWriter: Cannot create file: {}", path);
             return nullptr;
         }

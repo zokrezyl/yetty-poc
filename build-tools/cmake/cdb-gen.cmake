@@ -3,7 +3,7 @@
 # Outputs to ${CMAKE_BINARY_DIR}/fonts-cdb/
 # If pre-built CDB files exist in assets/fonts-cdb/, copies them instead
 
-set(CDB_OUTPUT_DIR "${CMAKE_BINARY_DIR}/fonts-cdb")
+set(CDB_OUTPUT_DIR "${CMAKE_BINARY_DIR}/assets/fonts-cdb")
 set(FONT_DIR "${YETTY_ROOT}/assets")
 set(PREBUILT_CDB_DIR "${YETTY_ROOT}/assets/fonts-cdb")
 

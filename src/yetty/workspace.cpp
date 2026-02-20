@@ -77,13 +77,11 @@ public:
     }
     auto pane = *paneResult;
 
-#if !YETTY_WEB && !defined(__ANDROID__)
     auto viewResult = TerminalView::create(_ctx);
     if (!viewResult) {
       return Err<Pane::Ptr>("Failed to create TerminalView", viewResult);
     }
     pane->pushView(*viewResult);
-#endif
 
     return Ok(pane);
   }

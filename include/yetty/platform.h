@@ -68,6 +68,14 @@ public:
     virtual void pollEvents() = 0;
     virtual double getTime() const = 0;
 
+    // Main loop callback type - returns false to stop loop
+    using MainLoopCallback = std::function<bool()>;
+
+    // Run the main loop (platform-specific implementation)
+    // - Desktop: Just calls the callback in a loop until it returns false
+    // - Web: Uses emscripten_request_animation_frame_loop
+    virtual void runMainLoop(MainLoopCallback callback) = 0;
+
     // Input callbacks
     virtual void setKeyCallback(KeyCallback cb) = 0;
     virtual void setCharCallback(CharCallback cb) = 0;
