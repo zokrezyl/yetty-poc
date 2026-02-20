@@ -31,6 +31,10 @@ add_library(yetty SHARED
     ${YETTY_ROOT}/src/yetty/msdf-gen/generator.cpp
 )
 
+# Add renderer sources to yetty (after target is created)
+add_subdirectory(${YETTY_ROOT}/src/yetty/ydraw-zoo ${CMAKE_BINARY_DIR}/src/yetty/ydraw-zoo)
+add_subdirectory(${YETTY_ROOT}/src/yetty/ydraw-maze ${CMAKE_BINARY_DIR}/src/yetty/ydraw-maze)
+
 target_include_directories(yetty PRIVATE ${YETTY_INCLUDES})
 
 target_compile_definitions(yetty PRIVATE

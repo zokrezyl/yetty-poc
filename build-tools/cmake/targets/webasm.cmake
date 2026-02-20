@@ -24,6 +24,10 @@ add_executable(yetty
     ${YETTY_ROOT}/src/yetty/platform/web-platform.cpp
 )
 
+# Add renderer sources to yetty (after target is created)
+add_subdirectory(${YETTY_ROOT}/src/yetty/ydraw-zoo ${CMAKE_BINARY_DIR}/src/yetty/ydraw-zoo)
+add_subdirectory(${YETTY_ROOT}/src/yetty/ydraw-maze ${CMAKE_BINARY_DIR}/src/yetty/ydraw-maze)
+
 target_include_directories(yetty PRIVATE ${YETTY_INCLUDES})
 
 add_dependencies(yetty generate-cdb copy-shaders copy-assets)

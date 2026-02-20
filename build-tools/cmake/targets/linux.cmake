@@ -26,6 +26,10 @@ add_executable(yetty
     ${YETTY_ROOT}/src/yetty/rpc/socket-path.cpp
 )
 
+# Add renderer sources to yetty (after target is created)
+add_subdirectory(${YETTY_ROOT}/src/yetty/ydraw-zoo ${CMAKE_BINARY_DIR}/src/yetty/ydraw-zoo)
+add_subdirectory(${YETTY_ROOT}/src/yetty/ydraw-maze ${CMAKE_BINARY_DIR}/src/yetty/ydraw-maze)
+
 target_include_directories(yetty PRIVATE ${YETTY_INCLUDES})
 
 target_compile_definitions(yetty PRIVATE
@@ -92,3 +96,7 @@ if(YETTY_BUILD_CDB_TESTS)
     enable_testing()
     add_subdirectory(${YETTY_ROOT}/test/ut/cdb ${CMAKE_BINARY_DIR}/test/ut/cdb)
 endif()
+
+# Tools (ycat, yecho, ydraw-maze, ydraw-zoo, etc.)
+add_subdirectory(${YETTY_ROOT}/src/yetty/ycat ${CMAKE_BINARY_DIR}/src/yetty/ycat)
+add_subdirectory(${YETTY_ROOT}/tools ${CMAKE_BINARY_DIR}/tools)
