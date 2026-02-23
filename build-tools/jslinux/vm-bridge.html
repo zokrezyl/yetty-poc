@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>JSLinux VM Bridge</title>
+    <style>
+        body { margin: 0; padding: 0; }
+        #term_container { display: none; }
+    </style>
+</head>
+<body>
+    <div id="term_container"></div>
+    <script src="term-bridge.js"></script>
+    <script>
+        // Modified jslinux loader for bridge mode
+        "use strict";
+
+        var term, console_write1;
+        var net_state, net_write_packet, net_set_carrier;
+        var fs_import_file;
+
+        // Module object - Emscripten will populate this
+        var Module = {};
+
+        // Logging helper
+        function log(msg) {
+            console.log("[vm-bridge] " + msg);
+            window.parent.postMessage({ type: 'vm-log', message: msg }, '*');
+        }
+
+        function term_handler(str) {
+            log("term_handler called with " + str.length + " chars");
+            var i;
+            for(i = 0; i < str.length; i++) {
+                console_write1(str.charCodeAt(i));
+            }
+        }
+
+        function update_downloading(flag) {
+            log("update_downloading: " + flag);
+            window.parent.postMessage({
+                type: 'vm-downloading',
+                ptyId: term ? term.ptyId : null,
+                downloading: flag
+            }, '*');
+        }
+
+        function get_params() {
+            var params = {};
+            var query = window.location.search.substring(1);
+            var pairs = query.split("&");
+            for (var i = 0; i < pairs.length; i++) {
+                var pair = pairs[i].split("=");
+                params[decodeURIComponent(pair[0])] = decodeURIComponent(pair[1] || '');
+            }
+            return params;
+        }
+
+        function start_vm() {
+            log("start_vm called");
+            var params = get_params();
+            var cpu = params["cpu"] || "x86_64";
+            var url = params["url"] || "alpine-x86_64.cfg";
+            var mem = parseInt(params["mem"]) || 256;
+            var cols = parseInt(params["cols"]) || 80;
+            var rows = parseInt(params["rows"]) || 25;
+
+            log("VM params: cpu=" + cpu + " url=" + url + " mem=" + mem + " cols=" + cols + " rows=" + rows);
+
+            // Create terminal bridge
+            log("Creating Term bridge...");
+            term = new Term({
+                cols: cols,
+                rows: rows,
+                scrollback: 0
+            });
+            term.setKeyHandler(term_handler);
+            term.open(document.getElementById("term_container"));
+            log("Term bridge created, ptyId=" + term.ptyId);
+
+            // Determine emulator file
+            var vm_file;
+            switch(cpu) {
+                case "x86":
+                    vm_file = "x86emu";
+                    break;
+                case "x86_64":
+                    vm_file = "x86_64emu";
+                    break;
+                case "riscv64":
+                    vm_file = "riscvemu64";
+                    break;
+                case "riscv32":
+                    vm_file = "riscvemu32";
+                    break;
+                default:
+                    log("ERROR: Unknown cpu: " + cpu);
+                    term.write("Error: Unknown cpu: " + cpu + "\r\n");
+                    return;
+            }
+            var vm_url = vm_file + "-wasm.js";
+
+            log("Loading emulator: " + vm_url);
+            term.write("Loading " + vm_url + "...\r\n");
+
+            // Get absolute URL for config
+            var cfg_url = new URL(url, window.location.href).href;
+            log("Config URL: " + cfg_url);
+
+            // Set up Module.preRun - this is called when WASM is ready
+            // This is how the original jslinux.js does it
+            Module.preRun = function() {
+                log("Module.preRun called - WASM is ready");
+                initVM(cfg_url, mem, cols, rows);
+            };
+
+            // Load the emulator script
+            log("Appending script tag for " + vm_url);
+            var script = document.createElement('script');
+            script.src = vm_url;
+            script.onerror = function(e) {
+                log("ERROR: Failed to load emulator: " + vm_url);
+                term.write("Error loading emulator: " + vm_url + "\r\n");
+            };
+            document.body.appendChild(script);
+        }
+
+        function initVM(cfg_url, mem, cols, rows) {
+            log("initVM called: cfg_url=" + cfg_url + " mem=" + mem);
+
+            try {
+                // Now Module should have all the Emscripten functions
+                console_write1 = Module.cwrap('console_queue_char', null, ['number']);
+                log("console_write1 wrapped: " + (typeof console_write1));
+
+                fs_import_file = Module.cwrap('fs_import_file', null, ['string', 'number', 'number']);
+                log("fs_import_file wrapped: " + (typeof fs_import_file));
+
+                // Get other exports for network support if needed
+                net_write_packet = Module.cwrap('net_write_packet', null, ['number', 'number']);
+                net_set_carrier = Module.cwrap('net_set_carrier', null, ['number']);
+            } catch(e) {
+                log("ERROR wrapping functions: " + e);
+                term.write("Error wrapping functions: " + e + "\r\n");
+                return;
+            }
+
+            term.write("Starting VM...\r\n");
+            log("Calling Module.ccall('vm_start', ...)");
+
+            try {
+                // Start VM - same signature as original jslinux.js
+                // Signature: url, mem_size, cmdline, pwd, width, height, net_flag, drive_url
+                Module.ccall('vm_start', null,
+                    ['string', 'number', 'string', 'string', 'number', 'number', 'number', 'string'],
+                    [cfg_url, mem, "", "", 0, 0, 0, ""]);
+                log("vm_start returned successfully");
+            } catch(e) {
+                log("ERROR calling vm_start: " + e);
+                term.write("Error starting VM: " + e + "\r\n");
+            }
+        }
+
+        // Start when DOM is ready
+        log("Document readyState: " + document.readyState);
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', function() {
+                log("DOMContentLoaded fired");
+                start_vm();
+            });
+        } else {
+            log("DOM already ready, starting VM");
+            start_vm();
+        }
+    </script>
+</body>
+</html>
