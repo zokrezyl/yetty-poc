@@ -240,12 +240,14 @@ build-webasm-dawn-debug: ## Build WebAssembly debug
 	@if [ ! -f "$(BUILD_DIR_WEBASM_DAWN_DEBUG)/build.ninja" ]; then $(MAKE) config-webasm-dawn-debug; fi
 	nix develop .#web --command bash -c 'cmake --build $(BUILD_DIR_WEBASM_DAWN_DEBUG) --target yetty $(CMAKE_PARALLEL)'
 	@cp build-tools/web/index.html build-tools/web/serve.py $(BUILD_DIR_WEBASM_DAWN_DEBUG)/
+	@bash build-tools/web/build-fs/build-vfsync.sh $(BUILD_DIR_WEBASM_DAWN_DEBUG)
 
 .PHONY: build-webasm-dawn-release
 build-webasm-dawn-release: ## Build WebAssembly release (CDB generation handled by CMake)
 	@if [ ! -f "$(BUILD_DIR_WEBASM_DAWN_RELEASE)/build.ninja" ]; then $(MAKE) config-webasm-dawn-release; fi
 	nix develop .#web --command bash -c 'cmake --build $(BUILD_DIR_WEBASM_DAWN_RELEASE) --target yetty $(CMAKE_PARALLEL)'
 	@cp build-tools/web/index.html build-tools/web/serve.py $(BUILD_DIR_WEBASM_DAWN_RELEASE)/
+	@bash build-tools/web/build-fs/build-vfsync.sh $(BUILD_DIR_WEBASM_DAWN_RELEASE)
 
 .PHONY: run-webasm-dawn-debug
 run-webasm-dawn-debug: build-webasm-dawn-debug ## Serve WebAssembly debug build

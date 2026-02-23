@@ -2770,6 +2770,8 @@ int GPUScreenImpl::onPutglyph(VTermGlyphInfo *info, VTermPos pos, void *user) {
     fontType = FONT_TYPE_SHADER;
     glyphIdx =
         self->_shaderGlyphFont ? self->_shaderGlyphFont->getGlyphIndex(cp) : cp;
+    yinfo(">>> SHADER GLYPH: cp={:#x} glyphIdx={} _shaderGlyphFont={} pos=({},{})",
+          cp, glyphIdx, (void*)self->_shaderGlyphFont.get(), pos.row, pos.col);
   } else if (isEmoji(cp) && self->_bitmapFont) {
     // Emoji - render from bitmap font atlas
     fontType = FONT_TYPE_BITMAP;

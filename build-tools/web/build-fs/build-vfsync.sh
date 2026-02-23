@@ -98,6 +98,11 @@ mount -t devtmpfs dev /dev 2>/dev/null || true
 hostname yetty
 clear
 cat /etc/motd
+echo "=== /home/demo contents ==="
+ls -la /home/demo/ 2>/dev/null || echo "ERROR: /home/demo not found!"
+echo "=== /home/demo/files contents ==="
+ls -la /home/demo/files/ 2>/dev/null || echo "ERROR: /home/demo/files not found!"
+echo "==============================="
 exec /bin/sh
 INITEOF
 chmod +x "$ROOTFS_DIR/sbin/init"

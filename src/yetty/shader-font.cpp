@@ -10,6 +10,11 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#if defined(__EMSCRIPTEN__)
+#include <dirent.h>
+#include <sys/stat.h>
+#endif
+
 namespace yetty {
 
 // Base codepoints for each category
@@ -160,7 +165,73 @@ Result<void> ShaderFontImpl::loadShaders() {
         searchDir += "glyphs/";
     }
 
+    yinfo("ShaderFont: loading from directory '{}'", searchDir);
+
+#if defined(__EMSCRIPTEN__)
+    // Use POSIX APIs on Emscripten since std::filesystem may not work correctly
+    // with the virtual FS
+    DIR* dir = opendir(searchDir.c_str());
+    if (!dir) {
+        yinfo("ShaderFont: opendir('{}') failed, trying fallback '{}'", searchDir, _shaderDir);
+        searchDir = _shaderDir;
+        dir = opendir(searchDir.c_str());
+    }
+
+    if (dir) {
+        struct dirent* ent;
+        while ((ent = readdir(dir)) != nullptr) {
+            std::string filename = ent->d_name;
+            if (filename == "." || filename == "..") continue;
+
+            // Check if it's a .wgsl file
+            if (filename.size() < 5 || filename.substr(filename.size() - 5) != ".wgsl") continue;
+
+            uint32_t offset;
+            std::string name;
+            if (!parseShaderFilename(filename, offset, name)) {
+                continue;
+            }
+
+            std::string filepath = searchDir + filename;
+            std::ifstream file(filepath);
+            if (!file.is_open()) {
+                ywarn("ShaderFont: failed to open {}", filepath);
+                continue;
+            }
+
+            std::stringstream buffer;
+            buffer << file.rdbuf();
+            std::string code = buffer.str();
+
+            if (code.empty()) {
+                ywarn("ShaderFont: empty shader file {}", filename);
+                continue;
+            }
+
+            uint32_t codepoint = _baseCodepoint + offset;
+
+            ShaderEntry shaderEntry;
+            shaderEntry.offset = offset;
+            shaderEntry.codepoint = codepoint;
+            shaderEntry.name = name;
+            shaderEntry.code = code;
+
+            uint32_t index = static_cast<uint32_t>(_entries.size());
+            _entries.push_back(std::move(shaderEntry));
+            _codepointToIndex[codepoint] = index;
+
+            yinfo("ShaderFont: loaded {} at offset 0x{:04X} (codepoint 0x{:06X})",
+                  filename, offset, codepoint);
+        }
+        closedir(dir);
+    } else {
+        yerror("ShaderFont: failed to open directory '{}'", searchDir);
+    }
+#else
+    // Use std::filesystem on native platforms
     if (!std::filesystem::exists(searchDir)) {
+        yinfo("ShaderFont: directory '{}' not found, falling back to '{}'",
+              searchDir, _shaderDir);
         searchDir = _shaderDir;
     }
 
@@ -209,6 +280,7 @@ Result<void> ShaderFontImpl::loadShaders() {
     } catch (const std::exception& e) {
         yerror("ShaderFont: error scanning shaders: {}", e.what());
     }
+#endif
 
     std::sort(_entries.begin(), _entries.end(),
               [](const auto& a, const auto& b) { return a.offset < b.offset; });
@@ -238,9 +310,13 @@ uint32_t ShaderFontImpl::getGlyphIndex(uint32_t codepoint) {
         if (_enabledCodepoints.find(codepoint) == _enabledCodepoints.end()) {
             _enabledCodepoints.insert(codepoint);
             _dirty = true;
+            yinfo("ShaderFont::getGlyphIndex: enabled codepoint {:#x}, now {} enabled, dirty=true",
+                  codepoint, _enabledCodepoints.size());
         }
         return codepoint;
     }
+    ywarn("ShaderFont::getGlyphIndex: codepoint {:#x} not found in {} entries",
+          codepoint, _entries.size());
     if (!_entries.empty()) {
         return _entries[0].codepoint;
     }

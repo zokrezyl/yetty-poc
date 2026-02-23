@@ -62,6 +62,92 @@ if ! curl -s -o /dev/null http://localhost:$PORT/; then
 fi
 echo "Server started"
 
+#=============================================================================
+# Build Asset Verification
+#=============================================================================
+echo ""
+echo "=== Build Asset Verification ==="
+
+BUILD_RESULT=0
+
+# Check vfsync filesystem
+echo "Checking vfsync filesystem..."
+if [ -d "$YETTY_ROOT/$BUILD_DIR/vfsync/u/os/yetty-alpine" ]; then
+    echo -e "${GREEN}OK: vfsync directory exists${NC}"
+    VFSYNC_FILES=$(ls "$YETTY_ROOT/$BUILD_DIR/vfsync/u/os/yetty-alpine/files/" 2>/dev/null | wc -l)
+    echo "  vfsync files: $VFSYNC_FILES"
+    if [ "$VFSYNC_FILES" -lt 100 ]; then
+        echo -e "${RED}ERROR: vfsync has too few files ($VFSYNC_FILES < 100)${NC}"
+        BUILD_RESULT=1
+    fi
+else
+    echo -e "${RED}ERROR: vfsync directory missing${NC}"
+    BUILD_RESULT=1
+fi
+
+# Check vfsync head file for demo presence
+if [ -f "$YETTY_ROOT/$BUILD_DIR/vfsync/u/os/yetty-alpine/head" ]; then
+    FS_COUNT=$(grep "FSFileCount:" "$YETTY_ROOT/$BUILD_DIR/vfsync/u/os/yetty-alpine/head" | awk '{print $2}')
+    echo "  FSFileCount: $FS_COUNT"
+fi
+
+# Check jslinux files
+echo "Checking jslinux files..."
+JSLINUX_DIR="$YETTY_ROOT/$BUILD_DIR/jslinux"
+JSLINUX_OK=1
+for file in vm-bridge.html term-bridge.js x86_64emu-wasm.js x86_64emu-wasm.wasm kernel-x86_64.bin; do
+    if [ -f "$JSLINUX_DIR/$file" ]; then
+        echo -e "  ${GREEN}OK: jslinux/$file${NC}"
+    else
+        echo -e "  ${RED}MISSING: jslinux/$file${NC}"
+        JSLINUX_OK=0
+        BUILD_RESULT=1
+    fi
+done
+
+# Check shader glyphs
+echo "Checking shader glyphs..."
+GLYPH_DIR="$YETTY_ROOT/$BUILD_DIR/assets/shaders/glyphs"
+if [ -d "$GLYPH_DIR" ]; then
+    GLYPH_COUNT=$(ls "$GLYPH_DIR"/*.wgsl 2>/dev/null | wc -l)
+    echo -e "${GREEN}OK: $GLYPH_COUNT shader glyph files${NC}"
+    if [ "$GLYPH_COUNT" -lt 30 ]; then
+        echo -e "${RED}ERROR: Too few shader glyphs ($GLYPH_COUNT < 30)${NC}"
+        BUILD_RESULT=1
+    fi
+else
+    echo -e "${RED}ERROR: Shader glyphs directory missing${NC}"
+    BUILD_RESULT=1
+fi
+
+# Check card shaders
+CARD_DIR="$YETTY_ROOT/$BUILD_DIR/assets/shaders/cards"
+if [ -d "$CARD_DIR" ]; then
+    CARD_COUNT=$(ls "$CARD_DIR"/*.wgsl 2>/dev/null | wc -l)
+    echo -e "${GREEN}OK: $CARD_COUNT card shader files${NC}"
+else
+    echo -e "${RED}ERROR: Card shaders directory missing${NC}"
+    BUILD_RESULT=1
+fi
+
+# Check yetty.data contains demo
+echo "Checking yetty.data..."
+if [ -f "$YETTY_ROOT/$BUILD_DIR/yetty.data" ]; then
+    DATA_SIZE=$(stat -c%s "$YETTY_ROOT/$BUILD_DIR/yetty.data" 2>/dev/null || stat -f%z "$YETTY_ROOT/$BUILD_DIR/yetty.data")
+    DATA_MB=$((DATA_SIZE / 1024 / 1024))
+    echo -e "${GREEN}OK: yetty.data exists (${DATA_MB}MB)${NC}"
+else
+    echo -e "${RED}ERROR: yetty.data missing${NC}"
+    BUILD_RESULT=1
+fi
+
+if [ "$BUILD_RESULT" -ne 0 ]; then
+    echo ""
+    echo -e "${RED}=== BUILD ASSET VERIFICATION FAILED ===${NC}"
+    exit 1
+fi
+echo ""
+
 # Determine test URL
 if [ "$TEST_MODE" = "jslinux" ]; then
     TEST_URL="http://localhost:$PORT/jslinux/vm-bridge.html?ptyId=test1&url=alpine-x86_64.cfg&cpu=x86_64&cols=80&rows=25&mem=256"
@@ -172,6 +258,23 @@ if [ "$TEST_MODE" = "jslinux" ] || [ "$TEST_MODE" = "jslinux-local" ]; then
     else
         echo -e "${YELLOW}WARN: Shell prompt not seen (may need more time)${NC}"
     fi
+
+    # Check for demo directory in boot output
+    echo ""
+    echo "=== Demo Files Check ==="
+    if grep -q "/home/demo contents" "$CONSOLE_LOG"; then
+        echo -e "${GREEN}OK: Demo directory listing found in boot${NC}"
+        grep -A 20 "/home/demo contents" "$CONSOLE_LOG" | head -25 || true
+    else
+        echo -e "${YELLOW}WARN: Demo directory listing not in boot output${NC}"
+    fi
+
+    # Check for shader-glyphs.txt specifically
+    if grep -q "shader-glyphs.txt" "$CONSOLE_LOG"; then
+        echo -e "${GREEN}OK: shader-glyphs.txt found${NC}"
+    else
+        echo -e "${YELLOW}WARN: shader-glyphs.txt not seen in output${NC}"
+    fi
 else
     # Full yetty checks
     if [ "$RESULT" -eq 0 ]; then
@@ -183,6 +286,7 @@ else
             "Config::init done"
             "Web platform created"
             "initWebGPU: Creating instance"
+            "ShaderFont: loaded"
         )
 
         # Desired checkpoints (render loop)
@@ -222,6 +326,32 @@ else
                 RESULT=1
             fi
         fi
+    fi
+
+    # Show shader loading output
+    echo ""
+    echo "=== Shader Loading ==="
+    grep -E "ShaderFont:|ShaderManager:" "$CONSOLE_LOG" | head -30 || echo "(no shader output)"
+
+    # Verify shader glyphs loaded
+    if grep -q "ShaderFont: loaded.*glyph shaders" "$CONSOLE_LOG"; then
+        GLYPH_COUNT=$(grep "ShaderFont: loaded.*glyph shaders" "$CONSOLE_LOG" | grep -oP '\d+ glyph' | head -1)
+        echo -e "${GREEN}OK: Shader glyphs loaded ($GLYPH_COUNT)${NC}"
+    else
+        echo -e "${RED}MISSING: Shader glyphs not loaded${NC}"
+        RESULT=1
+    fi
+
+    # Check for shader glyph rendering (when cat shader-glyphs.txt is run)
+    if grep -q "SHADER GLYPH:" "$CONSOLE_LOG"; then
+        echo -e "${GREEN}OK: Shader glyphs rendered${NC}"
+        grep "SHADER GLYPH:" "$CONSOLE_LOG" | head -5
+    fi
+
+    # Check for shader glyph enabling
+    if grep -q "ShaderFont::getGlyphIndex: enabled" "$CONSOLE_LOG"; then
+        echo -e "${GREEN}OK: Shader glyphs enabled for compilation${NC}"
+        grep "ShaderFont::getGlyphIndex: enabled" "$CONSOLE_LOG" | head -5
     fi
 
     # Show yetty-specific log output

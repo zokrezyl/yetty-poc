@@ -75,12 +75,40 @@ class Term {
     }
 
     write(str) {
-        termLog("write: " + str.substring(0, 50) + (str.length > 50 ? "..." : ""));
+        // Fix garbled UTF-8: JSLinux's _console_write uses String.fromCharCode on raw bytes,
+        // which treats each UTF-8 byte as a separate character. We detect this and reconstruct.
+        var fixedStr = str;
+        var needsFix = false;
+        for (var i = 0; i < str.length; i++) {
+            var code = str.charCodeAt(i);
+            // UTF-8 continuation bytes (0x80-0xBF) or lead bytes (0xC0-0xF7) appearing as chars
+            // indicate garbled UTF-8 from String.fromCharCode
+            if (code >= 0x80 && code <= 0xF7) {
+                needsFix = true;
+                break;
+            }
+        }
+
+        if (needsFix) {
+            // Convert back to bytes and decode as UTF-8
+            var bytes = new Uint8Array(str.length);
+            for (var i = 0; i < str.length; i++) {
+                bytes[i] = str.charCodeAt(i) & 0xFF;
+            }
+            try {
+                fixedStr = new TextDecoder('utf-8').decode(bytes);
+            } catch (e) {
+                // If decoding fails, use original
+                fixedStr = str;
+            }
+        }
+
+        termLog("write: " + fixedStr.substring(0, 50) + (fixedStr.length > 50 ? "..." : ""));
         // Send output to yetty for rendering
         window.parent.postMessage({
             type: 'term-output',
             ptyId: this.ptyId,
-            data: str
+            data: fixedStr
         }, '*');
     }
 

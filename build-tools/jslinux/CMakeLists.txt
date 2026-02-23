@@ -30,16 +30,16 @@ foreach(FILE ${JSLINUX_FILES})
     endif()
 endforeach()
 
-# Create proxied config file (uses /vfsync/ proxy instead of direct vfsync.org)
+# Create config file using local yetty-alpine filesystem (built by build-vfsync.sh)
 set(CONFIG_FILE "${JSLINUX_DIR}/alpine-x86_64.cfg")
-file(WRITE ${CONFIG_FILE} "/* VM configuration file - proxied for local serving */
+file(WRITE ${CONFIG_FILE} "/* VM configuration file - uses local vfsync filesystem */
 {
     version: 1,
     machine: \"pc\",
     memory_size: 256,
     kernel: \"kernel-x86_64.bin\",
     cmdline: \"loglevel=3 console=hvc0 root=root rootfstype=9p rootflags=trans=virtio ro TZ=\${TZ}\",
-    fs0: { file: \"/vfsync/u/os/alpine-x86_64\" },
+    fs0: { file: \"/vfsync/u/os/yetty-alpine\" },
     eth0: { driver: \"user\" },
 }
 ")
