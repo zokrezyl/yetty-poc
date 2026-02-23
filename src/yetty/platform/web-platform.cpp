@@ -1,4 +1,5 @@
 #include <yetty/platform.h>
+#include <yetty/pty-provider.h>
 #include <yetty/gpu-screen-manager.h>
 #include <yetty/gpu-screen.h>
 #include <ytrace/ytrace.hpp>
@@ -7,8 +8,147 @@
 
 #include <emscripten/emscripten.h>
 #include <emscripten/html5.h>
+#include <atomic>
+#include <unordered_map>
 
 namespace yetty {
+
+// =============================================================================
+// WebPTY - PTY Provider that uses JSLinux in an iframe
+// =============================================================================
+
+// Global registry of WebPTY instances for postMessage callbacks
+static std::unordered_map<uint32_t, class WebPTY*> g_ptyInstances;
+static std::atomic<uint32_t> g_nextPtyId{1};
+
+class WebPTY : public PTYProvider {
+public:
+    WebPTY() : _id(g_nextPtyId++) {
+        g_ptyInstances[_id] = this;
+    }
+
+    ~WebPTY() override {
+        stop();
+        g_ptyInstances.erase(_id);
+    }
+
+    Result<void> start(const std::string& vmConfig, uint32_t cols, uint32_t rows) override {
+        _cols = cols;
+        _rows = rows;
+        _vmConfig = vmConfig;
+        _running = true;
+
+        yinfo("WebPTY[{}]: Starting with config '{}' ({}x{})", _id, vmConfig, cols, rows);
+
+        // Create iframe and start JSLinux emulator via JavaScript
+        EM_ASM({
+            var ptyId = $0;
+            var vmConfig = UTF8ToString($1);
+            var cols = $2;
+            var rows = $3;
+
+            // Create hidden iframe for the emulator
+            var iframe = document.createElement('iframe');
+            iframe.id = 'jslinux-pty-' + ptyId;
+            iframe.style.cssText = 'position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;';
+            iframe.src = '/jslinux/vm-bridge.html?ptyId=' + ptyId +
+                         '&url=' + encodeURIComponent(vmConfig) +
+                         '&cols=' + cols + '&rows=' + rows +
+                         '&cpu=x86_64&mem=256';
+            document.body.appendChild(iframe);
+
+            console.log('WebPTY: Created iframe for pty ' + ptyId);
+        }, _id, vmConfig.c_str(), cols, rows);
+
+        return Ok();
+    }
+
+    void stop() override {
+        if (!_running) return;
+        _running = false;
+
+        yinfo("WebPTY[{}]: Stopping", _id);
+
+        // Remove iframe
+        EM_ASM({
+            var ptyId = $0;
+            var iframe = document.getElementById('jslinux-pty-' + ptyId);
+            if (iframe) {
+                iframe.remove();
+                console.log('WebPTY: Removed iframe for pty ' + ptyId);
+            }
+        }, _id);
+
+        if (_exitCallback) {
+            _exitCallback(0);
+        }
+    }
+
+    void write(const char* data, size_t len) override {
+        if (!_running || len == 0) return;
+
+        // Send input to iframe via postMessage
+        EM_ASM({
+            var ptyId = $0;
+            var data = UTF8ToString($1, $2);
+            var iframe = document.getElementById('jslinux-pty-' + ptyId);
+            if (iframe && iframe.contentWindow) {
+                iframe.contentWindow.postMessage({
+                    type: 'term-input',
+                    ptyId: ptyId,
+                    data: data
+                }, '*');
+            }
+        }, _id, data, len);
+    }
+
+    void resize(uint32_t cols, uint32_t rows) override {
+        _cols = cols;
+        _rows = rows;
+
+        // Send resize to iframe
+        EM_ASM({
+            var ptyId = $0;
+            var cols = $1;
+            var rows = $2;
+            var iframe = document.getElementById('jslinux-pty-' + ptyId);
+            if (iframe && iframe.contentWindow) {
+                iframe.contentWindow.postMessage({
+                    type: 'term-resize',
+                    ptyId: ptyId,
+                    cols: cols,
+                    rows: rows
+                }, '*');
+            }
+        }, _id, cols, rows);
+    }
+
+    bool isRunning() const override { return _running; }
+
+    void setDataCallback(DataCallback cb) override { _dataCallback = std::move(cb); }
+    void setExitCallback(ExitCallback cb) override { _exitCallback = std::move(cb); }
+    uint32_t getId() const override { return _id; }
+
+    // Called from JavaScript when data arrives from iframe
+    void onDataFromEmulator(const char* data, size_t len) {
+        if (_dataCallback) {
+            _dataCallback(data, len);
+        }
+    }
+
+private:
+    uint32_t _id;
+    uint32_t _cols = 80;
+    uint32_t _rows = 25;
+    std::string _vmConfig;
+    bool _running = false;
+    DataCallback _dataCallback;
+    ExitCallback _exitCallback;
+};
+
+// =============================================================================
+// WebPlatform - Main platform implementation for Emscripten
+// =============================================================================
 
 class WebPlatform : public Platform {
 public:
@@ -85,23 +225,9 @@ public:
 
     void runMainLoop(MainLoopCallback callback) override {
         _mainLoopCallback = std::move(callback);
-        // Use emscripten_set_main_loop_arg instead of request_animation_frame_loop
-        // 0 = use browser's requestAnimationFrame, false = don't simulate infinite loop
-        emscripten_set_main_loop_arg(mainLoopTrampoline, this, 0, true);
+        // 1 = 1 FPS default to reduce log output; use OSC 666671 to increase
+        emscripten_set_main_loop_arg(mainLoopTrampoline, this, 1, true);
     }
-
-private:
-    static void mainLoopTrampoline(void* userData) {
-        auto* self = static_cast<WebPlatform*>(userData);
-        if (self->_mainLoopCallback) {
-            bool continueLoop = self->_mainLoopCallback();
-            if (!continueLoop) {
-                emscripten_cancel_main_loop();
-            }
-        }
-    }
-
-    MainLoopCallback _mainLoopCallback;
 
     void setKeyCallback(KeyCallback cb) override { _keyCallback = std::move(cb); }
     void setCharCallback(CharCallback cb) override { _charCallback = std::move(cb); }
@@ -144,19 +270,57 @@ private:
         return "";
     }
 
-    // Shell stubs - web doesn't have PTY, uses toybox via JS
-    // Note: These are not virtual in Platform base class, so no override
-    Result<void> startShell(const std::vector<std::string>& envVars, int cols, int rows) {
-        (void)envVars; (void)cols; (void)rows;
-        return Ok();
+    Result<std::shared_ptr<PTYProvider>> createPTY() override {
+        return Ok(std::static_pointer_cast<PTYProvider>(std::make_shared<WebPTY>()));
     }
-    void stopShell() {}
-    void writeToShell(const char* data, size_t len) { (void)data; (void)len; }
-    void resizeShell(int cols, int rows) { (void)cols; (void)rows; }
-    void setShellOutputCallback(std::function<void(const char*, size_t)> cb) { (void)cb; }
-    bool isShellRunning() const { return false; }
 
 private:
+    static void mainLoopTrampoline(void* userData) {
+        auto* self = static_cast<WebPlatform*>(userData);
+        if (self->_mainLoopCallback) {
+            bool continueLoop = self->_mainLoopCallback();
+            if (!continueLoop) {
+                emscripten_cancel_main_loop();
+            }
+        }
+    }
+
+    // Map browser keyCode to GLFW key code
+    static int browserToGLFWKey(int keyCode) {
+        switch (keyCode) {
+            case 13: return 257;   // Enter -> GLFW_KEY_ENTER
+            case 8:  return 259;   // Backspace -> GLFW_KEY_BACKSPACE
+            case 9:  return 258;   // Tab -> GLFW_KEY_TAB
+            case 27: return 256;   // Escape -> GLFW_KEY_ESCAPE
+            case 38: return 265;   // ArrowUp -> GLFW_KEY_UP
+            case 40: return 264;   // ArrowDown -> GLFW_KEY_DOWN
+            case 37: return 263;   // ArrowLeft -> GLFW_KEY_LEFT
+            case 39: return 262;   // ArrowRight -> GLFW_KEY_RIGHT
+            case 36: return 268;   // Home -> GLFW_KEY_HOME
+            case 35: return 269;   // End -> GLFW_KEY_END
+            case 33: return 266;   // PageUp -> GLFW_KEY_PAGE_UP
+            case 34: return 267;   // PageDown -> GLFW_KEY_PAGE_DOWN
+            case 45: return 260;   // Insert -> GLFW_KEY_INSERT
+            case 46: return 261;   // Delete -> GLFW_KEY_DELETE
+            case 112: return 290;  // F1 -> GLFW_KEY_F1
+            case 113: return 291;  // F2
+            case 114: return 292;  // F3
+            case 115: return 293;  // F4
+            case 116: return 294;  // F5
+            case 117: return 295;  // F6
+            case 118: return 296;  // F7
+            case 119: return 297;  // F8
+            case 120: return 298;  // F9
+            case 121: return 299;  // F10
+            case 122: return 300;  // F11
+            case 123: return 301;  // F12
+            case 16: return 340;   // Shift -> GLFW_KEY_LEFT_SHIFT
+            case 17: return 341;   // Control -> GLFW_KEY_LEFT_CONTROL
+            case 18: return 342;   // Alt -> GLFW_KEY_LEFT_ALT
+            default: return keyCode; // Pass through for letters/numbers
+        }
+    }
+
     static EM_BOOL keyCallback(int eventType, const EmscriptenKeyboardEvent* e, void* userData) {
         auto* self = static_cast<WebPlatform*>(userData);
         if (self->_keyCallback) {
@@ -165,7 +329,8 @@ private:
             if (e->ctrlKey) mods |= 0x0002;  // GLFW_MOD_CONTROL
             if (e->shiftKey) mods |= 0x0001; // GLFW_MOD_SHIFT
             if (e->altKey) mods |= 0x0004;   // GLFW_MOD_ALT
-            self->_keyCallback(e->keyCode, 0, action, mods);
+            int glfwKey = browserToGLFWKey(e->keyCode);
+            self->_keyCallback(glfwKey, 0, action, mods);
         }
         if (self->_charCallback && eventType == EMSCRIPTEN_EVENT_KEYDOWN && e->key[0] && !e->key[1]) {
             // Single character key
@@ -219,6 +384,7 @@ private:
     int _width = 0;
     int _height = 0;
     std::string _title;
+    MainLoopCallback _mainLoopCallback;
 
     // Callbacks
     KeyCallback _keyCallback;
@@ -241,12 +407,20 @@ Result<Platform::Ptr> Platform::create() {
 
 // =============================================================================
 // Exported C functions for JavaScript interop
-// Write to GPUScreen via GPUScreenManager (no globals needed)
 // =============================================================================
 
 extern "C" {
 
-// Write data to terminal (from JavaScript)
+// Called from JavaScript when data arrives from JSLinux iframe
+EMSCRIPTEN_KEEPALIVE
+void webpty_on_data(uint32_t ptyId, const char* data, int len) {
+    auto it = yetty::g_ptyInstances.find(ptyId);
+    if (it != yetty::g_ptyInstances.end()) {
+        it->second->onDataFromEmulator(data, static_cast<size_t>(len));
+    }
+}
+
+// Write data to terminal (from JavaScript) - legacy, kept for compatibility
 EMSCRIPTEN_KEEPALIVE
 void yetty_write(const char* data, int len) {
     if (len <= 0) return;
@@ -257,79 +431,93 @@ void yetty_write(const char* data, int len) {
     auto screens = (*mgrResult)->screens();
     if (screens.empty()) return;
 
-    // Write to first screen (typically only one on web)
     screens[0]->write(data, static_cast<size_t>(len));
 }
 
-// Handle key press
-EMSCRIPTEN_KEEPALIVE 
+EMSCRIPTEN_KEEPALIVE
 void yetty_key(int key, int mods) {
     (void)key; (void)mods;
-    // TODO: Connect to input handling
 }
 
-// Handle special key (arrow keys, etc.)
 EMSCRIPTEN_KEEPALIVE
 void yetty_special_key(int key, int mods) {
     (void)key; (void)mods;
-    // TODO: Connect to input handling
 }
 
-// Read input from terminal (for toybox stdin)
 EMSCRIPTEN_KEEPALIVE
 int yetty_read_input(char* buffer, int maxLen) {
     (void)buffer; (void)maxLen;
     return 0;
 }
 
-// Sync terminal display
 EMSCRIPTEN_KEEPALIVE
 void yetty_sync() {
-    // Render loop handles display updates
 }
 
-// Set content scale
 EMSCRIPTEN_KEEPALIVE
 void yetty_set_scale(float scaleX, float scaleY) {
     (void)scaleX; (void)scaleY;
 }
 
-// Resize terminal
 EMSCRIPTEN_KEEPALIVE
 void yetty_resize(int cols, int rows) {
     auto mgr = yetty::GPUScreenManager::instance();
     if (!mgr) return;
-    
+
     auto screens = (*mgr)->screens();
     if (!screens.empty()) {
         screens[0]->resize(static_cast<uint32_t>(cols), static_cast<uint32_t>(rows));
     }
 }
 
-// Get terminal columns
 EMSCRIPTEN_KEEPALIVE
 int yetty_get_cols() {
     auto mgr = yetty::GPUScreenManager::instance();
     if (!mgr) return 80;
-    
+
     auto screens = (*mgr)->screens();
     if (screens.empty()) return 80;
-    
+
     return static_cast<int>(screens[0]->getCols());
 }
 
-// Get terminal rows
 EMSCRIPTEN_KEEPALIVE
 int yetty_get_rows() {
     auto mgr = yetty::GPUScreenManager::instance();
     if (!mgr) return 24;
-    
+
     auto screens = (*mgr)->screens();
     if (screens.empty()) return 24;
-    
+
     return static_cast<int>(screens[0]->getRows());
 }
 
 } // extern "C"
+
+// Initialize message listener at startup
+static struct WebPTYInit {
+    WebPTYInit() {
+        EM_ASM({
+            window.addEventListener('message', function(e) {
+                if (e.data && e.data.type === 'term-output' && e.data.ptyId) {
+                    var data = e.data.data;
+                    var ptyId = parseInt(e.data.ptyId, 10);  // Convert string to int
+                    if (isNaN(ptyId)) {
+                        console.error('WebPTY: Invalid ptyId:', e.data.ptyId);
+                        return;
+                    }
+                    console.log('WebPTY: Received term-output for pty ' + ptyId + ', len=' + data.length);
+                    var encoder = new TextEncoder();
+                    var bytes = encoder.encode(data);
+                    var ptr = Module._malloc(bytes.length);
+                    Module.HEAPU8.set(bytes, ptr);
+                    Module._webpty_on_data(ptyId, ptr, bytes.length);
+                    Module._free(ptr);
+                }
+            });
+            console.log('WebPTY: Message listener initialized');
+        });
+    }
+} g_webPtyInit;
 
 #endif // __EMSCRIPTEN__

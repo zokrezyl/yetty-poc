@@ -216,6 +216,7 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     // Build YettyContext
     _yettyContext.gpu = _gpuContext;
     _yettyContext.gpuAllocator = _gpuAllocator;
+    _yettyContext.platform = _platform;
 #if !YETTY_WEB && !defined(__ANDROID__)
     _yettyContext.gpuMonitor = gpu::GpuMonitor::create();
 #endif

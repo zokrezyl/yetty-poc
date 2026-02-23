@@ -8,6 +8,9 @@
 
 namespace yetty {
 
+// Forward declaration
+class PTYProvider;
+
 // Cursor types (subset that makes sense across platforms)
 enum class CursorType {
     Arrow,
@@ -97,6 +100,13 @@ public:
 
     // Key name lookup (for GLFW key codes)
     virtual std::string getKeyName(int key, int scancode) const = 0;
+
+    // PTY/Shell support
+    // Creates a platform-appropriate PTY provider:
+    // - Desktop: forkpty() based shell
+    // - Web: JSLinux iframe emulator
+    // - Android: toybox or other shell
+    virtual Result<std::shared_ptr<PTYProvider>> createPTY() = 0;
 
 protected:
     Platform() = default;

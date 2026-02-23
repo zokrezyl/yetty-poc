@@ -814,7 +814,6 @@ void GPUScreenImpl::createVTerm() {
 }
 
 void GPUScreenImpl::write(const char *data, size_t len) {
-  ydebug("GPUScreenImpl::write: len={} _vterm={}", len, (void *)_vterm);
   if (_vterm && len > 0) {
     vterm_input_write(_vterm, data, len);
   }

@@ -6,6 +6,7 @@ set -e
 
 BUILD_DIR="${1:-build-webasm-dawn-release}"
 PORT="${2:-8199}"
+TEST_MODE="${3:-full}"  # "full", "jslinux", or "jslinux-local"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 YETTY_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
@@ -18,6 +19,7 @@ echo "=============================================="
 echo "Headless Chrome Test (Software WebGPU)"
 echo "Build directory: $BUILD_DIR"
 echo "Port: $PORT"
+echo "Test mode: $TEST_MODE"
 echo "=============================================="
 
 cd "$YETTY_ROOT/$BUILD_DIR"
@@ -60,6 +62,18 @@ if ! curl -s -o /dev/null http://localhost:$PORT/; then
 fi
 echo "Server started"
 
+# Determine test URL
+if [ "$TEST_MODE" = "jslinux" ]; then
+    TEST_URL="http://localhost:$PORT/jslinux/vm-bridge.html?ptyId=test1&url=alpine-x86_64.cfg&cpu=x86_64&cols=80&rows=25&mem=256"
+    echo "Testing JSLinux (vfsync.org proxy) at: $TEST_URL"
+elif [ "$TEST_MODE" = "jslinux-local" ]; then
+    TEST_URL="http://localhost:$PORT/jslinux/vm-bridge.html?ptyId=test1&url=yetty-alpine.cfg&cpu=x86_64&cols=80&rows=25&mem=256"
+    echo "Testing JSLinux (local vfsync) at: $TEST_URL"
+else
+    TEST_URL="http://localhost:$PORT/"
+    echo "Testing full yetty at: $TEST_URL"
+fi
+
 # Run Chrome with software WebGPU rendering
 echo "Running headless Chrome with software WebGPU..."
 
@@ -83,7 +97,7 @@ timeout 120 $CHROME \
     --disable-vulkan-surface \
     --v=1 \
     --virtual-time-budget=60000 \
-    "http://localhost:$PORT/" \
+    "$TEST_URL" \
     2>&1 | tee "$CONSOLE_LOG" || true
 
 echo ""
@@ -102,7 +116,7 @@ elif grep -q "RuntimeError" "$CONSOLE_LOG"; then
     RESULT=1
 elif grep -q "Uncaught" "$CONSOLE_LOG"; then
     echo -e "${RED}ERROR: Uncaught exception${NC}"
-    grep "Uncaught" "$CONSOLE_LOG" || true
+    grep "Uncaught" "$CONSOLE_LOG" | head -5 || true
     RESULT=1
 elif grep -q "processPackageData" "$CONSOLE_LOG"; then
     echo -e "${RED}ERROR: processPackageData error${NC}"
@@ -110,25 +124,26 @@ elif grep -q "processPackageData" "$CONSOLE_LOG"; then
     RESULT=1
 fi
 
-# If no fatal errors, check for expected ytrace output
-if [ "$RESULT" -eq 0 ]; then
-    echo "Checking expected ytrace output..."
+if [ "$TEST_MODE" = "jslinux" ] || [ "$TEST_MODE" = "jslinux-local" ]; then
+    # JSLinux-specific checks
+    echo ""
+    echo "=== JSLinux Output ==="
+    grep -E "\[vm-bridge\]|\[term-bridge\]" "$CONSOLE_LOG" | head -50 || echo "(no vm-bridge output)"
 
-    # Required checkpoints
-    CHECKPOINTS=(
-        "Yetty starting"
-        "Config::init done"
-        "Web platform created"
-        "initWebGPU: Creating instance"
+    # Check JSLinux checkpoints
+    echo ""
+    echo "=== JSLinux Checkpoints ==="
+
+    JSLINUX_CHECKPOINTS=(
+        "term-bridge.js loaded"
+        "Term constructor called"
+        "start_vm called"
+        "Loading emulator"
+        "Module.preRun called"
+        "vm_start returned successfully"
     )
 
-    # Desired checkpoints (render loop)
-    RENDER_CHECKPOINTS=(
-        "Starting render loop"
-        "Surface configured"
-    )
-
-    for checkpoint in "${CHECKPOINTS[@]}"; do
+    for checkpoint in "${JSLINUX_CHECKPOINTS[@]}"; do
         if grep -q "$checkpoint" "$CONSOLE_LOG"; then
             echo -e "${GREEN}OK: $checkpoint${NC}"
         else
@@ -137,34 +152,83 @@ if [ "$RESULT" -eq 0 ]; then
         fi
     done
 
-    # Check WebGPU initialization
-    if grep -q "WebGPU device ready" "$CONSOLE_LOG" || grep -q "initWebGPU OK" "$CONSOLE_LOG"; then
-        echo -e "${GREEN}OK: WebGPU initialized${NC}"
+    # Check if kernel was downloaded (shows emulator is running)
+    if grep -q "kernel-x86_64.bin" "$CONSOLE_LOG"; then
+        echo -e "${GREEN}OK: Kernel download started${NC}"
+    else
+        echo -e "${YELLOW}WARN: Kernel download not seen${NC}"
+    fi
 
-        # If WebGPU works, check render loop
-        for checkpoint in "${RENDER_CHECKPOINTS[@]}"; do
+    # Check for successful VM boot
+    if grep -q "Welcome to JS/Linux" "$CONSOLE_LOG" || grep -q "Welcome to yetty Alpine" "$CONSOLE_LOG"; then
+        echo -e "${GREEN}OK: VM booted - Welcome message received${NC}"
+    else
+        echo -e "${RED}MISSING: VM boot welcome message${NC}"
+        RESULT=1
+    fi
+
+    if grep -q "localhost:~#" "$CONSOLE_LOG"; then
+        echo -e "${GREEN}OK: Shell prompt received${NC}"
+    else
+        echo -e "${YELLOW}WARN: Shell prompt not seen (may need more time)${NC}"
+    fi
+else
+    # Full yetty checks
+    if [ "$RESULT" -eq 0 ]; then
+        echo "Checking expected ytrace output..."
+
+        # Required checkpoints
+        CHECKPOINTS=(
+            "Yetty starting"
+            "Config::init done"
+            "Web platform created"
+            "initWebGPU: Creating instance"
+        )
+
+        # Desired checkpoints (render loop)
+        RENDER_CHECKPOINTS=(
+            "Starting render loop"
+            "Surface configured"
+        )
+
+        for checkpoint in "${CHECKPOINTS[@]}"; do
             if grep -q "$checkpoint" "$CONSOLE_LOG"; then
                 echo -e "${GREEN}OK: $checkpoint${NC}"
             else
-                echo -e "${YELLOW}MISSING: $checkpoint${NC}"
+                echo -e "${RED}MISSING: $checkpoint${NC}"
+                RESULT=1
             fi
         done
-    else
-        # WebGPU failed - check why
-        if grep -q "Failed to get WebGPU adapter" "$CONSOLE_LOG"; then
-            echo -e "${YELLOW}WARNING: WebGPU adapter not available (SwiftShader may not be working)${NC}"
-            echo -e "${YELLOW}This is acceptable in CI without proper GPU support${NC}"
+
+        # Check WebGPU initialization
+        if grep -q "WebGPU device ready" "$CONSOLE_LOG" || grep -q "initWebGPU OK" "$CONSOLE_LOG"; then
+            echo -e "${GREEN}OK: WebGPU initialized${NC}"
+
+            # If WebGPU works, check render loop
+            for checkpoint in "${RENDER_CHECKPOINTS[@]}"; do
+                if grep -q "$checkpoint" "$CONSOLE_LOG"; then
+                    echo -e "${GREEN}OK: $checkpoint${NC}"
+                else
+                    echo -e "${YELLOW}MISSING: $checkpoint${NC}"
+                fi
+            done
         else
-            echo -e "${RED}ERROR: WebGPU initialization failed for unknown reason${NC}"
-            RESULT=1
+            # WebGPU failed - check why
+            if grep -q "Failed to get WebGPU adapter" "$CONSOLE_LOG"; then
+                echo -e "${YELLOW}WARNING: WebGPU adapter not available (SwiftShader may not be working)${NC}"
+                echo -e "${YELLOW}This is acceptable in CI without proper GPU support${NC}"
+            else
+                echo -e "${RED}ERROR: WebGPU initialization failed for unknown reason${NC}"
+                RESULT=1
+            fi
         fi
     fi
-fi
 
-# Show yetty-specific log output
-echo ""
-echo "=== Yetty Console Output ==="
-grep -E "\[yetty\]" "$CONSOLE_LOG" | head -40 || echo "(no yetty output)"
+    # Show yetty-specific log output
+    echo ""
+    echo "=== Yetty Console Output ==="
+    grep -E "\[yetty\]" "$CONSOLE_LOG" | head -40 || echo "(no yetty output)"
+fi
 
 # Show any errors
 echo ""

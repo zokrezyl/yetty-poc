@@ -28,6 +28,9 @@ add_executable(yetty
 add_subdirectory(${YETTY_ROOT}/src/yetty/ydraw-zoo ${CMAKE_BINARY_DIR}/src/yetty/ydraw-zoo)
 add_subdirectory(${YETTY_ROOT}/src/yetty/ydraw-maze ${CMAKE_BINARY_DIR}/src/yetty/ydraw-maze)
 
+# JSLinux integration (downloads and copies files)
+add_subdirectory(${YETTY_ROOT}/build-tools/jslinux ${CMAKE_BINARY_DIR}/jslinux-build)
+
 target_include_directories(yetty PRIVATE ${YETTY_INCLUDES})
 
 add_dependencies(yetty generate-cdb copy-shaders copy-assets)
@@ -57,7 +60,7 @@ target_link_options(yetty PRIVATE
     "--preload-file=${CMAKE_BINARY_DIR}/assets@/assets"
     "--preload-file=${YETTY_ROOT}/demo@/demo"
     "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','UTF8ToString','stringToUTF8','FS','ENV','HEAPU8']"
-    "-sEXPORTED_FUNCTIONS=['_main','_malloc','_free','_yetty_write','_yetty_key','_yetty_special_key','_yetty_read_input','_yetty_sync','_yetty_set_scale','_yetty_resize','_yetty_get_cols','_yetty_get_rows']"
+    "-sEXPORTED_FUNCTIONS=['_main','_malloc','_free','_yetty_write','_yetty_key','_yetty_special_key','_yetty_read_input','_yetty_sync','_yetty_set_scale','_yetty_resize','_yetty_get_cols','_yetty_get_rows','_webpty_on_data']"
 )
 
 target_compile_options(yetty PRIVATE --use-port=emdawnwebgpu)
@@ -80,6 +83,13 @@ add_custom_command(TARGET yetty PRE_LINK
 add_custom_command(TARGET yetty POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${YETTY_ROOT}/build-tools/web/index.html ${CMAKE_BINARY_DIR}/index.html
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${YETTY_ROOT}/build-tools/web/serve.py ${CMAKE_BINARY_DIR}/serve.py
+)
+
+# Copy JSLinux files to build output
+add_custom_command(TARGET yetty POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/jslinux
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_BINARY_DIR}/jslinux-build/jslinux ${CMAKE_BINARY_DIR}/jslinux
+    COMMENT "Copying JSLinux files..."
 )
 
 # Build toybox if source exists

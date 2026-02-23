@@ -54,7 +54,7 @@
 </head>
 <body>
     <div id="canvas-container">
-        <canvas id="canvas" width="1024" height="768"></canvas>
+        <canvas id="canvas" width="1024" height="768" tabindex="0"></canvas>
         <div id="loading">
             <div class="spinner"></div>
             <div>Loading WebGPU...</div>
@@ -63,233 +63,6 @@
     </div>
 
     <script>
-        // Toybox WASM module factory
-        let ToyboxFactory = null;
-        let toyboxInstance = null;  // Persistent Toybox instance with synced FS
-        let commandHistory = [];
-        let historyIndex = -1;
-
-        const AVAILABLE_COMMANDS = [
-            'ls', 'cat', 'head', 'tail', 'touch', 'mkdir', 'rmdir', 'rm', 'cp', 'mv', 'find',
-            'echo', 'printf', 'pwd', 'printenv', 'env', 'test', 'true', 'false',
-            'wc', 'sort', 'uniq', 'cut', 'tr', 'rev', 'basename', 'dirname', 'tee',
-            'yes', 'seq', 'cal', 'factor', 'sleep', 'date'
-        ];
-
-        // Recursively copy directory from yetty's FS to Toybox's FS
-        function syncDirectoryToToybox(toybox, srcPath) {
-            if (!Module.FS || !toybox.FS) {
-                console.error('syncDirectoryToToybox: FS not available', {yettyFS: !!Module.FS, toyboxFS: !!toybox.FS});
-                return;
-            }
-
-            try {
-                const entries = Module.FS.readdir(srcPath);
-                console.log('Syncing', srcPath, 'entries:', entries.length - 2); // -2 for . and ..
-                for (const entry of entries) {
-                    if (entry === '.' || entry === '..') continue;
-
-                    const fullPath = srcPath + '/' + entry;
-                    const stat = Module.FS.stat(fullPath);
-
-                    if (Module.FS.isDir(stat.mode)) {
-                        try { toybox.FS.mkdir(fullPath); } catch (e) {}
-                        syncDirectoryToToybox(toybox, fullPath);
-                    } else if (Module.FS.isFile(stat.mode)) {
-                        try {
-                            const data = Module.FS.readFile(fullPath);
-                            toybox.FS.writeFile(fullPath, data);
-                        } catch (e) {
-                            console.warn('Failed to sync file:', fullPath, e);
-                        }
-                    }
-                }
-            } catch (e) {
-                console.error('Failed to read directory:', srcPath, e);
-            }
-        }
-
-        async function initToybox() {
-            const status = document.getElementById('status');
-            const loading = document.getElementById('loading');
-
-            if (status) status.textContent = 'Loading Toybox...';
-
-            try {
-                const script = document.createElement('script');
-                script.src = 'toybox.js';
-
-                await new Promise((resolve, reject) => {
-                    script.onload = resolve;
-                    script.onerror = () => reject(new Error('Failed to load toybox.js'));
-                    document.head.appendChild(script);
-                });
-
-                ToyboxFactory = ToyboxModule;
-                if (status) status.textContent = 'Toybox ready!';
-
-                setTimeout(() => {
-                    if (loading) loading.style.display = 'none';
-                }, 500);
-
-            } catch (err) {
-                if (status) status.textContent = 'Error: ' + err.message;
-                console.error('Failed to initialize Toybox:', err);
-            }
-        }
-
-        async function getToyboxInstance() {
-            if (toyboxInstance) return toyboxInstance;
-
-            if (!ToyboxFactory) return null;
-
-            // Create persistent Toybox instance
-            toyboxInstance = await ToyboxFactory({
-                thisProgram: 'toybox',
-                print: () => {},  // Will be overridden per-command
-                printErr: () => {},
-                noExitRuntime: true,
-            });
-
-            // Sync demo and assets directories from yetty's FS
-            try {
-                toyboxInstance.FS.mkdir('/demo');
-            } catch (e) {}
-            try {
-                toyboxInstance.FS.mkdir('/assets');
-            } catch (e) {}
-
-            syncDirectoryToToybox(toyboxInstance, '/demo');
-            syncDirectoryToToybox(toyboxInstance, '/assets');
-
-            console.log('Toybox filesystem synced with yetty');
-            return toyboxInstance;
-        }
-
-        // Pre-allocated buffer for terminal writes (avoids malloc/free per keypress)
-        let termWriteBuffer = null;
-        const TERM_BUFFER_SIZE = 4096;
-
-        function writeToTerminal(text) {
-            if (typeof Module._yetty_write !== 'function') return;
-            
-            // Lazy-init the buffer once Module is ready
-            if (!termWriteBuffer && typeof Module._malloc === 'function') {
-                termWriteBuffer = Module._malloc(TERM_BUFFER_SIZE);
-            }
-            if (!termWriteBuffer) return;
-
-            const len = Math.min(text.length, TERM_BUFFER_SIZE - 1);
-            for (let i = 0; i < len; i++) {
-                Module.HEAPU8[termWriteBuffer + i] = text.charCodeAt(i);
-            }
-            Module.HEAPU8[termWriteBuffer + len] = 0;
-            Module._yetty_write(termWriteBuffer, len);
-        }
-
-        let commandBuffer = '';
-
-        function setupCanvasInput() {
-            const canvas = document.getElementById('canvas');
-            canvas.tabIndex = 0;
-            canvas.focus();
-
-            canvas.addEventListener('keydown', async (e) => {
-                e.preventDefault();
-
-                if (e.key === 'Enter') {
-                    const cmd = commandBuffer.trim();
-                    commandBuffer = '';
-                    writeToTerminal('\r\n');
-
-                    if (cmd) {
-                        await runToyboxCommand(cmd);
-                    }
-                    writeToTerminal('$ ');
-                } else if (e.key === 'Backspace') {
-                    if (commandBuffer.length > 0) {
-                        commandBuffer = commandBuffer.slice(0, -1);
-                        writeToTerminal('\b \b');
-                    }
-                } else if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
-                    // Regular character - echo directly
-                    commandBuffer += e.key;
-                    writeToTerminal(e.key);
-                }
-            });
-
-            canvas.addEventListener('click', () => canvas.focus());
-
-            let currentScale = 1.0;
-            canvas.addEventListener('wheel', (e) => {
-                if (e.ctrlKey) {
-                    e.preventDefault();
-                    const delta = e.deltaY > 0 ? -0.1 : 0.1;
-                    currentScale = Math.max(0.3, Math.min(3.0, currentScale + delta));
-                    if (typeof Module._yetty_set_scale === 'function') {
-                        Module._yetty_set_scale(currentScale);
-                    }
-                }
-            }, { passive: false });
-        }
-
-        async function runToyboxCommand(cmdLine) {
-            if (cmdLine.trim()) {
-                commandHistory.push(cmdLine);
-                historyIndex = commandHistory.length;
-            }
-
-            const parts = cmdLine.trim().split(/\s+/);
-            const cmd = parts[0];
-
-            if (cmd === 'help') {
-                writeToTerminal('Available commands:\r\n');
-                writeToTerminal('  ' + AVAILABLE_COMMANDS.join(', ') + '\r\n');
-                writeToTerminal('  help  - Show this help\r\n');
-                writeToTerminal('  clear - Clear screen\r\n');
-                return;
-            }
-
-            if (cmd === 'clear') {
-                writeToTerminal('\x1b[2J\x1b[H');
-                return;
-            }
-
-            if (!ToyboxFactory) {
-                writeToTerminal('Error: Toybox not loaded yet\r\n');
-                return;
-            }
-
-            if (!AVAILABLE_COMMANDS.includes(cmd)) {
-                writeToTerminal(`'${cmd}' is not available.\r\n`);
-                return;
-            }
-
-            try {
-                // Create fresh Toybox instance and sync filesystem from yetty
-                const mod = await ToyboxFactory({
-                    thisProgram: 'toybox',
-                    print: (text) => writeToTerminal(text + '\r\n'),
-                    printErr: (text) => writeToTerminal('\x1b[31m' + text + '\x1b[0m\r\n'),
-                    noExitRuntime: true,
-                });
-
-                // Sync demo and assets directories from yetty's FS to this Toybox instance
-                if (Module.FS && mod.FS) {
-                    try { mod.FS.mkdir('/demo'); } catch (e) {}
-                    try { mod.FS.mkdir('/assets'); } catch (e) {}
-                    syncDirectoryToToybox(mod, '/demo');
-                    syncDirectoryToToybox(mod, '/assets');
-                }
-
-                mod.callMain(parts);
-            } catch (err) {
-                if (!err.message?.includes('exit') && !err.message?.includes('unreachable')) {
-                    writeToTerminal('Error: ' + err.message + '\r\n');
-                }
-            }
-        }
-
         async function checkWebGPU() {
             const status = document.getElementById('status');
 
@@ -349,9 +122,6 @@
             }
         }
 
-        let moduleReadyResolve;
-        const moduleReady = new Promise(resolve => { moduleReadyResolve = resolve; });
-
         var Module = {
             canvas: document.getElementById('canvas'),
             ENV: { YTRACE_DEFAULT_ON: 'yes' },
@@ -364,21 +134,23 @@
                 if (status) status.textContent = 'yetty ready!';
                 setTimeout(() => {
                     if (loading) loading.style.display = 'none';
+                    // Focus canvas for keyboard input
+                    const canvas = document.getElementById('canvas');
+                    if (canvas) {
+                        canvas.focus();
+                        console.log('Canvas focused for keyboard input');
+                    }
                 }, 500);
                 resizeCanvas();
-                moduleReadyResolve();
-
-                setTimeout(() => {
-                    writeToTerminal('$ ');
-                    if (typeof Module._yetty_sync === 'function') {
-                        Module._yetty_sync();
-                    }
-                    setupCanvasInput();
-                }, 100);
             }
         };
 
         window.addEventListener('resize', resizeCanvas);
+
+        // Click on canvas to focus for keyboard input
+        document.getElementById('canvas').addEventListener('click', function() {
+            this.focus();
+        });
 
         async function initYetty() {
             const status = document.getElementById('status');
@@ -408,13 +180,8 @@
             const hasWebGPU = await checkWebGPU();
 
             if (hasWebGPU) {
-                const yettyOk = await initYetty();
-                if (!yettyOk) {
-                    console.warn('yetty failed to initialize');
-                }
+                await initYetty();
             }
-
-            await initToybox();
         }
 
         init();
