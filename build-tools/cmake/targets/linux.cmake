@@ -29,6 +29,7 @@ add_executable(yetty
 # Add renderer sources to yetty (after target is created)
 add_subdirectory(${YETTY_ROOT}/src/yetty/ydraw-zoo ${CMAKE_BINARY_DIR}/src/yetty/ydraw-zoo)
 add_subdirectory(${YETTY_ROOT}/src/yetty/ydraw-maze ${CMAKE_BINARY_DIR}/src/yetty/ydraw-maze)
+add_subdirectory(${YETTY_ROOT}/src/yetty/cards/ygrid ${CMAKE_BINARY_DIR}/src/yetty/cards/ygrid)
 
 target_include_directories(yetty PRIVATE ${YETTY_INCLUDES})
 
@@ -95,6 +96,18 @@ option(YETTY_BUILD_CDB_TESTS "Build CDB wrapper tests" ON)
 if(YETTY_BUILD_CDB_TESTS)
     enable_testing()
     add_subdirectory(${YETTY_ROOT}/test/ut/cdb ${CMAKE_BINARY_DIR}/test/ut/cdb)
+endif()
+
+option(YETTY_BUILD_YMUX_TESTS "Build ymux tests" ON)
+if(YETTY_BUILD_YMUX_TESTS)
+    enable_testing()
+    add_subdirectory(${YETTY_ROOT}/test/ut/ymux ${CMAKE_BINARY_DIR}/test/ut/ymux)
+endif()
+
+option(YETTY_BUILD_OSC_TESTS "Build OSC scanner tests" ON)
+if(YETTY_BUILD_OSC_TESTS)
+    enable_testing()
+    add_subdirectory(${YETTY_ROOT}/test/ut/osc ${CMAKE_BINARY_DIR}/test/ut/osc)
 endif()
 
 # Tools (ycat, yecho, ydraw-maze, ydraw-zoo, etc.)

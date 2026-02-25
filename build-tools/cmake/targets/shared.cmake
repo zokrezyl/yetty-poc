@@ -43,6 +43,7 @@ set(YETTY_LIBS
     yetty_yecho
     yetty_ydraw
     yetty_diagram
+    ygrid
     yetty_cards
     yetty_yast
     msdf-wgsl

@@ -12,6 +12,20 @@ namespace ymux {
 
 static constexpr int VENDOR_ID = 666666;
 
+// Write all bytes, handling partial writes
+static bool writeAll(int fd, const char* data, size_t len) {
+    size_t written = 0;
+    while (written < len) {
+        ssize_t n = write(fd, data + written, len - written);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return false;
+        }
+        written += static_cast<size_t>(n);
+    }
+    return true;
+}
+
 static constexpr char BASE64_CHARS[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
@@ -90,15 +104,13 @@ std::string Multiplexer::buildUpdateOsc(const Pane& pane, const std::vector<uint
 
 void Multiplexer::sendCreateCard(Pane& pane, int x, int y, int w, int h) {
     auto seq = buildCreateOsc(pane, x, y, w, h);
-    ssize_t wr = write(STDOUT_FILENO, seq.data(), seq.size());
-    (void)wr;
+    writeAll(STDOUT_FILENO, seq.data(), seq.size());
 }
 
 void Multiplexer::sendUpdate(Pane& pane, const std::vector<uint8_t>& payload) {
     auto seq = buildUpdateOsc(pane, payload);
     if (seq.empty()) return;
-    ssize_t wr = write(STDOUT_FILENO, seq.data(), seq.size());
-    (void)wr;
+    writeAll(STDOUT_FILENO, seq.data(), seq.size());
 }
 
 bool Multiplexer::addPane(const std::string& shell) {

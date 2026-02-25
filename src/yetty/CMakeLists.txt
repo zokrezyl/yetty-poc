@@ -5,6 +5,9 @@ set(YETTY_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/yetty.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/config.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/osc-scanner.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/pty-reader-desktop.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/pty-reader-web.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/terminal.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/terminal-view.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/gpu-screen.cpp
@@ -55,6 +58,7 @@ add_subdirectory(ymery)
 add_subdirectory(yecho)
 add_subdirectory(ydraw)
 add_subdirectory(diagram)
+add_subdirectory(ygrid)
 add_subdirectory(cards)
 add_subdirectory(yast)
 add_subdirectory(msdf-wgsl)
