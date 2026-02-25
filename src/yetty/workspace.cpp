@@ -1,5 +1,5 @@
 #include <yetty/terminal-view.h>
-#include <yetty/widget-frame-renderer.h>
+#include <yetty/frame-renderer.h>
 #include <yetty/workspace.h>
 #include <ytrace/ytrace.hpp>
 #include <yaml-cpp/yaml.h>
@@ -20,12 +20,12 @@ public:
   Result<void> init() {
     // Create frame renderer for tiles
     auto frameResult =
-        WidgetFrameRenderer::create(_ctx.gpu.device, _ctx.gpu.surfaceFormat, _ctx.gpuAllocator);
+        FrameRenderer::create(_ctx.gpu.device, _ctx.gpu.surfaceFormat, _ctx.gpuAllocator);
     if (!frameResult) {
       ywarn("Failed to create frame renderer for workspace: {}",
             frameResult.error().message());
     } else {
-      _frameRenderer = std::shared_ptr<WidgetFrameRenderer>(
+      _frameRenderer = std::shared_ptr<FrameRenderer>(
           frameResult->release());
       yinfo("Workspace frame renderer initialized");
     }
@@ -357,7 +357,7 @@ private:
   float _width = 0;
   float _height = 0;
   YettyContext _ctx;
-  std::shared_ptr<WidgetFrameRenderer> _frameRenderer;
+  std::shared_ptr<FrameRenderer> _frameRenderer;
 };
 
 // ─── TreeLike implementations (Workspace) ──────────────────────────────────

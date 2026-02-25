@@ -139,7 +139,10 @@ private:
         std::string shellOrConfig;
 #if YETTY_WEB
         // Web: use JSLinux VM config
-        shellOrConfig = "alpine-x86_64.cfg";
+        // Check YETTY_VM_CONFIG env for override (set via Module.ENV)
+        const char* vmConfigEnv = getenv("YETTY_VM_CONFIG");
+        shellOrConfig = vmConfigEnv ? vmConfigEnv : "alpine-x86_64.cfg";
+        yinfo("Terminal: using VM config: {}", shellOrConfig);
 #else
         // Desktop: use shell from environment or config
         const char* shellEnv = getenv("SHELL");

@@ -1,9 +1,17 @@
 #include "yecho-parser.h"
-#include <filesystem>
-#include <regex>
 #include <algorithm>
 #include <cctype>
 #include <sstream>
+
+// std::filesystem and std::regex cause segfaults with musl static linking
+// Only include them when not building for static/minimal targets
+#ifndef YECHO_MINIMAL
+#include <filesystem>
+#include <regex>
+#define YECHO_HAS_FILESYSTEM 1
+#else
+#define YECHO_HAS_FILESYSTEM 0
+#endif
 
 // Include generated glyph registry if available (must be before namespace)
 #if __has_include("glyph-registry-generated.h")

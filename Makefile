@@ -247,7 +247,30 @@ build-webasm-dawn-release: ## Build WebAssembly release (CDB generation handled 
 	@if [ ! -f "$(BUILD_DIR_WEBASM_DAWN_RELEASE)/build.ninja" ]; then $(MAKE) config-webasm-dawn-release; fi
 	nix develop .#web --command bash -c 'cmake --build $(BUILD_DIR_WEBASM_DAWN_RELEASE) --target yetty $(CMAKE_PARALLEL)'
 	@cp build-tools/web/index.html build-tools/web/serve.py $(BUILD_DIR_WEBASM_DAWN_RELEASE)/
+	@$(MAKE) build-vm-tools BUILD_DIR=$(BUILD_DIR_WEBASM_DAWN_RELEASE)
 	@bash build-tools/web/build-fs/build-vfsync.sh $(BUILD_DIR_WEBASM_DAWN_RELEASE)
+
+.PHONY: build-vm-tools
+build-vm-tools: ## Build static x86_64 tools for JSLinux VM (tries Docker Alpine, fallback to system)
+	@mkdir -p $(BUILD_DIR)/vm-tools
+	@if command -v docker >/dev/null 2>&1; then \
+		echo "=== Building VM tools with Docker Alpine ==="; \
+		bash build-tools/docker/build-vm-tools.sh $(BUILD_DIR); \
+	else \
+		echo "=== Building VM tools (system gcc - may need musl-gcc for static) ==="; \
+		rm -rf $(BUILD_DIR)/vm-tools-build; \
+		PATH=/usr/bin:/bin cmake -S build-tools/cmake/host-tools -B $(BUILD_DIR)/vm-tools-build \
+			-DCMAKE_C_COMPILER=/usr/bin/gcc -DCMAKE_CXX_COMPILER=/usr/bin/g++ \
+			-DCMAKE_BUILD_TYPE=Release 2>/dev/null || \
+		PATH=/usr/bin:/bin cmake -S build-tools/cmake/host-tools -B $(BUILD_DIR)/vm-tools-build \
+			-DCMAKE_C_COMPILER=/usr/bin/gcc -DCMAKE_CXX_COMPILER=/usr/bin/g++ \
+			-DCMAKE_BUILD_TYPE=Release; \
+		PATH=/usr/bin:/bin cmake --build $(BUILD_DIR)/vm-tools-build --target yecho-static $(CMAKE_PARALLEL); \
+		cp $(BUILD_DIR)/vm-tools-build/yecho $(BUILD_DIR)/vm-tools/; \
+	fi
+	@echo "VM tools built: $(BUILD_DIR)/vm-tools/"
+	@ls -la $(BUILD_DIR)/vm-tools/
+	@file $(BUILD_DIR)/vm-tools/yecho
 
 .PHONY: run-webasm-dawn-debug
 run-webasm-dawn-debug: build-webasm-dawn-debug ## Serve WebAssembly debug build

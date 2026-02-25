@@ -15,6 +15,9 @@ add_subdirectory(${YETTY_ROOT}/assets ${CMAKE_BINARY_DIR}/assets-build)
 # Global definitions for all webasm targets (applied before add_subdirectory)
 add_compile_definitions(YETTY_WEB=1 YETTY_ANDROID=0)
 
+# Set shader directory path for web (used by card libraries)
+set(YETTY_SHADERS_DIR "/assets/shaders" CACHE STRING "Shader directory path")
+
 # Add src/yetty (builds libraries)
 add_subdirectory(${YETTY_ROOT}/src/yetty ${CMAKE_BINARY_DIR}/src/yetty)
 
@@ -92,13 +95,18 @@ add_custom_command(TARGET yetty POST_BUILD
     COMMENT "Copying JSLinux files..."
 )
 
-# Build toybox if source exists
-if(EXISTS "${YETTY_ROOT}/tmp/toybox")
-    add_custom_command(TARGET yetty POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E env BUILD_DIR=${CMAKE_BINARY_DIR} bash ${YETTY_ROOT}/build-tools/web/build-toybox-minimal.sh
-        WORKING_DIRECTORY ${YETTY_ROOT}
-    )
-endif()
+# Toybox: run build-tools/web/build-toybox-minimal.sh manually if needed
+
+# Generate pre-computed demo script outputs
+add_custom_target(generate-demo-outputs
+    COMMAND ${CMAKE_COMMAND}
+        -DYETTY_ROOT=${YETTY_ROOT}
+        -DOUTPUT_DIR=${CMAKE_BINARY_DIR}
+        -P ${YETTY_ROOT}/build-tools/cmake/generate-demo-outputs.cmake
+    COMMENT "Generating demo script outputs..."
+)
+
+add_dependencies(yetty generate-demo-outputs)
 
 # Verify all required assets are present
 add_custom_command(TARGET yetty POST_BUILD

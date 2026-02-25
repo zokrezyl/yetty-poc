@@ -158,27 +158,19 @@ public:
   }
 
   MsMsdfFont::Ptr getDefaultMsMsdfFont() noexcept override {
-    yinfo("getDefaultMsMsdfFont: entered, _defaultFontName.empty()={}", _defaultFontName.empty());
     if (!_defaultFontName.empty()) {
-      yinfo("getDefaultMsMsdfFont: checking cache for {}", _defaultFontName);
       auto it = _msdfFontCache.find(_defaultFontName);
       if (it != _msdfFontCache.end()) {
-        yinfo("getDefaultMsMsdfFont: found in cache");
         return it->second;
       }
     }
 
-    yinfo("getDefaultMsMsdfFont: calling getMsMsdfFont");
     auto result = getMsMsdfFont("DejaVuSansMNerdFontMono");
-    yinfo("getDefaultMsMsdfFont: getMsMsdfFont returned");
     if (result) {
-      yinfo("getDefaultMsMsdfFont: returning result");
       return *result;
     }
 
-    yinfo("getDefaultMsMsdfFont: checking if cache is empty");
     if (!_msdfFontCache.empty()) {
-      yinfo("getDefaultMsMsdfFont: returning first from cache");
       return _msdfFontCache.begin()->second;
     }
 

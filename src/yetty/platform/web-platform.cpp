@@ -21,6 +21,13 @@ namespace yetty {
 static std::unordered_map<uint32_t, class WebPTY*> g_ptyInstances;
 static std::atomic<uint32_t> g_nextPtyId{1};
 
+// Global resize callback for JavaScript interop
+static Platform::ResizeCallback g_globalResizeCallback;
+static int g_lastCanvasWidth = 0;
+static int g_lastCanvasHeight = 0;
+static int* g_platformWidthPtr = nullptr;
+static int* g_platformHeightPtr = nullptr;
+
 class WebPTY : public PTYProvider {
 public:
     WebPTY() : _id(g_nextPtyId++) {
@@ -234,7 +241,12 @@ public:
     void setMouseButtonCallback(MouseButtonCallback cb) override { _mouseButtonCallback = std::move(cb); }
     void setMouseMoveCallback(MouseMoveCallback cb) override { _mouseMoveCallback = std::move(cb); }
     void setScrollCallback(ScrollCallback cb) override { _scrollCallback = std::move(cb); }
-    void setResizeCallback(ResizeCallback cb) override { _resizeCallback = std::move(cb); }
+    void setResizeCallback(ResizeCallback cb) override {
+        _resizeCallback = cb;
+        g_globalResizeCallback = std::move(cb);  // Store globally for JS interop
+        g_platformWidthPtr = &_width;  // Allow JS interop to update dimensions
+        g_platformHeightPtr = &_height;
+    }
     void setFocusCallback(FocusCallback cb) override { _focusCallback = std::move(cb); }
 
     std::string getClipboardText() const override {
@@ -371,12 +383,28 @@ private:
 
     static EM_BOOL resizeCallback(int eventType, const EmscriptenUiEvent* e, void* userData) {
         (void)eventType;
+        (void)e;
         auto* self = static_cast<WebPlatform*>(userData);
-        self->_width = e->windowInnerWidth;
-        self->_height = e->windowInnerHeight;
-        emscripten_set_canvas_element_size("#canvas", self->_width, self->_height);
+
+        // Get actual canvas container size (not window inner size - wrong when devtools open)
+        int width = EM_ASM_INT({
+            var container = document.getElementById('canvas-container');
+            return container ? Math.floor(container.getBoundingClientRect().width) : 0;
+        });
+        int height = EM_ASM_INT({
+            var container = document.getElementById('canvas-container');
+            return container ? Math.floor(container.getBoundingClientRect().height) : 0;
+        });
+
+        if (width <= 0 || height <= 0) return EM_TRUE;
+        if (width == self->_width && height == self->_height) return EM_TRUE;
+
+        self->_width = width;
+        self->_height = height;
+        emscripten_set_canvas_element_size("#canvas", width, height);
+
         if (self->_resizeCallback) {
-            self->_resizeCallback(self->_width, self->_height);
+            self->_resizeCallback(width, height);
         }
         return EM_TRUE;
     }
@@ -490,6 +518,29 @@ int yetty_get_rows() {
     if (screens.empty()) return 24;
 
     return static_cast<int>(screens[0]->getRows());
+}
+
+// Called from JavaScript when canvas container is resized (e.g., devtools open/close)
+EMSCRIPTEN_KEEPALIVE
+void yetty_handle_resize(int width, int height) {
+    if (width <= 0 || height <= 0) return;
+    // Avoid redundant resize calls
+    if (width == yetty::g_lastCanvasWidth && height == yetty::g_lastCanvasHeight) return;
+    yetty::g_lastCanvasWidth = width;
+    yetty::g_lastCanvasHeight = height;
+
+
+    // Update platform's internal dimensions (used by getWindowSize/getFramebufferSize)
+    if (yetty::g_platformWidthPtr) *yetty::g_platformWidthPtr = width;
+    if (yetty::g_platformHeightPtr) *yetty::g_platformHeightPtr = height;
+
+    // Update canvas element size
+    emscripten_set_canvas_element_size("#canvas", width, height);
+
+    // Call the resize callback (which reconfigures WebGPU surface)
+    if (yetty::g_globalResizeCallback) {
+        yetty::g_globalResizeCallback(width, height);
+    }
 }
 
 } // extern "C"

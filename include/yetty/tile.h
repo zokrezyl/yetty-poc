@@ -12,7 +12,7 @@ namespace yetty {
 using namespace yetty::base;
 
 class View;
-class WidgetFrameRenderer;
+class FrameRenderer;
 
 struct Rect {
   float x = 0, y = 0, width = 0, height = 0;
@@ -25,7 +25,7 @@ struct TileRenderContext {
   WGPUQueue queue = nullptr;
   uint32_t screenWidth = 0;
   uint32_t screenHeight = 0;
-  std::shared_ptr<WidgetFrameRenderer> frameRenderer;
+  std::shared_ptr<FrameRenderer> frameRenderer;
 };
 
 // Base class for tiles (Split and Pane)

@@ -1,6 +1,6 @@
 #include <yetty/tile.h>
 #include <yetty/view.h>
-#include <yetty/widget-frame-renderer.h>
+#include <yetty/frame-renderer.h>
 #include <ytrace/ytrace.hpp>
 #include <yaml-cpp/yaml.h>
 #include <algorithm>

@@ -113,18 +113,43 @@
             const canvas = document.getElementById('canvas');
             if (container && canvas) {
                 const rect = container.getBoundingClientRect();
-                canvas.width = rect.width;
-                canvas.height = rect.height;
-
-                if (typeof Module !== 'undefined' && typeof Module._yetty_resize === 'function') {
-                    Module._yetty_resize(rect.width, rect.height);
+                const width = Math.floor(rect.width);
+                const height = Math.floor(rect.height);
+                if (width > 0 && height > 0 && (canvas.width !== width || canvas.height !== height)) {
+                    canvas.width = width;
+                    canvas.height = height;
+                    console.log('Canvas resized to:', width, 'x', height);
+                    // Notify C++ about the resize (if Module._yetty_handle_resize exists)
+                    if (typeof Module !== 'undefined' && Module._yetty_handle_resize) {
+                        Module._yetty_handle_resize(width, height);
+                    }
                 }
             }
         }
 
+        // Parse URL parameters for configuration
+        function getUrlParams() {
+            const params = {};
+            const query = window.location.search.substring(1);
+            if (query) {
+                query.split('&').forEach(pair => {
+                    const [key, value] = pair.split('=');
+                    params[decodeURIComponent(key)] = decodeURIComponent(value || '');
+                });
+            }
+            return params;
+        }
+
+        const urlParams = getUrlParams();
+        const vmConfig = urlParams.vmconfig || 'alpine-x86_64.cfg';
+        console.log('VM config from URL:', vmConfig);
+
         var Module = {
             canvas: document.getElementById('canvas'),
-            ENV: { YTRACE_DEFAULT_ON: 'yes' },
+            ENV: {
+                YTRACE_DEFAULT_ON: 'yes',
+                YETTY_VM_CONFIG: vmConfig
+            },
             print: function(text) { console.log('[yetty]', text); },
             printErr: function(text) { console.error('[yetty]', text); },
             onRuntimeInitialized: function() {
@@ -146,6 +171,15 @@
         };
 
         window.addEventListener('resize', resizeCanvas);
+
+        // Use ResizeObserver to detect container size changes (e.g., devtools open/close)
+        const container = document.getElementById('canvas-container');
+        if (container && typeof ResizeObserver !== 'undefined') {
+            const resizeObserver = new ResizeObserver(() => {
+                resizeCanvas();
+            });
+            resizeObserver.observe(container);
+        }
 
         // Click on canvas to focus for keyboard input
         document.getElementById('canvas').addEventListener('click', function() {

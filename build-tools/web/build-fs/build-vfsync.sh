@@ -76,14 +76,29 @@ else
     echo "Warning: demo/ directory not found"
 fi
 
+# Step 3b: Add pre-generated demo outputs
+if [ -d "$BUILD_DIR/demo-output" ]; then
+    cp -r "$BUILD_DIR/demo-output" "$ROOTFS_DIR/home/demo/output"
+    echo "Copied demo-output/ to /home/demo/output/"
+else
+    echo "Warning: demo-output/ not found (run cmake build first)"
+fi
+
 # Step 4: Add tools executables
 echo ""
 echo "=== Step 4: Adding tools executables ==="
+mkdir -p "$ROOTFS_DIR/usr/local/bin"
+
+# Copy shell scripts from tools/
 if [ -d "$YETTY_ROOT/tools" ]; then
-    mkdir -p "$ROOTFS_DIR/usr/local/bin"
-    find "$YETTY_ROOT/tools" -maxdepth 1 -type f -executable -exec cp {} "$ROOTFS_DIR/usr/local/bin/" \;
     find "$YETTY_ROOT/tools" -maxdepth 1 -name "*.sh" -exec cp {} "$ROOTFS_DIR/usr/local/bin/" \;
-    echo "Copied tools to /usr/local/bin/"
+    echo "Copied shell scripts from tools/"
+fi
+
+# Copy static VM tools (built by cmake)
+if [ -d "$BUILD_DIR/vm-tools" ]; then
+    cp -v "$BUILD_DIR/vm-tools"/* "$ROOTFS_DIR/usr/local/bin/" 2>/dev/null || true
+    echo "Copied VM tools from $BUILD_DIR/vm-tools/"
 fi
 
 # Step 5: Create simple init system
@@ -98,11 +113,6 @@ mount -t devtmpfs dev /dev 2>/dev/null || true
 hostname yetty
 clear
 cat /etc/motd
-echo "=== /home/demo contents ==="
-ls -la /home/demo/ 2>/dev/null || echo "ERROR: /home/demo not found!"
-echo "=== /home/demo/files contents ==="
-ls -la /home/demo/files/ 2>/dev/null || echo "ERROR: /home/demo/files not found!"
-echo "==============================="
 exec /bin/sh
 INITEOF
 chmod +x "$ROOTFS_DIR/sbin/init"
