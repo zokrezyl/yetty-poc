@@ -3575,8 +3575,8 @@ bool GPUScreenImpl::handleOSCSequence(const std::string &sequence,
     return false;
   }
 
-  // Handle vendor-specific commands (666667-666671) directly
-  if (vendorId >= 666667 && vendorId <= 666671) {
+  // Handle vendor-specific commands (666667-666672) directly
+  if (vendorId >= 666667 && vendorId <= 666672) {
     std::string payload = sequence.substr(semicolon + 1);
 
     // Effect commands (666667 = pre-effect, 666668 = post-effect, 666669 = effect)
@@ -3601,6 +3601,33 @@ bool GPUScreenImpl::handleOSCSequence(const std::string &sequence,
         (*base::EventLoop::instance())->dispatch(base::Event::setFrameRateEvent(fps));
       } catch (...) {
         yerror("OSC 666671: Invalid FPS value '{}'", payload);
+      }
+      return true;
+    }
+
+    // Trace control command (666672)
+    // Payload: 0 = disable all, 1 = enable all
+    //          level:<name>:0|1 = disable/enable level (e.g., level:debug:0)
+    if (vendorId == 666672) {
+      if (payload.empty() || payload == "0") {
+        yinfo("OSC 666672: Disabling all traces");
+        ydisable_all();
+      } else if (payload == "1") {
+        yinfo("OSC 666672: Enabling all traces");
+        yenable_all();
+      } else if (payload.rfind("level:", 0) == 0) {
+        // Parse level:<name>:<0|1>
+        auto colonPos = payload.find(':', 6);
+        if (colonPos != std::string::npos) {
+          std::string level = payload.substr(6, colonPos - 6);
+          bool enable = payload.substr(colonPos + 1) == "1";
+          yinfo("OSC 666672: {} level '{}'", enable ? "Enabling" : "Disabling", level);
+          if (enable) {
+            yenable_level(level.c_str());
+          } else {
+            ydisable_level(level.c_str());
+          }
+        }
       }
       return true;
     }
