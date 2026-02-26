@@ -39,7 +39,6 @@ set(YETTY_LIBS
     cdb-wrapper
     yetty_base
     yetty_font
-    yetty_ymery
     yetty_yecho
     yetty_ydraw
     yetty_diagram

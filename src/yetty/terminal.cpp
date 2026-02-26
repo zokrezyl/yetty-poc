@@ -1,7 +1,7 @@
 #include "terminal.h"
 #include "gpu-screen.h"
 #include <yetty/base/event-loop.h>
-#include <yetty/ymery/types.h>
+#include <yetty/result.hpp>
 #include <ytrace/ytrace.hpp>
 #include <cstring>
 

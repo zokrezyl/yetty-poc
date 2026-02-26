@@ -55,7 +55,6 @@ set(YETTY_ANDROID_SOURCES
 # Subdirectories that build libraries
 add_subdirectory(base)
 add_subdirectory(font)
-add_subdirectory(ymery)
 add_subdirectory(yecho)
 add_subdirectory(ydraw)
 add_subdirectory(diagram)
