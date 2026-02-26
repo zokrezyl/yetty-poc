@@ -50,8 +50,8 @@ public:
     virtual void setViewport(float x, float y, float width, float height) = 0;
 
     // Cell size (from font metrics)
-    virtual uint32_t getCellWidth() const = 0;
-    virtual uint32_t getCellHeight() const = 0;
+    virtual float getCellWidth() const = 0;
+    virtual float getCellHeight() const = 0;
 
     // Test interface - access cell data
     virtual const GridCell* getCellData() const = 0;

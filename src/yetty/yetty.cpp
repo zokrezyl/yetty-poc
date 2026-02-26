@@ -1212,16 +1212,22 @@ void YettyImpl::handleResize(int newWidth, int newHeight) noexcept {
               _contentScaleX, _contentScaleY, newWidth, newHeight, windowWidth, windowHeight);
     }
 
-    configureSurface(static_cast<uint32_t>(newWidth), static_cast<uint32_t>(newHeight));
+    // Convert framebuffer pixels to logical coordinates
+    // Dawn/Metal handles Retina scaling internally via contentsScale
+    float logicalW = (windowWidth > 0) ? static_cast<float>(windowWidth) : static_cast<float>(newWidth);
+    float logicalH = (windowHeight > 0) ? static_cast<float>(windowHeight) : static_cast<float>(newHeight);
+
+    // Surface uses logical size — Dawn handles physical backing automatically
+    configureSurface(static_cast<uint32_t>(logicalW), static_cast<uint32_t>(logicalH));
 
     if (_yettyContext.imguiManager) {
         _yettyContext.imguiManager->updateDisplaySize(
-            static_cast<uint32_t>(newWidth), static_cast<uint32_t>(newHeight));
+            static_cast<uint32_t>(logicalW), static_cast<uint32_t>(logicalH));
     }
 
     if (_activeWorkspace) {
         float statusbarHeight = _yettyContext.imguiManager ? _yettyContext.imguiManager->getStatusbarHeight() : 0.0f;
-        _activeWorkspace->resize(static_cast<float>(newWidth), static_cast<float>(newHeight) - statusbarHeight);
+        _activeWorkspace->resize(logicalW, logicalH - statusbarHeight);
     }
 }
 

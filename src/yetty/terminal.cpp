@@ -133,12 +133,12 @@ public:
         }
     }
 
-    uint32_t getCellWidth() const override {
-        return _gpuScreen ? _gpuScreen->getCellWidth() : 10;
+    float getCellWidth() const override {
+        return _gpuScreen ? _gpuScreen->getCellWidth() : 10.0f;
     }
 
-    uint32_t getCellHeight() const override {
-        return _gpuScreen ? _gpuScreen->getCellHeight() : 20;
+    float getCellHeight() const override {
+        return _gpuScreen ? _gpuScreen->getCellHeight() : 20.0f;
     }
 
     Result<bool> onEvent(const base::Event& event) override {

@@ -36,10 +36,12 @@ BUILD_DIR_WEBASM_DAWN_RELEASE := build-webasm-dawn-release
 PARALLEL_JOBS ?=
 CMAKE_PARALLEL := $(if $(PARALLEL_JOBS),--parallel $(PARALLEL_JOBS),--parallel)
 
-# Distributed build with ccache + distcc
+# Distributed build with ccache + distcc (only if distcc is available)
 DISTCC_HOSTS ?= localhost 192.168.1.10
 export DISTCC_HOSTS
+ifneq ($(shell which distcc 2>/dev/null),)
 export CCACHE_PREFIX := distcc
+endif
 CMAKE_COMPILER_LAUNCHER := -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
 # CMake options

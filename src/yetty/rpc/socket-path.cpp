@@ -40,6 +40,12 @@ Result<std::string> createSocketPath() {
     std::string baseDir;
     if (auto* xdg = std::getenv("XDG_RUNTIME_DIR")) {
         baseDir = xdg;
+    } else if (auto* tmpdir = std::getenv("TMPDIR")) {
+        // macOS: TMPDIR is per-user, set by launchd (e.g. /var/folders/.../T/)
+        baseDir = tmpdir;
+        if (!baseDir.empty() && baseDir.back() == '/') {
+            baseDir.pop_back();
+        }
     } else {
         // Fallback: /tmp/yetty-<uid>
         baseDir = "/tmp/yetty-" + std::to_string(getuid());

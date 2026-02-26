@@ -67,6 +67,26 @@ std::string resolveFontPath(const char* family, int weight = 400, bool italic = 
         FcPatternDestroy(match);
     }
     FcConfigDestroy(config);
+#elif defined(__APPLE__)
+    (void)weight; (void)italic;
+    // macOS fallback: map generic families to system fonts
+    struct FontMapping { const char* family; const char* path; };
+    static const FontMapping mappings[] = {
+        {"serif",      "/System/Library/Fonts/Supplemental/Times New Roman.ttf"},
+        {"serif",      "/System/Library/Fonts/Times.ttc"},
+        {"sans-serif", "/System/Library/Fonts/Helvetica.ttc"},
+        {"sans",       "/System/Library/Fonts/Helvetica.ttc"},
+        {"monospace",  "/System/Library/Fonts/Menlo.ttc"},
+        {"mono",       "/System/Library/Fonts/Menlo.ttc"},
+    };
+    std::string fam = family;
+    for (auto& ch : fam) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    for (const auto& m : mappings) {
+        if (fam == m.family && std::filesystem::exists(m.path)) {
+            result = m.path;
+            break;
+        }
+    }
 #else
     (void)family; (void)weight; (void)italic;
 #endif
