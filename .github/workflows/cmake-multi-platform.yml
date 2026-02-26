@@ -7,6 +7,7 @@ on:
     tags:
       - '*'
     branches:
+      - main
       - android
 
 jobs:
@@ -272,11 +273,116 @@ jobs:
           adb logcat -d | grep -i yetty | tail -50
 
   # =============================================================================
+  # WebAssembly Build
+  # =============================================================================
+  build-webasm:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Emscripten
+      uses: mymindstorm/setup-emsdk@v14
+      with:
+        version: '3.1.51'
+
+    - name: Install build dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y automake autoconf libtool ninja-build
+
+    - name: Configure WebAssembly build
+      run: |
+        export EMCC_SKIP_SANITY_CHECK=1
+        emcmake cmake -B build-webasm-dawn-release -G Ninja \
+          -DCMAKE_BUILD_TYPE=MinSizeRel
+
+    - name: Build WebAssembly
+      run: |
+        cmake --build build-webasm-dawn-release --target yetty --parallel
+
+    - name: Copy web files
+      run: |
+        cp build-tools/web/index.html build-webasm-dawn-release/
+        cp build-tools/web/serve.py build-webasm-dawn-release/
+
+    - name: Build VM tools (static with Alpine Docker)
+      run: |
+        bash build-tools/docker/build-vm-tools.sh build-webasm-dawn-release
+
+    - name: Build vfsync filesystem
+      run: |
+        bash build-tools/web/build-fs/build-vfsync.sh build-webasm-dawn-release
+
+    - name: Prepare site directory
+      run: |
+        mkdir -p site
+        cp build-webasm-dawn-release/index.html site/
+        cp build-webasm-dawn-release/yetty.js site/
+        cp build-webasm-dawn-release/yetty.wasm site/
+        cp build-webasm-dawn-release/yetty.data site/
+        cp -r build-webasm-dawn-release/jslinux site/
+        cp -r build-webasm-dawn-release/vfsync site/
+        ls -la site/
+
+    - name: Upload WebAssembly artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: yetty-webasm
+        path: site/
+        if-no-files-found: error
+
+  # =============================================================================
+  # Deploy to GitHub Pages
+  # =============================================================================
+  deploy-pages:
+    runs-on: ubuntu-latest
+    needs: build-webasm
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
+
+    permissions:
+      pages: write
+      id-token: write
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+    - name: Download WebAssembly artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: yetty-webasm
+        path: site
+
+    - name: List site contents
+      run: |
+        echo "=== Site structure ==="
+        ls -la site/
+        echo "=== jslinux directory ==="
+        ls -la site/jslinux/ || echo "jslinux not found"
+        echo "=== vfsync directory ==="
+        ls -la site/vfsync/ || echo "vfsync not found"
+
+    - name: Setup Pages
+      uses: actions/configure-pages@v4
+
+    - name: Upload Pages artifact
+      uses: actions/upload-pages-artifact@v3
+      with:
+        path: site
+
+    - name: Deploy to GitHub Pages
+      id: deployment
+      uses: actions/deploy-pages@v4
+
+  # =============================================================================
   # Upload to GitHub Release
   # =============================================================================
   release:
     runs-on: ubuntu-latest
-    needs: [build-desktop, build-macos, build-windows]
+    needs: [build-desktop, build-macos, build-windows, build-webasm]
+    if: startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: write
 
@@ -292,6 +398,7 @@ jobs:
         tar -czvf yetty-linux.tar.gz -C yetty-linux .
         tar -czvf yetty-macos.tar.gz -C yetty-macos .
         zip -r yetty-windows.zip yetty-windows
+        zip -r yetty-webasm.zip yetty-webasm
 
     - name: Upload to GitHub Release
       uses: softprops/action-gh-release@v2
@@ -300,3 +407,4 @@ jobs:
           artifacts/yetty-linux.tar.gz
           artifacts/yetty-macos.tar.gz
           artifacts/yetty-windows.zip
+          artifacts/yetty-webasm.zip
