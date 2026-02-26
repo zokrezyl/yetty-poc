@@ -145,7 +145,7 @@ cat > "$BUILD_DIR/jslinux/yetty-alpine.cfg" << 'EOF'
     memory_size: 256,
     kernel: "kernel-x86_64.bin",
     cmdline: "loglevel=3 console=hvc0 root=root rootfstype=9p rootflags=trans=virtio ro TZ=${TZ}",
-    fs0: { file: "/vfsync/u/os/yetty-alpine" },
+    fs0: { file: "vfsync/u/os/yetty-alpine" },
     eth0: { driver: "user" },
 }
 EOF

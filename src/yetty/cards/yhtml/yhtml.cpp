@@ -1,3 +1,7 @@
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
 #include "yhtml.h"
 #include "html-container.h"
 #include "html-renderer.h"
