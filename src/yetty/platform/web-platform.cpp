@@ -63,8 +63,6 @@ public:
                          '&cols=' + cols + '&rows=' + rows +
                          '&cpu=x86_64&mem=256';
             document.body.appendChild(iframe);
-
-            console.log('WebPTY: Created iframe for pty ' + ptyId);
         }, _id, vmConfig.c_str(), cols, rows);
 
         return Ok();
@@ -82,7 +80,6 @@ public:
             var iframe = document.getElementById('jslinux-pty-' + ptyId);
             if (iframe) {
                 iframe.remove();
-                console.log('WebPTY: Removed iframe for pty ' + ptyId);
             }
         }, _id);
 
@@ -609,10 +606,8 @@ static struct WebPTYInit {
                     var data = e.data.data;
                     var ptyId = parseInt(e.data.ptyId, 10);  // Convert string to int
                     if (isNaN(ptyId)) {
-                        console.error('WebPTY: Invalid ptyId:', e.data.ptyId);
                         return;
                     }
-                    console.log('WebPTY: Received term-output for pty ' + ptyId + ', len=' + data.length);
                     var encoder = new TextEncoder();
                     var bytes = encoder.encode(data);
                     var ptr = Module._malloc(bytes.length);
@@ -621,7 +616,6 @@ static struct WebPTYInit {
                     Module._free(ptr);
                 }
             });
-            console.log('WebPTY: Message listener initialized');
         });
     }
 } g_webPtyInit;

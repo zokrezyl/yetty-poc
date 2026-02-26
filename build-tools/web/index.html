@@ -99,11 +99,9 @@
 
                 Module.preinitializedWebGPUDevice = device;
                 status.textContent = 'WebGPU initialized';
-                console.log('WebGPU device ready:', device);
                 return true;
             } catch (err) {
                 status.textContent = 'WebGPU error: ' + err.message;
-                console.error('WebGPU initialization error:', err);
                 return false;
             }
         }
@@ -118,8 +116,6 @@
                 if (width > 0 && height > 0 && (canvas.width !== width || canvas.height !== height)) {
                     canvas.width = width;
                     canvas.height = height;
-                    console.log('Canvas resized to:', width, 'x', height);
-                    // Notify C++ about the resize (if Module._yetty_handle_resize exists)
                     if (typeof Module !== 'undefined' && Module._yetty_handle_resize) {
                         Module._yetty_handle_resize(width, height);
                     }
@@ -142,27 +138,23 @@
 
         const urlParams = getUrlParams();
         const vmConfig = urlParams.vmconfig || 'alpine-x86_64.cfg';
-        console.log('VM config from URL:', vmConfig);
 
         var Module = {
             canvas: document.getElementById('canvas'),
             ENV: {
                 YETTY_VM_CONFIG: vmConfig
             },
-            print: function(text) { console.log('[yetty]', text); },
-            printErr: function(text) { console.error('[yetty]', text); },
+            print: function(text) { },
+            printErr: function(text) { },
             onRuntimeInitialized: function() {
-                console.log('yetty runtime initialized');
                 const status = document.getElementById('status');
                 const loading = document.getElementById('loading');
                 if (status) status.textContent = 'yetty ready!';
                 setTimeout(() => {
                     if (loading) loading.style.display = 'none';
-                    // Focus canvas for keyboard input
                     const canvas = document.getElementById('canvas');
                     if (canvas) {
                         canvas.focus();
-                        console.log('Canvas focused for keyboard input');
                     }
                 }, 500);
                 resizeCanvas();
@@ -199,10 +191,8 @@
                     document.head.appendChild(script);
                 });
 
-                console.log('yetty.js loaded');
                 return true;
             } catch (err) {
-                console.error('Failed to load yetty:', err);
                 if (status) status.textContent = 'yetty error: ' + err.message;
                 return false;
             }

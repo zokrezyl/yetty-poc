@@ -22,10 +22,8 @@
         // Module object - Emscripten will populate this
         var Module = {};
 
-        // Logging helper
+        // Logging helper (disabled for production)
         function log(msg) {
-            console.log("[vm-bridge] " + msg);
-            window.parent.postMessage({ type: 'vm-log', message: msg }, '*');
         }
 
         function term_handler(str) {
