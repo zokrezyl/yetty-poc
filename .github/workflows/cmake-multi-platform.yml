@@ -284,7 +284,7 @@ jobs:
     - name: Setup Emscripten
       uses: mymindstorm/setup-emsdk@v14
       with:
-        version: '3.1.51'
+        version: '3.1.74'
 
     - name: Install build dependencies
       run: |
