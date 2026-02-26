@@ -1,3 +1,8 @@
+// Prevent Windows min/max macros from conflicting with std::min/std::max
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
 #include "image.h"
 #include <yetty/yetty-context.h>
 #include <yetty/base/event-loop.h>

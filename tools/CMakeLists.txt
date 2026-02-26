@@ -51,6 +51,7 @@ target_link_libraries(ymery-test PRIVATE
     OpenGL::GL
     yaml-cpp
     ytrace::ytrace
+    yetty_card_ygui
 )
 
 target_compile_features(ymery-test PRIVATE cxx_std_23)

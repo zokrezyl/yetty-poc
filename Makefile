@@ -251,21 +251,22 @@ build-webasm-dawn-release: ## Build WebAssembly release (CDB generation handled 
 	@bash build-tools/web/build-fs/build-vfsync.sh $(BUILD_DIR_WEBASM_DAWN_RELEASE)
 
 .PHONY: build-vm-tools
-build-vm-tools: ## Build static x86_64 tools for JSLinux VM (tries Docker Alpine, fallback to system)
+build-vm-tools: ## Build static x86_64 tools for JSLinux VM (tries Docker Alpine, fallback to system/nix gcc)
 	@mkdir -p $(BUILD_DIR)/vm-tools
 	@if command -v docker >/dev/null 2>&1; then \
 		echo "=== Building VM tools with Docker Alpine ==="; \
 		bash build-tools/docker/build-vm-tools.sh $(BUILD_DIR); \
 	else \
-		echo "=== Building VM tools (system gcc - may need musl-gcc for static) ==="; \
+		echo "=== Building VM tools (using available gcc) ==="; \
 		rm -rf $(BUILD_DIR)/vm-tools-build; \
-		PATH=/usr/bin:/bin cmake -S build-tools/cmake/host-tools -B $(BUILD_DIR)/vm-tools-build \
-			-DCMAKE_C_COMPILER=/usr/bin/gcc -DCMAKE_CXX_COMPILER=/usr/bin/g++ \
-			-DCMAKE_BUILD_TYPE=Release 2>/dev/null || \
-		PATH=/usr/bin:/bin cmake -S build-tools/cmake/host-tools -B $(BUILD_DIR)/vm-tools-build \
-			-DCMAKE_C_COMPILER=/usr/bin/gcc -DCMAKE_CXX_COMPILER=/usr/bin/g++ \
+		GCC_PATH=$$(command -v gcc || echo /usr/bin/gcc); \
+		GXX_PATH=$$(command -v g++ || echo /usr/bin/g++); \
+		CMAKE_PATH=$$(command -v cmake); \
+		echo "Using cmake=$$CMAKE_PATH gcc=$$GCC_PATH g++=$$GXX_PATH"; \
+		$$CMAKE_PATH -S build-tools/cmake/host-tools -B $(BUILD_DIR)/vm-tools-build \
+			-DCMAKE_C_COMPILER=$$GCC_PATH -DCMAKE_CXX_COMPILER=$$GXX_PATH \
 			-DCMAKE_BUILD_TYPE=Release; \
-		PATH=/usr/bin:/bin cmake --build $(BUILD_DIR)/vm-tools-build --target yecho-static $(CMAKE_PARALLEL); \
+		$$CMAKE_PATH --build $(BUILD_DIR)/vm-tools-build --target yecho-static $(CMAKE_PARALLEL); \
 		cp $(BUILD_DIR)/vm-tools-build/yecho $(BUILD_DIR)/vm-tools/; \
 	fi
 	@echo "VM tools built: $(BUILD_DIR)/vm-tools/"

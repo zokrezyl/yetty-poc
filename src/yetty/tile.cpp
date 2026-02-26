@@ -8,7 +8,7 @@
 
 namespace yetty {
 
-using namespace ymery;
+using namespace ygui;
 
 // ─── TreeLike base implementations (Tile) ────────────────────────────────────
 

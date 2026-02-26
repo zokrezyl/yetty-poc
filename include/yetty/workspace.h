@@ -4,14 +4,14 @@
 #include <yetty/base/base.h>
 #include <yetty/result.hpp>
 #include <yetty/tile.h>
-#include <yetty/ymery/types.h>
+#include <yetty/ygui/types.h>
 #include <yetty/yetty-context.h>
 
 namespace yetty {
 
 using namespace yetty::base;
 
-class Workspace : public EventListener, public ymery::TreeLike, public ObjectFactory<Workspace> {
+class Workspace : public EventListener, public ygui::TreeLike, public ObjectFactory<Workspace> {
 public:
   using Ptr = std::shared_ptr<Workspace>;
 
@@ -35,13 +35,13 @@ public:
   virtual float height() const = 0;
 
   // TreeLike
-  Result<std::vector<std::string>> getChildrenNames(const ymery::DataPath& path) override;
-  Result<ymery::Dict> getMetadata(const ymery::DataPath& path) override;
-  Result<std::vector<std::string>> getMetadataKeys(const ymery::DataPath& path) override;
-  Result<ymery::Value> get(const ymery::DataPath& path) override;
-  Result<void> set(const ymery::DataPath& path, const ymery::Value& value) override;
-  Result<void> addChild(const ymery::DataPath& path, const std::string& name, const ymery::Dict& data) override;
-  Result<std::string> asTree(const ymery::DataPath& path, int depth = -1) override;
+  Result<std::vector<std::string>> getChildrenNames(const ygui::DataPath& path) override;
+  Result<ygui::Dict> getMetadata(const ygui::DataPath& path) override;
+  Result<std::vector<std::string>> getMetadataKeys(const ygui::DataPath& path) override;
+  Result<ygui::Value> get(const ygui::DataPath& path) override;
+  Result<void> set(const ygui::DataPath& path, const ygui::Value& value) override;
+  Result<void> addChild(const ygui::DataPath& path, const std::string& name, const ygui::Dict& data) override;
+  Result<std::string> asTree(const ygui::DataPath& path, int depth = -1) override;
 
 protected:
   Workspace() = default;

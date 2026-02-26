@@ -1,3 +1,8 @@
+// Prevent Windows min/max macros from conflicting with std::min/std::max
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
 #include "plot.h"
 #include "plot-sampler-provider.h"
 #include "plot-transformer-provider.h"

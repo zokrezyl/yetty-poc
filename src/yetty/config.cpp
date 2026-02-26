@@ -17,7 +17,7 @@
 
 namespace yetty {
 
-using namespace ymery;
+using namespace ygui;
 
 // ─── ConfigNode: Custom tree structure ───────────────────────────────────────
 

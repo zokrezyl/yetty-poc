@@ -362,7 +362,7 @@ private:
 
 // ─── TreeLike implementations (Workspace) ──────────────────────────────────
 
-using namespace ymery;
+using namespace ygui;
 
 Result<std::vector<std::string>> Workspace::getChildrenNames(const DataPath& path) {
     if (!path.isRoot()) {

@@ -1,3 +1,8 @@
+// Prevent Windows min/max macros from conflicting with std::min/std::max
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
 #include <yetty/ydraw-builder.h>
 #include <yetty/card-texture-manager.h>
 #include "ydraw-types.gen.h"

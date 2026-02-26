@@ -3,6 +3,7 @@
 add_library(yetty_card_ygui STATIC
     ygui.cpp
     ${YETTY_ROOT}/src/yetty/ygui/ygui-engine.cpp
+    ${YETTY_ROOT}/src/yetty/ygui/data-types.cpp
 )
 target_include_directories(yetty_card_ygui PUBLIC
     ${YETTY_ROOT}/include
