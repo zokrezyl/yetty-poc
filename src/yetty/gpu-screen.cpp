@@ -285,6 +285,7 @@ private:
   void pushLineToScrollback(int row);
   void scrollToTop();
   void clampVisualZoomOffset();  // Clamp visual zoom pan offset to valid range
+  void requestScreenUpdate();    // Dispatch ScreenUpdate event for immediate re-render
 
   void setCell(int row, int col, uint32_t glyph, uint8_t fgR, uint8_t fgG,
                uint8_t fgB, uint8_t bgR, uint8_t bgG, uint8_t bgB,
@@ -1324,6 +1325,12 @@ void GPUScreenImpl::clampVisualZoomOffset() {
 
   _visualZoomOffsetX = std::clamp(_visualZoomOffsetX, -maxOffsetX, maxOffsetX);
   _visualZoomOffsetY = std::clamp(_visualZoomOffsetY, -maxOffsetY, maxOffsetY);
+}
+
+void GPUScreenImpl::requestScreenUpdate() {
+  if (auto loop = base::EventLoop::instance(); loop) {
+    (*loop)->dispatch(base::Event::screenUpdateEvent());
+  }
 }
 
 //=============================================================================
@@ -4182,6 +4189,7 @@ void GPUScreenImpl::sendKey(uint32_t codepoint, int mods) {
     vtMods = static_cast<VTermModifier>(vtMods | VTERM_MOD_ALT);
 
   vterm_keyboard_unichar(_vterm, codepoint, vtMods);
+  requestScreenUpdate();
 }
 
 void GPUScreenImpl::sendSpecialKey(int key, int mods) {
@@ -4296,12 +4304,14 @@ void GPUScreenImpl::sendSpecialKey(int key, int mods) {
       if (ch != 0) {
         ydebug("sendSpecialKey: sending ctrl/alt char '{}' ({})", (char)ch, ch);
         vterm_keyboard_unichar(_vterm, ch, vtMods);
+        requestScreenUpdate();
       }
     }
     return;
   }
 
   vterm_keyboard_key(_vterm, vtKey, vtMods);
+  requestScreenUpdate();
 }
 
 void GPUScreenImpl::setOutputCallback(OutputCallback cb) {
@@ -4523,6 +4533,7 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
       clampVisualZoomOffset();
       _visualZoomDragLastX = mx;
       _visualZoomDragLastY = my;
+      requestScreenUpdate();
       return Ok(true);
     }
 
@@ -4563,6 +4574,7 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
           _selEndRow = row;
           _hasSelection = (_selStartCol != _selEndCol || _selStartRow != _selEndRow);
           _hasDamage = true;
+          requestScreenUpdate();
         }
 
         // Forward mouse move to focused card with local coordinates
@@ -4764,6 +4776,7 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
             scrollDown(-lines);
           }
         }
+        requestScreenUpdate();  // Trigger immediate re-render
         return Ok(true);  // Consume
       }
     }
@@ -4896,15 +4909,18 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
     if (_copyMode) {
       if (event.type == base::Event::Type::Char) {
         if (handleCopyModeKey(event.chr.codepoint, 0, event.chr.mods)) {
+          requestScreenUpdate();
           return Ok(true);
         }
       }
       if (event.type == base::Event::Type::KeyDown) {
         if (handleCopyModeKey(0, event.key.key, event.key.mods)) {
+          requestScreenUpdate();
           return Ok(true);
         }
       }
       // Consume all keyboard input in copy mode
+      requestScreenUpdate();
       return Ok(true);
     }
 

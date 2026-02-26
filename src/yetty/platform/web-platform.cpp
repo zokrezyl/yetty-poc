@@ -162,6 +162,12 @@ public:
     WebPlatform() = default;
     ~WebPlatform() override = default;
 
+    // Track modifier key state for scroll events (same as desktop)
+    bool _ctrlPressed = false;
+    bool _shiftPressed = false;
+    float _lastMouseX = 0.0f;
+    float _lastMouseY = 0.0f;
+
     Result<void> createWindow(int width, int height, const std::string& title) override {
         _width = width;
         _height = height;
@@ -335,6 +341,16 @@ private:
 
     static EM_BOOL keyCallback(int eventType, const EmscriptenKeyboardEvent* e, void* userData) {
         auto* self = static_cast<WebPlatform*>(userData);
+
+        // Track modifier key state for scroll events
+        // Browser keyCode: 16=Shift, 17=Ctrl
+        if (e->keyCode == 17) {
+            self->_ctrlPressed = (eventType == EMSCRIPTEN_EVENT_KEYDOWN);
+        }
+        if (e->keyCode == 16) {
+            self->_shiftPressed = (eventType == EMSCRIPTEN_EVENT_KEYDOWN);
+        }
+
         if (self->_keyCallback) {
             KeyAction action = (eventType == EMSCRIPTEN_EVENT_KEYDOWN) ? KeyAction::Press : KeyAction::Release;
             int mods = 0;
@@ -366,6 +382,9 @@ private:
     static EM_BOOL mouseMoveCallback(int eventType, const EmscriptenMouseEvent* e, void* userData) {
         (void)eventType;
         auto* self = static_cast<WebPlatform*>(userData);
+        // Track mouse position for scroll events
+        self->_lastMouseX = static_cast<float>(e->targetX);
+        self->_lastMouseY = static_cast<float>(e->targetY);
         if (self->_mouseMoveCallback) {
             self->_mouseMoveCallback(e->targetX, e->targetY);
         }
@@ -375,8 +394,44 @@ private:
     static EM_BOOL wheelCallback(int eventType, const EmscriptenWheelEvent* e, void* userData) {
         (void)eventType;
         auto* self = static_cast<WebPlatform*>(userData);
+
+        // Sync modifier state from wheel event to ensure zoom/scroll works correctly.
+        // Browser may not send separate keydown events before wheel events.
+        if (self->_keyCallback) {
+            bool ctrlNow = e->mouse.ctrlKey;
+            bool shiftNow = e->mouse.shiftKey;
+
+            // Synthesize key events when modifier state changes
+            if (ctrlNow != self->_ctrlPressed) {
+                self->_ctrlPressed = ctrlNow;
+                int mods = (shiftNow ? 0x0001 : 0) | (ctrlNow ? 0x0002 : 0) | (e->mouse.altKey ? 0x0004 : 0);
+                self->_keyCallback(341, 0, ctrlNow ? KeyAction::Press : KeyAction::Release, mods);  // GLFW_KEY_LEFT_CONTROL
+            }
+            if (shiftNow != self->_shiftPressed) {
+                self->_shiftPressed = shiftNow;
+                int mods = (shiftNow ? 0x0001 : 0) | (ctrlNow ? 0x0002 : 0) | (e->mouse.altKey ? 0x0004 : 0);
+                self->_keyCallback(340, 0, shiftNow ? KeyAction::Press : KeyAction::Release, mods);  // GLFW_KEY_LEFT_SHIFT
+            }
+        }
+
         if (self->_scrollCallback) {
-            self->_scrollCallback(e->deltaX, e->deltaY);
+            // Normalize wheel delta to match GLFW's ~1.0 per scroll notch
+            // Browser deltaMode: 0=pixel (~100/notch), 1=line (~3/notch), 2=page (~1/notch)
+            double dx = e->deltaX;
+            double dy = e->deltaY;
+            switch (e->deltaMode) {
+                case 0:  // DOM_DELTA_PIXEL - normalize ~100 pixels to ~1.0
+                    dx /= 100.0;
+                    dy /= 100.0;
+                    break;
+                case 1:  // DOM_DELTA_LINE - normalize ~3 lines to ~1.0
+                    dx /= 3.0;
+                    dy /= 3.0;
+                    break;
+                case 2:  // DOM_DELTA_PAGE - already ~1.0
+                    break;
+            }
+            self->_scrollCallback(dx, dy);
         }
         return EM_TRUE;
     }
