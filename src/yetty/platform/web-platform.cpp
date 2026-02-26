@@ -58,7 +58,7 @@ public:
             var iframe = document.createElement('iframe');
             iframe.id = 'jslinux-pty-' + ptyId;
             iframe.style.cssText = 'position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;';
-            iframe.src = '/jslinux/vm-bridge.html?ptyId=' + ptyId +
+            iframe.src = 'jslinux/vm-bridge.html?ptyId=' + ptyId +
                          '&url=' + encodeURIComponent(vmConfig) +
                          '&cols=' + cols + '&rows=' + rows +
                          '&cpu=x86_64&mem=256';

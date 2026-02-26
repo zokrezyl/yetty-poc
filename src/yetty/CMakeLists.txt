@@ -1,6 +1,11 @@
 # yetty sources and subdirectories
 
-# Core sources
+# Sources for yetty executable (collected from subdirectories)
+add_subdirectory(ydraw-zoo)
+add_subdirectory(ydraw-maze)
+add_subdirectory(cards/ygrid)
+
+# Core sources - ALL sources needed for yetty executable
 set(YETTY_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/yetty.cpp
@@ -36,6 +41,10 @@ set(YETTY_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/bm-font.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/shader-font.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/shared-memory.cpp
+    # Renderer sources (from subdirectories)
+    ${YETTY_ZOO_SOURCES}
+    ${YETTY_MAZE_SOURCES}
+    ${YETTY_YGRID_SOURCES}
     PARENT_SCOPE
 )
 
@@ -47,8 +56,14 @@ set(YETTY_DESKTOP_SOURCES
 
 # Android-specific sources
 set(YETTY_ANDROID_SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/hdraw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/msdf-cdb-provider.cpp
+    PARENT_SCOPE
+)
+
+# Include directories for renderer sources
+set(YETTY_RENDERER_INCLUDES
+    ${YETTY_ZOO_INCLUDES}
+    ${YETTY_MAZE_INCLUDES}
     PARENT_SCOPE
 )
 

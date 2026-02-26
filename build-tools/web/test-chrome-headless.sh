@@ -1,6 +1,13 @@
 #!/bin/bash
 # Headless Chrome test for yetty WebAssembly
 # Tests actual browser loading with software WebGPU and verifies render loop
+#
+# Usage:
+#   ./test-chrome-headless.sh [BUILD_DIR|URL] [PORT] [TEST_MODE]
+#
+# Examples:
+#   ./test-chrome-headless.sh build-webasm-dawn-release      # Local build
+#   ./test-chrome-headless.sh https://zokrezyl.github.io/yetty/  # Remote URL
 
 set -e
 
@@ -15,14 +22,25 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-echo "=============================================="
-echo "Headless Chrome Test (Software WebGPU)"
-echo "Build directory: $BUILD_DIR"
-echo "Port: $PORT"
-echo "Test mode: $TEST_MODE"
-echo "=============================================="
-
-cd "$YETTY_ROOT/$BUILD_DIR"
+# Check if BUILD_DIR is a URL (remote mode)
+REMOTE_MODE=0
+if [[ "$BUILD_DIR" == http://* ]] || [[ "$BUILD_DIR" == https://* ]]; then
+    REMOTE_MODE=1
+    REMOTE_URL="$BUILD_DIR"
+    echo "=============================================="
+    echo "Headless Chrome Test (Software WebGPU) - REMOTE"
+    echo "URL: $REMOTE_URL"
+    echo "Test mode: $TEST_MODE"
+    echo "=============================================="
+else
+    echo "=============================================="
+    echo "Headless Chrome Test (Software WebGPU) - LOCAL"
+    echo "Build directory: $BUILD_DIR"
+    echo "Port: $PORT"
+    echo "Test mode: $TEST_MODE"
+    echo "=============================================="
+    cd "$YETTY_ROOT/$BUILD_DIR"
+fi
 
 # Find Chrome/Chromium
 CHROME=""
@@ -40,129 +58,143 @@ fi
 
 echo "Using browser: $CHROME"
 
-# Start server in background
-echo "Starting server on port $PORT..."
-python serve.py $PORT . > /tmp/yetty-server.log 2>&1 &
-SERVER_PID=$!
+# Start server for local mode only
+SERVER_PID=""
+if [ "$REMOTE_MODE" -eq 0 ]; then
+    echo "Starting server on port $PORT..."
+    python serve.py $PORT . > /tmp/yetty-server.log 2>&1 &
+    SERVER_PID=$!
 
-cleanup() {
-    echo "Cleaning up..."
-    kill $SERVER_PID 2>/dev/null || true
-}
-trap cleanup EXIT
+    cleanup() {
+        echo "Cleaning up..."
+        [ -n "$SERVER_PID" ] && kill $SERVER_PID 2>/dev/null || true
+    }
+    trap cleanup EXIT
 
-# Wait for server to start
-sleep 2
+    # Wait for server to start
+    sleep 2
 
-# Check server is running
-if ! curl -s -o /dev/null http://localhost:$PORT/; then
-    echo -e "${RED}ERROR: Server failed to start${NC}"
-    cat /tmp/yetty-server.log
-    exit 1
+    # Check server is running
+    if ! curl -s -o /dev/null http://localhost:$PORT/; then
+        echo -e "${RED}ERROR: Server failed to start${NC}"
+        cat /tmp/yetty-server.log
+        exit 1
+    fi
+    echo "Server started"
+    BASE_URL="http://localhost:$PORT"
+else
+    BASE_URL="$REMOTE_URL"
+    # Remove trailing slash if present
+    BASE_URL="${BASE_URL%/}"
 fi
-echo "Server started"
 
 #=============================================================================
-# Build Asset Verification
+# Build Asset Verification (local mode only)
 #=============================================================================
-echo ""
-echo "=== Build Asset Verification ==="
-
-BUILD_RESULT=0
-
-# Check vfsync filesystem
-echo "Checking vfsync filesystem..."
-if [ -d "$YETTY_ROOT/$BUILD_DIR/vfsync/u/os/yetty-alpine" ]; then
-    echo -e "${GREEN}OK: vfsync directory exists${NC}"
-    VFSYNC_FILES=$(ls "$YETTY_ROOT/$BUILD_DIR/vfsync/u/os/yetty-alpine/files/" 2>/dev/null | wc -l)
-    echo "  vfsync files: $VFSYNC_FILES"
-    if [ "$VFSYNC_FILES" -lt 100 ]; then
-        echo -e "${RED}ERROR: vfsync has too few files ($VFSYNC_FILES < 100)${NC}"
-        BUILD_RESULT=1
-    fi
-else
-    echo -e "${RED}ERROR: vfsync directory missing${NC}"
-    BUILD_RESULT=1
-fi
-
-# Check vfsync head file for demo presence
-if [ -f "$YETTY_ROOT/$BUILD_DIR/vfsync/u/os/yetty-alpine/head" ]; then
-    FS_COUNT=$(grep "FSFileCount:" "$YETTY_ROOT/$BUILD_DIR/vfsync/u/os/yetty-alpine/head" | awk '{print $2}')
-    echo "  FSFileCount: $FS_COUNT"
-fi
-
-# Check jslinux files
-echo "Checking jslinux files..."
-JSLINUX_DIR="$YETTY_ROOT/$BUILD_DIR/jslinux"
-JSLINUX_OK=1
-for file in vm-bridge.html term-bridge.js x86_64emu-wasm.js x86_64emu-wasm.wasm kernel-x86_64.bin; do
-    if [ -f "$JSLINUX_DIR/$file" ]; then
-        echo -e "  ${GREEN}OK: jslinux/$file${NC}"
-    else
-        echo -e "  ${RED}MISSING: jslinux/$file${NC}"
-        JSLINUX_OK=0
-        BUILD_RESULT=1
-    fi
-done
-
-# Check shader glyphs
-echo "Checking shader glyphs..."
-GLYPH_DIR="$YETTY_ROOT/$BUILD_DIR/assets/shaders/glyphs"
-if [ -d "$GLYPH_DIR" ]; then
-    GLYPH_COUNT=$(ls "$GLYPH_DIR"/*.wgsl 2>/dev/null | wc -l)
-    echo -e "${GREEN}OK: $GLYPH_COUNT shader glyph files${NC}"
-    if [ "$GLYPH_COUNT" -lt 30 ]; then
-        echo -e "${RED}ERROR: Too few shader glyphs ($GLYPH_COUNT < 30)${NC}"
-        BUILD_RESULT=1
-    fi
-else
-    echo -e "${RED}ERROR: Shader glyphs directory missing${NC}"
-    BUILD_RESULT=1
-fi
-
-# Check card shaders
-CARD_DIR="$YETTY_ROOT/$BUILD_DIR/assets/shaders/cards"
-if [ -d "$CARD_DIR" ]; then
-    CARD_COUNT=$(ls "$CARD_DIR"/*.wgsl 2>/dev/null | wc -l)
-    echo -e "${GREEN}OK: $CARD_COUNT card shader files${NC}"
-else
-    echo -e "${RED}ERROR: Card shaders directory missing${NC}"
-    BUILD_RESULT=1
-fi
-
-# Check yetty.data contains demo
-echo "Checking yetty.data..."
-if [ -f "$YETTY_ROOT/$BUILD_DIR/yetty.data" ]; then
-    DATA_SIZE=$(stat -c%s "$YETTY_ROOT/$BUILD_DIR/yetty.data" 2>/dev/null || stat -f%z "$YETTY_ROOT/$BUILD_DIR/yetty.data")
-    DATA_MB=$((DATA_SIZE / 1024 / 1024))
-    echo -e "${GREEN}OK: yetty.data exists (${DATA_MB}MB)${NC}"
-else
-    echo -e "${RED}ERROR: yetty.data missing${NC}"
-    BUILD_RESULT=1
-fi
-
-if [ "$BUILD_RESULT" -ne 0 ]; then
+if [ "$REMOTE_MODE" -eq 0 ]; then
     echo ""
-    echo -e "${RED}=== BUILD ASSET VERIFICATION FAILED ===${NC}"
-    exit 1
+    echo "=== Build Asset Verification ==="
+
+    BUILD_RESULT=0
+
+    # Check vfsync filesystem
+    echo "Checking vfsync filesystem..."
+    if [ -d "$YETTY_ROOT/$BUILD_DIR/vfsync/u/os/yetty-alpine" ]; then
+        echo -e "${GREEN}OK: vfsync directory exists${NC}"
+        VFSYNC_FILES=$(ls "$YETTY_ROOT/$BUILD_DIR/vfsync/u/os/yetty-alpine/files/" 2>/dev/null | wc -l)
+        echo "  vfsync files: $VFSYNC_FILES"
+        if [ "$VFSYNC_FILES" -lt 100 ]; then
+            echo -e "${RED}ERROR: vfsync has too few files ($VFSYNC_FILES < 100)${NC}"
+            BUILD_RESULT=1
+        fi
+    else
+        echo -e "${RED}ERROR: vfsync directory missing${NC}"
+        BUILD_RESULT=1
+    fi
+
+    # Check vfsync head file for demo presence
+    if [ -f "$YETTY_ROOT/$BUILD_DIR/vfsync/u/os/yetty-alpine/head" ]; then
+        FS_COUNT=$(grep "FSFileCount:" "$YETTY_ROOT/$BUILD_DIR/vfsync/u/os/yetty-alpine/head" | awk '{print $2}')
+        echo "  FSFileCount: $FS_COUNT"
+    fi
+
+    # Check jslinux files
+    echo "Checking jslinux files..."
+    JSLINUX_DIR="$YETTY_ROOT/$BUILD_DIR/jslinux"
+    JSLINUX_OK=1
+    for file in vm-bridge.html term-bridge.js x86_64emu-wasm.js x86_64emu-wasm.wasm kernel-x86_64.bin; do
+        if [ -f "$JSLINUX_DIR/$file" ]; then
+            echo -e "  ${GREEN}OK: jslinux/$file${NC}"
+        else
+            echo -e "  ${RED}MISSING: jslinux/$file${NC}"
+            JSLINUX_OK=0
+            BUILD_RESULT=1
+        fi
+    done
+
+    # Check shader glyphs
+    echo "Checking shader glyphs..."
+    GLYPH_DIR="$YETTY_ROOT/$BUILD_DIR/assets/shaders/glyphs"
+    if [ -d "$GLYPH_DIR" ]; then
+        GLYPH_COUNT=$(ls "$GLYPH_DIR"/*.wgsl 2>/dev/null | wc -l)
+        echo -e "${GREEN}OK: $GLYPH_COUNT shader glyph files${NC}"
+        if [ "$GLYPH_COUNT" -lt 30 ]; then
+            echo -e "${RED}ERROR: Too few shader glyphs ($GLYPH_COUNT < 30)${NC}"
+            BUILD_RESULT=1
+        fi
+    else
+        echo -e "${RED}ERROR: Shader glyphs directory missing${NC}"
+        BUILD_RESULT=1
+    fi
+
+    # Check card shaders
+    CARD_DIR="$YETTY_ROOT/$BUILD_DIR/assets/shaders/cards"
+    if [ -d "$CARD_DIR" ]; then
+        CARD_COUNT=$(ls "$CARD_DIR"/*.wgsl 2>/dev/null | wc -l)
+        echo -e "${GREEN}OK: $CARD_COUNT card shader files${NC}"
+    else
+        echo -e "${RED}ERROR: Card shaders directory missing${NC}"
+        BUILD_RESULT=1
+    fi
+
+    # Check yetty.data contains demo
+    echo "Checking yetty.data..."
+    if [ -f "$YETTY_ROOT/$BUILD_DIR/yetty.data" ]; then
+        DATA_SIZE=$(stat -c%s "$YETTY_ROOT/$BUILD_DIR/yetty.data" 2>/dev/null || stat -f%z "$YETTY_ROOT/$BUILD_DIR/yetty.data")
+        DATA_MB=$((DATA_SIZE / 1024 / 1024))
+        echo -e "${GREEN}OK: yetty.data exists (${DATA_MB}MB)${NC}"
+    else
+        echo -e "${RED}ERROR: yetty.data missing${NC}"
+        BUILD_RESULT=1
+    fi
+
+    if [ "$BUILD_RESULT" -ne 0 ]; then
+        echo ""
+        echo -e "${RED}=== BUILD ASSET VERIFICATION FAILED ===${NC}"
+        exit 1
+    fi
+    echo ""
+else
+    echo ""
+    echo "=== Skipping local asset verification (remote mode) ==="
+    echo ""
 fi
-echo ""
 
 # Determine test URL
 if [ "$TEST_MODE" = "jslinux" ]; then
-    TEST_URL="http://localhost:$PORT/jslinux/vm-bridge.html?ptyId=test1&url=alpine-x86_64.cfg&cpu=x86_64&cols=80&rows=25&mem=256"
+    TEST_URL="${BASE_URL}/jslinux/vm-bridge.html?ptyId=test1&url=alpine-x86_64.cfg&cpu=x86_64&cols=80&rows=25&mem=256"
     echo "Testing JSLinux (vfsync.org proxy) at: $TEST_URL"
 elif [ "$TEST_MODE" = "jslinux-local" ]; then
     # Test full yetty with local VM config - this enables card creation testing
     # The VM will boot, run card tests in init script, and yetty will process OSC sequences
-    TEST_URL="http://localhost:$PORT/?vmconfig=yetty-alpine.cfg"
+    TEST_URL="${BASE_URL}/?vmconfig=yetty-alpine.cfg"
     echo "Testing yetty with local JSLinux VM at: $TEST_URL"
 elif [ "$TEST_MODE" = "vm-only" ]; then
     # Test VM only (without yetty) - useful for debugging VM boot issues
-    TEST_URL="http://localhost:$PORT/jslinux/vm-bridge.html?ptyId=test1&url=yetty-alpine.cfg&cpu=x86_64&cols=80&rows=25&mem=256"
+    TEST_URL="${BASE_URL}/jslinux/vm-bridge.html?ptyId=test1&url=yetty-alpine.cfg&cpu=x86_64&cols=80&rows=25&mem=256"
     echo "Testing JSLinux VM only (no yetty) at: $TEST_URL"
 else
-    TEST_URL="http://localhost:$PORT/"
+    TEST_URL="${BASE_URL}/"
     echo "Testing full yetty at: $TEST_URL"
 fi
 
@@ -440,7 +472,9 @@ echo ""
 echo "=== Card Rendering Tests ==="
 
 DEMO_OUTPUT_DIR="$YETTY_ROOT/$BUILD_DIR/demo-output"
-if [ -d "$DEMO_OUTPUT_DIR" ] && [ "$TEST_MODE" = "jslinux-local" ]; then
+if [ "$REMOTE_MODE" -eq 1 ]; then
+    echo -e "${YELLOW}SKIP: Card rendering file tests not available in remote mode${NC}"
+elif [ -d "$DEMO_OUTPUT_DIR" ] && [ "$TEST_MODE" = "jslinux-local" ]; then
     # Test cards by catting .out files in JSLinux and checking yetty logs
     # Expected YTRACE patterns when card is successfully created:
     #   - "CardFactory: creating card '<type>'"

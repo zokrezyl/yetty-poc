@@ -1,3 +1,8 @@
+// Prevent Windows min/max macros from conflicting with std::min/std::max
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
 #include "html-container.h"
 #include "http-fetcher.h"
 #include <yetty/font/raw-font.h>

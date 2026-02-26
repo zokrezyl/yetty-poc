@@ -1,5 +1,5 @@
 # ygrid card - terminal cell grid renderer
-
-target_sources(yetty PRIVATE
+set(YETTY_YGRID_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ygrid.cpp
+    PARENT_SCOPE
 )
