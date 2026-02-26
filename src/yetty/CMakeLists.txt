@@ -8,6 +8,7 @@ set(YETTY_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/osc-scanner.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/pty-reader-desktop.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/pty-reader-web.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/pty-reader-windows.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/terminal.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/terminal-view.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/gpu-screen.cpp

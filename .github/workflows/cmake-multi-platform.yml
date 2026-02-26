@@ -273,7 +273,7 @@ jobs:
           adb logcat -d | grep -i yetty | tail -50
 
   # =============================================================================
-  # WebAssembly Build
+  # WebAssembly Build (using nix for deterministic builds)
   # =============================================================================
   build-webasm:
     runs-on: ubuntu-latest
@@ -281,38 +281,14 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Setup Emscripten
-      uses: mymindstorm/setup-emsdk@v14
+    - name: Install Nix
+      uses: cachix/install-nix-action@v27
       with:
-        version: '3.1.74'
+        nix_path: nixpkgs=channel:nixos-unstable
 
-    - name: Install build dependencies
+    - name: Build WebAssembly with Nix
       run: |
-        sudo apt-get update
-        sudo apt-get install -y automake autoconf libtool ninja-build
-
-    - name: Configure WebAssembly build
-      run: |
-        export EMCC_SKIP_SANITY_CHECK=1
-        emcmake cmake -B build-webasm-dawn-release -G Ninja \
-          -DCMAKE_BUILD_TYPE=MinSizeRel
-
-    - name: Build WebAssembly
-      run: |
-        cmake --build build-webasm-dawn-release --target yetty --parallel
-
-    - name: Copy web files
-      run: |
-        cp build-tools/web/index.html build-webasm-dawn-release/
-        cp build-tools/web/serve.py build-webasm-dawn-release/
-
-    - name: Build VM tools (static with Alpine Docker)
-      run: |
-        bash build-tools/docker/build-vm-tools.sh build-webasm-dawn-release
-
-    - name: Build vfsync filesystem
-      run: |
-        bash build-tools/web/build-fs/build-vfsync.sh build-webasm-dawn-release
+        nix develop .#web --command make build-webasm-dawn-release
 
     - name: Prepare site directory
       run: |

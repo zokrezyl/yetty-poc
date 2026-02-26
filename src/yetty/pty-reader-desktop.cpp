@@ -1,6 +1,6 @@
 #include <yetty/pty-reader.h>
 
-#if !YETTY_WEB && !defined(__ANDROID__) && !defined(_WIN32)
+#if !YETTY_WEB && !defined(_WIN32)
 
 #include <yetty/base/event-loop.h>
 #include <ytrace/ytrace.hpp>
@@ -215,4 +215,4 @@ Result<PtyReader::Ptr> PtyReader::create(const PtyConfig& config) {
 
 } // namespace yetty
 
-#endif // !YETTY_WEB && !__ANDROID__ && !_WIN32
+#endif // !YETTY_WEB && !_WIN32
