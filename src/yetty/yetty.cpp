@@ -22,7 +22,11 @@
 #include <array>
 #include <iostream>
 #include <csignal>
+#include <cstring>
 #include <ytrace/ytrace.hpp>
+#include <turbojpeg.h>
+#include "vnc/vnc-client.hpp"
+#include "vnc/vnc-server.hpp"
 
 #if defined(__EMSCRIPTEN__)
 #include <emscripten.h>
@@ -55,6 +59,10 @@ private:
     void configureSurface(uint32_t width, uint32_t height) noexcept;
     Result<WGPUTextureView> getCurrentTextureView() noexcept;
     void present() noexcept;
+
+    // Capture benchmark helpers
+    Result<void> ensureCaptureResources(uint32_t width, uint32_t height) noexcept;
+    Result<void> performFrameCapture(WGPUCommandEncoder encoder) noexcept;
 
 #if !YETTY_WEB && !defined(__ANDROID__)
     void initEventLoop() noexcept;
@@ -137,6 +145,34 @@ private:
     // Command line options
     std::string _executeCommand;
     std::string _msdfProviderName = "cpu";  // "cpu" or "gpu"
+
+    // Frame capture benchmark mode
+    bool _captureBenchmark = false;
+    WGPUTexture _captureTexture = nullptr;
+    WGPUTextureView _captureTextureView = nullptr;
+    WGPUBuffer _captureReadbackBuffer = nullptr;
+    uint32_t _captureWidth = 0;
+    uint32_t _captureHeight = 0;
+    uint32_t _captureReadbackSize = 0;
+    tjhandle _jpegCompressor = nullptr;
+    std::vector<uint8_t> _capturePixels;
+
+    // Capture statistics (ytrace handles timing, we just track JPEG sizes)
+    uint64_t _captureFrameCount = 0;
+    uint64_t _totalCompressedBytes = 0;
+    uint64_t _captureSkipCounter = 0;
+    static constexpr uint64_t CAPTURE_EVERY_N_FRAMES = 5;  // Only capture every 5th frame
+
+    // VNC client mode
+    bool _vncClientMode = false;
+    std::string _vncHost;
+    uint16_t _vncPort = 5900;
+    std::unique_ptr<vnc::VncClient> _vncClient;
+
+    // VNC server mode
+    bool _vncServerMode = false;
+    uint16_t _vncServerPort = 5900;
+    std::unique_ptr<vnc::VncServer> _vncServer;
 
     static YettyImpl* s_instance;
 };
@@ -295,6 +331,33 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     s_instance = this;
     _lastFpsTime = _platform->getTime();
 
+    // Initialize capture benchmark mode if enabled
+    if (_captureBenchmark) {
+        _jpegCompressor = tjInitCompress();
+        if (!_jpegCompressor) {
+            return Err<void>("Failed to initialize TurboJPEG compressor");
+        }
+        yinfo("Capture benchmark: TurboJPEG compressor initialized");
+    }
+
+    // Initialize VNC client mode if enabled
+    if (_vncClientMode) {
+        _vncClient = std::make_unique<vnc::VncClient>(_device, _queue);
+        if (auto res = _vncClient->connect(_vncHost, _vncPort); !res) {
+            return Err<void>("Failed to connect VNC client", res);
+        }
+        yinfo("VNC client connected to {}:{}", _vncHost, _vncPort);
+    }
+
+    // Initialize VNC server mode if enabled
+    if (_vncServerMode) {
+        _vncServer = std::make_unique<vnc::VncServer>(_device, _queue);
+        if (auto res = _vncServer->start(_vncServerPort); !res) {
+            return Err<void>("Failed to start VNC server", res);
+        }
+        yinfo("VNC server started on port {}", _vncServerPort);
+    }
+
     return Ok();
 }
 
@@ -307,6 +370,25 @@ Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
         } else if (arg == "--msdf-provider" && i + 1 < argc) {
             _msdfProviderName = argv[++i];
             yinfo("MSDF provider: {}", _msdfProviderName);
+        } else if (arg == "--capture-benchmark") {
+            _captureBenchmark = true;
+            yinfo("Capture benchmark mode enabled");
+        } else if (arg == "--vnc-client" && i + 1 < argc) {
+            _vncClientMode = true;
+            std::string hostPort = argv[++i];
+            // Parse host:port
+            auto colonPos = hostPort.rfind(':');
+            if (colonPos != std::string::npos) {
+                _vncHost = hostPort.substr(0, colonPos);
+                _vncPort = static_cast<uint16_t>(std::stoi(hostPort.substr(colonPos + 1)));
+            } else {
+                _vncHost = hostPort;
+            }
+            yinfo("VNC client mode: connecting to {}:{}", _vncHost, _vncPort);
+        } else if (arg == "--vnc-server" && i + 1 < argc) {
+            _vncServerMode = true;
+            _vncServerPort = static_cast<uint16_t>(std::stoi(argv[++i]));
+            yinfo("VNC server mode: port {}", _vncServerPort);
         }
     }
     return Ok();
@@ -559,6 +641,196 @@ void YettyImpl::present() noexcept {
     // wgpuSurfacePresent is not needed on Emscripten - browser handles via requestAnimationFrame
     wgpuSurfacePresent(_surface);
 #endif
+}
+
+//=============================================================================
+// Frame Capture Benchmark
+//=============================================================================
+
+Result<void> YettyImpl::ensureCaptureResources(uint32_t width, uint32_t height) noexcept {
+    if (_captureWidth == width && _captureHeight == height && _captureTexture) {
+        return Ok();
+    }
+
+    // Release old resources
+    if (_captureReadbackBuffer) {
+        wgpuBufferRelease(_captureReadbackBuffer);
+        _captureReadbackBuffer = nullptr;
+    }
+    if (_captureTextureView) {
+        wgpuTextureViewRelease(_captureTextureView);
+        _captureTextureView = nullptr;
+    }
+    if (_captureTexture) {
+        wgpuTextureRelease(_captureTexture);
+        _captureTexture = nullptr;
+    }
+
+    _captureWidth = width;
+    _captureHeight = height;
+
+    // Create offscreen texture with CopySrc for readback
+    WGPUTextureDescriptor texDesc = {};
+    texDesc.label = WGPU_STR("CaptureTexture");
+    texDesc.size = {width, height, 1};
+    texDesc.mipLevelCount = 1;
+    texDesc.sampleCount = 1;
+    texDesc.dimension = WGPUTextureDimension_2D;
+    texDesc.format = WGPUTextureFormat_BGRA8Unorm;  // Match surface format
+    texDesc.usage = WGPUTextureUsage_RenderAttachment | WGPUTextureUsage_CopySrc;
+
+    _captureTexture = wgpuDeviceCreateTexture(_device, &texDesc);
+    if (!_captureTexture) {
+        return Err<void>("Failed to create capture texture");
+    }
+
+    WGPUTextureViewDescriptor viewDesc = {};
+    viewDesc.label = WGPU_STR("CaptureTextureView");
+    viewDesc.format = WGPUTextureFormat_BGRA8Unorm;
+    viewDesc.dimension = WGPUTextureViewDimension_2D;
+    viewDesc.mipLevelCount = 1;
+    viewDesc.arrayLayerCount = 1;
+
+    _captureTextureView = wgpuTextureCreateView(_captureTexture, &viewDesc);
+    if (!_captureTextureView) {
+        return Err<void>("Failed to create capture texture view");
+    }
+
+    // Create readback buffer
+    // WebGPU requires bytesPerRow to be aligned to 256
+    uint32_t bytesPerPixel = 4;  // BGRA8
+    uint32_t unalignedBytesPerRow = width * bytesPerPixel;
+    uint32_t alignedBytesPerRow = (unalignedBytesPerRow + 255) & ~255;
+    _captureReadbackSize = alignedBytesPerRow * height;
+
+    WGPUBufferDescriptor bufDesc = {};
+    bufDesc.label = WGPU_STR("CaptureReadbackBuffer");
+    bufDesc.size = _captureReadbackSize;
+    bufDesc.usage = WGPUBufferUsage_CopyDst | WGPUBufferUsage_MapRead;
+
+    _captureReadbackBuffer = wgpuDeviceCreateBuffer(_device, &bufDesc);
+    if (!_captureReadbackBuffer) {
+        return Err<void>("Failed to create capture readback buffer");
+    }
+
+    // Resize pixel buffer for JPEG compression
+    _capturePixels.resize(width * height * bytesPerPixel);
+
+    yinfo("Capture resources created: {}x{}, readback buffer {}KB",
+          width, height, _captureReadbackSize / 1024);
+
+    return Ok();
+}
+
+Result<void> YettyImpl::performFrameCapture(WGPUCommandEncoder encoder) noexcept {
+    uint32_t bytesPerPixel = 4;
+    uint32_t unalignedBytesPerRow = _captureWidth * bytesPerPixel;
+    uint32_t alignedBytesPerRow = (unalignedBytesPerRow + 255) & ~255;
+
+    // === GPU READBACK ===
+    {
+        ytimeit("capture-readback");
+
+        // Copy texture to readback buffer
+        WGPUTexelCopyTextureInfo src = {};
+        src.texture = _captureTexture;
+
+        WGPUTexelCopyBufferInfo dst = {};
+        dst.buffer = _captureReadbackBuffer;
+        dst.layout.offset = 0;
+        dst.layout.bytesPerRow = alignedBytesPerRow;
+        dst.layout.rowsPerImage = _captureHeight;
+
+        WGPUExtent3D copySize = {_captureWidth, _captureHeight, 1};
+        wgpuCommandEncoderCopyTextureToBuffer(encoder, &src, &dst, &copySize);
+
+        // Finish and submit
+        WGPUCommandBufferDescriptor cmdDesc = {};
+        WGPUCommandBuffer cmdBuffer = wgpuCommandEncoderFinish(encoder, &cmdDesc);
+        if (!cmdBuffer) {
+            return Err<void>("Failed to finish capture command buffer");
+        }
+        wgpuQueueSubmit(_queue, 1, &cmdBuffer);
+        wgpuCommandBufferRelease(cmdBuffer);
+
+        // Map buffer synchronously (blocking for benchmark)
+        struct MapContext {
+            bool done = false;
+            WGPUMapAsyncStatus status = WGPUMapAsyncStatus_Error;
+        };
+        MapContext mapCtx;
+
+        WGPUBufferMapCallbackInfo cbInfo = {};
+        cbInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+        cbInfo.callback = [](WGPUMapAsyncStatus status, WGPUStringView, void* ud1, void*) {
+            auto* ctx = static_cast<MapContext*>(ud1);
+            ctx->status = status;
+            ctx->done = true;
+        };
+        cbInfo.userdata1 = &mapCtx;
+
+        wgpuBufferMapAsync(_captureReadbackBuffer, WGPUMapMode_Read, 0, _captureReadbackSize, cbInfo);
+
+        // Wait for mapping to complete
+        while (!mapCtx.done) {
+            WGPU_DEVICE_TICK(_device);
+        }
+
+        if (mapCtx.status != WGPUMapAsyncStatus_Success) {
+            return Err<void>("Failed to map capture readback buffer");
+        }
+
+        // Copy mapped data (handle row alignment)
+        const uint8_t* mapped = static_cast<const uint8_t*>(
+            wgpuBufferGetConstMappedRange(_captureReadbackBuffer, 0, _captureReadbackSize));
+        if (!mapped) {
+            wgpuBufferUnmap(_captureReadbackBuffer);
+            return Err<void>("Failed to get mapped range");
+        }
+
+        // Copy row by row to remove padding
+        uint8_t* dst_ptr = _capturePixels.data();
+        for (uint32_t y = 0; y < _captureHeight; y++) {
+            std::memcpy(dst_ptr, mapped + y * alignedBytesPerRow, unalignedBytesPerRow);
+            dst_ptr += unalignedBytesPerRow;
+        }
+        wgpuBufferUnmap(_captureReadbackBuffer);
+    }
+
+    // === JPEG COMPRESSION ===
+    unsigned long jpegSize = 0;
+    {
+        ytimeit("capture-jpeg");
+
+        unsigned char* jpegBuf = nullptr;
+
+        // TurboJPEG expects RGB, but we have BGRA. Use TJPF_BGRA for direct conversion.
+        int result = tjCompress2(
+            _jpegCompressor,
+            _capturePixels.data(),
+            _captureWidth,
+            0,  // pitch (0 = width * pixel size)
+            _captureHeight,
+            TJPF_BGRA,
+            &jpegBuf,
+            &jpegSize,
+            TJSAMP_420,  // 4:2:0 chroma subsampling (good compression)
+            85,          // Quality (0-100)
+            TJFLAG_FASTDCT
+        );
+
+        if (result != 0) {
+            if (jpegBuf) tjFree(jpegBuf);
+            return Err<void>("JPEG compression failed: " + std::string(tjGetErrorStr()));
+        }
+
+        tjFree(jpegBuf);
+    }
+
+    _totalCompressedBytes += jpegSize;
+    _captureFrameCount++;
+
+    return Ok();
 }
 
 Result<void> YettyImpl::initSharedResources() noexcept {
@@ -891,6 +1163,43 @@ Result<void> YettyImpl::initCallbacks() noexcept {
 Result<void> YettyImpl::onShutdown() {
     Result<void> result = Ok();
 
+    // Print capture benchmark JPEG size statistics (timing handled by ytrace)
+    if (_captureBenchmark && _captureFrameCount > 0) {
+        double avgCompressedKB = (_totalCompressedBytes / _captureFrameCount) / 1024.0;
+        yinfo("=== Capture Benchmark: {} frames, avg JPEG {:.1f}KB ===",
+              _captureFrameCount, avgCompressedKB);
+    }
+
+    // Cleanup capture resources
+    if (_captureReadbackBuffer) {
+        wgpuBufferRelease(_captureReadbackBuffer);
+        _captureReadbackBuffer = nullptr;
+    }
+    if (_captureTextureView) {
+        wgpuTextureViewRelease(_captureTextureView);
+        _captureTextureView = nullptr;
+    }
+    if (_captureTexture) {
+        wgpuTextureRelease(_captureTexture);
+        _captureTexture = nullptr;
+    }
+    if (_jpegCompressor) {
+        tjDestroy(_jpegCompressor);
+        _jpegCompressor = nullptr;
+    }
+
+    // Cleanup VNC client
+    if (_vncClient) {
+        _vncClient->disconnect();
+        _vncClient.reset();
+    }
+
+    // Cleanup VNC server
+    if (_vncServer) {
+        _vncServer->stop();
+        _vncServer.reset();
+    }
+
 #if !YETTY_WEB && !defined(__ANDROID__)
     if (_rpcServer) {
         _rpcServer->stop();
@@ -1132,6 +1441,85 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
         }
     }
 
+    // === CAPTURE/VNC SERVER MODE ===
+    // Render to offscreen texture for capture benchmark or VNC streaming
+    bool doCapture = (_captureBenchmark && (++_captureSkipCounter % CAPTURE_EVERY_N_FRAMES == 0)) ||
+                     (_vncServerMode && _vncServer && _vncServer->hasClients());
+    if (doCapture && windowWidth > 0 && windowHeight > 0) {
+        // Ensure capture resources match current window size
+        if (auto res = ensureCaptureResources(
+                static_cast<uint32_t>(windowWidth),
+                static_cast<uint32_t>(windowHeight)); !res) {
+            return Err<void>("Failed to ensure capture resources", res);
+        }
+
+        // Render to capture texture
+        WGPUCommandEncoderDescriptor encoderDesc = {};
+        WGPUCommandEncoder captureEncoder = wgpuDeviceCreateCommandEncoder(_device, &encoderDesc);
+        if (!captureEncoder) return Err<void>("Failed to create capture command encoder");
+
+        WGPURenderPassColorAttachment captureAttachment = {};
+        captureAttachment.view = _captureTextureView;
+        captureAttachment.loadOp = WGPULoadOp_Clear;
+        captureAttachment.storeOp = WGPUStoreOp_Store;
+        captureAttachment.clearValue = {0.1f, 0.1f, 0.2f, 1.0f};
+        captureAttachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+
+        WGPURenderPassDescriptor capturePassDesc = {};
+        capturePassDesc.colorAttachmentCount = 1;
+        capturePassDesc.colorAttachments = &captureAttachment;
+
+        WGPURenderPassEncoder capturePass = wgpuCommandEncoderBeginRenderPass(captureEncoder, &capturePassDesc);
+        if (capturePass) {
+            if (_activeWorkspace) {
+                if (auto res = _activeWorkspace->render(capturePass); !res) {
+                    wgpuRenderPassEncoderEnd(capturePass);
+                    wgpuRenderPassEncoderRelease(capturePass);
+                    wgpuCommandEncoderRelease(captureEncoder);
+                    return Err<void>("Capture workspace render failed", res);
+                }
+            }
+            if (_yettyContext.imguiManager) {
+                if (auto res = _yettyContext.imguiManager->render(capturePass); !res) {
+                    wgpuRenderPassEncoderEnd(capturePass);
+                    wgpuRenderPassEncoderRelease(capturePass);
+                    wgpuCommandEncoderRelease(captureEncoder);
+                    return Err<void>("Capture ImGui render failed", res);
+                }
+            }
+            wgpuRenderPassEncoderEnd(capturePass);
+            wgpuRenderPassEncoderRelease(capturePass);
+        }
+
+        // Perform capture benchmark (copy to buffer, map, compress)
+        if (_captureBenchmark) {
+            // Note: performFrameCapture finishes and submits the encoder
+            if (auto res = performFrameCapture(captureEncoder); !res) {
+                // Non-fatal - log warning and continue
+                ywarn("Frame capture failed: {}", res.error().message());
+            }
+        } else {
+            // Just finish and submit for VNC server
+            WGPUCommandBufferDescriptor cmdDesc = {};
+            WGPUCommandBuffer cmdBuf = wgpuCommandEncoderFinish(captureEncoder, &cmdDesc);
+            if (cmdBuf) {
+                wgpuQueueSubmit(_queue, 1, &cmdBuf);
+                wgpuCommandBufferRelease(cmdBuf);
+            }
+            wgpuCommandEncoderRelease(captureEncoder);
+        }
+
+        // VNC server: send frame to connected clients
+        if (_vncServerMode && _vncServer) {
+            if (auto res = _vncServer->sendFrame(_captureTexture,
+                    static_cast<uint32_t>(windowWidth),
+                    static_cast<uint32_t>(windowHeight)); !res) {
+                ywarn("VNC send failed: {}", res.error().message());
+            }
+        }
+    }
+
+    // === NORMAL RENDER TO SURFACE ===
     WGPUCommandEncoderDescriptor encoderDesc = {};
     WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(_device, &encoderDesc);
     if (!encoder) return Err<void>("Failed to create command encoder");
@@ -1149,7 +1537,20 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
 
     WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
     if (pass) {
-        if (_activeWorkspace) {
+        // VNC client mode: render received frame
+        if (_vncClientMode && _vncClient) {
+            // Update texture with any received tiles
+            if (auto res = _vncClient->updateTexture(); !res) {
+                ywarn("VNC texture update failed: {}", res.error().message());
+            }
+            // Render fullscreen quad with frame texture
+            if (auto res = _vncClient->render(pass); !res) {
+                wgpuRenderPassEncoderEnd(pass);
+                wgpuRenderPassEncoderRelease(pass);
+                wgpuCommandEncoderRelease(encoder);
+                return Err<void>("VNC client render failed", res);
+            }
+        } else if (_activeWorkspace) {
             if (auto res = _activeWorkspace->render(pass); !res) {
                 wgpuRenderPassEncoderEnd(pass);
                 wgpuRenderPassEncoderRelease(pass);

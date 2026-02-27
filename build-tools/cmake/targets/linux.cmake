@@ -53,6 +53,7 @@ target_link_libraries(yetty PRIVATE
     lz4_static
     uv_a
     yetty_gpu
+    yetty_vnc
     ${FONTCONFIG_STATIC_LIB}
     ${EXPAT_STATIC_LIB}
     ${UUID_STATIC_LIB}
