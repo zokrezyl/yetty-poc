@@ -104,9 +104,7 @@ void VncServer::acceptLoop() {
         int flag = 1;
         setsockopt(clientFd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
 
-        // Set non-blocking for input polling
-        int flags = fcntl(clientFd, F_GETFL, 0);
-        fcntl(clientFd, F_SETFL, flags | O_NONBLOCK);
+        // Keep socket blocking - we use MSG_DONTWAIT for non-blocking input reads
 
         char clientIp[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &clientAddr.sin_addr, clientIp, sizeof(clientIp));
