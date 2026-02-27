@@ -238,6 +238,7 @@ Result<void> VncClient::ensureResources(uint16_t width, uint16_t height) {
         samplerDesc.minFilter = WGPUFilterMode_Linear;
         samplerDesc.addressModeU = WGPUAddressMode_ClampToEdge;
         samplerDesc.addressModeV = WGPUAddressMode_ClampToEdge;
+        samplerDesc.maxAnisotropy = 1;
         _sampler = wgpuDeviceCreateSampler(_device, &samplerDesc);
     }
 
@@ -308,7 +309,7 @@ Result<void> VncClient::createPipeline() {
     pipelineDesc.vertex.entryPoint = {.data = "vs_main", .length = 7};
 
     WGPUColorTargetState colorTarget = {};
-    colorTarget.format = WGPUTextureFormat_BGRA8Unorm;
+    colorTarget.format = WGPUTextureFormat_BGRA8UnormSrgb;
     colorTarget.writeMask = WGPUColorWriteMask_All;
 
     WGPUFragmentState fragment = {};
