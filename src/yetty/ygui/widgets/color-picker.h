@@ -1,5 +1,10 @@
 #pragma once
 
+// Prevent Windows min/max macros from conflicting with std::min/std::max
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
 #include "../ygui-widgets.h"
 #include "../ygui-io.h"
 #include <algorithm>

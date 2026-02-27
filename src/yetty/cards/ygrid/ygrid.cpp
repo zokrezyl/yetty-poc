@@ -1,5 +1,6 @@
 #include "ygrid.h"
 #include "../../gpu-screen.h"
+#include "../../ygrid/ygrid.h"
 #include <yetty/yetty-context.h>
 #include <yetty/font-manager.h>
 #include <yetty/ms-msdf-font.h>
@@ -17,41 +18,6 @@ namespace {
 constexpr int GLFW_MOD_SHIFT   = 0x0001;
 constexpr int GLFW_MOD_CONTROL = 0x0002;
 } // namespace
-
-// Font type constants (match gpu-screen.cpp / gpu-screen.wgsl)
-static constexpr uint8_t FONT_TYPE_MSDF    = 0;
-static constexpr uint8_t FONT_TYPE_BITMAP  = 1;
-static constexpr uint8_t FONT_TYPE_SHADER  = 2;
-static constexpr uint8_t FONT_TYPE_CARD    = 3;
-static constexpr uint8_t FONT_TYPE_VECTOR  = 4;
-static constexpr uint8_t FONT_TYPE_COVERAGE = 5;
-static constexpr uint8_t FONT_TYPE_RASTER  = 6;
-
-// Glyph range constants
-static constexpr uint32_t CARD_GLYPH_BASE     = 0x100000;
-static constexpr uint32_t CARD_GLYPH_END      = 0x100FFF;
-static constexpr uint32_t SHADER_GLYPH_BASE   = 0x101000;
-static constexpr uint32_t SHADER_GLYPH_END    = 0x10FFFD;
-static constexpr uint32_t VECTOR_GLYPH_BASE   = 0xF0000;
-static constexpr uint32_t VECTOR_GLYPH_END    = 0xF0FFF;
-static constexpr uint32_t COVERAGE_GLYPH_BASE = 0xF1000;
-static constexpr uint32_t COVERAGE_GLYPH_END  = 0xF1FFF;
-static constexpr uint32_t RASTER_GLYPH_BASE   = 0xF2000;
-static constexpr uint32_t RASTER_GLYPH_END    = 0xF2FFF;
-
-inline bool isEmoji(uint32_t cp) {
-    if (cp >= 0x1F600 && cp <= 0x1F64F) return true;
-    if (cp >= 0x1F300 && cp <= 0x1F5FF) return true;
-    if (cp >= 0x1F680 && cp <= 0x1F6FF) return true;
-    if (cp >= 0x1F900 && cp <= 0x1F9FF) return true;
-    if (cp >= 0x1FA00 && cp <= 0x1FA6F) return true;
-    if (cp >= 0x1FA70 && cp <= 0x1FAFF) return true;
-    if (cp >= 0x2600 && cp <= 0x26FF) return true;
-    if (cp >= 0x2700 && cp <= 0x27BF) return true;
-    if (cp >= 0xFE00 && cp <= 0xFE0F) return true;
-    if (cp >= 0x200D && cp <= 0x200D) return true;
-    return false;
-}
 
 //=============================================================================
 // YGridImpl
@@ -153,7 +119,7 @@ public:
             uint32_t spaceGlyph = _msdfFont ? _msdfFont->getGlyphIndex(' ') : 0;
             for (auto& cell : _cells) {
                 cell = {spaceGlyph, 200, 200, 200, 255, 0, 0, 0,
-                        static_cast<uint8_t>(FONT_TYPE_MSDF << 5)};
+                        static_cast<uint8_t>(ygrid::FONT_TYPE_MSDF << 5)};
             }
         }
 
@@ -288,7 +254,7 @@ private:
     // Grid state
     uint8_t _gridCols = 0;
     uint8_t _gridRows = 0;
-    std::vector<yetty::Cell> _cells; // Post-translation cells (glyph indices, not codepoints)
+    std::vector<yetty::GridCell> _cells; // Post-translation cells (glyph indices, not codepoints)
 
     // GPU handles
     BufferHandle _bufferHandle = BufferHandle::invalid();
@@ -343,134 +309,33 @@ private:
         return (rgb << 8) | 0xFF;
     }
 
-    // Translate a UTF codepoint to a glyph index + font type
-    void translateCodepoint(uint32_t cp, uint32_t& glyphIdx, uint8_t& fontType) {
-        if (cp == 0) cp = ' ';
-
-        if (cp >= VECTOR_GLYPH_BASE && cp <= VECTOR_GLYPH_END) {
-            fontType = FONT_TYPE_VECTOR;
-            glyphIdx = cp;
-        } else if (cp >= COVERAGE_GLYPH_BASE && cp <= COVERAGE_GLYPH_END) {
-            fontType = FONT_TYPE_COVERAGE;
-            glyphIdx = cp;
-        } else if (cp >= RASTER_GLYPH_BASE && cp <= RASTER_GLYPH_END) {
-            fontType = FONT_TYPE_RASTER;
-            glyphIdx = cp;
-        } else if (isEmoji(cp) && _bitmapFont) {
-            fontType = FONT_TYPE_BITMAP;
-            glyphIdx = _bitmapFont->getGlyphIndex(cp);
-        } else if (_msdfFont) {
-            fontType = FONT_TYPE_MSDF;
-            // Extract bold/italic from style bits if present
-            glyphIdx = _msdfFont->getGlyphIndex(cp);
-        } else {
-            fontType = FONT_TYPE_MSDF;
-            glyphIdx = cp;
-        }
-    }
-
     Result<void> parsePayload(const std::string& payload) {
-        if (payload.size() < 8) {
-            return Err<void>("YGrid: payload too small for header");
+        // Create glyph lookup callbacks
+        ygrid::GlyphLookup msdfLookup = nullptr;
+        ygrid::GlyphLookup bitmapLookup = nullptr;
+
+        if (_msdfFont) {
+            msdfLookup = [this](uint32_t cp, bool) -> uint32_t {
+                return _msdfFont->getGlyphIndex(cp);
+            };
+        }
+        if (_bitmapFont) {
+            bitmapLookup = [this](uint32_t cp, bool) -> uint32_t {
+                return _bitmapFont->getGlyphIndex(cp);
+            };
         }
 
-        const uint8_t* data = reinterpret_cast<const uint8_t*>(payload.data());
-        size_t offset = 0;
+        uint32_t defaultSpaceGlyph = _msdfFont ? _msdfFont->getGlyphIndex(' ') : 0;
 
-        // Read header
-        uint32_t magic;
-        std::memcpy(&magic, data + offset, 4); offset += 4;
-        if (magic != YGRD_MAGIC) {
-            return Err<void>("YGrid: invalid magic");
+        auto result = ygrid::parsePayload(payload, _cells, _gridCols, _gridRows,
+                                          msdfLookup, bitmapLookup, defaultSpaceGlyph);
+        if (!result) {
+            return Err<void>(error_msg(result));
         }
 
-        uint16_t flags;
-        std::memcpy(&flags, data + offset, 2); offset += 2;
-        uint8_t cols = data[offset++];
-        uint8_t rows = data[offset++];
-
-        bool fullUpdate = (flags & YGRD_FLAG_FULL) != 0;
-
-        if (fullUpdate) {
-            // Resize grid if dimensions changed
-            if (cols != _gridCols || rows != _gridRows) {
-                _gridCols = cols;
-                _gridRows = rows;
-                _cells.resize(_gridCols * _gridRows);
-                // Clear to spaces
-                uint32_t spaceGlyph = _msdfFont ? _msdfFont->getGlyphIndex(' ') : 0;
-                for (auto& cell : _cells) {
-                    cell = {spaceGlyph, 200, 200, 200, 255, 0, 0, 0,
-                            static_cast<uint8_t>(FONT_TYPE_MSDF << 5)};
-                }
-            }
-
-            size_t expectedSize = offset + static_cast<size_t>(_gridCols) * _gridRows * sizeof(GridCell);
-            if (payload.size() < expectedSize) {
-                return Err<void>("YGrid: payload too small for full grid");
-            }
-
-            const GridCell* wireCells = reinterpret_cast<const GridCell*>(data + offset);
-            for (uint32_t i = 0; i < static_cast<uint32_t>(_gridCols) * _gridRows; i++) {
-                const auto& wc = wireCells[i];
-                uint32_t glyphIdx;
-                uint8_t fontType;
-                translateCodepoint(wc.codepoint, glyphIdx, fontType);
-
-                // Preserve text attrs (bits 0-4) from wire, set font type (bits 5-7)
-                uint8_t style = (wc.style & 0x1F) | ((fontType & 0x07) << 5);
-
-                _cells[i] = {glyphIdx, wc.fgR, wc.fgG, wc.fgB, wc.alpha,
-                             wc.bgR, wc.bgG, wc.bgB, style};
-            }
-        } else {
-            // Partial update
-            if (payload.size() < offset + 4) {
-                return Err<void>("YGrid: payload too small for partial header");
-            }
-
-            // Ensure grid is initialized
-            if (_gridCols == 0 || _gridRows == 0) {
-                _gridCols = cols;
-                _gridRows = rows;
-                _cells.resize(_gridCols * _gridRows);
-                uint32_t spaceGlyph = _msdfFont ? _msdfFont->getGlyphIndex(' ') : 0;
-                for (auto& cell : _cells) {
-                    cell = {spaceGlyph, 200, 200, 200, 255, 0, 0, 0,
-                            static_cast<uint8_t>(FONT_TYPE_MSDF << 5)};
-                }
-            }
-
-            uint32_t count;
-            std::memcpy(&count, data + offset, 4); offset += 4;
-
-            // Each entry: row(u8) + col(u8) + GridCell(12) = 14 bytes
-            size_t entrySize = 2 + sizeof(GridCell);
-            if (payload.size() < offset + count * entrySize) {
-                return Err<void>("YGrid: payload too small for partial entries");
-            }
-
-            for (uint32_t i = 0; i < count; i++) {
-                uint8_t row = data[offset++];
-                uint8_t col = data[offset++];
-
-                GridCell wc;
-                std::memcpy(&wc, data + offset, sizeof(GridCell));
-                offset += sizeof(GridCell);
-
-                if (row < _gridRows && col < _gridCols) {
-                    uint32_t glyphIdx;
-                    uint8_t fontType;
-                    translateCodepoint(wc.codepoint, glyphIdx, fontType);
-
-                    uint8_t style = (wc.style & 0x1F) | ((fontType & 0x07) << 5);
-
-                    size_t idx = static_cast<size_t>(row) * _gridCols + col;
-                    _cells[idx] = {glyphIdx, wc.fgR, wc.fgG, wc.fgB, wc.alpha,
-                                   wc.bgR, wc.bgG, wc.bgB, style};
-                }
-            }
-        }
+        auto [newCols, newRows] = *result;
+        _gridCols = newCols;
+        _gridRows = newRows;
 
         _dirty = true;
         _metadataDirty = true;

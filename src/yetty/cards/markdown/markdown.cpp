@@ -1,3 +1,8 @@
+// Prevent Windows min/max macros from conflicting with std::min/std::max
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
 #include "markdown.h"
 #include <yetty/ydraw-builder.h>
 #include "../../ydraw/ydraw-buffer.h"

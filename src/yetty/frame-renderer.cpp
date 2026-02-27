@@ -1,4 +1,4 @@
-#include <yetty/widget-frame-renderer.h>
+#include <yetty/frame-renderer.h>
 #include <yetty/gpu-allocator.h>
 #include <yetty/wgpu-compat.h>
 #include <ytrace/ytrace.hpp>
@@ -145,19 +145,19 @@ struct VertexOutput {
 // Creation and initialization
 //-----------------------------------------------------------------------------
 
-Result<std::unique_ptr<WidgetFrameRenderer>> WidgetFrameRenderer::create(
+Result<std::unique_ptr<FrameRenderer>> FrameRenderer::create(
     WGPUDevice device,
     WGPUTextureFormat format,
     GpuAllocator::Ptr allocator
 ) {
-    auto renderer = std::unique_ptr<WidgetFrameRenderer>(new WidgetFrameRenderer());
+    auto renderer = std::unique_ptr<FrameRenderer>(new FrameRenderer());
     if (auto res = renderer->init(device, format, std::move(allocator)); !res) {
-        return Err<std::unique_ptr<WidgetFrameRenderer>>("Failed to init WidgetFrameRenderer", res);
+        return Err<std::unique_ptr<FrameRenderer>>("Failed to init FrameRenderer", res);
     }
     return Ok(std::move(renderer));
 }
 
-WidgetFrameRenderer::~WidgetFrameRenderer() {
+FrameRenderer::~FrameRenderer() {
     for (auto bg : bindGroups_) {
         if (bg) wgpuBindGroupRelease(bg);
     }
@@ -168,13 +168,13 @@ WidgetFrameRenderer::~WidgetFrameRenderer() {
     if (framePipeline_) wgpuRenderPipelineRelease(framePipeline_);
 }
 
-std::pair<WGPUBuffer, WGPUBindGroup> WidgetFrameRenderer::getNextUniformBuffer() {
+std::pair<WGPUBuffer, WGPUBindGroup> FrameRenderer::getNextUniformBuffer() {
     size_t idx = drawIndex_ % MAX_DRAWS_PER_FRAME;
     drawIndex_++;
     return {uniformBuffers_[idx], bindGroups_[idx]};
 }
 
-Result<void> WidgetFrameRenderer::init(WGPUDevice device, WGPUTextureFormat format, GpuAllocator::Ptr allocator) {
+Result<void> FrameRenderer::init(WGPUDevice device, WGPUTextureFormat format, GpuAllocator::Ptr allocator) {
     allocator_ = std::move(allocator);
     device_ = device;
 
@@ -282,7 +282,7 @@ Result<void> WidgetFrameRenderer::init(WGPUDevice device, WGPUTextureFormat form
     }
 
     initialized_ = true;
-    yinfo("WidgetFrameRenderer initialized");
+    yinfo("FrameRenderer initialized");
     return Ok();
 }
 
@@ -290,7 +290,7 @@ Result<void> WidgetFrameRenderer::init(WGPUDevice device, WGPUTextureFormat form
 // Frame rendering
 //-----------------------------------------------------------------------------
 
-void WidgetFrameRenderer::renderFrame(
+void FrameRenderer::renderFrame(
     WGPURenderPassEncoder pass,
     WGPUQueue queue,
     uint32_t screenWidth,
@@ -342,7 +342,7 @@ void WidgetFrameRenderer::renderFrame(
 // Toolbox rendering
 //-----------------------------------------------------------------------------
 
-void WidgetFrameRenderer::renderToolbox(
+void FrameRenderer::renderToolbox(
     WGPURenderPassEncoder pass,
     WGPUQueue queue,
     uint32_t screenWidth,
@@ -460,7 +460,7 @@ void WidgetFrameRenderer::renderToolbox(
 // Hit testing
 //-----------------------------------------------------------------------------
 
-ToolboxButton WidgetFrameRenderer::hitTestToolbox(
+ToolboxButton FrameRenderer::hitTestToolbox(
     float clickX, float clickY,
     float widgetPixelX, float widgetPixelY,
     float widgetPixelW, float widgetPixelH

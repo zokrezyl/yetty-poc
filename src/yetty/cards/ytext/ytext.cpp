@@ -1,3 +1,8 @@
+// Prevent Windows min/max macros from conflicting with std::min/std::max
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
 #include "ytext.h"
 #include <yetty/yecho/yecho-parser.h>
 #include <ytrace/ytrace.hpp>

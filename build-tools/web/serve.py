@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 """
 Simple HTTP server for yetty web demo.
-Serves files with proper CORS and MIME type headers for WebAssembly.
-
-Usage: python serve.py [port] [directory]
+Serves static files like GitHub Pages (query params ignored).
 """
 
 import http.server
@@ -32,7 +30,6 @@ class CORSRequestHandler(http.server.SimpleHTTPRequestHandler):
         """Override to ensure correct MIME types."""
         mimetype = super().guess_type(path)
 
-        # Ensure correct MIME type for WebAssembly
         if path.endswith('.wasm'):
             return 'application/wasm'
         if path.endswith('.js'):

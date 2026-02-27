@@ -17,4 +17,5 @@ if [ ! -f "$LOGO" ]; then
 fi
 
 PAYLOAD=$(base64 -w0 < "$LOGO")
-printf '\033]666666;run -c image -x 0 -y 0 -w %d -h %d -r;;%s\033\\' "$WIDTH" "$HEIGHT" "$PAYLOAD"
+printf '\033]666666;run -c image -x 0 -y 0 -w %d -h %d -r;-i -;%s\033\\' "$WIDTH" "$HEIGHT" "$PAYLOAD"
+echo

@@ -165,6 +165,7 @@
               pkgs.emscripten
               pkgs.python3
               pkgs.nodejs
+              pkgs.gcc  # For building host tools (yecho-static for VM)
             ];
 
             # Emscripten environment

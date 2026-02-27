@@ -239,19 +239,39 @@ config-webasm-dawn-release: ## Configure WebAssembly release build
 build-webasm-dawn-debug: ## Build WebAssembly debug
 	@if [ ! -f "$(BUILD_DIR_WEBASM_DAWN_DEBUG)/build.ninja" ]; then $(MAKE) config-webasm-dawn-debug; fi
 	nix develop .#web --command bash -c 'cmake --build $(BUILD_DIR_WEBASM_DAWN_DEBUG) --target yetty $(CMAKE_PARALLEL)'
-	@if [ ! -f "$(BUILD_DIR_WEBASM_DAWN_DEBUG)/toybox.js" ]; then \
-		nix develop .#web --command bash -c 'BUILD_DIR=$(CURDIR)/$(BUILD_DIR_WEBASM_DAWN_DEBUG) bash build-tools/web/build-toybox-minimal.sh'; \
-	fi
 	@cp build-tools/web/index.html build-tools/web/serve.py $(BUILD_DIR_WEBASM_DAWN_DEBUG)/
+	@bash build-tools/web/build-fs/build-vfsync.sh $(BUILD_DIR_WEBASM_DAWN_DEBUG)
 
 .PHONY: build-webasm-dawn-release
 build-webasm-dawn-release: ## Build WebAssembly release (CDB generation handled by CMake)
 	@if [ ! -f "$(BUILD_DIR_WEBASM_DAWN_RELEASE)/build.ninja" ]; then $(MAKE) config-webasm-dawn-release; fi
 	nix develop .#web --command bash -c 'cmake --build $(BUILD_DIR_WEBASM_DAWN_RELEASE) --target yetty $(CMAKE_PARALLEL)'
-	@if [ ! -f "$(BUILD_DIR_WEBASM_DAWN_RELEASE)/toybox.js" ]; then \
-		nix develop .#web --command bash -c 'BUILD_DIR=$(CURDIR)/$(BUILD_DIR_WEBASM_DAWN_RELEASE) bash build-tools/web/build-toybox-minimal.sh'; \
-	fi
 	@cp build-tools/web/index.html build-tools/web/serve.py $(BUILD_DIR_WEBASM_DAWN_RELEASE)/
+	@$(MAKE) build-vm-tools BUILD_DIR=$(BUILD_DIR_WEBASM_DAWN_RELEASE)
+	@bash build-tools/web/build-fs/build-vfsync.sh $(BUILD_DIR_WEBASM_DAWN_RELEASE)
+
+.PHONY: build-vm-tools
+build-vm-tools: ## Build static x86_64 tools for JSLinux VM (tries Docker Alpine, fallback to system/nix gcc)
+	@mkdir -p $(BUILD_DIR)/vm-tools
+	@if command -v docker >/dev/null 2>&1; then \
+		echo "=== Building VM tools with Docker Alpine ==="; \
+		bash build-tools/docker/build-vm-tools.sh $(BUILD_DIR); \
+	else \
+		echo "=== Building VM tools (using available gcc) ==="; \
+		rm -rf $(BUILD_DIR)/vm-tools-build; \
+		GCC_PATH=$$(command -v gcc || echo /usr/bin/gcc); \
+		GXX_PATH=$$(command -v g++ || echo /usr/bin/g++); \
+		CMAKE_PATH=$$(command -v cmake); \
+		echo "Using cmake=$$CMAKE_PATH gcc=$$GCC_PATH g++=$$GXX_PATH"; \
+		$$CMAKE_PATH -S build-tools/cmake/host-tools -B $(BUILD_DIR)/vm-tools-build \
+			-DCMAKE_C_COMPILER=$$GCC_PATH -DCMAKE_CXX_COMPILER=$$GXX_PATH \
+			-DCMAKE_BUILD_TYPE=Release; \
+		$$CMAKE_PATH --build $(BUILD_DIR)/vm-tools-build --target yecho-static $(CMAKE_PARALLEL); \
+		cp $(BUILD_DIR)/vm-tools-build/yecho $(BUILD_DIR)/vm-tools/; \
+	fi
+	@echo "VM tools built: $(BUILD_DIR)/vm-tools/"
+	@ls -la $(BUILD_DIR)/vm-tools/
+	@file $(BUILD_DIR)/vm-tools/yecho
 
 .PHONY: run-webasm-dawn-debug
 run-webasm-dawn-debug: build-webasm-dawn-debug ## Serve WebAssembly debug build

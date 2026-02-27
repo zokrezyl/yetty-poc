@@ -1,3 +1,8 @@
+// Prevent Windows min/max macros from conflicting with std::min/std::max
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
 #include "image.h"
 #include <yetty/yetty-context.h>
 #include <yetty/base/event-loop.h>
@@ -81,8 +86,8 @@ public:
             return Err<void>("Image::init: failed to create scale pipeline", res);
         }
 
-        // Load image from payload if present
-        if (!_payloadStr.empty()) {
+        // Load image if input source specified
+        if (!_inputSource.empty()) {
             if (auto res = loadImageFromPayload(); !res) {
                 yerror("Image::init: failed to load image: {}", error_msg(res));
                 return Err<void>("Image::init: failed to load image", res);
@@ -643,26 +648,26 @@ private:
     //=========================================================================
 
     Result<void> loadImageFromPayload() {
-        if (_payloadStr.empty()) {
-            return Err<void>("Image::loadImageFromPayload: empty payload");
-        }
-
-        yinfo("Image::loadImageFromPayload: payload size={}", _payloadStr.size());
+        yinfo("Image::loadImageFromPayload: inputSource='{}' payload size={}", _inputSource, _payloadStr.size());
 
         int width, height, channels;
         uint8_t* pixels = nullptr;
 
-        // Detect if payload is a file path (starts with / and has no newlines)
-        if (_payloadStr.size() < 4096 &&
-            _payloadStr[0] == '/' &&
-            _payloadStr.find('\n') == std::string::npos) {
-            yinfo("Image::loadImageFromPayload: loading from file path: {}", _payloadStr);
-            pixels = stbi_load(_payloadStr.c_str(), &width, &height, &channels, 4);
-        } else {
+        if (_inputSource == "-") {
+            // Read from payload (base64-decoded data passed via OSC)
+            if (_payloadStr.empty()) {
+                return Err<void>("Image::loadImageFromPayload: empty payload (use -i - to read from payload)");
+            }
             pixels = stbi_load_from_memory(
                 reinterpret_cast<const uint8_t*>(_payloadStr.data()),
                 static_cast<int>(_payloadStr.size()),
                 &width, &height, &channels, 4);
+        } else if (!_inputSource.empty()) {
+            // Read from file path specified via -i <path>
+            yinfo("Image::loadImageFromPayload: loading from file path: {}", _inputSource);
+            pixels = stbi_load(_inputSource.c_str(), &width, &height, &channels, 4);
+        } else {
+            return Err<void>("Image::loadImageFromPayload: no input specified (use -i - or -i <path>)");
         }
 
         if (!pixels) {
@@ -701,7 +706,12 @@ private:
         std::string token;
 
         while (iss >> token) {
-            if (token == "--zoom" || token == "-z") {
+            if (token == "--input" || token == "-i") {
+                std::string val;
+                if (iss >> val) {
+                    _inputSource = val;
+                }
+            } else if (token == "--zoom" || token == "-z") {
                 float val;
                 if (iss >> val) {
                     _contentZoom = std::clamp(val, 0.1f, 10.0f);
@@ -799,6 +809,7 @@ private:
     const YettyContext& _ctx;
     std::string _argsStr;
     std::string _payloadStr;
+    std::string _inputSource;  // "-" for payload, or file path
 
     // Original image (CPU memory)
     std::vector<uint8_t> _originalPixels;

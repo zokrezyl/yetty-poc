@@ -2,11 +2,6 @@
 
 include(${YETTY_ROOT}/build-tools/cmake/targets/shared.cmake)
 
-# Android-specific libraries
-include(${YETTY_ROOT}/build-tools/cmake/libs/lz4.cmake)
-include(${YETTY_ROOT}/build-tools/cmake/libs/libuv.cmake)
-include(${YETTY_ROOT}/build-tools/cmake/libs/imgui.cmake)
-
 # native_app_glue from Android NDK
 add_library(native_app_glue STATIC
     ${ANDROID_NDK}/sources/android/native_app_glue/android_native_app_glue.c
@@ -31,11 +26,7 @@ add_library(yetty SHARED
     ${YETTY_ROOT}/src/yetty/msdf-gen/generator.cpp
 )
 
-# Add renderer sources to yetty (after target is created)
-add_subdirectory(${YETTY_ROOT}/src/yetty/ydraw-zoo ${CMAKE_BINARY_DIR}/src/yetty/ydraw-zoo)
-add_subdirectory(${YETTY_ROOT}/src/yetty/ydraw-maze ${CMAKE_BINARY_DIR}/src/yetty/ydraw-maze)
-
-target_include_directories(yetty PRIVATE ${YETTY_INCLUDES})
+target_include_directories(yetty PRIVATE ${YETTY_INCLUDES} ${YETTY_RENDERER_INCLUDES})
 
 target_compile_definitions(yetty PRIVATE
     ${YETTY_DEFINITIONS}

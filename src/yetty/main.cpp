@@ -53,10 +53,6 @@ extern "C" void android_main(struct android_app* app) {
 // Desktop Entry Point
 //-----------------------------------------------------------------------------
 int main(int argc, char* argv[]) {
-#if YETTY_WEB
-    // Enable ytrace for WebASM debugging
-    setenv("YTRACE_DEFAULT_ON", "yes", 1);
-#endif
 
     // Set default log level to trace for maximum debug output
     spdlog::set_level(spdlog::level::trace);

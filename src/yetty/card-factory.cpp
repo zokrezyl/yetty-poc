@@ -6,6 +6,7 @@
 #include "cards/ydraw-maze/ydraw-maze.h"
 #include "cards/ydraw-zoo/ydraw-zoo.h"
 #include "cards/ydraw/ydraw.h"
+#include "cards/ygrid/ygrid.h"
 #include "cards/ygui/ygui.h"
 #if YETTY_CARD_YHTML
 #include "cards/yhtml/yhtml.h"
@@ -63,6 +64,13 @@ public:
                             const std::string &payload) {
       return card::YGui::create(ctx, x, y, w, h, args, payload);
     });
+
+    registerCard("ygrid", [](const YettyContext &ctx, int32_t x, int32_t y,
+                             uint32_t w, uint32_t h, const std::string &args,
+                             const std::string &payload) {
+      return card::YGrid::create(ctx, x, y, w, h, args, payload);
+    });
+
     registerCard("ydraw-zoo", [](const YettyContext &ctx, int32_t x, int32_t y,
                                  uint32_t w, uint32_t h,
                                  const std::string &args,

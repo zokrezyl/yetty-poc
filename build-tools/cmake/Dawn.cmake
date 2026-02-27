@@ -60,48 +60,22 @@ endif()
 set(DAWN_BUILD_TYPE "Release")
 
 set(DAWN_URL "https://github.com/google/dawn/releases/download/v${DAWN_VERSION}/Dawn-${DAWN_COMMIT}-${DAWN_PLATFORM}-${DAWN_BUILD_TYPE}.tar.gz")
-set(DAWN_DOWNLOAD_DIR "${CMAKE_BINARY_DIR}/_deps/dawn")
 
-# Extracted directory name
-set(DAWN_EXTRACTED_DIR "Dawn-${DAWN_COMMIT}-${DAWN_PLATFORM}-${DAWN_BUILD_TYPE}")
+# Use FetchContent for reliable downloads (handles GitHub 302 redirects properly)
+message(STATUS "Downloading Dawn v${DAWN_VERSION} for ${DAWN_PLATFORM}...")
+message(STATUS "  URL: ${DAWN_URL}")
 
-# Download and extract if not already done
-if(NOT EXISTS "${DAWN_DOWNLOAD_DIR}/${DAWN_EXTRACTED_DIR}/${DAWN_LIB_DIR_NAME}/${DAWN_LIB_NAME}")
-    message(STATUS "Downloading Dawn v${DAWN_VERSION} for ${DAWN_PLATFORM}...")
-    message(STATUS "  URL: ${DAWN_URL}")
+FetchContent_Declare(
+    dawn_prebuilt
+    URL "${DAWN_URL}"
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+FetchContent_MakeAvailable(dawn_prebuilt)
 
-    # Download the library tarball
-    set(DAWN_TAR "${CMAKE_BINARY_DIR}/dawn.tar.gz")
-    file(DOWNLOAD "${DAWN_URL}" "${DAWN_TAR}"
-        STATUS DOWNLOAD_STATUS
-        SHOW_PROGRESS
-    )
-    list(GET DOWNLOAD_STATUS 0 STATUS_CODE)
-    list(GET DOWNLOAD_STATUS 1 STATUS_STRING)
-
-    if(NOT STATUS_CODE EQUAL 0)
-        message(FATAL_ERROR "Failed to download Dawn: ${STATUS_STRING}\n"
-            "URL: ${DAWN_URL}\n"
-            "You may need to download manually or check your internet connection.")
-    endif()
-
-    # Extract library
-    message(STATUS "Extracting Dawn...")
-    file(MAKE_DIRECTORY "${DAWN_DOWNLOAD_DIR}")
-    file(ARCHIVE_EXTRACT INPUT "${DAWN_TAR}" DESTINATION "${DAWN_DOWNLOAD_DIR}")
-
-    # Clean up tarball
-    file(REMOVE "${DAWN_TAR}")
-
-    message(STATUS "Dawn extracted to ${DAWN_DOWNLOAD_DIR}")
-endif()
-
-# Set paths - Dawn tarballs extract with subdirectory structure
-# Structure: Dawn-{commit}-{platform}-{buildtype}/
-#   - lib64/ (Linux) or lib/ (macOS/Windows): libwebgpu_dawn.a
-#   - include/webgpu/webgpu.h
-set(DAWN_INCLUDE_DIR "${DAWN_DOWNLOAD_DIR}/${DAWN_EXTRACTED_DIR}/include")
-set(DAWN_LIB_DIR "${DAWN_DOWNLOAD_DIR}/${DAWN_EXTRACTED_DIR}/${DAWN_LIB_DIR_NAME}")
+# Set paths - FetchContent extracts to _deps/dawn_prebuilt-src/
+# The tarball contains: Dawn-{commit}-{platform}-{buildtype}/lib[64]/... and include/
+set(DAWN_INCLUDE_DIR "${dawn_prebuilt_SOURCE_DIR}/include")
+set(DAWN_LIB_DIR "${dawn_prebuilt_SOURCE_DIR}/${DAWN_LIB_DIR_NAME}")
 set(DAWN_LIB_PATH "${DAWN_LIB_DIR}/${DAWN_LIB_NAME}")
 
 # Verify files exist

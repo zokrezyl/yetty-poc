@@ -1,4 +1,5 @@
-#include "ymery/renderer.h"
+// ymery is disabled - not part of the build
+// #include "ymery/renderer.h"
 #include <yetty/base/event-loop.h>
 #include <yetty/gpu-monitor.h>
 #include <yetty/imgui-manager.h>
@@ -320,13 +321,15 @@ Result<void> ImguiManagerImpl::render(WGPURenderPassEncoder pass) {
     }
   }
 
-  // Ymery: render YAML-driven widgets
+  // Ymery is disabled - not part of the build
+#if 0
   if (_ctx.ymeryRenderer) {
     if (auto res = _ctx.ymeryRenderer->renderFrame(); !res) {
       ydebug("ymeryRenderer->renderFrame() failed: {}",
              res.error().to_string());
     }
   }
+#endif
 
   // Sample GPU usage periodically (not every frame)
   auto now = std::chrono::steady_clock::now();

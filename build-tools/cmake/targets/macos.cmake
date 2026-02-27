@@ -3,30 +3,26 @@
 include(${YETTY_ROOT}/build-tools/cmake/targets/shared.cmake)
 
 # macOS-specific libraries
-include(${YETTY_ROOT}/build-tools/cmake/libs/args.cmake)
-include(${YETTY_ROOT}/build-tools/cmake/libs/lz4.cmake)
-include(${YETTY_ROOT}/build-tools/cmake/libs/libuv.cmake)
 include(${YETTY_ROOT}/build-tools/cmake/libs/glfw.cmake)
-include(${YETTY_ROOT}/build-tools/cmake/libs/imgui.cmake)
 include(${YETTY_ROOT}/build-tools/cmake/TreeSitter.cmake)
 include(${YETTY_ROOT}/build-tools/cmake/Libmagic.cmake)
 
 # Add src/yetty (builds libraries)
 add_subdirectory(${YETTY_ROOT}/src/yetty ${CMAKE_BINARY_DIR}/src/yetty)
 
+# Desktop-specific subdirectories
+add_subdirectory(${YETTY_ROOT}/src/yetty/gpu ${CMAKE_BINARY_DIR}/src/yetty/gpu)
+add_subdirectory(${YETTY_ROOT}/src/yetty/client ${CMAKE_BINARY_DIR}/src/yetty/client)
+add_subdirectory(${YETTY_ROOT}/src/yetty/ytop ${CMAKE_BINARY_DIR}/src/yetty/ytop)
+
 # Create executable with core sources + platform
 add_executable(yetty
     ${YETTY_CORE_SOURCES}
     ${YETTY_DESKTOP_SOURCES}
     ${YETTY_ROOT}/src/yetty/platform/glfw-platform.cpp
-    ${YETTY_ROOT}/src/yetty/msdf-gen/generator.cpp
-    ${YETTY_ROOT}/src/yetty/rpc/rpc-server.cpp
-    ${YETTY_ROOT}/src/yetty/rpc/event-loop-handler.cpp
-    ${YETTY_ROOT}/src/yetty/rpc/stream-handler.cpp
-    ${YETTY_ROOT}/src/yetty/rpc/socket-path.cpp
 )
 
-target_include_directories(yetty PRIVATE ${YETTY_INCLUDES})
+target_include_directories(yetty PRIVATE ${YETTY_INCLUDES} ${YETTY_RENDERER_INCLUDES})
 
 target_compile_definitions(yetty PRIVATE
     ${YETTY_DEFINITIONS}

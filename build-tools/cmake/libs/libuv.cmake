@@ -10,4 +10,5 @@ CPMAddPackage(
     OPTIONS
         "LIBUV_BUILD_TESTS OFF"
         "LIBUV_BUILD_BENCH OFF"
+        "LIBUV_BUILD_SHARED OFF"
 )

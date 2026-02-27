@@ -3,6 +3,7 @@
 #include <yetty/result.hpp>
 #include <yetty/yetty-context.h>
 #include <yetty/card.h>
+#include <yetty/grid-cell.h>
 #include <yetty/base/event-loop.h>
 #include <memory>
 #include <functional>
@@ -10,13 +11,6 @@
 #include <optional>
 
 namespace yetty {
-
-struct Cell {
-    uint32_t glyph;
-    uint8_t fgR, fgG, fgB, alpha;
-    uint8_t bgR, bgG, bgB, style;
-};
-static_assert(sizeof(Cell) == 12, "Cell must be 12 bytes");
 
 class GPUScreen : public base::EventListener {
 public:
@@ -60,8 +54,8 @@ public:
     virtual uint32_t getCellHeight() const = 0;
 
     // Test interface - access cell data
-    virtual const Cell* getCellData() const = 0;
-    virtual Cell getCell(int row, int col) const = 0;
+    virtual const GridCell* getCellData() const = 0;
+    virtual GridCell getCell(int row, int col) const = 0;
 
     // Card lookup by name (for RPC streaming)
     virtual Card* getCardByName(const std::string& name) const = 0;

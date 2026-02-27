@@ -10,6 +10,7 @@
 #include <yetty/card-factory.h>
 #include <yetty/config.h>
 #include <yetty/imgui-manager.h>
+#include <yetty/platform.h>
 
 #include <memory>
 
@@ -46,6 +47,9 @@ struct YettyContext {
 
     // Application config (tree-like, runtime writable)
     Config::Ptr config;
+
+    // Platform abstraction (for PTY creation, etc.)
+    Platform::Ptr platform;
 };
 
 } // namespace yetty

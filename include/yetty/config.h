@@ -8,13 +8,13 @@
 #include <yaml-cpp/yaml.h>
 #include <yetty/base/base.h>
 #include <yetty/result.hpp>
-#include <yetty/ymery/types.h>
+#include <yetty/ygui/types.h>
 
 namespace yetty {
 
 using namespace yetty::base;
 
-class Config : public virtual Object, public ymery::TreeLike, public ObjectFactory<Config> {
+class Config : public virtual Object, public ygui::TreeLike, public ObjectFactory<Config> {
 public:
   using Ptr = std::shared_ptr<Config>;
 

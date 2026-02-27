@@ -314,7 +314,7 @@ Result<void> registerWorkspaceHandlers(RpcServer& server, std::shared_ptr<Worksp
     // ui_tree: {} -> string (YAML dump of the UI tree)
     server.registerHandler(Channel::EventLoop, "ui_tree",
         [workspace](const RpcMessage& /*msg*/) -> Result<msgpack::object_handle> {
-            auto res = workspace->asTree(ymery::DataPath::root());
+            auto res = workspace->asTree(ygui::DataPath::root());
             if (!res) {
                 return Err<msgpack::object_handle>(error_msg(res));
             }

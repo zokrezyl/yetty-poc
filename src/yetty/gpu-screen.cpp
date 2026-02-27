@@ -179,7 +179,7 @@ inline bool isEmoji(uint32_t cp) {
 
 // Scrollback line storage
 struct ScrollbackLineGPU {
-  std::vector<Cell> cells;
+  std::vector<GridCell> cells;
 };
 
 
@@ -229,8 +229,8 @@ public:
   Result<bool> onEvent(const base::Event &event) override;
 
   // GPUScreen interface - test methods
-  const Cell *getCellData() const override;
-  Cell getCell(int row, int col) const override;
+  const GridCell *getCellData() const override;
+  GridCell getCell(int row, int col) const override;
   int getCursorCol() const { return _cursorCol; }
   int getCursorRow() const { return _cursorRow; }
   bool isCursorVisible() const { return _cursorVisible; }
@@ -276,8 +276,8 @@ private:
   void resizeInternal(int rows, int cols, VTermStateFields *fields);
   void resizeBuffer(int bufidx, int newRows, int newCols, bool active,
                     VTermStateFields *fields);
-  int linePopcount(const std::vector<Cell> &buffer, int row, int cols) const;
-  void clearBuffer(std::vector<Cell> &buffer);
+  int linePopcount(const std::vector<GridCell> &buffer, int row, int cols) const;
+  void clearBuffer(std::vector<GridCell> &buffer);
   void switchToScreen(bool alt);
   void reset();
   void composeViewBuffer();
@@ -285,6 +285,7 @@ private:
   void pushLineToScrollback(int row);
   void scrollToTop();
   void clampVisualZoomOffset();  // Clamp visual zoom pan offset to valid range
+  void requestScreenUpdate();    // Dispatch ScreenUpdate event for immediate re-render
 
   void setCell(int row, int col, uint32_t glyph, uint8_t fgR, uint8_t fgG,
                uint8_t fgB, uint8_t bgR, uint8_t bgG, uint8_t bgB,
@@ -377,7 +378,7 @@ private:
     float cellH = getCellHeightF();
     // bg encodes relative position within card: (relRow << 12) | relCol
     size_t idx = cellIndex(row, col);
-    const Cell &cell = (*_visibleBuffer)[idx];
+    const GridCell &cell = (*_visibleBuffer)[idx];
     uint32_t bg24 = static_cast<uint32_t>(cell.bgR) |
                     (static_cast<uint32_t>(cell.bgG) << 8) |
                     (static_cast<uint32_t>(cell.bgB) << 16);
@@ -394,11 +395,11 @@ private:
   VTermState *state_ = nullptr;
 
   // Buffers
-  std::vector<Cell> _primaryBuffer;
-  std::vector<Cell> _altBuffer;
-  std::vector<Cell> viewBuffer_;
-  std::vector<Cell> scratchBuffer_;
-  std::vector<Cell> *_visibleBuffer = nullptr;
+  std::vector<GridCell> _primaryBuffer;
+  std::vector<GridCell> _altBuffer;
+  std::vector<GridCell> viewBuffer_;
+  std::vector<GridCell> scratchBuffer_;
+  std::vector<GridCell> *_visibleBuffer = nullptr;
 
   // Scrollback
   std::deque<ScrollbackLineGPU> _scrollback;
@@ -494,7 +495,7 @@ private:
   int _currentMatchIndex = -1; // Index into _searchMatches for current match
 
   // Status line (tmux-style bar at bottom, not managed by vterm)
-  std::vector<Cell> _statusLine;
+  std::vector<GridCell> _statusLine;
   std::string _statusText;
   bool _statusLineEnabled = true;
 
@@ -814,9 +815,9 @@ void GPUScreenImpl::createVTerm() {
 }
 
 void GPUScreenImpl::write(const char *data, size_t len) {
-  ydebug("GPUScreenImpl::write: len={} _vterm={}", len, (void *)_vterm);
   if (_vterm && len > 0) {
     vterm_input_write(_vterm, data, len);
+    requestScreenUpdate();
   }
 }
 
@@ -873,7 +874,7 @@ void GPUScreenImpl::setViewport(float x, float y, float width, float height) {
 }
 
 // Helper: count non-blank cells from end of row (like screen.c line_popcount)
-int GPUScreenImpl::linePopcount(const std::vector<Cell> &buffer, int row,
+int GPUScreenImpl::linePopcount(const std::vector<GridCell> &buffer, int row,
                                 int cols) const {
   int col = cols - 1;
   while (col >= 0) {
@@ -894,11 +895,11 @@ void GPUScreenImpl::resizeBuffer(int bufidx, int newRows, int newCols,
   int oldRows = _rows;
   int oldCols = _cols;
 
-  std::vector<Cell> &oldBuffer = (bufidx == 0) ? _primaryBuffer : _altBuffer;
+  std::vector<GridCell> &oldBuffer = (bufidx == 0) ? _primaryBuffer : _altBuffer;
   VTermLineInfo *oldLineinfo = fields ? fields->lineinfos[bufidx] : nullptr;
 
   // Allocate new buffer
-  std::vector<Cell> newBuffer(static_cast<size_t>(newRows * newCols));
+  std::vector<GridCell> newBuffer(static_cast<size_t>(newRows * newCols));
   clearBuffer(newBuffer);
 
   // Allocate new lineinfo
@@ -1172,12 +1173,12 @@ void GPUScreenImpl::resizeInternal(int rows, int cols,
   viewBufferDirty_ = true;
 }
 
-void GPUScreenImpl::clearBuffer(std::vector<Cell> &buffer) {
+void GPUScreenImpl::clearBuffer(std::vector<GridCell> &buffer) {
   uint8_t fgR, fgG, fgB, bgR, bgG, bgB;
   colorToRGB(defaultFg_, fgR, fgG, fgB);
   colorToRGB(defaultBg_, bgR, bgG, bgB);
 
-  Cell defaultCell;
+  GridCell defaultCell;
   defaultCell.glyph = _cachedSpaceGlyph;
   defaultCell.fgR = fgR;
   defaultCell.fgG = fgG;
@@ -1246,7 +1247,7 @@ void GPUScreenImpl::reset() {
 // Buffer access - returns Cell buffer directly for GPU upload (zero-copy)
 //=============================================================================
 
-const Cell *GPUScreenImpl::getCellData() const {
+const GridCell *GPUScreenImpl::getCellData() const {
   if (_scrollOffset > 0 || (_searchActive && !_searchMatches.empty())) {
     const_cast<GPUScreenImpl *>(this)->composeViewBuffer();
     return viewBuffer_.data();
@@ -1257,9 +1258,9 @@ const Cell *GPUScreenImpl::getCellData() const {
   return nullptr;
 }
 
-Cell GPUScreenImpl::getCell(int row, int col) const {
+GridCell GPUScreenImpl::getCell(int row, int col) const {
   if (!_visibleBuffer || row < 0 || col < 0 || row >= _rows || col >= _cols) {
-    Cell empty = {};
+    GridCell empty = {};
     return empty;
   }
   size_t idx = static_cast<size_t>(row) * static_cast<size_t>(_cols) +
@@ -1327,6 +1328,12 @@ void GPUScreenImpl::clampVisualZoomOffset() {
   _visualZoomOffsetY = std::clamp(_visualZoomOffsetY, -maxOffsetY, maxOffsetY);
 }
 
+void GPUScreenImpl::requestScreenUpdate() {
+  if (_ctx.platform) {
+    _ctx.platform->requestRender();
+  }
+}
+
 //=============================================================================
 // View buffer composition (when scrolled back)
 //=============================================================================
@@ -1369,7 +1376,7 @@ void GPUScreenImpl::composeViewBuffer() {
 
         // Single memcpy for entire row of cells
         std::memcpy(&viewBuffer_[dstOffset], &(*_visibleBuffer)[srcOffset],
-                    numCells * sizeof(Cell));
+                    numCells * sizeof(GridCell));
       }
     }
 
@@ -1397,7 +1404,7 @@ void GPUScreenImpl::composeViewBuffer() {
         int viewRow = totalRow - firstVisibleTotalRow;
         size_t idx = static_cast<size_t>(viewRow * _cols + col);
         if (idx < viewBuffer_.size()) {
-          Cell& cell = viewBuffer_[idx];
+          GridCell& cell = viewBuffer_[idx];
           
           // Check if this is part of the current match
           bool isCurrentMatch = (totalRow == _searchMatchRow && 
@@ -1439,7 +1446,7 @@ void GPUScreenImpl::decompressLine(const ScrollbackLineGPU &line, int viewRow) {
   uint8_t bgR = defaultBg_.rgb.red, bgG = defaultBg_.rgb.green,
           bgB = defaultBg_.rgb.blue;
 
-  Cell defaultCell;
+  GridCell defaultCell;
   defaultCell.glyph = _cachedSpaceGlyph;
   defaultCell.fgR = fgR;
   defaultCell.fgG = fgG;
@@ -1469,7 +1476,7 @@ void GPUScreenImpl::pushLineToScrollback(int row) {
   // Copy cell data directly
   size_t srcOffset = static_cast<size_t>(row * _cols);
   std::memcpy(line.cells.data(), &(*_visibleBuffer)[srcOffset],
-              _cols * sizeof(Cell));
+              _cols * sizeof(GridCell));
 
   // Scan this row for card glyphs — check if any card's top-left cell is
   // leaving the visible area.  Top-left is identified by bg=0 (relRow=0, relCol=0).
@@ -2662,7 +2669,7 @@ void GPUScreenImpl::setCell(int row, int col, uint32_t glyph, uint8_t fgR,
   if (idx >= _visibleBuffer->size())
     return;
 
-  Cell &cell = (*_visibleBuffer)[idx];
+  GridCell &cell = (*_visibleBuffer)[idx];
   cell.glyph = glyph;
   cell.fgR = fgR;
   cell.fgG = fgG;
@@ -2771,6 +2778,8 @@ int GPUScreenImpl::onPutglyph(VTermGlyphInfo *info, VTermPos pos, void *user) {
     fontType = FONT_TYPE_SHADER;
     glyphIdx =
         self->_shaderGlyphFont ? self->_shaderGlyphFont->getGlyphIndex(cp) : cp;
+    yinfo(">>> SHADER GLYPH: cp={:#x} glyphIdx={} _shaderGlyphFont={} pos=({},{})",
+          cp, glyphIdx, (void*)self->_shaderGlyphFont.get(), pos.row, pos.col);
   } else if (isEmoji(cp) && self->_bitmapFont) {
     // Emoji - render from bitmap font atlas
     fontType = FONT_TYPE_BITMAP;
@@ -2915,7 +2924,7 @@ int GPUScreenImpl::onMoveRect(VTermRect dest, VTermRect src, void *user) {
 
     // Single memmove for all cell data
     std::memmove(&(*self->_visibleBuffer)[dstIdx],
-                 &(*self->_visibleBuffer)[srcIdx], totalCells * sizeof(Cell));
+                 &(*self->_visibleBuffer)[srcIdx], totalCells * sizeof(GridCell));
   }
   // Fast path: full-width but not starting at column 0 (scroll regions)
   // Still contiguous per row, do row-by-row with single memmove per row
@@ -2926,7 +2935,7 @@ int GPUScreenImpl::onMoveRect(VTermRect dest, VTermRect src, void *user) {
         size_t dstIdx = self->cellIndex(dest.start_row + row, 0);
 
         std::memmove(&(*self->_visibleBuffer)[dstIdx],
-                     &(*self->_visibleBuffer)[srcIdx], width * sizeof(Cell));
+                     &(*self->_visibleBuffer)[srcIdx], width * sizeof(GridCell));
       }
     } else {
       for (int row = height - 1; row >= 0; row--) {
@@ -2934,7 +2943,7 @@ int GPUScreenImpl::onMoveRect(VTermRect dest, VTermRect src, void *user) {
         size_t dstIdx = self->cellIndex(dest.start_row + row, 0);
 
         std::memmove(&(*self->_visibleBuffer)[dstIdx],
-                     &(*self->_visibleBuffer)[srcIdx], width * sizeof(Cell));
+                     &(*self->_visibleBuffer)[srcIdx], width * sizeof(GridCell));
       }
     }
   } else {
@@ -2959,9 +2968,9 @@ int GPUScreenImpl::onMoveRect(VTermRect dest, VTermRect src, void *user) {
         // Copy to scratch, then to dest (single memcpy for all cell data)
         std::memcpy(self->scratchBuffer_.data(),
                     &(*self->_visibleBuffer)[srcRowStart],
-                    width * sizeof(Cell));
+                    width * sizeof(GridCell));
         std::memcpy(&(*self->_visibleBuffer)[dstRowStart],
-                    self->scratchBuffer_.data(), width * sizeof(Cell));
+                    self->scratchBuffer_.data(), width * sizeof(GridCell));
       }
     } else {
       for (int row = height - 1; row >= 0; row--) {
@@ -2973,9 +2982,9 @@ int GPUScreenImpl::onMoveRect(VTermRect dest, VTermRect src, void *user) {
         // Copy to scratch, then to dest (single memcpy for all cell data)
         std::memcpy(self->scratchBuffer_.data(),
                     &(*self->_visibleBuffer)[srcRowStart],
-                    width * sizeof(Cell));
+                    width * sizeof(GridCell));
         std::memcpy(&(*self->_visibleBuffer)[dstRowStart],
-                    self->scratchBuffer_.data(), width * sizeof(Cell));
+                    self->scratchBuffer_.data(), width * sizeof(GridCell));
       }
     }
   }
@@ -3013,7 +3022,7 @@ int GPUScreenImpl::onErase(VTermRect rect, int, void *user) {
   }
 
   // Build default cell
-  Cell defaultCell;
+  GridCell defaultCell;
   defaultCell.glyph = self->_cachedSpaceGlyph;
   defaultCell.fgR = fgR;
   defaultCell.fgG = fgG;
@@ -3312,7 +3321,7 @@ bool GPUScreenImpl::isCardSlotVisibleInBuffer(uint32_t slotIndex, int excludeRow
   if (!_visibleBuffer)
     return false;
 
-  const Cell *cells = _visibleBuffer->data();
+  const GridCell *cells = _visibleBuffer->data();
   const uint8_t targetR = static_cast<uint8_t>(slotIndex & 0xFF);
   const uint8_t targetG = static_cast<uint8_t>((slotIndex >> 8) & 0xFF);
   const uint8_t targetB = static_cast<uint8_t>((slotIndex >> 16) & 0xFF);
@@ -3322,7 +3331,7 @@ bool GPUScreenImpl::isCardSlotVisibleInBuffer(uint32_t slotIndex, int excludeRow
       continue;
     size_t base = static_cast<size_t>(row) * _cols;
     for (int col = 0; col < _cols; col++) {
-      const Cell &c = cells[base + col];
+      const GridCell &c = cells[base + col];
       if (isCardGlyph(c.glyph) &&
           c.fgR == targetR &&
           c.fgG == targetG &&
@@ -3344,7 +3353,7 @@ void GPUScreenImpl::suspendOffscreenCards(int scrolledRow) {
   std::unordered_set<uint32_t> slotsOnRow;
 
   for (int col = 0; col < _cols; col++) {
-    const Cell &cell = (*_visibleBuffer)[srcOffset + col];
+    const GridCell &cell = (*_visibleBuffer)[srcOffset + col];
     if (!isCardGlyph(cell.glyph))
       continue;
 
@@ -3386,7 +3395,7 @@ void GPUScreenImpl::reactivateVisibleCards() {
 
   // Scan the composed view buffer for card glyphs that belong to inactive cards.
   // If found, move them back to _cards so update() runs and reconstructs buffers.
-  const Cell *cells = getCellData();
+  const GridCell *cells = getCellData();
   if (!cells)
     return;
 
@@ -3425,7 +3434,7 @@ void GPUScreenImpl::suspendNonVisibleCards() {
     return;
 
   // Collect all card slotIndices visible in the composed view
-  const Cell *cells = getCellData();
+  const GridCell *cells = getCellData();
   if (!cells)
     return;
 
@@ -3472,7 +3481,7 @@ void GPUScreenImpl::gcInactiveCards() {
 
   // Scan visible buffer
   if (_visibleBuffer) {
-    const Cell *cells = _visibleBuffer->data();
+    const GridCell *cells = _visibleBuffer->data();
     const size_t numCells = static_cast<size_t>(_rows) * _cols;
     for (size_t i = 0; i < numCells; i++) {
       if (isCardGlyph(cells[i].glyph)) {
@@ -3567,8 +3576,8 @@ bool GPUScreenImpl::handleOSCSequence(const std::string &sequence,
     return false;
   }
 
-  // Handle vendor-specific commands (666667-666671) directly
-  if (vendorId >= 666667 && vendorId <= 666671) {
+  // Handle vendor-specific commands (666667-666672) directly
+  if (vendorId >= 666667 && vendorId <= 666672) {
     std::string payload = sequence.substr(semicolon + 1);
 
     // Effect commands (666667 = pre-effect, 666668 = post-effect, 666669 = effect)
@@ -3593,6 +3602,33 @@ bool GPUScreenImpl::handleOSCSequence(const std::string &sequence,
         (*base::EventLoop::instance())->dispatch(base::Event::setFrameRateEvent(fps));
       } catch (...) {
         yerror("OSC 666671: Invalid FPS value '{}'", payload);
+      }
+      return true;
+    }
+
+    // Trace control command (666672)
+    // Payload: 0 = disable all, 1 = enable all
+    //          level:<name>:0|1 = disable/enable level (e.g., level:debug:0)
+    if (vendorId == 666672) {
+      if (payload.empty() || payload == "0") {
+        yinfo("OSC 666672: Disabling all traces");
+        ydisable_all();
+      } else if (payload == "1") {
+        yinfo("OSC 666672: Enabling all traces");
+        yenable_all();
+      } else if (payload.rfind("level:", 0) == 0) {
+        // Parse level:<name>:<0|1>
+        auto colonPos = payload.find(':', 6);
+        if (colonPos != std::string::npos) {
+          std::string level = payload.substr(6, colonPos - 6);
+          bool enable = payload.substr(colonPos + 1) == "1";
+          yinfo("OSC 666672: {} level '{}'", enable ? "Enabling" : "Disabling", level);
+          if (enable) {
+            yenable_level(level.c_str());
+          } else {
+            ydisable_level(level.c_str());
+          }
+        }
       }
       return true;
     }
@@ -4138,12 +4174,12 @@ Card *GPUScreenImpl::getCardAtCell(int row, int col) const {
     return nullptr;
   }
 
-  const Cell *cells = getCellData();
+  const GridCell *cells = getCellData();
   if (!cells)
     return nullptr;
 
   size_t idx = cellIndex(row, col);
-  const Cell &cell = cells[idx];
+  const GridCell &cell = cells[idx];
 
   // Check if this cell has a shader glyph (Plane 16 PUA-B: U+100000 - U+10FFFD)
   if (cell.glyph < 0x100000 || cell.glyph > 0x10FFFD) {
@@ -4181,6 +4217,7 @@ void GPUScreenImpl::sendKey(uint32_t codepoint, int mods) {
     vtMods = static_cast<VTermModifier>(vtMods | VTERM_MOD_ALT);
 
   vterm_keyboard_unichar(_vterm, codepoint, vtMods);
+  requestScreenUpdate();
 }
 
 void GPUScreenImpl::sendSpecialKey(int key, int mods) {
@@ -4295,12 +4332,14 @@ void GPUScreenImpl::sendSpecialKey(int key, int mods) {
       if (ch != 0) {
         ydebug("sendSpecialKey: sending ctrl/alt char '{}' ({})", (char)ch, ch);
         vterm_keyboard_unichar(_vterm, ch, vtMods);
+        requestScreenUpdate();
       }
     }
     return;
   }
 
   vterm_keyboard_key(_vterm, vtKey, vtMods);
+  requestScreenUpdate();
 }
 
 void GPUScreenImpl::setOutputCallback(OutputCallback cb) {
@@ -4466,7 +4505,7 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
           cardLocalCoords(localX, localY, row, col, cardX, cardY);
           // Store card origin for mouse move tracking (even outside card cells)
           size_t idx = cellIndex(row, col);
-          const Cell &cell = (*_visibleBuffer)[idx];
+          const GridCell &cell = (*_visibleBuffer)[idx];
           uint32_t bg24 = static_cast<uint32_t>(cell.bgR) |
                           (static_cast<uint32_t>(cell.bgG) << 8) |
                           (static_cast<uint32_t>(cell.bgB) << 16);
@@ -4522,6 +4561,7 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
       clampVisualZoomOffset();
       _visualZoomDragLastX = mx;
       _visualZoomDragLastY = my;
+      requestScreenUpdate();
       return Ok(true);
     }
 
@@ -4545,7 +4585,7 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
         }
 
         if (_ctx.imguiManager) {
-          Cell cell = getCell(row, col);
+          GridCell cell = getCell(row, col);
           char statusBuf[256];
           snprintf(statusBuf, sizeof(statusBuf),
                    "Row:%d Col:%d Glyph:U+%04X FG:(%d,%d,%d) BG:(%d,%d,%d) Style:0x%02X",
@@ -4562,6 +4602,7 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
           _selEndRow = row;
           _hasSelection = (_selStartCol != _selEndCol || _selStartRow != _selEndRow);
           _hasDamage = true;
+          requestScreenUpdate();
         }
 
         // Forward mouse move to focused card with local coordinates
@@ -4763,6 +4804,7 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
             scrollDown(-lines);
           }
         }
+        requestScreenUpdate();  // Trigger immediate re-render
         return Ok(true);  // Consume
       }
     }
@@ -4895,15 +4937,18 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
     if (_copyMode) {
       if (event.type == base::Event::Type::Char) {
         if (handleCopyModeKey(event.chr.codepoint, 0, event.chr.mods)) {
+          requestScreenUpdate();
           return Ok(true);
         }
       }
       if (event.type == base::Event::Type::KeyDown) {
         if (handleCopyModeKey(0, event.key.key, event.key.mods)) {
+          requestScreenUpdate();
           return Ok(true);
         }
       }
       // Consume all keyboard input in copy mode
+      requestScreenUpdate();
       return Ok(true);
     }
 
@@ -5103,7 +5148,7 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
     }
   }
 
-  const Cell *cells = getCellData();
+  const GridCell *cells = getCellData();
   if (!cells || _cols == 0 || _rows == 0) {
     return Ok(); // Nothing to render
   }
@@ -5126,7 +5171,7 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
   shaderMgr->update();
 
   // Recreate cell buffer if grid size changed (include status line row)
-  size_t requiredSize = static_cast<size_t>(_cols) * totalRows * sizeof(Cell);
+  size_t requiredSize = static_cast<size_t>(_cols) * totalRows * sizeof(GridCell);
   if (_cols != _textureCols || totalRows != _textureRows || !_cellBuffer ||
       _cellBufferSize < requiredSize) {
     if (_cellBuffer) {
@@ -5300,20 +5345,20 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
 
   // Upload vterm cells to GPU
   wgpuQueueWriteBuffer(queue, _cellBuffer, 0, cells,
-                       _cols * _rows * sizeof(Cell));
+                       _cols * _rows * sizeof(GridCell));
 
   // Upload status line cells (appended after vterm cells)
   if (_statusLineEnabled && !_statusLine.empty()) {
-    size_t statusOffset = static_cast<size_t>(_cols * _rows) * sizeof(Cell);
+    size_t statusOffset = static_cast<size_t>(_cols * _rows) * sizeof(GridCell);
     wgpuQueueWriteBuffer(queue, _cellBuffer, statusOffset, _statusLine.data(),
-                         _statusLine.size() * sizeof(Cell));
+                         _statusLine.size() * sizeof(GridCell));
   }
 
   // Debug: scan uploaded cells for card glyphs
   {
     int cardCellCount = 0;
     for (size_t i = 0; i < static_cast<size_t>(_cols * _rows); i++) {
-      const Cell& c = cells[i];
+      const GridCell& c = cells[i];
       uint8_t fontType = (c.style >> 5) & 0x07;
       if (fontType == FONT_TYPE_CARD) {
         if (cardCellCount < 3) {

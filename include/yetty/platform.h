@@ -8,6 +8,9 @@
 
 namespace yetty {
 
+// Forward declaration
+class PTYProvider;
+
 // Cursor types (subset that makes sense across platforms)
 enum class CursorType {
     Arrow,
@@ -76,6 +79,11 @@ public:
     // - Web: Uses emscripten_request_animation_frame_loop
     virtual void runMainLoop(MainLoopCallback callback) = 0;
 
+    // Request a render on next frame (for on-demand rendering)
+    // - Desktop: Calls main loop callback immediately
+    // - Web: Schedules via requestAnimationFrame, coalesces multiple requests
+    virtual void requestRender() = 0;
+
     // Input callbacks
     virtual void setKeyCallback(KeyCallback cb) = 0;
     virtual void setCharCallback(CharCallback cb) = 0;
@@ -97,6 +105,13 @@ public:
 
     // Key name lookup (for GLFW key codes)
     virtual std::string getKeyName(int key, int scancode) const = 0;
+
+    // PTY/Shell support
+    // Creates a platform-appropriate PTY provider:
+    // - Desktop: forkpty() based shell
+    // - Web: JSLinux iframe emulator
+    // - Android: toybox or other shell
+    virtual Result<std::shared_ptr<PTYProvider>> createPTY() = 0;
 
 protected:
     Platform() = default;

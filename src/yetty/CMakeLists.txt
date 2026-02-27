@@ -1,10 +1,21 @@
 # yetty sources and subdirectories
 
-# Core sources
+# Sources for yetty executable (collected from subdirectories)
+add_subdirectory(ydraw-zoo)
+add_subdirectory(ydraw-maze)
+add_subdirectory(cards/ygrid)
+add_subdirectory(msdf-gen)
+add_subdirectory(rpc)
+
+# Core sources - ALL sources needed for yetty executable
 set(YETTY_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/yetty.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/config.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/osc-scanner.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/pty-reader-desktop.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/pty-reader-web.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/pty-reader-windows.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/terminal.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/terminal-view.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/gpu-screen.cpp
@@ -32,41 +43,42 @@ set(YETTY_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/bm-font.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/shader-font.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/shared-memory.cpp
+    # Renderer sources (from subdirectories)
+    ${YETTY_ZOO_SOURCES}
+    ${YETTY_MAZE_SOURCES}
+    ${YETTY_YGRID_SOURCES}
     PARENT_SCOPE
 )
 
-# Desktop-only sources
+# Desktop-only sources (Linux, macOS, Windows)
 set(YETTY_DESKTOP_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/msdf-cdb-provider.cpp
+    ${YETTY_MSDF_GEN_SOURCES}
+    ${YETTY_RPC_SOURCES}
     PARENT_SCOPE
 )
 
 # Android-specific sources
 set(YETTY_ANDROID_SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/hdraw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/msdf-cdb-provider.cpp
     PARENT_SCOPE
 )
 
-# Subdirectories that build libraries
+# Include directories for renderer sources
+set(YETTY_RENDERER_INCLUDES
+    ${YETTY_ZOO_INCLUDES}
+    ${YETTY_MAZE_INCLUDES}
+    PARENT_SCOPE
+)
+
+# Subdirectories that build libraries (common to all platforms)
 add_subdirectory(base)
 add_subdirectory(font)
-add_subdirectory(ymery)
 add_subdirectory(yecho)
 add_subdirectory(ydraw)
 add_subdirectory(diagram)
+add_subdirectory(ygrid)
 add_subdirectory(cards)
 add_subdirectory(yast)
 add_subdirectory(msdf-wgsl)
 add_subdirectory(shaders)
-
-# Desktop-only subdirectories
-if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
-    add_subdirectory(gpu)
-    add_subdirectory(msdf-gen)
-    if(NOT WIN32)
-        add_subdirectory(rpc)
-        add_subdirectory(client)
-        add_subdirectory(ytop)
-    endif()
-endif()

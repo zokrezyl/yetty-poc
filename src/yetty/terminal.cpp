@@ -1,21 +1,16 @@
 #include "terminal.h"
 #include "gpu-screen.h"
 #include <yetty/base/event-loop.h>
-#include <yetty/ymery/types.h>
+#include <yetty/result.hpp>
 #include <ytrace/ytrace.hpp>
+#include <cstring>
 
-#if !YETTY_WEB && !defined(__ANDROID__) && !defined(_WIN32) && !defined(_WIN32)
-#include <fcntl.h>
-#include <signal.h>
-#include <sys/ioctl.h>
-#include <sys/wait.h>
-#include <termios.h>
-#include <unistd.h>
-#ifdef __APPLE__
-#include <util.h>
+#if YETTY_WEB
+#include <yetty/platform.h>
+#include <yetty/pty-provider.h>
 #else
-#include <pty.h>
-#endif
+#include <yetty/osc-scanner.h>
+#include <yetty/pty-reader.h>
 #endif
 
 namespace yetty {
@@ -34,18 +29,37 @@ public:
         }
         _gpuScreen = *screenResult;
 
+#if YETTY_WEB
+        // Webasm: GPUScreen callbacks write to PTYProvider
         _gpuScreen->setOutputCallback([this](const char* data, size_t len) {
-            writeToPty(data, len);
+            if (_pty) {
+                _pty->write(data, len);
+            }
         });
         _gpuScreen->setResizeCallback([this](uint32_t cols, uint32_t rows) {
-            resizePty(cols, rows);
+            if (_pty) {
+                _pty->resize(cols, rows);
+            }
         });
-
-#if !YETTY_WEB && !defined(__ANDROID__) && !defined(_WIN32)
-        if (auto res = startShell(); !res) {
-            return Err<void>("Failed to start shell", res);
-        }
+#else
+        // Desktop: GPUScreen callbacks write to PtyReader
+        _gpuScreen->setOutputCallback([this](const char* data, size_t len) {
+            if (_ptyReader) {
+                _ptyReader->write(data, len);
+            }
+        });
+        _gpuScreen->setResizeCallback([this](uint32_t cols, uint32_t rows) {
+            if (_ptyReader) {
+                _ptyReader->resize(cols, rows);
+            }
+        });
 #endif
+
+        // Start PTY
+        if (auto res = startPty(); !res) {
+            // On some platforms, PTY may not be available
+            ywarn("Terminal: PTY not available: {}", error_msg(res));
+        }
 
         yinfo("Terminal created with GPUScreen");
         return Ok();
@@ -54,30 +68,18 @@ public:
     Result<void> onShutdown() override {
         Result<void> result = Ok();
 
-#if !YETTY_WEB && !defined(__ANDROID__) && !defined(_WIN32)
-        _running = false;
-
-        if (_pollId >= 0) {
-            auto loop = *base::EventLoop::instance();
-
-            // Deregister event listeners — safe here, shared_ptr is still alive
-            loop->deregisterListener(sharedAs<base::EventListener>());
-
-            loop->destroyPoll(_pollId);
-            _pollId = -1;
+#if YETTY_WEB
+        if (_pty) {
+            _pty->stop();
+            _pty.reset();
         }
-
-        if (_ptyMaster >= 0) {
-            close(_ptyMaster);
-            _ptyMaster = -1;
-        }
-
-        if (_childPid > 0) {
-            kill(_childPid, SIGTERM);
-            waitpid(_childPid, nullptr, 0);
-            _childPid = -1;
+#else
+        if (_ptyReader) {
+            _ptyReader->stop();
+            _ptyReader.reset();
         }
 #endif
+        _running = false;
 
         if (_gpuScreen) {
             if (auto res = _gpuScreen->shutdown(); !res) {
@@ -105,14 +107,29 @@ public:
         if (_gpuScreen) {
             _gpuScreen->resize(cols, rows);
         }
-        resizePty(cols, rows);
+#if YETTY_WEB
+        if (_pty) {
+            _pty->resize(cols, rows);
+        }
+#else
+        if (_ptyReader) {
+            _ptyReader->resize(cols, rows);
+        }
+#endif
     }
 
     void setViewport(float x, float y, float width, float height) override {
         if (_gpuScreen) {
             _gpuScreen->setViewport(x, y, width, height);
-            // GPUScreen calculated and resized - now resize PTY to match
-            resizePty(_gpuScreen->getCols(), _gpuScreen->getRows());
+#if YETTY_WEB
+            if (_pty) {
+                _pty->resize(_gpuScreen->getCols(), _gpuScreen->getRows());
+            }
+#else
+            if (_ptyReader) {
+                _ptyReader->resize(_gpuScreen->getCols(), _gpuScreen->getRows());
+            }
+#endif
         }
     }
 
@@ -125,220 +142,143 @@ public:
     }
 
     Result<bool> onEvent(const base::Event& event) override {
-#if !YETTY_WEB && !defined(__ANDROID__) && !defined(_WIN32)
-        if (event.type == base::Event::Type::PollReadable && event.poll.fd == _ptyMaster) {
-            ydebug("Terminal::onEvent: PollReadable on PTY");
-            readPty();
-            return Ok(true);
-        }
-#endif
-        // Keyboard events are handled by GPUScreen directly
+        (void)event;
         return Ok(false);
     }
 
 private:
-    void writeToPty(const char* data, size_t len) {
-#if !YETTY_WEB && !defined(__ANDROID__) && !defined(_WIN32)
-        if (_ptyMaster >= 0 && len > 0) {
-            ssize_t written = ::write(_ptyMaster, data, len);
-            (void)written;
-        }
-#else
-        (void)data;
-        (void)len;
-#endif
-    }
+    Result<void> startPty() {
+        uint32_t cols = (_gpuScreen && _gpuScreen->getCols() > 0) ? _gpuScreen->getCols() : 80;
+        uint32_t rows = (_gpuScreen && _gpuScreen->getRows() > 0) ? _gpuScreen->getRows() : 24;
 
-    void resizePty(uint32_t cols, uint32_t rows) {
-#if !YETTY_WEB && !defined(__ANDROID__) && !defined(_WIN32)
-        if (_ptyMaster >= 0) {
-            struct winsize ws = {
-                static_cast<unsigned short>(rows),
-                static_cast<unsigned short>(cols), 0, 0
-            };
-            ioctl(_ptyMaster, TIOCSWINSZ, &ws);
-        }
-#else
-        (void)cols;
-        (void)rows;
-#endif
-    }
+#if YETTY_WEB
+        // Webasm: Use Platform::createPTY() which creates WebPTY with JSLinux iframe
+        const char* vmConfigEnv = getenv("YETTY_VM_CONFIG");
+        std::string vmConfig = vmConfigEnv ? vmConfigEnv : "alpine-x86_64.cfg";
+        yinfo("Terminal: using VM config: {}", vmConfig);
 
-#if !YETTY_WEB && !defined(__ANDROID__) && !defined(_WIN32)
-    Result<void> startShell() {
-        const char* shellEnv = getenv("SHELL");
-        std::string shellPath = shellEnv ? shellEnv : "/bin/sh";
-
-        yinfo("Terminal starting shell: {}", shellPath);
-
-        // Validate config and resolve shell/env before forking
-        if (!_ctx.config) {
-            yerror("Terminal: no config available, cannot start shell");
-            return Err<void>("Terminal: config is required to start shell");
+        // Get platform to create PTY
+        auto platformResult = Platform::create();
+        if (!platformResult) {
+            return Err<void>("Failed to get platform", platformResult);
         }
-        auto envKeysResult = _ctx.config->getMetadataKeys(ymery::DataPath("shell/env"));
-        if (!envKeysResult) {
-            yerror("Terminal: failed to read shell/env from config: {}", error_msg(envKeysResult));
-            return Err<void>("Terminal: failed to read shell/env from config", envKeysResult);
-        }
-        if (envKeysResult->empty()) {
-            yerror("Terminal: shell/env is empty in config");
-            return Err<void>("Terminal: shell/env must not be empty");
-        }
+        auto platform = *platformResult;
 
-        // Resolve all env var values before forking
-        std::vector<std::pair<std::string, std::string>> envVars;
-        for (const auto& name : *envKeysResult) {
-            auto val = _ctx.config->Config::get<std::string>("shell/env/" + name);
-            if (!val) {
-                yerror("Terminal: shell/env/{} is missing or not a string", name);
-                return Err<void>("Terminal: shell/env/" + name + " is missing or not a string");
+        auto ptyResult = platform->createPTY();
+        if (!ptyResult) {
+            return Err<void>("Failed to create PTY", ptyResult);
+        }
+        _pty = *ptyResult;
+
+        // Data callback - write directly to GPUScreen
+        // OSC handling is done by GPUScreen::write() which calls handleOSCSequence
+        _pty->setDataCallback([this](const char* data, size_t len) {
+            if (_gpuScreen) {
+                processPtyData(data, len);
             }
-            envVars.emplace_back(name, *val);
-        }
+        });
 
-        struct winsize ws = {24, 80, 0, 0};
+        _pty->setExitCallback([this](int exitCode) {
+            yinfo("PTY exited with code {}", exitCode);
+            _running = false;
+        });
 
-        _childPid = forkpty(&_ptyMaster, nullptr, nullptr, &ws);
-
-        if (_childPid < 0) {
-            return Err<void>(std::string("forkpty failed: ") + strerror(errno));
-        }
-
-        if (_childPid == 0) {
-            // Export shell env from config (TERM, COLORTERM, YETTY_SOCKET, etc.)
-            for (const auto& [name, value] : envVars) {
-                setenv(name.c_str(), value.c_str(), 1);
-            }
-
-            for (int fd = 3; fd < 1024; fd++)
-                close(fd);
-
-            execl(shellPath.c_str(), shellPath.c_str(), nullptr);
-            _exit(1);
-        }
-
-        int flags = fcntl(_ptyMaster, F_GETFL, 0);
-        fcntl(_ptyMaster, F_SETFL, flags | O_NONBLOCK);
-
-        auto loop = *base::EventLoop::instance();
-        auto pollResult = loop->createPoll();
-        if (!pollResult) {
-            return Err<void>("Failed to create poll", pollResult);
-        }
-        _pollId = *pollResult;
-        if (auto res = loop->configPoll(_pollId, _ptyMaster); !res) {
-            return Err<void>("Failed to configure poll", res);
-        }
-        if (auto res = loop->registerPollListener(_pollId, sharedAs<base::EventListener>()); !res) {
-            return Err<void>("Failed to register poll listener", res);
-        }
-        if (auto res = loop->startPoll(_pollId); !res) {
-            return Err<void>("Failed to start poll", res);
+        // Start the VM
+        if (auto res = _pty->start(vmConfig, cols, rows); !res) {
+            return Err<void>("Failed to start PTY", res);
         }
 
         _running = true;
-        yinfo("Terminal started: PTY fd={}, PID={}", _ptyMaster, _childPid);
+        yinfo("Terminal started WebPTY: {} ({}x{})", vmConfig, cols, rows);
         return Ok();
+#else
+        // Desktop: Use PtyReader with OSC-aware reading
+        const char* shellEnv = getenv("SHELL");
+        std::string shellPath = shellEnv ? shellEnv : "/bin/sh";
+
+        PtyConfig config;
+        config.shell = shellPath;
+        config.cols = cols;
+        config.rows = rows;
+
+        auto readerResult = PtyReader::create(config);
+        if (!readerResult) {
+            return Err<void>("Failed to create PtyReader", readerResult);
+        }
+        _ptyReader = *readerResult;
+
+        // Set up callbacks
+        _ptyReader->setDataAvailableCallback([this]() {
+            readFromPty();
+        });
+
+        _ptyReader->setExitCallback([this](int exitCode) {
+            yinfo("PTY exited with code {}", exitCode);
+            _running = false;
+        });
+
+        _running = true;
+        yinfo("Terminal started PTY: {} ({}x{})", shellPath, cols, rows);
+        return Ok();
+#endif
     }
 
-    void readPty() {
-        ydebug("Terminal::readPty: _ptyMaster={} _childPid={}, pendingBuf={}",
-               _ptyMaster, _childPid, _ptyBuffer.size());
-        int status;
-        if (waitpid(_childPid, &status, WNOHANG) > 0) {
-            _running = false;
-            yinfo("Shell exited");
-            return;
-        }
+#if !YETTY_WEB
+    /**
+     * Read from PTY with OSC-aware logic (Desktop only):
+     * - Normal data: read chunk, process, allow rendering
+     * - OSC data: keep reading until terminator (could be huge)
+     */
+    void readFromPty() {
+        static constexpr size_t CHUNK_SIZE = 65536;  // 64KB
+        char chunk[CHUNK_SIZE];
 
-        static constexpr size_t PTY_READ_CHUNK = 65536; // 64KB
-        ssize_t n;
-
-        // Read and scan for OSC in a loop
-        // - Normal text: stop at PTY_READ_CHUNK to allow rendering
-        // - Inside OSC: keep reading until terminator found
         int loopCount = 0;
         while (true) {
-            size_t oldSize = _ptyBuffer.size();
-            _ptyBuffer.resize(oldSize + PTY_READ_CHUNK);
-
-            n = read(_ptyMaster, _ptyBuffer.data() + oldSize, PTY_READ_CHUNK);
-            if (n <= 0) {
-                _ptyBuffer.resize(oldSize); // Remove unused space
-                ydebug("readPty: read returned {}, isInOsc={}", n, isInOsc());
-                if (isInOsc()) {
-                    // Still inside OSC but no more data - wait for next poll
-                    ydebug("readPty: incomplete OSC, keeping {} bytes for next call", _ptyBuffer.size());
+            size_t n = _ptyReader->read(chunk, CHUNK_SIZE);
+            if (n == 0) {
+                // No more data available
+                if (_oscScanner.isInOsc()) {
+                    // Inside OSC, wait for more data (don't process yet)
+                    ydebug("readFromPty: incomplete OSC, buffered {} bytes", _ptyBuffer.size());
                     return;
                 }
-                break;
+                break;  // Not in OSC, process what we have
             }
+
+            // Accumulate in buffer
+            size_t oldSize = _ptyBuffer.size();
             _ptyBuffer.resize(oldSize + n);
+            std::memcpy(_ptyBuffer.data() + oldSize, chunk, n);
 
-            // Scan this chunk to update OSC state
-            scanForOsc(_ptyBuffer.data() + oldSize, n);
-            ydebug("readPty loop {}: read {} bytes, totalBuf={}, isInOsc={}",
-                   loopCount, n, _ptyBuffer.size(), isInOsc());
+            // Scan for OSC state
+            _oscScanner.scan(chunk, n);
 
-            // If not inside an OSC, stop after first chunk to allow rendering
-            if (!isInOsc() && _ptyBuffer.size() >= PTY_READ_CHUNK) {
+            ydebug("readFromPty loop {}: read {} bytes, total={}, isInOsc={}",
+                   loopCount, n, _ptyBuffer.size(), _oscScanner.isInOsc());
+
+            // If NOT in OSC and we have enough data, stop to allow rendering
+            if (!_oscScanner.isInOsc() && _ptyBuffer.size() >= CHUNK_SIZE) {
                 break;
             }
-            // If inside OSC, keep reading until terminator found
+            // If IN OSC, keep reading until terminator found (could be 2000MB)
             loopCount++;
         }
 
-        ydebug("readPty: processing {} bytes in {} loops", _ptyBuffer.size(), loopCount);
         if (_ptyBuffer.empty() || !_gpuScreen) return;
 
-        // Reset scan state before processing (processPtyData has its own state)
-        resetOscScan();
+        ydebug("readFromPty: processing {} bytes after {} loops", _ptyBuffer.size(), loopCount);
 
-        // Process the complete buffer and clear it
+        // Reset scanner before processing (processPtyData has its own state)
+        _oscScanner.reset();
+
+        // Process: normal data -> vterm, OSC -> handle
         processPtyData(_ptyBuffer.data(), _ptyBuffer.size());
         _ptyBuffer.clear();
     }
+#endif
 
-    // Lightweight scan: just detect if we're inside ANY OSC (ESC ] ... until BEL or ST)
-    void scanForOsc(const char* data, size_t len) {
-        for (size_t i = 0; i < len; i++) {
-            char c = data[i];
-            int prev = _oscScanState;
-            switch (_oscScanState) {
-            case 0: // Normal
-                if (c == '\033') _oscScanState = 1; // Esc
-                break;
-            case 1: // Esc
-                _oscScanState = (c == ']') ? 2 : 0; // InOsc or Normal
-                break;
-            case 2: // InOsc
-                if (c == '\007') {
-                    _oscScanState = 0; // BEL terminator
-                } else if (c == '\033') {
-                    _oscScanState = 3; // OscEscEnd
-                }
-                break;
-            case 3: // OscEscEnd (checking for \)
-                _oscScanState = (c == '\\') ? 0 : 2; // Normal or back to InOsc
-                break;
-            }
-            if (prev != _oscScanState && (_oscScanState == 2 || prev == 2 || _oscScanState == 0 && prev >= 2)) {
-                ydebug("scanForOsc: state {} -> {} at pos {} (char 0x{:02x})",
-                       prev, _oscScanState, i, (unsigned char)c);
-            }
-        }
-    }
-
-    bool isInOsc() const {
-        return _oscScanState >= 2; // InOsc or OscEscEnd
-    }
-
-    void resetOscScan() {
-        _oscScanState = 0;
-    }
-
-    // OSC parsing states
+    // OSC parsing states for processPtyData
     enum class OscState {
         Normal,      // Not in OSC
         Esc,         // Saw ESC
@@ -348,7 +288,7 @@ private:
 
     void processPtyData(const char* data, size_t len) {
         size_t i = 0;
-        size_t normalStart = 0;  // Start of normal (non-OSC) data
+        size_t normalStart = 0;
 
         auto flushNormal = [&](size_t end) {
             if (end > normalStart) {
@@ -361,9 +301,15 @@ private:
             uint32_t linesToAdvance = 0;
             bool handled = _gpuScreen->handleOSCSequence(_oscBuffer, &response, &linesToAdvance);
             if (handled) {
-                if (!response.empty()) {
-                    writeToPty(response.c_str(), response.size());
+#if YETTY_WEB
+                if (!response.empty() && _pty) {
+                    _pty->write(response.c_str(), response.size());
                 }
+#else
+                if (!response.empty() && _ptyReader) {
+                    _ptyReader->write(response.c_str(), response.size());
+                }
+#endif
                 if (linesToAdvance > 0) {
                     std::string nl(linesToAdvance, '\n');
                     _gpuScreen->write(nl.c_str(), nl.size());
@@ -420,6 +366,11 @@ private:
                 if (c == '\\') {
                     i++;
                     handleOsc(i, true);
+                } else if (c == '\033') {
+                    // Another ESC - first one was body data, this one might start ST
+                    _oscBuffer += '\033';
+                    // Stay in OscEscEnd
+                    i++;
                 } else {
                     // Not a terminator, ESC is part of body
                     _oscBuffer += '\033';
@@ -435,11 +386,9 @@ private:
         if (_oscState == OscState::Normal) {
             flushNormal(len);
         } else if (_oscState == OscState::Esc) {
-            // Incomplete ESC at end of chunk - flush everything
             flushNormal(len);
             _oscState = OscState::Normal;
         }
-        // If in InOsc or OscEscEnd, keep accumulating (waiting for more data)
 
         // Trigger screen refresh
         if (auto loop = base::EventLoop::instance(); loop) {
@@ -447,22 +396,24 @@ private:
         }
     }
 
-    int _ptyMaster = -1;
-    pid_t _childPid = -1;
-    base::PollId _pollId = -1;
+#if YETTY_WEB
+    // Webasm: PTYProvider (WebPTY)
+    std::shared_ptr<PTYProvider> _pty;
+#else
+    // Desktop: PtyReader with OSC-aware buffering
+    PtyReader::Ptr _ptyReader;
 
-    // OSC parsing state (for processPtyData)
+    // OSC scanner for readFromPty (detects OSC boundaries)
+    OscScanner _oscScanner;
+
+    // Buffer for accumulating data (especially for large OSC sequences)
+    std::vector<char> _ptyBuffer;
+#endif
+
+    // OSC parsing state for processPtyData (used by both platforms)
     OscState _oscState = OscState::Normal;
     std::string _oscBuffer;
     size_t _oscEscPos = 0;
-
-    // OSC scan state (for readPty to decide read length)
-    // 0=Normal, 1=Esc, 2=InOsc, 3=OscEscEnd
-    int _oscScanState = 0;
-
-    // Persistent buffer for incomplete OSC sequences
-    std::vector<char> _ptyBuffer;
-#endif
 
     bool _running = false;
     YettyContext _ctx;

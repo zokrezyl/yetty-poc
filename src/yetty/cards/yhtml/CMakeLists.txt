@@ -9,7 +9,15 @@ CPMAddPackage(
 )
 
 # cpr builds libcurl from source. Force-disable optional curl features
-find_package(OpenSSL REQUIRED)
+# On Windows, use Schannel (native SSL). On other platforms, use OpenSSL.
+if(WIN32)
+    set(CURL_USE_SCHANNEL ON CACHE BOOL "" FORCE)
+    set(CURL_USE_OPENSSL OFF CACHE BOOL "" FORCE)
+else()
+    find_package(OpenSSL REQUIRED)
+    set(CURL_USE_SCHANNEL OFF CACHE BOOL "" FORCE)
+    set(CURL_USE_OPENSSL ON CACHE BOOL "" FORCE)
+endif()
 
 # Save and restore ZLIB state to hide our zlib from curl
 set(_SAVE_ZLIB_FOUND ${ZLIB_FOUND})
@@ -23,6 +31,12 @@ set(CURL_BROTLI OFF CACHE BOOL "" FORCE)
 set(CURL_ZSTD OFF CACHE BOOL "" FORCE)
 set(CURL_USE_LIBSSH2 OFF CACHE BOOL "" FORCE)
 
+if(WIN32)
+    set(_CPR_SSL_OPTIONS "CURL_USE_SCHANNEL ON" "CURL_USE_OPENSSL OFF")
+else()
+    set(_CPR_SSL_OPTIONS "CURL_USE_SCHANNEL OFF" "CURL_USE_OPENSSL ON")
+endif()
+
 CPMAddPackage(
     NAME cpr
     GITHUB_REPOSITORY libcpr/cpr
@@ -34,6 +48,7 @@ CPMAddPackage(
         "CPR_ENABLE_SSL ON"
         "CPR_BUILD_TESTS OFF"
         "CPR_BUILD_TESTS_SSL OFF"
+        ${_CPR_SSL_OPTIONS}
 )
 
 # Restore ZLIB state after curl configuration

@@ -1,4 +1,5 @@
 #include <yetty/platform.h>
+#include <yetty/pty-provider.h>
 #include <yetty/gpu-screen-manager.h>
 #include <yetty/gpu-screen.h>
 #include <ytrace/ytrace.hpp>
@@ -7,13 +8,162 @@
 
 #include <emscripten/emscripten.h>
 #include <emscripten/html5.h>
+#include <atomic>
+#include <unordered_map>
 
 namespace yetty {
+
+// =============================================================================
+// WebPTY - PTY Provider that uses JSLinux in an iframe
+// =============================================================================
+
+// Global registry of WebPTY instances for postMessage callbacks
+static std::unordered_map<uint32_t, class WebPTY*> g_ptyInstances;
+static std::atomic<uint32_t> g_nextPtyId{1};
+
+// Global resize callback for JavaScript interop
+static Platform::ResizeCallback g_globalResizeCallback;
+static int g_lastCanvasWidth = 0;
+static int g_lastCanvasHeight = 0;
+static int* g_platformWidthPtr = nullptr;
+static int* g_platformHeightPtr = nullptr;
+
+class WebPTY : public PTYProvider {
+public:
+    WebPTY() : _id(g_nextPtyId++) {
+        g_ptyInstances[_id] = this;
+    }
+
+    ~WebPTY() override {
+        stop();
+        g_ptyInstances.erase(_id);
+    }
+
+    Result<void> start(const std::string& vmConfig, uint32_t cols, uint32_t rows) override {
+        _cols = cols;
+        _rows = rows;
+        _vmConfig = vmConfig;
+        _running = true;
+
+        yinfo("WebPTY[{}]: Starting with config '{}' ({}x{})", _id, vmConfig, cols, rows);
+
+        // Create iframe and start JSLinux emulator via JavaScript
+        EM_ASM({
+            var ptyId = $0;
+            var vmConfig = UTF8ToString($1);
+            var cols = $2;
+            var rows = $3;
+
+            // Create hidden iframe for JSLinux VM
+            var iframe = document.createElement('iframe');
+            iframe.id = 'jslinux-pty-' + ptyId;
+            iframe.style.cssText = 'display:none;';
+            iframe.src = 'jslinux/vm-bridge.html?ptyId=' + ptyId +
+                         '&url=' + encodeURIComponent(vmConfig) +
+                         '&cols=' + cols + '&rows=' + rows +
+                         '&cpu=x86_64&mem=256';
+            document.body.appendChild(iframe);
+        }, _id, vmConfig.c_str(), cols, rows);
+
+        return Ok();
+    }
+
+    void stop() override {
+        if (!_running) return;
+        _running = false;
+
+        yinfo("WebPTY[{}]: Stopping", _id);
+
+        // Remove iframe
+        EM_ASM({
+            var ptyId = $0;
+            var iframe = document.getElementById('jslinux-pty-' + ptyId);
+            if (iframe) {
+                iframe.remove();
+            }
+        }, _id);
+
+        if (_exitCallback) {
+            _exitCallback(0);
+        }
+    }
+
+    void write(const char* data, size_t len) override {
+        if (!_running || len == 0) return;
+
+        // Send input to iframe via postMessage
+        EM_ASM({
+            var ptyId = $0;
+            var data = UTF8ToString($1, $2);
+            var iframe = document.getElementById('jslinux-pty-' + ptyId);
+            if (iframe && iframe.contentWindow) {
+                iframe.contentWindow.postMessage({
+                    type: 'term-input',
+                    ptyId: ptyId,
+                    data: data
+                }, '*');
+            }
+        }, _id, data, len);
+    }
+
+    void resize(uint32_t cols, uint32_t rows) override {
+        _cols = cols;
+        _rows = rows;
+
+        // Send resize to iframe
+        EM_ASM({
+            var ptyId = $0;
+            var cols = $1;
+            var rows = $2;
+            var iframe = document.getElementById('jslinux-pty-' + ptyId);
+            if (iframe && iframe.contentWindow) {
+                iframe.contentWindow.postMessage({
+                    type: 'term-resize',
+                    ptyId: ptyId,
+                    cols: cols,
+                    rows: rows
+                }, '*');
+            }
+        }, _id, cols, rows);
+    }
+
+    bool isRunning() const override { return _running; }
+
+    void setDataCallback(DataCallback cb) override { _dataCallback = std::move(cb); }
+    void setExitCallback(ExitCallback cb) override { _exitCallback = std::move(cb); }
+    uint32_t getId() const override { return _id; }
+
+    // Called from JavaScript when data arrives from iframe
+    void onDataFromEmulator(const char* data, size_t len) {
+        if (_dataCallback) {
+            _dataCallback(data, len);
+        }
+    }
+
+private:
+    uint32_t _id;
+    uint32_t _cols = 80;
+    uint32_t _rows = 25;
+    std::string _vmConfig;
+    bool _running = false;
+    DataCallback _dataCallback;
+    ExitCallback _exitCallback;
+};
+
+// =============================================================================
+// WebPlatform - Main platform implementation for Emscripten
+// =============================================================================
 
 class WebPlatform : public Platform {
 public:
     WebPlatform() = default;
     ~WebPlatform() override = default;
+
+    // Track modifier key state for scroll events (same as desktop)
+    bool _ctrlPressed = false;
+    bool _shiftPressed = false;
+    float _lastMouseX = 0.0f;
+    float _lastMouseY = 0.0f;
 
     Result<void> createWindow(int width, int height, const std::string& title) override {
         _width = width;
@@ -85,30 +235,36 @@ public:
 
     void runMainLoop(MainLoopCallback callback) override {
         _mainLoopCallback = std::move(callback);
-        // Use emscripten_set_main_loop_arg instead of request_animation_frame_loop
-        // 0 = use browser's requestAnimationFrame, false = don't simulate infinite loop
-        emscripten_set_main_loop_arg(mainLoopTrampoline, this, 0, true);
+        // 1 = 1 FPS default to reduce log output; use OSC 666671 to increase
+        emscripten_set_main_loop_arg(mainLoopTrampoline, this, 1, true);
     }
 
-private:
-    static void mainLoopTrampoline(void* userData) {
+    void requestRender() override {
+        if (_renderPending) return;
+        _renderPending = true;
+        emscripten_request_animation_frame(renderCallback, this);
+    }
+
+    static EM_BOOL renderCallback(double, void* userData) {
         auto* self = static_cast<WebPlatform*>(userData);
+        self->_renderPending = false;
         if (self->_mainLoopCallback) {
-            bool continueLoop = self->_mainLoopCallback();
-            if (!continueLoop) {
-                emscripten_cancel_main_loop();
-            }
+            self->_mainLoopCallback();
         }
+        return EM_FALSE;  // Don't repeat
     }
-
-    MainLoopCallback _mainLoopCallback;
 
     void setKeyCallback(KeyCallback cb) override { _keyCallback = std::move(cb); }
     void setCharCallback(CharCallback cb) override { _charCallback = std::move(cb); }
     void setMouseButtonCallback(MouseButtonCallback cb) override { _mouseButtonCallback = std::move(cb); }
     void setMouseMoveCallback(MouseMoveCallback cb) override { _mouseMoveCallback = std::move(cb); }
     void setScrollCallback(ScrollCallback cb) override { _scrollCallback = std::move(cb); }
-    void setResizeCallback(ResizeCallback cb) override { _resizeCallback = std::move(cb); }
+    void setResizeCallback(ResizeCallback cb) override {
+        _resizeCallback = cb;
+        g_globalResizeCallback = std::move(cb);  // Store globally for JS interop
+        g_platformWidthPtr = &_width;  // Allow JS interop to update dimensions
+        g_platformHeightPtr = &_height;
+    }
     void setFocusCallback(FocusCallback cb) override { _focusCallback = std::move(cb); }
 
     std::string getClipboardText() const override {
@@ -144,28 +300,77 @@ private:
         return "";
     }
 
-    // Shell stubs - web doesn't have PTY, uses toybox via JS
-    // Note: These are not virtual in Platform base class, so no override
-    Result<void> startShell(const std::vector<std::string>& envVars, int cols, int rows) {
-        (void)envVars; (void)cols; (void)rows;
-        return Ok();
+    Result<std::shared_ptr<PTYProvider>> createPTY() override {
+        return Ok(std::static_pointer_cast<PTYProvider>(std::make_shared<WebPTY>()));
     }
-    void stopShell() {}
-    void writeToShell(const char* data, size_t len) { (void)data; (void)len; }
-    void resizeShell(int cols, int rows) { (void)cols; (void)rows; }
-    void setShellOutputCallback(std::function<void(const char*, size_t)> cb) { (void)cb; }
-    bool isShellRunning() const { return false; }
 
 private:
+    static void mainLoopTrampoline(void* userData) {
+        auto* self = static_cast<WebPlatform*>(userData);
+        if (self->_mainLoopCallback) {
+            bool continueLoop = self->_mainLoopCallback();
+            if (!continueLoop) {
+                emscripten_cancel_main_loop();
+            }
+        }
+    }
+
+    // Map browser keyCode to GLFW key code
+    static int browserToGLFWKey(int keyCode) {
+        switch (keyCode) {
+            case 13: return 257;   // Enter -> GLFW_KEY_ENTER
+            case 8:  return 259;   // Backspace -> GLFW_KEY_BACKSPACE
+            case 9:  return 258;   // Tab -> GLFW_KEY_TAB
+            case 27: return 256;   // Escape -> GLFW_KEY_ESCAPE
+            case 38: return 265;   // ArrowUp -> GLFW_KEY_UP
+            case 40: return 264;   // ArrowDown -> GLFW_KEY_DOWN
+            case 37: return 263;   // ArrowLeft -> GLFW_KEY_LEFT
+            case 39: return 262;   // ArrowRight -> GLFW_KEY_RIGHT
+            case 36: return 268;   // Home -> GLFW_KEY_HOME
+            case 35: return 269;   // End -> GLFW_KEY_END
+            case 33: return 266;   // PageUp -> GLFW_KEY_PAGE_UP
+            case 34: return 267;   // PageDown -> GLFW_KEY_PAGE_DOWN
+            case 45: return 260;   // Insert -> GLFW_KEY_INSERT
+            case 46: return 261;   // Delete -> GLFW_KEY_DELETE
+            case 112: return 290;  // F1 -> GLFW_KEY_F1
+            case 113: return 291;  // F2
+            case 114: return 292;  // F3
+            case 115: return 293;  // F4
+            case 116: return 294;  // F5
+            case 117: return 295;  // F6
+            case 118: return 296;  // F7
+            case 119: return 297;  // F8
+            case 120: return 298;  // F9
+            case 121: return 299;  // F10
+            case 122: return 300;  // F11
+            case 123: return 301;  // F12
+            case 16: return 340;   // Shift -> GLFW_KEY_LEFT_SHIFT
+            case 17: return 341;   // Control -> GLFW_KEY_LEFT_CONTROL
+            case 18: return 342;   // Alt -> GLFW_KEY_LEFT_ALT
+            default: return keyCode; // Pass through for letters/numbers
+        }
+    }
+
     static EM_BOOL keyCallback(int eventType, const EmscriptenKeyboardEvent* e, void* userData) {
         auto* self = static_cast<WebPlatform*>(userData);
+
+        // Track modifier key state for scroll events
+        // Browser keyCode: 16=Shift, 17=Ctrl
+        if (e->keyCode == 17) {
+            self->_ctrlPressed = (eventType == EMSCRIPTEN_EVENT_KEYDOWN);
+        }
+        if (e->keyCode == 16) {
+            self->_shiftPressed = (eventType == EMSCRIPTEN_EVENT_KEYDOWN);
+        }
+
         if (self->_keyCallback) {
             KeyAction action = (eventType == EMSCRIPTEN_EVENT_KEYDOWN) ? KeyAction::Press : KeyAction::Release;
             int mods = 0;
             if (e->ctrlKey) mods |= 0x0002;  // GLFW_MOD_CONTROL
             if (e->shiftKey) mods |= 0x0001; // GLFW_MOD_SHIFT
             if (e->altKey) mods |= 0x0004;   // GLFW_MOD_ALT
-            self->_keyCallback(e->keyCode, 0, action, mods);
+            int glfwKey = browserToGLFWKey(e->keyCode);
+            self->_keyCallback(glfwKey, 0, action, mods);
         }
         if (self->_charCallback && eventType == EMSCRIPTEN_EVENT_KEYDOWN && e->key[0] && !e->key[1]) {
             // Single character key
@@ -189,6 +394,9 @@ private:
     static EM_BOOL mouseMoveCallback(int eventType, const EmscriptenMouseEvent* e, void* userData) {
         (void)eventType;
         auto* self = static_cast<WebPlatform*>(userData);
+        // Track mouse position for scroll events
+        self->_lastMouseX = static_cast<float>(e->targetX);
+        self->_lastMouseY = static_cast<float>(e->targetY);
         if (self->_mouseMoveCallback) {
             self->_mouseMoveCallback(e->targetX, e->targetY);
         }
@@ -198,20 +406,72 @@ private:
     static EM_BOOL wheelCallback(int eventType, const EmscriptenWheelEvent* e, void* userData) {
         (void)eventType;
         auto* self = static_cast<WebPlatform*>(userData);
+
+        // Sync modifier state from wheel event to ensure zoom/scroll works correctly.
+        // Browser may not send separate keydown events before wheel events.
+        if (self->_keyCallback) {
+            bool ctrlNow = e->mouse.ctrlKey;
+            bool shiftNow = e->mouse.shiftKey;
+
+            // Synthesize key events when modifier state changes
+            if (ctrlNow != self->_ctrlPressed) {
+                self->_ctrlPressed = ctrlNow;
+                int mods = (shiftNow ? 0x0001 : 0) | (ctrlNow ? 0x0002 : 0) | (e->mouse.altKey ? 0x0004 : 0);
+                self->_keyCallback(341, 0, ctrlNow ? KeyAction::Press : KeyAction::Release, mods);  // GLFW_KEY_LEFT_CONTROL
+            }
+            if (shiftNow != self->_shiftPressed) {
+                self->_shiftPressed = shiftNow;
+                int mods = (shiftNow ? 0x0001 : 0) | (ctrlNow ? 0x0002 : 0) | (e->mouse.altKey ? 0x0004 : 0);
+                self->_keyCallback(340, 0, shiftNow ? KeyAction::Press : KeyAction::Release, mods);  // GLFW_KEY_LEFT_SHIFT
+            }
+        }
+
         if (self->_scrollCallback) {
-            self->_scrollCallback(e->deltaX, e->deltaY);
+            // Normalize wheel delta to match GLFW's ~1.0 per scroll notch
+            // Browser deltaMode: 0=pixel (~100/notch), 1=line (~3/notch), 2=page (~1/notch)
+            double dx = e->deltaX;
+            double dy = e->deltaY;
+            switch (e->deltaMode) {
+                case 0:  // DOM_DELTA_PIXEL - normalize ~100 pixels to ~1.0
+                    dx /= 100.0;
+                    dy /= 100.0;
+                    break;
+                case 1:  // DOM_DELTA_LINE - normalize ~3 lines to ~1.0
+                    dx /= 3.0;
+                    dy /= 3.0;
+                    break;
+                case 2:  // DOM_DELTA_PAGE - already ~1.0
+                    break;
+            }
+            self->_scrollCallback(dx, dy);
         }
         return EM_TRUE;
     }
 
     static EM_BOOL resizeCallback(int eventType, const EmscriptenUiEvent* e, void* userData) {
         (void)eventType;
+        (void)e;
         auto* self = static_cast<WebPlatform*>(userData);
-        self->_width = e->windowInnerWidth;
-        self->_height = e->windowInnerHeight;
-        emscripten_set_canvas_element_size("#canvas", self->_width, self->_height);
+
+        // Get actual canvas container size (not window inner size - wrong when devtools open)
+        int width = EM_ASM_INT({
+            var container = document.getElementById('canvas-container');
+            return container ? Math.floor(container.getBoundingClientRect().width) : 0;
+        });
+        int height = EM_ASM_INT({
+            var container = document.getElementById('canvas-container');
+            return container ? Math.floor(container.getBoundingClientRect().height) : 0;
+        });
+
+        if (width <= 0 || height <= 0) return EM_TRUE;
+        if (width == self->_width && height == self->_height) return EM_TRUE;
+
+        self->_width = width;
+        self->_height = height;
+        emscripten_set_canvas_element_size("#canvas", width, height);
+
         if (self->_resizeCallback) {
-            self->_resizeCallback(self->_width, self->_height);
+            self->_resizeCallback(width, height);
         }
         return EM_TRUE;
     }
@@ -219,6 +479,8 @@ private:
     int _width = 0;
     int _height = 0;
     std::string _title;
+    MainLoopCallback _mainLoopCallback;
+    bool _renderPending = false;
 
     // Callbacks
     KeyCallback _keyCallback;
@@ -241,12 +503,20 @@ Result<Platform::Ptr> Platform::create() {
 
 // =============================================================================
 // Exported C functions for JavaScript interop
-// Write to GPUScreen via GPUScreenManager (no globals needed)
 // =============================================================================
 
 extern "C" {
 
-// Write data to terminal (from JavaScript)
+// Called from JavaScript when data arrives from JSLinux iframe
+EMSCRIPTEN_KEEPALIVE
+void webpty_on_data(uint32_t ptyId, const char* data, int len) {
+    auto it = yetty::g_ptyInstances.find(ptyId);
+    if (it != yetty::g_ptyInstances.end()) {
+        it->second->onDataFromEmulator(data, static_cast<size_t>(len));
+    }
+}
+
+// Write data to terminal (from JavaScript) - legacy, kept for compatibility
 EMSCRIPTEN_KEEPALIVE
 void yetty_write(const char* data, int len) {
     if (len <= 0) return;
@@ -257,79 +527,113 @@ void yetty_write(const char* data, int len) {
     auto screens = (*mgrResult)->screens();
     if (screens.empty()) return;
 
-    // Write to first screen (typically only one on web)
     screens[0]->write(data, static_cast<size_t>(len));
 }
 
-// Handle key press
-EMSCRIPTEN_KEEPALIVE 
+EMSCRIPTEN_KEEPALIVE
 void yetty_key(int key, int mods) {
     (void)key; (void)mods;
-    // TODO: Connect to input handling
 }
 
-// Handle special key (arrow keys, etc.)
 EMSCRIPTEN_KEEPALIVE
 void yetty_special_key(int key, int mods) {
     (void)key; (void)mods;
-    // TODO: Connect to input handling
 }
 
-// Read input from terminal (for toybox stdin)
 EMSCRIPTEN_KEEPALIVE
 int yetty_read_input(char* buffer, int maxLen) {
     (void)buffer; (void)maxLen;
     return 0;
 }
 
-// Sync terminal display
 EMSCRIPTEN_KEEPALIVE
 void yetty_sync() {
-    // Render loop handles display updates
 }
 
-// Set content scale
 EMSCRIPTEN_KEEPALIVE
 void yetty_set_scale(float scaleX, float scaleY) {
     (void)scaleX; (void)scaleY;
 }
 
-// Resize terminal
 EMSCRIPTEN_KEEPALIVE
 void yetty_resize(int cols, int rows) {
     auto mgr = yetty::GPUScreenManager::instance();
     if (!mgr) return;
-    
+
     auto screens = (*mgr)->screens();
     if (!screens.empty()) {
         screens[0]->resize(static_cast<uint32_t>(cols), static_cast<uint32_t>(rows));
     }
 }
 
-// Get terminal columns
 EMSCRIPTEN_KEEPALIVE
 int yetty_get_cols() {
     auto mgr = yetty::GPUScreenManager::instance();
     if (!mgr) return 80;
-    
+
     auto screens = (*mgr)->screens();
     if (screens.empty()) return 80;
-    
+
     return static_cast<int>(screens[0]->getCols());
 }
 
-// Get terminal rows
 EMSCRIPTEN_KEEPALIVE
 int yetty_get_rows() {
     auto mgr = yetty::GPUScreenManager::instance();
     if (!mgr) return 24;
-    
+
     auto screens = (*mgr)->screens();
     if (screens.empty()) return 24;
-    
+
     return static_cast<int>(screens[0]->getRows());
 }
 
+// Called from JavaScript when canvas container is resized (e.g., devtools open/close)
+EMSCRIPTEN_KEEPALIVE
+void yetty_handle_resize(int width, int height) {
+    if (width <= 0 || height <= 0) return;
+    // Avoid redundant resize calls
+    if (width == yetty::g_lastCanvasWidth && height == yetty::g_lastCanvasHeight) return;
+    yetty::g_lastCanvasWidth = width;
+    yetty::g_lastCanvasHeight = height;
+
+
+    // Update platform's internal dimensions (used by getWindowSize/getFramebufferSize)
+    if (yetty::g_platformWidthPtr) *yetty::g_platformWidthPtr = width;
+    if (yetty::g_platformHeightPtr) *yetty::g_platformHeightPtr = height;
+
+    // Update canvas element size
+    emscripten_set_canvas_element_size("#canvas", width, height);
+
+    // Call the resize callback (which reconfigures WebGPU surface)
+    if (yetty::g_globalResizeCallback) {
+        yetty::g_globalResizeCallback(width, height);
+    }
+}
+
 } // extern "C"
+
+// Initialize message listener at startup
+static struct WebPTYInit {
+    WebPTYInit() {
+        EM_ASM({
+            window.addEventListener('message', function(e) {
+                if (e.data && e.data.type === 'term-output' && e.data.ptyId) {
+                    var data = e.data.data;
+                    var ptyId = parseInt(e.data.ptyId, 10);
+                    if (isNaN(ptyId)) {
+                        return;
+                    }
+                    var encoder = new TextEncoder();
+                    var bytes = encoder.encode(data);
+                    var ptr = Module._malloc(bytes.length);
+                    Module.HEAPU8.set(bytes, ptr);
+                    Module._webpty_on_data(ptyId, ptr, bytes.length);
+                    Module._free(ptr);
+                }
+            });
+        });
+    }
+} g_webPtyInit;
 
 #endif // __EMSCRIPTEN__

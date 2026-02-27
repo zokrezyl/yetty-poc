@@ -6,22 +6,14 @@
 #include <yetty/base/factory.h>
 #include <yetty/card.h>
 #include <yetty/yetty-context.h>
+#include "../../ygrid/ygrid.h"
 
 namespace yetty::card {
 
-// Wire protocol cell (12 bytes) - same layout as Cell but glyph = UTF codepoint
-struct GridCell {
-    uint32_t codepoint;    // Unicode codepoint (NOT glyph index)
-    uint8_t fgR, fgG, fgB, alpha;
-    uint8_t bgR, bgG, bgB, style;
-};
-static_assert(sizeof(GridCell) == 12, "GridCell must be 12 bytes");
-
-// YGRD wire format magic
-static constexpr uint32_t YGRD_MAGIC = 0x59475244; // "YGRD"
-
-// YGRD flags
-static constexpr uint16_t YGRD_FLAG_FULL = 0x0001;
+// Re-export wire format types from business logic module
+using GridCell = ygrid::WireCell;
+static constexpr uint32_t YGRD_MAGIC = ygrid::YGRD_MAGIC;
+static constexpr uint16_t YGRD_FLAG_FULL = ygrid::YGRD_FLAG_FULL;
 
 class YGrid : public Card, public base::ObjectFactory<YGrid> {
 public:

@@ -1,6 +1,10 @@
 # Shared zoo rendering logic (used by ydraw-zoo card and standalone tools)
-target_sources(yetty PRIVATE
+set(YETTY_ZOO_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/zoo-renderer.h
     ${CMAKE_CURRENT_SOURCE_DIR}/zoo-renderer.cpp
+    PARENT_SCOPE
 )
-target_include_directories(yetty PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set(YETTY_ZOO_INCLUDES
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    PARENT_SCOPE
+)
