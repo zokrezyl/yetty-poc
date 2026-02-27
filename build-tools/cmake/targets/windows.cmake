@@ -3,21 +3,19 @@
 include(${YETTY_ROOT}/build-tools/cmake/targets/shared.cmake)
 
 # Windows-specific libraries
-include(${YETTY_ROOT}/build-tools/cmake/libs/args.cmake)
-include(${YETTY_ROOT}/build-tools/cmake/libs/lz4.cmake)
-include(${YETTY_ROOT}/build-tools/cmake/libs/libuv.cmake)
 include(${YETTY_ROOT}/build-tools/cmake/libs/glfw.cmake)
-include(${YETTY_ROOT}/build-tools/cmake/libs/imgui.cmake)
 
 # Add src/yetty (builds libraries)
 add_subdirectory(${YETTY_ROOT}/src/yetty ${CMAKE_BINARY_DIR}/src/yetty)
+
+# Desktop-specific subdirectories
+add_subdirectory(${YETTY_ROOT}/src/yetty/gpu ${CMAKE_BINARY_DIR}/src/yetty/gpu)
 
 # Create executable with core sources + platform
 add_executable(yetty
     ${YETTY_CORE_SOURCES}
     ${YETTY_DESKTOP_SOURCES}
     ${YETTY_ROOT}/src/yetty/platform/windows-platform.cpp
-    ${YETTY_ROOT}/src/yetty/msdf-gen/generator.cpp
 )
 
 target_include_directories(yetty PRIVATE ${YETTY_INCLUDES} ${YETTY_RENDERER_INCLUDES})

@@ -2,11 +2,6 @@
 
 include(${YETTY_ROOT}/build-tools/cmake/targets/shared.cmake)
 
-# Android-specific libraries
-include(${YETTY_ROOT}/build-tools/cmake/libs/lz4.cmake)
-include(${YETTY_ROOT}/build-tools/cmake/libs/libuv.cmake)
-include(${YETTY_ROOT}/build-tools/cmake/libs/imgui.cmake)
-
 # native_app_glue from Android NDK
 add_library(native_app_glue STATIC
     ${ANDROID_NDK}/sources/android/native_app_glue/android_native_app_glue.c

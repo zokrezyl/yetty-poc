@@ -2,10 +2,6 @@
 
 include(${YETTY_ROOT}/build-tools/cmake/targets/shared.cmake)
 
-# WebAssembly-specific libraries
-include(${YETTY_ROOT}/build-tools/cmake/libs/imgui.cmake)
-include(${YETTY_ROOT}/build-tools/cmake/libs/lz4.cmake)
-
 # CDB font generation (builds host tools automatically)
 include(${YETTY_ROOT}/build-tools/cmake/cdb-gen.cmake)
 

@@ -2,6 +2,10 @@
 # Include this before platform-specific target files
 
 # Common libraries needed by all platforms
+include(${YETTY_ROOT}/build-tools/cmake/libs/args.cmake)
+include(${YETTY_ROOT}/build-tools/cmake/libs/lz4.cmake)
+include(${YETTY_ROOT}/build-tools/cmake/libs/libuv.cmake)
+include(${YETTY_ROOT}/build-tools/cmake/libs/imgui.cmake)
 include(${YETTY_ROOT}/build-tools/cmake/libs/glm.cmake)
 include(${YETTY_ROOT}/build-tools/cmake/libs/stb.cmake)
 include(${YETTY_ROOT}/build-tools/cmake/libs/yaml-cpp.cmake)

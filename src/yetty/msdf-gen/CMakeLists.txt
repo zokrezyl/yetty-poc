@@ -1,3 +1,9 @@
+# MSDF generator sources (used by yetty executable)
+set(YETTY_MSDF_GEN_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/generator.cpp
+    PARENT_SCOPE
+)
+
 # MSDF generator tool - works on all platforms via CdbWriter wrapper
 add_executable(yetty-msdf-gen
     main.cpp

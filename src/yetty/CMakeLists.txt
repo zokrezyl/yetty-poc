@@ -4,6 +4,8 @@
 add_subdirectory(ydraw-zoo)
 add_subdirectory(ydraw-maze)
 add_subdirectory(cards/ygrid)
+add_subdirectory(msdf-gen)
+add_subdirectory(rpc)
 
 # Core sources - ALL sources needed for yetty executable
 set(YETTY_CORE_SOURCES
@@ -48,9 +50,11 @@ set(YETTY_CORE_SOURCES
     PARENT_SCOPE
 )
 
-# Desktop-only sources
+# Desktop-only sources (Linux, macOS, Windows)
 set(YETTY_DESKTOP_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/msdf-cdb-provider.cpp
+    ${YETTY_MSDF_GEN_SOURCES}
+    ${YETTY_RPC_SOURCES}
     PARENT_SCOPE
 )
 
@@ -67,7 +71,7 @@ set(YETTY_RENDERER_INCLUDES
     PARENT_SCOPE
 )
 
-# Subdirectories that build libraries
+# Subdirectories that build libraries (common to all platforms)
 add_subdirectory(base)
 add_subdirectory(font)
 add_subdirectory(yecho)
@@ -78,14 +82,3 @@ add_subdirectory(cards)
 add_subdirectory(yast)
 add_subdirectory(msdf-wgsl)
 add_subdirectory(shaders)
-
-# Desktop-only subdirectories
-if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
-    add_subdirectory(gpu)
-    add_subdirectory(msdf-gen)
-    if(NOT WIN32)
-        add_subdirectory(rpc)
-        add_subdirectory(client)
-        add_subdirectory(ytop)
-    endif()
-endif()
