@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <cerrno>
 
 namespace yetty::vnc {
 
@@ -85,13 +86,7 @@ void VncServer::stop() {
         _acceptThread.join();
     }
 
-    // Join all input threads
-    for (auto& t : _inputThreads) {
-        if (t.joinable()) {
-            t.join();
-        }
-    }
-    _inputThreads.clear();
+    _clientInputBuffers.clear();
 }
 
 void VncServer::acceptLoop() {
@@ -109,6 +104,10 @@ void VncServer::acceptLoop() {
         int flag = 1;
         setsockopt(clientFd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
 
+        // Set non-blocking for input polling
+        int flags = fcntl(clientFd, F_GETFL, 0);
+        fcntl(clientFd, F_SETFL, flags | O_NONBLOCK);
+
         char clientIp[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &clientAddr.sin_addr, clientIp, sizeof(clientIp));
         yinfo("VNC client connected from {}", clientIp);
@@ -117,10 +116,8 @@ void VncServer::acceptLoop() {
             std::lock_guard<std::mutex> lock(_clientsMutex);
             _clients.push_back(clientFd);
             _clientCount = _clients.size();
+            _clientInputBuffers[clientFd] = ClientInputBuffer{};
         }
-
-        // Start input receiving thread for this client
-        _inputThreads.emplace_back(&VncServer::clientInputLoop, this, clientFd);
     }
 }
 
@@ -397,6 +394,7 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, uint32_t width, uint32_t 
         for (int fd : deadClients) {
             close(fd);
             _clients.erase(std::remove(_clients.begin(), _clients.end(), fd), _clients.end());
+            _clientInputBuffers.erase(fd);
             yinfo("VNC client disconnected");
         }
         _clientCount = _clients.size();
@@ -405,99 +403,109 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, uint32_t width, uint32_t 
     return Ok();
 }
 
-void VncServer::clientInputLoop(int clientFd) {
-    std::vector<uint8_t> buf(1024);
+void VncServer::pollClientInput(int clientFd) {
+    auto it = _clientInputBuffers.find(clientFd);
+    if (it == _clientInputBuffers.end()) return;
 
-    while (_running) {
-        // Read input header
-        InputHeader hdr;
-        ssize_t n = recv(clientFd, &hdr, sizeof(hdr), MSG_WAITALL);
-        if (n != sizeof(hdr)) {
-            break;  // Client disconnected or error
+    ClientInputBuffer& buf = it->second;
+
+    // Non-blocking read
+    while (true) {
+        size_t toRead = buf.needed - buf.buffer.size();
+        if (toRead == 0) break;
+
+        uint8_t tmp[256];
+        ssize_t n = recv(clientFd, tmp, std::min(toRead, sizeof(tmp)), MSG_DONTWAIT);
+        if (n <= 0) {
+            if (n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK)) {
+                // Client disconnected or error - will be cleaned up in sendFrame
+            }
+            break;  // No more data available
         }
 
-        // Read event data
-        if (hdr.data_size > 0 && hdr.data_size <= 1024) {
-            if (buf.size() < hdr.data_size) {
-                buf.resize(hdr.data_size);
-            }
-            n = recv(clientFd, buf.data(), hdr.data_size, MSG_WAITALL);
-            if (n != (ssize_t)hdr.data_size) {
-                break;
-            }
+        buf.buffer.insert(buf.buffer.end(), tmp, tmp + n);
 
-            // Queue the event
-            {
-                std::lock_guard<std::mutex> lock(_inputMutex);
-                InputEvent evt;
-                evt.type = static_cast<InputType>(hdr.type);
-                evt.data.assign(buf.begin(), buf.begin() + hdr.data_size);
-                _pendingInputEvents.push(std::move(evt));
+        // Check if we have enough data
+        if (buf.buffer.size() >= buf.needed) {
+            if (buf.readingHeader) {
+                // Parse header
+                std::memcpy(&buf.header, buf.buffer.data(), sizeof(InputHeader));
+                buf.buffer.clear();
+                buf.needed = buf.header.data_size;
+                buf.readingHeader = false;
+
+                if (buf.needed == 0) {
+                    // No data, dispatch immediately
+                    dispatchInput(buf.header, nullptr);
+                    buf.needed = sizeof(InputHeader);
+                    buf.readingHeader = true;
+                }
+            } else {
+                // Dispatch event
+                dispatchInput(buf.header, buf.buffer.data());
+                buf.buffer.clear();
+                buf.needed = sizeof(InputHeader);
+                buf.readingHeader = true;
             }
         }
+    }
+}
+
+void VncServer::dispatchInput(const InputHeader& hdr, const uint8_t* data) {
+    switch (static_cast<InputType>(hdr.type)) {
+        case InputType::MOUSE_MOVE:
+            if (data && hdr.data_size >= sizeof(MouseMoveEvent) && onMouseMove) {
+                const MouseMoveEvent* m = reinterpret_cast<const MouseMoveEvent*>(data);
+                onMouseMove(m->x, m->y);
+            }
+            break;
+
+        case InputType::MOUSE_BUTTON:
+            if (data && hdr.data_size >= sizeof(MouseButtonEvent) && onMouseButton) {
+                const MouseButtonEvent* m = reinterpret_cast<const MouseButtonEvent*>(data);
+                onMouseButton(m->x, m->y, static_cast<MouseButton>(m->button), m->pressed != 0);
+            }
+            break;
+
+        case InputType::MOUSE_SCROLL:
+            if (data && hdr.data_size >= sizeof(MouseScrollEvent) && onMouseScroll) {
+                const MouseScrollEvent* m = reinterpret_cast<const MouseScrollEvent*>(data);
+                onMouseScroll(m->x, m->y, m->delta_x, m->delta_y);
+            }
+            break;
+
+        case InputType::KEY_DOWN:
+            if (data && hdr.data_size >= sizeof(KeyEvent) && onKeyDown) {
+                const KeyEvent* k = reinterpret_cast<const KeyEvent*>(data);
+                onKeyDown(k->keycode, k->scancode, k->mods);
+            }
+            break;
+
+        case InputType::KEY_UP:
+            if (data && hdr.data_size >= sizeof(KeyEvent) && onKeyUp) {
+                const KeyEvent* k = reinterpret_cast<const KeyEvent*>(data);
+                onKeyUp(k->keycode, k->scancode, k->mods);
+            }
+            break;
+
+        case InputType::TEXT_INPUT:
+            if (data && hdr.data_size > 0 && onTextInput) {
+                std::string text(reinterpret_cast<const char*>(data), hdr.data_size);
+                onTextInput(text);
+            }
+            break;
     }
 }
 
 bool VncServer::hasPendingInput() const {
-    // Note: this is a non-locking check, may have race but acceptable
-    return !_pendingInputEvents.empty();
+    return false;  // Input is processed immediately now
 }
 
 void VncServer::processInput() {
-    std::queue<InputEvent> events;
-    {
-        std::lock_guard<std::mutex> lock(_inputMutex);
-        std::swap(events, _pendingInputEvents);
-    }
-
-    while (!events.empty()) {
-        const InputEvent& evt = events.front();
-
-        switch (evt.type) {
-            case InputType::MOUSE_MOVE:
-                if (evt.data.size() >= sizeof(MouseMoveEvent) && onMouseMove) {
-                    const MouseMoveEvent* m = reinterpret_cast<const MouseMoveEvent*>(evt.data.data());
-                    onMouseMove(m->x, m->y);
-                }
-                break;
-
-            case InputType::MOUSE_BUTTON:
-                if (evt.data.size() >= sizeof(MouseButtonEvent) && onMouseButton) {
-                    const MouseButtonEvent* m = reinterpret_cast<const MouseButtonEvent*>(evt.data.data());
-                    onMouseButton(m->x, m->y, static_cast<MouseButton>(m->button), m->pressed != 0);
-                }
-                break;
-
-            case InputType::MOUSE_SCROLL:
-                if (evt.data.size() >= sizeof(MouseScrollEvent) && onMouseScroll) {
-                    const MouseScrollEvent* m = reinterpret_cast<const MouseScrollEvent*>(evt.data.data());
-                    onMouseScroll(m->x, m->y, m->delta_x, m->delta_y);
-                }
-                break;
-
-            case InputType::KEY_DOWN:
-                if (evt.data.size() >= sizeof(KeyEvent) && onKeyDown) {
-                    const KeyEvent* k = reinterpret_cast<const KeyEvent*>(evt.data.data());
-                    onKeyDown(k->keycode, k->scancode, k->mods);
-                }
-                break;
-
-            case InputType::KEY_UP:
-                if (evt.data.size() >= sizeof(KeyEvent) && onKeyUp) {
-                    const KeyEvent* k = reinterpret_cast<const KeyEvent*>(evt.data.data());
-                    onKeyUp(k->keycode, k->scancode, k->mods);
-                }
-                break;
-
-            case InputType::TEXT_INPUT:
-                if (onTextInput && !evt.data.empty()) {
-                    std::string text(reinterpret_cast<const char*>(evt.data.data()), evt.data.size());
-                    onTextInput(text);
-                }
-                break;
-        }
-
-        events.pop();
+    // Poll all clients for input (non-blocking)
+    std::lock_guard<std::mutex> lock(_clientsMutex);
+    for (int fd : _clients) {
+        pollClientInput(fd);
     }
 }
 

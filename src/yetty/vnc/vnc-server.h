@@ -9,7 +9,7 @@
 #include <atomic>
 #include <mutex>
 #include <functional>
-#include <queue>
+#include <unordered_map>
 
 namespace yetty::vnc {
 
@@ -82,18 +82,18 @@ private:
     void detectDirtyTiles();
     Result<void> encodeTile(uint16_t tx, uint16_t ty, std::vector<uint8_t>& outData, Encoding& outEncoding);
 
-    // Input receiving
-    void clientInputLoop(int clientFd);
+    // Input receiving (non-blocking, called from main thread)
+    void pollClientInput(int clientFd);
     void dispatchInput(const InputHeader& hdr, const uint8_t* data);
 
-    // Queued input events for processing on main thread
-    struct InputEvent {
-        InputType type;
-        std::vector<uint8_t> data;
+    // Per-client input buffer for partial reads
+    struct ClientInputBuffer {
+        std::vector<uint8_t> buffer;
+        size_t needed = sizeof(InputHeader);
+        bool readingHeader = true;
+        InputHeader header;
     };
-    std::mutex _inputMutex;
-    std::queue<InputEvent> _pendingInputEvents;
-    std::vector<std::thread> _inputThreads;
+    std::unordered_map<int, ClientInputBuffer> _clientInputBuffers;
 };
 
 } // namespace yetty::vnc

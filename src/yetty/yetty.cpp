@@ -358,13 +358,16 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
         yinfo("VNC server started on port {}", _vncServerPort);
 
         // Set up input callbacks from VNC clients
-        _vncServer->onMouseMove = [this](int16_t x, int16_t y) {
-            auto loop = *base::EventLoop::instance();
-            loop->dispatch(base::Event::mouseMove(static_cast<float>(x), static_cast<float>(y)));
+        _vncServer->onMouseMove = [](int16_t x, int16_t y) {
+            auto loopResult = base::EventLoop::instance();
+            if (!loopResult) return;
+            (*loopResult)->dispatch(base::Event::mouseMove(static_cast<float>(x), static_cast<float>(y)));
         };
 
-        _vncServer->onMouseButton = [this](int16_t x, int16_t y, vnc::MouseButton button, bool pressed) {
-            auto loop = *base::EventLoop::instance();
+        _vncServer->onMouseButton = [](int16_t x, int16_t y, vnc::MouseButton button, bool pressed) {
+            auto loopResult = base::EventLoop::instance();
+            if (!loopResult) return;
+            auto loop = *loopResult;
             int btn = static_cast<int>(button);
             if (pressed) {
                 loop->dispatch(base::Event::mouseDown(static_cast<float>(x), static_cast<float>(y), btn, 0));
@@ -373,24 +376,28 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
             }
         };
 
-        _vncServer->onMouseScroll = [this](int16_t x, int16_t y, int16_t dx, int16_t dy) {
-            auto loop = *base::EventLoop::instance();
-            loop->dispatch(base::Event::scrollEvent(
+        _vncServer->onMouseScroll = [](int16_t x, int16_t y, int16_t dx, int16_t dy) {
+            auto loopResult = base::EventLoop::instance();
+            if (!loopResult) return;
+            (*loopResult)->dispatch(base::Event::scrollEvent(
                 static_cast<float>(x), static_cast<float>(y),
                 static_cast<float>(dx), static_cast<float>(dy), 0));
         };
 
-        _vncServer->onKeyDown = [this](uint32_t keycode, uint32_t scancode, uint8_t mods) {
-            auto loop = *base::EventLoop::instance();
-            loop->dispatch(base::Event::keyDown(static_cast<int>(keycode), static_cast<int>(mods), static_cast<int>(scancode)));
+        _vncServer->onKeyDown = [](uint32_t keycode, uint32_t scancode, uint8_t mods) {
+            auto loopResult = base::EventLoop::instance();
+            if (!loopResult) return;
+            (*loopResult)->dispatch(base::Event::keyDown(static_cast<int>(keycode), static_cast<int>(mods), static_cast<int>(scancode)));
         };
 
         _vncServer->onKeyUp = [](uint32_t, uint32_t, uint8_t) {
             // Key up events are not typically used by terminal
         };
 
-        _vncServer->onTextInput = [this](const std::string& text) {
-            auto loop = *base::EventLoop::instance();
+        _vncServer->onTextInput = [](const std::string& text) {
+            auto loopResult = base::EventLoop::instance();
+            if (!loopResult) return;
+            auto loop = *loopResult;
             // Process each codepoint in the UTF-8 string
             for (size_t i = 0; i < text.size(); ) {
                 uint32_t cp = 0;
