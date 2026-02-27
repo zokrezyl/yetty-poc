@@ -151,7 +151,7 @@ jobs:
         -S ${{ github.workspace }}
 
     - name: Build
-      run: cmake --build ${{ steps.strings.outputs.build-output-dir }} --config Release --parallel -- /k
+      run: cmake --build ${{ steps.strings.outputs.build-output-dir }} --config Release --parallel
 
     # - name: Test
     #   working-directory: ${{ steps.strings.outputs.build-output-dir }}
