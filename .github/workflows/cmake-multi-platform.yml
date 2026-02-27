@@ -147,11 +147,12 @@ jobs:
     - name: Configure CMake
       run: >
         cmake -B ${{ steps.strings.outputs.build-output-dir }}
+        -G Ninja
         -DCMAKE_BUILD_TYPE=Release
         -S ${{ github.workspace }}
 
     - name: Build
-      run: cmake --build ${{ steps.strings.outputs.build-output-dir }} --config Release --parallel
+      run: cmake --build ${{ steps.strings.outputs.build-output-dir }} -k 0
 
     # - name: Test
     #   working-directory: ${{ steps.strings.outputs.build-output-dir }}
