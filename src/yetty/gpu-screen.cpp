@@ -818,31 +818,6 @@ void GPUScreenImpl::write(const char *data, size_t len) {
   if (_vterm && len > 0) {
     vterm_input_write(_vterm, data, len);
     requestScreenUpdate();
-    // Debug: show first N chars in statusbar
-    if (_ctx.imguiManager) {
-      std::string dbg(data, len);
-      if (dbg.size() > 20) dbg = dbg.substr(0, 20);
-      for (char& c : dbg) {
-        unsigned char uc = static_cast<unsigned char>(c);
-        if (uc < 32 || uc > 126) c = '.';
-      }
-      _ctx.imguiManager->setDebugVtermText(dbg);
-    }
-#ifdef __EMSCRIPTEN__
-    // Debug: update DOM directly to bypass WebGPU rendering
-    EM_ASM({
-      var el = document.getElementById('dbg-vterm-write');
-      if (el) {
-        var s = UTF8ToString($0, $1);
-        var clean = '';
-        for (var i = 0; i < s.length && i < 15; i++) {
-          var c = s.charCodeAt(i);
-          clean += (c >= 32 && c <= 126) ? s[i] : '.';
-        }
-        el.textContent = clean + ' @ ' + performance.now().toFixed(0);
-      }
-    }, data, len);
-#endif
   }
 }
 

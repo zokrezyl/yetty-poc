@@ -54,10 +54,10 @@ public:
             var cols = $2;
             var rows = $3;
 
-            // Create visible iframe for debugging
+            // Create hidden iframe for JSLinux VM
             var iframe = document.createElement('iframe');
             iframe.id = 'jslinux-pty-' + ptyId;
-            iframe.style.cssText = 'position:fixed;bottom:0;left:0;width:400px;height:80px;border:2px solid #0f0;z-index:9999;background:#000;';
+            iframe.style.cssText = 'display:none;';
             iframe.src = 'jslinux/vm-bridge.html?ptyId=' + ptyId +
                          '&url=' + encodeURIComponent(vmConfig) +
                          '&cols=' + cols + '&rows=' + rows +
@@ -617,34 +617,19 @@ void yetty_handle_resize(int width, int height) {
 static struct WebPTYInit {
     WebPTYInit() {
         EM_ASM({
-            // Create debug div for yetty side events
-            var dbgDiv = document.createElement('div');
-            dbgDiv.id = 'yetty-debug';
-            dbgDiv.style.cssText = 'position:fixed;bottom:85px;left:0;width:400px;background:#000;color:#0f0;font-family:monospace;font-size:12px;padding:4px;z-index:9999;border:2px solid #f00;';
-            dbgDiv.innerHTML = '<div>YETTY MSG: <span id="dbg-yetty-msg">-</span></div><div>YETTY CB: <span id="dbg-yetty-cb">-</span></div><div>VTERM WRITE: <span id="dbg-vterm-write">-</span></div>';
-            document.body.appendChild(dbgDiv);
-
             window.addEventListener('message', function(e) {
                 if (e.data && e.data.type === 'term-output' && e.data.ptyId) {
                     var data = e.data.data;
-                    var ptyId = parseInt(e.data.ptyId, 10);  // Convert string to int
+                    var ptyId = parseInt(e.data.ptyId, 10);
                     if (isNaN(ptyId)) {
                         return;
                     }
-                    // Debug: show message received time
-                    var el = document.getElementById('dbg-yetty-msg');
-                    if (el) el.textContent = data.substring(0,15).split(String.fromCharCode(10)).join('.') + ' @ ' + performance.now().toFixed(0);
-
                     var encoder = new TextEncoder();
                     var bytes = encoder.encode(data);
                     var ptr = Module._malloc(bytes.length);
                     Module.HEAPU8.set(bytes, ptr);
                     Module._webpty_on_data(ptyId, ptr, bytes.length);
                     Module._free(ptr);
-
-                    // Debug: show after callback
-                    var el2 = document.getElementById('dbg-yetty-cb');
-                    if (el2) el2.textContent = 'done @ ' + performance.now().toFixed(0);
                 }
             });
         });

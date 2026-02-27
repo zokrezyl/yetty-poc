@@ -78,8 +78,6 @@ class Term {
     }
 
     write(str) {
-        var el = document.getElementById('dbg-output');
-        if (el) el.textContent = str.substring(0, 20).replace(/\n/g, '\\n') + " @ " + performance.now().toFixed(0) + "ms";
         this._outputBuffer += str;
 
         if (!this._flushPending) {

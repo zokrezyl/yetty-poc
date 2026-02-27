@@ -48,7 +48,6 @@ public:
 
     // Statusbar API
     virtual void setStatusText(const std::string& text) = 0;
-    virtual void setDebugVtermText(const std::string& text) = 0;
     virtual void setFps(uint32_t fps) = 0;
     virtual float getStatusbarHeight() const = 0;
 

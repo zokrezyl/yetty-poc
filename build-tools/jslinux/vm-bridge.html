@@ -34,8 +34,6 @@
         }
 
         function term_handler(str) {
-            var el = document.getElementById('dbg-input');
-            if (el) el.textContent = str + " @ " + performance.now().toFixed(0) + "ms";
             var i;
             for(i = 0; i < str.length; i++) {
                 console_write1(str.charCodeAt(i));
