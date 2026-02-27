@@ -1,8 +1,35 @@
 #include <yetty/rpc/rpc-client.h>
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <winsock2.h>
+#include <afunix.h>
+#include <io.h>
+#pragma comment(lib, "ws2_32.lib")
+using SocketType = SOCKET;
+#define INVALID_SOCK INVALID_SOCKET
+#define CLOSE_SOCKET closesocket
+using ssize_t = int;
+static std::string getSocketError() {
+    int err = WSAGetLastError();
+    char buf[256];
+    FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM, nullptr, err, 0, buf, sizeof(buf), nullptr);
+    return std::string(buf);
+}
+#else
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
+using SocketType = int;
+#define INVALID_SOCK (-1)
+#define CLOSE_SOCKET ::close
+static std::string getSocketError() {
+    return std::string(strerror(errno));
+}
+#endif
+
 #include <cstring>
 #include <atomic>
 #include <mutex>
@@ -10,6 +37,21 @@
 
 namespace yetty {
 namespace rpc {
+
+// ─── Platform initialization ─────────────────────────────────────────────────
+
+#ifdef _WIN32
+struct WinsockInit {
+    WinsockInit() {
+        WSADATA wsaData;
+        WSAStartup(MAKEWORD(2, 2), &wsaData);
+    }
+    ~WinsockInit() {
+        WSACleanup();
+    }
+};
+static WinsockInit s_winsockInit;
+#endif
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -52,8 +94,8 @@ public:
 
     Result<void> connect() override {
         _fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
-        if (_fd < 0) {
-            return Err<void>("RpcClient: socket() failed: " + std::string(strerror(errno)));
+        if (_fd == INVALID_SOCK) {
+            return Err<void>("RpcClient: socket() failed: " + getSocketError());
         }
 
         struct sockaddr_un addr{};
@@ -61,9 +103,9 @@ public:
         std::strncpy(addr.sun_path, _socketPath.c_str(), sizeof(addr.sun_path) - 1);
 
         if (::connect(_fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) < 0) {
-            ::close(_fd);
-            _fd = -1;
-            return Err<void>("RpcClient: connect() failed: " + std::string(strerror(errno)));
+            CLOSE_SOCKET(_fd);
+            _fd = INVALID_SOCK;
+            return Err<void>("RpcClient: connect() failed: " + getSocketError());
         }
 
         _connected = true;
@@ -71,9 +113,9 @@ public:
     }
 
     void disconnect() override {
-        if (_fd >= 0) {
-            ::close(_fd);
-            _fd = -1;
+        if (_fd != INVALID_SOCK) {
+            CLOSE_SOCKET(_fd);
+            _fd = INVALID_SOCK;
             _connected = false;
         }
     }
@@ -302,9 +344,9 @@ private:
         const char* data = buf.data();
         size_t remaining = buf.size();
         while (remaining > 0) {
-            ssize_t n = ::send(_fd, data, remaining, 0);
+            ssize_t n = ::send(_fd, data, static_cast<int>(remaining), 0);
             if (n < 0) {
-                return Err<void>("RpcClient: send() failed: " + std::string(strerror(errno)));
+                return Err<void>("RpcClient: send() failed: " + getSocketError());
             }
             data += n;
             remaining -= static_cast<size_t>(n);
@@ -317,7 +359,7 @@ private:
         unpacker.reserve_buffer(65536);
 
         while (true) {
-            ssize_t n = ::recv(_fd, unpacker.buffer(), unpacker.buffer_capacity(), 0);
+            ssize_t n = ::recv(_fd, unpacker.buffer(), static_cast<int>(unpacker.buffer_capacity()), 0);
             if (n <= 0) {
                 return Err<msgpack::object_handle>("RpcClient: recv() failed");
             }
@@ -354,7 +396,7 @@ private:
     }
 
     std::string _socketPath;
-    int _fd = -1;
+    SocketType _fd = INVALID_SOCK;
     bool _connected = false;
 };
 
