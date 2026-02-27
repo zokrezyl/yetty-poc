@@ -16,7 +16,7 @@ add_subdirectory(${YETTY_ROOT}/src/yetty ${CMAKE_BINARY_DIR}/src/yetty)
 add_executable(yetty
     ${YETTY_CORE_SOURCES}
     ${YETTY_DESKTOP_SOURCES}
-    ${YETTY_ROOT}/src/yetty/platform/glfw-platform.cpp
+    ${YETTY_ROOT}/src/yetty/platform/windows-platform.cpp
     ${YETTY_ROOT}/src/yetty/msdf-gen/generator.cpp
 )
 

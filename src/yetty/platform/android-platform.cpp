@@ -1,5 +1,6 @@
 #include <yetty/platform.h>
 #include <yetty/pty-provider.h>
+#include <yetty/base/event-loop.h>
 #include <ytrace/ytrace.hpp>
 
 #if defined(__ANDROID__)
@@ -129,6 +130,12 @@ public:
     void runMainLoop(MainLoopCallback callback) override {
         // Android: Not used - android_main handles the loop
         (void)callback;
+    }
+
+    void requestRender() override {
+        if (auto loop = base::EventLoop::instance(); loop) {
+            (*loop)->dispatch(base::Event::screenUpdateEvent());
+        }
     }
 
     Result<std::shared_ptr<PTYProvider>> createPTY() override {
