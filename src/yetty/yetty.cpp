@@ -356,6 +356,64 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
             return Err<void>("Failed to start VNC server", res);
         }
         yinfo("VNC server started on port {}", _vncServerPort);
+
+        // Set up input callbacks from VNC clients
+        _vncServer->onMouseMove = [this](int16_t x, int16_t y) {
+            auto loop = *base::EventLoop::instance();
+            loop->dispatch(base::Event::mouseMove(static_cast<float>(x), static_cast<float>(y)));
+        };
+
+        _vncServer->onMouseButton = [this](int16_t x, int16_t y, vnc::MouseButton button, bool pressed) {
+            auto loop = *base::EventLoop::instance();
+            int btn = static_cast<int>(button);
+            if (pressed) {
+                loop->dispatch(base::Event::mouseDown(static_cast<float>(x), static_cast<float>(y), btn, 0));
+            } else {
+                loop->dispatch(base::Event::mouseUp(static_cast<float>(x), static_cast<float>(y), btn, 0));
+            }
+        };
+
+        _vncServer->onMouseScroll = [this](int16_t x, int16_t y, int16_t dx, int16_t dy) {
+            auto loop = *base::EventLoop::instance();
+            loop->dispatch(base::Event::scrollEvent(
+                static_cast<float>(x), static_cast<float>(y),
+                static_cast<float>(dx), static_cast<float>(dy), 0));
+        };
+
+        _vncServer->onKeyDown = [this](uint32_t keycode, uint32_t scancode, uint8_t mods) {
+            auto loop = *base::EventLoop::instance();
+            loop->dispatch(base::Event::keyDown(static_cast<int>(keycode), static_cast<int>(mods), static_cast<int>(scancode)));
+        };
+
+        _vncServer->onKeyUp = [](uint32_t, uint32_t, uint8_t) {
+            // Key up events are not typically used by terminal
+        };
+
+        _vncServer->onTextInput = [this](const std::string& text) {
+            auto loop = *base::EventLoop::instance();
+            // Process each codepoint in the UTF-8 string
+            for (size_t i = 0; i < text.size(); ) {
+                uint32_t cp = 0;
+                uint8_t c = text[i];
+                if ((c & 0x80) == 0) {
+                    cp = c;
+                    i += 1;
+                } else if ((c & 0xE0) == 0xC0 && i + 1 < text.size()) {
+                    cp = ((c & 0x1F) << 6) | (text[i+1] & 0x3F);
+                    i += 2;
+                } else if ((c & 0xF0) == 0xE0 && i + 2 < text.size()) {
+                    cp = ((c & 0x0F) << 12) | ((text[i+1] & 0x3F) << 6) | (text[i+2] & 0x3F);
+                    i += 3;
+                } else if ((c & 0xF8) == 0xF0 && i + 3 < text.size()) {
+                    cp = ((c & 0x07) << 18) | ((text[i+1] & 0x3F) << 12) | ((text[i+2] & 0x3F) << 6) | (text[i+3] & 0x3F);
+                    i += 4;
+                } else {
+                    i++;  // Skip invalid
+                    continue;
+                }
+                loop->dispatch(base::Event::charInput(cp));
+            }
+        };
     }
 
     return Ok();
@@ -1034,6 +1092,22 @@ Result<void> YettyImpl::initCallbacks() noexcept {
     _platform->setKeyCallback([this](int key, int scancode, KeyAction action, int mods) {
         ydebug("KeyCallback: key={} scancode={} action={} mods={}", key, scancode, static_cast<int>(action), mods);
 
+        // Forward to VNC server when in client mode
+        if (_vncClientMode && _vncClient) {
+            uint8_t vncMods = 0;
+            if (mods & 0x0001) vncMods |= vnc::MOD_SHIFT;
+            if (mods & 0x0002) vncMods |= vnc::MOD_CTRL;
+            if (mods & 0x0004) vncMods |= vnc::MOD_ALT;
+            if (mods & 0x0008) vncMods |= vnc::MOD_SUPER;
+
+            if (action == KeyAction::Press || action == KeyAction::Repeat) {
+                _vncClient->sendKeyDown(static_cast<uint32_t>(key), static_cast<uint32_t>(scancode), vncMods);
+            } else if (action == KeyAction::Release) {
+                _vncClient->sendKeyUp(static_cast<uint32_t>(key), static_cast<uint32_t>(scancode), vncMods);
+            }
+            return;  // Don't process locally in client mode
+        }
+
         // Track modifier key state for scroll events
         // GLFW_KEY_LEFT_CONTROL=341, GLFW_KEY_RIGHT_CONTROL=345
         // GLFW_KEY_LEFT_SHIFT=340, GLFW_KEY_RIGHT_SHIFT=344
@@ -1076,6 +1150,33 @@ Result<void> YettyImpl::initCallbacks() noexcept {
     // Char callback
     _platform->setCharCallback([this](unsigned int codepoint) {
         ydebug("CharCallback: codepoint={} ('{}')", codepoint, codepoint < 32 ? '?' : (char)codepoint);
+
+        // Forward to VNC server when in client mode
+        if (_vncClientMode && _vncClient) {
+            // Encode codepoint as UTF-8 and send
+            char utf8[5] = {0};
+            if (codepoint < 0x80) {
+                utf8[0] = static_cast<char>(codepoint);
+                _vncClient->sendTextInput(utf8, 1);
+            } else if (codepoint < 0x800) {
+                utf8[0] = static_cast<char>(0xC0 | (codepoint >> 6));
+                utf8[1] = static_cast<char>(0x80 | (codepoint & 0x3F));
+                _vncClient->sendTextInput(utf8, 2);
+            } else if (codepoint < 0x10000) {
+                utf8[0] = static_cast<char>(0xE0 | (codepoint >> 12));
+                utf8[1] = static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F));
+                utf8[2] = static_cast<char>(0x80 | (codepoint & 0x3F));
+                _vncClient->sendTextInput(utf8, 3);
+            } else {
+                utf8[0] = static_cast<char>(0xF0 | (codepoint >> 18));
+                utf8[1] = static_cast<char>(0x80 | ((codepoint >> 12) & 0x3F));
+                utf8[2] = static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F));
+                utf8[3] = static_cast<char>(0x80 | (codepoint & 0x3F));
+                _vncClient->sendTextInput(utf8, 4);
+            }
+            return;  // Don't process locally in client mode
+        }
+
         uint32_t glyphIdx = codepoint;
         if (auto font = _yettyContext.fontManager->getDefaultMsMsdfFont()) {
             glyphIdx = font->getGlyphIndex(codepoint);
@@ -1094,6 +1195,24 @@ Result<void> YettyImpl::initCallbacks() noexcept {
 
     // Mouse button callback
     _platform->setMouseButtonCallback([this](MouseButton button, bool pressed, int mods) {
+        (void)mods;  // Unused when forwarding
+
+        // Forward to VNC server when in client mode
+        if (_vncClientMode && _vncClient) {
+            vnc::MouseButton vncBtn;
+            switch (button) {
+                case MouseButton::Left: vncBtn = vnc::MouseButton::LEFT; break;
+                case MouseButton::Middle: vncBtn = vnc::MouseButton::MIDDLE; break;
+                case MouseButton::Right: vncBtn = vnc::MouseButton::RIGHT; break;
+                default: vncBtn = vnc::MouseButton::LEFT; break;
+            }
+            _vncClient->sendMouseButton(
+                static_cast<int16_t>(_lastMouseX),
+                static_cast<int16_t>(_lastMouseY),
+                vncBtn, pressed);
+            return;  // Don't process locally in client mode
+        }
+
         // Get current mouse position for event dispatch
         // Note: we track mouse position via move callback, but for now get from window size
         // The actual position is tracked in mouse move events
@@ -1129,12 +1248,29 @@ Result<void> YettyImpl::initCallbacks() noexcept {
         float my = static_cast<float>(ypos) * _contentScaleY;
         _lastMouseX = mx;
         _lastMouseY = my;
+
+        // Forward to VNC server when in client mode
+        if (_vncClientMode && _vncClient) {
+            _vncClient->sendMouseMove(static_cast<int16_t>(mx), static_cast<int16_t>(my));
+            return;  // Don't process locally in client mode
+        }
+
         auto loop = *base::EventLoop::instance();
         loop->dispatch(base::Event::mouseMove(mx, my));
     });
 
     // Scroll callback
     _platform->setScrollCallback([this](double xoffset, double yoffset) {
+        // Forward to VNC server when in client mode
+        if (_vncClientMode && _vncClient) {
+            _vncClient->sendMouseScroll(
+                static_cast<int16_t>(_lastMouseX),
+                static_cast<int16_t>(_lastMouseY),
+                static_cast<int16_t>(xoffset * 120),  // Standard scroll delta
+                static_cast<int16_t>(yoffset * 120));
+            return;  // Don't process locally in client mode
+        }
+
         // Build modifier state from tracked key presses
         // GLFW_MOD_SHIFT = 0x0001, GLFW_MOD_CONTROL = 0x0002
         int mods = 0;
@@ -1428,6 +1564,11 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
     _sharedUniforms.mouseX = _lastMouseX;
     _sharedUniforms.mouseY = _lastMouseY;
     wgpuQueueWriteBuffer(_queue, _sharedUniformBuffer, 0, &_sharedUniforms, sizeof(SharedUniforms));
+
+    // Process VNC input events from remote clients
+    if (_vncServerMode && _vncServer) {
+        _vncServer->processInput();
+    }
 
     // Upload any pending font glyphs (e.g., bold/italic loaded on demand)
     if (_yettyContext.fontManager) {

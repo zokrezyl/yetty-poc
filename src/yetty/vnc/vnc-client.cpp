@@ -387,4 +387,114 @@ Result<void> VncClient::render(WGPURenderPassEncoder pass) {
     return Ok();
 }
 
+void VncClient::sendInput(const void* data, size_t size) {
+    if (!_connected || _socket < 0) return;
+
+    const uint8_t* ptr = static_cast<const uint8_t*>(data);
+    size_t remaining = size;
+    while (remaining > 0 && _connected) {
+        ssize_t sent = send(_socket, ptr, remaining, MSG_NOSIGNAL);
+        if (sent <= 0) {
+            ywarn("VNC: Failed to send input");
+            return;
+        }
+        ptr += sent;
+        remaining -= sent;
+    }
+}
+
+void VncClient::sendMouseMove(int16_t x, int16_t y) {
+    InputHeader hdr = {};
+    hdr.type = static_cast<uint8_t>(InputType::MOUSE_MOVE);
+    hdr.data_size = sizeof(MouseMoveEvent);
+
+    MouseMoveEvent evt = {};
+    evt.x = x;
+    evt.y = y;
+
+    uint8_t buf[sizeof(hdr) + sizeof(evt)];
+    std::memcpy(buf, &hdr, sizeof(hdr));
+    std::memcpy(buf + sizeof(hdr), &evt, sizeof(evt));
+    sendInput(buf, sizeof(buf));
+}
+
+void VncClient::sendMouseButton(int16_t x, int16_t y, MouseButton button, bool pressed) {
+    InputHeader hdr = {};
+    hdr.type = static_cast<uint8_t>(InputType::MOUSE_BUTTON);
+    hdr.data_size = sizeof(MouseButtonEvent);
+
+    MouseButtonEvent evt = {};
+    evt.x = x;
+    evt.y = y;
+    evt.button = static_cast<uint8_t>(button);
+    evt.pressed = pressed ? 1 : 0;
+
+    uint8_t buf[sizeof(hdr) + sizeof(evt)];
+    std::memcpy(buf, &hdr, sizeof(hdr));
+    std::memcpy(buf + sizeof(hdr), &evt, sizeof(evt));
+    sendInput(buf, sizeof(buf));
+}
+
+void VncClient::sendMouseScroll(int16_t x, int16_t y, int16_t deltaX, int16_t deltaY) {
+    InputHeader hdr = {};
+    hdr.type = static_cast<uint8_t>(InputType::MOUSE_SCROLL);
+    hdr.data_size = sizeof(MouseScrollEvent);
+
+    MouseScrollEvent evt = {};
+    evt.x = x;
+    evt.y = y;
+    evt.delta_x = deltaX;
+    evt.delta_y = deltaY;
+
+    uint8_t buf[sizeof(hdr) + sizeof(evt)];
+    std::memcpy(buf, &hdr, sizeof(hdr));
+    std::memcpy(buf + sizeof(hdr), &evt, sizeof(evt));
+    sendInput(buf, sizeof(buf));
+}
+
+void VncClient::sendKeyDown(uint32_t keycode, uint32_t scancode, uint8_t mods) {
+    InputHeader hdr = {};
+    hdr.type = static_cast<uint8_t>(InputType::KEY_DOWN);
+    hdr.data_size = sizeof(KeyEvent);
+
+    KeyEvent evt = {};
+    evt.keycode = keycode;
+    evt.scancode = scancode;
+    evt.mods = mods;
+
+    uint8_t buf[sizeof(hdr) + sizeof(evt)];
+    std::memcpy(buf, &hdr, sizeof(hdr));
+    std::memcpy(buf + sizeof(hdr), &evt, sizeof(evt));
+    sendInput(buf, sizeof(buf));
+}
+
+void VncClient::sendKeyUp(uint32_t keycode, uint32_t scancode, uint8_t mods) {
+    InputHeader hdr = {};
+    hdr.type = static_cast<uint8_t>(InputType::KEY_UP);
+    hdr.data_size = sizeof(KeyEvent);
+
+    KeyEvent evt = {};
+    evt.keycode = keycode;
+    evt.scancode = scancode;
+    evt.mods = mods;
+
+    uint8_t buf[sizeof(hdr) + sizeof(evt)];
+    std::memcpy(buf, &hdr, sizeof(hdr));
+    std::memcpy(buf + sizeof(hdr), &evt, sizeof(evt));
+    sendInput(buf, sizeof(buf));
+}
+
+void VncClient::sendTextInput(const char* text, size_t len) {
+    if (len == 0 || len > 1024) return; // Sanity check
+
+    InputHeader hdr = {};
+    hdr.type = static_cast<uint8_t>(InputType::TEXT_INPUT);
+    hdr.data_size = static_cast<uint16_t>(len);
+
+    std::vector<uint8_t> buf(sizeof(hdr) + len);
+    std::memcpy(buf.data(), &hdr, sizeof(hdr));
+    std::memcpy(buf.data() + sizeof(hdr), text, len);
+    sendInput(buf.data(), buf.size());
+}
+
 } // namespace yetty::vnc

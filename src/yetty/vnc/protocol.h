@@ -29,6 +29,61 @@ struct TileHeader {
     uint32_t data_size;
 };
 
+// Input event types (client -> server)
+enum class InputType : uint8_t {
+    MOUSE_MOVE = 0,
+    MOUSE_BUTTON = 1,
+    MOUSE_SCROLL = 2,
+    KEY_DOWN = 3,
+    KEY_UP = 4,
+    TEXT_INPUT = 5,
+};
+
+enum class MouseButton : uint8_t {
+    LEFT = 0,
+    MIDDLE = 1,
+    RIGHT = 2,
+};
+
+struct InputHeader {
+    uint8_t type;       // InputType
+    uint8_t reserved;
+    uint16_t data_size; // Size of following data
+};
+
+struct MouseMoveEvent {
+    int16_t x;
+    int16_t y;
+};
+
+struct MouseButtonEvent {
+    int16_t x;
+    int16_t y;
+    uint8_t button;     // MouseButton
+    uint8_t pressed;    // 1 = pressed, 0 = released
+};
+
+struct MouseScrollEvent {
+    int16_t x;
+    int16_t y;
+    int16_t delta_x;
+    int16_t delta_y;
+};
+
+struct KeyEvent {
+    uint32_t keycode;   // Platform keycode
+    uint32_t scancode;  // Hardware scancode
+    uint8_t mods;       // Modifier flags (shift, ctrl, alt, etc.)
+};
+
+// Modifier flags for KeyEvent.mods
+constexpr uint8_t MOD_SHIFT = 0x01;
+constexpr uint8_t MOD_CTRL  = 0x02;
+constexpr uint8_t MOD_ALT   = 0x04;
+constexpr uint8_t MOD_SUPER = 0x08;
+
+// Text input event - for unicode text (follows InputHeader, variable length UTF-8)
+
 #pragma pack(pop)
 
 // Calculate tile grid dimensions

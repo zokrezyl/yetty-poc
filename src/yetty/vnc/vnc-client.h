@@ -35,7 +35,16 @@ public:
     // Get the texture view for external rendering
     WGPUTextureView getTextureView() const { return _textureView; }
 
+    // Input forwarding (call from main thread when events occur)
+    void sendMouseMove(int16_t x, int16_t y);
+    void sendMouseButton(int16_t x, int16_t y, MouseButton button, bool pressed);
+    void sendMouseScroll(int16_t x, int16_t y, int16_t deltaX, int16_t deltaY);
+    void sendKeyDown(uint32_t keycode, uint32_t scancode, uint8_t mods);
+    void sendKeyUp(uint32_t keycode, uint32_t scancode, uint8_t mods);
+    void sendTextInput(const char* text, size_t len);
+
 private:
+    void sendInput(const void* data, size_t size);
     void receiveLoop();
     Result<void> processFrame(const FrameHeader& header, const uint8_t* data, size_t size);
     Result<void> decodeTile(const TileHeader& tile, const uint8_t* data);

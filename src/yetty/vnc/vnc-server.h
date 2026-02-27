@@ -8,6 +8,8 @@
 #include <thread>
 #include <atomic>
 #include <mutex>
+#include <functional>
+#include <queue>
 
 namespace yetty::vnc {
 
@@ -25,6 +27,21 @@ public:
     // Capture current frame and send to all clients
     // Call this after rendering to the capture texture
     Result<void> sendFrame(WGPUTexture texture, uint32_t width, uint32_t height);
+
+    // Poll for incoming input events (call from main thread)
+    // Returns true if there are pending events
+    bool hasPendingInput() const;
+
+    // Input event callbacks (set these to receive input from clients)
+    std::function<void(int16_t x, int16_t y)> onMouseMove;
+    std::function<void(int16_t x, int16_t y, MouseButton button, bool pressed)> onMouseButton;
+    std::function<void(int16_t x, int16_t y, int16_t dx, int16_t dy)> onMouseScroll;
+    std::function<void(uint32_t keycode, uint32_t scancode, uint8_t mods)> onKeyDown;
+    std::function<void(uint32_t keycode, uint32_t scancode, uint8_t mods)> onKeyUp;
+    std::function<void(const std::string& text)> onTextInput;
+
+    // Process all pending input events (call from main thread)
+    void processInput();
 
 private:
     void acceptLoop();
@@ -64,6 +81,19 @@ private:
     Result<void> ensureResources(uint32_t width, uint32_t height);
     void detectDirtyTiles();
     Result<void> encodeTile(uint16_t tx, uint16_t ty, std::vector<uint8_t>& outData, Encoding& outEncoding);
+
+    // Input receiving
+    void clientInputLoop(int clientFd);
+    void dispatchInput(const InputHeader& hdr, const uint8_t* data);
+
+    // Queued input events for processing on main thread
+    struct InputEvent {
+        InputType type;
+        std::vector<uint8_t> data;
+    };
+    std::mutex _inputMutex;
+    std::queue<InputEvent> _pendingInputEvents;
+    std::vector<std::thread> _inputThreads;
 };
 
 } // namespace yetty::vnc
