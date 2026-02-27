@@ -9,6 +9,10 @@
     </style>
 </head>
 <body>
+    <div id="debug" style="position:fixed;top:0;left:0;right:0;background:#000;color:#0f0;font-family:monospace;font-size:12px;padding:4px;z-index:9999;">
+        <div>INPUT: <span id="dbg-input">-</span></div>
+        <div>OUTPUT: <span id="dbg-output">-</span></div>
+    </div>
     <div id="term_container"></div>
     <script src="term-bridge.js"></script>
     <script>
@@ -22,12 +26,20 @@
         // Module object - Emscripten will populate this
         var Module = {};
 
+        // Force setTimeout mode (mode 0) instead of rAF for faster input processing in iframe
+        Module.postRun = function() {
+            if (typeof Module.setMainLoopTiming === 'function') {
+                Module.setMainLoopTiming(0, 0);
+            }
+        };
+
         // Logging helper (disabled for production)
         function log(msg) {
         }
 
         function term_handler(str) {
-            log("term_handler called with " + str.length + " chars");
+            var el = document.getElementById('dbg-input');
+            if (el) el.textContent = str + " @ " + performance.now().toFixed(0) + "ms";
             var i;
             for(i = 0; i < str.length; i++) {
                 console_write1(str.charCodeAt(i));

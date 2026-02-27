@@ -371,6 +371,13 @@ public:
         (void)callback;
     }
 
+    void requestRender() override {
+        // Desktop: dispatch ScreenUpdate event directly
+        if (auto loop = base::EventLoop::instance(); loop) {
+            (*loop)->dispatch(base::Event::screenUpdateEvent());
+        }
+    }
+
     Result<std::shared_ptr<PTYProvider>> createPTY() override {
         return Ok(std::static_pointer_cast<PTYProvider>(std::make_shared<ForkPTY>()));
     }

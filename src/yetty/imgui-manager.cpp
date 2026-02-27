@@ -34,6 +34,7 @@ public:
   void addContextMenuItem(const ContextMenuItem &item) override;
   void clearContextMenu() override;
   void setStatusText(const std::string &text) override;
+  void setDebugVtermText(const std::string &text) override;
   void setFps(uint32_t fps) override;
   float getStatusbarHeight() const override { return STATUSBAR_HEIGHT; }
   Result<void> render(WGPURenderPassEncoder pass) override;
@@ -66,6 +67,7 @@ private:
 
   // Statusbar
   std::string _statusText;
+  std::string _debugVtermText;
   uint32_t _fps = 0;
 
   // GPU usage monitoring (sampled periodically, not every frame)
@@ -225,6 +227,10 @@ void ImguiManagerImpl::setStatusText(const std::string &text) {
   _statusText = text;
 }
 
+void ImguiManagerImpl::setDebugVtermText(const std::string &text) {
+  _debugVtermText = text;
+}
+
 void ImguiManagerImpl::setFps(uint32_t fps) {
   _fps = fps;
 }
@@ -359,6 +365,17 @@ Result<void> ImguiManagerImpl::render(WGPURenderPassEncoder pass) {
         ImGui::Text("Ready");
       } else {
         ImGui::Text("%s", _statusText.c_str());
+      }
+
+      // Debug vterm text (after FPS, far right)
+      if (!_debugVtermText.empty()) {
+        float windowWidth = ImGui::GetWindowWidth();
+        std::string vtermLabel = "VT: " + _debugVtermText;
+        float vtermWidth = ImGui::CalcTextSize(vtermLabel.c_str()).x;
+        ImGui::SameLine(windowWidth - vtermWidth - 100.0f);
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 1.0f, 0.0f, 1.0f));
+        ImGui::TextUnformatted(vtermLabel.c_str());
+        ImGui::PopStyleColor();
       }
 
       // Right side: FPS

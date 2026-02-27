@@ -21,6 +21,10 @@ class Term {
         this.keyHandler = null;
         this.ptyId = null;
 
+        // Output buffering for performance
+        this._outputBuffer = '';
+        this._flushPending = false;
+
         // Get ptyId from URL params (set by yetty when creating iframe)
         const params = new URLSearchParams(window.location.search);
         this.ptyId = params.get('ptyId');
@@ -74,14 +78,28 @@ class Term {
     }
 
     write(str) {
-        // Fix garbled UTF-8: JSLinux's _console_write uses String.fromCharCode on raw bytes,
-        // which treats each UTF-8 byte as a separate character. We detect this and reconstruct.
+        var el = document.getElementById('dbg-output');
+        if (el) el.textContent = str.substring(0, 20).replace(/\n/g, '\\n') + " @ " + performance.now().toFixed(0) + "ms";
+        this._outputBuffer += str;
+
+        if (!this._flushPending) {
+            this._flushPending = true;
+            setTimeout(() => this._flushOutput(), 0);
+        }
+    }
+
+    _flushOutput() {
+        this._flushPending = false;
+        if (this._outputBuffer.length === 0) return;
+
+        var str = this._outputBuffer;
+        this._outputBuffer = '';
+
+        // Fix garbled UTF-8: JSLinux's _console_write uses String.fromCharCode on raw bytes
         var fixedStr = str;
         var needsFix = false;
         for (var i = 0; i < str.length; i++) {
             var code = str.charCodeAt(i);
-            // UTF-8 continuation bytes (0x80-0xBF) or lead bytes (0xC0-0xF7) appearing as chars
-            // indicate garbled UTF-8 from String.fromCharCode
             if (code >= 0x80 && code <= 0xF7) {
                 needsFix = true;
                 break;
@@ -89,7 +107,6 @@ class Term {
         }
 
         if (needsFix) {
-            // Convert back to bytes and decode as UTF-8
             var bytes = new Uint8Array(str.length);
             for (var i = 0; i < str.length; i++) {
                 bytes[i] = str.charCodeAt(i) & 0xFF;
@@ -97,13 +114,10 @@ class Term {
             try {
                 fixedStr = new TextDecoder('utf-8').decode(bytes);
             } catch (e) {
-                // If decoding fails, use original
                 fixedStr = str;
             }
         }
 
-        termLog("write: " + fixedStr.substring(0, 50) + (fixedStr.length > 50 ? "..." : ""));
-        // Send output to yetty for rendering
         window.parent.postMessage({
             type: 'term-output',
             ptyId: this.ptyId,

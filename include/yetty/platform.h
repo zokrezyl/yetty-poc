@@ -79,6 +79,11 @@ public:
     // - Web: Uses emscripten_request_animation_frame_loop
     virtual void runMainLoop(MainLoopCallback callback) = 0;
 
+    // Request a render on next frame (for on-demand rendering)
+    // - Desktop: Calls main loop callback immediately
+    // - Web: Schedules via requestAnimationFrame, coalesces multiple requests
+    virtual void requestRender() = 0;
+
     // Input callbacks
     virtual void setKeyCallback(KeyCallback cb) = 0;
     virtual void setCharCallback(CharCallback cb) = 0;
