@@ -452,6 +452,7 @@ void VncServer::pollClientInput(int clientFd) {
 }
 
 void VncServer::dispatchInput(const InputHeader& hdr, const uint8_t* data) {
+    yinfo("VNC: dispatchInput type={} size={}", hdr.type, hdr.data_size);
     switch (static_cast<InputType>(hdr.type)) {
         case InputType::MOUSE_MOVE:
             if (data && hdr.data_size >= sizeof(MouseMoveEvent) && onMouseMove) {
@@ -505,6 +506,7 @@ void VncServer::processInput() {
     // Poll all clients for input (non-blocking)
     std::lock_guard<std::mutex> lock(_clientsMutex);
     for (int fd : _clients) {
+        ydebug("VNC: polling client fd={}", fd);
         pollClientInput(fd);
     }
 }

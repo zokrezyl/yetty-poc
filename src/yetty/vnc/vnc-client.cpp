@@ -388,8 +388,12 @@ Result<void> VncClient::render(WGPURenderPassEncoder pass) {
 }
 
 void VncClient::sendInput(const void* data, size_t size) {
-    if (!_connected || _socket < 0) return;
+    if (!_connected || _socket < 0) {
+        ywarn("VNC: sendInput called but not connected");
+        return;
+    }
 
+    yinfo("VNC client: sending {} bytes of input", size);
     const uint8_t* ptr = static_cast<const uint8_t*>(data);
     size_t remaining = size;
     while (remaining > 0 && _connected) {
