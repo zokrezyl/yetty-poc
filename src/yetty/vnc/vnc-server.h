@@ -1,6 +1,6 @@
 #pragma once
 
-#include "protocol.hpp"
+#include "protocol.h"
 #include <yetty/result.hpp>
 #include <webgpu/webgpu.h>
 #include <string>

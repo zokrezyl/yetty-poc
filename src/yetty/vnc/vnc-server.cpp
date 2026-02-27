@@ -1,4 +1,4 @@
-#include "vnc-server.hpp"
+#include "vnc-server.h"
 #include <ytrace/ytrace.hpp>
 #include <turbojpeg.h>
 #include <cstring>

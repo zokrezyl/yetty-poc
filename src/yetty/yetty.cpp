@@ -25,8 +25,8 @@
 #include <cstring>
 #include <ytrace/ytrace.hpp>
 #include <turbojpeg.h>
-#include "vnc/vnc-client.hpp"
-#include "vnc/vnc-server.hpp"
+#include "vnc/vnc-client.h"
+#include "vnc/vnc-server.h"
 
 #if defined(__EMSCRIPTEN__)
 #include <emscripten.h>
