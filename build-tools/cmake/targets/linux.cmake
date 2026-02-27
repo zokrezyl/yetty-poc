@@ -97,6 +97,12 @@ if(YETTY_BUILD_OSC_TESTS)
     add_subdirectory(${YETTY_ROOT}/test/ut/osc ${CMAKE_BINARY_DIR}/test/ut/osc)
 endif()
 
+option(YETTY_BUILD_YFLAME_TESTS "Build yflame flamegraph tests" ON)
+if(YETTY_BUILD_YFLAME_TESTS)
+    enable_testing()
+    add_subdirectory(${YETTY_ROOT}/test/ut/yflame ${CMAKE_BINARY_DIR}/test/ut/yflame)
+endif()
+
 # Tools (ycat, yecho, ydraw-maze, ydraw-zoo, etc.)
 add_subdirectory(${YETTY_ROOT}/src/yetty/ycat ${CMAKE_BINARY_DIR}/src/yetty/ycat)
 add_subdirectory(${YETTY_ROOT}/tools ${CMAKE_BINARY_DIR}/tools)

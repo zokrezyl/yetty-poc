@@ -2,6 +2,7 @@ add_subdirectory(gpu-info)
 add_subdirectory(ydraw-maze)
 add_subdirectory(ydraw-zoo)
 add_subdirectory(ymux)
+add_subdirectory(yflame)
 
 # PDF and HTML tools (desktop only - require pdfio, litehtml)
 if(NOT YETTY_ANDROID AND NOT EMSCRIPTEN)
