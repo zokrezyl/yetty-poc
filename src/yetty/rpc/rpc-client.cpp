@@ -8,10 +8,21 @@
 #include <afunix.h>
 #include <io.h>
 #pragma comment(lib, "ws2_32.lib")
+#else
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
+#endif
+
+#include <cstring>
+#include <atomic>
+#include <mutex>
+#include <uv.h>
+
+#ifdef _WIN32
 using SocketType = SOCKET;
 #define INVALID_SOCK INVALID_SOCKET
 #define CLOSE_SOCKET closesocket
-using ssize_t = int;
 static std::string getSocketError() {
     int err = WSAGetLastError();
     char buf[256];
@@ -19,9 +30,6 @@ static std::string getSocketError() {
     return std::string(buf);
 }
 #else
-#include <sys/socket.h>
-#include <sys/un.h>
-#include <unistd.h>
 using SocketType = int;
 #define INVALID_SOCK (-1)
 #define CLOSE_SOCKET ::close
@@ -29,11 +37,6 @@ static std::string getSocketError() {
     return std::string(strerror(errno));
 }
 #endif
-
-#include <cstring>
-#include <atomic>
-#include <mutex>
-#include <uv.h>
 
 namespace yetty {
 namespace rpc {
