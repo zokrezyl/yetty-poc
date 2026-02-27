@@ -339,8 +339,24 @@ Result<void> BmFont::findFont() noexcept {
 
     FcConfigDestroy(config);
     return Err<void>("No suitable font found");
+#elif defined(__APPLE__)
+    // macOS: try known system emoji font paths
+    FT_Library library = static_cast<FT_Library>(_ftLibrary);
+    FT_Face face = nullptr;
+    const char* macFontPaths[] = {
+        "/System/Library/Fonts/Apple Color Emoji.ttc",
+        "/System/Library/Fonts/AppleColorEmoji.ttc",
+    };
+    for (const char* path : macFontPaths) {
+        if (FT_New_Face(library, path, 0, &face) == 0) {
+            yinfo("BmFont: using macOS system font '{}'", path);
+            _ftFace = face;
+            return Ok();
+        }
+    }
+    return Err<void>("No suitable emoji font found on macOS");
 #else
-    // macOS/Windows: font path must be specified explicitly
+    // Windows: font path must be specified explicitly
     return Err<void>("No font path specified and fontconfig not available");
 #endif
 }

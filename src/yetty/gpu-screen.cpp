@@ -218,8 +218,8 @@ public:
   void setResizeCallback(ResizeCallback cb) override;
   Result<void> render(WGPURenderPassEncoder pass) override;
   void setViewport(float x, float y, float width, float height) override;
-  uint32_t getCellWidth() const override { return static_cast<uint32_t>(_baseCellWidth * _zoomLevel); }
-  uint32_t getCellHeight() const override { return static_cast<uint32_t>(_baseCellHeight * _zoomLevel); }
+  float getCellWidth() const override { return _baseCellWidth * _zoomLevel; }
+  float getCellHeight() const override { return _baseCellHeight * _zoomLevel; }
 
   // Float cell size for hit testing (must match shader's grid.cellSize)
   float getCellWidthF() const { return _baseCellWidth * _zoomLevel; }
