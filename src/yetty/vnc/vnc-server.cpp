@@ -1,0 +1,397 @@
+#include "vnc-server.hpp"
+#include <ytrace/ytrace.hpp>
+#include <turbojpeg.h>
+#include <cstring>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <poll.h>
+
+namespace yetty::vnc {
+
+using yetty::Result;
+using yetty::Ok;
+using yetty::Err;
+
+VncServer::VncServer(WGPUDevice device, WGPUQueue queue)
+    : _device(device), _queue(queue) {
+    _jpegCompressor = tjInitCompress();
+}
+
+VncServer::~VncServer() {
+    stop();
+    if (_readbackBuffer) wgpuBufferRelease(_readbackBuffer);
+    if (_jpegCompressor) tjDestroy(static_cast<tjhandle>(_jpegCompressor));
+}
+
+Result<void> VncServer::start(uint16_t port) {
+    if (_running) return Err<void>("Server already running");
+
+    _serverFd = socket(AF_INET, SOCK_STREAM, 0);
+    if (_serverFd < 0) return Err<void>("Failed to create socket");
+
+    int opt = 1;
+    setsockopt(_serverFd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    struct sockaddr_in addr = {};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_port = htons(port);
+
+    if (bind(_serverFd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        close(_serverFd);
+        _serverFd = -1;
+        return Err<void>("Failed to bind to port " + std::to_string(port));
+    }
+
+    if (listen(_serverFd, 5) < 0) {
+        close(_serverFd);
+        _serverFd = -1;
+        return Err<void>("Failed to listen");
+    }
+
+    _port = port;
+    _running = true;
+    _acceptThread = std::thread(&VncServer::acceptLoop, this);
+
+    yinfo("VNC server listening on port {}", port);
+    return Ok();
+}
+
+void VncServer::stop() {
+    _running = false;
+
+    if (_serverFd >= 0) {
+        shutdown(_serverFd, SHUT_RDWR);
+        close(_serverFd);
+        _serverFd = -1;
+    }
+
+    // Close all client connections
+    {
+        std::lock_guard<std::mutex> lock(_clientsMutex);
+        for (int fd : _clients) {
+            shutdown(fd, SHUT_RDWR);
+            close(fd);
+        }
+        _clients.clear();
+        _clientCount = 0;
+    }
+
+    if (_acceptThread.joinable()) {
+        _acceptThread.join();
+    }
+}
+
+void VncServer::acceptLoop() {
+    while (_running) {
+        struct pollfd pfd = {_serverFd, POLLIN, 0};
+        int ret = poll(&pfd, 1, 100);  // 100ms timeout
+        if (ret <= 0) continue;
+
+        struct sockaddr_in clientAddr;
+        socklen_t clientLen = sizeof(clientAddr);
+        int clientFd = accept(_serverFd, (struct sockaddr*)&clientAddr, &clientLen);
+        if (clientFd < 0) continue;
+
+        // Disable Nagle
+        int flag = 1;
+        setsockopt(clientFd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
+
+        char clientIp[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &clientAddr.sin_addr, clientIp, sizeof(clientIp));
+        yinfo("VNC client connected from {}", clientIp);
+
+        {
+            std::lock_guard<std::mutex> lock(_clientsMutex);
+            _clients.push_back(clientFd);
+            _clientCount = _clients.size();
+        }
+    }
+}
+
+Result<void> VncServer::sendToClient(int clientFd, const void* data, size_t size) {
+    const uint8_t* ptr = static_cast<const uint8_t*>(data);
+    size_t remaining = size;
+    while (remaining > 0) {
+        ssize_t sent = send(clientFd, ptr, remaining, MSG_NOSIGNAL);
+        if (sent <= 0) {
+            return Err<void>("Send failed");
+        }
+        ptr += sent;
+        remaining -= sent;
+    }
+    return Ok();
+}
+
+Result<void> VncServer::ensureResources(uint32_t width, uint32_t height) {
+    if (_lastWidth == width && _lastHeight == height && _readbackBuffer) {
+        return Ok();
+    }
+
+    // Release old buffer
+    if (_readbackBuffer) {
+        wgpuBufferRelease(_readbackBuffer);
+        _readbackBuffer = nullptr;
+    }
+
+    _lastWidth = width;
+    _lastHeight = height;
+
+    // Calculate aligned size
+    uint32_t bytesPerPixel = 4;
+    uint32_t alignedBytesPerRow = (width * bytesPerPixel + 255) & ~255;
+    _readbackSize = alignedBytesPerRow * height;
+
+    // Create readback buffer
+    WGPUBufferDescriptor bufDesc = {};
+    bufDesc.size = _readbackSize;
+    bufDesc.usage = WGPUBufferUsage_CopyDst | WGPUBufferUsage_MapRead;
+    _readbackBuffer = wgpuDeviceCreateBuffer(_device, &bufDesc);
+    if (!_readbackBuffer) return Err<void>("Failed to create readback buffer");
+
+    // Resize pixel buffers
+    _pixels.resize(width * height * bytesPerPixel);
+    _prevPixels.resize(width * height * bytesPerPixel);
+    std::memset(_prevPixels.data(), 0, _prevPixels.size());
+
+    // Setup tile tracking
+    _tilesX = tiles_x(width);
+    _tilesY = tiles_y(height);
+    _dirtyTiles.resize(_tilesX * _tilesY);
+
+    yinfo("VNC server resources: {}x{}, {} tiles", width, height, _tilesX * _tilesY);
+    return Ok();
+}
+
+void VncServer::detectDirtyTiles() {
+    // Compare current pixels to previous, mark dirty tiles
+    std::fill(_dirtyTiles.begin(), _dirtyTiles.end(), false);
+
+    uint32_t bytesPerPixel = 4;
+    uint32_t stride = _lastWidth * bytesPerPixel;
+
+    for (uint16_t ty = 0; ty < _tilesY; ty++) {
+        for (uint16_t tx = 0; tx < _tilesX; tx++) {
+            uint32_t startX = tx * TILE_SIZE;
+            uint32_t startY = ty * TILE_SIZE;
+            uint32_t endX = std::min(startX + TILE_SIZE, _lastWidth);
+            uint32_t endY = std::min(startY + TILE_SIZE, _lastHeight);
+
+            bool dirty = false;
+            for (uint32_t y = startY; y < endY && !dirty; y++) {
+                const uint8_t* curr = _pixels.data() + y * stride + startX * bytesPerPixel;
+                const uint8_t* prev = _prevPixels.data() + y * stride + startX * bytesPerPixel;
+                uint32_t rowBytes = (endX - startX) * bytesPerPixel;
+                if (std::memcmp(curr, prev, rowBytes) != 0) {
+                    dirty = true;
+                }
+            }
+            _dirtyTiles[ty * _tilesX + tx] = dirty;
+        }
+    }
+}
+
+Result<void> VncServer::encodeTile(uint16_t tx, uint16_t ty,
+                                    std::vector<uint8_t>& outData, Encoding& outEncoding) {
+    uint32_t startX = tx * TILE_SIZE;
+    uint32_t startY = ty * TILE_SIZE;
+    uint32_t tileW = std::min((uint32_t)TILE_SIZE, _lastWidth - startX);
+    uint32_t tileH = std::min((uint32_t)TILE_SIZE, _lastHeight - startY);
+
+    // Extract tile pixels
+    std::vector<uint8_t> tilePixels(TILE_SIZE * TILE_SIZE * 4);
+    uint32_t srcStride = _lastWidth * 4;
+    for (uint32_t y = 0; y < tileH; y++) {
+        const uint8_t* src = _pixels.data() + (startY + y) * srcStride + startX * 4;
+        uint8_t* dst = tilePixels.data() + y * TILE_SIZE * 4;
+        std::memcpy(dst, src, tileW * 4);
+    }
+
+    // Check if tile is simple (solid color or few colors)
+    // For now, use heuristic: if raw size is small enough, send raw
+    uint32_t rawSize = TILE_SIZE * TILE_SIZE * 4;
+
+    // Try JPEG compression
+    unsigned char* jpegBuf = nullptr;
+    unsigned long jpegSize = 0;
+    int result = tjCompress2(
+        static_cast<tjhandle>(_jpegCompressor),
+        tilePixels.data(),
+        TILE_SIZE, 0, TILE_SIZE,
+        TJPF_BGRA,
+        &jpegBuf, &jpegSize,
+        TJSAMP_420, 80,  // Quality 80
+        TJFLAG_FASTDCT
+    );
+
+    if (result == 0 && jpegSize < rawSize * 0.8) {
+        // JPEG is smaller, use it
+        outData.assign(jpegBuf, jpegBuf + jpegSize);
+        outEncoding = Encoding::JPEG;
+        tjFree(jpegBuf);
+    } else {
+        // Use RAW
+        if (jpegBuf) tjFree(jpegBuf);
+        outData = std::move(tilePixels);
+        outEncoding = Encoding::RAW;
+    }
+
+    return Ok();
+}
+
+Result<void> VncServer::sendFrame(WGPUTexture texture, uint32_t width, uint32_t height) {
+    ytimeit("vnc-sendFrame");
+
+    if (_clientCount == 0) return Ok();  // No clients, skip
+
+    if (auto res = ensureResources(width, height); !res) {
+        return res;
+    }
+
+    // Copy texture to readback buffer
+    {
+        ytimeit("vnc-readback");
+
+        uint32_t bytesPerPixel = 4;
+        uint32_t alignedBytesPerRow = (width * bytesPerPixel + 255) & ~255;
+
+        WGPUCommandEncoderDescriptor encDesc = {};
+        WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(_device, &encDesc);
+
+        WGPUTexelCopyTextureInfo src = {};
+        src.texture = texture;
+
+        WGPUTexelCopyBufferInfo dst = {};
+        dst.buffer = _readbackBuffer;
+        dst.layout.bytesPerRow = alignedBytesPerRow;
+        dst.layout.rowsPerImage = height;
+
+        WGPUExtent3D copySize = {width, height, 1};
+        wgpuCommandEncoderCopyTextureToBuffer(encoder, &src, &dst, &copySize);
+
+        WGPUCommandBufferDescriptor cmdDesc = {};
+        WGPUCommandBuffer cmdBuf = wgpuCommandEncoderFinish(encoder, &cmdDesc);
+        wgpuQueueSubmit(_queue, 1, &cmdBuf);
+        wgpuCommandBufferRelease(cmdBuf);
+        wgpuCommandEncoderRelease(encoder);
+
+        // Map and copy
+        struct MapCtx { bool done = false; WGPUMapAsyncStatus status; };
+        MapCtx ctx;
+        WGPUBufferMapCallbackInfo cbInfo = {};
+        cbInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+        cbInfo.callback = [](WGPUMapAsyncStatus status, WGPUStringView, void* ud, void*) {
+            auto* c = static_cast<MapCtx*>(ud);
+            c->status = status;
+            c->done = true;
+        };
+        cbInfo.userdata1 = &ctx;
+
+        wgpuBufferMapAsync(_readbackBuffer, WGPUMapMode_Read, 0, _readbackSize, cbInfo);
+        while (!ctx.done) {
+            wgpuDeviceTick(_device);
+        }
+
+        if (ctx.status != WGPUMapAsyncStatus_Success) {
+            return Err<void>("Buffer map failed");
+        }
+
+        const uint8_t* mapped = static_cast<const uint8_t*>(
+            wgpuBufferGetConstMappedRange(_readbackBuffer, 0, _readbackSize));
+
+        // Copy with row alignment removal
+        uint32_t unalignedBytesPerRow = width * bytesPerPixel;
+        for (uint32_t y = 0; y < height; y++) {
+            std::memcpy(_pixels.data() + y * unalignedBytesPerRow,
+                       mapped + y * alignedBytesPerRow,
+                       unalignedBytesPerRow);
+        }
+        wgpuBufferUnmap(_readbackBuffer);
+    }
+
+    // Detect dirty tiles
+    detectDirtyTiles();
+
+    // Count dirty tiles
+    uint16_t numDirty = 0;
+    for (bool d : _dirtyTiles) if (d) numDirty++;
+
+    if (numDirty == 0) {
+        // No changes, skip sending
+        return Ok();
+    }
+
+    // Build frame data
+    std::vector<uint8_t> frameData;
+    frameData.reserve(64 * 1024);  // Pre-allocate
+
+    // Frame header
+    FrameHeader fh;
+    fh.width = width;
+    fh.height = height;
+    fh.tile_size = TILE_SIZE;
+    fh.num_tiles = numDirty;
+
+    frameData.insert(frameData.end(),
+                     reinterpret_cast<uint8_t*>(&fh),
+                     reinterpret_cast<uint8_t*>(&fh) + sizeof(fh));
+
+    // Encode and append dirty tiles
+    {
+        ytimeit("vnc-encode");
+        for (uint16_t ty = 0; ty < _tilesY; ty++) {
+            for (uint16_t tx = 0; tx < _tilesX; tx++) {
+                if (!_dirtyTiles[ty * _tilesX + tx]) continue;
+
+                std::vector<uint8_t> tileData;
+                Encoding enc;
+                if (auto res = encodeTile(tx, ty, tileData, enc); !res) {
+                    continue;
+                }
+
+                TileHeader th;
+                th.tile_x = tx;
+                th.tile_y = ty;
+                th.encoding = static_cast<uint8_t>(enc);
+                th.data_size = tileData.size();
+
+                frameData.insert(frameData.end(),
+                                reinterpret_cast<uint8_t*>(&th),
+                                reinterpret_cast<uint8_t*>(&th) + sizeof(th));
+                frameData.insert(frameData.end(), tileData.begin(), tileData.end());
+            }
+        }
+    }
+
+    // Save current frame as previous
+    std::swap(_pixels, _prevPixels);
+
+    // Send to all clients
+    {
+        ytimeit("vnc-send");
+        std::lock_guard<std::mutex> lock(_clientsMutex);
+        std::vector<int> deadClients;
+
+        for (int fd : _clients) {
+            if (auto res = sendToClient(fd, frameData.data(), frameData.size()); !res) {
+                deadClients.push_back(fd);
+            }
+        }
+
+        // Remove dead clients
+        for (int fd : deadClients) {
+            close(fd);
+            _clients.erase(std::remove(_clients.begin(), _clients.end(), fd), _clients.end());
+            yinfo("VNC client disconnected");
+        }
+        _clientCount = _clients.size();
+    }
+
+    return Ok();
+}
+
+} // namespace yetty::vnc
