@@ -83,11 +83,7 @@ if(YETTY_BUILD_YECHO_TESTS)
     add_subdirectory(${YETTY_ROOT}/test/ut/yecho ${CMAKE_BINARY_DIR}/test/ut/yecho)
 endif()
 
-option(YETTY_BUILD_CDB_TESTS "Build CDB wrapper tests" ON)
-if(YETTY_BUILD_CDB_TESTS)
-    enable_testing()
-    add_subdirectory(${YETTY_ROOT}/test/ut/cdb ${CMAKE_BINARY_DIR}/test/ut/cdb)
-endif()
+
 
 option(YETTY_BUILD_YMUX_TESTS "Build ymux tests" ON)
 if(YETTY_BUILD_YMUX_TESTS)
