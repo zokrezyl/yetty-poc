@@ -104,6 +104,12 @@ if(YETTY_BUILD_YFLAME_TESTS)
     add_subdirectory(${YETTY_ROOT}/test/ut/yflame ${CMAKE_BINARY_DIR}/test/ut/yflame)
 endif()
 
+option(YETTY_BUILD_VNC_TESTS "Build VNC protocol tests" ON)
+if(YETTY_BUILD_VNC_TESTS)
+    enable_testing()
+    add_subdirectory(${YETTY_ROOT}/test/ut/vnc ${CMAKE_BINARY_DIR}/test/ut/vnc)
+endif()
+
 # Tools (ycat, yecho, ydraw-maze, ydraw-zoo, etc.)
 add_subdirectory(${YETTY_ROOT}/src/yetty/ycat ${CMAKE_BINARY_DIR}/src/yetty/ycat)
 add_subdirectory(${YETTY_ROOT}/tools ${CMAKE_BINARY_DIR}/tools)

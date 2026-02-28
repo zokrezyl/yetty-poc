@@ -70,6 +70,15 @@ private:
     std::vector<uint8_t> _pixels;
     std::vector<uint8_t> _prevPixels;  // For dirty detection
 
+    // Async capture state machine
+    enum class CaptureState { IDLE, WAITING_QUEUE, WAITING_MAP };
+    CaptureState _captureState = CaptureState::IDLE;
+    std::atomic<bool> _queueDone{false};
+    std::atomic<bool> _mapDone{false};
+    WGPUMapAsyncStatus _mapStatus = WGPUMapAsyncStatus_Success;
+    uint32_t _pendingWidth = 0;
+    uint32_t _pendingHeight = 0;
+
     // JPEG compression
     void* _jpegCompressor = nullptr;
 

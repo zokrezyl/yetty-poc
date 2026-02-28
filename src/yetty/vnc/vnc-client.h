@@ -14,7 +14,7 @@ namespace yetty::vnc {
 
 class VncClient {
 public:
-    VncClient(WGPUDevice device, WGPUQueue queue);
+    VncClient(WGPUDevice device, WGPUQueue queue, WGPUTextureFormat surfaceFormat);
     ~VncClient();
 
     // Connect to server
@@ -53,6 +53,7 @@ private:
 
     WGPUDevice _device;
     WGPUQueue _queue;
+    WGPUTextureFormat _surfaceFormat;
 
     // Network
     int _socket = -1;

@@ -174,6 +174,9 @@ private:
     uint16_t _vncServerPort = 5900;
     std::unique_ptr<vnc::VncServer> _vncServer;
 
+    // Prevent recursive render
+    bool _inRender = false;
+
     static YettyImpl* s_instance;
 };
 
@@ -311,11 +314,16 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     }
 #endif
 
-    if (auto res = initWorkspace(); !res) return res;
+    // Skip workspace/PTY creation in VNC client mode - we just display remote frames
+    if (!_vncClientMode) {
+        if (auto res = initWorkspace(); !res) return res;
+    }
 
 #if !YETTY_WEB && !defined(__ANDROID__)
     // Register workspace handlers now that workspace exists
-    rpc::registerWorkspaceHandlers(*_rpcServer, _activeWorkspace);
+    if (_activeWorkspace) {
+        rpc::registerWorkspaceHandlers(*_rpcServer, _activeWorkspace);
+    }
 
     // Register stream handlers (uses GPUScreenManager singleton)
     rpc::registerStreamHandlers(*_rpcServer);
@@ -342,7 +350,7 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
 
     // Initialize VNC client mode if enabled
     if (_vncClientMode) {
-        _vncClient = std::make_unique<vnc::VncClient>(_device, _queue);
+        _vncClient = std::make_unique<vnc::VncClient>(_device, _queue, _surfaceFormat);
         if (auto res = _vncClient->connect(_vncHost, _vncPort); !res) {
             return Err<void>("Failed to connect VNC client", res);
         }
@@ -359,38 +367,60 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
 
         // Set up input callbacks from VNC clients
         _vncServer->onMouseMove = [](int16_t x, int16_t y) {
+            ydebug("VNC onMouseMove callback: x={} y={}", x, y);
             auto loopResult = base::EventLoop::instance();
-            if (!loopResult) return;
+            if (!loopResult) {
+                ywarn("VNC onMouseMove: EventLoop::instance() failed!");
+                return;
+            }
+            ydebug("VNC onMouseMove: dispatching to EventLoop");
             (*loopResult)->dispatch(base::Event::mouseMove(static_cast<float>(x), static_cast<float>(y)));
         };
 
         _vncServer->onMouseButton = [](int16_t x, int16_t y, vnc::MouseButton button, bool pressed) {
+            ydebug("VNC onMouseButton callback: x={} y={} btn={} pressed={}", x, y, static_cast<int>(button), pressed);
             auto loopResult = base::EventLoop::instance();
-            if (!loopResult) return;
+            if (!loopResult) {
+                ywarn("VNC onMouseButton: EventLoop::instance() failed!");
+                return;
+            }
             auto loop = *loopResult;
             int btn = static_cast<int>(button);
             if (pressed) {
+                ydebug("VNC onMouseButton: dispatching mouseDown");
                 loop->dispatch(base::Event::mouseDown(static_cast<float>(x), static_cast<float>(y), btn, 0));
             } else {
+                ydebug("VNC onMouseButton: dispatching mouseUp");
                 loop->dispatch(base::Event::mouseUp(static_cast<float>(x), static_cast<float>(y), btn, 0));
             }
         };
 
         _vncServer->onMouseScroll = [](int16_t x, int16_t y, int16_t dx, int16_t dy) {
+            ydebug("VNC onMouseScroll callback: x={} y={} dx={} dy={}", x, y, dx, dy);
             auto loopResult = base::EventLoop::instance();
-            if (!loopResult) return;
+            if (!loopResult) {
+                ywarn("VNC onMouseScroll: EventLoop::instance() failed!");
+                return;
+            }
+            ydebug("VNC onMouseScroll: dispatching to EventLoop");
             (*loopResult)->dispatch(base::Event::scrollEvent(
                 static_cast<float>(x), static_cast<float>(y),
                 static_cast<float>(dx), static_cast<float>(dy), 0));
         };
 
         _vncServer->onKeyDown = [](uint32_t keycode, uint32_t scancode, uint8_t mods) {
+            ydebug("VNC onKeyDown callback: keycode={} scancode={} mods={}", keycode, scancode, mods);
             auto loopResult = base::EventLoop::instance();
-            if (!loopResult) return;
+            if (!loopResult) {
+                ywarn("VNC onKeyDown: EventLoop::instance() failed!");
+                return;
+            }
+            ydebug("VNC onKeyDown: dispatching to EventLoop");
             (*loopResult)->dispatch(base::Event::keyDown(static_cast<int>(keycode), static_cast<int>(mods), static_cast<int>(scancode)));
         };
 
-        _vncServer->onKeyUp = [](uint32_t, uint32_t, uint8_t) {
+        _vncServer->onKeyUp = [](uint32_t keycode, uint32_t scancode, uint8_t mods) {
+            ydebug("VNC onKeyUp callback: keycode={} scancode={} mods={}", keycode, scancode, mods);
             // Key up events are not typically used by terminal
         };
 
@@ -633,6 +663,7 @@ Result<void> YettyImpl::initWebGPU() noexcept {
     wgpuSurfaceGetCapabilities(_surface, _adapter, &caps);
     if (caps.formatCount > 0) {
         _surfaceFormat = caps.formats[0];
+        yinfo("Surface format: {}", static_cast<int>(_surfaceFormat));
     }
     wgpuSurfaceCapabilitiesFreeMembers(caps);
 
@@ -1101,6 +1132,7 @@ Result<void> YettyImpl::initCallbacks() noexcept {
 
         // Forward to VNC server when in client mode
         if (_vncClientMode && _vncClient) {
+            ydebug("VNC client mode: forwarding key={} scancode={} action={}", key, scancode, static_cast<int>(action));
             uint8_t vncMods = 0;
             if (mods & 0x0001) vncMods |= vnc::MOD_SHIFT;
             if (mods & 0x0002) vncMods |= vnc::MOD_CTRL;
@@ -1108,8 +1140,10 @@ Result<void> YettyImpl::initCallbacks() noexcept {
             if (mods & 0x0008) vncMods |= vnc::MOD_SUPER;
 
             if (action == KeyAction::Press || action == KeyAction::Repeat) {
+                ydebug("VNC client: sending KEY_DOWN keycode={} scancode={} mods={}", key, scancode, vncMods);
                 _vncClient->sendKeyDown(static_cast<uint32_t>(key), static_cast<uint32_t>(scancode), vncMods);
             } else if (action == KeyAction::Release) {
+                ydebug("VNC client: sending KEY_UP keycode={} scancode={}", key, scancode);
                 _vncClient->sendKeyUp(static_cast<uint32_t>(key), static_cast<uint32_t>(scancode), vncMods);
             }
             return;  // Don't process locally in client mode
@@ -1453,10 +1487,16 @@ Result<bool> YettyImpl::onEvent(const base::Event& event) {
     // Frame timer or ScreenUpdate: render
     if ((event.type == base::Event::Type::Timer && event.timer.timerId == _frameTimerId) ||
         event.type == base::Event::Type::ScreenUpdate) {
+        // Prevent recursive render (e.g. VNC input -> requestScreenUpdate -> ScreenUpdate)
+        if (_inRender) {
+            return Ok(true);  // Skip, will render on next frame
+        }
+        _inRender = true;
         if (auto res = mainLoopIteration(); !res) {
             yerror("Fatal render error: {}", error_msg(res));
             (*base::EventLoop::instance())->stop();
         }
+        _inRender = false;
         return Ok(true);
     }
 
@@ -1574,7 +1614,9 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
 
     // Process VNC input events from remote clients
     if (_vncServerMode && _vncServer) {
+        ydebug("VNC: before processInput");
         _vncServer->processInput();
+        ydebug("VNC: after processInput");
     }
 
     // Upload any pending font glyphs (e.g., bold/italic loaded on demand)

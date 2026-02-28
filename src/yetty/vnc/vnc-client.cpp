@@ -10,6 +10,7 @@
 #include <netdb.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <poll.h>
 
 namespace yetty::vnc {
 
@@ -49,8 +50,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 }
 )";
 
-VncClient::VncClient(WGPUDevice device, WGPUQueue queue)
-    : _device(device), _queue(queue) {
+VncClient::VncClient(WGPUDevice device, WGPUQueue queue, WGPUTextureFormat surfaceFormat)
+    : _device(device), _queue(queue), _surfaceFormat(surfaceFormat) {
 }
 
 VncClient::~VncClient() {
@@ -123,20 +124,42 @@ void VncClient::disconnect() {
     }
 }
 
+// Helper to read exactly n bytes with poll timeout
+static bool recvExact(int fd, void* buf, size_t len, int timeoutMs) {
+    uint8_t* ptr = static_cast<uint8_t*>(buf);
+    size_t remaining = len;
+    while (remaining > 0) {
+        struct pollfd pfd = {fd, POLLIN, 0};
+        int ret = poll(&pfd, 1, timeoutMs);
+        if (ret <= 0) return false;  // Timeout or error
+
+        ssize_t n = recv(fd, ptr, remaining, 0);
+        if (n <= 0) return false;
+        ptr += n;
+        remaining -= n;
+    }
+    return true;
+}
+
 void VncClient::receiveLoop() {
+    ydebug("VNC receiveLoop: started, socket={}", _socket);
     std::vector<uint8_t> recvBuffer(16 * 1024 * 1024);  // 16MB buffer
     tjhandle jpegDecompressor = tjInitDecompress();
 
     while (_connected) {
-        // Read frame header
+        // Read frame header with timeout
         FrameHeader header;
-        ssize_t n = recv(_socket, &header, sizeof(header), MSG_WAITALL);
-        if (n != sizeof(header)) {
-            if (_connected) {
-                ywarn("VNC: Failed to read frame header");
-            }
-            break;
+        if (!recvExact(_socket, &header, sizeof(header), 100)) {
+            continue;  // Timeout, keep looping
         }
+
+        // Sanity check
+        if (header.width == 0 || header.height == 0 || header.width > 8192 || header.height > 8192) {
+            ywarn("VNC: Invalid frame header {}x{}", header.width, header.height);
+            continue;
+        }
+
+        ydebug("VNC receiveLoop: frame {}x{} tiles={}", header.width, header.height, header.num_tiles);
 
         // Ensure resources match frame size
         if (header.width != _width || header.height != _height) {
@@ -150,9 +173,14 @@ void VncClient::receiveLoop() {
         // Read all tiles
         for (uint16_t i = 0; i < header.num_tiles; i++) {
             TileHeader tile;
-            n = recv(_socket, &tile, sizeof(tile), MSG_WAITALL);
-            if (n != sizeof(tile)) {
+            if (!recvExact(_socket, &tile, sizeof(tile), 1000)) {
                 ywarn("VNC: Failed to read tile header");
+                break;
+            }
+
+            // Sanity check
+            if (tile.data_size > 16 * 1024 * 1024) {
+                ywarn("VNC: Tile data too large: {}", tile.data_size);
                 break;
             }
 
@@ -160,8 +188,7 @@ void VncClient::receiveLoop() {
             if (tile.data_size > recvBuffer.size()) {
                 recvBuffer.resize(tile.data_size);
             }
-            n = recv(_socket, recvBuffer.data(), tile.data_size, MSG_WAITALL);
-            if (n != (ssize_t)tile.data_size) {
+            if (!recvExact(_socket, recvBuffer.data(), tile.data_size, 1000)) {
                 ywarn("VNC: Failed to read tile data");
                 break;
             }
@@ -309,7 +336,7 @@ Result<void> VncClient::createPipeline() {
     pipelineDesc.vertex.entryPoint = {.data = "vs_main", .length = 7};
 
     WGPUColorTargetState colorTarget = {};
-    colorTarget.format = WGPUTextureFormat_BGRA8UnormSrgb;
+    colorTarget.format = _surfaceFormat;
     colorTarget.writeMask = WGPUColorWriteMask_All;
 
     WGPUFragmentState fragment = {};
@@ -334,10 +361,12 @@ Result<void> VncClient::createPipeline() {
 }
 
 Result<void> VncClient::updateTexture() {
+    ydebug("VNC updateTexture: width={} height={}", _width, _height);
     if (_width == 0 || _height == 0) return Ok();
 
     // Ensure GPU resources
     if (auto res = ensureResources(_width, _height); !res) {
+        ywarn("VNC updateTexture: ensureResources failed");
         return res;
     }
 
@@ -347,6 +376,7 @@ Result<void> VncClient::updateTexture() {
         std::lock_guard<std::mutex> lock(_tileMutex);
         std::swap(tiles, _pendingTiles);
     }
+    ydebug("VNC updateTexture: {} pending tiles", tiles.size());
 
     while (!tiles.empty()) {
         TileUpdate& update = tiles.front();
@@ -378,33 +408,40 @@ Result<void> VncClient::updateTexture() {
 }
 
 Result<void> VncClient::render(WGPURenderPassEncoder pass) {
-    if (!_pipeline || !_bindGroup) return Ok();
+    ydebug("VNC render: pipeline={} bindGroup={}", (void*)_pipeline, (void*)_bindGroup);
+    if (!_pipeline || !_bindGroup) {
+        ydebug("VNC render: skipping - no pipeline or bindGroup");
+        return Ok();
+    }
 
     wgpuRenderPassEncoderSetPipeline(pass, _pipeline);
     wgpuRenderPassEncoderSetBindGroup(pass, 0, _bindGroup, 0, nullptr);
     wgpuRenderPassEncoderDraw(pass, 6, 1, 0, 0);
+    ydebug("VNC render: draw complete");
 
     return Ok();
 }
 
 void VncClient::sendInput(const void* data, size_t size) {
     if (!_connected || _socket < 0) {
-        ywarn("VNC: sendInput called but not connected");
+        ywarn("VNC client sendInput: not connected! _socket={}", _socket);
         return;
     }
 
-    yinfo("VNC client: sending {} bytes of input", size);
+    ydebug("VNC client sendInput: sending {} bytes to socket {}", size, _socket);
     const uint8_t* ptr = static_cast<const uint8_t*>(data);
     size_t remaining = size;
     while (remaining > 0 && _connected) {
         ssize_t sent = send(_socket, ptr, remaining, MSG_NOSIGNAL);
         if (sent <= 0) {
-            ywarn("VNC: Failed to send input");
+            ywarn("VNC client sendInput: send failed errno={}", errno);
             return;
         }
+        ydebug("VNC client sendInput: sent {} bytes", sent);
         ptr += sent;
         remaining -= sent;
     }
+    ydebug("VNC client sendInput: complete");
 }
 
 void VncClient::sendMouseMove(int16_t x, int16_t y) {
@@ -457,6 +494,7 @@ void VncClient::sendMouseScroll(int16_t x, int16_t y, int16_t deltaX, int16_t de
 }
 
 void VncClient::sendKeyDown(uint32_t keycode, uint32_t scancode, uint8_t mods) {
+    ydebug("VNC client sendKeyDown: keycode={} scancode={} mods={}", keycode, scancode, mods);
     InputHeader hdr = {};
     hdr.type = static_cast<uint8_t>(InputType::KEY_DOWN);
     hdr.data_size = sizeof(KeyEvent);

@@ -123,8 +123,12 @@ Result<void> VncServer::sendToClient(int clientFd, const void* data, size_t size
     const uint8_t* ptr = static_cast<const uint8_t*>(data);
     size_t remaining = size;
     while (remaining > 0) {
-        ssize_t sent = send(clientFd, ptr, remaining, MSG_NOSIGNAL);
+        ssize_t sent = send(clientFd, ptr, remaining, MSG_NOSIGNAL | MSG_DONTWAIT);
         if (sent <= 0) {
+            if (sent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                // Buffer full, skip this frame for this client
+                return Ok();
+            }
             return Err<void>("Send failed");
         }
         ptr += sent;
@@ -250,75 +254,116 @@ Result<void> VncServer::encodeTile(uint16_t tx, uint16_t ty,
 }
 
 Result<void> VncServer::sendFrame(WGPUTexture texture, uint32_t width, uint32_t height) {
-    ytimeit("vnc-sendFrame");
-
     if (_clientCount == 0) return Ok();  // No clients, skip
 
-    if (auto res = ensureResources(width, height); !res) {
-        return res;
+    // Single tick to process any pending callbacks
+    wgpuDeviceTick(_device);
+
+    // State machine for async capture
+    ydebug("VNC sendFrame: state={} queueDone={} mapDone={}",
+           static_cast<int>(_captureState), _queueDone.load(), _mapDone.load());
+    switch (_captureState) {
+        case CaptureState::IDLE: {
+            // Start new capture
+            if (auto res = ensureResources(width, height); !res) {
+                return res;
+            }
+
+            uint32_t bytesPerPixel = 4;
+            uint32_t alignedBytesPerRow = (width * bytesPerPixel + 255) & ~255;
+
+            WGPUCommandEncoderDescriptor encDesc = {};
+            WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(_device, &encDesc);
+
+            WGPUTexelCopyTextureInfo src = {};
+            src.texture = texture;
+
+            WGPUTexelCopyBufferInfo dst = {};
+            dst.buffer = _readbackBuffer;
+            dst.layout.bytesPerRow = alignedBytesPerRow;
+            dst.layout.rowsPerImage = height;
+
+            WGPUExtent3D copySize = {width, height, 1};
+            wgpuCommandEncoderCopyTextureToBuffer(encoder, &src, &dst, &copySize);
+
+            WGPUCommandBufferDescriptor cmdDesc = {};
+            WGPUCommandBuffer cmdBuf = wgpuCommandEncoderFinish(encoder, &cmdDesc);
+            wgpuQueueSubmit(_queue, 1, &cmdBuf);
+            wgpuCommandBufferRelease(cmdBuf);
+            wgpuCommandEncoderRelease(encoder);
+
+            // Register queue done callback
+            _queueDone = false;
+            WGPUQueueWorkDoneCallbackInfo queueCbInfo = {};
+            queueCbInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+            queueCbInfo.callback = [](WGPUQueueWorkDoneStatus, WGPUStringView, void* ud, void*) {
+                auto* done = static_cast<std::atomic<bool>*>(ud);
+                *done = true;
+            };
+            queueCbInfo.userdata1 = &_queueDone;
+            wgpuQueueOnSubmittedWorkDone(_queue, queueCbInfo);
+
+            _pendingWidth = width;
+            _pendingHeight = height;
+            _captureState = CaptureState::WAITING_QUEUE;
+            return Ok();  // Will process on next frame
+        }
+
+        case CaptureState::WAITING_QUEUE: {
+            if (!_queueDone) {
+                return Ok();  // Still waiting
+            }
+
+            // Queue done, start mapping
+            _mapDone = false;
+            WGPUBufferMapCallbackInfo cbInfo = {};
+            cbInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+            cbInfo.callback = [](WGPUMapAsyncStatus status, WGPUStringView, void* ud1, void* ud2) {
+                auto* done = static_cast<std::atomic<bool>*>(ud1);
+                auto* statusOut = static_cast<WGPUMapAsyncStatus*>(ud2);
+                *statusOut = status;
+                *done = true;
+            };
+            cbInfo.userdata1 = &_mapDone;
+            cbInfo.userdata2 = &_mapStatus;
+            wgpuBufferMapAsync(_readbackBuffer, WGPUMapMode_Read, 0, _readbackSize, cbInfo);
+
+            _captureState = CaptureState::WAITING_MAP;
+            return Ok();  // Will process on next frame
+        }
+
+        case CaptureState::WAITING_MAP: {
+            if (!_mapDone) {
+                return Ok();  // Still waiting
+            }
+
+            if (_mapStatus != WGPUMapAsyncStatus_Success) {
+                ywarn("VNC buffer map failed, resetting");
+                _captureState = CaptureState::IDLE;
+                return Ok();
+            }
+
+            // Buffer is mapped, copy data
+            uint32_t bytesPerPixel = 4;
+            uint32_t alignedBytesPerRow = (_pendingWidth * bytesPerPixel + 255) & ~255;
+
+            const uint8_t* mapped = static_cast<const uint8_t*>(
+                wgpuBufferGetConstMappedRange(_readbackBuffer, 0, _readbackSize));
+
+            uint32_t unalignedBytesPerRow = _pendingWidth * bytesPerPixel;
+            for (uint32_t y = 0; y < _pendingHeight; y++) {
+                std::memcpy(_pixels.data() + y * unalignedBytesPerRow,
+                           mapped + y * alignedBytesPerRow,
+                           unalignedBytesPerRow);
+            }
+            wgpuBufferUnmap(_readbackBuffer);
+
+            _captureState = CaptureState::IDLE;
+            break;  // Continue to send the frame
+        }
     }
 
-    // Copy texture to readback buffer
-    {
-        ytimeit("vnc-readback");
-
-        uint32_t bytesPerPixel = 4;
-        uint32_t alignedBytesPerRow = (width * bytesPerPixel + 255) & ~255;
-
-        WGPUCommandEncoderDescriptor encDesc = {};
-        WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(_device, &encDesc);
-
-        WGPUTexelCopyTextureInfo src = {};
-        src.texture = texture;
-
-        WGPUTexelCopyBufferInfo dst = {};
-        dst.buffer = _readbackBuffer;
-        dst.layout.bytesPerRow = alignedBytesPerRow;
-        dst.layout.rowsPerImage = height;
-
-        WGPUExtent3D copySize = {width, height, 1};
-        wgpuCommandEncoderCopyTextureToBuffer(encoder, &src, &dst, &copySize);
-
-        WGPUCommandBufferDescriptor cmdDesc = {};
-        WGPUCommandBuffer cmdBuf = wgpuCommandEncoderFinish(encoder, &cmdDesc);
-        wgpuQueueSubmit(_queue, 1, &cmdBuf);
-        wgpuCommandBufferRelease(cmdBuf);
-        wgpuCommandEncoderRelease(encoder);
-
-        // Map and copy
-        struct MapCtx { bool done = false; WGPUMapAsyncStatus status; };
-        MapCtx ctx;
-        WGPUBufferMapCallbackInfo cbInfo = {};
-        cbInfo.mode = WGPUCallbackMode_AllowSpontaneous;
-        cbInfo.callback = [](WGPUMapAsyncStatus status, WGPUStringView, void* ud, void*) {
-            auto* c = static_cast<MapCtx*>(ud);
-            c->status = status;
-            c->done = true;
-        };
-        cbInfo.userdata1 = &ctx;
-
-        wgpuBufferMapAsync(_readbackBuffer, WGPUMapMode_Read, 0, _readbackSize, cbInfo);
-        while (!ctx.done) {
-            wgpuDeviceTick(_device);
-        }
-
-        if (ctx.status != WGPUMapAsyncStatus_Success) {
-            return Err<void>("Buffer map failed");
-        }
-
-        const uint8_t* mapped = static_cast<const uint8_t*>(
-            wgpuBufferGetConstMappedRange(_readbackBuffer, 0, _readbackSize));
-
-        // Copy with row alignment removal
-        uint32_t unalignedBytesPerRow = width * bytesPerPixel;
-        for (uint32_t y = 0; y < height; y++) {
-            std::memcpy(_pixels.data() + y * unalignedBytesPerRow,
-                       mapped + y * alignedBytesPerRow,
-                       unalignedBytesPerRow);
-        }
-        wgpuBufferUnmap(_readbackBuffer);
-    }
-
+    // Data is ready, process and send
     // Detect dirty tiles
     detectDirtyTiles();
 
@@ -337,8 +382,8 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, uint32_t width, uint32_t 
 
     // Frame header
     FrameHeader fh;
-    fh.width = width;
-    fh.height = height;
+    fh.width = _pendingWidth;
+    fh.height = _pendingHeight;
     fh.tile_size = TILE_SIZE;
     fh.num_tiles = numDirty;
 
@@ -403,7 +448,10 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, uint32_t width, uint32_t 
 
 void VncServer::pollClientInput(int clientFd) {
     auto it = _clientInputBuffers.find(clientFd);
-    if (it == _clientInputBuffers.end()) return;
+    if (it == _clientInputBuffers.end()) {
+        ydebug("VNC pollClientInput: no buffer for fd={}", clientFd);
+        return;
+    }
 
     ClientInputBuffer& buf = it->second;
 
@@ -415,12 +463,15 @@ void VncServer::pollClientInput(int clientFd) {
         uint8_t tmp[256];
         ssize_t n = recv(clientFd, tmp, std::min(toRead, sizeof(tmp)), MSG_DONTWAIT);
         if (n <= 0) {
-            if (n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK)) {
-                // Client disconnected or error - will be cleaned up in sendFrame
+            if (n == 0) {
+                ydebug("VNC pollClientInput: fd={} disconnected", clientFd);
+            } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                ydebug("VNC pollClientInput: fd={} recv error errno={}", clientFd, errno);
             }
             break;  // No more data available
         }
 
+        ydebug("VNC pollClientInput: fd={} received {} bytes", clientFd, n);
         buf.buffer.insert(buf.buffer.end(), tmp, tmp + n);
 
         // Check if we have enough data
@@ -428,18 +479,21 @@ void VncServer::pollClientInput(int clientFd) {
             if (buf.readingHeader) {
                 // Parse header
                 std::memcpy(&buf.header, buf.buffer.data(), sizeof(InputHeader));
+                ydebug("VNC pollClientInput: parsed header type={} data_size={}", buf.header.type, buf.header.data_size);
                 buf.buffer.clear();
                 buf.needed = buf.header.data_size;
                 buf.readingHeader = false;
 
                 if (buf.needed == 0) {
                     // No data, dispatch immediately
+                    ydebug("VNC pollClientInput: dispatching event with no data");
                     dispatchInput(buf.header, nullptr);
                     buf.needed = sizeof(InputHeader);
                     buf.readingHeader = true;
                 }
             } else {
                 // Dispatch event
+                ydebug("VNC pollClientInput: dispatching event with {} bytes data", buf.buffer.size());
                 dispatchInput(buf.header, buf.buffer.data());
                 buf.buffer.clear();
                 buf.needed = sizeof(InputHeader);
@@ -450,46 +504,58 @@ void VncServer::pollClientInput(int clientFd) {
 }
 
 void VncServer::dispatchInput(const InputHeader& hdr, const uint8_t* data) {
-    yinfo("VNC: dispatchInput type={} size={}", hdr.type, hdr.data_size);
+    ydebug("VNC dispatchInput: type={} size={} data={}", hdr.type, hdr.data_size, (void*)data);
     switch (static_cast<InputType>(hdr.type)) {
         case InputType::MOUSE_MOVE:
+            ydebug("VNC dispatchInput: MOUSE_MOVE callback={}", (bool)onMouseMove);
             if (data && hdr.data_size >= sizeof(MouseMoveEvent) && onMouseMove) {
                 const MouseMoveEvent* m = reinterpret_cast<const MouseMoveEvent*>(data);
+                ydebug("VNC dispatchInput: calling onMouseMove x={} y={}", m->x, m->y);
                 onMouseMove(m->x, m->y);
             }
             break;
 
         case InputType::MOUSE_BUTTON:
+            ydebug("VNC dispatchInput: MOUSE_BUTTON callback={}", (bool)onMouseButton);
             if (data && hdr.data_size >= sizeof(MouseButtonEvent) && onMouseButton) {
                 const MouseButtonEvent* m = reinterpret_cast<const MouseButtonEvent*>(data);
+                ydebug("VNC dispatchInput: calling onMouseButton x={} y={} btn={} pressed={}", m->x, m->y, m->button, m->pressed);
                 onMouseButton(m->x, m->y, static_cast<MouseButton>(m->button), m->pressed != 0);
             }
             break;
 
         case InputType::MOUSE_SCROLL:
+            ydebug("VNC dispatchInput: MOUSE_SCROLL callback={}", (bool)onMouseScroll);
             if (data && hdr.data_size >= sizeof(MouseScrollEvent) && onMouseScroll) {
                 const MouseScrollEvent* m = reinterpret_cast<const MouseScrollEvent*>(data);
+                ydebug("VNC dispatchInput: calling onMouseScroll x={} y={} dx={} dy={}", m->x, m->y, m->delta_x, m->delta_y);
                 onMouseScroll(m->x, m->y, m->delta_x, m->delta_y);
             }
             break;
 
         case InputType::KEY_DOWN:
+            ydebug("VNC dispatchInput: KEY_DOWN callback={}", (bool)onKeyDown);
             if (data && hdr.data_size >= sizeof(KeyEvent) && onKeyDown) {
                 const KeyEvent* k = reinterpret_cast<const KeyEvent*>(data);
+                ydebug("VNC dispatchInput: calling onKeyDown keycode={} scancode={} mods={}", k->keycode, k->scancode, k->mods);
                 onKeyDown(k->keycode, k->scancode, k->mods);
             }
             break;
 
         case InputType::KEY_UP:
+            ydebug("VNC dispatchInput: KEY_UP callback={}", (bool)onKeyUp);
             if (data && hdr.data_size >= sizeof(KeyEvent) && onKeyUp) {
                 const KeyEvent* k = reinterpret_cast<const KeyEvent*>(data);
+                ydebug("VNC dispatchInput: calling onKeyUp keycode={} scancode={} mods={}", k->keycode, k->scancode, k->mods);
                 onKeyUp(k->keycode, k->scancode, k->mods);
             }
             break;
 
         case InputType::TEXT_INPUT:
+            ydebug("VNC dispatchInput: TEXT_INPUT callback={}", (bool)onTextInput);
             if (data && hdr.data_size > 0 && onTextInput) {
                 std::string text(reinterpret_cast<const char*>(data), hdr.data_size);
+                ydebug("VNC dispatchInput: calling onTextInput text={}", text);
                 onTextInput(text);
             }
             break;
@@ -503,6 +569,7 @@ bool VncServer::hasPendingInput() const {
 void VncServer::processInput() {
     // Poll all clients for input (non-blocking)
     std::lock_guard<std::mutex> lock(_clientsMutex);
+    ydebug("VNC processInput: {} clients", _clients.size());
     for (int fd : _clients) {
         ydebug("VNC: polling client fd={}", fd);
         pollClientInput(fd);
