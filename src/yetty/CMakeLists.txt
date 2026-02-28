@@ -28,7 +28,7 @@ set(YETTY_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/card-factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/card.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/name-generator.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/imgui-manager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ygui/ygui-overlay.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/workspace.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tile.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/view.cpp

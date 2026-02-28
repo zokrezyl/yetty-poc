@@ -47,7 +47,6 @@ target_link_libraries(yetty PRIVATE
     ${YETTY_LIBS}
     glfw
     glfw3webgpu
-    imgui
     args
     ytrace::ytrace
     lz4_static
@@ -71,37 +70,8 @@ add_custom_command(TARGET yetty POST_BUILD
 configure_file(${YETTY_ROOT}/src/yetty/shaders/gpu-screen.wgsl ${CMAKE_BINARY_DIR}/gpu-screen.wgsl COPYONLY)
 
 # Tests
-option(YETTY_BUILD_YAST_TESTS "Build YAST parser tests" ON)
-if(YETTY_BUILD_YAST_TESTS)
-    enable_testing()
-    add_subdirectory(${YETTY_ROOT}/test/ut/yast ${CMAKE_BINARY_DIR}/test/ut/yast)
-endif()
-
-option(YETTY_BUILD_YECHO_TESTS "Build YEcho parser tests" ON)
-if(YETTY_BUILD_YECHO_TESTS)
-    enable_testing()
-    add_subdirectory(${YETTY_ROOT}/test/ut/yecho ${CMAKE_BINARY_DIR}/test/ut/yecho)
-endif()
-
-
-
-option(YETTY_BUILD_YMUX_TESTS "Build ymux tests" ON)
-if(YETTY_BUILD_YMUX_TESTS)
-    enable_testing()
-    add_subdirectory(${YETTY_ROOT}/test/ut/ymux ${CMAKE_BINARY_DIR}/test/ut/ymux)
-endif()
-
-option(YETTY_BUILD_OSC_TESTS "Build OSC scanner tests" ON)
-if(YETTY_BUILD_OSC_TESTS)
-    enable_testing()
-    add_subdirectory(${YETTY_ROOT}/test/ut/osc ${CMAKE_BINARY_DIR}/test/ut/osc)
-endif()
-
-option(YETTY_BUILD_YFLAME_TESTS "Build yflame flamegraph tests" ON)
-if(YETTY_BUILD_YFLAME_TESTS)
-    enable_testing()
-    add_subdirectory(${YETTY_ROOT}/test/ut/yflame ${CMAKE_BINARY_DIR}/test/ut/yflame)
-endif()
+enable_testing()
+add_subdirectory(${YETTY_ROOT}/test/ut ${CMAKE_BINARY_DIR}/test/ut)
 
 # Tools (ycat, yecho, ydraw-maze, ydraw-zoo, etc.)
 add_subdirectory(${YETTY_ROOT}/src/yetty/ycat ${CMAKE_BINARY_DIR}/src/yetty/ycat)

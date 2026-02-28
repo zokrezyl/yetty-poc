@@ -24,6 +24,7 @@
 #include <yetty/vector-coverage-font.h>
 #include <yetty/raster-font.h>
 #include <yetty/name-generator.h>
+#include "ygui/ygui-overlay.h"
 #include <ytrace/ytrace.hpp>
 
 #ifndef CMAKE_SOURCE_DIR
@@ -4435,7 +4436,7 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
         }
 
         // Right-click: open context menu
-        if (button == 1 && _ctx.imguiManager) {  // GLFW_MOUSE_BUTTON_RIGHT = 1
+        if (button == 1 && _ctx.yguiOverlay) {  // GLFW_MOUSE_BUTTON_RIGHT = 1
           // Calculate cell position from mouse coordinates
           float localX = mx - _viewportX;
           float localY = my - _viewportY;
@@ -4446,19 +4447,18 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
           col = std::max(0, std::min(col, static_cast<int>(_cols) - 1));
           row = std::max(0, std::min(row, static_cast<int>(_rows) - 1));
 
-          // Begin context menu at mouse position, then add items
-          _ctx.imguiManager->beginContextMenu(mx, my);
-          _ctx.imguiManager->addContextMenuItem({
+          _ctx.yguiOverlay->beginContextMenu(mx, my);
+          _ctx.yguiOverlay->addContextMenuItem({
             "Copy cell info",
             base::Event::contextMenuAction(_id, "copy_cell_info", row, col)
           });
-          _ctx.imguiManager->addContextMenuItem({
+          _ctx.yguiOverlay->addContextMenuItem({
             "Inspect glyph",
             base::Event::contextMenuAction(_id, "inspect_glyph", row, col)
           });
-          _ctx.imguiManager->addContextMenuItem({
+          _ctx.yguiOverlay->addContextMenuItem({
             "GPU Stats", {}, [this]() {
-              _ctx.imguiManager->showGpuStatsDialog([this]() -> std::string {
+              _ctx.yguiOverlay->showGpuStatsDialog([this]() -> std::string {
                 std::string stats = buildGpuStatsText();
                 std::string cleaned;
                 cleaned.reserve(stats.size());
@@ -4584,7 +4584,7 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
           return Ok(true);
         }
 
-        if (_ctx.imguiManager) {
+        {
           GridCell cell = getCell(row, col);
           char statusBuf[256];
           snprintf(statusBuf, sizeof(statusBuf),
@@ -4593,7 +4593,8 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
                    cell.fgR, cell.fgG, cell.fgB,
                    cell.bgR, cell.bgG, cell.bgB,
                    cell.style);
-          _ctx.imguiManager->setStatusText(statusBuf);
+          if (_ctx.yguiOverlay)
+            _ctx.yguiOverlay->setStatusText(statusBuf);
         }
 
         // Extend text selection while dragging

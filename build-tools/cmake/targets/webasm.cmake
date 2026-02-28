@@ -63,7 +63,6 @@ set_target_properties(yetty PROPERTIES SUFFIX ".js")
 
 target_link_libraries(yetty PRIVATE
     ${YETTY_LIBS}
-    imgui
     Freetype::Freetype
     zlibstatic
 )

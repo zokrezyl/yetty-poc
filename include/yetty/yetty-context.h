@@ -9,7 +9,6 @@
 #include <yetty/card-manager.h>
 #include <yetty/card-factory.h>
 #include <yetty/config.h>
-#include <yetty/imgui-manager.h>
 #include <yetty/platform.h>
 
 #include <memory>
@@ -17,6 +16,8 @@
 namespace yetty::ymery { class Renderer; }
 
 namespace yetty {
+
+class YGuiOverlay;
 
 // Application-level context for Yetty components
 // Contains GPUContext plus shared managers and application state
@@ -34,7 +35,7 @@ struct YettyContext {
     ShaderManager::Ptr shaderManager;
     FontManager::Ptr fontManager;
     CardFactory::Ptr cardFactory;
-    ImguiManager::Ptr imguiManager;
+    std::shared_ptr<YGuiOverlay> yguiOverlay;
 
     // Per-screen card manager (set by GPUScreen, not globally)
     CardManager::Ptr cardManager;

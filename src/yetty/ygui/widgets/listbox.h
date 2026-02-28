@@ -15,17 +15,18 @@ public:
     int selectedIndex = 0;
     int hoverIndex = -1;
     float scrollY = 0;
-    float rowHeight = 24;
+    float rowHeight = 0;  // 0 = use theme
 
     void render(RenderContext& ctx) override {
-        ctx.box(x, y, w, h, bgColor, 4);
-        ctx.boxOutline(x, y, w, h, 0xFF444455, 4);
+        auto& t = ctx.theme();
+        float itemH = rowHeight > 0 ? rowHeight : t.rowHeight;
+        ctx.box(x, y, w, h, bgColor, t.radiusMedium);
+        ctx.boxOutline(x, y, w, h, t.border, t.radiusMedium);
 
-        float itemH = rowHeight;
         float contentH = options.size() * itemH;
         bool needsScroll = contentH > h;
         float scrollbarW = needsScroll ? 10 : 0;
-        float contentWidth = w - scrollbarW - 4;
+        float contentWidth = w - scrollbarW - t.padMedium;
         float maxScroll = std::max(0.0f, contentH - h);
         scrollY = std::clamp(scrollY, 0.0f, maxScroll);
 
@@ -41,24 +42,28 @@ public:
             bool isHovered = (i == hoverIndex);
 
             if (isSelected)
-                ctx.box(x + 2, itemY + 1, contentWidth, itemH - 2, accentColor, 2);
+                ctx.box(x + t.padSmall, itemY + 1, contentWidth, itemH - t.padSmall,
+                        accentColor, t.radiusSmall);
             else if (isHovered)
-                ctx.box(x + 2, itemY + 1, contentWidth, itemH - 2, 0xFF333344, 2);
+                ctx.box(x + t.padSmall, itemY + 1, contentWidth, itemH - t.padSmall,
+                        t.bgHover, t.radiusSmall);
 
-            ctx.text(options[i], x + 8, itemY + 4, fgColor);
+            ctx.text(options[i], x + t.padLarge, itemY + t.padMedium, fgColor);
         }
 
         if (needsScroll) {
-            float trackH = h - 4;
+            float trackH = h - t.padMedium;
             float thumbH = std::max(20.0f, trackH * h / contentH);
-            float thumbY = y + 2 + (maxScroll > 0 ? (scrollY / maxScroll) * (trackH - thumbH) : 0);
-            ctx.box(x + w - scrollbarW, y + 2, scrollbarW - 2, trackH, 0xFF222233, 4);
-            ctx.box(x + w - scrollbarW + 1, thumbY, scrollbarW - 4, thumbH, 0xFF555566, 3);
+            float thumbY = y + t.padSmall + (maxScroll > 0 ? (scrollY / maxScroll) * (trackH - thumbH) : 0);
+            ctx.box(x + w - scrollbarW, y + t.padSmall, scrollbarW - t.padSmall,
+                    trackH, t.bgSecondary, t.radiusMedium);
+            ctx.box(x + w - scrollbarW + 1, thumbY, scrollbarW - t.padMedium,
+                    thumbH, t.thumbHover, 3);
         }
     }
 
     std::optional<WidgetEvent> onPress(float localX, float localY) override {
-        float itemH = rowHeight;
+        float itemH = rowHeight > 0 ? rowHeight : defaultTheme().rowHeight;
         float localYScrolled = localY + scrollY;
         int idx = (int)(localYScrolled / itemH);
         if (idx >= 0 && idx < (int)options.size()) {
@@ -70,9 +75,10 @@ public:
     }
 
     std::optional<WidgetEvent> onScroll(float dx, float dy) override {
-        float contentH = options.size() * rowHeight;
+        float itemH = rowHeight > 0 ? rowHeight : defaultTheme().rowHeight;
+        float contentH = options.size() * itemH;
         float maxScroll = std::max(0.0f, contentH - h);
-        scrollY = std::clamp(scrollY - dy * rowHeight, 0.0f, maxScroll);
+        scrollY = std::clamp(scrollY - dy * itemH, 0.0f, maxScroll);
         return {};
     }
 };

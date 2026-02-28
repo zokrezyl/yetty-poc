@@ -14,29 +14,30 @@ public:
     int hoverIndex = -1;
 
     void render(RenderContext& ctx) override {
-        float optH = 24;
+        auto& t = ctx.theme();
+        float optH = t.rowHeight;
         float cy = y;
         for (size_t i = 0; i < options.size(); i++) {
             bool isSelected = ((int)i == selectedIndex);
             bool isHovered = ((int)i == hoverIndex);
             float radioSize = 14;
             float centerX = x + radioSize / 2;
-            float centerY = cy + 4 + radioSize / 2;
+            float centerY = cy + t.padMedium + radioSize / 2;
 
             ctx.circleOutline(centerX, centerY, radioSize / 2,
-                              isHovered ? accentColor : 0xFF666677);
+                              isHovered ? accentColor : t.borderMuted);
             if (isSelected)
                 ctx.circle(centerX, centerY, radioSize / 4, accentColor);
             if (isHovered && !isSelected)
-                ctx.circle(centerX, centerY, radioSize / 6, 0xFF555566);
+                ctx.circle(centerX, centerY, radioSize / 6, t.thumbHover);
 
-            ctx.text(options[i], x + radioSize + 8, cy + 4, fgColor);
+            ctx.text(options[i], x + radioSize + t.padLarge, cy + t.padMedium, fgColor);
             cy += optH;
         }
     }
 
     std::optional<WidgetEvent> onPress(float localX, float localY) override {
-        float optH = 24;
+        float optH = defaultTheme().rowHeight;
         int idx = (int)(localY / optH);
         if (idx >= 0 && idx < (int)options.size()) {
             selectedIndex = idx;

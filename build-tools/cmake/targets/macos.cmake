@@ -47,7 +47,6 @@ target_link_libraries(yetty PRIVATE
     ${YETTY_LIBS}
     glfw
     glfw3webgpu
-    imgui
     args
     ytrace::ytrace
     lz4_static

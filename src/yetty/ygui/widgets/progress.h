@@ -11,9 +11,11 @@ public:
     float maxValue = 1;
 
     void render(RenderContext& ctx) override {
-        ctx.box(x, y, w, h, bgColor, 4);
+        auto& t = ctx.theme();
+        ctx.box(x, y, w, h, bgColor, t.radiusMedium);
         float pct = (value - minValue) / (maxValue - minValue);
-        ctx.box(x + 2, y + 2, (w - 4) * pct, h - 4, accentColor, 2);
+        float pad = t.padSmall;
+        ctx.box(x + pad, y + pad, (w - pad * 2) * pct, h - pad * 2, accentColor, t.radiusSmall);
     }
 };
 

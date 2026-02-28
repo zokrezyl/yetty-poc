@@ -25,6 +25,8 @@
 #include "../../ygui/widgets/popup.h"
 #include "../../ygui/widgets/listbox.h"
 #include "../../ygui/widgets/tooltip.h"
+#include "../../ygui/widgets/hbox.h"
+#include "../../ygui/widgets/vbox.h"
 
 #include <cmath>
 #include <sstream>
@@ -125,6 +127,7 @@ static void applyCommon(yetty::ygui::Widget* w, const YAML::Node& node) {
         w->w = (node["w"] ? node["w"] : node["width"]).as<float>();
     if (node["h"] || node["height"])
         w->h = (node["h"] ? node["h"] : node["height"]).as<float>();
+    w->stretch = yamlFloat(node, "stretch");
     w->onClick = yamlStr(node, "on_click");
     w->onChange = yamlStr(node, "on_change");
 
@@ -312,6 +315,18 @@ static yetty::ygui::WidgetPtr parseWidget(const YAML::Node& node) {
         w->label = yamlStr(node, "label");
         return w;
     }
+    if (t == "hbox") {
+        auto w = std::make_shared<HBox>();
+        applyCommon(w.get(), node);
+        w->spacing = yamlFloat(node, "spacing");
+        return w;
+    }
+    if (t == "vbox") {
+        auto w = std::make_shared<VBox>();
+        applyCommon(w.get(), node);
+        w->spacing = yamlFloat(node, "spacing");
+        return w;
+    }
 
     // Unknown type — return generic label
     auto w = std::make_shared<Label>();
@@ -375,6 +390,12 @@ public:
         // Create IO and engine
         _io = std::make_unique<OscYGuiIO>(name());
         _engine = std::make_unique<yetty::ygui::YGuiEngine>(_buffer.get(), _io.get());
+
+        // Wire text measurement from builder into engine
+        auto builderPtr = _builder;
+        _engine->setMeasureTextFn([builderPtr](const std::string& text, float fontSize) {
+            return builderPtr->measureTextWidth(text, fontSize);
+        });
 
         _pixelWidth = static_cast<float>(_widthCells * 10);
         _pixelHeight = static_cast<float>(_heightCells * 20);

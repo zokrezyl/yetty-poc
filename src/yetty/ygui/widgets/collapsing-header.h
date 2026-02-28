@@ -11,10 +11,11 @@ public:
     std::string label;
 
     void render(RenderContext& ctx) override {
-        ctx.box(x, y, w, h, bgColor, 4);
+        auto& t = ctx.theme();
+        ctx.box(x, y, w, h, bgColor, t.radiusMedium);
 
-        float arrowSize = 8;
-        float arrowX = x + 10;
+        float arrowSize = t.padLarge;
+        float arrowX = x + t.padLarge + 2;
         float arrowY = y + h / 2;
         if (isOpen()) {
             ctx.triangle(arrowX, arrowY - arrowSize / 3,
@@ -26,9 +27,9 @@ public:
                          arrowX + arrowSize * 0.7f, arrowY, fgColor);
         }
 
-        ctx.text(label, x + 26, y + 4, fgColor);
+        ctx.text(label, x + arrowSize + t.padLarge * 2 + 2, y + t.padMedium, fgColor);
         if (isHover())
-            ctx.boxOutline(x, y, w, h, accentColor, 4);
+            ctx.boxOutline(x, y, w, h, accentColor, t.radiusMedium);
     }
 
     void renderAll(RenderContext& ctx) override {
@@ -37,15 +38,13 @@ public:
         wasRendered = true;
         render(ctx);
         if (isOpen()) {
-            ctx.pushOffset(x, y + h);
+            RenderContext::OffsetGuard outerGuard(ctx, x, y + h);
             float yAccum = 0;
             for (auto& child : children) {
-                ctx.pushOffset(0, yAccum);
+                RenderContext::OffsetGuard innerGuard(ctx, 0, yAccum);
                 child->renderAll(ctx);
-                ctx.popOffset();
                 yAccum += child->h;
             }
-            ctx.popOffset();
         }
     }
 

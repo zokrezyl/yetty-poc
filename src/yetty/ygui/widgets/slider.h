@@ -14,17 +14,18 @@ public:
     float maxValue = 1;
 
     void render(RenderContext& ctx) override {
-        float trackH = 4;
+        auto& t = ctx.theme();
+        float trackH = t.padMedium;
         float trackY = y + (h - trackH) / 2;
-        ctx.box(x, trackY, w, trackH, bgColor, 2);
+        ctx.box(x, trackY, w, trackH, bgColor, t.radiusSmall);
 
         float pct = (value - minValue) / (maxValue - minValue);
         float fillW = pct * w;
-        ctx.box(x, trackY, fillW, trackH, accentColor, 2);
+        ctx.box(x, trackY, fillW, trackH, accentColor, t.radiusSmall);
 
-        float handleW = 12;
+        float handleW = t.scrollbarSize;
         float handleX = x + fillW - handleW / 2;
-        ctx.box(handleX, y, handleW, h, accentColor, 6);
+        ctx.box(handleX, y, handleW, h, accentColor, handleW / 2);
     }
 
     std::optional<WidgetEvent> onPress(float localX, float localY) override {

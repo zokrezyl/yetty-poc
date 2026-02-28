@@ -12,7 +12,7 @@ public:
 
     void render(RenderContext& ctx) override {
         if (isOpen()) {
-            ctx.box(x, y, w, h, bgColor, 4);
+            ctx.box(x, y, w, h, bgColor, ctx.theme().radiusMedium);
         }
     }
 };
@@ -22,26 +22,28 @@ public:
     int activeTab = 0;
 
     void render(RenderContext& ctx) override {
-        ctx.box(x, y, w, h, bgColor, 4);
+        auto& t = ctx.theme();
+        ctx.box(x, y, w, h, bgColor, t.radiusMedium);
 
-        float tabX = x + 4;
+        float tabX = x + t.padMedium;
         int tabIdx = 0;
         for (auto& child : children) {
             bool isActive = (tabIdx == activeTab);
             float tabW = child->w > 0 ? child->w : 80;
-            float tabH = h - 4;
+            float tabH = h - t.padMedium;
 
             if (isActive)
-                ctx.box(tabX, y + 2, tabW, tabH, accentColor, 4);
+                ctx.box(tabX, y + t.padSmall, tabW, tabH, accentColor, t.radiusMedium);
             else if (child->isHover())
-                ctx.box(tabX, y + 2, tabW, tabH, 0xFF333344, 4);
+                ctx.box(tabX, y + t.padSmall, tabW, tabH, t.bgHover, t.radiusMedium);
 
             auto* tabItem = dynamic_cast<TabItem*>(child.get());
             std::string label;
             if (tabItem) label = tabItem->label;
-            ctx.text(label, tabX + 8, y + 6, isActive ? 0xFFFFFFFF : 0xFFAAAAAA);
+            ctx.text(label, tabX + t.padLarge, y + t.padLarge - 2,
+                     isActive ? t.textPrimary : t.textMuted);
 
-            tabX += tabW + 4;
+            tabX += tabW + t.padMedium;
             tabIdx++;
         }
     }
@@ -52,7 +54,8 @@ public:
     }
 
     std::optional<WidgetEvent> onPress(float localX, float localY) override {
-        float tabX = 4;
+        auto& t = defaultTheme();
+        float tabX = t.padMedium;
         int tabIdx = 0;
         for (auto& child : children) {
             float tabW = child->w > 0 ? child->w : 80;
@@ -62,7 +65,7 @@ public:
                     return WidgetEvent{id, "change", "selected", std::to_string(activeTab)};
                 return {};
             }
-            tabX += tabW + 4;
+            tabX += tabW + t.padMedium;
             tabIdx++;
         }
         return {};
