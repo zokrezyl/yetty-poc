@@ -35,3 +35,14 @@ target_include_directories(vnc-test-client PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/src
 )
+
+# Compute shader unit test
+add_executable(test-compute-shader test-compute-shader.cpp)
+
+target_link_libraries(test-compute-shader PRIVATE
+    webgpu
+)
+
+target_include_directories(test-compute-shader PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+)

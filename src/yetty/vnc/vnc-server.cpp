@@ -24,33 +24,45 @@ VncServer::VncServer(WGPUDevice device, WGPUQueue queue)
 }
 
 // Compute shader for tile diff detection
-// Each workgroup handles one tile, compares pixels, outputs 1 if any differ
+// Each workgroup handles one tile (64x64), 8x8 threads each check 8x8 pixels = full coverage
 static const char* DIFF_SHADER = R"(
 @group(0) @binding(0) var currTex: texture_2d<f32>;
 @group(0) @binding(1) var prevTex: texture_2d<f32>;
 @group(0) @binding(2) var<storage, read_write> dirtyFlags: array<u32>;
 
-override TILE_SIZE: u32 = 64;
-override TILES_X: u32 = 20;
+const TILE_SIZE: u32 = 64;
+const PIXELS_PER_THREAD: u32 = 8;  // 64/8 = 8 pixels per thread per dimension
 
 @compute @workgroup_size(8, 8)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>,
+fn main(@builtin(local_invocation_id) lid: vec3<u32>,
         @builtin(workgroup_id) wgid: vec3<u32>) {
-    let tileIdx = wgid.y * TILES_X + wgid.x;
-    let px = wgid.x * TILE_SIZE + gid.x % TILE_SIZE;
-    let py = wgid.y * TILE_SIZE + gid.y % TILE_SIZE;
-
     let dims = textureDimensions(currTex);
-    if (px >= dims.x || py >= dims.y) {
-        return;
-    }
+    let tilesX = (dims.x + TILE_SIZE - 1u) / TILE_SIZE;
+    let tileIdx = wgid.y * tilesX + wgid.x;
+    let tileStartX = wgid.x * TILE_SIZE;
+    let tileStartY = wgid.y * TILE_SIZE;
 
-    let curr = textureLoad(currTex, vec2<u32>(px, py), 0);
-    let prev = textureLoad(prevTex, vec2<u32>(px, py), 0);
+    // Each thread checks an 8x8 region of pixels within the tile
+    let regionStartX = tileStartX + lid.x * PIXELS_PER_THREAD;
+    let regionStartY = tileStartY + lid.y * PIXELS_PER_THREAD;
 
-    // If any channel differs, mark tile dirty (atomic OR)
-    if (any(curr != prev)) {
-        atomicOr(&dirtyFlags[tileIdx], 1u);
+    for (var dy: u32 = 0u; dy < PIXELS_PER_THREAD; dy++) {
+        for (var dx: u32 = 0u; dx < PIXELS_PER_THREAD; dx++) {
+            let px = regionStartX + dx;
+            let py = regionStartY + dy;
+
+            if (px >= dims.x || py >= dims.y) {
+                continue;
+            }
+
+            let curr = textureLoad(currTex, vec2<u32>(px, py), 0);
+            let prev = textureLoad(prevTex, vec2<u32>(px, py), 0);
+
+            if (any(curr != prev)) {
+                dirtyFlags[tileIdx] = 1u;
+                return;  // Early exit once we find a difference
+            }
+        }
     }
 }
 )";
@@ -363,21 +375,27 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
                 _framesSinceFullRefresh = 0;
             }
 
+            WGPUExtent3D extent = {width, height, 1};
+
             if (_forceFullFrame) {
                 // Skip GPU diff, mark all dirty
                 std::fill(_dirtyTiles.begin(), _dirtyTiles.end(), true);
                 _forceFullFrame = false;
-                _captureState = CaptureState::IDLE;
+
+                // Copy current to prev for next frame comparison
+                WGPUCommandEncoder copyEnc = wgpuDeviceCreateCommandEncoder(_device, nullptr);
+                WGPUTexelCopyTextureInfo srcCopy = {};
+                srcCopy.texture = texture;
+                WGPUTexelCopyTextureInfo dstCopy = {};
+                dstCopy.texture = _prevTexture;
+                wgpuCommandEncoderCopyTextureToTexture(copyEnc, &srcCopy, &dstCopy, &extent);
+                WGPUCommandBuffer copyCmd = wgpuCommandEncoderFinish(copyEnc, nullptr);
+                wgpuQueueSubmit(_queue, 1, &copyCmd);
+                wgpuCommandBufferRelease(copyCmd);
+                wgpuCommandEncoderRelease(copyEnc);
+
                 break;  // Go to encoding
             }
-
-            // Upload current frame to GPU for comparison
-            WGPUTexelCopyTextureInfo dst = {};
-            dst.texture = _prevTexture;
-            WGPUTexelCopyBufferLayout layout = {};
-            layout.bytesPerRow = width * 4;
-            layout.rowsPerImage = height;
-            WGPUExtent3D extent = {width, height, 1};
 
             // Create bind group for this frame
             if (_diffBindGroup) wgpuBindGroupRelease(_diffBindGroup);
@@ -403,14 +421,30 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
             wgpuTextureViewRelease(currView);
             wgpuTextureViewRelease(prevView);
 
-            // Clear dirty flags buffer, run compute, copy to readback
+            // Clear dirty flags buffer in separate submission (required for Dawn)
+            {
+                WGPUCommandEncoder clearEnc = wgpuDeviceCreateCommandEncoder(_device, nullptr);
+                wgpuCommandEncoderClearBuffer(clearEnc, _dirtyFlagsBuffer, 0, _tilesX * _tilesY * sizeof(uint32_t));
+                WGPUCommandBuffer clearCmd = wgpuCommandEncoderFinish(clearEnc, nullptr);
+                wgpuQueueSubmit(_queue, 1, &clearCmd);
+                wgpuCommandBufferRelease(clearCmd);
+                wgpuCommandEncoderRelease(clearEnc);
+
+                std::atomic<bool> clearDone{false};
+                WGPUQueueWorkDoneCallbackInfo clearCb = {};
+                clearCb.mode = WGPUCallbackMode_AllowSpontaneous;
+                clearCb.callback = [](WGPUQueueWorkDoneStatus, WGPUStringView, void* ud, void*) {
+                    *static_cast<std::atomic<bool>*>(ud) = true;
+                };
+                clearCb.userdata1 = &clearDone;
+                wgpuQueueOnSubmittedWorkDone(_queue, clearCb);
+                while (!clearDone) wgpuDeviceTick(_device);
+            }
+
+            // Run compute shader and copy to readback
             WGPUCommandEncoderDescriptor encDesc = {};
             WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(_device, &encDesc);
 
-            // Clear dirty flags to 0
-            wgpuCommandEncoderClearBuffer(encoder, _dirtyFlagsBuffer, 0, _tilesX * _tilesY * sizeof(uint32_t));
-
-            // Run compute shader
             WGPUComputePassDescriptor cpDesc = {};
             WGPUComputePassEncoder cpass = wgpuCommandEncoderBeginComputePass(encoder, &cpDesc);
             wgpuComputePassEncoderSetPipeline(cpass, _diffPipeline);
@@ -542,6 +576,8 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
     for (size_t i = 0; i < _dirtyTiles.size(); i++) {
         if (_dirtyTiles[i]) numDirty++;
     }
+
+    yinfo("VNC sendFrame: numDirty={}/{}", numDirty, _tilesX * _tilesY);
 
     if (numDirty == 0) return Ok();
 

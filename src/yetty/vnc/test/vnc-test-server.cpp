@@ -494,7 +494,7 @@ int main(int argc, char* argv[]) {
             WGPUTextureDescriptor texDesc = {};
             texDesc.size = {static_cast<uint32_t>(sizing.width), static_cast<uint32_t>(sizing.height), 1};
             texDesc.format = WGPUTextureFormat_BGRA8Unorm;
-            texDesc.usage = WGPUTextureUsage_CopySrc | WGPUTextureUsage_CopyDst;
+            texDesc.usage = WGPUTextureUsage_CopySrc | WGPUTextureUsage_CopyDst | WGPUTextureUsage_TextureBinding;
             texDesc.mipLevelCount = 1;
             texDesc.sampleCount = 1;
             texDesc.dimension = WGPUTextureDimension_2D;
