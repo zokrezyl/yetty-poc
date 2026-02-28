@@ -204,59 +204,27 @@ private:
 //=============================================================================
 
 void generateTextPattern(Terminal& term, int frame) {
-    // Always clear and redraw entire screen for consistent testing
     term.write("\033[2J\033[H");  // Clear screen, home cursor
 
-    char buf[256];
+    char buf[128];
 
-    // Line 1: Header
-    term.write("\033[1;36m========== VNC TEST ==========\033[0m\n");
-
-    // Line 2: Frame counter (big and obvious)
-    snprintf(buf, sizeof(buf), "\033[1;33mFRAME: %08d\033[0m\n", frame);
+    // Row 0: Frame number at column 0
+    snprintf(buf, sizeof(buf), "%08d\r\n", frame);
     term.write(buf);
 
-    // Line 3: Simple incrementing numbers
-    snprintf(buf, sizeof(buf), "Count: %d %d %d %d %d\n",
-             frame, frame+1, frame+2, frame+3, frame+4);
+    // Row 1: Counter
+    snprintf(buf, sizeof(buf), "%d\r\n", frame);
     term.write(buf);
 
-    // Line 4: Time display
-    int h = (frame / 3600) % 24;
-    int m = (frame / 60) % 60;
-    int s = frame % 60;
-    snprintf(buf, sizeof(buf), "Time: %02d:%02d:%02d\n", h, m, s);
-    term.write(buf);
+    // Row 2: Static
+    term.write("ABCDEFGHIJ\r\n");
 
-    // Line 5: Progress bar
-    int pct = frame % 100;
-    snprintf(buf, sizeof(buf), "Progress: [");
-    term.write(buf);
-    for (int i = 0; i < 50; ++i) {
-        term.write(i < pct/2 ? "#" : ".");
+    // Row 3: Rotating
+    for (int i = 0; i < 10; i++) {
+        char c = '0' + ((frame + i) % 10);
+        term.write(&c, 1);
     }
-    snprintf(buf, sizeof(buf), "] %02d%%\n", pct);
-    term.write(buf);
-
-    // Line 6: Alphabet rotating
-    term.write("Alpha: ");
-    for (int i = 0; i < 26; ++i) {
-        char c = 'A' + ((i + frame) % 26);
-        snprintf(buf, sizeof(buf), "%c", c);
-        term.write(buf);
-    }
-    term.write("\n");
-
-    // Line 7: Numbers rotating
-    term.write("Nums:  ");
-    for (int i = 0; i < 20; ++i) {
-        snprintf(buf, sizeof(buf), "%d", (frame + i) % 10);
-        term.write(buf);
-    }
-    term.write("\n");
-
-    // Line 8: Static reference text
-    term.write("\n\033[32mIf you see this updating, VNC works!\033[0m\n");
+    term.write("\r\n");
 }
 
 void generateScrollPattern(Terminal& term, int frame) {
@@ -451,6 +419,21 @@ int main(int argc, char* argv[]) {
         std::memset(framebuffer.data(), 0x1E, framebuffer.size());
         for (size_t i = 3; i < framebuffer.size(); i += 4) {
             framebuffer[i] = 0xFF;  // Alpha
+        }
+
+        // Debug: dump first 4 rows
+        if (frameCount % 10 == 0) {
+            for (int r = 0; r < 4; r++) {
+                std::string rowStr;
+                for (int c = 0; c < 12; c++) {
+                    uint32_t cp;
+                    uint8_t rr, g, b, bgR, bgG, bgB;
+                    if (term.getCell(r, c, cp, rr, g, b, bgR, bgG, bgB)) {
+                        rowStr += (cp >= 32 && cp < 127) ? static_cast<char>(cp) : '.';
+                    }
+                }
+                yinfo("Row {}: [{}]", r, rowStr);
+            }
         }
 
         // Render terminal cells to framebuffer
