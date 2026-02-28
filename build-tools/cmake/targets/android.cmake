@@ -50,9 +50,27 @@ target_link_libraries(yetty PRIVATE
     log
 )
 
-# Copy assets
+# CDB font generation (builds host tools for cross-compilation)
+include(${YETTY_ROOT}/build-tools/cmake/cdb-gen.cmake)
+
+# Copy assets to Android build directory
 set(ANDROID_ASSETS_DIR "${ANDROID_BUILD_DIR}/assets")
 file(MAKE_DIRECTORY ${ANDROID_ASSETS_DIR})
 file(GLOB ASSET_FILES "${YETTY_ROOT}/assets/*")
 file(COPY ${ASSET_FILES} DESTINATION ${ANDROID_ASSETS_DIR})
-configure_file(${YETTY_ROOT}/src/yetty/shaders/gpu-screen.wgsl ${ANDROID_ASSETS_DIR}/gpu-screen.wgsl COPYONLY)
+
+# Ensure CDB, shaders, and assets are built before yetty
+add_dependencies(yetty generate-cdb copy-shaders)
+
+# Copy generated assets (CDB fonts, shaders) to Android assets dir after build
+add_custom_command(TARGET yetty POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_BINARY_DIR}/assets/fonts-cdb ${ANDROID_ASSETS_DIR}/fonts-cdb
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_BINARY_DIR}/assets/shaders ${ANDROID_ASSETS_DIR}/shaders
+    COMMENT "Copying CDB fonts and shaders to Android assets"
+)
+
+# Verify all required assets are present
+add_custom_command(TARGET yetty POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -DBUILD_DIR=${ANDROID_ASSETS_DIR}/.. -DTARGET_TYPE=android -P ${YETTY_ROOT}/build-tools/cmake/verify-assets.cmake
+    COMMENT "Verifying build assets..."
+)

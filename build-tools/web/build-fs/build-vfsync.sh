@@ -76,7 +76,25 @@ else
     echo "Warning: demo/ directory not found"
 fi
 
-# Step 3b: Add pre-generated demo outputs
+# Step 3b: Add source tree
+echo ""
+echo "=== Step 3b: Adding source tree ==="
+mkdir -p "$ROOTFS_DIR/home/src"
+for dir in src include build-tools assets; do
+    if [ -d "$YETTY_ROOT/$dir" ]; then
+        cp -r "$YETTY_ROOT/$dir" "$ROOTFS_DIR/home/src/$dir"
+        echo "Copied $dir/ to /home/src/$dir/"
+    fi
+done
+# Copy top-level build files
+for f in CMakeLists.txt Makefile flake.nix flake.lock; do
+    if [ -f "$YETTY_ROOT/$f" ]; then
+        cp "$YETTY_ROOT/$f" "$ROOTFS_DIR/home/src/"
+    fi
+done
+echo "Source tree available at /home/src/"
+
+# Step 3c: Add pre-generated demo outputs
 if [ -d "$BUILD_DIR/demo-output" ]; then
     cp -r "$BUILD_DIR/demo-output" "$ROOTFS_DIR/home/demo/output"
     echo "Copied demo-output/ to /home/demo/output/"
@@ -121,8 +139,9 @@ cat > "$ROOTFS_DIR/etc/motd" << 'EOF'
 
 Welcome to yetty Alpine Linux!
 
-Demo files: /home/demo/
-Tools: /usr/local/bin/
+Source tree: /home/src/
+Demo files:  /home/demo/
+Tools:       /usr/local/bin/
 
 EOF
 

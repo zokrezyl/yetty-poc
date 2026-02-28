@@ -105,9 +105,6 @@ if(TARGET_TYPE STREQUAL "desktop")
 
     # Executable
     check_file("yetty" "Yetty executable")
-
-    # Demo directory
-    check_dir("demo" "Demo scripts directory")
 endif()
 
 #-----------------------------------------------------------------------------
