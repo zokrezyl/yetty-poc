@@ -362,6 +362,14 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
             return Err<void>("Failed to connect VNC client", res);
         }
         yinfo("VNC client connected to {}:{}", _vncHost, _vncPort);
+
+        // Send initial window size to server so it can size the terminal appropriately
+        int windowW, windowH;
+        _platform->getWindowSize(windowW, windowH);
+        if (windowW > 0 && windowH > 0) {
+            _vncClient->sendResize(static_cast<uint16_t>(windowW), static_cast<uint16_t>(windowH));
+            yinfo("VNC client sent initial resize: {}x{}", windowW, windowH);
+        }
     }
 
     // Initialize VNC server mode if enabled
@@ -457,6 +465,29 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
                 }
                 loop->dispatch(base::Event::charInput(cp));
             }
+        };
+
+        // VNC client resize - changes the terminal grid size (not cell size)
+        _vncServer->onResize = [this](uint16_t widthPx, uint16_t heightPx) {
+            if (widthPx == 0 || heightPx == 0) return;
+            yinfo("VNC onResize: {}x{} px", widthPx, heightPx);
+
+            // In VNC mode, client controls the frame size
+            // Resize workspace to match (this flows down to terminal)
+            if (_activeWorkspace) {
+                _activeWorkspace->resize(static_cast<float>(widthPx), static_cast<float>(heightPx));
+            }
+
+            // Force full frame on next capture
+            _vncServer->forceFullFrame();
+        };
+
+        // VNC client cell size change (zoom)
+        _vncServer->onCellSize = [this](uint8_t cellHeight) {
+            yinfo("VNC onCellSize: cellHeight={}", cellHeight);
+            // TODO: Implement cell size change - requires font scaling
+            // For now, just force a full frame refresh
+            _vncServer->forceFullFrame();
         };
     }
 
@@ -1738,7 +1769,9 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
                     return Err<void>("Capture workspace render failed", res);
                 }
             }
-            if (_yettyContext.imguiManager) {
+            // Only render ImGui for capture benchmark, NOT for VNC streaming
+            // VNC should only show the terminal content, not statusbar/UI
+            if (_captureBenchmark && _yettyContext.imguiManager) {
                 if (auto res = _yettyContext.imguiManager->render(capturePass); !res) {
                     wgpuRenderPassEncoderEnd(capturePass);
                     wgpuRenderPassEncoderRelease(capturePass);
@@ -1890,6 +1923,12 @@ void YettyImpl::handleResize(int newWidth, int newHeight) noexcept {
     if (_activeWorkspace) {
         float statusbarHeight = _yettyContext.imguiManager ? _yettyContext.imguiManager->getStatusbarHeight() : 0.0f;
         _activeWorkspace->resize(logicalW, logicalH - statusbarHeight);
+    }
+
+    // VNC client mode: tell server about our new window size
+    if (_vncClientMode && _vncClient && windowWidth > 0 && windowHeight > 0) {
+        _vncClient->sendResize(static_cast<uint16_t>(windowWidth), static_cast<uint16_t>(windowHeight));
+        yinfo("VNC client sent resize: {}x{}", windowWidth, windowHeight);
     }
 }
 
