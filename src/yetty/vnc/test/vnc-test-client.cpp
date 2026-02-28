@@ -36,16 +36,27 @@ void signalHandler(int) {
 // Client state for GLFW callbacks
 struct ClientState {
     VncClient* client = nullptr;
+    WGPUSurface surface = nullptr;
+    WGPUDevice device = nullptr;
+    WGPUTextureFormat surfaceFormat = WGPUTextureFormat_BGRA8Unorm;
+    int windowWidth = 1280;
+    int windowHeight = 720;
     uint8_t cellHeight = 20;  // Default cell height
+    bool needsReconfigure = false;
     static constexpr uint8_t MIN_CELL_HEIGHT = 8;
     static constexpr uint8_t MAX_CELL_HEIGHT = 64;
 };
 ClientState g_clientState;
 
 void framebufferSizeCallback(GLFWwindow* window, int width, int height) {
-    if (g_clientState.client && width > 0 && height > 0) {
+    if (width > 0 && height > 0) {
         yinfo("Window resized to {}x{}", width, height);
-        g_clientState.client->sendResize(static_cast<uint16_t>(width), static_cast<uint16_t>(height));
+        g_clientState.windowWidth = width;
+        g_clientState.windowHeight = height;
+        g_clientState.needsReconfigure = true;
+        if (g_clientState.client) {
+            g_clientState.client->sendResize(static_cast<uint16_t>(width), static_cast<uint16_t>(height));
+        }
     }
 }
 
@@ -361,6 +372,13 @@ int main(int argc, char* argv[]) {
     }
     yinfo("Surface test OK, texture={}", (void*)testSurfaceTex.texture);
 
+    // Store in client state for resize handling
+    g_clientState.surface = surface;
+    g_clientState.device = device;
+    g_clientState.surfaceFormat = surfaceFormat;
+    g_clientState.windowWidth = windowWidth;
+    g_clientState.windowHeight = windowHeight;
+
     yinfo("WebGPU initialized");
 
     // Test render mode: create random bitmap texture directly
@@ -572,6 +590,23 @@ struct VertexOutput {
     // Main loop - event driven, render only when tiles arrive
     while (!glfwWindowShouldClose(window) && g_running) {
         glfwPollEvents();
+
+        // Reconfigure surface if window was resized
+        if (g_clientState.needsReconfigure && g_clientState.surface) {
+            yinfo("Reconfiguring surface to {}x{}", g_clientState.windowWidth, g_clientState.windowHeight);
+            WGPUSurfaceConfiguration surfaceConfig = {};
+            surfaceConfig.device = g_clientState.device;
+            surfaceConfig.format = g_clientState.surfaceFormat;
+            surfaceConfig.usage = WGPUTextureUsage_RenderAttachment;
+            surfaceConfig.width = g_clientState.windowWidth;
+            surfaceConfig.height = g_clientState.windowHeight;
+            surfaceConfig.presentMode = WGPUPresentMode_Fifo;
+            surfaceConfig.alphaMode = WGPUCompositeAlphaMode_Auto;
+            wgpuSurfaceConfigure(g_clientState.surface, &surfaceConfig);
+            windowWidth = g_clientState.windowWidth;
+            windowHeight = g_clientState.windowHeight;
+            g_clientState.needsReconfigure = false;
+        }
 
         // Run libuv event loop - blocks until socket has data or timeout
         if (uvLoop) {
