@@ -171,6 +171,8 @@ Result<bool> VncClient::onEvent(const base::Event& event) {
 void VncClient::onSocketReadable() {
     if (!_connected || _socket < 0) return;
 
+    yinfo("VNC client: onSocketReadable called, state={}", static_cast<int>(_recvState));
+
     // Read as much as possible
     while (true) {
         ssize_t n = recv(_socket, _recvBuffer.data() + _recvOffset,
@@ -311,7 +313,9 @@ void VncClient::onSocketReadable() {
                 }
 
                 // Queue tile update
+                uint16_t tx = update.tile_x, ty = update.tile_y;
                 _pendingTiles.push(std::move(update));
+                yinfo("VNC client: queued tile ({},{}) total pending={}", tx, ty, _pendingTiles.size());
 
                 _tilesReceived++;
 

@@ -15,4 +15,8 @@ target_link_libraries(yetty_vnc PUBLIC
     webgpu
     turbojpeg-static
     ytrace::ytrace
+    yetty_base
 )
+
+# Test utilities
+add_subdirectory(test)

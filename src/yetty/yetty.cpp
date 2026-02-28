@@ -176,6 +176,11 @@ private:
     uint16_t _vncServerPort = 5900;
     std::unique_ptr<vnc::VncServer> _vncServer;
 
+    // VNC test mode - generates test patterns instead of PTY
+    bool _vncTestMode = false;
+    std::string _vncTestPattern = "text";  // text, color, scroll, stress
+    int _vncTestFrame = 0;
+
     // Prevent recursive render
     bool _inRender = false;
 
@@ -469,6 +474,7 @@ Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
     args::Flag vncServerFlag(parser, "vnc-server", "Start VNC server", {"vnc-server"});
     args::ValueFlag<uint16_t> vncServerPortFlag(parser, "port", "VNC server port (default 5900)", {"vnc-port"}, 5900);
     args::Flag vncHeadlessFlag(parser, "vnc-headless", "VNC headless mode (no local rendering)", {"vnc-headless"});
+    args::ValueFlag<std::string> vncTestFlag(parser, "pattern", "VNC test mode: text, color, scroll, stress", {"vnc-test"});
 
     try {
         parser.ParseCLI(argc, argv);
@@ -518,6 +524,28 @@ Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
     if (vncHeadlessFlag) {
         _vncHeadless = true;
         yinfo("VNC headless mode: no local rendering");
+    }
+
+    if (vncTestFlag) {
+        _vncTestMode = true;
+        _vncTestPattern = args::get(vncTestFlag);
+        _vncServerMode = true;  // Test mode implies server mode
+        yinfo("VNC test mode: pattern={}", _vncTestPattern);
+
+        // Set execute command for test patterns
+        if (_vncTestPattern == "text") {
+            // Scrolling text test - shows consistent readable content
+            _executeCommand = "bash -c 'frame=0; while true; do clear; echo \"=== VNC TEST: TEXT ===\"; echo \"Frame: $((++frame))\"; for i in $(seq 1 20); do echo \"Line $i: ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyz\"; done; date; sleep 0.1; done'";
+        } else if (_vncTestPattern == "color") {
+            // Color test - shows ANSI colors
+            _executeCommand = "bash -c 'while true; do clear; echo \"=== VNC TEST: COLOR ===\"; for fg in 30 31 32 33 34 35 36 37; do for bg in 40 41 42 43 44 45 46 47; do printf \"\\033[%d;%dm X \\033[0m\" $fg $bg; done; echo; done; sleep 1; done'";
+        } else if (_vncTestPattern == "scroll") {
+            // Scroll test - continuous scrolling
+            _executeCommand = "bash -c 'i=0; while true; do echo \"Line $((++i)): $(date) - The quick brown fox jumps over the lazy dog\"; sleep 0.05; done'";
+        } else if (_vncTestPattern == "stress") {
+            // Stress test - maximum output
+            _executeCommand = "bash -c 'while true; do cat /dev/urandom | tr -dc A-Za-z0-9 | head -c 1000; echo; done'";
+        }
     }
 
     return Ok();
