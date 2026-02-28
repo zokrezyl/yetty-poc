@@ -1927,7 +1927,8 @@ void YettyImpl::handleResize(int newWidth, int newHeight) noexcept {
             static_cast<uint32_t>(logicalW), static_cast<uint32_t>(logicalH));
     }
 
-    if (_activeWorkspace) {
+    // In VNC headless mode, workspace size is controlled by VNC client, not local window
+    if (_activeWorkspace && !_vncHeadless) {
         float statusbarHeight = _yettyContext.imguiManager ? _yettyContext.imguiManager->getStatusbarHeight() : 0.0f;
         _activeWorkspace->resize(logicalW, logicalH - statusbarHeight);
     }
