@@ -94,6 +94,7 @@ VncServer::~VncServer() {
     if (_prevTexture) wgpuTextureRelease(_prevTexture);
     if (_dirtyFlagsBuffer) wgpuBufferRelease(_dirtyFlagsBuffer);
     if (_dirtyFlagsReadback) wgpuBufferRelease(_dirtyFlagsReadback);
+    if (_tileReadbackBuffer) wgpuBufferRelease(_tileReadbackBuffer);
     if (_diffPipeline) wgpuComputePipelineRelease(_diffPipeline);
     if (_diffBindGroup) wgpuBindGroupRelease(_diffBindGroup);
     if (_diffBindGroupLayout) wgpuBindGroupLayoutRelease(_diffBindGroupLayout);
@@ -227,6 +228,7 @@ Result<void> VncServer::ensureResources(uint32_t width, uint32_t height) {
     if (_dirtyFlagsBuffer) { wgpuBufferRelease(_dirtyFlagsBuffer); _dirtyFlagsBuffer = nullptr; }
     if (_dirtyFlagsReadback) { wgpuBufferRelease(_dirtyFlagsReadback); _dirtyFlagsReadback = nullptr; }
     if (_diffBindGroup) { wgpuBindGroupRelease(_diffBindGroup); _diffBindGroup = nullptr; }
+    if (_tileReadbackBuffer) { wgpuBufferRelease(_tileReadbackBuffer); _tileReadbackBuffer = nullptr; }
 
     _lastWidth = width;
     _lastHeight = height;
