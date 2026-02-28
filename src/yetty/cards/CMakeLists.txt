@@ -11,11 +11,8 @@ add_subdirectory(ygui)
 add_subdirectory(markdown)
 add_subdirectory(qrcode)
 
-# Cards with system dependencies not available on Android/WebAssembly
-if(NOT YETTY_ANDROID AND NOT EMSCRIPTEN)
-    add_subdirectory(ypdf)   # Requires ZLIB
-    add_subdirectory(yhtml)  # Requires OpenSSL for cpr
-endif()
+add_subdirectory(ypdf)
+add_subdirectory(yhtml)
 
 # Aggregate library linking all cards
 add_library(yetty_cards INTERFACE)
@@ -31,16 +28,6 @@ target_link_libraries(yetty_cards INTERFACE
     yetty_card_ygui
     yetty_card_markdown
     yetty_card_qrcode
+    yetty_card_ypdf
+    yetty_card_yhtml
 )
-
-# Add platform-specific cards
-if(NOT YETTY_ANDROID AND NOT EMSCRIPTEN)
-    target_link_libraries(yetty_cards INTERFACE
-        yetty_card_ypdf
-        yetty_card_yhtml
-    )
-    target_compile_definitions(yetty_cards INTERFACE
-        YETTY_CARD_YPDF=1
-        YETTY_CARD_YHTML=1
-    )
-endif()
