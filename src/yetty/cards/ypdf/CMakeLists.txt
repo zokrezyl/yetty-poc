@@ -40,6 +40,10 @@ if(pdfio_ADDED)
     else()
         target_compile_options(pdfio_lib PRIVATE -w)
     endif()
+    # Emscripten has <sys/random.h> header but no getrandom() — provide stub
+    if(EMSCRIPTEN)
+        target_sources(pdfio_lib PRIVATE ${YETTY_ROOT}/src/yetty/cards/ypdf/pdfio-getrandom-stub.c)
+    endif()
 endif()
 
 add_subdirectory(${YETTY_ROOT}/src/yetty/ypdf ypdf)
