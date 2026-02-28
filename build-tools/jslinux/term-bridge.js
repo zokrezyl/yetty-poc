@@ -9,6 +9,7 @@
 
 // Logging helper (disabled for production)
 function termLog(msg) {
+    console.log("[term-bridge] " + msg);
 }
 
 class Term {

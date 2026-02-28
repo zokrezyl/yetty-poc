@@ -26,4 +26,6 @@ RUN apk add --no-cache \
     linux-headers \
     binutils \
     strace \
-    file
+    file \
+    util-linux \
+    ncurses-terminfo-base
