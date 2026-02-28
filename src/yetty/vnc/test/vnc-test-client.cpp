@@ -114,21 +114,17 @@ private:
     }
 
     void sendTextInput() {
-        std::uniform_int_distribution<int> lenDist(3, 10);
-        std::uniform_int_distribution<int> charDist('a', 'z');
-        std::uniform_int_distribution<int> newlineDist(0, 5);
+        std::uniform_int_distribution<int> lenDist(3, 8);
+        std::uniform_int_distribution<int> charDist('A', 'Z');
 
         int len = lenDist(_rng);
-        std::string text;
+        // Red color + ">>>" prefix to clearly identify client text
+        std::string text = "\033[1;31m>>>CLIENT>>> ";
         for (int i = 0; i < len; i++) {
             text += static_cast<char>(charDist(_rng));
         }
-        // Add newline occasionally
-        if (newlineDist(_rng) == 0) {
-            text += '\n';
-        } else {
-            text += ' ';
-        }
+        text += "\033[0m\n";  // Reset color + newline
+        yinfo("SENDING TEXT: {}", text);
         _client->sendTextInput(text.data(), text.size());
         _inputCount++;
     }
@@ -528,12 +524,13 @@ struct VertexOutput {
     stats.startTime = glfwGetTime();
     stats.lastReportTime = stats.startTime;
 
-    // Main loop
+    // Main loop - event driven, render only when tiles arrive
     while (!glfwWindowShouldClose(window) && g_running) {
         glfwPollEvents();
 
-        // Run libuv event loop iteration (non-blocking) - processes socket I/O
+        // Run libuv event loop - blocks until socket has data or timeout
         if (uvLoop) {
+            // Use UV_RUN_ONCE to block until event or timeout
             uv_run(uvLoop, UV_RUN_NOWAIT);
         }
 
@@ -543,6 +540,24 @@ struct VertexOutput {
         if (generateInput) {
             inputGen.update(now, windowWidth, windowHeight);
             stats.inputsSent = inputGen.inputCount();
+        }
+
+        // Update VNC texture - returns true if new tiles were received
+        bool needsRender = false;
+        if (vncClient) {
+            auto res = vncClient->updateTexture();
+            if (res) {
+                needsRender = *res;
+            }
+        } else if (testRender) {
+            needsRender = true;  // Always render in test mode
+        }
+
+        // Only render if we have new content
+        if (!needsRender) {
+            // No new tiles, just poll and continue
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            continue;
         }
 
         // Get surface texture
@@ -556,11 +571,6 @@ struct VertexOutput {
 
         WGPUTextureView view = wgpuTextureCreateView(surfaceTexture.texture, nullptr);
 
-        // Update VNC texture with received tiles (only in VNC mode)
-        if (vncClient) {
-            vncClient->updateTexture();
-        }
-
         // Create render pass
         WGPUCommandEncoderDescriptor encDesc = {};
         WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(device, &encDesc);
@@ -573,10 +583,9 @@ struct VertexOutput {
 
         // Use different clear colors to prove rendering works
         if (testRender) {
-            // BRIGHT GREEN - if you don't see this, surface is broken
             colorAtt.clearValue = {0.0, 1.0, 0.0, 1.0};
         } else {
-            colorAtt.clearValue = {1.0, 0.0, 0.0, 1.0};  // RED for VNC mode
+            colorAtt.clearValue = {0.1, 0.1, 0.1, 1.0};  // Dark gray background
         }
 
         WGPURenderPassDescriptor passDesc = {};
@@ -587,12 +596,10 @@ struct VertexOutput {
 
         // Render frame
         if (testRender) {
-            // Draw textured fullscreen quad
             wgpuRenderPassEncoderSetPipeline(pass, testPipeline);
             wgpuRenderPassEncoderSetBindGroup(pass, 0, testBindGroup, 0, nullptr);
             wgpuRenderPassEncoderDraw(pass, 6, 1, 0, 0);
         } else {
-            // VNC mode: render VNC frame
             vncClient->render(pass);
         }
 
@@ -610,9 +617,6 @@ struct VertexOutput {
         // Update stats
         stats.framesRendered++;
         stats.report(now);
-
-        // Small sleep to limit CPU
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 
     yinfo("Shutting down...");

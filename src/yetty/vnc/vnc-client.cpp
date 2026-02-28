@@ -485,14 +485,14 @@ Result<void> VncClient::createPipeline() {
     return Ok();
 }
 
-Result<void> VncClient::updateTexture() {
+Result<bool> VncClient::updateTexture() {
     ydebug("VNC updateTexture: width={} height={}", _width, _height);
-    if (_width == 0 || _height == 0) return Ok();
+    if (_width == 0 || _height == 0) return Ok(false);
 
     // Ensure GPU resources
     if (auto res = ensureResources(_width, _height); !res) {
         ywarn("VNC updateTexture: ensureResources failed");
-        return res;
+        return Err<bool>("ensureResources failed", res);
     }
 
     // Process pending tile updates
@@ -537,7 +537,7 @@ Result<void> VncClient::updateTexture() {
         ydebug("VNC updateTexture: processed {} tiles", tilesProcessed);
     }
 
-    return Ok();
+    return Ok(tilesProcessed > 0);
 }
 
 Result<void> VncClient::render(WGPURenderPassEncoder pass) {

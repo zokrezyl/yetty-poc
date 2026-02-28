@@ -10,6 +10,7 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <cerrno>
+#include <chrono>
 
 namespace yetty::vnc {
 
@@ -422,6 +423,12 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, uint32_t width, uint32_t 
                      reinterpret_cast<uint8_t*>(&fh),
                      reinterpret_cast<uint8_t*>(&fh) + sizeof(fh));
 
+    // Track if this is a full update
+    bool isFullUpdate = (numDirty == _pendingTilesX * _pendingTilesY);
+    if (isFullUpdate) {
+        _stats.fullUpdates++;
+    }
+
     // Encode and append dirty tiles (use pending tile counts to match captured frame)
     {
         ytimeit("vnc-encode");
@@ -433,6 +440,16 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, uint32_t width, uint32_t 
                 Encoding enc;
                 if (auto res = encodeTile(tx, ty, tileData, enc); !res) {
                     continue;
+                }
+
+                // Track tile stats
+                _stats.tilesSent++;
+                if (enc == Encoding::JPEG) {
+                    _stats.tilesJpeg++;
+                    _stats.bytesJpeg += tileData.size();
+                } else {
+                    _stats.tilesRaw++;
+                    _stats.bytesRaw += tileData.size();
                 }
 
                 TileHeader th;
@@ -474,6 +491,33 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, uint32_t width, uint32_t 
         _clientCount = _clients.size();
     }
 
+    // Track frame stats
+    _stats.bytesSent += frameData.size();
+    _stats.frames++;
+
+    // Report stats every second
+    auto now = std::chrono::duration<double>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (now - _stats.lastReportTime >= 1.0) {
+        double elapsed = now - _stats.lastReportTime;
+        if (_stats.lastReportTime > 0 && _stats.frames > 0) {
+            uint32_t avgTileSize = _stats.tilesSent > 0
+                ? static_cast<uint32_t>((_stats.bytesJpeg + _stats.bytesRaw) / _stats.tilesSent)
+                : 0;
+            // Save to public stats
+            _lastStats.tilesSent = _stats.tilesSent;
+            _lastStats.tilesJpeg = _stats.tilesJpeg;
+            _lastStats.tilesRaw = _stats.tilesRaw;
+            _lastStats.avgTileSize = avgTileSize;
+            _lastStats.fullUpdates = _stats.fullUpdates;
+            _lastStats.frames = _stats.frames;
+            _lastStats.bytesPerSec = static_cast<uint64_t>(_stats.bytesSent / elapsed);
+        }
+        // Reset stats
+        _stats = Stats{};
+        _stats.lastReportTime = now;
+    }
+
     return Ok();
 }
 
@@ -502,7 +546,7 @@ void VncServer::pollClientInput(int clientFd) {
             break;  // No more data available
         }
 
-        ydebug("VNC pollClientInput: fd={} received {} bytes", clientFd, n);
+        yinfo("VNC pollClientInput: fd={} received {} bytes", clientFd, n);
         buf.buffer.insert(buf.buffer.end(), tmp, tmp + n);
 
         // Check if we have enough data
@@ -600,11 +644,17 @@ bool VncServer::hasPendingInput() const {
 void VncServer::processInput() {
     // Poll all clients for input (non-blocking)
     std::lock_guard<std::mutex> lock(_clientsMutex);
-    ydebug("VNC processInput: {} clients", _clients.size());
+    static int callCount = 0;
+    if (++callCount % 100 == 1) {
+        yinfo("VNC processInput: {} clients", _clients.size());
+    }
     for (int fd : _clients) {
-        ydebug("VNC: polling client fd={}", fd);
         pollClientInput(fd);
     }
+}
+
+VncServer::FrameStats VncServer::getStats() const {
+    return _lastStats;
 }
 
 } // namespace yetty::vnc

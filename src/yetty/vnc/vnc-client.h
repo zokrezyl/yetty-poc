@@ -28,7 +28,8 @@ public:
     uint16_t height() const { return _height; }
 
     // Update texture with received tiles (call from main thread)
-    Result<void> updateTexture();
+    // Returns true if new tiles were processed
+    Result<bool> updateTexture();
 
     // Render the frame (fullscreen quad)
     Result<void> render(WGPURenderPassEncoder pass);

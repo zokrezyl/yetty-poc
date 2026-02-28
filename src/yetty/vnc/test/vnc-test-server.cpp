@@ -433,6 +433,25 @@ int main(int argc, char* argv[]) {
     }
     yinfo("VNC server started on port {}", port);
 
+    // Store client text to display at a dedicated line (not overwritten by patterns)
+    std::string clientText;
+
+    // Set up input callbacks to write received text to terminal
+    server.onTextInput = [&clientText](const std::string& text) {
+        yinfo("SERVER RECEIVED TEXT: {} bytes: {}", text.size(), text);
+        // Store the text - we'll render it at a dedicated line after pattern generation
+        clientText = text;
+    };
+    server.onKeyDown = [&term](uint32_t keycode, uint32_t scancode, uint8_t mods) {
+        // Convert keycode to character and write to terminal
+        if (keycode >= 32 && keycode < 127) {
+            char c = static_cast<char>(keycode);
+            term.write(&c, 1);
+        } else if (keycode == '\n' || keycode == '\r') {
+            term.write("\n", 1);
+        }
+    };
+
     // Main loop
     std::mt19937 rng(std::random_device{}());
     int frameCount = 0;
@@ -454,6 +473,25 @@ int main(int argc, char* argv[]) {
             generateScrollPattern(term, frameCount);
         } else if (pattern == "stress") {
             generateStressPattern(term, frameCount, rng);
+        }
+
+        // Write client text at a dedicated line (row 30) - won't be overwritten by patterns
+        if (!clientText.empty()) {
+            char buf[256];
+            snprintf(buf, sizeof(buf), "\033[30;1H");  // Move cursor to row 30, col 1
+            term.write(buf);
+            term.write(clientText);
+        }
+
+        // Write VNC stats at bottom line (row 35)
+        {
+            auto stats = server.getStats();
+            char buf[256];
+            snprintf(buf, sizeof(buf), "\033[35;1H\033[36mtiles/s=%u (j=%u r=%u) avg=%uB full/s=%u fps=%u %luKB/s\033[0m",
+                     stats.tilesSent, stats.tilesJpeg, stats.tilesRaw,
+                     stats.avgTileSize, stats.fullUpdates, stats.frames,
+                     (unsigned long)(stats.bytesPerSec / 1024));
+            term.write(buf);
         }
 
         // Clear framebuffer to dark background

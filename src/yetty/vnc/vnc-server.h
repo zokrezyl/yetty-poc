@@ -24,6 +24,18 @@ public:
     bool isRunning() const { return _running; }
     bool hasClients() const { return _clientCount > 0; }
 
+    // Statistics (updated per second)
+    struct FrameStats {
+        uint32_t tilesSent = 0;
+        uint32_t tilesJpeg = 0;
+        uint32_t tilesRaw = 0;
+        uint32_t avgTileSize = 0;
+        uint32_t fullUpdates = 0;
+        uint32_t frames = 0;
+        uint64_t bytesPerSec = 0;
+    };
+    FrameStats getStats() const;
+
     // Capture current frame and send to all clients
     // Call this after rendering to the capture texture
     Result<void> sendFrame(WGPUTexture texture, uint32_t width, uint32_t height);
@@ -110,6 +122,21 @@ private:
         InputHeader header;
     };
     std::unordered_map<int, ClientInputBuffer> _clientInputBuffers;
+
+    // Statistics tracking (per second)
+    struct Stats {
+        uint32_t tilesSent = 0;
+        uint32_t tilesJpeg = 0;
+        uint32_t tilesRaw = 0;
+        uint64_t bytesSent = 0;
+        uint64_t bytesJpeg = 0;
+        uint64_t bytesRaw = 0;
+        uint32_t fullUpdates = 0;
+        uint32_t frames = 0;
+        double lastReportTime = 0;
+    };
+    Stats _stats;
+    FrameStats _lastStats;  // Last reported stats for public access
 };
 
 } // namespace yetty::vnc
