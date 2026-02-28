@@ -347,6 +347,9 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
 
     wgpuDeviceTick(_device);
 
+    ydebug("VNC sendFrame: state={} computeDone={} mapDone={}",
+           static_cast<int>(_captureState), _computeDone.load(), _mapDone.load());
+
     switch (_captureState) {
         case CaptureState::IDLE: {
             if (auto res = ensureResources(width, height); !res) {
@@ -438,57 +441,49 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
             wgpuCommandBufferRelease(copyCmd);
             wgpuCommandEncoderRelease(copyEnc);
 
-            _computeDone = false;
-            WGPUQueueWorkDoneCallbackInfo cbInfo = {};
-            cbInfo.mode = WGPUCallbackMode_AllowSpontaneous;
-            cbInfo.callback = [](WGPUQueueWorkDoneStatus, WGPUStringView, void* ud, void*) {
-                *static_cast<std::atomic<bool>*>(ud) = true;
-            };
-            cbInfo.userdata1 = &_computeDone;
-            wgpuQueueOnSubmittedWorkDone(_queue, cbInfo);
-
-            _captureState = CaptureState::WAITING_COMPUTE;
-            return Ok();
-        }
-
-        case CaptureState::WAITING_COMPUTE: {
-            if (!_computeDone) return Ok();
-
-            _mapDone = false;
-            WGPUBufferMapCallbackInfo cbInfo = {};
-            cbInfo.mode = WGPUCallbackMode_AllowSpontaneous;
-            cbInfo.callback = [](WGPUMapAsyncStatus status, WGPUStringView, void* ud1, void* ud2) {
-                *static_cast<std::atomic<bool>*>(ud1) = true;
-                *static_cast<WGPUMapAsyncStatus*>(ud2) = status;
-            };
-            cbInfo.userdata1 = &_mapDone;
-            cbInfo.userdata2 = &_mapStatus;
-            wgpuBufferMapAsync(_dirtyFlagsReadback, WGPUMapMode_Read, 0,
-                _tilesX * _tilesY * sizeof(uint32_t), cbInfo);
-
-            _captureState = CaptureState::WAITING_MAP;
-            return Ok();
-        }
-
-        case CaptureState::WAITING_MAP: {
-            if (!_mapDone) return Ok();
-
-            if (_mapStatus != WGPUMapAsyncStatus_Success) {
-                ywarn("VNC dirty flags map failed");
-                _captureState = CaptureState::IDLE;
-                return Ok();
+            // Wait for GPU work to complete (synchronous)
+            {
+                std::atomic<bool> done{false};
+                WGPUQueueWorkDoneCallbackInfo cbInfo = {};
+                cbInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+                cbInfo.callback = [](WGPUQueueWorkDoneStatus, WGPUStringView, void* ud, void*) {
+                    *static_cast<std::atomic<bool>*>(ud) = true;
+                };
+                cbInfo.userdata1 = &done;
+                wgpuQueueOnSubmittedWorkDone(_queue, cbInfo);
+                while (!done) wgpuDeviceTick(_device);
             }
 
-            const uint32_t* flags = static_cast<const uint32_t*>(
-                wgpuBufferGetConstMappedRange(_dirtyFlagsReadback, 0, _tilesX * _tilesY * sizeof(uint32_t)));
+            // Map dirty flags buffer and read (synchronous)
+            {
+                std::atomic<bool> done{false};
+                WGPUMapAsyncStatus status = WGPUMapAsyncStatus_Success;
+                WGPUBufferMapCallbackInfo cbInfo = {};
+                cbInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+                cbInfo.callback = [](WGPUMapAsyncStatus s, WGPUStringView, void* ud1, void* ud2) {
+                    *static_cast<std::atomic<bool>*>(ud1) = true;
+                    *static_cast<WGPUMapAsyncStatus*>(ud2) = s;
+                };
+                cbInfo.userdata1 = &done;
+                cbInfo.userdata2 = &status;
+                wgpuBufferMapAsync(_dirtyFlagsReadback, WGPUMapMode_Read, 0,
+                    _tilesX * _tilesY * sizeof(uint32_t), cbInfo);
+                while (!done) wgpuDeviceTick(_device);
 
-            for (uint32_t i = 0; i < _tilesX * _tilesY; i++) {
-                _dirtyTiles[i] = (flags[i] != 0);
+                if (status != WGPUMapAsyncStatus_Success) {
+                    ywarn("VNC dirty flags map failed");
+                    break;
+                }
+
+                const uint32_t* flags = static_cast<const uint32_t*>(
+                    wgpuBufferGetConstMappedRange(_dirtyFlagsReadback, 0, _tilesX * _tilesY * sizeof(uint32_t)));
+
+                for (uint32_t i = 0; i < _tilesX * _tilesY; i++) {
+                    _dirtyTiles[i] = (flags[i] != 0);
+                }
+                wgpuBufferUnmap(_dirtyFlagsReadback);
             }
-            wgpuBufferUnmap(_dirtyFlagsReadback);
-
-            _captureState = CaptureState::IDLE;
-            break;
+            break;  // Fall through to encoding
         }
     }
 
