@@ -835,7 +835,8 @@ Result<void> YettyImpl::ensureCaptureResources(uint32_t width, uint32_t height) 
     texDesc.sampleCount = 1;
     texDesc.dimension = WGPUTextureDimension_2D;
     texDesc.format = WGPUTextureFormat_BGRA8Unorm;  // Match surface format
-    texDesc.usage = WGPUTextureUsage_RenderAttachment | WGPUTextureUsage_CopySrc;
+    // RenderAttachment for rendering to it, CopySrc for readback, TextureBinding for VNC compute shader
+    texDesc.usage = WGPUTextureUsage_RenderAttachment | WGPUTextureUsage_CopySrc | WGPUTextureUsage_TextureBinding;
 
     _captureTexture = wgpuDeviceCreateTexture(_device, &texDesc);
     if (!_captureTexture) {

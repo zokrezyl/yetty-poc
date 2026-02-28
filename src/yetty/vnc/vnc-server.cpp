@@ -246,10 +246,11 @@ Result<void> VncServer::ensureResources(uint32_t width, uint32_t height) {
     if (!_prevTexture) return Err<void>("Failed to create prev texture");
 
     // Create dirty flags buffer (1 uint32 per tile)
+    // Needs Storage for compute shader, CopySrc to copy to readback, CopyDst for ClearBuffer
     uint32_t numTiles = _tilesX * _tilesY;
     WGPUBufferDescriptor bufDesc = {};
     bufDesc.size = numTiles * sizeof(uint32_t);
-    bufDesc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopySrc;
+    bufDesc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopySrc | WGPUBufferUsage_CopyDst;
     _dirtyFlagsBuffer = wgpuDeviceCreateBuffer(_device, &bufDesc);
     if (!_dirtyFlagsBuffer) return Err<void>("Failed to create dirty flags buffer");
 

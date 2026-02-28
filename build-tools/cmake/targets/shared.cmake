@@ -53,5 +53,7 @@ set(YETTY_LIBS
     yetty_cards
     yetty_yast
     msdf-wgsl
+    yetty_vnc
+    args
 )
 
