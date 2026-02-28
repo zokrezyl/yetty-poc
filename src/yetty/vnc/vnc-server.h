@@ -78,6 +78,8 @@ private:
     WGPUMapAsyncStatus _mapStatus = WGPUMapAsyncStatus_Success;
     uint32_t _pendingWidth = 0;
     uint32_t _pendingHeight = 0;
+    uint16_t _pendingTilesX = 0;
+    uint16_t _pendingTilesY = 0;
 
     // Full frame refresh
     std::atomic<bool> _forceFullFrame{true};  // Start with full frame

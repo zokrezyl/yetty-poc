@@ -194,17 +194,18 @@ void VncServer::detectDirtyTiles() {
     }
 
     // Compare current pixels to previous, mark dirty tiles
+    // Use _pendingTilesX/Y since we're processing the captured frame
     std::fill(_dirtyTiles.begin(), _dirtyTiles.end(), false);
 
     uint32_t bytesPerPixel = 4;
-    uint32_t stride = _lastWidth * bytesPerPixel;
+    uint32_t stride = _pendingWidth * bytesPerPixel;
 
-    for (uint16_t ty = 0; ty < _tilesY; ty++) {
-        for (uint16_t tx = 0; tx < _tilesX; tx++) {
+    for (uint16_t ty = 0; ty < _pendingTilesY; ty++) {
+        for (uint16_t tx = 0; tx < _pendingTilesX; tx++) {
             uint32_t startX = tx * TILE_SIZE;
             uint32_t startY = ty * TILE_SIZE;
-            uint32_t endX = std::min(startX + TILE_SIZE, _lastWidth);
-            uint32_t endY = std::min(startY + TILE_SIZE, _lastHeight);
+            uint32_t endX = std::min(startX + TILE_SIZE, _pendingWidth);
+            uint32_t endY = std::min(startY + TILE_SIZE, _pendingHeight);
 
             bool dirty = false;
             for (uint32_t y = startY; y < endY && !dirty; y++) {
@@ -215,7 +216,7 @@ void VncServer::detectDirtyTiles() {
                     dirty = true;
                 }
             }
-            _dirtyTiles[ty * _tilesX + tx] = dirty;
+            _dirtyTiles[ty * _pendingTilesX + tx] = dirty;
         }
     }
 }
@@ -320,6 +321,8 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, uint32_t width, uint32_t 
 
             _pendingWidth = width;
             _pendingHeight = height;
+            _pendingTilesX = _tilesX;
+            _pendingTilesY = _tilesY;
             _captureState = CaptureState::WAITING_QUEUE;
             return Ok();  // Will process on next frame
         }
@@ -382,9 +385,12 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, uint32_t width, uint32_t 
     // Detect dirty tiles
     detectDirtyTiles();
 
-    // Count dirty tiles
+    // Count dirty tiles (only within pending tile grid)
     uint16_t numDirty = 0;
-    for (bool d : _dirtyTiles) if (d) numDirty++;
+    size_t pendingTileCount = _pendingTilesX * _pendingTilesY;
+    for (size_t i = 0; i < pendingTileCount && i < _dirtyTiles.size(); i++) {
+        if (_dirtyTiles[i]) numDirty++;
+    }
 
     if (numDirty == 0) {
         // No changes, skip sending
@@ -407,12 +413,12 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, uint32_t width, uint32_t 
                      reinterpret_cast<uint8_t*>(&fh),
                      reinterpret_cast<uint8_t*>(&fh) + sizeof(fh));
 
-    // Encode and append dirty tiles
+    // Encode and append dirty tiles (use pending tile counts to match captured frame)
     {
         ytimeit("vnc-encode");
-        for (uint16_t ty = 0; ty < _tilesY; ty++) {
-            for (uint16_t tx = 0; tx < _tilesX; tx++) {
-                if (!_dirtyTiles[ty * _tilesX + tx]) continue;
+        for (uint16_t ty = 0; ty < _pendingTilesY; ty++) {
+            for (uint16_t tx = 0; tx < _pendingTilesX; tx++) {
+                if (!_dirtyTiles[ty * _pendingTilesX + tx]) continue;
 
                 std::vector<uint8_t> tileData;
                 Encoding enc;

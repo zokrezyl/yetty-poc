@@ -171,6 +171,7 @@ private:
 
     // VNC server mode
     bool _vncServerMode = false;
+    bool _vncHeadless = false;  // No local rendering, only serve to VNC clients
     uint16_t _vncServerPort = 5900;
     std::unique_ptr<vnc::VncServer> _vncServer;
 
@@ -484,6 +485,9 @@ Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
             _vncServerMode = true;
             _vncServerPort = static_cast<uint16_t>(std::stoi(argv[++i]));
             yinfo("VNC server mode: port {}", _vncServerPort);
+        } else if (arg == "--vnc-headless") {
+            _vncHeadless = true;
+            yinfo("VNC headless mode: no local rendering");
         }
     }
     return Ok();
@@ -1591,9 +1595,13 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
         return Err<void>("Fatal GPU error: " + _fatalGpuErrorMsg);
     }
 
-    auto viewResult = getCurrentTextureView();
-    if (!viewResult) return Err<void>("Failed to get texture view");
-    WGPUTextureView targetView = *viewResult;
+    // In headless mode, skip surface operations
+    WGPUTextureView targetView = nullptr;
+    if (!_vncHeadless) {
+        auto viewResult = getCurrentTextureView();
+        if (!viewResult) return Err<void>("Failed to get texture view");
+        targetView = *viewResult;
+    }
 
     // Update shared uniforms
     static double lastTime = _platform->getTime();
@@ -1633,7 +1641,9 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
 
     // === CAPTURE/VNC SERVER MODE ===
     // Render to offscreen texture for capture benchmark or VNC streaming
+    // In headless mode, always capture (since there's no local display)
     bool doCapture = (_captureBenchmark && (++_captureSkipCounter % CAPTURE_EVERY_N_FRAMES == 0)) ||
+                     (_vncHeadless && _vncServerMode && _vncServer) ||
                      (_vncServerMode && _vncServer && _vncServer->hasClients());
     if (doCapture && windowWidth > 0 && windowHeight > 0) {
         // Ensure capture resources match current window size
@@ -1709,67 +1719,69 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
         }
     }
 
-    // === NORMAL RENDER TO SURFACE ===
-    WGPUCommandEncoderDescriptor encoderDesc = {};
-    WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(_device, &encoderDesc);
-    if (!encoder) return Err<void>("Failed to create command encoder");
+    // === NORMAL RENDER TO SURFACE (skip in headless mode) ===
+    if (!_vncHeadless) {
+        WGPUCommandEncoderDescriptor encoderDesc = {};
+        WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(_device, &encoderDesc);
+        if (!encoder) return Err<void>("Failed to create command encoder");
 
-    WGPURenderPassColorAttachment colorAttachment = {};
-    colorAttachment.view = targetView;
-    colorAttachment.loadOp = WGPULoadOp_Clear;
-    colorAttachment.storeOp = WGPUStoreOp_Store;
-    colorAttachment.clearValue = {0.1f, 0.1f, 0.2f, 1.0f};
-    colorAttachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+        WGPURenderPassColorAttachment colorAttachment = {};
+        colorAttachment.view = targetView;
+        colorAttachment.loadOp = WGPULoadOp_Clear;
+        colorAttachment.storeOp = WGPUStoreOp_Store;
+        colorAttachment.clearValue = {0.1f, 0.1f, 0.2f, 1.0f};
+        colorAttachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
 
-    WGPURenderPassDescriptor passDesc = {};
-    passDesc.colorAttachmentCount = 1;
-    passDesc.colorAttachments = &colorAttachment;
+        WGPURenderPassDescriptor passDesc = {};
+        passDesc.colorAttachmentCount = 1;
+        passDesc.colorAttachments = &colorAttachment;
 
-    WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
-    if (pass) {
-        // VNC client mode: render received frame
-        if (_vncClientMode && _vncClient) {
-            // Update texture with any received tiles
-            if (auto res = _vncClient->updateTexture(); !res) {
-                ywarn("VNC texture update failed: {}", res.error().message());
+        WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
+        if (pass) {
+            // VNC client mode: render received frame
+            if (_vncClientMode && _vncClient) {
+                // Update texture with any received tiles
+                if (auto res = _vncClient->updateTexture(); !res) {
+                    ywarn("VNC texture update failed: {}", res.error().message());
+                }
+                // Render fullscreen quad with frame texture
+                if (auto res = _vncClient->render(pass); !res) {
+                    wgpuRenderPassEncoderEnd(pass);
+                    wgpuRenderPassEncoderRelease(pass);
+                    wgpuCommandEncoderRelease(encoder);
+                    return Err<void>("VNC client render failed", res);
+                }
+            } else if (_activeWorkspace) {
+                if (auto res = _activeWorkspace->render(pass); !res) {
+                    wgpuRenderPassEncoderEnd(pass);
+                    wgpuRenderPassEncoderRelease(pass);
+                    wgpuCommandEncoderRelease(encoder);
+                    return Err<void>("Workspace render failed", res);
+                }
             }
-            // Render fullscreen quad with frame texture
-            if (auto res = _vncClient->render(pass); !res) {
-                wgpuRenderPassEncoderEnd(pass);
-                wgpuRenderPassEncoderRelease(pass);
-                wgpuCommandEncoderRelease(encoder);
-                return Err<void>("VNC client render failed", res);
+            // Render ImGui (context menus, etc.) after main content
+            if (_yettyContext.imguiManager) {
+                if (auto res = _yettyContext.imguiManager->render(pass); !res) {
+                    wgpuRenderPassEncoderEnd(pass);
+                    wgpuRenderPassEncoderRelease(pass);
+                    wgpuCommandEncoderRelease(encoder);
+                    return Err<void>("ImGui render failed", res);
+                }
             }
-        } else if (_activeWorkspace) {
-            if (auto res = _activeWorkspace->render(pass); !res) {
-                wgpuRenderPassEncoderEnd(pass);
-                wgpuRenderPassEncoderRelease(pass);
-                wgpuCommandEncoderRelease(encoder);
-                return Err<void>("Workspace render failed", res);
-            }
+            wgpuRenderPassEncoderEnd(pass);
+            wgpuRenderPassEncoderRelease(pass);
         }
-        // Render ImGui (context menus, etc.) after main content
-        if (_yettyContext.imguiManager) {
-            if (auto res = _yettyContext.imguiManager->render(pass); !res) {
-                wgpuRenderPassEncoderEnd(pass);
-                wgpuRenderPassEncoderRelease(pass);
-                wgpuCommandEncoderRelease(encoder);
-                return Err<void>("ImGui render failed", res);
-            }
+
+        WGPUCommandBufferDescriptor cmdDesc = {};
+        WGPUCommandBuffer cmdBuffer = wgpuCommandEncoderFinish(encoder, &cmdDesc);
+        if (cmdBuffer) {
+            wgpuQueueSubmit(_queue, 1, &cmdBuffer);
+            wgpuCommandBufferRelease(cmdBuffer);
         }
-        wgpuRenderPassEncoderEnd(pass);
-        wgpuRenderPassEncoderRelease(pass);
-    }
+        wgpuCommandEncoderRelease(encoder);
 
-    WGPUCommandBufferDescriptor cmdDesc = {};
-    WGPUCommandBuffer cmdBuffer = wgpuCommandEncoderFinish(encoder, &cmdDesc);
-    if (cmdBuffer) {
-        wgpuQueueSubmit(_queue, 1, &cmdBuffer);
-        wgpuCommandBufferRelease(cmdBuffer);
+        present();
     }
-    wgpuCommandEncoderRelease(encoder);
-
-    present();
 
     // Check if GPU error occurred during this frame
     if (_fatalGpuError) {

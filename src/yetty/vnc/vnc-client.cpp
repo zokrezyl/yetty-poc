@@ -402,6 +402,15 @@ Result<void> VncClient::updateTexture() {
         // Calculate pixel coordinates
         uint32_t px = update.tile_x * TILE_SIZE;
         uint32_t py = update.tile_y * TILE_SIZE;
+
+        // Validate tile is within frame bounds
+        if (px >= _width || py >= _height) {
+            ywarn("VNC: Tile ({},{}) at pixel ({},{}) outside frame {}x{}",
+                  update.tile_x, update.tile_y, px, py, _width, _height);
+            tiles.pop();
+            continue;
+        }
+
         uint32_t tw = std::min((uint32_t)TILE_SIZE, _width - px);
         uint32_t th = std::min((uint32_t)TILE_SIZE, _height - py);
 
