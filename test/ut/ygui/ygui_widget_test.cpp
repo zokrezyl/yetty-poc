@@ -497,6 +497,198 @@ suite widget_gpu_dropdown = [] {
         auto hits = shaderGridLookup(p, cx, cy);
         expect(!hits.empty()) << "dropdown center reachable from grid";
     };
+
+    "Dropdown inside ScrollArea: click selects option"_test = [] {
+        auto dd = std::make_shared<Dropdown>();
+        dd->id = "dd1";
+        dd->x = 10; dd->y = 130; dd->w = 150; dd->h = 28;
+        dd->options = {"Alpha", "Beta", "Gamma"};
+        dd->selectedIndex = 0;
+        dd->onChange = "dd_changed";
+
+        auto scroll = std::make_shared<ScrollArea>();
+        scroll->id = "scroll";
+        scroll->x = 0; scroll->y = 0; scroll->w = 300; scroll->h = 300;
+        scroll->contentW = 300; scroll->contentH = 500;
+        scroll->children = {dd};
+
+        auto buf = *YDrawBuffer::create();
+        TestIO io;
+        YGuiEngine engine(buf.get(), &io);
+        engine.setPixelSize(300, 300);
+        engine.addWidget(scroll);
+        engine.rebuild();
+
+        expect(dd->selectedIndex == 0) << "initial selection is 0";
+        expect(!dd->isOpen()) << "dropdown starts closed";
+
+        // Click center of dropdown to open it
+        float cx = dd->effectiveX + dd->w / 2;
+        float cy = dd->effectiveY + dd->h / 2;
+        engine.handleMouseDown(cx, cy, 0);
+        engine.handleMouseUp(cx, cy, 0);
+
+        expect(dd->isOpen()) << "dropdown must be open after click";
+
+        // Rebuild so grid/focus are updated
+        engine.rebuild();
+
+        // Click on option index 2 ("Gamma")
+        // Options start at effectiveY + h, each 24px tall
+        float optX = dd->effectiveX + dd->w / 2;
+        float optY = dd->effectiveY + dd->h + 2 * 24.0f + 12.0f;
+        engine.handleMouseDown(optX, optY, 0);
+        engine.handleMouseUp(optX, optY, 0);
+
+        expect(!dd->isOpen()) << "dropdown must close after selection";
+        expect(dd->selectedIndex == 2) << "selectedIndex must be 2 (Gamma), got " << dd->selectedIndex;
+
+        // Verify change event was emitted
+        bool foundChange = false;
+        for (auto& e : io.events) {
+            if (e.widgetId == "dd1" && e.eventType == "change" && e.value == "2")
+                foundChange = true;
+        }
+        expect(foundChange) << "must emit change event with value '2'";
+    };
+
+    "Dropdown inside ScrollArea: multiple selections work"_test = [] {
+        auto dd = std::make_shared<Dropdown>();
+        dd->id = "dd2";
+        dd->x = 10; dd->y = 10; dd->w = 150; dd->h = 28;
+        dd->options = {"One", "Two", "Three", "Four"};
+        dd->selectedIndex = 0;
+        dd->onChange = "dd_sel";
+
+        auto scroll = std::make_shared<ScrollArea>();
+        scroll->id = "scroll2";
+        scroll->x = 0; scroll->y = 0; scroll->w = 300; scroll->h = 400;
+        scroll->contentW = 300; scroll->contentH = 500;
+        scroll->children = {dd};
+
+        auto buf = *YDrawBuffer::create();
+        TestIO io;
+        YGuiEngine engine(buf.get(), &io);
+        engine.setPixelSize(300, 400);
+        engine.addWidget(scroll);
+        engine.rebuild();
+
+        // Open
+        float cx = dd->effectiveX + dd->w / 2;
+        float cy = dd->effectiveY + dd->h / 2;
+        engine.handleMouseDown(cx, cy, 0);
+        engine.handleMouseUp(cx, cy, 0);
+        expect(dd->isOpen()) << "open after click";
+        engine.rebuild();
+
+        // Select option 1 ("Two")
+        float optY = dd->effectiveY + dd->h + 1 * 24.0f + 12.0f;
+        engine.handleMouseDown(cx, optY, 0);
+        engine.handleMouseUp(cx, optY, 0);
+
+        expect(dd->selectedIndex == 1) << "selectedIndex must be 1 (Two), got " << dd->selectedIndex;
+        expect(!dd->isOpen()) << "dropdown closes after selection";
+
+        // Open again and select option 3 ("Four")
+        io.events.clear();
+        engine.rebuild();
+        engine.handleMouseDown(cx, cy, 0);
+        engine.handleMouseUp(cx, cy, 0);
+        expect(dd->isOpen()) << "re-opened";
+        engine.rebuild();
+
+        float opt3Y = dd->effectiveY + dd->h + 3 * 24.0f + 12.0f;
+        engine.handleMouseDown(cx, opt3Y, 0);
+        engine.handleMouseUp(cx, opt3Y, 0);
+
+        expect(dd->selectedIndex == 3) << "selectedIndex must be 3 (Four), got " << dd->selectedIndex;
+
+        bool foundChange = false;
+        for (auto& e : io.events) {
+            if (e.widgetId == "dd2" && e.eventType == "change" && e.value == "3")
+                foundChange = true;
+        }
+        expect(foundChange) << "must emit change event with value '3'";
+    };
+
+    "Dropdown click on header toggles open/close without changing selection"_test = [] {
+        auto dd = std::make_shared<Dropdown>();
+        dd->id = "dd3";
+        dd->x = 10; dd->y = 10; dd->w = 150; dd->h = 28;
+        dd->options = {"A", "B"};
+        dd->selectedIndex = 0;
+        dd->onChange = "dd_chg";
+
+        auto scroll = std::make_shared<ScrollArea>();
+        scroll->x = 0; scroll->y = 0; scroll->w = 300; scroll->h = 300;
+        scroll->contentW = 300; scroll->contentH = 500;
+        scroll->children = {dd};
+
+        auto buf = *YDrawBuffer::create();
+        TestIO io;
+        YGuiEngine engine(buf.get(), &io);
+        engine.setPixelSize(300, 300);
+        engine.addWidget(scroll);
+        engine.rebuild();
+
+        // Open
+        float cx = dd->effectiveX + dd->w / 2;
+        float cy = dd->effectiveY + dd->h / 2;
+        engine.handleMouseDown(cx, cy, 0);
+        engine.handleMouseUp(cx, cy, 0);
+        expect(dd->isOpen()) << "opened";
+        engine.rebuild();
+
+        // Click on the dropdown header (not in option area) to close
+        engine.handleMouseDown(cx, cy, 0);
+        engine.handleMouseUp(cx, cy, 0);
+
+        expect(!dd->isOpen()) << "closed after clicking header again";
+        expect(dd->selectedIndex == 0) << "selection unchanged, got " << dd->selectedIndex;
+
+        // No change event should have been emitted
+        bool foundChange = false;
+        for (auto& e : io.events) {
+            if (e.eventType == "change") foundChange = true;
+        }
+        expect(!foundChange) << "no change event when closing without selecting";
+    };
+
+    "Button onPress prevents parent from stealing click"_test = [] {
+        // Simulate the close button scenario: Button inside a Panel header
+        auto panel = std::make_shared<Panel>();
+        panel->id = "panel";
+        panel->x = 50; panel->y = 50; panel->w = 300; panel->h = 200;
+        panel->headerH = 28;
+
+        auto btn = std::make_shared<Button>();
+        btn->id = "close-btn";
+        btn->x = 250; btn->y = 0; btn->w = 28; btn->h = 28;
+        btn->label = "X";
+        btn->onClick = "close";
+        panel->children.push_back(btn);
+
+        auto buf = *YDrawBuffer::create();
+        TestIO io;
+        YGuiEngine engine(buf.get(), &io);
+        engine.setPixelSize(500, 400);
+        engine.addWidget(panel);
+        engine.rebuild();
+
+        // Click on the button (which is inside the panel header)
+        float bx = btn->effectiveX + btn->w / 2;
+        float by = btn->effectiveY + btn->h / 2;
+        engine.handleMouseDown(bx, by, 0);
+        engine.handleMouseUp(bx, by, 0);
+
+        // Button must receive the click, not the panel
+        bool foundClick = false;
+        for (auto& e : io.events) {
+            if (e.widgetId == "close-btn" && e.eventType == "click")
+                foundClick = true;
+        }
+        expect(foundClick) << "Button must receive click event, not be stolen by Panel drag";
+    };
 };
 
 //=============================================================================

@@ -85,7 +85,7 @@ public:
                     flags &= ~WIDGET_OPEN;
                     if (!onChange.empty())
                         return WidgetEvent{id, "change", "selected", std::to_string(selectedIndex)};
-                    return {};
+                    return WidgetEvent{id, "press", "", ""};
                 }
             }
             flags &= ~WIDGET_OPEN;
@@ -93,7 +93,7 @@ public:
             flags |= WIDGET_OPEN;
             hoverOptionIdx = -1;
         }
-        return {};
+        return WidgetEvent{id, "press", "", ""};
     }
 };
 
