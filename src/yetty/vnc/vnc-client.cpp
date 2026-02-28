@@ -666,6 +666,22 @@ void VncClient::sendKeyUp(uint32_t keycode, uint32_t scancode, uint8_t mods) {
     sendInput(buf, sizeof(buf));
 }
 
+void VncClient::sendCharWithMods(uint32_t codepoint, uint8_t mods) {
+    ydebug("VNC client sendCharWithMods: codepoint={} ('{}') mods={}", codepoint, (char)codepoint, mods);
+    InputHeader hdr = {};
+    hdr.type = static_cast<uint8_t>(InputType::CHAR_WITH_MODS);
+    hdr.data_size = sizeof(CharWithModsEvent);
+
+    CharWithModsEvent evt = {};
+    evt.codepoint = codepoint;
+    evt.mods = mods;
+
+    uint8_t buf[sizeof(hdr) + sizeof(evt)];
+    std::memcpy(buf, &hdr, sizeof(hdr));
+    std::memcpy(buf + sizeof(hdr), &evt, sizeof(evt));
+    sendInput(buf, sizeof(buf));
+}
+
 void VncClient::sendTextInput(const char* text, size_t len) {
     if (len == 0 || len > 1024) return; // Sanity check
 

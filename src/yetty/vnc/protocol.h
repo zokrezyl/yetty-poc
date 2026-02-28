@@ -42,6 +42,7 @@ enum class InputType : uint8_t {
     TEXT_INPUT = 5,
     RESIZE = 6,      // Client window resized
     CELL_SIZE = 7,   // Client sets cell height (ctrl+wheel zoom)
+    CHAR_WITH_MODS = 8,  // Character with modifiers (layout-mapped)
 };
 
 enum class MouseButton : uint8_t {
@@ -86,6 +87,12 @@ constexpr uint8_t MOD_SHIFT = 0x01;
 constexpr uint8_t MOD_CTRL  = 0x02;
 constexpr uint8_t MOD_ALT   = 0x04;
 constexpr uint8_t MOD_SUPER = 0x08;
+
+// Character with modifiers (layout-mapped character, not raw keycode)
+struct CharWithModsEvent {
+    uint32_t codepoint;  // Unicode codepoint (layout-mapped)
+    uint8_t mods;        // Modifier flags
+};
 
 // Text input event - for unicode text (follows InputHeader, variable length UTF-8)
 

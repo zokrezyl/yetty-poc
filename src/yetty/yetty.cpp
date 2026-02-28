@@ -523,6 +523,14 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
             yinfo("VNC onCellSize: cellHeight={}", cellHeight);
             _vncServer->forceFullFrame();
         };
+
+        // VNC character with modifiers (layout-mapped, for Ctrl/Alt + character)
+        _vncServer->onCharWithMods = [](uint32_t codepoint, uint8_t mods) {
+            ydebug("VNC onCharWithMods: codepoint={} ('{}') mods={}", codepoint, (char)codepoint, mods);
+            auto loopResult = base::EventLoop::instance();
+            if (!loopResult) return;
+            (*loopResult)->dispatch(base::Event::charInputWithMods(codepoint, static_cast<int>(mods)));
+        };
     }
 
     return Ok();
@@ -1268,6 +1276,16 @@ Result<void> YettyImpl::initCallbacks() noexcept {
             if (mods & 0x0008) vncMods |= vnc::MOD_SUPER;
 
             if (action == KeyAction::Press || action == KeyAction::Repeat) {
+                // For Ctrl/Alt + character keys, use layout-mapped character
+                if (mods & (0x0002 | 0x0004)) {  // Ctrl or Alt
+                    std::string keyName = _platform->getKeyName(key, scancode);
+                    if (!keyName.empty() && keyName.size() == 1) {
+                        uint32_t ch = static_cast<uint32_t>(static_cast<uint8_t>(keyName[0]));
+                        ydebug("VNC client: sending CHAR_WITH_MODS ch='{}' ({}) mods={}", keyName[0], ch, vncMods);
+                        _vncClient->sendCharWithMods(ch, vncMods);
+                        return;
+                    }
+                }
                 ydebug("VNC client: sending KEY_DOWN keycode={} scancode={} mods={}", key, scancode, vncMods);
                 _vncClient->sendKeyDown(static_cast<uint32_t>(key), static_cast<uint32_t>(scancode), vncMods);
             } else if (action == KeyAction::Release) {

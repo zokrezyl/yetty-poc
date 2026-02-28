@@ -43,6 +43,7 @@ public:
     void sendMouseScroll(int16_t x, int16_t y, int16_t deltaX, int16_t deltaY);
     void sendKeyDown(uint32_t keycode, uint32_t scancode, uint8_t mods);
     void sendKeyUp(uint32_t keycode, uint32_t scancode, uint8_t mods);
+    void sendCharWithMods(uint32_t codepoint, uint8_t mods);
     void sendTextInput(const char* text, size_t len);
     void sendResize(uint16_t width, uint16_t height);
     void sendCellSize(uint8_t cellHeight);

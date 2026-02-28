@@ -899,6 +899,15 @@ void VncServer::dispatchInput(const InputHeader& hdr, const uint8_t* data) {
                 onCellSize(c->cellHeight);
             }
             break;
+
+        case InputType::CHAR_WITH_MODS:
+            ydebug("VNC dispatchInput: CHAR_WITH_MODS callback={}", (bool)onCharWithMods);
+            if (data && hdr.data_size >= sizeof(CharWithModsEvent) && onCharWithMods) {
+                const CharWithModsEvent* c = reinterpret_cast<const CharWithModsEvent*>(data);
+                ydebug("VNC dispatchInput: calling onCharWithMods codepoint={} mods={}", c->codepoint, c->mods);
+                onCharWithMods(c->codepoint, c->mods);
+            }
+            break;
     }
 }
 
