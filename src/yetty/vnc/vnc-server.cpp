@@ -385,6 +385,14 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
     // Single tick to process any pending GPU callbacks - no busy wait!
     wgpuDeviceTick(_device);
 
+    // If dimensions changed, reset state machine to re-create resources
+    if (width != _lastWidth || height != _lastHeight) {
+        ydebug("VNC sendFrame: size changed {}x{} -> {}x{}, resetting state",
+               _lastWidth, _lastHeight, width, height);
+        _captureState = CaptureState::IDLE;
+        _gpuWorkDone = true;
+    }
+
     ydebug("VNC sendFrame: state={} gpuWorkDone={}",
            static_cast<int>(_captureState), _gpuWorkDone.load());
 
