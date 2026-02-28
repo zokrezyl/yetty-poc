@@ -175,6 +175,8 @@ private:
     bool _vncHeadless = false;  // No local rendering, only serve to VNC clients
     uint16_t _vncServerPort = 5900;
     std::unique_ptr<vnc::VncServer> _vncServer;
+    uint32_t _vncRequestedWidth = 0;   // Client-requested capture size
+    uint32_t _vncRequestedHeight = 0;
 
     // VNC test mode - generates test patterns instead of PTY
     bool _vncTestMode = false;
@@ -475,6 +477,10 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
         _vncServer->onResize = [this](uint16_t widthPx, uint16_t heightPx) {
             if (widthPx == 0 || heightPx == 0) return;
             yinfo("VNC onResize: {}x{} px", widthPx, heightPx);
+
+            // Store requested capture size
+            _vncRequestedWidth = widthPx;
+            _vncRequestedHeight = heightPx;
 
             // Resize workspace to match client request
             if (_activeWorkspace) {
@@ -1736,11 +1742,13 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
     bool doCapture = (_captureBenchmark && (++_captureSkipCounter % CAPTURE_EVERY_N_FRAMES == 0)) ||
                      (_vncHeadless && _vncServerMode && _vncServer) ||
                      (_vncServerMode && _vncServer && _vncServer->hasClients());
-    if (doCapture && windowWidth > 0 && windowHeight > 0) {
-        // Ensure capture resources match current window size
-        if (auto res = ensureCaptureResources(
-                static_cast<uint32_t>(windowWidth),
-                static_cast<uint32_t>(windowHeight)); !res) {
+    // Determine capture size: use VNC requested size if set, otherwise window size
+    uint32_t captureW = (_vncServerMode && _vncRequestedWidth > 0) ? _vncRequestedWidth : static_cast<uint32_t>(windowWidth);
+    uint32_t captureH = (_vncServerMode && _vncRequestedHeight > 0) ? _vncRequestedHeight : static_cast<uint32_t>(windowHeight);
+
+    if (doCapture && captureW > 0 && captureH > 0) {
+        // Ensure capture resources match requested size
+        if (auto res = ensureCaptureResources(captureW, captureH); !res) {
             return Err<void>("Failed to ensure capture resources", res);
         }
 
