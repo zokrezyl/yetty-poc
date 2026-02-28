@@ -123,17 +123,24 @@ void VncServer::acceptLoop() {
 Result<void> VncServer::sendToClient(int clientFd, const void* data, size_t size) {
     const uint8_t* ptr = static_cast<const uint8_t*>(data);
     size_t remaining = size;
+    int retries = 0;
     while (remaining > 0) {
-        ssize_t sent = send(clientFd, ptr, remaining, MSG_NOSIGNAL | MSG_DONTWAIT);
+        ssize_t sent = send(clientFd, ptr, remaining, MSG_NOSIGNAL);
         if (sent <= 0) {
             if (sent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-                // Buffer full, skip this frame for this client
-                return Ok();
+                // Buffer full, wait a bit and retry
+                if (++retries > 100) {
+                    ywarn("VNC: send timeout after {} retries", retries);
+                    return Err<void>("Send timeout");
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                continue;
             }
             return Err<void>("Send failed");
         }
         ptr += sent;
         remaining -= sent;
+        retries = 0;
     }
     return Ok();
 }

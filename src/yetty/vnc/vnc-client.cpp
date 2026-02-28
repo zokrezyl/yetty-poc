@@ -45,7 +45,12 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOutput {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return textureSample(frame_texture, frame_sampler, in.uv);
+    let tex = textureSample(frame_texture, frame_sampler, in.uv);
+    // Debug: return magenta if texture alpha is zero, otherwise return texture
+    if (tex.a < 0.01) {
+        return vec4<f32>(1.0, 0.0, 1.0, 1.0);  // magenta = no texture data
+    }
+    return tex;
 }
 )";
 
@@ -120,20 +125,35 @@ Result<void> VncClient::connect(const std::string& host, uint16_t port) {
 
     // Register with event loop for async receive
     auto loopResult = base::EventLoop::instance();
-    if (loopResult) {
-        auto loop = *loopResult;
-        auto pollRes = loop->createPoll();
-        if (pollRes) {
-            _pollId = *pollRes;
-            loop->configPoll(_pollId, _socket);
-            loop->registerPollListener(_pollId, sharedAs<base::EventListener>());
-            loop->startPoll(_pollId);
-            ydebug("VNC client: registered poll id={} for socket={}", _pollId, _socket);
-        } else {
-            ywarn("VNC client: failed to create poll: {}", pollRes.error().message());
-        }
+    if (!loopResult) {
+        return Err<void>("No event loop available");
+    }
+    auto loop = *loopResult;
+
+    auto pollRes = loop->createPoll();
+    if (!pollRes) {
+        return Err<void>("Failed to create poll", pollRes);
+    }
+    _pollId = *pollRes;
+
+    if (auto res = loop->configPoll(_pollId, _socket); !res) {
+        return Err<void>("Failed to configure poll", res);
     }
 
+    auto listener = sharedAs<base::EventListener>();
+    if (!listener) {
+        return Err<void>("Failed to get shared_ptr<EventListener> - sharedAs returned nullptr");
+    }
+
+    if (auto res = loop->registerPollListener(_pollId, listener); !res) {
+        return Err<void>("Failed to register poll listener", res);
+    }
+
+    if (auto res = loop->startPoll(_pollId); !res) {
+        return Err<void>("Failed to start poll", res);
+    }
+
+    yinfo("VNC client: registered poll id={} for socket={}", _pollId, _socket);
     return Ok();
 }
 

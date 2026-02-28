@@ -152,8 +152,13 @@ public:
 
         auto& ph = it->second;
         ph->fd = fd;
-        uv_poll_init(_loop, &ph->poll, fd);
+        int r = uv_poll_init(_loop, &ph->poll, fd);
+        if (r != 0) {
+            yerror("EventLoop::configPoll: uv_poll_init failed for fd={}: {}", fd, uv_strerror(r));
+            return Err<void>(std::string("uv_poll_init failed: ") + uv_strerror(r));
+        }
         ph->poll.data = ph.get();
+        ydebug("EventLoop::configPoll: id={} fd={} success", id, fd);
         return Ok();
 #else
         (void)id;
@@ -170,7 +175,11 @@ public:
         }
 
         ydebug("EventLoop::startPoll: id={} fd={}", id, it->second->fd);
-        uv_poll_start(&it->second->poll, UV_READABLE, onPollCallback);
+        int r = uv_poll_start(&it->second->poll, UV_READABLE, onPollCallback);
+        if (r != 0) {
+            yerror("EventLoop::startPoll: uv_poll_start failed for fd={}: {}", it->second->fd, uv_strerror(r));
+            return Err<void>(std::string("uv_poll_start failed: ") + uv_strerror(r));
+        }
         return Ok();
 #else
         (void)id;
