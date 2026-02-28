@@ -103,8 +103,12 @@ endif()
 if(TARGET_TYPE STREQUAL "desktop")
     message(STATUS "Checking Desktop assets...")
 
-    # Executable
-    check_file("yetty" "Yetty executable")
+    # Executable (MSVC puts it in Release/yetty.exe)
+    if(WIN32)
+        check_file("Release/yetty.exe" "Yetty executable")
+    else()
+        check_file("yetty" "Yetty executable")
+    endif()
 endif()
 
 #-----------------------------------------------------------------------------
