@@ -551,13 +551,13 @@ int main(int argc, char* argv[]) {
                 int x = col * sizing.cellWidth;
                 int y = row * sizing.cellHeight;
 
-                // Fill cell background
-                for (int py = 0; py < sizing.cellHeight && y + py < sizing.height; ++py) {
-                    uint32_t* row = reinterpret_cast<uint32_t*>(framebuffer.data() + ((y + py) * sizing.width + x) * 4);
-                    uint32_t color = 0xFF000000 | (bgR << 16) | (bgG << 8) | bgB;
-                    for (int px = 0; px < sizing.cellWidth && x + px < sizing.width; ++px) {
-                        row[px] = color;
-                    }
+                // Fill cell background with std::fill_n (much faster than pixel loop)
+                uint32_t color = 0xFF000000 | (bgR << 16) | (bgG << 8) | bgB;
+                int fillWidth = std::min(sizing.cellWidth, sizing.width - x);
+                int fillHeight = std::min(sizing.cellHeight, sizing.height - y);
+                for (int py = 0; py < fillHeight; ++py) {
+                    uint32_t* rowPtr = reinterpret_cast<uint32_t*>(framebuffer.data() + ((y + py) * sizing.width + x) * 4);
+                    std::fill_n(rowPtr, fillWidth, color);
                 }
 
                 // Render glyph
