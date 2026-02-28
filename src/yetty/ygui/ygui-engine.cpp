@@ -302,6 +302,9 @@ void YGuiEngine::handleMouseDown(float px, float py, int button) {
     float wy = toWidgetY(py);
 
     auto hit = _grid.queryAt(wx, wy);
+    // Open focused widget (e.g. dropdown) has expanded hit area not covered by grid
+    if (_focused && (_focused->flags & WIDGET_OPEN) && _focused->contains(wx, wy))
+        hit = _focused;
     if (!hit) return;
 
     // Update focus
