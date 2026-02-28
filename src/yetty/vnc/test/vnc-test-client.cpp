@@ -591,22 +591,8 @@ struct VertexOutput {
     while (!glfwWindowShouldClose(window) && g_running) {
         glfwPollEvents();
 
-        // Reconfigure surface if window was resized
-        if (g_clientState.needsReconfigure && g_clientState.surface) {
-            yinfo("Reconfiguring surface to {}x{}", g_clientState.windowWidth, g_clientState.windowHeight);
-            WGPUSurfaceConfiguration surfaceConfig = {};
-            surfaceConfig.device = g_clientState.device;
-            surfaceConfig.format = g_clientState.surfaceFormat;
-            surfaceConfig.usage = WGPUTextureUsage_RenderAttachment;
-            surfaceConfig.width = g_clientState.windowWidth;
-            surfaceConfig.height = g_clientState.windowHeight;
-            surfaceConfig.presentMode = WGPUPresentMode_Fifo;
-            surfaceConfig.alphaMode = WGPUCompositeAlphaMode_Auto;
-            wgpuSurfaceConfigure(g_clientState.surface, &surfaceConfig);
-            windowWidth = g_clientState.windowWidth;
-            windowHeight = g_clientState.windowHeight;
-            g_clientState.needsReconfigure = false;
-        }
+        // Note: Surface reconfiguration is DEFERRED until we have a frame at the new size.
+        // This prevents stretching during resize transitions.
 
         // Run libuv event loop - blocks until socket has data or timeout
         if (uvLoop) {
@@ -629,10 +615,44 @@ struct VertexOutput {
             if (res) {
                 needsRender = *res;
             }
-            // Don't render if VNC frame size doesn't match window size (avoid stretching)
-            if (vncClient->width() != g_clientState.windowWidth ||
-                vncClient->height() != g_clientState.windowHeight) {
-                needsRender = false;  // Wait for server to send frame at correct size
+
+            uint32_t vncW = vncClient->width();
+            uint32_t vncH = vncClient->height();
+
+            // Only reconfigure surface when VNC frame matches requested window size
+            // This prevents stretching during resize transitions
+            if (g_clientState.needsReconfigure) {
+                if (vncW == static_cast<uint32_t>(g_clientState.windowWidth) &&
+                    vncH == static_cast<uint32_t>(g_clientState.windowHeight)) {
+                    // VNC frame matches window - safe to reconfigure surface now
+                    yinfo("Reconfiguring surface to {}x{} (VNC frame matches)", vncW, vncH);
+                    WGPUSurfaceConfiguration surfaceConfig = {};
+                    surfaceConfig.device = g_clientState.device;
+                    surfaceConfig.format = g_clientState.surfaceFormat;
+                    surfaceConfig.usage = WGPUTextureUsage_RenderAttachment;
+                    surfaceConfig.width = g_clientState.windowWidth;
+                    surfaceConfig.height = g_clientState.windowHeight;
+                    surfaceConfig.presentMode = WGPUPresentMode_Fifo;
+                    surfaceConfig.alphaMode = WGPUCompositeAlphaMode_Auto;
+                    wgpuSurfaceConfigure(g_clientState.surface, &surfaceConfig);
+                    windowWidth = g_clientState.windowWidth;
+                    windowHeight = g_clientState.windowHeight;
+                    g_clientState.needsReconfigure = false;
+                } else {
+                    // VNC frame doesn't match yet - skip rendering until server catches up
+                    if (needsRender) {
+                        yinfo("SIZE MISMATCH: VNC {}x{} vs requested {}x{} - waiting for server",
+                              vncW, vncH, g_clientState.windowWidth, g_clientState.windowHeight);
+                    }
+                    needsRender = false;
+                }
+            }
+
+            // Also skip if VNC dimensions don't match current surface dimensions
+            if (needsRender && (vncW != static_cast<uint32_t>(windowWidth) ||
+                                vncH != static_cast<uint32_t>(windowHeight))) {
+                yinfo("VNC {}x{} != surface {}x{} - skipping render", vncW, vncH, windowWidth, windowHeight);
+                needsRender = false;
             }
         } else if (testRender) {
             needsRender = true;  // Always render in test mode

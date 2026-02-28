@@ -471,6 +471,9 @@ int main(int argc, char* argv[]) {
         }
         lastFrame = now;
 
+        // Process input FIRST so resize/cellSize events update sizing before anything else
+        server.processInput();
+
         // Recreate resources if size changed
         if (sizing.needsRecreate) {
             yinfo("Recreating resources: {}x{} cellH={}", sizing.width, sizing.height, sizing.cellHeight);
@@ -588,8 +591,6 @@ int main(int argc, char* argv[]) {
                 ywarn("Frame send failed: {}", res.error().message());
             }
         }
-
-        server.processInput();
         frameCount++;
 
         if (frameCount % (fps * 5) == 0) {
