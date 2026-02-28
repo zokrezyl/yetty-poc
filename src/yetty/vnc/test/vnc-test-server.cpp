@@ -206,9 +206,9 @@ private:
 void generateTextPattern(Terminal& term, int frame) {
     term.write("\033[2J\033[H");  // Clear screen, home cursor
 
-    char buf[128];
+    char buf[256];
 
-    // Row 0: Frame number at column 0
+    // Row 0: Frame number
     snprintf(buf, sizeof(buf), "%08d\r\n", frame);
     term.write(buf);
 
@@ -217,12 +217,53 @@ void generateTextPattern(Terminal& term, int frame) {
     term.write(buf);
 
     // Row 2: Static
-    term.write("ABCDEFGHIJ\r\n");
+    term.write("ABCDEFGHIJKLMNOPQRSTUVWXYZ\r\n");
 
-    // Row 3: Rotating
-    for (int i = 0; i < 10; i++) {
+    // Row 3: Rotating digits
+    for (int i = 0; i < 26; i++) {
         char c = '0' + ((frame + i) % 10);
         term.write(&c, 1);
+    }
+    term.write("\r\n");
+
+    // Row 4-10: Empty
+    for (int r = 4; r < 10; r++) {
+        term.write("\r\n");
+    }
+
+    // Row 10: Progress bar
+    int pct = frame % 50;
+    for (int i = 0; i < 50; i++) {
+        term.write(i < pct ? "#" : ".");
+    }
+    term.write("\r\n");
+
+    // Row 11: Time
+    int s = frame % 60;
+    int m = (frame / 60) % 60;
+    int h = (frame / 3600) % 24;
+    snprintf(buf, sizeof(buf), "%02d:%02d:%02d\r\n", h, m, s);
+    term.write(buf);
+
+    // Row 12-19: Empty
+    for (int r = 12; r < 20; r++) {
+        term.write("\r\n");
+    }
+
+    // Row 20: Another frame counter
+    snprintf(buf, sizeof(buf), "BOTTOM:%08d\r\n", frame);
+    term.write(buf);
+
+    // Row 21: Rotating alphabet
+    for (int i = 0; i < 26; i++) {
+        char c = 'A' + ((frame + i) % 26);
+        term.write(&c, 1);
+    }
+    term.write("\r\n");
+
+    // Row 22: Alternating pattern
+    for (int i = 0; i < 40; i++) {
+        term.write((frame + i) % 2 == 0 ? "X" : "O");
     }
     term.write("\r\n");
 }
@@ -421,20 +462,6 @@ int main(int argc, char* argv[]) {
             framebuffer[i] = 0xFF;  // Alpha
         }
 
-        // Debug: dump first 4 rows
-        if (frameCount % 10 == 0) {
-            for (int r = 0; r < 4; r++) {
-                std::string rowStr;
-                for (int c = 0; c < 12; c++) {
-                    uint32_t cp;
-                    uint8_t rr, g, b, bgR, bgG, bgB;
-                    if (term.getCell(r, c, cp, rr, g, b, bgR, bgG, bgB)) {
-                        rowStr += (cp >= 32 && cp < 127) ? static_cast<char>(cp) : '.';
-                    }
-                }
-                yinfo("Row {}: [{}]", r, rowStr);
-            }
-        }
 
         // Render terminal cells to framebuffer
         for (int row = 0; row < rows; ++row) {
