@@ -228,7 +228,7 @@ Result<void> VncServer::ensureResources(uint32_t width, uint32_t height) {
     if (_dirtyFlagsBuffer) { wgpuBufferRelease(_dirtyFlagsBuffer); _dirtyFlagsBuffer = nullptr; }
     if (_dirtyFlagsReadback) { wgpuBufferRelease(_dirtyFlagsReadback); _dirtyFlagsReadback = nullptr; }
     if (_diffBindGroup) { wgpuBindGroupRelease(_diffBindGroup); _diffBindGroup = nullptr; }
-    if (_tileReadbackBuffer) { wgpuBufferRelease(_tileReadbackBuffer); _tileReadbackBuffer = nullptr; }
+    if (_tileReadbackBuffer) { wgpuBufferRelease(_tileReadbackBuffer); _tileReadbackBuffer = nullptr; _tileReadbackBufferSize = 0; }
 
     _lastWidth = width;
     _lastHeight = height;
@@ -601,12 +601,16 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
         uint32_t alignedBytesPerRow = (width * bytesPerPixel + 255) & ~255;
         uint32_t bufSize = alignedBytesPerRow * height;
 
-        // Create temp readback buffer if needed
-        if (!_tileReadbackBuffer) {
+        // Create or recreate temp readback buffer if size changed
+        if (!_tileReadbackBuffer || _tileReadbackBufferSize != bufSize) {
+            if (_tileReadbackBuffer) {
+                wgpuBufferRelease(_tileReadbackBuffer);
+            }
             WGPUBufferDescriptor bufDesc = {};
             bufDesc.size = bufSize;
             bufDesc.usage = WGPUBufferUsage_CopyDst | WGPUBufferUsage_MapRead;
             _tileReadbackBuffer = wgpuDeviceCreateBuffer(_device, &bufDesc);
+            _tileReadbackBufferSize = bufSize;
         }
 
         // Copy texture to buffer

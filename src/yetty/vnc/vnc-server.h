@@ -100,6 +100,7 @@ private:
     uint32_t _cpuPixelsSize = 0;
     std::vector<uint8_t> _gpuReadbackPixels;  // For GPU-only rendering
     WGPUBuffer _tileReadbackBuffer = nullptr;
+    uint32_t _tileReadbackBufferSize = 0;
 
     // Async state machine for non-blocking GPU operations
     enum class CaptureState {
