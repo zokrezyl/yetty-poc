@@ -1812,9 +1812,7 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
 
         // VNC server: send frame to connected clients
         if (_vncServerMode && _vncServer) {
-            if (auto res = _vncServer->sendFrame(_captureTexture,
-                    static_cast<uint32_t>(windowWidth),
-                    static_cast<uint32_t>(windowHeight)); !res) {
+            if (auto res = _vncServer->sendFrame(_captureTexture, captureW, captureH); !res) {
                 ywarn("VNC send failed: {}", res.error().message());
             }
         }
