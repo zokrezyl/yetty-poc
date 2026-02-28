@@ -11,6 +11,7 @@
 #include <poll.h>
 #include <cerrno>
 #include <chrono>
+#include <uv.h>  // Use uv_default_loop() - same as yetty's EventLoop
 
 namespace yetty::vnc {
 
@@ -21,6 +22,17 @@ using yetty::Err;
 VncServer::VncServer(WGPUDevice device, WGPUQueue queue)
     : _device(device), _queue(queue) {
     _jpegCompressor = tjInitCompress();
+
+    // Initialize libuv async handle using the same default loop as yetty's EventLoop
+    auto* async = new uv_async_t();
+    async->data = this;
+    uv_async_init(uv_default_loop(), async, [](uv_async_t* handle) {
+        // This callback runs on the main thread when GPU work completes
+        // The VncServer will check _gpuWorkDone flag on next sendFrame call
+        auto* self = static_cast<VncServer*>(handle->data);
+        (void)self;  // Flag is already set by GPU callback
+    });
+    _uvAsync = async;
 }
 
 // Compute shader for tile diff detection
@@ -69,6 +81,16 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
 
 VncServer::~VncServer() {
     stop();
+
+    // Close libuv async handle
+    if (_uvAsync) {
+        auto* async = static_cast<uv_async_t*>(_uvAsync);
+        uv_close(reinterpret_cast<uv_handle_t*>(async), [](uv_handle_t* h) {
+            delete reinterpret_cast<uv_async_t*>(h);
+        });
+        _uvAsync = nullptr;
+    }
+
     if (_prevTexture) wgpuTextureRelease(_prevTexture);
     if (_dirtyFlagsBuffer) wgpuBufferRelease(_dirtyFlagsBuffer);
     if (_dirtyFlagsReadback) wgpuBufferRelease(_dirtyFlagsReadback);
@@ -357,11 +379,13 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
         _gpuReadbackPixels.resize(width * height * 4);
     }
 
+    // Single tick to process any pending GPU callbacks - no busy wait!
     wgpuDeviceTick(_device);
 
-    ydebug("VNC sendFrame: state={} computeDone={} mapDone={}",
-           static_cast<int>(_captureState), _computeDone.load(), _mapDone.load());
+    ydebug("VNC sendFrame: state={} gpuWorkDone={}",
+           static_cast<int>(_captureState), _gpuWorkDone.load());
 
+    // State machine for async GPU operations
     switch (_captureState) {
         case CaptureState::IDLE: {
             if (auto res = ensureResources(width, height); !res) {
@@ -394,8 +418,12 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
                 wgpuCommandBufferRelease(copyCmd);
                 wgpuCommandEncoderRelease(copyEnc);
 
-                break;  // Go to encoding
+                _captureState = CaptureState::READY_TO_SEND;
+                break;
             }
+
+            // Store texture for async processing
+            _pendingTexture = texture;
 
             // Create bind group for this frame
             if (_diffBindGroup) wgpuBindGroupRelease(_diffBindGroup);
@@ -429,19 +457,35 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
                 wgpuQueueSubmit(_queue, 1, &clearCmd);
                 wgpuCommandBufferRelease(clearCmd);
                 wgpuCommandEncoderRelease(clearEnc);
-
-                std::atomic<bool> clearDone{false};
-                WGPUQueueWorkDoneCallbackInfo clearCb = {};
-                clearCb.mode = WGPUCallbackMode_AllowSpontaneous;
-                clearCb.callback = [](WGPUQueueWorkDoneStatus, WGPUStringView, void* ud, void*) {
-                    *static_cast<std::atomic<bool>*>(ud) = true;
-                };
-                clearCb.userdata1 = &clearDone;
-                wgpuQueueOnSubmittedWorkDone(_queue, clearCb);
-                while (!clearDone) wgpuDeviceTick(_device);
             }
 
-            // Run compute shader and copy to readback
+            // Register async callback for clear completion
+            _gpuWorkDone = false;
+            WGPUQueueWorkDoneCallbackInfo clearCb = {};
+            clearCb.mode = WGPUCallbackMode_AllowSpontaneous;
+            clearCb.callback = [](WGPUQueueWorkDoneStatus, WGPUStringView, void* ud1, void* ud2) {
+                auto* self = static_cast<VncServer*>(ud1);
+                self->_gpuWorkDone = true;
+                // Wake up libuv main loop
+                if (self->_uvAsync) {
+                    uv_async_send(static_cast<uv_async_t*>(self->_uvAsync));
+                }
+            };
+            clearCb.userdata1 = this;
+            wgpuQueueOnSubmittedWorkDone(_queue, clearCb);
+
+            _captureState = CaptureState::WAITING_CLEAR;
+            return Ok();  // Return immediately, don't block!
+        }
+
+        case CaptureState::WAITING_CLEAR: {
+            if (!_gpuWorkDone) {
+                return Ok();  // Still waiting, return without blocking
+            }
+
+            // Clear is done, now run compute shader
+            WGPUExtent3D extent = {width, height, 1};
+
             WGPUCommandEncoderDescriptor encDesc = {};
             WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(_device, &encDesc);
 
@@ -449,7 +493,6 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
             WGPUComputePassEncoder cpass = wgpuCommandEncoderBeginComputePass(encoder, &cpDesc);
             wgpuComputePassEncoderSetPipeline(cpass, _diffPipeline);
             wgpuComputePassEncoderSetBindGroup(cpass, 0, _diffBindGroup, 0, nullptr);
-            // Dispatch one workgroup per tile (8x8 threads per workgroup covers 64x64 tile)
             wgpuComputePassEncoderDispatchWorkgroups(cpass, _tilesX, _tilesY, 1);
             wgpuComputePassEncoderEnd(cpass);
             wgpuComputePassEncoderRelease(cpass);
@@ -466,7 +509,7 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
             // Copy current texture to prev for next frame comparison
             WGPUCommandEncoder copyEnc = wgpuDeviceCreateCommandEncoder(_device, nullptr);
             WGPUTexelCopyTextureInfo srcCopy = {};
-            srcCopy.texture = texture;
+            srcCopy.texture = _pendingTexture;
             WGPUTexelCopyTextureInfo dstCopy = {};
             dstCopy.texture = _prevTexture;
             wgpuCommandEncoderCopyTextureToTexture(copyEnc, &srcCopy, &dstCopy, &extent);
@@ -475,53 +518,81 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
             wgpuCommandBufferRelease(copyCmd);
             wgpuCommandEncoderRelease(copyEnc);
 
-            // Wait for GPU work to complete (synchronous)
-            {
-                std::atomic<bool> done{false};
-                WGPUQueueWorkDoneCallbackInfo cbInfo = {};
-                cbInfo.mode = WGPUCallbackMode_AllowSpontaneous;
-                cbInfo.callback = [](WGPUQueueWorkDoneStatus, WGPUStringView, void* ud, void*) {
-                    *static_cast<std::atomic<bool>*>(ud) = true;
-                };
-                cbInfo.userdata1 = &done;
-                wgpuQueueOnSubmittedWorkDone(_queue, cbInfo);
-                while (!done) wgpuDeviceTick(_device);
-            }
-
-            // Map dirty flags buffer and read (synchronous)
-            {
-                std::atomic<bool> done{false};
-                WGPUMapAsyncStatus status = WGPUMapAsyncStatus_Success;
-                WGPUBufferMapCallbackInfo cbInfo = {};
-                cbInfo.mode = WGPUCallbackMode_AllowSpontaneous;
-                cbInfo.callback = [](WGPUMapAsyncStatus s, WGPUStringView, void* ud1, void* ud2) {
-                    *static_cast<std::atomic<bool>*>(ud1) = true;
-                    *static_cast<WGPUMapAsyncStatus*>(ud2) = s;
-                };
-                cbInfo.userdata1 = &done;
-                cbInfo.userdata2 = &status;
-                wgpuBufferMapAsync(_dirtyFlagsReadback, WGPUMapMode_Read, 0,
-                    _tilesX * _tilesY * sizeof(uint32_t), cbInfo);
-                while (!done) wgpuDeviceTick(_device);
-
-                if (status != WGPUMapAsyncStatus_Success) {
-                    ywarn("VNC dirty flags map failed");
-                    break;
+            // Register async callback for compute completion
+            _gpuWorkDone = false;
+            WGPUQueueWorkDoneCallbackInfo cbInfo = {};
+            cbInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+            cbInfo.callback = [](WGPUQueueWorkDoneStatus, WGPUStringView, void* ud1, void*) {
+                auto* self = static_cast<VncServer*>(ud1);
+                self->_gpuWorkDone = true;
+                if (self->_uvAsync) {
+                    uv_async_send(static_cast<uv_async_t*>(self->_uvAsync));
                 }
+            };
+            cbInfo.userdata1 = this;
+            wgpuQueueOnSubmittedWorkDone(_queue, cbInfo);
 
-                const uint32_t* flags = static_cast<const uint32_t*>(
-                    wgpuBufferGetConstMappedRange(_dirtyFlagsReadback, 0, _tilesX * _tilesY * sizeof(uint32_t)));
-
-                for (uint32_t i = 0; i < _tilesX * _tilesY; i++) {
-                    _dirtyTiles[i] = (flags[i] != 0);
-                }
-                wgpuBufferUnmap(_dirtyFlagsReadback);
-            }
-            break;  // Fall through to encoding
+            _captureState = CaptureState::WAITING_COMPUTE;
+            return Ok();
         }
+
+        case CaptureState::WAITING_COMPUTE: {
+            if (!_gpuWorkDone) {
+                return Ok();  // Still waiting
+            }
+
+            // Compute is done, now map the buffer
+            _gpuWorkDone = false;
+            WGPUBufferMapCallbackInfo cbInfo = {};
+            cbInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+            cbInfo.callback = [](WGPUMapAsyncStatus s, WGPUStringView, void* ud1, void* ud2) {
+                auto* self = static_cast<VncServer*>(ud1);
+                self->_mapStatus = s;
+                self->_gpuWorkDone = true;
+                if (self->_uvAsync) {
+                    uv_async_send(static_cast<uv_async_t*>(self->_uvAsync));
+                }
+            };
+            cbInfo.userdata1 = this;
+            wgpuBufferMapAsync(_dirtyFlagsReadback, WGPUMapMode_Read, 0,
+                _tilesX * _tilesY * sizeof(uint32_t), cbInfo);
+
+            _captureState = CaptureState::WAITING_MAP;
+            return Ok();
+        }
+
+        case CaptureState::WAITING_MAP: {
+            if (!_gpuWorkDone) {
+                return Ok();  // Still waiting
+            }
+
+            if (_mapStatus != WGPUMapAsyncStatus_Success) {
+                ywarn("VNC dirty flags map failed");
+                _captureState = CaptureState::IDLE;
+                return Ok();
+            }
+
+            // Read dirty flags
+            const uint32_t* flags = static_cast<const uint32_t*>(
+                wgpuBufferGetConstMappedRange(_dirtyFlagsReadback, 0, _tilesX * _tilesY * sizeof(uint32_t)));
+
+            for (uint32_t i = 0; i < _tilesX * _tilesY; i++) {
+                _dirtyTiles[i] = (flags[i] != 0);
+            }
+            wgpuBufferUnmap(_dirtyFlagsReadback);
+
+            _captureState = CaptureState::READY_TO_SEND;
+            // Fall through to send
+            [[fallthrough]];
+        }
+
+        case CaptureState::READY_TO_SEND:
+            // Reset state for next frame
+            _captureState = CaptureState::IDLE;
+            break;
     }
 
-    // If no CPU pixels, read back from GPU (synchronous for simplicity)
+    // If no CPU pixels, read back from GPU (still synchronous for simplicity)
     if (!_cpuPixels && !_gpuReadbackPixels.empty()) {
         uint32_t bytesPerPixel = 4;
         uint32_t alignedBytesPerRow = (width * bytesPerPixel + 255) & ~255;
@@ -550,7 +621,7 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
         wgpuCommandBufferRelease(cmd);
         wgpuCommandEncoderRelease(encoder);
 
-        // Blocking map and copy
+        // Blocking map and copy (TODO: make async too)
         std::atomic<bool> mapDone{false};
         WGPUBufferMapCallbackInfo cbInfo = {};
         cbInfo.mode = WGPUCallbackMode_AllowSpontaneous;

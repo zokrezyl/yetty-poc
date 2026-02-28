@@ -101,12 +101,23 @@ private:
     std::vector<uint8_t> _gpuReadbackPixels;  // For GPU-only rendering
     WGPUBuffer _tileReadbackBuffer = nullptr;
 
-    // Async state machine
-    enum class CaptureState { IDLE, WAITING_COMPUTE, WAITING_MAP };
+    // Async state machine for non-blocking GPU operations
+    enum class CaptureState {
+        IDLE,              // Ready to start new frame
+        WAITING_CLEAR,     // Waiting for buffer clear
+        WAITING_COMPUTE,   // Waiting for compute shader + copy
+        WAITING_MAP,       // Waiting for buffer map
+        READY_TO_SEND      // Results ready, encode and send
+    };
     CaptureState _captureState = CaptureState::IDLE;
-    std::atomic<bool> _computeDone{false};
-    std::atomic<bool> _mapDone{false};
+    std::atomic<bool> _gpuWorkDone{false};
     WGPUMapAsyncStatus _mapStatus = WGPUMapAsyncStatus_Success;
+
+    // libuv async handle for GPU callback wakeup (void* to avoid uv.h in header)
+    void* _uvAsync = nullptr;
+
+    // Pending texture for async processing
+    WGPUTexture _pendingTexture = nullptr;
 
     // Full frame refresh
     std::atomic<bool> _forceFullFrame{true};  // Start with full frame
