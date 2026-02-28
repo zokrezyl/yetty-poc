@@ -363,7 +363,7 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
         }
         yinfo("VNC client connected to {}:{}", _vncHost, _vncPort);
 
-        // Send initial window size to server so it can size the terminal appropriately
+        // Send initial window size to server
         int windowW, windowH;
         _platform->getWindowSize(windowW, windowH);
         if (windowW > 0 && windowH > 0) {
@@ -472,8 +472,7 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
             if (widthPx == 0 || heightPx == 0) return;
             yinfo("VNC onResize: {}x{} px", widthPx, heightPx);
 
-            // In VNC mode, client controls the frame size
-            // Resize workspace to match (this flows down to terminal)
+            // Resize workspace to match client request
             if (_activeWorkspace) {
                 _activeWorkspace->resize(static_cast<float>(widthPx), static_cast<float>(heightPx));
             }
@@ -485,8 +484,6 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
         // VNC client cell size change (zoom)
         _vncServer->onCellSize = [this](uint8_t cellHeight) {
             yinfo("VNC onCellSize: cellHeight={}", cellHeight);
-            // TODO: Implement cell size change - requires font scaling
-            // For now, just force a full frame refresh
             _vncServer->forceFullFrame();
         };
     }
