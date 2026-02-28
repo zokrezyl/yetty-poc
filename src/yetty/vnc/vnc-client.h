@@ -100,6 +100,8 @@ private:
 
     // GPU resources
     WGPUTexture _texture = nullptr;
+    uint16_t _textureWidth = 0;
+    uint16_t _textureHeight = 0;
     WGPUTextureView _textureView = nullptr;
     WGPUSampler _sampler = nullptr;
     WGPUBindGroup _bindGroup = nullptr;

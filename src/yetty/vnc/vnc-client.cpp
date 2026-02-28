@@ -359,7 +359,7 @@ void VncClient::onSocketReadable() {
 }
 
 Result<void> VncClient::ensureResources(uint16_t width, uint16_t height) {
-    if (_texture && _width == width && _height == height) {
+    if (_texture && _textureWidth == width && _textureHeight == height) {
         return Ok();
     }
 
@@ -379,6 +379,9 @@ Result<void> VncClient::ensureResources(uint16_t width, uint16_t height) {
 
     _texture = wgpuDeviceCreateTexture(_device, &texDesc);
     if (!_texture) return Err<void>("Failed to create VNC texture");
+
+    _textureWidth = width;
+    _textureHeight = height;
 
     _textureView = wgpuTextureCreateView(_texture, nullptr);
     if (!_textureView) return Err<void>("Failed to create VNC texture view");
