@@ -436,8 +436,35 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
                 ywarn("VNC onKeyDown: EventLoop::instance() failed!");
                 return;
             }
-            ydebug("VNC onKeyDown: dispatching to EventLoop");
-            (*loopResult)->dispatch(base::Event::keyDown(static_cast<int>(keycode), static_cast<int>(mods), static_cast<int>(scancode)));
+            auto loop = *loopResult;
+
+            // Handle Ctrl/Alt + character combinations - dispatch as charInputWithMods
+            // to match local keyboard handling behavior
+            // VNC mods: MOD_CTRL=0x02, MOD_ALT=0x04
+            if (mods & (0x02 | 0x04)) {
+                uint32_t ch = 0;
+                // GLFW key codes: SPACE=32, 0-9=48-57, A-Z=65-90
+                if (keycode == 32) {
+                    // Space - dispatch as keyDown
+                    loop->dispatch(base::Event::keyDown(static_cast<int>(keycode), static_cast<int>(mods), static_cast<int>(scancode)));
+                    return;
+                } else if (keycode >= 48 && keycode <= 57) {
+                    // 0-9
+                    ch = keycode;
+                } else if (keycode >= 65 && keycode <= 90) {
+                    // A-Z -> a-z (lowercase)
+                    ch = keycode + 32;
+                }
+                if (ch != 0) {
+                    ydebug("VNC onKeyDown: Ctrl/Alt+char -> charInputWithMods ch={} mods={}", ch, mods);
+                    loop->dispatch(base::Event::charInputWithMods(ch, static_cast<int>(mods)));
+                    return;
+                }
+            }
+
+            // For special keys (Enter, arrows, etc.), dispatch keyDown
+            ydebug("VNC onKeyDown: dispatching keyDown to EventLoop");
+            loop->dispatch(base::Event::keyDown(static_cast<int>(keycode), static_cast<int>(mods), static_cast<int>(scancode)));
         };
 
         _vncServer->onKeyUp = [](uint32_t keycode, uint32_t scancode, uint8_t mods) {
