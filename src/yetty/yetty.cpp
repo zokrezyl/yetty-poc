@@ -531,6 +531,13 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
             if (!loopResult) return;
             (*loopResult)->dispatch(base::Event::charInputWithMods(codepoint, static_cast<int>(mods)));
         };
+
+        // VNC input received - trigger immediate screen refresh
+        _vncServer->onInputReceived = []() {
+            auto loopResult = base::EventLoop::instance();
+            if (!loopResult) return;
+            (*loopResult)->dispatch(base::Event::screenUpdateEvent());
+        };
     }
 
     return Ok();
@@ -1762,12 +1769,8 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
     _sharedUniforms.mouseY = _lastMouseY;
     wgpuQueueWriteBuffer(_queue, _sharedUniformBuffer, 0, &_sharedUniforms, sizeof(SharedUniforms));
 
-    // Process VNC input events from remote clients
-    if (_vncServerMode && _vncServer) {
-        ydebug("VNC: before processInput");
-        _vncServer->processInput();
-        ydebug("VNC: after processInput");
-    }
+    // Note: VNC input is now processed in the fast input timer (120Hz)
+    // for immediate responsiveness regardless of frame rate
 
     // Upload any pending font glyphs (e.g., bold/italic loaded on demand)
     if (_yettyContext.fontManager) {

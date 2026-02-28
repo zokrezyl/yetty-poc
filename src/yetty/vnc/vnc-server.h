@@ -2,6 +2,7 @@
 
 #include "protocol.h"
 #include <yetty/result.hpp>
+#include <yetty/base/event-listener.h>
 #include <webgpu/webgpu.h>
 #include <string>
 #include <vector>
@@ -13,7 +14,7 @@
 
 namespace yetty::vnc {
 
-class VncServer {
+class VncServer : public base::EventListener {
 public:
     VncServer(WGPUDevice device, WGPUQueue queue);
     ~VncServer();
@@ -61,11 +62,20 @@ public:
     std::function<void(uint16_t width, uint16_t height)> onResize;
     std::function<void(uint8_t cellHeight)> onCellSize;
     std::function<void(uint32_t codepoint, uint8_t mods)> onCharWithMods;
+    std::function<void()> onInputReceived;  // Called after any input event (for triggering refresh)
 
-    // Process all pending input events (call from main thread)
+    // EventListener interface - handles async I/O from client sockets
+    Result<bool> onEvent(const base::Event& event) override;
+
+    // Process all pending input events (call from main thread) - legacy, prefer async
     void processInput();
 
 private:
+    // Register/unregister client FD with EventLoop for async I/O
+    Result<void> registerClientPoll(int clientFd);
+    void unregisterClientPoll(int clientFd);
+
+
     void acceptLoop();
     void clientLoop(int clientFd);
     Result<void> sendToClient(int clientFd, const void* data, size_t size);
@@ -83,6 +93,10 @@ private:
     std::mutex _clientsMutex;
     std::vector<int> _clients;
     std::atomic<int> _clientCount{0};
+
+    // Async I/O: poll ID per client FD
+    std::unordered_map<int, int> _clientPollIds;  // fd -> pollId
+    std::unordered_map<int, int> _pollIdToFd;     // pollId -> fd (reverse lookup)
 
     // Frame dimensions
     uint32_t _lastWidth = 0;

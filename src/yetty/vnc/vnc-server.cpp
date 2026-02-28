@@ -1,4 +1,5 @@
 #include "vnc-server.h"
+#include <yetty/base/event-loop.h>
 #include <ytrace/ytrace.hpp>
 #include <turbojpeg.h>
 #include <cstring>
@@ -139,7 +140,7 @@ void VncServer::stop() {
     _running = false;
 
     if (_serverFd >= 0) {
-        shutdown(_serverFd, SHUT_RDWR);
+        ::shutdown(_serverFd, SHUT_RDWR);
         close(_serverFd);
         _serverFd = -1;
     }
@@ -148,7 +149,7 @@ void VncServer::stop() {
     {
         std::lock_guard<std::mutex> lock(_clientsMutex);
         for (int fd : _clients) {
-            shutdown(fd, SHUT_RDWR);
+            ::shutdown(fd, SHUT_RDWR);
             close(fd);
         }
         _clients.clear();
@@ -189,6 +190,11 @@ void VncServer::acceptLoop() {
             _clientCount = _clients.size();
             _clientInputBuffers[clientFd] = ClientInputBuffer{};
             _forceFullFrame = true;  // Send full frame to new client
+        }
+
+        // Register for async I/O (outside lock)
+        if (auto res = registerClientPoll(clientFd); !res) {
+            ywarn("Failed to register client poll: {}", res.error().message());
         }
     }
 }
@@ -730,6 +736,7 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
 
         // Remove dead clients
         for (int fd : deadClients) {
+            unregisterClientPoll(fd);  // Unregister async I/O first
             close(fd);
             _clients.erase(std::remove(_clients.begin(), _clients.end(), fd), _clients.end());
             _clientInputBuffers.erase(fd);
@@ -909,6 +916,11 @@ void VncServer::dispatchInput(const InputHeader& hdr, const uint8_t* data) {
             }
             break;
     }
+
+    // Notify that input was received (triggers screen refresh)
+    if (onInputReceived) {
+        onInputReceived();
+    }
 }
 
 bool VncServer::hasPendingInput() const {
@@ -929,6 +941,83 @@ void VncServer::processInput() {
 
 VncServer::FrameStats VncServer::getStats() const {
     return _lastStats;
+}
+
+Result<void> VncServer::registerClientPoll(int clientFd) {
+    auto loopResult = base::EventLoop::instance();
+    if (!loopResult) {
+        return Err<void>("EventLoop not available");
+    }
+    auto loop = *loopResult;
+
+    auto pollResult = loop->createPoll();
+    if (!pollResult) {
+        return Err<void>("Failed to create poll", pollResult);
+    }
+    int pollId = *pollResult;
+
+    if (auto res = loop->configPoll(pollId, clientFd); !res) {
+        loop->destroyPoll(pollId);
+        return Err<void>("Failed to configure poll", res);
+    }
+
+    if (auto res = loop->registerPollListener(pollId, sharedAs<base::EventListener>()); !res) {
+        loop->destroyPoll(pollId);
+        return Err<void>("Failed to register poll listener", res);
+    }
+
+    if (auto res = loop->startPoll(pollId); !res) {
+        loop->destroyPoll(pollId);
+        return Err<void>("Failed to start poll", res);
+    }
+
+    _clientPollIds[clientFd] = pollId;
+    _pollIdToFd[pollId] = clientFd;
+    yinfo("VNC: registered async poll for client fd={} pollId={}", clientFd, pollId);
+    return Ok();
+}
+
+void VncServer::unregisterClientPoll(int clientFd) {
+    auto it = _clientPollIds.find(clientFd);
+    if (it == _clientPollIds.end()) {
+        return;
+    }
+    int pollId = it->second;
+
+    auto loopResult = base::EventLoop::instance();
+    if (loopResult) {
+        auto loop = *loopResult;
+        loop->stopPoll(pollId);
+        loop->destroyPoll(pollId);
+    }
+
+    _pollIdToFd.erase(pollId);
+    _clientPollIds.erase(it);
+    yinfo("VNC: unregistered async poll for client fd={}", clientFd);
+}
+
+Result<bool> VncServer::onEvent(const base::Event& event) {
+    if (event.type != base::Event::Type::PollReadable) {
+        return Ok(false);
+    }
+
+    int fd = event.poll.fd;
+    ydebug("VNC onEvent: PollReadable fd={}", fd);
+
+    // Find the client FD (event.poll.fd should match)
+    {
+        std::lock_guard<std::mutex> lock(_clientsMutex);
+        auto it = std::find(_clients.begin(), _clients.end(), fd);
+        if (it == _clients.end()) {
+            ywarn("VNC onEvent: unknown fd={}", fd);
+            return Ok(false);
+        }
+    }
+
+    // Process input from this client
+    pollClientInput(fd);
+
+    return Ok(true);
 }
 
 } // namespace yetty::vnc
