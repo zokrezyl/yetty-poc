@@ -397,6 +397,7 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, uint32_t width, uint32_t 
 
     // Frame header
     FrameHeader fh;
+    fh.magic = FRAME_MAGIC;
     fh.width = _pendingWidth;
     fh.height = _pendingHeight;
     fh.tile_size = TILE_SIZE;

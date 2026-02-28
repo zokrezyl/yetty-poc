@@ -15,7 +15,10 @@ enum class Encoding : uint8_t {
 
 #pragma pack(push, 1)
 
+constexpr uint32_t FRAME_MAGIC = 0x594E4346;  // "YNCF" - Yetty VNC Frame
+
 struct FrameHeader {
+    uint32_t magic;      // FRAME_MAGIC for sync detection
     uint16_t width;
     uint16_t height;
     uint16_t tile_size;

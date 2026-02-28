@@ -153,9 +153,27 @@ void VncClient::receiveLoop() {
             continue;  // Timeout, keep looping
         }
 
-        // Sanity check
+        // Validate magic number
+        if (header.magic != FRAME_MAGIC) {
+            ywarn("VNC: Invalid frame magic 0x{:08X}, expected 0x{:08X}",
+                  header.magic, FRAME_MAGIC);
+            // Drain socket and resync
+            uint8_t drain[1024];
+            recv(_socket, drain, sizeof(drain), MSG_DONTWAIT);
+            continue;
+        }
+
+        // Sanity check dimensions
         if (header.width == 0 || header.height == 0 || header.width > 8192 || header.height > 8192) {
             ywarn("VNC: Invalid frame header {}x{}", header.width, header.height);
+            continue;
+        }
+
+        // Sanity check tile count
+        uint16_t maxTiles = ((header.width + TILE_SIZE - 1) / TILE_SIZE) *
+                           ((header.height + TILE_SIZE - 1) / TILE_SIZE);
+        if (header.num_tiles > maxTiles) {
+            ywarn("VNC: Too many tiles {} (max {})", header.num_tiles, maxTiles);
             continue;
         }
 
