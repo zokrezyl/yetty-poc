@@ -115,6 +115,7 @@ void VncServer::acceptLoop() {
             _clients.push_back(clientFd);
             _clientCount = _clients.size();
             _clientInputBuffers[clientFd] = ClientInputBuffer{};
+            _forceFullFrame = true;  // Send full frame to new client
         }
     }
 }
@@ -178,6 +179,20 @@ Result<void> VncServer::ensureResources(uint32_t width, uint32_t height) {
 }
 
 void VncServer::detectDirtyTiles() {
+    // Check if we need periodic full refresh
+    _framesSinceFullRefresh++;
+    if (_framesSinceFullRefresh >= FULL_REFRESH_INTERVAL) {
+        _forceFullFrame = true;
+        _framesSinceFullRefresh = 0;
+    }
+
+    // Force full frame: mark all tiles dirty
+    if (_forceFullFrame) {
+        std::fill(_dirtyTiles.begin(), _dirtyTiles.end(), true);
+        _forceFullFrame = false;
+        return;
+    }
+
     // Compare current pixels to previous, mark dirty tiles
     std::fill(_dirtyTiles.begin(), _dirtyTiles.end(), false);
 

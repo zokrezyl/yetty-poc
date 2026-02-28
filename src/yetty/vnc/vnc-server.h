@@ -79,6 +79,11 @@ private:
     uint32_t _pendingWidth = 0;
     uint32_t _pendingHeight = 0;
 
+    // Full frame refresh
+    std::atomic<bool> _forceFullFrame{true};  // Start with full frame
+    uint32_t _framesSinceFullRefresh = 0;
+    static constexpr uint32_t FULL_REFRESH_INTERVAL = 300;  // Every 300 frames (~5 sec at 60fps)
+
     // JPEG compression
     void* _jpegCompressor = nullptr;
 
