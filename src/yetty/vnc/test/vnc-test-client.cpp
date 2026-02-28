@@ -629,6 +629,11 @@ struct VertexOutput {
             if (res) {
                 needsRender = *res;
             }
+            // Don't render if VNC frame size doesn't match window size (avoid stretching)
+            if (vncClient->width() != g_clientState.windowWidth ||
+                vncClient->height() != g_clientState.windowHeight) {
+                needsRender = false;  // Wait for server to send frame at correct size
+            }
         } else if (testRender) {
             needsRender = true;  // Always render in test mode
         }
