@@ -242,7 +242,7 @@ build-webasm-dawn-debug: ## Build WebAssembly debug
 	@if [ ! -f "$(BUILD_DIR_WEBASM_DAWN_DEBUG)/build.ninja" ]; then $(MAKE) config-webasm-dawn-debug; fi
 	nix develop .#web --command bash -c 'cmake --build $(BUILD_DIR_WEBASM_DAWN_DEBUG) --target yetty $(CMAKE_PARALLEL)'
 	@cp build-tools/web/index.html build-tools/web/serve.py $(BUILD_DIR_WEBASM_DAWN_DEBUG)/
-	@bash build-tools/web/build-fs/build-vfsync.sh $(BUILD_DIR_WEBASM_DAWN_DEBUG)
+	@bash build-tools/jslinux/alpine/build-vfsync.sh $(BUILD_DIR_WEBASM_DAWN_DEBUG)
 
 .PHONY: build-webasm-dawn-release
 build-webasm-dawn-release: ## Build WebAssembly release (CDB generation handled by CMake)
@@ -250,7 +250,7 @@ build-webasm-dawn-release: ## Build WebAssembly release (CDB generation handled 
 	nix develop .#web --command bash -c 'cmake --build $(BUILD_DIR_WEBASM_DAWN_RELEASE) --target yetty $(CMAKE_PARALLEL)'
 	@cp build-tools/web/index.html build-tools/web/serve.py $(BUILD_DIR_WEBASM_DAWN_RELEASE)/
 	@$(MAKE) build-vm-tools BUILD_DIR=$(BUILD_DIR_WEBASM_DAWN_RELEASE)
-	@bash build-tools/web/build-fs/build-vfsync.sh $(BUILD_DIR_WEBASM_DAWN_RELEASE)
+	@bash build-tools/jslinux/alpine/build-vfsync.sh $(BUILD_DIR_WEBASM_DAWN_RELEASE)
 
 .PHONY: build-vm-tools
 build-vm-tools: ## Build static x86_64 tools for JSLinux VM (tries Docker Alpine, fallback to system/nix gcc)

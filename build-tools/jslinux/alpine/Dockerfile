@@ -1,0 +1,29 @@
+FROM alpine:3.23
+RUN apk add --no-cache \
+    bash \
+    coreutils \
+    neovim \
+    gcc \
+    g++ \
+    make \
+    cmake \
+    git \
+    python3 \
+    curl \
+    wget \
+    tar \
+    gzip \
+    findutils \
+    grep \
+    sed \
+    gawk \
+    diffutils \
+    patch \
+    less \
+    man-pages \
+    mandoc \
+    musl-dev \
+    linux-headers \
+    binutils \
+    strace \
+    file
