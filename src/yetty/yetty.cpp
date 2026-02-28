@@ -363,12 +363,16 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
         }
         yinfo("VNC client connected to {}:{}", _vncHost, _vncPort);
 
-        // Send initial window size to server
+        // Send initial VNC area size to server (window minus statusbar)
         int windowW, windowH;
         _platform->getWindowSize(windowW, windowH);
         if (windowW > 0 && windowH > 0) {
-            _vncClient->sendResize(static_cast<uint16_t>(windowW), static_cast<uint16_t>(windowH));
-            yinfo("VNC client sent initial resize: {}x{}", windowW, windowH);
+            float statusbarH = _yettyContext.imguiManager ? _yettyContext.imguiManager->getStatusbarHeight() : 0.0f;
+            int vncH = windowH - static_cast<int>(statusbarH);
+            if (vncH > 0) {
+                _vncClient->sendResize(static_cast<uint16_t>(windowW), static_cast<uint16_t>(vncH));
+                yinfo("VNC client sent initial resize: {}x{} (statusbar={})", windowW, vncH, statusbarH);
+            }
         }
     }
 
@@ -1922,10 +1926,14 @@ void YettyImpl::handleResize(int newWidth, int newHeight) noexcept {
         _activeWorkspace->resize(logicalW, logicalH - statusbarHeight);
     }
 
-    // VNC client mode: tell server about our new window size
+    // VNC client mode: tell server about our VNC area size (window minus statusbar)
     if (_vncClientMode && _vncClient && windowWidth > 0 && windowHeight > 0) {
-        _vncClient->sendResize(static_cast<uint16_t>(windowWidth), static_cast<uint16_t>(windowHeight));
-        yinfo("VNC client sent resize: {}x{}", windowWidth, windowHeight);
+        float statusbarH = _yettyContext.imguiManager ? _yettyContext.imguiManager->getStatusbarHeight() : 0.0f;
+        int vncH = windowHeight - static_cast<int>(statusbarH);
+        if (vncH > 0) {
+            _vncClient->sendResize(static_cast<uint16_t>(windowWidth), static_cast<uint16_t>(vncH));
+            yinfo("VNC client sent resize: {}x{} (statusbar={})", windowWidth, vncH, statusbarH);
+        }
     }
 }
 
