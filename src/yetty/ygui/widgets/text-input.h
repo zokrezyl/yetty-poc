@@ -12,12 +12,14 @@ public:
     uint32_t cursorPos = 0;
 
     void render(RenderContext& ctx) override {
-        ctx.box(x, y, w, h, bgColor, 4);
-        ctx.text(text, x + 8, y + 4, fgColor);
+        auto& t = ctx.theme();
+        ctx.box(x, y, w, h, bgColor, t.radiusMedium);
+        ctx.text(text, x + t.padLarge, y + t.padMedium, fgColor);
         if (isFocused()) {
-            float cursorX = x + 8 + cursorPos * 8;
-            ctx.box(cursorX, y + 4, 2, h - 8, fgColor, 0);
-            ctx.boxOutline(x, y, w, h, accentColor, 4);
+            float charW = ctx.measureText("M", t.fontSize);
+            float cursorX = x + t.padLarge + cursorPos * charW;
+            ctx.box(cursorX, y + t.padMedium, 2, h - t.padLarge, fgColor, 0);
+            ctx.boxOutline(x, y, w, h, accentColor, t.radiusMedium);
         }
     }
 

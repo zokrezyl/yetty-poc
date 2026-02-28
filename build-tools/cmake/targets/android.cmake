@@ -42,7 +42,6 @@ target_link_libraries(yetty PRIVATE
     -Wl,--whole-archive
     native_app_glue
     -Wl,--no-whole-archive
-    imgui
     ytrace::ytrace
     lz4_static
     uv_a

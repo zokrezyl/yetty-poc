@@ -10,23 +10,26 @@ class Popup : public Widget {
 public:
     std::string label;
     bool modal = false;
-    uint32_t headerColor = 0xFF3A3A4E;
-    float sceneWidth = 0;  // set by engine for modal overlay
+    uint32_t headerColor = 0;  // 0 = use theme
+    float sceneWidth = 0;
     float sceneHeight = 0;
 
     void render(RenderContext& ctx) override {
         if (!isOpen()) return;
+        auto& t = ctx.theme();
 
         if (modal)
-            ctx.box(0, 0, sceneWidth, sceneHeight, 0x80000000, 0);
+            ctx.box(0, 0, sceneWidth, sceneHeight, t.overlayModal, 0);
 
-        ctx.box(x + 4, y + 4, w, h, 0x40000000, 8); // Shadow
-        ctx.box(x, y, w, h, bgColor, 8);
-        ctx.boxOutline(x, y, w, h, accentColor, 8);
+        ctx.box(x + t.padMedium, y + t.padMedium, w, h, t.shadow, t.radiusLarge); // Shadow
+        ctx.box(x, y, w, h, bgColor, t.radiusLarge);
+        ctx.boxOutline(x, y, w, h, accentColor, t.radiusLarge);
 
         if (!label.empty()) {
-            ctx.box(x, y, w, 28, headerColor, 8);
-            ctx.text(label, x + 8, y + 6, fgColor);
+            uint32_t hdrColor = headerColor ? headerColor : t.bgHeader;
+            float hdrH = t.rowHeight + t.padMedium;
+            ctx.box(x, y, w, hdrH, hdrColor, t.radiusLarge);
+            ctx.text(label, x + t.padLarge, y + t.padLarge - 2, fgColor);
         }
     }
 

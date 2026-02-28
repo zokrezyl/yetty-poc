@@ -38,18 +38,20 @@ public:
                 else
                     hue = ((rf - gf) / delta + 4.0f) / 6.0f;
             }
-            float radius = std::min(w, h) / 2.0f - 4.0f;
+            auto& t = ctx.theme();
+            float radius = std::min(w, h) / 2.0f - t.padMedium;
             ctx.colorWheel(x + w / 2.0f, y + h / 2.0f,
                            radius, radius * 0.7f, hue, sat, val, 6.0f);
         } else {
             // Small preview box
+            auto& t = ctx.theme();
             float boxSize = 20;
-            ctx.box(x, y + 2, boxSize, boxSize, colorValue, 2);
-            ctx.boxOutline(x, y + 2, boxSize, boxSize, 0xFF666666, 2);
+            ctx.box(x, y + t.padSmall, boxSize, boxSize, colorValue, t.radiusSmall);
+            ctx.boxOutline(x, y + t.padSmall, boxSize, boxSize, t.borderMuted, t.radiusSmall);
             if (!label.empty())
-                ctx.text(label, x + boxSize + 8, y + 4, fgColor);
+                ctx.text(label, x + boxSize + t.padLarge, y + t.padMedium, fgColor);
             if (isHover())
-                ctx.boxOutline(x, y + 2, boxSize, boxSize, accentColor, 2);
+                ctx.boxOutline(x, y + t.padSmall, boxSize, boxSize, accentColor, t.radiusSmall);
         }
     }
 };

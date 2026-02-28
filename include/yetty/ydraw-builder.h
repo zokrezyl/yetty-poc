@@ -209,6 +209,20 @@ public:
     virtual std::string getSelectedText() = 0;
 
     //=========================================================================
+    // Text measurement & font metrics
+    //=========================================================================
+
+    /// Measure text width in scene units. fontId -1 = default font.
+    virtual float measureTextWidth(const std::string& text,
+                                   float fontSize, int fontId = -1) = 0;
+
+    /// Font ascent (positive, above baseline) in scene units.
+    virtual float fontAscent(float fontSize, int fontId = -1) = 0;
+
+    /// Font descent (positive, below baseline) in scene units.
+    virtual float fontDescent(float fontSize, int fontId = -1) = 0;
+
+    //=========================================================================
     // Grid computation
     //=========================================================================
 

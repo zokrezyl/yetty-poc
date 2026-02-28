@@ -34,7 +34,7 @@ suite gpu_screen_cell_tests = [] {
         auto screen = *result;
 
         WRITE(screen, "A");
-        Cell cell = screen->getCell(0, 0);
+        auto cell = screen->getCell(0, 0);
 
         expect(cell.glyph != 0_u) << "glyph should be set";
         // Default fg is white (240,240,240) and bg is black (0,0,0)
@@ -52,7 +52,7 @@ suite gpu_screen_cell_tests = [] {
         auto screen = *result;
 
         WRITE(screen, "\033[31mR");
-        Cell cell = screen->getCell(0, 0);
+        auto cell = screen->getCell(0, 0);
 
         expect(cell.glyph != 0_u);
         // Red: 224,0,0
@@ -67,7 +67,7 @@ suite gpu_screen_cell_tests = [] {
         auto screen = *result;
 
         WRITE(screen, "\033[32mG");
-        Cell cell = screen->getCell(0, 0);
+        auto cell = screen->getCell(0, 0);
 
         expect(cell.glyph != 0_u);
         // Green: 0,224,0
@@ -82,7 +82,7 @@ suite gpu_screen_cell_tests = [] {
         auto screen = *result;
 
         WRITE(screen, "\033[34mB");
-        Cell cell = screen->getCell(0, 0);
+        auto cell = screen->getCell(0, 0);
 
         expect(cell.glyph != 0_u);
         // Blue: 0,0,224
@@ -97,7 +97,7 @@ suite gpu_screen_cell_tests = [] {
         auto screen = *result;
 
         WRITE(screen, "\033[41mX");
-        Cell cell = screen->getCell(0, 0);
+        auto cell = screen->getCell(0, 0);
 
         expect(cell.glyph != 0_u);
         expect(cell.bgR == 224_u) << "bgR=" << cell.bgR;
@@ -111,7 +111,7 @@ suite gpu_screen_cell_tests = [] {
         auto screen = *result;
 
         WRITE(screen, "\033[42mX");
-        Cell cell = screen->getCell(0, 0);
+        auto cell = screen->getCell(0, 0);
 
         expect(cell.glyph != 0_u);
         expect(cell.bgR == 0_u) << "bgR=" << cell.bgR;
@@ -128,7 +128,7 @@ suite gpu_screen_cell_tests = [] {
         // Original: fg=red(224,0,0), bg=default(0,0,0)
         // After reverse: fg=default_bg(0,0,0), bg=red(224,0,0)
         WRITE(screen, "\033[31;7mR");
-        Cell cell = screen->getCell(0, 0);
+        auto cell = screen->getCell(0, 0);
 
         expect(cell.glyph != 0_u);
         // After reverse: red moves to bg, default bg (black) moves to fg
@@ -146,7 +146,7 @@ suite gpu_screen_cell_tests = [] {
         auto screen = *result;
 
         WRITE(screen, "\033[1mB");
-        Cell cell = screen->getCell(0, 0);
+        auto cell = screen->getCell(0, 0);
 
         expect(cell.glyph != 0_u);
         expect((cell.style & STYLE_BOLD) != 0_u) << "style=" << cell.style << " should have bold bit";
@@ -158,7 +158,7 @@ suite gpu_screen_cell_tests = [] {
         auto screen = *result;
 
         WRITE(screen, "\033[3mI");
-        Cell cell = screen->getCell(0, 0);
+        auto cell = screen->getCell(0, 0);
 
         expect(cell.glyph != 0_u);
         expect((cell.style & STYLE_ITALIC) != 0_u) << "style=" << cell.style << " should have italic bit";
@@ -170,7 +170,7 @@ suite gpu_screen_cell_tests = [] {
         auto screen = *result;
 
         WRITE(screen, "\033[4mU");
-        Cell cell = screen->getCell(0, 0);
+        auto cell = screen->getCell(0, 0);
 
         expect(cell.glyph != 0_u);
         uint8_t underline = (cell.style & STYLE_UNDERLINE_MASK) >> 2;
@@ -183,7 +183,7 @@ suite gpu_screen_cell_tests = [] {
         auto screen = *result;
 
         WRITE(screen, "\033[9mS");
-        Cell cell = screen->getCell(0, 0);
+        auto cell = screen->getCell(0, 0);
 
         expect(cell.glyph != 0_u);
         expect((cell.style & STYLE_STRIKE) != 0_u) << "style=" << cell.style << " should have strike bit";
@@ -196,7 +196,7 @@ suite gpu_screen_cell_tests = [] {
 
         WRITE(screen, "\033[1;3;4;31m");  // bold, italic, underline, red
         WRITE(screen, "\033[mN");  // reset + N
-        Cell cell = screen->getCell(0, 0);
+        auto cell = screen->getCell(0, 0);
 
         expect(cell.glyph != 0_u);
         // After reset, should have default colors and no style bits (except font type)
@@ -209,7 +209,7 @@ suite gpu_screen_cell_tests = [] {
         auto screen = *result;
 
         WRITE(screen, "\033[38;2;100;150;200mT");
-        Cell cell = screen->getCell(0, 0);
+        auto cell = screen->getCell(0, 0);
 
         expect(cell.glyph != 0_u);
         expect(cell.fgR == 100_u) << "fgR=" << cell.fgR;
@@ -223,7 +223,7 @@ suite gpu_screen_cell_tests = [] {
         auto screen = *result;
 
         WRITE(screen, "\033[48;2;50;100;150mB");
-        Cell cell = screen->getCell(0, 0);
+        auto cell = screen->getCell(0, 0);
 
         expect(cell.glyph != 0_u);
         expect(cell.bgR == 50_u) << "bgR=" << cell.bgR;
@@ -238,7 +238,7 @@ suite gpu_screen_cell_tests = [] {
 
         // 38;5;1 = red (index 1) = 224,0,0
         WRITE(screen, "\033[38;5;1mR");
-        Cell cell = screen->getCell(0, 0);
+        auto cell = screen->getCell(0, 0);
 
         expect(cell.glyph != 0_u);
         expect(cell.fgR == 224_u) << "fgR=" << cell.fgR;
@@ -253,7 +253,7 @@ suite gpu_screen_cell_tests = [] {
 
         // Red text on green background
         WRITE(screen, "\033[31;42mX");
-        Cell cell = screen->getCell(0, 0);
+        auto cell = screen->getCell(0, 0);
 
         expect(cell.glyph != 0_u);
         // Foreground red (224,0,0)
@@ -273,10 +273,10 @@ suite gpu_screen_cell_tests = [] {
 
         WRITE(screen, "\033[31mR\033[32mG\033[34mB\033[mN");
 
-        Cell cellR = screen->getCell(0, 0);
-        Cell cellG = screen->getCell(0, 1);
-        Cell cellB = screen->getCell(0, 2);
-        Cell cellN = screen->getCell(0, 3);
+        auto cellR = screen->getCell(0, 0);
+        auto cellG = screen->getCell(0, 1);
+        auto cellB = screen->getCell(0, 2);
+        auto cellN = screen->getCell(0, 3);
 
         // R should be red (224,0,0)
         expect(cellR.fgR == 224_u) << "R: fgR=" << cellR.fgR;
@@ -309,7 +309,7 @@ suite gpu_screen_cell_tests = [] {
         // Default: fg=240,240,240 bg=0,0,0
         // After reverse: fg=0,0,0 bg=240,240,240
         WRITE(screen, "\033[7mX");
-        Cell cell = screen->getCell(0, 0);
+        auto cell = screen->getCell(0, 0);
 
         expect(cell.glyph != 0_u);
         expect(cell.fgR == 0_u) << "fgR=" << cell.fgR;
@@ -329,7 +329,7 @@ suite gpu_screen_cell_tests = [] {
         // Before reverse: fg=0,224,0 bg=0,0,0
         // After reverse: fg=0,0,0 bg=0,224,0
         WRITE(screen, "\033[32;7mX");
-        Cell cell = screen->getCell(0, 0);
+        auto cell = screen->getCell(0, 0);
 
         expect(cell.glyph != 0_u);
         expect(cell.fgR == 0_u) << "fgR=" << cell.fgR;
@@ -349,7 +349,7 @@ suite gpu_screen_cell_tests = [] {
         // Before reverse: fg=240,240,240 bg=0,0,224
         // After reverse: fg=0,0,224 bg=240,240,240
         WRITE(screen, "\033[44;7mX");
-        Cell cell = screen->getCell(0, 0);
+        auto cell = screen->getCell(0, 0);
 
         expect(cell.glyph != 0_u);
         expect(cell.fgR == 0_u) << "fgR=" << cell.fgR;
@@ -369,7 +369,7 @@ suite gpu_screen_cell_tests = [] {
         // Before reverse: fg=224,0,0 bg=0,224,0
         // After reverse: fg=0,224,0 bg=224,0,0
         WRITE(screen, "\033[31;42;7mX");
-        Cell cell = screen->getCell(0, 0);
+        auto cell = screen->getCell(0, 0);
 
         expect(cell.glyph != 0_u);
         // fg becomes green (was bg)
@@ -391,7 +391,7 @@ suite gpu_screen_cell_tests = [] {
         // Before reverse: fg=100,150,200 bg=0,0,0
         // After reverse: fg=0,0,0 bg=100,150,200
         WRITE(screen, "\033[38;2;100;150;200;7mX");
-        Cell cell = screen->getCell(0, 0);
+        auto cell = screen->getCell(0, 0);
 
         expect(cell.glyph != 0_u);
         expect(cell.fgR == 0_u) << "fgR=" << cell.fgR;
@@ -411,7 +411,7 @@ suite gpu_screen_cell_tests = [] {
         // Before reverse: fg=240,240,240 bg=50,100,150
         // After reverse: fg=50,100,150 bg=240,240,240
         WRITE(screen, "\033[48;2;50;100;150;7mX");
-        Cell cell = screen->getCell(0, 0);
+        auto cell = screen->getCell(0, 0);
 
         expect(cell.glyph != 0_u);
         expect(cell.fgR == 50_u) << "fgR=" << cell.fgR;
@@ -429,8 +429,8 @@ suite gpu_screen_cell_tests = [] {
 
         // Set red, reverse, then turn off reverse with SGR 27
         WRITE(screen, "\033[31;7mR\033[27mN");
-        Cell cellR = screen->getCell(0, 0);
-        Cell cellN = screen->getCell(0, 1);
+        auto cellR = screen->getCell(0, 0);
+        auto cellN = screen->getCell(0, 1);
 
         // R should have reversed colors (fg=black, bg=red)
         expect(cellR.fgR == 0_u) << "R fgR=" << cellR.fgR;
@@ -455,7 +455,7 @@ suite gpu_screen_cell_tests = [] {
         auto screen = *result;
 
         WRITE(screen, "\033[38;5;2mG");
-        Cell cell = screen->getCell(0, 0);
+        auto cell = screen->getCell(0, 0);
 
         expect(cell.glyph != 0_u);
         // Index 2 = green = 0,224,0
@@ -470,7 +470,7 @@ suite gpu_screen_cell_tests = [] {
         auto screen = *result;
 
         WRITE(screen, "\033[48;5;4mB");
-        Cell cell = screen->getCell(0, 0);
+        auto cell = screen->getCell(0, 0);
 
         expect(cell.glyph != 0_u);
         // Index 4 = blue = 0,0,224
@@ -485,7 +485,7 @@ suite gpu_screen_cell_tests = [] {
         auto screen = *result;
 
         WRITE(screen, "\033[38;5;9mR");
-        Cell cell = screen->getCell(0, 0);
+        auto cell = screen->getCell(0, 0);
 
         expect(cell.glyph != 0_u);
         // Index 9 = bright red (vterm palette: 255,64,64)
@@ -502,7 +502,7 @@ suite gpu_screen_cell_tests = [] {
         // Index 244 is in grayscale range (232-255)
         // vterm grayscale formula produces 133 for index 244
         WRITE(screen, "\033[38;5;244mG");
-        Cell cell = screen->getCell(0, 0);
+        auto cell = screen->getCell(0, 0);
 
         expect(cell.glyph != 0_u);
         expect(cell.fgR == 133_u) << "fgR=" << cell.fgR;
@@ -520,7 +520,7 @@ suite gpu_screen_cell_tests = [] {
         auto screen = *result;
 
         WRITE(screen, "\033[91mR");
-        Cell cell = screen->getCell(0, 0);
+        auto cell = screen->getCell(0, 0);
 
         expect(cell.glyph != 0_u);
         // Bright red (vterm palette: 255,64,64)
@@ -535,7 +535,7 @@ suite gpu_screen_cell_tests = [] {
         auto screen = *result;
 
         WRITE(screen, "\033[92mG");
-        Cell cell = screen->getCell(0, 0);
+        auto cell = screen->getCell(0, 0);
 
         expect(cell.glyph != 0_u);
         // Bright green (vterm palette: 64,255,64)
@@ -550,7 +550,7 @@ suite gpu_screen_cell_tests = [] {
         auto screen = *result;
 
         WRITE(screen, "\033[104mB");
-        Cell cell = screen->getCell(0, 0);
+        auto cell = screen->getCell(0, 0);
 
         expect(cell.glyph != 0_u);
         // Bright blue (vterm palette: 64,64,255)
@@ -570,8 +570,8 @@ suite gpu_screen_cell_tests = [] {
 
         // Set red, then reset fg to default
         WRITE(screen, "\033[31mR\033[39mD");
-        Cell cellR = screen->getCell(0, 0);
-        Cell cellD = screen->getCell(0, 1);
+        auto cellR = screen->getCell(0, 0);
+        auto cellD = screen->getCell(0, 1);
 
         // R should be red
         expect(cellR.fgR == 224_u) << "R fgR=" << cellR.fgR;
@@ -588,8 +588,8 @@ suite gpu_screen_cell_tests = [] {
 
         // Set green bg, then reset bg to default
         WRITE(screen, "\033[42mG\033[49mD");
-        Cell cellG = screen->getCell(0, 0);
-        Cell cellD = screen->getCell(0, 1);
+        auto cellG = screen->getCell(0, 0);
+        auto cellD = screen->getCell(0, 1);
 
         // G should have green bg
         expect(cellG.bgG == 224_u) << "G bgG=" << cellG.bgG;

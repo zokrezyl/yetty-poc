@@ -69,6 +69,9 @@ public:
     void setCellSize(float cellWidth, float cellHeight);
     void setBgColor(uint32_t color) { _bgColor = color; }
 
+    /// Set text measurement callback (typically from YDrawBuilder::measureTextWidth).
+    void setMeasureTextFn(RenderContext::MeasureTextFn fn) { _measureFn = std::move(fn); }
+
     // Widget management — grid updates instantly
     void addWidget(WidgetPtr widget);
     void removeWidget(const WidgetPtr& widget);
@@ -92,6 +95,9 @@ public:
     bool isDirty() const { return _dirty; }
     void markDirty() { _dirty = true; }
 
+    /// Clear drag/press/hover state (call on display resize to avoid stale references)
+    void clearInteractionState();
+
 private:
     // Coordinate conversion (card pixels → widget space, assuming 10x20 nominal)
     float toWidgetX(float px) const { return px * 10.0f / _cellWidthF; }
@@ -110,6 +116,8 @@ private:
     float _cellWidthF = 10.0f;
     float _cellHeightF = 20.0f;
     uint32_t _bgColor = 0xFF1A1A2E;
+
+    RenderContext::MeasureTextFn _measureFn;
 
     WidgetPtr _hovered;   // currently hovered widget
     WidgetPtr _pressed;   // currently pressed widget (tracks drag)

@@ -11,6 +11,21 @@ namespace yetty::ygui {
 
 void RenderContext::box(float x, float y, float w, float h, uint32_t color, float radius) {
     float ox = x + _offsetX, oy = y + _offsetY;
+    if (isClipped(ox, oy, w, h)) return;
+    // Clamp to clip rect if active
+    if (hasClip()) {
+        auto& c = currentClip();
+        float x1 = std::max(ox, c.x);
+        float y1 = std::max(oy, c.y);
+        float x2 = std::min(ox + w, c.x + c.w);
+        float y2 = std::min(oy + h, c.y + c.h);
+        float cw = x2 - x1, ch = y2 - y1;
+        _buffer->addRoundedBox(_buffer->primCount(),
+            x1 + cw / 2, y1 + ch / 2, cw / 2, ch / 2,
+            radius, radius, radius, radius,
+            color, 0, 0.0f, 0.0f);
+        return;
+    }
     _buffer->addRoundedBox(_buffer->primCount(),
         ox + w / 2, oy + h / 2, w / 2, h / 2,
         radius, radius, radius, radius,
@@ -20,6 +35,7 @@ void RenderContext::box(float x, float y, float w, float h, uint32_t color, floa
 void RenderContext::boxOutline(float x, float y, float w, float h, uint32_t color,
                                float radius, float strokeWidth) {
     float ox = x + _offsetX, oy = y + _offsetY;
+    if (isClipped(ox, oy, w, h)) return;
     _buffer->addRoundedBox(_buffer->primCount(),
         ox + w / 2, oy + h / 2, w / 2, h / 2,
         radius, radius, radius, radius,
@@ -29,32 +45,58 @@ void RenderContext::boxOutline(float x, float y, float w, float h, uint32_t colo
 void RenderContext::text(const std::string& text, float x, float y, uint32_t color,
                          float fontSize) {
     if (text.empty()) return;
-    _buffer->addText(x + _offsetX, y + _offsetY + fontSize * 0.8f, text, fontSize, color, 0, -1);
+    float ox = x + _offsetX, oy = y + _offsetY;
+    if (hasClip()) {
+        auto& c = currentClip();
+        if (oy < c.y || oy + fontSize > c.y + c.h || ox > c.x + c.w) return;
+    }
+    _buffer->addText(ox, oy + fontSize * 0.8f, text, fontSize, color, 0, -1);
 }
 
 void RenderContext::triangle(float x0, float y0, float x1, float y1,
                              float x2, float y2, uint32_t color) {
-    _buffer->addTriangle(_buffer->primCount(),
-                         x0 + _offsetX, y0 + _offsetY,
-                         x1 + _offsetX, y1 + _offsetY,
-                         x2 + _offsetX, y2 + _offsetY,
+    float ax = x0 + _offsetX, ay = y0 + _offsetY;
+    float bx = x1 + _offsetX, by = y1 + _offsetY;
+    float cx = x2 + _offsetX, cy = y2 + _offsetY;
+    if (hasClip()) {
+        float minX = std::min({ax, bx, cx}), maxX = std::max({ax, bx, cx});
+        float minY = std::min({ay, by, cy}), maxY = std::max({ay, by, cy});
+        if (isClipped(minX, minY, maxX - minX, maxY - minY)) return;
+    }
+    _buffer->addTriangle(_buffer->primCount(), ax, ay, bx, by, cx, cy,
                          color, 0, 0.0f, 0.0f);
 }
 
 void RenderContext::circle(float cx, float cy, float radius, uint32_t color) {
-    _buffer->addCircle(_buffer->primCount(), cx + _offsetX, cy + _offsetY, radius,
+    float ox = cx + _offsetX, oy = cy + _offsetY;
+    if (isClipped(ox - radius, oy - radius, radius * 2, radius * 2)) return;
+    _buffer->addCircle(_buffer->primCount(), ox, oy, radius,
                        color, 0, 0.0f, 0.0f);
 }
 
 void RenderContext::circleOutline(float cx, float cy, float radius, uint32_t color,
                                   float strokeWidth) {
-    _buffer->addCircle(_buffer->primCount(), cx + _offsetX, cy + _offsetY, radius,
+    float ox = cx + _offsetX, oy = cy + _offsetY;
+    if (isClipped(ox - radius, oy - radius, radius * 2, radius * 2)) return;
+    _buffer->addCircle(_buffer->primCount(), ox, oy, radius,
                        0, color, strokeWidth, 0.0f);
+}
+
+void RenderContext::roundedX(float cx, float cy, float size, float armWidth,
+                             uint32_t color, float rounding) {
+    float ox = cx + _offsetX, oy = cy + _offsetY;
+    if (hasClip()) {
+        if (isClipped(ox - size, oy - size, size * 2, size * 2)) return;
+    }
+    _buffer->addRoundedX(_buffer->primCount(), ox, oy, size, armWidth,
+                         color, 0, 0.0f, rounding);
 }
 
 void RenderContext::colorWheel(float cx, float cy, float outerR, float innerR,
                                float hue, float sat, float val, float indicatorSize) {
-    _buffer->addColorWheel(_buffer->primCount(), cx + _offsetX, cy + _offsetY, outerR, innerR,
+    float ox = cx + _offsetX, oy = cy + _offsetY;
+    if (isClipped(ox - outerR, oy - outerR, outerR * 2, outerR * 2)) return;
+    _buffer->addColorWheel(_buffer->primCount(), ox, oy, outerR, innerR,
                            hue, sat, val, indicatorSize, 0, 0, 0.0f, 0.0f);
 }
 
@@ -188,6 +230,19 @@ void YGuiEngine::clearWidgets() {
     _dirty = true;
 }
 
+void YGuiEngine::clearInteractionState() {
+    if (_pressed) {
+        _pressed->onRelease(0, 0);  // let widget clean up drag state
+        _pressed->flags &= ~WIDGET_PRESSED;
+        _pressed = nullptr;
+    }
+    if (_hovered) {
+        _hovered->onHoverLeave();
+        _hovered = nullptr;
+    }
+    _dirty = true;
+}
+
 WidgetPtr YGuiEngine::widgetAt(float px, float py) const {
     return _grid.queryAt(px, py);
 }
@@ -260,7 +315,26 @@ void YGuiEngine::handleMouseDown(float px, float py, int button) {
     _pressed = hit;
 
     auto event = hit->onPress(wx - hit->effectiveX, wy - hit->effectiveY);
-    if (event) emitEvent(*event);
+    if (event) {
+        emitEvent(*event);
+        _dirty = true;
+        return;
+    }
+
+    // Bubble: if child didn't handle press, try top-level widgets (e.g. Panel header drag)
+    for (auto& root : _widgets) {
+        if (root.get() != hit.get() && root->contains(wx, wy)) {
+            auto ev = root->onPress(wx - root->effectiveX, wy - root->effectiveY);
+            if (ev) {
+                hit->flags &= ~WIDGET_PRESSED;
+                _pressed = root;
+                root->flags |= WIDGET_PRESSED;
+                emitEvent(*ev);
+                _dirty = true;
+                return;
+            }
+        }
+    }
 
     _dirty = true;
 }
@@ -280,15 +354,41 @@ void YGuiEngine::handleMouseUp(float px, float py, int button) {
     }
 }
 
+// Find the deepest ancestor chain from root widgets to the hit widget
+static WidgetPtr findScrollableAncestor(const WidgetPtr& root, const WidgetPtr& target) {
+    if (root == target) return root;
+    for (auto& child : root->children) {
+        auto found = findScrollableAncestor(child, target);
+        if (found) return found;
+    }
+    return nullptr;
+}
+
 void YGuiEngine::handleMouseScroll(float px, float py, float dx, float dy) {
     float wx = toWidgetX(px);
     float wy = toWidgetY(py);
 
     auto hit = _grid.queryAt(wx, wy);
-    if (hit) {
-        auto event = hit->onScroll(dx, dy);
-        if (event) emitEvent(*event);
+    if (!hit) return;
+
+    // Try the hit widget first
+    auto event = hit->onScroll(dx, dy);
+    if (event) {
+        emitEvent(*event);
         _dirty = true;
+        return;
+    }
+
+    // Bubble: try each top-level widget that contains the hit as a descendant
+    for (auto& root : _widgets) {
+        if (root->contains(wx, wy)) {
+            auto ev = root->onScroll(dx, dy);
+            if (ev) {
+                emitEvent(*ev);
+                _dirty = true;
+                return;
+            }
+        }
     }
 }
 
@@ -320,7 +420,7 @@ void YGuiEngine::rebuild() {
     for (auto& w : _widgets)
         clearRenderState(w);
 
-    RenderContext ctx(_buffer);
+    RenderContext ctx(_buffer, _measureFn);
     for (auto& w : _widgets)
         w->renderAll(ctx);
 

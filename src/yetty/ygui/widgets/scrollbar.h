@@ -12,15 +12,17 @@ public:
     float value = 0; // 0..1
 
     void render(RenderContext& ctx) override {
-        float trackW = w > 0 ? w : 12;
-        ctx.box(x, y, trackW, h, 0xFF222233, trackW / 2);
+        auto& t = ctx.theme();
+        float trackW = w > 0 ? w : t.scrollbarSize;
+        ctx.box(x, y, trackW, h, t.bgSecondary, trackW / 2);
 
         float thumbH = std::max(20.0f, h * 0.2f);
         float trackRange = h - thumbH;
         float thumbY = y + value * trackRange;
         uint32_t thumbColor = isPressed() ? accentColor
-                            : (isHover() ? 0xFF555566 : 0xFF444455);
-        ctx.box(x + 2, thumbY, trackW - 4, thumbH, thumbColor, (trackW - 4) / 2);
+                            : (isHover() ? t.thumbHover : t.thumbNormal);
+        ctx.box(x + t.padSmall, thumbY, trackW - t.padMedium, thumbH,
+                thumbColor, (trackW - t.padMedium) / 2);
     }
 
     std::optional<WidgetEvent> onPress(float localX, float localY) override {
@@ -50,15 +52,17 @@ public:
     float value = 0; // 0..1
 
     void render(RenderContext& ctx) override {
-        float trackH = h > 0 ? h : 12;
-        ctx.box(x, y, w, trackH, 0xFF222233, trackH / 2);
+        auto& t = ctx.theme();
+        float trackH = h > 0 ? h : t.scrollbarSize;
+        ctx.box(x, y, w, trackH, t.bgSecondary, trackH / 2);
 
         float thumbW = std::max(20.0f, w * 0.2f);
         float trackRange = w - thumbW;
         float thumbX = x + value * trackRange;
         uint32_t thumbColor = isPressed() ? accentColor
-                            : (isHover() ? 0xFF555566 : 0xFF444455);
-        ctx.box(thumbX, y + 2, thumbW, trackH - 4, thumbColor, (trackH - 4) / 2);
+                            : (isHover() ? t.thumbHover : t.thumbNormal);
+        ctx.box(thumbX, y + t.padSmall, thumbW, trackH - t.padMedium,
+                thumbColor, (trackH - t.padMedium) / 2);
     }
 
     std::optional<WidgetEvent> onPress(float localX, float localY) override {

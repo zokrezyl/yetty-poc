@@ -1,8 +1,10 @@
 #pragma once
 
 #include "ygui-io.h"
+#include "ygui-theme.h"
 #include <cstdint>
 #include <cmath>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -31,7 +33,13 @@ enum WidgetFlags : uint32_t {
 //=============================================================================
 class RenderContext {
 public:
-    explicit RenderContext(YDrawBuffer* buffer) : _buffer(buffer) {}
+    /// Text measurement callback: (text, fontSize) -> width in scene units.
+    using MeasureTextFn = std::function<float(const std::string&, float)>;
+
+    explicit RenderContext(YDrawBuffer* buffer, MeasureTextFn measureFn = nullptr,
+                          const Theme* theme = nullptr)
+        : _buffer(buffer), _measureFn(std::move(measureFn))
+        , _theme(theme ? theme : &defaultTheme()) {}
 
     void box(float x, float y, float w, float h, uint32_t color, float radius = 0);
     void boxOutline(float x, float y, float w, float h, uint32_t color,
@@ -45,6 +53,14 @@ public:
                        float strokeWidth = 1.5f);
     void colorWheel(float cx, float cy, float outerR, float innerR,
                     float hue, float sat, float val, float indicatorSize);
+    void roundedX(float cx, float cy, float size, float armWidth,
+                  uint32_t color, float rounding = 0);
+
+    /// Measure text width. Returns 0 if no measurement function is set.
+    float measureText(const std::string& text, float fontSize = 14.0f) const {
+        if (_measureFn) return _measureFn(text, fontSize);
+        return text.size() * fontSize * 0.6f;  // rough fallback
+    }
 
     // Offset stack for layout widgets (ScrollArea, CollapsingHeader, etc.)
     void pushOffset(float dx, float dy) {
@@ -63,11 +79,72 @@ public:
     float offsetY() const { return _offsetY; }
 
     YDrawBuffer* buffer() const { return _buffer; }
+    const Theme& theme() const { return *_theme; }
+
+    // Clip rect stack — CPU-side scissoring
+    struct ClipRect { float x, y, w, h; };
+
+    void pushClipRect(float cx, float cy, float cw, float ch) {
+        ClipRect r{cx + _offsetX, cy + _offsetY, cw, ch};
+        if (!_clipStack.empty()) {
+            // Intersect with current clip rect
+            auto& cur = _clipStack.back();
+            float x0 = std::max(r.x, cur.x);
+            float y0 = std::max(r.y, cur.y);
+            float x1 = std::min(r.x + r.w, cur.x + cur.w);
+            float y1 = std::min(r.y + r.h, cur.y + cur.h);
+            r = {x0, y0, std::max(0.0f, x1 - x0), std::max(0.0f, y1 - y0)};
+        }
+        _clipStack.push_back(r);
+    }
+
+    void popClipRect() {
+        if (!_clipStack.empty()) _clipStack.pop_back();
+    }
+
+    bool isClipped(float px, float py, float pw, float ph) const {
+        if (_clipStack.empty()) return false;
+        auto& c = _clipStack.back();
+        return (px + pw <= c.x || px >= c.x + c.w ||
+                py + ph <= c.y || py >= c.y + c.h);
+    }
+
+    bool hasClip() const { return !_clipStack.empty(); }
+    const ClipRect& currentClip() const { return _clipStack.back(); }
+
+    // RAII guard for push/popOffset — prevents stack mismatches
+    class OffsetGuard {
+    public:
+        OffsetGuard(RenderContext& ctx, float dx, float dy) : _ctx(ctx) {
+            _ctx.pushOffset(dx, dy);
+        }
+        ~OffsetGuard() { _ctx.popOffset(); }
+        OffsetGuard(const OffsetGuard&) = delete;
+        OffsetGuard& operator=(const OffsetGuard&) = delete;
+    private:
+        RenderContext& _ctx;
+    };
+
+    // RAII guard for push/popClipRect
+    class ClipGuard {
+    public:
+        ClipGuard(RenderContext& ctx, float x, float y, float w, float h) : _ctx(ctx) {
+            _ctx.pushClipRect(x, y, w, h);
+        }
+        ~ClipGuard() { _ctx.popClipRect(); }
+        ClipGuard(const ClipGuard&) = delete;
+        ClipGuard& operator=(const ClipGuard&) = delete;
+    private:
+        RenderContext& _ctx;
+    };
 
 private:
     YDrawBuffer* _buffer;
+    MeasureTextFn _measureFn;
+    const Theme* _theme;
     float _offsetX = 0, _offsetY = 0;
     std::vector<std::pair<float, float>> _offsetStack;
+    std::vector<ClipRect> _clipStack;
 };
 
 //=============================================================================
@@ -88,6 +165,7 @@ public:
 
     // Geometry (local coordinates — relative to parent container)
     float x = 0, y = 0, w = 100, h = 24;
+    float stretch = 0;  // 0 = use fixed w/h, >0 = proportional weight for layout
 
     // Effective screen position (computed during renderAll from offsets)
     float effectiveX = 0, effectiveY = 0;
@@ -103,7 +181,7 @@ public:
     bool isChecked() const  { return flags & WIDGET_CHECKED; }
     bool isOpen() const     { return flags & WIDGET_OPEN; }
 
-    bool contains(float px, float py) const {
+    virtual bool contains(float px, float py) const {
         return px >= effectiveX && px < effectiveX + w
             && py >= effectiveY && py < effectiveY + h;
     }

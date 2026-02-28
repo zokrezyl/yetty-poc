@@ -1412,9 +1412,10 @@ suite widget_gpu_scroll_multi = [] {
         auto p = runWidgetPipeline(200, 300, {scroll});
 
         uint32_t scrollOwnPrims = countScrollAreaOwnPrims(200, 300, 200, 600);
-        // 15 buttons = 15 prims + scroll own
-        expect(p.primitiveCount >= scrollOwnPrims + 15)
-            << "15 buttons in scroll: expected >= " << (scrollOwnPrims + 15)
+        // Only 9 of 15 buttons are visible (clip area h=288, buttons at y=10+i*32,
+        // button 9 at y=298 is fully clipped). Each visible button = 1 box prim.
+        expect(p.primitiveCount >= scrollOwnPrims + 9)
+            << "15 buttons in scroll (9 visible): expected >= " << (scrollOwnPrims + 9)
             << ", got " << p.primitiveCount;
 
         verifyAllPrimsReachable(p, "scroll-15-buttons");

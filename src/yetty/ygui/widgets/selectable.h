@@ -11,11 +11,12 @@ public:
     std::string label;
 
     void render(RenderContext& ctx) override {
+        auto& t = ctx.theme();
         if (isChecked())
-            ctx.box(x, y, w, h, accentColor, 2);
+            ctx.box(x, y, w, h, accentColor, t.radiusSmall);
         else if (isHover())
-            ctx.box(x, y, w, h, 0xFF333344, 2);
-        ctx.text(label, x + 8, y + 4, fgColor);
+            ctx.box(x, y, w, h, t.bgHover, t.radiusSmall);
+        ctx.text(label, x + t.padLarge, y + t.padMedium, fgColor);
     }
 
     std::optional<WidgetEvent> onPress(float localX, float localY) override {
