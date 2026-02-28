@@ -25,6 +25,7 @@
 #include <cstring>
 #include <ytrace/ytrace.hpp>
 #include <turbojpeg.h>
+#include <args.hxx>
 #include "vnc/vnc-client.h"
 #include "vnc/vnc-server.h"
 
@@ -458,38 +459,67 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
 }
 
 Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
-    for (int i = 1; i < argc; i++) {
-        std::string arg = argv[i];
-        if (arg == "-e" && i + 1 < argc) {
-            _executeCommand = argv[++i];
-            yinfo("Execute command: {}", _executeCommand);
-        } else if (arg == "--msdf-provider" && i + 1 < argc) {
-            _msdfProviderName = argv[++i];
-            yinfo("MSDF provider: {}", _msdfProviderName);
-        } else if (arg == "--capture-benchmark") {
-            _captureBenchmark = true;
-            yinfo("Capture benchmark mode enabled");
-        } else if (arg == "--vnc-client" && i + 1 < argc) {
-            _vncClientMode = true;
-            std::string hostPort = argv[++i];
-            // Parse host:port
-            auto colonPos = hostPort.rfind(':');
-            if (colonPos != std::string::npos) {
-                _vncHost = hostPort.substr(0, colonPos);
-                _vncPort = static_cast<uint16_t>(std::stoi(hostPort.substr(colonPos + 1)));
-            } else {
-                _vncHost = hostPort;
-            }
-            yinfo("VNC client mode: connecting to {}:{}", _vncHost, _vncPort);
-        } else if (arg == "--vnc-server" && i + 1 < argc) {
-            _vncServerMode = true;
-            _vncServerPort = static_cast<uint16_t>(std::stoi(argv[++i]));
-            yinfo("VNC server mode: port {}", _vncServerPort);
-        } else if (arg == "--vnc-headless") {
-            _vncHeadless = true;
-            yinfo("VNC headless mode: no local rendering");
-        }
+    args::ArgumentParser parser("yetty", "Terminal emulator with GPU rendering");
+
+    args::HelpFlag help(parser, "help", "Show this help", {'h', "help"});
+    args::ValueFlag<std::string> executeFlag(parser, "command", "Execute command", {'e'});
+    args::ValueFlag<std::string> msdfProviderFlag(parser, "provider", "MSDF provider (cpu/gpu)", {"msdf-provider"});
+    args::Flag captureBenchmarkFlag(parser, "capture-benchmark", "Enable capture benchmark mode", {"capture-benchmark"});
+    args::ValueFlag<std::string> vncClientFlag(parser, "host:port", "Connect as VNC client", {"vnc-client"});
+    args::Flag vncServerFlag(parser, "vnc-server", "Start VNC server", {"vnc-server"});
+    args::ValueFlag<uint16_t> vncServerPortFlag(parser, "port", "VNC server port (default 5900)", {"vnc-port"}, 5900);
+    args::Flag vncHeadlessFlag(parser, "vnc-headless", "VNC headless mode (no local rendering)", {"vnc-headless"});
+
+    try {
+        parser.ParseCLI(argc, argv);
+    } catch (const args::Help&) {
+        std::cout << parser;
+        std::exit(0);
+    } catch (const args::Error& e) {
+        yerror("Argument error: {}", e.what());
+        std::cerr << parser;
+        return Err<void>(e.what());
     }
+
+    if (executeFlag) {
+        _executeCommand = args::get(executeFlag);
+        yinfo("Execute command: {}", _executeCommand);
+    }
+
+    if (msdfProviderFlag) {
+        _msdfProviderName = args::get(msdfProviderFlag);
+        yinfo("MSDF provider: {}", _msdfProviderName);
+    }
+
+    if (captureBenchmarkFlag) {
+        _captureBenchmark = true;
+        yinfo("Capture benchmark mode enabled");
+    }
+
+    if (vncClientFlag) {
+        _vncClientMode = true;
+        std::string hostPort = args::get(vncClientFlag);
+        auto colonPos = hostPort.rfind(':');
+        if (colonPos != std::string::npos) {
+            _vncHost = hostPort.substr(0, colonPos);
+            _vncPort = static_cast<uint16_t>(std::stoi(hostPort.substr(colonPos + 1)));
+        } else {
+            _vncHost = hostPort;
+        }
+        yinfo("VNC client mode: connecting to {}:{}", _vncHost, _vncPort);
+    }
+
+    if (vncServerFlag) {
+        _vncServerMode = true;
+        _vncServerPort = args::get(vncServerPortFlag);
+        yinfo("VNC server mode: port {}", _vncServerPort);
+    }
+
+    if (vncHeadlessFlag) {
+        _vncHeadless = true;
+        yinfo("VNC headless mode: no local rendering");
+    }
+
     return Ok();
 }
 
