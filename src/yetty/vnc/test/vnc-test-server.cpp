@@ -500,6 +500,9 @@ int main(int argc, char* argv[]) {
             // Recreate framebuffer
             framebuffer.resize(sizing.width * sizing.height * 4);
 
+            // Force full frame update to clients
+            server.forceFullFrame();
+
             sizing.needsRecreate = false;
         }
 

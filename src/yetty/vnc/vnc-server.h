@@ -23,6 +23,7 @@ public:
     void stop();
     bool isRunning() const { return _running; }
     bool hasClients() const { return _clientCount > 0; }
+    void forceFullFrame() { _forceFullFrame = true; }
 
     // Statistics (updated per second)
     struct FrameStats {
