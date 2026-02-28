@@ -40,6 +40,8 @@ enum class InputType : uint8_t {
     KEY_DOWN = 3,
     KEY_UP = 4,
     TEXT_INPUT = 5,
+    RESIZE = 6,      // Client window resized
+    CELL_SIZE = 7,   // Client sets cell height (ctrl+wheel zoom)
 };
 
 enum class MouseButton : uint8_t {
@@ -86,6 +88,15 @@ constexpr uint8_t MOD_ALT   = 0x04;
 constexpr uint8_t MOD_SUPER = 0x08;
 
 // Text input event - for unicode text (follows InputHeader, variable length UTF-8)
+
+struct ResizeEvent {
+    uint16_t width;    // New client window width
+    uint16_t height;   // New client window height
+};
+
+struct CellSizeEvent {
+    uint8_t cellHeight;  // Absolute cell height in pixels (client commands the size)
+};
 
 #pragma pack(pop)
 

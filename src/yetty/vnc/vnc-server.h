@@ -51,6 +51,8 @@ public:
     std::function<void(uint32_t keycode, uint32_t scancode, uint8_t mods)> onKeyDown;
     std::function<void(uint32_t keycode, uint32_t scancode, uint8_t mods)> onKeyUp;
     std::function<void(const std::string& text)> onTextInput;
+    std::function<void(uint16_t width, uint16_t height)> onResize;
+    std::function<void(uint8_t cellHeight)> onCellSize;
 
     // Process all pending input events (call from main thread)
     void processInput();

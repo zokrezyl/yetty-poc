@@ -676,4 +676,35 @@ void VncClient::sendTextInput(const char* text, size_t len) {
     sendInput(buf.data(), buf.size());
 }
 
+void VncClient::sendResize(uint16_t width, uint16_t height) {
+    yinfo("VNC client sendResize: {}x{}", width, height);
+    InputHeader hdr = {};
+    hdr.type = static_cast<uint8_t>(InputType::RESIZE);
+    hdr.data_size = sizeof(ResizeEvent);
+
+    ResizeEvent evt = {};
+    evt.width = width;
+    evt.height = height;
+
+    uint8_t buf[sizeof(hdr) + sizeof(evt)];
+    std::memcpy(buf, &hdr, sizeof(hdr));
+    std::memcpy(buf + sizeof(hdr), &evt, sizeof(evt));
+    sendInput(buf, sizeof(buf));
+}
+
+void VncClient::sendCellSize(uint8_t cellHeight) {
+    yinfo("VNC client sendCellSize: cellHeight={}", (int)cellHeight);
+    InputHeader hdr = {};
+    hdr.type = static_cast<uint8_t>(InputType::CELL_SIZE);
+    hdr.data_size = sizeof(CellSizeEvent);
+
+    CellSizeEvent evt = {};
+    evt.cellHeight = cellHeight;
+
+    uint8_t buf[sizeof(hdr) + sizeof(evt)];
+    std::memcpy(buf, &hdr, sizeof(hdr));
+    std::memcpy(buf + sizeof(hdr), &evt, sizeof(evt));
+    sendInput(buf, sizeof(buf));
+}
+
 } // namespace yetty::vnc

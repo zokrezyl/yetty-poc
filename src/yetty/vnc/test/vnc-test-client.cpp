@@ -33,6 +33,40 @@ void signalHandler(int) {
     g_running = false;
 }
 
+// Client state for GLFW callbacks
+struct ClientState {
+    VncClient* client = nullptr;
+    uint8_t cellHeight = 20;  // Default cell height
+    static constexpr uint8_t MIN_CELL_HEIGHT = 8;
+    static constexpr uint8_t MAX_CELL_HEIGHT = 64;
+};
+ClientState g_clientState;
+
+void framebufferSizeCallback(GLFWwindow* window, int width, int height) {
+    if (g_clientState.client && width > 0 && height > 0) {
+        yinfo("Window resized to {}x{}", width, height);
+        g_clientState.client->sendResize(static_cast<uint16_t>(width), static_cast<uint16_t>(height));
+    }
+}
+
+void scrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
+    // Ctrl+wheel = zoom (change cell size)
+    if (glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ||
+        glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS) {
+        if (g_clientState.client) {
+            int delta = (yoffset > 0) ? 2 : -2;  // Zoom step
+            int newHeight = g_clientState.cellHeight + delta;
+            newHeight = std::max((int)ClientState::MIN_CELL_HEIGHT,
+                                 std::min((int)ClientState::MAX_CELL_HEIGHT, newHeight));
+            if (newHeight != g_clientState.cellHeight) {
+                g_clientState.cellHeight = static_cast<uint8_t>(newHeight);
+                yinfo("Zoom: cellHeight={}", g_clientState.cellHeight);
+                g_clientState.client->sendCellSize(g_clientState.cellHeight);
+            }
+        }
+    }
+}
+
 // Stats tracking
 struct Stats {
     uint64_t framesRendered = 0;
@@ -198,6 +232,10 @@ int main(int argc, char* argv[]) {
     }
     yinfo("Window created: {}", (void*)window);
     glfwShowWindow(window);
+
+    // Setup GLFW callbacks for resize and zoom
+    glfwSetFramebufferSizeCallback(window, framebufferSizeCallback);
+    glfwSetScrollCallback(window, scrollCallback);
 
     // Create WebGPU instance
     WGPUInstanceDescriptor instanceDesc = {};
@@ -509,6 +547,13 @@ struct VertexOutput {
             return 1;
         }
         yinfo("Connected to {}:{}", host, port);
+
+        // Setup client state for GLFW callbacks
+        g_clientState.client = vncClient.get();
+
+        // Send initial resize and cell size
+        vncClient->sendResize(static_cast<uint16_t>(windowWidth), static_cast<uint16_t>(windowHeight));
+        vncClient->sendCellSize(g_clientState.cellHeight);
 
         // Setup input generator
         if (generateInput) {

@@ -336,22 +336,26 @@ int main(int argc, char* argv[]) {
     std::signal(SIGINT, signalHandler);
     std::signal(SIGTERM, signalHandler);
 
-    // Initialize font
-    int cellWidth = 10;
-    int cellHeight = 20;
-    CpuFont font;
-    if (!font.init(fontPath, cellWidth, cellHeight)) {
-        yerror("Failed to initialize font");
-        return 1;
-    }
+    // Dynamic sizing state (can be changed by client)
+    struct SizingState {
+        int width;
+        int height;
+        int cellHeight;
+        int cellWidth;
+        bool needsRecreate = true;
 
-    // Calculate terminal size
-    int cols = width / cellWidth;
-    int rows = height / cellHeight;
-    yinfo("Terminal: {}x{} cells", cols, rows);
+        int cols() const { return width / cellWidth; }
+        int rows() const { return height / cellHeight; }
+    };
+    SizingState sizing;
+    sizing.width = width;
+    sizing.height = height;
+    sizing.cellHeight = 20;
+    sizing.cellWidth = 10;  // Will be derived from cellHeight * 0.5
 
-    // Create terminal
-    Terminal term(cols, rows);
+    // Font and terminal (recreated on size change)
+    std::unique_ptr<CpuFont> font;
+    std::unique_ptr<Terminal> term;
 
     // Create WebGPU instance
     WGPUInstanceDescriptor instanceDesc = {};
@@ -406,23 +410,9 @@ int main(int argc, char* argv[]) {
     WGPUQueue queue = wgpuDeviceGetQueue(device);
     yinfo("WebGPU initialized");
 
-    // Create texture for VNC
-    WGPUTextureDescriptor texDesc = {};
-    texDesc.size = {static_cast<uint32_t>(width), static_cast<uint32_t>(height), 1};
-    texDesc.format = WGPUTextureFormat_BGRA8Unorm;
-    texDesc.usage = WGPUTextureUsage_CopySrc | WGPUTextureUsage_CopyDst;
-    texDesc.mipLevelCount = 1;
-    texDesc.sampleCount = 1;
-    texDesc.dimension = WGPUTextureDimension_2D;
-
-    WGPUTexture texture = wgpuDeviceCreateTexture(device, &texDesc);
-    if (!texture) {
-        yerror("Failed to create texture");
-        return 1;
-    }
-
-    // Create framebuffer
-    std::vector<uint8_t> framebuffer(width * height * 4);
+    // Texture and framebuffer (recreated on size change)
+    WGPUTexture texture = nullptr;
+    std::vector<uint8_t> framebuffer;
 
     // Start VNC server
     yetty::vnc::VncServer server(device, queue);
@@ -436,19 +426,34 @@ int main(int argc, char* argv[]) {
     // Store client text to display at a dedicated line (not overwritten by patterns)
     std::string clientText;
 
-    // Set up input callbacks to write received text to terminal
+    // Set up input callbacks
     server.onTextInput = [&clientText](const std::string& text) {
         yinfo("SERVER RECEIVED TEXT: {} bytes: {}", text.size(), text);
-        // Store the text - we'll render it at a dedicated line after pattern generation
         clientText = text;
     };
     server.onKeyDown = [&term](uint32_t keycode, uint32_t scancode, uint8_t mods) {
-        // Convert keycode to character and write to terminal
+        if (!term) return;
         if (keycode >= 32 && keycode < 127) {
             char c = static_cast<char>(keycode);
-            term.write(&c, 1);
+            term->write(&c, 1);
         } else if (keycode == '\n' || keycode == '\r') {
-            term.write("\n", 1);
+            term->write("\n", 1);
+        }
+    };
+    server.onResize = [&sizing](uint16_t w, uint16_t h) {
+        yinfo("SERVER RESIZE: {}x{}", w, h);
+        if (w > 0 && h > 0 && (sizing.width != w || sizing.height != h)) {
+            sizing.width = w;
+            sizing.height = h;
+            sizing.needsRecreate = true;
+        }
+    };
+    server.onCellSize = [&sizing](uint8_t cellH) {
+        yinfo("SERVER CELL SIZE: {}", cellH);
+        if (cellH >= 8 && cellH <= 64 && sizing.cellHeight != cellH) {
+            sizing.cellHeight = cellH;
+            sizing.cellWidth = cellH / 2;  // Maintain 1:2 aspect ratio
+            sizing.needsRecreate = true;
         }
     };
 
@@ -466,21 +471,55 @@ int main(int argc, char* argv[]) {
         }
         lastFrame = now;
 
+        // Recreate resources if size changed
+        if (sizing.needsRecreate) {
+            yinfo("Recreating resources: {}x{} cellH={}", sizing.width, sizing.height, sizing.cellHeight);
+
+            // Recreate font
+            font = std::make_unique<CpuFont>();
+            if (!font->init(fontPath, sizing.cellWidth, sizing.cellHeight)) {
+                yerror("Failed to reinit font");
+                break;
+            }
+
+            // Recreate terminal
+            term = std::make_unique<Terminal>(sizing.cols(), sizing.rows());
+            yinfo("Terminal: {}x{} cells", sizing.cols(), sizing.rows());
+
+            // Recreate texture
+            if (texture) wgpuTextureRelease(texture);
+            WGPUTextureDescriptor texDesc = {};
+            texDesc.size = {static_cast<uint32_t>(sizing.width), static_cast<uint32_t>(sizing.height), 1};
+            texDesc.format = WGPUTextureFormat_BGRA8Unorm;
+            texDesc.usage = WGPUTextureUsage_CopySrc | WGPUTextureUsage_CopyDst;
+            texDesc.mipLevelCount = 1;
+            texDesc.sampleCount = 1;
+            texDesc.dimension = WGPUTextureDimension_2D;
+            texture = wgpuDeviceCreateTexture(device, &texDesc);
+
+            // Recreate framebuffer
+            framebuffer.resize(sizing.width * sizing.height * 4);
+
+            sizing.needsRecreate = false;
+        }
+
+        if (!term || !font) continue;
+
         // Generate pattern
         if (pattern == "text") {
-            generateTextPattern(term, frameCount);
+            generateTextPattern(*term, frameCount);
         } else if (pattern == "scroll") {
-            generateScrollPattern(term, frameCount);
+            generateScrollPattern(*term, frameCount);
         } else if (pattern == "stress") {
-            generateStressPattern(term, frameCount, rng);
+            generateStressPattern(*term, frameCount, rng);
         }
 
         // Write client text at a dedicated line (row 30) - won't be overwritten by patterns
         if (!clientText.empty()) {
             char buf[256];
-            snprintf(buf, sizeof(buf), "\033[30;1H");  // Move cursor to row 30, col 1
-            term.write(buf);
-            term.write(clientText);
+            snprintf(buf, sizeof(buf), "\033[30;1H");
+            term->write(buf);
+            term->write(clientText);
         }
 
         // Write VNC stats at bottom line (row 35)
@@ -491,7 +530,7 @@ int main(int argc, char* argv[]) {
                      stats.tilesSent, stats.tilesJpeg, stats.tilesRaw,
                      stats.avgTileSize, stats.fullUpdates, stats.frames,
                      (unsigned long)(stats.bytesPerSec / 1024));
-            term.write(buf);
+            term->write(buf);
         }
 
         // Clear framebuffer to dark background
@@ -500,22 +539,21 @@ int main(int argc, char* argv[]) {
             framebuffer[i] = 0xFF;  // Alpha
         }
 
-
         // Render terminal cells to framebuffer
-        for (int row = 0; row < rows; ++row) {
-            for (int col = 0; col < cols; ++col) {
+        for (int row = 0; row < sizing.rows(); ++row) {
+            for (int col = 0; col < sizing.cols(); ++col) {
                 uint32_t cp;
                 uint8_t r, g, b, bgR, bgG, bgB;
-                if (!term.getCell(row, col, cp, r, g, b, bgR, bgG, bgB)) continue;
+                if (!term->getCell(row, col, cp, r, g, b, bgR, bgG, bgB)) continue;
 
-                int x = col * cellWidth;
-                int y = row * cellHeight;
+                int x = col * sizing.cellWidth;
+                int y = row * sizing.cellHeight;
 
                 // Fill background if not default
                 if (bgR != 0 || bgG != 0 || bgB != 0) {
-                    for (int py = 0; py < cellHeight && y + py < height; ++py) {
-                        for (int px = 0; px < cellWidth && x + px < width; ++px) {
-                            int idx = ((y + py) * width + (x + px)) * 4;
+                    for (int py = 0; py < sizing.cellHeight && y + py < sizing.height; ++py) {
+                        for (int px = 0; px < sizing.cellWidth && x + px < sizing.width; ++px) {
+                            int idx = ((y + py) * sizing.width + (x + px)) * 4;
                             framebuffer[idx + 0] = bgB;
                             framebuffer[idx + 1] = bgG;
                             framebuffer[idx + 2] = bgR;
@@ -526,7 +564,7 @@ int main(int argc, char* argv[]) {
 
                 // Render glyph
                 if (cp > 32) {
-                    font.renderGlyph(cp, framebuffer.data(), width, height, x, y, r, g, b);
+                    font->renderGlyph(cp, framebuffer.data(), sizing.width, sizing.height, x, y, r, g, b);
                 }
             }
         }
@@ -535,14 +573,14 @@ int main(int argc, char* argv[]) {
         WGPUTexelCopyTextureInfo dst = {};
         dst.texture = texture;
         WGPUTexelCopyBufferLayout layout = {};
-        layout.bytesPerRow = width * 4;
-        layout.rowsPerImage = height;
-        WGPUExtent3D extent = {static_cast<uint32_t>(width), static_cast<uint32_t>(height), 1};
+        layout.bytesPerRow = sizing.width * 4;
+        layout.rowsPerImage = sizing.height;
+        WGPUExtent3D extent = {static_cast<uint32_t>(sizing.width), static_cast<uint32_t>(sizing.height), 1};
         wgpuQueueWriteTexture(queue, &dst, framebuffer.data(), framebuffer.size(), &layout, &extent);
 
         // Send frame
         if (server.hasClients()) {
-            auto res = server.sendFrame(texture, width, height);
+            auto res = server.sendFrame(texture, sizing.width, sizing.height);
             if (!res && frameCount % 60 == 0) {
                 ywarn("Frame send failed: {}", res.error().message());
             }
@@ -558,7 +596,7 @@ int main(int argc, char* argv[]) {
 
     yinfo("Stopping...");
     server.stop();
-    wgpuTextureRelease(texture);
+    if (texture) wgpuTextureRelease(texture);
     wgpuQueueRelease(queue);
     wgpuDeviceRelease(device);
     wgpuAdapterRelease(adapter);

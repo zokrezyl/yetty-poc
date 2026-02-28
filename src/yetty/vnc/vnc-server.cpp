@@ -634,6 +634,24 @@ void VncServer::dispatchInput(const InputHeader& hdr, const uint8_t* data) {
                 onTextInput(text);
             }
             break;
+
+        case InputType::RESIZE:
+            yinfo("VNC dispatchInput: RESIZE callback={}", (bool)onResize);
+            if (data && hdr.data_size >= sizeof(ResizeEvent) && onResize) {
+                const ResizeEvent* r = reinterpret_cast<const ResizeEvent*>(data);
+                yinfo("VNC dispatchInput: calling onResize {}x{}", r->width, r->height);
+                onResize(r->width, r->height);
+            }
+            break;
+
+        case InputType::CELL_SIZE:
+            yinfo("VNC dispatchInput: CELL_SIZE callback={}", (bool)onCellSize);
+            if (data && hdr.data_size >= sizeof(CellSizeEvent) && onCellSize) {
+                const CellSizeEvent* c = reinterpret_cast<const CellSizeEvent*>(data);
+                yinfo("VNC dispatchInput: calling onCellSize cellHeight={}", c->cellHeight);
+                onCellSize(c->cellHeight);
+            }
+            break;
     }
 }
 
