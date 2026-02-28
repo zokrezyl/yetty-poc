@@ -539,11 +539,7 @@ int main(int argc, char* argv[]) {
             term->write(buf);
         }
 
-        // Clear framebuffer to dark background
-        std::memset(framebuffer.data(), 0x1E, framebuffer.size());
-        for (size_t i = 3; i < framebuffer.size(); i += 4) {
-            framebuffer[i] = 0xFF;  // Alpha
-        }
+        // No clear needed - we render every cell which overwrites everything
 
         // Render terminal cells to framebuffer
         for (int row = 0; row < sizing.rows(); ++row) {
@@ -555,16 +551,12 @@ int main(int argc, char* argv[]) {
                 int x = col * sizing.cellWidth;
                 int y = row * sizing.cellHeight;
 
-                // Fill background if not default
-                if (bgR != 0 || bgG != 0 || bgB != 0) {
-                    for (int py = 0; py < sizing.cellHeight && y + py < sizing.height; ++py) {
-                        for (int px = 0; px < sizing.cellWidth && x + px < sizing.width; ++px) {
-                            int idx = ((y + py) * sizing.width + (x + px)) * 4;
-                            framebuffer[idx + 0] = bgB;
-                            framebuffer[idx + 1] = bgG;
-                            framebuffer[idx + 2] = bgR;
-                            framebuffer[idx + 3] = 0xFF;
-                        }
+                // Fill cell background
+                for (int py = 0; py < sizing.cellHeight && y + py < sizing.height; ++py) {
+                    uint32_t* row = reinterpret_cast<uint32_t*>(framebuffer.data() + ((y + py) * sizing.width + x) * 4);
+                    uint32_t color = 0xFF000000 | (bgR << 16) | (bgG << 8) | bgB;
+                    for (int px = 0; px < sizing.cellWidth && x + px < sizing.width; ++px) {
+                        row[px] = color;
                     }
                 }
 
@@ -584,9 +576,9 @@ int main(int argc, char* argv[]) {
         WGPUExtent3D extent = {static_cast<uint32_t>(sizing.width), static_cast<uint32_t>(sizing.height), 1};
         wgpuQueueWriteTexture(queue, &dst, framebuffer.data(), framebuffer.size(), &layout, &extent);
 
-        // Send frame
+        // Send frame (GPU texture for diff detection, CPU buffer for encoding)
         if (server.hasClients()) {
-            auto res = server.sendFrame(texture, sizing.width, sizing.height);
+            auto res = server.sendFrame(texture, framebuffer.data(), sizing.width, sizing.height);
             if (!res && frameCount % 60 == 0) {
                 ywarn("Frame send failed: {}", res.error().message());
             }

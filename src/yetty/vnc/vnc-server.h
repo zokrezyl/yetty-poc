@@ -38,8 +38,14 @@ public:
     FrameStats getStats() const;
 
     // Capture current frame and send to all clients
-    // Call this after rendering to the capture texture
-    Result<void> sendFrame(WGPUTexture texture, uint32_t width, uint32_t height);
+    // texture: current frame on GPU (for diff detection)
+    // cpuPixels: same frame in CPU memory (for JPEG encoding), or nullptr to read back from GPU
+    Result<void> sendFrame(WGPUTexture texture, const uint8_t* cpuPixels, uint32_t width, uint32_t height);
+
+    // Overload for GPU-only rendering (will read back dirty tiles for encoding)
+    Result<void> sendFrame(WGPUTexture texture, uint32_t width, uint32_t height) {
+        return sendFrame(texture, nullptr, width, height);
+    }
 
     // Poll for incoming input events (call from main thread)
     // Returns true if there are pending events
@@ -77,24 +83,30 @@ private:
     std::vector<int> _clients;
     std::atomic<int> _clientCount{0};
 
-    // Frame capture resources
-    WGPUBuffer _readbackBuffer = nullptr;
-    uint32_t _readbackSize = 0;
+    // Frame dimensions
     uint32_t _lastWidth = 0;
     uint32_t _lastHeight = 0;
-    std::vector<uint8_t> _pixels;
-    std::vector<uint8_t> _prevPixels;  // For dirty detection
 
-    // Async capture state machine
-    enum class CaptureState { IDLE, WAITING_QUEUE, WAITING_MAP };
+    // GPU tile diff resources
+    WGPUTexture _prevTexture = nullptr;      // Previous frame for comparison
+    WGPUBuffer _dirtyFlagsBuffer = nullptr;  // Output: 1 uint per tile (dirty=1, clean=0)
+    WGPUBuffer _dirtyFlagsReadback = nullptr; // CPU-readable copy
+    WGPUComputePipeline _diffPipeline = nullptr;
+    WGPUBindGroup _diffBindGroup = nullptr;
+    WGPUBindGroupLayout _diffBindGroupLayout = nullptr;
+
+    // CPU framebuffer for encoding (passed in from caller or read back from GPU)
+    const uint8_t* _cpuPixels = nullptr;
+    uint32_t _cpuPixelsSize = 0;
+    std::vector<uint8_t> _gpuReadbackPixels;  // For GPU-only rendering
+    WGPUBuffer _tileReadbackBuffer = nullptr;
+
+    // Async state machine
+    enum class CaptureState { IDLE, WAITING_COMPUTE, WAITING_MAP };
     CaptureState _captureState = CaptureState::IDLE;
-    std::atomic<bool> _queueDone{false};
+    std::atomic<bool> _computeDone{false};
     std::atomic<bool> _mapDone{false};
     WGPUMapAsyncStatus _mapStatus = WGPUMapAsyncStatus_Success;
-    uint32_t _pendingWidth = 0;
-    uint32_t _pendingHeight = 0;
-    uint16_t _pendingTilesX = 0;
-    uint16_t _pendingTilesY = 0;
 
     // Full frame refresh
     std::atomic<bool> _forceFullFrame{true};  // Start with full frame
@@ -110,7 +122,7 @@ private:
     uint16_t _tilesY = 0;
 
     Result<void> ensureResources(uint32_t width, uint32_t height);
-    void detectDirtyTiles();
+    Result<void> createDiffPipeline();
     Result<void> encodeTile(uint16_t tx, uint16_t ty, std::vector<uint8_t>& outData, Encoding& outEncoding);
 
     // Input receiving (non-blocking, called from main thread)

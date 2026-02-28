@@ -23,9 +23,46 @@ VncServer::VncServer(WGPUDevice device, WGPUQueue queue)
     _jpegCompressor = tjInitCompress();
 }
 
+// Compute shader for tile diff detection
+// Each workgroup handles one tile, compares pixels, outputs 1 if any differ
+static const char* DIFF_SHADER = R"(
+@group(0) @binding(0) var currTex: texture_2d<f32>;
+@group(0) @binding(1) var prevTex: texture_2d<f32>;
+@group(0) @binding(2) var<storage, read_write> dirtyFlags: array<u32>;
+
+override TILE_SIZE: u32 = 64;
+override TILES_X: u32 = 20;
+
+@compute @workgroup_size(8, 8)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>,
+        @builtin(workgroup_id) wgid: vec3<u32>) {
+    let tileIdx = wgid.y * TILES_X + wgid.x;
+    let px = wgid.x * TILE_SIZE + gid.x % TILE_SIZE;
+    let py = wgid.y * TILE_SIZE + gid.y % TILE_SIZE;
+
+    let dims = textureDimensions(currTex);
+    if (px >= dims.x || py >= dims.y) {
+        return;
+    }
+
+    let curr = textureLoad(currTex, vec2<u32>(px, py), 0);
+    let prev = textureLoad(prevTex, vec2<u32>(px, py), 0);
+
+    // If any channel differs, mark tile dirty (atomic OR)
+    if (any(curr != prev)) {
+        atomicOr(&dirtyFlags[tileIdx], 1u);
+    }
+}
+)";
+
 VncServer::~VncServer() {
     stop();
-    if (_readbackBuffer) wgpuBufferRelease(_readbackBuffer);
+    if (_prevTexture) wgpuTextureRelease(_prevTexture);
+    if (_dirtyFlagsBuffer) wgpuBufferRelease(_dirtyFlagsBuffer);
+    if (_dirtyFlagsReadback) wgpuBufferRelease(_dirtyFlagsReadback);
+    if (_diffPipeline) wgpuComputePipelineRelease(_diffPipeline);
+    if (_diffBindGroup) wgpuBindGroupRelease(_diffBindGroup);
+    if (_diffBindGroupLayout) wgpuBindGroupLayoutRelease(_diffBindGroupLayout);
     if (_jpegCompressor) tjDestroy(static_cast<tjhandle>(_jpegCompressor));
 }
 
@@ -147,106 +184,128 @@ Result<void> VncServer::sendToClient(int clientFd, const void* data, size_t size
 }
 
 Result<void> VncServer::ensureResources(uint32_t width, uint32_t height) {
-    if (_lastWidth == width && _lastHeight == height && _readbackBuffer) {
+    if (_lastWidth == width && _lastHeight == height && _prevTexture) {
         return Ok();
     }
 
-    // Release old buffer
-    if (_readbackBuffer) {
-        wgpuBufferRelease(_readbackBuffer);
-        _readbackBuffer = nullptr;
-    }
+    // Release old resources
+    if (_prevTexture) { wgpuTextureRelease(_prevTexture); _prevTexture = nullptr; }
+    if (_dirtyFlagsBuffer) { wgpuBufferRelease(_dirtyFlagsBuffer); _dirtyFlagsBuffer = nullptr; }
+    if (_dirtyFlagsReadback) { wgpuBufferRelease(_dirtyFlagsReadback); _dirtyFlagsReadback = nullptr; }
+    if (_diffBindGroup) { wgpuBindGroupRelease(_diffBindGroup); _diffBindGroup = nullptr; }
 
     _lastWidth = width;
     _lastHeight = height;
-
-    // Calculate aligned size
-    uint32_t bytesPerPixel = 4;
-    uint32_t alignedBytesPerRow = (width * bytesPerPixel + 255) & ~255;
-    _readbackSize = alignedBytesPerRow * height;
-
-    // Create readback buffer
-    WGPUBufferDescriptor bufDesc = {};
-    bufDesc.size = _readbackSize;
-    bufDesc.usage = WGPUBufferUsage_CopyDst | WGPUBufferUsage_MapRead;
-    _readbackBuffer = wgpuDeviceCreateBuffer(_device, &bufDesc);
-    if (!_readbackBuffer) return Err<void>("Failed to create readback buffer");
-
-    // Resize pixel buffers
-    _pixels.resize(width * height * bytesPerPixel);
-    _prevPixels.resize(width * height * bytesPerPixel);
-    std::memset(_prevPixels.data(), 0, _prevPixels.size());
-
-    // Setup tile tracking
     _tilesX = tiles_x(width);
     _tilesY = tiles_y(height);
     _dirtyTiles.resize(_tilesX * _tilesY);
 
-    yinfo("VNC server resources: {}x{}, {} tiles", width, height, _tilesX * _tilesY);
+    // Create previous frame texture (for comparison)
+    WGPUTextureDescriptor texDesc = {};
+    texDesc.size = {width, height, 1};
+    texDesc.format = WGPUTextureFormat_BGRA8Unorm;
+    texDesc.usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst;
+    texDesc.mipLevelCount = 1;
+    texDesc.sampleCount = 1;
+    texDesc.dimension = WGPUTextureDimension_2D;
+    _prevTexture = wgpuDeviceCreateTexture(_device, &texDesc);
+    if (!_prevTexture) return Err<void>("Failed to create prev texture");
+
+    // Create dirty flags buffer (1 uint32 per tile)
+    uint32_t numTiles = _tilesX * _tilesY;
+    WGPUBufferDescriptor bufDesc = {};
+    bufDesc.size = numTiles * sizeof(uint32_t);
+    bufDesc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopySrc;
+    _dirtyFlagsBuffer = wgpuDeviceCreateBuffer(_device, &bufDesc);
+    if (!_dirtyFlagsBuffer) return Err<void>("Failed to create dirty flags buffer");
+
+    // Create readback buffer for dirty flags
+    bufDesc.usage = WGPUBufferUsage_CopyDst | WGPUBufferUsage_MapRead;
+    _dirtyFlagsReadback = wgpuDeviceCreateBuffer(_device, &bufDesc);
+    if (!_dirtyFlagsReadback) return Err<void>("Failed to create dirty flags readback");
+
+    // Create compute pipeline if needed
+    if (!_diffPipeline) {
+        if (auto res = createDiffPipeline(); !res) return res;
+    }
+
+    yinfo("VNC server resources: {}x{}, {} tiles", width, height, numTiles);
     return Ok();
 }
 
-void VncServer::detectDirtyTiles() {
-    // Check if we need periodic full refresh
-    _framesSinceFullRefresh++;
-    if (_framesSinceFullRefresh >= FULL_REFRESH_INTERVAL) {
-        _forceFullFrame = true;
-        _framesSinceFullRefresh = 0;
-    }
+Result<void> VncServer::createDiffPipeline() {
+    // Create shader module
+    WGPUShaderSourceWGSL wgslDesc = {};
+    wgslDesc.chain.sType = WGPUSType_ShaderSourceWGSL;
+    wgslDesc.code = {DIFF_SHADER, strlen(DIFF_SHADER)};
+    WGPUShaderModuleDescriptor shaderDesc = {};
+    shaderDesc.nextInChain = &wgslDesc.chain;
+    WGPUShaderModule shader = wgpuDeviceCreateShaderModule(_device, &shaderDesc);
+    if (!shader) return Err<void>("Failed to create diff shader");
 
-    // Force full frame: mark all tiles dirty
-    if (_forceFullFrame) {
-        std::fill(_dirtyTiles.begin(), _dirtyTiles.end(), true);
-        _forceFullFrame = false;
-        return;
-    }
+    // Bind group layout: currTex, prevTex, dirtyFlags
+    WGPUBindGroupLayoutEntry entries[3] = {};
+    entries[0].binding = 0;
+    entries[0].visibility = WGPUShaderStage_Compute;
+    entries[0].texture.sampleType = WGPUTextureSampleType_Float;
+    entries[0].texture.viewDimension = WGPUTextureViewDimension_2D;
 
-    // Compare current pixels to previous, mark dirty tiles
-    // Use _pendingTilesX/Y since we're processing the captured frame
-    std::fill(_dirtyTiles.begin(), _dirtyTiles.end(), false);
+    entries[1].binding = 1;
+    entries[1].visibility = WGPUShaderStage_Compute;
+    entries[1].texture.sampleType = WGPUTextureSampleType_Float;
+    entries[1].texture.viewDimension = WGPUTextureViewDimension_2D;
 
-    uint32_t bytesPerPixel = 4;
-    uint32_t stride = _pendingWidth * bytesPerPixel;
+    entries[2].binding = 2;
+    entries[2].visibility = WGPUShaderStage_Compute;
+    entries[2].buffer.type = WGPUBufferBindingType_Storage;
 
-    for (uint16_t ty = 0; ty < _pendingTilesY; ty++) {
-        for (uint16_t tx = 0; tx < _pendingTilesX; tx++) {
-            uint32_t startX = tx * TILE_SIZE;
-            uint32_t startY = ty * TILE_SIZE;
-            uint32_t endX = std::min(startX + TILE_SIZE, _pendingWidth);
-            uint32_t endY = std::min(startY + TILE_SIZE, _pendingHeight);
+    WGPUBindGroupLayoutDescriptor bglDesc = {};
+    bglDesc.entryCount = 3;
+    bglDesc.entries = entries;
+    _diffBindGroupLayout = wgpuDeviceCreateBindGroupLayout(_device, &bglDesc);
 
-            bool dirty = false;
-            for (uint32_t y = startY; y < endY && !dirty; y++) {
-                const uint8_t* curr = _pixels.data() + y * stride + startX * bytesPerPixel;
-                const uint8_t* prev = _prevPixels.data() + y * stride + startX * bytesPerPixel;
-                uint32_t rowBytes = (endX - startX) * bytesPerPixel;
-                if (std::memcmp(curr, prev, rowBytes) != 0) {
-                    dirty = true;
-                }
-            }
-            _dirtyTiles[ty * _pendingTilesX + tx] = dirty;
-        }
-    }
+    // Pipeline layout
+    WGPUPipelineLayoutDescriptor plDesc = {};
+    plDesc.bindGroupLayoutCount = 1;
+    plDesc.bindGroupLayouts = &_diffBindGroupLayout;
+    WGPUPipelineLayout pipelineLayout = wgpuDeviceCreatePipelineLayout(_device, &plDesc);
+
+    // Compute pipeline
+    WGPUComputePipelineDescriptor cpDesc = {};
+    cpDesc.layout = pipelineLayout;
+    cpDesc.compute.module = shader;
+    cpDesc.compute.entryPoint = {.data = "main", .length = 4};
+
+    _diffPipeline = wgpuDeviceCreateComputePipeline(_device, &cpDesc);
+
+    wgpuShaderModuleRelease(shader);
+    wgpuPipelineLayoutRelease(pipelineLayout);
+
+    if (!_diffPipeline) return Err<void>("Failed to create diff pipeline");
+    return Ok();
 }
 
 Result<void> VncServer::encodeTile(uint16_t tx, uint16_t ty,
                                     std::vector<uint8_t>& outData, Encoding& outEncoding) {
+    const uint8_t* pixels = _cpuPixels ? _cpuPixels : _gpuReadbackPixels.data();
+    if (!pixels || (_cpuPixels == nullptr && _gpuReadbackPixels.empty())) {
+        return Err<void>("No pixels for encoding");
+    }
+
     uint32_t startX = tx * TILE_SIZE;
     uint32_t startY = ty * TILE_SIZE;
     uint32_t tileW = std::min((uint32_t)TILE_SIZE, _lastWidth - startX);
     uint32_t tileH = std::min((uint32_t)TILE_SIZE, _lastHeight - startY);
 
-    // Extract tile pixels
+    // Extract tile pixels from framebuffer
     std::vector<uint8_t> tilePixels(TILE_SIZE * TILE_SIZE * 4);
     uint32_t srcStride = _lastWidth * 4;
     for (uint32_t y = 0; y < tileH; y++) {
-        const uint8_t* src = _pixels.data() + (startY + y) * srcStride + startX * 4;
+        const uint8_t* src = pixels + (startY + y) * srcStride + startX * 4;
         uint8_t* dst = tilePixels.data() + y * TILE_SIZE * 4;
         std::memcpy(dst, src, tileW * 4);
     }
 
-    // Check if tile is simple (solid color or few colors)
-    // For now, use heuristic: if raw size is small enough, send raw
     uint32_t rawSize = TILE_SIZE * TILE_SIZE * 4;
 
     // Try JPEG compression
@@ -258,17 +317,15 @@ Result<void> VncServer::encodeTile(uint16_t tx, uint16_t ty,
         TILE_SIZE, 0, TILE_SIZE,
         TJPF_BGRA,
         &jpegBuf, &jpegSize,
-        TJSAMP_420, 80,  // Quality 80
+        TJSAMP_420, 80,
         TJFLAG_FASTDCT
     );
 
     if (result == 0 && jpegSize < rawSize * 0.8) {
-        // JPEG is smaller, use it
         outData.assign(jpegBuf, jpegBuf + jpegSize);
         outEncoding = Encoding::JPEG;
         tjFree(jpegBuf);
     } else {
-        // Use RAW
         if (jpegBuf) tjFree(jpegBuf);
         outData = std::move(tilePixels);
         outEncoding = Encoding::RAW;
@@ -277,145 +334,230 @@ Result<void> VncServer::encodeTile(uint16_t tx, uint16_t ty,
     return Ok();
 }
 
-Result<void> VncServer::sendFrame(WGPUTexture texture, uint32_t width, uint32_t height) {
+Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels, uint32_t width, uint32_t height) {
     if (_clientCount == 0) return Ok();  // No clients, skip
 
-    // Single tick to process any pending callbacks
+    _cpuPixels = cpuPixels;
+    _cpuPixelsSize = width * height * 4;
+
+    // If no CPU pixels provided, prepare to read back from GPU
+    if (!cpuPixels) {
+        _gpuReadbackPixels.resize(width * height * 4);
+    }
+
     wgpuDeviceTick(_device);
 
-    // State machine for async capture
-    ydebug("VNC sendFrame: state={} queueDone={} mapDone={}",
-           static_cast<int>(_captureState), _queueDone.load(), _mapDone.load());
     switch (_captureState) {
         case CaptureState::IDLE: {
-            // Start new capture
             if (auto res = ensureResources(width, height); !res) {
                 return res;
             }
 
-            uint32_t bytesPerPixel = 4;
-            uint32_t alignedBytesPerRow = (width * bytesPerPixel + 255) & ~255;
+            // Check for full refresh
+            _framesSinceFullRefresh++;
+            if (_framesSinceFullRefresh >= FULL_REFRESH_INTERVAL) {
+                _forceFullFrame = true;
+                _framesSinceFullRefresh = 0;
+            }
 
+            if (_forceFullFrame) {
+                // Skip GPU diff, mark all dirty
+                std::fill(_dirtyTiles.begin(), _dirtyTiles.end(), true);
+                _forceFullFrame = false;
+                _captureState = CaptureState::IDLE;
+                break;  // Go to encoding
+            }
+
+            // Upload current frame to GPU for comparison
+            WGPUTexelCopyTextureInfo dst = {};
+            dst.texture = _prevTexture;
+            WGPUTexelCopyBufferLayout layout = {};
+            layout.bytesPerRow = width * 4;
+            layout.rowsPerImage = height;
+            WGPUExtent3D extent = {width, height, 1};
+
+            // Create bind group for this frame
+            if (_diffBindGroup) wgpuBindGroupRelease(_diffBindGroup);
+
+            WGPUTextureView currView = wgpuTextureCreateView(texture, nullptr);
+            WGPUTextureView prevView = wgpuTextureCreateView(_prevTexture, nullptr);
+
+            WGPUBindGroupEntry entries[3] = {};
+            entries[0].binding = 0;
+            entries[0].textureView = currView;
+            entries[1].binding = 1;
+            entries[1].textureView = prevView;
+            entries[2].binding = 2;
+            entries[2].buffer = _dirtyFlagsBuffer;
+            entries[2].size = _tilesX * _tilesY * sizeof(uint32_t);
+
+            WGPUBindGroupDescriptor bgDesc = {};
+            bgDesc.layout = _diffBindGroupLayout;
+            bgDesc.entryCount = 3;
+            bgDesc.entries = entries;
+            _diffBindGroup = wgpuDeviceCreateBindGroup(_device, &bgDesc);
+
+            wgpuTextureViewRelease(currView);
+            wgpuTextureViewRelease(prevView);
+
+            // Clear dirty flags buffer, run compute, copy to readback
             WGPUCommandEncoderDescriptor encDesc = {};
             WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(_device, &encDesc);
 
-            WGPUTexelCopyTextureInfo src = {};
-            src.texture = texture;
+            // Clear dirty flags to 0
+            wgpuCommandEncoderClearBuffer(encoder, _dirtyFlagsBuffer, 0, _tilesX * _tilesY * sizeof(uint32_t));
 
-            WGPUTexelCopyBufferInfo dst = {};
-            dst.buffer = _readbackBuffer;
-            dst.layout.bytesPerRow = alignedBytesPerRow;
-            dst.layout.rowsPerImage = height;
+            // Run compute shader
+            WGPUComputePassDescriptor cpDesc = {};
+            WGPUComputePassEncoder cpass = wgpuCommandEncoderBeginComputePass(encoder, &cpDesc);
+            wgpuComputePassEncoderSetPipeline(cpass, _diffPipeline);
+            wgpuComputePassEncoderSetBindGroup(cpass, 0, _diffBindGroup, 0, nullptr);
+            // Dispatch one workgroup per tile (8x8 threads per workgroup covers 64x64 tile)
+            wgpuComputePassEncoderDispatchWorkgroups(cpass, _tilesX, _tilesY, 1);
+            wgpuComputePassEncoderEnd(cpass);
+            wgpuComputePassEncoderRelease(cpass);
 
-            WGPUExtent3D copySize = {width, height, 1};
-            wgpuCommandEncoderCopyTextureToBuffer(encoder, &src, &dst, &copySize);
+            // Copy dirty flags to readback buffer
+            wgpuCommandEncoderCopyBufferToBuffer(encoder, _dirtyFlagsBuffer, 0,
+                _dirtyFlagsReadback, 0, _tilesX * _tilesY * sizeof(uint32_t));
 
-            WGPUCommandBufferDescriptor cmdDesc = {};
-            WGPUCommandBuffer cmdBuf = wgpuCommandEncoderFinish(encoder, &cmdDesc);
+            WGPUCommandBuffer cmdBuf = wgpuCommandEncoderFinish(encoder, nullptr);
             wgpuQueueSubmit(_queue, 1, &cmdBuf);
             wgpuCommandBufferRelease(cmdBuf);
             wgpuCommandEncoderRelease(encoder);
 
-            // Register queue done callback
-            _queueDone = false;
-            WGPUQueueWorkDoneCallbackInfo queueCbInfo = {};
-            queueCbInfo.mode = WGPUCallbackMode_AllowSpontaneous;
-            queueCbInfo.callback = [](WGPUQueueWorkDoneStatus, WGPUStringView, void* ud, void*) {
-                auto* done = static_cast<std::atomic<bool>*>(ud);
-                *done = true;
-            };
-            queueCbInfo.userdata1 = &_queueDone;
-            wgpuQueueOnSubmittedWorkDone(_queue, queueCbInfo);
+            // Copy current texture to prev for next frame comparison
+            WGPUCommandEncoder copyEnc = wgpuDeviceCreateCommandEncoder(_device, nullptr);
+            WGPUTexelCopyTextureInfo srcCopy = {};
+            srcCopy.texture = texture;
+            WGPUTexelCopyTextureInfo dstCopy = {};
+            dstCopy.texture = _prevTexture;
+            wgpuCommandEncoderCopyTextureToTexture(copyEnc, &srcCopy, &dstCopy, &extent);
+            WGPUCommandBuffer copyCmd = wgpuCommandEncoderFinish(copyEnc, nullptr);
+            wgpuQueueSubmit(_queue, 1, &copyCmd);
+            wgpuCommandBufferRelease(copyCmd);
+            wgpuCommandEncoderRelease(copyEnc);
 
-            _pendingWidth = width;
-            _pendingHeight = height;
-            _pendingTilesX = _tilesX;
-            _pendingTilesY = _tilesY;
-            _captureState = CaptureState::WAITING_QUEUE;
-            return Ok();  // Will process on next frame
+            _computeDone = false;
+            WGPUQueueWorkDoneCallbackInfo cbInfo = {};
+            cbInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+            cbInfo.callback = [](WGPUQueueWorkDoneStatus, WGPUStringView, void* ud, void*) {
+                *static_cast<std::atomic<bool>*>(ud) = true;
+            };
+            cbInfo.userdata1 = &_computeDone;
+            wgpuQueueOnSubmittedWorkDone(_queue, cbInfo);
+
+            _captureState = CaptureState::WAITING_COMPUTE;
+            return Ok();
         }
 
-        case CaptureState::WAITING_QUEUE: {
-            if (!_queueDone) {
-                return Ok();  // Still waiting
-            }
+        case CaptureState::WAITING_COMPUTE: {
+            if (!_computeDone) return Ok();
 
-            // Queue done, start mapping
             _mapDone = false;
             WGPUBufferMapCallbackInfo cbInfo = {};
             cbInfo.mode = WGPUCallbackMode_AllowSpontaneous;
             cbInfo.callback = [](WGPUMapAsyncStatus status, WGPUStringView, void* ud1, void* ud2) {
-                auto* done = static_cast<std::atomic<bool>*>(ud1);
-                auto* statusOut = static_cast<WGPUMapAsyncStatus*>(ud2);
-                *statusOut = status;
-                *done = true;
+                *static_cast<std::atomic<bool>*>(ud1) = true;
+                *static_cast<WGPUMapAsyncStatus*>(ud2) = status;
             };
             cbInfo.userdata1 = &_mapDone;
             cbInfo.userdata2 = &_mapStatus;
-            wgpuBufferMapAsync(_readbackBuffer, WGPUMapMode_Read, 0, _readbackSize, cbInfo);
+            wgpuBufferMapAsync(_dirtyFlagsReadback, WGPUMapMode_Read, 0,
+                _tilesX * _tilesY * sizeof(uint32_t), cbInfo);
 
             _captureState = CaptureState::WAITING_MAP;
-            return Ok();  // Will process on next frame
+            return Ok();
         }
 
         case CaptureState::WAITING_MAP: {
-            if (!_mapDone) {
-                return Ok();  // Still waiting
-            }
+            if (!_mapDone) return Ok();
 
             if (_mapStatus != WGPUMapAsyncStatus_Success) {
-                ywarn("VNC buffer map failed, resetting");
+                ywarn("VNC dirty flags map failed");
                 _captureState = CaptureState::IDLE;
                 return Ok();
             }
 
-            // Buffer is mapped, copy data
-            uint32_t bytesPerPixel = 4;
-            uint32_t alignedBytesPerRow = (_pendingWidth * bytesPerPixel + 255) & ~255;
+            const uint32_t* flags = static_cast<const uint32_t*>(
+                wgpuBufferGetConstMappedRange(_dirtyFlagsReadback, 0, _tilesX * _tilesY * sizeof(uint32_t)));
 
-            const uint8_t* mapped = static_cast<const uint8_t*>(
-                wgpuBufferGetConstMappedRange(_readbackBuffer, 0, _readbackSize));
-
-            uint32_t unalignedBytesPerRow = _pendingWidth * bytesPerPixel;
-            for (uint32_t y = 0; y < _pendingHeight; y++) {
-                std::memcpy(_pixels.data() + y * unalignedBytesPerRow,
-                           mapped + y * alignedBytesPerRow,
-                           unalignedBytesPerRow);
+            for (uint32_t i = 0; i < _tilesX * _tilesY; i++) {
+                _dirtyTiles[i] = (flags[i] != 0);
             }
-            wgpuBufferUnmap(_readbackBuffer);
+            wgpuBufferUnmap(_dirtyFlagsReadback);
 
             _captureState = CaptureState::IDLE;
-            break;  // Continue to send the frame
+            break;
         }
     }
 
-    // Data is ready, process and send
-    // Detect dirty tiles
-    detectDirtyTiles();
+    // If no CPU pixels, read back from GPU (synchronous for simplicity)
+    if (!_cpuPixels && !_gpuReadbackPixels.empty()) {
+        uint32_t bytesPerPixel = 4;
+        uint32_t alignedBytesPerRow = (width * bytesPerPixel + 255) & ~255;
+        uint32_t bufSize = alignedBytesPerRow * height;
 
-    // Count dirty tiles (only within pending tile grid)
+        // Create temp readback buffer if needed
+        if (!_tileReadbackBuffer) {
+            WGPUBufferDescriptor bufDesc = {};
+            bufDesc.size = bufSize;
+            bufDesc.usage = WGPUBufferUsage_CopyDst | WGPUBufferUsage_MapRead;
+            _tileReadbackBuffer = wgpuDeviceCreateBuffer(_device, &bufDesc);
+        }
+
+        // Copy texture to buffer
+        WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(_device, nullptr);
+        WGPUTexelCopyTextureInfo src = {};
+        src.texture = texture;
+        WGPUTexelCopyBufferInfo dst = {};
+        dst.buffer = _tileReadbackBuffer;
+        dst.layout.bytesPerRow = alignedBytesPerRow;
+        dst.layout.rowsPerImage = height;
+        WGPUExtent3D copySize = {width, height, 1};
+        wgpuCommandEncoderCopyTextureToBuffer(encoder, &src, &dst, &copySize);
+        WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(encoder, nullptr);
+        wgpuQueueSubmit(_queue, 1, &cmd);
+        wgpuCommandBufferRelease(cmd);
+        wgpuCommandEncoderRelease(encoder);
+
+        // Blocking map and copy
+        std::atomic<bool> mapDone{false};
+        WGPUBufferMapCallbackInfo cbInfo = {};
+        cbInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+        cbInfo.callback = [](WGPUMapAsyncStatus, WGPUStringView, void* ud, void*) {
+            *static_cast<std::atomic<bool>*>(ud) = true;
+        };
+        cbInfo.userdata1 = &mapDone;
+        wgpuBufferMapAsync(_tileReadbackBuffer, WGPUMapMode_Read, 0, bufSize, cbInfo);
+        while (!mapDone) wgpuDeviceTick(_device);
+
+        const uint8_t* mapped = static_cast<const uint8_t*>(
+            wgpuBufferGetConstMappedRange(_tileReadbackBuffer, 0, bufSize));
+        uint32_t unalignedRow = width * bytesPerPixel;
+        for (uint32_t y = 0; y < height; y++) {
+            std::memcpy(_gpuReadbackPixels.data() + y * unalignedRow,
+                       mapped + y * alignedBytesPerRow, unalignedRow);
+        }
+        wgpuBufferUnmap(_tileReadbackBuffer);
+    }
+
+    // Count dirty tiles
     uint16_t numDirty = 0;
-    size_t pendingTileCount = _pendingTilesX * _pendingTilesY;
-    for (size_t i = 0; i < pendingTileCount && i < _dirtyTiles.size(); i++) {
+    for (size_t i = 0; i < _dirtyTiles.size(); i++) {
         if (_dirtyTiles[i]) numDirty++;
     }
 
-    ydebug("VNC sendFrame: {}x{} tiles, {} dirty", _pendingTilesX, _pendingTilesY, numDirty);
-
-    if (numDirty == 0) {
-        // No changes, skip sending
-        return Ok();
-    }
+    if (numDirty == 0) return Ok();
 
     // Build frame data
     std::vector<uint8_t> frameData;
-    frameData.reserve(64 * 1024);  // Pre-allocate
+    frameData.reserve(64 * 1024);
 
-    // Frame header
     FrameHeader fh;
     fh.magic = FRAME_MAGIC;
-    fh.width = _pendingWidth;
-    fh.height = _pendingHeight;
+    fh.width = width;
+    fh.height = height;
     fh.tile_size = TILE_SIZE;
     fh.num_tiles = numDirty;
 
@@ -423,51 +565,39 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, uint32_t width, uint32_t 
                      reinterpret_cast<uint8_t*>(&fh),
                      reinterpret_cast<uint8_t*>(&fh) + sizeof(fh));
 
-    // Track if this is a full update
-    bool isFullUpdate = (numDirty == _pendingTilesX * _pendingTilesY);
-    if (isFullUpdate) {
-        _stats.fullUpdates++;
-    }
+    bool isFullUpdate = (numDirty == _tilesX * _tilesY);
+    if (isFullUpdate) _stats.fullUpdates++;
 
-    // Encode and append dirty tiles (use pending tile counts to match captured frame)
-    {
-        ytimeit("vnc-encode");
-        for (uint16_t ty = 0; ty < _pendingTilesY; ty++) {
-            for (uint16_t tx = 0; tx < _pendingTilesX; tx++) {
-                if (!_dirtyTiles[ty * _pendingTilesX + tx]) continue;
+    // Encode dirty tiles from CPU framebuffer
+    for (uint16_t ty = 0; ty < _tilesY; ty++) {
+        for (uint16_t tx = 0; tx < _tilesX; tx++) {
+            if (!_dirtyTiles[ty * _tilesX + tx]) continue;
 
-                std::vector<uint8_t> tileData;
-                Encoding enc;
-                if (auto res = encodeTile(tx, ty, tileData, enc); !res) {
-                    continue;
-                }
+            std::vector<uint8_t> tileData;
+            Encoding enc;
+            if (auto res = encodeTile(tx, ty, tileData, enc); !res) continue;
 
-                // Track tile stats
-                _stats.tilesSent++;
-                if (enc == Encoding::JPEG) {
-                    _stats.tilesJpeg++;
-                    _stats.bytesJpeg += tileData.size();
-                } else {
-                    _stats.tilesRaw++;
-                    _stats.bytesRaw += tileData.size();
-                }
-
-                TileHeader th;
-                th.tile_x = tx;
-                th.tile_y = ty;
-                th.encoding = static_cast<uint8_t>(enc);
-                th.data_size = tileData.size();
-
-                frameData.insert(frameData.end(),
-                                reinterpret_cast<uint8_t*>(&th),
-                                reinterpret_cast<uint8_t*>(&th) + sizeof(th));
-                frameData.insert(frameData.end(), tileData.begin(), tileData.end());
+            _stats.tilesSent++;
+            if (enc == Encoding::JPEG) {
+                _stats.tilesJpeg++;
+                _stats.bytesJpeg += tileData.size();
+            } else {
+                _stats.tilesRaw++;
+                _stats.bytesRaw += tileData.size();
             }
+
+            TileHeader th;
+            th.tile_x = tx;
+            th.tile_y = ty;
+            th.encoding = static_cast<uint8_t>(enc);
+            th.data_size = tileData.size();
+
+            frameData.insert(frameData.end(),
+                            reinterpret_cast<uint8_t*>(&th),
+                            reinterpret_cast<uint8_t*>(&th) + sizeof(th));
+            frameData.insert(frameData.end(), tileData.begin(), tileData.end());
         }
     }
-
-    // Save current frame as previous
-    std::swap(_pixels, _prevPixels);
 
     // Send to all clients
     {
