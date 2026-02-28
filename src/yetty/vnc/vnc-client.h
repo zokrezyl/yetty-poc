@@ -1,21 +1,22 @@
 #pragma once
 
-#include "protocol.h"
 #include <yetty/result.hpp>
+#include <yetty/base/event-loop.h>
+#include <yetty/base/event-listener.h>
+#include "protocol.h"
 #include <webgpu/webgpu.h>
 #include <string>
 #include <vector>
-#include <thread>
-#include <atomic>
-#include <mutex>
 #include <queue>
 
 namespace yetty::vnc {
 
-class VncClient {
+class VncClient : public base::EventListener {
 public:
+    using Ptr = std::shared_ptr<VncClient>;
+
     VncClient(WGPUDevice device, WGPUQueue queue, WGPUTextureFormat surfaceFormat);
-    ~VncClient();
+    ~VncClient() override;
 
     // Connect to server
     Result<void> connect(const std::string& host, uint16_t port);
@@ -43,11 +44,12 @@ public:
     void sendKeyUp(uint32_t keycode, uint32_t scancode, uint8_t mods);
     void sendTextInput(const char* text, size_t len);
 
+    // EventListener interface
+    Result<bool> onEvent(const base::Event& event) override;
+
 private:
     void sendInput(const void* data, size_t size);
-    void receiveLoop();
-    Result<void> processFrame(const FrameHeader& header, const uint8_t* data, size_t size);
-    Result<void> decodeTile(const TileHeader& tile, const uint8_t* data);
+    void onSocketReadable();
     Result<void> ensureResources(uint16_t width, uint16_t height);
     Result<void> createPipeline();
 
@@ -57,20 +59,40 @@ private:
 
     // Network
     int _socket = -1;
-    std::atomic<bool> _connected{false};
-    std::thread _receiveThread;
+    bool _connected = false;
+    base::PollId _pollId = -1;
+
+    // Async receive state machine
+    enum class RecvState {
+        FRAME_HEADER,   // Waiting for frame header
+        TILE_HEADER,    // Waiting for tile header
+        TILE_DATA       // Waiting for tile data
+    };
+    RecvState _recvState = RecvState::FRAME_HEADER;
+    std::vector<uint8_t> _recvBuffer;
+    size_t _recvOffset = 0;
+    size_t _recvNeeded = 0;
+
+    // Current frame being received
+    FrameHeader _currentFrame;
+    uint16_t _tilesReceived = 0;
+
+    // Current tile being received
+    TileHeader _currentTile;
+
+    // JPEG decompressor (initialized once)
+    void* _jpegDecompressor = nullptr;
 
     // Frame state
     uint16_t _width = 0;
     uint16_t _height = 0;
     std::vector<uint8_t> _pixels;  // CPU-side pixel buffer
 
-    // Pending tile updates (thread-safe queue)
+    // Pending tile updates
     struct TileUpdate {
         uint16_t tile_x, tile_y;
         std::vector<uint8_t> pixels;  // TILE_SIZE * TILE_SIZE * 4
     };
-    std::mutex _tileMutex;
     std::queue<TileUpdate> _pendingTiles;
 
     // GPU resources

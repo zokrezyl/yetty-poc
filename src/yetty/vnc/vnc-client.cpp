@@ -10,7 +10,6 @@
 #include <netdb.h>
 #include <unistd.h>
 #include <fcntl.h>
-#include <poll.h>
 
 namespace yetty::vnc {
 
@@ -52,10 +51,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
 VncClient::VncClient(WGPUDevice device, WGPUQueue queue, WGPUTextureFormat surfaceFormat)
     : _device(device), _queue(queue), _surfaceFormat(surfaceFormat) {
+    _jpegDecompressor = tjInitDecompress();
 }
 
 VncClient::~VncClient() {
     disconnect();
+
+    if (_jpegDecompressor) {
+        tjDestroy(static_cast<tjhandle>(_jpegDecompressor));
+    }
 
     if (_pipeline) wgpuRenderPipelineRelease(_pipeline);
     if (_bindGroup) wgpuBindGroupRelease(_bindGroup);
@@ -101,11 +105,34 @@ Result<void> VncClient::connect(const std::string& host, uint16_t port) {
     int flag = 1;
     setsockopt(_socket, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
 
+    // Set non-blocking
+    int flags = fcntl(_socket, F_GETFL, 0);
+    fcntl(_socket, F_SETFL, flags | O_NONBLOCK);
+
     _connected = true;
     yinfo("VNC client connected to {}:{}", host, port);
 
-    // Start receive thread
-    _receiveThread = std::thread(&VncClient::receiveLoop, this);
+    // Initialize receive state machine
+    _recvState = RecvState::FRAME_HEADER;
+    _recvNeeded = sizeof(FrameHeader);
+    _recvOffset = 0;
+    _recvBuffer.resize(_recvNeeded);
+
+    // Register with event loop for async receive
+    auto loopResult = base::EventLoop::instance();
+    if (loopResult) {
+        auto loop = *loopResult;
+        auto pollRes = loop->createPoll();
+        if (pollRes) {
+            _pollId = *pollRes;
+            loop->configPoll(_pollId, _socket);
+            loop->registerPollListener(_pollId, sharedAs<base::EventListener>());
+            loop->startPoll(_pollId);
+            ydebug("VNC client: registered poll id={} for socket={}", _pollId, _socket);
+        } else {
+            ywarn("VNC client: failed to create poll: {}", pollRes.error().message());
+        }
+    }
 
     return Ok();
 }
@@ -113,142 +140,198 @@ Result<void> VncClient::connect(const std::string& host, uint16_t port) {
 void VncClient::disconnect() {
     _connected = false;
 
+    // Deregister from event loop
+    if (_pollId >= 0) {
+        auto loopResult = base::EventLoop::instance();
+        if (loopResult) {
+            auto loop = *loopResult;
+            loop->stopPoll(_pollId);
+            loop->destroyPoll(_pollId);
+        }
+        _pollId = -1;
+    }
+
     if (_socket >= 0) {
-        shutdown(_socket, SHUT_RDWR);
-        close(_socket);
+        ::shutdown(_socket, SHUT_RDWR);
+        ::close(_socket);
         _socket = -1;
     }
-
-    if (_receiveThread.joinable()) {
-        _receiveThread.join();
-    }
 }
 
-// Helper to read exactly n bytes with poll timeout
-static bool recvExact(int fd, void* buf, size_t len, int timeoutMs) {
-    uint8_t* ptr = static_cast<uint8_t*>(buf);
-    size_t remaining = len;
-    while (remaining > 0) {
-        struct pollfd pfd = {fd, POLLIN, 0};
-        int ret = poll(&pfd, 1, timeoutMs);
-        if (ret <= 0) return false;  // Timeout or error
-
-        ssize_t n = recv(fd, ptr, remaining, 0);
-        if (n <= 0) return false;
-        ptr += n;
-        remaining -= n;
+Result<bool> VncClient::onEvent(const base::Event& event) {
+    if (event.type == base::Event::Type::PollReadable) {
+        if (event.poll.fd == _socket) {
+            onSocketReadable();
+            return Ok(true);
+        }
     }
-    return true;
+    return Ok(false);
 }
 
-void VncClient::receiveLoop() {
-    ydebug("VNC receiveLoop: started, socket={}", _socket);
-    std::vector<uint8_t> recvBuffer(16 * 1024 * 1024);  // 16MB buffer
-    tjhandle jpegDecompressor = tjInitDecompress();
+void VncClient::onSocketReadable() {
+    if (!_connected || _socket < 0) return;
 
-    while (_connected) {
-        // Read frame header with timeout
-        FrameHeader header;
-        if (!recvExact(_socket, &header, sizeof(header), 100)) {
-            continue;  // Timeout, keep looping
-        }
+    // Read as much as possible
+    while (true) {
+        ssize_t n = recv(_socket, _recvBuffer.data() + _recvOffset,
+                         _recvNeeded - _recvOffset, MSG_DONTWAIT);
 
-        // Validate magic number
-        if (header.magic != FRAME_MAGIC) {
-            ywarn("VNC: Invalid frame magic 0x{:08X}, expected 0x{:08X}",
-                  header.magic, FRAME_MAGIC);
-            // Drain socket and resync
-            uint8_t drain[1024];
-            recv(_socket, drain, sizeof(drain), MSG_DONTWAIT);
-            continue;
-        }
-
-        // Sanity check dimensions
-        if (header.width == 0 || header.height == 0 || header.width > 8192 || header.height > 8192) {
-            ywarn("VNC: Invalid frame header {}x{}", header.width, header.height);
-            continue;
-        }
-
-        // Sanity check tile count
-        uint16_t maxTiles = ((header.width + TILE_SIZE - 1) / TILE_SIZE) *
-                           ((header.height + TILE_SIZE - 1) / TILE_SIZE);
-        if (header.num_tiles > maxTiles) {
-            ywarn("VNC: Too many tiles {} (max {})", header.num_tiles, maxTiles);
-            continue;
-        }
-
-        ydebug("VNC receiveLoop: frame {}x{} tiles={}", header.width, header.height, header.num_tiles);
-
-        // Ensure resources match frame size
-        if (header.width != _width || header.height != _height) {
-            _width = header.width;
-            _height = header.height;
-            _pixels.resize(_width * _height * 4);
-            std::memset(_pixels.data(), 0, _pixels.size());
-            yinfo("VNC: Frame size {}x{}", _width, _height);
-        }
-
-        // Read all tiles
-        for (uint16_t i = 0; i < header.num_tiles; i++) {
-            TileHeader tile;
-            if (!recvExact(_socket, &tile, sizeof(tile), 1000)) {
-                ywarn("VNC: Failed to read tile header");
-                break;
+        if (n < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                // No more data available
+                return;
             }
+            ywarn("VNC client: recv error: {}", strerror(errno));
+            disconnect();
+            return;
+        }
 
-            // Sanity check
-            if (tile.data_size > 16 * 1024 * 1024) {
-                ywarn("VNC: Tile data too large: {}", tile.data_size);
-                break;
-            }
+        if (n == 0) {
+            yinfo("VNC client: server closed connection");
+            disconnect();
+            return;
+        }
 
-            // Read tile data
-            if (tile.data_size > recvBuffer.size()) {
-                recvBuffer.resize(tile.data_size);
-            }
-            if (!recvExact(_socket, recvBuffer.data(), tile.data_size, 1000)) {
-                ywarn("VNC: Failed to read tile data");
-                break;
-            }
+        _recvOffset += n;
 
-            // Decode tile
-            TileUpdate update;
-            update.tile_x = tile.tile_x;
-            update.tile_y = tile.tile_y;
-            update.pixels.resize(TILE_SIZE * TILE_SIZE * 4);
+        // Check if we have enough data
+        if (_recvOffset < _recvNeeded) {
+            continue;  // Need more data
+        }
 
-            switch (static_cast<Encoding>(tile.encoding)) {
-                case Encoding::RAW:
-                    if (tile.data_size == TILE_SIZE * TILE_SIZE * 4) {
-                        std::memcpy(update.pixels.data(), recvBuffer.data(), tile.data_size);
-                    }
-                    break;
+        // Process based on current state
+        switch (_recvState) {
+            case RecvState::FRAME_HEADER: {
+                std::memcpy(&_currentFrame, _recvBuffer.data(), sizeof(FrameHeader));
 
-                case Encoding::JPEG: {
-                    int width, height, subsamp, colorspace;
-                    if (tjDecompressHeader3(jpegDecompressor, recvBuffer.data(), tile.data_size,
-                                           &width, &height, &subsamp, &colorspace) == 0) {
-                        tjDecompress2(jpegDecompressor, recvBuffer.data(), tile.data_size,
-                                     update.pixels.data(), TILE_SIZE, 0, TILE_SIZE,
-                                     TJPF_BGRA, TJFLAG_FASTDCT);
-                    }
-                    break;
+                // Validate magic number
+                if (_currentFrame.magic != FRAME_MAGIC) {
+                    ywarn("VNC: Invalid frame magic 0x{:08X}, expected 0x{:08X}",
+                          _currentFrame.magic, FRAME_MAGIC);
+                    // Drain and resync
+                    uint8_t drain[1024];
+                    while (recv(_socket, drain, sizeof(drain), MSG_DONTWAIT) > 0) {}
+                    _recvState = RecvState::FRAME_HEADER;
+                    _recvNeeded = sizeof(FrameHeader);
+                    _recvOffset = 0;
+                    _recvBuffer.resize(_recvNeeded);
+                    return;
                 }
 
-                case Encoding::RLE:
-                    // TODO: implement RLE decoding
-                    break;
+                // Sanity check dimensions
+                if (_currentFrame.width == 0 || _currentFrame.height == 0 ||
+                    _currentFrame.width > 8192 || _currentFrame.height > 8192) {
+                    ywarn("VNC: Invalid frame header {}x{}", _currentFrame.width, _currentFrame.height);
+                    _recvState = RecvState::FRAME_HEADER;
+                    _recvNeeded = sizeof(FrameHeader);
+                    _recvOffset = 0;
+                    return;
+                }
+
+                ydebug("VNC client: frame {}x{} tiles={}", _currentFrame.width, _currentFrame.height, _currentFrame.num_tiles);
+
+                // Update frame dimensions
+                if (_currentFrame.width != _width || _currentFrame.height != _height) {
+                    _width = _currentFrame.width;
+                    _height = _currentFrame.height;
+                    _pixels.resize(_width * _height * 4);
+                    std::memset(_pixels.data(), 0, _pixels.size());
+                    yinfo("VNC: Frame size {}x{}", _width, _height);
+                }
+
+                _tilesReceived = 0;
+
+                if (_currentFrame.num_tiles == 0) {
+                    // No tiles, wait for next frame
+                    _recvState = RecvState::FRAME_HEADER;
+                    _recvNeeded = sizeof(FrameHeader);
+                    _recvOffset = 0;
+                    _recvBuffer.resize(_recvNeeded);
+                } else {
+                    // Read first tile header
+                    _recvState = RecvState::TILE_HEADER;
+                    _recvNeeded = sizeof(TileHeader);
+                    _recvOffset = 0;
+                    _recvBuffer.resize(_recvNeeded);
+                }
+                break;
             }
 
-            // Queue tile update
-            {
-                std::lock_guard<std::mutex> lock(_tileMutex);
+            case RecvState::TILE_HEADER: {
+                std::memcpy(&_currentTile, _recvBuffer.data(), sizeof(TileHeader));
+
+                // Sanity check
+                if (_currentTile.data_size > 16 * 1024 * 1024) {
+                    ywarn("VNC: Tile data too large: {}", _currentTile.data_size);
+                    _recvState = RecvState::FRAME_HEADER;
+                    _recvNeeded = sizeof(FrameHeader);
+                    _recvOffset = 0;
+                    _recvBuffer.resize(_recvNeeded);
+                    return;
+                }
+
+                // Read tile data
+                _recvState = RecvState::TILE_DATA;
+                _recvNeeded = _currentTile.data_size;
+                _recvOffset = 0;
+                _recvBuffer.resize(_recvNeeded);
+                break;
+            }
+
+            case RecvState::TILE_DATA: {
+                // Decode tile
+                TileUpdate update;
+                update.tile_x = _currentTile.tile_x;
+                update.tile_y = _currentTile.tile_y;
+                update.pixels.resize(TILE_SIZE * TILE_SIZE * 4);
+
+                switch (static_cast<Encoding>(_currentTile.encoding)) {
+                    case Encoding::RAW:
+                        if (_currentTile.data_size == TILE_SIZE * TILE_SIZE * 4) {
+                            std::memcpy(update.pixels.data(), _recvBuffer.data(), _currentTile.data_size);
+                        }
+                        break;
+
+                    case Encoding::JPEG: {
+                        int width, height, subsamp, colorspace;
+                        if (tjDecompressHeader3(static_cast<tjhandle>(_jpegDecompressor),
+                                               _recvBuffer.data(), _currentTile.data_size,
+                                               &width, &height, &subsamp, &colorspace) == 0) {
+                            tjDecompress2(static_cast<tjhandle>(_jpegDecompressor),
+                                         _recvBuffer.data(), _currentTile.data_size,
+                                         update.pixels.data(), TILE_SIZE, 0, TILE_SIZE,
+                                         TJPF_BGRA, TJFLAG_FASTDCT);
+                        }
+                        break;
+                    }
+
+                    case Encoding::RLE:
+                        // TODO: implement RLE decoding
+                        break;
+                }
+
+                // Queue tile update
                 _pendingTiles.push(std::move(update));
+
+                _tilesReceived++;
+
+                if (_tilesReceived >= _currentFrame.num_tiles) {
+                    // All tiles received, wait for next frame
+                    _recvState = RecvState::FRAME_HEADER;
+                    _recvNeeded = sizeof(FrameHeader);
+                    _recvOffset = 0;
+                    _recvBuffer.resize(_recvNeeded);
+                } else {
+                    // Read next tile header
+                    _recvState = RecvState::TILE_HEADER;
+                    _recvNeeded = sizeof(TileHeader);
+                    _recvOffset = 0;
+                    _recvBuffer.resize(_recvNeeded);
+                }
+                break;
             }
         }
     }
-
-    tjDestroy(jpegDecompressor);
 }
 
 Result<void> VncClient::ensureResources(uint16_t width, uint16_t height) {
@@ -389,15 +472,9 @@ Result<void> VncClient::updateTexture() {
     }
 
     // Process pending tile updates
-    std::queue<TileUpdate> tiles;
-    {
-        std::lock_guard<std::mutex> lock(_tileMutex);
-        std::swap(tiles, _pendingTiles);
-    }
-    ydebug("VNC updateTexture: {} pending tiles", tiles.size());
-
-    while (!tiles.empty()) {
-        TileUpdate& update = tiles.front();
+    size_t tilesProcessed = 0;
+    while (!_pendingTiles.empty()) {
+        TileUpdate& update = _pendingTiles.front();
 
         // Calculate pixel coordinates
         uint32_t px = update.tile_x * TILE_SIZE;
@@ -407,7 +484,7 @@ Result<void> VncClient::updateTexture() {
         if (px >= _width || py >= _height) {
             ywarn("VNC: Tile ({},{}) at pixel ({},{}) outside frame {}x{}",
                   update.tile_x, update.tile_y, px, py, _width, _height);
-            tiles.pop();
+            _pendingTiles.pop();
             continue;
         }
 
@@ -428,7 +505,12 @@ Result<void> VncClient::updateTexture() {
         wgpuQueueWriteTexture(_queue, &dst, update.pixels.data(),
                               update.pixels.size(), &layout, &size);
 
-        tiles.pop();
+        _pendingTiles.pop();
+        tilesProcessed++;
+    }
+
+    if (tilesProcessed > 0) {
+        ydebug("VNC updateTexture: processed {} tiles", tilesProcessed);
     }
 
     return Ok();
@@ -461,6 +543,10 @@ void VncClient::sendInput(const void* data, size_t size) {
     while (remaining > 0 && _connected) {
         ssize_t sent = send(_socket, ptr, remaining, MSG_NOSIGNAL);
         if (sent <= 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                // Would block, try again
+                continue;
+            }
             ywarn("VNC client sendInput: send failed errno={}", errno);
             return;
         }

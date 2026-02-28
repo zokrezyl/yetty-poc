@@ -392,6 +392,8 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, uint32_t width, uint32_t 
         if (_dirtyTiles[i]) numDirty++;
     }
 
+    ydebug("VNC sendFrame: {}x{} tiles, {} dirty", _pendingTilesX, _pendingTilesY, numDirty);
+
     if (numDirty == 0) {
         // No changes, skip sending
         return Ok();

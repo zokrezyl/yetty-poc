@@ -167,7 +167,7 @@ private:
     bool _vncClientMode = false;
     std::string _vncHost;
     uint16_t _vncPort = 5900;
-    std::unique_ptr<vnc::VncClient> _vncClient;
+    vnc::VncClient::Ptr _vncClient;
 
     // VNC server mode
     bool _vncServerMode = false;
@@ -351,7 +351,7 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
 
     // Initialize VNC client mode if enabled
     if (_vncClientMode) {
-        _vncClient = std::make_unique<vnc::VncClient>(_device, _queue, _surfaceFormat);
+        _vncClient = std::make_shared<vnc::VncClient>(_device, _queue, _surfaceFormat);
         if (auto res = _vncClient->connect(_vncHost, _vncPort); !res) {
             return Err<void>("Failed to connect VNC client", res);
         }
