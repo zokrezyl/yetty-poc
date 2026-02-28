@@ -15,7 +15,7 @@
         // Modified jslinux loader for bridge mode
         "use strict";
 
-        var term, console_write1;
+        var term, console_write1, console_resize_event;
         var net_state, net_write_packet, net_set_carrier;
         var fs_import_file;
 
@@ -139,6 +139,17 @@
                 // Get other exports for network support if needed
                 net_write_packet = Module.cwrap('net_write_packet', null, ['number', 'number']);
                 net_set_carrier = Module.cwrap('net_set_carrier', null, ['number']);
+
+                console_resize_event = Module.cwrap('console_resize_event', null, []);
+                term.setResizeHandler(function(cols, rows) {
+                    log("resizeHandler: " + cols + "x" + rows + " getSize=" + JSON.stringify(term.getSize()));
+                    try {
+                        console_resize_event();
+                        log("console_resize_event() OK");
+                    } catch(e) {
+                        log("ERROR in console_resize_event: " + e);
+                    }
+                });
             } catch(e) {
                 log("ERROR wrapping functions: " + e);
                 term.write("Error wrapping functions: " + e + "\r\n");
@@ -155,6 +166,7 @@
                     ['string', 'number', 'string', 'string', 'number', 'number', 'number', 'string'],
                     [cfg_url, mem, "", "", 0, 0, 0, ""]);
                 log("vm_start returned successfully");
+                setTimeout(function() { console_resize_event(); }, 1000);
             } catch(e) {
                 log("ERROR calling vm_start: " + e);
                 term.write("Error starting VM: " + e + "\r\n");

@@ -106,6 +106,7 @@ cat > "$ROOTFS_DIR/sbin/init" << 'INITEOF'
 mount -t proc proc /proc
 mount -t sysfs sys /sys
 mount -t devtmpfs dev /dev 2>/dev/null || true
+exec </dev/hvc0 >/dev/hvc0 2>&1
 mount -t tmpfs tmpfs /tmp
 mount -t tmpfs tmpfs /var
 mount -t tmpfs tmpfs /run
@@ -113,10 +114,13 @@ mount -t tmpfs tmpfs /root
 mkdir -p /var/log /var/tmp
 hostname yetty
 export HOME=/root
+export TERM=xterm-256color
+stty rows 24 cols 80 2>/dev/null
 cd /root
-clear
 cat /etc/motd
-exec /bin/bash
+while true; do
+    /bin/bash -l
+done
 INITEOF
 chmod +x "$ROOTFS_DIR/sbin/init"
 
