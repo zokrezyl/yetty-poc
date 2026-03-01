@@ -6,7 +6,6 @@
 #include <webgpu/webgpu.h>
 #include <string>
 #include <vector>
-#include <thread>
 #include <atomic>
 #include <mutex>
 #include <functional>
@@ -74,10 +73,7 @@ private:
     // Register/unregister client FD with EventLoop for async I/O
     Result<void> registerClientPoll(int clientFd);
     void unregisterClientPoll(int clientFd);
-
-
-    void acceptLoop();
-    void clientLoop(int clientFd);
+    void handleAccept();  // Called when server socket is readable
     Result<void> sendToClient(int clientFd, const void* data, size_t size);
 
     WGPUDevice _device;
@@ -85,9 +81,9 @@ private:
 
     // Server socket
     int _serverFd = -1;
+    int _serverPollId = -1;  // EventLoop poll ID for async accept
     uint16_t _port = 0;
     std::atomic<bool> _running{false};
-    std::thread _acceptThread;
 
     // Connected clients
     std::mutex _clientsMutex;
@@ -119,11 +115,12 @@ private:
 
     // Async state machine for non-blocking GPU operations
     enum class CaptureState {
-        IDLE,              // Ready to start new frame
-        WAITING_CLEAR,     // Waiting for buffer clear
-        WAITING_COMPUTE,   // Waiting for compute shader + copy
-        WAITING_MAP,       // Waiting for buffer map
-        READY_TO_SEND      // Results ready, encode and send
+        IDLE,                  // Ready to start new frame
+        WAITING_CLEAR,         // Waiting for buffer clear
+        WAITING_COMPUTE,       // Waiting for compute shader + copy
+        WAITING_MAP,           // Waiting for buffer map
+        READY_TO_SEND,         // Results ready, encode and send
+        WAITING_TILE_READBACK  // Waiting for GPU tile readback
     };
     CaptureState _captureState = CaptureState::IDLE;
     std::atomic<bool> _gpuWorkDone{false};

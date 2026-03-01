@@ -555,8 +555,9 @@ struct VertexOutput {
         }
         yinfo("EventLoop initialized");
 
-        // Create VNC client
-        vncClient = std::make_shared<VncClient>(device, queue, surfaceFormat);
+        // Create VNC client with initial size - texture created immediately
+        vncClient = std::make_shared<VncClient>(device, queue, surfaceFormat,
+            static_cast<uint16_t>(windowWidth), static_cast<uint16_t>(windowHeight));
 
         // Connect to server
         auto connectRes = vncClient->connect(host, port);
@@ -569,7 +570,7 @@ struct VertexOutput {
         // Setup client state for GLFW callbacks
         g_clientState.client = vncClient.get();
 
-        // Send initial resize and cell size
+        // Send initial resize and cell size FIRST - server adjusts before sending frames
         vncClient->sendResize(static_cast<uint16_t>(windowWidth), static_cast<uint16_t>(windowHeight));
         vncClient->sendCellSize(g_clientState.cellHeight);
 

@@ -3,6 +3,7 @@
 add_library(yetty_vnc STATIC
     vnc-client.cpp
     vnc-server.cpp
+    vnc-view.cpp
 )
 
 target_include_directories(yetty_vnc PUBLIC

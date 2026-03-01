@@ -174,7 +174,7 @@ private:
     bool _vncServerMode = false;
     bool _vncHeadless = false;  // No local rendering, only serve to VNC clients
     uint16_t _vncServerPort = 5900;
-    std::unique_ptr<vnc::VncServer> _vncServer;
+    std::shared_ptr<vnc::VncServer> _vncServer;
     uint32_t _vncRequestedWidth = 0;   // Client-requested capture size
     uint32_t _vncRequestedHeight = 0;
 
@@ -359,28 +359,41 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
 
     // Initialize VNC client mode if enabled
     if (_vncClientMode) {
-        _vncClient = std::make_shared<vnc::VncClient>(_device, _queue, _surfaceFormat);
+        // Get initial VNC area size (window minus statusbar)
+        int windowW, windowH;
+        _platform->getWindowSize(windowW, windowH);
+        float statusbarH = _yettyContext.imguiManager ? _yettyContext.imguiManager->getStatusbarHeight() : 0.0f;
+        int vncH = windowH - static_cast<int>(statusbarH);
+        uint16_t vncWidth = static_cast<uint16_t>(windowW > 0 ? windowW : 800);
+        uint16_t vncHeight = static_cast<uint16_t>(vncH > 0 ? vncH : 600);
+
+        // Create VNC client with initial size - texture created immediately
+        _vncClient = std::make_shared<vnc::VncClient>(_device, _queue, _surfaceFormat, vncWidth, vncHeight);
         if (auto res = _vncClient->connect(_vncHost, _vncPort); !res) {
             return Err<void>("Failed to connect VNC client", res);
         }
         yinfo("VNC client connected to {}:{}", _vncHost, _vncPort);
 
-        // Send initial VNC area size to server (window minus statusbar)
-        int windowW, windowH;
-        _platform->getWindowSize(windowW, windowH);
-        if (windowW > 0 && windowH > 0) {
-            float statusbarH = _yettyContext.imguiManager ? _yettyContext.imguiManager->getStatusbarHeight() : 0.0f;
-            int vncH = windowH - static_cast<int>(statusbarH);
-            if (vncH > 0) {
-                _vncClient->sendResize(static_cast<uint16_t>(windowW), static_cast<uint16_t>(vncH));
-                yinfo("VNC client sent initial resize: {}x{} (statusbar={})", windowW, vncH, statusbarH);
-            }
+        // Send initial size + cell height FIRST - server adjusts before sending frames
+        _vncClient->sendResize(vncWidth, vncHeight);
+        _vncClient->sendCellSize(20);  // Default cell height
+
+        // Set up frame received callback for immediate screen refresh
+        _vncClient->onFrameReceived = []() {
+            auto loopResult = base::EventLoop::instance();
+            if (!loopResult) return;
+            (*loopResult)->dispatch(base::Event::screenUpdateEvent());
+        };
+        yinfo("VNC client sent initial resize: {}x{} (statusbar={})", vncWidth, vncHeight, statusbarH);
+
+        // Legacy resize code removed - we now send resize FIRST before any frames
+        if (false) {
         }
     }
 
     // Initialize VNC server mode if enabled
     if (_vncServerMode) {
-        _vncServer = std::make_unique<vnc::VncServer>(_device, _queue);
+        _vncServer = std::make_shared<vnc::VncServer>(_device, _queue);
         if (auto res = _vncServer->start(_vncServerPort); !res) {
             return Err<void>("Failed to start VNC server", res);
         }
@@ -1594,7 +1607,7 @@ void YettyImpl::initEventLoop() noexcept {
         return;
     }
     _frameTimerId = *frameTimerResult;
-    if (auto res = loop->configTimer(_frameTimerId, 16); !res) {
+    if (auto res = loop->configTimer(_frameTimerId, 100); !res) {  // 10 FPS
         yerror("Failed to configure frame timer: {}", error_msg(res));
         return;
     }
@@ -1628,7 +1641,8 @@ void YettyImpl::shutdownEventLoop() noexcept {
 
 Result<bool> YettyImpl::onEvent(const base::Event& event) {
 #if !YETTY_WEB && !defined(__ANDROID__)
-    // Input timer: poll events only (fast, always responsive)
+    // Input timer: poll GLFW events (fast, always responsive)
+    // Note: VNC input is now fully async via EventLoop poll, no longer needs polling here
     if (event.type == base::Event::Type::Timer && event.timer.timerId == _inputTimerId) {
         _platform->pollEvents();
         if (_platform->shouldClose()) {
@@ -1768,9 +1782,6 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
     _sharedUniforms.mouseX = _lastMouseX;
     _sharedUniforms.mouseY = _lastMouseY;
     wgpuQueueWriteBuffer(_queue, _sharedUniformBuffer, 0, &_sharedUniforms, sizeof(SharedUniforms));
-
-    // Note: VNC input is now processed in the fast input timer (120Hz)
-    // for immediate responsiveness regardless of frame rate
 
     // Upload any pending font glyphs (e.g., bold/italic loaded on demand)
     if (_yettyContext.fontManager) {

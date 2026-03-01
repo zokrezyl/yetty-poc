@@ -343,18 +343,20 @@ private:
 #if !YETTY_WEB && !defined(__ANDROID__)
     static void onPollCallback(uv_poll_t* handle, int status, int events) {
         auto* ph = static_cast<PollHandle*>(handle->data);
-        ydebug("EventLoop::onPollCallback: fd={} status={} events={}", ph->fd, status, events);
+        fprintf(stderr, "[POLL] fd=%d status=%d events=%d listeners=%zu\n", ph->fd, status, events, ph->listeners.size());
+        yinfo("EventLoop::onPollCallback: fd={} status={} events={} listeners={}", ph->fd, status, events, ph->listeners.size());
         if (status < 0 || !(events & UV_READABLE)) return;
 
         Event event;
         event.type = Event::Type::PollReadable;
         event.poll.fd = ph->fd;
 
-        ydebug("EventLoop::onPollCallback: dispatching to {} listeners", ph->listeners.size());
         for (const auto& wp : ph->listeners) {
             if (auto sp = wp.lock()) {
-                ydebug("EventLoop::onPollCallback: calling listener onEvent");
+                yinfo("EventLoop::onPollCallback: calling onEvent for fd={}", ph->fd);
                 sp->onEvent(event);
+            } else {
+                ywarn("EventLoop::onPollCallback: listener weak_ptr expired for fd={}", ph->fd);
             }
         }
     }

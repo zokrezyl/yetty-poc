@@ -111,6 +111,10 @@ Result<void> VncServer::start(uint16_t port) {
     int opt = 1;
     setsockopt(_serverFd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
+    // Set non-blocking for async accept
+    int flags = fcntl(_serverFd, F_GETFL, 0);
+    fcntl(_serverFd, F_SETFL, flags | O_NONBLOCK);
+
     struct sockaddr_in addr = {};
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = INADDR_ANY;
@@ -128,16 +132,63 @@ Result<void> VncServer::start(uint16_t port) {
         return Err<void>("Failed to listen");
     }
 
+    // Register server socket with EventLoop for async accept
+    auto loopResult = base::EventLoop::instance();
+    if (!loopResult) {
+        close(_serverFd);
+        _serverFd = -1;
+        return Err<void>("EventLoop not available");
+    }
+    auto loop = *loopResult;
+
+    auto pollResult = loop->createPoll();
+    if (!pollResult) {
+        close(_serverFd);
+        _serverFd = -1;
+        return Err<void>("Failed to create server poll", pollResult);
+    }
+    _serverPollId = *pollResult;
+
+    if (auto res = loop->configPoll(_serverPollId, _serverFd); !res) {
+        loop->destroyPoll(_serverPollId);
+        close(_serverFd);
+        _serverFd = -1;
+        return Err<void>("Failed to configure server poll", res);
+    }
+
+    if (auto res = loop->registerPollListener(_serverPollId, sharedAs<base::EventListener>()); !res) {
+        loop->destroyPoll(_serverPollId);
+        close(_serverFd);
+        _serverFd = -1;
+        return Err<void>("Failed to register server poll listener", res);
+    }
+
+    if (auto res = loop->startPoll(_serverPollId); !res) {
+        loop->destroyPoll(_serverPollId);
+        close(_serverFd);
+        _serverFd = -1;
+        return Err<void>("Failed to start server poll", res);
+    }
+
     _port = port;
     _running = true;
-    _acceptThread = std::thread(&VncServer::acceptLoop, this);
 
-    yinfo("VNC server listening on port {}", port);
+    yerror("VNC server listening on port {} (async) serverFd={} pollId={}", port, _serverFd, _serverPollId);
     return Ok();
 }
 
 void VncServer::stop() {
     _running = false;
+
+    auto loopResult = base::EventLoop::instance();
+
+    // Unregister server poll
+    if (_serverPollId >= 0 && loopResult) {
+        auto loop = *loopResult;
+        loop->stopPoll(_serverPollId);
+        loop->destroyPoll(_serverPollId);
+        _serverPollId = -1;
+    }
 
     if (_serverFd >= 0) {
         ::shutdown(_serverFd, SHUT_RDWR);
@@ -145,40 +196,51 @@ void VncServer::stop() {
         _serverFd = -1;
     }
 
-    // Close all client connections
+    // Unregister and close all client connections
     {
         std::lock_guard<std::mutex> lock(_clientsMutex);
         for (int fd : _clients) {
+            // Unregister client poll
+            auto it = _clientPollIds.find(fd);
+            if (it != _clientPollIds.end() && loopResult) {
+                auto loop = *loopResult;
+                loop->stopPoll(it->second);
+                loop->destroyPoll(it->second);
+            }
             ::shutdown(fd, SHUT_RDWR);
             close(fd);
         }
         _clients.clear();
+        _clientPollIds.clear();
+        _pollIdToFd.clear();
         _clientCount = 0;
-    }
-
-    if (_acceptThread.joinable()) {
-        _acceptThread.join();
     }
 
     _clientInputBuffers.clear();
 }
 
-void VncServer::acceptLoop() {
-    while (_running) {
-        struct pollfd pfd = {_serverFd, POLLIN, 0};
-        int ret = poll(&pfd, 1, 100);  // 100ms timeout
-        if (ret <= 0) continue;
-
+void VncServer::handleAccept() {
+    yinfo("VNC handleAccept called");
+    // Accept all pending connections (non-blocking)
+    while (true) {
         struct sockaddr_in clientAddr;
         socklen_t clientLen = sizeof(clientAddr);
         int clientFd = accept(_serverFd, (struct sockaddr*)&clientAddr, &clientLen);
-        if (clientFd < 0) continue;
+        if (clientFd < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                break;  // No more pending connections
+            }
+            ywarn("VNC accept failed: errno={}", errno);
+            break;
+        }
 
         // Disable Nagle
         int flag = 1;
         setsockopt(clientFd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
 
-        // Keep socket blocking - we use MSG_DONTWAIT for non-blocking input reads
+        // Set non-blocking for async I/O
+        int flags = fcntl(clientFd, F_GETFL, 0);
+        fcntl(clientFd, F_SETFL, flags | O_NONBLOCK);
 
         char clientIp[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &clientAddr.sin_addr, clientIp, sizeof(clientIp));
@@ -192,7 +254,7 @@ void VncServer::acceptLoop() {
             _forceFullFrame = true;  // Send full frame to new client
         }
 
-        // Register for async I/O (outside lock)
+        // Register client socket for async I/O (we're on main thread now)
         if (auto res = registerClientPoll(clientFd); !res) {
             ywarn("Failed to register client poll: {}", res.error().message());
         }
@@ -202,24 +264,19 @@ void VncServer::acceptLoop() {
 Result<void> VncServer::sendToClient(int clientFd, const void* data, size_t size) {
     const uint8_t* ptr = static_cast<const uint8_t*>(data);
     size_t remaining = size;
-    int retries = 0;
     while (remaining > 0) {
         ssize_t sent = send(clientFd, ptr, remaining, MSG_NOSIGNAL);
         if (sent <= 0) {
             if (sent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-                // Buffer full, wait a bit and retry
-                if (++retries > 100) {
-                    ywarn("VNC: send timeout after {} retries", retries);
-                    return Err<void>("Send timeout");
-                }
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                continue;
+                // Buffer full - in async mode we'd need to queue and wait for writable
+                // For now, just skip this client for this frame
+                ywarn("VNC: send would block, dropping frame for fd={}", clientFd);
+                return Err<void>("Send would block");
             }
             return Err<void>("Send failed");
         }
         ptr += sent;
         remaining -= sent;
-        retries = 0;
     }
     return Ok();
 }
@@ -604,63 +661,89 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
         }
 
         case CaptureState::READY_TO_SEND:
-            // Reset state for next frame
+            // Need to read back from GPU if no CPU pixels
+            if (!_cpuPixels && !_gpuReadbackPixels.empty()) {
+                uint32_t bytesPerPixel = 4;
+                uint32_t alignedBytesPerRow = (width * bytesPerPixel + 255) & ~255;
+                uint32_t bufSize = alignedBytesPerRow * height;
+
+                // Create or recreate temp readback buffer if size changed
+                if (!_tileReadbackBuffer || _tileReadbackBufferSize != bufSize) {
+                    if (_tileReadbackBuffer) {
+                        wgpuBufferRelease(_tileReadbackBuffer);
+                    }
+                    WGPUBufferDescriptor bufDesc = {};
+                    bufDesc.size = bufSize;
+                    bufDesc.usage = WGPUBufferUsage_CopyDst | WGPUBufferUsage_MapRead;
+                    _tileReadbackBuffer = wgpuDeviceCreateBuffer(_device, &bufDesc);
+                    _tileReadbackBufferSize = bufSize;
+                }
+
+                // Copy texture to buffer
+                WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(_device, nullptr);
+                WGPUTexelCopyTextureInfo src = {};
+                src.texture = texture;
+                WGPUTexelCopyBufferInfo dst = {};
+                dst.buffer = _tileReadbackBuffer;
+                dst.layout.bytesPerRow = alignedBytesPerRow;
+                dst.layout.rowsPerImage = height;
+                WGPUExtent3D copySize = {width, height, 1};
+                wgpuCommandEncoderCopyTextureToBuffer(encoder, &src, &dst, &copySize);
+                WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(encoder, nullptr);
+                wgpuQueueSubmit(_queue, 1, &cmd);
+                wgpuCommandBufferRelease(cmd);
+                wgpuCommandEncoderRelease(encoder);
+
+                // Start async map - NO BUSY WAIT!
+                _gpuWorkDone = false;
+                WGPUBufferMapCallbackInfo cbInfo = {};
+                cbInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+                cbInfo.callback = [](WGPUMapAsyncStatus status, WGPUStringView, void* ud1, void*) {
+                    auto* self = static_cast<VncServer*>(ud1);
+                    self->_mapStatus = status;
+                    self->_gpuWorkDone = true;
+                    if (self->_uvAsync) {
+                        uv_async_send(static_cast<uv_async_t*>(self->_uvAsync));
+                    }
+                };
+                cbInfo.userdata1 = this;
+                wgpuBufferMapAsync(_tileReadbackBuffer, WGPUMapMode_Read, 0, bufSize, cbInfo);
+
+                _captureState = CaptureState::WAITING_TILE_READBACK;
+                return Ok();  // Return immediately, don't block!
+            }
+            // No GPU readback needed, continue to send
             _captureState = CaptureState::IDLE;
             break;
-    }
 
-    // If no CPU pixels, read back from GPU (still synchronous for simplicity)
-    if (!_cpuPixels && !_gpuReadbackPixels.empty()) {
-        uint32_t bytesPerPixel = 4;
-        uint32_t alignedBytesPerRow = (width * bytesPerPixel + 255) & ~255;
-        uint32_t bufSize = alignedBytesPerRow * height;
-
-        // Create or recreate temp readback buffer if size changed
-        if (!_tileReadbackBuffer || _tileReadbackBufferSize != bufSize) {
-            if (_tileReadbackBuffer) {
-                wgpuBufferRelease(_tileReadbackBuffer);
+        case CaptureState::WAITING_TILE_READBACK: {
+            if (!_gpuWorkDone) {
+                return Ok();  // Still waiting, return without blocking
             }
-            WGPUBufferDescriptor bufDesc = {};
-            bufDesc.size = bufSize;
-            bufDesc.usage = WGPUBufferUsage_CopyDst | WGPUBufferUsage_MapRead;
-            _tileReadbackBuffer = wgpuDeviceCreateBuffer(_device, &bufDesc);
-            _tileReadbackBufferSize = bufSize;
+
+            if (_mapStatus != WGPUMapAsyncStatus_Success) {
+                ywarn("VNC tile readback map failed");
+                _captureState = CaptureState::IDLE;
+                return Ok();
+            }
+
+            // Copy mapped data to CPU buffer
+            uint32_t bytesPerPixel = 4;
+            uint32_t alignedBytesPerRow = (width * bytesPerPixel + 255) & ~255;
+            uint32_t bufSize = alignedBytesPerRow * height;
+
+            const uint8_t* mapped = static_cast<const uint8_t*>(
+                wgpuBufferGetConstMappedRange(_tileReadbackBuffer, 0, bufSize));
+            uint32_t unalignedRow = width * bytesPerPixel;
+            for (uint32_t y = 0; y < height; y++) {
+                std::memcpy(_gpuReadbackPixels.data() + y * unalignedRow,
+                           mapped + y * alignedBytesPerRow, unalignedRow);
+            }
+            wgpuBufferUnmap(_tileReadbackBuffer);
+
+            _captureState = CaptureState::IDLE;
+            break;
         }
-
-        // Copy texture to buffer
-        WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(_device, nullptr);
-        WGPUTexelCopyTextureInfo src = {};
-        src.texture = texture;
-        WGPUTexelCopyBufferInfo dst = {};
-        dst.buffer = _tileReadbackBuffer;
-        dst.layout.bytesPerRow = alignedBytesPerRow;
-        dst.layout.rowsPerImage = height;
-        WGPUExtent3D copySize = {width, height, 1};
-        wgpuCommandEncoderCopyTextureToBuffer(encoder, &src, &dst, &copySize);
-        WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(encoder, nullptr);
-        wgpuQueueSubmit(_queue, 1, &cmd);
-        wgpuCommandBufferRelease(cmd);
-        wgpuCommandEncoderRelease(encoder);
-
-        // Blocking map and copy (TODO: make async too)
-        std::atomic<bool> mapDone{false};
-        WGPUBufferMapCallbackInfo cbInfo = {};
-        cbInfo.mode = WGPUCallbackMode_AllowSpontaneous;
-        cbInfo.callback = [](WGPUMapAsyncStatus, WGPUStringView, void* ud, void*) {
-            *static_cast<std::atomic<bool>*>(ud) = true;
-        };
-        cbInfo.userdata1 = &mapDone;
-        wgpuBufferMapAsync(_tileReadbackBuffer, WGPUMapMode_Read, 0, bufSize, cbInfo);
-        while (!mapDone) wgpuDeviceTick(_device);
-
-        const uint8_t* mapped = static_cast<const uint8_t*>(
-            wgpuBufferGetConstMappedRange(_tileReadbackBuffer, 0, bufSize));
-        uint32_t unalignedRow = width * bytesPerPixel;
-        for (uint32_t y = 0; y < height; y++) {
-            std::memcpy(_gpuReadbackPixels.data() + y * unalignedRow,
-                       mapped + y * alignedBytesPerRow, unalignedRow);
-        }
-        wgpuBufferUnmap(_tileReadbackBuffer);
     }
 
     // Count dirty tiles
@@ -736,7 +819,6 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
 
         // Remove dead clients
         for (int fd : deadClients) {
-            unregisterClientPoll(fd);  // Unregister async I/O first
             close(fd);
             _clients.erase(std::remove(_clients.begin(), _clients.end(), fd), _clients.end());
             _clientInputBuffers.erase(fd);
@@ -997,26 +1079,32 @@ void VncServer::unregisterClientPoll(int clientFd) {
 }
 
 Result<bool> VncServer::onEvent(const base::Event& event) {
+    yinfo("VNC SERVER onEvent: type={} clientCount={}", static_cast<int>(event.type), _clientCount.load());
     if (event.type != base::Event::Type::PollReadable) {
         return Ok(false);
     }
 
     int fd = event.poll.fd;
-    ydebug("VNC onEvent: PollReadable fd={}", fd);
+    yinfo("VNC onEvent: PollReadable fd={} serverFd={}", fd, _serverFd);
 
-    // Find the client FD (event.poll.fd should match)
+    // Server socket - accept new connections
+    if (fd == _serverFd) {
+        yinfo("VNC onEvent: accepting new connection");
+        handleAccept();
+        return Ok(true);
+    }
+
+    // Client socket - process input
     {
         std::lock_guard<std::mutex> lock(_clientsMutex);
         auto it = std::find(_clients.begin(), _clients.end(), fd);
         if (it == _clients.end()) {
-            ywarn("VNC onEvent: unknown fd={}", fd);
+            ydebug("VNC onEvent: unknown fd={}", fd);
             return Ok(false);
         }
     }
 
-    // Process input from this client
     pollClientInput(fd);
-
     return Ok(true);
 }
 

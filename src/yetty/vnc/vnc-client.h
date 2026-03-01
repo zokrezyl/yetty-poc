@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 #include <queue>
+#include <functional>
 
 namespace yetty::vnc {
 
@@ -15,7 +16,7 @@ class VncClient : public base::EventListener {
 public:
     using Ptr = std::shared_ptr<VncClient>;
 
-    VncClient(WGPUDevice device, WGPUQueue queue, WGPUTextureFormat surfaceFormat);
+    VncClient(WGPUDevice device, WGPUQueue queue, WGPUTextureFormat surfaceFormat, uint16_t width, uint16_t height);
     ~VncClient() override;
 
     // Connect to server
@@ -50,6 +51,9 @@ public:
 
     // EventListener interface
     Result<bool> onEvent(const base::Event& event) override;
+
+    // Callback when frame tiles are received (triggers screen refresh)
+    std::function<void()> onFrameReceived;
 
 private:
     void sendInput(const void* data, size_t size);

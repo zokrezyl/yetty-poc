@@ -54,9 +54,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 }
 )";
 
-VncClient::VncClient(WGPUDevice device, WGPUQueue queue, WGPUTextureFormat surfaceFormat)
-    : _device(device), _queue(queue), _surfaceFormat(surfaceFormat) {
+VncClient::VncClient(WGPUDevice device, WGPUQueue queue, WGPUTextureFormat surfaceFormat, uint16_t width, uint16_t height)
+    : _device(device), _queue(queue), _surfaceFormat(surfaceFormat), _width(width), _height(height) {
     _jpegDecompressor = tjInitDecompress();
+    // Create texture immediately with view bounds
+    ensureResources(width, height);
 }
 
 VncClient::~VncClient() {
@@ -180,6 +182,7 @@ void VncClient::disconnect() {
 
 Result<bool> VncClient::onEvent(const base::Event& event) {
     if (event.type == base::Event::Type::PollReadable) {
+        yinfo("VNC onEvent: PollReadable fd={} _socket={}", event.poll.fd, _socket);
         if (event.poll.fd == _socket) {
             onSocketReadable();
             return Ok(true);
@@ -189,32 +192,49 @@ Result<bool> VncClient::onEvent(const base::Event& event) {
 }
 
 void VncClient::onSocketReadable() {
-    if (!_connected || _socket < 0) return;
+    if (!_connected || _socket < 0) {
+        ywarn("VNC onSocketReadable: NOT CONNECTED! _connected={} _socket={}", _connected, _socket);
+        return;
+    }
 
-    yinfo("VNC client: onSocketReadable called, state={}", static_cast<int>(_recvState));
+    yinfo("VNC onSocketReadable: state={} offset={} needed={}", static_cast<int>(_recvState), _recvOffset, _recvNeeded);
+
+    bool tilesReceived = false;
+    int loopCount = 0;
 
     // Read as much as possible
     while (true) {
+        loopCount++;
+        if (loopCount > 10000) {
+            yerror("VNC onSocketReadable: INFINITE LOOP DETECTED! Breaking out.");
+            break;
+        }
         ssize_t n = recv(_socket, _recvBuffer.data() + _recvOffset,
                          _recvNeeded - _recvOffset, MSG_DONTWAIT);
 
         if (n < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                // No more data available
+                // No more data available - trigger render if we got tiles
+                yinfo("VNC onSocketReadable: EAGAIN after {} loops, tilesReceived={}", loopCount, tilesReceived);
+                if (tilesReceived && onFrameReceived) {
+                    yinfo("VNC onSocketReadable: calling onFrameReceived callback");
+                    onFrameReceived();
+                }
                 return;
             }
-            ywarn("VNC client: recv error: {}", strerror(errno));
+            ywarn("VNC onSocketReadable: recv error: {} (errno={})", strerror(errno), errno);
             disconnect();
             return;
         }
 
         if (n == 0) {
-            yinfo("VNC client: server closed connection");
+            yinfo("VNC onSocketReadable: server closed connection");
             disconnect();
             return;
         }
 
         _recvOffset += n;
+        ydebug("VNC onSocketReadable: recv {} bytes, offset now {}/{}", n, _recvOffset, _recvNeeded);
 
         // Check if we have enough data
         if (_recvOffset < _recvNeeded) {
@@ -252,14 +272,14 @@ void VncClient::onSocketReadable() {
 
                 ydebug("VNC client: frame {}x{} tiles={}", _currentFrame.width, _currentFrame.height, _currentFrame.num_tiles);
 
-                // Update frame dimensions
+                // Update frame dimensions and ensure GPU resources
                 if (_currentFrame.width != _width || _currentFrame.height != _height) {
                     _width = _currentFrame.width;
                     _height = _currentFrame.height;
-                    _pixels.resize(_width * _height * 4);
-                    std::memset(_pixels.data(), 0, _pixels.size());
                     yinfo("VNC: Frame size {}x{}", _width, _height);
                 }
+                // Ensure texture exists for immediate tile uploads
+                ensureResources(_width, _height);
 
                 _tilesReceived = 0;
 
@@ -301,16 +321,13 @@ void VncClient::onSocketReadable() {
             }
 
             case RecvState::TILE_DATA: {
-                // Decode tile
-                TileUpdate update;
-                update.tile_x = _currentTile.tile_x;
-                update.tile_y = _currentTile.tile_y;
-                update.pixels.resize(TILE_SIZE * TILE_SIZE * 4);
+                // Decode tile directly into temp buffer
+                std::vector<uint8_t> pixels(TILE_SIZE * TILE_SIZE * 4);
 
                 switch (static_cast<Encoding>(_currentTile.encoding)) {
                     case Encoding::RAW:
                         if (_currentTile.data_size == TILE_SIZE * TILE_SIZE * 4) {
-                            std::memcpy(update.pixels.data(), _recvBuffer.data(), _currentTile.data_size);
+                            std::memcpy(pixels.data(), _recvBuffer.data(), _currentTile.data_size);
                         }
                         break;
 
@@ -319,24 +336,49 @@ void VncClient::onSocketReadable() {
                         if (tjDecompressHeader3(static_cast<tjhandle>(_jpegDecompressor),
                                                _recvBuffer.data(), _currentTile.data_size,
                                                &width, &height, &subsamp, &colorspace) == 0) {
-                            tjDecompress2(static_cast<tjhandle>(_jpegDecompressor),
-                                         _recvBuffer.data(), _currentTile.data_size,
-                                         update.pixels.data(), TILE_SIZE, 0, TILE_SIZE,
-                                         TJPF_BGRA, TJFLAG_FASTDCT);
+                            if (width <= TILE_SIZE && height <= TILE_SIZE) {
+                                tjDecompress2(static_cast<tjhandle>(_jpegDecompressor),
+                                             _recvBuffer.data(), _currentTile.data_size,
+                                             pixels.data(), TILE_SIZE, 0, TILE_SIZE,
+                                             TJPF_BGRA, TJFLAG_FASTDCT);
+                            }
                         }
                         break;
                     }
 
                     case Encoding::RLE:
-                        // TODO: implement RLE decoding
                         break;
                 }
 
-                // Queue tile update
-                uint16_t tx = update.tile_x, ty = update.tile_y;
-                _pendingTiles.push(std::move(update));
-                yinfo("VNC client: queued tile ({},{}) total pending={}", tx, ty, _pendingTiles.size());
+                // Upload tile IMMEDIATELY to GPU
+                if (_texture && _width > 0 && _height > 0) {
+                    uint32_t px = _currentTile.tile_x * TILE_SIZE;
+                    uint32_t py = _currentTile.tile_y * TILE_SIZE;
+                    if (px < _width && py < _height) {
+                        uint32_t tw = std::min((uint32_t)TILE_SIZE, _width - px);
+                        uint32_t th = std::min((uint32_t)TILE_SIZE, _height - py);
 
+                        WGPUTexelCopyTextureInfo dst = {};
+                        dst.texture = _texture;
+                        dst.origin = {px, py, 0};
+
+                        WGPUTexelCopyBufferLayout layout = {};
+                        layout.bytesPerRow = TILE_SIZE * 4;
+                        layout.rowsPerImage = TILE_SIZE;
+
+                        WGPUExtent3D size = {tw, th, 1};
+                        wgpuQueueWriteTexture(_queue, &dst, pixels.data(), pixels.size(), &layout, &size);
+                        yinfo("VNC TILE UPLOAD: tile({},{}) px({},{}) size({}x{}) texSize({}x{})",
+                              _currentTile.tile_x, _currentTile.tile_y, px, py, tw, th, _textureWidth, _textureHeight);
+                    } else {
+                        ywarn("VNC TILE SKIP: tile({},{}) px({},{}) OUT OF BOUNDS frame({}x{})",
+                              _currentTile.tile_x, _currentTile.tile_y, px, py, _width, _height);
+                    }
+                } else {
+                    ywarn("VNC TILE SKIP: no texture! _texture={} _width={} _height={}", (void*)_texture, _width, _height);
+                }
+
+                tilesReceived = true;
                 _tilesReceived++;
 
                 if (_tilesReceived >= _currentFrame.num_tiles) {
