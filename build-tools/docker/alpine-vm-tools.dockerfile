@@ -47,7 +47,8 @@ CMD ["sh", "-c", "\
     mkdir -p /build/vm-tools && \
     cmake -S /src/build-tools/cmake/host-tools -B /build/vm-tools-build \
         -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_EXE_LINKER_FLAGS=-static && \
+        -DCMAKE_EXE_LINKER_FLAGS=-static \
+        -DBUILD_VM_TOOLS=ON && \
     cmake --build /build/vm-tools-build --target yecho-static ycat-static ybrowser-static -j$(nproc) && \
     cp /build/vm-tools-build/yecho /build/vm-tools/ && \
     cp /build/vm-tools-build/ycat /build/vm-tools/ && \

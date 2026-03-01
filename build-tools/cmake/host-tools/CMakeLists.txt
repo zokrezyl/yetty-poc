@@ -180,8 +180,12 @@ target_compile_features(yecho-static PRIVATE cxx_std_23)
 set_target_properties(yecho-static PROPERTIES OUTPUT_NAME "yecho")
 
 # =============================================================================
-# ycat-static — syntax-highlighted cat for JSLinux VM
+# ycat-static + ybrowser-static — only built when BUILD_VM_TOOLS is ON
+# (requires OpenSSL, fontconfig, etc. — available in Docker Alpine build)
 # =============================================================================
+option(BUILD_VM_TOOLS "Build ycat-static and ybrowser-static VM tools" OFF)
+
+if(BUILD_VM_TOOLS)
 
 # cpr (HTTP client, builds libcurl from source)
 # Prefer static OpenSSL for static linking
@@ -359,3 +363,5 @@ target_link_libraries(ybrowser-static PRIVATE
 target_compile_definitions(ybrowser-static PRIVATE YETTY_USE_FONTCONFIG=1)
 target_compile_features(ybrowser-static PRIVATE cxx_std_20)
 set_target_properties(ybrowser-static PROPERTIES OUTPUT_NAME "ybrowser")
+
+endif() # BUILD_VM_TOOLS
