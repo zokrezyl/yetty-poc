@@ -58,6 +58,8 @@ public:
 private:
     void sendInput(const void* data, size_t size);
     void onSocketReadable();
+    void drainSendQueue();
+    void updatePollEvents();  // Enable/disable writable based on state
     Result<void> ensureResources(uint16_t width, uint16_t height);
     Result<void> createPipeline();
 
@@ -68,7 +70,12 @@ private:
     // Network
     int _socket = -1;
     bool _connected = false;
+    bool _connecting = false;  // Async connect in progress
     base::PollId _pollId = -1;
+
+    // Async send queue (to avoid blocking on EAGAIN)
+    std::vector<uint8_t> _sendQueue;
+    size_t _sendOffset = 0;
 
     // Async receive state machine
     enum class RecvState {

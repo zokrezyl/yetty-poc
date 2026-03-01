@@ -99,25 +99,33 @@ Result<void> VncClient::connect(const std::string& host, uint16_t port) {
         return Err<void>("Failed to create socket");
     }
 
-    // Connect
-    if (::connect(_socket, result->ai_addr, result->ai_addrlen) < 0) {
-        freeaddrinfo(result);
-        close(_socket);
-        _socket = -1;
-        return Err<void>("Failed to connect to " + host + ":" + portStr);
-    }
-    freeaddrinfo(result);
+    // Set non-blocking BEFORE connect for async connection
+    int flags = fcntl(_socket, F_GETFL, 0);
+    fcntl(_socket, F_SETFL, flags | O_NONBLOCK);
 
     // Disable Nagle's algorithm for lower latency
     int flag = 1;
     setsockopt(_socket, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
 
-    // Set non-blocking
-    int flags = fcntl(_socket, F_GETFL, 0);
-    fcntl(_socket, F_SETFL, flags | O_NONBLOCK);
+    // Non-blocking connect - will return immediately with EINPROGRESS
+    int connectResult = ::connect(_socket, result->ai_addr, result->ai_addrlen);
+    freeaddrinfo(result);
 
-    _connected = true;
-    yinfo("VNC client connected to {}:{}", host, port);
+    if (connectResult < 0 && errno != EINPROGRESS) {
+        close(_socket);
+        _socket = -1;
+        return Err<void>("Failed to connect to " + host + ":" + portStr + ": " + strerror(errno));
+    }
+
+    // Connection is in progress - we'll complete it asynchronously
+    _connecting = (errno == EINPROGRESS);
+    _connected = !_connecting;  // If connect succeeded immediately (localhost)
+
+    if (_connected) {
+        yinfo("VNC client connected to {}:{} (immediate)", host, port);
+    } else {
+        yinfo("VNC client connecting to {}:{} (async)...", host, port);
+    }
 
     // Initialize receive state machine
     _recvState = RecvState::FRAME_HEADER;
@@ -151,11 +159,18 @@ Result<void> VncClient::connect(const std::string& host, uint16_t port) {
         return Err<void>("Failed to register poll listener", res);
     }
 
-    if (auto res = loop->startPoll(_pollId); !res) {
+    // Start polling - if connecting async, need writable to detect connect completion
+    // Otherwise just readable
+    int pollEvents = base::EventLoop::POLL_READABLE;
+    if (_connecting) {
+        pollEvents |= base::EventLoop::POLL_WRITABLE;
+    }
+
+    if (auto res = loop->startPoll(_pollId, pollEvents); !res) {
         return Err<void>("Failed to start poll", res);
     }
 
-    yinfo("VNC client: registered poll id={} for socket={}", _pollId, _socket);
+    yinfo("VNC client: registered poll id={} for socket={} events={}", _pollId, _socket, pollEvents);
     return Ok();
 }
 
@@ -181,13 +196,40 @@ void VncClient::disconnect() {
 }
 
 Result<bool> VncClient::onEvent(const base::Event& event) {
-    if (event.type == base::Event::Type::PollReadable) {
-        yinfo("VNC onEvent: PollReadable fd={} _socket={}", event.poll.fd, _socket);
-        if (event.poll.fd == _socket) {
-            onSocketReadable();
+    if (event.poll.fd != _socket) {
+        return Ok(false);
+    }
+
+    // Handle async connect completion
+    if (_connecting && event.type == base::Event::Type::PollWritable) {
+        int error = 0;
+        socklen_t len = sizeof(error);
+        if (getsockopt(_socket, SOL_SOCKET, SO_ERROR, &error, &len) < 0 || error != 0) {
+            yerror("VNC async connect failed: {}", error ? strerror(error) : "getsockopt failed");
+            disconnect();
             return Ok(true);
         }
+        _connecting = false;
+        _connected = true;
+        yinfo("VNC client connected (async complete)");
+        // Switch to readable-only polling now that we're connected
+        updatePollEvents();
+        return Ok(true);
     }
+
+    // Handle writable event - drain send queue
+    if (event.type == base::Event::Type::PollWritable) {
+        drainSendQueue();
+        return Ok(true);
+    }
+
+    // Handle readable event
+    if (event.type == base::Event::Type::PollReadable) {
+        ydebug("VNC onEvent: PollReadable fd={}", event.poll.fd);
+        onSocketReadable();
+        return Ok(true);
+    }
+
     return Ok(false);
 }
 
@@ -606,24 +648,85 @@ void VncClient::sendInput(const void* data, size_t size) {
         return;
     }
 
-    ydebug("VNC client sendInput: sending {} bytes to socket {}", size, _socket);
     const uint8_t* ptr = static_cast<const uint8_t*>(data);
-    size_t remaining = size;
-    while (remaining > 0 && _connected) {
-        ssize_t sent = send(_socket, ptr, remaining, MSG_NOSIGNAL);
-        if (sent <= 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                // Would block, try again
-                continue;
+
+    // If send queue is empty, try to send directly first
+    if (_sendQueue.empty()) {
+        ssize_t sent = send(_socket, ptr, size, MSG_NOSIGNAL | MSG_DONTWAIT);
+        if (sent > 0) {
+            if (static_cast<size_t>(sent) == size) {
+                ydebug("VNC client sendInput: sent {} bytes directly", sent);
+                return;  // All sent!
             }
+            // Partial send - queue the rest
+            ptr += sent;
+            size -= sent;
+        } else if (sent < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
             ywarn("VNC client sendInput: send failed errno={}", errno);
             return;
         }
-        ydebug("VNC client sendInput: sent {} bytes", sent);
-        ptr += sent;
-        remaining -= sent;
+        // EAGAIN/EWOULDBLOCK - queue the data
     }
-    ydebug("VNC client sendInput: complete");
+
+    // Queue remaining data for async send
+    _sendQueue.insert(_sendQueue.end(), ptr, ptr + size);
+    ydebug("VNC client sendInput: queued {} bytes, queue size now {}", size, _sendQueue.size());
+
+    // Enable writable polling to drain queue
+    updatePollEvents();
+}
+
+void VncClient::drainSendQueue() {
+    if (_sendQueue.empty() || _socket < 0) {
+        return;
+    }
+
+    while (_sendOffset < _sendQueue.size()) {
+        size_t remaining = _sendQueue.size() - _sendOffset;
+        ssize_t sent = send(_socket, _sendQueue.data() + _sendOffset, remaining, MSG_NOSIGNAL | MSG_DONTWAIT);
+
+        if (sent <= 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                // Can't send more right now, wait for next writable event
+                ydebug("VNC drainSendQueue: EAGAIN, {} bytes remaining", remaining);
+                return;
+            }
+            ywarn("VNC drainSendQueue: send failed errno={}", errno);
+            _sendQueue.clear();
+            _sendOffset = 0;
+            updatePollEvents();
+            return;
+        }
+
+        _sendOffset += sent;
+        ydebug("VNC drainSendQueue: sent {} bytes, {} remaining", sent, _sendQueue.size() - _sendOffset);
+    }
+
+    // All sent - clear queue and disable writable polling
+    _sendQueue.clear();
+    _sendOffset = 0;
+    updatePollEvents();
+    ydebug("VNC drainSendQueue: queue drained");
+}
+
+void VncClient::updatePollEvents() {
+    if (_pollId < 0) return;
+
+    auto loopResult = base::EventLoop::instance();
+    if (!loopResult) return;
+    auto loop = *loopResult;
+
+    // Always poll readable when connected
+    int events = base::EventLoop::POLL_READABLE;
+
+    // Poll writable if:
+    // 1. We're in async connect and need to detect completion
+    // 2. We have data queued to send
+    if (_connecting || !_sendQueue.empty()) {
+        events |= base::EventLoop::POLL_WRITABLE;
+    }
+
+    loop->setPollEvents(_pollId, events);
 }
 
 void VncClient::sendMouseMove(int16_t x, int16_t y) {
