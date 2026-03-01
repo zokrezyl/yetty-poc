@@ -120,6 +120,7 @@ Result<void> VncClient::connect(const std::string& host, uint16_t port) {
     // Connection is in progress - we'll complete it asynchronously
     _connecting = (errno == EINPROGRESS);
     _connected = !_connecting;  // If connect succeeded immediately (localhost)
+    bool immediateConnect = _connected;
 
     if (_connected) {
         yinfo("VNC client connected to {}:{} (immediate)", host, port);
@@ -171,6 +172,13 @@ Result<void> VncClient::connect(const std::string& host, uint16_t port) {
     }
 
     yinfo("VNC client: registered poll id={} for socket={} events={}", _pollId, _socket, pollEvents);
+
+    // If connect succeeded immediately, call onConnected callback now
+    if (immediateConnect && onConnected) {
+        yinfo("VNC client: calling onConnected (immediate connect)");
+        onConnected();
+    }
+
     return Ok();
 }
 
@@ -214,6 +222,11 @@ Result<bool> VncClient::onEvent(const base::Event& event) {
         yinfo("VNC client connected (async complete)");
         // Switch to readable-only polling now that we're connected
         updatePollEvents();
+        // Call onConnected callback - client should send resize here
+        if (onConnected) {
+            yinfo("VNC client: calling onConnected (async connect complete)");
+            onConnected();
+        }
         return Ok(true);
     }
 

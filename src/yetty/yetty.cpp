@@ -369,14 +369,14 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
 
         // Create VNC client with initial size - texture created immediately
         _vncClient = std::make_shared<vnc::VncClient>(_device, _queue, _surfaceFormat, vncWidth, vncHeight);
-        if (auto res = _vncClient->connect(_vncHost, _vncPort); !res) {
-            return Err<void>("Failed to connect VNC client", res);
-        }
-        yinfo("VNC client connected to {}:{}", _vncHost, _vncPort);
 
-        // Send initial size + cell height FIRST - server adjusts before sending frames
-        _vncClient->sendResize(vncWidth, vncHeight);
-        _vncClient->sendCellSize(20);  // Default cell height
+        // Set up callback for when connection completes (async or immediate)
+        // The resize MUST be sent AFTER connect completes, not before!
+        _vncClient->onConnected = [this, vncWidth, vncHeight]() {
+            yinfo("VNC client connected - sending initial resize {}x{}", vncWidth, vncHeight);
+            _vncClient->sendResize(vncWidth, vncHeight);
+            _vncClient->sendCellSize(20);  // Default cell height
+        };
 
         // Set up frame received callback for immediate screen refresh
         _vncClient->onFrameReceived = []() {
@@ -384,11 +384,11 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
             if (!loopResult) return;
             (*loopResult)->dispatch(base::Event::screenUpdateEvent());
         };
-        yinfo("VNC client sent initial resize: {}x{} (statusbar={})", vncWidth, vncHeight, statusbarH);
 
-        // Legacy resize code removed - we now send resize FIRST before any frames
-        if (false) {
+        if (auto res = _vncClient->connect(_vncHost, _vncPort); !res) {
+            return Err<void>("Failed to connect VNC client", res);
         }
+        yinfo("VNC client connecting to {}:{}...", _vncHost, _vncPort);
     }
 
     // Initialize VNC server mode if enabled
@@ -1607,7 +1607,7 @@ void YettyImpl::initEventLoop() noexcept {
         return;
     }
     _frameTimerId = *frameTimerResult;
-    if (auto res = loop->configTimer(_frameTimerId, 100); !res) {  // 10 FPS
+    if (auto res = loop->configTimer(_frameTimerId, 1000); !res) {  // 1 FPS
         yerror("Failed to configure frame timer: {}", error_msg(res));
         return;
     }
@@ -1798,9 +1798,17 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
     // === CAPTURE/VNC SERVER MODE ===
     // Render to offscreen texture for capture benchmark or VNC streaming
     // In headless mode, always capture (since there's no local display)
+    // VNC: throttle to max 30 FPS to avoid 100% CPU from ScreenUpdate spam
+    static auto lastVncFrame = std::chrono::steady_clock::now();
+    auto vncNow = std::chrono::steady_clock::now();
+    bool vncThrottleOk = std::chrono::duration_cast<std::chrono::milliseconds>(vncNow - lastVncFrame).count() >= 33; // 30 FPS max
+
+    // VNC SERVER PROTOCOL: Only start sending frames AFTER client sends its resize
+    // _vncRequestedWidth/Height are set by onResize callback when client's resize arrives
+    bool vncClientReady = _vncRequestedWidth > 0 && _vncRequestedHeight > 0;
     bool doCapture = (_captureBenchmark && (++_captureSkipCounter % CAPTURE_EVERY_N_FRAMES == 0)) ||
-                     (_vncHeadless && _vncServerMode && _vncServer) ||
-                     (_vncServerMode && _vncServer && _vncServer->hasClients());
+                     (_vncHeadless && _vncServerMode && _vncServer && vncClientReady) ||
+                     (_vncServerMode && _vncServer && _vncServer->hasClients() && vncClientReady && vncThrottleOk);
     // Determine capture size: use VNC requested size if set, otherwise window size
     uint32_t captureW = (_vncServerMode && _vncRequestedWidth > 0) ? _vncRequestedWidth : static_cast<uint32_t>(windowWidth);
     uint32_t captureH = (_vncServerMode && _vncRequestedHeight > 0) ? _vncRequestedHeight : static_cast<uint32_t>(windowHeight);
@@ -1874,6 +1882,7 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
             if (auto res = _vncServer->sendFrame(_captureTexture, captureW, captureH); !res) {
                 ywarn("VNC send failed: {}", res.error().message());
             }
+            lastVncFrame = vncNow;  // Update throttle timestamp
         }
     }
 

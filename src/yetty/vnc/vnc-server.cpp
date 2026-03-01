@@ -217,6 +217,7 @@ void VncServer::stop() {
     }
 
     _clientInputBuffers.clear();
+    _clientSendBuffers.clear();
 }
 
 void VncServer::handleAccept() {
@@ -251,6 +252,7 @@ void VncServer::handleAccept() {
             _clients.push_back(clientFd);
             _clientCount = _clients.size();
             _clientInputBuffers[clientFd] = ClientInputBuffer{};
+            _clientSendBuffers[clientFd] = ClientSendBuffer{};
             _forceFullFrame = true;  // Send full frame to new client
         }
 
@@ -263,22 +265,90 @@ void VncServer::handleAccept() {
 
 Result<void> VncServer::sendToClient(int clientFd, const void* data, size_t size) {
     const uint8_t* ptr = static_cast<const uint8_t*>(data);
+
+    // If send queue has data, append to it (preserve ordering)
+    auto it = _clientSendBuffers.find(clientFd);
+    if (it != _clientSendBuffers.end() && !it->second.queue.empty()) {
+        it->second.queue.insert(it->second.queue.end(), ptr, ptr + size);
+        ydebug("VNC sendToClient: fd={} queued {} bytes (queue has data)", clientFd, size);
+        return Ok();
+    }
+
+    // Try to send directly first
     size_t remaining = size;
     while (remaining > 0) {
-        ssize_t sent = send(clientFd, ptr, remaining, MSG_NOSIGNAL);
-        if (sent <= 0) {
-            if (sent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-                // Buffer full - in async mode we'd need to queue and wait for writable
-                // For now, just skip this client for this frame
-                ywarn("VNC: send would block, dropping frame for fd={}", clientFd);
-                return Err<void>("Send would block");
-            }
-            return Err<void>("Send failed");
+        ssize_t sent = send(clientFd, ptr, remaining, MSG_NOSIGNAL | MSG_DONTWAIT);
+        if (sent > 0) {
+            ptr += sent;
+            remaining -= sent;
+            continue;
         }
-        ptr += sent;
-        remaining -= sent;
+        if (sent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            // Queue remaining data for async send
+            if (it == _clientSendBuffers.end()) {
+                it = _clientSendBuffers.emplace(clientFd, ClientSendBuffer{}).first;
+            }
+            it->second.queue.insert(it->second.queue.end(), ptr, ptr + remaining);
+            ydebug("VNC sendToClient: fd={} queued {} bytes on EAGAIN", clientFd, remaining);
+            updateClientPollEvents(clientFd);
+            return Ok();
+        }
+        // Real error
+        return Err<void>("Send failed: " + std::string(strerror(errno)));
     }
     return Ok();
+}
+
+void VncServer::drainClientSendQueue(int clientFd) {
+    auto it = _clientSendBuffers.find(clientFd);
+    if (it == _clientSendBuffers.end() || it->second.queue.empty()) {
+        return;
+    }
+
+    auto& buf = it->second;
+    while (buf.offset < buf.queue.size()) {
+        size_t remaining = buf.queue.size() - buf.offset;
+        ssize_t sent = send(clientFd, buf.queue.data() + buf.offset, remaining, MSG_NOSIGNAL | MSG_DONTWAIT);
+
+        if (sent <= 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                ydebug("VNC drainClientSendQueue: fd={} EAGAIN, {} bytes remaining", clientFd, remaining);
+                return;
+            }
+            ywarn("VNC drainClientSendQueue: fd={} send failed errno={}", clientFd, errno);
+            buf.queue.clear();
+            buf.offset = 0;
+            updateClientPollEvents(clientFd);
+            return;
+        }
+
+        buf.offset += sent;
+        ydebug("VNC drainClientSendQueue: fd={} sent {} bytes, {} remaining", clientFd, sent, buf.queue.size() - buf.offset);
+    }
+
+    // All sent
+    buf.queue.clear();
+    buf.offset = 0;
+    updateClientPollEvents(clientFd);
+    ydebug("VNC drainClientSendQueue: fd={} queue drained", clientFd);
+}
+
+void VncServer::updateClientPollEvents(int clientFd) {
+    auto pollIt = _clientPollIds.find(clientFd);
+    if (pollIt == _clientPollIds.end()) return;
+
+    auto loopResult = base::EventLoop::instance();
+    if (!loopResult) return;
+    auto loop = *loopResult;
+
+    int events = base::EventLoop::POLL_READABLE;
+
+    auto bufIt = _clientSendBuffers.find(clientFd);
+    if (bufIt != _clientSendBuffers.end() && !bufIt->second.queue.empty()) {
+        events |= base::EventLoop::POLL_WRITABLE;
+    }
+
+    loop->setPollEvents(pollIt->second, events);
 }
 
 Result<void> VncServer::ensureResources(uint32_t width, uint32_t height) {
@@ -819,9 +889,11 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
 
         // Remove dead clients
         for (int fd : deadClients) {
+            unregisterClientPoll(fd);
             close(fd);
             _clients.erase(std::remove(_clients.begin(), _clients.end(), fd), _clients.end());
             _clientInputBuffers.erase(fd);
+            _clientSendBuffers.erase(fd);
             yinfo("VNC client disconnected");
         }
         _clientCount = _clients.size();
@@ -1079,33 +1151,39 @@ void VncServer::unregisterClientPoll(int clientFd) {
 }
 
 Result<bool> VncServer::onEvent(const base::Event& event) {
-    yinfo("VNC SERVER onEvent: type={} clientCount={}", static_cast<int>(event.type), _clientCount.load());
-    if (event.type != base::Event::Type::PollReadable) {
-        return Ok(false);
-    }
+    ydebug("VNC SERVER onEvent: type={} clientCount={}", static_cast<int>(event.type), _clientCount.load());
 
     int fd = event.poll.fd;
-    yinfo("VNC onEvent: PollReadable fd={} serverFd={}", fd, _serverFd);
 
-    // Server socket - accept new connections
-    if (fd == _serverFd) {
+    // Server socket - accept new connections (readable only)
+    if (fd == _serverFd && event.type == base::Event::Type::PollReadable) {
         yinfo("VNC onEvent: accepting new connection");
         handleAccept();
         return Ok(true);
     }
 
-    // Client socket - process input
+    // Client socket - check if it's one of ours
     {
         std::lock_guard<std::mutex> lock(_clientsMutex);
         auto it = std::find(_clients.begin(), _clients.end(), fd);
         if (it == _clients.end()) {
-            ydebug("VNC onEvent: unknown fd={}", fd);
             return Ok(false);
         }
     }
 
-    pollClientInput(fd);
-    return Ok(true);
+    // Handle writable - drain send queue
+    if (event.type == base::Event::Type::PollWritable) {
+        drainClientSendQueue(fd);
+        return Ok(true);
+    }
+
+    // Handle readable - process input
+    if (event.type == base::Event::Type::PollReadable) {
+        pollClientInput(fd);
+        return Ok(true);
+    }
+
+    return Ok(false);
 }
 
 } // namespace yetty::vnc

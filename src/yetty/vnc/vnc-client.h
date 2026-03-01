@@ -55,6 +55,10 @@ public:
     // Callback when frame tiles are received (triggers screen refresh)
     std::function<void()> onFrameReceived;
 
+    // Callback when connection completes (for async connect)
+    // Called AFTER socket is connected - client should send resize here
+    std::function<void()> onConnected;
+
 private:
     void sendInput(const void* data, size_t size);
     void onSocketReadable();

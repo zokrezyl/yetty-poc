@@ -162,6 +162,15 @@ private:
     };
     std::unordered_map<int, ClientInputBuffer> _clientInputBuffers;
 
+    // Per-client send queue for async writes
+    struct ClientSendBuffer {
+        std::vector<uint8_t> queue;
+        size_t offset = 0;
+    };
+    std::unordered_map<int, ClientSendBuffer> _clientSendBuffers;
+    void drainClientSendQueue(int clientFd);
+    void updateClientPollEvents(int clientFd);
+
     // Statistics tracking (per second)
     struct Stats {
         uint32_t tilesSent = 0;
