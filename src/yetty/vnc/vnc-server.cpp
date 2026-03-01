@@ -830,48 +830,103 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
     std::vector<uint8_t> frameData;
     frameData.reserve(64 * 1024);
 
-    FrameHeader fh;
-    fh.magic = FRAME_MAGIC;
-    fh.width = width;
-    fh.height = height;
-    fh.tile_size = TILE_SIZE;
-    fh.num_tiles = numDirty;
+    uint16_t totalTiles = _tilesX * _tilesY;
+    bool useFullFrame = (numDirty > totalTiles / 2);  // > 50% dirty = full frame
 
-    frameData.insert(frameData.end(),
-                     reinterpret_cast<uint8_t*>(&fh),
-                     reinterpret_cast<uint8_t*>(&fh) + sizeof(fh));
+    if (useFullFrame) {
+        // FULL FRAME: encode entire frame as one JPEG
+        _stats.fullUpdates++;
 
-    bool isFullUpdate = (numDirty == _tilesX * _tilesY);
-    if (isFullUpdate) _stats.fullUpdates++;
+        const uint8_t* pixels = _cpuPixels ? _cpuPixels : _gpuReadbackPixels.data();
+        if (!pixels) {
+            return Err<void>("No pixels for full frame encoding");
+        }
 
-    // Encode dirty tiles from CPU framebuffer
-    for (uint16_t ty = 0; ty < _tilesY; ty++) {
-        for (uint16_t tx = 0; tx < _tilesX; tx++) {
-            if (!_dirtyTiles[ty * _tilesX + tx]) continue;
+        unsigned char* jpegBuf = nullptr;
+        unsigned long jpegSize = 0;
+        int result = tjCompress2(
+            static_cast<tjhandle>(_jpegCompressor),
+            const_cast<unsigned char*>(pixels),
+            width, 0, height,
+            TJPF_BGRA,
+            &jpegBuf, &jpegSize,
+            TJSAMP_420, 70,
+            TJFLAG_FASTDCT
+        );
 
-            std::vector<uint8_t> tileData;
-            Encoding enc;
-            if (auto res = encodeTile(tx, ty, tileData, enc); !res) continue;
+        if (result != 0) {
+            if (jpegBuf) tjFree(jpegBuf);
+            return Err<void>("Full frame JPEG compression failed");
+        }
 
-            _stats.tilesSent++;
-            if (enc == Encoding::JPEG) {
-                _stats.tilesJpeg++;
-                _stats.bytesJpeg += tileData.size();
-            } else {
-                _stats.tilesRaw++;
-                _stats.bytesRaw += tileData.size();
+        FrameHeader fh;
+        fh.magic = FRAME_MAGIC;
+        fh.width = width;
+        fh.height = height;
+        fh.tile_size = TILE_SIZE;
+        fh.num_tiles = 1;
+
+        frameData.insert(frameData.end(),
+                         reinterpret_cast<uint8_t*>(&fh),
+                         reinterpret_cast<uint8_t*>(&fh) + sizeof(fh));
+
+        TileHeader th;
+        th.tile_x = 0;
+        th.tile_y = 0;
+        th.encoding = static_cast<uint8_t>(Encoding::FULL_FRAME);
+        th.data_size = jpegSize;
+
+        frameData.insert(frameData.end(),
+                        reinterpret_cast<uint8_t*>(&th),
+                        reinterpret_cast<uint8_t*>(&th) + sizeof(th));
+        frameData.insert(frameData.end(), jpegBuf, jpegBuf + jpegSize);
+
+        _stats.bytesJpeg += jpegSize;
+        tjFree(jpegBuf);
+
+        yinfo("VNC sendFrame: FULL_FRAME {} bytes", jpegSize);
+    } else {
+        // TILE MODE: encode individual dirty tiles
+        FrameHeader fh;
+        fh.magic = FRAME_MAGIC;
+        fh.width = width;
+        fh.height = height;
+        fh.tile_size = TILE_SIZE;
+        fh.num_tiles = numDirty;
+
+        frameData.insert(frameData.end(),
+                         reinterpret_cast<uint8_t*>(&fh),
+                         reinterpret_cast<uint8_t*>(&fh) + sizeof(fh));
+
+        // Encode dirty tiles from CPU framebuffer
+        for (uint16_t ty = 0; ty < _tilesY; ty++) {
+            for (uint16_t tx = 0; tx < _tilesX; tx++) {
+                if (!_dirtyTiles[ty * _tilesX + tx]) continue;
+
+                std::vector<uint8_t> tileData;
+                Encoding enc;
+                if (auto res = encodeTile(tx, ty, tileData, enc); !res) continue;
+
+                _stats.tilesSent++;
+                if (enc == Encoding::JPEG) {
+                    _stats.tilesJpeg++;
+                    _stats.bytesJpeg += tileData.size();
+                } else {
+                    _stats.tilesRaw++;
+                    _stats.bytesRaw += tileData.size();
+                }
+
+                TileHeader th;
+                th.tile_x = tx;
+                th.tile_y = ty;
+                th.encoding = static_cast<uint8_t>(enc);
+                th.data_size = tileData.size();
+
+                frameData.insert(frameData.end(),
+                                reinterpret_cast<uint8_t*>(&th),
+                                reinterpret_cast<uint8_t*>(&th) + sizeof(th));
+                frameData.insert(frameData.end(), tileData.begin(), tileData.end());
             }
-
-            TileHeader th;
-            th.tile_x = tx;
-            th.tile_y = ty;
-            th.encoding = static_cast<uint8_t>(enc);
-            th.data_size = tileData.size();
-
-            frameData.insert(frameData.end(),
-                            reinterpret_cast<uint8_t*>(&th),
-                            reinterpret_cast<uint8_t*>(&th) + sizeof(th));
-            frameData.insert(frameData.end(), tileData.begin(), tileData.end());
         }
     }
 

@@ -11,6 +11,7 @@ enum class Encoding : uint8_t {
     RAW = 0,
     RLE = 1,
     JPEG = 2,
+    FULL_FRAME = 3,  // Entire frame as one JPEG (tile_x=0, tile_y=0, covers whole frame)
 };
 
 #pragma pack(push, 1)

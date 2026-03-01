@@ -403,9 +403,53 @@ void VncClient::onSocketReadable() {
 
                     case Encoding::RLE:
                         break;
+
+                    case Encoding::FULL_FRAME: {
+                        // Full frame JPEG - decompress entire frame
+                        int width, height, subsamp, colorspace;
+                        if (tjDecompressHeader3(static_cast<tjhandle>(_jpegDecompressor),
+                                               _recvBuffer.data(), _currentTile.data_size,
+                                               &width, &height, &subsamp, &colorspace) == 0) {
+                            if (width == static_cast<int>(_width) && height == static_cast<int>(_height)) {
+                                // Decompress directly into full-frame buffer
+                                std::vector<uint8_t> fullFrame(_width * _height * 4);
+                                tjDecompress2(static_cast<tjhandle>(_jpegDecompressor),
+                                             _recvBuffer.data(), _currentTile.data_size,
+                                             fullFrame.data(), _width, 0, _height,
+                                             TJPF_BGRA, TJFLAG_FASTDCT);
+
+                                // Upload entire frame to GPU
+                                if (_texture) {
+                                    WGPUTexelCopyTextureInfo dst = {};
+                                    dst.texture = _texture;
+                                    dst.origin = {0, 0, 0};
+
+                                    WGPUTexelCopyBufferLayout layout = {};
+                                    layout.bytesPerRow = _width * 4;
+                                    layout.rowsPerImage = _height;
+
+                                    WGPUExtent3D size = {_width, _height, 1};
+                                    wgpuQueueWriteTexture(_queue, &dst, fullFrame.data(), fullFrame.size(), &layout, &size);
+                                    yinfo("VNC FULL_FRAME: {}x{} ({} bytes)", _width, _height, _currentTile.data_size);
+                                }
+                            }
+                        }
+                        tilesReceived = true;
+                        _tilesReceived++;
+                        if (_tilesReceived >= _currentFrame.num_tiles) {
+                            _recvState = RecvState::FRAME_HEADER;
+                            _recvNeeded = sizeof(FrameHeader);
+                            _recvOffset = 0;
+                            _recvBuffer.resize(_recvNeeded);
+                        }
+                        break;
+                    }
                 }
 
-                // Upload tile IMMEDIATELY to GPU
+                // Upload tile IMMEDIATELY to GPU (skip for FULL_FRAME - already handled)
+                if (static_cast<Encoding>(_currentTile.encoding) == Encoding::FULL_FRAME) {
+                    break;  // Already uploaded full frame above
+                }
                 if (_texture && _width > 0 && _height > 0) {
                     uint32_t px = _currentTile.tile_x * TILE_SIZE;
                     uint32_t py = _currentTile.tile_y * TILE_SIZE;
