@@ -34,10 +34,14 @@ class Term {
         // Listen for input from yetty
         window.addEventListener('message', (e) => {
             if (e.data.type === 'term-input' && e.data.ptyId == this.ptyId) {
-                termLog("Received term-input: " + e.data.data.length + " chars");
+                var codes = [];
+                for (var ci = 0; ci < e.data.data.length; ci++) codes.push(e.data.data.charCodeAt(ci));
+                termLog("Received term-input: " + e.data.data.length + " chars, codes=[" + codes.join(',') + "]");
                 // Input from yetty keyboard -> send to emulator
                 if (this.keyHandler) {
                     this.keyHandler(e.data.data);
+                } else {
+                    termLog("WARNING: keyHandler not set!");
                 }
             }
             if (e.data.type === 'term-resize' && e.data.ptyId == this.ptyId) {

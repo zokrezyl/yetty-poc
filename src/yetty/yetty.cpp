@@ -332,6 +332,14 @@ Result<void> YettyImpl::initWindow() noexcept {
         return Err<void>("Failed to create window", res);
     }
 
+    // Update initial dimensions with actual window size (may differ from defaults on web)
+    int actualW, actualH;
+    _platform->getWindowSize(actualW, actualH);
+    if (actualW > 0 && actualH > 0) {
+        _initialWidth = static_cast<uint32_t>(actualW);
+        _initialHeight = static_cast<uint32_t>(actualH);
+    }
+
     return Ok();
 }
 
