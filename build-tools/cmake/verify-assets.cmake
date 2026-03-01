@@ -94,6 +94,16 @@ if(TARGET_TYPE STREQUAL "webasm")
     check_file("jslinux/vm-bridge.html" "JSLinux VM bridge")
     check_file("jslinux/term-bridge.js" "JSLinux terminal bridge")
 
+    # VM tools (built for JSLinux Alpine VM)
+    check_dir("vm-tools" "VM tools directory")
+    check_file("vm-tools/yecho" "yecho VM tool")
+    check_file("vm-tools/ycat" "ycat VM tool")
+    check_file("vm-tools/ybrowser" "ybrowser VM tool")
+
+    # vfsync filesystem (Alpine rootfs for JSLinux)
+    check_dir("vfsync/u/os/yetty-alpine" "Alpine vfsync directory")
+    check_file("vfsync/u/os/yetty-alpine/head" "vfsync head file")
+
     # Note: demo directory is preloaded from source into yetty.data, not copied to build dir
 endif()
 

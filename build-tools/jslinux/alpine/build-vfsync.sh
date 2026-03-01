@@ -92,7 +92,12 @@ if [ -d "$YETTY_ROOT/tools" ]; then
     find "$YETTY_ROOT/tools" -maxdepth 1 -name "*.sh" -exec cp {} "$ROOTFS_DIR/usr/local/bin/" \;
 fi
 if [ -d "$BUILD_DIR/vm-tools" ]; then
-    cp "$BUILD_DIR/vm-tools"/* "$ROOTFS_DIR/usr/local/bin/" 2>/dev/null || true
+    for f in "$BUILD_DIR/vm-tools"/*; do
+        case "$f" in
+            *.mgc) mkdir -p "$ROOTFS_DIR/usr/share/misc"; cp "$f" "$ROOTFS_DIR/usr/share/misc/" ;;
+            *)     cp "$f" "$ROOTFS_DIR/usr/local/bin/" 2>/dev/null || true ;;
+        esac
+    done
 fi
 
 mkdir -p "$ROOTFS_DIR/root"
