@@ -37,7 +37,6 @@ target_link_libraries(yetty PRIVATE
     ${YETTY_LIBS}
     glfw
     glfw3webgpu
-    imgui
     args
     ytrace::ytrace
     lz4_static
@@ -50,8 +49,14 @@ target_link_libraries(yetty PRIVATE
 # CDB font generation
 include(${YETTY_ROOT}/build-tools/cmake/cdb-gen.cmake)
 
-# Copy assets
+# Copy runtime assets to build directory
+add_subdirectory(${YETTY_ROOT}/assets ${CMAKE_BINARY_DIR}/assets-build)
+
+# Ensure all runtime assets are in build output before yetty
+add_dependencies(yetty generate-cdb copy-shaders copy-assets)
+
+# Verify all required assets are present
 add_custom_command(TARGET yetty POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory ${YETTY_ROOT}/assets ${CMAKE_BINARY_DIR}/assets
+    COMMAND ${CMAKE_COMMAND} -DBUILD_DIR=${CMAKE_BINARY_DIR} -DTARGET_TYPE=desktop -P ${YETTY_ROOT}/build-tools/cmake/verify-assets.cmake
+    COMMENT "Verifying build assets..."
 )
-configure_file(${YETTY_ROOT}/src/yetty/shaders/gpu-screen.wgsl ${CMAKE_BINARY_DIR}/gpu-screen.wgsl COPYONLY)

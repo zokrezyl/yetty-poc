@@ -13,16 +13,28 @@ public:
     int selectedIndex = 0;
     int hoverOptionIdx = -1;
 
+    bool contains(float px, float py) const override {
+        if (Widget::contains(px, py)) return true;
+        if (isOpen()) {
+            float optH = defaultTheme().rowHeight;
+            float listH = (float)options.size() * optH;
+            return px >= effectiveX && px < effectiveX + w
+                && py >= effectiveY + h && py < effectiveY + h + listH;
+        }
+        return false;
+    }
+
     void render(RenderContext& ctx) override {
-        ctx.box(x, y, w, h, bgColor, 4);
+        auto& t = ctx.theme();
+        ctx.box(x, y, w, h, bgColor, t.radiusMedium);
 
         std::string text = (selectedIndex >= 0 && selectedIndex < (int)options.size())
             ? options[selectedIndex] : "";
-        ctx.text(text, x + 8, y + 4, fgColor);
+        ctx.text(text, x + t.padLarge, y + t.padMedium, fgColor);
 
         // Chevron
-        float arrowSize = 8;
-        float arrowX = x + w - 16 - arrowSize / 2;
+        float arrowSize = t.padLarge;
+        float arrowX = x + w - t.padLarge * 2 - arrowSize / 2;
         float arrowY = y + h / 2;
         if (isOpen()) {
             ctx.triangle(arrowX, arrowY + arrowSize / 3,
@@ -34,37 +46,38 @@ public:
                          arrowX + arrowSize / 2, arrowY + arrowSize / 3, fgColor);
         }
         if (isHover())
-            ctx.boxOutline(x, y, w, h, accentColor, 4);
+            ctx.boxOutline(x, y, w, h, accentColor, t.radiusMedium);
 
         // Render dropdown options when open
         if (isOpen()) {
-            float optH = 24;
+            float optH = t.rowHeight;
             float listH = (float)options.size() * optH;
             float optY = y + h;
-            ctx.box(x, optY, w, listH, 0xFF1E1E2E, 4);
+            ctx.box(x, optY, w, listH, t.bgDropdown, t.radiusMedium);
 
             for (size_t i = 0; i < options.size(); i++) {
                 float oy = optY + i * optH;
-                bool isSelected = ((int)i == selectedIndex);
-                bool isHovered = ((int)i == hoverOptionIdx);
+                bool isSel = ((int)i == selectedIndex);
+                bool isHov = ((int)i == hoverOptionIdx);
 
-                if (isHovered)
-                    ctx.box(x + 2, oy + 2, w - 4, optH - 4, accentColor, 2);
-                else if (isSelected)
-                    ctx.box(x + 2, oy + 2, w - 4, optH - 4, 0xFF2A2A3E, 2);
+                if (isHov)
+                    ctx.box(x + t.padSmall, oy + t.padSmall, w - t.padSmall * 2,
+                            optH - t.padSmall * 2, accentColor, t.radiusSmall);
+                else if (isSel)
+                    ctx.box(x + t.padSmall, oy + t.padSmall, w - t.padSmall * 2,
+                            optH - t.padSmall * 2, t.bgSurface, t.radiusSmall);
 
-                ctx.text(options[i], x + 8, oy + 4, fgColor);
-                if (isSelected)
-                    ctx.text("\xE2\x9C\x93", x + w - 20, oy + 4, accentColor);
+                ctx.text(options[i], x + t.padLarge, oy + t.padMedium, fgColor);
+                if (isSel)
+                    ctx.text("\xE2\x9C\x93", x + w - 20, oy + t.padMedium, accentColor);
             }
         }
     }
 
     std::optional<WidgetEvent> onPress(float localX, float localY) override {
         if (isOpen()) {
-            // Check if clicking on an option
-            float optH = 24;
-            float optY = h; // options start below the button
+            float optH = defaultTheme().rowHeight;
+            float optY = h;
             if (localY >= optY) {
                 int idx = (int)((localY - optY) / optH);
                 if (idx >= 0 && idx < (int)options.size()) {
@@ -72,16 +85,15 @@ public:
                     flags &= ~WIDGET_OPEN;
                     if (!onChange.empty())
                         return WidgetEvent{id, "change", "selected", std::to_string(selectedIndex)};
-                    return {};
+                    return WidgetEvent{id, "press", "", ""};
                 }
             }
-            // Clicked on button itself or outside options — close
             flags &= ~WIDGET_OPEN;
         } else {
             flags |= WIDGET_OPEN;
             hoverOptionIdx = -1;
         }
-        return {};
+        return WidgetEvent{id, "press", "", ""};
     }
 };
 

@@ -570,7 +570,7 @@ public:
     //=========================================================================
 
     float measureTextWidth(const std::string& text,
-                           float fontSize, int fontId) {
+                           float fontSize, int fontId) override {
         int resolvedFontId = fontId;
         if (fontId >= 0) {
             auto it = _userFontIdMap.find(fontId);
@@ -628,7 +628,7 @@ public:
         return width;
     }
 
-    float fontAscent(float fontSize, int fontId) {
+    float fontAscent(float fontSize, int fontId) override {
         auto it = _ttfMetricsCache.find(fontId);
         if (it != _ttfMetricsCache.end()) {
             bool useCustom = (fontId >= 0 && _customAtlas);
@@ -639,7 +639,7 @@ public:
         return fontSize * 0.8f;
     }
 
-    float fontDescent(float fontSize, int fontId) {
+    float fontDescent(float fontSize, int fontId) override {
         auto it = _ttfMetricsCache.find(fontId);
         if (it != _ttfMetricsCache.end()) {
             bool useCustom = (fontId >= 0 && _customAtlas);

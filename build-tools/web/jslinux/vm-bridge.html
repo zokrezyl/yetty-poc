@@ -15,7 +15,7 @@
         // Modified jslinux loader for bridge mode
         "use strict";
 
-        var term, console_write1;
+        var term, console_write1, console_resize_event;
         var net_state, net_write_packet, net_set_carrier;
         var fs_import_file;
 
@@ -29,10 +29,14 @@
         }
 
         function term_handler(str) {
-            log("term_handler called with " + str.length + " chars");
+            var codes = [];
+            for (var j = 0; j < str.length; j++) codes.push(str.charCodeAt(j));
+            log("term_handler: " + str.length + " chars, codes=[" + codes.join(',') + "]");
             var i;
             for(i = 0; i < str.length; i++) {
-                console_write1(str.charCodeAt(i));
+                var code = str.charCodeAt(i);
+                if (code < 32) log("  console_write1(" + code + ") [CONTROL CHAR]");
+                console_write1(code);
             }
         }
 
@@ -139,6 +143,17 @@
                 // Get other exports for network support if needed
                 net_write_packet = Module.cwrap('net_write_packet', null, ['number', 'number']);
                 net_set_carrier = Module.cwrap('net_set_carrier', null, ['number']);
+
+                console_resize_event = Module.cwrap('console_resize_event', null, []);
+                term.setResizeHandler(function(cols, rows) {
+                    log("resizeHandler: " + cols + "x" + rows + " getSize=" + JSON.stringify(term.getSize()));
+                    try {
+                        console_resize_event();
+                        log("console_resize_event() OK");
+                    } catch(e) {
+                        log("ERROR in console_resize_event: " + e);
+                    }
+                });
             } catch(e) {
                 log("ERROR wrapping functions: " + e);
                 term.write("Error wrapping functions: " + e + "\r\n");
@@ -155,14 +170,23 @@
                     ['string', 'number', 'string', 'string', 'number', 'number', 'number', 'string'],
                     [cfg_url, mem, "", "", 0, 0, 0, ""]);
                 log("vm_start returned successfully");
+                setTimeout(function() { console_resize_event(); }, 1000);
             } catch(e) {
                 log("ERROR calling vm_start: " + e);
                 term.write("Error starting VM: " + e + "\r\n");
             }
         }
 
-        // Handle file import requests from parent
+        // Handle messages from parent
         window.addEventListener('message', function(e) {
+            // Direct resize handler as backup - term-bridge also handles this
+            if (e.data.type === 'term-resize') {
+                log("direct term-resize: " + e.data.cols + "x" + e.data.rows +
+                    " termSize=" + JSON.stringify(term ? term.getSize() : null));
+                if (console_resize_event) {
+                    console_resize_event();
+                }
+            }
             if (e.data.type === 'import-file' && fs_import_file) {
                 var path = e.data.path;
                 var data = e.data.data; // Uint8Array

@@ -53,7 +53,8 @@ target_link_options(yetty PRIVATE
     -sWASM_BIGINT
     -sFILESYSTEM=1
     "--preload-file=${CMAKE_BINARY_DIR}/assets@/assets"
-    "--preload-file=${YETTY_ROOT}/demo@/demo"
+    "--preload-file=${CMAKE_BINARY_DIR}/demo@/demo"
+    "--preload-file=${CMAKE_BINARY_DIR}/src@/src"
     "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','UTF8ToString','stringToUTF8','FS','ENV','HEAPU8']"
     "-sEXPORTED_FUNCTIONS=['_main','_malloc','_free','_yetty_write','_yetty_key','_yetty_special_key','_yetty_read_input','_yetty_sync','_yetty_set_scale','_yetty_resize','_yetty_get_cols','_yetty_get_rows','_webpty_on_data']"
 )
@@ -63,9 +64,15 @@ set_target_properties(yetty PROPERTIES SUFFIX ".js")
 
 target_link_libraries(yetty PRIVATE
     ${YETTY_LIBS}
-    imgui
     Freetype::Freetype
     zlibstatic
+)
+
+# Copy demo and source tree to build directory for preloading
+add_custom_command(TARGET yetty PRE_LINK
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${YETTY_ROOT}/demo ${CMAKE_BINARY_DIR}/demo
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${YETTY_ROOT}/src ${CMAKE_BINARY_DIR}/src
+    COMMENT "Copying demo and source tree to build directory"
 )
 
 # Remove stamp file that can cause issues with Emscripten file packaging

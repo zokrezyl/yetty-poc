@@ -8,7 +8,7 @@
 #include <yetty/msdf-cdb-provider.h>
 #include <yetty/shader-manager.h>
 #include <yetty/card-factory.h>
-#include <yetty/imgui-manager.h>
+#include "ygui/ygui-overlay.h"
 #include <yetty/wgpu-compat.h>
 #include <yetty/platform.h>
 #include <yetty/base/base.h>
@@ -19,6 +19,7 @@
 #include "cards/plot/plot-sampler-provider.h"
 #include "cards/plot/plot-transformer-provider.h"
 #include "cards/plot/plot-renderer-provider.h"
+#include <algorithm>
 #include <array>
 #include <iostream>
 #include <csignal>
@@ -127,6 +128,13 @@ private:
     bool _fatalGpuError = false;
     std::string _fatalGpuErrorMsg;
 
+    // Deferred resize — applied at start of next frame to avoid destroying
+    // the surface texture mid-render when resize callbacks fire re-entrantly.
+    bool _pendingResize = false;
+    uint32_t _pendingResizeW = 0;
+    uint32_t _pendingResizeH = 0;
+    bool _inRender = false;  // re-entrancy guard
+
     // FPS tracking
     double _lastFpsTime = 0.0;
     uint32_t _frameCount = 0;
@@ -223,13 +231,14 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     _yettyContext.shaderManager = shaderMgr;
     _yettyContext.fontManager = fontMgr;
 
-    // Create ImguiManager
-    auto imguiMgrResult = ImguiManager::create(_yettyContext);
-    if (!imguiMgrResult) {
-        return Err<void>("Failed to create ImguiManager", imguiMgrResult);
+    // Create YGuiOverlay
+    auto yguiResult = YGuiOverlay::create(_yettyContext);
+    if (!yguiResult) {
+        ywarn("Failed to create YGuiOverlay: {}", yguiResult.error().message());
+    } else {
+        _yettyContext.yguiOverlay = *yguiResult;
+        _yettyContext.yguiOverlay->updateDisplaySize(_surfaceWidth, _surfaceHeight);
     }
-    _yettyContext.imguiManager = *imguiMgrResult;
-    _yettyContext.imguiManager->updateDisplaySize(_surfaceWidth, _surfaceHeight);
 
 #if !defined(__ANDROID__)
     // Create CardFactory (card types registry, no CardBufferManager needed)
@@ -321,6 +330,14 @@ Result<void> YettyImpl::initWindow() noexcept {
 
     if (auto res = _platform->createWindow(_initialWidth, _initialHeight, "yetty"); !res) {
         return Err<void>("Failed to create window", res);
+    }
+
+    // Update initial dimensions with actual window size (may differ from defaults on web)
+    int actualW, actualH;
+    _platform->getWindowSize(actualW, actualH);
+    if (actualW > 0 && actualH > 0) {
+        _initialWidth = static_cast<uint32_t>(actualW);
+        _initialHeight = static_cast<uint32_t>(actualH);
     }
 
     return Ok();
@@ -733,7 +750,7 @@ Result<Workspace::Ptr> YettyImpl::createWorkspace() noexcept {
         return Err<Workspace::Ptr>("Failed to create Workspace", wsResult);
     }
     auto workspace = *wsResult;
-    float statusbarHeight = _yettyContext.imguiManager ? _yettyContext.imguiManager->getStatusbarHeight() : 0.0f;
+    float statusbarHeight = _yettyContext.yguiOverlay ? _yettyContext.yguiOverlay->getStatusbarHeight() : 0.0f;
     workspace->resize(static_cast<float>(_initialWidth), static_cast<float>(_initialHeight) - statusbarHeight);
 
     // Create single pane for debugging
@@ -1099,6 +1116,25 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
         return Err<void>("Fatal GPU error: " + _fatalGpuErrorMsg);
     }
 
+    // Prevent re-entrant rendering (requestRender dispatches ScreenUpdate
+    // synchronously which can re-enter mainLoopIteration)
+    if (_inRender) return Ok();
+
+    // Apply deferred resize before acquiring the surface texture
+    if (_pendingResize) {
+        _pendingResize = false;
+        configureSurface(_pendingResizeW, _pendingResizeH);
+
+        if (_yettyContext.yguiOverlay) {
+            _yettyContext.yguiOverlay->updateDisplaySize(_pendingResizeW, _pendingResizeH);
+        }
+        if (_activeWorkspace) {
+            float statusbarHeight = _yettyContext.yguiOverlay ? _yettyContext.yguiOverlay->getStatusbarHeight() : 0.0f;
+            float wsH = std::max(1.0f, static_cast<float>(_pendingResizeH) - statusbarHeight);
+            _activeWorkspace->resize(static_cast<float>(_pendingResizeW), wsH);
+        }
+    }
+
     auto viewResult = getCurrentTextureView();
     if (!viewResult) return Err<void>("Failed to get texture view");
     WGPUTextureView targetView = *viewResult;
@@ -1132,9 +1168,14 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
         }
     }
 
+    _inRender = true;
+
     WGPUCommandEncoderDescriptor encoderDesc = {};
     WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(_device, &encoderDesc);
-    if (!encoder) return Err<void>("Failed to create command encoder");
+    if (!encoder) {
+        _inRender = false;
+        return Err<void>("Failed to create command encoder");
+    }
 
     WGPURenderPassColorAttachment colorAttachment = {};
     colorAttachment.view = targetView;
@@ -1154,16 +1195,14 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
                 wgpuRenderPassEncoderEnd(pass);
                 wgpuRenderPassEncoderRelease(pass);
                 wgpuCommandEncoderRelease(encoder);
+                _inRender = false;
                 return Err<void>("Workspace render failed", res);
             }
         }
-        // Render ImGui (context menus, etc.) after main content
-        if (_yettyContext.imguiManager) {
-            if (auto res = _yettyContext.imguiManager->render(pass); !res) {
-                wgpuRenderPassEncoderEnd(pass);
-                wgpuRenderPassEncoderRelease(pass);
-                wgpuCommandEncoderRelease(encoder);
-                return Err<void>("ImGui render failed", res);
+        // Render overlay (statusbar, context menus, dialogs)
+        if (_yettyContext.yguiOverlay) {
+            if (auto res = _yettyContext.yguiOverlay->render(pass); !res) {
+                ywarn("YGuiOverlay render failed: {}", res.error().message());
             }
         }
         wgpuRenderPassEncoderEnd(pass);
@@ -1179,6 +1218,7 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
     wgpuCommandEncoderRelease(encoder);
 
     present();
+    _inRender = false;
 
     // Check if GPU error occurred during this frame
     if (_fatalGpuError) {
@@ -1189,9 +1229,8 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
     double fpsNow = _platform->getTime();
     if (fpsNow - _lastFpsTime >= 1.0) {
         yinfo("FPS: {}", _frameCount);
-        if (_yettyContext.imguiManager) {
-            _yettyContext.imguiManager->setFps(_frameCount);
-        }
+        if (_yettyContext.yguiOverlay)
+            _yettyContext.yguiOverlay->setFps(_frameCount);
         _frameCount = 0;
         _lastFpsTime = fpsNow;
     }
@@ -1217,17 +1256,28 @@ void YettyImpl::handleResize(int newWidth, int newHeight) noexcept {
     float logicalW = (windowWidth > 0) ? static_cast<float>(windowWidth) : static_cast<float>(newWidth);
     float logicalH = (windowHeight > 0) ? static_cast<float>(windowHeight) : static_cast<float>(newHeight);
 
-    // Surface uses logical size — Dawn handles physical backing automatically
-    configureSurface(static_cast<uint32_t>(logicalW), static_cast<uint32_t>(logicalH));
+    uint32_t w = static_cast<uint32_t>(logicalW);
+    uint32_t h = static_cast<uint32_t>(logicalH);
 
-    if (_yettyContext.imguiManager) {
-        _yettyContext.imguiManager->updateDisplaySize(
-            static_cast<uint32_t>(logicalW), static_cast<uint32_t>(logicalH));
+    if (_inRender) {
+        // Defer surface reconfiguration — applying it now would destroy the
+        // texture that the current frame is rendering into.
+        _pendingResize = true;
+        _pendingResizeW = w;
+        _pendingResizeH = h;
+        return;
     }
 
+    // Safe to reconfigure immediately (not inside a render)
+    configureSurface(w, h);
+
+    if (_yettyContext.yguiOverlay) {
+        _yettyContext.yguiOverlay->updateDisplaySize(w, h);
+    }
     if (_activeWorkspace) {
-        float statusbarHeight = _yettyContext.imguiManager ? _yettyContext.imguiManager->getStatusbarHeight() : 0.0f;
-        _activeWorkspace->resize(logicalW, logicalH - statusbarHeight);
+        float statusbarHeight = _yettyContext.yguiOverlay ? _yettyContext.yguiOverlay->getStatusbarHeight() : 0.0f;
+        float wsH = std::max(1.0f, logicalH - statusbarHeight);
+        _activeWorkspace->resize(logicalW, wsH);
     }
 }
 

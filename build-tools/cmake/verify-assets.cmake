@@ -94,6 +94,8 @@ if(TARGET_TYPE STREQUAL "webasm")
     check_file("jslinux/vm-bridge.html" "JSLinux VM bridge")
     check_file("jslinux/term-bridge.js" "JSLinux terminal bridge")
 
+    # Note: vm-tools and vfsync are checked by Makefile verify-webasm target (built after cmake)
+
     # Note: demo directory is preloaded from source into yetty.data, not copied to build dir
 endif()
 
@@ -103,11 +105,12 @@ endif()
 if(TARGET_TYPE STREQUAL "desktop")
     message(STATUS "Checking Desktop assets...")
 
-    # Executable
-    check_file("yetty" "Yetty executable")
-
-    # Demo directory
-    check_dir("demo" "Demo scripts directory")
+    # Executable (MSVC puts it in Release/yetty.exe)
+    if(WIN32)
+        check_file("Release/yetty.exe" "Yetty executable")
+    else()
+        check_file("yetty" "Yetty executable")
+    endif()
 endif()
 
 #-----------------------------------------------------------------------------

@@ -158,6 +158,9 @@
                     }
                 }, 500);
                 resizeCanvas();
+                // Retry after yetty main loop starts and resize callback is registered
+                setTimeout(resizeCanvas, 1000);
+                setTimeout(resizeCanvas, 2000);
             }
         };
 

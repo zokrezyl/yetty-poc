@@ -1,8 +1,4 @@
 #!/bin/bash
-#
-# Build a minimal vfsync filesystem for GitHub Pages
-#
-
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -15,70 +11,65 @@ else
 fi
 OUTPUT_DIR="$BUILD_DIR/vfsync/u/os/yetty-alpine"
 TOOL_BUILD_DIR="$BUILD_DIR/_vfsync-build"
+ROOTFS_DIR="$TOOL_BUILD_DIR/rootfs"
 
 TINYEMU_URL="https://bellard.org/tinyemu/tinyemu-2019-12-21.tar.gz"
-ALPINE_URL="https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/x86_64/alpine-minirootfs-3.21.3-x86_64.tar.gz"
+DOCKER_IMAGE="yetty-alpine-rootfs"
 
 echo "=============================================="
-echo "Building vfsync filesystem for GitHub Pages"
+echo "Building Alpine vfsync filesystem (Docker)"
 echo "=============================================="
 echo "Build dir: $BUILD_DIR"
 echo "Output: $OUTPUT_DIR"
 echo ""
 
 mkdir -p "$TOOL_BUILD_DIR"
-cd "$TOOL_BUILD_DIR"
 
 # Step 1: Build build_filelist tool
 echo "=== Step 1: Building build_filelist tool ==="
 if [ ! -f "$TOOL_BUILD_DIR/build_filelist" ]; then
     if [ ! -d "$TOOL_BUILD_DIR/tinyemu-2019-12-21" ]; then
         echo "Downloading TinyEMU..."
-        curl -sL "$TINYEMU_URL" -o tinyemu.tar.gz
-        tar xzf tinyemu.tar.gz
-        rm tinyemu.tar.gz
+        curl -sL "$TINYEMU_URL" -o "$TOOL_BUILD_DIR/tinyemu.tar.gz"
+        tar xzf "$TOOL_BUILD_DIR/tinyemu.tar.gz" -C "$TOOL_BUILD_DIR"
+        rm "$TOOL_BUILD_DIR/tinyemu.tar.gz"
     fi
     echo "Compiling build_filelist..."
-    cd "$TOOL_BUILD_DIR/tinyemu-2019-12-21"
-    gcc -o "$TOOL_BUILD_DIR/build_filelist" build_filelist.c fs_utils.c cutils.c -I.
-    echo "Done: $TOOL_BUILD_DIR/build_filelist"
+    gcc -o "$TOOL_BUILD_DIR/build_filelist" \
+        "$TOOL_BUILD_DIR/tinyemu-2019-12-21/build_filelist.c" \
+        "$TOOL_BUILD_DIR/tinyemu-2019-12-21/fs_utils.c" \
+        "$TOOL_BUILD_DIR/tinyemu-2019-12-21/cutils.c" \
+        -I"$TOOL_BUILD_DIR/tinyemu-2019-12-21"
 else
     echo "build_filelist already exists"
 fi
-cd "$TOOL_BUILD_DIR"
 
-# Step 2: Download Alpine minirootfs
+# Step 2: Build Docker image and export rootfs
 echo ""
-echo "=== Step 2: Downloading Alpine minirootfs ==="
-ROOTFS_DIR="$TOOL_BUILD_DIR/rootfs"
-if [ ! -d "$ROOTFS_DIR" ]; then
-    mkdir -p "$ROOTFS_DIR"
-    echo "Downloading Alpine minirootfs..."
-    curl -sL "$ALPINE_URL" -o alpine.tar.gz
-    echo "Extracting..."
-    cd "$ROOTFS_DIR"
-    tar xzf "$TOOL_BUILD_DIR/alpine.tar.gz"
-    rm "$TOOL_BUILD_DIR/alpine.tar.gz"
-    echo "Done: $ROOTFS_DIR"
-else
-    echo "rootfs already exists"
+echo "=== Step 2: Building Alpine rootfs via Docker ==="
+if [ -d "$ROOTFS_DIR" ]; then
+    chmod -R u+w "$ROOTFS_DIR" 2>/dev/null || true
+    rm -rf "$ROOTFS_DIR"
 fi
-cd "$TOOL_BUILD_DIR"
+mkdir -p "$ROOTFS_DIR"
 
-# Step 3: Add demo directory
+docker build -t "$DOCKER_IMAGE" "$SCRIPT_DIR"
+CONTAINER_ID=$(docker create "$DOCKER_IMAGE")
+docker export "$CONTAINER_ID" | tar x -C "$ROOTFS_DIR"
+docker rm "$CONTAINER_ID" > /dev/null
+
+# Step 3: Add yetty content
 echo ""
-echo "=== Step 3: Adding demo files ==="
+echo "=== Step 3: Adding yetty files ==="
+
+# Demo files
 if [ -d "$YETTY_ROOT/demo" ]; then
     mkdir -p "$ROOTFS_DIR/home/demo"
     cp -r "$YETTY_ROOT/demo/"* "$ROOTFS_DIR/home/demo/" 2>/dev/null || true
     echo "Copied demo/ to /home/demo/"
-else
-    echo "Warning: demo/ directory not found"
 fi
 
-# Step 3b: Add source tree
-echo ""
-echo "=== Step 3b: Adding source tree ==="
+# Source tree
 mkdir -p "$ROOTFS_DIR/home/src"
 for dir in src include build-tools assets; do
     if [ -d "$YETTY_ROOT/$dir" ]; then
@@ -86,52 +77,55 @@ for dir in src include build-tools assets; do
         echo "Copied $dir/ to /home/src/$dir/"
     fi
 done
-# Copy top-level build files
 for f in CMakeLists.txt Makefile flake.nix flake.lock; do
-    if [ -f "$YETTY_ROOT/$f" ]; then
-        cp "$YETTY_ROOT/$f" "$ROOTFS_DIR/home/src/"
-    fi
+    [ -f "$YETTY_ROOT/$f" ] && cp "$YETTY_ROOT/$f" "$ROOTFS_DIR/home/src/"
 done
-echo "Source tree available at /home/src/"
 
-# Step 3c: Add pre-generated demo outputs
+# Pre-generated demo outputs
 if [ -d "$BUILD_DIR/demo-output" ]; then
     cp -r "$BUILD_DIR/demo-output" "$ROOTFS_DIR/home/demo/output"
-    echo "Copied demo-output/ to /home/demo/output/"
-else
-    echo "Warning: demo-output/ not found (run cmake build first)"
 fi
 
-# Step 4: Add tools executables
-echo ""
-echo "=== Step 4: Adding tools executables ==="
+# Tools
 mkdir -p "$ROOTFS_DIR/usr/local/bin"
-
-# Copy shell scripts from tools/
 if [ -d "$YETTY_ROOT/tools" ]; then
     find "$YETTY_ROOT/tools" -maxdepth 1 -name "*.sh" -exec cp {} "$ROOTFS_DIR/usr/local/bin/" \;
-    echo "Copied shell scripts from tools/"
 fi
-
-# Copy static VM tools (built by cmake)
 if [ -d "$BUILD_DIR/vm-tools" ]; then
-    cp -v "$BUILD_DIR/vm-tools"/* "$ROOTFS_DIR/usr/local/bin/" 2>/dev/null || true
-    echo "Copied VM tools from $BUILD_DIR/vm-tools/"
+    for f in "$BUILD_DIR/vm-tools"/*; do
+        case "$f" in
+            *.mgc) mkdir -p "$ROOTFS_DIR/usr/share/misc"; cp "$f" "$ROOTFS_DIR/usr/share/misc/" ;;
+            *)     cp "$f" "$ROOTFS_DIR/usr/local/bin/" 2>/dev/null || true ;;
+        esac
+    done
 fi
 
-# Step 5: Create simple init system
+mkdir -p "$ROOTFS_DIR/root"
+
+# Step 4: Init system
 echo ""
-echo "=== Step 5: Creating simple init system ==="
+echo "=== Step 4: Creating init system ==="
 rm -f "$ROOTFS_DIR/sbin/init"
 cat > "$ROOTFS_DIR/sbin/init" << 'INITEOF'
 #!/bin/sh
 mount -t proc proc /proc
 mount -t sysfs sys /sys
 mount -t devtmpfs dev /dev 2>/dev/null || true
+exec </dev/hvc0 >/dev/hvc0 2>&1
+mount -t tmpfs tmpfs /tmp
+mount -t tmpfs tmpfs /var
+mount -t tmpfs tmpfs /run
+mount -t tmpfs tmpfs /root
+mkdir -p /var/log /var/tmp
 hostname yetty
-clear
+export HOME=/root
+export TERM=xterm-256color
+stty sane rows 24 cols 80 2>/dev/null
+cd /root
 cat /etc/motd
-exec /bin/sh
+while true; do
+    setsid -c /bin/bash -l </dev/hvc0 >/dev/hvc0 2>&1
+done
 INITEOF
 chmod +x "$ROOTFS_DIR/sbin/init"
 
@@ -145,26 +139,25 @@ Tools:       /usr/local/bin/
 
 EOF
 
-# Step 6: Build vfsync filesystem
+# Step 5: Build vfsync filesystem
 echo ""
-echo "=== Step 6: Building vfsync filesystem ==="
+echo "=== Step 5: Building vfsync filesystem ==="
 mkdir -p "$OUTPUT_DIR"
 rm -rf "$OUTPUT_DIR"/*
-"$TOOL_BUILD_DIR/build_filelist" -m 500 "$ROOTFS_DIR" "$OUTPUT_DIR"
+"$TOOL_BUILD_DIR/build_filelist" -m 2000 "$ROOTFS_DIR" "$OUTPUT_DIR"
 
-# Step 7: Create config file
+# Step 6: Create config
 echo ""
-echo "=== Step 7: Creating JSLinux config ==="
+echo "=== Step 6: Creating JSLinux config ==="
 mkdir -p "$BUILD_DIR/jslinux"
 cat > "$BUILD_DIR/jslinux/yetty-alpine.cfg" << 'EOF'
-/* Yetty Alpine - minimal filesystem for GitHub Pages */
 {
     version: 1,
     machine: "pc",
     memory_size: 256,
     kernel: "kernel-x86_64.bin",
     cmdline: "loglevel=3 console=hvc0 root=root rootfstype=9p rootflags=trans=virtio ro TZ=${TZ}",
-    fs0: { file: "vfsync/u/os/yetty-alpine" },
+    fs0: { file: "../vfsync/u/os/yetty-alpine" },
     eth0: { driver: "user" },
 }
 EOF
@@ -172,6 +165,4 @@ EOF
 echo ""
 echo "=== Done! ==="
 echo "Filesystem: $OUTPUT_DIR"
-ls -la "$OUTPUT_DIR/"
-cat "$OUTPUT_DIR/head"
 du -sh "$OUTPUT_DIR"

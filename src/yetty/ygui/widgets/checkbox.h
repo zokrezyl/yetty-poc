@@ -10,13 +10,14 @@ public:
     std::string label;
 
     void render(RenderContext& ctx) override {
+        auto& t = ctx.theme();
         float boxSize = 16;
-        ctx.box(x, y + 2, boxSize, boxSize, bgColor, 2);
+        ctx.box(x, y + t.padSmall, boxSize, boxSize, bgColor, t.radiusSmall);
         if (isChecked())
-            ctx.box(x + 3, y + 5, boxSize - 6, boxSize - 6, accentColor, 2);
-        ctx.text(label, x + boxSize + 8, y + 2, fgColor);
+            ctx.box(x + 3, y + t.padSmall + 3, boxSize - 6, boxSize - 6, accentColor, t.radiusSmall);
+        ctx.text(label, x + boxSize + t.padLarge, y + t.padSmall, fgColor);
         if (isHover())
-            ctx.boxOutline(x, y + 2, boxSize, boxSize, accentColor, 2);
+            ctx.boxOutline(x, y + t.padSmall, boxSize, boxSize, accentColor, t.radiusSmall);
     }
 
     std::optional<WidgetEvent> onPress(float localX, float localY) override {

@@ -55,11 +55,19 @@ docker run --rm \
 # Verify output
 echo ""
 echo "=== Results ==="
-if [ -f "$BUILD_DIR/vm-tools/yecho" ]; then
-    echo "SUCCESS: Built $BUILD_DIR/vm-tools/yecho"
-    file "$BUILD_DIR/vm-tools/yecho"
-    ls -la "$BUILD_DIR/vm-tools/"
-else
-    echo "ERROR: Build failed - yecho not found"
+FAILED=0
+for tool in yecho ycat ybrowser; do
+    if [ -f "$BUILD_DIR/vm-tools/$tool" ]; then
+        echo "OK: $tool"
+        file "$BUILD_DIR/vm-tools/$tool"
+    else
+        echo "MISSING: $tool"
+        FAILED=1
+    fi
+done
+echo ""
+ls -la "$BUILD_DIR/vm-tools/"
+if [ "$FAILED" -ne 0 ]; then
+    echo "ERROR: Some tools failed to build"
     exit 1
 fi

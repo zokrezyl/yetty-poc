@@ -13,8 +13,9 @@ if(NOT YETTY_ANDROID AND NOT EMSCRIPTEN)
 endif()
 
 # Ymery test tool - standalone ImGui/OpenGL3 app that loads YAML layouts (optional)
+# Requires imgui (removed from main build). Only builds if imgui is fetched separately.
 find_package(OpenGL QUIET)
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/ymery/test.cpp" AND OpenGL_FOUND)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/ymery/test.cpp" AND OpenGL_FOUND AND TARGET imgui)
 add_executable(ymery-test
     ymery/test.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/ymery/types.cpp

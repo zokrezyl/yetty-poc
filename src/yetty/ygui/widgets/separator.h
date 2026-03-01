@@ -7,8 +7,9 @@ namespace yetty::ygui {
 class Separator : public Widget {
 public:
     void render(RenderContext& ctx) override {
+        auto& t = ctx.theme();
         float lineY = y + h / 2;
-        ctx.box(x, lineY - 1, w, 2, 0xFF444455, 0);
+        ctx.box(x, lineY - t.separatorSize, w, t.separatorSize * 2, t.border, 0);
     }
 };
 
