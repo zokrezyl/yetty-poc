@@ -48,7 +48,6 @@ target_link_libraries(yetty PRIVATE
     glfw
     glfw3webgpu
     imgui
-    args
     ytrace::ytrace
     lz4_static
     uv_a
@@ -101,6 +100,12 @@ option(YETTY_BUILD_YFLAME_TESTS "Build yflame flamegraph tests" ON)
 if(YETTY_BUILD_YFLAME_TESTS)
     enable_testing()
     add_subdirectory(${YETTY_ROOT}/test/ut/yflame ${CMAKE_BINARY_DIR}/test/ut/yflame)
+endif()
+
+option(YETTY_BUILD_VNC_TESTS "Build VNC protocol tests" ON)
+if(YETTY_BUILD_VNC_TESTS)
+    enable_testing()
+    add_subdirectory(${YETTY_ROOT}/test/ut/vnc ${CMAKE_BINARY_DIR}/test/ut/vnc)
 endif()
 
 # Tools (ycat, yecho, ydraw-maze, ydraw-zoo, etc.)

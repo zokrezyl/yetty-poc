@@ -35,10 +35,6 @@ target_compile_definitions(yetty PRIVATE
 
 set_target_properties(yetty PROPERTIES ENABLE_EXPORTS TRUE)
 
-# Shared renderer sources (add after yetty target exists)
-add_subdirectory(${YETTY_ROOT}/src/yetty/ydraw-zoo ${CMAKE_BINARY_DIR}/src/yetty/ydraw-zoo)
-add_subdirectory(${YETTY_ROOT}/src/yetty/ydraw-maze ${CMAKE_BINARY_DIR}/src/yetty/ydraw-maze)
-
 # Core Text for font discovery
 find_library(CORETEXT_LIBRARY CoreText REQUIRED)
 find_library(COREFOUNDATION_LIBRARY CoreFoundation REQUIRED)
@@ -48,7 +44,6 @@ target_link_libraries(yetty PRIVATE
     glfw
     glfw3webgpu
     imgui
-    args
     ytrace::ytrace
     lz4_static
     uv_a

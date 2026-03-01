@@ -2697,19 +2697,15 @@ void GPUScreenImpl::clearCell(int row, int col) {
 
 void GPUScreenImpl::colorToRGB(const VTermColor &color, uint8_t &r, uint8_t &g,
                                uint8_t &b) {
-  const char* colorType = "UNKNOWN";
   if (VTERM_COLOR_IS_DEFAULT_FG(&color)) {
-    colorType = "DEFAULT_FG";
     r = defaultFg_.rgb.red;
     g = defaultFg_.rgb.green;
     b = defaultFg_.rgb.blue;
   } else if (VTERM_COLOR_IS_DEFAULT_BG(&color)) {
-    colorType = "DEFAULT_BG";
     r = defaultBg_.rgb.red;
     g = defaultBg_.rgb.green;
     b = defaultBg_.rgb.blue;
   } else if (VTERM_COLOR_IS_INDEXED(&color)) {
-    colorType = "INDEXED";
     VTermColor rgb = color;
     if (state_) {
       vterm_state_convert_color_to_rgb(state_, &rgb);
@@ -2718,19 +2714,9 @@ void GPUScreenImpl::colorToRGB(const VTermColor &color, uint8_t &r, uint8_t &g,
     g = rgb.rgb.green;
     b = rgb.rgb.blue;
   } else {
-    colorType = "RGB";
     r = color.rgb.red;
     g = color.rgb.green;
     b = color.rgb.blue;
-  }
-
-  // Debug: log non-default color conversions
-  static int colorDebugCount = 0;
-  bool isNonDefault = !VTERM_COLOR_IS_DEFAULT_FG(&color) && !VTERM_COLOR_IS_DEFAULT_BG(&color);
-  if (colorDebugCount < 50 && isNonDefault) {
-    colorDebugCount++;
-    yinfo("colorToRGB: type={} idx={} -> RGB({},{},{})",
-          colorType, color.indexed.idx, r, g, b);
   }
 }
 
@@ -2742,12 +2728,6 @@ int GPUScreenImpl::onPutglyph(VTermGlyphInfo *info, VTermPos pos, void *user) {
   auto *self = static_cast<GPUScreenImpl *>(user);
 
   uint32_t cp = info->chars[0];
-
-  // Debug: log all high codepoints (above BMP)
-  if (cp >= 0x10000) {
-    yinfo(">>> onPutglyph: HIGH CODEPOINT cp={:#x} pos=({},{})", cp, pos.row, pos.col);
-  }
-
   if (cp == 0)
     cp = ' ';
 
@@ -2756,39 +2736,26 @@ int GPUScreenImpl::onPutglyph(VTermGlyphInfo *info, VTermPos pos, void *user) {
   uint8_t fontType = FONT_TYPE_MSDF; // Default to MSDF text
 
   if (isVectorGlyph(cp)) {
-    // Vector SDF font glyphs
     fontType = FONT_TYPE_VECTOR;
-    glyphIdx = cp;  // Shader uses codepoint directly
+    glyphIdx = cp;
   } else if (isCoverageGlyph(cp)) {
-    // Vector Coverage font glyphs
     fontType = FONT_TYPE_COVERAGE;
-    glyphIdx = cp;  // Shader uses codepoint directly
+    glyphIdx = cp;
   } else if (isRasterGlyph(cp)) {
-    // Raster font glyphs (texture atlas)
     fontType = FONT_TYPE_RASTER;
-    glyphIdx = cp;  // Shader uses codepoint directly, converts to index
+    glyphIdx = cp;
   } else if (isCardGlyph(cp)) {
-    // Card glyphs (multi-cell widgets)
     fontType = FONT_TYPE_CARD;
     glyphIdx = self->_cardFont ? self->_cardFont->getGlyphIndex(cp) : cp;
-    yinfo(">>> CARD GLYPH: cp={:#x} glyphIdx={} _cardFont={} pos=({},{})",
-          cp, glyphIdx, (void*)self->_cardFont.get(), pos.row, pos.col);
   } else if (isShaderGlyph(cp)) {
-    // Shader glyphs (single-cell animated)
     fontType = FONT_TYPE_SHADER;
-    glyphIdx =
-        self->_shaderGlyphFont ? self->_shaderGlyphFont->getGlyphIndex(cp) : cp;
-    yinfo(">>> SHADER GLYPH: cp={:#x} glyphIdx={} _shaderGlyphFont={} pos=({},{})",
-          cp, glyphIdx, (void*)self->_shaderGlyphFont.get(), pos.row, pos.col);
+    glyphIdx = self->_shaderGlyphFont ? self->_shaderGlyphFont->getGlyphIndex(cp) : cp;
   } else if (isEmoji(cp) && self->_bitmapFont) {
-    // Emoji - render from bitmap font atlas
     fontType = FONT_TYPE_BITMAP;
     glyphIdx = self->_bitmapFont->getGlyphIndex(cp);
   } else if (self->_msdfFont) {
-    // Regular text - get glyph from MSDF font
     fontType = FONT_TYPE_MSDF;
-    glyphIdx =
-        self->_msdfFont->getGlyphIndex(cp, self->_pen.bold, self->_pen.italic);
+    glyphIdx = self->_msdfFont->getGlyphIndex(cp, self->_pen.bold, self->_pen.italic);
   } else {
     fontType = FONT_TYPE_MSDF;
     glyphIdx = cp;
@@ -2798,17 +2765,6 @@ int GPUScreenImpl::onPutglyph(VTermGlyphInfo *info, VTermPos pos, void *user) {
   uint8_t fgR, fgG, fgB, bgR, bgG, bgB;
   self->colorToRGB(self->_pen.fg, fgR, fgG, fgB);
   self->colorToRGB(self->_pen.bg, bgR, bgG, bgB);
-
-  // Debug: log first few colored glyphs with bold state
-  static int debugCount = 0;
-  bool hasColor = (bgR != 0 || bgG != 0 || bgB != 0) ||
-                  (fgR != 240 || fgG != 240 || fgB != 240);
-  if (debugCount < 10 && hasColor) {
-    debugCount++;
-    yinfo("onPutglyph: '{}' glyph={} bold={} fg=({},{},{}) fontType={}",
-          (cp >= 32 && cp < 127) ? static_cast<char>(cp) : '?', glyphIdx,
-          self->_pen.bold, fgR, fgG, fgB, fontType);
-  }
 
   if (self->_pen.reverse) {
     std::swap(fgR, bgR);
@@ -2825,17 +2781,7 @@ int GPUScreenImpl::onPutglyph(VTermGlyphInfo *info, VTermPos pos, void *user) {
   attrsByte |= (self->_pen.underline & 0x03) << 2;
   if (self->_pen.strike)
     attrsByte |= 0x10;
-  attrsByte |= (fontType & 0x07) << 5; // Pack font type into bits 5-7
-
-  // Debug card glyph cells
-  if (fontType == FONT_TYPE_CARD) {
-    uint32_t cellSlotIndex = fgR | (static_cast<uint32_t>(fgG) << 8) | (static_cast<uint32_t>(fgB) << 16);
-    uint32_t bg24 = bgR | (static_cast<uint32_t>(bgG) << 8) | (static_cast<uint32_t>(bgB) << 16);
-    int relCol = bg24 & 0xFFF;
-    int relRow = (bg24 >> 12) & 0xFFF;
-    ydebug("CARD CELL: pos=({},{}) glyph={:#x} glyphIdx={} slotIndex={} relPos=({},{}) attrs={:#x}",
-           pos.row, pos.col, cp, glyphIdx, cellSlotIndex, relRow, relCol, attrsByte);
-  }
+  attrsByte |= (fontType & 0x07) << 5;
 
   self->setCell(pos.row, pos.col, glyphIdx, fgR, fgG, fgB, bgR, bgG, bgB,
                 attrsByte);

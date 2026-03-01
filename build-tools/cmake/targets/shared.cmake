@@ -16,6 +16,7 @@ include(${YETTY_ROOT}/build-tools/cmake/libs/webgpu.cmake)
 include(${YETTY_ROOT}/build-tools/cmake/libs/vterm.cmake)
 include(${YETTY_ROOT}/build-tools/cmake/libs/zlib.cmake)
 include(${YETTY_ROOT}/build-tools/cmake/libs/libpng.cmake)
+include(${YETTY_ROOT}/build-tools/cmake/libs/libjpeg-turbo.cmake)
 include(${YETTY_ROOT}/build-tools/cmake/libs/msdfgen.cmake)
 include(${YETTY_ROOT}/build-tools/cmake/libs/cdb.cmake)
 
@@ -23,6 +24,7 @@ include(${YETTY_ROOT}/build-tools/cmake/libs/cdb.cmake)
 set(YETTY_INCLUDES
     ${YETTY_ROOT}/src
     ${YETTY_ROOT}/include
+    ${JPEG_INCLUDE_DIRS}
 )
 
 # Common compile definitions
@@ -41,6 +43,7 @@ set(YETTY_LIBS
     msdfgen::msdfgen-core
     msdfgen::msdfgen-ext
     cdb-wrapper
+    turbojpeg-static
     yetty_base
     yetty_font
     yetty_yecho
@@ -50,5 +53,7 @@ set(YETTY_LIBS
     yetty_cards
     yetty_yast
     msdf-wgsl
+    yetty_vnc
+    args
 )
 

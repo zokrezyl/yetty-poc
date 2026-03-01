@@ -27,6 +27,7 @@ struct Event {
         Resize,
         // Poll
         PollReadable,
+        PollWritable,
         // Timer
         Timer,
         // Context menu

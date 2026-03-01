@@ -22,7 +22,12 @@
 #include <array>
 #include <iostream>
 #include <csignal>
+#include <cstring>
 #include <ytrace/ytrace.hpp>
+#include <turbojpeg.h>
+#include <args.hxx>
+#include "vnc/vnc-client.h"
+#include "vnc/vnc-server.h"
 
 #if defined(__EMSCRIPTEN__)
 #include <emscripten.h>
@@ -55,6 +60,10 @@ private:
     void configureSurface(uint32_t width, uint32_t height) noexcept;
     Result<WGPUTextureView> getCurrentTextureView() noexcept;
     void present() noexcept;
+
+    // Capture benchmark helpers
+    Result<void> ensureCaptureResources(uint32_t width, uint32_t height) noexcept;
+    Result<void> performFrameCapture(WGPUCommandEncoder encoder) noexcept;
 
 #if !YETTY_WEB && !defined(__ANDROID__)
     void initEventLoop() noexcept;
@@ -137,6 +146,45 @@ private:
     // Command line options
     std::string _executeCommand;
     std::string _msdfProviderName = "cpu";  // "cpu" or "gpu"
+
+    // Frame capture benchmark mode
+    bool _captureBenchmark = false;
+    WGPUTexture _captureTexture = nullptr;
+    WGPUTextureView _captureTextureView = nullptr;
+    WGPUBuffer _captureReadbackBuffer = nullptr;
+    uint32_t _captureWidth = 0;
+    uint32_t _captureHeight = 0;
+    uint32_t _captureReadbackSize = 0;
+    tjhandle _jpegCompressor = nullptr;
+    std::vector<uint8_t> _capturePixels;
+
+    // Capture statistics (ytrace handles timing, we just track JPEG sizes)
+    uint64_t _captureFrameCount = 0;
+    uint64_t _totalCompressedBytes = 0;
+    uint64_t _captureSkipCounter = 0;
+    static constexpr uint64_t CAPTURE_EVERY_N_FRAMES = 5;  // Only capture every 5th frame
+
+    // VNC client mode
+    bool _vncClientMode = false;
+    std::string _vncHost;
+    uint16_t _vncPort = 5900;
+    vnc::VncClient::Ptr _vncClient;
+
+    // VNC server mode
+    bool _vncServerMode = false;
+    bool _vncHeadless = false;  // No local rendering, only serve to VNC clients
+    uint16_t _vncServerPort = 5900;
+    std::shared_ptr<vnc::VncServer> _vncServer;
+    uint32_t _vncRequestedWidth = 0;   // Client-requested capture size
+    uint32_t _vncRequestedHeight = 0;
+
+    // VNC test mode - generates test patterns instead of PTY
+    bool _vncTestMode = false;
+    std::string _vncTestPattern = "text";  // text, color, scroll, stress
+    int _vncTestFrame = 0;
+
+    // Prevent recursive render
+    bool _inRender = false;
 
     static YettyImpl* s_instance;
 };
@@ -275,11 +323,16 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     }
 #endif
 
-    if (auto res = initWorkspace(); !res) return res;
+    // Skip workspace/PTY creation in VNC client mode - we just display remote frames
+    if (!_vncClientMode) {
+        if (auto res = initWorkspace(); !res) return res;
+    }
 
 #if !YETTY_WEB && !defined(__ANDROID__)
     // Register workspace handlers now that workspace exists
-    rpc::registerWorkspaceHandlers(*_rpcServer, _activeWorkspace);
+    if (_activeWorkspace) {
+        rpc::registerWorkspaceHandlers(*_rpcServer, _activeWorkspace);
+    }
 
     // Register stream handlers (uses GPUScreenManager singleton)
     rpc::registerStreamHandlers(*_rpcServer);
@@ -295,29 +348,324 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     s_instance = this;
     _lastFpsTime = _platform->getTime();
 
+    // Initialize capture benchmark mode if enabled
+    if (_captureBenchmark) {
+        _jpegCompressor = tjInitCompress();
+        if (!_jpegCompressor) {
+            return Err<void>("Failed to initialize TurboJPEG compressor");
+        }
+        yinfo("Capture benchmark: TurboJPEG compressor initialized");
+    }
+
+    // Initialize VNC client mode if enabled
+    if (_vncClientMode) {
+        // Get initial VNC area size (window minus statusbar)
+        int windowW, windowH;
+        _platform->getWindowSize(windowW, windowH);
+        float statusbarH = _yettyContext.imguiManager ? _yettyContext.imguiManager->getStatusbarHeight() : 0.0f;
+        int vncH = windowH - static_cast<int>(statusbarH);
+        uint16_t vncWidth = static_cast<uint16_t>(windowW > 0 ? windowW : 800);
+        uint16_t vncHeight = static_cast<uint16_t>(vncH > 0 ? vncH : 600);
+
+        // Create VNC client with initial size - texture created immediately
+        _vncClient = std::make_shared<vnc::VncClient>(_device, _queue, _surfaceFormat, vncWidth, vncHeight);
+
+        // Set up callback for when connection completes (async or immediate)
+        // The resize MUST be sent AFTER connect completes, not before!
+        _vncClient->onConnected = [this, vncWidth, vncHeight]() {
+            yinfo("VNC client connected - sending initial resize {}x{}", vncWidth, vncHeight);
+            _vncClient->sendResize(vncWidth, vncHeight);
+            _vncClient->sendCellSize(20);  // Default cell height
+        };
+
+        // Set up frame received callback for immediate screen refresh
+        _vncClient->onFrameReceived = []() {
+            auto loopResult = base::EventLoop::instance();
+            if (!loopResult) return;
+            (*loopResult)->dispatch(base::Event::screenUpdateEvent());
+        };
+
+        if (auto res = _vncClient->connect(_vncHost, _vncPort); !res) {
+            return Err<void>("Failed to connect VNC client", res);
+        }
+        yinfo("VNC client connecting to {}:{}...", _vncHost, _vncPort);
+    }
+
+    // Initialize VNC server mode if enabled
+    if (_vncServerMode) {
+        _vncServer = std::make_shared<vnc::VncServer>(_device, _queue);
+        if (auto res = _vncServer->start(_vncServerPort); !res) {
+            return Err<void>("Failed to start VNC server", res);
+        }
+        yinfo("VNC server started on port {}", _vncServerPort);
+
+        // Set up input callbacks from VNC clients
+        _vncServer->onMouseMove = [](int16_t x, int16_t y) {
+            ydebug("VNC onMouseMove callback: x={} y={}", x, y);
+            auto loopResult = base::EventLoop::instance();
+            if (!loopResult) {
+                ywarn("VNC onMouseMove: EventLoop::instance() failed!");
+                return;
+            }
+            ydebug("VNC onMouseMove: dispatching to EventLoop");
+            (*loopResult)->dispatch(base::Event::mouseMove(static_cast<float>(x), static_cast<float>(y)));
+        };
+
+        _vncServer->onMouseButton = [](int16_t x, int16_t y, vnc::MouseButton button, bool pressed) {
+            ydebug("VNC onMouseButton callback: x={} y={} btn={} pressed={}", x, y, static_cast<int>(button), pressed);
+            auto loopResult = base::EventLoop::instance();
+            if (!loopResult) {
+                ywarn("VNC onMouseButton: EventLoop::instance() failed!");
+                return;
+            }
+            auto loop = *loopResult;
+            int btn = static_cast<int>(button);
+            if (pressed) {
+                ydebug("VNC onMouseButton: dispatching mouseDown");
+                loop->dispatch(base::Event::mouseDown(static_cast<float>(x), static_cast<float>(y), btn, 0));
+            } else {
+                ydebug("VNC onMouseButton: dispatching mouseUp");
+                loop->dispatch(base::Event::mouseUp(static_cast<float>(x), static_cast<float>(y), btn, 0));
+            }
+        };
+
+        _vncServer->onMouseScroll = [](int16_t x, int16_t y, int16_t dx, int16_t dy) {
+            ydebug("VNC onMouseScroll callback: x={} y={} dx={} dy={}", x, y, dx, dy);
+            auto loopResult = base::EventLoop::instance();
+            if (!loopResult) {
+                ywarn("VNC onMouseScroll: EventLoop::instance() failed!");
+                return;
+            }
+            ydebug("VNC onMouseScroll: dispatching to EventLoop");
+            (*loopResult)->dispatch(base::Event::scrollEvent(
+                static_cast<float>(x), static_cast<float>(y),
+                static_cast<float>(dx), static_cast<float>(dy), 0));
+        };
+
+        _vncServer->onKeyDown = [](uint32_t keycode, uint32_t scancode, uint8_t mods) {
+            ydebug("VNC onKeyDown callback: keycode={} scancode={} mods={}", keycode, scancode, mods);
+            auto loopResult = base::EventLoop::instance();
+            if (!loopResult) {
+                ywarn("VNC onKeyDown: EventLoop::instance() failed!");
+                return;
+            }
+            auto loop = *loopResult;
+
+            // Handle Ctrl/Alt + character combinations - dispatch as charInputWithMods
+            // to match local keyboard handling behavior
+            // VNC mods: MOD_CTRL=0x02, MOD_ALT=0x04
+            if (mods & (0x02 | 0x04)) {
+                uint32_t ch = 0;
+                // GLFW key codes: SPACE=32, 0-9=48-57, A-Z=65-90
+                if (keycode == 32) {
+                    // Space - dispatch as keyDown
+                    loop->dispatch(base::Event::keyDown(static_cast<int>(keycode), static_cast<int>(mods), static_cast<int>(scancode)));
+                    return;
+                } else if (keycode >= 48 && keycode <= 57) {
+                    // 0-9
+                    ch = keycode;
+                } else if (keycode >= 65 && keycode <= 90) {
+                    // A-Z -> a-z (lowercase)
+                    ch = keycode + 32;
+                }
+                if (ch != 0) {
+                    ydebug("VNC onKeyDown: Ctrl/Alt+char -> charInputWithMods ch={} mods={}", ch, mods);
+                    loop->dispatch(base::Event::charInputWithMods(ch, static_cast<int>(mods)));
+                    return;
+                }
+            }
+
+            // For special keys (Enter, arrows, etc.), dispatch keyDown
+            ydebug("VNC onKeyDown: dispatching keyDown to EventLoop");
+            loop->dispatch(base::Event::keyDown(static_cast<int>(keycode), static_cast<int>(mods), static_cast<int>(scancode)));
+        };
+
+        _vncServer->onKeyUp = [](uint32_t keycode, uint32_t scancode, uint8_t mods) {
+            ydebug("VNC onKeyUp callback: keycode={} scancode={} mods={}", keycode, scancode, mods);
+            // Key up events are not typically used by terminal
+        };
+
+        _vncServer->onTextInput = [](const std::string& text) {
+            auto loopResult = base::EventLoop::instance();
+            if (!loopResult) return;
+            auto loop = *loopResult;
+            // Process each codepoint in the UTF-8 string
+            for (size_t i = 0; i < text.size(); ) {
+                uint32_t cp = 0;
+                uint8_t c = text[i];
+                if ((c & 0x80) == 0) {
+                    cp = c;
+                    i += 1;
+                } else if ((c & 0xE0) == 0xC0 && i + 1 < text.size()) {
+                    cp = ((c & 0x1F) << 6) | (text[i+1] & 0x3F);
+                    i += 2;
+                } else if ((c & 0xF0) == 0xE0 && i + 2 < text.size()) {
+                    cp = ((c & 0x0F) << 12) | ((text[i+1] & 0x3F) << 6) | (text[i+2] & 0x3F);
+                    i += 3;
+                } else if ((c & 0xF8) == 0xF0 && i + 3 < text.size()) {
+                    cp = ((c & 0x07) << 18) | ((text[i+1] & 0x3F) << 12) | ((text[i+2] & 0x3F) << 6) | (text[i+3] & 0x3F);
+                    i += 4;
+                } else {
+                    i++;  // Skip invalid
+                    continue;
+                }
+                loop->dispatch(base::Event::charInput(cp));
+            }
+        };
+
+        // VNC client resize - changes the terminal grid size (not cell size)
+        _vncServer->onResize = [this](uint16_t widthPx, uint16_t heightPx) {
+            if (widthPx == 0 || heightPx == 0) return;
+            yinfo("VNC onResize: {}x{} px", widthPx, heightPx);
+
+            // Store requested capture size
+            _vncRequestedWidth = widthPx;
+            _vncRequestedHeight = heightPx;
+
+            // Resize workspace to match client request
+            if (_activeWorkspace) {
+                _activeWorkspace->resize(static_cast<float>(widthPx), static_cast<float>(heightPx));
+            }
+
+            // Force full frame on next capture
+            _vncServer->forceFullFrame();
+        };
+
+        // VNC client cell size change (zoom)
+        _vncServer->onCellSize = [this](uint8_t cellHeight) {
+            yinfo("VNC onCellSize: cellHeight={}", cellHeight);
+            _vncServer->forceFullFrame();
+        };
+
+        // VNC character with modifiers (layout-mapped, for Ctrl/Alt + character)
+        _vncServer->onCharWithMods = [](uint32_t codepoint, uint8_t mods) {
+            ydebug("VNC onCharWithMods: codepoint={} ('{}') mods={}", codepoint, (char)codepoint, mods);
+            auto loopResult = base::EventLoop::instance();
+            if (!loopResult) return;
+            (*loopResult)->dispatch(base::Event::charInputWithMods(codepoint, static_cast<int>(mods)));
+        };
+
+        // VNC input received - trigger immediate screen refresh
+        _vncServer->onInputReceived = []() {
+            auto loopResult = base::EventLoop::instance();
+            if (!loopResult) return;
+            (*loopResult)->dispatch(base::Event::screenUpdateEvent());
+        };
+    }
+
     return Ok();
 }
 
 Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
-    for (int i = 1; i < argc; i++) {
-        std::string arg = argv[i];
-        if (arg == "-e" && i + 1 < argc) {
-            _executeCommand = argv[++i];
-            yinfo("Execute command: {}", _executeCommand);
-        } else if (arg == "--msdf-provider" && i + 1 < argc) {
-            _msdfProviderName = argv[++i];
-            yinfo("MSDF provider: {}", _msdfProviderName);
+    args::ArgumentParser parser("yetty", "Terminal emulator with GPU rendering");
+
+    args::HelpFlag help(parser, "help", "Show this help", {'h', "help"});
+    args::ValueFlag<std::string> executeFlag(parser, "command", "Execute command", {'e'});
+    args::ValueFlag<std::string> msdfProviderFlag(parser, "provider", "MSDF provider (cpu/gpu)", {"msdf-provider"});
+    args::Flag captureBenchmarkFlag(parser, "capture-benchmark", "Enable capture benchmark mode", {"capture-benchmark"});
+    args::ValueFlag<std::string> vncClientFlag(parser, "host:port", "Connect as VNC client", {"vnc-client"});
+    args::Flag vncServerFlag(parser, "vnc-server", "Start VNC server (with local window)", {"vnc-server"});
+    args::ValueFlag<uint16_t> vncServerPortFlag(parser, "port", "VNC server port (default 5900)", {"vnc-port"}, 5900);
+    args::Flag vncHeadlessFlag(parser, "vnc-headless", "Start VNC server without window (headless)", {"vnc-headless"});
+    args::ValueFlag<std::string> vncTestFlag(parser, "pattern", "VNC test mode: text, color, scroll, stress", {"vnc-test"});
+
+    try {
+        parser.ParseCLI(argc, argv);
+    } catch (const args::Help&) {
+        std::cout << parser;
+        std::exit(0);
+    } catch (const args::Error& e) {
+        yerror("Argument error: {}", e.what());
+        std::cerr << parser;
+        return Err<void>(e.what());
+    }
+
+    if (executeFlag) {
+        _executeCommand = args::get(executeFlag);
+        yinfo("Execute command: {}", _executeCommand);
+    }
+
+    if (msdfProviderFlag) {
+        _msdfProviderName = args::get(msdfProviderFlag);
+        yinfo("MSDF provider: {}", _msdfProviderName);
+    }
+
+    if (captureBenchmarkFlag) {
+        _captureBenchmark = true;
+        yinfo("Capture benchmark mode enabled");
+    }
+
+    if (vncClientFlag) {
+        _vncClientMode = true;
+        std::string hostPort = args::get(vncClientFlag);
+        auto colonPos = hostPort.rfind(':');
+        if (colonPos != std::string::npos) {
+            _vncHost = hostPort.substr(0, colonPos);
+            _vncPort = static_cast<uint16_t>(std::stoi(hostPort.substr(colonPos + 1)));
+        } else {
+            _vncHost = hostPort;
+        }
+        yinfo("VNC client mode: connecting to {}:{}", _vncHost, _vncPort);
+    }
+
+    // --vnc-server and --vnc-headless are mutually exclusive
+    // --vnc-server: VNC server with local window
+    // --vnc-headless: VNC server without window (headless)
+    if (vncServerFlag && vncHeadlessFlag) {
+        return Err<void>("--vnc-server and --vnc-headless are mutually exclusive");
+    }
+
+    if (vncServerFlag) {
+        _vncServerMode = true;
+        _vncServerPort = args::get(vncServerPortFlag);
+        yinfo("VNC server mode: port {}", _vncServerPort);
+    }
+
+    if (vncHeadlessFlag) {
+        _vncServerMode = true;  // Headless implies server mode
+        _vncHeadless = true;
+        _vncServerPort = args::get(vncServerPortFlag);
+        yinfo("VNC headless server mode: port {} (no local window)", _vncServerPort);
+    }
+
+    if (vncTestFlag) {
+        _vncTestMode = true;
+        _vncTestPattern = args::get(vncTestFlag);
+        _vncServerMode = true;  // Test mode implies server mode
+        yinfo("VNC test mode: pattern={}", _vncTestPattern);
+
+        // Set execute command for test patterns
+        if (_vncTestPattern == "text") {
+            // Scrolling text test - shows consistent readable content
+            _executeCommand = "bash -c 'frame=0; while true; do clear; echo \"=== VNC TEST: TEXT ===\"; echo \"Frame: $((++frame))\"; for i in $(seq 1 20); do echo \"Line $i: ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyz\"; done; date; sleep 0.1; done'";
+        } else if (_vncTestPattern == "color") {
+            // Color test - shows ANSI colors
+            _executeCommand = "bash -c 'while true; do clear; echo \"=== VNC TEST: COLOR ===\"; for fg in 30 31 32 33 34 35 36 37; do for bg in 40 41 42 43 44 45 46 47; do printf \"\\033[%d;%dm X \\033[0m\" $fg $bg; done; echo; done; sleep 1; done'";
+        } else if (_vncTestPattern == "scroll") {
+            // Scroll test - continuous scrolling
+            _executeCommand = "bash -c 'i=0; while true; do echo \"Line $((++i)): $(date) - The quick brown fox jumps over the lazy dog\"; sleep 0.05; done'";
+        } else if (_vncTestPattern == "stress") {
+            // Stress test - maximum output
+            _executeCommand = "bash -c 'while true; do cat /dev/urandom | tr -dc A-Za-z0-9 | head -c 1000; echo; done'";
         }
     }
+
     return Ok();
 }
 
 Result<void> YettyImpl::initWindow() noexcept {
-    auto platformResult = Platform::create();
+    // Create platform (headless mode skips GLFW, uses std::chrono for timing)
+    auto platformResult = Platform::create(_vncHeadless);
     if (!platformResult) {
         return Err<void>("Failed to create platform", platformResult);
     }
     _platform = *platformResult;
+
+    // In headless mode, skip window creation
+    if (_vncHeadless) {
+        yinfo("VNC headless mode: platform created, skipping window");
+        return Ok();
+    }
 
     if (auto res = _platform->createWindow(_initialWidth, _initialHeight, "yetty"); !res) {
         return Err<void>("Failed to create window", res);
@@ -337,16 +685,20 @@ Result<void> YettyImpl::initWebGPU() noexcept {
     }
     yinfo("initWebGPU: Instance created");
 
-    // Create surface via platform
-    _surface = _platform->createWGPUSurface(_instance);
-    if (!_surface) {
-        return Err<void>("Failed to create WebGPU surface");
+    // Create surface via platform (skip in headless mode)
+    if (!_vncHeadless) {
+        _surface = _platform->createWGPUSurface(_instance);
+        if (!_surface) {
+            return Err<void>("Failed to create WebGPU surface");
+        }
+        yinfo("initWebGPU: Surface created");
+    } else {
+        yinfo("initWebGPU: Headless mode - skipping surface creation");
     }
-    yinfo("initWebGPU: Surface created");
 
-    // Request adapter
+    // Request adapter (without compatibleSurface in headless mode)
     WGPURequestAdapterOptions adapterOpts = {};
-    adapterOpts.compatibleSurface = _surface;
+    adapterOpts.compatibleSurface = _vncHeadless ? nullptr : _surface;
     adapterOpts.powerPreference = WGPUPowerPreference_HighPerformance;
 
     WGPURequestAdapterCallbackInfo adapterCallbackInfo = {};
@@ -481,21 +833,37 @@ Result<void> YettyImpl::initWebGPU() noexcept {
     _queue = wgpuDeviceGetQueue(_device);
     yinfo("initWebGPU: Queue obtained");
 
-    // Configure surface
-    WGPUSurfaceCapabilities caps = {};
-    wgpuSurfaceGetCapabilities(_surface, _adapter, &caps);
-    if (caps.formatCount > 0) {
-        _surfaceFormat = caps.formats[0];
-    }
-    wgpuSurfaceCapabilitiesFreeMembers(caps);
+    // Configure surface (skip in headless mode)
+    if (_surface) {
+        WGPUSurfaceCapabilities caps = {};
+        wgpuSurfaceGetCapabilities(_surface, _adapter, &caps);
+        if (caps.formatCount > 0) {
+            _surfaceFormat = caps.formats[0];
+            yinfo("Surface format: {}", static_cast<int>(_surfaceFormat));
+        }
+        wgpuSurfaceCapabilitiesFreeMembers(caps);
 
-    configureSurface(_initialWidth, _initialHeight);
+        configureSurface(_initialWidth, _initialHeight);
+    } else {
+        // Headless mode - use default format and set initial dimensions
+        _surfaceFormat = WGPUTextureFormat_BGRA8Unorm;
+        _surfaceWidth = _initialWidth;
+        _surfaceHeight = _initialHeight;
+        yinfo("Headless mode: using default surface format BGRA8Unorm, {}x{}", _surfaceWidth, _surfaceHeight);
+    }
 
     yinfo("WebGPU initialized: device={} queue={}", (void*)_device, (void*)_queue);
     return Ok();
 }
 
 void YettyImpl::configureSurface(uint32_t width, uint32_t height) noexcept {
+    // Skip if no surface (headless mode)
+    if (!_surface) {
+        _surfaceWidth = width;
+        _surfaceHeight = height;
+        return;
+    }
+
     // Release any held texture/view before reconfiguring - they become invalid
     if (_currentTextureView) {
         wgpuTextureViewRelease(_currentTextureView);
@@ -522,6 +890,11 @@ void YettyImpl::configureSurface(uint32_t width, uint32_t height) noexcept {
 }
 
 Result<WGPUTextureView> YettyImpl::getCurrentTextureView() noexcept {
+    // No surface in headless mode
+    if (!_surface) {
+        return Err<WGPUTextureView>("No surface in headless mode");
+    }
+
     if (_currentTextureView) {
         return Ok(_currentTextureView);
     }
@@ -547,6 +920,11 @@ Result<WGPUTextureView> YettyImpl::getCurrentTextureView() noexcept {
 }
 
 void YettyImpl::present() noexcept {
+    // No surface in headless mode
+    if (!_surface) {
+        return;
+    }
+
     if (_currentTextureView) {
         wgpuTextureViewRelease(_currentTextureView);
         _currentTextureView = nullptr;
@@ -559,6 +937,197 @@ void YettyImpl::present() noexcept {
     // wgpuSurfacePresent is not needed on Emscripten - browser handles via requestAnimationFrame
     wgpuSurfacePresent(_surface);
 #endif
+}
+
+//=============================================================================
+// Frame Capture Benchmark
+//=============================================================================
+
+Result<void> YettyImpl::ensureCaptureResources(uint32_t width, uint32_t height) noexcept {
+    if (_captureWidth == width && _captureHeight == height && _captureTexture) {
+        return Ok();
+    }
+
+    // Release old resources
+    if (_captureReadbackBuffer) {
+        wgpuBufferRelease(_captureReadbackBuffer);
+        _captureReadbackBuffer = nullptr;
+    }
+    if (_captureTextureView) {
+        wgpuTextureViewRelease(_captureTextureView);
+        _captureTextureView = nullptr;
+    }
+    if (_captureTexture) {
+        wgpuTextureRelease(_captureTexture);
+        _captureTexture = nullptr;
+    }
+
+    _captureWidth = width;
+    _captureHeight = height;
+
+    // Create offscreen texture with CopySrc for readback
+    WGPUTextureDescriptor texDesc = {};
+    texDesc.label = WGPU_STR("CaptureTexture");
+    texDesc.size = {width, height, 1};
+    texDesc.mipLevelCount = 1;
+    texDesc.sampleCount = 1;
+    texDesc.dimension = WGPUTextureDimension_2D;
+    texDesc.format = WGPUTextureFormat_BGRA8Unorm;  // Match surface format
+    // RenderAttachment for rendering to it, CopySrc for readback, TextureBinding for VNC compute shader
+    texDesc.usage = WGPUTextureUsage_RenderAttachment | WGPUTextureUsage_CopySrc | WGPUTextureUsage_TextureBinding;
+
+    _captureTexture = wgpuDeviceCreateTexture(_device, &texDesc);
+    if (!_captureTexture) {
+        return Err<void>("Failed to create capture texture");
+    }
+
+    WGPUTextureViewDescriptor viewDesc = {};
+    viewDesc.label = WGPU_STR("CaptureTextureView");
+    viewDesc.format = WGPUTextureFormat_BGRA8Unorm;
+    viewDesc.dimension = WGPUTextureViewDimension_2D;
+    viewDesc.mipLevelCount = 1;
+    viewDesc.arrayLayerCount = 1;
+
+    _captureTextureView = wgpuTextureCreateView(_captureTexture, &viewDesc);
+    if (!_captureTextureView) {
+        return Err<void>("Failed to create capture texture view");
+    }
+
+    // Create readback buffer
+    // WebGPU requires bytesPerRow to be aligned to 256
+    uint32_t bytesPerPixel = 4;  // BGRA8
+    uint32_t unalignedBytesPerRow = width * bytesPerPixel;
+    uint32_t alignedBytesPerRow = (unalignedBytesPerRow + 255) & ~255;
+    _captureReadbackSize = alignedBytesPerRow * height;
+
+    WGPUBufferDescriptor bufDesc = {};
+    bufDesc.label = WGPU_STR("CaptureReadbackBuffer");
+    bufDesc.size = _captureReadbackSize;
+    bufDesc.usage = WGPUBufferUsage_CopyDst | WGPUBufferUsage_MapRead;
+
+    _captureReadbackBuffer = wgpuDeviceCreateBuffer(_device, &bufDesc);
+    if (!_captureReadbackBuffer) {
+        return Err<void>("Failed to create capture readback buffer");
+    }
+
+    // Resize pixel buffer for JPEG compression
+    _capturePixels.resize(width * height * bytesPerPixel);
+
+    yinfo("Capture resources created: {}x{}, readback buffer {}KB",
+          width, height, _captureReadbackSize / 1024);
+
+    return Ok();
+}
+
+Result<void> YettyImpl::performFrameCapture(WGPUCommandEncoder encoder) noexcept {
+    uint32_t bytesPerPixel = 4;
+    uint32_t unalignedBytesPerRow = _captureWidth * bytesPerPixel;
+    uint32_t alignedBytesPerRow = (unalignedBytesPerRow + 255) & ~255;
+
+    // === GPU READBACK ===
+    {
+        ytimeit("capture-readback");
+
+        // Copy texture to readback buffer
+        WGPUTexelCopyTextureInfo src = {};
+        src.texture = _captureTexture;
+
+        WGPUTexelCopyBufferInfo dst = {};
+        dst.buffer = _captureReadbackBuffer;
+        dst.layout.offset = 0;
+        dst.layout.bytesPerRow = alignedBytesPerRow;
+        dst.layout.rowsPerImage = _captureHeight;
+
+        WGPUExtent3D copySize = {_captureWidth, _captureHeight, 1};
+        wgpuCommandEncoderCopyTextureToBuffer(encoder, &src, &dst, &copySize);
+
+        // Finish and submit
+        WGPUCommandBufferDescriptor cmdDesc = {};
+        WGPUCommandBuffer cmdBuffer = wgpuCommandEncoderFinish(encoder, &cmdDesc);
+        if (!cmdBuffer) {
+            return Err<void>("Failed to finish capture command buffer");
+        }
+        wgpuQueueSubmit(_queue, 1, &cmdBuffer);
+        wgpuCommandBufferRelease(cmdBuffer);
+
+        // Map buffer synchronously (blocking for benchmark)
+        struct MapContext {
+            bool done = false;
+            WGPUMapAsyncStatus status = WGPUMapAsyncStatus_Error;
+        };
+        MapContext mapCtx;
+
+        WGPUBufferMapCallbackInfo cbInfo = {};
+        cbInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+        cbInfo.callback = [](WGPUMapAsyncStatus status, WGPUStringView, void* ud1, void*) {
+            auto* ctx = static_cast<MapContext*>(ud1);
+            ctx->status = status;
+            ctx->done = true;
+        };
+        cbInfo.userdata1 = &mapCtx;
+
+        wgpuBufferMapAsync(_captureReadbackBuffer, WGPUMapMode_Read, 0, _captureReadbackSize, cbInfo);
+
+        // Wait for mapping to complete
+        while (!mapCtx.done) {
+            WGPU_DEVICE_TICK(_device);
+        }
+
+        if (mapCtx.status != WGPUMapAsyncStatus_Success) {
+            return Err<void>("Failed to map capture readback buffer");
+        }
+
+        // Copy mapped data (handle row alignment)
+        const uint8_t* mapped = static_cast<const uint8_t*>(
+            wgpuBufferGetConstMappedRange(_captureReadbackBuffer, 0, _captureReadbackSize));
+        if (!mapped) {
+            wgpuBufferUnmap(_captureReadbackBuffer);
+            return Err<void>("Failed to get mapped range");
+        }
+
+        // Copy row by row to remove padding
+        uint8_t* dst_ptr = _capturePixels.data();
+        for (uint32_t y = 0; y < _captureHeight; y++) {
+            std::memcpy(dst_ptr, mapped + y * alignedBytesPerRow, unalignedBytesPerRow);
+            dst_ptr += unalignedBytesPerRow;
+        }
+        wgpuBufferUnmap(_captureReadbackBuffer);
+    }
+
+    // === JPEG COMPRESSION ===
+    unsigned long jpegSize = 0;
+    {
+        ytimeit("capture-jpeg");
+
+        unsigned char* jpegBuf = nullptr;
+
+        // TurboJPEG expects RGB, but we have BGRA. Use TJPF_BGRA for direct conversion.
+        int result = tjCompress2(
+            _jpegCompressor,
+            _capturePixels.data(),
+            _captureWidth,
+            0,  // pitch (0 = width * pixel size)
+            _captureHeight,
+            TJPF_BGRA,
+            &jpegBuf,
+            &jpegSize,
+            TJSAMP_420,  // 4:2:0 chroma subsampling (good compression)
+            85,          // Quality (0-100)
+            TJFLAG_FASTDCT
+        );
+
+        if (result != 0) {
+            if (jpegBuf) tjFree(jpegBuf);
+            return Err<void>("JPEG compression failed: " + std::string(tjGetErrorStr()));
+        }
+
+        tjFree(jpegBuf);
+    }
+
+    _totalCompressedBytes += jpegSize;
+    _captureFrameCount++;
+
+    return Ok();
 }
 
 Result<void> YettyImpl::initSharedResources() noexcept {
@@ -753,6 +1322,12 @@ Result<Workspace::Ptr> YettyImpl::createWorkspace() noexcept {
 }
 
 Result<void> YettyImpl::initCallbacks() noexcept {
+    // Skip platform callbacks in headless mode (no window)
+    if (_vncHeadless) {
+        yinfo("Headless mode: skipping platform callbacks");
+        return Ok();
+    }
+
     // Focus callback
     _platform->setFocusCallback([](bool focused) {
         ydebug("FocusCallback: focused={}", focused);
@@ -761,6 +1336,35 @@ Result<void> YettyImpl::initCallbacks() noexcept {
     // Key callback
     _platform->setKeyCallback([this](int key, int scancode, KeyAction action, int mods) {
         ydebug("KeyCallback: key={} scancode={} action={} mods={}", key, scancode, static_cast<int>(action), mods);
+
+        // Forward to VNC server when in client mode
+        if (_vncClientMode && _vncClient) {
+            ydebug("VNC client mode: forwarding key={} scancode={} action={}", key, scancode, static_cast<int>(action));
+            uint8_t vncMods = 0;
+            if (mods & 0x0001) vncMods |= vnc::MOD_SHIFT;
+            if (mods & 0x0002) vncMods |= vnc::MOD_CTRL;
+            if (mods & 0x0004) vncMods |= vnc::MOD_ALT;
+            if (mods & 0x0008) vncMods |= vnc::MOD_SUPER;
+
+            if (action == KeyAction::Press || action == KeyAction::Repeat) {
+                // For Ctrl/Alt + character keys, use layout-mapped character
+                if (mods & (0x0002 | 0x0004)) {  // Ctrl or Alt
+                    std::string keyName = _platform->getKeyName(key, scancode);
+                    if (!keyName.empty() && keyName.size() == 1) {
+                        uint32_t ch = static_cast<uint32_t>(static_cast<uint8_t>(keyName[0]));
+                        ydebug("VNC client: sending CHAR_WITH_MODS ch='{}' ({}) mods={}", keyName[0], ch, vncMods);
+                        _vncClient->sendCharWithMods(ch, vncMods);
+                        return;
+                    }
+                }
+                ydebug("VNC client: sending KEY_DOWN keycode={} scancode={} mods={}", key, scancode, vncMods);
+                _vncClient->sendKeyDown(static_cast<uint32_t>(key), static_cast<uint32_t>(scancode), vncMods);
+            } else if (action == KeyAction::Release) {
+                ydebug("VNC client: sending KEY_UP keycode={} scancode={}", key, scancode);
+                _vncClient->sendKeyUp(static_cast<uint32_t>(key), static_cast<uint32_t>(scancode), vncMods);
+            }
+            return;  // Don't process locally in client mode
+        }
 
         // Track modifier key state for scroll events
         // GLFW_KEY_LEFT_CONTROL=341, GLFW_KEY_RIGHT_CONTROL=345
@@ -804,6 +1408,33 @@ Result<void> YettyImpl::initCallbacks() noexcept {
     // Char callback
     _platform->setCharCallback([this](unsigned int codepoint) {
         ydebug("CharCallback: codepoint={} ('{}')", codepoint, codepoint < 32 ? '?' : (char)codepoint);
+
+        // Forward to VNC server when in client mode
+        if (_vncClientMode && _vncClient) {
+            // Encode codepoint as UTF-8 and send
+            char utf8[5] = {0};
+            if (codepoint < 0x80) {
+                utf8[0] = static_cast<char>(codepoint);
+                _vncClient->sendTextInput(utf8, 1);
+            } else if (codepoint < 0x800) {
+                utf8[0] = static_cast<char>(0xC0 | (codepoint >> 6));
+                utf8[1] = static_cast<char>(0x80 | (codepoint & 0x3F));
+                _vncClient->sendTextInput(utf8, 2);
+            } else if (codepoint < 0x10000) {
+                utf8[0] = static_cast<char>(0xE0 | (codepoint >> 12));
+                utf8[1] = static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F));
+                utf8[2] = static_cast<char>(0x80 | (codepoint & 0x3F));
+                _vncClient->sendTextInput(utf8, 3);
+            } else {
+                utf8[0] = static_cast<char>(0xF0 | (codepoint >> 18));
+                utf8[1] = static_cast<char>(0x80 | ((codepoint >> 12) & 0x3F));
+                utf8[2] = static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F));
+                utf8[3] = static_cast<char>(0x80 | (codepoint & 0x3F));
+                _vncClient->sendTextInput(utf8, 4);
+            }
+            return;  // Don't process locally in client mode
+        }
+
         uint32_t glyphIdx = codepoint;
         if (auto font = _yettyContext.fontManager->getDefaultMsMsdfFont()) {
             glyphIdx = font->getGlyphIndex(codepoint);
@@ -822,6 +1453,24 @@ Result<void> YettyImpl::initCallbacks() noexcept {
 
     // Mouse button callback
     _platform->setMouseButtonCallback([this](MouseButton button, bool pressed, int mods) {
+        (void)mods;  // Unused when forwarding
+
+        // Forward to VNC server when in client mode
+        if (_vncClientMode && _vncClient) {
+            vnc::MouseButton vncBtn;
+            switch (button) {
+                case MouseButton::Left: vncBtn = vnc::MouseButton::LEFT; break;
+                case MouseButton::Middle: vncBtn = vnc::MouseButton::MIDDLE; break;
+                case MouseButton::Right: vncBtn = vnc::MouseButton::RIGHT; break;
+                default: vncBtn = vnc::MouseButton::LEFT; break;
+            }
+            _vncClient->sendMouseButton(
+                static_cast<int16_t>(_lastMouseX),
+                static_cast<int16_t>(_lastMouseY),
+                vncBtn, pressed);
+            return;  // Don't process locally in client mode
+        }
+
         // Get current mouse position for event dispatch
         // Note: we track mouse position via move callback, but for now get from window size
         // The actual position is tracked in mouse move events
@@ -857,12 +1506,29 @@ Result<void> YettyImpl::initCallbacks() noexcept {
         float my = static_cast<float>(ypos) * _contentScaleY;
         _lastMouseX = mx;
         _lastMouseY = my;
+
+        // Forward to VNC server when in client mode
+        if (_vncClientMode && _vncClient) {
+            _vncClient->sendMouseMove(static_cast<int16_t>(mx), static_cast<int16_t>(my));
+            return;  // Don't process locally in client mode
+        }
+
         auto loop = *base::EventLoop::instance();
         loop->dispatch(base::Event::mouseMove(mx, my));
     });
 
     // Scroll callback
     _platform->setScrollCallback([this](double xoffset, double yoffset) {
+        // Forward to VNC server when in client mode
+        if (_vncClientMode && _vncClient) {
+            _vncClient->sendMouseScroll(
+                static_cast<int16_t>(_lastMouseX),
+                static_cast<int16_t>(_lastMouseY),
+                static_cast<int16_t>(xoffset * 120),  // Standard scroll delta
+                static_cast<int16_t>(yoffset * 120));
+            return;  // Don't process locally in client mode
+        }
+
         // Build modifier state from tracked key presses
         // GLFW_MOD_SHIFT = 0x0001, GLFW_MOD_CONTROL = 0x0002
         int mods = 0;
@@ -890,6 +1556,43 @@ Result<void> YettyImpl::initCallbacks() noexcept {
 
 Result<void> YettyImpl::onShutdown() {
     Result<void> result = Ok();
+
+    // Print capture benchmark JPEG size statistics (timing handled by ytrace)
+    if (_captureBenchmark && _captureFrameCount > 0) {
+        double avgCompressedKB = (_totalCompressedBytes / _captureFrameCount) / 1024.0;
+        yinfo("=== Capture Benchmark: {} frames, avg JPEG {:.1f}KB ===",
+              _captureFrameCount, avgCompressedKB);
+    }
+
+    // Cleanup capture resources
+    if (_captureReadbackBuffer) {
+        wgpuBufferRelease(_captureReadbackBuffer);
+        _captureReadbackBuffer = nullptr;
+    }
+    if (_captureTextureView) {
+        wgpuTextureViewRelease(_captureTextureView);
+        _captureTextureView = nullptr;
+    }
+    if (_captureTexture) {
+        wgpuTextureRelease(_captureTexture);
+        _captureTexture = nullptr;
+    }
+    if (_jpegCompressor) {
+        tjDestroy(_jpegCompressor);
+        _jpegCompressor = nullptr;
+    }
+
+    // Cleanup VNC client
+    if (_vncClient) {
+        _vncClient->disconnect();
+        _vncClient.reset();
+    }
+
+    // Cleanup VNC server
+    if (_vncServer) {
+        _vncServer->stop();
+        _vncServer.reset();
+    }
 
 #if !YETTY_WEB && !defined(__ANDROID__)
     if (_rpcServer) {
@@ -955,7 +1658,7 @@ void YettyImpl::initEventLoop() noexcept {
         return;
     }
     _frameTimerId = *frameTimerResult;
-    if (auto res = loop->configTimer(_frameTimerId, 16); !res) {
+    if (auto res = loop->configTimer(_frameTimerId, 1000); !res) {  // 1 FPS
         yerror("Failed to configure frame timer: {}", error_msg(res));
         return;
     }
@@ -989,11 +1692,15 @@ void YettyImpl::shutdownEventLoop() noexcept {
 
 Result<bool> YettyImpl::onEvent(const base::Event& event) {
 #if !YETTY_WEB && !defined(__ANDROID__)
-    // Input timer: poll events only (fast, always responsive)
+    // Input timer: poll GLFW events (fast, always responsive)
+    // Note: VNC input is now fully async via EventLoop poll, no longer needs polling here
     if (event.type == base::Event::Type::Timer && event.timer.timerId == _inputTimerId) {
-        _platform->pollEvents();
-        if (_platform->shouldClose()) {
-            (*base::EventLoop::instance())->stop();
+        // In headless mode, no window to poll events from
+        if (!_vncHeadless) {
+            _platform->pollEvents();
+            if (_platform->shouldClose()) {
+                (*base::EventLoop::instance())->stop();
+            }
         }
         return Ok(true);
     }
@@ -1001,10 +1708,16 @@ Result<bool> YettyImpl::onEvent(const base::Event& event) {
     // Frame timer or ScreenUpdate: render
     if ((event.type == base::Event::Type::Timer && event.timer.timerId == _frameTimerId) ||
         event.type == base::Event::Type::ScreenUpdate) {
+        // Prevent recursive render (e.g. VNC input -> requestScreenUpdate -> ScreenUpdate)
+        if (_inRender) {
+            return Ok(true);  // Skip, will render on next frame
+        }
+        _inRender = true;
         if (auto res = mainLoopIteration(); !res) {
             yerror("Fatal render error: {}", error_msg(res));
             (*base::EventLoop::instance())->stop();
         }
+        _inRender = false;
         return Ok(true);
     }
 
@@ -1099,9 +1812,22 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
         return Err<void>("Fatal GPU error: " + _fatalGpuErrorMsg);
     }
 
-    auto viewResult = getCurrentTextureView();
-    if (!viewResult) return Err<void>("Failed to get texture view");
-    WGPUTextureView targetView = *viewResult;
+    // In headless mode with no client connected, skip entire render iteration
+    // to avoid accumulating GPU operations that leak NVIDIA FDs
+    if (_vncHeadless && _vncServerMode) {
+        bool vncClientReady = _vncRequestedWidth > 0 && _vncRequestedHeight > 0;
+        if (!vncClientReady) {
+            return Ok();  // No client yet, nothing to render
+        }
+    }
+
+    // In headless mode, skip surface operations
+    WGPUTextureView targetView = nullptr;
+    if (!_vncHeadless) {
+        auto viewResult = getCurrentTextureView();
+        if (!viewResult) return Err<void>("Failed to get texture view");
+        targetView = *viewResult;
+    }
 
     // Update shared uniforms
     static double lastTime = _platform->getTime();
@@ -1110,7 +1836,13 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
     lastTime = now;
 
     int windowWidth, windowHeight;
-    _platform->getWindowSize(windowWidth, windowHeight);
+    if (_vncHeadless) {
+        // Headless mode: use VNC requested size or default (no window)
+        windowWidth = _vncRequestedWidth > 0 ? static_cast<int>(_vncRequestedWidth) : static_cast<int>(_initialWidth);
+        windowHeight = _vncRequestedHeight > 0 ? static_cast<int>(_vncRequestedHeight) : static_cast<int>(_initialHeight);
+    } else {
+        _platform->getWindowSize(windowWidth, windowHeight);
+    }
 
     _sharedUniforms.time = static_cast<float>(now);
     _sharedUniforms.deltaTime = deltaTime;
@@ -1132,53 +1864,169 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
         }
     }
 
-    WGPUCommandEncoderDescriptor encoderDesc = {};
-    WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(_device, &encoderDesc);
-    if (!encoder) return Err<void>("Failed to create command encoder");
+    // === CAPTURE/VNC SERVER MODE ===
+    // Render to offscreen texture for capture benchmark or VNC streaming
+    // In headless mode, always capture (since there's no local display)
+    // VNC: throttle to max 30 FPS to avoid 100% CPU from ScreenUpdate spam
+    static auto lastVncFrame = std::chrono::steady_clock::now();
+    auto vncNow = std::chrono::steady_clock::now();
+    bool vncThrottleOk = std::chrono::duration_cast<std::chrono::milliseconds>(vncNow - lastVncFrame).count() >= 33; // 30 FPS max
 
-    WGPURenderPassColorAttachment colorAttachment = {};
-    colorAttachment.view = targetView;
-    colorAttachment.loadOp = WGPULoadOp_Clear;
-    colorAttachment.storeOp = WGPUStoreOp_Store;
-    colorAttachment.clearValue = {0.1f, 0.1f, 0.2f, 1.0f};
-    colorAttachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+    // VNC SERVER PROTOCOL: Only start sending frames AFTER client sends its resize
+    // _vncRequestedWidth/Height are set by onResize callback when client's resize arrives
+    bool vncClientReady = _vncRequestedWidth > 0 && _vncRequestedHeight > 0;
+    // CRITICAL: Check if VNC server is ready for more frames BEFORE creating GPU work
+    // This prevents FD exhaustion from queuing GPU operations faster than they complete
+    bool vncServerReady = !_vncServer || _vncServer->isReadyForFrame();
+    bool doCapture = (_captureBenchmark && (++_captureSkipCounter % CAPTURE_EVERY_N_FRAMES == 0)) ||
+                     (_vncHeadless && _vncServerMode && _vncServer && vncClientReady && vncServerReady) ||
+                     (_vncServerMode && _vncServer && _vncServer->hasClients() && vncClientReady && vncThrottleOk && vncServerReady);
+    // Determine capture size: use VNC requested size if set, otherwise window size
+    uint32_t captureW = (_vncServerMode && _vncRequestedWidth > 0) ? _vncRequestedWidth : static_cast<uint32_t>(windowWidth);
+    uint32_t captureH = (_vncServerMode && _vncRequestedHeight > 0) ? _vncRequestedHeight : static_cast<uint32_t>(windowHeight);
 
-    WGPURenderPassDescriptor passDesc = {};
-    passDesc.colorAttachmentCount = 1;
-    passDesc.colorAttachments = &colorAttachment;
-
-    WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
-    if (pass) {
-        if (_activeWorkspace) {
-            if (auto res = _activeWorkspace->render(pass); !res) {
-                wgpuRenderPassEncoderEnd(pass);
-                wgpuRenderPassEncoderRelease(pass);
-                wgpuCommandEncoderRelease(encoder);
-                return Err<void>("Workspace render failed", res);
-            }
+    if (doCapture && captureW > 0 && captureH > 0) {
+        // Ensure capture resources match requested size
+        if (auto res = ensureCaptureResources(captureW, captureH); !res) {
+            return Err<void>("Failed to ensure capture resources", res);
         }
-        // Render ImGui (context menus, etc.) after main content
-        if (_yettyContext.imguiManager) {
-            if (auto res = _yettyContext.imguiManager->render(pass); !res) {
-                wgpuRenderPassEncoderEnd(pass);
-                wgpuRenderPassEncoderRelease(pass);
-                wgpuCommandEncoderRelease(encoder);
-                return Err<void>("ImGui render failed", res);
+
+        // Render to capture texture
+        WGPUCommandEncoderDescriptor encoderDesc = {};
+        WGPUCommandEncoder captureEncoder = wgpuDeviceCreateCommandEncoder(_device, &encoderDesc);
+        if (!captureEncoder) return Err<void>("Failed to create capture command encoder");
+
+        WGPURenderPassColorAttachment captureAttachment = {};
+        captureAttachment.view = _captureTextureView;
+        captureAttachment.loadOp = WGPULoadOp_Clear;
+        captureAttachment.storeOp = WGPUStoreOp_Store;
+        captureAttachment.clearValue = {0.1f, 0.1f, 0.2f, 1.0f};
+        captureAttachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+
+        WGPURenderPassDescriptor capturePassDesc = {};
+        capturePassDesc.colorAttachmentCount = 1;
+        capturePassDesc.colorAttachments = &captureAttachment;
+
+        WGPURenderPassEncoder capturePass = wgpuCommandEncoderBeginRenderPass(captureEncoder, &capturePassDesc);
+        if (capturePass) {
+            if (_activeWorkspace) {
+                if (auto res = _activeWorkspace->render(capturePass); !res) {
+                    wgpuRenderPassEncoderEnd(capturePass);
+                    wgpuRenderPassEncoderRelease(capturePass);
+                    wgpuCommandEncoderRelease(captureEncoder);
+                    return Err<void>("Capture workspace render failed", res);
+                }
             }
+            // Only render ImGui for capture benchmark, NOT for VNC streaming
+            // VNC should only show the terminal content, not statusbar/UI
+            if (_captureBenchmark && _yettyContext.imguiManager) {
+                if (auto res = _yettyContext.imguiManager->render(capturePass); !res) {
+                    wgpuRenderPassEncoderEnd(capturePass);
+                    wgpuRenderPassEncoderRelease(capturePass);
+                    wgpuCommandEncoderRelease(captureEncoder);
+                    return Err<void>("Capture ImGui render failed", res);
+                }
+            }
+            wgpuRenderPassEncoderEnd(capturePass);
+            wgpuRenderPassEncoderRelease(capturePass);
         }
-        wgpuRenderPassEncoderEnd(pass);
-        wgpuRenderPassEncoderRelease(pass);
+
+        // Perform capture benchmark (copy to buffer, map, compress)
+        if (_captureBenchmark) {
+            // Note: performFrameCapture finishes and submits the encoder
+            if (auto res = performFrameCapture(captureEncoder); !res) {
+                // Non-fatal - log warning and continue
+                ywarn("Frame capture failed: {}", res.error().message());
+            }
+        } else {
+            // Just finish and submit for VNC server
+            WGPUCommandBufferDescriptor cmdDesc = {};
+            WGPUCommandBuffer cmdBuf = wgpuCommandEncoderFinish(captureEncoder, &cmdDesc);
+            if (cmdBuf) {
+                wgpuQueueSubmit(_queue, 1, &cmdBuf);
+                wgpuCommandBufferRelease(cmdBuf);
+            }
+            wgpuCommandEncoderRelease(captureEncoder);
+        }
+
+        // VNC server: send frame to connected clients
+        if (_vncServerMode && _vncServer) {
+            if (auto res = _vncServer->sendFrame(_captureTexture, captureW, captureH); !res) {
+                ywarn("VNC send failed: {}", res.error().message());
+            }
+            lastVncFrame = vncNow;  // Update throttle timestamp
+        }
+    } else if (_vncServerMode && _vncServer && vncClientReady && captureW > 0 && captureH > 0) {
+        // VNC server not ready for new frame, but still need to call sendFrame
+        // to progress the state machine (check GPU callbacks, transition states)
+        if (auto res = _vncServer->sendFrame(_captureTexture, captureW, captureH); !res) {
+            ywarn("VNC send failed: {}", res.error().message());
+        }
     }
 
-    WGPUCommandBufferDescriptor cmdDesc = {};
-    WGPUCommandBuffer cmdBuffer = wgpuCommandEncoderFinish(encoder, &cmdDesc);
-    if (cmdBuffer) {
-        wgpuQueueSubmit(_queue, 1, &cmdBuffer);
-        wgpuCommandBufferRelease(cmdBuffer);
-    }
-    wgpuCommandEncoderRelease(encoder);
+    // === NORMAL RENDER TO SURFACE (skip in headless mode) ===
+    if (!_vncHeadless) {
+        WGPUCommandEncoderDescriptor encoderDesc = {};
+        WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(_device, &encoderDesc);
+        if (!encoder) return Err<void>("Failed to create command encoder");
 
-    present();
+        WGPURenderPassColorAttachment colorAttachment = {};
+        colorAttachment.view = targetView;
+        colorAttachment.loadOp = WGPULoadOp_Clear;
+        colorAttachment.storeOp = WGPUStoreOp_Store;
+        colorAttachment.clearValue = {0.1f, 0.1f, 0.2f, 1.0f};
+        colorAttachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+
+        WGPURenderPassDescriptor passDesc = {};
+        passDesc.colorAttachmentCount = 1;
+        passDesc.colorAttachments = &colorAttachment;
+
+        WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
+        if (pass) {
+            // VNC client mode: render received frame
+            if (_vncClientMode && _vncClient) {
+                // Update texture with any received tiles
+                if (auto res = _vncClient->updateTexture(); !res) {
+                    ywarn("VNC texture update failed: {}", res.error().message());
+                }
+                // Render fullscreen quad with frame texture
+                if (auto res = _vncClient->render(pass); !res) {
+                    wgpuRenderPassEncoderEnd(pass);
+                    wgpuRenderPassEncoderRelease(pass);
+                    wgpuCommandEncoderRelease(encoder);
+                    return Err<void>("VNC client render failed", res);
+                }
+            } else if (_activeWorkspace) {
+                if (auto res = _activeWorkspace->render(pass); !res) {
+                    wgpuRenderPassEncoderEnd(pass);
+                    wgpuRenderPassEncoderRelease(pass);
+                    wgpuCommandEncoderRelease(encoder);
+                    return Err<void>("Workspace render failed", res);
+                }
+            }
+            // Render ImGui (context menus, etc.) after main content
+            if (_yettyContext.imguiManager) {
+                if (auto res = _yettyContext.imguiManager->render(pass); !res) {
+                    wgpuRenderPassEncoderEnd(pass);
+                    wgpuRenderPassEncoderRelease(pass);
+                    wgpuCommandEncoderRelease(encoder);
+                    return Err<void>("ImGui render failed", res);
+                }
+            }
+            wgpuRenderPassEncoderEnd(pass);
+            wgpuRenderPassEncoderRelease(pass);
+        }
+
+        WGPUCommandBufferDescriptor cmdDesc = {};
+        WGPUCommandBuffer cmdBuffer = wgpuCommandEncoderFinish(encoder, &cmdDesc);
+        if (cmdBuffer) {
+            wgpuQueueSubmit(_queue, 1, &cmdBuffer);
+            wgpuCommandBufferRelease(cmdBuffer);
+        }
+        wgpuCommandEncoderRelease(encoder);
+
+        present();
+    }
 
     // Check if GPU error occurred during this frame
     if (_fatalGpuError) {
@@ -1225,9 +2073,20 @@ void YettyImpl::handleResize(int newWidth, int newHeight) noexcept {
             static_cast<uint32_t>(logicalW), static_cast<uint32_t>(logicalH));
     }
 
-    if (_activeWorkspace) {
+    // In VNC headless mode, workspace size is controlled by VNC client, not local window
+    if (_activeWorkspace && !_vncHeadless) {
         float statusbarHeight = _yettyContext.imguiManager ? _yettyContext.imguiManager->getStatusbarHeight() : 0.0f;
         _activeWorkspace->resize(logicalW, logicalH - statusbarHeight);
+    }
+
+    // VNC client mode: tell server about our VNC area size (window minus statusbar)
+    if (_vncClientMode && _vncClient && windowWidth > 0 && windowHeight > 0) {
+        float statusbarH = _yettyContext.imguiManager ? _yettyContext.imguiManager->getStatusbarHeight() : 0.0f;
+        int vncH = windowHeight - static_cast<int>(statusbarH);
+        if (vncH > 0) {
+            _vncClient->sendResize(static_cast<uint16_t>(windowWidth), static_cast<uint16_t>(vncH));
+            yinfo("VNC client sent resize: {}x{} (statusbar={})", windowWidth, vncH, statusbarH);
+        }
     }
 }
 
