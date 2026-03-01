@@ -25,6 +25,10 @@ public:
     bool hasClients() const { return _clientCount > 0; }
     void forceFullFrame() { _forceFullFrame = true; }
 
+    // Check if server is ready to accept more frames (previous GPU work done)
+    // Call this BEFORE creating GPU command buffers to avoid FD exhaustion
+    bool isReadyForFrame() const;
+
     // Statistics (updated per second)
     struct FrameStats {
         uint32_t tilesSent = 0;

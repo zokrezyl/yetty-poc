@@ -1081,6 +1081,10 @@ bool VncServer::hasPendingInput() const {
     return false;  // Input is processed immediately now
 }
 
+bool VncServer::isReadyForFrame() const {
+    return _captureState == CaptureState::IDLE || _gpuWorkDone.load();
+}
+
 void VncServer::processInput() {
     // Poll all clients for input (non-blocking)
     std::lock_guard<std::mutex> lock(_clientsMutex);

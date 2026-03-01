@@ -564,9 +564,9 @@ Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
     args::ValueFlag<std::string> msdfProviderFlag(parser, "provider", "MSDF provider (cpu/gpu)", {"msdf-provider"});
     args::Flag captureBenchmarkFlag(parser, "capture-benchmark", "Enable capture benchmark mode", {"capture-benchmark"});
     args::ValueFlag<std::string> vncClientFlag(parser, "host:port", "Connect as VNC client", {"vnc-client"});
-    args::Flag vncServerFlag(parser, "vnc-server", "Start VNC server", {"vnc-server"});
+    args::Flag vncServerFlag(parser, "vnc-server", "Start VNC server (with local window)", {"vnc-server"});
     args::ValueFlag<uint16_t> vncServerPortFlag(parser, "port", "VNC server port (default 5900)", {"vnc-port"}, 5900);
-    args::Flag vncHeadlessFlag(parser, "vnc-headless", "VNC headless mode (no local rendering)", {"vnc-headless"});
+    args::Flag vncHeadlessFlag(parser, "vnc-headless", "Start VNC server without window (headless)", {"vnc-headless"});
     args::ValueFlag<std::string> vncTestFlag(parser, "pattern", "VNC test mode: text, color, scroll, stress", {"vnc-test"});
 
     try {
@@ -608,6 +608,13 @@ Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
         yinfo("VNC client mode: connecting to {}:{}", _vncHost, _vncPort);
     }
 
+    // --vnc-server and --vnc-headless are mutually exclusive
+    // --vnc-server: VNC server with local window
+    // --vnc-headless: VNC server without window (headless)
+    if (vncServerFlag && vncHeadlessFlag) {
+        return Err<void>("--vnc-server and --vnc-headless are mutually exclusive");
+    }
+
     if (vncServerFlag) {
         _vncServerMode = true;
         _vncServerPort = args::get(vncServerPortFlag);
@@ -615,8 +622,10 @@ Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
     }
 
     if (vncHeadlessFlag) {
+        _vncServerMode = true;  // Headless implies server mode
         _vncHeadless = true;
-        yinfo("VNC headless mode: no local rendering");
+        _vncServerPort = args::get(vncServerPortFlag);
+        yinfo("VNC headless server mode: port {} (no local window)", _vncServerPort);
     }
 
     if (vncTestFlag) {
@@ -645,15 +654,16 @@ Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
 }
 
 Result<void> YettyImpl::initWindow() noexcept {
-    auto platformResult = Platform::create();
+    // Create platform (headless mode skips GLFW, uses std::chrono for timing)
+    auto platformResult = Platform::create(_vncHeadless);
     if (!platformResult) {
         return Err<void>("Failed to create platform", platformResult);
     }
     _platform = *platformResult;
 
-    // In VNC headless mode, skip window creation but keep platform for timers/events
+    // In headless mode, skip window creation
     if (_vncHeadless) {
-        yinfo("VNC headless mode: platform created, skipping window creation");
+        yinfo("VNC headless mode: platform created, skipping window");
         return Ok();
     }
 
@@ -1802,6 +1812,15 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
         return Err<void>("Fatal GPU error: " + _fatalGpuErrorMsg);
     }
 
+    // In headless mode with no client connected, skip entire render iteration
+    // to avoid accumulating GPU operations that leak NVIDIA FDs
+    if (_vncHeadless && _vncServerMode) {
+        bool vncClientReady = _vncRequestedWidth > 0 && _vncRequestedHeight > 0;
+        if (!vncClientReady) {
+            return Ok();  // No client yet, nothing to render
+        }
+    }
+
     // In headless mode, skip surface operations
     WGPUTextureView targetView = nullptr;
     if (!_vncHeadless) {
@@ -1856,9 +1875,12 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
     // VNC SERVER PROTOCOL: Only start sending frames AFTER client sends its resize
     // _vncRequestedWidth/Height are set by onResize callback when client's resize arrives
     bool vncClientReady = _vncRequestedWidth > 0 && _vncRequestedHeight > 0;
+    // CRITICAL: Check if VNC server is ready for more frames BEFORE creating GPU work
+    // This prevents FD exhaustion from queuing GPU operations faster than they complete
+    bool vncServerReady = !_vncServer || _vncServer->isReadyForFrame();
     bool doCapture = (_captureBenchmark && (++_captureSkipCounter % CAPTURE_EVERY_N_FRAMES == 0)) ||
-                     (_vncHeadless && _vncServerMode && _vncServer && vncClientReady) ||
-                     (_vncServerMode && _vncServer && _vncServer->hasClients() && vncClientReady && vncThrottleOk);
+                     (_vncHeadless && _vncServerMode && _vncServer && vncClientReady && vncServerReady) ||
+                     (_vncServerMode && _vncServer && _vncServer->hasClients() && vncClientReady && vncThrottleOk && vncServerReady);
     // Determine capture size: use VNC requested size if set, otherwise window size
     uint32_t captureW = (_vncServerMode && _vncRequestedWidth > 0) ? _vncRequestedWidth : static_cast<uint32_t>(windowWidth);
     uint32_t captureH = (_vncServerMode && _vncRequestedHeight > 0) ? _vncRequestedHeight : static_cast<uint32_t>(windowHeight);
@@ -1933,6 +1955,12 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
                 ywarn("VNC send failed: {}", res.error().message());
             }
             lastVncFrame = vncNow;  // Update throttle timestamp
+        }
+    } else if (_vncServerMode && _vncServer && vncClientReady && captureW > 0 && captureH > 0) {
+        // VNC server not ready for new frame, but still need to call sendFrame
+        // to progress the state machine (check GPU callbacks, transition states)
+        if (auto res = _vncServer->sendFrame(_captureTexture, captureW, captureH); !res) {
+            ywarn("VNC send failed: {}", res.error().message());
         }
     }
 
