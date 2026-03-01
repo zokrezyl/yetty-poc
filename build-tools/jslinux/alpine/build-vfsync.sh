@@ -139,7 +139,7 @@ echo ""
 echo "=== Step 5: Building vfsync filesystem ==="
 mkdir -p "$OUTPUT_DIR"
 rm -rf "$OUTPUT_DIR"/*
-"$TOOL_BUILD_DIR/build_filelist" -m 500 "$ROOTFS_DIR" "$OUTPUT_DIR"
+"$TOOL_BUILD_DIR/build_filelist" -m 2000 "$ROOTFS_DIR" "$OUTPUT_DIR"
 
 # Step 6: Create config
 echo ""
