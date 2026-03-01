@@ -251,29 +251,30 @@ build-webasm-dawn-release: ## Build WebAssembly release (CDB generation handled 
 	@cp build-tools/web/index.html build-tools/web/serve.py $(BUILD_DIR_WEBASM_DAWN_RELEASE)/
 	@$(MAKE) build-vm-tools BUILD_DIR=$(BUILD_DIR_WEBASM_DAWN_RELEASE)
 	@bash build-tools/jslinux/alpine/build-vfsync.sh $(BUILD_DIR_WEBASM_DAWN_RELEASE)
+	@$(MAKE) verify-webasm BUILD_DIR=$(BUILD_DIR_WEBASM_DAWN_RELEASE)
+
+.PHONY: verify-webasm
+verify-webasm: ## Post-build verification that all webasm artifacts are present
+	@echo "=== Post-build webasm verification ==="
+	@FAIL=0; \
+	for f in yetty.js yetty.wasm yetty.data index.html serve.py \
+	         jslinux/vm-bridge.html jslinux/term-bridge.js \
+	         vm-tools/yecho vm-tools/ycat vm-tools/ybrowser \
+	         vfsync/u/os/yetty-alpine/head; do \
+		if [ ! -e "$(BUILD_DIR)/$$f" ]; then \
+			echo "MISSING: $$f"; \
+			FAIL=1; \
+		fi; \
+	done; \
+	if [ "$$FAIL" -ne 0 ]; then \
+		echo "ERROR: Webasm build incomplete — missing artifacts above"; \
+		exit 1; \
+	fi; \
+	echo "All webasm artifacts verified OK"
 
 .PHONY: build-vm-tools
-build-vm-tools: ## Build static x86_64 tools for JSLinux VM (tries Docker Alpine, fallback to system/nix gcc)
-	@mkdir -p $(BUILD_DIR)/vm-tools
-	@if command -v docker >/dev/null 2>&1; then \
-		echo "=== Building VM tools with Docker Alpine ==="; \
-		bash build-tools/docker/build-vm-tools.sh $(BUILD_DIR); \
-	else \
-		echo "=== Building VM tools (using available gcc) ==="; \
-		rm -rf $(BUILD_DIR)/vm-tools-build; \
-		GCC_PATH=$$(command -v gcc || echo /usr/bin/gcc); \
-		GXX_PATH=$$(command -v g++ || echo /usr/bin/g++); \
-		CMAKE_PATH=$$(command -v cmake); \
-		echo "Using cmake=$$CMAKE_PATH gcc=$$GCC_PATH g++=$$GXX_PATH"; \
-		$$CMAKE_PATH -S build-tools/cmake/host-tools -B $(BUILD_DIR)/vm-tools-build \
-			-DCMAKE_C_COMPILER=$$GCC_PATH -DCMAKE_CXX_COMPILER=$$GXX_PATH \
-			-DCMAKE_BUILD_TYPE=Release; \
-		$$CMAKE_PATH --build $(BUILD_DIR)/vm-tools-build --target yecho-static $(CMAKE_PARALLEL); \
-		cp $(BUILD_DIR)/vm-tools-build/yecho $(BUILD_DIR)/vm-tools/; \
-	fi
-	@echo "VM tools built: $(BUILD_DIR)/vm-tools/"
-	@ls -la $(BUILD_DIR)/vm-tools/
-	@file $(BUILD_DIR)/vm-tools/yecho
+build-vm-tools: ## Build static x86_64 tools for JSLinux VM via Docker Alpine
+	@bash build-tools/docker/build-vm-tools.sh $(BUILD_DIR)
 
 .PHONY: run-webasm-dawn-debug
 run-webasm-dawn-debug: build-webasm-dawn-debug ## Serve WebAssembly debug build
