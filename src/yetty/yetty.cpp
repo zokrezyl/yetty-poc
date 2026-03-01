@@ -651,6 +651,12 @@ Result<void> YettyImpl::initWindow() noexcept {
     }
     _platform = *platformResult;
 
+    // In VNC headless mode, skip window creation but keep platform for timers/events
+    if (_vncHeadless) {
+        yinfo("VNC headless mode: platform created, skipping window creation");
+        return Ok();
+    }
+
     if (auto res = _platform->createWindow(_initialWidth, _initialHeight, "yetty"); !res) {
         return Err<void>("Failed to create window", res);
     }
@@ -669,16 +675,20 @@ Result<void> YettyImpl::initWebGPU() noexcept {
     }
     yinfo("initWebGPU: Instance created");
 
-    // Create surface via platform
-    _surface = _platform->createWGPUSurface(_instance);
-    if (!_surface) {
-        return Err<void>("Failed to create WebGPU surface");
+    // Create surface via platform (skip in headless mode)
+    if (!_vncHeadless) {
+        _surface = _platform->createWGPUSurface(_instance);
+        if (!_surface) {
+            return Err<void>("Failed to create WebGPU surface");
+        }
+        yinfo("initWebGPU: Surface created");
+    } else {
+        yinfo("initWebGPU: Headless mode - skipping surface creation");
     }
-    yinfo("initWebGPU: Surface created");
 
-    // Request adapter
+    // Request adapter (without compatibleSurface in headless mode)
     WGPURequestAdapterOptions adapterOpts = {};
-    adapterOpts.compatibleSurface = _surface;
+    adapterOpts.compatibleSurface = _vncHeadless ? nullptr : _surface;
     adapterOpts.powerPreference = WGPUPowerPreference_HighPerformance;
 
     WGPURequestAdapterCallbackInfo adapterCallbackInfo = {};
@@ -813,22 +823,37 @@ Result<void> YettyImpl::initWebGPU() noexcept {
     _queue = wgpuDeviceGetQueue(_device);
     yinfo("initWebGPU: Queue obtained");
 
-    // Configure surface
-    WGPUSurfaceCapabilities caps = {};
-    wgpuSurfaceGetCapabilities(_surface, _adapter, &caps);
-    if (caps.formatCount > 0) {
-        _surfaceFormat = caps.formats[0];
-        yinfo("Surface format: {}", static_cast<int>(_surfaceFormat));
-    }
-    wgpuSurfaceCapabilitiesFreeMembers(caps);
+    // Configure surface (skip in headless mode)
+    if (_surface) {
+        WGPUSurfaceCapabilities caps = {};
+        wgpuSurfaceGetCapabilities(_surface, _adapter, &caps);
+        if (caps.formatCount > 0) {
+            _surfaceFormat = caps.formats[0];
+            yinfo("Surface format: {}", static_cast<int>(_surfaceFormat));
+        }
+        wgpuSurfaceCapabilitiesFreeMembers(caps);
 
-    configureSurface(_initialWidth, _initialHeight);
+        configureSurface(_initialWidth, _initialHeight);
+    } else {
+        // Headless mode - use default format and set initial dimensions
+        _surfaceFormat = WGPUTextureFormat_BGRA8Unorm;
+        _surfaceWidth = _initialWidth;
+        _surfaceHeight = _initialHeight;
+        yinfo("Headless mode: using default surface format BGRA8Unorm, {}x{}", _surfaceWidth, _surfaceHeight);
+    }
 
     yinfo("WebGPU initialized: device={} queue={}", (void*)_device, (void*)_queue);
     return Ok();
 }
 
 void YettyImpl::configureSurface(uint32_t width, uint32_t height) noexcept {
+    // Skip if no surface (headless mode)
+    if (!_surface) {
+        _surfaceWidth = width;
+        _surfaceHeight = height;
+        return;
+    }
+
     // Release any held texture/view before reconfiguring - they become invalid
     if (_currentTextureView) {
         wgpuTextureViewRelease(_currentTextureView);
@@ -855,6 +880,11 @@ void YettyImpl::configureSurface(uint32_t width, uint32_t height) noexcept {
 }
 
 Result<WGPUTextureView> YettyImpl::getCurrentTextureView() noexcept {
+    // No surface in headless mode
+    if (!_surface) {
+        return Err<WGPUTextureView>("No surface in headless mode");
+    }
+
     if (_currentTextureView) {
         return Ok(_currentTextureView);
     }
@@ -880,6 +910,11 @@ Result<WGPUTextureView> YettyImpl::getCurrentTextureView() noexcept {
 }
 
 void YettyImpl::present() noexcept {
+    // No surface in headless mode
+    if (!_surface) {
+        return;
+    }
+
     if (_currentTextureView) {
         wgpuTextureViewRelease(_currentTextureView);
         _currentTextureView = nullptr;
@@ -1277,6 +1312,12 @@ Result<Workspace::Ptr> YettyImpl::createWorkspace() noexcept {
 }
 
 Result<void> YettyImpl::initCallbacks() noexcept {
+    // Skip platform callbacks in headless mode (no window)
+    if (_vncHeadless) {
+        yinfo("Headless mode: skipping platform callbacks");
+        return Ok();
+    }
+
     // Focus callback
     _platform->setFocusCallback([](bool focused) {
         ydebug("FocusCallback: focused={}", focused);
@@ -1644,9 +1685,12 @@ Result<bool> YettyImpl::onEvent(const base::Event& event) {
     // Input timer: poll GLFW events (fast, always responsive)
     // Note: VNC input is now fully async via EventLoop poll, no longer needs polling here
     if (event.type == base::Event::Type::Timer && event.timer.timerId == _inputTimerId) {
-        _platform->pollEvents();
-        if (_platform->shouldClose()) {
-            (*base::EventLoop::instance())->stop();
+        // In headless mode, no window to poll events from
+        if (!_vncHeadless) {
+            _platform->pollEvents();
+            if (_platform->shouldClose()) {
+                (*base::EventLoop::instance())->stop();
+            }
         }
         return Ok(true);
     }
@@ -1773,7 +1817,13 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
     lastTime = now;
 
     int windowWidth, windowHeight;
-    _platform->getWindowSize(windowWidth, windowHeight);
+    if (_vncHeadless) {
+        // Headless mode: use VNC requested size or default (no window)
+        windowWidth = _vncRequestedWidth > 0 ? static_cast<int>(_vncRequestedWidth) : static_cast<int>(_initialWidth);
+        windowHeight = _vncRequestedHeight > 0 ? static_cast<int>(_vncRequestedHeight) : static_cast<int>(_initialHeight);
+    } else {
+        _platform->getWindowSize(windowWidth, windowHeight);
+    }
 
     _sharedUniforms.time = static_cast<float>(now);
     _sharedUniforms.deltaTime = deltaTime;
