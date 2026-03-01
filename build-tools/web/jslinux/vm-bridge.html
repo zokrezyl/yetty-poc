@@ -29,10 +29,14 @@
         }
 
         function term_handler(str) {
-            log("term_handler called with " + str.length + " chars");
+            var codes = [];
+            for (var j = 0; j < str.length; j++) codes.push(str.charCodeAt(j));
+            log("term_handler: " + str.length + " chars, codes=[" + codes.join(',') + "]");
             var i;
             for(i = 0; i < str.length; i++) {
-                console_write1(str.charCodeAt(i));
+                var code = str.charCodeAt(i);
+                if (code < 32) log("  console_write1(" + code + ") [CONTROL CHAR]");
+                console_write1(code);
             }
         }
 
@@ -173,8 +177,16 @@
             }
         }
 
-        // Handle file import requests from parent
+        // Handle messages from parent
         window.addEventListener('message', function(e) {
+            // Direct resize handler as backup - term-bridge also handles this
+            if (e.data.type === 'term-resize') {
+                log("direct term-resize: " + e.data.cols + "x" + e.data.rows +
+                    " termSize=" + JSON.stringify(term ? term.getSize() : null));
+                if (console_resize_event) {
+                    console_resize_event();
+                }
+            }
             if (e.data.type === 'import-file' && fs_import_file) {
                 var path = e.data.path;
                 var data = e.data.data; // Uint8Array

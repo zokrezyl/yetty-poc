@@ -115,11 +115,11 @@ mkdir -p /var/log /var/tmp
 hostname yetty
 export HOME=/root
 export TERM=xterm-256color
-stty rows 24 cols 80 2>/dev/null
+stty sane rows 24 cols 80 2>/dev/null
 cd /root
 cat /etc/motd
 while true; do
-    /bin/bash -l
+    setsid -c /bin/bash -l </dev/hvc0 >/dev/hvc0 2>&1
 done
 INITEOF
 chmod +x "$ROOTFS_DIR/sbin/init"

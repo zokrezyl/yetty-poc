@@ -166,12 +166,22 @@ public:
     float _lastMouseY = 0.0f;
 
     Result<void> createWindow(int width, int height, const std::string& title) override {
-        _width = width;
-        _height = height;
         _title = title;
 
+        // Use actual canvas container size instead of defaults
+        int containerW = EM_ASM_INT({
+            var c = document.getElementById('canvas-container');
+            return c ? Math.floor(c.getBoundingClientRect().width) : $0;
+        }, width);
+        int containerH = EM_ASM_INT({
+            var c = document.getElementById('canvas-container');
+            return c ? Math.floor(c.getBoundingClientRect().height) : $0;
+        }, height);
+        _width = (containerW > 0) ? containerW : width;
+        _height = (containerH > 0) ? containerH : height;
+
         // Set canvas size
-        emscripten_set_canvas_element_size("#canvas", width, height);
+        emscripten_set_canvas_element_size("#canvas", _width, _height);
 
         // Register callbacks
         emscripten_set_keydown_callback("#canvas", this, true, keyCallback);
@@ -295,8 +305,14 @@ public:
     }
 
     std::string getKeyName(int key, int scancode) const override {
-        (void)key;
         (void)scancode;
+        // Map GLFW key codes to character names for Ctrl+letter handling
+        if (key >= 'A' && key <= 'Z') {
+            return std::string(1, static_cast<char>(key + 32)); // lowercase
+        }
+        if (key >= '0' && key <= '9') {
+            return std::string(1, static_cast<char>(key));
+        }
         return "";
     }
 
@@ -372,9 +388,12 @@ private:
             int glfwKey = browserToGLFWKey(e->keyCode);
             self->_keyCallback(glfwKey, 0, action, mods);
         }
+        // Synthesize char events for printable keys (Emscripten doesn't have separate char callback)
+        // Ctrl+letter is handled via _keyCallback -> charInputWithMods path, not here
         if (self->_charCallback && eventType == EMSCRIPTEN_EVENT_KEYDOWN && e->key[0] && !e->key[1]) {
-            // Single character key
-            self->_charCallback(static_cast<unsigned int>(e->key[0]));
+            if (!e->ctrlKey && !e->altKey) {
+                self->_charCallback(static_cast<unsigned int>(e->key[0]));
+            }
         }
         return EM_TRUE;
     }
