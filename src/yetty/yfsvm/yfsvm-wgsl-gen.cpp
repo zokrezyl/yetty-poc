@@ -141,27 +141,29 @@ fn yfsvm_write_reg(regs: ptr<function, array<f32, 16>>, idx: u32, val: f32) {
 // t: time value
 // samplers: additional input values (s0-s7)
 fn yfsvm_execute(bytecodeOffset: u32, funcIndex: u32, x: f32, t: f32, samplers: array<f32, 8>) -> f32 {
-    // Read program header
-    let magic = cardStorage[bytecodeOffset];
+    // Read program header (cardStorage is f32, bitcast to u32 for integer fields)
+    let magic = bitcast<u32>(cardStorage[bytecodeOffset]);
     if (magic != YFSVM_MAGIC) {
         return 0.0; // Invalid program
     }
 
-    let version = cardStorage[bytecodeOffset + 1u];
-    let funcCount = cardStorage[bytecodeOffset + 2u];
-    let constCount = cardStorage[bytecodeOffset + 3u];
+    let version = bitcast<u32>(cardStorage[bytecodeOffset + 1u]);
+    let funcCount = bitcast<u32>(cardStorage[bytecodeOffset + 2u]);
+    let constCount = bitcast<u32>(cardStorage[bytecodeOffset + 3u]);
 
     if (funcIndex >= funcCount) {
         return 0.0; // Function index out of range
     }
 
-    // Function table starts at offset 4
+    // Function table starts at offset 4, one packed u32 per function
+    // Format: lower 16 bits = codeOffset, upper 16 bits = codeLength
     let funcTableOffset = bytecodeOffset + 4u;
-    let funcOffset = cardStorage[funcTableOffset + funcIndex * 2u];
-    let funcLength = cardStorage[funcTableOffset + funcIndex * 2u + 1u];
+    let packedFunc = bitcast<u32>(cardStorage[funcTableOffset + funcIndex]);
+    let funcOffset = packedFunc & 0xFFFFu;
+    let funcLength = packedFunc >> 16u;
 
-    // Constants start after function table
-    let constOffset = funcTableOffset + funcCount * 2u;
+    // Constants start after function table (padded to YFSVM_MAX_FUNCTIONS)
+    let constOffset = funcTableOffset + YFSVM_MAX_FUNCTIONS;
 
     // Code starts after constants
     let codeOffset = constOffset + constCount;
@@ -181,7 +183,7 @@ fn yfsvm_execute(bytecodeOffset: u32, funcIndex: u32, x: f32, t: f32, samplers: 
             break;
         }
 
-        let instr = cardStorage[codeOffset + pc];
+        let instr = bitcast<u32>(cardStorage[codeOffset + pc]);
         pc = pc + 1u;
 
         let op = yfsvm_decode_opcode(instr);
@@ -230,7 +232,7 @@ fn yfsvm_execute(bytecodeOffset: u32, funcIndex: u32, x: f32, t: f32, samplers: 
             case OP_MUL: { yfsvm_write_reg(&regs, dst, v1 * v2); }
             case OP_DIV: { yfsvm_write_reg(&regs, dst, v1 / v2); }
             case OP_NEG: { yfsvm_write_reg(&regs, dst, -v1); }
-            case OP_MOD: { yfsvm_write_reg(&regs, dst, v1 % v2); }
+            case OP_MOD: { yfsvm_write_reg(&regs, dst, v1 - v2 * floor(v1 / v2)); }
 
             // Transcendentals
             case OP_SIN: { yfsvm_write_reg(&regs, dst, sin(v1)); }

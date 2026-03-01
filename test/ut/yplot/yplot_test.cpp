@@ -443,7 +443,7 @@ suite decoration_tests = [] {
         state->axis().showAxes = true;
         auto buffer = *YDrawBuffer::create();
         state->buildDecoration(*buffer, 80, 25);
-        expect(buffer->primitiveCount() > 0_u);
+        expect(buffer->primCount() > 0_u);
     };
 
     "buildDecoration with grid off adds fewer primitives"_test = [] {
@@ -457,7 +457,7 @@ suite decoration_tests = [] {
         auto bufferNoGrid = *YDrawBuffer::create();
         stateNoGrid->buildDecoration(*bufferNoGrid, 80, 25);
 
-        expect(bufferWithGrid->primitiveCount() > bufferNoGrid->primitiveCount());
+        expect(bufferWithGrid->primCount() > bufferNoGrid->primCount());
     };
 };
 
