@@ -82,3 +82,8 @@ add_subdirectory(cards)
 add_subdirectory(yast)
 add_subdirectory(msdf-wgsl)
 add_subdirectory(shaders)
+
+# VNC is desktop-only (Linux, macOS)
+if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID AND NOT WIN32)
+    add_subdirectory(vnc)
+endif()

@@ -9,9 +9,6 @@
 #include "cards/ygrid/ygrid.h"
 #include "cards/ygui/ygui.h"
 #include "cards/yhtml/yhtml.h"
-#if 0
-#include "cards/ymery/ymery.h"
-#endif
 #include "cards/ypdf/ypdf.h"
 #include "cards/ytext/ytext.h"
 #include <regex>
@@ -97,19 +94,6 @@ public:
                                 const std::string &payload) {
       return card::Markdown::create(ctx, x, y, w, h, args, payload);
     });
-
-#if 0
-    registerCard("ymery",
-                 [](const YettyContext &ctx, int32_t x, int32_t y, uint32_t w,
-                    uint32_t h, const std::string &args,
-                    const std::string &payload) -> Result<CardPtr> {
-                   auto result =
-                       card::Ymery::create(ctx, x, y, w, h, args, payload);
-                   if (!result)
-                     return std::unexpected(result.error());
-                   return Ok<CardPtr>(*result);
-                 });
-#endif
 
     registerCard("qrcode",
                  [](const YettyContext &ctx, int32_t x, int32_t y, uint32_t w,

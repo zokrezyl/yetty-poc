@@ -36,9 +36,14 @@ public:
     virtual Result<void> broadcast(const Event& event) = 0;
 
     // Poll (file descriptor) management
+    enum PollEvents : int {
+        POLL_READABLE = 1,
+        POLL_WRITABLE = 2,
+    };
     virtual Result<PollId> createPoll() = 0;
     virtual Result<void> configPoll(PollId id, int fd) = 0;
-    virtual Result<void> startPoll(PollId id) = 0;
+    virtual Result<void> startPoll(PollId id, int events = POLL_READABLE) = 0;  // events = POLL_READABLE | POLL_WRITABLE
+    virtual Result<void> setPollEvents(PollId id, int events) = 0;  // Change events on running poll
     virtual Result<void> stopPoll(PollId id) = 0;
     virtual Result<void> destroyPoll(PollId id) = 0;
     virtual Result<void> registerPollListener(PollId id, EventListener::Ptr listener) = 0;

@@ -13,8 +13,6 @@
 
 #include <memory>
 
-namespace yetty::ymery { class Renderer; }
-
 namespace yetty {
 
 class YGuiOverlay;
@@ -42,9 +40,6 @@ struct YettyContext {
 
     // ID of owning GPUScreen (set by GPUScreen, used for targeted events)
     base::ObjectId screenId = 0;
-
-    // Ymery widget renderer (YAML-driven ImGui widgets)
-    std::shared_ptr<ymery::Renderer> ymeryRenderer;
 
     // Application config (tree-like, runtime writable)
     Config::Ptr config;
