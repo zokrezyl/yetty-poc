@@ -139,13 +139,6 @@ private:
     bool _fatalGpuError = false;
     std::string _fatalGpuErrorMsg;
 
-    // Deferred resize — applied at start of next frame to avoid destroying
-    // the surface texture mid-render when resize callbacks fire re-entrantly.
-    bool _pendingResize = false;
-    uint32_t _pendingResizeW = 0;
-    uint32_t _pendingResizeH = 0;
-    bool _inRender = false;  // re-entrancy guard
-
     // FPS tracking
     double _lastFpsTime = 0.0;
     uint32_t _frameCount = 0;
