@@ -435,7 +435,13 @@ private:
                     _buffer->setBgColor(static_cast<uint32_t>(std::stoul(colorStr, nullptr, 16)));
                 }
             } else if (token == "--cell-size") {
-                std::string s; if (iss >> s) _builder->setGridCellSize(std::stof(s));
+                std::string sx, sy;
+                if (iss >> sx) {
+                    float csX = std::stof(sx);
+                    float csY = csX;  // default to square
+                    if (iss >> sy) csY = std::stof(sy);
+                    _builder->setGridCellSize(csX, csY);
+                }
             } else if (token == "--max-prims-per-cell") {
                 std::string s; if (iss >> s) _builder->setMaxPrimsPerCell(static_cast<uint32_t>(std::stoul(s)));
             } else if (token == "--show-bounds") {

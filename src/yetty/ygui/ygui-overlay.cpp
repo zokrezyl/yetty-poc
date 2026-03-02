@@ -45,10 +45,12 @@ struct OverlayUniforms {
     float sceneMaxY;
     uint32_t gridWidth;
     uint32_t gridHeight;
-    float cellSize;
+    float cellSizeX;
+    float cellSizeY;
     uint32_t primCount;
     uint32_t glyphCount;
     float pixelRange;
+    float _pad;  // padding to maintain alignment
 };
 
 class YGuiOverlayImpl;  // forward decl
@@ -532,7 +534,8 @@ void YGuiOverlayImpl::rebuildBuffers() {
     uniforms.sceneMaxY = _builder->sceneMaxY();
     uniforms.gridWidth = _builder->gridWidth();
     uniforms.gridHeight = _builder->gridHeight();
-    uniforms.cellSize = _builder->cellSize();
+    uniforms.cellSizeX = _builder->cellSizeX();
+    uniforms.cellSizeY = _builder->cellSizeY();
     uniforms.primCount = primCount;
     uniforms.glyphCount = static_cast<uint32_t>(glyphs.size());
 

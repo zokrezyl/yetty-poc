@@ -89,7 +89,7 @@ struct YDrawMetadata {
     uint32_t gridOffset;        // 8
     uint32_t gridWidth;         // 12
     uint32_t gridHeight;        // 16
-    uint32_t cellSize;          // 20 (f32 stored as bits)
+    uint32_t cellSizeXY;        // 20: cellSizeX (f16 low) | cellSizeY (f16 high)
     uint32_t glyphOffset;       // 24
     uint32_t glyphCount;        // 28
     uint32_t sceneMinX;         // 32 (f32 stored as bits)
@@ -100,6 +100,22 @@ struct YDrawMetadata {
     uint32_t heightCells;       // 52
     uint32_t flags;             // 56
     uint32_t bgColor;           // 60
+
+    // Helper to pack two f32 cell sizes into f16 pair
+    static uint32_t packCellSize(float x, float y) {
+        auto toF16 = [](float f) -> uint16_t {
+            uint32_t b;
+            std::memcpy(&b, &f, 4);
+            uint16_t sign = (b >> 16) & 0x8000;
+            int32_t  exp  = ((b >> 23) & 0xFF) - 127 + 15;
+            uint16_t mant = (b >> 13) & 0x3FF;
+            if (exp <= 0) { exp = 0; mant = 0; }
+            else if (exp >= 31) { exp = 31; mant = 0; }
+            return sign | (static_cast<uint16_t>(exp) << 10) | mant;
+        };
+        return static_cast<uint32_t>(toF16(x)) |
+               (static_cast<uint32_t>(toF16(y)) << 16);
+    }
 };
 static_assert(sizeof(YDrawMetadata) == 64, "YDrawMetadata must be 64 bytes");
 
@@ -169,8 +185,9 @@ public:
                                 float maxX, float maxY) = 0;
     virtual bool hasExplicitBounds() const = 0;
 
-    virtual void setGridCellSize(float size) = 0;
-    virtual float gridCellSize() const = 0;
+    virtual void setGridCellSize(float sizeX, float sizeY) = 0;
+    virtual float gridCellSizeX() const = 0;
+    virtual float gridCellSizeY() const = 0;
 
     virtual void setFlags(uint32_t flags) = 0;
     virtual void addFlags(uint32_t flags) = 0;
@@ -236,7 +253,8 @@ public:
     virtual float sceneMinY() const = 0;
     virtual float sceneMaxX() const = 0;
     virtual float sceneMaxY() const = 0;
-    virtual float cellSize() const = 0;
+    virtual float cellSizeX() const = 0;
+    virtual float cellSizeY() const = 0;
     virtual uint32_t gridWidth() const = 0;
     virtual uint32_t gridHeight() const = 0;
 

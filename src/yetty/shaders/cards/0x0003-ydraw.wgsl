@@ -13,7 +13,7 @@
 //   offset 2:  gridOffset (u32)
 //   offset 3:  gridWidth (u32)
 //   offset 4:  gridHeight (u32)
-//   offset 5:  cellSize (f32)
+//   offset 5:  cellSizeXY (cellSizeX f16 low | cellSizeY f16 high)
 //   offset 6:  glyphOffset (u32)   - offset of glyph data in cardStorage
 //   offset 7:  glyphCount (u32)    - number of text glyphs
 //   offset 8:  sceneMinX (f32)     - content bounds (= grid origin)
@@ -165,10 +165,14 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
     let gridOffset = cardMetadata[metaOffset + 2u];
     let gridWidth = cardMetadata[metaOffset + 3u];
     let gridHeight = cardMetadata[metaOffset + 4u];
-    let cellSize = bitcast<f32>(cardMetadata[metaOffset + 5u]);
+    // Unpack f16 pair: cellSizeX (low 16 bits), cellSizeY (high 16 bits)
+    let cellSizeXY = unpack2x16float(cardMetadata[metaOffset + 5u]);
+    let cellSizeX = cellSizeXY.x;
+    let cellSizeY = cellSizeXY.y;
     let glyphOffset = cardMetadata[metaOffset + 6u];
     let glyphCount = cardMetadata[metaOffset + 7u];
-    let invCellSize = select(0.0, 1.0 / cellSize, cellSize > 0.0);
+    let invCellSizeX = select(0.0, 1.0 / cellSizeX, cellSizeX > 0.0);
+    let invCellSizeY = select(0.0, 1.0 / cellSizeY, cellSizeY > 0.0);
 
     // Content bounds (= grid origin, never changes with zoom/pan)
     let contentMinX = bitcast<f32>(cardMetadata[metaOffset + 8u]);
@@ -358,8 +362,8 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
     }
 
     // O(1) GRID LOOKUP - use CONTENT bounds (grid origin), not view bounds
-    let cellX = u32(clamp((scenePos.x - contentMinX) * invCellSize, 0.0, f32(gridWidth - 1u)));
-    let cellY = u32(clamp((scenePos.y - contentMinY) * invCellSize, 0.0, f32(gridHeight - 1u)));
+    let cellX = u32(clamp((scenePos.x - contentMinX) * invCellSizeX, 0.0, f32(gridWidth - 1u)));
+    let cellY = u32(clamp((scenePos.y - contentMinY) * invCellSizeY, 0.0, f32(gridHeight - 1u)));
     let cellIndex = cellY * gridWidth + cellX;
 
     // Variable-length grid: [off0][off1]...[offN] [count,entries...] ...
@@ -568,9 +572,8 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
 
     // Debug: show grid lines (use floor instead of expensive modulo)
     if ((flags & YDRAW_FLAG_SHOW_GRID) != 0u) {
-        let cellSize = 1.0 / invCellSize;
-        let cellPosX = (scenePos.x - contentMinX) * invCellSize;
-        let cellPosY = (scenePos.y - contentMinY) * invCellSize;
+        let cellPosX = (scenePos.x - contentMinX) * invCellSizeX;
+        let cellPosY = (scenePos.y - contentMinY) * invCellSizeY;
         let fracX = fract(cellPosX);
         let fracY = fract(cellPosY);
         let gridLineWidth = 0.02;
