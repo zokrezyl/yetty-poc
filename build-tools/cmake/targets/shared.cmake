@@ -17,6 +17,7 @@ include(${YETTY_ROOT}/build-tools/cmake/libs/zlib.cmake)
 include(${YETTY_ROOT}/build-tools/cmake/libs/libpng.cmake)
 include(${YETTY_ROOT}/build-tools/cmake/libs/msdfgen.cmake)
 include(${YETTY_ROOT}/build-tools/cmake/libs/cdb.cmake)
+include(${YETTY_ROOT}/build-tools/cmake/thorvg.cmake)
 
 # Common include directories
 set(YETTY_INCLUDES
