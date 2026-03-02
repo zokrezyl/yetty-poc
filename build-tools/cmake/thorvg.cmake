@@ -87,6 +87,8 @@ if(thorvg_ADDED)
     # Compile options
     target_compile_definitions(thorvg_lib PRIVATE
         TVG_STATIC
+        $<$<PLATFORM_ID:Windows>:NOMINMAX>
+        $<$<PLATFORM_ID:Windows>:WIN32_LEAN_AND_MEAN>
     )
 
     set_target_properties(thorvg_lib PROPERTIES
