@@ -778,3 +778,75 @@ Card resources are bound to the main render shader:
 | `src/yetty/cards/ydraw/` | YDraw card (parser) |
 | `src/yetty/ydraw/ydraw-base.cpp` | YDraw core + spatial hash |
 | `src/yetty/shaders/cards/` | Card shader implementations |
+
+---
+
+## Screen Draw Layer (OSC 666673)
+
+The Screen Draw Layer is a separate overlay that renders ydraw primitives at **pixel coordinates** (not tied to terminal cells). Unlike cards which scroll with terminal content and are positioned in cell coordinates, the screen draw layer:
+
+- Draws on top of everything (terminal + cards)
+- Uses pixel coordinates (0,0 = top-left of terminal viewport)
+- Persists until explicitly cleared
+- Supports the same YAML format as the ydraw card
+
+### OSC Format
+
+```
+ESC ] 666673 ; <args> ; <base64-payload> ST
+```
+
+Where:
+- `666673` = Screen Draw Layer vendor ID
+- `args` = Options: `--yaml`, `--append`, `--clear`
+- `base64-payload` = Base64-encoded YAML or binary data
+- `ST` = `\033\\` (String Terminator)
+
+### Arguments
+
+| Argument | Description |
+|----------|-------------|
+| `--yaml` | Parse payload as YAML (same format as ydraw card) |
+| `--append` | Append to existing drawings instead of replacing |
+| `--clear` | Clear all drawings (no payload needed) |
+
+### Examples
+
+**Draw shapes at pixel coordinates:**
+```bash
+YAML='
+background: "#00000000"
+body:
+  - circle:
+      center: [100, 100]
+      radius: 40
+      fill-color: "#e74c3c"
+  - text:
+      position: [50, 50]
+      content: "Overlay Text"
+      font-size: 24
+      color: "#3498db"
+'
+PAYLOAD=$(echo "$YAML" | base64 -w0)
+printf '\033]666673;--yaml;%s\033\\' "$PAYLOAD"
+```
+
+**Clear the overlay:**
+```bash
+printf '\033]666673;--clear;\033\\'
+```
+
+### Use Cases
+
+- HUD overlays (FPS counter, status indicators)
+- Annotations on top of terminal content
+- Pixel-precise positioning for visualizations
+- Non-scrolling UI elements
+
+### Source Files
+
+| File | Purpose |
+|------|---------|
+| `src/yetty/screen-draw-layer.h` | Screen draw layer interface |
+| `src/yetty/screen-draw-layer.cpp` | Implementation |
+| `src/yetty/shaders/ygui-overlay.wgsl` | Shared overlay shader |
