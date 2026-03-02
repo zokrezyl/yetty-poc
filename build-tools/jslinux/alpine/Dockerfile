@@ -1,18 +1,10 @@
 FROM alpine:3.23
 RUN apk add --no-cache \
+    # Shells
     bash \
+    zsh \
+    # Core utilities
     coreutils \
-    neovim \
-    gcc \
-    g++ \
-    make \
-    cmake \
-    git \
-    python3 \
-    curl \
-    wget \
-    tar \
-    gzip \
     findutils \
     grep \
     sed \
@@ -20,12 +12,37 @@ RUN apk add --no-cache \
     diffutils \
     patch \
     less \
-    man-pages \
-    mandoc \
-    musl-dev \
-    linux-headers \
-    binutils \
-    strace \
     file \
     util-linux \
-    ncurses-terminfo-base
+    # Build tools (build-base = gcc, g++, make, libc-dev)
+    build-base \
+    cmake \
+    binutils \
+    musl-dev \
+    linux-headers \
+    # Editors
+    neovim \
+    # Version control
+    git \
+    # Python
+    python3 \
+    py3-pip \
+    # Network tools
+    curl \
+    wget \
+    # Compression
+    tar \
+    gzip \
+    xz \
+    zip \
+    unzip \
+    # Documentation
+    man-pages \
+    mandoc \
+    # Debug tools
+    strace \
+    # Terminal
+    ncurses-terminfo-base \
+    # Misc
+    tree \
+    htop
