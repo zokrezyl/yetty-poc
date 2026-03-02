@@ -25,10 +25,11 @@ namespace yetty::card {
 //=============================================================================
 
 struct YPlotMetadata {
-    // [0]: flags(8) | funcCount(8) | pad(16)
+    // [0]: flags(8) | funcCount(8) | glyphBase0(8) | glyphDot(8)
     uint8_t flags;
     uint8_t funcCount;
-    uint16_t _pad0;
+    uint8_t glyphBase0;  // MSDF glyph index for '0'
+    uint8_t glyphDot;    // MSDF glyph index for '.'
 
     // [1]: widthCells(16) | heightCells(16)
     uint16_t widthCells;
@@ -55,8 +56,8 @@ struct YPlotMetadata {
     float centerX;
     float centerY;
 
-    // [15]: color table
-    uint32_t colorTableOffset;
+    // [15]: colorTableOffset(24) | glyphMinus(8)
+    uint32_t colorTableOffsetAndGlyph;  // Lower 24 bits = offset, upper 8 bits = glyphMinus
 };
 static_assert(sizeof(YPlotMetadata) == 64, "YPlotMetadata must be 64 bytes");
 
@@ -80,6 +81,18 @@ public:
         auto stateResult = yplot::YPlotState::create();
         if (stateResult) {
             _state = *stateResult;
+        }
+
+        // Look up glyph indices for axis label characters
+        if (_fontMgr) {
+            auto font = _fontMgr->getDefaultMsMsdfFont();
+            if (font) {
+                _glyphBase0 = font->getGlyphIndex('0');
+                _glyphDot = font->getGlyphIndex('.');
+                _glyphMinus = font->getGlyphIndex('-');
+                yinfo("YPlotCard: glyph indices: '0'={} '.'={} '-'={}",
+                      _glyphBase0, _glyphDot, _glyphMinus);
+            }
         }
     }
 
@@ -527,6 +540,10 @@ private:
         if (_state->axis().showLabels) meta.flags |= FLAG_LABELS;
         meta.funcCount = static_cast<uint8_t>(_state->functionCount());
 
+        // Glyph indices for axis labels
+        meta.glyphBase0 = static_cast<uint8_t>(_glyphBase0);
+        meta.glyphDot = static_cast<uint8_t>(_glyphDot);
+
         // Size
         meta.widthCells = static_cast<uint16_t>(_widthCells);
         meta.heightCells = static_cast<uint16_t>(_heightCells);
@@ -554,18 +571,22 @@ private:
         meta.centerX = _centerX;
         meta.centerY = _centerY;
 
-        // Colors
+        // Colors and glyphMinus packed into slot 15
+        uint32_t colorOffset = 0;
         if (_colorHandle.isValid()) {
-            meta.colorTableOffset = _colorHandle.offset / sizeof(uint32_t);
+            colorOffset = _colorHandle.offset / sizeof(uint32_t);
         }
+        // Pack: lower 24 bits = colorTableOffset, upper 8 bits = glyphMinus
+        meta.colorTableOffsetAndGlyph = (colorOffset & 0xFFFFFF) | ((_glyphMinus & 0xFF) << 24);
 
         // Debug dump metadata
         ydebug("YPlotCard::uploadMetadata: flags={} funcCount={} widthCells={} heightCells={}",
                meta.flags, meta.funcCount, meta.widthCells, meta.heightCells);
         ydebug("YPlotCard::uploadMetadata: range=[{},{},{},{}] bytecode=[off={} size={}]",
                meta.xMin, meta.xMax, meta.yMin, meta.yMax, meta.bytecodeOffset, meta.bytecodeSize);
-        ydebug("YPlotCard::uploadMetadata: margins=[{},{},{},{}] colorTableOff={}",
-               meta.marginLeft, meta.marginBottom, meta.plotWidth, meta.plotHeight, meta.colorTableOffset);
+        ydebug("YPlotCard::uploadMetadata: margins=[{},{},{},{}] colorTableOff={} glyphs=[{},{},{}]",
+               meta.marginLeft, meta.marginBottom, meta.plotWidth, meta.plotHeight, colorOffset,
+               meta.glyphBase0, meta.glyphDot, _glyphMinus);
 
         _cardMgr->writeMetadata(_metaHandle, &meta, sizeof(meta));
     }
@@ -597,6 +618,11 @@ private:
     float _zoom = 1.0f;
     float _centerX = 0.5f;
     float _centerY = 0.5f;
+
+    // Glyph indices for axis labels
+    uint32_t _glyphBase0 = 0;
+    uint32_t _glyphDot = 0;
+    uint32_t _glyphMinus = 0;
 };
 
 //=============================================================================

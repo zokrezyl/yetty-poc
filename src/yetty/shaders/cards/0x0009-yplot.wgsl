@@ -13,7 +13,7 @@
 //
 // =============================================================================
 // Metadata layout (64 bytes = 16 u32s):
-//   [0]  flags(8) | funcCount(8) | pad(16)
+//   [0]  flags(8) | funcCount(8) | glyphBase0(8) | glyphDot(8)
 //   [1]  widthCells(16) | heightCells(16)
 //   [2]  bytecodeOffset (u32)
 //   [3]  bytecodeSize (u32)
@@ -28,7 +28,7 @@
 //   [12] zoom (f32)
 //   [13] centerX (f32)
 //   [14] centerY (f32)
-//   [15] colorTableOffset (u32)
+//   [15] colorTableOffset(24) | glyphMinus(8)
 // =============================================================================
 
 const YPLOT_FLAG_GRID: u32 = 1u;
@@ -75,6 +75,9 @@ fn shaderGlyph_1048585(
     // Use buffer values if working, otherwise use hardcoded defaults
     var flags = 7u;
     var funcCount = 1u;
+    var glyphBase0 = 0u;
+    var glyphDot = 0u;
+    var glyphMinus = 0u;
     var widthCells = 1u;
     var heightCells = 1u;
     var bytecodeOffset = 0u;
@@ -90,11 +93,13 @@ fn shaderGlyph_1048585(
     var zoom = 1.0;
     var centerX = 0.5;
     var centerY = 0.5;
-    var colorTableOffset = 6u;
+    var colorTableOffset = 0u;
 
     if (bufferWorking) {
         flags = slot0 & 0xFFu;
         funcCount = (slot0 >> 8u) & 0xFFu;
+        glyphBase0 = (slot0 >> 16u) & 0xFFu;
+        glyphDot = (slot0 >> 24u) & 0xFFu;
         widthCells = slot1 & 0xFFFFu;
         heightCells = slot1 >> 16u;
         if (widthCells == 0u) { widthCells = 1u; }
@@ -113,7 +118,9 @@ fn shaderGlyph_1048585(
         zoom = bitcast<f32>(cardMetadata[metaOffset + 12u]);
         centerX = bitcast<f32>(cardMetadata[metaOffset + 13u]);
         centerY = bitcast<f32>(cardMetadata[metaOffset + 14u]);
-        colorTableOffset = cardMetadata[metaOffset + 15u];
+        let slot15 = cardMetadata[metaOffset + 15u];
+        colorTableOffset = slot15 & 0xFFFFFFu;
+        glyphMinus = (slot15 >> 24u) & 0xFFu;
     }
 
     // Compute widget-wide UV (0-1 across entire widget)
@@ -204,11 +211,179 @@ fn shaderGlyph_1048585(
         }
     } else {
         // Outside plot area - margin for labels
-        // TODO: Render axis labels here using text
         color = YPLOT_BG_COLOR * 0.8;
     }
 
+    // =========================================================================
+    // Axis labels — rendered in margin area using MSDF glyphs
+    // =========================================================================
+    if (glyphBase0 > 0u) {
+        let labelColor = vec3<f32>(0.7, 0.7, 0.7);
+        let widgetPixelW = f32(widthCells) * grid.cellSize.x;
+        let widgetPixelH = f32(heightCells) * grid.cellSize.y;
+        let screenScale = widgetPixelW;
+
+        // Glyph size: one cell height in widget UV space
+        let glyphH = 1.0 / f32(heightCells);
+        let glyphW = glyphH * (grid.cellSize.x / grid.cellSize.y) * 0.6;
+
+        // Compute nice grid spacing for labels
+        let visibleYRange = (viewYMax - viewYMin);
+        let rawYSpacing = visibleYRange / 5.0;
+        let logYSp = log2(abs(rawYSpacing)) / 3.321928;
+        let magY = pow(10.0, floor(logYSp));
+        let resY = abs(rawYSpacing) / magY;
+        var ySpacing: f32;
+        if (resY < 1.5) { ySpacing = magY; }
+        else if (resY < 3.5) { ySpacing = 2.0 * magY; }
+        else if (resY < 7.5) { ySpacing = 5.0 * magY; }
+        else { ySpacing = 10.0 * magY; }
+
+        let visibleXRange = (viewXMax - viewXMin);
+        let rawXSpacing = visibleXRange / 5.0;
+        let logXSp = log2(abs(rawXSpacing)) / 3.321928;
+        let magX = pow(10.0, floor(logXSp));
+        let resX = abs(rawXSpacing) / magX;
+        var xSpacing: f32;
+        if (resX < 1.5) { xSpacing = magX; }
+        else if (resX < 3.5) { xSpacing = 2.0 * magX; }
+        else if (resX < 7.5) { xSpacing = 5.0 * magX; }
+        else { xSpacing = 10.0 * magX; }
+
+        // --- Y axis labels (left margin) ---
+        if (widgetUV.x < plotLeft && widgetUV.y >= plotBottom && widgetUV.y <= plotTop) {
+            // Current Y position in data coordinates
+            let plotUVy = (widgetUV.y - plotBottom) / plotHeight;
+            let dataY = mix(viewYMin, viewYMax, plotUVy);
+            let snapY = round(dataY / ySpacing) * ySpacing;
+
+            // Convert snapped Y back to widget UV
+            let snapPlotUVy = (snapY - viewYMin) / (viewYMax - viewYMin);
+            let snapWidgetY = plotBottom + snapPlotUVy * plotHeight;
+
+            let labelTop = snapWidgetY - glyphH * 0.5;
+            let labelBot = snapWidgetY + glyphH * 0.5;
+            if (widgetUV.y >= labelTop && widgetUV.y < labelBot) {
+                let glyphUV_y = (widgetUV.y - labelTop) / glyphH;
+                let rendered = renderYplotLabel(widgetUV.x, glyphUV_y, snapY, ySpacing, plotLeft, glyphW, glyphH, glyphBase0, glyphDot, glyphMinus, labelColor, color, screenScale);
+                if (rendered.a > 0.01) { color = rendered.rgb; }
+            }
+        }
+
+        // --- X axis labels (bottom margin) ---
+        if (widgetUV.y < plotBottom && widgetUV.x >= plotLeft && widgetUV.x <= plotRight) {
+            // Current X position in data coordinates
+            let plotUVx = (widgetUV.x - plotLeft) / plotWidth;
+            let dataX = mix(viewXMin, viewXMax, plotUVx);
+            let snapX = round(dataX / xSpacing) * xSpacing;
+
+            // Convert snapped X back to widget UV
+            let snapPlotUVx = (snapX - viewXMin) / (viewXMax - viewXMin);
+            let snapWidgetX = plotLeft + snapPlotUVx * plotWidth;
+
+            // Render label centered on snapWidgetX
+            var val = snapX;
+            var hasSign = 0u;
+            if (val < 0.0) { hasSign = 1u; val = -val; }
+
+            var decimals = 0u;
+            if (xSpacing < 0.01) { decimals = 3u; }
+            else if (xSpacing < 0.1) { decimals = 2u; }
+            else if (xSpacing < 1.0) { decimals = 1u; }
+
+            let intPart = u32(floor(val));
+            var intDigits = 1u;
+            if (intPart >= 10u) { intDigits = 2u; }
+            if (intPart >= 100u) { intDigits = 3u; }
+            if (intPart >= 1000u) { intDigits = 4u; }
+            let totalChars = hasSign + intDigits + select(0u, 1u + decimals, decimals > 0u);
+
+            let labelLeft = snapWidgetX - f32(totalChars) * glyphW * 0.5;
+            let labelRight = labelLeft + f32(totalChars) * glyphW;
+            let labelTop = 0.003;
+            let labelBot = labelTop + glyphH;
+
+            if (widgetUV.x >= labelLeft && widgetUV.x < labelRight &&
+                widgetUV.y >= labelTop && widgetUV.y < labelBot) {
+                let charIdx = u32(floor((widgetUV.x - labelLeft) / glyphW));
+                let charLocalUV = vec2<f32>(
+                    fract((widgetUV.x - labelLeft) / glyphW),
+                    (widgetUV.y - labelTop) / glyphH
+                );
+
+                let glyphIdx = getDigitGlyph(charIdx, snapX, decimals, intDigits, hasSign, glyphBase0, glyphDot, glyphMinus);
+                if (glyphIdx > 0u) {
+                    let r = renderMsdfGlyph(charLocalUV, glyphIdx, labelColor, color, grid.pixelRange, screenScale);
+                    if (r.alpha > 0.01) { color = r.color; }
+                }
+            }
+        }
+    }
+
     return color;
+}
+
+// Helper: render Y-axis label at given position
+fn renderYplotLabel(widgetX: f32, glyphUV_y: f32, dataVal: f32, spacing: f32, plotLeft: f32, glyphW: f32, glyphH: f32, glyphBase0: u32, glyphDot: u32, glyphMinus: u32, labelColor: vec3<f32>, bgColor: vec3<f32>, screenScale: f32) -> vec4<f32> {
+    var val = dataVal;
+    var hasSign = 0u;
+    if (val < 0.0) { hasSign = 1u; val = -val; }
+
+    var decimals = 0u;
+    if (spacing < 0.01) { decimals = 3u; }
+    else if (spacing < 0.1) { decimals = 2u; }
+    else if (spacing < 1.0) { decimals = 1u; }
+
+    let intPart = u32(floor(val));
+    let fracPart = u32(round(fract(val) * pow(10.0, f32(decimals))));
+    var intDigits = 1u;
+    if (intPart >= 10u) { intDigits = 2u; }
+    if (intPart >= 100u) { intDigits = 3u; }
+    if (intPart >= 1000u) { intDigits = 4u; }
+    let totalChars = hasSign + intDigits + select(0u, 1u + decimals, decimals > 0u);
+
+    let labelRight = plotLeft - 0.003;
+    let labelLeft = labelRight - f32(totalChars) * glyphW;
+
+    if (widgetX >= labelLeft && widgetX < labelRight) {
+        let charIdx = u32(floor((widgetX - labelLeft) / glyphW));
+        let charLocalUV = vec2<f32>(
+            fract((widgetX - labelLeft) / glyphW),
+            glyphUV_y
+        );
+
+        let glyphIdx = getDigitGlyph(charIdx, dataVal, decimals, intDigits, hasSign, glyphBase0, glyphDot, glyphMinus);
+        if (glyphIdx > 0u) {
+            let r = renderMsdfGlyph(charLocalUV, glyphIdx, labelColor, bgColor, grid.pixelRange, screenScale);
+            if (r.alpha > 0.01) {
+                return vec4<f32>(r.color, 1.0);
+            }
+        }
+    }
+    return vec4<f32>(bgColor, 0.0);
+}
+
+// Helper: get glyph index for a digit at given position in a number
+fn getDigitGlyph(charIdx: u32, dataVal: f32, decimals: u32, intDigits: u32, hasSign: u32, glyphBase0: u32, glyphDot: u32, glyphMinus: u32) -> u32 {
+    var val = abs(dataVal);
+    let intPart = u32(floor(val));
+    let fracPart = u32(round(fract(val) * pow(10.0, f32(decimals))));
+    let digitStart = hasSign;
+
+    if (hasSign > 0u && charIdx == 0u) {
+        return glyphMinus;
+    } else if (charIdx >= digitStart && charIdx < digitStart + intDigits) {
+        let digitPos = charIdx - digitStart;
+        let divisor = u32(round(pow(10.0, f32(intDigits - 1u - digitPos))));
+        return glyphBase0 + (intPart / divisor) % 10u;
+    } else if (decimals > 0u && charIdx == digitStart + intDigits) {
+        return glyphDot;
+    } else if (decimals > 0u && charIdx > digitStart + intDigits) {
+        let decPos = charIdx - digitStart - intDigits - 1u;
+        let divisor = u32(round(pow(10.0, f32(decimals - 1u - decPos))));
+        return glyphBase0 + (fracPart / divisor) % 10u;
+    }
+    return 0u;
 }
 
 // Draw grid lines
