@@ -21,12 +21,41 @@ env:
   BUILD_WEB: false
 
 jobs:
+  # =============================================================================
+  # Read build flags (required because env context not available in job-level if)
+  # =============================================================================
+  read-flags:
+    runs-on: ubuntu-latest
+    outputs:
+      linux: ${{ steps.set.outputs.linux }}
+      macos: ${{ steps.set.outputs.macos }}
+      windows: ${{ steps.set.outputs.windows }}
+      android: ${{ steps.set.outputs.android }}
+      web: ${{ steps.set.outputs.web }}
+    steps:
+      - id: set
+        run: |
+          if [[ "${{ startsWith(github.ref, 'refs/tags/') }}" == "true" ]]; then
+            echo "linux=true" >> $GITHUB_OUTPUT
+            echo "macos=true" >> $GITHUB_OUTPUT
+            echo "windows=true" >> $GITHUB_OUTPUT
+            echo "android=true" >> $GITHUB_OUTPUT
+            echo "web=true" >> $GITHUB_OUTPUT
+          else
+            echo "linux=${{ env.BUILD_LINUX }}" >> $GITHUB_OUTPUT
+            echo "macos=${{ env.BUILD_MACOS }}" >> $GITHUB_OUTPUT
+            echo "windows=${{ env.BUILD_WINDOWS }}" >> $GITHUB_OUTPUT
+            echo "android=${{ env.BUILD_ANDROID }}" >> $GITHUB_OUTPUT
+            echo "web=${{ env.BUILD_WEB }}" >> $GITHUB_OUTPUT
+          fi
+
 
   # =============================================================================
   # Desktop Build (Linux)
   # =============================================================================
   build-desktop:
-    if: startsWith(github.ref, 'refs/tags/') || env.BUILD_LINUX == 'true'
+    needs: read-flags
+    if: needs.read-flags.outputs.linux == 'true'
     runs-on: ${{ matrix.os }}
 
     strategy:
@@ -99,7 +128,8 @@ jobs:
   # Desktop Build (macOS Intel)
   # =============================================================================
   build-macos:
-    if: startsWith(github.ref, 'refs/tags/') || env.BUILD_MACOS == 'true'
+    needs: read-flags
+    if: needs.read-flags.outputs.macos == 'true'
     runs-on: macos-15-intel
 
     steps:
@@ -146,7 +176,8 @@ jobs:
   # Desktop Build (Windows)
   # =============================================================================
   build-windows:
-    if: startsWith(github.ref, 'refs/tags/') || env.BUILD_WINDOWS == 'true'
+    needs: read-flags
+    if: needs.read-flags.outputs.windows == 'true'
     runs-on: windows-latest
 
     steps:
@@ -189,7 +220,8 @@ jobs:
   # Android Build
   # =============================================================================
   build-android:
-    if: startsWith(github.ref, 'refs/tags/') || env.BUILD_ANDROID == 'true'
+    needs: read-flags
+    if: needs.read-flags.outputs.android == 'true'
     runs-on: ubuntu-latest
 
     env:
@@ -290,7 +322,8 @@ jobs:
   # WebAssembly Build (using nix for deterministic builds)
   # =============================================================================
   build-webasm:
-    if: startsWith(github.ref, 'refs/tags/') || env.BUILD_WEB == 'true'
+    needs: read-flags
+    if: needs.read-flags.outputs.web == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -328,7 +361,7 @@ jobs:
   # =============================================================================
   deploy-pages:
     runs-on: ubuntu-latest
-    needs: build-webasm
+    needs: [read-flags, build-webasm]
     if: |
       always() &&
       needs.build-webasm.result == 'success' &&
@@ -375,7 +408,7 @@ jobs:
   # =============================================================================
   release:
     runs-on: ubuntu-latest
-    needs: [build-desktop, build-macos, build-windows, build-webasm, build-android]
+    needs: [read-flags, build-desktop, build-macos, build-windows, build-webasm, build-android]
     if: |
       always() &&
       startsWith(github.ref, 'refs/tags/') &&
