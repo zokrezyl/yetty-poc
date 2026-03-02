@@ -498,7 +498,8 @@ private:
 };
 
 // Factory implementation for Windows
-Result<Platform::Ptr> Platform::create() {
+Result<Platform::Ptr> Platform::create(bool headless) {
+    (void)headless;  // Windows doesn't support headless mode
     auto platform = std::make_shared<GlfwPlatform>();
     if (auto res = platform->init(); !res) {
         return Err<Ptr>("Failed to initialize GLFW platform", res);

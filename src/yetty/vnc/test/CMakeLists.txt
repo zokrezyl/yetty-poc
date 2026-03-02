@@ -28,7 +28,7 @@ target_link_libraries(vnc-test-client PRIVATE
     webgpu
     glfw
     glfw3webgpu
-    uv
+    uv_a
 )
 
 target_include_directories(vnc-test-client PRIVATE
