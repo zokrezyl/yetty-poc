@@ -12,6 +12,7 @@
 #include <termios.h>
 #include <unistd.h>
 #include <cstring>
+#include <vector>
 
 #ifdef __APPLE__
 #include <util.h>
@@ -32,6 +33,7 @@ public:
 
     Result<void> init(const PtyConfig& config) {
         _shell = config.shell;
+        _command = config.command;
         _cols = config.cols;
         _rows = config.rows;
 
@@ -52,8 +54,25 @@ public:
             for (int fd = 3; fd < 1024; fd++) {
                 close(fd);
             }
-            execl(_shell.c_str(), _shell.c_str(), nullptr);
-            _exit(1);
+
+            if (!_command.empty()) {
+                // Execute command directly (parse into args)
+                auto args = parseCommand(_command);
+                if (args.empty()) {
+                    _exit(1);
+                }
+                std::vector<char*> argv;
+                for (auto& arg : args) {
+                    argv.push_back(const_cast<char*>(arg.c_str()));
+                }
+                argv.push_back(nullptr);
+                execvp(argv[0], argv.data());
+                _exit(1);
+            } else {
+                // No command - start interactive shell
+                execl(_shell.c_str(), _shell.c_str(), nullptr);
+                _exit(1);
+            }
         }
 
         // Parent process - set non-blocking
@@ -196,12 +215,54 @@ public:
     }
 
 private:
+    // Parse command string into arguments (handles quotes)
+    static std::vector<std::string> parseCommand(const std::string& cmd) {
+        std::vector<std::string> args;
+        std::string current;
+        bool inSingleQuote = false;
+        bool inDoubleQuote = false;
+        bool escape = false;
+
+        for (char c : cmd) {
+            if (escape) {
+                current += c;
+                escape = false;
+                continue;
+            }
+            if (c == '\\' && !inSingleQuote) {
+                escape = true;
+                continue;
+            }
+            if (c == '\'' && !inDoubleQuote) {
+                inSingleQuote = !inSingleQuote;
+                continue;
+            }
+            if (c == '"' && !inSingleQuote) {
+                inDoubleQuote = !inDoubleQuote;
+                continue;
+            }
+            if (c == ' ' && !inSingleQuote && !inDoubleQuote) {
+                if (!current.empty()) {
+                    args.push_back(current);
+                    current.clear();
+                }
+                continue;
+            }
+            current += c;
+        }
+        if (!current.empty()) {
+            args.push_back(current);
+        }
+        return args;
+    }
+
     int _ptyMaster = -1;
     pid_t _childPid = -1;
     base::PollId _pollId = -1;
     uint32_t _cols = 80;
     uint32_t _rows = 24;
     std::string _shell;
+    std::string _command;
     bool _running = false;
     DataAvailableCallback _dataAvailableCallback;
     ExitCallback _exitCallback;

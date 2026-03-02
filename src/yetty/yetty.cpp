@@ -241,6 +241,12 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     }
     _yettyContext.config = *configResult;
 
+    // Set shell/command from -c/-e flag if specified
+    if (!_executeCommand.empty()) {
+        _yettyContext.config->setString("shell/command", _executeCommand);
+        yinfo("Set shell/command in config: {}", _executeCommand);
+    }
+
     if (auto res = initWindow(); !res) return res;
     if (auto res = initWebGPU(); !res) return res;
     if (auto res = initSharedResources(); !res) return res;
@@ -573,7 +579,7 @@ Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
     args::ArgumentParser parser("yetty", "Terminal emulator with GPU rendering");
 
     args::HelpFlag help(parser, "help", "Show this help", {'h', "help"});
-    args::ValueFlag<std::string> executeFlag(parser, "command", "Execute command", {'e'});
+    args::ValueFlag<std::string> executeFlag(parser, "command", "Execute command", {'e', 'c'});
     args::ValueFlag<std::string> msdfProviderFlag(parser, "provider", "MSDF provider (cpu/gpu)", {"msdf-provider"});
     args::Flag captureBenchmarkFlag(parser, "capture-benchmark", "Enable capture benchmark mode", {"capture-benchmark"});
 #if YETTY_HAS_VNC
