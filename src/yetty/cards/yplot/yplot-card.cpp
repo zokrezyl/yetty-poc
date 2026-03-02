@@ -45,11 +45,13 @@ struct YPlotMetadata {
     float yMin;
     float yMax;
 
-    // [8-11]: plot area (normalized coords)
+    // [8-9]: data buffer (for buffer mode)
+    uint32_t dataOffset;   // float index into cardStorage
+    uint32_t dataCount;    // number of floats
+
+    // [10-11]: plot area (normalized coords)
     float marginLeft;
     float marginBottom;
-    float plotWidth;
-    float plotHeight;
 
     // [12-14]: view/pan
     float zoom;
@@ -119,6 +121,13 @@ public:
             ywarn("YPlotCard::init: failed to parse args: {}", error_msg(res));
         }
 
+        // Parse payload for buffer mode (comma-separated floats)
+        if (!_payloadStr.empty()) {
+            if (auto res = parsePayload(_payloadStr); !res) {
+                ywarn("YPlotCard::init: failed to parse payload: {}", error_msg(res));
+            }
+        }
+
         // Compile expressions if any
         if (_state && _state->functionCount() > 0) {
             if (auto res = compileExpressions(); !res) {
@@ -145,6 +154,7 @@ public:
         // Need realloc if we have bytecode but no valid handle
         if (!_bytecode.empty() && !_bytecodeHandle.isValid()) return true;
         if (!_colorTable.empty() && !_colorHandle.isValid()) return true;
+        if (!_data.empty() && !_dataHandle.isValid()) return true;
         return false;
     }
 
@@ -152,6 +162,7 @@ public:
         // Invalidate handles
         _bytecodeHandle = BufferHandle::invalid();
         _colorHandle = BufferHandle::invalid();
+        _dataHandle = BufferHandle::invalid();
 
         // Reserve for bytecode
         if (!_bytecode.empty()) {
@@ -163,6 +174,12 @@ public:
         if (!_colorTable.empty()) {
             uint32_t colorSize = static_cast<uint32_t>(_colorTable.size() * sizeof(uint32_t));
             _cardMgr->bufferManager()->reserve(colorSize);
+        }
+
+        // Reserve for data buffer
+        if (!_data.empty()) {
+            uint32_t dataSize = static_cast<uint32_t>(_data.size() * sizeof(float));
+            _cardMgr->bufferManager()->reserve(dataSize);
         }
     }
 
@@ -193,6 +210,21 @@ public:
             _cardMgr->bufferManager()->markBufferDirty(_colorHandle);
         }
 
+        // Allocate data buffer (for buffer mode)
+        if (!_data.empty()) {
+            uint32_t dataSize = static_cast<uint32_t>(_data.size() * sizeof(float));
+            auto bufResult = _cardMgr->bufferManager()->allocateBuffer(
+                metadataSlotIndex(), "data", dataSize);
+            if (!bufResult) {
+                return Err<void>("YPlotCard::allocateBuffers: failed to allocate data buffer");
+            }
+            _dataHandle = *bufResult;
+            std::memcpy(_dataHandle.data, _data.data(), dataSize);
+            _cardMgr->bufferManager()->markBufferDirty(_dataHandle);
+            yinfo("YPlotCard::allocateBuffers: allocated data buffer at offset {}, {} floats",
+                  _dataHandle.offset, _data.size());
+        }
+
         _metadataDirty = true;
         return Ok();
     }
@@ -214,6 +246,7 @@ public:
 
         _bytecodeHandle = BufferHandle::invalid();
         _colorHandle = BufferHandle::invalid();
+        _dataHandle = BufferHandle::invalid();
 
         if (_metaHandle.isValid() && _cardMgr) {
             _cardMgr->deallocateMetadata(_metaHandle);
@@ -226,7 +259,7 @@ public:
     void suspend() override {
         _bytecodeHandle = BufferHandle::invalid();
         _colorHandle = BufferHandle::invalid();
-        // YDrawBuilder doesn't have suspend - handles are invalidated when card is suspended
+        _dataHandle = BufferHandle::invalid();
     }
 
     //=========================================================================
@@ -525,6 +558,79 @@ private:
     }
 
     //=========================================================================
+    // Buffer mode support
+    //=========================================================================
+
+    Result<void> parsePayload(const std::string& payload) {
+        yinfo("YPlotCard::parsePayload: payload length={}", payload.size());
+
+        // Parse comma or space separated float values
+        std::vector<float> values;
+        std::istringstream iss(payload);
+        std::string token;
+
+        // Split by comma
+        while (std::getline(iss, token, ',')) {
+            // Trim whitespace
+            size_t start = token.find_first_not_of(" \t\n\r");
+            size_t end = token.find_last_not_of(" \t\n\r");
+            if (start != std::string::npos && end != std::string::npos) {
+                token = token.substr(start, end - start + 1);
+                try {
+                    values.push_back(std::stof(token));
+                } catch (const std::exception& e) {
+                    ywarn("YPlotCard::parsePayload: invalid float '{}'", token);
+                }
+            }
+        }
+
+        yinfo("YPlotCard::parsePayload: parsed {} values", values.size());
+
+        if (values.empty()) {
+            return Err<void>("No valid data points in payload");
+        }
+
+        _data = std::move(values);
+
+        // Calculate range if auto
+        if (_autoRange) {
+            calculateRange();
+        }
+
+        _metadataDirty = true;
+        return Ok();
+    }
+
+    void calculateRange() {
+        if (_data.empty()) {
+            return;
+        }
+
+        float minVal = *std::min_element(_data.begin(), _data.end());
+        float maxVal = *std::max_element(_data.begin(), _data.end());
+
+        // Add 5% padding
+        float range = maxVal - minVal;
+        if (range < 0.0001f) {
+            range = 1.0f;
+        }
+        minVal -= range * 0.05f;
+        maxVal += range * 0.05f;
+
+        // Update state range
+        if (_state) {
+            _state->range().yMin = minVal;
+            _state->range().yMax = maxVal;
+            // X range is 0..dataCount-1 for buffer mode
+            _state->range().xMin = 0.0f;
+            _state->range().xMax = static_cast<float>(_data.size() - 1);
+        }
+
+        yinfo("YPlotCard::calculateRange: y=[{}, {}] x=[0, {}]",
+              minVal, maxVal, _data.size() - 1);
+    }
+
+    //=========================================================================
     // Metadata upload
     //=========================================================================
 
@@ -538,6 +644,7 @@ private:
         if (_state->axis().showGrid) meta.flags |= FLAG_GRID;
         if (_state->axis().showAxes) meta.flags |= FLAG_AXES;
         if (_state->axis().showLabels) meta.flags |= FLAG_LABELS;
+        if (!_data.empty()) meta.flags |= FLAG_BUFFER;  // Buffer mode flag
         meta.funcCount = static_cast<uint8_t>(_state->functionCount());
 
         // Glyph indices for axis labels
@@ -548,7 +655,7 @@ private:
         meta.widthCells = static_cast<uint16_t>(_widthCells);
         meta.heightCells = static_cast<uint16_t>(_heightCells);
 
-        // Bytecode
+        // Bytecode (for expression mode)
         if (_bytecodeHandle.isValid()) {
             meta.bytecodeOffset = _bytecodeHandle.offset / sizeof(uint32_t);
             meta.bytecodeSize = static_cast<uint32_t>(_bytecode.size());
@@ -560,11 +667,15 @@ private:
         meta.yMin = _state->range().yMin;
         meta.yMax = _state->range().yMax;
 
+        // Data buffer (for buffer mode)
+        if (_dataHandle.isValid()) {
+            meta.dataOffset = _dataHandle.offset / sizeof(float);
+            meta.dataCount = static_cast<uint32_t>(_data.size());
+        }
+
         // Plot area margins (normalized)
         meta.marginLeft = 0.08f;
         meta.marginBottom = 0.08f;
-        meta.plotWidth = 1.0f - 0.08f - 0.02f;
-        meta.plotHeight = 1.0f - 0.08f - 0.02f;
 
         // View/pan
         meta.zoom = _zoom;
@@ -582,11 +693,9 @@ private:
         // Debug dump metadata
         ydebug("YPlotCard::uploadMetadata: flags={} funcCount={} widthCells={} heightCells={}",
                meta.flags, meta.funcCount, meta.widthCells, meta.heightCells);
-        ydebug("YPlotCard::uploadMetadata: range=[{},{},{},{}] bytecode=[off={} size={}]",
-               meta.xMin, meta.xMax, meta.yMin, meta.yMax, meta.bytecodeOffset, meta.bytecodeSize);
-        ydebug("YPlotCard::uploadMetadata: margins=[{},{},{},{}] colorTableOff={} glyphs=[{},{},{}]",
-               meta.marginLeft, meta.marginBottom, meta.plotWidth, meta.plotHeight, colorOffset,
-               meta.glyphBase0, meta.glyphDot, _glyphMinus);
+        ydebug("YPlotCard::uploadMetadata: range=[{},{},{},{}] bytecode=[off={} size={}] data=[off={} cnt={}]",
+               meta.xMin, meta.xMax, meta.yMin, meta.yMax, meta.bytecodeOffset, meta.bytecodeSize,
+               meta.dataOffset, meta.dataCount);
 
         _cardMgr->writeMetadata(_metaHandle, &meta, sizeof(meta));
     }
@@ -609,6 +718,11 @@ private:
     // Color table
     std::vector<uint32_t> _colorTable;
     BufferHandle _colorHandle = BufferHandle::invalid();
+
+    // Data buffer (for buffer mode plotting)
+    std::vector<float> _data;
+    BufferHandle _dataHandle = BufferHandle::invalid();
+    bool _autoRange = true;
 
     // State
     bool _metadataDirty = true;

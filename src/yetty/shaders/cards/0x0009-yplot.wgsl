@@ -5,26 +5,24 @@
 // Design: Composes yfsvm for expression evaluation with built-in rendering
 // =============================================================================
 //
-// This shader:
-// 1. Reads yplot metadata from cardMetadata
-// 2. Reads yfsvm bytecode from cardStorage
-// 3. For each pixel in the plot area, evaluates expressions via yfsvm_execute()
-// 4. Renders grid, axes, and plot lines
+// This shader supports two modes:
+// 1. Expression mode: Uses yfsvm bytecode to evaluate mathematical expressions
+// 2. Buffer mode: Reads float data from cardStorage and renders as line plot
 //
 // =============================================================================
 // Metadata layout (64 bytes = 16 u32s):
 //   [0]  flags(8) | funcCount(8) | glyphBase0(8) | glyphDot(8)
 //   [1]  widthCells(16) | heightCells(16)
-//   [2]  bytecodeOffset (u32)
+//   [2]  bytecodeOffset (u32) - expression mode
 //   [3]  bytecodeSize (u32)
 //   [4]  xMin (f32)
 //   [5]  xMax (f32)
 //   [6]  yMin (f32)
 //   [7]  yMax (f32)
-//   [8]  marginLeft (f32)
-//   [9]  marginBottom (f32)
-//   [10] plotWidth (f32)
-//   [11] plotHeight (f32)
+//   [8]  dataOffset (u32) - buffer mode: float index into cardStorage
+//   [9]  dataCount (u32) - buffer mode: number of floats
+//   [10] marginLeft (f32)
+//   [11] marginBottom (f32)
 //   [12] zoom (f32)
 //   [13] centerX (f32)
 //   [14] centerY (f32)
@@ -34,11 +32,13 @@
 const YPLOT_FLAG_GRID: u32 = 1u;
 const YPLOT_FLAG_AXES: u32 = 2u;
 const YPLOT_FLAG_LABELS: u32 = 4u;
+const YPLOT_FLAG_BUFFER: u32 = 8u;  // Buffer mode (vs expression mode)
 
 // Colors
 const YPLOT_BG_COLOR: vec3<f32> = vec3<f32>(0.102, 0.102, 0.180);  // #1A1A2E
 const YPLOT_GRID_COLOR: vec3<f32> = vec3<f32>(0.267, 0.267, 0.267);  // #444444
 const YPLOT_AXIS_COLOR: vec3<f32> = vec3<f32>(0.667, 0.667, 0.667);  // #AAAAAA
+const YPLOT_LINE_COLOR: vec3<f32> = vec3<f32>(0.2, 0.8, 0.2);  // Green for buffer mode
 
 fn shaderGlyph_1048585(
     localUV: vec2<f32>,
@@ -63,12 +63,12 @@ fn shaderGlyph_1048585(
     let slot1 = cardMetadata[metaOffset + 1u];
 
     // Detect if buffer is working by checking multiple conditions:
-    // 1. flags should be 1-7 (valid flag combination)
+    // 1. flags should be 1-15 (valid flag combination including buffer mode)
     // 2. widthCells and heightCells should be 1-100 (reasonable range)
     let flagsRaw = slot0 & 0xFFu;
     let widthRaw = slot1 & 0xFFFFu;
     let heightRaw = slot1 >> 16u;
-    let bufferWorking = flagsRaw >= 1u && flagsRaw <= 7u &&
+    let bufferWorking = flagsRaw >= 1u && flagsRaw <= 15u &&
                         widthRaw >= 1u && widthRaw <= 100u &&
                         heightRaw >= 1u && heightRaw <= 100u;
 
@@ -86,10 +86,10 @@ fn shaderGlyph_1048585(
     var xMax = 3.14159;
     var yMin = -1.5;
     var yMax = 1.5;
+    var dataOffset = 0u;
+    var dataCount = 0u;
     var marginLeft = 0.08;
     var marginBottom = 0.08;
-    var plotWidth = 0.9;
-    var plotHeight = 0.9;
     var zoom = 1.0;
     var centerX = 0.5;
     var centerY = 0.5;
@@ -111,10 +111,10 @@ fn shaderGlyph_1048585(
         xMax = bitcast<f32>(cardMetadata[metaOffset + 5u]);
         yMin = bitcast<f32>(cardMetadata[metaOffset + 6u]);
         yMax = bitcast<f32>(cardMetadata[metaOffset + 7u]);
-        marginLeft = bitcast<f32>(cardMetadata[metaOffset + 8u]);
-        marginBottom = bitcast<f32>(cardMetadata[metaOffset + 9u]);
-        plotWidth = bitcast<f32>(cardMetadata[metaOffset + 10u]);
-        plotHeight = bitcast<f32>(cardMetadata[metaOffset + 11u]);
+        dataOffset = cardMetadata[metaOffset + 8u];
+        dataCount = cardMetadata[metaOffset + 9u];
+        marginLeft = bitcast<f32>(cardMetadata[metaOffset + 10u]);
+        marginBottom = bitcast<f32>(cardMetadata[metaOffset + 11u]);
         zoom = bitcast<f32>(cardMetadata[metaOffset + 12u]);
         centerX = bitcast<f32>(cardMetadata[metaOffset + 13u]);
         centerY = bitcast<f32>(cardMetadata[metaOffset + 14u]);
@@ -122,6 +122,10 @@ fn shaderGlyph_1048585(
         colorTableOffset = slot15 & 0xFFFFFFu;
         glyphMinus = (slot15 >> 24u) & 0xFFu;
     }
+
+    // Compute plot area dimensions from margins
+    let plotWidth = 1.0 - marginLeft - 0.02;
+    let plotHeight = 1.0 - marginBottom - 0.02;
 
     // Compute widget-wide UV (0-1 across entire widget)
     let widgetUV = (vec2<f32>(f32(relCol), f32(relRow)) + localUV) /
@@ -178,13 +182,47 @@ fn shaderGlyph_1048585(
             color = drawAxes(color, plotUV, viewXMin, viewXMax, viewYMin, viewYMax);
         }
 
-        // Evaluate and draw plot lines using yfsvm
-        if (funcCount > 0u && bytecodeSize > 0u) {
+        // Pixel size in data coordinates for anti-aliasing
+        let pixelSizeY = (viewYMax - viewYMin) / (f32(heightCells) * 20.0);
+
+        // Check for buffer mode
+        let isBufferMode = (flags & YPLOT_FLAG_BUFFER) != 0u && dataCount > 1u;
+
+        if (isBufferMode) {
+            // =========================================================================
+            // Buffer mode: render data from cardStorage as line plot
+            // =========================================================================
+            let lineColor = YPLOT_LINE_COLOR;
+
+            // Map plotUV.x to data index
+            let dataIndex_f = plotUV.x * f32(dataCount - 1u);
+            let dataIndex = u32(floor(dataIndex_f));
+            let nextIndex = min(dataIndex + 1u, dataCount - 1u);
+            let interpolatedT = fract(dataIndex_f);
+
+            // Read two adjacent data points and interpolate
+            let value1 = cardStorage[dataOffset + dataIndex];
+            let value2 = cardStorage[dataOffset + nextIndex];
+            let interpolatedY = mix(value1, value2, interpolatedT);
+
+            // Map y value to plot UV (using zoomed/panned view)
+            let yNorm = (interpolatedY - viewYMin) / (viewYMax - viewYMin);
+
+            // Distance from current pixel to the curve
+            let dist = abs(plotUV.y - yNorm);
+
+            // Anti-aliased line rendering
+            let lineWidth = 2.0 * pixelSizeY / (viewYMax - viewYMin);
+            if (dist < lineWidth) {
+                let alpha = 1.0 - dist / lineWidth;
+                color = mix(color, lineColor, alpha);
+            }
+        } else if (funcCount > 0u && bytecodeSize > 0u) {
+            // =========================================================================
+            // Expression mode: evaluate and draw plot lines using yfsvm
+            // =========================================================================
             var samplers: array<f32, 8>;
             samplers[0] = dataX;
-
-            // Pixel size in data coordinates for anti-aliasing
-            let pixelSizeY = (viewYMax - viewYMin) / (f32(heightCells) * 20.0);
 
             // Evaluate each function
             for (var fi = 0u; fi < funcCount && fi < 8u; fi = fi + 1u) {
