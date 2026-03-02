@@ -137,7 +137,10 @@ public:
         if (_pollId >= 0) {
             if (auto loopResult = base::EventLoop::instance(); loopResult) {
                 auto loop = *loopResult;
-                loop->deregisterListener(sharedAs<base::EventListener>());
+                // Check if shared_ptr is still valid before calling sharedAs
+                if (auto self = weak_from_this().lock()) {
+                    loop->deregisterListener(sharedAs<base::EventListener>());
+                }
                 loop->destroyPoll(_pollId);
             }
             _pollId = -1;

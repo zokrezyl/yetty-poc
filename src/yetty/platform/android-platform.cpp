@@ -201,7 +201,8 @@ private:
 };
 
 // Factory implementation for Android
-Result<Platform::Ptr> Platform::create() {
+Result<Platform::Ptr> Platform::create(bool headless) {
+    (void)headless;
     auto platform = std::make_shared<AndroidPlatform>();
     yinfo("Android platform created");
     return Ok<Ptr>(std::move(platform));

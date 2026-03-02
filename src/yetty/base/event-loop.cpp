@@ -21,6 +21,7 @@ struct EventTypeHash {
 struct PollHandle {
     uv_poll_t poll;
     int fd = -1;
+    int events = UV_READABLE;  // Current poll events
     std::vector<std::weak_ptr<EventListener>> listeners;
 };
 
@@ -152,8 +153,13 @@ public:
 
         auto& ph = it->second;
         ph->fd = fd;
-        uv_poll_init(_loop, &ph->poll, fd);
+        int r = uv_poll_init(_loop, &ph->poll, fd);
+        if (r != 0) {
+            yerror("EventLoop::configPoll: uv_poll_init failed for fd={}: {}", fd, uv_strerror(r));
+            return Err<void>(std::string("uv_poll_init failed: ") + uv_strerror(r));
+        }
         ph->poll.data = ph.get();
+        ydebug("EventLoop::configPoll: id={} fd={} success", id, fd);
         return Ok();
 #else
         (void)id;
@@ -162,18 +168,62 @@ public:
 #endif
     }
 
-    Result<void> startPoll(PollId id) override {
+    Result<void> startPoll(PollId id, int events = POLL_READABLE) override {
 #if !YETTY_WEB && !defined(__ANDROID__)
         auto it = _polls.find(id);
         if (it == _polls.end()) {
             return Err<void>("Poll not found");
         }
 
-        ydebug("EventLoop::startPoll: id={} fd={}", id, it->second->fd);
-        uv_poll_start(&it->second->poll, UV_READABLE, onPollCallback);
+        // Convert our flags to libuv flags
+        int uvEvents = 0;
+        if (events & POLL_READABLE) uvEvents |= UV_READABLE;
+        if (events & POLL_WRITABLE) uvEvents |= UV_WRITABLE;
+        it->second->events = uvEvents;
+
+        ydebug("EventLoop::startPoll: id={} fd={} events={}", id, it->second->fd, uvEvents);
+        int r = uv_poll_start(&it->second->poll, uvEvents, onPollCallback);
+        if (r != 0) {
+            yerror("EventLoop::startPoll: uv_poll_start failed for fd={}: {}", it->second->fd, uv_strerror(r));
+            return Err<void>(std::string("uv_poll_start failed: ") + uv_strerror(r));
+        }
         return Ok();
 #else
         (void)id;
+        (void)events;
+        return Err<void>("Poll not supported on this platform");
+#endif
+    }
+
+    Result<void> setPollEvents(PollId id, int events) override {
+#if !YETTY_WEB && !defined(__ANDROID__)
+        auto it = _polls.find(id);
+        if (it == _polls.end()) {
+            return Err<void>("Poll not found");
+        }
+
+        // Convert our flags to libuv flags
+        int uvEvents = 0;
+        if (events & POLL_READABLE) uvEvents |= UV_READABLE;
+        if (events & POLL_WRITABLE) uvEvents |= UV_WRITABLE;
+
+        if (it->second->events == uvEvents) {
+            return Ok();  // No change needed
+        }
+
+        it->second->events = uvEvents;
+        ydebug("EventLoop::setPollEvents: id={} fd={} events={}", id, it->second->fd, uvEvents);
+
+        // Restart poll with new events
+        int r = uv_poll_start(&it->second->poll, uvEvents, onPollCallback);
+        if (r != 0) {
+            yerror("EventLoop::setPollEvents: uv_poll_start failed for fd={}: {}", it->second->fd, uv_strerror(r));
+            return Err<void>(std::string("uv_poll_start failed: ") + uv_strerror(r));
+        }
+        return Ok();
+#else
+        (void)id;
+        (void)events;
         return Err<void>("Poll not supported on this platform");
 #endif
     }
@@ -334,18 +384,36 @@ private:
 #if !YETTY_WEB && !defined(__ANDROID__)
     static void onPollCallback(uv_poll_t* handle, int status, int events) {
         auto* ph = static_cast<PollHandle*>(handle->data);
-        ydebug("EventLoop::onPollCallback: fd={} status={} events={}", ph->fd, status, events);
-        if (status < 0 || !(events & UV_READABLE)) return;
+        ydebug("EventLoop::onPollCallback: fd={} status={} events={} listeners={}", ph->fd, status, events, ph->listeners.size());
 
-        Event event;
-        event.type = Event::Type::PollReadable;
-        event.poll.fd = ph->fd;
+        if (status < 0) {
+            ywarn("EventLoop::onPollCallback: error status={} for fd={}", status, ph->fd);
+            return;
+        }
 
-        ydebug("EventLoop::onPollCallback: dispatching to {} listeners", ph->listeners.size());
-        for (const auto& wp : ph->listeners) {
-            if (auto sp = wp.lock()) {
-                ydebug("EventLoop::onPollCallback: calling listener onEvent");
-                sp->onEvent(event);
+        // Dispatch readable event
+        if (events & UV_READABLE) {
+            Event event;
+            event.type = Event::Type::PollReadable;
+            event.poll.fd = ph->fd;
+
+            for (const auto& wp : ph->listeners) {
+                if (auto sp = wp.lock()) {
+                    sp->onEvent(event);
+                }
+            }
+        }
+
+        // Dispatch writable event
+        if (events & UV_WRITABLE) {
+            Event event;
+            event.type = Event::Type::PollWritable;
+            event.poll.fd = ph->fd;
+
+            for (const auto& wp : ph->listeners) {
+                if (auto sp = wp.lock()) {
+                    sp->onEvent(event);
+                }
             }
         }
     }

@@ -53,7 +53,8 @@ public:
     virtual ~Platform() = default;
 
     // Factory - creates platform-appropriate implementation
-    static Result<Ptr> create();
+    // headless=true: No window/GLFW, uses std::chrono for timing (for VNC headless server)
+    static Result<Ptr> create(bool headless = false);
 
     // Window management
     virtual Result<void> createWindow(int width, int height, const std::string& title) = 0;

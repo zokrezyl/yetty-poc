@@ -4,6 +4,7 @@ include(${YETTY_ROOT}/build-tools/cmake/targets/shared.cmake)
 
 # Linux-specific libraries
 include(${YETTY_ROOT}/build-tools/cmake/libs/glfw.cmake)
+include(${YETTY_ROOT}/build-tools/cmake/libs/libjpeg-turbo.cmake)
 include(${YETTY_ROOT}/build-tools/cmake/TreeSitter.cmake)
 include(${YETTY_ROOT}/build-tools/cmake/Libmagic.cmake)
 
@@ -22,7 +23,7 @@ add_executable(yetty
     ${YETTY_ROOT}/src/yetty/platform/glfw-platform.cpp
 )
 
-target_include_directories(yetty PRIVATE ${YETTY_INCLUDES} ${YETTY_RENDERER_INCLUDES})
+target_include_directories(yetty PRIVATE ${YETTY_INCLUDES} ${YETTY_RENDERER_INCLUDES} ${JPEG_INCLUDE_DIRS})
 
 target_compile_definitions(yetty PRIVATE
     ${YETTY_DEFINITIONS}
@@ -31,6 +32,7 @@ target_compile_definitions(yetty PRIVATE
     YETTY_USE_PREBUILT_ATLAS=0
     YETTY_USE_FONTCONFIG=1
     YETTY_USE_FORKPTY=1
+    YETTY_HAS_VNC=1
 )
 
 set_target_properties(yetty PROPERTIES ENABLE_EXPORTS TRUE)
@@ -52,6 +54,8 @@ target_link_libraries(yetty PRIVATE
     lz4_static
     uv_a
     yetty_gpu
+    turbojpeg-static
+    yetty_vnc
     ${FONTCONFIG_STATIC_LIB}
     ${EXPAT_STATIC_LIB}
     ${UUID_STATIC_LIB}

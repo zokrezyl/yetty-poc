@@ -512,7 +512,8 @@ private:
 };
 
 // Factory implementation for Web
-Result<Platform::Ptr> Platform::create() {
+Result<Platform::Ptr> Platform::create(bool headless) {
+    (void)headless;
     auto platform = std::make_shared<WebPlatform>();
     yinfo("Web platform created");
     return Ok<Ptr>(std::move(platform));

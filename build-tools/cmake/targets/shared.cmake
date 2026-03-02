@@ -49,5 +49,5 @@ set(YETTY_LIBS
     yetty_cards
     yetty_yast
     msdf-wgsl
+    args
 )
-
