@@ -136,7 +136,7 @@ extern const unsigned int g${RES_NAME}Size;
         target_sources(${TARGET} PRIVATE ${RESOURCE_SOURCE} ${INCBIN_OUTPUT})
         target_include_directories(${TARGET} PRIVATE ${INCBIN_INCLUDE_DIR})
 
-    elseif(EMSCRIPTEN)
+    elseif(EMSCRIPTEN OR CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
         # Emscripten: incbin's inline assembly doesn't work with WASM
         # Provide empty stubs - icons not supported on web
         file(WRITE ${RESOURCE_SOURCE}
