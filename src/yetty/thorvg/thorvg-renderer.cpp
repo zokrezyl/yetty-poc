@@ -5,6 +5,8 @@
 #include <ytrace/ytrace.hpp>
 #include <cstring>
 #include <mutex>
+#include <stack>
+#include <vector>
 
 namespace yetty::thorvg {
 
@@ -97,9 +99,9 @@ public:
             result = picture->load(data.c_str(), static_cast<uint32_t>(data.size()),
                                    "lottie", nullptr, true);
             if (result == tvg::Result::Success) {
-                _isAnimated = true;
                 _totalFrames = _animation->totalFrame();
                 _duration = _animation->duration();
+                _isAnimated = _totalFrames > 1;
             }
         } else {
             result = picture->load(data.c_str(), static_cast<uint32_t>(data.size()),
@@ -109,7 +111,7 @@ public:
 
         if (result != tvg::Result::Success) {
             _animation.reset();
-            return Err<void>("ThorVgRenderer: failed to load content");
+            return Err<void>("ThorVgRenderer: failed to load content (result=" + std::to_string(static_cast<int>(result)) + ")");
         }
 
         // Get content dimensions
@@ -176,20 +178,15 @@ public:
             return Err<void>("ThorVgRenderer: no content loaded");
         }
 
+        uint32_t beforeCount = _buffer->primCount();
         _buffer->clear();
         _nextPrimId = 0;
 
-        // Use Accessor to traverse scene tree
-        auto accessor = std::unique_ptr<tvg::Accessor>(tvg::Accessor::gen());
-        if (accessor) {
-            accessor->set(_picture, [](const tvg::Paint* paint, void* data) -> bool {
-                auto* self = static_cast<ThorVgRendererImpl*>(data);
-                self->renderPaint(paint);
-                return true;  // continue traversal
-            }, this);
-        }
+        // Use Accessor to traverse, computing world transforms via parent chain
+        renderWithAccessor(_picture);
 
-        ydebug("ThorVgRenderer::render: emitted {} primitives", _nextPrimId);
+        yinfo("ThorVgRenderer::render: frame={:.1f} prims before={} after={}", 
+              _currentFrame, beforeCount, _buffer->primCount());
         return Ok();
     }
 
@@ -206,30 +203,94 @@ public:
 
 private:
     //=========================================================================
+    // Matrix operations
+    //=========================================================================
+
+    // Multiply two 2D affine matrices
+    tvg::Matrix multiplyMatrix(const tvg::Matrix& a, const tvg::Matrix& b) {
+        return {
+            a.e11 * b.e11 + a.e12 * b.e21,  // e11
+            a.e11 * b.e12 + a.e12 * b.e22,  // e12
+            a.e11 * b.e13 + a.e12 * b.e23 + a.e13,  // e13
+            a.e21 * b.e11 + a.e22 * b.e21,  // e21
+            a.e21 * b.e12 + a.e22 * b.e22,  // e22
+            a.e21 * b.e13 + a.e22 * b.e23 + a.e23,  // e23
+            0, 0, 1  // e31, e32, e33 (always identity for 2D)
+        };
+    }
+
+    // Apply 2D affine transform to a point
+    tvg::Point transformPoint(const tvg::Point& p, const tvg::Matrix& m) {
+        return {
+            m.e11 * p.x + m.e12 * p.y + m.e13,
+            m.e21 * p.x + m.e22 * p.y + m.e23
+        };
+    }
+
+    //=========================================================================
     // Scene graph traversal
     //=========================================================================
 
-    void renderPaint(const tvg::Paint* paint) {
+    void renderPaintRecursive(const tvg::Paint* paint, const tvg::Matrix& parentTransform) {
         if (!paint) return;
 
-        // Get transform - cast away const since Accessor provides non-const access
+        // Get this node's local transform
         auto* mutablePaint = const_cast<tvg::Paint*>(paint);
-        tvg::Matrix& m = mutablePaint->transform();
+        tvg::Matrix& local = mutablePaint->transform();
+        
+        // Accumulate with parent transform
+        tvg::Matrix world = multiplyMatrix(parentTransform, local);
 
-        // Apply translation from matrix
-        float tx = m.e13;
-        float ty = m.e23;
-
-        // Check paint type
         auto type = paint->type();
 
         if (type == tvg::Type::Shape) {
-            renderShape(static_cast<const tvg::Shape*>(paint), tx, ty);
+            renderShape(static_cast<const tvg::Shape*>(paint), world);
         }
-        // Scene and Picture children are handled by Accessor traversal
+        // For Scene/Picture, the Accessor will handle traversal - we just need to
+        // apply transforms. But Accessor doesn't give us hierarchy info, so we use
+        // a simple approach: traverse once with Accessor, accumulating transforms.
     }
 
-    void renderShape(const tvg::Shape* shape, float ox, float oy) {
+    // Main entry point for rendering - uses Accessor with transform tracking
+    void renderWithAccessor(tvg::Picture* picture) {
+        auto accessor = std::unique_ptr<tvg::Accessor>(tvg::Accessor::gen());
+        if (!accessor) return;
+
+        // Build parent chain for each paint to compute world transforms
+        // Accessor traverses depth-first, so we track the transform as we go
+        
+        accessor->set(picture, [](const tvg::Paint* paint, void* data) -> bool {
+            auto* self = static_cast<ThorVgRendererImpl*>(data);
+            
+            if (paint->type() == tvg::Type::Shape) {
+                // Compute world transform by walking up parent chain
+                tvg::Matrix world = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+                self->computeWorldTransform(paint, world);
+                self->renderShape(static_cast<const tvg::Shape*>(paint), world);
+            }
+            return true;
+        }, this);
+    }
+
+    void computeWorldTransform(const tvg::Paint* paint, tvg::Matrix& result) {
+        // Walk up parent chain accumulating transforms
+        std::vector<const tvg::Paint*> chain;
+        const tvg::Paint* p = paint;
+        while (p) {
+            chain.push_back(p);
+            p = p->parent();
+        }
+        
+        // Start with identity and multiply from root to leaf
+        result = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+        for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+            auto* mutablePaint = const_cast<tvg::Paint*>(*it);
+            tvg::Matrix& local = mutablePaint->transform();
+            result = multiplyMatrix(result, local);
+        }
+    }
+
+    void renderShape(const tvg::Shape* shape, const tvg::Matrix& m) {
         if (!shape) return;
 
         // Get fill color (using getter overload)
@@ -259,14 +320,133 @@ private:
 
         if (cmdCount == 0 || ptCount == 0) return;
 
-        // Convert path to YDraw primitives
-        renderPath(cmds, cmdCount, pts, ptCount, ox, oy, fillColor, strokeColor, strokeWidth);
+        // Convert path to YDraw primitives with full matrix transform
+        renderPath(cmds, cmdCount, pts, ptCount, m, fillColor, strokeColor, strokeWidth);
+    }
+
+    // Check if path is an ellipse (MoveTo + 4 CubicTo + Close pattern)
+    bool tryRenderAsEllipse(const tvg::PathCommand* cmds, uint32_t cmdCount,
+                            const tvg::Point* pts, uint32_t ptCount,
+                            const tvg::Matrix& m,
+                            uint32_t fillColor, uint32_t strokeColor, float strokeWidth) {
+        // Ellipse pattern: MoveTo, CubicTo, CubicTo, CubicTo, CubicTo, Close
+        if (cmdCount != 6) return false;
+        if (cmds[0] != tvg::PathCommand::MoveTo) return false;
+        if (cmds[1] != tvg::PathCommand::CubicTo) return false;
+        if (cmds[2] != tvg::PathCommand::CubicTo) return false;
+        if (cmds[3] != tvg::PathCommand::CubicTo) return false;
+        if (cmds[4] != tvg::PathCommand::CubicTo) return false;
+        if (cmds[5] != tvg::PathCommand::Close) return false;
+        
+        // Need 1 + 3*4 = 13 points (1 for MoveTo, 3 for each CubicTo)
+        if (ptCount < 13) return false;
+        
+        // Transform all points and find bounding box
+        float minX = 1e10f, minY = 1e10f, maxX = -1e10f, maxY = -1e10f;
+        for (uint32_t i = 0; i < ptCount; ++i) {
+            tvg::Point tp = transformPoint(pts[i], m);
+            minX = std::min(minX, tp.x);
+            minY = std::min(minY, tp.y);
+            maxX = std::max(maxX, tp.x);
+            maxY = std::max(maxY, tp.y);
+        }
+        
+        float cx = (minX + maxX) / 2.0f;
+        float cy = (minY + maxY) / 2.0f;
+        float rx = (maxX - minX) / 2.0f;
+        float ry = (maxY - minY) / 2.0f;
+        
+        yinfo("Ellipse detected: center=({},{}) radii=({},{}) fill=0x{:08X}", cx, cy, rx, ry, fillColor);
+        
+        auto result = _buffer->addEllipse(
+            0,              // layer
+            cx, cy,         // center
+            rx, ry,         // radii
+            fillColor,
+            strokeColor,
+            strokeWidth,
+            0.0f            // round
+        );
+        if (result) _nextPrimId++;
+        return true;
+    }
+
+    // Check if path is a rounded rectangle (MoveTo + alternating Line/CubicTo + Close)
+    // Rounded rect: MoveTo, Line, Cubic, Line, Cubic, Line, Cubic, Line, Cubic, Close (10 cmds)
+    // Or simple rect: MoveTo, Line, Line, Line, Line, Close (6 cmds with all LineTo)
+    bool tryRenderAsBox(const tvg::PathCommand* cmds, uint32_t cmdCount,
+                        const tvg::Point* pts, uint32_t ptCount,
+                        const tvg::Matrix& m,
+                        uint32_t fillColor, uint32_t strokeColor, float strokeWidth) {
+        
+        // Simple rectangle: MoveTo + 4 LineTo + Close
+        bool isSimpleRect = (cmdCount == 6 &&
+                             cmds[0] == tvg::PathCommand::MoveTo &&
+                             cmds[1] == tvg::PathCommand::LineTo &&
+                             cmds[2] == tvg::PathCommand::LineTo &&
+                             cmds[3] == tvg::PathCommand::LineTo &&
+                             cmds[4] == tvg::PathCommand::LineTo &&
+                             cmds[5] == tvg::PathCommand::Close);
+        
+        // Rounded rectangle: MoveTo + (LineTo + CubicTo) * 4 + Close = 10 cmds
+        bool isRoundedRect = (cmdCount == 10 &&
+                              cmds[0] == tvg::PathCommand::MoveTo &&
+                              cmds[1] == tvg::PathCommand::LineTo &&
+                              cmds[2] == tvg::PathCommand::CubicTo &&
+                              cmds[3] == tvg::PathCommand::LineTo &&
+                              cmds[4] == tvg::PathCommand::CubicTo &&
+                              cmds[5] == tvg::PathCommand::LineTo &&
+                              cmds[6] == tvg::PathCommand::CubicTo &&
+                              cmds[7] == tvg::PathCommand::LineTo &&
+                              cmds[8] == tvg::PathCommand::CubicTo &&
+                              cmds[9] == tvg::PathCommand::Close);
+        
+        if (!isSimpleRect && !isRoundedRect) return false;
+        
+        // Transform all points and find bounding box
+        float minX = 1e10f, minY = 1e10f, maxX = -1e10f, maxY = -1e10f;
+        for (uint32_t i = 0; i < ptCount; ++i) {
+            tvg::Point tp = transformPoint(pts[i], m);
+            minX = std::min(minX, tp.x);
+            minY = std::min(minY, tp.y);
+            maxX = std::max(maxX, tp.x);
+            maxY = std::max(maxY, tp.y);
+        }
+        
+        float cx = (minX + maxX) / 2.0f;
+        float cy = (minY + maxY) / 2.0f;
+        float hw = (maxX - minX) / 2.0f;  // half width
+        float hh = (maxY - minY) / 2.0f;  // half height
+        
+        yinfo("Box detected: center=({},{}) halfSize=({},{}) fill=0x{:08X}", cx, cy, hw, hh, fillColor);
+        
+        auto result = _buffer->addBox(
+            0,              // layer
+            cx, cy,         // center
+            hw, hh,         // half width, half height
+            fillColor,
+            strokeColor,
+            strokeWidth,
+            0.0f            // round (could extract corner radius for RoundedBox)
+        );
+        if (result) _nextPrimId++;
+        return true;
     }
 
     void renderPath(const tvg::PathCommand* cmds, uint32_t cmdCount,
                     const tvg::Point* pts, uint32_t ptCount,
-                    float ox, float oy,
+                    const tvg::Matrix& m,
                     uint32_t fillColor, uint32_t strokeColor, float strokeWidth) {
+        
+        // Try to render as ellipse first (for Lottie circles)
+        if (tryRenderAsEllipse(cmds, cmdCount, pts, ptCount, m, fillColor, strokeColor, strokeWidth)) {
+            return;
+        }
+        
+        // Try to render as box (for Lottie rectangles)
+        if (tryRenderAsBox(cmds, cmdCount, pts, ptCount, m, fillColor, strokeColor, strokeWidth)) {
+            return;
+        }
         
         tvg::Point current = {0, 0};
         tvg::Point start = {0, 0};
@@ -276,49 +456,65 @@ private:
             switch (cmds[i]) {
                 case tvg::PathCommand::MoveTo:
                     if (ptIdx < ptCount) {
-                        current = pts[ptIdx++];
+                        current = transformPoint(pts[ptIdx++], m);
                         start = current;
                     }
                     break;
 
                 case tvg::PathCommand::LineTo:
                     if (ptIdx < ptCount) {
-                        tvg::Point end = pts[ptIdx++];
-                        // Emit segment primitive (layer=0, id=AUTO)
-                        auto res = _buffer->addSegment(0,
-                            current.x + ox, current.y + oy,
-                            end.x + ox, end.y + oy,
-                            fillColor, strokeColor, strokeWidth, 0.0f);
-                        if (res) _nextPrimId++;
-                        current = end;
+                        tvg::Point next = transformPoint(pts[ptIdx++], m);
+                        
+                        auto result = _buffer->addSegment(
+                            0,                    // layer
+                            current.x, current.y, // start
+                            next.x, next.y,       // end
+                            fillColor,
+                            strokeColor,
+                            strokeWidth,
+                            0.0f                  // round
+                        );
+                        if (result) _nextPrimId++;
+                        current = next;
                     }
                     break;
 
                 case tvg::PathCommand::CubicTo:
                     if (ptIdx + 2 < ptCount) {
-                        tvg::Point cp1 = pts[ptIdx++];
-                        tvg::Point cp2 = pts[ptIdx++];
-                        tvg::Point end = pts[ptIdx++];
-                        // Emit cubic bezier primitive (layer=0, id=AUTO)
-                        auto res = _buffer->addBezier3(0,
-                            current.x + ox, current.y + oy,
-                            cp1.x + ox, cp1.y + oy,
-                            cp2.x + ox, cp2.y + oy,
-                            end.x + ox, end.y + oy,
-                            fillColor, strokeColor, strokeWidth, 0.0f);
-                        if (res) _nextPrimId++;
+                        tvg::Point cp1 = transformPoint(pts[ptIdx++], m);
+                        tvg::Point cp2 = transformPoint(pts[ptIdx++], m);
+                        tvg::Point end = transformPoint(pts[ptIdx++], m);
+                        
+                        ydebug("Bezier3: ({},{}) -> ({},{}) fill=0x{:08X}", current.x, current.y, end.x, end.y, fillColor);
+                        
+                        auto result = _buffer->addBezier3(
+                            0,                    // layer
+                            current.x, current.y, // start
+                            cp1.x, cp1.y,         // control 1
+                            cp2.x, cp2.y,         // control 2
+                            end.x, end.y,         // end
+                            fillColor,
+                            strokeColor,
+                            strokeWidth,
+                            0.0f                  // round
+                        );
+                        if (result) _nextPrimId++;
                         current = end;
                     }
                     break;
 
                 case tvg::PathCommand::Close:
-                    // Close path - draw line back to start if needed
                     if (current.x != start.x || current.y != start.y) {
-                        auto res = _buffer->addSegment(0,
-                            current.x + ox, current.y + oy,
-                            start.x + ox, start.y + oy,
-                            fillColor, strokeColor, strokeWidth, 0.0f);
-                        if (res) _nextPrimId++;
+                        auto result = _buffer->addSegment(
+                            0,
+                            current.x, current.y,
+                            start.x, start.y,
+                            fillColor,
+                            strokeColor,
+                            strokeWidth,
+                            0.0f
+                        );
+                        if (result) _nextPrimId++;
                     }
                     current = start;
                     break;
@@ -333,6 +529,7 @@ private:
     std::shared_ptr<YDrawBuffer> _buffer;
     std::unique_ptr<tvg::Animation> _animation;
     tvg::Picture* _picture = nullptr;
+    std::stack<tvg::Matrix> _transformStack;
 
     float _contentWidth = 0;
     float _contentHeight = 0;
