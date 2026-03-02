@@ -14,6 +14,11 @@ struct GPUContext {
     WGPUBindGroup sharedBindGroup;
     WGPUBuffer sharedUniformBuffer;
     uint32_t sharedUniformSize;
+
+    // Current render target dimensions (updated before each frame)
+    // Used to clamp scissor rects during resize transitions
+    uint32_t renderTargetWidth = 0;
+    uint32_t renderTargetHeight = 0;
 };
 
 } // namespace yetty

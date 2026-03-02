@@ -193,6 +193,13 @@ elif [ "$TEST_MODE" = "vm-only" ]; then
     # Test VM only (without yetty) - useful for debugging VM boot issues
     TEST_URL="${BASE_URL}/jslinux/vm-bridge.html?ptyId=test1&url=yetty-alpine.cfg&cpu=x86_64&cols=80&rows=25&mem=256"
     echo "Testing JSLinux VM only (no yetty) at: $TEST_URL"
+elif [ "$TEST_MODE" = "term-size" ]; then
+    # Test terminal size initialization - use non-default size to verify kernel gets correct dimensions
+    TEST_COLS="${4:-120}"
+    TEST_ROWS="${5:-40}"
+    TEST_URL="${BASE_URL}/jslinux/vm-bridge.html?ptyId=test1&url=yetty-alpine.cfg&cpu=x86_64&cols=${TEST_COLS}&rows=${TEST_ROWS}&mem=256"
+    echo "Testing terminal size initialization at: $TEST_URL"
+    echo "Expected terminal size: ${TEST_COLS}x${TEST_ROWS}"
 else
     TEST_URL="${BASE_URL}/"
     echo "Testing full yetty at: $TEST_URL"
@@ -295,6 +302,44 @@ if [ "$TEST_MODE" = "jslinux" ] || [ "$TEST_MODE" = "jslinux-local" ]; then
         echo -e "${GREEN}OK: Shell prompt received${NC}"
     else
         echo -e "${YELLOW}WARN: Shell prompt not seen (may need more time)${NC}"
+    fi
+
+    # Terminal size verification (for term-size test mode)
+    if [ "$TEST_MODE" = "term-size" ]; then
+        echo ""
+        echo "=== Terminal Size Verification ==="
+        echo "JavaScript side:"
+        grep -E "term_get_size|_console_get_size|getSize|cols.*rows|URL params" "$CONSOLE_LOG" | head -20 || echo "(no JS size logs)"
+
+        echo ""
+        echo "Looking for stty output in boot messages..."
+        # The init script should run 'stty size' and output it
+        # Format is: "rows cols" e.g. "40 120"
+        if grep -qE "^[0-9]+ [0-9]+$" "$CONSOLE_LOG"; then
+            STTY_OUTPUT=$(grep -E "^[0-9]+ [0-9]+$" "$CONSOLE_LOG" | tail -1)
+            KERNEL_ROWS=$(echo "$STTY_OUTPUT" | awk '{print $1}')
+            KERNEL_COLS=$(echo "$STTY_OUTPUT" | awk '{print $2}')
+            echo "Kernel terminal size (stty): ${KERNEL_COLS}x${KERNEL_ROWS}"
+
+            if [ "$KERNEL_COLS" = "$TEST_COLS" ] && [ "$KERNEL_ROWS" = "$TEST_ROWS" ]; then
+                echo -e "${GREEN}OK: Kernel has correct terminal size${NC}"
+            else
+                echo -e "${RED}FAIL: Kernel has WRONG size! Expected ${TEST_COLS}x${TEST_ROWS}, got ${KERNEL_COLS}x${KERNEL_ROWS}${NC}"
+                RESULT=1
+            fi
+        else
+            echo -e "${YELLOW}WARN: No stty output found - checking term-output messages${NC}"
+        fi
+
+        # Also check term-output messages for any size indicators
+        echo ""
+        echo "Term output containing size info:"
+        grep -E "term-output.*[0-9]+.*[0-9]+" "$CONSOLE_LOG" | head -10 || echo "(none)"
+
+        # Show all resize events
+        echo ""
+        echo "Resize events:"
+        grep -E "resize|console_resize" "$CONSOLE_LOG" | head -20 || echo "(none)"
     fi
 
     # Check for demo directory in boot output

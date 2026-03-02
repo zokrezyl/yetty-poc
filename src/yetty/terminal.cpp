@@ -55,11 +55,8 @@ public:
         });
 #endif
 
-        // Start PTY
-        if (auto res = startPty(); !res) {
-            // On some platforms, PTY may not be available
-            ywarn("Terminal: PTY not available: {}", error_msg(res));
-        }
+        // PTY start is deferred to first setViewport() call so we have correct size
+        // (GPUScreen cols/rows are 0 until first resize)
 
         yinfo("Terminal created with GPUScreen");
         return Ok();
@@ -121,6 +118,16 @@ public:
     void setViewport(float x, float y, float width, float height) override {
         if (_gpuScreen) {
             _gpuScreen->setViewport(x, y, width, height);
+
+            // Start PTY on first setViewport with valid size (deferred from init)
+            // This ensures PTY gets correct initial size instead of hardcoded fallback
+            if (!_ptyStarted && _gpuScreen->getCols() > 0 && _gpuScreen->getRows() > 0) {
+                _ptyStarted = true;
+                if (auto res = startPty(); !res) {
+                    ywarn("Terminal: PTY not available: {}", error_msg(res));
+                }
+            }
+
 #if YETTY_WEB
             if (_pty) {
                 _pty->resize(_gpuScreen->getCols(), _gpuScreen->getRows());
@@ -130,6 +137,12 @@ public:
                 _ptyReader->resize(_gpuScreen->getCols(), _gpuScreen->getRows());
             }
 #endif
+        }
+    }
+
+    void setRenderTargetSize(uint32_t width, uint32_t height) override {
+        if (_gpuScreen) {
+            _gpuScreen->setRenderTargetSize(width, height);
         }
     }
 
@@ -416,6 +429,7 @@ private:
     size_t _oscEscPos = 0;
 
     bool _running = false;
+    bool _ptyStarted = false;  // Track if PTY has been started (deferred until first resize)
     YettyContext _ctx;
     GPUScreen::Ptr _gpuScreen;
 };

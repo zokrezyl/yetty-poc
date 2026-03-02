@@ -219,6 +219,12 @@ public:
   void setResizeCallback(ResizeCallback cb) override;
   Result<void> render(WGPURenderPassEncoder pass) override;
   void setViewport(float x, float y, float width, float height) override;
+  void setRenderTargetSize(uint32_t width, uint32_t height) override {
+    // Note: This is now also set via context in yetty.cpp before render
+    // Keep this method for potential direct use or testing
+    const_cast<GPUContext&>(_ctx.gpu).renderTargetWidth = width;
+    const_cast<GPUContext&>(_ctx.gpu).renderTargetHeight = height;
+  }
   float getCellWidth() const override { return _baseCellWidth * _zoomLevel; }
   float getCellHeight() const override { return _baseCellHeight * _zoomLevel; }
 
@@ -5391,9 +5397,24 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
     wgpuRenderPassEncoderSetViewport(pass, _viewportX, _viewportY,
                                      _viewportWidth, _viewportHeight, 0.0f,
                                      1.0f);
-    wgpuRenderPassEncoderSetScissorRect(pass,
-        static_cast<uint32_t>(_viewportX), static_cast<uint32_t>(_viewportY),
-        static_cast<uint32_t>(_viewportWidth), static_cast<uint32_t>(_viewportHeight));
+    // Clamp scissor rect to render target dimensions to avoid WebGPU validation errors during resize
+    uint32_t scissorX = static_cast<uint32_t>(_viewportX);
+    uint32_t scissorY = static_cast<uint32_t>(_viewportY);
+    uint32_t scissorW = static_cast<uint32_t>(_viewportWidth);
+    uint32_t scissorH = static_cast<uint32_t>(_viewportHeight);
+    uint32_t rtWidth = _ctx.gpu.renderTargetWidth;
+    uint32_t rtHeight = _ctx.gpu.renderTargetHeight;
+    if (rtWidth > 0 && rtHeight > 0) {
+      if (scissorX + scissorW > rtWidth) {
+        scissorW = (scissorX < rtWidth) ? rtWidth - scissorX : 0;
+      }
+      if (scissorY + scissorH > rtHeight) {
+        scissorH = (scissorY < rtHeight) ? rtHeight - scissorY : 0;
+      }
+    }
+    if (scissorW > 0 && scissorH > 0) {
+      wgpuRenderPassEncoderSetScissorRect(pass, scissorX, scissorY, scissorW, scissorH);
+    }
   }
 
   // Draw using shared pipeline and quad vertex buffer from ShaderManager

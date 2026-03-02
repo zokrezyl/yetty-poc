@@ -28,6 +28,9 @@ public:
     // Viewport (pixel coordinates within window)
     virtual void setViewport(float x, float y, float width, float height) = 0;
 
+    // Set render target dimensions for scissor rect clamping during resize
+    virtual void setRenderTargetSize(uint32_t width, uint32_t height) = 0;
+
     // Cell size (from font metrics * zoom)
     virtual float getCellWidth() const = 0;
     virtual float getCellHeight() const = 0;
