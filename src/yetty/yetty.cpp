@@ -1851,10 +1851,6 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
         return Err<void>("Fatal GPU error: " + _fatalGpuErrorMsg);
     }
 
-    // Prevent re-entrant rendering (requestRender dispatches ScreenUpdate
-    // synchronously which can re-enter mainLoopIteration on webasm)
-    if (_inRender) return Ok();
-
     // Apply deferred resize before acquiring the surface texture
     if (_pendingResize) {
         _pendingResize = false;
