@@ -131,7 +131,8 @@ For complex paths that don't map to YDraw primitives, tessellate to triangles.
 | appendCircle(cx,cy,rx,ry) where rx!=ry | Ellipse | Direct mapping ✓ |
 | LineTo segment | Segment | Direct mapping ✓ |
 | CubicTo | Bezier3 | Direct mapping ✓ |
-| Closed polygon (N points) | N×Triangle | Triangulation needed |
+| Closed polygon (N points) | Polygon → N-2 Triangles | Ear-clipping triangulation ✓ |
+| Polygon with holes | PolygonGroup → Triangles | Bridge merging + triangulation ✓ |
 | Arc | Arc | Needs parameter conversion |
 | Complex path | Multiple primitives | Path decomposition |
 
@@ -235,14 +236,21 @@ Patching ThorVG to render to YDraw is **feasible** and would enable GPU-accelera
 | **Stroke caps/joins** | ❌ | Medium | Round, bevel, miter not supported |
 | **Variable stroke width** | ❌ | Medium | YDraw has fixed strokeWidth |
 | **Fill rules** (EvenOdd/NonZero) | ❌ | High | Complex path decomposition needed |
-| **Paths with holes** | ❌ | High | Requires triangulation |
 | **Alpha masks** | ❌ | High | Multi-pass rendering needed |
 | **Blend modes** | ❌ | High | Not in YDraw primitive model |
 | **Text rendering** | ❌ | Medium | Could wire to YDraw's glyph system |
 | **Images/Pictures** | ❌ | Medium | YDraw has Image type |
 | **Quadratic Bezier** | ❌ | Low | Add Bezier2 detection |
 | **Arc/Pie shapes** | ❌ | Low | Add pattern detection |
-| **Arbitrary polygons** | ❌ | Medium | Needs triangulation |
+
+### Recently Implemented
+
+| Feature | Implementation | Notes |
+|---------|----------------|-------|
+| **Arbitrary polygons** | `tryRenderAsPolygon()` → `addPolygonWithVertices()` | Closed paths without curves become Polygon primitives |
+| **Polygons with holes** | `PolygonGroup` + triangulation | Ear-clipping with bridge merging for holes |
+| **Multiple holes** | Hole sorting + sequential merge | Holes sorted by rightmost x-coordinate |
+| **Axis-aligned rect detection** | `tryRenderAsBox()` validation | Verifies 2 unique X/Y values to avoid misdetecting pentagons |
 
 ### Files Created
 
@@ -257,15 +265,32 @@ src/yetty/cards/thorvg/
 ├── thorvg.cpp             # YDrawBuilder + animation integration
 └── CMakeLists.txt         # yetty_card_thorvg library
 
+src/yetty/ydraw/
+├── triangulate.h          # Triangulation API
+└── triangulate.cpp        # Ear-clipping + hole merging
+
 build-tools/cmake/
 └── thorvg.cmake           # CPM download of ThorVG v1.0.1
+
+test/ut/thorvg/
+├── CMakeLists.txt         # ThorVG test build config
+├── main.cpp               # Test entry point
+└── thorvg_test.cpp        # ThorVG rendering tests (13 tests)
+
+test/ut/ydraw/
+└── triangulate_test.cpp   # Triangulation tests (51 tests)
 
 demo/scripts/cards/thorvg/
 ├── simple-shapes.sh       # SVG shapes demo
 ├── beziers.sh             # Bezier curves demo
+├── polygon-shapes.sh      # Polygon shapes demo
 ├── lottie-bounce.sh       # Bouncing ball animation
 ├── lottie-spinner.sh      # Spinning loader animation
 └── all.sh                 # Run all demos
+
+demo/scripts/cards/ydraw/
+├── ydraw-polygon.sh       # Simple polygon demo
+└── ydraw-polygon-holes.sh # Polygon with holes demo
 ```
 
 ### Key Technical Decisions

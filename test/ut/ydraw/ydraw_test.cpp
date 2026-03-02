@@ -278,9 +278,22 @@ struct PipelineResult {
     uint32_t gridOffset;
     uint32_t gridWidth;
     uint32_t gridHeight;
-    float cellSize;
+    float cellSizeX;
+    float cellSizeY;
     float sceneMinX, sceneMinY;
 };
+
+// Helper to unpack f16 from f16 pair
+static float unpackF16(uint32_t packed, bool high) {
+    uint16_t f16 = high ? (packed >> 16) : (packed & 0xFFFF);
+    uint32_t sign = (f16 >> 15) & 1;
+    uint32_t exp = (f16 >> 10) & 0x1F;
+    uint32_t mant = f16 & 0x3FF;
+    if (exp == 0) return sign ? -0.0f : 0.0f;
+    if (exp == 31) return sign ? -INFINITY : INFINITY;
+    float f = (1.0f + mant / 1024.0f) * std::pow(2.0f, int(exp) - 15);
+    return sign ? -f : f;
+}
 
 static PipelineResult runPipeline(YDrawBuffer::Ptr buf,
                                    float sceneW = 200.0f, float sceneH = 200.0f,
@@ -308,7 +321,8 @@ static PipelineResult runPipeline(YDrawBuffer::Ptr buf,
     r.gridOffset = meta[2];
     r.gridWidth = meta[3];
     r.gridHeight = meta[4];
-    std::memcpy(&r.cellSize, &meta[5], sizeof(float));
+    r.cellSizeX = unpackF16(meta[5], false);
+    r.cellSizeY = unpackF16(meta[5], true);
     std::memcpy(&r.sceneMinX, &meta[8], sizeof(float));
     std::memcpy(&r.sceneMinY, &meta[9], sizeof(float));
     return r;
@@ -321,13 +335,14 @@ static PipelineResult runPipeline(YDrawBuffer::Ptr buf,
 static std::vector<uint32_t> shaderGridLookup(const PipelineResult& p,
                                                float sceneX, float sceneY) {
     std::vector<uint32_t> result;
-    if (p.gridWidth == 0 || p.gridHeight == 0 || p.cellSize <= 0.0f) return result;
+    if (p.gridWidth == 0 || p.gridHeight == 0 || p.cellSizeX <= 0.0f || p.cellSizeY <= 0.0f) return result;
 
-    float invCellSize = 1.0f / p.cellSize;
+    float invCellSizeX = 1.0f / p.cellSizeX;
+    float invCellSizeY = 1.0f / p.cellSizeY;
     uint32_t cellX = static_cast<uint32_t>(
-        std::clamp((sceneX - p.sceneMinX) * invCellSize, 0.0f, float(p.gridWidth - 1)));
+        std::clamp((sceneX - p.sceneMinX) * invCellSizeX, 0.0f, float(p.gridWidth - 1)));
     uint32_t cellY = static_cast<uint32_t>(
-        std::clamp((sceneY - p.sceneMinY) * invCellSize, 0.0f, float(p.gridHeight - 1)));
+        std::clamp((sceneY - p.sceneMinY) * invCellSizeY, 0.0f, float(p.gridHeight - 1)));
     uint32_t cellIndex = cellY * p.gridWidth + cellX;
 
     uint32_t packedStart = readU32(p.storage, p.gridOffset + cellIndex);
@@ -973,9 +988,10 @@ suite gpu_pipeline_tests = [] {
         expect(p.meta[3] > 0_u) << "gridWidth > 0";
         expect(p.meta[4] > 0_u) << "gridHeight > 0";
 
-        float cellSize;
-        std::memcpy(&cellSize, &p.meta[5], sizeof(float));
-        expect(cellSize > 0.0_f) << "cellSize > 0";
+        float cellSizeX = unpackF16(p.meta[5], false);
+        float cellSizeY = unpackF16(p.meta[5], true);
+        expect(cellSizeX > 0.0_f) << "cellSizeX > 0";
+        expect(cellSizeY > 0.0_f) << "cellSizeY > 0";
 
         float sMinX, sMinY, sMaxX, sMaxY;
         std::memcpy(&sMinX, &p.meta[8], sizeof(float));
@@ -1114,8 +1130,7 @@ suite gpu_pipeline_tests = [] {
         meta.gridOffset = 100;
         meta.gridWidth = 8;
         meta.gridHeight = 6;
-        float cs = 12.5f;
-        std::memcpy(&meta.cellSize, &cs, sizeof(float));
+        meta.cellSizeXY = YDrawMetadata::packCellSize(12.5f, 12.5f);
         meta.glyphOffset = 200;
         meta.glyphCount = 3;
         meta.bgColor = 0xFF1A1A2E;
