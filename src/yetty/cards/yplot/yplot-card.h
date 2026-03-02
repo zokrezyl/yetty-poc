@@ -10,22 +10,22 @@
 //   - A shader that renders both ydraw primitives and yfsvm plot lines
 //
 // Metadata layout (64 bytes = 16 u32):
-//   [0]  flags(8) | funcCount(8) | pad(16)
+//   [0]  flags(8) | funcCount(8) | glyphBase0(8) | glyphDot(8)
 //   [1]  widthCells(16) | heightCells(16)
-//   [2]  bytecodeOffset (u32) - index into cardStorage
+//   [2]  bytecodeOffset (u32) - index into cardStorage (expression mode)
 //   [3]  bytecodeSize (u32)
 //   [4]  xMin (f32)
 //   [5]  xMax (f32)
 //   [6]  yMin (f32)
 //   [7]  yMax (f32)
-//   [8]  marginLeft (f32)  - plot area margins in normalized coords
-//   [9]  marginBottom (f32)
-//   [10] plotWidth (f32)
-//   [11] plotHeight (f32)
-//   [12] time (f32)
-//   [13] zoom (f32)
-//   [14] centerX (f32)
-//   [15] colorTableOffset (u32)
+//   [8]  dataOffset (u32) - index into cardStorage (buffer mode)
+//   [9]  dataCount (u32) - number of floats
+//   [10] marginLeft (f32)  - plot area margins in normalized coords
+//   [11] marginBottom (f32)
+//   [12] zoom (f32)
+//   [13] centerX (f32)
+//   [14] centerY (f32)
+//   [15] colorTableOffset(24) | glyphMinus(8)
 
 #include <yetty/card.h>
 #include <yetty/base/factory.h>
@@ -49,6 +49,7 @@ public:
     static constexpr uint32_t FLAG_GRID = 1;
     static constexpr uint32_t FLAG_AXES = 2;
     static constexpr uint32_t FLAG_LABELS = 4;
+    static constexpr uint32_t FLAG_BUFFER = 8;  // Buffer mode (vs expression mode)
 
     //=========================================================================
     // Factory method
