@@ -25,9 +25,9 @@
 //   [9]  marginBottom (f32)
 //   [10] plotWidth (f32)
 //   [11] plotHeight (f32)
-//   [12] time (f32)
-//   [13] zoom (f32)
-//   [14] centerX (f32)
+//   [12] zoom (f32)
+//   [13] centerX (f32)
+//   [14] centerY (f32)
 //   [15] colorTableOffset (u32)
 // =============================================================================
 
@@ -87,9 +87,9 @@ fn shaderGlyph_1048585(
     var marginBottom = 0.08;
     var plotWidth = 0.9;
     var plotHeight = 0.9;
-    var currentTime = time;
     var zoom = 1.0;
-    var centerX = 0.0;
+    var centerX = 0.5;
+    var centerY = 0.5;
     var colorTableOffset = 6u;
 
     if (bufferWorking) {
@@ -110,9 +110,9 @@ fn shaderGlyph_1048585(
         marginBottom = bitcast<f32>(cardMetadata[metaOffset + 9u]);
         plotWidth = bitcast<f32>(cardMetadata[metaOffset + 10u]);
         plotHeight = bitcast<f32>(cardMetadata[metaOffset + 11u]);
-        currentTime = bitcast<f32>(cardMetadata[metaOffset + 12u]);
-        zoom = bitcast<f32>(cardMetadata[metaOffset + 13u]);
-        centerX = bitcast<f32>(cardMetadata[metaOffset + 14u]);
+        zoom = bitcast<f32>(cardMetadata[metaOffset + 12u]);
+        centerX = bitcast<f32>(cardMetadata[metaOffset + 13u]);
+        centerY = bitcast<f32>(cardMetadata[metaOffset + 14u]);
         colorTableOffset = cardMetadata[metaOffset + 15u];
     }
 
@@ -120,25 +120,22 @@ fn shaderGlyph_1048585(
     let widgetUV = (vec2<f32>(f32(relCol), f32(relRow)) + localUV) /
                    vec2<f32>(f32(widthCells), f32(heightCells));
 
-    // Debug: show raw slot0 and slot1 as colors
-    // Use widgetUV so we see across the whole card, not just one cell
-    if (widgetUV.y < 0.1) {
-        // Bottom strip: slot0 bits as RGB
-        let r = f32((slot0 >> 0u) & 0xFFu) / 255.0;
-        let g = f32((slot0 >> 8u) & 0xFFu) / 255.0;
-        let b = f32((slot0 >> 16u) & 0xFFu) / 255.0;
-        return vec3<f32>(r, g, b);  // slot0: flags|funcCount|pad
-    }
-    if (widgetUV.y < 0.2) {
-        // Next strip: slot1 bits as RGB
-        let r = f32((slot1 >> 0u) & 0xFFu) / 255.0;
-        let g = f32((slot1 >> 8u) & 0xFFu) / 255.0;
-        let b = f32((slot1 >> 16u) & 0xFFu) / 255.0;
-        return vec3<f32>(r, g, b);  // slot1: widthLo|widthHi|heightLo
-    }
+    // Fallback if buffer not working
     if (!bufferWorking) {
-        return vec3<f32>(1.0, 0.0, 1.0);  // MAGENTA = check failed
+        return vec3<f32>(0.3, 0.1, 0.1);  // Dark red = buffer error
     }
+
+    // Apply zoom and pan to the data range
+    let xRange = xMax - xMin;
+    let yRange = yMax - yMin;
+    let zoomedXRange = xRange / zoom;
+    let zoomedYRange = yRange / zoom;
+    let panOffsetX = (centerX - 0.5) * xRange;
+    let panOffsetY = (centerY - 0.5) * yRange;
+    let viewXMin = xMin + panOffsetX + (xRange - zoomedXRange) * 0.5;
+    let viewXMax = viewXMin + zoomedXRange;
+    let viewYMin = yMin + panOffsetY + (yRange - zoomedYRange) * 0.5;
+    let viewYMax = viewYMin + zoomedYRange;
 
     // Start with background
     var color = YPLOT_BG_COLOR;
@@ -160,18 +157,18 @@ fn shaderGlyph_1048585(
             (widgetUV.y - plotBottom) / plotHeight
         );
 
-        // Map to data coordinates
-        let dataX = mix(xMin, xMax, plotUV.x);
-        let dataY = mix(yMin, yMax, plotUV.y);
+        // Map to data coordinates (using zoomed/panned view)
+        let dataX = mix(viewXMin, viewXMax, plotUV.x);
+        let dataY = mix(viewYMin, viewYMax, plotUV.y);
 
         // Draw grid
         if ((flags & YPLOT_FLAG_GRID) != 0u) {
-            color = drawGrid(color, plotUV, xMin, xMax, yMin, yMax);
+            color = drawGrid(color, plotUV, viewXMin, viewXMax, viewYMin, viewYMax);
         }
 
         // Draw axes
         if ((flags & YPLOT_FLAG_AXES) != 0u) {
-            color = drawAxes(color, plotUV, xMin, xMax, yMin, yMax);
+            color = drawAxes(color, plotUV, viewXMin, viewXMax, viewYMin, viewYMax);
         }
 
         // Evaluate and draw plot lines using yfsvm
@@ -180,7 +177,7 @@ fn shaderGlyph_1048585(
             samplers[0] = dataX;
 
             // Pixel size in data coordinates for anti-aliasing
-            let pixelSizeY = (yMax - yMin) / (f32(heightCells) * 20.0);
+            let pixelSizeY = (viewYMax - viewYMin) / (f32(heightCells) * 20.0);
 
             // Evaluate each function
             for (var fi = 0u; fi < funcCount && fi < 8u; fi = fi + 1u) {
@@ -189,16 +186,16 @@ fn shaderGlyph_1048585(
                 let funcColor = yplot_unpackColorARGB(funcColorPacked);
 
                 // Evaluate function at this x position
-                let y = yfsvm_execute(bytecodeOffset, fi, dataX, currentTime, samplers);
+                let y = yfsvm_execute(bytecodeOffset, fi, dataX, time, samplers);
 
-                // Map y to plot UV
-                let yNorm = (y - yMin) / (yMax - yMin);
+                // Map y to plot UV (using zoomed/panned view)
+                let yNorm = (y - viewYMin) / (viewYMax - viewYMin);
 
                 // Distance from current pixel to the curve
                 let dist = abs(plotUV.y - yNorm);
 
                 // Anti-aliased line rendering
-                let lineWidth = 2.0 * pixelSizeY / (yMax - yMin);
+                let lineWidth = 2.0 * pixelSizeY / (viewYMax - viewYMin);
                 if (dist < lineWidth) {
                     let alpha = 1.0 - dist / lineWidth;
                     color = mix(color, funcColor, alpha);

@@ -7,10 +7,16 @@
 #include <yetty/yetty-context.h>
 #include <yetty/yfsvm/yfsvm.h>
 #include <yetty/yfsvm/yfsvm-compiler.h>
+#include <yetty/base/event-loop.h>
 #include <ytrace/ytrace.hpp>
 #include <sstream>
 #include <cmath>
 #include <cstring>
+#include <algorithm>
+
+// GLFW modifier constants
+constexpr int GLFW_MOD_SHIFT   = 0x0001;
+constexpr int GLFW_MOD_CONTROL = 0x0002;
 
 namespace yetty::card {
 
@@ -44,10 +50,10 @@ struct YPlotMetadata {
     float plotWidth;
     float plotHeight;
 
-    // [12-14]: animation/view
-    float time;
+    // [12-14]: view/pan
     float zoom;
     float centerX;
+    float centerY;
 
     // [15]: color table
     uint32_t colorTableOffset;
@@ -109,6 +115,11 @@ public:
 
         // NOTE: The yplot shader draws its own grid and axes.
         // Do NOT use YDrawBuilder here - it would overwrite YPlot metadata.
+
+        // Register for events (pan/zoom via scroll)
+        if (auto res = registerForEvents(); !res) {
+            return Err<void>("YPlotCard::init: failed to register for events", res);
+        }
 
         return Ok();
     }
@@ -183,6 +194,11 @@ public:
     }
 
     Result<void> dispose() override {
+        // Deregister from events
+        if (auto res = deregisterFromEvents(); !res) {
+            ywarn("YPlotCard::dispose: failed to deregister from events");
+        }
+
         _bytecodeHandle = BufferHandle::invalid();
         _colorHandle = BufferHandle::invalid();
 
@@ -246,7 +262,99 @@ public:
         return *_state;
     }
 
+    //=========================================================================
+    // EventListener interface
+    //=========================================================================
+
+    Result<bool> onEvent(const base::Event& event) override {
+        // Handle SetFocus events
+        if (event.type == base::Event::Type::SetFocus) {
+            if (event.setFocus.objectId == id()) {
+                if (!_focused) {
+                    _focused = true;
+                    ydebug("YPlotCard::onEvent: focused (id={})", id());
+                }
+                return Ok(true);
+            } else if (_focused) {
+                _focused = false;
+                ydebug("YPlotCard::onEvent: unfocused (id={})", id());
+            }
+            return Ok(false);
+        }
+
+        // Handle scroll events (only when focused)
+        if (_focused && event.type == base::Event::Type::Scroll) {
+            if (event.scroll.mods & GLFW_MOD_CONTROL) {
+                // Ctrl+Scroll: zoom
+                float zoomDelta = event.scroll.dy * 0.1f;
+                float newZoom = std::clamp(_zoom + zoomDelta, 0.1f, 10.0f);
+                if (newZoom != _zoom) {
+                    _zoom = newZoom;
+                    _state->display().zoom = _zoom;
+                    _metadataDirty = true;
+                    yinfo("YPlotCard::onEvent: zoom={:.2f}", _zoom);
+                }
+                return Ok(true);
+            } else if (event.scroll.mods & GLFW_MOD_SHIFT) {
+                // Shift+Scroll: pan Y
+                float dy = event.scroll.dy * 0.05f / _zoom;
+                _centerY = std::clamp(_centerY + dy, 0.0f, 1.0f);
+                _metadataDirty = true;
+                return Ok(true);
+            } else {
+                // Plain scroll: pan X
+                float dx = event.scroll.dy * 0.05f / _zoom;
+                _centerX = std::clamp(_centerX + dx, 0.0f, 1.0f);
+                _state->display().centerX = _centerX;
+                _metadataDirty = true;
+                return Ok(true);
+            }
+        }
+
+        return Ok(false);
+    }
+
 private:
+    //=========================================================================
+    // Event registration
+    //=========================================================================
+
+    Result<void> registerForEvents() {
+        auto loopResult = base::EventLoop::instance();
+        if (!loopResult) {
+            return Err<void>("YPlotCard::registerForEvents: no EventLoop instance", loopResult);
+        }
+        auto loop = *loopResult;
+        auto self = sharedAs<base::EventListener>();
+
+        if (auto res = loop->registerListener(base::Event::Type::SetFocus, self, 1000); !res) {
+            return Err<void>("YPlotCard::registerForEvents: failed to register SetFocus", res);
+        }
+        if (auto res = loop->registerListener(base::Event::Type::Scroll, self, 1000); !res) {
+            return Err<void>("YPlotCard::registerForEvents: failed to register Scroll", res);
+        }
+
+        yinfo("YPlotCard {} registered for events (priority 1000)", id());
+        return Ok();
+    }
+
+    Result<void> deregisterFromEvents() {
+        if (weak_from_this().expired()) {
+            return Ok();
+        }
+
+        auto loopResult = base::EventLoop::instance();
+        if (!loopResult) {
+            return Err<void>("YPlotCard::deregisterFromEvents: no EventLoop instance", loopResult);
+        }
+        auto loop = *loopResult;
+
+        if (auto res = loop->deregisterListener(sharedAs<base::EventListener>()); !res) {
+            return Err<void>("YPlotCard::deregisterFromEvents: failed to deregister", res);
+        }
+        return Ok();
+    }
+
     //=========================================================================
     // Argument parsing
     //=========================================================================
@@ -441,10 +549,10 @@ private:
         meta.plotWidth = 1.0f - 0.08f - 0.02f;
         meta.plotHeight = 1.0f - 0.08f - 0.02f;
 
-        // Animation
-        meta.time = _currentTime;
-        meta.zoom = _state->display().zoom;
-        meta.centerX = _state->display().centerX;
+        // View/pan
+        meta.zoom = _zoom;
+        meta.centerX = _centerX;
+        meta.centerY = _centerY;
 
         // Colors
         if (_colorHandle.isValid()) {
@@ -483,7 +591,12 @@ private:
 
     // State
     bool _metadataDirty = true;
-    float _currentTime = 0.0f;
+    bool _focused = false;
+
+    // View/pan state
+    float _zoom = 1.0f;
+    float _centerX = 0.5f;
+    float _centerY = 0.5f;
 };
 
 //=============================================================================
