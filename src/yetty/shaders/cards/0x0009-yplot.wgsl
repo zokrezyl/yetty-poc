@@ -62,8 +62,15 @@ fn shaderGlyph_1048585(
     let slot0 = cardMetadata[metaOffset + 0u];
     let slot1 = cardMetadata[metaOffset + 1u];
 
-    // Detect if buffer is working: slot0 should have flags (lower 8 bits non-zero)
-    let bufferWorking = (slot0 & 0xFFu) != 0u;
+    // Detect if buffer is working by checking multiple conditions:
+    // 1. flags should be 1-7 (valid flag combination)
+    // 2. widthCells and heightCells should be 1-100 (reasonable range)
+    let flagsRaw = slot0 & 0xFFu;
+    let widthRaw = slot1 & 0xFFFFu;
+    let heightRaw = slot1 >> 16u;
+    let bufferWorking = flagsRaw >= 1u && flagsRaw <= 7u &&
+                        widthRaw >= 1u && widthRaw <= 100u &&
+                        heightRaw >= 1u && heightRaw <= 100u;
 
     // Use buffer values if working, otherwise use hardcoded defaults
     var flags = 7u;
