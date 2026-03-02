@@ -84,9 +84,12 @@ if(thorvg_ADDED)
         ${thorvg_SOURCE_DIR}/src/loaders/raw
     )
 
-    # Compile options
-    target_compile_definitions(thorvg_lib PRIVATE
+    # Compile options - TVG_STATIC must be PUBLIC so consumers also get it
+    # (prevents __declspec(dllimport) in thorvg.h on Windows)
+    target_compile_definitions(thorvg_lib PUBLIC
         TVG_STATIC
+    )
+    target_compile_definitions(thorvg_lib PRIVATE
         $<$<PLATFORM_ID:Windows>:NOMINMAX>
         $<$<PLATFORM_ID:Windows>:WIN32_LEAN_AND_MEAN>
     )
