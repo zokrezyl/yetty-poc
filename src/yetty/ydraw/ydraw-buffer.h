@@ -67,6 +67,20 @@ public:
     // --- Generated per-type add/update methods ---
 #include "ydraw-buffer.gen.inc"
 
+    // --- Polygon with variable vertex data (manual methods) ---
+    // vertices: array of x,y pairs (size = vertexCount * 2)
+    Result<uint32_t> addPolygonWithVertices(uint32_t layer, uint32_t vertexCount,
+        const float* vertices, uint32_t fillColor, uint32_t strokeColor,
+        float strokeWidth, float round_, uint32_t id = AUTO_ID);
+
+    // contourStarts: array of vertex indices (size = contourCount)
+    // vertices: array of x,y pairs (size = vertexCount * 2)
+    Result<uint32_t> addPolygonGroupWithVertices(uint32_t layer,
+        uint32_t vertexCount, uint32_t contourCount,
+        const uint32_t* contourStarts, const float* vertices,
+        uint32_t fillColor, uint32_t strokeColor,
+        float strokeWidth, float round_, uint32_t id = AUTO_ID);
+
     // --- Generic operations ---
     Result<void> remove(uint32_t id);
     uint32_t primCount() const { return static_cast<uint32_t>(_prims.size()); }

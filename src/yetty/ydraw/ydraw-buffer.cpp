@@ -152,6 +152,53 @@ void YDrawBuffer::clear() {
 }
 
 //=============================================================================
+// Polygon with variable vertex data
+//=============================================================================
+
+Result<uint32_t> YDrawBuffer::addPolygonWithVertices(uint32_t layer, uint32_t vertexCount,
+    const float* vertices, uint32_t fillColor, uint32_t strokeColor,
+    float strokeWidth, float round_, uint32_t id) {
+
+    // Total words: 7 header + vertexCount*2 floats
+    uint32_t totalWords = 7 + vertexCount * 2;
+    std::vector<float> data(totalWords);
+
+    // Write header
+    sdf::writePolygon(data.data(), layer, vertexCount, fillColor, strokeColor, strokeWidth, round_);
+
+    // Append vertex data
+    std::memcpy(data.data() + 7, vertices, vertexCount * 2 * sizeof(float));
+
+    return addPrim(id, data.data(), totalWords);
+}
+
+Result<uint32_t> YDrawBuffer::addPolygonGroupWithVertices(uint32_t layer,
+    uint32_t vertexCount, uint32_t contourCount,
+    const uint32_t* contourStarts, const float* vertices,
+    uint32_t fillColor, uint32_t strokeColor,
+    float strokeWidth, float round_, uint32_t id) {
+
+    // Total words: 8 header + contourCount contour starts + vertexCount*2 floats
+    uint32_t totalWords = 8 + contourCount + vertexCount * 2;
+    std::vector<float> data(totalWords);
+
+    // Write header
+    sdf::writePolygonGroup(data.data(), layer, vertexCount, contourCount, fillColor, strokeColor, strokeWidth, round_);
+
+    // Append contour starts (as floats with bits preserved)
+    float* dst = data.data() + 8;
+    for (uint32_t i = 0; i < contourCount; ++i) {
+        uint32_t v = contourStarts[i];
+        std::memcpy(dst + i, &v, sizeof(float));
+    }
+
+    // Append vertex data
+    std::memcpy(dst + contourCount, vertices, vertexCount * 2 * sizeof(float));
+
+    return addPrim(id, data.data(), totalWords);
+}
+
+//=============================================================================
 // Output
 //=============================================================================
 

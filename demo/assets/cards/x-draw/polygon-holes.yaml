@@ -1,0 +1,68 @@
+background: "#1a1a2e"
+
+body:
+  # Simple donut - outer circle approximated as octagon, inner as square hole
+  - polygon_group:
+      contours:
+        # Outer octagon (clockwise)
+        - [[150, 50], [200, 70], [220, 120], [200, 170], [150, 190], [100, 170], [80, 120], [100, 70]]
+        # Inner square hole (counter-clockwise)
+        - [[130, 100], [130, 140], [170, 140], [170, 100]]
+      fill: "#e74c3c"
+      stroke: "#c0392b"
+      stroke-width: 2
+
+  # Letter "O" shape - rectangle with rectangle hole
+  - polygon_group:
+      contours:
+        # Outer rectangle
+        - [[280, 60], [380, 60], [380, 180], [280, 180]]
+        # Inner rectangle hole
+        - [[310, 90], [310, 150], [350, 150], [350, 90]]
+      fill: "#3498db"
+      stroke: "#2980b9"
+      stroke-width: 2
+
+  # Frame shape - large rect with centered rect hole
+  - polygon_group:
+      contours:
+        # Outer frame
+        - [[420, 40], [560, 40], [560, 200], [420, 200]]
+        # Inner cutout
+        - [[450, 70], [450, 170], [530, 170], [530, 70]]
+      fill: "#2ecc71"
+      stroke: "#27ae60"
+      stroke-width: 2
+
+  # Complex shape - irregular outer with triangular hole
+  - polygon_group:
+      contours:
+        # Irregular pentagon outer
+        - [[100, 230], [180, 220], [200, 280], [150, 320], [80, 290]]
+        # Triangular hole
+        - [[130, 260], [120, 290], [160, 280]]
+      fill: "#9b59b6"
+      stroke: "#8e44ad"
+      stroke-width: 2
+
+  # Washer/ring shape - hexagon with hexagon hole
+  - polygon_group:
+      contours:
+        # Outer hexagon
+        - [[320, 250], [370, 230], [420, 250], [420, 310], [370, 330], [320, 310]]
+        # Inner hexagon hole (smaller, centered)
+        - [[345, 260], [370, 250], [395, 260], [395, 300], [370, 310], [345, 300]]
+      fill: "#f39c12"
+      stroke: "#d68910"
+      stroke-width: 2
+
+  # Star frame - star outer with pentagon hole
+  - polygon_group:
+      contours:
+        # Outer star (10 points)
+        - [[510, 220], [520, 250], [555, 250], [530, 270], [540, 305], [510, 285], [480, 305], [490, 270], [465, 250], [500, 250]]
+        # Inner pentagon hole
+        - [[510, 250], [495, 270], [502, 290], [518, 290], [525, 270]]
+      fill: "#1abc9c"
+      stroke: "#16a085"
+      stroke-width: 2

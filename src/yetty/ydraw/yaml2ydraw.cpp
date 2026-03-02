@@ -201,6 +201,65 @@ static Result<void> parseYAMLPrimitive(YDrawBuffer* buffer,
         return Ok();
     }
 
+    // Polygon (variable vertices)
+    if (item["polygon"]) {
+        auto p = item["polygon"];
+        uint32_t fill = 0, stroke = 0;
+        float strokeWidth = 0, round = 0;
+        if (p["fill"]) fill = parseColor(p["fill"]);
+        if (p["stroke"]) stroke = parseColor(p["stroke"]);
+        if (p["stroke-width"]) strokeWidth = p["stroke-width"].as<float>();
+        if (p["round"]) round = p["round"].as<float>();
+        std::vector<float> vertices;
+        if (p["vertices"] && p["vertices"].IsSequence()) {
+            for (const auto& pt : p["vertices"]) {
+                if (pt.IsSequence() && pt.size() >= 2) {
+                    vertices.push_back(pt[0].as<float>());
+                    vertices.push_back(pt[1].as<float>());
+                }
+            }
+        }
+        if (vertices.size() >= 6) { // At least 3 points
+            buffer->addPolygonWithVertices(layer, static_cast<uint32_t>(vertices.size() / 2),
+                vertices.data(), fill, stroke, strokeWidth, round);
+        }
+        return Ok();
+    }
+
+    // PolygonGroup (polygon with holes)
+    if (item["polygon_group"]) {
+        auto pg = item["polygon_group"];
+        uint32_t fill = 0, stroke = 0;
+        float strokeWidth = 0, round = 0;
+        if (pg["fill"]) fill = parseColor(pg["fill"]);
+        if (pg["stroke"]) stroke = parseColor(pg["stroke"]);
+        if (pg["stroke-width"]) strokeWidth = pg["stroke-width"].as<float>();
+        if (pg["round"]) round = pg["round"].as<float>();
+        std::vector<float> vertices;
+        std::vector<uint32_t> contourStarts;
+        if (pg["contours"] && pg["contours"].IsSequence()) {
+            for (const auto& contour : pg["contours"]) {
+                if (contour.IsSequence()) {
+                    contourStarts.push_back(static_cast<uint32_t>(vertices.size() / 2));
+                    for (const auto& pt : contour) {
+                        if (pt.IsSequence() && pt.size() >= 2) {
+                            vertices.push_back(pt[0].as<float>());
+                            vertices.push_back(pt[1].as<float>());
+                        }
+                    }
+                }
+            }
+        }
+        if (vertices.size() >= 6 && !contourStarts.empty()) {
+            buffer->addPolygonGroupWithVertices(layer,
+                static_cast<uint32_t>(vertices.size() / 2),
+                static_cast<uint32_t>(contourStarts.size()),
+                contourStarts.data(), vertices.data(),
+                fill, stroke, strokeWidth, round);
+        }
+        return Ok();
+    }
+
     // Bezier
     if (item["bezier"]) {
         auto b = item["bezier"];

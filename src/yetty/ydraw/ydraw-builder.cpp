@@ -7,6 +7,7 @@
 #include <yetty/card-texture-manager.h>
 #include "ydraw-types.gen.h"
 #include "ydraw-buffer.h"
+#include "triangulate.h"
 #include <yetty/msdf-glyph-data.h>  // For GlyphMetadataGPU
 #include <ytrace/ytrace.hpp>
 #include <algorithm>
@@ -361,6 +362,55 @@ static void computeAABB(const float* data, uint32_t wc,
         case SDFType::TriPrism3D: case SDFType::Octahedron3D: case SDFType::Pyramid3D:
         case SDFType::Ellipsoid3D: case SDFType::Rhombus3D: case SDFType::Link3D: {
             aabbMinX = 0; aabbMinY = 0; aabbMaxX = 0; aabbMaxY = 0;
+            break;
+        }
+        case SDFType::Polygon: {
+            // Polygon: header(7) + vertices(vertexCount*2)
+            uint32_t vertexCount = sdf::detail::read_u32(data, 2);
+            strokeWidth = data[5];
+            float expand = strokeWidth * 0.5f;
+            const float* verts = data + 7;
+            if (vertexCount > 0) {
+                aabbMinX = verts[0]; aabbMaxX = verts[0];
+                aabbMinY = verts[1]; aabbMaxY = verts[1];
+                for (uint32_t i = 1; i < vertexCount; ++i) {
+                    float vx = verts[i * 2];
+                    float vy = verts[i * 2 + 1];
+                    aabbMinX = std::min(aabbMinX, vx);
+                    aabbMinY = std::min(aabbMinY, vy);
+                    aabbMaxX = std::max(aabbMaxX, vx);
+                    aabbMaxY = std::max(aabbMaxY, vy);
+                }
+                aabbMinX -= expand; aabbMinY -= expand;
+                aabbMaxX += expand; aabbMaxY += expand;
+            } else {
+                aabbMinX = 0; aabbMinY = 0; aabbMaxX = 0; aabbMaxY = 0;
+            }
+            break;
+        }
+        case SDFType::PolygonGroup: {
+            // PolygonGroup: header(8) + contourStarts(contourCount) + vertices(vertexCount*2)
+            uint32_t vertexCount = sdf::detail::read_u32(data, 2);
+            uint32_t contourCount = sdf::detail::read_u32(data, 3);
+            strokeWidth = data[6];
+            float expand = strokeWidth * 0.5f;
+            const float* verts = data + 8 + contourCount;
+            if (vertexCount > 0) {
+                aabbMinX = verts[0]; aabbMaxX = verts[0];
+                aabbMinY = verts[1]; aabbMaxY = verts[1];
+                for (uint32_t i = 1; i < vertexCount; ++i) {
+                    float vx = verts[i * 2];
+                    float vy = verts[i * 2 + 1];
+                    aabbMinX = std::min(aabbMinX, vx);
+                    aabbMinY = std::min(aabbMinY, vy);
+                    aabbMaxX = std::max(aabbMaxX, vx);
+                    aabbMaxY = std::max(aabbMaxY, vy);
+                }
+                aabbMinX -= expand; aabbMinY -= expand;
+                aabbMaxX += expand; aabbMaxY += expand;
+            } else {
+                aabbMinX = 0; aabbMinY = 0; aabbMaxX = 0; aabbMaxY = 0;
+            }
             break;
         }
         default:
@@ -1276,6 +1326,81 @@ public:
             }
             _pendingImages.push_back(std::move(pi));
         });
+
+        // Triangulation pass: convert Polygon/PolygonGroup to Triangle primitives
+        {
+            struct PendingTri {
+                float x0, y0, x1, y1, x2, y2;
+                uint32_t layer, fillColor;
+                float strokeWidth;
+            };
+            std::vector<PendingTri> pendingTris;
+            std::vector<uint32_t> toRemove;
+
+            _buffer->forEachPrim([&](uint32_t id, const float* data, uint32_t /*wc*/) {
+                uint32_t type = sdf::detail::read_u32(data, 0);
+
+                if (type == static_cast<uint32_t>(SDFType::Polygon)) {
+                    uint32_t layer = sdf::detail::read_u32(data, 1);
+                    uint32_t vertexCount = sdf::detail::read_u32(data, 2);
+                    uint32_t fillColor = sdf::detail::read_u32(data, 3);
+                    float strokeWidth = data[5];
+                    const float* vertices = data + 7;
+
+                    std::vector<uint32_t> indices;
+                    if (triangulatePolygon(vertices, vertexCount, indices)) {
+                        for (size_t i = 0; i + 2 < indices.size(); i += 3) {
+                            uint32_t i0 = indices[i], i1 = indices[i + 1], i2 = indices[i + 2];
+                            PendingTri pt;
+                            pt.x0 = vertices[i0 * 2]; pt.y0 = vertices[i0 * 2 + 1];
+                            pt.x1 = vertices[i1 * 2]; pt.y1 = vertices[i1 * 2 + 1];
+                            pt.x2 = vertices[i2 * 2]; pt.y2 = vertices[i2 * 2 + 1];
+                            pt.layer = layer; pt.fillColor = fillColor; pt.strokeWidth = strokeWidth;
+                            pendingTris.push_back(pt);
+                        }
+                        toRemove.push_back(id);
+                    }
+                }
+                else if (type == static_cast<uint32_t>(SDFType::PolygonGroup)) {
+                    uint32_t layer = sdf::detail::read_u32(data, 1);
+                    uint32_t vertexCount = sdf::detail::read_u32(data, 2);
+                    uint32_t contourCount = sdf::detail::read_u32(data, 3);
+                    uint32_t fillColor = sdf::detail::read_u32(data, 4);
+                    float strokeWidth = data[6];
+                    const float* contourStartsF = data + 8;
+                    const float* vertices = data + 8 + contourCount;
+
+                    std::vector<uint32_t> contourStarts(contourCount);
+                    for (uint32_t i = 0; i < contourCount; ++i) {
+                        std::memcpy(&contourStarts[i], &contourStartsF[i], sizeof(uint32_t));
+                    }
+
+                    std::vector<uint32_t> indices;
+                    if (triangulatePolygonGroup(contourStarts.data(), contourCount,
+                                                 vertices, vertexCount, indices)) {
+                        for (size_t i = 0; i + 2 < indices.size(); i += 3) {
+                            uint32_t i0 = indices[i], i1 = indices[i + 1], i2 = indices[i + 2];
+                            PendingTri pt;
+                            pt.x0 = vertices[i0 * 2]; pt.y0 = vertices[i0 * 2 + 1];
+                            pt.x1 = vertices[i1 * 2]; pt.y1 = vertices[i1 * 2 + 1];
+                            pt.x2 = vertices[i2 * 2]; pt.y2 = vertices[i2 * 2 + 1];
+                            pt.layer = layer; pt.fillColor = fillColor; pt.strokeWidth = strokeWidth;
+                            pendingTris.push_back(pt);
+                        }
+                        toRemove.push_back(id);
+                    }
+                }
+            });
+
+            for (uint32_t id : toRemove) {
+                _buffer->remove(id);
+            }
+
+            for (const auto& pt : pendingTris) {
+                _buffer->addTriangle(pt.layer, pt.x0, pt.y0, pt.x1, pt.y1, pt.x2, pt.y2,
+                                      pt.fillColor, 0, pt.strokeWidth, 0);
+            }
+        }
 
         // Step 1: Read all prims from buffer, compute AABB for each
         _buffer->forEachPrim([this](uint32_t /*id*/, const float* data, uint32_t wc) {

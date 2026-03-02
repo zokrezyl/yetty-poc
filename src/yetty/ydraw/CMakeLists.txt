@@ -4,6 +4,7 @@ add_library(yetty_ydraw STATIC
     ydraw-buffer.cpp
     animation.cpp
     yaml2ydraw.cpp
+    triangulate.cpp
 )
 
 target_include_directories(yetty_ydraw PUBLIC

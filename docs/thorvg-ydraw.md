@@ -131,7 +131,8 @@ For complex paths that don't map to YDraw primitives, tessellate to triangles.
 | appendCircle(cx,cy,rx,ry) where rx!=ry | Ellipse | Direct mapping ✓ |
 | LineTo segment | Segment | Direct mapping ✓ |
 | CubicTo | Bezier3 | Direct mapping ✓ |
-| Closed polygon (N points) | N×Triangle | Triangulation needed |
+| Closed polygon (N points) | Polygon → N-2 Triangles | Ear-clipping triangulation ✓ |
+| Polygon with holes | PolygonGroup → Triangles | Bridge merging + triangulation ✓ |
 | Arc | Arc | Needs parameter conversion |
 | Complex path | Multiple primitives | Path decomposition |
 
@@ -200,13 +201,102 @@ tmp/thorvg/src/renderer/ydraw_engine/
 
 | Phase | Complexity | Description |
 |-------|------------|-------------|
-| Phase 1 | Medium | Basic renderer + simple shapes (~2 weeks) |
-| Phase 2 | Medium | Bezier paths + strokes (~2 weeks) |
-| Phase 3 | High | Tessellation + complex paths (~3 weeks) |
-| Phase 4 | High | Gradients + composition (~3 weeks) |
+| Phase 1 | Medium | Basic renderer + simple shapes |
+| Phase 2 | Medium | Bezier paths + strokes |
+| Phase 3 | High | Tessellation + complex paths |
+| Phase 4 | High | Gradients + composition |
 
 ## Conclusion
 
 Patching ThorVG to render to YDraw is **feasible** and would enable GPU-accelerated SVG/Lottie rendering through YDraw's SDF system. The main work is building a path-to-primitive translator. Simple shapes (rect, circle, beziers) map directly; complex paths require tessellation to triangles.
 
 **Recommended starting point:** Implement `YDrawRenderer` with basic shape support, then iterate.
+
+## Progress
+
+### Implemented ✓
+
+| Feature | Implementation | Notes |
+|---------|----------------|-------|
+| **Circle/Ellipse** | `tryRenderAsEllipse()` | Detects MoveTo+4×CubicTo+Close pattern → `addEllipse()` |
+| **Rectangle/Box** | `tryRenderAsBox()` | Detects MoveTo+LineTo/CubicTo+Close pattern → `addBox()` |
+| **Cubic Bezier** | `addBezier3()` | Direct mapping for stroke curves |
+| **Line Segment** | `addSegment()` | Direct mapping for LineTo commands |
+| **Basic fill colors** | RGBA→ABGR conversion | Solid fills working |
+| **Transform accumulation** | `computeWorldTransform()` | Walks parent chain for correct world transforms |
+| **Lottie animation** | `setFrame()` + re-render | Frame updates working |
+| **SVG static rendering** | Scene graph traversal | Via ThorVG's Accessor API |
+
+### Not Yet Implemented
+
+| Feature | Status | Difficulty | Notes |
+|---------|--------|------------|-------|
+| **Gradients** (Linear/Radial) | ❌ | High | YDraw needs gradient primitive types |
+| **Stroke dash patterns** | ❌ | Medium | Needs stroke-to-path conversion |
+| **Stroke caps/joins** | ❌ | Medium | Round, bevel, miter not supported |
+| **Variable stroke width** | ❌ | Medium | YDraw has fixed strokeWidth |
+| **Fill rules** (EvenOdd/NonZero) | ❌ | High | Complex path decomposition needed |
+| **Alpha masks** | ❌ | High | Multi-pass rendering needed |
+| **Blend modes** | ❌ | High | Not in YDraw primitive model |
+| **Text rendering** | ❌ | Medium | Could wire to YDraw's glyph system |
+| **Images/Pictures** | ❌ | Medium | YDraw has Image type |
+| **Quadratic Bezier** | ❌ | Low | Add Bezier2 detection |
+| **Arc/Pie shapes** | ❌ | Low | Add pattern detection |
+
+### Recently Implemented
+
+| Feature | Implementation | Notes |
+|---------|----------------|-------|
+| **Arbitrary polygons** | `tryRenderAsPolygon()` → `addPolygonWithVertices()` | Closed paths without curves become Polygon primitives |
+| **Polygons with holes** | `PolygonGroup` + triangulation | Ear-clipping with bridge merging for holes |
+| **Multiple holes** | Hole sorting + sequential merge | Holes sorted by rightmost x-coordinate |
+| **Axis-aligned rect detection** | `tryRenderAsBox()` validation | Verifies 2 unique X/Y values to avoid misdetecting pentagons |
+
+### Files Created
+
+```
+src/yetty/thorvg/
+├── thorvg-renderer.h      # ThorVgRenderer interface (Object pattern)
+├── thorvg-renderer.cpp    # Scene traversal + primitive emission
+└── CMakeLists.txt         # yetty_thorvg library
+
+src/yetty/cards/thorvg/
+├── thorvg.h               # ThorVG card wrapper
+├── thorvg.cpp             # YDrawBuilder + animation integration
+└── CMakeLists.txt         # yetty_card_thorvg library
+
+src/yetty/ydraw/
+├── triangulate.h          # Triangulation API
+└── triangulate.cpp        # Ear-clipping + hole merging
+
+build-tools/cmake/
+└── thorvg.cmake           # CPM download of ThorVG v1.0.1
+
+test/ut/thorvg/
+├── CMakeLists.txt         # ThorVG test build config
+├── main.cpp               # Test entry point
+└── thorvg_test.cpp        # ThorVG rendering tests (13 tests)
+
+test/ut/ydraw/
+└── triangulate_test.cpp   # Triangulation tests (51 tests)
+
+demo/scripts/cards/thorvg/
+├── simple-shapes.sh       # SVG shapes demo
+├── beziers.sh             # Bezier curves demo
+├── polygon-shapes.sh      # Polygon shapes demo
+├── lottie-bounce.sh       # Bouncing ball animation
+├── lottie-spinner.sh      # Spinning loader animation
+└── all.sh                 # Run all demos
+
+demo/scripts/cards/ydraw/
+├── ydraw-polygon.sh       # Simple polygon demo
+└── ydraw-polygon-holes.sh # Polygon with holes demo
+```
+
+### Key Technical Decisions
+
+1. **Shape Detection over Path Walking**: For filled shapes (ellipse, rectangle), we detect the path command pattern and emit a single YDraw primitive rather than individual bezier strokes. This enables proper SDF fill rendering.
+
+2. **Transform Accumulation**: ThorVG's `Paint::parent()` is used to walk the hierarchy and accumulate transforms from root to leaf, ensuring correct world-space coordinates.
+
+3. **Animation via Re-render**: Each frame, `setFrame()` updates ThorVG's animation state, then `render()` clears and re-populates the YDrawBuffer with new primitive positions.

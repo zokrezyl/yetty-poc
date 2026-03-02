@@ -24,6 +24,7 @@ add_executable(ygui_tests
     # YDraw core
     ${CMAKE_SOURCE_DIR}/src/yetty/ydraw/ydraw-buffer.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/ydraw/ydraw-builder.cpp
+    ${CMAKE_SOURCE_DIR}/src/yetty/ydraw/triangulate.cpp
     # Builder transitive deps
     ${CMAKE_SOURCE_DIR}/src/yetty/msdf-atlas.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/msdf-cdb-provider.cpp

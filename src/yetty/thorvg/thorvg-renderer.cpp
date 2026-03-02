@@ -384,14 +384,24 @@ private:
                         const tvg::Matrix& m,
                         uint32_t fillColor, uint32_t strokeColor, float strokeWidth) {
         
-        // Simple rectangle: MoveTo + 4 LineTo + Close
-        bool isSimpleRect = (cmdCount == 6 &&
-                             cmds[0] == tvg::PathCommand::MoveTo &&
-                             cmds[1] == tvg::PathCommand::LineTo &&
-                             cmds[2] == tvg::PathCommand::LineTo &&
-                             cmds[3] == tvg::PathCommand::LineTo &&
-                             cmds[4] == tvg::PathCommand::LineTo &&
-                             cmds[5] == tvg::PathCommand::Close);
+        // Simple rectangle: MoveTo + 3 LineTo + Close (4 unique vertices)
+        // Note: ThorVG may emit MoveTo + 4 LineTo + Close if it includes returning to start
+        bool isSimpleRect4 = (cmdCount == 5 && ptCount == 4 &&
+                              cmds[0] == tvg::PathCommand::MoveTo &&
+                              cmds[1] == tvg::PathCommand::LineTo &&
+                              cmds[2] == tvg::PathCommand::LineTo &&
+                              cmds[3] == tvg::PathCommand::LineTo &&
+                              cmds[4] == tvg::PathCommand::Close);
+        
+        bool isSimpleRect5 = (cmdCount == 6 && ptCount == 5 &&
+                              cmds[0] == tvg::PathCommand::MoveTo &&
+                              cmds[1] == tvg::PathCommand::LineTo &&
+                              cmds[2] == tvg::PathCommand::LineTo &&
+                              cmds[3] == tvg::PathCommand::LineTo &&
+                              cmds[4] == tvg::PathCommand::LineTo &&
+                              cmds[5] == tvg::PathCommand::Close);
+        
+        bool isSimpleRect = isSimpleRect4 || isSimpleRect5;
         
         // Rounded rectangle: MoveTo + (LineTo + CubicTo) * 4 + Close = 10 cmds
         bool isRoundedRect = (cmdCount == 10 &&
@@ -407,6 +417,37 @@ private:
                               cmds[9] == tvg::PathCommand::Close);
         
         if (!isSimpleRect && !isRoundedRect) return false;
+        
+        // For simple rect, verify it's actually an axis-aligned rectangle
+        // (has exactly 2 unique X values and 2 unique Y values)
+        if (isSimpleRect) {
+            // Transform points
+            uint32_t checkCount = std::min(ptCount, 4u);
+            float xVals[4], yVals[4];
+            for (uint32_t i = 0; i < checkCount; ++i) {
+                tvg::Point tp = transformPoint(pts[i], m);
+                xVals[i] = tp.x;
+                yVals[i] = tp.y;
+            }
+            
+            // Sort and count unique values
+            std::sort(xVals, xVals + checkCount);
+            std::sort(yVals, yVals + checkCount);
+            
+            const float eps = 0.5f;
+            bool twoUniqueX = (checkCount == 4 &&
+                               std::abs(xVals[0] - xVals[1]) < eps && 
+                               std::abs(xVals[2] - xVals[3]) < eps &&
+                               std::abs(xVals[1] - xVals[2]) > eps);
+            bool twoUniqueY = (checkCount == 4 &&
+                               std::abs(yVals[0] - yVals[1]) < eps && 
+                               std::abs(yVals[2] - yVals[3]) < eps &&
+                               std::abs(yVals[1] - yVals[2]) > eps);
+            
+            if (!twoUniqueX || !twoUniqueY) {
+                return false;  // Not an axis-aligned rectangle
+            }
+        }
         
         // Transform all points and find bounding box
         float minX = 1e10f, minY = 1e10f, maxX = -1e10f, maxY = -1e10f;
@@ -438,6 +479,94 @@ private:
         return true;
     }
 
+    // Try to render a closed path with fill as a polygon
+    // Returns true if rendered as polygon, false otherwise
+    bool tryRenderAsPolygon(const tvg::PathCommand* cmds, uint32_t cmdCount,
+                            const tvg::Point* pts, uint32_t ptCount,
+                            const tvg::Matrix& m,
+                            uint32_t fillColor, uint32_t strokeColor, float strokeWidth) {
+        // Only use polygon for filled shapes
+        if ((fillColor & 0xFF000000) == 0) {
+            return false;
+        }
+
+        // Check if path is closed and contains only MoveTo, LineTo, Close
+        // (no curves - those need different handling)
+        bool hasCurves = false;
+        bool isClosed = false;
+        int moveCount = 0;
+        
+        for (uint32_t i = 0; i < cmdCount; ++i) {
+            switch (cmds[i]) {
+                case tvg::PathCommand::MoveTo:
+                    moveCount++;
+                    break;
+                case tvg::PathCommand::LineTo:
+                    break;
+                case tvg::PathCommand::CubicTo:
+                    hasCurves = true;
+                    break;
+                case tvg::PathCommand::Close:
+                    isClosed = true;
+                    break;
+            }
+        }
+
+        // Skip if has curves or multiple subpaths
+        if (hasCurves || moveCount > 1) {
+            return false;
+        }
+
+        if (!isClosed) {
+            return false;
+        }
+
+        // Extract vertices
+        std::vector<float> vertices;
+        uint32_t ptIdx = 0;
+
+        for (uint32_t i = 0; i < cmdCount && ptIdx < ptCount; ++i) {
+            switch (cmds[i]) {
+                case tvg::PathCommand::MoveTo:
+                    if (ptIdx < ptCount) {
+                        tvg::Point p = transformPoint(pts[ptIdx++], m);
+                        vertices.push_back(p.x);
+                        vertices.push_back(p.y);
+                    }
+                    break;
+                case tvg::PathCommand::LineTo:
+                    if (ptIdx < ptCount) {
+                        tvg::Point p = transformPoint(pts[ptIdx++], m);
+                        vertices.push_back(p.x);
+                        vertices.push_back(p.y);
+                    }
+                    break;
+                case tvg::PathCommand::Close:
+                    // Don't add closing vertex - polygon is implicitly closed
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        uint32_t vertexCount = static_cast<uint32_t>(vertices.size() / 2);
+        if (vertexCount < 3) {
+            return false;
+        }
+
+        auto result = _buffer->addPolygonWithVertices(
+            0,              // layer
+            vertexCount,
+            vertices.data(),
+            fillColor,
+            strokeColor,
+            strokeWidth,
+            0.0f            // round
+        );
+        if (result) _nextPrimId++;
+        return true;
+    }
+
     void renderPath(const tvg::PathCommand* cmds, uint32_t cmdCount,
                     const tvg::Point* pts, uint32_t ptCount,
                     const tvg::Matrix& m,
@@ -450,6 +579,11 @@ private:
         
         // Try to render as box (for Lottie rectangles)
         if (tryRenderAsBox(cmds, cmdCount, pts, ptCount, m, fillColor, strokeColor, strokeWidth)) {
+            return;
+        }
+        
+        // Try to render as filled polygon (only for paths with fill and no bezier curves)
+        if (tryRenderAsPolygon(cmds, cmdCount, pts, ptCount, m, fillColor, strokeColor, strokeWidth)) {
             return;
         }
         
