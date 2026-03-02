@@ -1,8 +1,13 @@
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
 #include "thorvg-renderer.h"
 #include "../ydraw/ydraw-buffer.h"
 #include "../ydraw/ydraw-types.gen.h"
 #include <thorvg.h>
 #include <ytrace/ytrace.hpp>
+#include <algorithm>
 #include <cstring>
 #include <mutex>
 #include <stack>

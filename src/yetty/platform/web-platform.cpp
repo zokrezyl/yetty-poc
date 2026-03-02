@@ -224,6 +224,10 @@ public:
         EM_ASM({ document.title = UTF8ToString($0); }, title.c_str());
     }
 
+    void setIcon(const unsigned char*, size_t) override {
+        // Not supported on web - favicon is set via HTML
+    }
+
     WGPUSurface createWGPUSurface(WGPUInstance instance) override {
         WGPUEmscriptenSurfaceSourceCanvasHTMLSelector canvasSource = {};
         canvasSource.chain.sType = WGPUSType_EmscriptenSurfaceSourceCanvasHTMLSelector;

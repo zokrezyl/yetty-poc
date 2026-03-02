@@ -28,6 +28,11 @@ add_subdirectory(${YETTY_ROOT}/build-tools/jslinux ${CMAKE_BINARY_DIR}/jslinux-b
 
 target_include_directories(yetty PRIVATE ${YETTY_INCLUDES} ${YETTY_RENDERER_INCLUDES})
 
+# Embed resources (logo) - no-op on web but needed for symbol resolution
+incbin_add_resources(yetty
+    Logo "${YETTY_ROOT}/docs/logo.jpeg"
+)
+
 add_dependencies(yetty generate-cdb copy-shaders copy-assets)
 
 target_compile_definitions(yetty PRIVATE

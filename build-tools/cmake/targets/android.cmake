@@ -28,6 +28,11 @@ add_library(yetty SHARED
 
 target_include_directories(yetty PRIVATE ${YETTY_INCLUDES} ${YETTY_RENDERER_INCLUDES})
 
+# Embed resources (logo)
+incbin_add_resources(yetty
+    Logo "${YETTY_ROOT}/docs/logo.jpeg"
+)
+
 target_compile_definitions(yetty PRIVATE
     ${YETTY_DEFINITIONS}
     YETTY_WEB=0

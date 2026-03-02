@@ -23,6 +23,7 @@
 
 #include <GLFW/glfw3.h>
 #include <glfw3webgpu.h>
+#include <stb_image.h>
 
 namespace yetty {
 
@@ -224,6 +225,15 @@ public:
             yinfo("Platform: headless mode (no GLFW)");
             return Ok();
         }
+
+#if defined(__linux__) && defined(GLFW_PLATFORM)
+        // Force X11 on Linux to ensure window icons work (Wayland doesn't support glfwSetWindowIcon)
+        // User can override with YETTY_WAYLAND=1 environment variable
+        if (!getenv("YETTY_WAYLAND")) {
+            glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_X11);
+        }
+#endif
+
         if (!glfwInit()) {
             return Err<void>("Failed to initialize GLFW");
         }
@@ -302,6 +312,26 @@ public:
         if (_window) {
             glfwSetWindowTitle(_window, title.c_str());
         }
+    }
+
+    void setIcon(const unsigned char* data, size_t size) override {
+        if (!_window || !data || size == 0) return;
+
+        int width, height, channels;
+        unsigned char* pixels = stbi_load_from_memory(data, static_cast<int>(size), &width, &height, &channels, 4);
+        if (!pixels) {
+            ywarn("Failed to decode embedded icon");
+            return;
+        }
+
+        GLFWimage icon;
+        icon.width = width;
+        icon.height = height;
+        icon.pixels = pixels;
+        glfwSetWindowIcon(_window, 1, &icon);
+
+        stbi_image_free(pixels);
+        yinfo("Set window icon from embedded data ({}x{})", width, height);
     }
 
     WGPUSurface createWGPUSurface(WGPUInstance instance) override {
