@@ -13,6 +13,7 @@ add_subdirectory(qrcode)
 
 add_subdirectory(ypdf)
 add_subdirectory(yhtml)
+add_subdirectory(thorvg)
 
 # Aggregate library linking all cards
 add_library(yetty_cards INTERFACE)
@@ -30,4 +31,5 @@ target_link_libraries(yetty_cards INTERFACE
     yetty_card_qrcode
     yetty_card_ypdf
     yetty_card_yhtml
+    yetty_card_thorvg
 )
