@@ -1,4 +1,7 @@
 #include "telnet-client.h"
+
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
+
 #include <ytrace/ytrace.hpp>
 
 #include <arpa/inet.h>
@@ -532,3 +535,5 @@ void TelnetClient::handleSubnegotiation() {
 }
 
 } // namespace yetty::telnet
+
+#endif // !defined(_WIN32) && !defined(__EMSCRIPTEN__)
