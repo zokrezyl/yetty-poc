@@ -11,6 +11,7 @@
 #else
 #include <yetty/osc-scanner.h>
 #include <yetty/pty-reader.h>
+#include "telnet/telnet-pty-reader.h"
 #endif
 
 namespace yetty {
@@ -205,32 +206,64 @@ private:
         yinfo("Terminal started WebPTY: {} ({}x{})", vmConfig, cols, rows);
         return Ok();
 #else
-        // Desktop: Use PtyReader with OSC-aware reading
-        // Get shell path from SHELL env
-        const char* shellEnv = getenv("SHELL");
-        std::string shellPath = shellEnv ? shellEnv : "/bin/sh";
-
-        // Get command from config (if specified via -c flag)
-        std::string command;
+        // Check for telnet mode (--telnet flag)
+        std::string telnetAddress;
         if (_ctx.config) {
-            auto cmdOpt = _ctx.config->get<std::string>("shell/command");
-            if (cmdOpt && !cmdOpt->empty()) {
-                command = *cmdOpt;
-                yinfo("Terminal: using command from config: {}", command);
+            auto telnetOpt = _ctx.config->get<std::string>("shell/telnet");
+            if (telnetOpt && !telnetOpt->empty()) {
+                telnetAddress = *telnetOpt;
             }
         }
 
-        PtyConfig config;
-        config.shell = shellPath;
-        config.command = command;
-        config.cols = cols;
-        config.rows = rows;
+        if (!telnetAddress.empty()) {
+            // Telnet mode: connect to remote/local telnet server
+            yinfo("Terminal: using telnet connection to {}", telnetAddress);
 
-        auto readerResult = PtyReader::create(config);
-        if (!readerResult) {
-            return Err<void>("Failed to create PtyReader", readerResult);
+            PtyConfig config;
+            config.shell = telnetAddress;  // host:port format
+            config.cols = cols;
+            config.rows = rows;
+
+            auto reader = std::make_shared<telnet::TelnetPtyReader>();
+            if (auto res = reader->init(config); !res) {
+                return Err<void>("Failed to initialize TelnetPtyReader", res);
+            }
+            _ptyReader = reader;
+            yinfo("Terminal started telnet: {} ({}x{})", telnetAddress, cols, rows);
+        } else {
+            // Desktop: Use PtyReader with OSC-aware reading
+            // Get shell path from SHELL env (or COMSPEC on Windows)
+            const char* shellEnv = getenv("SHELL");
+#ifdef _WIN32
+            if (!shellEnv) shellEnv = getenv("COMSPEC");  // Windows: try COMSPEC
+            std::string shellPath = shellEnv ? shellEnv : "cmd.exe";
+#else
+            std::string shellPath = shellEnv ? shellEnv : "/bin/sh";
+#endif
+
+            // Get command from config (if specified via -c flag)
+            std::string command;
+            if (_ctx.config) {
+                auto cmdOpt = _ctx.config->get<std::string>("shell/command");
+                if (cmdOpt && !cmdOpt->empty()) {
+                    command = *cmdOpt;
+                    yinfo("Terminal: using command from config: {}", command);
+                }
+            }
+
+            PtyConfig config;
+            config.shell = shellPath;
+            config.command = command;
+            config.cols = cols;
+            config.rows = rows;
+
+            auto readerResult = PtyReader::create(config);
+            if (!readerResult) {
+                return Err<void>("Failed to create PtyReader", readerResult);
+            }
+            _ptyReader = *readerResult;
+            yinfo("Terminal started PTY: {} ({}x{})", shellPath, cols, rows);
         }
-        _ptyReader = *readerResult;
 
         // Set up callbacks
         _ptyReader->setDataAvailableCallback([this]() {
@@ -243,7 +276,6 @@ private:
         });
 
         _running = true;
-        yinfo("Terminal started PTY: {} ({}x{})", shellPath, cols, rows);
         return Ok();
 #endif
     }

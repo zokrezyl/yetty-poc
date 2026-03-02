@@ -49,6 +49,7 @@ set(YETTY_LIBS
     ygrid
     yetty_cards
     yetty_yast
+    yetty_telnet
     msdf-wgsl
     args
 )

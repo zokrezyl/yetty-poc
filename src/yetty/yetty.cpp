@@ -149,6 +149,7 @@ private:
     // Command line options
     std::string _executeCommand;
     std::string _msdfProviderName = "cpu";  // "cpu" or "gpu"
+    std::string _telnetAddress;  // host:port for telnet mode
 
     // Frame capture benchmark mode
     bool _captureBenchmark = false;
@@ -245,6 +246,12 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     if (!_executeCommand.empty()) {
         _yettyContext.config->setString("shell/command", _executeCommand);
         yinfo("Set shell/command in config: {}", _executeCommand);
+    }
+
+    // Set telnet address if specified
+    if (!_telnetAddress.empty()) {
+        _yettyContext.config->setString("shell/telnet", _telnetAddress);
+        yinfo("Set shell/telnet in config: {}", _telnetAddress);
     }
 
     if (auto res = initWindow(); !res) return res;
@@ -581,6 +588,7 @@ Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
     args::HelpFlag help(parser, "help", "Show this help", {'h', "help"});
     args::ValueFlag<std::string> executeFlag(parser, "command", "Execute command", {'e', 'c'});
     args::ValueFlag<std::string> msdfProviderFlag(parser, "provider", "MSDF provider (cpu/gpu)", {"msdf-provider"});
+    args::ValueFlag<std::string> telnetFlag(parser, "host:port", "Connect via telnet (default: 127.0.0.1:8023)", {"telnet"});
     args::Flag captureBenchmarkFlag(parser, "capture-benchmark", "Enable capture benchmark mode", {"capture-benchmark"});
 #if YETTY_HAS_VNC
     args::ValueFlag<std::string> vncClientFlag(parser, "host:port", "Connect as VNC client", {"vnc-client"});
@@ -614,6 +622,14 @@ Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
     if (captureBenchmarkFlag) {
         _captureBenchmark = true;
         yinfo("Capture benchmark mode enabled");
+    }
+
+    if (telnetFlag) {
+        _telnetAddress = args::get(telnetFlag);
+        if (_telnetAddress.empty()) {
+            _telnetAddress = "127.0.0.1:8023";  // Default for Termux telnetd
+        }
+        yinfo("Telnet mode: connecting to {}", _telnetAddress);
     }
 
 #if YETTY_HAS_VNC
