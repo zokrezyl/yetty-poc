@@ -1,0 +1,71 @@
+background: "#1a1a2e"
+
+body:
+  # Pentagon
+  - polygon:
+      vertices:
+        - [150, 50]
+        - [200, 100]
+        - [180, 160]
+        - [120, 160]
+        - [100, 100]
+      fill: "#e74c3c"
+      stroke: "#c0392b"
+      stroke-width: 2
+
+  # Hexagon
+  - polygon:
+      vertices:
+        - [300, 60]
+        - [350, 90]
+        - [350, 140]
+        - [300, 170]
+        - [250, 140]
+        - [250, 90]
+      fill: "#3498db"
+      stroke: "#2980b9"
+      stroke-width: 2
+
+  # Star shape (10 vertices)
+  - polygon:
+      vertices:
+        - [450, 50]
+        - [465, 90]
+        - [510, 90]
+        - [475, 115]
+        - [490, 160]
+        - [450, 130]
+        - [410, 160]
+        - [425, 115]
+        - [390, 90]
+        - [435, 90]
+      fill: "#f1c40f"
+      stroke: "#d4ac0d"
+      stroke-width: 2
+
+  # Arrow shape
+  - polygon:
+      vertices:
+        - [100, 220]
+        - [170, 220]
+        - [170, 200]
+        - [220, 240]
+        - [170, 280]
+        - [170, 260]
+        - [100, 260]
+      fill: "#2ecc71"
+      stroke: "#27ae60"
+      stroke-width: 2
+
+  # Irregular polygon
+  - polygon:
+      vertices:
+        - [300, 200]
+        - [380, 210]
+        - [400, 270]
+        - [340, 300]
+        - [280, 280]
+        - [260, 230]
+      fill: "#9b59b6"
+      stroke: "#8e44ad"
+      stroke-width: 2

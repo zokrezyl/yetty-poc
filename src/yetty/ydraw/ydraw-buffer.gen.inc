@@ -755,3 +755,29 @@ Result<void> updateImage(uint32_t id, uint32_t layer, float x, float y, float w,
     sdf::writeImage(data, layer, x, y, w, h, atlasX, atlasY, texW, texH);
     return updatePrim(id, data, 10);
 }
+
+Result<uint32_t> addPolygon(uint32_t layer, uint32_t vertexCount, uint32_t fillColor, uint32_t strokeColor, float strokeWidth, float round_,
+        uint32_t id = AUTO_ID) {
+    float data[7];
+    sdf::writePolygon(data, layer, vertexCount, fillColor, strokeColor, strokeWidth, round_);
+    return addPrim(id, data, 7);
+}
+
+Result<void> updatePolygon(uint32_t id, uint32_t layer, uint32_t vertexCount, uint32_t fillColor, uint32_t strokeColor, float strokeWidth, float round_) {
+    float data[7];
+    sdf::writePolygon(data, layer, vertexCount, fillColor, strokeColor, strokeWidth, round_);
+    return updatePrim(id, data, 7);
+}
+
+Result<uint32_t> addPolygonGroup(uint32_t layer, uint32_t vertexCount, uint32_t contourCount, uint32_t fillColor, uint32_t strokeColor, float strokeWidth, float round_,
+        uint32_t id = AUTO_ID) {
+    float data[8];
+    sdf::writePolygonGroup(data, layer, vertexCount, contourCount, fillColor, strokeColor, strokeWidth, round_);
+    return addPrim(id, data, 8);
+}
+
+Result<void> updatePolygonGroup(uint32_t id, uint32_t layer, uint32_t vertexCount, uint32_t contourCount, uint32_t fillColor, uint32_t strokeColor, float strokeWidth, float round_) {
+    float data[8];
+    sdf::writePolygonGroup(data, layer, vertexCount, contourCount, fillColor, strokeColor, strokeWidth, round_);
+    return updatePrim(id, data, 8);
+}

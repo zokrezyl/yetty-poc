@@ -69,6 +69,8 @@ const SDF_RHOMBUS_3D: u32 = 118u;
 const SDF_LINK_3D: u32 = 119u;
 const SDF_PLOT: u32 = 128u;
 const SDF_IMAGE: u32 = 129u;
+const SDF_POLYGON: u32 = 130u;
+const SDF_POLYGON_GROUP: u32 = 131u;
 
 fn evalSDF(primOffset: u32, p: vec2<f32>) -> f32 {
     let primType = bitcast<u32>(cardStorage[primOffset + 0u]);
@@ -704,6 +706,20 @@ fn primColors(primOffset: u32) -> vec4<u32> {
                 bitcast<u32>(cardStorage[primOffset + 1u]),
                 0u);
         }
+        case SDF_POLYGON: {
+            return vec4<u32>(
+                bitcast<u32>(cardStorage[primOffset + 3u]),
+                bitcast<u32>(cardStorage[primOffset + 4u]),
+                bitcast<u32>(cardStorage[primOffset + 1u]),
+                0u);
+        }
+        case SDF_POLYGON_GROUP: {
+            return vec4<u32>(
+                bitcast<u32>(cardStorage[primOffset + 4u]),
+                bitcast<u32>(cardStorage[primOffset + 5u]),
+                bitcast<u32>(cardStorage[primOffset + 1u]),
+                0u);
+        }
         default: { return vec4<u32>(0u); }
     }
 }
@@ -767,6 +783,8 @@ fn primStrokeWidth(primOffset: u32) -> f32 {
         case SDF_OCTAHEDRON_3D: { return cardStorage[primOffset + 8u]; }
         case SDF_PYRAMID_3D: { return cardStorage[primOffset + 8u]; }
         case SDF_ELLIPSOID_3D: { return cardStorage[primOffset + 10u]; }
+        case SDF_POLYGON: { return cardStorage[primOffset + 5u]; }
+        case SDF_POLYGON_GROUP: { return cardStorage[primOffset + 6u]; }
         default: { return 0.0; }
     }
 }

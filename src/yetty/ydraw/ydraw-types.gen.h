@@ -76,6 +76,8 @@ enum class SDFType : uint32_t {
     Link3D = 119,
     Plot = 128,
     Image = 129,
+    Polygon = 130,
+    PolygonGroup = 131,
 };
 
 namespace sdf_field {
@@ -928,6 +930,29 @@ namespace Image {
     constexpr uint32_t kTexW = 8;
     constexpr uint32_t kTexH = 9;
     constexpr uint32_t kWordCount = 10;
+}
+
+namespace Polygon {
+    constexpr uint32_t kType = 0;
+    constexpr uint32_t kLayer = 1;
+    constexpr uint32_t kVertexCount = 2;
+    constexpr uint32_t kFillColor = 3;
+    constexpr uint32_t kStrokeColor = 4;
+    constexpr uint32_t kStrokeWidth = 5;
+    constexpr uint32_t kRound = 6;
+    constexpr uint32_t kWordCount = 7;
+}
+
+namespace PolygonGroup {
+    constexpr uint32_t kType = 0;
+    constexpr uint32_t kLayer = 1;
+    constexpr uint32_t kVertexCount = 2;
+    constexpr uint32_t kContourCount = 3;
+    constexpr uint32_t kFillColor = 4;
+    constexpr uint32_t kStrokeColor = 5;
+    constexpr uint32_t kStrokeWidth = 6;
+    constexpr uint32_t kRound = 7;
+    constexpr uint32_t kWordCount = 8;
 }
 
 } // namespace sdf_field

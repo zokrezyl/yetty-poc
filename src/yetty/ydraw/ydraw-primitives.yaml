@@ -1132,3 +1132,53 @@ primitives:
       - { name: atlasY,      type: u32 }
       - { name: texW,        type: u32 }
       - { name: texH,        type: u32 }
+
+  # =========================================================================
+  # Polygon primitives — for triangulation
+  # =========================================================================
+
+  - name: Polygon
+    id: 130
+    category: composite
+    description: |
+      Simple polygon (no holes). Vertices are x,y pairs forming a closed contour.
+      YDrawBuilder will triangulate this into Triangle primitives.
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: vertexCount, type: u32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    variable_data:
+      name: vertices
+      type: f32
+      count_field: vertexCount
+      multiplier: 2  # x,y pairs
+
+  - name: PolygonGroup
+    id: 131
+    category: composite
+    description: |
+      Polygon with holes. Contains multiple contours: first is outer boundary,
+      rest are holes. contourStarts array indicates where each contour begins
+      in the vertices array (as vertex index, not float index).
+      YDrawBuilder will triangulate respecting holes.
+    fields:
+      - { name: type,         type: u32 }
+      - { name: layer,        type: u32 }
+      - { name: vertexCount,  type: u32 }
+      - { name: contourCount, type: u32 }
+      - { name: fillColor,    type: u32 }
+      - { name: strokeColor,  type: u32 }
+      - { name: strokeWidth,  type: f32 }
+      - { name: round,        type: f32 }
+    variable_data:
+      - name: contourStarts
+        type: u32
+        count_field: contourCount
+      - name: vertices
+        type: f32
+        count_field: vertexCount
+        multiplier: 2  # x,y pairs
