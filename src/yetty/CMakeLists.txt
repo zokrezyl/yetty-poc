@@ -61,6 +61,7 @@ set(YETTY_DESKTOP_SOURCES
 # Android-specific sources
 set(YETTY_ANDROID_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/msdf-cdb-provider.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/pty-reader-android.cpp
     PARENT_SCOPE
 )
 
@@ -90,3 +91,6 @@ add_subdirectory(shaders)
 if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID AND NOT WIN32)
     add_subdirectory(vnc)
 endif()
+
+# Telnet is available on all platforms (primarily for Android local connections)
+add_subdirectory(telnet)
