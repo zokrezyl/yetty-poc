@@ -14,7 +14,7 @@
 #   --bg-color 0xCOLOR  Background color ABGR hex (default 0xFF1A1A2E)
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
-cd "$DIR/../../.."
+cd "$DIR/../../../.."
 
 MODE="${1:-default}"
 

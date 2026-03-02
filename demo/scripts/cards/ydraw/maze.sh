@@ -13,7 +13,7 @@
 #   --wall-width F      Wall thickness (default 1.5)
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
-cd "$DIR/../../.."
+cd "$DIR/../../../.."
 
 MODE="${1:-default}"
 
