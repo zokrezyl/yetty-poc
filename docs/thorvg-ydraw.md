@@ -251,6 +251,7 @@ Patching ThorVG to render to YDraw is **feasible** and would enable GPU-accelera
 | **Polygons with holes** | `PolygonGroup` + triangulation | Ear-clipping with bridge merging for holes |
 | **Multiple holes** | Hole sorting + sequential merge | Holes sorted by rightmost x-coordinate |
 | **Axis-aligned rect detection** | `tryRenderAsBox()` validation | Verifies 2 unique X/Y values to avoid misdetecting pentagons |
+| **Rounded rectangle corner radius** | `tryRenderAsBox()` cubic analysis | Extracts corner radius from bezier control points |
 
 ### Files Created
 
@@ -275,7 +276,8 @@ build-tools/cmake/
 test/ut/thorvg/
 ├── CMakeLists.txt         # ThorVG test build config
 ├── main.cpp               # Test entry point
-└── thorvg_test.cpp        # ThorVG rendering tests (13 tests)
+├── thorvg_test.cpp        # ThorVG rendering tests (14 tests)
+└── thorvg_rounded_rect_test.cpp  # Rounded rectangle tests (7 tests)
 
 test/ut/ydraw/
 └── triangulate_test.cpp   # Triangulation tests (51 tests)

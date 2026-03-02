@@ -418,6 +418,22 @@ private:
         
         if (!isSimpleRect && !isRoundedRect) return false;
         
+        // Calculate corner radius for rounded rectangles
+        // Rounded rect path: MoveTo(1pt), LineTo(1pt), CubicTo(3pts), repeated 4 times + Close
+        // For cubic bezier approximating a quarter circle, control point is at ~0.552*r from curve start
+        float cornerRadius = 0.0f;
+        if (isRoundedRect && ptCount >= 5) {
+            // First LineTo ends at pts[1], first CubicTo uses pts[2..4]
+            // The corner radius is: distance from lineEnd to first control point / 0.552
+            tvg::Point lineEnd = transformPoint(pts[1], m);
+            tvg::Point bezierCP1 = transformPoint(pts[2], m);
+            float dx = bezierCP1.x - lineEnd.x;
+            float dy = bezierCP1.y - lineEnd.y;
+            float dist = std::sqrt(dx * dx + dy * dy);
+            // Magic number for cubic bezier circle approximation: 4/3 * tan(pi/8) ≈ 0.5522847
+            cornerRadius = dist / 0.5522847f;
+        }
+        
         // For simple rect, verify it's actually an axis-aligned rectangle
         // (has exactly 2 unique X values and 2 unique Y values)
         if (isSimpleRect) {
@@ -464,7 +480,7 @@ private:
         float hw = (maxX - minX) / 2.0f;  // half width
         float hh = (maxY - minY) / 2.0f;  // half height
         
-        yinfo("Box detected: center=({},{}) halfSize=({},{}) fill=0x{:08X}", cx, cy, hw, hh, fillColor);
+        yinfo("Box detected: center=({},{}) halfSize=({},{}) round={} fill=0x{:08X}", cx, cy, hw, hh, cornerRadius, fillColor);
         
         auto result = _buffer->addBox(
             0,              // layer
@@ -473,7 +489,7 @@ private:
             fillColor,
             strokeColor,
             strokeWidth,
-            0.0f            // round (could extract corner radius for RoundedBox)
+            cornerRadius    // round
         );
         if (result) _nextPrimId++;
         return true;

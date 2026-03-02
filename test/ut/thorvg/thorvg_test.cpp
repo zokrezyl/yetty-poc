@@ -268,4 +268,20 @@ suite thorvg_tests = [] {
         expect(buffer->primCount() >= 1_u) << "Rect should produce primitives";
         // Rect may be detected as Box or become Polygon - either is fine
     };
+    
+    "rounded_rect_svg"_test = [] {
+        // Rounded rectangle with rx/ry attributes
+        const char* svg = R"(<svg width="200" height="200">
+            <rect x="20" y="20" width="160" height="120" rx="15" ry="15" fill="purple"/>
+        </svg>)";
+        
+        auto buffer = *YDrawBuffer::create();
+        auto renderer = *ThorVgRenderer::create(buffer);
+        renderer->load(svg, "svg");
+        renderer->render();
+        
+        // Rounded rect should be detected as Box (not polygon since it has curves)
+        expect(buffer->primCount() >= 1_u) << "Rounded rect should produce primitives";
+        expect(!hasPolygonPrimitive(*buffer)) << "Rounded rect should NOT be polygon (has curves)";
+    };
 };

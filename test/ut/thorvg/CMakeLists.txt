@@ -15,6 +15,7 @@ CPMAddPackage(
 add_executable(thorvg_tests
     main.cpp
     thorvg_test.cpp
+    thorvg_rounded_rect_test.cpp
 )
 
 target_include_directories(thorvg_tests PRIVATE
