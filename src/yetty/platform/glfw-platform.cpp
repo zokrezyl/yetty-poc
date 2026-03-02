@@ -387,6 +387,7 @@ public:
     void requestRender() override {
         // Desktop: dispatch ScreenUpdate event directly
         if (auto loop = base::EventLoop::instance(); loop) {
+            ydebug("requestRender: dispatching ScreenUpdate");
             (*loop)->dispatch(base::Event::screenUpdateEvent());
         }
     }
