@@ -305,13 +305,13 @@ public:
         }
     }
 
-    void setIcon(const std::string& path) override {
-        if (!_window) return;
+    void setIcon(const unsigned char* data, size_t size) override {
+        if (!_window || !data || size == 0) return;
 
         int width, height, channels;
-        unsigned char* pixels = stbi_load(path.c_str(), &width, &height, &channels, 4);
+        unsigned char* pixels = stbi_load_from_memory(data, static_cast<int>(size), &width, &height, &channels, 4);
         if (!pixels) {
-            ywarn("Failed to load icon: {}", path);
+            ywarn("Failed to decode embedded icon");
             return;
         }
 
@@ -322,7 +322,7 @@ public:
         glfwSetWindowIcon(_window, 1, &icon);
 
         stbi_image_free(pixels);
-        yinfo("Set window icon: {} ({}x{})", path, width, height);
+        yinfo("Set window icon from embedded data ({}x{})", width, height);
     }
 
     WGPUSurface createWGPUSurface(WGPUInstance instance) override {

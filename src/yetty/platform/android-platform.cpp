@@ -69,7 +69,7 @@ public:
         (void)title;
     }
 
-    void setIcon(const std::string&) override {
+    void setIcon(const unsigned char*, size_t) override {
         // Not supported on Android - app icon is set via manifest
     }
 
