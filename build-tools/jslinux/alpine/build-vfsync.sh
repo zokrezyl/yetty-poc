@@ -120,7 +120,9 @@ mkdir -p /var/log /var/tmp
 hostname yetty
 export HOME=/root
 export TERM=xterm-256color
-stty sane rows 24 cols 80 2>/dev/null
+stty sane 2>/dev/null
+# Debug: show terminal size from kernel (should match JavaScript cols/rows)
+echo "Terminal size at init: $(stty size)"
 cd /root
 cat /etc/motd
 while true; do

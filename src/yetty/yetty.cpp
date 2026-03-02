@@ -2067,6 +2067,10 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
 
         WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
         if (pass) {
+            // Update render target dimensions for scissor rect clamping during resize
+            _yettyContext.gpu.renderTargetWidth = _surfaceWidth;
+            _yettyContext.gpu.renderTargetHeight = _surfaceHeight;
+
             // VNC client mode: render received frame
 #if YETTY_HAS_VNC
             if (_vncClientMode && _vncClient) {

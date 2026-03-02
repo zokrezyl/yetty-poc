@@ -133,6 +133,7 @@ class Term {
     }
 
     getSize() {
+        termLog("getSize() called, returning: " + this.cols + "x" + this.rows);
         return [this.cols, this.rows];
     }
 

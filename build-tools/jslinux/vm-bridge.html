@@ -16,6 +16,24 @@
         "use strict";
 
         var term, console_write1, console_resize_event;
+
+        // Required by emulator WASM - must be global functions
+        function term_get_size() {
+            var size;
+            if (term) {
+                size = term.getSize();
+            } else {
+                size = [80, 25]; // fallback
+            }
+            console.log("[vm-bridge] term_get_size() called, returning: " + size[0] + "x" + size[1]);
+            return size;
+        }
+
+        function term_write(str) {
+            if (term) {
+                term.write(str);
+            }
+        }
         var net_state, net_write_packet, net_set_carrier;
         var fs_import_file;
 
@@ -142,8 +160,19 @@
                 Module.ccall('vm_start', null,
                     ['string', 'number', 'string', 'string', 'number', 'number', 'number', 'string'],
                     [cfg_url, mem, "", "", 0, 0, 0, ""]);
-                // Trigger initial resize after VM starts
-                setTimeout(function() { console_resize_event(); }, 1000);
+                // Trigger resize aggressively during boot to ensure kernel has correct size
+                // before shell/nvim starts
+                log("Starting aggressive resize event sequence");
+                var resizeCount = 0;
+                var resizeInterval = setInterval(function() {
+                    resizeCount++;
+                    log("console_resize_event #" + resizeCount);
+                    console_resize_event();
+                    if (resizeCount >= 30) { // 30 * 200ms = 6 seconds
+                        clearInterval(resizeInterval);
+                        log("Stopping resize event sequence");
+                    }
+                }, 200);
             } catch(e) {
                 term.write("Error starting VM: " + e + "\r\n");
             }
