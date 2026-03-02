@@ -131,6 +131,12 @@ run-desktop-dawn-debug: build-desktop-dawn-debug ## Run desktop dawn debug build
 run-desktop-dawn-release: build-desktop-dawn-release ## Run desktop dawn release build
 	./$(BUILD_DIR_DESKTOP_DAWN_RELEASE)/yetty
 
+.PHONY: test-desktop-dawn-release
+test-desktop-dawn-release: ## Run desktop dawn release tests
+	@if [ ! -f "$(BUILD_DIR_DESKTOP_DAWN_RELEASE)/build.ninja" ]; then $(MAKE) config-desktop-dawn-release; fi
+	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_DESKTOP_DAWN_RELEASE) --target yetty_tests $(CMAKE_PARALLEL)
+	./$(BUILD_DIR_DESKTOP_DAWN_RELEASE)/test/ut/yetty_tests
+
 .PHONY: test-desktop-dawn-debug
 test-desktop-dawn-debug: ## Run desktop dawn debug tests
 	@if [ ! -f "$(BUILD_DIR_DESKTOP_DAWN_DEBUG)/build.ninja" ]; then $(MAKE) config-desktop-dawn-debug; fi

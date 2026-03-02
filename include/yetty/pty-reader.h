@@ -11,6 +11,7 @@ namespace yetty {
 
 struct PtyConfig {
     std::string shell;           // Shell path (desktop) or VM config (webasm)
+    std::string command;         // Command to execute (if empty, start interactive shell)
     uint32_t cols = 80;
     uint32_t rows = 24;
 };

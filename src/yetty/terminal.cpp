@@ -206,11 +206,23 @@ private:
         return Ok();
 #else
         // Desktop: Use PtyReader with OSC-aware reading
+        // Get shell path from SHELL env
         const char* shellEnv = getenv("SHELL");
         std::string shellPath = shellEnv ? shellEnv : "/bin/sh";
 
+        // Get command from config (if specified via -c flag)
+        std::string command;
+        if (_ctx.config) {
+            auto cmdOpt = _ctx.config->get<std::string>("shell/command");
+            if (cmdOpt && !cmdOpt->empty()) {
+                command = *cmdOpt;
+                yinfo("Terminal: using command from config: {}", command);
+            }
+        }
+
         PtyConfig config;
         config.shell = shellPath;
+        config.command = command;
         config.cols = cols;
         config.rows = rows;
 

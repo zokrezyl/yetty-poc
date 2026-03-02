@@ -1,20 +1,20 @@
 #=============================================================================
-# YAST Unit Tests
+# YFSVM Unit Tests
 #=============================================================================
 
-add_executable(yast_tests
+add_executable(yfsvm_tests
     main.cpp
-    yast_test.cpp
+    yfsvm_test.cpp
 )
 
-target_include_directories(yast_tests PRIVATE
+target_include_directories(yfsvm_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/include
 )
 
-target_link_libraries(yast_tests PRIVATE
-    yetty_yast
+target_link_libraries(yfsvm_tests PRIVATE
+    yetty_yfsvm
     ut
 )
 
-add_test(NAME yast_tests COMMAND yast_tests)
+add_test(NAME yfsvm_tests COMMAND yfsvm_tests)

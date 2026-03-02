@@ -81,6 +81,8 @@ add_subdirectory(ygrid)
 add_subdirectory(thorvg)
 add_subdirectory(cards)
 add_subdirectory(yast)
+add_subdirectory(yfsvm)
+add_subdirectory(yplot)
 add_subdirectory(msdf-wgsl)
 add_subdirectory(shaders)
 

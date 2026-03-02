@@ -1,4 +1,5 @@
 add_subdirectory(gpu-info)
+add_subdirectory(card-runner)
 add_subdirectory(ydraw-maze)
 add_subdirectory(ydraw-zoo)
 add_subdirectory(ymux)

@@ -1,20 +1,23 @@
 #=============================================================================
-# YAST Unit Tests
+# YPlot Unit Tests
 #=============================================================================
 
-add_executable(yast_tests
+add_executable(yplot_tests
     main.cpp
-    yast_test.cpp
+    yplot_test.cpp
 )
 
-target_include_directories(yast_tests PRIVATE
+target_include_directories(yplot_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/include
 )
 
-target_link_libraries(yast_tests PRIVATE
+target_link_libraries(yplot_tests PRIVATE
+    yetty_yplot
+    yetty_yfsvm
     yetty_yast
+    yetty_ydraw
     ut
 )
 
-add_test(NAME yast_tests COMMAND yast_tests)
+add_test(NAME yplot_tests COMMAND yplot_tests)

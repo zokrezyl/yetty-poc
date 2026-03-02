@@ -10,6 +10,7 @@ add_subdirectory(ytext)
 add_subdirectory(ygui)
 add_subdirectory(markdown)
 add_subdirectory(qrcode)
+add_subdirectory(yplot)
 
 add_subdirectory(ypdf)
 add_subdirectory(yhtml)
@@ -29,6 +30,7 @@ target_link_libraries(yetty_cards INTERFACE
     yetty_card_ygui
     yetty_card_markdown
     yetty_card_qrcode
+    yetty_card_yplot
     yetty_card_ypdf
     yetty_card_yhtml
     yetty_card_thorvg

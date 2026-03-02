@@ -9,7 +9,7 @@
 #include <algorithm>
 
 #include <boost/ut.hpp>
-#include "yecho-parser.h"
+#include "yetty/yecho/yecho-parser.h"
 
 using namespace boost::ut;
 using namespace yetty;

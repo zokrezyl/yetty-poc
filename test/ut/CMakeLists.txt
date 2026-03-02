@@ -93,10 +93,12 @@ add_custom_target(run_tests
 # Add subdirectory tests
 add_subdirectory(cdb)
 add_subdirectory(yast)
+add_subdirectory(yfsvm)
 add_subdirectory(yecho)
 add_subdirectory(yhtml)
 add_subdirectory(ybrowser)
 add_subdirectory(ymux)
 add_subdirectory(yflame)
+add_subdirectory(yplot)
 add_subdirectory(ygui)
 add_subdirectory(vnc)
