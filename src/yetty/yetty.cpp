@@ -1697,7 +1697,7 @@ void YettyImpl::initEventLoop() noexcept {
         return;
     }
     _frameTimerId = *frameTimerResult;
-    if (auto res = loop->configTimer(_frameTimerId, 1000); !res) {  // 1 FPS
+    if (auto res = loop->configTimer(_frameTimerId, 1000); !res) {  // 1 FPS baseline, events trigger immediate render
         yerror("Failed to configure frame timer: {}", error_msg(res));
         return;
     }
@@ -1741,22 +1741,19 @@ Result<bool> YettyImpl::onEvent(const base::Event& event) {
                 (*base::EventLoop::instance())->stop();
             }
         }
+        // Process GPU events so async callbacks (like render done) can fire
+        wgpuInstanceProcessEvents(_instance);
         return Ok(true);
     }
 
     // Frame timer or ScreenUpdate: render
+    // _inRender guard is inside mainLoopIteration (async: cleared by GPU callback)
     if ((event.type == base::Event::Type::Timer && event.timer.timerId == _frameTimerId) ||
         event.type == base::Event::Type::ScreenUpdate) {
-        // Prevent recursive render (e.g. VNC input -> requestScreenUpdate -> ScreenUpdate)
-        if (_inRender) {
-            return Ok(true);  // Skip, will render on next frame
-        }
-        _inRender = true;
         if (auto res = mainLoopIteration(); !res) {
             yerror("Fatal render error: {}", error_msg(res));
             (*base::EventLoop::instance())->stop();
         }
-        _inRender = false;
         return Ok(true);
     }
 
@@ -1849,6 +1846,14 @@ Result<void> YettyImpl::run() noexcept {
 Result<void> YettyImpl::mainLoopIteration() noexcept {
     if (_fatalGpuError) {
         return Err<void>("Fatal GPU error: " + _fatalGpuErrorMsg);
+    }
+
+    // Prevent re-entrant rendering. _inRender is set to true before GPU submit
+    // and cleared asynchronously by wgpuQueueOnSubmittedWorkDone callback.
+    if (_inRender) {
+        // Still need to process GPU events so the callback can fire!
+        wgpuInstanceProcessEvents(_instance);
+        return Ok();
     }
 
     // Apply deferred resize before acquiring the surface texture
@@ -1945,16 +1950,23 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
     uint32_t captureW = (_vncServerMode && _vncRequestedWidth > 0) ? _vncRequestedWidth : static_cast<uint32_t>(windowWidth);
     uint32_t captureH = (_vncServerMode && _vncRequestedHeight > 0) ? _vncRequestedHeight : static_cast<uint32_t>(windowHeight);
 
+    // Mark rendering in progress — cleared by wgpuQueueOnSubmittedWorkDone callback
+    _inRender = true;
+
     if (doCapture && captureW > 0 && captureH > 0) {
         // Ensure capture resources match requested size
         if (auto res = ensureCaptureResources(captureW, captureH); !res) {
+            _inRender = false;
             return Err<void>("Failed to ensure capture resources", res);
         }
 
         // Render to capture texture
         WGPUCommandEncoderDescriptor encoderDesc = {};
         WGPUCommandEncoder captureEncoder = wgpuDeviceCreateCommandEncoder(_device, &encoderDesc);
-        if (!captureEncoder) return Err<void>("Failed to create capture command encoder");
+        if (!captureEncoder) {
+            _inRender = false;
+            return Err<void>("Failed to create capture command encoder");
+        }
 
         WGPURenderPassColorAttachment captureAttachment = {};
         captureAttachment.view = _captureTextureView;
@@ -1974,6 +1986,7 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
                     wgpuRenderPassEncoderEnd(capturePass);
                     wgpuRenderPassEncoderRelease(capturePass);
                     wgpuCommandEncoderRelease(captureEncoder);
+                    _inRender = false;
                     return Err<void>("Capture workspace render failed", res);
                 }
             }
@@ -1984,6 +1997,7 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
                     wgpuRenderPassEncoderEnd(capturePass);
                     wgpuRenderPassEncoderRelease(capturePass);
                     wgpuCommandEncoderRelease(captureEncoder);
+                    _inRender = false;
                     return Err<void>("Capture overlay render failed", res);
                 }
             }
@@ -2035,7 +2049,10 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
     if (!_vncHeadless) {
         WGPUCommandEncoderDescriptor encoderDesc = {};
         WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(_device, &encoderDesc);
-        if (!encoder) return Err<void>("Failed to create command encoder");
+        if (!encoder) {
+            _inRender = false;
+            return Err<void>("Failed to create command encoder");
+        }
 
         WGPURenderPassColorAttachment colorAttachment = {};
         colorAttachment.view = targetView;
@@ -2062,6 +2079,7 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
                     wgpuRenderPassEncoderEnd(pass);
                     wgpuRenderPassEncoderRelease(pass);
                     wgpuCommandEncoderRelease(encoder);
+                    _inRender = false;
                     return Err<void>("VNC client render failed", res);
                 }
             } else
@@ -2071,6 +2089,7 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
                     wgpuRenderPassEncoderEnd(pass);
                     wgpuRenderPassEncoderRelease(pass);
                     wgpuCommandEncoderRelease(encoder);
+                    _inRender = false;
                     return Err<void>("Workspace render failed", res);
                 }
             }
@@ -2097,6 +2116,7 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
 
     // Check if GPU error occurred during this frame
     if (_fatalGpuError) {
+        _inRender = false;
         return Err<void>("GPU error during frame: " + _fatalGpuErrorMsg);
     }
 
@@ -2110,6 +2130,16 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
         _frameCount = 0;
         _lastFpsTime = fpsNow;
     }
+
+    // _inRender cleared by wgpuQueueOnSubmittedWorkDone callback when GPU finishes
+    WGPUQueueWorkDoneCallbackInfo renderDoneCb = {};
+    renderDoneCb.mode = WGPUCallbackMode_AllowSpontaneous;
+    renderDoneCb.callback = [](WGPUQueueWorkDoneStatus, WGPUStringView, void* ud1, void*) {
+        static_cast<YettyImpl*>(ud1)->_inRender = false;
+    };
+    renderDoneCb.userdata1 = this;
+    wgpuQueueOnSubmittedWorkDone(_queue, renderDoneCb);
+    wgpuInstanceProcessEvents(_instance);
 
     return Ok();
 }
