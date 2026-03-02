@@ -246,13 +246,8 @@ suite thorvg_tests = [] {
         
         auto buffer = *YDrawBuffer::create();
         auto renderer = *ThorVgRenderer::create(buffer);
-        auto loadRes = renderer->load(svg, "svg");
-        std::fprintf(stderr, "load result: %s\n", loadRes.has_value() ? "OK" : "FAIL");
-        auto renderRes = renderer->render();
-        std::fprintf(stderr, "render result: %s\n", renderRes.has_value() ? "OK" : "FAIL");
-        
-        std::fprintf(stderr, "Pentagon primitives (count=%u):\n", buffer->primCount());
-        dumpPrimTypes(*buffer);
+        renderer->load(svg, "svg");
+        renderer->render();
         
         expect(buffer->primCount() >= 1_u) << "Pentagon should produce primitives";
         expect(hasPolygonPrimitive(*buffer)) << "Pentagon should be a Polygon primitive";
