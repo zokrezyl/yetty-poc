@@ -23,6 +23,7 @@
 
 #include <GLFW/glfw3.h>
 #include <glfw3webgpu.h>
+#include <stb_image.h>
 
 namespace yetty {
 
@@ -302,6 +303,26 @@ public:
         if (_window) {
             glfwSetWindowTitle(_window, title.c_str());
         }
+    }
+
+    void setIcon(const std::string& path) override {
+        if (!_window) return;
+
+        int width, height, channels;
+        unsigned char* pixels = stbi_load(path.c_str(), &width, &height, &channels, 4);
+        if (!pixels) {
+            ywarn("Failed to load icon: {}", path);
+            return;
+        }
+
+        GLFWimage icon;
+        icon.width = width;
+        icon.height = height;
+        icon.pixels = pixels;
+        glfwSetWindowIcon(_window, 1, &icon);
+
+        stbi_image_free(pixels);
+        yinfo("Set window icon: {} ({}x{})", path, width, height);
     }
 
     WGPUSurface createWGPUSurface(WGPUInstance instance) override {

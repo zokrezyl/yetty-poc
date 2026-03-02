@@ -505,7 +505,7 @@ private:
   // Status line (tmux-style bar at bottom, not managed by vterm)
   std::vector<GridCell> _statusLine;
   std::string _statusText;
-  bool _statusLineEnabled = true;
+  bool _statusLineEnabled = false;
 
   // OSC parsing
   OscCommandParser _oscParser;
@@ -1889,6 +1889,9 @@ void GPUScreenImpl::enterCopyMode() {
   }
 
   updateCopyModeStatus();
+  if (_ctx.yguiOverlay) {
+    _ctx.yguiOverlay->setStatusText("Mode:COPY");
+  }
   ydebug("Entered copy mode at row={} col={}", _copyCursorRow, _copyCursorCol);
 }
 
@@ -1903,6 +1906,12 @@ void GPUScreenImpl::exitCopyMode() {
   scrollToBottom();
   _statusText = "[0] yetty";
   updateStatusLine();
+  if (_ctx.yguiOverlay) {
+    const char* mode = _visualZoomActive ? "ZOOM" : "NORMAL";
+    char buf[64];
+    snprintf(buf, sizeof(buf), "Mode:%s", mode);
+    _ctx.yguiOverlay->setStatusText(buf);
+  }
   ydebug("Exited copy mode");
 }
 
@@ -4679,13 +4688,14 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
 
         {
           GridCell cell = getCell(row, col);
+          const char* mode = _copyMode ? "COPY" : (_visualZoomActive ? "ZOOM" : "NORMAL");
           char statusBuf[256];
           snprintf(statusBuf, sizeof(statusBuf),
-                   "Row:%d Col:%d Glyph:U+%04X FG:(%d,%d,%d) BG:(%d,%d,%d) Style:0x%02X",
+                   "Row:%d Col:%d Glyph:U+%04X FG:(%d,%d,%d) BG:(%d,%d,%d) Style:0x%02X Mode:%s",
                    row, col, cell.glyph,
                    cell.fgR, cell.fgG, cell.fgB,
                    cell.bgR, cell.bgG, cell.bgB,
-                   cell.style);
+                   cell.style, mode);
           if (_ctx.yguiOverlay)
             _ctx.yguiOverlay->setStatusText(statusBuf);
         }
@@ -4857,6 +4867,9 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
             _visualZoomOffsetY = 0.0f;
             auto loop = *base::EventLoop::instance();
             loop->dispatch(base::Event::setCursorEvent(CURSOR_CROSSHAIR));
+            if (_ctx.yguiOverlay) {
+              _ctx.yguiOverlay->setStatusText("Mode:ZOOM");
+            }
           }
           if (_visualZoomActive) {
             _visualZoomScale += event.scroll.dy * 0.1f;
@@ -4869,6 +4882,12 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
               _visualZoomOffsetY = 0.0f;
               auto loop = *base::EventLoop::instance();
               loop->dispatch(base::Event::setCursorEvent(CURSOR_DEFAULT));
+              if (_ctx.yguiOverlay) {
+                const char* mode = _copyMode ? "COPY" : "NORMAL";
+                char buf[64];
+                snprintf(buf, sizeof(buf), "Mode:%s", mode);
+                _ctx.yguiOverlay->setStatusText(buf);
+              }
               yinfo("GPUScreen {} visual zoom: off", _id);
             } else {
               // Re-clamp offsets after scale change
@@ -5022,6 +5041,12 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
         _visualZoomDragging = false;
         auto loop = *base::EventLoop::instance();
         loop->dispatch(base::Event::setCursorEvent(CURSOR_DEFAULT));
+        if (_ctx.yguiOverlay) {
+          const char* mode = _copyMode ? "COPY" : "NORMAL";
+          char buf[64];
+          snprintf(buf, sizeof(buf), "Mode:%s", mode);
+          _ctx.yguiOverlay->setStatusText(buf);
+        }
         yinfo("GPUScreen {} visual zoom: off", _id);
         return Ok(true);  // consume
       }

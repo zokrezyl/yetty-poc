@@ -36,6 +36,10 @@
 #include <emscripten.h>
 #endif
 
+#ifndef CMAKE_SOURCE_DIR
+#define CMAKE_SOURCE_DIR "."
+#endif
+
 namespace yetty {
 
 class YettyImpl : public Yetty, public base::EventListener {
@@ -709,6 +713,9 @@ Result<void> YettyImpl::initWindow() noexcept {
     if (auto res = _platform->createWindow(_initialWidth, _initialHeight, "yetty"); !res) {
         return Err<void>("Failed to create window", res);
     }
+
+    // Set window icon
+    _platform->setIcon(std::string(CMAKE_SOURCE_DIR) + "/docs/logo.jpeg");
 
     // Update initial dimensions with actual window size (may differ from defaults on web)
     int actualW, actualH;

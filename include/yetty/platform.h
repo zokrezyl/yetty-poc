@@ -65,6 +65,9 @@ public:
     virtual bool shouldClose() const = 0;
     virtual void setTitle(const std::string& title) = 0;
 
+    // Window icon (no-op on platforms that don't support it)
+    virtual void setIcon(const std::string& path) = 0;
+
     // WebGPU surface creation (platform-specific)
     virtual WGPUSurface createWGPUSurface(WGPUInstance instance) = 0;
 

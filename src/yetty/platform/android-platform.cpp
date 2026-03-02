@@ -69,6 +69,10 @@ public:
         (void)title;
     }
 
+    void setIcon(const std::string&) override {
+        // Not supported on Android - app icon is set via manifest
+    }
+
     WGPUSurface createWGPUSurface(WGPUInstance instance) override {
         if (!_window) return nullptr;
 
