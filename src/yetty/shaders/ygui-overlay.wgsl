@@ -21,10 +21,12 @@ struct OverlayUniforms {
     sceneMaxY: f32,
     gridWidth: u32,
     gridHeight: u32,
-    cellSize: f32,
+    cellSizeX: f32,
+    cellSizeY: f32,
     primCount: u32,
     glyphCount: u32,
     pixelRange: f32,
+    _pad: f32,  // padding to maintain alignment
 };
 
 // Glyph metadata (40 bytes per glyph, matches C++ GlyphMetadataGPU)
@@ -177,13 +179,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
 
-    let invCellSize = select(0.0, 1.0 / overlay.cellSize, overlay.cellSize > 0.0);
+    let invCellSizeX = select(0.0, 1.0 / overlay.cellSizeX, overlay.cellSizeX > 0.0);
+    let invCellSizeY = select(0.0, 1.0 / overlay.cellSizeY, overlay.cellSizeY > 0.0);
     let contentMinX = overlay.sceneMinX;
     let contentMinY = overlay.sceneMinY;
 
     // O(1) grid lookup
-    let cellX = u32(clamp((scenePos.x - contentMinX) * invCellSize, 0.0, f32(overlay.gridWidth - 1u)));
-    let cellY = u32(clamp((scenePos.y - contentMinY) * invCellSize, 0.0, f32(overlay.gridHeight - 1u)));
+    let cellX = u32(clamp((scenePos.x - contentMinX) * invCellSizeX, 0.0, f32(overlay.gridWidth - 1u)));
+    let cellY = u32(clamp((scenePos.y - contentMinY) * invCellSizeY, 0.0, f32(overlay.gridHeight - 1u)));
     let cellIndex = cellY * overlay.gridWidth + cellX;
 
     let packedStart = gridData[cellIndex];

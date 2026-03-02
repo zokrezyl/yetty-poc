@@ -386,15 +386,13 @@ private:
         int16_t panYi16 = static_cast<int16_t>(std::clamp(
             _viewPanY / std::max(contentH, 1e-6f) * 16384.0f, -32768.0f, 32767.0f));
 
-        float cellSize = _builder->cellSize();
-
         YDrawMetadata meta = {};
         meta.primitiveOffset = _primStorage.isValid() ? _primStorage.offset / sizeof(float) : 0;
         meta.primitiveCount = _primCount;
         meta.gridOffset = _gridOffset;
         meta.gridWidth = _gridWidth;
         meta.gridHeight = _gridHeight;
-        std::memcpy(&meta.cellSize, &cellSize, sizeof(float));
+        meta.cellSizeXY = YDrawMetadata::packCellSize(_builder->cellSizeX(), _builder->cellSizeY());
         meta.glyphOffset = _glyphOffset;
         meta.glyphCount = static_cast<uint32_t>(_builder->glyphs().size());
         std::memcpy(&meta.sceneMinX, &sceneMinX, sizeof(float));

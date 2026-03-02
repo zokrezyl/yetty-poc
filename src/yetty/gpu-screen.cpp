@@ -25,6 +25,7 @@
 #include <yetty/raster-font.h>
 #include <yetty/name-generator.h>
 #include "ygui/ygui-overlay.h"
+#include "screen-draw-layer.h"
 #include <ytrace/ytrace.hpp>
 
 #ifndef CMAKE_SOURCE_DIR
@@ -511,6 +512,9 @@ private:
   std::string _oscBuffer;
   int _oscCommand = -1;
 
+  // Screen draw layer (pixel-coordinate ydraw overlay)
+  ScreenDrawLayer::Ptr _screenDrawLayer;
+
   // Rendering - GPU resources (shared resources come from ShaderManager)
   YettyContext _ctx;
   GpuAllocator::Ptr _allocator;
@@ -877,6 +881,13 @@ void GPUScreenImpl::setViewport(float x, float y, float width, float height) {
   // Update cards with viewport origin
   for (auto& [slotIndex, card] : _cards) {
     card->setScreenOrigin(x, y);
+  }
+
+  // Update screen draw layer display size and cell size
+  if (_screenDrawLayer) {
+    _screenDrawLayer->updateDisplaySize(
+        static_cast<uint32_t>(width), static_cast<uint32_t>(height));
+    _screenDrawLayer->setCellSize(cellWidthF, cellHeightF);
   }
 }
 
@@ -3184,8 +3195,8 @@ int GPUScreenImpl::onOSC(int command, VTermStringFragment frag, void *user) {
     return 0;
   }
 
-  // Accept yetty vendor commands: 666666 (cards), 666667-669 (effects), 666670 (gpu stats), 666671 (fps)
-  if (command != YETTY_OSC_VENDOR_ID && command != 666667 && command != 666668 && command != 666669 && command != 666670 && command != 666671) {
+  // Accept yetty vendor commands: 666666 (cards), 666667-669 (effects), 666670 (gpu stats), 666671 (fps), 666673 (screen draw)
+  if (command != YETTY_OSC_VENDOR_ID && command != 666667 && command != 666668 && command != 666669 && command != 666670 && command != 666671 && command != 666673) {
     yinfo(">>> onOSC: ignoring non-yetty command {}", command);
     return 0;
   }
@@ -3229,6 +3240,72 @@ int GPUScreenImpl::onOSC(int command, VTermStringFragment frag, void *user) {
       uint32_t fps = std::clamp(std::stoi(self->_oscBuffer), 1, 240);
       yinfo("OSC 666671: Setting frame rate to {} FPS", fps);
       (*base::EventLoop::instance())->dispatch(base::Event::setFrameRateEvent(fps));
+      self->_oscBuffer.clear();
+      self->_oscCommand = -1;
+      return 1;
+    }
+
+    // Handle screen draw OSC command (666673)
+    // Format: args;base64payload  or  args (no payload)
+    if (command == 666673) {
+      if (!self->_screenDrawLayer) {
+        // Lazy init screen draw layer
+        auto res = ScreenDrawLayer::create(self->_ctx);
+        if (res) {
+          self->_screenDrawLayer = *res;
+          self->_screenDrawLayer->updateDisplaySize(
+              static_cast<uint32_t>(self->_viewportWidth),
+              static_cast<uint32_t>(self->_viewportHeight));
+          self->_screenDrawLayer->setCellSize(
+              self->getCellWidthF(), self->getCellHeightF());
+        } else {
+          yerror("Failed to create ScreenDrawLayer: {}", error_msg(res));
+        }
+      }
+
+      if (self->_screenDrawLayer) {
+        std::string args;
+        std::string payload;
+        size_t sepPos = self->_oscBuffer.find(';');
+        if (sepPos != std::string::npos) {
+          args = self->_oscBuffer.substr(0, sepPos);
+          // Decode base64 payload
+          std::string b64 = self->_oscBuffer.substr(sepPos + 1);
+          // Simple base64 decoding (use existing decoder or inline)
+          static auto b64Decode = [](const std::string& in) -> std::string {
+            static const std::string chars =
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+            std::string out;
+            std::vector<int> T(256, -1);
+            for (int i = 0; i < 64; i++) T[chars[i]] = i;
+            int val = 0, valb = -8;
+            for (unsigned char c : in) {
+              if (T[c] == -1) break;
+              val = (val << 6) + T[c];
+              valb += 6;
+              if (valb >= 0) {
+                out.push_back(char((val >> valb) & 0xFF));
+                valb -= 8;
+              }
+            }
+            return out;
+          };
+          payload = b64Decode(b64);
+        } else {
+          args = self->_oscBuffer;
+        }
+
+        // Handle clear command
+        if (args.find("--clear") != std::string::npos) {
+          self->_screenDrawLayer->clear();
+        } else if (!payload.empty()) {
+          auto res = self->_screenDrawLayer->update(args, payload);
+          if (!res) {
+            yerror("ScreenDrawLayer update failed: {}", error_msg(res));
+          }
+        }
+        self->_hasDamage = true;
+      }
       self->_oscBuffer.clear();
       self->_oscCommand = -1;
       return 1;
@@ -3529,8 +3606,8 @@ bool GPUScreenImpl::handleOSCSequence(const std::string &sequence,
     return false;
   }
 
-  // Handle vendor-specific commands (666667-666672) directly
-  if (vendorId >= 666667 && vendorId <= 666672) {
+  // Handle vendor-specific commands (666667-666673) directly
+  if (vendorId >= 666667 && vendorId <= 666673) {
     std::string payload = sequence.substr(semicolon + 1);
 
     // Effect commands (666667 = pre-effect, 666668 = post-effect, 666669 = effect)
@@ -3582,6 +3659,70 @@ bool GPUScreenImpl::handleOSCSequence(const std::string &sequence,
             ydisable_level(level.c_str());
           }
         }
+      }
+      return true;
+    }
+
+    // Screen draw layer command (666673)
+    // Format: args;base64payload  or  args (no payload)
+    if (vendorId == 666673) {
+      if (!_screenDrawLayer) {
+        // Lazy init screen draw layer
+        auto res = ScreenDrawLayer::create(_ctx);
+        if (res) {
+          _screenDrawLayer = *res;
+          _screenDrawLayer->updateDisplaySize(
+              static_cast<uint32_t>(_viewportWidth),
+              static_cast<uint32_t>(_viewportHeight));
+          _screenDrawLayer->setCellSize(
+              getCellWidthF(), getCellHeightF());
+        } else {
+          yerror("Failed to create ScreenDrawLayer: {}", error_msg(res));
+          return true;
+        }
+      }
+
+      if (_screenDrawLayer) {
+        std::string args;
+        std::string payloadDecoded;
+        size_t sepPos = payload.find(';');
+        if (sepPos != std::string::npos) {
+          args = payload.substr(0, sepPos);
+          // Decode base64 payload
+          std::string b64 = payload.substr(sepPos + 1);
+          static auto b64Decode = [](const std::string& in) -> std::string {
+            static const std::string chars =
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+            std::string out;
+            std::vector<int> T(256, -1);
+            for (int i = 0; i < 64; i++) T[chars[i]] = i;
+            int val = 0, valb = -8;
+            for (unsigned char c : in) {
+              if (T[c] == -1) break;
+              val = (val << 6) + T[c];
+              valb += 6;
+              if (valb >= 0) {
+                out.push_back(char((val >> valb) & 0xFF));
+                valb -= 8;
+              }
+            }
+            return out;
+          };
+          payloadDecoded = b64Decode(b64);
+        } else {
+          args = payload;
+        }
+
+        // Handle clear command
+        if (args.find("--clear") != std::string::npos) {
+          _screenDrawLayer->clear();
+        } else if (!payloadDecoded.empty()) {
+          auto res = _screenDrawLayer->update(args, payloadDecoded);
+          if (!res) {
+            yerror("ScreenDrawLayer update failed: {}", error_msg(res));
+          }
+        }
+        _hasDamage = true;
       }
       return true;
     }
@@ -5435,6 +5576,13 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
   wgpuRenderPassEncoderSetVertexBuffer(
       pass, 0, shaderMgr->getQuadVertexBuffer(), 0, WGPU_WHOLE_SIZE);
   wgpuRenderPassEncoderDraw(pass, 6, 1, 0, 0);
+
+  // Render screen draw layer (pixel-coordinate ydraw overlay) on top of terminal
+  if (_screenDrawLayer && _screenDrawLayer->hasContent()) {
+    if (auto res = _screenDrawLayer->render(pass); !res) {
+      ywarn("ScreenDrawLayer render failed: {}", error_msg(res));
+    }
+  }
 
   return Ok();
 }
