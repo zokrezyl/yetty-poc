@@ -75,12 +75,6 @@ public:
         if (stateResult) {
             _state = *stateResult;
         }
-
-        // Create YDrawBuffer for decoration
-        auto bufferResult = YDrawBuffer::create();
-        if (bufferResult) {
-            _drawBuffer = *bufferResult;
-        }
     }
 
     ~YPlotCardImpl() override {
@@ -113,21 +107,8 @@ public:
             }
         }
 
-        // Build decoration (axes, grid, labels)
-        if (_state && _drawBuffer) {
-            _state->buildDecoration(*_drawBuffer, _widthCells, _heightCells);
-        }
-
-        // Create YDrawBuilder for the decoration
-        if (_drawBuffer && _fontMgr && _allocator) {
-            auto builderResult = YDrawBuilder::create(
-                _fontMgr, _allocator, _drawBuffer, _cardMgr, metadataSlotIndex());
-            if (builderResult) {
-                _drawBuilder = *builderResult;
-                _drawBuilder->setViewport(_widthCells, _heightCells);
-                _drawBuilder->calculate();
-            }
-        }
+        // NOTE: The yplot shader draws its own grid and axes.
+        // Do NOT use YDrawBuilder here - it would overwrite YPlot metadata.
 
         return Ok();
     }
@@ -140,7 +121,6 @@ public:
         // Need realloc if we have bytecode but no valid handle
         if (!_bytecode.empty() && !_bytecodeHandle.isValid()) return true;
         if (!_colorTable.empty() && !_colorHandle.isValid()) return true;
-        if (_drawBuilder && _drawBuilder->needsBufferRealloc()) return true;
         return false;
     }
 
@@ -159,11 +139,6 @@ public:
         if (!_colorTable.empty()) {
             uint32_t colorSize = static_cast<uint32_t>(_colorTable.size() * sizeof(uint32_t));
             _cardMgr->bufferManager()->reserve(colorSize);
-        }
-
-        // Let ydraw builder declare its needs
-        if (_drawBuilder) {
-            _drawBuilder->declareBufferNeeds();
         }
     }
 
@@ -194,13 +169,6 @@ public:
             _cardMgr->bufferManager()->markBufferDirty(_colorHandle);
         }
 
-        // Let ydraw builder allocate
-        if (_drawBuilder) {
-            if (auto res = _drawBuilder->allocateBuffers(); !res) {
-                return res;
-            }
-        }
-
         _metadataDirty = true;
         return Ok();
     }
@@ -211,20 +179,12 @@ public:
             _metadataDirty = false;
         }
 
-        // Let ydraw builder write buffers
-        if (_drawBuilder) {
-            if (auto res = _drawBuilder->writeBuffers(); !res) {
-                return res;
-            }
-        }
-
         return Ok();
     }
 
     Result<void> dispose() override {
         _bytecodeHandle = BufferHandle::invalid();
         _colorHandle = BufferHandle::invalid();
-        _drawBuilder.reset();
 
         if (_metaHandle.isValid() && _cardMgr) {
             _cardMgr->deallocateMetadata(_metaHandle);
@@ -253,19 +213,10 @@ public:
             }
         }
 
-        // Recompile and rebuild
+        // Recompile expressions
         if (_state && _state->functionCount() > 0) {
             if (auto res = compileExpressions(); !res) {
                 return res;
-            }
-        }
-
-        // Rebuild decoration
-        if (_state && _drawBuffer) {
-            _drawBuffer->clear();
-            _state->buildDecoration(*_drawBuffer, _widthCells, _heightCells);
-            if (_drawBuilder) {
-                _drawBuilder->calculate();
             }
         }
 
@@ -521,10 +472,6 @@ private:
     std::string _payloadStr;
 
     yplot::YPlotState::Ptr _state;
-
-    // YDraw components for decoration
-    YDrawBuffer::Ptr _drawBuffer;
-    YDrawBuilder::Ptr _drawBuilder;
 
     // yfsvm bytecode
     std::vector<uint32_t> _bytecode;

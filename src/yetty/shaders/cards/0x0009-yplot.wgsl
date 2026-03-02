@@ -120,6 +120,26 @@ fn shaderGlyph_1048585(
     let widgetUV = (vec2<f32>(f32(relCol), f32(relRow)) + localUV) /
                    vec2<f32>(f32(widthCells), f32(heightCells));
 
+    // Debug: show raw slot0 and slot1 as colors
+    // Use widgetUV so we see across the whole card, not just one cell
+    if (widgetUV.y < 0.1) {
+        // Bottom strip: slot0 bits as RGB
+        let r = f32((slot0 >> 0u) & 0xFFu) / 255.0;
+        let g = f32((slot0 >> 8u) & 0xFFu) / 255.0;
+        let b = f32((slot0 >> 16u) & 0xFFu) / 255.0;
+        return vec3<f32>(r, g, b);  // slot0: flags|funcCount|pad
+    }
+    if (widgetUV.y < 0.2) {
+        // Next strip: slot1 bits as RGB
+        let r = f32((slot1 >> 0u) & 0xFFu) / 255.0;
+        let g = f32((slot1 >> 8u) & 0xFFu) / 255.0;
+        let b = f32((slot1 >> 16u) & 0xFFu) / 255.0;
+        return vec3<f32>(r, g, b);  // slot1: widthLo|widthHi|heightLo
+    }
+    if (!bufferWorking) {
+        return vec3<f32>(1.0, 0.0, 1.0);  // MAGENTA = check failed
+    }
+
     // Start with background
     var color = YPLOT_BG_COLOR;
 
