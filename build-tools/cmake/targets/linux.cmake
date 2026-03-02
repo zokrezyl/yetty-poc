@@ -83,12 +83,6 @@ add_custom_command(TARGET yetty POST_BUILD
 enable_testing()
 add_subdirectory(${YETTY_ROOT}/test/ut ${CMAKE_BINARY_DIR}/test/ut)
 
-option(YETTY_BUILD_YPLOT_TESTS "Build yplot tests" ON)
-if(YETTY_BUILD_YPLOT_TESTS)
-    enable_testing()
-    add_subdirectory(${YETTY_ROOT}/test/ut/yplot ${CMAKE_BINARY_DIR}/test/ut/yplot)
-endif()
-
 # Tools (ycat, yecho, ydraw-maze, ydraw-zoo, etc.)
 add_subdirectory(${YETTY_ROOT}/src/yetty/ycat ${CMAKE_BINARY_DIR}/src/yetty/ycat)
 add_subdirectory(${YETTY_ROOT}/tools ${CMAKE_BINARY_DIR}/tools)

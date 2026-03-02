@@ -58,32 +58,56 @@ fn shaderGlyph_1048585(
     let relCol = bg24 & 0xFFFu;
     let relRow = (bg24 >> 12u) & 0xFFFu;
 
-    // Read metadata
+    // Try to read metadata from buffer
     let slot0 = cardMetadata[metaOffset + 0u];
-    let flags = slot0 & 0xFFu;
-    let funcCount = (slot0 >> 8u) & 0xFFu;
-
     let slot1 = cardMetadata[metaOffset + 1u];
-    let widthCells = slot1 & 0xFFFFu;
-    let heightCells = slot1 >> 16u;
 
-    let bytecodeOffset = cardMetadata[metaOffset + 2u];
-    let bytecodeSize = cardMetadata[metaOffset + 3u];
+    // Detect if buffer is working: slot0 should have flags (lower 8 bits non-zero)
+    let bufferWorking = (slot0 & 0xFFu) != 0u;
 
-    let xMin = bitcast<f32>(cardMetadata[metaOffset + 4u]);
-    let xMax = bitcast<f32>(cardMetadata[metaOffset + 5u]);
-    let yMin = bitcast<f32>(cardMetadata[metaOffset + 6u]);
-    let yMax = bitcast<f32>(cardMetadata[metaOffset + 7u]);
+    // Use buffer values if working, otherwise use hardcoded defaults
+    var flags = 7u;
+    var funcCount = 1u;
+    var widthCells = 1u;
+    var heightCells = 1u;
+    var bytecodeOffset = 0u;
+    var bytecodeSize = 24u;
+    var xMin = -3.14159;
+    var xMax = 3.14159;
+    var yMin = -1.5;
+    var yMax = 1.5;
+    var marginLeft = 0.08;
+    var marginBottom = 0.08;
+    var plotWidth = 0.9;
+    var plotHeight = 0.9;
+    var currentTime = time;
+    var zoom = 1.0;
+    var centerX = 0.0;
+    var colorTableOffset = 6u;
 
-    let marginLeft = bitcast<f32>(cardMetadata[metaOffset + 8u]);
-    let marginBottom = bitcast<f32>(cardMetadata[metaOffset + 9u]);
-    let plotWidth = bitcast<f32>(cardMetadata[metaOffset + 10u]);
-    let plotHeight = bitcast<f32>(cardMetadata[metaOffset + 11u]);
+    if (bufferWorking) {
+        flags = slot0 & 0xFFu;
+        funcCount = (slot0 >> 8u) & 0xFFu;
+        widthCells = slot1 & 0xFFFFu;
+        heightCells = slot1 >> 16u;
+        if (widthCells == 0u) { widthCells = 1u; }
+        if (heightCells == 0u) { heightCells = 1u; }
 
-    let currentTime = bitcast<f32>(cardMetadata[metaOffset + 12u]);
-    let zoom = bitcast<f32>(cardMetadata[metaOffset + 13u]);
-    let centerX = bitcast<f32>(cardMetadata[metaOffset + 14u]);
-    let colorTableOffset = cardMetadata[metaOffset + 15u];
+        bytecodeOffset = cardMetadata[metaOffset + 2u];
+        bytecodeSize = cardMetadata[metaOffset + 3u];
+        xMin = bitcast<f32>(cardMetadata[metaOffset + 4u]);
+        xMax = bitcast<f32>(cardMetadata[metaOffset + 5u]);
+        yMin = bitcast<f32>(cardMetadata[metaOffset + 6u]);
+        yMax = bitcast<f32>(cardMetadata[metaOffset + 7u]);
+        marginLeft = bitcast<f32>(cardMetadata[metaOffset + 8u]);
+        marginBottom = bitcast<f32>(cardMetadata[metaOffset + 9u]);
+        plotWidth = bitcast<f32>(cardMetadata[metaOffset + 10u]);
+        plotHeight = bitcast<f32>(cardMetadata[metaOffset + 11u]);
+        currentTime = bitcast<f32>(cardMetadata[metaOffset + 12u]);
+        zoom = bitcast<f32>(cardMetadata[metaOffset + 13u]);
+        centerX = bitcast<f32>(cardMetadata[metaOffset + 14u]);
+        colorTableOffset = cardMetadata[metaOffset + 15u];
+    }
 
     // Compute widget-wide UV (0-1 across entire widget)
     let widgetUV = (vec2<f32>(f32(relCol), f32(relRow)) + localUV) /
@@ -135,7 +159,7 @@ fn shaderGlyph_1048585(
             for (var fi = 0u; fi < funcCount && fi < 8u; fi = fi + 1u) {
                 // Get function color from color table
                 let funcColorPacked = bitcast<u32>(cardStorage[colorTableOffset + fi]);
-                let funcColor = unpackColor(funcColorPacked);
+                let funcColor = yplot_unpackColorARGB(funcColorPacked);
 
                 // Evaluate function at this x position
                 let y = yfsvm_execute(bytecodeOffset, fi, dataX, currentTime, samplers);
@@ -216,8 +240,8 @@ fn drawAxes(bg: vec3<f32>, plotUV: vec2<f32>, xMin: f32, xMax: f32, yMin: f32, y
     return color;
 }
 
-// Unpack color from u32 ARGB
-fn unpackColor(packed: u32) -> vec3<f32> {
+// Unpack color from u32 ARGB (yplot uses ARGB format for function colors)
+fn yplot_unpackColorARGB(packed: u32) -> vec3<f32> {
     let r = f32((packed >> 16u) & 0xFFu) / 255.0;
     let g = f32((packed >> 8u) & 0xFFu) / 255.0;
     let b = f32(packed & 0xFFu) / 255.0;

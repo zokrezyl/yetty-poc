@@ -500,6 +500,14 @@ private:
             meta.colorTableOffset = _colorHandle.offset / sizeof(uint32_t);
         }
 
+        // Debug dump metadata
+        ydebug("YPlotCard::uploadMetadata: flags={} funcCount={} widthCells={} heightCells={}",
+               meta.flags, meta.funcCount, meta.widthCells, meta.heightCells);
+        ydebug("YPlotCard::uploadMetadata: range=[{},{},{},{}] bytecode=[off={} size={}]",
+               meta.xMin, meta.xMax, meta.yMin, meta.yMax, meta.bytecodeOffset, meta.bytecodeSize);
+        ydebug("YPlotCard::uploadMetadata: margins=[{},{},{},{}] colorTableOff={}",
+               meta.marginLeft, meta.marginBottom, meta.plotWidth, meta.plotHeight, meta.colorTableOffset);
+
         _cardMgr->writeMetadata(_metaHandle, &meta, sizeof(meta));
     }
 
