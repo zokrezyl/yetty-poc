@@ -225,6 +225,15 @@ public:
             yinfo("Platform: headless mode (no GLFW)");
             return Ok();
         }
+
+#if defined(__linux__) && defined(GLFW_PLATFORM)
+        // Force X11 on Linux to ensure window icons work (Wayland doesn't support glfwSetWindowIcon)
+        // User can override with YETTY_WAYLAND=1 environment variable
+        if (!getenv("YETTY_WAYLAND")) {
+            glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_X11);
+        }
+#endif
+
         if (!glfwInit()) {
             return Err<void>("Failed to initialize GLFW");
         }
