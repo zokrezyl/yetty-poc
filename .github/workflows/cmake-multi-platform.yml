@@ -15,8 +15,8 @@ on:
 env:
   BUILD_LINUX: false
   BUILD_MACOS: false
-  BUILD_WINDOWS: true
-  BUILD_ANDROID: true
+  BUILD_WINDOWS: false
+  BUILD_ANDROID: false
   BUILD_WEB: true
 
 jobs:
