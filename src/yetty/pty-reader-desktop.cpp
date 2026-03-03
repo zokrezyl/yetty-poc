@@ -1,6 +1,6 @@
 #include <yetty/pty-reader.h>
 
-#if !YETTY_WEB && !defined(_WIN32)
+#if !YETTY_WEB && !defined(_WIN32) && !defined(__ANDROID__)
 
 #include <yetty/base/event-loop.h>
 #include <ytrace/ytrace.hpp>

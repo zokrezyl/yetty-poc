@@ -46,6 +46,9 @@ endif()
 # Creates global symbols: g<NAME>Data, g<NAME>Size, g<NAME>End
 #-----------------------------------------------------------------------------
 function(incbin_add_resources TARGET)
+    # Debug: Show platform detection
+    message(STATUS "incbin: TARGET=${TARGET} MSVC=${MSVC} EMSCRIPTEN=${EMSCRIPTEN} CMAKE_SYSTEM_NAME=${CMAKE_SYSTEM_NAME}")
+
     # Parse arguments as name-file pairs
     set(RESOURCES ${ARGN})
     list(LENGTH RESOURCES RESOURCES_LEN)
@@ -135,6 +138,35 @@ extern const unsigned int g${RES_NAME}Size;
 
         target_sources(${TARGET} PRIVATE ${RESOURCE_SOURCE} ${INCBIN_OUTPUT})
         target_include_directories(${TARGET} PRIVATE ${INCBIN_INCLUDE_DIR})
+
+    elseif(EMSCRIPTEN)
+        # Emscripten: incbin's inline assembly doesn't work with WASM
+        # Provide empty stubs - icons not supported on web
+        # Compile as C (not C++) to get external linkage for const by default
+        message(STATUS "incbin: Using Emscripten stubs for ${TARGET}")
+
+        # Use .c extension so it compiles as C (const has external linkage in C)
+        set(RESOURCE_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/${TARGET}_resources.c")
+
+        file(WRITE ${RESOURCE_SOURCE}
+"/* Generated stub resources for ${TARGET} (Emscripten) */
+/* incbin inline assembly not supported on WASM - providing empty stubs */
+/* Compiled as C for external linkage of const variables */
+
+")
+        math(EXPR LAST_INDEX "${PAIR_COUNT} - 1")
+        foreach(I RANGE 0 ${LAST_INDEX})
+            math(EXPR NAME_INDEX "${I} * 2")
+            list(GET RESOURCES ${NAME_INDEX} RES_NAME)
+
+            file(APPEND ${RESOURCE_SOURCE}
+"const unsigned char g${RES_NAME}Data[] = {0};
+const unsigned char* const g${RES_NAME}End = g${RES_NAME}Data;
+const unsigned int g${RES_NAME}Size = 0;
+")
+        endforeach()
+
+        target_sources(${TARGET} PRIVATE ${RESOURCE_SOURCE})
 
     else()
         # GCC/Clang: Use incbin.h directly with inline assembly
