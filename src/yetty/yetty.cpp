@@ -2043,6 +2043,12 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
 
         WGPURenderPassEncoder capturePass = wgpuCommandEncoderBeginRenderPass(captureEncoder, &capturePassDesc);
         if (capturePass) {
+            // CRITICAL: Update render target dimensions for capture texture
+            // The terminal's scissor rect is clamped to these values - without this,
+            // the last rows may be clipped when capture size != window size
+            _yettyContext.gpu.renderTargetWidth = captureW;
+            _yettyContext.gpu.renderTargetHeight = captureH;
+
             if (_activeWorkspace) {
                 if (auto res = _activeWorkspace->render(capturePass); !res) {
                     wgpuRenderPassEncoderEnd(capturePass);
