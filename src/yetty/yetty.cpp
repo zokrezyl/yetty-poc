@@ -107,6 +107,12 @@ private:
     WGPUTextureFormat _surfaceFormat = WGPUTextureFormat_BGRA8Unorm;
     WGPUTextureView _currentTextureView = nullptr;
     WGPUTexture _currentTexture = nullptr;
+#if defined(__EMSCRIPTEN__)
+    // Web: textures pending release - will be released in GPU-done callback
+    // This ensures GPU has finished using the texture before we release it
+    WGPUTextureView _pendingReleaseTextureView = nullptr;
+    WGPUTexture _pendingReleaseTexture = nullptr;
+#endif
     uint32_t _surfaceWidth = 0;
     uint32_t _surfaceHeight = 0;
 
@@ -199,6 +205,8 @@ private:
 
     // Prevent recursive render + deferred resize
     bool _inRender = false;
+    std::atomic<bool> _nextScreenUpdateNeeded{false};
+    base::EventQueue::Ptr _eventQueue;  // Thread-safe event queue for GPU callbacks
     bool _pendingResize = false;
     uint32_t _pendingResizeW = 0;
     uint32_t _pendingResizeH = 0;
@@ -259,6 +267,13 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
         _yettyContext.config->setString("shell/telnet", _telnetAddress);
         yinfo("Set shell/telnet in config: {}", _telnetAddress);
     }
+
+    // Get EventQueue for thread-safe GPU callback wakeups
+    auto queueResult = base::EventQueue::instance();
+    if (!queueResult) {
+        return Err<void>("EventQueue not available", queueResult);
+    }
+    _eventQueue = *queueResult;
 
     if (auto res = initWindow(); !res) return res;
     if (auto res = initWebGPU(); !res) return res;
@@ -411,6 +426,9 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
 
         // Set up frame received callback for immediate screen refresh
         _vncClient->onFrameReceived = []() {
+            auto t = std::chrono::high_resolution_clock::now();
+            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
+            yinfo("[TIME] CLIENT onFrameReceived dispatching ScreenUpdate at {}ms", ms);
             auto loopResult = base::EventLoop::instance();
             if (!loopResult) return;
             (*loopResult)->dispatch(base::Event::screenUpdateEvent());
@@ -578,6 +596,9 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
 
         // VNC input received - trigger immediate screen refresh
         _vncServer->onInputReceived = []() {
+            auto t = std::chrono::high_resolution_clock::now();
+            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
+            yinfo("[TIME] onInputReceived lambda called at {}ms", ms);
             auto loopResult = base::EventLoop::instance();
             if (!loopResult) return;
             (*loopResult)->dispatch(base::Event::screenUpdateEvent());
@@ -929,6 +950,13 @@ void YettyImpl::configureSurface(uint32_t width, uint32_t height) noexcept {
         wgpuTextureRelease(_currentTexture);
         _currentTexture = nullptr;
     }
+#if defined(__EMSCRIPTEN__)
+    // On web: DO NOT release pending textures here - GPU might still be using them!
+    // The GPU callback will release them when it fires (or they'll be orphaned but that's OK)
+    // Just clear our references so we don't double-release
+    _pendingReleaseTextureView = nullptr;
+    _pendingReleaseTexture = nullptr;
+#endif
 
     _surfaceWidth = width;
     _surfaceHeight = height;
@@ -951,6 +979,9 @@ Result<WGPUTextureView> YettyImpl::getCurrentTextureView() noexcept {
         return Err<WGPUTextureView>("No surface in headless mode");
     }
 
+    // Return cached texture view if available (caching within single frame)
+    // On web: present() clears _currentTextureView, so next frame gets new texture
+    // On native: present() also clears it after wgpuSurfacePresent
     if (_currentTextureView) {
         return Ok(_currentTextureView);
     }
@@ -981,6 +1012,9 @@ void YettyImpl::present() noexcept {
         return;
     }
 
+#if !defined(__EMSCRIPTEN__)
+    // On native: release texture references before presenting
+    // wgpuSurfacePresent ensures GPU has finished using the texture
     if (_currentTextureView) {
         wgpuTextureViewRelease(_currentTextureView);
         _currentTextureView = nullptr;
@@ -989,9 +1023,21 @@ void YettyImpl::present() noexcept {
         wgpuTextureRelease(_currentTexture);
         _currentTexture = nullptr;
     }
-#if !defined(__EMSCRIPTEN__)
-    // wgpuSurfacePresent is not needed on Emscripten - browser handles via requestAnimationFrame
     wgpuSurfacePresent(_surface);
+#else
+    // On Emscripten: move texture to "pending release" - will be released in GPU-done callback
+    // This ensures GPU has finished using the texture before we release it
+    // Note: if there's already a pending texture, release it first (shouldn't happen normally)
+    if (_pendingReleaseTextureView) {
+        wgpuTextureViewRelease(_pendingReleaseTextureView);
+    }
+    if (_pendingReleaseTexture) {
+        wgpuTextureRelease(_pendingReleaseTexture);
+    }
+    _pendingReleaseTextureView = _currentTextureView;
+    _pendingReleaseTexture = _currentTexture;
+    _currentTextureView = nullptr;
+    _currentTexture = nullptr;
 #endif
 }
 
@@ -1467,7 +1513,9 @@ Result<void> YettyImpl::initCallbacks() noexcept {
 
     // Char callback
     _platform->setCharCallback([this](unsigned int codepoint) {
-        ydebug("CharCallback: codepoint={} ('{}')", codepoint, codepoint < 32 ? '?' : (char)codepoint);
+        auto t = std::chrono::high_resolution_clock::now();
+        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
+        yinfo("[TIME] CLIENT CharCallback at {}ms: codepoint={}", ms, codepoint);
 
         // Forward to VNC server when in client mode
 #if YETTY_HAS_VNC
@@ -1762,6 +1810,12 @@ void YettyImpl::shutdownEventLoop() noexcept {
 
 Result<bool> YettyImpl::onEvent(const base::Event& event) {
 #if !YETTY_WEB && !defined(__ANDROID__)
+    if (event.type == base::Event::Type::ScreenUpdate) {
+        auto t = std::chrono::high_resolution_clock::now();
+        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
+        yinfo("[TIME] onEvent() called for ScreenUpdate at {}ms", ms);
+    }
+
     // Input timer: poll GLFW events (fast, always responsive)
     // Note: VNC input is now fully async via EventLoop poll, no longer needs polling here
     if (event.type == base::Event::Type::Timer && event.timer.timerId == _inputTimerId) {
@@ -1879,13 +1933,16 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
         return Err<void>("Fatal GPU error: " + _fatalGpuErrorMsg);
     }
 
-    // Prevent re-entrant rendering. _inRender is set to true before GPU submit
-    // and cleared asynchronously by wgpuQueueOnSubmittedWorkDone callback.
-    if (_inRender) {
-        // Still need to process GPU events so the callback can fire!
-        wgpuInstanceProcessEvents(_instance);
-        return Ok();
+    // Process GPU events so async callbacks (like render done) can fire
+    wgpuInstanceProcessEvents(_instance);
+
+#if YETTY_WEB
+    // Web builds: drain EventQueue since libuv async wakeup is not available
+    // GPU callbacks may have pushed events that need to be processed
+    if (_eventQueue) {
+        _eventQueue->drain();
     }
+#endif
 
     // Apply deferred resize before acquiring the surface texture
     if (_pendingResize) {
@@ -1912,11 +1969,29 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
         }
     }
 
+#if defined(__EMSCRIPTEN__)
+    // On web: set _inRender BEFORE getting texture to protect it from resize events
+    // Resize events check _inRender and defer if true
+    // Without this, a resize between getCurrentTextureView and the later _inRender=true
+    // would destroy the texture we just acquired
+    if (_inRender) {
+        // Already rendering - remember we need another update
+        _nextScreenUpdateNeeded = true;
+        return Ok();
+    }
+    _inRender = true;  // Protect texture from resize events
+#endif
+
     // In headless mode, skip surface operations
     WGPUTextureView targetView = nullptr;
     if (!_vncHeadless) {
         auto viewResult = getCurrentTextureView();
-        if (!viewResult) return Err<void>("Failed to get texture view");
+        if (!viewResult) {
+#if defined(__EMSCRIPTEN__)
+            _inRender = false;  // Failed to get texture, allow resize
+#endif
+            return Err<void>("Failed to get texture view");
+        }
         targetView = *viewResult;
     }
 
@@ -1981,8 +2056,24 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
     uint32_t captureW = (_vncServerMode && _vncRequestedWidth > 0) ? _vncRequestedWidth : static_cast<uint32_t>(windowWidth);
     uint32_t captureH = (_vncServerMode && _vncRequestedHeight > 0) ? _vncRequestedHeight : static_cast<uint32_t>(windowHeight);
 
+#if !defined(__EMSCRIPTEN__)
+    // Skip GPU work if already rendering, but remember we need another update
+    // On web, this check is done earlier (before getCurrentTextureView) to protect texture
+    if (_inRender) {
+        auto t = std::chrono::high_resolution_clock::now();
+        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
+        yinfo("[TIME] SKIPPING GPU at {}ms (_inRender=true), setting _nextScreenUpdateNeeded", ms);
+        _nextScreenUpdateNeeded = true;
+        return Ok();
+    }
+
     // Mark rendering in progress — cleared by wgpuQueueOnSubmittedWorkDone callback
     _inRender = true;
+#endif
+
+    auto t = std::chrono::high_resolution_clock::now();
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
+    yinfo("[TIME] STARTING GPU at {}ms", ms);
 
     if (doCapture && captureW > 0 && captureH > 0) {
         // Ensure capture resources match requested size
@@ -2012,6 +2103,12 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
 
         WGPURenderPassEncoder capturePass = wgpuCommandEncoderBeginRenderPass(captureEncoder, &capturePassDesc);
         if (capturePass) {
+            // CRITICAL: Update render target dimensions for capture texture
+            // The terminal's scissor rect is clamped to these values - without this,
+            // the last rows may be clipped when capture size != window size
+            _yettyContext.gpu.renderTargetWidth = captureW;
+            _yettyContext.gpu.renderTargetHeight = captureH;
+
             if (_activeWorkspace) {
                 if (auto res = _activeWorkspace->render(capturePass); !res) {
                     wgpuRenderPassEncoderEnd(capturePass);
@@ -2170,7 +2267,31 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
     WGPUQueueWorkDoneCallbackInfo renderDoneCb = {};
     renderDoneCb.mode = WGPUCallbackMode_AllowSpontaneous;
     renderDoneCb.callback = [](WGPUQueueWorkDoneStatus, WGPUStringView, void* ud1, void*) {
-        static_cast<YettyImpl*>(ud1)->_inRender = false;
+        auto t = std::chrono::high_resolution_clock::now();
+        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
+        yinfo("[TIME] GPU DONE callback at {}ms", ms);
+
+        auto* self = static_cast<YettyImpl*>(ud1);
+        self->_inRender = false;
+
+#if defined(__EMSCRIPTEN__)
+        // Web: NOW it's safe to release the texture - GPU has finished using it
+        if (self->_pendingReleaseTextureView) {
+            wgpuTextureViewRelease(self->_pendingReleaseTextureView);
+            self->_pendingReleaseTextureView = nullptr;
+        }
+        if (self->_pendingReleaseTexture) {
+            wgpuTextureRelease(self->_pendingReleaseTexture);
+            self->_pendingReleaseTexture = nullptr;
+        }
+#endif
+
+        // If ScreenUpdate was needed while rendering, dispatch it now
+        if (self->_nextScreenUpdateNeeded.exchange(false)) {
+            yinfo("[TIME] GPU DONE: _nextScreenUpdateNeeded was true, dispatching ScreenUpdate");
+            // Wake up main thread via EventQueue (thread-safe for GPU callbacks)
+            self->_eventQueue->push(base::Event::screenUpdateEvent());
+        }
     };
     renderDoneCb.userdata1 = this;
     wgpuQueueOnSubmittedWorkDone(_queue, renderDoneCb);

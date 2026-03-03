@@ -357,11 +357,6 @@ private:
   void copyModeFindChar(char ch, bool forward, bool till);
   int getTotalRows() const;  // scrollback + visible rows
 
-  // Status line (tmux-style bar at bottom)
-  void updateStatusLine();
-  void setStatusText(const std::string& text);
-  void clearStatusLine();
-
   // Card registry
   void registerCard(CardPtr card);
   void unregisterCard(uint32_t metadataOffset);
@@ -501,11 +496,6 @@ private:
   // Store all match positions as (row, col) pairs for highlighting
   std::vector<std::pair<int, int>> _searchMatches;
   int _currentMatchIndex = -1; // Index into _searchMatches for current match
-
-  // Status line (tmux-style bar at bottom, not managed by vterm)
-  std::vector<GridCell> _statusLine;
-  std::string _statusText;
-  bool _statusLineEnabled = false;
 
   // OSC parsing
   OscCommandParser _oscParser;
@@ -690,9 +680,6 @@ Result<void> GPUScreenImpl::init() noexcept {
     }
   }
 
-  // Initialize status line with default text
-  _statusText = "[0] yetty";
-
   return Ok();
 }
 
@@ -867,15 +854,9 @@ void GPUScreenImpl::setViewport(float x, float y, float width, float height) {
   uint32_t totalCols = cellWidthF > 0 ? static_cast<uint32_t>(width / cellWidthF) : 0;
   uint32_t totalRows = cellHeightF > 0 ? static_cast<uint32_t>(height / cellHeightF) : 0;
 
-  // Reserve 1 row for status line (not managed by vterm)
-  uint32_t vtermRows = (_statusLineEnabled && totalRows > 1) ? totalRows - 1 : totalRows;
-
   // Only resize if size actually changed
-  if (totalCols > 0 && vtermRows > 0 && (totalCols != _cols || vtermRows != _rows)) {
-    resize(totalCols, vtermRows);
-    // Resize status line buffer to match columns
-    _statusLine.resize(totalCols);
-    updateStatusLine();
+  if (totalCols > 0 && totalRows > 0 && (totalCols != _cols || totalRows != _rows)) {
+    resize(totalCols, totalRows);
   }
 
   // Update cards with viewport origin
@@ -1333,9 +1314,8 @@ void GPUScreenImpl::clampVisualZoomOffset() {
   // NOT getCellWidth()/getCellHeight() which truncate to uint32_t.
   float cellW = _baseCellWidth * _zoomLevel;
   float cellH = _baseCellHeight * _zoomLevel;
-  int totalRows = static_cast<int>(_rows) + 1;  // +1 for status line
   float contentW = static_cast<float>(_cols) * cellW;
-  float contentH = static_cast<float>(totalRows) * cellH;
+  float contentH = static_cast<float>(_rows) * cellH;
 
   // Shader zooms centered on screenSize/2 = contentSize/2.
   // maxOffset lets the content edge reach the screen edge.
@@ -1904,8 +1884,6 @@ void GPUScreenImpl::exitCopyMode() {
   clearSelection();
   clearSearch();
   scrollToBottom();
-  _statusText = "[0] yetty";
-  updateStatusLine();
   if (_ctx.yguiOverlay) {
     const char* mode = _visualZoomActive ? "ZOOM" : "NORMAL";
     char buf[64];
@@ -1938,9 +1916,7 @@ void GPUScreenImpl::updateCopyModeStatus() {
     // Show cursor position
     status += " [" + std::to_string(_copyCursorRow) + "," + std::to_string(_copyCursorCol) + "]";
   }
-
-  _statusText = status;
-  updateStatusLine();
+  (void)status;  // Status text now shown via yguiOverlay
 }
 
 void GPUScreenImpl::copyModeMoveCursor(int dRow, int dCol) {
@@ -2624,58 +2600,6 @@ bool GPUScreenImpl::handleCopyModeKey(uint32_t codepoint, int key, int mods) {
 
   _gPending = 0;  // Reset g pending on any other key
   return false;
-}
-
-//=============================================================================
-// Status line (tmux-style bar at bottom)
-//=============================================================================
-
-void GPUScreenImpl::updateStatusLine() {
-  if (!_statusLineEnabled || _cols == 0) return;
-
-  // Ensure status line buffer is sized correctly
-  if (_statusLine.size() != static_cast<size_t>(_cols)) {
-    _statusLine.resize(_cols);
-  }
-
-  // Default colors for status line (green on black, like tmux default)
-  uint8_t fgR = 0, fgG = 255, fgB = 0;      // Green text
-  uint8_t bgR = 0, bgG = 0, bgB = 0;        // Black background
-  uint8_t style = 0;
-
-  // Get space glyph
-  uint32_t spaceGlyph = _cachedSpaceGlyph;
-  if (spaceGlyph == 0 && _msdfFont) {
-    spaceGlyph = _msdfFont->getGlyphIndex(' ');
-  }
-
-  // Clear status line with spaces
-  for (int col = 0; col < _cols; col++) {
-    _statusLine[col] = {spaceGlyph, fgR, fgG, fgB, 255, bgR, bgG, bgB, style};
-  }
-
-  // Render status text
-  if (!_statusText.empty() && _msdfFont) {
-    int col = 0;
-    for (size_t i = 0; i < _statusText.size() && col < _cols; i++) {
-      char ch = _statusText[i];
-      uint32_t glyph = _msdfFont->getGlyphIndex(static_cast<uint32_t>(ch));
-      _statusLine[col] = {glyph, fgR, fgG, fgB, 255, bgR, bgG, bgB, style};
-      col++;
-    }
-  }
-
-  _hasDamage = true;
-}
-
-void GPUScreenImpl::setStatusText(const std::string& text) {
-  _statusText = text;
-  updateStatusLine();
-}
-
-void GPUScreenImpl::clearStatusLine() {
-  _statusText.clear();
-  updateStatusLine();
 }
 
 //=============================================================================
@@ -5272,8 +5196,7 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
     return Ok(); // Nothing to render
   }
 
-  // Calculate total rows including status line
-  int totalRows = _statusLineEnabled ? _rows + 1 : _rows;
+  int totalRows = _rows;
 
   // Initialize pipeline on first render
   if (!_pipelineInitialized) {
@@ -5465,13 +5388,6 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
   // Upload vterm cells to GPU
   wgpuQueueWriteBuffer(queue, _cellBuffer, 0, cells,
                        _cols * _rows * sizeof(GridCell));
-
-  // Upload status line cells (appended after vterm cells)
-  if (_statusLineEnabled && !_statusLine.empty()) {
-    size_t statusOffset = static_cast<size_t>(_cols * _rows) * sizeof(GridCell);
-    wgpuQueueWriteBuffer(queue, _cellBuffer, statusOffset, _statusLine.data(),
-                         _statusLine.size() * sizeof(GridCell));
-  }
 
   // Debug: scan uploaded cells for card glyphs
   {

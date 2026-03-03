@@ -142,10 +142,11 @@
         var Module = {
             canvas: document.getElementById('canvas'),
             ENV: {
-                YETTY_VM_CONFIG: vmConfig
+                YETTY_VM_CONFIG: vmConfig,
+                YTRACE_DEFAULT_ON: 'yes'
             },
-            print: function(text) { },
-            printErr: function(text) { },
+            print: function(text) { console.log('[yetty]', text); },
+            printErr: function(text) { console.error('[yetty]', text); },
             onRuntimeInitialized: function() {
                 const status = document.getElementById('status');
                 const loading = document.getElementById('loading');
