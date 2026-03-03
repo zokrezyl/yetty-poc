@@ -1,8 +1,9 @@
 #!/bin/bash
-# Demo: SVG gradient fills in ThorVG-to-YDraw rendering
-# Demonstrates linear and radial gradient support
+# ThorVG Gradients Demo: Linear and radial gradient fills
 
-SCRIPT_DIR="$(dirname "$0")"
-ASSET="$SCRIPT_DIR/../../assets/cards/thorvg/gradients.svg"
+DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$DIR/../../.."
 
-exec yetty "$ASSET" "$@"
+SVG_PATH="demo/assets/cards/thorvg/gradients.svg"
+printf '\033]666666;run -c thorvg -x 0 -y 0 -w 80 -h 20 -r;--svg;%s\033\\' "$SVG_PATH"
+echo

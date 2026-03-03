@@ -1,8 +1,9 @@
 #!/bin/bash
-# Demo: Cubic bezier curves in ThorVG-to-YDraw rendering
-# Demonstrates Bezier3 primitive for smooth curves
+# ThorVG Bezier Curves Demo: Cubic bezier paths
 
-SCRIPT_DIR="$(dirname "$0")"
-ASSET="$SCRIPT_DIR/../../assets/cards/thorvg/bezier-curves.svg"
+DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$DIR/../../.."
 
-exec yetty "$ASSET" "$@"
+SVG_PATH="demo/assets/cards/thorvg/bezier-curves.svg"
+printf '\033]666666;run -c thorvg -x 0 -y 0 -w 80 -h 20 -r;--svg;%s\033\\' "$SVG_PATH"
+echo

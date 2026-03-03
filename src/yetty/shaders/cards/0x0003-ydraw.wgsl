@@ -321,7 +321,12 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
                         hitMinD = d;
                         let colors = primColors(pOff);
                         if (colors.x != 0u) {
-                            hitColor = unpackColor(colors.x);
+                            let primType = bitcast<u32>(cardStorage[pOff + 0u]);
+                            if (isGradientPrim(primType)) {
+                                hitColor = evalGradientFillColor(pOff, hitPos.xy).rgb;
+                            } else {
+                                hitColor = unpackColor(colors.x).rgb;
+                            }
                         }
                     }
                 }
@@ -551,7 +556,13 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
                 let colors = primColors(primOff);
                 let fillColorPacked = colors.x;
                 if (d < 0.0 && fillColorPacked != 0u) {
-                    let fillColor = unpackColor(fillColorPacked);
+                    let primType = bitcast<u32>(cardStorage[primOff + 0u]);
+                    var fillColor: vec4<f32>;
+                    if (isGradientPrim(primType)) {
+                        fillColor = evalGradientFillColor(primOff, scenePos);
+                    } else {
+                        fillColor = unpackColor(fillColorPacked);
+                    }
                     let alpha = clamp(-d * 2.0, 0.0, 1.0);
                     resultColor = mix(resultColor, fillColor, alpha);
                 }
