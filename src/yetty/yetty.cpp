@@ -199,6 +199,8 @@ private:
 
     // Prevent recursive render + deferred resize
     bool _inRender = false;
+    std::atomic<bool> _nextScreenUpdateNeeded{false};
+    base::EventQueue::Ptr _eventQueue;  // Thread-safe event queue for GPU callbacks
     bool _pendingResize = false;
     uint32_t _pendingResizeW = 0;
     uint32_t _pendingResizeH = 0;
@@ -259,6 +261,13 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
         _yettyContext.config->setString("shell/telnet", _telnetAddress);
         yinfo("Set shell/telnet in config: {}", _telnetAddress);
     }
+
+    // Get EventQueue for thread-safe GPU callback wakeups
+    auto queueResult = base::EventQueue::instance();
+    if (!queueResult) {
+        return Err<void>("EventQueue not available", queueResult);
+    }
+    _eventQueue = *queueResult;
 
     if (auto res = initWindow(); !res) return res;
     if (auto res = initWebGPU(); !res) return res;
@@ -411,6 +420,9 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
 
         // Set up frame received callback for immediate screen refresh
         _vncClient->onFrameReceived = []() {
+            auto t = std::chrono::high_resolution_clock::now();
+            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
+            yinfo("[TIME] CLIENT onFrameReceived dispatching ScreenUpdate at {}ms", ms);
             auto loopResult = base::EventLoop::instance();
             if (!loopResult) return;
             (*loopResult)->dispatch(base::Event::screenUpdateEvent());
@@ -578,6 +590,9 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
 
         // VNC input received - trigger immediate screen refresh
         _vncServer->onInputReceived = []() {
+            auto t = std::chrono::high_resolution_clock::now();
+            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
+            yinfo("[TIME] onInputReceived lambda called at {}ms", ms);
             auto loopResult = base::EventLoop::instance();
             if (!loopResult) return;
             (*loopResult)->dispatch(base::Event::screenUpdateEvent());
@@ -1467,7 +1482,9 @@ Result<void> YettyImpl::initCallbacks() noexcept {
 
     // Char callback
     _platform->setCharCallback([this](unsigned int codepoint) {
-        ydebug("CharCallback: codepoint={} ('{}')", codepoint, codepoint < 32 ? '?' : (char)codepoint);
+        auto t = std::chrono::high_resolution_clock::now();
+        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
+        yinfo("[TIME] CLIENT CharCallback at {}ms: codepoint={}", ms, codepoint);
 
         // Forward to VNC server when in client mode
 #if YETTY_HAS_VNC
@@ -1762,6 +1779,12 @@ void YettyImpl::shutdownEventLoop() noexcept {
 
 Result<bool> YettyImpl::onEvent(const base::Event& event) {
 #if !YETTY_WEB && !defined(__ANDROID__)
+    if (event.type == base::Event::Type::ScreenUpdate) {
+        auto t = std::chrono::high_resolution_clock::now();
+        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
+        yinfo("[TIME] onEvent() called for ScreenUpdate at {}ms", ms);
+    }
+
     // Input timer: poll GLFW events (fast, always responsive)
     // Note: VNC input is now fully async via EventLoop poll, no longer needs polling here
     if (event.type == base::Event::Type::Timer && event.timer.timerId == _inputTimerId) {
@@ -1879,13 +1902,8 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
         return Err<void>("Fatal GPU error: " + _fatalGpuErrorMsg);
     }
 
-    // Prevent re-entrant rendering. _inRender is set to true before GPU submit
-    // and cleared asynchronously by wgpuQueueOnSubmittedWorkDone callback.
-    if (_inRender) {
-        // Still need to process GPU events so the callback can fire!
-        wgpuInstanceProcessEvents(_instance);
-        return Ok();
-    }
+    // Process GPU events so async callbacks (like render done) can fire
+    wgpuInstanceProcessEvents(_instance);
 
     // Apply deferred resize before acquiring the surface texture
     if (_pendingResize) {
@@ -1980,6 +1998,19 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
     // Determine capture size: use VNC requested size if set, otherwise window size
     uint32_t captureW = (_vncServerMode && _vncRequestedWidth > 0) ? _vncRequestedWidth : static_cast<uint32_t>(windowWidth);
     uint32_t captureH = (_vncServerMode && _vncRequestedHeight > 0) ? _vncRequestedHeight : static_cast<uint32_t>(windowHeight);
+
+    // Skip GPU work if already rendering, but remember we need another update
+    if (_inRender) {
+        auto t = std::chrono::high_resolution_clock::now();
+        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
+        yinfo("[TIME] SKIPPING GPU at {}ms (_inRender=true), setting _nextScreenUpdateNeeded", ms);
+        _nextScreenUpdateNeeded = true;
+        return Ok();
+    }
+
+    auto t = std::chrono::high_resolution_clock::now();
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
+    yinfo("[TIME] STARTING GPU at {}ms", ms);
 
     // Mark rendering in progress — cleared by wgpuQueueOnSubmittedWorkDone callback
     _inRender = true;
@@ -2170,7 +2201,19 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
     WGPUQueueWorkDoneCallbackInfo renderDoneCb = {};
     renderDoneCb.mode = WGPUCallbackMode_AllowSpontaneous;
     renderDoneCb.callback = [](WGPUQueueWorkDoneStatus, WGPUStringView, void* ud1, void*) {
-        static_cast<YettyImpl*>(ud1)->_inRender = false;
+        auto t = std::chrono::high_resolution_clock::now();
+        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
+        yinfo("[TIME] GPU DONE callback at {}ms", ms);
+
+        auto* self = static_cast<YettyImpl*>(ud1);
+        self->_inRender = false;
+
+        // If ScreenUpdate was needed while rendering, dispatch it now
+        if (self->_nextScreenUpdateNeeded.exchange(false)) {
+            yinfo("[TIME] GPU DONE: _nextScreenUpdateNeeded was true, dispatching ScreenUpdate");
+            // Wake up main thread via EventQueue (thread-safe for GPU callbacks)
+            self->_eventQueue->push(base::Event::screenUpdateEvent());
+        }
     };
     renderDoneCb.userdata1 = this;
     wgpuQueueOnSubmittedWorkDone(_queue, renderDoneCb);

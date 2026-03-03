@@ -1,6 +1,7 @@
 # yetty base utilities
 add_library(yetty_base STATIC
     event-loop.cpp
+    event-queue.cpp
 )
 
 target_include_directories(yetty_base PUBLIC

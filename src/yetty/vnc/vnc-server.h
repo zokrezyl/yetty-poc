@@ -3,6 +3,7 @@
 #include "protocol.h"
 #include <yetty/result.hpp>
 #include <yetty/base/event-listener.h>
+#include <yetty/base/event-queue.h>
 #include <webgpu/webgpu.h>
 #include <string>
 #include <vector>
@@ -82,6 +83,7 @@ private:
 
     WGPUDevice _device;
     WGPUQueue _queue;
+    base::EventQueue::Ptr _eventQueue;  // Thread-safe event queue for GPU callbacks
 
     // Server socket
     int _serverFd = -1;

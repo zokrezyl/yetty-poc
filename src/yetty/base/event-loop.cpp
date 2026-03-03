@@ -101,12 +101,32 @@ public:
     }
 
     Result<bool> dispatch(const Event& event) override {
+        if (event.type == Event::Type::ScreenUpdate) {
+            auto t = std::chrono::high_resolution_clock::now();
+            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
+            yinfo("[TIME] dispatch() called for ScreenUpdate at {}ms", ms);
+        }
+
         auto it = _listeners.find(event.type);
-        if (it == _listeners.end()) return Ok(false);
+        if (it == _listeners.end()) {
+            if (event.type == Event::Type::ScreenUpdate) {
+                yinfo("[TIME] dispatch() NO LISTENERS FOUND for ScreenUpdate");
+            }
+            return Ok(false);
+        }
+
+        if (event.type == Event::Type::ScreenUpdate) {
+            yinfo("[TIME] dispatch() found {} listeners for ScreenUpdate", it->second.size());
+        }
 
         auto listeners = it->second;  // copy for safe iteration
         for (const auto& pl : listeners) {
             if (auto sp = pl.listener.lock()) {
+                if (event.type == Event::Type::ScreenUpdate) {
+                    auto t = std::chrono::high_resolution_clock::now();
+                    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
+                    yinfo("[TIME] dispatch() calling onEvent for ScreenUpdate at {}ms", ms);
+                }
                 auto result = sp->onEvent(event);
                 if (!result) {
                     return Err<bool>("Event handler failed", result);

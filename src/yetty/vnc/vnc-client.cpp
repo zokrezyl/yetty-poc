@@ -272,7 +272,9 @@ void VncClient::onSocketReadable() {
                 // No more data available - trigger render if we got tiles
                 yinfo("VNC onSocketReadable: EAGAIN after {} loops, tilesReceived={}", loopCount, tilesReceived);
                 if (tilesReceived && onFrameReceived) {
-                    yinfo("VNC onSocketReadable: calling onFrameReceived callback");
+                    auto t = std::chrono::high_resolution_clock::now();
+                    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
+                    yinfo("[TIME] CLIENT frame received at {}ms, calling onFrameReceived", ms);
                     onFrameReceived();
                 }
                 return;
@@ -886,6 +888,11 @@ void VncClient::sendCharWithMods(uint32_t codepoint, uint8_t mods) {
 
 void VncClient::sendTextInput(const char* text, size_t len) {
     if (len == 0 || len > 1024) return; // Sanity check
+
+    auto t = std::chrono::high_resolution_clock::now();
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
+    std::string textStr(text, len);
+    yinfo("[TIME] CLIENT sendTextInput at {}ms: '{}'", ms, textStr);
 
     InputHeader hdr = {};
     hdr.type = static_cast<uint8_t>(InputType::TEXT_INPUT);

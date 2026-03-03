@@ -454,6 +454,9 @@ private:
 
         // Trigger screen refresh
         if (auto loop = base::EventLoop::instance(); loop) {
+            auto t = std::chrono::high_resolution_clock::now();
+            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
+            yinfo("[TIME] PTY output processed, dispatching ScreenUpdate at {}ms", ms);
             (*loop)->dispatch(base::Event::screenUpdateEvent());
         }
     }
