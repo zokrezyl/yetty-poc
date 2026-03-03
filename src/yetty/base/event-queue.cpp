@@ -1,12 +1,55 @@
 #include <yetty/base/event-queue.h>
 #include <yetty/base/event-loop.h>
-#include <uv.h>
 #include <queue>
 #include <mutex>
+
+#if !YETTY_WEB
+#include <uv.h>
+#endif
 
 namespace yetty {
 namespace base {
 
+#if YETTY_WEB
+
+// Web/WASM implementation - single-threaded, no libuv needed
+// Events are queued and dispatched on next frame via requestAnimationFrame
+class EventQueueImpl : public EventQueue {
+public:
+    EventQueueImpl() = default;
+    ~EventQueueImpl() override = default;
+
+    Result<void> init() {
+        return Ok();
+    }
+
+    void push(const Event& event) override {
+        _queue.push(event);
+        // In web builds, events will be drained by the main loop
+        // No async wakeup needed - the browser's requestAnimationFrame drives the loop
+    }
+
+    // Called by EventLoop to drain queued events (web-specific)
+    void drain() {
+        auto loopResult = EventLoop::instance();
+        if (!loopResult) {
+            return;
+        }
+        auto loop = *loopResult;
+
+        while (!_queue.empty()) {
+            (void)loop->dispatch(_queue.front());
+            _queue.pop();
+        }
+    }
+
+private:
+    std::queue<Event> _queue;
+};
+
+#else
+
+// Native implementation with libuv for thread-safe cross-thread wakeup
 class EventQueueImpl : public EventQueue {
 public:
     EventQueueImpl() = default;
@@ -79,6 +122,8 @@ private:
     std::queue<Event> _queue;
     uv_async_t* _asyncHandle = nullptr;
 };
+
+#endif // YETTY_WEB
 
 Result<EventQueue::Ptr> EventQueue::createImpl() noexcept {
     auto impl = std::make_shared<EventQueueImpl>();
