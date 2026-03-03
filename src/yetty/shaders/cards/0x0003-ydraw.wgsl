@@ -557,9 +557,9 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
                 let fillColorPacked = colors.x;
                 if (d < 0.0 && fillColorPacked != 0u) {
                     let primType = bitcast<u32>(cardStorage[primOff + 0u]);
-                    var fillColor: vec4<f32>;
+                    var fillColor: vec3<f32>;
                     if (isGradientPrim(primType)) {
-                        fillColor = evalGradientFillColor(primOff, scenePos);
+                        fillColor = evalGradientFillColor(primOff, scenePos).rgb;
                     } else {
                         fillColor = unpackColor(fillColorPacked);
                     }

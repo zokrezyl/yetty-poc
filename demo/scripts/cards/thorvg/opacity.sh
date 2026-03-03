@@ -1,9 +1,11 @@
 #!/bin/bash
-# ThorVG Opacity Demo: Paint opacity applied to fill/stroke alpha
+# ThorVG Demo: opacity
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
-cd "$DIR/../../.."
+cd "$DIR/../../../.."
 
 SVG_PATH="demo/assets/cards/thorvg/opacity.svg"
-printf '\033]666666;run -c thorvg -x 0 -y 0 -w 80 -h 20 -r;--svg;%s\033\\' "$SVG_PATH"
+SVG_CONTENT=$(cat "$SVG_PATH")
+PAYLOAD=$(echo -n "$SVG_CONTENT" | base64 -w0)
+printf '\033]666666;run -c thorvg -x 0 -y 0 -w 80 -h 20 -r;-i - --svg;%s\033\\' "$PAYLOAD"
 echo

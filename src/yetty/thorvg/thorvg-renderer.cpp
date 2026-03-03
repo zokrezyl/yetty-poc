@@ -401,7 +401,7 @@ private:
         if (cmdCount == 0 || ptCount == 0) return;
 
         // For gradient fills on boxes, try to detect and emit gradient box primitive
-        if ((hasLinearGradient || hasRadialGradient) && fillColor != 0) {
+        if ((hasLinearGradient || hasRadialGradient) && (gradColor1 != 0 || gradColor2 != 0)) {
             if (tryRenderAsGradientBox(cmds, cmdCount, pts, ptCount, m,
                                        hasLinearGradient, gx1, gy1, gx2, gy2,
                                        gcx, gcy, gr, gradColor1, gradColor2,
@@ -425,7 +425,10 @@ private:
                                 uint32_t gradColor1, uint32_t gradColor2,
                                 uint32_t strokeColor, float strokeWidth) {
         // Check for simple rectangle pattern: MoveTo + 3*LineTo + Close
-        if (cmdCount != 5) return false;
+        if (cmdCount != 5) {
+            yinfo("tryRenderAsGradientBox: cmdCount={} (expected 5)", cmdCount);
+            return false;
+        }
         if (cmds[0] != tvg::PathCommand::MoveTo) return false;
         if (cmds[1] != tvg::PathCommand::LineTo) return false;
         if (cmds[2] != tvg::PathCommand::LineTo) return false;
@@ -450,11 +453,33 @@ private:
         float hw = (maxX - minX) * 0.5f;
         float hh = (maxY - minY) * 0.5f;
         
+        // Convert gradient coordinates from normalized (0-1) to world coordinates
+        // if they look like percentage values (small range)
+        float worldGx1 = gx1, worldGy1 = gy1, worldGx2 = gx2, worldGy2 = gy2;
+        if (hasLinearGradient && std::abs(gx2 - gx1) <= 1.0f && std::abs(gy2 - gy1) <= 1.0f) {
+            // Looks like normalized coordinates - scale to box
+            worldGx1 = minX + gx1 * (maxX - minX);
+            worldGy1 = minY + gy1 * (maxY - minY);
+            worldGx2 = minX + gx2 * (maxX - minX);
+            worldGy2 = minY + gy2 * (maxY - minY);
+        }
+        
+        float worldGcx = gcx, worldGcy = gcy, worldGr = gr;
+        if (!hasLinearGradient && std::abs(gcx) <= 1.0f && std::abs(gcy) <= 1.0f) {
+            // Radial - scale center and radius to box
+            worldGcx = minX + gcx * (maxX - minX);
+            worldGcy = minY + gcy * (maxY - minY);
+            worldGr = gr * std::max(maxX - minX, maxY - minY);
+        }
+        
+        yinfo("tryRenderAsGradientBox: linear={} box=({},{}) {}x{} grad=({},{})→({},{}) colors=0x{:08x},0x{:08x}",
+              hasLinearGradient, cx, cy, hw*2, hh*2, worldGx1, worldGy1, worldGx2, worldGy2, gradColor1, gradColor2);
+        
         if (hasLinearGradient) {
             auto result = _buffer->addLinearGradientBox(
                 0,              // layer
                 cx, cy, hw, hh, // box params
-                gx1, gy1, gx2, gy2, // gradient endpoints
+                worldGx1, worldGy1, worldGx2, worldGy2, // gradient endpoints (world coords)
                 gradColor1, gradColor2,
                 strokeColor, strokeWidth,
                 0.0f            // round
@@ -464,12 +489,12 @@ private:
                 return true;
             }
         } else {
-            // Radial gradient - use circle center as gradient center if not specified
+            // Radial gradient
             auto result = _buffer->addRadialGradientCircle(
                 0,              // layer
                 cx, cy,         // circle center
                 std::max(hw, hh), // radius (use larger extent)
-                gcx, gcy, gr,   // gradient center and radius
+                worldGcx, worldGcy, worldGr,   // gradient center and radius (world coords)
                 gradColor1, gradColor2,
                 strokeColor, strokeWidth,
                 0.0f            // round
