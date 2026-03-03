@@ -116,6 +116,10 @@ fn sdBezier3(p: vec2<f32>, A: vec2<f32>, B: vec2<f32>, C: vec2<f32>, D: vec2<f32
 }
 
 fn sdEllipse(p: vec2<f32>, center: vec2<f32>, ab: vec2<f32>) -> f32 {
+    // Handle circle case (ab.x == ab.y) to avoid division by zero
+    if (abs(ab.x - ab.y) < 0.001) {
+        return length(p - center) - ab.x;
+    }
     let pp = abs(p - center);
     let pab = pp / ab;
     let abab = ab * ab;

@@ -1,0 +1,7 @@
+background: "#1a1a2e"
+
+body:
+  - ellipse:
+      position: [100, 100]
+      radii: [40, 40]
+      fill: "#ff0000"
