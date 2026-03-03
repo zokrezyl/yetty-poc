@@ -557,14 +557,15 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
                 let fillColorPacked = colors.x;
                 if (d < 0.0 && fillColorPacked != 0u) {
                     let primType = bitcast<u32>(cardStorage[primOff + 0u]);
-                    var fillColor: vec3<f32>;
+                    var fillColorAlpha: vec4<f32>;
                     if (isGradientPrim(primType)) {
-                        fillColor = evalGradientFillColor(primOff, scenePos).rgb;
+                        fillColorAlpha = evalGradientFillColor(primOff, scenePos);
                     } else {
-                        fillColor = unpackColor(fillColorPacked);
+                        fillColorAlpha = unpackColorAlpha(fillColorPacked);
                     }
-                    let alpha = clamp(-d * 2.0, 0.0, 1.0);
-                    resultColor = mix(resultColor, fillColor, alpha);
+                    let edgeAlpha = clamp(-d * 2.0, 0.0, 1.0);
+                    let alpha = edgeAlpha * fillColorAlpha.a;
+                    resultColor = mix(resultColor, fillColorAlpha.rgb, alpha);
                 }
 
                 let strokeColorPacked = colors.y;
@@ -572,9 +573,10 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
                 if (strokeWidth > 0.0 && strokeColorPacked != 0u) {
                     let strokeDist = abs(d) - strokeWidth * 0.5;
                     if (strokeDist < 0.0) {
-                        let strokeColor = unpackColor(strokeColorPacked);
-                        let alpha = clamp(-strokeDist * 2.0, 0.0, 1.0);
-                        resultColor = mix(resultColor, strokeColor, alpha);
+                        let strokeColorAlpha = unpackColorAlpha(strokeColorPacked);
+                        let edgeAlpha = clamp(-strokeDist * 2.0, 0.0, 1.0);
+                        let alpha = edgeAlpha * strokeColorAlpha.a;
+                        resultColor = mix(resultColor, strokeColorAlpha.rgb, alpha);
                     }
                 }
             }

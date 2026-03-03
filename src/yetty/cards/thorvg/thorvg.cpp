@@ -8,9 +8,10 @@
 #include <yetty/ydraw-builder.h>
 #include <yetty/base/event-loop.h>
 #include <ytrace/ytrace.hpp>
-#include <sstream>
-#include <fstream>
 #include <cmath>
+#include <fstream>
+#include <iostream>
+#include <sstream>
 
 namespace {
 constexpr int GLFW_MOD_SHIFT   = 0x0001;
@@ -76,6 +77,7 @@ public:
 
     Result<void> allocateBuffers() override {
         if (!_builder) return Ok();
+        std::cerr << "ThorVG::allocateBuffers: prims=" << _buffer->primCount() << std::endl;
         return _builder->allocateBuffers();
     }
 
@@ -241,6 +243,7 @@ public:
         _builder = *builderRes;
         _builder->addFlags(YDrawBuilder::FLAG_UNIFORM_SCALE);
         _builder->setViewport(_widthCells, _heightCells);
+        _builder->setView(_viewZoom, _viewPanX, _viewPanY);
 
         // Create renderer
         auto rendererRes = yetty::thorvg::ThorVgRenderer::create(_buffer);

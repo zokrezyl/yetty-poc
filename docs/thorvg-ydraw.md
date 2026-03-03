@@ -303,3 +303,96 @@ demo/scripts/cards/ydraw/
 2. **Transform Accumulation**: ThorVG's `Paint::parent()` is used to walk the hierarchy and accumulate transforms from root to leaf, ensuring correct world-space coordinates.
 
 3. **Animation via Re-render**: Each frame, `setFrame()` updates ThorVG's animation state, then `render()` clears and re-populates the YDrawBuffer with new primitive positions.
+
+---
+
+## Current Status & Known Issues
+
+### Working Demos ✅
+
+| Demo | Script | Description | Status |
+|------|--------|-------------|--------|
+| YDraw circles | `demo/scripts/cards/ydraw/circles.sh` | Pure YDraw Circle primitives | **WORKING** |
+| YDraw ellipses | `demo/scripts/cards/ydraw/ellipses.sh` | Pure YDraw Ellipse primitives | **WORKING** (minor artifacts) |
+| YDraw gradients | `demo/scripts/cards/ydraw/gradients.sh` | Linear/Radial gradients | **WORKING** |
+| ThorVG simple shapes | `demo/scripts/cards/thorvg/simple-shapes.sh` | SVG rectangles, paths | **PARTIALLY WORKING** |
+| ThorVG beziers | `demo/scripts/cards/thorvg/beziers.sh` | Cubic bezier strokes | **WORKING** |
+| ThorVG polygons | `demo/scripts/cards/thorvg/polygon-shapes.sh` | Polygon triangulation | **WORKING** |
+
+### Broken Demos ❌
+
+| Demo | Script | Issue | Investigation Status |
+|------|--------|-------|---------------------|
+| ThorVG opacity | `demo/scripts/cards/thorvg/opacity.sh` | **Ellipses/circles not rendering** | See debugging notes below |
+
+### Debugging Notes: ThorVG Ellipse Rendering Issue
+
+**Problem:** SVG circles rendered via ThorVG are not visible, while identical YDraw ellipses work correctly.
+
+**What we confirmed works:**
+- ThorVG correctly parses SVG circles and converts them to 4×CubicTo+Close paths
+- `tryRenderAsEllipse()` correctly detects the pattern and creates Ellipse primitives (type=6)
+- Debug output shows 7 primitives created: 4 boxes (type=1) + 3 ellipses (type=6)
+- Ellipse data is correct: cx=160, cy=60, rx=40, ry=40, fillColor=0x990000ff (blue with 60% opacity)
+- Grid calculation is correct: 2x2 grid, ellipses assigned to correct cells
+- GPU buffer allocation succeeds: primHandle.offset=0, derivedHandle at offset 80
+- Grid index-to-offset translation works: prim indices [4,5,6] → word offsets [40,50,60]
+- Metadata is flushed correctly: primOff=0, primCnt=7, gridOff=80
+
+**What's different from working YDraw ellipses:**
+- Both use same shader (0x100003)
+- Both use same YDrawBuilder and buffer system  
+- Both set FLAG_UNIFORM_SCALE
+- Both have similar scene bounds and grid configurations
+
+**Suspected issues (not yet verified):**
+1. Scene position computation in shader may differ due to view/zoom calculation
+2. Potential issue with how widgetUV maps to scenePos for the ThorVG card
+3. Possible timing issue - buffer written but not flushed to GPU before render
+
+**Debug output sample:**
+```
+Ellipse: cx=160 cy=60 rx=40 ry=40 fill=0x990000ff stroke=0x0
+ThorVgRenderer::render: prims=7
+YDrawBuilder::calculate: grid=2x2 scene=[0,0]-[200,200] prims=7
+ThorVG::allocateBuffers: prims=7
+writeGPU: prim[4] id=2147483652 type=6 words=10 dataOff=40
+writeDerived: gridSize=22 gridOffset=80 primWordOffsets.size=7
+  cell[1]: packedOff=9 cnt=5 prim:1->10 prim:3->30 prim:4->40 prim:5->50 prim:6->60
+flushMetadata: primOff=0 primCnt=7 gridOff=80 grid=2x2 scene=[0,0]-[200,200]
+```
+
+### Test Coverage
+
+| Test Suite | File | Tests | Status |
+|------------|------|-------|--------|
+| ThorVG rendering | `test/ut/thorvg/thorvg_test.cpp` | 14 | ✅ All pass |
+| ThorVG rounded rect | `test/ut/thorvg/thorvg_rounded_rect_test.cpp` | 7 | ✅ All pass |
+| ThorVG circles | `test/ut/thorvg/thorvg_circle_test.cpp` | 9 | ✅ All pass |
+| Triangulation | `test/ut/ydraw/triangulate_test.cpp` | 51 | ✅ All pass |
+| YDraw gradients | `test/ut/ydraw/ydraw_gradient_test.cpp` | 7 | ✅ All pass |
+| YDraw opacity | `test/ut/ydraw/ydraw_opacity_test.cpp` | 6 | ✅ All pass |
+
+**Note:** All unit tests pass, but the ThorVG circle tests verify CPU-side primitive creation only. The actual GPU rendering issue is not caught by unit tests.
+
+### Recent Fixes
+
+1. **Gradient AABB computation** - Added bounding box calculation for `LinearGradientBox`, `LinearGradientCircle`, `RadialGradientCircle` in `ydraw-builder.cpp`
+
+2. **3D type detection fix** - Changed `type >= 100` to `type >= 100 && type < 128` to properly count gradient primitives (types 132-134) as 2D
+
+3. **Shader alpha blending** - Changed from `unpackColor()` (RGB only) to `unpackColorAlpha()` (RGBA) in `0x0003-ydraw.wgsl` for proper opacity support
+
+4. **setView() call** - Added `_builder->setView()` in ThorVG card init to match YDraw card behavior
+
+### Additional Demo Files Created
+
+```
+demo/assets/cards/x-draw/
+├── circles.yaml      # YDraw Circle primitives
+└── ellipses.yaml     # YDraw Ellipse primitives
+
+demo/scripts/cards/ydraw/
+├── circles.sh        # Run circles.yaml demo
+└── ellipses.sh       # Run ellipses.yaml demo
+```

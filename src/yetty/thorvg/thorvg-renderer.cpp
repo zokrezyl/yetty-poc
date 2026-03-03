@@ -9,6 +9,7 @@
 #include <ytrace/ytrace.hpp>
 #include <algorithm>
 #include <cstring>
+#include <iostream>
 #include <mutex>
 #include <stack>
 #include <vector>
@@ -190,6 +191,7 @@ public:
         // Use Accessor to traverse, computing world transforms via parent chain
         renderWithAccessor(_picture);
 
+        std::cerr << "ThorVgRenderer::render: prims=" << _buffer->primCount() << std::endl;
         yinfo("ThorVgRenderer::render: frame={:.1f} prims before={} after={}", 
               _currentFrame, beforeCount, _buffer->primCount());
         return Ok();
@@ -540,7 +542,8 @@ private:
         float rx = (maxX - minX) / 2.0f;
         float ry = (maxY - minY) / 2.0f;
         
-        yinfo("Ellipse detected: center=({},{}) radii=({},{}) fill=0x{:08X}", cx, cy, rx, ry, fillColor);
+        std::cerr << "Ellipse: cx=" << cx << " cy=" << cy << " rx=" << rx << " ry=" << ry 
+                  << " fill=0x" << std::hex << fillColor << " stroke=0x" << strokeColor << std::dec << std::endl;
         
         auto result = _buffer->addEllipse(
             0,              // layer
