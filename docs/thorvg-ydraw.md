@@ -231,17 +231,14 @@ Patching ThorVG to render to YDraw is **feasible** and would enable GPU-accelera
 
 | Feature | Status | Difficulty | Notes |
 |---------|--------|------------|-------|
-| **Gradients** (Linear/Radial) | ❌ | High | YDraw needs gradient primitive types |
-| **Stroke dash patterns** | ❌ | Medium | Needs stroke-to-path conversion |
 | **Stroke caps/joins** | ❌ | Medium | Round, bevel, miter not supported |
 | **Variable stroke width** | ❌ | Medium | YDraw has fixed strokeWidth |
 | **Fill rules** (EvenOdd/NonZero) | ❌ | High | Complex path decomposition needed |
 | **Alpha masks** | ❌ | High | Multi-pass rendering needed |
 | **Blend modes** | ❌ | High | Not in YDraw primitive model |
-| **Text rendering** | ❌ | Medium | Could wire to YDraw's glyph system |
-| **Images/Pictures** | ❌ | Medium | YDraw has Image type |
-| **Quadratic Bezier** | ❌ | Low | Add Bezier2 detection |
-| **Arc/Pie shapes** | ❌ | Low | Add pattern detection |
+| **Text rendering** | ❌ | Medium | ThorVG Text has no getters for content |
+| **Images/Pictures** | ❌ | Medium | YDraw has Image type, needs atlas coords |
+| **Multi-stop gradients** | ❌ | Medium | Currently only 2-stop gradients supported |
 
 ### Recently Implemented
 
@@ -252,6 +249,10 @@ Patching ThorVG to render to YDraw is **feasible** and would enable GPU-accelera
 | **Multiple holes** | Hole sorting + sequential merge | Holes sorted by rightmost x-coordinate |
 | **Axis-aligned rect detection** | `tryRenderAsBox()` validation | Verifies 2 unique X/Y values to avoid misdetecting pentagons |
 | **Rounded rectangle corner radius** | `tryRenderAsBox()` cubic analysis | Extracts corner radius from bezier control points |
+| **Stroke dash patterns** | `renderDashedSegment()` | Breaks strokes into dash/gap segments for LineTo |
+| **Paint opacity** | `shape->opacity()` applied to alpha | Multiplies fill/stroke alpha by paint opacity |
+| **Linear gradients** | `LinearGradientBox`, `LinearGradientCircle` | 2-color gradient fills for rectangles |
+| **Radial gradients** | `RadialGradientCircle` | 2-color radial gradient from center to edge |
 
 ### Files Created
 

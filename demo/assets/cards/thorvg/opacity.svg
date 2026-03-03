@@ -1,0 +1,18 @@
+<svg width="200" height="200" xmlns="http://www.w3.org/2000/svg">
+  <!-- Full opacity (default) -->
+  <rect x="10" y="10" width="60" height="60" fill="red"/>
+  
+  <!-- 75% opacity -->
+  <rect x="80" y="10" width="60" height="60" fill="green" opacity="0.75"/>
+  
+  <!-- 50% opacity -->
+  <rect x="10" y="80" width="60" height="60" fill="blue" opacity="0.5"/>
+  
+  <!-- 25% opacity -->
+  <rect x="80" y="80" width="60" height="60" fill="purple" opacity="0.25"/>
+  
+  <!-- Overlapping circles with opacity -->
+  <circle cx="160" cy="60" r="40" fill="red" opacity="0.6"/>
+  <circle cx="180" cy="80" r="40" fill="blue" opacity="0.6"/>
+  <circle cx="160" cy="100" r="40" fill="green" opacity="0.6"/>
+</svg>

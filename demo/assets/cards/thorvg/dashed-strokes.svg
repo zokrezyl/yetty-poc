@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300">
+  <!-- Simple dashed lines -->
+  <line x1="20" y1="30" x2="380" y2="30" stroke="#3498db" stroke-width="3" stroke-dasharray="20,10"/>
+  <line x1="20" y1="60" x2="380" y2="60" stroke="#e74c3c" stroke-width="2" stroke-dasharray="10,5"/>
+  <line x1="20" y1="90" x2="380" y2="90" stroke="#2ecc71" stroke-width="4" stroke-dasharray="5,15"/>
+  
+  <!-- Dotted line -->
+  <line x1="20" y1="120" x2="380" y2="120" stroke="#9b59b6" stroke-width="3" stroke-dasharray="2,8"/>
+  
+  <!-- Complex dash patterns -->
+  <line x1="20" y1="150" x2="380" y2="150" stroke="#f39c12" stroke-width="2" stroke-dasharray="20,5,5,5"/>
+  <line x1="20" y1="180" x2="380" y2="180" stroke="#1abc9c" stroke-width="3" stroke-dasharray="30,10,5,10"/>
+  
+  <!-- Dashed paths (shapes) -->
+  <path d="M40,210 L160,210 L160,280 L40,280 Z" 
+        fill="none" stroke="#e74c3c" stroke-width="2" stroke-dasharray="10,5"/>
+  
+  <path d="M180,210 L240,210 L260,245 L240,280 L180,280 L160,245 Z" 
+        fill="none" stroke="#3498db" stroke-width="2" stroke-dasharray="15,5"/>
+  
+  <path d="M280,245 L320,210 L360,245 L320,280 Z" 
+        fill="none" stroke="#2ecc71" stroke-width="3" stroke-dasharray="8,4"/>
+</svg>

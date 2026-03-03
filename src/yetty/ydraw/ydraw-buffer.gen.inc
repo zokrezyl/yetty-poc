@@ -781,3 +781,42 @@ Result<void> updatePolygonGroup(uint32_t id, uint32_t layer, uint32_t vertexCoun
     sdf::writePolygonGroup(data, layer, vertexCount, contourCount, fillColor, strokeColor, strokeWidth, round_);
     return updatePrim(id, data, 8);
 }
+
+Result<uint32_t> addLinearGradientBox(uint32_t layer, float cx, float cy, float hw, float hh, float gx1, float gy1, float gx2, float gy2, uint32_t color1, uint32_t color2, uint32_t strokeColor, float strokeWidth, float round_,
+        uint32_t id = AUTO_ID) {
+    float data[15];
+    sdf::writeLinearGradientBox(data, layer, cx, cy, hw, hh, gx1, gy1, gx2, gy2, color1, color2, strokeColor, strokeWidth, round_);
+    return addPrim(id, data, 15);
+}
+
+Result<void> updateLinearGradientBox(uint32_t id, uint32_t layer, float cx, float cy, float hw, float hh, float gx1, float gy1, float gx2, float gy2, uint32_t color1, uint32_t color2, uint32_t strokeColor, float strokeWidth, float round_) {
+    float data[15];
+    sdf::writeLinearGradientBox(data, layer, cx, cy, hw, hh, gx1, gy1, gx2, gy2, color1, color2, strokeColor, strokeWidth, round_);
+    return updatePrim(id, data, 15);
+}
+
+Result<uint32_t> addLinearGradientCircle(uint32_t layer, float cx, float cy, float r, float gx1, float gy1, float gx2, float gy2, uint32_t color1, uint32_t color2, uint32_t strokeColor, float strokeWidth, float round_,
+        uint32_t id = AUTO_ID) {
+    float data[14];
+    sdf::writeLinearGradientCircle(data, layer, cx, cy, r, gx1, gy1, gx2, gy2, color1, color2, strokeColor, strokeWidth, round_);
+    return addPrim(id, data, 14);
+}
+
+Result<void> updateLinearGradientCircle(uint32_t id, uint32_t layer, float cx, float cy, float r, float gx1, float gy1, float gx2, float gy2, uint32_t color1, uint32_t color2, uint32_t strokeColor, float strokeWidth, float round_) {
+    float data[14];
+    sdf::writeLinearGradientCircle(data, layer, cx, cy, r, gx1, gy1, gx2, gy2, color1, color2, strokeColor, strokeWidth, round_);
+    return updatePrim(id, data, 14);
+}
+
+Result<uint32_t> addRadialGradientCircle(uint32_t layer, float cx, float cy, float r, float gcx, float gcy, float gr, uint32_t color1, uint32_t color2, uint32_t strokeColor, float strokeWidth, float round_,
+        uint32_t id = AUTO_ID) {
+    float data[13];
+    sdf::writeRadialGradientCircle(data, layer, cx, cy, r, gcx, gcy, gr, color1, color2, strokeColor, strokeWidth, round_);
+    return addPrim(id, data, 13);
+}
+
+Result<void> updateRadialGradientCircle(uint32_t id, uint32_t layer, float cx, float cy, float r, float gcx, float gcy, float gr, uint32_t color1, uint32_t color2, uint32_t strokeColor, float strokeWidth, float round_) {
+    float data[13];
+    sdf::writeRadialGradientCircle(data, layer, cx, cy, r, gcx, gcy, gr, color1, color2, strokeColor, strokeWidth, round_);
+    return updatePrim(id, data, 13);
+}

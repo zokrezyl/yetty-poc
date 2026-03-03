@@ -953,6 +953,63 @@ inline uint32_t writePolygonGroup(float* buf, uint32_t layer, uint32_t vertexCou
     return 8;
 }
 
+/// Write LinearGradientBox (15 words). Returns word count.
+inline uint32_t writeLinearGradientBox(float* buf, uint32_t layer, float cx, float cy, float hw, float hh, float gx1, float gy1, float gx2, float gy2, uint32_t color1, uint32_t color2, uint32_t strokeColor, float strokeWidth, float round_) {
+    detail::write_u32(buf, 0, 132u);
+    detail::write_u32(buf, 1, layer);
+    buf[2] = cx;
+    buf[3] = cy;
+    buf[4] = hw;
+    buf[5] = hh;
+    buf[6] = gx1;
+    buf[7] = gy1;
+    buf[8] = gx2;
+    buf[9] = gy2;
+    detail::write_u32(buf, 10, color1);
+    detail::write_u32(buf, 11, color2);
+    detail::write_u32(buf, 12, strokeColor);
+    buf[13] = strokeWidth;
+    buf[14] = round_;
+    return 15;
+}
+
+/// Write LinearGradientCircle (14 words). Returns word count.
+inline uint32_t writeLinearGradientCircle(float* buf, uint32_t layer, float cx, float cy, float r, float gx1, float gy1, float gx2, float gy2, uint32_t color1, uint32_t color2, uint32_t strokeColor, float strokeWidth, float round_) {
+    detail::write_u32(buf, 0, 133u);
+    detail::write_u32(buf, 1, layer);
+    buf[2] = cx;
+    buf[3] = cy;
+    buf[4] = r;
+    buf[5] = gx1;
+    buf[6] = gy1;
+    buf[7] = gx2;
+    buf[8] = gy2;
+    detail::write_u32(buf, 9, color1);
+    detail::write_u32(buf, 10, color2);
+    detail::write_u32(buf, 11, strokeColor);
+    buf[12] = strokeWidth;
+    buf[13] = round_;
+    return 14;
+}
+
+/// Write RadialGradientCircle (13 words). Returns word count.
+inline uint32_t writeRadialGradientCircle(float* buf, uint32_t layer, float cx, float cy, float r, float gcx, float gcy, float gr, uint32_t color1, uint32_t color2, uint32_t strokeColor, float strokeWidth, float round_) {
+    detail::write_u32(buf, 0, 134u);
+    detail::write_u32(buf, 1, layer);
+    buf[2] = cx;
+    buf[3] = cy;
+    buf[4] = r;
+    buf[5] = gcx;
+    buf[6] = gcy;
+    buf[7] = gr;
+    detail::write_u32(buf, 8, color1);
+    detail::write_u32(buf, 9, color2);
+    detail::write_u32(buf, 10, strokeColor);
+    buf[11] = strokeWidth;
+    buf[12] = round_;
+    return 13;
+}
+
 /// Return word count for a given SDF type ID. 0 = unknown.
 inline uint32_t wordCountForType(uint32_t type) {
     switch (type) {
@@ -1016,6 +1073,9 @@ inline uint32_t wordCountForType(uint32_t type) {
     case 129u: return 10; // Image
     case 130u: return 7; // Polygon
     case 131u: return 8; // PolygonGroup
+    case 132u: return 15; // LinearGradientBox
+    case 133u: return 14; // LinearGradientCircle
+    case 134u: return 13; // RadialGradientCircle
     default: return 0;
     }
 }
@@ -1866,6 +1926,57 @@ inline uint32_t readPrimitive(const float* buf, card::SDFPrimitive& prim) {
         prim.round = buf[7];
         return 8;
     }
+    case card::SDFType::LinearGradientBox: {
+        prim.type = detail::read_u32(buf, 0);
+        prim.layer = detail::read_u32(buf, 1);
+        prim.params[0] = buf[2];
+        prim.params[1] = buf[3];
+        prim.params[2] = buf[4];
+        prim.params[3] = buf[5];
+        prim.params[4] = buf[6];
+        prim.params[5] = buf[7];
+        prim.params[6] = buf[8];
+        prim.params[7] = buf[9];
+        std::memcpy(&prim.params[8], &buf[10], sizeof(float));
+        std::memcpy(&prim.params[9], &buf[11], sizeof(float));
+        prim.strokeColor = detail::read_u32(buf, 12);
+        prim.strokeWidth = buf[13];
+        prim.round = buf[14];
+        return 15;
+    }
+    case card::SDFType::LinearGradientCircle: {
+        prim.type = detail::read_u32(buf, 0);
+        prim.layer = detail::read_u32(buf, 1);
+        prim.params[0] = buf[2];
+        prim.params[1] = buf[3];
+        prim.params[2] = buf[4];
+        prim.params[3] = buf[5];
+        prim.params[4] = buf[6];
+        prim.params[5] = buf[7];
+        prim.params[6] = buf[8];
+        std::memcpy(&prim.params[7], &buf[9], sizeof(float));
+        std::memcpy(&prim.params[8], &buf[10], sizeof(float));
+        prim.strokeColor = detail::read_u32(buf, 11);
+        prim.strokeWidth = buf[12];
+        prim.round = buf[13];
+        return 14;
+    }
+    case card::SDFType::RadialGradientCircle: {
+        prim.type = detail::read_u32(buf, 0);
+        prim.layer = detail::read_u32(buf, 1);
+        prim.params[0] = buf[2];
+        prim.params[1] = buf[3];
+        prim.params[2] = buf[4];
+        prim.params[3] = buf[5];
+        prim.params[4] = buf[6];
+        prim.params[5] = buf[7];
+        std::memcpy(&prim.params[6], &buf[8], sizeof(float));
+        std::memcpy(&prim.params[7], &buf[9], sizeof(float));
+        prim.strokeColor = detail::read_u32(buf, 10);
+        prim.strokeWidth = buf[11];
+        prim.round = buf[12];
+        return 13;
+    }
     default:
         return 0;
     }
@@ -2686,6 +2797,57 @@ inline uint32_t writePrimitive(float* buf, const card::SDFPrimitive& prim) {
         buf[6] = prim.strokeWidth;
         buf[7] = prim.round;
         return 8;
+    }
+    case card::SDFType::LinearGradientBox: {
+        detail::write_u32(buf, 0, prim.type);
+        detail::write_u32(buf, 1, prim.layer);
+        buf[2] = prim.params[0];
+        buf[3] = prim.params[1];
+        buf[4] = prim.params[2];
+        buf[5] = prim.params[3];
+        buf[6] = prim.params[4];
+        buf[7] = prim.params[5];
+        buf[8] = prim.params[6];
+        buf[9] = prim.params[7];
+        std::memcpy(&buf[10], &prim.params[8], sizeof(float));
+        std::memcpy(&buf[11], &prim.params[9], sizeof(float));
+        detail::write_u32(buf, 12, prim.strokeColor);
+        buf[13] = prim.strokeWidth;
+        buf[14] = prim.round;
+        return 15;
+    }
+    case card::SDFType::LinearGradientCircle: {
+        detail::write_u32(buf, 0, prim.type);
+        detail::write_u32(buf, 1, prim.layer);
+        buf[2] = prim.params[0];
+        buf[3] = prim.params[1];
+        buf[4] = prim.params[2];
+        buf[5] = prim.params[3];
+        buf[6] = prim.params[4];
+        buf[7] = prim.params[5];
+        buf[8] = prim.params[6];
+        std::memcpy(&buf[9], &prim.params[7], sizeof(float));
+        std::memcpy(&buf[10], &prim.params[8], sizeof(float));
+        detail::write_u32(buf, 11, prim.strokeColor);
+        buf[12] = prim.strokeWidth;
+        buf[13] = prim.round;
+        return 14;
+    }
+    case card::SDFType::RadialGradientCircle: {
+        detail::write_u32(buf, 0, prim.type);
+        detail::write_u32(buf, 1, prim.layer);
+        buf[2] = prim.params[0];
+        buf[3] = prim.params[1];
+        buf[4] = prim.params[2];
+        buf[5] = prim.params[3];
+        buf[6] = prim.params[4];
+        buf[7] = prim.params[5];
+        std::memcpy(&buf[8], &prim.params[6], sizeof(float));
+        std::memcpy(&buf[9], &prim.params[7], sizeof(float));
+        detail::write_u32(buf, 10, prim.strokeColor);
+        buf[11] = prim.strokeWidth;
+        buf[12] = prim.round;
+        return 13;
     }
     default:
         return 0;
