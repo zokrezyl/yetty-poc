@@ -28,6 +28,10 @@ public:
     // Wakes up main thread to process the event
     virtual void push(const Event& event) = 0;
 
+    // Drain queued events (web-specific, called from main loop)
+    // On native builds with libuv, this is a no-op (events are drained via async callback)
+    virtual void drain() {}
+
 protected:
     EventQueue() = default;
 };

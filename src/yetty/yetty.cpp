@@ -107,6 +107,12 @@ private:
     WGPUTextureFormat _surfaceFormat = WGPUTextureFormat_BGRA8Unorm;
     WGPUTextureView _currentTextureView = nullptr;
     WGPUTexture _currentTexture = nullptr;
+#if defined(__EMSCRIPTEN__)
+    // Web: textures pending release - will be released in GPU-done callback
+    // This ensures GPU has finished using the texture before we release it
+    WGPUTextureView _pendingReleaseTextureView = nullptr;
+    WGPUTexture _pendingReleaseTexture = nullptr;
+#endif
     uint32_t _surfaceWidth = 0;
     uint32_t _surfaceHeight = 0;
 
@@ -944,6 +950,13 @@ void YettyImpl::configureSurface(uint32_t width, uint32_t height) noexcept {
         wgpuTextureRelease(_currentTexture);
         _currentTexture = nullptr;
     }
+#if defined(__EMSCRIPTEN__)
+    // On web: DO NOT release pending textures here - GPU might still be using them!
+    // The GPU callback will release them when it fires (or they'll be orphaned but that's OK)
+    // Just clear our references so we don't double-release
+    _pendingReleaseTextureView = nullptr;
+    _pendingReleaseTexture = nullptr;
+#endif
 
     _surfaceWidth = width;
     _surfaceHeight = height;
@@ -966,6 +979,9 @@ Result<WGPUTextureView> YettyImpl::getCurrentTextureView() noexcept {
         return Err<WGPUTextureView>("No surface in headless mode");
     }
 
+    // Return cached texture view if available (caching within single frame)
+    // On web: present() clears _currentTextureView, so next frame gets new texture
+    // On native: present() also clears it after wgpuSurfacePresent
     if (_currentTextureView) {
         return Ok(_currentTextureView);
     }
@@ -996,6 +1012,9 @@ void YettyImpl::present() noexcept {
         return;
     }
 
+#if !defined(__EMSCRIPTEN__)
+    // On native: release texture references before presenting
+    // wgpuSurfacePresent ensures GPU has finished using the texture
     if (_currentTextureView) {
         wgpuTextureViewRelease(_currentTextureView);
         _currentTextureView = nullptr;
@@ -1004,9 +1023,21 @@ void YettyImpl::present() noexcept {
         wgpuTextureRelease(_currentTexture);
         _currentTexture = nullptr;
     }
-#if !defined(__EMSCRIPTEN__)
-    // wgpuSurfacePresent is not needed on Emscripten - browser handles via requestAnimationFrame
     wgpuSurfacePresent(_surface);
+#else
+    // On Emscripten: move texture to "pending release" - will be released in GPU-done callback
+    // This ensures GPU has finished using the texture before we release it
+    // Note: if there's already a pending texture, release it first (shouldn't happen normally)
+    if (_pendingReleaseTextureView) {
+        wgpuTextureViewRelease(_pendingReleaseTextureView);
+    }
+    if (_pendingReleaseTexture) {
+        wgpuTextureRelease(_pendingReleaseTexture);
+    }
+    _pendingReleaseTextureView = _currentTextureView;
+    _pendingReleaseTexture = _currentTexture;
+    _currentTextureView = nullptr;
+    _currentTexture = nullptr;
 #endif
 }
 
@@ -1905,6 +1936,14 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
     // Process GPU events so async callbacks (like render done) can fire
     wgpuInstanceProcessEvents(_instance);
 
+#if YETTY_WEB
+    // Web builds: drain EventQueue since libuv async wakeup is not available
+    // GPU callbacks may have pushed events that need to be processed
+    if (_eventQueue) {
+        _eventQueue->drain();
+    }
+#endif
+
     // Apply deferred resize before acquiring the surface texture
     if (_pendingResize) {
         _pendingResize = false;
@@ -1930,11 +1969,29 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
         }
     }
 
+#if defined(__EMSCRIPTEN__)
+    // On web: set _inRender BEFORE getting texture to protect it from resize events
+    // Resize events check _inRender and defer if true
+    // Without this, a resize between getCurrentTextureView and the later _inRender=true
+    // would destroy the texture we just acquired
+    if (_inRender) {
+        // Already rendering - remember we need another update
+        _nextScreenUpdateNeeded = true;
+        return Ok();
+    }
+    _inRender = true;  // Protect texture from resize events
+#endif
+
     // In headless mode, skip surface operations
     WGPUTextureView targetView = nullptr;
     if (!_vncHeadless) {
         auto viewResult = getCurrentTextureView();
-        if (!viewResult) return Err<void>("Failed to get texture view");
+        if (!viewResult) {
+#if defined(__EMSCRIPTEN__)
+            _inRender = false;  // Failed to get texture, allow resize
+#endif
+            return Err<void>("Failed to get texture view");
+        }
         targetView = *viewResult;
     }
 
@@ -1999,7 +2056,9 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
     uint32_t captureW = (_vncServerMode && _vncRequestedWidth > 0) ? _vncRequestedWidth : static_cast<uint32_t>(windowWidth);
     uint32_t captureH = (_vncServerMode && _vncRequestedHeight > 0) ? _vncRequestedHeight : static_cast<uint32_t>(windowHeight);
 
+#if !defined(__EMSCRIPTEN__)
     // Skip GPU work if already rendering, but remember we need another update
+    // On web, this check is done earlier (before getCurrentTextureView) to protect texture
     if (_inRender) {
         auto t = std::chrono::high_resolution_clock::now();
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
@@ -2008,12 +2067,13 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
         return Ok();
     }
 
+    // Mark rendering in progress — cleared by wgpuQueueOnSubmittedWorkDone callback
+    _inRender = true;
+#endif
+
     auto t = std::chrono::high_resolution_clock::now();
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
     yinfo("[TIME] STARTING GPU at {}ms", ms);
-
-    // Mark rendering in progress — cleared by wgpuQueueOnSubmittedWorkDone callback
-    _inRender = true;
 
     if (doCapture && captureW > 0 && captureH > 0) {
         // Ensure capture resources match requested size
@@ -2213,6 +2273,18 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
 
         auto* self = static_cast<YettyImpl*>(ud1);
         self->_inRender = false;
+
+#if defined(__EMSCRIPTEN__)
+        // Web: NOW it's safe to release the texture - GPU has finished using it
+        if (self->_pendingReleaseTextureView) {
+            wgpuTextureViewRelease(self->_pendingReleaseTextureView);
+            self->_pendingReleaseTextureView = nullptr;
+        }
+        if (self->_pendingReleaseTexture) {
+            wgpuTextureRelease(self->_pendingReleaseTexture);
+            self->_pendingReleaseTexture = nullptr;
+        }
+#endif
 
         // If ScreenUpdate was needed while rendering, dispatch it now
         if (self->_nextScreenUpdateNeeded.exchange(false)) {
