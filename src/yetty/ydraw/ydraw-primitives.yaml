@@ -1182,3 +1182,85 @@ primitives:
         type: f32
         count_field: vertexCount
         multiplier: 2  # x,y pairs
+
+  # =========================================================================
+  # Gradient primitives — shapes with linear/radial gradient fills
+  # =========================================================================
+
+  - name: LinearGradientBox
+    id: 132
+    category: sdf2d
+    description: |
+      Box/rectangle with linear gradient fill. Supports 2 color stops.
+      Gradient direction is defined by (gx1,gy1) to (gx2,gy2).
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: cx,          type: f32 }  # box center x
+      - { name: cy,          type: f32 }  # box center y
+      - { name: hw,          type: f32 }  # half width
+      - { name: hh,          type: f32 }  # half height
+      - { name: gx1,         type: f32 }  # gradient start x
+      - { name: gy1,         type: f32 }  # gradient start y
+      - { name: gx2,         type: f32 }  # gradient end x
+      - { name: gy2,         type: f32 }  # gradient end y
+      - { name: color1,      type: u32 }  # start color (ABGR)
+      - { name: color2,      type: u32 }  # end color (ABGR)
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let center = vec2<f32>({cx}, {cy});
+      let halfSize = vec2<f32>({hw}, {hh});
+      let round = {round};
+      return sdBox(p, center, halfSize, round);
+
+  - name: LinearGradientCircle
+    id: 133
+    category: sdf2d
+    description: |
+      Circle with linear gradient fill. Supports 2 color stops.
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: cx,          type: f32 }  # circle center x
+      - { name: cy,          type: f32 }  # circle center y
+      - { name: r,           type: f32 }  # radius
+      - { name: gx1,         type: f32 }  # gradient start x
+      - { name: gy1,         type: f32 }  # gradient start y
+      - { name: gx2,         type: f32 }  # gradient end x
+      - { name: gy2,         type: f32 }  # gradient end y
+      - { name: color1,      type: u32 }  # start color (ABGR)
+      - { name: color2,      type: u32 }  # end color (ABGR)
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let center = vec2<f32>({cx}, {cy});
+      let radius = {r};
+      return sdCircle(p, center, radius);
+
+  - name: RadialGradientCircle
+    id: 134
+    category: sdf2d
+    description: |
+      Circle with radial gradient fill. Supports 2 color stops.
+      Gradient goes from center (color1) to edge (color2).
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: cx,          type: f32 }  # circle center x
+      - { name: cy,          type: f32 }  # circle center y
+      - { name: r,           type: f32 }  # radius
+      - { name: gcx,         type: f32 }  # gradient center x
+      - { name: gcy,         type: f32 }  # gradient center y
+      - { name: gr,          type: f32 }  # gradient radius
+      - { name: color1,      type: u32 }  # center color (ABGR)
+      - { name: color2,      type: u32 }  # edge color (ABGR)
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    eval: |
+      let center = vec2<f32>({cx}, {cy});
+      let radius = {r};
+      return sdCircle(p, center, radius);

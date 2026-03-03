@@ -16,6 +16,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <limits>
 #include <numeric>
 #include <unordered_map>
@@ -411,6 +412,41 @@ static void computeAABB(const float* data, uint32_t wc,
             } else {
                 aabbMinX = 0; aabbMinY = 0; aabbMaxX = 0; aabbMaxY = 0;
             }
+            break;
+        }
+        case SDFType::LinearGradientBox: {
+            // Layout: type(0), layer(1), cx(2), cy(3), hw(4), hh(5), gx1(6), gy1(7), gx2(8), gy2(9), 
+            //         color1(10), color2(11), strokeColor(12), strokeWidth(13), round(14)
+            float cx = p[0], cy = p[1], hw = p[2], hh = p[3];
+            strokeWidth = data[13];
+            float r = data[14];  // round
+            float expand = strokeWidth * 0.5f;
+            aabbMinX = cx - hw - r - expand;
+            aabbMinY = cy - hh - r - expand;
+            aabbMaxX = cx + hw + r + expand;
+            aabbMaxY = cy + hh + r + expand;
+            break;
+        }
+        case SDFType::LinearGradientCircle: {
+            // Layout: type(0), layer(1), cx(2), cy(3), r(4), ...
+            float cx = p[0], cy = p[1], r = p[2];
+            strokeWidth = data[12];
+            float expand = strokeWidth * 0.5f;
+            aabbMinX = cx - r - expand;
+            aabbMinY = cy - r - expand;
+            aabbMaxX = cx + r + expand;
+            aabbMaxY = cy + r + expand;
+            break;
+        }
+        case SDFType::RadialGradientCircle: {
+            // Layout: type(0), layer(1), cx(2), cy(3), r(4), ...
+            float cx = p[0], cy = p[1], r = p[2];
+            strokeWidth = data[11];
+            float expand = strokeWidth * 0.5f;
+            aabbMinX = cx - r - expand;
+            aabbMinY = cy - r - expand;
+            aabbMaxX = cx + r + expand;
+            aabbMaxY = cy + r + expand;
             break;
         }
         default:
@@ -917,6 +953,10 @@ public:
                 if (!primResult) return Err<void>("allocateBuffers: prim alloc failed", primResult);
                 _primHandle = *primResult;
 
+                std::cerr << "allocateBuffers: primHandle.offset=" << _primHandle.offset 
+                          << " size=" << _primHandle.size 
+                          << " words=" << (_primHandle.offset / sizeof(float)) << std::endl;
+
                 float* buf = reinterpret_cast<float*>(_primHandle.data);
                 _buffer->writeGPU(buf, _primHandle.size, _primWordOffsets);
                 bufMgr->markBufferDirty(_primHandle);
@@ -929,6 +969,10 @@ public:
             auto derivedResult = bufMgr->allocateBuffer(_metaSlotIndex, "derived", derivedSize);
             if (!derivedResult) return Err<void>("allocateBuffers: derived alloc failed", derivedResult);
             _derivedHandle = *derivedResult;
+
+            std::cerr << "allocateBuffers: derivedHandle.offset=" << _derivedHandle.offset 
+                      << " size=" << _derivedHandle.size 
+                      << " words=" << (_derivedHandle.offset / sizeof(float)) << std::endl;
 
             if (auto res = writeDerived(); !res) return res;
             bufMgr->markBufferDirty(_derivedHandle);
@@ -1035,11 +1079,17 @@ public:
     Result<void> writeBuffers() override {
         if (!_cardMgr) return Err<void>("writeBuffers: no CardManager");
 
+        std::cerr << "writeBuffers: bufferDirty=" << _bufferDirty 
+                  << " metaDirty=" << _metadataDirty 
+                  << " primHandle=" << _primHandle.isValid()
+                  << " derivedHandle=" << _derivedHandle.isValid() << std::endl;
+
         if (_bufferDirty) {
             auto bufMgr = _cardMgr->bufferManager();
 
             // Re-write prims
             if (_primHandle.isValid() && !_buffer->empty()) {
+                std::cerr << "writeBuffers: re-writing prims" << std::endl;
                 float* buf = reinterpret_cast<float*>(_primHandle.data);
                 _buffer->writeGPU(buf, _primHandle.size, _primWordOffsets);
                 bufMgr->markBufferDirty(_primHandle);
@@ -1047,6 +1097,7 @@ public:
 
             // Re-write derived (grid + glyphs + atlas header)
             if (_derivedHandle.isValid()) {
+                std::cerr << "writeBuffers: re-writing derived" << std::endl;
                 if (auto res = writeDerived(); !res) return res;
                 bufMgr->markBufferDirty(_derivedHandle);
             }
@@ -1407,7 +1458,7 @@ public:
             uint32_t type = sdf::detail::read_u32(data, 0);
             float minX, minY, maxX, maxY;
             computeAABB(data, wc, minX, minY, maxX, maxY);
-            if (type >= 100) {
+            if (type >= 100 && type < 128) {
                 _flags |= FLAG_HAS_3D;
             }
             _primBounds.push_back({minX, minY, maxX, maxY, type});
@@ -1418,7 +1469,8 @@ public:
             _sceneMinX = 1e10f; _sceneMinY = 1e10f;
             _sceneMaxX = -1e10f; _sceneMaxY = -1e10f;
             for (const auto& pb : _primBounds) {
-                if (pb.type >= 100) continue;
+                bool is3D = (pb.type >= 100 && pb.type < 128);
+                if (is3D) continue;
                 _sceneMinX = std::min(_sceneMinX, pb.minX);
                 _sceneMinY = std::min(_sceneMinY, pb.minY);
                 _sceneMaxX = std::max(_sceneMaxX, pb.maxX);
@@ -1447,7 +1499,10 @@ public:
 
         uint32_t num2DPrims = 0;
         for (const auto& pb : _primBounds) {
-            if (pb.type < 100) num2DPrims++;
+            // 3D primitives are types 100-127, everything else is 2D
+            // (includes gradients 132-134, polygons 130-131, etc.)
+            bool is3D = (pb.type >= 100 && pb.type < 128);
+            if (!is3D) num2DPrims++;
         }
 
         if (num2DPrims > 0 || !_glyphs.empty()) {
@@ -1458,7 +1513,8 @@ public:
                 if (num2DPrims > 0) {
                     float avgPrimW = 0.0f, avgPrimH = 0.0f;
                     for (const auto& pb : _primBounds) {
-                        if (pb.type >= 100) continue;
+                        bool is3D = (pb.type >= 100 && pb.type < 128);
+                        if (is3D) continue;
                         avgPrimW += pb.maxX - pb.minX;
                         avgPrimH += pb.maxY - pb.minY;
                     }
@@ -1510,6 +1566,10 @@ public:
         _cellSizeX = csX;
         _cellSizeY = csY;
 
+        std::cerr << "YDrawBuilder::calculate: grid=" << gridW << "x" << gridH 
+                  << " scene=[" << _sceneMinX << "," << _sceneMinY << "]-[" 
+                  << _sceneMaxX << "," << _sceneMaxY << "] prims=" << _primBounds.size() << std::endl;
+
         yinfo("YDrawBuilder::calculate: grid={}x{} cellSize=({:.1f},{:.1f}) prims={} glyphs={} scene=[{:.0f},{:.0f}]-[{:.0f},{:.0f}]",
               gridW, gridH, csX, csY, _primBounds.size(), _glyphs.size(),
               _sceneMinX, _sceneMinY, _sceneMaxX, _sceneMaxY);
@@ -1519,7 +1579,8 @@ public:
         std::vector<uint32_t> cellCounts(numCells, 0);
 
         for (const auto& pb : _primBounds) {
-            if (pb.type >= 100) continue;
+            bool is3D = (pb.type >= 100 && pb.type < 128);
+            if (is3D) continue;
             uint32_t cMinX = static_cast<uint32_t>(std::clamp((pb.minX - _sceneMinX) / csX, 0.0f, float(gridW - 1)));
             uint32_t cMaxX = static_cast<uint32_t>(std::clamp((pb.maxX - _sceneMinX) / csX, 0.0f, float(gridW - 1)));
             uint32_t cMinY = static_cast<uint32_t>(std::clamp((pb.minY - _sceneMinY) / csY, 0.0f, float(gridH - 1)));
@@ -1554,7 +1615,8 @@ public:
         // Pass 2: fill entries
         for (uint32_t primIdx = 0; primIdx < static_cast<uint32_t>(_primBounds.size()); primIdx++) {
             const auto& pb = _primBounds[primIdx];
-            if (pb.type >= 100) continue;
+            bool is3D = (pb.type >= 100 && pb.type < 128);
+            if (is3D) continue;
             uint32_t cMinX = static_cast<uint32_t>(std::clamp((pb.minX - _sceneMinX) / csX, 0.0f, float(gridW - 1)));
             uint32_t cMaxX = static_cast<uint32_t>(std::clamp((pb.maxX - _sceneMinX) / csX, 0.0f, float(gridW - 1)));
             uint32_t cMinY = static_cast<uint32_t>(std::clamp((pb.minY - _sceneMinY) / csY, 0.0f, float(gridH - 1)));
@@ -1649,6 +1711,13 @@ private:
         meta.flags = (_flags & 0xFFFF) | (zoomBits << 16);
         meta.bgColor = _bgColor;
 
+        std::cerr << "flushMetadata: primOff=" << meta.primitiveOffset 
+                  << " primCnt=" << meta.primitiveCount
+                  << " gridOff=" << meta.gridOffset
+                  << " grid=" << meta.gridWidth << "x" << meta.gridHeight
+                  << " scene=[" << _sceneMinX << "," << _sceneMinY << "]-[" 
+                  << _sceneMaxX << "," << _sceneMaxY << "]" << std::endl;
+
         return _cardMgr->writeMetadata(
             MetadataHandle{_metaSlotIndex * 64, 64}, &meta, sizeof(meta));
     }
@@ -1677,6 +1746,9 @@ private:
         // Copy grid and translate prim indices to word offsets
         uint32_t gridBytes = static_cast<uint32_t>(_gridStaging.size()) * sizeof(uint32_t);
         _gpuGridOffset = (_derivedHandle.offset + offset) / sizeof(float);
+        std::cerr << "writeDerived: gridSize=" << _gridStaging.size() 
+                  << " gridOffset=" << _gpuGridOffset 
+                  << " primWordOffsets.size=" << _primWordOffsets.size() << std::endl;
         if (!_gridStaging.empty()) {
             std::memcpy(base + offset, _gridStaging.data(), gridBytes);
             // Translate prim indices in grid entries to word offsets
@@ -1688,15 +1760,21 @@ private:
                     uint32_t packedOff = gridPtr[ci];
                     if (packedOff >= gridSize) continue;
                     uint32_t cnt = gridPtr[packedOff];
+                    std::cerr << "  cell[" << ci << "]: packedOff=" << packedOff << " cnt=" << cnt;
                     for (uint32_t j = 0; j < cnt; j++) {
                         uint32_t idx = packedOff + 1 + j;
                         if (idx >= gridSize) break;
                         uint32_t rawVal = gridPtr[idx];
-                        if ((rawVal & 0x80000000u) != 0) continue;
+                        if ((rawVal & 0x80000000u) != 0) {
+                            std::cerr << " glyph:" << (rawVal & 0x7FFFFFFFu);
+                            continue;
+                        }
                         if (rawVal < static_cast<uint32_t>(_primWordOffsets.size())) {
+                            std::cerr << " prim:" << rawVal << "->" << _primWordOffsets[rawVal];
                             gridPtr[idx] = _primWordOffsets[rawVal];
                         }
                     }
+                    std::cerr << std::endl;
                 }
             }
         }

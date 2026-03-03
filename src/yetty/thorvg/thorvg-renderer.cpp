@@ -9,6 +9,7 @@
 #include <ytrace/ytrace.hpp>
 #include <algorithm>
 #include <cstring>
+#include <iostream>
 #include <mutex>
 #include <stack>
 #include <vector>
@@ -190,6 +191,7 @@ public:
         // Use Accessor to traverse, computing world transforms via parent chain
         renderWithAccessor(_picture);
 
+        std::cerr << "ThorVgRenderer::render: prims=" << _buffer->primCount() << std::endl;
         yinfo("ThorVgRenderer::render: frame={:.1f} prims before={} after={}", 
               _currentFrame, beforeCount, _buffer->primCount());
         return Ok();
@@ -298,20 +300,95 @@ private:
     void renderShape(const tvg::Shape* shape, const tvg::Matrix& m) {
         if (!shape) return;
 
-        // Get fill color (using getter overload)
+        // Get paint opacity (0-255) and apply to colors
+        uint8_t paintOpacity = shape->opacity();
+        
+        // Check for gradient fill
+        const tvg::Fill* gradientFill = shape->fill();
+        bool hasLinearGradient = false;
+        bool hasRadialGradient = false;
+        float gx1 = 0, gy1 = 0, gx2 = 0, gy2 = 0;  // Linear gradient endpoints
+        float gcx = 0, gcy = 0, gr = 0;             // Radial gradient params
+        uint32_t gradColor1 = 0, gradColor2 = 0;
+        
+        if (gradientFill) {
+            auto fillType = gradientFill->type();
+            if (fillType == tvg::Type::LinearGradient) {
+                hasLinearGradient = true;
+                auto* lg = static_cast<const tvg::LinearGradient*>(gradientFill);
+                lg->linear(&gx1, &gy1, &gx2, &gy2);
+                // Transform gradient endpoints by matrix
+                tvg::Point gStart = transformPoint({gx1, gy1}, m);
+                tvg::Point gEnd = transformPoint({gx2, gy2}, m);
+                gx1 = gStart.x; gy1 = gStart.y;
+                gx2 = gEnd.x; gy2 = gEnd.y;
+                
+                // Get color stops
+                const tvg::Fill::ColorStop* stops = nullptr;
+                uint32_t stopCount = gradientFill->colorStops(&stops);
+                if (stopCount >= 2 && stops) {
+                    gradColor1 = rgbaToPackedABGR(stops[0].r, stops[0].g, stops[0].b, 
+                        static_cast<uint8_t>((stops[0].a * paintOpacity) / 255));
+                    gradColor2 = rgbaToPackedABGR(stops[stopCount-1].r, stops[stopCount-1].g, stops[stopCount-1].b,
+                        static_cast<uint8_t>((stops[stopCount-1].a * paintOpacity) / 255));
+                } else if (stopCount == 1 && stops) {
+                    gradColor1 = gradColor2 = rgbaToPackedABGR(stops[0].r, stops[0].g, stops[0].b,
+                        static_cast<uint8_t>((stops[0].a * paintOpacity) / 255));
+                }
+            } else if (fillType == tvg::Type::RadialGradient) {
+                hasRadialGradient = true;
+                auto* rg = static_cast<const tvg::RadialGradient*>(gradientFill);
+                float fx = 0, fy = 0, fr = 0;  // focal point (ignored for now)
+                rg->radial(&gcx, &gcy, &gr, &fx, &fy, &fr);
+                // Transform gradient center by matrix (radius needs scale)
+                tvg::Point gCenter = transformPoint({gcx, gcy}, m);
+                gcx = gCenter.x; gcy = gCenter.y;
+                // Approximate radius scale (use x-scale)
+                gr = gr * std::sqrt(m.e11 * m.e11 + m.e21 * m.e21);
+                
+                // Get color stops
+                const tvg::Fill::ColorStop* stops = nullptr;
+                uint32_t stopCount = gradientFill->colorStops(&stops);
+                if (stopCount >= 2 && stops) {
+                    gradColor1 = rgbaToPackedABGR(stops[0].r, stops[0].g, stops[0].b,
+                        static_cast<uint8_t>((stops[0].a * paintOpacity) / 255));
+                    gradColor2 = rgbaToPackedABGR(stops[stopCount-1].r, stops[stopCount-1].g, stops[stopCount-1].b,
+                        static_cast<uint8_t>((stops[stopCount-1].a * paintOpacity) / 255));
+                } else if (stopCount == 1 && stops) {
+                    gradColor1 = gradColor2 = rgbaToPackedABGR(stops[0].r, stops[0].g, stops[0].b,
+                        static_cast<uint8_t>((stops[0].a * paintOpacity) / 255));
+                }
+            }
+        }
+        
+        // Get fill color (using getter overload) - for solid fills
         uint8_t fr = 0, fg = 0, fb = 0, fa = 0;
         shape->fill(&fr, &fg, &fb, &fa);
+        // Apply paint opacity to fill alpha
+        fa = static_cast<uint8_t>((static_cast<uint32_t>(fa) * paintOpacity) / 255);
         uint32_t fillColor = (fa > 0) ? rgbaToPackedABGR(fr, fg, fb, fa) : 0;
+        
+        // If we have a gradient, use it instead of solid fill
+        if (hasLinearGradient || hasRadialGradient) {
+            fillColor = gradColor1;  // For now, use first color as fallback
+        }
 
         // Get stroke
         float strokeWidth = shape->strokeWidth();
         uint8_t sr = 0, sg = 0, sb = 0, sa = 0;
         shape->strokeFill(&sr, &sg, &sb, &sa);
+        // Apply paint opacity to stroke alpha
+        sa = static_cast<uint8_t>((static_cast<uint32_t>(sa) * paintOpacity) / 255);
         uint32_t strokeColor = (sa > 0 && strokeWidth > 0)
                                ? rgbaToPackedABGR(sr, sg, sb, sa) : 0;
 
+        // Get stroke dash pattern
+        const float* dashPattern = nullptr;
+        float dashOffset = 0.0f;
+        uint32_t dashCount = shape->strokeDash(&dashPattern, &dashOffset);
+
         // Skip invisible shapes
-        if (fillColor == 0 && strokeColor == 0) return;
+        if (fillColor == 0 && strokeColor == 0 && !hasLinearGradient && !hasRadialGradient) return;
 
         // Get path data using the combined path() method
         const tvg::PathCommand* cmds = nullptr;
@@ -325,8 +402,112 @@ private:
 
         if (cmdCount == 0 || ptCount == 0) return;
 
+        // For gradient fills on boxes, try to detect and emit gradient box primitive
+        if ((hasLinearGradient || hasRadialGradient) && (gradColor1 != 0 || gradColor2 != 0)) {
+            if (tryRenderAsGradientBox(cmds, cmdCount, pts, ptCount, m,
+                                       hasLinearGradient, gx1, gy1, gx2, gy2,
+                                       gcx, gcy, gr, gradColor1, gradColor2,
+                                       strokeColor, strokeWidth)) {
+                return;
+            }
+        }
+
         // Convert path to YDraw primitives with full matrix transform
-        renderPath(cmds, cmdCount, pts, ptCount, m, fillColor, strokeColor, strokeWidth);
+        renderPath(cmds, cmdCount, pts, ptCount, m, fillColor, strokeColor, strokeWidth,
+                   dashPattern, dashCount, dashOffset);
+    }
+
+    // Try to render a gradient-filled box
+    bool tryRenderAsGradientBox(const tvg::PathCommand* cmds, uint32_t cmdCount,
+                                const tvg::Point* pts, uint32_t ptCount,
+                                const tvg::Matrix& m,
+                                bool hasLinearGradient,
+                                float gx1, float gy1, float gx2, float gy2,
+                                float gcx, float gcy, float gr,
+                                uint32_t gradColor1, uint32_t gradColor2,
+                                uint32_t strokeColor, float strokeWidth) {
+        // Check for simple rectangle pattern: MoveTo + 3*LineTo + Close
+        if (cmdCount != 5) {
+            yinfo("tryRenderAsGradientBox: cmdCount={} (expected 5)", cmdCount);
+            return false;
+        }
+        if (cmds[0] != tvg::PathCommand::MoveTo) return false;
+        if (cmds[1] != tvg::PathCommand::LineTo) return false;
+        if (cmds[2] != tvg::PathCommand::LineTo) return false;
+        if (cmds[3] != tvg::PathCommand::LineTo) return false;
+        if (cmds[4] != tvg::PathCommand::Close) return false;
+        if (ptCount < 4) return false;
+        
+        // Transform all points
+        tvg::Point p0 = transformPoint(pts[0], m);
+        tvg::Point p1 = transformPoint(pts[1], m);
+        tvg::Point p2 = transformPoint(pts[2], m);
+        tvg::Point p3 = transformPoint(pts[3], m);
+        
+        // Find bounding box
+        float minX = std::min({p0.x, p1.x, p2.x, p3.x});
+        float maxX = std::max({p0.x, p1.x, p2.x, p3.x});
+        float minY = std::min({p0.y, p1.y, p2.y, p3.y});
+        float maxY = std::max({p0.y, p1.y, p2.y, p3.y});
+        
+        float cx = (minX + maxX) * 0.5f;
+        float cy = (minY + maxY) * 0.5f;
+        float hw = (maxX - minX) * 0.5f;
+        float hh = (maxY - minY) * 0.5f;
+        
+        // Convert gradient coordinates from normalized (0-1) to world coordinates
+        // if they look like percentage values (small range)
+        float worldGx1 = gx1, worldGy1 = gy1, worldGx2 = gx2, worldGy2 = gy2;
+        if (hasLinearGradient && std::abs(gx2 - gx1) <= 1.0f && std::abs(gy2 - gy1) <= 1.0f) {
+            // Looks like normalized coordinates - scale to box
+            worldGx1 = minX + gx1 * (maxX - minX);
+            worldGy1 = minY + gy1 * (maxY - minY);
+            worldGx2 = minX + gx2 * (maxX - minX);
+            worldGy2 = minY + gy2 * (maxY - minY);
+        }
+        
+        float worldGcx = gcx, worldGcy = gcy, worldGr = gr;
+        if (!hasLinearGradient && std::abs(gcx) <= 1.0f && std::abs(gcy) <= 1.0f) {
+            // Radial - scale center and radius to box
+            worldGcx = minX + gcx * (maxX - minX);
+            worldGcy = minY + gcy * (maxY - minY);
+            worldGr = gr * std::max(maxX - minX, maxY - minY);
+        }
+        
+        yinfo("tryRenderAsGradientBox: linear={} box=({},{}) {}x{} grad=({},{})→({},{}) colors=0x{:08x},0x{:08x}",
+              hasLinearGradient, cx, cy, hw*2, hh*2, worldGx1, worldGy1, worldGx2, worldGy2, gradColor1, gradColor2);
+        
+        if (hasLinearGradient) {
+            auto result = _buffer->addLinearGradientBox(
+                0,              // layer
+                cx, cy, hw, hh, // box params
+                worldGx1, worldGy1, worldGx2, worldGy2, // gradient endpoints (world coords)
+                gradColor1, gradColor2,
+                strokeColor, strokeWidth,
+                0.0f            // round
+            );
+            if (result) {
+                _nextPrimId++;
+                return true;
+            }
+        } else {
+            // Radial gradient
+            auto result = _buffer->addRadialGradientCircle(
+                0,              // layer
+                cx, cy,         // circle center
+                std::max(hw, hh), // radius (use larger extent)
+                worldGcx, worldGcy, worldGr,   // gradient center and radius (world coords)
+                gradColor1, gradColor2,
+                strokeColor, strokeWidth,
+                0.0f            // round
+            );
+            if (result) {
+                _nextPrimId++;
+                return true;
+            }
+        }
+        
+        return false;
     }
 
     // Check if path is an ellipse (MoveTo + 4 CubicTo + Close pattern)
@@ -361,7 +542,8 @@ private:
         float rx = (maxX - minX) / 2.0f;
         float ry = (maxY - minY) / 2.0f;
         
-        yinfo("Ellipse detected: center=({},{}) radii=({},{}) fill=0x{:08X}", cx, cy, rx, ry, fillColor);
+        std::cerr << "Ellipse: cx=" << cx << " cy=" << cy << " rx=" << rx << " ry=" << ry 
+                  << " fill=0x" << std::hex << fillColor << " stroke=0x" << strokeColor << std::dec << std::endl;
         
         auto result = _buffer->addEllipse(
             0,              // layer
@@ -418,6 +600,22 @@ private:
         
         if (!isSimpleRect && !isRoundedRect) return false;
         
+        // Calculate corner radius for rounded rectangles
+        // Rounded rect path: MoveTo(1pt), LineTo(1pt), CubicTo(3pts), repeated 4 times + Close
+        // For cubic bezier approximating a quarter circle, control point is at ~0.552*r from curve start
+        float cornerRadius = 0.0f;
+        if (isRoundedRect && ptCount >= 5) {
+            // First LineTo ends at pts[1], first CubicTo uses pts[2..4]
+            // The corner radius is: distance from lineEnd to first control point / 0.552
+            tvg::Point lineEnd = transformPoint(pts[1], m);
+            tvg::Point bezierCP1 = transformPoint(pts[2], m);
+            float dx = bezierCP1.x - lineEnd.x;
+            float dy = bezierCP1.y - lineEnd.y;
+            float dist = std::sqrt(dx * dx + dy * dy);
+            // Magic number for cubic bezier circle approximation: 4/3 * tan(pi/8) ≈ 0.5522847
+            cornerRadius = dist / 0.5522847f;
+        }
+        
         // For simple rect, verify it's actually an axis-aligned rectangle
         // (has exactly 2 unique X values and 2 unique Y values)
         if (isSimpleRect) {
@@ -464,7 +662,7 @@ private:
         float hw = (maxX - minX) / 2.0f;  // half width
         float hh = (maxY - minY) / 2.0f;  // half height
         
-        yinfo("Box detected: center=({},{}) halfSize=({},{}) fill=0x{:08X}", cx, cy, hw, hh, fillColor);
+        yinfo("Box detected: center=({},{}) halfSize=({},{}) round={} fill=0x{:08X}", cx, cy, hw, hh, cornerRadius, fillColor);
         
         auto result = _buffer->addBox(
             0,              // layer
@@ -473,7 +671,7 @@ private:
             fillColor,
             strokeColor,
             strokeWidth,
-            0.0f            // round (could extract corner radius for RoundedBox)
+            cornerRadius    // round
         );
         if (result) _nextPrimId++;
         return true;
@@ -567,18 +765,72 @@ private:
         return true;
     }
 
+    // Render a dashed line segment by breaking it into visible dash segments
+    void renderDashedSegment(float x0, float y0, float x1, float y1,
+                             uint32_t strokeColor, float strokeWidth,
+                             const float* dashPattern, uint32_t dashCount,
+                             float& dashPos, uint32_t& dashIdx, bool& dashVisible) {
+        float dx = x1 - x0;
+        float dy = y1 - y0;
+        float segLen = std::sqrt(dx * dx + dy * dy);
+        if (segLen < 0.001f) return;
+        
+        float ux = dx / segLen;  // Unit vector
+        float uy = dy / segLen;
+        
+        float pos = 0.0f;  // Position along this segment
+        float curX = x0, curY = y0;
+        
+        while (pos < segLen) {
+            float dashLen = dashPattern[dashIdx];
+            float remaining = dashLen - dashPos;
+            float advance = std::min(remaining, segLen - pos);
+            
+            float nextX = curX + ux * advance;
+            float nextY = curY + uy * advance;
+            
+            if (dashVisible && advance > 0.001f) {
+                // Draw this dash segment
+                auto result = _buffer->addSegment(
+                    0, curX, curY, nextX, nextY,
+                    0,  // fillColor
+                    strokeColor,
+                    strokeWidth,
+                    0.0f
+                );
+                if (result) _nextPrimId++;
+            }
+            
+            pos += advance;
+            dashPos += advance;
+            curX = nextX;
+            curY = nextY;
+            
+            // Move to next dash/gap if current one is complete
+            if (dashPos >= dashLen - 0.001f) {
+                dashPos = 0.0f;
+                dashIdx = (dashIdx + 1) % dashCount;
+                dashVisible = !dashVisible;
+            }
+        }
+    }
+
     void renderPath(const tvg::PathCommand* cmds, uint32_t cmdCount,
                     const tvg::Point* pts, uint32_t ptCount,
                     const tvg::Matrix& m,
-                    uint32_t fillColor, uint32_t strokeColor, float strokeWidth) {
+                    uint32_t fillColor, uint32_t strokeColor, float strokeWidth,
+                    const float* dashPattern = nullptr, uint32_t dashCount = 0, float dashOffset = 0.0f) {
         
-        // Try to render as ellipse first (for Lottie circles)
-        if (tryRenderAsEllipse(cmds, cmdCount, pts, ptCount, m, fillColor, strokeColor, strokeWidth)) {
+        // Check if we have a dash pattern - if so, skip shape shortcuts that don't support dashing
+        bool hasDash = dashPattern != nullptr && dashCount >= 2;
+        
+        // Try to render as ellipse first (for Lottie circles) - skip if dashed stroke
+        if (!hasDash && tryRenderAsEllipse(cmds, cmdCount, pts, ptCount, m, fillColor, strokeColor, strokeWidth)) {
             return;
         }
         
-        // Try to render as box (for Lottie rectangles)
-        if (tryRenderAsBox(cmds, cmdCount, pts, ptCount, m, fillColor, strokeColor, strokeWidth)) {
+        // Try to render as box (for Lottie rectangles) - skip if dashed stroke
+        if (!hasDash && tryRenderAsBox(cmds, cmdCount, pts, ptCount, m, fillColor, strokeColor, strokeWidth)) {
             return;
         }
         
@@ -590,6 +842,11 @@ private:
         tvg::Point current = {0, 0};
         tvg::Point start = {0, 0};
         uint32_t ptIdx = 0;
+        
+        // For dash patterns, track position along path
+        float dashPos = dashOffset;  // Current position in dash pattern
+        uint32_t dashIdx = 0;        // Current dash/gap index
+        bool dashVisible = true;     // Whether we're in a dash (vs gap)
 
         for (uint32_t i = 0; i < cmdCount && ptIdx < ptCount; ++i) {
             switch (cmds[i]) {
@@ -604,16 +861,25 @@ private:
                     if (ptIdx < ptCount) {
                         tvg::Point next = transformPoint(pts[ptIdx++], m);
                         
-                        auto result = _buffer->addSegment(
-                            0,                    // layer
-                            current.x, current.y, // start
-                            next.x, next.y,       // end
-                            fillColor,
-                            strokeColor,
-                            strokeWidth,
-                            0.0f                  // round
-                        );
-                        if (result) _nextPrimId++;
+                        if (hasDash && strokeColor != 0) {
+                            // Render dashed line
+                            renderDashedSegment(current.x, current.y, next.x, next.y,
+                                               strokeColor, strokeWidth,
+                                               dashPattern, dashCount,
+                                               dashPos, dashIdx, dashVisible);
+                        } else {
+                            // Render solid line
+                            auto result = _buffer->addSegment(
+                                0,                    // layer
+                                current.x, current.y, // start
+                                next.x, next.y,       // end
+                                fillColor,
+                                strokeColor,
+                                strokeWidth,
+                                0.0f                  // round
+                            );
+                            if (result) _nextPrimId++;
+                        }
                         current = next;
                     }
                     break;

@@ -71,6 +71,9 @@ const SDF_PLOT: u32 = 128u;
 const SDF_IMAGE: u32 = 129u;
 const SDF_POLYGON: u32 = 130u;
 const SDF_POLYGON_GROUP: u32 = 131u;
+const SDF_LINEAR_GRADIENT_BOX: u32 = 132u;
+const SDF_LINEAR_GRADIENT_CIRCLE: u32 = 133u;
+const SDF_RADIAL_GRADIENT_CIRCLE: u32 = 134u;
 
 fn evalSDF(primOffset: u32, p: vec2<f32>) -> f32 {
     let primType = bitcast<u32>(cardStorage[primOffset + 0u]);
@@ -288,6 +291,22 @@ fn evalSDF(primOffset: u32, p: vec2<f32>) -> f32 {
             let dist = length(d);
             let ringDist = abs(dist - (cardStorage[primOffset + 5u] + cardStorage[primOffset + 4u]) * 0.5) - (cardStorage[primOffset + 4u] - cardStorage[primOffset + 5u]) * 0.5;
             return ringDist;
+        }
+        case SDF_LINEAR_GRADIENT_BOX: {
+            let center = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
+            let halfSize = vec2<f32>(cardStorage[primOffset + 4u], cardStorage[primOffset + 5u]);
+            let round = cardStorage[primOffset + 14u];
+            return sdBox(p, center, halfSize, round);
+        }
+        case SDF_LINEAR_GRADIENT_CIRCLE: {
+            let center = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
+            let radius = cardStorage[primOffset + 4u];
+            return sdCircle(p, center, radius);
+        }
+        case SDF_RADIAL_GRADIENT_CIRCLE: {
+            let center = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
+            let radius = cardStorage[primOffset + 4u];
+            return sdCircle(p, center, radius);
         }
         default: {
             return 1e10;
@@ -720,7 +739,72 @@ fn primColors(primOffset: u32) -> vec4<u32> {
                 bitcast<u32>(cardStorage[primOffset + 1u]),
                 0u);
         }
+        case SDF_LINEAR_GRADIENT_BOX: {
+            return vec4<u32>(
+                bitcast<u32>(cardStorage[primOffset + 10u]),
+                bitcast<u32>(cardStorage[primOffset + 12u]),
+                bitcast<u32>(cardStorage[primOffset + 1u]),
+                1u);  // flag=1 indicates gradient type
+        }
+        case SDF_LINEAR_GRADIENT_CIRCLE: {
+            return vec4<u32>(
+                bitcast<u32>(cardStorage[primOffset + 9u]),
+                bitcast<u32>(cardStorage[primOffset + 11u]),
+                bitcast<u32>(cardStorage[primOffset + 1u]),
+                1u);  // flag=1 indicates gradient type
+        }
+        case SDF_RADIAL_GRADIENT_CIRCLE: {
+            return vec4<u32>(
+                bitcast<u32>(cardStorage[primOffset + 8u]),
+                bitcast<u32>(cardStorage[primOffset + 10u]),
+                bitcast<u32>(cardStorage[primOffset + 1u]),
+                1u);  // flag=1 indicates gradient type
+        }
         default: { return vec4<u32>(0u); }
+    }
+}
+
+fn isGradientPrim(primType: u32) -> bool {
+    switch (primType) {
+        case SDF_LINEAR_GRADIENT_BOX: { return true; }
+        case SDF_LINEAR_GRADIENT_CIRCLE: { return true; }
+        case SDF_RADIAL_GRADIENT_CIRCLE: { return true; }
+        default: { return false; }
+    }
+}
+
+fn evalGradientFillColor(primOffset: u32, p: vec2<f32>) -> vec4<f32> {
+    let primType = bitcast<u32>(cardStorage[primOffset + 0u]);
+    switch (primType) {
+        case SDF_LINEAR_GRADIENT_BOX: {
+            let gStart = vec2<f32>(cardStorage[primOffset + 6u], cardStorage[primOffset + 7u]);
+            let gEnd = vec2<f32>(cardStorage[primOffset + 8u], cardStorage[primOffset + 9u]);
+            let gDir = gEnd - gStart;
+            let gLen = length(gDir);
+            let t = clamp(dot(p - gStart, gDir) / (gLen * gLen), 0.0, 1.0);
+            let c1 = unpack4x8unorm(bitcast<u32>(cardStorage[primOffset + 10u]));
+            let c2 = unpack4x8unorm(bitcast<u32>(cardStorage[primOffset + 11u]));
+            return mix(c1, c2, t);
+        }
+        case SDF_LINEAR_GRADIENT_CIRCLE: {
+            let gStart = vec2<f32>(cardStorage[primOffset + 5u], cardStorage[primOffset + 6u]);
+            let gEnd = vec2<f32>(cardStorage[primOffset + 7u], cardStorage[primOffset + 8u]);
+            let gDir = gEnd - gStart;
+            let gLen = length(gDir);
+            let t = clamp(dot(p - gStart, gDir) / (gLen * gLen), 0.0, 1.0);
+            let c1 = unpack4x8unorm(bitcast<u32>(cardStorage[primOffset + 9u]));
+            let c2 = unpack4x8unorm(bitcast<u32>(cardStorage[primOffset + 10u]));
+            return mix(c1, c2, t);
+        }
+        case SDF_RADIAL_GRADIENT_CIRCLE: {
+            let gCenter = vec2<f32>(cardStorage[primOffset + 5u], cardStorage[primOffset + 6u]);
+            let gRadius = cardStorage[primOffset + 7u];
+            let t = clamp(length(p - gCenter) / gRadius, 0.0, 1.0);
+            let c1 = unpack4x8unorm(bitcast<u32>(cardStorage[primOffset + 8u]));
+            let c2 = unpack4x8unorm(bitcast<u32>(cardStorage[primOffset + 9u]));
+            return mix(c1, c2, t);
+        }
+        default: { return vec4<f32>(0.0); }
     }
 }
 
@@ -785,6 +869,9 @@ fn primStrokeWidth(primOffset: u32) -> f32 {
         case SDF_ELLIPSOID_3D: { return cardStorage[primOffset + 10u]; }
         case SDF_POLYGON: { return cardStorage[primOffset + 5u]; }
         case SDF_POLYGON_GROUP: { return cardStorage[primOffset + 6u]; }
+        case SDF_LINEAR_GRADIENT_BOX: { return cardStorage[primOffset + 13u]; }
+        case SDF_LINEAR_GRADIENT_CIRCLE: { return cardStorage[primOffset + 12u]; }
+        case SDF_RADIAL_GRADIENT_CIRCLE: { return cardStorage[primOffset + 11u]; }
         default: { return 0.0; }
     }
 }

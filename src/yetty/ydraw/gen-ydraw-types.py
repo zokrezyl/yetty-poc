@@ -197,13 +197,22 @@ def generate_wgsl(primitives: list[dict], out: Path) -> None:
         L.append("}\n")
 
     # --- primColors ---
+    # Include regular primitives with fillColor
     renderable = [
         p for p in primitives
         if "fillColor" in p["_offset_map"]
         and "strokeColor" in p["_offset_map"]
         and "layer" in p["_offset_map"]
     ]
-    if renderable:
+    # Also include gradient primitives (use color1 as fillColor equivalent)
+    gradient_prims = [
+        p for p in primitives
+        if "color1" in p["_offset_map"]
+        and "strokeColor" in p["_offset_map"]
+        and "layer" in p["_offset_map"]
+    ]
+    all_colorable = renderable + gradient_prims
+    if all_colorable:
         L.append("fn primColors(primOffset: u32) -> vec4<u32> {")
         L.append("    let primType = bitcast<u32>(cardStorage[primOffset + 0u]);")
         L.append("    switch (primType) {")
@@ -219,7 +228,74 @@ def generate_wgsl(primitives: list[dict], out: Path) -> None:
             L.append(f"                bitcast<u32>(cardStorage[primOffset + {layer_off}u]),")
             L.append(f"                0u);")
             L.append(f"        }}")
+        for prim in gradient_prims:
+            om = prim["_offset_map"]
+            # For gradients, use color1 as fill color (allows basic rendering)
+            color1_off = om["color1"][0]
+            stroke_off = om["strokeColor"][0]
+            layer_off = om["layer"][0]
+            L.append(f"        case {prim['_const_name']}: {{")
+            L.append(f"            return vec4<u32>(")
+            L.append(f"                bitcast<u32>(cardStorage[primOffset + {color1_off}u]),")
+            L.append(f"                bitcast<u32>(cardStorage[primOffset + {stroke_off}u]),")
+            L.append(f"                bitcast<u32>(cardStorage[primOffset + {layer_off}u]),")
+            L.append(f"                1u);  // flag=1 indicates gradient type")
+            L.append(f"        }}")
         L.append("        default: { return vec4<u32>(0u); }")
+        L.append("    }")
+        L.append("}\n")
+
+    # --- isGradientPrim ---
+    if gradient_prims:
+        L.append("fn isGradientPrim(primType: u32) -> bool {")
+        L.append("    switch (primType) {")
+        for prim in gradient_prims:
+            L.append(f"        case {prim['_const_name']}: {{ return true; }}")
+        L.append("        default: { return false; }")
+        L.append("    }")
+        L.append("}\n")
+
+    # --- evalGradientFillColor ---
+    # Computes gradient color for a given position
+    if gradient_prims:
+        L.append("fn evalGradientFillColor(primOffset: u32, p: vec2<f32>) -> vec4<f32> {")
+        L.append("    let primType = bitcast<u32>(cardStorage[primOffset + 0u]);")
+        L.append("    switch (primType) {")
+        for prim in gradient_prims:
+            om = prim["_offset_map"]
+            name = prim["name"]
+            if "LinearGradient" in name:
+                gx1_off = om["gx1"][0]
+                gy1_off = om["gy1"][0]
+                gx2_off = om["gx2"][0]
+                gy2_off = om["gy2"][0]
+                c1_off = om["color1"][0]
+                c2_off = om["color2"][0]
+                L.append(f"        case {prim['_const_name']}: {{")
+                L.append(f"            let gStart = vec2<f32>(cardStorage[primOffset + {gx1_off}u], cardStorage[primOffset + {gy1_off}u]);")
+                L.append(f"            let gEnd = vec2<f32>(cardStorage[primOffset + {gx2_off}u], cardStorage[primOffset + {gy2_off}u]);")
+                L.append(f"            let gDir = gEnd - gStart;")
+                L.append(f"            let gLen = length(gDir);")
+                L.append(f"            let t = clamp(dot(p - gStart, gDir) / (gLen * gLen), 0.0, 1.0);")
+                L.append(f"            let c1 = unpack4x8unorm(bitcast<u32>(cardStorage[primOffset + {c1_off}u]));")
+                L.append(f"            let c2 = unpack4x8unorm(bitcast<u32>(cardStorage[primOffset + {c2_off}u]));")
+                L.append(f"            return mix(c1, c2, t);")
+                L.append(f"        }}")
+            elif "RadialGradient" in name:
+                gcx_off = om["gcx"][0]
+                gcy_off = om["gcy"][0]
+                gr_off = om["gr"][0]
+                c1_off = om["color1"][0]
+                c2_off = om["color2"][0]
+                L.append(f"        case {prim['_const_name']}: {{")
+                L.append(f"            let gCenter = vec2<f32>(cardStorage[primOffset + {gcx_off}u], cardStorage[primOffset + {gcy_off}u]);")
+                L.append(f"            let gRadius = cardStorage[primOffset + {gr_off}u];")
+                L.append(f"            let t = clamp(length(p - gCenter) / gRadius, 0.0, 1.0);")
+                L.append(f"            let c1 = unpack4x8unorm(bitcast<u32>(cardStorage[primOffset + {c1_off}u]));")
+                L.append(f"            let c2 = unpack4x8unorm(bitcast<u32>(cardStorage[primOffset + {c2_off}u]));")
+                L.append(f"            return mix(c1, c2, t);")
+                L.append(f"        }}")
+        L.append("        default: { return vec4<f32>(0.0); }")
         L.append("    }")
         L.append("}\n")
 

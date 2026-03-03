@@ -78,6 +78,9 @@ enum class SDFType : uint32_t {
     Image = 129,
     Polygon = 130,
     PolygonGroup = 131,
+    LinearGradientBox = 132,
+    LinearGradientCircle = 133,
+    RadialGradientCircle = 134,
 };
 
 namespace sdf_field {
@@ -953,6 +956,60 @@ namespace PolygonGroup {
     constexpr uint32_t kStrokeWidth = 6;
     constexpr uint32_t kRound = 7;
     constexpr uint32_t kWordCount = 8;
+}
+
+namespace LinearGradientBox {
+    constexpr uint32_t kType = 0;
+    constexpr uint32_t kLayer = 1;
+    constexpr uint32_t kCx = 2;
+    constexpr uint32_t kCy = 3;
+    constexpr uint32_t kHw = 4;
+    constexpr uint32_t kHh = 5;
+    constexpr uint32_t kGx1 = 6;
+    constexpr uint32_t kGy1 = 7;
+    constexpr uint32_t kGx2 = 8;
+    constexpr uint32_t kGy2 = 9;
+    constexpr uint32_t kColor1 = 10;
+    constexpr uint32_t kColor2 = 11;
+    constexpr uint32_t kStrokeColor = 12;
+    constexpr uint32_t kStrokeWidth = 13;
+    constexpr uint32_t kRound = 14;
+    constexpr uint32_t kWordCount = 15;
+}
+
+namespace LinearGradientCircle {
+    constexpr uint32_t kType = 0;
+    constexpr uint32_t kLayer = 1;
+    constexpr uint32_t kCx = 2;
+    constexpr uint32_t kCy = 3;
+    constexpr uint32_t kR = 4;
+    constexpr uint32_t kGx1 = 5;
+    constexpr uint32_t kGy1 = 6;
+    constexpr uint32_t kGx2 = 7;
+    constexpr uint32_t kGy2 = 8;
+    constexpr uint32_t kColor1 = 9;
+    constexpr uint32_t kColor2 = 10;
+    constexpr uint32_t kStrokeColor = 11;
+    constexpr uint32_t kStrokeWidth = 12;
+    constexpr uint32_t kRound = 13;
+    constexpr uint32_t kWordCount = 14;
+}
+
+namespace RadialGradientCircle {
+    constexpr uint32_t kType = 0;
+    constexpr uint32_t kLayer = 1;
+    constexpr uint32_t kCx = 2;
+    constexpr uint32_t kCy = 3;
+    constexpr uint32_t kR = 4;
+    constexpr uint32_t kGcx = 5;
+    constexpr uint32_t kGcy = 6;
+    constexpr uint32_t kGr = 7;
+    constexpr uint32_t kColor1 = 8;
+    constexpr uint32_t kColor2 = 9;
+    constexpr uint32_t kStrokeColor = 10;
+    constexpr uint32_t kStrokeWidth = 11;
+    constexpr uint32_t kRound = 12;
+    constexpr uint32_t kWordCount = 13;
 }
 
 } // namespace sdf_field

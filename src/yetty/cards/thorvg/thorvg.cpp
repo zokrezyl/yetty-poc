@@ -8,8 +8,10 @@
 #include <yetty/ydraw-builder.h>
 #include <yetty/base/event-loop.h>
 #include <ytrace/ytrace.hpp>
-#include <sstream>
 #include <cmath>
+#include <fstream>
+#include <iostream>
+#include <sstream>
 
 namespace {
 constexpr int GLFW_MOD_SHIFT   = 0x0001;
@@ -75,6 +77,7 @@ public:
 
     Result<void> allocateBuffers() override {
         if (!_builder) return Ok();
+        std::cerr << "ThorVG::allocateBuffers: prims=" << _buffer->primCount() << std::endl;
         return _builder->allocateBuffers();
     }
 
@@ -240,6 +243,7 @@ public:
         _builder = *builderRes;
         _builder->addFlags(YDrawBuilder::FLAG_UNIFORM_SCALE);
         _builder->setViewport(_widthCells, _heightCells);
+        _builder->setView(_viewZoom, _viewPanX, _viewPanY);
 
         // Create renderer
         auto rendererRes = yetty::thorvg::ThorVgRenderer::create(_buffer);
@@ -251,11 +255,9 @@ public:
         // Parse args
         parseArgs(_argsStr);
 
-        // Load payload
-        if (!_payloadStr.empty()) {
-            if (auto res = loadPayload(_payloadStr); !res) {
-                ywarn("ThorVG::init: payload load failed: {}", error_msg(res));
-            }
+        // Load content (from payload or file based on -i flag)
+        if (auto res = loadContent(); !res) {
+            ywarn("ThorVG::init: content load failed: {}", error_msg(res));
         }
 
         // Set scene bounds from content
@@ -294,7 +296,14 @@ private:
         std::istringstream iss(args);
         std::string token;
         while (iss >> token) {
-            if (token == "--no-loop") {
+            if (token == "-i" || token == "--input") {
+                std::string val;
+                if (iss >> val) _inputSource = val;
+            } else if (token == "--svg") {
+                _contentType = "svg";
+            } else if (token == "--lottie") {
+                _contentType = "lottie";
+            } else if (token == "--no-loop") {
                 _loop = false;
             } else if (token == "--paused") {
                 _playing = false;
@@ -305,20 +314,48 @@ private:
         }
     }
 
-    Result<void> loadPayload(const std::string& payload) {
+    Result<void> loadContent() {
+        std::string content;
+        
+        if (_inputSource == "-") {
+            // Content from payload
+            content = _payloadStr;
+        } else if (!_inputSource.empty()) {
+            // Content from file
+            std::ifstream file(_inputSource);
+            if (file) {
+                std::stringstream buffer;
+                buffer << file.rdbuf();
+                content = buffer.str();
+            } else {
+                return Err<void>("ThorVG: failed to open file: " + _inputSource);
+            }
+        } else if (!_payloadStr.empty()) {
+            // Legacy: payload without -i flag
+            content = _payloadStr;
+        } else {
+            return Err<void>("ThorVG: no input specified (use -i - for payload or -i <path> for file)");
+        }
+        
+        if (content.empty()) {
+            return Err<void>("ThorVG: empty content");
+        }
+        
+        // Use explicit content type if provided, otherwise auto-detect
         const char* mimeType = nullptr;
-        std::string content = payload;
-
-        // Check for type prefix (format: "type\n<content>")
-        size_t newlinePos = payload.find('\n');
-        if (newlinePos != std::string::npos && newlinePos < 20) {
-            std::string prefix = payload.substr(0, newlinePos);
-            if (prefix == "svg" || prefix == "lottie") {
-                mimeType = prefix.c_str();
-                content = payload.substr(newlinePos + 1);
+        if (!_contentType.empty()) {
+            mimeType = _contentType.c_str();
+        } else {
+            // Auto-detect from content
+            if (content.find("<svg") != std::string::npos || 
+                content.find("<?xml") != std::string::npos) {
+                mimeType = "svg";
+            } else if (content.find("\"v\"") != std::string::npos && 
+                       content.find("\"layers\"") != std::string::npos) {
+                mimeType = "lottie";
             }
         }
-
+        
         return _renderer->load(content, mimeType);
     }
 
@@ -351,6 +388,8 @@ private:
     base::ObjectId _screenId = 0;
     std::string _argsStr;
     std::string _payloadStr;
+    std::string _inputSource;   // "-" for payload, or file path
+    std::string _contentType;   // "svg" or "lottie" (from --svg/--lottie flags)
 
     // View
     float _viewZoom = 1.0f;

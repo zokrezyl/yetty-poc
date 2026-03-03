@@ -18,6 +18,9 @@ pkg_check_modules(FONTCONFIG REQUIRED fontconfig)
 add_executable(ydraw_tests
     main.cpp
     ydraw_test.cpp
+    ydraw_bezier_test.cpp
+    ydraw_gradient_test.cpp
+    ydraw_opacity_test.cpp
     triangulate_test.cpp
     # YDraw core
     ${CMAKE_SOURCE_DIR}/src/yetty/ydraw/ydraw-buffer.cpp
