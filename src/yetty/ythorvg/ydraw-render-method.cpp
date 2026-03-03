@@ -9,7 +9,7 @@
 #include <cmath>
 #include <cstring>
 
-namespace yetty::thorvg2 {
+namespace yetty::ythorvg {
 
 //=============================================================================
 // Constructor/Destructor
@@ -824,4 +824,4 @@ bool YDrawRenderMethod::tryRenderAsGradientBox(YDrawRenderData* rd) {
     return true;
 }
 
-} // namespace yetty::thorvg2
+} // namespace yetty::ythorvg

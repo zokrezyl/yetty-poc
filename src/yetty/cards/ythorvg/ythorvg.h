@@ -9,10 +9,10 @@
 namespace yetty::card {
 
 //=============================================================================
-// ThorVG2 - Vector graphics card using ThorVG RenderMethod interface
+// YThorVG - Vector graphics card using ThorVG RenderMethod interface
 //
 // Unlike the original ThorVG card which traverses the scene tree via Accessor,
-// ThorVG2 implements ThorVG's RenderMethod interface directly. ThorVG calls
+// YThorVG implements ThorVG's RenderMethod interface directly. ThorVG calls
 // our prepare()/renderShape() methods with pre-processed, world-space data.
 //
 // Benefits:
@@ -21,10 +21,10 @@ namespace yetty::card {
 // - Text renders as bezier paths through standard renderShape()
 // - Correct render order managed by ThorVG
 //=============================================================================
-class ThorVG2 : public Card,
-                public base::ObjectFactory<ThorVG2> {
+class YThorVG : public Card,
+                public base::ObjectFactory<YThorVG> {
 public:
-    using Ptr = std::shared_ptr<ThorVG2>;
+    using Ptr = std::shared_ptr<YThorVG>;
 
     // Use YDraw shader glyph for SDF rendering
     static constexpr uint32_t SHADER_GLYPH = 0x100003;
@@ -44,8 +44,8 @@ public:
         const std::string& args,
         const std::string& payload) noexcept;
 
-    ~ThorVG2() override = default;
-    const char* typeName() const override { return "thorvg2"; }
+    ~YThorVG() override = default;
+    const char* typeName() const override { return "ythorvg"; }
     bool needsBuffer() const override { return true; }
 
     // Card accessors
@@ -65,7 +65,7 @@ public:
     }
 
 protected:
-    ThorVG2(CardManager::Ptr mgr, const GPUContext& gpu,
+    YThorVG(CardManager::Ptr mgr, const GPUContext& gpu,
             int32_t x, int32_t y, uint32_t widthCells, uint32_t heightCells)
         : _cardMgr(std::move(mgr)), _gpu(gpu)
         , _x(x), _y(y), _widthCells(widthCells), _heightCells(heightCells) {}

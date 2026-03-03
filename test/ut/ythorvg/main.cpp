@@ -1,5 +1,5 @@
 //=============================================================================
-// ThorVG2 Unit Tests - Main entry point
+// YThorVG Unit Tests - Main entry point
 //=============================================================================
 
 // Include C++ standard headers BEFORE boost/ut.hpp to prevent cdb's 'version'

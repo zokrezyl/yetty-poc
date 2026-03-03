@@ -15,7 +15,7 @@ add_subdirectory(yplot)
 add_subdirectory(ypdf)
 add_subdirectory(yhtml)
 add_subdirectory(thorvg)
-add_subdirectory(thorvg2)
+add_subdirectory(ythorvg)
 
 # Aggregate library linking all cards
 add_library(yetty_cards INTERFACE)
@@ -35,5 +35,5 @@ target_link_libraries(yetty_cards INTERFACE
     yetty_card_ypdf
     yetty_card_yhtml
     yetty_card_thorvg
-    yetty_card_thorvg2
+    yetty_card_ythorvg
 )

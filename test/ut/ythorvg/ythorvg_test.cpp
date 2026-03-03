@@ -1,5 +1,5 @@
 //=============================================================================
-// ThorVG2 Unit Tests - YDrawRenderMethod tests
+// YThorVG Unit Tests - YDrawRenderMethod tests
 //=============================================================================
 
 // Include C++ standard headers BEFORE boost/ut.hpp
@@ -8,7 +8,7 @@
 #include <algorithm>
 
 #include <boost/ut.hpp>
-#include "yetty/thorvg2/ydraw-render-method.h"
+#include "yetty/ythorvg/ydraw-render-method.h"
 #include "yetty/ydraw/ydraw-buffer.h"
 #include "yetty/ydraw/ydraw-types.gen.h"
 #include <thorvg.h>
@@ -16,7 +16,7 @@
 
 using namespace boost::ut;
 using namespace yetty;
-using namespace yetty::thorvg2;
+using namespace yetty::ythorvg;
 
 // Helper to count primitives by type
 [[maybe_unused]]
@@ -72,7 +72,7 @@ static bool hasBezierPrimitive(const YDrawBuffer& buffer) {
 // Tests
 //=============================================================================
 
-suite thorvg2_render_method_tests = [] {
+suite ythorvg_render_method_tests = [] {
 
     "ydraw_render_method_create"_test = [] {
         auto buffer = YDrawBuffer::create();

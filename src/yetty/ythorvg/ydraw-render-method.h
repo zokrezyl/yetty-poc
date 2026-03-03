@@ -13,7 +13,7 @@ namespace yetty {
 class YDrawBuffer;
 }
 
-namespace yetty::thorvg2 {
+namespace yetty::ythorvg {
 
 //=============================================================================
 // YDrawRenderData - stores shape data between prepare() and renderShape()
@@ -155,4 +155,4 @@ private:
     std::vector<YDrawRenderData*> _renderDataList;
 };
 
-} // namespace yetty::thorvg2
+} // namespace yetty::ythorvg

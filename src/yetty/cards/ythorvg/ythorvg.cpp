@@ -2,8 +2,8 @@
 #define NOMINMAX
 #endif
 
-#include "thorvg2.h"
-#include "../../thorvg2/ydraw-render-method.h"
+#include "ythorvg.h"
+#include "../../ythorvg/ydraw-render-method.h"
 #include "../../ydraw/ydraw-buffer.h"
 #include <yetty/ydraw-builder.h>
 #include <yetty/base/event-loop.h>
@@ -34,40 +34,40 @@ namespace yetty::card {
 static int s_thorvgRefCount = 0;
 static std::mutex s_thorvgMutex;
 
-static Result<void> thorvg2Init() {
+static Result<void> ythorvgInit() {
     std::lock_guard<std::mutex> lock(s_thorvgMutex);
     if (s_thorvgRefCount == 0) {
         auto result = tvg::Initializer::init(0);
         if (result != tvg::Result::Success) {
-            return Err<void>("ThorVG2: tvg::Initializer::init failed");
+            return Err<void>("YThorVG: tvg::Initializer::init failed");
         }
         uint32_t major, minor, micro;
         const char* version = tvg::Initializer::version(&major, &minor, &micro);
-        yinfo("ThorVG2 engine initialized: {}", version ? version : "unknown");
+        yinfo("YThorVG engine initialized: {}", version ? version : "unknown");
     }
     ++s_thorvgRefCount;
     return Ok();
 }
 
-static void thorvg2Term() {
+static void ythorvgTerm() {
     std::lock_guard<std::mutex> lock(s_thorvgMutex);
     if (--s_thorvgRefCount == 0) {
         tvg::Initializer::term();
-        yinfo("ThorVG2 engine terminated");
+        yinfo("YThorVG engine terminated");
     }
 }
 
 //=============================================================================
-// ThorVG2Impl - full implementation with RenderMethod
+// YThorVGImpl - full implementation with RenderMethod
 //=============================================================================
 
-class ThorVG2Impl : public ThorVG2 {
+class YThorVGImpl : public YThorVG {
 public:
-    ThorVG2Impl(const YettyContext& ctx,
+    YThorVGImpl(const YettyContext& ctx,
                 int32_t x, int32_t y,
                 uint32_t widthCells, uint32_t heightCells,
                 const std::string& args, const std::string& payload)
-        : ThorVG2(ctx.cardManager, ctx.gpu, x, y, widthCells, heightCells)
+        : YThorVG(ctx.cardManager, ctx.gpu, x, y, widthCells, heightCells)
         , _screenId(ctx.screenId)
         , _argsStr(args)
         , _payloadStr(payload)
@@ -78,7 +78,7 @@ public:
         _buffer = *YDrawBuffer::create();
     }
 
-    ~ThorVG2Impl() override { dispose(); }
+    ~YThorVGImpl() override { dispose(); }
 
     //=========================================================================
     // Card lifecycle
@@ -96,7 +96,7 @@ public:
         deregisterFromEvents();
         if (_metaHandle.isValid() && _cardMgr) {
             if (auto res = _cardMgr->deallocateMetadata(_metaHandle); !res) {
-                yerror("ThorVG2::dispose: deallocateMetadata failed");
+                yerror("YThorVG::dispose: deallocateMetadata failed");
             }
             _metaHandle = MetadataHandle::invalid();
         }
@@ -104,7 +104,7 @@ public:
         // Clean up ThorVG resources
         _animation.reset();
         _picture = nullptr;
-        thorvg2Term();
+        ythorvgTerm();
 
         return Ok();
     }
@@ -114,7 +114,7 @@ public:
     void declareBufferNeeds() override {
         if (!_builder) return;
         if (auto res = _builder->declareBufferNeeds(); !res) {
-            yerror("ThorVG2::declareBufferNeeds: {}", error_msg(res));
+            yerror("YThorVG::declareBufferNeeds: {}", error_msg(res));
         }
     }
 
@@ -249,7 +249,7 @@ public:
         }
 
         if (auto res = loadContent(content, mimeType); !res) {
-            return Err<void>("ThorVG2::update: load failed", res);
+            return Err<void>("YThorVG::update: load failed", res);
         }
 
         _needsInitialZoom = true;
@@ -266,14 +266,14 @@ public:
 
     Result<void> init() {
         // Initialize ThorVG
-        if (auto res = thorvg2Init(); !res) {
-            return Err<void>("ThorVG2::init: failed to initialize ThorVG", res);
+        if (auto res = ythorvgInit(); !res) {
+            return Err<void>("YThorVG::init: failed to initialize ThorVG", res);
         }
 
         // Allocate metadata
         auto metaResult = _cardMgr->allocateMetadata(64);
         if (!metaResult) {
-            return Err<void>("ThorVG2::init: failed to allocate metadata");
+            return Err<void>("YThorVG::init: failed to allocate metadata");
         }
         _metaHandle = *metaResult;
 
@@ -281,7 +281,7 @@ public:
         auto builderRes = YDrawBuilder::create(
             _fontManager, _gpuAllocator, _buffer, _cardMgr, metadataSlotIndex());
         if (!builderRes) {
-            return Err<void>("ThorVG2::init: failed to create builder", builderRes);
+            return Err<void>("YThorVG::init: failed to create builder", builderRes);
         }
         _builder = *builderRes;
         _builder->addFlags(YDrawBuilder::FLAG_UNIFORM_SCALE);
@@ -289,14 +289,14 @@ public:
         _builder->setView(_viewZoom, _viewPanX, _viewPanY);
 
         // Create our custom RenderMethod
-        _renderMethod = std::make_unique<thorvg2::YDrawRenderMethod>(_buffer);
+        _renderMethod = std::make_unique<ythorvg::YDrawRenderMethod>(_buffer);
         _renderMethod->setTarget(_widthCells * 10, _heightCells * 20);  // approx pixel size
 
         // Parse args and load content
         parseArgs(_argsStr);
 
         if (auto res = loadContentFromArgs(); !res) {
-            ywarn("ThorVG2::init: content load failed: {}", error_msg(res));
+            ywarn("YThorVG::init: content load failed: {}", error_msg(res));
         }
 
         // Set scene bounds
@@ -313,10 +313,10 @@ public:
 
         // Register for events
         if (auto res = registerForEvents(); !res) {
-            ywarn("ThorVG2::init: event registration failed");
+            ywarn("YThorVG::init: event registration failed");
         }
 
-        yinfo("ThorVG2::init: {}x{} prims={} animated={}",
+        yinfo("YThorVG::init: {}x{} prims={} animated={}",
               _contentWidth, _contentHeight, _buffer->primCount(), _isAnimated);
 
         return Ok();
@@ -390,16 +390,16 @@ private:
                 buffer << file.rdbuf();
                 content = buffer.str();
             } else {
-                return Err<void>("ThorVG2: failed to open file: " + _inputSource);
+                return Err<void>("YThorVG: failed to open file: " + _inputSource);
             }
         } else if (!_payloadStr.empty()) {
             content = _payloadStr;
         } else {
-            return Err<void>("ThorVG2: no input specified");
+            return Err<void>("YThorVG: no input specified");
         }
 
         if (content.empty()) {
-            return Err<void>("ThorVG2: empty content");
+            return Err<void>("YThorVG: empty content");
         }
 
         const char* mimeType = nullptr;
@@ -427,13 +427,13 @@ private:
         // Create Animation wrapper
         _animation.reset(tvg::Animation::gen());
         if (!_animation) {
-            return Err<void>("ThorVG2: failed to create Animation");
+            return Err<void>("YThorVG: failed to create Animation");
         }
 
         _picture = _animation->picture();
         if (!_picture) {
             _animation.reset();
-            return Err<void>("ThorVG2: failed to get picture from Animation");
+            return Err<void>("YThorVG: failed to get picture from Animation");
         }
 
         // Load content
@@ -455,7 +455,7 @@ private:
         if (result != tvg::Result::Success) {
             _animation.reset();
             _picture = nullptr;
-            return Err<void>("ThorVG2: failed to load content");
+            return Err<void>("YThorVG: failed to load content");
         }
 
         // Get dimensions
@@ -488,7 +488,7 @@ private:
     // Members
     //=========================================================================
 
-    std::unique_ptr<thorvg2::YDrawRenderMethod> _renderMethod;
+    std::unique_ptr<ythorvg::YDrawRenderMethod> _renderMethod;
     std::unique_ptr<tvg::Animation> _animation;
     tvg::Picture* _picture = nullptr;
     YDrawBuilder::Ptr _builder;
@@ -532,7 +532,7 @@ private:
 // Factory
 //=============================================================================
 
-Result<CardPtr> ThorVG2::create(
+Result<CardPtr> YThorVG::create(
     const YettyContext& ctx,
     int32_t x, int32_t y,
     uint32_t widthCells, uint32_t heightCells,
@@ -540,16 +540,16 @@ Result<CardPtr> ThorVG2::create(
     const std::string& payload)
 {
     if (!ctx.cardManager) {
-        return Err<CardPtr>("ThorVG2::create: null CardManager");
+        return Err<CardPtr>("YThorVG::create: null CardManager");
     }
-    auto card = std::make_shared<ThorVG2Impl>(ctx, x, y, widthCells, heightCells, args, payload);
+    auto card = std::make_shared<YThorVGImpl>(ctx, x, y, widthCells, heightCells, args, payload);
     if (auto res = card->init(); !res) {
-        return Err<CardPtr>("ThorVG2::create: init failed", res);
+        return Err<CardPtr>("YThorVG::create: init failed", res);
     }
     return Ok<CardPtr>(card);
 }
 
-Result<ThorVG2::Ptr> ThorVG2::createImpl(
+Result<YThorVG::Ptr> YThorVG::createImpl(
     ContextType& ctx,
     const YettyContext& yettyCtx,
     int32_t x, int32_t y,
@@ -559,9 +559,9 @@ Result<ThorVG2::Ptr> ThorVG2::createImpl(
 {
     (void)ctx;
     auto result = create(yettyCtx, x, y, widthCells, heightCells, args, payload);
-    if (!result) return Err<Ptr>("Failed to create ThorVG2", result);
-    auto card = std::dynamic_pointer_cast<ThorVG2>(*result);
-    if (!card) return Err<Ptr>("Created card is not ThorVG2");
+    if (!result) return Err<Ptr>("Failed to create YThorVG", result);
+    auto card = std::dynamic_pointer_cast<YThorVG>(*result);
+    if (!card) return Err<Ptr>("Created card is not YThorVG");
     return Ok(card);
 }
 

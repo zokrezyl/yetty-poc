@@ -4,7 +4,7 @@
 #include "cards/plot/plot.h"
 #include "cards/qrcode/qrcode.h"
 #include "cards/thorvg/thorvg.h"
-#include "cards/thorvg2/thorvg2.h"
+#include "cards/ythorvg/ythorvg.h"
 #include "cards/yplot/yplot-card.h"
 #include "cards/ydraw-maze/ydraw-maze.h"
 #include "cards/ydraw-zoo/ydraw-zoo.h"
@@ -157,11 +157,11 @@ public:
                    return card::ThorVG::create(ctx, x, y, w, h, args, payload);
                  });
 
-    registerCard("thorvg2",
+    registerCard("ythorvg",
                  [](const YettyContext &ctx, int32_t x, int32_t y, uint32_t w,
                     uint32_t h, const std::string &args,
                     const std::string &payload) -> Result<CardPtr> {
-                   return card::ThorVG2::create(ctx, x, y, w, h, args, payload);
+                   return card::YThorVG::create(ctx, x, y, w, h, args, payload);
                  });
 
     return Ok();
