@@ -2217,8 +2217,16 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
         // If ScreenUpdate was needed while rendering, dispatch it now
         if (self->_nextScreenUpdateNeeded.exchange(false)) {
             yinfo("[TIME] GPU DONE: _nextScreenUpdateNeeded was true, dispatching ScreenUpdate");
-            // Wake up main thread via EventQueue (thread-safe for GPU callbacks)
+#if YETTY_WEB
+            // WebASM is single-threaded, dispatch directly
+            auto loopResult = base::EventLoop::instance();
+            if (loopResult) {
+                (*loopResult)->dispatch(base::Event::screenUpdateEvent());
+            }
+#else
+            // Native: wake up main thread via EventQueue (thread-safe for GPU callbacks)
             self->_eventQueue->push(base::Event::screenUpdateEvent());
+#endif
         }
     };
     renderDoneCb.userdata1 = this;
