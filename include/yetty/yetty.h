@@ -26,6 +26,9 @@ public:
 
   virtual Result<void> run() noexcept = 0;
 
+  // Single frame iteration (for Android/external event loop)
+  virtual Result<void> iterate() noexcept = 0;
+
 protected:
   Yetty() = default;
 };

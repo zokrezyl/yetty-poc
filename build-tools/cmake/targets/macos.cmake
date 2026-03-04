@@ -5,7 +5,6 @@ include(${YETTY_ROOT}/build-tools/cmake/targets/shared.cmake)
 # macOS-specific libraries
 include(${YETTY_ROOT}/build-tools/cmake/libs/glfw.cmake)
 include(${YETTY_ROOT}/build-tools/cmake/libs/libjpeg-turbo.cmake)
-include(${YETTY_ROOT}/build-tools/cmake/TreeSitter.cmake)
 include(${YETTY_ROOT}/build-tools/cmake/Libmagic.cmake)
 
 # Add src/yetty (builds libraries)

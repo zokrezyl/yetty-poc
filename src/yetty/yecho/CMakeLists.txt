@@ -35,19 +35,26 @@ target_include_directories(yetty_yecho PUBLIC
     ${CMAKE_CURRENT_BINARY_DIR}
 )
 
-# Standalone yecho executable (desktop only)
-if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
-    add_executable(yecho
-        yecho.cpp
-        yecho-parser.cpp
-    )
+# Standalone yecho executable (all platforms)
+add_executable(yecho
+    yecho.cpp
+    yecho-parser.cpp
+)
 
-    target_include_directories(yecho PRIVATE
-        ${YETTY_ROOT}/include
-        ${YETTY_ROOT}/src/yetty/yecho
-        ${CMAKE_CURRENT_BINARY_DIR}
-    )
+target_include_directories(yecho PRIVATE
+    ${YETTY_ROOT}/include
+    ${YETTY_ROOT}/src/yetty/yecho
+    ${CMAKE_CURRENT_BINARY_DIR}
+)
 
-    target_link_libraries(yecho PRIVATE args)
-    target_compile_features(yecho PRIVATE cxx_std_23)
+target_link_libraries(yecho PRIVATE args)
+target_compile_features(yecho PRIVATE cxx_std_23)
+
+# Install yecho to Android jniLibs as libyecho.so
+if(YETTY_ANDROID AND ANDROID_BUILD_DIR)
+    add_custom_command(TARGET yecho POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:yecho>
+                "${ANDROID_BUILD_DIR}/jniLibs/${ANDROID_ABI}/libyecho.so"
+        COMMENT "Copying yecho to Android jniLibs"
+    )
 endif()

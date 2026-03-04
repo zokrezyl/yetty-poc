@@ -11,6 +11,13 @@ namespace yetty {
 // Forward declaration
 class PTYProvider;
 
+// Android-specific path configuration
+struct AndroidPaths {
+    std::string dataDir;       // App data directory
+    std::string nativeLibDir;  // Native library directory (.so files)
+    std::string binDir;        // Symlinks directory for clean command names
+};
+
 // Cursor types (subset that makes sense across platforms)
 enum class CursorType {
     Arrow,
@@ -116,6 +123,20 @@ public:
     // - Web: JSLinux iframe emulator
     // - Android: toybox or other shell
     virtual Result<std::shared_ptr<PTYProvider>> createPTY() = 0;
+
+    // Android-specific path configuration
+    // Returns empty paths on non-Android platforms
+    virtual const AndroidPaths& getAndroidPaths() const {
+        static AndroidPaths empty;
+        return empty;
+    }
+
+    // Set Android paths (called from android_main before creating PTY)
+    virtual void setAndroidPaths(const std::string& dataDir,
+                                  const std::string& nativeLibDir) {
+        (void)dataDir;
+        (void)nativeLibDir;
+    }
 
 protected:
     Platform() = default;

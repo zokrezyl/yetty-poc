@@ -2,6 +2,9 @@
 
 include(${YETTY_ROOT}/build-tools/cmake/targets/shared.cmake)
 
+# libjpeg-turbo for VNC compression
+include(${YETTY_ROOT}/build-tools/cmake/libs/libjpeg-turbo.cmake)
+
 # native_app_glue from Android NDK
 add_library(native_app_glue STATIC
     ${ANDROID_NDK}/sources/android/native_app_glue/android_native_app_glue.c
@@ -15,8 +18,15 @@ if(TOYBOX_PATH)
     add_compile_definitions(YETTY_TOYBOX_PATH="${TOYBOX_PATH}")
 endif()
 
+# Set ANDROID_ASSETS_DIR BEFORE adding yetty subdirectory so shaders/CMakeLists.txt can use it
+set(ANDROID_ASSETS_DIR "${ANDROID_BUILD_DIR}/assets")
+file(MAKE_DIRECTORY ${ANDROID_ASSETS_DIR})
+
 # Add src/yetty (builds libraries)
 add_subdirectory(${YETTY_ROOT}/src/yetty ${CMAKE_BINARY_DIR}/src/yetty)
+
+# VNC server/client support
+add_subdirectory(${YETTY_ROOT}/src/yetty/vnc ${CMAKE_BINARY_DIR}/src/yetty/vnc)
 
 # Create shared library with core sources + android platform
 add_library(yetty SHARED
@@ -26,7 +36,7 @@ add_library(yetty SHARED
     ${YETTY_ROOT}/src/yetty/msdf-gen/generator.cpp
 )
 
-target_include_directories(yetty PRIVATE ${YETTY_INCLUDES} ${YETTY_RENDERER_INCLUDES})
+target_include_directories(yetty PRIVATE ${YETTY_INCLUDES} ${YETTY_RENDERER_INCLUDES} ${JPEG_INCLUDE_DIRS})
 
 # Embed resources (logo)
 incbin_add_resources(yetty
@@ -38,6 +48,8 @@ target_compile_definitions(yetty PRIVATE
     YETTY_WEB=0
     YETTY_ANDROID=1
     YETTY_USE_PREBUILT_ATLAS=1
+    YETTY_ASSETS_FROM_APK=1
+    YETTY_HAS_VNC=1
 )
 
 set_target_properties(yetty PROPERTIES LIBRARY_OUTPUT_NAME "yetty")
@@ -50,6 +62,8 @@ target_link_libraries(yetty PRIVATE
     ytrace::ytrace
     lz4_static
     uv_a
+    yetty_vnc
+    turbojpeg-static
     ${FREETYPE_ALL_LIBS}
     android
     log
@@ -58,20 +72,18 @@ target_link_libraries(yetty PRIVATE
 # CDB font generation (builds host tools for cross-compilation)
 include(${YETTY_ROOT}/build-tools/cmake/cdb-gen.cmake)
 
-# Copy assets to Android build directory
-set(ANDROID_ASSETS_DIR "${ANDROID_BUILD_DIR}/assets")
-file(MAKE_DIRECTORY ${ANDROID_ASSETS_DIR})
+# Copy static assets to Android build directory (ANDROID_ASSETS_DIR already set above)
 file(GLOB ASSET_FILES "${YETTY_ROOT}/assets/*")
 file(COPY ${ASSET_FILES} DESTINATION ${ANDROID_ASSETS_DIR})
 
 # Ensure CDB, shaders, and assets are built before yetty
 add_dependencies(yetty generate-cdb copy-shaders)
 
-# Copy generated assets (CDB fonts, shaders) to Android assets dir after build
+# Copy generated CDB fonts to Android assets dir after build
+# (shaders are already copied at configure time in shaders/CMakeLists.txt)
 add_custom_command(TARGET yetty POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_BINARY_DIR}/assets/fonts-cdb ${ANDROID_ASSETS_DIR}/fonts-cdb
-    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_BINARY_DIR}/assets/shaders ${ANDROID_ASSETS_DIR}/shaders
-    COMMENT "Copying CDB fonts and shaders to Android assets"
+    COMMENT "Copying CDB fonts to Android assets"
 )
 
 # Verify all required assets are present

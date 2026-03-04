@@ -5,7 +5,6 @@ include(${YETTY_ROOT}/build-tools/cmake/targets/shared.cmake)
 # Linux-specific libraries
 include(${YETTY_ROOT}/build-tools/cmake/libs/glfw.cmake)
 include(${YETTY_ROOT}/build-tools/cmake/libs/libjpeg-turbo.cmake)
-include(${YETTY_ROOT}/build-tools/cmake/TreeSitter.cmake)
 include(${YETTY_ROOT}/build-tools/cmake/Libmagic.cmake)
 
 # Add src/yetty (builds libraries)
@@ -88,6 +87,6 @@ add_custom_command(TARGET yetty POST_BUILD
 enable_testing()
 add_subdirectory(${YETTY_ROOT}/test/ut ${CMAKE_BINARY_DIR}/test/ut)
 
-# Tools (ycat, yecho, ydraw-maze, ydraw-zoo, etc.)
-add_subdirectory(${YETTY_ROOT}/src/yetty/ycat ${CMAKE_BINARY_DIR}/src/yetty/ycat)
+# Tools (ydraw-maze, ydraw-zoo, etc.)
+# Note: ycat is already added via src/yetty/CMakeLists.txt
 add_subdirectory(${YETTY_ROOT}/tools ${CMAKE_BINARY_DIR}/tools)

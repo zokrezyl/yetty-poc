@@ -14,6 +14,9 @@
     <!-- Keep screen on while using terminal -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <!-- Network access for telnet PTY and future features -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
@@ -25,6 +28,7 @@
         <activity
             android:name="android.app.NativeActivity"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
+            android:screenOrientation="fullSensor"
             android:exported="true"
             android:launchMode="singleTask"
             android:windowSoftInputMode="adjustResize">

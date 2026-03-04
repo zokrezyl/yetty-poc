@@ -18,6 +18,21 @@
 #define YETTY_SHADERS_DIR CMAKE_SOURCE_DIR "/src/yetty/shaders"
 #endif
 
+// Helper to get assets directory at runtime (for Android asset extraction)
+static std::string getAssetsDir() {
+#if defined(__ANDROID__)
+    const char* envDir = getenv("YETTY_ASSETS_DIR");
+    if (envDir && envDir[0]) {
+        return std::string(envDir);
+    }
+#endif
+#ifdef YETTY_ASSETS_DIR
+    return std::string(YETTY_ASSETS_DIR);
+#else
+    return std::string(CMAKE_SOURCE_DIR) + "/assets";
+#endif
+}
+
 namespace yetty {
 
 class FontManagerImpl : public FontManager {
@@ -310,9 +325,9 @@ public:
 
 private:
   Result<void> initMsMsdfFonts() noexcept {
-#ifdef YETTY_ASSETS_DIR
-    // Use prebuilt CDB files from build assets directory
-    _cacheDir = std::string(YETTY_ASSETS_DIR) + "/fonts-cdb";
+#if defined(__ANDROID__) || defined(YETTY_ASSETS_DIR)
+    // Use prebuilt CDB files from assets directory
+    _cacheDir = getAssetsDir() + "/fonts-cdb";
     yinfo("MSDF font cache dir (prebuilt): {}", _cacheDir);
 #else
     const char *home = std::getenv("HOME");
@@ -378,13 +393,7 @@ private:
 
   Result<void> initVectorSdfFont() noexcept {
     // Use the default monospace font TTF
-#ifdef YETTY_ASSETS_DIR
-    std::string ttfPath = std::string(YETTY_ASSETS_DIR) +
-                          "/DejaVuSansMNerdFontMono-Regular.ttf";
-#else
-    std::string ttfPath = std::string(CMAKE_SOURCE_DIR) +
-                          "/assets/DejaVuSansMNerdFontMono-Regular.ttf";
-#endif
+    std::string ttfPath = getAssetsDir() + "/DejaVuSansMNerdFontMono-Regular.ttf";
 
     if (!std::filesystem::exists(ttfPath)) {
       return Err<void>("Default TTF not found: " + ttfPath);
@@ -412,13 +421,7 @@ private:
 
   Result<void> initRasterFont() noexcept {
     // Use the default monospace font TTF
-#ifdef YETTY_ASSETS_DIR
-    std::string ttfPath = std::string(YETTY_ASSETS_DIR) +
-                          "/DejaVuSansMNerdFontMono-Regular.ttf";
-#else
-    std::string ttfPath = std::string(CMAKE_SOURCE_DIR) +
-                          "/assets/DejaVuSansMNerdFontMono-Regular.ttf";
-#endif
+    std::string ttfPath = getAssetsDir() + "/DejaVuSansMNerdFontMono-Regular.ttf";
 
     if (!std::filesystem::exists(ttfPath)) {
       return Err<void>("Default TTF not found: " + ttfPath);

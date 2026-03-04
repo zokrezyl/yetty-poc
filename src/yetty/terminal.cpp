@@ -5,6 +5,7 @@
 #include <ytrace/ytrace.hpp>
 #include <cstring>
 
+
 #if YETTY_WEB
 #include <yetty/platform.h>
 #include <yetty/pty-provider.h>
@@ -24,10 +25,13 @@ public:
     ~TerminalImpl() override = default;
 
     Result<void> init() {
+        yinfo("Terminal::init() start");
         auto screenResult = GPUScreen::create(_ctx);
         if (!screenResult) {
+            yerror("Terminal::init() GPUScreen::create FAILED");
             return Err<void>("Failed to create GPUScreen", screenResult);
         }
+        yinfo("Terminal::init() GPUScreen created");
         _gpuScreen = *screenResult;
 
 #if YETTY_WEB
@@ -257,10 +261,13 @@ private:
             config.cols = cols;
             config.rows = rows;
 
-            auto readerResult = PtyReader::create(config);
+            yinfo("Creating PtyReader: shell={} {}x{}", shellPath, cols, rows);
+            auto readerResult = PtyReader::create(config, _ctx.platform);
             if (!readerResult) {
+                yerror("PtyReader::create FAILED: {}", readerResult.error().message());
                 return Err<void>("Failed to create PtyReader", readerResult);
             }
+            yinfo("PtyReader::create SUCCESS");
             _ptyReader = *readerResult;
             yinfo("Terminal started PTY: {} ({}x{})", shellPath, cols, rows);
         }

@@ -23,6 +23,17 @@
 #define YETTY_SHADERS_DIR CMAKE_SOURCE_DIR "/src/yetty/shaders"
 #endif
 
+// Helper to get shader directory at runtime (for Android asset extraction)
+static std::string getShadersDir() {
+#if defined(__ANDROID__)
+    const char* envDir = getenv("YETTY_SHADERS_DIR");
+    if (envDir && envDir[0]) {
+        return std::string(envDir);
+    }
+#endif
+    return std::string(YETTY_SHADERS_DIR);
+}
+
 namespace yetty {
 
 // Stub shader preamble for validating individual effect files
@@ -369,13 +380,15 @@ Result<void> ShaderManagerImpl::init(const GPUContext& gpu, GpuAllocator::Ptr al
     _allocator = std::move(allocator);
 
     // Load base shader
-    std::string shaderPath = std::string(YETTY_SHADERS_DIR) + "/gpu-screen.wgsl";
+    std::string shadersDir = getShadersDir();
+    std::string shaderPath = shadersDir + "/gpu-screen.wgsl";
+    yinfo("ShaderManager: loading shaders from {}", shadersDir);
     if (auto res = loadBaseShader(shaderPath); !res) {
         return res;
     }
 
     // Load all shader libraries from lib directory
-    std::string libDir = std::string(YETTY_SHADERS_DIR) + "/lib";
+    std::string libDir = shadersDir + "/lib";
     if (std::filesystem::exists(libDir) && std::filesystem::is_directory(libDir)) {
         for (const auto& entry : std::filesystem::directory_iterator(libDir)) {
             if (entry.is_regular_file() && entry.path().extension() == ".wgsl") {

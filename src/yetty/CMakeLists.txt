@@ -77,6 +77,7 @@ set(YETTY_RENDERER_INCLUDES
 add_subdirectory(base)
 add_subdirectory(font)
 add_subdirectory(yecho)
+add_subdirectory(ycat)
 add_subdirectory(ydraw)
 add_subdirectory(diagram)
 add_subdirectory(ygrid)

@@ -108,7 +108,7 @@ private:
 static std::shared_ptr<PtyReaderWeb> g_webPtyReader;
 
 // Factory implementation for webasm
-Result<PtyReader::Ptr> PtyReader::create(const PtyConfig& config) {
+Result<PtyReader::Ptr> PtyReader::create(const PtyConfig& config, std::shared_ptr<Platform> /*platform*/) {
     auto reader = std::make_shared<PtyReaderWeb>();
     if (auto res = reader->init(config); !res) {
         return Err<Ptr>("Failed to initialize PtyReaderWeb", res);

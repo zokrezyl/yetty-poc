@@ -15,7 +15,9 @@ android {
         versionName = "0.1.0"
 
         ndk {
-            abiFilters += listOf("arm64-v8a")  // Primary target
+            // Architecture from env var: arm64-v8a (default) or x86_64
+            val androidAbi = System.getenv("ANDROID_ABI") ?: "arm64-v8a"
+            abiFilters += listOf(androidAbi)
         }
 
         externalNativeBuild {
@@ -76,14 +78,18 @@ android {
         }
     }
 
-    // Include pre-built libraries and assets from ANDROID_BUILD_DIR
+    // Include pre-built libraries and assets from ANDROID_BUILD_DIR and source directories
     val buildDir = System.getenv("ANDROID_BUILD_DIR") ?: "${rootProject.projectDir.parentFile.parentFile}/build-android"
+    val projectRoot = rootProject.projectDir.parentFile.parentFile
     val webgpuBackend = System.getenv("WEBGPU_BACKEND") ?: "wgpu"
     val libsDir = if (webgpuBackend == "dawn") "dawn-libs" else "wgpu-libs"
     sourceSets {
         getByName("main") {
-            jniLibs.srcDirs(File(buildDir, libsDir))
-            assets.srcDirs(File(buildDir, "assets"))
+            jniLibs.srcDirs(File(buildDir, libsDir), File(buildDir, "jniLibs"))
+            assets.srcDirs(
+                File(buildDir, "assets"),
+                File(projectRoot, "demo")  // Include demo directory
+            )
         }
     }
 }
