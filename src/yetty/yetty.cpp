@@ -2117,6 +2117,8 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
             // Render UI overlay (statusbar) for both capture benchmark and VNC streaming
             // VNC client will see server's statusbar, plus its own statusbar on top
             if (_yettyContext.yguiOverlay) {
+                yinfo("VNC capture: rendering yguiOverlay, captureSize={}x{}, statusbarH={}",
+                      captureW, captureH, _yettyContext.yguiOverlay->getStatusbarHeight());
                 if (auto res = _yettyContext.yguiOverlay->render(capturePass); !res) {
                     // Restore workspace size before returning error
                     if (workspaceResized) {

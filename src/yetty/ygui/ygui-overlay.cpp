@@ -631,6 +631,7 @@ void YGuiOverlayImpl::buildStatusbar() {
 }
 
 void YGuiOverlayImpl::updateDisplaySize(uint32_t width, uint32_t height) {
+    yinfo("YGuiOverlay::updateDisplaySize: {}x{}", width, height);
     _displayWidth = width;
     _displayHeight = height;
 
@@ -645,6 +646,8 @@ void YGuiOverlayImpl::updateDisplaySize(uint32_t width, uint32_t height) {
         _statusbarRoot->y = static_cast<float>(height) - STATUSBAR_HEIGHT;
         _statusbarRoot->w = static_cast<float>(width);
         _engine->markDirty();
+        yinfo("YGuiOverlay: statusbar positioned at y={} (height={}, STATUSBAR_HEIGHT={})",
+              _statusbarRoot->y, height, STATUSBAR_HEIGHT);
     }
 
     // Clamp GPU stats dialog position to new screen bounds
@@ -933,6 +936,7 @@ Result<void> YGuiOverlayImpl::render(WGPURenderPassEncoder pass) {
 
     // Rebuild if dirty
     if (_engine->isDirty()) {
+        yinfo("YGuiOverlay: rebuilding widgets, displaySize={}x{}", _displayWidth, _displayHeight);
         _engine->rebuild();
         // Keep builder scene bounds in sync (handles resize)
         _builder->setSceneBounds(0, 0,
@@ -940,6 +944,7 @@ Result<void> YGuiOverlayImpl::render(WGPURenderPassEncoder pass) {
             static_cast<float>(_displayHeight));
         _builder->calculate();
         rebuildBuffers();
+        yinfo("YGuiOverlay: rebuild complete, primCount={}", _buffer ? _buffer->primCount() : 0);
     }
 
     if (!_bindGroup) return Ok();
