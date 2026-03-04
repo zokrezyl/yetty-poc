@@ -35,3 +35,8 @@ if(YETTY_ANDROID)
 elseif(WIN32)
     target_compile_definitions(ytrace INTERFACE YTRACE_NO_CONTROL_SOCKET=1)
 endif()
+
+# Disable control socket on macOS and Windows (bind() conflicts with std::bind)
+if(APPLE OR WIN32)
+    target_compile_definitions(ytrace INTERFACE YTRACE_NO_CONTROL_SOCKET)
+endif()
