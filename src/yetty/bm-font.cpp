@@ -355,8 +355,28 @@ Result<void> BmFont::findFont() noexcept {
         }
     }
     return Err<void>("No suitable emoji font found on macOS");
+#elif defined(_WIN32)
+    // Windows: try known system font paths
+    FT_Library library = static_cast<FT_Library>(_ftLibrary);
+    FT_Face face = nullptr;
+    const char* winFontPaths[] = {
+        "C:\\Windows\\Fonts\\seguiemj.ttf",   // Segoe UI Emoji (Win10+)
+        "C:\\Windows\\Fonts\\segoeui.ttf",     // Segoe UI fallback
+    };
+    for (const char* path : winFontPaths) {
+        if (FT_New_Face(library, path, 0, &face) == 0) {
+            _fontPath = path;
+            _ftFace = face;
+            if (face->num_fixed_sizes > 0) {
+                FT_Select_Size(face, 0);
+            }
+            FT_Select_Charmap(face, FT_ENCODING_UNICODE);
+            yinfo("BmFont: using Windows system font '{}'", path);
+            return Ok();
+        }
+    }
+    return Err<void>("No suitable font found on Windows");
 #else
-    // Windows: font path must be specified explicitly
     return Err<void>("No font path specified and fontconfig not available");
 #endif
 }

@@ -38,6 +38,10 @@ BUILD_DIR_ANDROID_X86_64_DAWN_RELEASE := build-android_x86_64-dawn-release
 BUILD_DIR_WEBASM_DAWN_DEBUG := build-webasm-dawn-debug
 BUILD_DIR_WEBASM_DAWN_RELEASE := build-webasm-dawn-release
 
+# Windows (MSVC via VS Build Tools)
+BUILD_DIR_WINDOWS_DAWN_DEBUG := build-windows-dawn-debug
+BUILD_DIR_WINDOWS_DAWN_RELEASE := build-windows-dawn-release
+
 # Parallel jobs (override with: make build-... PARALLEL_JOBS=30)
 PARALLEL_JOBS ?=
 CMAKE_PARALLEL := $(if $(PARALLEL_JOBS),--parallel $(PARALLEL_JOBS),--parallel)
@@ -352,6 +356,34 @@ run-webasm-dawn-release: build-webasm-dawn-release ## Serve WebAssembly release 
 
 
 #=============================================================================
+# Windows - dawn backend (MSVC)
+#=============================================================================
+
+.PHONY: config-windows-dawn-debug
+config-windows-dawn-debug: ## Configure Windows dawn debug build (MSVC)
+	cmd.exe //c "build-tools\windows\build.bat debug configure"
+
+.PHONY: config-windows-dawn-release
+config-windows-dawn-release: ## Configure Windows dawn release build (MSVC)
+	cmd.exe //c "build-tools\windows\build.bat release configure"
+
+.PHONY: build-windows-dawn-debug
+build-windows-dawn-debug: ## Build Windows dawn debug
+	cmd.exe //c "build-tools\windows\build.bat debug"
+
+.PHONY: build-windows-dawn-release
+build-windows-dawn-release: ## Build Windows dawn release
+	cmd.exe //c "build-tools\windows\build.bat release"
+
+.PHONY: run-windows-dawn-debug
+run-windows-dawn-debug: build-windows-dawn-debug ## Run Windows dawn debug build
+	./$(BUILD_DIR_WINDOWS_DAWN_DEBUG)/yetty.exe
+
+.PHONY: run-windows-dawn-release
+run-windows-dawn-release: build-windows-dawn-release ## Run Windows dawn release build
+	./$(BUILD_DIR_WINDOWS_DAWN_RELEASE)/yetty.exe
+
+#=============================================================================
 # Clean
 #=============================================================================
 
@@ -360,12 +392,13 @@ clean: ## Clean all build directories
 	rm -rf $(BUILD_DIR_DESKTOP_WGPU_DEBUG) $(BUILD_DIR_DESKTOP_WGPU_RELEASE) \
 	       $(BUILD_DIR_DESKTOP_DAWN_DEBUG) $(BUILD_DIR_DESKTOP_DAWN_RELEASE) \
 	       $(BUILD_DIR_DESKTOP_DAWN_ASAN) \
+	       $(BUILD_DIR_WINDOWS_DAWN_DEBUG) $(BUILD_DIR_WINDOWS_DAWN_RELEASE) \
 	       $(BUILD_DIR_ANDROID_WGPU_DEBUG) $(BUILD_DIR_ANDROID_WGPU_RELEASE) \
 	       $(BUILD_DIR_ANDROID_DAWN_DEBUG) $(BUILD_DIR_ANDROID_DAWN_RELEASE) \
 	       $(BUILD_DIR_ANDROID_X86_64_WGPU_DEBUG) $(BUILD_DIR_ANDROID_X86_64_WGPU_RELEASE) \
 	       $(BUILD_DIR_ANDROID_X86_64_DAWN_DEBUG) $(BUILD_DIR_ANDROID_X86_64_DAWN_RELEASE) \
 	       $(BUILD_DIR_WEBASM_DAWN_DEBUG) $(BUILD_DIR_WEBASM_DAWN_RELEASE) \
-	       build-desktop build-android build-webasm \
+	       build-desktop build-android build-webasm build-windows \
 	       build-desktop-debug build-desktop-release \
 	       build-android-debug build-android-release \
 	       build-android_x86_64-debug build-android_x86_64-release

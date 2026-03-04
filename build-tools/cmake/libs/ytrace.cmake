@@ -31,4 +31,7 @@ CPMAddPackage(
 # Disable control socket on Android (can't create ~/.cache/ytrace)
 if(YETTY_ANDROID)
     target_compile_definitions(ytrace INTERFACE YTRACE_NO_CONTROL_SOCKET)
+# Disable control socket on Windows - avoids MSVC bind() vs std::bind() conflict
+elseif(WIN32)
+    target_compile_definitions(ytrace INTERFACE YTRACE_NO_CONTROL_SOCKET=1)
 endif()

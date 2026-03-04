@@ -237,11 +237,21 @@ private:
         } else {
             // Desktop: Use PtyReader with OSC-aware reading
             // Get shell path from SHELL env (or COMSPEC on Windows)
-            const char* shellEnv = getenv("SHELL");
 #ifdef _WIN32
-            if (!shellEnv) shellEnv = getenv("COMSPEC");  // Windows: try COMSPEC
-            std::string shellPath = shellEnv ? shellEnv : "cmd.exe";
+            // Windows: prefer PowerShell, then COMSPEC (cmd.exe)
+            // Avoid MSYS/Git bash under ConPTY (interactive I/O issues)
+            const char* shellEnv = nullptr;
+            std::string shellPath;
+            if (auto* ps = getenv("YETTY_SHELL")) {
+                shellPath = ps;  // Explicit override
+            } else if (std::filesystem::exists("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe")) {
+                shellPath = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
+            } else {
+                shellEnv = getenv("COMSPEC");
+                shellPath = shellEnv ? shellEnv : "cmd.exe";
+            }
 #else
+            const char* shellEnv = getenv("SHELL");
             std::string shellPath = shellEnv ? shellEnv : "/bin/sh";
 #endif
 
@@ -332,6 +342,19 @@ private:
         if (_ptyBuffer.empty() || !_gpuScreen) return;
 
         ydebug("readFromPty: processing {} bytes after {} loops", _ptyBuffer.size(), loopCount);
+
+        // DEBUG: hex dump first 64 bytes of PTY data
+        {
+            std::string hex, ascii;
+            size_t dumpLen = std::min(_ptyBuffer.size(), size_t(64));
+            for (size_t di = 0; di < dumpLen; di++) {
+                uint8_t b = static_cast<uint8_t>(_ptyBuffer[di]);
+                char h[4]; snprintf(h, sizeof(h), "%02x ", b); hex += h;
+                ascii += (b >= 0x20 && b < 0x7f) ? static_cast<char>(b) : '.';
+            }
+            yinfo("PTY DATA[{}]: {}", dumpLen, hex);
+            yinfo("PTY ASCII: {}", ascii);
+        }
 
         // Reset scanner before processing (processPtyData has its own state)
         _oscScanner.reset();
@@ -454,13 +477,8 @@ private:
             _oscState = OscState::Normal;
         }
 
-        // Trigger screen refresh
-        if (auto loop = base::EventLoop::instance(); loop) {
-            auto t = std::chrono::high_resolution_clock::now();
-            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
-            yinfo("[TIME] PTY output processed, dispatching ScreenUpdate at {}ms", ms);
-            (*loop)->dispatch(base::Event::screenUpdateEvent());
-        }
+        // Note: screen update is already triggered by _gpuScreen->write() -> requestScreenUpdate()
+        // via EventQueue (thread-safe cross-thread dispatch to main thread)
     }
 
 #if YETTY_WEB

@@ -814,6 +814,15 @@ void GPUScreenImpl::createVTerm() {
 
 void GPUScreenImpl::write(const char *data, size_t len) {
   if (_vterm && len > 0) {
+    // DEBUG: log data reaching vterm
+    {
+      std::string hex;
+      size_t dumpLen = std::min(len, size_t(128));
+      for (size_t i = 0; i < dumpLen; i++) {
+        char h[4]; snprintf(h, sizeof(h), "%02x ", (uint8_t)data[i]); hex += h;
+      }
+      yinfo("VTERM_WRITE[{}]: {}", len, hex);
+    }
     vterm_input_write(_vterm, data, len);
     requestScreenUpdate();
   }
@@ -2707,6 +2716,13 @@ int GPUScreenImpl::onPutglyph(VTermGlyphInfo *info, VTermPos pos, void *user) {
   } else if (self->_msdfFont) {
     fontType = FONT_TYPE_MSDF;
     glyphIdx = self->_msdfFont->getGlyphIndex(cp, self->_pen.bold, self->_pen.italic);
+    // DEBUG: log glyph mapping for first few chars (any codepoint)
+    static int putglyphDebugCount = 0;
+    if (putglyphDebugCount < 30) {
+      yinfo("PUTGLYPH: cp={:#x} glyphIdx={} pos=({},{}) bold={} italic={}",
+            cp, glyphIdx, pos.row, pos.col, self->_pen.bold, self->_pen.italic);
+      putglyphDebugCount++;
+    }
   } else {
     fontType = FONT_TYPE_MSDF;
     glyphIdx = cp;
@@ -5264,17 +5280,29 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
     if (!_msdfFont->atlas()->getGlyphMetadataBuffer()) {
       return Err<void>("MSDF font glyph metadata buffer not ready");
     }
-    if (!_bitmapFont) {
-      return Err<void>("Bitmap font not initialized (_bitmapFont is null)");
-    }
-    if (!_bitmapFont->getTextureView()) {
-      return Err<void>("Bitmap font texture view not ready");
-    }
-    if (!_bitmapFont->getSampler()) {
-      return Err<void>("Bitmap font sampler not ready");
-    }
-    if (!_bitmapFont->getMetadataBuffer()) {
-      return Err<void>("Bitmap font metadata buffer not ready");
+    // Bitmap font resources (may be null if emoji font not found)
+    WGPUTextureView bmTextureView = nullptr;
+    WGPUSampler bmSampler = nullptr;
+    WGPUBuffer bmMetadataBuffer = nullptr;
+    size_t bmMetadataSize = 0;
+
+    if (_bitmapFont && _bitmapFont->getTextureView() &&
+        _bitmapFont->getSampler() && _bitmapFont->getMetadataBuffer()) {
+      bmTextureView = _bitmapFont->getTextureView();
+      bmSampler = _bitmapFont->getSampler();
+      bmMetadataBuffer = _bitmapFont->getMetadataBuffer();
+      uint32_t glyphsPerRow =
+          _bitmapFont->getAtlasWidth() / _bitmapFont->getGlyphSize();
+      bmMetadataSize =
+          glyphsPerRow * glyphsPerRow * sizeof(BitmapGlyphMetadata);
+    } else {
+      // Bitmap font not available - use MSDF font resources as placeholder
+      // (emoji rendering will be disabled but terminal still works)
+      ywarn("GPUScreen: BmFont not available, using MSDF resources as placeholder for bind group");
+      bmTextureView = _msdfFont->atlas()->getTextureView();
+      bmSampler = _msdfFont->atlas()->getSampler();
+      bmMetadataBuffer = _msdfFont->atlas()->getGlyphMetadataBuffer();
+      bmMetadataSize = _msdfFont->atlas()->getBufferGlyphCount() * sizeof(GlyphMetadataGPU);
     }
 
     WGPUBindGroupEntry bgEntries[15] = {};  // 12 + 3 for raster font
@@ -5299,17 +5327,14 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
     bgEntries[4].size = _cellBufferSize;
 
     bgEntries[5].binding = 5;
-    bgEntries[5].textureView = _bitmapFont->getTextureView();
+    bgEntries[5].textureView = bmTextureView;
 
     bgEntries[6].binding = 6;
-    bgEntries[6].sampler = _bitmapFont->getSampler();
+    bgEntries[6].sampler = bmSampler;
 
     bgEntries[7].binding = 7;
-    bgEntries[7].buffer = _bitmapFont->getMetadataBuffer();
-    uint32_t glyphsPerRow =
-        _bitmapFont->getAtlasWidth() / _bitmapFont->getGlyphSize();
-    bgEntries[7].size =
-        glyphsPerRow * glyphsPerRow * sizeof(BitmapGlyphMetadata);
+    bgEntries[7].buffer = bmMetadataBuffer;
+    bgEntries[7].size = bmMetadataSize;
 
     // Vector font bindings (8 and 9)
     if (!_vectorFont) {
@@ -5358,15 +5383,15 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
         bgEntries[14].buffer = _rasterFont->getMetadataBuffer();
         bgEntries[14].size = _rasterFont->getMetadataBufferSize();
     } else {
-        // Fallback: use bitmap font resources as placeholder
+        // Fallback: use bitmap font (or MSDF placeholder) resources
         bgEntries[12].binding = 12;
-        bgEntries[12].textureView = _bitmapFont->getTextureView();
+        bgEntries[12].textureView = bmTextureView;
 
         bgEntries[13].binding = 13;
-        bgEntries[13].sampler = _bitmapFont->getSampler();
+        bgEntries[13].sampler = bmSampler;
 
         bgEntries[14].binding = 14;
-        bgEntries[14].buffer = _bitmapFont->getMetadataBuffer();
+        bgEntries[14].buffer = bmMetadataBuffer;
         bgEntries[14].size = 8;  // Minimum size
     }
 
@@ -5388,6 +5413,25 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
   // Upload vterm cells to GPU
   wgpuQueueWriteBuffer(queue, _cellBuffer, 0, cells,
                        _cols * _rows * sizeof(GridCell));
+
+  // DEBUG: log first few non-empty cells with font type
+  {
+    int logged = 0;
+    for (int i = 0; i < _cols * _rows && logged < 8; i++) {
+      if (cells[i].glyph > 0) {
+        uint8_t fontType = (cells[i].style >> 5) & 0x07;
+        yinfo("CELL[{}]: glyph={} fontType={} fg=({},{},{}) bg=({},{},{}) style={:#x}",
+              i, cells[i].glyph, fontType,
+              cells[i].fgR, cells[i].fgG, cells[i].fgB,
+              cells[i].bgR, cells[i].bgG, cells[i].bgB,
+              cells[i].style);
+        logged++;
+      }
+    }
+    if (logged == 0) {
+      yinfo("CELL DEBUG: all {} cells have glyph=0", _cols * _rows);
+    }
+  }
 
   // Debug: scan uploaded cells for card glyphs
   {

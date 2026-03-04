@@ -18,22 +18,8 @@ namespace rpc {
 
 Result<std::string> createSocketPath() {
 #ifdef _WIN32
-    // Windows: use named pipes or temp directory
-    std::string baseDir;
-    if (auto* temp = std::getenv("TEMP")) {
-        baseDir = temp;
-    } else if (auto* tmp = std::getenv("TMP")) {
-        baseDir = tmp;
-    } else {
-        baseDir = "C:\\Temp";
-    }
-
-    // Create yetty subdirectory
-    std::string dir = baseDir + "\\yetty";
-    _mkdir(dir.c_str()); // ok if already exists
-
-    // Socket file (Windows will use named pipes, but path format similar)
-    std::string path = dir + "\\yetty-" + std::to_string(_getpid()) + ".sock";
+    // Windows: use named pipes (\\.\pipe\name format required by libuv)
+    std::string path = "\\\\.\\pipe\\yetty-" + std::to_string(_getpid());
     return Ok(path);
 #else
     // Determine base directory: $XDG_RUNTIME_DIR or fallback

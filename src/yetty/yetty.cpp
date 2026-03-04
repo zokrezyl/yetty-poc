@@ -874,6 +874,35 @@ Result<void> YettyImpl::initWebGPU() noexcept {
     }
 #endif
 
+#ifdef _WIN32
+    // On Windows, if default adapter request failed or returned software/WARP renderer,
+    // try D3D11 backend which supports older GPUs (pre-D3D12/Vulkan hardware)
+    if (_adapter) {
+        WGPUAdapterInfo info = {};
+        if (wgpuAdapterGetInfo(_adapter, &info) == WGPUStatus_Success) {
+            // Check if we got WARP (software) - adapterType 3 = CPU/Software
+            if (info.adapterType == WGPUAdapterType_CPU) {
+                yinfo("initWebGPU: Got software renderer, trying D3D11 backend for hardware GPU...");
+                wgpuAdapterRelease(_adapter);
+                _adapter = nullptr;
+                adapterOpts.backendType = WGPUBackendType_D3D11;
+                wgpuInstanceRequestAdapter(_instance, &adapterOpts, adapterCallbackInfo);
+                // If D3D11 also fails, fall back to whatever works
+                if (!_adapter) {
+                    ywarn("initWebGPU: D3D11 backend unavailable, falling back to any adapter");
+                    adapterOpts.backendType = WGPUBackendType_Undefined;
+                    wgpuInstanceRequestAdapter(_instance, &adapterOpts, adapterCallbackInfo);
+                }
+            }
+        }
+    } else {
+        // Default request failed entirely, try D3D11 explicitly
+        yinfo("initWebGPU: Default adapter failed, trying D3D11 backend...");
+        adapterOpts.backendType = WGPUBackendType_D3D11;
+        wgpuInstanceRequestAdapter(_instance, &adapterOpts, adapterCallbackInfo);
+    }
+#endif
+
     if (!_adapter) {
         return Err<void>("Failed to get WebGPU adapter");
     }
@@ -1519,10 +1548,10 @@ Result<void> YettyImpl::initCallbacks() noexcept {
         if (_vncClientMode && _vncClient) {
             ydebug("VNC client mode: forwarding key={} scancode={} action={}", key, scancode, static_cast<int>(action));
             uint8_t vncMods = 0;
-            if (mods & 0x0001) vncMods |= vnc::MOD_SHIFT;
-            if (mods & 0x0002) vncMods |= vnc::MOD_CTRL;
-            if (mods & 0x0004) vncMods |= vnc::MOD_ALT;
-            if (mods & 0x0008) vncMods |= vnc::MOD_SUPER;
+            if (mods & 0x0001) vncMods |= vnc::VNC_MOD_SHIFT;
+            if (mods & 0x0002) vncMods |= vnc::VNC_MOD_CTRL;
+            if (mods & 0x0004) vncMods |= vnc::VNC_MOD_ALT;
+            if (mods & 0x0008) vncMods |= vnc::VNC_MOD_SUPER;
 
             if (action == KeyAction::Press || action == KeyAction::Repeat) {
                 // For Ctrl/Alt + character keys, use layout-mapped character

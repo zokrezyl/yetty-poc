@@ -99,10 +99,11 @@ struct KeyEvent {
 };
 
 // Modifier flags for KeyEvent.mods
-constexpr uint8_t MOD_SHIFT = 0x01;
-constexpr uint8_t MOD_CTRL  = 0x02;
-constexpr uint8_t MOD_ALT   = 0x04;
-constexpr uint8_t MOD_SUPER = 0x08;
+// Prefixed with VNC_ to avoid collision with Windows MOD_SHIFT/MOD_ALT macros
+constexpr uint8_t VNC_MOD_SHIFT = 0x01;
+constexpr uint8_t VNC_MOD_CTRL  = 0x02;
+constexpr uint8_t VNC_MOD_ALT   = 0x04;
+constexpr uint8_t VNC_MOD_SUPER = 0x08;
 
 // Character with modifiers (layout-mapped character, not raw keycode)
 struct CharWithModsEvent {

@@ -1,6 +1,7 @@
 #include <yetty/platform.h>
 #include <yetty/pty-provider.h>
 #include <yetty/base/event-loop.h>
+#include <yetty/base/event-queue.h>
 #include <ytrace/ytrace.hpp>
 
 #include <fcntl.h>
@@ -415,10 +416,11 @@ public:
     }
 
     void requestRender() override {
-        // Desktop: dispatch ScreenUpdate event directly
-        if (auto loop = base::EventLoop::instance(); loop) {
-            ydebug("requestRender: dispatching ScreenUpdate");
-            (*loop)->dispatch(base::Event::screenUpdateEvent());
+        // Use EventQueue for thread-safe cross-thread dispatch
+        // (PTY reader thread calls write() -> requestScreenUpdate() -> requestRender(),
+        //  but EventLoop is a ThreadSingleton so we need EventQueue to reach the main thread)
+        if (auto eq = base::EventQueue::instance(); eq) {
+            (*eq)->push(base::Event::screenUpdateEvent());
         }
     }
 

@@ -4,6 +4,7 @@ include(${YETTY_ROOT}/build-tools/cmake/targets/shared.cmake)
 
 # Windows-specific libraries
 include(${YETTY_ROOT}/build-tools/cmake/libs/glfw.cmake)
+include(${YETTY_ROOT}/build-tools/cmake/libs/libjpeg-turbo.cmake)
 
 # Add src/yetty (builds libraries)
 add_subdirectory(${YETTY_ROOT}/src/yetty ${CMAKE_BINARY_DIR}/src/yetty)
@@ -18,7 +19,7 @@ add_executable(yetty
     ${YETTY_ROOT}/src/yetty/platform/windows-platform.cpp
 )
 
-target_include_directories(yetty PRIVATE ${YETTY_INCLUDES} ${YETTY_RENDERER_INCLUDES})
+target_include_directories(yetty PRIVATE ${YETTY_INCLUDES} ${YETTY_RENDERER_INCLUDES} ${JPEG_INCLUDE_DIRS})
 
 # Embed resources (logo)
 incbin_add_resources(yetty
@@ -32,6 +33,7 @@ target_compile_definitions(yetty PRIVATE
     YETTY_USE_PREBUILT_ATLAS=0
     YETTY_USE_DIRECTWRITE=1
     YETTY_USE_CONPTY=1
+    YETTY_HAS_VNC=1
     NOMINMAX
     WIN32_LEAN_AND_MEAN
 )
@@ -47,7 +49,10 @@ target_link_libraries(yetty PRIVATE
     lz4_static
     uv_a
     yetty_gpu
+    turbojpeg-static
+    yetty_vnc
     dwrite
+    ws2_32
     ${FREETYPE_ALL_LIBS}
 )
 
@@ -65,3 +70,7 @@ add_custom_command(TARGET yetty POST_BUILD
     COMMAND ${CMAKE_COMMAND} -DBUILD_DIR=${CMAKE_BINARY_DIR} -DTARGET_TYPE=desktop -P ${YETTY_ROOT}/build-tools/cmake/verify-assets.cmake
     COMMENT "Verifying build assets..."
 )
+
+# Tests
+enable_testing()
+add_subdirectory(${YETTY_ROOT}/test/ut/windows ${CMAKE_BINARY_DIR}/test/ut/windows)

@@ -19,6 +19,11 @@ target_link_libraries(yetty_vnc PUBLIC
     yetty_base
 )
 
+if(WIN32)
+    target_compile_definitions(yetty_vnc PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_link_libraries(yetty_vnc PUBLIC ws2_32)
+endif()
+
 # Test utilities (desktop only - require GLFW)
 if(NOT YETTY_ANDROID AND NOT EMSCRIPTEN)
     add_subdirectory(test)

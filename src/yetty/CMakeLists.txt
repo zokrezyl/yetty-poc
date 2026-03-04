@@ -90,8 +90,8 @@ add_subdirectory(yplot)
 add_subdirectory(msdf-wgsl)
 add_subdirectory(shaders)
 
-# VNC is available on desktop (Linux, macOS) and WebAssembly
-if(NOT YETTY_ANDROID AND NOT WIN32)
+# VNC is desktop-only (Linux, macOS, Windows)
+if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
     add_subdirectory(vnc)
 endif()
 

@@ -14,13 +14,13 @@
 #include <glfw3webgpu.h>
 #include <uv.h>
 
+#include "../socket-compat.h"
 #include <chrono>
 #include <thread>
 #include <random>
 #include <csignal>
 #include <cstring>
 #include <atomic>
-#include <sys/socket.h>
 
 using namespace yetty::vnc;
 

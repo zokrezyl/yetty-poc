@@ -3,15 +3,8 @@
 #include <yetty/base/event-queue.h>
 #include <ytrace/ytrace.hpp>
 #include <turbojpeg.h>
+#include "socket-compat.h"
 #include <cstring>
-#include <arpa/inet.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <poll.h>
-#include <cerrno>
 #include <chrono>
 
 namespace yetty::vnc {
@@ -92,29 +85,30 @@ Result<void> VncServer::start(uint16_t port) {
     }
     _eventQueue = *queueResult;
 
-    _serverFd = socket(AF_INET, SOCK_STREAM, 0);
+    sock::init();  // No-op on POSIX, WSAStartup on Windows
+
+    _serverFd = static_cast<int>(socket(AF_INET, SOCK_STREAM, 0));
     if (_serverFd < 0) return Err<void>("Failed to create socket");
 
     int opt = 1;
-    setsockopt(_serverFd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    sock::setsockopt(_serverFd, SOL_SOCKET, SO_REUSEADDR, opt);
 
     // Set non-blocking for async accept
-    int flags = fcntl(_serverFd, F_GETFL, 0);
-    fcntl(_serverFd, F_SETFL, flags | O_NONBLOCK);
+    sock::set_nonblocking(_serverFd);
 
     struct sockaddr_in addr = {};
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = INADDR_ANY;
     addr.sin_port = htons(port);
 
-    if (bind(_serverFd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-        close(_serverFd);
+    if (::bind(_serverFd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        sock::close(_serverFd);
         _serverFd = -1;
         return Err<void>("Failed to bind to port " + std::to_string(port));
     }
 
-    if (listen(_serverFd, 5) < 0) {
-        close(_serverFd);
+    if (::listen(_serverFd, 5) < 0) {
+        sock::close(_serverFd);
         _serverFd = -1;
         return Err<void>("Failed to listen");
     }
@@ -122,7 +116,7 @@ Result<void> VncServer::start(uint16_t port) {
     // Register server socket with EventLoop for async accept
     auto loopResult = base::EventLoop::instance();
     if (!loopResult) {
-        close(_serverFd);
+        sock::close(_serverFd);
         _serverFd = -1;
         return Err<void>("EventLoop not available");
     }
@@ -130,7 +124,7 @@ Result<void> VncServer::start(uint16_t port) {
 
     auto pollResult = loop->createPoll();
     if (!pollResult) {
-        close(_serverFd);
+        sock::close(_serverFd);
         _serverFd = -1;
         return Err<void>("Failed to create server poll", pollResult);
     }
@@ -138,21 +132,21 @@ Result<void> VncServer::start(uint16_t port) {
 
     if (auto res = loop->configPoll(_serverPollId, _serverFd); !res) {
         loop->destroyPoll(_serverPollId);
-        close(_serverFd);
+        sock::close(_serverFd);
         _serverFd = -1;
         return Err<void>("Failed to configure server poll", res);
     }
 
     if (auto res = loop->registerPollListener(_serverPollId, sharedAs<base::EventListener>()); !res) {
         loop->destroyPoll(_serverPollId);
-        close(_serverFd);
+        sock::close(_serverFd);
         _serverFd = -1;
         return Err<void>("Failed to register server poll listener", res);
     }
 
     if (auto res = loop->startPoll(_serverPollId); !res) {
         loop->destroyPoll(_serverPollId);
-        close(_serverFd);
+        sock::close(_serverFd);
         _serverFd = -1;
         return Err<void>("Failed to start server poll", res);
     }
@@ -179,7 +173,7 @@ void VncServer::stop() {
 
     if (_serverFd >= 0) {
         ::shutdown(_serverFd, SHUT_RDWR);
-        close(_serverFd);
+        sock::close(_serverFd);
         _serverFd = -1;
     }
 
@@ -195,7 +189,7 @@ void VncServer::stop() {
                 loop->destroyPoll(it->second);
             }
             ::shutdown(fd, SHUT_RDWR);
-            close(fd);
+            sock::close(fd);
         }
         _clients.clear();
         _clientPollIds.clear();
@@ -213,22 +207,21 @@ void VncServer::handleAccept() {
     while (true) {
         struct sockaddr_in clientAddr;
         socklen_t clientLen = sizeof(clientAddr);
-        int clientFd = accept(_serverFd, (struct sockaddr*)&clientAddr, &clientLen);
+        int clientFd = static_cast<int>(::accept(_serverFd, (struct sockaddr*)&clientAddr, &clientLen));
         if (clientFd < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            if (sock::would_block()) {
                 break;  // No more pending connections
             }
-            ywarn("VNC accept failed: errno={}", errno);
+            ywarn("VNC accept failed: {}", sock::last_error_string());
             break;
         }
 
         // Disable Nagle
         int flag = 1;
-        setsockopt(clientFd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
+        sock::setsockopt(clientFd, IPPROTO_TCP, TCP_NODELAY, flag);
 
         // Set non-blocking for async I/O
-        int flags = fcntl(clientFd, F_GETFL, 0);
-        fcntl(clientFd, F_SETFL, flags | O_NONBLOCK);
+        sock::set_nonblocking(clientFd);
 
         char clientIp[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &clientAddr.sin_addr, clientIp, sizeof(clientIp));
@@ -264,13 +257,13 @@ Result<void> VncServer::sendToClient(int clientFd, const void* data, size_t size
     // Try to send directly first
     size_t remaining = size;
     while (remaining > 0) {
-        ssize_t sent = send(clientFd, ptr, remaining, MSG_NOSIGNAL | MSG_DONTWAIT);
+        ssize_t sent = sock::send(clientFd, ptr, remaining, MSG_NOSIGNAL | MSG_DONTWAIT);
         if (sent > 0) {
             ptr += sent;
             remaining -= sent;
             continue;
         }
-        if (sent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+        if (sent < 0 && sock::would_block()) {
             // Queue remaining data for async send
             if (it == _clientSendBuffers.end()) {
                 it = _clientSendBuffers.emplace(clientFd, ClientSendBuffer{}).first;
@@ -281,7 +274,7 @@ Result<void> VncServer::sendToClient(int clientFd, const void* data, size_t size
             return Ok();
         }
         // Real error
-        return Err<void>("Send failed: " + std::string(strerror(errno)));
+        return Err<void>("Send failed: " + sock::last_error_string());
     }
     return Ok();
 }
@@ -295,14 +288,14 @@ void VncServer::drainClientSendQueue(int clientFd) {
     auto& buf = it->second;
     while (buf.offset < buf.queue.size()) {
         size_t remaining = buf.queue.size() - buf.offset;
-        ssize_t sent = send(clientFd, buf.queue.data() + buf.offset, remaining, MSG_NOSIGNAL | MSG_DONTWAIT);
+        ssize_t sent = sock::send(clientFd, buf.queue.data() + buf.offset, remaining, MSG_NOSIGNAL | MSG_DONTWAIT);
 
         if (sent <= 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            if (sock::would_block()) {
                 ydebug("VNC drainClientSendQueue: fd={} EAGAIN, {} bytes remaining", clientFd, remaining);
                 return;
             }
-            ywarn("VNC drainClientSendQueue: fd={} send failed errno={}", clientFd, errno);
+            ywarn("VNC drainClientSendQueue: fd={} send failed: {}", clientFd, sock::last_error_string());
             buf.queue.clear();
             buf.offset = 0;
             updateClientPollEvents(clientFd);
@@ -1113,7 +1106,7 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
         // Remove dead clients
         for (int fd : deadClients) {
             unregisterClientPoll(fd);
-            close(fd);
+            sock::close(fd);
             _clients.erase(std::remove(_clients.begin(), _clients.end(), fd), _clients.end());
             _clientInputBuffers.erase(fd);
             _clientSendBuffers.erase(fd);
@@ -1170,21 +1163,21 @@ void VncServer::pollClientInput(int clientFd) {
         if (toRead == 0) break;
 
         uint8_t tmp[256];
-        ssize_t n = recv(clientFd, tmp, std::min(toRead, sizeof(tmp)), MSG_DONTWAIT);
+        ssize_t n = sock::recv(clientFd, tmp, std::min(toRead, sizeof(tmp)), MSG_DONTWAIT);
         if (n <= 0) {
             if (n == 0) {
                 // Client disconnected - clean up
                 yinfo("VNC pollClientInput: fd={} disconnected, cleaning up", clientFd);
                 std::lock_guard<std::mutex> lock(_clientsMutex);
                 unregisterClientPoll(clientFd);
-                close(clientFd);
+                sock::close(clientFd);
                 _clients.erase(std::remove(_clients.begin(), _clients.end(), clientFd), _clients.end());
                 _clientInputBuffers.erase(clientFd);
                 _clientSendBuffers.erase(clientFd);
                 _clientCount = _clients.size();
                 return;  // Stop processing this client
-            } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
-                ydebug("VNC pollClientInput: fd={} recv error errno={}", clientFd, errno);
+            } else if (!sock::would_block()) {
+                ydebug("VNC pollClientInput: fd={} recv error: {}", clientFd, sock::last_error_string());
             }
             break;  // No more data available
         }

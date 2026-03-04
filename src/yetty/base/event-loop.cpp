@@ -174,7 +174,12 @@ public:
 
         auto& ph = it->second;
         ph->fd = fd;
+#ifdef _WIN32
+        // On Windows, sockets require uv_poll_init_socket (not uv_poll_init)
+        int r = uv_poll_init_socket(_loop, &ph->poll, fd);
+#else
         int r = uv_poll_init(_loop, &ph->poll, fd);
+#endif
         if (r != 0) {
             yerror("EventLoop::configPoll: uv_poll_init failed for fd={}: {}", fd, uv_strerror(r));
             return Err<void>(std::string("uv_poll_init failed: ") + uv_strerror(r));

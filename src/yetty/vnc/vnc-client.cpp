@@ -1,15 +1,9 @@
 #include "vnc-client.h"
+#include "socket-compat.h"
 #include <ytrace/ytrace.hpp>
 #include <turbojpeg.h>
 
 #include <cstring>
-#include <arpa/inet.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <netdb.h>
-#include <unistd.h>
-#include <fcntl.h>
 
 namespace yetty::vnc {
 
@@ -82,6 +76,8 @@ Result<void> VncClient::connect(const std::string& host, uint16_t port) {
         return Err<void>("Already connected");
     }
 
+    sock::init();  // No-op on POSIX, WSAStartup on Windows
+
     // Resolve host
     struct addrinfo hints = {}, *result;
     hints.ai_family = AF_INET;
@@ -93,32 +89,31 @@ Result<void> VncClient::connect(const std::string& host, uint16_t port) {
     }
 
     // Create socket
-    _socket = socket(result->ai_family, result->ai_socktype, result->ai_protocol);
+    _socket = static_cast<int>(socket(result->ai_family, result->ai_socktype, result->ai_protocol));
     if (_socket < 0) {
         freeaddrinfo(result);
         return Err<void>("Failed to create socket");
     }
 
     // Set non-blocking BEFORE connect for async connection
-    int flags = fcntl(_socket, F_GETFL, 0);
-    fcntl(_socket, F_SETFL, flags | O_NONBLOCK);
+    sock::set_nonblocking(_socket);
 
     // Disable Nagle's algorithm for lower latency
     int flag = 1;
-    setsockopt(_socket, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
+    sock::setsockopt(_socket, IPPROTO_TCP, TCP_NODELAY, flag);
 
-    // Non-blocking connect - will return immediately with EINPROGRESS
-    int connectResult = ::connect(_socket, result->ai_addr, result->ai_addrlen);
+    // Non-blocking connect - will return immediately with EINPROGRESS/WSAEWOULDBLOCK
+    int connectResult = ::connect(_socket, result->ai_addr, static_cast<int>(result->ai_addrlen));
     freeaddrinfo(result);
 
-    if (connectResult < 0 && errno != EINPROGRESS) {
-        close(_socket);
+    if (connectResult < 0 && !sock::connect_in_progress()) {
+        sock::close(_socket);
         _socket = -1;
-        return Err<void>("Failed to connect to " + host + ":" + portStr + ": " + strerror(errno));
+        return Err<void>("Failed to connect to " + host + ":" + portStr + ": " + sock::last_error_string());
     }
 
     // Connection is in progress - we'll complete it asynchronously
-    _connecting = (errno == EINPROGRESS);
+    _connecting = (connectResult < 0);  // If connect returned error, it's in progress
     _connected = !_connecting;  // If connect succeeded immediately (localhost)
     bool immediateConnect = _connected;
 
@@ -198,7 +193,7 @@ void VncClient::disconnect() {
 
     if (_socket >= 0) {
         ::shutdown(_socket, SHUT_RDWR);
-        ::close(_socket);
+        sock::close(_socket);
         _socket = -1;
     }
 }
@@ -211,9 +206,8 @@ Result<bool> VncClient::onEvent(const base::Event& event) {
     // Handle async connect completion
     if (_connecting && event.type == base::Event::Type::PollWritable) {
         int error = 0;
-        socklen_t len = sizeof(error);
-        if (getsockopt(_socket, SOL_SOCKET, SO_ERROR, &error, &len) < 0 || error != 0) {
-            yerror("VNC async connect failed: {}", error ? strerror(error) : "getsockopt failed");
+        if (sock::getsockopt(_socket, SOL_SOCKET, SO_ERROR, error) < 0 || error != 0) {
+            yerror("VNC async connect failed: {}", error ? sock::error_string(error) : "getsockopt failed");
             disconnect();
             return Ok(true);
         }
@@ -264,11 +258,11 @@ void VncClient::onSocketReadable() {
             yerror("VNC onSocketReadable: INFINITE LOOP DETECTED! Breaking out.");
             break;
         }
-        ssize_t n = recv(_socket, _recvBuffer.data() + _recvOffset,
+        ssize_t n = sock::recv(_socket, _recvBuffer.data() + _recvOffset,
                          _recvNeeded - _recvOffset, MSG_DONTWAIT);
 
         if (n < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            if (sock::would_block()) {
                 // No more data available - trigger render if we got tiles
                 ydebug("VNC onSocketReadable: EAGAIN after {} loops, tilesReceived={}", loopCount, tilesReceived);
                 if (tilesReceived && onFrameReceived) {
@@ -279,7 +273,7 @@ void VncClient::onSocketReadable() {
                 }
                 return;
             }
-            ywarn("VNC onSocketReadable: recv error: {} (errno={})", strerror(errno), errno);
+            ywarn("VNC onSocketReadable: recv error: {}", sock::last_error_string());
             disconnect();
             return;
         }
@@ -309,7 +303,7 @@ void VncClient::onSocketReadable() {
                           _currentFrame.magic, FRAME_MAGIC);
                     // Drain and resync
                     uint8_t drain[1024];
-                    while (recv(_socket, drain, sizeof(drain), MSG_DONTWAIT) > 0) {}
+                    while (sock::recv(_socket, drain, sizeof(drain), MSG_DONTWAIT) > 0) {}
                     _recvState = RecvState::FRAME_HEADER;
                     _recvNeeded = sizeof(FrameHeader);
                     _recvOffset = 0;
@@ -824,7 +818,7 @@ void VncClient::sendInput(const void* data, size_t size) {
 
     // If send queue is empty, try to send directly first
     if (_sendQueue.empty()) {
-        ssize_t sent = send(_socket, ptr, size, MSG_NOSIGNAL | MSG_DONTWAIT);
+        ssize_t sent = sock::send(_socket, ptr, size, MSG_NOSIGNAL | MSG_DONTWAIT);
         if (sent > 0) {
             if (static_cast<size_t>(sent) == size) {
                 ydebug("VNC client sendInput: sent {} bytes directly", sent);
@@ -833,8 +827,8 @@ void VncClient::sendInput(const void* data, size_t size) {
             // Partial send - queue the rest
             ptr += sent;
             size -= sent;
-        } else if (sent < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-            ywarn("VNC client sendInput: send failed errno={}", errno);
+        } else if (sent < 0 && !sock::would_block()) {
+            ywarn("VNC client sendInput: send failed: {}", sock::last_error_string());
             return;
         }
         // EAGAIN/EWOULDBLOCK - queue the data
@@ -855,15 +849,15 @@ void VncClient::drainSendQueue() {
 
     while (_sendOffset < _sendQueue.size()) {
         size_t remaining = _sendQueue.size() - _sendOffset;
-        ssize_t sent = send(_socket, _sendQueue.data() + _sendOffset, remaining, MSG_NOSIGNAL | MSG_DONTWAIT);
+        ssize_t sent = sock::send(_socket, _sendQueue.data() + _sendOffset, remaining, MSG_NOSIGNAL | MSG_DONTWAIT);
 
         if (sent <= 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            if (sock::would_block()) {
                 // Can't send more right now, wait for next writable event
                 ydebug("VNC drainSendQueue: EAGAIN, {} bytes remaining", remaining);
                 return;
             }
-            ywarn("VNC drainSendQueue: send failed errno={}", errno);
+            ywarn("VNC drainSendQueue: send failed: {}", sock::last_error_string());
             _sendQueue.clear();
             _sendOffset = 0;
             updatePollEvents();

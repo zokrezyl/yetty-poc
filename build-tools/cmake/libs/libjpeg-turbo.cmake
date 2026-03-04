@@ -23,11 +23,16 @@ set(_LIBJPEG_SRC_DIR "${CMAKE_BINARY_DIR}/_deps/libjpeg-turbo-src")
 if(EXISTS "${_LIBJPEG_SRC_DIR}/src/turbojpeg.h")
     set(LIBJPEG_TURBO_INSTALL_DIR "${CMAKE_BINARY_DIR}/libjpeg-turbo-install")
 
-    # Determine library directory (lib vs lib64)
-    if(CMAKE_SIZEOF_VOID_P EQUAL 8 AND NOT APPLE AND NOT EMSCRIPTEN)
+    # Determine library directory and name
+    if(WIN32)
+        set(_LIBJPEG_LIB_SUBDIR "lib")
+        set(_LIBJPEG_LIB_NAME "turbojpeg-static.lib")
+    elseif(CMAKE_SIZEOF_VOID_P EQUAL 8 AND NOT APPLE AND NOT EMSCRIPTEN)
         set(_LIBJPEG_LIB_SUBDIR "lib64")
+        set(_LIBJPEG_LIB_NAME "libturbojpeg.a")
     else()
         set(_LIBJPEG_LIB_SUBDIR "lib")
+        set(_LIBJPEG_LIB_NAME "libturbojpeg.a")
     endif()
 
     # Platform-specific CMake arguments
@@ -74,7 +79,7 @@ if(EXISTS "${_LIBJPEG_SRC_DIR}/src/turbojpeg.h")
         INSTALL_DIR ${LIBJPEG_TURBO_INSTALL_DIR}
         CMAKE_ARGS ${_LIBJPEG_CMAKE_ARGS}
         BUILD_BYPRODUCTS
-            ${LIBJPEG_TURBO_INSTALL_DIR}/${_LIBJPEG_LIB_SUBDIR}/libturbojpeg.a
+            ${LIBJPEG_TURBO_INSTALL_DIR}/${_LIBJPEG_LIB_SUBDIR}/${_LIBJPEG_LIB_NAME}
     )
 
     # Create imported target
@@ -82,7 +87,7 @@ if(EXISTS "${_LIBJPEG_SRC_DIR}/src/turbojpeg.h")
     add_dependencies(turbojpeg-static libjpeg-turbo-ext)
 
     set_target_properties(turbojpeg-static PROPERTIES
-        IMPORTED_LOCATION "${LIBJPEG_TURBO_INSTALL_DIR}/${_LIBJPEG_LIB_SUBDIR}/libturbojpeg.a"
+        IMPORTED_LOCATION "${LIBJPEG_TURBO_INSTALL_DIR}/${_LIBJPEG_LIB_SUBDIR}/${_LIBJPEG_LIB_NAME}"
     )
 
     # Use SOURCE directory headers (available immediately after CPM download)

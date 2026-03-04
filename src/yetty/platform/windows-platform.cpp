@@ -1,9 +1,11 @@
 #include <yetty/platform.h>
 #include <yetty/pty-provider.h>
 #include <yetty/base/event-loop.h>
+#include <yetty/base/event-queue.h>
 #include <ytrace/ytrace.hpp>
 
 #include <atomic>
+#include <chrono>
 #include <vector>
 #include <thread>
 #include <mutex>
@@ -248,7 +250,7 @@ private:
 
 class GlfwPlatform : public Platform {
 public:
-    GlfwPlatform() = default;
+    GlfwPlatform() : _startTime(std::chrono::steady_clock::now()) {}
     ~GlfwPlatform() override {
         destroyWindow();
         if (_initialized) {
@@ -256,7 +258,14 @@ public:
         }
     }
 
-    Result<void> init() {
+    Result<void> init(bool headless = false) {
+        _headless = headless;
+        if (_headless) {
+            // Headless mode: no GLFW, use std::chrono for timing
+            yinfo("Platform: headless mode (no GLFW)");
+            return Ok();
+        }
+
         if (!glfwInit()) {
             return Err<void>("Failed to initialize GLFW");
         }
@@ -363,10 +372,16 @@ public:
     }
 
     void pollEvents() override {
-        glfwPollEvents();
+        if (!_headless) {
+            glfwPollEvents();
+        }
     }
 
     double getTime() const override {
+        if (_headless) {
+            auto elapsed = std::chrono::steady_clock::now() - _startTime;
+            return std::chrono::duration<double>(elapsed).count();
+        }
         return glfwGetTime();
     }
 
@@ -431,9 +446,11 @@ public:
     }
 
     void requestRender() override {
-        // Desktop: dispatch ScreenUpdate event directly
-        if (auto loop = base::EventLoop::instance(); loop) {
-            (*loop)->dispatch(base::Event::screenUpdateEvent());
+        // Use EventQueue for thread-safe cross-thread dispatch
+        // (PTY reader thread calls write() -> requestScreenUpdate() -> requestRender(),
+        //  but EventLoop is a ThreadSingleton so we need EventQueue to reach the main thread)
+        if (auto eq = base::EventQueue::instance(); eq) {
+            (*eq)->push(base::Event::screenUpdateEvent());
         }
     }
 
@@ -500,6 +517,8 @@ private:
 
     GLFWwindow* _window = nullptr;
     bool _initialized = false;
+    bool _headless = false;
+    std::chrono::steady_clock::time_point _startTime;
 
     // Cursors
     GLFWcursor* _cursorArrow = nullptr;
@@ -520,9 +539,8 @@ private:
 
 // Factory implementation for Windows
 Result<Platform::Ptr> Platform::create(bool headless) {
-    (void)headless;  // Windows doesn't support headless mode
     auto platform = std::make_shared<GlfwPlatform>();
-    if (auto res = platform->init(); !res) {
+    if (auto res = platform->init(headless); !res) {
         return Err<Ptr>("Failed to initialize GLFW platform", res);
     }
     return Ok<Ptr>(std::move(platform));

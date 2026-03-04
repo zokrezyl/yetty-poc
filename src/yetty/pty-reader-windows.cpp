@@ -52,6 +52,10 @@ public:
         // Set up startup info with pseudo console
         STARTUPINFOEXW siEx = {};
         siEx.StartupInfo.cb = sizeof(STARTUPINFOEXW);
+        // Prevent child from inheriting parent's redirected stdio handles
+        // (fixes ConPTY output routing when parent runs under mintty/pipe)
+        // See: https://github.com/microsoft/terminal/issues/11276
+        siEx.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
 
         SIZE_T attrListSize = 0;
         InitializeProcThreadAttributeList(nullptr, 1, 0, &attrListSize);
@@ -203,20 +207,31 @@ public:
 private:
     void readerThreadFunc() {
         char buf[4096];
+        int readCount = 0;
+        yinfo("PtyReaderWindows: reader thread started");
         while (_running) {
             DWORD bytesRead = 0;
-            if (ReadFile(_pipeOutRead, buf, sizeof(buf), &bytesRead, nullptr) && bytesRead > 0) {
+            yinfo("PtyReaderWindows: ReadFile #{} waiting...", readCount);
+            BOOL ok = ReadFile(_pipeOutRead, buf, sizeof(buf), &bytesRead, nullptr);
+            if (ok && bytesRead > 0) {
+                yinfo("PtyReaderWindows: ReadFile #{} got {} bytes", readCount, bytesRead);
                 {
                     std::lock_guard<std::mutex> lock(_bufferMutex);
                     _readBuffer.insert(_readBuffer.end(), buf, buf + bytesRead);
                 }
+                yinfo("PtyReaderWindows: calling dataAvailableCallback...");
                 if (_dataAvailableCallback) {
                     _dataAvailableCallback();
                 }
+                yinfo("PtyReaderWindows: callback returned");
+                readCount++;
             } else {
+                DWORD err = GetLastError();
+                yinfo("PtyReaderWindows: ReadFile failed ok={} bytesRead={} err={}", (int)ok, bytesRead, err);
                 // Check if process exited
                 DWORD exitCode;
                 if (GetExitCodeProcess(_hProcess, &exitCode) && exitCode != STILL_ACTIVE) {
+                    yinfo("PtyReaderWindows: process exited with code {}", exitCode);
                     _running = false;
                     if (_exitCallback) {
                         _exitCallback(static_cast<int>(exitCode));
@@ -226,6 +241,7 @@ private:
                 Sleep(10);
             }
         }
+        yinfo("PtyReaderWindows: reader thread exiting");
     }
 
     HPCON _hPC = nullptr;

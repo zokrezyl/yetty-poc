@@ -1,3 +1,8 @@
+# Windows macro guards
+if(WIN32)
+    add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN)
+endif()
+
 # VNC Test Server - Terminal rendering with vterm + FreeType
 add_executable(vnc-test-server vnc-test-server.cpp)
 
