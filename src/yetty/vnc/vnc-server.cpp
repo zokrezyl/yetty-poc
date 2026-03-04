@@ -930,6 +930,10 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
 
     if (numDirty == 0) return Ok();
 
+    // Flow control: set awaiting ack BEFORE sending, to prevent race condition
+    // where isReadyForFrame() returns true between state=IDLE and _awaitingAck=true
+    _awaitingAck = true;
+
     // Build frame data
     std::vector<uint8_t> frameData;
     frameData.reserve(64 * 1024);
@@ -1130,8 +1134,8 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
         _stats.lastReportTime = now;
     }
 
-    // Flow control: wait for client ack before next frame
-    _awaitingAck = true;
+    // Note: _awaitingAck was set to true earlier (before encoding) to prevent
+    // race condition where isReadyForFrame() returns true during encoding
 
     return Ok();
 }
@@ -1310,8 +1314,9 @@ bool VncServer::hasPendingInput() const {
 }
 
 bool VncServer::isReadyForFrame() const {
-    // Ready when: state machine is idle/done AND not waiting for client ack
-    return (_captureState == CaptureState::IDLE || _gpuWorkDone.load()) && !_awaitingAck.load();
+    // Ready when: state machine is idle AND not waiting for client ack
+    // Note: _gpuWorkDone being true is not sufficient - state machine must complete
+    return _captureState == CaptureState::IDLE && !_awaitingAck.load();
 }
 
 void VncServer::processInput() {
