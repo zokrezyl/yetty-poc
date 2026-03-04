@@ -48,6 +48,8 @@ public:
     void sendTextInput(const char* text, size_t len);
     void sendResize(uint16_t width, uint16_t height);
     void sendCellSize(uint8_t cellHeight);
+    void sendFrameAck();  // Flow control: notify server we're done with frame
+    void sendCompressionConfig(bool forceRaw, uint8_t quality);  // Configure compression settings
 
     // EventListener interface
     Result<bool> onEvent(const base::Event& event) override;
@@ -85,7 +87,9 @@ private:
     enum class RecvState {
         FRAME_HEADER,   // Waiting for frame header
         TILE_HEADER,    // Waiting for tile header
-        TILE_DATA       // Waiting for tile data
+        TILE_DATA,      // Waiting for tile data
+        RECT_HEADER,    // Waiting for rectangle header (merged tiles mode)
+        RECT_DATA       // Waiting for rectangle data
     };
     RecvState _recvState = RecvState::FRAME_HEADER;
     std::vector<uint8_t> _recvBuffer;
@@ -98,6 +102,9 @@ private:
 
     // Current tile being received
     TileHeader _currentTile;
+
+    // Current rectangle being received (for merged tiles mode)
+    RectHeader _currentRect;
 
     // JPEG decompressor (initialized once)
     void* _jpegDecompressor = nullptr;

@@ -24,7 +24,18 @@ public:
     void stop();
     bool isRunning() const { return _running; }
     bool hasClients() const { return _clientCount > 0; }
+    bool isAwaitingAck() const { return _awaitingAck; }  // Flow control: waiting for client
     void forceFullFrame() { _forceFullFrame = true; }
+
+    // Enable/disable rectangle merging (merges adjacent dirty tiles into larger rectangles)
+    void setMergeRectangles(bool enable) { _mergeRectangles = enable; }
+    bool getMergeRectangles() const { return _mergeRectangles; }
+
+    // Compression settings (can be configured by client via COMPRESSION_CONFIG message)
+    void setForceRaw(bool enable) { _forceRaw = enable; }
+    bool getForceRaw() const { return _forceRaw; }
+    void setJpegQuality(uint8_t quality) { _jpegQuality = quality; }
+    uint8_t getJpegQuality() const { return _jpegQuality; }
 
     // Check if server is ready to accept more frames (previous GPU work done)
     // Call this BEFORE creating GPU command buffers to avoid FD exhaustion
@@ -150,9 +161,25 @@ private:
     uint16_t _tilesX = 0;
     uint16_t _tilesY = 0;
 
+    // Rectangle merging mode (default: disabled for backward compatibility)
+    bool _mergeRectangles = false;
+
+    // Compression settings (configurable by client)
+    bool _forceRaw = false;      // Force raw encoding (no JPEG)
+    uint8_t _jpegQuality = 80;   // JPEG quality (1-100), default 80
+
+    // Flow control: wait for client ack before sending next frame
+    std::atomic<bool> _awaitingAck{false};
+
     Result<void> ensureResources(uint32_t width, uint32_t height);
     Result<void> createDiffPipeline();
     Result<void> encodeTile(uint16_t tx, uint16_t ty, std::vector<uint8_t>& outData, Encoding& outEncoding);
+    Result<void> encodeRect(uint16_t px, uint16_t py, uint16_t width, uint16_t height,
+                            std::vector<uint8_t>& outData, Encoding& outEncoding);
+
+    // Rectangle merging: find maximal rectangles covering dirty tiles
+    struct Rect { uint16_t x, y, w, h; };
+    std::vector<Rect> mergeRectangles();
 
     // Input receiving (non-blocking, called from main thread)
     void pollClientInput(int clientFd);

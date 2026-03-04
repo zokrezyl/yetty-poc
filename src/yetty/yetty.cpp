@@ -182,6 +182,9 @@ private:
     bool _vncClientMode = false;
     bool _vncServerMode = false;
     bool _vncHeadless = false;  // No local rendering, only serve to VNC clients
+    bool _vncMergeRects = false;  // Merge dirty tiles into larger rectangles
+    bool _vncForceRaw = false;    // Force raw encoding (no JPEG) - client-side setting
+    uint8_t _vncCompressionQuality = 0;  // JPEG quality (0 = use server default)
     uint32_t _vncRequestedWidth = 0;   // Client-requested capture size
     uint32_t _vncRequestedHeight = 0;
     std::string _vncHost;
@@ -415,6 +418,10 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
             yinfo("VNC client connected - sending initial resize {}x{}", vncWidth, vncHeight);
             _vncClient->sendResize(vncWidth, vncHeight);
             _vncClient->sendCellSize(20);  // Default cell height
+            // Send compression config if custom settings are specified
+            if (_vncForceRaw || _vncCompressionQuality > 0) {
+                _vncClient->sendCompressionConfig(_vncForceRaw, _vncCompressionQuality);
+            }
         };
 
         // Set up frame received callback for immediate screen refresh
@@ -436,6 +443,9 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     // Initialize VNC server mode if enabled
     if (_vncServerMode) {
         _vncServer = std::make_shared<vnc::VncServer>(_device, _queue);
+        if (_vncMergeRects) {
+            _vncServer->setMergeRectangles(true);
+        }
         if (auto res = _vncServer->start(_vncServerPort); !res) {
             return Err<void>("Failed to start VNC server", res);
         }
@@ -614,15 +624,18 @@ Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
     args::ArgumentParser parser("yetty", "Terminal emulator with GPU rendering");
 
     args::HelpFlag help(parser, "help", "Show this help", {'h', "help"});
-    args::ValueFlag<std::string> executeFlag(parser, "command", "Execute command", {'e', 'c'});
-    args::ValueFlag<std::string> msdfProviderFlag(parser, "provider", "MSDF provider (cpu/gpu)", {"msdf-provider"});
-    args::ValueFlag<std::string> telnetFlag(parser, "host:port", "Connect via telnet (default: 127.0.0.1:8023)", {"telnet"});
+    args::ValueFlag<std::string> executeFlag(parser, "COMMAND", "Execute command", {'e', 'c'});
+    args::ValueFlag<std::string> msdfProviderFlag(parser, "PROVIDER", "MSDF provider (cpu/gpu)", {"msdf-provider"});
+    args::ValueFlag<std::string> telnetFlag(parser, "HOST:PORT", "Connect via telnet (default: 127.0.0.1:8023)", {"telnet"});
     args::Flag captureBenchmarkFlag(parser, "capture-benchmark", "Enable capture benchmark mode", {"capture-benchmark"});
-    args::ValueFlag<std::string> vncClientFlag(parser, "host:port", "Connect as VNC client", {"vnc-client"});
+    args::ValueFlag<std::string> vncClientFlag(parser, "HOST:PORT", "Connect as VNC client", {"vnc-client"});
     args::Flag vncServerFlag(parser, "vnc-server", "Start VNC server (with local window)", {"vnc-server"});
-    args::ValueFlag<uint16_t> vncServerPortFlag(parser, "port", "VNC server port (default 5900)", {"vnc-port"}, 5900);
+    args::ValueFlag<uint16_t> vncServerPortFlag(parser, "PORT", "VNC server port (default 5900)", {"vnc-port"}, 5900);
     args::Flag vncHeadlessFlag(parser, "vnc-headless", "Start VNC server without window (headless)", {"vnc-headless"});
-    args::ValueFlag<std::string> vncTestFlag(parser, "pattern", "VNC test mode: text, color, scroll, stress", {"vnc-test"});
+    args::Flag vncMergeRectsFlag(parser, "vnc-merge-rects", "Merge dirty tiles into larger rectangles (better compression)", {"vnc-merge-rects"});
+    args::Flag vncRawFlag(parser, "vnc-raw", "Force raw encoding (no JPEG compression) - client-side", {"vnc-raw"});
+    args::ValueFlag<uint8_t> vncQualityFlag(parser, "QUALITY", "JPEG compression quality 1-100 (default 80) - client-side", {"vnc-compression-quality"}, 0);
+    args::ValueFlag<std::string> vncTestFlag(parser, "PATTERN", "VNC test mode: text, color, scroll, stress", {"vnc-test"});
 
     try {
         parser.ParseCLI(argc, argv);
@@ -689,6 +702,22 @@ Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
         _vncHeadless = true;
         _vncServerPort = args::get(vncServerPortFlag);
         yinfo("VNC headless server mode: port {} (no local window)", _vncServerPort);
+    }
+
+    if (vncMergeRectsFlag) {
+        _vncMergeRects = true;
+        yinfo("VNC rectangle merging enabled");
+    }
+
+    if (vncRawFlag) {
+        _vncForceRaw = true;
+        yinfo("VNC raw encoding enabled (no JPEG compression)");
+    }
+
+    if (vncQualityFlag && args::get(vncQualityFlag) > 0) {
+        _vncCompressionQuality = args::get(vncQualityFlag);
+        if (_vncCompressionQuality > 100) _vncCompressionQuality = 100;
+        yinfo("VNC compression quality set to {}", _vncCompressionQuality);
     }
 
     if (vncTestFlag) {
@@ -2024,11 +2053,26 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
     // VNC SERVER PROTOCOL: Only start sending frames AFTER client sends its resize
     // _vncRequestedWidth/Height are set by onResize callback when client's resize arrives
     bool vncClientReady = _vncRequestedWidth > 0 && _vncRequestedHeight > 0;
+    // Flow control: don't capture if VNC server isn't ready (state machine busy or waiting for ack)
+    bool vncServerReady = !_vncServer || _vncServer->isReadyForFrame();
     // Always capture when there are clients - state machine handles diff detection
     // NOT requiring vncServerReady because we need to capture new content even while processing
     bool doCapture = (_captureBenchmark && (++_captureSkipCounter % CAPTURE_EVERY_N_FRAMES == 0)) ||
-                     (_vncHeadless && _vncServerMode && _vncServer && vncClientReady) ||
-                     (_vncServerMode && _vncServer && _vncServer->hasClients() && vncClientReady && vncThrottleOk);
+                     (_vncHeadless && _vncServerMode && _vncServer && vncClientReady && vncServerReady) ||
+                     (_vncServerMode && _vncServer && _vncServer->hasClients() && vncClientReady && vncThrottleOk && vncServerReady);
+
+    // Debug: track capture vs skip ratio
+    static uint32_t captureCount = 0, skipCount = 0;
+    static double lastDbgTime = 0;
+    if (_vncHeadless) {
+        if (doCapture) captureCount++; else skipCount++;
+        double now = _platform->getTime();
+        if (now - lastDbgTime >= 1.0) {
+            yinfo("VNC STATS: captures={} skips={} ackReady={}", captureCount, skipCount, vncServerReady);
+            captureCount = skipCount = 0;
+            lastDbgTime = now;
+        }
+    }
     // Determine capture size: use VNC requested size if set, otherwise window size
     uint32_t captureW = (_vncServerMode && _vncRequestedWidth > 0) ? _vncRequestedWidth : static_cast<uint32_t>(windowWidth);
     uint32_t captureH = (_vncServerMode && _vncRequestedHeight > 0) ? _vncRequestedHeight : static_cast<uint32_t>(windowHeight);
@@ -2253,10 +2297,14 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
         return Err<void>("GPU error during frame: " + _fatalGpuErrorMsg);
     }
 
-    _frameCount++;
+    // In headless VNC mode, FPS reflects actual frames captured/sent (throttled to ~30 FPS)
+    // In normal mode, FPS reflects all render iterations
+    if (!_vncHeadless || doCapture) {
+        _frameCount++;
+    }
     double fpsNow = _platform->getTime();
     if (fpsNow - _lastFpsTime >= 1.0) {
-        yinfo("FPS: {}", _frameCount);
+        ydebug("FPS: {}", _frameCount);
         if (_yettyContext.yguiOverlay) {
             _yettyContext.yguiOverlay->setFps(_frameCount);
         }

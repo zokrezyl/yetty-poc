@@ -12,6 +12,8 @@ enum class Encoding : uint8_t {
     RLE = 1,
     JPEG = 2,
     FULL_FRAME = 3,  // Entire frame as one JPEG (tile_x=0, tile_y=0, covers whole frame)
+    RECT_RAW = 4,    // Arbitrary rectangle (uses RectHeader, raw pixels)
+    RECT_JPEG = 5,   // Arbitrary rectangle (uses RectHeader, JPEG compressed)
 };
 
 #pragma pack(push, 1)
@@ -33,6 +35,17 @@ struct TileHeader {
     uint32_t data_size;
 };
 
+// Rectangle header for merged tile regions (used with RECT_RAW/RECT_JPEG encoding)
+struct RectHeader {
+    uint16_t px_x;      // Pixel X coordinate
+    uint16_t px_y;      // Pixel Y coordinate
+    uint16_t width;     // Width in pixels
+    uint16_t height;    // Height in pixels
+    uint8_t encoding;   // RECT_RAW or RECT_JPEG
+    uint8_t reserved;
+    uint32_t data_size;
+};
+
 // Input event types (client -> server)
 enum class InputType : uint8_t {
     MOUSE_MOVE = 0,
@@ -44,6 +57,8 @@ enum class InputType : uint8_t {
     RESIZE = 6,      // Client window resized
     CELL_SIZE = 7,   // Client sets cell height (ctrl+wheel zoom)
     CHAR_WITH_MODS = 8,  // Character with modifiers (layout-mapped)
+    FRAME_ACK = 9,   // Client finished processing frame (flow control)
+    COMPRESSION_CONFIG = 10,  // Client configures compression settings
 };
 
 enum class MouseButton : uint8_t {
@@ -104,6 +119,13 @@ struct ResizeEvent {
 
 struct CellSizeEvent {
     uint8_t cellHeight;  // Absolute cell height in pixels (client commands the size)
+};
+
+// Compression configuration (client -> server)
+struct CompressionConfigEvent {
+    uint8_t forceRaw;    // 1 = force raw encoding (no JPEG), 0 = allow JPEG
+    uint8_t quality;     // JPEG quality (1-100), 0 = use server default
+    uint8_t reserved[2]; // Padding for alignment
 };
 
 #pragma pack(pop)
