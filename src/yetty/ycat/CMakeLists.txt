@@ -7,8 +7,17 @@ set(CURL_ZSTD OFF CACHE BOOL "" FORCE)
 set(ZLIB_FOUND FALSE CACHE BOOL "" FORCE)
 set(CMAKE_DISABLE_FIND_PACKAGE_ZLIB TRUE CACHE BOOL "" FORCE)
 
-# OpenSSL for all platforms (built from source)
-include(${YETTY_ROOT}/build-tools/cmake/openssl.cmake)
+# SSL backend: OpenSSL on Unix, WinSSL (Schannel) on Windows
+if(WIN32)
+    set(_CPR_SSL_OPTIONS
+        "CPR_FORCE_WINSSL_BACKEND ON"
+    )
+else()
+    include(${YETTY_ROOT}/build-tools/cmake/openssl.cmake)
+    set(_CPR_SSL_OPTIONS
+        "CPR_FORCE_OPENSSL_BACKEND ON"
+    )
+endif()
 
 CPMAddPackage(
     NAME cpr
@@ -18,7 +27,7 @@ CPMAddPackage(
         "CPR_USE_SYSTEM_CURL OFF"
         "BUILD_SHARED_LIBS OFF"
         "CPR_ENABLE_SSL ON"
-        "CPR_FORCE_OPENSSL_BACKEND ON"
+        ${_CPR_SSL_OPTIONS}
         "CPR_BUILD_TESTS OFF"
         "CPR_BUILD_TESTS_SSL OFF"
         "CPR_CURL_USE_LIBPSL OFF"
