@@ -94,6 +94,33 @@ Tiles are uploaded to GPU texture immediately on receipt via `wgpuQueueWriteText
 - `PollWritable` events trigger `drainSendQueue()` to flush
 - Poll events dynamically enabled/disabled via `setPollEvents()`
 
+## VNC Content Area and Viewport
+
+The VNC client displays the server's frame in its **VNC content area**, not the full window:
+
+```
++---------------------------+
+|                           |
+|   VNC Content Area        |  <- Server's entire frame (terminal + server's statusbar)
+|   (from server)           |     Rendered pixel-perfect, no stretching
+|                           |
++---------------------------+
+|   Client's Statusbar      |  <- Client's own UI, rendered on top
++---------------------------+
+```
+
+**Protocol flow:**
+1. Client window: e.g., 1024x768
+2. Client's statusbar: 22px
+3. Client sends resize to server: 1024x746 (window - client's statusbar)
+4. Server receives 1024x746, allocates workspace: 1024x724 (area - server's statusbar)
+5. Server renders terminal (724px) + server's statusbar (22px) = 746px total
+6. Server sends 1024x746 frame to client
+7. Client sets viewport to (0, 0, 1024, 746) and renders server frame
+8. Client renders its own statusbar at y=746
+
+This ensures both statusbars are visible without overlap or stretching.
+
 ## Key Files
 
 - `src/yetty/vnc/protocol.h` - Wire protocol definitions

@@ -693,10 +693,18 @@ Result<void> VncClient::render(WGPURenderPassEncoder pass) {
         return Ok();
     }
 
+    // Set viewport to VNC content area (top portion of window, excluding client's statusbar)
+    // The VNC texture size (_width x _height) matches this area exactly - no stretching
+    if (_width > 0 && _height > 0) {
+        wgpuRenderPassEncoderSetViewport(pass, 0, 0,
+            static_cast<float>(_width), static_cast<float>(_height), 0.0f, 1.0f);
+        wgpuRenderPassEncoderSetScissorRect(pass, 0, 0, _width, _height);
+    }
+
     wgpuRenderPassEncoderSetPipeline(pass, _pipeline);
     wgpuRenderPassEncoderSetBindGroup(pass, 0, _bindGroup, 0, nullptr);
     wgpuRenderPassEncoderDraw(pass, 6, 1, 0, 0);
-    ydebug("VNC render: draw complete");
+    ydebug("VNC render: draw complete, viewport={}x{}", _width, _height);
 
     return Ok();
 }

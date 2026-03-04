@@ -631,6 +631,7 @@ void YGuiOverlayImpl::buildStatusbar() {
 }
 
 void YGuiOverlayImpl::updateDisplaySize(uint32_t width, uint32_t height) {
+    ydebug("YGuiOverlay::updateDisplaySize: {}x{}", width, height);
     _displayWidth = width;
     _displayHeight = height;
 

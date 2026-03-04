@@ -455,7 +455,8 @@ Result<void> VncServer::encodeTile(uint16_t tx, uint16_t ty,
     uint32_t tileH = std::min((uint32_t)TILE_SIZE, _lastHeight - startY);
 
     // Extract tile pixels from framebuffer
-    std::vector<uint8_t> tilePixels(TILE_SIZE * TILE_SIZE * 4);
+    // Initialize to zero to avoid JPEG artifacts from garbage data in partial tiles
+    std::vector<uint8_t> tilePixels(TILE_SIZE * TILE_SIZE * 4, 0);
     uint32_t srcStride = _lastWidth * 4;
     for (uint32_t y = 0; y < tileH; y++) {
         const uint8_t* src = pixels + (startY + y) * srcStride + startX * 4;
@@ -537,6 +538,9 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
                 std::fill(_dirtyTiles.begin(), _dirtyTiles.end(), true);
                 _forceFullFrame = false;
 
+                // Store texture for readback
+                _pendingTexture = texture;
+
                 // Copy current to prev for next frame comparison
                 WGPUCommandEncoder copyEnc = wgpuDeviceCreateCommandEncoder(_device, nullptr);
                 WGPUTexelCopyTextureInfo srcCopy = {};
@@ -549,8 +553,10 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
                 wgpuCommandBufferRelease(copyCmd);
                 wgpuCommandEncoderRelease(copyEnc);
 
+                // Go to READY_TO_SEND - next call will kick off pixel readback
+                // DON'T break and fall through to encoding - we need readback first!
                 _captureState = CaptureState::READY_TO_SEND;
-                break;
+                return Ok();  // Return and let next call do the readback
             }
 
             // Store texture for async processing
@@ -680,10 +686,25 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
             const uint32_t* flags = static_cast<const uint32_t*>(
                 wgpuBufferGetConstMappedRange(_dirtyFlagsReadback, 0, _tilesX * _tilesY * sizeof(uint32_t)));
 
+            uint16_t dirtyCount = 0;
+            uint16_t lastRowStart = (_tilesY - 1) * _tilesX;
+            bool bottomDirty = false;
+            std::string dirtyIndices;
             for (uint32_t i = 0; i < _tilesX * _tilesY; i++) {
                 _dirtyTiles[i] = (flags[i] != 0);
+                if (flags[i] != 0) {
+                    dirtyCount++;
+                    if (i >= lastRowStart) bottomDirty = true;
+                    uint16_t tx = i % _tilesX;
+                    uint16_t ty = i / _tilesX;
+                    if (dirtyIndices.size() < 200) {
+                        dirtyIndices += "(" + std::to_string(tx) + "," + std::to_string(ty) + ") ";
+                    }
+                }
             }
             wgpuBufferUnmap(_dirtyFlagsReadback);
+            ydebug("VNC WAITING_MAP: dirtyCount={} bottomDirty={} tilesY={} lastRowStart={} tiles={}",
+                   dirtyCount, bottomDirty, _tilesY, lastRowStart, dirtyIndices);
 
             _captureState = CaptureState::READY_TO_SEND;
             // Fall through to send
@@ -691,6 +712,8 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
         }
 
         case CaptureState::READY_TO_SEND:
+            ydebug("VNC READY_TO_SEND: _cpuPixels={} _gpuReadbackPixels.empty()={}",
+                   (void*)_cpuPixels, _gpuReadbackPixels.empty());
             // Need to read back from GPU if no CPU pixels
             if (!_cpuPixels && !_gpuReadbackPixels.empty()) {
                 uint32_t bytesPerPixel = 4;
@@ -709,10 +732,11 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
                     _tileReadbackBufferSize = bufSize;
                 }
 
-                // Copy texture to buffer
+                // Copy texture to buffer - use _pendingTexture which was saved when we started
+                // processing this frame, NOT the texture parameter which may have new content
                 WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(_device, nullptr);
                 WGPUTexelCopyTextureInfo src = {};
-                src.texture = texture;
+                src.texture = _pendingTexture ? _pendingTexture : texture;
                 WGPUTexelCopyBufferInfo dst = {};
                 dst.buffer = _tileReadbackBuffer;
                 dst.layout.bytesPerRow = alignedBytesPerRow;
@@ -739,9 +763,11 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
                 wgpuBufferMapAsync(_tileReadbackBuffer, WGPUMapMode_Read, 0, bufSize, cbInfo);
 
                 _captureState = CaptureState::WAITING_TILE_READBACK;
+                ydebug("VNC READY_TO_SEND: started pixel readback, returning");
                 return Ok();  // Return immediately, don't block!
             }
             // No GPU readback needed, continue to send
+            ydebug("VNC READY_TO_SEND: no readback needed, breaking to encode");
             _captureState = CaptureState::IDLE;
             break;
 
@@ -771,9 +797,12 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
             wgpuBufferUnmap(_tileReadbackBuffer);
 
             _captureState = CaptureState::IDLE;
+            ydebug("VNC WAITING_TILE_READBACK: readback complete, breaking to encode");
             break;
         }
     }
+
+    ydebug("VNC sendFrame: REACHED ENCODING CODE, state={}", static_cast<int>(_captureState));
 
     // Count dirty tiles
     uint16_t numDirty = 0;
@@ -781,7 +810,7 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
         if (_dirtyTiles[i]) numDirty++;
     }
 
-    yinfo("VNC sendFrame: numDirty={}/{}", numDirty, _tilesX * _tilesY);
+    ydebug("VNC sendFrame: numDirty={}/{} tilesX={} tilesY={}", numDirty, _tilesX * _tilesY, _tilesX, _tilesY);
 
     if (numDirty == 0) return Ok();
 
