@@ -2,6 +2,9 @@
 
 include(${YETTY_ROOT}/build-tools/cmake/targets/shared.cmake)
 
+# VNC support requires libjpeg-turbo
+include(${YETTY_ROOT}/build-tools/cmake/libs/libjpeg-turbo.cmake)
+
 # CDB font generation (builds host tools automatically)
 include(${YETTY_ROOT}/build-tools/cmake/cdb-gen.cmake)
 
@@ -26,7 +29,7 @@ add_executable(yetty
 # JSLinux integration (downloads and copies files)
 add_subdirectory(${YETTY_ROOT}/build-tools/jslinux ${CMAKE_BINARY_DIR}/jslinux-build)
 
-target_include_directories(yetty PRIVATE ${YETTY_INCLUDES} ${YETTY_RENDERER_INCLUDES})
+target_include_directories(yetty PRIVATE ${YETTY_INCLUDES} ${YETTY_RENDERER_INCLUDES} ${JPEG_INCLUDE_DIRS})
 
 # Embed resources (logo) - no-op on web but needed for symbol resolution
 incbin_add_resources(yetty
@@ -45,6 +48,7 @@ target_compile_definitions(yetty PRIVATE
     YTRACE_USE_SPDLOG=1
     YETTY_ASSETS_DIR="/assets"
     YETTY_SHADERS_DIR="/assets/shaders"
+    YETTY_HAS_VNC=1
 )
 
 target_include_directories(yetty PRIVATE ${ytrace_SOURCE_DIR}/include ${spdlog_SOURCE_DIR}/include)
@@ -71,6 +75,8 @@ target_link_libraries(yetty PRIVATE
     ${YETTY_LIBS}
     Freetype::Freetype
     zlibstatic
+    turbojpeg-static
+    yetty_vnc
 )
 
 # Copy demo and source tree to build directory for preloading

@@ -24,25 +24,38 @@ if(EXISTS "${_LIBJPEG_SRC_DIR}/src/turbojpeg.h")
     set(LIBJPEG_TURBO_INSTALL_DIR "${CMAKE_BINARY_DIR}/libjpeg-turbo-install")
 
     # Determine library directory (lib vs lib64)
-    if(CMAKE_SIZEOF_VOID_P EQUAL 8 AND NOT APPLE)
+    if(CMAKE_SIZEOF_VOID_P EQUAL 8 AND NOT APPLE AND NOT EMSCRIPTEN)
         set(_LIBJPEG_LIB_SUBDIR "lib64")
     else()
         set(_LIBJPEG_LIB_SUBDIR "lib")
+    endif()
+
+    # Platform-specific CMake arguments
+    set(_LIBJPEG_CMAKE_ARGS
+        -DCMAKE_INSTALL_PREFIX=${LIBJPEG_TURBO_INSTALL_DIR}
+        -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
+        -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+        -DCMAKE_INSTALL_LIBDIR=${_LIBJPEG_LIB_SUBDIR}
+        -DENABLE_SHARED=OFF
+        -DENABLE_STATIC=ON
+        -DWITH_TURBOJPEG=ON
+        -DWITH_JPEG8=ON
+    )
+
+    if(EMSCRIPTEN)
+        # For Emscripten: use the toolchain and disable SIMD (use C fallback)
+        list(APPEND _LIBJPEG_CMAKE_ARGS
+            -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}
+            -DWITH_SIMD=OFF
+            -DREQUIRE_SIMD=OFF
+        )
     endif()
 
     # Build libjpeg-turbo as external project
     ExternalProject_Add(libjpeg-turbo-ext
         SOURCE_DIR ${_LIBJPEG_SRC_DIR}
         INSTALL_DIR ${LIBJPEG_TURBO_INSTALL_DIR}
-        CMAKE_ARGS
-            -DCMAKE_INSTALL_PREFIX=${LIBJPEG_TURBO_INSTALL_DIR}
-            -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
-            -DCMAKE_POSITION_INDEPENDENT_CODE=ON
-            -DCMAKE_INSTALL_LIBDIR=${_LIBJPEG_LIB_SUBDIR}
-            -DENABLE_SHARED=OFF
-            -DENABLE_STATIC=ON
-            -DWITH_TURBOJPEG=ON
-            -DWITH_JPEG8=ON
+        CMAKE_ARGS ${_LIBJPEG_CMAKE_ARGS}
         BUILD_BYPRODUCTS
             ${LIBJPEG_TURBO_INSTALL_DIR}/${_LIBJPEG_LIB_SUBDIR}/libturbojpeg.a
     )
