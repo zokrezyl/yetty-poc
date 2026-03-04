@@ -9,6 +9,8 @@
 
 namespace yetty {
 
+class Platform;
+
 struct PtyConfig {
     std::string shell;           // Shell path (desktop) or VM config (webasm)
     std::string command;         // Command to execute (if empty, start interactive shell)
@@ -75,8 +77,10 @@ public:
 
     /**
      * Factory method - creates platform-appropriate implementation.
+     * @param config PTY configuration
+     * @param platform Platform instance (required for Android, optional for others)
      */
-    static Result<Ptr> create(const PtyConfig& config);
+    static Result<Ptr> create(const PtyConfig& config, std::shared_ptr<Platform> platform = nullptr);
 };
 
 } // namespace yetty

@@ -49,6 +49,23 @@ if(EXISTS "${_LIBJPEG_SRC_DIR}/src/turbojpeg.h")
             -DWITH_SIMD=OFF
             -DREQUIRE_SIMD=OFF
         )
+    elseif(ANDROID)
+        # For Android: pass cross-compilation settings
+        if(CMAKE_TOOLCHAIN_FILE)
+            list(APPEND _LIBJPEG_CMAKE_ARGS -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE})
+        endif()
+        if(ANDROID_ABI)
+            list(APPEND _LIBJPEG_CMAKE_ARGS -DANDROID_ABI=${ANDROID_ABI})
+        endif()
+        if(ANDROID_NDK)
+            list(APPEND _LIBJPEG_CMAKE_ARGS -DANDROID_NDK=${ANDROID_NDK})
+        endif()
+        if(ANDROID_PLATFORM)
+            list(APPEND _LIBJPEG_CMAKE_ARGS -DANDROID_PLATFORM=${ANDROID_PLATFORM})
+        endif()
+        if(CMAKE_ANDROID_NDK)
+            list(APPEND _LIBJPEG_CMAKE_ARGS -DCMAKE_ANDROID_NDK=${CMAKE_ANDROID_NDK})
+        endif()
     endif()
 
     # Build libjpeg-turbo as external project

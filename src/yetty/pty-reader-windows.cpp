@@ -249,7 +249,7 @@ private:
 };
 
 // Factory implementation for Windows
-Result<PtyReader::Ptr> PtyReader::create(const PtyConfig& config) {
+Result<PtyReader::Ptr> PtyReader::create(const PtyConfig& config, std::shared_ptr<Platform> /*platform*/) {
     auto reader = std::make_shared<PtyReaderWindows>();
     if (auto res = reader->init(config); !res) {
         return Err<Ptr>("Failed to initialize PtyReaderWindows", res);

@@ -269,7 +269,7 @@ private:
 };
 
 // Factory implementation for desktop
-Result<PtyReader::Ptr> PtyReader::create(const PtyConfig& config) {
+Result<PtyReader::Ptr> PtyReader::create(const PtyConfig& config, std::shared_ptr<Platform> /*platform*/) {
     auto reader = std::make_shared<PtyReaderDesktop>();
     if (auto res = reader->init(config); !res) {
         return Err<Ptr>("Failed to initialize PtyReaderDesktop", res);

@@ -6,7 +6,8 @@ endif()
 
 include(${CMAKE_CURRENT_LIST_DIR}/spdlog.cmake)
 
-if(EMSCRIPTEN)
+if(EMSCRIPTEN OR YETTY_ANDROID)
+    # No control socket on Emscripten (no filesystem) or Android (sandboxed fs)
     set(YTRACE_BUILD_TOOLS_OPT "YTRACE_BUILD_TOOLS OFF")
 else()
     set(YTRACE_BUILD_TOOLS_OPT "YTRACE_BUILD_TOOLS ON")
@@ -26,3 +27,8 @@ CPMAddPackage(
         "YTRACE_ENABLE_YWARN ON"
         "YTRACE_ENABLE_YFUNC ON"
 )
+
+# Disable control socket on Android (can't create ~/.cache/ytrace)
+if(YETTY_ANDROID)
+    target_compile_definitions(ytrace INTERFACE YTRACE_NO_CONTROL_SOCKET)
+endif()

@@ -1,60 +1,127 @@
 # Yetty on Android
 
-Yetty on Android connects to a local telnet server to provide terminal functionality. This is typically Termux running a telnet daemon.
+## Core Architecture
 
-## Architecture
+**Yetty uses an internal telnet client to connect to toybox telnetd for shell access.**
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│ Yetty App                                                       │
-│   └── Terminal                                                  │
-│         └── TelnetPtyReader                                     │
-│               └── TelnetClient (async TCP + telnet protocol)    │
-│                     ↓                                           │
-│               localhost:8023                                    │
-│                     ↓                                           │
-│ Termux App                                                      │
-│   └── telnetd → /bin/bash                                       │
+│ Yetty Android App                                               │
+│                                                                 │
+│   ┌─────────────────────────────────────────────────────────┐   │
+│   │ Terminal (GPU-rendered, WebGPU)                         │   │
+│   │     │                                                   │   │
+│   │     ▼                                                   │   │
+│   │ TelnetPtyReader                                         │   │
+│   │     │                                                   │   │
+│   │     ▼                                                   │   │
+│   │ TelnetClient (internal, async TCP + telnet protocol)    │   │
+│   └─────────────────────────────────────────────────────────┘   │
+│             │                                                   │
+│             │ TCP localhost connection                          │
+│             ▼                                                   │
+│   ┌─────────────────────────────────────────────────────────┐   │
+│   │ toybox telnetd (bundled, runs on port 8024)             │   │
+│   │     │                                                   │   │
+│   │     ▼                                                   │   │
+│   │ toybox sh (shell, invoked via symlink)                  │   │
+│   └─────────────────────────────────────────────────────────┘   │
+│                                                                 │
+│   Alternative: Connect to Termux telnetd on port 8023           │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+## How It Works
+
+1. **Yetty starts** and creates a `TelnetPtyReader`
+2. **Try Termux first**: Attempt connection to `localhost:8023` (Termux telnetd)
+3. **Fallback to toybox**: If Termux unavailable:
+   - Fork and exec `toybox telnetd -l /path/to/sh -p 8024 -F`
+   - Wait for telnetd to start
+   - Connect internal telnet client to `localhost:8024`
+4. **Telnet protocol negotiation**: NAWS (window size), ECHO, SGA
+5. **Shell session**: PTY data flows via telnet connection
+
 ## Why Telnet?
 
-Android's app sandbox prevents direct access to other apps' files and processes. Yetty cannot directly execute Termux's shell. Instead:
+Android's app sandbox prevents direct PTY access:
+- Apps cannot fork/exec shells directly with proper PTY
+- Apps cannot access other apps' processes or files
+- TCP localhost connections ARE allowed between apps
 
-1. Termux runs a telnet server inside its sandbox
-2. Yetty connects to `localhost:8023` (TCP connection is allowed between apps)
-3. Full terminal via telnet protocol with NAWS (window size) support
+Telnet provides:
+- Full PTY semantics via protocol
+- Window resize via NAWS (RFC 1073)
+- Terminal type via TTYPE (RFC 1091)
+- Works within Android sandbox restrictions
 
-## Setup Instructions
+## Toybox Integration
 
-### 1. Install Termux
+Toybox is bundled in the APK as `libtoybox.so` (in jniLibs):
+- **Location**: `/data/app/.../lib/<arch>/libtoybox.so`
+- **Executable from lib dir**: Android SELinux allows execution from native lib directory
+- **Multicall binary**: argv[0] determines which applet runs
 
-Download Termux from F-Droid (recommended) or GitHub releases. The Play Store version is outdated.
+### Login Wrapper
 
-### 2. Install and Start telnetd
+telnetd passes `-h hostname` to the login program, but toybox sh doesn't support `-h`.
+Solution: `liblogin.so` wrapper that ignores arguments and execs toybox sh.
+
+```
+telnetd -l liblogin.so
+    │
+    └── liblogin.so (ignores -h hostname)
+            │
+            └── execv("libtoybox.so", {"sh", NULL})
+                    │
+                    └── toybox sh (argv[0]="sh" → shell mode)
+```
+
+### Files
+
+| File | Location | Purpose |
+|------|----------|---------|
+| `libtoybox.so` | APK lib/ | Toybox multicall binary |
+| `liblogin.so` | APK lib/ | Wrapper: ignores -h, execs sh |
+| `libtelnetd.so` | APK lib/ | Symlink to libtoybox.so |
+| `toybox` | App assets | Legacy, extracted on first run |
+
+## Connection Strategy
+
+```
+PtyReader::create()
+    │
+    ├── Try connect to localhost:8023 (Termux)
+    │       │
+    │       ├── Success → Use Termux shell
+    │       │
+    │       └── Fail → Continue to fallback
+    │
+    └── Start bundled toybox telnetd
+            │
+            ├── fork()
+            │     │
+            │     └── Child: execl(libtoybox.so, "telnetd", "-l", sh_symlink, "-p", "8024", "-F")
+            │
+            └── Parent: wait 200ms, then connect to localhost:8024
+```
+
+## Termux Integration (Optional)
+
+For a full Linux environment, install Termux and start telnetd:
 
 ```bash
 # In Termux
-pkg update
-pkg install busybox
-
-# Start telnet daemon (foreground, for testing)
+pkg update && pkg install busybox
 busybox telnetd -l /bin/bash -p 8023 -F
-
-# Or run in background
-busybox telnetd -l /bin/bash -p 8023 &
 ```
 
-### 3. Auto-start on Boot (Optional)
+Yetty will automatically connect to Termux instead of using bundled toybox.
 
-Create a Termux:Boot script to start telnetd automatically:
+### Auto-start telnetd on Boot
 
 ```bash
 # Install Termux:Boot from F-Droid
-pkg install termux-services
-
-# Create boot script
 mkdir -p ~/.termux/boot
 cat > ~/.termux/boot/start-telnetd.sh << 'EOF'
 #!/data/data/com.termux/files/usr/bin/bash
@@ -63,64 +130,86 @@ EOF
 chmod +x ~/.termux/boot/start-telnetd.sh
 ```
 
-### 4. Launch Yetty
+## Toybox Commands
 
-Yetty automatically connects to `127.0.0.1:8023` on Android.
+Toybox provides ~200 Unix commands:
 
-## Alternative: socat for Better PTY
+| Category | Commands |
+|----------|----------|
+| Shell | `sh` |
+| Files | `ls`, `cp`, `mv`, `rm`, `mkdir`, `cat`, `grep`, `find`, `chmod` |
+| Text | `sed`, `sort`, `uniq`, `wc`, `head`, `tail`, `vi` |
+| Process | `ps`, `kill`, `sleep`, `top` |
+| Network | `netcat`, `ping`, `ifconfig`, `wget`, `telnetd` |
+| System | `uname`, `id`, `whoami`, `env`, `date`, `df`, `mount` |
 
-For improved PTY support (job control, etc.), use socat instead of telnetd:
+## Telnet Protocol
 
-```bash
-pkg install socat
-
-# Start PTY server
-socat TCP-LISTEN:8023,reuseaddr,fork EXEC:bash,pty,stderr,setsid,sigint,sane
-```
-
-## Telnet Protocol Features
-
-The implementation supports:
+Implemented features:
 
 | Feature | RFC | Description |
 |---------|-----|-------------|
-| Binary mode | 856 | 8-bit clean for UTF-8 |
+| Binary | 856 | 8-bit clean for UTF-8 |
 | Echo | 857 | Server-side echo |
-| Suppress Go-Ahead | 858 | Full-duplex mode |
-| **NAWS** | 1073 | Window size negotiation |
-| **TTYPE** | 1091 | Terminal type (xterm-256color) |
+| SGA | 858 | Suppress Go-Ahead (full-duplex) |
+| NAWS | 1073 | Window size negotiation |
+| TTYPE | 1091 | Terminal type (xterm-256color) |
 
-## Default Configuration
+## Configuration
 
-- **Host**: `127.0.0.1` (localhost)
-- **Port**: `8023` (Termux default, avoids root requirement for port 23)
-- **Terminal type**: `xterm-256color`
+| Setting | Value | Notes |
+|---------|-------|-------|
+| Termux port | 8023 | Checked first |
+| Toybox port | 8024 | Fallback |
+| Terminal type | xterm-256color | Sent via TTYPE |
+| Host | 127.0.0.1 | Localhost only |
 
 ## Troubleshooting
 
+### Shell exits immediately
+
+Check if toybox sh works:
+```bash
+adb shell run-as <package> /data/user/0/<package>/files/sh -c "echo test"
+```
+
+Check SELinux denials:
+```bash
+adb logcat | grep -E "(avc|denied)"
+```
+
 ### Connection refused
 
-Ensure telnetd is running in Termux:
+Verify telnetd is running:
+```bash
+adb shell "ps -A | grep telnet"
+```
+
+### No shell prompt
+
+Check symlink:
+```bash
+adb shell run-as <package> ls -la /data/user/0/<package>/files/sh
+```
+
+### Termux not detected
+
+Start telnetd in Termux:
 ```bash
 pgrep telnetd || busybox telnetd -l /bin/bash -p 8023
 ```
 
-### Wrong terminal size
+## Security
 
-NAWS (window size) should be negotiated automatically. If not, try:
-```bash
-# In Termux shell
-stty rows 40 cols 120
-```
+- Telnet is unencrypted but localhost-only (data never leaves device)
+- No authentication (single-user device assumption)
+- For remote access, use SSH (future roadmap)
 
-### No colors
+## Source Files
 
-Verify TERM is set:
-```bash
-echo $TERM  # Should be xterm-256color
-export TERM=xterm-256color
-```
-
-## Security Note
-
-Telnet is unencrypted, but since it's localhost-only, data never leaves the device. For remote connections, use SSH instead (see future roadmap).
+| File | Purpose |
+|------|---------|
+| `src/yetty/pty-reader-android.cpp` | Android PTY factory, toybox startup |
+| `src/yetty/telnet/telnet-client.cpp` | Telnet protocol client |
+| `src/yetty/telnet/telnet-pty-reader.cpp` | PTY interface over telnet |
+| `build-tools/android/build-toybox.sh` | Builds toybox for Android |

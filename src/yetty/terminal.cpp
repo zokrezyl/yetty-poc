@@ -5,15 +5,14 @@
 #include <ytrace/ytrace.hpp>
 #include <cstring>
 
+
 #if YETTY_WEB
 #include <yetty/platform.h>
 #include <yetty/pty-provider.h>
 #else
 #include <yetty/osc-scanner.h>
 #include <yetty/pty-reader.h>
-#if !defined(_WIN32)
 #include "telnet/telnet-pty-reader.h"
-#endif
 #endif
 
 namespace yetty {
@@ -26,10 +25,13 @@ public:
     ~TerminalImpl() override = default;
 
     Result<void> init() {
+        yinfo("Terminal::init() start");
         auto screenResult = GPUScreen::create(_ctx);
         if (!screenResult) {
+            yerror("Terminal::init() GPUScreen::create FAILED");
             return Err<void>("Failed to create GPUScreen", screenResult);
         }
+        yinfo("Terminal::init() GPUScreen created");
         _gpuScreen = *screenResult;
 
 #if YETTY_WEB
@@ -208,8 +210,7 @@ private:
         yinfo("Terminal started WebPTY: {} ({}x{})", vmConfig, cols, rows);
         return Ok();
 #else
-#if !defined(_WIN32)
-        // Check for telnet mode (--telnet flag) - not available on Windows
+        // Check for telnet mode (--telnet flag)
         std::string telnetAddress;
         if (_ctx.config) {
             auto telnetOpt = _ctx.config->get<std::string>("shell/telnet");
@@ -233,9 +234,7 @@ private:
             }
             _ptyReader = reader;
             yinfo("Terminal started telnet: {} ({}x{})", telnetAddress, cols, rows);
-        } else
-#endif
-        {
+        } else {
             // Desktop: Use PtyReader with OSC-aware reading
             // Get shell path from SHELL env (or COMSPEC on Windows)
             const char* shellEnv = getenv("SHELL");
@@ -262,10 +261,13 @@ private:
             config.cols = cols;
             config.rows = rows;
 
-            auto readerResult = PtyReader::create(config);
+            yinfo("Creating PtyReader: shell={} {}x{}", shellPath, cols, rows);
+            auto readerResult = PtyReader::create(config, _ctx.platform);
             if (!readerResult) {
+                yerror("PtyReader::create FAILED: {}", readerResult.error().message());
                 return Err<void>("Failed to create PtyReader", readerResult);
             }
+            yinfo("PtyReader::create SUCCESS");
             _ptyReader = *readerResult;
             yinfo("Terminal started PTY: {} ({}x{})", shellPath, cols, rows);
         }

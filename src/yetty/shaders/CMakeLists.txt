@@ -7,7 +7,24 @@ file(GLOB_RECURSE SHADER_FILES
     ${SHADER_SRC_DIR}/*.wgsl
 )
 
-# Create custom target to copy shaders
+# For Android: copy shaders at configure time to ANDROID_ASSETS_DIR
+# This ensures shaders are in place BEFORE gradle packages the APK
+if(ANDROID_ASSETS_DIR)
+    file(MAKE_DIRECTORY ${ANDROID_ASSETS_DIR}/shaders)
+    foreach(SHADER_FILE ${SHADER_FILES})
+        file(RELATIVE_PATH REL_PATH ${SHADER_SRC_DIR} ${SHADER_FILE})
+        get_filename_component(REL_DIR ${REL_PATH} DIRECTORY)
+        if(REL_DIR)
+            file(MAKE_DIRECTORY ${ANDROID_ASSETS_DIR}/shaders/${REL_DIR})
+        endif()
+        file(COPY ${SHADER_FILE} DESTINATION ${ANDROID_ASSETS_DIR}/shaders/${REL_DIR})
+    endforeach()
+    # Also copy gpu-screen.wgsl to root for backward compat
+    file(COPY ${SHADER_SRC_DIR}/gpu-screen.wgsl DESTINATION ${ANDROID_ASSETS_DIR})
+    message(STATUS "Copied shaders to Android assets: ${ANDROID_ASSETS_DIR}/shaders")
+endif()
+
+# Create custom target to copy shaders (for non-Android builds and incremental builds)
 add_custom_target(copy-shaders ALL
     COMMAND ${CMAKE_COMMAND} -E make_directory ${SHADER_DST_DIR}
     COMMENT "Copying shaders to build directory"

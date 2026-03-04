@@ -9,6 +9,11 @@
 #include <emscripten.h>
 // Emscripten: yield to JS event loop instead of device tick
 #define WGPU_DEVICE_TICK(device) emscripten_sleep(1)
+#elif defined(__ANDROID__)
+#include <unistd.h>
+// Android wgpu-native: no wgpuDeviceTick, use brief sleep to yield
+// Note: wgpuInstanceProcessEvents exists but requires instance handle
+#define WGPU_DEVICE_TICK(device) usleep(1000)
 #else
 // Desktop: use wgpuDeviceTick to process GPU work
 #define WGPU_DEVICE_TICK(device) wgpuDeviceTick(device)
@@ -30,3 +35,16 @@
 // Mipmap filter
 #define WGPU_MIPMAP_FILTER_LINEAR WGPUMipmapFilterMode_Linear
 #define WGPU_MIPMAP_FILTER_NEAREST WGPUMipmapFilterMode_Nearest
+
+// Queue work done callback - signature differs between Dawn and wgpu-native
+// Dawn: (WGPUQueueWorkDoneStatus, WGPUStringView message, void* u1, void* u2)
+// wgpu-native: (WGPUQueueWorkDoneStatus, void* u1, void* u2)
+#if defined(WEBGPU_BACKEND_WGPU)
+// wgpu-native: no message parameter
+#define WGPU_QUEUE_WORK_DONE_CALLBACK(name, body) \
+    [](WGPUQueueWorkDoneStatus status, void* u1, void* u2) body
+#else
+// Dawn: includes message parameter
+#define WGPU_QUEUE_WORK_DONE_CALLBACK(name, body) \
+    [](WGPUQueueWorkDoneStatus status, WGPUStringView, void* u1, void* u2) body
+#endif

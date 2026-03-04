@@ -1,7 +1,4 @@
 #include "telnet-client.h"
-
-#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
-
 #include <ytrace/ytrace.hpp>
 
 #include <arpa/inet.h>
@@ -68,14 +65,37 @@ Result<void> TelnetClient::connect(const std::string& host, uint16_t port) {
         return Err<void>("Failed to connect: " + std::string(strerror(errno)));
     }
 
-    _connecting = (errno == EINPROGRESS);
-    _connected = !_connecting;
+    // If EINPROGRESS, wait for connection to complete with a short timeout
+    // This ensures we know immediately if the connection fails (no server)
+    if (errno == EINPROGRESS) {
+        fd_set writefds;
+        FD_ZERO(&writefds);
+        FD_SET(_socket, &writefds);
 
-    if (_connected) {
-        yinfo("Telnet connected to {}:{} (immediate)", host, port);
-    } else {
-        yinfo("Telnet connecting to {}:{} (async)...", host, port);
+        struct timeval tv;
+        tv.tv_sec = 1;  // 1 second timeout
+        tv.tv_usec = 0;
+
+        int ret = select(_socket + 1, nullptr, &writefds, nullptr, &tv);
+        if (ret <= 0) {
+            close(_socket);
+            _socket = -1;
+            return Err<void>("Connection timed out");
+        }
+
+        // Check if connection succeeded or failed
+        int error = 0;
+        socklen_t len = sizeof(error);
+        if (getsockopt(_socket, SOL_SOCKET, SO_ERROR, &error, &len) < 0 || error != 0) {
+            close(_socket);
+            _socket = -1;
+            return Err<void>("Connection failed: " + std::string(strerror(error ? error : errno)));
+        }
     }
+
+    _connecting = false;
+    _connected = true;
+    yinfo("Telnet connected to {}:{} socket={}", host, port, _socket);
 
     // Register with event loop
     auto loopResult = base::EventLoop::instance();
@@ -273,7 +293,10 @@ void TelnetClient::updatePollEvents() {
 }
 
 Result<bool> TelnetClient::onEvent(const base::Event& event) {
+    yinfo("TelnetClient::onEvent: type={} fd={} socket={}", (int)event.type, event.poll.fd, _socket);
+
     if (event.type == base::Event::Type::PollWritable && event.poll.fd == _socket) {
+        yinfo("TelnetClient::onEvent: PollWritable");
         if (_connecting) {
             // Check if connect completed
             int error = 0;
@@ -297,6 +320,7 @@ Result<bool> TelnetClient::onEvent(const base::Event& event) {
     }
 
     if (event.type == base::Event::Type::PollReadable && event.poll.fd == _socket) {
+        yinfo("TelnetClient::onEvent: PollReadable - calling processReceived");
         processReceived();
         return Ok(true);
     }
@@ -307,10 +331,11 @@ Result<bool> TelnetClient::onEvent(const base::Event& event) {
 void TelnetClient::processReceived() {
     uint8_t buf[4096];
     ssize_t n = ::recv(_socket, buf, sizeof(buf), 0);
+    yinfo("TelnetClient::processReceived: recv returned {}", n);
 
     if (n <= 0) {
         if (n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK)) {
-            yinfo("Telnet: connection closed");
+            yinfo("TelnetClient: connection closed n={} errno={}", n, errno);
             disconnect();
             if (_disconnectCallback) _disconnectCallback();
         }
@@ -325,6 +350,14 @@ void TelnetClient::processReceived() {
 
     // Deliver decoded data to terminal
     if (!_outputBuffer.empty() && _dataCallback) {
+        // Log first bytes for debugging
+        std::string preview;
+        for (size_t i = 0; i < std::min(_outputBuffer.size(), size_t(80)); i++) {
+            char c = _outputBuffer[i];
+            if (c >= 32 && c < 127) preview += c;
+            else preview += '.';
+        }
+        yinfo("TelnetClient: delivering {} bytes: [{}]", _outputBuffer.size(), preview);
         _dataCallback(_outputBuffer.data(), _outputBuffer.size());
     }
 }
@@ -535,5 +568,3 @@ void TelnetClient::handleSubnegotiation() {
 }
 
 } // namespace yetty::telnet
-
-#endif // !defined(_WIN32) && !defined(__EMSCRIPTEN__)

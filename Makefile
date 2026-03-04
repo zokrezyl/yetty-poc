@@ -28,6 +28,12 @@ BUILD_DIR_ANDROID_WGPU_RELEASE := build-android-wgpu-release
 BUILD_DIR_ANDROID_DAWN_DEBUG := build-android-dawn-debug
 BUILD_DIR_ANDROID_DAWN_RELEASE := build-android-dawn-release
 
+# Android x86_64 (for emulator)
+BUILD_DIR_ANDROID_X86_64_WGPU_DEBUG := build-android_x86_64-wgpu-debug
+BUILD_DIR_ANDROID_X86_64_WGPU_RELEASE := build-android_x86_64-wgpu-release
+BUILD_DIR_ANDROID_X86_64_DAWN_DEBUG := build-android_x86_64-dawn-debug
+BUILD_DIR_ANDROID_X86_64_DAWN_RELEASE := build-android_x86_64-dawn-release
+
 # WebAssembly uses browser native WebGPU (Dawn in Chrome)
 BUILD_DIR_WEBASM_DAWN_DEBUG := build-webasm-dawn-debug
 BUILD_DIR_WEBASM_DAWN_RELEASE := build-webasm-dawn-release
@@ -58,6 +64,12 @@ GRADLE_OPTS_WGPU_DEBUG := --project-cache-dir=../../$(BUILD_DIR_ANDROID_WGPU_DEB
 GRADLE_OPTS_WGPU_RELEASE := --project-cache-dir=../../$(BUILD_DIR_ANDROID_WGPU_RELEASE)/.gradle
 GRADLE_OPTS_DAWN_DEBUG := --project-cache-dir=../../$(BUILD_DIR_ANDROID_DAWN_DEBUG)/.gradle
 GRADLE_OPTS_DAWN_RELEASE := --project-cache-dir=../../$(BUILD_DIR_ANDROID_DAWN_RELEASE)/.gradle
+
+# Gradle options for x86_64 (emulator)
+GRADLE_OPTS_X86_64_WGPU_DEBUG := --project-cache-dir=../../$(BUILD_DIR_ANDROID_X86_64_WGPU_DEBUG)/.gradle
+GRADLE_OPTS_X86_64_WGPU_RELEASE := --project-cache-dir=../../$(BUILD_DIR_ANDROID_X86_64_WGPU_RELEASE)/.gradle
+GRADLE_OPTS_X86_64_DAWN_DEBUG := --project-cache-dir=../../$(BUILD_DIR_ANDROID_X86_64_DAWN_DEBUG)/.gradle
+GRADLE_OPTS_X86_64_DAWN_RELEASE := --project-cache-dir=../../$(BUILD_DIR_ANDROID_X86_64_DAWN_RELEASE)/.gradle
 
 # Default target - show help
 .PHONY: all
@@ -226,6 +238,54 @@ test-android-dawn-release: build-android-dawn-release ## Install and run Android
 	adb shell am start -n com.yetty.terminal/android.app.NativeActivity
 
 #=============================================================================
+# Android x86_64 - wgpu backend (for emulator)
+#=============================================================================
+
+.PHONY: build-android_x86_64-wgpu-debug
+build-android_x86_64-wgpu-debug: ## Build Android x86_64 wgpu debug APK (emulator)
+	@$(MAKE) _android_x86_64-wgpu-deps-debug
+	ANDROID_ABI=x86_64 WEBGPU_BACKEND=wgpu ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_X86_64_WGPU_DEBUG) nix develop .#android --command bash -c "cd build-tools/android && ./gradlew $(GRADLE_OPTS_X86_64_WGPU_DEBUG) assembleDebug"
+
+.PHONY: build-android_x86_64-wgpu-release
+build-android_x86_64-wgpu-release: ## Build Android x86_64 wgpu release APK (emulator)
+	@$(MAKE) _android_x86_64-wgpu-deps-release
+	ANDROID_ABI=x86_64 WEBGPU_BACKEND=wgpu ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_X86_64_WGPU_RELEASE) nix develop .#android --command bash -c "cd build-tools/android && ./gradlew $(GRADLE_OPTS_X86_64_WGPU_RELEASE) assembleRelease"
+
+.PHONY: test-android_x86_64-wgpu-debug
+test-android_x86_64-wgpu-debug: build-android_x86_64-wgpu-debug ## Install and run Android x86_64 wgpu debug (emulator)
+	adb install -r $(BUILD_DIR_ANDROID_X86_64_WGPU_DEBUG)/app/outputs/apk/debug/app-debug.apk
+	adb shell am start -n com.yetty.terminal/android.app.NativeActivity
+
+.PHONY: test-android_x86_64-wgpu-release
+test-android_x86_64-wgpu-release: build-android_x86_64-wgpu-release ## Install and run Android x86_64 wgpu release (emulator)
+	adb install -r $(BUILD_DIR_ANDROID_X86_64_WGPU_RELEASE)/app/outputs/apk/release/app-release-unsigned.apk
+	adb shell am start -n com.yetty.terminal/android.app.NativeActivity
+
+#=============================================================================
+# Android x86_64 - dawn backend (for emulator)
+#=============================================================================
+
+.PHONY: build-android_x86_64-dawn-debug
+build-android_x86_64-dawn-debug: ## Build Android x86_64 dawn debug APK (emulator)
+	@$(MAKE) _android_x86_64-dawn-deps-debug
+	ANDROID_ABI=x86_64 WEBGPU_BACKEND=dawn ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_X86_64_DAWN_DEBUG) nix develop .#android --command bash -c "cd build-tools/android && ./gradlew $(GRADLE_OPTS_X86_64_DAWN_DEBUG) assembleDebug"
+
+.PHONY: build-android_x86_64-dawn-release
+build-android_x86_64-dawn-release: ## Build Android x86_64 dawn release APK (emulator)
+	@$(MAKE) _android_x86_64-dawn-deps-release
+	ANDROID_ABI=x86_64 WEBGPU_BACKEND=dawn ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_X86_64_DAWN_RELEASE) nix develop .#android --command bash -c "cd build-tools/android && ./gradlew $(GRADLE_OPTS_X86_64_DAWN_RELEASE) assembleRelease"
+
+.PHONY: test-android_x86_64-dawn-debug
+test-android_x86_64-dawn-debug: build-android_x86_64-dawn-debug ## Install and run Android x86_64 dawn debug (emulator)
+	adb install -r $(BUILD_DIR_ANDROID_X86_64_DAWN_DEBUG)/app/outputs/apk/debug/app-debug.apk
+	adb shell am start -n com.yetty.terminal/android.app.NativeActivity
+
+.PHONY: test-android_x86_64-dawn-release
+test-android_x86_64-dawn-release: build-android_x86_64-dawn-release ## Install and run Android x86_64 dawn release (emulator)
+	adb install -r $(BUILD_DIR_ANDROID_X86_64_DAWN_RELEASE)/app/outputs/apk/release/app-release-unsigned.apk
+	adb shell am start -n com.yetty.terminal/android.app.NativeActivity
+
+#=============================================================================
 # WebAssembly (browser native WebGPU - Dawn in Chrome)
 #=============================================================================
 
@@ -302,32 +362,55 @@ clean: ## Clean all build directories
 	       $(BUILD_DIR_DESKTOP_DAWN_ASAN) \
 	       $(BUILD_DIR_ANDROID_WGPU_DEBUG) $(BUILD_DIR_ANDROID_WGPU_RELEASE) \
 	       $(BUILD_DIR_ANDROID_DAWN_DEBUG) $(BUILD_DIR_ANDROID_DAWN_RELEASE) \
+	       $(BUILD_DIR_ANDROID_X86_64_WGPU_DEBUG) $(BUILD_DIR_ANDROID_X86_64_WGPU_RELEASE) \
+	       $(BUILD_DIR_ANDROID_X86_64_DAWN_DEBUG) $(BUILD_DIR_ANDROID_X86_64_DAWN_RELEASE) \
 	       $(BUILD_DIR_WEBASM_DAWN_DEBUG) $(BUILD_DIR_WEBASM_DAWN_RELEASE) \
 	       build-desktop build-android build-webasm \
 	       build-desktop-debug build-desktop-release \
-	       build-android-debug build-android-release
+	       build-android-debug build-android-release \
+	       build-android_x86_64-debug build-android_x86_64-release
 
 #=============================================================================
 # Internal targets (not shown in help)
 #=============================================================================
 
+# ARM64 (arm64-v8a) internal targets
 .PHONY: _android-wgpu-deps-debug
 _android-wgpu-deps-debug:
-	@cd $(CURDIR) && ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_WGPU_DEBUG) bash build-tools/android/build-wgpu.sh
-	@cd $(CURDIR) && ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_WGPU_DEBUG) bash build-tools/android/build-toybox.sh
+	@cd $(CURDIR) && ANDROID_ABI=arm64-v8a ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_WGPU_DEBUG) bash build-tools/android/build-wgpu.sh
+	@cd $(CURDIR) && ANDROID_ABI=arm64-v8a ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_WGPU_DEBUG) bash build-tools/android/build-toybox.sh
 
 .PHONY: _android-wgpu-deps-release
 _android-wgpu-deps-release:
-	@cd $(CURDIR) && ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_WGPU_RELEASE) bash build-tools/android/build-wgpu.sh
-	@cd $(CURDIR) && ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_WGPU_RELEASE) bash build-tools/android/build-toybox.sh
+	@cd $(CURDIR) && ANDROID_ABI=arm64-v8a ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_WGPU_RELEASE) bash build-tools/android/build-wgpu.sh
+	@cd $(CURDIR) && ANDROID_ABI=arm64-v8a ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_WGPU_RELEASE) bash build-tools/android/build-toybox.sh
 
 .PHONY: _android-dawn-deps-debug
 _android-dawn-deps-debug:
-	@cd $(CURDIR) && ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_DAWN_DEBUG) bash build-tools/android/build-dawn.sh
+	@cd $(CURDIR) && ANDROID_ABI=arm64-v8a ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_DAWN_DEBUG) bash build-tools/android/build-dawn.sh
 
 .PHONY: _android-dawn-deps-release
 _android-dawn-deps-release:
-	@cd $(CURDIR) && ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_DAWN_RELEASE) bash build-tools/android/build-dawn.sh
+	@cd $(CURDIR) && ANDROID_ABI=arm64-v8a ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_DAWN_RELEASE) bash build-tools/android/build-dawn.sh
+
+# x86_64 internal targets (for emulator)
+.PHONY: _android_x86_64-wgpu-deps-debug
+_android_x86_64-wgpu-deps-debug:
+	@cd $(CURDIR) && ANDROID_ABI=x86_64 ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_X86_64_WGPU_DEBUG) bash build-tools/android/build-wgpu.sh
+	@cd $(CURDIR) && ANDROID_ABI=x86_64 ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_X86_64_WGPU_DEBUG) bash build-tools/android/build-toybox.sh
+
+.PHONY: _android_x86_64-wgpu-deps-release
+_android_x86_64-wgpu-deps-release:
+	@cd $(CURDIR) && ANDROID_ABI=x86_64 ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_X86_64_WGPU_RELEASE) bash build-tools/android/build-wgpu.sh
+	@cd $(CURDIR) && ANDROID_ABI=x86_64 ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_X86_64_WGPU_RELEASE) bash build-tools/android/build-toybox.sh
+
+.PHONY: _android_x86_64-dawn-deps-debug
+_android_x86_64-dawn-deps-debug:
+	@cd $(CURDIR) && ANDROID_ABI=x86_64 ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_X86_64_DAWN_DEBUG) bash build-tools/android/build-dawn.sh
+
+.PHONY: _android_x86_64-dawn-deps-release
+_android_x86_64-dawn-deps-release:
+	@cd $(CURDIR) && ANDROID_ABI=x86_64 ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_X86_64_DAWN_RELEASE) bash build-tools/android/build-dawn.sh
 
 #=============================================================================
 # Help
@@ -344,9 +427,10 @@ help:
 	@echo "  dawn  - Dawn (Google's C++ implementation)"
 	@echo ""
 	@echo "Targets:"
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-30s\033[0m %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-30s\033[0m %s\n", $$1, $$2}'
 	@echo ""
 	@echo "Build outputs:"
 	@echo "  build-desktop-{wgpu,dawn}-{debug,release}/yetty"
-	@echo "  build-tools/android/app/build/outputs/apk/{debug,release}/"
+	@echo "  build-android-{wgpu,dawn}-{debug,release}/app/outputs/apk/"
+	@echo "  build-android_x86_64-{wgpu,dawn}-{debug,release}/app/outputs/apk/  (emulator)"
 	@echo "  build-webasm-{debug,release}/yetty.html"

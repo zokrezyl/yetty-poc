@@ -4,6 +4,9 @@
 # - Dawn WebGPU (Google's C++ implementation)
 # - toybox (BSD-licensed shell utilities)
 #
+# Supports: arm64-v8a (default) and x86_64 (for emulator)
+# Set ANDROID_ABI=x86_64 for emulator builds
+#
 # Dawn release URL: https://github.com/google/dawn/releases
 #
 
@@ -18,21 +21,24 @@ OUTPUT_DIR="$BUILD_DIR/dawn-libs"
 INCLUDE_DIR="$BUILD_DIR/dawn-include"
 ASSETS_DIR="$BUILD_DIR/assets"
 
+# Architecture (default: arm64-v8a, or x86_64 for emulator)
+ANDROID_ABI="${ANDROID_ABI:-arm64-v8a}"
+
 # Versions - must match Dawn.cmake
 DAWN_VERSION="20260214.164635"
 DAWN_COMMIT="1a3afc99a7ef7dacaab73b71d44575c4f1bf2dd7"
 
-mkdir -p "$OUTPUT_DIR/arm64-v8a"
+mkdir -p "$OUTPUT_DIR/$ANDROID_ABI"
 mkdir -p "$INCLUDE_DIR"
 mkdir -p "$ASSETS_DIR"
 
 #-----------------------------------------------------------------------------
 # Dawn WebGPU
 #-----------------------------------------------------------------------------
-if [ -f "$OUTPUT_DIR/arm64-v8a/libwebgpu_dawn.a" ] && [ -f "$INCLUDE_DIR/webgpu/webgpu.h" ]; then
-    echo "Dawn already exists: $OUTPUT_DIR/arm64-v8a/libwebgpu_dawn.a"
+if [ -f "$OUTPUT_DIR/$ANDROID_ABI/libwebgpu_dawn.a" ] && [ -f "$INCLUDE_DIR/webgpu/webgpu.h" ]; then
+    echo "Dawn already exists: $OUTPUT_DIR/$ANDROID_ABI/libwebgpu_dawn.a"
 else
-    echo "Downloading pre-built Dawn ${DAWN_VERSION} for Android..."
+    echo "Downloading pre-built Dawn ${DAWN_VERSION} for Android $ANDROID_ABI..."
 
     # Android build uses different naming: dawn-android-{commit}.tar.gz
     DAWN_URL="https://github.com/google/dawn/releases/download/v${DAWN_VERSION}/dawn-android-${DAWN_COMMIT}.tar.gz"
@@ -54,16 +60,31 @@ else
 
     # Find and copy the library (Dawn Android provides static .a library)
     DAWN_EXTRACTED="/tmp/dawn-android/dawn-android-${DAWN_COMMIT}"
-    if [ -f "$DAWN_EXTRACTED/arm64-v8a/libwebgpu_dawn.a" ]; then
-        cp "$DAWN_EXTRACTED/arm64-v8a/libwebgpu_dawn.a" "$OUTPUT_DIR/arm64-v8a/"
-        echo "Copied static library: libwebgpu_dawn.a"
-    elif [ -f "/tmp/dawn-android/arm64-v8a/libwebgpu_dawn.a" ]; then
-        cp "/tmp/dawn-android/arm64-v8a/libwebgpu_dawn.a" "$OUTPUT_DIR/arm64-v8a/"
-        echo "Copied static library: libwebgpu_dawn.a"
-    else
-        echo "Looking for Dawn library..."
-        find /tmp/dawn-android -name "*.so" -o -name "*.a" 2>/dev/null
-        echo "ERROR: Could not find Dawn library in extracted archive"
+    FOUND_LIB=""
+
+    # Try various paths where Dawn library might be
+    for TRY_PATH in \
+        "$DAWN_EXTRACTED/$ANDROID_ABI/libwebgpu_dawn.a" \
+        "/tmp/dawn-android/$ANDROID_ABI/libwebgpu_dawn.a" \
+        "$DAWN_EXTRACTED/libwebgpu_dawn.a" \
+        "/tmp/dawn-android/libwebgpu_dawn.a"; do
+        if [ -f "$TRY_PATH" ]; then
+            cp "$TRY_PATH" "$OUTPUT_DIR/$ANDROID_ABI/"
+            FOUND_LIB="$TRY_PATH"
+            echo "Copied static library from: $TRY_PATH"
+            break
+        fi
+    done
+
+    if [ -z "$FOUND_LIB" ]; then
+        echo "Looking for Dawn library (target: $ANDROID_ABI)..."
+        find /tmp/dawn-android -name "*.so" -o -name "*.a" 2>/dev/null || true
+        echo ""
+        echo "ERROR: Could not find Dawn library for $ANDROID_ABI in extracted archive"
+        echo "Dawn may not provide pre-built binaries for $ANDROID_ABI architecture."
+        echo ""
+        echo "For x86_64 emulator testing, consider using wgpu backend instead:"
+        echo "  make build-android_x86_64-wgpu-release"
         exit 1
     fi
 
@@ -84,19 +105,20 @@ else
 
     rm -rf "/tmp/dawn-android" "/tmp/dawn-android.tar.gz" "/tmp/dawn-headers" "/tmp/dawn-headers.tar.gz"
 
-    echo "Dawn downloaded to: $OUTPUT_DIR/arm64-v8a/"
+    echo "Dawn downloaded to: $OUTPUT_DIR/$ANDROID_ABI/"
 fi
 
 #-----------------------------------------------------------------------------
-# Toybox (BSD-licensed shell utilities)
+# Toybox - build from source using build-toybox.sh
 #-----------------------------------------------------------------------------
-if [ -f "$OUTPUT_DIR/arm64-v8a/libtoybox.so" ]; then
-    echo "Toybox already exists: $OUTPUT_DIR/arm64-v8a/libtoybox.so"
+# Note: toybox is now built from source, not downloaded
+# The build-toybox.sh script handles this and puts it in assets/
+TOYBOX_BIN="$ASSETS_DIR/toybox"
+if [ -f "$TOYBOX_BIN" ]; then
+    echo "Toybox already exists: $TOYBOX_BIN"
 else
-    echo "Downloading Toybox for Android ARM64..."
-    curl -fsSL "https://landley.net/toybox/bin/toybox-aarch64" -o "$OUTPUT_DIR/arm64-v8a/libtoybox.so"
-    chmod +x "$OUTPUT_DIR/arm64-v8a/libtoybox.so"
-    echo "Toybox downloaded: $OUTPUT_DIR/arm64-v8a/libtoybox.so"
+    echo "Building toybox from source..."
+    ANDROID_ABI="$ANDROID_ABI" ANDROID_BUILD_DIR="$BUILD_DIR" bash "$SCRIPT_DIR/build-toybox.sh"
 fi
 
 #-----------------------------------------------------------------------------
@@ -107,9 +129,21 @@ if [ -d "$PROJECT_ROOT/assets" ]; then
     echo "Assets copied to: $ASSETS_DIR/"
 fi
 
+#-----------------------------------------------------------------------------
+# Copy shaders (must be done BEFORE gradle, not as CMake post-build)
+#-----------------------------------------------------------------------------
+SHADERS_SRC="$PROJECT_ROOT/src/yetty/shaders"
+SHADERS_DST="$ASSETS_DIR/shaders"
+if [ -d "$SHADERS_SRC" ]; then
+    echo "Copying shaders..."
+    mkdir -p "$SHADERS_DST"
+    cp -r "$SHADERS_SRC"/* "$SHADERS_DST/"
+    echo "Shaders copied to: $SHADERS_DST/"
+fi
+
 echo ""
-echo "Android Dawn dependencies ready:"
-echo "  Dawn:   $OUTPUT_DIR/arm64-v8a/"
-echo "  toybox: $OUTPUT_DIR/arm64-v8a/libtoybox.so"
+echo "Android Dawn dependencies ready ($ANDROID_ABI):"
+echo "  Dawn:    $OUTPUT_DIR/$ANDROID_ABI/"
+echo "  toybox:  $TOYBOX_BIN"
 echo "  headers: $INCLUDE_DIR/"
 echo "  assets:  $ASSETS_DIR/"

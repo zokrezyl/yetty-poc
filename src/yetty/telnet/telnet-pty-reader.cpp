@@ -3,9 +3,6 @@
 #endif
 
 #include "telnet-pty-reader.h"
-
-#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
-
 #include <ytrace/ytrace.hpp>
 #include <algorithm>
 
@@ -138,5 +135,3 @@ Result<PtyReader::Ptr> createTelnetPtyReader(const PtyConfig& config) {
 }
 
 } // namespace yetty::telnet
-
-#endif // !defined(_WIN32) && !defined(__EMSCRIPTEN__)

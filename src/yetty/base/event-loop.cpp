@@ -4,7 +4,7 @@
 #include <unordered_map>
 #include <algorithm>
 
-#if !YETTY_WEB && !defined(__ANDROID__)
+#if !YETTY_WEB
 #include <uv.h>
 #endif
 
@@ -17,7 +17,7 @@ struct EventTypeHash {
     }
 };
 
-#if !YETTY_WEB && !defined(__ANDROID__)
+#if !YETTY_WEB
 struct PollHandle {
     uv_poll_t poll;
     int fd = -1;
@@ -36,7 +36,7 @@ struct TimerHandle {
 class EventLoopImpl : public EventLoop {
 public:
     EventLoopImpl() {
-#if !YETTY_WEB && !defined(__ANDROID__)
+#if !YETTY_WEB
         _loop = uv_default_loop();
 #endif
     }
@@ -44,7 +44,7 @@ public:
     ~EventLoopImpl() override = default;
 
     int start() override {
-#if !YETTY_WEB && !defined(__ANDROID__)
+#if !YETTY_WEB
         yinfo("EventLoop::start: running uv_default_loop");
         return uv_run(_loop, UV_RUN_DEFAULT);
 #else
@@ -53,7 +53,7 @@ public:
     }
 
     Result<void> stop() override {
-#if !YETTY_WEB && !defined(__ANDROID__)
+#if !YETTY_WEB
         yinfo("EventLoop::stop");
         uv_stop(_loop);
 #endif
@@ -155,9 +155,10 @@ public:
     }
 
     Result<PollId> createPoll() override {
-#if !YETTY_WEB && !defined(__ANDROID__)
+#if !YETTY_WEB
         PollId id = _nextPollId++;
         _polls[id] = std::make_unique<PollHandle>();
+        yinfo("EventLoop::createPoll: id={}", id);
         return Ok(id);
 #else
         return Err<PollId>("Poll not supported on this platform");
@@ -165,7 +166,7 @@ public:
     }
 
     Result<void> configPoll(PollId id, int fd) override {
-#if !YETTY_WEB && !defined(__ANDROID__)
+#if !YETTY_WEB
         auto it = _polls.find(id);
         if (it == _polls.end()) {
             return Err<void>("Poll not found");
@@ -179,7 +180,7 @@ public:
             return Err<void>(std::string("uv_poll_init failed: ") + uv_strerror(r));
         }
         ph->poll.data = ph.get();
-        ydebug("EventLoop::configPoll: id={} fd={} success", id, fd);
+        yinfo("EventLoop::configPoll: id={} fd={} success", id, fd);
         return Ok();
 #else
         (void)id;
@@ -189,7 +190,7 @@ public:
     }
 
     Result<void> startPoll(PollId id, int events = POLL_READABLE) override {
-#if !YETTY_WEB && !defined(__ANDROID__)
+#if !YETTY_WEB
         auto it = _polls.find(id);
         if (it == _polls.end()) {
             return Err<void>("Poll not found");
@@ -201,7 +202,7 @@ public:
         if (events & POLL_WRITABLE) uvEvents |= UV_WRITABLE;
         it->second->events = uvEvents;
 
-        ydebug("EventLoop::startPoll: id={} fd={} events={}", id, it->second->fd, uvEvents);
+        yinfo("EventLoop::startPoll: id={} fd={} events={}", id, it->second->fd, uvEvents);
         int r = uv_poll_start(&it->second->poll, uvEvents, onPollCallback);
         if (r != 0) {
             yerror("EventLoop::startPoll: uv_poll_start failed for fd={}: {}", it->second->fd, uv_strerror(r));
@@ -216,7 +217,7 @@ public:
     }
 
     Result<void> setPollEvents(PollId id, int events) override {
-#if !YETTY_WEB && !defined(__ANDROID__)
+#if !YETTY_WEB
         auto it = _polls.find(id);
         if (it == _polls.end()) {
             return Err<void>("Poll not found");
@@ -249,7 +250,7 @@ public:
     }
 
     Result<void> stopPoll(PollId id) override {
-#if !YETTY_WEB && !defined(__ANDROID__)
+#if !YETTY_WEB
         auto it = _polls.find(id);
         if (it == _polls.end()) {
             return Err<void>("Poll not found");
@@ -264,7 +265,7 @@ public:
     }
 
     Result<void> destroyPoll(PollId id) override {
-#if !YETTY_WEB && !defined(__ANDROID__)
+#if !YETTY_WEB
         auto it = _polls.find(id);
         if (it == _polls.end()) {
             return Err<void>("Poll not found");
@@ -281,13 +282,13 @@ public:
     }
 
     Result<void> registerPollListener(PollId id, EventListener::Ptr listener) override {
-#if !YETTY_WEB && !defined(__ANDROID__)
+#if !YETTY_WEB
         auto it = _polls.find(id);
         if (it == _polls.end()) {
             return Err<void>("Poll not found");
         }
 
-        ydebug("EventLoop::registerPollListener: id={} fd={} listener={}", id, it->second->fd, (void*)listener.get());
+        yinfo("EventLoop::registerPollListener: id={} fd={} listener={}", id, it->second->fd, (void*)listener.get());
         it->second->listeners.push_back(listener);
         return Ok();
 #else
@@ -298,7 +299,7 @@ public:
     }
 
     Result<TimerId> createTimer() override {
-#if !YETTY_WEB && !defined(__ANDROID__)
+#if !YETTY_WEB
         TimerId id = _nextTimerId++;
         auto th = std::make_unique<TimerHandle>();
         th->id = id;
@@ -313,7 +314,7 @@ public:
     }
 
     Result<void> configTimer(TimerId id, Timeout timeoutMs) override {
-#if !YETTY_WEB && !defined(__ANDROID__)
+#if !YETTY_WEB
         auto it = _timers.find(id);
         if (it == _timers.end()) {
             return Err<void>("Timer not found");
@@ -335,7 +336,7 @@ public:
     }
 
     Result<void> startTimer(TimerId id) override {
-#if !YETTY_WEB && !defined(__ANDROID__)
+#if !YETTY_WEB
         auto it = _timers.find(id);
         if (it == _timers.end()) {
             return Err<void>("Timer not found");
@@ -352,7 +353,7 @@ public:
     }
 
     Result<void> stopTimer(TimerId id) override {
-#if !YETTY_WEB && !defined(__ANDROID__)
+#if !YETTY_WEB
         auto it = _timers.find(id);
         if (it == _timers.end()) {
             return Err<void>("Timer not found");
@@ -367,7 +368,7 @@ public:
     }
 
     Result<void> destroyTimer(TimerId id) override {
-#if !YETTY_WEB && !defined(__ANDROID__)
+#if !YETTY_WEB
         auto it = _timers.find(id);
         if (it == _timers.end()) {
             return Err<void>("Timer not found");
@@ -384,7 +385,7 @@ public:
     }
 
     Result<void> registerTimerListener(TimerId id, EventListener::Ptr listener) override {
-#if !YETTY_WEB && !defined(__ANDROID__)
+#if !YETTY_WEB
         auto it = _timers.find(id);
         if (it == _timers.end()) {
             return Err<void>("Timer not found");
@@ -401,10 +402,10 @@ public:
     }
 
 private:
-#if !YETTY_WEB && !defined(__ANDROID__)
+#if !YETTY_WEB
     static void onPollCallback(uv_poll_t* handle, int status, int events) {
         auto* ph = static_cast<PollHandle*>(handle->data);
-        ydebug("EventLoop::onPollCallback: fd={} status={} events={} listeners={}", ph->fd, status, events, ph->listeners.size());
+        yinfo("EventLoop::onPollCallback: fd={} status={} events={} listeners={}", ph->fd, status, events, ph->listeners.size());
 
         if (status < 0) {
             ywarn("EventLoop::onPollCallback: error status={} for fd={}", status, ph->fd);
@@ -413,6 +414,7 @@ private:
 
         // Dispatch readable event
         if (events & UV_READABLE) {
+            yinfo("EventLoop::onPollCallback: READABLE fd={}", ph->fd);
             Event event;
             event.type = Event::Type::PollReadable;
             event.poll.fd = ph->fd;
@@ -426,6 +428,7 @@ private:
 
         // Dispatch writable event
         if (events & UV_WRITABLE) {
+            yinfo("EventLoop::onPollCallback: WRITABLE fd={}", ph->fd);
             Event event;
             event.type = Event::Type::PollWritable;
             event.poll.fd = ph->fd;
@@ -459,7 +462,7 @@ private:
 
     std::unordered_map<Event::Type, std::vector<PrioritizedListener>, EventTypeHash> _listeners;
 
-#if !YETTY_WEB && !defined(__ANDROID__)
+#if !YETTY_WEB
     uv_loop_t* _loop = nullptr;
     std::unordered_map<PollId, std::unique_ptr<PollHandle>> _polls;
     std::unordered_map<TimerId, std::unique_ptr<TimerHandle>> _timers;

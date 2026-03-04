@@ -857,9 +857,9 @@ int Context::generateGlyphs(Font& font, const std::vector<uint32_t>& codepoints)
     std::atomic<bool> computeDone{false};
     WGPUQueueWorkDoneCallbackInfo computeCallback = {};
     computeCallback.mode = WGPUCallbackMode_AllowSpontaneous;
-    computeCallback.callback = [](WGPUQueueWorkDoneStatus, WGPUStringView, void* u1, void*) {
+    computeCallback.callback = WGPU_QUEUE_WORK_DONE_CALLBACK(computeDoneCb, {
         *static_cast<std::atomic<bool>*>(u1) = true;
-    };
+    });
     computeCallback.userdata1 = &computeDone;
     wgpuQueueOnSubmittedWorkDone(queue, computeCallback);
 
@@ -948,9 +948,9 @@ std::vector<uint8_t> Context::readAtlasToRGBA8(const Atlas& atlas) {
     std::atomic<bool> done{false};
     WGPUQueueWorkDoneCallbackInfo callback = {};
     callback.mode = WGPUCallbackMode_AllowSpontaneous;
-    callback.callback = [](WGPUQueueWorkDoneStatus, WGPUStringView, void* u1, void*) {
+    callback.callback = WGPU_QUEUE_WORK_DONE_CALLBACK(doneCb, {
         *static_cast<std::atomic<bool>*>(u1) = true;
-    };
+    });
     callback.userdata1 = &done;
 
     fprintf(stderr, "[MSDF] Waiting for queue work done...\n");

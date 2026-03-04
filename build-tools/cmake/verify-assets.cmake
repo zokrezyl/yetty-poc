@@ -119,8 +119,51 @@ endif()
 if(TARGET_TYPE STREQUAL "android")
     message(STATUS "Checking Android assets...")
 
-    # Android outputs are in different locations
-    # check_file("libyetty.so" "Yetty shared library")
+    # Toybox binary
+    check_file("assets/toybox" "Toybox shell utilities")
+
+    # Find the APK file
+    file(GLOB APK_FILES "${BUILD_DIR}/app/outputs/apk/*/app-*.apk")
+    if(APK_FILES)
+        list(GET APK_FILES 0 APK_FILE)
+        message(STATUS "Checking APK contents: ${APK_FILE}")
+
+        # Verify shaders are in the APK
+        execute_process(
+            COMMAND unzip -l "${APK_FILE}"
+            OUTPUT_VARIABLE APK_CONTENTS
+            ERROR_QUIET
+        )
+
+        # Check for critical shaders in APK
+        set(APK_MISSING "")
+        foreach(SHADER_CHECK
+            "assets/shaders/gpu-screen.wgsl"
+            "assets/shaders/cursor.wgsl"
+            "assets/shaders/lib/util.wgsl"
+            "assets/shaders/cards/0x0000-texture.wgsl"
+        )
+            string(FIND "${APK_CONTENTS}" "${SHADER_CHECK}" FOUND_POS)
+            if(FOUND_POS EQUAL -1)
+                list(APPEND APK_MISSING "${SHADER_CHECK}")
+            endif()
+        endforeach()
+
+        # Check for font CDB in APK
+        string(FIND "${APK_CONTENTS}" "assets/fonts-cdb/DejaVuSansMNerdFontMono-Regular.cdb" FOUND_POS)
+        if(FOUND_POS EQUAL -1)
+            list(APPEND APK_MISSING "assets/fonts-cdb/DejaVuSansMNerdFontMono-Regular.cdb")
+        endif()
+
+        list(LENGTH APK_MISSING APK_MISSING_COUNT)
+        if(APK_MISSING_COUNT GREATER 0)
+            message(FATAL_ERROR "APK missing critical assets:\n  ${APK_MISSING}")
+        else()
+            message(STATUS "APK contains all critical assets")
+        endif()
+    else()
+        message(WARNING "No APK found in ${BUILD_DIR}/app/outputs/apk/")
+    endif()
 endif()
 
 #-----------------------------------------------------------------------------

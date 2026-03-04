@@ -1,9 +1,14 @@
-# HTTP fetching via cpr (shares build with yhtml if enabled)
-find_package(OpenSSL REQUIRED)
+# HTTP fetching via cpr with OpenSSL
+# Disable optional curl dependencies
 set(CURL_ZLIB OFF CACHE BOOL "" FORCE)
 set(CURL_USE_LIBPSL OFF CACHE BOOL "" FORCE)
 set(CURL_BROTLI OFF CACHE BOOL "" FORCE)
 set(CURL_ZSTD OFF CACHE BOOL "" FORCE)
+set(ZLIB_FOUND FALSE CACHE BOOL "" FORCE)
+set(CMAKE_DISABLE_FIND_PACKAGE_ZLIB TRUE CACHE BOOL "" FORCE)
+
+# OpenSSL for all platforms (built from source)
+include(${YETTY_ROOT}/build-tools/cmake/openssl.cmake)
 
 CPMAddPackage(
     NAME cpr
@@ -13,8 +18,11 @@ CPMAddPackage(
         "CPR_USE_SYSTEM_CURL OFF"
         "BUILD_SHARED_LIBS OFF"
         "CPR_ENABLE_SSL ON"
+        "CPR_FORCE_OPENSSL_BACKEND ON"
         "CPR_BUILD_TESTS OFF"
         "CPR_BUILD_TESTS_SSL OFF"
+        "CPR_CURL_USE_LIBPSL OFF"
+        "CURL_ZLIB OFF"
 )
 
 set(TS_GRAMMAR_NAMES
@@ -63,8 +71,8 @@ add_executable(ycat
     ts/highlight.cpp
 )
 
-# libmagic is available on Unix (Linux/macOS), not Windows
-if(NOT WIN32)
+# libmagic is available on Unix (Linux/macOS), not Windows or Android
+if(NOT WIN32 AND NOT ANDROID)
     set(YCAT_MAGIC_LIBS magic)
     set(YCAT_HAS_LIBMAGIC TRUE)
 else()
@@ -105,5 +113,14 @@ if(YCAT_HAS_LIBMAGIC)
     target_compile_definitions(ycat PRIVATE
         YCAT_HAS_LIBMAGIC=1
         YCAT_MAGIC_MGC_PATH="${LIBMAGIC_MGC_PATH}"
+    )
+endif()
+
+# Install ycat to Android jniLibs as libycat.so
+if(YETTY_ANDROID AND ANDROID_BUILD_DIR)
+    add_custom_command(TARGET ycat POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:ycat>
+                "${ANDROID_BUILD_DIR}/jniLibs/${ANDROID_ABI}/libycat.so"
+        COMMENT "Copying ycat to Android jniLibs"
     )
 endif()
