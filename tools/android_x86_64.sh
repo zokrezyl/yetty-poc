@@ -1,0 +1,759 @@
+#!/bin/bash
+#
+# Run Yetty Android x86_64 build in an emulator
+# Supports: Ubuntu and macOS
+#
+# Usage:
+#   ./tools/android_x86_64.sh              # Build, create AVD if needed, and run
+#   ./tools/android_x86_64.sh --build      # Build only
+#   ./tools/android_x86_64.sh --run        # Run only (assumes APK exists)
+#   ./tools/android_x86_64.sh --vnc        # Run headless with VNC on port 5900
+#   ./tools/android_x86_64.sh --vnc-port 5901  # Use custom VNC port
+#   ./tools/android_x86_64.sh --vnc-build  # Build and run with VNC mode
+#   ./tools/android_x86_64.sh --kill       # Kill running emulator
+#
+# VNC Mode:
+#   The Android emulator's Qt GUI intercepts Ctrl key for pinch-zoom gestures,
+#   making Ctrl+C, Ctrl+D etc. unusable in terminal apps. VNC mode uses
+#   yetty's built-in VNC server to bypass this:
+#   1. Emulator runs normally (window opens - minimize it)
+#   2. Yetty starts its VNC server on port 5900
+#   3. Connect via VNC client to yetty directly
+#   4. Ctrl keys work because input goes to yetty, not Qt!
+#
+#   Connect with: vncviewer localhost:5900
+#
+# =============================================================================
+# TRANSPARENCY: What this script downloads and why
+# =============================================================================
+#
+# This script may download the following official Google components:
+#
+# 1. ANDROID SDK COMMAND LINE TOOLS (if not installed)
+#    - What: Official Android development tools from Google
+#    - From: https://developer.android.com/studio#command-tools
+#    - Why: Required to manage Android emulator and system images
+#    - Size: ~150 MB
+#
+# 2. ANDROID SYSTEM IMAGE (if not installed)
+#    - What: Android 14 (API 34) x86_64 emulator image with Google APIs
+#    - From: Google's official SDK repository via sdkmanager
+#    - Package: "system-images;android-34;google_apis;x86_64"
+#    - Why: The actual Android OS that runs inside the emulator
+#    - Size: ~1.2 GB
+#
+# 3. PLATFORM TOOLS & EMULATOR (if not installed)
+#    - What: adb (Android Debug Bridge) and emulator binaries
+#    - From: Google's official SDK repository via sdkmanager
+#    - Why: adb installs/runs apps; emulator runs the virtual device
+#    - Size: ~300 MB
+#
+# All downloads are from official Google servers via HTTPS.
+# No third-party sources are used.
+#
+# On Ubuntu: Uses apt package 'android-sdk' from Ubuntu repositories
+# On macOS: Uses Homebrew cask 'android-commandlinetools' from Google
+#
+# =============================================================================
+#
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+
+# Auto-yes mode (skip prompts)
+AUTO_YES=false
+DEBUG_MODE=false
+VNC_MODE=false
+VNC_HEADLESS=false
+VNC_PORT=5900
+
+# Configuration
+AVD_NAME="yetty_x86_64"
+SYSTEM_IMAGE="system-images;android-34;google_apis;x86_64"
+APK_PATH="${APK_PATH:-$PROJECT_ROOT/build-android_x86_64-dawn-debug/app/outputs/apk/debug/app-debug.apk}"
+PACKAGE_NAME="com.yetty.terminal"
+ACTIVITY_NAME="android.app.NativeActivity"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+info() { echo -e "${BLUE}[INFO]${NC} $*"; }
+warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
+error() { echo -e "${RED}[ERROR]${NC} $*"; }
+success() { echo -e "${GREEN}[OK]${NC} $*"; }
+
+# Prompt user for confirmation (respects AUTO_YES)
+confirm() {
+    local prompt="$1"
+    if [ "$AUTO_YES" = true ]; then
+        info "Auto-confirming: $prompt"
+        return 0
+    fi
+    read -p "$prompt [y/N] " -n 1 -r
+    echo
+    [[ $REPLY =~ ^[Yy]$ ]]
+}
+
+#-----------------------------------------------------------------------------
+# Detect OS
+#-----------------------------------------------------------------------------
+detect_os() {
+    case "$(uname -s)" in
+        Linux*)  OS="linux" ;;
+        Darwin*) OS="macos" ;;
+        *)       error "Unsupported OS: $(uname -s)"; exit 1 ;;
+    esac
+    info "Detected OS: $OS"
+}
+
+#-----------------------------------------------------------------------------
+# Find Android SDK
+#-----------------------------------------------------------------------------
+find_android_sdk() {
+    # Check common locations
+    local sdk_paths=(
+        "$ANDROID_HOME"
+        "$ANDROID_SDK_ROOT"
+        "$HOME/android-sdk"
+        "$HOME/Android/Sdk"
+        "$HOME/Library/Android/sdk"
+        "/usr/local/android-sdk"
+    )
+
+    for path in "${sdk_paths[@]}"; do
+        if [ -d "$path" ] && [ -f "$path/platform-tools/adb" ]; then
+            ANDROID_SDK="$path"
+            export ANDROID_HOME="$path"
+            export ANDROID_SDK_ROOT="$path"
+            # AVD home may be in .config/.android on some systems
+            if [ -d "$HOME/.config/.android/avd" ]; then
+                export ANDROID_AVD_HOME="$HOME/.config/.android/avd"
+            elif [ -d "$HOME/.android/avd" ]; then
+                export ANDROID_AVD_HOME="$HOME/.android/avd"
+            fi
+            export PATH="$ANDROID_SDK/platform-tools:$ANDROID_SDK/emulator:$ANDROID_SDK/cmdline-tools/latest/bin:$PATH"
+            success "Found Android SDK: $ANDROID_SDK"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+#-----------------------------------------------------------------------------
+# Check/Install Android SDK (Ubuntu)
+#-----------------------------------------------------------------------------
+install_android_sdk_ubuntu() {
+    info "Android SDK not found."
+    echo ""
+    echo "The Android SDK is required to run the emulator."
+    echo ""
+    echo "This will install from Ubuntu's official repositories:"
+    echo "  Package: android-sdk"
+    echo "  Source:  Ubuntu/Debian apt repository"
+    echo "  Info:    https://packages.ubuntu.com/android-sdk"
+    echo ""
+    if confirm "Install android-sdk via apt?"; then
+        # Downloads from Ubuntu's official apt repositories
+        info "Installing Android SDK from Ubuntu repositories..."
+        sudo apt-get update
+        sudo apt-get install -y android-sdk google-android-emulator-installer
+
+        # Set up paths
+        if [ -d "/usr/lib/android-sdk" ]; then
+            ANDROID_SDK="/usr/lib/android-sdk"
+        else
+            error "Installation failed or SDK not found"
+            exit 1
+        fi
+
+        export ANDROID_HOME="$ANDROID_SDK"
+        export ANDROID_SDK_ROOT="$ANDROID_SDK"
+        export PATH="$ANDROID_SDK/platform-tools:$ANDROID_SDK/emulator:$ANDROID_SDK/cmdline-tools/latest/bin:$PATH"
+
+        success "Android SDK installed"
+    else
+        echo ""
+        echo "Manual installation instructions:"
+        echo "  1. Download Command Line Tools from:"
+        echo "     https://developer.android.com/studio#command-tools"
+        echo "  2. Extract to ~/android-sdk/cmdline-tools/latest/"
+        echo "  3. Run: sdkmanager --install 'platform-tools' 'emulator' '$SYSTEM_IMAGE'"
+        echo "  4. Set ANDROID_HOME=~/android-sdk"
+        exit 1
+    fi
+}
+
+#-----------------------------------------------------------------------------
+# Check/Install Android SDK (macOS)
+#-----------------------------------------------------------------------------
+install_android_sdk_macos() {
+    info "Android SDK not found."
+    echo ""
+    echo "The Android SDK is required to run the emulator."
+    echo ""
+
+    # Check if Homebrew is available
+    if command -v brew &> /dev/null; then
+        echo "This will install from Homebrew (official Google package):"
+        echo "  Cask:   android-commandlinetools"
+        echo "  Source: https://developer.android.com/studio#command-tools"
+        echo "  Info:   https://formulae.brew.sh/cask/android-commandlinetools"
+        echo ""
+        if confirm "Install android-commandlinetools via Homebrew?"; then
+            # Downloads official Google Android tools via Homebrew
+            info "Installing Android Command Line Tools via Homebrew..."
+            brew install --cask android-commandlinetools
+
+            # Homebrew installs to this location
+            ANDROID_SDK="$HOME/Library/Android/sdk"
+            mkdir -p "$ANDROID_SDK"
+
+            export ANDROID_HOME="$ANDROID_SDK"
+            export ANDROID_SDK_ROOT="$ANDROID_SDK"
+            export PATH="$ANDROID_SDK/platform-tools:$ANDROID_SDK/emulator:$ANDROID_SDK/cmdline-tools/latest/bin:$PATH"
+
+            # Accept licenses and install required components
+            yes | sdkmanager --licenses 2>/dev/null || true
+            sdkmanager --install "platform-tools" "emulator"
+
+            success "Android SDK installed"
+            return 0
+        fi
+    fi
+
+    echo ""
+    echo "Manual installation instructions:"
+    echo "  1. Install Homebrew: /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
+    echo "  2. Run: brew install --cask android-commandlinetools"
+    echo "  3. Or download from: https://developer.android.com/studio#command-tools"
+    exit 1
+}
+
+#-----------------------------------------------------------------------------
+# Check/Install system image
+#-----------------------------------------------------------------------------
+check_system_image() {
+    info "Checking for system image: $SYSTEM_IMAGE"
+
+    if ! command -v sdkmanager &> /dev/null; then
+        # Try to find sdkmanager
+        local sdkmanager_paths=(
+            "$ANDROID_SDK/cmdline-tools/latest/bin/sdkmanager"
+            "$ANDROID_SDK/cmdline-tools/bin/sdkmanager"
+            "$ANDROID_SDK/tools/bin/sdkmanager"
+        )
+        for path in "${sdkmanager_paths[@]}"; do
+            if [ -f "$path" ]; then
+                alias sdkmanager="$path"
+                break
+            fi
+        done
+    fi
+
+    # Check if image is installed
+    local image_path="$ANDROID_SDK/system-images/android-34/google_apis/x86_64"
+    if [ -d "$image_path" ]; then
+        success "System image found"
+        return 0
+    fi
+
+    warn "System image not found: $SYSTEM_IMAGE"
+    echo ""
+    echo "This will download from Google's official SDK repository:"
+    echo "  Package: $SYSTEM_IMAGE"
+    echo "  Source:  https://dl.google.com/android/repository/"
+    echo "  What:    Android 14 (API 34) x86_64 emulator image"
+    echo "  Size:    ~1.2 GB"
+    echo ""
+    if confirm "Download system image?"; then
+        # Downloads from Google's official Android SDK repository via HTTPS
+        info "Downloading system image from Google (this may take a while)..."
+        yes | sdkmanager --licenses 2>/dev/null || true
+        sdkmanager --install "$SYSTEM_IMAGE"
+        success "System image installed"
+    else
+        error "System image required for emulator"
+        exit 1
+    fi
+}
+
+#-----------------------------------------------------------------------------
+# Check/Create AVD
+#-----------------------------------------------------------------------------
+check_avd() {
+    info "Checking for AVD: $AVD_NAME"
+
+    if ! command -v avdmanager &> /dev/null; then
+        local avdmanager_paths=(
+            "$ANDROID_SDK/cmdline-tools/latest/bin/avdmanager"
+            "$ANDROID_SDK/cmdline-tools/bin/avdmanager"
+            "$ANDROID_SDK/tools/bin/avdmanager"
+        )
+        for path in "${avdmanager_paths[@]}"; do
+            if [ -f "$path" ]; then
+                AVDMANAGER="$path"
+                break
+            fi
+        done
+    else
+        AVDMANAGER="avdmanager"
+    fi
+
+    # Check if AVD exists
+    if $AVDMANAGER list avd 2>/dev/null | grep -q "Name: $AVD_NAME"; then
+        success "AVD found: $AVD_NAME"
+        return 0
+    fi
+
+    info "Creating AVD: $AVD_NAME"
+    echo "no" | $AVDMANAGER create avd \
+        --name "$AVD_NAME" \
+        --package "$SYSTEM_IMAGE" \
+        --device "pixel_6" \
+        --force
+
+    # Configure AVD for better performance
+    local avd_config="$HOME/.android/avd/${AVD_NAME}.avd/config.ini"
+    if [ -f "$avd_config" ]; then
+        # Enable GPU acceleration
+        echo "hw.gpu.enabled=yes" >> "$avd_config"
+        echo "hw.gpu.mode=auto" >> "$avd_config"
+        # Set RAM
+        echo "hw.ramSize=4096" >> "$avd_config"
+        # Enable keyboard
+        echo "hw.keyboard=yes" >> "$avd_config"
+    fi
+
+    success "AVD created: $AVD_NAME"
+}
+
+#-----------------------------------------------------------------------------
+# Check KVM (Linux only)
+#-----------------------------------------------------------------------------
+check_kvm() {
+    if [ "$OS" != "linux" ]; then
+        return 0
+    fi
+
+    info "Checking KVM support..."
+
+    if [ ! -e /dev/kvm ]; then
+        warn "KVM not available. Emulator will be slow."
+        echo ""
+        echo "To enable KVM:"
+        echo "  1. Ensure virtualization is enabled in BIOS"
+        echo "  2. Install KVM: sudo apt-get install qemu-kvm"
+        echo "  3. Add user to kvm group: sudo usermod -aG kvm \$USER"
+        echo "  4. Log out and back in"
+        echo ""
+        if ! confirm "Continue without KVM (slow)?"; then
+            exit 1
+        fi
+    elif [ ! -r /dev/kvm ] || [ ! -w /dev/kvm ]; then
+        warn "KVM exists but not accessible"
+        echo "Run: sudo usermod -aG kvm \$USER"
+        echo "Then log out and back in"
+    else
+        success "KVM available"
+    fi
+}
+
+#-----------------------------------------------------------------------------
+# Build APK
+#-----------------------------------------------------------------------------
+build_apk() {
+    info "Building Android x86_64 release APK..."
+    cd "$PROJECT_ROOT"
+
+    # Use wgpu backend (more compatible than Dawn for emulator)
+    make build-android_x86_64-wgpu-release
+
+    if [ ! -f "$APK_PATH" ]; then
+        error "Build failed - APK not found: $APK_PATH"
+        exit 1
+    fi
+
+    success "APK built: $APK_PATH"
+}
+
+#-----------------------------------------------------------------------------
+# Start emulator
+#-----------------------------------------------------------------------------
+start_emulator() {
+    info "Starting emulator..."
+
+    # Check if already running
+    if adb devices 2>/dev/null | grep -q "emulator"; then
+        success "Emulator already running"
+        return 0
+    fi
+
+    # Find emulator binary
+    local emulator_bin="$ANDROID_SDK/emulator/emulator"
+    if [ ! -f "$emulator_bin" ]; then
+        emulator_bin="$(command -v emulator)"
+    fi
+
+    if [ -z "$emulator_bin" ] || [ ! -f "$emulator_bin" ]; then
+        error "Emulator binary not found"
+        exit 1
+    fi
+
+    # Start emulator in background
+    if [ "$VNC_HEADLESS" = true ]; then
+        # VNC headless: no emulator window, use yetty's built-in VNC server
+        # The emulator runs without display, yetty provides VNC access
+        # -gpu host: use host GPU via virtio-gpu passthrough (NOT software rendering!)
+        info "Launching emulator in HEADLESS mode (no window)..."
+        info "  - No emulator window"
+        info "  - Host GPU acceleration"
+        info "  - Yetty's VNC server on port $VNC_PORT"
+        "$emulator_bin" -avd "$AVD_NAME" \
+            -no-window \
+            -no-audio \
+            -gpu host \
+            -no-snapshot-load \
+            -skin 1920x1080 \
+            -netdelay none \
+            -netspeed full &
+    elif [ "$VNC_MODE" = true ]; then
+        # VNC mode with window: emulator window + yetty's VNC server
+        info "Launching emulator for VNC mode..."
+        info "  - Emulator window opens (can ignore it)"
+        info "  - Yetty's VNC server on port $VNC_PORT"
+        "$emulator_bin" -avd "$AVD_NAME" \
+            -gpu auto \
+            -no-snapshot-load \
+            -skin 1920x1080 \
+            -netdelay none \
+            -netspeed full \
+            -qemu -k en-us &
+    else
+        # Normal mode with Qt GUI
+        # -skin 1920x1080: landscape fullscreen
+        # -screen touch: single-touch mode (still has Ctrl pinch-zoom issue)
+        # -netdelay none -netspeed full: ensure network is enabled with no throttling
+        # -qemu -k en-us: keyboard layout
+        info "Launching emulator (this may take a minute)..."
+        "$emulator_bin" -avd "$AVD_NAME" \
+            -gpu auto \
+            -no-snapshot-load \
+            -skin 1920x1080 \
+            -screen touch \
+            -netdelay none \
+            -netspeed full \
+            -qemu -k en-us -usb -device usb-mouse &
+    fi
+    EMULATOR_PID=$!
+
+    # Wait for emulator to boot
+    info "Waiting for emulator to boot..."
+    local timeout=120
+    local count=0
+    while [ $count -lt $timeout ]; do
+        if adb shell getprop sys.boot_completed 2>/dev/null | grep -q "1"; then
+            success "Emulator booted"
+            return 0
+        fi
+        sleep 2
+        count=$((count + 2))
+        echo -n "."
+    done
+    echo ""
+
+    error "Emulator boot timeout"
+    exit 1
+}
+
+#-----------------------------------------------------------------------------
+# Configure emulator settings for terminal use
+#-----------------------------------------------------------------------------
+configure_emulator() {
+    info "Configuring emulator settings..."
+
+    # Disable pointer location overlay (annoying visual feedback)
+    adb shell settings put system pointer_location 0
+
+    # Disable show touches
+    adb shell settings put system show_touches 0
+
+    # Disable on-screen keyboard when hardware keyboard is connected
+    adb shell settings put secure show_ime_with_hard_keyboard 0
+
+    # Hide the navigation bar to maximize terminal space
+    adb shell settings put global policy_control immersive.navigation=*
+
+    success "Emulator configured (on-screen keyboard disabled)"
+}
+
+#-----------------------------------------------------------------------------
+# Install and run APK
+#-----------------------------------------------------------------------------
+install_and_run() {
+    if [ ! -f "$APK_PATH" ]; then
+        error "APK not found: $APK_PATH"
+        error "Run with --build first or run without arguments"
+        exit 1
+    fi
+
+    # Configure emulator for terminal use
+    configure_emulator
+
+    info "Installing APK..."
+    adb install -r "$APK_PATH"
+
+    if [ "$VNC_HEADLESS" = true ] || [ "$VNC_MODE" = true ]; then
+        # VNC mode: use yetty's built-in VNC server
+        # Works with or without emulator window - yetty provides the VNC!
+        local host_ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+        [ -z "$host_ip" ] && host_ip="<host-ip>"
+
+        if [ "$VNC_HEADLESS" = true ]; then
+            info "Setting up VNC HEADLESS mode (no emulator window)..."
+        else
+            info "Setting up VNC mode..."
+        fi
+
+        # Set yetty VNC properties BEFORE starting the app
+        info "Setting VNC properties (debug.yetty.vnc.*)..."
+        adb shell setprop debug.yetty.vnc.headless 1
+        adb shell setprop debug.yetty.vnc.port $VNC_PORT
+        success "VNC properties set"
+
+        # Forward yetty's VNC port from emulator to host
+        # Use tcp:0.0.0.0:PORT to bind to all interfaces for remote access
+        info "Forwarding port $VNC_PORT (binding to 0.0.0.0 for remote access)..."
+        adb forward tcp:$VNC_PORT tcp:$VNC_PORT
+
+        # Also set up a listener on all interfaces using socat if available
+        if command -v socat &>/dev/null; then
+            # Kill any existing socat on this port
+            pkill -f "socat.*:$VNC_PORT" 2>/dev/null || true
+            # Forward from all interfaces to localhost
+            socat TCP-LISTEN:$VNC_PORT,bind=0.0.0.0,fork,reuseaddr TCP:127.0.0.1:$VNC_PORT &
+            success "Port $VNC_PORT bound to 0.0.0.0 via socat"
+        else
+            warn "Install socat for remote VNC access: sudo apt install socat"
+            warn "Without socat, VNC only works on localhost"
+        fi
+
+        info "Starting Yetty..."
+        adb shell am start -n "$PACKAGE_NAME/$ACTIVITY_NAME"
+        sleep 3
+
+        # Check if VNC port is listening
+        if nc -z localhost $VNC_PORT 2>/dev/null; then
+            success "Yetty VNC server is listening on port $VNC_PORT"
+        else
+            warn "VNC port $VNC_PORT not responding yet (app may need more time)"
+        fi
+
+        echo ""
+        echo "=============================================="
+        if [ "$VNC_HEADLESS" = true ]; then
+            echo "  VNC HEADLESS MODE ACTIVE"
+        else
+            echo "  VNC MODE ACTIVE"
+        fi
+        echo "=============================================="
+        echo ""
+        echo "Connect from REMOTE host:"
+        echo "  vncviewer $host_ip:$VNC_PORT"
+        echo ""
+        echo "Connect LOCALLY:"
+        echo "  vncviewer localhost:$VNC_PORT"
+        echo ""
+        echo "Ctrl+C, Ctrl+D, etc. work via VNC!"
+        if [ "$VNC_HEADLESS" = true ]; then
+            echo "(No emulator window - truly headless)"
+        fi
+        echo ""
+
+    else
+        info "Starting Yetty..."
+        adb shell am start -n "$PACKAGE_NAME/$ACTIVITY_NAME"
+
+        success "Yetty is running!"
+    fi
+
+    echo ""
+    echo "Useful commands:"
+    echo "  adb logcat -s yetty          # View Yetty logs"
+    echo "  adb logcat | grep -i yetty   # View all related logs"
+    echo "  adb shell am force-stop $PACKAGE_NAME  # Stop app"
+    echo "  ./tools/android_x86_64.sh --kill       # Kill emulator"
+}
+
+#-----------------------------------------------------------------------------
+# Kill emulator
+#-----------------------------------------------------------------------------
+kill_emulator() {
+    info "Killing emulator..."
+    adb -s emulator-5554 emu kill 2>/dev/null || true
+    pkill -f "qemu-system-x86_64.*$AVD_NAME" 2>/dev/null || true
+    pkill -f "emulator.*$AVD_NAME" 2>/dev/null || true
+    success "Emulator killed"
+}
+
+#-----------------------------------------------------------------------------
+# Main
+#-----------------------------------------------------------------------------
+main() {
+    # Parse global flags first (can be combined with other flags)
+    local args=()
+    local skip_next=false
+    for i in $(seq 1 $#); do
+        if [ "$skip_next" = true ]; then
+            skip_next=false
+            continue
+        fi
+        arg="${!i}"
+        next_i=$((i + 1))
+        next_arg="${!next_i:-}"
+        case "$arg" in
+            --yes|-y)
+                AUTO_YES=true
+                ;;
+            --debug|-d)
+                DEBUG_MODE=true
+                ;;
+            --vnc-port)
+                if [ -n "$next_arg" ] && [[ "$next_arg" =~ ^[0-9]+$ ]]; then
+                    VNC_PORT="$next_arg"
+                    skip_next=true
+                else
+                    error "--vnc-port requires a port number"
+                    exit 1
+                fi
+                ;;
+            *)
+                args+=("$arg")
+                ;;
+        esac
+    done
+    set -- "${args[@]}"
+
+    # Enable debug tracing if requested
+    if [ "$DEBUG_MODE" = true ]; then
+        set -x
+    fi
+
+    echo "========================================"
+    echo "  Yetty Android x86_64 Emulator"
+    echo "========================================"
+    if [ "$AUTO_YES" = true ]; then
+        echo "  (auto-yes mode enabled)"
+    fi
+    echo ""
+
+    detect_os
+
+    # Parse action arguments
+    case "${1:-}" in
+        --build)
+            build_apk
+            exit 0
+            ;;
+        --run)
+            find_android_sdk || { error "Android SDK not found"; exit 1; }
+            start_emulator
+            install_and_run
+            exit 0
+            ;;
+        --vnc)
+            VNC_MODE=true
+            find_android_sdk || { error "Android SDK not found"; exit 1; }
+            start_emulator
+            install_and_run
+            exit 0
+            ;;
+        --vnc-headless)
+            VNC_HEADLESS=true
+            find_android_sdk || { error "Android SDK not found"; exit 1; }
+            start_emulator
+            install_and_run
+            exit 0
+            ;;
+        --vnc-build)
+            VNC_MODE=true
+            find_android_sdk || { error "Android SDK not found"; exit 1; }
+            check_system_image
+            check_avd
+            check_kvm
+            build_apk
+            start_emulator
+            install_and_run
+            success "VNC server running on port $VNC_PORT - connect with: vncviewer localhost:$VNC_PORT"
+            exit 0
+            ;;
+        --kill)
+            kill_emulator
+            exit 0
+            ;;
+        --help|-h)
+            echo "Usage: $0 [OPTIONS]"
+            echo ""
+            echo "Options:"
+            echo "  (none)          Build APK, setup emulator, and run"
+            echo "  --build         Build APK only"
+            echo "  --run           Run in emulator (assumes APK exists)"
+            echo "  --vnc           Run with VNC (emulator window + yetty VNC)"
+            echo "  --vnc-headless  Run truly headless (no window, QEMU VNC)"
+            echo "  --vnc-build     Build APK and run with VNC mode"
+            echo "  --vnc-port N    Set VNC port (default: 5900)"
+            echo "  --kill          Kill running emulator"
+            echo "  --yes, -y       Auto-confirm all prompts (non-interactive)"
+            echo "  --debug, -d     Enable debug output (bash -x tracing)"
+            echo "  --help          Show this help"
+            echo ""
+            echo "VNC Mode:"
+            echo "  The emulator's Qt GUI intercepts Ctrl for pinch-zoom gestures."
+            echo "  VNC mode runs the emulator headless and exposes the display via"
+            echo "  QEMU's built-in VNC server. Ctrl keys work properly through VNC!"
+            echo ""
+            echo "  How it works:"
+            echo "    1. Emulator runs with -no-window (no Qt GUI)"
+            echo "    2. QEMU VNC server exposes the Android display"
+            echo "    3. Yetty's VNC port is forwarded from emulator to host"
+            echo "    4. Connect with any VNC client to localhost:5900"
+            echo ""
+            echo "Examples:"
+            echo "  $0 --yes              # Full setup without prompts"
+            echo "  $0 --yes --build      # Build only without prompts"
+            echo "  $0 --vnc              # Run with VNC (Ctrl keys work!)"
+            echo "  $0 --vnc-build        # Build and run with VNC"
+            echo "  $0 --vnc-port 5901 --vnc  # Use port 5901"
+            echo "  $0 --yes --debug      # Full setup with debug output"
+            echo ""
+            echo "Connecting to VNC:"
+            echo "  vncviewer localhost:5900"
+            echo "  tigervnc localhost:5900"
+            echo "  remmina vnc://localhost:5900"
+            exit 0
+            ;;
+    esac
+
+    # Full setup and run
+    if ! find_android_sdk; then
+        case "$OS" in
+            linux) install_android_sdk_ubuntu ;;
+            macos) install_android_sdk_macos ;;
+        esac
+    fi
+
+    check_system_image
+    check_avd
+    check_kvm
+    build_apk
+    start_emulator
+    install_and_run
+}
+
+main "$@"
