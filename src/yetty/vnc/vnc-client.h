@@ -48,6 +48,7 @@ public:
     void sendTextInput(const char* text, size_t len);
     void sendResize(uint16_t width, uint16_t height);
     void sendCellSize(uint8_t cellHeight);
+    void sendFrameAck();  // Flow control: notify server we're done with frame
 
     // EventListener interface
     Result<bool> onEvent(const base::Event& event) override;

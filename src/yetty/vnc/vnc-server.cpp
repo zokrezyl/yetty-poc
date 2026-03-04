@@ -606,6 +606,11 @@ std::vector<VncServer::Rect> VncServer::mergeRectangles() {
 Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels, uint32_t width, uint32_t height) {
     if (_clientCount == 0) return Ok();  // No clients, skip
 
+    // Flow control: wait for client ack before sending next frame
+    if (_awaitingAck) {
+        return Ok();  // Skip this frame, client hasn't acked previous
+    }
+
     _cpuPixels = cpuPixels;
     _cpuPixelsSize = width * height * 4;
 
@@ -1125,6 +1130,9 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
         _stats.lastReportTime = now;
     }
 
+    // Flow control: wait for client ack before next frame
+    _awaitingAck = true;
+
     return Ok();
 }
 
@@ -1278,6 +1286,12 @@ void VncServer::dispatchInput(const InputHeader& hdr, const uint8_t* data) {
                 onCharWithMods(c->codepoint, c->mods);
             }
             break;
+
+        case InputType::FRAME_ACK:
+            // Flow control: client finished processing frame, allow next frame
+            yinfo("VNC FRAME_ACK received, clearing _awaitingAck");
+            _awaitingAck = false;
+            break;
     }
 
     // Notify that input was received (triggers screen refresh)
@@ -1296,7 +1310,8 @@ bool VncServer::hasPendingInput() const {
 }
 
 bool VncServer::isReadyForFrame() const {
-    return _captureState == CaptureState::IDLE || _gpuWorkDone.load();
+    // Ready when: state machine is idle/done AND not waiting for client ack
+    return (_captureState == CaptureState::IDLE || _gpuWorkDone.load()) && !_awaitingAck.load();
 }
 
 void VncServer::processInput() {

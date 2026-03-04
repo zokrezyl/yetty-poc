@@ -618,16 +618,16 @@ Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
     args::ArgumentParser parser("yetty", "Terminal emulator with GPU rendering");
 
     args::HelpFlag help(parser, "help", "Show this help", {'h', "help"});
-    args::ValueFlag<std::string> executeFlag(parser, "command", "Execute command", {'e', 'c'});
-    args::ValueFlag<std::string> msdfProviderFlag(parser, "provider", "MSDF provider (cpu/gpu)", {"msdf-provider"});
-    args::ValueFlag<std::string> telnetFlag(parser, "host:port", "Connect via telnet (default: 127.0.0.1:8023)", {"telnet"});
+    args::ValueFlag<std::string> executeFlag(parser, "COMMAND", "Execute command", {'e', 'c'});
+    args::ValueFlag<std::string> msdfProviderFlag(parser, "PROVIDER", "MSDF provider (cpu/gpu)", {"msdf-provider"});
+    args::ValueFlag<std::string> telnetFlag(parser, "HOST:PORT", "Connect via telnet (default: 127.0.0.1:8023)", {"telnet"});
     args::Flag captureBenchmarkFlag(parser, "capture-benchmark", "Enable capture benchmark mode", {"capture-benchmark"});
-    args::ValueFlag<std::string> vncClientFlag(parser, "host:port", "Connect as VNC client", {"vnc-client"});
+    args::ValueFlag<std::string> vncClientFlag(parser, "HOST:PORT", "Connect as VNC client", {"vnc-client"});
     args::Flag vncServerFlag(parser, "vnc-server", "Start VNC server (with local window)", {"vnc-server"});
-    args::ValueFlag<uint16_t> vncServerPortFlag(parser, "port", "VNC server port (default 5900)", {"vnc-port"}, 5900);
+    args::ValueFlag<uint16_t> vncServerPortFlag(parser, "PORT", "VNC server port (default 5900)", {"vnc-port"}, 5900);
     args::Flag vncHeadlessFlag(parser, "vnc-headless", "Start VNC server without window (headless)", {"vnc-headless"});
     args::Flag vncMergeRectsFlag(parser, "vnc-merge-rects", "Merge dirty tiles into larger rectangles (better compression)", {"vnc-merge-rects"});
-    args::ValueFlag<std::string> vncTestFlag(parser, "pattern", "VNC test mode: text, color, scroll, stress", {"vnc-test"});
+    args::ValueFlag<std::string> vncTestFlag(parser, "PATTERN", "VNC test mode: text, color, scroll, stress", {"vnc-test"});
 
     try {
         parser.ParseCLI(argc, argv);
@@ -2034,11 +2034,26 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
     // VNC SERVER PROTOCOL: Only start sending frames AFTER client sends its resize
     // _vncRequestedWidth/Height are set by onResize callback when client's resize arrives
     bool vncClientReady = _vncRequestedWidth > 0 && _vncRequestedHeight > 0;
+    // Flow control: don't capture if VNC server isn't ready (state machine busy or waiting for ack)
+    bool vncServerReady = !_vncServer || _vncServer->isReadyForFrame();
     // Always capture when there are clients - state machine handles diff detection
     // NOT requiring vncServerReady because we need to capture new content even while processing
     bool doCapture = (_captureBenchmark && (++_captureSkipCounter % CAPTURE_EVERY_N_FRAMES == 0)) ||
-                     (_vncHeadless && _vncServerMode && _vncServer && vncClientReady) ||
-                     (_vncServerMode && _vncServer && _vncServer->hasClients() && vncClientReady && vncThrottleOk);
+                     (_vncHeadless && _vncServerMode && _vncServer && vncClientReady && vncServerReady) ||
+                     (_vncServerMode && _vncServer && _vncServer->hasClients() && vncClientReady && vncThrottleOk && vncServerReady);
+
+    // Debug: track capture vs skip ratio
+    static uint32_t captureCount = 0, skipCount = 0;
+    static double lastDbgTime = 0;
+    if (_vncHeadless) {
+        if (doCapture) captureCount++; else skipCount++;
+        double now = _platform->getTime();
+        if (now - lastDbgTime >= 1.0) {
+            yinfo("VNC STATS: captures={} skips={} ackReady={}", captureCount, skipCount, vncServerReady);
+            captureCount = skipCount = 0;
+            lastDbgTime = now;
+        }
+    }
     // Determine capture size: use VNC requested size if set, otherwise window size
     uint32_t captureW = (_vncServerMode && _vncRequestedWidth > 0) ? _vncRequestedWidth : static_cast<uint32_t>(windowWidth);
     uint32_t captureH = (_vncServerMode && _vncRequestedHeight > 0) ? _vncRequestedHeight : static_cast<uint32_t>(windowHeight);

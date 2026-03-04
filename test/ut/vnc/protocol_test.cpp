@@ -161,10 +161,53 @@ suite protocol_tests = [] {
         expect(tiles_y(1) == 1_i);
     };
 
+    "rect header serialization"_test = [] {
+        RectHeader rect;
+        rect.px_x = 128;
+        rect.px_y = 256;
+        rect.width = 192;
+        rect.height = 128;
+        rect.encoding = static_cast<uint8_t>(Encoding::RECT_JPEG);
+        rect.reserved = 0;
+        rect.data_size = 8192;
+
+        std::vector<uint8_t> buf(sizeof(rect));
+        std::memcpy(buf.data(), &rect, sizeof(rect));
+
+        RectHeader parsed;
+        std::memcpy(&parsed, buf.data(), sizeof(parsed));
+
+        expect(parsed.px_x == 128_i);
+        expect(parsed.px_y == 256_i);
+        expect(parsed.width == 192_i);
+        expect(parsed.height == 128_i);
+        expect(parsed.encoding == static_cast<uint8_t>(Encoding::RECT_JPEG));
+        expect(parsed.data_size == 8192_i);
+    };
+
+    "rectangle mode detection"_test = [] {
+        // tile_size == 0 indicates rectangle mode
+        FrameHeader rectMode;
+        rectMode.magic = FRAME_MAGIC;
+        rectMode.width = 1024;
+        rectMode.height = 768;
+        rectMode.tile_size = 0;  // Rectangle mode
+        rectMode.num_tiles = 3;  // 3 rectangles
+
+        expect(rectMode.tile_size == 0_i);
+
+        FrameHeader tileMode;
+        tileMode.tile_size = TILE_SIZE;  // Tile mode
+        expect(tileMode.tile_size == TILE_SIZE);
+    };
+
     "encoding enum values"_test = [] {
         expect(static_cast<uint8_t>(Encoding::RAW) == 0_i);
         expect(static_cast<uint8_t>(Encoding::RLE) == 1_i);
         expect(static_cast<uint8_t>(Encoding::JPEG) == 2_i);
+        expect(static_cast<uint8_t>(Encoding::FULL_FRAME) == 3_i);
+        expect(static_cast<uint8_t>(Encoding::RECT_RAW) == 4_i);
+        expect(static_cast<uint8_t>(Encoding::RECT_JPEG) == 5_i);
     };
 
     "input type enum values"_test = [] {
@@ -174,6 +217,21 @@ suite protocol_tests = [] {
         expect(static_cast<uint8_t>(InputType::KEY_DOWN) == 3_i);
         expect(static_cast<uint8_t>(InputType::KEY_UP) == 4_i);
         expect(static_cast<uint8_t>(InputType::TEXT_INPUT) == 5_i);
+        expect(static_cast<uint8_t>(InputType::RESIZE) == 6_i);
+        expect(static_cast<uint8_t>(InputType::CELL_SIZE) == 7_i);
+        expect(static_cast<uint8_t>(InputType::CHAR_WITH_MODS) == 8_i);
+        expect(static_cast<uint8_t>(InputType::FRAME_ACK) == 9_i);
+    };
+
+    "frame ack message format"_test = [] {
+        // FRAME_ACK has no payload, just InputHeader
+        InputHeader ack;
+        ack.type = static_cast<uint8_t>(InputType::FRAME_ACK);
+        ack.reserved = 0;
+        ack.data_size = 0;
+
+        expect(ack.type == 9_i);
+        expect(ack.data_size == 0_i);
     };
 
     "modifier flags"_test = [] {

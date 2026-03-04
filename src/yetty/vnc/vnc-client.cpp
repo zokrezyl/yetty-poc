@@ -449,6 +449,7 @@ void VncClient::onSocketReadable() {
                             _recvNeeded = sizeof(FrameHeader);
                             _recvOffset = 0;
                             _recvBuffer.resize(_recvNeeded);
+                            sendFrameAck();  // Flow control: notify server
                         }
                         break;
                     }
@@ -494,6 +495,7 @@ void VncClient::onSocketReadable() {
                     _recvNeeded = sizeof(FrameHeader);
                     _recvOffset = 0;
                     _recvBuffer.resize(_recvNeeded);
+                    sendFrameAck();  // Flow control: notify server
                 } else {
                     // Read next tile header
                     _recvState = RecvState::TILE_HEADER;
@@ -590,6 +592,7 @@ void VncClient::onSocketReadable() {
                     _recvNeeded = sizeof(FrameHeader);
                     _recvOffset = 0;
                     _recvBuffer.resize(_recvNeeded);
+                    sendFrameAck();  // Flow control: notify server
                 } else {
                     // Read next rectangle header
                     _recvState = RecvState::RECT_HEADER;
@@ -1043,6 +1046,15 @@ void VncClient::sendCellSize(uint8_t cellHeight) {
     std::memcpy(buf, &hdr, sizeof(hdr));
     std::memcpy(buf + sizeof(hdr), &evt, sizeof(evt));
     sendInput(buf, sizeof(buf));
+}
+
+void VncClient::sendFrameAck() {
+    ydebug("VNC client sendFrameAck");
+    InputHeader hdr = {};
+    hdr.type = static_cast<uint8_t>(InputType::FRAME_ACK);
+    hdr.data_size = 0;  // No payload
+
+    sendInput(&hdr, sizeof(hdr));
 }
 
 } // namespace yetty::vnc

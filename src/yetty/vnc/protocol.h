@@ -57,6 +57,7 @@ enum class InputType : uint8_t {
     RESIZE = 6,      // Client window resized
     CELL_SIZE = 7,   // Client sets cell height (ctrl+wheel zoom)
     CHAR_WITH_MODS = 8,  // Character with modifiers (layout-mapped)
+    FRAME_ACK = 9,   // Client finished processing frame (flow control)
 };
 
 enum class MouseButton : uint8_t {

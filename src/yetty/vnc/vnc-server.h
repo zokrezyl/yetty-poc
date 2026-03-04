@@ -24,6 +24,7 @@ public:
     void stop();
     bool isRunning() const { return _running; }
     bool hasClients() const { return _clientCount > 0; }
+    bool isAwaitingAck() const { return _awaitingAck; }  // Flow control: waiting for client
     void forceFullFrame() { _forceFullFrame = true; }
 
     // Enable/disable rectangle merging (merges adjacent dirty tiles into larger rectangles)
@@ -156,6 +157,9 @@ private:
 
     // Rectangle merging mode (default: disabled for backward compatibility)
     bool _mergeRectangles = false;
+
+    // Flow control: wait for client ack before sending next frame
+    std::atomic<bool> _awaitingAck{false};
 
     Result<void> ensureResources(uint32_t width, uint32_t height);
     Result<void> createDiffPipeline();
