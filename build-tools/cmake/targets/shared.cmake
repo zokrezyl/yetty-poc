@@ -20,6 +20,9 @@ include(${YETTY_ROOT}/build-tools/cmake/libs/msdfgen.cmake)
 include(${YETTY_ROOT}/build-tools/cmake/libs/cdb.cmake)
 include(${YETTY_ROOT}/build-tools/cmake/thorvg.cmake)
 include(${YETTY_ROOT}/build-tools/cmake/TreeSitter.cmake)
+include(${YETTY_ROOT}/build-tools/cmake/Dav1d.cmake)
+include(${YETTY_ROOT}/build-tools/cmake/openh264.cmake)
+include(${YETTY_ROOT}/build-tools/cmake/minimp4.cmake)
 
 # Common include directories
 set(YETTY_INCLUDES

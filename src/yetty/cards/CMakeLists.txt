@@ -16,6 +16,7 @@ add_subdirectory(ypdf)
 add_subdirectory(yhtml)
 add_subdirectory(thorvg)
 add_subdirectory(ythorvg)
+add_subdirectory(yvideo)
 
 # Aggregate library linking all cards
 add_library(yetty_cards INTERFACE)
@@ -36,4 +37,5 @@ target_link_libraries(yetty_cards INTERFACE
     yetty_card_yhtml
     yetty_card_thorvg
     yetty_card_ythorvg
+    yetty_card_yvideo
 )
