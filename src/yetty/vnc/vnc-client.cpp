@@ -1057,4 +1057,20 @@ void VncClient::sendFrameAck() {
     sendInput(&hdr, sizeof(hdr));
 }
 
+void VncClient::sendCompressionConfig(bool forceRaw, uint8_t quality) {
+    yinfo("VNC client sendCompressionConfig: forceRaw={} quality={}", forceRaw, quality);
+    InputHeader hdr = {};
+    hdr.type = static_cast<uint8_t>(InputType::COMPRESSION_CONFIG);
+    hdr.data_size = sizeof(CompressionConfigEvent);
+
+    CompressionConfigEvent evt = {};
+    evt.forceRaw = forceRaw ? 1 : 0;
+    evt.quality = quality;
+
+    uint8_t buf[sizeof(hdr) + sizeof(evt)];
+    std::memcpy(buf, &hdr, sizeof(hdr));
+    std::memcpy(buf + sizeof(hdr), &evt, sizeof(evt));
+    sendInput(buf, sizeof(buf));
+}
+
 } // namespace yetty::vnc

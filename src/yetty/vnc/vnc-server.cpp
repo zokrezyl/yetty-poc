@@ -466,6 +466,13 @@ Result<void> VncServer::encodeTile(uint16_t tx, uint16_t ty,
 
     uint32_t rawSize = TILE_SIZE * TILE_SIZE * 4;
 
+    // Use raw encoding if forced, otherwise try JPEG compression
+    if (_forceRaw) {
+        outData = std::move(tilePixels);
+        outEncoding = Encoding::RAW;
+        return Ok();
+    }
+
     // Try JPEG compression
     unsigned char* jpegBuf = nullptr;
     unsigned long jpegSize = 0;
@@ -475,7 +482,7 @@ Result<void> VncServer::encodeTile(uint16_t tx, uint16_t ty,
         TILE_SIZE, 0, TILE_SIZE,
         TJPF_BGRA,
         &jpegBuf, &jpegSize,
-        TJSAMP_420, 80,
+        TJSAMP_420, _jpegQuality,
         TJFLAG_FASTDCT
     );
 
@@ -515,6 +522,13 @@ Result<void> VncServer::encodeRect(uint16_t px, uint16_t py, uint16_t width, uin
 
     uint32_t rawSize = rectW * rectH * 4;
 
+    // Use raw encoding if forced, otherwise try JPEG compression
+    if (_forceRaw) {
+        outData = std::move(rectPixels);
+        outEncoding = Encoding::RECT_RAW;
+        return Ok();
+    }
+
     // Try JPEG compression
     unsigned char* jpegBuf = nullptr;
     unsigned long jpegSize = 0;
@@ -524,7 +538,7 @@ Result<void> VncServer::encodeRect(uint16_t px, uint16_t py, uint16_t width, uin
         rectW, 0, rectH,
         TJPF_BGRA,
         &jpegBuf, &jpegSize,
-        TJSAMP_420, 80,
+        TJSAMP_420, _jpegQuality,
         TJFLAG_FASTDCT
     );
 
@@ -939,7 +953,8 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
     frameData.reserve(64 * 1024);
 
     uint16_t totalTiles = _tilesX * _tilesY;
-    bool useFullFrame = (numDirty > totalTiles / 2);  // > 50% dirty = full frame
+    // Use full-frame JPEG when > 50% tiles dirty, but not if raw encoding is forced
+    bool useFullFrame = !_forceRaw && (numDirty > totalTiles / 2);
 
     if (useFullFrame) {
         // FULL FRAME: encode entire frame as one JPEG
@@ -958,7 +973,7 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
             width, 0, height,
             TJPF_BGRA,
             &jpegBuf, &jpegSize,
-            TJSAMP_420, 70,
+            TJSAMP_420, _jpegQuality,
             TJFLAG_FASTDCT
         );
 
@@ -1295,6 +1310,17 @@ void VncServer::dispatchInput(const InputHeader& hdr, const uint8_t* data) {
             // Flow control: client finished processing frame, allow next frame
             yinfo("VNC FRAME_ACK received, clearing _awaitingAck");
             _awaitingAck = false;
+            break;
+
+        case InputType::COMPRESSION_CONFIG:
+            if (data && hdr.data_size >= sizeof(CompressionConfigEvent)) {
+                const CompressionConfigEvent* c = reinterpret_cast<const CompressionConfigEvent*>(data);
+                _forceRaw = (c->forceRaw != 0);
+                if (c->quality > 0 && c->quality <= 100) {
+                    _jpegQuality = c->quality;
+                }
+                yinfo("VNC COMPRESSION_CONFIG: forceRaw={} quality={}", _forceRaw, _jpegQuality);
+            }
             break;
     }
 

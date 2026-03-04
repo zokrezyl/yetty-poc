@@ -49,6 +49,7 @@ public:
     void sendResize(uint16_t width, uint16_t height);
     void sendCellSize(uint8_t cellHeight);
     void sendFrameAck();  // Flow control: notify server we're done with frame
+    void sendCompressionConfig(bool forceRaw, uint8_t quality);  // Configure compression settings
 
     // EventListener interface
     Result<bool> onEvent(const base::Event& event) override;

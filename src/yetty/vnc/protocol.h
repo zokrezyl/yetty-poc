@@ -58,6 +58,7 @@ enum class InputType : uint8_t {
     CELL_SIZE = 7,   // Client sets cell height (ctrl+wheel zoom)
     CHAR_WITH_MODS = 8,  // Character with modifiers (layout-mapped)
     FRAME_ACK = 9,   // Client finished processing frame (flow control)
+    COMPRESSION_CONFIG = 10,  // Client configures compression settings
 };
 
 enum class MouseButton : uint8_t {
@@ -118,6 +119,13 @@ struct ResizeEvent {
 
 struct CellSizeEvent {
     uint8_t cellHeight;  // Absolute cell height in pixels (client commands the size)
+};
+
+// Compression configuration (client -> server)
+struct CompressionConfigEvent {
+    uint8_t forceRaw;    // 1 = force raw encoding (no JPEG), 0 = allow JPEG
+    uint8_t quality;     // JPEG quality (1-100), 0 = use server default
+    uint8_t reserved[2]; // Padding for alignment
 };
 
 #pragma pack(pop)

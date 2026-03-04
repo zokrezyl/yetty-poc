@@ -31,6 +31,12 @@ public:
     void setMergeRectangles(bool enable) { _mergeRectangles = enable; }
     bool getMergeRectangles() const { return _mergeRectangles; }
 
+    // Compression settings (can be configured by client via COMPRESSION_CONFIG message)
+    void setForceRaw(bool enable) { _forceRaw = enable; }
+    bool getForceRaw() const { return _forceRaw; }
+    void setJpegQuality(uint8_t quality) { _jpegQuality = quality; }
+    uint8_t getJpegQuality() const { return _jpegQuality; }
+
     // Check if server is ready to accept more frames (previous GPU work done)
     // Call this BEFORE creating GPU command buffers to avoid FD exhaustion
     bool isReadyForFrame() const;
@@ -157,6 +163,10 @@ private:
 
     // Rectangle merging mode (default: disabled for backward compatibility)
     bool _mergeRectangles = false;
+
+    // Compression settings (configurable by client)
+    bool _forceRaw = false;      // Force raw encoding (no JPEG)
+    uint8_t _jpegQuality = 80;   // JPEG quality (1-100), default 80
 
     // Flow control: wait for client ack before sending next frame
     std::atomic<bool> _awaitingAck{false};
