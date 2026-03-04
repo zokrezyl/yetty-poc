@@ -26,11 +26,9 @@
 #include <cstring>
 #include <ytrace/ytrace.hpp>
 #include <args.hxx>
-#if YETTY_HAS_VNC
 #include <turbojpeg.h>
 #include "vnc/vnc-client.h"
 #include "vnc/vnc-server.h"
-#endif
 
 #if defined(__EMSCRIPTEN__)
 #include <emscripten.h>
@@ -171,9 +169,7 @@ private:
     uint32_t _captureWidth = 0;
     uint32_t _captureHeight = 0;
     uint32_t _captureReadbackSize = 0;
-#if YETTY_HAS_VNC
     tjhandle _jpegCompressor = nullptr;
-#endif
     std::vector<uint8_t> _capturePixels;
 
     // Capture statistics (ytrace handles timing, we just track JPEG sizes)
@@ -188,7 +184,6 @@ private:
     bool _vncHeadless = false;  // No local rendering, only serve to VNC clients
     uint32_t _vncRequestedWidth = 0;   // Client-requested capture size
     uint32_t _vncRequestedHeight = 0;
-#if YETTY_HAS_VNC
     std::string _vncHost;
     uint16_t _vncPort = 5900;
     vnc::VncClient::Ptr _vncClient;
@@ -201,7 +196,6 @@ private:
     bool _vncTestMode = false;
     std::string _vncTestPattern = "text";  // text, color, scroll, stress
     int _vncTestFrame = 0;
-#endif
 
     // Prevent recursive render + deferred resize
     bool _inRender = false;
@@ -393,7 +387,6 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     s_instance = this;
     _lastFpsTime = _platform->getTime();
 
-#if YETTY_HAS_VNC
     // Initialize capture benchmark mode if enabled
     if (_captureBenchmark) {
         _jpegCompressor = tjInitCompress();
@@ -405,7 +398,7 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
 
     // Initialize VNC client mode if enabled
     if (_vncClientMode) {
-        // Get initial VNC area size (window minus statusbar)
+        // Get initial VNC content area size (window minus our statusbar)
         int windowW, windowH;
         _platform->getWindowSize(windowW, windowH);
         float statusbarH = _yettyContext.yguiOverlay ? _yettyContext.yguiOverlay->getStatusbarHeight() : 0.0f;
@@ -567,13 +560,22 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
             if (widthPx == 0 || heightPx == 0) return;
             yinfo("VNC onResize: {}x{} px", widthPx, heightPx);
 
-            // Store requested capture size
+            // Store requested capture size (full VNC area including server's statusbar)
             _vncRequestedWidth = widthPx;
             _vncRequestedHeight = heightPx;
 
-            // Resize workspace to match client request
+            // Resize workspace to client area minus server's statusbar
+            // Server renders terminal in top portion, statusbar at bottom
             if (_activeWorkspace) {
-                _activeWorkspace->resize(static_cast<float>(widthPx), static_cast<float>(heightPx));
+                float statusbarH = _yettyContext.yguiOverlay ? _yettyContext.yguiOverlay->getStatusbarHeight() : 0.0f;
+                float wsH = std::max(1.0f, static_cast<float>(heightPx) - statusbarH);
+                _activeWorkspace->resize(static_cast<float>(widthPx), wsH);
+                yinfo("VNC onResize: workspace={}x{} (statusbar={})", widthPx, wsH, statusbarH);
+            }
+
+            // Update ygui overlay display size for statusbar positioning
+            if (_yettyContext.yguiOverlay) {
+                _yettyContext.yguiOverlay->updateDisplaySize(widthPx, heightPx);
             }
 
             // Force full frame on next capture
@@ -604,7 +606,6 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
             (*loopResult)->dispatch(base::Event::screenUpdateEvent());
         };
     }
-#endif // YETTY_HAS_VNC
 
     return Ok();
 }
@@ -617,13 +618,11 @@ Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
     args::ValueFlag<std::string> msdfProviderFlag(parser, "provider", "MSDF provider (cpu/gpu)", {"msdf-provider"});
     args::ValueFlag<std::string> telnetFlag(parser, "host:port", "Connect via telnet (default: 127.0.0.1:8023)", {"telnet"});
     args::Flag captureBenchmarkFlag(parser, "capture-benchmark", "Enable capture benchmark mode", {"capture-benchmark"});
-#if YETTY_HAS_VNC
     args::ValueFlag<std::string> vncClientFlag(parser, "host:port", "Connect as VNC client", {"vnc-client"});
     args::Flag vncServerFlag(parser, "vnc-server", "Start VNC server (with local window)", {"vnc-server"});
     args::ValueFlag<uint16_t> vncServerPortFlag(parser, "port", "VNC server port (default 5900)", {"vnc-port"}, 5900);
     args::Flag vncHeadlessFlag(parser, "vnc-headless", "Start VNC server without window (headless)", {"vnc-headless"});
     args::ValueFlag<std::string> vncTestFlag(parser, "pattern", "VNC test mode: text, color, scroll, stress", {"vnc-test"});
-#endif
 
     try {
         parser.ParseCLI(argc, argv);
@@ -659,7 +658,6 @@ Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
         yinfo("Telnet mode: connecting to {}", _telnetAddress);
     }
 
-#if YETTY_HAS_VNC
     if (vncClientFlag) {
         _vncClientMode = true;
         std::string hostPort = args::get(vncClientFlag);
@@ -714,7 +712,6 @@ Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
             _executeCommand = "bash -c 'while true; do cat /dev/urandom | tr -dc A-Za-z0-9 | head -c 1000; echo; done'";
         }
     }
-#endif // YETTY_HAS_VNC
 
     return Ok();
 }
@@ -1198,7 +1195,6 @@ Result<void> YettyImpl::performFrameCapture(WGPUCommandEncoder encoder) noexcept
 
     // === JPEG COMPRESSION ===
     unsigned long jpegSize = 0;
-#if YETTY_HAS_VNC
     {
         ytimeit("capture-jpeg");
 
@@ -1226,7 +1222,6 @@ Result<void> YettyImpl::performFrameCapture(WGPUCommandEncoder encoder) noexcept
 
         tjFree(jpegBuf);
     }
-#endif
 
     _totalCompressedBytes += jpegSize;
     _captureFrameCount++;
@@ -1442,7 +1437,6 @@ Result<void> YettyImpl::initCallbacks() noexcept {
         ydebug("KeyCallback: key={} scancode={} action={} mods={}", key, scancode, static_cast<int>(action), mods);
 
         // Forward to VNC server when in client mode
-#if YETTY_HAS_VNC
         if (_vncClientMode && _vncClient) {
             ydebug("VNC client mode: forwarding key={} scancode={} action={}", key, scancode, static_cast<int>(action));
             uint8_t vncMods = 0;
@@ -1470,7 +1464,6 @@ Result<void> YettyImpl::initCallbacks() noexcept {
             }
             return;  // Don't process locally in client mode
         }
-#endif
 
         // Track modifier key state for scroll events
         // GLFW_KEY_LEFT_CONTROL=341, GLFW_KEY_RIGHT_CONTROL=345
@@ -1518,7 +1511,6 @@ Result<void> YettyImpl::initCallbacks() noexcept {
         yinfo("[TIME] CLIENT CharCallback at {}ms: codepoint={}", ms, codepoint);
 
         // Forward to VNC server when in client mode
-#if YETTY_HAS_VNC
         if (_vncClientMode && _vncClient) {
             // Encode codepoint as UTF-8 and send
             char utf8[5] = {0};
@@ -1543,7 +1535,6 @@ Result<void> YettyImpl::initCallbacks() noexcept {
             }
             return;  // Don't process locally in client mode
         }
-#endif
 
         uint32_t glyphIdx = codepoint;
         if (auto font = _yettyContext.fontManager->getDefaultMsMsdfFont()) {
@@ -1566,7 +1557,6 @@ Result<void> YettyImpl::initCallbacks() noexcept {
         (void)mods;  // Unused when forwarding
 
         // Forward to VNC server when in client mode
-#if YETTY_HAS_VNC
         if (_vncClientMode && _vncClient) {
             vnc::MouseButton vncBtn;
             switch (button) {
@@ -1581,7 +1571,6 @@ Result<void> YettyImpl::initCallbacks() noexcept {
                 vncBtn, pressed);
             return;  // Don't process locally in client mode
         }
-#endif
 
         // Get current mouse position for event dispatch
         // Note: we track mouse position via move callback, but for now get from window size
@@ -1620,12 +1609,10 @@ Result<void> YettyImpl::initCallbacks() noexcept {
         _lastMouseY = my;
 
         // Forward to VNC server when in client mode
-#if YETTY_HAS_VNC
         if (_vncClientMode && _vncClient) {
             _vncClient->sendMouseMove(static_cast<int16_t>(mx), static_cast<int16_t>(my));
             return;  // Don't process locally in client mode
         }
-#endif
 
         auto loop = *base::EventLoop::instance();
         loop->dispatch(base::Event::mouseMove(mx, my));
@@ -1634,7 +1621,6 @@ Result<void> YettyImpl::initCallbacks() noexcept {
     // Scroll callback
     _platform->setScrollCallback([this](double xoffset, double yoffset) {
         // Forward to VNC server when in client mode
-#if YETTY_HAS_VNC
         if (_vncClientMode && _vncClient) {
             _vncClient->sendMouseScroll(
                 static_cast<int16_t>(_lastMouseX),
@@ -1643,7 +1629,6 @@ Result<void> YettyImpl::initCallbacks() noexcept {
                 static_cast<int16_t>(yoffset * 120));
             return;  // Don't process locally in client mode
         }
-#endif
 
         // Build modifier state from tracked key presses
         // GLFW_MOD_SHIFT = 0x0001, GLFW_MOD_CONTROL = 0x0002
@@ -1693,7 +1678,6 @@ Result<void> YettyImpl::onShutdown() {
         wgpuTextureRelease(_captureTexture);
         _captureTexture = nullptr;
     }
-#if YETTY_HAS_VNC
     if (_jpegCompressor) {
         tjDestroy(_jpegCompressor);
         _jpegCompressor = nullptr;
@@ -1710,7 +1694,6 @@ Result<void> YettyImpl::onShutdown() {
         _vncServer->stop();
         _vncServer.reset();
     }
-#endif
 
 #if !YETTY_WEB && !defined(__ANDROID__)
     if (_rpcServer) {
@@ -2041,17 +2024,11 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
     // VNC SERVER PROTOCOL: Only start sending frames AFTER client sends its resize
     // _vncRequestedWidth/Height are set by onResize callback when client's resize arrives
     bool vncClientReady = _vncRequestedWidth > 0 && _vncRequestedHeight > 0;
-    // CRITICAL: Check if VNC server is ready for more frames BEFORE creating GPU work
-    // This prevents FD exhaustion from queuing GPU operations faster than they complete
-#if YETTY_HAS_VNC
-    bool vncServerReady = !_vncServer || _vncServer->isReadyForFrame();
+    // Always capture when there are clients - state machine handles diff detection
+    // NOT requiring vncServerReady because we need to capture new content even while processing
     bool doCapture = (_captureBenchmark && (++_captureSkipCounter % CAPTURE_EVERY_N_FRAMES == 0)) ||
-                     (_vncHeadless && _vncServerMode && _vncServer && vncClientReady && vncServerReady) ||
-                     (_vncServerMode && _vncServer && _vncServer->hasClients() && vncClientReady && vncThrottleOk && vncServerReady);
-#else
-    bool vncServerReady = true;
-    bool doCapture = (_captureBenchmark && (++_captureSkipCounter % CAPTURE_EVERY_N_FRAMES == 0));
-#endif
+                     (_vncHeadless && _vncServerMode && _vncServer && vncClientReady) ||
+                     (_vncServerMode && _vncServer && _vncServer->hasClients() && vncClientReady && vncThrottleOk);
     // Determine capture size: use VNC requested size if set, otherwise window size
     uint32_t captureW = (_vncServerMode && _vncRequestedWidth > 0) ? _vncRequestedWidth : static_cast<uint32_t>(windowWidth);
     uint32_t captureH = (_vncServerMode && _vncRequestedHeight > 0) ? _vncRequestedHeight : static_cast<uint32_t>(windowHeight);
@@ -2109,8 +2086,27 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
             _yettyContext.gpu.renderTargetWidth = captureW;
             _yettyContext.gpu.renderTargetHeight = captureH;
 
+            // CRITICAL: In non-headless VNC mode, workspace may be sized to window dimensions
+            // but we need to render at VNC capture dimensions. Resize workspace temporarily.
+            float savedWorkspaceW = 0.0f;
+            float savedWorkspaceH = 0.0f;
+            bool workspaceResized = false;
+            if (_activeWorkspace && !_vncHeadless && _vncServerMode) {
+                savedWorkspaceW = _activeWorkspace->width();
+                savedWorkspaceH = _activeWorkspace->height();
+                if (savedWorkspaceW != static_cast<float>(captureW) ||
+                    savedWorkspaceH != static_cast<float>(captureH)) {
+                    _activeWorkspace->resize(static_cast<float>(captureW), static_cast<float>(captureH));
+                    workspaceResized = true;
+                }
+            }
+
             if (_activeWorkspace) {
                 if (auto res = _activeWorkspace->render(capturePass); !res) {
+                    // Restore workspace size before returning error
+                    if (workspaceResized) {
+                        _activeWorkspace->resize(savedWorkspaceW, savedWorkspaceH);
+                    }
                     wgpuRenderPassEncoderEnd(capturePass);
                     wgpuRenderPassEncoderRelease(capturePass);
                     wgpuCommandEncoderRelease(captureEncoder);
@@ -2118,10 +2114,14 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
                     return Err<void>("Capture workspace render failed", res);
                 }
             }
-            // Only render UI overlay for capture benchmark, NOT for VNC streaming
-            // VNC should only show the terminal content, not statusbar/UI
-            if (_captureBenchmark && _yettyContext.yguiOverlay) {
+            // Render UI overlay (statusbar) for both capture benchmark and VNC streaming
+            // VNC client will see server's statusbar, plus its own statusbar on top
+            if (_yettyContext.yguiOverlay) {
                 if (auto res = _yettyContext.yguiOverlay->render(capturePass); !res) {
+                    // Restore workspace size before returning error
+                    if (workspaceResized) {
+                        _activeWorkspace->resize(savedWorkspaceW, savedWorkspaceH);
+                    }
                     wgpuRenderPassEncoderEnd(capturePass);
                     wgpuRenderPassEncoderRelease(capturePass);
                     wgpuCommandEncoderRelease(captureEncoder);
@@ -2131,6 +2131,11 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
             }
             wgpuRenderPassEncoderEnd(capturePass);
             wgpuRenderPassEncoderRelease(capturePass);
+
+            // Restore workspace size for local rendering
+            if (workspaceResized) {
+                _activeWorkspace->resize(savedWorkspaceW, savedWorkspaceH);
+            }
         }
 
         // Perform capture benchmark (copy to buffer, map, compress)
@@ -2151,26 +2156,25 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
             wgpuCommandEncoderRelease(captureEncoder);
         }
 
-        // VNC server: send frame to connected clients
-#if YETTY_HAS_VNC
+        // VNC server: ALWAYS call sendFrame after rendering to capture texture
+        // The state machine inside sendFrame handles when to start new diff detection
         if (_vncServerMode && _vncServer) {
             if (auto res = _vncServer->sendFrame(_captureTexture, captureW, captureH); !res) {
                 ywarn("VNC send failed: {}", res.error().message());
             }
             // Process pending GPU callbacks so VNC state machine advances
             wgpuInstanceProcessEvents(_instance);
-            lastVncFrame = vncNow;  // Update throttle timestamp
+            lastVncFrame = vncNow;
         }
     } else if (_vncServerMode && _vncServer && vncClientReady && _captureTexture && _captureWidth > 0 && _captureHeight > 0) {
-        // VNC server not ready for new frame, but still need to call sendFrame
-        // to progress the state machine (check GPU callbacks, transition states)
-        // Use actual capture texture dimensions, not requested size (may differ after resize)
-        if (auto res = _vncServer->sendFrame(_captureTexture, _captureWidth, _captureHeight); !res) {
-            ywarn("VNC send failed: {}", res.error().message());
+        // No capture this frame - only advance state machine if NOT idle
+        // If idle, don't call sendFrame or we'll compare stale content!
+        if (!_vncServer->isReadyForFrame()) {
+            if (auto res = _vncServer->sendFrame(_captureTexture, _captureWidth, _captureHeight); !res) {
+                ywarn("VNC send failed: {}", res.error().message());
+            }
+            wgpuInstanceProcessEvents(_instance);
         }
-        // Process pending GPU callbacks (buffer map completions) so VNC state machine advances
-        wgpuInstanceProcessEvents(_instance);
-#endif
     }
 
     // === NORMAL RENDER TO SURFACE (skip in headless mode) ===
@@ -2200,7 +2204,6 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
             _yettyContext.gpu.renderTargetHeight = _surfaceHeight;
 
             // VNC client mode: render received frame
-#if YETTY_HAS_VNC
             if (_vncClientMode && _vncClient) {
                 // Update texture with any received tiles
                 if (auto res = _vncClient->updateTexture(); !res) {
@@ -2214,9 +2217,7 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
                     _inRender = false;
                     return Err<void>("VNC client render failed", res);
                 }
-            } else
-#endif
-            if (_activeWorkspace) {
+            } else if (_activeWorkspace) {
                 if (auto res = _activeWorkspace->render(pass); !res) {
                     wgpuRenderPassEncoderEnd(pass);
                     wgpuRenderPassEncoderRelease(pass);
@@ -2343,17 +2344,16 @@ void YettyImpl::handleResize(int newWidth, int newHeight) noexcept {
         _activeWorkspace->resize(logicalW, wsH);
     }
 
-    // VNC client mode: tell server about our VNC area size (window minus statusbar)
-#if YETTY_HAS_VNC
+    // VNC client mode: tell server about our VNC content area (window minus our statusbar)
+    // Server renders its full frame (terminal + server's statusbar) into this area
     if (_vncClientMode && _vncClient && windowWidth > 0 && windowHeight > 0) {
         float statusbarH = _yettyContext.yguiOverlay ? _yettyContext.yguiOverlay->getStatusbarHeight() : 0.0f;
         int vncH = windowHeight - static_cast<int>(statusbarH);
         if (vncH > 0) {
             _vncClient->sendResize(static_cast<uint16_t>(windowWidth), static_cast<uint16_t>(vncH));
-            yinfo("VNC client sent resize: {}x{} (statusbar={})", windowWidth, vncH, statusbarH);
+            yinfo("VNC client sent resize: {}x{} (content area, statusbar={})", windowWidth, vncH, statusbarH);
         }
     }
-#endif
 }
 
 } // namespace yetty
