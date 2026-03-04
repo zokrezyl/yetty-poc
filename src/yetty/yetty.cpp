@@ -841,17 +841,18 @@ Result<void> YettyImpl::initWebGPU() noexcept {
     // Create surface via platform (skip in headless mode)
     if (!_vncHeadless) {
         _surface = _platform->createWGPUSurface(_instance);
-        if (!_surface) {
-            return Err<void>("Failed to create WebGPU surface");
+        if (_surface) {
+            yinfo("initWebGPU: Surface created");
+        } else {
+            ywarn("initWebGPU: Surface creation failed - will try without surface");
         }
-        yinfo("initWebGPU: Surface created");
     } else {
         yinfo("initWebGPU: Headless mode - skipping surface creation");
     }
 
-    // Request adapter (without compatibleSurface in headless mode)
+    // Request adapter (without compatibleSurface if headless or surface creation failed)
     WGPURequestAdapterOptions adapterOpts = {};
-    adapterOpts.compatibleSurface = _vncHeadless ? nullptr : _surface;
+    adapterOpts.compatibleSurface = _surface;  // nullptr if headless or surface failed
     adapterOpts.powerPreference = WGPUPowerPreference_HighPerformance;
 
     WGPURequestAdapterCallbackInfo adapterCallbackInfo = {};
@@ -2077,9 +2078,9 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
     _inRender = true;  // Protect texture from resize events
 #endif
 
-    // In headless mode, skip surface operations
+    // In headless mode or when surface is unavailable, skip surface operations
     WGPUTextureView targetView = nullptr;
-    if (!_vncHeadless) {
+    if (!_vncHeadless && _surface) {
         auto viewResult = getCurrentTextureView();
         if (!viewResult) {
 #if defined(__EMSCRIPTEN__)
@@ -2304,8 +2305,8 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
         }
     }
 
-    // === NORMAL RENDER TO SURFACE (skip in headless mode) ===
-    if (!_vncHeadless) {
+    // === NORMAL RENDER TO SURFACE (skip in headless mode or when no surface) ===
+    if (!_vncHeadless && _surface) {
         WGPUCommandEncoderDescriptor encoderDesc = {};
         WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(_device, &encoderDesc);
         if (!encoder) {
