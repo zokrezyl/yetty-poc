@@ -9,8 +9,9 @@ using namespace yetty::vnc;
 suite protocol_tests = [] {
     "protocol struct sizes are packed"_test = [] {
         // Verify packed struct sizes for wire protocol
-        expect(sizeof(FrameHeader) == 8_i);
-        expect(sizeof(TileHeader) == 9_i);
+        expect(sizeof(FrameHeader) == 12_i);   // magic(4) + width(2) + height(2) + tile_size(2) + num_tiles(2)
+        expect(sizeof(TileHeader) == 9_i);     // tile_x(2) + tile_y(2) + encoding(1) + data_size(4)
+        expect(sizeof(RectHeader) == 14_i);    // px_x(2) + px_y(2) + width(2) + height(2) + encoding(1) + reserved(1) + data_size(4)
         expect(sizeof(InputHeader) == 4_i);
         expect(sizeof(MouseMoveEvent) == 4_i);
         expect(sizeof(MouseButtonEvent) == 6_i);

@@ -12,6 +12,8 @@ enum class Encoding : uint8_t {
     RLE = 1,
     JPEG = 2,
     FULL_FRAME = 3,  // Entire frame as one JPEG (tile_x=0, tile_y=0, covers whole frame)
+    RECT_RAW = 4,    // Arbitrary rectangle (uses RectHeader, raw pixels)
+    RECT_JPEG = 5,   // Arbitrary rectangle (uses RectHeader, JPEG compressed)
 };
 
 #pragma pack(push, 1)
@@ -30,6 +32,17 @@ struct TileHeader {
     uint16_t tile_x;
     uint16_t tile_y;
     uint8_t encoding;
+    uint32_t data_size;
+};
+
+// Rectangle header for merged tile regions (used with RECT_RAW/RECT_JPEG encoding)
+struct RectHeader {
+    uint16_t px_x;      // Pixel X coordinate
+    uint16_t px_y;      // Pixel Y coordinate
+    uint16_t width;     // Width in pixels
+    uint16_t height;    // Height in pixels
+    uint8_t encoding;   // RECT_RAW or RECT_JPEG
+    uint8_t reserved;
     uint32_t data_size;
 };
 

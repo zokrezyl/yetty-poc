@@ -208,7 +208,7 @@ void VncServer::stop() {
 }
 
 void VncServer::handleAccept() {
-    yinfo("VNC handleAccept called");
+    ydebug("VNC handleAccept called");
     // Accept all pending connections (non-blocking)
     while (true) {
         struct sockaddr_in clientAddr;
@@ -386,7 +386,7 @@ Result<void> VncServer::ensureResources(uint32_t width, uint32_t height) {
         if (auto res = createDiffPipeline(); !res) return res;
     }
 
-    yinfo("VNC server resources: {}x{}, {} tiles", width, height, numTiles);
+    ydebug("VNC server resources: {}x{}, {} tiles", width, height, numTiles);
     return Ok();
 }
 
@@ -490,6 +490,117 @@ Result<void> VncServer::encodeTile(uint16_t tx, uint16_t ty,
     }
 
     return Ok();
+}
+
+Result<void> VncServer::encodeRect(uint16_t px, uint16_t py, uint16_t width, uint16_t height,
+                                   std::vector<uint8_t>& outData, Encoding& outEncoding) {
+    const uint8_t* pixels = _cpuPixels ? _cpuPixels : _gpuReadbackPixels.data();
+    if (!pixels || (_cpuPixels == nullptr && _gpuReadbackPixels.empty())) {
+        return Err<void>("No pixels for encoding");
+    }
+
+    // Clamp to frame bounds
+    uint16_t rectW = std::min(static_cast<uint32_t>(width), _lastWidth - px);
+    uint16_t rectH = std::min(static_cast<uint32_t>(height), _lastHeight - py);
+
+    // Extract rectangle pixels from framebuffer
+    std::vector<uint8_t> rectPixels(rectW * rectH * 4);
+    uint32_t srcStride = _lastWidth * 4;
+    uint32_t dstStride = rectW * 4;
+    for (uint16_t y = 0; y < rectH; y++) {
+        const uint8_t* src = pixels + (py + y) * srcStride + px * 4;
+        uint8_t* dst = rectPixels.data() + y * dstStride;
+        std::memcpy(dst, src, dstStride);
+    }
+
+    uint32_t rawSize = rectW * rectH * 4;
+
+    // Try JPEG compression
+    unsigned char* jpegBuf = nullptr;
+    unsigned long jpegSize = 0;
+    int result = tjCompress2(
+        static_cast<tjhandle>(_jpegCompressor),
+        rectPixels.data(),
+        rectW, 0, rectH,
+        TJPF_BGRA,
+        &jpegBuf, &jpegSize,
+        TJSAMP_420, 80,
+        TJFLAG_FASTDCT
+    );
+
+    if (result == 0 && jpegSize < rawSize * 0.8) {
+        outData.assign(jpegBuf, jpegBuf + jpegSize);
+        outEncoding = Encoding::RECT_JPEG;
+        tjFree(jpegBuf);
+    } else {
+        if (jpegBuf) tjFree(jpegBuf);
+        outData = std::move(rectPixels);
+        outEncoding = Encoding::RECT_RAW;
+    }
+
+    return Ok();
+}
+
+std::vector<VncServer::Rect> VncServer::mergeRectangles() {
+    std::vector<Rect> result;
+
+    // Copy dirty tiles to working set
+    std::vector<bool> used(_tilesX * _tilesY, false);
+
+    // Greedy algorithm: find maximal rectangles
+    for (uint16_t ty = 0; ty < _tilesY; ty++) {
+        for (uint16_t tx = 0; tx < _tilesX; tx++) {
+            uint32_t idx = ty * _tilesX + tx;
+            if (!_dirtyTiles[idx] || used[idx]) continue;
+
+            // Start a new rectangle at this tile
+            uint16_t maxW = 1;
+            uint16_t maxH = 1;
+
+            // Extend width as far as possible
+            while (tx + maxW < _tilesX) {
+                uint32_t nextIdx = ty * _tilesX + tx + maxW;
+                if (!_dirtyTiles[nextIdx] || used[nextIdx]) break;
+                maxW++;
+            }
+
+            // Extend height as far as possible (all columns must be dirty)
+            while (ty + maxH < _tilesY) {
+                bool rowOk = true;
+                for (uint16_t x = 0; x < maxW; x++) {
+                    uint32_t checkIdx = (ty + maxH) * _tilesX + tx + x;
+                    if (!_dirtyTiles[checkIdx] || used[checkIdx]) {
+                        rowOk = false;
+                        break;
+                    }
+                }
+                if (!rowOk) break;
+                maxH++;
+            }
+
+            // Mark tiles as used
+            for (uint16_t dy = 0; dy < maxH; dy++) {
+                for (uint16_t dx = 0; dx < maxW; dx++) {
+                    used[(ty + dy) * _tilesX + tx + dx] = true;
+                }
+            }
+
+            // Add rectangle (in pixels)
+            Rect r;
+            r.x = tx * TILE_SIZE;
+            r.y = ty * TILE_SIZE;
+            r.w = maxW * TILE_SIZE;
+            r.h = maxH * TILE_SIZE;
+
+            // Clamp to frame bounds
+            if (r.x + r.w > _lastWidth) r.w = _lastWidth - r.x;
+            if (r.y + r.h > _lastHeight) r.h = _lastHeight - r.y;
+
+            result.push_back(r);
+        }
+    }
+
+    return result;
 }
 
 Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels, uint32_t width, uint32_t height) {
@@ -872,7 +983,52 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
         _stats.bytesJpeg += jpegSize;
         tjFree(jpegBuf);
 
-        yinfo("VNC sendFrame: FULL_FRAME {} bytes", jpegSize);
+        ydebug("VNC sendFrame: FULL_FRAME {} bytes", jpegSize);
+    } else if (_mergeRectangles) {
+        // RECTANGLE MODE: merge dirty tiles into larger rectangles
+        auto rects = mergeRectangles();
+
+        FrameHeader fh;
+        fh.magic = FRAME_MAGIC;
+        fh.width = width;
+        fh.height = height;
+        fh.tile_size = 0;  // Indicates rectangle mode
+        fh.num_tiles = static_cast<uint16_t>(rects.size());
+
+        frameData.insert(frameData.end(),
+                         reinterpret_cast<uint8_t*>(&fh),
+                         reinterpret_cast<uint8_t*>(&fh) + sizeof(fh));
+
+        for (const auto& r : rects) {
+            std::vector<uint8_t> rectData;
+            Encoding enc;
+            if (auto res = encodeRect(r.x, r.y, r.w, r.h, rectData, enc); !res) continue;
+
+            _stats.tilesSent++;
+            if (enc == Encoding::RECT_JPEG) {
+                _stats.tilesJpeg++;
+                _stats.bytesJpeg += rectData.size();
+            } else {
+                _stats.tilesRaw++;
+                _stats.bytesRaw += rectData.size();
+            }
+
+            RectHeader rh;
+            rh.px_x = r.x;
+            rh.px_y = r.y;
+            rh.width = r.w;
+            rh.height = r.h;
+            rh.encoding = static_cast<uint8_t>(enc);
+            rh.reserved = 0;
+            rh.data_size = rectData.size();
+
+            frameData.insert(frameData.end(),
+                            reinterpret_cast<uint8_t*>(&rh),
+                            reinterpret_cast<uint8_t*>(&rh) + sizeof(rh));
+            frameData.insert(frameData.end(), rectData.begin(), rectData.end());
+        }
+
+        ydebug("VNC sendFrame: {} rectangles (from {} dirty tiles)", rects.size(), numDirty);
     } else {
         // TILE MODE: encode individual dirty tiles
         FrameHeader fh;
@@ -1006,7 +1162,7 @@ void VncServer::pollClientInput(int clientFd) {
             break;  // No more data available
         }
 
-        yinfo("VNC pollClientInput: fd={} received {} bytes", clientFd, n);
+        ydebug("VNC pollClientInput: fd={} received {} bytes", clientFd, n);
         buf.buffer.insert(buf.buffer.end(), tmp, tmp + n);
 
         // Check if we have enough data
@@ -1097,19 +1253,19 @@ void VncServer::dispatchInput(const InputHeader& hdr, const uint8_t* data) {
             break;
 
         case InputType::RESIZE:
-            yinfo("VNC dispatchInput: RESIZE callback={}", (bool)onResize);
+            ydebug("VNC dispatchInput: RESIZE callback={}", (bool)onResize);
             if (data && hdr.data_size >= sizeof(ResizeEvent) && onResize) {
                 const ResizeEvent* r = reinterpret_cast<const ResizeEvent*>(data);
-                yinfo("VNC dispatchInput: calling onResize {}x{}", r->width, r->height);
+                ydebug("VNC dispatchInput: calling onResize {}x{}", r->width, r->height);
                 onResize(r->width, r->height);
             }
             break;
 
         case InputType::CELL_SIZE:
-            yinfo("VNC dispatchInput: CELL_SIZE callback={}", (bool)onCellSize);
+            ydebug("VNC dispatchInput: CELL_SIZE callback={}", (bool)onCellSize);
             if (data && hdr.data_size >= sizeof(CellSizeEvent) && onCellSize) {
                 const CellSizeEvent* c = reinterpret_cast<const CellSizeEvent*>(data);
-                yinfo("VNC dispatchInput: calling onCellSize cellHeight={}", c->cellHeight);
+                ydebug("VNC dispatchInput: calling onCellSize cellHeight={}", c->cellHeight);
                 onCellSize(c->cellHeight);
             }
             break;
@@ -1148,7 +1304,7 @@ void VncServer::processInput() {
     std::lock_guard<std::mutex> lock(_clientsMutex);
     static int callCount = 0;
     if (++callCount % 100 == 1) {
-        yinfo("VNC processInput: {} clients", _clients.size());
+        ydebug("VNC processInput: {} clients", _clients.size());
     }
     for (int fd : _clients) {
         pollClientInput(fd);
@@ -1189,7 +1345,7 @@ Result<void> VncServer::registerClientPoll(int clientFd) {
 
     _clientPollIds[clientFd] = pollId;
     _pollIdToFd[pollId] = clientFd;
-    yinfo("VNC: registered async poll for client fd={} pollId={}", clientFd, pollId);
+    ydebug("VNC: registered async poll for client fd={} pollId={}", clientFd, pollId);
     return Ok();
 }
 
@@ -1209,7 +1365,7 @@ void VncServer::unregisterClientPoll(int clientFd) {
 
     _pollIdToFd.erase(pollId);
     _clientPollIds.erase(it);
-    yinfo("VNC: unregistered async poll for client fd={}", clientFd);
+    ydebug("VNC: unregistered async poll for client fd={}", clientFd);
 }
 
 Result<bool> VncServer::onEvent(const base::Event& event) {
@@ -1219,7 +1375,7 @@ Result<bool> VncServer::onEvent(const base::Event& event) {
 
     // Server socket - accept new connections (readable only)
     if (fd == _serverFd && event.type == base::Event::Type::PollReadable) {
-        yinfo("VNC onEvent: accepting new connection");
+        ydebug("VNC onEvent: accepting new connection");
         handleAccept();
         return Ok(true);
     }

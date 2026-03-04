@@ -171,11 +171,11 @@ Result<void> VncClient::connect(const std::string& host, uint16_t port) {
         return Err<void>("Failed to start poll", res);
     }
 
-    yinfo("VNC client: registered poll id={} for socket={} events={}", _pollId, _socket, pollEvents);
+    ydebug("VNC client: registered poll id={} for socket={} events={}", _pollId, _socket, pollEvents);
 
     // If connect succeeded immediately, call onConnected callback now
     if (immediateConnect && onConnected) {
-        yinfo("VNC client: calling onConnected (immediate connect)");
+        ydebug("VNC client: calling onConnected (immediate connect)");
         onConnected();
     }
 
@@ -224,7 +224,7 @@ Result<bool> VncClient::onEvent(const base::Event& event) {
         updatePollEvents();
         // Call onConnected callback - client should send resize here
         if (onConnected) {
-            yinfo("VNC client: calling onConnected (async connect complete)");
+            ydebug("VNC client: calling onConnected (async connect complete)");
             onConnected();
         }
         return Ok(true);
@@ -252,7 +252,7 @@ void VncClient::onSocketReadable() {
         return;
     }
 
-    yinfo("VNC onSocketReadable: state={} offset={} needed={}", static_cast<int>(_recvState), _recvOffset, _recvNeeded);
+    ydebug("VNC onSocketReadable: state={} offset={} needed={}", static_cast<int>(_recvState), _recvOffset, _recvNeeded);
 
     bool tilesReceived = false;
     int loopCount = 0;
@@ -270,7 +270,7 @@ void VncClient::onSocketReadable() {
         if (n < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 // No more data available - trigger render if we got tiles
-                yinfo("VNC onSocketReadable: EAGAIN after {} loops, tilesReceived={}", loopCount, tilesReceived);
+                ydebug("VNC onSocketReadable: EAGAIN after {} loops, tilesReceived={}", loopCount, tilesReceived);
                 if (tilesReceived && onFrameReceived) {
                     auto t = std::chrono::high_resolution_clock::now();
                     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
@@ -344,6 +344,12 @@ void VncClient::onSocketReadable() {
                     // No tiles, wait for next frame
                     _recvState = RecvState::FRAME_HEADER;
                     _recvNeeded = sizeof(FrameHeader);
+                    _recvOffset = 0;
+                    _recvBuffer.resize(_recvNeeded);
+                } else if (_currentFrame.tile_size == 0) {
+                    // Rectangle mode (merged tiles) - read RectHeader
+                    _recvState = RecvState::RECT_HEADER;
+                    _recvNeeded = sizeof(RectHeader);
                     _recvOffset = 0;
                     _recvBuffer.resize(_recvNeeded);
                 } else {
@@ -432,7 +438,7 @@ void VncClient::onSocketReadable() {
 
                                     WGPUExtent3D size = {_width, _height, 1};
                                     wgpuQueueWriteTexture(_queue, &dst, fullFrame.data(), fullFrame.size(), &layout, &size);
-                                    yinfo("VNC FULL_FRAME: {}x{} ({} bytes)", _width, _height, _currentTile.data_size);
+                                    ydebug("VNC FULL_FRAME: {}x{} ({} bytes)", _width, _height, _currentTile.data_size);
                                 }
                             }
                         }
@@ -469,7 +475,7 @@ void VncClient::onSocketReadable() {
 
                         WGPUExtent3D size = {tw, th, 1};
                         wgpuQueueWriteTexture(_queue, &dst, pixels.data(), pixels.size(), &layout, &size);
-                        yinfo("VNC TILE UPLOAD: tile({},{}) px({},{}) size({}x{}) texSize({}x{})",
+                        ydebug("VNC TILE UPLOAD: tile({},{}) px({},{}) size({}x{}) texSize({}x{})",
                               _currentTile.tile_x, _currentTile.tile_y, px, py, tw, th, _textureWidth, _textureHeight);
                     } else {
                         ywarn("VNC TILE SKIP: tile({},{}) px({},{}) OUT OF BOUNDS frame({}x{})",
@@ -492,6 +498,102 @@ void VncClient::onSocketReadable() {
                     // Read next tile header
                     _recvState = RecvState::TILE_HEADER;
                     _recvNeeded = sizeof(TileHeader);
+                    _recvOffset = 0;
+                    _recvBuffer.resize(_recvNeeded);
+                }
+                break;
+            }
+
+            case RecvState::RECT_HEADER: {
+                std::memcpy(&_currentRect, _recvBuffer.data(), sizeof(RectHeader));
+
+                // Sanity check
+                if (_currentRect.data_size > 16 * 1024 * 1024) {
+                    ywarn("VNC: Rect data too large: {}", _currentRect.data_size);
+                    _recvState = RecvState::FRAME_HEADER;
+                    _recvNeeded = sizeof(FrameHeader);
+                    _recvOffset = 0;
+                    _recvBuffer.resize(_recvNeeded);
+                    return;
+                }
+
+                // Read rectangle data
+                _recvState = RecvState::RECT_DATA;
+                _recvNeeded = _currentRect.data_size;
+                _recvOffset = 0;
+                _recvBuffer.resize(_recvNeeded);
+                break;
+            }
+
+            case RecvState::RECT_DATA: {
+                // Decode rectangle
+                uint16_t px = _currentRect.px_x;
+                uint16_t py = _currentRect.px_y;
+                uint16_t rectW = _currentRect.width;
+                uint16_t rectH = _currentRect.height;
+
+                std::vector<uint8_t> pixels(rectW * rectH * 4);
+
+                switch (static_cast<Encoding>(_currentRect.encoding)) {
+                    case Encoding::RECT_RAW:
+                        if (_currentRect.data_size == static_cast<uint32_t>(rectW * rectH * 4)) {
+                            std::memcpy(pixels.data(), _recvBuffer.data(), _currentRect.data_size);
+                        }
+                        break;
+
+                    case Encoding::RECT_JPEG: {
+                        int width, height, subsamp, colorspace;
+                        if (tjDecompressHeader3(static_cast<tjhandle>(_jpegDecompressor),
+                                               _recvBuffer.data(), _currentRect.data_size,
+                                               &width, &height, &subsamp, &colorspace) == 0) {
+                            if (width == rectW && height == rectH) {
+                                tjDecompress2(static_cast<tjhandle>(_jpegDecompressor),
+                                             _recvBuffer.data(), _currentRect.data_size,
+                                             pixels.data(), rectW, 0, rectH,
+                                             TJPF_BGRA, TJFLAG_FASTDCT);
+                            }
+                        }
+                        break;
+                    }
+
+                    default:
+                        ywarn("VNC: Unknown rect encoding {}", _currentRect.encoding);
+                        break;
+                }
+
+                // Upload rectangle to GPU
+                if (_texture && _width > 0 && _height > 0) {
+                    if (px < _width && py < _height) {
+                        uint32_t uploadW = std::min(static_cast<uint32_t>(rectW), static_cast<uint32_t>(_width - px));
+                        uint32_t uploadH = std::min(static_cast<uint32_t>(rectH), static_cast<uint32_t>(_height - py));
+
+                        WGPUTexelCopyTextureInfo dst = {};
+                        dst.texture = _texture;
+                        dst.origin = {px, py, 0};
+
+                        WGPUTexelCopyBufferLayout layout = {};
+                        layout.bytesPerRow = rectW * 4;
+                        layout.rowsPerImage = rectH;
+
+                        WGPUExtent3D size = {uploadW, uploadH, 1};
+                        wgpuQueueWriteTexture(_queue, &dst, pixels.data(), pixels.size(), &layout, &size);
+                        ydebug("VNC RECT UPLOAD: pos({},{}) size({}x{})", px, py, uploadW, uploadH);
+                    }
+                }
+
+                tilesReceived = true;
+                _tilesReceived++;
+
+                if (_tilesReceived >= _currentFrame.num_tiles) {
+                    // All rectangles received, wait for next frame
+                    _recvState = RecvState::FRAME_HEADER;
+                    _recvNeeded = sizeof(FrameHeader);
+                    _recvOffset = 0;
+                    _recvBuffer.resize(_recvNeeded);
+                } else {
+                    // Read next rectangle header
+                    _recvState = RecvState::RECT_HEADER;
+                    _recvNeeded = sizeof(RectHeader);
                     _recvOffset = 0;
                     _recvBuffer.resize(_recvNeeded);
                 }
@@ -913,7 +1015,7 @@ void VncClient::sendTextInput(const char* text, size_t len) {
 }
 
 void VncClient::sendResize(uint16_t width, uint16_t height) {
-    yinfo("VNC client sendResize: {}x{}", width, height);
+    ydebug("VNC client sendResize: {}x{}", width, height);
     InputHeader hdr = {};
     hdr.type = static_cast<uint8_t>(InputType::RESIZE);
     hdr.data_size = sizeof(ResizeEvent);
@@ -929,7 +1031,7 @@ void VncClient::sendResize(uint16_t width, uint16_t height) {
 }
 
 void VncClient::sendCellSize(uint8_t cellHeight) {
-    yinfo("VNC client sendCellSize: cellHeight={}", (int)cellHeight);
+    ydebug("VNC client sendCellSize: cellHeight={}", (int)cellHeight);
     InputHeader hdr = {};
     hdr.type = static_cast<uint8_t>(InputType::CELL_SIZE);
     hdr.data_size = sizeof(CellSizeEvent);

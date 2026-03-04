@@ -182,6 +182,7 @@ private:
     bool _vncClientMode = false;
     bool _vncServerMode = false;
     bool _vncHeadless = false;  // No local rendering, only serve to VNC clients
+    bool _vncMergeRects = false;  // Merge dirty tiles into larger rectangles
     uint32_t _vncRequestedWidth = 0;   // Client-requested capture size
     uint32_t _vncRequestedHeight = 0;
     std::string _vncHost;
@@ -436,6 +437,9 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     // Initialize VNC server mode if enabled
     if (_vncServerMode) {
         _vncServer = std::make_shared<vnc::VncServer>(_device, _queue);
+        if (_vncMergeRects) {
+            _vncServer->setMergeRectangles(true);
+        }
         if (auto res = _vncServer->start(_vncServerPort); !res) {
             return Err<void>("Failed to start VNC server", res);
         }
@@ -622,6 +626,7 @@ Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
     args::Flag vncServerFlag(parser, "vnc-server", "Start VNC server (with local window)", {"vnc-server"});
     args::ValueFlag<uint16_t> vncServerPortFlag(parser, "port", "VNC server port (default 5900)", {"vnc-port"}, 5900);
     args::Flag vncHeadlessFlag(parser, "vnc-headless", "Start VNC server without window (headless)", {"vnc-headless"});
+    args::Flag vncMergeRectsFlag(parser, "vnc-merge-rects", "Merge dirty tiles into larger rectangles (better compression)", {"vnc-merge-rects"});
     args::ValueFlag<std::string> vncTestFlag(parser, "pattern", "VNC test mode: text, color, scroll, stress", {"vnc-test"});
 
     try {
@@ -689,6 +694,11 @@ Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
         _vncHeadless = true;
         _vncServerPort = args::get(vncServerPortFlag);
         yinfo("VNC headless server mode: port {} (no local window)", _vncServerPort);
+    }
+
+    if (vncMergeRectsFlag) {
+        _vncMergeRects = true;
+        yinfo("VNC rectangle merging enabled");
     }
 
     if (vncTestFlag) {
@@ -2253,10 +2263,14 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
         return Err<void>("GPU error during frame: " + _fatalGpuErrorMsg);
     }
 
-    _frameCount++;
+    // In headless VNC mode, FPS reflects actual frames captured/sent (throttled to ~30 FPS)
+    // In normal mode, FPS reflects all render iterations
+    if (!_vncHeadless || doCapture) {
+        _frameCount++;
+    }
     double fpsNow = _platform->getTime();
     if (fpsNow - _lastFpsTime >= 1.0) {
-        yinfo("FPS: {}", _frameCount);
+        ydebug("FPS: {}", _frameCount);
         if (_yettyContext.yguiOverlay) {
             _yettyContext.yguiOverlay->setFps(_frameCount);
         }

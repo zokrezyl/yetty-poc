@@ -26,6 +26,10 @@ public:
     bool hasClients() const { return _clientCount > 0; }
     void forceFullFrame() { _forceFullFrame = true; }
 
+    // Enable/disable rectangle merging (merges adjacent dirty tiles into larger rectangles)
+    void setMergeRectangles(bool enable) { _mergeRectangles = enable; }
+    bool getMergeRectangles() const { return _mergeRectangles; }
+
     // Check if server is ready to accept more frames (previous GPU work done)
     // Call this BEFORE creating GPU command buffers to avoid FD exhaustion
     bool isReadyForFrame() const;
@@ -150,9 +154,18 @@ private:
     uint16_t _tilesX = 0;
     uint16_t _tilesY = 0;
 
+    // Rectangle merging mode (default: disabled for backward compatibility)
+    bool _mergeRectangles = false;
+
     Result<void> ensureResources(uint32_t width, uint32_t height);
     Result<void> createDiffPipeline();
     Result<void> encodeTile(uint16_t tx, uint16_t ty, std::vector<uint8_t>& outData, Encoding& outEncoding);
+    Result<void> encodeRect(uint16_t px, uint16_t py, uint16_t width, uint16_t height,
+                            std::vector<uint8_t>& outData, Encoding& outEncoding);
+
+    // Rectangle merging: find maximal rectangles covering dirty tiles
+    struct Rect { uint16_t x, y, w, h; };
+    std::vector<Rect> mergeRectangles();
 
     // Input receiving (non-blocking, called from main thread)
     void pollClientInput(int clientFd);
