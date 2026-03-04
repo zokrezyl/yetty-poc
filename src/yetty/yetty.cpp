@@ -363,7 +363,6 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
         _yettyContext.yguiOverlay->updateDisplaySize(_surfaceWidth, _surfaceHeight);
     }
 
-#if !defined(__ANDROID__)
     // Create CardFactory (card types registry, no CardBufferManager needed)
     {
         auto cardFactoryResult = CardFactory::create(_gpuContext);
@@ -377,7 +376,6 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     card::PlotSamplerProvider::instance()->registerWith(shaderMgr);
     card::PlotTransformerProvider::instance()->registerWith(shaderMgr);
     card::PlotRendererProvider::instance()->registerWith(shaderMgr);
-#endif
 
     // Compile shaders after all providers (fonts, plot) are registered
     yinfo("init: compiling shaders");

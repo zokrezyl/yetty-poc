@@ -364,7 +364,10 @@ private:
   }
 
   Result<void> initShaderFonts() noexcept {
-    std::string shaderDir = std::string(YETTY_SHADERS_DIR) + "/";
+    // Check env var first (set at runtime on Android), fallback to compile-time path
+    const char* envShaderDir = std::getenv("YETTY_SHADERS_DIR");
+    std::string shaderDir = envShaderDir ? std::string(envShaderDir) + "/"
+                                         : std::string(YETTY_SHADERS_DIR) + "/";
 
     auto shaderGlyphResult =
         ShaderFont::create(_shaderMgr, ShaderFont::Category::Glyph, shaderDir);

@@ -81,6 +81,11 @@ static bool extractAsset(AAssetManager* mgr, const char* assetName, const char* 
 }
 
 // Recursively extract asset directory to filesystem
+// Note: Android AAssetDir only lists files, not subdirectories.
+// We use a list of known subdirectories to recurse into.
+static void extractAssetDirRecursive(AAssetManager* mgr, const char* assetDir, const char* destDir,
+                                      const std::vector<std::string>& knownSubdirs, int depth = 0);
+
 static void extractAssetDir(AAssetManager* mgr, const char* assetDir, const char* destDir) {
     AAssetDir* dir = AAssetManager_openDir(mgr, assetDir);
     if (!dir) {
@@ -115,6 +120,27 @@ static void extractAssetDir(AAssetManager* mgr, const char* assetDir, const char
 
     AAssetDir_close(dir);
     __android_log_print(ANDROID_LOG_INFO, "yetty", "Extracted dir: %s -> %s", assetDir, destDir);
+}
+
+// Extract asset directory with known subdirectories (for recursive extraction)
+static void extractAssetDirRecursive(AAssetManager* mgr, const char* assetDir, const char* destDir,
+                                      const std::vector<std::string>& knownSubdirs, int depth) {
+    // First extract files in this directory
+    extractAssetDir(mgr, assetDir, destDir);
+
+    // Then recurse into known subdirectories
+    for (const auto& subdir : knownSubdirs) {
+        std::string subAssetPath = std::string(assetDir) + "/" + subdir;
+        std::string subDestPath = std::string(destDir) + "/" + subdir;
+
+        // Check if this subdirectory exists by trying to open it
+        AAssetDir* testDir = AAssetManager_openDir(mgr, subAssetPath.c_str());
+        if (testDir) {
+            AAssetDir_close(testDir);
+            // Recurse with empty subdirs (will just extract files)
+            extractAssetDirRecursive(mgr, subAssetPath.c_str(), subDestPath.c_str(), {}, depth + 1);
+        }
+    }
 }
 
 // Forward declaration for platform access
@@ -222,13 +248,17 @@ extern "C" void android_main(struct android_app* app) {
         }
     }
 
-    // Extract shaders directory
+    // Extract shaders directory and all subdirectories
     std::string shadersDir = std::string(dataDir) + "/shaders";
     if (assetMgr) {
         extractAssetDir(assetMgr, "shaders", shadersDir.c_str());
-        // Also extract lib subdirectory
-        std::string shadersLibDir = shadersDir + "/lib";
-        extractAssetDir(assetMgr, "shaders/lib", shadersLibDir.c_str());
+        // Extract all shader subdirectories
+        extractAssetDir(assetMgr, "shaders/lib", (shadersDir + "/lib").c_str());
+        extractAssetDir(assetMgr, "shaders/cards", (shadersDir + "/cards").c_str());
+        extractAssetDir(assetMgr, "shaders/glyphs", (shadersDir + "/glyphs").c_str());
+        extractAssetDir(assetMgr, "shaders/effects", (shadersDir + "/effects").c_str());
+        extractAssetDir(assetMgr, "shaders/pre-effects", (shadersDir + "/pre-effects").c_str());
+        extractAssetDir(assetMgr, "shaders/post-effects", (shadersDir + "/post-effects").c_str());
     }
 
     // Extract fonts-cdb directory
@@ -241,6 +271,42 @@ extern "C" void android_main(struct android_app* app) {
     std::string fontPath = std::string(dataDir) + "/DejaVuSansMNerdFontMono-Regular.ttf";
     if (access(fontPath.c_str(), R_OK) != 0 && assetMgr) {
         extractAsset(assetMgr, "DejaVuSansMNerdFontMono-Regular.ttf", fontPath.c_str());
+    }
+
+    // Extract demo content (scripts, files, etc.)
+    if (assetMgr) {
+        // Scripts directory (demo.sh, etc.)
+        std::string scriptsDir = std::string(dataDir) + "/scripts";
+        extractAssetDir(assetMgr, "scripts", scriptsDir.c_str());
+        // Subdirectories
+        extractAssetDir(assetMgr, "scripts/cards", (scriptsDir + "/cards").c_str());
+        extractAssetDir(assetMgr, "scripts/gpu-screen-ydraw", (scriptsDir + "/gpu-screen-ydraw").c_str());
+
+        // Files directory (data files for demos)
+        std::string filesDir = std::string(dataDir) + "/files";
+        extractAssetDir(assetMgr, "files", filesDir.c_str());
+        extractAssetDir(assetMgr, "files/shader-glyphs", (filesDir + "/shader-glyphs").c_str());
+
+        // Glyphs directory
+        std::string glyphsDir = std::string(dataDir) + "/glyphs";
+        extractAssetDir(assetMgr, "glyphs", glyphsDir.c_str());
+
+        // Presentation directory
+        std::string presentDir = std::string(dataDir) + "/presentation";
+        extractAssetDir(assetMgr, "presentation", presentDir.c_str());
+        extractAssetDir(assetMgr, "presentation/video-1", (presentDir + "/video-1").c_str());
+
+        // Demo outputs (pre-generated .out files from demo scripts)
+        // All known subdirectories from demo/scripts/
+        std::vector<std::string> demoSubdirs = {
+            "cards", "cards/mermaid", "cards/plot", "cards/thorvg", "cards/ydraw",
+            "cards/ygrid", "cards/ygui", "cards/yhtml", "cards/yplot",
+            "effects", "gpu-screen-ydraw", "yecho"
+        };
+        std::string demoOutputDir = std::string(dataDir) + "/demo-output";
+        extractAssetDirRecursive(assetMgr, "demo-output", demoOutputDir.c_str(), demoSubdirs);
+
+        __android_log_print(ANDROID_LOG_INFO, "yetty", "Demo content extracted to: %s", dataDir);
     }
 
     // Set environment variables for yetty to find assets

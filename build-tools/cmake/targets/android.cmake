@@ -72,6 +72,17 @@ target_link_libraries(yetty PRIVATE
 # CDB font generation (builds host tools for cross-compilation)
 include(${YETTY_ROOT}/build-tools/cmake/cdb-gen.cmake)
 
+# Generate demo outputs (pre-run demo scripts to capture output for Android)
+# This runs at configure time since Android can't run bash scripts
+message(STATUS "Generating demo outputs for Android...")
+execute_process(
+    COMMAND ${CMAKE_COMMAND}
+        -DYETTY_ROOT=${YETTY_ROOT}
+        -DOUTPUT_DIR=${ANDROID_ASSETS_DIR}
+        -P ${YETTY_ROOT}/build-tools/cmake/generate-demo-outputs.cmake
+    WORKING_DIRECTORY ${YETTY_ROOT}
+)
+
 # Copy static assets to Android build directory (ANDROID_ASSETS_DIR already set above)
 file(GLOB ASSET_FILES "${YETTY_ROOT}/assets/*")
 file(COPY ${ASSET_FILES} DESTINATION ${ANDROID_ASSETS_DIR})
