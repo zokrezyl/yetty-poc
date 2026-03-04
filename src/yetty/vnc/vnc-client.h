@@ -61,7 +61,23 @@ public:
     // Called AFTER socket is connected - client should send resize here
     std::function<void()> onConnected;
 
+#ifdef __EMSCRIPTEN__
+    // WebSocket data handler (called from callback)
+    void onWebSocketData(const uint8_t* data, size_t size);
+
+    // WebSocket state (public for callbacks)
+    bool _wsConnected = false;
+    // Connection state (public for WebSocket callbacks on Emscripten)
+    bool _connected = false;
+    bool _connecting = false;
+#endif
+
 private:
+#ifndef __EMSCRIPTEN__
+    // Connection state (private on non-Emscripten platforms)
+    bool _connected = false;
+    bool _connecting = false;
+#endif
     void sendInput(const void* data, size_t size);
     void onSocketReadable();
     void drainSendQueue();
@@ -74,10 +90,12 @@ private:
     WGPUTextureFormat _surfaceFormat;
 
     // Network
+#ifdef __EMSCRIPTEN__
+    int _wsSocket = 0;  // Emscripten WebSocket handle
+#else
     int _socket = -1;
-    bool _connected = false;
-    bool _connecting = false;  // Async connect in progress
     base::PollId _pollId = -1;
+#endif
 
     // Async send queue (to avoid blocking on EAGAIN)
     std::vector<uint8_t> _sendQueue;

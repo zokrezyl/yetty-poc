@@ -3,6 +3,11 @@
 #include <turbojpeg.h>
 
 #include <cstring>
+
+#ifdef __EMSCRIPTEN__
+#include <emscripten/websocket.h>
+#include <emscripten/emscripten.h>
+#else
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -10,6 +15,7 @@
 #include <netdb.h>
 #include <unistd.h>
 #include <fcntl.h>
+#endif
 
 namespace yetty::vnc {
 
@@ -54,6 +60,48 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 }
 )";
 
+#ifdef __EMSCRIPTEN__
+// WebSocket callbacks for Emscripten
+static EM_BOOL onWsOpen(int eventType, const EmscriptenWebSocketOpenEvent* wsEvent, void* userData) {
+    VncClient* client = static_cast<VncClient*>(userData);
+    yinfo("WebSocket connected");
+    client->_wsConnected = true;
+    client->_connected = true;
+    client->_connecting = false;
+    if (client->onConnected) {
+        client->onConnected();
+    }
+    return EM_TRUE;
+}
+
+static EM_BOOL onWsError(int eventType, const EmscriptenWebSocketErrorEvent* wsEvent, void* userData) {
+    VncClient* client = static_cast<VncClient*>(userData);
+    yerror("WebSocket error");
+    client->_wsConnected = false;
+    client->_connected = false;
+    return EM_TRUE;
+}
+
+static EM_BOOL onWsClose(int eventType, const EmscriptenWebSocketCloseEvent* wsEvent, void* userData) {
+    VncClient* client = static_cast<VncClient*>(userData);
+    yinfo("WebSocket closed: code={} reason={}", wsEvent->code, wsEvent->reason);
+    client->_wsConnected = false;
+    client->_connected = false;
+    return EM_TRUE;
+}
+
+static EM_BOOL onWsMessage(int eventType, const EmscriptenWebSocketMessageEvent* wsEvent, void* userData) {
+    VncClient* client = static_cast<VncClient*>(userData);
+    if (wsEvent->isText) {
+        ywarn("WebSocket received text message, expected binary");
+        return EM_TRUE;
+    }
+    // Append binary data to receive buffer and process
+    client->onWebSocketData(wsEvent->data, wsEvent->numBytes);
+    return EM_TRUE;
+}
+#endif
+
 VncClient::VncClient(WGPUDevice device, WGPUQueue queue, WGPUTextureFormat surfaceFormat, uint16_t width, uint16_t height)
     : _device(device), _queue(queue), _surfaceFormat(surfaceFormat), _width(width), _height(height) {
     _jpegDecompressor = tjInitDecompress();
@@ -82,7 +130,40 @@ Result<void> VncClient::connect(const std::string& host, uint16_t port) {
         return Err<void>("Already connected");
     }
 
-    // Resolve host
+    // Initialize receive state machine
+    _recvState = RecvState::FRAME_HEADER;
+    _recvNeeded = sizeof(FrameHeader);
+    _recvOffset = 0;
+    _recvBuffer.resize(_recvNeeded);
+
+#ifdef __EMSCRIPTEN__
+    // WebSocket connection for Emscripten
+    std::string wsUrl = "ws://" + host + ":" + std::to_string(port);
+    yinfo("VNC client connecting via WebSocket to {}", wsUrl);
+
+    EmscriptenWebSocketCreateAttributes attrs;
+    emscripten_websocket_init_create_attributes(&attrs);
+    attrs.url = wsUrl.c_str();
+    attrs.protocols = nullptr;
+    attrs.createOnMainThread = EM_TRUE;
+
+    _wsSocket = emscripten_websocket_new(&attrs);
+    if (_wsSocket <= 0) {
+        return Err<void>("Failed to create WebSocket");
+    }
+
+    // Set up callbacks
+    emscripten_websocket_set_onopen_callback(_wsSocket, this, onWsOpen);
+    emscripten_websocket_set_onerror_callback(_wsSocket, this, onWsError);
+    emscripten_websocket_set_onclose_callback(_wsSocket, this, onWsClose);
+    emscripten_websocket_set_onmessage_callback(_wsSocket, this, onWsMessage);
+
+    _connecting = true;
+    yinfo("VNC client: WebSocket created, waiting for connection...");
+    return Ok();
+
+#else
+    // POSIX socket connection
     struct addrinfo hints = {}, *result;
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
@@ -127,12 +208,6 @@ Result<void> VncClient::connect(const std::string& host, uint16_t port) {
     } else {
         yinfo("VNC client connecting to {}:{} (async)...", host, port);
     }
-
-    // Initialize receive state machine
-    _recvState = RecvState::FRAME_HEADER;
-    _recvNeeded = sizeof(FrameHeader);
-    _recvOffset = 0;
-    _recvBuffer.resize(_recvNeeded);
 
     // Register with event loop for async receive
     auto loopResult = base::EventLoop::instance();
@@ -180,11 +255,21 @@ Result<void> VncClient::connect(const std::string& host, uint16_t port) {
     }
 
     return Ok();
+#endif
 }
 
 void VncClient::disconnect() {
     _connected = false;
+    _connecting = false;
 
+#ifdef __EMSCRIPTEN__
+    if (_wsSocket > 0) {
+        emscripten_websocket_close(_wsSocket, 1000, "disconnect");
+        emscripten_websocket_delete(_wsSocket);
+        _wsSocket = 0;
+        _wsConnected = false;
+    }
+#else
     // Deregister from event loop
     if (_pollId >= 0) {
         auto loopResult = base::EventLoop::instance();
@@ -201,8 +286,10 @@ void VncClient::disconnect() {
         ::close(_socket);
         _socket = -1;
     }
+#endif
 }
 
+#ifndef __EMSCRIPTEN__
 Result<bool> VncClient::onEvent(const base::Event& event) {
     if (event.poll.fd != _socket) {
         return Ok(false);
@@ -245,7 +332,14 @@ Result<bool> VncClient::onEvent(const base::Event& event) {
 
     return Ok(false);
 }
+#else
+Result<bool> VncClient::onEvent(const base::Event& event) {
+    // WebSocket uses callbacks, not event loop polling
+    return Ok(false);
+}
+#endif
 
+#ifndef __EMSCRIPTEN__
 void VncClient::onSocketReadable() {
     if (!_connected || _socket < 0) {
         ywarn("VNC onSocketReadable: NOT CONNECTED! _connected={} _socket={}", _connected, _socket);
@@ -605,6 +699,7 @@ void VncClient::onSocketReadable() {
         }
     }
 }
+#endif  // !__EMSCRIPTEN__
 
 Result<void> VncClient::ensureResources(uint16_t width, uint16_t height) {
     if (_texture && _textureWidth == width && _textureHeight == height) {
@@ -815,6 +910,20 @@ Result<void> VncClient::render(WGPURenderPassEncoder pass) {
 }
 
 void VncClient::sendInput(const void* data, size_t size) {
+#ifdef __EMSCRIPTEN__
+    if (!_connected || !_wsConnected || _wsSocket <= 0) {
+        ywarn("VNC client sendInput: not connected!");
+        return;
+    }
+
+    // Send binary data via WebSocket
+    EMSCRIPTEN_RESULT result = emscripten_websocket_send_binary(_wsSocket, const_cast<void*>(data), size);
+    if (result != EMSCRIPTEN_RESULT_SUCCESS) {
+        ywarn("VNC client sendInput: WebSocket send failed: {}", result);
+    } else {
+        ydebug("VNC client sendInput: sent {} bytes via WebSocket", size);
+    }
+#else
     if (!_connected || _socket < 0) {
         ywarn("VNC client sendInput: not connected! _socket={}", _socket);
         return;
@@ -846,8 +955,10 @@ void VncClient::sendInput(const void* data, size_t size) {
 
     // Enable writable polling to drain queue
     updatePollEvents();
+#endif
 }
 
+#ifndef __EMSCRIPTEN__
 void VncClient::drainSendQueue() {
     if (_sendQueue.empty() || _socket < 0) {
         return;
@@ -900,6 +1011,7 @@ void VncClient::updatePollEvents() {
 
     loop->setPollEvents(_pollId, events);
 }
+#endif
 
 void VncClient::sendMouseMove(int16_t x, int16_t y) {
     InputHeader hdr = {};
@@ -1072,5 +1184,263 @@ void VncClient::sendCompressionConfig(bool forceRaw, uint8_t quality) {
     std::memcpy(buf + sizeof(hdr), &evt, sizeof(evt));
     sendInput(buf, sizeof(buf));
 }
+
+#ifdef __EMSCRIPTEN__
+void VncClient::onWebSocketData(const uint8_t* data, size_t size) {
+    ydebug("VNC WebSocket received {} bytes", size);
+
+    // Append incoming data to receive buffer
+    size_t dataOffset = 0;
+    while (dataOffset < size) {
+        // How much more data do we need?
+        size_t toRead = _recvNeeded - _recvOffset;
+        size_t available = size - dataOffset;
+        size_t toCopy = std::min(toRead, available);
+
+        // Copy to buffer
+        if (_recvBuffer.size() < _recvNeeded) {
+            _recvBuffer.resize(_recvNeeded);
+        }
+        std::memcpy(_recvBuffer.data() + _recvOffset, data + dataOffset, toCopy);
+        _recvOffset += toCopy;
+        dataOffset += toCopy;
+
+        // Check if we have enough data
+        if (_recvOffset < _recvNeeded) {
+            continue;  // Need more data
+        }
+
+        // Process based on current state - reuse the logic from onSocketReadable
+        // but inline it here for WebSocket
+        switch (_recvState) {
+            case RecvState::FRAME_HEADER: {
+                std::memcpy(&_currentFrame, _recvBuffer.data(), sizeof(FrameHeader));
+
+                if (_currentFrame.magic != FRAME_MAGIC) {
+                    ywarn("VNC: Invalid frame magic 0x{:08X}", _currentFrame.magic);
+                    _recvState = RecvState::FRAME_HEADER;
+                    _recvNeeded = sizeof(FrameHeader);
+                    _recvOffset = 0;
+                    return;
+                }
+
+                if (_currentFrame.width == 0 || _currentFrame.height == 0 ||
+                    _currentFrame.width > 8192 || _currentFrame.height > 8192) {
+                    ywarn("VNC: Invalid frame header {}x{}", _currentFrame.width, _currentFrame.height);
+                    _recvState = RecvState::FRAME_HEADER;
+                    _recvNeeded = sizeof(FrameHeader);
+                    _recvOffset = 0;
+                    return;
+                }
+
+                if (_currentFrame.width != _width || _currentFrame.height != _height) {
+                    _width = _currentFrame.width;
+                    _height = _currentFrame.height;
+                    yinfo("VNC: Frame size {}x{}", _width, _height);
+                }
+                ensureResources(_width, _height);
+
+                _tilesReceived = 0;
+
+                if (_currentFrame.num_tiles == 0) {
+                    _recvState = RecvState::FRAME_HEADER;
+                    _recvNeeded = sizeof(FrameHeader);
+                    _recvOffset = 0;
+                } else if (_currentFrame.tile_size == 0) {
+                    _recvState = RecvState::RECT_HEADER;
+                    _recvNeeded = sizeof(RectHeader);
+                    _recvOffset = 0;
+                } else {
+                    _recvState = RecvState::TILE_HEADER;
+                    _recvNeeded = sizeof(TileHeader);
+                    _recvOffset = 0;
+                }
+                break;
+            }
+
+            case RecvState::TILE_HEADER: {
+                std::memcpy(&_currentTile, _recvBuffer.data(), sizeof(TileHeader));
+
+                if (_currentTile.data_size > 16 * 1024 * 1024) {
+                    ywarn("VNC: Tile data too large: {}", _currentTile.data_size);
+                    _recvState = RecvState::FRAME_HEADER;
+                    _recvNeeded = sizeof(FrameHeader);
+                    _recvOffset = 0;
+                    return;
+                }
+
+                _recvState = RecvState::TILE_DATA;
+                _recvNeeded = _currentTile.data_size;
+                _recvOffset = 0;
+                _recvBuffer.resize(_recvNeeded);
+                break;
+            }
+
+            case RecvState::TILE_DATA: {
+                // Decode and upload tile (simplified - full implementation in onSocketReadable)
+                std::vector<uint8_t> pixels(TILE_SIZE * TILE_SIZE * 4);
+
+                if (static_cast<Encoding>(_currentTile.encoding) == Encoding::FULL_FRAME) {
+                    // Full frame JPEG
+                    int width, height, subsamp, colorspace;
+                    if (tjDecompressHeader3(static_cast<tjhandle>(_jpegDecompressor),
+                                           _recvBuffer.data(), _currentTile.data_size,
+                                           &width, &height, &subsamp, &colorspace) == 0) {
+                        if (width == static_cast<int>(_width) && height == static_cast<int>(_height)) {
+                            std::vector<uint8_t> fullFrame(_width * _height * 4);
+                            tjDecompress2(static_cast<tjhandle>(_jpegDecompressor),
+                                         _recvBuffer.data(), _currentTile.data_size,
+                                         fullFrame.data(), _width, 0, _height,
+                                         TJPF_BGRA, TJFLAG_FASTDCT);
+
+                            if (_texture) {
+                                WGPUTexelCopyTextureInfo dst = {};
+                                dst.texture = _texture;
+                                dst.origin = {0, 0, 0};
+                                WGPUTexelCopyBufferLayout layout = {};
+                                layout.bytesPerRow = _width * 4;
+                                layout.rowsPerImage = _height;
+                                WGPUExtent3D sz = {_width, _height, 1};
+                                wgpuQueueWriteTexture(_queue, &dst, fullFrame.data(), fullFrame.size(), &layout, &sz);
+                            }
+                        }
+                    }
+                } else if (static_cast<Encoding>(_currentTile.encoding) == Encoding::RAW) {
+                    if (_currentTile.data_size == TILE_SIZE * TILE_SIZE * 4) {
+                        std::memcpy(pixels.data(), _recvBuffer.data(), _currentTile.data_size);
+                    }
+                } else if (static_cast<Encoding>(_currentTile.encoding) == Encoding::JPEG) {
+                    int width, height, subsamp, colorspace;
+                    if (tjDecompressHeader3(static_cast<tjhandle>(_jpegDecompressor),
+                                           _recvBuffer.data(), _currentTile.data_size,
+                                           &width, &height, &subsamp, &colorspace) == 0) {
+                        if (width <= TILE_SIZE && height <= TILE_SIZE) {
+                            tjDecompress2(static_cast<tjhandle>(_jpegDecompressor),
+                                         _recvBuffer.data(), _currentTile.data_size,
+                                         pixels.data(), TILE_SIZE, 0, TILE_SIZE,
+                                         TJPF_BGRA, TJFLAG_FASTDCT);
+                        }
+                    }
+                }
+
+                // Upload tile to texture (skip for FULL_FRAME)
+                if (static_cast<Encoding>(_currentTile.encoding) != Encoding::FULL_FRAME &&
+                    _texture && _width > 0 && _height > 0) {
+                    uint32_t px = _currentTile.tile_x * TILE_SIZE;
+                    uint32_t py = _currentTile.tile_y * TILE_SIZE;
+                    if (px < _width && py < _height) {
+                        uint32_t tw = std::min((uint32_t)TILE_SIZE, (uint32_t)(_width - px));
+                        uint32_t th = std::min((uint32_t)TILE_SIZE, (uint32_t)(_height - py));
+
+                        WGPUTexelCopyTextureInfo dst = {};
+                        dst.texture = _texture;
+                        dst.origin = {px, py, 0};
+                        WGPUTexelCopyBufferLayout layout = {};
+                        layout.bytesPerRow = TILE_SIZE * 4;
+                        layout.rowsPerImage = TILE_SIZE;
+                        WGPUExtent3D sz = {tw, th, 1};
+                        wgpuQueueWriteTexture(_queue, &dst, pixels.data(), pixels.size(), &layout, &sz);
+                    }
+                }
+
+                _tilesReceived++;
+                if (_tilesReceived >= _currentFrame.num_tiles) {
+                    _recvState = RecvState::FRAME_HEADER;
+                    _recvNeeded = sizeof(FrameHeader);
+                    _recvOffset = 0;
+                    sendFrameAck();
+                    if (onFrameReceived) {
+                        onFrameReceived();
+                    }
+                } else {
+                    _recvState = RecvState::TILE_HEADER;
+                    _recvNeeded = sizeof(TileHeader);
+                    _recvOffset = 0;
+                }
+                break;
+            }
+
+            case RecvState::RECT_HEADER: {
+                std::memcpy(&_currentRect, _recvBuffer.data(), sizeof(RectHeader));
+
+                if (_currentRect.data_size > 16 * 1024 * 1024) {
+                    ywarn("VNC: Rect data too large: {}", _currentRect.data_size);
+                    _recvState = RecvState::FRAME_HEADER;
+                    _recvNeeded = sizeof(FrameHeader);
+                    _recvOffset = 0;
+                    return;
+                }
+
+                _recvState = RecvState::RECT_DATA;
+                _recvNeeded = _currentRect.data_size;
+                _recvOffset = 0;
+                _recvBuffer.resize(_recvNeeded);
+                break;
+            }
+
+            case RecvState::RECT_DATA: {
+                uint16_t px = _currentRect.px_x;
+                uint16_t py = _currentRect.px_y;
+                uint16_t rectW = _currentRect.width;
+                uint16_t rectH = _currentRect.height;
+
+                std::vector<uint8_t> pixels(rectW * rectH * 4);
+
+                if (static_cast<Encoding>(_currentRect.encoding) == Encoding::RECT_RAW) {
+                    if (_currentRect.data_size == static_cast<uint32_t>(rectW * rectH * 4)) {
+                        std::memcpy(pixels.data(), _recvBuffer.data(), _currentRect.data_size);
+                    }
+                } else if (static_cast<Encoding>(_currentRect.encoding) == Encoding::RECT_JPEG) {
+                    int width, height, subsamp, colorspace;
+                    if (tjDecompressHeader3(static_cast<tjhandle>(_jpegDecompressor),
+                                           _recvBuffer.data(), _currentRect.data_size,
+                                           &width, &height, &subsamp, &colorspace) == 0) {
+                        if (width == rectW && height == rectH) {
+                            tjDecompress2(static_cast<tjhandle>(_jpegDecompressor),
+                                         _recvBuffer.data(), _currentRect.data_size,
+                                         pixels.data(), rectW, 0, rectH,
+                                         TJPF_BGRA, TJFLAG_FASTDCT);
+                        }
+                    }
+                }
+
+                // Upload rectangle to texture
+                if (_texture && _width > 0 && _height > 0) {
+                    if (px < _width && py < _height) {
+                        uint32_t uploadW = std::min(static_cast<uint32_t>(rectW), static_cast<uint32_t>(_width - px));
+                        uint32_t uploadH = std::min(static_cast<uint32_t>(rectH), static_cast<uint32_t>(_height - py));
+
+                        WGPUTexelCopyTextureInfo dst = {};
+                        dst.texture = _texture;
+                        dst.origin = {px, py, 0};
+                        WGPUTexelCopyBufferLayout layout = {};
+                        layout.bytesPerRow = rectW * 4;
+                        layout.rowsPerImage = rectH;
+                        WGPUExtent3D sz = {uploadW, uploadH, 1};
+                        wgpuQueueWriteTexture(_queue, &dst, pixels.data(), pixels.size(), &layout, &sz);
+                    }
+                }
+
+                _tilesReceived++;
+                if (_tilesReceived >= _currentFrame.num_tiles) {
+                    _recvState = RecvState::FRAME_HEADER;
+                    _recvNeeded = sizeof(FrameHeader);
+                    _recvOffset = 0;
+                    sendFrameAck();
+                    if (onFrameReceived) {
+                        onFrameReceived();
+                    }
+                } else {
+                    _recvState = RecvState::RECT_HEADER;
+                    _recvNeeded = sizeof(RectHeader);
+                    _recvOffset = 0;
+                }
+                break;
+            }
+        }
+        _recvBuffer.resize(_recvNeeded);
+    }
+}
+#endif
 
 } // namespace yetty::vnc
