@@ -12,7 +12,9 @@
 #else
 #include <yetty/osc-scanner.h>
 #include <yetty/pty-reader.h>
+#ifndef _WIN32
 #include "telnet/telnet-pty-reader.h"
+#endif
 #endif
 
 namespace yetty {
@@ -210,7 +212,8 @@ private:
         yinfo("Terminal started WebPTY: {} ({}x{})", vmConfig, cols, rows);
         return Ok();
 #else
-        // Check for telnet mode (--telnet flag)
+#ifndef _WIN32
+        // Check for telnet mode (--telnet flag) - Unix only
         std::string telnetAddress;
         if (_ctx.config) {
             auto telnetOpt = _ctx.config->get<std::string>("shell/telnet");
@@ -234,7 +237,9 @@ private:
             }
             _ptyReader = reader;
             yinfo("Terminal started telnet: {} ({}x{})", telnetAddress, cols, rows);
-        } else {
+        } else
+#endif
+        {
             // Desktop: Use PtyReader with OSC-aware reading
             // Get shell path from SHELL env (or COMSPEC on Windows)
             const char* shellEnv = getenv("SHELL");
