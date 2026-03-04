@@ -4,24 +4,32 @@
 # Supports: Ubuntu and macOS
 #
 # Usage:
-#   ./tools/android_x86_64.sh              # Build, create AVD if needed, and run
-#   ./tools/android_x86_64.sh --build      # Build only
-#   ./tools/android_x86_64.sh --run        # Run only (assumes APK exists)
-#   ./tools/android_x86_64.sh --vnc        # Run headless with VNC on port 5900
-#   ./tools/android_x86_64.sh --vnc-port 5901  # Use custom VNC port
-#   ./tools/android_x86_64.sh --vnc-build  # Build and run with VNC mode
-#   ./tools/android_x86_64.sh --kill       # Kill running emulator
+#   First build: make build-android_x86_64-dawn-debug (or -release)
+#   Then run:
+#     ./tools/android_x86_64.sh              # Normal: emulator window with yetty
+#     ./tools/android_x86_64.sh --vnc        # VNC: emulator window + yetty VNC server
+#     ./tools/android_x86_64.sh --vnc-headless  # Headless: no window, yetty VNC only
+#     ./tools/android_x86_64.sh --kill       # Kill running emulator
+#     ./tools/android_x86_64.sh --help       # Show full help
 #
-# VNC Mode:
-#   The Android emulator's Qt GUI intercepts Ctrl key for pinch-zoom gestures,
-#   making Ctrl+C, Ctrl+D etc. unusable in terminal apps. VNC mode uses
-#   yetty's built-in VNC server to bypass this:
-#   1. Emulator runs normally (window opens - minimize it)
-#   2. Yetty starts its VNC server on port 5900
-#   3. Connect via VNC client to yetty directly
-#   4. Ctrl keys work because input goes to yetty, not Qt!
+# THREE MODES:
 #
-#   Connect with: vncviewer localhost:5900
+#   NORMAL (no flags):
+#     - Emulator window opens with yetty running inside
+#     - Use the emulator GUI directly
+#     - WARNING: Ctrl keys don't work (Qt intercepts for pinch-zoom)
+#
+#   --vnc (VNC with window):
+#     - Emulator window opens (can minimize it)
+#     - Yetty's VNC server runs on port 5900
+#     - Connect: vncviewer localhost:5900
+#     - Ctrl keys work via VNC!
+#
+#   --vnc-headless (Headless VNC):
+#     - NO emulator window at all
+#     - Yetty's VNC server runs on port 5900
+#     - Connect: vncviewer localhost:5900
+#     - Best for servers/remote use
 #
 # =============================================================================
 # TRANSPARENCY: What this script downloads and why
@@ -365,23 +373,6 @@ check_kvm() {
     fi
 }
 
-#-----------------------------------------------------------------------------
-# Build APK
-#-----------------------------------------------------------------------------
-build_apk() {
-    info "Building Android x86_64 release APK..."
-    cd "$PROJECT_ROOT"
-
-    # Use wgpu backend (more compatible than Dawn for emulator)
-    make build-android_x86_64-wgpu-release
-
-    if [ ! -f "$APK_PATH" ]; then
-        error "Build failed - APK not found: $APK_PATH"
-        exit 1
-    fi
-
-    success "APK built: $APK_PATH"
-}
 
 #-----------------------------------------------------------------------------
 # Start emulator
@@ -429,7 +420,7 @@ start_emulator() {
         info "  - Emulator window opens (can ignore it)"
         info "  - Yetty's VNC server on port $VNC_PORT"
         "$emulator_bin" -avd "$AVD_NAME" \
-            -gpu auto \
+            -gpu host \
             -no-snapshot-load \
             -skin 1920x1080 \
             -netdelay none \
@@ -437,13 +428,14 @@ start_emulator() {
             -qemu -k en-us &
     else
         # Normal mode with Qt GUI
+        # -gpu host: use host GPU (NOT software rendering!)
         # -skin 1920x1080: landscape fullscreen
         # -screen touch: single-touch mode (still has Ctrl pinch-zoom issue)
         # -netdelay none -netspeed full: ensure network is enabled with no throttling
         # -qemu -k en-us: keyboard layout
         info "Launching emulator (this may take a minute)..."
         "$emulator_bin" -avd "$AVD_NAME" \
-            -gpu auto \
+            -gpu host \
             -no-snapshot-load \
             -skin 1920x1080 \
             -screen touch \
@@ -657,12 +649,16 @@ main() {
 
     # Parse action arguments
     case "${1:-}" in
-        --build)
-            build_apk
-            exit 0
-            ;;
         --run)
             find_android_sdk || { error "Android SDK not found"; exit 1; }
+            check_system_image
+            check_avd
+            check_kvm
+            if [ ! -f "$APK_PATH" ]; then
+                error "APK not found: $APK_PATH"
+                echo "Build first: make build-android_x86_64-dawn-debug"
+                exit 1
+            fi
             start_emulator
             install_and_run
             exit 0
@@ -670,6 +666,14 @@ main() {
         --vnc)
             VNC_MODE=true
             find_android_sdk || { error "Android SDK not found"; exit 1; }
+            check_system_image
+            check_avd
+            check_kvm
+            if [ ! -f "$APK_PATH" ]; then
+                error "APK not found: $APK_PATH"
+                echo "Build first: make build-android_x86_64-dawn-debug"
+                exit 1
+            fi
             start_emulator
             install_and_run
             exit 0
@@ -677,20 +681,16 @@ main() {
         --vnc-headless)
             VNC_HEADLESS=true
             find_android_sdk || { error "Android SDK not found"; exit 1; }
-            start_emulator
-            install_and_run
-            exit 0
-            ;;
-        --vnc-build)
-            VNC_MODE=true
-            find_android_sdk || { error "Android SDK not found"; exit 1; }
             check_system_image
             check_avd
             check_kvm
-            build_apk
+            if [ ! -f "$APK_PATH" ]; then
+                error "APK not found: $APK_PATH"
+                echo "Build first: make build-android_x86_64-dawn-debug"
+                exit 1
+            fi
             start_emulator
             install_and_run
-            success "VNC server running on port $VNC_PORT - connect with: vncviewer localhost:$VNC_PORT"
             exit 0
             ;;
         --kill)
@@ -700,47 +700,57 @@ main() {
         --help|-h)
             echo "Usage: $0 [OPTIONS]"
             echo ""
-            echo "Options:"
-            echo "  (none)          Build APK, setup emulator, and run"
-            echo "  --build         Build APK only"
-            echo "  --run           Run in emulator (assumes APK exists)"
-            echo "  --vnc           Run with VNC (emulator window + yetty VNC)"
-            echo "  --vnc-headless  Run truly headless (no window, QEMU VNC)"
-            echo "  --vnc-build     Build APK and run with VNC mode"
+            echo "PREREQUISITE: Build the APK first!"
+            echo "  make build-android_x86_64-dawn-debug"
+            echo "  make build-android_x86_64-dawn-release"
+            echo ""
+            echo "MODES:"
+            echo ""
+            echo "  (no options)    NORMAL MODE - Emulator window with yetty inside"
+            echo "                  Use if you want the Android emulator GUI."
+            echo "                  WARNING: Ctrl keys don't work (Qt intercepts them)"
+            echo ""
+            echo "  --vnc           VNC MODE - Emulator window + yetty VNC server"
+            echo "                  Emulator window opens but you can minimize it."
+            echo "                  Connect via VNC to yetty for working Ctrl keys."
+            echo ""
+            echo "  --vnc-headless  HEADLESS MODE - No emulator window, yetty VNC only"
+            echo "                  Best for remote/server use. No GUI at all."
+            echo "                  Connect via VNC to yetty on port 5900."
+            echo ""
+            echo "OTHER OPTIONS:"
+            echo "  --run           Same as no options (run emulator)"
             echo "  --vnc-port N    Set VNC port (default: 5900)"
             echo "  --kill          Kill running emulator"
-            echo "  --yes, -y       Auto-confirm all prompts (non-interactive)"
-            echo "  --debug, -d     Enable debug output (bash -x tracing)"
+            echo "  --yes, -y       Auto-confirm all prompts"
+            echo "  --debug, -d     Enable bash debug tracing"
             echo "  --help          Show this help"
             echo ""
-            echo "VNC Mode:"
-            echo "  The emulator's Qt GUI intercepts Ctrl for pinch-zoom gestures."
-            echo "  VNC mode runs the emulator headless and exposes the display via"
-            echo "  QEMU's built-in VNC server. Ctrl keys work properly through VNC!"
+            echo "EXAMPLES:"
             echo ""
-            echo "  How it works:"
-            echo "    1. Emulator runs with -no-window (no Qt GUI)"
-            echo "    2. QEMU VNC server exposes the Android display"
-            echo "    3. Yetty's VNC port is forwarded from emulator to host"
-            echo "    4. Connect with any VNC client to localhost:5900"
+            echo "  # First build the APK (only once, or after code changes):"
+            echo "  make build-android_x86_64-dawn-debug"
             echo ""
-            echo "Examples:"
-            echo "  $0 --yes              # Full setup without prompts"
-            echo "  $0 --yes --build      # Build only without prompts"
-            echo "  $0 --vnc              # Run with VNC (Ctrl keys work!)"
-            echo "  $0 --vnc-build        # Build and run with VNC"
-            echo "  $0 --vnc-port 5901 --vnc  # Use port 5901"
-            echo "  $0 --yes --debug      # Full setup with debug output"
-            echo ""
-            echo "Connecting to VNC:"
+            echo "  # Then run headless (server/remote use):"
+            echo "  $0 --vnc-headless"
             echo "  vncviewer localhost:5900"
-            echo "  tigervnc localhost:5900"
-            echo "  remmina vnc://localhost:5900"
+            echo ""
+            echo "  # Or with emulator window + VNC for input:"
+            echo "  $0 --vnc"
+            echo "  vncviewer localhost:5900"
+            echo ""
+            echo "  # Or normal mode (Ctrl keys won't work):"
+            echo "  $0"
+            echo ""
+            echo "WHY VNC?"
+            echo "  The Android emulator's Qt GUI intercepts Ctrl key for pinch-zoom,"
+            echo "  making Ctrl+C, Ctrl+D, etc. unusable in terminal apps."
+            echo "  VNC mode bypasses this by using yetty's built-in VNC server."
             exit 0
             ;;
     esac
 
-    # Full setup and run
+    # Default: setup and run (NO BUILD - use 'make build-android_x86_64-dawn-*' first!)
     if ! find_android_sdk; then
         case "$OS" in
             linux) install_android_sdk_ubuntu ;;
@@ -751,7 +761,18 @@ main() {
     check_system_image
     check_avd
     check_kvm
-    build_apk
+
+    # Check APK exists - DO NOT BUILD, user must build separately
+    if [ ! -f "$APK_PATH" ]; then
+        error "APK not found: $APK_PATH"
+        echo ""
+        echo "Build the APK first with:"
+        echo "  make build-android_x86_64-dawn-debug"
+        echo "  make build-android_x86_64-dawn-release"
+        echo ""
+        exit 1
+    fi
+
     start_emulator
     install_and_run
 }
