@@ -558,7 +558,7 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
         // VNC client resize - changes the terminal grid size (not cell size)
         _vncServer->onResize = [this](uint16_t widthPx, uint16_t heightPx) {
             if (widthPx == 0 || heightPx == 0) return;
-            yinfo("VNC onResize: {}x{} px", widthPx, heightPx);
+            ydebug("VNC onResize: {}x{} px", widthPx, heightPx);
 
             // Store requested capture size (full VNC area including server's statusbar)
             _vncRequestedWidth = widthPx;
@@ -570,7 +570,7 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
                 float statusbarH = _yettyContext.yguiOverlay ? _yettyContext.yguiOverlay->getStatusbarHeight() : 0.0f;
                 float wsH = std::max(1.0f, static_cast<float>(heightPx) - statusbarH);
                 _activeWorkspace->resize(static_cast<float>(widthPx), wsH);
-                yinfo("VNC onResize: workspace={}x{} (statusbar={})", widthPx, wsH, statusbarH);
+                ydebug("VNC onResize: workspace={}x{} (statusbar={})", widthPx, wsH, statusbarH);
             }
 
             // Update ygui overlay display size for statusbar positioning
@@ -584,7 +584,7 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
 
         // VNC client cell size change (zoom)
         _vncServer->onCellSize = [this](uint8_t cellHeight) {
-            yinfo("VNC onCellSize: cellHeight={}", cellHeight);
+            ydebug("VNC onCellSize: cellHeight={}", cellHeight);
             _vncServer->forceFullFrame();
         };
 
@@ -2117,8 +2117,6 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
             // Render UI overlay (statusbar) for both capture benchmark and VNC streaming
             // VNC client will see server's statusbar, plus its own statusbar on top
             if (_yettyContext.yguiOverlay) {
-                yinfo("VNC capture: rendering yguiOverlay, captureSize={}x{}, statusbarH={}",
-                      captureW, captureH, _yettyContext.yguiOverlay->getStatusbarHeight());
                 if (auto res = _yettyContext.yguiOverlay->render(capturePass); !res) {
                     // Restore workspace size before returning error
                     if (workspaceResized) {
@@ -2353,7 +2351,7 @@ void YettyImpl::handleResize(int newWidth, int newHeight) noexcept {
         int vncH = windowHeight - static_cast<int>(statusbarH);
         if (vncH > 0) {
             _vncClient->sendResize(static_cast<uint16_t>(windowWidth), static_cast<uint16_t>(vncH));
-            yinfo("VNC client sent resize: {}x{} (content area, statusbar={})", windowWidth, vncH, statusbarH);
+            ydebug("VNC client sent resize: {}x{}", windowWidth, vncH);
         }
     }
 }

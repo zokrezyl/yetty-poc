@@ -810,17 +810,7 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
         if (_dirtyTiles[i]) numDirty++;
     }
 
-    // Log which specific tiles are dirty, especially bottom row
-    uint16_t lastRowStart = (_tilesY - 1) * _tilesX;
-    bool bottomRowDirty = false;
-    for (uint16_t tx = 0; tx < _tilesX; tx++) {
-        if (_dirtyTiles[lastRowStart + tx]) {
-            bottomRowDirty = true;
-            break;
-        }
-    }
-    yinfo("VNC sendFrame: numDirty={}/{} tilesX={} tilesY={} bottomRowDirty={} height={}",
-          numDirty, _tilesX * _tilesY, _tilesX, _tilesY, bottomRowDirty, _lastHeight);
+    ydebug("VNC sendFrame: numDirty={}/{} tilesX={} tilesY={}", numDirty, _tilesX * _tilesY, _tilesX, _tilesY);
 
     if (numDirty == 0) return Ok();
 
