@@ -13,16 +13,27 @@ if(OPENSSL_FOUND)
 else()
     message(STATUS "Building OpenSSL from source (janbar/openssl-cmake)")
     
-    # Use janbar/openssl-cmake with CMake policy workaround
-    # Pin to a specific commit known to work
+    # Use janbar/openssl-cmake - download only first
     CPMAddPackage(
         NAME openssl
         GITHUB_REPOSITORY janbar/openssl-cmake
         GIT_TAG 1.1.1w-20250419
-        OPTIONS
-            "BUILD_SHARED_LIBS OFF"
-            "WITH_APPS OFF"
+        DOWNLOAD_ONLY YES
     )
+    
+    # Fix line 146: if( HAVE_LONG_INT AND (${LONG_INT} EQUAL 8) )
+    # When LONG_INT is empty (e.g., Emscripten), CMake fails. Quote the variable.
+    file(READ "${openssl_SOURCE_DIR}/CMakeLists.txt" _openssl_cmake)
+    string(REPLACE 
+        "if( HAVE_LONG_INT AND (\${LONG_INT} EQUAL 8) )"
+        "if( HAVE_LONG_INT AND (\"\${LONG_INT}\" EQUAL 8) )"
+        _openssl_cmake "${_openssl_cmake}")
+    file(WRITE "${openssl_SOURCE_DIR}/CMakeLists.txt" "${_openssl_cmake}")
+    
+    # Now add the subdirectory with options
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+    set(WITH_APPS OFF CACHE BOOL "" FORCE)
+    add_subdirectory(${openssl_SOURCE_DIR} ${openssl_BINARY_DIR})
 
     # Create OpenSSL::Crypto target that cpr/curl expect
     if(NOT TARGET OpenSSL::Crypto)

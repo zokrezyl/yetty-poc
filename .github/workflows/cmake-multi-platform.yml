@@ -15,7 +15,7 @@ on:
 env:
   BUILD_LINUX: true
   BUILD_MACOS: true
-  BUILD_WINDOWS: false
+  BUILD_WINDOWS: true
   BUILD_ANDROID: true
   BUILD_WEB: true
 
