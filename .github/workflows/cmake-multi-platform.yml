@@ -13,11 +13,11 @@ on:
 # BUILD FLAGS - Set to true to enable specific builds (tags always build all)
 # =============================================================================
 env:
-  BUILD_LINUX: false
-  BUILD_MACOS: false
-  BUILD_WINDOWS: true
-  BUILD_ANDROID: false
-  BUILD_WEB: false
+  BUILD_LINUX: true
+  BUILD_MACOS: true
+  BUILD_WINDOWS: false
+  BUILD_ANDROID: true
+  BUILD_WEB: true
 
 jobs:
   # =============================================================================
