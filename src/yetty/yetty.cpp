@@ -479,13 +479,20 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
         };
 
         // Set up frame received callback for immediate screen refresh
-        _vncClient->onFrameReceived = []() {
+        _vncClient->onFrameReceived = [this]() {
+#if YETTY_WEB
+            // Web builds: request animation frame directly
+            if (_platform) {
+                _platform->requestRender();
+            }
+#else
             auto t = std::chrono::high_resolution_clock::now();
             auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
             yinfo("[TIME] CLIENT onFrameReceived dispatching ScreenUpdate at {}ms", ms);
             auto loopResult = base::EventLoop::instance();
             if (!loopResult) return;
             (*loopResult)->dispatch(base::Event::screenUpdateEvent());
+#endif
         };
 
         // Set up reconnection parameters
