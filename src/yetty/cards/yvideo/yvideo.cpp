@@ -62,12 +62,12 @@ public:
         // Parse args
         parseArgs(_argsStr);
 
-        // Create decoder
-        auto decoderResult = yvideo::Decoder::create();
-        if (!decoderResult) {
-            return Err<void>("YVideo::init: failed to create decoder", decoderResult);
+        // Create video source
+        auto sourceResult = yvideo::VideoSource::create();
+        if (!sourceResult) {
+            return Err<void>("YVideo::init: failed to create video source", sourceResult);
         }
-        _decoder = *decoderResult;
+        _videoSource = *sourceResult;
 
         // Register for events
         if (auto res = registerForEvents(); !res) {
@@ -86,6 +86,18 @@ public:
     }
 
     Result<void> dispose() override {
+        // Stop playback timer
+        stopPlayback();
+        
+        // Destroy timer
+        if (_timerId >= 0) {
+            auto loopResult = base::EventLoop::instance();
+            if (loopResult) {
+                (*loopResult)->destroyTimer(_timerId);
+            }
+            _timerId = -1;
+        }
+        
         // Deregister from events
         if (auto res = deregisterFromEvents(); !res) {
             return Err<void>("YVideo::dispose: failed to deregister", res);
@@ -97,7 +109,7 @@ public:
         }
 
         // Clear decoder
-        _decoder.reset();
+        _videoSource.reset();
 
         // Clear frame data
         _yPlane.clear();
@@ -160,38 +172,55 @@ public:
             return Ok();
         }
 
-        // Write Y plane (grayscale expanded to RGBA)
+        // Write Y plane (grayscale expanded to RGBA, scaled to fit texture)
         std::vector<uint8_t> yRgba(_scaledYWidth * _scaledYHeight * 4);
-        for (size_t i = 0; i < _yPlane.size(); ++i) {
-            yRgba[i * 4 + 0] = _yPlane[i];
-            yRgba[i * 4 + 1] = _yPlane[i];
-            yRgba[i * 4 + 2] = _yPlane[i];
-            yRgba[i * 4 + 3] = 255;
+        
+        // Simple nearest-neighbor scaling from _frameWidth x _frameHeight to _scaledYWidth x _scaledYHeight
+        for (uint32_t y = 0; y < _scaledYHeight; ++y) {
+            uint32_t srcY = y * _frameHeight / _scaledYHeight;
+            for (uint32_t x = 0; x < _scaledYWidth; ++x) {
+                uint32_t srcX = x * _frameWidth / _scaledYWidth;
+                size_t srcIdx = srcY * _frameWidth + srcX;
+                size_t dstIdx = (y * _scaledYWidth + x) * 4;
+                uint8_t val = (srcIdx < _yPlane.size()) ? _yPlane[srcIdx] : 0;
+                yRgba[dstIdx + 0] = val;
+                yRgba[dstIdx + 1] = val;
+                yRgba[dstIdx + 2] = val;
+                yRgba[dstIdx + 3] = 255;
+            }
         }
         if (auto res = _cardMgr->textureManager()->write(_yTextureHandle, yRgba.data()); !res) {
             return Err<void>("YVideo::writeTextures: Y write failed", res);
         }
 
-        // Write UV planes (U and V side by side)
-        uint32_t uvWidth = _scaledYWidth / 2;
-        uint32_t uvHeight = _scaledYHeight / 2;
-        std::vector<uint8_t> uvRgba(_scaledYWidth * uvHeight * 4);
+        // Write UV planes (U and V side by side, scaled)
+        uint32_t scaledUVWidth = _scaledYWidth / 2;
+        uint32_t scaledUVHeight = _scaledYHeight / 2;
+        uint32_t srcUVWidth = _frameWidth / 2;
+        uint32_t srcUVHeight = _frameHeight / 2;
+        
+        std::vector<uint8_t> uvRgba(_scaledYWidth * scaledUVHeight * 4);
 
-        for (uint32_t y = 0; y < uvHeight; ++y) {
-            for (uint32_t x = 0; x < uvWidth; ++x) {
-                size_t srcIdx = y * uvWidth + x;
+        for (uint32_t y = 0; y < scaledUVHeight; ++y) {
+            uint32_t srcY = y * srcUVHeight / scaledUVHeight;
+            for (uint32_t x = 0; x < scaledUVWidth; ++x) {
+                uint32_t srcX = x * srcUVWidth / scaledUVWidth;
+                size_t srcIdx = srcY * srcUVWidth + srcX;
+                
                 // U plane on the left
                 size_t dstIdxU = (y * _scaledYWidth + x) * 4;
-                uvRgba[dstIdxU + 0] = _uPlane[srcIdx];
-                uvRgba[dstIdxU + 1] = _uPlane[srcIdx];
-                uvRgba[dstIdxU + 2] = _uPlane[srcIdx];
+                uint8_t uVal = (srcIdx < _uPlane.size()) ? _uPlane[srcIdx] : 128;
+                uvRgba[dstIdxU + 0] = uVal;
+                uvRgba[dstIdxU + 1] = uVal;
+                uvRgba[dstIdxU + 2] = uVal;
                 uvRgba[dstIdxU + 3] = 255;
 
                 // V plane on the right
-                size_t dstIdxV = (y * _scaledYWidth + uvWidth + x) * 4;
-                uvRgba[dstIdxV + 0] = _vPlane[srcIdx];
-                uvRgba[dstIdxV + 1] = _vPlane[srcIdx];
-                uvRgba[dstIdxV + 2] = _vPlane[srcIdx];
+                size_t dstIdxV = (y * _scaledYWidth + scaledUVWidth + x) * 4;
+                uint8_t vVal = (srcIdx < _vPlane.size()) ? _vPlane[srcIdx] : 128;
+                uvRgba[dstIdxV + 0] = vVal;
+                uvRgba[dstIdxV + 1] = vVal;
+                uvRgba[dstIdxV + 2] = vVal;
                 uvRgba[dstIdxV + 3] = 255;
             }
         }
@@ -237,6 +266,15 @@ public:
     //=========================================================================
 
     Result<bool> onEvent(const base::Event& event) override {
+        // Handle timer events for frame advancement
+        if (event.type == base::Event::Type::Timer) {
+            if (event.timer.timerId == _timerId) {
+                advanceFrame();
+                return Ok(true);
+            }
+            return Ok(false);
+        }
+        
         // Handle SetFocus events
         if (event.type == base::Event::Type::SetFocus) {
             if (event.setFocus.objectId == id()) {
@@ -285,31 +323,40 @@ private:
     }
 
     Result<void> decodePayload(const std::string& payload) {
-        // Payload is raw AV1 OBU data (base64 decoded by OSC layer)
+        // Payload is video data (MP4, AV1 OBU, etc.)
         auto data = std::span<const uint8_t>(
             reinterpret_cast<const uint8_t*>(payload.data()),
             payload.size()
         );
 
-        if (auto res = _decoder->feed(data); !res) {
-            return Err<void>("YVideo::decodePayload: feed failed", res);
+        // Open video source (auto-detects format)
+        if (auto res = _videoSource->open(data); !res) {
+            return Err<void>("YVideo::decodePayload: open failed", res);
         }
 
-        // Try to get decoded frame
-        auto frameResult = _decoder->getFrame();
-        if (!frameResult) {
-            return Err<void>("YVideo::decodePayload: getFrame failed", frameResult);
+        // Get first frame - may need multiple calls due to B-frames
+        std::optional<yvideo::YUVFrame> frameOpt;
+        for (int attempt = 0; attempt < 30; ++attempt) {  // Try up to 30 samples
+            auto frameResult = _videoSource->nextFrame();
+            if (!frameResult) {
+                return Err<void>("YVideo::decodePayload: nextFrame failed", frameResult);
+            }
+            frameOpt = *frameResult;
+            if (frameOpt) {
+                yinfo("YVideo::decodePayload: got frame after {} sample(s)", attempt + 1);
+                break;
+            }
         }
-
-        auto frameOpt = *frameResult;
+        
         if (!frameOpt) {
-            // No frame ready yet (buffered)
+            // No frame ready yet
+            ywarn("YVideo::decodePayload: no frame after 30 samples");
             return Ok();
         }
 
         auto& frame = *frameOpt;
         if (!frame.isValid()) {
-            _decoder->releaseFrame();
+            _videoSource->releaseFrame();
             return Err<void>("YVideo::decodePayload: invalid frame");
         }
 
@@ -327,11 +374,182 @@ private:
         // Copy YUV planes
         copyYUVPlanes(frame);
 
-        _decoder->releaseFrame();
+        _videoSource->releaseFrame();
         _metadataDirty = true;
 
         yinfo("YVideo::decodePayload: decoded frame {}x{}", _frameWidth, _frameHeight);
+        
+        // Start playback timer
+        _frameRate = _videoSource->frameRate();
+        if (auto res = startPlayback(); !res) {
+            ywarn("YVideo::decodePayload: failed to start playback: {}", error_msg(res));
+        }
+        
         return Ok();
+    }
+    
+    void advanceFrame() {
+        if (!_videoSource) return;
+        
+        auto frameResult = _videoSource->nextFrame();
+        if (!frameResult) {
+            ywarn("YVideo::advanceFrame: nextFrame failed: {}", error_msg(frameResult));
+            stopPlayback();
+            return;
+        }
+        
+        auto frameOpt = *frameResult;
+        if (!frameOpt) {
+            // End of video - loop back to start
+            if (auto res = _videoSource->seekFrame(0); res) {
+                ytrace("YVideo::advanceFrame: looping to start");
+                // Try to get first frame after seek
+                frameResult = _videoSource->nextFrame();
+                if (frameResult) {
+                    frameOpt = *frameResult;
+                }
+            }
+            if (!frameOpt) {
+                ytrace("YVideo::advanceFrame: no more frames, stopping");
+                stopPlayback();
+                return;
+            }
+        }
+        
+        auto& frame = *frameOpt;
+        if (!frame.isValid()) {
+            _videoSource->releaseFrame();
+            return;
+        }
+        
+        // Copy new frame data
+        copyYUVPlanes(frame);
+        _videoSource->releaseFrame();
+        
+        // Write updated texture data (marks textures as dirty for upload)
+        if (_yTextureHandle.isValid() && !_yPlane.empty()) {
+            writeTexturesToManager();
+        }
+        
+        _metadataDirty = true;
+        
+        // Request screen update
+        requestScreenUpdate();
+    }
+    
+    void writeTexturesToManager() {
+        if (!_cardMgr || !_cardMgr->textureManager()) return;
+        
+        // Write Y plane (grayscale expanded to RGBA, scaled)
+        std::vector<uint8_t> yRgba(_scaledYWidth * _scaledYHeight * 4);
+        
+        for (uint32_t y = 0; y < _scaledYHeight; ++y) {
+            uint32_t srcY = y * _frameHeight / _scaledYHeight;
+            for (uint32_t x = 0; x < _scaledYWidth; ++x) {
+                uint32_t srcX = x * _frameWidth / _scaledYWidth;
+                size_t srcIdx = srcY * _frameWidth + srcX;
+                size_t dstIdx = (y * _scaledYWidth + x) * 4;
+                uint8_t val = (srcIdx < _yPlane.size()) ? _yPlane[srcIdx] : 0;
+                yRgba[dstIdx + 0] = val;
+                yRgba[dstIdx + 1] = val;
+                yRgba[dstIdx + 2] = val;
+                yRgba[dstIdx + 3] = 255;
+            }
+        }
+        _cardMgr->textureManager()->write(_yTextureHandle, yRgba.data());
+        
+        // Write UV planes (scaled)
+        uint32_t scaledUVWidth = _scaledYWidth / 2;
+        uint32_t scaledUVHeight = _scaledYHeight / 2;
+        uint32_t srcUVWidth = _frameWidth / 2;
+        uint32_t srcUVHeight = _frameHeight / 2;
+        
+        std::vector<uint8_t> uvRgba(_scaledYWidth * scaledUVHeight * 4);
+        
+        for (uint32_t y = 0; y < scaledUVHeight; ++y) {
+            uint32_t srcY = y * srcUVHeight / scaledUVHeight;
+            for (uint32_t x = 0; x < scaledUVWidth; ++x) {
+                uint32_t srcX = x * srcUVWidth / scaledUVWidth;
+                size_t srcIdx = srcY * srcUVWidth + srcX;
+                
+                size_t dstIdxU = (y * _scaledYWidth + x) * 4;
+                uint8_t uVal = (srcIdx < _uPlane.size()) ? _uPlane[srcIdx] : 128;
+                uvRgba[dstIdxU + 0] = uVal;
+                uvRgba[dstIdxU + 1] = uVal;
+                uvRgba[dstIdxU + 2] = uVal;
+                uvRgba[dstIdxU + 3] = 255;
+                
+                size_t dstIdxV = (y * _scaledYWidth + scaledUVWidth + x) * 4;
+                uint8_t vVal = (srcIdx < _vPlane.size()) ? _vPlane[srcIdx] : 128;
+                uvRgba[dstIdxV + 0] = vVal;
+                uvRgba[dstIdxV + 1] = vVal;
+                uvRgba[dstIdxV + 2] = vVal;
+                uvRgba[dstIdxV + 3] = 255;
+            }
+        }
+        _cardMgr->textureManager()->write(_uvTextureHandle, uvRgba.data());
+    }
+    
+    Result<void> startPlayback() {
+        if (_playing) return Ok();
+        
+        auto loopResult = base::EventLoop::instance();
+        if (!loopResult) {
+            return Err<void>("YVideo::startPlayback: no EventLoop");
+        }
+        auto loop = *loopResult;
+        
+        // Create timer if needed
+        if (_timerId < 0) {
+            auto timerResult = loop->createTimer();
+            if (!timerResult) {
+                return Err<void>("YVideo::startPlayback: createTimer failed", timerResult);
+            }
+            _timerId = *timerResult;
+            
+            // Register this card as timer listener
+            if (auto res = loop->registerTimerListener(_timerId, sharedAs<base::EventListener>()); !res) {
+                return Err<void>("YVideo::startPlayback: registerTimerListener failed", res);
+            }
+        }
+        
+        // Configure and start timer (frame interval in ms)
+        int intervalMs = static_cast<int>(1000.0f / _frameRate);
+        if (intervalMs < 1) intervalMs = 1;
+        
+        if (auto res = loop->configTimer(_timerId, intervalMs); !res) {
+            return Err<void>("YVideo::startPlayback: configTimer failed", res);
+        }
+        if (auto res = loop->startTimer(_timerId); !res) {
+            return Err<void>("YVideo::startPlayback: startTimer failed", res);
+        }
+        
+        _playing = true;
+        yinfo("YVideo::startPlayback: started at {}fps ({}ms interval)", _frameRate, intervalMs);
+        return Ok();
+    }
+    
+    void stopPlayback() {
+        if (!_playing) return;
+        
+        auto loopResult = base::EventLoop::instance();
+        if (loopResult) {
+            auto loop = *loopResult;
+            if (_timerId >= 0) {
+                loop->stopTimer(_timerId);
+            }
+        }
+        
+        _playing = false;
+        ytrace("YVideo::stopPlayback: stopped");
+    }
+    
+    void requestScreenUpdate() {
+        auto loopResult = base::EventLoop::instance();
+        if (!loopResult) return;
+        
+        auto loop = *loopResult;
+        loop->dispatch(base::Event::screenUpdateEvent());
     }
 
     void copyYUVPlanes(const yvideo::YUVFrame& frame) {
@@ -495,8 +713,8 @@ private:
     std::string _argsStr;
     std::string _payloadStr;
 
-    // Decoder
-    yvideo::Decoder::Ptr _decoder;
+    // Video source (demuxer + decoder)
+    yvideo::VideoSource::Ptr _videoSource;
 
     // Frame data
     uint32_t _frameWidth = 0;
@@ -527,6 +745,11 @@ private:
     bool _needsRealloc = false;
     bool _metadataDirty = true;
     bool _focused = false;
+    
+    // Playback timer
+    base::TimerId _timerId = -1;
+    float _frameRate = 30.0f;
+    bool _playing = false;
 };
 
 //=============================================================================

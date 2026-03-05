@@ -200,26 +200,43 @@ public:
 
         _pendingData.clear();
 
-        if (state != dsErrorFree || bufInfo.iBufferStatus != 1) {
+        if (state != dsErrorFree) {
+            ytrace("H264Decoder::getFrame: decode state={} (not dsErrorFree=0)", static_cast<int>(state));
             return Ok(std::nullopt);
         }
+        if (bufInfo.iBufferStatus != 1) {
+            ytrace("H264Decoder::getFrame: bufferStatus={} (need more data)", bufInfo.iBufferStatus);
+            return Ok(std::nullopt);
+        }
+
+        yinfo("H264Decoder::getFrame: got frame!");
 
         // Copy YUV data to internal buffer (openh264 may reuse buffers)
         int width = bufInfo.UsrData.sSystemBuffer.iWidth;
         int height = bufInfo.UsrData.sSystemBuffer.iHeight;
         int yStride = bufInfo.UsrData.sSystemBuffer.iStride[0];
         int uvStride = bufInfo.UsrData.sSystemBuffer.iStride[1];
+        
+        yinfo("H264Decoder::getFrame: {}x{} yStride={} uvStride={}", width, height, yStride, uvStride);
 
         size_t ySize = static_cast<size_t>(yStride * height);
         size_t uvSize = static_cast<size_t>(uvStride * (height / 2));
+        
+        yinfo("H264Decoder::getFrame: ySize={} uvSize={}", ySize, uvSize);
 
         _yBuffer.resize(ySize);
         _uBuffer.resize(uvSize);
         _vBuffer.resize(uvSize);
 
-        std::memcpy(_yBuffer.data(), yuvData[0], ySize);
-        std::memcpy(_uBuffer.data(), yuvData[1], uvSize);
-        std::memcpy(_vBuffer.data(), yuvData[2], uvSize);
+        if (yuvData[0] && yuvData[1] && yuvData[2]) {
+            std::memcpy(_yBuffer.data(), yuvData[0], ySize);
+            std::memcpy(_uBuffer.data(), yuvData[1], uvSize);
+            std::memcpy(_vBuffer.data(), yuvData[2], uvSize);
+        } else {
+            ywarn("H264Decoder::getFrame: null YUV pointers! Y={} U={} V={}", 
+                  (void*)yuvData[0], (void*)yuvData[1], (void*)yuvData[2]);
+            return Ok(std::nullopt);
+        }
 
         _currentFrame.yPlane = _yBuffer.data();
         _currentFrame.yStride = static_cast<uint32_t>(yStride);
@@ -348,8 +365,19 @@ public:
         }
 
         std::span<const uint8_t> sampleData(_data.data() + sample.offset, sample.size);
-        if (auto res = _decoder->feed(sampleData); !res) {
-            return Err<std::optional<YUVFrame>>("Failed to feed sample", res);
+        
+        // For H.264, convert from length-prefixed to Annex B format
+        if (_codec == VideoCodec::H264) {
+            auto annexBData = convertToAnnexB(sampleData);
+            ytrace("VideoSource::nextFrame: sample {} size={} -> annexB size={}", 
+                   _currentSample - 1, sample.size, annexBData.size());
+            if (auto res = _decoder->feed(std::span<const uint8_t>(annexBData)); !res) {
+                return Err<std::optional<YUVFrame>>("Failed to feed H264 sample", res);
+            }
+        } else {
+            if (auto res = _decoder->feed(sampleData); !res) {
+                return Err<std::optional<YUVFrame>>("Failed to feed sample", res);
+            }
         }
 
         return _decoder->getFrame();
@@ -381,18 +409,34 @@ private:
     };
 
     Result<void> openMP4() {
+        yinfo("VideoSource::openMP4: data.size={}", _data.size());
+        
+        // Debug: print first 32 bytes
+        std::string hexDump;
+        for (size_t i = 0; i < std::min(size_t(32), _data.size()); ++i) {
+            char buf[4];
+            snprintf(buf, sizeof(buf), "%02x ", _data[i]);
+            hexDump += buf;
+        }
+        yinfo("VideoSource::openMP4: first 32 bytes: {}", hexDump);
+
         MP4D_demux_t mp4 = {};
 
+        // minimp4 read callback: returns 0 on success, non-zero on error
         int res = MP4D_open(&mp4, [](int64_t offset, void* buffer, size_t size, void* user) -> int {
             auto* self = static_cast<VideoSourceImpl*>(user);
-            if (offset < 0 || static_cast<size_t>(offset) + size > self->_data.size()) {
-                return 0;
+            size_t dataSize = self->_data.size();
+            if (offset < 0 || static_cast<size_t>(offset) + size > dataSize) {
+                return 1;  // Error: out of bounds
             }
             std::memcpy(buffer, self->_data.data() + offset, size);
-            return static_cast<int>(size);
+            return 0;  // Success
         }, this, static_cast<int64_t>(_data.size()));
 
+        yinfo("VideoSource::openMP4: MP4D_open returned {}", res);
+
         if (res == 0) {
+            yerror("VideoSource::openMP4: MP4D_open returned 0 (no tracks?)");
             return Err<void>("MP4D_open failed");
         }
 
@@ -413,6 +457,7 @@ private:
         auto& track = mp4.track[videoTrack];
         _width = track.SampleDescription.video.width;
         _height = track.SampleDescription.video.height;
+        _videoTrack = videoTrack;
 
         // Detect codec from object type
         if (track.object_type_indication == 0x21) {
@@ -429,6 +474,40 @@ private:
             _frameRate = static_cast<float>(track.timescale) /
                         static_cast<float>(track.duration_hi * 0x100000000ULL + track.duration_lo) *
                         static_cast<float>(track.sample_count);
+        }
+
+        // For H.264, extract SPS/PPS from avcC box
+        if (_codec == VideoCodec::H264) {
+            // Read all SPS
+            int spsIdx = 0;
+            int spsBytes = 0;
+            while (const void* sps = MP4D_read_sps(&mp4, videoTrack, spsIdx, &spsBytes)) {
+                // Prepend with Annex B start code
+                _spsPps.push_back(0x00);
+                _spsPps.push_back(0x00);
+                _spsPps.push_back(0x00);
+                _spsPps.push_back(0x01);
+                const uint8_t* spsData = static_cast<const uint8_t*>(sps);
+                _spsPps.insert(_spsPps.end(), spsData, spsData + spsBytes);
+                yinfo("VideoSource: extracted SPS[{}] {} bytes", spsIdx, spsBytes);
+                spsIdx++;
+            }
+
+            // Read all PPS
+            int ppsIdx = 0;
+            int ppsBytes = 0;
+            while (const void* pps = MP4D_read_pps(&mp4, videoTrack, ppsIdx, &ppsBytes)) {
+                _spsPps.push_back(0x00);
+                _spsPps.push_back(0x00);
+                _spsPps.push_back(0x00);
+                _spsPps.push_back(0x01);
+                const uint8_t* ppsData = static_cast<const uint8_t*>(pps);
+                _spsPps.insert(_spsPps.end(), ppsData, ppsData + ppsBytes);
+                yinfo("VideoSource: extracted PPS[{}] {} bytes", ppsIdx, ppsBytes);
+                ppsIdx++;
+            }
+
+            yinfo("VideoSource: total SPS/PPS data {} bytes", _spsPps.size());
         }
 
         // Extract sample offsets
@@ -456,7 +535,53 @@ private:
         }
         _decoder = *decoderRes;
 
+        // For H.264, feed SPS/PPS first and decode to configure the decoder
+        if (_codec == VideoCodec::H264 && !_spsPps.empty()) {
+            yinfo("VideoSource: feeding SPS/PPS to decoder ({} bytes)", _spsPps.size());
+            if (auto res = _decoder->feed(std::span<const uint8_t>(_spsPps)); !res) {
+                return Err<void>("Failed to feed SPS/PPS", res);
+            }
+            // Call getFrame to process SPS/PPS - won't return a frame but configures decoder
+            auto frameRes = _decoder->getFrame();
+            if (frameRes) {
+                ytrace("VideoSource: SPS/PPS decoded (frame={})", (*frameRes).has_value());
+            }
+        }
+
         return Ok();
+    }
+
+    // Convert MP4 length-prefixed NAL to Annex B format
+    std::vector<uint8_t> convertToAnnexB(std::span<const uint8_t> mp4Data) {
+        std::vector<uint8_t> annexB;
+        annexB.reserve(mp4Data.size() + 64);  // Some extra space for start codes
+
+        size_t pos = 0;
+        while (pos + 4 <= mp4Data.size()) {
+            // Read 4-byte NAL length (big-endian)
+            uint32_t nalLen = (static_cast<uint32_t>(mp4Data[pos]) << 24) |
+                             (static_cast<uint32_t>(mp4Data[pos + 1]) << 16) |
+                             (static_cast<uint32_t>(mp4Data[pos + 2]) << 8) |
+                             static_cast<uint32_t>(mp4Data[pos + 3]);
+            pos += 4;
+
+            if (pos + nalLen > mp4Data.size()) {
+                ywarn("VideoSource: NAL length {} extends beyond data", nalLen);
+                break;
+            }
+
+            // Add Annex B start code
+            annexB.push_back(0x00);
+            annexB.push_back(0x00);
+            annexB.push_back(0x00);
+            annexB.push_back(0x01);
+
+            // Add NAL data
+            annexB.insert(annexB.end(), mp4Data.begin() + pos, mp4Data.begin() + pos + nalLen);
+            pos += nalLen;
+        }
+
+        return annexB;
     }
 
     std::vector<uint8_t> _data;
@@ -467,10 +592,14 @@ private:
     VideoCodec _codec = VideoCodec::Unknown;
     bool _isRawBitstream = false;
     bool _fedAllData = false;
+    int _videoTrack = -1;
 
     std::vector<Sample> _samples;
     size_t _currentSample = 0;
     Decoder::Ptr _decoder;
+    
+    // H.264 SPS/PPS data in Annex B format
+    std::vector<uint8_t> _spsPps;
 };
 
 Result<VideoSource::Ptr> VideoSource::create() {

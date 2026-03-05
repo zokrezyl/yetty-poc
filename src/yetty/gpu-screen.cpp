@@ -4095,33 +4095,55 @@ bool GPUScreenImpl::handleCardOSCSequence(const std::string &sequence,
   }
 
   case OscCommandType::Update: {
-    // Find card by id or name
+    // Find card by id, name, or type
+    yinfo("GPUScreen::Update: target.id='{}' target.card='{}' payload.size={}",
+          cmd.target.id, cmd.target.card, cmd.payload.size());
     Card* card = nullptr;
     if (!cmd.target.id.empty()) {
       try {
         uint32_t slotIndex = static_cast<uint32_t>(std::stoul(cmd.target.id));
         card = getCardBySlotIndex(slotIndex);
+        yinfo("GPUScreen::Update: found card by slotIndex={}", slotIndex);
       } catch (...) {
         // Try as name
         card = getCardByName(cmd.target.id);
+        if (card) yinfo("GPUScreen::Update: found card by name='{}'", cmd.target.id);
       }
     }
     if (!card && !cmd.target.card.empty()) {
-      // --card can also be a name
+      // --card can be a name or a type
       card = getCardByName(cmd.target.card);
+      if (card) {
+        yinfo("GPUScreen::Update: found card by name='{}'", cmd.target.card);
+      } else {
+        // Try by type - find first active card of this type
+        yinfo("GPUScreen::Update: searching {} active cards by type='{}'", _cards.size(), cmd.target.card);
+        for (const auto& [slotIndex, c] : _cards) {
+          yinfo("GPUScreen::Update: checking card slot={} type='{}'", slotIndex, c->typeName());
+          if (c->typeName() == cmd.target.card) {
+            card = c.get();
+            yinfo("GPUScreen::Update: found card by type='{}' at slot={}", cmd.target.card, slotIndex);
+            break;
+          }
+        }
+      }
     }
     if (!card) {
+      yerror("GPUScreen::Update: card not found");
       if (response)
         *response = OscResponse::error("update: card not found");
       return false;
     }
 
     // Call the card's update method with args and payload
+    yinfo("GPUScreen::Update: calling card->update() with payload.size={}", cmd.payload.size());
     if (auto res = card->update(cmd.cardArgs, cmd.payload); !res) {
+      yerror("GPUScreen::Update: card->update() failed: {}", error_msg(res));
       if (response)
         *response = OscResponse::error("update failed: " + error_msg(res));
       return false;
     }
+    yinfo("GPUScreen::Update: card->update() succeeded");
     return true;
   }
 
