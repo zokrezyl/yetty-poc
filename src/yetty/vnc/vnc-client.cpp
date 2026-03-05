@@ -8,14 +8,6 @@
 #ifdef __EMSCRIPTEN__
 #include <emscripten/websocket.h>
 #include <emscripten/emscripten.h>
-#else
-#include <arpa/inet.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <netdb.h>
-#include <unistd.h>
-#include <fcntl.h>
 #endif
 
 namespace yetty::vnc {
