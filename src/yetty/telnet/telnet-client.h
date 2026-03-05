@@ -9,6 +9,10 @@
 #include <functional>
 #include <cstdint>
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten/websocket.h>
+#endif
+
 namespace yetty::telnet {
 
 /**
@@ -27,6 +31,11 @@ namespace yetty::telnet {
  * 1. Termux runs: busybox telnetd -l /bin/bash -p 8023
  * 2. Yetty connects to localhost:8023
  * 3. Full PTY via telnet protocol over localhost TCP
+ *
+ * Usage for WebAssembly:
+ * 1. Run telnetd on host
+ * 2. Run WebSocket proxy: ./tools/telnet-websocket.sh
+ * 3. Browser connects via WebSocket
  */
 class TelnetClient : public base::EventListener {
 public:
@@ -35,14 +44,15 @@ public:
     // Callbacks
     using DataCallback = std::function<void(const char* data, size_t len)>;
     using DisconnectCallback = std::function<void()>;
+    using ConnectCallback = std::function<void()>;
 
     TelnetClient();
     ~TelnetClient() override;
 
     /**
      * Connect to telnet server
-     * @param host Hostname or IP (usually "127.0.0.1" for Android local)
-     * @param port Port number (Termux telnetd default: 8023)
+     * @param host Hostname, IP, or WebSocket URL (ws://...)
+     * @param port Port number (ignored if host is WebSocket URL)
      */
     Result<void> connect(const std::string& host, uint16_t port);
 
@@ -81,8 +91,29 @@ public:
      */
     void setDisconnectCallback(DisconnectCallback cb) { _disconnectCallback = std::move(cb); }
 
+    /**
+     * Set callback for connection established
+     */
+    void setConnectCallback(ConnectCallback cb) { _connectCallback = std::move(cb); }
+
     // EventListener interface
     Result<bool> onEvent(const base::Event& event) override;
+
+#ifdef __EMSCRIPTEN__
+    // WebSocket callbacks need access to internals
+    void onWebSocketData(const uint8_t* data, size_t len);
+    void onWebSocketConnected();  // Called when WS opens
+    void onWebSocketDisconnected();  // Called when WS closes
+
+    // Public for WebSocket callbacks
+    bool _wsConnected = false;
+    bool _wantsReconnect = false;
+    std::string _wsUrl;  // For reconnection
+
+    // Reconnection support
+    void setReconnectParams(const std::string& url) { _wsUrl = url; }
+    Result<void> reconnect();
+#endif
 
 private:
     // Telnet protocol state machine
@@ -118,6 +149,10 @@ private:
     bool _connecting = false;
     base::PollId _pollId = -1;
 
+#ifdef __EMSCRIPTEN__
+    EMSCRIPTEN_WEBSOCKET_T _wsSocket = 0;
+#endif
+
     // Protocol state
     State _state = State::DATA;
     std::vector<uint8_t> _subnegBuffer;  // Subnegotiation accumulator
@@ -144,6 +179,7 @@ private:
     // Callbacks
     DataCallback _dataCallback;
     DisconnectCallback _disconnectCallback;
+    ConnectCallback _connectCallback;
 };
 
 } // namespace yetty::telnet

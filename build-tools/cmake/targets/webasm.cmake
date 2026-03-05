@@ -61,6 +61,7 @@ target_link_options(yetty PRIVATE
     -sALLOW_MEMORY_GROWTH
     -sWASM_BIGINT
     -sFILESYSTEM=1
+    -lwebsocket.js
     "--preload-file=${CMAKE_BINARY_DIR}/assets@/assets"
     "--preload-file=${CMAKE_BINARY_DIR}/demo@/demo"
     "--preload-file=${CMAKE_BINARY_DIR}/src@/src"

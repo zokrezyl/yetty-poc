@@ -132,7 +132,7 @@ suite protocol_tests = [] {
         KeyEvent evt;
         evt.keycode = 65;  // 'A'
         evt.scancode = 30;
-        evt.mods = MOD_SHIFT | MOD_CTRL;
+        evt.mods = VNC_MOD_SHIFT | VNC_MOD_CTRL;
 
         std::vector<uint8_t> buf(sizeof(evt));
         std::memcpy(buf.data(), &evt, sizeof(evt));
@@ -142,7 +142,7 @@ suite protocol_tests = [] {
 
         expect(parsed.keycode == 65_i);
         expect(parsed.scancode == 30_i);
-        expect(parsed.mods == (MOD_SHIFT | MOD_CTRL));
+        expect(parsed.mods == (VNC_MOD_SHIFT | VNC_MOD_CTRL));
     };
 
     "tiles_x calculation"_test = [] {
@@ -235,15 +235,15 @@ suite protocol_tests = [] {
     };
 
     "modifier flags"_test = [] {
-        expect(MOD_SHIFT == 1_i);
-        expect(MOD_CTRL == 2_i);
-        expect(MOD_ALT == 4_i);
-        expect(MOD_SUPER == 8_i);
+        expect(VNC_MOD_SHIFT == 1_i);
+        expect(VNC_MOD_CTRL == 2_i);
+        expect(VNC_MOD_ALT == 4_i);
+        expect(VNC_MOD_SUPER == 8_i);
 
         // Test combinations
-        uint8_t mods = MOD_SHIFT | MOD_CTRL;
-        expect((mods & MOD_SHIFT) != 0_i);
-        expect((mods & MOD_CTRL) != 0_i);
-        expect((mods & MOD_ALT) == 0_i);
+        uint8_t mods = VNC_MOD_SHIFT | VNC_MOD_CTRL;
+        expect((mods & VNC_MOD_SHIFT) != 0_i);
+        expect((mods & VNC_MOD_CTRL) != 0_i);
+        expect((mods & VNC_MOD_ALT) == 0_i);
     };
 };

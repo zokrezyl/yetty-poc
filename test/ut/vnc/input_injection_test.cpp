@@ -202,7 +202,7 @@ suite input_injection_tests = [] {
     "key down injection"_test = [] {
         MockInputSender sender;
 
-        sender.sendKeyDown(65, 30, MOD_SHIFT);
+        sender.sendKeyDown(65, 30, VNC_MOD_SHIFT);
 
         auto& packet = sender.sentPackets[0];
         auto hdr = parseHeader(packet);
@@ -212,7 +212,7 @@ suite input_injection_tests = [] {
         std::memcpy(&evt, packet.data() + sizeof(InputHeader), sizeof(evt));
         expect(evt.keycode == 65_i);
         expect(evt.scancode == 30_i);
-        expect(evt.mods == MOD_SHIFT);
+        expect(evt.mods == VNC_MOD_SHIFT);
     };
 
     "key up injection"_test = [] {
@@ -291,9 +291,9 @@ suite input_injection_tests = [] {
         MockInputSender sender;
 
         // Ctrl+C sequence
-        sender.sendKeyDown(0x11, 29, MOD_CTRL);  // Ctrl down
-        sender.sendKeyDown(67, 46, MOD_CTRL);    // C down with Ctrl
-        sender.sendKeyUp(67, 46, MOD_CTRL);      // C up
+        sender.sendKeyDown(0x11, 29, VNC_MOD_CTRL);  // Ctrl down
+        sender.sendKeyDown(67, 46, VNC_MOD_CTRL);    // C down with Ctrl
+        sender.sendKeyUp(67, 46, VNC_MOD_CTRL);      // C up
         sender.sendKeyUp(0x11, 29, 0);           // Ctrl up
 
         expect(sender.sentPackets.size() == 4_i);
@@ -314,14 +314,14 @@ suite input_injection_tests = [] {
     "all modifier combinations"_test = [] {
         MockInputSender sender;
 
-        uint8_t allMods = MOD_SHIFT | MOD_CTRL | MOD_ALT | MOD_SUPER;
+        uint8_t allMods = VNC_MOD_SHIFT | VNC_MOD_CTRL | VNC_MOD_ALT | VNC_MOD_SUPER;
         sender.sendKeyDown(65, 30, allMods);
 
         KeyEvent evt;
         std::memcpy(&evt, sender.sentPackets[0].data() + sizeof(InputHeader), sizeof(evt));
-        expect((evt.mods & MOD_SHIFT) != 0_i);
-        expect((evt.mods & MOD_CTRL) != 0_i);
-        expect((evt.mods & MOD_ALT) != 0_i);
-        expect((evt.mods & MOD_SUPER) != 0_i);
+        expect((evt.mods & VNC_MOD_SHIFT) != 0_i);
+        expect((evt.mods & VNC_MOD_CTRL) != 0_i);
+        expect((evt.mods & VNC_MOD_ALT) != 0_i);
+        expect((evt.mods & VNC_MOD_SUPER) != 0_i);
     };
 };

@@ -1,6 +1,12 @@
 #include "telnet-client.h"
 #include <ytrace/ytrace.hpp>
 
+#include <cstring>
+
+#ifdef __EMSCRIPTEN__
+#include <emscripten/websocket.h>
+#include <emscripten/emscripten.h>
+#else
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -9,12 +15,48 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <cerrno>
-#include <cstring>
+#endif
 
 namespace yetty::telnet {
 
 using yetty::Ok;
 using yetty::Err;
+
+#ifdef __EMSCRIPTEN__
+// WebSocket callbacks for Emscripten
+static EM_BOOL onWsOpen(int eventType, const EmscriptenWebSocketOpenEvent* wsEvent, void* userData) {
+    TelnetClient* client = static_cast<TelnetClient*>(userData);
+    client->onWebSocketConnected();
+    return EM_TRUE;
+}
+
+static EM_BOOL onWsError(int eventType, const EmscriptenWebSocketErrorEvent* wsEvent, void* userData) {
+    TelnetClient* client = static_cast<TelnetClient*>(userData);
+    yerror("Telnet WebSocket error");
+    client->onWebSocketDisconnected();
+    client->_wantsReconnect = true;
+    return EM_TRUE;
+}
+
+static EM_BOOL onWsClose(int eventType, const EmscriptenWebSocketCloseEvent* wsEvent, void* userData) {
+    TelnetClient* client = static_cast<TelnetClient*>(userData);
+    yinfo("Telnet WebSocket closed: code={} reason={}", wsEvent->code, wsEvent->reason);
+    client->onWebSocketDisconnected();
+    client->_wantsReconnect = true;
+    return EM_TRUE;
+}
+
+static EM_BOOL onWsMessage(int eventType, const EmscriptenWebSocketMessageEvent* wsEvent, void* userData) {
+    TelnetClient* client = static_cast<TelnetClient*>(userData);
+    if (wsEvent->isText) {
+        ywarn("Telnet WebSocket received text message, expected binary");
+        return EM_TRUE;
+    }
+    // Process binary data through telnet protocol
+    client->onWebSocketData(wsEvent->data, wsEvent->numBytes);
+    return EM_TRUE;
+}
+#endif
 
 TelnetClient::TelnetClient() {
     _outputBuffer.reserve(4096);
@@ -30,6 +72,46 @@ Result<void> TelnetClient::connect(const std::string& host, uint16_t port) {
         return Err<void>("Already connected or connecting");
     }
 
+#ifdef __EMSCRIPTEN__
+    // WebSocket connection for Emscripten
+    // host may be either:
+    // - a hostname (legacy): build ws://host:port
+    // - a full WebSocket URL (from web UI): use as-is
+    std::string wsUrl;
+    if (host.find("ws://") == 0 || host.find("wss://") == 0) {
+        // Full URL provided (from YETTY_TELNET env var)
+        wsUrl = host;
+    } else {
+        // Legacy: build URL from host:port
+        wsUrl = "ws://" + host + ":" + std::to_string(port);
+    }
+    _wsUrl = wsUrl;  // Store for reconnection
+    yinfo("Telnet client connecting via WebSocket to {}", wsUrl);
+
+    EmscriptenWebSocketCreateAttributes attrs;
+    emscripten_websocket_init_create_attributes(&attrs);
+    attrs.url = wsUrl.c_str();
+    attrs.protocols = nullptr;
+    attrs.createOnMainThread = EM_TRUE;
+
+    _wsSocket = emscripten_websocket_new(&attrs);
+    if (_wsSocket <= 0) {
+        return Err<void>("Failed to create WebSocket");
+    }
+
+    // Set up callbacks
+    emscripten_websocket_set_onopen_callback(_wsSocket, this, onWsOpen);
+    emscripten_websocket_set_onerror_callback(_wsSocket, this, onWsError);
+    emscripten_websocket_set_onclose_callback(_wsSocket, this, onWsClose);
+    emscripten_websocket_set_onmessage_callback(_wsSocket, this, onWsMessage);
+
+    _connecting = true;
+    _connected = true;  // Consider connected for send operations
+    yinfo("Telnet client: WebSocket created, waiting for connection...");
+    return Ok();
+
+#else
+    // POSIX socket connection
     // Resolve host
     struct addrinfo hints = {}, *result;
     hints.ai_family = AF_INET;
@@ -147,12 +229,21 @@ Result<void> TelnetClient::connect(const std::string& host, uint16_t port) {
 
     yinfo("Telnet: registered poll id={} socket={}", _pollId, _socket);
     return Ok();
+#endif
 }
 
 void TelnetClient::disconnect() {
     _connected = false;
     _connecting = false;
 
+#ifdef __EMSCRIPTEN__
+    if (_wsSocket > 0) {
+        emscripten_websocket_close(_wsSocket, 1000, "disconnect");
+        emscripten_websocket_delete(_wsSocket);
+        _wsSocket = 0;
+    }
+    _wsConnected = false;
+#else
     if (_pollId >= 0) {
         if (auto loopResult = base::EventLoop::instance(); loopResult) {
             auto loop = *loopResult;
@@ -167,6 +258,7 @@ void TelnetClient::disconnect() {
         ::close(_socket);
         _socket = -1;
     }
+#endif
 
     _state = State::DATA;
     _subnegBuffer.clear();
@@ -183,7 +275,11 @@ void TelnetClient::disconnect() {
 }
 
 void TelnetClient::send(const char* data, size_t len) {
+#ifdef __EMSCRIPTEN__
+    if (!_connected || !_wsConnected || _wsSocket <= 0) return;
+#else
     if (!_connected || _socket < 0) return;
+#endif
 
     // Escape IAC bytes in data (IAC -> IAC IAC)
     for (size_t i = 0; i < len; i++) {
@@ -202,9 +298,11 @@ void TelnetClient::sendWindowSize(uint16_t cols, uint16_t rows) {
     _rows = rows;
 
     if (!_nawsEnabled) {
+        yinfo("Telnet: sendWindowSize skipped, NAWS not enabled");
         return;  // Server hasn't agreed to NAWS yet
     }
 
+    yinfo("Telnet: sendWindowSize {}x{}, queuing subnegotiation", cols, rows);
     // NAWS: IAC SB NAWS <width-hi> <width-lo> <height-hi> <height-lo> IAC SE
     uint8_t naws[4] = {
         static_cast<uint8_t>((cols >> 8) & 0xFF),
@@ -252,7 +350,35 @@ void TelnetClient::sendTerminalType() {
 }
 
 void TelnetClient::drainSendQueue() {
-    if (_sendQueue.empty() || _socket < 0) return;
+    if (_sendQueue.empty()) return;
+
+#ifdef __EMSCRIPTEN__
+    if (_wsSocket <= 0 || !_wsConnected) {
+        ytrace("Telnet drainSendQueue: not ready (socket={} connected={})", _wsSocket, _wsConnected);
+        return;
+    }
+
+    size_t toSend = _sendQueue.size() - _sendOffset;
+    ytrace("Telnet drainSendQueue: sending {} bytes via WebSocket", toSend);
+
+    // Send all data via WebSocket
+    EMSCRIPTEN_RESULT result = emscripten_websocket_send_binary(
+        _wsSocket,
+        _sendQueue.data() + _sendOffset,
+        toSend
+    );
+
+    if (result != EMSCRIPTEN_RESULT_SUCCESS) {
+        yerror("Telnet: WebSocket send error: {}", result);
+        return;
+    }
+
+    ytrace("Telnet drainSendQueue: sent successfully");
+    // All sent
+    _sendQueue.clear();
+    _sendOffset = 0;
+#else
+    if (_socket < 0) return;
 
     while (_sendOffset < _sendQueue.size()) {
         ssize_t sent = ::send(_socket,
@@ -276,8 +402,10 @@ void TelnetClient::drainSendQueue() {
     _sendQueue.clear();
     _sendOffset = 0;
     updatePollEvents();
+#endif
 }
 
+#ifndef __EMSCRIPTEN__
 void TelnetClient::updatePollEvents() {
     if (_pollId < 0) return;
 
@@ -361,6 +489,12 @@ void TelnetClient::processReceived() {
         _dataCallback(_outputBuffer.data(), _outputBuffer.size());
     }
 }
+#else
+// Emscripten stubs - socket-based methods not used
+void TelnetClient::updatePollEvents() {}
+Result<bool> TelnetClient::onEvent(const base::Event&) { return Ok(false); }
+void TelnetClient::processReceived() {}
+#endif
 
 void TelnetClient::processByte(uint8_t byte) {
     switch (_state) {
@@ -566,5 +700,93 @@ void TelnetClient::handleSubnegotiation() {
             break;
     }
 }
+
+#ifdef __EMSCRIPTEN__
+void TelnetClient::onWebSocketData(const uint8_t* data, size_t len) {
+    ytrace("Telnet: received {} bytes via WebSocket", len);
+
+    // If we're receiving data, we're connected (handles race where message arrives before onopen)
+    if (!_wsConnected) {
+        yinfo("Telnet: received data before onopen, setting connected");
+        _wsConnected = true;
+        _connected = true;
+        _connecting = false;
+    }
+
+    _outputBuffer.clear();
+
+    // Process through telnet state machine
+    for (size_t i = 0; i < len; i++) {
+        processByte(data[i]);
+    }
+
+    // After processing commands, drain any queued responses
+    drainSendQueue();
+
+    // Deliver decoded data to terminal
+    if (!_outputBuffer.empty() && _dataCallback) {
+        ytrace("Telnet: delivering {} bytes", _outputBuffer.size());
+        _dataCallback(_outputBuffer.data(), _outputBuffer.size());
+    }
+}
+
+void TelnetClient::onWebSocketConnected() {
+    yinfo("Telnet WebSocket connected");
+    _wsConnected = true;
+    _connected = true;
+    _connecting = false;
+    _wantsReconnect = false;
+    // Drain any queued data (e.g., NAWS, responses)
+    drainSendQueue();
+    if (_connectCallback) {
+        _connectCallback();
+    }
+}
+
+void TelnetClient::onWebSocketDisconnected() {
+    _wsConnected = false;
+    _connected = false;
+    if (_disconnectCallback) {
+        _disconnectCallback();
+    }
+}
+
+Result<void> TelnetClient::reconnect() {
+    if (_wsUrl.empty()) {
+        return Err<void>("No WebSocket URL set for reconnection");
+    }
+
+    // Close existing socket if any
+    if (_wsSocket > 0) {
+        emscripten_websocket_delete(_wsSocket);
+        _wsSocket = 0;
+    }
+    _wsConnected = false;
+    _wantsReconnect = false;
+
+    yinfo("Telnet: reconnecting to {}", _wsUrl);
+
+    EmscriptenWebSocketCreateAttributes attrs;
+    emscripten_websocket_init_create_attributes(&attrs);
+    attrs.url = _wsUrl.c_str();
+    attrs.protocols = nullptr;
+    attrs.createOnMainThread = EM_TRUE;
+
+    _wsSocket = emscripten_websocket_new(&attrs);
+    if (_wsSocket <= 0) {
+        _wantsReconnect = true;
+        return Err<void>("Failed to create WebSocket for reconnection");
+    }
+
+    emscripten_websocket_set_onopen_callback(_wsSocket, this, onWsOpen);
+    emscripten_websocket_set_onerror_callback(_wsSocket, this, onWsError);
+    emscripten_websocket_set_onclose_callback(_wsSocket, this, onWsClose);
+    emscripten_websocket_set_onmessage_callback(_wsSocket, this, onWsMessage);
+
+    _connecting = true;
+    _connected = true;
+    return Ok();
+}
+#endif
 
 } // namespace yetty::telnet

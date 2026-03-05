@@ -356,14 +356,14 @@ suite socket_integration_tests = [] {
         expect(client.connect(15903) == true);
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
-        expect(client.sendKeyDown(65, 30, MOD_SHIFT) == true);
+        expect(client.sendKeyDown(65, 30, VNC_MOD_SHIFT) == true);
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
         serverThread.join();
 
         expect(rKeycode == 65_i);
         expect(rScancode == 30_i);
-        expect(rMods == MOD_SHIFT);
+        expect(rMods == VNC_MOD_SHIFT);
     };
 
     "client sends key up to server"_test = [] {
@@ -479,8 +479,8 @@ suite socket_integration_tests = [] {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
         // Type "Hi" - H down, H up, I down, I up
-        client.sendKeyDown(72, 35, MOD_SHIFT);  // H (shift+h)
-        client.sendKeyUp(72, 35, MOD_SHIFT);
+        client.sendKeyDown(72, 35, VNC_MOD_SHIFT);  // H (shift+h)
+        client.sendKeyUp(72, 35, VNC_MOD_SHIFT);
         client.sendKeyDown(73, 23, 0);  // i
         client.sendKeyUp(73, 23, 0);
 

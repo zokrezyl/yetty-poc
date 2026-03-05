@@ -90,10 +90,13 @@ add_subdirectory(yplot)
 add_subdirectory(msdf-wgsl)
 add_subdirectory(shaders)
 
-# VNC is desktop-only (Linux, macOS, Windows)
-if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
+# VNC is available on all platforms except Android
+# - Desktop (Linux, macOS, Windows): uses POSIX/Winsock sockets
+# - WebAssembly: uses Emscripten WebSocket API
+if(NOT YETTY_ANDROID)
     add_subdirectory(vnc)
 endif()
 
-# Telnet is available on all platforms (primarily for Android local connections)
+# Telnet is available on Unix platforms (primarily for Android local connections)
+# Windows: telnet/CMakeLists.txt creates an INTERFACE stub (uses ConPTY instead)
 add_subdirectory(telnet)

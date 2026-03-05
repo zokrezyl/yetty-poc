@@ -50,19 +50,287 @@
             color: #666;
             margin-top: 10px;
         }
+        /* Mode selection dialog */
+        #mode-dialog {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: #1a1a2e;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 24px;
+            color: #eee;
+            font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+            z-index: 100;
+            min-width: 380px;
+        }
+        #mode-dialog h2 {
+            margin-bottom: 16px;
+            color: #e94560;
+            font-size: 1.2em;
+        }
+        #mode-dialog .mode-option {
+            display: block;
+            background: #252540;
+            border: 1px solid #444;
+            border-radius: 4px;
+            padding: 12px 16px;
+            margin-bottom: 10px;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-align: left;
+        }
+        #mode-dialog .mode-option:hover {
+            background: #333355;
+            border-color: #e94560;
+        }
+        #mode-dialog .mode-option .mode-title {
+            font-weight: bold;
+            color: #fff;
+            margin-bottom: 4px;
+        }
+        #mode-dialog .mode-option .mode-desc {
+            font-size: 0.85em;
+            color: #888;
+        }
+        #mode-dialog .ws-config {
+            margin-top: 16px;
+            padding-top: 16px;
+            border-top: 1px solid #333;
+            display: none;
+        }
+        #mode-dialog .ws-config.visible {
+            display: block;
+        }
+        #mode-dialog label {
+            display: block;
+            margin-bottom: 6px;
+            color: #aaa;
+            font-size: 0.9em;
+        }
+        #mode-dialog input[type="text"] {
+            width: 100%;
+            padding: 8px 12px;
+            background: #0f0f23;
+            border: 1px solid #444;
+            border-radius: 4px;
+            color: #eee;
+            font-family: inherit;
+            font-size: 0.95em;
+            margin-bottom: 12px;
+        }
+        #mode-dialog input[type="text"]:focus {
+            outline: none;
+            border-color: #e94560;
+        }
+        #mode-dialog .connect-btn {
+            background: #e94560;
+            border: none;
+            border-radius: 4px;
+            padding: 10px 20px;
+            color: #fff;
+            font-family: inherit;
+            font-size: 1em;
+            cursor: pointer;
+            width: 100%;
+            transition: background 0.2s;
+        }
+        #mode-dialog .connect-btn:hover {
+            background: #ff5577;
+        }
+        #mode-dialog .connect-btn:disabled {
+            background: #555;
+            cursor: not-allowed;
+        }
+        #mode-dialog .note {
+            font-size: 0.8em;
+            color: #666;
+            margin-top: 8px;
+        }
+        #mode-dialog .options-row {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin-top: 12px;
+            padding: 8px 0;
+            border-top: 1px solid #333;
+        }
+        #mode-dialog .options-row label {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.85em;
+            color: #888;
+            cursor: pointer;
+        }
+        #mode-dialog .options-row label:hover {
+            color: #aaa;
+        }
+        #mode-dialog .options-row input[type="checkbox"] {
+            width: 16px;
+            height: 16px;
+            cursor: pointer;
+        }
+        #mode-dialog .help-section {
+            margin-top: 16px;
+            padding-top: 12px;
+            border-top: 1px solid #333;
+            font-size: 0.8em;
+            color: #666;
+        }
+        #mode-dialog .help-section summary {
+            cursor: pointer;
+            color: #888;
+            margin-bottom: 8px;
+        }
+        #mode-dialog .help-section summary:hover {
+            color: #aaa;
+        }
+        #mode-dialog .help-section code {
+            background: #0f0f23;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: inherit;
+            color: #e94560;
+        }
+        #mode-dialog .help-section pre {
+            background: #0f0f23;
+            padding: 8px 12px;
+            border-radius: 4px;
+            overflow-x: auto;
+            margin: 6px 0;
+            color: #aaa;
+        }
     </style>
 </head>
 <body>
     <div id="canvas-container">
         <canvas id="canvas" width="1024" height="768" tabindex="0"></canvas>
-        <div id="loading">
+        <div id="loading" style="display: none;">
             <div class="spinner"></div>
             <div>Loading WebGPU...</div>
             <div id="status"></div>
         </div>
+        <!-- Mode selection dialog -->
+        <div id="mode-dialog">
+            <h2>🖥️ yetty - WebGPU Terminal</h2>
+            <button class="mode-option" data-mode="jslinux">
+                <div class="mode-title">🐧 JSLinux VM</div>
+                <div class="mode-desc">Run Alpine Linux in-browser (no server required)</div>
+            </button>
+            <button class="mode-option" data-mode="vnc">
+                <div class="mode-title">🖼️ VNC Client</div>
+                <div class="mode-desc">Connect to yetty VNC server via WebSocket proxy</div>
+            </button>
+            <button class="mode-option" data-mode="telnet">
+                <div class="mode-title">📡 Telnet</div>
+                <div class="mode-desc">Connect to telnet daemon via WebSocket proxy</div>
+            </button>
+            <div id="ws-config" class="ws-config">
+                <label for="ws-url">WebSocket URL:</label>
+                <input type="text" id="ws-url" placeholder="ws://localhost:5901">
+                <button id="connect-btn" class="connect-btn">Connect</button>
+                <div class="note" id="ws-note"></div>
+            </div>
+            <div class="options-row">
+                <label>
+                    <input type="checkbox" id="trace-logging">
+                    Enable trace logging (slower)
+                </label>
+            </div>
+            <details class="help-section">
+                <summary>ℹ️ Setup Instructions</summary>
+                <div id="help-content">
+                    <p><strong>VNC Mode:</strong></p>
+                    <pre># Start yetty VNC server
+./yetty --vnc-server
+
+# Start WebSocket proxy (in another terminal)
+./tools/vnc-websocket.sh 127.0.0.1:5900 5901
+
+# Connect with: ws://localhost:5901</pre>
+                    <p><strong>Telnet Mode:</strong></p>
+                    <pre># Start telnet daemon
+busybox telnetd -p 8023 -l /bin/bash
+
+# Start WebSocket proxy
+./tools/telnet-websocket.sh 127.0.0.1:8023 8024
+
+# Connect with: ws://localhost:8024</pre>
+                    <p><strong>URL Parameters:</strong></p>
+                    <pre>?mode=vnc&wsurl=ws://host:port
+?mode=telnet&wsurl=ws://host:port
+?mode=jslinux</pre>
+                </div>
+            </details>
+        </div>
     </div>
 
     <script>
+        // Selected mode and config
+        let selectedMode = null;
+        let wsUrl = '';
+
+        // Mode selection handling
+        function setupModeSelection() {
+            const modeDialog = document.getElementById('mode-dialog');
+            const wsConfig = document.getElementById('ws-config');
+            const wsUrlInput = document.getElementById('ws-url');
+            const wsNote = document.getElementById('ws-note');
+            const connectBtn = document.getElementById('connect-btn');
+            const modeOptions = document.querySelectorAll('.mode-option');
+
+            modeOptions.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const mode = btn.dataset.mode;
+
+                    if (mode === 'jslinux') {
+                        // Direct launch for jslinux
+                        selectedMode = 'jslinux';
+                        modeDialog.style.display = 'none';
+                        launchYetty();
+                    } else {
+                        // Show WebSocket config for VNC/telnet
+                        selectedMode = mode;
+                        wsConfig.classList.add('visible');
+
+                        // Highlight selected mode
+                        modeOptions.forEach(b => b.style.borderColor = '#444');
+                        btn.style.borderColor = '#e94560';
+
+                        // Set default URL and note based on mode
+                        if (mode === 'vnc') {
+                            wsUrlInput.value = wsUrlInput.value || 'ws://localhost:5901';
+                            wsNote.innerHTML = 'Start VNC server: <code>./yetty --vnc-server</code><br>' +
+                                'Start WebSocket proxy: <code>./tools/vnc-websocket.sh</code>';
+                        } else if (mode === 'telnet') {
+                            wsUrlInput.value = wsUrlInput.value || 'ws://localhost:8024';
+                            wsNote.innerHTML = 'Start telnetd: <code>busybox telnetd -p 8023 -l /bin/bash</code><br>' +
+                                'Start WebSocket proxy: <code>./tools/telnet-websocket.sh</code>';
+                        }
+                    }
+                });
+            });
+
+            connectBtn.addEventListener('click', () => {
+                wsUrl = wsUrlInput.value.trim();
+                if (!wsUrl) {
+                    wsUrlInput.style.borderColor = '#e94560';
+                    return;
+                }
+                modeDialog.style.display = 'none';
+                launchYetty();
+            });
+
+            // Enter key to connect
+            wsUrlInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    connectBtn.click();
+                }
+            });
+        }
+
         async function checkWebGPU() {
             const status = document.getElementById('status');
 
@@ -139,14 +407,65 @@
         const urlParams = getUrlParams();
         const vmConfig = urlParams.vmconfig || 'alpine-x86_64.cfg';
 
+        // Check if URL specifies mode directly (for bookmarking)
+        // Examples:
+        //   ?mode=jslinux
+        //   ?mode=vnc&wsurl=ws://localhost:5901
+        //   ?mode=telnet&wsurl=ws://localhost:8024
+        //   ?trace=1  (enable trace logging)
+        if (urlParams.mode) {
+            selectedMode = urlParams.mode;
+            if (urlParams.wsurl) {
+                wsUrl = urlParams.wsurl;
+            }
+        }
+
+        // Set trace checkbox from URL param
+        if (urlParams.trace === '1' || urlParams.trace === 'yes') {
+            document.addEventListener('DOMContentLoaded', () => {
+                const cb = document.getElementById('trace-logging');
+                if (cb) cb.checked = true;
+            });
+        }
+
+        // Build environment variables based on selected mode
+        function buildEnvVars() {
+            const env = {};
+
+            // Check trace logging checkbox
+            const traceCheckbox = document.getElementById('trace-logging');
+            if (traceCheckbox && traceCheckbox.checked) {
+                env.YTRACE_DEFAULT_ON = 'yes';
+            }
+
+            if (selectedMode === 'jslinux') {
+                env.YETTY_VM_CONFIG = vmConfig;
+                env.YETTY_MODE = 'jslinux';
+            } else if (selectedMode === 'vnc') {
+                env.YETTY_MODE = 'vnc';
+                env.YETTY_VNC_CLIENT = wsUrl;
+            } else if (selectedMode === 'telnet') {
+                env.YETTY_MODE = 'telnet';
+                env.YETTY_TELNET = wsUrl;
+            }
+
+            return env;
+        }
+
         var Module = {
             canvas: document.getElementById('canvas'),
-            ENV: {
-                YETTY_VM_CONFIG: vmConfig,
-                YTRACE_DEFAULT_ON: 'yes'
-            },
             print: function(text) { console.log('[yetty]', text); },
             printErr: function(text) { console.error('[yetty]', text); },
+            // preRun runs AFTER yetty.js loads but BEFORE main() executes
+            // This is where we inject environment variables into Emscripten's ENV
+            preRun: [function() {
+                const envVars = buildEnvVars();
+                console.log('[yetty] preRun: Setting ENV vars:', envVars);
+                // Emscripten's ENV is a global variable in yetty.js, not Module.ENV
+                Object.keys(envVars).forEach(key => {
+                    ENV[key] = envVars[key];
+                });
+            }],
             onRuntimeInitialized: function() {
                 const status = document.getElementById('status');
                 const loading = document.getElementById('loading');
@@ -202,13 +521,30 @@
             }
         }
 
-        async function init() {
+        async function launchYetty() {
+            const loading = document.getElementById('loading');
+            loading.style.display = 'block';
+
+            console.log('[yetty] Launching with mode:', selectedMode, 'wsUrl:', wsUrl);
+
             resizeCanvas();
             const hasWebGPU = await checkWebGPU();
 
             if (hasWebGPU) {
                 await initYetty();
             }
+        }
+
+        async function init() {
+            resizeCanvas();
+            setupModeSelection();
+
+            // If mode was specified in URL, launch directly
+            if (selectedMode) {
+                document.getElementById('mode-dialog').style.display = 'none';
+                await launchYetty();
+            }
+            // Otherwise, mode dialog stays visible for user selection
         }
 
         init();

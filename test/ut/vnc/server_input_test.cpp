@@ -218,13 +218,13 @@ suite server_input_tests = [] {
     "parse key down"_test = [] {
         MockServerInputParser parser;
 
-        auto packet = buildKeyPacket(InputType::KEY_DOWN, 65, 30, MOD_SHIFT);
+        auto packet = buildKeyPacket(InputType::KEY_DOWN, 65, 30, VNC_MOD_SHIFT);
         parser.feedData(packet.data(), packet.size());
 
         expect(parser.keys.size() == 1_i);
         expect(parser.keys[0].keycode == 65_i);
         expect(parser.keys[0].scancode == 30_i);
-        expect(parser.keys[0].mods == MOD_SHIFT);
+        expect(parser.keys[0].mods == VNC_MOD_SHIFT);
         expect(parser.keys[0].down == true);
     };
 
@@ -351,9 +351,9 @@ suite server_input_tests = [] {
         MockServerInputParser parser;
 
         // Ctrl+C: ctrl down, c down, c up, ctrl up
-        auto p1 = buildKeyPacket(InputType::KEY_DOWN, 0x11, 29, MOD_CTRL);
-        auto p2 = buildKeyPacket(InputType::KEY_DOWN, 67, 46, MOD_CTRL);
-        auto p3 = buildKeyPacket(InputType::KEY_UP, 67, 46, MOD_CTRL);
+        auto p1 = buildKeyPacket(InputType::KEY_DOWN, 0x11, 29, VNC_MOD_CTRL);
+        auto p2 = buildKeyPacket(InputType::KEY_DOWN, 67, 46, VNC_MOD_CTRL);
+        auto p3 = buildKeyPacket(InputType::KEY_UP, 67, 46, VNC_MOD_CTRL);
         auto p4 = buildKeyPacket(InputType::KEY_UP, 0x11, 29, 0);
 
         std::vector<uint8_t> combined;
@@ -537,13 +537,13 @@ suite callback_dispatch_tests = [] {
         KeyEvent evt = {};
         evt.keycode = 65;
         evt.scancode = 30;
-        evt.mods = MOD_SHIFT | MOD_CTRL;
+        evt.mods = VNC_MOD_SHIFT | VNC_MOD_CTRL;
 
         dispatcher.dispatchInput(hdr, reinterpret_cast<uint8_t*>(&evt));
 
         expect(rKeycode == 65_i);
         expect(rScancode == 30_i);
-        expect(rMods == (MOD_SHIFT | MOD_CTRL));
+        expect(rMods == (VNC_MOD_SHIFT | VNC_MOD_CTRL));
     };
 
     "dispatch text input invokes callback"_test = [] {
