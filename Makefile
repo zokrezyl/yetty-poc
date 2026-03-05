@@ -308,7 +308,6 @@ build-webasm-dawn-debug: ## Build WebAssembly debug
 	@if [ ! -f "$(BUILD_DIR_WEBASM_DAWN_DEBUG)/build.ninja" ]; then $(MAKE) config-webasm-dawn-debug; fi
 	nix develop .#web --command bash -c 'cmake --build $(BUILD_DIR_WEBASM_DAWN_DEBUG) --target yetty $(CMAKE_PARALLEL)'
 	@cp build-tools/web/index.html build-tools/web/serve.py $(BUILD_DIR_WEBASM_DAWN_DEBUG)/
-	@bash build-tools/jslinux/alpine/build-vfsync.sh $(BUILD_DIR_WEBASM_DAWN_DEBUG)
 
 .PHONY: build-webasm-dawn-release
 build-webasm-dawn-release: ## Build WebAssembly release (CDB generation handled by CMake)
@@ -316,7 +315,6 @@ build-webasm-dawn-release: ## Build WebAssembly release (CDB generation handled 
 	nix develop .#web --command bash -c 'cmake --build $(BUILD_DIR_WEBASM_DAWN_RELEASE) --target yetty $(CMAKE_PARALLEL)'
 	@cp build-tools/web/index.html build-tools/web/serve.py $(BUILD_DIR_WEBASM_DAWN_RELEASE)/
 	@$(MAKE) build-vm-tools BUILD_DIR=$(BUILD_DIR_WEBASM_DAWN_RELEASE)
-	@bash build-tools/jslinux/alpine/build-vfsync.sh $(BUILD_DIR_WEBASM_DAWN_RELEASE)
 	@$(MAKE) verify-webasm BUILD_DIR=$(BUILD_DIR_WEBASM_DAWN_RELEASE)
 
 .PHONY: verify-webasm
@@ -325,8 +323,7 @@ verify-webasm: ## Post-build verification that all webasm artifacts are present
 	@FAIL=0; \
 	for f in yetty.js yetty.wasm yetty.data index.html serve.py \
 	         jslinux/vm-bridge.html jslinux/term-bridge.js \
-	         vm-tools/yecho vm-tools/ycat vm-tools/ybrowser \
-	         vfsync/u/os/yetty-alpine/head; do \
+	         vm-tools/yecho vm-tools/ycat vm-tools/ybrowser; do \
 		if [ ! -e "$(BUILD_DIR)/$$f" ]; then \
 			echo "MISSING: $$f"; \
 			FAIL=1; \
