@@ -77,7 +77,7 @@ set(YETTY_RENDERER_INCLUDES
 add_subdirectory(base)
 add_subdirectory(font)
 add_subdirectory(yecho)
-# ycat requires OpenSSL for HTTP fetching - skip on WebAssembly where janbar/openssl-cmake fails
+# ycat requires OpenSSL via cpr, skip for WebAssembly
 if(NOT EMSCRIPTEN)
     add_subdirectory(ycat)
 endif()
@@ -93,8 +93,8 @@ add_subdirectory(yplot)
 add_subdirectory(msdf-wgsl)
 add_subdirectory(shaders)
 
-# VNC is desktop-only (Linux, macOS, Windows)
-if(NOT EMSCRIPTEN AND NOT YETTY_ANDROID)
+# VNC is available on desktop (Linux, macOS) and WebAssembly
+if(NOT YETTY_ANDROID AND NOT WIN32)
     add_subdirectory(vnc)
 endif()
 

@@ -13,7 +13,7 @@ set -e
 
 BUILD_DIR="${1:-build-webasm-dawn-release}"
 PORT="${2:-8199}"
-TEST_MODE="${3:-full}"  # "full", "jslinux", or "jslinux-local"
+TEST_MODE="${3:-full}"  # "full", "jslinux", "telnet", etc.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 YETTY_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
@@ -22,9 +22,19 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
+# Special case: "telnet" as first arg means telnet mode (no build dir needed)
+if [ "$BUILD_DIR" = "telnet" ]; then
+    TEST_MODE="telnet"
+    TELNET_WS_URL="${2:-ws://localhost:8765}"
+    REMOTE_MODE=1
+    BASE_URL="http://localhost:8080"
+    echo "=============================================="
+    echo "Headless Chrome Test - TELNET MODE"
+    echo "Server: $BASE_URL"
+    echo "WebSocket: $TELNET_WS_URL"
+    echo "=============================================="
 # Check if BUILD_DIR is a URL (remote mode)
-REMOTE_MODE=0
-if [[ "$BUILD_DIR" == http://* ]] || [[ "$BUILD_DIR" == https://* ]]; then
+elif [[ "$BUILD_DIR" == http://* ]] || [[ "$BUILD_DIR" == https://* ]]; then
     REMOTE_MODE=1
     REMOTE_URL="$BUILD_DIR"
     echo "=============================================="
@@ -33,6 +43,7 @@ if [[ "$BUILD_DIR" == http://* ]] || [[ "$BUILD_DIR" == https://* ]]; then
     echo "Test mode: $TEST_MODE"
     echo "=============================================="
 else
+    REMOTE_MODE=0
     echo "=============================================="
     echo "Headless Chrome Test (Software WebGPU) - LOCAL"
     echo "Build directory: $BUILD_DIR"
@@ -200,6 +211,22 @@ elif [ "$TEST_MODE" = "term-size" ]; then
     TEST_URL="${BASE_URL}/jslinux/vm-bridge.html?ptyId=test1&url=yetty-alpine.cfg&cpu=x86_64&cols=${TEST_COLS}&rows=${TEST_ROWS}&mem=256"
     echo "Testing terminal size initialization at: $TEST_URL"
     echo "Expected terminal size: ${TEST_COLS}x${TEST_ROWS}"
+elif [ "$TEST_MODE" = "telnet" ]; then
+    # Test telnet mode via WebSocket proxy
+    # Usage: ./test-chrome-headless.sh telnet [WS_URL]
+    # Requires: telnetd running, websocket proxy running
+    TELNET_WS_URL="${2:-ws://localhost:8765}"
+    # For telnet mode, we use a fixed server at 8080 (user must start it)
+    BASE_URL="http://localhost:8080"
+    TEST_URL="${BASE_URL}/?mode=telnet&wsurl=${TELNET_WS_URL}"
+    echo "Testing telnet mode at: $TEST_URL"
+    echo "WebSocket proxy: $TELNET_WS_URL"
+    echo ""
+    echo "Prerequisites:"
+    echo "  1. Start telnetd: busybox telnetd -F -p 8023 -l /bin/bash"
+    echo "  2. Start proxy:   ./tools/telnet-websocket.sh 127.0.0.1:8023 8765"
+    echo "  3. Start server:  cd build-webasm-dawn-release && python3 serve.py 8080"
+    echo ""
 else
     TEST_URL="${BASE_URL}/"
     echo "Testing full yetty at: $TEST_URL"
@@ -226,6 +253,8 @@ timeout 120 $CHROME \
     --use-webgpu-adapter=swiftshader \
     --enable-features=Vulkan,WebGPU \
     --disable-vulkan-surface \
+    --allow-insecure-localhost \
+    --disable-web-security \
     --v=1 \
     --virtual-time-budget=60000 \
     "$TEST_URL" \

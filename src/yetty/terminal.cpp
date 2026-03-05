@@ -9,6 +9,8 @@
 #if YETTY_WEB
 #include <yetty/platform.h>
 #include <yetty/pty-provider.h>
+#include <yetty/pty-reader.h>
+#include "telnet/telnet-pty-reader.h"
 #else
 #include <yetty/osc-scanner.h>
 #include <yetty/pty-reader.h>
@@ -37,14 +39,18 @@ public:
         _gpuScreen = *screenResult;
 
 #if YETTY_WEB
-        // Webasm: GPUScreen callbacks write to PTYProvider
+        // Webasm: GPUScreen callbacks write to PTYProvider or PtyReader (for telnet)
         _gpuScreen->setOutputCallback([this](const char* data, size_t len) {
-            if (_pty) {
+            if (_ptyReader) {
+                _ptyReader->write(data, len);
+            } else if (_pty) {
                 _pty->write(data, len);
             }
         });
         _gpuScreen->setResizeCallback([this](uint32_t cols, uint32_t rows) {
-            if (_pty) {
+            if (_ptyReader) {
+                _ptyReader->resize(cols, rows);
+            } else if (_pty) {
                 _pty->resize(cols, rows);
             }
         });
@@ -138,6 +144,8 @@ public:
 #if YETTY_WEB
             if (_pty) {
                 _pty->resize(_gpuScreen->getCols(), _gpuScreen->getRows());
+            } else if (_ptyReader) {
+                _ptyReader->resize(_gpuScreen->getCols(), _gpuScreen->getRows());
             }
 #else
             if (_ptyReader) {
@@ -172,6 +180,49 @@ private:
         uint32_t rows = (_gpuScreen && _gpuScreen->getRows() > 0) ? _gpuScreen->getRows() : 24;
 
 #if YETTY_WEB
+        // Check for telnet mode first (works on web via WebSocket)
+        std::string telnetAddress;
+        if (_ctx.config) {
+            auto telnetOpt = _ctx.config->get<std::string>("shell/telnet");
+            if (telnetOpt && !telnetOpt->empty()) {
+                telnetAddress = *telnetOpt;
+            }
+        }
+
+        if (!telnetAddress.empty()) {
+            // Telnet mode: connect to telnet server via WebSocket
+            yinfo("Terminal: using telnet connection to {}", telnetAddress);
+
+            PtyConfig config;
+            config.shell = telnetAddress;  // ws://host:port format
+            config.cols = cols;
+            config.rows = rows;
+
+            auto reader = std::make_shared<telnet::TelnetPtyReader>();
+            if (auto res = reader->init(config); !res) {
+                return Err<void>("Failed to initialize TelnetPtyReader", res);
+            }
+            _ptyReader = reader;
+
+            // Set up data callback
+            _ptyReader->setDataAvailableCallback([this]() {
+                char buf[4096];
+                size_t n = _ptyReader->read(buf, sizeof(buf));
+                if (n > 0 && _gpuScreen) {
+                    processPtyData(buf, n);
+                }
+            });
+
+            _ptyReader->setExitCallback([this](int exitCode) {
+                yinfo("Telnet exited with code {}", exitCode);
+                _running = false;
+            });
+
+            _running = true;
+            yinfo("Terminal started telnet: {} ({}x{})", telnetAddress, cols, rows);
+            return Ok();
+        }
+
         // Webasm: Use Platform::createPTY() which creates WebPTY with JSLinux iframe
         const char* vmConfigEnv = getenv("YETTY_VM_CONFIG");
         std::string vmConfig = vmConfigEnv ? vmConfigEnv : "alpine-x86_64.cfg";
@@ -487,8 +538,10 @@ private:
     }
 
 #if YETTY_WEB
-    // Webasm: PTYProvider (WebPTY)
+    // Webasm: PTYProvider (WebPTY) for JSLinux mode
     std::shared_ptr<PTYProvider> _pty;
+    // For telnet mode on web, we use PtyReader instead
+    PtyReader::Ptr _ptyReader;
 #else
     // Desktop: PtyReader with OSC-aware buffering
     PtyReader::Ptr _ptyReader;
