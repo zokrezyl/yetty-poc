@@ -148,6 +148,30 @@
             color: #666;
             margin-top: 8px;
         }
+        #mode-dialog .options-row {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin-top: 12px;
+            padding: 8px 0;
+            border-top: 1px solid #333;
+        }
+        #mode-dialog .options-row label {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.85em;
+            color: #888;
+            cursor: pointer;
+        }
+        #mode-dialog .options-row label:hover {
+            color: #aaa;
+        }
+        #mode-dialog .options-row input[type="checkbox"] {
+            width: 16px;
+            height: 16px;
+            cursor: pointer;
+        }
         #mode-dialog .help-section {
             margin-top: 16px;
             padding-top: 12px;
@@ -208,6 +232,12 @@
                 <input type="text" id="ws-url" placeholder="ws://localhost:5901">
                 <button id="connect-btn" class="connect-btn">Connect</button>
                 <div class="note" id="ws-note"></div>
+            </div>
+            <div class="options-row">
+                <label>
+                    <input type="checkbox" id="trace-logging">
+                    Enable trace logging (slower)
+                </label>
             </div>
             <details class="help-section">
                 <summary>ℹ️ Setup Instructions</summary>
@@ -382,6 +412,7 @@ busybox telnetd -p 8023 -l /bin/bash
         //   ?mode=jslinux
         //   ?mode=vnc&wsurl=ws://localhost:5901
         //   ?mode=telnet&wsurl=ws://localhost:8024
+        //   ?trace=1  (enable trace logging)
         if (urlParams.mode) {
             selectedMode = urlParams.mode;
             if (urlParams.wsurl) {
@@ -389,11 +420,23 @@ busybox telnetd -p 8023 -l /bin/bash
             }
         }
 
+        // Set trace checkbox from URL param
+        if (urlParams.trace === '1' || urlParams.trace === 'yes') {
+            document.addEventListener('DOMContentLoaded', () => {
+                const cb = document.getElementById('trace-logging');
+                if (cb) cb.checked = true;
+            });
+        }
+
         // Build environment variables based on selected mode
         function buildEnvVars() {
-            const env = {
-                YTRACE_DEFAULT_ON: 'yes'
-            };
+            const env = {};
+
+            // Check trace logging checkbox
+            const traceCheckbox = document.getElementById('trace-logging');
+            if (traceCheckbox && traceCheckbox.checked) {
+                env.YTRACE_DEFAULT_ON = 'yes';
+            }
 
             if (selectedMode === 'jslinux') {
                 env.YETTY_VM_CONFIG = vmConfig;
