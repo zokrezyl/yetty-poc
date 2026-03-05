@@ -77,10 +77,7 @@ set(YETTY_RENDERER_INCLUDES
 add_subdirectory(base)
 add_subdirectory(font)
 add_subdirectory(yecho)
-# ycat requires OpenSSL via cpr, skip for WebAssembly
-if(NOT EMSCRIPTEN)
-    add_subdirectory(ycat)
-endif()
+add_subdirectory(ycat)
 add_subdirectory(ydraw)
 add_subdirectory(diagram)
 add_subdirectory(ygrid)
@@ -93,8 +90,10 @@ add_subdirectory(yplot)
 add_subdirectory(msdf-wgsl)
 add_subdirectory(shaders)
 
-# VNC is available on desktop (Linux, macOS) and WebAssembly
-if(NOT YETTY_ANDROID AND NOT WIN32)
+# VNC is available on all platforms except Android
+# - Desktop (Linux, macOS, Windows): uses POSIX/Winsock sockets
+# - WebAssembly: uses Emscripten WebSocket API
+if(NOT YETTY_ANDROID)
     add_subdirectory(vnc)
 endif()
 
