@@ -6,7 +6,7 @@
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR/../../.."
 
-TEXT="${1:-https://github.com/anthropics/claude-code}"
+TEXT="${1:-https://zokrezyl.github.io/yetty/}"
 
 PAYLOAD=$(echo -n "$TEXT" | base64 -w0)
 printf '\033]666666;run -c qrcode -x 0 -y 0 -w 15 -h 15 -r;ecl=M;%s\033\\' "$PAYLOAD"
