@@ -13,19 +13,26 @@ TelnetPtyReader::~TelnetPtyReader() {
 }
 
 Result<void> TelnetPtyReader::init(const PtyConfig& config) {
-    // Parse shell as "host:port" or just "port"
+    // Parse shell as WebSocket URL, "host:port", or just "port"
     std::string host = "127.0.0.1";
     uint16_t port = 8023;  // Default Termux telnetd port
 
     const std::string& spec = config.shell;
     if (!spec.empty()) {
-        size_t colonPos = spec.find(':');
-        if (colonPos != std::string::npos) {
-            host = spec.substr(0, colonPos);
-            port = static_cast<uint16_t>(std::stoi(spec.substr(colonPos + 1)));
+        // Check if it's a WebSocket URL (for Emscripten)
+        if (spec.find("ws://") == 0 || spec.find("wss://") == 0) {
+            // Pass the full URL as host - TelnetClient::connect will handle it
+            host = spec;
+            port = 0;  // Ignored for WebSocket URLs
         } else {
-            // Just a port number
-            port = static_cast<uint16_t>(std::stoi(spec));
+            size_t colonPos = spec.find(':');
+            if (colonPos != std::string::npos) {
+                host = spec.substr(0, colonPos);
+                port = static_cast<uint16_t>(std::stoi(spec.substr(colonPos + 1)));
+            } else {
+                // Just a port number
+                port = static_cast<uint16_t>(std::stoi(spec));
+            }
         }
     }
 
@@ -104,6 +111,7 @@ void TelnetPtyReader::setExitCallback(ExitCallback cb) {
 }
 
 void TelnetPtyReader::onTelnetData(const char* data, size_t len) {
+    ytrace("TelnetPtyReader::onTelnetData received {} bytes", len);
     {
         std::lock_guard<std::mutex> lock(_mutex);
         for (size_t i = 0; i < len; i++) {
@@ -114,6 +122,8 @@ void TelnetPtyReader::onTelnetData(const char* data, size_t len) {
     // Notify terminal that data is available
     if (_dataAvailableCallback) {
         _dataAvailableCallback();
+    } else {
+        ywarn("TelnetPtyReader: NO dataAvailableCallback set!");
     }
 }
 

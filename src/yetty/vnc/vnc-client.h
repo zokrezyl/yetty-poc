@@ -61,6 +61,15 @@ public:
     // Called AFTER socket is connected - client should send resize here
     std::function<void()> onConnected;
 
+    // Callback when connection fails or is lost (for reconnection logic)
+    std::function<void()> onDisconnected;
+
+    // Reconnection support
+    void setReconnectParams(const std::string& host, uint16_t port);
+    Result<void> reconnect();
+    bool wantsReconnect() const { return _wantsReconnect; }
+    void clearReconnect() { _wantsReconnect = false; }
+
 #ifdef __EMSCRIPTEN__
     // WebSocket data handler (called from callback)
     void onWebSocketData(const uint8_t* data, size_t size);
@@ -70,6 +79,7 @@ public:
     // Connection state (public for WebSocket callbacks on Emscripten)
     bool _connected = false;
     bool _connecting = false;
+    bool _wantsReconnect = false;
 #endif
 
 private:
@@ -77,7 +87,12 @@ private:
     // Connection state (private on non-Emscripten platforms)
     bool _connected = false;
     bool _connecting = false;
+    bool _wantsReconnect = false;
 #endif
+    // Reconnection support
+    std::string _reconnectHost;
+    uint16_t _reconnectPort = 0;
+
     void sendInput(const void* data, size_t size);
     void onSocketReadable();
     void drainSendQueue();

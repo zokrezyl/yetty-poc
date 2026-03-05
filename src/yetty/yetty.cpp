@@ -21,6 +21,7 @@
 #include "cards/plot/plot-renderer-provider.h"
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -194,6 +195,13 @@ private:
     std::string _vncHost;
     uint16_t _vncPort = 5900;
     vnc::VncClient::Ptr _vncClient;
+    std::chrono::steady_clock::time_point _vncLastReconnectAttempt;
+    static constexpr int VNC_RECONNECT_INTERVAL_MS = 3000;  // Retry every 3 seconds
+
+    // Telnet client mode (web only - requires WebSocket proxy)
+    bool _telnetClientMode = false;
+    std::chrono::steady_clock::time_point _telnetLastReconnectAttempt;
+    static constexpr int TELNET_RECONNECT_INTERVAL_MS = 3000;
 
     // VNC server mode
     uint16_t _vncServerPort = 5900;
@@ -408,7 +416,8 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     }
 #endif
 
-    // Skip workspace/PTY creation in VNC client mode - we just display remote frames
+    // Skip workspace/PTY creation in VNC client mode only - we just display remote content
+    // Telnet mode DOES need a workspace with terminal (uses TelnetPtyReader)
     if (!_vncClientMode) {
         yinfo("init: initWorkspace");
         if (auto res = initWorkspace(); !res) { yinfo("init: initWorkspace FAILED"); return res; }
@@ -479,11 +488,30 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
             (*loopResult)->dispatch(base::Event::screenUpdateEvent());
         };
 
+        // Set up reconnection parameters
+        _vncClient->setReconnectParams(_vncHost, _vncPort);
+
+        // Set up disconnection callback for reconnection
+        _vncClient->onDisconnected = [this]() {
+            yinfo("VNC client disconnected, will attempt reconnection...");
+        };
+
+        // Initial connection attempt - don't fail if it doesn't connect immediately
+        // The main loop will handle reconnection attempts
         if (auto res = _vncClient->connect(_vncHost, _vncPort); !res) {
-            return Err<void>("Failed to connect VNC client", res);
+            ywarn("Initial VNC connection failed: {} - will retry", res.error().message());
+            // Mark as wanting reconnect so main loop will retry
         }
-        yinfo("VNC client connecting to {}:{}...", _vncHost, _vncPort);
+        yinfo("VNC client mode initialized for {}:{}", _vncHost, _vncPort);
     }
+
+#if YETTY_WEB
+    // Telnet client mode: the workspace was already initialized with telnet config
+    // TelnetPtyReader will use TelnetClient which now has WebSocket support
+    if (_telnetClientMode) {
+        yinfo("Telnet client mode initialized for: {}", _telnetAddress);
+    }
+#endif
 
     // Initialize VNC server mode if enabled
     if (_vncServerMode) {
@@ -666,7 +694,47 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
 }
 
 Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
-    // Skip argument parsing if no args (e.g., Android NativeActivity)
+#if YETTY_WEB
+    // Web builds: read mode from environment variables set by JavaScript
+    // This MUST be done before the early return below!
+    // YETTY_MODE: jslinux, vnc, telnet
+    // YETTY_VNC_CLIENT: ws://host:port (WebSocket URL for VNC)
+    // YETTY_TELNET: ws://host:port (WebSocket URL for telnet)
+    const char* modeEnv = getenv("YETTY_MODE");
+    if (modeEnv) {
+        std::string mode(modeEnv);
+        yinfo("Web mode: {}", mode);
+
+        if (mode == "vnc") {
+            const char* vncClientEnv = getenv("YETTY_VNC_CLIENT");
+            if (vncClientEnv && vncClientEnv[0] != '\0') {
+                _vncClientMode = true;
+                // For WebSocket URLs, store the full URL as host (VncClient handles ws:// URLs)
+                _vncHost = vncClientEnv;
+                _vncPort = 0;  // Port embedded in URL
+                yinfo("VNC client mode (WebSocket): {}", _vncHost);
+            } else {
+                // Mode is VNC but no URL - still set the flag to prevent VM startup
+                _vncClientMode = true;
+                yinfo("VNC client mode enabled (no URL yet)");
+            }
+        } else if (mode == "telnet") {
+            const char* telnetEnv = getenv("YETTY_TELNET");
+            if (telnetEnv && telnetEnv[0] != '\0') {
+                _telnetClientMode = true;
+                _telnetAddress = telnetEnv;
+                yinfo("Telnet client mode (WebSocket): {}", _telnetAddress);
+            } else {
+                // Mode is telnet but no URL - still set the flag to prevent VM startup
+                _telnetClientMode = true;
+                yinfo("Telnet client mode enabled (no URL yet)");
+            }
+        }
+        // mode == "jslinux" is the default, no special handling needed
+    }
+#endif
+
+    // Skip argument parsing if no args (e.g., Android NativeActivity, Emscripten)
     if (argc <= 0 || argv == nullptr) {
         return Ok();
     }
@@ -2008,6 +2076,21 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
     if (_eventQueue) {
         _eventQueue->drain();
     }
+
+    // VNC client reconnection logic
+    if (_vncClientMode && _vncClient && !_vncClient->isConnected() && !_vncClient->_connecting) {
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - _vncLastReconnectAttempt).count();
+        if (elapsed >= VNC_RECONNECT_INTERVAL_MS) {
+            _vncLastReconnectAttempt = now;
+            yinfo("VNC client attempting reconnection...");
+            if (auto res = _vncClient->reconnect(); !res) {
+                ywarn("VNC reconnection failed: {} - will retry in {}ms", res.error().message(), VNC_RECONNECT_INTERVAL_MS);
+            }
+        }
+    }
+
+    // Telnet client reconnection is handled by TelnetPtyReader/TelnetClient automatically
 #endif
 
     // Apply deferred resize before acquiring the surface texture

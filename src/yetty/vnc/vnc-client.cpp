@@ -79,6 +79,11 @@ static EM_BOOL onWsError(int eventType, const EmscriptenWebSocketErrorEvent* wsE
     yerror("WebSocket error");
     client->_wsConnected = false;
     client->_connected = false;
+    client->_connecting = false;
+    client->_wantsReconnect = true;
+    if (client->onDisconnected) {
+        client->onDisconnected();
+    }
     return EM_TRUE;
 }
 
@@ -87,6 +92,11 @@ static EM_BOOL onWsClose(int eventType, const EmscriptenWebSocketCloseEvent* wsE
     yinfo("WebSocket closed: code={} reason={}", wsEvent->code, wsEvent->reason);
     client->_wsConnected = false;
     client->_connected = false;
+    client->_connecting = false;
+    client->_wantsReconnect = true;
+    if (client->onDisconnected) {
+        client->onDisconnected();
+    }
     return EM_TRUE;
 }
 
@@ -138,7 +148,17 @@ Result<void> VncClient::connect(const std::string& host, uint16_t port) {
 
 #ifdef __EMSCRIPTEN__
     // WebSocket connection for Emscripten
-    std::string wsUrl = "ws://" + host + ":" + std::to_string(port);
+    // host may be either:
+    // - a hostname (legacy): build ws://host:port
+    // - a full WebSocket URL (from web UI): use as-is
+    std::string wsUrl;
+    if (host.find("ws://") == 0 || host.find("wss://") == 0) {
+        // Full URL provided (from YETTY_VNC_CLIENT env var)
+        wsUrl = host;
+    } else {
+        // Legacy: build URL from host:port
+        wsUrl = "ws://" + host + ":" + std::to_string(port);
+    }
     yinfo("VNC client connecting via WebSocket to {}", wsUrl);
 
     EmscriptenWebSocketCreateAttributes attrs;
@@ -287,6 +307,31 @@ void VncClient::disconnect() {
         _socket = -1;
     }
 #endif
+}
+
+void VncClient::setReconnectParams(const std::string& host, uint16_t port) {
+    _reconnectHost = host;
+    _reconnectPort = port;
+}
+
+Result<void> VncClient::reconnect() {
+    if (_reconnectHost.empty()) {
+        return Err<void>("No reconnection parameters set");
+    }
+    yinfo("VNC client reconnecting to {}:{}", _reconnectHost, _reconnectPort);
+    _wantsReconnect = false;
+
+    // Reset receive state
+    _recvState = RecvState::FRAME_HEADER;
+    _recvNeeded = sizeof(FrameHeader);
+    _recvOffset = 0;
+    _recvBuffer.resize(_recvNeeded);
+
+    // Clear send queue
+    _sendQueue.clear();
+    _sendOffset = 0;
+
+    return connect(_reconnectHost, _reconnectPort);
 }
 
 #ifndef __EMSCRIPTEN__
