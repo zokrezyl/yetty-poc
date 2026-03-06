@@ -558,12 +558,8 @@ void ScreenDrawLayerImpl::rebuildBuffers() {
 void ScreenDrawLayerImpl::updateDisplaySize(uint32_t width, uint32_t height) {
     _displayWidth = width;
     _displayHeight = height;
-
-    // Update scene bounds to match display
-    if (_builder) {
-        _builder->setSceneBounds(0, 0, static_cast<float>(width), static_cast<float>(height));
-        _dirty = true;
-    }
+    // Note: Don't set scene bounds here - let builder compute from content AABBs
+    // This ensures getContentHeightCells() returns actual content height, not display height
 }
 
 void ScreenDrawLayerImpl::setCellSize(float cellWidth, float cellHeight) {
@@ -637,12 +633,16 @@ void ScreenDrawLayerImpl::setOriginOffset(float x, float y) {
 
 void ScreenDrawLayerImpl::scroll(int32_t num_lines) {
     if (num_lines == 0) return;
+    if (!_builder) return;
 
-    // Scroll = adjust Y offset by lines * cellHeight
-    // Positive num_lines = content moves UP = offsetY DECREASES
-    // (scenePos = pixelPos - offset, so smaller offset = higher scenePos = content moves up)
+    // Two things must happen for scroll:
+    // 1. Builder shifts grid row references (row N becomes row N-1)
+    //    This ensures correct primitives are found for each screen position
+    // 2. Offset adjusts where primitives are drawn on screen
+    //    This shifts the visual rendering position
+    _builder->scroll(num_lines);
     _originOffsetY -= static_cast<float>(num_lines) * _cellHeight;
-    _dirty = true;  // Need to re-upload uniforms
+    _dirty = true;
 }
 
 void ScreenDrawLayerImpl::extractRowsFromGrid() {

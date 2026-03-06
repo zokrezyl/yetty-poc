@@ -5,6 +5,46 @@ Cards add primitives to a `YDrawBuffer`. The `YDrawBuilder` computes AABBs, buil
 a spatial hash grid, and writes everything to GPU memory. The shader does O(1)
 grid lookup per pixel to find which primitives to evaluate.
 
+## Three YDraw Usage Modes
+
+YDraw content can be rendered in three different ways:
+
+| Mode | Trigger | Scrolls with Terminal | Cursor Advances | Use Case |
+|------|---------|----------------------|-----------------|----------|
+| **Card** | Card widget in terminal cell | Yes (part of cell) | N/A (cell-based) | Interactive widgets, embedded UIs |
+| **Absolute Overlay** | OSC 666673 with `--row`/`--col` | No (fixed on screen) | No | HUD, floating UI, debug overlays |
+| **Inline Overlay** | OSC 666673 without position | Yes (like terminal text) | Yes | Inline graphics, charts, diagrams |
+
+### Card Mode
+
+Cards are rendered inside terminal cells. Each card occupies a rectangular region
+of cells and is managed by `CardManager`. The card's ydraw content is stored in
+`cardStorage[]` and rendered by the card shader (`0x0003-ydraw.wgsl`).
+
+### Absolute Overlay Mode
+
+Content appears at a fixed screen position regardless of terminal scroll. Useful
+for HUD elements, floating panels, or debug overlays that should stay visible.
+
+```bash
+# Position at row 0, col 0 (top-left of terminal)
+printf '\033]666673;--row=0;--col=0;--yaml;%s\033\\' "$PAYLOAD"
+```
+
+### Inline Overlay Mode
+
+Content appears at the current cursor position and the terminal scrolls to
+accommodate the content height (like writing text). The overlay scrolls with
+terminal content naturally.
+
+```bash
+# No position args = inline at cursor
+printf '\033]666673;--yaml;%s\033\\' "$PAYLOAD"
+```
+
+After displaying inline content of N lines height, the cursor advances N rows
+(same behavior as writing N lines of text).
+
 ## Overview
 
 ```
@@ -790,3 +830,257 @@ uint32_t primCnt = meta[1];  // primitiveCount
 uint32_t gridOff = meta[2];  // gridOffset
 // ... verify types, colors, grid entries
 ```
+
+## Screen Draw Layer (Overlay)
+
+The `ScreenDrawLayer` renders ydraw content as a transparent overlay on top of
+the terminal. Unlike cards (which render inside terminal cells), overlays draw
+directly to screen pixel coordinates.
+
+### Architecture
+
+```
+OSC 666673 escape sequence
+  │
+  │  parsed by gpu-screen.cpp
+  ▼
+ScreenDrawLayer              ← manages overlay rendering
+  │
+  │  owns
+  ▼
+YDrawBuffer + YDrawBuilder   ← same classes as cards, different GPU path
+  │
+  │  writes to separate buffers
+  ▼
+overlayGridData[]            ← GPU storage (binding 15)
+overlayGlyphBuffer[]         ← GPU storage (binding 16)
+overlayPrimBuffer[]          ← GPU storage (binding 17)
+overlay uniforms             ← GPU uniform (binding 18)
+  │
+  │  shader reads from
+  ▼
+gpu-screen.wgsl              ← evaluateOverlay() called in fs_main()
+```
+
+### Key Classes
+
+| Class | File | Purpose |
+|-------|------|---------|
+| `ScreenDrawLayer` | screen-draw-layer.h | Interface for overlay management |
+| `ScreenDrawLayerImpl` | screen-draw-layer.cpp | Implementation with GPU buffers |
+| `YDrawBuffer` | ydraw-buffer.h | Primitive data storage (shared with cards) |
+| `YDrawBuilder` | ydraw-builder.h | Grid computation (shared with cards) |
+
+### GPU Bindings (gpu-screen.wgsl)
+
+The overlay uses bindings 15-18 in the terminal shader:
+
+| Binding | Name | Type | Contents |
+|---------|------|------|----------|
+| 15 | `overlayGridData` | storage | Spatial hash grid (same format as card grid) |
+| 16 | `overlayGlyphBuffer` | storage | Text glyph data (5 floats per glyph) |
+| 17 | `overlayPrimBuffer` | storage | Primitive data (same format as card prims) |
+| 18 | `overlay` | uniform | OverlayUniforms struct (64 bytes) |
+
+### OverlayUniforms Structure
+
+```cpp
+struct ScreenDrawUniforms {
+    float sceneMinX, sceneMinY;     // Content bounds
+    float sceneMaxX, sceneMaxY;
+    uint32_t gridWidth, gridHeight; // Grid dimensions
+    float cellSizeX, cellSizeY;     // Cell size (matches terminal cell size)
+    uint32_t primCount, glyphCount;
+    float pixelRange;               // MSDF pixel range
+    uint32_t hasOverlay;            // 1 if content present
+    float offsetX, offsetY;         // Position offset (for inline/scroll)
+    float _pad0, _pad1;             // Padding to 64 bytes
+};
+```
+
+### Shader Integration
+
+The overlay is evaluated in `fs_main()` of `gpu-screen.wgsl`:
+
+```wgsl
+fn evaluateOverlay(pixelPos: vec2<f32>) -> vec4<f32> {
+    // Apply position offset (inline positioning + scroll)
+    let scenePos = pixelPos - vec2<f32>(overlay.offsetX, overlay.offsetY);
+
+    // O(1) grid lookup (same algorithm as cards)
+    let cellX = u32(clamp((scenePos.x - contentMinX) * invCellSizeX, 0.0, f32(gridWidth-1)));
+    let cellY = u32(clamp((scenePos.y - contentMinY) * invCellSizeY, 0.0, f32(gridHeight-1)));
+    // ... evaluate primitives and glyphs
+}
+
+// In fs_main(), after terminal rendering:
+let overlayResult = evaluateOverlay(pixelPos);
+if (overlayResult.a > 0.01) {
+    finalColor = mix(finalColor, overlayResult.rgb, overlayResult.a);
+}
+```
+
+## Scroll Synchronization (Inline Mode)
+
+When an overlay is created in inline mode, it should scroll with terminal content
+just like text does. This is achieved by adjusting the Y offset in the uniforms.
+
+### Mental Model: Two Synchronized Grids
+
+```
+Terminal Grid              Overlay Grid
+┌───┬───┬───┬───┐         ┌───┬───┬───┬───┐
+│ 0 │ 1 │ 2 │ 3 │  row 0  │ 0 │ 1 │ 2 │ 3 │
+├───┼───┼───┼───┤         ├───┼───┼───┼───┤
+│ 4 │ 5 │ 6 │ 7 │  row 1  │ 4 │ 5 │ 6 │ 7 │
+├───┼───┼───┼───┤         ├───┼───┼───┼───┤
+│ 8 │ 9 │10 │11 │  row 2  │ 8 │ 9 │10 │11 │
+└───┴───┴───┴───┘         └───┴───┴───┴───┘
+     ↑                          ↑
+Same cell size, same positions, scroll together
+```
+
+Both grids use the **same cell size** (terminal cell dimensions). When the terminal
+scrolls, the overlay must scroll by the same amount to stay aligned.
+
+### Scroll Implementation
+
+Scrolling is triggered by vterm's `onScrollRect` callback in `gpu-screen.cpp`:
+
+```cpp
+int GPUScreenImpl::onScrollRect(VTermRect rect, int downward, int rightward, void* user) {
+    // ... handle scrollback ...
+
+    // Sync overlay with terminal scroll (inline mode only)
+    if (self->_screenDrawLayer && self->_screenDrawLayer->hasContent()
+        && self->_ydrawIsInline) {
+        if (downward != 0) {
+            self->_screenDrawLayer->scroll(downward);
+            self->_needsBindGroupRecreation = true;
+        }
+    }
+    return 0;
+}
+```
+
+The `ScreenDrawLayer::scroll()` method adjusts the Y offset:
+
+```cpp
+void ScreenDrawLayerImpl::scroll(int32_t num_lines) {
+    if (num_lines == 0) return;
+
+    // Positive num_lines = content moves UP = offsetY decreases
+    // (scenePos = pixelPos - offset, so smaller offset = content moves up)
+    _originOffsetY -= static_cast<float>(num_lines) * _cellHeight;
+    _dirty = true;
+}
+```
+
+### Why Offset Adjustment Works
+
+The shader computes scene position as:
+```wgsl
+let scenePos = pixelPos - vec2<f32>(overlay.offsetX, overlay.offsetY);
+```
+
+When terminal scrolls up by N lines:
+- Terminal content at row R moves to row R-1 visually
+- Overlay content should do the same
+- Decreasing `offsetY` by `N * cellHeight` makes the same pixel position map to
+  a higher scene Y coordinate, effectively moving content up
+
+### Absolute vs Inline Scroll Behavior
+
+| Mode | `_ydrawIsInline` | Scroll Behavior |
+|------|------------------|-----------------|
+| Absolute | `false` | Does not scroll - fixed on screen |
+| Inline | `true` | Scrolls with terminal content |
+
+## OSC 666673 Escape Sequence
+
+The screen draw layer is triggered via the OSC 666673 escape sequence:
+
+```
+ESC ] 666673 ; <args> ; <payload> ESC \
+```
+
+### Arguments
+
+| Argument | Description |
+|----------|-------------|
+| `--row=N` | Absolute row position (0 = top) |
+| `--col=N` | Absolute column position (0 = left) |
+| `--yaml` | Payload is YAML format (base64 encoded) |
+| `--append` | Append to existing content (don't clear) |
+
+### Positioning Modes
+
+**Absolute positioning** (has `--row` or `--col`):
+```bash
+printf '\033]666673;--row=0;--col=0;--yaml;%s\033\\' "$(echo "$YAML" | base64 -w0)"
+```
+- Content appears at specified screen position
+- Does NOT scroll with terminal
+- Cursor does NOT advance
+
+**Inline positioning** (no position args):
+```bash
+printf '\033]666673;--yaml;%s\033\\' "$(echo "$YAML" | base64 -w0)"
+```
+- Content appears at current cursor position
+- Scrolls with terminal content
+- Cursor advances by content height (newlines injected)
+
+### Example YAML Payload
+
+```yaml
+background: "#00000000"
+
+body:
+  - circle:
+      position: [100, 100]
+      radius: 50
+      fill: "#ff0000"
+
+  - text:
+      position: [50, 200]
+      content: "Hello YDraw"
+      font-size: 24
+      color: "#ffffff"
+```
+
+## Demo Scripts
+
+Demo scripts are located in `demo/scripts/gpu-screen-ydraw/`:
+
+```
+demo/scripts/gpu-screen-ydraw/
+├── absolute/           # Fixed screen position (no scroll)
+│   ├── curves.sh
+│   ├── dashboard.sh
+│   ├── geometric.sh
+│   ├── patterns.sh
+│   ├── shapes.sh
+│   └── text.sh
+├── inline/             # At cursor, scrolls with terminal
+│   ├── curves.sh
+│   ├── dashboard.sh
+│   ├── geometric.sh
+│   ├── patterns.sh
+│   ├── shapes.sh
+│   └── text.sh
+├── animated.sh         # Animation example
+└── clear.sh            # Clear overlay
+```
+
+## Known Limitations
+
+1. **No primitive cleanup on scroll-out**: Primitives that scroll completely out
+   of view remain in the buffer. This is a memory consideration for long sessions
+   with lots of inline ydraw content.
+
+2. **Single overlay**: Only one screen draw layer exists. New content replaces
+   previous content (unless `--append` is used).
+
+3. **No per-primitive scroll tracking**: All content scrolls together. Cannot have
+   some primitives fixed while others scroll.
