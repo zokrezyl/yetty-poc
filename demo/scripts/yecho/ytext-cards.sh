@@ -1,8 +1,7 @@
 #!/bin/bash
 # YEcho YText Cards: GPU-rendered styled text via OSC escape sequences
 # NOTE: Run this inside yetty terminal to see the styled text cards!
-DIR="$(cd "$(dirname "$0")" && pwd)"
-YECHO="$DIR/../../../build-desktop-dawn-release/src/yetty/yecho/yecho"
+YECHO="${YECHO:-yecho}"
 
 echo "=== YEcho YText Card Demo ==="
 echo "Run inside yetty terminal to see GPU-rendered text"
