@@ -46,7 +46,7 @@ public:
         }
         _metaHandle = *metaResult;
         
-        yinfo("QRCode::init: allocated metadata at offset {}", _metaHandle.offset);
+        ydebug("QRCode::init: allocated metadata at offset {}", _metaHandle.offset);
         
         // Parse args
         parseArgs(_argsStr);
@@ -114,7 +114,7 @@ public:
 
         _metadataDirty = true;
 
-        yinfo("QRCode::allocateBuffers: allocated {} bytes at offset {}",
+        ydebug("QRCode::allocateBuffers: allocated {} bytes at offset {}",
               bufferSize, _bufferHandle.offset);
 
         return Ok();
@@ -224,7 +224,7 @@ private:
         
         _qrSize = encoder.size();
         
-        yinfo("QRCode::encodeQR: encoded '{}' as v{} {}x{} QR code",
+        ydebug("QRCode::encodeQR: encoded '{}' as v{} {}x{} QR code",
               data.substr(0, 20), encoder.version(), _qrSize, _qrSize);
         
         return Ok();

@@ -277,32 +277,31 @@ Result<Yetty::Ptr> Yetty::createImpl(ContextType&, struct android_app* app) noex
 //=============================================================================
 
 Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
-    yinfo("init: start");
     yinfo("Yetty starting...");
 
-    yinfo("init: parseArgs");
+    ydebug("init: parseArgs");
     if (auto res = parseArgs(argc, argv); !res) return res;
 
     // Create Config early (before anything that reads it)
-    yinfo("init: Config::create");
+    ydebug("init: Config::create");
     auto configResult = Config::create();
     if (!configResult) {
-        yinfo("init: Config::create FAILED");
+        ydebug("init: Config::create FAILED");
         return Err<void>("Failed to create Config", configResult);
     }
     _yettyContext.config = *configResult;
-    yinfo("init: Config created");
+    ydebug("init: Config created");
 
     // Set shell/command from -c/-e flag if specified
     if (!_executeCommand.empty()) {
         _yettyContext.config->setString("shell/command", _executeCommand);
-        yinfo("Set shell/command in config: {}", _executeCommand);
+        ydebug("Set shell/command in config: {}", _executeCommand);
     }
 
     // Set telnet address if specified
     if (!_telnetAddress.empty()) {
         _yettyContext.config->setString("shell/telnet", _telnetAddress);
-        yinfo("Set shell/telnet in config: {}", _telnetAddress);
+        ydebug("Set shell/telnet in config: {}", _telnetAddress);
     }
 
     // Get EventQueue for thread-safe GPU callback wakeups
@@ -312,45 +311,45 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     }
     _eventQueue = *queueResult;
 
-    yinfo("init: initWindow");
-    if (auto res = initWindow(); !res) { yinfo("init: initWindow FAILED"); return res; }
-    yinfo("init: initWebGPU");
-    if (auto res = initWebGPU(); !res) { yinfo("init: initWebGPU FAILED"); return res; }
-    yinfo("init: initSharedResources");
-    if (auto res = initSharedResources(); !res) { yinfo("init: initSharedResources FAILED"); return res; }
+    ydebug("init: initWindow");
+    if (auto res = initWindow(); !res) { ydebug("init: initWindow FAILED"); return res; }
+    ydebug("init: initWebGPU");
+    if (auto res = initWebGPU(); !res) { ydebug("init: initWebGPU FAILED"); return res; }
+    ydebug("init: initSharedResources");
+    if (auto res = initSharedResources(); !res) { ydebug("init: initSharedResources FAILED"); return res; }
 
     // Create ShaderManager with GPUContext and allocator
-    yinfo("init: ShaderManager::create");
+    ydebug("init: ShaderManager::create");
     auto shaderMgrResult = ShaderManager::create(_gpuContext, _gpuAllocator);
     if (!shaderMgrResult) {
-        yinfo("init: ShaderManager::create FAILED");
+        ydebug("init: ShaderManager::create FAILED");
         return Err<void>("Failed to create ShaderManager", shaderMgrResult);
     }
     auto shaderMgr = *shaderMgrResult;
-    yinfo("init: ShaderManager created");
+    ydebug("init: ShaderManager created");
 
     // Create MSDF CDB provider based on CLI flag
     MsdfCdbProvider::Ptr cdbProvider;
 #if !YETTY_WEB
-    yinfo("init: MSDF CDB provider");
+    ydebug("init: MSDF CDB provider");
     if (_msdfProviderName == "cpu") {
         cdbProvider = std::make_shared<CpuMsdfCdbProvider>();
-        yinfo("init: Using CPU MSDF CDB provider");
+        ydebug("init: Using CPU MSDF CDB provider");
     } else {
         cdbProvider = std::make_shared<GpuMsdfCdbProvider>(_instance);
-        yinfo("init: Using GPU MSDF CDB provider");
+        ydebug("init: Using GPU MSDF CDB provider");
     }
 #endif
 
     // Create FontManager with GPUContext, ShaderManager, and CDB provider
-    yinfo("init: FontManager::create");
+    ydebug("init: FontManager::create");
     auto fontMgrResult = FontManager::create(_gpuContext, _gpuAllocator, shaderMgr, cdbProvider);
     if (!fontMgrResult) {
-        yinfo("init: FontManager::create FAILED");
+        ydebug("init: FontManager::create FAILED");
         return Err<void>("Failed to create FontManager", fontMgrResult);
     }
     auto fontMgr = *fontMgrResult;
-    yinfo("init: FontManager created");
+    ydebug("init: FontManager created");
 
     // Build YettyContext
     _yettyContext.gpu = _gpuContext;
@@ -386,12 +385,12 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     card::PlotRendererProvider::instance()->registerWith(shaderMgr);
 
     // Compile shaders after all providers (fonts, plot) are registered
-    yinfo("init: compiling shaders");
+    ydebug("init: compiling shaders");
     if (auto res = shaderMgr->compile(); !res) {
-        yinfo("init: shader compile FAILED");
+        ydebug("init: shader compile FAILED");
         return Err<void>("Failed to compile shaders", res);
     }
-    yinfo("init: shaders compiled");
+    ydebug("init: shaders compiled");
 
 #if !YETTY_WEB && !defined(__ANDROID__)
     initEventLoop();
@@ -419,9 +418,9 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     // Skip workspace/PTY creation in VNC client mode only - we just display remote content
     // Telnet mode DOES need a workspace with terminal (uses TelnetPtyReader)
     if (!_vncClientMode) {
-        yinfo("init: initWorkspace");
-        if (auto res = initWorkspace(); !res) { yinfo("init: initWorkspace FAILED"); return res; }
-        yinfo("init: initWorkspace done");
+        ydebug("init: initWorkspace");
+        if (auto res = initWorkspace(); !res) { ydebug("init: initWorkspace FAILED"); return res; }
+        ydebug("init: initWorkspace done");
     }
 
 #if !YETTY_WEB && !defined(__ANDROID__)
@@ -450,7 +449,7 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
         if (!_jpegCompressor) {
             return Err<void>("Failed to initialize TurboJPEG compressor");
         }
-        yinfo("Capture benchmark: TurboJPEG compressor initialized");
+        ydebug("Capture benchmark: TurboJPEG compressor initialized");
     }
 
     // Initialize VNC client mode if enabled
@@ -469,7 +468,7 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
         // Set up callback for when connection completes (async or immediate)
         // The resize MUST be sent AFTER connect completes, not before!
         _vncClient->onConnected = [this, vncWidth, vncHeight]() {
-            yinfo("VNC client connected - sending initial resize {}x{}", vncWidth, vncHeight);
+            ydebug("VNC client connected - sending initial resize {}x{}", vncWidth, vncHeight);
             _vncClient->sendResize(vncWidth, vncHeight);
             _vncClient->sendCellSize(20);  // Default cell height
             // Send compression config if custom settings are specified
@@ -488,7 +487,7 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
 #else
             auto t = std::chrono::high_resolution_clock::now();
             auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
-            yinfo("[TIME] CLIENT onFrameReceived dispatching ScreenUpdate at {}ms", ms);
+            ydebug("[TIME] CLIENT onFrameReceived dispatching ScreenUpdate at {}ms", ms);
             auto loopResult = base::EventLoop::instance();
             if (!loopResult) return;
             (*loopResult)->dispatch(base::Event::screenUpdateEvent());
@@ -500,7 +499,7 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
 
         // Set up disconnection callback for reconnection
         _vncClient->onDisconnected = [this]() {
-            yinfo("VNC client disconnected, will attempt reconnection...");
+            ydebug("VNC client disconnected, will attempt reconnection...");
         };
 
         // Initial connection attempt - don't fail if it doesn't connect immediately
@@ -509,14 +508,14 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
             ywarn("Initial VNC connection failed: {} - will retry", res.error().message());
             // Mark as wanting reconnect so main loop will retry
         }
-        yinfo("VNC client mode initialized for {}:{}", _vncHost, _vncPort);
+        ydebug("VNC client mode initialized for {}:{}", _vncHost, _vncPort);
     }
 
 #if YETTY_WEB
     // Telnet client mode: the workspace was already initialized with telnet config
     // TelnetPtyReader will use TelnetClient which now has WebSocket support
     if (_telnetClientMode) {
-        yinfo("Telnet client mode initialized for: {}", _telnetAddress);
+        ydebug("Telnet client mode initialized for: {}", _telnetAddress);
     }
 #endif
 
@@ -529,7 +528,7 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
         if (auto res = _vncServer->start(_vncServerPort); !res) {
             return Err<void>("Failed to start VNC server", res);
         }
-        yinfo("VNC server started on port {}", _vncServerPort);
+        ydebug("VNC server started on port {}", _vncServerPort);
 
         // Set up input callbacks from VNC clients
         _vncServer->onMouseMove = [](int16_t x, int16_t y) {
@@ -690,7 +689,7 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
         _vncServer->onInputReceived = []() {
             auto t = std::chrono::high_resolution_clock::now();
             auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
-            yinfo("[TIME] onInputReceived lambda called at {}ms", ms);
+            ydebug("[TIME] onInputReceived lambda called at {}ms", ms);
             auto loopResult = base::EventLoop::instance();
             if (!loopResult) return;
             (*loopResult)->dispatch(base::Event::screenUpdateEvent());
@@ -710,7 +709,7 @@ Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
     const char* modeEnv = getenv("YETTY_MODE");
     if (modeEnv) {
         std::string mode(modeEnv);
-        yinfo("Web mode: {}", mode);
+        ydebug("Web mode: {}", mode);
 
         if (mode == "vnc") {
             const char* vncClientEnv = getenv("YETTY_VNC_CLIENT");
@@ -719,22 +718,22 @@ Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
                 // For WebSocket URLs, store the full URL as host (VncClient handles ws:// URLs)
                 _vncHost = vncClientEnv;
                 _vncPort = 0;  // Port embedded in URL
-                yinfo("VNC client mode (WebSocket): {}", _vncHost);
+                ydebug("VNC client mode (WebSocket): {}", _vncHost);
             } else {
                 // Mode is VNC but no URL - still set the flag to prevent VM startup
                 _vncClientMode = true;
-                yinfo("VNC client mode enabled (no URL yet)");
+                ydebug("VNC client mode enabled (no URL yet)");
             }
         } else if (mode == "telnet") {
             const char* telnetEnv = getenv("YETTY_TELNET");
             if (telnetEnv && telnetEnv[0] != '\0') {
                 _telnetClientMode = true;
                 _telnetAddress = telnetEnv;
-                yinfo("Telnet client mode (WebSocket): {}", _telnetAddress);
+                ydebug("Telnet client mode (WebSocket): {}", _telnetAddress);
             } else {
                 // Mode is telnet but no URL - still set the flag to prevent VM startup
                 _telnetClientMode = true;
-                yinfo("Telnet client mode enabled (no URL yet)");
+                ydebug("Telnet client mode enabled (no URL yet)");
             }
         }
         // mode == "jslinux" is the default, no special handling needed
@@ -775,17 +774,17 @@ Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
 
     if (executeFlag) {
         _executeCommand = args::get(executeFlag);
-        yinfo("Execute command: {}", _executeCommand);
+        ydebug("Execute command: {}", _executeCommand);
     }
 
     if (msdfProviderFlag) {
         _msdfProviderName = args::get(msdfProviderFlag);
-        yinfo("MSDF provider: {}", _msdfProviderName);
+        ydebug("MSDF provider: {}", _msdfProviderName);
     }
 
     if (captureBenchmarkFlag) {
         _captureBenchmark = true;
-        yinfo("Capture benchmark mode enabled");
+        ydebug("Capture benchmark mode enabled");
     }
 
     if (telnetFlag) {
@@ -793,7 +792,7 @@ Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
         if (_telnetAddress.empty()) {
             _telnetAddress = "127.0.0.1:8023";  // Default for Termux telnetd
         }
-        yinfo("Telnet mode: connecting to {}", _telnetAddress);
+        ydebug("Telnet mode: connecting to {}", _telnetAddress);
     }
 
     if (vncClientFlag) {
@@ -806,7 +805,7 @@ Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
         } else {
             _vncHost = hostPort;
         }
-        yinfo("VNC client mode: connecting to {}:{}", _vncHost, _vncPort);
+        ydebug("VNC client mode: connecting to {}:{}", _vncHost, _vncPort);
     }
 
     // --vnc-server and --vnc-headless are mutually exclusive
@@ -819,37 +818,37 @@ Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
     if (vncServerFlag) {
         _vncServerMode = true;
         _vncServerPort = args::get(vncServerPortFlag);
-        yinfo("VNC server mode: port {}", _vncServerPort);
+        ydebug("VNC server mode: port {}", _vncServerPort);
     }
 
     if (vncHeadlessFlag) {
         _vncServerMode = true;  // Headless implies server mode
         _vncHeadless = true;
         _vncServerPort = args::get(vncServerPortFlag);
-        yinfo("VNC headless server mode: port {} (no local window)", _vncServerPort);
+        ydebug("VNC headless server mode: port {} (no local window)", _vncServerPort);
     }
 
     if (vncMergeRectsFlag) {
         _vncMergeRects = true;
-        yinfo("VNC rectangle merging enabled");
+        ydebug("VNC rectangle merging enabled");
     }
 
     if (vncRawFlag) {
         _vncForceRaw = true;
-        yinfo("VNC raw encoding enabled (no JPEG compression)");
+        ydebug("VNC raw encoding enabled (no JPEG compression)");
     }
 
     if (vncQualityFlag && args::get(vncQualityFlag) > 0) {
         _vncCompressionQuality = args::get(vncQualityFlag);
         if (_vncCompressionQuality > 100) _vncCompressionQuality = 100;
-        yinfo("VNC compression quality set to {}", _vncCompressionQuality);
+        ydebug("VNC compression quality set to {}", _vncCompressionQuality);
     }
 
     if (vncTestFlag) {
         _vncTestMode = true;
         _vncTestPattern = args::get(vncTestFlag);
         _vncServerMode = true;  // Test mode implies server mode
-        yinfo("VNC test mode: pattern={}", _vncTestPattern);
+        ydebug("VNC test mode: pattern={}", _vncTestPattern);
 
         // Set execute command for test patterns
         if (_vncTestPattern == "text") {
@@ -880,7 +879,7 @@ Result<void> YettyImpl::initWindow() noexcept {
 
     // In headless mode, skip window creation
     if (_vncHeadless) {
-        yinfo("VNC headless mode: platform created, skipping window");
+        ydebug("VNC headless mode: platform created, skipping window");
         return Ok();
     }
 
@@ -903,7 +902,7 @@ Result<void> YettyImpl::initWindow() noexcept {
 }
 
 Result<void> YettyImpl::initWebGPU() noexcept {
-    yinfo("initWebGPU: Creating instance...");
+    ydebug("initWebGPU: Creating instance...");
 
     // Create instance
     WGPUInstanceDescriptor instanceDesc = {};
@@ -911,18 +910,18 @@ Result<void> YettyImpl::initWebGPU() noexcept {
     if (!_instance) {
         return Err<void>("Failed to create WebGPU instance");
     }
-    yinfo("initWebGPU: Instance created");
+    ydebug("initWebGPU: Instance created");
 
     // Create surface via platform (skip in headless mode)
     if (!_vncHeadless) {
         _surface = _platform->createWGPUSurface(_instance);
         if (_surface) {
-            yinfo("initWebGPU: Surface created");
+            ydebug("initWebGPU: Surface created");
         } else {
             ywarn("initWebGPU: Surface creation failed - will try without surface");
         }
     } else {
-        yinfo("initWebGPU: Headless mode - skipping surface creation");
+        ydebug("initWebGPU: Headless mode - skipping surface creation");
     }
 
     // Request adapter (without compatibleSurface if headless or surface creation failed)
@@ -940,7 +939,7 @@ Result<void> YettyImpl::initWebGPU() noexcept {
     };
     adapterCallbackInfo.userdata1 = &_adapter;
 
-    yinfo("initWebGPU: Requesting adapter...");
+    ydebug("initWebGPU: Requesting adapter...");
     wgpuInstanceRequestAdapter(_instance, &adapterOpts, adapterCallbackInfo);
 
 #if defined(__EMSCRIPTEN__)
@@ -958,7 +957,7 @@ Result<void> YettyImpl::initWebGPU() noexcept {
         if (wgpuAdapterGetInfo(_adapter, &info) == WGPUStatus_Success) {
             // Check if we got WARP (software) - adapterType 3 = CPU/Software
             if (info.adapterType == WGPUAdapterType_CPU) {
-                yinfo("initWebGPU: Got software renderer, trying D3D11 backend for hardware GPU...");
+                ydebug("initWebGPU: Got software renderer, trying D3D11 backend for hardware GPU...");
                 wgpuAdapterRelease(_adapter);
                 _adapter = nullptr;
                 adapterOpts.backendType = WGPUBackendType_D3D11;
@@ -973,7 +972,7 @@ Result<void> YettyImpl::initWebGPU() noexcept {
         }
     } else {
         // Default request failed entirely, try D3D11 explicitly
-        yinfo("initWebGPU: Default adapter failed, trying D3D11 backend...");
+        ydebug("initWebGPU: Default adapter failed, trying D3D11 backend...");
         adapterOpts.backendType = WGPUBackendType_D3D11;
         wgpuInstanceRequestAdapter(_instance, &adapterOpts, adapterCallbackInfo);
     }
@@ -982,7 +981,7 @@ Result<void> YettyImpl::initWebGPU() noexcept {
     if (!_adapter) {
         return Err<void>("Failed to get WebGPU adapter");
     }
-    yinfo("initWebGPU: Adapter obtained");
+    ydebug("initWebGPU: Adapter obtained");
 
     // Log adapter info
     {
@@ -991,10 +990,10 @@ Result<void> YettyImpl::initWebGPU() noexcept {
             auto sv = [](WGPUStringView s) -> std::string {
                 return (s.data && s.length > 0) ? std::string(s.data, s.length) : "(unknown)";
             };
-            yinfo("GPU adapter: {} ({})", sv(info.device), sv(info.vendor));
-            yinfo("GPU backend: {} | architecture: {} | description: {}",
+            ydebug("GPU adapter: {} ({})", sv(info.device), sv(info.vendor));
+            ydebug("GPU backend: {} | architecture: {} | description: {}",
                   static_cast<int>(info.backendType), sv(info.architecture), sv(info.description));
-            yinfo("GPU vendor ID: 0x{:x} | device ID: 0x{:x} | type: {}",
+            ydebug("GPU vendor ID: 0x{:x} | device ID: 0x{:x} | type: {}",
                   info.vendorID, info.deviceID, static_cast<int>(info.adapterType));
             wgpuAdapterInfoFreeMembers(info);
         } else {
@@ -1006,7 +1005,7 @@ Result<void> YettyImpl::initWebGPU() noexcept {
     WGPULimits adapterLimits = {};
     wgpuAdapterGetLimits(_adapter, &adapterLimits);
     uint64_t adapterMaxStorage = adapterLimits.maxStorageBufferBindingSize;
-    yinfo("GPU adapter maxStorageBufferBindingSize: {} MB", adapterMaxStorage / (1024 * 1024));
+    ydebug("GPU adapter maxStorageBufferBindingSize: {} MB", adapterMaxStorage / (1024 * 1024));
 
     // Request device with limits capped to adapter support
     WGPULimits limits = {};
@@ -1073,7 +1072,7 @@ Result<void> YettyImpl::initWebGPU() noexcept {
     deviceCallbackInfo.userdata1 = &_device;
     deviceCallbackInfo.userdata2 = &deviceError;
 
-    yinfo("initWebGPU: Requesting device...");
+    ydebug("initWebGPU: Requesting device...");
     wgpuAdapterRequestDevice(_adapter, &deviceDesc, deviceCallbackInfo);
 
 #if defined(__EMSCRIPTEN__)
@@ -1086,10 +1085,10 @@ Result<void> YettyImpl::initWebGPU() noexcept {
     if (!_device) {
         return Err<void>("Failed to get WebGPU device: " + deviceError);
     }
-    yinfo("initWebGPU: Device obtained");
+    ydebug("initWebGPU: Device obtained");
 
     _queue = wgpuDeviceGetQueue(_device);
-    yinfo("initWebGPU: Queue obtained");
+    ydebug("initWebGPU: Queue obtained");
 
     // Configure surface (skip in headless mode)
     if (_surface) {
@@ -1097,7 +1096,7 @@ Result<void> YettyImpl::initWebGPU() noexcept {
         wgpuSurfaceGetCapabilities(_surface, _adapter, &caps);
         if (caps.formatCount > 0) {
             _surfaceFormat = caps.formats[0];
-            yinfo("Surface format: {}", static_cast<int>(_surfaceFormat));
+            ydebug("Surface format: {}", static_cast<int>(_surfaceFormat));
         }
         wgpuSurfaceCapabilitiesFreeMembers(caps);
 
@@ -1107,10 +1106,10 @@ Result<void> YettyImpl::initWebGPU() noexcept {
         _surfaceFormat = WGPUTextureFormat_BGRA8Unorm;
         _surfaceWidth = _initialWidth;
         _surfaceHeight = _initialHeight;
-        yinfo("Headless mode: using default surface format BGRA8Unorm, {}x{}", _surfaceWidth, _surfaceHeight);
+        ydebug("Headless mode: using default surface format BGRA8Unorm, {}x{}", _surfaceWidth, _surfaceHeight);
     }
 
-    yinfo("WebGPU initialized: device={} queue={}", (void*)_device, (void*)_queue);
+    yinfo("WebGPU initialized");
     return Ok();
 }
 
@@ -1296,7 +1295,7 @@ Result<void> YettyImpl::ensureCaptureResources(uint32_t width, uint32_t height) 
     // Resize pixel buffer for JPEG compression
     _capturePixels.resize(width * height * bytesPerPixel);
 
-    yinfo("Capture resources created: {}x{}, readback buffer {}KB",
+    ydebug("Capture resources created: {}x{}, readback buffer {}KB",
           width, height, _captureReadbackSize / 1024);
 
     return Ok();
@@ -1539,7 +1538,7 @@ Result<void> YettyImpl::initWorkspace() noexcept {
     if (!wsResult) {
         return Err<void>("Failed to create default workspace", wsResult);
     }
-    yinfo("Created default workspace");
+    ydebug("Created default workspace");
     return Ok();
 }
 
@@ -1594,7 +1593,7 @@ Result<Workspace::Ptr> YettyImpl::createWorkspace() noexcept {
         return Err<Workspace::Ptr>("Failed to create pane", paneResult);
     }
     workspace->setRoot(*paneResult);
-    yinfo("Created single terminal pane");
+    ydebug("Created single terminal pane");
 
     _workspaces.push_back(workspace);
     if (_workspaces.size() == 1) {
@@ -1607,7 +1606,7 @@ Result<Workspace::Ptr> YettyImpl::createWorkspace() noexcept {
 Result<void> YettyImpl::initCallbacks() noexcept {
     // Skip platform callbacks in headless mode (no window)
     if (_vncHeadless) {
-        yinfo("Headless mode: skipping platform callbacks");
+        ydebug("Headless mode: skipping platform callbacks");
         return Ok();
     }
 
@@ -1692,7 +1691,7 @@ Result<void> YettyImpl::initCallbacks() noexcept {
     _platform->setCharCallback([this](unsigned int codepoint) {
         auto t = std::chrono::high_resolution_clock::now();
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
-        yinfo("[TIME] CLIENT CharCallback at {}ms: codepoint={}", ms, codepoint);
+        ydebug("[TIME] CLIENT CharCallback at {}ms: codepoint={}", ms, codepoint);
 
         // Forward to VNC server when in client mode
         if (_vncClientMode && _vncClient) {
@@ -1832,7 +1831,7 @@ Result<void> YettyImpl::initCallbacks() noexcept {
     if (winWidth > 0 && winHeight > 0) {
         _contentScaleX = static_cast<float>(fbWidth) / static_cast<float>(winWidth);
         _contentScaleY = static_cast<float>(fbHeight) / static_cast<float>(winHeight);
-        yinfo("Initial content scale: {}x{} (fb {}x{} / win {}x{})",
+        ydebug("Initial content scale: {}x{} (fb {}x{} / win {}x{})",
               _contentScaleX, _contentScaleY, fbWidth, fbHeight, winWidth, winHeight);
     }
 
@@ -1845,7 +1844,7 @@ Result<void> YettyImpl::onShutdown() {
     // Print capture benchmark JPEG size statistics (timing handled by ytrace)
     if (_captureBenchmark && _captureFrameCount > 0) {
         double avgCompressedKB = (_totalCompressedBytes / _captureFrameCount) / 1024.0;
-        yinfo("=== Capture Benchmark: {} frames, avg JPEG {:.1f}KB ===",
+        ydebug("=== Capture Benchmark: {} frames, avg JPEG {:.1f}KB ===",
               _captureFrameCount, avgCompressedKB);
     }
 
@@ -1980,7 +1979,7 @@ Result<bool> YettyImpl::onEvent(const base::Event& event) {
     if (event.type == base::Event::Type::ScreenUpdate) {
         auto t = std::chrono::high_resolution_clock::now();
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
-        yinfo("[TIME] onEvent() called for ScreenUpdate at {}ms", ms);
+        ydebug("[TIME] onEvent() called for ScreenUpdate at {}ms", ms);
     }
 
     // Input timer: poll GLFW events (fast, always responsive)
@@ -2031,7 +2030,7 @@ Result<bool> YettyImpl::onEvent(const base::Event& event) {
         auto text = std::static_pointer_cast<std::string>(event.payload);
         if (text && !text->empty()) {
             _platform->setClipboardText(*text);
-            yinfo("Clipboard: copied {} bytes", text->size());
+            ydebug("Clipboard: copied {} bytes", text->size());
         }
         return Ok(true);
     }
@@ -2045,7 +2044,7 @@ Result<bool> YettyImpl::onEvent(const base::Event& event) {
         if (auto res = loop->configTimer(_frameTimerId, intervalMs); !res) {
             yerror("Failed to reconfigure frame timer: {}", error_msg(res));
         } else {
-            yinfo("Frame rate changed to {} FPS ({}ms interval)", fps, intervalMs);
+            ydebug("Frame rate changed to {} FPS ({}ms interval)", fps, intervalMs);
         }
         return Ok(true);
     }
@@ -2054,12 +2053,12 @@ Result<bool> YettyImpl::onEvent(const base::Event& event) {
 }
 
 static void signalHandler(int sig) {
-    yinfo("Received signal {}, shutting down...", sig);
+    ydebug("Received signal {}, shutting down...", sig);
     (void)(*base::EventLoop::instance())->stop();
 }
 
 Result<void> YettyImpl::run() noexcept {
-    yinfo("Starting render loop...");
+    ydebug("Starting render loop...");
 
     // Handle Ctrl+C from launching terminal
     std::signal(SIGINT, signalHandler);
@@ -2083,7 +2082,7 @@ Result<void> YettyImpl::run() noexcept {
     loop->startTimer(_frameTimerId);
     loop->start();
 
-    yinfo("Run finished.");
+    ydebug("Run finished.");
 
     if (_fatalGpuError) {
         return Err<void>("Fatal GPU error: " + _fatalGpuErrorMsg);
@@ -2120,7 +2119,7 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - _vncLastReconnectAttempt).count();
         if (elapsed >= VNC_RECONNECT_INTERVAL_MS) {
             _vncLastReconnectAttempt = now;
-            yinfo("VNC client attempting reconnection...");
+            ydebug("VNC client attempting reconnection...");
             if (auto res = _vncClient->reconnect(); !res) {
                 ywarn("VNC reconnection failed: {} - will retry in {}ms", res.error().message(), VNC_RECONNECT_INTERVAL_MS);
             }
@@ -2242,7 +2241,7 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
         if (doCapture) captureCount++; else skipCount++;
         double now = _platform->getTime();
         if (now - lastDbgTime >= 1.0) {
-            yinfo("VNC STATS: captures={} skips={} ackReady={}", captureCount, skipCount, vncServerReady);
+            ydebug("VNC STATS: captures={} skips={} ackReady={}", captureCount, skipCount, vncServerReady);
             captureCount = skipCount = 0;
             lastDbgTime = now;
         }
@@ -2257,7 +2256,7 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
     if (_inRender) {
         auto t = std::chrono::high_resolution_clock::now();
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
-        yinfo("[TIME] SKIPPING GPU at {}ms (_inRender=true), setting _nextScreenUpdateNeeded", ms);
+        ydebug("[TIME] SKIPPING GPU at {}ms (_inRender=true), setting _nextScreenUpdateNeeded", ms);
         _nextScreenUpdateNeeded = true;
         return Ok();
     }
@@ -2268,7 +2267,7 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
 
     auto t = std::chrono::high_resolution_clock::now();
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
-    yinfo("[TIME] STARTING GPU at {}ms", ms);
+    ydebug("[TIME] STARTING GPU at {}ms", ms);
 
     if (doCapture && captureW > 0 && captureH > 0) {
         // Ensure capture resources match requested size
@@ -2498,7 +2497,7 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
 #endif
         auto t = std::chrono::high_resolution_clock::now();
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
-        yinfo("[TIME] GPU DONE callback at {}ms", ms);
+        ydebug("[TIME] GPU DONE callback at {}ms", ms);
 
         auto* self = static_cast<YettyImpl*>(ud1);
         self->_inRender = false;
@@ -2517,7 +2516,7 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
 
         // If ScreenUpdate was needed while rendering, dispatch it now
         if (self->_nextScreenUpdateNeeded.exchange(false)) {
-            yinfo("[TIME] GPU DONE: _nextScreenUpdateNeeded was true, dispatching ScreenUpdate");
+            ydebug("[TIME] GPU DONE: _nextScreenUpdateNeeded was true, dispatching ScreenUpdate");
             // Wake up main thread via EventQueue (thread-safe for GPU callbacks)
             self->_eventQueue->push(base::Event::screenUpdateEvent());
         }
@@ -2538,7 +2537,7 @@ void YettyImpl::handleResize(int newWidth, int newHeight) noexcept {
     if (windowWidth > 0 && windowHeight > 0) {
         _contentScaleX = static_cast<float>(newWidth) / static_cast<float>(windowWidth);
         _contentScaleY = static_cast<float>(newHeight) / static_cast<float>(windowHeight);
-        yinfo("Content scale updated: {}x{} (fb {}x{} / win {}x{})",
+        ydebug("Content scale updated: {}x{} (fb {}x{} / win {}x{})",
               _contentScaleX, _contentScaleY, newWidth, newHeight, windowWidth, windowHeight);
     }
 

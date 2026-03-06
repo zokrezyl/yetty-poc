@@ -81,22 +81,22 @@ public:
 
   Result<MsMsdfFont::Ptr>
   getMsMsdfFont(const std::string &fontName) noexcept override {
-    yinfo("getMsMsdfFont: entered with fontName={}", fontName);
-    yinfo("getMsMsdfFont: checking cache, size={}", _msdfFontCache.size());
+    ydebug("getMsMsdfFont: entered with fontName={}", fontName);
+    ydebug("getMsMsdfFont: checking cache, size={}", _msdfFontCache.size());
     auto it = _msdfFontCache.find(fontName);
-    yinfo("getMsMsdfFont: find completed");
+    ydebug("getMsMsdfFont: find completed");
     if (it != _msdfFontCache.end()) {
-      yinfo("getMsMsdfFont: found in cache");
+      ydebug("getMsMsdfFont: found in cache");
       return Ok(it->second);
     }
-    yinfo("getMsMsdfFont: not in cache, loading");
+    ydebug("getMsMsdfFont: not in cache, loading");
 
-    yinfo("getMsMsdfFont: _cacheDir={}", _cacheDir);
+    ydebug("getMsMsdfFont: _cacheDir={}", _cacheDir);
     std::string cdbBasePath = _cacheDir + "/" + fontName;
-    yinfo("getMsMsdfFont: cdbBasePath={}", cdbBasePath);
+    ydebug("getMsMsdfFont: cdbBasePath={}", cdbBasePath);
 
     // Check if all required CDB files exist; generate any missing ones
-    yinfo("getMsMsdfFont: checking _cdbProvider={}", (void*)_cdbProvider.get());
+    ydebug("getMsMsdfFont: checking _cdbProvider={}", (void*)_cdbProvider.get());
     if (_cdbProvider) {
       static const std::array<std::string, 4> styleSuffixes = {
           "Regular", "Bold", "Oblique", "BoldOblique"};
@@ -114,7 +114,7 @@ public:
       }
 
       if (anyMissing && !ttfPaths.empty() && !ttfPaths[0].empty()) {
-        yinfo("CDB missing for {}, generating via {} provider...", fontName,
+        ydebug("CDB missing for {}, generating via {} provider...", fontName,
               _cdbProvider->name());
 
         for (size_t i = 0; i < styleSuffixes.size(); ++i) {
@@ -132,13 +132,13 @@ public:
           }
         }
 
-        yinfo("CDB generation complete for {}", fontName);
+        ydebug("CDB generation complete for {}", fontName);
       }
     }
 
-    yinfo("getMsMsdfFont: calling MsMsdfFont::create");
+    ydebug("getMsMsdfFont: calling MsMsdfFont::create");
     auto result = MsMsdfFont::create(cdbBasePath, _allocator);
-    yinfo("getMsMsdfFont: MsMsdfFont::create returned");
+    ydebug("getMsMsdfFont: MsMsdfFont::create returned");
     if (!result) {
       return Err<MsMsdfFont::Ptr>("Failed to load MsMsdfFont: " + fontName,
                                   result);
@@ -150,7 +150,7 @@ public:
     std::string cjkFallbackPath = _cacheDir + "/NotoSansCJK-Regular.cdb";
     if (std::filesystem::exists(cjkFallbackPath)) {
       font->setFallbackCdb(cjkFallbackPath);
-      yinfo("Set CJK fallback CDB: {}", cjkFallbackPath);
+      ydebug("Set CJK fallback CDB: {}", cjkFallbackPath);
     }
 
     // Create GPU resources (texture, sampler, metadata buffer) on the atlas
@@ -168,7 +168,7 @@ public:
       _defaultFontName = fontName;
     }
 
-    yinfo("Loaded MsMsdfFont: {}", fontName);
+    ydebug("Loaded MsMsdfFont: {}", fontName);
     return Ok(font);
   }
 
@@ -225,7 +225,7 @@ public:
       _defaultVectorSdfFont = font;
     }
 
-    yinfo("Created VectorSdfFont: {} ({} glyphs, {} curves, {} bytes)",
+    ydebug("Created VectorSdfFont: {} ({} glyphs, {} curves, {} bytes)",
           ttfPath, font->glyphCount(), font->totalCurves(), font->bufferSize());
 
     return Ok(font);
@@ -259,7 +259,7 @@ public:
       _defaultVectorCoverageFont = font;
     }
 
-    yinfo("Created VectorCoverageFont: {} ({} glyphs, {} curves, {} bytes)",
+    ydebug("Created VectorCoverageFont: {} ({} glyphs, {} curves, {} bytes)",
           ttfPath, font->glyphCount(), font->totalCurves(), font->bufferSize());
 
     return Ok(font);
@@ -299,7 +299,7 @@ public:
       _defaultRasterFont = font;
     }
 
-    yinfo("Created RasterFont: {} (cell={}x{}, {} glyphs)",
+    ydebug("Created RasterFont: {} (cell={}x{}, {} glyphs)",
           ttfPath, cellWidth, cellHeight, font->glyphCount());
 
     return Ok(font);
@@ -328,7 +328,7 @@ private:
 #if defined(__ANDROID__) || defined(YETTY_ASSETS_DIR)
     // Use prebuilt CDB files from assets directory
     _cacheDir = getAssetsDir() + "/fonts-cdb";
-    yinfo("MSDF font cache dir (prebuilt): {}", _cacheDir);
+    ydebug("MSDF font cache dir (prebuilt): {}", _cacheDir);
 #else
     const char *home = std::getenv("HOME");
     if (!home) {
@@ -338,11 +338,11 @@ private:
     _cacheDir = std::string(home) + "/.cache/yetty/msdf-font-cache";
 
     if (!std::filesystem::exists(_cacheDir)) {
-      yinfo("Creating MSDF font cache directory: {}", _cacheDir);
+      ydebug("Creating MSDF font cache directory: {}", _cacheDir);
       std::filesystem::create_directories(_cacheDir);
     }
 
-    yinfo("MSDF font cache dir: {}", _cacheDir);
+    ydebug("MSDF font cache dir: {}", _cacheDir);
 #endif
     return Ok();
   }
@@ -359,7 +359,7 @@ private:
       ywarn("Failed to load common glyphs: {}", res.error().message());
     }
 
-    yinfo("BmFont created successfully");
+    ydebug("BmFont created successfully");
     return Ok();
   }
 
@@ -376,7 +376,7 @@ private:
             shaderGlyphResult.error().message());
     } else {
       _shaderGlyphFont = *shaderGlyphResult;
-      yinfo("ShaderFont for glyphs created with {} shaders",
+      ydebug("ShaderFont for glyphs created with {} shaders",
             _shaderGlyphFont->getFunctionCount());
     }
 
@@ -387,7 +387,7 @@ private:
             cardFontResult.error().message());
     } else {
       _cardFont = *cardFontResult;
-      yinfo("ShaderFont for cards created with {} shaders",
+      ydebug("ShaderFont for cards created with {} shaders",
             _cardFont->getFunctionCount());
     }
 
@@ -414,7 +414,7 @@ private:
       return Err<void>("Failed to load basic Latin glyphs", res);
     }
 
-    yinfo("VectorSdfFont initialized: {} glyphs, {} curves, {} bytes",
+    ydebug("VectorSdfFont initialized: {} glyphs, {} curves, {} bytes",
           _defaultVectorSdfFont->glyphCount(),
           _defaultVectorSdfFont->totalCurves(),
           _defaultVectorSdfFont->bufferSize());
@@ -446,7 +446,7 @@ private:
     // Upload to GPU
     _defaultRasterFont->uploadToGpu();
 
-    yinfo("RasterFont initialized: {} glyphs, cell={}x{}",
+    ydebug("RasterFont initialized: {} glyphs, cell={}x{}",
           _defaultRasterFont->glyphCount(),
           _defaultRasterFont->getCellWidth(),
           _defaultRasterFont->getCellHeight());
@@ -469,7 +469,7 @@ private:
           assetsDir + "/" + fontName + "-" + suffixes[i] + ".ttf";
       if (std::filesystem::exists(candidate)) {
         paths[i] = candidate;
-        yinfo("Found TTF: {}", candidate);
+        ydebug("Found TTF: {}", candidate);
       }
     }
 

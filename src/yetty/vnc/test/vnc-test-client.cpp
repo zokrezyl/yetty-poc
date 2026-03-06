@@ -29,7 +29,7 @@ namespace {
 std::atomic<bool> g_running{true};
 
 void signalHandler(int) {
-    yinfo("Received signal, stopping...");
+    ydebug("Received signal, stopping...");
     g_running = false;
 }
 
@@ -50,7 +50,7 @@ ClientState g_clientState;
 
 void framebufferSizeCallback(GLFWwindow* window, int width, int height) {
     if (width > 0 && height > 0) {
-        yinfo("Window resized to {}x{}", width, height);
+        ydebug("Window resized to {}x{}", width, height);
         g_clientState.windowWidth = width;
         g_clientState.windowHeight = height;
         g_clientState.needsReconfigure = true;
@@ -71,7 +71,7 @@ void scrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
                                  std::min((int)ClientState::MAX_CELL_HEIGHT, newHeight));
             if (newHeight != g_clientState.cellHeight) {
                 g_clientState.cellHeight = static_cast<uint8_t>(newHeight);
-                yinfo("Zoom: cellHeight={}", g_clientState.cellHeight);
+                ydebug("Zoom: cellHeight={}", g_clientState.cellHeight);
                 g_clientState.client->sendCellSize(g_clientState.cellHeight);
             }
         }
@@ -89,7 +89,7 @@ struct Stats {
         double elapsed = now - lastReportTime;
         if (elapsed >= 1.0) {
             double fps = framesRendered / (now - startTime);
-            yinfo("Stats: frames={} inputs={} fps={:.1f}",
+            ydebug("Stats: frames={} inputs={} fps={:.1f}",
                   framesRendered, inputsSent, fps);
             lastReportTime = now;
         }
@@ -169,7 +169,7 @@ private:
             text += static_cast<char>(charDist(_rng));
         }
         text += "\033[0m\n";  // Reset color + newline
-        yinfo("SENDING TEXT: {}", text);
+        ydebug("SENDING TEXT: {}", text);
         _client->sendTextInput(text.data(), text.size());
         _inputCount++;
     }
@@ -212,14 +212,14 @@ int main(int argc, char* argv[]) {
     int windowWidth = args::get(widthFlag);
     int windowHeight = args::get(heightFlag);
 
-    yinfo("=== VNC Test Client ===");
+    ydebug("=== VNC Test Client ===");
     if (testRender) {
-        yinfo("TEST RENDER MODE - no server connection, random bitmap");
+        ydebug("TEST RENDER MODE - no server connection, random bitmap");
     } else {
-        yinfo("Server: {}:{}", host, port);
+        ydebug("Server: {}:{}", host, port);
     }
-    yinfo("Window: {}x{}", windowWidth, windowHeight);
-    yinfo("Input generation: {}", generateInput ? "enabled" : "disabled");
+    ydebug("Window: {}x{}", windowWidth, windowHeight);
+    ydebug("Input generation: {}", generateInput ? "enabled" : "disabled");
 
     // Signal handling
     std::signal(SIGINT, signalHandler);
@@ -241,7 +241,7 @@ int main(int argc, char* argv[]) {
         glfwTerminate();
         return 1;
     }
-    yinfo("Window created: {}", (void*)window);
+    ydebug("Window created: {}", (void*)window);
     glfwShowWindow(window);
 
     // Setup GLFW callbacks for resize and zoom
@@ -262,7 +262,7 @@ int main(int argc, char* argv[]) {
         yerror("Failed to create surface");
         return 1;
     }
-    yinfo("Surface created: {}", (void*)surface);
+    ydebug("Surface created: {}", (void*)surface);
 
     // Request adapter
     WGPUAdapter adapter = nullptr;
@@ -292,7 +292,7 @@ int main(int argc, char* argv[]) {
         yerror("Failed to get adapter");
         return 1;
     }
-    yinfo("Got adapter");
+    ydebug("Got adapter");
 
     // Request device with error callback
     WGPUDevice device = nullptr;
@@ -333,7 +333,7 @@ int main(int argc, char* argv[]) {
         yerror("Failed to get device");
         return 1;
     }
-    yinfo("Got device");
+    ydebug("Got device");
 
     WGPUQueue queue = wgpuDeviceGetQueue(device);
 
@@ -349,7 +349,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     WGPUTextureFormat surfaceFormat = caps.formats[0];
-    yinfo("Surface format: {}, present modes: {}", (int)surfaceFormat, caps.presentModeCount);
+    ydebug("Surface format: {}, present modes: {}", (int)surfaceFormat, caps.presentModeCount);
 
     // Configure surface
     WGPUSurfaceConfiguration surfaceConfig = {};
@@ -370,7 +370,7 @@ int main(int argc, char* argv[]) {
         yerror("Surface test failed! Status: {}", (int)testSurfaceTex.status);
         return 1;
     }
-    yinfo("Surface test OK, texture={}", (void*)testSurfaceTex.texture);
+    ydebug("Surface test OK, texture={}", (void*)testSurfaceTex.texture);
 
     // Store in client state for resize handling
     g_clientState.surface = surface;
@@ -379,7 +379,7 @@ int main(int argc, char* argv[]) {
     g_clientState.windowWidth = windowWidth;
     g_clientState.windowHeight = windowHeight;
 
-    yinfo("WebGPU initialized");
+    ydebug("WebGPU initialized");
 
     // Test render mode: create random bitmap texture directly
     WGPUTexture testTexture = nullptr;
@@ -394,7 +394,7 @@ int main(int argc, char* argv[]) {
     uv_loop_t* uvLoop = nullptr;
 
     if (testRender) {
-        yinfo("Creating test texture {}x{}", windowWidth, windowHeight);
+        ydebug("Creating test texture {}x{}", windowWidth, windowHeight);
 
         // Create texture
         WGPUTextureDescriptor texDesc = {};
@@ -543,7 +543,7 @@ struct VertexOutput {
             return 1;
         }
 
-        yinfo("Test render resources created - pipeline={}", (void*)testPipeline);
+        ydebug("Test render resources created - pipeline={}", (void*)testPipeline);
 
     } else {
         // Normal VNC client mode
@@ -553,7 +553,7 @@ struct VertexOutput {
             yerror("Failed to create EventLoop: {}", loopRes.error().message());
             return 1;
         }
-        yinfo("EventLoop initialized");
+        ydebug("EventLoop initialized");
 
         // Create VNC client with initial size - texture created immediately
         vncClient = std::make_shared<VncClient>(device, queue, surfaceFormat,
@@ -565,7 +565,7 @@ struct VertexOutput {
             yerror("Failed to connect: {}", connectRes.error().message());
             return 1;
         }
-        yinfo("Connected to {}:{}", host, port);
+        ydebug("Connected to {}:{}", host, port);
 
         // Setup client state for GLFW callbacks
         g_clientState.client = vncClient.get();
@@ -626,7 +626,7 @@ struct VertexOutput {
                 if (vncW == static_cast<uint32_t>(g_clientState.windowWidth) &&
                     vncH == static_cast<uint32_t>(g_clientState.windowHeight)) {
                     // VNC frame matches window - safe to reconfigure surface now
-                    yinfo("Reconfiguring surface to {}x{} (VNC frame matches)", vncW, vncH);
+                    ydebug("Reconfiguring surface to {}x{} (VNC frame matches)", vncW, vncH);
                     WGPUSurfaceConfiguration surfaceConfig = {};
                     surfaceConfig.device = g_clientState.device;
                     surfaceConfig.format = g_clientState.surfaceFormat;
@@ -642,7 +642,7 @@ struct VertexOutput {
                 } else {
                     // VNC frame doesn't match yet - skip rendering until server catches up
                     if (needsRender) {
-                        yinfo("SIZE MISMATCH: VNC {}x{} vs requested {}x{} - waiting for server",
+                        ydebug("SIZE MISMATCH: VNC {}x{} vs requested {}x{} - waiting for server",
                               vncW, vncH, g_clientState.windowWidth, g_clientState.windowHeight);
                     }
                     needsRender = false;
@@ -652,7 +652,7 @@ struct VertexOutput {
             // Also skip if VNC dimensions don't match current surface dimensions
             if (needsRender && (vncW != static_cast<uint32_t>(windowWidth) ||
                                 vncH != static_cast<uint32_t>(windowHeight))) {
-                yinfo("VNC {}x{} != surface {}x{} - skipping render", vncW, vncH, windowWidth, windowHeight);
+                ydebug("VNC {}x{} != surface {}x{} - skipping render", vncW, vncH, windowWidth, windowHeight);
                 needsRender = false;
             }
         } else if (testRender) {
@@ -725,7 +725,7 @@ struct VertexOutput {
         stats.report(now);
     }
 
-    yinfo("Shutting down...");
+    ydebug("Shutting down...");
 
     if (vncClient) {
         vncClient->disconnect();
@@ -749,6 +749,6 @@ struct VertexOutput {
     glfwDestroyWindow(window);
     glfwTerminate();
 
-    yinfo("Done");
+    ydebug("Done");
     return 0;
 }

@@ -127,7 +127,7 @@ public:
         // Start reader thread
         _readerThread = std::thread([this]() { readerThreadFunc(); });
 
-        yinfo("PtyReaderWindows: Started ConPTY, shell={}", _shell);
+        ydebug("PtyReaderWindows: Started ConPTY, shell={}", _shell);
         return Ok();
     }
 
@@ -165,7 +165,7 @@ public:
         if (!_running) return;
         _running = false;
 
-        yinfo("PtyReaderWindows: Stopping");
+        ydebug("PtyReaderWindows: Stopping");
 
         if (_hPC) {
             ClosePseudoConsole(_hPC);
@@ -208,30 +208,30 @@ private:
     void readerThreadFunc() {
         char buf[4096];
         int readCount = 0;
-        yinfo("PtyReaderWindows: reader thread started");
+        ydebug("PtyReaderWindows: reader thread started");
         while (_running) {
             DWORD bytesRead = 0;
-            yinfo("PtyReaderWindows: ReadFile #{} waiting...", readCount);
+            ydebug("PtyReaderWindows: ReadFile #{} waiting...", readCount);
             BOOL ok = ReadFile(_pipeOutRead, buf, sizeof(buf), &bytesRead, nullptr);
             if (ok && bytesRead > 0) {
-                yinfo("PtyReaderWindows: ReadFile #{} got {} bytes", readCount, bytesRead);
+                ydebug("PtyReaderWindows: ReadFile #{} got {} bytes", readCount, bytesRead);
                 {
                     std::lock_guard<std::mutex> lock(_bufferMutex);
                     _readBuffer.insert(_readBuffer.end(), buf, buf + bytesRead);
                 }
-                yinfo("PtyReaderWindows: calling dataAvailableCallback...");
+                ydebug("PtyReaderWindows: calling dataAvailableCallback...");
                 if (_dataAvailableCallback) {
                     _dataAvailableCallback();
                 }
-                yinfo("PtyReaderWindows: callback returned");
+                ydebug("PtyReaderWindows: callback returned");
                 readCount++;
             } else {
                 DWORD err = GetLastError();
-                yinfo("PtyReaderWindows: ReadFile failed ok={} bytesRead={} err={}", (int)ok, bytesRead, err);
+                ydebug("PtyReaderWindows: ReadFile failed ok={} bytesRead={} err={}", (int)ok, bytesRead, err);
                 // Check if process exited
                 DWORD exitCode;
                 if (GetExitCodeProcess(_hProcess, &exitCode) && exitCode != STILL_ACTIVE) {
-                    yinfo("PtyReaderWindows: process exited with code {}", exitCode);
+                    ydebug("PtyReaderWindows: process exited with code {}", exitCode);
                     _running = false;
                     if (_exitCallback) {
                         _exitCallback(static_cast<int>(exitCode));
@@ -241,7 +241,7 @@ private:
                 Sleep(10);
             }
         }
-        yinfo("PtyReaderWindows: reader thread exiting");
+        ydebug("PtyReaderWindows: reader thread exiting");
     }
 
     HPCON _hPC = nullptr;

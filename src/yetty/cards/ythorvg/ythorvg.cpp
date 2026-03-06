@@ -43,7 +43,7 @@ static Result<void> ythorvgInit() {
         }
         uint32_t major, minor, micro;
         const char* version = tvg::Initializer::version(&major, &minor, &micro);
-        yinfo("YThorVG engine initialized: {}", version ? version : "unknown");
+        ydebug("YThorVG engine initialized: {}", version ? version : "unknown");
     }
     ++s_thorvgRefCount;
     return Ok();
@@ -53,7 +53,7 @@ static void ythorvgTerm() {
     std::lock_guard<std::mutex> lock(s_thorvgMutex);
     if (--s_thorvgRefCount == 0) {
         tvg::Initializer::term();
-        yinfo("YThorVG engine terminated");
+        ydebug("YThorVG engine terminated");
     }
 }
 
@@ -316,7 +316,7 @@ public:
             ywarn("YThorVG::init: event registration failed");
         }
 
-        yinfo("YThorVG::init: {}x{} prims={} animated={}",
+        ydebug("YThorVG::init: {}x{} prims={} animated={}",
               _contentWidth, _contentHeight, _buffer->primCount(), _isAnimated);
 
         return Ok();

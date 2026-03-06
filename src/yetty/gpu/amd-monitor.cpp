@@ -44,7 +44,7 @@ std::shared_ptr<AmdMonitor> AmdMonitor::tryCreate(const fs::path& cardPath) {
         }
     }
 
-    yinfo("AMD monitor: found GPU at {}", cardPath.string());
+    ydebug("AMD monitor: found GPU at {}", cardPath.string());
     return std::shared_ptr<AmdMonitor>(new AmdMonitor(cardPath, deviceName));
 }
 

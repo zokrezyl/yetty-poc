@@ -225,7 +225,7 @@ void VncServer::handleAccept() {
 
         char clientIp[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &clientAddr.sin_addr, clientIp, sizeof(clientIp));
-        yinfo("VNC client connected from {}", clientIp);
+        ydebug("VNC client connected from {}", clientIp);
 
         {
             std::lock_guard<std::mutex> lock(_clientsMutex);
@@ -1110,7 +1110,7 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
             _clients.erase(std::remove(_clients.begin(), _clients.end(), fd), _clients.end());
             _clientInputBuffers.erase(fd);
             _clientSendBuffers.erase(fd);
-            yinfo("VNC client disconnected");
+            ydebug("VNC client disconnected");
         }
         _clientCount = _clients.size();
     }
@@ -1167,7 +1167,7 @@ void VncServer::pollClientInput(int clientFd) {
         if (n <= 0) {
             if (n == 0) {
                 // Client disconnected - clean up
-                yinfo("VNC pollClientInput: fd={} disconnected, cleaning up", clientFd);
+                ydebug("VNC pollClientInput: fd={} disconnected, cleaning up", clientFd);
                 std::lock_guard<std::mutex> lock(_clientsMutex);
                 unregisterClientPoll(clientFd);
                 sock::close(clientFd);
@@ -1267,7 +1267,7 @@ void VncServer::dispatchInput(const InputHeader& hdr, const uint8_t* data) {
                 std::string text(reinterpret_cast<const char*>(data), hdr.data_size);
                 auto t = std::chrono::high_resolution_clock::now();
                 auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
-                yinfo("[TIME] TEXT_INPUT at {}ms: '{}'", ms, text);
+                ydebug("[TIME] TEXT_INPUT at {}ms: '{}'", ms, text);
                 onTextInput(text);
             }
             break;
@@ -1301,7 +1301,7 @@ void VncServer::dispatchInput(const InputHeader& hdr, const uint8_t* data) {
 
         case InputType::FRAME_ACK:
             // Flow control: client finished processing frame, allow next frame
-            yinfo("VNC FRAME_ACK received, clearing _awaitingAck");
+            ydebug("VNC FRAME_ACK received, clearing _awaitingAck");
             _awaitingAck = false;
             break;
 
@@ -1312,7 +1312,7 @@ void VncServer::dispatchInput(const InputHeader& hdr, const uint8_t* data) {
                 if (c->quality > 0 && c->quality <= 100) {
                     _jpegQuality = c->quality;
                 }
-                yinfo("VNC COMPRESSION_CONFIG: forceRaw={} quality={}", _forceRaw, _jpegQuality);
+                ydebug("VNC COMPRESSION_CONFIG: forceRaw={} quality={}", _forceRaw, _jpegQuality);
             }
             break;
     }
@@ -1321,7 +1321,7 @@ void VncServer::dispatchInput(const InputHeader& hdr, const uint8_t* data) {
     if (onInputReceived) {
         auto t = std::chrono::high_resolution_clock::now();
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
-        yinfo("[TIME] Calling onInputReceived at {}ms", ms);
+        ydebug("[TIME] Calling onInputReceived at {}ms", ms);
         onInputReceived();
     } else {
         ywarn("[TIME] onInputReceived callback is NULL!");

@@ -280,7 +280,7 @@ public:
             ywarn("ThorVG::init: event registration failed");
         }
 
-        yinfo("ThorVG::init: {}x{} prims={} animated={}",
+        ydebug("ThorVG::init: {}x{} prims={} animated={}",
               _renderer->contentWidth(), _renderer->contentHeight(),
               _buffer->primCount(), _renderer->isAnimated());
 

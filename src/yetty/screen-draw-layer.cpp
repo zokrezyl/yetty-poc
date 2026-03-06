@@ -131,7 +131,7 @@ Result<void> ScreenDrawLayerImpl::init() noexcept {
     if (auto res = createPipeline(); !res)
         return Err<void>("ScreenDrawLayer: pipeline creation failed", res);
 
-    yinfo("ScreenDrawLayer initialized");
+    ydebug("ScreenDrawLayer initialized");
     return Ok();
 }
 
@@ -349,7 +349,7 @@ Result<void> ScreenDrawLayerImpl::createPipeline() {
     if (!_pipeline)
         return Err<void>("Failed to create screen draw render pipeline");
 
-    yinfo("ScreenDrawLayer: pipeline created successfully");
+    ydebug("ScreenDrawLayer: pipeline created successfully");
     return Ok();
 }
 
@@ -591,7 +591,7 @@ Result<void> ScreenDrawLayerImpl::parseBinary(const std::string& payload) {
             if (!res) return res;
             data = decompressed.data();
             size = decompressed.size();
-            yinfo("parseBinary: decompressed {} -> {} bytes", payload.size(), size);
+            ydebug("parseBinary: decompressed {} -> {} bytes", payload.size(), size);
         }
     }
 

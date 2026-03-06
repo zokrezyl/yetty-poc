@@ -154,7 +154,7 @@ Result<void> ShaderFontImpl::loadShaders() {
     _codepointToIndex.clear();
 
     if (_shaderDir.empty()) {
-        yinfo("ShaderFont: no shader directory specified");
+        ydebug("ShaderFont: no shader directory specified");
         return Ok();
     }
 
@@ -165,14 +165,14 @@ Result<void> ShaderFontImpl::loadShaders() {
         searchDir += "glyphs/";
     }
 
-    yinfo("ShaderFont: loading from directory '{}'", searchDir);
+    ydebug("ShaderFont: loading from directory '{}'", searchDir);
 
 #if defined(__EMSCRIPTEN__)
     // Use POSIX APIs on Emscripten since std::filesystem may not work correctly
     // with the virtual FS
     DIR* dir = opendir(searchDir.c_str());
     if (!dir) {
-        yinfo("ShaderFont: opendir('{}') failed, trying fallback '{}'", searchDir, _shaderDir);
+        ydebug("ShaderFont: opendir('{}') failed, trying fallback '{}'", searchDir, _shaderDir);
         searchDir = _shaderDir;
         dir = opendir(searchDir.c_str());
     }
@@ -220,7 +220,7 @@ Result<void> ShaderFontImpl::loadShaders() {
             _entries.push_back(std::move(shaderEntry));
             _codepointToIndex[codepoint] = index;
 
-            yinfo("ShaderFont: loaded {} at offset 0x{:04X} (codepoint 0x{:06X})",
+            ydebug("ShaderFont: loaded {} at offset 0x{:04X} (codepoint 0x{:06X})",
                   filename, offset, codepoint);
         }
         closedir(dir);
@@ -230,7 +230,7 @@ Result<void> ShaderFontImpl::loadShaders() {
 #else
     // Use std::filesystem on native platforms
     if (!std::filesystem::exists(searchDir)) {
-        yinfo("ShaderFont: directory '{}' not found, falling back to '{}'",
+        ydebug("ShaderFont: directory '{}' not found, falling back to '{}'",
               searchDir, _shaderDir);
         searchDir = _shaderDir;
     }
@@ -274,7 +274,7 @@ Result<void> ShaderFontImpl::loadShaders() {
             _entries.push_back(std::move(shaderEntry));
             _codepointToIndex[codepoint] = index;
 
-            yinfo("ShaderFont: loaded {} at offset 0x{:04X} (codepoint 0x{:06X})",
+            ydebug("ShaderFont: loaded {} at offset 0x{:04X} (codepoint 0x{:06X})",
                   filename, offset, codepoint);
         }
     } catch (const std::exception& e) {
@@ -290,7 +290,7 @@ Result<void> ShaderFontImpl::loadShaders() {
         _codepointToIndex[_entries[i].codepoint] = i;
     }
 
-    yinfo("ShaderFont: loaded {} {} shaders from {}",
+    ydebug("ShaderFont: loaded {} {} shaders from {}",
           _entries.size(),
           (_category == Category::Card) ? "card" : "glyph",
           searchDir);
@@ -310,7 +310,7 @@ uint32_t ShaderFontImpl::getGlyphIndex(uint32_t codepoint) {
         if (_enabledCodepoints.find(codepoint) == _enabledCodepoints.end()) {
             _enabledCodepoints.insert(codepoint);
             _dirty = true;
-            yinfo("ShaderFont::getGlyphIndex: enabled codepoint {:#x}, now {} enabled, dirty=true",
+            ydebug("ShaderFont::getGlyphIndex: enabled codepoint {:#x}, now {} enabled, dirty=true",
                   codepoint, _enabledCodepoints.size());
         }
         return codepoint;

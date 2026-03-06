@@ -360,7 +360,7 @@ public:
         _bounds = r;
         if (auto view = activeView()) {
             Rect inner = innerBounds();
-            yinfo("Pane::setBounds outer=({},{} {}x{}) inner=({},{} {}x{})",
+            ydebug("Pane::setBounds outer=({},{} {}x{}) inner=({},{} {}x{})",
                   r.x, r.y, r.width, r.height,
                   inner.x, inner.y, inner.width, inner.height);
             if (inner.width > 0 && inner.height > 0) {
@@ -375,14 +375,14 @@ public:
             handleFocusEvent(event);
         } else if (event.type == Event::Type::Close) {
             if (event.closeEv.objectId == id()) {
-                yinfo("Pane {} received Close event", id());
+                ydebug("Pane {} received Close event", id());
                 _views.clear();
                 return Ok(true);
             }
             // Check if close targets one of our views
             for (auto& v : _views) {
                 if (v->id() == event.closeEv.objectId) {
-                    yinfo("Pane {} closing view {}", id(), v->id());
+                    ydebug("Pane {} closing view {}", id(), v->id());
                     closeView(event.closeEv.objectId);
                     return Ok(true);
                 }

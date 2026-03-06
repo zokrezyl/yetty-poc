@@ -129,7 +129,7 @@ public:
             if (auto res = renderHtmlInternal(); !res) {
                 ywarn("YHtmlImpl::renderToStaging: render failed: {}", error_msg(res));
             } else {
-                yinfo("YHtmlImpl::renderToStaging: {} prims, {} glyphs",
+                ydebug("YHtmlImpl::renderToStaging: {} prims, {} glyphs",
                       _builder->primitiveCount(), _builder->glyphCount());
                 _dirty = true;
             }
@@ -257,7 +257,7 @@ public:
             }
 
             if (!redrawBoxes.empty()) {
-                yinfo("YHtmlImpl: mouse event at doc({},{}) triggered redraw ({} boxes)",
+                ydebug("YHtmlImpl: mouse event at doc({},{}) triggered redraw ({} boxes)",
                       docX, docY, redrawBoxes.size());
                 redrawHtml();
             }
@@ -532,7 +532,7 @@ private:
 
         // Resolve relative URLs against current base
         std::string resolvedUrl = _fetcher->resolveUrl(url);
-        yinfo("YHtmlImpl::navigateTo: {} -> {}", url, resolvedUrl);
+        ydebug("YHtmlImpl::navigateTo: {} -> {}", url, resolvedUrl);
 
         // Fetch the new page
         _fetcher->setBaseUrl(resolvedUrl);
@@ -565,7 +565,7 @@ private:
         _metadataDirty = true;
         _needsBufferRealloc = true;
         _needsTextureRealloc = true;
-        yinfo("YHtmlImpl::navigateTo: rendered {} prims, {} glyphs",
+        ydebug("YHtmlImpl::navigateTo: rendered {} prims, {} glyphs",
               _builder->primitiveCount(), _builder->glyphCount());
     }
 
@@ -646,18 +646,18 @@ private:
             if (_payloadStr.empty()) {
                 return Err<void>("YHtmlImpl::loadContent: no payload");
             }
-            yinfo("YHtmlImpl::loadContent: using payload ({} bytes)", _payloadStr.size());
+            ydebug("YHtmlImpl::loadContent: using payload ({} bytes)", _payloadStr.size());
             _htmlContent = _payloadStr;
         } else if (HttpFetcher::isUrl(_inputSource)) {
             _fetcher->setBaseUrl(_inputSource);
-            yinfo("YHtmlImpl::loadContent: fetching URL: {}", _inputSource);
+            ydebug("YHtmlImpl::loadContent: fetching URL: {}", _inputSource);
             auto body = _fetcher->fetch(_inputSource);
             if (!body) {
                 return Err<void>("YHtmlImpl::loadContent: failed to fetch URL");
             }
             _htmlContent = std::move(*body);
         } else {
-            yinfo("YHtmlImpl::loadContent: reading file: {}", _inputSource);
+            ydebug("YHtmlImpl::loadContent: reading file: {}", _inputSource);
             std::ifstream file(_inputSource);
             if (!file) {
                 return Err<void>("YHtmlImpl::loadContent: failed to open file");
@@ -671,7 +671,7 @@ private:
             return Err<void>("YHtmlImpl::loadContent: empty content");
         }
 
-        yinfo("YHtmlImpl::loadContent: {} bytes", _htmlContent.size());
+        ydebug("YHtmlImpl::loadContent: {} bytes", _htmlContent.size());
         return Ok();
     }
 
@@ -717,7 +717,7 @@ private:
                 _pendingFormSubmit = PendingFormSubmit{action, method, formData};
             });
 
-        yinfo("YHtmlImpl::renderHtml: {}x{} prims={} glyphs={}",
+        ydebug("YHtmlImpl::renderHtml: {}x{} prims={} glyphs={}",
               result.documentWidth, result.documentHeight,
               _builder->primitiveCount(), _builder->glyphCount());
 
@@ -785,7 +785,7 @@ private:
                           const std::string& formData) {
         if (!_fetcher) return;
         std::string resolvedAction = _fetcher->resolveUrl(action);
-        yinfo("YHtmlImpl::handleFormSubmit: {} {} data={}bytes",
+        ydebug("YHtmlImpl::handleFormSubmit: {} {} data={}bytes",
               method, resolvedAction, formData.size());
 
         if (method == "GET") {
@@ -801,7 +801,7 @@ private:
                 ywarn("YHtmlImpl::handleFormSubmit: POST failed");
                 return;
             }
-            yinfo("YHtmlImpl::handleFormSubmit: POST response {} bytes", body->size());
+            ydebug("YHtmlImpl::handleFormSubmit: POST response {} bytes", body->size());
             _htmlContent = std::move(*body);
             _document.reset();
             _container.reset();
@@ -825,7 +825,7 @@ Result<YHtml::Ptr> YHtml::createImpl(
     const std::string& args,
     const std::string& payload)
 {
-    yinfo("YHtml::create: pos=({},{}) size={}x{} payload_len={}",
+    ydebug("YHtml::create: pos=({},{}) size={}x{} payload_len={}",
           x, y, widthCells, heightCells, payload.size());
 
     auto card = std::make_shared<YHtmlImpl>(ctx, x, y, widthCells, heightCells,
@@ -836,7 +836,7 @@ Result<YHtml::Ptr> YHtml::createImpl(
         return Err<Ptr>("YHtml::create: init failed");
     }
 
-    yinfo("YHtml::create: SUCCESS");
+    ydebug("YHtml::create: SUCCESS");
     return Ok(std::move(card));
 }
 

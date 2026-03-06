@@ -118,7 +118,7 @@ Result<CardPtr> YDrawMaze::create(
 {
     (void)payload;
 
-    yinfo("YDrawMaze::create: pos=({},{}) size={}x{} args='{}'", x, y, widthCells, heightCells, args);
+    ydebug("YDrawMaze::create: pos=({},{}) size={}x{} args='{}'", x, y, widthCells, heightCells, args);
 
     if (!ctx.cardManager) {
         return Err<CardPtr>("YDrawMaze::create: null CardBufferManager");
@@ -131,7 +131,7 @@ Result<CardPtr> YDrawMaze::create(
         return Err<CardPtr>("YDrawMaze::create: init failed");
     }
 
-    yinfo("YDrawMaze::create: SUCCESS");
+    ydebug("YDrawMaze::create: SUCCESS");
     return Ok<CardPtr>(card);
 }
 

@@ -45,7 +45,7 @@ std::shared_ptr<IntelMonitor> IntelMonitor::tryCreate(const fs::path& cardPath) 
         }
     }
 
-    yinfo("Intel monitor: found GPU at {}", cardPath.string());
+    ydebug("Intel monitor: found GPU at {}", cardPath.string());
     return std::shared_ptr<IntelMonitor>(new IntelMonitor(cardPath, deviceName));
 }
 

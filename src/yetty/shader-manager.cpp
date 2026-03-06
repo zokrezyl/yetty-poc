@@ -382,7 +382,7 @@ Result<void> ShaderManagerImpl::init(const GPUContext& gpu, GpuAllocator::Ptr al
     // Load base shader
     std::string shadersDir = getShadersDir();
     std::string shaderPath = shadersDir + "/gpu-screen.wgsl";
-    yinfo("ShaderManager: loading shaders from {}", shadersDir);
+    ydebug("ShaderManager: loading shaders from {}", shadersDir);
     if (auto res = loadBaseShader(shaderPath); !res) {
         return res;
     }
@@ -400,7 +400,7 @@ Result<void> ShaderManagerImpl::init(const GPUContext& gpu, GpuAllocator::Ptr al
                     if (!libCode.empty()) {
                         std::string libName = entry.path().stem().string();
                         addLibrary(libName, libCode);
-                        yinfo("ShaderManager: loaded library '{}' ({} bytes)", libName, libCode.size());
+                        ydebug("ShaderManager: loaded library '{}' ({} bytes)", libName, libCode.size());
                     }
                 }
             }
@@ -413,7 +413,7 @@ Result<void> ShaderManagerImpl::init(const GPUContext& gpu, GpuAllocator::Ptr al
     // Validation is enabled when WEBGPU_BACKEND_DAWN is defined (compile-time check)
     auto loadEffects = [this](const std::string& dir, std::vector<EffectFile>& dest, const std::string& prefix) {
         if (!std::filesystem::exists(dir) || !std::filesystem::is_directory(dir)) {
-            yinfo("ShaderManager: no {} directory at {}", prefix, dir);
+            ydebug("ShaderManager: no {} directory at {}", prefix, dir);
             return;
         }
         for (const auto& entry : std::filesystem::directory_iterator(dir)) {
@@ -494,7 +494,7 @@ Result<void> ShaderManagerImpl::init(const GPUContext& gpu, GpuAllocator::Ptr al
 #endif
 
             dest.push_back({idx, name, funcName, code});
-            yinfo("ShaderManager: loaded {} effect '{}' index={} func={}", prefix, name, idx, funcName);
+            ydebug("ShaderManager: loaded {} effect '{}' index={} func={}", prefix, name, idx, funcName);
         }
         // Sort by index
         std::sort(dest.begin(), dest.end(), [](const EffectFile& a, const EffectFile& b) {
@@ -510,7 +510,7 @@ Result<void> ShaderManagerImpl::init(const GPUContext& gpu, GpuAllocator::Ptr al
     loadEffects(postEffectsDir, _postEffects, "post");
 
     _initialized = true;
-    yinfo("ShaderManager: initialized ({} pre-effects, {} effects, {} post-effects)",
+    ydebug("ShaderManager: initialized ({} pre-effects, {} effects, {} post-effects)",
           _preEffects.size(), _effects.size(), _postEffects.size());
     return Ok();
 }
@@ -524,7 +524,7 @@ void ShaderManagerImpl::addProvider(std::shared_ptr<ShaderProvider> provider, co
 
 void ShaderManagerImpl::addLibrary(const std::string& name, const std::string& code) {
     _libraries[name] = code;
-    yinfo("ShaderManager: added library '{}'", name);
+    ydebug("ShaderManager: added library '{}'", name);
 }
 
 Result<void> ShaderManagerImpl::loadBaseShader(const std::string& path) {
@@ -541,7 +541,7 @@ Result<void> ShaderManagerImpl::loadBaseShader(const std::string& path) {
         return Err<void>("Shader file is empty: " + path);
     }
 
-    yinfo("ShaderManager: loaded base shader from {} ({} lines)",
+    ydebug("ShaderManager: loaded base shader from {} ({} lines)",
           path, std::count(_baseShader.begin(), _baseShader.end(), '\n') + 1);
 
     return Ok();
@@ -621,11 +621,11 @@ std::string ShaderManagerImpl::mergeShaders() const {
     // Replace dispatch placeholders for each dispatch name
     for (const auto& [dispatchName, dispatchCode] : dispatchByName) {
         std::string placeholder = "// " + dispatchName;
-        yinfo("ShaderManager: dispatch '{}' code length={}", dispatchName, dispatchCode.size());
+        ydebug("ShaderManager: dispatch '{}' code length={}", dispatchName, dispatchCode.size());
         if (dispatchCode.size() > 200) {
-            yinfo("  dispatch start: '{}'", dispatchCode.substr(0, 200));
+            ydebug("  dispatch start: '{}'", dispatchCode.substr(0, 200));
         } else {
-            yinfo("  dispatch: '{}'", dispatchCode);
+            ydebug("  dispatch: '{}'", dispatchCode);
         }
         if (!replacePlaceholder(result, placeholder, dispatchCode)) {
             ywarn("ShaderManager: dispatch placeholder '{}' not found in base shader", placeholder);
@@ -735,7 +735,7 @@ Result<void> ShaderManagerImpl::compile() {
     _mergedSource = mergeShaders();
 
     int lineCount = static_cast<int>(std::count(_mergedSource.begin(), _mergedSource.end(), '\n')) + 1;
-    yinfo("ShaderManager: compiling merged shader ({} lines)", lineCount);
+    ydebug("ShaderManager: compiling merged shader ({} lines)", lineCount);
 
     // Release old shader module if exists
     if (_shaderModule) {
@@ -798,7 +798,7 @@ Result<void> ShaderManagerImpl::compile() {
         }
     }
 
-    yinfo("ShaderManager: compiled successfully ({} shader functions)", totalFunctions);
+    ydebug("ShaderManager: compiled successfully ({} shader functions)", totalFunctions);
     return Ok();
 }
 
@@ -996,7 +996,7 @@ Result<void> ShaderManagerImpl::createPipelineResources() {
         return Err<void>("Failed to create grid render pipeline: " + scopeErrorMsg);
     }
 
-    yinfo("ShaderManager: created shared pipeline resources");
+    ydebug("ShaderManager: created shared pipeline resources");
     return Ok();
 }
 
@@ -1071,7 +1071,7 @@ Result<void> ShaderManagerImpl::recreatePipeline() {
         return Err<void>("Failed to recreate grid render pipeline: " + scopeErrorMsg);
     }
 
-    yinfo("ShaderManager: recreated pipeline after shader recompile");
+    ydebug("ShaderManager: recreated pipeline after shader recompile");
     return Ok();
 }
 

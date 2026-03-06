@@ -45,7 +45,7 @@ public:
 
     int start() override {
 #if !YETTY_WEB
-        yinfo("EventLoop::start: running uv_default_loop");
+        ydebug("EventLoop::start: running uv_default_loop");
         return uv_run(_loop, UV_RUN_DEFAULT);
 #else
         return 0;
@@ -54,7 +54,7 @@ public:
 
     Result<void> stop() override {
 #if !YETTY_WEB
-        yinfo("EventLoop::stop");
+        ydebug("EventLoop::stop");
         uv_stop(_loop);
 #endif
         return Ok();
@@ -104,19 +104,19 @@ public:
         if (event.type == Event::Type::ScreenUpdate) {
             auto t = std::chrono::high_resolution_clock::now();
             auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
-            yinfo("[TIME] dispatch() called for ScreenUpdate at {}ms", ms);
+            ydebug("[TIME] dispatch() called for ScreenUpdate at {}ms", ms);
         }
 
         auto it = _listeners.find(event.type);
         if (it == _listeners.end()) {
             if (event.type == Event::Type::ScreenUpdate) {
-                yinfo("[TIME] dispatch() NO LISTENERS FOUND for ScreenUpdate");
+                ydebug("[TIME] dispatch() NO LISTENERS FOUND for ScreenUpdate");
             }
             return Ok(false);
         }
 
         if (event.type == Event::Type::ScreenUpdate) {
-            yinfo("[TIME] dispatch() found {} listeners for ScreenUpdate", it->second.size());
+            ydebug("[TIME] dispatch() found {} listeners for ScreenUpdate", it->second.size());
         }
 
         auto listeners = it->second;  // copy for safe iteration
@@ -125,7 +125,7 @@ public:
                 if (event.type == Event::Type::ScreenUpdate) {
                     auto t = std::chrono::high_resolution_clock::now();
                     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
-                    yinfo("[TIME] dispatch() calling onEvent for ScreenUpdate at {}ms", ms);
+                    ydebug("[TIME] dispatch() calling onEvent for ScreenUpdate at {}ms", ms);
                 }
                 auto result = sp->onEvent(event);
                 if (!result) {
@@ -158,7 +158,7 @@ public:
 #if !YETTY_WEB
         PollId id = _nextPollId++;
         _polls[id] = std::make_unique<PollHandle>();
-        yinfo("EventLoop::createPoll: id={}", id);
+        ydebug("EventLoop::createPoll: id={}", id);
         return Ok(id);
 #else
         return Err<PollId>("Poll not supported on this platform");
@@ -185,7 +185,7 @@ public:
             return Err<void>(std::string("uv_poll_init failed: ") + uv_strerror(r));
         }
         ph->poll.data = ph.get();
-        yinfo("EventLoop::configPoll: id={} fd={} success", id, fd);
+        ydebug("EventLoop::configPoll: id={} fd={} success", id, fd);
         return Ok();
 #else
         (void)id;
@@ -207,7 +207,7 @@ public:
         if (events & POLL_WRITABLE) uvEvents |= UV_WRITABLE;
         it->second->events = uvEvents;
 
-        yinfo("EventLoop::startPoll: id={} fd={} events={}", id, it->second->fd, uvEvents);
+        ydebug("EventLoop::startPoll: id={} fd={} events={}", id, it->second->fd, uvEvents);
         int r = uv_poll_start(&it->second->poll, uvEvents, onPollCallback);
         if (r != 0) {
             yerror("EventLoop::startPoll: uv_poll_start failed for fd={}: {}", it->second->fd, uv_strerror(r));
@@ -293,7 +293,7 @@ public:
             return Err<void>("Poll not found");
         }
 
-        yinfo("EventLoop::registerPollListener: id={} fd={} listener={}", id, it->second->fd, (void*)listener.get());
+        ydebug("EventLoop::registerPollListener: id={} fd={} listener={}", id, it->second->fd, (void*)listener.get());
         it->second->listeners.push_back(listener);
         return Ok();
 #else
@@ -410,7 +410,7 @@ private:
 #if !YETTY_WEB
     static void onPollCallback(uv_poll_t* handle, int status, int events) {
         auto* ph = static_cast<PollHandle*>(handle->data);
-        yinfo("EventLoop::onPollCallback: fd={} status={} events={} listeners={}", ph->fd, status, events, ph->listeners.size());
+        ydebug("EventLoop::onPollCallback: fd={} status={} events={} listeners={}", ph->fd, status, events, ph->listeners.size());
 
         if (status < 0) {
             ywarn("EventLoop::onPollCallback: error status={} for fd={}", status, ph->fd);
@@ -419,7 +419,7 @@ private:
 
         // Dispatch readable event
         if (events & UV_READABLE) {
-            yinfo("EventLoop::onPollCallback: READABLE fd={}", ph->fd);
+            ydebug("EventLoop::onPollCallback: READABLE fd={}", ph->fd);
             Event event;
             event.type = Event::Type::PollReadable;
             event.poll.fd = ph->fd;
@@ -433,7 +433,7 @@ private:
 
         // Dispatch writable event
         if (events & UV_WRITABLE) {
-            yinfo("EventLoop::onPollCallback: WRITABLE fd={}", ph->fd);
+            ydebug("EventLoop::onPollCallback: WRITABLE fd={}", ph->fd);
             Event event;
             event.type = Event::Type::PollWritable;
             event.poll.fd = ph->fd;

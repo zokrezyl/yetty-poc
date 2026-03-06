@@ -263,7 +263,7 @@ public:
             _advanceWidth = static_cast<float>(_unitsPerEM) / FT_SCALE;
         }
 
-        yinfo("VectorCoverageFont loaded: {} (units_per_EM={} ascender={:.1f} descender={:.1f} advance={:.1f})",
+        ydebug("VectorCoverageFont loaded: {} (units_per_EM={} ascender={:.1f} descender={:.1f} advance={:.1f})",
               _ttfPath, _unitsPerEM, _ascender, _descender, _advanceWidth);
 
         return Ok();
@@ -496,7 +496,7 @@ private:
         wgpuQueueWriteBuffer(queue, _offsetBuffer, 0,
                              offsetTable.data(), offsetTable.size() * sizeof(uint32_t));
 
-        yinfo("VectorCoverageFont uploaded: {} glyphs, {} curves, {} bytes",
+        ydebug("VectorCoverageFont uploaded: {} glyphs, {} curves, {} bytes",
               _glyphOffsets.size(), _totalCurves, bufferSize());
 
         _dirty = false;

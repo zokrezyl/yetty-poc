@@ -34,47 +34,47 @@ std::string TextureProvider::detectProviderType(const std::string& payload) {
 
     // Check image formats (handled by stb_image)
     if (matchMagic(payload, PNG_MAGIC, sizeof(PNG_MAGIC))) {
-        yinfo("TextureProvider::detectProviderType: detected PNG");
+        ydebug("TextureProvider::detectProviderType: detected PNG");
         return "image";
     }
     if (matchMagic(payload, JPEG_MAGIC, sizeof(JPEG_MAGIC))) {
-        yinfo("TextureProvider::detectProviderType: detected JPEG");
+        ydebug("TextureProvider::detectProviderType: detected JPEG");
         return "image";
     }
     if (matchMagic(payload, GIF87_MAGIC, sizeof(GIF87_MAGIC)) ||
         matchMagic(payload, GIF89_MAGIC, sizeof(GIF89_MAGIC))) {
-        yinfo("TextureProvider::detectProviderType: detected GIF");
+        ydebug("TextureProvider::detectProviderType: detected GIF");
         return "image";
     }
     if (matchMagic(payload, BMP_MAGIC, sizeof(BMP_MAGIC))) {
-        yinfo("TextureProvider::detectProviderType: detected BMP");
+        ydebug("TextureProvider::detectProviderType: detected BMP");
         return "image";
     }
     if (matchMagic(payload, PSD_MAGIC, sizeof(PSD_MAGIC))) {
-        yinfo("TextureProvider::detectProviderType: detected PSD");
+        ydebug("TextureProvider::detectProviderType: detected PSD");
         return "image";
     }
     if (matchMagic(payload, TIFF_LE_MAGIC, sizeof(TIFF_LE_MAGIC)) ||
         matchMagic(payload, TIFF_BE_MAGIC, sizeof(TIFF_BE_MAGIC))) {
-        yinfo("TextureProvider::detectProviderType: detected TIFF");
+        ydebug("TextureProvider::detectProviderType: detected TIFF");
         return "image";
     }
     // WEBP: RIFF....WEBP
     if (matchMagic(payload, WEBP_MAGIC, sizeof(WEBP_MAGIC)) && payload.size() >= 12) {
         if (payload[8] == 'W' && payload[9] == 'E' &&
             payload[10] == 'B' && payload[11] == 'P') {
-            yinfo("TextureProvider::detectProviderType: detected WEBP");
+            ydebug("TextureProvider::detectProviderType: detected WEBP");
             return "image";
         }
     }
 
     // Check PDF
     if (matchMagic(payload, PDF_MAGIC, sizeof(PDF_MAGIC))) {
-        yinfo("TextureProvider::detectProviderType: detected PDF");
+        ydebug("TextureProvider::detectProviderType: detected PDF");
         return "pdf";
     }
 
-    yinfo("TextureProvider::detectProviderType: unknown format");
+    ydebug("TextureProvider::detectProviderType: unknown format");
     return "";
 }
 
@@ -89,7 +89,7 @@ Result<TextureProvider::Ptr> TextureProvider::create(
     const std::string& args,
     const std::string& payload)
 {
-    yinfo("TextureProvider::create: type='{}' widthCells={} heightCells={}",
+    ydebug("TextureProvider::create: type='{}' widthCells={} heightCells={}",
           providerType, widthCells, heightCells);
 
     if (providerType == "image") {

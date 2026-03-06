@@ -176,7 +176,7 @@ Result<void> CardTextureManagerImpl::createAtlas() {
     // No textures — release atlas GPU resources and reset size
     if (_textureHandles.empty()) {
         if (_atlasInitialized) {
-            yinfo("CardTextureManager: no textures, releasing atlas (was {}x{})",
+            ydebug("CardTextureManager: no textures, releasing atlas (was {}x{})",
                   _currentAtlasSize, _currentAtlasSize);
             if (_atlasSampler) { wgpuSamplerRelease(_atlasSampler); _atlasSampler = nullptr; }
             if (_atlasTextureView) { wgpuTextureViewRelease(_atlasTextureView); _atlasTextureView = nullptr; }
@@ -256,7 +256,7 @@ Result<void> CardTextureManagerImpl::createAtlas() {
 
     // Recreate GPU texture if size changed
     if (neededSize != _currentAtlasSize || !_atlasInitialized) {
-        yinfo("CardTextureManager: atlas {}x{} -> {}x{}", _currentAtlasSize, _currentAtlasSize, neededSize, neededSize);
+        ydebug("CardTextureManager: atlas {}x{} -> {}x{}", _currentAtlasSize, _currentAtlasSize, neededSize, neededSize);
         _currentAtlasSize = neededSize;
         if (auto res = createAtlasTexture(); !res) {
             return res;
@@ -266,7 +266,7 @@ Result<void> CardTextureManagerImpl::createAtlas() {
         packWithSize(_currentAtlasSize);
     }
 
-    yinfo("CardTextureManager: packed {} textures into {}x{} atlas",
+    ydebug("CardTextureManager: packed {} textures into {}x{} atlas",
           entries.size(), _currentAtlasSize, _currentAtlasSize);
 
     return Ok();

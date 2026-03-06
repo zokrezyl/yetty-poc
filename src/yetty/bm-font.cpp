@@ -60,7 +60,7 @@ BmFont::~BmFont() {
 
 Result<void> BmFont::init() {
     // Stub: no font support on Android/Emscripten
-    yinfo("BmFont: stub implementation (no FreeType support)");
+    ydebug("BmFont: stub implementation (no FreeType support)");
     _atlasData.resize(_atlasSize * _atlasSize * 4, 0);
     return Ok();
 }
@@ -76,7 +76,7 @@ Result<void> BmFont::loadCommonGlyphs() noexcept {
             return res;
         }
     }
-    yinfo("BmFont: stub - GPU resources created");
+    ydebug("BmFont: stub - GPU resources created");
     return Ok();
 }
 
@@ -111,7 +111,7 @@ void BmFont::uploadToGpu() {
 
 Result<void> BmFont::createGPUResources() noexcept {
     size_t textureBytes = _atlasSize * _atlasSize * 4;
-    yinfo("GPU_ALLOC BmFont(stub): texture={}x{} RGBA8 = {} bytes ({:.2f} MB)",
+    ydebug("GPU_ALLOC BmFont(stub): texture={}x{} RGBA8 = {} bytes ({:.2f} MB)",
           _atlasSize, _atlasSize, textureBytes, textureBytes / (1024.0 * 1024.0));
 
     WGPUTextureDescriptor texDesc = {};
@@ -167,7 +167,7 @@ Result<void> BmFont::createGPUResources() noexcept {
 
     _gpuResourcesCreated = true;
     _gpuAtlasSize = _atlasSize;
-    yinfo("BmFont: stub GPU resources created");
+    ydebug("BmFont: stub GPU resources created");
 
     return Ok();
 }
@@ -235,7 +235,7 @@ Result<void> BmFont::init() {
     // Log FreeType version
     FT_Int major, minor, patch;
     FT_Library_Version(library, &major, &minor, &patch);
-    yinfo("BmFont: FreeType version {}.{}.{}", major, minor, patch);
+    ydebug("BmFont: FreeType version {}.{}.{}", major, minor, patch);
 
     // Find font
     if (auto res = findFont(); !res) {
@@ -245,7 +245,7 @@ Result<void> BmFont::init() {
     // Initialize atlas data (RGBA)
     _atlasData.resize(_atlasSize * _atlasSize * 4, 0);
 
-    yinfo("BmFont initialized: {}x{} atlas, {}px glyphs",
+    ydebug("BmFont initialized: {}x{} atlas, {}px glyphs",
           _atlasSize, _atlasSize, _glyphSize);
 
     return Ok();
@@ -265,7 +265,7 @@ Result<void> BmFont::findFont() noexcept {
             }
             FT_Select_Charmap(face, FT_ENCODING_UNICODE);
 
-            yinfo("BmFont: using font '{}'", _fontPath);
+            ydebug("BmFont: using font '{}'", _fontPath);
             return Ok();
         }
         return Err<void>("Failed to load font: " + _fontPath);
@@ -308,7 +308,7 @@ Result<void> BmFont::findFont() noexcept {
         if (match && result == FcResultMatch) {
             FcChar8* fontPath = nullptr;
             if (FcPatternGetString(match, FC_FILE, 0, &fontPath) == FcResultMatch) {
-                yinfo("BmFont: pattern '{}' matched '{}'", pattern,
+                ydebug("BmFont: pattern '{}' matched '{}'", pattern,
                       reinterpret_cast<const char*>(fontPath));
                 FT_Error error = FT_New_Face(library, reinterpret_cast<const char*>(fontPath),
                                               0, &face);
@@ -316,7 +316,7 @@ Result<void> BmFont::findFont() noexcept {
                     _fontPath = reinterpret_cast<const char*>(fontPath);
                     _ftFace = face;
 
-                    yinfo("BmFont: using font '{}'", _fontPath);
+                    ydebug("BmFont: using font '{}'", _fontPath);
 
                     // Select size and charmap
                     if (face->num_fixed_sizes > 0) {
@@ -349,7 +349,7 @@ Result<void> BmFont::findFont() noexcept {
     };
     for (const char* path : macFontPaths) {
         if (FT_New_Face(library, path, 0, &face) == 0) {
-            yinfo("BmFont: using macOS system font '{}'", path);
+            ydebug("BmFont: using macOS system font '{}'", path);
             _ftFace = face;
             return Ok();
         }
@@ -371,7 +371,7 @@ Result<void> BmFont::findFont() noexcept {
                 FT_Select_Size(face, 0);
             }
             FT_Select_Charmap(face, FT_ENCODING_UNICODE);
-            yinfo("BmFont: using Windows system font '{}'", path);
+            ydebug("BmFont: using Windows system font '{}'", path);
             return Ok();
         }
     }
@@ -388,7 +388,7 @@ Result<void> BmFont::loadCommonGlyphs() noexcept {
             return res;
         }
     }
-    yinfo("BmFont: progressive atlas ready (glyphs loaded on demand)");
+    ydebug("BmFont: progressive atlas ready (glyphs loaded on demand)");
     return Ok();
 }
 
@@ -547,7 +547,7 @@ void BmFont::uploadToGpu() {
 
     // Atlas grew beyond current GPU texture - recreate
     if (_gpuResourcesCreated && _atlasSize > _gpuAtlasSize) {
-        yinfo("BmFont: atlas grew {}->{}x{}, recreating GPU resources",
+        ydebug("BmFont: atlas grew {}->{}x{}, recreating GPU resources",
               _gpuAtlasSize, _atlasSize, _atlasSize);
         releaseGPUResources();
     }
@@ -605,7 +605,7 @@ Result<void> BmFont::createGPUResources() noexcept {
         return Err<void>("Failed to create BmFont texture");
     }
     size_t texBytes = static_cast<size_t>(_atlasSize) * _atlasSize * 4;
-    yinfo("GPU_ALLOC BmFont: texture={}x{} RGBA8 = {} bytes ({:.2f} MB)",
+    ydebug("GPU_ALLOC BmFont: texture={}x{} RGBA8 = {} bytes ({:.2f} MB)",
           _atlasSize, _atlasSize, texBytes, texBytes / (1024.0 * 1024.0));
 
     // Create texture view
@@ -648,12 +648,12 @@ Result<void> BmFont::createGPUResources() noexcept {
         return Err<void>("Failed to create BmFont metadata buffer");
     }
     size_t metaBytes = maxGlyphs * sizeof(BitmapGlyphMetadata);
-    yinfo("GPU_ALLOC BmFont: metadataBuffer={} bytes ({:.2f} MB) for {} glyphs",
+    ydebug("GPU_ALLOC BmFont: metadataBuffer={} bytes ({:.2f} MB) for {} glyphs",
           metaBytes, metaBytes / (1024.0 * 1024.0), maxGlyphs);
 
     _gpuResourcesCreated = true;
     _gpuAtlasSize = _atlasSize;
-    yinfo("BmFont: created GPU resources ({}x{} texture, {} max glyphs)",
+    ydebug("BmFont: created GPU resources ({}x{} texture, {} max glyphs)",
           _atlasSize, _atlasSize, maxGlyphs);
 
     return Ok();
@@ -672,7 +672,7 @@ void BmFont::growAtlas() {
     uint32_t oldSize = _atlasSize;
     uint32_t newSize = std::min(_atlasSize * 2, ATLAS_MAX_SIZE);
 
-    yinfo("BmFont: growing atlas {}x{} -> {}x{}", oldSize, oldSize, newSize, newSize);
+    ydebug("BmFont: growing atlas {}x{} -> {}x{}", oldSize, oldSize, newSize, newSize);
 
     // Create new atlas data and copy old rows
     std::vector<uint8_t> newData(static_cast<size_t>(newSize) * newSize * 4, 0);
