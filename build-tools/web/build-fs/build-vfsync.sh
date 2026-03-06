@@ -1,6 +1,7 @@
 #!/bin/bash
 #
 # Build a minimal vfsync filesystem for GitHub Pages
+# Uses cached Alpine minirootfs for fast rebuilds
 #
 
 set -e
@@ -15,6 +16,14 @@ else
 fi
 OUTPUT_DIR="$BUILD_DIR/vfsync/u/os/yetty-alpine"
 TOOL_BUILD_DIR="$BUILD_DIR/_vfsync-build"
+ROOTFS_DIR="$TOOL_BUILD_DIR/rootfs"
+
+# Cache directory - persistent across builds
+CACHE_DIR="${YETTY_VFSYNC_CACHE:-$HOME/.cache/yetty}"
+ROOTFS_CACHE="$CACHE_DIR/alpine-minirootfs-base"
+CACHE_VERSION_FILE="$ROOTFS_CACHE/.cache-version"
+# Bump this when Alpine version changes
+CACHE_VERSION="3.21.3"
 
 TINYEMU_URL="https://bellard.org/tinyemu/tinyemu-2019-12-21.tar.gz"
 ALPINE_URL="https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/x86_64/alpine-minirootfs-3.21.3-x86_64.tar.gz"
@@ -24,6 +33,7 @@ echo "Building vfsync filesystem for GitHub Pages"
 echo "=============================================="
 echo "Build dir: $BUILD_DIR"
 echo "Output: $OUTPUT_DIR"
+echo "Cache: $ROOTFS_CACHE"
 echo ""
 
 mkdir -p "$TOOL_BUILD_DIR"
@@ -47,23 +57,53 @@ else
 fi
 cd "$TOOL_BUILD_DIR"
 
-# Step 2: Download Alpine minirootfs
+# Step 2: Get Alpine minirootfs (cached or download)
 echo ""
-echo "=== Step 2: Downloading Alpine minirootfs ==="
-ROOTFS_DIR="$TOOL_BUILD_DIR/rootfs"
-if [ ! -d "$ROOTFS_DIR" ]; then
-    mkdir -p "$ROOTFS_DIR"
+echo "=== Step 2: Getting Alpine minirootfs ==="
+
+# Check if cache is valid
+cache_valid=false
+if [ -d "$ROOTFS_CACHE" ] && [ -f "$CACHE_VERSION_FILE" ]; then
+    cached_version=$(cat "$CACHE_VERSION_FILE" 2>/dev/null || echo "0")
+    if [ "$cached_version" = "$CACHE_VERSION" ]; then
+        cache_valid=true
+    else
+        echo "Cache version mismatch ($cached_version != $CACHE_VERSION), re-downloading..."
+    fi
+fi
+
+# Prepare working rootfs directory
+if [ -d "$ROOTFS_DIR" ]; then
+    rm -rf "$ROOTFS_DIR"
+fi
+mkdir -p "$ROOTFS_DIR"
+
+if [ "$cache_valid" = true ]; then
+    echo "Using cached minirootfs from $ROOTFS_CACHE"
+    echo "Copying to working directory..."
+    cp -a "$ROOTFS_CACHE/." "$ROOTFS_DIR/"
+    echo "Done (cached)"
+else
     echo "Downloading Alpine minirootfs..."
     curl -sL "$ALPINE_URL" -o alpine.tar.gz
     echo "Extracting..."
     cd "$ROOTFS_DIR"
     tar xzf "$TOOL_BUILD_DIR/alpine.tar.gz"
     rm "$TOOL_BUILD_DIR/alpine.tar.gz"
-    echo "Done: $ROOTFS_DIR"
-else
-    echo "rootfs already exists"
+    cd "$TOOL_BUILD_DIR"
+
+    # Save to cache for next time (only locally, CI can skip)
+    if [ -z "$CI" ]; then
+        echo "Saving minirootfs to cache..."
+        mkdir -p "$CACHE_DIR"
+        if [ -d "$ROOTFS_CACHE" ]; then
+            rm -rf "$ROOTFS_CACHE"
+        fi
+        cp -a "$ROOTFS_DIR" "$ROOTFS_CACHE"
+        echo "$CACHE_VERSION" > "$CACHE_VERSION_FILE"
+        echo "Cached at $ROOTFS_CACHE"
+    fi
 fi
-cd "$TOOL_BUILD_DIR"
 
 # Step 3: Add demo directory
 echo ""

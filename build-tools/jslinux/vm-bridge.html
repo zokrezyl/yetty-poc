@@ -25,7 +25,6 @@
             } else {
                 size = [80, 25]; // fallback
             }
-            console.log("[vm-bridge] term_get_size() called, returning: " + size[0] + "x" + size[1]);
             return size;
         }
 
@@ -37,29 +36,33 @@
         var net_state, net_write_packet, net_set_carrier;
         var fs_import_file;
 
+        // Runtime state tracking
+        var runtimeReady = false;
+        var pendingImports = [];
+
         // Module object - Emscripten will populate this
         var Module = {};
 
-        // Force setTimeout mode (mode 0) instead of rAF for faster input processing in iframe
+        Module.onRuntimeInitialized = function() {
+            log("Emscripten runtime initialized");
+            runtimeReady = true;
+            processPendingImports();
+        };
+
+        // Force setTimeout mode for faster input processing in iframe
         Module.postRun = function() {
             if (typeof Module.setMainLoopTiming === 'function') {
                 Module.setMainLoopTiming(0, 0);
             }
         };
 
-        // Logging helper
         function log(msg) {
             console.log("[vm-bridge] " + msg);
         }
 
         function term_handler(str) {
-            var i;
-            for(i = 0; i < str.length; i++) {
-                var code = str.charCodeAt(i);
-                if (code < 32) {
-                    console.log("[vm-bridge] CTRL char " + code + " -> console_write1");
-                }
-                console_write1(code);
+            for (var i = 0; i < str.length; i++) {
+                console_write1(str.charCodeAt(i));
             }
         }
 
@@ -90,7 +93,6 @@
             var cols = parseInt(params["cols"]) || 80;
             var rows = parseInt(params["rows"]) || 25;
 
-            // Create terminal bridge
             term = new Term({
                 cols: cols,
                 rows: rows,
@@ -99,21 +101,12 @@
             term.setKeyHandler(term_handler);
             term.open(document.getElementById("term_container"));
 
-            // Determine emulator file
             var vm_file;
             switch(cpu) {
-                case "x86":
-                    vm_file = "x86emu";
-                    break;
-                case "x86_64":
-                    vm_file = "x86_64emu";
-                    break;
-                case "riscv64":
-                    vm_file = "riscvemu64";
-                    break;
-                case "riscv32":
-                    vm_file = "riscvemu32";
-                    break;
+                case "x86": vm_file = "x86emu"; break;
+                case "x86_64": vm_file = "x86_64emu"; break;
+                case "riscv64": vm_file = "riscvemu64"; break;
+                case "riscv32": vm_file = "riscvemu32"; break;
                 default:
                     term.write("Error: Unknown cpu: " + cpu + "\r\n");
                     return;
@@ -143,7 +136,6 @@
                 net_set_carrier = Module.cwrap('net_set_carrier', null, ['number']);
                 console_resize_event = Module.cwrap('console_resize_event', null, []);
 
-                // Set up resize handler so VM kernel gets notified of terminal size changes
                 term.setResizeHandler(function(cols, rows) {
                     if (console_resize_event) {
                         console_resize_event();
@@ -160,17 +152,16 @@
                 Module.ccall('vm_start', null,
                     ['string', 'number', 'string', 'string', 'number', 'number', 'number', 'string'],
                     [cfg_url, mem, "", "", 0, 0, 0, ""]);
-                // Trigger resize aggressively during boot to ensure kernel has correct size
-                // before shell/nvim starts
-                log("Starting aggressive resize event sequence");
+
+                // Resize events during boot
                 var resizeCount = 0;
                 var resizeInterval = setInterval(function() {
                     resizeCount++;
-                    log("console_resize_event #" + resizeCount);
                     console_resize_event();
-                    if (resizeCount >= 30) { // 30 * 200ms = 6 seconds
+                    if (resizeCount >= 10) {
                         clearInterval(resizeInterval);
-                        log("Stopping resize event sequence");
+                        // Import local files after VM has booted
+                        importLocalFiles();
                     }
                 }, 200);
             } catch(e) {
@@ -178,33 +169,135 @@
             }
         }
 
-        // Handle messages from parent for file import and resize
+        // Check if WASM runtime is ready for memory operations
+        function isRuntimeReady() {
+            return runtimeReady &&
+                   typeof _malloc === 'function' &&
+                   typeof HEAPU8 !== 'undefined';
+        }
+
+        function processPendingImports() {
+            if (pendingImports.length > 0) {
+                log("Processing " + pendingImports.length + " queued imports");
+                pendingImports.forEach(function(fn) { fn(); });
+                pendingImports = [];
+            }
+        }
+
+        // Import a file into the VM
+        function doImportFile(vmPath, data) {
+            if (!isRuntimeReady()) {
+                pendingImports.push(function() {
+                    doImportFile(vmPath, data);
+                });
+                return false;
+            }
+
+            try {
+                var ptr = _malloc(data.length);
+                if (!ptr) {
+                    log("malloc failed for: " + vmPath);
+                    return false;
+                }
+                HEAPU8.set(data, ptr);
+                fs_import_file(vmPath, ptr, data.length);
+                _free(ptr);
+                log("Imported: " + vmPath + " (" + data.length + " bytes)");
+                return true;
+            } catch (e) {
+                log("Error importing " + vmPath + ": " + e);
+                return false;
+            }
+        }
+
+        // Import local files from manifest
+        function importLocalFiles() {
+            log("Checking for local files manifest...");
+            fetch('local-files/manifest.json')
+                .then(function(r) {
+                    if (!r.ok) {
+                        log("No local files manifest (normal for production)");
+                        return null;
+                    }
+                    return r.json();
+                })
+                .then(function(manifest) {
+                    if (!manifest || !manifest.files) return;
+                    log("Found " + manifest.files.length + " files to import");
+
+                    var imported = 0;
+                    var total = manifest.files.length;
+
+                    manifest.files.forEach(function(filePath) {
+                        fetch('local-files/' + filePath)
+                            .then(function(r) { return r.arrayBuffer(); })
+                            .then(function(buf) {
+                                var data = new Uint8Array(buf);
+                                // Import with original path - appears at /path in VM
+                                doImportFile(filePath, data);
+                                imported++;
+                                if (imported === total) {
+                                    log("Import complete: " + imported + " files");
+                                    setupYettyTools();
+                                }
+                            })
+                            .catch(function(e) {
+                                log("Failed to fetch " + filePath);
+                                imported++;
+                            });
+                    });
+                })
+                .catch(function(e) {
+                    log("Local files import skipped: " + e);
+                });
+        }
+
+        // Run setup commands in VM to make tools available
+        function setupYettyTools() {
+            // Send commands to VM via console input
+            // Files are at / with their import paths, e.g. /bin/ycat
+            // Need to make them executable and add to PATH
+            var cmds = [
+                "chmod +x /bin/* 2>/dev/null",
+                "export PATH=/bin:$PATH",
+                "echo 'Yetty tools loaded: ycat yecho ybrowser'"
+            ].join(" && ") + "\n";
+
+            for (var i = 0; i < cmds.length; i++) {
+                console_write1(cmds.charCodeAt(i));
+            }
+            log("Sent setup commands to VM");
+        }
+
+        // Handle messages from parent
         window.addEventListener('message', function(e) {
             if (e.data.type === 'term-resize') {
                 if (console_resize_event) {
                     console_resize_event();
                 }
             }
-            if (e.data.type === 'import-file' && fs_import_file) {
+            if (e.data.type === 'import-file') {
                 var path = e.data.path;
                 var data = e.data.data;
-                var ptr = Module._malloc(data.length);
-                Module.HEAPU8.set(data, ptr);
-                fs_import_file(path, ptr, data.length);
-                Module._free(ptr);
-                window.parent.postMessage({
-                    type: 'file-imported',
-                    path: path,
-                    size: data.length
-                }, '*');
+                if (doImportFile(path, data)) {
+                    window.parent.postMessage({
+                        type: 'file-imported',
+                        path: path,
+                        size: data.length
+                    }, '*');
+                } else {
+                    window.parent.postMessage({
+                        type: 'file-import-error',
+                        path: path,
+                        error: 'import failed'
+                    }, '*');
+                }
             }
         });
 
         // Start when DOM is ready
         if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', function() {
-                start_vm();
-            });
+            document.addEventListener('DOMContentLoaded', start_vm);
         } else {
             start_vm();
         }

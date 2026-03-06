@@ -13,14 +13,24 @@ OUTPUT_DIR="$BUILD_DIR/vfsync/u/os/yetty-alpine"
 TOOL_BUILD_DIR="$BUILD_DIR/_vfsync-build"
 ROOTFS_DIR="$TOOL_BUILD_DIR/rootfs"
 
+# Cache directory - persistent across builds
+# Local: ~/.cache/yetty/alpine-rootfs-base
+# CI: no cache, always rebuild
+CACHE_DIR="${YETTY_VFSYNC_CACHE:-$HOME/.cache/yetty}"
+ROOTFS_CACHE="$CACHE_DIR/alpine-rootfs-base"
+CACHE_VERSION_FILE="$ROOTFS_CACHE/.cache-version"
+# Bump this when Dockerfile changes
+CACHE_VERSION="1"
+
 TINYEMU_URL="https://bellard.org/tinyemu/tinyemu-2019-12-21.tar.gz"
 DOCKER_IMAGE="yetty-alpine-rootfs"
 
 echo "=============================================="
-echo "Building Alpine vfsync filesystem (Docker)"
+echo "Building Alpine vfsync filesystem"
 echo "=============================================="
 echo "Build dir: $BUILD_DIR"
 echo "Output: $OUTPUT_DIR"
+echo "Cache: $ROOTFS_CACHE"
 echo ""
 
 mkdir -p "$TOOL_BUILD_DIR"
@@ -44,21 +54,55 @@ else
     echo "build_filelist already exists"
 fi
 
-# Step 2: Build Docker image and export rootfs
+# Step 2: Get Alpine base rootfs (cached or build from Docker)
 echo ""
-echo "=== Step 2: Building Alpine rootfs via Docker ==="
+echo "=== Step 2: Getting Alpine base rootfs ==="
+
+# Check if cache is valid
+cache_valid=false
+if [ -d "$ROOTFS_CACHE" ] && [ -f "$CACHE_VERSION_FILE" ]; then
+    cached_version=$(cat "$CACHE_VERSION_FILE" 2>/dev/null || echo "0")
+    if [ "$cached_version" = "$CACHE_VERSION" ]; then
+        cache_valid=true
+    else
+        echo "Cache version mismatch ($cached_version != $CACHE_VERSION), rebuilding..."
+    fi
+fi
+
+# Prepare working rootfs directory
 if [ -d "$ROOTFS_DIR" ]; then
     chmod -R u+w "$ROOTFS_DIR" 2>/dev/null || true
     rm -rf "$ROOTFS_DIR"
 fi
 mkdir -p "$ROOTFS_DIR"
 
-docker build -t "$DOCKER_IMAGE" "$SCRIPT_DIR"
-CONTAINER_ID=$(docker create "$DOCKER_IMAGE")
-docker export "$CONTAINER_ID" | tar x -C "$ROOTFS_DIR"
-docker rm "$CONTAINER_ID" > /dev/null
+if [ "$cache_valid" = true ]; then
+    echo "Using cached base rootfs from $ROOTFS_CACHE"
+    echo "Copying to working directory..."
+    cp -a "$ROOTFS_CACHE/." "$ROOTFS_DIR/"
+    echo "Done (cached)"
+else
+    echo "Building Alpine rootfs via Docker..."
+    docker build -t "$DOCKER_IMAGE" "$SCRIPT_DIR"
+    CONTAINER_ID=$(docker create "$DOCKER_IMAGE")
+    docker export "$CONTAINER_ID" | tar x -C "$ROOTFS_DIR"
+    docker rm "$CONTAINER_ID" > /dev/null
 
-# Step 3: Add yetty content
+    # Save to cache for next time (only locally, CI can skip)
+    if [ -z "$CI" ]; then
+        echo "Saving base rootfs to cache..."
+        mkdir -p "$CACHE_DIR"
+        if [ -d "$ROOTFS_CACHE" ]; then
+            chmod -R u+w "$ROOTFS_CACHE" 2>/dev/null || true
+            rm -rf "$ROOTFS_CACHE"
+        fi
+        cp -a "$ROOTFS_DIR" "$ROOTFS_CACHE"
+        echo "$CACHE_VERSION" > "$CACHE_VERSION_FILE"
+        echo "Cached at $ROOTFS_CACHE"
+    fi
+fi
+
+# Step 3: Add yetty content (always runs, uses fresh files)
 echo ""
 echo "=== Step 3: Adding yetty files ==="
 
