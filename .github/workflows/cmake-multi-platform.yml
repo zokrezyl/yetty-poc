@@ -335,16 +335,16 @@ jobs:
 
     - name: Build WebAssembly with Nix
       run: |
-        nix develop .#web --command make build-webasm-dawn-release
+        nix develop .#web --command make build-webasm-ytrace-release
 
     - name: Prepare site directory
       run: |
         mkdir -p site
-        cp build-webasm-dawn-release/index.html site/
-        cp build-webasm-dawn-release/yetty.js site/
-        cp build-webasm-dawn-release/yetty.wasm site/
-        cp build-webasm-dawn-release/yetty.data site/
-        cp -r build-webasm-dawn-release/jslinux site/
+        cp build-webasm-ytrace-release/index.html site/
+        cp build-webasm-ytrace-release/yetty.js site/
+        cp build-webasm-ytrace-release/yetty.wasm site/
+        cp build-webasm-ytrace-release/yetty.data site/
+        cp -r build-webasm-ytrace-release/jslinux site/
         ls -la site/
 
     - name: Upload WebAssembly artifacts
