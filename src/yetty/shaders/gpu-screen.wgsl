@@ -59,7 +59,7 @@ struct GridUniforms {
     _pad0: f32,                // 4 bytes: alignment padding
 };  // Total: 256 bytes (16-byte aligned)
 
-// Overlay uniforms for ydraw screen overlay (48 bytes, 16-byte aligned)
+// Overlay uniforms for ydraw screen overlay (64 bytes, 16-byte aligned)
 struct OverlayUniforms {
     sceneMinX: f32,        // 4 bytes
     sceneMinY: f32,        // 4 bytes
@@ -73,6 +73,10 @@ struct OverlayUniforms {
     glyphCount: u32,       // 4 bytes
     pixelRange: f32,       // 4 bytes
     hasOverlay: u32,       // 4 bytes (1 if overlay present, 0 otherwise)
+    offsetX: f32,          // 4 bytes - pixel offset for inline positioning
+    offsetY: f32,          // 4 bytes
+    _pad0: f32,            // 4 bytes - padding to 16-byte alignment
+    _pad1: f32,            // 4 bytes
 };
 
 // Glyph metadata (40 bytes per glyph, matches C++ GlyphMetadataGPU)
@@ -634,7 +638,8 @@ fn evaluateOverlay(pixelPos: vec2<f32>) -> vec4<f32> {
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
 
-    let scenePos = pixelPos;  // 1:1 mapping for screen overlay
+    // Apply offset for inline positioning (shifts content to cursor position)
+    let scenePos = pixelPos - vec2<f32>(overlay.offsetX, overlay.offsetY);
 
     let invCellSizeX = select(0.0, 1.0 / overlay.cellSizeX, overlay.cellSizeX > 0.0);
     let invCellSizeY = select(0.0, 1.0 / overlay.cellSizeY, overlay.cellSizeY > 0.0);

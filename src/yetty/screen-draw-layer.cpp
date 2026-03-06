@@ -10,6 +10,7 @@
 #include <lz4frame.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -38,6 +39,10 @@ struct ScreenDrawUniforms {
     uint32_t glyphCount;
     float pixelRange;
     uint32_t hasOverlay;  // 1 if overlay present, 0 otherwise
+    float offsetX;        // Pixel offset for inline positioning
+    float offsetY;
+    float _pad0;          // Padding to 16-byte alignment
+    float _pad1;
 };
 
 //=============================================================================
@@ -55,6 +60,9 @@ public:
     void setCellSize(float cellWidth, float cellHeight) override;
     void clear() override;
     Result<void> update(const std::string& args, const std::string& payload) override;
+    void setOriginOffset(float x, float y) override;
+    void getContentBounds(float& minX, float& minY, float& maxX, float& maxY) const override;
+    uint32_t getContentHeightCells() const override;
     Result<void> render(WGPURenderPassEncoder pass) override;
     bool hasContent() const override;
 
@@ -82,6 +90,10 @@ private:
     uint32_t _displayHeight = 0;
     float _cellWidth = 10.0f;
     float _cellHeight = 20.0f;
+
+    // Origin offset for inline positioning
+    float _originOffsetX = 0.0f;
+    float _originOffsetY = 0.0f;
 
     // YDraw
     YDrawBuffer::Ptr _buffer;
@@ -458,6 +470,8 @@ void ScreenDrawLayerImpl::rebuildBuffers() {
     uniforms.primCount = primCount;
     uniforms.glyphCount = static_cast<uint32_t>(glyphs.size());
     uniforms.hasOverlay = 1;  // We have overlay content
+    uniforms.offsetX = _originOffsetX;
+    uniforms.offsetY = _originOffsetY;
 
     // Get pixel range from font atlas
     auto font = _ctx.fontManager->getDefaultMsMsdfFont();
@@ -580,6 +594,29 @@ Result<void> ScreenDrawLayerImpl::update(const std::string& args, const std::str
     ydebug("ScreenDrawLayer::update: {} prims, {} text spans",
            _buffer->primCount(), _buffer->textSpanCount());
     return Ok();
+}
+
+void ScreenDrawLayerImpl::setOriginOffset(float x, float y) {
+    _originOffsetX = x;
+    _originOffsetY = y;
+    _dirty = true;  // Need to recalculate grid with new offset
+}
+
+void ScreenDrawLayerImpl::getContentBounds(float& minX, float& minY, float& maxX, float& maxY) const {
+    if (_buffer) {
+        minX = _buffer->sceneMinX();
+        minY = _buffer->sceneMinY();
+        maxX = _buffer->sceneMaxX();
+        maxY = _buffer->sceneMaxY();
+    } else {
+        minX = minY = maxX = maxY = 0.0f;
+    }
+}
+
+uint32_t ScreenDrawLayerImpl::getContentHeightCells() const {
+    if (!_buffer || _cellHeight <= 0.0f) return 0;
+    float height = _buffer->sceneMaxY() - _buffer->sceneMinY();
+    return static_cast<uint32_t>(std::ceil(height / _cellHeight));
 }
 
 Result<void> ScreenDrawLayerImpl::parseBinary(const std::string& payload) {

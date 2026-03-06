@@ -38,6 +38,15 @@ public:
     // Update with binary payload (same format as ydraw card)
     virtual Result<void> update(const std::string& args, const std::string& payload) = 0;
 
+    // Set pixel origin offset (for inline positioning at cursor)
+    virtual void setOriginOffset(float x, float y) = 0;
+
+    // Get content bounding box in pixels (after update)
+    virtual void getContentBounds(float& minX, float& minY, float& maxX, float& maxY) const = 0;
+
+    // Get content height in terminal cell rows (for scroll calculation)
+    virtual uint32_t getContentHeightCells() const = 0;
+
     // Render overlay — call after main scene render (legacy, now integrated into gpu-screen)
     virtual Result<void> render(WGPURenderPassEncoder pass) = 0;
 

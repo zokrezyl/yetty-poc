@@ -512,7 +512,8 @@ private:
   WGPUBindGroup _bindGroup = nullptr;
   WGPUBuffer _uniformBuffer = nullptr;
   WGPUBuffer _cellBuffer = nullptr;
-  WGPUBuffer _dummyStorageBuffer = nullptr;  // Placeholder for overlay bindings when no overlay
+  WGPUBuffer _dummyStorageBuffer = nullptr;  // Placeholder for overlay storage bindings when no overlay
+  WGPUBuffer _dummyOverlayUniformBuffer = nullptr;  // Placeholder for overlay uniform binding (64 bytes)
   size_t _cellBufferSize = 0;
   uint32_t _textureCols = 0;
   uint32_t _textureRows = 0;
@@ -3248,12 +3249,53 @@ int GPUScreenImpl::onOSC(int command, VTermStringFragment frag, void *user) {
         // Handle clear command
         if (args.find("--clear") != std::string::npos) {
           self->_screenDrawLayer->clear();
+          self->_screenDrawLayer->setOriginOffset(0.0f, 0.0f);
           self->_needsBindGroupRecreation = true;
         } else if (!payload.empty()) {
+          // Check for explicit position args: --row=N --col=N
+          bool hasExplicitPosition = false;
+          float offsetX = 0.0f, offsetY = 0.0f;
+
+          // Parse --row=N
+          auto rowPos = args.find("--row=");
+          auto colPos = args.find("--col=");
+          if (rowPos != std::string::npos || colPos != std::string::npos) {
+            hasExplicitPosition = true;
+            if (rowPos != std::string::npos) {
+              int row = std::atoi(args.c_str() + rowPos + 6);
+              offsetY = static_cast<float>(row) * self->getCellHeightF();
+            }
+            if (colPos != std::string::npos) {
+              int col = std::atoi(args.c_str() + colPos + 6);
+              offsetX = static_cast<float>(col) * self->getCellWidthF();
+            }
+          }
+
+          // Inline mode: position at current cursor and scroll
+          if (!hasExplicitPosition) {
+            // Get current cursor position
+            offsetX = static_cast<float>(self->_cursorCol) * self->getCellWidthF();
+            offsetY = static_cast<float>(self->_cursorRow) * self->getCellHeightF();
+          }
+
+          // Set the origin offset
+          self->_screenDrawLayer->setOriginOffset(offsetX, offsetY);
+
+          // Update with payload
           auto res = self->_screenDrawLayer->update(args, payload);
           self->_needsBindGroupRecreation = true;
           if (!res) {
             yerror("ScreenDrawLayer update failed: {}", error_msg(res));
+          }
+
+          // In inline mode, scroll terminal by content height
+          if (!hasExplicitPosition && self->_vterm) {
+            uint32_t heightCells = self->_screenDrawLayer->getContentHeightCells();
+            if (heightCells > 0) {
+              // Inject newlines to scroll the terminal
+              std::string nl(heightCells, '\n');
+              vterm_input_write(self->_vterm, nl.c_str(), nl.size());
+            }
           }
         }
         self->_hasDamage = true;
@@ -3668,12 +3710,53 @@ bool GPUScreenImpl::handleOSCSequence(const std::string &sequence,
         // Handle clear command
         if (args.find("--clear") != std::string::npos) {
           _screenDrawLayer->clear();
+          _screenDrawLayer->setOriginOffset(0.0f, 0.0f);
           _needsBindGroupRecreation = true;
         } else if (!payloadDecoded.empty()) {
+          // Check for explicit position args: --row=N --col=N
+          bool hasExplicitPosition = false;
+          float offsetX = 0.0f, offsetY = 0.0f;
+
+          // Parse --row=N
+          auto rowPos = args.find("--row=");
+          auto colPos = args.find("--col=");
+          if (rowPos != std::string::npos || colPos != std::string::npos) {
+            hasExplicitPosition = true;
+            if (rowPos != std::string::npos) {
+              int row = std::atoi(args.c_str() + rowPos + 6);
+              offsetY = static_cast<float>(row) * getCellHeightF();
+            }
+            if (colPos != std::string::npos) {
+              int col = std::atoi(args.c_str() + colPos + 6);
+              offsetX = static_cast<float>(col) * getCellWidthF();
+            }
+          }
+
+          // Inline mode: position at current cursor and scroll
+          if (!hasExplicitPosition) {
+            // Get current cursor position
+            offsetX = static_cast<float>(_cursorCol) * getCellWidthF();
+            offsetY = static_cast<float>(_cursorRow) * getCellHeightF();
+          }
+
+          // Set the origin offset
+          _screenDrawLayer->setOriginOffset(offsetX, offsetY);
+
+          // Update with payload
           auto res = _screenDrawLayer->update(args, payloadDecoded);
           _needsBindGroupRecreation = true;
           if (!res) {
             yerror("ScreenDrawLayer update failed: {}", error_msg(res));
+          }
+
+          // In inline mode, scroll terminal by content height
+          if (!hasExplicitPosition && _vterm) {
+            uint32_t heightCells = _screenDrawLayer->getContentHeightCells();
+            if (heightCells > 0) {
+              // Inject newlines to scroll the terminal
+              std::string nl(heightCells, '\n');
+              vterm_input_write(_vterm, nl.c_str(), nl.size());
+            }
           }
         }
         _hasDamage = true;
@@ -5097,6 +5180,16 @@ Result<void> GPUScreenImpl::initPipeline() {
     return Err<void>("Failed to create dummy storage buffer");
   }
 
+  // Create dummy uniform buffer for overlay uniforms (64 bytes = sizeof(ScreenDrawUniforms))
+  WGPUBufferDescriptor dummyUniformDesc = {};
+  dummyUniformDesc.label = WGPU_STR("dummy overlay uniforms");
+  dummyUniformDesc.size = 64;
+  dummyUniformDesc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
+  _dummyOverlayUniformBuffer = _allocator->createBuffer(dummyUniformDesc);
+  if (!_dummyOverlayUniformBuffer) {
+    return Err<void>("Failed to create dummy overlay uniform buffer");
+  }
+
   _pipelineInitialized = true;
   yinfo("GPUScreenImpl::initPipeline: per-instance resources initialized");
   return Ok();
@@ -5429,7 +5522,7 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
 
         bgEntries[18].binding = 18;
         bgEntries[18].buffer = _screenDrawLayer->getUniformBuffer();
-        bgEntries[18].size = 48;  // sizeof(OverlayUniforms)
+        bgEntries[18].size = 64;  // sizeof(ScreenDrawUniforms) = 16 fields x 4 bytes
     } else {
         // No overlay - use placeholder buffers
         // Bindings 15-17 are storage buffers, binding 18 is uniform
@@ -5446,8 +5539,8 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
         bgEntries[17].size = 4;
 
         bgEntries[18].binding = 18;
-        bgEntries[18].buffer = _uniformBuffer;  // Uniform buffer for overlay uniforms
-        bgEntries[18].size = 48;
+        bgEntries[18].buffer = _dummyOverlayUniformBuffer;  // 64-byte placeholder for overlay uniforms
+        bgEntries[18].size = 64;
     }
 
     WGPUBindGroupDescriptor bindGroupDesc = {};
