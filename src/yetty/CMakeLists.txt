@@ -77,7 +77,10 @@ set(YETTY_RENDERER_INCLUDES
 add_subdirectory(base)
 add_subdirectory(font)
 add_subdirectory(yecho)
-add_subdirectory(ycat)
+# ycat requires OpenSSL via cpr, skip for WebAssembly
+if(NOT EMSCRIPTEN)
+    add_subdirectory(ycat)
+endif()
 add_subdirectory(ydraw)
 add_subdirectory(diagram)
 add_subdirectory(ygrid)

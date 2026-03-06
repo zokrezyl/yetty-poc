@@ -30,16 +30,18 @@ foreach(FILE ${JSLINUX_FILES})
     endif()
 endforeach()
 
-# Create config file using local yetty-alpine filesystem (built by build-vfsync.sh)
+# Create config file using external yetty-alpine-9p-fs GitHub Pages
+# Note: JSLinux WASM only supports single filesystem (fs_count == 1)
+# Local demo/tools files are imported via fs_import_file after VM boots
 set(CONFIG_FILE "${JSLINUX_DIR}/alpine-x86_64.cfg")
-file(WRITE ${CONFIG_FILE} "/* VM configuration file - uses local vfsync filesystem */
+file(WRITE ${CONFIG_FILE} "/* VM configuration file - uses external GitHub Pages vfsync filesystem */
 {
     version: 1,
     machine: \"pc\",
     memory_size: 256,
     kernel: \"kernel-x86_64.bin\",
     cmdline: \"loglevel=3 console=hvc0 root=root rootfstype=9p rootflags=trans=virtio ro TZ=\${TZ}\",
-    fs0: { file: \"../vfsync/u/os/yetty-alpine\" },
+    fs0: { file: \"https://zokrezyl.github.io/yetty-alpine-9p-fs\" },
     eth0: { driver: \"user\" },
 }
 ")
@@ -57,6 +59,21 @@ configure_file(
     COPYONLY
 )
 
+# Build local files for VM import (demo scripts, tools)
+set(LOCAL_FILES_DIR "${JSLINUX_DIR}/local-files")
+add_custom_command(
+    OUTPUT ${LOCAL_FILES_DIR}/filelist.txt
+    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/build-local-vfsync.sh ${CMAKE_BINARY_DIR}
+    WORKING_DIRECTORY ${YETTY_ROOT}
+    COMMENT "Building local files for JSLinux VM import (demo/tools)"
+    DEPENDS
+        ${CMAKE_CURRENT_SOURCE_DIR}/build-local-vfsync.sh
+)
+
+add_custom_target(local-files
+    DEPENDS ${LOCAL_FILES_DIR}/filelist.txt
+)
+
 # Create custom target for jslinux assets
 add_custom_target(jslinux-assets
     DEPENDS
@@ -66,5 +83,6 @@ add_custom_target(jslinux-assets
         ${JSLINUX_DIR}/alpine-x86_64.cfg
         ${JSLINUX_DIR}/term-bridge.js
         ${JSLINUX_DIR}/vm-bridge.html
+        local-files
     COMMENT "JSLinux assets ready"
 )
