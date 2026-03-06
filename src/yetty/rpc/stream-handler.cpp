@@ -80,7 +80,7 @@ Result<void> registerStreamHandlers(RpcServer& server) {
                 pk.pack(uint64_t(0));
             }
 
-            yinfo("stream_connect: shm='{}' size={}",
+            ydebug("stream_connect: shm='{}' size={}",
                   bufMgr->usesSharedMemory() ? bufMgr->shm()->name() : "",
                   bufMgr->usesSharedMemory() ? bufMgr->shm()->size() : 0);
 
@@ -147,7 +147,7 @@ Result<void> registerStreamHandlers(RpcServer& server) {
             pk.pack("slot_index");
             pk.pack(slotIndex);
 
-            yinfo("stream_get_buffer: card='{}' slot={} offset={} size={}",
+            ydebug("stream_get_buffer: card='{}' slot={} offset={} size={}",
                   cardName, slotIndex, handle.offset, handle.size);
 
             return packResult(sbuf);
@@ -156,7 +156,7 @@ Result<void> registerStreamHandlers(RpcServer& server) {
     // stream_disconnect: {} -> {}
     server.registerHandler(Channel::CardStream, "stream_disconnect",
         [](const RpcMessage& /*msg*/) -> Result<msgpack::object_handle> {
-            yinfo("stream_disconnect");
+            ydebug("stream_disconnect");
             msgpack::sbuffer sbuf;
             msgpack::packer<msgpack::sbuffer> pk(&sbuf);
             pk.pack_map(1);
@@ -258,7 +258,7 @@ Result<void> registerStreamHandlers(RpcServer& server) {
                 pk.pack(type);
             }
 
-            yinfo("cards_list: {} cards", cards.size());
+            ydebug("cards_list: {} cards", cards.size());
             return packResult(sbuf);
         });
 
@@ -297,11 +297,11 @@ Result<void> registerStreamHandlers(RpcServer& server) {
                 pk.pack(buf.size);
             }
 
-            yinfo("buffers_list: {} buffers", buffers.size());
+            ydebug("buffers_list: {} buffers", buffers.size());
             return packResult(sbuf);
         });
 
-    yinfo("Registered 5 CardStream handlers on Channel 1");
+    ydebug("Registered 5 CardStream handlers on Channel 1");
     return Ok();
 }
 

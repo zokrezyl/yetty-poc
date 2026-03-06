@@ -54,7 +54,7 @@ public:
         if (!event.key.empty())
             ss << ";" << event.key << "=" << event.value;
         ss << "\033\\";
-        yinfo("YGui event: {}", ss.str());
+        ydebug("YGui event: {}", ss.str());
     }
 
 private:
@@ -405,7 +405,7 @@ public:
         if (!_payloadStr.empty())
             parseWidgets(_payloadStr, *_engine);
 
-        yinfo("YGui::init: size {}x{} cells, {}x{} pixels", _widthCells,
+        ydebug("YGui::init: size {}x{} cells, {}x{} pixels", _widthCells,
               _heightCells, _pixelWidth, _pixelHeight);
 
         // Initial render

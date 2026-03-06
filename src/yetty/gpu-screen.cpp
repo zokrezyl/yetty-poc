@@ -676,7 +676,7 @@ Result<void> GPUScreenImpl::init() noexcept {
       _cardManager = *cmResult;
       _ctx.cardManager = _cardManager;
       _ctx.screenId = _id;
-      yinfo("GPUScreen[{}]: created per-screen CardManager (lazy)", _id);
+      ydebug("GPUScreen[{}]: created per-screen CardManager (lazy)", _id);
     }
   }
 
@@ -721,35 +721,35 @@ Result<void> GPUScreenImpl::onShutdown() {
   // Release CardManager while shared_ptr is still alive
   _cardManager.reset();
 
-  yinfo("GPUScreen[{}]: onShutdown complete", _id);
+  ydebug("GPUScreen[{}]: onShutdown complete", _id);
   return result;
 }
 
 void GPUScreenImpl::attach(VTerm *vt) {
-  yinfo(">>> GPUScreenImpl::attach: ENTERED vt={}", (void*)vt);
+  ydebug(">>> GPUScreenImpl::attach: ENTERED vt={}", (void*)vt);
   _vterm = vt;
   state_ = vterm_obtain_state(vt);
-  yinfo(">>> GPUScreenImpl::attach: state_={}", (void*)state_);
+  ydebug(">>> GPUScreenImpl::attach: state_={}", (void*)state_);
 
   // Register our callbacks with State layer
   vterm_state_set_callbacks(state_, &stateCallbacks, this);
-  yinfo(">>> GPUScreenImpl::attach: state callbacks registered");
+  ydebug(">>> GPUScreenImpl::attach: state callbacks registered");
 
   // Register fallbacks for unrecognized sequences (OSC, etc.)
   vterm_state_set_unrecognised_fallbacks(state_, &stateFallbacks, this);
-  yinfo(">>> GPUScreenImpl::attach: OSC fallbacks registered (stateFallbacks.osc={})",
+  ydebug(">>> GPUScreenImpl::attach: OSC fallbacks registered (stateFallbacks.osc={})",
         (void*)stateFallbacks.osc);
 
   // Get default colors from vterm (white fg, black bg)
   vterm_state_get_default_colors(state_, &defaultFg_, &defaultBg_);
 
-  yinfo("attach: defaultFg_ type={} idx={} rgb=({},{},{})",
+  ydebug("attach: defaultFg_ type={} idx={} rgb=({},{},{})",
         VTERM_COLOR_IS_DEFAULT_FG(&defaultFg_) ? "DEFAULT_FG" :
         VTERM_COLOR_IS_DEFAULT_BG(&defaultFg_) ? "DEFAULT_BG" :
         VTERM_COLOR_IS_INDEXED(&defaultFg_) ? "INDEXED" : "RGB",
         defaultFg_.indexed.idx,
         defaultFg_.rgb.red, defaultFg_.rgb.green, defaultFg_.rgb.blue);
-  yinfo("attach: defaultBg_ type={} idx={} rgb=({},{},{})",
+  ydebug("attach: defaultBg_ type={} idx={} rgb=({},{},{})",
         VTERM_COLOR_IS_DEFAULT_BG(&defaultBg_) ? "DEFAULT_BG" :
         VTERM_COLOR_IS_DEFAULT_FG(&defaultBg_) ? "DEFAULT_FG" :
         VTERM_COLOR_IS_INDEXED(&defaultBg_) ? "INDEXED" : "RGB",
@@ -759,12 +759,12 @@ void GPUScreenImpl::attach(VTerm *vt) {
   // Convert to RGB if they're indexed
   if (VTERM_COLOR_IS_INDEXED(&defaultFg_)) {
     vterm_state_convert_color_to_rgb(state_, &defaultFg_);
-    yinfo("attach: converted defaultFg_ to RGB: ({},{},{})",
+    ydebug("attach: converted defaultFg_ to RGB: ({},{},{})",
           defaultFg_.rgb.red, defaultFg_.rgb.green, defaultFg_.rgb.blue);
   }
   if (VTERM_COLOR_IS_INDEXED(&defaultBg_)) {
     vterm_state_convert_color_to_rgb(state_, &defaultBg_);
-    yinfo("attach: converted defaultBg_ to RGB: ({},{},{})",
+    ydebug("attach: converted defaultBg_ to RGB: ({},{},{})",
           defaultBg_.rgb.red, defaultBg_.rgb.green, defaultBg_.rgb.blue);
   }
 
@@ -804,12 +804,12 @@ void GPUScreenImpl::createVTerm() {
   // Set up vterm input callback for card ANSI output
   // This allows cards to inject their ANSI-encoded cells into vterm
   vtermInputCallback_ = [this](const char *data, size_t len) {
-    yinfo(">>> vtermInputCallback_: injecting {} bytes into vterm", len);
+    ydebug(">>> vtermInputCallback_: injecting {} bytes into vterm", len);
     if (_vterm) {
       vterm_input_write(_vterm, data, len);
     }
   };
-  yinfo(">>> GPUScreenImpl::createVTerm: vtermInputCallback_ SET");
+  ydebug(">>> GPUScreenImpl::createVTerm: vtermInputCallback_ SET");
 }
 
 void GPUScreenImpl::write(const char *data, size_t len) {
@@ -821,7 +821,7 @@ void GPUScreenImpl::write(const char *data, size_t len) {
       for (size_t i = 0; i < dumpLen; i++) {
         char h[4]; snprintf(h, sizeof(h), "%02x ", (uint8_t)data[i]); hex += h;
       }
-      yinfo("VTERM_WRITE[{}]: {}", len, hex);
+      ydebug("VTERM_WRITE[{}]: {}", len, hex);
     }
     vterm_input_write(_vterm, data, len);
     requestScreenUpdate();
@@ -1138,7 +1138,7 @@ void GPUScreenImpl::resizeInternal(int rows, int cols,
     return;
   }
 
-  yinfo("GPUScreenImpl::resize: {}x{} -> {}x{} isAltScreen={}", _rows, _cols,
+  ydebug("GPUScreenImpl::resize: {}x{} -> {}x{} isAltScreen={}", _rows, _cols,
         rows, cols, _isAltScreen);
 
   int oldRows = _rows;
@@ -1204,7 +1204,7 @@ void GPUScreenImpl::switchToScreen(bool alt) {
   if (_isAltScreen == alt)
     return; // Already on the requested screen
 
-  yinfo("GPUScreenImpl::switchToScreen: {} -> {}",
+  ydebug("GPUScreenImpl::switchToScreen: {} -> {}",
         _isAltScreen ? "alt" : "primary", alt ? "alt" : "primary");
 
   _isAltScreen = alt;
@@ -1992,7 +1992,7 @@ void GPUScreenImpl::copyModeYank() {
   if (!text.empty()) {
     auto loop = *base::EventLoop::instance();
     loop->dispatch(base::Event::copyEvent(std::make_shared<std::string>(text)));
-    yinfo("Yanked {} bytes to clipboard", text.size());
+    ydebug("Yanked {} bytes to clipboard", text.size());
   }
 
   // Exit copy mode after yank (like tmux)
@@ -2719,7 +2719,7 @@ int GPUScreenImpl::onPutglyph(VTermGlyphInfo *info, VTermPos pos, void *user) {
     // DEBUG: log glyph mapping for first few chars (any codepoint)
     static int putglyphDebugCount = 0;
     if (putglyphDebugCount < 30) {
-      yinfo("PUTGLYPH: cp={:#x} glyphIdx={} pos=({},{}) bold={} italic={}",
+      ydebug("PUTGLYPH: cp={:#x} glyphIdx={} pos=({},{}) bold={} italic={}",
             cp, glyphIdx, pos.row, pos.col, self->_pen.bold, self->_pen.italic);
       putglyphDebugCount++;
     }
@@ -3002,11 +3002,11 @@ int GPUScreenImpl::onSetPenAttr(VTermAttr attr, VTermValue *val, void *user) {
   switch (attr) {
   case VTERM_ATTR_BOLD:
     self->_pen.bold = val->boolean != 0;
-    yinfo("VTERM_ATTR_BOLD: val->boolean={} pen.bold={}", val->boolean, self->_pen.bold);
+    ydebug("VTERM_ATTR_BOLD: val->boolean={} pen.bold={}", val->boolean, self->_pen.bold);
     break;
   case VTERM_ATTR_ITALIC:
     self->_pen.italic = val->boolean != 0;
-    yinfo("VTERM_ATTR_ITALIC: val->boolean={} pen.italic={}", val->boolean, self->_pen.italic);
+    ydebug("VTERM_ATTR_ITALIC: val->boolean={} pen.italic={}", val->boolean, self->_pen.italic);
     break;
   case VTERM_ATTR_UNDERLINE:
     self->_pen.underline = static_cast<uint8_t>(val->number & 0x03);
@@ -3016,7 +3016,7 @@ int GPUScreenImpl::onSetPenAttr(VTermAttr attr, VTermValue *val, void *user) {
     break;
   case VTERM_ATTR_REVERSE:
     self->_pen.reverse = val->boolean != 0;
-    yinfo("VTERM_ATTR_REVERSE: val->boolean={} pen.reverse={}", val->boolean,
+    ydebug("VTERM_ATTR_REVERSE: val->boolean={} pen.reverse={}", val->boolean,
           self->_pen.reverse);
     break;
   case VTERM_ATTR_BLINK:
@@ -3024,7 +3024,7 @@ int GPUScreenImpl::onSetPenAttr(VTermAttr attr, VTermValue *val, void *user) {
     break;
   case VTERM_ATTR_FOREGROUND:
     self->_pen.fg = val->color;
-    yinfo("VTERM_ATTR_FOREGROUND: type={} idx={} rgb=({},{},{})",
+    ydebug("VTERM_ATTR_FOREGROUND: type={} idx={} rgb=({},{},{})",
           VTERM_COLOR_IS_DEFAULT_FG(&val->color) ? "DEFAULT_FG" :
           VTERM_COLOR_IS_DEFAULT_BG(&val->color) ? "DEFAULT_BG" :
           VTERM_COLOR_IS_INDEXED(&val->color) ? "INDEXED" : "RGB",
@@ -3033,7 +3033,7 @@ int GPUScreenImpl::onSetPenAttr(VTermAttr attr, VTermValue *val, void *user) {
     break;
   case VTERM_ATTR_BACKGROUND:
     self->_pen.bg = val->color;
-    yinfo("VTERM_ATTR_BACKGROUND: type={} idx={} rgb=({},{},{})",
+    ydebug("VTERM_ATTR_BACKGROUND: type={} idx={} rgb=({},{},{})",
           VTERM_COLOR_IS_DEFAULT_BG(&val->color) ? "DEFAULT_BG" :
           VTERM_COLOR_IS_DEFAULT_FG(&val->color) ? "DEFAULT_FG" :
           VTERM_COLOR_IS_INDEXED(&val->color) ? "INDEXED" : "RGB",
@@ -3099,7 +3099,7 @@ int GPUScreenImpl::onSetLineInfo(int, const VTermLineInfo *,
 int GPUScreenImpl::onOSC(int command, VTermStringFragment frag, void *user) {
   auto *self = static_cast<GPUScreenImpl *>(user);
 
-  yinfo(">>> onOSC: command={} initial={} final={} len={}", command,
+  ydebug(">>> onOSC: command={} initial={} final={} len={}", command,
          (bool)frag.initial, (bool)frag.final, (size_t)frag.len);
 
   // Handle color query OSC commands (10=fg, 11=bg, 12=cursor)
@@ -3132,7 +3132,7 @@ int GPUScreenImpl::onOSC(int command, VTermStringFragment frag, void *user) {
                color.rgb.green * 257,
                color.rgb.blue * 257);
 
-      yinfo(">>> onOSC: color query {} -> rgb:{:02x}{:02x}{:02x}",
+      ydebug(">>> onOSC: color query {} -> rgb:{:02x}{:02x}{:02x}",
             command, color.rgb.red, color.rgb.green, color.rgb.blue);
 
       if (self->_outputCallback) {
@@ -3146,21 +3146,21 @@ int GPUScreenImpl::onOSC(int command, VTermStringFragment frag, void *user) {
 
   // Accept yetty vendor commands: 666666 (cards), 666667-669 (effects), 666670 (gpu stats), 666671 (fps), 666673 (screen draw)
   if (command != YETTY_OSC_VENDOR_ID && command != 666667 && command != 666668 && command != 666669 && command != 666670 && command != 666671 && command != 666673) {
-    yinfo(">>> onOSC: ignoring non-yetty command {}", command);
+    ydebug(">>> onOSC: ignoring non-yetty command {}", command);
     return 0;
   }
 
-  yinfo(">>> onOSC: *** YETTY OSC DETECTED *** command={}", command);
+  ydebug(">>> onOSC: *** YETTY OSC DETECTED *** command={}", command);
 
   if (frag.initial) {
     self->_oscBuffer.clear();
     self->_oscCommand = command;
-    yinfo(">>> onOSC: started new OSC buffer");
+    ydebug(">>> onOSC: started new OSC buffer");
   }
 
   if (frag.len > 0) {
     self->_oscBuffer.append(frag.str, frag.len);
-    yinfo(">>> onOSC: appended {} bytes, total={}", (size_t)frag.len,
+    ydebug(">>> onOSC: appended {} bytes, total={}", (size_t)frag.len,
            self->_oscBuffer.size());
   }
 
@@ -3187,7 +3187,7 @@ int GPUScreenImpl::onOSC(int command, VTermStringFragment frag, void *user) {
     // Handle FPS OSC command (666671)
     if (command == 666671) {
       uint32_t fps = std::clamp(std::stoi(self->_oscBuffer), 1, 240);
-      yinfo("OSC 666671: Setting frame rate to {} FPS", fps);
+      ydebug("OSC 666671: Setting frame rate to {} FPS", fps);
       (*base::EventLoop::instance())->dispatch(base::Event::setFrameRateEvent(fps));
       self->_oscBuffer.clear();
       self->_oscCommand = -1;
@@ -3261,7 +3261,7 @@ int GPUScreenImpl::onOSC(int command, VTermStringFragment frag, void *user) {
     }
 
     std::string fullSeq = std::to_string(command) + ";" + self->_oscBuffer;
-    yinfo("onOSC: FINAL - fullSeq len={} first100chars='{}'",
+    ydebug("onOSC: FINAL - fullSeq len={} first100chars='{}'",
           fullSeq.size(), fullSeq.substr(0, 100));
 
     std::string response;
@@ -3270,7 +3270,7 @@ int GPUScreenImpl::onOSC(int command, VTermStringFragment frag, void *user) {
     // Forward OSC handling to handleOSCSequence
     bool handled = self->handleOSCSequence(fullSeq, &response, &linesToAdvance);
 
-    yinfo("onOSC: handled={} response_len={} linesToAdvance={}", handled,
+    ydebug("onOSC: handled={} response_len={} linesToAdvance={}", handled,
            response.size(), linesToAdvance);
 
     if (handled) {
@@ -3357,7 +3357,7 @@ void GPUScreenImpl::suspendOffscreenCards(int scrolledRow) {
     // Card is fully off-screen — suspend and move to inactive
     auto it = _cards.find(slotIndex);
     if (it != _cards.end()) {
-      yinfo("GPUScreen::suspendOffscreenCards: suspending card '{}' slotIndex={}",
+      ydebug("GPUScreen::suspendOffscreenCards: suspending card '{}' slotIndex={}",
             it->second->typeName(), slotIndex);
       if (it->second->needsBuffer())  _bufferLayoutChanged = true;
       if (it->second->needsTexture()) _textureLayoutChanged = true;
@@ -3399,7 +3399,7 @@ void GPUScreenImpl::reactivateVisibleCards() {
   for (uint32_t slotIndex : toReactivate) {
     auto it = _inactiveCards.find(slotIndex);
     if (it != _inactiveCards.end()) {
-      yinfo("GPUScreen::reactivateVisibleCards: reactivating card slotIndex={}", slotIndex);
+      ydebug("GPUScreen::reactivateVisibleCards: reactivating card slotIndex={}", slotIndex);
       if (it->second->needsBuffer())  _bufferLayoutChanged = true;
       if (it->second->needsTexture()) _textureLayoutChanged = true;
       _cards[slotIndex] = std::move(it->second);
@@ -3440,7 +3440,7 @@ void GPUScreenImpl::suspendNonVisibleCards() {
   for (uint32_t slotIndex : toSuspend) {
     auto it = _cards.find(slotIndex);
     if (it != _cards.end()) {
-      yinfo("GPUScreen::suspendNonVisibleCards: suspending card '{}' slotIndex={}",
+      ydebug("GPUScreen::suspendNonVisibleCards: suspending card '{}' slotIndex={}",
             it->second->typeName(), slotIndex);
       if (it->second->needsBuffer())  _bufferLayoutChanged = true;
       if (it->second->needsTexture()) _textureLayoutChanged = true;
@@ -3495,7 +3495,7 @@ void GPUScreenImpl::gcInactiveCards() {
   for (uint32_t slotIndex : toDispose) {
     auto it = _inactiveCards.find(slotIndex);
     if (it != _inactiveCards.end()) {
-      yinfo("GPUScreen::gcInactiveCards: disposing orphaned inactive card '{}' slotIndex={}",
+      ydebug("GPUScreen::gcInactiveCards: disposing orphaned inactive card '{}' slotIndex={}",
             it->second->typeName(), slotIndex);
       it->second->dispose();
       _inactiveCards.erase(it);
@@ -3513,7 +3513,7 @@ void GPUScreenImpl::gcInactiveCards() {
   for (uint32_t slotIndex : toDisposeActive) {
     auto it = _cards.find(slotIndex);
     if (it != _cards.end()) {
-      yinfo("GPUScreen::gcInactiveCards: disposing orphaned active card '{}' slotIndex={}",
+      ydebug("GPUScreen::gcInactiveCards: disposing orphaned active card '{}' slotIndex={}",
             it->second->typeName(), slotIndex);
       it->second->dispose();
       _cards.erase(it);
@@ -3521,7 +3521,7 @@ void GPUScreenImpl::gcInactiveCards() {
   }
 
   if (!toDispose.empty() || !toDisposeActive.empty()) {
-    yinfo("GPUScreen::gcInactiveCards: disposed {} inactive + {} active orphaned cards",
+    ydebug("GPUScreen::gcInactiveCards: disposed {} inactive + {} active orphaned cards",
           toDispose.size(), toDisposeActive.size());
   }
 }
@@ -3533,7 +3533,7 @@ void GPUScreenImpl::gcInactiveCards() {
 bool GPUScreenImpl::handleOSCSequence(const std::string &sequence,
                                       std::string *response,
                                       uint32_t *linesToAdvance) {
-  yinfo("GPUScreenImpl::handleOSCSequence: ENTERED, sequence len={}",
+  ydebug("GPUScreenImpl::handleOSCSequence: ENTERED, sequence len={}",
         sequence.size());
 
   // Parse vendor ID from sequence (format: "vendorId;...")
@@ -3577,7 +3577,7 @@ bool GPUScreenImpl::handleOSCSequence(const std::string &sequence,
     if (vendorId == 666671) {
       try {
         uint32_t fps = std::clamp(std::stoi(payload), 1, 240);
-        yinfo("OSC 666671: Setting frame rate to {} FPS", fps);
+        ydebug("OSC 666671: Setting frame rate to {} FPS", fps);
         (*base::EventLoop::instance())->dispatch(base::Event::setFrameRateEvent(fps));
       } catch (...) {
         yerror("OSC 666671: Invalid FPS value '{}'", payload);
@@ -3590,10 +3590,10 @@ bool GPUScreenImpl::handleOSCSequence(const std::string &sequence,
     //          level:<name>:0|1 = disable/enable level (e.g., level:debug:0)
     if (vendorId == 666672) {
       if (payload.empty() || payload == "0") {
-        yinfo("OSC 666672: Disabling all traces");
+        ydebug("OSC 666672: Disabling all traces");
         ydisable_all();
       } else if (payload == "1") {
-        yinfo("OSC 666672: Enabling all traces");
+        ydebug("OSC 666672: Enabling all traces");
         yenable_all();
       } else if (payload.rfind("level:", 0) == 0) {
         // Parse level:<name>:<0|1>
@@ -3601,7 +3601,7 @@ bool GPUScreenImpl::handleOSCSequence(const std::string &sequence,
         if (colonPos != std::string::npos) {
           std::string level = payload.substr(6, colonPos - 6);
           bool enable = payload.substr(colonPos + 1) == "1";
-          yinfo("OSC 666672: {} level '{}'", enable ? "Enabling" : "Disabling", level);
+          ydebug("OSC 666672: {} level '{}'", enable ? "Enabling" : "Disabling", level);
           if (enable) {
             yenable_level(level.c_str());
           } else {
@@ -3707,7 +3707,7 @@ void GPUScreenImpl::handleEffectOSC(int command, const std::string &payload) {
   }
 
   if (values.empty()) {
-    yinfo("Effect OSC {}: disabling {}", command, label);
+    ydebug("Effect OSC {}: disabling {}", command, label);
     if (command == 666667) {
       _uniforms.preEffectIndex = 0;
     } else if (command == 666668) {
@@ -3725,7 +3725,7 @@ void GPUScreenImpl::handleEffectOSC(int command, const std::string &payload) {
     for (int i = 0; i < 6; i++) {
       _uniforms.preEffectParams[i] = (i + 1 < static_cast<int>(values.size())) ? values[i + 1] : 0.0f;
     }
-    yinfo("Effect OSC: {} index={} params=[{},{},{},{},{},{}]",
+    ydebug("Effect OSC: {} index={} params=[{},{},{},{},{},{}]",
           label, effectIndex,
           _uniforms.preEffectParams[0], _uniforms.preEffectParams[1],
           _uniforms.preEffectParams[2], _uniforms.preEffectParams[3],
@@ -3735,7 +3735,7 @@ void GPUScreenImpl::handleEffectOSC(int command, const std::string &payload) {
     for (int i = 0; i < 6; i++) {
       _uniforms.postEffectParams[i] = (i + 1 < static_cast<int>(values.size())) ? values[i + 1] : 0.0f;
     }
-    yinfo("Effect OSC: {} index={} params=[{},{},{},{},{},{}]",
+    ydebug("Effect OSC: {} index={} params=[{},{},{},{},{},{}]",
           label, effectIndex,
           _uniforms.postEffectParams[0], _uniforms.postEffectParams[1],
           _uniforms.postEffectParams[2], _uniforms.postEffectParams[3],
@@ -3745,7 +3745,7 @@ void GPUScreenImpl::handleEffectOSC(int command, const std::string &payload) {
     for (int i = 0; i < 6; i++) {
       _uniforms.effectParams[i] = (i + 1 < static_cast<int>(values.size())) ? values[i + 1] : 0.0f;
     }
-    yinfo("Effect OSC: {} index={} params=[{},{},{},{},{},{}]",
+    ydebug("Effect OSC: {} index={} params=[{},{},{},{},{},{}]",
           label, effectIndex,
           _uniforms.effectParams[0], _uniforms.effectParams[1],
           _uniforms.effectParams[2], _uniforms.effectParams[3],
@@ -3810,9 +3810,9 @@ std::string GPUScreenImpl::buildGpuStatsText() {
 bool GPUScreenImpl::handleCardOSCSequence(const std::string &sequence,
                                           std::string *response,
                                           uint32_t *linesToAdvance) {
-  yinfo("GPUScreenImpl::handleCardOSCSequence: ENTERED with sequence length={}",
+  ydebug("GPUScreenImpl::handleCardOSCSequence: ENTERED with sequence length={}",
         sequence.size());
-  yinfo("GPUScreenImpl::handleCardOSCSequence: sequence={}",
+  ydebug("GPUScreenImpl::handleCardOSCSequence: sequence={}",
         sequence.substr(0, 200));
 
   if (!_ctx.cardFactory) {
@@ -3821,7 +3821,7 @@ bool GPUScreenImpl::handleCardOSCSequence(const std::string &sequence,
       *response = OscResponse::error("No CardFactory");
     return false;
   }
-  yinfo("GPUScreenImpl::handleCardOSCSequence: cardFactory is available");
+  ydebug("GPUScreenImpl::handleCardOSCSequence: cardFactory is available");
 
   // Parse using the same OSC parser (same argument format)
   auto parseResult = _oscParser.parse(sequence);
@@ -3832,7 +3832,7 @@ bool GPUScreenImpl::handleCardOSCSequence(const std::string &sequence,
       *response = OscResponse::error(error_msg(parseResult));
     return false;
   }
-  yinfo("GPUScreenImpl::handleCardOSCSequence: parse succeeded");
+  ydebug("GPUScreenImpl::handleCardOSCSequence: parse succeeded");
 
   OscCommand cmd = *parseResult;
   if (!cmd.isValid()) {
@@ -3841,12 +3841,12 @@ bool GPUScreenImpl::handleCardOSCSequence(const std::string &sequence,
       *response = OscResponse::error(cmd.error);
     return false;
   }
-  yinfo("GPUScreenImpl::handleCardOSCSequence: cmd valid, type={}, card='{}'",
+  ydebug("GPUScreenImpl::handleCardOSCSequence: cmd valid, type={}, card='{}'",
         static_cast<int>(cmd.type), cmd.run.card);
 
   switch (cmd.type) {
   case OscCommandType::Run: {
-    yinfo(
+    ydebug(
         "GPUScreenImpl::handleCardOSCSequence: RUN command for card '{}'",
         cmd.run.card);
     int32_t x = cmd.run.x;
@@ -3895,12 +3895,12 @@ bool GPUScreenImpl::handleCardOSCSequence(const std::string &sequence,
     ydebug("GPUScreen: cmd.run.name='{}'", cmd.run.name);
     if (!cmd.run.name.empty()) {
       card->setName(cmd.run.name);
-      yinfo("GPUScreen: Set user-provided card name='{}'", cmd.run.name);
+      ydebug("GPUScreen: Set user-provided card name='{}'", cmd.run.name);
     } else {
       // Auto-generate a name for RPC discoverability
       if (auto genResult = NameGenerator::instance(); genResult) {
         card->setName((*genResult)->generate());
-        yinfo("GPUScreen: Set auto-generated card name='{}'", card->name());
+        ydebug("GPUScreen: Set auto-generated card name='{}'", card->name());
       }
     }
 
@@ -3984,7 +3984,7 @@ bool GPUScreenImpl::handleCardOSCSequence(const std::string &sequence,
         ansiOutput += "[0m\n";
       }
 
-      yinfo("GPUScreen: Writing {} bytes of ANSI sequences to vterm for card "
+      ydebug("GPUScreen: Writing {} bytes of ANSI sequences to vterm for card "
             "'{}'",
             ansiOutput.size(), card->typeName());
 
@@ -3995,14 +3995,14 @@ bool GPUScreenImpl::handleCardOSCSequence(const std::string &sequence,
       return false;
     }
 
-    yinfo("GPUScreen: Created card '{}' at ({},{}) size {}x{} slotIndex={} "
+    ydebug("GPUScreen: Created card '{}' at ({},{}) size {}x{} slotIndex={} "
           "shaderGlyph={:#x}",
           card->typeName(), x, y, card->widthCells(), card->heightCells(),
           card->metadataSlotIndex(), card->shaderGlyph());
 
     // Register named card with CardManager for RPC lookup
     if (!card->name().empty()) {
-      yinfo("GPUScreen: Registering named card '{}' with slotIndex={}",
+      ydebug("GPUScreen: Registering named card '{}' with slotIndex={}",
             card->name(), card->metadataSlotIndex());
       registerNamedCard(card->name(), card->metadataSlotIndex());
     } else {
@@ -4424,7 +4424,7 @@ void GPUScreenImpl::registerForFocus() {
                          sharedAs<base::EventListener>());
   loop->registerListener(base::Event::Type::CardTextureRepack,
                          sharedAs<base::EventListener>());
-  yinfo("GPUScreen {} registered for SetFocus, Mouse, Scroll, Paste, CommandKey and CardRepack events", _id);
+  ydebug("GPUScreen {} registered for SetFocus, Mouse, Scroll, Paste, CommandKey and CardRepack events", _id);
 
   // Auto-focus on startup so keyboard works immediately
   loop->dispatch(base::Event::focusEvent(_id));
@@ -4512,7 +4512,7 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
             }
           });
 
-          yinfo("GPUScreen {} right-click at cell ({}, {}), opening context menu", _id, row, col);
+          ydebug("GPUScreen {} right-click at cell ({}, {}), opening context menu", _id, row, col);
           return Ok(true);
         }
 
@@ -4796,7 +4796,7 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
               _rasterFont->setCellSize(getCellWidth(), getCellHeight());
               _rasterFont->uploadToGpu();
             }
-            yinfo("GPUScreen {} zoom: {:.0f}%", _id, _zoomLevel * 100.0f);
+            ydebug("GPUScreen {} zoom: {:.0f}%", _id, _zoomLevel * 100.0f);
           }
         } else if (ctrlPressed) {
           // Ctrl+scroll: Visual Zoom (shader-based)
@@ -4828,11 +4828,11 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
                 snprintf(buf, sizeof(buf), "Mode:%s", mode);
                 _ctx.yguiOverlay->setStatusText(buf);
               }
-              yinfo("GPUScreen {} visual zoom: off", _id);
+              ydebug("GPUScreen {} visual zoom: off", _id);
             } else {
               // Re-clamp offsets after scale change
               clampVisualZoomOffset();
-              yinfo("GPUScreen {} visual zoom: {:.1f}x", _id, _visualZoomScale);
+              ydebug("GPUScreen {} visual zoom: {:.1f}x", _id, _visualZoomScale);
             }
           }
         } else if (_visualZoomActive) {
@@ -4885,10 +4885,10 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
                                sharedAs<base::EventListener>());
         loop->registerListener(base::Event::Type::KeyDown,
                                sharedAs<base::EventListener>());
-        yinfo("GPUScreen {} gained focus (card={}), registered for keyboard events",
+        ydebug("GPUScreen {} gained focus (card={}), registered for keyboard events",
               _id, _focusedCardId);
       } else if (isOurCard) {
-        yinfo("GPUScreen {} card {} gained focus", _id, _focusedCardId);
+        ydebug("GPUScreen {} card {} gained focus", _id, _focusedCardId);
       }
     } else {
       // Another element is being focused, we lose focus
@@ -4899,7 +4899,7 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
                                  sharedAs<base::EventListener>());
         loop->deregisterListener(base::Event::Type::KeyDown,
                                  sharedAs<base::EventListener>());
-        yinfo("GPUScreen {} lost focus, deregistered from keyboard events",
+        ydebug("GPUScreen {} lost focus, deregistered from keyboard events",
               _id);
       }
     }
@@ -4987,7 +4987,7 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
           snprintf(buf, sizeof(buf), "Mode:%s", mode);
           _ctx.yguiOverlay->setStatusText(buf);
         }
-        yinfo("GPUScreen {} visual zoom: off", _id);
+        ydebug("GPUScreen {} visual zoom: off", _id);
         return Ok(true);  // consume
       }
     }
@@ -5023,7 +5023,7 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
       if (event.type == base::Event::Type::KeyDown) {
         // Escape unfocuses the card
         if (event.key.key == 256 /* GLFW_KEY_ESCAPE */) {
-          yinfo("GPUScreen {}: Escape pressed, unfocusing card {}", _id, _focusedCardId);
+          ydebug("GPUScreen {}: Escape pressed, unfocusing card {}", _id, _focusedCardId);
           _focusedCardId = 0;
           loop->dispatch(base::Event::focusEvent(_id));
           return Ok(true);
@@ -5063,7 +5063,7 @@ Result<void> GPUScreenImpl::initPipeline() {
     return Ok();
 
   WGPUDevice device = _ctx.gpu.device;
-  yinfo("GPUScreenImpl::initPipeline: initializing per-instance resources");
+  ydebug("GPUScreenImpl::initPipeline: initializing per-instance resources");
 
   // Verify ShaderManager has shared resources ready
   auto shaderMgr = _ctx.shaderManager;
@@ -5083,7 +5083,7 @@ Result<void> GPUScreenImpl::initPipeline() {
   }
 
   _pipelineInitialized = true;
-  yinfo("GPUScreenImpl::initPipeline: per-instance resources initialized");
+  ydebug("GPUScreenImpl::initPipeline: per-instance resources initialized");
   return Ok();
 }
 
@@ -5249,7 +5249,7 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
     _textureCols = _cols;
     _textureRows = totalRows;
     _needsBindGroupRecreation = true;
-    yinfo("GPUScreenImpl::render: created cell buffer {}x{} ({} bytes)", _cols,
+    ydebug("GPUScreenImpl::render: created cell buffer {}x{} ({} bytes)", _cols,
           totalRows, requiredSize);
   }
 
@@ -5420,7 +5420,7 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
     for (int i = 0; i < _cols * _rows && logged < 8; i++) {
       if (cells[i].glyph > 0) {
         uint8_t fontType = (cells[i].style >> 5) & 0x07;
-        yinfo("CELL[{}]: glyph={} fontType={} fg=({},{},{}) bg=({},{},{}) style={:#x}",
+        ydebug("CELL[{}]: glyph={} fontType={} fg=({},{},{}) bg=({},{},{}) style={:#x}",
               i, cells[i].glyph, fontType,
               cells[i].fgR, cells[i].fgG, cells[i].fgB,
               cells[i].bgR, cells[i].bgG, cells[i].bgB,
@@ -5429,7 +5429,7 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
       }
     }
     if (logged == 0) {
-      yinfo("CELL DEBUG: all {} cells have glyph=0", _cols * _rows);
+      ydebug("CELL DEBUG: all {} cells have glyph=0", _cols * _rows);
     }
   }
 

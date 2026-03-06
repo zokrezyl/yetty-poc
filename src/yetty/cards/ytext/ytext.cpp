@@ -78,7 +78,7 @@ Result<void> YText::init() {
         }
     }
 
-    yinfo("YText::init: {} lines, {} glyphs, content={}x{}, scroll=({}, {})",
+    ydebug("YText::init: {} lines, {} glyphs, content={}x{}, scroll=({}, {})",
           _lines.size(), _glyphs.size(), _contentWidth, _contentHeight,
           _scrollSpeedX, _scrollSpeedY);
 
@@ -121,27 +121,27 @@ bool YText::parseBracedArgs(const std::string& args) {
 
         if (key == "@scroll-x" || key == "@sx") {
             try { _scrollSpeedX = std::stof(value); } catch (...) {}
-            yinfo("YText: scrollSpeedX={}", _scrollSpeedX);
+            ydebug("YText: scrollSpeedX={}", _scrollSpeedX);
         }
         else if (key == "@scroll-y" || key == "@sy") {
             try { _scrollSpeedY = std::stof(value); } catch (...) {}
-            yinfo("YText: scrollSpeedY={}", _scrollSpeedY);
+            ydebug("YText: scrollSpeedY={}", _scrollSpeedY);
         }
         else if (key == "@loop") {
             _scrollMode = YTextScrollMode::Loop;
-            yinfo("YText: scrollMode=loop");
+            ydebug("YText: scrollMode=loop");
         }
         else if (key == "@pingpong") {
             _scrollMode = YTextScrollMode::PingPong;
-            yinfo("YText: scrollMode=pingpong");
+            ydebug("YText: scrollMode=pingpong");
         }
         else if (key == "@font-size" || key == "@fs") {
             try { _baseFontSize = std::stof(value); } catch (...) {}
-            yinfo("YText: fontSize={}", _baseFontSize);
+            ydebug("YText: fontSize={}", _baseFontSize);
         }
         else if (key == "@font-family") {
             // TODO: font family support
-            yinfo("YText: fontFamily={}", value);
+            ydebug("YText: fontFamily={}", value);
         }
         else if (key == "@effect") {
             if (value == "cylinder" || value == "cylinder-h") {
@@ -163,31 +163,31 @@ bool YText::parseBracedArgs(const std::string& args) {
             } else if (value == "perspective" || value == "starwars") {
                 _effectMode = YTextEffectMode::Perspective;
             }
-            yinfo("YText: effect={}", value);
+            ydebug("YText: effect={}", value);
         }
         else if (key == "@effect-strength" || key == "@es") {
             try { _effectStrength = std::stof(value); } catch (...) {}
-            yinfo("YText: effectStrength={}", _effectStrength);
+            ydebug("YText: effectStrength={}", _effectStrength);
         }
         else if (key == "@frequency" || key == "@freq") {
             try { _frequency = std::stof(value); } catch (...) {}
-            yinfo("YText: frequency={}", _frequency);
+            ydebug("YText: frequency={}", _frequency);
         }
         else if (key == "@tilt-x" || key == "@tx") {
             try { _tiltX = std::stof(value); } catch (...) {}
-            yinfo("YText: tiltX={}", _tiltX);
+            ydebug("YText: tiltX={}", _tiltX);
         }
         else if (key == "@tilt-y" || key == "@ty") {
             try { _tiltY = std::stof(value); } catch (...) {}
-            yinfo("YText: tiltY={}", _tiltY);
+            ydebug("YText: tiltY={}", _tiltY);
         }
         else if (key == "@fg-color" || key == "@fg" || key == "@color") {
             _fgColor = parseColor(value);
-            yinfo("YText: fgColor=0x{:08X}", _fgColor);
+            ydebug("YText: fgColor=0x{:08X}", _fgColor);
         }
         else if (key == "@bg-color" || key == "@bg") {
             _bgColor = parseColor(value);
-            yinfo("YText: bgColor=0x{:08X}", _bgColor);
+            ydebug("YText: bgColor=0x{:08X}", _bgColor);
         }
     }
 
@@ -215,7 +215,7 @@ bool YText::parseBracedArgs(const std::string& args) {
             text += block->content[i];
         }
         setText(text, _baseFontSize, _fgColor ? _fgColor : 0xFFFFFFFF);
-        yinfo("YText: content from braced notation: '{}'", text);
+        ydebug("YText: content from braced notation: '{}'", text);
     }
 
     return true;
@@ -237,11 +237,11 @@ void YText::parseArgs(const std::string& args) {
     while (iss >> token) {
         if (token == "--scroll-x" || token == "-sx") {
             if (iss >> _scrollSpeedX) {
-                yinfo("YText: scrollSpeedX={}", _scrollSpeedX);
+                ydebug("YText: scrollSpeedX={}", _scrollSpeedX);
             }
         } else if (token == "--scroll-y" || token == "-sy") {
             if (iss >> _scrollSpeedY) {
-                yinfo("YText: scrollSpeedY={}", _scrollSpeedY);
+                ydebug("YText: scrollSpeedY={}", _scrollSpeedY);
             }
         } else if (token == "--loop") {
             _scrollMode = YTextScrollMode::Loop;
@@ -251,58 +251,58 @@ void YText::parseArgs(const std::string& args) {
             iss >> _baseFontSize;
         } else if (token == "--cylinder" || token == "--cylinder-h") {
             _effectMode = YTextEffectMode::CylinderH;
-            yinfo("YText: effect=cylinderH");
+            ydebug("YText: effect=cylinderH");
         } else if (token == "--cylinder-v") {
             _effectMode = YTextEffectMode::CylinderV;
-            yinfo("YText: effect=cylinderV");
+            ydebug("YText: effect=cylinderV");
         } else if (token == "--sphere") {
             _effectMode = YTextEffectMode::Sphere;
-            yinfo("YText: effect=sphere");
+            ydebug("YText: effect=sphere");
         } else if (token == "--wave-disp" || token == "--wave-disp-h") {
             _effectMode = YTextEffectMode::WaveDispH;
-            yinfo("YText: effect=waveDispH");
+            ydebug("YText: effect=waveDispH");
         } else if (token == "--wave-disp-v") {
             _effectMode = YTextEffectMode::WaveDispV;
-            yinfo("YText: effect=waveDispV");
+            ydebug("YText: effect=waveDispV");
         } else if (token == "--wave-proj" || token == "--wave-proj-h") {
             _effectMode = YTextEffectMode::WaveProjH;
-            yinfo("YText: effect=waveProjH");
+            ydebug("YText: effect=waveProjH");
         } else if (token == "--wave-proj-v") {
             _effectMode = YTextEffectMode::WaveProjV;
-            yinfo("YText: effect=waveProjV");
+            ydebug("YText: effect=waveProjV");
         } else if (token == "--ripple") {
             _effectMode = YTextEffectMode::Ripple;
-            yinfo("YText: effect=ripple");
+            ydebug("YText: effect=ripple");
         } else if (token == "--perspective" || token == "--starwars") {
             _effectMode = YTextEffectMode::Perspective;
-            yinfo("YText: effect=perspective");
+            ydebug("YText: effect=perspective");
         } else if (token == "--effect-strength" || token == "-es") {
             if (iss >> _effectStrength) {
-                yinfo("YText: effectStrength={}", _effectStrength);
+                ydebug("YText: effectStrength={}", _effectStrength);
             }
         } else if (token == "--frequency" || token == "-freq") {
             if (iss >> _frequency) {
-                yinfo("YText: frequency={}", _frequency);
+                ydebug("YText: frequency={}", _frequency);
             }
         } else if (token == "--tilt-x" || token == "-tx") {
             if (iss >> _tiltX) {
-                yinfo("YText: tiltX={}", _tiltX);
+                ydebug("YText: tiltX={}", _tiltX);
             }
         } else if (token == "--tilt-y" || token == "-ty") {
             if (iss >> _tiltY) {
-                yinfo("YText: tiltY={}", _tiltY);
+                ydebug("YText: tiltY={}", _tiltY);
             }
         } else if (token == "--fg-color" || token == "-fg") {
             std::string colorStr;
             if (iss >> colorStr) {
                 _fgColor = parseColor(colorStr);
-                yinfo("YText: fgColor=0x{:08X}", _fgColor);
+                ydebug("YText: fgColor=0x{:08X}", _fgColor);
             }
         } else if (token == "--bg-color" || token == "-bg") {
             std::string colorStr;
             if (iss >> colorStr) {
                 _bgColor = parseColor(colorStr);
-                yinfo("YText: bgColor=0x{:08X}", _bgColor);
+                ydebug("YText: bgColor=0x{:08X}", _bgColor);
             }
         }
     }
@@ -504,7 +504,7 @@ Result<void> YText::allocateBuffers() {
     _dirty = false;
     _metadataDirty = true;
 
-    yinfo("YText::allocateBuffers: {} bytes ({} lines, {} glyphs)",
+    ydebug("YText::allocateBuffers: {} bytes ({} lines, {} glyphs)",
           totalBytes, _lines.size(), _glyphs.size());
 
     return Ok();

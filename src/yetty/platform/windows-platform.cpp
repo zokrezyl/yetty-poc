@@ -41,7 +41,7 @@ public:
         _cols = cols;
         _rows = rows;
 
-        yinfo("ConPTY[{}]: Starting shell '{}' ({}x{})", _id, shell, cols, rows);
+        ydebug("ConPTY[{}]: Starting shell '{}' ({}x{})", _id, shell, cols, rows);
 
         // Create pipes for PTY input/output
         SECURITY_ATTRIBUTES sa = { sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE };
@@ -141,7 +141,7 @@ public:
         // Start reader thread
         _readerThread = std::thread([this]() { readerThreadFunc(); });
 
-        yinfo("ConPTY[{}]: Started, PID={}", _id, GetProcessId(_hProcess));
+        ydebug("ConPTY[{}]: Started, PID={}", _id, GetProcessId(_hProcess));
         return Ok();
     }
 
@@ -149,7 +149,7 @@ public:
         if (!_running) return;
         _running = false;
 
-        yinfo("ConPTY[{}]: Stopping", _id);
+        ydebug("ConPTY[{}]: Stopping", _id);
 
         if (_hPC) {
             ClosePseudoConsole(_hPC);
@@ -262,7 +262,7 @@ public:
         _headless = headless;
         if (_headless) {
             // Headless mode: no GLFW, use std::chrono for timing
-            yinfo("Platform: headless mode (no GLFW)");
+            ydebug("Platform: headless mode (no GLFW)");
             return Ok();
         }
 
@@ -299,7 +299,7 @@ public:
         _cursorResizeH = glfwCreateStandardCursor(GLFW_HRESIZE_CURSOR);
         _cursorResizeV = glfwCreateStandardCursor(GLFW_VRESIZE_CURSOR);
 
-        yinfo("GLFW window created: {}x{}", width, height);
+        ydebug("GLFW window created: {}x{}", width, height);
         return Ok();
     }
 
@@ -363,7 +363,7 @@ public:
         glfwSetWindowIcon(_window, 1, &icon);
 
         stbi_image_free(pixels);
-        yinfo("Set window icon from embedded data ({}x{})", width, height);
+        ydebug("Set window icon from embedded data ({}x{})", width, height);
     }
 
     WGPUSurface createWGPUSurface(WGPUInstance instance) override {

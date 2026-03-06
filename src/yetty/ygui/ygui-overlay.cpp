@@ -208,7 +208,7 @@ Result<void> YGuiOverlayImpl::init() noexcept {
     if (auto res = createPipeline(); !res)
         return Err<void>("YGuiOverlay: pipeline creation failed", res);
 
-    yinfo("YGuiOverlay initialized");
+    ydebug("YGuiOverlay initialized");
     return Ok();
 }
 
@@ -267,7 +267,7 @@ Result<void> YGuiOverlayImpl::createPipeline() {
         std::ofstream dbg("/tmp/ygui-overlay-composed.wgsl");
         if (dbg.is_open()) {
             dbg << shaderSource;
-            yinfo("YGuiOverlay: wrote composed shader ({} lines) to /tmp/ygui-overlay-composed.wgsl",
+            ydebug("YGuiOverlay: wrote composed shader ({} lines) to /tmp/ygui-overlay-composed.wgsl",
                   std::count(shaderSource.begin(), shaderSource.end(), '\n') + 1);
         }
     }
@@ -436,7 +436,7 @@ Result<void> YGuiOverlayImpl::createPipeline() {
     if (!_pipeline)
         return Err<void>("Failed to create overlay render pipeline");
 
-    yinfo("YGuiOverlay: pipeline created successfully");
+    ydebug("YGuiOverlay: pipeline created successfully");
     return Ok();
 }
 

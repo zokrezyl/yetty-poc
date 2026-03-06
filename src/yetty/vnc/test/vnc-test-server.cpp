@@ -26,7 +26,7 @@ namespace {
 volatile bool g_running = true;
 
 void signalHandler(int) {
-    yinfo("Received signal, stopping...");
+    ydebug("Received signal, stopping...");
     g_running = false;
 }
 
@@ -78,7 +78,7 @@ public:
         int topMargin = (cellHeight - actualLineHeight) / 2;
         _baseline = topMargin + ascender;
 
-        yinfo("CpuFont: loaded {} (cell={}x{}, baseline={})", ttfPath, cellWidth, cellHeight, _baseline);
+        ydebug("CpuFont: loaded {} (cell={}x{}, baseline={})", ttfPath, cellWidth, cellHeight, _baseline);
         return true;
     }
 
@@ -328,9 +328,9 @@ int main(int argc, char* argv[]) {
     int width = args::get(widthFlag);
     int height = args::get(heightFlag);
 
-    yinfo("=== VNC Test Server ===");
-    yinfo("Port: {}, FPS: {}, Pattern: {}", port, fps, pattern);
-    yinfo("Resolution: {}x{}, Font: {}", width, height, fontPath);
+    ydebug("=== VNC Test Server ===");
+    ydebug("Port: {}, FPS: {}, Pattern: {}", port, fps, pattern);
+    ydebug("Resolution: {}x{}, Font: {}", width, height, fontPath);
 
     // Signal handling
     std::signal(SIGINT, signalHandler);
@@ -408,7 +408,7 @@ int main(int argc, char* argv[]) {
     }
 
     WGPUQueue queue = wgpuDeviceGetQueue(device);
-    yinfo("WebGPU initialized");
+    ydebug("WebGPU initialized");
 
     // Texture and framebuffer (recreated on size change)
     WGPUTexture texture = nullptr;
@@ -421,14 +421,14 @@ int main(int argc, char* argv[]) {
         yerror("Failed to start VNC server: {}", startRes.error().message());
         return 1;
     }
-    yinfo("VNC server started on port {}", port);
+    ydebug("VNC server started on port {}", port);
 
     // Store client text to display at a dedicated line (not overwritten by patterns)
     std::string clientText;
 
     // Set up input callbacks
     server.onTextInput = [&clientText](const std::string& text) {
-        yinfo("SERVER RECEIVED TEXT: {} bytes: {}", text.size(), text);
+        ydebug("SERVER RECEIVED TEXT: {} bytes: {}", text.size(), text);
         clientText = text;
     };
     server.onKeyDown = [&term](uint32_t keycode, uint32_t scancode, uint8_t mods) {
@@ -441,7 +441,7 @@ int main(int argc, char* argv[]) {
         }
     };
     server.onResize = [&sizing](uint16_t w, uint16_t h) {
-        yinfo("SERVER RESIZE: {}x{}", w, h);
+        ydebug("SERVER RESIZE: {}x{}", w, h);
         if (w > 0 && h > 0 && (sizing.width != w || sizing.height != h)) {
             sizing.width = w;
             sizing.height = h;
@@ -449,7 +449,7 @@ int main(int argc, char* argv[]) {
         }
     };
     server.onCellSize = [&sizing](uint8_t cellH) {
-        yinfo("SERVER CELL SIZE: {}", cellH);
+        ydebug("SERVER CELL SIZE: {}", cellH);
         if (cellH >= 8 && cellH <= 64 && sizing.cellHeight != cellH) {
             sizing.cellHeight = cellH;
             sizing.cellWidth = cellH / 2;  // Maintain 1:2 aspect ratio
@@ -476,7 +476,7 @@ int main(int argc, char* argv[]) {
 
         // Recreate resources if size changed
         if (sizing.needsRecreate) {
-            yinfo("Recreating resources: {}x{} cellH={}", sizing.width, sizing.height, sizing.cellHeight);
+            ydebug("Recreating resources: {}x{} cellH={}", sizing.width, sizing.height, sizing.cellHeight);
 
             // Recreate font
             font = std::make_unique<CpuFont>();
@@ -487,7 +487,7 @@ int main(int argc, char* argv[]) {
 
             // Recreate terminal
             term = std::make_unique<Terminal>(sizing.cols(), sizing.rows());
-            yinfo("Terminal: {}x{} cells", sizing.cols(), sizing.rows());
+            ydebug("Terminal: {}x{} cells", sizing.cols(), sizing.rows());
 
             // Recreate texture
             if (texture) wgpuTextureRelease(texture);
@@ -586,11 +586,11 @@ int main(int argc, char* argv[]) {
         frameCount++;
 
         if (frameCount % (fps * 5) == 0) {
-            yinfo("Frame {} sent, pattern={}", frameCount, pattern);
+            ydebug("Frame {} sent, pattern={}", frameCount, pattern);
         }
     }
 
-    yinfo("Stopping...");
+    ydebug("Stopping...");
     server.stop();
     if (texture) wgpuTextureRelease(texture);
     wgpuQueueRelease(queue);
@@ -598,6 +598,6 @@ int main(int argc, char* argv[]) {
     wgpuAdapterRelease(adapter);
     wgpuInstanceRelease(instance);
 
-    yinfo("Done");
+    ydebug("Done");
     return 0;
 }

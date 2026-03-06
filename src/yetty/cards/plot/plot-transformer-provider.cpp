@@ -14,7 +14,7 @@ uint32_t PlotTransformerProvider::registerTransform(const std::string& expressio
     uint32_t idx = _nextIndex.fetch_add(1);
     _transforms[idx] = {expression, wgsl.code, wgsl.usesTime};
     _dirty = true;
-    yinfo("PlotTransformerProvider: registered transform[{}] = '{}' -> '{}'", idx, expression, wgsl.code);
+    ydebug("PlotTransformerProvider: registered transform[{}] = '{}' -> '{}'", idx, expression, wgsl.code);
     return idx;
 }
 
@@ -22,7 +22,7 @@ void PlotTransformerProvider::unregisterTransform(uint32_t transformIndex) {
     std::lock_guard<std::mutex> lock(_mutex);
     if (_transforms.erase(transformIndex) > 0) {
         _dirty = true;
-        yinfo("PlotTransformerProvider: unregistered transform[{}]", transformIndex);
+        ydebug("PlotTransformerProvider: unregistered transform[{}]", transformIndex);
     }
 }
 
@@ -31,7 +31,7 @@ void PlotTransformerProvider::registerWith(std::shared_ptr<ShaderManager> shader
     _shaderMgr = shaderMgr;
     shaderMgr->addProvider(shared_from_this(), "plotTransformDispatch");
     _registered = true;
-    yinfo("PlotTransformerProvider: registered with ShaderManager");
+    ydebug("PlotTransformerProvider: registered with ShaderManager");
 }
 
 std::string PlotTransformerProvider::getCode() const {

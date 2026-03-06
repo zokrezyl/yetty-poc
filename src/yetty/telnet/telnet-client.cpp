@@ -40,7 +40,7 @@ static EM_BOOL onWsError(int eventType, const EmscriptenWebSocketErrorEvent* wsE
 
 static EM_BOOL onWsClose(int eventType, const EmscriptenWebSocketCloseEvent* wsEvent, void* userData) {
     TelnetClient* client = static_cast<TelnetClient*>(userData);
-    yinfo("Telnet WebSocket closed: code={} reason={}", wsEvent->code, wsEvent->reason);
+    ydebug("Telnet WebSocket closed: code={} reason={}", wsEvent->code, wsEvent->reason);
     client->onWebSocketDisconnected();
     client->_wantsReconnect = true;
     return EM_TRUE;
@@ -86,7 +86,7 @@ Result<void> TelnetClient::connect(const std::string& host, uint16_t port) {
         wsUrl = "ws://" + host + ":" + std::to_string(port);
     }
     _wsUrl = wsUrl;  // Store for reconnection
-    yinfo("Telnet client connecting via WebSocket to {}", wsUrl);
+    ydebug("Telnet client connecting via WebSocket to {}", wsUrl);
 
     EmscriptenWebSocketCreateAttributes attrs;
     emscripten_websocket_init_create_attributes(&attrs);
@@ -107,7 +107,7 @@ Result<void> TelnetClient::connect(const std::string& host, uint16_t port) {
 
     _connecting = true;
     _connected = true;  // Consider connected for send operations
-    yinfo("Telnet client: WebSocket created, waiting for connection...");
+    ydebug("Telnet client: WebSocket created, waiting for connection...");
     return Ok();
 
 #else
@@ -177,7 +177,7 @@ Result<void> TelnetClient::connect(const std::string& host, uint16_t port) {
 
     _connecting = false;
     _connected = true;
-    yinfo("Telnet connected to {}:{} socket={}", host, port, _socket);
+    ydebug("Telnet connected to {}:{} socket={}", host, port, _socket);
 
     // Register with event loop
     auto loopResult = base::EventLoop::instance();
@@ -227,7 +227,7 @@ Result<void> TelnetClient::connect(const std::string& host, uint16_t port) {
         return Err<void>("Failed to start poll", res);
     }
 
-    yinfo("Telnet: registered poll id={} socket={}", _pollId, _socket);
+    ydebug("Telnet: registered poll id={} socket={}", _pollId, _socket);
     return Ok();
 #endif
 }
@@ -298,11 +298,11 @@ void TelnetClient::sendWindowSize(uint16_t cols, uint16_t rows) {
     _rows = rows;
 
     if (!_nawsEnabled) {
-        yinfo("Telnet: sendWindowSize skipped, NAWS not enabled");
+        ydebug("Telnet: sendWindowSize skipped, NAWS not enabled");
         return;  // Server hasn't agreed to NAWS yet
     }
 
-    yinfo("Telnet: sendWindowSize {}x{}, queuing subnegotiation", cols, rows);
+    ydebug("Telnet: sendWindowSize {}x{}, queuing subnegotiation", cols, rows);
     // NAWS: IAC SB NAWS <width-hi> <width-lo> <height-hi> <height-lo> IAC SE
     uint8_t naws[4] = {
         static_cast<uint8_t>((cols >> 8) & 0xFF),
@@ -311,7 +311,7 @@ void TelnetClient::sendWindowSize(uint16_t cols, uint16_t rows) {
         static_cast<uint8_t>(rows & 0xFF),
     };
     sendSubnegotiation(OPT_NAWS, naws, 4);
-    yinfo("Telnet: sent NAWS {}x{}", cols, rows);
+    ydebug("Telnet: sent NAWS {}x{}", cols, rows);
 }
 
 void TelnetClient::sendCommand(uint8_t cmd, uint8_t option) {
@@ -346,7 +346,7 @@ void TelnetClient::sendTerminalType() {
         data.push_back(static_cast<uint8_t>(c));
     }
     sendSubnegotiation(OPT_TTYPE, data.data(), data.size());
-    yinfo("Telnet: sent TTYPE IS {}", _terminalType);
+    ydebug("Telnet: sent TTYPE IS {}", _terminalType);
 }
 
 void TelnetClient::drainSendQueue() {
@@ -421,10 +421,10 @@ void TelnetClient::updatePollEvents() {
 }
 
 Result<bool> TelnetClient::onEvent(const base::Event& event) {
-    yinfo("TelnetClient::onEvent: type={} fd={} socket={}", (int)event.type, event.poll.fd, _socket);
+    ydebug("TelnetClient::onEvent: type={} fd={} socket={}", (int)event.type, event.poll.fd, _socket);
 
     if (event.type == base::Event::Type::PollWritable && event.poll.fd == _socket) {
-        yinfo("TelnetClient::onEvent: PollWritable");
+        ydebug("TelnetClient::onEvent: PollWritable");
         if (_connecting) {
             // Check if connect completed
             int error = 0;
@@ -438,7 +438,7 @@ Result<bool> TelnetClient::onEvent(const base::Event& event) {
 
             _connecting = false;
             _connected = true;
-            yinfo("Telnet: async connect completed");
+            ydebug("Telnet: async connect completed");
             updatePollEvents();
         } else {
             // Socket writable - drain send queue
@@ -448,7 +448,7 @@ Result<bool> TelnetClient::onEvent(const base::Event& event) {
     }
 
     if (event.type == base::Event::Type::PollReadable && event.poll.fd == _socket) {
-        yinfo("TelnetClient::onEvent: PollReadable - calling processReceived");
+        ydebug("TelnetClient::onEvent: PollReadable - calling processReceived");
         processReceived();
         return Ok(true);
     }
@@ -459,11 +459,11 @@ Result<bool> TelnetClient::onEvent(const base::Event& event) {
 void TelnetClient::processReceived() {
     uint8_t buf[4096];
     ssize_t n = ::recv(_socket, buf, sizeof(buf), 0);
-    yinfo("TelnetClient::processReceived: recv returned {}", n);
+    ydebug("TelnetClient::processReceived: recv returned {}", n);
 
     if (n <= 0) {
         if (n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK)) {
-            yinfo("TelnetClient: connection closed n={} errno={}", n, errno);
+            ydebug("TelnetClient: connection closed n={} errno={}", n, errno);
             disconnect();
             if (_disconnectCallback) _disconnectCallback();
         }
@@ -485,7 +485,7 @@ void TelnetClient::processReceived() {
             if (c >= 32 && c < 127) preview += c;
             else preview += '.';
         }
-        yinfo("TelnetClient: delivering {} bytes: [{}]", _outputBuffer.size(), preview);
+        ydebug("TelnetClient: delivering {} bytes: [{}]", _outputBuffer.size(), preview);
         _dataCallback(_outputBuffer.data(), _outputBuffer.size());
     }
 }
@@ -591,14 +591,14 @@ void TelnetClient::handleWill(uint8_t option) {
             // Server will echo - we accept
             sendCommand(DO, OPT_ECHO);
             _echoEnabled = true;
-            yinfo("Telnet: server WILL ECHO, sent DO ECHO");
+            ydebug("Telnet: server WILL ECHO, sent DO ECHO");
             break;
 
         case OPT_SGA:
             // Server will suppress go-ahead - we accept
             sendCommand(DO, OPT_SGA);
             _sgaEnabled = true;
-            yinfo("Telnet: server WILL SGA, sent DO SGA");
+            ydebug("Telnet: server WILL SGA, sent DO SGA");
             break;
 
         default:
@@ -626,7 +626,7 @@ void TelnetClient::handleDo(uint8_t option) {
             // Server requests window size
             sendCommand(WILL, OPT_NAWS);
             _nawsEnabled = true;
-            yinfo("Telnet: server DO NAWS, sent WILL NAWS");
+            ydebug("Telnet: server DO NAWS, sent WILL NAWS");
             // Send current window size
             sendWindowSize(_cols, _rows);
             break;
@@ -635,21 +635,21 @@ void TelnetClient::handleDo(uint8_t option) {
             // Server requests terminal type
             sendCommand(WILL, OPT_TTYPE);
             _ttypeEnabled = true;
-            yinfo("Telnet: server DO TTYPE, sent WILL TTYPE");
+            ydebug("Telnet: server DO TTYPE, sent WILL TTYPE");
             break;
 
         case OPT_BINARY:
             // Binary transmission - accept for UTF-8
             sendCommand(WILL, OPT_BINARY);
             _binaryEnabled = true;
-            yinfo("Telnet: server DO BINARY, sent WILL BINARY");
+            ydebug("Telnet: server DO BINARY, sent WILL BINARY");
             break;
 
         case OPT_SGA:
             // Suppress go-ahead - accept
             sendCommand(WILL, OPT_SGA);
             _sgaEnabled = true;
-            yinfo("Telnet: server DO SGA, sent WILL SGA");
+            ydebug("Telnet: server DO SGA, sent WILL SGA");
             break;
 
         case OPT_NEW_ENVIRON:
@@ -707,7 +707,7 @@ void TelnetClient::onWebSocketData(const uint8_t* data, size_t len) {
 
     // If we're receiving data, we're connected (handles race where message arrives before onopen)
     if (!_wsConnected) {
-        yinfo("Telnet: received data before onopen, setting connected");
+        ydebug("Telnet: received data before onopen, setting connected");
         _wsConnected = true;
         _connected = true;
         _connecting = false;
@@ -731,7 +731,7 @@ void TelnetClient::onWebSocketData(const uint8_t* data, size_t len) {
 }
 
 void TelnetClient::onWebSocketConnected() {
-    yinfo("Telnet WebSocket connected");
+    ydebug("Telnet WebSocket connected");
     _wsConnected = true;
     _connected = true;
     _connecting = false;
@@ -764,7 +764,7 @@ Result<void> TelnetClient::reconnect() {
     _wsConnected = false;
     _wantsReconnect = false;
 
-    yinfo("Telnet: reconnecting to {}", _wsUrl);
+    ydebug("Telnet: reconnecting to {}", _wsUrl);
 
     EmscriptenWebSocketCreateAttributes attrs;
     emscripten_websocket_init_create_attributes(&attrs);

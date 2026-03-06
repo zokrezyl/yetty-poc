@@ -29,7 +29,7 @@ WGPUBuffer GpuAllocator::createBuffer(const WGPUBufferDescriptor& desc) {
     _allocations.push_back({name, size, AllocType::Buffer, buffer});
     _totalBytes += size;
 
-    yinfo("GPU [+] buffer '{}': {} bytes ({:.2f} KB) — total: {} bytes ({:.2f} MB)",
+    ydebug("GPU [+] buffer '{}': {} bytes ({:.2f} KB) — total: {} bytes ({:.2f} MB)",
           name, size, size / 1024.0,
           _totalBytes, _totalBytes / (1024.0 * 1024.0));
 
@@ -46,7 +46,7 @@ void GpuAllocator::releaseBuffer(WGPUBuffer buffer) {
 
     if (it != _allocations.end()) {
         _totalBytes -= it->size;
-        yinfo("GPU [-] buffer '{}': {} bytes ({:.2f} KB) — total: {} bytes ({:.2f} MB)",
+        ydebug("GPU [-] buffer '{}': {} bytes ({:.2f} KB) — total: {} bytes ({:.2f} MB)",
               it->name, it->size, it->size / 1024.0,
               _totalBytes, _totalBytes / (1024.0 * 1024.0));
         _allocations.erase(it);
@@ -70,7 +70,7 @@ WGPUTexture GpuAllocator::createTexture(const WGPUTextureDescriptor& desc) {
     _allocations.push_back({name, size, AllocType::Texture, texture});
     _totalBytes += size;
 
-    yinfo("GPU [+] texture '{}': {}x{}x{} = {} bytes ({:.2f} MB) — total: {} bytes ({:.2f} MB)",
+    ydebug("GPU [+] texture '{}': {}x{}x{} = {} bytes ({:.2f} MB) — total: {} bytes ({:.2f} MB)",
           name,
           desc.size.width, desc.size.height, desc.size.depthOrArrayLayers,
           size, size / (1024.0 * 1024.0),
@@ -89,7 +89,7 @@ void GpuAllocator::releaseTexture(WGPUTexture texture) {
 
     if (it != _allocations.end()) {
         _totalBytes -= it->size;
-        yinfo("GPU [-] texture '{}': {} bytes ({:.2f} MB) — total: {} bytes ({:.2f} MB)",
+        ydebug("GPU [-] texture '{}': {} bytes ({:.2f} MB) — total: {} bytes ({:.2f} MB)",
               it->name, it->size, it->size / (1024.0 * 1024.0),
               _totalBytes, _totalBytes / (1024.0 * 1024.0));
         _allocations.erase(it);
@@ -117,18 +117,18 @@ uint64_t GpuAllocator::totalTextureBytes() const {
 }
 
 void GpuAllocator::dumpAllocations() const {
-    yinfo("=== GPU Allocations ({} resources, {} bytes / {:.2f} MB) ===",
+    ydebug("=== GPU Allocations ({} resources, {} bytes / {:.2f} MB) ===",
           _allocations.size(), _totalBytes, _totalBytes / (1024.0 * 1024.0));
 
     for (const auto& a : _allocations) {
         const char* type = (a.type == AllocType::Buffer) ? "buffer" : "texture";
-        yinfo("  {:>8} {:>10} bytes ({:>8.2f} KB)  {}",
+        ydebug("  {:>8} {:>10} bytes ({:>8.2f} KB)  {}",
               type, a.size, a.size / 1024.0, a.name);
     }
 
-    yinfo("  Buffers:  {} bytes ({:.2f} MB)", totalBufferBytes(), totalBufferBytes() / (1024.0 * 1024.0));
-    yinfo("  Textures: {} bytes ({:.2f} MB)", totalTextureBytes(), totalTextureBytes() / (1024.0 * 1024.0));
-    yinfo("  Total:    {} bytes ({:.2f} MB)", _totalBytes, _totalBytes / (1024.0 * 1024.0));
+    ydebug("  Buffers:  {} bytes ({:.2f} MB)", totalBufferBytes(), totalBufferBytes() / (1024.0 * 1024.0));
+    ydebug("  Textures: {} bytes ({:.2f} MB)", totalTextureBytes(), totalTextureBytes() / (1024.0 * 1024.0));
+    ydebug("  Total:    {} bytes ({:.2f} MB)", _totalBytes, _totalBytes / (1024.0 * 1024.0));
 }
 
 std::string GpuAllocator::dumpAllocationsToString() const {

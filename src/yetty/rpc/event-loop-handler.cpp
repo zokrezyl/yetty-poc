@@ -306,7 +306,7 @@ Result<void> registerEventLoopHandlers(RpcServer& server) {
             return okResult();
         });
 
-    yinfo("Registered {} EventLoop handlers on Channel 0", 17);
+    ydebug("Registered {} EventLoop handlers on Channel 0", 17);
     return Ok();
 }
 
@@ -321,7 +321,7 @@ Result<void> registerWorkspaceHandlers(RpcServer& server, std::shared_ptr<Worksp
             return stringResult(*res);
         });
 
-    yinfo("Registered workspace handlers on Channel 0");
+    ydebug("Registered workspace handlers on Channel 0");
     return Ok();
 }
 

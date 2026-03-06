@@ -183,7 +183,7 @@ public:
             }
         }
 
-        yinfo("DiagramImpl::init: {} prims, {} glyphs",
+        ydebug("DiagramImpl::init: {} prims, {} glyphs",
               _builder->primitiveCount(), _builder->glyphCount());
 
         return Ok();

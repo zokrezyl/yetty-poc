@@ -29,13 +29,13 @@ public:
     ~TerminalImpl() override = default;
 
     Result<void> init() {
-        yinfo("Terminal::init() start");
+        ydebug("Terminal::init() start");
         auto screenResult = GPUScreen::create(_ctx);
         if (!screenResult) {
             yerror("Terminal::init() GPUScreen::create FAILED");
             return Err<void>("Failed to create GPUScreen", screenResult);
         }
-        yinfo("Terminal::init() GPUScreen created");
+        ydebug("Terminal::init() GPUScreen created");
         _gpuScreen = *screenResult;
 
 #if YETTY_WEB
@@ -71,7 +71,7 @@ public:
         // PTY start is deferred to first setViewport() call so we have correct size
         // (GPUScreen cols/rows are 0 until first resize)
 
-        yinfo("Terminal created with GPUScreen");
+        ydebug("Terminal created with GPUScreen");
         return Ok();
     }
 
@@ -191,7 +191,7 @@ private:
 
         if (!telnetAddress.empty()) {
             // Telnet mode: connect to telnet server via WebSocket
-            yinfo("Terminal: using telnet connection to {}", telnetAddress);
+            ydebug("Terminal: using telnet connection to {}", telnetAddress);
 
             PtyConfig config;
             config.shell = telnetAddress;  // ws://host:port format
@@ -214,7 +214,7 @@ private:
             });
 
             _ptyReader->setExitCallback([this](int exitCode) {
-                yinfo("Telnet exited with code {}", exitCode);
+                ydebug("Telnet exited with code {}", exitCode);
                 _running = false;
             });
 
@@ -226,7 +226,7 @@ private:
         // Webasm: Use Platform::createPTY() which creates WebPTY with JSLinux iframe
         const char* vmConfigEnv = getenv("YETTY_VM_CONFIG");
         std::string vmConfig = vmConfigEnv ? vmConfigEnv : "alpine-x86_64.cfg";
-        yinfo("Terminal: using VM config: {}", vmConfig);
+        ydebug("Terminal: using VM config: {}", vmConfig);
 
         // Get platform to create PTY
         auto platformResult = Platform::create();
@@ -250,7 +250,7 @@ private:
         });
 
         _pty->setExitCallback([this](int exitCode) {
-            yinfo("PTY exited with code {}", exitCode);
+            ydebug("PTY exited with code {}", exitCode);
             _running = false;
         });
 
@@ -275,7 +275,7 @@ private:
 
         if (!telnetAddress.empty()) {
             // Telnet mode: connect to remote/local telnet server
-            yinfo("Terminal: using telnet connection to {}", telnetAddress);
+            ydebug("Terminal: using telnet connection to {}", telnetAddress);
 
             PtyConfig config;
             config.shell = telnetAddress;  // host:port format
@@ -317,7 +317,7 @@ private:
                 auto cmdOpt = _ctx.config->get<std::string>("shell/command");
                 if (cmdOpt && !cmdOpt->empty()) {
                     command = *cmdOpt;
-                    yinfo("Terminal: using command from config: {}", command);
+                    ydebug("Terminal: using command from config: {}", command);
                 }
             }
 
@@ -327,13 +327,13 @@ private:
             config.cols = cols;
             config.rows = rows;
 
-            yinfo("Creating PtyReader: shell={} {}x{}", shellPath, cols, rows);
+            ydebug("Creating PtyReader: shell={} {}x{}", shellPath, cols, rows);
             auto readerResult = PtyReader::create(config, _ctx.platform);
             if (!readerResult) {
                 yerror("PtyReader::create FAILED: {}", readerResult.error().message());
                 return Err<void>("Failed to create PtyReader", readerResult);
             }
-            yinfo("PtyReader::create SUCCESS");
+            ydebug("PtyReader::create SUCCESS");
             _ptyReader = *readerResult;
             yinfo("Terminal started PTY: {} ({}x{})", shellPath, cols, rows);
         }
@@ -344,7 +344,7 @@ private:
         });
 
         _ptyReader->setExitCallback([this](int exitCode) {
-            yinfo("PTY exited with code {}", exitCode);
+            ydebug("PTY exited with code {}", exitCode);
             _running = false;
         });
 
@@ -408,8 +408,8 @@ private:
                 char h[4]; snprintf(h, sizeof(h), "%02x ", b); hex += h;
                 ascii += (b >= 0x20 && b < 0x7f) ? static_cast<char>(b) : '.';
             }
-            yinfo("PTY DATA[{}]: {}", dumpLen, hex);
-            yinfo("PTY ASCII: {}", ascii);
+            ydebug("PTY DATA[{}]: {}", dumpLen, hex);
+            ydebug("PTY ASCII: {}", ascii);
         }
 
         // Reset scanner before processing (processPtyData has its own state)

@@ -207,7 +207,7 @@ public:
     // Called by el_form_submit::on_click()
     void submitForm(const std::string& action, const std::string& method,
                     const std::string& formData) {
-        yinfo("HtmlContainer::submitForm: action={} method={} data={}bytes",
+        ydebug("HtmlContainer::submitForm: action={} method={} data={}bytes",
               action, method, formData.size());
         if (_formSubmitCb) {
             _formSubmitCb(action, method, formData);
@@ -237,7 +237,7 @@ public:
             if (!ttfPath.empty()) {
                 fi->rawFont = loadFont(ttfPath, fi->fontId);
                 if (fi->fontId >= 0) {
-                    yinfo("HtmlContainer: font '{}' w={} i={} -> fontId={}",
+                    ydebug("HtmlContainer: font '{}' w={} i={} -> fontId={}",
                           faceName, weight, fi->italic, fi->fontId);
                 }
             }
@@ -401,7 +401,7 @@ public:
         float w = static_cast<float>(draw_pos.width);
         float h = static_cast<float>(draw_pos.height);
 
-        yinfo("draw_borders: pos=({},{} {}x{}) top=({},w={}) right=({},w={}) bottom=({},w={}) left=({},w={})",
+        ydebug("draw_borders: pos=({},{} {}x{}) top=({},w={}) right=({},w={}) bottom=({},w={}) left=({},w={})",
                draw_pos.x, draw_pos.y, draw_pos.width, draw_pos.height,
                borders.top.color.alpha, borders.top.width,
                borders.right.color.alpha, borders.right.width,
@@ -413,28 +413,28 @@ public:
             float bw = static_cast<float>(borders.top.width);
             auto res = _buffer->addSegment(_layer, x, y + bw * 0.5f,
                                 x + w, y + bw * 0.5f, 0, c, bw, 0);
-            yinfo("draw_borders: top segment res={}", res ? "ok" : "fail");
+            ydebug("draw_borders: top segment res={}", res ? "ok" : "fail");
         }
         if (borders.bottom.width > 0 && borders.bottom.color.alpha > 0) {
             uint32_t c = packColor(borders.bottom.color);
             float bw = static_cast<float>(borders.bottom.width);
             auto res = _buffer->addSegment(_layer, x, y + h - bw * 0.5f,
                                 x + w, y + h - bw * 0.5f, 0, c, bw, 0);
-            yinfo("draw_borders: bottom segment res={}", res ? "ok" : "fail");
+            ydebug("draw_borders: bottom segment res={}", res ? "ok" : "fail");
         }
         if (borders.left.width > 0 && borders.left.color.alpha > 0) {
             uint32_t c = packColor(borders.left.color);
             float bw = static_cast<float>(borders.left.width);
             auto res = _buffer->addSegment(_layer, x + bw * 0.5f, y,
                                 x + bw * 0.5f, y + h, 0, c, bw, 0);
-            yinfo("draw_borders: left segment res={}", res ? "ok" : "fail");
+            ydebug("draw_borders: left segment res={}", res ? "ok" : "fail");
         }
         if (borders.right.width > 0 && borders.right.color.alpha > 0) {
             uint32_t c = packColor(borders.right.color);
             float bw = static_cast<float>(borders.right.width);
             auto res = _buffer->addSegment(_layer, x + w - bw * 0.5f, y,
                                 x + w - bw * 0.5f, y + h, 0, c, bw, 0);
-            yinfo("draw_borders: right segment res={}", res ? "ok" : "fail");
+            ydebug("draw_borders: right segment res={}", res ? "ok" : "fail");
         }
     }
 
@@ -566,7 +566,7 @@ public:
         info.pixels.assign(decoded, decoded + w * h * 4);
         stbi_image_free(decoded);
 
-        yinfo("HtmlContainer::load_image: {} -> {}x{} ({} KB)",
+        ydebug("HtmlContainer::load_image: {} -> {}x{} ({} KB)",
               url, w, h, info.pixels.size() / 1024);
         _imageCache[url] = std::move(info);
     }
@@ -585,7 +585,7 @@ public:
     void on_anchor_click(const char* url,
                          const litehtml::element::ptr& /*el*/) override {
         if (url && _navigateCb) {
-            yinfo("HtmlContainer::on_anchor_click: {}", url);
+            ydebug("HtmlContainer::on_anchor_click: {}", url);
             _navigateCb(url);
         }
     }
@@ -618,7 +618,7 @@ public:
                     litehtml::string& /*baseurl*/) override {
         if (!_fetcher || url.empty()) return;
 
-        yinfo("HtmlContainer::import_css: fetching {}", url);
+        ydebug("HtmlContainer::import_css: fetching {}", url);
         auto css = _fetcher->fetch(url);
         if (css) {
             text = std::move(*css);
@@ -869,7 +869,7 @@ void el_form_submit::on_click() {
     }
 
     if (!formEl) {
-        yinfo("el_form_submit: no parent <form> found");
+        ydebug("el_form_submit: no parent <form> found");
         // Check for formaction attribute on the element itself
         const char* formaction = get_attr("formaction");
         if (formaction && *formaction) {
@@ -882,7 +882,7 @@ void el_form_submit::on_click() {
 
     const char* action = formEl->get_attr("action");
     if (!action || !*action) {
-        yinfo("el_form_submit: form has no action");
+        ydebug("el_form_submit: form has no action");
         html_tag::on_click();
         return;
     }
@@ -895,7 +895,7 @@ void el_form_submit::on_click() {
     std::string formData;
     collectFormFields(formEl, this, formData);
 
-    yinfo("el_form_submit: action={} method={} data={}", action, methodStr, formData);
+    ydebug("el_form_submit: action={} method={} data={}", action, methodStr, formData);
 
     auto* ctr = static_cast<HtmlContainerImpl*>(get_document()->container());
     ctr->submitForm(action, methodStr, formData);

@@ -456,7 +456,7 @@ Result<CardPtr> Markdown::create(
     const std::string& args,
     const std::string& payload)
 {
-    yinfo("Markdown::create: pos=({},{}) size={}x{} payload_len={}",
+    ydebug("Markdown::create: pos=({},{}) size={}x{} payload_len={}",
           x, y, widthCells, heightCells, payload.size());
 
     if (!ctx.cardManager) {
@@ -472,7 +472,7 @@ Result<CardPtr> Markdown::create(
         return Err<CardPtr>("Markdown::create: init failed");
     }
 
-    yinfo("Markdown::create: SUCCESS");
+    ydebug("Markdown::create: SUCCESS");
     return Ok<CardPtr>(card);
 }
 

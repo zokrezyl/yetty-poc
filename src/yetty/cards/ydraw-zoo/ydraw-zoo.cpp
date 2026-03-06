@@ -116,7 +116,7 @@ Result<CardPtr> YDrawZoo::create(
 {
     (void)payload;
 
-    yinfo("YDrawZoo::create: pos=({},{}) size={}x{} args='{}'", x, y, widthCells, heightCells, args);
+    ydebug("YDrawZoo::create: pos=({},{}) size={}x{} args='{}'", x, y, widthCells, heightCells, args);
 
     if (!ctx.cardManager) {
         return Err<CardPtr>("YDrawZoo::create: null CardBufferManager");
@@ -129,7 +129,7 @@ Result<CardPtr> YDrawZoo::create(
         return Err<CardPtr>("YDrawZoo::create: init failed");
     }
 
-    yinfo("YDrawZoo::create: SUCCESS");
+    ydebug("YDrawZoo::create: SUCCESS");
     return Ok<CardPtr>(card);
 }
 

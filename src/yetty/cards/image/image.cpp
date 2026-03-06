@@ -76,7 +76,7 @@ public:
         }
         _metaHandle = *metaResult;
 
-        yinfo("Image::init: allocated metadata at offset {}", _metaHandle.offset);
+        ydebug("Image::init: allocated metadata at offset {}", _metaHandle.offset);
 
         // Parse args
         parseArgs(_argsStr);
@@ -154,7 +154,7 @@ public:
 
         _scaledPixels.clear();
         _needsScaling = true;
-        yinfo("Image::suspend: deallocated texture handle + compute resources, _originalPixels has {} bytes",
+        ydebug("Image::suspend: deallocated texture handle + compute resources, _originalPixels has {} bytes",
               _originalPixels.size());
     }
 
@@ -245,7 +245,7 @@ public:
                 if (newZoom != _contentZoom) {
                     _contentZoom = newZoom;
                     _metadataDirty = true;
-                    yinfo("Image::onEvent: content zoom={:.2f}", _contentZoom);
+                    ydebug("Image::onEvent: content zoom={:.2f}", _contentZoom);
                 }
                 return Ok(true);
             } else if (event.scroll.mods & GLFW_MOD_SHIFT) {
@@ -289,7 +289,7 @@ private:
             return Err<void>("Image::registerForEvents: failed to register MouseDown", res);
         }
 
-        yinfo("Image card {} registered for events (priority 1000)", id());
+        ydebug("Image card {} registered for events (priority 1000)", id());
         return Ok();
     }
 
@@ -344,7 +344,7 @@ private:
         _scaledWidth = std::max(_scaledWidth, 1u);
         _scaledHeight = std::max(_scaledHeight, 1u);
 
-        yinfo("Image::recalculateScaledDimensions: original={}x{} target={}x{} scaled={}x{}",
+        ydebug("Image::recalculateScaledDimensions: original={}x{} target={}x{} scaled={}x{}",
               _originalWidth, _originalHeight, targetWidth, targetHeight, _scaledWidth, _scaledHeight);
 
         _metadataDirty = true;
@@ -356,7 +356,7 @@ private:
 
     Result<void> createScalePipeline() {
         std::string shaderPath = std::string(YETTY_SHADERS_DIR) + "/scale-image.wgsl";
-        yinfo("Image: Loading scale shader from: {}", shaderPath.c_str());
+        ydebug("Image: Loading scale shader from: {}", shaderPath.c_str());
 
         std::ifstream file(shaderPath.c_str());
         if (!file.is_open()) {
@@ -443,7 +443,7 @@ private:
             return Err<void>("Image: Failed to create scale uniform buffer");
         }
 
-        yinfo("Image: Scale compute pipeline created successfully");
+        ydebug("Image: Scale compute pipeline created successfully");
         return Ok();
     }
 
@@ -457,7 +457,7 @@ private:
             return Err<void>("Image::runScaleCompute: no data to scale");
         }
 
-        yinfo("Image::runScaleCompute: scaling {}x{} -> {}x{}",
+        ydebug("Image::runScaleCompute: scaling {}x{} -> {}x{}",
               _originalWidth, _originalHeight, _scaledWidth, _scaledHeight);
 
         uint32_t scaledDataSize = _scaledWidth * _scaledHeight * 4;
@@ -592,7 +592,7 @@ private:
         wgpuQueueSubmit(_gpu.queue, 1, &cmdBuffer);
         wgpuCommandBufferRelease(cmdBuffer);
 
-        yinfo("Image::runScaleCompute: dispatched ({}x{} workgroups), reading back",
+        ydebug("Image::runScaleCompute: dispatched ({}x{} workgroups), reading back",
               workgroupsX, workgroupsY);
 
         // Map readback buffer synchronously
@@ -639,7 +639,7 @@ private:
 
         _metadataDirty = true;
 
-        yinfo("Image::runScaleCompute: done, handle id={}", _textureHandle.id);
+        ydebug("Image::runScaleCompute: done, handle id={}", _textureHandle.id);
         return Ok();
     }
 
@@ -648,7 +648,7 @@ private:
     //=========================================================================
 
     Result<void> loadImageFromPayload() {
-        yinfo("Image::loadImageFromPayload: inputSource='{}' payload size={}", _inputSource, _payloadStr.size());
+        ydebug("Image::loadImageFromPayload: inputSource='{}' payload size={}", _inputSource, _payloadStr.size());
 
         int width, height, channels;
         uint8_t* pixels = nullptr;
@@ -664,7 +664,7 @@ private:
                 &width, &height, &channels, 4);
         } else if (!_inputSource.empty()) {
             // Read from file path specified via -i <path>
-            yinfo("Image::loadImageFromPayload: loading from file path: {}", _inputSource);
+            ydebug("Image::loadImageFromPayload: loading from file path: {}", _inputSource);
             pixels = stbi_load(_inputSource.c_str(), &width, &height, &channels, 4);
         } else {
             return Err<void>("Image::loadImageFromPayload: no input specified (use -i - or -i <path>)");
@@ -675,7 +675,7 @@ private:
                              stbi_failure_reason());
         }
 
-        yinfo("Image::loadImageFromPayload: decoded {}x{} ({} channels -> 4)",
+        ydebug("Image::loadImageFromPayload: decoded {}x{} ({} channels -> 4)",
               width, height, channels);
 
         _originalWidth = static_cast<uint32_t>(width);
@@ -689,7 +689,7 @@ private:
         _payloadStr.clear();
         _payloadStr.shrink_to_fit();
 
-        yinfo("Image::loadImageFromPayload: stored {}x{} ({} bytes) in CPU memory",
+        ydebug("Image::loadImageFromPayload: stored {}x{} ({} bytes) in CPU memory",
               _originalWidth, _originalHeight, dataSize);
 
         return Ok();
@@ -700,7 +700,7 @@ private:
     //=========================================================================
 
     void parseArgs(const std::string& args) {
-        yinfo("Image::parseArgs: args='{}'", args);
+        ydebug("Image::parseArgs: args='{}'", args);
 
         std::istringstream iss(args);
         std::string token;
@@ -758,7 +758,7 @@ private:
         meta.scaledWidth = _scaledWidth;
         meta.scaledHeight = _scaledHeight;
 
-        yinfo("Image::uploadMetadata: offset={} textureSize={}x{} zoom={}",
+        ydebug("Image::uploadMetadata: offset={} textureSize={}x{} zoom={}",
               _metaHandle.offset, meta.textureWidth, meta.textureHeight, meta.zoom);
 
         if (auto res = _cardMgr->writeMetadata(_metaHandle, &meta, sizeof(meta)); !res) {

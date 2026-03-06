@@ -1,7 +1,6 @@
 #!/bin/bash
 # YEcho Basic: Simple text output with glyphs
-DIR="$(cd "$(dirname "$0")" && pwd)"
-YECHO="$DIR/../../../build-desktop-dawn-release/src/yetty/yecho/yecho"
+YECHO="${YECHO:-yecho}"
 
 echo "=== YEcho Basic Demo ==="
 echo

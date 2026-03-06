@@ -58,7 +58,7 @@ Result<void> TelnetPtyReader::init(const PtyConfig& config) {
     _client->sendWindowSize(config.cols, config.rows);
 
     _running = true;
-    yinfo("TelnetPtyReader: connected to {}:{}", host, port);
+    ydebug("TelnetPtyReader: connected to {}:{}", host, port);
     return Ok();
 }
 
@@ -99,7 +99,7 @@ void TelnetPtyReader::stop() {
         _client.reset();
     }
 
-    yinfo("TelnetPtyReader: stopped");
+    ydebug("TelnetPtyReader: stopped");
 }
 
 void TelnetPtyReader::setDataAvailableCallback(DataAvailableCallback cb) {

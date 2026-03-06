@@ -1,8 +1,7 @@
 #!/bin/bash
 # YEcho Plot Cards: GPU-rendered plots via OSC escape sequences
 # NOTE: Run this inside yetty terminal to see the plots!
-DIR="$(cd "$(dirname "$0")" && pwd)"
-YECHO="$DIR/../../../build-desktop-dawn-release/src/yetty/yecho/yecho"
+YECHO="${YECHO:-yecho}"
 
 echo "=== YEcho Plot Card Demo ==="
 echo "Run inside yetty terminal to see GPU-rendered plots"

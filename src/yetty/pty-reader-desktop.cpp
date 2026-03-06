@@ -105,7 +105,7 @@ public:
         }
 
         _running = true;
-        yinfo("PtyReaderDesktop: Started PTY fd={}, PID={}, shell={}",
+        ydebug("PtyReaderDesktop: Started PTY fd={}, PID={}, shell={}",
               _ptyMaster, _childPid, _shell);
         return Ok();
     }
@@ -151,7 +151,7 @@ public:
         if (!_running) return;
         _running = false;
 
-        yinfo("PtyReaderDesktop: Stopping");
+        ydebug("PtyReaderDesktop: Stopping");
 
         if (_pollId >= 0) {
             if (auto loopResult = base::EventLoop::instance(); loopResult) {

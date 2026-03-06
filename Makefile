@@ -12,35 +12,31 @@ export ANDROID_NDK_HOME ?= $(ANDROID_HOME)/ndk/26.1.10909125
 export ANDROID_ABI ?= arm64-v8a
 export ANDROID_PLATFORM ?= android-26
 
-# WebGPU backends
-BACKEND_WGPU := wgpu
-BACKEND_DAWN := dawn
+# Build directories (platform-loglevel-buildtype)
+# ytrace = all logging enabled (ytrace, ydebug, yinfo, ywarn, yerror)
+# yinfo  = only yinfo and above (yinfo, ywarn, yerror) - for release/perf testing
+BUILD_DIR_DESKTOP_YTRACE_DEBUG := build-desktop-ytrace-debug
+BUILD_DIR_DESKTOP_YTRACE_RELEASE := build-desktop-ytrace-release
+BUILD_DIR_DESKTOP_YTRACE_ASAN := build-desktop-ytrace-asan
+BUILD_DIR_DESKTOP_YINFO_RELEASE := build-desktop-yinfo-release
 
-# Build directories (platform-backend-buildtype)
-BUILD_DIR_DESKTOP_WGPU_DEBUG := build-desktop-wgpu-debug
-BUILD_DIR_DESKTOP_WGPU_RELEASE := build-desktop-wgpu-release
-BUILD_DIR_DESKTOP_DAWN_DEBUG := build-desktop-dawn-debug
-BUILD_DIR_DESKTOP_DAWN_RELEASE := build-desktop-dawn-release
-BUILD_DIR_DESKTOP_DAWN_ASAN := build-desktop-dawn-asan
-
-BUILD_DIR_ANDROID_WGPU_DEBUG := build-android-wgpu-debug
-BUILD_DIR_ANDROID_WGPU_RELEASE := build-android-wgpu-release
-BUILD_DIR_ANDROID_DAWN_DEBUG := build-android-dawn-debug
-BUILD_DIR_ANDROID_DAWN_RELEASE := build-android-dawn-release
+BUILD_DIR_ANDROID_YTRACE_DEBUG := build-android-ytrace-debug
+BUILD_DIR_ANDROID_YTRACE_RELEASE := build-android-ytrace-release
+BUILD_DIR_ANDROID_YINFO_RELEASE := build-android-yinfo-release
 
 # Android x86_64 (for emulator)
-BUILD_DIR_ANDROID_X86_64_WGPU_DEBUG := build-android_x86_64-wgpu-debug
-BUILD_DIR_ANDROID_X86_64_WGPU_RELEASE := build-android_x86_64-wgpu-release
-BUILD_DIR_ANDROID_X86_64_DAWN_DEBUG := build-android_x86_64-dawn-debug
-BUILD_DIR_ANDROID_X86_64_DAWN_RELEASE := build-android_x86_64-dawn-release
+BUILD_DIR_ANDROID_X86_64_YTRACE_DEBUG := build-android_x86_64-ytrace-debug
+BUILD_DIR_ANDROID_X86_64_YTRACE_RELEASE := build-android_x86_64-ytrace-release
 
 # WebAssembly uses browser native WebGPU (Dawn in Chrome)
-BUILD_DIR_WEBASM_DAWN_DEBUG := build-webasm-dawn-debug
-BUILD_DIR_WEBASM_DAWN_RELEASE := build-webasm-dawn-release
+BUILD_DIR_WEBASM_YTRACE_DEBUG := build-webasm-ytrace-debug
+BUILD_DIR_WEBASM_YTRACE_RELEASE := build-webasm-ytrace-release
+BUILD_DIR_WEBASM_YINFO_RELEASE := build-webasm-yinfo-release
 
 # Windows (MSVC via VS Build Tools)
-BUILD_DIR_WINDOWS_DAWN_DEBUG := build-windows-dawn-debug
-BUILD_DIR_WINDOWS_DAWN_RELEASE := build-windows-dawn-release
+BUILD_DIR_WINDOWS_YTRACE_DEBUG := build-windows-ytrace-debug
+BUILD_DIR_WINDOWS_YTRACE_RELEASE := build-windows-ytrace-release
+BUILD_DIR_WINDOWS_YINFO_RELEASE := build-windows-yinfo-release
 
 # Parallel jobs (override with: make build-... PARALLEL_JOBS=30)
 PARALLEL_JOBS ?=
@@ -59,267 +55,213 @@ CMAKE := cmake
 CMAKE_GENERATOR := -G Ninja
 CMAKE_RELEASE := -DCMAKE_BUILD_TYPE=Release
 CMAKE_DEBUG := -DCMAKE_BUILD_TYPE=Debug
-CMAKE_BACKEND_WGPU := -DWEBGPU_BACKEND=wgpu
-CMAKE_BACKEND_DAWN := -DWEBGPU_BACKEND=dawn
 CMAKE_ASAN := -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer -g" -DCMAKE_C_FLAGS="-fsanitize=address -fno-omit-frame-pointer -g" -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address"
 
+# Logging level options (ytrace = all, yinfo = info and above)
+CMAKE_LOGLEVEL_YTRACE :=
+CMAKE_LOGLEVEL_YINFO := -DYTRACE_ENABLE_YTRACE=0 -DYTRACE_ENABLE_YDEBUG=0
+
 # Gradle options (path relative to build-tools/android/)
-GRADLE_OPTS_WGPU_DEBUG := --project-cache-dir=../../$(BUILD_DIR_ANDROID_WGPU_DEBUG)/.gradle
-GRADLE_OPTS_WGPU_RELEASE := --project-cache-dir=../../$(BUILD_DIR_ANDROID_WGPU_RELEASE)/.gradle
-GRADLE_OPTS_DAWN_DEBUG := --project-cache-dir=../../$(BUILD_DIR_ANDROID_DAWN_DEBUG)/.gradle
-GRADLE_OPTS_DAWN_RELEASE := --project-cache-dir=../../$(BUILD_DIR_ANDROID_DAWN_RELEASE)/.gradle
+GRADLE_OPTS_YTRACE_DEBUG := --project-cache-dir=../../$(BUILD_DIR_ANDROID_YTRACE_DEBUG)/.gradle
+GRADLE_OPTS_YTRACE_RELEASE := --project-cache-dir=../../$(BUILD_DIR_ANDROID_YTRACE_RELEASE)/.gradle
+GRADLE_OPTS_YINFO_RELEASE := --project-cache-dir=../../$(BUILD_DIR_ANDROID_YINFO_RELEASE)/.gradle
 
 # Gradle options for x86_64 (emulator)
-GRADLE_OPTS_X86_64_WGPU_DEBUG := --project-cache-dir=../../$(BUILD_DIR_ANDROID_X86_64_WGPU_DEBUG)/.gradle
-GRADLE_OPTS_X86_64_WGPU_RELEASE := --project-cache-dir=../../$(BUILD_DIR_ANDROID_X86_64_WGPU_RELEASE)/.gradle
-GRADLE_OPTS_X86_64_DAWN_DEBUG := --project-cache-dir=../../$(BUILD_DIR_ANDROID_X86_64_DAWN_DEBUG)/.gradle
-GRADLE_OPTS_X86_64_DAWN_RELEASE := --project-cache-dir=../../$(BUILD_DIR_ANDROID_X86_64_DAWN_RELEASE)/.gradle
+GRADLE_OPTS_X86_64_YTRACE_DEBUG := --project-cache-dir=../../$(BUILD_DIR_ANDROID_X86_64_YTRACE_DEBUG)/.gradle
+GRADLE_OPTS_X86_64_YTRACE_RELEASE := --project-cache-dir=../../$(BUILD_DIR_ANDROID_X86_64_YTRACE_RELEASE)/.gradle
 
 # Default target - show help
 .PHONY: all
 all: help
 
 #=============================================================================
-# Desktop - wgpu backend
+# Desktop - ytrace (full logging)
 #=============================================================================
 
-.PHONY: config-desktop-wgpu-debug
-config-desktop-wgpu-debug: ## Configure desktop wgpu debug build
-	PATH="$(SYSTEM_PATH)" $(CMAKE) -B $(BUILD_DIR_DESKTOP_WGPU_DEBUG) $(CMAKE_GENERATOR) $(CMAKE_DEBUG) $(CMAKE_BACKEND_WGPU) $(CMAKE_COMPILER_LAUNCHER)
+.PHONY: config-desktop-ytrace-debug
+config-desktop-ytrace-debug: ## Configure desktop ytrace debug build
+	PATH="$(SYSTEM_PATH)" $(CMAKE) -B $(BUILD_DIR_DESKTOP_YTRACE_DEBUG) $(CMAKE_GENERATOR) $(CMAKE_DEBUG) $(CMAKE_LOGLEVEL_YTRACE) $(CMAKE_COMPILER_LAUNCHER)
+	@ln -sfn $(BUILD_DIR_DESKTOP_YTRACE_DEBUG)/compile_commands.json compile_commands.json
 
-.PHONY: config-desktop-wgpu-release
-config-desktop-wgpu-release: ## Configure desktop wgpu release build
-	PATH="$(SYSTEM_PATH)" $(CMAKE) -B $(BUILD_DIR_DESKTOP_WGPU_RELEASE) $(CMAKE_GENERATOR) $(CMAKE_RELEASE) $(CMAKE_BACKEND_WGPU) $(CMAKE_COMPILER_LAUNCHER)
+.PHONY: config-desktop-ytrace-release
+config-desktop-ytrace-release: ## Configure desktop ytrace release build
+	PATH="$(SYSTEM_PATH)" $(CMAKE) -B $(BUILD_DIR_DESKTOP_YTRACE_RELEASE) $(CMAKE_GENERATOR) $(CMAKE_RELEASE) $(CMAKE_LOGLEVEL_YTRACE) $(CMAKE_COMPILER_LAUNCHER)
+	@ln -sfn $(BUILD_DIR_DESKTOP_YTRACE_RELEASE)/compile_commands.json compile_commands.json
 
-.PHONY: build-desktop-wgpu-debug
-build-desktop-wgpu-debug: ## Build desktop wgpu debug
-	@if [ ! -f "$(BUILD_DIR_DESKTOP_WGPU_DEBUG)/build.ninja" ]; then $(MAKE) config-desktop-wgpu-debug; fi
-	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_DESKTOP_WGPU_DEBUG) $(CMAKE_PARALLEL)
+.PHONY: build-desktop-ytrace-debug
+build-desktop-ytrace-debug: ## Build desktop ytrace debug
+	@if [ ! -f "$(BUILD_DIR_DESKTOP_YTRACE_DEBUG)/build.ninja" ]; then $(MAKE) config-desktop-ytrace-debug; fi
+	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_DESKTOP_YTRACE_DEBUG) $(CMAKE_PARALLEL)
 
-.PHONY: build-desktop-wgpu-release
-build-desktop-wgpu-release: ## Build desktop wgpu release
-	@if [ ! -f "$(BUILD_DIR_DESKTOP_WGPU_RELEASE)/build.ninja" ]; then $(MAKE) config-desktop-wgpu-release; fi
-	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_DESKTOP_WGPU_RELEASE) $(CMAKE_PARALLEL)
+.PHONY: build-desktop-ytrace-release
+build-desktop-ytrace-release: ## Build desktop ytrace release (daily driver)
+	@if [ ! -f "$(BUILD_DIR_DESKTOP_YTRACE_RELEASE)/build.ninja" ]; then $(MAKE) config-desktop-ytrace-release; fi
+	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_DESKTOP_YTRACE_RELEASE) $(CMAKE_PARALLEL)
 
-.PHONY: run-desktop-wgpu-debug
-run-desktop-wgpu-debug: build-desktop-wgpu-debug ## Run desktop wgpu debug build
-	./$(BUILD_DIR_DESKTOP_WGPU_DEBUG)/yetty
+.PHONY: run-desktop-ytrace-debug
+run-desktop-ytrace-debug: build-desktop-ytrace-debug ## Run desktop ytrace debug build
+	./$(BUILD_DIR_DESKTOP_YTRACE_DEBUG)/yetty
 
-.PHONY: run-desktop-wgpu-release
-run-desktop-wgpu-release: build-desktop-wgpu-release ## Run desktop wgpu release build
-	./$(BUILD_DIR_DESKTOP_WGPU_RELEASE)/yetty
+.PHONY: run-desktop-ytrace-release
+run-desktop-ytrace-release: build-desktop-ytrace-release ## Run desktop ytrace release build
+	./$(BUILD_DIR_DESKTOP_YTRACE_RELEASE)/yetty
 
-.PHONY: test-desktop-wgpu-debug
-test-desktop-wgpu-debug: ## Run desktop wgpu debug tests
-	@if [ ! -f "$(BUILD_DIR_DESKTOP_WGPU_DEBUG)/build.ninja" ]; then $(MAKE) config-desktop-wgpu-debug; fi
-	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_DESKTOP_WGPU_DEBUG) --target yetty_tests $(CMAKE_PARALLEL)
-	./$(BUILD_DIR_DESKTOP_WGPU_DEBUG)/test/ut/yetty_tests
+.PHONY: test-desktop-ytrace-release
+test-desktop-ytrace-release: ## Run desktop ytrace release tests
+	@if [ ! -f "$(BUILD_DIR_DESKTOP_YTRACE_RELEASE)/build.ninja" ]; then $(MAKE) config-desktop-ytrace-release; fi
+	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_DESKTOP_YTRACE_RELEASE) --target yetty_tests $(CMAKE_PARALLEL)
+	./$(BUILD_DIR_DESKTOP_YTRACE_RELEASE)/test/ut/yetty_tests
 
-#=============================================================================
-# Desktop - dawn backend
-#=============================================================================
-
-.PHONY: config-desktop-dawn-debug
-config-desktop-dawn-debug: ## Configure desktop dawn debug build
-	PATH="$(SYSTEM_PATH)" $(CMAKE) -B $(BUILD_DIR_DESKTOP_DAWN_DEBUG) $(CMAKE_GENERATOR) $(CMAKE_DEBUG) $(CMAKE_BACKEND_DAWN) $(CMAKE_COMPILER_LAUNCHER)
-	@ln -sfn $(BUILD_DIR_DESKTOP_DAWN_DEBUG)/compile_commands.json compile_commands.json
-
-.PHONY: config-desktop-dawn-release
-config-desktop-dawn-release: ## Configure desktop dawn release build
-	PATH="$(SYSTEM_PATH)" $(CMAKE) -B $(BUILD_DIR_DESKTOP_DAWN_RELEASE) $(CMAKE_GENERATOR) $(CMAKE_RELEASE) $(CMAKE_BACKEND_DAWN) $(CMAKE_COMPILER_LAUNCHER)
-	@ln -sfn $(BUILD_DIR_DESKTOP_DAWN_RELEASE)/compile_commands.json compile_commands.json
-
-.PHONY: build-desktop-dawn-debug
-build-desktop-dawn-debug: ## Build desktop dawn debug
-	@if [ ! -f "$(BUILD_DIR_DESKTOP_DAWN_DEBUG)/build.ninja" ]; then $(MAKE) config-desktop-dawn-debug; fi
-	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_DESKTOP_DAWN_DEBUG) $(CMAKE_PARALLEL)
-
-.PHONY: build-desktop-dawn-release
-build-desktop-dawn-release: ## Build desktop dawn release
-	@if [ ! -f "$(BUILD_DIR_DESKTOP_DAWN_RELEASE)/build.ninja" ]; then $(MAKE) config-desktop-dawn-release; fi
-	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_DESKTOP_DAWN_RELEASE) $(CMAKE_PARALLEL)
-
-.PHONY: run-desktop-dawn-debug
-run-desktop-dawn-debug: build-desktop-dawn-debug ## Run desktop dawn debug build
-	./$(BUILD_DIR_DESKTOP_DAWN_DEBUG)/yetty
-
-.PHONY: run-desktop-dawn-release
-run-desktop-dawn-release: build-desktop-dawn-release ## Run desktop dawn release build
-	./$(BUILD_DIR_DESKTOP_DAWN_RELEASE)/yetty
-
-.PHONY: test-desktop-dawn-release
-test-desktop-dawn-release: ## Run desktop dawn release tests
-	@if [ ! -f "$(BUILD_DIR_DESKTOP_DAWN_RELEASE)/build.ninja" ]; then $(MAKE) config-desktop-dawn-release; fi
-	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_DESKTOP_DAWN_RELEASE) --target yetty_tests $(CMAKE_PARALLEL)
-	./$(BUILD_DIR_DESKTOP_DAWN_RELEASE)/test/ut/yetty_tests
-
-.PHONY: test-desktop-dawn-debug
-test-desktop-dawn-debug: ## Run desktop dawn debug tests
-	@if [ ! -f "$(BUILD_DIR_DESKTOP_DAWN_DEBUG)/build.ninja" ]; then $(MAKE) config-desktop-dawn-debug; fi
-	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_DESKTOP_DAWN_DEBUG) --target yetty_tests $(CMAKE_PARALLEL)
-	./$(BUILD_DIR_DESKTOP_DAWN_DEBUG)/test/ut/yetty_tests
+.PHONY: test-desktop-ytrace-debug
+test-desktop-ytrace-debug: ## Run desktop ytrace debug tests
+	@if [ ! -f "$(BUILD_DIR_DESKTOP_YTRACE_DEBUG)/build.ninja" ]; then $(MAKE) config-desktop-ytrace-debug; fi
+	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_DESKTOP_YTRACE_DEBUG) --target yetty_tests $(CMAKE_PARALLEL)
+	./$(BUILD_DIR_DESKTOP_YTRACE_DEBUG)/test/ut/yetty_tests
 
 #=============================================================================
-# Desktop - dawn backend with ASAN
+# Desktop - ytrace with ASAN
 #=============================================================================
 
-.PHONY: config-desktop-dawn-asan
-config-desktop-dawn-asan: ## Configure desktop dawn ASAN build
-	PATH="$(SYSTEM_PATH)" $(CMAKE) -B $(BUILD_DIR_DESKTOP_DAWN_ASAN) $(CMAKE_GENERATOR) $(CMAKE_DEBUG) $(CMAKE_BACKEND_DAWN) $(CMAKE_ASAN) $(CMAKE_COMPILER_LAUNCHER)
-	@ln -sfn $(BUILD_DIR_DESKTOP_DAWN_ASAN)/compile_commands.json compile_commands.json
+.PHONY: config-desktop-ytrace-asan
+config-desktop-ytrace-asan: ## Configure desktop ytrace ASAN build
+	PATH="$(SYSTEM_PATH)" $(CMAKE) -B $(BUILD_DIR_DESKTOP_YTRACE_ASAN) $(CMAKE_GENERATOR) $(CMAKE_DEBUG) $(CMAKE_LOGLEVEL_YTRACE) $(CMAKE_ASAN) $(CMAKE_COMPILER_LAUNCHER)
+	@ln -sfn $(BUILD_DIR_DESKTOP_YTRACE_ASAN)/compile_commands.json compile_commands.json
 
-.PHONY: build-desktop-dawn-asan
-build-desktop-dawn-asan: ## Build desktop dawn ASAN
-	@if [ ! -f "$(BUILD_DIR_DESKTOP_DAWN_ASAN)/build.ninja" ]; then $(MAKE) config-desktop-dawn-asan; fi
-	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_DESKTOP_DAWN_ASAN) $(CMAKE_PARALLEL)
+.PHONY: build-desktop-ytrace-asan
+build-desktop-ytrace-asan: ## Build desktop ytrace ASAN
+	@if [ ! -f "$(BUILD_DIR_DESKTOP_YTRACE_ASAN)/build.ninja" ]; then $(MAKE) config-desktop-ytrace-asan; fi
+	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_DESKTOP_YTRACE_ASAN) $(CMAKE_PARALLEL)
 
-.PHONY: run-desktop-dawn-asan
-run-desktop-dawn-asan: build-desktop-dawn-asan ## Run desktop dawn ASAN build
-	./$(BUILD_DIR_DESKTOP_DAWN_ASAN)/yetty
+.PHONY: run-desktop-ytrace-asan
+run-desktop-ytrace-asan: build-desktop-ytrace-asan ## Run desktop ytrace ASAN build
+	./$(BUILD_DIR_DESKTOP_YTRACE_ASAN)/yetty
 
 #=============================================================================
-# Android - wgpu backend
+# Desktop - yinfo (minimal logging for release/perf testing)
 #=============================================================================
 
-.PHONY: config-android-wgpu-debug
-config-android-wgpu-debug: ## Configure Android wgpu debug build
-	@$(MAKE) _android-wgpu-deps-debug
+.PHONY: config-desktop-yinfo-release
+config-desktop-yinfo-release: ## Configure desktop yinfo release build (minimal logging)
+	PATH="$(SYSTEM_PATH)" $(CMAKE) -B $(BUILD_DIR_DESKTOP_YINFO_RELEASE) $(CMAKE_GENERATOR) $(CMAKE_RELEASE) $(CMAKE_LOGLEVEL_YINFO) $(CMAKE_COMPILER_LAUNCHER)
 
-.PHONY: config-android-wgpu-release
-config-android-wgpu-release: ## Configure Android wgpu release build
-	@$(MAKE) _android-wgpu-deps-release
+.PHONY: build-desktop-yinfo-release
+build-desktop-yinfo-release: ## Build desktop yinfo release (for perf testing)
+	@if [ ! -f "$(BUILD_DIR_DESKTOP_YINFO_RELEASE)/build.ninja" ]; then $(MAKE) config-desktop-yinfo-release; fi
+	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_DESKTOP_YINFO_RELEASE) $(CMAKE_PARALLEL)
 
-.PHONY: build-android-wgpu-debug
-build-android-wgpu-debug: ## Build Android wgpu debug APK
-	@$(MAKE) _android-wgpu-deps-debug
-	WEBGPU_BACKEND=wgpu ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_WGPU_DEBUG) nix develop .#android --command bash -c "cd build-tools/android && ./gradlew $(GRADLE_OPTS_WGPU_DEBUG) assembleDebug"
+.PHONY: run-desktop-yinfo-release
+run-desktop-yinfo-release: build-desktop-yinfo-release ## Run desktop yinfo release build
+	./$(BUILD_DIR_DESKTOP_YINFO_RELEASE)/yetty
 
-.PHONY: build-android-wgpu-release
-build-android-wgpu-release: ## Build Android wgpu release APK
-	@$(MAKE) _android-wgpu-deps-release
-	WEBGPU_BACKEND=wgpu ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_WGPU_RELEASE) nix develop .#android --command bash -c "cd build-tools/android && ./gradlew $(GRADLE_OPTS_WGPU_RELEASE) assembleRelease"
+.PHONY: test-desktop-yinfo-release
+test-desktop-yinfo-release: ## Run desktop yinfo release tests
+	@if [ ! -f "$(BUILD_DIR_DESKTOP_YINFO_RELEASE)/build.ninja" ]; then $(MAKE) config-desktop-yinfo-release; fi
+	PATH="$(SYSTEM_PATH)" $(CMAKE) --build $(BUILD_DIR_DESKTOP_YINFO_RELEASE) --target yetty_tests $(CMAKE_PARALLEL)
+	./$(BUILD_DIR_DESKTOP_YINFO_RELEASE)/test/ut/yetty_tests
 
-.PHONY: test-android-wgpu-debug
-test-android-wgpu-debug: build-android-wgpu-debug ## Install and run Android wgpu debug build
-	adb install -r $(BUILD_DIR_ANDROID_WGPU_DEBUG)/app/outputs/apk/debug/app-debug.apk
+#=============================================================================
+# Android - ytrace (full logging)
+#=============================================================================
+
+.PHONY: config-android-ytrace-debug
+config-android-ytrace-debug: ## Configure Android ytrace debug build
+	@$(MAKE) _android-ytrace-deps-debug
+
+.PHONY: config-android-ytrace-release
+config-android-ytrace-release: ## Configure Android ytrace release build
+	@$(MAKE) _android-ytrace-deps-release
+
+.PHONY: build-android-ytrace-debug
+build-android-ytrace-debug: ## Build Android ytrace debug APK
+	@$(MAKE) _android-ytrace-deps-debug
+	ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_YTRACE_DEBUG) nix develop .#android --command bash -c "cd build-tools/android && ./gradlew $(GRADLE_OPTS_YTRACE_DEBUG) assembleDebug"
+
+.PHONY: build-android-ytrace-release
+build-android-ytrace-release: ## Build Android ytrace release APK
+	@$(MAKE) _android-ytrace-deps-release
+	ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_YTRACE_RELEASE) nix develop .#android --command bash -c "cd build-tools/android && ./gradlew $(GRADLE_OPTS_YTRACE_RELEASE) assembleRelease"
+
+.PHONY: test-android-ytrace-debug
+test-android-ytrace-debug: build-android-ytrace-debug ## Install and run Android ytrace debug build
+	adb install -r $(BUILD_DIR_ANDROID_YTRACE_DEBUG)/app/outputs/apk/debug/app-debug.apk
 	adb shell am start -n com.yetty.terminal/android.app.NativeActivity
 
-.PHONY: test-android-wgpu-release
-test-android-wgpu-release: build-android-wgpu-release ## Install and run Android wgpu release build
-	adb install -r $(BUILD_DIR_ANDROID_WGPU_RELEASE)/app/outputs/apk/release/app-release-unsigned.apk
+.PHONY: test-android-ytrace-release
+test-android-ytrace-release: build-android-ytrace-release ## Install and run Android ytrace release build
+	adb install -r $(BUILD_DIR_ANDROID_YTRACE_RELEASE)/app/outputs/apk/release/app-release-unsigned.apk
 	adb shell am start -n com.yetty.terminal/android.app.NativeActivity
 
 #=============================================================================
-# Android - dawn backend
+# Android x86_64 - ytrace (for emulator)
 #=============================================================================
 
-.PHONY: config-android-dawn-debug
-config-android-dawn-debug: ## Configure Android dawn debug build
-	@$(MAKE) _android-dawn-deps-debug
+.PHONY: build-android_x86_64-ytrace-debug
+build-android_x86_64-ytrace-debug: ## Build Android x86_64 ytrace debug APK (emulator)
+	@$(MAKE) _android_x86_64-ytrace-deps-debug
+	ANDROID_ABI=x86_64 ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_X86_64_YTRACE_DEBUG) nix develop .#android --command bash -c "cd build-tools/android && ./gradlew $(GRADLE_OPTS_X86_64_YTRACE_DEBUG) assembleDebug"
 
-.PHONY: config-android-dawn-release
-config-android-dawn-release: ## Configure Android dawn release build
-	@$(MAKE) _android-dawn-deps-release
+.PHONY: build-android_x86_64-ytrace-release
+build-android_x86_64-ytrace-release: ## Build Android x86_64 ytrace release APK (emulator)
+	@$(MAKE) _android_x86_64-ytrace-deps-release
+	ANDROID_ABI=x86_64 ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_X86_64_YTRACE_RELEASE) nix develop .#android --command bash -c "cd build-tools/android && ./gradlew $(GRADLE_OPTS_X86_64_YTRACE_RELEASE) assembleRelease"
 
-.PHONY: build-android-dawn-debug
-build-android-dawn-debug: ## Build Android dawn debug APK
-	@$(MAKE) _android-dawn-deps-debug
-	WEBGPU_BACKEND=dawn ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_DAWN_DEBUG) nix develop .#android --command bash -c "cd build-tools/android && ./gradlew $(GRADLE_OPTS_DAWN_DEBUG) assembleDebug"
-
-.PHONY: build-android-dawn-release
-build-android-dawn-release: ## Build Android dawn release APK
-	@$(MAKE) _android-dawn-deps-release
-	WEBGPU_BACKEND=dawn ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_DAWN_RELEASE) nix develop .#android --command bash -c "cd build-tools/android && ./gradlew $(GRADLE_OPTS_DAWN_RELEASE) assembleRelease"
-
-.PHONY: test-android-dawn-debug
-test-android-dawn-debug: build-android-dawn-debug ## Install and run Android dawn debug build
-	adb install -r $(BUILD_DIR_ANDROID_DAWN_DEBUG)/app/outputs/apk/debug/app-debug.apk
+.PHONY: test-android_x86_64-ytrace-debug
+test-android_x86_64-ytrace-debug: build-android_x86_64-ytrace-debug ## Install and run Android x86_64 ytrace debug (emulator)
+	adb install -r $(BUILD_DIR_ANDROID_X86_64_YTRACE_DEBUG)/app/outputs/apk/debug/app-debug.apk
 	adb shell am start -n com.yetty.terminal/android.app.NativeActivity
 
-.PHONY: test-android-dawn-release
-test-android-dawn-release: build-android-dawn-release ## Install and run Android dawn release build
-	adb install -r $(BUILD_DIR_ANDROID_DAWN_RELEASE)/app/outputs/apk/release/app-release-unsigned.apk
-	adb shell am start -n com.yetty.terminal/android.app.NativeActivity
-
-#=============================================================================
-# Android x86_64 - wgpu backend (for emulator)
-#=============================================================================
-
-.PHONY: build-android_x86_64-wgpu-debug
-build-android_x86_64-wgpu-debug: ## Build Android x86_64 wgpu debug APK (emulator)
-	@$(MAKE) _android_x86_64-wgpu-deps-debug
-	ANDROID_ABI=x86_64 WEBGPU_BACKEND=wgpu ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_X86_64_WGPU_DEBUG) nix develop .#android --command bash -c "cd build-tools/android && ./gradlew $(GRADLE_OPTS_X86_64_WGPU_DEBUG) assembleDebug"
-
-.PHONY: build-android_x86_64-wgpu-release
-build-android_x86_64-wgpu-release: ## Build Android x86_64 wgpu release APK (emulator)
-	@$(MAKE) _android_x86_64-wgpu-deps-release
-	ANDROID_ABI=x86_64 WEBGPU_BACKEND=wgpu ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_X86_64_WGPU_RELEASE) nix develop .#android --command bash -c "cd build-tools/android && ./gradlew $(GRADLE_OPTS_X86_64_WGPU_RELEASE) assembleRelease"
-
-.PHONY: test-android_x86_64-wgpu-debug
-test-android_x86_64-wgpu-debug: build-android_x86_64-wgpu-debug ## Install and run Android x86_64 wgpu debug (emulator)
-	adb install -r $(BUILD_DIR_ANDROID_X86_64_WGPU_DEBUG)/app/outputs/apk/debug/app-debug.apk
-	adb shell am start -n com.yetty.terminal/android.app.NativeActivity
-
-.PHONY: test-android_x86_64-wgpu-release
-test-android_x86_64-wgpu-release: build-android_x86_64-wgpu-release ## Install and run Android x86_64 wgpu release (emulator)
-	adb install -r $(BUILD_DIR_ANDROID_X86_64_WGPU_RELEASE)/app/outputs/apk/release/app-release-unsigned.apk
-	adb shell am start -n com.yetty.terminal/android.app.NativeActivity
-
-#=============================================================================
-# Android x86_64 - dawn backend (for emulator)
-#=============================================================================
-
-.PHONY: build-android_x86_64-dawn-debug
-build-android_x86_64-dawn-debug: ## Build Android x86_64 dawn debug APK (emulator)
-	@$(MAKE) _android_x86_64-dawn-deps-debug
-	ANDROID_ABI=x86_64 WEBGPU_BACKEND=dawn ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_X86_64_DAWN_DEBUG) nix develop .#android --command bash -c "cd build-tools/android && ./gradlew $(GRADLE_OPTS_X86_64_DAWN_DEBUG) assembleDebug"
-
-.PHONY: build-android_x86_64-dawn-release
-build-android_x86_64-dawn-release: ## Build Android x86_64 dawn release APK (emulator)
-	@$(MAKE) _android_x86_64-dawn-deps-release
-	ANDROID_ABI=x86_64 WEBGPU_BACKEND=dawn ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_X86_64_DAWN_RELEASE) nix develop .#android --command bash -c "cd build-tools/android && ./gradlew $(GRADLE_OPTS_X86_64_DAWN_RELEASE) assembleRelease"
-
-.PHONY: test-android_x86_64-dawn-debug
-test-android_x86_64-dawn-debug: build-android_x86_64-dawn-debug ## Install and run Android x86_64 dawn debug (emulator)
-	adb install -r $(BUILD_DIR_ANDROID_X86_64_DAWN_DEBUG)/app/outputs/apk/debug/app-debug.apk
-	adb shell am start -n com.yetty.terminal/android.app.NativeActivity
-
-.PHONY: test-android_x86_64-dawn-release
-test-android_x86_64-dawn-release: build-android_x86_64-dawn-release ## Install and run Android x86_64 dawn release (emulator)
-	adb install -r $(BUILD_DIR_ANDROID_X86_64_DAWN_RELEASE)/app/outputs/apk/release/app-release-unsigned.apk
+.PHONY: test-android_x86_64-ytrace-release
+test-android_x86_64-ytrace-release: build-android_x86_64-ytrace-release ## Install and run Android x86_64 ytrace release (emulator)
+	adb install -r $(BUILD_DIR_ANDROID_X86_64_YTRACE_RELEASE)/app/outputs/apk/release/app-release-unsigned.apk
 	adb shell am start -n com.yetty.terminal/android.app.NativeActivity
 
 #=============================================================================
 # WebAssembly (browser native WebGPU - Dawn in Chrome)
 #=============================================================================
 
-.PHONY: config-webasm-dawn-debug
-config-webasm-dawn-debug: ## Configure WebAssembly debug build
+.PHONY: config-webasm-ytrace-debug
+config-webasm-ytrace-debug: ## Configure WebAssembly ytrace debug build
 	nix develop .#web --command bash -c '\
 		export EMCC_SKIP_SANITY_CHECK=1 && \
-		emcmake cmake -B $(BUILD_DIR_WEBASM_DAWN_DEBUG) $(CMAKE_GENERATOR) \
+		emcmake cmake -B $(BUILD_DIR_WEBASM_YTRACE_DEBUG) $(CMAKE_GENERATOR) \
 			-DCMAKE_BUILD_TYPE=Debug'
 
-.PHONY: config-webasm-dawn-release
-config-webasm-dawn-release: ## Configure WebAssembly release build
+.PHONY: config-webasm-ytrace-release
+config-webasm-ytrace-release: ## Configure WebAssembly ytrace release build
 	nix develop .#web --command bash -c '\
 		export EMCC_SKIP_SANITY_CHECK=1 && \
-		emcmake cmake -B $(BUILD_DIR_WEBASM_DAWN_RELEASE) $(CMAKE_GENERATOR) \
+		emcmake cmake -B $(BUILD_DIR_WEBASM_YTRACE_RELEASE) $(CMAKE_GENERATOR) \
 			-DCMAKE_BUILD_TYPE=MinSizeRel'
 
-.PHONY: build-webasm-dawn-debug
-build-webasm-dawn-debug: ## Build WebAssembly debug
-	@if [ ! -f "$(BUILD_DIR_WEBASM_DAWN_DEBUG)/build.ninja" ]; then $(MAKE) config-webasm-dawn-debug; fi
-	nix develop .#web --command bash -c 'cmake --build $(BUILD_DIR_WEBASM_DAWN_DEBUG) --target yetty $(CMAKE_PARALLEL)'
-	@cp build-tools/web/index.html build-tools/web/serve.py $(BUILD_DIR_WEBASM_DAWN_DEBUG)/
+.PHONY: build-webasm-ytrace-debug
+build-webasm-ytrace-debug: ## Build WebAssembly ytrace debug
+	@if [ ! -f "$(BUILD_DIR_WEBASM_YTRACE_DEBUG)/build.ninja" ]; then $(MAKE) config-webasm-ytrace-debug; fi
+	nix develop .#web --command bash -c 'cmake --build $(BUILD_DIR_WEBASM_YTRACE_DEBUG) --target yetty $(CMAKE_PARALLEL)'
+	@cp build-tools/web/index.html build-tools/web/serve.py $(BUILD_DIR_WEBASM_YTRACE_DEBUG)/
 
-.PHONY: build-webasm-dawn-release
-build-webasm-dawn-release: ## Build WebAssembly release (CDB generation handled by CMake)
-	@if [ ! -f "$(BUILD_DIR_WEBASM_DAWN_RELEASE)/build.ninja" ]; then $(MAKE) config-webasm-dawn-release; fi
-	nix develop .#web --command bash -c 'cmake --build $(BUILD_DIR_WEBASM_DAWN_RELEASE) --target yetty $(CMAKE_PARALLEL)'
-	@cp build-tools/web/index.html build-tools/web/serve.py $(BUILD_DIR_WEBASM_DAWN_RELEASE)/
-	@$(MAKE) build-vm-tools BUILD_DIR=$(BUILD_DIR_WEBASM_DAWN_RELEASE)
-	@$(MAKE) verify-webasm BUILD_DIR=$(BUILD_DIR_WEBASM_DAWN_RELEASE)
+.PHONY: build-webasm-ytrace-release
+build-webasm-ytrace-release: ## Build WebAssembly ytrace release (CDB generation handled by CMake)
+	@if [ ! -f "$(BUILD_DIR_WEBASM_YTRACE_RELEASE)/build.ninja" ]; then $(MAKE) config-webasm-ytrace-release; fi
+	nix develop .#web --command bash -c 'cmake --build $(BUILD_DIR_WEBASM_YTRACE_RELEASE) --target yetty $(CMAKE_PARALLEL)'
+	@cp build-tools/web/index.html build-tools/web/serve.py $(BUILD_DIR_WEBASM_YTRACE_RELEASE)/
+	@$(MAKE) build-vm-tools BUILD_DIR=$(BUILD_DIR_WEBASM_YTRACE_RELEASE)
+	@$(MAKE) verify-webasm BUILD_DIR=$(BUILD_DIR_WEBASM_YTRACE_RELEASE)
+
+.PHONY: config-webasm-yinfo-release
+config-webasm-yinfo-release: ## Configure WebAssembly yinfo release build (minimal logging)
+	nix develop .#web --command bash -c '\
+		export EMCC_SKIP_SANITY_CHECK=1 && \
+		emcmake cmake -B $(BUILD_DIR_WEBASM_YINFO_RELEASE) $(CMAKE_GENERATOR) \
+			-DCMAKE_BUILD_TYPE=MinSizeRel \
+			-DYTRACE_ENABLE_YTRACE=0 -DYTRACE_ENABLE_YDEBUG=0'
+
+.PHONY: build-webasm-yinfo-release
+build-webasm-yinfo-release: ## Build WebAssembly yinfo release (minimal logging)
+	@if [ ! -f "$(BUILD_DIR_WEBASM_YINFO_RELEASE)/build.ninja" ]; then $(MAKE) config-webasm-yinfo-release; fi
+	nix develop .#web --command bash -c 'cmake --build $(BUILD_DIR_WEBASM_YINFO_RELEASE) --target yetty $(CMAKE_PARALLEL)'
+	@cp build-tools/web/index.html build-tools/web/serve.py $(BUILD_DIR_WEBASM_YINFO_RELEASE)/
+	@$(MAKE) build-vm-tools BUILD_DIR=$(BUILD_DIR_WEBASM_YINFO_RELEASE)
+	@$(MAKE) verify-webasm BUILD_DIR=$(BUILD_DIR_WEBASM_YINFO_RELEASE)
 
 .PHONY: verify-webasm
 verify-webasm: ## Post-build verification that all webasm artifacts are present
@@ -343,42 +285,42 @@ verify-webasm: ## Post-build verification that all webasm artifacts are present
 build-vm-tools: ## Build static x86_64 tools for JSLinux VM via Docker Alpine
 	@bash build-tools/docker/build-vm-tools.sh $(BUILD_DIR)
 
-.PHONY: run-webasm-dawn-debug
-run-webasm-dawn-debug: build-webasm-dawn-debug ## Serve WebAssembly debug build
-	python3 $(BUILD_DIR_WEBASM_DAWN_DEBUG)/serve.py 8000 $(BUILD_DIR_WEBASM_DAWN_DEBUG)
+.PHONY: run-webasm-ytrace-debug
+run-webasm-ytrace-debug: build-webasm-ytrace-debug ## Serve WebAssembly ytrace debug build
+	python3 $(BUILD_DIR_WEBASM_YTRACE_DEBUG)/serve.py 8000 $(BUILD_DIR_WEBASM_YTRACE_DEBUG)
 
-.PHONY: run-webasm-dawn-release
-run-webasm-dawn-release: build-webasm-dawn-release ## Serve WebAssembly release build
-	python3 $(BUILD_DIR_WEBASM_DAWN_RELEASE)/serve.py 8000 $(BUILD_DIR_WEBASM_DAWN_RELEASE)
+.PHONY: run-webasm-ytrace-release
+run-webasm-ytrace-release: build-webasm-ytrace-release ## Serve WebAssembly ytrace release build
+	python3 $(BUILD_DIR_WEBASM_YTRACE_RELEASE)/serve.py 8000 $(BUILD_DIR_WEBASM_YTRACE_RELEASE)
 
 
 #=============================================================================
-# Windows - dawn backend (MSVC)
+# Windows (MSVC via VS Build Tools)
 #=============================================================================
 
-.PHONY: config-windows-dawn-debug
-config-windows-dawn-debug: ## Configure Windows dawn debug build (MSVC)
+.PHONY: config-windows-ytrace-debug
+config-windows-ytrace-debug: ## Configure Windows ytrace debug build (MSVC)
 	cmd.exe //c "build-tools\windows\build.bat debug configure"
 
-.PHONY: config-windows-dawn-release
-config-windows-dawn-release: ## Configure Windows dawn release build (MSVC)
+.PHONY: config-windows-ytrace-release
+config-windows-ytrace-release: ## Configure Windows ytrace release build (MSVC)
 	cmd.exe //c "build-tools\windows\build.bat release configure"
 
-.PHONY: build-windows-dawn-debug
-build-windows-dawn-debug: ## Build Windows dawn debug
+.PHONY: build-windows-ytrace-debug
+build-windows-ytrace-debug: ## Build Windows ytrace debug
 	cmd.exe //c "build-tools\windows\build.bat debug"
 
-.PHONY: build-windows-dawn-release
-build-windows-dawn-release: ## Build Windows dawn release
+.PHONY: build-windows-ytrace-release
+build-windows-ytrace-release: ## Build Windows ytrace release
 	cmd.exe //c "build-tools\windows\build.bat release"
 
-.PHONY: run-windows-dawn-debug
-run-windows-dawn-debug: build-windows-dawn-debug ## Run Windows dawn debug build
-	./$(BUILD_DIR_WINDOWS_DAWN_DEBUG)/yetty.exe
+.PHONY: run-windows-ytrace-debug
+run-windows-ytrace-debug: build-windows-ytrace-debug ## Run Windows ytrace debug build
+	./$(BUILD_DIR_WINDOWS_YTRACE_DEBUG)/yetty.exe
 
-.PHONY: run-windows-dawn-release
-run-windows-dawn-release: build-windows-dawn-release ## Run Windows dawn release build
-	./$(BUILD_DIR_WINDOWS_DAWN_RELEASE)/yetty.exe
+.PHONY: run-windows-ytrace-release
+run-windows-ytrace-release: build-windows-ytrace-release ## Run Windows ytrace release build
+	./$(BUILD_DIR_WINDOWS_YTRACE_RELEASE)/yetty.exe
 
 #=============================================================================
 # Clean
@@ -386,61 +328,45 @@ run-windows-dawn-release: build-windows-dawn-release ## Run Windows dawn release
 
 .PHONY: clean
 clean: ## Clean all build directories
-	rm -rf $(BUILD_DIR_DESKTOP_WGPU_DEBUG) $(BUILD_DIR_DESKTOP_WGPU_RELEASE) \
-	       $(BUILD_DIR_DESKTOP_DAWN_DEBUG) $(BUILD_DIR_DESKTOP_DAWN_RELEASE) \
-	       $(BUILD_DIR_DESKTOP_DAWN_ASAN) \
-	       $(BUILD_DIR_WINDOWS_DAWN_DEBUG) $(BUILD_DIR_WINDOWS_DAWN_RELEASE) \
-	       $(BUILD_DIR_ANDROID_WGPU_DEBUG) $(BUILD_DIR_ANDROID_WGPU_RELEASE) \
-	       $(BUILD_DIR_ANDROID_DAWN_DEBUG) $(BUILD_DIR_ANDROID_DAWN_RELEASE) \
-	       $(BUILD_DIR_ANDROID_X86_64_WGPU_DEBUG) $(BUILD_DIR_ANDROID_X86_64_WGPU_RELEASE) \
-	       $(BUILD_DIR_ANDROID_X86_64_DAWN_DEBUG) $(BUILD_DIR_ANDROID_X86_64_DAWN_RELEASE) \
-	       $(BUILD_DIR_WEBASM_DAWN_DEBUG) $(BUILD_DIR_WEBASM_DAWN_RELEASE) \
+	rm -rf $(BUILD_DIR_DESKTOP_YTRACE_DEBUG) $(BUILD_DIR_DESKTOP_YTRACE_RELEASE) \
+	       $(BUILD_DIR_DESKTOP_YTRACE_ASAN) $(BUILD_DIR_DESKTOP_YINFO_RELEASE) \
+	       $(BUILD_DIR_WINDOWS_YTRACE_DEBUG) $(BUILD_DIR_WINDOWS_YTRACE_RELEASE) \
+	       $(BUILD_DIR_WINDOWS_YINFO_RELEASE) \
+	       $(BUILD_DIR_ANDROID_YTRACE_DEBUG) $(BUILD_DIR_ANDROID_YTRACE_RELEASE) \
+	       $(BUILD_DIR_ANDROID_YINFO_RELEASE) \
+	       $(BUILD_DIR_ANDROID_X86_64_YTRACE_DEBUG) $(BUILD_DIR_ANDROID_X86_64_YTRACE_RELEASE) \
+	       $(BUILD_DIR_WEBASM_YTRACE_DEBUG) $(BUILD_DIR_WEBASM_YTRACE_RELEASE) \
+	       $(BUILD_DIR_WEBASM_YINFO_RELEASE) \
 	       build-desktop build-android build-webasm build-windows \
 	       build-desktop-debug build-desktop-release \
 	       build-android-debug build-android-release \
-	       build-android_x86_64-debug build-android_x86_64-release
+	       build-android_x86_64-debug build-android_x86_64-release \
+	       build-desktop-wgpu-* build-desktop-dawn-* \
+	       build-android-wgpu-* build-android-dawn-* \
+	       build-android_x86_64-wgpu-* build-android_x86_64-dawn-* \
+	       build-webasm-dawn-* build-windows-dawn-*
 
 #=============================================================================
 # Internal targets (not shown in help)
 #=============================================================================
 
 # ARM64 (arm64-v8a) internal targets
-.PHONY: _android-wgpu-deps-debug
-_android-wgpu-deps-debug:
-	@cd $(CURDIR) && ANDROID_ABI=arm64-v8a ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_WGPU_DEBUG) bash build-tools/android/build-wgpu.sh
-	@cd $(CURDIR) && ANDROID_ABI=arm64-v8a ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_WGPU_DEBUG) bash build-tools/android/build-toybox.sh
+.PHONY: _android-ytrace-deps-debug
+_android-ytrace-deps-debug:
+	@cd $(CURDIR) && ANDROID_ABI=arm64-v8a ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_YTRACE_DEBUG) bash build-tools/android/build-dawn.sh
 
-.PHONY: _android-wgpu-deps-release
-_android-wgpu-deps-release:
-	@cd $(CURDIR) && ANDROID_ABI=arm64-v8a ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_WGPU_RELEASE) bash build-tools/android/build-wgpu.sh
-	@cd $(CURDIR) && ANDROID_ABI=arm64-v8a ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_WGPU_RELEASE) bash build-tools/android/build-toybox.sh
-
-.PHONY: _android-dawn-deps-debug
-_android-dawn-deps-debug:
-	@cd $(CURDIR) && ANDROID_ABI=arm64-v8a ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_DAWN_DEBUG) bash build-tools/android/build-dawn.sh
-
-.PHONY: _android-dawn-deps-release
-_android-dawn-deps-release:
-	@cd $(CURDIR) && ANDROID_ABI=arm64-v8a ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_DAWN_RELEASE) bash build-tools/android/build-dawn.sh
+.PHONY: _android-ytrace-deps-release
+_android-ytrace-deps-release:
+	@cd $(CURDIR) && ANDROID_ABI=arm64-v8a ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_YTRACE_RELEASE) bash build-tools/android/build-dawn.sh
 
 # x86_64 internal targets (for emulator)
-.PHONY: _android_x86_64-wgpu-deps-debug
-_android_x86_64-wgpu-deps-debug:
-	@cd $(CURDIR) && ANDROID_ABI=x86_64 ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_X86_64_WGPU_DEBUG) bash build-tools/android/build-wgpu.sh
-	@cd $(CURDIR) && ANDROID_ABI=x86_64 ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_X86_64_WGPU_DEBUG) bash build-tools/android/build-toybox.sh
+.PHONY: _android_x86_64-ytrace-deps-debug
+_android_x86_64-ytrace-deps-debug:
+	@cd $(CURDIR) && ANDROID_ABI=x86_64 ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_X86_64_YTRACE_DEBUG) bash build-tools/android/build-dawn.sh
 
-.PHONY: _android_x86_64-wgpu-deps-release
-_android_x86_64-wgpu-deps-release:
-	@cd $(CURDIR) && ANDROID_ABI=x86_64 ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_X86_64_WGPU_RELEASE) bash build-tools/android/build-wgpu.sh
-	@cd $(CURDIR) && ANDROID_ABI=x86_64 ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_X86_64_WGPU_RELEASE) bash build-tools/android/build-toybox.sh
-
-.PHONY: _android_x86_64-dawn-deps-debug
-_android_x86_64-dawn-deps-debug:
-	@cd $(CURDIR) && ANDROID_ABI=x86_64 ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_X86_64_DAWN_DEBUG) bash build-tools/android/build-dawn.sh
-
-.PHONY: _android_x86_64-dawn-deps-release
-_android_x86_64-dawn-deps-release:
-	@cd $(CURDIR) && ANDROID_ABI=x86_64 ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_X86_64_DAWN_RELEASE) bash build-tools/android/build-dawn.sh
+.PHONY: _android_x86_64-ytrace-deps-release
+_android_x86_64-ytrace-deps-release:
+	@cd $(CURDIR) && ANDROID_ABI=x86_64 ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_X86_64_YTRACE_RELEASE) bash build-tools/android/build-dawn.sh
 
 #=============================================================================
 # Help
@@ -452,15 +378,15 @@ help:
 	@echo ""
 	@echo "Usage: make <target>"
 	@echo ""
-	@echo "WebGPU Backends:"
-	@echo "  wgpu  - wgpu-native (Rust implementation, required for pygfx)"
-	@echo "  dawn  - Dawn (Google's C++ implementation)"
+	@echo "Logging Levels:"
+	@echo "  ytrace - Full logging (ytrace, ydebug, yinfo, ywarn, yerror) - daily driver"
+	@echo "  yinfo  - Minimal logging (yinfo, ywarn, yerror) - for release/perf testing"
 	@echo ""
 	@echo "Targets:"
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-30s\033[0m %s\n", $$1, $$2}'
 	@echo ""
 	@echo "Build outputs:"
-	@echo "  build-desktop-{wgpu,dawn}-{debug,release}/yetty"
-	@echo "  build-android-{wgpu,dawn}-{debug,release}/app/outputs/apk/"
-	@echo "  build-android_x86_64-{wgpu,dawn}-{debug,release}/app/outputs/apk/  (emulator)"
-	@echo "  build-webasm-{debug,release}/yetty.html"
+	@echo "  build-desktop-{ytrace,yinfo}-{debug,release}/yetty"
+	@echo "  build-android-{ytrace,yinfo}-{debug,release}/app/outputs/apk/"
+	@echo "  build-android_x86_64-ytrace-{debug,release}/app/outputs/apk/  (emulator)"
+	@echo "  build-webasm-{ytrace,yinfo}-{debug,release}/yetty.html"

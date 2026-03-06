@@ -141,7 +141,7 @@ Result<CardPtr> YPdf::create(
     const std::string& args,
     const std::string& payload)
 {
-    yinfo("YPdf::create: pos=({},{}) size={}x{} payload_len={}",
+    ydebug("YPdf::create: pos=({},{}) size={}x{} payload_len={}",
           x, y, widthCells, heightCells, payload.size());
 
     auto card = std::make_shared<YPdf>(ctx, x, y, widthCells, heightCells,
@@ -152,7 +152,7 @@ Result<CardPtr> YPdf::create(
         return Err<CardPtr>("YPdf::create: init failed");
     }
 
-    yinfo("YPdf::create: SUCCESS, shaderGlyph={:#x} pages={} glyphs={}",
+    ydebug("YPdf::create: SUCCESS, shaderGlyph={:#x} pages={} glyphs={}",
           card->shaderGlyph(), card->_pageCount,
           card->_builder ? card->_builder->glyphCount() : 0);
     return Ok<CardPtr>(card);
@@ -284,14 +284,14 @@ Result<void> YPdf::loadPdf() {
         out.close();
 
         pdfPath = _tempPdfPath.string();
-        yinfo("YPdf::loadPdf: wrote {} bytes to temp file '{}'", _payloadStr.size(), pdfPath);
+        ydebug("YPdf::loadPdf: wrote {} bytes to temp file '{}'", _payloadStr.size(), pdfPath);
     } else {
         // Read from file path specified via -i <path>
         if (!std::filesystem::exists(_inputSource)) {
             return Err<void>("YPdf::loadPdf: file not found: " + _inputSource);
         }
         pdfPath = _inputSource;
-        yinfo("YPdf::loadPdf: loading from file '{}'", pdfPath);
+        ydebug("YPdf::loadPdf: loading from file '{}'", pdfPath);
     }
 
     _pdfFile = pdfioFileOpen(pdfPath.c_str(), /*password_cb=*/nullptr,
@@ -311,7 +311,7 @@ Result<void> YPdf::loadPdf() {
 
     _currentPage = std::clamp(_currentPage, 0, _pageCount - 1);
 
-    yinfo("YPdf::loadPdf: opened '{}' with {} pages", pdfPath, _pageCount);
+    ydebug("YPdf::loadPdf: opened '{}' with {} pages", pdfPath, _pageCount);
     return Ok();
 }
 
@@ -331,7 +331,7 @@ Result<void> YPdf::renderAllPages() {
         return Err<void>("YPdf::renderAllPages: no valid pages");
     }
 
-    yinfo("YPdf::renderAllPages: {} pages, totalHeight={:.1f}",
+    ydebug("YPdf::renderAllPages: {} pages, totalHeight={:.1f}",
           result.pageCount, result.totalHeight);
 
     return Ok();
@@ -599,7 +599,7 @@ Result<bool> YPdf::onEvent(const base::Event& event) {
             auto loop = *base::EventLoop::instance();
             loop->dispatch(base::Event::copyEvent(
                 std::make_shared<std::string>(text)));
-            yinfo("YPdf: copied {} bytes to clipboard", text.size());
+            ydebug("YPdf: copied {} bytes to clipboard", text.size());
         }
         return Ok(true);
     }

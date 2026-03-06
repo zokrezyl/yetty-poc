@@ -316,12 +316,12 @@ void extractPageFonts(pdfio_obj_t* pageObj,
         // Parse ToUnicode CMap if present
         if (toUnicodeObj) {
             parseToUnicodeCMap(toUnicodeObj, info.toUnicode);
-            yinfo("Font '{}': ToUnicode CMap with {} mappings", tag, info.toUnicode.size());
+            ydebug("Font '{}': ToUnicode CMap with {} mappings", tag, info.toUnicode.size());
         }
 
         fonts.push_back(std::move(info));
 
-        yinfo("Extracted font '{}' ({} bytes) identityH={} → bufFontId={}",
+        ydebug("Extracted font '{}' ({} bytes) identityH={} → bufFontId={}",
               tag, fontBytes.size(), isIdentityH, bufFontId);
     }
 }
@@ -490,7 +490,7 @@ PdfRenderResult renderPdfToBuffer(pdfio_file_t* pdf,
     buffer->setSceneBounds(0, 0, maxWidth, yOffset);
     buffer->setBgColor(0xFFFFFFFF);
 
-    yinfo("renderPdfToBuffer: {} pages, {} fonts, totalHeight={:.1f}",
+    ydebug("renderPdfToBuffer: {} pages, {} fonts, totalHeight={:.1f}",
           pageCount, fonts.size(), yOffset);
 
     return result;

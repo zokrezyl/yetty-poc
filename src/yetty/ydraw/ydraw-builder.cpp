@@ -796,7 +796,7 @@ public:
         float atlasSize = _customAtlas->getFontSize();
         _ttfMetricsCache[fontId] = readTtfMetrics(ttfPath, atlasSize);
 
-        yinfo("addFont: registered '{}' on custom atlas (fontId={})", stem, fontId);
+        ydebug("addFont: registered '{}' on custom atlas (fontId={})", stem, fontId);
         return Ok(fontId);
     }
 
@@ -808,7 +808,7 @@ public:
         }
         int atlasId = *result;
         _userFontIdMap[userFontId] = atlasId;
-        yinfo("addFont: mapped user fontId {} -> atlas fontId {}", userFontId, atlasId);
+        ydebug("addFont: mapped user fontId {} -> atlas fontId {}", userFontId, atlasId);
         return Ok();
     }
 
@@ -1570,7 +1570,7 @@ public:
                   << " scene=[" << _sceneMinX << "," << _sceneMinY << "]-[" 
                   << _sceneMaxX << "," << _sceneMaxY << "] prims=" << _primBounds.size() << std::endl;
 
-        yinfo("YDrawBuilder::calculate: grid={}x{} cellSize=({:.1f},{:.1f}) prims={} glyphs={} scene=[{:.0f},{:.0f}]-[{:.0f},{:.0f}]",
+        ydebug("YDrawBuilder::calculate: grid={}x{} cellSize=({:.1f},{:.1f}) prims={} glyphs={} scene=[{:.0f},{:.0f}]-[{:.0f},{:.0f}]",
               gridW, gridH, csX, csY, _primBounds.size(), _glyphs.size(),
               _sceneMinX, _sceneMinY, _sceneMaxX, _sceneMaxY);
 
@@ -1654,7 +1654,7 @@ public:
             if (cnt > 0) nonEmptyCells++;
             if (cnt > maxEntries) maxEntries = cnt;
         }
-        yinfo("YDrawBuilder::calculate: gridSize={} u32s ({} KB) cells={} nonEmpty={} totalEntries={} maxPerCell={} avgPerNonEmpty={:.1f}",
+        ydebug("YDrawBuilder::calculate: gridSize={} u32s ({} KB) cells={} nonEmpty={} totalEntries={} maxPerCell={} avgPerNonEmpty={:.1f}",
               _gridStaging.size(), _gridStaging.size() * 4 / 1024,
               numCells, nonEmptyCells, totalEntries, maxEntries,
               nonEmptyCells > 0 ? float(totalEntries) / nonEmptyCells : 0.0f);

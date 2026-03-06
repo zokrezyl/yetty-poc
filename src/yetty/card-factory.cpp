@@ -172,7 +172,7 @@ public:
       ywarn("CardFactory: overwriting existing card type '{}'", name);
     }
     _creators[name] = std::move(creator);
-    yinfo("CardFactory: registered card type '{}'", name);
+    ydebug("CardFactory: registered card type '{}'", name);
   }
 
   bool hasCard(const std::string &name) const override {
@@ -220,7 +220,7 @@ public:
           std::regex_replace(filteredArgs, std::regex(R"(\s*;\s*;\s*)"), ";");
     }
 
-    yinfo("CardFactory: creating card '{}' at ({},{}) size {}x{}{}", name, x, y,
+    ydebug("CardFactory: creating card '{}' at ({},{}) size {}x{}{}", name, x, y,
           widthCells, heightCells,
           cardName.empty() ? "" : " name='" + cardName + "'");
 
@@ -238,7 +238,7 @@ public:
       (*result)->setName(cardName);
     }
 
-    yinfo("CardFactory: created card '{}' with metadataOffset={}{}", name,
+    ydebug("CardFactory: created card '{}' with metadataOffset={}{}", name,
           (*result)->metadataOffset(),
           cardName.empty() ? "" : " name='" + cardName + "'");
 

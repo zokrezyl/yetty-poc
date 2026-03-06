@@ -25,34 +25,34 @@ public:
     //=========================================================================
 
     Result<void> init() override {
-        yinfo("MsMsdfFontImpl::init: entered");
+        ydebug("MsMsdfFontImpl::init: entered");
         // Create atlas
-        yinfo("MsMsdfFontImpl::init: creating MsdfAtlas");
+        ydebug("MsMsdfFontImpl::init: creating MsdfAtlas");
         auto atlasResult = MsdfAtlas::create(_allocator);
-        yinfo("MsMsdfFontImpl::init: MsdfAtlas::create returned");
+        ydebug("MsMsdfFontImpl::init: MsdfAtlas::create returned");
         if (!atlasResult) {
             return Err<void>("Failed to create MsdfAtlas", atlasResult);
         }
         _atlas = std::move(*atlasResult);
-        yinfo("MsMsdfFontImpl::init: atlas created");
+        ydebug("MsMsdfFontImpl::init: atlas created");
 
         // Open all style CDBs on the atlas
-        yinfo("MsMsdfFontImpl::init: opening CDBs, cdbBasePath={}", _cdbBasePath);
+        ydebug("MsMsdfFontImpl::init: opening CDBs, cdbBasePath={}", _cdbBasePath);
         for (int i = 0; i < 4; ++i) {
             std::string path = _cdbBasePath + STYLE_SUFFIXES[i];
-            yinfo("MsMsdfFontImpl::init: opening CDB[{}] path={}", i, path);
+            ydebug("MsMsdfFontImpl::init: opening CDB[{}] path={}", i, path);
             int fontId = _atlas->openCdb(path);
-            yinfo("MsMsdfFontImpl::init: openCdb returned fontId={}", fontId);
+            ydebug("MsMsdfFontImpl::init: openCdb returned fontId={}", fontId);
             if (fontId < 0) {
                 return Err<void>("Failed to open CDB: " + path);
             }
             _styleFontId[i] = fontId;
         }
 
-        yinfo("MsMsdfFontImpl::init: all CDBs opened, pre-loading basic Latin");
+        ydebug("MsMsdfFontImpl::init: all CDBs opened, pre-loading basic Latin");
         // Pre-load basic Latin
         initBasicLatin();
-        yinfo("MsMsdfFontImpl::init: done");
+        ydebug("MsMsdfFontImpl::init: done");
 
         return Ok();
     }
@@ -147,7 +147,7 @@ private:
         for (uint32_t cp = 0x20; cp <= 0x7E; ++cp) {
             _atlas->loadGlyph(regularId, cp);
         }
-        yinfo("Pre-loaded basic Latin glyphs");
+        ydebug("Pre-loaded basic Latin glyphs");
     }
 
     //=========================================================================
@@ -196,9 +196,9 @@ private:
 Result<MsMsdfFont::Ptr> MsMsdfFont::createImpl(ContextType&,
                                                  const std::string& cdbBasePath,
                                                  GpuAllocator::Ptr allocator) {
-    yinfo("MsMsdfFont::createImpl: entered cdbBasePath={}", cdbBasePath);
+    ydebug("MsMsdfFont::createImpl: entered cdbBasePath={}", cdbBasePath);
     auto font = Ptr(new MsMsdfFontImpl(cdbBasePath, std::move(allocator)));
-    yinfo("MsMsdfFont::createImpl: font created");
+    ydebug("MsMsdfFont::createImpl: font created");
     if (auto res = static_cast<MsMsdfFontImpl*>(font.get())->init(); !res) {
         return Err<Ptr>("Failed to initialize MsMsdfFont", res);
     }

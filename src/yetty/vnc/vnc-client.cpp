@@ -57,7 +57,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 // WebSocket callbacks for Emscripten
 static EM_BOOL onWsOpen(int eventType, const EmscriptenWebSocketOpenEvent* wsEvent, void* userData) {
     VncClient* client = static_cast<VncClient*>(userData);
-    yinfo("WebSocket connected");
+    ydebug("WebSocket connected");
     client->_wsConnected = true;
     client->_connected = true;
     client->_connecting = false;
@@ -82,7 +82,7 @@ static EM_BOOL onWsError(int eventType, const EmscriptenWebSocketErrorEvent* wsE
 
 static EM_BOOL onWsClose(int eventType, const EmscriptenWebSocketCloseEvent* wsEvent, void* userData) {
     VncClient* client = static_cast<VncClient*>(userData);
-    yinfo("WebSocket closed: code={} reason={}", wsEvent->code, wsEvent->reason);
+    ydebug("WebSocket closed: code={} reason={}", wsEvent->code, wsEvent->reason);
     client->_wsConnected = false;
     client->_connected = false;
     client->_connecting = false;
@@ -152,7 +152,7 @@ Result<void> VncClient::connect(const std::string& host, uint16_t port) {
         // Legacy: build URL from host:port
         wsUrl = "ws://" + host + ":" + std::to_string(port);
     }
-    yinfo("VNC client connecting via WebSocket to {}", wsUrl);
+    ydebug("VNC client connecting via WebSocket to {}", wsUrl);
 
     EmscriptenWebSocketCreateAttributes attrs;
     emscripten_websocket_init_create_attributes(&attrs);
@@ -172,7 +172,7 @@ Result<void> VncClient::connect(const std::string& host, uint16_t port) {
     emscripten_websocket_set_onmessage_callback(_wsSocket, this, onWsMessage);
 
     _connecting = true;
-    yinfo("VNC client: WebSocket created, waiting for connection...");
+    ydebug("VNC client: WebSocket created, waiting for connection...");
     return Ok();
 
 #else
@@ -219,9 +219,9 @@ Result<void> VncClient::connect(const std::string& host, uint16_t port) {
     bool immediateConnect = _connected;
 
     if (_connected) {
-        yinfo("VNC client connected to {}:{} (immediate)", host, port);
+        ydebug("VNC client connected to {}:{} (immediate)", host, port);
     } else {
-        yinfo("VNC client connecting to {}:{} (async)...", host, port);
+        ydebug("VNC client connecting to {}:{} (async)...", host, port);
     }
 
     // Register with event loop for async receive
@@ -313,7 +313,7 @@ Result<void> VncClient::reconnect() {
     if (_reconnectHost.empty()) {
         return Err<void>("No reconnection parameters set");
     }
-    yinfo("VNC client reconnecting to {}:{}", _reconnectHost, _reconnectPort);
+    ydebug("VNC client reconnecting to {}:{}", _reconnectHost, _reconnectPort);
     _wantsReconnect = false;
 
     // Reset receive state
@@ -345,7 +345,7 @@ Result<bool> VncClient::onEvent(const base::Event& event) {
         }
         _connecting = false;
         _connected = true;
-        yinfo("VNC client connected (async complete)");
+        ydebug("VNC client connected (async complete)");
         // Switch to readable-only polling now that we're connected
         updatePollEvents();
         // Call onConnected callback - client should send resize here
@@ -407,7 +407,7 @@ void VncClient::onSocketReadable() {
                 if (tilesReceived && onFrameReceived) {
                     auto t = std::chrono::high_resolution_clock::now();
                     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
-                    yinfo("[TIME] CLIENT frame received at {}ms, calling onFrameReceived", ms);
+                    ydebug("[TIME] CLIENT frame received at {}ms, calling onFrameReceived", ms);
                     onFrameReceived();
                 }
                 return;
@@ -418,7 +418,7 @@ void VncClient::onSocketReadable() {
         }
 
         if (n == 0) {
-            yinfo("VNC onSocketReadable: server closed connection");
+            ydebug("VNC onSocketReadable: server closed connection");
             disconnect();
             return;
         }
@@ -466,7 +466,7 @@ void VncClient::onSocketReadable() {
                 if (_currentFrame.width != _width || _currentFrame.height != _height) {
                     _width = _currentFrame.width;
                     _height = _currentFrame.height;
-                    yinfo("VNC: Frame size {}x{}", _width, _height);
+                    ydebug("VNC: Frame size {}x{}", _width, _height);
                 }
                 // Ensure texture exists for immediate tile uploads
                 ensureResources(_width, _height);
@@ -1156,7 +1156,7 @@ void VncClient::sendTextInput(const char* text, size_t len) {
     auto t = std::chrono::high_resolution_clock::now();
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
     std::string textStr(text, len);
-    yinfo("[TIME] CLIENT sendTextInput at {}ms: '{}'", ms, textStr);
+    ydebug("[TIME] CLIENT sendTextInput at {}ms: '{}'", ms, textStr);
 
     InputHeader hdr = {};
     hdr.type = static_cast<uint8_t>(InputType::TEXT_INPUT);
@@ -1209,7 +1209,7 @@ void VncClient::sendFrameAck() {
 }
 
 void VncClient::sendCompressionConfig(bool forceRaw, uint8_t quality) {
-    yinfo("VNC client sendCompressionConfig: forceRaw={} quality={}", forceRaw, quality);
+    ydebug("VNC client sendCompressionConfig: forceRaw={} quality={}", forceRaw, quality);
     InputHeader hdr = {};
     hdr.type = static_cast<uint8_t>(InputType::COMPRESSION_CONFIG);
     hdr.data_size = sizeof(CompressionConfigEvent);
@@ -1275,7 +1275,7 @@ void VncClient::onWebSocketData(const uint8_t* data, size_t size) {
                 if (_currentFrame.width != _width || _currentFrame.height != _height) {
                     _width = _currentFrame.width;
                     _height = _currentFrame.height;
-                    yinfo("VNC: Frame size {}x{}", _width, _height);
+                    ydebug("VNC: Frame size {}x{}", _width, _height);
                 }
                 ensureResources(_width, _height);
 

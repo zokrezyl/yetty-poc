@@ -265,7 +265,7 @@ Result<void> CardBufferManagerImpl::init() noexcept {
         // Using shared memory - initial capacity from shm size
         _currentBufferCapacity = static_cast<uint32_t>(_shm->size());
         _bufferAllocator = BufferAllocator(_currentBufferCapacity);
-        yinfo("CardBufferManager: using shared memory '{}' ({} bytes)",
+        ydebug("CardBufferManager: using shared memory '{}' ({} bytes)",
               _shm->name(), _shm->size());
     } else {
         // Using internal vector
@@ -332,7 +332,7 @@ Result<void> CardBufferManagerImpl::commitReservations() {
             if (auto res = _shm->grow(newSize); !res) {
                 return Err<void>("Failed to grow shared memory", res);
             }
-            yinfo("CardBufferManager: grew shared memory to {} bytes", newSize);
+            ydebug("CardBufferManager: grew shared memory to {} bytes", newSize);
         }
 
         // Allocator spans only what cards need, not entire shm
@@ -491,12 +491,12 @@ CardBufferManager::Stats CardBufferManagerImpl::getStats() const {
 }
 
 void CardBufferManagerImpl::dumpSubAllocations() const {
-    yinfo("=== CardBufferManager Sub-Allocations ({} entries, {}/{} bytes used) ===",
+    ydebug("=== CardBufferManager Sub-Allocations ({} entries, {}/{} bytes used) ===",
           _subAllocations.size(),
           _bufferAllocator.used(), _bufferAllocator.capacity());
 
     for (const auto& [key, handle] : _subAllocations) {
-        yinfo("  slot={:>4} scope={:<12} offset={:>8} size={:>8} ({:.2f} KB)",
+        ydebug("  slot={:>4} scope={:<12} offset={:>8} size={:>8} ({:.2f} KB)",
               key.first, key.second,
               handle.offset, handle.size, handle.size / 1024.0);
     }

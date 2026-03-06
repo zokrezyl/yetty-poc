@@ -282,7 +282,7 @@ Result<void> FrameRenderer::init(WGPUDevice device, WGPUTextureFormat format, Gp
     }
 
     initialized_ = true;
-    yinfo("FrameRenderer initialized");
+    ydebug("FrameRenderer initialized");
     return Ok();
 }
 
