@@ -163,6 +163,7 @@ private:
 
     // Command line options
     std::string _executeCommand;
+    std::string _textFile;
     std::string _msdfProviderName = "cpu";  // "cpu" or "gpu"
     std::string _telnetAddress;  // host:port for telnet mode
 
@@ -297,6 +298,12 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     if (!_executeCommand.empty()) {
         _yettyContext.config->setString("shell/command", _executeCommand);
         yinfo("Set shell/command in config: {}", _executeCommand);
+    }
+
+    // Set text inject file from --text flag
+    if (!_textFile.empty()) {
+        _yettyContext.config->setString("shell/text", _textFile);
+        yinfo("Set shell/text in config: {}", _textFile);
     }
 
     // Set telnet address if specified
@@ -761,6 +768,7 @@ Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
     args::Flag vncRawFlag(parser, "vnc-raw", "Force raw encoding (no JPEG compression) - client-side", {"vnc-raw"});
     args::ValueFlag<uint8_t> vncQualityFlag(parser, "QUALITY", "JPEG compression quality 1-100 (default 80) - client-side", {"vnc-compression-quality"}, 0);
     args::ValueFlag<std::string> vncTestFlag(parser, "PATTERN", "VNC test mode: text, color, scroll, stress", {"vnc-test"});
+    args::ValueFlag<std::string> textFlag(parser, "FILE", "Inject file contents directly into terminal (no shell)", {"text"});
 
     try {
         parser.ParseCLI(argc, argv);
@@ -843,6 +851,11 @@ Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
         _vncCompressionQuality = args::get(vncQualityFlag);
         if (_vncCompressionQuality > 100) _vncCompressionQuality = 100;
         yinfo("VNC compression quality set to {}", _vncCompressionQuality);
+    }
+
+    if (textFlag) {
+        _textFile = args::get(textFlag);
+        yinfo("Text inject mode: file={}", _textFile);
     }
 
     if (vncTestFlag) {
