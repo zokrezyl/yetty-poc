@@ -26,6 +26,7 @@ PROJECT_ROOT = SCRIPT_DIR.parent.parent.parent  # src/yetty/ydraw -> project roo
 YAML_PATH = SCRIPT_DIR / "ydraw-primitives.yaml"
 CPP_OUT = SCRIPT_DIR / "ydraw-types.gen.h"
 WGSL_OUT = PROJECT_ROOT / "src" / "yetty" / "shaders" / "lib" / "sdf-types.gen.wgsl"
+WGSL_OVERLAY_OUT = PROJECT_ROOT / "src" / "yetty" / "shaders" / "lib" / "sdf-overlay.gen.wgsl"
 WRITER_OUT = SCRIPT_DIR / "ydraw-prim-writer.gen.h"
 BUFFER_OUT = SCRIPT_DIR / "ydraw-buffer.gen.inc"
 
@@ -87,8 +88,8 @@ def load_primitives(path: Path) -> list[dict]:
 # Field substitution for WGSL eval blocks
 # =============================================================================
 
-def substitute_fields(eval_code: str, offset_map: dict) -> str:
-    """{fieldName} → cardStorage[primOffset + Nu] (with bitcast for u32)."""
+def substitute_fields(eval_code: str, offset_map: dict, buffer_name: str = "cardStorage") -> str:
+    """{fieldName} → bufferName[primOffset + Nu] (with bitcast for u32)."""
 
     def _repl(m):
         name = m.group(1)
@@ -96,8 +97,8 @@ def substitute_fields(eval_code: str, offset_map: dict) -> str:
             return m.group(0)
         offset, ftype = offset_map[name]
         if ftype == "u32":
-            return f"bitcast<u32>(cardStorage[primOffset + {offset}u])"
-        return f"cardStorage[primOffset + {offset}u]"
+            return f"bitcast<u32>({buffer_name}[primOffset + {offset}u])"
+        return f"{buffer_name}[primOffset + {offset}u]"
 
     return re.sub(r"\{(\w+)\}", _repl, eval_code)
 
@@ -146,6 +147,7 @@ def generate_cpp(primitives: list[dict], out: Path) -> None:
 # =============================================================================
 
 def generate_wgsl(primitives: list[dict], out: Path) -> None:
+    """Generate the main sdf-types.gen.wgsl with cardStorage functions only."""
     L = []
     L.append(HEADER)
 
@@ -154,7 +156,7 @@ def generate_wgsl(primitives: list[dict], out: Path) -> None:
         L.append(f"const {prim['_const_name']}: u32 = {prim['id']}u;")
     L.append("")
 
-    # --- evalSDF (2D) — compact layout dispatch ---
+    # --- evalSDF (2D) — cardStorage only ---
     sdf2d = [p for p in primitives if p["category"] == "sdf2d"]
     if sdf2d:
         L.append("fn evalSDF(primOffset: u32, p: vec2<f32>) -> f32 {")
@@ -165,7 +167,7 @@ def generate_wgsl(primitives: list[dict], out: Path) -> None:
             eval_code = prim.get("eval", "").strip()
             if not eval_code:
                 continue
-            substituted = substitute_fields(eval_code, prim["_offset_map"])
+            substituted = substitute_fields(eval_code, prim["_offset_map"], "cardStorage")
             L.append(f"        case {prim['_const_name']}: {{")
             for line in substituted.split("\n"):
                 L.append(f"            {line}")
@@ -176,7 +178,7 @@ def generate_wgsl(primitives: list[dict], out: Path) -> None:
         L.append("    }")
         L.append("}\n")
 
-    # --- evalSDF3D ---
+    # --- evalSDF3D --- cardStorage only
     sdf3d = [p for p in primitives if p["category"] == "sdf3d"]
     if sdf3d:
         L.append("fn evalSDF3D(primOffset: u32, p: vec3<f32>) -> f32 {")
@@ -187,7 +189,7 @@ def generate_wgsl(primitives: list[dict], out: Path) -> None:
             eval_code = prim.get("eval", "").strip()
             if not eval_code:
                 continue
-            substituted = substitute_fields(eval_code, prim["_offset_map"])
+            substituted = substitute_fields(eval_code, prim["_offset_map"], "cardStorage")
             L.append(f"        case {prim['_const_name']}: {{")
             for line in substituted.split("\n"):
                 L.append(f"            {line}")
@@ -196,15 +198,13 @@ def generate_wgsl(primitives: list[dict], out: Path) -> None:
         L.append("    }")
         L.append("}\n")
 
-    # --- primColors ---
-    # Include regular primitives with fillColor
+    # --- primColors --- cardStorage only
     renderable = [
         p for p in primitives
         if "fillColor" in p["_offset_map"]
         and "strokeColor" in p["_offset_map"]
         and "layer" in p["_offset_map"]
     ]
-    # Also include gradient primitives (use color1 as fillColor equivalent)
     gradient_prims = [
         p for p in primitives
         if "color1" in p["_offset_map"]
@@ -230,7 +230,6 @@ def generate_wgsl(primitives: list[dict], out: Path) -> None:
             L.append(f"        }}")
         for prim in gradient_prims:
             om = prim["_offset_map"]
-            # For gradients, use color1 as fill color (allows basic rendering)
             color1_off = om["color1"][0]
             stroke_off = om["strokeColor"][0]
             layer_off = om["layer"][0]
@@ -245,7 +244,7 @@ def generate_wgsl(primitives: list[dict], out: Path) -> None:
         L.append("    }")
         L.append("}\n")
 
-    # --- isGradientPrim ---
+    # --- isGradientPrim --- (no buffer dependency)
     if gradient_prims:
         L.append("fn isGradientPrim(primType: u32) -> bool {")
         L.append("    switch (primType) {")
@@ -255,8 +254,7 @@ def generate_wgsl(primitives: list[dict], out: Path) -> None:
         L.append("    }")
         L.append("}\n")
 
-    # --- evalGradientFillColor ---
-    # Computes gradient color for a given position
+    # --- evalGradientFillColor --- cardStorage only
     if gradient_prims:
         L.append("fn evalGradientFillColor(primOffset: u32, p: vec2<f32>) -> vec4<f32> {")
         L.append("    let primType = bitcast<u32>(cardStorage[primOffset + 0u]);")
@@ -299,7 +297,7 @@ def generate_wgsl(primitives: list[dict], out: Path) -> None:
         L.append("    }")
         L.append("}\n")
 
-    # --- primStrokeWidth ---
+    # --- primStrokeWidth --- cardStorage only
     has_stroke = [p for p in primitives if "strokeWidth" in p["_offset_map"]]
     if has_stroke:
         L.append("fn primStrokeWidth(primOffset: u32) -> f32 {")
@@ -308,6 +306,165 @@ def generate_wgsl(primitives: list[dict], out: Path) -> None:
         for prim in has_stroke:
             sw_off = prim["_offset_map"]["strokeWidth"][0]
             L.append(f"        case {prim['_const_name']}: {{ return cardStorage[primOffset + {sw_off}u]; }}")
+        L.append("        default: { return 0.0; }")
+        L.append("    }")
+        L.append("}")
+        L.append("")
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text("\n".join(L))
+
+
+def generate_wgsl_overlay(primitives: list[dict], out: Path) -> None:
+    """Generate sdf-overlay.gen.wgsl with overlayStorage functions (_overlay suffix).
+
+    This file is only included by gpu-screen.wgsl which has the overlayStorage binding.
+    """
+    L = []
+    L.append(HEADER)
+    L.append("// Overlay SDF functions reading from overlayStorage buffer.")
+    L.append("// Only include in shaders that define @group(1) @binding(17) overlayStorage.\n")
+
+    # --- evalSDF_overlay (2D) ---
+    sdf2d = [p for p in primitives if p["category"] == "sdf2d"]
+    if sdf2d:
+        L.append("fn evalSDF_overlay(primOffset: u32, p: vec2<f32>) -> f32 {")
+        L.append("    let primType = bitcast<u32>(overlayStorage[primOffset + 0u]);")
+        L.append("")
+        L.append("    switch (primType) {")
+        for prim in sdf2d:
+            eval_code = prim.get("eval", "").strip()
+            if not eval_code:
+                continue
+            substituted = substitute_fields(eval_code, prim["_offset_map"], "overlayStorage")
+            L.append(f"        case {prim['_const_name']}: {{")
+            for line in substituted.split("\n"):
+                L.append(f"            {line}")
+            L.append("        }")
+        L.append("        default: {")
+        L.append("            return 1e10;")
+        L.append("        }")
+        L.append("    }")
+        L.append("}\n")
+
+    # --- evalSDF3D_overlay ---
+    sdf3d = [p for p in primitives if p["category"] == "sdf3d"]
+    if sdf3d:
+        L.append("fn evalSDF3D_overlay(primOffset: u32, p: vec3<f32>) -> f32 {")
+        L.append("    let primType = bitcast<u32>(overlayStorage[primOffset + 0u]);")
+        L.append("")
+        L.append("    switch (primType) {")
+        for prim in sdf3d:
+            eval_code = prim.get("eval", "").strip()
+            if not eval_code:
+                continue
+            substituted = substitute_fields(eval_code, prim["_offset_map"], "overlayStorage")
+            L.append(f"        case {prim['_const_name']}: {{")
+            for line in substituted.split("\n"):
+                L.append(f"            {line}")
+            L.append("        }")
+        L.append("        default: { return 1e10; }")
+        L.append("    }")
+        L.append("}\n")
+
+    # --- primColors_overlay ---
+    renderable = [
+        p for p in primitives
+        if "fillColor" in p["_offset_map"]
+        and "strokeColor" in p["_offset_map"]
+        and "layer" in p["_offset_map"]
+    ]
+    gradient_prims = [
+        p for p in primitives
+        if "color1" in p["_offset_map"]
+        and "strokeColor" in p["_offset_map"]
+        and "layer" in p["_offset_map"]
+    ]
+    all_colorable = renderable + gradient_prims
+    if all_colorable:
+        L.append("fn primColors_overlay(primOffset: u32) -> vec4<u32> {")
+        L.append("    let primType = bitcast<u32>(overlayStorage[primOffset + 0u]);")
+        L.append("    switch (primType) {")
+        for prim in renderable:
+            om = prim["_offset_map"]
+            fill_off = om["fillColor"][0]
+            stroke_off = om["strokeColor"][0]
+            layer_off = om["layer"][0]
+            L.append(f"        case {prim['_const_name']}: {{")
+            L.append(f"            return vec4<u32>(")
+            L.append(f"                bitcast<u32>(overlayStorage[primOffset + {fill_off}u]),")
+            L.append(f"                bitcast<u32>(overlayStorage[primOffset + {stroke_off}u]),")
+            L.append(f"                bitcast<u32>(overlayStorage[primOffset + {layer_off}u]),")
+            L.append(f"                0u);")
+            L.append(f"        }}")
+        for prim in gradient_prims:
+            om = prim["_offset_map"]
+            color1_off = om["color1"][0]
+            stroke_off = om["strokeColor"][0]
+            layer_off = om["layer"][0]
+            L.append(f"        case {prim['_const_name']}: {{")
+            L.append(f"            return vec4<u32>(")
+            L.append(f"                bitcast<u32>(overlayStorage[primOffset + {color1_off}u]),")
+            L.append(f"                bitcast<u32>(overlayStorage[primOffset + {stroke_off}u]),")
+            L.append(f"                bitcast<u32>(overlayStorage[primOffset + {layer_off}u]),")
+            L.append(f"                1u);  // flag=1 indicates gradient type")
+            L.append(f"        }}")
+        L.append("        default: { return vec4<u32>(0u); }")
+        L.append("    }")
+        L.append("}\n")
+
+    # --- evalGradientFillColor_overlay ---
+    if gradient_prims:
+        L.append("fn evalGradientFillColor_overlay(primOffset: u32, p: vec2<f32>) -> vec4<f32> {")
+        L.append("    let primType = bitcast<u32>(overlayStorage[primOffset + 0u]);")
+        L.append("    switch (primType) {")
+        for prim in gradient_prims:
+            om = prim["_offset_map"]
+            name = prim["name"]
+            if "LinearGradient" in name:
+                gx1_off = om["gx1"][0]
+                gy1_off = om["gy1"][0]
+                gx2_off = om["gx2"][0]
+                gy2_off = om["gy2"][0]
+                c1_off = om["color1"][0]
+                c2_off = om["color2"][0]
+                L.append(f"        case {prim['_const_name']}: {{")
+                L.append(f"            let gStart = vec2<f32>(overlayStorage[primOffset + {gx1_off}u], overlayStorage[primOffset + {gy1_off}u]);")
+                L.append(f"            let gEnd = vec2<f32>(overlayStorage[primOffset + {gx2_off}u], overlayStorage[primOffset + {gy2_off}u]);")
+                L.append(f"            let gDir = gEnd - gStart;")
+                L.append(f"            let gLen = length(gDir);")
+                L.append(f"            let t = clamp(dot(p - gStart, gDir) / (gLen * gLen), 0.0, 1.0);")
+                L.append(f"            let c1 = unpack4x8unorm(bitcast<u32>(overlayStorage[primOffset + {c1_off}u]));")
+                L.append(f"            let c2 = unpack4x8unorm(bitcast<u32>(overlayStorage[primOffset + {c2_off}u]));")
+                L.append(f"            return mix(c1, c2, t);")
+                L.append(f"        }}")
+            elif "RadialGradient" in name:
+                gcx_off = om["gcx"][0]
+                gcy_off = om["gcy"][0]
+                gr_off = om["gr"][0]
+                c1_off = om["color1"][0]
+                c2_off = om["color2"][0]
+                L.append(f"        case {prim['_const_name']}: {{")
+                L.append(f"            let gCenter = vec2<f32>(overlayStorage[primOffset + {gcx_off}u], overlayStorage[primOffset + {gcy_off}u]);")
+                L.append(f"            let gRadius = overlayStorage[primOffset + {gr_off}u];")
+                L.append(f"            let t = clamp(length(p - gCenter) / gRadius, 0.0, 1.0);")
+                L.append(f"            let c1 = unpack4x8unorm(bitcast<u32>(overlayStorage[primOffset + {c1_off}u]));")
+                L.append(f"            let c2 = unpack4x8unorm(bitcast<u32>(overlayStorage[primOffset + {c2_off}u]));")
+                L.append(f"            return mix(c1, c2, t);")
+                L.append(f"        }}")
+        L.append("        default: { return vec4<f32>(0.0); }")
+        L.append("    }")
+        L.append("}\n")
+
+    # --- primStrokeWidth_overlay ---
+    has_stroke = [p for p in primitives if "strokeWidth" in p["_offset_map"]]
+    if has_stroke:
+        L.append("fn primStrokeWidth_overlay(primOffset: u32) -> f32 {")
+        L.append("    let primType = bitcast<u32>(overlayStorage[primOffset + 0u]);")
+        L.append("    switch (primType) {")
+        for prim in has_stroke:
+            sw_off = prim["_offset_map"]["strokeWidth"][0]
+            L.append(f"        case {prim['_const_name']}: {{ return overlayStorage[primOffset + {sw_off}u]; }}")
         L.append("        default: { return 0.0; }")
         L.append("    }")
         L.append("}")
@@ -615,6 +772,7 @@ def main() -> None:
 
     generate_cpp(primitives, CPP_OUT)
     generate_wgsl(primitives, WGSL_OUT)
+    generate_wgsl_overlay(primitives, WGSL_OVERLAY_OUT)
     generate_writer(primitives, WRITER_OUT)
     generate_buffer(primitives, BUFFER_OUT)
 
@@ -627,6 +785,7 @@ def main() -> None:
         print(f"  {cat}: {len(names)}")
     print(f"Generated {CPP_OUT.relative_to(PROJECT_ROOT)}")
     print(f"Generated {WGSL_OUT.relative_to(PROJECT_ROOT)}")
+    print(f"Generated {WGSL_OVERLAY_OUT.relative_to(PROJECT_ROOT)}")
     print(f"Generated {WRITER_OUT.relative_to(PROJECT_ROOT)}")
     print(f"Generated {BUFFER_OUT.relative_to(PROJECT_ROOT)}")
 

@@ -24,10 +24,8 @@
 
 namespace yetty {
 
-// GPU uniform buffer layout — must match OverlayUniforms in shader
+// GPU uniform buffer layout — must match OverlayUniforms in gpu-screen.wgsl
 struct ScreenDrawUniforms {
-    float screenWidth;
-    float screenHeight;
     float sceneMinX;
     float sceneMinY;
     float sceneMaxX;
@@ -39,7 +37,7 @@ struct ScreenDrawUniforms {
     uint32_t primCount;
     uint32_t glyphCount;
     float pixelRange;
-    float _pad;  // padding to maintain alignment
+    uint32_t hasOverlay;  // 1 if overlay present, 0 otherwise
 };
 
 //=============================================================================
@@ -59,6 +57,16 @@ public:
     Result<void> update(const std::string& args, const std::string& payload) override;
     Result<void> render(WGPURenderPassEncoder pass) override;
     bool hasContent() const override;
+
+    // Buffer accessors for integrated rendering
+    WGPUBuffer getGridBuffer() const override { return _gridBuffer; }
+    WGPUBuffer getGlyphBuffer() const override { return _glyphBuffer; }
+    WGPUBuffer getPrimBuffer() const override { return _primBuffer; }
+    WGPUBuffer getUniformBuffer() const override { return _uniformBuffer; }
+    uint32_t getGridBufferSize() const override { return _gridBufferSize; }
+    uint32_t getGlyphBufferSize() const override { return _glyphBufferSize; }
+    uint32_t getPrimBufferSize() const override { return _primBufferSize; }
+    void prepareForRender() override;
 
 private:
     Result<void> createPipeline();
@@ -439,8 +447,6 @@ void ScreenDrawLayerImpl::rebuildBuffers() {
 
     // Upload uniforms
     ScreenDrawUniforms uniforms{};
-    uniforms.screenWidth = static_cast<float>(_displayWidth);
-    uniforms.screenHeight = static_cast<float>(_displayHeight);
     uniforms.sceneMinX = _builder->sceneMinX();
     uniforms.sceneMinY = _builder->sceneMinY();
     uniforms.sceneMaxX = _builder->sceneMaxX();
@@ -451,6 +457,7 @@ void ScreenDrawLayerImpl::rebuildBuffers() {
     uniforms.cellSizeY = _builder->cellSizeY();
     uniforms.primCount = primCount;
     uniforms.glyphCount = static_cast<uint32_t>(glyphs.size());
+    uniforms.hasOverlay = 1;  // We have overlay content
 
     // Get pixel range from font atlas
     auto font = _ctx.fontManager->getDefaultMsMsdfFont();
@@ -650,6 +657,19 @@ Result<void> ScreenDrawLayerImpl::decompressLZ4(const uint8_t* src, size_t srcSi
 
 bool ScreenDrawLayerImpl::hasContent() const {
     return _buffer && !_buffer->empty();
+}
+
+void ScreenDrawLayerImpl::prepareForRender() {
+    if (!_buffer || _buffer->empty()) return;
+
+    // Recalculate spatial hash grid if dirty
+    if (_dirty) {
+        _builder->setSceneBounds(0, 0, static_cast<float>(_displayWidth),
+                                  static_cast<float>(_displayHeight));
+        _builder->calculate();
+        rebuildBuffers();
+        _dirty = false;
+    }
 }
 
 Result<void> ScreenDrawLayerImpl::render(WGPURenderPassEncoder pass) {

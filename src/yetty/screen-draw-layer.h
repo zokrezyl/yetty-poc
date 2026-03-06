@@ -38,11 +38,23 @@ public:
     // Update with binary payload (same format as ydraw card)
     virtual Result<void> update(const std::string& args, const std::string& payload) = 0;
 
-    // Render overlay — call after main scene render
+    // Render overlay — call after main scene render (legacy, now integrated into gpu-screen)
     virtual Result<void> render(WGPURenderPassEncoder pass) = 0;
 
     // Check if there's anything to render
     virtual bool hasContent() const = 0;
+
+    // Buffer accessors for integrated rendering in gpu-screen shader
+    virtual WGPUBuffer getGridBuffer() const = 0;
+    virtual WGPUBuffer getGlyphBuffer() const = 0;
+    virtual WGPUBuffer getPrimBuffer() const = 0;
+    virtual WGPUBuffer getUniformBuffer() const = 0;
+    virtual uint32_t getGridBufferSize() const = 0;
+    virtual uint32_t getGlyphBufferSize() const = 0;
+    virtual uint32_t getPrimBufferSize() const = 0;
+
+    // Prepare buffers for rendering (call before bind group creation)
+    virtual void prepareForRender() = 0;
 
 protected:
     ScreenDrawLayer() = default;
