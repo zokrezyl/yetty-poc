@@ -331,6 +331,11 @@ private:
     yinfo("MSDF font cache dir (prebuilt): {}", _cacheDir);
 #else
     const char *home = std::getenv("HOME");
+#ifdef _WIN32
+    if (!home) {
+      home = std::getenv("USERPROFILE");
+    }
+#endif
     if (!home) {
       return Err<void>("HOME environment variable not set");
     }
