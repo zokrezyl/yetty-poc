@@ -174,6 +174,26 @@ EOF
 )
 
 PAYLOAD=$(echo "$YAML_PAYLOAD" | base64 -w0)
+
+# Query cursor position (DSR - Device Status Report)
+get_cursor_pos() {
+    exec < /dev/tty
+    oldstty=$(stty -g)
+    stty raw -echo min 0
+    printf '\033[6n' > /dev/tty
+    result=""
+    while IFS= read -r -n1 -t1 char; do
+        result+="$char"
+        [[ "$char" == "R" ]] && break
+    done
+    stty "$oldstty"
+    echo "$result" | sed 's/\x1b\[//' | sed 's/R//'
+}
+
+echo "Cursor BEFORE ydraw: $(get_cursor_pos)"
+
 # INLINE positioning: no --row/--col, content appears at cursor and terminal scrolls
 printf '\033]666673;--yaml;%s\033\\' "$PAYLOAD"
+
+echo "Cursor AFTER ydraw: $(get_cursor_pos)"
 echo "Screen draw layer: curves and arcs demo (inline positioning)"

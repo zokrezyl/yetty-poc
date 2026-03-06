@@ -1309,6 +1309,7 @@ public:
         _primBounds.clear();
         _gridStaging.clear();
         _glyphs.clear();
+        _scrollLines = 0;  // Reset scroll when recalculating
 
         // Step 0: Ingest buffer metadata — fonts, text spans, scene bounds
         // The buffer may carry font blobs and text spans (e.g. from PDF renderer).
@@ -1662,6 +1663,110 @@ public:
         _bufferDirty = true;
     }
 
+    void scroll(int32_t num_lines) override {
+        // Early exit if nothing changed or no data
+        if (num_lines == _scrollLines) return;
+        if (_primBounds.empty() && _glyphs.empty()) return;
+        if (_gridWidth == 0 || _gridHeight == 0) return;
+
+        _scrollLines = num_lines;
+        float scrollOffsetY = static_cast<float>(num_lines) * _cellSizeY;
+
+        // Rebuild grid with scroll offset (reuse stored AABBs)
+        uint32_t gridW = _gridWidth;
+        uint32_t gridH = _gridHeight;
+        float csX = _cellSizeX;
+        float csY = _cellSizeY;
+        uint32_t numCells = gridW * gridH;
+
+        // Pass 1: count entries per cell (with scroll offset applied)
+        std::vector<uint32_t> cellCounts(numCells, 0);
+
+        for (const auto& pb : _primBounds) {
+            bool is3D = (pb.type >= 100 && pb.type < 128);
+            if (is3D) continue;
+            // Apply scroll offset to Y coordinates
+            float minY = pb.minY - scrollOffsetY;
+            float maxY = pb.maxY - scrollOffsetY;
+            // Skip primitives completely outside the visible scene
+            if (maxY < _sceneMinY || minY > _sceneMaxY) continue;
+            uint32_t cMinX = static_cast<uint32_t>(std::clamp((pb.minX - _sceneMinX) / csX, 0.0f, float(gridW - 1)));
+            uint32_t cMaxX = static_cast<uint32_t>(std::clamp((pb.maxX - _sceneMinX) / csX, 0.0f, float(gridW - 1)));
+            uint32_t cMinY = static_cast<uint32_t>(std::clamp((minY - _sceneMinY) / csY, 0.0f, float(gridH - 1)));
+            uint32_t cMaxY = static_cast<uint32_t>(std::clamp((maxY - _sceneMinY) / csY, 0.0f, float(gridH - 1)));
+            for (uint32_t cy = cMinY; cy <= cMaxY; cy++)
+                for (uint32_t cx = cMinX; cx <= cMaxX; cx++)
+                    cellCounts[cy * gridW + cx]++;
+        }
+        for (const auto& g : _glyphs) {
+            float minY = g.y - scrollOffsetY;
+            float maxY = g.y + g.height() - scrollOffsetY;
+            if (maxY < _sceneMinY || minY > _sceneMaxY) continue;
+            uint32_t cMinX = static_cast<uint32_t>(std::clamp((g.x - _sceneMinX) / csX, 0.0f, float(gridW - 1)));
+            uint32_t cMaxX = static_cast<uint32_t>(std::clamp((g.x + g.width() - _sceneMinX) / csX, 0.0f, float(gridW - 1)));
+            uint32_t cMinY = static_cast<uint32_t>(std::clamp((minY - _sceneMinY) / csY, 0.0f, float(gridH - 1)));
+            uint32_t cMaxY = static_cast<uint32_t>(std::clamp((maxY - _sceneMinY) / csY, 0.0f, float(gridH - 1)));
+            for (uint32_t cy = cMinY; cy <= cMaxY; cy++)
+                for (uint32_t cx = cMinX; cx <= cMaxX; cx++)
+                    cellCounts[cy * gridW + cx]++;
+        }
+
+        // Compute offsets (prefix sum)
+        uint32_t pos = numCells;
+        _gridStaging.resize(numCells);
+        for (uint32_t i = 0; i < numCells; i++) {
+            _gridStaging[i] = pos;
+            pos += 1 + cellCounts[i];
+        }
+        _gridStaging.resize(pos, 0);
+
+        for (uint32_t i = 0; i < numCells; i++) {
+            _gridStaging[_gridStaging[i]] = 0;
+        }
+
+        // Pass 2: fill entries (with scroll offset)
+        for (uint32_t primIdx = 0; primIdx < static_cast<uint32_t>(_primBounds.size()); primIdx++) {
+            const auto& pb = _primBounds[primIdx];
+            bool is3D = (pb.type >= 100 && pb.type < 128);
+            if (is3D) continue;
+            float minY = pb.minY - scrollOffsetY;
+            float maxY = pb.maxY - scrollOffsetY;
+            if (maxY < _sceneMinY || minY > _sceneMaxY) continue;
+            uint32_t cMinX = static_cast<uint32_t>(std::clamp((pb.minX - _sceneMinX) / csX, 0.0f, float(gridW - 1)));
+            uint32_t cMaxX = static_cast<uint32_t>(std::clamp((pb.maxX - _sceneMinX) / csX, 0.0f, float(gridW - 1)));
+            uint32_t cMinY = static_cast<uint32_t>(std::clamp((minY - _sceneMinY) / csY, 0.0f, float(gridH - 1)));
+            uint32_t cMaxY = static_cast<uint32_t>(std::clamp((maxY - _sceneMinY) / csY, 0.0f, float(gridH - 1)));
+            for (uint32_t cy = cMinY; cy <= cMaxY; cy++) {
+                for (uint32_t cx = cMinX; cx <= cMaxX; cx++) {
+                    uint32_t off = _gridStaging[cy * gridW + cx];
+                    uint32_t cnt = _gridStaging[off];
+                    _gridStaging[off + 1 + cnt] = primIdx;
+                    _gridStaging[off] = cnt + 1;
+                }
+            }
+        }
+        for (uint32_t gi = 0; gi < static_cast<uint32_t>(_glyphs.size()); gi++) {
+            const auto& g = _glyphs[gi];
+            float minY = g.y - scrollOffsetY;
+            float maxY = g.y + g.height() - scrollOffsetY;
+            if (maxY < _sceneMinY || minY > _sceneMaxY) continue;
+            uint32_t cMinX = static_cast<uint32_t>(std::clamp((g.x - _sceneMinX) / csX, 0.0f, float(gridW - 1)));
+            uint32_t cMaxX = static_cast<uint32_t>(std::clamp((g.x + g.width() - _sceneMinX) / csX, 0.0f, float(gridW - 1)));
+            uint32_t cMinY = static_cast<uint32_t>(std::clamp((minY - _sceneMinY) / csY, 0.0f, float(gridH - 1)));
+            uint32_t cMaxY = static_cast<uint32_t>(std::clamp((maxY - _sceneMinY) / csY, 0.0f, float(gridH - 1)));
+            for (uint32_t cy = cMinY; cy <= cMaxY; cy++) {
+                for (uint32_t cx = cMinX; cx <= cMaxX; cx++) {
+                    uint32_t off = _gridStaging[cy * gridW + cx];
+                    uint32_t cnt = _gridStaging[off];
+                    _gridStaging[off + 1 + cnt] = gi | GLYPH_BIT;
+                    _gridStaging[off] = cnt + 1;
+                }
+            }
+        }
+
+        _bufferDirty = true;
+    }
+
 private:
     //=========================================================================
     // GPU helpers
@@ -1855,6 +1960,7 @@ private:
     float _cellSizeX = DEFAULT_CELL_SIZE;
     float _cellSizeY = DEFAULT_CELL_SIZE;
     uint32_t _maxPrimsPerCell = DEFAULT_MAX_PRIMS_PER_CELL;
+    int32_t _scrollLines = 0;  // Scroll offset in terminal lines (for overlay scroll sync)
 
     // Appearance
     uint32_t _bgColor = 0xFF2E1A1A;

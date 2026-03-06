@@ -61,6 +61,7 @@ public:
     void clear() override;
     Result<void> update(const std::string& args, const std::string& payload) override;
     void setOriginOffset(float x, float y) override;
+    void scroll(int32_t num_lines) override;
     void getContentBounds(float& minX, float& minY, float& maxX, float& maxY) const override;
     uint32_t getContentHeightCells() const override;
     Result<void> render(WGPURenderPassEncoder pass) override;
@@ -83,6 +84,11 @@ private:
     Result<void> parseBinary(const std::string& payload);
     Result<void> decompressLZ4(const uint8_t* src, size_t srcSize, std::vector<uint8_t>& dst);
 
+    // Per-row grid management for scroll support
+    void extractRowsFromGrid();   // Extract builder's grid into per-row format
+    void buildGridFromRows();     // Build flat grid from per-row data
+    void shiftRows(int32_t lines); // Shift rows for scrolling
+
     const YettyContext& _ctx;
 
     // Display
@@ -99,6 +105,14 @@ private:
     YDrawBuffer::Ptr _buffer;
     YDrawBuilder::Ptr _builder;
     bool _dirty = false;
+
+    // Per-row grid storage for scroll support
+    // _rowEntries[row][col] = vector of primitive/glyph indices for that cell
+    std::vector<std::vector<std::vector<uint32_t>>> _rowEntries;
+    std::vector<uint32_t> _scrollableGrid;  // Flat grid built from _rowEntries
+    uint32_t _gridWidth = 0;
+    uint32_t _gridHeight = 0;
+    bool _rowsInitialized = false;  // True after extractRowsFromGrid() called
 
     // GPU resources
     WGPURenderPipeline _pipeline = nullptr;
@@ -378,7 +392,6 @@ void ScreenDrawLayerImpl::rebuildBuffers() {
     auto queue = _ctx.gpu.queue;
 
     // Get computed data from builder
-    const auto& gridStaging = _builder->gridStaging();
     const auto& glyphs = _builder->glyphs();
     uint32_t primCount = _builder->primitiveCount();
 
@@ -391,10 +404,18 @@ void ScreenDrawLayerImpl::rebuildBuffers() {
         _buffer->writeGPU(primData.data(), primBytes, primWordOffsets);
     }
 
-    // Translate grid prim indices to word offsets
-    std::vector<uint32_t> gridData = gridStaging;  // copy
-    uint32_t gridWidth = _builder->gridWidth();
-    uint32_t gridHeight = _builder->gridHeight();
+    // Use scrollable grid if initialized, otherwise fall back to builder's grid
+    std::vector<uint32_t> gridData;
+    uint32_t gridWidth, gridHeight;
+    if (_rowsInitialized && !_scrollableGrid.empty()) {
+        gridData = _scrollableGrid;
+        gridWidth = _gridWidth;
+        gridHeight = static_cast<uint32_t>(_rowEntries.size());
+    } else {
+        gridData = _builder->gridStaging();
+        gridWidth = _builder->gridWidth();
+        gridHeight = _builder->gridHeight();
+    }
     uint32_t numCells = gridWidth * gridHeight;
     if (!primWordOffsets.empty() && numCells <= gridData.size()) {
         for (uint32_t ci = 0; ci < numCells; ci++) {
@@ -463,8 +484,8 @@ void ScreenDrawLayerImpl::rebuildBuffers() {
     uniforms.sceneMinY = _builder->sceneMinY();
     uniforms.sceneMaxX = _builder->sceneMaxX();
     uniforms.sceneMaxY = _builder->sceneMaxY();
-    uniforms.gridWidth = _builder->gridWidth();
-    uniforms.gridHeight = _builder->gridHeight();
+    uniforms.gridWidth = gridWidth;   // Use local computed value
+    uniforms.gridHeight = gridHeight; // Use local computed value
     uniforms.cellSizeX = _builder->cellSizeX();
     uniforms.cellSizeY = _builder->cellSizeY();
     uniforms.primCount = primCount;
@@ -561,6 +582,10 @@ void ScreenDrawLayerImpl::clear() {
         _buffer->clear();
         _dirty = true;
     }
+    // Reset scroll state
+    _rowEntries.clear();
+    _scrollableGrid.clear();
+    _rowsInitialized = false;
 }
 
 Result<void> ScreenDrawLayerImpl::update(const std::string& args, const std::string& payload) {
@@ -590,7 +615,15 @@ Result<void> ScreenDrawLayerImpl::update(const std::string& args, const std::str
         }
     }
 
-    _dirty = true;
+    // Calculate immediately so scene bounds are available for getContentHeightCells()
+    if (_builder) {
+        _builder->calculate();
+        // Extract grid into per-row format for scroll support
+        extractRowsFromGrid();
+        buildGridFromRows();
+    }
+
+    _dirty = true;  // Still mark dirty for buffer rebuild in prepareForRender
     ydebug("ScreenDrawLayer::update: {} prims, {} text spans",
            _buffer->primCount(), _buffer->textSpanCount());
     return Ok();
@@ -599,7 +632,139 @@ Result<void> ScreenDrawLayerImpl::update(const std::string& args, const std::str
 void ScreenDrawLayerImpl::setOriginOffset(float x, float y) {
     _originOffsetX = x;
     _originOffsetY = y;
-    _dirty = true;  // Need to recalculate grid with new offset
+    // Note: Don't set _dirty here - offset is just a uniform, not a grid change
+}
+
+void ScreenDrawLayerImpl::scroll(int32_t num_lines) {
+    if (num_lines == 0) return;
+
+    // Scroll = adjust Y offset by lines * cellHeight
+    // Positive num_lines = content moves UP = offsetY DECREASES
+    // (scenePos = pixelPos - offset, so smaller offset = higher scenePos = content moves up)
+    _originOffsetY -= static_cast<float>(num_lines) * _cellHeight;
+    _dirty = true;  // Need to re-upload uniforms
+}
+
+void ScreenDrawLayerImpl::extractRowsFromGrid() {
+    if (!_builder) return;
+
+    const auto& gridData = _builder->gridStaging();
+    uint32_t gridW = _builder->gridWidth();
+    uint32_t gridH = _builder->gridHeight();
+
+    if (gridData.empty() || gridW == 0 || gridH == 0) {
+        _rowEntries.clear();
+        _rowsInitialized = false;
+        return;
+    }
+
+    _gridWidth = gridW;
+    _gridHeight = gridH;
+
+    // Resize to [gridH][gridW]
+    _rowEntries.resize(gridH);
+    for (uint32_t row = 0; row < gridH; row++) {
+        _rowEntries[row].resize(gridW);
+        for (uint32_t col = 0; col < gridW; col++) {
+            _rowEntries[row][col].clear();
+        }
+    }
+
+    // Extract entries from builder's grid
+    uint32_t numCells = gridW * gridH;
+    for (uint32_t row = 0; row < gridH; row++) {
+        for (uint32_t col = 0; col < gridW; col++) {
+            uint32_t cellIdx = row * gridW + col;
+            if (cellIdx >= numCells) continue;
+
+            uint32_t offset = gridData[cellIdx];
+            if (offset >= gridData.size()) continue;
+
+            uint32_t count = gridData[offset];
+            for (uint32_t i = 0; i < count; i++) {
+                uint32_t entryIdx = offset + 1 + i;
+                if (entryIdx >= gridData.size()) break;
+                _rowEntries[row][col].push_back(gridData[entryIdx]);
+            }
+        }
+    }
+
+    _rowsInitialized = true;
+    yinfo("extractRowsFromGrid: {}x{} grid extracted", gridW, gridH);
+}
+
+void ScreenDrawLayerImpl::buildGridFromRows() {
+    if (!_rowsInitialized || _rowEntries.empty()) {
+        _scrollableGrid.clear();
+        return;
+    }
+
+    uint32_t gridW = _gridWidth;
+    uint32_t gridH = static_cast<uint32_t>(_rowEntries.size());
+    uint32_t numCells = gridW * gridH;
+
+    // Pass 1: count entries per cell
+    std::vector<uint32_t> cellCounts(numCells, 0);
+    for (uint32_t row = 0; row < gridH; row++) {
+        for (uint32_t col = 0; col < gridW && col < _rowEntries[row].size(); col++) {
+            cellCounts[row * gridW + col] = static_cast<uint32_t>(_rowEntries[row][col].size());
+        }
+    }
+
+    // Compute offsets (prefix sum)
+    uint32_t pos = numCells;
+    _scrollableGrid.resize(numCells);
+    for (uint32_t i = 0; i < numCells; i++) {
+        _scrollableGrid[i] = pos;
+        pos += 1 + cellCounts[i];  // +1 for count field
+    }
+    _scrollableGrid.resize(pos, 0);
+
+    // Initialize count fields to 0
+    for (uint32_t i = 0; i < numCells; i++) {
+        _scrollableGrid[_scrollableGrid[i]] = 0;
+    }
+
+    // Pass 2: fill entries
+    for (uint32_t row = 0; row < gridH; row++) {
+        for (uint32_t col = 0; col < gridW && col < _rowEntries[row].size(); col++) {
+            uint32_t cellIdx = row * gridW + col;
+            uint32_t off = _scrollableGrid[cellIdx];
+            for (uint32_t primIdx : _rowEntries[row][col]) {
+                uint32_t cnt = _scrollableGrid[off];
+                _scrollableGrid[off + 1 + cnt] = primIdx;
+                _scrollableGrid[off] = cnt + 1;
+            }
+        }
+    }
+}
+
+void ScreenDrawLayerImpl::shiftRows(int32_t lines) {
+    if (lines == 0 || _rowEntries.empty()) return;
+
+    uint32_t gridW = _gridWidth;
+
+    if (lines > 0) {
+        // Scroll up: drop top rows, add empty rows at bottom
+        uint32_t drop = std::min(static_cast<uint32_t>(lines), static_cast<uint32_t>(_rowEntries.size()));
+        _rowEntries.erase(_rowEntries.begin(), _rowEntries.begin() + drop);
+
+        // Add empty rows at bottom
+        for (uint32_t i = 0; i < drop; i++) {
+            _rowEntries.emplace_back(gridW);  // Empty row with gridW empty cells
+        }
+    } else {
+        // Scroll down: drop bottom rows, add empty rows at top
+        uint32_t drop = std::min(static_cast<uint32_t>(-lines), static_cast<uint32_t>(_rowEntries.size()));
+        _rowEntries.erase(_rowEntries.end() - drop, _rowEntries.end());
+
+        // Add empty rows at top
+        for (uint32_t i = 0; i < drop; i++) {
+            _rowEntries.insert(_rowEntries.begin(), std::vector<std::vector<uint32_t>>(gridW));
+        }
+    }
+
+    yinfo("shiftRows: shifted by {} lines, now {} rows", lines, _rowEntries.size());
 }
 
 void ScreenDrawLayerImpl::getContentBounds(float& minX, float& minY, float& maxX, float& maxY) const {
@@ -614,8 +779,9 @@ void ScreenDrawLayerImpl::getContentBounds(float& minX, float& minY, float& maxX
 }
 
 uint32_t ScreenDrawLayerImpl::getContentHeightCells() const {
-    if (!_buffer || _cellHeight <= 0.0f) return 0;
-    float height = _buffer->sceneMaxY() - _buffer->sceneMinY();
+    if (!_builder || _cellHeight <= 0.0f) return 0;
+    // Use builder's calculated scene bounds (set by calculate())
+    float height = _builder->sceneMaxY() - _builder->sceneMinY();
     return static_cast<uint32_t>(std::ceil(height / _cellHeight));
 }
 

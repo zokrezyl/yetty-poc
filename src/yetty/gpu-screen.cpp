@@ -504,6 +504,8 @@ private:
 
   // Screen draw layer (pixel-coordinate ydraw overlay)
   ScreenDrawLayer::Ptr _screenDrawLayer;
+  // Inline ydraw anchor tracking (for scroll sync)
+  bool _ydrawIsInline = false;              // True if ydraw uses inline positioning (scroll sync)
 
   // Rendering - GPU resources (shared resources come from ShaderManager)
   YettyContext _ctx;
@@ -2803,6 +2805,19 @@ int GPUScreenImpl::onScrollRect(VTermRect rect, int downward, int rightward,
     }
   }
 
+  // Sync ydraw overlay with terminal scroll
+  if (self->_screenDrawLayer && self->_screenDrawLayer->hasContent() && self->_ydrawIsInline) {
+    if (downward > 0) {
+      // Content moves up - ydraw moves up too
+      self->_screenDrawLayer->scroll(downward);
+      self->_needsBindGroupRecreation = true;
+    } else if (downward < 0) {
+      // Content moves down - ydraw moves down too
+      self->_screenDrawLayer->scroll(downward);
+      self->_needsBindGroupRecreation = true;
+    }
+  }
+
   // Return 0 to let vterm handle the actual scroll via moverect/erase callbacks
   return 0;
 }
@@ -3250,6 +3265,7 @@ int GPUScreenImpl::onOSC(int command, VTermStringFragment frag, void *user) {
         if (args.find("--clear") != std::string::npos) {
           self->_screenDrawLayer->clear();
           self->_screenDrawLayer->setOriginOffset(0.0f, 0.0f);
+          self->_ydrawIsInline = false;
           self->_needsBindGroupRecreation = true;
         } else if (!payload.empty()) {
           // Check for explicit position args: --row=N --col=N
@@ -3271,11 +3287,14 @@ int GPUScreenImpl::onOSC(int command, VTermStringFragment frag, void *user) {
             }
           }
 
-          // Inline mode: position at current cursor and scroll
+          // Inline mode: position at current cursor and enable scroll sync
           if (!hasExplicitPosition) {
-            // Get current cursor position
+            self->_ydrawIsInline = true;
             offsetX = static_cast<float>(self->_cursorCol) * self->getCellWidthF();
             offsetY = static_cast<float>(self->_cursorRow) * self->getCellHeightF();
+          } else {
+            // Explicit positioning - no scroll sync
+            self->_ydrawIsInline = false;
           }
 
           // Set the origin offset
@@ -3711,6 +3730,7 @@ bool GPUScreenImpl::handleOSCSequence(const std::string &sequence,
         if (args.find("--clear") != std::string::npos) {
           _screenDrawLayer->clear();
           _screenDrawLayer->setOriginOffset(0.0f, 0.0f);
+          _ydrawIsInline = false;
           _needsBindGroupRecreation = true;
         } else if (!payloadDecoded.empty()) {
           // Check for explicit position args: --row=N --col=N
@@ -3732,11 +3752,14 @@ bool GPUScreenImpl::handleOSCSequence(const std::string &sequence,
             }
           }
 
-          // Inline mode: position at current cursor and scroll
+          // Inline mode: position at current cursor and enable scroll sync
           if (!hasExplicitPosition) {
-            // Get current cursor position
+            _ydrawIsInline = true;
             offsetX = static_cast<float>(_cursorCol) * getCellWidthF();
             offsetY = static_cast<float>(_cursorRow) * getCellHeightF();
+          } else {
+            // Explicit positioning - no scroll sync
+            _ydrawIsInline = false;
           }
 
           // Set the origin offset
@@ -5506,6 +5529,7 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
     // Overlay bindings (15-18)
     // Prepare overlay buffers if available, otherwise use fallback
     if (_screenDrawLayer && _screenDrawLayer->hasContent()) {
+        // Ensure buffers are uploaded to GPU before binding
         _screenDrawLayer->prepareForRender();
 
         bgEntries[15].binding = 15;

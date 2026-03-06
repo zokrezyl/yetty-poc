@@ -41,6 +41,10 @@ public:
     // Set pixel origin offset (for inline positioning at cursor)
     virtual void setOriginOffset(float x, float y) = 0;
 
+    // Scroll overlay by terminal lines (efficient - only rebuilds grid, not AABBs)
+    // num_lines: number of terminal lines scrolled (positive = content moves up)
+    virtual void scroll(int32_t num_lines) = 0;
+
     // Get content bounding box in pixels (after update)
     virtual void getContentBounds(float& minX, float& minY, float& maxX, float& maxY) const = 0;
 

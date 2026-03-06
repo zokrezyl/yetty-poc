@@ -248,6 +248,11 @@ public:
     // Call after all primitives/glyphs have been added.
     virtual void calculate() = 0;
 
+    // Efficiently rebuild grid with Y offset (for terminal scroll sync).
+    // Does NOT recalculate AABBs - only re-bins primitives into cells.
+    // num_lines: number of terminal lines to scroll (positive = content moves up)
+    virtual void scroll(int32_t num_lines) = 0;
+
     // Scene bounds (set explicitly or computed by calculate())
     virtual float sceneMinX() const = 0;
     virtual float sceneMinY() const = 0;
