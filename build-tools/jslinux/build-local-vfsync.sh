@@ -1,6 +1,6 @@
 #!/bin/bash
 # Build local files for JSLinux VM import
-# Creates jslinux/local-files/ with demo scripts and a manifest
+# Creates jslinux/local-files/ with vm-tools, demo scripts and manifest
 # Files are imported via fs_import_file after VM boots
 set -e
 
@@ -29,10 +29,34 @@ mkdir -p "$OUTPUT_DIR"
 # Temporary manifest file
 MANIFEST_TMP=$(mktemp)
 
+# Collect vm-tools binaries (ycat, yecho, ybrowser)
+echo "=== Collecting vm-tools binaries ==="
+if [ -d "$BUILD_DIR/vm-tools" ]; then
+    mkdir -p "$OUTPUT_DIR/bin"
+    for tool in ycat yecho ybrowser; do
+        if [ -f "$BUILD_DIR/vm-tools/$tool" ]; then
+            cp "$BUILD_DIR/vm-tools/$tool" "$OUTPUT_DIR/bin/"
+            echo "bin/$tool" >> "$MANIFEST_TMP"
+            size=$(du -h "$BUILD_DIR/vm-tools/$tool" | cut -f1)
+            echo "  bin/$tool ($size)"
+        fi
+    done
+    # magic.mgc for file type detection
+    if [ -f "$BUILD_DIR/vm-tools/magic.mgc" ]; then
+        mkdir -p "$OUTPUT_DIR/share"
+        cp "$BUILD_DIR/vm-tools/magic.mgc" "$OUTPUT_DIR/share/"
+        echo "share/magic.mgc" >> "$MANIFEST_TMP"
+        echo "  share/magic.mgc"
+    fi
+else
+    echo "WARNING: vm-tools not found at $BUILD_DIR/vm-tools"
+    echo "Run 'make build-webasm-dawn-release' first"
+fi
+
 # Collect demo scripts (shell scripts and .txt files only)
+echo ""
 echo "=== Collecting demo scripts ==="
 if [ -d "$YETTY_ROOT/demo" ]; then
-    # Only collect demo scripts and relevant files, skip build artifacts
     while IFS= read -r -d '' file; do
         # Skip build directories
         case "$file" in
@@ -40,9 +64,7 @@ if [ -d "$YETTY_ROOT/demo" ]; then
             */CMakeFiles/*) continue ;;
             *CMakeCache*) continue ;;
         esac
-        # Get relative path from demo/
         relpath="${file#$YETTY_ROOT/demo/}"
-        # Create target directory
         target_dir="$OUTPUT_DIR/demo/$(dirname "$relpath")"
         mkdir -p "$target_dir"
         cp "$file" "$target_dir/"
@@ -64,16 +86,14 @@ if [ -d "$YETTY_ROOT/tools" ]; then
     done < <(find "$YETTY_ROOT/tools" -maxdepth 1 -type f \( -name "*.sh" -o -name "*.py" \) -print0)
 fi
 
-# Create manifest JSON with proper formatting
+# Create manifest JSON
 echo ""
 echo "=== Creating manifest ==="
 {
     echo "{"
     echo "  \"version\": 1,"
     echo "  \"base_url\": \"local-files/\","
-    echo "  \"import_dir\": \"/tmp/yetty\","
     echo "  \"files\": ["
-    # Add files with proper JSON formatting
     first=true
     while IFS= read -r file; do
         if [ "$first" = true ]; then
@@ -89,12 +109,11 @@ echo "=== Creating manifest ==="
 
 rm -f "$MANIFEST_TMP"
 
-# Count files
 FILE_COUNT=$(grep -c '"' "$OUTPUT_DIR/manifest.json" 2>/dev/null || echo 0)
 echo "Created manifest with $((FILE_COUNT/2)) files"
 
-# Create a filelist.txt for CMake dependency tracking
-find "$OUTPUT_DIR" -type f -name "*.sh" -o -name "*.py" -o -name "*.txt" > "$OUTPUT_DIR/filelist.txt"
+# Create filelist for CMake dependency tracking
+find "$OUTPUT_DIR" -type f > "$OUTPUT_DIR/filelist.txt"
 
 echo ""
 echo "=== Done! ==="
