@@ -9,14 +9,10 @@
 #if YETTY_WEB
 #include <yetty/platform.h>
 #include <yetty/pty-provider.h>
-#include <yetty/pty-reader.h>
-#include "telnet/telnet-pty-reader.h"
 #else
 #include <yetty/osc-scanner.h>
 #include <yetty/pty-reader.h>
-#ifndef _WIN32
 #include "telnet/telnet-pty-reader.h"
-#endif
 #endif
 
 namespace yetty {
@@ -29,28 +25,24 @@ public:
     ~TerminalImpl() override = default;
 
     Result<void> init() {
-        ydebug("Terminal::init() start");
+        yinfo("Terminal::init() start");
         auto screenResult = GPUScreen::create(_ctx);
         if (!screenResult) {
             yerror("Terminal::init() GPUScreen::create FAILED");
             return Err<void>("Failed to create GPUScreen", screenResult);
         }
-        ydebug("Terminal::init() GPUScreen created");
+        yinfo("Terminal::init() GPUScreen created");
         _gpuScreen = *screenResult;
 
 #if YETTY_WEB
-        // Webasm: GPUScreen callbacks write to PTYProvider or PtyReader (for telnet)
+        // Webasm: GPUScreen callbacks write to PTYProvider
         _gpuScreen->setOutputCallback([this](const char* data, size_t len) {
-            if (_ptyReader) {
-                _ptyReader->write(data, len);
-            } else if (_pty) {
+            if (_pty) {
                 _pty->write(data, len);
             }
         });
         _gpuScreen->setResizeCallback([this](uint32_t cols, uint32_t rows) {
-            if (_ptyReader) {
-                _ptyReader->resize(cols, rows);
-            } else if (_pty) {
+            if (_pty) {
                 _pty->resize(cols, rows);
             }
         });
@@ -71,7 +63,7 @@ public:
         // PTY start is deferred to first setViewport() call so we have correct size
         // (GPUScreen cols/rows are 0 until first resize)
 
-        ydebug("Terminal created with GPUScreen");
+        yinfo("Terminal created with GPUScreen");
         return Ok();
     }
 
@@ -144,8 +136,6 @@ public:
 #if YETTY_WEB
             if (_pty) {
                 _pty->resize(_gpuScreen->getCols(), _gpuScreen->getRows());
-            } else if (_ptyReader) {
-                _ptyReader->resize(_gpuScreen->getCols(), _gpuScreen->getRows());
             }
 #else
             if (_ptyReader) {
@@ -180,53 +170,10 @@ private:
         uint32_t rows = (_gpuScreen && _gpuScreen->getRows() > 0) ? _gpuScreen->getRows() : 24;
 
 #if YETTY_WEB
-        // Check for telnet mode first (works on web via WebSocket)
-        std::string telnetAddress;
-        if (_ctx.config) {
-            auto telnetOpt = _ctx.config->get<std::string>("shell/telnet");
-            if (telnetOpt && !telnetOpt->empty()) {
-                telnetAddress = *telnetOpt;
-            }
-        }
-
-        if (!telnetAddress.empty()) {
-            // Telnet mode: connect to telnet server via WebSocket
-            ydebug("Terminal: using telnet connection to {}", telnetAddress);
-
-            PtyConfig config;
-            config.shell = telnetAddress;  // ws://host:port format
-            config.cols = cols;
-            config.rows = rows;
-
-            auto reader = std::make_shared<telnet::TelnetPtyReader>();
-            if (auto res = reader->init(config); !res) {
-                return Err<void>("Failed to initialize TelnetPtyReader", res);
-            }
-            _ptyReader = reader;
-
-            // Set up data callback
-            _ptyReader->setDataAvailableCallback([this]() {
-                char buf[4096];
-                size_t n = _ptyReader->read(buf, sizeof(buf));
-                if (n > 0 && _gpuScreen) {
-                    processPtyData(buf, n);
-                }
-            });
-
-            _ptyReader->setExitCallback([this](int exitCode) {
-                ydebug("Telnet exited with code {}", exitCode);
-                _running = false;
-            });
-
-            _running = true;
-            yinfo("Terminal started telnet: {} ({}x{})", telnetAddress, cols, rows);
-            return Ok();
-        }
-
         // Webasm: Use Platform::createPTY() which creates WebPTY with JSLinux iframe
         const char* vmConfigEnv = getenv("YETTY_VM_CONFIG");
         std::string vmConfig = vmConfigEnv ? vmConfigEnv : "alpine-x86_64.cfg";
-        ydebug("Terminal: using VM config: {}", vmConfig);
+        yinfo("Terminal: using VM config: {}", vmConfig);
 
         // Get platform to create PTY
         auto platformResult = Platform::create();
@@ -250,7 +197,7 @@ private:
         });
 
         _pty->setExitCallback([this](int exitCode) {
-            ydebug("PTY exited with code {}", exitCode);
+            yinfo("PTY exited with code {}", exitCode);
             _running = false;
         });
 
@@ -263,8 +210,7 @@ private:
         yinfo("Terminal started WebPTY: {} ({}x{})", vmConfig, cols, rows);
         return Ok();
 #else
-#ifndef _WIN32
-        // Check for telnet mode (--telnet flag) - Unix only
+        // Check for telnet mode (--telnet flag)
         std::string telnetAddress;
         if (_ctx.config) {
             auto telnetOpt = _ctx.config->get<std::string>("shell/telnet");
@@ -275,7 +221,7 @@ private:
 
         if (!telnetAddress.empty()) {
             // Telnet mode: connect to remote/local telnet server
-            ydebug("Terminal: using telnet connection to {}", telnetAddress);
+            yinfo("Terminal: using telnet connection to {}", telnetAddress);
 
             PtyConfig config;
             config.shell = telnetAddress;  // host:port format
@@ -288,26 +234,14 @@ private:
             }
             _ptyReader = reader;
             yinfo("Terminal started telnet: {} ({}x{})", telnetAddress, cols, rows);
-        } else
-#endif
-        {
+        } else {
             // Desktop: Use PtyReader with OSC-aware reading
             // Get shell path from SHELL env (or COMSPEC on Windows)
-#ifdef _WIN32
-            // Windows: prefer PowerShell, then COMSPEC (cmd.exe)
-            // Avoid MSYS/Git bash under ConPTY (interactive I/O issues)
-            const char* shellEnv = nullptr;
-            std::string shellPath;
-            if (auto* ps = getenv("YETTY_SHELL")) {
-                shellPath = ps;  // Explicit override
-            } else if (std::filesystem::exists("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe")) {
-                shellPath = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
-            } else {
-                shellEnv = getenv("COMSPEC");
-                shellPath = shellEnv ? shellEnv : "cmd.exe";
-            }
-#else
             const char* shellEnv = getenv("SHELL");
+#ifdef _WIN32
+            if (!shellEnv) shellEnv = getenv("COMSPEC");  // Windows: try COMSPEC
+            std::string shellPath = shellEnv ? shellEnv : "cmd.exe";
+#else
             std::string shellPath = shellEnv ? shellEnv : "/bin/sh";
 #endif
 
@@ -317,7 +251,7 @@ private:
                 auto cmdOpt = _ctx.config->get<std::string>("shell/command");
                 if (cmdOpt && !cmdOpt->empty()) {
                     command = *cmdOpt;
-                    ydebug("Terminal: using command from config: {}", command);
+                    yinfo("Terminal: using command from config: {}", command);
                 }
             }
 
@@ -327,13 +261,13 @@ private:
             config.cols = cols;
             config.rows = rows;
 
-            ydebug("Creating PtyReader: shell={} {}x{}", shellPath, cols, rows);
+            yinfo("Creating PtyReader: shell={} {}x{}", shellPath, cols, rows);
             auto readerResult = PtyReader::create(config, _ctx.platform);
             if (!readerResult) {
                 yerror("PtyReader::create FAILED: {}", readerResult.error().message());
                 return Err<void>("Failed to create PtyReader", readerResult);
             }
-            ydebug("PtyReader::create SUCCESS");
+            yinfo("PtyReader::create SUCCESS");
             _ptyReader = *readerResult;
             yinfo("Terminal started PTY: {} ({}x{})", shellPath, cols, rows);
         }
@@ -344,7 +278,7 @@ private:
         });
 
         _ptyReader->setExitCallback([this](int exitCode) {
-            ydebug("PTY exited with code {}", exitCode);
+            yinfo("PTY exited with code {}", exitCode);
             _running = false;
         });
 
@@ -363,61 +297,66 @@ private:
         static constexpr size_t CHUNK_SIZE = 65536;  // 64KB
         char chunk[CHUNK_SIZE];
 
-        int loopCount = 0;
         while (true) {
-            size_t n = _ptyReader->read(chunk, CHUNK_SIZE);
-            if (n == 0) {
-                // No more data available
-                if (_oscScanner.isInOsc()) {
-                    // Inside OSC, wait for more data (don't process yet)
-                    ydebug("readFromPty: incomplete OSC, buffered {} bytes", _ptyBuffer.size());
-                    return;
+            int loopCount = 0;
+            while (true) {
+                size_t n = _ptyReader->read(chunk, CHUNK_SIZE);
+                if (n == 0) {
+                    // No more data available
+                    if (_oscScanner.isInOsc()) {
+                        // Inside OSC, wait for more data (don't process yet)
+                        ydebug("readFromPty: incomplete OSC, buffered {} bytes", _ptyBuffer.size());
+                        // Re-arm poll to ensure we get callback when more data arrives
+                        _ptyReader->rearmPoll();
+                        return;
+                    }
+                    break;  // Not in OSC, process what we have
                 }
-                break;  // Not in OSC, process what we have
+
+                // Accumulate in buffer
+                size_t oldSize = _ptyBuffer.size();
+                _ptyBuffer.resize(oldSize + n);
+                std::memcpy(_ptyBuffer.data() + oldSize, chunk, n);
+
+                // Scan for OSC state
+                _oscScanner.scan(chunk, n);
+
+                ydebug("readFromPty loop {}: read {} bytes, total={}, isInOsc={}",
+                       loopCount, n, _ptyBuffer.size(), _oscScanner.isInOsc());
+
+                // If NOT in OSC and we have enough data, stop to allow rendering
+                if (!_oscScanner.isInOsc() && _ptyBuffer.size() >= CHUNK_SIZE) {
+                    break;
+                }
+                // If IN OSC, keep reading until terminator found (could be 2000MB)
+                loopCount++;
             }
 
-            // Accumulate in buffer
-            size_t oldSize = _ptyBuffer.size();
-            _ptyBuffer.resize(oldSize + n);
-            std::memcpy(_ptyBuffer.data() + oldSize, chunk, n);
+            if (_ptyBuffer.empty() || !_gpuScreen) return;
 
-            // Scan for OSC state
+            ydebug("readFromPty: processing {} bytes after {} loops", _ptyBuffer.size(), loopCount);
+
+            // Reset scanner before processing (processPtyData has its own state)
+            _oscScanner.reset();
+
+            // Process: normal data -> vterm, OSC -> handle
+            processPtyData(_ptyBuffer.data(), _ptyBuffer.size());
+            _ptyBuffer.clear();
+            
+            // Check if more data arrived during processing (workaround for poll not re-firing)
+            size_t n = _ptyReader->read(chunk, CHUNK_SIZE);
+            ydebug("readFromPty: after processing, read returned {} bytes", n);
+            if (n == 0) {
+                // Re-arm poll to ensure we get callback when more data arrives
+                _ptyReader->rearmPoll();
+                return;  // No more data
+            }
+            // More data - add to buffer and continue outer loop
+            ydebug("readFromPty: more data arrived, continuing");
+            _ptyBuffer.resize(n);
+            std::memcpy(_ptyBuffer.data(), chunk, n);
             _oscScanner.scan(chunk, n);
-
-            ydebug("readFromPty loop {}: read {} bytes, total={}, isInOsc={}",
-                   loopCount, n, _ptyBuffer.size(), _oscScanner.isInOsc());
-
-            // If NOT in OSC and we have enough data, stop to allow rendering
-            if (!_oscScanner.isInOsc() && _ptyBuffer.size() >= CHUNK_SIZE) {
-                break;
-            }
-            // If IN OSC, keep reading until terminator found (could be 2000MB)
-            loopCount++;
         }
-
-        if (_ptyBuffer.empty() || !_gpuScreen) return;
-
-        ydebug("readFromPty: processing {} bytes after {} loops", _ptyBuffer.size(), loopCount);
-
-        // DEBUG: hex dump first 64 bytes of PTY data
-        {
-            std::string hex, ascii;
-            size_t dumpLen = std::min(_ptyBuffer.size(), size_t(64));
-            for (size_t di = 0; di < dumpLen; di++) {
-                uint8_t b = static_cast<uint8_t>(_ptyBuffer[di]);
-                char h[4]; snprintf(h, sizeof(h), "%02x ", b); hex += h;
-                ascii += (b >= 0x20 && b < 0x7f) ? static_cast<char>(b) : '.';
-            }
-            ydebug("PTY DATA[{}]: {}", dumpLen, hex);
-            ydebug("PTY ASCII: {}", ascii);
-        }
-
-        // Reset scanner before processing (processPtyData has its own state)
-        _oscScanner.reset();
-
-        // Process: normal data -> vterm, OSC -> handle
-        processPtyData(_ptyBuffer.data(), _ptyBuffer.size());
-        _ptyBuffer.clear();
     }
 #endif
 
@@ -533,15 +472,18 @@ private:
             _oscState = OscState::Normal;
         }
 
-        // Note: screen update is already triggered by _gpuScreen->write() -> requestScreenUpdate()
-        // via EventQueue (thread-safe cross-thread dispatch to main thread)
+        // Trigger screen refresh
+        if (auto loop = base::EventLoop::instance(); loop) {
+            auto t = std::chrono::high_resolution_clock::now();
+            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
+            yinfo("[TIME] PTY output processed, dispatching ScreenUpdate at {}ms", ms);
+            (*loop)->dispatch(base::Event::screenUpdateEvent());
+        }
     }
 
 #if YETTY_WEB
-    // Webasm: PTYProvider (WebPTY) for JSLinux mode
+    // Webasm: PTYProvider (WebPTY)
     std::shared_ptr<PTYProvider> _pty;
-    // For telnet mode on web, we use PtyReader instead
-    PtyReader::Ptr _ptyReader;
 #else
     // Desktop: PtyReader with OSC-aware buffering
     PtyReader::Ptr _ptyReader;

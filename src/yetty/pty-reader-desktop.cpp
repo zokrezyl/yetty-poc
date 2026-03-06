@@ -189,6 +189,16 @@ public:
         _exitCallback = std::move(cb);
     }
 
+    void rearmPoll() override {
+        if (_pollId < 0 || !_running) return;
+        
+        if (auto loopResult = base::EventLoop::instance(); loopResult) {
+            auto loop = *loopResult;
+            // Re-start the poll to ensure it fires for any pending data
+            loop->startPoll(_pollId);
+        }
+    }
+
     // EventListener interface - triggered by poll when PTY has data
 
     Result<bool> onEvent(const base::Event& event) override {

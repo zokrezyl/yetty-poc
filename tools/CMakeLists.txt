@@ -4,6 +4,7 @@ add_subdirectory(ydraw-maze)
 add_subdirectory(ydraw-zoo)
 add_subdirectory(ymux)
 add_subdirectory(yflame)
+add_subdirectory(yplayer)
 
 # PDF and HTML tools (desktop only - require pdfio, litehtml)
 if(NOT YETTY_ANDROID AND NOT EMSCRIPTEN)

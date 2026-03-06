@@ -1,5 +1,9 @@
 # HTTP fetching via cpr with OpenSSL
 # Disable optional curl dependencies
+# Save ZLIB state - we need to hide it from curl but restore for other libs (libpng)
+set(_SAVED_ZLIB_FOUND ${ZLIB_FOUND})
+set(_SAVED_CMAKE_DISABLE_FIND_PACKAGE_ZLIB ${CMAKE_DISABLE_FIND_PACKAGE_ZLIB})
+
 set(CURL_ZLIB OFF CACHE BOOL "" FORCE)
 set(CURL_USE_LIBPSL OFF CACHE BOOL "" FORCE)
 set(CURL_BROTLI OFF CACHE BOOL "" FORCE)
@@ -33,6 +37,14 @@ CPMAddPackage(
         "CPR_CURL_USE_LIBPSL OFF"
         "CURL_ZLIB OFF"
 )
+
+# Restore ZLIB state for other libraries (like libpng)
+set(ZLIB_FOUND ${_SAVED_ZLIB_FOUND} CACHE BOOL "" FORCE)
+if(_SAVED_CMAKE_DISABLE_FIND_PACKAGE_ZLIB)
+    set(CMAKE_DISABLE_FIND_PACKAGE_ZLIB ${_SAVED_CMAKE_DISABLE_FIND_PACKAGE_ZLIB} CACHE BOOL "" FORCE)
+else()
+    unset(CMAKE_DISABLE_FIND_PACKAGE_ZLIB CACHE)
+endif()
 
 set(TS_GRAMMAR_NAMES
     c cpp python javascript typescript rust go java bash json yaml toml html xml

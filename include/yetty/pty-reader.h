@@ -64,6 +64,13 @@ public:
     virtual void stop() = 0;
 
     /**
+     * Re-arm the poll watcher (Desktop only).
+     * Call after reading returns 0 to ensure poll fires for new data.
+     * No-op on platforms without poll (webasm, etc.)
+     */
+    virtual void rearmPoll() {}
+
+    /**
      * Set callback for when data becomes available.
      * Desktop: triggered by poll event on PTY fd
      * Webasm: triggered when JS pushes data

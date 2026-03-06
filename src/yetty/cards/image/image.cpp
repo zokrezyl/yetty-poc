@@ -217,6 +217,49 @@ public:
     }
 
     //=========================================================================
+    // Update interface - replaces image content with new data
+    //=========================================================================
+
+    Result<void> update(const std::string& args, const std::string& payload) override {
+        yinfo("Image::update: args='{}' payload size={}", args, payload.size());
+        
+        if (payload.empty()) {
+            return Err<void>("Image::update: empty payload");
+        }
+
+        // Decode new image from payload
+        int width, height, channels;
+        uint8_t* pixels = stbi_load_from_memory(
+            reinterpret_cast<const uint8_t*>(payload.data()),
+            static_cast<int>(payload.size()),
+            &width, &height, &channels, 4);
+        
+        if (!pixels) {
+            return Err<void>(std::string("Image::update: stbi_load failed: ") +
+                             stbi_failure_reason());
+        }
+
+        yinfo("Image::update: decoded {}x{} ({} channels -> 4)", width, height, channels);
+
+        // Update original pixels
+        _originalWidth = static_cast<uint32_t>(width);
+        _originalHeight = static_cast<uint32_t>(height);
+        size_t dataSize = _originalWidth * _originalHeight * 4;
+        _originalPixels.resize(dataSize);
+        std::memcpy(_originalPixels.data(), pixels, dataSize);
+        stbi_image_free(pixels);
+
+        // Mark for re-scaling and re-upload
+        _needsScaling = true;
+        _metadataDirty = true;
+
+        yinfo("Image::update: stored {}x{} ({} bytes), needs rescale",
+              _originalWidth, _originalHeight, dataSize);
+
+        return Ok();
+    }
+
+    //=========================================================================
     // EventListener interface
     //=========================================================================
 
