@@ -59,6 +59,22 @@ struct GridUniforms {
     _pad0: f32,                // 4 bytes: alignment padding
 };  // Total: 256 bytes (16-byte aligned)
 
+// Overlay uniforms for ydraw screen overlay (48 bytes, 16-byte aligned)
+struct OverlayUniforms {
+    sceneMinX: f32,        // 4 bytes
+    sceneMinY: f32,        // 4 bytes
+    sceneMaxX: f32,        // 4 bytes
+    sceneMaxY: f32,        // 4 bytes
+    gridWidth: u32,        // 4 bytes
+    gridHeight: u32,       // 4 bytes
+    cellSizeX: f32,        // 4 bytes
+    cellSizeY: f32,        // 4 bytes
+    primCount: u32,        // 4 bytes
+    glyphCount: u32,       // 4 bytes
+    pixelRange: f32,       // 4 bytes
+    hasOverlay: u32,       // 4 bytes (1 if overlay present, 0 otherwise)
+};
+
 // Glyph metadata (40 bytes per glyph, matches C++ GlyphMetadataGPU)
 struct GlyphMetadata {
     uvMin: vec2<f32>,      // 8 bytes
@@ -129,6 +145,13 @@ struct Cell {
 @group(1) @binding(12) var rasterTexture: texture_2d<f32>;
 @group(1) @binding(13) var rasterSampler: sampler;
 @group(1) @binding(14) var<storage, read> rasterMetadata: array<RasterGlyphUV>;
+
+// Overlay bindings (group 1 continued) - ydraw screen overlay
+// Uses _overlay variants of SDF functions from lib/sdf-types.gen.wgsl
+@group(1) @binding(15) var<storage, read> overlayGridData: array<u32>;
+@group(1) @binding(16) var<storage, read> overlayGlyphBuffer: array<f32>;
+@group(1) @binding(17) var<storage, read> overlayStorage: array<f32>;
+@group(1) @binding(18) var<uniform> overlay: OverlayUniforms;
 
 // Attribute bit masks (matches CellAttrs in grid.h)
 const ATTR_BOLD: u32 = 0x01u;           // Bit 0
@@ -573,6 +596,11 @@ fn getFontType(attrs: u32) -> u32 {
 // ==== SHADER GLYPH FUNCTIONS (injected by loader) ====
 // SHADER_GLYPH_FUNCTIONS_PLACEHOLDER
 
+// ==== YDRAW OVERLAY CONSTANTS ====
+const YDRAW_MAX_ENTRIES_PER_CELL: u32 = 4096u;
+const YDRAW_GLYPH_BIT: u32 = 0x80000000u;
+const YDRAW_INDEX_MASK: u32 = 0x7FFFFFFFu;
+
 // Helper to unpack u32 color to vec3<f32>
 fn unpackColor(packed: u32) -> vec3<f32> {
     return vec3<f32>(
@@ -590,6 +618,113 @@ fn unpackColorAlpha(packed: u32) -> vec4<f32> {
         f32((packed >> 16u) & 0xFFu) / 255.0,
         f32((packed >> 24u) & 0xFFu) / 255.0
     );
+}
+
+// Helper to unpack alpha from packed color
+fn unpackAlpha(packed: u32) -> f32 {
+    return f32((packed >> 24u) & 0xFFu) / 255.0;
+}
+
+// ==== YDRAW OVERLAY EVALUATION ====
+// Uses _overlay variants of SDF functions that read from overlayStorage
+
+fn evaluateOverlay(pixelPos: vec2<f32>) -> vec4<f32> {
+    // Early exit if no overlay
+    if (overlay.hasOverlay == 0u || overlay.gridWidth == 0u || overlay.gridHeight == 0u) {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+
+    let scenePos = pixelPos;  // 1:1 mapping for screen overlay
+
+    let invCellSizeX = select(0.0, 1.0 / overlay.cellSizeX, overlay.cellSizeX > 0.0);
+    let invCellSizeY = select(0.0, 1.0 / overlay.cellSizeY, overlay.cellSizeY > 0.0);
+    let contentMinX = overlay.sceneMinX;
+    let contentMinY = overlay.sceneMinY;
+
+    // O(1) grid lookup
+    let cellX = u32(clamp((scenePos.x - contentMinX) * invCellSizeX, 0.0, f32(overlay.gridWidth - 1u)));
+    let cellY = u32(clamp((scenePos.y - contentMinY) * invCellSizeY, 0.0, f32(overlay.gridHeight - 1u)));
+    let cellIndex = cellY * overlay.gridWidth + cellX;
+
+    let packedStart = overlayGridData[cellIndex];
+    let cellEntryCount = overlayGridData[packedStart];
+    let loopCount = min(cellEntryCount, YDRAW_MAX_ENTRIES_PER_CELL);
+
+    var resultColor = vec3<f32>(0.0, 0.0, 0.0);
+    var resultAlpha = 0.0;
+    let primDataBase = overlay.primCount;
+
+    for (var i = 0u; i < loopCount; i++) {
+        let rawIdx = overlayGridData[packedStart + 1u + i];
+
+        if ((rawIdx & YDRAW_GLYPH_BIT) != 0u) {
+            // TEXT GLYPH (MSDF)
+            let gi = rawIdx & YDRAW_INDEX_MASK;
+            let gOffset = gi * 5u;
+
+            let gx = overlayGlyphBuffer[gOffset + 0u];
+            let gy = overlayGlyphBuffer[gOffset + 1u];
+            let whPacked = bitcast<u32>(overlayGlyphBuffer[gOffset + 2u]);
+            let gw = unpack2x16float(whPacked).x;
+            let gh = unpack2x16float(whPacked).y;
+            let glfPacked = bitcast<u32>(overlayGlyphBuffer[gOffset + 3u]);
+            let gIdx = glfPacked & 0xFFFFu;
+            let gColorPacked = bitcast<u32>(overlayGlyphBuffer[gOffset + 4u]);
+
+            if (scenePos.x >= gx && scenePos.x < gx + gw &&
+                scenePos.y >= gy && scenePos.y < gy + gh) {
+
+                let glyphUV = vec2<f32>(
+                    (scenePos.x - gx) / gw,
+                    (scenePos.y - gy) / gh
+                );
+                let gColor = unpackColor(gColorPacked);
+
+                // Sample MSDF from shared font atlas
+                let glyph = glyphMetadata[gIdx];
+                let uv = mix(glyph.uvMin, glyph.uvMax, glyphUV);
+                let msdf = textureSampleLevel(fontTexture, fontSampler, uv, 0.0);
+                let sd = median(msdf.r, msdf.g, msdf.b);
+                let pxDist = overlay.pixelRange * (sd - 0.5);
+                let alpha = clamp(pxDist + 0.5, 0.0, 1.0);
+                if (alpha > 0.01) {
+                    resultColor = mix(resultColor, gColor, alpha);
+                    resultAlpha = max(resultAlpha, alpha);
+                }
+            }
+        } else {
+            // SDF PRIMITIVE - use _overlay variants that read from overlayStorage
+            let primOff = primDataBase + rawIdx;
+            let d = evalSDF_overlay(primOff, scenePos);
+
+            let colors = primColors_overlay(primOff);
+            let fillColorPacked = colors.x;
+            if (d < 0.0 && fillColorPacked != 0u) {
+                let fillColor = unpackColor(fillColorPacked);
+                let fillAlpha = unpackAlpha(fillColorPacked);
+                let edgeAlpha = clamp(-d * 2.0, 0.0, 1.0);
+                let alpha = edgeAlpha * fillAlpha;
+                resultColor = mix(resultColor, fillColor, alpha);
+                resultAlpha = max(resultAlpha, alpha);
+            }
+
+            let strokeColorPacked = colors.y;
+            let strokeWidth = primStrokeWidth_overlay(primOff);
+            if (strokeWidth > 0.0 && strokeColorPacked != 0u) {
+                let strokeDist = abs(d) - strokeWidth * 0.5;
+                if (strokeDist < 0.0) {
+                    let strokeColor = unpackColor(strokeColorPacked);
+                    let strokeAlpha = unpackAlpha(strokeColorPacked);
+                    let edgeAlpha = clamp(-strokeDist * 2.0, 0.0, 1.0);
+                    let alpha = edgeAlpha * strokeAlpha;
+                    resultColor = mix(resultColor, strokeColor, alpha);
+                    resultAlpha = max(resultAlpha, alpha);
+                }
+            }
+        }
+    }
+
+    return vec4<f32>(resultColor, resultAlpha);
 }
 
 // Dispatch to shader glyph by codepoint
@@ -935,6 +1070,12 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
             // Highlight: blend with selection color (blue tint)
             finalColor = mix(finalColor, vec3<f32>(0.3, 0.5, 0.8), 0.4);
         }
+    }
+
+    // ==== YDRAW OVERLAY: blend overlay content on top ====
+    let overlayResult = evaluateOverlay(pixelPos);
+    if (overlayResult.a > 0.01) {
+        finalColor = mix(finalColor, overlayResult.rgb, overlayResult.a);
     }
 
     // ==== POST-EFFECT: modify final pixel color ====
