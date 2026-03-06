@@ -23,6 +23,7 @@ public:
 
     Result<void> init(const PtyConfig& config) {
         _shell = config.shell;
+        _command = config.command;
         _cols = config.cols;
         _rows = config.rows;
 
@@ -37,6 +38,10 @@ public:
             CloseHandle(_pipeInWrite);
             return Err<void>("Failed to create output pipe");
         }
+
+        // Set console code page to UTF-8 so child processes handle Unicode correctly
+        SetConsoleCP(CP_UTF8);
+        SetConsoleOutputCP(CP_UTF8);
 
         // Create pseudo console (ConPTY)
         COORD size = { static_cast<SHORT>(_cols), static_cast<SHORT>(_rows) };
@@ -92,8 +97,19 @@ public:
             return Err<void>("Failed to update attribute list");
         }
 
-        // Convert shell path to wide string
-        std::wstring wShell(_shell.begin(), _shell.end());
+        // Build command line
+        // Set UTF-8 codepage (65001) for correct supplementary Unicode handling
+        // ConPTY internally converts UTF-8↔UTF-16; without UTF-8 codepage,
+        // 4-byte UTF-8 sequences (codepoints above U+FFFF) get mangled
+        std::string cmdLine;
+        if (!_command.empty()) {
+            cmdLine = "cmd.exe /c chcp 65001 >nul && " + _command;
+        } else {
+            cmdLine = "cmd.exe /c chcp 65001 >nul && " + _shell;
+        }
+
+        // Convert to wide string
+        std::wstring wShell(cmdLine.begin(), cmdLine.end());
 
         // Create process
         PROCESS_INFORMATION pi = {};
@@ -254,6 +270,7 @@ private:
     uint32_t _cols = 80;
     uint32_t _rows = 24;
     std::string _shell;
+    std::string _command;
     std::atomic<bool> _running{false};
 
     std::thread _readerThread;

@@ -4,6 +4,7 @@
 #include <yetty/result.hpp>
 #include <ytrace/ytrace.hpp>
 #include <cstring>
+#include <fstream>
 
 
 #if YETTY_WEB
@@ -263,6 +264,31 @@ private:
         yinfo("Terminal started WebPTY: {} ({}x{})", vmConfig, cols, rows);
         return Ok();
 #else
+        // Check for text inject mode (--text flag)
+        std::string textFile;
+        if (_ctx.config) {
+            auto textOpt = _ctx.config->get<std::string>("shell/text");
+            if (textOpt && !textOpt->empty()) {
+                textFile = *textOpt;
+            }
+        }
+
+        if (!textFile.empty()) {
+            // Text inject mode: read file and feed raw bytes directly to renderer
+            yinfo("Terminal: text inject mode, file={}", textFile);
+            std::ifstream file(textFile, std::ios::binary);
+            if (!file) {
+                return Err<void>("Failed to open text file: " + textFile);
+            }
+            std::vector<char> content((std::istreambuf_iterator<char>(file)),
+                                       std::istreambuf_iterator<char>());
+            file.close();
+            yinfo("Terminal: injecting {} bytes from {}", content.size(), textFile);
+            processPtyData(content.data(), content.size());
+            _running = true;
+            return Ok();
+        }
+
 #ifndef _WIN32
         // Check for telnet mode (--telnet flag) - Unix only
         std::string telnetAddress;
@@ -294,14 +320,14 @@ private:
             // Desktop: Use PtyReader with OSC-aware reading
             // Get shell path from SHELL env (or COMSPEC on Windows)
 #ifdef _WIN32
-            // Windows: prefer PowerShell, then COMSPEC (cmd.exe)
-            // Avoid MSYS/Git bash under ConPTY (interactive I/O issues)
+            // Windows: prefer cmd.exe (COMSPEC) for best ConPTY compatibility
+            // cmd.exe's 'type' passes raw bytes/escape sequences through correctly
+            // PowerShell's 'cat' (Get-Content) strips ANSI escapes and mangles UTF-8
+            // Override with YETTY_SHELL env var if needed
             const char* shellEnv = nullptr;
             std::string shellPath;
             if (auto* ps = getenv("YETTY_SHELL")) {
                 shellPath = ps;  // Explicit override
-            } else if (std::filesystem::exists("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe")) {
-                shellPath = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
             } else {
                 shellEnv = getenv("COMSPEC");
                 shellPath = shellEnv ? shellEnv : "cmd.exe";
