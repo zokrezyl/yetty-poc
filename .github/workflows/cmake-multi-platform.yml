@@ -83,7 +83,7 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y \
           automake autoconf libtool \
-          meson ninja-build \
+          meson ninja-build nasm \
           libfontconfig1-dev \
           libxrandr-dev \
           libxinerama-dev \
@@ -142,7 +142,7 @@ jobs:
         echo "build-output-dir=${{ github.workspace }}/build-macos" >> "$GITHUB_OUTPUT"
 
     - name: Install build dependencies
-      run: brew install automake autoconf libtool meson ninja
+      run: brew install automake autoconf libtool meson ninja nasm
 
     - name: Configure CMake
       run: >
@@ -190,7 +190,10 @@ jobs:
         echo "build-output-dir=${{ github.workspace }}/build-windows" >> "$GITHUB_OUTPUT"
 
     - name: Install build dependencies
-      run: pip install meson ninja
+      run: |
+        pip install meson ninja
+        choco install nasm -y
+        echo "C:\Program Files\NASM" >> $env:GITHUB_PATH
 
     - name: Configure CMake
       run: >
@@ -258,7 +261,7 @@ jobs:
     - name: Install build dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y meson ninja-build
+        sudo apt-get install -y meson ninja-build nasm
 
     - name: Setup Gradle
       uses: gradle/actions/setup-gradle@v3

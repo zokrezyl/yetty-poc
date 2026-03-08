@@ -39,6 +39,7 @@
           cmake
           ninja
           meson
+          nasm
           pkg-config
           git
           llvmPackages_21.clang
