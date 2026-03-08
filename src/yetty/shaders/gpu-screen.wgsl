@@ -695,7 +695,9 @@ fn evaluateOverlay(pixelPos: vec2<f32>) -> vec4<f32> {
             }
         } else {
             // SDF PRIMITIVE - use _overlay variants that read from overlayStorage
-            let primOff = primDataBase + rawIdx;
+            // rawIdx is primitive index; look up offset from offset table (stored as f32->u32)
+            let primOffset = bitcast<u32>(overlayStorage[rawIdx]);
+            let primOff = primDataBase + primOffset;
             let d = evalSDF_overlay(primOff, scenePos);
 
             let colors = primColors_overlay(primOff);

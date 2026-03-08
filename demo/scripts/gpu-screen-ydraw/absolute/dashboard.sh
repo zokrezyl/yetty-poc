@@ -1,5 +1,5 @@
 #!/bin/bash
-# Screen Draw Layer Demo: Dashboard-style overlay
+# Absolute YDraw Overlay Demo: Dashboard-style overlay
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR/../../.."

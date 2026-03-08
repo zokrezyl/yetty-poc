@@ -1,5 +1,5 @@
 #!/bin/bash
-# Screen Draw Layer Demo: Basic shapes
+# Absolute YDraw Overlay Demo: Basic shapes
 # Draws SDF shapes at pixel coordinates (not tied to terminal cells)
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -7,7 +7,7 @@ cd "$DIR/../../.."
 
 # Create YAML payload with shapes
 YAML_PAYLOAD=$(cat <<'EOF'
-# Basic shapes demo for screen draw layer
+# Basic shapes demo for absolute ydraw overlay
 background: "#00000000"
 
 body:

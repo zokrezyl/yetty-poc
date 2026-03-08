@@ -1,5 +1,5 @@
 #!/bin/bash
-# Screen Draw Layer Demo: Bezier curves and arcs
+# Scrolling YDraw Overlay Demo: Bezier curves and arcs
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR/../../.."
@@ -173,5 +173,5 @@ EOF
 )
 
 PAYLOAD=$(echo "$YAML_PAYLOAD" | base64 -w0)
-printf '\033]666673;--yaml;%s\033\\' "$PAYLOAD"
+printf '\033]666674;--yaml;%s\033\\' "$PAYLOAD"
 echo "Screen draw layer: curves and arcs demo"

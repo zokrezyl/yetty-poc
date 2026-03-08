@@ -210,6 +210,13 @@ public:
     virtual const std::vector<YDrawGlyph>& glyphs() const = 0;
     virtual std::vector<YDrawGlyph>& glyphsMut() = 0;
 
+    /// Build primitive staging data for GPU upload. Call after addYdrawBuffer().
+    /// Returns (offset_table, primitive_data) packed as u32 words.
+    virtual void buildPrimStaging(std::vector<uint32_t>& out) const = 0;
+
+    /// Returns true if there is content to render.
+    virtual bool hasContent() const = 0;
+
     //=========================================================================
     // Text selection
     //=========================================================================
@@ -253,7 +260,8 @@ public:
     /// buffer, AABBs are computed, and the spatial grid is updated incrementally.
     /// Scene bounds are extended to include the new primitives (if not explicit).
     /// Can be called multiple times to add multiple buffers.
-    virtual Result<void> addYdrawBuffer(std::shared_ptr<YDrawBuffer> buffer) = 0;
+    /// Returns the number of lines scrolled (0 if no scrolling occurred).
+    virtual Result<uint32_t> addYdrawBuffer(std::shared_ptr<YDrawBuffer> buffer) = 0;
 
     /// Clear all primitives, glyphs, and grid data. Resets scene bounds.
     /// Call before addYdrawBuffer() for replace (vs. incremental) semantics.

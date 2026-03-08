@@ -1,5 +1,5 @@
 #!/bin/bash
-# Screen Draw Layer Demo: Animated shapes
+# Scrolling YDraw Overlay Demo: Animated shapes
 # Updates the overlay repeatedly to show animation
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -33,7 +33,7 @@ EOF
 )
 
     PAYLOAD=$(echo "$YAML_PAYLOAD" | base64 -w0)
-    printf '\033]666673;--yaml;%s\033\\' "$PAYLOAD"
+    printf '\033]666674;--yaml;%s\033\\' "$PAYLOAD"
 
     sleep 0.05
 done

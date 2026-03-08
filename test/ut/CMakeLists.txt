@@ -56,6 +56,7 @@ target_link_libraries(yetty_test_lib PUBLIC
     webgpu
     glfw
     cdb
+    lz4_static
     ${FREETYPE_ALL_LIBS}
     msdfgen::msdfgen-core
     msdfgen::msdfgen-ext

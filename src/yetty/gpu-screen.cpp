@@ -25,7 +25,10 @@
 #include <yetty/raster-font.h>
 #include <yetty/name-generator.h>
 #include "ygui/ygui-overlay.h"
-#include "screen-draw-layer.h"
+#include <yetty/ydraw-builder.h>
+#include "ydraw/ydraw-buffer.h"
+#include "ydraw/yaml2ydraw.h"
+#include <lz4frame.h>
 #include <ytrace/ytrace.hpp>
 
 #ifndef CMAKE_SOURCE_DIR
@@ -318,6 +321,9 @@ private:
   bool handleCardOSCSequence(const std::string &sequence, std::string *response,
                              uint32_t *linesToAdvance);
   void handleEffectOSC(int command, const std::string &payload);
+  void handleYdrawOSC(const std::string &payload, bool scrolling);
+  Result<void> initYdrawBuilder(bool scrolling);
+  void updateYdrawGpuBuffers();
   std::string buildGpuStatsText();
 
   // Text selection
@@ -502,8 +508,17 @@ private:
   std::string _oscBuffer;
   int _oscCommand = -1;
 
-  // Screen draw layer (pixel-coordinate ydraw overlay)
-  ScreenDrawLayer::Ptr _screenDrawLayer;
+  // YDraw overlay layers - absolute (OSC 666673) and scrolling (OSC 666674)
+  YDrawBuilder::Ptr _ydrawAbsolute;      // Absolute positioning overlay
+  YDrawBuilder::Ptr _ydrawScrolling;     // Scrolling mode (syncs with vterm)
+  WGPUBuffer _ydrawGridBuffer = nullptr;
+  WGPUBuffer _ydrawGlyphBuffer = nullptr;
+  WGPUBuffer _ydrawPrimBuffer = nullptr;
+  WGPUBuffer _ydrawUniformBuffer = nullptr;
+  uint32_t _ydrawGridBufferSize = 0;
+  uint32_t _ydrawGlyphBufferSize = 0;
+  uint32_t _ydrawPrimBufferSize = 0;
+  bool _ydrawDirty = false;
 
   // Rendering - GPU resources (shared resources come from ShaderManager)
   YettyContext _ctx;
@@ -874,11 +889,14 @@ void GPUScreenImpl::setViewport(float x, float y, float width, float height) {
     card->setScreenOrigin(x, y);
   }
 
-  // Update screen draw layer display size and cell size
-  if (_screenDrawLayer) {
-    _screenDrawLayer->updateDisplaySize(
-        static_cast<uint32_t>(width), static_cast<uint32_t>(height));
-    _screenDrawLayer->setCellSize(cellWidthF, cellHeightF);
+  // Update ydraw builders scene bounds and cell size
+  if (_ydrawAbsolute) {
+    _ydrawAbsolute->setSceneBounds(0, 0, width, height);
+    _ydrawAbsolute->setGridCellSize(cellWidthF, cellHeightF);
+  }
+  if (_ydrawScrolling) {
+    _ydrawScrolling->setSceneBounds(0, 0, width, height);
+    _ydrawScrolling->setGridCellSize(cellWidthF, cellHeightF);
   }
 }
 
@@ -3146,7 +3164,7 @@ int GPUScreenImpl::onOSC(int command, VTermStringFragment frag, void *user) {
   }
 
   // Accept yetty vendor commands: 666666 (cards), 666667-669 (effects), 666670 (gpu stats), 666671 (fps), 666673 (screen draw)
-  if (command != YETTY_OSC_VENDOR_ID && command != 666667 && command != 666668 && command != 666669 && command != 666670 && command != 666671 && command != 666673) {
+  if (command != YETTY_OSC_VENDOR_ID && command != 666667 && command != 666668 && command != 666669 && command != 666670 && command != 666671 && command != 666673 && command != 666674) {
     ydebug(">>> onOSC: ignoring non-yetty command {}", command);
     return 0;
   }
@@ -3195,69 +3213,19 @@ int GPUScreenImpl::onOSC(int command, VTermStringFragment frag, void *user) {
       return 1;
     }
 
-    // Handle screen draw OSC command (666673)
+    // Handle ydraw absolute overlay OSC command (666673)
     // Format: args;base64payload  or  args (no payload)
     if (command == 666673) {
-      if (!self->_screenDrawLayer) {
-        // Lazy init screen draw layer
-        auto res = ScreenDrawLayer::create(self->_ctx);
-        if (res) {
-          self->_screenDrawLayer = *res;
-          self->_screenDrawLayer->updateDisplaySize(
-              static_cast<uint32_t>(self->_viewportWidth),
-              static_cast<uint32_t>(self->_viewportHeight));
-          self->_screenDrawLayer->setCellSize(
-              self->getCellWidthF(), self->getCellHeightF());
-        } else {
-          yerror("Failed to create ScreenDrawLayer: {}", error_msg(res));
-        }
-      }
+      self->handleYdrawOSC(self->_oscBuffer, false);
+      self->_oscBuffer.clear();
+      self->_oscCommand = -1;
+      return 1;
+    }
 
-      if (self->_screenDrawLayer) {
-        std::string args;
-        std::string payload;
-        size_t sepPos = self->_oscBuffer.find(';');
-        if (sepPos != std::string::npos) {
-          args = self->_oscBuffer.substr(0, sepPos);
-          // Decode base64 payload
-          std::string b64 = self->_oscBuffer.substr(sepPos + 1);
-          // Simple base64 decoding (use existing decoder or inline)
-          static auto b64Decode = [](const std::string& in) -> std::string {
-            static const std::string chars =
-                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-            std::string out;
-            std::vector<int> T(256, -1);
-            for (int i = 0; i < 64; i++) T[chars[i]] = i;
-            int val = 0, valb = -8;
-            for (unsigned char c : in) {
-              if (T[c] == -1) break;
-              val = (val << 6) + T[c];
-              valb += 6;
-              if (valb >= 0) {
-                out.push_back(char((val >> valb) & 0xFF));
-                valb -= 8;
-              }
-            }
-            return out;
-          };
-          payload = b64Decode(b64);
-        } else {
-          args = self->_oscBuffer;
-        }
-
-        // Handle clear command
-        if (args.find("--clear") != std::string::npos) {
-          self->_screenDrawLayer->clear();
-          self->_needsBindGroupRecreation = true;
-        } else if (!payload.empty()) {
-          auto res = self->_screenDrawLayer->update(args, payload);
-          self->_needsBindGroupRecreation = true;
-          if (!res) {
-            yerror("ScreenDrawLayer update failed: {}", error_msg(res));
-          }
-        }
-        self->_hasDamage = true;
-      }
+    // Handle ydraw scrolling overlay OSC command (666674)
+    // Format: args;base64payload  or  args (no payload)
+    if (command == 666674) {
+      self->handleYdrawOSC(self->_oscBuffer, true);
       self->_oscBuffer.clear();
       self->_oscCommand = -1;
       return 1;
@@ -3558,8 +3526,8 @@ bool GPUScreenImpl::handleOSCSequence(const std::string &sequence,
     return false;
   }
 
-  // Handle vendor-specific commands (666667-666673) directly
-  if (vendorId >= 666667 && vendorId <= 666673) {
+  // Handle vendor-specific commands (666667-666674) directly
+  if (vendorId >= 666667 && vendorId <= 666674) {
     std::string payload = sequence.substr(semicolon + 1);
 
     // Effect commands (666667 = pre-effect, 666668 = post-effect, 666669 = effect)
@@ -3615,69 +3583,15 @@ bool GPUScreenImpl::handleOSCSequence(const std::string &sequence,
       return true;
     }
 
-    // Screen draw layer command (666673)
-    // Format: args;base64payload  or  args (no payload)
+    // Ydraw absolute overlay command (666673)
     if (vendorId == 666673) {
-      if (!_screenDrawLayer) {
-        // Lazy init screen draw layer
-        auto res = ScreenDrawLayer::create(_ctx);
-        if (res) {
-          _screenDrawLayer = *res;
-          _screenDrawLayer->updateDisplaySize(
-              static_cast<uint32_t>(_viewportWidth),
-              static_cast<uint32_t>(_viewportHeight));
-          _screenDrawLayer->setCellSize(
-              getCellWidthF(), getCellHeightF());
-        } else {
-          yerror("Failed to create ScreenDrawLayer: {}", error_msg(res));
-          return true;
-        }
-      }
+      handleYdrawOSC(payload, false);
+      return true;
+    }
 
-      if (_screenDrawLayer) {
-        std::string args;
-        std::string payloadDecoded;
-        size_t sepPos = payload.find(';');
-        if (sepPos != std::string::npos) {
-          args = payload.substr(0, sepPos);
-          // Decode base64 payload
-          std::string b64 = payload.substr(sepPos + 1);
-          static auto b64Decode = [](const std::string& in) -> std::string {
-            static const std::string chars =
-                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-            std::string out;
-            std::vector<int> T(256, -1);
-            for (int i = 0; i < 64; i++) T[chars[i]] = i;
-            int val = 0, valb = -8;
-            for (unsigned char c : in) {
-              if (T[c] == -1) break;
-              val = (val << 6) + T[c];
-              valb += 6;
-              if (valb >= 0) {
-                out.push_back(char((val >> valb) & 0xFF));
-                valb -= 8;
-              }
-            }
-            return out;
-          };
-          payloadDecoded = b64Decode(b64);
-        } else {
-          args = payload;
-        }
-
-        // Handle clear command
-        if (args.find("--clear") != std::string::npos) {
-          _screenDrawLayer->clear();
-          _needsBindGroupRecreation = true;
-        } else if (!payloadDecoded.empty()) {
-          auto res = _screenDrawLayer->update(args, payloadDecoded);
-          _needsBindGroupRecreation = true;
-          if (!res) {
-            yerror("ScreenDrawLayer update failed: {}", error_msg(res));
-          }
-        }
-        _hasDamage = true;
-      }
+    // Ydraw scrolling overlay command (666674)
+    if (vendorId == 666674) {
+      handleYdrawOSC(payload, true);
       return true;
     }
   }
@@ -3756,6 +3670,179 @@ void GPUScreenImpl::handleEffectOSC(int command, const std::string &payload) {
           _uniforms.effectParams[2], _uniforms.effectParams[3],
           _uniforms.effectParams[4], _uniforms.effectParams[5]);
   }
+}
+
+//=============================================================================
+// YDraw Overlay Handling (OSC 666673 = absolute, OSC 666674 = scrolling)
+//=============================================================================
+
+Result<void> GPUScreenImpl::initYdrawBuilder(bool scrolling) {
+  auto& builder = scrolling ? _ydrawScrolling : _ydrawAbsolute;
+  if (builder) return Ok();  // Already initialized
+
+  auto res = YDrawBuilder::create(_ctx.fontManager, _ctx.gpuAllocator, scrolling);
+  if (!res) {
+    yerror("Failed to create YDrawBuilder (scrolling={}): {}", scrolling, error_msg(res));
+    return Err<void>("Failed to create YDrawBuilder");
+  }
+  builder = *res;
+  builder->setSceneBounds(0, 0, _viewportWidth, _viewportHeight);
+  builder->setGridCellSize(getCellWidthF(), getCellHeightF());
+  ydebug("Created YDrawBuilder (scrolling={})", scrolling);
+  return Ok();
+}
+
+void GPUScreenImpl::handleYdrawOSC(const std::string& payload, bool scrolling) {
+  // Lazy init builder
+  if (auto res = initYdrawBuilder(scrolling); !res) {
+    return;
+  }
+
+  auto& builder = scrolling ? _ydrawScrolling : _ydrawAbsolute;
+
+  // Parse args and payload
+  std::string args;
+  std::string payloadDecoded;
+  size_t sepPos = payload.find(';');
+  if (sepPos != std::string::npos) {
+    args = payload.substr(0, sepPos);
+    // Decode base64 payload
+    std::string b64 = payload.substr(sepPos + 1);
+    static auto b64Decode = [](const std::string& in) -> std::string {
+      static const std::string chars =
+          "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+      std::string out;
+      std::vector<int> T(256, -1);
+      for (int i = 0; i < 64; i++) T[chars[i]] = i;
+      int val = 0, valb = -8;
+      for (unsigned char c : in) {
+        if (T[c] == -1) break;
+        val = (val << 6) + T[c];
+        valb += 6;
+        if (valb >= 0) {
+          out.push_back(char((val >> valb) & 0xFF));
+          valb -= 8;
+        }
+      }
+      return out;
+    };
+    payloadDecoded = b64Decode(b64);
+  } else {
+    args = payload;
+  }
+
+  // Handle clear command
+  if (args.find("--clear") != std::string::npos) {
+    builder->clear();
+    _ydrawDirty = true;
+    _needsBindGroupRecreation = true;
+  } else if (!payloadDecoded.empty()) {
+    // Parse payload into YDrawBuffer
+    auto bufRes = YDrawBuffer::create();
+    if (!bufRes) {
+      yerror("Failed to create YDrawBuffer");
+      return;
+    }
+    auto buf = *bufRes;
+
+    // Check for YAML mode
+    bool yamlMode = args.find("--yaml") != std::string::npos;
+
+    if (yamlMode) {
+      // Parse as YAML
+      auto res = parseYDrawYAML(buf, payloadDecoded);
+      if (!res) {
+        yerror("YDrawBuffer YAML parse failed: {}", error_msg(res));
+        return;
+      }
+    } else {
+      // Check for LZ4 compression
+      const uint8_t* data = reinterpret_cast<const uint8_t*>(payloadDecoded.data());
+      size_t size = payloadDecoded.size();
+      std::vector<uint8_t> decompressed;
+      if (size >= 4) {
+        uint32_t magic = data[0] | (data[1] << 8) | (data[2] << 16) | (data[3] << 24);
+        if (magic == 0x184D2204) {  // LZ4 frame magic
+          LZ4F_dctx* dctx = nullptr;
+          if (!LZ4F_isError(LZ4F_createDecompressionContext(&dctx, LZ4F_VERSION))) {
+            LZ4F_frameInfo_t info;
+            size_t consumed = size;
+            LZ4F_getFrameInfo(dctx, &info, data, &consumed);
+            size_t dstSize = info.contentSize > 0 ? info.contentSize : size * 4;
+            decompressed.resize(dstSize);
+            size_t srcOffset = consumed;
+            size_t dstOffset = 0;
+            while (srcOffset < size) {
+              size_t srcAvail = size - srcOffset;
+              size_t dstAvail = decompressed.size() - dstOffset;
+              size_t result = LZ4F_decompress(dctx, decompressed.data() + dstOffset, &dstAvail,
+                                              data + srcOffset, &srcAvail, nullptr);
+              if (LZ4F_isError(result)) break;
+              srcOffset += srcAvail;
+              dstOffset += dstAvail;
+              if (result == 0) break;
+              if (dstOffset >= decompressed.size()) {
+                decompressed.resize(decompressed.size() * 2);
+              }
+            }
+            decompressed.resize(dstOffset);
+            LZ4F_freeDecompressionContext(dctx);
+            data = decompressed.data();
+            size = decompressed.size();
+          }
+        }
+      }
+
+      // Deserialize into buffer
+      if (auto res = buf->deserialize(data, size); !res) {
+        yerror("YDrawBuffer deserialize failed: {}", error_msg(res));
+        return;
+      }
+    }
+
+    // Sync scrolling builder cursor with vterm cursor
+    if (scrolling && _vterm) {
+      VTermPos pos;
+      VTermState* state = vterm_obtain_state(_vterm);
+      vterm_state_get_cursorpos(state, &pos);
+      ydebug("YDraw scrolling: BEFORE addYdrawBuffer - vterm cursor=({},{}) builder cursor=({},{})",
+             pos.col, pos.row, builder->cursorCol(), builder->cursorRow());
+      builder->setCursorPosition(static_cast<uint16_t>(pos.col),
+                                  static_cast<uint16_t>(pos.row));
+      ydebug("YDraw scrolling: AFTER setCursorPosition - builder cursor=({},{})",
+             builder->cursorCol(), builder->cursorRow());
+    }
+
+    // Add buffer to builder
+    auto addRes = builder->addYdrawBuffer(buf);
+    if (!addRes) {
+      yerror("addYdrawBuffer failed: {}", error_msg(addRes));
+      return;
+    }
+
+    // Sync scroll with vterm if scrolling occurred
+    if (scrolling) {
+      ydebug("YDraw scrolling: AFTER addYdrawBuffer - linesScrolled={} builder cursor=({},{}) sceneHeight={}",
+             *addRes, builder->cursorCol(), builder->cursorRow(), builder->sceneHeightInLines());
+    }
+    if (scrolling && *addRes > 0) {
+      // The builder scrolled - vterm should also scroll
+      // This is handled automatically since we sync cursor before each add
+      ydebug("YDraw scrolling: {} lines scrolled", *addRes);
+    }
+
+    _ydrawDirty = true;
+    _needsBindGroupRecreation = true;
+  }
+  _hasDamage = true;
+}
+
+void GPUScreenImpl::updateYdrawGpuBuffers() {
+  if (!_ydrawDirty) return;
+
+  // For now, we just mark that we need to rebuild bind group
+  // The actual buffer creation happens in recreateBindGroup
+  _ydrawDirty = false;
 }
 
 //=============================================================================
@@ -5412,24 +5499,107 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
 
     // Overlay bindings (15-18)
     // Prepare overlay buffers if available, otherwise use fallback
-    if (_screenDrawLayer && _screenDrawLayer->hasContent()) {
-        _screenDrawLayer->prepareForRender();
+    bool hasOverlay = (_ydrawAbsolute && _ydrawAbsolute->hasContent()) ||
+                      (_ydrawScrolling && _ydrawScrolling->hasContent());
+    if (hasOverlay) {
+        // Prefer absolute overlay, fallback to scrolling
+        YDrawBuilder::Ptr builder = (_ydrawAbsolute && _ydrawAbsolute->hasContent())
+                                    ? _ydrawAbsolute : _ydrawScrolling;
+
+        // Build staging data
+        const auto& gridStaging = builder->gridStaging();
+        const auto& glyphs = builder->glyphs();
+        std::vector<uint32_t> primStaging;
+        builder->buildPrimStaging(primStaging);
+
+        // Create/resize GPU buffers as needed
+        uint32_t gridSize = std::max(static_cast<uint32_t>(gridStaging.size() * sizeof(uint32_t)), 4u);
+        uint32_t glyphSize = std::max(static_cast<uint32_t>(glyphs.size() * sizeof(YDrawGlyph)), 4u);
+        uint32_t primSize = std::max(static_cast<uint32_t>(primStaging.size() * sizeof(uint32_t)), 4u);
+
+        // Recreate buffers if sizes changed
+        if (gridSize > _ydrawGridBufferSize) {
+            if (_ydrawGridBuffer) wgpuBufferRelease(_ydrawGridBuffer);
+            WGPUBufferDescriptor desc{};
+            desc.label = WGPU_STR("ydraw-grid");
+            desc.size = gridSize;
+            desc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
+            _ydrawGridBuffer = wgpuDeviceCreateBuffer(device, &desc);
+            _ydrawGridBufferSize = gridSize;
+        }
+        if (glyphSize > _ydrawGlyphBufferSize) {
+            if (_ydrawGlyphBuffer) wgpuBufferRelease(_ydrawGlyphBuffer);
+            WGPUBufferDescriptor desc{};
+            desc.label = WGPU_STR("ydraw-glyph");
+            desc.size = glyphSize;
+            desc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
+            _ydrawGlyphBuffer = wgpuDeviceCreateBuffer(device, &desc);
+            _ydrawGlyphBufferSize = glyphSize;
+        }
+        if (primSize > _ydrawPrimBufferSize) {
+            if (_ydrawPrimBuffer) wgpuBufferRelease(_ydrawPrimBuffer);
+            WGPUBufferDescriptor desc{};
+            desc.label = WGPU_STR("ydraw-prim");
+            desc.size = primSize;
+            desc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
+            _ydrawPrimBuffer = wgpuDeviceCreateBuffer(device, &desc);
+            _ydrawPrimBufferSize = primSize;
+        }
+        if (!_ydrawUniformBuffer) {
+            WGPUBufferDescriptor desc{};
+            desc.label = WGPU_STR("ydraw-uniform");
+            desc.size = 48;
+            desc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
+            _ydrawUniformBuffer = wgpuDeviceCreateBuffer(device, &desc);
+        }
+
+        // Write data to buffers
+        if (!gridStaging.empty()) {
+            wgpuQueueWriteBuffer(queue, _ydrawGridBuffer, 0,
+                                 gridStaging.data(), gridStaging.size() * sizeof(uint32_t));
+        }
+        if (!glyphs.empty()) {
+            wgpuQueueWriteBuffer(queue, _ydrawGlyphBuffer, 0,
+                                 glyphs.data(), glyphs.size() * sizeof(YDrawGlyph));
+        }
+        if (!primStaging.empty()) {
+            wgpuQueueWriteBuffer(queue, _ydrawPrimBuffer, 0,
+                                 primStaging.data(), primStaging.size() * sizeof(uint32_t));
+        }
+
+        // Write uniform data
+        struct OverlayUniforms {
+            float sceneMinX, sceneMinY, sceneMaxX, sceneMaxY;
+            uint32_t gridWidth, gridHeight;
+            float cellSizeX, cellSizeY;
+            uint32_t primCount, glyphCount;
+            float pixelRange;
+            uint32_t hasOverlay;
+        } uniforms = {
+            builder->sceneMinX(), builder->sceneMinY(),
+            builder->sceneMaxX(), builder->sceneMaxY(),
+            builder->gridWidth(), builder->gridHeight(),
+            builder->cellSizeX(), builder->cellSizeY(),
+            builder->primitiveCount(), static_cast<uint32_t>(glyphs.size()),
+            4.0f, 1
+        };
+        wgpuQueueWriteBuffer(queue, _ydrawUniformBuffer, 0, &uniforms, sizeof(uniforms));
 
         bgEntries[15].binding = 15;
-        bgEntries[15].buffer = _screenDrawLayer->getGridBuffer();
-        bgEntries[15].size = _screenDrawLayer->getGridBufferSize();
+        bgEntries[15].buffer = _ydrawGridBuffer;
+        bgEntries[15].size = gridSize;
 
         bgEntries[16].binding = 16;
-        bgEntries[16].buffer = _screenDrawLayer->getGlyphBuffer();
-        bgEntries[16].size = std::max(_screenDrawLayer->getGlyphBufferSize(), 4u);
+        bgEntries[16].buffer = _ydrawGlyphBuffer;
+        bgEntries[16].size = glyphSize;
 
         bgEntries[17].binding = 17;
-        bgEntries[17].buffer = _screenDrawLayer->getPrimBuffer();
-        bgEntries[17].size = std::max(_screenDrawLayer->getPrimBufferSize(), 4u);
+        bgEntries[17].buffer = _ydrawPrimBuffer;
+        bgEntries[17].size = primSize;
 
         bgEntries[18].binding = 18;
-        bgEntries[18].buffer = _screenDrawLayer->getUniformBuffer();
-        bgEntries[18].size = 48;  // sizeof(OverlayUniforms)
+        bgEntries[18].buffer = _ydrawUniformBuffer;
+        bgEntries[18].size = 48;
     } else {
         // No overlay - use placeholder buffers
         // Bindings 15-17 are storage buffers, binding 18 is uniform
@@ -5619,12 +5789,7 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
 
   // NOTE: Overlay rendering is now integrated into the main shader (gpu-screen.wgsl)
   // The overlay data is bound at bindings 15-18 and evaluated in fs_main()
-  // Legacy separate render pass commented out:
-  // if (_screenDrawLayer && _screenDrawLayer->hasContent()) {
-  //   if (auto res = _screenDrawLayer->render(pass); !res) {
-  //     ywarn("ScreenDrawLayer render failed: {}", error_msg(res));
-  //   }
-  // }
+  // YDraw overlay is rendered via bindings 15-18 in the main shader pass
 
   return Ok();
 }
