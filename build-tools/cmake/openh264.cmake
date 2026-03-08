@@ -27,7 +27,7 @@ if(openh264_ADDED)
         set(OPENH264_LIB_NAME "libopenh264.a")
     endif()
 
-    # Android cross-compilation setup
+    # Platform-specific build setup
     if(ANDROID)
         # Map Android ABI to openh264 ARCH
         if(ANDROID_ABI STREQUAL "arm64-v8a")
@@ -41,27 +41,79 @@ if(openh264_ADDED)
         endif()
 
         set(OPENH264_BUILD_ARGS "OS=android ARCH=${OPENH264_ARCH} NDKROOT=${ANDROID_NDK} TARGET=android-${ANDROID_NATIVE_API_LEVEL} NDKLEVEL=${ANDROID_NATIVE_API_LEVEL}")
+
+        # Build openh264 using make (Android)
+        ExternalProject_Add(openh264_ext
+            SOURCE_DIR ${openh264_SOURCE_DIR}
+            BUILD_IN_SOURCE TRUE
+            INSTALL_DIR ${OPENH264_INSTALL_DIR}
+
+            UPDATE_DISCONNECTED TRUE
+
+            CONFIGURE_COMMAND ""
+
+            BUILD_COMMAND sh -c "make MAKEFLAGS= -j${NPROC} libraries BUILDTYPE=Release ENABLE_SHARED=No PREFIX=${OPENH264_INSTALL_DIR} ${OPENH264_BUILD_ARGS}"
+
+            INSTALL_COMMAND sh -c "make MAKEFLAGS= install-static BUILDTYPE=Release ENABLE_SHARED=No PREFIX=${OPENH264_INSTALL_DIR} ${OPENH264_BUILD_ARGS}"
+
+            BUILD_BYPRODUCTS
+                ${OPENH264_INSTALL_DIR}/lib/${OPENH264_LIB_NAME}
+        )
+    elseif(WIN32)
+        # Windows: Use msbuild with Visual Studio solution
+        # Determine architecture for msbuild
+        if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+            set(OPENH264_PLATFORM "x64")
+        else()
+            set(OPENH264_PLATFORM "Win32")
+        endif()
+
+        ExternalProject_Add(openh264_ext
+            SOURCE_DIR ${openh264_SOURCE_DIR}
+            BUILD_IN_SOURCE TRUE
+            INSTALL_DIR ${OPENH264_INSTALL_DIR}
+
+            UPDATE_DISCONNECTED TRUE
+
+            CONFIGURE_COMMAND ""
+
+            BUILD_COMMAND msbuild ${openh264_SOURCE_DIR}/codec/build/win32/dec/WelsDecCore.vcxproj
+                /p:Configuration=Release
+                /p:Platform=${OPENH264_PLATFORM}
+                /p:PlatformToolset=v143
+                /m:${NPROC}
+
+            INSTALL_COMMAND ${CMAKE_COMMAND} -E make_directory ${OPENH264_INSTALL_DIR}/lib
+                COMMAND ${CMAKE_COMMAND} -E make_directory ${OPENH264_INSTALL_DIR}/include/wels
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    ${openh264_SOURCE_DIR}/codec/build/win32/dec/${OPENH264_PLATFORM}/Release/WelsDecCore.lib
+                    ${OPENH264_INSTALL_DIR}/lib/openh264.lib
+                COMMAND ${CMAKE_COMMAND} -E copy_directory
+                    ${openh264_SOURCE_DIR}/codec/api/wels
+                    ${OPENH264_INSTALL_DIR}/include/wels
+
+            BUILD_BYPRODUCTS
+                ${OPENH264_INSTALL_DIR}/lib/${OPENH264_LIB_NAME}
+        )
     else()
-        set(OPENH264_BUILD_ARGS "")
+        # Unix/Linux/macOS: Use make
+        ExternalProject_Add(openh264_ext
+            SOURCE_DIR ${openh264_SOURCE_DIR}
+            BUILD_IN_SOURCE TRUE
+            INSTALL_DIR ${OPENH264_INSTALL_DIR}
+
+            UPDATE_DISCONNECTED TRUE
+
+            CONFIGURE_COMMAND ""
+
+            BUILD_COMMAND sh -c "make MAKEFLAGS= -j${NPROC} libraries BUILDTYPE=Release ENABLE_SHARED=No PREFIX=${OPENH264_INSTALL_DIR}"
+
+            INSTALL_COMMAND sh -c "make MAKEFLAGS= install-static BUILDTYPE=Release ENABLE_SHARED=No PREFIX=${OPENH264_INSTALL_DIR}"
+
+            BUILD_BYPRODUCTS
+                ${OPENH264_INSTALL_DIR}/lib/${OPENH264_LIB_NAME}
+        )
     endif()
-
-    # Build openh264 using make
-    ExternalProject_Add(openh264_ext
-        SOURCE_DIR ${openh264_SOURCE_DIR}
-        BUILD_IN_SOURCE TRUE
-        INSTALL_DIR ${OPENH264_INSTALL_DIR}
-
-        UPDATE_DISCONNECTED TRUE
-
-        CONFIGURE_COMMAND ""
-
-        BUILD_COMMAND sh -c "make MAKEFLAGS= -j${NPROC} libraries BUILDTYPE=Release ENABLE_SHARED=No PREFIX=${OPENH264_INSTALL_DIR} ${OPENH264_BUILD_ARGS}"
-
-        INSTALL_COMMAND sh -c "make MAKEFLAGS= install-static BUILDTYPE=Release ENABLE_SHARED=No PREFIX=${OPENH264_INSTALL_DIR} ${OPENH264_BUILD_ARGS}"
-
-        BUILD_BYPRODUCTS
-            ${OPENH264_INSTALL_DIR}/lib/${OPENH264_LIB_NAME}
-    )
 
     # Pre-create include dir for CMake validation
     file(MAKE_DIRECTORY ${OPENH264_INSTALL_DIR}/include)
