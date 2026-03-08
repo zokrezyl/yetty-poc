@@ -597,9 +597,10 @@ fn getFontType(attrs: u32) -> u32 {
 // SHADER_GLYPH_FUNCTIONS_PLACEHOLDER
 
 // ==== YDRAW OVERLAY CONSTANTS ====
-const YDRAW_MAX_ENTRIES_PER_CELL: u32 = 4096u;
-const YDRAW_GLYPH_BIT: u32 = 0x80000000u;
-const YDRAW_INDEX_MASK: u32 = 0x7FFFFFFFu;
+// Use OVERLAY_ prefix to avoid conflict with card shader constants
+const OVERLAY_MAX_ENTRIES_PER_CELL: u32 = 4096u;
+const OVERLAY_GLYPH_BIT: u32 = 0x80000000u;
+const OVERLAY_INDEX_MASK: u32 = 0x7FFFFFFFu;
 
 // Helper to unpack u32 color to vec3<f32>
 fn unpackColor(packed: u32) -> vec3<f32> {
@@ -648,7 +649,7 @@ fn evaluateOverlay(pixelPos: vec2<f32>) -> vec4<f32> {
 
     let packedStart = overlayGridData[cellIndex];
     let cellEntryCount = overlayGridData[packedStart];
-    let loopCount = min(cellEntryCount, YDRAW_MAX_ENTRIES_PER_CELL);
+    let loopCount = min(cellEntryCount, OVERLAY_MAX_ENTRIES_PER_CELL);
 
     var resultColor = vec3<f32>(0.0, 0.0, 0.0);
     var resultAlpha = 0.0;
@@ -657,9 +658,9 @@ fn evaluateOverlay(pixelPos: vec2<f32>) -> vec4<f32> {
     for (var i = 0u; i < loopCount; i++) {
         let rawIdx = overlayGridData[packedStart + 1u + i];
 
-        if ((rawIdx & YDRAW_GLYPH_BIT) != 0u) {
+        if ((rawIdx & OVERLAY_GLYPH_BIT) != 0u) {
             // TEXT GLYPH (MSDF)
-            let gi = rawIdx & YDRAW_INDEX_MASK;
+            let gi = rawIdx & OVERLAY_INDEX_MASK;
             let gOffset = gi * 5u;
 
             let gx = overlayGlyphBuffer[gOffset + 0u];
