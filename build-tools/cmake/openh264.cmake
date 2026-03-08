@@ -84,6 +84,24 @@ if(openh264_ADDED)
             BUILD_BYPRODUCTS
                 ${OPENH264_INSTALL_DIR}/lib/${OPENH264_LIB_NAME}
         )
+    elseif(EMSCRIPTEN)
+        # Emscripten/WebAssembly: Use emmake
+        ExternalProject_Add(openh264_ext
+            SOURCE_DIR ${openh264_SOURCE_DIR}
+            BUILD_IN_SOURCE TRUE
+            INSTALL_DIR ${OPENH264_INSTALL_DIR}
+
+            UPDATE_DISCONNECTED TRUE
+
+            CONFIGURE_COMMAND ""
+
+            BUILD_COMMAND sh -c "emmake make MAKEFLAGS= -j${NPROC} libraries BUILDTYPE=Release ENABLE_SHARED=No USE_ASM=No PREFIX=${OPENH264_INSTALL_DIR}"
+
+            INSTALL_COMMAND sh -c "emmake make MAKEFLAGS= install-static BUILDTYPE=Release ENABLE_SHARED=No USE_ASM=No PREFIX=${OPENH264_INSTALL_DIR}"
+
+            BUILD_BYPRODUCTS
+                ${OPENH264_INSTALL_DIR}/lib/${OPENH264_LIB_NAME}
+        )
     else()
         # Unix/Linux/macOS: Use make
         ExternalProject_Add(openh264_ext

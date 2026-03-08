@@ -25,12 +25,17 @@ if(dav1d_ADDED)
 
     # Platform-specific library name
     if(WIN32)
-        set(DAV1D_LIB_NAME "dav1d.lib")
+        # MSVC produces dav1d.lib, MinGW produces libdav1d.a
+        if(MSVC)
+            set(DAV1D_LIB_NAME "dav1d.lib")
+        else()
+            set(DAV1D_LIB_NAME "libdav1d.a")
+        endif()
     else()
         set(DAV1D_LIB_NAME "libdav1d.a")
     endif()
 
-    # Android cross-compilation setup
+    # Platform-specific cross-compilation setup
     if(ANDROID)
         # Map Android ABI to meson cpu/cpu_family
         if(ANDROID_ABI STREQUAL "arm64-v8a")
@@ -69,8 +74,47 @@ cpu = '${DAV1D_CPU}'
 endian = 'little'
 ")
         set(DAV1D_CROSS_ARGS --cross-file ${DAV1D_CROSS_FILE})
+    elseif(EMSCRIPTEN)
+        # Generate meson cross file for Emscripten/WebAssembly
+        set(DAV1D_CROSS_FILE "${CMAKE_BINARY_DIR}/_deps/dav1d-emscripten-cross.txt")
+        file(WRITE ${DAV1D_CROSS_FILE}
+"[binaries]
+c = 'emcc'
+cpp = 'em++'
+ar = 'emar'
+strip = 'emstrip'
+
+[built-in options]
+c_args = ['-fPIC', '-pthread']
+c_link_args = ['-pthread']
+
+[host_machine]
+system = 'emscripten'
+cpu_family = 'wasm32'
+cpu = 'wasm32'
+endian = 'little'
+")
+        set(DAV1D_CROSS_ARGS --cross-file ${DAV1D_CROSS_FILE})
+        # Disable ASM for WebAssembly
+        set(DAV1D_EXTRA_ARGS -Denable_asm=false)
+    elseif(WIN32)
+        # Windows: use native file to ensure MSVC is used
+        set(DAV1D_CROSS_FILE "${CMAKE_BINARY_DIR}/_deps/dav1d-windows-native.txt")
+        file(WRITE ${DAV1D_CROSS_FILE}
+"[binaries]
+c = 'cl'
+cpp = 'cl'
+ar = 'lib'
+
+[built-in options]
+c_args = []
+cpp_args = []
+")
+        set(DAV1D_CROSS_ARGS --native-file ${DAV1D_CROSS_FILE})
+        set(DAV1D_EXTRA_ARGS "")
     else()
         set(DAV1D_CROSS_ARGS "")
+        set(DAV1D_EXTRA_ARGS "")
     endif()
 
     # Build dav1d using meson + ninja
@@ -90,6 +134,7 @@ endian = 'little'
             -Denable_tools=false
             -Denable_tests=false
             -Denable_examples=false
+            ${DAV1D_EXTRA_ARGS}
             ${DAV1D_CROSS_ARGS}
 
         BUILD_COMMAND ninja -C ${DAV1D_BUILD_DIR} -j${NPROC}
