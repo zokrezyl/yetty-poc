@@ -22,6 +22,8 @@
 #include <cmath>
 #include <cstring>
 #include <cstdint>
+#include <cerrno>
+#include <unistd.h>
 
 // Base64 encoding table
 static const char base64_chars[] =
@@ -118,27 +120,54 @@ void yuv_to_rgb(const yetty::yvideo::YUVFrame& frame, std::vector<uint8_t>& rgb)
 // Card name for updates
 static const char* CARD_NAME = "yplayer-video";
 
+// Write all data, handling partial writes
+void write_all(int fd, const char* data, size_t len) {
+    size_t written = 0;
+    while (written < len) {
+        ssize_t n = write(fd, data + written, len - written);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        written += n;
+    }
+}
+
 void send_frame_osc(const std::vector<uint8_t>& tga, int x, int y, int w, int h) {
     std::string payload = base64_encode(tga.data(), tga.size());
-    
+
     ytrace("Sending update frame, payload size: {}", payload.size());
-    
-    // OSC sequence: \033]666666;update --name NAME;-i -;BASE64\033\\
-    std::cout << "\033]666666;update --name " << CARD_NAME << ";-i -;" << payload << "\033\\";
-    std::cout.flush();
-    
+
+    // Build complete OSC sequence first, then single atomic write
+    std::string seq;
+    seq.reserve(64 + payload.size());
+    seq += "\033]666666;update --name ";
+    seq += CARD_NAME;
+    seq += ";-i -;";
+    seq += payload;
+    seq += "\033\\";
+
+    write_all(STDOUT_FILENO, seq.data(), seq.size());
+
     ytrace("Update frame sent");
 }
 
 void run_card_osc(int x, int y, int w, int h, const std::vector<uint8_t>& tga) {
     std::string payload = base64_encode(tga.data(), tga.size());
-    
-    // OSC sequence to create image card with initial image
-    // Format: run -c image --name NAME -x X -y Y -w W -h H -r;-i -;PAYLOAD
-    std::cout << "\033]666666;run -c image --name " << CARD_NAME 
-              << " -x " << x << " -y " << y 
-              << " -w " << w << " -h " << h << " -r;-i -;" << payload << "\033\\";
-    std::cout.flush();
+
+    // Build complete OSC sequence first, then single atomic write
+    char header[256];
+    std::snprintf(header, sizeof(header),
+        "\033]666666;run -c image --name %s -x %d -y %d -w %d -h %d -r;-i -;",
+        CARD_NAME, x, y, w, h);
+
+    std::string seq;
+    seq.reserve(strlen(header) + payload.size() + 4);
+    seq += header;
+    seq += payload;
+    seq += "\033\\";
+
+    write_all(STDOUT_FILENO, seq.data(), seq.size());
 }
 
 int main(int argc, char* argv[]) {
@@ -150,6 +179,7 @@ int main(int argc, char* argv[]) {
     args::ValueFlag<int> xArg(parser, "x", "X position", {'x'}, 0);
     args::ValueFlag<int> yArg(parser, "y", "Y position", {'y'}, 0);
     args::Flag loopArg(parser, "loop", "Loop playback", {'l', "loop"});
+    args::ValueFlag<double> fpsArg(parser, "fps", "Playback FPS (default: video fps)", {'f', "fps"}, 0);
     args::ValueFlag<std::string> ytraceFileArg(parser, "file", "Write ytrace output to file", {"ytrace-file"});
     
     try {
@@ -211,12 +241,18 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     
-    ytrace("Video: {}x{} @ {} fps, {} frames", 
-           source->width(), source->height(), source->frameRate(), source->frameCount());
-    
+    // Use specified FPS or video's native FPS
+    double fps = args::get(fpsArg);
+    if (fps <= 0) {
+        fps = source->frameRate();
+    }
+
+    ytrace("Video: {}x{} @ {} fps (playback: {} fps), {} frames",
+           source->width(), source->height(), source->frameRate(), fps, source->frameCount());
+
     // Calculate frame interval
     auto frameInterval = std::chrono::microseconds(
-        static_cast<int64_t>(1000000.0 / source->frameRate())
+        static_cast<int64_t>(1000000.0 / fps)
     );
     
     std::vector<uint8_t> rgb;

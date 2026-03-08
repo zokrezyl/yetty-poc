@@ -30,6 +30,49 @@ if(dav1d_ADDED)
         set(DAV1D_LIB_NAME "libdav1d.a")
     endif()
 
+    # Android cross-compilation setup
+    if(ANDROID)
+        # Map Android ABI to meson cpu/cpu_family
+        if(ANDROID_ABI STREQUAL "arm64-v8a")
+            set(DAV1D_CPU "aarch64")
+            set(DAV1D_CPU_FAMILY "aarch64")
+        elseif(ANDROID_ABI STREQUAL "armeabi-v7a")
+            set(DAV1D_CPU "armv7")
+            set(DAV1D_CPU_FAMILY "arm")
+        elseif(ANDROID_ABI STREQUAL "x86_64")
+            set(DAV1D_CPU "x86_64")
+            set(DAV1D_CPU_FAMILY "x86_64")
+        elseif(ANDROID_ABI STREQUAL "x86")
+            set(DAV1D_CPU "i686")
+            set(DAV1D_CPU_FAMILY "x86")
+        endif()
+
+        # Generate meson cross file for Android
+        set(DAV1D_CROSS_FILE "${CMAKE_BINARY_DIR}/_deps/dav1d-android-cross.txt")
+        file(WRITE ${DAV1D_CROSS_FILE}
+"[binaries]
+c = '${CMAKE_C_COMPILER}'
+cpp = '${CMAKE_CXX_COMPILER}'
+ar = '${CMAKE_AR}'
+strip = '${CMAKE_STRIP}'
+
+[built-in options]
+c_args = ['-DANDROID', '-fPIC', '--target=${ANDROID_LLVM_TRIPLE}', '--sysroot=${CMAKE_SYSROOT}']
+c_link_args = ['--target=${ANDROID_LLVM_TRIPLE}', '--sysroot=${CMAKE_SYSROOT}']
+cpp_args = ['-DANDROID', '-fPIC', '--target=${ANDROID_LLVM_TRIPLE}', '--sysroot=${CMAKE_SYSROOT}']
+cpp_link_args = ['--target=${ANDROID_LLVM_TRIPLE}', '--sysroot=${CMAKE_SYSROOT}']
+
+[host_machine]
+system = 'android'
+cpu_family = '${DAV1D_CPU_FAMILY}'
+cpu = '${DAV1D_CPU}'
+endian = 'little'
+")
+        set(DAV1D_CROSS_ARGS --cross-file ${DAV1D_CROSS_FILE})
+    else()
+        set(DAV1D_CROSS_ARGS "")
+    endif()
+
     # Build dav1d using meson + ninja
     ExternalProject_Add(dav1d_ext
         SOURCE_DIR ${dav1d_SOURCE_DIR}
@@ -47,6 +90,7 @@ if(dav1d_ADDED)
             -Denable_tools=false
             -Denable_tests=false
             -Denable_examples=false
+            ${DAV1D_CROSS_ARGS}
 
         BUILD_COMMAND ninja -C ${DAV1D_BUILD_DIR} -j${NPROC}
         INSTALL_COMMAND ninja -C ${DAV1D_BUILD_DIR} install

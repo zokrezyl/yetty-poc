@@ -27,6 +27,24 @@ if(openh264_ADDED)
         set(OPENH264_LIB_NAME "libopenh264.a")
     endif()
 
+    # Android cross-compilation setup
+    if(ANDROID)
+        # Map Android ABI to openh264 ARCH
+        if(ANDROID_ABI STREQUAL "arm64-v8a")
+            set(OPENH264_ARCH "arm64")
+        elseif(ANDROID_ABI STREQUAL "armeabi-v7a")
+            set(OPENH264_ARCH "arm")
+        elseif(ANDROID_ABI STREQUAL "x86_64")
+            set(OPENH264_ARCH "x86_64")
+        elseif(ANDROID_ABI STREQUAL "x86")
+            set(OPENH264_ARCH "x86")
+        endif()
+
+        set(OPENH264_BUILD_ARGS "OS=android ARCH=${OPENH264_ARCH} NDKROOT=${ANDROID_NDK} TARGET=android-${ANDROID_NATIVE_API_LEVEL} NDKLEVEL=${ANDROID_NATIVE_API_LEVEL}")
+    else()
+        set(OPENH264_BUILD_ARGS "")
+    endif()
+
     # Build openh264 using make
     ExternalProject_Add(openh264_ext
         SOURCE_DIR ${openh264_SOURCE_DIR}
@@ -37,15 +55,9 @@ if(openh264_ADDED)
 
         CONFIGURE_COMMAND ""
 
-        BUILD_COMMAND make -j${NPROC}
-            BUILDTYPE=Release
-            ENABLE_SHARED=No
-            PREFIX=${OPENH264_INSTALL_DIR}
+        BUILD_COMMAND sh -c "make MAKEFLAGS= -j${NPROC} libraries BUILDTYPE=Release ENABLE_SHARED=No PREFIX=${OPENH264_INSTALL_DIR} ${OPENH264_BUILD_ARGS}"
 
-        INSTALL_COMMAND make install
-            BUILDTYPE=Release
-            ENABLE_SHARED=No
-            PREFIX=${OPENH264_INSTALL_DIR}
+        INSTALL_COMMAND sh -c "make MAKEFLAGS= install-static BUILDTYPE=Release ENABLE_SHARED=No PREFIX=${OPENH264_INSTALL_DIR} ${OPENH264_BUILD_ARGS}"
 
         BUILD_BYPRODUCTS
             ${OPENH264_INSTALL_DIR}/lib/${OPENH264_LIB_NAME}
