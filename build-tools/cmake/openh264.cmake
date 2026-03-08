@@ -85,7 +85,9 @@ if(openh264_ADDED)
                 ${OPENH264_INSTALL_DIR}/lib/${OPENH264_LIB_NAME}
         )
     elseif(EMSCRIPTEN)
-        # Emscripten/WebAssembly: Use emmake
+        # Emscripten/WebAssembly: Use emmake with ARCH= to prevent -m64 flags
+        # Add -pthread for threading support
+        # Define __APPLE__ to use pthread_cond_t instead of sem_t (sem_timedwait not available in emscripten)
         ExternalProject_Add(openh264_ext
             SOURCE_DIR ${openh264_SOURCE_DIR}
             BUILD_IN_SOURCE TRUE
@@ -95,9 +97,9 @@ if(openh264_ADDED)
 
             CONFIGURE_COMMAND ""
 
-            BUILD_COMMAND sh -c "emmake make MAKEFLAGS= -j${NPROC} libraries BUILDTYPE=Release ENABLE_SHARED=No USE_ASM=No PREFIX=${OPENH264_INSTALL_DIR}"
+            BUILD_COMMAND sh -c "emmake make MAKEFLAGS= -j${NPROC} libraries BUILDTYPE=Release ENABLE_SHARED=No USE_ASM=No ARCH= 'CFLAGS=-pthread -D__APPLE__' 'CXXFLAGS=-pthread -D__APPLE__' 'LDFLAGS=-pthread' PREFIX=${OPENH264_INSTALL_DIR}"
 
-            INSTALL_COMMAND sh -c "emmake make MAKEFLAGS= install-static BUILDTYPE=Release ENABLE_SHARED=No USE_ASM=No PREFIX=${OPENH264_INSTALL_DIR}"
+            INSTALL_COMMAND sh -c "emmake make MAKEFLAGS= install-static BUILDTYPE=Release ENABLE_SHARED=No USE_ASM=No ARCH= PREFIX=${OPENH264_INSTALL_DIR}"
 
             BUILD_BYPRODUCTS
                 ${OPENH264_INSTALL_DIR}/lib/${OPENH264_LIB_NAME}
