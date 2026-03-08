@@ -60,12 +60,12 @@ if(openh264_ADDED)
                 ${OPENH264_INSTALL_DIR}/lib/${OPENH264_LIB_NAME}
         )
     elseif(WIN32)
-        # Windows: Use msbuild with Visual Studio solution
-        # Determine architecture for msbuild
+        # Windows: Use make with OS=msvc (requires make installed via chocolatey)
+        # Determine architecture
         if(CMAKE_SIZEOF_VOID_P EQUAL 8)
-            set(OPENH264_PLATFORM "x64")
+            set(OPENH264_ARCH "x86_64")
         else()
-            set(OPENH264_PLATFORM "Win32")
+            set(OPENH264_ARCH "i386")
         endif()
 
         ExternalProject_Add(openh264_ext
@@ -77,20 +77,9 @@ if(openh264_ADDED)
 
             CONFIGURE_COMMAND ""
 
-            BUILD_COMMAND msbuild ${openh264_SOURCE_DIR}/codec/build/win32/dec/WelsDecCore.vcxproj
-                /p:Configuration=Release
-                /p:Platform=${OPENH264_PLATFORM}
-                /p:PlatformToolset=v143
-                /m:${NPROC}
+            BUILD_COMMAND make MAKEFLAGS= -j${NPROC} OS=msvc ARCH=${OPENH264_ARCH} libraries BUILDTYPE=Release ENABLE_SHARED=No PREFIX=${OPENH264_INSTALL_DIR}
 
-            INSTALL_COMMAND ${CMAKE_COMMAND} -E make_directory ${OPENH264_INSTALL_DIR}/lib
-                COMMAND ${CMAKE_COMMAND} -E make_directory ${OPENH264_INSTALL_DIR}/include/wels
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    ${openh264_SOURCE_DIR}/codec/build/win32/dec/${OPENH264_PLATFORM}/Release/WelsDecCore.lib
-                    ${OPENH264_INSTALL_DIR}/lib/openh264.lib
-                COMMAND ${CMAKE_COMMAND} -E copy_directory
-                    ${openh264_SOURCE_DIR}/codec/api/wels
-                    ${OPENH264_INSTALL_DIR}/include/wels
+            INSTALL_COMMAND make MAKEFLAGS= OS=msvc ARCH=${OPENH264_ARCH} install-static BUILDTYPE=Release ENABLE_SHARED=No PREFIX=${OPENH264_INSTALL_DIR}
 
             BUILD_BYPRODUCTS
                 ${OPENH264_INSTALL_DIR}/lib/${OPENH264_LIB_NAME}

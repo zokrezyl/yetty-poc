@@ -192,7 +192,7 @@ jobs:
     - name: Install build dependencies
       run: |
         pip install meson ninja
-        choco install nasm -y
+        choco install nasm make -y
         echo "C:\Program Files\NASM" >> $env:GITHUB_PATH
 
     - name: Configure CMake
