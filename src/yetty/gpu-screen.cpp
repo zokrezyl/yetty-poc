@@ -512,6 +512,7 @@ private:
   WGPUBindGroup _bindGroup = nullptr;
   WGPUBuffer _uniformBuffer = nullptr;
   WGPUBuffer _cellBuffer = nullptr;
+  WGPUBuffer _dummyStorageBuffer = nullptr;  // Placeholder for overlay bindings when no overlay
   size_t _cellBufferSize = 0;
   uint32_t _textureCols = 0;
   uint32_t _textureRows = 0;
@@ -3247,8 +3248,10 @@ int GPUScreenImpl::onOSC(int command, VTermStringFragment frag, void *user) {
         // Handle clear command
         if (args.find("--clear") != std::string::npos) {
           self->_screenDrawLayer->clear();
+          self->_needsBindGroupRecreation = true;
         } else if (!payload.empty()) {
           auto res = self->_screenDrawLayer->update(args, payload);
+          self->_needsBindGroupRecreation = true;
           if (!res) {
             yerror("ScreenDrawLayer update failed: {}", error_msg(res));
           }
@@ -3665,8 +3668,10 @@ bool GPUScreenImpl::handleOSCSequence(const std::string &sequence,
         // Handle clear command
         if (args.find("--clear") != std::string::npos) {
           _screenDrawLayer->clear();
+          _needsBindGroupRecreation = true;
         } else if (!payloadDecoded.empty()) {
           auto res = _screenDrawLayer->update(args, payloadDecoded);
+          _needsBindGroupRecreation = true;
           if (!res) {
             yerror("ScreenDrawLayer update failed: {}", error_msg(res));
           }
@@ -5082,6 +5087,16 @@ Result<void> GPUScreenImpl::initPipeline() {
     return Err<void>("Failed to create uniform buffer");
   }
 
+  // Create dummy storage buffer for overlay fallback bindings
+  WGPUBufferDescriptor dummyStorageDesc = {};
+  dummyStorageDesc.label = WGPU_STR("dummy overlay storage");
+  dummyStorageDesc.size = 4;
+  dummyStorageDesc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
+  _dummyStorageBuffer = _allocator->createBuffer(dummyStorageDesc);
+  if (!_dummyStorageBuffer) {
+    return Err<void>("Failed to create dummy storage buffer");
+  }
+
   _pipelineInitialized = true;
   ydebug("GPUScreenImpl::initPipeline: per-instance resources initialized");
   return Ok();
@@ -5305,7 +5320,7 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
       bmMetadataSize = _msdfFont->atlas()->getBufferGlyphCount() * sizeof(GlyphMetadataGPU);
     }
 
-    WGPUBindGroupEntry bgEntries[15] = {};  // 12 + 3 for raster font
+    WGPUBindGroupEntry bgEntries[19] = {};  // 15 grid + 4 overlay
 
     bgEntries[0].binding = 0;
     bgEntries[0].buffer = _uniformBuffer;
@@ -5395,9 +5410,49 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
         bgEntries[14].size = 8;  // Minimum size
     }
 
+    // Overlay bindings (15-18)
+    // Prepare overlay buffers if available, otherwise use fallback
+    if (_screenDrawLayer && _screenDrawLayer->hasContent()) {
+        _screenDrawLayer->prepareForRender();
+
+        bgEntries[15].binding = 15;
+        bgEntries[15].buffer = _screenDrawLayer->getGridBuffer();
+        bgEntries[15].size = _screenDrawLayer->getGridBufferSize();
+
+        bgEntries[16].binding = 16;
+        bgEntries[16].buffer = _screenDrawLayer->getGlyphBuffer();
+        bgEntries[16].size = std::max(_screenDrawLayer->getGlyphBufferSize(), 4u);
+
+        bgEntries[17].binding = 17;
+        bgEntries[17].buffer = _screenDrawLayer->getPrimBuffer();
+        bgEntries[17].size = std::max(_screenDrawLayer->getPrimBufferSize(), 4u);
+
+        bgEntries[18].binding = 18;
+        bgEntries[18].buffer = _screenDrawLayer->getUniformBuffer();
+        bgEntries[18].size = 48;  // sizeof(OverlayUniforms)
+    } else {
+        // No overlay - use placeholder buffers
+        // Bindings 15-17 are storage buffers, binding 18 is uniform
+        bgEntries[15].binding = 15;
+        bgEntries[15].buffer = _dummyStorageBuffer;
+        bgEntries[15].size = 4;
+
+        bgEntries[16].binding = 16;
+        bgEntries[16].buffer = _dummyStorageBuffer;
+        bgEntries[16].size = 4;
+
+        bgEntries[17].binding = 17;
+        bgEntries[17].buffer = _dummyStorageBuffer;
+        bgEntries[17].size = 4;
+
+        bgEntries[18].binding = 18;
+        bgEntries[18].buffer = _uniformBuffer;  // Uniform buffer for overlay uniforms
+        bgEntries[18].size = 48;
+    }
+
     WGPUBindGroupDescriptor bindGroupDesc = {};
     bindGroupDesc.layout = shaderMgr->getGridBindGroupLayout();
-    bindGroupDesc.entryCount = 15;
+    bindGroupDesc.entryCount = 19;
     bindGroupDesc.entries = bgEntries;
     _bindGroup = wgpuDeviceCreateBindGroup(device, &bindGroupDesc);
     if (!_bindGroup) {
@@ -5562,12 +5617,14 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
       pass, 0, shaderMgr->getQuadVertexBuffer(), 0, WGPU_WHOLE_SIZE);
   wgpuRenderPassEncoderDraw(pass, 6, 1, 0, 0);
 
-  // Render screen draw layer (pixel-coordinate ydraw overlay) on top of terminal
-  if (_screenDrawLayer && _screenDrawLayer->hasContent()) {
-    if (auto res = _screenDrawLayer->render(pass); !res) {
-      ywarn("ScreenDrawLayer render failed: {}", error_msg(res));
-    }
-  }
+  // NOTE: Overlay rendering is now integrated into the main shader (gpu-screen.wgsl)
+  // The overlay data is bound at bindings 15-18 and evaluated in fs_main()
+  // Legacy separate render pass commented out:
+  // if (_screenDrawLayer && _screenDrawLayer->hasContent()) {
+  //   if (auto res = _screenDrawLayer->render(pass); !res) {
+  //     ywarn("ScreenDrawLayer render failed: {}", error_msg(res));
+  //   }
+  // }
 
   return Ok();
 }
