@@ -778,11 +778,11 @@ suite gpu_pipeline_tests = [] {
         expect(type == static_cast<uint32_t>(SDFType::Circle))
             << "type should be Circle";
 
-        // Circle: +2=cx, +3=cy, +4=r, +5=fillColor
-        expect(p.storage[primOff + 2] == 50.0_f) << "cx";
-        expect(p.storage[primOff + 3] == 50.0_f) << "cy";
-        expect(p.storage[primOff + 4] == 10.0_f) << "r";
-        uint32_t readFill = readU32(p.storage, primOff + 5);
+        // GPU format with scroll offset: +2=offsetXY, +3=cx, +4=cy, +5=r, +6=fillColor
+        expect(p.storage[primOff + 3] == 50.0_f) << "cx";
+        expect(p.storage[primOff + 4] == 50.0_f) << "cy";
+        expect(p.storage[primOff + 5] == 10.0_f) << "r";
+        uint32_t readFill = readU32(p.storage, primOff + 6);
         expect(readFill == fillColor) << "fillColor";
     };
 
@@ -805,10 +805,12 @@ suite gpu_pipeline_tests = [] {
             uint32_t type = readU32(p.storage, primOff);
 
             if (type == static_cast<uint32_t>(SDFType::Circle)) {
-                uint32_t fill = readU32(p.storage, primOff + 5);
+                // GPU format: fillColor at +6 (after offset at +2)
+                uint32_t fill = readU32(p.storage, primOff + 6);
                 expect(fill == circleColor) << "Circle fillColor";
             } else if (type == static_cast<uint32_t>(SDFType::RoundedBox)) {
-                uint32_t fill = readU32(p.storage, primOff + 10);
+                // GPU format: fillColor at +11 (after offset at +2)
+                uint32_t fill = readU32(p.storage, primOff + 11);
                 expect(fill == rboxColor) << "RoundedBox fillColor";
             } else {
                 expect(false) << "unexpected prim type " << type;
@@ -974,7 +976,8 @@ suite gpu_pipeline_tests = [] {
         uint32_t absOff = primDataBase + wordOff0;
         uint32_t type = readU32(storage, absOff);
         expect(type == static_cast<uint32_t>(SDFType::RoundedBox));
-        uint32_t readFill = readU32(storage, absOff + 10);
+        // GPU format: fillColor at +11 (after scroll offset at +2)
+        uint32_t readFill = readU32(storage, absOff + 11);
         expect(readFill == newColor) << "fillColor after rebuild";
     };
 
@@ -1059,27 +1062,29 @@ suite gpu_pipeline_tests = [] {
         uint32_t primOff = p.primDataBase + wordOff0;
 
         // Verify exact word offsets that the shader uses
-        // RoundedBox: type=+0, layer=+1, cx=+2, cy=+3, hw=+4, hh=+5
-        //             r0=+6, r1=+7, r2=+8, r3=+9
-        //             fillColor=+10, strokeColor=+11, strokeWidth=+12, round=+13
+        // GPU format with scroll offset: type=+0, layer=+1, offsetXY=+2,
+        //             cx=+3, cy=+4, hw=+5, hh=+6
+        //             r0=+7, r1=+8, r2=+9, r3=+10
+        //             fillColor=+11, strokeColor=+12, strokeWidth=+13, round=+14
         uint32_t type = readU32(p.storage, primOff + 0);
         expect(type == 8_u) << "type = SDF_ROUNDED_BOX (8)";
 
-        expect(p.storage[primOff + 2] == 100.0_f) << "cx";
-        expect(p.storage[primOff + 3] == 200.0_f) << "cy";
-        expect(p.storage[primOff + 4] == 40.0_f) << "hw";
-        expect(p.storage[primOff + 5] == 30.0_f) << "hh";
-        expect(p.storage[primOff + 6] == 5.0_f) << "r0";
-        expect(p.storage[primOff + 7] == 6.0_f) << "r1";
-        expect(p.storage[primOff + 8] == 7.0_f) << "r2";
-        expect(p.storage[primOff + 9] == 8.0_f) << "r3";
+        // +2 is packed scroll offset (0,0 initially)
+        expect(p.storage[primOff + 3] == 100.0_f) << "cx";
+        expect(p.storage[primOff + 4] == 200.0_f) << "cy";
+        expect(p.storage[primOff + 5] == 40.0_f) << "hw";
+        expect(p.storage[primOff + 6] == 30.0_f) << "hh";
+        expect(p.storage[primOff + 7] == 5.0_f) << "r0";
+        expect(p.storage[primOff + 8] == 6.0_f) << "r1";
+        expect(p.storage[primOff + 9] == 7.0_f) << "r2";
+        expect(p.storage[primOff + 10] == 8.0_f) << "r3";
 
         // These are the exact offsets primColors() and primStrokeWidth() read
-        uint32_t readFill = readU32(p.storage, primOff + 10);
-        uint32_t readStroke = readU32(p.storage, primOff + 11);
-        expect(readFill == fillColor) << "shader reads fillColor at +10";
-        expect(readStroke == strokeColor) << "shader reads strokeColor at +11";
-        expect(p.storage[primOff + 12] == strokeWidth) << "shader reads strokeWidth at +12";
+        uint32_t readFill = readU32(p.storage, primOff + 11);
+        uint32_t readStroke = readU32(p.storage, primOff + 12);
+        expect(readFill == fillColor) << "shader reads fillColor at +11";
+        expect(readStroke == strokeColor) << "shader reads strokeColor at +12";
+        expect(p.storage[primOff + 13] == strokeWidth) << "shader reads strokeWidth at +13";
     };
 
     "Box word layout matches shader's primColors offsets"_test = [] {
@@ -1091,17 +1096,18 @@ suite gpu_pipeline_tests = [] {
         uint32_t wordOff0 = readU32(p.storage, p.primitiveOffset);
         uint32_t primOff = p.primDataBase + wordOff0;
 
-        // Box: type=+0, layer=+1, cx=+2, cy=+3, hw=+4, hh=+5
-        //      fillColor=+6, strokeColor=+7, strokeWidth=+8, round=+9
+        // GPU format with scroll offset: type=+0, layer=+1, offsetXY=+2,
+        //      cx=+3, cy=+4, hw=+5, hh=+6
+        //      fillColor=+7, strokeColor=+8, strokeWidth=+9, round=+10
         uint32_t type = readU32(p.storage, primOff + 0);
         expect(type == 1_u) << "type = SDF_BOX (1)";
-        expect(p.storage[primOff + 2] == 50.0_f) << "cx";
-        expect(p.storage[primOff + 3] == 60.0_f) << "cy";
-        expect(p.storage[primOff + 4] == 20.0_f) << "hw";
-        expect(p.storage[primOff + 5] == 15.0_f) << "hh";
-        uint32_t readFill = readU32(p.storage, primOff + 6);
-        expect(readFill == fillColor) << "shader reads fillColor at +6";
-        expect(p.storage[primOff + 9] == 3.0_f) << "round at +9";
+        expect(p.storage[primOff + 3] == 50.0_f) << "cx";
+        expect(p.storage[primOff + 4] == 60.0_f) << "cy";
+        expect(p.storage[primOff + 5] == 20.0_f) << "hw";
+        expect(p.storage[primOff + 6] == 15.0_f) << "hh";
+        uint32_t readFill = readU32(p.storage, primOff + 7);
+        expect(readFill == fillColor) << "shader reads fillColor at +7";
+        expect(p.storage[primOff + 10] == 3.0_f) << "round at +10";
     };
 
     "Triangle word layout matches shader's primColors offsets"_test = [] {
@@ -1114,14 +1120,15 @@ suite gpu_pipeline_tests = [] {
         uint32_t wordOff0 = readU32(p.storage, p.primitiveOffset);
         uint32_t primOff = p.primDataBase + wordOff0;
 
-        // Triangle: type=+0, layer=+1, ax=+2, ay=+3, bx=+4, by=+5, vx=+6, vy=+7
-        //           fillColor=+8, strokeColor=+9, strokeWidth=+10, round=+11
+        // GPU format with scroll offset: type=+0, layer=+1, offsetXY=+2,
+        //           ax=+3, ay=+4, bx=+5, by=+6, cx=+7, cy=+8
+        //           fillColor=+9, strokeColor=+10, strokeWidth=+11, round=+12
         uint32_t type = readU32(p.storage, primOff + 0);
         expect(type == 3_u) << "type = SDF_TRIANGLE (3)";
-        expect(p.storage[primOff + 2] == 10.0_f) << "ax";
-        expect(p.storage[primOff + 3] == 20.0_f) << "ay";
-        uint32_t readFill = readU32(p.storage, primOff + 8);
-        expect(readFill == fillColor) << "shader reads fillColor at +8";
+        expect(p.storage[primOff + 3] == 10.0_f) << "ax";
+        expect(p.storage[primOff + 4] == 20.0_f) << "ay";
+        uint32_t readFill = readU32(p.storage, primOff + 9);
+        expect(readFill == fillColor) << "shader reads fillColor at +9";
     };
 
     "YDrawMetadata struct is 64 bytes and matches shader layout"_test = [] {

@@ -86,6 +86,7 @@ add_custom_command(TARGET yetty POST_BUILD
 # Tests
 enable_testing()
 add_subdirectory(${YETTY_ROOT}/test/ut ${CMAKE_BINARY_DIR}/test/ut)
+add_subdirectory(${YETTY_ROOT}/test/performance/ydraw ${CMAKE_BINARY_DIR}/test/performance/ydraw)
 
 # Tools (ydraw-maze, ydraw-zoo, etc.)
 # Note: ycat is already added via src/yetty/CMakeLists.txt

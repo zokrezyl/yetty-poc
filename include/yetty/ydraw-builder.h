@@ -158,11 +158,13 @@ public:
     static Result<Ptr> createImpl(FontManager::Ptr fontManager,
                                   GpuAllocator::Ptr allocator,
                                   CardManager::Ptr cardMgr,
-                                  uint32_t metaSlotIndex);
+                                  uint32_t metaSlotIndex,
+                                  bool scrollingMode = false);
 
     // Lightweight factory — no GPU card manager (for offline/file writers).
     static Result<Ptr> createImpl(FontManager::Ptr fontManager,
-                                  GpuAllocator::Ptr allocator);
+                                  GpuAllocator::Ptr allocator,
+                                  bool scrollingMode = false);
 
     ~YDrawBuilder() override = default;
     const char* typeName() const override { return "YDrawBuilder"; }
@@ -256,6 +258,25 @@ public:
     /// Clear all primitives, glyphs, and grid data. Resets scene bounds.
     /// Call before addYdrawBuffer() for replace (vs. incremental) semantics.
     virtual void clear() = 0;
+
+    //=========================================================================
+    // Scrolling mode (terminal-style) - set at construction
+    //=========================================================================
+
+    /// Whether scrolling mode is enabled (set at construction).
+    /// When enabled:
+    /// - Primitives are positioned at cursor position (grid cells)
+    /// - If content overflows scene, existing content scrolls up
+    /// - Cursor advances after each addYdrawBuffer()
+    virtual bool scrollingMode() const = 0;
+
+    /// Set cursor position in grid cells (column, row). Used in scrolling mode.
+    virtual void setCursorPosition(uint16_t col, uint16_t row) = 0;
+    virtual uint16_t cursorCol() const = 0;
+    virtual uint16_t cursorRow() const = 0;
+
+    /// Get scene height in grid lines (sceneHeight / cellSizeY)
+    virtual uint32_t sceneHeightInLines() const = 0;
 
     //=========================================================================
     // Grid / Scene bounds

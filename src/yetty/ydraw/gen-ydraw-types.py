@@ -88,17 +88,23 @@ def load_primitives(path: Path) -> list[dict]:
 # Field substitution for WGSL eval blocks
 # =============================================================================
 
-def substitute_fields(eval_code: str, offset_map: dict, buffer_name: str = "cardStorage") -> str:
-    """{fieldName} → bufferName[primOffset + Nu] (with bitcast for u32)."""
+def substitute_fields(eval_code: str, offset_map: dict, buffer_name: str = "cardStorage",
+                      gpu_offset_shift: int = 0) -> str:
+    """{fieldName} → bufferName[primOffset + Nu] (with bitcast for u32).
+
+    gpu_offset_shift: extra offset added to all fields (for 2D prims with scroll offset).
+    """
 
     def _repl(m):
         name = m.group(1)
         if name not in offset_map:
             return m.group(0)
         offset, ftype = offset_map[name]
+        # Apply GPU offset shift (for scroll offset fields inserted before geometry)
+        actual_offset = offset + gpu_offset_shift
         if ftype == "u32":
-            return f"bitcast<u32>({buffer_name}[primOffset + {offset}u])"
-        return f"{buffer_name}[primOffset + {offset}u]"
+            return f"bitcast<u32>({buffer_name}[primOffset + {actual_offset}u])"
+        return f"{buffer_name}[primOffset + {actual_offset}u]"
 
     return re.sub(r"\{(\w+)\}", _repl, eval_code)
 
@@ -157,17 +163,31 @@ def generate_wgsl(primitives: list[dict], out: Path) -> None:
     L.append("")
 
     # --- evalSDF (2D) — cardStorage only ---
+    # GPU format has grid offset at position 2: [type][layer][gridOffsetXY_packed][...]
+    # gridOffsetXY_packed = (u16_gridX | u16_gridY << 16) - offset in grid cells
+    # Shader converts to pixels: pixelOffset = gridOffset * cellSize
+    # All field accesses shifted by +1 to account for inserted offset field
     sdf2d = [p for p in primitives if p["category"] == "sdf2d"]
     if sdf2d:
         L.append("fn evalSDF(primOffset: u32, p: vec2<f32>) -> f32 {")
         L.append("    let primType = bitcast<u32>(cardStorage[primOffset + 0u]);")
+        L.append("    // Read grid offset (u16,u16 packed in u32) and convert to pixel offset")
+        L.append("    let gridOffsetPacked = bitcast<u32>(cardStorage[primOffset + 2u]);")
+        L.append("    let gridOffsetX = f32(gridOffsetPacked & 0xFFFFu);")
+        L.append("    let gridOffsetY = f32(gridOffsetPacked >> 16u);")
+        L.append("    let pixelOffset = vec2<f32>(gridOffsetX * grid.cellSize.x, gridOffsetY * grid.cellSize.y);")
+        L.append("    let pAdj = p - pixelOffset;")
         L.append("")
         L.append("    switch (primType) {")
         for prim in sdf2d:
             eval_code = prim.get("eval", "").strip()
             if not eval_code:
                 continue
-            substituted = substitute_fields(eval_code, prim["_offset_map"], "cardStorage")
+            # Shift field offsets by 1 (skip packed offsetXY)
+            substituted = substitute_fields(eval_code, prim["_offset_map"], "cardStorage",
+                                            gpu_offset_shift=1)
+            # Replace p with pAdj in eval code
+            substituted = re.sub(r'\bp\b', 'pAdj', substituted)
             L.append(f"        case {prim['_const_name']}: {{")
             for line in substituted.split("\n"):
                 L.append(f"            {line}")
@@ -199,6 +219,7 @@ def generate_wgsl(primitives: list[dict], out: Path) -> None:
         L.append("}\n")
 
     # --- primColors --- cardStorage only
+    # Note: 2D primitives have +1 offset shift due to packed scrollOffset at position 2
     renderable = [
         p for p in primitives
         if "fillColor" in p["_offset_map"]
@@ -218,9 +239,11 @@ def generate_wgsl(primitives: list[dict], out: Path) -> None:
         L.append("    switch (primType) {")
         for prim in renderable:
             om = prim["_offset_map"]
-            fill_off = om["fillColor"][0]
-            stroke_off = om["strokeColor"][0]
-            layer_off = om["layer"][0]
+            # +1 shift for 2D primitives (scroll offset at position 2)
+            shift = 1 if prim.get("category") == "sdf2d" else 0
+            fill_off = om["fillColor"][0] + shift
+            stroke_off = om["strokeColor"][0] + shift
+            layer_off = om["layer"][0]  # layer is at position 1, before offset
             L.append(f"        case {prim['_const_name']}: {{")
             L.append(f"            return vec4<u32>(")
             L.append(f"                bitcast<u32>(cardStorage[primOffset + {fill_off}u]),")
@@ -230,9 +253,11 @@ def generate_wgsl(primitives: list[dict], out: Path) -> None:
             L.append(f"        }}")
         for prim in gradient_prims:
             om = prim["_offset_map"]
-            color1_off = om["color1"][0]
-            stroke_off = om["strokeColor"][0]
-            layer_off = om["layer"][0]
+            # +1 shift for 2D primitives (scroll offset at position 2)
+            shift = 1 if prim.get("category") == "sdf2d" else 0
+            color1_off = om["color1"][0] + shift
+            stroke_off = om["strokeColor"][0] + shift
+            layer_off = om["layer"][0]  # layer is at position 1, before offset
             L.append(f"        case {prim['_const_name']}: {{")
             L.append(f"            return vec4<u32>(")
             L.append(f"                bitcast<u32>(cardStorage[primOffset + {color1_off}u]),")
@@ -255,40 +280,49 @@ def generate_wgsl(primitives: list[dict], out: Path) -> None:
         L.append("}\n")
 
     # --- evalGradientFillColor --- cardStorage only
+    # Note: 2D primitives have +1 offset shift and need pAdj for grid offset
     if gradient_prims:
         L.append("fn evalGradientFillColor(primOffset: u32, p: vec2<f32>) -> vec4<f32> {")
         L.append("    let primType = bitcast<u32>(cardStorage[primOffset + 0u]);")
+        L.append("    // Read grid offset (u16,u16 packed) and convert to pixel offset")
+        L.append("    let gridOffsetPacked = bitcast<u32>(cardStorage[primOffset + 2u]);")
+        L.append("    let gridOffsetX = f32(gridOffsetPacked & 0xFFFFu);")
+        L.append("    let gridOffsetY = f32(gridOffsetPacked >> 16u);")
+        L.append("    let pixelOffset = vec2<f32>(gridOffsetX * grid.cellSize.x, gridOffsetY * grid.cellSize.y);")
+        L.append("    let pAdj = p - pixelOffset;")
         L.append("    switch (primType) {")
         for prim in gradient_prims:
             om = prim["_offset_map"]
             name = prim["name"]
+            # +1 shift for 2D primitives
+            shift = 1 if prim.get("category") == "sdf2d" else 0
             if "LinearGradient" in name:
-                gx1_off = om["gx1"][0]
-                gy1_off = om["gy1"][0]
-                gx2_off = om["gx2"][0]
-                gy2_off = om["gy2"][0]
-                c1_off = om["color1"][0]
-                c2_off = om["color2"][0]
+                gx1_off = om["gx1"][0] + shift
+                gy1_off = om["gy1"][0] + shift
+                gx2_off = om["gx2"][0] + shift
+                gy2_off = om["gy2"][0] + shift
+                c1_off = om["color1"][0] + shift
+                c2_off = om["color2"][0] + shift
                 L.append(f"        case {prim['_const_name']}: {{")
                 L.append(f"            let gStart = vec2<f32>(cardStorage[primOffset + {gx1_off}u], cardStorage[primOffset + {gy1_off}u]);")
                 L.append(f"            let gEnd = vec2<f32>(cardStorage[primOffset + {gx2_off}u], cardStorage[primOffset + {gy2_off}u]);")
                 L.append(f"            let gDir = gEnd - gStart;")
                 L.append(f"            let gLen = length(gDir);")
-                L.append(f"            let t = clamp(dot(p - gStart, gDir) / (gLen * gLen), 0.0, 1.0);")
+                L.append(f"            let t = clamp(dot(pAdj - gStart, gDir) / (gLen * gLen), 0.0, 1.0);")
                 L.append(f"            let c1 = unpack4x8unorm(bitcast<u32>(cardStorage[primOffset + {c1_off}u]));")
                 L.append(f"            let c2 = unpack4x8unorm(bitcast<u32>(cardStorage[primOffset + {c2_off}u]));")
                 L.append(f"            return mix(c1, c2, t);")
                 L.append(f"        }}")
             elif "RadialGradient" in name:
-                gcx_off = om["gcx"][0]
-                gcy_off = om["gcy"][0]
-                gr_off = om["gr"][0]
-                c1_off = om["color1"][0]
-                c2_off = om["color2"][0]
+                gcx_off = om["gcx"][0] + shift
+                gcy_off = om["gcy"][0] + shift
+                gr_off = om["gr"][0] + shift
+                c1_off = om["color1"][0] + shift
+                c2_off = om["color2"][0] + shift
                 L.append(f"        case {prim['_const_name']}: {{")
                 L.append(f"            let gCenter = vec2<f32>(cardStorage[primOffset + {gcx_off}u], cardStorage[primOffset + {gcy_off}u]);")
                 L.append(f"            let gRadius = cardStorage[primOffset + {gr_off}u];")
-                L.append(f"            let t = clamp(length(p - gCenter) / gRadius, 0.0, 1.0);")
+                L.append(f"            let t = clamp(length(pAdj - gCenter) / gRadius, 0.0, 1.0);")
                 L.append(f"            let c1 = unpack4x8unorm(bitcast<u32>(cardStorage[primOffset + {c1_off}u]));")
                 L.append(f"            let c2 = unpack4x8unorm(bitcast<u32>(cardStorage[primOffset + {c2_off}u]));")
                 L.append(f"            return mix(c1, c2, t);")
@@ -298,13 +332,16 @@ def generate_wgsl(primitives: list[dict], out: Path) -> None:
         L.append("}\n")
 
     # --- primStrokeWidth --- cardStorage only
+    # Note: 2D primitives have +1 offset shift due to packed scrollOffset at position 2
     has_stroke = [p for p in primitives if "strokeWidth" in p["_offset_map"]]
     if has_stroke:
         L.append("fn primStrokeWidth(primOffset: u32) -> f32 {")
         L.append("    let primType = bitcast<u32>(cardStorage[primOffset + 0u]);")
         L.append("    switch (primType) {")
         for prim in has_stroke:
-            sw_off = prim["_offset_map"]["strokeWidth"][0]
+            # +1 shift for 2D primitives
+            shift = 1 if prim.get("category") == "sdf2d" else 0
+            sw_off = prim["_offset_map"]["strokeWidth"][0] + shift
             L.append(f"        case {prim['_const_name']}: {{ return cardStorage[primOffset + {sw_off}u]; }}")
         L.append("        default: { return 0.0; }")
         L.append("    }")
@@ -326,17 +363,28 @@ def generate_wgsl_overlay(primitives: list[dict], out: Path) -> None:
     L.append("// Only include in shaders that define @group(1) @binding(17) overlayStorage.\n")
 
     # --- evalSDF_overlay (2D) ---
+    # GPU format has grid offset at position 2: [type][layer][gridOffsetXY_packed][...]
     sdf2d = [p for p in primitives if p["category"] == "sdf2d"]
     if sdf2d:
         L.append("fn evalSDF_overlay(primOffset: u32, p: vec2<f32>) -> f32 {")
         L.append("    let primType = bitcast<u32>(overlayStorage[primOffset + 0u]);")
+        L.append("    // Read grid offset (u16,u16 packed in u32) and convert to pixel offset")
+        L.append("    let gridOffsetPacked = bitcast<u32>(overlayStorage[primOffset + 2u]);")
+        L.append("    let gridOffsetX = f32(gridOffsetPacked & 0xFFFFu);")
+        L.append("    let gridOffsetY = f32(gridOffsetPacked >> 16u);")
+        L.append("    let pixelOffset = vec2<f32>(gridOffsetX * overlay.cellSizeX, gridOffsetY * overlay.cellSizeY);")
+        L.append("    let pAdj = p - pixelOffset;")
         L.append("")
         L.append("    switch (primType) {")
         for prim in sdf2d:
             eval_code = prim.get("eval", "").strip()
             if not eval_code:
                 continue
-            substituted = substitute_fields(eval_code, prim["_offset_map"], "overlayStorage")
+            # Shift field offsets by 1 (skip packed offsetXY)
+            substituted = substitute_fields(eval_code, prim["_offset_map"], "overlayStorage",
+                                            gpu_offset_shift=1)
+            # Replace p with pAdj
+            substituted = re.sub(r'\bp\b', 'pAdj', substituted)
             L.append(f"        case {prim['_const_name']}: {{")
             for line in substituted.split("\n"):
                 L.append(f"            {line}")
@@ -368,6 +416,7 @@ def generate_wgsl_overlay(primitives: list[dict], out: Path) -> None:
         L.append("}\n")
 
     # --- primColors_overlay ---
+    # Note: 2D primitives have +1 offset shift due to packed scrollOffset at position 2
     renderable = [
         p for p in primitives
         if "fillColor" in p["_offset_map"]
@@ -387,9 +436,11 @@ def generate_wgsl_overlay(primitives: list[dict], out: Path) -> None:
         L.append("    switch (primType) {")
         for prim in renderable:
             om = prim["_offset_map"]
-            fill_off = om["fillColor"][0]
-            stroke_off = om["strokeColor"][0]
-            layer_off = om["layer"][0]
+            # +1 shift for 2D primitives
+            shift = 1 if prim.get("category") == "sdf2d" else 0
+            fill_off = om["fillColor"][0] + shift
+            stroke_off = om["strokeColor"][0] + shift
+            layer_off = om["layer"][0]  # layer is at position 1, before offset
             L.append(f"        case {prim['_const_name']}: {{")
             L.append(f"            return vec4<u32>(")
             L.append(f"                bitcast<u32>(overlayStorage[primOffset + {fill_off}u]),")
@@ -399,9 +450,11 @@ def generate_wgsl_overlay(primitives: list[dict], out: Path) -> None:
             L.append(f"        }}")
         for prim in gradient_prims:
             om = prim["_offset_map"]
-            color1_off = om["color1"][0]
-            stroke_off = om["strokeColor"][0]
-            layer_off = om["layer"][0]
+            # +1 shift for 2D primitives
+            shift = 1 if prim.get("category") == "sdf2d" else 0
+            color1_off = om["color1"][0] + shift
+            stroke_off = om["strokeColor"][0] + shift
+            layer_off = om["layer"][0]  # layer is at position 1, before offset
             L.append(f"        case {prim['_const_name']}: {{")
             L.append(f"            return vec4<u32>(")
             L.append(f"                bitcast<u32>(overlayStorage[primOffset + {color1_off}u]),")
@@ -414,40 +467,49 @@ def generate_wgsl_overlay(primitives: list[dict], out: Path) -> None:
         L.append("}\n")
 
     # --- evalGradientFillColor_overlay ---
+    # Note: 2D primitives have +1 offset shift and need pAdj for grid offset
     if gradient_prims:
         L.append("fn evalGradientFillColor_overlay(primOffset: u32, p: vec2<f32>) -> vec4<f32> {")
         L.append("    let primType = bitcast<u32>(overlayStorage[primOffset + 0u]);")
+        L.append("    // Read grid offset (u16,u16 packed) and convert to pixel offset")
+        L.append("    let gridOffsetPacked = bitcast<u32>(overlayStorage[primOffset + 2u]);")
+        L.append("    let gridOffsetX = f32(gridOffsetPacked & 0xFFFFu);")
+        L.append("    let gridOffsetY = f32(gridOffsetPacked >> 16u);")
+        L.append("    let pixelOffset = vec2<f32>(gridOffsetX * overlay.cellSizeX, gridOffsetY * overlay.cellSizeY);")
+        L.append("    let pAdj = p - pixelOffset;")
         L.append("    switch (primType) {")
         for prim in gradient_prims:
             om = prim["_offset_map"]
             name = prim["name"]
+            # +1 shift for 2D primitives
+            shift = 1 if prim.get("category") == "sdf2d" else 0
             if "LinearGradient" in name:
-                gx1_off = om["gx1"][0]
-                gy1_off = om["gy1"][0]
-                gx2_off = om["gx2"][0]
-                gy2_off = om["gy2"][0]
-                c1_off = om["color1"][0]
-                c2_off = om["color2"][0]
+                gx1_off = om["gx1"][0] + shift
+                gy1_off = om["gy1"][0] + shift
+                gx2_off = om["gx2"][0] + shift
+                gy2_off = om["gy2"][0] + shift
+                c1_off = om["color1"][0] + shift
+                c2_off = om["color2"][0] + shift
                 L.append(f"        case {prim['_const_name']}: {{")
                 L.append(f"            let gStart = vec2<f32>(overlayStorage[primOffset + {gx1_off}u], overlayStorage[primOffset + {gy1_off}u]);")
                 L.append(f"            let gEnd = vec2<f32>(overlayStorage[primOffset + {gx2_off}u], overlayStorage[primOffset + {gy2_off}u]);")
                 L.append(f"            let gDir = gEnd - gStart;")
                 L.append(f"            let gLen = length(gDir);")
-                L.append(f"            let t = clamp(dot(p - gStart, gDir) / (gLen * gLen), 0.0, 1.0);")
+                L.append(f"            let t = clamp(dot(pAdj - gStart, gDir) / (gLen * gLen), 0.0, 1.0);")
                 L.append(f"            let c1 = unpack4x8unorm(bitcast<u32>(overlayStorage[primOffset + {c1_off}u]));")
                 L.append(f"            let c2 = unpack4x8unorm(bitcast<u32>(overlayStorage[primOffset + {c2_off}u]));")
                 L.append(f"            return mix(c1, c2, t);")
                 L.append(f"        }}")
             elif "RadialGradient" in name:
-                gcx_off = om["gcx"][0]
-                gcy_off = om["gcy"][0]
-                gr_off = om["gr"][0]
-                c1_off = om["color1"][0]
-                c2_off = om["color2"][0]
+                gcx_off = om["gcx"][0] + shift
+                gcy_off = om["gcy"][0] + shift
+                gr_off = om["gr"][0] + shift
+                c1_off = om["color1"][0] + shift
+                c2_off = om["color2"][0] + shift
                 L.append(f"        case {prim['_const_name']}: {{")
                 L.append(f"            let gCenter = vec2<f32>(overlayStorage[primOffset + {gcx_off}u], overlayStorage[primOffset + {gcy_off}u]);")
                 L.append(f"            let gRadius = overlayStorage[primOffset + {gr_off}u];")
-                L.append(f"            let t = clamp(length(p - gCenter) / gRadius, 0.0, 1.0);")
+                L.append(f"            let t = clamp(length(pAdj - gCenter) / gRadius, 0.0, 1.0);")
                 L.append(f"            let c1 = unpack4x8unorm(bitcast<u32>(overlayStorage[primOffset + {c1_off}u]));")
                 L.append(f"            let c2 = unpack4x8unorm(bitcast<u32>(overlayStorage[primOffset + {c2_off}u]));")
                 L.append(f"            return mix(c1, c2, t);")
@@ -457,13 +519,16 @@ def generate_wgsl_overlay(primitives: list[dict], out: Path) -> None:
         L.append("}\n")
 
     # --- primStrokeWidth_overlay ---
+    # Note: 2D primitives have +1 offset shift due to packed scrollOffset at position 2
     has_stroke = [p for p in primitives if "strokeWidth" in p["_offset_map"]]
     if has_stroke:
         L.append("fn primStrokeWidth_overlay(primOffset: u32) -> f32 {")
         L.append("    let primType = bitcast<u32>(overlayStorage[primOffset + 0u]);")
         L.append("    switch (primType) {")
         for prim in has_stroke:
-            sw_off = prim["_offset_map"]["strokeWidth"][0]
+            # +1 shift for 2D primitives
+            shift = 1 if prim.get("category") == "sdf2d" else 0
+            sw_off = prim["_offset_map"]["strokeWidth"][0] + shift
             L.append(f"        case {prim['_const_name']}: {{ return overlayStorage[primOffset + {sw_off}u]; }}")
         L.append("        default: { return 0.0; }")
         L.append("    }")

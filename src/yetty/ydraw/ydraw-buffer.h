@@ -100,6 +100,14 @@ public:
         }
     }
 
+    // Iterate all primitives (mutable). Callback: fn(uint32_t id, float* data, uint32_t wordCount)
+    template<typename F>
+    void forEachPrimMut(F&& fn) {
+        for (auto& [id, pd] : _prims) {
+            fn(id, pd.words.data(), static_cast<uint32_t>(pd.words.size()));
+        }
+    }
+
     // --- Font blob storage (raw data, no FreeType) ---
 
     int addFontBlob(const uint8_t* data, size_t size, const std::string& name);

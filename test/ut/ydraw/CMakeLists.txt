@@ -21,6 +21,7 @@ add_executable(ydraw_tests
     ydraw_bezier_test.cpp
     ydraw_gradient_test.cpp
     ydraw_opacity_test.cpp
+    ydraw_scrolling_test.cpp
     triangulate_test.cpp
     # YDraw core
     ${CMAKE_SOURCE_DIR}/src/yetty/ydraw/ydraw-buffer.cpp
