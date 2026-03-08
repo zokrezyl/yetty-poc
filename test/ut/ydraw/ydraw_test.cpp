@@ -299,9 +299,11 @@ static PipelineResult runPipeline(YDrawBuffer::Ptr buf,
                                    float sceneW = 200.0f, float sceneH = 200.0f,
                                    FontManager::Ptr fontMgr = nullptr) {
     auto mockCM = std::make_shared<MockCardManager>();
-    auto builder = *YDrawBuilder::create(fontMgr, testAllocator(), buf, mockCM, 0);
+    auto builder = *YDrawBuilder::create(fontMgr, testAllocator(), mockCM, 0);
     builder->setSceneBounds(0, 0, sceneW, sceneH);
-    builder->calculate();
+    if (!buf->empty()) {
+        builder->addYdrawBuffer(buf);
+    }
     builder->declareBufferNeeds();
     mockCM->mockBufMgr()->commitReservations();
     builder->allocateBuffers();
@@ -933,13 +935,13 @@ suite gpu_pipeline_tests = [] {
     "clear and rebuild produces valid pipeline"_test = [] {
         auto buf = *YDrawBuffer::create();
         auto mockCM = std::make_shared<MockCardManager>();
-        auto builder = *YDrawBuilder::create(nullptr, nullptr, buf, mockCM, 0);
+        auto builder = *YDrawBuilder::create(nullptr, nullptr, mockCM, 0);
         builder->setSceneBounds(0, 0, 200.0f, 200.0f);
 
         // First build: Circle + Box
         buf->addCircle(0, 50.0f, 50.0f, 15.0f, 0xFFFF0000, 0, 0.0f, 0.0f);
         buf->addBox(1, 150.0f, 150.0f, 20.0f, 20.0f, 0xFF00FF00, 0, 0.0f, 0.0f);
-        builder->calculate();
+        builder->addYdrawBuffer(buf);
         builder->declareBufferNeeds();
         mockCM->mockBufMgr()->commitReservations();
         builder->allocateBuffers();
@@ -950,10 +952,11 @@ suite gpu_pipeline_tests = [] {
 
         // Clear and rebuild: single RoundedBox
         buf->clear();
+        builder->clear();
         uint32_t newColor = 0xFFBB44CC;
         buf->addRoundedBox(0, 100.0f, 100.0f, 30.0f, 20.0f,
                            5.0f, 5.0f, 5.0f, 5.0f, newColor, 0, 0.0f, 0.0f);
-        builder->calculate();
+        builder->addYdrawBuffer(buf);
         builder->declareBufferNeeds();
         mockCM->mockBufMgr()->commitReservations();
         builder->allocateBuffers();
@@ -1016,9 +1019,9 @@ suite gpu_pipeline_tests = [] {
         buf->addCircle(0, 50.0f, 50.0f, 10.0f, 0xFFFF0000, 0, 0.0f, 0.0f);
 
         auto mockCM = std::make_shared<MockCardManager>();
-        auto builder = *YDrawBuilder::create(nullptr, nullptr, buf, mockCM, 0);
+        auto builder = *YDrawBuilder::create(nullptr, nullptr, mockCM, 0);
         builder->setSceneBounds(0, 0, 100.0f, 100.0f);
-        builder->calculate();
+        builder->addYdrawBuffer(buf);
         builder->declareBufferNeeds();
         mockCM->mockBufMgr()->commitReservations();
         builder->allocateBuffers();

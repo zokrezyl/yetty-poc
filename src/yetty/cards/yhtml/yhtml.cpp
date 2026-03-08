@@ -162,9 +162,12 @@ public:
             _dirty = true;
         }
 
-        // Calculate grid when dirty (like ypdf does)
+        // Rebuild spatial grid when dirty (like ypdf does)
         if (_dirty) {
-            _builder->calculate();
+            _builder->clear();
+            if (!_buffer->empty()) {
+                _builder->addYdrawBuffer(_buffer);
+            }
             _dirty = false;
         }
     }
@@ -312,9 +315,9 @@ public:
         }
         _metaHandle = *metaResult;
 
-        // Create builder with buffer
+        // Create builder (new API - no buffer in constructor)
         auto builderRes = YDrawBuilder::create(
-            _fontManager, _gpuAllocator, _buffer, _cardMgr, metadataSlotIndex());
+            _fontManager, _gpuAllocator, _cardMgr, metadataSlotIndex());
         if (!builderRes) {
             return Err<void>("YHtmlImpl::init: failed to create builder", builderRes);
         }

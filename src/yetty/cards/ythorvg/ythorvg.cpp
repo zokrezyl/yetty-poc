@@ -279,7 +279,7 @@ public:
 
         // Create YDraw builder
         auto builderRes = YDrawBuilder::create(
-            _fontManager, _gpuAllocator, _buffer, _cardMgr, metadataSlotIndex());
+            _fontManager, _gpuAllocator, _cardMgr, metadataSlotIndex());
         if (!builderRes) {
             return Err<void>("YThorVG::init: failed to create builder", builderRes);
         }
@@ -345,11 +345,14 @@ private:
         // Render paint tree
         paintImpl->render(_renderMethod.get());
 
-        // postRender (we don't do much here, builder->calculate() is separate)
+        // postRender (we don't do much here, builder->clear() + addYdrawBuffer() is separate)
         _renderMethod->postRender();
 
-        // Calculate grid
-        _builder->calculate();
+        // Rebuild spatial grid
+        _builder->clear();
+        if (!_buffer->empty()) {
+            _builder->addYdrawBuffer(_buffer);
+        }
     }
 
     //=========================================================================

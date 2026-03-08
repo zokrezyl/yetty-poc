@@ -468,31 +468,32 @@ Takes a `YDrawBuffer` at creation time (shared pointer).
 
 ```cpp
 // Full — with CardManager for GPU lifecycle
-YDrawBuilder::create(fontManager, gpuAllocator, buffer, cardMgr, metaSlotIndex);
+YDrawBuilder::create(fontManager, gpuAllocator, cardMgr, metaSlotIndex);
 
 // Lightweight — no GPU (for tests, offline tools)
-YDrawBuilder::create(fontManager, gpuAllocator, buffer);
+YDrawBuilder::create(fontManager, gpuAllocator);
 ```
 
-### calculate()
+### addYdrawBuffer()
 
-Called after all primitives/text have been added to the buffer. Does:
+Called to add a buffer's primitives to the builder. Can be called multiple times
+to incrementally add content. Uses a two-level grid architecture:
+- Level 1: Incremental internal structure (`std::vector<std::vector<uint32_t>>`)
+- Level 2: Packed GPU format as cache (rebuilt when dirty)
 
-1. **Clear** builder-owned staging: `_primBounds`, `_gridStaging`, `_glyphs`
-2. **Ingest buffer metadata**: register font blobs with MSDF atlas, convert text
-   spans to glyphs via `addText()`/`addRotatedText()`
-3. **Read buffer scene metadata**: bounds, bgColor, flags (buffer values used
-   only if builder has no explicit bounds set)
-4. **Compute AABBs**: iterate `forEachPrim()`, compute bounding box per prim,
-   store in `_primBounds`
-5. **Compute scene bounds** (if no explicit bounds): min/max of all AABBs + glyphs
-   with 5% padding
-6. **Compute grid dimensions**: auto cell size based on average prim area, capped
-   at 4M total cells
-7. **Build grid**: two-pass — count entries per cell, prefix-sum for offsets, fill
-   entries. Prim entries are **indices** (0, 1, 2, ...) into `_primBounds`. Glyph
-   entries have `GLYPH_BIT` set.
-8. Set `_bufferDirty = true`
+Does:
+
+1. **Copy primitives** to internal buffer, compute AABBs, extend scene bounds
+2. **Register fonts** with MSDF atlas
+3. **Convert text spans** to glyphs via `addText()`/`addRotatedText()`
+4. **Process images** into custom atlas
+5. **Add prims/glyphs to grid** incrementally
+6. Set `_gridStagingDirty = true`, `_bufferDirty = true`
+
+### clear()
+
+Clears all primitives, glyphs, and grid data. Call before `addYdrawBuffer()` for
+replace (vs. incremental) semantics.
 
 ### AABB computation
 
@@ -514,7 +515,7 @@ calls these in order each frame:
 
 ```
 1. renderToStaging(time)
-   └─ Card adds prims to buffer, calls builder->calculate()
+   └─ Card adds prims to buffer, calls builder->clear() + builder->addYdrawBuffer()
 
 2. needsBufferRealloc()
    └─ Builder checks: _primHandle.size != buffer.gpuBufferSize()
@@ -697,7 +698,8 @@ if (hovered) {
         0, accentColor, 2.0f, 0.0f);            // fill=0, stroke=accent
 }
 
-_builder->calculate();
+_builder->clear();
+_builder->addYdrawBuffer(_buffer);
 // → _primBounds has 1-2 entries, _glyphs has N glyphs
 // → grid built with prim indices (0, 1), _bufferDirty = true
 ```
@@ -771,9 +773,9 @@ auto buf = *YDrawBuffer::create();
 buf->addRoundedBox(0, 100, 100, 40, 30, 5,5,5,5, 0xFFAABBCC, 0, 0, 0);
 
 auto mockCM = std::make_shared<MockCardManager>();
-auto builder = *YDrawBuilder::create(nullptr, nullptr, buf, mockCM, /*slot=*/0);
+auto builder = *YDrawBuilder::create(nullptr, nullptr, mockCM, /*slot=*/0);
 builder->setSceneBounds(0, 0, 200, 200);
-builder->calculate();
+builder->addYdrawBuffer(buf);
 builder->declareBufferNeeds();
 mockCM->mockBufMgr()->commitReservations();
 builder->allocateBuffers();

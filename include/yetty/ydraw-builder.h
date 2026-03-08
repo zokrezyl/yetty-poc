@@ -122,11 +122,15 @@ static_assert(sizeof(YDrawMetadata) == 64, "YDrawMetadata must be 64 bytes");
 //=============================================================================
 // YDrawBuilder - AABB computation and spatial grid builder
 //
-// Takes a YDrawBuffer at creation time. The buffer holds all primitives.
-// calculate() reads the buffer, computes AABB per prim, builds the spatial
-// hash grid for GPU culling.
+// Builds a spatial hash grid for GPU culling from YDrawBuffer primitives.
+// Uses a two-level architecture:
+//   Level 1: Internal incremental structure (std::vector<std::vector<uint32_t>>)
+//   Level 2: Packed GPU format (cache, rebuilt when dirty)
 //
-// Cards add primitives to the YDrawBuffer directly, then call calculate().
+// Usage:
+//   auto builder = YDrawBuilder::create(fontMgr, alloc, cardMgr, slot);
+//   builder->addYdrawBuffer(buffer1);  // Incrementally adds primitives
+//   builder->addYdrawBuffer(buffer2);  // Can add multiple buffers
 //=============================================================================
 class YDrawBuilder : public base::Object,
                      public base::ObjectFactory<YDrawBuilder> {
@@ -146,19 +150,19 @@ public:
     static constexpr uint32_t FLAG_UNIFORM_SCALE = 16;
     static constexpr uint32_t FLAG_CUSTOM_ATLAS = 32;
 
-    // Factory — buffer is shared between card and builder.
-    // cardMgr provides access to buffer/texture managers for GPU allocation.
+    //=========================================================================
+    // Factory methods
+    //=========================================================================
+
     // Full factory — with GPU card manager for buffer lifecycle.
     static Result<Ptr> createImpl(FontManager::Ptr fontManager,
                                   GpuAllocator::Ptr allocator,
-                                  std::shared_ptr<YDrawBuffer> buffer,
                                   CardManager::Ptr cardMgr,
                                   uint32_t metaSlotIndex);
 
     // Lightweight factory — no GPU card manager (for offline/file writers).
     static Result<Ptr> createImpl(FontManager::Ptr fontManager,
-                                  GpuAllocator::Ptr allocator,
-                                  std::shared_ptr<YDrawBuffer> buffer);
+                                  GpuAllocator::Ptr allocator);
 
     ~YDrawBuilder() override = default;
     const char* typeName() const override { return "YDrawBuilder"; }
@@ -240,15 +244,24 @@ public:
     virtual float fontDescent(float fontSize, int fontId = -1) = 0;
 
     //=========================================================================
-    // Grid computation
+    // Buffer management
     //=========================================================================
 
-    // Reads all prims from the YDrawBuffer, computes AABB per prim,
-    // computes scene bounds + builds spatial hash grid.
-    // Call after all primitives/glyphs have been added.
-    virtual void calculate() = 0;
+    /// Add a YDrawBuffer to this builder. Primitives are copied to an internal
+    /// buffer, AABBs are computed, and the spatial grid is updated incrementally.
+    /// Scene bounds are extended to include the new primitives (if not explicit).
+    /// Can be called multiple times to add multiple buffers.
+    virtual Result<void> addYdrawBuffer(std::shared_ptr<YDrawBuffer> buffer) = 0;
 
-    // Scene bounds (set explicitly or computed by calculate())
+    /// Clear all primitives, glyphs, and grid data. Resets scene bounds.
+    /// Call before addYdrawBuffer() for replace (vs. incremental) semantics.
+    virtual void clear() = 0;
+
+    //=========================================================================
+    // Grid / Scene bounds
+    //=========================================================================
+
+    // Scene bounds (set explicitly or extended by addYdrawBuffer())
     virtual float sceneMinX() const = 0;
     virtual float sceneMinY() const = 0;
     virtual float sceneMaxX() const = 0;
@@ -262,10 +275,10 @@ public:
     // GPU buffer lifecycle
     //
     // Cards forward their Card:: overrides to these methods.
-    // Call calculate() before declareBufferNeeds().
+    // Call addYdrawBuffer() before declareBufferNeeds().
     //
     // Flow:
-    //   renderToStaging: card populates buffer, calls calculate()
+    //   renderToStaging: card populates buffer, calls addYdrawBuffer()
     //   declareBufferNeeds: builder reserves space for prims + derived
     //   allocateBuffers: builder gets handles, writes prim/grid/glyph data
     //   allocateTextures: builder allocates custom atlas texture (if any)
@@ -275,7 +288,7 @@ public:
     //=========================================================================
 
     /// Reserve buffer space for prims + derived (grid + glyphs + atlas).
-    /// Call after calculate().
+    /// Call after addYdrawBuffer().
     virtual Result<void> declareBufferNeeds() = 0;
 
     /// Allocate handles and write prim/grid/glyph data into them.

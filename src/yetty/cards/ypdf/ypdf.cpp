@@ -172,9 +172,9 @@ Result<void> YPdf::init() {
     }
     _metaHandle = *metaResult;
 
-    // Create builder with buffer
+    // Create builder (new API - no buffer in constructor)
     auto builderRes = YDrawBuilder::create(
-        _fontManager, _gpuAllocator, _buffer, _cardMgr, metadataSlotIndex());
+        _fontManager, _gpuAllocator, _cardMgr, metadataSlotIndex());
     if (!builderRes) {
         return Err<void>("YPdf::init: failed to create builder", builderRes);
     }
@@ -381,7 +381,10 @@ void YPdf::cardPixelToScene(float cardX, float cardY, float& sceneX, float& scen
 
 void YPdf::renderToStaging(float /*time*/) {
     if (_builder && _dirty) {
-        _builder->calculate();
+        _builder->clear();
+        if (!_buffer->empty()) {
+            _builder->addYdrawBuffer(_buffer);
+        }
 
         // First-time zoom: fit page width to card width with uniform scaling
         if (_needsInitialZoom && _cellWidth > 0 && _cellHeight > 0) {

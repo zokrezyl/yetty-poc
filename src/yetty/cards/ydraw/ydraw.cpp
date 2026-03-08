@@ -113,39 +113,37 @@ public:
         }
 
         // Animation update — advance time, apply to buffer
+        // Note: Animation modifies _buffer directly. With new incremental API,
+        // we need to re-add the buffer to pick up changes.
         if (_animation && _animation->isPlaying() && !_buffer->empty()) {
             float dt = (_lastRenderTime < 0.0f) ? 0.0f : (time - _lastRenderTime);
             _lastRenderTime = time;
             if (_animation->advance(dt)) {
                 _animation->apply();
-                _dirty = true;
+                // Re-add buffer to pick up animation changes
+                // TODO: This is inefficient - consider a more incremental approach
+                _builder->addYdrawBuffer(_buffer);
             }
         }
 
-        // If dirty, recalculate grid
-        if (_dirty && !_buffer->empty()) {
-            _builder->calculate();
+        // First-time zoom: fit content width to card width (like ypdf)
+        if (_dirty && _needsInitialZoom && _cellWidth > 0 && _cellHeight > 0) {
+            float contentW = _builder->sceneMaxX() - _builder->sceneMinX();
+            float contentH = _builder->sceneMaxY() - _builder->sceneMinY();
+            if (contentW > 0 && contentH > 0) {
+                float cardAspect = static_cast<float>(_widthCells * _cellWidth) /
+                                   std::max(static_cast<float>(_heightCells * _cellHeight), 1.0f);
+                // With UNIFORM_SCALE: zoom to fit content width to card width
+                _viewZoom = contentH * cardAspect / contentW;
 
-            // First-time zoom: fit content width to card width (like ypdf)
-            if (_needsInitialZoom && _cellWidth > 0 && _cellHeight > 0) {
-                float contentW = _builder->sceneMaxX() - _builder->sceneMinX();
-                float contentH = _builder->sceneMaxY() - _builder->sceneMinY();
-                if (contentW > 0 && contentH > 0) {
-                    float cardAspect = static_cast<float>(_widthCells * _cellWidth) /
-                                       std::max(static_cast<float>(_heightCells * _cellHeight), 1.0f);
-                    // With UNIFORM_SCALE: zoom to fit content width to card width
-                    _viewZoom = contentH * cardAspect / contentW;
+                // Pan to show top of document
+                float centerY = (_builder->sceneMinY() + _builder->sceneMaxY()) * 0.5f;
+                float viewHalfH = contentH * 0.5f / _viewZoom;
+                _viewPanY = _builder->sceneMinY() - centerY + viewHalfH;
 
-                    // Pan to show top of document
-                    float centerY = (_builder->sceneMinY() + _builder->sceneMaxY()) * 0.5f;
-                    float viewHalfH = contentH * 0.5f / _viewZoom;
-                    _viewPanY = _builder->sceneMinY() - centerY + viewHalfH;
-
-                    _builder->setView(_viewZoom, _viewPanX, _viewPanY);
-                    _needsInitialZoom = false;
-                }
+                _builder->setView(_viewZoom, _viewPanX, _viewPanY);
+                _needsInitialZoom = false;
             }
-
             _dirty = false;
         }
     }
@@ -304,6 +302,14 @@ public:
             return res;
         }
 
+        // Clear builder and add new buffer content (replace semantics)
+        _builder->clear();
+        if (!_buffer->empty()) {
+            if (auto res = _builder->addYdrawBuffer(_buffer); !res) {
+                ywarn("YDrawImpl::update: addYdrawBuffer failed: {}", error_msg(res));
+            }
+        }
+
         // Reset view state for new content
         _needsInitialZoom = true;
         _sortedOrderBuilt = false;
@@ -328,8 +334,9 @@ public:
         }
         _metaHandle = *metaResult;
 
+        // Create builder without buffer (new API)
         auto builderRes = YDrawBuilder::create(
-            _fontManager, _gpuAllocator, _buffer, _cardMgr, metadataSlotIndex());
+            _fontManager, _gpuAllocator, _cardMgr, metadataSlotIndex());
         if (!builderRes) {
             return Err<void>("YDrawImpl::init: failed to create builder", builderRes);
         }
@@ -346,6 +353,13 @@ public:
         if (!_payloadStr.empty()) {
             if (auto res = parsePayload(_payloadStr); !res) {
                 ywarn("YDrawImpl::init: payload parse failed: {}", error_msg(res));
+            }
+        }
+
+        // Add buffer to builder (new incremental API)
+        if (!_buffer->empty()) {
+            if (auto res = _builder->addYdrawBuffer(_buffer); !res) {
+                ywarn("YDrawImpl::init: addYdrawBuffer failed: {}", error_msg(res));
             }
         }
 

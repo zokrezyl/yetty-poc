@@ -23,7 +23,7 @@ namespace yetty::thorvg {
 //   auto renderer = *ThorVgRenderer::create(buffer);
 //   renderer->load(svgContent, "svg");
 //   renderer->render();  // primitives now in buffer
-//   builder->calculate(); // rebuild grid
+//   builder->clear(); builder->addYdrawBuffer(buffer); // rebuild grid
 //=============================================================================
 class ThorVgRenderer : public base::Object,
                        public base::ObjectFactory<ThorVgRenderer> {

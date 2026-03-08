@@ -381,7 +381,7 @@ public:
         _metaHandle = *metaRes;
 
         auto builderRes = YDrawBuilder::create(
-            _fontManager, _gpuAllocator, _buffer, _cardMgr, metadataSlotIndex());
+            _fontManager, _gpuAllocator, _cardMgr, metadataSlotIndex());
         if (!builderRes)
             return Err<void>("YGui: failed to create builder", builderRes);
         _builder = *builderRes;
@@ -413,7 +413,9 @@ public:
 
         _builder->setSceneBounds(0, 0, _pixelWidth, _pixelHeight);
         _builder->setBgColor(0xFF1A1A2E);
-        _builder->calculate();
+        if (!_buffer->empty()) {
+            _builder->addYdrawBuffer(_buffer);
+        }
 
         // Register for events
         if (auto res = registerForEvents(); !res)
@@ -480,7 +482,10 @@ public:
         if (!_builder || !_engine) return;
         if (_engine->isDirty()) {
             _engine->rebuild();
-            _builder->calculate();
+            _builder->clear();
+            if (!_buffer->empty()) {
+                _builder->addYdrawBuffer(_buffer);
+            }
         }
     }
 

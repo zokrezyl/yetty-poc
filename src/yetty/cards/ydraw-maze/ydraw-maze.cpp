@@ -46,7 +46,7 @@ Result<void> YDrawMaze::init() {
     _metaHandle = *metaResult;
 
     auto builderRes = YDrawBuilder::create(
-        _fontManager, _gpuAllocator, _buffer, _cardMgr, metadataSlotIndex());
+        _fontManager, _gpuAllocator, _cardMgr, metadataSlotIndex());
     if (!builderRes) {
         return Err<void>("YDrawMaze::init: failed to create builder", builderRes);
     }
@@ -72,7 +72,10 @@ bool YDrawMaze::needsBufferRealloc() {
 void YDrawMaze::renderToStaging(float time) {
     if (!_builder) return;
     _renderer->render(_buffer, time);
-    _builder->calculate();
+    _builder->clear();
+    if (!_buffer->empty()) {
+        _builder->addYdrawBuffer(_buffer);
+    }
 }
 
 void YDrawMaze::declareBufferNeeds() {

@@ -123,7 +123,7 @@ Result<void> ScreenDrawLayerImpl::init() noexcept {
 
     // Create YDrawBuffer and builder (no CardManager - standalone)
     _buffer = *YDrawBuffer::create();
-    auto builderRes = YDrawBuilder::create(_ctx.fontManager, _ctx.gpuAllocator, _buffer);
+    auto builderRes = YDrawBuilder::create(_ctx.fontManager, _ctx.gpuAllocator);
     if (!builderRes) return Err<void>("ScreenDrawLayer: failed to create builder", builderRes);
     _builder = *builderRes;
 
@@ -666,7 +666,10 @@ void ScreenDrawLayerImpl::prepareForRender() {
     if (_dirty) {
         _builder->setSceneBounds(0, 0, static_cast<float>(_displayWidth),
                                   static_cast<float>(_displayHeight));
-        _builder->calculate();
+        _builder->clear();
+        if (!_buffer->empty()) {
+            _builder->addYdrawBuffer(_buffer);
+        }
         rebuildBuffers();
         _dirty = false;
     }
@@ -681,7 +684,10 @@ Result<void> ScreenDrawLayerImpl::render(WGPURenderPassEncoder pass) {
         _builder->setSceneBounds(0, 0,
             static_cast<float>(_displayWidth),
             static_cast<float>(_displayHeight));
-        _builder->calculate();
+        _builder->clear();
+        if (!_buffer->empty()) {
+            _builder->addYdrawBuffer(_buffer);
+        }
         rebuildBuffers();
         _dirty = false;
     }

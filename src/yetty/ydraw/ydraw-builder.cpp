@@ -464,11 +464,9 @@ static void computeAABB(const float* data, uint32_t wc,
 class YDrawBuilderImpl : public YDrawBuilder {
 public:
     YDrawBuilderImpl(FontManager::Ptr fontManager, GpuAllocator::Ptr allocator,
-                     YDrawBuffer::Ptr buffer, CardManager::Ptr cardMgr,
-                     uint32_t metaSlotIndex)
+                     CardManager::Ptr cardMgr, uint32_t metaSlotIndex)
         : _fontManager(std::move(fontManager))
         , _gpuAllocator(std::move(allocator))
-        , _buffer(std::move(buffer))
         , _cardMgr(std::move(cardMgr))
         , _metaSlotIndex(metaSlotIndex)
     {
@@ -899,8 +897,337 @@ public:
     std::vector<YDrawGlyph>& glyphsMut() override { return _glyphs; }
 
     //=========================================================================
-    // Buffer access
+    // Buffer management - addYdrawBuffer
     //=========================================================================
+
+    Result<void> addYdrawBuffer(std::shared_ptr<YDrawBuffer> buffer) override {
+        if (!buffer) {
+            return Err<void>("addYdrawBuffer: null buffer");
+        }
+
+        // Create internal buffer on first add
+        if (!_buffer) {
+            auto bufRes = YDrawBuffer::create();
+            if (!bufRes) {
+                return Err<void>("addYdrawBuffer: failed to create internal buffer");
+            }
+            _buffer = *bufRes;
+        }
+
+        // Track starting index for new primitives
+        uint32_t basePrimIdx = static_cast<uint32_t>(_primBounds.size());
+        uint32_t baseGlyphIdx = static_cast<uint32_t>(_glyphs.size());
+
+        // 1. Process fonts from input buffer (register with atlas)
+        buffer->forEachFont([this](int bufFontId, const uint8_t* data,
+                                   size_t size, const std::string& name) {
+            if (_bufferFontIdMap.count(bufFontId)) return;
+            auto res = addFontData(data, size, name);
+            if (res) {
+                _bufferFontIdMap[bufFontId] = *res;
+            } else {
+                ywarn("addYdrawBuffer: addFontData failed for '{}': {}", name, res.error().message());
+            }
+        });
+
+        // 2. Process text spans -> glyphs
+        buffer->forEachTextSpan([this](const TextSpanData& span) {
+            int atlasFontId = -1;
+            auto it = _bufferFontIdMap.find(span.fontId);
+            if (it != _bufferFontIdMap.end()) atlasFontId = it->second;
+
+            if (std::abs(span.rotation) > 0.001f) {
+                addRotatedText(span.x, span.y, span.text,
+                               span.fontSize, span.color,
+                               span.rotation, atlasFontId);
+            } else {
+                addText(span.x, span.y, span.text,
+                        span.fontSize, span.color, span.layer, atlasFontId);
+            }
+        });
+
+        // 3. Process images
+        buffer->forEachImage([this](const ImageData& img) {
+            PendingImage pi;
+            pi.x = img.x;
+            pi.y = img.y;
+            pi.w = img.w;
+            pi.h = img.h;
+            pi.pixelWidth = img.pixelWidth;
+            pi.pixelHeight = img.pixelHeight;
+            pi.layer = img.layer;
+            pi.pixels = img.pixels;
+            pi.texHandle = TextureHandle::invalid();
+            // Add Image primitive to internal buffer
+            auto res = _buffer->addImage(img.layer, img.x, img.y, img.w, img.h,
+                                         0, 0, img.pixelWidth, img.pixelHeight);
+            if (res) {
+                pi.primId = *res;
+            }
+            _pendingImages.push_back(std::move(pi));
+        });
+
+        // 4. Copy primitives and compute AABBs
+        buffer->forEachPrim([this](uint32_t id, const float* data, uint32_t wc) {
+            // Copy to internal buffer
+            _buffer->copyPrim(data, wc, YDrawBuffer::AUTO_ID);
+
+            // Compute AABB
+            float minX, minY, maxX, maxY;
+            computeAABB(data, wc, minX, minY, maxX, maxY);
+            uint32_t type = sdf::detail::read_u32(data, 0);
+            _primBounds.push_back({minX, minY, maxX, maxY, type});
+
+            // Extend scene bounds (incremental) if not explicit
+            bool is3D = (type >= 100 && type < 128);
+            if (!is3D && !_hasExplicitBounds) {
+                _sceneMinX = std::min(_sceneMinX, minX);
+                _sceneMinY = std::min(_sceneMinY, minY);
+                _sceneMaxX = std::max(_sceneMaxX, maxX);
+                _sceneMaxY = std::max(_sceneMaxY, maxY);
+            }
+
+            // Set 3D flag if needed
+            if (is3D) {
+                _flags |= FLAG_HAS_3D;
+            }
+        });
+
+        // 5. Also extend scene bounds for new glyphs
+        for (uint32_t gi = baseGlyphIdx; gi < _glyphs.size(); gi++) {
+            const auto& g = _glyphs[gi];
+            if (!_hasExplicitBounds) {
+                _sceneMinX = std::min(_sceneMinX, g.x);
+                _sceneMinY = std::min(_sceneMinY, g.y);
+                _sceneMaxX = std::max(_sceneMaxX, g.x + g.width());
+                _sceneMaxY = std::max(_sceneMaxY, g.y + g.height());
+            }
+        }
+
+        // 6. Copy scene metadata from input buffer
+        if (buffer->hasSceneBounds() && !_hasExplicitBounds) {
+            _sceneMinX = std::min(_sceneMinX, buffer->sceneMinX());
+            _sceneMinY = std::min(_sceneMinY, buffer->sceneMinY());
+            _sceneMaxX = std::max(_sceneMaxX, buffer->sceneMaxX());
+            _sceneMaxY = std::max(_sceneMaxY, buffer->sceneMaxY());
+        }
+        if (buffer->bgColor() != 0 && _bgColor == 0xFF2E1A1A) {
+            _bgColor = buffer->bgColor();
+        }
+        _flags |= buffer->flags();
+
+        // 7. Ensure grid is sized and add primitives to internal grid structure
+        ensureGridSize();
+        addPrimsToGrid(basePrimIdx, static_cast<uint32_t>(_primBounds.size()));
+        addGlyphsToGrid(baseGlyphIdx, static_cast<uint32_t>(_glyphs.size()));
+
+        // 8. Mark packed grid as dirty
+        _gridStagingDirty = true;
+        _bufferDirty = true;
+
+        ydebug("addYdrawBuffer: added {} prims, {} glyphs, scene=[{:.0f},{:.0f}]-[{:.0f},{:.0f}]",
+               _primBounds.size() - basePrimIdx, _glyphs.size() - baseGlyphIdx,
+               _sceneMinX, _sceneMinY, _sceneMaxX, _sceneMaxY);
+
+        return Ok();
+    }
+
+    void clear() override {
+        // Clear primitive data
+        _primBounds.clear();
+        if (_buffer) {
+            _buffer->clear();
+        }
+
+        // Clear glyph data
+        _glyphs.clear();
+        _glyphSortedOrder.clear();
+
+        // Clear Level 1 grid (incremental structure)
+        _cellEntries.clear();
+        _gridWidth = 0;
+        _gridHeight = 0;
+
+        // Clear Level 2 grid (packed cache)
+        _gridStaging.clear();
+        _gridStagingDirty = true;
+
+        // Reset scene bounds to extreme values (auto-extend mode)
+        if (!_hasExplicitBounds) {
+            _sceneMinX = 1e10f;
+            _sceneMinY = 1e10f;
+            _sceneMaxX = -1e10f;
+            _sceneMaxY = -1e10f;
+        }
+
+        // Reset dirty flags
+        _bufferDirty = true;
+        _metadataDirty = true;
+
+        ydebug("YDrawBuilder::clear: reset all primitive and grid data");
+    }
+
+    //=========================================================================
+    // Grid helper methods
+    //=========================================================================
+
+    uint32_t cellX(float worldX) const {
+        if (_gridWidth == 0 || _cellSizeX <= 0) return 0;
+        return static_cast<uint32_t>(std::clamp(
+            (worldX - _sceneMinX) / _cellSizeX, 0.0f, static_cast<float>(_gridWidth - 1)));
+    }
+
+    uint32_t cellY(float worldY) const {
+        if (_gridHeight == 0 || _cellSizeY <= 0) return 0;
+        return static_cast<uint32_t>(std::clamp(
+            (worldY - _sceneMinY) / _cellSizeY, 0.0f, static_cast<float>(_gridHeight - 1)));
+    }
+
+    void ensureGridSize() {
+        // Handle edge case: no content yet
+        if (_sceneMinX >= _sceneMaxX) { _sceneMinX = 0; _sceneMaxX = 100; }
+        if (_sceneMinY >= _sceneMaxY) { _sceneMinY = 0; _sceneMaxY = 100; }
+
+        float sceneW = _sceneMaxX - _sceneMinX;
+        float sceneH = _sceneMaxY - _sceneMinY;
+
+        // Auto-compute cell size if needed
+        float csX = _cellSizeX;
+        float csY = _cellSizeY;
+        if (csX <= 0.0f || csY <= 0.0f) {
+            // Use average primitive size * 1.5 as cell size
+            if (!_primBounds.empty()) {
+                float avgW = 0.0f, avgH = 0.0f;
+                uint32_t count2D = 0;
+                for (const auto& pb : _primBounds) {
+                    bool is3D = (pb.type >= 100 && pb.type < 128);
+                    if (is3D) continue;
+                    avgW += pb.maxX - pb.minX;
+                    avgH += pb.maxY - pb.minY;
+                    count2D++;
+                }
+                if (count2D > 0) {
+                    avgW /= count2D;
+                    avgH /= count2D;
+                    csX = avgW * 1.5f;
+                    csY = avgH * 1.5f;
+                }
+            }
+            if (csX <= 0.0f) csX = sceneW / 10.0f;
+            if (csY <= 0.0f) csY = sceneH / 10.0f;
+            if (csX <= 0.0f) csX = 1.0f;
+            if (csY <= 0.0f) csY = 1.0f;
+        }
+
+        uint32_t newW = std::max(1u, static_cast<uint32_t>(std::ceil(sceneW / csX)));
+        uint32_t newH = std::max(1u, static_cast<uint32_t>(std::ceil(sceneH / csY)));
+
+        // Cap total cells
+        constexpr uint32_t MAX_TOTAL_CELLS = 4u * 1024u * 1024u;
+        uint64_t totalCells = static_cast<uint64_t>(newW) * newH;
+        if (totalCells > MAX_TOTAL_CELLS) {
+            float scale = std::sqrt(static_cast<float>(totalCells) / MAX_TOTAL_CELLS);
+            csX *= scale;
+            csY *= scale;
+            newW = std::max(1u, static_cast<uint32_t>(std::ceil(sceneW / csX)));
+            newH = std::max(1u, static_cast<uint32_t>(std::ceil(sceneH / csY)));
+        }
+
+        // If grid dimensions changed, need to rebuild cell entries
+        if (newW != _gridWidth || newH != _gridHeight || _cellEntries.empty()) {
+            _cellSizeX = csX;
+            _cellSizeY = csY;
+            rebuildCellEntries(newW, newH);
+        }
+    }
+
+    void rebuildCellEntries(uint32_t newW, uint32_t newH) {
+        _gridWidth = newW;
+        _gridHeight = newH;
+        _cellEntries.clear();
+        _cellEntries.resize(static_cast<size_t>(newW) * newH);
+
+        // Re-add all existing primitives to new grid
+        addPrimsToGrid(0, static_cast<uint32_t>(_primBounds.size()));
+        addGlyphsToGrid(0, static_cast<uint32_t>(_glyphs.size()));
+
+        _gridStagingDirty = true;
+    }
+
+    void addPrimsToGrid(uint32_t startIdx, uint32_t endIdx) {
+        if (_gridWidth == 0 || _gridHeight == 0) return;
+
+        for (uint32_t primIdx = startIdx; primIdx < endIdx; primIdx++) {
+            const auto& pb = _primBounds[primIdx];
+            bool is3D = (pb.type >= 100 && pb.type < 128);
+            if (is3D) continue;
+
+            uint32_t cMinX = cellX(pb.minX);
+            uint32_t cMaxX = cellX(pb.maxX);
+            uint32_t cMinY = cellY(pb.minY);
+            uint32_t cMaxY = cellY(pb.maxY);
+
+            for (uint32_t cy = cMinY; cy <= cMaxY; cy++) {
+                for (uint32_t cx = cMinX; cx <= cMaxX; cx++) {
+                    _cellEntries[cy * _gridWidth + cx].push_back(primIdx);
+                }
+            }
+        }
+    }
+
+    void addGlyphsToGrid(uint32_t startIdx, uint32_t endIdx) {
+        if (_gridWidth == 0 || _gridHeight == 0) return;
+
+        for (uint32_t gi = startIdx; gi < endIdx; gi++) {
+            const auto& g = _glyphs[gi];
+            uint32_t cMinX = cellX(g.x);
+            uint32_t cMaxX = cellX(g.x + g.width());
+            uint32_t cMinY = cellY(g.y);
+            uint32_t cMaxY = cellY(g.y + g.height());
+
+            for (uint32_t cy = cMinY; cy <= cMaxY; cy++) {
+                for (uint32_t cx = cMinX; cx <= cMaxX; cx++) {
+                    _cellEntries[cy * _gridWidth + cx].push_back(gi | GLYPH_BIT);
+                }
+            }
+        }
+    }
+
+    void rebuildPackedGrid() {
+        if (!_gridStagingDirty) return;
+
+        uint32_t numCells = _gridWidth * _gridHeight;
+        if (numCells == 0) {
+            _gridStaging.clear();
+            _gridStagingDirty = false;
+            return;
+        }
+
+        // Pass 1: compute total size needed
+        uint32_t totalEntries = 0;
+        for (const auto& cell : _cellEntries) {
+            totalEntries += 1 + static_cast<uint32_t>(cell.size());  // count + entries
+        }
+
+        // Allocate
+        _gridStaging.resize(numCells + totalEntries);
+
+        // Pass 2: fill offsets and entries
+        uint32_t pos = numCells;
+        for (uint32_t i = 0; i < numCells; i++) {
+            _gridStaging[i] = pos;  // offset to this cell's packed list
+            _gridStaging[pos] = static_cast<uint32_t>(_cellEntries[i].size());  // count
+            for (size_t j = 0; j < _cellEntries[i].size(); j++) {
+                _gridStaging[pos + 1 + j] = _cellEntries[i][j];
+            }
+            pos += 1 + static_cast<uint32_t>(_cellEntries[i].size());
+        }
+
+        _gridStagingDirty = false;
+
+        ydebug("rebuildPackedGrid: grid={}x{} cells={} staging={} u32s",
+               _gridWidth, _gridHeight, numCells, _gridStaging.size());
+    }
 
     //=========================================================================
     // GPU buffer lifecycle
@@ -915,20 +1242,20 @@ public:
         _derivedHandle = BufferHandle::invalid();
         _primWordOffsets.clear();
 
-        if (_buffer->empty() && _glyphs.empty()) {
+        if ((!_buffer || _buffer->empty()) && _glyphs.empty()) {
             clearGridStaging();
             return Ok();
         }
 
         // Reserve compact prim storage (only if there are actual prims)
-        uint32_t primBytes = _buffer->gpuBufferSize();
+        uint32_t primBytes = _buffer ? _buffer->gpuBufferSize() : 0;
         if (primBytes > 0) {
             bufMgr->reserve(primBytes);
         }
 
-        // Build grid if not already computed
-        if (_gridStaging.empty()) {
-            calculate();
+        // Build packed grid if dirty
+        if (_gridStagingDirty) {
+            rebuildPackedGrid();
         }
 
         // Reserve derived size (grid + glyphs + optional atlas metadata)
@@ -1304,364 +1631,6 @@ public:
     uint32_t gridWidth() const override { return _gridWidth; }
     uint32_t gridHeight() const override { return _gridHeight; }
 
-    void calculate() override {
-        // Clear builder-owned staging data — will be rebuilt from buffer state
-        _primBounds.clear();
-        _gridStaging.clear();
-        _glyphs.clear();
-
-        // Step 0: Ingest buffer metadata — fonts, text spans, scene bounds
-        // The buffer may carry font blobs and text spans (e.g. from PDF renderer).
-        // Register fonts with the builder's MSDF atlas, then convert text spans
-        // into glyphs via the builder's existing addText/addRotatedText.
-        _buffer->forEachFont([this](int bufFontId, const uint8_t* data,
-                                     size_t size, const std::string& name) {
-            if (_bufferFontIdMap.count(bufFontId)) return;
-            auto res = addFontData(data, size, name);
-            if (res) {
-                _bufferFontIdMap[bufFontId] = *res;
-            } else {
-                ywarn("calculate: addFontData failed for '{}': {}", name, res.error().message());
-            }
-        });
-
-        _buffer->forEachTextSpan([this](const TextSpanData& span) {
-            int atlasFontId = -1;
-            auto it = _bufferFontIdMap.find(span.fontId);
-            if (it != _bufferFontIdMap.end()) atlasFontId = it->second;
-
-            if (std::abs(span.rotation) > 0.001f) {
-                addRotatedText(span.x, span.y, span.text,
-                               span.fontSize, span.color,
-                               span.rotation, atlasFontId);
-            } else {
-                addText(span.x, span.y, span.text,
-                        span.fontSize, span.color, span.layer, atlasFontId);
-            }
-        });
-
-        if (_buffer->hasSceneBounds() && !_hasExplicitBounds) {
-            _sceneMinX = _buffer->sceneMinX();
-            _sceneMinY = _buffer->sceneMinY();
-            _sceneMaxX = _buffer->sceneMaxX();
-            _sceneMaxY = _buffer->sceneMaxY();
-            _hasExplicitBounds = true;
-        }
-
-        if (_buffer->bgColor() != 0) {
-            _bgColor = _buffer->bgColor();
-        }
-
-        if (_buffer->flags() != 0) {
-            _flags |= _buffer->flags();
-        }
-
-        // Ingest images from buffer into pending list and add Image primitives
-        _pendingImages.clear();
-        _buffer->forEachImage([this](const ImageData& img) {
-            PendingImage pi;
-            pi.x = img.x;
-            pi.y = img.y;
-            pi.w = img.w;
-            pi.h = img.h;
-            pi.pixelWidth = img.pixelWidth;
-            pi.pixelHeight = img.pixelHeight;
-            pi.layer = img.layer;
-            pi.pixels = img.pixels;
-            pi.texHandle = TextureHandle::invalid();
-            // Add Image primitive with placeholder atlas coords (will be updated in writeTextures)
-            auto res = _buffer->addImage(img.layer, img.x, img.y, img.w, img.h,
-                                         0, 0, img.pixelWidth, img.pixelHeight);
-            if (res) {
-                pi.primId = *res;
-            }
-            _pendingImages.push_back(std::move(pi));
-        });
-
-        // Triangulation pass: convert Polygon/PolygonGroup to Triangle primitives
-        {
-            struct PendingTri {
-                float x0, y0, x1, y1, x2, y2;
-                uint32_t layer, fillColor;
-                float strokeWidth;
-            };
-            std::vector<PendingTri> pendingTris;
-            std::vector<uint32_t> toRemove;
-
-            _buffer->forEachPrim([&](uint32_t id, const float* data, uint32_t /*wc*/) {
-                uint32_t type = sdf::detail::read_u32(data, 0);
-
-                if (type == static_cast<uint32_t>(SDFType::Polygon)) {
-                    uint32_t layer = sdf::detail::read_u32(data, 1);
-                    uint32_t vertexCount = sdf::detail::read_u32(data, 2);
-                    uint32_t fillColor = sdf::detail::read_u32(data, 3);
-                    float strokeWidth = data[5];
-                    const float* vertices = data + 7;
-
-                    std::vector<uint32_t> indices;
-                    if (triangulatePolygon(vertices, vertexCount, indices)) {
-                        for (size_t i = 0; i + 2 < indices.size(); i += 3) {
-                            uint32_t i0 = indices[i], i1 = indices[i + 1], i2 = indices[i + 2];
-                            PendingTri pt;
-                            pt.x0 = vertices[i0 * 2]; pt.y0 = vertices[i0 * 2 + 1];
-                            pt.x1 = vertices[i1 * 2]; pt.y1 = vertices[i1 * 2 + 1];
-                            pt.x2 = vertices[i2 * 2]; pt.y2 = vertices[i2 * 2 + 1];
-                            pt.layer = layer; pt.fillColor = fillColor; pt.strokeWidth = strokeWidth;
-                            pendingTris.push_back(pt);
-                        }
-                        toRemove.push_back(id);
-                    }
-                }
-                else if (type == static_cast<uint32_t>(SDFType::PolygonGroup)) {
-                    uint32_t layer = sdf::detail::read_u32(data, 1);
-                    uint32_t vertexCount = sdf::detail::read_u32(data, 2);
-                    uint32_t contourCount = sdf::detail::read_u32(data, 3);
-                    uint32_t fillColor = sdf::detail::read_u32(data, 4);
-                    float strokeWidth = data[6];
-                    const float* contourStartsF = data + 8;
-                    const float* vertices = data + 8 + contourCount;
-
-                    std::vector<uint32_t> contourStarts(contourCount);
-                    for (uint32_t i = 0; i < contourCount; ++i) {
-                        std::memcpy(&contourStarts[i], &contourStartsF[i], sizeof(uint32_t));
-                    }
-
-                    std::vector<uint32_t> indices;
-                    if (triangulatePolygonGroup(contourStarts.data(), contourCount,
-                                                 vertices, vertexCount, indices)) {
-                        for (size_t i = 0; i + 2 < indices.size(); i += 3) {
-                            uint32_t i0 = indices[i], i1 = indices[i + 1], i2 = indices[i + 2];
-                            PendingTri pt;
-                            pt.x0 = vertices[i0 * 2]; pt.y0 = vertices[i0 * 2 + 1];
-                            pt.x1 = vertices[i1 * 2]; pt.y1 = vertices[i1 * 2 + 1];
-                            pt.x2 = vertices[i2 * 2]; pt.y2 = vertices[i2 * 2 + 1];
-                            pt.layer = layer; pt.fillColor = fillColor; pt.strokeWidth = strokeWidth;
-                            pendingTris.push_back(pt);
-                        }
-                        toRemove.push_back(id);
-                    }
-                }
-            });
-
-            for (uint32_t id : toRemove) {
-                _buffer->remove(id);
-            }
-
-            for (const auto& pt : pendingTris) {
-                _buffer->addTriangle(pt.layer, pt.x0, pt.y0, pt.x1, pt.y1, pt.x2, pt.y2,
-                                      pt.fillColor, 0, pt.strokeWidth, 0);
-            }
-        }
-
-        // Step 1: Read all prims from buffer, compute AABB for each
-        _buffer->forEachPrim([this](uint32_t /*id*/, const float* data, uint32_t wc) {
-            uint32_t type = sdf::detail::read_u32(data, 0);
-            float minX, minY, maxX, maxY;
-            computeAABB(data, wc, minX, minY, maxX, maxY);
-            if (type >= 100 && type < 128) {
-                _flags |= FLAG_HAS_3D;
-            }
-            _primBounds.push_back({minX, minY, maxX, maxY, type});
-        });
-
-        // Step 2: Compute scene bounds from prim AABBs
-        if (!_hasExplicitBounds) {
-            _sceneMinX = 1e10f; _sceneMinY = 1e10f;
-            _sceneMaxX = -1e10f; _sceneMaxY = -1e10f;
-            for (const auto& pb : _primBounds) {
-                bool is3D = (pb.type >= 100 && pb.type < 128);
-                if (is3D) continue;
-                _sceneMinX = std::min(_sceneMinX, pb.minX);
-                _sceneMinY = std::min(_sceneMinY, pb.minY);
-                _sceneMaxX = std::max(_sceneMaxX, pb.maxX);
-                _sceneMaxY = std::max(_sceneMaxY, pb.maxY);
-            }
-            for (const auto& g : _glyphs) {
-                _sceneMinX = std::min(_sceneMinX, g.x);
-                _sceneMinY = std::min(_sceneMinY, g.y);
-                _sceneMaxX = std::max(_sceneMaxX, g.x + g.width());
-                _sceneMaxY = std::max(_sceneMaxY, g.y + g.height());
-            }
-            float padX = (_sceneMaxX - _sceneMinX) * 0.05f;
-            float padY = (_sceneMaxY - _sceneMinY) * 0.05f;
-            _sceneMinX -= padX; _sceneMinY -= padY;
-            _sceneMaxX += padX; _sceneMaxY += padY;
-            if (_sceneMinX >= _sceneMaxX) { _sceneMinX = 0; _sceneMaxX = 100; }
-            if (_sceneMinY >= _sceneMaxY) { _sceneMinY = 0; _sceneMaxY = 100; }
-        }
-
-        // Step 3: Compute grid dimensions (supports non-square cells)
-        float sceneWidth = _sceneMaxX - _sceneMinX;
-        float sceneHeight = _sceneMaxY - _sceneMinY;
-        uint32_t gridW = 0, gridH = 0;
-        float csX = _cellSizeX;
-        float csY = _cellSizeY;
-
-        uint32_t num2DPrims = 0;
-        for (const auto& pb : _primBounds) {
-            // 3D primitives are types 100-127, everything else is 2D
-            // (includes gradients 132-134, polygons 130-131, etc.)
-            bool is3D = (pb.type >= 100 && pb.type < 128);
-            if (!is3D) num2DPrims++;
-        }
-
-        if (num2DPrims > 0 || !_glyphs.empty()) {
-            // Auto-compute cell sizes if not explicitly set
-            if (csX <= 0.0f || csY <= 0.0f) {
-                float primCsX = 0.0f, primCsY = 0.0f;
-                float glyphCsX = 0.0f, glyphCsY = 0.0f;
-                if (num2DPrims > 0) {
-                    float avgPrimW = 0.0f, avgPrimH = 0.0f;
-                    for (const auto& pb : _primBounds) {
-                        bool is3D = (pb.type >= 100 && pb.type < 128);
-                        if (is3D) continue;
-                        avgPrimW += pb.maxX - pb.minX;
-                        avgPrimH += pb.maxY - pb.minY;
-                    }
-                    avgPrimW /= num2DPrims;
-                    avgPrimH /= num2DPrims;
-                    primCsX = avgPrimW * 1.5f;
-                    primCsY = avgPrimH * 1.5f;
-                }
-                uint32_t glyphCount = static_cast<uint32_t>(_glyphs.size());
-                if (glyphCount > 0) {
-                    float avgGlyphW = 0.0f, avgGlyphH = 0.0f;
-                    for (const auto& g : _glyphs) {
-                        avgGlyphW += g.width();
-                        avgGlyphH += g.height();
-                    }
-                    avgGlyphW /= glyphCount;
-                    avgGlyphH /= glyphCount;
-                    glyphCsX = avgGlyphW * 2.0f;
-                    glyphCsY = avgGlyphH * 2.0f;
-                }
-                if (num2DPrims > 0 && glyphCount > 0) {
-                    csX = (num2DPrims * primCsX + glyphCount * glyphCsX) / (num2DPrims + glyphCount);
-                    csY = (num2DPrims * primCsY + glyphCount * glyphCsY) / (num2DPrims + glyphCount);
-                } else if (num2DPrims > 0) {
-                    csX = primCsX;
-                    csY = primCsY;
-                } else {
-                    csX = glyphCsX;
-                    csY = glyphCsY;
-                }
-                if (csX <= 0.0f) csX = 1.0f;
-                if (csY <= 0.0f) csY = 1.0f;
-            }
-            gridW = std::max(1u, static_cast<uint32_t>(std::ceil(sceneWidth / csX)));
-            gridH = std::max(1u, static_cast<uint32_t>(std::ceil(sceneHeight / csY)));
-            constexpr uint32_t MAX_TOTAL_CELLS = 4u * 1024u * 1024u;
-            uint64_t totalCells = static_cast<uint64_t>(gridW) * gridH;
-            if (totalCells > MAX_TOTAL_CELLS) {
-                float scale = std::sqrt(static_cast<float>(totalCells) / MAX_TOTAL_CELLS);
-                csX *= scale;
-                csY *= scale;
-                gridW = std::max(1u, static_cast<uint32_t>(std::ceil(sceneWidth / csX)));
-                gridH = std::max(1u, static_cast<uint32_t>(std::ceil(sceneHeight / csY)));
-            }
-        }
-
-        _gridWidth = gridW;
-        _gridHeight = gridH;
-        _cellSizeX = csX;
-        _cellSizeY = csY;
-
-        std::cerr << "YDrawBuilder::calculate: grid=" << gridW << "x" << gridH 
-                  << " scene=[" << _sceneMinX << "," << _sceneMinY << "]-[" 
-                  << _sceneMaxX << "," << _sceneMaxY << "] prims=" << _primBounds.size() << std::endl;
-
-        ydebug("YDrawBuilder::calculate: grid={}x{} cellSize=({:.1f},{:.1f}) prims={} glyphs={} scene=[{:.0f},{:.0f}]-[{:.0f},{:.0f}]",
-              gridW, gridH, csX, csY, _primBounds.size(), _glyphs.size(),
-              _sceneMinX, _sceneMinY, _sceneMaxX, _sceneMaxY);
-
-        // Step 4: Build variable-length grid into staging
-        uint32_t numCells = gridW * gridH;
-        std::vector<uint32_t> cellCounts(numCells, 0);
-
-        for (const auto& pb : _primBounds) {
-            bool is3D = (pb.type >= 100 && pb.type < 128);
-            if (is3D) continue;
-            uint32_t cMinX = static_cast<uint32_t>(std::clamp((pb.minX - _sceneMinX) / csX, 0.0f, float(gridW - 1)));
-            uint32_t cMaxX = static_cast<uint32_t>(std::clamp((pb.maxX - _sceneMinX) / csX, 0.0f, float(gridW - 1)));
-            uint32_t cMinY = static_cast<uint32_t>(std::clamp((pb.minY - _sceneMinY) / csY, 0.0f, float(gridH - 1)));
-            uint32_t cMaxY = static_cast<uint32_t>(std::clamp((pb.maxY - _sceneMinY) / csY, 0.0f, float(gridH - 1)));
-            for (uint32_t cy = cMinY; cy <= cMaxY; cy++)
-                for (uint32_t cx = cMinX; cx <= cMaxX; cx++)
-                    cellCounts[cy * gridW + cx]++;
-        }
-        for (const auto& g : _glyphs) {
-            uint32_t cMinX = static_cast<uint32_t>(std::clamp((g.x - _sceneMinX) / csX, 0.0f, float(gridW - 1)));
-            uint32_t cMaxX = static_cast<uint32_t>(std::clamp((g.x + g.width() - _sceneMinX) / csX, 0.0f, float(gridW - 1)));
-            uint32_t cMinY = static_cast<uint32_t>(std::clamp((g.y - _sceneMinY) / csY, 0.0f, float(gridH - 1)));
-            uint32_t cMaxY = static_cast<uint32_t>(std::clamp((g.y + g.height() - _sceneMinY) / csY, 0.0f, float(gridH - 1)));
-            for (uint32_t cy = cMinY; cy <= cMaxY; cy++)
-                for (uint32_t cx = cMinX; cx <= cMaxX; cx++)
-                    cellCounts[cy * gridW + cx]++;
-        }
-
-        // Compute offsets (prefix sum)
-        uint32_t pos = numCells;
-        _gridStaging.resize(numCells);
-        for (uint32_t i = 0; i < numCells; i++) {
-            _gridStaging[i] = pos;
-            pos += 1 + cellCounts[i];
-        }
-        _gridStaging.resize(pos, 0);
-
-        for (uint32_t i = 0; i < numCells; i++) {
-            _gridStaging[_gridStaging[i]] = 0;
-        }
-
-        // Pass 2: fill entries
-        for (uint32_t primIdx = 0; primIdx < static_cast<uint32_t>(_primBounds.size()); primIdx++) {
-            const auto& pb = _primBounds[primIdx];
-            bool is3D = (pb.type >= 100 && pb.type < 128);
-            if (is3D) continue;
-            uint32_t cMinX = static_cast<uint32_t>(std::clamp((pb.minX - _sceneMinX) / csX, 0.0f, float(gridW - 1)));
-            uint32_t cMaxX = static_cast<uint32_t>(std::clamp((pb.maxX - _sceneMinX) / csX, 0.0f, float(gridW - 1)));
-            uint32_t cMinY = static_cast<uint32_t>(std::clamp((pb.minY - _sceneMinY) / csY, 0.0f, float(gridH - 1)));
-            uint32_t cMaxY = static_cast<uint32_t>(std::clamp((pb.maxY - _sceneMinY) / csY, 0.0f, float(gridH - 1)));
-            for (uint32_t cy = cMinY; cy <= cMaxY; cy++) {
-                for (uint32_t cx = cMinX; cx <= cMaxX; cx++) {
-                    uint32_t off = _gridStaging[cy * gridW + cx];
-                    uint32_t cnt = _gridStaging[off];
-                    _gridStaging[off + 1 + cnt] = primIdx;
-                    _gridStaging[off] = cnt + 1;
-                }
-            }
-        }
-        for (uint32_t gi = 0; gi < static_cast<uint32_t>(_glyphs.size()); gi++) {
-            const auto& g = _glyphs[gi];
-            uint32_t cMinX = static_cast<uint32_t>(std::clamp((g.x - _sceneMinX) / csX, 0.0f, float(gridW - 1)));
-            uint32_t cMaxX = static_cast<uint32_t>(std::clamp((g.x + g.width() - _sceneMinX) / csX, 0.0f, float(gridW - 1)));
-            uint32_t cMinY = static_cast<uint32_t>(std::clamp((g.y - _sceneMinY) / csY, 0.0f, float(gridH - 1)));
-            uint32_t cMaxY = static_cast<uint32_t>(std::clamp((g.y + g.height() - _sceneMinY) / csY, 0.0f, float(gridH - 1)));
-            for (uint32_t cy = cMinY; cy <= cMaxY; cy++) {
-                for (uint32_t cx = cMinX; cx <= cMaxX; cx++) {
-                    uint32_t off = _gridStaging[cy * gridW + cx];
-                    uint32_t cnt = _gridStaging[off];
-                    _gridStaging[off + 1 + cnt] = gi | GLYPH_BIT;
-                    _gridStaging[off] = cnt + 1;
-                }
-            }
-        }
-
-        // Grid stats
-        uint32_t maxEntries = 0, totalEntries = 0, nonEmptyCells = 0;
-        for (uint32_t i = 0; i < numCells; i++) {
-            uint32_t cnt = _gridStaging[_gridStaging[i]];
-            totalEntries += cnt;
-            if (cnt > 0) nonEmptyCells++;
-            if (cnt > maxEntries) maxEntries = cnt;
-        }
-        ydebug("YDrawBuilder::calculate: gridSize={} u32s ({} KB) cells={} nonEmpty={} totalEntries={} maxPerCell={} avgPerNonEmpty={:.1f}",
-              _gridStaging.size(), _gridStaging.size() * 4 / 1024,
-              numCells, nonEmptyCells, totalEntries, maxEntries,
-              nonEmptyCells > 0 ? float(totalEntries) / nonEmptyCells : 0.0f);
-
-        _bufferDirty = true;
-    }
-
 private:
     //=========================================================================
     // GPU helpers
@@ -1828,27 +1797,34 @@ private:
     // Data
     //=========================================================================
 
-    // Lightweight AABB data for grid computation (populated by calculate from buffer)
+    // Lightweight AABB data for grid computation (populated by addYdrawBuffer)
     struct PrimBounds {
         float minX, minY, maxX, maxY;
         uint32_t type;
     };
     std::vector<PrimBounds> _primBounds;
 
-    // The buffer holding all primitives (shared with card)
+    // Internal merged buffer (created on first addYdrawBuffer)
     YDrawBuffer::Ptr _buffer;
 
+    // Level 1: Internal incremental grid structure
+    // _cellEntries[cellIdx] = list of prim indices in that cell
+    std::vector<std::vector<uint32_t>> _cellEntries;
+
+    // Level 2: Packed GPU format (cache, rebuilt when _gridStagingDirty)
     std::vector<uint32_t> _gridStaging;
+    bool _gridStagingDirty = true;
+
     std::vector<YDrawGlyph> _glyphs;
     std::vector<uint32_t> _glyphSortedOrder;
 
-    // Grid dimensions (computed by calculate())
+    // Grid dimensions
     uint32_t _gridWidth = 0;
     uint32_t _gridHeight = 0;
 
-    // Scene bounds
-    float _sceneMinX = 0, _sceneMinY = 0;
-    float _sceneMaxX = 100, _sceneMaxY = 100;
+    // Scene bounds (initialized to extreme values, extended by addYdrawBuffer)
+    float _sceneMinX = 1e10f, _sceneMinY = 1e10f;
+    float _sceneMaxX = -1e10f, _sceneMaxY = -1e10f;
     bool _hasExplicitBounds = false;
 
     // Grid parameters
@@ -1920,24 +1896,18 @@ private:
 
 Result<YDrawBuilder::Ptr> YDrawBuilder::createImpl(
     FontManager::Ptr fontManager, GpuAllocator::Ptr allocator,
-    std::shared_ptr<YDrawBuffer> buffer,
     CardManager::Ptr cardMgr, uint32_t metaSlotIndex)
 {
-    // cardMgr may be null for transitional cards that still manage their own GPU state.
-    // Lifecycle methods (declareBufferNeeds, allocateBuffers, etc.) validate it at call time.
     return Ok(Ptr(new YDrawBuilderImpl(std::move(fontManager),
                                         std::move(allocator),
-                                        std::move(buffer),
                                         std::move(cardMgr), metaSlotIndex)));
 }
 
 Result<YDrawBuilder::Ptr> YDrawBuilder::createImpl(
-    FontManager::Ptr fontManager, GpuAllocator::Ptr allocator,
-    std::shared_ptr<YDrawBuffer> buffer)
+    FontManager::Ptr fontManager, GpuAllocator::Ptr allocator)
 {
     return Ok(Ptr(new YDrawBuilderImpl(std::move(fontManager),
                                         std::move(allocator),
-                                        std::move(buffer),
                                         CardManager::Ptr{}, 0)));
 }
 

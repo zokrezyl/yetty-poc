@@ -75,7 +75,10 @@ public:
 
         _buffer->clear();
         generatePrimitives();
-        _builder->calculate();
+        _builder->clear();
+        if (!_buffer->empty()) {
+            _builder->addYdrawBuffer(_buffer);
+        }
     }
 
     Result<bool> onEvent(const base::Event& event) override {
@@ -167,7 +170,7 @@ public:
         _metaHandle = *metaResult;
 
         auto builderRes = YDrawBuilder::create(
-            _fontManager, _gpuAllocator, _buffer, _cardMgr, metadataSlotIndex());
+            _fontManager, _gpuAllocator, _cardMgr, metadataSlotIndex());
         if (!builderRes) {
             return Err<void>("MarkdownImpl::init: failed to create builder", builderRes);
         }

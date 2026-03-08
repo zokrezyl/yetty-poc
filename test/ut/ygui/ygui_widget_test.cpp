@@ -256,10 +256,12 @@ GpuResult runWidgetPipeline(float sceneW, float sceneH,
 
     // Builder processes buffer → GPU
     auto mockCM = std::make_shared<WMockCardManager>();
-    auto builder = *YDrawBuilder::create(fm, testAllocator(), buf, std::static_pointer_cast<CardManager>(mockCM), 0);
+    auto builder = *YDrawBuilder::create(fm, testAllocator(), std::static_pointer_cast<CardManager>(mockCM), 0);
     builder->setSceneBounds(0, 0, sceneW, sceneH);
     builder->setBgColor(0xFF1A1A2E);
-    builder->calculate();
+    if (!buf->empty()) {
+        builder->addYdrawBuffer(buf);
+    }
     builder->declareBufferNeeds();
     mockCM->mockBufMgr()->commitReservations();
     builder->allocateBuffers();
@@ -946,10 +948,10 @@ suite widget_gpu_full_demo = [] {
         engine.rebuild();
 
         auto mockCM = std::make_shared<WMockCardManager>();
-        auto builder = *YDrawBuilder::create(fm, testAllocator(), buf, std::static_pointer_cast<CardManager>(mockCM), 0);
+        auto builder = *YDrawBuilder::create(fm, testAllocator(), std::static_pointer_cast<CardManager>(mockCM), 0);
         builder->setSceneBounds(0, 0, 300, 200);
         builder->setBgColor(0xFF1A1A2E);
-        builder->calculate();
+        builder->addYdrawBuffer(buf);
         builder->declareBufferNeeds();
         mockCM->mockBufMgr()->commitReservations();
         builder->allocateBuffers();
@@ -966,7 +968,8 @@ suite widget_gpu_full_demo = [] {
         engine.addWidget(chk);
         engine.rebuild();
 
-        builder->calculate();
+        builder->clear();
+        builder->addYdrawBuffer(buf);
         builder->declareBufferNeeds();
         mockCM->mockBufMgr()->commitReservations();
         builder->allocateBuffers();
@@ -1183,11 +1186,11 @@ suite widget_direct_to_gpu = [] {
 
         auto fm = testFontManager();
         auto mockCM = std::make_shared<WMockCardManager>();
-        auto builder = *YDrawBuilder::create(fm, testAllocator(), buf,
+        auto builder = *YDrawBuilder::create(fm, testAllocator(),
             std::static_pointer_cast<CardManager>(mockCM), 0);
         builder->setSceneBounds(0, 0, 300, 200);
         builder->setBgColor(0xFF1A1A2E);
-        builder->calculate();
+        builder->addYdrawBuffer(buf);
         builder->declareBufferNeeds();
         mockCM->mockBufMgr()->commitReservations();
         builder->allocateBuffers();
@@ -1243,7 +1246,7 @@ suite card_exact_flow = [] {
 
         // Step 2: Create builder BEFORE engine (card init line 368-372)
         auto mockCM = std::make_shared<WMockCardManager>();
-        auto builder = *YDrawBuilder::create(fm, testAllocator(), buf,
+        auto builder = *YDrawBuilder::create(fm, testAllocator(),
             std::static_pointer_cast<CardManager>(mockCM), 0);
 
         // Step 3: Set viewport (card init line 373)
@@ -1283,8 +1286,8 @@ suite card_exact_flow = [] {
         builder->setSceneBounds(0, 0, pixelW, pixelH);
         builder->setBgColor(0xFF1A1A2E);
 
-        // Step 10: builder.calculate() (card init line 394)
-        builder->calculate();
+        // Step 10: builder.addYdrawBuffer() (card init line 394)
+        builder->addYdrawBuffer(buf);
 
         // Step 11-12: Framework first-frame calls
         builder->declareBufferNeeds();
@@ -1339,7 +1342,7 @@ suite card_exact_flow = [] {
 
         auto buf = *YDrawBuffer::create();
         auto mockCM = std::make_shared<WMockCardManager>();
-        auto builder = *YDrawBuilder::create(fm, testAllocator(), buf,
+        auto builder = *YDrawBuilder::create(fm, testAllocator(),
             std::static_pointer_cast<CardManager>(mockCM), 0);
         builder->setViewport(30, 10);
 
@@ -1355,7 +1358,7 @@ suite card_exact_flow = [] {
         engine.rebuild();
         builder->setSceneBounds(0, 0, 300, 200);
         builder->setBgColor(0xFF1A1A2E);
-        builder->calculate();
+        builder->addYdrawBuffer(buf);
         builder->declareBufferNeeds();
         mockCM->mockBufMgr()->commitReservations();
         builder->allocateBuffers();
@@ -1371,7 +1374,8 @@ suite card_exact_flow = [] {
         // renderToStaging equivalent
         if (engine.isDirty()) {
             engine.rebuild();
-            builder->calculate();
+            builder->clear();
+            builder->addYdrawBuffer(buf);
         }
         builder->declareBufferNeeds();
         mockCM->mockBufMgr()->commitReservations();

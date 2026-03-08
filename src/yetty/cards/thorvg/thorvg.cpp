@@ -129,7 +129,10 @@ public:
             if (auto res = _renderer->render(); !res) {
                 yerror("ThorVG::renderToStaging: render failed");
             }
-            _builder->calculate();
+            _builder->clear();
+            if (!_buffer->empty()) {
+                _builder->addYdrawBuffer(_buffer);
+            }
 
             // First-time zoom: fit content
             if (_needsInitialZoom && _cellWidth > 0 && _cellHeight > 0) {
@@ -236,7 +239,7 @@ public:
         _metaHandle = *metaResult;
 
         auto builderRes = YDrawBuilder::create(
-            _fontManager, _gpuAllocator, _buffer, _cardMgr, metadataSlotIndex());
+            _fontManager, _gpuAllocator, _cardMgr, metadataSlotIndex());
         if (!builderRes) {
             return Err<void>("ThorVG::init: failed to create builder", builderRes);
         }
@@ -268,7 +271,10 @@ public:
 
         // Render initial frame
         if (auto res = _renderer->render(); res) {
-            _builder->calculate();
+            _builder->clear();
+            if (!_buffer->empty()) {
+                _builder->addYdrawBuffer(_buffer);
+            }
         }
 
         // Start animation if animated
