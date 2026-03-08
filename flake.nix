@@ -38,6 +38,7 @@
         commonDeps = with pkgs; [
           cmake
           ninja
+          meson
           pkg-config
           git
           llvmPackages_21.clang

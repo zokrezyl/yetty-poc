@@ -83,6 +83,7 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y \
           automake autoconf libtool \
+          meson ninja-build \
           libfontconfig1-dev \
           libxrandr-dev \
           libxinerama-dev \
@@ -140,8 +141,8 @@ jobs:
       run: |
         echo "build-output-dir=${{ github.workspace }}/build-macos" >> "$GITHUB_OUTPUT"
 
-    - name: Install autotools
-      run: brew install automake autoconf libtool
+    - name: Install build dependencies
+      run: brew install automake autoconf libtool meson ninja
 
     - name: Configure CMake
       run: >
@@ -187,6 +188,9 @@ jobs:
       shell: bash
       run: |
         echo "build-output-dir=${{ github.workspace }}/build-windows" >> "$GITHUB_OUTPUT"
+
+    - name: Install build dependencies
+      run: pip install meson ninja
 
     - name: Configure CMake
       run: >
@@ -250,6 +254,11 @@ jobs:
 
     - name: Download Toybox for Android
       run: bash build-tools/android/build-toybox.sh
+
+    - name: Install build dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y meson ninja-build
 
     - name: Setup Gradle
       uses: gradle/actions/setup-gradle@v3
