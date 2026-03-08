@@ -24,16 +24,8 @@ if(dav1d_ADDED)
     set(DAV1D_BUILD_DIR "${CMAKE_BINARY_DIR}/_deps/dav1d-build")
 
     # Platform-specific library name
-    if(WIN32)
-        # MSVC produces dav1d.lib, MinGW produces libdav1d.a
-        if(MSVC)
-            set(DAV1D_LIB_NAME "dav1d.lib")
-        else()
-            set(DAV1D_LIB_NAME "libdav1d.a")
-        endif()
-    else()
-        set(DAV1D_LIB_NAME "libdav1d.a")
-    endif()
+    # Meson always produces libdav1d.a on all platforms (even Windows with MSVC)
+    set(DAV1D_LIB_NAME "libdav1d.a")
 
     # Platform-specific cross-compilation setup
     if(ANDROID)
