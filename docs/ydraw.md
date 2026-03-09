@@ -28,6 +28,42 @@ cardMetadata[]           ← GPU storage buffer (binding 1) — 64-byte metadata
 0x0003-ydraw.wgsl        ← O(1) grid lookup + SDF eval + MSDF text
 ```
 
+## CRITICAL: Current Format Change (Scrolling Support)
+
+**The primitive word layout has CHANGED to support scrolling mode.**
+
+### NEW Primitive Word Layout (GPU Format)
+
+All primitives written to GPU now have **gridOffset prepended**:
+
+```
+Word 0:     gridOffset   (u32)  ← packed: (gridOffsetCol | gridOffsetRow << 16)
+Word 1:     type         (u32)  ← SDFType enum value (MOVED from word 0)
+Word 2:     layer        (u32)  ← (MOVED from word 1)
+Words 3..N: geometry + colors   ← (MOVED from word 2+)
+```
+
+### OLD vs NEW Format Comparison
+
+| Field | OLD Offset | NEW Offset |
+|-------|------------|------------|
+| type | +0 | +1 |
+| layer | +1 | +2 |
+| gridOffset | +2 | +0 |
+| geometry start | +2 | +3 |
+| fillColor | N-4 | N-3 (relative to new end) |
+| strokeColor | N-3 | N-2 |
+| strokeWidth | N-2 | N-1 |
+| round | N-1 | N |
+
+**All shader code must read from the NEW offsets.**
+
+### Affected Files
+
+1. **sdf-types.gen.wgsl** - Auto-generated, reads type from +1, gridOffset from +0
+2. **sdf-overlay.gen.wgsl** - Auto-generated, same format
+3. **0x0003-ydraw.wgsl** - Hand-written, MUST manually update special case handling
+
 ## The Two GPU Buffers
 
 The shader reads from **two** storage buffers:
@@ -41,156 +77,294 @@ Both are backed by CPU-side arrays in `CardManager` (metadata) and
 `CardBufferManager` (storage). Cards write to CPU pointers; the managers flush
 dirty ranges to GPU each frame.
 
-### How cards get addresses into cardStorage
+## YDrawBuilder Internal Data Structures
 
-`CardBufferManager` is a free-list allocator. A card calls:
+### Scrolling Mode Storage
+
+The builder uses line-based storage for efficient scrolling:
 
 ```cpp
-auto handle = bufMgr->allocateBuffer(slotIndex, "prims", sizeBytes);
-// handle.data   → uint8_t* into CPU buffer (write here)
-// handle.offset → byte offset in cardStorage (for metadata references)
-// handle.size   → allocated bytes
+std::deque<ScrollLine> _scrollLines;  // front=line 0 (top), pop_front on scroll
+
+struct ScrollLine {
+    std::vector<std::vector<float>> prims;  // primitives with BASE at this line
+    std::vector<ScrollGridCell> cells;       // grid cells indexed by X column
+};
+
+struct ScrollGridCell {
+    std::vector<ScrollPrimRef> refs;  // primitives overlapping this cell
+};
+
+struct ScrollPrimRef {
+    uint16_t linesAhead;  // offset to base line (0 = same line, N = N lines down)
+    uint16_t primIndex;   // index within base line's prims vector
+};
 ```
 
-The `handle.data` pointer lets the card write directly. The `handle.offset`
-byte offset divided by 4 gives the **word offset** the shader uses to index
-into `cardStorage[]`.
+### Primitive Storage in ScrollLine
 
-A single card makes **two** separate allocations:
-- `"prims"` — offset table + variable-length prim data
-- `"derived"` — grid + glyphs + optional atlas header
+Each primitive in `ScrollLine::prims` is a `std::vector<float>` with NEW format:
 
-These are at **independent** offsets in `cardStorage`. They are NOT contiguous.
+| Word | Content | Description |
+|------|---------|-------------|
+| 0 | **gridOffset** | Packed: `(gridOffsetCol \| gridOffsetRow << 16)` |
+| 1 | type | Primitive type (original word[0]) |
+| 2 | layer | Layer/z-order (original word[1]) |
+| 3+ | data | Original primitive geometry data (from original word[2]+) |
+
+### Grid Offset Explained
+
+The **gridOffset** tells the shader how to translate primitive LOCAL coordinates to WORLD coordinates:
+
+- **Non-scrolling mode**: gridOffset = 0 (no translation needed)
+- **Scrolling mode**: gridOffset = cursor position at primitive addition time
+
+**Shader formula**: `localPos = worldPos - gridOffset * cellSize`
+
+When scrolling occurs, gridOffsetRow is **DECREMENTED** in all remaining primitives.
+
+### State Variables
+
+```cpp
+bool _scrollingMode = false;      // true for scrolling overlay
+uint16_t _cursorCol = 0;          // current cursor column
+uint16_t _cursorRow = 0;          // current cursor row
+float _cellSizeX, _cellSizeY;     // grid cell dimensions
+uint32_t _gridWidth, _gridHeight; // grid dimensions
+
+// Dirty flags
+bool _bufferDirty = false;        // primitives changed, need GPU write
+bool _gridStagingDirty = false;   // grid needs rebuild
+```
+
+## Primitive Word Layout (NEW Format with gridOffset)
+
+All 2D SDF primitives now have gridOffset at word 0. Example layouts:
+
+**Circle** (type=0, 10 words total):
+```
++0: gridOffset  +1: type=0  +2: layer  +3: cx  +4: cy  +5: r
++6: fillColor  +7: strokeColor  +8: strokeWidth  +9: round
+```
+
+**Box** (type=1, 11 words total):
+```
++0: gridOffset  +1: type=1  +2: layer  +3: cx  +4: cy  +5: hw  +6: hh
++7: fillColor  +8: strokeColor  +9: strokeWidth  +10: round
+```
+
+**Triangle** (type=3, 13 words total):
+```
++0: gridOffset  +1: type=3  +2: layer  +3: ax  +4: ay  +5: bx  +6: by  +7: cx  +8: cy
++9: fillColor  +10: strokeColor  +11: strokeWidth  +12: round
+```
+
+**RoundedBox** (type=8, 15 words total):
+```
++0: gridOffset  +1: type=8  +2: layer  +3: cx  +4: cy  +5: hw  +6: hh
++7: r0  +8: r1  +9: r2  +10: r3
++11: fillColor  +12: strokeColor  +13: strokeWidth  +14: round
+```
+
+**Star** (type=12, 12 words total):
+```
++0: gridOffset  +1: type=12  +2: layer  +3: cx  +4: cy  +5: r  +6: n  +7: m
++8: fillColor  +9: strokeColor  +10: strokeWidth  +11: round
+```
+
+**ColorWheel** (type=44, 15 words total):
+```
++0: gridOffset  +1: type=44  +2: layer  +3: cx  +4: cy  +5: outerR  +6: innerR
++7: hue  +8: sat  +9: val  +10: indicatorSize
++11: fillColor  +12: strokeColor  +13: strokeWidth  +14: round
+```
+
+**RotatedGlyph** (type=65, 15 words total):
+```
++0: gridOffset  +1: type=65  +2: layer  +3: x  +4: y  +5: scaleX  +6: scaleY
++7: angle  +8: glyphIndex  +9: cosAngle  +10: sinAngle
++11: fillColor  +12: strokeColor  +13: strokeWidth  +14: round
+```
+
+**Image** (type=129, 11 words total):
+```
++0: gridOffset  +1: type=129  +2: layer  +3: x  +4: y  +5: w  +6: h
++7: atlasX  +8: atlasY  +9: texW  +10: texH
+```
+
+### Shader Read Offsets
+
+The shader MUST read using these offsets:
+
+| Field | Offset |
+|-------|--------|
+| gridOffset | +0 |
+| type | +1 |
+| layer | +2 |
+| geometry start | +3 |
+
+For type-specific color offsets, see `primColors()` in `sdf-types.gen.wgsl`.
+
+## KNOWN BUGS AND ISSUES
+
+### 1. Text Rendering in Grid is BROKEN
+
+**Status**: FAILING
+
+Text glyphs added via `addText()` are not appearing in the grid correctly. The unit tests for glyph grid placement are failing:
+
+- `glyphs appear in grid with GLYPH_BIT` - FAILED
+- `mixed prims and text both reachable from grid` - FAILED
+- `ygui full widget scenario — prims + text all reachable` - FAILED
+
+**Root cause**: Not yet determined. The glyph path uses GLYPH_BIT entries in the grid (bit 31 set), separate from SDF primitive entries.
+
+### 2. Shader Special Cases Not Updated
+
+**Status**: PARTIALLY FIXED
+
+The hand-written `0x0003-ydraw.wgsl` has special handling for:
+- ColorWheel (type 44)
+- Image (type 129)
+- RotatedGlyph (type 65)
+
+These read geometry directly from cardStorage and MUST use the new offsets (+3 for geometry start instead of +2).
+
+**Fix applied**: Updated offsets in 0x0003-ydraw.wgsl for these special cases.
+
+### 3. Scrolling Grid/Shader Mismatch
+
+**Status**: OPEN BUG
+
+When primitives are added with cursor at non-zero row, there's a mismatch between:
+- Grid storage: primitives stored at cursor-adjusted rows (cursorRow + localLine)
+- Shader lookup: uses world pixel position / cellSize
+
+**Example**:
+- Circle at world Y=120, cellSize=20 → shader cellY = 6
+- Added at cursorRow=3 → stored in grid rows 7-11
+- Shader looks at row 6, finds nothing → **BUG**
+
+See `docs/scrolling-ydraw-builder.md` for detailed analysis.
+
+## Unit Test Limitations
+
+### The Problem with Current Tests
+
+The unit tests have significant limitations that prevent them from catching real bugs:
+
+#### 1. Tests Don't Verify Shader Behavior
+
+The tests verify:
+- Primitive data is written correctly to GPU buffer
+- Grid contains expected primitive indices
+- Metadata has correct offsets
+
+The tests DO NOT verify:
+- Shader reads data from correct offsets
+- Shader grid lookup matches CPU grid storage
+- Rendered output is correct
+
+**Result**: A bug where shader reads from wrong offset (like primType at +0 vs +1) passes all tests but breaks rendering.
+
+#### 2. Tests Use Mock Objects That Skip Critical Code Paths
+
+The mock `CardManager` and `CardBufferManager`:
+- Don't involve actual GPU
+- Don't run shader code
+- Don't validate coordinate translation
+
+**Result**: Grid storage bugs that cause shader lookup mismatches are not caught.
+
+#### 3. Grid Tests Only Check Presence, Not Position
+
+Tests verify that primitives appear in the grid, but don't verify:
+- Grid cell coordinates match world coordinates
+- Shader lookup at world position finds the primitive
+
+**Example of undetected bug**:
+```cpp
+// Test passes: "grid contains prim 0"
+// But prim 0 is stored at grid row 7, shader looks at row 3
+// Test doesn't check this → BUG goes undetected
+```
+
+#### 4. Format Change Tests Are Incomplete
+
+When the primitive format changed from `[type][layer][gridOffset]` to `[gridOffset][type][layer]`:
+
+- Tests were updated to read type from +1 instead of +0 ✓
+- Tests don't run shader code that also needs updating ✗
+- Hand-written shader special cases were not updated ✗
+
+### What Tests SHOULD Do
+
+To catch real bugs, tests should:
+
+1. **Verify shader expectations explicitly**:
+   ```cpp
+   // GPU format: [0]=gridOffset, [1]=type, [2]=layer
+   uint32_t type = readU32(storage, primOff + 1);  // Document why +1
+   ASSERT_EQ(type, SDF_CIRCLE);
+   ```
+
+2. **Test grid lookup matches world coordinates**:
+   ```cpp
+   float worldY = 120.0f;
+   uint32_t expectedGridRow = floor(worldY / cellSizeY);
+   uint32_t actualGridRow = findPrimInGrid(primId);
+   ASSERT_EQ(expectedGridRow, actualGridRow);
+   ```
+
+3. **Test shader-side coordinate translation**:
+   ```cpp
+   // Simulate shader grid lookup
+   uint32_t cellY = floor((worldPos.y - sceneMinY) / cellSizeY);
+   uint32_t cellIdx = cellY * gridWidth + cellX;
+   // Verify primitive is in this cell
+   ```
+
+4. **Include visual regression tests**:
+   - Render to offscreen buffer
+   - Compare against golden images
+   - Detect rendering differences automatically
 
 ## YDrawBuffer
 
 Pure data container. No GPU, no fonts, no computation. Stores:
 
 - **Primitives**: `unordered_map<uint32_t, PrimData>` where `PrimData.words` is
-  a `vector<float>` containing the raw word data for that primitive.
+  a `vector<float>` containing the raw word data (WITHOUT gridOffset - that's added by builder).
 - **Text spans**: `vector<TextSpanData>` — high-level text (x, y, text, fontSize,
   color, layer, fontId, rotation). NOT rendered directly; the builder converts
-  these to glyphs during `calculate()`.
-- **Font blobs**: `vector<FontBlob>` — raw TTF data for serialization. The builder
-  registers these with its MSDF atlas during `calculate()`.
+  these to glyphs during `addYdrawBuffer()`.
+- **Font blobs**: `vector<FontBlob>` — raw TTF data for serialization.
 - **Scene metadata**: `sceneMinX/Y/MaxX/Y`, `bgColor`, `flags`.
 
-### Key methods
+### Primitive Format in YDrawBuffer (WITHOUT gridOffset)
 
-| Method | Description |
-|--------|-------------|
-| `addCircle(id, ...)` | Add a circle primitive |
-| `addBox(id, ...)` | Add a box primitive |
-| `addRoundedBox(id, ...)` | Add a rounded box primitive |
-| `addTriangle(id, ...)` | Add a triangle primitive |
-| `addText(x, y, text, ...)` | Add a text span (NOT a prim) |
-| `addFontBlob(data, size, name)` | Store a TTF font blob |
-| `clear()` | Clear prims + text spans. Keeps fonts + scene metadata |
-| `primCount()` | Number of primitives (NOT text spans) |
-| `empty()` | True only if BOTH prims AND text spans are empty |
-| `gpuBufferSize()` | Bytes needed for prim buffer: `(primCount + totalDataWords) * 4` |
-| `writeGPU(buf, bufBytes, wordOffsets)` | Write prim offset table + data to `buf`. Fills `wordOffsets`. |
-| `forEachPrim(fn)` | Iterate all prims: `fn(id, data, wordCount)` |
-| `forEachTextSpan(fn)` | Iterate text spans: `fn(TextSpanData&)` |
-| `forEachFont(fn)` | Iterate font blobs: `fn(fontId, data, size, name)` |
-
-### Auto-ID
-
-`addXxx(AUTO_ID, ...)` auto-assigns an ID starting from `AUTO_ID_BASE = 0x80000000`.
-Cards like ygui use `primCount()` as the ID (0, 1, 2, ...) for sequential assignment
-after `clear()`.
-
-### Delta mode
-
-After `serialize()`, the buffer enters delta mode. Subsequent add/update/remove
-operations are recorded as deltas. `serializeDelta()` returns the delta and applies
-it to the main map. This is used for incremental network updates.
-
-## Primitive Word Layout
-
-Each primitive is a variable-length array of words (`u32` or `f32`).
-The layout is defined in `ydraw-primitives.yaml` and code-generated into
-`ydraw-prim-writer.gen.h` (C++) and `sdf-types.gen.wgsl` (shader).
-
-All 2D SDF primitives share this structure — the tail fields are always at
-fixed offsets from the **end** of the word array:
+YDrawBuffer stores primitives in the ORIGINAL format from `ydraw-prim-writer.gen.h`:
 
 ```
 Word 0:     type         (u32)  ← SDFType enum value
 Word 1:     layer        (u32)
-Words 2..N-5: geometry   (varies by type)
-Word N-4:   fillColor    (u32)  ← 0 = transparent, non-zero = RGBA packed
-Word N-3:   strokeColor  (u32)  ← 0 = no stroke
-Word N-2:   strokeWidth  (f32)
-Word N-1:   round        (f32)  ← corner rounding (used by Box only)
+Words 2..N: geometry + colors
 ```
 
-### Common types — complete word maps
+The YDrawBuilder PREPENDS gridOffset when writing to GPU:
 
-The shader reads fields by **absolute offset from primOffset**. These are the
-exact offsets used by `primColors()`, `primStrokeWidth()`, and `evalSDF()`:
-
-**Circle** (type=0, 9 words):
+```cpp
+// In addYdrawBuffer():
+std::vector<float> primData(wc + 1);  // +1 for gridOffset
+primData[0] = packedGridOffset;        // NEW: gridOffset first
+for (uint32_t i = 0; i < wc; i++) {
+    primData[i + 1] = data[i];         // Original data shifted by 1
+}
 ```
-+0: type=0   +1: layer   +2: cx   +3: cy   +4: r
-+5: fillColor   +6: strokeColor   +7: strokeWidth   +8: round
-```
-
-**Box** (type=1, 10 words):
-```
-+0: type=1   +1: layer   +2: cx   +3: cy   +4: hw   +5: hh
-+6: fillColor   +7: strokeColor   +8: strokeWidth   +9: round
-```
-
-**Segment** (type=2, 10 words):
-```
-+0: type=2   +1: layer   +2: x0   +3: y0   +4: x1   +5: y1
-+6: fillColor   +7: strokeColor   +8: strokeWidth   +9: round
-```
-
-**Triangle** (type=3, 12 words):
-```
-+0: type=3   +1: layer   +2: ax   +3: ay   +4: bx   +5: by   +6: vx   +7: vy
-+8: fillColor   +9: strokeColor   +10: strokeWidth   +11: round
-```
-
-**Ellipse** (type=6, 10 words):
-```
-+0: type=6   +1: layer   +2: cx   +3: cy   +4: rx   +5: ry
-+6: fillColor   +7: strokeColor   +8: strokeWidth   +9: round
-```
-
-**RoundedBox** (type=8, 14 words):
-```
-+0: type=8   +1: layer   +2: cx   +3: cy   +4: hw   +5: hh
-+6: r0   +7: r1   +8: r2   +9: r3
-+10: fillColor   +11: strokeColor   +12: strokeWidth   +13: round
-```
-
-**ColorWheel** (type=44, 14 words):
-```
-+0: type=44   +1: layer   +2: cx   +3: cy   +4: outerR   +5: innerR
-+6: hue   +7: sat   +8: val   +9: indicatorSize
-+10: fillColor   +11: strokeColor   +12: strokeWidth   +13: round
-```
-
-### Shader reads for fill/stroke
-
-`primColors(primOffset)` returns `vec4<u32>(fillColor, strokeColor, layer, 0)`.
-The fill/stroke offsets are type-dependent (generated from yaml):
-
-| Type | fillColor offset | strokeColor offset | strokeWidth offset |
-|------|-----------------|-------------------|-------------------|
-| Circle (0) | +5 | +6 | +7 |
-| Box (1) | +6 | +7 | +8 |
-| Segment (2) | +6 | +7 | +8 |
-| Triangle (3) | +8 | +9 | +10 |
-| Ellipse (6) | +6 | +7 | +8 |
-| RoundedBox (8) | +10 | +11 | +12 |
 
 ## GPU Buffer Layout — Prim Buffer
 
-Written by `YDrawBuffer::writeGPU()` into the `"prims"` allocation.
+Written by `YDrawBuilder::writePrimsGPU()` into the `"prims"` allocation.
 
 ```
                       cardStorage[] indices (word offsets)
@@ -201,195 +375,33 @@ primitiveOffset ──►┌──────────────┐
                    │ ...          │
                    │ wordOff[N-1] │  u32: prim N-1 data offset
 primDataBase ─────►├──────────────┤  primDataBase = primitiveOffset + primitiveCount
-                   │ prim 0 data  │  variable-length (e.g. 9 words for Circle)
-                   │ prim 1 data  │  variable-length (e.g. 14 words for RoundedBox)
+                   │ prim 0 data  │  [gridOffset][type][layer][geometry...]
+                   │ prim 1 data  │  [gridOffset][type][layer][geometry...]
                    │ ...          │
                    │ prim N-1     │
                    └──────────────┘
 ```
 
-### Address computation
+### Shader Prim Read Example
 
-C++ side (`allocateBuffers`):
-```cpp
-_primHandle = bufMgr->allocateBuffer(slotIndex, "prims", buf->gpuBufferSize());
-float* buf = reinterpret_cast<float*>(_primHandle.data);
-_buffer->writeGPU(buf, _primHandle.size, _primWordOffsets);
-// _primWordOffsets[i] = word offset of prim i relative to data section start
-```
-
-Metadata (`flushMetadata`):
-```cpp
-meta.primitiveOffset = _primHandle.offset / sizeof(float);  // byte→word
-meta.primitiveCount = _buffer->primCount();
-```
-
-Shader reads a prim via offset table:
 ```wgsl
 let primitiveOffset = cardMetadata[metaOffset + 0];
 let primitiveCount  = cardMetadata[metaOffset + 1];
 let primDataBase    = primitiveOffset + primitiveCount;
 
-// Read prim i via offset table:
-let wordOff = bitcast<u32>(cardStorage[primitiveOffset + i]);
-let primOff = primDataBase + wordOff;
-let primType = bitcast<u32>(cardStorage[primOff + 0]);  // type
-let cx       = cardStorage[primOff + 2];                // geometry
-```
+// Read prim via grid entry (rawIdx is word offset):
+let primOff = primDataBase + rawIdx;
 
-Shader reads a prim via grid entry:
-```wgsl
-let rawIdx  = bitcast<u32>(cardStorage[gridOffset + packedStart + 1 + i]);
-let primOff = primDataBase + rawIdx;  // rawIdx IS a word offset (post-translation)
-```
-
-### Numeric example
-
-Suppose `_primHandle.offset = 128` bytes and we have 3 prims: Circle(9w), Box(10w), RoundedBox(14w).
-
-```
-primitiveOffset = 128/4 = 32       (metadata word 0)
-primitiveCount  = 3                 (metadata word 1)
-primDataBase    = 32 + 3 = 35
-
-cardStorage[32] = 0     ← wordOff[0] (Circle starts at primDataBase+0 = word 35)
-cardStorage[33] = 9     ← wordOff[1] (Box starts at primDataBase+9 = word 44)
-cardStorage[34] = 19    ← wordOff[2] (RoundedBox starts at primDataBase+19 = word 54)
-cardStorage[35] = type=0 (Circle)
-cardStorage[36] = layer
-cardStorage[37] = cx
-...
-cardStorage[44] = type=1 (Box)
-...
-cardStorage[54] = type=8 (RoundedBox)
-...
-```
-
-The shader resolves Circle: `primOff = 35 + 0 = 35`, reads `cardStorage[35]` = type 0.
-The shader resolves Box: `primOff = 35 + 9 = 44`, reads `cardStorage[44]` = type 1.
-The shader resolves RoundedBox: `primOff = 35 + 19 = 54`, reads `cardStorage[54]` = type 8.
-
-## GPU Buffer Layout — Derived Buffer (Grid + Glyphs)
-
-Written by `YDrawBuilder::writeDerived()` into the `"derived"` allocation.
-This is a **separate** allocation from the prim buffer — at a different offset in
-`cardStorage`.
-
-```
-derivedHandle.offset ──►┌──────────────────┐
-                        │ GRID DATA        │  _gridStaging[] copied + translated
-                        │ [cell offsets]   │  (numCells u32s: one per grid cell)
-                        │ [packed entries] │  ([count, entry, entry, ...] per cell)
-                        ├──────────────────┤
-                        │ GLYPH DATA       │  _glyphs[] copied (5 u32s each)
-                        ├──────────────────┤  (only if FLAG_CUSTOM_ATLAS)
-                        │ ATLAS HEADER     │  4 u32s
-                        │ GLYPH METADATA   │  10 floats per atlas glyph
-                        └──────────────────┘
-```
-
-Address computation:
-```cpp
-_gpuGridOffset  = (_derivedHandle.offset + 0)         / sizeof(float);
-_gpuGlyphOffset = (_derivedHandle.offset + gridBytes) / sizeof(float);
-```
-
-These word offsets go directly into metadata words 2 and 6.
-
-### Grid format (variable-length)
-
-The grid has two sections packed contiguously:
-1. **Cell offset table** — `gridWidth * gridHeight` u32s
-2. **Packed entry lists** — `[count, entry0, entry1, ...]` per cell
-
-```
-gridOffset ──►┌───────────┐  cardStorage[gridOffset + 0]
-              │ off[0]    │  → packed offset of cell 0's entry list (relative to gridOffset)
-              │ off[1]    │  → packed offset of cell 1's entry list
-              │ ...       │
-              │ off[N-1]  │  → packed offset of cell N-1's entry list  (N = gridW * gridH)
-              ├───────────┤
- off[0]──────►│ count     │  number of entries in cell 0
-              │ entry_0   │  prim word offset OR glyph index | 0x80000000
-              │ entry_1   │
-              │ ...       │
- off[1]──────►│ count     │  number of entries in cell 1
-              │ entry_0   │
-              │ ...       │
-              └───────────┘
-```
-
-Grid cell index from scene position:
-```wgsl
-let cellX = u32(clamp((scenePos.x - contentMinX) * invCellSize, 0.0, f32(gridWidth - 1)));
-let cellY = u32(clamp((scenePos.y - contentMinY) * invCellSize, 0.0, f32(gridHeight - 1)));
-let cellIndex = cellY * gridWidth + cellX;
-```
-
-Reading entries:
-```wgsl
-let packedStart    = bitcast<u32>(cardStorage[gridOffset + cellIndex]);
-let cellEntryCount = bitcast<u32>(cardStorage[gridOffset + packedStart]);
-// entries at: cardStorage[gridOffset + packedStart + 1 + i]
-```
-
-### Grid entry types
-
-Each entry is a u32:
-- **Bit 31 clear** → SDF primitive. Value is the **word offset** relative to
-  `primDataBase`. Shader: `primOff = primDataBase + rawIdx`
-- **Bit 31 set** → Text glyph. Lower 31 bits = glyph index.
-  Shader: `glyphOffset + (rawIdx & 0x7FFFFFFF) * 5`
-
-### Grid translation (critical!)
-
-During `calculate()`, grid entries are **prim indices** (0, 1, 2, ...) matching
-the iteration order of `forEachPrim()`.
-
-During `writeDerived()`, these are **translated** to word offsets:
-```cpp
-gridPtr[idx] = _primWordOffsets[gridPtr[idx]];
-// e.g. prim index 2 → wordOffset 19 (from the numeric example above)
-```
-
-This translation is critical. Without it, the shader would compute
-`primDataBase + 2` instead of `primDataBase + 19` and read garbage.
-
-The `_primWordOffsets` vector is populated by `writeGPU()`. Its iteration
-order matches `forEachPrim()` — both iterate the same `unordered_map`.
-
-### Numeric example (grid)
-
-Suppose `_derivedHandle.offset = 512` bytes, `gridWidth = 4`, `gridHeight = 3`
-(12 cells), and cell (1,1) contains prim 0 (Circle, wordOff=0) and prim 2
-(RoundedBox, wordOff=19).
-
-```
-gridOffset = 512/4 = 128           (metadata word 2)
-
-cardStorage[128] = off[0] = 12     ← cell 0 packed list at gridOffset+12
-cardStorage[129] = off[1] = 13     ← cell 1 (empty, count=0)
-...
-cardStorage[133] = off[5] = 14     ← cell (1,1) packed list at gridOffset+14
-...
-cardStorage[140] = 0               ← cell 0: count=0
-cardStorage[141] = 0               ← cell 1: count=0
-...
-cardStorage[142] = 2               ← cell (1,1): count=2
-cardStorage[143] = 0               ← entry: wordOff=0 (Circle, translated from index 0)
-cardStorage[144] = 19              ← entry: wordOff=19 (RoundedBox, translated from index 2)
-```
-
-Shader lookup at position in cell (1,1):
-```
-cellIndex = 1*4 + 1 = 5
-packedStart = cardStorage[128 + 5] = 14
-count = cardStorage[128 + 14] = 2
-entry0 = cardStorage[128 + 14 + 1] = 0   → primOff = primDataBase + 0
-entry1 = cardStorage[128 + 14 + 2] = 19  → primOff = primDataBase + 19
+// NEW FORMAT: gridOffset at +0, type at +1
+let gridOffsetPacked = bitcast<u32>(cardStorage[primOff + 0u]);
+let primType = bitcast<u32>(cardStorage[primOff + 1u]);
+let layer = bitcast<u32>(cardStorage[primOff + 2u]);
+let cx = cardStorage[primOff + 3u];  // geometry starts at +3
 ```
 
 ## YDrawGlyph (20 bytes = 5 u32s)
+
+**Note**: Glyphs do NOT have gridOffset prepended. They use their own format:
 
 ```
 Word 0: x (f32)           position in scene coords
@@ -399,15 +411,9 @@ Word 3: glyphIndex (u16 low) | layer (u8) | flags (u8 high)
 Word 4: color (u32)       packed RGBA
 ```
 
-Glyph flags (bits 24-31 of word 3):
-- `1`: GLYPH_FLAG_CUSTOM_ATLAS — use custom atlas, not shared
-- `2`: GLYPH_FLAG_SELECTED — draw selection highlight behind glyph
+Glyphs are stored in a separate section of the derived buffer, not mixed with SDF primitives.
 
 ## Metadata (64 bytes = 16 u32s)
-
-Written by `YDrawBuilder::flushMetadata()` to `cardMetadata[]` via
-`cardMgr->writeMetadata()`. The slot offset is `metaSlotIndex * 64` bytes =
-`metaSlotIndex * 16` u32 words.
 
 ```
 Word  Field            Type   Description
@@ -417,7 +423,7 @@ Word  Field            Type   Description
   2   gridOffset       u32    word offset into cardStorage[] for grid start
   3   gridWidth        u32    grid columns
   4   gridHeight       u32    grid rows
-  5   cellSize         f32    grid cell size in scene units (stored as bitcast u32)
+  5   cellSizeXY       u32    cellSizeX (f16 low) | cellSizeY (f16 high)
   6   glyphOffset      u32    word offset into cardStorage[] for glyph array
   7   glyphCount       u32    number of text glyphs
   8   sceneMinX        f32    content bounds min X (= grid origin X)
@@ -430,365 +436,60 @@ Word  Field            Type   Description
  15   bgColor          u32    background color (packed RGBA)
 ```
 
-Shader reads: `cardMetadata[slotIndex * 16 + N]` for word N.
+## Scrolling Implementation
 
-### Key metadata address relationships
+See `docs/scrolling-ydraw-builder.md` for detailed documentation of:
 
-```
-primitiveOffset = _primHandle.offset / 4          (byte offset → word offset)
-primDataBase    = primitiveOffset + primitiveCount (shader computes this)
-gridOffset      = _derivedHandle.offset / 4
-glyphOffset     = (_derivedHandle.offset + gridBytes) / 4
-```
+- ScrollLine, ScrollGridCell, ScrollPrimRef structures
+- How primitives are stored at base lines
+- How grid references work with linesAhead offsets
+- How scrolling updates gridOffset in primitives
+- Known grid/shader mismatch bug
 
-### Flags
+## File Reference
 
-| Bit | Name | Description |
-|-----|------|-------------|
-| 1 | SHOW_BOUNDS | Debug: draw bounding boxes |
-| 2 | SHOW_GRID | Debug: draw grid lines |
-| 4 | SHOW_EVAL_COUNT | Debug: heatmap of SDF evals per pixel |
-| 8 | HAS_3D | Enable 3D raymarching pass |
-| 16 | UNIFORM_SCALE | Preserve aspect ratio (circles stay circular) |
-| 32 | CUSTOM_ATLAS | Custom MSDF atlas data present after glyph data |
+| File | Purpose | Format Awareness |
+|------|---------|------------------|
+| `ydraw-prim-writer.gen.h` | Write primitives to buffer | OLD format (no gridOffset) |
+| `ydraw-builder.cpp` | Build GPU data, prepend gridOffset | NEW format (gridOffset at +0) |
+| `sdf-types.gen.wgsl` | Card shader SDF functions | NEW format (auto-generated) |
+| `sdf-overlay.gen.wgsl` | Overlay shader SDF functions | NEW format (auto-generated) |
+| `0x0003-ydraw.wgsl` | Card shader main + special cases | NEW format (MANUAL updates needed) |
+| `gpu-screen.wgsl` | Overlay shader main | Uses sdf-overlay.gen.wgsl |
 
-### Pan/Zoom encoding
+## Debugging Tips
 
-Pan fixedpoint: `panScene = i16value / 16384.0 * sceneExtent`
-
-Zoom is IEEE 754 half-float (f16) in upper 16 bits of word 14.
-Shader converts f16→f32 manually. Default zoom = 1.0.
-
-## YDrawBuilder
-
-Computes AABBs, builds spatial hash grid, manages GPU buffer lifecycle.
-Takes a `YDrawBuffer` at creation time (shared pointer).
-
-### Factory
+### Verify Primitive Format
 
 ```cpp
-// Full — with CardManager for GPU lifecycle
-YDrawBuilder::create(fontManager, gpuAllocator, cardMgr, metaSlotIndex);
+// After writeBuffers(), check GPU data:
+const float* storage = bufMgr->storageAsFloat();
+uint32_t primOff = primDataBase + wordOffset;
 
-// Lightweight — no GPU (for tests, offline tools)
-YDrawBuilder::create(fontManager, gpuAllocator);
+// NEW FORMAT verification:
+uint32_t gridOffset = readU32(storage, primOff + 0);  // Should be cursor-based
+uint32_t type = readU32(storage, primOff + 1);        // Should be SDF type enum
+uint32_t layer = readU32(storage, primOff + 2);       // Should be layer value
+float cx = storage[primOff + 3];                       // Should be geometry
 ```
 
-### addYdrawBuffer()
-
-Called to add a buffer's primitives to the builder. Can be called multiple times
-to incrementally add content. Uses a two-level grid architecture:
-- Level 1: Incremental internal structure (`std::vector<std::vector<uint32_t>>`)
-- Level 2: Packed GPU format as cache (rebuilt when dirty)
-
-Does:
-
-1. **Copy primitives** to internal buffer, compute AABBs, extend scene bounds
-2. **Register fonts** with MSDF atlas
-3. **Convert text spans** to glyphs via `addText()`/`addRotatedText()`
-4. **Process images** into custom atlas
-5. **Add prims/glyphs to grid** incrementally
-6. Set `_gridStagingDirty = true`, `_bufferDirty = true`
-
-### clear()
-
-Clears all primitives, glyphs, and grid data. Call before `addYdrawBuffer()` for
-replace (vs. incremental) semantics.
-
-### AABB computation
-
-Per-type bounding box:
-
-| Type | AABB |
-|------|------|
-| Circle | center +/- (r + strokeWidth/2) |
-| Box | center +/- (hw + round + strokeWidth/2, hh + round + strokeWidth/2) |
-| RoundedBox | center +/- (hw + maxRadius + strokeWidth/2, hh + maxRadius + strokeWidth/2) |
-| Triangle | min/max of 3 vertices +/- strokeWidth/2 |
-| Segment | min/max of 2 endpoints +/- strokeWidth/2 |
-| Ellipse | center +/- (rx + strokeWidth/2, ry + strokeWidth/2) |
-
-## Card Lifecycle
-
-Cards forward their `Card::` lifecycle overrides to the builder. The card manager
-calls these in order each frame:
-
-```
-1. renderToStaging(time)
-   └─ Card adds prims to buffer, calls builder->clear() + builder->addYdrawBuffer()
-
-2. needsBufferRealloc()
-   └─ Builder checks: _primHandle.size != buffer.gpuBufferSize()
-      OR computeDerivedSize() > _derivedHandle.size
-      OR no handles allocated yet
-
-3. declareBufferNeeds()         ← only if needsBufferRealloc()
-   └─ bufMgr->reserve(primSize)
-      bufMgr->reserve(derivedSize)
-      Resets _primHandle, _derivedHandle, _primWordOffsets to invalid/empty
-
-4. [gpu-screen calls bufMgr->commitReservations()]
-   └─ Resets allocator with total needed size, recreates GPU buffer if needed
-
-5. allocateBuffers()            ← only if needsBufferRealloc()
-   └─ _primHandle = bufMgr->allocateBuffer(slot, "prims", primBytes)
-      writeGPU(_primHandle.data, primBytes, _primWordOffsets)
-      bufMgr->markBufferDirty(_primHandle)
-      _derivedHandle = bufMgr->allocateBuffer(slot, "derived", derivedBytes)
-      writeDerived()  ← copies grid (with translation) + glyphs to _derivedHandle.data
-      bufMgr->markBufferDirty(_derivedHandle)
-      _bufferDirty = false, _metadataDirty = true
-
-6. needsTextureRealloc()
-7. allocateTextures()           ← if custom atlas
-8. writeTextures()              ← if custom atlas
-
-9. finalize()
-   └─ builder->writeBuffers():
-      If _bufferDirty: re-write prim data + derived data
-      If _metadataDirty: flushMetadata() → cardMgr->writeMetadata()
-```
-
-### writeGPU()
-
-Called on the buffer with the prim handle's data pointer:
+### Verify Grid Lookup Matches Shader
 
 ```cpp
-float* buf = reinterpret_cast<float*>(_primHandle.data);
-_buffer->writeGPU(buf, _primHandle.size, _primWordOffsets);
+// Simulate shader lookup:
+float worldY = primitiveWorldY;
+uint32_t shaderCellY = floor((worldY - sceneMinY) / cellSizeY);
+
+// Check grid storage:
+uint32_t storageCellY = lineWherePermIsStored;
+
+// These MUST match for primitive to render:
+ASSERT_EQ(shaderCellY, storageCellY);
 ```
 
-Implementation (ydraw-buffer.cpp):
-```cpp
-void YDrawBuffer::writeGPU(float* buf, uint32_t bufBytes,
-                           vector<uint32_t>& wordOffsets) const {
-    uint32_t count = _prims.size();
-    wordOffsets.resize(count);
-    float* dataBase = buf + count;  // data starts after offset table
-    uint32_t dataOffset = 0;
-    uint32_t i = 0;
-    for (const auto& [id, pd] : _prims) {
-        wordOffsets[i] = dataOffset;
-        memcpy(&buf[i], &dataOffset, sizeof(uint32_t));  // offset table entry
-        memcpy(dataBase + dataOffset, pd.words.data(), pd.words.size() * 4);
-        dataOffset += pd.words.size();
-        i++;
-    }
-}
-```
+### Common Bugs
 
-Key: `wordOffsets[i]` and the offset table entry `buf[i]` contain the **same value**
-— the word offset of prim i relative to the data section.
-
-### writeDerived()
-
-1. Copy `_gridStaging` to `_derivedHandle.data`
-2. **Translate** grid prim entries from indices to word offsets:
-   ```cpp
-   if (rawVal < _primWordOffsets.size())
-       gridPtr[idx] = _primWordOffsets[rawVal];
-   ```
-   (skips entries with `GLYPH_BIT` set)
-3. Copy `_glyphs` to derived handle after grid
-4. If custom atlas: write atlas header + glyph metadata
-
-### flushMetadata()
-
-Packs all metadata fields into a 64-byte `YDrawMetadata` struct and writes
-it to the metadata buffer via `cardMgr->writeMetadata()`.
-
-Key field computations:
-```cpp
-meta.primitiveOffset = _primHandle.offset / sizeof(float);  // byte→word
-meta.primitiveCount  = _buffer->primCount();
-meta.gridOffset      = _gpuGridOffset;   // = _derivedHandle.offset / 4
-meta.glyphOffset     = _gpuGlyphOffset;  // = (_derivedHandle.offset + gridBytes) / 4
-meta.cellSize        = bitcast(_cellSize);
-meta.gridWidth       = _gridWidth;
-meta.gridHeight      = _gridHeight;
-```
-
-## Shader (0x0003-ydraw.wgsl) — Full Read Path
-
-### 1. Read metadata
-
-```wgsl
-let slotIndex = fg & 0xFFFFFF;
-let metaOffset = slotIndex * 16;
-let primitiveOffset = cardMetadata[metaOffset + 0];
-let primitiveCount  = cardMetadata[metaOffset + 1];
-let gridOffset      = cardMetadata[metaOffset + 2];
-let gridWidth       = cardMetadata[metaOffset + 3];
-let gridHeight      = cardMetadata[metaOffset + 4];
-let cellSize        = bitcast<f32>(cardMetadata[metaOffset + 5]);
-let glyphOffset     = cardMetadata[metaOffset + 6];
-let glyphCount      = cardMetadata[metaOffset + 7];
-// ... scene bounds from words 8-11, view from 12-14, bg from 15
-```
-
-### 2. Compute primDataBase
-
-```wgsl
-let primDataBase = primitiveOffset + primitiveCount;
-```
-
-### 3. Compute scene position from UV
-
-Widget UV → scene position via view transform (zoom/pan/aspect).
-
-### 4. O(1) grid lookup
-
-```wgsl
-let cellX = u32(clamp((scenePos.x - contentMinX) * invCellSize, 0.0, f32(gridWidth-1)));
-let cellY = u32(clamp((scenePos.y - contentMinY) * invCellSize, 0.0, f32(gridHeight-1)));
-let cellIndex = cellY * gridWidth + cellX;
-let packedStart = bitcast<u32>(cardStorage[gridOffset + cellIndex]);
-let cellEntryCount = bitcast<u32>(cardStorage[gridOffset + packedStart]);
-```
-
-### 5. Evaluate each entry
-
-```wgsl
-for (var i = 0u; i < cellEntryCount; i++) {
-    let rawIdx = bitcast<u32>(cardStorage[gridOffset + packedStart + 1 + i]);
-
-    if ((rawIdx & 0x80000000) != 0) {
-        // GLYPH: gi = rawIdx & 0x7FFFFFFF
-        // read from cardStorage[glyphOffset + gi * 5 + ...]
-    } else {
-        // SDF PRIMITIVE:
-        let primOff = primDataBase + rawIdx;
-        let d = evalSDF(primOff, scenePos);
-        let colors = primColors(primOff);   // returns (fillColor, strokeColor, layer, 0)
-        // fill:   d < 0 && fillColor != 0 → blend
-        // stroke: |d| < strokeWidth/2 && strokeColor != 0 → blend
-    }
-}
-```
-
-### What makes a prim visible
-
-A prim renders if **all** of these are true:
-1. Its AABB overlaps at least one grid cell (computed during `calculate()`)
-2. The pixel's scene position maps to a cell containing that prim
-3. `evalSDF(primOff, scenePos)` returns `d < 0` (fill) or `|d| < strokeWidth/2` (stroke)
-4. The corresponding color (fillColor or strokeColor) is **non-zero**
-
-If fillColor == 0 and strokeColor == 0, the prim is invisible even if present in the grid.
-
-## Example: ygui button rendering
-
-```cpp
-// In rebuildPrimitives():
-_buffer->clear();
-_builder->setSceneBounds(0, 0, pixelWidth, pixelHeight);
-
-// Button background — RoundedBox (id=0)
-_buffer->addRoundedBox(_buffer->primCount(),   // id = 0
-    cx, cy, hw, hh, r, r, r, r,
-    bgColor, 0, 0.0f, 0.0f);
-
-// Button text — text span (NOT a prim, converted to glyphs by calculate())
-_buffer->addText(textX, textY, "Click", 14.0f, textColor, 0, -1);
-
-// Hover outline — RoundedBox with stroke only (id=1)
-if (hovered) {
-    _buffer->addRoundedBox(_buffer->primCount(), // id = 1
-        cx, cy, hw, hh, r, r, r, r,
-        0, accentColor, 2.0f, 0.0f);            // fill=0, stroke=accent
-}
-
-_builder->clear();
-_builder->addYdrawBuffer(_buffer);
-// → _primBounds has 1-2 entries, _glyphs has N glyphs
-// → grid built with prim indices (0, 1), _bufferDirty = true
-```
-
-Then the card lifecycle:
-1. `needsBufferRealloc()` → true (new buffer content)
-2. `declareBufferNeeds()` → reserve prim + derived space
-3. `commitReservations()` → resize GPU buffer
-4. `allocateBuffers()` → write prim data to handle, translate grid, write derived
-5. `writeBuffers()` → flush metadata to cardMetadata[]
-6. `flush()` → upload dirty ranges to GPU
-7. Shader renders using O(1) grid lookup per pixel
-
-## Testing: Mock CardManager
-
-To test the real builder write pipeline without GPU, create mock implementations
-of `CardBufferManager` and `CardManager` that use plain CPU byte arrays:
-
-```cpp
-class MockCardBufferManager : public CardBufferManager {
-    std::vector<uint8_t> _storage;      // CPU-side cardStorage
-    uint32_t _nextOffset = 0;
-    uint32_t _pendingReservation = 0;
-    std::map<std::pair<uint32_t,std::string>, BufferHandle> _allocs;
-public:
-    void reserve(uint32_t size) override { _pendingReservation += (size+15)&~15u; }
-    Result<void> commitReservations() override {
-        _storage.resize(_pendingReservation);
-        _nextOffset = 0;
-        _allocs.clear();
-        _pendingReservation = 0;
-        return Ok();
-    }
-    Result<BufferHandle> allocateBuffer(uint32_t slot, const std::string& scope, uint32_t size) override {
-        size = (size+15)&~15u;
-        BufferHandle h{_storage.data() + _nextOffset, _nextOffset, size};
-        _allocs[{slot, scope}] = h;
-        _nextOffset += size;
-        return Ok(h);
-    }
-    void markBufferDirty(BufferHandle) override {}
-    // ... other methods return defaults
-    const uint8_t* data() const { return _storage.data(); }
-    const float* storageAsFloat() const { return reinterpret_cast<const float*>(_storage.data()); }
-    BufferHandle getBufferHandle(uint32_t s, const std::string& sc) const override {
-        auto it = _allocs.find({s, sc});
-        return it != _allocs.end() ? it->second : BufferHandle::invalid();
-    }
-};
-
-class MockCardManager : public CardManager {
-    std::shared_ptr<MockCardBufferManager> _bufMgr;
-    std::vector<uint8_t> _metadata;
-public:
-    MockCardManager() : _bufMgr(std::make_shared<MockCardBufferManager>()),
-                        _metadata(16 * 64, 0) {}
-    CardBufferManager::Ptr bufferManager() const override { return _bufMgr; }
-    Result<void> writeMetadata(MetadataHandle h, const void* data, uint32_t size) override {
-        memcpy(_metadata.data() + h.offset, data, size);
-        return Ok();
-    }
-    // ... other methods return defaults/nullptr
-    const uint32_t* metadataAsU32() const { return reinterpret_cast<const uint32_t*>(_metadata.data()); }
-    auto mockBufMgr() { return _bufMgr; }
-};
-```
-
-Test pattern:
-```cpp
-auto buf = *YDrawBuffer::create();
-buf->addRoundedBox(0, 100, 100, 40, 30, 5,5,5,5, 0xFFAABBCC, 0, 0, 0);
-
-auto mockCM = std::make_shared<MockCardManager>();
-auto builder = *YDrawBuilder::create(nullptr, nullptr, mockCM, /*slot=*/0);
-builder->setSceneBounds(0, 0, 200, 200);
-builder->addYdrawBuffer(buf);
-builder->declareBufferNeeds();
-mockCM->mockBufMgr()->commitReservations();
-builder->allocateBuffers();
-builder->writeBuffers();
-
-// Now inspect what the builder actually wrote:
-auto primH = mockCM->mockBufMgr()->getBufferHandle(0, "prims");
-auto derivedH = mockCM->mockBufMgr()->getBufferHandle(0, "derived");
-const float* storage = mockCM->mockBufMgr()->storageAsFloat();
-const uint32_t* meta = mockCM->metadataAsU32();
-
-uint32_t primOff = meta[0];  // primitiveOffset
-uint32_t primCnt = meta[1];  // primitiveCount
-uint32_t gridOff = meta[2];  // gridOffset
-// ... verify types, colors, grid entries
-```
+1. **Primitive invisible**: Check gridOffset is not causing coordinate mismatch
+2. **Wrong colors**: Check fillColor/strokeColor offsets (+8/+9 for Star, varies by type)
+3. **Text not rendering**: Check GLYPH_BIT entries in grid, glyph array population
+4. **Scrolling breaks rendering**: Check gridOffset is decremented correctly on scroll

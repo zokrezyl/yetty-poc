@@ -452,16 +452,17 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
             evalCount++;
 
             // Check for special primitives (ColorWheel) that return color directly
-            let primType = bitcast<u32>(cardStorage[primOff + 0u]);
+            // Layout: [0]=gridOffset, [1]=type, [2]=layer, [3+]=geometry
+            let primType = bitcast<u32>(cardStorage[primOff + 1u]);
             if (primType == SDF_COLOR_WHEEL) {
-                // Compact ColorWheel: cx=2, cy=3, outerR=4, innerR=5, hue=6, sat=7, val=8, indicatorSize=9
-                let cwCenter = vec2<f32>(cardStorage[primOff + 2u], cardStorage[primOff + 3u]);
-                let cwOuterR = cardStorage[primOff + 4u];
-                let cwInnerR = cardStorage[primOff + 5u];
-                let cwHue = cardStorage[primOff + 6u];
-                let cwSat = cardStorage[primOff + 7u];
-                let cwVal = cardStorage[primOff + 8u];
-                let cwIndicator = cardStorage[primOff + 9u];
+                // Compact ColorWheel: cx=3, cy=4, outerR=5, innerR=6, hue=7, sat=8, val=9, indicatorSize=10
+                let cwCenter = vec2<f32>(cardStorage[primOff + 3u], cardStorage[primOff + 4u]);
+                let cwOuterR = cardStorage[primOff + 5u];
+                let cwInnerR = cardStorage[primOff + 6u];
+                let cwHue = cardStorage[primOff + 7u];
+                let cwSat = cardStorage[primOff + 8u];
+                let cwVal = cardStorage[primOff + 9u];
+                let cwIndicator = cardStorage[primOff + 10u];
 
                 let cwColor = renderColorWheel(scenePos, cwCenter, cwOuterR, cwInnerR,
                                                cwHue, cwSat, cwVal, cwIndicator);
@@ -473,15 +474,15 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
 
             if (primType == SDF_IMAGE) {
                 // ---- IMAGE PRIMITIVE (type 129) ----
-                // x=2, y=3, w=4, h=5, atlasX=6, atlasY=7, texW=8, texH=9
-                let imgX = cardStorage[primOff + 2u];
-                let imgY = cardStorage[primOff + 3u];
-                let imgW = cardStorage[primOff + 4u];
-                let imgH = cardStorage[primOff + 5u];
-                let imgAtlasX = bitcast<u32>(cardStorage[primOff + 6u]);
-                let imgAtlasY = bitcast<u32>(cardStorage[primOff + 7u]);
-                let imgTexW = bitcast<u32>(cardStorage[primOff + 8u]);
-                let imgTexH = bitcast<u32>(cardStorage[primOff + 9u]);
+                // x=3, y=4, w=5, h=6, atlasX=7, atlasY=8, texW=9, texH=10
+                let imgX = cardStorage[primOff + 3u];
+                let imgY = cardStorage[primOff + 4u];
+                let imgW = cardStorage[primOff + 5u];
+                let imgH = cardStorage[primOff + 6u];
+                let imgAtlasX = bitcast<u32>(cardStorage[primOff + 7u]);
+                let imgAtlasY = bitcast<u32>(cardStorage[primOff + 8u]);
+                let imgTexW = bitcast<u32>(cardStorage[primOff + 9u]);
+                let imgTexH = bitcast<u32>(cardStorage[primOff + 10u]);
 
                 // Check if inside image bounds
                 if (scenePos.x >= imgX && scenePos.x < imgX + imgW &&
@@ -509,17 +510,17 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
 
             if (primType == 65u && hasCustomAtlas) {
                 // ---- ROTATED MSDF GLYPH (type 65, compact layout) ----
-                // x=2, y=3, scaleX=4, scaleY=5, angle=6, glyphIndex=7, cosAngle=8, sinAngle=9, fillColor=10
-                let gx = cardStorage[primOff + 2u];
-                let gy = cardStorage[primOff + 3u];
-                let gw = cardStorage[primOff + 4u];
-                let gh = cardStorage[primOff + 5u];
-                let gIdx = bitcast<u32>(cardStorage[primOff + 7u]);
-                let gColor = unpackColor(bitcast<u32>(cardStorage[primOff + 10u]));
+                // x=3, y=4, scaleX=5, scaleY=6, angle=7, glyphIndex=8, cosAngle=9, sinAngle=10, fillColor=11
+                let gx = cardStorage[primOff + 3u];
+                let gy = cardStorage[primOff + 4u];
+                let gw = cardStorage[primOff + 5u];
+                let gh = cardStorage[primOff + 6u];
+                let gIdx = bitcast<u32>(cardStorage[primOff + 8u]);
+                let gColor = unpackColor(bitcast<u32>(cardStorage[primOff + 11u]));
 
                 // Use pre-computed cos/sin from compact layout
-                let ca = cardStorage[primOff + 8u];   // cosAngle
-                let sa = cardStorage[primOff + 9u];   // sinAngle
+                let ca = cardStorage[primOff + 9u];   // cosAngle
+                let sa = cardStorage[primOff + 10u];  // sinAngle
 
                 // Inverse-rotate scene point into glyph-local space
                 let dx = scenePos.x - gx;
@@ -556,7 +557,7 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
                 let colors = primColors(primOff);
                 let fillColorPacked = colors.x;
                 if (d < 0.0 && fillColorPacked != 0u) {
-                    let primType = bitcast<u32>(cardStorage[primOff + 0u]);
+                    let primType = bitcast<u32>(cardStorage[primOff + 1u]);
                     var fillColorAlpha: vec4<f32>;
                     if (isGradientPrim(primType)) {
                         fillColorAlpha = evalGradientFillColor(primOff, scenePos);

@@ -301,6 +301,7 @@ static PipelineResult runPipeline(YDrawBuffer::Ptr buf,
     auto mockCM = std::make_shared<MockCardManager>();
     auto builder = *YDrawBuilder::create(fontMgr, testAllocator(), mockCM, 0);
     builder->setSceneBounds(0, 0, sceneW, sceneH);
+    builder->setGridCellSize(20.0f, 20.0f);  // Default cell size
     if (!buf->empty()) {
         builder->addYdrawBuffer(buf);
     }
@@ -773,12 +774,12 @@ suite gpu_pipeline_tests = [] {
         expect(wordOff0 == 0_u) << "single prim starts at offset 0";
 
         // Read prim data at primDataBase + wordOff0
+        // GPU format: [0]=gridOffset, [1]=type, [2]=layer, [3]=cx, [4]=cy, [5]=r, [6]=fillColor
         uint32_t primOff = p.primDataBase + wordOff0;
-        uint32_t type = readU32(p.storage, primOff + 0);
+        uint32_t type = readU32(p.storage, primOff + 1);
         expect(type == static_cast<uint32_t>(SDFType::Circle))
             << "type should be Circle";
 
-        // GPU format with scroll offset: +2=offsetXY, +3=cx, +4=cy, +5=r, +6=fillColor
         expect(p.storage[primOff + 3] == 50.0_f) << "cx";
         expect(p.storage[primOff + 4] == 50.0_f) << "cy";
         expect(p.storage[primOff + 5] == 10.0_f) << "r";
@@ -799,17 +800,18 @@ suite gpu_pipeline_tests = [] {
         expect(p.primitiveCount == 2_u);
 
         // Read both prims via offset table
+        // GPU format: [0]=gridOffset, [1]=type, [2]=layer, [3+]=geometry
         for (uint32_t i = 0; i < p.primitiveCount; i++) {
             uint32_t wordOff = readU32(p.storage, p.primitiveOffset + i);
             uint32_t primOff = p.primDataBase + wordOff;
-            uint32_t type = readU32(p.storage, primOff);
+            uint32_t type = readU32(p.storage, primOff + 1);  // type at offset +1
 
             if (type == static_cast<uint32_t>(SDFType::Circle)) {
-                // GPU format: fillColor at +6 (after offset at +2)
+                // GPU format: fillColor at +6 (gridOffset=0, type=1, layer=2, cx=3, cy=4, r=5, fill=6)
                 uint32_t fill = readU32(p.storage, primOff + 6);
                 expect(fill == circleColor) << "Circle fillColor";
             } else if (type == static_cast<uint32_t>(SDFType::RoundedBox)) {
-                // GPU format: fillColor at +11 (after offset at +2)
+                // GPU format: fillColor at +11 (gridOffset=0, type=1, layer=2, cx=3, cy=4, hw=5, hh=6, r0=7, r1=8, r2=9, r3=10, fill=11)
                 uint32_t fill = readU32(p.storage, primOff + 11);
                 expect(fill == rboxColor) << "RoundedBox fillColor";
             } else {
@@ -828,11 +830,12 @@ suite gpu_pipeline_tests = [] {
         auto p = runPipeline(buf, 100.0f, 100.0f);
 
         // Shader lookup at circle center
+        // GPU format: type at offset +1 (gridOffset is at +0)
         auto circleHits = shaderGridLookup(p, 20.0f, 20.0f);
         expect(!circleHits.empty()) << "should find prim at circle center";
         bool foundCircle = false;
         for (uint32_t off : circleHits) {
-            if (readU32(p.storage, off) == static_cast<uint32_t>(SDFType::Circle))
+            if (readU32(p.storage, off + 1) == static_cast<uint32_t>(SDFType::Circle))
                 foundCircle = true;
         }
         expect(foundCircle) << "should find Circle type at (20,20)";
@@ -842,7 +845,7 @@ suite gpu_pipeline_tests = [] {
         expect(!rboxHits.empty()) << "should find prim at roundedbox center";
         bool foundRBox = false;
         for (uint32_t off : rboxHits) {
-            if (readU32(p.storage, off) == static_cast<uint32_t>(SDFType::RoundedBox))
+            if (readU32(p.storage, off + 1) == static_cast<uint32_t>(SDFType::RoundedBox))
                 foundRBox = true;
         }
         expect(foundRBox) << "should find RoundedBox type at (80,80)";
@@ -908,8 +911,9 @@ suite gpu_pipeline_tests = [] {
         }
 
         // Verify each reachable offset has a valid type
+        // GPU format: type at offset +1 (gridOffset is at +0)
         for (uint32_t off : reachable) {
-            uint32_t type = readU32(p.storage, off);
+            uint32_t type = readU32(p.storage, off + 1);
             expect(type < 100_u) << "type " << type << " at offset " << off;
         }
 
@@ -918,7 +922,7 @@ suite gpu_pipeline_tests = [] {
         expect(!btnHits.empty()) << "should find prims at button center";
         int rboxCount = 0;
         for (uint32_t off : btnHits) {
-            if (readU32(p.storage, off) == static_cast<uint32_t>(SDFType::RoundedBox))
+            if (readU32(p.storage, off + 1) == static_cast<uint32_t>(SDFType::RoundedBox))
                 rboxCount++;
         }
         expect(rboxCount >= 2) << "should find bg + outline RoundedBoxes at button center";
@@ -928,7 +932,7 @@ suite gpu_pipeline_tests = [] {
         expect(!chevHits.empty()) << "should find prim at chevron";
         bool foundTri = false;
         for (uint32_t off : chevHits) {
-            if (readU32(p.storage, off) == static_cast<uint32_t>(SDFType::Triangle))
+            if (readU32(p.storage, off + 1) == static_cast<uint32_t>(SDFType::Triangle))
                 foundTri = true;
         }
         expect(foundTri) << "should find Triangle at chevron position";
@@ -939,6 +943,7 @@ suite gpu_pipeline_tests = [] {
         auto mockCM = std::make_shared<MockCardManager>();
         auto builder = *YDrawBuilder::create(nullptr, nullptr, mockCM, 0);
         builder->setSceneBounds(0, 0, 200.0f, 200.0f);
+        builder->setGridCellSize(20.0f, 20.0f);
 
         // First build: Circle + Box
         buf->addCircle(0, 50.0f, 50.0f, 15.0f, 0xFFFF0000, 0, 0.0f, 0.0f);
@@ -974,9 +979,10 @@ suite gpu_pipeline_tests = [] {
         uint32_t primDataBase = primOff + primCnt;
         uint32_t wordOff0 = readU32(storage, primOff);
         uint32_t absOff = primDataBase + wordOff0;
-        uint32_t type = readU32(storage, absOff);
+        // GPU format: [0]=gridOffset, [1]=type, [2]=layer, ...
+        uint32_t type = readU32(storage, absOff + 1);
         expect(type == static_cast<uint32_t>(SDFType::RoundedBox));
-        // GPU format: fillColor at +11 (after scroll offset at +2)
+        // GPU format: fillColor at +11 (gridOffset=0, type=1, layer=2, cx=3, cy=4, hw=5, hh=6, r0=7, r1=8, r2=9, r3=10, fill=11)
         uint32_t readFill = readU32(storage, absOff + 11);
         expect(readFill == newColor) << "fillColor after rebuild";
     };
@@ -1062,14 +1068,11 @@ suite gpu_pipeline_tests = [] {
         uint32_t primOff = p.primDataBase + wordOff0;
 
         // Verify exact word offsets that the shader uses
-        // GPU format with scroll offset: type=+0, layer=+1, offsetXY=+2,
-        //             cx=+3, cy=+4, hw=+5, hh=+6
-        //             r0=+7, r1=+8, r2=+9, r3=+10
-        //             fillColor=+11, strokeColor=+12, strokeWidth=+13, round=+14
-        uint32_t type = readU32(p.storage, primOff + 0);
+        // GPU format: [0]=gridOffset, [1]=type, [2]=layer, [3]=cx, [4]=cy, [5]=hw, [6]=hh,
+        //             [7]=r0, [8]=r1, [9]=r2, [10]=r3, [11]=fillColor, [12]=strokeColor, [13]=strokeWidth, [14]=round
+        uint32_t type = readU32(p.storage, primOff + 1);
         expect(type == 8_u) << "type = SDF_ROUNDED_BOX (8)";
 
-        // +2 is packed scroll offset (0,0 initially)
         expect(p.storage[primOff + 3] == 100.0_f) << "cx";
         expect(p.storage[primOff + 4] == 200.0_f) << "cy";
         expect(p.storage[primOff + 5] == 40.0_f) << "hw";
@@ -1096,10 +1099,9 @@ suite gpu_pipeline_tests = [] {
         uint32_t wordOff0 = readU32(p.storage, p.primitiveOffset);
         uint32_t primOff = p.primDataBase + wordOff0;
 
-        // GPU format with scroll offset: type=+0, layer=+1, offsetXY=+2,
-        //      cx=+3, cy=+4, hw=+5, hh=+6
-        //      fillColor=+7, strokeColor=+8, strokeWidth=+9, round=+10
-        uint32_t type = readU32(p.storage, primOff + 0);
+        // GPU format: [0]=gridOffset, [1]=type, [2]=layer, [3]=cx, [4]=cy, [5]=hw, [6]=hh,
+        //             [7]=fillColor, [8]=strokeColor, [9]=strokeWidth, [10]=round
+        uint32_t type = readU32(p.storage, primOff + 1);
         expect(type == 1_u) << "type = SDF_BOX (1)";
         expect(p.storage[primOff + 3] == 50.0_f) << "cx";
         expect(p.storage[primOff + 4] == 60.0_f) << "cy";
@@ -1120,10 +1122,9 @@ suite gpu_pipeline_tests = [] {
         uint32_t wordOff0 = readU32(p.storage, p.primitiveOffset);
         uint32_t primOff = p.primDataBase + wordOff0;
 
-        // GPU format with scroll offset: type=+0, layer=+1, offsetXY=+2,
-        //           ax=+3, ay=+4, bx=+5, by=+6, cx=+7, cy=+8
-        //           fillColor=+9, strokeColor=+10, strokeWidth=+11, round=+12
-        uint32_t type = readU32(p.storage, primOff + 0);
+        // GPU format: [0]=gridOffset, [1]=type, [2]=layer, [3]=ax, [4]=ay, [5]=bx, [6]=by, [7]=cx, [8]=cy,
+        //             [9]=fillColor, [10]=strokeColor, [11]=strokeWidth, [12]=round
+        uint32_t type = readU32(p.storage, primOff + 1);
         expect(type == 3_u) << "type = SDF_TRIANGLE (3)";
         expect(p.storage[primOff + 3] == 10.0_f) << "ax";
         expect(p.storage[primOff + 4] == 20.0_f) << "ay";
@@ -1294,8 +1295,9 @@ suite text_pipeline_tests = [] {
         expect(!glyphIndices.empty()) << "grid should contain glyph entries";
 
         // The prim should be a RoundedBox
+        // GPU format: type at offset +1 (gridOffset is at +0)
         for (uint32_t off : primOffsets) {
-            uint32_t type = readU32(p.storage, off);
+            uint32_t type = readU32(p.storage, off + 1);
             expect(type == static_cast<uint32_t>(SDFType::RoundedBox))
                 << "prim should be RoundedBox";
         }

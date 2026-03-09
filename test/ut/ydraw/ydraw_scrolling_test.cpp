@@ -23,6 +23,8 @@
 
 #include <cstring>
 #include <cmath>
+#include <iomanip>
+#include <iostream>
 #include <map>
 #include <set>
 #include <vector>
@@ -173,9 +175,12 @@ static GpuAllocator::Ptr testAllocator() {
 //=============================================================================
 static YDrawBuffer::Ptr createShapeSpanningLines(uint32_t numLines, float cellHeight) {
     auto buf = *YDrawBuffer::create();
-    // Box at (10, 0) with width=50, height = numLines * cellHeight - 1
+    // Box spanning Y from 0 to (numLines * cellHeight - 1)
+    // addBox uses (layer, cx, cy, hw, hh) where hw/hh are HALF sizes
     float height = numLines * cellHeight - 1.0f;
-    buf->addBox(0, 10, 0, 50, height, 0xFFFFFFFF, 0, 0, 0, 0);
+    float halfHeight = height / 2.0f;
+    float centerY = halfHeight;  // AABB spans [0, height]
+    buf->addBox(0, 50, centerY, 25, halfHeight, 0xFFFFFFFF, 0, 0, 0, 0);
     return buf;
 }
 
@@ -1274,11 +1279,18 @@ suite scrolling_tests = [] {
         std::vector<uint32_t> primStaging;
         builder->buildPrimStaging(primStaging);
 
-        expect(primStaging.size() > 3_u) << "Prim staging should have header data";
+        // primStaging format for scrolling mode:
+        // [0..primCount-1] = offset for each primitive
+        // [primCount + offset + 0] = packed(col | row<<16) = gridOffset
+        // [primCount + offset + 1] = type
+        // [primCount + offset + 2] = layer
+        // [primCount + offset + 3+] = geometry
+        uint32_t primCount = builder->primitiveCount();
+        expect(primCount == 1_u) << "Should have 1 primitive";
+        expect(primStaging.size() > primCount + 2) << "Prim staging should have primitive data";
 
-        // Primitive format: [0]=type, [1]=layer, [2]=packed(col|row<<16), ...
-        // After addYdrawBuffer at row 5, row should be 5
-        uint32_t packed = primStaging[2];
+        uint32_t offset = primStaging[0];  // offset for prim 0
+        uint32_t packed = primStaging[primCount + offset + 0];  // word[0] = gridOffset (packed row/col)
         int16_t initialRow = static_cast<int16_t>((packed >> 16) & 0xFFFF);
         expect(initialRow == 5_i) << "Initial row should be 5, got " << initialRow;
 
@@ -1289,8 +1301,11 @@ suite scrolling_tests = [] {
         primStaging.clear();
         builder->buildPrimStaging(primStaging);
 
-        // Row should now be 3 (5 - 2 = 3)
-        packed = primStaging[2];
+        primCount = builder->primitiveCount();
+        expect(primCount == 1_u) << "Should still have 1 primitive after scroll 2";
+
+        offset = primStaging[0];
+        packed = primStaging[primCount + offset + 0];  // word[0] = gridOffset
         int16_t newRow = static_cast<int16_t>((packed >> 16) & 0xFFFF);
         expect(newRow == 3_i) << "After scroll 2, row should be 3, got " << newRow;
 
@@ -1300,9 +1315,10 @@ suite scrolling_tests = [] {
         primStaging.clear();
         builder->buildPrimStaging(primStaging);
 
-        packed = primStaging[2];
-        int16_t negRow = static_cast<int16_t>((packed >> 16) & 0xFFFF);
-        expect(negRow == -1_i) << "After scroll 6 total, row should be -1, got " << negRow;
+        primCount = builder->primitiveCount();
+        // After scrolling 6 total, primitive at baseLine 5 should be scrolled out
+        // (baseLine 5 - scroll 6 = -1, line is gone)
+        expect(primCount == 0_u) << "Primitive should be gone after scroll 6, got " << primCount;
     };
 
     "gpu_layout_incremental_add_verify_each_step"_test = [] {
@@ -1410,7 +1426,57 @@ suite scrolling_tests = [] {
         }
     };
 
-    "gpu_layout_multiline_shape_grid_coverage"_test = [] {
+    // Visual grid dump - only uses cout for visual verification
+    auto dumpGridState = [](YDrawBuilder* builder, const char* label) {
+        const auto& grid = builder->gridStaging();
+        uint32_t gridW = builder->gridWidth();
+        uint32_t gridH = builder->gridHeight();
+        uint32_t primCount = builder->primitiveCount();
+
+        std::cout << "\n=== " << label << " ===" << std::endl;
+        std::cout << "Grid: " << gridW << "x" << gridH << ", prims: " << primCount << std::endl;
+
+        for (uint32_t row = 0; row < gridH; row++) {
+            // Check if row has any content
+            bool hasContent = false;
+            for (uint32_t col = 0; col < gridW; col++) {
+                uint32_t cellIdx = row * gridW + col;
+                if (cellIdx < grid.size()) {
+                    uint32_t offset = grid[cellIdx];
+                    if (offset < grid.size() && grid[offset] > 0) {
+                        hasContent = true;
+                        break;
+                    }
+                }
+            }
+
+            // Only print rows with content or every 10th row for context
+            if (hasContent || row % 10 == 0) {
+                std::cout << "Row " << std::setw(3) << row << ": ";
+                for (uint32_t col = 0; col < gridW && col < 40; col++) {
+                    uint32_t cellIdx = row * gridW + col;
+                    if (cellIdx < grid.size()) {
+                        uint32_t offset = grid[cellIdx];
+                        if (offset < grid.size()) {
+                            uint32_t count = grid[offset];
+                            if (count > 0) {
+                                std::cout << count;
+                            } else {
+                                std::cout << ".";
+                            }
+                        } else {
+                            std::cout << "?";
+                        }
+                    }
+                }
+                if (gridW > 40) std::cout << "...";
+                std::cout << std::endl;
+            }
+        }
+        std::cout << std::flush;
+    };
+
+    "gpu_layout_multiline_shape_grid_coverage"_test = [&dumpGridState] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
 
@@ -1424,9 +1490,12 @@ suite scrolling_tests = [] {
         builder->setGridCellSize(CELL_WIDTH, CELL_HEIGHT);
 
         // Add shape spanning lines 2-5 (4 lines)
+        // Shape AABB: Y=[0, 79], with cursor at row 2 -> primLines=[2,5]
         builder->setCursorPosition(0, 2);
         auto buf = createShapeSpanningLines(4, CELL_HEIGHT);
         builder->addYdrawBuffer(buf);
+
+        dumpGridState(builder.get(), "After addYdrawBuffer at cursor (0,2)");
 
         const auto& grid = builder->gridStaging();
         uint32_t gridW = builder->gridWidth();
@@ -1435,7 +1504,6 @@ suite scrolling_tests = [] {
         expect(gridH >= 6_u) << "Grid should have at least 6 rows for shape at lines 2-5";
 
         // The shape should appear in cells for rows 2, 3, 4, 5
-        // Check that at least one cell in each of those rows references the prim
         for (uint32_t row = 2; row < 6 && row < gridH; row++) {
             bool foundInRow = false;
             for (uint32_t col = 0; col < gridW; col++) {
@@ -1452,6 +1520,224 @@ suite scrolling_tests = [] {
                 }
             }
             expect(foundInRow) << "Shape should be referenced in row " << row;
+        }
+    };
+
+    "gpu_layout_cursor_at_10_10"_test = [&dumpGridState] {
+        auto cardMgr = std::make_shared<MockCardManager>();
+        auto gpuAlloc = testAllocator();
+
+        auto builder = *YDrawBuilder::create(
+            FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
+
+        const uint32_t VISIBLE_LINES = 20;
+        const float CELL_HEIGHT = 20.0f;
+        const float CELL_WIDTH = 50.0f;
+        builder->setSceneBounds(0, 0, 500, VISIBLE_LINES * CELL_HEIGHT);
+        builder->setGridCellSize(CELL_WIDTH, CELL_HEIGHT);
+
+        // Cursor at (10, 10), add shape spanning 3 lines
+        builder->setCursorPosition(10, 10);
+        auto buf = createShapeSpanningLines(3, CELL_HEIGHT);
+        builder->addYdrawBuffer(buf);
+
+        dumpGridState(builder.get(), "After addYdrawBuffer at cursor (10,10)");
+
+        const auto& grid = builder->gridStaging();
+        uint32_t gridW = builder->gridWidth();
+        uint32_t gridH = builder->gridHeight();
+
+        // Shape AABB: Y=[0, 59], with cursor at row 10 -> primLines=[10,12]
+        for (uint32_t row = 10; row <= 12 && row < gridH; row++) {
+            bool foundInRow = false;
+            for (uint32_t col = 0; col < gridW; col++) {
+                uint32_t cellIdx = row * gridW + col;
+                if (cellIdx < grid.size()) {
+                    uint32_t offset = grid[cellIdx];
+                    if (offset < grid.size()) {
+                        uint32_t count = grid[offset];
+                        if (count > 0) {
+                            foundInRow = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            expect(foundInRow) << "Shape should be referenced in row " << row;
+        }
+    };
+
+    "gpu_layout_large_grid_progressive"_test = [&dumpGridState] {
+        auto cardMgr = std::make_shared<MockCardManager>();
+        auto gpuAlloc = testAllocator();
+
+        auto builder = *YDrawBuilder::create(
+            FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
+
+        // Large grid: 80 columns x 60 rows
+        const uint32_t VISIBLE_LINES = 60;
+        const float CELL_HEIGHT = 20.0f;
+        const float CELL_WIDTH = 10.0f;
+        builder->setSceneBounds(0, 0, 800, VISIBLE_LINES * CELL_HEIGHT);
+        builder->setGridCellSize(CELL_WIDTH, CELL_HEIGHT);
+
+        std::cout << "\n========== LARGE GRID PROGRESSIVE TEST ==========" << std::endl;
+
+        // Shape 1: cursor at (0, 0), 2 lines
+        builder->setCursorPosition(0, 0);
+        builder->addYdrawBuffer(createShapeSpanningLines(2, CELL_HEIGHT));
+        dumpGridState(builder.get(), "Shape 1 @ cursor(0,0) 2 lines");
+
+        // Shape 2: cursor at (10, 5), 3 lines
+        builder->setCursorPosition(10, 5);
+        builder->addYdrawBuffer(createShapeSpanningLines(3, CELL_HEIGHT));
+        dumpGridState(builder.get(), "Shape 2 @ cursor(10,5) 3 lines");
+
+        // Shape 3: cursor at (20, 15), 4 lines
+        builder->setCursorPosition(20, 15);
+        builder->addYdrawBuffer(createShapeSpanningLines(4, CELL_HEIGHT));
+        dumpGridState(builder.get(), "Shape 3 @ cursor(20,15) 4 lines");
+
+        // Shape 4: cursor at (5, 25), 2 lines
+        builder->setCursorPosition(5, 25);
+        builder->addYdrawBuffer(createShapeSpanningLines(2, CELL_HEIGHT));
+        dumpGridState(builder.get(), "Shape 4 @ cursor(5,25) 2 lines");
+
+        // Shape 5: cursor at (30, 35), 5 lines
+        builder->setCursorPosition(30, 35);
+        builder->addYdrawBuffer(createShapeSpanningLines(5, CELL_HEIGHT));
+        dumpGridState(builder.get(), "Shape 5 @ cursor(30,35) 5 lines");
+
+        // Shape 6: cursor at (0, 45), 3 lines
+        builder->setCursorPosition(0, 45);
+        builder->addYdrawBuffer(createShapeSpanningLines(3, CELL_HEIGHT));
+        dumpGridState(builder.get(), "Shape 6 @ cursor(0,45) 3 lines");
+
+        expect(builder->primitiveCount() == 6_u) << "Should have 6 primitives";
+
+        // Verify each shape is in expected rows
+        auto checkRowsHavePrim = [&](uint32_t startRow, uint32_t endRow, const char* label) {
+            const auto& grid = builder->gridStaging();
+            uint32_t gridW = builder->gridWidth();
+            uint32_t gridH = builder->gridHeight();
+            for (uint32_t row = startRow; row <= endRow && row < gridH; row++) {
+                bool found = false;
+                for (uint32_t col = 0; col < gridW; col++) {
+                    uint32_t cellIdx = row * gridW + col;
+                    if (cellIdx < grid.size()) {
+                        uint32_t offset = grid[cellIdx];
+                        if (offset < grid.size() && grid[offset] > 0) {
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+                expect(found) << label << " should be in row " << row;
+            }
+        };
+
+        checkRowsHavePrim(0, 1, "Shape 1");
+        checkRowsHavePrim(5, 7, "Shape 2");
+        checkRowsHavePrim(15, 18, "Shape 3");
+        checkRowsHavePrim(25, 26, "Shape 4");
+        checkRowsHavePrim(35, 39, "Shape 5");
+        checkRowsHavePrim(45, 47, "Shape 6");
+    };
+
+    "gpu_layout_large_grid_with_scrolling"_test = [&dumpGridState] {
+        auto cardMgr = std::make_shared<MockCardManager>();
+        auto gpuAlloc = testAllocator();
+
+        auto builder = *YDrawBuilder::create(
+            FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
+
+        // Large grid: 80 columns x 40 rows
+        const uint32_t VISIBLE_LINES = 40;
+        const float CELL_HEIGHT = 20.0f;
+        const float CELL_WIDTH = 10.0f;
+        builder->setSceneBounds(0, 0, 800, VISIBLE_LINES * CELL_HEIGHT);
+        builder->setGridCellSize(CELL_WIDTH, CELL_HEIGHT);
+
+        std::cout << "\n========== LARGE GRID WITH SCROLLING ==========\n";
+
+        builder->setCursorPosition(0, 0);
+        builder->addYdrawBuffer(createShapeSpanningLines(3, CELL_HEIGHT));
+        dumpGridState(builder.get(), "Step1: cursor(0,0) 3 lines");
+
+        builder->setCursorPosition(5, 5);
+        builder->addYdrawBuffer(createShapeSpanningLines(4, CELL_HEIGHT));
+        dumpGridState(builder.get(), "Step2: cursor(5,5) 4 lines");
+
+        builder->setCursorPosition(10, 12);
+        builder->addYdrawBuffer(createShapeSpanningLines(3, CELL_HEIGHT));
+        dumpGridState(builder.get(), "Step3: cursor(10,12) 3 lines");
+
+        std::cout << "\n>>> SCROLL 5 LINES <<<\n";
+        builder->scrollLines(5);
+        dumpGridState(builder.get(), "After scroll(5)");
+
+        builder->setCursorPosition(15, 20);
+        builder->addYdrawBuffer(createShapeSpanningLines(2, CELL_HEIGHT));
+        dumpGridState(builder.get(), "Step4: cursor(15,20) 2 lines");
+
+        std::cout << "\n>>> SCROLL 10 LINES <<<\n";
+        builder->scrollLines(10);
+        dumpGridState(builder.get(), "After scroll(10)");
+
+        builder->setCursorPosition(0, 30);
+        builder->addYdrawBuffer(createShapeSpanningLines(5, CELL_HEIGHT));
+        dumpGridState(builder.get(), "Step5: cursor(0,30) 5 lines");
+
+        expect(builder->primitiveCount() > 0_u) << "Should have primitives";
+    };
+
+    "gpu_layout_terminal_simulation"_test = [&dumpGridState] {
+        auto cardMgr = std::make_shared<MockCardManager>();
+        auto gpuAlloc = testAllocator();
+
+        auto builder = *YDrawBuilder::create(
+            FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
+
+        // Terminal-like: 120 columns x 50 rows
+        const uint32_t VISIBLE_LINES = 50;
+        const float CELL_HEIGHT = 16.0f;
+        const float CELL_WIDTH = 8.0f;
+        builder->setSceneBounds(0, 0, 960, VISIBLE_LINES * CELL_HEIGHT);
+        builder->setGridCellSize(CELL_WIDTH, CELL_HEIGHT);
+
+        std::cout << "\n========== TERMINAL SIMULATION ==========\n";
+
+        uint16_t cursorRow = 0;
+
+        for (int i = 0; i < 10; i++) {
+            uint32_t lines = (i % 3) + 1;
+            uint16_t col = static_cast<uint16_t>((i * 7) % 80);
+
+            builder->setCursorPosition(col, cursorRow);
+            builder->addYdrawBuffer(createShapeSpanningLines(lines, CELL_HEIGHT));
+
+            cursorRow += lines;
+
+            if (cursorRow >= VISIBLE_LINES - 5) {
+                uint16_t scrollAmount = 10;
+                std::cout << ">>> SCROLL " << scrollAmount << " <<<\n";
+                builder->scrollLines(scrollAmount);
+                cursorRow -= scrollAmount;
+            }
+        }
+
+        dumpGridState(builder.get(), "Final terminal state");
+
+        expect(builder->primitiveCount() > 0_u) << "Should have primitives";
+
+        const auto& grid = builder->gridStaging();
+        uint32_t gridW = builder->gridWidth();
+        uint32_t gridH = builder->gridHeight();
+        uint32_t numCells = gridW * gridH;
+
+        for (uint32_t c = 0; c < numCells && c < grid.size(); c++) {
+            uint32_t offset = grid[c];
+            expect(offset < grid.size()) << "Cell " << c << " has invalid offset " << offset;
         }
     };
 
@@ -1688,15 +1974,16 @@ suite scrolling_tests = [] {
         builder->buildPrimStaging(primStaging);
 
         // Primitive format: every prim has data starting at offset table position
-        // For scrolling mode, we need to extract row from each prim's word[2]
+        // For scrolling mode, gridOffset is at word[0] = packed(col | row<<16)
         uint32_t primCount = builder->primitiveCount();
         // primStaging format: [primCount offsets][primCount primitive data blocks]
         // Each prim starts at primStaging[primCount + offset]
+        // Layout: [0]=gridOffset, [1]=type, [2]=layer, [3+]=geometry
         for (uint32_t i = 0; i < primCount; i++) {
             uint32_t offset = primStaging[i];
             uint32_t primBase = primCount + offset;
-            if (primBase + 2 < primStaging.size()) {
-                uint32_t packed = primStaging[primBase + 2];
+            if (primBase < primStaging.size()) {
+                uint32_t packed = primStaging[primBase + 0];  // word[0] = gridOffset
                 int16_t row = static_cast<int16_t>((packed >> 16) & 0xFFFF);
                 initialRows.push_back(row);
             }
@@ -1736,8 +2023,8 @@ suite scrolling_tests = [] {
         for (uint32_t i = 0; i < primCount; i++) {
             uint32_t offset = primStaging[i];
             uint32_t primBase = primCount + offset;
-            if (primBase + 2 < primStaging.size()) {
-                uint32_t packed = primStaging[primBase + 2];
+            if (primBase < primStaging.size()) {
+                uint32_t packed = primStaging[primBase + 0];  // word[0] = gridOffset
                 int16_t row = static_cast<int16_t>((packed >> 16) & 0xFFFF);
                 newRows.push_back(row);
             }
@@ -1752,6 +2039,591 @@ suite scrolling_tests = [] {
             expect(newRows[1] == 2_i) << "Second remaining row should be 2, got " << newRows[1];
             expect(newRows[2] == 4_i) << "Third remaining row should be 4, got " << newRows[2];
             expect(newRows[3] == 6_i) << "Fourth remaining row should be 6, got " << newRows[3];
+        }
+    };
+
+    //=========================================================================
+    // COMPREHENSIVE GPU BUFFER VERIFICATION WITH ALL PRIMITIVE TYPES
+    // Uses Circle, Box, Triangle, Ellipse, RoundedBox, Segment, Pentagon,
+    // Hexagon, Star, Rhombus, Capsule, Heart, Cross, Ring to ensure the
+    // GPU buffer format is correct for ALL primitive types, not just one.
+    //=========================================================================
+
+    "all_primitive_types_gpu_buffer_verification"_test = [] {
+        auto cardMgr = std::make_shared<MockCardManager>();
+        auto gpuAlloc = testAllocator();
+
+        auto builder = *YDrawBuilder::create(
+            FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
+
+        const uint32_t VISIBLE_LINES = 20;
+        const float CELL_HEIGHT = 20.0f;
+        builder->setSceneBounds(0, 0, 400, VISIBLE_LINES * CELL_HEIGHT);
+        builder->setGridCellSize(10.0f, CELL_HEIGHT);
+
+        // Define expected types and their IDs
+        struct PrimInfo {
+            uint32_t type;
+            const char* name;
+            uint16_t cursorRow;
+        };
+
+        std::vector<PrimInfo> primInfos;
+
+        // Add Circle at row 0
+        {
+            auto buf = *YDrawBuffer::create();
+            buf->addCircle(0, 50, 10, 8, 0xFF0000FF, 0, 0, 0);
+            builder->setCursorPosition(0, 0);
+            builder->addYdrawBuffer(buf);
+            primInfos.push_back({0, "Circle", 0});
+        }
+
+        // Add Box at row 1
+        {
+            auto buf = *YDrawBuffer::create();
+            buf->addBox(0, 50, 30, 10, 8, 0xFF00FF00, 0, 0, 0);
+            builder->setCursorPosition(0, 1);
+            builder->addYdrawBuffer(buf);
+            primInfos.push_back({1, "Box", 1});
+        }
+
+        // Add Triangle at row 2
+        {
+            auto buf = *YDrawBuffer::create();
+            buf->addTriangle(0, 30, 50, 70, 50, 50, 40, 0xFFFF0000, 0, 0, 0);
+            builder->setCursorPosition(0, 2);
+            builder->addYdrawBuffer(buf);
+            primInfos.push_back({3, "Triangle", 2});
+        }
+
+        // Add Segment at row 3
+        {
+            auto buf = *YDrawBuffer::create();
+            buf->addSegment(0, 10, 70, 90, 70, 0xFF00FFFF, 0, 2.0f, 0);
+            builder->setCursorPosition(0, 3);
+            builder->addYdrawBuffer(buf);
+            primInfos.push_back({2, "Segment", 3});
+        }
+
+        // Add Ellipse at row 4
+        {
+            auto buf = *YDrawBuffer::create();
+            buf->addEllipse(0, 50, 90, 15, 8, 0xFFFF00FF, 0, 0, 0);
+            builder->setCursorPosition(0, 4);
+            builder->addYdrawBuffer(buf);
+            primInfos.push_back({6, "Ellipse", 4});
+        }
+
+        // Add RoundedBox at row 5
+        {
+            auto buf = *YDrawBuffer::create();
+            buf->addRoundedBox(0, 50, 110, 20, 8, 3, 3, 3, 3, 0xFFAA5500, 0, 0, 0);
+            builder->setCursorPosition(0, 5);
+            builder->addYdrawBuffer(buf);
+            primInfos.push_back({8, "RoundedBox", 5});
+        }
+
+        // Add Pentagon at row 6
+        {
+            auto buf = *YDrawBuffer::create();
+            buf->addPentagon(0, 50, 130, 10, 0xFF5500AA, 0, 0, 0);
+            builder->setCursorPosition(0, 6);
+            builder->addYdrawBuffer(buf);
+            primInfos.push_back({10, "Pentagon", 6});
+        }
+
+        // Add Hexagon at row 7
+        {
+            auto buf = *YDrawBuffer::create();
+            buf->addHexagon(0, 50, 150, 10, 0xFF00AA55, 0, 0, 0);
+            builder->setCursorPosition(0, 7);
+            builder->addYdrawBuffer(buf);
+            primInfos.push_back({11, "Hexagon", 7});
+        }
+
+        // Add Star at row 8
+        {
+            auto buf = *YDrawBuffer::create();
+            buf->addStar(0, 50, 170, 12, 5, 5, 0xFFAAAA00, 0, 0, 0);
+            builder->setCursorPosition(0, 8);
+            builder->addYdrawBuffer(buf);
+            primInfos.push_back({12, "Star", 8});
+        }
+
+        // Add Rhombus at row 9
+        {
+            auto buf = *YDrawBuffer::create();
+            buf->addRhombus(0, 50, 190, 10, 15, 0xFF00AAAA, 0, 0, 0);
+            builder->setCursorPosition(0, 9);
+            builder->addYdrawBuffer(buf);
+            primInfos.push_back({9, "Rhombus", 9});
+        }
+
+        // Add Heart at row 10
+        {
+            auto buf = *YDrawBuffer::create();
+            buf->addHeart(0, 50, 210, 10, 0xFFFF5555, 0, 0, 0);
+            builder->setCursorPosition(0, 10);
+            builder->addYdrawBuffer(buf);
+            primInfos.push_back({15, "Heart", 10});
+        }
+
+        // Add Cross at row 11 (layer, cx, cy, bx, by, r, fillColor, strokeColor, strokeWidth, round)
+        {
+            auto buf = *YDrawBuffer::create();
+            buf->addCross(0, 50, 230, 15, 10, 3, 0xFF5555FF, 0, 0, 0);
+            builder->setCursorPosition(0, 11);
+            builder->addYdrawBuffer(buf);
+            primInfos.push_back({16, "Cross", 11});
+        }
+
+        // Add Ring at row 12 (layer, cx, cy, nx, ny, r, th, fillColor, strokeColor, strokeWidth, round)
+        {
+            auto buf = *YDrawBuffer::create();
+            buf->addRing(0, 50, 250, 0, 1, 12, 3, 0xFFFFFF55, 0, 0, 0);
+            builder->setCursorPosition(0, 12);
+            builder->addYdrawBuffer(buf);
+            primInfos.push_back({14, "Ring", 12});
+        }
+
+        // Add Capsule at row 13
+        {
+            auto buf = *YDrawBuffer::create();
+            buf->addCapsule(0, 30, 270, 70, 270, 5, 0xFF55FFFF, 0, 0, 0);
+            builder->setCursorPosition(0, 13);
+            builder->addYdrawBuffer(buf);
+            primInfos.push_back({18, "Capsule", 13});
+        }
+
+        // Verify primitive count
+        expect(builder->primitiveCount() == primInfos.size())
+            << "Should have " << primInfos.size() << " prims";
+
+        // Build primStaging to verify GPU format
+        std::vector<uint32_t> primStaging;
+        builder->buildPrimStaging(primStaging);
+
+        uint32_t primCount = builder->primitiveCount();
+        expect(primCount == primInfos.size());
+
+        // Verify EACH primitive's GPU format:
+        // word[0] = gridOffset (packed: col | row << 16)
+        // word[1] = type
+        // word[2] = layer
+        for (uint32_t i = 0; i < primCount && i < primInfos.size(); i++) {
+            uint32_t offset = primStaging[i];
+            uint32_t primBase = primCount + offset;
+
+            if (primBase + 2 < primStaging.size()) {
+                uint32_t packedOffset = primStaging[primBase + 0];
+                uint32_t type = primStaging[primBase + 1];
+                uint32_t layer = primStaging[primBase + 2];
+
+                uint16_t col = packedOffset & 0xFFFF;
+                int16_t row = static_cast<int16_t>((packedOffset >> 16) & 0xFFFF);
+
+                expect(col == 0_u) << primInfos[i].name << ": col should be 0";
+                expect(row == static_cast<int16_t>(primInfos[i].cursorRow))
+                    << primInfos[i].name << ": row should be " << primInfos[i].cursorRow
+                    << ", got " << row;
+                expect(type == primInfos[i].type)
+                    << primInfos[i].name << ": type should be " << primInfos[i].type
+                    << ", got " << type;
+                expect(layer == 0_u) << primInfos[i].name << ": layer should be 0";
+            } else {
+                expect(false) << "primBase + 2 out of bounds for " << primInfos[i].name;
+            }
+        }
+
+        // Now scroll 3 lines and verify gridOffsetRow is DECREMENTED
+        builder->scrollLines(3);
+
+        // First 3 prims (Circle, Box, Triangle) should be gone
+        uint32_t newPrimCount = builder->primitiveCount();
+        expect(newPrimCount == primInfos.size() - 3)
+            << "After scroll 3, should have " << (primInfos.size() - 3) << " prims, got " << newPrimCount;
+
+        // Rebuild staging
+        primStaging.clear();
+        builder->buildPrimStaging(primStaging);
+
+        // Verify remaining prims have decremented rows
+        // Segment was at row 3, now should be 0
+        // Ellipse was at row 4, now should be 1
+        // etc.
+        std::vector<std::pair<int16_t, uint32_t>> rowsAndTypes;
+        for (uint32_t i = 0; i < newPrimCount; i++) {
+            uint32_t offset = primStaging[i];
+            uint32_t primBase = newPrimCount + offset;
+            if (primBase + 1 < primStaging.size()) {
+                uint32_t packedOffset = primStaging[primBase + 0];
+                uint32_t type = primStaging[primBase + 1];
+                int16_t row = static_cast<int16_t>((packedOffset >> 16) & 0xFFFF);
+                rowsAndTypes.push_back({row, type});
+            }
+        }
+
+        // Sort by row for predictable order
+        std::sort(rowsAndTypes.begin(), rowsAndTypes.end());
+
+        // Expected after scroll 3:
+        // Segment (type 2) was row 3, now row 0
+        // Ellipse (type 6) was row 4, now row 1
+        // RoundedBox (type 8) was row 5, now row 2
+        // Pentagon (type 10) was row 6, now row 3
+        // Hexagon (type 11) was row 7, now row 4
+        // Star (type 12) was row 8, now row 5
+        // Rhombus (type 9) was row 9, now row 6
+        // Heart (type 15) was row 10, now row 7
+        // Cross (type 16) was row 11, now row 8
+        // Ring (type 14) was row 12, now row 9
+        // Capsule (type 18) was row 13, now row 10
+
+        std::vector<std::pair<int16_t, uint32_t>> expected = {
+            {0, 2},   // Segment
+            {1, 6},   // Ellipse
+            {2, 8},   // RoundedBox
+            {3, 10},  // Pentagon
+            {4, 11},  // Hexagon
+            {5, 12},  // Star
+            {6, 9},   // Rhombus
+            {7, 15},  // Heart
+            {8, 16},  // Cross
+            {9, 14},  // Ring
+            {10, 18}, // Capsule
+        };
+
+        expect(rowsAndTypes.size() == expected.size())
+            << "Should have " << expected.size() << " prims after scroll";
+
+        for (size_t i = 0; i < std::min(rowsAndTypes.size(), expected.size()); i++) {
+            expect(rowsAndTypes[i].first == expected[i].first)
+                << "Prim " << i << ": row should be " << expected[i].first
+                << ", got " << rowsAndTypes[i].first;
+            expect(rowsAndTypes[i].second == expected[i].second)
+                << "Prim " << i << ": type should be " << expected[i].second
+                << ", got " << rowsAndTypes[i].second;
+        }
+
+        // Scroll 5 more lines and verify
+        builder->scrollLines(5);
+        newPrimCount = builder->primitiveCount();
+        expect(newPrimCount == 6_u) << "After scroll 8 total, should have 6 prims";
+
+        primStaging.clear();
+        builder->buildPrimStaging(primStaging);
+
+        // Verify types and rows of remaining prims
+        rowsAndTypes.clear();
+        for (uint32_t i = 0; i < newPrimCount; i++) {
+            uint32_t offset = primStaging[i];
+            uint32_t primBase = newPrimCount + offset;
+            if (primBase + 1 < primStaging.size()) {
+                uint32_t packedOffset = primStaging[primBase + 0];
+                uint32_t type = primStaging[primBase + 1];
+                int16_t row = static_cast<int16_t>((packedOffset >> 16) & 0xFFFF);
+                rowsAndTypes.push_back({row, type});
+            }
+        }
+        std::sort(rowsAndTypes.begin(), rowsAndTypes.end());
+
+        // After 8 total scrolls:
+        // Rhombus (type 9) was row 6 (after first scroll), now row 1
+        // Heart (type 15) was row 7, now row 2
+        // Cross (type 16) was row 8, now row 3
+        // Ring (type 14) was row 9, now row 4
+        // Capsule (type 18) was row 10, now row 5
+        // Star (type 12) was row 5, now row 0
+        expected = {
+            {0, 12},  // Star (was row 5 after first scroll, now 0)
+            {1, 9},   // Rhombus
+            {2, 15},  // Heart
+            {3, 16},  // Cross
+            {4, 14},  // Ring
+            {5, 18},  // Capsule
+        };
+
+        for (size_t i = 0; i < std::min(rowsAndTypes.size(), expected.size()); i++) {
+            expect(rowsAndTypes[i].first == expected[i].first)
+                << "After scroll 8, prim " << i << ": row should be " << expected[i].first
+                << ", got " << rowsAndTypes[i].first;
+            expect(rowsAndTypes[i].second == expected[i].second)
+                << "After scroll 8, prim " << i << ": type should be " << expected[i].second
+                << ", got " << rowsAndTypes[i].second;
+        }
+    };
+
+    "cursor_offset_applied_to_all_primitive_types"_test = [] {
+        auto cardMgr = std::make_shared<MockCardManager>();
+        auto gpuAlloc = testAllocator();
+
+        auto builder = *YDrawBuilder::create(
+            FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
+
+        const uint32_t VISIBLE_LINES = 30;
+        const float CELL_HEIGHT = 20.0f;
+        builder->setSceneBounds(0, 0, 400, VISIBLE_LINES * CELL_HEIGHT);
+        builder->setGridCellSize(10.0f, CELL_HEIGHT);
+
+        // Add primitives at cursor row 10 (non-zero) to verify offset is applied
+        const uint16_t CURSOR_ROW = 10;
+        builder->setCursorPosition(5, CURSOR_ROW);
+
+        // Add multiple different primitive types at the SAME cursor position
+        auto buf = *YDrawBuffer::create();
+        buf->addCircle(0, 50, 5, 4, 0xFF0000FF, 0, 0, 0);      // type 0
+        buf->addBox(0, 50, 5, 5, 4, 0xFF00FF00, 0, 0, 0);       // type 1
+        buf->addEllipse(0, 50, 5, 6, 4, 0xFFFF0000, 0, 0, 0);   // type 6
+        buf->addPentagon(0, 50, 5, 4, 0xFF00FFFF, 0, 0, 0);     // type 10
+        buf->addHexagon(0, 50, 5, 4, 0xFFFF00FF, 0, 0, 0);      // type 11
+        buf->addStar(0, 50, 5, 6, 3, 5, 0xFFFFFF00, 0, 0, 0);   // type 12
+        buf->addHeart(0, 50, 5, 4, 0xFF888888, 0, 0, 0);        // type 15
+
+        builder->addYdrawBuffer(buf);
+
+        uint32_t primCount = builder->primitiveCount();
+        expect(primCount == 7_u) << "Should have 7 prims";
+
+        std::vector<uint32_t> primStaging;
+        builder->buildPrimStaging(primStaging);
+
+        std::vector<uint32_t> expectedTypes = {0, 1, 6, 10, 11, 12, 15};
+
+        // Verify ALL prims have the correct gridOffsetRow (CURSOR_ROW)
+        for (uint32_t i = 0; i < primCount; i++) {
+            uint32_t offset = primStaging[i];
+            uint32_t primBase = primCount + offset;
+
+            uint32_t packedOffset = primStaging[primBase + 0];
+            uint32_t type = primStaging[primBase + 1];
+
+            uint16_t col = packedOffset & 0xFFFF;
+            int16_t row = static_cast<int16_t>((packedOffset >> 16) & 0xFFFF);
+
+            expect(col == 5_u) << "Prim " << i << " (type " << type << "): col should be 5, got " << col;
+            expect(row == static_cast<int16_t>(CURSOR_ROW))
+                << "Prim " << i << " (type " << type << "): row should be " << CURSOR_ROW << ", got " << row;
+        }
+
+        // Scroll 5 lines - all prims should have row decremented to 5
+        builder->scrollLines(5);
+        primCount = builder->primitiveCount();
+        expect(primCount == 7_u) << "After scroll 5, should still have 7 prims";
+
+        primStaging.clear();
+        builder->buildPrimStaging(primStaging);
+
+        for (uint32_t i = 0; i < primCount; i++) {
+            uint32_t offset = primStaging[i];
+            uint32_t primBase = primCount + offset;
+
+            uint32_t packedOffset = primStaging[primBase + 0];
+            uint32_t type = primStaging[primBase + 1];
+
+            int16_t row = static_cast<int16_t>((packedOffset >> 16) & 0xFFFF);
+
+            expect(row == 5_i)
+                << "After scroll 5, prim " << i << " (type " << type << "): row should be 5, got " << row;
+        }
+
+        // Scroll 5 more - all prims should have row = 0
+        builder->scrollLines(5);
+        primStaging.clear();
+        builder->buildPrimStaging(primStaging);
+        primCount = builder->primitiveCount();
+
+        for (uint32_t i = 0; i < primCount; i++) {
+            uint32_t offset = primStaging[i];
+            uint32_t primBase = primCount + offset;
+
+            uint32_t packedOffset = primStaging[primBase + 0];
+            int16_t row = static_cast<int16_t>((packedOffset >> 16) & 0xFFFF);
+
+            expect(row == 0_i) << "After scroll 10, prim " << i << ": row should be 0, got " << row;
+        }
+
+        // Scroll 1 more - all prims should be GONE (row would be -1)
+        builder->scrollLines(1);
+        primCount = builder->primitiveCount();
+        expect(primCount == 0_u) << "After scroll 11, all prims should be gone";
+    };
+
+    "verify_gpu_buffer_after_each_add_and_scroll"_test = [] {
+        auto cardMgr = std::make_shared<MockCardManager>();
+        auto gpuAlloc = testAllocator();
+
+        auto builder = *YDrawBuilder::create(
+            FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
+
+        const uint32_t VISIBLE_LINES = 10;
+        const float CELL_HEIGHT = 20.0f;
+        builder->setSceneBounds(0, 0, 200, VISIBLE_LINES * CELL_HEIGHT);
+        builder->setGridCellSize(10.0f, CELL_HEIGHT);
+
+        // Test: Add prim, verify buffer, scroll, verify buffer, repeat
+
+        // Step 1: Add Circle at row 0
+        {
+            auto buf = *YDrawBuffer::create();
+            buf->addCircle(0, 50, 10, 8, 0xFF0000FF, 0, 0, 0);
+            builder->setCursorPosition(0, 0);
+            builder->addYdrawBuffer(buf);
+
+            std::vector<uint32_t> staging;
+            builder->buildPrimStaging(staging);
+            expect(builder->primitiveCount() == 1_u);
+
+            uint32_t primBase = 1 + staging[0];
+            uint32_t packed = staging[primBase + 0];
+            uint32_t type = staging[primBase + 1];
+            int16_t row = static_cast<int16_t>((packed >> 16) & 0xFFFF);
+
+            expect(type == 0_u) << "Step 1: Circle type should be 0";
+            expect(row == 0_i) << "Step 1: Circle row should be 0";
+        }
+
+        // Step 2: Add Box at row 3
+        {
+            auto buf = *YDrawBuffer::create();
+            buf->addBox(0, 50, 70, 10, 8, 0xFF00FF00, 0, 0, 0);
+            builder->setCursorPosition(0, 3);
+            builder->addYdrawBuffer(buf);
+
+            std::vector<uint32_t> staging;
+            builder->buildPrimStaging(staging);
+            expect(builder->primitiveCount() == 2_u);
+
+            // Find the Box (type 1)
+            bool foundBox = false;
+            for (uint32_t i = 0; i < 2; i++) {
+                uint32_t primBase = 2 + staging[i];
+                uint32_t type = staging[primBase + 1];
+                if (type == 1) {
+                    uint32_t packed = staging[primBase + 0];
+                    int16_t row = static_cast<int16_t>((packed >> 16) & 0xFFFF);
+                    expect(row == 3_i) << "Step 2: Box row should be 3";
+                    foundBox = true;
+                }
+            }
+            expect(foundBox) << "Step 2: Should find Box";
+        }
+
+        // Step 3: Scroll 2 lines
+        {
+            builder->scrollLines(2);
+
+            std::vector<uint32_t> staging;
+            builder->buildPrimStaging(staging);
+            expect(builder->primitiveCount() == 1_u) << "Step 3: Circle should be gone";
+
+            // Box should now have row = 1 (was 3, scroll 2)
+            uint32_t primBase = 1 + staging[0];
+            uint32_t type = staging[primBase + 1];
+            uint32_t packed = staging[primBase + 0];
+            int16_t row = static_cast<int16_t>((packed >> 16) & 0xFFFF);
+
+            expect(type == 1_u) << "Step 3: Remaining prim should be Box";
+            expect(row == 1_i) << "Step 3: Box row should be 1 (was 3, scrolled 2)";
+        }
+
+        // Step 4: Add Triangle at row 5
+        {
+            auto buf = *YDrawBuffer::create();
+            buf->addTriangle(0, 30, 110, 70, 110, 50, 90, 0xFFFF0000, 0, 0, 0);
+            builder->setCursorPosition(0, 5);
+            builder->addYdrawBuffer(buf);
+
+            std::vector<uint32_t> staging;
+            builder->buildPrimStaging(staging);
+            expect(builder->primitiveCount() == 2_u);
+
+            // Find Triangle and verify row
+            bool foundTriangle = false;
+            for (uint32_t i = 0; i < 2; i++) {
+                uint32_t primBase = 2 + staging[i];
+                uint32_t type = staging[primBase + 1];
+                if (type == 3) {  // Triangle
+                    uint32_t packed = staging[primBase + 0];
+                    int16_t row = static_cast<int16_t>((packed >> 16) & 0xFFFF);
+                    expect(row == 5_i) << "Step 4: Triangle row should be 5";
+                    foundTriangle = true;
+                }
+            }
+            expect(foundTriangle) << "Step 4: Should find Triangle";
+        }
+
+        // Step 5: Scroll 3 more lines (total 5)
+        {
+            builder->scrollLines(3);
+
+            std::vector<uint32_t> staging;
+            builder->buildPrimStaging(staging);
+            uint32_t count = builder->primitiveCount();
+            expect(count == 1_u) << "Step 5: Box should be gone, only Triangle remains";
+
+            // Triangle was at row 5, after scroll 3 (total 5 from start, but
+            // we scrolled 2 earlier, so now scroll 3 more = triangle at row 5-3=2)
+            uint32_t primBase = 1 + staging[0];
+            uint32_t type = staging[primBase + 1];
+            uint32_t packed = staging[primBase + 0];
+            int16_t row = static_cast<int16_t>((packed >> 16) & 0xFFFF);
+
+            expect(type == 3_u) << "Step 5: Remaining should be Triangle";
+            expect(row == 2_i) << "Step 5: Triangle row should be 2 (was 5, scrolled 3)";
+        }
+
+        // Step 6: Add Ellipse at row 8, Pentagon at row 9
+        {
+            auto buf = *YDrawBuffer::create();
+            buf->addEllipse(0, 50, 170, 10, 5, 0xFF00FFFF, 0, 0, 0);
+            builder->setCursorPosition(0, 8);
+            builder->addYdrawBuffer(buf);
+
+            auto buf2 = *YDrawBuffer::create();
+            buf2->addPentagon(0, 50, 190, 8, 0xFFFF00FF, 0, 0, 0);
+            builder->setCursorPosition(0, 9);
+            builder->addYdrawBuffer(buf2);
+
+            std::vector<uint32_t> staging;
+            builder->buildPrimStaging(staging);
+            expect(builder->primitiveCount() == 3_u);
+
+            // Verify all three prims
+            std::map<uint32_t, int16_t> typeToRow;
+            for (uint32_t i = 0; i < 3; i++) {
+                uint32_t primBase = 3 + staging[i];
+                uint32_t type = staging[primBase + 1];
+                uint32_t packed = staging[primBase + 0];
+                int16_t row = static_cast<int16_t>((packed >> 16) & 0xFFFF);
+                typeToRow[type] = row;
+            }
+
+            expect(typeToRow[3] == 2_i) << "Step 6: Triangle row should be 2";
+            expect(typeToRow[6] == 8_i) << "Step 6: Ellipse row should be 8";
+            expect(typeToRow[10] == 9_i) << "Step 6: Pentagon row should be 9";
+        }
+
+        // Step 7: Scroll 5 lines
+        {
+            builder->scrollLines(5);
+
+            std::vector<uint32_t> staging;
+            builder->buildPrimStaging(staging);
+            uint32_t count = builder->primitiveCount();
+            expect(count == 2_u) << "Step 7: Triangle gone, Ellipse and Pentagon remain";
+
+            std::map<uint32_t, int16_t> typeToRow;
+            for (uint32_t i = 0; i < count; i++) {
+                uint32_t primBase = count + staging[i];
+                uint32_t type = staging[primBase + 1];
+                uint32_t packed = staging[primBase + 0];
+                int16_t row = static_cast<int16_t>((packed >> 16) & 0xFFFF);
+                typeToRow[type] = row;
+            }
+
+            expect(typeToRow[6] == 3_i) << "Step 7: Ellipse row should be 3 (was 8, scroll 5)";
+            expect(typeToRow[10] == 4_i) << "Step 7: Pentagon row should be 4 (was 9, scroll 5)";
         }
     };
 };

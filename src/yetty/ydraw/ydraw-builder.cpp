@@ -643,9 +643,96 @@ public:
             float gx = x + (cursorAdvance + bx) * cosA - by * sinA;
             float gy = y + (cursorAdvance + bx) * sinA + by * cosA;
 
-            // Write RotatedGlyph prim to buffer
-            _buffer->addRotatedGlyph(0, gx, gy, gw, gh, angleRadians,
-                                    glyphIndex, cosA, sinA, color, 0, 0, 0);
+            // Build RotatedGlyph primitive (15 words with gridOffset prefix)
+            // Layout: [gridOffset][type=65][layer][x][y][scaleX][scaleY][angle]
+            //         [glyphIndex][cosAngle][sinAngle][fillColor][strokeColor][strokeWidth][round]
+            std::vector<float> primData(15);
+            uint16_t gridOffsetCol = _scrollingMode ? _cursorCol : 0;
+            uint16_t gridOffsetRow = _scrollingMode ? _cursorRow : 0;
+            uint32_t packedOffset = static_cast<uint32_t>(gridOffsetCol) |
+                                    (static_cast<uint32_t>(gridOffsetRow) << 16);
+            std::memcpy(&primData[0], &packedOffset, sizeof(uint32_t));
+            sdf::detail::write_u32(primData.data(), 1, 65u);  // RotatedGlyph type
+            sdf::detail::write_u32(primData.data(), 2, 0u);   // layer 0
+            primData[3] = gx;
+            primData[4] = gy;
+            primData[5] = scale;   // scaleX
+            primData[6] = scale;   // scaleY
+            primData[7] = angleRadians;
+            sdf::detail::write_u32(primData.data(), 8, glyphIndex);
+            primData[9] = cosA;
+            primData[10] = sinA;
+            sdf::detail::write_u32(primData.data(), 11, color);  // fillColor
+            sdf::detail::write_u32(primData.data(), 12, 0u);     // strokeColor
+            primData[13] = 0.0f;  // strokeWidth
+            primData[14] = 0.0f;  // round
+
+            // Compute AABB for grid placement
+            // Rotated glyph bounding box: corners rotated by angle
+            float halfW = gw * 0.5f;
+            float halfH = gh * 0.5f;
+            float corners[4][2] = {
+                {-halfW, -halfH}, {halfW, -halfH}, {halfW, halfH}, {-halfW, halfH}
+            };
+            float minX = gx, maxX = gx, minY = gy, maxY = gy;
+            for (int c = 0; c < 4; c++) {
+                float rx = gx + corners[c][0] * cosA - corners[c][1] * sinA;
+                float ry = gy + corners[c][0] * sinA + corners[c][1] * cosA;
+                minX = std::min(minX, rx);
+                maxX = std::max(maxX, rx);
+                minY = std::min(minY, ry);
+                maxY = std::max(maxY, ry);
+            }
+
+            // Compute which lines this primitive spans
+            // Use sceneMinY as base for grid line calculation
+            float baseY = (_sceneMinY < 1e9f) ? _sceneMinY : 0.0f;
+            int32_t localMinLine = static_cast<int32_t>(std::floor((minY - baseY) / _cellSizeY));
+            int32_t localMaxLine = static_cast<int32_t>(std::floor((maxY - baseY) / _cellSizeY));
+            int32_t primMinLineSigned = static_cast<int32_t>(gridOffsetRow) + localMinLine;
+            int32_t primMaxLineSigned = static_cast<int32_t>(gridOffsetRow) + localMaxLine;
+            primMinLineSigned = std::max(primMinLineSigned, 0);
+            primMaxLineSigned = std::max(primMaxLineSigned, 0);
+            uint32_t primMinLine = static_cast<uint32_t>(primMinLineSigned);
+            uint32_t primMaxLine = static_cast<uint32_t>(primMaxLineSigned);
+
+            // Ensure enough lines exist
+            while (_scrollLines.size() <= primMaxLine) {
+                ScrollLine line;
+                line.cells.resize(_gridWidth > 0 ? _gridWidth : 1);
+                _scrollLines.push_back(std::move(line));
+            }
+            primMinLine = std::min(primMinLine, static_cast<uint32_t>(_scrollLines.size() - 1));
+            primMaxLine = std::min(primMaxLine, static_cast<uint32_t>(_scrollLines.size() - 1));
+
+            // Store primitive in base line
+            uint32_t baseLine = primMaxLine;
+            uint16_t primIndex = static_cast<uint16_t>(_scrollLines[baseLine].prims.size());
+            _scrollLines[baseLine].prims.push_back(std::move(primData));
+
+            // Add grid cell references
+            uint32_t cellMinX = cellX(minX);
+            uint32_t cellMaxX = cellX(maxX);
+            for (uint32_t lineIdx = primMinLine; lineIdx <= primMaxLine; lineIdx++) {
+                while (_scrollLines[lineIdx].cells.size() <= cellMaxX) {
+                    _scrollLines[lineIdx].cells.push_back(ScrollGridCell{});
+                }
+                uint16_t linesAhead = static_cast<uint16_t>(baseLine - lineIdx);
+                for (uint32_t cx = cellMinX; cx <= cellMaxX; cx++) {
+                    _scrollLines[lineIdx].cells[cx].refs.push_back({linesAhead, primIndex});
+                }
+            }
+
+            // Update scene bounds
+            if (!_hasExplicitBounds) {
+                _sceneMinX = std::min(_sceneMinX, minX);
+                _sceneMinY = std::min(_sceneMinY, minY);
+                _sceneMaxX = std::max(_sceneMaxX, maxX);
+                _sceneMaxY = std::max(_sceneMaxY, maxY);
+            }
+
+            _gridStagingDirty = true;
+            _bufferDirty = true;
             cursorAdvance += glyph._advance * scale;
         }
 
@@ -857,14 +944,12 @@ public:
     //=========================================================================
 
     uint32_t primitiveCount() const override {
-        if (_scrollingMode) {
-            uint32_t count = 0;
-            for (const auto& line : _scrollLines) {
-                count += static_cast<uint32_t>(line.prims.size());
-            }
-            return count;
+        // Unified: count primitives from _scrollLines (used for both modes)
+        uint32_t count = 0;
+        for (const auto& line : _scrollLines) {
+            count += static_cast<uint32_t>(line.prims.size());
         }
-        return _buffer ? _buffer->primCount() : 0;
+        return count;
     }
 
     uint32_t glyphCount() const override {
@@ -912,67 +997,13 @@ public:
     std::vector<YDrawGlyph>& glyphsMut() override { return _glyphs; }
 
     void buildPrimStaging(std::vector<uint32_t>& out) const override {
-        if (_scrollingMode) {
-            buildPrimStagingScrolling(out);
-        } else {
-            buildPrimStagingNormal(out);
-        }
-    }
-
-    bool hasContent() const override {
-        if (_scrollingMode) {
-            for (const auto& line : _scrollLines) {
-                if (!line.prims.empty()) return true;
-            }
-            ydebug("hasContent: scrollingMode, no content");
-            return false;
-        }
-        uint32_t pc = primitiveCount();
-        bool hasGlyphs = !_glyphs.empty();
-        bool result = pc > 0 || hasGlyphs;
-        ydebug("hasContent: normal mode, primCount={} glyphCount={} => {}", pc, _glyphs.size(), result);
-        return result;
-    }
-
-    void buildPrimStagingNormal(std::vector<uint32_t>& out) const {
-        // Normal mode: primitives are in _buffer
-        if (!_buffer) {
-            out.clear();
+        // Use cached version if buffer not dirty
+        if (!_bufferDirty && !_primStagingCache.empty()) {
+            out = _primStagingCache;
             return;
         }
 
-        // Count primitives and total words
-        uint32_t primCount = 0;
-        uint32_t totalWords = 0;
-        _buffer->forEachPrim([&primCount, &totalWords](uint32_t id, const float* data, uint32_t wc) {
-            primCount++;
-            totalWords += wc;
-        });
-
-        if (primCount == 0) {
-            out.clear();
-            return;
-        }
-
-        // Format: [offsets...][prim data...]
-        // offsets[i] = word offset of prim i from start of data section
-        out.resize(primCount + totalWords);
-        uint32_t dataOffset = 0;
-        uint32_t primIdx = 0;
-        _buffer->forEachPrim([&out, &dataOffset, &primIdx, primCount](uint32_t id, const float* data, uint32_t wc) {
-            out[primIdx] = dataOffset;
-            for (uint32_t i = 0; i < wc; i++) {
-                uint32_t val;
-                std::memcpy(&val, &data[i], sizeof(uint32_t));
-                out[primCount + dataOffset + i] = val;
-            }
-            dataOffset += wc;
-            primIdx++;
-        });
-    }
-
-    void buildPrimStagingScrolling(std::vector<uint32_t>& out) const {
-        // Scrolling mode: primitives stored in _scrollLines
+        // Primitives are stored in _scrollLines (line-based storage)
         // Count total primitives and words
         uint32_t primCount = 0;
         uint32_t totalWords = 0;
@@ -985,6 +1016,7 @@ public:
 
         if (primCount == 0) {
             out.clear();
+            const_cast<YDrawBuilderImpl*>(this)->_primStagingCache.clear();
             return;
         }
 
@@ -1003,10 +1035,20 @@ public:
                 primIdx++;
             }
         }
+
+        // Cache the result
+        const_cast<YDrawBuilderImpl*>(this)->_primStagingCache = out;
+    }
+
+    bool hasContent() const override {
+        for (const auto& line : _scrollLines) {
+            if (!line.prims.empty()) return true;
+        }
+        return !_glyphs.empty();
     }
 
     //=========================================================================
-    // Scrolling mode
+    // Scrolling feature
     //=========================================================================
 
     bool scrollingMode() const override { return _scrollingMode; }
@@ -1034,17 +1076,6 @@ public:
             return Err<uint32_t>("addYdrawBuffer: null buffer");
         }
 
-        // Create internal buffer on first add
-        if (!_buffer) {
-            auto bufRes = YDrawBuffer::create();
-            if (!bufRes) {
-                return Err<uint32_t>("addYdrawBuffer: failed to create internal buffer");
-            }
-            _buffer = *bufRes;
-        }
-
-        // Track starting index for new primitives
-        uint32_t basePrimIdx = static_cast<uint32_t>(_primBounds.size());
         uint32_t baseGlyphIdx = static_cast<uint32_t>(_glyphs.size());
 
         // 1. Process fonts from input buffer (register with atlas)
@@ -1075,7 +1106,7 @@ public:
             }
         });
 
-        // 3. Process images
+        // 3. Process images (TODO: store in _scrollLines as well)
         buffer->forEachImage([this](const ImageData& img) {
             PendingImage pi;
             pi.x = img.x;
@@ -1087,70 +1118,11 @@ public:
             pi.layer = img.layer;
             pi.pixels = img.pixels;
             pi.texHandle = TextureHandle::invalid();
-            // Add Image primitive to internal buffer
-            auto res = _buffer->addImage(img.layer, img.x, img.y, img.w, img.h,
-                                         0, 0, img.pixelWidth, img.pixelHeight);
-            if (res) {
-                pi.primId = *res;
-            }
+            pi.primId = 0;
             _pendingImages.push_back(std::move(pi));
         });
 
-        // 4. Handle scrolling mode vs normal mode
-        if (_scrollingMode) {
-            return addYdrawBufferScrolling(buffer);
-        }
-
-        // Normal mode: use existing _buffer + _primBounds + _cellEntries
-
-        // 5. Copy primitives and compute AABBs
-        buffer->forEachPrim([this](uint32_t id, const float* data, uint32_t wc) {
-            uint32_t type = sdf::detail::read_u32(data, 0);
-            bool is3D = (type >= 100 && type < 128);
-
-            // For 2D primitives, insert zero offset field at position 2
-            // GPU format: [type][layer][offsetXY_packed][...rest of data...]
-            if (!is3D) {
-                std::vector<float> withOffset(wc + 1);
-                withOffset[0] = data[0];
-                withOffset[1] = data[1];
-                uint32_t packedOffset = 0;  // No offset in normal mode
-                std::memcpy(&withOffset[2], &packedOffset, sizeof(uint32_t));
-                for (uint32_t i = 2; i < wc; i++) {
-                    withOffset[i + 1] = data[i];
-                }
-                _buffer->copyPrim(withOffset.data(), wc + 1, YDrawBuffer::AUTO_ID);
-            } else {
-                _buffer->copyPrim(data, wc, YDrawBuffer::AUTO_ID);
-            }
-
-            float minX, minY, maxX, maxY;
-            computeAABB(data, wc, minX, minY, maxX, maxY);
-            _primBounds.push_back({minX, minY, maxX, maxY, type});
-
-            if (!is3D && !_hasExplicitBounds) {
-                _sceneMinX = std::min(_sceneMinX, minX);
-                _sceneMinY = std::min(_sceneMinY, minY);
-                _sceneMaxX = std::max(_sceneMaxX, maxX);
-                _sceneMaxY = std::max(_sceneMaxY, maxY);
-            }
-            if (is3D) {
-                _flags |= FLAG_HAS_3D;
-            }
-        });
-
-        // 6. Also extend scene bounds for new glyphs
-        for (uint32_t gi = baseGlyphIdx; gi < _glyphs.size(); gi++) {
-            const auto& g = _glyphs[gi];
-            if (!_hasExplicitBounds) {
-                _sceneMinX = std::min(_sceneMinX, g.x);
-                _sceneMinY = std::min(_sceneMinY, g.y);
-                _sceneMaxX = std::max(_sceneMaxX, g.x + g.width());
-                _sceneMaxY = std::max(_sceneMaxY, g.y + g.height());
-            }
-        }
-
-        // 7. Copy scene metadata from input buffer
+        // 4. Copy scene metadata from input buffer
         if (buffer->hasSceneBounds() && !_hasExplicitBounds) {
             _sceneMinX = std::min(_sceneMinX, buffer->sceneMinX());
             _sceneMinY = std::min(_sceneMinY, buffer->sceneMinY());
@@ -1162,36 +1134,7 @@ public:
         }
         _flags |= buffer->flags();
 
-        // 8. Ensure grid is sized and add primitives to internal grid structure
-        ensureGridSize();
-        addPrimsToGrid(basePrimIdx, static_cast<uint32_t>(_primBounds.size()));
-        addGlyphsToGrid(baseGlyphIdx, static_cast<uint32_t>(_glyphs.size()));
-
-        // 9. Mark packed grid as dirty
-        _gridStagingDirty = true;
-        _bufferDirty = true;
-
-        ydebug("addYdrawBuffer: added {} prims, {} glyphs, scene=[{:.0f},{:.0f}]-[{:.0f},{:.0f}]",
-               _primBounds.size() - basePrimIdx, _glyphs.size() - baseGlyphIdx,
-               _sceneMinX, _sceneMinY, _sceneMaxX, _sceneMaxY);
-
-        return Ok(0u);  // No scroll in normal mode
-    }
-
-    //=========================================================================
-    // Scrolling mode: line-based primitive storage
-    //=========================================================================
-
-    Result<uint32_t> addYdrawBufferScrolling(std::shared_ptr<YDrawBuffer> buffer) {
-        ydebug("addYdrawBufferScrolling: ENTER cursor=({},{}) cellSize=({:.1f},{:.1f}) scene=[{:.0f},{:.0f}]-[{:.0f},{:.0f}]",
-               _cursorCol, _cursorRow, _cellSizeX, _cellSizeY,
-               _sceneMinX, _sceneMinY, _sceneMaxX, _sceneMaxY);
-
-        if (_cellSizeY <= 0.0f) {
-            return Err<uint32_t>("addYdrawBufferScrolling: cellSizeY not set");
-        }
-
-        // Ensure grid dimensions are set
+        // 5. Ensure grid dimensions are set
         if (_gridWidth == 0 || _gridHeight == 0) {
             float sceneW = _sceneMaxX - _sceneMinX;
             float sceneH = _sceneMaxY - _sceneMinY;
@@ -1199,69 +1142,82 @@ public:
             if (sceneH <= 0) sceneH = 100;
             _gridWidth = std::max(1u, static_cast<uint32_t>(std::ceil(sceneW / _cellSizeX)));
             _gridHeight = std::max(1u, static_cast<uint32_t>(std::ceil(sceneH / _cellSizeY)));
-            ydebug("addYdrawBufferScrolling: initialized grid={}x{}", _gridWidth, _gridHeight);
         }
 
-        uint32_t totalLines = sceneHeightInLines();
-        if (totalLines == 0) totalLines = 24;  // Default
-
-        ydebug("addYdrawBufferScrolling: totalLines={} scrollLines.size={}", totalLines, _scrollLines.size());
-
-        // Compute content bounds to determine lines spanned
+        // 6. Compute content bounds
         float contentMinY = 1e10f;
         float contentMaxY = -1e10f;
-        buffer->forEachPrim([&contentMinY, &contentMaxY](uint32_t id, const float* data, uint32_t wc) {
+        uint32_t primCount = 0;
+        buffer->forEachPrim([&](uint32_t id, const float* data, uint32_t wc) {
             uint32_t type = sdf::detail::read_u32(data, 0);
             if (type >= 100 && type < 128) return;  // Skip 3D
             float minX, minY, maxX, maxY;
             computeAABB(data, wc, minX, minY, maxX, maxY);
             contentMinY = std::min(contentMinY, minY);
             contentMaxY = std::max(contentMaxY, maxY);
+            if (!_hasExplicitBounds) {
+                _sceneMinX = std::min(_sceneMinX, minX);
+                _sceneMinY = std::min(_sceneMinY, minY);
+                _sceneMaxX = std::max(_sceneMaxX, maxX);
+                _sceneMaxY = std::max(_sceneMaxY, maxY);
+            }
+            primCount++;
         });
 
         float contentHeight = (contentMaxY > contentMinY) ? (contentMaxY - contentMinY) : 0.0f;
-        uint32_t contentLines = static_cast<uint32_t>(std::ceil(contentHeight / _cellSizeY));
-        if (contentLines == 0) contentLines = 1;
+        uint32_t contentLines = std::max(1u, static_cast<uint32_t>(std::ceil(contentHeight / _cellSizeY)));
 
-        ydebug("addYdrawBufferScrolling: contentY=[{:.0f},{:.0f}] contentHeight={:.0f} contentLines={}",
-               contentMinY, contentMaxY, contentHeight, contentLines);
-
-        // NOTE: We do NOT scroll here internally!
-        // The vterm will scroll when we write newlines (in gpu-screen.cpp),
-        // and onScrollRect callback will call scrollLines to keep ydraw in sync.
-        // This avoids double-scrolling.
-
-        // Ensure we have enough lines for content placement
+        // 7. Ensure we have enough lines
+        uint32_t totalLines = sceneHeightInLines();
+        if (totalLines == 0) totalLines = 24;
         while (_scrollLines.size() < totalLines) {
             ScrollLine line;
             line.cells.resize(_gridWidth > 0 ? _gridWidth : 1);
             _scrollLines.push_back(std::move(line));
         }
 
-        // Capture cursor position for lambda
-        uint16_t cursorCol = _cursorCol;
-        uint16_t cursorRow = _cursorRow;
+        // 8. Capture grid offset for this batch
+        // Scrolling mode: offset = cursor position
+        // Non-scrolling mode: offset = 0
+        uint16_t gridOffsetCol = _scrollingMode ? _cursorCol : 0;
+        uint16_t gridOffsetRow = _scrollingMode ? _cursorRow : 0;
 
-        // Process each primitive
-        buffer->forEachPrim([this, totalLines, cursorCol, cursorRow](uint32_t id, const float* data, uint32_t wc) {
+        // 9. Process each primitive - store in line-based storage
+        // Grid line = gridOffsetRow + floor((Y - sceneMinY) / cellSizeY)
+        // Always use sceneMinY for world-position grid mapping
+        float baseY = _sceneMinY;
+        if (baseY > 1e9f) baseY = 0.0f;  // Fallback if not set
+        buffer->forEachPrim([this, gridOffsetCol, gridOffsetRow, baseY](uint32_t id, const float* data, uint32_t wc) {
             uint32_t type = sdf::detail::read_u32(data, 0);
             bool is3D = (type >= 100 && type < 128);
-            if (is3D) return;  // Skip 3D in scrolling mode for now
+            if (is3D) {
+                _flags |= FLAG_HAS_3D;
+                return;  // Skip 3D for now
+            }
 
-            // Compute AABB from primitive data
+            // Compute AABB
             float minX, minY, maxX, maxY;
             computeAABB(data, wc, minX, minY, maxX, maxY);
 
-            // Compute which lines this primitive spans
-            // The primitive's Y coordinates are local; we offset by cursor row
-            uint32_t localMinLine = static_cast<uint32_t>(std::floor(minY / _cellSizeY));
-            uint32_t localMaxLine = static_cast<uint32_t>(std::floor(maxY / _cellSizeY));
-            uint32_t primMinLine = cursorRow + localMinLine;
-            uint32_t primMaxLine = cursorRow + localMaxLine;
-            primMinLine = std::min(primMinLine, static_cast<uint32_t>(_scrollLines.size() - 1));
-            primMaxLine = std::min(primMaxLine, static_cast<uint32_t>(_scrollLines.size() - 1));
+            // Compute which grid lines this primitive spans
+            // Grid line = gridOffsetRow + floor((Y - sceneMinY) / cellSizeY)
+            int32_t localMinLine = static_cast<int32_t>(std::floor((minY - baseY) / _cellSizeY));
+            int32_t localMaxLine = static_cast<int32_t>(std::floor((maxY - baseY) / _cellSizeY));
+            int32_t primMinLineSigned = static_cast<int32_t>(gridOffsetRow) + localMinLine;
+            int32_t primMaxLineSigned = static_cast<int32_t>(gridOffsetRow) + localMaxLine;
 
-            // Base line is the LAST line this primitive touches
+            // Clamp to valid range
+            primMinLineSigned = std::max(primMinLineSigned, 0);
+            primMaxLineSigned = std::max(primMaxLineSigned, 0);
+            uint32_t primMinLine = static_cast<uint32_t>(primMinLineSigned);
+            uint32_t primMaxLine = static_cast<uint32_t>(primMaxLineSigned);
+            if (!_scrollLines.empty()) {
+                primMinLine = std::min(primMinLine, static_cast<uint32_t>(_scrollLines.size() - 1));
+                primMaxLine = std::min(primMaxLine, static_cast<uint32_t>(_scrollLines.size() - 1));
+            }
+
+            // Base line determines where the primitive is stored in _scrollLines
+            // Use max line (bottom of primitive) - removed when bottom scrolls off screen
             uint32_t baseLine = primMaxLine;
 
             // Ensure base line exists
@@ -1271,15 +1227,12 @@ public:
                 _scrollLines.push_back(std::move(line));
             }
 
-            // Build primitive data with cursor offset (not computed line)
+            // Build primitive data: [gridOffset][type][layer][geometry...]
             std::vector<float> primData(wc + 1);
-            primData[0] = data[0];  // type
-            primData[1] = data[1];  // layer
-            // Pack cursor position as offset (the test expects this)
-            uint32_t packedOffset = static_cast<uint32_t>(cursorCol) |
-                                   (static_cast<uint32_t>(cursorRow) << 16);
-            std::memcpy(&primData[2], &packedOffset, sizeof(uint32_t));
-            for (uint32_t i = 2; i < wc; i++) {
+            uint32_t packedOffset = static_cast<uint32_t>(gridOffsetCol) |
+                                    (static_cast<uint32_t>(gridOffsetRow) << 16);
+            std::memcpy(&primData[0], &packedOffset, sizeof(uint32_t));
+            for (uint32_t i = 0; i < wc; i++) {
                 primData[i + 1] = data[i];
             }
 
@@ -1287,55 +1240,57 @@ public:
             uint16_t primIndex = static_cast<uint16_t>(_scrollLines[baseLine].prims.size());
             _scrollLines[baseLine].prims.push_back(std::move(primData));
 
-            // Add grid cell references for all lines this primitive spans
+            // Add grid cell references
             uint32_t cellMinX = cellX(minX);
             uint32_t cellMaxX = cellX(maxX);
 
             for (uint32_t lineIdx = primMinLine; lineIdx <= primMaxLine; lineIdx++) {
-                // Ensure line has enough cells
                 while (_scrollLines[lineIdx].cells.size() <= cellMaxX) {
                     _scrollLines[lineIdx].cells.push_back(ScrollGridCell{});
                 }
-
-                // linesAhead = baseLine - lineIdx (how many lines ahead is the base)
                 uint16_t linesAhead = static_cast<uint16_t>(baseLine - lineIdx);
-
                 for (uint32_t cx = cellMinX; cx <= cellMaxX; cx++) {
                     _scrollLines[lineIdx].cells[cx].refs.push_back({linesAhead, primIndex});
                 }
             }
         });
 
+        // 10. Extend scene bounds for new glyphs
+        for (uint32_t gi = baseGlyphIdx; gi < _glyphs.size(); gi++) {
+            const auto& g = _glyphs[gi];
+            if (!_hasExplicitBounds) {
+                _sceneMinX = std::min(_sceneMinX, g.x);
+                _sceneMinY = std::min(_sceneMinY, g.y);
+                _sceneMaxX = std::max(_sceneMaxX, g.x + g.width());
+                _sceneMaxY = std::max(_sceneMaxY, g.y + g.height());
+            }
+        }
+
         _gridStagingDirty = true;
         _bufferDirty = true;
 
-        // Return the number of lines the content occupies (not just lines scrolled)
-        // so that the caller can advance the terminal cursor accordingly
+        ydebug("addYdrawBuffer: added {} prims, {} glyphs, scene=[{:.0f},{:.0f}]-[{:.0f},{:.0f}]",
+               primCount, _glyphs.size() - baseGlyphIdx,
+               _sceneMinX, _sceneMinY, _sceneMaxX, _sceneMaxY);
+
         return Ok(contentLines);
     }
 
     void clear() override {
-        // Clear primitive data
-        _primBounds.clear();
-        if (_buffer) {
-            _buffer->clear();
-        }
+        // Clear line-based primitive storage
+        _scrollLines.clear();
 
         // Clear glyph data
         _glyphs.clear();
         _glyphSortedOrder.clear();
 
-        // Clear Level 1 grid (incremental structure)
-        _cellEntries.clear();
+        // Clear grid
         _gridWidth = 0;
         _gridHeight = 0;
-
-        // Clear Level 2 grid (packed cache)
         _gridStaging.clear();
         _gridStagingDirty = true;
 
-        // Clear scrolling mode data
-        _scrollLines.clear();
+        // Reset cursor
         _cursorCol = 0;
         _cursorRow = 0;
 
@@ -1387,21 +1342,21 @@ public:
         // by the same amount. All refs in remaining lines point to other remaining
         // lines (by construction: refs only point forward or to themselves).
 
-        // Update cursor row in ALL remaining primitives' data
-        // Primitive data format: [0]=type, [1]=layer, [2]=packed(col|row<<16), [3..]=prim data
+        // Update grid offset row in ALL remaining primitives' data
+        // Primitive data format: [0]=packed(gridOffsetCol|gridOffsetRow<<16), [1]=type, [2]=layer, [3..]=geometry
         // Row is stored as SIGNED int16_t to allow negative values (scrolled partially off-screen)
-        // After scrolling N lines, each primitive's row needs to decrease by N
+        // After scrolling N lines, each primitive's gridOffsetRow needs to decrease by N
         for (auto& line : _scrollLines) {
             for (auto& prim : line.prims) {
-                if (prim.size() >= 3) {
+                if (prim.size() >= 1) {
                     uint32_t packed;
-                    std::memcpy(&packed, &prim[2], sizeof(uint32_t));
+                    std::memcpy(&packed, &prim[0], sizeof(uint32_t));
                     uint16_t col = packed & 0xFFFF;
                     int16_t row = static_cast<int16_t>((packed >> 16) & 0xFFFF);
                     row -= static_cast<int16_t>(numLines);  // Can go negative!
                     packed = static_cast<uint32_t>(col) |
                              (static_cast<uint32_t>(static_cast<uint16_t>(row)) << 16);
-                    std::memcpy(&prim[2], &packed, sizeof(uint32_t));
+                    std::memcpy(&prim[0], &packed, sizeof(uint32_t));
                 }
             }
         }
@@ -1417,159 +1372,10 @@ public:
         _gridStagingDirty = true;
     }
 
-    void ensureGridSize() {
-        // Handle edge case: no content yet
-        if (_sceneMinX >= _sceneMaxX) { _sceneMinX = 0; _sceneMaxX = 100; }
-        if (_sceneMinY >= _sceneMaxY) { _sceneMinY = 0; _sceneMaxY = 100; }
-
-        float sceneW = _sceneMaxX - _sceneMinX;
-        float sceneH = _sceneMaxY - _sceneMinY;
-
-        // Auto-compute cell size if needed
-        float csX = _cellSizeX;
-        float csY = _cellSizeY;
-        if (csX <= 0.0f || csY <= 0.0f) {
-            // Use average primitive size * 1.5 as cell size
-            if (!_primBounds.empty()) {
-                float avgW = 0.0f, avgH = 0.0f;
-                uint32_t count2D = 0;
-                for (const auto& pb : _primBounds) {
-                    bool is3D = (pb.type >= 100 && pb.type < 128);
-                    if (is3D) continue;
-                    avgW += pb.maxX - pb.minX;
-                    avgH += pb.maxY - pb.minY;
-                    count2D++;
-                }
-                if (count2D > 0) {
-                    avgW /= count2D;
-                    avgH /= count2D;
-                    csX = avgW * 1.5f;
-                    csY = avgH * 1.5f;
-                }
-            }
-            if (csX <= 0.0f) csX = sceneW / 10.0f;
-            if (csY <= 0.0f) csY = sceneH / 10.0f;
-            if (csX <= 0.0f) csX = 1.0f;
-            if (csY <= 0.0f) csY = 1.0f;
-        }
-
-        uint32_t newW = std::max(1u, static_cast<uint32_t>(std::ceil(sceneW / csX)));
-        uint32_t newH = std::max(1u, static_cast<uint32_t>(std::ceil(sceneH / csY)));
-
-        // Cap total cells
-        constexpr uint32_t MAX_TOTAL_CELLS = 4u * 1024u * 1024u;
-        uint64_t totalCells = static_cast<uint64_t>(newW) * newH;
-        if (totalCells > MAX_TOTAL_CELLS) {
-            float scale = std::sqrt(static_cast<float>(totalCells) / MAX_TOTAL_CELLS);
-            csX *= scale;
-            csY *= scale;
-            newW = std::max(1u, static_cast<uint32_t>(std::ceil(sceneW / csX)));
-            newH = std::max(1u, static_cast<uint32_t>(std::ceil(sceneH / csY)));
-        }
-
-        // If grid dimensions changed, need to rebuild cell entries
-        if (newW != _gridWidth || newH != _gridHeight || _cellEntries.empty()) {
-            _cellSizeX = csX;
-            _cellSizeY = csY;
-            rebuildCellEntries(newW, newH);
-        }
-    }
-
-    void rebuildCellEntries(uint32_t newW, uint32_t newH) {
-        _gridWidth = newW;
-        _gridHeight = newH;
-        _cellEntries.clear();
-        _cellEntries.resize(static_cast<size_t>(newW) * newH);
-
-        // Re-add all existing primitives to new grid
-        addPrimsToGrid(0, static_cast<uint32_t>(_primBounds.size()));
-        addGlyphsToGrid(0, static_cast<uint32_t>(_glyphs.size()));
-
-        _gridStagingDirty = true;
-    }
-
-    void addPrimsToGrid(uint32_t startIdx, uint32_t endIdx) {
-        if (_gridWidth == 0 || _gridHeight == 0) return;
-
-        for (uint32_t primIdx = startIdx; primIdx < endIdx; primIdx++) {
-            const auto& pb = _primBounds[primIdx];
-            bool is3D = (pb.type >= 100 && pb.type < 128);
-            if (is3D) continue;
-
-            uint32_t cMinX = cellX(pb.minX);
-            uint32_t cMaxX = cellX(pb.maxX);
-            uint32_t cMinY = cellY(pb.minY);
-            uint32_t cMaxY = cellY(pb.maxY);
-
-            for (uint32_t cy = cMinY; cy <= cMaxY; cy++) {
-                for (uint32_t cx = cMinX; cx <= cMaxX; cx++) {
-                    _cellEntries[cy * _gridWidth + cx].push_back(primIdx);
-                }
-            }
-        }
-    }
-
-    void addGlyphsToGrid(uint32_t startIdx, uint32_t endIdx) {
-        if (_gridWidth == 0 || _gridHeight == 0) return;
-
-        for (uint32_t gi = startIdx; gi < endIdx; gi++) {
-            const auto& g = _glyphs[gi];
-            uint32_t cMinX = cellX(g.x);
-            uint32_t cMaxX = cellX(g.x + g.width());
-            uint32_t cMinY = cellY(g.y);
-            uint32_t cMaxY = cellY(g.y + g.height());
-
-            for (uint32_t cy = cMinY; cy <= cMaxY; cy++) {
-                for (uint32_t cx = cMinX; cx <= cMaxX; cx++) {
-                    _cellEntries[cy * _gridWidth + cx].push_back(gi | GLYPH_BIT);
-                }
-            }
-        }
-    }
-
     void rebuildPackedGrid() {
         if (!_gridStagingDirty) return;
 
-        if (_scrollingMode) {
-            rebuildPackedGridScrolling();
-            return;
-        }
-
-        uint32_t numCells = _gridWidth * _gridHeight;
-        if (numCells == 0) {
-            _gridStaging.clear();
-            _gridStagingDirty = false;
-            return;
-        }
-
-        // Pass 1: compute total size needed
-        uint32_t totalEntries = 0;
-        for (const auto& cell : _cellEntries) {
-            totalEntries += 1 + static_cast<uint32_t>(cell.size());  // count + entries
-        }
-
-        // Allocate
-        _gridStaging.resize(numCells + totalEntries);
-
-        // Pass 2: fill offsets and entries
-        uint32_t pos = numCells;
-        for (uint32_t i = 0; i < numCells; i++) {
-            _gridStaging[i] = pos;  // offset to this cell's packed list
-            _gridStaging[pos] = static_cast<uint32_t>(_cellEntries[i].size());  // count
-            for (size_t j = 0; j < _cellEntries[i].size(); j++) {
-                _gridStaging[pos + 1 + j] = _cellEntries[i][j];
-            }
-            pos += 1 + static_cast<uint32_t>(_cellEntries[i].size());
-        }
-
-        _gridStagingDirty = false;
-
-        ydebug("rebuildPackedGrid: grid={}x{} cells={} staging={} u32s",
-               _gridWidth, _gridHeight, numCells, _gridStaging.size());
-    }
-
-    // Build packed grid from scrolling line-based structure
-    void rebuildPackedGridScrolling() {
+        // Build packed grid from line-based storage (_scrollLines)
         // First, build a mapping from (lineIdx, primIdx) to global prim index
         // by iterating all lines and counting primitives
         std::vector<uint32_t> lineBasePrimIdx;  // lineBasePrimIdx[line] = first prim index for that line
@@ -1648,7 +1454,7 @@ public:
     //=========================================================================
 
     // Compute GPU buffer size for scrolling mode primitives
-    uint32_t scrollingPrimGpuSize() const {
+    uint32_t primGpuSize() const {
         uint32_t totalWords = 0;
         for (const auto& line : _scrollLines) {
             for (const auto& prim : line.prims) {
@@ -1660,7 +1466,7 @@ public:
     }
 
     // Write scrolling mode primitives to GPU buffer
-    void writeScrollingPrimsGPU(float* buf, uint32_t bufBytes) {
+    void writePrimsGPU(float* buf, uint32_t bufBytes) {
         uint32_t totalPrims = 0;
         for (const auto& line : _scrollLines) {
             totalPrims += static_cast<uint32_t>(line.prims.size());
@@ -1702,22 +1508,16 @@ public:
         _primWordOffsets.clear();
 
         bool hasContent = false;
-        if (_scrollingMode) {
-            for (const auto& line : _scrollLines) {
-                if (!line.prims.empty()) { hasContent = true; break; }
-            }
-        } else {
-            hasContent = (_buffer && !_buffer->empty()) || !_glyphs.empty();
+        for (const auto& line : _scrollLines) {
+            if (!line.prims.empty()) { hasContent = true; break; }
         }
-
-        if (!hasContent) {
+        if (!hasContent && _glyphs.empty()) {
             clearGridStaging();
             return Ok();
         }
 
         // Reserve compact prim storage
-        uint32_t primBytes = _scrollingMode ? scrollingPrimGpuSize()
-                                            : (_buffer ? _buffer->gpuBufferSize() : 0);
+        uint32_t primBytes = primGpuSize();
         if (primBytes > 0) {
             bufMgr->reserve(primBytes);
         }
@@ -1742,8 +1542,7 @@ public:
 
         // Allocate and write compact prim data
         {
-            uint32_t allocBytes = _scrollingMode ? scrollingPrimGpuSize()
-                                                 : (_buffer ? _buffer->gpuBufferSize() : 0);
+            uint32_t allocBytes = primGpuSize();
             if (allocBytes > 0) {
                 auto primResult = bufMgr->allocateBuffer(_metaSlotIndex, "prims", allocBytes);
                 if (!primResult) return Err<void>("allocateBuffers: prim alloc failed", primResult);
@@ -1753,11 +1552,7 @@ public:
                        _primHandle.offset, _primHandle.size, _primHandle.offset / sizeof(float));
 
                 float* buf = reinterpret_cast<float*>(_primHandle.data);
-                if (_scrollingMode) {
-                    writeScrollingPrimsGPU(buf, _primHandle.size);
-                } else {
-                    _buffer->writeGPU(buf, _primHandle.size, _primWordOffsets);
-                }
+                writePrimsGPU(buf, _primHandle.size);
                 bufMgr->markBufferDirty(_primHandle);
             }
         }
@@ -1861,9 +1656,9 @@ public:
             }
 
             // Update Image primitive with real atlas coordinates
+            // TODO: images need to be stored in _scrollLines and updated here
             auto atlasPos = texMgr->getAtlasPosition(pi.texHandle);
-            _buffer->updateImage(pi.primId, pi.layer, pi.x, pi.y, pi.w, pi.h,
-                                 atlasPos.x, atlasPos.y, pi.pixelWidth, pi.pixelHeight);
+            (void)atlasPos;  // Suppress unused warning for now
         }
 
         // Mark buffer dirty so writeBuffers re-uploads with updated atlas coords
@@ -1883,24 +1678,16 @@ public:
         if (_bufferDirty) {
             auto bufMgr = _cardMgr->bufferManager();
 
-            // Re-write prims - handle scrolling mode vs normal mode
+            // Check if we have primitives
             bool hasPrims = false;
-            if (_scrollingMode) {
-                for (const auto& line : _scrollLines) {
-                    if (!line.prims.empty()) { hasPrims = true; break; }
-                }
-            } else {
-                hasPrims = _buffer && !_buffer->empty();
+            for (const auto& line : _scrollLines) {
+                if (!line.prims.empty()) { hasPrims = true; break; }
             }
 
             if (_primHandle.isValid() && hasPrims) {
-                ydebug("writeBuffers: re-writing prims (scrollingMode={})", _scrollingMode);
+                ydebug("writeBuffers: re-writing prims");
                 float* buf = reinterpret_cast<float*>(_primHandle.data);
-                if (_scrollingMode) {
-                    writeScrollingPrimsGPU(buf, _primHandle.size);
-                } else {
-                    _buffer->writeGPU(buf, _primHandle.size, _primWordOffsets);
-                }
+                writePrimsGPU(buf, _primHandle.size);
                 bufMgr->markBufferDirty(_primHandle);
             }
 
@@ -1931,8 +1718,7 @@ public:
 
     bool needsBufferRealloc() const override {
         if (!_cardMgr) return false;
-        uint32_t primNeeded = _scrollingMode ? scrollingPrimGpuSize()
-                                             : (_buffer ? _buffer->gpuBufferSize() : 0);
+        uint32_t primNeeded = primGpuSize();
         if (_primHandle.isValid()) {
             if (primNeeded != _primHandle.size) return true;
         } else if (primNeeded > 0) {
@@ -2278,23 +2064,12 @@ private:
     // Data
     //=========================================================================
 
-    // Lightweight AABB data for grid computation (populated by addYdrawBuffer)
-    struct PrimBounds {
-        float minX, minY, maxX, maxY;
-        uint32_t type;
-    };
-    std::vector<PrimBounds> _primBounds;
-
-    // Internal merged buffer (created on first addYdrawBuffer)
-    YDrawBuffer::Ptr _buffer;
-
-    // Level 1: Internal incremental grid structure
-    // _cellEntries[cellIdx] = list of prim indices in that cell
-    std::vector<std::vector<uint32_t>> _cellEntries;
-
-    // Level 2: Packed GPU format (cache, rebuilt when _gridStagingDirty)
+    // Packed GPU format (cache, rebuilt when _gridStagingDirty)
     std::vector<uint32_t> _gridStaging;
     bool _gridStagingDirty = true;
+
+    // Prim staging cache (rebuilt when _bufferDirty)
+    std::vector<uint32_t> _primStagingCache;
 
     std::vector<YDrawGlyph> _glyphs;
     std::vector<uint32_t> _glyphSortedOrder;
