@@ -1,0 +1,1 @@
+/nix/store/a245z3cvf9x9sn0xlk6k8j9xhxbhda1z-gcc-wrapper-15.2.0/bin/g++ -Wl,--dependency-file=CMakeFiles/displaylist-to-ydraw.dir/link.d "CMakeFiles/displaylist-to-ydraw.dir/displaylist-to-ydraw-main.cpp.o" -o displaylist-to-ydraw  libdisplaylist-to-ydraw-lib.a libdisplaylist-json.a libydraw-buffer.a

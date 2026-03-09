@@ -1,0 +1,1 @@
+/usr/bin/c++ -Wl,--dependency-file=CMakeFiles/html-to-displaylist.dir/link.d "CMakeFiles/html-to-displaylist.dir/html-to-displaylist.cpp.o" -o html-to-displaylist  libdisplaylist-json.a /usr/lib/x86_64-linux-gnu/libcurl.so /usr/lib/x86_64-linux-gnu/libcurl.so

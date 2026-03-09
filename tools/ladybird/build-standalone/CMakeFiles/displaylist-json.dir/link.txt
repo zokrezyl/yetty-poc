@@ -1,0 +1,2 @@
+/usr/bin/ar qc libdisplaylist-json.a "CMakeFiles/displaylist-json.dir/displaylist-json.cpp.o"
+/usr/bin/ranlib libdisplaylist-json.a

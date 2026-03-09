@@ -1,0 +1,2 @@
+/usr/bin/ar qc libydraw-buffer.a "CMakeFiles/ydraw-buffer.dir/ydraw-buffer-standalone.cpp.o"
+/usr/bin/ranlib libydraw-buffer.a

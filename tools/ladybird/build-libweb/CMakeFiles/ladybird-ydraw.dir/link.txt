@@ -1,0 +1,1 @@
+/nix/store/a245z3cvf9x9sn0xlk6k8j9xhxbhda1z-gcc-wrapper-15.2.0/bin/g++ -Wl,--dependency-file=CMakeFiles/ladybird-ydraw.dir/link.d "CMakeFiles/ladybird-ydraw.dir/main.cpp.o" -o ladybird-ydraw  libydraw-buffer.a

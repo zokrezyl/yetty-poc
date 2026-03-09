@@ -1,0 +1,1 @@
+/usr/bin/c++ -Wl,--dependency-file=CMakeFiles/displaylist-to-ydraw.dir/link.d "CMakeFiles/displaylist-to-ydraw.dir/displaylist-to-ydraw-main.cpp.o" -o displaylist-to-ydraw  libdisplaylist-to-ydraw-lib.a libdisplaylist-json.a libydraw-buffer.a

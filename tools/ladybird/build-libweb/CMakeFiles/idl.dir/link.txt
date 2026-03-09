@@ -1,0 +1,2 @@
+/nix/store/a245z3cvf9x9sn0xlk6k8j9xhxbhda1z-gcc-wrapper-15.2.0/bin/ar qc libidl.a CMakeFiles/idl.dir/home/misi/work/my/yetty/tmp/ladybird/Libraries/LibIDL/ExposedTo.cpp.o CMakeFiles/idl.dir/home/misi/work/my/yetty/tmp/ladybird/Libraries/LibIDL/IDLParser.cpp.o CMakeFiles/idl.dir/home/misi/work/my/yetty/tmp/ladybird/Libraries/LibIDL/Types.cpp.o
+/nix/store/a245z3cvf9x9sn0xlk6k8j9xhxbhda1z-gcc-wrapper-15.2.0/bin/ranlib libidl.a

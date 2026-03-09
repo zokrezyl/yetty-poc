@@ -1,0 +1,2 @@
+/usr/bin/ar qc libdisplaylist-to-ydraw-lib.a "CMakeFiles/displaylist-to-ydraw-lib.dir/displaylist-to-ydraw.cpp.o"
+/usr/bin/ranlib libdisplaylist-to-ydraw-lib.a

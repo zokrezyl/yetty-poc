@@ -1,0 +1,2 @@
+/nix/store/a245z3cvf9x9sn0xlk6k8j9xhxbhda1z-gcc-wrapper-15.2.0/bin/ar qc libdisplay-list-player-ydraw.a "CMakeFiles/display-list-player-ydraw.dir/DisplayListPlayerYDraw.cpp.o"
+/nix/store/a245z3cvf9x9sn0xlk6k8j9xhxbhda1z-gcc-wrapper-15.2.0/bin/ranlib libdisplay-list-player-ydraw.a

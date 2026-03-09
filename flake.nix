@@ -42,6 +42,8 @@
           git
           llvmPackages_21.clang
           llvmPackages_21.lld
+          ccache
+          distcc
         ];
 
         # Desktop build dependencies
@@ -66,6 +68,22 @@
           glfw
           zlib
           openssl
+
+          # For LibWeb integration
+          fmt
+          simdutf
+          curl
+          icu
+          fast-float
+          harfbuzz
+          libavif
+          simdjson
+          libjpeg
+          libpng
+          libwebp
+          libjxl
+          libtiff
+          giflib
         ];
 
         # Android build dependencies
@@ -129,9 +147,14 @@
 
             LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath desktopDeps;
 
+            # Distributed build with ccache + distcc
+            CCACHE_PREFIX = "distcc";
+            DISTCC_HOSTS = "192.168.1.10/8";
+
             shellHook = ''
               echo "Yetty development environment (desktop)"
               echo "  Run: make release"
+              echo "  Distributed build: distcc -> $DISTCC_HOSTS"
             '';
           };
 
