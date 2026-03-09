@@ -286,6 +286,10 @@ public:
     /// Get scene height in grid lines (sceneHeight / cellSizeY)
     virtual uint32_t sceneHeightInLines() const = 0;
 
+    /// Scroll N lines in scrolling mode - removes top N lines.
+    /// Call this when terminal scrolls to keep ydraw in sync.
+    virtual void scrollLines(uint16_t numLines) = 0;
+
     //=========================================================================
     // Grid / Scene bounds
     //=========================================================================

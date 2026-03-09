@@ -1226,18 +1226,12 @@ public:
         ydebug("addYdrawBufferScrolling: contentY=[{:.0f},{:.0f}] contentHeight={:.0f} contentLines={}",
                contentMinY, contentMaxY, contentHeight, contentLines);
 
-        // Track scroll amount for return value
-        uint32_t linesScrolled = 0;
+        // NOTE: We do NOT scroll here internally!
+        // The vterm will scroll when we write newlines (in gpu-screen.cpp),
+        // and onScrollRect callback will call scrollLines to keep ydraw in sync.
+        // This avoids double-scrolling.
 
-        // Check if we need to scroll
-        if (_cursorRow + contentLines > totalLines) {
-            linesScrolled = _cursorRow + contentLines - totalLines;
-            ydebug("addYdrawBufferScrolling: SCROLLING {} lines (cursorRow={} + contentLines={} > totalLines={})",
-                   linesScrolled, _cursorRow, contentLines, totalLines);
-            scrollLines(static_cast<uint16_t>(linesScrolled));
-        }
-
-        // Ensure we have enough lines AFTER scrolling
+        // Ensure we have enough lines for content placement
         while (_scrollLines.size() < totalLines) {
             ScrollLine line;
             line.cells.resize(_gridWidth > 0 ? _gridWidth : 1);
@@ -1315,7 +1309,9 @@ public:
         _gridStagingDirty = true;
         _bufferDirty = true;
 
-        return Ok(linesScrolled);
+        // Return the number of lines the content occupies (not just lines scrolled)
+        // so that the caller can advance the terminal cursor accordingly
+        return Ok(contentLines);
     }
 
     void clear() override {
@@ -1375,12 +1371,39 @@ public:
     }
 
     // Scroll N lines in scrolling mode - O(lines deleted), not O(all primitives)
-    void scrollLines(uint16_t numLines) {
+    void scrollLines(uint16_t numLines) override {
         if (numLines == 0 || _scrollLines.empty()) return;
+        ydebug("scrollLines: removing {} lines, had {} lines, cursor was ({},{})",
+               numLines, _scrollLines.size(), _cursorCol, _cursorRow);
 
         // Pop lines from front - primitives and grid cells are deleted together
         for (uint16_t i = 0; i < numLines && !_scrollLines.empty(); i++) {
             _scrollLines.pop_front();
+        }
+
+        // DO NOT modify refs in remaining lines!
+        // linesAhead is a RELATIVE offset (baseLine - lineIdx) that remains correct
+        // after scrolling because both the ref's line and the target line shift
+        // by the same amount. All refs in remaining lines point to other remaining
+        // lines (by construction: refs only point forward or to themselves).
+
+        // Update cursor row in ALL remaining primitives' data
+        // Primitive data format: [0]=type, [1]=layer, [2]=packed(col|row<<16), [3..]=prim data
+        // Row is stored as SIGNED int16_t to allow negative values (scrolled partially off-screen)
+        // After scrolling N lines, each primitive's row needs to decrease by N
+        for (auto& line : _scrollLines) {
+            for (auto& prim : line.prims) {
+                if (prim.size() >= 3) {
+                    uint32_t packed;
+                    std::memcpy(&packed, &prim[2], sizeof(uint32_t));
+                    uint16_t col = packed & 0xFFFF;
+                    int16_t row = static_cast<int16_t>((packed >> 16) & 0xFFFF);
+                    row -= static_cast<int16_t>(numLines);  // Can go negative!
+                    packed = static_cast<uint32_t>(col) |
+                             (static_cast<uint32_t>(static_cast<uint16_t>(row)) << 16);
+                    std::memcpy(&prim[2], &packed, sizeof(uint32_t));
+                }
+            }
         }
 
         // Adjust cursor position
@@ -1854,18 +1877,37 @@ public:
     Result<void> writeBuffers() override {
         if (!_cardMgr) return Err<void>("writeBuffers: no CardManager");
 
-        ydebug("writeBuffers: bufferDirty={} metaDirty={} primHandle={} derivedHandle={}",
-               _bufferDirty, _metadataDirty, _primHandle.isValid(), _derivedHandle.isValid());
+        ydebug("writeBuffers: bufferDirty={} metaDirty={} primHandle={} derivedHandle={} scrollingMode={}",
+               _bufferDirty, _metadataDirty, _primHandle.isValid(), _derivedHandle.isValid(), _scrollingMode);
 
         if (_bufferDirty) {
             auto bufMgr = _cardMgr->bufferManager();
 
-            // Re-write prims
-            if (_primHandle.isValid() && !_buffer->empty()) {
-                ydebug("writeBuffers: re-writing prims");
+            // Re-write prims - handle scrolling mode vs normal mode
+            bool hasPrims = false;
+            if (_scrollingMode) {
+                for (const auto& line : _scrollLines) {
+                    if (!line.prims.empty()) { hasPrims = true; break; }
+                }
+            } else {
+                hasPrims = _buffer && !_buffer->empty();
+            }
+
+            if (_primHandle.isValid() && hasPrims) {
+                ydebug("writeBuffers: re-writing prims (scrollingMode={})", _scrollingMode);
                 float* buf = reinterpret_cast<float*>(_primHandle.data);
-                _buffer->writeGPU(buf, _primHandle.size, _primWordOffsets);
+                if (_scrollingMode) {
+                    writeScrollingPrimsGPU(buf, _primHandle.size);
+                } else {
+                    _buffer->writeGPU(buf, _primHandle.size, _primWordOffsets);
+                }
                 bufMgr->markBufferDirty(_primHandle);
+            }
+
+            // Rebuild packed grid if dirty (important after scrolling!)
+            if (_gridStagingDirty) {
+                ydebug("writeBuffers: rebuilding packed grid");
+                rebuildPackedGrid();
             }
 
             // Re-write derived (grid + glyphs + atlas header)
@@ -1889,7 +1931,8 @@ public:
 
     bool needsBufferRealloc() const override {
         if (!_cardMgr) return false;
-        uint32_t primNeeded = _buffer->gpuBufferSize();
+        uint32_t primNeeded = _scrollingMode ? scrollingPrimGpuSize()
+                                             : (_buffer ? _buffer->gpuBufferSize() : 0);
         if (_primHandle.isValid()) {
             if (primNeeded != _primHandle.size) return true;
         } else if (primNeeded > 0) {

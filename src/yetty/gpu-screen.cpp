@@ -2808,6 +2808,14 @@ int GPUScreenImpl::onScrollRect(VTermRect rect, int downward, int rightward,
     for (int i = 0; i < downward && i < rect.end_row; i++) {
       self->pushLineToScrollback(i);
     }
+
+    // Sync ydraw scrolling overlay with terminal scroll
+    if (self->_ydrawScrolling && self->_ydrawScrolling->hasContent()) {
+      ydebug("onScrollRect: syncing ydraw scrolling - {} lines down", downward);
+      self->_ydrawScrolling->scrollLines(static_cast<uint16_t>(downward));
+      self->_ydrawDirty = true;
+      self->_needsBindGroupRecreation = true;
+    }
   } else if (downward < 0) {
     // Scroll up: top lines will be overwritten
     int upAmount = -downward;
@@ -2816,6 +2824,14 @@ int GPUScreenImpl::onScrollRect(VTermRect rect, int downward, int rightward,
       // Full-screen scroll from top - push to scrollback
       for (int i = 0; i < upAmount && i < rect.end_row; i++) {
         self->pushLineToScrollback(i);
+      }
+
+      // Sync ydraw scrolling overlay with terminal scroll
+      if (self->_ydrawScrolling && self->_ydrawScrolling->hasContent()) {
+        ydebug("onScrollRect: syncing ydraw scrolling - {} lines up", upAmount);
+        self->_ydrawScrolling->scrollLines(static_cast<uint16_t>(upAmount));
+        self->_ydrawDirty = true;
+        self->_needsBindGroupRecreation = true;
       }
     }
   }
@@ -3820,15 +3836,18 @@ void GPUScreenImpl::handleYdrawOSC(const std::string& payload, bool scrolling) {
       return;
     }
 
-    // Sync scroll with vterm if scrolling occurred
-    if (scrolling) {
-      ydebug("YDraw scrolling: AFTER addYdrawBuffer - linesScrolled={} builder cursor=({},{}) sceneHeight={}",
-             *addRes, builder->cursorCol(), builder->cursorRow(), builder->sceneHeightInLines());
-    }
-    if (scrolling && *addRes > 0) {
-      // The builder scrolled - vterm should also scroll
-      // This is handled automatically since we sync cursor before each add
-      ydebug("YDraw scrolling: {} lines scrolled", *addRes);
+    // Advance vterm cursor by the number of lines the content occupies
+    if (scrolling && *addRes > 0 && _vterm) {
+      uint32_t contentLines = *addRes;
+      ydebug("YDraw scrolling: AFTER addYdrawBuffer - contentLines={} builder cursor=({},{}) sceneHeight={}",
+             contentLines, builder->cursorCol(), builder->cursorRow(), builder->sceneHeightInLines());
+
+      // Write newlines to vterm to advance cursor past the ydraw content
+      // This ensures subsequent terminal output appears after the shape
+      // The onScrollRect callback will handle scrolling the ydraw overlay in sync
+      std::string newlines(contentLines, '\n');
+      vterm_input_write(_vterm, newlines.c_str(), newlines.size());
+      ydebug("YDraw scrolling: wrote {} newlines to advance vterm cursor", contentLines);
     }
 
     _ydrawDirty = true;
