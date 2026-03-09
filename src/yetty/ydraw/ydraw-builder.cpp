@@ -1090,8 +1090,12 @@ public:
             }
         });
 
+        ydebug("addYdrawBuffer: fonts processed, fontMap size={}", _bufferFontIdMap.size());
+
         // 2. Process text spans -> glyphs
-        buffer->forEachTextSpan([this](const TextSpanData& span) {
+        uint32_t spanCount = 0;
+        buffer->forEachTextSpan([this, &spanCount](const TextSpanData& span) {
+            spanCount++;
             int atlasFontId = -1;
             auto it = _bufferFontIdMap.find(span.fontId);
             if (it != _bufferFontIdMap.end()) atlasFontId = it->second;
@@ -1105,6 +1109,21 @@ public:
                         span.fontSize, span.color, span.layer, atlasFontId);
             }
         });
+
+        ydebug("addYdrawBuffer: text spans processed, count={}, glyphs={}", spanCount, _glyphs.size());
+
+        // 2b. Extend scene bounds for new glyphs (MUST happen before cell size computation!)
+        for (uint32_t gi = baseGlyphIdx; gi < _glyphs.size(); gi++) {
+            const auto& g = _glyphs[gi];
+            if (!_hasExplicitBounds) {
+                _sceneMinX = std::min(_sceneMinX, g.x);
+                _sceneMinY = std::min(_sceneMinY, g.y);
+                _sceneMaxX = std::max(_sceneMaxX, g.x + g.width());
+                _sceneMaxY = std::max(_sceneMaxY, g.y + g.height());
+            }
+        }
+
+        ydebug("addYdrawBuffer: processing images...");
 
         // 3. Process images (TODO: store in _scrollLines as well)
         buffer->forEachImage([this](const ImageData& img) {
@@ -1135,6 +1154,16 @@ public:
         _flags |= buffer->flags();
 
         // 5. Ensure grid dimensions are set
+        // Auto-compute cell size if not set (DEFAULT_CELL_SIZE = 0)
+        if (_cellSizeX <= 0.0f || _cellSizeY <= 0.0f) {
+            float sceneW = _sceneMaxX - _sceneMinX;
+            float sceneH = _sceneMaxY - _sceneMinY;
+            if (sceneW <= 0) sceneW = 100;
+            if (sceneH <= 0) sceneH = 100;
+            // Default to ~10x10 grid cells
+            _cellSizeX = std::max(1.0f, sceneW / 10.0f);
+            _cellSizeY = std::max(1.0f, sceneH / 10.0f);
+        }
         if (_gridWidth == 0 || _gridHeight == 0) {
             float sceneW = _sceneMaxX - _sceneMinX;
             float sceneH = _sceneMaxY - _sceneMinY;
@@ -1254,17 +1283,6 @@ public:
                 }
             }
         });
-
-        // 10. Extend scene bounds for new glyphs
-        for (uint32_t gi = baseGlyphIdx; gi < _glyphs.size(); gi++) {
-            const auto& g = _glyphs[gi];
-            if (!_hasExplicitBounds) {
-                _sceneMinX = std::min(_sceneMinX, g.x);
-                _sceneMinY = std::min(_sceneMinY, g.y);
-                _sceneMaxX = std::max(_sceneMaxX, g.x + g.width());
-                _sceneMaxY = std::max(_sceneMaxY, g.y + g.height());
-            }
-        }
 
         _gridStagingDirty = true;
         _bufferDirty = true;
@@ -1392,6 +1410,18 @@ public:
             gridW = std::max(gridW, static_cast<uint32_t>(line.cells.size()));
         }
 
+        // Also consider grid dimensions needed for glyphs
+        if (!_glyphs.empty() && _cellSizeX > 0 && _cellSizeY > 0) {
+            for (const auto& g : _glyphs) {
+                uint32_t maxCellX = static_cast<uint32_t>(std::max(0.0f,
+                    std::floor((g.x + g.width() - _sceneMinX) / _cellSizeX))) + 1;
+                uint32_t maxCellY = static_cast<uint32_t>(std::max(0.0f,
+                    std::floor((g.y + g.height() - _sceneMinY) / _cellSizeY))) + 1;
+                gridW = std::max(gridW, maxCellX);
+                gridH = std::max(gridH, maxCellY);
+            }
+        }
+
         if (gridW == 0 || gridH == 0) {
             _gridStaging.clear();
             _gridStagingDirty = false;
@@ -1402,16 +1432,46 @@ public:
         _gridHeight = gridH;
         uint32_t numCells = gridW * gridH;
 
-        // Pass 1: compute total entries needed
+        // Build glyph->cell mapping: for each cell, list of glyph indices
+        std::vector<std::vector<uint32_t>> cellGlyphs(numCells);
+        if (!_glyphs.empty() && _cellSizeX > 0 && _cellSizeY > 0) {
+            for (uint32_t gi = 0; gi < static_cast<uint32_t>(_glyphs.size()); gi++) {
+                const auto& g = _glyphs[gi];
+                float gMinX = g.x;
+                float gMinY = g.y;
+                float gMaxX = g.x + g.width();
+                float gMaxY = g.y + g.height();
+
+                int32_t cellMinX = static_cast<int32_t>(std::floor((gMinX - _sceneMinX) / _cellSizeX));
+                int32_t cellMinY = static_cast<int32_t>(std::floor((gMinY - _sceneMinY) / _cellSizeY));
+                int32_t cellMaxX = static_cast<int32_t>(std::floor((gMaxX - _sceneMinX) / _cellSizeX));
+                int32_t cellMaxY = static_cast<int32_t>(std::floor((gMaxY - _sceneMinY) / _cellSizeY));
+
+                cellMinX = std::max(0, cellMinX);
+                cellMinY = std::max(0, cellMinY);
+                cellMaxX = std::min(static_cast<int32_t>(gridW) - 1, cellMaxX);
+                cellMaxY = std::min(static_cast<int32_t>(gridH) - 1, cellMaxY);
+
+                for (int32_t cy = cellMinY; cy <= cellMaxY; cy++) {
+                    for (int32_t cx = cellMinX; cx <= cellMaxX; cx++) {
+                        uint32_t cellIdx = static_cast<uint32_t>(cy) * gridW + static_cast<uint32_t>(cx);
+                        cellGlyphs[cellIdx].push_back(gi);
+                    }
+                }
+            }
+        }
+
+        // Pass 1: compute total entries needed (prims + glyphs per cell)
         uint32_t totalEntries = 0;
         for (uint32_t y = 0; y < gridH; y++) {
-            const auto& line = _scrollLines[y];
             for (uint32_t x = 0; x < gridW; x++) {
-                if (x < line.cells.size()) {
-                    totalEntries += 1 + static_cast<uint32_t>(line.cells[x].refs.size());
-                } else {
-                    totalEntries += 1;  // empty cell still has count=0
+                uint32_t cellIdx = y * gridW + x;
+                uint32_t primCount = 0;
+                if (y < _scrollLines.size() && x < _scrollLines[y].cells.size()) {
+                    primCount = static_cast<uint32_t>(_scrollLines[y].cells[x].refs.size());
                 }
+                uint32_t glyphCount = static_cast<uint32_t>(cellGlyphs[cellIdx].size());
+                totalEntries += 1 + primCount + glyphCount;
             }
         }
 
@@ -1420,33 +1480,46 @@ public:
         // Pass 2: fill offsets and entries
         uint32_t pos = numCells;
         for (uint32_t y = 0; y < gridH; y++) {
-            const auto& line = _scrollLines[y];
             for (uint32_t x = 0; x < gridW; x++) {
                 uint32_t cellIdx = y * gridW + x;
                 _gridStaging[cellIdx] = pos;
 
-                if (x < line.cells.size()) {
-                    const auto& cell = line.cells[x];
-                    _gridStaging[pos] = static_cast<uint32_t>(cell.refs.size());
+                uint32_t primCount = 0;
+                if (y < _scrollLines.size() && x < _scrollLines[y].cells.size()) {
+                    primCount = static_cast<uint32_t>(_scrollLines[y].cells[x].refs.size());
+                }
+                uint32_t glyphCount = static_cast<uint32_t>(cellGlyphs[cellIdx].size());
+                uint32_t totalCount = primCount + glyphCount;
+
+                _gridStaging[pos] = totalCount;
+                uint32_t entryIdx = 0;
+
+                // Add prim entries
+                if (y < _scrollLines.size() && x < _scrollLines[y].cells.size()) {
+                    const auto& cell = _scrollLines[y].cells[x];
                     for (size_t j = 0; j < cell.refs.size(); j++) {
                         const auto& ref = cell.refs[j];
-                        // Resolve (linesAhead, primIndex) to global prim index
                         uint32_t baseLine = y + ref.linesAhead;
                         uint32_t globalPrimIdx = lineBasePrimIdx[baseLine] + ref.primIndex;
-                        _gridStaging[pos + 1 + j] = globalPrimIdx;
+                        _gridStaging[pos + 1 + entryIdx] = globalPrimIdx;
+                        entryIdx++;
                     }
-                    pos += 1 + static_cast<uint32_t>(cell.refs.size());
-                } else {
-                    _gridStaging[pos] = 0;  // empty cell
-                    pos += 1;
                 }
+
+                // Add glyph entries with GLYPH_BIT (0x80000000) set
+                for (uint32_t gi : cellGlyphs[cellIdx]) {
+                    _gridStaging[pos + 1 + entryIdx] = gi | 0x80000000u;
+                    entryIdx++;
+                }
+
+                pos += 1 + totalCount;
             }
         }
 
         _gridStagingDirty = false;
 
-        ydebug("rebuildPackedGridScrolling: grid={}x{} prims={} staging={} u32s",
-               gridW, gridH, totalPrims, _gridStaging.size());
+        ydebug("rebuildPackedGrid: grid={}x{} prims={} glyphs={} staging={} u32s",
+               gridW, gridH, totalPrims, _glyphs.size(), _gridStaging.size());
     }
 
     //=========================================================================

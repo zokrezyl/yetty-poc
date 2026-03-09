@@ -2239,19 +2239,21 @@ suite scrolling_tests = [] {
         // Now scroll 3 lines and verify gridOffsetRow is DECREMENTED
         builder->scrollLines(3);
 
-        // First 3 prims (Circle, Box, Triangle) should be gone
+        // Primitives removed when their baseLine (= primMaxLine) < 3
+        // baseLine = cursorRow + floor(maxY / cellSizeY)
+        // Circle: baseLine = 0 + 0 = 0 < 3 → REMOVED
+        // Box: baseLine = 1 + 1 = 2 < 3 → REMOVED
+        // Triangle: baseLine = 2 + 2 = 4 >= 3 → SURVIVES
+        // So only 2 prims removed, 12 survive
         uint32_t newPrimCount = builder->primitiveCount();
-        expect(newPrimCount == primInfos.size() - 3)
-            << "After scroll 3, should have " << (primInfos.size() - 3) << " prims, got " << newPrimCount;
+        expect(newPrimCount == primInfos.size() - 2)
+            << "After scroll 3, should have " << (primInfos.size() - 2) << " prims, got " << newPrimCount;
 
         // Rebuild staging
         primStaging.clear();
         builder->buildPrimStaging(primStaging);
 
         // Verify remaining prims have decremented rows
-        // Segment was at row 3, now should be 0
-        // Ellipse was at row 4, now should be 1
-        // etc.
         std::vector<std::pair<int16_t, uint32_t>> rowsAndTypes;
         for (uint32_t i = 0; i < newPrimCount; i++) {
             uint32_t offset = primStaging[i];
@@ -2267,7 +2269,8 @@ suite scrolling_tests = [] {
         // Sort by row for predictable order
         std::sort(rowsAndTypes.begin(), rowsAndTypes.end());
 
-        // Expected after scroll 3:
+        // Expected after scroll 3 (gridOffset = original cursorRow - 3):
+        // Triangle (type 3) was row 2, now row -1
         // Segment (type 2) was row 3, now row 0
         // Ellipse (type 6) was row 4, now row 1
         // RoundedBox (type 8) was row 5, now row 2
@@ -2281,6 +2284,7 @@ suite scrolling_tests = [] {
         // Capsule (type 18) was row 13, now row 10
 
         std::vector<std::pair<int16_t, uint32_t>> expected = {
+            {-1, 3},  // Triangle
             {0, 2},   // Segment
             {1, 6},   // Ellipse
             {2, 8},   // RoundedBox
@@ -2309,7 +2313,10 @@ suite scrolling_tests = [] {
         // Scroll 5 more lines and verify
         builder->scrollLines(5);
         newPrimCount = builder->primitiveCount();
-        expect(newPrimCount == 6_u) << "After scroll 8 total, should have 6 prims";
+        // After scroll 3, baseLines were (original - 3): Triangle=1, Segment=3, Ellipse=5, ...
+        // Scroll 5 more removes baseLine < 5: Triangle(1), Segment(3) removed
+        // 10 primitives survive
+        expect(newPrimCount == 10_u) << "After scroll 8 total, should have 10 prims";
 
         primStaging.clear();
         builder->buildPrimStaging(primStaging);
@@ -2328,15 +2335,23 @@ suite scrolling_tests = [] {
         }
         std::sort(rowsAndTypes.begin(), rowsAndTypes.end());
 
-        // After 8 total scrolls:
-        // Rhombus (type 9) was row 6 (after first scroll), now row 1
-        // Heart (type 15) was row 7, now row 2
-        // Cross (type 16) was row 8, now row 3
-        // Ring (type 14) was row 9, now row 4
-        // Capsule (type 18) was row 10, now row 5
-        // Star (type 12) was row 5, now row 0
+        // After 8 total scrolls (gridOffset = original cursorRow - 8):
+        // Ellipse (type 6) was row 4, now row -4
+        // RoundedBox (type 8) was row 5, now row -3
+        // Pentagon (type 10) was row 6, now row -2
+        // Hexagon (type 11) was row 7, now row -1
+        // Star (type 12) was row 8, now row 0
+        // Rhombus (type 9) was row 9, now row 1
+        // Heart (type 15) was row 10, now row 2
+        // Cross (type 16) was row 11, now row 3
+        // Ring (type 14) was row 12, now row 4
+        // Capsule (type 18) was row 13, now row 5
         expected = {
-            {0, 12},  // Star (was row 5 after first scroll, now 0)
+            {-4, 6},  // Ellipse
+            {-3, 8},  // RoundedBox
+            {-2, 10}, // Pentagon
+            {-1, 11}, // Hexagon
+            {0, 12},  // Star
             {1, 9},   // Rhombus
             {2, 15},  // Heart
             {3, 16},  // Cross
@@ -2554,26 +2569,31 @@ suite scrolling_tests = [] {
         }
 
         // Step 5: Scroll 3 more lines (total 5)
+        // Box baseLine=6 > 5 → survives
+        // Triangle baseLine=10 > 5 → survives
         {
             builder->scrollLines(3);
 
             std::vector<uint32_t> staging;
             builder->buildPrimStaging(staging);
             uint32_t count = builder->primitiveCount();
-            expect(count == 1_u) << "Step 5: Box should be gone, only Triangle remains";
+            expect(count == 2_u) << "Step 5: Both Box and Triangle survive";
 
-            // Triangle was at row 5, after scroll 3 (total 5 from start, but
-            // we scrolled 2 earlier, so now scroll 3 more = triangle at row 5-3=2)
-            uint32_t primBase = 1 + staging[0];
-            uint32_t type = staging[primBase + 1];
-            uint32_t packed = staging[primBase + 0];
-            int16_t row = static_cast<int16_t>((packed >> 16) & 0xFFFF);
+            std::map<uint32_t, int16_t> typeToRow;
+            for (uint32_t i = 0; i < count; i++) {
+                uint32_t primBase = count + staging[i];
+                uint32_t type = staging[primBase + 1];
+                uint32_t packed = staging[primBase + 0];
+                int16_t row = static_cast<int16_t>((packed >> 16) & 0xFFFF);
+                typeToRow[type] = row;
+            }
 
-            expect(type == 3_u) << "Step 5: Remaining should be Triangle";
-            expect(row == 2_i) << "Step 5: Triangle row should be 2 (was 5, scrolled 3)";
+            expect(typeToRow[1] == -2_i) << "Step 5: Box row should be -2 (was 3, scrolled 5)";
+            expect(typeToRow[3] == 2_i) << "Step 5: Triangle row should be 2 (was 5, scrolled 3)";
         }
 
         // Step 6: Add Ellipse at row 8, Pentagon at row 9
+        // Now have: Box (baseLine=6), Triangle (baseLine=10), Ellipse (baseLine=16), Pentagon (baseLine=18)
         {
             auto buf = *YDrawBuffer::create();
             buf->addEllipse(0, 50, 170, 10, 5, 0xFF00FFFF, 0, 0, 0);
@@ -2587,31 +2607,36 @@ suite scrolling_tests = [] {
 
             std::vector<uint32_t> staging;
             builder->buildPrimStaging(staging);
-            expect(builder->primitiveCount() == 3_u);
+            expect(builder->primitiveCount() == 4_u);
 
-            // Verify all three prims
+            // Verify all four prims
             std::map<uint32_t, int16_t> typeToRow;
-            for (uint32_t i = 0; i < 3; i++) {
-                uint32_t primBase = 3 + staging[i];
+            for (uint32_t i = 0; i < 4; i++) {
+                uint32_t primBase = 4 + staging[i];
                 uint32_t type = staging[primBase + 1];
                 uint32_t packed = staging[primBase + 0];
                 int16_t row = static_cast<int16_t>((packed >> 16) & 0xFFFF);
                 typeToRow[type] = row;
             }
 
+            expect(typeToRow[1] == -2_i) << "Step 6: Box row should be -2";
             expect(typeToRow[3] == 2_i) << "Step 6: Triangle row should be 2";
             expect(typeToRow[6] == 8_i) << "Step 6: Ellipse row should be 8";
             expect(typeToRow[10] == 9_i) << "Step 6: Pentagon row should be 9";
         }
 
-        // Step 7: Scroll 5 lines
+        // Step 7: Scroll 5 lines (total 10)
+        // Box baseLine=6 < 10 → REMOVED
+        // Triangle baseLine=10 = 10 → survives (pop_front removes 0-9, index 10 remains)
+        // Ellipse baseLine=16 > 10 → survives
+        // Pentagon baseLine=18 > 10 → survives
         {
             builder->scrollLines(5);
 
             std::vector<uint32_t> staging;
             builder->buildPrimStaging(staging);
             uint32_t count = builder->primitiveCount();
-            expect(count == 2_u) << "Step 7: Triangle gone, Ellipse and Pentagon remain";
+            expect(count == 3_u) << "Step 7: Box gone, Triangle/Ellipse/Pentagon remain";
 
             std::map<uint32_t, int16_t> typeToRow;
             for (uint32_t i = 0; i < count; i++) {
@@ -2622,6 +2647,7 @@ suite scrolling_tests = [] {
                 typeToRow[type] = row;
             }
 
+            expect(typeToRow[3] == -3_i) << "Step 7: Triangle row should be -3 (was 2, scroll 5)";
             expect(typeToRow[6] == 3_i) << "Step 7: Ellipse row should be 3 (was 8, scroll 5)";
             expect(typeToRow[10] == 4_i) << "Step 7: Pentagon row should be 4 (was 9, scroll 5)";
         }
