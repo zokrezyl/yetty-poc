@@ -827,8 +827,8 @@ Result<void> ShaderManagerImpl::createPipelineResources() {
     memcpy(mapped, quadVertices, sizeof(quadVertices));
     wgpuBufferUnmap(_quadVertexBuffer);
 
-    // 2. Create grid bind group layout (19 bindings: 15 grid + 4 overlay)
-    WGPUBindGroupLayoutEntry entries[19] = {};
+    // 2. Create grid bind group layout (23 bindings: 15 grid + 4 absolute overlay + 4 scrolling overlay)
+    WGPUBindGroupLayoutEntry entries[23] = {};
 
     // 0: Grid uniforms
     entries[0].binding = 0;
@@ -928,8 +928,28 @@ Result<void> ShaderManagerImpl::createPipelineResources() {
     entries[18].visibility = WGPUShaderStage_Fragment;
     entries[18].buffer.type = WGPUBufferBindingType_Uniform;
 
+    // 19: Scrolling overlay grid data SSBO
+    entries[19].binding = 19;
+    entries[19].visibility = WGPUShaderStage_Fragment;
+    entries[19].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
+
+    // 20: Scrolling overlay glyph buffer SSBO
+    entries[20].binding = 20;
+    entries[20].visibility = WGPUShaderStage_Fragment;
+    entries[20].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
+
+    // 21: Scrolling overlay storage (primitive data) SSBO
+    entries[21].binding = 21;
+    entries[21].visibility = WGPUShaderStage_Fragment;
+    entries[21].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
+
+    // 22: Scrolling overlay uniforms
+    entries[22].binding = 22;
+    entries[22].visibility = WGPUShaderStage_Fragment;
+    entries[22].buffer.type = WGPUBufferBindingType_Uniform;
+
     WGPUBindGroupLayoutDescriptor layoutDesc = {};
-    layoutDesc.entryCount = 19;
+    layoutDesc.entryCount = 23;
     layoutDesc.entries = entries;
     _gridBindGroupLayout = wgpuDeviceCreateBindGroupLayout(device, &layoutDesc);
     if (!_gridBindGroupLayout) {

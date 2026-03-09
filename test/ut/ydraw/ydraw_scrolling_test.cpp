@@ -24,6 +24,7 @@
 #include <cstring>
 #include <cmath>
 #include <map>
+#include <set>
 #include <vector>
 
 using namespace boost::ut;
@@ -1092,5 +1093,665 @@ suite scrolling_tests = [] {
         expect(res.has_value()) << "allocateBuffers should succeed after partial scroll";
         res = builder->writeBuffers();
         expect(res.has_value()) << "writeBuffers should succeed after partial scroll";
+    };
+
+    //=========================================================================
+    // GPU BUFFER LAYOUT VERIFICATION TESTS
+    // These tests verify the EXACT format of gridStaging() and primitive data
+    // that the shader will read. Critical for catching rendering bugs.
+    //=========================================================================
+
+    "gpu_layout_grid_staging_format"_test = [] {
+        auto cardMgr = std::make_shared<MockCardManager>();
+        auto gpuAlloc = testAllocator();
+
+        auto builder = *YDrawBuilder::create(
+            FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
+
+        const uint32_t VISIBLE_LINES = 5;
+        const float CELL_HEIGHT = 20.0f;
+        const float CELL_WIDTH = 10.0f;
+        builder->setSceneBounds(0, 0, 100, VISIBLE_LINES * CELL_HEIGHT);
+        builder->setGridCellSize(CELL_WIDTH, CELL_HEIGHT);
+
+        // Add one shape at line 0
+        builder->setCursorPosition(0, 0);
+        auto buf = createShapeSpanningLines(1, CELL_HEIGHT);
+        builder->addYdrawBuffer(buf);
+
+        // Get grid staging
+        const auto& grid = builder->gridStaging();
+        uint32_t gridW = builder->gridWidth();
+        uint32_t gridH = builder->gridHeight();
+        uint32_t numCells = gridW * gridH;
+
+        expect(grid.size() > numCells) << "Grid staging should have offsets + entries";
+        expect(gridW > 0_u) << "Grid width should be > 0";
+        expect(gridH > 0_u) << "Grid height should be > 0";
+
+        // First numCells entries are offsets into packed data
+        // Each offset should point to a valid position in the array
+        for (uint32_t i = 0; i < numCells; i++) {
+            uint32_t offset = grid[i];
+            expect(offset >= numCells) << "Cell " << i << " offset " << offset
+                                       << " should be >= numCells " << numCells;
+            expect(offset < grid.size()) << "Cell " << i << " offset " << offset
+                                         << " should be < grid.size " << grid.size();
+        }
+
+        // At each offset, first entry is count, followed by that many prim indices
+        for (uint32_t i = 0; i < numCells; i++) {
+            uint32_t offset = grid[i];
+            uint32_t count = grid[offset];
+            // Verify we have enough space for count + indices
+            expect(offset + 1 + count <= grid.size())
+                << "Cell " << i << " at offset " << offset << " with count " << count
+                << " overflows grid.size " << grid.size();
+        }
+    };
+
+    "gpu_layout_verify_prim_indices_valid"_test = [] {
+        auto cardMgr = std::make_shared<MockCardManager>();
+        auto gpuAlloc = testAllocator();
+
+        auto builder = *YDrawBuilder::create(
+            FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
+
+        const uint32_t VISIBLE_LINES = 10;
+        const float CELL_HEIGHT = 20.0f;
+        builder->setSceneBounds(0, 0, 200, VISIBLE_LINES * CELL_HEIGHT);
+        builder->setGridCellSize(20.0f, CELL_HEIGHT);
+
+        // Add 5 shapes
+        for (uint32_t i = 0; i < 5; i++) {
+            builder->setCursorPosition(0, static_cast<uint16_t>(i * 2));
+            auto buf = createShapeSpanningLines(1, CELL_HEIGHT);
+            builder->addYdrawBuffer(buf);
+        }
+
+        const auto& grid = builder->gridStaging();
+        uint32_t gridW = builder->gridWidth();
+        uint32_t gridH = builder->gridHeight();
+        uint32_t numCells = gridW * gridH;
+        uint32_t primCount = builder->primitiveCount();
+
+        expect(primCount == 5_u) << "Should have 5 primitives";
+
+        // Verify all primitive indices in grid cells are < primCount
+        for (uint32_t cellIdx = 0; cellIdx < numCells; cellIdx++) {
+            uint32_t offset = grid[cellIdx];
+            uint32_t count = grid[offset];
+            for (uint32_t j = 0; j < count; j++) {
+                uint32_t primIdx = grid[offset + 1 + j];
+                // Check if it's a glyph (high bit set) or primitive
+                if ((primIdx & 0x80000000u) == 0) {
+                    expect(primIdx < primCount)
+                        << "Cell " << cellIdx << " entry " << j
+                        << " has invalid primIdx " << primIdx
+                        << " >= primCount " << primCount;
+                }
+            }
+        }
+    };
+
+    "gpu_layout_after_scroll_grid_valid"_test = [] {
+        auto cardMgr = std::make_shared<MockCardManager>();
+        auto gpuAlloc = testAllocator();
+
+        auto builder = *YDrawBuilder::create(
+            FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
+
+        const uint32_t VISIBLE_LINES = 10;
+        const float CELL_HEIGHT = 20.0f;
+        builder->setSceneBounds(0, 0, 200, VISIBLE_LINES * CELL_HEIGHT);
+        builder->setGridCellSize(20.0f, CELL_HEIGHT);
+
+        // Add 10 shapes, one per line
+        for (uint32_t i = 0; i < 10; i++) {
+            builder->setCursorPosition(0, static_cast<uint16_t>(i));
+            auto buf = createShapeSpanningLines(1, CELL_HEIGHT);
+            builder->addYdrawBuffer(buf);
+        }
+
+        expect(builder->primitiveCount() == 10_u);
+
+        // Scroll 3 lines
+        builder->scrollLines(3);
+        expect(builder->primitiveCount() == 7_u);
+
+        // Verify grid is still valid after scroll
+        const auto& grid = builder->gridStaging();
+        uint32_t gridW = builder->gridWidth();
+        uint32_t gridH = builder->gridHeight();
+        uint32_t numCells = gridW * gridH;
+        uint32_t primCount = builder->primitiveCount();
+
+        expect(grid.size() > 0_u) << "Grid should not be empty after scroll";
+
+        // Verify all offsets are valid
+        for (uint32_t i = 0; i < numCells && i < grid.size(); i++) {
+            uint32_t offset = grid[i];
+            expect(offset < grid.size())
+                << "After scroll: cell " << i << " offset " << offset
+                << " >= grid.size " << grid.size();
+
+            if (offset < grid.size()) {
+                uint32_t count = grid[offset];
+                expect(offset + 1 + count <= grid.size())
+                    << "After scroll: cell " << i << " overflow";
+
+                // Verify prim indices
+                for (uint32_t j = 0; j < count; j++) {
+                    uint32_t primIdx = grid[offset + 1 + j];
+                    if ((primIdx & 0x80000000u) == 0) {
+                        expect(primIdx < primCount)
+                            << "After scroll: cell " << i << " has invalid primIdx "
+                            << primIdx << " >= " << primCount;
+                    }
+                }
+            }
+        }
+    };
+
+    "gpu_layout_prim_row_offset_after_scroll"_test = [] {
+        auto cardMgr = std::make_shared<MockCardManager>();
+        auto gpuAlloc = testAllocator();
+
+        auto builder = *YDrawBuilder::create(
+            FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
+
+        const uint32_t VISIBLE_LINES = 10;
+        const float CELL_HEIGHT = 20.0f;
+        builder->setSceneBounds(0, 0, 200, VISIBLE_LINES * CELL_HEIGHT);
+        builder->setGridCellSize(20.0f, CELL_HEIGHT);
+
+        // Add shape at row 5
+        builder->setCursorPosition(0, 5);
+        auto buf = createShapeSpanningLines(1, CELL_HEIGHT);
+        builder->addYdrawBuffer(buf);
+
+        // Build to get primitive staging
+        std::vector<uint32_t> primStaging;
+        builder->buildPrimStaging(primStaging);
+
+        expect(primStaging.size() > 3_u) << "Prim staging should have header data";
+
+        // Primitive format: [0]=type, [1]=layer, [2]=packed(col|row<<16), ...
+        // After addYdrawBuffer at row 5, row should be 5
+        uint32_t packed = primStaging[2];
+        int16_t initialRow = static_cast<int16_t>((packed >> 16) & 0xFFFF);
+        expect(initialRow == 5_i) << "Initial row should be 5, got " << initialRow;
+
+        // Now scroll 2 lines
+        builder->scrollLines(2);
+
+        // Rebuild prim staging
+        primStaging.clear();
+        builder->buildPrimStaging(primStaging);
+
+        // Row should now be 3 (5 - 2 = 3)
+        packed = primStaging[2];
+        int16_t newRow = static_cast<int16_t>((packed >> 16) & 0xFFFF);
+        expect(newRow == 3_i) << "After scroll 2, row should be 3, got " << newRow;
+
+        // Scroll 4 more lines (row becomes -1)
+        builder->scrollLines(4);
+
+        primStaging.clear();
+        builder->buildPrimStaging(primStaging);
+
+        packed = primStaging[2];
+        int16_t negRow = static_cast<int16_t>((packed >> 16) & 0xFFFF);
+        expect(negRow == -1_i) << "After scroll 6 total, row should be -1, got " << negRow;
+    };
+
+    "gpu_layout_incremental_add_verify_each_step"_test = [] {
+        auto cardMgr = std::make_shared<MockCardManager>();
+        auto gpuAlloc = testAllocator();
+
+        auto builder = *YDrawBuilder::create(
+            FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
+
+        const uint32_t VISIBLE_LINES = 10;
+        const float CELL_HEIGHT = 20.0f;
+        builder->setSceneBounds(0, 0, 200, VISIBLE_LINES * CELL_HEIGHT);
+        builder->setGridCellSize(20.0f, CELL_HEIGHT);
+
+        // Add shapes one by one and verify grid after each
+        for (uint32_t i = 0; i < 5; i++) {
+            builder->setCursorPosition(0, static_cast<uint16_t>(i * 2));
+            auto buf = createShapeSpanningLines(1, CELL_HEIGHT);
+            builder->addYdrawBuffer(buf);
+
+            // Verify grid after this add
+            const auto& grid = builder->gridStaging();
+            uint32_t primCount = builder->primitiveCount();
+
+            expect(primCount == i + 1)
+                << "After add " << i << ", primCount should be " << (i + 1)
+                << ", got " << primCount;
+
+            expect(grid.size() > 0_u)
+                << "After add " << i << ", grid should not be empty";
+
+            // Verify structure
+            uint32_t gridW = builder->gridWidth();
+            uint32_t gridH = builder->gridHeight();
+            uint32_t numCells = gridW * gridH;
+
+            for (uint32_t c = 0; c < numCells && c < grid.size(); c++) {
+                uint32_t offset = grid[c];
+                expect(offset < grid.size())
+                    << "Add " << i << " cell " << c << " bad offset";
+            }
+        }
+    };
+
+    "gpu_layout_scroll_step_by_step_verify"_test = [] {
+        auto cardMgr = std::make_shared<MockCardManager>();
+        auto gpuAlloc = testAllocator();
+
+        auto builder = *YDrawBuilder::create(
+            FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
+
+        const uint32_t VISIBLE_LINES = 5;
+        const float CELL_HEIGHT = 20.0f;
+        builder->setSceneBounds(0, 0, 100, VISIBLE_LINES * CELL_HEIGHT);
+        builder->setGridCellSize(10.0f, CELL_HEIGHT);
+
+        // Add 5 shapes, one per line
+        for (uint32_t i = 0; i < 5; i++) {
+            builder->setCursorPosition(0, static_cast<uint16_t>(i));
+            auto buf = createShapeSpanningLines(1, CELL_HEIGHT);
+            builder->addYdrawBuffer(buf);
+        }
+
+        expect(builder->primitiveCount() == 5_u);
+
+        // Scroll one line at a time and verify grid each time
+        for (uint32_t scrolled = 1; scrolled <= 5; scrolled++) {
+            builder->scrollLines(1);
+
+            uint32_t expectedPrims = 5 - scrolled;
+            expect(builder->primitiveCount() == expectedPrims)
+                << "After scrolling " << scrolled << " lines, expected "
+                << expectedPrims << " prims, got " << builder->primitiveCount();
+
+            const auto& grid = builder->gridStaging();
+
+            if (expectedPrims > 0) {
+                expect(grid.size() > 0_u)
+                    << "After scroll " << scrolled << ", grid should not be empty";
+
+                // Verify grid structure
+                uint32_t gridW = builder->gridWidth();
+                uint32_t gridH = builder->gridHeight();
+                uint32_t numCells = gridW * gridH;
+
+                for (uint32_t c = 0; c < numCells && c < grid.size(); c++) {
+                    uint32_t offset = grid[c];
+                    expect(offset < grid.size())
+                        << "Scroll " << scrolled << " cell " << c
+                        << " offset " << offset << " >= " << grid.size();
+
+                    if (offset < grid.size()) {
+                        uint32_t count = grid[offset];
+                        for (uint32_t j = 0; j < count; j++) {
+                            uint32_t primIdx = grid[offset + 1 + j];
+                            if ((primIdx & 0x80000000u) == 0) {
+                                expect(primIdx < expectedPrims)
+                                    << "Scroll " << scrolled << " cell " << c
+                                    << " primIdx " << primIdx << " >= " << expectedPrims;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    };
+
+    "gpu_layout_multiline_shape_grid_coverage"_test = [] {
+        auto cardMgr = std::make_shared<MockCardManager>();
+        auto gpuAlloc = testAllocator();
+
+        auto builder = *YDrawBuilder::create(
+            FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
+
+        const uint32_t VISIBLE_LINES = 10;
+        const float CELL_HEIGHT = 20.0f;
+        const float CELL_WIDTH = 50.0f;
+        builder->setSceneBounds(0, 0, 100, VISIBLE_LINES * CELL_HEIGHT);
+        builder->setGridCellSize(CELL_WIDTH, CELL_HEIGHT);
+
+        // Add shape spanning lines 2-5 (4 lines)
+        builder->setCursorPosition(0, 2);
+        auto buf = createShapeSpanningLines(4, CELL_HEIGHT);
+        builder->addYdrawBuffer(buf);
+
+        const auto& grid = builder->gridStaging();
+        uint32_t gridW = builder->gridWidth();
+        uint32_t gridH = builder->gridHeight();
+
+        expect(gridH >= 6_u) << "Grid should have at least 6 rows for shape at lines 2-5";
+
+        // The shape should appear in cells for rows 2, 3, 4, 5
+        // Check that at least one cell in each of those rows references the prim
+        for (uint32_t row = 2; row < 6 && row < gridH; row++) {
+            bool foundInRow = false;
+            for (uint32_t col = 0; col < gridW; col++) {
+                uint32_t cellIdx = row * gridW + col;
+                if (cellIdx < grid.size()) {
+                    uint32_t offset = grid[cellIdx];
+                    if (offset < grid.size()) {
+                        uint32_t count = grid[offset];
+                        if (count > 0) {
+                            foundInRow = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            expect(foundInRow) << "Shape should be referenced in row " << row;
+        }
+    };
+
+    "gpu_layout_stress_50_shapes_verify_all"_test = [] {
+        auto cardMgr = std::make_shared<MockCardManager>();
+        auto gpuAlloc = testAllocator();
+
+        auto builder = *YDrawBuilder::create(
+            FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
+
+        const uint32_t VISIBLE_LINES = 20;
+        const float CELL_HEIGHT = 20.0f;
+        builder->setSceneBounds(0, 0, 400, VISIBLE_LINES * CELL_HEIGHT);
+        builder->setGridCellSize(20.0f, CELL_HEIGHT);
+
+        std::mt19937 rng(12345);
+        std::uniform_int_distribution<uint32_t> lineDist(1, 3);
+        uint32_t cursorRow = 0;
+
+        // Add 50 shapes with scrolling, verify grid after each
+        for (uint32_t i = 0; i < 50; i++) {
+            uint32_t lines = lineDist(rng);
+
+            // Scroll if needed
+            while (cursorRow + lines > VISIBLE_LINES && cursorRow > 0) {
+                builder->scrollLines(1);
+                cursorRow--;
+            }
+
+            builder->setCursorPosition(0, static_cast<uint16_t>(cursorRow));
+            auto buf = createShapeSpanningLines(lines, CELL_HEIGHT);
+            auto res = builder->addYdrawBuffer(buf);
+            expect(res.has_value()) << "addYdrawBuffer failed at i=" << i;
+
+            cursorRow += lines;
+
+            // Verify grid integrity every 5 iterations
+            if (i % 5 == 0) {
+                const auto& grid = builder->gridStaging();
+                uint32_t primCount = builder->primitiveCount();
+                uint32_t gridW = builder->gridWidth();
+                uint32_t gridH = builder->gridHeight();
+                uint32_t numCells = gridW * gridH;
+
+                expect(primCount > 0_u) << "At i=" << i << " should have prims";
+
+                // Verify all cell offsets and prim indices
+                for (uint32_t c = 0; c < numCells && c < grid.size(); c++) {
+                    uint32_t offset = grid[c];
+                    expect(offset < grid.size())
+                        << "i=" << i << " cell " << c << " bad offset " << offset;
+
+                    if (offset < grid.size()) {
+                        uint32_t count = grid[offset];
+                        expect(offset + 1 + count <= grid.size())
+                            << "i=" << i << " cell " << c << " overflow";
+
+                        for (uint32_t j = 0; j < count; j++) {
+                            uint32_t primIdx = grid[offset + 1 + j];
+                            if ((primIdx & 0x80000000u) == 0) {
+                                expect(primIdx < primCount)
+                                    << "i=" << i << " cell " << c
+                                    << " invalid primIdx " << primIdx;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    };
+
+    "gpu_layout_uniforms_correct"_test = [] {
+        auto cardMgr = std::make_shared<MockCardManager>();
+        auto gpuAlloc = testAllocator();
+
+        auto builder = *YDrawBuilder::create(
+            FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
+
+        const float SCENE_W = 800.0f;
+        const float SCENE_H = 480.0f;
+        const float CELL_W = 10.0f;
+        const float CELL_H = 20.0f;
+
+        builder->setSceneBounds(0, 0, SCENE_W, SCENE_H);
+        builder->setGridCellSize(CELL_W, CELL_H);
+
+        // Add a shape to trigger grid creation
+        builder->setCursorPosition(0, 0);
+        auto buf = createShapeSpanningLines(1, CELL_H);
+        builder->addYdrawBuffer(buf);
+
+        // Verify uniforms match what shader expects
+        expect(std::abs(builder->sceneMinX() - 0.0f) < 0.01f);
+        expect(std::abs(builder->sceneMinY() - 0.0f) < 0.01f);
+        expect(std::abs(builder->sceneMaxX() - SCENE_W) < 0.01f);
+        expect(std::abs(builder->sceneMaxY() - SCENE_H) < 0.01f);
+        expect(std::abs(builder->cellSizeX() - CELL_W) < 0.01f);
+        expect(std::abs(builder->cellSizeY() - CELL_H) < 0.01f);
+
+        uint32_t expectedGridW = static_cast<uint32_t>(std::ceil(SCENE_W / CELL_W));
+        uint32_t expectedGridH = static_cast<uint32_t>(std::ceil(SCENE_H / CELL_H));
+
+        expect(builder->gridWidth() == expectedGridW)
+            << "Grid width should be " << expectedGridW << ", got " << builder->gridWidth();
+        expect(builder->gridHeight() == expectedGridH)
+            << "Grid height should be " << expectedGridH << ", got " << builder->gridHeight();
+    };
+
+    "gpu_layout_empty_after_full_scroll"_test = [] {
+        auto cardMgr = std::make_shared<MockCardManager>();
+        auto gpuAlloc = testAllocator();
+
+        auto builder = *YDrawBuilder::create(
+            FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
+
+        const uint32_t VISIBLE_LINES = 5;
+        const float CELL_HEIGHT = 20.0f;
+        builder->setSceneBounds(0, 0, 100, VISIBLE_LINES * CELL_HEIGHT);
+        builder->setGridCellSize(10.0f, CELL_HEIGHT);
+
+        // Add shapes
+        for (uint32_t i = 0; i < 5; i++) {
+            builder->setCursorPosition(0, static_cast<uint16_t>(i));
+            auto buf = createShapeSpanningLines(1, CELL_HEIGHT);
+            builder->addYdrawBuffer(buf);
+        }
+
+        // Scroll all out
+        builder->scrollLines(5);
+
+        expect(builder->primitiveCount() == 0_u);
+        expect(builder->hasContent() == false);
+
+        // Grid should be empty or have all zero counts
+        const auto& grid = builder->gridStaging();
+        // Empty grid is valid
+        if (!grid.empty()) {
+            uint32_t gridW = builder->gridWidth();
+            uint32_t gridH = builder->gridHeight();
+            uint32_t numCells = gridW * gridH;
+
+            uint32_t totalCount = 0;
+            for (uint32_t c = 0; c < numCells && c < grid.size(); c++) {
+                uint32_t offset = grid[c];
+                if (offset < grid.size()) {
+                    totalCount += grid[offset];
+                }
+            }
+            expect(totalCount == 0_u) << "After full scroll, total count should be 0";
+        }
+    };
+
+    "gpu_layout_prim_staging_matches_grid_refs"_test = [] {
+        auto cardMgr = std::make_shared<MockCardManager>();
+        auto gpuAlloc = testAllocator();
+
+        auto builder = *YDrawBuilder::create(
+            FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
+
+        const uint32_t VISIBLE_LINES = 10;
+        const float CELL_HEIGHT = 20.0f;
+        builder->setSceneBounds(0, 0, 200, VISIBLE_LINES * CELL_HEIGHT);
+        builder->setGridCellSize(20.0f, CELL_HEIGHT);
+
+        // Add 3 shapes at different positions
+        builder->setCursorPosition(0, 1);
+        builder->addYdrawBuffer(createShapeSpanningLines(1, CELL_HEIGHT));
+
+        builder->setCursorPosition(0, 5);
+        builder->addYdrawBuffer(createShapeSpanningLines(2, CELL_HEIGHT));
+
+        builder->setCursorPosition(0, 8);
+        builder->addYdrawBuffer(createShapeSpanningLines(1, CELL_HEIGHT));
+
+        // Get grid and prim staging
+        const auto& grid = builder->gridStaging();
+        std::vector<uint32_t> primStaging;
+        builder->buildPrimStaging(primStaging);
+
+        uint32_t primCount = builder->primitiveCount();
+        expect(primCount == 3_u);
+
+        // Collect all unique prim indices from grid
+        std::set<uint32_t> referencedPrims;
+        uint32_t gridW = builder->gridWidth();
+        uint32_t gridH = builder->gridHeight();
+        uint32_t numCells = gridW * gridH;
+
+        for (uint32_t c = 0; c < numCells && c < grid.size(); c++) {
+            uint32_t offset = grid[c];
+            if (offset < grid.size()) {
+                uint32_t count = grid[offset];
+                for (uint32_t j = 0; j < count; j++) {
+                    uint32_t primIdx = grid[offset + 1 + j];
+                    if ((primIdx & 0x80000000u) == 0) {
+                        referencedPrims.insert(primIdx);
+                    }
+                }
+            }
+        }
+
+        // All primitives should be referenced somewhere in grid
+        expect(referencedPrims.size() == primCount)
+            << "Grid should reference all " << primCount << " prims, but references "
+            << referencedPrims.size();
+
+        // Each referenced index should be < primCount
+        for (uint32_t idx : referencedPrims) {
+            expect(idx < primCount) << "Referenced prim " << idx << " >= primCount " << primCount;
+        }
+    };
+
+    "gpu_layout_scroll_preserves_relative_positions"_test = [] {
+        auto cardMgr = std::make_shared<MockCardManager>();
+        auto gpuAlloc = testAllocator();
+
+        auto builder = *YDrawBuilder::create(
+            FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
+
+        const uint32_t VISIBLE_LINES = 10;
+        const float CELL_HEIGHT = 20.0f;
+        builder->setSceneBounds(0, 0, 100, VISIBLE_LINES * CELL_HEIGHT);
+        builder->setGridCellSize(10.0f, CELL_HEIGHT);
+
+        // Add shapes at rows 0, 2, 4, 6, 8
+        for (uint32_t i = 0; i < 5; i++) {
+            builder->setCursorPosition(0, static_cast<uint16_t>(i * 2));
+            builder->addYdrawBuffer(createShapeSpanningLines(1, CELL_HEIGHT));
+        }
+
+        // Get initial row values
+        std::vector<int16_t> initialRows;
+        std::vector<uint32_t> primStaging;
+        builder->buildPrimStaging(primStaging);
+
+        // Primitive format: every prim has data starting at offset table position
+        // For scrolling mode, we need to extract row from each prim's word[2]
+        uint32_t primCount = builder->primitiveCount();
+        // primStaging format: [primCount offsets][primCount primitive data blocks]
+        // Each prim starts at primStaging[primCount + offset]
+        for (uint32_t i = 0; i < primCount; i++) {
+            uint32_t offset = primStaging[i];
+            uint32_t primBase = primCount + offset;
+            if (primBase + 2 < primStaging.size()) {
+                uint32_t packed = primStaging[primBase + 2];
+                int16_t row = static_cast<int16_t>((packed >> 16) & 0xFFFF);
+                initialRows.push_back(row);
+            }
+        }
+
+        expect(initialRows.size() == 5_u) << "Should have 5 initial rows";
+
+        // Scroll 2 lines
+        builder->scrollLines(2);
+
+        // Get new rows
+        primStaging.clear();
+        builder->buildPrimStaging(primStaging);
+
+        primCount = builder->primitiveCount();
+        expect(primCount == 4_u) << "After scroll 2, should have 4 prims (row 0 gone)";
+
+        // Remaining prims should have rows decreased by 2
+        // Original rows were 0, 2, 4, 6, 8
+        // After scroll 2: row 0 gone, remaining are -2 (gone), 0, 2, 4, 6
+        // But row 0 shape (at original row 0) is removed because baseLine 0 is popped
+        // Wait, let me think about this again...
+        // Shapes at rows 0, 2, 4, 6, 8
+        // scrollLines(2) pops 2 lines from front
+        // Shape at row 0: baseLine=0, gets popped
+        // Shape at row 2: baseLine=2, after scroll baseLine=0, row becomes 2-2=0
+        // Shape at row 4: baseLine=4, after scroll baseLine=2, row becomes 4-2=2
+        // etc.
+
+        // Actually the logic is: baseLine is the LINE in _scrollLines where prim is stored
+        // Row offset in primitive data is decremented by scroll amount
+
+        // After scrollLines(2), we expect 4 remaining prims with rows:
+        // original 2 -> 0, original 4 -> 2, original 6 -> 4, original 8 -> 6
+
+        std::vector<int16_t> newRows;
+        for (uint32_t i = 0; i < primCount; i++) {
+            uint32_t offset = primStaging[i];
+            uint32_t primBase = primCount + offset;
+            if (primBase + 2 < primStaging.size()) {
+                uint32_t packed = primStaging[primBase + 2];
+                int16_t row = static_cast<int16_t>((packed >> 16) & 0xFFFF);
+                newRows.push_back(row);
+            }
+        }
+
+        // The 4 remaining shapes should have rows 0, 2, 4, 6 (decremented from 2,4,6,8)
+        expect(newRows.size() == 4_u);
+        if (newRows.size() == 4) {
+            // Sort to compare
+            std::sort(newRows.begin(), newRows.end());
+            expect(newRows[0] == 0_i) << "First remaining row should be 0, got " << newRows[0];
+            expect(newRows[1] == 2_i) << "Second remaining row should be 2, got " << newRows[1];
+            expect(newRows[2] == 4_i) << "Third remaining row should be 4, got " << newRows[2];
+            expect(newRows[3] == 6_i) << "Fourth remaining row should be 6, got " << newRows[3];
+        }
     };
 };

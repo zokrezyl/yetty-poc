@@ -511,6 +511,8 @@ private:
   // YDraw overlay layers - absolute (OSC 666673) and scrolling (OSC 666674)
   YDrawBuilder::Ptr _ydrawAbsolute;      // Absolute positioning overlay
   YDrawBuilder::Ptr _ydrawScrolling;     // Scrolling mode (syncs with vterm)
+
+  // Absolute overlay GPU buffers (bindings 15-18)
   WGPUBuffer _ydrawGridBuffer = nullptr;
   WGPUBuffer _ydrawGlyphBuffer = nullptr;
   WGPUBuffer _ydrawPrimBuffer = nullptr;
@@ -518,6 +520,16 @@ private:
   uint32_t _ydrawGridBufferSize = 0;
   uint32_t _ydrawGlyphBufferSize = 0;
   uint32_t _ydrawPrimBufferSize = 0;
+
+  // Scrolling overlay GPU buffers (bindings 19-22)
+  WGPUBuffer _scrollingGridBuffer = nullptr;
+  WGPUBuffer _scrollingGlyphBuffer = nullptr;
+  WGPUBuffer _scrollingPrimBuffer = nullptr;
+  WGPUBuffer _scrollingUniformBuffer = nullptr;
+  uint32_t _scrollingGridBufferSize = 0;
+  uint32_t _scrollingGlyphBufferSize = 0;
+  uint32_t _scrollingPrimBufferSize = 0;
+
   bool _ydrawDirty = false;
 
   // Rendering - GPU resources (shared resources come from ShaderManager)
@@ -5426,7 +5438,7 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
       bmMetadataSize = _msdfFont->atlas()->getBufferGlyphCount() * sizeof(GlyphMetadataGPU);
     }
 
-    WGPUBindGroupEntry bgEntries[19] = {};  // 15 grid + 4 overlay
+    WGPUBindGroupEntry bgEntries[23] = {};  // 15 grid + 4 absolute overlay + 4 scrolling overlay
 
     bgEntries[0].binding = 0;
     bgEntries[0].buffer = _uniformBuffer;
@@ -5516,31 +5528,35 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
         bgEntries[14].size = 8;  // Minimum size
     }
 
-    // Overlay bindings (15-18)
-    // Prepare overlay buffers if available, otherwise use fallback
-    bool hasOverlay = (_ydrawAbsolute && _ydrawAbsolute->hasContent()) ||
-                      (_ydrawScrolling && _ydrawScrolling->hasContent());
-    if (hasOverlay) {
-        // Prefer absolute overlay, fallback to scrolling
-        YDrawBuilder::Ptr builder = (_ydrawAbsolute && _ydrawAbsolute->hasContent())
-                                    ? _ydrawAbsolute : _ydrawScrolling;
+    // Overlay uniform struct used for both absolute and scrolling overlays
+    struct OverlayUniforms {
+        float sceneMinX, sceneMinY, sceneMaxX, sceneMaxY;
+        uint32_t gridWidth, gridHeight;
+        float cellSizeX, cellSizeY;
+        uint32_t primCount, glyphCount;
+        float pixelRange;
+        uint32_t hasOverlay;
+    };
 
-        // Build staging data
-        const auto& gridStaging = builder->gridStaging();
-        const auto& glyphs = builder->glyphs();
+    // ============================================================
+    // ABSOLUTE OVERLAY bindings (15-18) - fixed position on screen
+    // ============================================================
+    bool hasAbsolute = _ydrawAbsolute && _ydrawAbsolute->hasContent();
+    if (hasAbsolute) {
+        const auto& gridStaging = _ydrawAbsolute->gridStaging();
+        const auto& glyphs = _ydrawAbsolute->glyphs();
         std::vector<uint32_t> primStaging;
-        builder->buildPrimStaging(primStaging);
+        _ydrawAbsolute->buildPrimStaging(primStaging);
 
-        // Create/resize GPU buffers as needed
         uint32_t gridSize = std::max(static_cast<uint32_t>(gridStaging.size() * sizeof(uint32_t)), 4u);
         uint32_t glyphSize = std::max(static_cast<uint32_t>(glyphs.size() * sizeof(YDrawGlyph)), 4u);
         uint32_t primSize = std::max(static_cast<uint32_t>(primStaging.size() * sizeof(uint32_t)), 4u);
 
-        // Recreate buffers if sizes changed
+        // Recreate absolute overlay buffers if sizes changed
         if (gridSize > _ydrawGridBufferSize) {
             if (_ydrawGridBuffer) wgpuBufferRelease(_ydrawGridBuffer);
             WGPUBufferDescriptor desc{};
-            desc.label = WGPU_STR("ydraw-grid");
+            desc.label = WGPU_STR("ydraw-absolute-grid");
             desc.size = gridSize;
             desc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
             _ydrawGridBuffer = wgpuDeviceCreateBuffer(device, &desc);
@@ -5549,7 +5565,7 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
         if (glyphSize > _ydrawGlyphBufferSize) {
             if (_ydrawGlyphBuffer) wgpuBufferRelease(_ydrawGlyphBuffer);
             WGPUBufferDescriptor desc{};
-            desc.label = WGPU_STR("ydraw-glyph");
+            desc.label = WGPU_STR("ydraw-absolute-glyph");
             desc.size = glyphSize;
             desc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
             _ydrawGlyphBuffer = wgpuDeviceCreateBuffer(device, &desc);
@@ -5558,7 +5574,7 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
         if (primSize > _ydrawPrimBufferSize) {
             if (_ydrawPrimBuffer) wgpuBufferRelease(_ydrawPrimBuffer);
             WGPUBufferDescriptor desc{};
-            desc.label = WGPU_STR("ydraw-prim");
+            desc.label = WGPU_STR("ydraw-absolute-prim");
             desc.size = primSize;
             desc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
             _ydrawPrimBuffer = wgpuDeviceCreateBuffer(device, &desc);
@@ -5566,13 +5582,13 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
         }
         if (!_ydrawUniformBuffer) {
             WGPUBufferDescriptor desc{};
-            desc.label = WGPU_STR("ydraw-uniform");
+            desc.label = WGPU_STR("ydraw-absolute-uniform");
             desc.size = 48;
             desc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
             _ydrawUniformBuffer = wgpuDeviceCreateBuffer(device, &desc);
         }
 
-        // Write data to buffers
+        // Write absolute overlay data to GPU
         if (!gridStaging.empty()) {
             wgpuQueueWriteBuffer(queue, _ydrawGridBuffer, 0,
                                  gridStaging.data(), gridStaging.size() * sizeof(uint32_t));
@@ -5586,20 +5602,12 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
                                  primStaging.data(), primStaging.size() * sizeof(uint32_t));
         }
 
-        // Write uniform data
-        struct OverlayUniforms {
-            float sceneMinX, sceneMinY, sceneMaxX, sceneMaxY;
-            uint32_t gridWidth, gridHeight;
-            float cellSizeX, cellSizeY;
-            uint32_t primCount, glyphCount;
-            float pixelRange;
-            uint32_t hasOverlay;
-        } uniforms = {
-            builder->sceneMinX(), builder->sceneMinY(),
-            builder->sceneMaxX(), builder->sceneMaxY(),
-            builder->gridWidth(), builder->gridHeight(),
-            builder->cellSizeX(), builder->cellSizeY(),
-            builder->primitiveCount(), static_cast<uint32_t>(glyphs.size()),
+        OverlayUniforms uniforms = {
+            _ydrawAbsolute->sceneMinX(), _ydrawAbsolute->sceneMinY(),
+            _ydrawAbsolute->sceneMaxX(), _ydrawAbsolute->sceneMaxY(),
+            _ydrawAbsolute->gridWidth(), _ydrawAbsolute->gridHeight(),
+            _ydrawAbsolute->cellSizeX(), _ydrawAbsolute->cellSizeY(),
+            _ydrawAbsolute->primitiveCount(), static_cast<uint32_t>(glyphs.size()),
             4.0f, 1
         };
         wgpuQueueWriteBuffer(queue, _ydrawUniformBuffer, 0, &uniforms, sizeof(uniforms));
@@ -5620,8 +5628,7 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
         bgEntries[18].buffer = _ydrawUniformBuffer;
         bgEntries[18].size = 48;
     } else {
-        // No overlay - use placeholder buffers
-        // Bindings 15-17 are storage buffers, binding 18 is uniform
+        // No absolute overlay - use placeholder buffers
         bgEntries[15].binding = 15;
         bgEntries[15].buffer = _dummyStorageBuffer;
         bgEntries[15].size = 4;
@@ -5635,13 +5642,121 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
         bgEntries[17].size = 4;
 
         bgEntries[18].binding = 18;
-        bgEntries[18].buffer = _uniformBuffer;  // Uniform buffer for overlay uniforms
+        bgEntries[18].buffer = _uniformBuffer;  // Fallback to main uniform buffer
         bgEntries[18].size = 48;
+    }
+
+    // ============================================================
+    // SCROLLING OVERLAY bindings (19-22) - syncs with terminal scrolling
+    // ============================================================
+    bool hasScrolling = _ydrawScrolling && _ydrawScrolling->hasContent();
+    if (hasScrolling) {
+        const auto& gridStaging = _ydrawScrolling->gridStaging();
+        const auto& glyphs = _ydrawScrolling->glyphs();
+        std::vector<uint32_t> primStaging;
+        _ydrawScrolling->buildPrimStaging(primStaging);
+
+        uint32_t gridSize = std::max(static_cast<uint32_t>(gridStaging.size() * sizeof(uint32_t)), 4u);
+        uint32_t glyphSize = std::max(static_cast<uint32_t>(glyphs.size() * sizeof(YDrawGlyph)), 4u);
+        uint32_t primSize = std::max(static_cast<uint32_t>(primStaging.size() * sizeof(uint32_t)), 4u);
+
+        // Recreate scrolling overlay buffers if sizes changed
+        if (gridSize > _scrollingGridBufferSize) {
+            if (_scrollingGridBuffer) wgpuBufferRelease(_scrollingGridBuffer);
+            WGPUBufferDescriptor desc{};
+            desc.label = WGPU_STR("ydraw-scrolling-grid");
+            desc.size = gridSize;
+            desc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
+            _scrollingGridBuffer = wgpuDeviceCreateBuffer(device, &desc);
+            _scrollingGridBufferSize = gridSize;
+        }
+        if (glyphSize > _scrollingGlyphBufferSize) {
+            if (_scrollingGlyphBuffer) wgpuBufferRelease(_scrollingGlyphBuffer);
+            WGPUBufferDescriptor desc{};
+            desc.label = WGPU_STR("ydraw-scrolling-glyph");
+            desc.size = glyphSize;
+            desc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
+            _scrollingGlyphBuffer = wgpuDeviceCreateBuffer(device, &desc);
+            _scrollingGlyphBufferSize = glyphSize;
+        }
+        if (primSize > _scrollingPrimBufferSize) {
+            if (_scrollingPrimBuffer) wgpuBufferRelease(_scrollingPrimBuffer);
+            WGPUBufferDescriptor desc{};
+            desc.label = WGPU_STR("ydraw-scrolling-prim");
+            desc.size = primSize;
+            desc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
+            _scrollingPrimBuffer = wgpuDeviceCreateBuffer(device, &desc);
+            _scrollingPrimBufferSize = primSize;
+        }
+        if (!_scrollingUniformBuffer) {
+            WGPUBufferDescriptor desc{};
+            desc.label = WGPU_STR("ydraw-scrolling-uniform");
+            desc.size = 48;
+            desc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
+            _scrollingUniformBuffer = wgpuDeviceCreateBuffer(device, &desc);
+        }
+
+        // Write scrolling overlay data to GPU
+        if (!gridStaging.empty()) {
+            wgpuQueueWriteBuffer(queue, _scrollingGridBuffer, 0,
+                                 gridStaging.data(), gridStaging.size() * sizeof(uint32_t));
+        }
+        if (!glyphs.empty()) {
+            wgpuQueueWriteBuffer(queue, _scrollingGlyphBuffer, 0,
+                                 glyphs.data(), glyphs.size() * sizeof(YDrawGlyph));
+        }
+        if (!primStaging.empty()) {
+            wgpuQueueWriteBuffer(queue, _scrollingPrimBuffer, 0,
+                                 primStaging.data(), primStaging.size() * sizeof(uint32_t));
+        }
+
+        OverlayUniforms uniforms = {
+            _ydrawScrolling->sceneMinX(), _ydrawScrolling->sceneMinY(),
+            _ydrawScrolling->sceneMaxX(), _ydrawScrolling->sceneMaxY(),
+            _ydrawScrolling->gridWidth(), _ydrawScrolling->gridHeight(),
+            _ydrawScrolling->cellSizeX(), _ydrawScrolling->cellSizeY(),
+            _ydrawScrolling->primitiveCount(), static_cast<uint32_t>(glyphs.size()),
+            4.0f, 1
+        };
+        wgpuQueueWriteBuffer(queue, _scrollingUniformBuffer, 0, &uniforms, sizeof(uniforms));
+
+        bgEntries[19].binding = 19;
+        bgEntries[19].buffer = _scrollingGridBuffer;
+        bgEntries[19].size = gridSize;
+
+        bgEntries[20].binding = 20;
+        bgEntries[20].buffer = _scrollingGlyphBuffer;
+        bgEntries[20].size = glyphSize;
+
+        bgEntries[21].binding = 21;
+        bgEntries[21].buffer = _scrollingPrimBuffer;
+        bgEntries[21].size = primSize;
+
+        bgEntries[22].binding = 22;
+        bgEntries[22].buffer = _scrollingUniformBuffer;
+        bgEntries[22].size = 48;
+    } else {
+        // No scrolling overlay - use placeholder buffers
+        bgEntries[19].binding = 19;
+        bgEntries[19].buffer = _dummyStorageBuffer;
+        bgEntries[19].size = 4;
+
+        bgEntries[20].binding = 20;
+        bgEntries[20].buffer = _dummyStorageBuffer;
+        bgEntries[20].size = 4;
+
+        bgEntries[21].binding = 21;
+        bgEntries[21].buffer = _dummyStorageBuffer;
+        bgEntries[21].size = 4;
+
+        bgEntries[22].binding = 22;
+        bgEntries[22].buffer = _uniformBuffer;  // Fallback to main uniform buffer
+        bgEntries[22].size = 48;
     }
 
     WGPUBindGroupDescriptor bindGroupDesc = {};
     bindGroupDesc.layout = shaderMgr->getGridBindGroupLayout();
-    bindGroupDesc.entryCount = 19;
+    bindGroupDesc.entryCount = 23;  // 15 grid + 4 absolute overlay + 4 scrolling overlay
     bindGroupDesc.entries = bgEntries;
     _bindGroup = wgpuDeviceCreateBindGroup(device, &bindGroupDesc);
     if (!_bindGroup) {

@@ -146,12 +146,19 @@ struct Cell {
 @group(1) @binding(13) var rasterSampler: sampler;
 @group(1) @binding(14) var<storage, read> rasterMetadata: array<RasterGlyphUV>;
 
-// Overlay bindings (group 1 continued) - ydraw screen overlay
+// Overlay bindings (group 1 continued) - ydraw ABSOLUTE overlay (OSC 666673)
 // Uses _overlay variants of SDF functions from lib/sdf-types.gen.wgsl
 @group(1) @binding(15) var<storage, read> overlayGridData: array<u32>;
 @group(1) @binding(16) var<storage, read> overlayGlyphBuffer: array<f32>;
 @group(1) @binding(17) var<storage, read> overlayStorage: array<f32>;
 @group(1) @binding(18) var<uniform> overlay: OverlayUniforms;
+
+// Scrolling overlay bindings - ydraw SCROLLING overlay (OSC 666674)
+// Uses _scrolling variants of SDF functions from lib/sdf-types.gen.wgsl
+@group(1) @binding(19) var<storage, read> scrollingGridData: array<u32>;
+@group(1) @binding(20) var<storage, read> scrollingGlyphBuffer: array<f32>;
+@group(1) @binding(21) var<storage, read> scrollingStorage: array<f32>;
+@group(1) @binding(22) var<uniform> scrolling: OverlayUniforms;
 
 // Attribute bit masks (matches CellAttrs in grid.h)
 const ATTR_BOLD: u32 = 0x01u;           // Bit 0
@@ -730,6 +737,109 @@ fn evaluateOverlay(pixelPos: vec2<f32>) -> vec4<f32> {
     return vec4<f32>(resultColor, resultAlpha);
 }
 
+// ==== YDRAW SCROLLING OVERLAY EVALUATION ====
+// Uses _scrolling variants of SDF functions that read from scrollingStorage
+
+fn evaluateScrollingOverlay(pixelPos: vec2<f32>) -> vec4<f32> {
+    // Early exit if no scrolling overlay
+    if (scrolling.hasOverlay == 0u || scrolling.gridWidth == 0u || scrolling.gridHeight == 0u) {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+
+    let scenePos = pixelPos;  // 1:1 mapping for screen overlay
+
+    let invCellSizeX = select(0.0, 1.0 / scrolling.cellSizeX, scrolling.cellSizeX > 0.0);
+    let invCellSizeY = select(0.0, 1.0 / scrolling.cellSizeY, scrolling.cellSizeY > 0.0);
+    let contentMinX = scrolling.sceneMinX;
+    let contentMinY = scrolling.sceneMinY;
+
+    // O(1) grid lookup
+    let cellX = u32(clamp((scenePos.x - contentMinX) * invCellSizeX, 0.0, f32(scrolling.gridWidth - 1u)));
+    let cellY = u32(clamp((scenePos.y - contentMinY) * invCellSizeY, 0.0, f32(scrolling.gridHeight - 1u)));
+    let cellIndex = cellY * scrolling.gridWidth + cellX;
+
+    let packedStart = scrollingGridData[cellIndex];
+    let cellEntryCount = scrollingGridData[packedStart];
+    let loopCount = min(cellEntryCount, OVERLAY_MAX_ENTRIES_PER_CELL);
+
+    var resultColor = vec3<f32>(0.0, 0.0, 0.0);
+    var resultAlpha = 0.0;
+    let primDataBase = scrolling.primCount;
+
+    for (var i = 0u; i < loopCount; i++) {
+        let rawIdx = scrollingGridData[packedStart + 1u + i];
+
+        if ((rawIdx & OVERLAY_GLYPH_BIT) != 0u) {
+            // TEXT GLYPH (MSDF)
+            let gi = rawIdx & OVERLAY_INDEX_MASK;
+            let gOffset = gi * 5u;
+
+            let gx = scrollingGlyphBuffer[gOffset + 0u];
+            let gy = scrollingGlyphBuffer[gOffset + 1u];
+            let whPacked = bitcast<u32>(scrollingGlyphBuffer[gOffset + 2u]);
+            let gw = unpack2x16float(whPacked).x;
+            let gh = unpack2x16float(whPacked).y;
+            let glfPacked = bitcast<u32>(scrollingGlyphBuffer[gOffset + 3u]);
+            let gIdx = glfPacked & 0xFFFFu;
+            let gColorPacked = bitcast<u32>(scrollingGlyphBuffer[gOffset + 4u]);
+
+            if (scenePos.x >= gx && scenePos.x < gx + gw &&
+                scenePos.y >= gy && scenePos.y < gy + gh) {
+
+                let glyphUV = vec2<f32>(
+                    (scenePos.x - gx) / gw,
+                    (scenePos.y - gy) / gh
+                );
+                let gColor = unpackColor(gColorPacked);
+
+                // Sample MSDF from shared font atlas
+                let glyph = glyphMetadata[gIdx];
+                let uv = mix(glyph.uvMin, glyph.uvMax, glyphUV);
+                let msdf = textureSampleLevel(fontTexture, fontSampler, uv, 0.0);
+                let sd = median(msdf.r, msdf.g, msdf.b);
+                let pxDist = scrolling.pixelRange * (sd - 0.5);
+                let alpha = clamp(pxDist + 0.5, 0.0, 1.0);
+                if (alpha > 0.01) {
+                    resultColor = mix(resultColor, gColor, alpha);
+                    resultAlpha = max(resultAlpha, alpha);
+                }
+            }
+        } else {
+            // SDF PRIMITIVE - use _scrolling variants that read from scrollingStorage
+            let primOffset = bitcast<u32>(scrollingStorage[rawIdx]);
+            let primOff = primDataBase + primOffset;
+            let d = evalSDF_scrolling(primOff, scenePos);
+
+            let colors = primColors_scrolling(primOff);
+            let fillColorPacked = colors.x;
+            if (d < 0.0 && fillColorPacked != 0u) {
+                let fillColor = unpackColor(fillColorPacked);
+                let fillAlpha = unpackAlpha(fillColorPacked);
+                let edgeAlpha = clamp(-d * 2.0, 0.0, 1.0);
+                let alpha = edgeAlpha * fillAlpha;
+                resultColor = mix(resultColor, fillColor, alpha);
+                resultAlpha = max(resultAlpha, alpha);
+            }
+
+            let strokeColorPacked = colors.y;
+            let strokeWidth = primStrokeWidth_scrolling(primOff);
+            if (strokeWidth > 0.0 && strokeColorPacked != 0u) {
+                let strokeDist = abs(d) - strokeWidth * 0.5;
+                if (strokeDist < 0.0) {
+                    let strokeColor = unpackColor(strokeColorPacked);
+                    let strokeAlpha = unpackAlpha(strokeColorPacked);
+                    let edgeAlpha = clamp(-strokeDist * 2.0, 0.0, 1.0);
+                    let alpha = edgeAlpha * strokeAlpha;
+                    resultColor = mix(resultColor, strokeColor, alpha);
+                    resultAlpha = max(resultAlpha, alpha);
+                }
+            }
+        }
+    }
+
+    return vec4<f32>(resultColor, resultAlpha);
+}
+
 // Dispatch to shader glyph by codepoint
 // Returns rendered color, or bgColor if glyph not found
 // pixelPos: absolute pixel coordinates on screen (for tiled effects like fractals)
@@ -1075,7 +1185,13 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         }
     }
 
-    // ==== YDRAW OVERLAY: blend overlay content on top ====
+    // ==== YDRAW OVERLAYS: blend overlay content on top ====
+    // First: scrolling overlay (syncs with terminal content)
+    let scrollingResult = evaluateScrollingOverlay(pixelPos);
+    if (scrollingResult.a > 0.01) {
+        finalColor = mix(finalColor, scrollingResult.rgb, scrollingResult.a);
+    }
+    // Second: absolute overlay (fixed position, on top of scrolling)
     let overlayResult = evaluateOverlay(pixelPos);
     if (overlayResult.a > 0.01) {
         finalColor = mix(finalColor, overlayResult.rgb, overlayResult.a);

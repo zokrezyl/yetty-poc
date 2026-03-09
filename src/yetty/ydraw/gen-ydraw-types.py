@@ -352,15 +352,139 @@ def generate_wgsl(primitives: list[dict], out: Path) -> None:
     out.write_text("\n".join(L))
 
 
-def generate_wgsl_overlay(primitives: list[dict], out: Path) -> None:
-    """Generate sdf-overlay.gen.wgsl with overlayStorage functions (_overlay suffix).
+def generate_overlay_functions(primitives: list[dict], L: list[str], prefix: str, storage_name: str, uniform_name: str) -> None:
+    """Generate SDF functions for a given overlay prefix.
 
-    This file is only included by gpu-screen.wgsl which has the overlayStorage binding.
+    Args:
+        primitives: List of primitive definitions
+        L: List to append generated lines to
+        prefix: Function suffix (e.g., "overlay" or "scrolling")
+        storage_name: Name of storage buffer (e.g., "overlayStorage" or "scrollingStorage")
+        uniform_name: Name of uniform (e.g., "overlay" or "scrolling")
+    """
+    # --- evalSDF_{prefix} (2D) ---
+    sdf2d = [p for p in primitives if p["category"] == "sdf2d"]
+    if sdf2d:
+        L.append(f"fn evalSDF_{prefix}(primOffset: u32, p: vec2<f32>) -> f32 {{")
+        L.append(f"    let primType = bitcast<u32>({storage_name}[primOffset + 0u]);")
+        L.append("    // Read grid offset (u16,u16 packed in u32) and convert to pixel offset")
+        L.append(f"    let gridOffsetPacked = bitcast<u32>({storage_name}[primOffset + 2u]);")
+        L.append("    let gridOffsetX = f32(gridOffsetPacked & 0xFFFFu);")
+        L.append("    let gridOffsetY = f32(gridOffsetPacked >> 16u);")
+        L.append(f"    let pixelOffset = vec2<f32>(gridOffsetX * {uniform_name}.cellSizeX, gridOffsetY * {uniform_name}.cellSizeY);")
+        L.append("    let pAdj = p - pixelOffset;")
+        L.append("")
+        L.append("    switch (primType) {")
+        for prim in sdf2d:
+            eval_code = prim.get("eval", "").strip()
+            if not eval_code:
+                continue
+            substituted = substitute_fields(eval_code, prim["_offset_map"], storage_name,
+                                            gpu_offset_shift=1)
+            substituted = re.sub(r'\bp\b', 'pAdj', substituted)
+            L.append(f"        case {prim['_const_name']}: {{")
+            for line in substituted.split("\n"):
+                L.append(f"            {line}")
+            L.append("        }")
+        L.append("        default: {")
+        L.append("            return 1e10;")
+        L.append("        }")
+        L.append("    }")
+        L.append("}\n")
+
+    # --- evalSDF3D_{prefix} ---
+    sdf3d = [p for p in primitives if p["category"] == "sdf3d"]
+    if sdf3d:
+        L.append(f"fn evalSDF3D_{prefix}(primOffset: u32, p: vec3<f32>) -> f32 {{")
+        L.append(f"    let primType = bitcast<u32>({storage_name}[primOffset + 0u]);")
+        L.append("")
+        L.append("    switch (primType) {")
+        for prim in sdf3d:
+            eval_code = prim.get("eval", "").strip()
+            if not eval_code:
+                continue
+            substituted = substitute_fields(eval_code, prim["_offset_map"], storage_name)
+            L.append(f"        case {prim['_const_name']}: {{")
+            for line in substituted.split("\n"):
+                L.append(f"            {line}")
+            L.append("        }")
+        L.append("        default: { return 1e10; }")
+        L.append("    }")
+        L.append("}\n")
+
+    # --- primColors_{prefix} ---
+    renderable = [
+        p for p in primitives
+        if "fillColor" in p["_offset_map"]
+        and "strokeColor" in p["_offset_map"]
+        and "layer" in p["_offset_map"]
+    ]
+    gradient_prims = [
+        p for p in primitives
+        if "color1" in p["_offset_map"]
+        and "strokeColor" in p["_offset_map"]
+        and "layer" in p["_offset_map"]
+    ]
+    all_colorable = renderable + gradient_prims
+    if all_colorable:
+        L.append(f"fn primColors_{prefix}(primOffset: u32) -> vec4<u32> {{")
+        L.append(f"    let primType = bitcast<u32>({storage_name}[primOffset + 0u]);")
+        L.append("    switch (primType) {")
+        for prim in renderable:
+            om = prim["_offset_map"]
+            shift = 1 if prim.get("category") == "sdf2d" else 0
+            fill_off = om["fillColor"][0] + shift
+            stroke_off = om["strokeColor"][0] + shift
+            layer_off = om["layer"][0]
+            L.append(f"        case {prim['_const_name']}: {{")
+            L.append(f"            return vec4<u32>(")
+            L.append(f"                bitcast<u32>({storage_name}[primOffset + {fill_off}u]),")
+            L.append(f"                bitcast<u32>({storage_name}[primOffset + {stroke_off}u]),")
+            L.append(f"                bitcast<u32>({storage_name}[primOffset + {layer_off}u]),")
+            L.append(f"                0u);")
+            L.append(f"        }}")
+        for prim in gradient_prims:
+            om = prim["_offset_map"]
+            shift = 1 if prim.get("category") == "sdf2d" else 0
+            color1_off = om["color1"][0] + shift
+            stroke_off = om["strokeColor"][0] + shift
+            layer_off = om["layer"][0]
+            L.append(f"        case {prim['_const_name']}: {{")
+            L.append(f"            return vec4<u32>(")
+            L.append(f"                bitcast<u32>({storage_name}[primOffset + {color1_off}u]),")
+            L.append(f"                bitcast<u32>({storage_name}[primOffset + {stroke_off}u]),")
+            L.append(f"                bitcast<u32>({storage_name}[primOffset + {layer_off}u]),")
+            L.append(f"                0u);")
+            L.append(f"        }}")
+        L.append("        default: { return vec4<u32>(0u); }")
+        L.append("    }")
+        L.append("}\n")
+
+    # --- primStrokeWidth_{prefix} ---
+    has_stroke = [p for p in primitives if "strokeWidth" in p["_offset_map"]]
+    if has_stroke:
+        L.append(f"fn primStrokeWidth_{prefix}(primOffset: u32) -> f32 {{")
+        L.append(f"    let primType = bitcast<u32>({storage_name}[primOffset + 0u]);")
+        L.append("    switch (primType) {")
+        for prim in has_stroke:
+            shift = 1 if prim.get("category") == "sdf2d" else 0
+            sw_off = prim["_offset_map"]["strokeWidth"][0] + shift
+            L.append(f"        case {prim['_const_name']}: {{ return {storage_name}[primOffset + {sw_off}u]; }}")
+        L.append("        default: { return 0.0; }")
+        L.append("    }")
+        L.append("}")
+        L.append("")
+
+
+def generate_wgsl_overlay(primitives: list[dict], out: Path) -> None:
+    """Generate sdf-overlay.gen.wgsl with overlay and scrolling SDF functions.
+
+    This file is included by gpu-screen.wgsl which has both buffer bindings.
     """
     L = []
     L.append(HEADER)
-    L.append("// Overlay SDF functions reading from overlayStorage buffer.")
-    L.append("// Only include in shaders that define @group(1) @binding(17) overlayStorage.\n")
+    L.append("// Overlay SDF functions for both absolute (overlay) and scrolling overlays.")
+    L.append("// Requires bindings: overlayStorage (17), scrollingStorage (21)\n")
 
     # --- evalSDF_overlay (2D) ---
     # GPU format has grid offset at position 2: [type][layer][gridOffsetXY_packed][...]
@@ -534,6 +658,20 @@ def generate_wgsl_overlay(primitives: list[dict], out: Path) -> None:
         L.append("    }")
         L.append("}")
         L.append("")
+
+    # === SCROLLING OVERLAY VARIANTS ===
+    # Duplicate all _overlay functions as _scrolling, replacing buffer/uniform names
+    L.append("\n// ============= SCROLLING OVERLAY VARIANTS =============")
+    L.append("// Same as _overlay functions but reading from scrollingStorage/scrolling uniform\n")
+
+    # Get the overlay code we just generated (after the header)
+    overlay_code = "\n".join(L[3:])  # Skip header lines
+    scrolling_code = overlay_code.replace("overlayStorage", "scrollingStorage")
+    scrolling_code = scrolling_code.replace("overlayGridData", "scrollingGridData")
+    scrolling_code = scrolling_code.replace("overlayGlyphBuffer", "scrollingGlyphBuffer")
+    scrolling_code = scrolling_code.replace("overlay.", "scrolling.")
+    scrolling_code = scrolling_code.replace("_overlay", "_scrolling")
+    L.append(scrolling_code)
 
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text("\n".join(L))
