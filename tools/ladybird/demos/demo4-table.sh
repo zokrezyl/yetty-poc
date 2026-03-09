@@ -30,5 +30,5 @@ cat > /tmp/demo4.html <<'EOF'
 </html>
 EOF
 
-./result/bin/libweb-to-ydraw-full /tmp/demo4.html --width 640 --height 480
+../../build-ladybird/bin/libweb-to-ydraw-full /tmp/demo4.html --width 640 --height 480
 sleep 5

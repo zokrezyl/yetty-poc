@@ -9,8 +9,8 @@
 #include <LibCore/EventLoop.h>
 #include <LibCore/File.h>
 #include <LibCore/Timer.h>
-#include <LibGfx/Font/FontDatabase.h>
 #include <LibJS/Runtime/VM.h>
+#include <LibURL/URL.h>
 #include <LibWeb/Bindings/MainThreadVM.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/HTML/BrowsingContext.h>
@@ -19,17 +19,16 @@
 #include <LibWeb/Layout/Viewport.h>
 #include <LibWeb/Page/Page.h>
 #include <LibWeb/Painting/DisplayList.h>
+#include <LibWeb/Painting/DisplayListRecorder.h>
 #include <LibWeb/Painting/PaintableBox.h>
 #include <LibWeb/Painting/ViewportPaintable.h>
 #include <LibWeb/Platform/EventLoopPlugin.h>
 #include <LibWeb/Platform/FontPlugin.h>
-#include <LibURL/URL.h>
 
 #include <curl/curl.h>
 #include <fstream>
 #include <iostream>
 #include <sstream>
-#include <string>
 
 namespace {
 
@@ -89,64 +88,54 @@ void printUsage(const char* progname) {
     std::cerr << "Outputs OSC 666666 sequence for yetty terminal.\n";
 }
 
-int main(int argc, char** argv) {
-    std::string input;
+ErrorOr<int> serenity_main(Main::Arguments arguments) {
+    StringView input_arg;
     int viewWidth = 800;
     int viewHeight = 600;
     int cellsW = 80;
     int cellsH = 30;
 
-    for (int i = 1; i < argc; ++i) {
-        std::string arg = argv[i];
-        if (arg == "--help" || arg == "-h") {
-            printUsage(argv[0]);
-            return 0;
-        } else if (arg == "--width" && i + 1 < argc) {
-            viewWidth = std::stoi(argv[++i]);
-        } else if (arg == "--height" && i + 1 < argc) {
-            viewHeight = std::stoi(argv[++i]);
-        } else if (arg == "--cells-w" && i + 1 < argc) {
-            cellsW = std::stoi(argv[++i]);
-        } else if (arg == "--cells-h" && i + 1 < argc) {
-            cellsH = std::stoi(argv[++i]);
-        } else if (arg[0] != '-') {
-            input = arg;
-        }
-    }
+    Core::ArgsParser args_parser;
+    args_parser.add_positional_argument(input_arg, "URL or file path", "input", Core::ArgsParser::Required::No);
+    args_parser.add_option(viewWidth, "Viewport width", "width", 'w', "pixels");
+    args_parser.add_option(viewHeight, "Viewport height", "height", 'h', "pixels");
+    args_parser.add_option(cellsW, "Terminal cell width", "cells-w", 'c', "cells");
+    args_parser.add_option(cellsH, "Terminal cell height", "cells-h", 'r', "cells");
+    args_parser.parse(arguments);
 
-    if (input.empty()) {
-        std::cerr << "Error: URL or file required\n";
-        printUsage(argv[0]);
+    if (input_arg.is_empty()) {
+        printUsage(arguments.strings[0].characters_without_null_termination());
         return 1;
     }
 
+    std::string input(input_arg.characters_without_null_termination(), input_arg.length());
+
     // Fetch or read HTML content
-    std::string html;
+    std::string html_std;
     URL::URL url;
 
     if (isURL(input)) {
         std::cerr << "Fetching: " << input << "\n";
-        html = fetchURL(input);
-        url = URL::URL(input);
+        html_std = fetchURL(input);
+        url = URL::URL(StringView { input.data(), input.size() });
     } else {
         std::cerr << "Reading: " << input << "\n";
-        html = readFile(input);
-        url = URL::URL::create_with_file_scheme(input);
+        html_std = readFile(input);
+        auto path = TRY(FileSystem::real_path(input_arg));
+        url = URL::URL::create_with_file_scheme(path);
     }
 
-    if (html.empty()) {
+    if (html_std.empty()) {
         std::cerr << "Error: Failed to load content\n";
         return 1;
     }
 
-    std::cerr << "Loaded " << html.size() << " bytes\n";
+    std::cerr << "Loaded " << html_std.size() << " bytes\n";
+
+    StringView html { html_std.data(), html_std.size() };
 
     // Initialize LibWeb
     Core::EventLoop event_loop;
-
-    // Initialize the font database
-    Gfx::FontDatabase::set_default_font_query("Katica 10 400 0"sv);
-    Gfx::FontDatabase::set_fixed_width_font_query("Csilla 10 400 0"sv);
 
     // Install platform plugins
     Web::Platform::EventLoopPlugin::install(*new Web::Platform::EventLoopPlugin);
@@ -154,7 +143,6 @@ int main(int argc, char** argv) {
 
     // Create VM and heap
     auto& vm = Web::Bindings::main_thread_vm();
-    auto& heap = vm.heap();
 
     // Create headless page client
     auto client = ydraw::HeadlessPageClient::create(vm, viewWidth, viewHeight);
@@ -168,7 +156,7 @@ int main(int argc, char** argv) {
 
     // Run event loop briefly to allow parsing and layout
     int max_iterations = 100;
-    for (int i = 0; i < max_iterations && !client->is_layout_done(); ++i) {
+    for (int i = 0; i < max_iterations; ++i) {
         event_loop.pump(Core::EventLoop::WaitMode::PollForEvents);
     }
 
@@ -181,18 +169,12 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    std::cerr << "Document loaded: " << document->title().to_byte_string().characters() << "\n";
+    std::cerr << "Document loaded\n";
 
     // Force layout
     document->update_layout();
 
     // Get viewport paintable
-    auto* viewport = document->layout_node();
-    if (!viewport) {
-        std::cerr << "Error: No layout tree\n";
-        return 1;
-    }
-
     auto* viewport_paintable = document->paintable();
     if (!viewport_paintable) {
         std::cerr << "Error: No paintable tree\n";
@@ -204,7 +186,14 @@ int main(int argc, char** argv) {
 
     // Build the display list from paintable tree
     Web::Painting::DisplayListRecorder recorder(*display_list);
-    viewport_paintable->paint_all_phases(recorder);
+
+    auto paint_context = Web::Painting::PaintContext::create(
+        recorder,
+        client->palette(),
+        Web::DevicePixelRect { 0, 0, viewWidth, viewHeight }
+    );
+
+    viewport_paintable->paint_all_phases(paint_context);
 
     std::cerr << "DisplayList has " << display_list->commands().size() << " commands\n";
 

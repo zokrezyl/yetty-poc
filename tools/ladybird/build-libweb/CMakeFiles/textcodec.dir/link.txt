@@ -1,2 +1,0 @@
-/nix/store/a245z3cvf9x9sn0xlk6k8j9xhxbhda1z-gcc-wrapper-15.2.0/bin/ar qc libtextcodec.a CMakeFiles/textcodec.dir/home/misi/work/my/yetty/tmp/ladybird/Libraries/LibTextCodec/Decoder.cpp.o CMakeFiles/textcodec.dir/home/misi/work/my/yetty/tmp/ladybird/Libraries/LibTextCodec/Encoder.cpp.o CMakeFiles/textcodec.dir/generated/LibTextCodec/LookupTables.cpp.o
-/nix/store/a245z3cvf9x9sn0xlk6k8j9xhxbhda1z-gcc-wrapper-15.2.0/bin/ranlib libtextcodec.a

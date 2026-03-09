@@ -6,5 +6,5 @@ cd "$(dirname "$0")/.."
 URL="${1:-https://example.com}"
 echo "Fetching: $URL"
 
-./result/bin/libweb-to-ydraw-full "$URL" --width 800 --height 600
+../../build-ladybird/bin/libweb-to-ydraw-full "$URL" --width 800 --height 600
 sleep 5

@@ -40,42 +40,6 @@ add_executable(ladybird-ydraw
 )
 target_link_libraries(ladybird-ydraw PRIVATE ydraw-buffer)
 
-# === DisplayList JSON library (standalone, no Ladybird deps) ===
-add_library(displaylist-json STATIC
-    displaylist-json.cpp
-)
-target_include_directories(displaylist-json PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-
-# === DisplayList to YDraw converter ===
-add_library(displaylist-to-ydraw-lib STATIC
-    displaylist-to-ydraw.cpp
-)
-target_link_libraries(displaylist-to-ydraw-lib PUBLIC displaylist-json ydraw-buffer)
-
-# === displaylist-to-ydraw executable ===
-# Reads JSON DisplayList from stdin, outputs YDraw OSC 666666
-add_executable(displaylist-to-ydraw
-    displaylist-to-ydraw-main.cpp
-)
-target_link_libraries(displaylist-to-ydraw PRIVATE displaylist-to-ydraw-lib)
-
-# === html-to-displaylist executable ===
-# Simple HTML to DisplayList converter (fallback for basic HTML)
-add_executable(html-to-displaylist
-    html-to-displaylist.cpp
-)
-target_link_libraries(html-to-displaylist PRIVATE displaylist-json)
-if(CURL_FOUND)
-    target_link_libraries(html-to-displaylist PRIVATE CURL::libcurl)
-    target_compile_definitions(html-to-displaylist PRIVATE HAS_CURL=1)
-endif()
-
-# === Full pipeline wrapper script ===
-configure_file(
-    ${CMAKE_CURRENT_SOURCE_DIR}/libweb-to-ydraw.sh.in
-    ${CMAKE_CURRENT_BINARY_DIR}/libweb-to-ydraw
-    @ONLY
-)
 
 # === LibWeb integration (requires Ladybird source) ===
 option(BUILD_LIBWEB "Build LibWeb integration" OFF)

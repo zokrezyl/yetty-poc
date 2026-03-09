@@ -1,8 +1,0 @@
-/home/misi/work/my/yetty/tools/ladybird/build-standalone/CMakeFiles/ydraw-buffer.dir
-/home/misi/work/my/yetty/tools/ladybird/build-standalone/CMakeFiles/ladybird-ydraw.dir
-/home/misi/work/my/yetty/tools/ladybird/build-standalone/CMakeFiles/displaylist-json.dir
-/home/misi/work/my/yetty/tools/ladybird/build-standalone/CMakeFiles/displaylist-to-ydraw-lib.dir
-/home/misi/work/my/yetty/tools/ladybird/build-standalone/CMakeFiles/displaylist-to-ydraw.dir
-/home/misi/work/my/yetty/tools/ladybird/build-standalone/CMakeFiles/html-to-displaylist.dir
-/home/misi/work/my/yetty/tools/ladybird/build-standalone/CMakeFiles/edit_cache.dir
-/home/misi/work/my/yetty/tools/ladybird/build-standalone/CMakeFiles/rebuild_cache.dir
