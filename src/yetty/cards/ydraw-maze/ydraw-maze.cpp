@@ -46,7 +46,7 @@ Result<void> YDrawMaze::init() {
     _metaHandle = *metaResult;
 
     auto builderRes = YDrawBuilder::create(
-        _fontManager, _gpuAllocator, _cardMgr, metadataSlotIndex());
+        _fontManager, _gpuAllocator, _buffer, _cardMgr, metadataSlotIndex());
     if (!builderRes) {
         return Err<void>("YDrawMaze::init: failed to create builder", builderRes);
     }
@@ -72,10 +72,7 @@ bool YDrawMaze::needsBufferRealloc() {
 void YDrawMaze::renderToStaging(float time) {
     if (!_builder) return;
     _renderer->render(_buffer, time);
-    _builder->clear();
-    if (!_buffer->empty()) {
-        _builder->addYdrawBuffer(_buffer);
-    }
+    _builder->calculate();
 }
 
 void YDrawMaze::declareBufferNeeds() {
@@ -121,7 +118,7 @@ Result<CardPtr> YDrawMaze::create(
 {
     (void)payload;
 
-    ydebug("YDrawMaze::create: pos=({},{}) size={}x{} args='{}'", x, y, widthCells, heightCells, args);
+    yinfo("YDrawMaze::create: pos=({},{}) size={}x{} args='{}'", x, y, widthCells, heightCells, args);
 
     if (!ctx.cardManager) {
         return Err<CardPtr>("YDrawMaze::create: null CardBufferManager");
@@ -134,7 +131,7 @@ Result<CardPtr> YDrawMaze::create(
         return Err<CardPtr>("YDrawMaze::create: init failed");
     }
 
-    ydebug("YDrawMaze::create: SUCCESS");
+    yinfo("YDrawMaze::create: SUCCESS");
     return Ok<CardPtr>(card);
 }
 

@@ -1,6 +1,6 @@
 #!/bin/bash
-# Absolute YDraw Overlay: Clear the overlay
-# Removes all drawings from the absolute ydraw overlay
+# Screen Draw Layer: Clear the overlay
+# Removes all drawings from the screen draw layer
 
 # Send OSC 666673 with --clear argument
 printf '\033]666673;--clear;\033\\'

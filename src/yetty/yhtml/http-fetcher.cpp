@@ -62,7 +62,7 @@ public:
         std::string resolved = resolveUrl(url);
         if (resolved.empty()) return std::nullopt;
 
-        ydebug("HttpFetcher::fetch: {}", resolved);
+        yinfo("HttpFetcher::fetch: {}", resolved);
 
         _session.SetUrl(cpr::Url{resolved});
         cpr::Response r = _session.Get();
@@ -76,7 +76,7 @@ public:
             return std::nullopt;
         }
 
-        ydebug("HttpFetcher::fetch: OK {} ({} bytes)", r.status_code, r.text.size());
+        yinfo("HttpFetcher::fetch: OK {} ({} bytes)", r.status_code, r.text.size());
         return r.text;
     }
 
@@ -85,7 +85,7 @@ public:
         std::string resolved = resolveUrl(url);
         if (resolved.empty()) return std::nullopt;
 
-        ydebug("HttpFetcher::post: {}", resolved);
+        yinfo("HttpFetcher::post: {}", resolved);
 
         // Disable redirect following for POST — handle redirects manually
         // (cpr can misbehave with POST → 303 → GET chains)
@@ -100,7 +100,7 @@ public:
         _session.SetHeader(cpr::Header{});
         _session.SetRedirect(cpr::Redirect{10L});
 
-        ydebug("HttpFetcher::post: status={} url={} redirect_count={}",
+        yinfo("HttpFetcher::post: status={} url={} redirect_count={}",
               r.status_code, r.url.str(), r.redirect_count);
 
         if (r.status_code == 0) {
@@ -114,7 +114,7 @@ public:
             if (it == r.header.end()) it = r.header.find("location");
             if (it != r.header.end()) {
                 std::string location = it->second;
-                ydebug("HttpFetcher::post: redirect {} -> {}", r.status_code, location);
+                yinfo("HttpFetcher::post: redirect {} -> {}", r.status_code, location);
                 // Follow with GET
                 return fetch(location);
             }
@@ -125,7 +125,7 @@ public:
             return std::nullopt;
         }
 
-        ydebug("HttpFetcher::post: OK {} ({} bytes)", r.status_code, r.text.size());
+        yinfo("HttpFetcher::post: OK {} ({} bytes)", r.status_code, r.text.size());
         return r.text;
     }
 

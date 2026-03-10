@@ -370,16 +370,15 @@ static PipelineResult runFullPipeline(const std::string& pdfPath) {
 
     auto fm = testFontManager();
     r.cardMgr = std::make_shared<MockCardManager>();
-    r.builder = *YDrawBuilder::create(fm, testAllocator(), r.cardMgr, 0);
+    r.builder = *YDrawBuilder::create(fm, testAllocator(), r.buffer,
+                                       r.cardMgr, 0);
 
     // ypdf.cpp init sets viewport + view, then renderAllPages fills buffer.
-    // Then renderToStaging calls addYdrawBuffer() when dirty.
+    // Then renderToStaging calls calculate() when dirty.
     r.builder->setViewport(80, 24);
 
-    // renderToStaging → addYdrawBuffer (ingests buffer fonts, text spans, scene bounds, bgColor)
-    if (!r.buffer->empty()) {
-        r.builder->addYdrawBuffer(r.buffer);
-    }
+    // renderToStaging → calculate (ingests buffer fonts, text spans, scene bounds, bgColor)
+    r.builder->calculate();
 
     // declareBufferNeeds
     r.builder->declareBufferNeeds();

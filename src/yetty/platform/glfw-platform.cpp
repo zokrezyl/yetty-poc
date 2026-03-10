@@ -47,7 +47,7 @@ public:
         _cols = cols;
         _rows = rows;
 
-        ydebug("ForkPTY[{}]: Starting shell '{}' ({}x{})", _id, shell, cols, rows);
+        yinfo("ForkPTY[{}]: Starting shell '{}' ({}x{})", _id, shell, cols, rows);
 
         struct winsize ws = {
             static_cast<unsigned short>(rows),
@@ -100,7 +100,7 @@ public:
         }
 
         _running = true;
-        ydebug("ForkPTY[{}]: Started PTY fd={}, PID={}", _id, _ptyMaster, _childPid);
+        yinfo("ForkPTY[{}]: Started PTY fd={}, PID={}", _id, _ptyMaster, _childPid);
         return Ok();
     }
 
@@ -108,7 +108,7 @@ public:
         if (!_running) return;
         _running = false;
 
-        ydebug("ForkPTY[{}]: Stopping", _id);
+        yinfo("ForkPTY[{}]: Stopping", _id);
 
         if (_pollId >= 0) {
             auto loopResult = base::EventLoop::instance();
@@ -223,7 +223,7 @@ public:
         _headless = headless;
         if (_headless) {
             // Headless mode: no GLFW, use std::chrono for timing
-            ydebug("Platform: headless mode (no GLFW)");
+            yinfo("Platform: headless mode (no GLFW)");
             return Ok();
         }
 
@@ -268,7 +268,7 @@ public:
         _cursorResizeH = glfwCreateStandardCursor(GLFW_HRESIZE_CURSOR);
         _cursorResizeV = glfwCreateStandardCursor(GLFW_VRESIZE_CURSOR);
 
-        ydebug("GLFW window created: {}x{}", width, height);
+        yinfo("GLFW window created: {}x{}", width, height);
         return Ok();
     }
 
@@ -332,7 +332,7 @@ public:
         glfwSetWindowIcon(_window, 1, &icon);
 
         stbi_image_free(pixels);
-        ydebug("Set window icon from embedded data ({}x{})", width, height);
+        yinfo("Set window icon from embedded data ({}x{})", width, height);
     }
 
     WGPUSurface createWGPUSurface(WGPUInstance instance) override {

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Absolute YDraw Overlay Demo: Text at pixel coordinates
+# Screen Draw Layer Demo: Text at pixel coordinates
 # Draws text overlay on top of terminal content
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -7,14 +7,14 @@ cd "$DIR/../../.."
 
 # Create YAML payload with text
 YAML_PAYLOAD=$(cat <<'EOF'
-# Text overlay demo for absolute ydraw overlay
+# Text overlay demo for screen draw layer
 background: "#00000000"
 
 body:
   # Large title
   - text:
       position: [50, 50]
-      content: "Absolute YDraw Overlay"
+      content: "Screen Draw Layer"
       font-size: 32
       color: "#3498db"
 

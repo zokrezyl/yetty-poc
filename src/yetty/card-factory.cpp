@@ -9,7 +9,6 @@
 #include "cards/ydraw-maze/ydraw-maze.h"
 #include "cards/ydraw-zoo/ydraw-zoo.h"
 #include "cards/ydraw/ydraw.h"
-#include "cards/ypaint/ypaint.h"
 #include "cards/ygrid/ygrid.h"
 #include "cards/ygui/ygui.h"
 #include "cards/yhtml/yhtml.h"
@@ -54,12 +53,6 @@ public:
                              uint32_t w, uint32_t h, const std::string &args,
                              const std::string &payload) {
       return card::YDraw::create(ctx, x, y, w, h, args, payload);
-    });
-
-    registerCard("ypaint", [](const YettyContext &ctx, int32_t x, int32_t y,
-                              uint32_t w, uint32_t h, const std::string &args,
-                              const std::string &payload) {
-      return ypaint::card::YPaint::create(ctx, x, y, w, h, args, payload);
     });
 
     registerCard("ygui", [](const YettyContext &ctx, int32_t x, int32_t y,
@@ -179,7 +172,7 @@ public:
       ywarn("CardFactory: overwriting existing card type '{}'", name);
     }
     _creators[name] = std::move(creator);
-    ydebug("CardFactory: registered card type '{}'", name);
+    yinfo("CardFactory: registered card type '{}'", name);
   }
 
   bool hasCard(const std::string &name) const override {
@@ -227,7 +220,7 @@ public:
           std::regex_replace(filteredArgs, std::regex(R"(\s*;\s*;\s*)"), ";");
     }
 
-    ydebug("CardFactory: creating card '{}' at ({},{}) size {}x{}{}", name, x, y,
+    yinfo("CardFactory: creating card '{}' at ({},{}) size {}x{}{}", name, x, y,
           widthCells, heightCells,
           cardName.empty() ? "" : " name='" + cardName + "'");
 
@@ -245,7 +238,7 @@ public:
       (*result)->setName(cardName);
     }
 
-    ydebug("CardFactory: created card '{}' with metadataOffset={}{}", name,
+    yinfo("CardFactory: created card '{}' with metadataOffset={}{}", name,
           (*result)->metadataOffset(),
           cardName.empty() ? "" : " name='" + cardName + "'");
 

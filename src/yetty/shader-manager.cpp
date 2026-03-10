@@ -382,7 +382,7 @@ Result<void> ShaderManagerImpl::init(const GPUContext& gpu, GpuAllocator::Ptr al
     // Load base shader
     std::string shadersDir = getShadersDir();
     std::string shaderPath = shadersDir + "/gpu-screen.wgsl";
-    ydebug("ShaderManager: loading shaders from {}", shadersDir);
+    yinfo("ShaderManager: loading shaders from {}", shadersDir);
     if (auto res = loadBaseShader(shaderPath); !res) {
         return res;
     }
@@ -400,7 +400,7 @@ Result<void> ShaderManagerImpl::init(const GPUContext& gpu, GpuAllocator::Ptr al
                     if (!libCode.empty()) {
                         std::string libName = entry.path().stem().string();
                         addLibrary(libName, libCode);
-                        ydebug("ShaderManager: loaded library '{}' ({} bytes)", libName, libCode.size());
+                        yinfo("ShaderManager: loaded library '{}' ({} bytes)", libName, libCode.size());
                     }
                 }
             }
@@ -413,7 +413,7 @@ Result<void> ShaderManagerImpl::init(const GPUContext& gpu, GpuAllocator::Ptr al
     // Validation is enabled when WEBGPU_BACKEND_DAWN is defined (compile-time check)
     auto loadEffects = [this](const std::string& dir, std::vector<EffectFile>& dest, const std::string& prefix) {
         if (!std::filesystem::exists(dir) || !std::filesystem::is_directory(dir)) {
-            ydebug("ShaderManager: no {} directory at {}", prefix, dir);
+            yinfo("ShaderManager: no {} directory at {}", prefix, dir);
             return;
         }
         for (const auto& entry : std::filesystem::directory_iterator(dir)) {
@@ -494,7 +494,7 @@ Result<void> ShaderManagerImpl::init(const GPUContext& gpu, GpuAllocator::Ptr al
 #endif
 
             dest.push_back({idx, name, funcName, code});
-            ydebug("ShaderManager: loaded {} effect '{}' index={} func={}", prefix, name, idx, funcName);
+            yinfo("ShaderManager: loaded {} effect '{}' index={} func={}", prefix, name, idx, funcName);
         }
         // Sort by index
         std::sort(dest.begin(), dest.end(), [](const EffectFile& a, const EffectFile& b) {
@@ -510,7 +510,7 @@ Result<void> ShaderManagerImpl::init(const GPUContext& gpu, GpuAllocator::Ptr al
     loadEffects(postEffectsDir, _postEffects, "post");
 
     _initialized = true;
-    ydebug("ShaderManager: initialized ({} pre-effects, {} effects, {} post-effects)",
+    yinfo("ShaderManager: initialized ({} pre-effects, {} effects, {} post-effects)",
           _preEffects.size(), _effects.size(), _postEffects.size());
     return Ok();
 }
@@ -524,7 +524,7 @@ void ShaderManagerImpl::addProvider(std::shared_ptr<ShaderProvider> provider, co
 
 void ShaderManagerImpl::addLibrary(const std::string& name, const std::string& code) {
     _libraries[name] = code;
-    ydebug("ShaderManager: added library '{}'", name);
+    yinfo("ShaderManager: added library '{}'", name);
 }
 
 Result<void> ShaderManagerImpl::loadBaseShader(const std::string& path) {
@@ -541,7 +541,7 @@ Result<void> ShaderManagerImpl::loadBaseShader(const std::string& path) {
         return Err<void>("Shader file is empty: " + path);
     }
 
-    ydebug("ShaderManager: loaded base shader from {} ({} lines)",
+    yinfo("ShaderManager: loaded base shader from {} ({} lines)",
           path, std::count(_baseShader.begin(), _baseShader.end(), '\n') + 1);
 
     return Ok();
@@ -621,11 +621,11 @@ std::string ShaderManagerImpl::mergeShaders() const {
     // Replace dispatch placeholders for each dispatch name
     for (const auto& [dispatchName, dispatchCode] : dispatchByName) {
         std::string placeholder = "// " + dispatchName;
-        ydebug("ShaderManager: dispatch '{}' code length={}", dispatchName, dispatchCode.size());
+        yinfo("ShaderManager: dispatch '{}' code length={}", dispatchName, dispatchCode.size());
         if (dispatchCode.size() > 200) {
-            ydebug("  dispatch start: '{}'", dispatchCode.substr(0, 200));
+            yinfo("  dispatch start: '{}'", dispatchCode.substr(0, 200));
         } else {
-            ydebug("  dispatch: '{}'", dispatchCode);
+            yinfo("  dispatch: '{}'", dispatchCode);
         }
         if (!replacePlaceholder(result, placeholder, dispatchCode)) {
             ywarn("ShaderManager: dispatch placeholder '{}' not found in base shader", placeholder);
@@ -735,7 +735,7 @@ Result<void> ShaderManagerImpl::compile() {
     _mergedSource = mergeShaders();
 
     int lineCount = static_cast<int>(std::count(_mergedSource.begin(), _mergedSource.end(), '\n')) + 1;
-    ydebug("ShaderManager: compiling merged shader ({} lines)", lineCount);
+    yinfo("ShaderManager: compiling merged shader ({} lines)", lineCount);
 
     // Release old shader module if exists
     if (_shaderModule) {
@@ -798,7 +798,7 @@ Result<void> ShaderManagerImpl::compile() {
         }
     }
 
-    ydebug("ShaderManager: compiled successfully ({} shader functions)", totalFunctions);
+    yinfo("ShaderManager: compiled successfully ({} shader functions)", totalFunctions);
     return Ok();
 }
 
@@ -827,8 +827,8 @@ Result<void> ShaderManagerImpl::createPipelineResources() {
     memcpy(mapped, quadVertices, sizeof(quadVertices));
     wgpuBufferUnmap(_quadVertexBuffer);
 
-    // 2. Create grid bind group layout (23 bindings: 15 grid + 4 absolute overlay + 4 scrolling overlay)
-    WGPUBindGroupLayoutEntry entries[23] = {};
+    // 2. Create grid bind group layout (15 bindings)
+    WGPUBindGroupLayoutEntry entries[15] = {};
 
     // 0: Grid uniforms
     entries[0].binding = 0;
@@ -908,48 +908,8 @@ Result<void> ShaderManagerImpl::createPipelineResources() {
     entries[14].visibility = WGPUShaderStage_Fragment;
     entries[14].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
 
-    // 15: Overlay grid data SSBO
-    entries[15].binding = 15;
-    entries[15].visibility = WGPUShaderStage_Fragment;
-    entries[15].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
-
-    // 16: Overlay glyph buffer SSBO
-    entries[16].binding = 16;
-    entries[16].visibility = WGPUShaderStage_Fragment;
-    entries[16].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
-
-    // 17: Overlay storage (primitive data) SSBO
-    entries[17].binding = 17;
-    entries[17].visibility = WGPUShaderStage_Fragment;
-    entries[17].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
-
-    // 18: Overlay uniforms
-    entries[18].binding = 18;
-    entries[18].visibility = WGPUShaderStage_Fragment;
-    entries[18].buffer.type = WGPUBufferBindingType_Uniform;
-
-    // 19: Scrolling overlay grid data SSBO
-    entries[19].binding = 19;
-    entries[19].visibility = WGPUShaderStage_Fragment;
-    entries[19].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
-
-    // 20: Scrolling overlay glyph buffer SSBO
-    entries[20].binding = 20;
-    entries[20].visibility = WGPUShaderStage_Fragment;
-    entries[20].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
-
-    // 21: Scrolling overlay storage (primitive data) SSBO
-    entries[21].binding = 21;
-    entries[21].visibility = WGPUShaderStage_Fragment;
-    entries[21].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
-
-    // 22: Scrolling overlay uniforms
-    entries[22].binding = 22;
-    entries[22].visibility = WGPUShaderStage_Fragment;
-    entries[22].buffer.type = WGPUBufferBindingType_Uniform;
-
     WGPUBindGroupLayoutDescriptor layoutDesc = {};
-    layoutDesc.entryCount = 23;
+    layoutDesc.entryCount = 15;
     layoutDesc.entries = entries;
     _gridBindGroupLayout = wgpuDeviceCreateBindGroupLayout(device, &layoutDesc);
     if (!_gridBindGroupLayout) {
@@ -1036,7 +996,7 @@ Result<void> ShaderManagerImpl::createPipelineResources() {
         return Err<void>("Failed to create grid render pipeline: " + scopeErrorMsg);
     }
 
-    ydebug("ShaderManager: created shared pipeline resources");
+    yinfo("ShaderManager: created shared pipeline resources");
     return Ok();
 }
 
@@ -1111,7 +1071,7 @@ Result<void> ShaderManagerImpl::recreatePipeline() {
         return Err<void>("Failed to recreate grid render pipeline: " + scopeErrorMsg);
     }
 
-    ydebug("ShaderManager: recreated pipeline after shader recompile");
+    yinfo("ShaderManager: recreated pipeline after shader recompile");
     return Ok();
 }
 

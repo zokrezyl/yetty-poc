@@ -1,5 +1,5 @@
 #!/bin/bash
-# Scrolling YDraw Overlay Demo: Fun patterns and special shapes
+# Screen Draw Layer Demo: Fun patterns and special shapes
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR/../../.."
@@ -183,5 +183,5 @@ EOF
 )
 
 PAYLOAD=$(echo "$YAML_PAYLOAD" | base64 -w0)
-printf '\033]666674;--yaml;%s\033\\' "$PAYLOAD"
+printf '\033]666673;--yaml;%s\033\\' "$PAYLOAD"
 echo "Screen draw layer: patterns demo"

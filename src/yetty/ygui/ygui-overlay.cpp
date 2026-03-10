@@ -181,7 +181,7 @@ Result<void> YGuiOverlayImpl::init() noexcept {
 
     // Create YDrawBuffer and builder (no CardManager - standalone)
     _buffer = *YDrawBuffer::create();
-    auto builderRes = YDrawBuilder::create(_ctx.fontManager, _ctx.gpuAllocator);
+    auto builderRes = YDrawBuilder::create(_ctx.fontManager, _ctx.gpuAllocator, _buffer);
     if (!builderRes) return Err<void>("YGuiOverlay: failed to create builder", builderRes);
     _builder = *builderRes;
 
@@ -208,7 +208,7 @@ Result<void> YGuiOverlayImpl::init() noexcept {
     if (auto res = createPipeline(); !res)
         return Err<void>("YGuiOverlay: pipeline creation failed", res);
 
-    ydebug("YGuiOverlay initialized");
+    yinfo("YGuiOverlay initialized");
     return Ok();
 }
 
@@ -267,7 +267,7 @@ Result<void> YGuiOverlayImpl::createPipeline() {
         std::ofstream dbg("/tmp/ygui-overlay-composed.wgsl");
         if (dbg.is_open()) {
             dbg << shaderSource;
-            ydebug("YGuiOverlay: wrote composed shader ({} lines) to /tmp/ygui-overlay-composed.wgsl",
+            yinfo("YGuiOverlay: wrote composed shader ({} lines) to /tmp/ygui-overlay-composed.wgsl",
                   std::count(shaderSource.begin(), shaderSource.end(), '\n') + 1);
         }
     }
@@ -436,7 +436,7 @@ Result<void> YGuiOverlayImpl::createPipeline() {
     if (!_pipeline)
         return Err<void>("Failed to create overlay render pipeline");
 
-    ydebug("YGuiOverlay: pipeline created successfully");
+    yinfo("YGuiOverlay: pipeline created successfully");
     return Ok();
 }
 
@@ -939,10 +939,7 @@ Result<void> YGuiOverlayImpl::render(WGPURenderPassEncoder pass) {
         _builder->setSceneBounds(0, 0,
             static_cast<float>(_displayWidth),
             static_cast<float>(_displayHeight));
-        _builder->clear();
-        if (!_buffer->empty()) {
-            _builder->addYdrawBuffer(_buffer);
-        }
+        _builder->calculate();
         rebuildBuffers();
     }
 

@@ -75,10 +75,7 @@ public:
 
         _buffer->clear();
         generatePrimitives();
-        _builder->clear();
-        if (!_buffer->empty()) {
-            _builder->addYdrawBuffer(_buffer);
-        }
+        _builder->calculate();
     }
 
     Result<bool> onEvent(const base::Event& event) override {
@@ -170,7 +167,7 @@ public:
         _metaHandle = *metaResult;
 
         auto builderRes = YDrawBuilder::create(
-            _fontManager, _gpuAllocator, _cardMgr, metadataSlotIndex());
+            _fontManager, _gpuAllocator, _buffer, _cardMgr, metadataSlotIndex());
         if (!builderRes) {
             return Err<void>("MarkdownImpl::init: failed to create builder", builderRes);
         }
@@ -459,7 +456,7 @@ Result<CardPtr> Markdown::create(
     const std::string& args,
     const std::string& payload)
 {
-    ydebug("Markdown::create: pos=({},{}) size={}x{} payload_len={}",
+    yinfo("Markdown::create: pos=({},{}) size={}x{} payload_len={}",
           x, y, widthCells, heightCells, payload.size());
 
     if (!ctx.cardManager) {
@@ -475,7 +472,7 @@ Result<CardPtr> Markdown::create(
         return Err<CardPtr>("Markdown::create: init failed");
     }
 
-    ydebug("Markdown::create: SUCCESS");
+    yinfo("Markdown::create: SUCCESS");
     return Ok<CardPtr>(card);
 }
 

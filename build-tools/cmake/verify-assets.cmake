@@ -68,8 +68,10 @@ check_file("assets/shaders/scale-image.wgsl" "Image scaling shader")
 # Card shaders
 check_file("assets/shaders/cards/0x0000-texture.wgsl" "Texture card shader")
 check_file("assets/shaders/cards/0x0001-plot.wgsl" "Plot card shader")
+check_file("assets/shaders/cards/0x0002-hdraw.wgsl" "Hdraw card shader")
 check_file("assets/shaders/cards/0x0003-ydraw.wgsl" "Ydraw card shader")
-check_file("assets/shaders/cards/0x0004-ypaint.wgsl" "Ypaint card shader")
+check_file("assets/shaders/cards/0x0004-kdraw.wgsl" "Kdraw card shader")
+check_file("assets/shaders/cards/0x0005-jdraw.wgsl" "Jdraw card shader")
 check_file("assets/shaders/cards/0x0006-ytext.wgsl" "Ytext card shader")
 
 #-----------------------------------------------------------------------------

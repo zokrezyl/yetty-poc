@@ -27,7 +27,7 @@ static void ensurePdfiumInit() {
         FPDF_LIBRARY_CONFIG config = {};
         config.version = 2;
         FPDF_InitLibraryWithConfig(&config);
-        ydebug("PDFium library initialized");
+        yinfo("PDFium library initialized");
     });
 }
 
@@ -138,7 +138,7 @@ public:
     void suspend() override {
         _needsUpload = true;
         _metadataDirty = true;
-        ydebug("Pdf::suspend: deallocated texture handle, _pagePixels has {} bytes", _pagePixels.size());
+        yinfo("Pdf::suspend: deallocated texture handle, _pagePixels has {} bytes", _pagePixels.size());
     }
 
     Result<void> dispose() override {
@@ -265,7 +265,7 @@ public:
                     _contentZoom = newZoom;
                     _needsRender = true;
                     _metadataDirty = true;
-                    ydebug("Pdf::onEvent: content zoom={:.2f}", _contentZoom);
+                    yinfo("Pdf::onEvent: content zoom={:.2f}", _contentZoom);
                 }
                 return Ok(true);
             } else {
@@ -274,13 +274,13 @@ public:
                     _currentPage--;
                     _needsRender = true;
                     _metadataDirty = true;
-                    ydebug("Pdf::onEvent: prev page -> {}", _currentPage);
+                    yinfo("Pdf::onEvent: prev page -> {}", _currentPage);
                     return Ok(true);
                 } else if (event.scroll.dy < 0 && _currentPage < _pageCount - 1) {
                     _currentPage++;
                     _needsRender = true;
                     _metadataDirty = true;
-                    ydebug("Pdf::onEvent: next page -> {}", _currentPage);
+                    yinfo("Pdf::onEvent: next page -> {}", _currentPage);
                     return Ok(true);
                 }
             }
@@ -309,7 +309,7 @@ private:
             return Err<void>("Pdf::registerForEvents: failed to register Scroll", res);
         }
 
-        ydebug("Pdf card {} registered for events (priority 1000)", id());
+        yinfo("Pdf card {} registered for events (priority 1000)", id());
         return Ok();
     }
 
@@ -387,7 +387,7 @@ private:
         int startX = static_cast<int>(cardW / 2.0 - _centerX * sizeX);
         int startY = static_cast<int>(cardH / 2.0 - _centerY * sizeY);
 
-        ydebug("Pdf::renderCurrentPage: page {} bitmap={}x{} pageSize={}x{} "
+        yinfo("Pdf::renderCurrentPage: page {} bitmap={}x{} pageSize={}x{} "
               "start=({},{}) zoom={:.2f} center=({:.2f},{:.2f})",
               _currentPage, cardW, cardH, sizeX, sizeY,
               startX, startY, _contentZoom, _centerX, _centerY);
@@ -430,7 +430,7 @@ private:
 
         _metadataDirty = true;
 
-        ydebug("Pdf::renderCurrentPage: rendered {} bytes ({}x{})",
+        yinfo("Pdf::renderCurrentPage: rendered {} bytes ({}x{})",
               _pagePixels.size(), cardW, cardH);
         return Ok();
     }
@@ -451,10 +451,10 @@ private:
                 return Err<void>("Pdf::linkPixelsToHandle: failed to allocate texture handle", allocResult);
             }
             _textureHandle = *allocResult;
-            ydebug("Pdf::linkPixelsToHandle: allocated texture handle id={}", _textureHandle.id);
+            yinfo("Pdf::linkPixelsToHandle: allocated texture handle id={}", _textureHandle.id);
         }
 
-        ydebug("Pdf::linkPixelsToHandle: linked {}x{} pixels to handle id={}",
+        yinfo("Pdf::linkPixelsToHandle: linked {}x{} pixels to handle id={}",
               _renderWidth, _renderHeight, _textureHandle.id);
         return Ok();
     }
@@ -464,7 +464,7 @@ private:
     //=========================================================================
 
     void parseArgs(const std::string& args) {
-        ydebug("Pdf::parseArgs: args='{}'", args);
+        yinfo("Pdf::parseArgs: args='{}'", args);
 
         std::istringstream iss(args);
         std::string token;
@@ -522,7 +522,7 @@ private:
         meta.scaledWidth = _renderWidth;
         meta.scaledHeight = _renderHeight;
 
-        ydebug("Pdf::uploadMetadata: offset={} size={}x{} page={}/{} zoom={:.2f}",
+        yinfo("Pdf::uploadMetadata: offset={} size={}x{} page={}/{} zoom={:.2f}",
               _metaHandle.offset, _renderWidth, _renderHeight,
               _currentPage + 1, _pageCount, _contentZoom);
 

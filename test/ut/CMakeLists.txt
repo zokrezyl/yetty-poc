@@ -56,7 +56,6 @@ target_link_libraries(yetty_test_lib PUBLIC
     webgpu
     glfw
     cdb
-    lz4_static
     ${FREETYPE_ALL_LIBS}
     msdfgen::msdfgen-core
     msdfgen::msdfgen-ext
@@ -104,7 +103,6 @@ add_subdirectory(yplot)
 add_subdirectory(ygui)
 add_subdirectory(vnc)
 add_subdirectory(ydraw)
-add_subdirectory(ypaint)
 add_subdirectory(thorvg)
 add_subdirectory(ythorvg)
 if(WIN32)

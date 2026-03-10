@@ -4,7 +4,6 @@
 #include <yetty/result.hpp>
 #include <ytrace/ytrace.hpp>
 #include <cstring>
-#include <fstream>
 
 
 #if YETTY_WEB
@@ -30,13 +29,13 @@ public:
     ~TerminalImpl() override = default;
 
     Result<void> init() {
-        ydebug("Terminal::init() start");
+        yinfo("Terminal::init() start");
         auto screenResult = GPUScreen::create(_ctx);
         if (!screenResult) {
             yerror("Terminal::init() GPUScreen::create FAILED");
             return Err<void>("Failed to create GPUScreen", screenResult);
         }
-        ydebug("Terminal::init() GPUScreen created");
+        yinfo("Terminal::init() GPUScreen created");
         _gpuScreen = *screenResult;
 
 #if YETTY_WEB
@@ -72,7 +71,7 @@ public:
         // PTY start is deferred to first setViewport() call so we have correct size
         // (GPUScreen cols/rows are 0 until first resize)
 
-        ydebug("Terminal created with GPUScreen");
+        yinfo("Terminal created with GPUScreen");
         return Ok();
     }
 
@@ -192,7 +191,7 @@ private:
 
         if (!telnetAddress.empty()) {
             // Telnet mode: connect to telnet server via WebSocket
-            ydebug("Terminal: using telnet connection to {}", telnetAddress);
+            yinfo("Terminal: using telnet connection to {}", telnetAddress);
 
             PtyConfig config;
             config.shell = telnetAddress;  // ws://host:port format
@@ -215,7 +214,7 @@ private:
             });
 
             _ptyReader->setExitCallback([this](int exitCode) {
-                ydebug("Telnet exited with code {}", exitCode);
+                yinfo("Telnet exited with code {}", exitCode);
                 _running = false;
             });
 
@@ -227,7 +226,7 @@ private:
         // Webasm: Use Platform::createPTY() which creates WebPTY with JSLinux iframe
         const char* vmConfigEnv = getenv("YETTY_VM_CONFIG");
         std::string vmConfig = vmConfigEnv ? vmConfigEnv : "alpine-x86_64.cfg";
-        ydebug("Terminal: using VM config: {}", vmConfig);
+        yinfo("Terminal: using VM config: {}", vmConfig);
 
         // Get platform to create PTY
         auto platformResult = Platform::create();
@@ -251,7 +250,7 @@ private:
         });
 
         _pty->setExitCallback([this](int exitCode) {
-            ydebug("PTY exited with code {}", exitCode);
+            yinfo("PTY exited with code {}", exitCode);
             _running = false;
         });
 
@@ -264,31 +263,6 @@ private:
         yinfo("Terminal started WebPTY: {} ({}x{})", vmConfig, cols, rows);
         return Ok();
 #else
-        // Check for text inject mode (--text flag)
-        std::string textFile;
-        if (_ctx.config) {
-            auto textOpt = _ctx.config->get<std::string>("shell/text");
-            if (textOpt && !textOpt->empty()) {
-                textFile = *textOpt;
-            }
-        }
-
-        if (!textFile.empty()) {
-            // Text inject mode: read file and feed raw bytes directly to renderer
-            yinfo("Terminal: text inject mode, file={}", textFile);
-            std::ifstream file(textFile, std::ios::binary);
-            if (!file) {
-                return Err<void>("Failed to open text file: " + textFile);
-            }
-            std::vector<char> content((std::istreambuf_iterator<char>(file)),
-                                       std::istreambuf_iterator<char>());
-            file.close();
-            yinfo("Terminal: injecting {} bytes from {}", content.size(), textFile);
-            processPtyData(content.data(), content.size());
-            _running = true;
-            return Ok();
-        }
-
 #ifndef _WIN32
         // Check for telnet mode (--telnet flag) - Unix only
         std::string telnetAddress;
@@ -301,7 +275,7 @@ private:
 
         if (!telnetAddress.empty()) {
             // Telnet mode: connect to remote/local telnet server
-            ydebug("Terminal: using telnet connection to {}", telnetAddress);
+            yinfo("Terminal: using telnet connection to {}", telnetAddress);
 
             PtyConfig config;
             config.shell = telnetAddress;  // host:port format
@@ -320,14 +294,14 @@ private:
             // Desktop: Use PtyReader with OSC-aware reading
             // Get shell path from SHELL env (or COMSPEC on Windows)
 #ifdef _WIN32
-            // Windows: prefer cmd.exe (COMSPEC) for best ConPTY compatibility
-            // cmd.exe's 'type' passes raw bytes/escape sequences through correctly
-            // PowerShell's 'cat' (Get-Content) strips ANSI escapes and mangles UTF-8
-            // Override with YETTY_SHELL env var if needed
+            // Windows: prefer PowerShell, then COMSPEC (cmd.exe)
+            // Avoid MSYS/Git bash under ConPTY (interactive I/O issues)
             const char* shellEnv = nullptr;
             std::string shellPath;
             if (auto* ps = getenv("YETTY_SHELL")) {
                 shellPath = ps;  // Explicit override
+            } else if (std::filesystem::exists("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe")) {
+                shellPath = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
             } else {
                 shellEnv = getenv("COMSPEC");
                 shellPath = shellEnv ? shellEnv : "cmd.exe";
@@ -343,7 +317,7 @@ private:
                 auto cmdOpt = _ctx.config->get<std::string>("shell/command");
                 if (cmdOpt && !cmdOpt->empty()) {
                     command = *cmdOpt;
-                    ydebug("Terminal: using command from config: {}", command);
+                    yinfo("Terminal: using command from config: {}", command);
                 }
             }
 
@@ -353,13 +327,13 @@ private:
             config.cols = cols;
             config.rows = rows;
 
-            ydebug("Creating PtyReader: shell={} {}x{}", shellPath, cols, rows);
+            yinfo("Creating PtyReader: shell={} {}x{}", shellPath, cols, rows);
             auto readerResult = PtyReader::create(config, _ctx.platform);
             if (!readerResult) {
                 yerror("PtyReader::create FAILED: {}", readerResult.error().message());
                 return Err<void>("Failed to create PtyReader", readerResult);
             }
-            ydebug("PtyReader::create SUCCESS");
+            yinfo("PtyReader::create SUCCESS");
             _ptyReader = *readerResult;
             yinfo("Terminal started PTY: {} ({}x{})", shellPath, cols, rows);
         }
@@ -370,7 +344,7 @@ private:
         });
 
         _ptyReader->setExitCallback([this](int exitCode) {
-            ydebug("PTY exited with code {}", exitCode);
+            yinfo("PTY exited with code {}", exitCode);
             _running = false;
         });
 
@@ -434,8 +408,8 @@ private:
                 char h[4]; snprintf(h, sizeof(h), "%02x ", b); hex += h;
                 ascii += (b >= 0x20 && b < 0x7f) ? static_cast<char>(b) : '.';
             }
-            ydebug("PTY DATA[{}]: {}", dumpLen, hex);
-            ydebug("PTY ASCII: {}", ascii);
+            yinfo("PTY DATA[{}]: {}", dumpLen, hex);
+            yinfo("PTY ASCII: {}", ascii);
         }
 
         // Reset scanner before processing (processPtyData has its own state)

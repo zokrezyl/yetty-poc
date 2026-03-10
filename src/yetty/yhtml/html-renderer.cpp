@@ -42,13 +42,13 @@ HtmlRenderResult renderHtmlToBuffer(
     result.documentHeight = result.document->height();
     result.container->setViewportSize(viewW, result.documentHeight);
 
-    ydebug("renderHtmlToBuffer: viewW={} docHeight={} buffer primCount before draw={}",
+    yinfo("renderHtmlToBuffer: viewW={} docHeight={} buffer primCount before draw={}",
           viewW, result.documentHeight, buffer->primCount());
 
     litehtml::position clip(0, 0, viewW, result.documentHeight);
     result.document->draw(0, 0, 0, &clip);
 
-    ydebug("renderHtmlToBuffer: buffer primCount after draw={}", buffer->primCount());
+    yinfo("renderHtmlToBuffer: buffer primCount after draw={}", buffer->primCount());
 
     return result;
 }

@@ -3,7 +3,6 @@ add_subdirectory(texture)
 add_subdirectory(image)
 add_subdirectory(plot)
 add_subdirectory(ydraw)
-add_subdirectory(ypaint)
 add_subdirectory(diagram)
 add_subdirectory(ydraw-zoo)
 add_subdirectory(ydraw-maze)
@@ -25,7 +24,6 @@ target_link_libraries(yetty_cards INTERFACE
     yetty_card_image
     yetty_card_plot
     yetty_card_ydraw
-    yetty_card_ypaint
     yetty_card_diagram
     yetty_card_ydraw_zoo
     yetty_card_ydraw_maze

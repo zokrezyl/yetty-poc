@@ -284,11 +284,9 @@ static PipelineResult runPipeline(YDrawBuffer::Ptr buf,
                                    float sceneW, float sceneH,
                                    FontManager::Ptr fontMgr = nullptr) {
     auto mockCM = std::make_shared<MockCardManager>();
-    auto builder = *YDrawBuilder::create(fontMgr, testAllocator(), mockCM, 0);
+    auto builder = *YDrawBuilder::create(fontMgr, testAllocator(), buf, mockCM, 0);
     builder->setSceneBounds(0, 0, sceneW, sceneH);
-    if (!buf->empty()) {
-        builder->addYdrawBuffer(buf);
-    }
+    builder->calculate();
     builder->declareBufferNeeds();
     mockCM->mockBufMgr()->commitReservations();
     builder->allocateBuffers();
@@ -774,14 +772,14 @@ suite ygui_full_scenario_tests = [] {
 
         auto buf = *YDrawBuffer::create();
         auto mockCM = std::make_shared<MockCardManager>();
-        auto builder = *YDrawBuilder::create(fm, testAllocator(), mockCM, 0);
+        auto builder = *YDrawBuilder::create(fm, testAllocator(), buf, mockCM, 0);
         builder->setSceneBounds(0, 0, 300.0f, 200.0f);
 
         // First build: button
         yguiAddBox(buf.get(), 10, 10, 100, 24, 0xFF333344, 4);
         yguiAddText(buf.get(), "Old", 18, 14, 0xFFFFFFFF);
 
-        builder->addYdrawBuffer(buf);
+        builder->calculate();
         builder->declareBufferNeeds();
         mockCM->mockBufMgr()->commitReservations();
         builder->allocateBuffers();
@@ -794,11 +792,10 @@ suite ygui_full_scenario_tests = [] {
 
         // Rebuild: clear and add different widget
         buf->clear();
-        builder->clear();
         yguiAddCircle(buf.get(), 50.0f, 50.0f, 20.0f, 0xFFFF0000);
         yguiAddText(buf.get(), "New Label Here", 80, 45, 0xFFFFFFFF);
 
-        builder->addYdrawBuffer(buf);
+        builder->calculate();
         builder->declareBufferNeeds();
         mockCM->mockBufMgr()->commitReservations();
         builder->allocateBuffers();
@@ -834,11 +831,11 @@ suite ygui_metadata_tests = [] {
         yguiAddBox(buf.get(), 10, 10, 100, 30, 0xFF333344, 4);
 
         auto mockCM = std::make_shared<MockCardManager>();
-        auto builder = *YDrawBuilder::create(nullptr, nullptr, mockCM, 0);
+        auto builder = *YDrawBuilder::create(nullptr, nullptr, buf, mockCM, 0);
         builder->setSceneBounds(0, 0, 200.0f, 100.0f);
         builder->setBgColor(0xFF1A1A2E);  // ygui dark theme bg
 
-        builder->addYdrawBuffer(buf);
+        builder->calculate();
         builder->declareBufferNeeds();
         mockCM->mockBufMgr()->commitReservations();
         builder->allocateBuffers();
@@ -854,12 +851,12 @@ suite ygui_metadata_tests = [] {
         yguiAddBox(buf.get(), 10, 10, 100, 30, 0xFF333344, 4);
 
         auto mockCM = std::make_shared<MockCardManager>();
-        auto builder = *YDrawBuilder::create(nullptr, nullptr, mockCM, 0);
+        auto builder = *YDrawBuilder::create(nullptr, nullptr, buf, mockCM, 0);
 
         float pixelW = 800.0f, pixelH = 600.0f;
         builder->setSceneBounds(0, 0, pixelW, pixelH);
 
-        builder->addYdrawBuffer(buf);
+        builder->calculate();
         builder->declareBufferNeeds();
         mockCM->mockBufMgr()->commitReservations();
         builder->allocateBuffers();

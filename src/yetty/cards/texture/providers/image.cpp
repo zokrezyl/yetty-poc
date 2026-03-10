@@ -40,7 +40,7 @@ public:
     //=========================================================================
 
     Result<void> init() override {
-        ydebug("ImageProvider::init: payload size={}", _payload.size());
+        yinfo("ImageProvider::init: payload size={}", _payload.size());
 
         if (_payload.empty()) {
             return Err<void>("ImageProvider::init: empty payload");
@@ -58,7 +58,7 @@ public:
                              stbi_failure_reason());
         }
 
-        ydebug("ImageProvider::init: loaded image {}x{} ({} channels -> 4)",
+        yinfo("ImageProvider::init: loaded image {}x{} ({} channels -> 4)",
               width, height, channels);
 
         // Calculate target dimensions based on card size (using default cell size 10x20)
@@ -83,7 +83,7 @@ public:
         _textureWidth = std::max(_textureWidth, 1u);
         _textureHeight = std::max(_textureHeight, 1u);
 
-        ydebug("ImageProvider::init: scaling {}x{} -> {}x{} (target {}x{})",
+        yinfo("ImageProvider::init: scaling {}x{} -> {}x{} (target {}x{})",
               width, height, _textureWidth, _textureHeight, targetWidth, targetHeight);
 
         // Scale image using bilinear interpolation
@@ -164,7 +164,7 @@ public:
         outWidth = _textureWidth;
         outHeight = _textureHeight;
 
-        ydebug("ImageProvider::render: {}x{} ({} bytes)",
+        yinfo("ImageProvider::render: {}x{} ({} bytes)",
               outWidth, outHeight, buffer.size());
 
         return Ok();
@@ -213,7 +213,7 @@ Result<ImageProvider::Ptr> ImageProvider::create(
     const std::string& args,
     const std::string& payload)
 {
-    ydebug("ImageProvider::create: widthCells={} heightCells={} payload_len={}",
+    yinfo("ImageProvider::create: widthCells={} heightCells={} payload_len={}",
           widthCells, heightCells, payload.size());
 
     auto provider = std::make_shared<ImageProviderImpl>(

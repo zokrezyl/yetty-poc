@@ -1,6 +1,7 @@
 #!/bin/bash
 # YEcho Styled: ANSI colored and styled text blocks
-YECHO="${YECHO:-yecho}"
+DIR="$(cd "$(dirname "$0")" && pwd)"
+YECHO="$DIR/../../../build-desktop-dawn-release/src/yetty/yecho/yecho"
 
 echo "=== YEcho Styled Text Demo ==="
 echo

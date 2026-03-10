@@ -54,7 +54,7 @@ public:
         if (!event.key.empty())
             ss << ";" << event.key << "=" << event.value;
         ss << "\033\\";
-        ydebug("YGui event: {}", ss.str());
+        yinfo("YGui event: {}", ss.str());
     }
 
 private:
@@ -381,7 +381,7 @@ public:
         _metaHandle = *metaRes;
 
         auto builderRes = YDrawBuilder::create(
-            _fontManager, _gpuAllocator, _cardMgr, metadataSlotIndex());
+            _fontManager, _gpuAllocator, _buffer, _cardMgr, metadataSlotIndex());
         if (!builderRes)
             return Err<void>("YGui: failed to create builder", builderRes);
         _builder = *builderRes;
@@ -405,7 +405,7 @@ public:
         if (!_payloadStr.empty())
             parseWidgets(_payloadStr, *_engine);
 
-        ydebug("YGui::init: size {}x{} cells, {}x{} pixels", _widthCells,
+        yinfo("YGui::init: size {}x{} cells, {}x{} pixels", _widthCells,
               _heightCells, _pixelWidth, _pixelHeight);
 
         // Initial render
@@ -413,9 +413,7 @@ public:
 
         _builder->setSceneBounds(0, 0, _pixelWidth, _pixelHeight);
         _builder->setBgColor(0xFF1A1A2E);
-        if (!_buffer->empty()) {
-            _builder->addYdrawBuffer(_buffer);
-        }
+        _builder->calculate();
 
         // Register for events
         if (auto res = registerForEvents(); !res)
@@ -482,10 +480,7 @@ public:
         if (!_builder || !_engine) return;
         if (_engine->isDirty()) {
             _engine->rebuild();
-            _builder->clear();
-            if (!_buffer->empty()) {
-                _builder->addYdrawBuffer(_buffer);
-            }
+            _builder->calculate();
         }
     }
 

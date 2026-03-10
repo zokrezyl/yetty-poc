@@ -40,7 +40,7 @@ public:
         _paths.dataDir = dataDir;
         _paths.nativeLibDir = nativeLibDir;
         _paths.binDir = dataDir + "/bin";
-        ydebug("Android paths set: dataDir={}, nativeLib={}, bin={}",
+        yinfo("Android paths set: dataDir={}, nativeLib={}, bin={}",
               _paths.dataDir, _paths.nativeLibDir, _paths.binDir);
         setupBinDirectory();
     }
@@ -83,25 +83,25 @@ private:
             for (int i = 0; TOYBOX_COMMANDS[i]; i++) {
                 createSymlink(toyboxLib, _paths.binDir + "/" + TOYBOX_COMMANDS[i]);
             }
-            ydebug("Created toybox symlinks in {}", _paths.binDir);
+            yinfo("Created toybox symlinks in {}", _paths.binDir);
         }
 
         // Create ycat symlink
         if (access(ycatLib.c_str(), X_OK) == 0) {
             createSymlink(ycatLib, _paths.binDir + "/ycat");
-            ydebug("Created ycat symlink");
+            yinfo("Created ycat symlink");
         }
 
         // Create yecho symlink
         if (access(yechoLib.c_str(), X_OK) == 0) {
             createSymlink(yechoLib, _paths.binDir + "/yecho");
-            ydebug("Created yecho symlink");
+            yinfo("Created yecho symlink");
         }
 
         // Create login symlink
         if (access(loginLib.c_str(), X_OK) == 0) {
             createSymlink(loginLib, _paths.binDir + "/login");
-            ydebug("Created login symlink");
+            yinfo("Created login symlink");
         }
     }
 
@@ -363,7 +363,7 @@ Result<Platform::Ptr> Platform::create(bool headless) {
     initAndroidPaths(platform.get());
 
     g_androidPlatform = platform.get();
-    ydebug("Android platform created");
+    yinfo("Android platform created");
     return Ok<Ptr>(std::move(platform));
 }
 

@@ -155,7 +155,7 @@ public:
         _metaHandle = *metaResult;
 
         auto builderRes = YDrawBuilder::create(
-            _fontManager, _gpuAllocator, _cardMgr, metadataSlotIndex());
+            _fontManager, _gpuAllocator, _buffer, _cardMgr, metadataSlotIndex());
         if (!builderRes) {
             return Err<void>("DiagramImpl::init: failed to create builder", builderRes);
         }
@@ -183,7 +183,7 @@ public:
             }
         }
 
-        ydebug("DiagramImpl::init: {} prims, {} glyphs",
+        yinfo("DiagramImpl::init: {} prims, {} glyphs",
               _builder->primitiveCount(), _builder->glyphCount());
 
         return Ok();

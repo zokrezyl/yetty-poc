@@ -29,14 +29,14 @@ namespace yetty {
 
 Result<void> CpuMsdfCdbProvider::generate(const MsdfCdbConfig& config) {
     if (std::filesystem::exists(config.cdbPath)) {
-        ydebug("CpuMsdfCdbProvider: CDB already exists: {}", config.cdbPath);
+        yinfo("CpuMsdfCdbProvider: CDB already exists: {}", config.cdbPath);
         return Ok();
     }
 
     auto outputDir = std::filesystem::path(config.cdbPath).parent_path().string();
     std::filesystem::create_directories(outputDir);
 
-    ydebug("CpuMsdfCdbProvider: generating {} from {}", config.cdbPath, config.ttfPath);
+    yinfo("CpuMsdfCdbProvider: generating {} from {}", config.cdbPath, config.ttfPath);
 
     msdfgen::GeneratorConfig genCfg;
     genCfg.fontPath   = config.ttfPath;
@@ -46,7 +46,7 @@ Result<void> CpuMsdfCdbProvider::generate(const MsdfCdbConfig& config) {
 
     auto result = msdfgen::generate(genCfg, [](size_t cur, size_t total, const std::string&) {
         if (cur % 1000 == 0 || cur == total) {
-            ydebug("  progress: {}/{}", cur, total);
+            yinfo("  progress: {}/{}", cur, total);
         }
     });
 
@@ -61,7 +61,7 @@ Result<void> CpuMsdfCdbProvider::generate(const MsdfCdbConfig& config) {
         std::filesystem::rename(msdfgenOutput, config.cdbPath);
     }
 
-    ydebug("CpuMsdfCdbProvider: generated {} glyphs", result.glyphsGenerated);
+    yinfo("CpuMsdfCdbProvider: generated {} glyphs", result.glyphsGenerated);
     return Ok();
 }
 
@@ -149,7 +149,7 @@ Result<void> GpuMsdfCdbProvider::initDevice() {
         return Err<void>("GpuMsdfCdbProvider: failed to create WebGPU device with high limits");
     }
 
-    ydebug("GpuMsdfCdbProvider: created dedicated device with 2GB buffer limit");
+    yinfo("GpuMsdfCdbProvider: created dedicated device with 2GB buffer limit");
     return Ok();
 }
 
@@ -166,7 +166,7 @@ void GpuMsdfCdbProvider::releaseDevice() {
 
 Result<void> GpuMsdfCdbProvider::generate(const MsdfCdbConfig& config) {
     if (std::filesystem::exists(config.cdbPath)) {
-        ydebug("GpuMsdfCdbProvider: CDB already exists: {}", config.cdbPath);
+        yinfo("GpuMsdfCdbProvider: CDB already exists: {}", config.cdbPath);
         return Ok();
     }
 
@@ -184,7 +184,7 @@ Result<void> GpuMsdfCdbProvider::generate(const MsdfCdbConfig& config) {
 
     msdf::Context ctx(_device, _instance);
 
-    ydebug("GpuMsdfCdbProvider: generating {} from {}", config.cdbPath, config.ttfPath);
+    yinfo("GpuMsdfCdbProvider: generating {} from {}", config.cdbPath, config.ttfPath);
 
     // Compute correct scale: fontSize * 64 / unitsPerEm
     // so atlas pixel dimensions match display pixel dimensions
@@ -200,7 +200,7 @@ Result<void> GpuMsdfCdbProvider::generate(const MsdfCdbConfig& config) {
     fontCfg.scale = config.fontSize * 64.0f / unitsPerEm;
     fontCfg.range = config.pixelRange;
 
-    ydebug("GpuMsdfCdbProvider: unitsPerEm={} scale={}", unitsPerEm, fontCfg.scale);
+    yinfo("GpuMsdfCdbProvider: unitsPerEm={} scale={}", unitsPerEm, fontCfg.scale);
 
     auto font = ctx.loadFont(config.ttfPath, fontCfg);
     if (!font) {
@@ -209,10 +209,10 @@ Result<void> GpuMsdfCdbProvider::generate(const MsdfCdbConfig& config) {
     }
 
     auto charset = font->getAllCodepoints();
-    ydebug("GpuMsdfCdbProvider: generating {} glyphs", charset.size());
+    yinfo("GpuMsdfCdbProvider: generating {} glyphs", charset.size());
 
     int generated = ctx.generateGlyphs(*font, charset);
-    ydebug("GpuMsdfCdbProvider: generated {} glyphs", generated);
+    yinfo("GpuMsdfCdbProvider: generated {} glyphs", generated);
 
     // Read atlas back to CPU
     auto atlasData = ctx.readAtlasToRGBA8(*font->getAtlas());
@@ -274,7 +274,7 @@ Result<void> GpuMsdfCdbProvider::generate(const MsdfCdbConfig& config) {
 
     std::filesystem::rename(tmpPath, config.cdbPath);
     auto fileSize = std::filesystem::file_size(config.cdbPath);
-    ydebug("GpuMsdfCdbProvider: wrote {} glyphs to {} ({} MB)",
+    yinfo("GpuMsdfCdbProvider: wrote {} glyphs to {} ({} MB)",
           written, config.cdbPath, fileSize / 1024 / 1024);
 
     // Release dedicated device after generation

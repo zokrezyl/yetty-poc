@@ -49,7 +49,7 @@ public:
                 _glyphBase0 = font->getGlyphIndex('0');
                 _glyphDot   = font->getGlyphIndex('.');
                 _glyphMinus = font->getGlyphIndex('-');
-                ydebug("Plot: glyph indices: '0'={} '.'={} '-'={}",
+                yinfo("Plot: glyph indices: '0'={} '.'={} '-'={}",
                       _glyphBase0, _glyphDot, _glyphMinus);
             }
         }
@@ -89,7 +89,7 @@ public:
         }
         _metaHandle = *metaResult;
 
-        ydebug("Plot::init: allocated metadata at offset {}", _metaHandle.offset);
+        yinfo("Plot::init: allocated metadata at offset {}", _metaHandle.offset);
 
         // Parse args (may set up expression mode)
         parseArgs(_argsStr);
@@ -107,7 +107,7 @@ public:
                 }
             }
             _transformCount = static_cast<uint32_t>(_transformIndices.size());
-            ydebug("Plot::init: expression mode, {} transforms, base={}", _transformCount, _transformBase);
+            yinfo("Plot::init: expression mode, {} transforms, base={}", _transformCount, _transformBase);
         }
 
         // Parse payload if provided (for buffer mode)
@@ -165,7 +165,7 @@ public:
             buf.handle = StorageHandle::invalid();
         }
 
-        ydebug("Plot::suspend: deallocated storage, _data has {} floats, {} declared buffers",
+        yinfo("Plot::suspend: deallocated storage, _data has {} floats, {} declared buffers",
               _data.size(), _bufferDecls.size());
     }
 
@@ -210,7 +210,7 @@ public:
             std::memcpy(_storageHandle.data, _data.data(), storageSize);
             _cardMgr->bufferManager()->markBufferDirty(_storageHandle);
             _metadataDirty = true;
-            ydebug("Plot::allocateBuffers: allocated storage at offset {}", _storageHandle.offset);
+            yinfo("Plot::allocateBuffers: allocated storage at offset {}", _storageHandle.offset);
         }
 
         // Allocate declared buffers
@@ -232,7 +232,7 @@ public:
                     std::memset(buf.handle.data, 0, storageSize);
                 }
                 _cardMgr->bufferManager()->markBufferDirty(buf.handle);
-                ydebug("Plot::allocateBuffers: allocated buffer '{}' at offset {}, size={}",
+                yinfo("Plot::allocateBuffers: allocated buffer '{}' at offset {}, size={}",
                       buf.name, buf.handle.offset, buf.size);
             }
         }
@@ -256,7 +256,7 @@ public:
     //=========================================================================
 
     Result<void> update(const std::string& args, const std::string& payload) override {
-        ydebug("Plot::update: args='{}' payload_len={}", args, payload.size());
+        yinfo("Plot::update: args='{}' payload_len={}", args, payload.size());
 
         // Parse args for advance=N and buffer=name
         uint32_t advanceCount = 0;
@@ -288,7 +288,7 @@ public:
             }
         }
 
-        ydebug("Plot::update: advance={} buffer='{}' newValues={}",
+        yinfo("Plot::update: advance={} buffer='{}' newValues={}",
               advanceCount, targetBuffer, newValues.size());
 
         // Resolve target buffer - named buffer, first declared buffer, or default storage
@@ -345,7 +345,7 @@ public:
     }
 
     Result<void> setData(const float* data, uint32_t count) override {
-        ydebug("Plot::setData: count={}", count);
+        yinfo("Plot::setData: count={}", count);
 
         if (count == 0 || !data) {
             return Err<void>("Plot::setData: empty data");
@@ -354,7 +354,7 @@ public:
         // Copy data locally
         _data.assign(data, data + count);
 
-        ydebug("Plot::setData: copied {} floats, first few: {} {} {} {} {}",
+        yinfo("Plot::setData: copied {} floats, first few: {} {} {} {} {}",
               _data.size(),
               count > 0 ? _data[0] : 0.0f,
               count > 1 ? _data[1] : 0.0f,
@@ -369,7 +369,7 @@ public:
 
         // Allocate new storage
         uint32_t storageSize = count * sizeof(float);
-        ydebug("Plot::setData: allocating {} bytes for {} floats", storageSize, count);
+        yinfo("Plot::setData: allocating {} bytes for {} floats", storageSize, count);
 
         auto storageResult = _cardMgr->bufferManager()->allocateBuffer(metadataSlotIndex(), "storage", storageSize);
         if (!storageResult) {
@@ -378,14 +378,14 @@ public:
         }
         _storageHandle = *storageResult;
 
-        ydebug("Plot::setData: storage allocated at byte offset {}, float index {}",
+        yinfo("Plot::setData: storage allocated at byte offset {}, float index {}",
               _storageHandle.offset, _storageHandle.offset / sizeof(float));
 
         // Write data directly to buffer
         std::memcpy(_storageHandle.data, _data.data(), storageSize);
         _cardMgr->bufferManager()->markBufferDirty(_storageHandle);
 
-        ydebug("Plot::setData: {} floats written to storage", count);
+        yinfo("Plot::setData: {} floats written to storage", count);
 
         _metadataDirty = true;
         return Ok();
@@ -473,7 +473,7 @@ public:
                 if (newZoom != _zoom) {
                     _zoom = newZoom;
                     _metadataDirty = true;
-                    ydebug("Plot::onEvent: zoom={:.2f}", _zoom);
+                    yinfo("Plot::onEvent: zoom={:.2f}", _zoom);
                 }
                 return Ok(true);
             } else if (event.scroll.mods & GLFW_MOD_SHIFT) {
@@ -514,7 +514,7 @@ private:
             return Err<void>("Plot::registerForEvents: failed to register Scroll", res);
         }
 
-        ydebug("Plot card {} registered for events (priority 1000)", id());
+        yinfo("Plot card {} registered for events (priority 1000)", id());
         return Ok();
     }
 
@@ -557,7 +557,7 @@ private:
 
     // Parse braced notation using YEchoParser
     void parseBracedArgs(const std::string& args) {
-        ydebug("Plot::parseBracedArgs: args='{}'", args);
+        yinfo("Plot::parseBracedArgs: args='{}'", args);
 
         YEchoParser parser;
         auto spans = parser.parse(args);
@@ -600,7 +600,7 @@ private:
             } else if (attr.value == "buffer") {
                 // f=buffer declares a buffer named 'f'
                 auto* buf = findOrCreateBuffer(attr.key);
-                ydebug("Plot::parseBracedArgs: declared buffer '{}'", attr.key);
+                yinfo("Plot::parseBracedArgs: declared buffer '{}'", attr.key);
             } else if (attr.key.size() > 1 && attr.key[0] == '@') {
                 // Check for @name.property pattern
                 std::string fullKey = attr.key.substr(1);  // Remove leading @
@@ -612,20 +612,20 @@ private:
                     auto* buf = findOrCreateBuffer(bufName);
                     if (prop == "size") {
                         buf->size = parseSizeWithSuffix(attr.value);
-                        ydebug("Plot::parseBracedArgs: buffer '{}' size={}", bufName, buf->size);
+                        yinfo("Plot::parseBracedArgs: buffer '{}' size={}", bufName, buf->size);
                     } else if (prop == "values") {
                         if (attr.value.empty()) {
                             // @f.values= means take from payload
                             buf->valuesFromPayload = true;
-                            ydebug("Plot::parseBracedArgs: buffer '{}' values from payload", bufName);
+                            yinfo("Plot::parseBracedArgs: buffer '{}' values from payload", bufName);
                         } else if (attr.value.front() == '"' || attr.value.front() == '\'') {
                             // @f.values="file.csv" means load from file
                             buf->valuesSource = attr.value.substr(1, attr.value.size() - 2);
-                            ydebug("Plot::parseBracedArgs: buffer '{}' values from file '{}'", bufName, buf->valuesSource);
+                            yinfo("Plot::parseBracedArgs: buffer '{}' values from file '{}'", bufName, buf->valuesSource);
                         } else {
                             // @f.values=1,2,3 means inline values
                             buf->valuesSource = attr.value;
-                            ydebug("Plot::parseBracedArgs: buffer '{}' inline values", bufName);
+                            yinfo("Plot::parseBracedArgs: buffer '{}' inline values", bufName);
                         }
                     }
                 }
@@ -637,10 +637,10 @@ private:
             _plotResult = yast::plotExpressionToWGSL(span.content);
             if (!_plotResult.plots.empty()) {
                 _flags |= FLAG_EXPR;
-                ydebug("Plot::parseBracedArgs: parsed {} functions", _plotResult.plots.size());
+                yinfo("Plot::parseBracedArgs: parsed {} functions", _plotResult.plots.size());
                 for (size_t i = 0; i < _plotResult.plots.size(); i++) {
                     const auto& p = _plotResult.plots[i];
-                    ydebug("  [{}] {} = '{}' color='{}' text='{}'",
+                    yinfo("  [{}] {} = '{}' color='{}' text='{}'",
                           i, p.name, p.expr.code, p.color, p.text);
                 }
 
@@ -682,7 +682,7 @@ private:
     }
 
     void parseArgs(const std::string& args) {
-        ydebug("Plot::parseArgs: args='{}'", args);
+        yinfo("Plot::parseArgs: args='{}'", args);
 
         // Check for braced notation
         if (!args.empty() && args.front() == '{') {
@@ -718,10 +718,10 @@ private:
                     _plotResult = yast::plotExpressionToWGSL(expr);
                     if (!_plotResult.plots.empty()) {
                         _flags |= FLAG_EXPR;
-                        ydebug("Plot::parseArgs: parsed {} functions", _plotResult.plots.size());
+                        yinfo("Plot::parseArgs: parsed {} functions", _plotResult.plots.size());
                         for (size_t i = 0; i < _plotResult.plots.size(); i++) {
                             const auto& p = _plotResult.plots[i];
-                            ydebug("  [{}] {} = '{}' color='{}' text='{}'",
+                            yinfo("  [{}] {} = '{}' color='{}' text='{}'",
                                   i, p.name, p.expr.code, p.color, p.text);
                         }
                     } else {
@@ -779,11 +779,11 @@ private:
                             if (!bufValue.empty() && (bufValue.front() == '"' || bufValue.front() == '\'')) {
                                 // File source: name="file.csv"
                                 buf->valuesSource = bufValue.substr(1, bufValue.size() - 2);
-                                ydebug("Plot::parseArgs: buffer '{}' from file '{}'", bufName, buf->valuesSource);
+                                yinfo("Plot::parseArgs: buffer '{}' from file '{}'", bufName, buf->valuesSource);
                             } else {
                                 // Size: name=1024 or name=1k
                                 buf->size = parseSizeWithSuffix(bufValue);
-                                ydebug("Plot::parseArgs: buffer '{}' size={}", bufName, buf->size);
+                                yinfo("Plot::parseArgs: buffer '{}' size={}", bufName, buf->size);
                             }
                         }
                     }
@@ -805,14 +805,14 @@ private:
                     auto* buf = findOrCreateBuffer(bufName);
                     if (prop == "size") {
                         buf->size = parseSizeWithSuffix(value);
-                        ydebug("Plot::parseArgs: buffer '{}' size={}", bufName, buf->size);
+                        yinfo("Plot::parseArgs: buffer '{}' size={}", bufName, buf->size);
                     } else if (prop == "values") {
                         if (value.empty()) {
                             buf->valuesFromPayload = true;
-                            ydebug("Plot::parseArgs: buffer '{}' values from payload", bufName);
+                            yinfo("Plot::parseArgs: buffer '{}' values from payload", bufName);
                         } else {
                             buf->valuesSource = value;
-                            ydebug("Plot::parseArgs: buffer '{}' values='{}'", bufName, value);
+                            yinfo("Plot::parseArgs: buffer '{}' values='{}'", bufName, value);
                         }
                     }
                 }
@@ -856,9 +856,9 @@ private:
     }
 
     Result<void> parsePayload(const std::string& payload) {
-        ydebug("Plot::parsePayload: payload length={}", payload.size());
+        yinfo("Plot::parsePayload: payload length={}", payload.size());
         if (payload.size() > 0) {
-            ydebug("Plot::parsePayload: first 100 chars: '{}'", payload.substr(0, 100));
+            yinfo("Plot::parsePayload: first 100 chars: '{}'", payload.substr(0, 100));
         }
 
         // Parse comma or space separated float values
@@ -881,9 +881,9 @@ private:
             }
         }
 
-        ydebug("Plot::parsePayload: parsed {} values", values.size());
+        yinfo("Plot::parsePayload: parsed {} values", values.size());
         if (values.size() >= 5) {
-            ydebug("Plot::parsePayload: first 5 values: {} {} {} {} {}",
+            yinfo("Plot::parsePayload: first 5 values: {} {} {} {} {}",
                   values[0], values[1], values[2], values[3], values[4]);
         }
 
@@ -902,7 +902,7 @@ private:
                 size_t count = std::min(static_cast<size_t>(buf.size), values.size() - payloadOffset);
                 if (count > 0) {
                     buf.data.assign(values.begin() + payloadOffset, values.begin() + payloadOffset + count);
-                    ydebug("Plot::parsePayload: buffer '{}' got {} values from offset {}",
+                    yinfo("Plot::parsePayload: buffer '{}' got {} values from offset {}",
                           buf.name, count, payloadOffset);
                     payloadOffset += count;
                 }
@@ -992,7 +992,7 @@ private:
                           | ((_transformCount & 0xFF) << 16)
                           | ((renderIdx & 0xFF) << 24);
 
-        ydebug("Plot::uploadMetadata: metaOffset={} plotType={} dataOffset={} "
+        yinfo("Plot::uploadMetadata: metaOffset={} plotType={} dataOffset={} "
               "dataCount={} min={} max={} flags={} size={}x{} bgColor={:#x} domain=[{},{}] dispatch=[s={},tBase={},tCount={},r={}]",
               _metaHandle.offset, meta.plotType, meta.dataOffset,
               meta.dataCount, meta.minValue, meta.maxValue, meta.flags,
@@ -1163,7 +1163,7 @@ private:
         }
 
         _cardMgr->bufferManager()->markBufferDirty(handle);
-        ydebug("Plot::applyBufferUpdate: shifted by {}, appended {} values",
+        yinfo("Plot::applyBufferUpdate: shifted by {}, appended {} values",
               advanceCount, newValues.size());
     }
 };
@@ -1179,7 +1179,7 @@ Result<CardPtr> Plot::create(
     const std::string& args,
     const std::string& payload)
 {
-    ydebug("Plot::create: ENTERED pos=({},{}) size={}x{} args='{}' payload_len={}",
+    yinfo("Plot::create: ENTERED pos=({},{}) size={}x{} args='{}' payload_len={}",
           x, y, widthCells, heightCells, args, payload.size());
 
     if (!ctx.cardManager) {
@@ -1190,13 +1190,13 @@ Result<CardPtr> Plot::create(
     auto card = std::make_shared<PlotImpl>(
         ctx, x, y, widthCells, heightCells, args, payload);
 
-    ydebug("Plot::create: calling init()...");
+    yinfo("Plot::create: calling init()...");
     if (auto res = card->init(); !res) {
         yerror("Plot::create: init FAILED: {}", error_msg(res));
         return Err<CardPtr>("Plot::create: init failed");
     }
 
-    ydebug("Plot::create: SUCCESS, shaderGlyph={:#x}", card->shaderGlyph());
+    yinfo("Plot::create: SUCCESS, shaderGlyph={:#x}", card->shaderGlyph());
     return Ok<CardPtr>(card);
 }
 

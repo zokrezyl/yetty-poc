@@ -141,7 +141,7 @@ Result<CardPtr> YPdf::create(
     const std::string& args,
     const std::string& payload)
 {
-    ydebug("YPdf::create: pos=({},{}) size={}x{} payload_len={}",
+    yinfo("YPdf::create: pos=({},{}) size={}x{} payload_len={}",
           x, y, widthCells, heightCells, payload.size());
 
     auto card = std::make_shared<YPdf>(ctx, x, y, widthCells, heightCells,
@@ -152,7 +152,7 @@ Result<CardPtr> YPdf::create(
         return Err<CardPtr>("YPdf::create: init failed");
     }
 
-    ydebug("YPdf::create: SUCCESS, shaderGlyph={:#x} pages={} glyphs={}",
+    yinfo("YPdf::create: SUCCESS, shaderGlyph={:#x} pages={} glyphs={}",
           card->shaderGlyph(), card->_pageCount,
           card->_builder ? card->_builder->glyphCount() : 0);
     return Ok<CardPtr>(card);
@@ -172,9 +172,9 @@ Result<void> YPdf::init() {
     }
     _metaHandle = *metaResult;
 
-    // Create builder (new API - no buffer in constructor)
+    // Create builder with buffer
     auto builderRes = YDrawBuilder::create(
-        _fontManager, _gpuAllocator, _cardMgr, metadataSlotIndex());
+        _fontManager, _gpuAllocator, _buffer, _cardMgr, metadataSlotIndex());
     if (!builderRes) {
         return Err<void>("YPdf::init: failed to create builder", builderRes);
     }
@@ -284,14 +284,14 @@ Result<void> YPdf::loadPdf() {
         out.close();
 
         pdfPath = _tempPdfPath.string();
-        ydebug("YPdf::loadPdf: wrote {} bytes to temp file '{}'", _payloadStr.size(), pdfPath);
+        yinfo("YPdf::loadPdf: wrote {} bytes to temp file '{}'", _payloadStr.size(), pdfPath);
     } else {
         // Read from file path specified via -i <path>
         if (!std::filesystem::exists(_inputSource)) {
             return Err<void>("YPdf::loadPdf: file not found: " + _inputSource);
         }
         pdfPath = _inputSource;
-        ydebug("YPdf::loadPdf: loading from file '{}'", pdfPath);
+        yinfo("YPdf::loadPdf: loading from file '{}'", pdfPath);
     }
 
     _pdfFile = pdfioFileOpen(pdfPath.c_str(), /*password_cb=*/nullptr,
@@ -311,7 +311,7 @@ Result<void> YPdf::loadPdf() {
 
     _currentPage = std::clamp(_currentPage, 0, _pageCount - 1);
 
-    ydebug("YPdf::loadPdf: opened '{}' with {} pages", pdfPath, _pageCount);
+    yinfo("YPdf::loadPdf: opened '{}' with {} pages", pdfPath, _pageCount);
     return Ok();
 }
 
@@ -331,7 +331,7 @@ Result<void> YPdf::renderAllPages() {
         return Err<void>("YPdf::renderAllPages: no valid pages");
     }
 
-    ydebug("YPdf::renderAllPages: {} pages, totalHeight={:.1f}",
+    yinfo("YPdf::renderAllPages: {} pages, totalHeight={:.1f}",
           result.pageCount, result.totalHeight);
 
     return Ok();
@@ -381,10 +381,7 @@ void YPdf::cardPixelToScene(float cardX, float cardY, float& sceneX, float& scen
 
 void YPdf::renderToStaging(float /*time*/) {
     if (_builder && _dirty) {
-        _builder->clear();
-        if (!_buffer->empty()) {
-            _builder->addYdrawBuffer(_buffer);
-        }
+        _builder->calculate();
 
         // First-time zoom: fit page width to card width with uniform scaling
         if (_needsInitialZoom && _cellWidth > 0 && _cellHeight > 0) {
@@ -602,7 +599,7 @@ Result<bool> YPdf::onEvent(const base::Event& event) {
             auto loop = *base::EventLoop::instance();
             loop->dispatch(base::Event::copyEvent(
                 std::make_shared<std::string>(text)));
-            ydebug("YPdf: copied {} bytes to clipboard", text.size());
+            yinfo("YPdf: copied {} bytes to clipboard", text.size());
         }
         return Ok(true);
     }

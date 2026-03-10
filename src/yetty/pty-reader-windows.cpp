@@ -23,7 +23,6 @@ public:
 
     Result<void> init(const PtyConfig& config) {
         _shell = config.shell;
-        _command = config.command;
         _cols = config.cols;
         _rows = config.rows;
 
@@ -38,10 +37,6 @@ public:
             CloseHandle(_pipeInWrite);
             return Err<void>("Failed to create output pipe");
         }
-
-        // Set console code page to UTF-8 so child processes handle Unicode correctly
-        SetConsoleCP(CP_UTF8);
-        SetConsoleOutputCP(CP_UTF8);
 
         // Create pseudo console (ConPTY)
         COORD size = { static_cast<SHORT>(_cols), static_cast<SHORT>(_rows) };
@@ -97,19 +92,8 @@ public:
             return Err<void>("Failed to update attribute list");
         }
 
-        // Build command line
-        // Set UTF-8 codepage (65001) for correct supplementary Unicode handling
-        // ConPTY internally converts UTF-8↔UTF-16; without UTF-8 codepage,
-        // 4-byte UTF-8 sequences (codepoints above U+FFFF) get mangled
-        std::string cmdLine;
-        if (!_command.empty()) {
-            cmdLine = "cmd.exe /c chcp 65001 >nul && " + _command;
-        } else {
-            cmdLine = "cmd.exe /c chcp 65001 >nul && " + _shell;
-        }
-
-        // Convert to wide string
-        std::wstring wShell(cmdLine.begin(), cmdLine.end());
+        // Convert shell path to wide string
+        std::wstring wShell(_shell.begin(), _shell.end());
 
         // Create process
         PROCESS_INFORMATION pi = {};
@@ -143,7 +127,7 @@ public:
         // Start reader thread
         _readerThread = std::thread([this]() { readerThreadFunc(); });
 
-        ydebug("PtyReaderWindows: Started ConPTY, shell={}", _shell);
+        yinfo("PtyReaderWindows: Started ConPTY, shell={}", _shell);
         return Ok();
     }
 
@@ -181,7 +165,7 @@ public:
         if (!_running) return;
         _running = false;
 
-        ydebug("PtyReaderWindows: Stopping");
+        yinfo("PtyReaderWindows: Stopping");
 
         if (_hPC) {
             ClosePseudoConsole(_hPC);
@@ -224,30 +208,30 @@ private:
     void readerThreadFunc() {
         char buf[4096];
         int readCount = 0;
-        ydebug("PtyReaderWindows: reader thread started");
+        yinfo("PtyReaderWindows: reader thread started");
         while (_running) {
             DWORD bytesRead = 0;
-            ydebug("PtyReaderWindows: ReadFile #{} waiting...", readCount);
+            yinfo("PtyReaderWindows: ReadFile #{} waiting...", readCount);
             BOOL ok = ReadFile(_pipeOutRead, buf, sizeof(buf), &bytesRead, nullptr);
             if (ok && bytesRead > 0) {
-                ydebug("PtyReaderWindows: ReadFile #{} got {} bytes", readCount, bytesRead);
+                yinfo("PtyReaderWindows: ReadFile #{} got {} bytes", readCount, bytesRead);
                 {
                     std::lock_guard<std::mutex> lock(_bufferMutex);
                     _readBuffer.insert(_readBuffer.end(), buf, buf + bytesRead);
                 }
-                ydebug("PtyReaderWindows: calling dataAvailableCallback...");
+                yinfo("PtyReaderWindows: calling dataAvailableCallback...");
                 if (_dataAvailableCallback) {
                     _dataAvailableCallback();
                 }
-                ydebug("PtyReaderWindows: callback returned");
+                yinfo("PtyReaderWindows: callback returned");
                 readCount++;
             } else {
                 DWORD err = GetLastError();
-                ydebug("PtyReaderWindows: ReadFile failed ok={} bytesRead={} err={}", (int)ok, bytesRead, err);
+                yinfo("PtyReaderWindows: ReadFile failed ok={} bytesRead={} err={}", (int)ok, bytesRead, err);
                 // Check if process exited
                 DWORD exitCode;
                 if (GetExitCodeProcess(_hProcess, &exitCode) && exitCode != STILL_ACTIVE) {
-                    ydebug("PtyReaderWindows: process exited with code {}", exitCode);
+                    yinfo("PtyReaderWindows: process exited with code {}", exitCode);
                     _running = false;
                     if (_exitCallback) {
                         _exitCallback(static_cast<int>(exitCode));
@@ -257,7 +241,7 @@ private:
                 Sleep(10);
             }
         }
-        ydebug("PtyReaderWindows: reader thread exiting");
+        yinfo("PtyReaderWindows: reader thread exiting");
     }
 
     HPCON _hPC = nullptr;
@@ -270,7 +254,6 @@ private:
     uint32_t _cols = 80;
     uint32_t _rows = 24;
     std::string _shell;
-    std::string _command;
     std::atomic<bool> _running{false};
 
     std::thread _readerThread;

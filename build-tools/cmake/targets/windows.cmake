@@ -65,33 +65,6 @@ add_subdirectory(${YETTY_ROOT}/assets ${CMAKE_BINARY_DIR}/assets-build)
 # Ensure all runtime assets are in build output before yetty
 add_dependencies(yetty generate-cdb copy-shaders copy-assets)
 
-# Copy DirectX runtime DLLs needed by Dawn (d3dcompiler_47.dll, dxil.dll)
-if(WEBGPU_BACKEND STREQUAL "dawn")
-    # Find Windows SDK Redist directory
-    cmake_path(SET _WIN_SDK_DIR NORMALIZE "$ENV{WindowsSdkDir}")
-    set(_D3D_REDIST_DIR "${_WIN_SDK_DIR}/Redist/D3D/x64")
-    if(NOT EXISTS "${_D3D_REDIST_DIR}/d3dcompiler_47.dll")
-        # Fallback: well-known path
-        file(GLOB _SDK_DIRS "C:/Program Files (x86)/Windows Kits/10/Redist/D3D/x64")
-        if(_SDK_DIRS)
-            list(GET _SDK_DIRS 0 _D3D_REDIST_DIR)
-        endif()
-    endif()
-    if(EXISTS "${_D3D_REDIST_DIR}/d3dcompiler_47.dll")
-        add_custom_command(TARGET yetty POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${_D3D_REDIST_DIR}/d3dcompiler_47.dll"
-                "$<TARGET_FILE_DIR:yetty>/d3dcompiler_47.dll"
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${_D3D_REDIST_DIR}/dxil.dll"
-                "$<TARGET_FILE_DIR:yetty>/dxil.dll"
-            COMMENT "Copying DirectX runtime DLLs..."
-        )
-    else()
-        message(WARNING "DirectX Redist DLLs not found - d3dcompiler_47.dll and dxil.dll may be missing at runtime")
-    endif()
-endif()
-
 # Verify all required assets are present
 add_custom_command(TARGET yetty POST_BUILD
     COMMAND ${CMAKE_COMMAND} -DBUILD_DIR=${CMAKE_BINARY_DIR} -DTARGET_TYPE=desktop -P ${YETTY_ROOT}/build-tools/cmake/verify-assets.cmake

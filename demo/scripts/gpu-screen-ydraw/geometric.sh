@@ -1,5 +1,5 @@
 #!/bin/bash
-# Absolute YDraw Overlay Demo: Geometric shapes (polygons and stars)
+# Screen Draw Layer Demo: Geometric shapes (polygons and stars)
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR/../../.."

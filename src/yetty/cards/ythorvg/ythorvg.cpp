@@ -43,7 +43,7 @@ static Result<void> ythorvgInit() {
         }
         uint32_t major, minor, micro;
         const char* version = tvg::Initializer::version(&major, &minor, &micro);
-        ydebug("YThorVG engine initialized: {}", version ? version : "unknown");
+        yinfo("YThorVG engine initialized: {}", version ? version : "unknown");
     }
     ++s_thorvgRefCount;
     return Ok();
@@ -53,7 +53,7 @@ static void ythorvgTerm() {
     std::lock_guard<std::mutex> lock(s_thorvgMutex);
     if (--s_thorvgRefCount == 0) {
         tvg::Initializer::term();
-        ydebug("YThorVG engine terminated");
+        yinfo("YThorVG engine terminated");
     }
 }
 
@@ -279,7 +279,7 @@ public:
 
         // Create YDraw builder
         auto builderRes = YDrawBuilder::create(
-            _fontManager, _gpuAllocator, _cardMgr, metadataSlotIndex());
+            _fontManager, _gpuAllocator, _buffer, _cardMgr, metadataSlotIndex());
         if (!builderRes) {
             return Err<void>("YThorVG::init: failed to create builder", builderRes);
         }
@@ -316,7 +316,7 @@ public:
             ywarn("YThorVG::init: event registration failed");
         }
 
-        ydebug("YThorVG::init: {}x{} prims={} animated={}",
+        yinfo("YThorVG::init: {}x{} prims={} animated={}",
               _contentWidth, _contentHeight, _buffer->primCount(), _isAnimated);
 
         return Ok();
@@ -345,14 +345,11 @@ private:
         // Render paint tree
         paintImpl->render(_renderMethod.get());
 
-        // postRender (we don't do much here, builder->clear() + addYdrawBuffer() is separate)
+        // postRender (we don't do much here, builder->calculate() is separate)
         _renderMethod->postRender();
 
-        // Rebuild spatial grid
-        _builder->clear();
-        if (!_buffer->empty()) {
-            _builder->addYdrawBuffer(_buffer);
-        }
+        // Calculate grid
+        _builder->calculate();
     }
 
     //=========================================================================

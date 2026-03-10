@@ -109,7 +109,7 @@ Result<OscCommand> OscCommandParser::parse(const std::string& sequence) {
         return Ok(cmd);
     }
 
-    if (vendorId != YETTY_OSC_VENDOR_ID && vendorId != YPAINT_OSC_VENDOR_ID) {
+    if (vendorId != YETTY_OSC_VENDOR_ID) {
         cmd.error = "unknown vendor ID: " + std::to_string(vendorId);
         return Ok(cmd);
     }

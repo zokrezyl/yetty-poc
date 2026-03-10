@@ -95,10 +95,6 @@ Result<uint32_t> YDrawBuffer::addPrim(uint32_t id, const float* data, uint32_t w
     return Ok(id);
 }
 
-Result<uint32_t> YDrawBuffer::copyPrim(const float* data, uint32_t wordCount, uint32_t id) {
-    return addPrim(id, data, wordCount);
-}
-
 Result<void> YDrawBuffer::updatePrim(uint32_t id, const float* data, uint32_t wordCount) {
     if (_deltaMode) {
         if (!_prims.count(id)) {
@@ -239,6 +235,14 @@ void YDrawBuffer::writeGPU(float* buf, uint32_t bufBytes,
         std::memcpy(&buf[i], &off, sizeof(uint32_t));
         std::memcpy(dataBase + dataOffset, pd.words.data(),
                     pd.words.size() * sizeof(float));
+        
+        // Debug: print prim type and data
+        uint32_t primType = 0;
+        if (!pd.words.empty()) {
+            std::memcpy(&primType, &pd.words[0], sizeof(uint32_t));
+        }
+        std::cerr << "writeGPU: prim[" << i << "] id=" << id << " type=" << primType 
+                  << " words=" << pd.words.size() << " dataOff=" << dataOffset << std::endl;
         
         dataOffset += static_cast<uint32_t>(pd.words.size());
         i++;

@@ -87,23 +87,12 @@ public:
     bool empty() const { return _prims.empty() && _textSpans.empty(); }
     void clear();
 
-    // Copy raw primitive data (used by YDrawBuilder for merging buffers)
-    Result<uint32_t> copyPrim(const float* data, uint32_t wordCount, uint32_t id = AUTO_ID);
-
     // --- Iteration (primitives) ---
 
     // Iterate all primitives. Callback: fn(uint32_t id, const float* data, uint32_t wordCount)
     template<typename F>
     void forEachPrim(F&& fn) const {
         for (const auto& [id, pd] : _prims) {
-            fn(id, pd.words.data(), static_cast<uint32_t>(pd.words.size()));
-        }
-    }
-
-    // Iterate all primitives (mutable). Callback: fn(uint32_t id, float* data, uint32_t wordCount)
-    template<typename F>
-    void forEachPrimMut(F&& fn) {
-        for (auto& [id, pd] : _prims) {
             fn(id, pd.words.data(), static_cast<uint32_t>(pd.words.size()));
         }
     }

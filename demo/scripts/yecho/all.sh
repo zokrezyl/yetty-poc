@@ -1,7 +1,8 @@
 #!/bin/bash
 # YEcho All: Combined demo of all yecho features
 # NOTE: Run this inside yetty terminal for full experience!
-YECHO="${YECHO:-yecho}"
+DIR="$(cd "$(dirname "$0")" && pwd)"
+YECHO="$DIR/../../../build-desktop-dawn-release/src/yetty/yecho/yecho"
 
 echo "╔════════════════════════════════════════════════════════════╗"
 echo "║                    YEcho Feature Demo                       ║"

@@ -16,7 +16,7 @@ Result<VncView::Ptr> VncView::create(const YettyContext& ctx, const std::string&
     view->_port = port;
     view->_ctx = ctx;
     // Don't create client or connect yet - wait for setBounds() to know the view size
-    ydebug("VncView initialized for {}:{} - waiting for bounds before connect", host, port);
+    yinfo("VncView initialized for {}:{} - waiting for bounds before connect", host, port);
     return Ok<Ptr>(std::move(view));
 }
 
@@ -52,7 +52,7 @@ Result<void> VncView::connectWithBounds() {
         (*loopResult)->dispatch(base::Event::screenUpdateEvent());
     };
 
-    ydebug("VncView connected to {}:{} with bounds {}x{}", _host, _port, width, height);
+    yinfo("VncView connected to {}:{} with bounds {}x{}", _host, _port, width, height);
     return Ok();
 }
 
@@ -154,7 +154,7 @@ void VncView::onBoundsChanged() {
             static_cast<uint16_t>(_bounds.width),
             static_cast<uint16_t>(_bounds.height)
         );
-        ydebug("VncView: sent resize {}x{}", _bounds.width, _bounds.height);
+        yinfo("VncView: sent resize {}x{}", _bounds.width, _bounds.height);
     }
 }
 
