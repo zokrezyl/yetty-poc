@@ -504,6 +504,13 @@ public:
             }
         }
         bool useCustom = (resolvedFontId >= 0 && _customAtlas);
+        // Custom fonts are NOT fully supported in scrolling mode - the scrolling shader
+        // only samples from the shared fontTexture, not the custom atlas. Fall back to
+        // shared atlas with a warning.
+        if (useCustom && _scrollingMode) {
+            ywarn("addText: custom fonts not supported in scrolling mode, using default font");
+            useCustom = false;
+        }
         MsdfAtlas* activeAtlas = useCustom ? _customAtlas.get() : _atlas.get();
         if (!activeAtlas) {
             return Err<void>("addText: no atlas available");
@@ -585,6 +592,13 @@ public:
     Result<void> addRotatedText(float x, float y, const std::string& text,
                                  float fontSize, uint32_t color,
                                  float angleRadians, int fontId) {
+        // Rotated text is NOT supported in scrolling mode - the scrolling shader
+        // doesn't have SDF_ROTATED_GLYPH handling or custom atlas texture binding.
+        // Log a warning and skip rendering (return Ok to not break the flow).
+        if (_scrollingMode) {
+            ywarn("addRotatedText: rotated text not supported in scrolling mode, text='{}' ignored", text);
+            return Ok();
+        }
         int resolvedFontId = fontId;
         if (fontId >= 0) {
             auto it = _userFontIdMap.find(fontId);
@@ -656,8 +670,8 @@ public:
             sdf::detail::write_u32(primData.data(), 2, 0u);   // layer 0
             primData[3] = gx;
             primData[4] = gy;
-            primData[5] = scale;   // scaleX
-            primData[6] = scale;   // scaleY
+            primData[5] = gw;   // width in pixels (shader expects gw, not scale)
+            primData[6] = gh;   // height in pixels (shader expects gh, not scale)
             primData[7] = angleRadians;
             sdf::detail::write_u32(primData.data(), 8, glyphIndex);
             primData[9] = cosA;
@@ -686,9 +700,11 @@ public:
 
             // Compute which lines this primitive spans
             // Use sceneMinY as base for grid line calculation
+            // Guard against division by zero if cell size not yet computed
             float baseY = (_sceneMinY < 1e9f) ? _sceneMinY : 0.0f;
-            int32_t localMinLine = static_cast<int32_t>(std::floor((minY - baseY) / _cellSizeY));
-            int32_t localMaxLine = static_cast<int32_t>(std::floor((maxY - baseY) / _cellSizeY));
+            float effectiveCellSizeY = (_cellSizeY > 0.0f) ? _cellSizeY : 20.0f;  // default fallback
+            int32_t localMinLine = static_cast<int32_t>(std::floor((minY - baseY) / effectiveCellSizeY));
+            int32_t localMaxLine = static_cast<int32_t>(std::floor((maxY - baseY) / effectiveCellSizeY));
             int32_t primMinLineSigned = static_cast<int32_t>(gridOffsetRow) + localMinLine;
             int32_t primMaxLineSigned = static_cast<int32_t>(gridOffsetRow) + localMaxLine;
             primMinLineSigned = std::max(primMinLineSigned, 0);
@@ -844,7 +860,11 @@ public:
     }
 
     Result<int> addFont(const std::string& ttfPath) {
-        if (!_fontManager) return Err<int>("addFont: no font manager");
+        ydebug("addFont: ttfPath='{}'", ttfPath);
+        if (!_fontManager) {
+            yerror("addFont: _fontManager is NULL!");
+            return Err<int>("addFont: no font manager");
+        }
 
         auto stem = std::filesystem::path(ttfPath).stem().string();
         auto cacheDir = _fontManager->getCacheDir();
@@ -901,7 +921,12 @@ public:
     }
 
     Result<int> addFontData(const uint8_t* data, size_t size,
-                             const std::string& /*name*/) {
+                             const std::string& name) {
+        ydebug("addFontData: name='{}' size={}", name, size);
+        if (!_fontManager) {
+            yerror("addFontData: _fontManager is NULL!");
+            return Err<int>("addFontData: no font manager");
+        }
         uint64_t h = 14695981039346656037ULL;
         for (size_t i = 0; i < size; i++) {
             h ^= data[i];
@@ -1079,38 +1104,39 @@ public:
         uint32_t baseGlyphIdx = static_cast<uint32_t>(_glyphs.size());
 
         // 1. Process fonts from input buffer (register with atlas)
+        ydebug("addYdrawBuffer: processing fonts");
         buffer->forEachFont([this](int bufFontId, const uint8_t* data,
                                    size_t size, const std::string& name) {
+            ydebug("forEachFont: bufFontId={} name='{}' size={}", bufFontId, name, size);
             if (_bufferFontIdMap.count(bufFontId)) return;
             auto res = addFontData(data, size, name);
             if (res) {
                 _bufferFontIdMap[bufFontId] = *res;
+                ydebug("forEachFont: SUCCESS, atlasFontId={}", *res);
             } else {
-                ywarn("addYdrawBuffer: addFontData failed for '{}': {}", name, res.error().message());
+                yerror("forEachFont: FAILED: {}", res.error().message());
             }
         });
 
-        ydebug("addYdrawBuffer: fonts processed, fontMap size={}", _bufferFontIdMap.size());
-
         // 2. Process text spans -> glyphs
-        uint32_t spanCount = 0;
-        buffer->forEachTextSpan([this, &spanCount](const TextSpanData& span) {
-            spanCount++;
+        buffer->forEachTextSpan([this](const TextSpanData& span) {
             int atlasFontId = -1;
             auto it = _bufferFontIdMap.find(span.fontId);
             if (it != _bufferFontIdMap.end()) atlasFontId = it->second;
 
             if (std::abs(span.rotation) > 0.001f) {
-                addRotatedText(span.x, span.y, span.text,
+                ydebug("text span: rotation={} atlasFontId={} text='{}'", span.rotation, atlasFontId, span.text);
+                auto res = addRotatedText(span.x, span.y, span.text,
                                span.fontSize, span.color,
                                span.rotation, atlasFontId);
+                if (!res) {
+                    yerror("addRotatedText FAILED: {}", res.error().message());
+                }
             } else {
                 addText(span.x, span.y, span.text,
                         span.fontSize, span.color, span.layer, atlasFontId);
             }
         });
-
-        ydebug("addYdrawBuffer: text spans processed, count={}, glyphs={}", spanCount, _glyphs.size());
 
         // 2b. Extend scene bounds for new glyphs (MUST happen before cell size computation!)
         for (uint32_t gi = baseGlyphIdx; gi < _glyphs.size(); gi++) {
@@ -1122,8 +1148,6 @@ public:
                 _sceneMaxY = std::max(_sceneMaxY, g.y + g.height());
             }
         }
-
-        ydebug("addYdrawBuffer: processing images...");
 
         // 3. Process images (TODO: store in _scrollLines as well)
         buffer->forEachImage([this](const ImageData& img) {
