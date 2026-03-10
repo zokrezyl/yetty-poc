@@ -1,5 +1,5 @@
-#include "yaml2ydraw.h"
-#include "ydraw-buffer.h"
+#include "yaml2ypaint.h"
+#include "ypaint-buffer.h"
 #include <yaml-cpp/yaml.h>
 #include <ytrace/ytrace.hpp>
 #include <cmath>
@@ -30,7 +30,7 @@ static uint32_t parseColor(const YAML::Node& node) {
 }
 
 static animation::Animation* getAnim(animation::Animation::Ptr& anim,
-                                      YDrawBuffer::Ptr buffer) {
+                                      YPaintBuffer::Ptr buffer) {
     if (!anim) {
         auto res = animation::Animation::create(buffer);
         if (res) anim = *res;
@@ -43,7 +43,7 @@ static animation::Animation* getAnim(animation::Animation::Ptr& anim,
 //=============================================================================
 
 static void parseAnimateBlock(animation::Animation::Ptr& anim,
-                              YDrawBuffer::Ptr buffer,
+                              YPaintBuffer::Ptr buffer,
                               const YAML::Node& animNode,
                               uint32_t primIndex) {
     if (!animNode.IsSequence()) return;
@@ -63,7 +63,7 @@ static void parseAnimateBlock(animation::Animation::Ptr& anim,
 
         animation::AnimatedProperty prop;
         prop.type = propType;
-        prop.primitiveId = YDrawBuffer::AUTO_ID_BASE + primIndex;
+        prop.primitiveId = YPaintBuffer::AUTO_ID_BASE + primIndex;
         for (const auto& kfNode : propNode["keyframes"]) {
             animation::Keyframe kf = {};
             if (kfNode["t"]) kf.time = kfNode["t"].as<float>();
@@ -88,7 +88,7 @@ static void parseAnimateBlock(animation::Animation::Ptr& anim,
 // parseYAMLPrimitive
 //=============================================================================
 
-static Result<void> parseYAMLPrimitive(YDrawBuffer* buffer,
+static Result<void> parseYAMLPrimitive(YPaintBuffer* buffer,
                                        const YAML::Node& item) {
     uint32_t layer = buffer->primCount() + buffer->textSpanCount();
 
@@ -910,10 +910,10 @@ static Result<void> parseYAMLPrimitive(YDrawBuffer* buffer,
 }
 
 //=============================================================================
-// parseYDrawYAML
+// parseYPaintYAML
 //=============================================================================
 
-Result<animation::Animation::Ptr> parseYDrawYAML(YDrawBuffer::Ptr buffer,
+Result<animation::Animation::Ptr> parseYPaintYAML(YPaintBuffer::Ptr buffer,
                                                   const std::string& yaml) {
     animation::Animation::Ptr animation;
     try {
@@ -945,15 +945,15 @@ Result<animation::Animation::Ptr> parseYDrawYAML(YDrawBuffer::Ptr buffer,
                 if (flagsNode.IsSequence()) {
                     for (const auto& flag : flagsNode) {
                         std::string f = flag.as<std::string>();
-                        if (f == "show_bounds") buffer->addFlags(YDrawBuffer::FLAG_SHOW_BOUNDS);
-                        else if (f == "show_grid") buffer->addFlags(YDrawBuffer::FLAG_SHOW_GRID);
-                        else if (f == "show_eval_count") buffer->addFlags(YDrawBuffer::FLAG_SHOW_EVAL_COUNT);
+                        if (f == "show_bounds") buffer->addFlags(YPaintBuffer::FLAG_SHOW_BOUNDS);
+                        else if (f == "show_grid") buffer->addFlags(YPaintBuffer::FLAG_SHOW_GRID);
+                        else if (f == "show_eval_count") buffer->addFlags(YPaintBuffer::FLAG_SHOW_EVAL_COUNT);
                     }
                 } else if (flagsNode.IsScalar()) {
                     std::string f = flagsNode.as<std::string>();
-                    if (f == "show_bounds") buffer->addFlags(YDrawBuffer::FLAG_SHOW_BOUNDS);
-                    else if (f == "show_grid") buffer->addFlags(YDrawBuffer::FLAG_SHOW_GRID);
-                    else if (f == "show_eval_count") buffer->addFlags(YDrawBuffer::FLAG_SHOW_EVAL_COUNT);
+                    if (f == "show_bounds") buffer->addFlags(YPaintBuffer::FLAG_SHOW_BOUNDS);
+                    else if (f == "show_grid") buffer->addFlags(YPaintBuffer::FLAG_SHOW_GRID);
+                    else if (f == "show_eval_count") buffer->addFlags(YPaintBuffer::FLAG_SHOW_EVAL_COUNT);
                 }
             }
             if (node["animation"]) {

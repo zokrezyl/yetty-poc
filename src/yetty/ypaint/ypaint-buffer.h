@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ydraw-prim-writer.gen.h"
+#include "ypaint-prim-writer.gen.h"
 #include <yetty/base/object.h>
 #include <yetty/base/factory.h>
 #include <yetty/result.hpp>
@@ -41,22 +41,22 @@ struct ImageData {
 };
 
 //=============================================================================
-// YDrawBuffer — pure data container for primitives, text, fonts, scene metadata
+// YPaintBuffer — pure data container for primitives, text, fonts, scene metadata
 //=============================================================================
-class YDrawBuffer : public base::Object,
-                    public base::ObjectFactory<YDrawBuffer> {
+class YPaintBuffer : public base::Object,
+                     public base::ObjectFactory<YPaintBuffer> {
 public:
-    using Ptr = std::shared_ptr<YDrawBuffer>;
+    using Ptr = std::shared_ptr<YPaintBuffer>;
 
     static Result<Ptr> createImpl();
 
-    ~YDrawBuffer() override = default;
-    const char* typeName() const override { return "YDrawBuffer"; }
+    ~YPaintBuffer() override = default;
+    const char* typeName() const override { return "YPaintBuffer"; }
 
     static constexpr uint32_t AUTO_ID = 0xFFFFFFFF;
     static constexpr uint32_t AUTO_ID_BASE = 0x80000000;
 
-    // Rendering flags (mirrored from YDrawBuilder for buffer-only usage)
+    // Rendering flags (mirrored from YPaintBuilder for buffer-only usage)
     static constexpr uint32_t FLAG_SHOW_BOUNDS = 1;
     static constexpr uint32_t FLAG_SHOW_GRID = 2;
     static constexpr uint32_t FLAG_SHOW_EVAL_COUNT = 4;
@@ -65,7 +65,7 @@ public:
     static constexpr uint32_t FLAG_CUSTOM_ATLAS = 32;
 
     // --- Generated per-type add/update methods ---
-#include "ydraw-buffer.gen.inc"
+#include "ypaint-buffer.gen.inc"
 
     // --- Polygon with variable vertex data (manual methods) ---
     // vertices: array of x,y pairs (size = vertexCount * 2)
@@ -87,7 +87,7 @@ public:
     bool empty() const { return _prims.empty() && _textSpans.empty(); }
     void clear();
 
-    // Copy raw primitive data (used by YDrawBuilder for merging buffers)
+    // Copy raw primitive data (used by YPaintBuilder for merging buffers)
     Result<uint32_t> copyPrim(const float* data, uint32_t wordCount, uint32_t id = AUTO_ID);
 
     // --- Iteration (primitives) ---
@@ -210,7 +210,7 @@ public:
     Result<void> updatePrim(uint32_t id, const float* data, uint32_t wordCount);
 
 protected:
-    YDrawBuffer() = default;
+    YPaintBuffer() = default;
 
 private:
     Result<uint32_t> addPrim(uint32_t id, const float* data, uint32_t wordCount);

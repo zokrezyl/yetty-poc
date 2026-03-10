@@ -3,10 +3,10 @@
 #define NOMINMAX
 #endif
 
-#include <yetty/ydraw-builder.h>
+#include <yetty/ypaint-builder.h>
 #include <yetty/card-texture-manager.h>
-#include "ydraw-types.gen.h"
-#include "ydraw-buffer.h"
+#include "ypaint-types.gen.h"
+#include "ypaint-buffer.h"
 #include "triangulate.h"
 #include <yetty/msdf-glyph-data.h>  // For GlyphMetadataGPU
 #include <ytrace/ytrace.hpp>
@@ -459,12 +459,12 @@ static void computeAABB(const float* data, uint32_t wc,
 
 
 //=============================================================================
-// YDrawBuilderImpl
+// YPaintBuilderImpl
 //=============================================================================
 
-class YDrawBuilderImpl : public YDrawBuilder {
+class YPaintBuilderImpl : public YPaintBuilder {
 public:
-    YDrawBuilderImpl(FontManager::Ptr fontManager, GpuAllocator::Ptr allocator,
+    YPaintBuilderImpl(FontManager::Ptr fontManager, GpuAllocator::Ptr allocator,
                      CardManager::Ptr cardMgr, uint32_t metaSlotIndex,
                      bool scrollingMode = false)
         : _fontManager(std::move(fontManager))
@@ -481,7 +481,7 @@ public:
         }
     }
 
-    ~YDrawBuilderImpl() override = default;
+    ~YPaintBuilderImpl() override = default;
 
     //=========================================================================
     // Text API
@@ -566,7 +566,7 @@ public:
 
             const auto& glyph = metadata[glyphIndex];
 
-            YDrawGlyph posGlyph = {};
+            YPaintGlyph posGlyph = {};
             posGlyph.x = cursorX + glyph._bearingX * scale;
             posGlyph.y = y - glyph._bearingY * scale;
             posGlyph.setSize(glyph._sizeX * scale, glyph._sizeY * scale);
@@ -1013,13 +1013,13 @@ public:
 
     const std::vector<uint32_t>& gridStaging() const override {
         if (_gridStagingDirty) {
-            const_cast<YDrawBuilderImpl*>(this)->rebuildPackedGrid();
+            const_cast<YPaintBuilderImpl*>(this)->rebuildPackedGrid();
         }
         return _gridStaging;
     }
     void clearGridStaging() override { _gridStaging.clear(); }
-    const std::vector<YDrawGlyph>& glyphs() const override { return _glyphs; }
-    std::vector<YDrawGlyph>& glyphsMut() override { return _glyphs; }
+    const std::vector<YPaintGlyph>& glyphs() const override { return _glyphs; }
+    std::vector<YPaintGlyph>& glyphsMut() override { return _glyphs; }
 
     void buildPrimStaging(std::vector<uint32_t>& out) const override {
         // Use cached version if buffer not dirty
@@ -1041,7 +1041,7 @@ public:
 
         if (primCount == 0) {
             out.clear();
-            const_cast<YDrawBuilderImpl*>(this)->_primStagingCache.clear();
+            const_cast<YPaintBuilderImpl*>(this)->_primStagingCache.clear();
             return;
         }
 
@@ -1062,7 +1062,7 @@ public:
         }
 
         // Cache the result
-        const_cast<YDrawBuilderImpl*>(this)->_primStagingCache = out;
+        const_cast<YPaintBuilderImpl*>(this)->_primStagingCache = out;
     }
 
     bool hasContent() const override {
@@ -1093,18 +1093,18 @@ public:
     }
 
     //=========================================================================
-    // Buffer management - addYdrawBuffer
+    // Buffer management - addYpaintBuffer
     //=========================================================================
 
-    Result<uint32_t> addYdrawBuffer(std::shared_ptr<YDrawBuffer> buffer) override {
+    Result<uint32_t> addYpaintBuffer(std::shared_ptr<YPaintBuffer> buffer) override {
         if (!buffer) {
-            return Err<uint32_t>("addYdrawBuffer: null buffer");
+            return Err<uint32_t>("addYpaintBuffer: null buffer");
         }
 
         uint32_t baseGlyphIdx = static_cast<uint32_t>(_glyphs.size());
 
         // 1. Process fonts from input buffer (register with atlas)
-        ydebug("addYdrawBuffer: processing fonts");
+        ydebug("addYpaintBuffer: processing fonts");
         buffer->forEachFont([this](int bufFontId, const uint8_t* data,
                                    size_t size, const std::string& name) {
             ydebug("forEachFont: bufFontId={} name='{}' size={}", bufFontId, name, size);
@@ -1311,7 +1311,7 @@ public:
         _gridStagingDirty = true;
         _bufferDirty = true;
 
-        ydebug("addYdrawBuffer: added {} prims, {} glyphs, scene=[{:.0f},{:.0f}]-[{:.0f},{:.0f}]",
+        ydebug("addYpaintBuffer: added {} prims, {} glyphs, scene=[{:.0f},{:.0f}]-[{:.0f},{:.0f}]",
                primCount, _glyphs.size() - baseGlyphIdx,
                _sceneMinX, _sceneMinY, _sceneMaxX, _sceneMaxY);
 
@@ -1348,7 +1348,7 @@ public:
         _bufferDirty = true;
         _metadataDirty = true;
 
-        ydebug("YDrawBuilder::clear: reset all primitive and grid data");
+        ydebug("YPaintBuilder::clear: reset all primitive and grid data");
     }
 
     //=========================================================================
@@ -2032,13 +2032,13 @@ private:
         uint32_t primOffset = _primHandle.isValid()
             ? _primHandle.offset / sizeof(float) : 0;
 
-        YDrawMetadata meta = {};
+        YPaintMetadata meta = {};
         meta.primitiveOffset = primOffset;
         meta.primitiveCount = primitiveCount();
         meta.gridOffset = _gpuGridOffset;
         meta.gridWidth = _gridWidth;
         meta.gridHeight = _gridHeight;
-        meta.cellSizeXY = YDrawMetadata::packCellSize(_cellSizeX, _cellSizeY);
+        meta.cellSizeXY = YPaintMetadata::packCellSize(_cellSizeX, _cellSizeY);
         meta.glyphOffset = _gpuGlyphOffset;
         meta.glyphCount = static_cast<uint32_t>(_glyphs.size());
         std::memcpy(&meta.sceneMinX, &_sceneMinX, sizeof(float));
@@ -2062,7 +2062,7 @@ private:
 
     uint32_t computeDerivedSize() const {
         uint32_t gridBytes = static_cast<uint32_t>(_gridStaging.size()) * sizeof(uint32_t);
-        uint32_t glyphBytes = static_cast<uint32_t>(_glyphs.size() * sizeof(YDrawGlyph));
+        uint32_t glyphBytes = static_cast<uint32_t>(_glyphs.size() * sizeof(YPaintGlyph));
         uint32_t total = gridBytes + glyphBytes;
         if (_customAtlas) {
             uint32_t atlasHeaderBytes = 4 * sizeof(uint32_t);
@@ -2114,7 +2114,7 @@ private:
         offset += gridBytes;
 
         // Copy glyphs
-        uint32_t glyphBytes = static_cast<uint32_t>(_glyphs.size() * sizeof(YDrawGlyph));
+        uint32_t glyphBytes = static_cast<uint32_t>(_glyphs.size() * sizeof(YPaintGlyph));
         _gpuGlyphOffset = (_derivedHandle.offset + offset) / sizeof(float);
         if (!_glyphs.empty()) {
             std::memcpy(base + offset, _glyphs.data(), glyphBytes);
@@ -2168,14 +2168,14 @@ private:
     // Prim staging cache (rebuilt when _bufferDirty)
     std::vector<uint32_t> _primStagingCache;
 
-    std::vector<YDrawGlyph> _glyphs;
+    std::vector<YPaintGlyph> _glyphs;
     std::vector<uint32_t> _glyphSortedOrder;
 
     // Grid dimensions
     uint32_t _gridWidth = 0;
     uint32_t _gridHeight = 0;
 
-    // Scene bounds (initialized to extreme values, extended by addYdrawBuffer)
+    // Scene bounds (initialized to extreme values, extended by addYpaintBuffer)
     float _sceneMinX = 1e10f, _sceneMinY = 1e10f;
     float _sceneMaxX = -1e10f, _sceneMaxY = -1e10f;
     bool _hasExplicitBounds = false;
@@ -2279,22 +2279,22 @@ private:
 // Factory
 //=============================================================================
 
-Result<YDrawBuilder::Ptr> YDrawBuilder::createImpl(
+Result<YPaintBuilder::Ptr> YPaintBuilder::createImpl(
     FontManager::Ptr fontManager, GpuAllocator::Ptr allocator,
     CardManager::Ptr cardMgr, uint32_t metaSlotIndex,
     bool scrollingMode)
 {
-    return Ok(Ptr(new YDrawBuilderImpl(std::move(fontManager),
+    return Ok(Ptr(new YPaintBuilderImpl(std::move(fontManager),
                                         std::move(allocator),
                                         std::move(cardMgr), metaSlotIndex,
                                         scrollingMode)));
 }
 
-Result<YDrawBuilder::Ptr> YDrawBuilder::createImpl(
+Result<YPaintBuilder::Ptr> YPaintBuilder::createImpl(
     FontManager::Ptr fontManager, GpuAllocator::Ptr allocator,
     bool scrollingMode)
 {
-    return Ok(Ptr(new YDrawBuilderImpl(std::move(fontManager),
+    return Ok(Ptr(new YPaintBuilderImpl(std::move(fontManager),
                                         std::move(allocator),
                                         CardManager::Ptr{}, 0,
                                         scrollingMode)));

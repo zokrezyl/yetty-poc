@@ -1,5 +1,5 @@
 #include "animation.h"
-#include "ydraw-types.gen.h"
+#include "ypaint-types.gen.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -59,7 +59,7 @@ uint8_t AnimatedProperty::evaluate(float time, float* out) const {
 
 class AnimationImpl : public Animation {
 public:
-    explicit AnimationImpl(std::shared_ptr<YDrawBuffer> buffer)
+    explicit AnimationImpl(std::shared_ptr<YPaintBuffer> buffer)
         : _buffer(std::move(buffer)) {}
 
     void play() override { _playing = true; }
@@ -312,7 +312,7 @@ public:
     }
 
 private:
-    std::shared_ptr<YDrawBuffer> _buffer;
+    std::shared_ptr<YPaintBuffer> _buffer;
     std::vector<AnimatedProperty> _properties;
     std::unordered_map<uint32_t, std::vector<float>> _baseData;
 
@@ -327,7 +327,7 @@ private:
 // Factory
 //=============================================================================
 
-Result<Animation::Ptr> Animation::createImpl(std::shared_ptr<YDrawBuffer> buffer) {
+Result<Animation::Ptr> Animation::createImpl(std::shared_ptr<YPaintBuffer> buffer) {
     auto impl = Ptr(new AnimationImpl(std::move(buffer)));
     return Ok(std::move(impl));
 }

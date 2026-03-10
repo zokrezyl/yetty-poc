@@ -1,5 +1,5 @@
 #!/bin/bash
-# YDraw Maze: procedural maze with animated solver
+# YPaint Maze: procedural maze with animated solver
 #
 # Arguments:
 #   --cols N            Maze columns (default 15)
@@ -40,5 +40,5 @@ case "$MODE" in
         ;;
 esac
 
-printf '\033]666666;run -c ydraw-maze -x 0 -y 0 -w 80 -h 30 -r;%s;\033\\' "$ARGS"
+printf '\033]666667;run -c ypaint-maze -x 0 -y 0 -w 80 -h 30 -r;%s;\033\\' "$ARGS"
 echo

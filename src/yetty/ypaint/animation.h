@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ydraw-buffer.h"
+#include "ypaint-buffer.h"
 #include <yetty/base/object.h>
 #include <yetty/base/factory.h>
 #include <cstdint>
@@ -35,7 +35,7 @@ struct Keyframe {
 //=============================================================================
 struct AnimatedProperty {
     PropertyType type;
-    uint32_t primitiveId;     // YDrawBuffer prim ID
+    uint32_t primitiveId;     // YPaintBuffer prim ID
     std::vector<Keyframe> keyframes;  // sorted by time ascending
 
     // Evaluate at given time via linear interpolation.
@@ -45,7 +45,7 @@ struct AnimatedProperty {
 //=============================================================================
 // Animation — playback controller + property collection
 //
-// Created with a shared_ptr to YDrawBuffer. On snapshotBase(), stores raw
+// Created with a shared_ptr to YPaintBuffer. On snapshotBase(), stores raw
 // word data for each animated prim. On apply(), computes animated values
 // from the base snapshot and calls updatePrim() on the buffer.
 // Then the builder's calculate() rebuilds the grid.
@@ -55,7 +55,7 @@ class Animation : public base::Object,
 public:
     using Ptr = base::ObjectFactory<Animation>::Ptr;
 
-    static Result<Ptr> createImpl(std::shared_ptr<YDrawBuffer> buffer);
+    static Result<Ptr> createImpl(std::shared_ptr<YPaintBuffer> buffer);
 
     ~Animation() override = default;
     const char* typeName() const override { return "Animation"; }

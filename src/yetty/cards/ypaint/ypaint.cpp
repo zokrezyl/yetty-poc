@@ -3,10 +3,10 @@
 #define NOMINMAX
 #endif
 
-#include "ydraw.h"
-#include <yetty/ydraw-builder.h>
-#include "../../ydraw/animation.h"
-#include "../../ydraw/yaml2ydraw.h"
+#include "ypaint.h"
+#include <yetty/ypaint-builder.h>
+#include "../../ypaint/animation.h"
+#include "../../ypaint/yaml2ypaint.h"
 #include <yetty/base/event-loop.h>
 #include <ytrace/ytrace.hpp>
 #include <lz4frame.h>
@@ -25,27 +25,27 @@ constexpr int GLFW_KEY_C       = 67;
 namespace yetty::card {
 
 //=============================================================================
-// YDrawImpl - full implementation with builder, GPU buffers, animation
+// YPaintImpl - full implementation with builder, GPU buffers, animation
 //=============================================================================
 
-class YDrawImpl : public YDraw {
+class YPaintImpl : public YPaint {
 public:
-    YDrawImpl(const YettyContext& ctx,
+    YPaintImpl(const YettyContext& ctx,
               int32_t x, int32_t y,
               uint32_t widthCells, uint32_t heightCells,
               const std::string& args, const std::string& payload)
-        : YDraw(ctx.cardManager, ctx.gpu, x, y, widthCells, heightCells)
+        : YPaint(ctx.cardManager, ctx.gpu, x, y, widthCells, heightCells)
         , _screenId(ctx.screenId)
         , _argsStr(args)
         , _payloadStr(payload)
     {
         _shaderGlyph = SHADER_GLYPH;
-        _buffer = *YDrawBuffer::create();
+        _buffer = *YPaintBuffer::create();
         _fontManager = ctx.fontManager;
         _gpuAllocator = ctx.gpuAllocator;
     }
 
-    ~YDrawImpl() override { dispose(); }
+    ~YPaintImpl() override { dispose(); }
 
     //=========================================================================
     // Card lifecycle
@@ -63,7 +63,7 @@ public:
         deregisterFromEvents();
         if (_metaHandle.isValid() && _cardMgr) {
             if (auto res = _cardMgr->deallocateMetadata(_metaHandle); !res) {
-                yerror("YDrawImpl::dispose: deallocateMetadata failed: {}", error_msg(res));
+                yerror("YPaintImpl::dispose: deallocateMetadata failed: {}", error_msg(res));
             }
             _metaHandle = MetadataHandle::invalid();
         }
@@ -76,7 +76,7 @@ public:
     void declareBufferNeeds() override {
         if (!_builder) return;
         if (auto res = _builder->declareBufferNeeds(); !res) {
-            yerror("YDrawImpl::declareBufferNeeds: {}", error_msg(res));
+            yerror("YPaintImpl::declareBufferNeeds: {}", error_msg(res));
         }
     }
 
@@ -122,7 +122,7 @@ public:
                 _animation->apply();
                 // Re-add buffer to pick up animation changes
                 // TODO: This is inefficient - consider a more incremental approach
-                _builder->addYdrawBuffer(_buffer);
+                _builder->addYpaintBuffer(_buffer);
             }
         }
 
@@ -279,7 +279,7 @@ public:
                 auto loop = *base::EventLoop::instance();
                 loop->dispatch(base::Event::copyEvent(
                     std::make_shared<std::string>(text)));
-                ydebug("YDraw: copied {} bytes to clipboard", text.size());
+                ydebug("YPaint: copied {} bytes to clipboard", text.size());
             }
             return Ok(true);
         }
@@ -294,19 +294,19 @@ public:
     Result<void> update(const std::string& args, const std::string& payload) override {
         if (payload.empty()) return Ok();
 
-        ydebug("YDrawImpl::update: payload={} bytes", payload.size());
+        ydebug("YPaintImpl::update: payload={} bytes", payload.size());
 
         // Deserialize new buffer data (same path as initial payload)
         if (auto res = parseBinary(payload); !res) {
-            yerror("YDrawImpl::update: parseBinary failed: {}", error_msg(res));
+            yerror("YPaintImpl::update: parseBinary failed: {}", error_msg(res));
             return res;
         }
 
         // Clear builder and add new buffer content (replace semantics)
         _builder->clear();
         if (!_buffer->empty()) {
-            if (auto res = _builder->addYdrawBuffer(_buffer); !res) {
-                ywarn("YDrawImpl::update: addYdrawBuffer failed: {}", error_msg(res));
+            if (auto res = _builder->addYpaintBuffer(_buffer); !res) {
+                ywarn("YPaintImpl::update: addYpaintBuffer failed: {}", error_msg(res));
             }
         }
 
@@ -318,7 +318,7 @@ public:
         _selecting = false;
         _dirty = true;
 
-        ydebug("YDrawImpl::update: {} prims, {} text spans",
+        ydebug("YPaintImpl::update: {} prims, {} text spans",
               _buffer->primCount(), _buffer->textSpanCount());
         return Ok();
     }
@@ -328,42 +328,42 @@ public:
     //=========================================================================
 
     Result<void> init() {
-        auto metaResult = _cardMgr->allocateMetadata(sizeof(YDrawMetadata));
+        auto metaResult = _cardMgr->allocateMetadata(sizeof(YPaintMetadata));
         if (!metaResult) {
-            return Err<void>("YDrawImpl::init: failed to allocate metadata");
+            return Err<void>("YPaintImpl::init: failed to allocate metadata");
         }
         _metaHandle = *metaResult;
 
         // Create builder without buffer (new API)
-        auto builderRes = YDrawBuilder::create(
+        auto builderRes = YPaintBuilder::create(
             _fontManager, _gpuAllocator, _cardMgr, metadataSlotIndex());
         if (!builderRes) {
-            return Err<void>("YDrawImpl::init: failed to create builder", builderRes);
+            return Err<void>("YPaintImpl::init: failed to create builder", builderRes);
         }
         _builder = *builderRes;
 
-        _builder->addFlags(YDrawBuilder::FLAG_UNIFORM_SCALE);
+        _builder->addFlags(YPaintBuilder::FLAG_UNIFORM_SCALE);
 
         if (auto res = registerForEvents(); !res) {
-            ywarn("YDrawImpl::init: event registration failed: {}", error_msg(res));
+            ywarn("YPaintImpl::init: event registration failed: {}", error_msg(res));
         }
 
         parseArgs(_argsStr);
 
         if (!_payloadStr.empty()) {
             if (auto res = parsePayload(_payloadStr); !res) {
-                ywarn("YDrawImpl::init: payload parse failed: {}", error_msg(res));
+                ywarn("YPaintImpl::init: payload parse failed: {}", error_msg(res));
             }
         }
 
         // Add buffer to builder (new incremental API)
         if (!_buffer->empty()) {
-            if (auto res = _builder->addYdrawBuffer(_buffer); !res) {
-                ywarn("YDrawImpl::init: addYdrawBuffer failed: {}", error_msg(res));
+            if (auto res = _builder->addYpaintBuffer(_buffer); !res) {
+                ywarn("YPaintImpl::init: addYpaintBuffer failed: {}", error_msg(res));
             }
         }
 
-        ydebug("YDrawImpl::init: {} prims, {} glyphs",
+        ydebug("YPaintImpl::init: {} prims, {} glyphs",
               _builder->primitiveCount(), _builder->glyphCount());
 
         _builder->setViewport(_widthCells, _heightCells);
@@ -459,11 +459,11 @@ private:
             } else if (token == "--max-prims-per-cell") {
                 std::string s; if (iss >> s) _builder->setMaxPrimsPerCell(static_cast<uint32_t>(std::stoul(s)));
             } else if (token == "--show-bounds") {
-                _buffer->addFlags(YDrawBuffer::FLAG_SHOW_BOUNDS);
+                _buffer->addFlags(YPaintBuffer::FLAG_SHOW_BOUNDS);
             } else if (token == "--show-grid") {
-                _buffer->addFlags(YDrawBuffer::FLAG_SHOW_GRID);
+                _buffer->addFlags(YPaintBuffer::FLAG_SHOW_GRID);
             } else if (token == "--show-eval-count") {
-                _buffer->addFlags(YDrawBuffer::FLAG_SHOW_EVAL_COUNT);
+                _buffer->addFlags(YPaintBuffer::FLAG_SHOW_EVAL_COUNT);
             } else if (token == "--zoom") {
                 std::string s;
                 if (iss >> s) _viewZoom = std::clamp(std::stof(s), 0.1f, 1000.0f);
@@ -479,7 +479,7 @@ private:
     Result<void> parsePayload(const std::string& payload) {
         if (payload.empty()) return Ok();
         if (_yamlMode) {
-            auto res = parseYDrawYAML(_buffer, payload);
+            auto res = parseYPaintYAML(_buffer, payload);
             if (!res) return Err<void>(res.error().message());
             if (*res) _animation = *res;
             return Ok();
@@ -566,13 +566,13 @@ private:
         return Ok();
     }
 
-    // Old parseYAML/parseYAMLPrimitive/parseColor removed — now in yaml2ydraw.cpp
+    // Old parseYAML/parseYAMLPrimitive/parseColor removed — now in yaml2ypaint.cpp
     //=========================================================================
     // State
     //=========================================================================
 
-    YDrawBuilder::Ptr _builder;
-    YDrawBuffer::Ptr _buffer;
+    YPaintBuilder::Ptr _builder;
+    YPaintBuffer::Ptr _buffer;
     FontManager::Ptr _fontManager;
     GpuAllocator::Ptr _gpuAllocator;
     base::ObjectId _screenId = 0;
@@ -611,7 +611,7 @@ private:
 // Factory
 //=============================================================================
 
-Result<CardPtr> YDraw::create(
+Result<CardPtr> YPaint::create(
     const YettyContext& ctx,
     int32_t x, int32_t y,
     uint32_t widthCells, uint32_t heightCells,
@@ -619,16 +619,16 @@ Result<CardPtr> YDraw::create(
     const std::string& payload)
 {
     if (!ctx.cardManager) {
-        return Err<CardPtr>("YDraw::create: null CardManager");
+        return Err<CardPtr>("YPaint::create: null CardManager");
     }
-    auto card = std::make_shared<YDrawImpl>(ctx, x, y, widthCells, heightCells, args, payload);
+    auto card = std::make_shared<YPaintImpl>(ctx, x, y, widthCells, heightCells, args, payload);
     if (auto res = card->init(); !res) {
-        return Err<CardPtr>("YDraw::create: init failed");
+        return Err<CardPtr>("YPaint::create: init failed");
     }
     return Ok<CardPtr>(card);
 }
 
-Result<YDraw::Ptr> YDraw::createImpl(
+Result<YPaint::Ptr> YPaint::createImpl(
     ContextType& ctx,
     const YettyContext& yettyCtx,
     int32_t x, int32_t y,
@@ -638,10 +638,10 @@ Result<YDraw::Ptr> YDraw::createImpl(
 {
     (void)ctx;
     auto result = create(yettyCtx, x, y, widthCells, heightCells, args, payload);
-    if (!result) return Err<Ptr>("Failed to create YDraw", result);
-    auto ydraw = std::dynamic_pointer_cast<YDraw>(*result);
-    if (!ydraw) return Err<Ptr>("Created card is not a YDraw");
-    return Ok(ydraw);
+    if (!result) return Err<Ptr>("Failed to create YPaint", result);
+    auto ypaint = std::dynamic_pointer_cast<YPaint>(*result);
+    if (!ypaint) return Err<Ptr>("Created card is not a YPaint");
+    return Ok(ypaint);
 }
 
 } // namespace yetty::card

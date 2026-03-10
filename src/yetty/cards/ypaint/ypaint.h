@@ -6,22 +6,22 @@
 #include <string>
 #include <memory>
 
-namespace yetty { class YDrawBuffer; }
+namespace yetty { class YPaintBuffer; }
 
 namespace yetty::card {
 
 //=============================================================================
-// YDraw - SDF card with YAML/binary payload parsing
+// YPaint - Scrolling SDF card with YAML/binary payload parsing
 //
-// Uses YDrawBuilder for content generation.
-// Implementation (GPU buffers, parsing, animation) is in YDrawImpl.
+// Uses YPaintBuilder for content generation.
+// Implementation (GPU buffers, parsing, animation) is in YPaintImpl.
 //=============================================================================
-class YDraw : public Card,
-              public base::ObjectFactory<YDraw> {
+class YPaint : public Card,
+               public base::ObjectFactory<YPaint> {
 public:
-    using Ptr = std::shared_ptr<YDraw>;
+    using Ptr = std::shared_ptr<YPaint>;
 
-    static constexpr uint32_t SHADER_GLYPH = 0x100003;
+    static constexpr uint32_t SHADER_GLYPH = 0x100004;  // Different from ydraw
 
     static Result<CardPtr> create(
         const YettyContext& ctx,
@@ -38,8 +38,8 @@ public:
         const std::string& args,
         const std::string& payload) noexcept;
 
-    ~YDraw() override = default;
-    const char* typeName() const override { return "ydraw"; }
+    ~YPaint() override = default;
+    const char* typeName() const override { return "ypaint"; }
     bool needsBuffer() const override { return true; }
 
     // Card accessors
@@ -57,8 +57,8 @@ public:
     void setScreenOrigin(float sx, float sy) override { _screenOriginX = sx; _screenOriginY = sy; }
 
 protected:
-    YDraw(CardManager::Ptr mgr, const GPUContext& gpu,
-          int32_t x, int32_t y, uint32_t widthCells, uint32_t heightCells)
+    YPaint(CardManager::Ptr mgr, const GPUContext& gpu,
+           int32_t x, int32_t y, uint32_t widthCells, uint32_t heightCells)
         : _cardMgr(std::move(mgr)), _gpu(gpu)
         , _x(x), _y(y), _widthCells(widthCells), _heightCells(heightCells) {}
 

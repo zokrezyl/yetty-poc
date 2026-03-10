@@ -1,5 +1,5 @@
 #!/bin/bash
-# YDraw Zoo: infinite zoom with connected control points and curves
+# YPaint Zoo: infinite zoom with connected control points and curves
 #
 # Arguments:
 #   --points N          Number of control points (default 15)
@@ -45,5 +45,5 @@ case "$MODE" in
         ;;
 esac
 
-printf '\033]666666;run -c ydraw-zoo -x 0 -y 0 -w 80 -h 30 -r;%s;\033\\' "$ARGS"
+printf '\033]666667;run -c ypaint-zoo -x 0 -y 0 -w 80 -h 30 -r;%s;\033\\' "$ARGS"
 echo

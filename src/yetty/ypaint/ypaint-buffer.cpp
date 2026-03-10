@@ -1,5 +1,5 @@
-#include "ydraw-buffer.h"
-#include "ydraw-prim-writer.gen.h"
+#include "ypaint-buffer.h"
+#include "ypaint-prim-writer.gen.h"
 
 #include <ytrace/ytrace.hpp>
 #include <cstring>
@@ -7,15 +7,15 @@
 
 namespace yetty {
 
-Result<YDrawBuffer::Ptr> YDrawBuffer::createImpl() {
-    return Ok(Ptr(new YDrawBuffer()));
+Result<YPaintBuffer::Ptr> YPaintBuffer::createImpl() {
+    return Ok(Ptr(new YPaintBuffer()));
 }
 
 //=============================================================================
 // Font blob storage (raw data only, no FreeType)
 //=============================================================================
 
-int YDrawBuffer::addFontBlob(const uint8_t* data, size_t size,
+int YPaintBuffer::addFontBlob(const uint8_t* data, size_t size,
                               const std::string& name) {
     int id = _nextFontId++;
     _fonts.push_back({id, name, {data, data + size}});
@@ -26,13 +26,13 @@ int YDrawBuffer::addFontBlob(const uint8_t* data, size_t size,
 // Text span storage
 //=============================================================================
 
-void YDrawBuffer::addText(float x, float y, const std::string& text,
+void YPaintBuffer::addText(float x, float y, const std::string& text,
                            float fontSize, uint32_t color,
                            uint32_t layer, int fontId) {
     _textSpans.push_back({x, y, text, fontSize, color, layer, fontId, 0.0f});
 }
 
-void YDrawBuffer::addRotatedText(float x, float y, const std::string& text,
+void YPaintBuffer::addRotatedText(float x, float y, const std::string& text,
                                   float fontSize, uint32_t color,
                                   float rotation, int fontId) {
     _textSpans.push_back({x, y, text, fontSize, color, 0, fontId, rotation});
@@ -42,7 +42,7 @@ void YDrawBuffer::addRotatedText(float x, float y, const std::string& text,
 // Image storage
 //=============================================================================
 
-void YDrawBuffer::addImage(float x, float y, float w, float h,
+void YPaintBuffer::addImage(float x, float y, float w, float h,
                            const uint8_t* pixels, uint32_t pixelWidth, uint32_t pixelHeight,
                            uint32_t layer) {
     ImageData img;
@@ -61,7 +61,7 @@ void YDrawBuffer::addImage(float x, float y, float w, float h,
 // Scene metadata
 //=============================================================================
 
-void YDrawBuffer::setSceneBounds(float minX, float minY, float maxX, float maxY) {
+void YPaintBuffer::setSceneBounds(float minX, float minY, float maxX, float maxY) {
     _sceneMinX = minX;
     _sceneMinY = minY;
     _sceneMaxX = maxX;
@@ -73,15 +73,15 @@ void YDrawBuffer::setSceneBounds(float minX, float minY, float maxX, float maxY)
 // Primitive operations (unchanged)
 //=============================================================================
 
-uint32_t YDrawBuffer::nextAutoId() {
+uint32_t YPaintBuffer::nextAutoId() {
     return _nextAutoId++;
 }
 
-Result<uint32_t> YDrawBuffer::addPrim(uint32_t id, const float* data, uint32_t wordCount) {
+Result<uint32_t> YPaintBuffer::addPrim(uint32_t id, const float* data, uint32_t wordCount) {
     if (id == AUTO_ID) {
         id = nextAutoId();
     } else if (_prims.count(id)) {
-        return Err<uint32_t>("YDrawBuffer::addPrim: id " + std::to_string(id) + " already exists");
+        return Err<uint32_t>("YPaintBuffer::addPrim: id " + std::to_string(id) + " already exists");
     }
 
     PrimData pd;
@@ -95,11 +95,11 @@ Result<uint32_t> YDrawBuffer::addPrim(uint32_t id, const float* data, uint32_t w
     return Ok(id);
 }
 
-Result<uint32_t> YDrawBuffer::copyPrim(const float* data, uint32_t wordCount, uint32_t id) {
+Result<uint32_t> YPaintBuffer::copyPrim(const float* data, uint32_t wordCount, uint32_t id) {
     return addPrim(id, data, wordCount);
 }
 
-Result<void> YDrawBuffer::updatePrim(uint32_t id, const float* data, uint32_t wordCount) {
+Result<void> YPaintBuffer::updatePrim(uint32_t id, const float* data, uint32_t wordCount) {
     if (_deltaMode) {
         if (!_prims.count(id)) {
             bool foundInDelta = false;
@@ -108,7 +108,7 @@ Result<void> YDrawBuffer::updatePrim(uint32_t id, const float* data, uint32_t wo
                 if (op.id == id && op.type == DeltaOp::REMOVE) foundInDelta = false;
             }
             if (!foundInDelta) {
-                return Err<void>("YDrawBuffer::updatePrim: id " + std::to_string(id) + " not found");
+                return Err<void>("YPaintBuffer::updatePrim: id " + std::to_string(id) + " not found");
             }
         }
         std::vector<float> words(data, data + wordCount);
@@ -116,14 +116,14 @@ Result<void> YDrawBuffer::updatePrim(uint32_t id, const float* data, uint32_t wo
     } else {
         auto it = _prims.find(id);
         if (it == _prims.end()) {
-            return Err<void>("YDrawBuffer::updatePrim: id " + std::to_string(id) + " not found");
+            return Err<void>("YPaintBuffer::updatePrim: id " + std::to_string(id) + " not found");
         }
         it->second.words.assign(data, data + wordCount);
     }
     return Ok();
 }
 
-Result<void> YDrawBuffer::remove(uint32_t id) {
+Result<void> YPaintBuffer::remove(uint32_t id) {
     if (_deltaMode) {
         if (!_prims.count(id)) {
             bool foundInDelta = false;
@@ -132,21 +132,21 @@ Result<void> YDrawBuffer::remove(uint32_t id) {
                 if (op.id == id && op.type == DeltaOp::REMOVE) foundInDelta = false;
             }
             if (!foundInDelta) {
-                return Err<void>("YDrawBuffer::remove: id " + std::to_string(id) + " not found");
+                return Err<void>("YPaintBuffer::remove: id " + std::to_string(id) + " not found");
             }
         }
         _delta.push_back({DeltaOp::REMOVE, id, {}});
     } else {
         auto it = _prims.find(id);
         if (it == _prims.end()) {
-            return Err<void>("YDrawBuffer::remove: id " + std::to_string(id) + " not found");
+            return Err<void>("YPaintBuffer::remove: id " + std::to_string(id) + " not found");
         }
         _prims.erase(it);
     }
     return Ok();
 }
 
-void YDrawBuffer::clear() {
+void YPaintBuffer::clear() {
     _prims.clear();
     _delta.clear();
     _deltaMode = false;
@@ -160,7 +160,7 @@ void YDrawBuffer::clear() {
 // Polygon with variable vertex data
 //=============================================================================
 
-Result<uint32_t> YDrawBuffer::addPolygonWithVertices(uint32_t layer, uint32_t vertexCount,
+Result<uint32_t> YPaintBuffer::addPolygonWithVertices(uint32_t layer, uint32_t vertexCount,
     const float* vertices, uint32_t fillColor, uint32_t strokeColor,
     float strokeWidth, float round_, uint32_t id) {
 
@@ -177,7 +177,7 @@ Result<uint32_t> YDrawBuffer::addPolygonWithVertices(uint32_t layer, uint32_t ve
     return addPrim(id, data.data(), totalWords);
 }
 
-Result<uint32_t> YDrawBuffer::addPolygonGroupWithVertices(uint32_t layer,
+Result<uint32_t> YPaintBuffer::addPolygonGroupWithVertices(uint32_t layer,
     uint32_t vertexCount, uint32_t contourCount,
     const uint32_t* contourStarts, const float* vertices,
     uint32_t fillColor, uint32_t strokeColor,
@@ -207,7 +207,7 @@ Result<uint32_t> YDrawBuffer::addPolygonGroupWithVertices(uint32_t layer,
 // Output
 //=============================================================================
 
-uint32_t YDrawBuffer::buildCompact(std::vector<float>& out) const {
+uint32_t YPaintBuffer::buildCompact(std::vector<float>& out) const {
     out.clear();
     for (const auto& [id, pd] : _prims) {
         out.insert(out.end(), pd.words.begin(), pd.words.end());
@@ -215,7 +215,7 @@ uint32_t YDrawBuffer::buildCompact(std::vector<float>& out) const {
     return static_cast<uint32_t>(out.size());
 }
 
-uint32_t YDrawBuffer::gpuBufferSize() const {
+uint32_t YPaintBuffer::gpuBufferSize() const {
     uint32_t count = static_cast<uint32_t>(_prims.size());
     uint32_t dataWords = 0;
     for (const auto& [id, pd] : _prims) {
@@ -224,7 +224,7 @@ uint32_t YDrawBuffer::gpuBufferSize() const {
     return (count + dataWords) * sizeof(float);
 }
 
-void YDrawBuffer::writeGPU(float* buf, uint32_t bufBytes,
+void YPaintBuffer::writeGPU(float* buf, uint32_t bufBytes,
                            std::vector<uint32_t>& wordOffsets) const {
     uint32_t count = static_cast<uint32_t>(_prims.size());
     wordOffsets.resize(count);
@@ -239,7 +239,7 @@ void YDrawBuffer::writeGPU(float* buf, uint32_t bufBytes,
         std::memcpy(&buf[i], &off, sizeof(uint32_t));
         std::memcpy(dataBase + dataOffset, pd.words.data(),
                     pd.words.size() * sizeof(float));
-        
+
         dataOffset += static_cast<uint32_t>(pd.words.size());
         i++;
     }
@@ -257,10 +257,10 @@ void YDrawBuffer::writeGPU(float* buf, uint32_t bufBytes,
 //   span: [x:4][y:4][fontSize:4][color:4][layer:4][fontId:4][rotation:4][textLen:4][text...]
 // [bgColor:4][flags:4][hasSceneBounds:1][minX:4][minY:4][maxX:4][maxY:4]
 
-static constexpr uint32_t SERIALIZE_MAGIC = 0x59445246; // "YDRF"
+static constexpr uint32_t SERIALIZE_MAGIC = 0x59505246; // "YPRF" (YPaint Raw Format)
 static constexpr uint32_t SERIALIZE_VERSION = 1;
 
-std::vector<uint8_t> YDrawBuffer::serialize() {
+std::vector<uint8_t> YPaintBuffer::serialize() {
     std::vector<uint8_t> out;
 
     auto writeU32 = [&](uint32_t v) {
@@ -333,7 +333,7 @@ std::vector<uint8_t> YDrawBuffer::serialize() {
     return out;
 }
 
-std::vector<uint8_t> YDrawBuffer::serializeDelta() {
+std::vector<uint8_t> YPaintBuffer::serializeDelta() {
     uint32_t opCount = static_cast<uint32_t>(_delta.size());
     std::vector<uint8_t> out;
 
@@ -373,7 +373,7 @@ std::vector<uint8_t> YDrawBuffer::serializeDelta() {
     return out;
 }
 
-Result<void> YDrawBuffer::deserialize(const uint8_t* data, size_t size) {
+Result<void> YPaintBuffer::deserialize(const uint8_t* data, size_t size) {
     ydebug("deserialize: size={}", size);
     if (size < 8) return Err("deserialize: too small");
 
