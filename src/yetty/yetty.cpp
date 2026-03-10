@@ -1006,6 +1006,12 @@ Result<void> YettyImpl::initWebGPU() noexcept {
     wgpuAdapterGetLimits(_adapter, &adapterLimits);
     uint64_t adapterMaxStorage = adapterLimits.maxStorageBufferBindingSize;
     ydebug("GPU adapter maxStorageBufferBindingSize: {} MB", adapterMaxStorage / (1024 * 1024));
+    ydebug("GPU adapter maxStorageBuffersPerShaderStage: {}", adapterLimits.maxStorageBuffersPerShaderStage);
+    _gpuContext.maxStorageBuffersPerShaderStage = adapterLimits.maxStorageBuffersPerShaderStage;
+    if (adapterLimits.maxStorageBuffersPerShaderStage < 14) {
+        ywarn("GPU has limited storage buffers ({}/14 needed) - scrolling overlay disabled",
+              adapterLimits.maxStorageBuffersPerShaderStage);
+    }
 
     // Request device with limits capped to adapter support
     WGPULimits limits = {};
@@ -1021,7 +1027,7 @@ Result<void> YettyImpl::initWebGPU() noexcept {
     limits.maxDynamicStorageBuffersPerPipelineLayout = WGPU_LIMIT_U32_UNDEFINED;
     limits.maxSampledTexturesPerShaderStage = WGPU_LIMIT_U32_UNDEFINED;
     limits.maxSamplersPerShaderStage = WGPU_LIMIT_U32_UNDEFINED;
-    limits.maxStorageBuffersPerShaderStage = 16;  // Need 13 for grid shader + overlay buffers
+    limits.maxStorageBuffersPerShaderStage = std::min(16u, adapterLimits.maxStorageBuffersPerShaderStage);  // Need 13 for grid shader + overlay buffers
     limits.maxStorageTexturesPerShaderStage = WGPU_LIMIT_U32_UNDEFINED;
     limits.maxUniformBuffersPerShaderStage = WGPU_LIMIT_U32_UNDEFINED;
     limits.maxUniformBufferBindingSize = WGPU_LIMIT_U64_UNDEFINED;

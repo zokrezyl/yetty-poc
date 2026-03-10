@@ -19,6 +19,9 @@ struct GPUContext {
     // Used to clamp scissor rects during resize transitions
     uint32_t renderTargetWidth = 0;
     uint32_t renderTargetHeight = 0;
+
+    // GPU limits - obtained from adapter, used to disable features on limited hardware
+    uint32_t maxStorageBuffersPerShaderStage = 0;  // Set from wgpuAdapterGetLimits
 };
 
 } // namespace yetty

@@ -333,6 +333,28 @@ private:
     WGPUBuffer _quadVertexBuffer = nullptr;
 
     bool _initialized = false;
+
+    // === GPU CAPABILITY FLAGS ===
+    // Storage buffer budget: GPU limit minus 2 (shared bind group uses 2 storage buffers)
+    // e.g., GPU limit 10 -> 8 available for grid bind group
+    //
+    // SCROLLING OVERLAY (bindings 19-22): Requires 14 total storage buffers (12 grid + 2 shared)
+    // Disabled on GPUs with < 14 storage buffer limit.
+    bool _hasScrollingOverlay = false;
+
+    // ABSOLUTE OVERLAY (bindings 15-17): Requires 12 total storage buffers (10 grid + 2 shared)
+    // Disabled on GPUs with <= 10 storage buffer limit (need to fit in 10 total).
+    // TODO: Future fix options:
+    //   1. Split overlay into separate render pass (reduces storage buffers per pass)
+    //   2. Pack multiple overlay buffers into single buffer with offsets
+    //   3. Use texture-based lookup instead of storage buffers for some data
+    bool _hasAbsoluteOverlay = true;
+
+    // RASTER FONT (binding 14): Uses 1 storage buffer for UV metadata.
+    // Disabled on GPUs with <= 10 storage buffers (combined with absolute overlay).
+    // Set YETTY_DISABLE_RASTER_FONT=1 to disable raster font rendering.
+    // TODO: Merge raster font UV data into another buffer or use texture lookup.
+    bool _hasRasterFont = true;
 };
 
 // Factory implementation
@@ -378,6 +400,47 @@ Result<void> ShaderManagerImpl::init(const GPUContext& gpu, GpuAllocator::Ptr al
 
     _gpu = gpu;
     _allocator = std::move(allocator);
+
+    // GPU storage buffer budget calculation:
+    // - Shared bind group (group 0) uses 2 storage buffers
+    // - Grid bind group (group 1) uses remaining budget
+    // - Total must not exceed GPU's maxStorageBuffersPerShaderStage
+    //
+    // Feature requirements (grid bind group storage buffers):
+    // - Base: 7 storage buffers (bindings 3,4,7,8,9,10,11)
+    // - Absolute overlay (bindings 15-17): +3 storage buffers -> 10 total grid
+    // - Raster font (binding 14): +1 storage buffer -> 11 total grid
+    // - Scrolling overlay (bindings 19-21): +3 storage buffers -> 14 total grid
+    //
+    // With shared bind group (2), total requirements:
+    // - Base only: 7 + 2 = 9 storage buffers
+    // - With absolute overlay: 10 + 2 = 12 storage buffers
+    // - With raster font: 11 + 2 = 13 storage buffers
+    // - With scrolling overlay: 14 + 2 = 16 storage buffers
+
+    _hasScrollingOverlay = _gpu.maxStorageBuffersPerShaderStage >= 16;
+    _hasAbsoluteOverlay = _gpu.maxStorageBuffersPerShaderStage >= 12;
+
+    // Raster font requires absolute overlay to be enabled (depends on overlay infrastructure)
+    // and needs 1 extra storage buffer
+    const char* disableRasterEnv = std::getenv("YETTY_DISABLE_RASTER_FONT");
+    bool envDisablesRaster = disableRasterEnv && (std::string(disableRasterEnv) == "1" || std::string(disableRasterEnv) == "yes");
+    _hasRasterFont = _hasAbsoluteOverlay && !envDisablesRaster && _gpu.maxStorageBuffersPerShaderStage >= 13;
+
+    ydebug("ShaderManager: GPU maxStorageBuffersPerShaderStage={}, scrolling={}, absolute={}, raster={}",
+           _gpu.maxStorageBuffersPerShaderStage,
+           _hasScrollingOverlay ? "ON" : "OFF",
+           _hasAbsoluteOverlay ? "ON" : "OFF",
+           _hasRasterFont ? "ON" : "OFF");
+
+    if (!_hasAbsoluteOverlay) {
+        ywarn("ShaderManager: absolute overlay DISABLED (GPU has {} storage buffers, need >=12 with shared group)",
+              _gpu.maxStorageBuffersPerShaderStage);
+    }
+    if (!_hasRasterFont && _hasAbsoluteOverlay) {
+        ywarn("ShaderManager: raster font DISABLED (GPU has {} storage buffers, need >=13 or env YETTY_DISABLE_RASTER_FONT=1)",
+              _gpu.maxStorageBuffersPerShaderStage);
+    }
 
     // Load base shader
     std::string shadersDir = getShadersDir();
@@ -576,7 +639,33 @@ std::string ShaderManagerImpl::mergeShaders() const {
     // Add library code first
     for (const auto& [name, code] : _libraries) {
         allFunctions += "// Library: " + name + "\n";
-        allFunctions += code;
+
+        // If scrolling overlay is disabled, strip out _scrolling functions from sdf-overlay.gen
+        // These functions reference scrollingStorage/scrolling which won't exist
+        if (!_hasScrollingOverlay && name == "sdf-overlay.gen") {
+            // Find and remove the SCROLLING OVERLAY VARIANTS section
+            std::string modifiedCode = code;
+            const std::string scrollingMarker = "// ============= SCROLLING OVERLAY VARIANTS =============";
+            size_t scrollingStart = modifiedCode.find(scrollingMarker);
+            if (scrollingStart != std::string::npos) {
+                // Remove everything from the marker to the end of the file
+                modifiedCode = modifiedCode.substr(0, scrollingStart);
+                modifiedCode += R"(
+// ============= SCROLLING OVERLAY VARIANTS =============
+// DISABLED: GPU doesn't support enough storage buffers (need 14, see gpu-context.h)
+// Stub functions to prevent shader compilation errors
+
+fn evalSDF_scrolling(primOffset: u32, p: vec2<f32>) -> f32 { return 1e10; }
+fn evalSDF3D_scrolling(primOffset: u32, p: vec3<f32>) -> f32 { return 1e10; }
+fn primColors_scrolling(primOffset: u32) -> vec4<u32> { return vec4<u32>(0u); }
+fn evalGradientFillColor_scrolling(primOffset: u32, p: vec2<f32>) -> vec4<f32> { return vec4<f32>(0.0); }
+fn primStrokeWidth_scrolling(primOffset: u32) -> f32 { return 0.0; }
+)";
+            }
+            allFunctions += modifiedCode;
+        } else {
+            allFunctions += code;
+        }
         allFunctions += "\n\n";
     }
 
@@ -721,6 +810,329 @@ std::string ShaderManagerImpl::mergeShaders() const {
         ywarn("ShaderManager: post-effect apply placeholder not found");
     }
 
+    // === RASTER FONT: Conditionally enabled based on GPU storage buffer limit ===
+    // DISABLED ON LOW-LIMIT GPUS: Raster font needs 1 additional storage buffer (binding 14).
+    // On GPUs with only 10 storage buffers, we disable raster font to fit within the limit.
+    // TODO: Merge raster font UV data into another buffer or use texture lookup.
+    if (_hasRasterFont) {
+        const char* rasterBinding = "@group(1) @binding(14) var<storage, read> rasterMetadata: array<RasterGlyphUV>;";
+        const char* rasterRendering = R"(} else if (isRasterGlyph(glyphIndex)) {
+            // Raster font: sample from texture atlas
+            let rasterIdx = glyphIndex - RASTER_GLYPH_BASE;
+            let glyphUV = rasterMetadata[rasterIdx].uv;
+
+            // Skip empty glyphs (marked with negative UV)
+            if (glyphUV.x >= 0.0) {
+                // Compute UV within the glyph cell
+                // glyphSizeUV should be passed as uniform, for now assume square cells
+                let glyphSizeUV = vec2<f32>(grid.cellSize.x / 1024.0, grid.cellSize.y / 1024.0);
+                let localUV = localPxBase / grid.cellSize;
+                let sampleUV = glyphUV + localUV * glyphSizeUV;
+
+                // Sample grayscale texture (R channel) - use Level to avoid non-uniform control flow issue
+                let alpha = textureSampleLevel(rasterTexture, rasterSampler, sampleUV, 0.0).r;
+
+                finalColor = mix(bgColor.rgb, fgColor.rgb, alpha);
+                hasGlyph = alpha > 0.01;
+            }
+        )";
+        replacePlaceholder(result, "// RASTER_FONT_METADATA_PLACEHOLDER", rasterBinding);
+        replacePlaceholder(result, "// RASTER_FONT_RENDERING_PLACEHOLDER", rasterRendering);
+    } else {
+        // Raster font DISABLED - use stubs
+        const char* stubBinding = "// Raster font metadata DISABLED - GPU storage buffer limit too low";
+        const char* stubRendering = "// Raster font rendering DISABLED";
+        replacePlaceholder(result, "// RASTER_FONT_METADATA_PLACEHOLDER", stubBinding);
+        replacePlaceholder(result, "// RASTER_FONT_RENDERING_PLACEHOLDER", stubRendering);
+    }
+
+    // === ABSOLUTE OVERLAY: Conditionally enabled based on GPU storage buffer limit ===
+    // DISABLED ON LOW-LIMIT GPUS: Absolute overlay requires 12 total storage buffers (10 grid + 2 shared).
+    // Some GPUs (e.g., Intel HD 530) only support 10, so we disable absolute overlay on those.
+    // TODO: Future fix options:
+    //   1. Split overlay into separate render pass (reduces storage buffers per pass)
+    //   2. Pack multiple overlay buffers into single buffer with offsets
+    //   3. Use texture-based lookup instead of storage buffers for some data
+    if (_hasAbsoluteOverlay) {
+        // Full absolute overlay support - inject bindings and function
+        const char* absoluteBindings = R"(
+// Overlay bindings (group 1 continued) - ydraw ABSOLUTE overlay (OSC 666673)
+// Uses _overlay variants of SDF functions from lib/sdf-types.gen.wgsl
+@group(1) @binding(15) var<storage, read> overlayGridData: array<u32>;
+@group(1) @binding(16) var<storage, read> overlayGlyphBuffer: array<f32>;
+@group(1) @binding(17) var<storage, read> overlayStorage: array<f32>;
+@group(1) @binding(18) var<uniform> overlay: OverlayUniforms;
+)";
+        const char* absoluteFunction = R"(
+// ==== YDRAW OVERLAY EVALUATION ====
+// Uses _overlay variants of SDF functions that read from overlayStorage
+
+fn evaluateOverlay(pixelPos: vec2<f32>) -> vec4<f32> {
+    // Early exit if no overlay
+    if (overlay.hasOverlay == 0u || overlay.gridWidth == 0u || overlay.gridHeight == 0u) {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+
+    let scenePos = pixelPos;  // 1:1 mapping for screen overlay
+
+    let invCellSizeX = select(0.0, 1.0 / overlay.cellSizeX, overlay.cellSizeX > 0.0);
+    let invCellSizeY = select(0.0, 1.0 / overlay.cellSizeY, overlay.cellSizeY > 0.0);
+    let contentMinX = overlay.sceneMinX;
+    let contentMinY = overlay.sceneMinY;
+
+    // O(1) grid lookup
+    let cellX = u32(clamp((scenePos.x - contentMinX) * invCellSizeX, 0.0, f32(overlay.gridWidth - 1u)));
+    let cellY = u32(clamp((scenePos.y - contentMinY) * invCellSizeY, 0.0, f32(overlay.gridHeight - 1u)));
+    let cellIndex = cellY * overlay.gridWidth + cellX;
+
+    let packedStart = overlayGridData[cellIndex];
+    let cellEntryCount = overlayGridData[packedStart];
+    let loopCount = min(cellEntryCount, OVERLAY_MAX_ENTRIES_PER_CELL);
+
+    var resultColor = vec3<f32>(0.0, 0.0, 0.0);
+    var resultAlpha = 0.0;
+    let primDataBase = overlay.primCount;
+
+    for (var i = 0u; i < loopCount; i++) {
+        let rawIdx = overlayGridData[packedStart + 1u + i];
+
+        if ((rawIdx & OVERLAY_GLYPH_BIT) != 0u) {
+            // TEXT GLYPH (MSDF)
+            let gi = rawIdx & OVERLAY_INDEX_MASK;
+            let gOffset = gi * 5u;
+
+            let gx = overlayGlyphBuffer[gOffset + 0u];
+            let gy = overlayGlyphBuffer[gOffset + 1u];
+            let whPacked = bitcast<u32>(overlayGlyphBuffer[gOffset + 2u]);
+            let gw = unpack2x16float(whPacked).x;
+            let gh = unpack2x16float(whPacked).y;
+            let glfPacked = bitcast<u32>(overlayGlyphBuffer[gOffset + 3u]);
+            let gIdx = glfPacked & 0xFFFFu;
+            let gColorPacked = bitcast<u32>(overlayGlyphBuffer[gOffset + 4u]);
+
+            if (scenePos.x >= gx && scenePos.x < gx + gw &&
+                scenePos.y >= gy && scenePos.y < gy + gh) {
+
+                let glyphUV = vec2<f32>(
+                    (scenePos.x - gx) / gw,
+                    (scenePos.y - gy) / gh
+                );
+                let gColor = unpackColor(gColorPacked);
+
+                // Sample MSDF from shared font atlas
+                let glyph = glyphMetadata[gIdx];
+                let uv = mix(glyph.uvMin, glyph.uvMax, glyphUV);
+                let msdf = textureSampleLevel(fontTexture, fontSampler, uv, 0.0);
+                let sd = median(msdf.r, msdf.g, msdf.b);
+                let pxDist = overlay.pixelRange * (sd - 0.5);
+                let alpha = clamp(pxDist + 0.5, 0.0, 1.0);
+                if (alpha > 0.01) {
+                    resultColor = mix(resultColor, gColor, alpha);
+                    resultAlpha = max(resultAlpha, alpha);
+                }
+            }
+        } else {
+            // SDF PRIMITIVE - use _overlay variants that read from overlayStorage
+            // rawIdx is primitive index; look up offset from offset table (stored as f32->u32)
+            let primOffset = bitcast<u32>(overlayStorage[rawIdx]);
+            let primOff = primDataBase + primOffset;
+            let d = evalSDF_overlay(primOff, scenePos);
+
+            let colors = primColors_overlay(primOff);
+            let fillColorPacked = colors.x;
+            if (d < 0.0 && fillColorPacked != 0u) {
+                let fillColor = unpackColor(fillColorPacked);
+                let fillAlpha = unpackAlpha(fillColorPacked);
+                let edgeAlpha = clamp(-d * 2.0, 0.0, 1.0);
+                let alpha = edgeAlpha * fillAlpha;
+                resultColor = mix(resultColor, fillColor, alpha);
+                resultAlpha = max(resultAlpha, alpha);
+            }
+
+            let strokeColorPacked = colors.y;
+            let strokeWidth = primStrokeWidth_overlay(primOff);
+            if (strokeWidth > 0.0 && strokeColorPacked != 0u) {
+                let strokeDist = abs(d) - strokeWidth * 0.5;
+                if (strokeDist < 0.0) {
+                    let strokeColor = unpackColor(strokeColorPacked);
+                    let strokeAlpha = unpackAlpha(strokeColorPacked);
+                    let edgeAlpha = clamp(-strokeDist * 2.0, 0.0, 1.0);
+                    let alpha = edgeAlpha * strokeAlpha;
+                    resultColor = mix(resultColor, strokeColor, alpha);
+                    resultAlpha = max(resultAlpha, alpha);
+                }
+            }
+        }
+    }
+
+    return vec4<f32>(resultColor, resultAlpha);
+}
+)";
+        replacePlaceholder(result, "// ABSOLUTE_OVERLAY_BINDINGS_PLACEHOLDER", absoluteBindings);
+        replacePlaceholder(result, "// ABSOLUTE_OVERLAY_FUNCTION_PLACEHOLDER", absoluteFunction);
+    } else {
+        // Absolute overlay DISABLED - use stub function and dummy variables
+        // The sdf-overlay.gen.wgsl library functions reference these variables,
+        // so we need to provide dummy definitions to prevent shader compilation errors
+        ywarn("ShaderManager: absolute overlay DISABLED (GPU has {} storage buffers, need 12 total)",
+              _gpu.maxStorageBuffersPerShaderStage);
+        const char* stubBindings = R"(
+// Absolute overlay DISABLED - GPU storage buffer limit too low
+// Dummy variables for library functions that reference overlay storage
+var<private> overlayGridData: array<u32, 1>;
+var<private> overlayGlyphBuffer: array<f32, 1>;
+var<private> overlayStorage: array<f32, 1>;
+var<private> overlay: OverlayUniforms;
+)";
+        const char* stubFunction = R"(
+// Absolute overlay DISABLED - GPU only supports limited storage buffers per shader stage
+// This stub returns transparent to avoid shader compilation errors
+fn evaluateOverlay(pixelPos: vec2<f32>) -> vec4<f32> {
+    return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+}
+)";
+        replacePlaceholder(result, "// ABSOLUTE_OVERLAY_BINDINGS_PLACEHOLDER", stubBindings);
+        replacePlaceholder(result, "// ABSOLUTE_OVERLAY_FUNCTION_PLACEHOLDER", stubFunction);
+    }
+
+    // === SCROLLING OVERLAY: Conditionally enabled based on GPU storage buffer limit ===
+    // DISABLED ON LOW-LIMIT GPUS: Scrolling overlay requires 16 total storage buffers (14 grid + 2 shared).
+    // TODO: Future fix options:
+    //   1. Split overlay into separate render pass (reduces storage buffers per pass)
+    //   2. Pack multiple overlay buffers into single buffer with offsets
+    //   3. Use texture-based lookup instead of storage buffers for some data
+    if (_hasScrollingOverlay) {
+        // Full scrolling overlay support - inject bindings and function
+        const char* scrollingBindings = R"(
+// Scrolling overlay bindings - ydraw SCROLLING overlay (OSC 666674)
+// Uses _scrolling variants of SDF functions from lib/sdf-types.gen.wgsl
+@group(1) @binding(19) var<storage, read> scrollingGridData: array<u32>;
+@group(1) @binding(20) var<storage, read> scrollingGlyphBuffer: array<f32>;
+@group(1) @binding(21) var<storage, read> scrollingStorage: array<f32>;
+@group(1) @binding(22) var<uniform> scrolling: OverlayUniforms;
+)";
+        const char* scrollingFunction = R"(
+// ==== YDRAW SCROLLING OVERLAY EVALUATION ====
+// Uses _scrolling variants of SDF functions that read from scrollingStorage
+
+fn evaluateScrollingOverlay(pixelPos: vec2<f32>) -> vec4<f32> {
+    // Early exit if no scrolling overlay
+    if (scrolling.hasOverlay == 0u || scrolling.gridWidth == 0u || scrolling.gridHeight == 0u) {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+
+    let scenePos = pixelPos;  // 1:1 mapping for screen overlay
+
+    let invCellSizeX = select(0.0, 1.0 / scrolling.cellSizeX, scrolling.cellSizeX > 0.0);
+    let invCellSizeY = select(0.0, 1.0 / scrolling.cellSizeY, scrolling.cellSizeY > 0.0);
+    let contentMinX = scrolling.sceneMinX;
+    let contentMinY = scrolling.sceneMinY;
+
+    // O(1) grid lookup
+    let cellX = u32(clamp((scenePos.x - contentMinX) * invCellSizeX, 0.0, f32(scrolling.gridWidth - 1u)));
+    let cellY = u32(clamp((scenePos.y - contentMinY) * invCellSizeY, 0.0, f32(scrolling.gridHeight - 1u)));
+    let cellIndex = cellY * scrolling.gridWidth + cellX;
+
+    let packedStart = scrollingGridData[cellIndex];
+    let cellEntryCount = scrollingGridData[packedStart];
+    let loopCount = min(cellEntryCount, OVERLAY_MAX_ENTRIES_PER_CELL);
+
+    var resultColor = vec3<f32>(0.0, 0.0, 0.0);
+    var resultAlpha = 0.0;
+    let primDataBase = scrolling.primCount;
+
+    for (var i = 0u; i < loopCount; i++) {
+        let rawIdx = scrollingGridData[packedStart + 1u + i];
+
+        if ((rawIdx & OVERLAY_GLYPH_BIT) != 0u) {
+            // TEXT GLYPH (MSDF)
+            let gi = rawIdx & OVERLAY_INDEX_MASK;
+            let gOffset = gi * 5u;
+
+            let gx = scrollingGlyphBuffer[gOffset + 0u];
+            let gy = scrollingGlyphBuffer[gOffset + 1u];
+            let whPacked = bitcast<u32>(scrollingGlyphBuffer[gOffset + 2u]);
+            let gw = unpack2x16float(whPacked).x;
+            let gh = unpack2x16float(whPacked).y;
+            let glfPacked = bitcast<u32>(scrollingGlyphBuffer[gOffset + 3u]);
+            let gIdx = glfPacked & 0xFFFFu;
+            let gColorPacked = bitcast<u32>(scrollingGlyphBuffer[gOffset + 4u]);
+
+            if (scenePos.x >= gx && scenePos.x < gx + gw &&
+                scenePos.y >= gy && scenePos.y < gy + gh) {
+
+                let glyphUV = vec2<f32>(
+                    (scenePos.x - gx) / gw,
+                    (scenePos.y - gy) / gh
+                );
+                let gColor = unpackColor(gColorPacked);
+
+                // Sample MSDF from shared font atlas
+                let glyph = glyphMetadata[gIdx];
+                let uv = mix(glyph.uvMin, glyph.uvMax, glyphUV);
+                let msdf = textureSampleLevel(fontTexture, fontSampler, uv, 0.0);
+                let sd = median(msdf.r, msdf.g, msdf.b);
+                let pxDist = scrolling.pixelRange * (sd - 0.5);
+                let alpha = clamp(pxDist + 0.5, 0.0, 1.0);
+                if (alpha > 0.01) {
+                    resultColor = mix(resultColor, gColor, alpha);
+                    resultAlpha = max(resultAlpha, alpha);
+                }
+            }
+        } else {
+            // SDF PRIMITIVE - use _scrolling variants that read from scrollingStorage
+            let primOffset = bitcast<u32>(scrollingStorage[rawIdx]);
+            let primOff = primDataBase + primOffset;
+            let d = evalSDF_scrolling(primOff, scenePos);
+
+            let colors = primColors_scrolling(primOff);
+            let fillColorPacked = colors.x;
+            if (d < 0.0 && fillColorPacked != 0u) {
+                let fillColor = unpackColor(fillColorPacked);
+                let fillAlpha = unpackAlpha(fillColorPacked);
+                let edgeAlpha = clamp(-d * 2.0, 0.0, 1.0);
+                let alpha = edgeAlpha * fillAlpha;
+                resultColor = mix(resultColor, fillColor, alpha);
+                resultAlpha = max(resultAlpha, alpha);
+            }
+
+            let strokeColorPacked = colors.y;
+            let strokeWidth = primStrokeWidth_scrolling(primOff);
+            if (strokeWidth > 0.0 && strokeColorPacked != 0u) {
+                let strokeDist = abs(d) - strokeWidth * 0.5;
+                if (strokeDist < 0.0) {
+                    let strokeColor = unpackColor(strokeColorPacked);
+                    let strokeAlpha = unpackAlpha(strokeColorPacked);
+                    let edgeAlpha = clamp(-strokeDist * 2.0, 0.0, 1.0);
+                    let alpha = edgeAlpha * strokeAlpha;
+                    resultColor = mix(resultColor, strokeColor, alpha);
+                    resultAlpha = max(resultAlpha, alpha);
+                }
+            }
+        }
+    }
+
+    return vec4<f32>(resultColor, resultAlpha);
+}
+)";
+        replacePlaceholder(result, "// SCROLLING_OVERLAY_BINDINGS_PLACEHOLDER", scrollingBindings);
+        replacePlaceholder(result, "// SCROLLING_OVERLAY_FUNCTION_PLACEHOLDER", scrollingFunction);
+    } else {
+        // GPU doesn't support enough storage buffers - use stub function
+        ywarn("ShaderManager: scrolling overlay DISABLED (GPU has {} storage buffers, need 14)",
+              _gpu.maxStorageBuffersPerShaderStage);
+        const char* stubBindings = "// Scrolling overlay DISABLED - GPU storage buffer limit too low";
+        const char* stubFunction = R"(
+// Scrolling overlay DISABLED - GPU only supports limited storage buffers per shader stage
+// This stub returns transparent to avoid shader compilation errors
+fn evaluateScrollingOverlay(pixelPos: vec2<f32>) -> vec4<f32> {
+    return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+}
+)";
+        replacePlaceholder(result, "// SCROLLING_OVERLAY_BINDINGS_PLACEHOLDER", stubBindings);
+        replacePlaceholder(result, "// SCROLLING_OVERLAY_FUNCTION_PLACEHOLDER", stubFunction);
+    }
+
     return result;
 }
 
@@ -827,130 +1239,91 @@ Result<void> ShaderManagerImpl::createPipelineResources() {
     memcpy(mapped, quadVertices, sizeof(quadVertices));
     wgpuBufferUnmap(_quadVertexBuffer);
 
-    // 2. Create grid bind group layout (23 bindings: 15 grid + 4 absolute overlay + 4 scrolling overlay)
-    WGPUBindGroupLayoutEntry entries[23] = {};
+    // 2. Create grid bind group layout dynamically based on GPU capabilities
+    // Bindings can have gaps - we skip disabled features
+    // Base: 14 bindings (grid without raster font)
+    // +1 for raster font (binding 14) if enabled
+    // +4 for scrolling overlay (bindings 19-22) if enabled
+    std::vector<WGPUBindGroupLayoutEntry> entries;
+    entries.reserve(23);
+
+    // Helper to add an entry
+    auto addEntry = [&entries](uint32_t binding, WGPUShaderStage visibility,
+                               WGPUBufferBindingType bufType = WGPUBufferBindingType_Undefined,
+                               WGPUTextureSampleType texType = WGPUTextureSampleType_Undefined,
+                               WGPUSamplerBindingType samplerType = WGPUSamplerBindingType_Undefined) {
+        WGPUBindGroupLayoutEntry e = {};
+        e.binding = binding;
+        e.visibility = visibility;
+        if (bufType != WGPUBufferBindingType_Undefined) e.buffer.type = bufType;
+        if (texType != WGPUTextureSampleType_Undefined) {
+            e.texture.sampleType = texType;
+            e.texture.viewDimension = WGPUTextureViewDimension_2D;
+        }
+        if (samplerType != WGPUSamplerBindingType_Undefined) e.sampler.type = samplerType;
+        entries.push_back(e);
+    };
 
     // 0: Grid uniforms
-    entries[0].binding = 0;
-    entries[0].visibility = WGPUShaderStage_Vertex | WGPUShaderStage_Fragment;
-    entries[0].buffer.type = WGPUBufferBindingType_Uniform;
-
+    addEntry(0, WGPUShaderStage_Vertex | WGPUShaderStage_Fragment, WGPUBufferBindingType_Uniform);
     // 1: Font atlas texture
-    entries[1].binding = 1;
-    entries[1].visibility = WGPUShaderStage_Fragment;
-    entries[1].texture.sampleType = WGPUTextureSampleType_Float;
-    entries[1].texture.viewDimension = WGPUTextureViewDimension_2D;
-
+    addEntry(1, WGPUShaderStage_Fragment, WGPUBufferBindingType_Undefined, WGPUTextureSampleType_Float);
     // 2: Font sampler
-    entries[2].binding = 2;
-    entries[2].visibility = WGPUShaderStage_Fragment;
-    entries[2].sampler.type = WGPUSamplerBindingType_Filtering;
-
+    addEntry(2, WGPUShaderStage_Fragment, WGPUBufferBindingType_Undefined, WGPUTextureSampleType_Undefined, WGPUSamplerBindingType_Filtering);
     // 3: Glyph metadata SSBO
-    entries[3].binding = 3;
-    entries[3].visibility = WGPUShaderStage_Fragment;
-    entries[3].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
-
+    addEntry(3, WGPUShaderStage_Fragment, WGPUBufferBindingType_ReadOnlyStorage);
     // 4: Cell buffer SSBO
-    entries[4].binding = 4;
-    entries[4].visibility = WGPUShaderStage_Fragment;
-    entries[4].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
-
+    addEntry(4, WGPUShaderStage_Fragment, WGPUBufferBindingType_ReadOnlyStorage);
     // 5: Bitmap/Emoji atlas texture
-    entries[5].binding = 5;
-    entries[5].visibility = WGPUShaderStage_Fragment;
-    entries[5].texture.sampleType = WGPUTextureSampleType_Float;
-    entries[5].texture.viewDimension = WGPUTextureViewDimension_2D;
-
+    addEntry(5, WGPUShaderStage_Fragment, WGPUBufferBindingType_Undefined, WGPUTextureSampleType_Float);
     // 6: Bitmap/Emoji sampler
-    entries[6].binding = 6;
-    entries[6].visibility = WGPUShaderStage_Fragment;
-    entries[6].sampler.type = WGPUSamplerBindingType_Filtering;
-
+    addEntry(6, WGPUShaderStage_Fragment, WGPUBufferBindingType_Undefined, WGPUTextureSampleType_Undefined, WGPUSamplerBindingType_Filtering);
     // 7: Bitmap/Emoji metadata SSBO
-    entries[7].binding = 7;
-    entries[7].visibility = WGPUShaderStage_Fragment;
-    entries[7].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
-
+    addEntry(7, WGPUShaderStage_Fragment, WGPUBufferBindingType_ReadOnlyStorage);
     // 8: Vector font glyph buffer SSBO
-    entries[8].binding = 8;
-    entries[8].visibility = WGPUShaderStage_Fragment;
-    entries[8].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
-
+    addEntry(8, WGPUShaderStage_Fragment, WGPUBufferBindingType_ReadOnlyStorage);
     // 9: Vector font offset table SSBO
-    entries[9].binding = 9;
-    entries[9].visibility = WGPUShaderStage_Fragment;
-    entries[9].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
-
+    addEntry(9, WGPUShaderStage_Fragment, WGPUBufferBindingType_ReadOnlyStorage);
     // 10: Coverage font glyph buffer SSBO
-    entries[10].binding = 10;
-    entries[10].visibility = WGPUShaderStage_Fragment;
-    entries[10].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
-
+    addEntry(10, WGPUShaderStage_Fragment, WGPUBufferBindingType_ReadOnlyStorage);
     // 11: Coverage font offset table SSBO
-    entries[11].binding = 11;
-    entries[11].visibility = WGPUShaderStage_Fragment;
-    entries[11].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
-
+    addEntry(11, WGPUShaderStage_Fragment, WGPUBufferBindingType_ReadOnlyStorage);
     // 12: Raster font texture (R8Unorm)
-    entries[12].binding = 12;
-    entries[12].visibility = WGPUShaderStage_Fragment;
-    entries[12].texture.sampleType = WGPUTextureSampleType_Float;
-    entries[12].texture.viewDimension = WGPUTextureViewDimension_2D;
-
+    addEntry(12, WGPUShaderStage_Fragment, WGPUBufferBindingType_Undefined, WGPUTextureSampleType_Float);
     // 13: Raster font sampler
-    entries[13].binding = 13;
-    entries[13].visibility = WGPUShaderStage_Fragment;
-    entries[13].sampler.type = WGPUSamplerBindingType_Filtering;
+    addEntry(13, WGPUShaderStage_Fragment, WGPUBufferBindingType_Undefined, WGPUTextureSampleType_Undefined, WGPUSamplerBindingType_Filtering);
 
-    // 14: Raster font UV metadata SSBO
-    entries[14].binding = 14;
-    entries[14].visibility = WGPUShaderStage_Fragment;
-    entries[14].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
+    // 14: Raster font UV metadata SSBO (CONDITIONAL - disabled on low-limit GPUs)
+    if (_hasRasterFont) {
+        addEntry(14, WGPUShaderStage_Fragment, WGPUBufferBindingType_ReadOnlyStorage);
+    }
 
-    // 15: Overlay grid data SSBO
-    entries[15].binding = 15;
-    entries[15].visibility = WGPUShaderStage_Fragment;
-    entries[15].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
+    // 15-18: Absolute overlay (CONDITIONAL - disabled on GPUs with < 12 total storage buffer limit)
+    // These bindings use 3 storage buffers (15,16,17) + 1 uniform buffer (18)
+    if (_hasAbsoluteOverlay) {
+        addEntry(15, WGPUShaderStage_Fragment, WGPUBufferBindingType_ReadOnlyStorage);  // grid data
+        addEntry(16, WGPUShaderStage_Fragment, WGPUBufferBindingType_ReadOnlyStorage);  // glyph buffer
+        addEntry(17, WGPUShaderStage_Fragment, WGPUBufferBindingType_ReadOnlyStorage);  // prim storage
+        addEntry(18, WGPUShaderStage_Fragment, WGPUBufferBindingType_Uniform);          // uniforms
+    }
 
-    // 16: Overlay glyph buffer SSBO
-    entries[16].binding = 16;
-    entries[16].visibility = WGPUShaderStage_Fragment;
-    entries[16].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
+    // 19-22: Scrolling overlay (CONDITIONAL - disabled on GPUs with < 16 total storage buffer limit)
+    if (_hasScrollingOverlay) {
+        addEntry(19, WGPUShaderStage_Fragment, WGPUBufferBindingType_ReadOnlyStorage);  // grid data
+        addEntry(20, WGPUShaderStage_Fragment, WGPUBufferBindingType_ReadOnlyStorage);  // glyph buffer
+        addEntry(21, WGPUShaderStage_Fragment, WGPUBufferBindingType_ReadOnlyStorage);  // prim storage
+        addEntry(22, WGPUShaderStage_Fragment, WGPUBufferBindingType_Uniform);          // uniforms
+    }
 
-    // 17: Overlay storage (primitive data) SSBO
-    entries[17].binding = 17;
-    entries[17].visibility = WGPUShaderStage_Fragment;
-    entries[17].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
-
-    // 18: Overlay uniforms
-    entries[18].binding = 18;
-    entries[18].visibility = WGPUShaderStage_Fragment;
-    entries[18].buffer.type = WGPUBufferBindingType_Uniform;
-
-    // 19: Scrolling overlay grid data SSBO
-    entries[19].binding = 19;
-    entries[19].visibility = WGPUShaderStage_Fragment;
-    entries[19].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
-
-    // 20: Scrolling overlay glyph buffer SSBO
-    entries[20].binding = 20;
-    entries[20].visibility = WGPUShaderStage_Fragment;
-    entries[20].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
-
-    // 21: Scrolling overlay storage (primitive data) SSBO
-    entries[21].binding = 21;
-    entries[21].visibility = WGPUShaderStage_Fragment;
-    entries[21].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
-
-    // 22: Scrolling overlay uniforms
-    entries[22].binding = 22;
-    entries[22].visibility = WGPUShaderStage_Fragment;
-    entries[22].buffer.type = WGPUBufferBindingType_Uniform;
+    ydebug("ShaderManager: bind group layout has {} entries ({} storage buffers)",
+           entries.size(),
+           std::count_if(entries.begin(), entries.end(), [](const auto& e) {
+               return e.buffer.type == WGPUBufferBindingType_ReadOnlyStorage;
+           }));
 
     WGPUBindGroupLayoutDescriptor layoutDesc = {};
-    layoutDesc.entryCount = 23;
-    layoutDesc.entries = entries;
+    layoutDesc.entryCount = static_cast<uint32_t>(entries.size());
+    layoutDesc.entries = entries.data();
     _gridBindGroupLayout = wgpuDeviceCreateBindGroupLayout(device, &layoutDesc);
     if (!_gridBindGroupLayout) {
         return Err<void>("Failed to create grid bind group layout");

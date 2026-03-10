@@ -144,21 +144,15 @@ struct Cell {
 // R8Unorm texture atlas with grayscale glyph bitmaps
 @group(1) @binding(12) var rasterTexture: texture_2d<f32>;
 @group(1) @binding(13) var rasterSampler: sampler;
-@group(1) @binding(14) var<storage, read> rasterMetadata: array<RasterGlyphUV>;
+// RASTER_FONT_METADATA_PLACEHOLDER
+// (Replaced by shader-manager - disabled on GPUs with <=10 storage buffers)
 
-// Overlay bindings (group 1 continued) - ydraw ABSOLUTE overlay (OSC 666673)
-// Uses _overlay variants of SDF functions from lib/sdf-types.gen.wgsl
-@group(1) @binding(15) var<storage, read> overlayGridData: array<u32>;
-@group(1) @binding(16) var<storage, read> overlayGlyphBuffer: array<f32>;
-@group(1) @binding(17) var<storage, read> overlayStorage: array<f32>;
-@group(1) @binding(18) var<uniform> overlay: OverlayUniforms;
+// ABSOLUTE_OVERLAY_BINDINGS_PLACEHOLDER
+// (Replaced by shader-manager based on GPU capabilities - requires 12 total storage buffers)
+// When enabled: bindings 15-18 for ydraw ABSOLUTE overlay (OSC 666673)
 
-// Scrolling overlay bindings - ydraw SCROLLING overlay (OSC 666674)
-// Uses _scrolling variants of SDF functions from lib/sdf-types.gen.wgsl
-@group(1) @binding(19) var<storage, read> scrollingGridData: array<u32>;
-@group(1) @binding(20) var<storage, read> scrollingGlyphBuffer: array<f32>;
-@group(1) @binding(21) var<storage, read> scrollingStorage: array<f32>;
-@group(1) @binding(22) var<uniform> scrolling: OverlayUniforms;
+// SCROLLING_OVERLAY_BINDINGS_PLACEHOLDER
+// (Replaced by shader-manager based on GPU capabilities - requires 14 storage buffers)
 
 // Attribute bit masks (matches CellAttrs in grid.h)
 const ATTR_BOLD: u32 = 0x01u;           // Bit 0
@@ -633,212 +627,12 @@ fn unpackAlpha(packed: u32) -> f32 {
     return f32((packed >> 24u) & 0xFFu) / 255.0;
 }
 
-// ==== YDRAW OVERLAY EVALUATION ====
-// Uses _overlay variants of SDF functions that read from overlayStorage
+// ABSOLUTE_OVERLAY_FUNCTION_PLACEHOLDER
+// (Replaced by shader-manager based on GPU capabilities - requires 12 total storage buffers)
+// When enabled: evaluateOverlay function for ydraw ABSOLUTE overlay (OSC 666673)
 
-fn evaluateOverlay(pixelPos: vec2<f32>) -> vec4<f32> {
-    // Early exit if no overlay
-    if (overlay.hasOverlay == 0u || overlay.gridWidth == 0u || overlay.gridHeight == 0u) {
-        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
-    }
-
-    let scenePos = pixelPos;  // 1:1 mapping for screen overlay
-
-    let invCellSizeX = select(0.0, 1.0 / overlay.cellSizeX, overlay.cellSizeX > 0.0);
-    let invCellSizeY = select(0.0, 1.0 / overlay.cellSizeY, overlay.cellSizeY > 0.0);
-    let contentMinX = overlay.sceneMinX;
-    let contentMinY = overlay.sceneMinY;
-
-    // O(1) grid lookup
-    let cellX = u32(clamp((scenePos.x - contentMinX) * invCellSizeX, 0.0, f32(overlay.gridWidth - 1u)));
-    let cellY = u32(clamp((scenePos.y - contentMinY) * invCellSizeY, 0.0, f32(overlay.gridHeight - 1u)));
-    let cellIndex = cellY * overlay.gridWidth + cellX;
-
-    let packedStart = overlayGridData[cellIndex];
-    let cellEntryCount = overlayGridData[packedStart];
-    let loopCount = min(cellEntryCount, OVERLAY_MAX_ENTRIES_PER_CELL);
-
-    var resultColor = vec3<f32>(0.0, 0.0, 0.0);
-    var resultAlpha = 0.0;
-    let primDataBase = overlay.primCount;
-
-    for (var i = 0u; i < loopCount; i++) {
-        let rawIdx = overlayGridData[packedStart + 1u + i];
-
-        if ((rawIdx & OVERLAY_GLYPH_BIT) != 0u) {
-            // TEXT GLYPH (MSDF)
-            let gi = rawIdx & OVERLAY_INDEX_MASK;
-            let gOffset = gi * 5u;
-
-            let gx = overlayGlyphBuffer[gOffset + 0u];
-            let gy = overlayGlyphBuffer[gOffset + 1u];
-            let whPacked = bitcast<u32>(overlayGlyphBuffer[gOffset + 2u]);
-            let gw = unpack2x16float(whPacked).x;
-            let gh = unpack2x16float(whPacked).y;
-            let glfPacked = bitcast<u32>(overlayGlyphBuffer[gOffset + 3u]);
-            let gIdx = glfPacked & 0xFFFFu;
-            let gColorPacked = bitcast<u32>(overlayGlyphBuffer[gOffset + 4u]);
-
-            if (scenePos.x >= gx && scenePos.x < gx + gw &&
-                scenePos.y >= gy && scenePos.y < gy + gh) {
-
-                let glyphUV = vec2<f32>(
-                    (scenePos.x - gx) / gw,
-                    (scenePos.y - gy) / gh
-                );
-                let gColor = unpackColor(gColorPacked);
-
-                // Sample MSDF from shared font atlas
-                let glyph = glyphMetadata[gIdx];
-                let uv = mix(glyph.uvMin, glyph.uvMax, glyphUV);
-                let msdf = textureSampleLevel(fontTexture, fontSampler, uv, 0.0);
-                let sd = median(msdf.r, msdf.g, msdf.b);
-                let pxDist = overlay.pixelRange * (sd - 0.5);
-                let alpha = clamp(pxDist + 0.5, 0.0, 1.0);
-                if (alpha > 0.01) {
-                    resultColor = mix(resultColor, gColor, alpha);
-                    resultAlpha = max(resultAlpha, alpha);
-                }
-            }
-        } else {
-            // SDF PRIMITIVE - use _overlay variants that read from overlayStorage
-            // rawIdx is primitive index; look up offset from offset table (stored as f32->u32)
-            let primOffset = bitcast<u32>(overlayStorage[rawIdx]);
-            let primOff = primDataBase + primOffset;
-            let d = evalSDF_overlay(primOff, scenePos);
-
-            let colors = primColors_overlay(primOff);
-            let fillColorPacked = colors.x;
-            if (d < 0.0 && fillColorPacked != 0u) {
-                let fillColor = unpackColor(fillColorPacked);
-                let fillAlpha = unpackAlpha(fillColorPacked);
-                let edgeAlpha = clamp(-d * 2.0, 0.0, 1.0);
-                let alpha = edgeAlpha * fillAlpha;
-                resultColor = mix(resultColor, fillColor, alpha);
-                resultAlpha = max(resultAlpha, alpha);
-            }
-
-            let strokeColorPacked = colors.y;
-            let strokeWidth = primStrokeWidth_overlay(primOff);
-            if (strokeWidth > 0.0 && strokeColorPacked != 0u) {
-                let strokeDist = abs(d) - strokeWidth * 0.5;
-                if (strokeDist < 0.0) {
-                    let strokeColor = unpackColor(strokeColorPacked);
-                    let strokeAlpha = unpackAlpha(strokeColorPacked);
-                    let edgeAlpha = clamp(-strokeDist * 2.0, 0.0, 1.0);
-                    let alpha = edgeAlpha * strokeAlpha;
-                    resultColor = mix(resultColor, strokeColor, alpha);
-                    resultAlpha = max(resultAlpha, alpha);
-                }
-            }
-        }
-    }
-
-    return vec4<f32>(resultColor, resultAlpha);
-}
-
-// ==== YDRAW SCROLLING OVERLAY EVALUATION ====
-// Uses _scrolling variants of SDF functions that read from scrollingStorage
-
-fn evaluateScrollingOverlay(pixelPos: vec2<f32>) -> vec4<f32> {
-    // Early exit if no scrolling overlay
-    if (scrolling.hasOverlay == 0u || scrolling.gridWidth == 0u || scrolling.gridHeight == 0u) {
-        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
-    }
-
-    let scenePos = pixelPos;  // 1:1 mapping for screen overlay
-
-    let invCellSizeX = select(0.0, 1.0 / scrolling.cellSizeX, scrolling.cellSizeX > 0.0);
-    let invCellSizeY = select(0.0, 1.0 / scrolling.cellSizeY, scrolling.cellSizeY > 0.0);
-    let contentMinX = scrolling.sceneMinX;
-    let contentMinY = scrolling.sceneMinY;
-
-    // O(1) grid lookup
-    let cellX = u32(clamp((scenePos.x - contentMinX) * invCellSizeX, 0.0, f32(scrolling.gridWidth - 1u)));
-    let cellY = u32(clamp((scenePos.y - contentMinY) * invCellSizeY, 0.0, f32(scrolling.gridHeight - 1u)));
-    let cellIndex = cellY * scrolling.gridWidth + cellX;
-
-    let packedStart = scrollingGridData[cellIndex];
-    let cellEntryCount = scrollingGridData[packedStart];
-    let loopCount = min(cellEntryCount, OVERLAY_MAX_ENTRIES_PER_CELL);
-
-    var resultColor = vec3<f32>(0.0, 0.0, 0.0);
-    var resultAlpha = 0.0;
-    let primDataBase = scrolling.primCount;
-
-    for (var i = 0u; i < loopCount; i++) {
-        let rawIdx = scrollingGridData[packedStart + 1u + i];
-
-        if ((rawIdx & OVERLAY_GLYPH_BIT) != 0u) {
-            // TEXT GLYPH (MSDF)
-            let gi = rawIdx & OVERLAY_INDEX_MASK;
-            let gOffset = gi * 5u;
-
-            let gx = scrollingGlyphBuffer[gOffset + 0u];
-            let gy = scrollingGlyphBuffer[gOffset + 1u];
-            let whPacked = bitcast<u32>(scrollingGlyphBuffer[gOffset + 2u]);
-            let gw = unpack2x16float(whPacked).x;
-            let gh = unpack2x16float(whPacked).y;
-            let glfPacked = bitcast<u32>(scrollingGlyphBuffer[gOffset + 3u]);
-            let gIdx = glfPacked & 0xFFFFu;
-            let gColorPacked = bitcast<u32>(scrollingGlyphBuffer[gOffset + 4u]);
-
-            if (scenePos.x >= gx && scenePos.x < gx + gw &&
-                scenePos.y >= gy && scenePos.y < gy + gh) {
-
-                let glyphUV = vec2<f32>(
-                    (scenePos.x - gx) / gw,
-                    (scenePos.y - gy) / gh
-                );
-                let gColor = unpackColor(gColorPacked);
-
-                // Sample MSDF from shared font atlas
-                let glyph = glyphMetadata[gIdx];
-                let uv = mix(glyph.uvMin, glyph.uvMax, glyphUV);
-                let msdf = textureSampleLevel(fontTexture, fontSampler, uv, 0.0);
-                let sd = median(msdf.r, msdf.g, msdf.b);
-                let pxDist = scrolling.pixelRange * (sd - 0.5);
-                let alpha = clamp(pxDist + 0.5, 0.0, 1.0);
-                if (alpha > 0.01) {
-                    resultColor = mix(resultColor, gColor, alpha);
-                    resultAlpha = max(resultAlpha, alpha);
-                }
-            }
-        } else {
-            // SDF PRIMITIVE - use _scrolling variants that read from scrollingStorage
-            let primOffset = bitcast<u32>(scrollingStorage[rawIdx]);
-            let primOff = primDataBase + primOffset;
-            let d = evalSDF_scrolling(primOff, scenePos);
-
-            let colors = primColors_scrolling(primOff);
-            let fillColorPacked = colors.x;
-            if (d < 0.0 && fillColorPacked != 0u) {
-                let fillColor = unpackColor(fillColorPacked);
-                let fillAlpha = unpackAlpha(fillColorPacked);
-                let edgeAlpha = clamp(-d * 2.0, 0.0, 1.0);
-                let alpha = edgeAlpha * fillAlpha;
-                resultColor = mix(resultColor, fillColor, alpha);
-                resultAlpha = max(resultAlpha, alpha);
-            }
-
-            let strokeColorPacked = colors.y;
-            let strokeWidth = primStrokeWidth_scrolling(primOff);
-            if (strokeWidth > 0.0 && strokeColorPacked != 0u) {
-                let strokeDist = abs(d) - strokeWidth * 0.5;
-                if (strokeDist < 0.0) {
-                    let strokeColor = unpackColor(strokeColorPacked);
-                    let strokeAlpha = unpackAlpha(strokeColorPacked);
-                    let edgeAlpha = clamp(-strokeDist * 2.0, 0.0, 1.0);
-                    let alpha = edgeAlpha * strokeAlpha;
-                    resultColor = mix(resultColor, strokeColor, alpha);
-                    resultAlpha = max(resultAlpha, alpha);
-                }
-            }
-        }
-    }
-
-    return vec4<f32>(resultColor, resultAlpha);
-}
+// SCROLLING_OVERLAY_FUNCTION_PLACEHOLDER
+// (Replaced by shader-manager based on GPU capabilities)
 
 // Dispatch to shader glyph by codepoint
 // Returns rendered color, or bgColor if glyph not found
@@ -998,25 +792,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 
             finalColor = mix(bgColor.rgb, fgColor.rgb, coverage);
             hasGlyph = coverage > 0.01;
-        } else if (isRasterGlyph(glyphIndex)) {
-            // Raster font: sample from texture atlas
-            let rasterIdx = glyphIndex - RASTER_GLYPH_BASE;
-            let glyphUV = rasterMetadata[rasterIdx].uv;
-
-            // Skip empty glyphs (marked with negative UV)
-            if (glyphUV.x >= 0.0) {
-                // Compute UV within the glyph cell
-                // glyphSizeUV should be passed as uniform, for now assume square cells
-                let glyphSizeUV = vec2<f32>(grid.cellSize.x / 1024.0, grid.cellSize.y / 1024.0);
-                let localUV = localPxBase / grid.cellSize;
-                let sampleUV = glyphUV + localUV * glyphSizeUV;
-
-                // Sample grayscale texture (R channel) - use Level to avoid non-uniform control flow issue
-                let alpha = textureSampleLevel(rasterTexture, rasterSampler, sampleUV, 0.0).r;
-
-                finalColor = mix(bgColor.rgb, fgColor.rgb, alpha);
-                hasGlyph = alpha > 0.01;
-            }
+        // RASTER_FONT_RENDERING_PLACEHOLDER
+        // (Replaced by shader-manager - disabled on GPUs with <=10 storage buffers)
         } else if (isCardGlyph(glyphIndex) || isShaderGlyph(glyphIndex)) {
             // Card or shader glyph: render via shader function
             let localUV = localPxBase / grid.cellSize;  // Normalize to 0-1

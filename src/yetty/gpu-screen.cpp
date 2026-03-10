@@ -5438,36 +5438,54 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
       bmMetadataSize = _msdfFont->atlas()->getBufferGlyphCount() * sizeof(GlyphMetadataGPU);
     }
 
-    WGPUBindGroupEntry bgEntries[23] = {};  // 15 grid + 4 absolute overlay + 4 scrolling overlay
+    // Build bind group entries dynamically - some bindings are conditional based on GPU limits
+    // Storage buffer budget: GPU limit minus 2 (shared bind group uses 2 storage buffers)
+    // - Bindings 15-18 (absolute overlay): skipped if GPU has < 12 total storage buffers
+    // - Binding 14 (raster font metadata): skipped if GPU has < 13 total storage buffers
+    // - Bindings 19-22 (scrolling overlay): skipped if GPU has < 16 total storage buffers
+    const bool gpuSupportsAbsoluteOverlay = _ctx.gpu.maxStorageBuffersPerShaderStage >= 12;
+    const bool hasRasterFontMetadata = gpuSupportsAbsoluteOverlay && _ctx.gpu.maxStorageBuffersPerShaderStage >= 13;
+    std::vector<WGPUBindGroupEntry> bgEntries;
+    bgEntries.reserve(23);
 
-    bgEntries[0].binding = 0;
-    bgEntries[0].buffer = _uniformBuffer;
-    bgEntries[0].size = sizeof(Uniforms);
+    // Helper to add entries
+    auto addBuffer = [&bgEntries](uint32_t binding, WGPUBuffer buffer, size_t size) {
+        WGPUBindGroupEntry e = {};
+        e.binding = binding;
+        e.buffer = buffer;
+        e.size = size;
+        bgEntries.push_back(e);
+    };
+    auto addTexture = [&bgEntries](uint32_t binding, WGPUTextureView view) {
+        WGPUBindGroupEntry e = {};
+        e.binding = binding;
+        e.textureView = view;
+        bgEntries.push_back(e);
+    };
+    auto addSampler = [&bgEntries](uint32_t binding, WGPUSampler sampler) {
+        WGPUBindGroupEntry e = {};
+        e.binding = binding;
+        e.sampler = sampler;
+        bgEntries.push_back(e);
+    };
 
-    bgEntries[1].binding = 1;
-    bgEntries[1].textureView = _msdfFont->atlas()->getTextureView();
-
-    bgEntries[2].binding = 2;
-    bgEntries[2].sampler = _msdfFont->atlas()->getSampler();
-
-    bgEntries[3].binding = 3;
-    bgEntries[3].buffer = _msdfFont->atlas()->getGlyphMetadataBuffer();
-    bgEntries[3].size =
-        _msdfFont->atlas()->getBufferGlyphCount() * sizeof(GlyphMetadataGPU);
-
-    bgEntries[4].binding = 4;
-    bgEntries[4].buffer = _cellBuffer;
-    bgEntries[4].size = _cellBufferSize;
-
-    bgEntries[5].binding = 5;
-    bgEntries[5].textureView = bmTextureView;
-
-    bgEntries[6].binding = 6;
-    bgEntries[6].sampler = bmSampler;
-
-    bgEntries[7].binding = 7;
-    bgEntries[7].buffer = bmMetadataBuffer;
-    bgEntries[7].size = bmMetadataSize;
+    // 0: Grid uniforms
+    addBuffer(0, _uniformBuffer, sizeof(Uniforms));
+    // 1: Font atlas texture
+    addTexture(1, _msdfFont->atlas()->getTextureView());
+    // 2: Font sampler
+    addSampler(2, _msdfFont->atlas()->getSampler());
+    // 3: Glyph metadata
+    addBuffer(3, _msdfFont->atlas()->getGlyphMetadataBuffer(),
+              _msdfFont->atlas()->getBufferGlyphCount() * sizeof(GlyphMetadataGPU));
+    // 4: Cell buffer
+    addBuffer(4, _cellBuffer, _cellBufferSize);
+    // 5: Bitmap texture
+    addTexture(5, bmTextureView);
+    // 6: Bitmap sampler
+    addSampler(6, bmSampler);
+    // 7: Bitmap metadata
+    addBuffer(7, bmMetadataBuffer, bmMetadataSize);
 
     // Vector font bindings (8 and 9)
     if (!_vectorFont) {
@@ -5480,13 +5498,8 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
       return Err<void>("Vector font offset buffer not ready");
     }
 
-    bgEntries[8].binding = 8;
-    bgEntries[8].buffer = _vectorFont->getGlyphBuffer();
-    bgEntries[8].size = _vectorFont->bufferSize();
-
-    bgEntries[9].binding = 9;
-    bgEntries[9].buffer = _vectorFont->getOffsetBuffer();
-    bgEntries[9].size = _vectorFont->offsetTableSize();
+    addBuffer(8, _vectorFont->getGlyphBuffer(), _vectorFont->bufferSize());
+    addBuffer(9, _vectorFont->getOffsetBuffer(), _vectorFont->offsetTableSize());
 
     // Coverage font bindings (10 and 11)
     // Note: coverage font is optional, use vector font buffers as fallback if not available
@@ -5495,37 +5508,24 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
     size_t coverageGlyphSize = _coverageFont ? _coverageFont->bufferSize() : _vectorFont->bufferSize();
     size_t coverageOffsetSize = _coverageFont ? _coverageFont->offsetTableSize() : _vectorFont->offsetTableSize();
 
-    bgEntries[10].binding = 10;
-    bgEntries[10].buffer = coverageGlyphBuffer;
-    bgEntries[10].size = coverageGlyphSize;
+    addBuffer(10, coverageGlyphBuffer, coverageGlyphSize);
+    addBuffer(11, coverageOffsetBuffer, coverageOffsetSize);
 
-    bgEntries[11].binding = 11;
-    bgEntries[11].buffer = coverageOffsetBuffer;
-    bgEntries[11].size = coverageOffsetSize;
-
-    // Raster font bindings (12, 13, 14)
-    // Use dummy resources if raster font not available
-    if (_rasterFont && _rasterFont->getTextureView() && _rasterFont->getSampler() && _rasterFont->getMetadataBuffer()) {
-        bgEntries[12].binding = 12;
-        bgEntries[12].textureView = _rasterFont->getTextureView();
-
-        bgEntries[13].binding = 13;
-        bgEntries[13].sampler = _rasterFont->getSampler();
-
-        bgEntries[14].binding = 14;
-        bgEntries[14].buffer = _rasterFont->getMetadataBuffer();
-        bgEntries[14].size = _rasterFont->getMetadataBufferSize();
+    // Raster font bindings (12, 13, and optionally 14)
+    // Binding 14 (metadata) is skipped if GPU has <=10 storage buffers
+    if (_rasterFont && _rasterFont->getTextureView() && _rasterFont->getSampler()) {
+        addTexture(12, _rasterFont->getTextureView());
+        addSampler(13, _rasterFont->getSampler());
+        if (hasRasterFontMetadata && _rasterFont->getMetadataBuffer()) {
+            addBuffer(14, _rasterFont->getMetadataBuffer(), _rasterFont->getMetadataBufferSize());
+        }
     } else {
         // Fallback: use bitmap font (or MSDF placeholder) resources
-        bgEntries[12].binding = 12;
-        bgEntries[12].textureView = bmTextureView;
-
-        bgEntries[13].binding = 13;
-        bgEntries[13].sampler = bmSampler;
-
-        bgEntries[14].binding = 14;
-        bgEntries[14].buffer = bmMetadataBuffer;
-        bgEntries[14].size = 8;  // Minimum size
+        addTexture(12, bmTextureView);
+        addSampler(13, bmSampler);
+        if (hasRasterFontMetadata) {
+            addBuffer(14, bmMetadataBuffer, 8);  // Minimum size
+        }
     }
 
     // Overlay uniform struct used for both absolute and scrolling overlays
@@ -5541,6 +5541,9 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
     // ============================================================
     // ABSOLUTE OVERLAY bindings (15-18) - fixed position on screen
     // ============================================================
+    // DISABLED ON LOW-LIMIT GPUS: Absolute overlay requires 12 total storage buffers (10 grid + 2 shared).
+    // Some GPUs (e.g., Intel HD 530) only support 10, so we disable absolute overlay on those.
+    if (gpuSupportsAbsoluteOverlay) {
     bool hasAbsolute = _ydrawAbsolute && _ydrawAbsolute->hasContent();
     if (hasAbsolute) {
         const auto& gridStaging = _ydrawAbsolute->gridStaging();
@@ -5612,44 +5615,28 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
         };
         wgpuQueueWriteBuffer(queue, _ydrawUniformBuffer, 0, &uniforms, sizeof(uniforms));
 
-        bgEntries[15].binding = 15;
-        bgEntries[15].buffer = _ydrawGridBuffer;
-        bgEntries[15].size = gridSize;
-
-        bgEntries[16].binding = 16;
-        bgEntries[16].buffer = _ydrawGlyphBuffer;
-        bgEntries[16].size = glyphSize;
-
-        bgEntries[17].binding = 17;
-        bgEntries[17].buffer = _ydrawPrimBuffer;
-        bgEntries[17].size = primSize;
-
-        bgEntries[18].binding = 18;
-        bgEntries[18].buffer = _ydrawUniformBuffer;
-        bgEntries[18].size = 48;
+        addBuffer(15, _ydrawGridBuffer, gridSize);
+        addBuffer(16, _ydrawGlyphBuffer, glyphSize);
+        addBuffer(17, _ydrawPrimBuffer, primSize);
+        addBuffer(18, _ydrawUniformBuffer, 48);
     } else {
         // No absolute overlay - use placeholder buffers
-        bgEntries[15].binding = 15;
-        bgEntries[15].buffer = _dummyStorageBuffer;
-        bgEntries[15].size = 4;
-
-        bgEntries[16].binding = 16;
-        bgEntries[16].buffer = _dummyStorageBuffer;
-        bgEntries[16].size = 4;
-
-        bgEntries[17].binding = 17;
-        bgEntries[17].buffer = _dummyStorageBuffer;
-        bgEntries[17].size = 4;
-
-        bgEntries[18].binding = 18;
-        bgEntries[18].buffer = _uniformBuffer;  // Fallback to main uniform buffer
-        bgEntries[18].size = 48;
+        addBuffer(15, _dummyStorageBuffer, 4);
+        addBuffer(16, _dummyStorageBuffer, 4);
+        addBuffer(17, _dummyStorageBuffer, 4);
+        addBuffer(18, _uniformBuffer, 48);  // Fallback to main uniform buffer
     }
+    } // end gpuSupportsAbsoluteOverlay
+    // else: GPU doesn't support absolute overlay - bindings 15-18 not included in bind group
 
     // ============================================================
     // SCROLLING OVERLAY bindings (19-22) - syncs with terminal scrolling
     // ============================================================
-    bool hasScrolling = _ydrawScrolling && _ydrawScrolling->hasContent();
+    // DISABLED ON LOW-LIMIT GPUS: Scrolling overlay requires 16 total storage buffers (14 grid + 2 shared).
+    // Some GPUs (e.g., Intel HD 530) only support 10, so we disable scrolling overlay on those.
+    // Check _ctx.gpu.maxStorageBuffersPerShaderStage to determine support.
+    const bool gpuSupportsScrollingOverlay = _ctx.gpu.maxStorageBuffersPerShaderStage >= 16;
+    bool hasScrolling = gpuSupportsScrollingOverlay && _ydrawScrolling && _ydrawScrolling->hasContent();
     if (hasScrolling) {
         const auto& gridStaging = _ydrawScrolling->gridStaging();
         const auto& glyphs = _ydrawScrolling->glyphs();
@@ -5720,44 +5707,23 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
         };
         wgpuQueueWriteBuffer(queue, _scrollingUniformBuffer, 0, &uniforms, sizeof(uniforms));
 
-        bgEntries[19].binding = 19;
-        bgEntries[19].buffer = _scrollingGridBuffer;
-        bgEntries[19].size = gridSize;
-
-        bgEntries[20].binding = 20;
-        bgEntries[20].buffer = _scrollingGlyphBuffer;
-        bgEntries[20].size = glyphSize;
-
-        bgEntries[21].binding = 21;
-        bgEntries[21].buffer = _scrollingPrimBuffer;
-        bgEntries[21].size = primSize;
-
-        bgEntries[22].binding = 22;
-        bgEntries[22].buffer = _scrollingUniformBuffer;
-        bgEntries[22].size = 48;
-    } else {
-        // No scrolling overlay - use placeholder buffers
-        bgEntries[19].binding = 19;
-        bgEntries[19].buffer = _dummyStorageBuffer;
-        bgEntries[19].size = 4;
-
-        bgEntries[20].binding = 20;
-        bgEntries[20].buffer = _dummyStorageBuffer;
-        bgEntries[20].size = 4;
-
-        bgEntries[21].binding = 21;
-        bgEntries[21].buffer = _dummyStorageBuffer;
-        bgEntries[21].size = 4;
-
-        bgEntries[22].binding = 22;
-        bgEntries[22].buffer = _uniformBuffer;  // Fallback to main uniform buffer
-        bgEntries[22].size = 48;
+        addBuffer(19, _scrollingGridBuffer, gridSize);
+        addBuffer(20, _scrollingGlyphBuffer, glyphSize);
+        addBuffer(21, _scrollingPrimBuffer, primSize);
+        addBuffer(22, _scrollingUniformBuffer, 48);
+    } else if (gpuSupportsScrollingOverlay) {
+        // GPU supports scrolling overlay but no content - use placeholder buffers
+        addBuffer(19, _dummyStorageBuffer, 4);
+        addBuffer(20, _dummyStorageBuffer, 4);
+        addBuffer(21, _dummyStorageBuffer, 4);
+        addBuffer(22, _uniformBuffer, 48);  // Fallback to main uniform buffer
     }
+    // else: GPU doesn't support scrolling overlay - entries 19-22 not included in bind group
 
     WGPUBindGroupDescriptor bindGroupDesc = {};
     bindGroupDesc.layout = shaderMgr->getGridBindGroupLayout();
-    bindGroupDesc.entryCount = 23;  // 15 grid + 4 absolute overlay + 4 scrolling overlay
-    bindGroupDesc.entries = bgEntries;
+    bindGroupDesc.entryCount = bgEntries.size();
+    bindGroupDesc.entries = bgEntries.data();
     _bindGroup = wgpuDeviceCreateBindGroup(device, &bindGroupDesc);
     if (!_bindGroup) {
       return Err<void>("Failed to create bind group");
