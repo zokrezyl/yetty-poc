@@ -9,9 +9,9 @@
 #include <vector>
 
 // Forward declaration — include ydraw-types.gen.h for full enum
-namespace yetty::card { enum class SDFType : uint32_t; struct SDFPrimitive; }
+namespace yetty::ypaint::card { enum class SDFType : uint32_t; struct SDFPrimitive; }
 
-namespace yetty::sdf {
+namespace yetty::ypaint::sdf {
 
 namespace detail {
 inline void write_u32(float* buf, uint32_t off, uint32_t val) {
@@ -2890,4 +2890,4 @@ inline void writeCompactToBuffer(
 
 #endif // YETTY_CARD_SDF_PRIMITIVE_DEFINED
 
-} // namespace yetty::sdf
+} // namespace yetty::ypaint::sdf

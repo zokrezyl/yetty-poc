@@ -22,7 +22,7 @@
 #include <numeric>
 #include <unordered_map>
 
-namespace yetty {
+namespace yetty::ypaint {
 
 //=============================================================================
 // Read font ascender/descender from TTF hhea + head tables (no FreeType)
@@ -2300,4 +2300,4 @@ Result<YPaintBuilder::Ptr> YPaintBuilder::createImpl(
                                         scrollingMode)));
 }
 
-} // namespace yetty
+} // namespace yetty::ypaint

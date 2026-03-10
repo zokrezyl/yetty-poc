@@ -6,7 +6,7 @@
 
 #include <cstdint>
 
-namespace yetty::card {
+namespace yetty::ypaint::card {
 
 enum class SDFType : uint32_t {
     Circle = 0,
@@ -1016,4 +1016,4 @@ namespace RadialGradientCircle {
 
 } // namespace sdf_field
 
-} // namespace yetty::card
+} // namespace yetty::ypaint::card

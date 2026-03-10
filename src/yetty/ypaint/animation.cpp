@@ -5,7 +5,7 @@
 #include <cstring>
 #include <unordered_map>
 
-namespace yetty::animation {
+namespace yetty::ypaint::animation {
 
 //=============================================================================
 // AnimatedProperty::evaluate — linear interpolation between keyframes
@@ -332,4 +332,4 @@ Result<Animation::Ptr> Animation::createImpl(std::shared_ptr<YPaintBuffer> buffe
     return Ok(std::move(impl));
 }
 
-} // namespace yetty::animation
+} // namespace yetty::ypaint::animation

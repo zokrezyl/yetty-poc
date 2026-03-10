@@ -1139,10 +1139,10 @@ primitives:
 
   - name: Polygon
     id: 130
-    category: composite
+    category: sdf2d
     description: |
       Simple polygon (no holes). Vertices are x,y pairs forming a closed contour.
-      YDrawBuilder will triangulate this into Triangle primitives.
+      GPU evaluates polygon SDF directly using sdPolygonBuffer.
     fields:
       - { name: type,        type: u32 }
       - { name: layer,       type: u32 }
@@ -1156,15 +1156,18 @@ primitives:
       type: f32
       count_field: vertexCount
       multiplier: 2  # x,y pairs
+    eval: |
+      let vertCount = {vertexCount};
+      let vertsOffset = primOffset + 8u;
+      return sdPolygonBuffer(pAdj, vertsOffset, vertCount);
 
   - name: PolygonGroup
     id: 131
-    category: composite
+    category: sdf2d
     description: |
       Polygon with holes. Contains multiple contours: first is outer boundary,
-      rest are holes. contourStarts array indicates where each contour begins
-      in the vertices array (as vertex index, not float index).
-      YDrawBuilder will triangulate respecting holes.
+      rest are holes. GPU evaluates as simple polygon (outer contour only for SDF).
+      contourStarts array indicates where each contour begins.
     fields:
       - { name: type,         type: u32 }
       - { name: layer,        type: u32 }
@@ -1182,6 +1185,11 @@ primitives:
         type: f32
         count_field: vertexCount
         multiplier: 2  # x,y pairs
+    eval: |
+      let vertCount = {vertexCount};
+      let contourCnt = {contourCount};
+      let vertsOffset = primOffset + 9u + contourCnt;
+      return sdPolygonBuffer(pAdj, vertsOffset, vertCount);
 
   # =========================================================================
   # Gradient primitives — shapes with linear/radial gradient fills

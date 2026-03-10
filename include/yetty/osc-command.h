@@ -11,6 +11,7 @@ namespace yetty {
 
 // Vendor ID for yetty card OSC sequences
 constexpr int YETTY_OSC_VENDOR_ID = 666666;
+constexpr int YPAINT_OSC_VENDOR_ID = 666675;
 
 //-----------------------------------------------------------------------------
 // OscCommand - parsed OSC command

@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace yetty {
+namespace yetty::ypaint {
 
 // Simple ear-clipping triangulation for convex and simple concave polygons
 // Vertices: array of x,y pairs (size = vertexCount * 2)
@@ -24,4 +24,4 @@ bool triangulatePolygonGroup(const uint32_t* contourStarts, uint32_t contourCoun
                              const float* vertices, uint32_t vertexCount,
                              std::vector<uint32_t>& outIndices);
 
-} // namespace yetty
+} // namespace yetty::ypaint

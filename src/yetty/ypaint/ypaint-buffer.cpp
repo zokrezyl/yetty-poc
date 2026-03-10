@@ -5,7 +5,7 @@
 #include <cstring>
 #include <iostream>
 
-namespace yetty {
+namespace yetty::ypaint {
 
 Result<YPaintBuffer::Ptr> YPaintBuffer::createImpl() {
     return Ok(Ptr(new YPaintBuffer()));
@@ -492,4 +492,4 @@ Result<void> YPaintBuffer::deserialize(const uint8_t* data, size_t size) {
     return Ok();
 }
 
-} // namespace yetty
+} // namespace yetty::ypaint

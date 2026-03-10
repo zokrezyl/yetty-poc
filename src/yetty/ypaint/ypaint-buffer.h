@@ -12,7 +12,7 @@
 #include <map>
 #include <vector>
 
-namespace yetty {
+namespace yetty::ypaint {
 
 //=============================================================================
 // TextSpanData — high-level text span stored in the buffer
@@ -254,4 +254,4 @@ private:
     bool _hasSceneBounds = false;
 };
 
-} // namespace yetty
+} // namespace yetty::ypaint

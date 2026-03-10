@@ -6,7 +6,7 @@
 #include <fstream>
 #include <filesystem>
 
-namespace yetty {
+namespace yetty::ypaint {
 
 //=============================================================================
 // Helpers
@@ -993,4 +993,4 @@ Result<animation::Animation::Ptr> parseYPaintYAML(YPaintBuffer::Ptr buffer,
     }
 }
 
-} // namespace yetty
+} // namespace yetty::ypaint

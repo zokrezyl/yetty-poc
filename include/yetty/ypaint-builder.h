@@ -13,7 +13,7 @@
 #include <cstring>
 #include <memory>
 
-namespace yetty {
+namespace yetty::ypaint {
 
 // Forward declarations
 class YPaintBuffer;
@@ -354,4 +354,4 @@ protected:
     YPaintBuilder() = default;
 };
 
-} // namespace yetty
+} // namespace yetty::ypaint

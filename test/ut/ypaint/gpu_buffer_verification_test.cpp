@@ -28,7 +28,8 @@
 
 using namespace boost::ut;
 using namespace yetty;
-using namespace yetty::card;
+using namespace yetty::ypaint;
+using namespace yetty::ypaint::card;
 
 //=============================================================================
 // Helpers

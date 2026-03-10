@@ -59,7 +59,7 @@ public:
     registerCard("ypaint", [](const YettyContext &ctx, int32_t x, int32_t y,
                               uint32_t w, uint32_t h, const std::string &args,
                               const std::string &payload) {
-      return card::YPaint::create(ctx, x, y, w, h, args, payload);
+      return ypaint::card::YPaint::create(ctx, x, y, w, h, args, payload);
     });
 
     registerCard("ygui", [](const YettyContext &ctx, int32_t x, int32_t y,

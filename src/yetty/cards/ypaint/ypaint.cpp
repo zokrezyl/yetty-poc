@@ -22,7 +22,7 @@ constexpr int GLFW_MOD_CONTROL = 0x0002;
 constexpr int GLFW_KEY_C       = 67;
 }
 
-namespace yetty::card {
+namespace yetty::ypaint::card {
 
 //=============================================================================
 // YPaintImpl - full implementation with builder, GPU buffers, animation
@@ -644,4 +644,4 @@ Result<YPaint::Ptr> YPaint::createImpl(
     return Ok(ypaint);
 }
 
-} // namespace yetty::card
+} // namespace yetty::ypaint::card

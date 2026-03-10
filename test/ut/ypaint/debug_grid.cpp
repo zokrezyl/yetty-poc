@@ -12,7 +12,8 @@
 #include <map>
 
 using namespace yetty;
-using namespace yetty::card;
+using namespace yetty::ypaint;
+using namespace yetty::ypaint::card;
 
 // Minimal mocks - same as test file
 class MockCardBufferManager : public CardBufferManager {

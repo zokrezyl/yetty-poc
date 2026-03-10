@@ -2,7 +2,7 @@
 #include <cmath>
 #include <algorithm>
 
-namespace yetty {
+namespace yetty::ypaint {
 
 namespace {
 
@@ -388,4 +388,4 @@ bool triangulatePolygonGroup(const uint32_t* contourStarts, uint32_t contourCoun
     return !outIndices.empty();
 }
 
-} // namespace yetty
+} // namespace yetty::ypaint

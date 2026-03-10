@@ -6,9 +6,9 @@
 #include <string>
 #include <memory>
 
-namespace yetty { class YPaintBuffer; }
+namespace yetty::ypaint { class YPaintBuffer; }
 
-namespace yetty::card {
+namespace yetty::ypaint::card {
 
 //=============================================================================
 // YPaint - Scrolling SDF card with YAML/binary payload parsing
@@ -72,4 +72,4 @@ protected:
     std::string _name;
 };
 
-} // namespace yetty::card
+} // namespace yetty::ypaint::card

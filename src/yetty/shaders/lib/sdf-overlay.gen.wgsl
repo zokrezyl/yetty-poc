@@ -230,6 +230,17 @@ fn evalSDF_overlay(primOffset: u32, p: vec2<f32>) -> f32 {
             let ringDist = abs(dist - (overlayStorage[primOffset + 6u] + overlayStorage[primOffset + 5u]) * 0.5) - (overlayStorage[primOffset + 5u] - overlayStorage[primOffset + 6u]) * 0.5;
             return ringDist;
         }
+        case SDF_POLYGON: {
+            let vertCount = bitcast<u32>(overlayStorage[primOffset + 3u]);
+            let vertsOffset = primOffset + 8u;
+            return sdPolygonBuffer_overlay(pAdj, vertsOffset, vertCount);
+        }
+        case SDF_POLYGON_GROUP: {
+            let vertCount = bitcast<u32>(overlayStorage[primOffset + 3u]);
+            let contourCnt = bitcast<u32>(overlayStorage[primOffset + 4u]);
+            let vertsOffset = primOffset + 9u + contourCnt;
+            return sdPolygonBuffer_overlay(pAdj, vertsOffset, vertCount);
+        }
         case SDF_LINEAR_GRADIENT_BOX: {
             let center = vec2<f32>(overlayStorage[primOffset + 3u], overlayStorage[primOffset + 4u]);
             let halfSize = vec2<f32>(overlayStorage[primOffset + 5u], overlayStorage[primOffset + 6u]);
@@ -666,16 +677,16 @@ fn primColors_overlay(primOffset: u32) -> vec4<u32> {
         }
         case SDF_POLYGON: {
             return vec4<u32>(
-                bitcast<u32>(overlayStorage[primOffset + 3u]),
                 bitcast<u32>(overlayStorage[primOffset + 4u]),
-                bitcast<u32>(overlayStorage[primOffset + 1u]),
+                bitcast<u32>(overlayStorage[primOffset + 5u]),
+                bitcast<u32>(overlayStorage[primOffset + 2u]),
                 0u);
         }
         case SDF_POLYGON_GROUP: {
             return vec4<u32>(
-                bitcast<u32>(overlayStorage[primOffset + 4u]),
                 bitcast<u32>(overlayStorage[primOffset + 5u]),
-                bitcast<u32>(overlayStorage[primOffset + 1u]),
+                bitcast<u32>(overlayStorage[primOffset + 6u]),
+                bitcast<u32>(overlayStorage[primOffset + 2u]),
                 0u);
         }
         case SDF_LINEAR_GRADIENT_BOX: {
@@ -806,8 +817,8 @@ fn primStrokeWidth_overlay(primOffset: u32) -> f32 {
         case SDF_OCTAHEDRON_3D: { return overlayStorage[primOffset + 8u]; }
         case SDF_PYRAMID_3D: { return overlayStorage[primOffset + 8u]; }
         case SDF_ELLIPSOID_3D: { return overlayStorage[primOffset + 10u]; }
-        case SDF_POLYGON: { return overlayStorage[primOffset + 5u]; }
-        case SDF_POLYGON_GROUP: { return overlayStorage[primOffset + 6u]; }
+        case SDF_POLYGON: { return overlayStorage[primOffset + 6u]; }
+        case SDF_POLYGON_GROUP: { return overlayStorage[primOffset + 7u]; }
         case SDF_LINEAR_GRADIENT_BOX: { return overlayStorage[primOffset + 14u]; }
         case SDF_LINEAR_GRADIENT_CIRCLE: { return overlayStorage[primOffset + 13u]; }
         case SDF_RADIAL_GRADIENT_CIRCLE: { return overlayStorage[primOffset + 12u]; }
@@ -1043,6 +1054,17 @@ fn evalSDF_scrolling(primOffset: u32, p: vec2<f32>) -> f32 {
             let dist = length(d);
             let ringDist = abs(dist - (scrollingStorage[primOffset + 6u] + scrollingStorage[primOffset + 5u]) * 0.5) - (scrollingStorage[primOffset + 5u] - scrollingStorage[primOffset + 6u]) * 0.5;
             return ringDist;
+        }
+        case SDF_POLYGON: {
+            let vertCount = bitcast<u32>(scrollingStorage[primOffset + 3u]);
+            let vertsOffset = primOffset + 8u;
+            return sdPolygonBuffer_scrolling(pAdj, vertsOffset, vertCount);
+        }
+        case SDF_POLYGON_GROUP: {
+            let vertCount = bitcast<u32>(scrollingStorage[primOffset + 3u]);
+            let contourCnt = bitcast<u32>(scrollingStorage[primOffset + 4u]);
+            let vertsOffset = primOffset + 9u + contourCnt;
+            return sdPolygonBuffer_scrolling(pAdj, vertsOffset, vertCount);
         }
         case SDF_LINEAR_GRADIENT_BOX: {
             let center = vec2<f32>(scrollingStorage[primOffset + 3u], scrollingStorage[primOffset + 4u]);
@@ -1480,16 +1502,16 @@ fn primColors_scrolling(primOffset: u32) -> vec4<u32> {
         }
         case SDF_POLYGON: {
             return vec4<u32>(
-                bitcast<u32>(scrollingStorage[primOffset + 3u]),
                 bitcast<u32>(scrollingStorage[primOffset + 4u]),
-                bitcast<u32>(scrollingStorage[primOffset + 1u]),
+                bitcast<u32>(scrollingStorage[primOffset + 5u]),
+                bitcast<u32>(scrollingStorage[primOffset + 2u]),
                 0u);
         }
         case SDF_POLYGON_GROUP: {
             return vec4<u32>(
-                bitcast<u32>(scrollingStorage[primOffset + 4u]),
                 bitcast<u32>(scrollingStorage[primOffset + 5u]),
-                bitcast<u32>(scrollingStorage[primOffset + 1u]),
+                bitcast<u32>(scrollingStorage[primOffset + 6u]),
+                bitcast<u32>(scrollingStorage[primOffset + 2u]),
                 0u);
         }
         case SDF_LINEAR_GRADIENT_BOX: {
@@ -1620,8 +1642,8 @@ fn primStrokeWidth_scrolling(primOffset: u32) -> f32 {
         case SDF_OCTAHEDRON_3D: { return scrollingStorage[primOffset + 8u]; }
         case SDF_PYRAMID_3D: { return scrollingStorage[primOffset + 8u]; }
         case SDF_ELLIPSOID_3D: { return scrollingStorage[primOffset + 10u]; }
-        case SDF_POLYGON: { return scrollingStorage[primOffset + 5u]; }
-        case SDF_POLYGON_GROUP: { return scrollingStorage[primOffset + 6u]; }
+        case SDF_POLYGON: { return scrollingStorage[primOffset + 6u]; }
+        case SDF_POLYGON_GROUP: { return scrollingStorage[primOffset + 7u]; }
         case SDF_LINEAR_GRADIENT_BOX: { return scrollingStorage[primOffset + 14u]; }
         case SDF_LINEAR_GRADIENT_CIRCLE: { return scrollingStorage[primOffset + 13u]; }
         case SDF_RADIAL_GRADIENT_CIRCLE: { return scrollingStorage[primOffset + 12u]; }

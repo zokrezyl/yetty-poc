@@ -2,7 +2,7 @@
 #include <yetty/ypaint/ypaint-buffer.h>
 
 using namespace boost::ut;
-using namespace yetty;
+using namespace yetty::ypaint;
 
 suite opacity_tests = [] {
     "Circle with 50% alpha"_test = [] {

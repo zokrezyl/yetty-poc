@@ -613,6 +613,132 @@ fn sdCircleWave(p: vec2<f32>, center: vec2<f32>, tb: f32, ra: f32) -> f32 {
     return min(d1, d2);
 }
 
+// =============================================================================
+// Polygon SDF - reads vertices from buffer
+// Based on Inigo Quilez's polygon distance function
+// =============================================================================
+
+// Polygon SDF reading from cardStorage buffer
+// vertsOffset: offset in cardStorage where vertices start (x0,y0,x1,y1,...)
+// vertexCount: number of vertices (pairs of floats)
+fn sdPolygonBuffer(p: vec2<f32>, vertsOffset: u32, vertexCount: u32) -> f32 {
+    if (vertexCount < 3u) {
+        return 1e10;
+    }
+
+    // First vertex
+    let v0x = cardStorage[vertsOffset + 0u];
+    let v0y = cardStorage[vertsOffset + 1u];
+    var d = dot(p - vec2<f32>(v0x, v0y), p - vec2<f32>(v0x, v0y));
+    var s = 1.0;
+
+    var j = vertexCount - 1u;
+    for (var i = 0u; i < vertexCount; i = i + 1u) {
+        let vix = cardStorage[vertsOffset + i * 2u];
+        let viy = cardStorage[vertsOffset + i * 2u + 1u];
+        let vjx = cardStorage[vertsOffset + j * 2u];
+        let vjy = cardStorage[vertsOffset + j * 2u + 1u];
+
+        let vi = vec2<f32>(vix, viy);
+        let vj = vec2<f32>(vjx, vjy);
+
+        let e = vj - vi;
+        let w = p - vi;
+        let b = w - e * clamp(dot(w, e) / dot(e, e), 0.0, 1.0);
+        d = min(d, dot(b, b));
+
+        // Winding number contribution
+        let c0 = p.y >= vi.y;
+        let c1 = p.y < vj.y;
+        let c2 = e.x * w.y > e.y * w.x;
+        if ((c0 && c1 && c2) || (!c0 && !c1 && !c2)) {
+            s = s * -1.0;
+        }
+
+        j = i;
+    }
+
+    return s * sqrt(d);
+}
+
+// Polygon SDF reading from overlayStorage buffer
+fn sdPolygonBuffer_overlay(p: vec2<f32>, vertsOffset: u32, vertexCount: u32) -> f32 {
+    if (vertexCount < 3u) {
+        return 1e10;
+    }
+
+    let v0x = overlayStorage[vertsOffset + 0u];
+    let v0y = overlayStorage[vertsOffset + 1u];
+    var d = dot(p - vec2<f32>(v0x, v0y), p - vec2<f32>(v0x, v0y));
+    var s = 1.0;
+
+    var j = vertexCount - 1u;
+    for (var i = 0u; i < vertexCount; i = i + 1u) {
+        let vix = overlayStorage[vertsOffset + i * 2u];
+        let viy = overlayStorage[vertsOffset + i * 2u + 1u];
+        let vjx = overlayStorage[vertsOffset + j * 2u];
+        let vjy = overlayStorage[vertsOffset + j * 2u + 1u];
+
+        let vi = vec2<f32>(vix, viy);
+        let vj = vec2<f32>(vjx, vjy);
+
+        let e = vj - vi;
+        let w = p - vi;
+        let b = w - e * clamp(dot(w, e) / dot(e, e), 0.0, 1.0);
+        d = min(d, dot(b, b));
+
+        let c0 = p.y >= vi.y;
+        let c1 = p.y < vj.y;
+        let c2 = e.x * w.y > e.y * w.x;
+        if ((c0 && c1 && c2) || (!c0 && !c1 && !c2)) {
+            s = s * -1.0;
+        }
+
+        j = i;
+    }
+
+    return s * sqrt(d);
+}
+
+// Polygon SDF reading from scrollingStorage buffer
+fn sdPolygonBuffer_scrolling(p: vec2<f32>, vertsOffset: u32, vertexCount: u32) -> f32 {
+    if (vertexCount < 3u) {
+        return 1e10;
+    }
+
+    let v0x = scrollingStorage[vertsOffset + 0u];
+    let v0y = scrollingStorage[vertsOffset + 1u];
+    var d = dot(p - vec2<f32>(v0x, v0y), p - vec2<f32>(v0x, v0y));
+    var s = 1.0;
+
+    var j = vertexCount - 1u;
+    for (var i = 0u; i < vertexCount; i = i + 1u) {
+        let vix = scrollingStorage[vertsOffset + i * 2u];
+        let viy = scrollingStorage[vertsOffset + i * 2u + 1u];
+        let vjx = scrollingStorage[vertsOffset + j * 2u];
+        let vjy = scrollingStorage[vertsOffset + j * 2u + 1u];
+
+        let vi = vec2<f32>(vix, viy);
+        let vj = vec2<f32>(vjx, vjy);
+
+        let e = vj - vi;
+        let w = p - vi;
+        let b = w - e * clamp(dot(w, e) / dot(e, e), 0.0, 1.0);
+        d = min(d, dot(b, b));
+
+        let c0 = p.y >= vi.y;
+        let c1 = p.y < vj.y;
+        let c2 = e.x * w.y > e.y * w.x;
+        if ((c0 && c1 && c2) || (!c0 && !c1 && !c2)) {
+            s = s * -1.0;
+        }
+
+        j = i;
+    }
+
+    return s * sqrt(d);
+}
+
 // 3D SDF type constants are now in sdf-types.gen.wgsl (auto-generated)
 
 // =============================================================================

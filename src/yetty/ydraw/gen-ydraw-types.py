@@ -528,6 +528,8 @@ def generate_wgsl_overlay(primitives: list[dict], out: Path) -> None:
                                             gpu_offset_shift=1)
             # Replace p with pAdj
             substituted = re.sub(r'\bp\b', 'pAdj', substituted)
+            # Replace buffer-specific function calls
+            substituted = substituted.replace("sdPolygonBuffer(", "sdPolygonBuffer_overlay(")
             L.append(f"        case {prim['_const_name']}: {{")
             for line in substituted.split("\n"):
                 L.append(f"            {line}")

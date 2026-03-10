@@ -2,7 +2,7 @@
 #include <yetty/ypaint/ypaint-buffer.h>
 
 using namespace boost::ut;
-using namespace yetty;
+using namespace yetty::ypaint;
 
 suite gradient_tests = [] {
     "LinearGradientBox primitive creation"_test = [] {

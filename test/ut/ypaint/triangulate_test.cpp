@@ -10,7 +10,7 @@
 #include <algorithm>
 
 using namespace boost::ut;
-using namespace yetty;
+using namespace yetty::ypaint;
 
 //=============================================================================
 // Helper: check if triangulation produces valid triangles

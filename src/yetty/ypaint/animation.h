@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace yetty::animation {
+namespace yetty::ypaint::animation {
 
 //=============================================================================
 // Animatable property types
@@ -99,4 +99,4 @@ protected:
     Animation() = default;
 };
 
-} // namespace yetty::animation
+} // namespace yetty::ypaint::animation
