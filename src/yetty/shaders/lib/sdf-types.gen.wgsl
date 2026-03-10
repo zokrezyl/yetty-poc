@@ -302,6 +302,17 @@ fn evalSDF(primOffset: u32, p: vec2<f32>) -> f32 {
             let ringDist = abs(dist - (cardStorage[primOffset + 6u] + cardStorage[primOffset + 5u]) * 0.5) - (cardStorage[primOffset + 5u] - cardStorage[primOffset + 6u]) * 0.5;
             return ringDist;
         }
+        case SDF_POLYGON: {
+            let vertCount = bitcast<u32>(cardStorage[primOffset + 3u]);
+            let vertsOffset = primOffset + 8u;
+            return sdPolygonBuffer(pAdj, vertsOffset, vertCount);
+        }
+        case SDF_POLYGON_GROUP: {
+            let vertCount = bitcast<u32>(cardStorage[primOffset + 3u]);
+            let contourCnt = bitcast<u32>(cardStorage[primOffset + 4u]);
+            let vertsOffset = primOffset + 9u + contourCnt;
+            return sdPolygonBuffer(pAdj, vertsOffset, vertCount);
+        }
         case SDF_LINEAR_GRADIENT_BOX: {
             let center = vec2<f32>(cardStorage[primOffset + 3u], cardStorage[primOffset + 4u]);
             let halfSize = vec2<f32>(cardStorage[primOffset + 5u], cardStorage[primOffset + 6u]);
@@ -738,16 +749,16 @@ fn primColors(primOffset: u32) -> vec4<u32> {
         }
         case SDF_POLYGON: {
             return vec4<u32>(
-                bitcast<u32>(cardStorage[primOffset + 3u]),
                 bitcast<u32>(cardStorage[primOffset + 4u]),
-                bitcast<u32>(cardStorage[primOffset + 1u]),
+                bitcast<u32>(cardStorage[primOffset + 5u]),
+                bitcast<u32>(cardStorage[primOffset + 2u]),
                 0u);
         }
         case SDF_POLYGON_GROUP: {
             return vec4<u32>(
-                bitcast<u32>(cardStorage[primOffset + 4u]),
                 bitcast<u32>(cardStorage[primOffset + 5u]),
-                bitcast<u32>(cardStorage[primOffset + 1u]),
+                bitcast<u32>(cardStorage[primOffset + 6u]),
+                bitcast<u32>(cardStorage[primOffset + 2u]),
                 0u);
         }
         case SDF_LINEAR_GRADIENT_BOX: {
@@ -887,8 +898,8 @@ fn primStrokeWidth(primOffset: u32) -> f32 {
         case SDF_OCTAHEDRON_3D: { return cardStorage[primOffset + 8u]; }
         case SDF_PYRAMID_3D: { return cardStorage[primOffset + 8u]; }
         case SDF_ELLIPSOID_3D: { return cardStorage[primOffset + 10u]; }
-        case SDF_POLYGON: { return cardStorage[primOffset + 5u]; }
-        case SDF_POLYGON_GROUP: { return cardStorage[primOffset + 6u]; }
+        case SDF_POLYGON: { return cardStorage[primOffset + 6u]; }
+        case SDF_POLYGON_GROUP: { return cardStorage[primOffset + 7u]; }
         case SDF_LINEAR_GRADIENT_BOX: { return cardStorage[primOffset + 14u]; }
         case SDF_LINEAR_GRADIENT_CIRCLE: { return cardStorage[primOffset + 13u]; }
         case SDF_RADIAL_GRADIENT_CIRCLE: { return cardStorage[primOffset + 12u]; }

@@ -3191,8 +3191,8 @@ int GPUScreenImpl::onOSC(int command, VTermStringFragment frag, void *user) {
     return 0;
   }
 
-  // Accept yetty vendor commands: 666666 (cards), 666667-669 (effects), 666670 (gpu stats), 666671 (fps), 666673 (screen draw)
-  if (command != YETTY_OSC_VENDOR_ID && command != 666667 && command != 666668 && command != 666669 && command != 666670 && command != 666671 && command != 666673 && command != 666674) {
+  // Accept yetty vendor commands: 666666 (cards/ydraw), 666667-669 (effects), 666670 (gpu stats), 666671 (fps), 666673-674 (ydraw overlay), 666675 (ypaint)
+  if (command != YETTY_OSC_VENDOR_ID && command != 666667 && command != 666668 && command != 666669 && command != 666670 && command != 666671 && command != 666673 && command != 666674 && command != 666675) {
     ydebug(">>> onOSC: ignoring non-yetty command {}", command);
     return 0;
   }
@@ -3554,7 +3554,7 @@ bool GPUScreenImpl::handleOSCSequence(const std::string &sequence,
     return false;
   }
 
-  // Handle vendor-specific commands (666667-666674) directly
+  // Handle vendor-specific commands (666667-666674) directly (not card commands)
   if (vendorId >= 666667 && vendorId <= 666674) {
     std::string payload = sequence.substr(semicolon + 1);
 
@@ -3624,7 +3624,8 @@ bool GPUScreenImpl::handleOSCSequence(const std::string &sequence,
     }
   }
 
-  if (vendorId != YETTY_OSC_VENDOR_ID) {
+  // Card commands: 666666 (ydraw) and 666675 (ypaint)
+  if (vendorId != YETTY_OSC_VENDOR_ID && vendorId != 666675) {
     yerror("GPUScreenImpl::handleOSCSequence: unknown vendor ID {}", vendorId);
     if (response)
       *response = OscResponse::error("Unknown vendor ID");
