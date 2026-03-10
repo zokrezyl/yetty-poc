@@ -8,6 +8,9 @@ set CONFIG=Release
 set CLEAN=0
 set CONFIGURE_ONLY=0
 
+REM GNU Make path
+set MAKE="C:\Program Files (x86)\GnuWin32\bin\make.exe"
+
 :parse_args
 if "%1"=="" goto :start
 if /i "%1"=="debug" (
