@@ -1,8 +1,8 @@
-# Scrolling YDrawBuilder Data Structure
+# Scrolling YPaintBuilder Data Structure
 
 ## Overview
 
-The scrolling YDrawBuilder implements terminal-style scrolling for SDF primitives. Primitives are stored at the LAST (lowest) line they overlap, enabling O(1) scroll removal via `pop_front()`.
+The scrolling YPaintBuilder implements terminal-style scrolling for SDF primitives. Primitives are stored at the LAST (lowest) line they overlap, enabling O(1) scroll removal via `pop_front()`.
 
 ## State Variables
 
@@ -69,7 +69,7 @@ The gridOffset is:
 
 **Shader must read**: type from +1, layer from +2, geometry from +3+.
 
-## Adding Primitives (addYdrawBuffer)
+## Adding Primitives (addYpaintBuffer)
 
 When a primitive with local Y coordinates `[minY, maxY]` is added at cursor position `(cursorCol, cursorRow)`:
 

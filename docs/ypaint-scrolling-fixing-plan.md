@@ -1,8 +1,8 @@
-# YDraw Scrolling Fix Plan
+# YPaint Scrolling Fix Plan
 
 ## Problem Statement
 
-Shapes disappear when cursor position is non-zero at time of `addYdrawBuffer()`. The grid stores primitives at cursor-adjusted rows, but shader looks up using world pixel coordinates.
+Shapes disappear when cursor position is non-zero at time of `addYpaintBuffer()`. The grid stores primitives at cursor-adjusted rows, but shader looks up using world pixel coordinates.
 
 ## Root Cause
 
@@ -53,18 +53,18 @@ OR: sceneMinY should be negative (-cursorRow * cellSizeY) so that world coords m
 
 ### Phase 4: Verify
 
-- [ ] 4.1 Run ydraw_tests
+- [ ] 4.1 Run ypaint_tests
 - [ ] 4.2 Run shapes.sh demo with various cursor positions
 - [ ] 4.3 Verify visual output
 
 ## Files to Examine
 
-1. `src/yetty/ydraw/ydraw-builder.cpp` - Grid building, addYdrawBuffer, scrollLines
+1. `src/yetty/ypaint/ydraw-builder.cpp` - Grid building, addYpaintBuffer, scrollLines
 2. `src/yetty/shaders/gpu-screen.wgsl` - Shader grid lookup (lines 743-763)
 3. `src/yetty/shaders/lib/sdf-overlay.gen.wgsl` - SDF evaluation with offset
-4. `test/ut/ydraw/ydraw_scrolling_test.cpp` - Scrolling tests
-5. `test/ut/ydraw/ydraw_shapes_demo_test.cpp` - Shapes demo test
-6. `test/ut/ydraw/debug_grid.cpp` - Debug tool
+4. `test/ut/ypaint/ydraw_scrolling_test.cpp` - Scrolling tests
+5. `test/ut/ypaint/ydraw_shapes_demo_test.cpp` - Shapes demo test
+6. `test/ut/ypaint/debug_grid.cpp` - Debug tool
 
 ## Current Understanding
 
