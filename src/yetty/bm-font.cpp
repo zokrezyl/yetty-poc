@@ -370,8 +370,11 @@ Result<void> BmFont::findFont() noexcept {
             if (face->num_fixed_sizes > 0) {
                 FT_Select_Size(face, 0);
             }
+            // Set pixel size for scalable/color emoji rendering
+            FT_Set_Pixel_Sizes(face, _glyphSize, _glyphSize);
             FT_Select_Charmap(face, FT_ENCODING_UNICODE);
-            ydebug("BmFont: using Windows system font '{}'", path);
+            yinfo("BmFont: using Windows system font '{}' ({}px, fixed_sizes={})",
+                  path, _glyphSize, face->num_fixed_sizes);
             return Ok();
         }
     }

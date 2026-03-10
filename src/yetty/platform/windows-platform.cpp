@@ -55,6 +55,10 @@ public:
             return Err<void>("Failed to create output pipe");
         }
 
+        // Set console code page to UTF-8 so child processes handle Unicode correctly
+        SetConsoleCP(CP_UTF8);
+        SetConsoleOutputCP(CP_UTF8);
+
         // Create pseudo console (ConPTY)
         COORD size = { static_cast<SHORT>(cols), static_cast<SHORT>(rows) };
         HRESULT hr = CreatePseudoConsole(size, _pipeInRead, _pipeOutWrite, 0, &_hPC);
