@@ -822,9 +822,12 @@ fn primStrokeWidth_overlay(primOffset: u32) -> f32 {
 fn evalSDF_scrolling(primOffset: u32, p: vec2<f32>) -> f32 {
     // Layout: [0]=gridOffset, [1]=type, [2]=layer, [3+]=geometry
     // Read grid offset FIRST (u16,u16 packed in u32) and convert to pixel offset
+    // gridOffsetY is SIGNED (int16) - can be negative after scrolling!
     let gridOffsetPacked = bitcast<u32>(scrollingStorage[primOffset + 0u]);
     let gridOffsetX = f32(gridOffsetPacked & 0xFFFFu);
-    let gridOffsetY = f32(gridOffsetPacked >> 16u);
+    // Sign-extend the upper 16 bits: shift left then arithmetic shift right
+    let gridOffsetYRaw = i32(gridOffsetPacked) >> 16;  // arithmetic shift preserves sign
+    let gridOffsetY = f32(gridOffsetYRaw);
     let pixelOffset = vec2<f32>(gridOffsetX * scrolling.cellSizeX, gridOffsetY * scrolling.cellSizeY);
     let pAdj = p - pixelOffset;
 
@@ -1520,9 +1523,12 @@ fn primColors_scrolling(primOffset: u32) -> vec4<u32> {
 fn evalGradientFillColor_scrolling(primOffset: u32, p: vec2<f32>) -> vec4<f32> {
     // Layout: [0]=gridOffset, [1]=type, [2]=layer, [3+]=geometry
     // Read grid offset FIRST (u16,u16 packed) and convert to pixel offset
+    // gridOffsetY is SIGNED (int16) - can be negative after scrolling!
     let gridOffsetPacked = bitcast<u32>(scrollingStorage[primOffset + 0u]);
     let gridOffsetX = f32(gridOffsetPacked & 0xFFFFu);
-    let gridOffsetY = f32(gridOffsetPacked >> 16u);
+    // Sign-extend the upper 16 bits: shift left then arithmetic shift right
+    let gridOffsetYRaw = i32(gridOffsetPacked) >> 16;  // arithmetic shift preserves sign
+    let gridOffsetY = f32(gridOffsetYRaw);
     let pixelOffset = vec2<f32>(gridOffsetX * scrolling.cellSizeX, gridOffsetY * scrolling.cellSizeY);
     let pAdj = p - pixelOffset;
 

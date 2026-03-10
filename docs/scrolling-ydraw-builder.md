@@ -187,22 +187,23 @@ let cellIndex = cellY * gridWidth + cellX;
 
 **CRITICAL**: The shader looks up using WORLD pixel coordinates. The grid must be organized such that world coordinate Y maps to the correct grid row.
 
-## Known Issue: Grid/Shader Mismatch
+## Signed Grid Offset (Critical Fix)
 
-Currently:
-- Primitives are stored at cursor-adjusted grid rows (cursorRow + localLine)
-- Shader looks up using world pixel position / cellSize
-- These don't match when cursorRow > 0
+After scrolling, `gridOffsetRow` can become **negative** (e.g., -3 for a primitive that started at row 3 and scrolled up 6 lines). The shader MUST interpret this as a signed int16, not unsigned.
 
-Example:
-- Circle at world Y=120, cellSize=20 -> shader cellY = 6
-- Added at cursorRow=3 -> stored in grid rows 7-11
-- Shader looks at row 6, finds nothing -> **BUG**
+**Bug (fixed)**: Shader was reading `gridOffsetY = f32(gridOffsetPacked >> 16u)`, which interprets -3 as 65533, causing massive coordinate offset and invisible primitives.
 
-The fix requires ensuring shader lookup matches grid storage, either by:
-1. Adjusting sceneMinY to account for cursor offset
-2. Adding explicit grid offset to uniforms
-3. Storing primitives at world-position rows (not cursor-adjusted)
+**Fix**: Use arithmetic right shift to preserve sign:
+```wgsl
+let gridOffsetYRaw = i32(gridOffsetPacked) >> 16;  // arithmetic shift preserves sign
+let gridOffsetY = f32(gridOffsetYRaw);
+```
+
+## Current Limitations
+
+1. **Rotated text not supported** - The scrolling shader doesn't handle SDF_ROTATED_GLYPH (type 65). Rotated text in scrolling mode is skipped with a warning.
+
+2. **Custom fonts not supported** - The scrolling shader only samples from the shared `fontTexture`, not custom atlas textures. Custom fonts fall back to the default font with a warning.
 
 ## Grid Offset Explained
 
