@@ -42,13 +42,25 @@ BUILD_DIR_WINDOWS_YINFO_RELEASE := build-windows-yinfo-release
 PARALLEL_JOBS ?=
 CMAKE_PARALLEL := $(if $(PARALLEL_JOBS),--parallel $(PARALLEL_JOBS),--parallel)
 
-# Distributed build with ccache + distcc (only if distcc is available)
+# Build acceleration options:
+#   USE_DISTCC=1: use ccache + distcc (distributed build)
+#   USE_CCACHE=1: use ccache only (local caching)
+#   Neither set:  no caching/distribution
+USE_DISTCC ?= 0
+USE_CCACHE ?= 0
 DISTCC_HOSTS ?= localhost 192.168.1.10
 export DISTCC_HOSTS
+
+ifeq ($(USE_DISTCC),1)
 ifneq ($(shell which distcc 2>/dev/null),)
 export CCACHE_PREFIX := distcc
 endif
 CMAKE_COMPILER_LAUNCHER := -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+else ifeq ($(USE_CCACHE),1)
+CMAKE_COMPILER_LAUNCHER := -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+else
+CMAKE_COMPILER_LAUNCHER :=
+endif
 
 # CMake options
 CMAKE := cmake

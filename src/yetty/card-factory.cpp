@@ -4,16 +4,17 @@
 #include "cards/plot/plot.h"
 #include "cards/qrcode/qrcode.h"
 #include "cards/thorvg/thorvg.h"
-#include "cards/ythorvg/ythorvg.h"
-#include "cards/yplot/yplot-card.h"
 #include "cards/ydraw-maze/ydraw-maze.h"
 #include "cards/ydraw-zoo/ydraw-zoo.h"
 #include "cards/ydraw/ydraw.h"
 #include "cards/ygrid/ygrid.h"
 #include "cards/ygui/ygui.h"
 #include "cards/yhtml/yhtml.h"
+#include "cards/ypaint/ypaint.h"
 #include "cards/ypdf/ypdf.h"
+#include "cards/yplot/yplot-card.h"
 #include "cards/ytext/ytext.h"
+#include "cards/ythorvg/ythorvg.h"
 #include <regex>
 #include <unordered_map>
 #include <yetty/card-factory.h>
@@ -53,6 +54,12 @@ public:
                              uint32_t w, uint32_t h, const std::string &args,
                              const std::string &payload) {
       return card::YDraw::create(ctx, x, y, w, h, args, payload);
+    });
+
+    registerCard("ypaint", [](const YettyContext &ctx, int32_t x, int32_t y,
+                              uint32_t w, uint32_t h, const std::string &args,
+                              const std::string &payload) {
+      return ypaint::card::YPaint::create(ctx, x, y, w, h, args, payload);
     });
 
     registerCard("ygui", [](const YettyContext &ctx, int32_t x, int32_t y,
@@ -220,9 +227,9 @@ public:
           std::regex_replace(filteredArgs, std::regex(R"(\s*;\s*;\s*)"), ";");
     }
 
-    ydebug("CardFactory: creating card '{}' at ({},{}) size {}x{}{}", name, x, y,
-          widthCells, heightCells,
-          cardName.empty() ? "" : " name='" + cardName + "'");
+    ydebug("CardFactory: creating card '{}' at ({},{}) size {}x{}{}", name, x,
+           y, widthCells, heightCells,
+           cardName.empty() ? "" : " name='" + cardName + "'");
 
     // Call the creator function with full context
     auto result =
@@ -239,8 +246,8 @@ public:
     }
 
     ydebug("CardFactory: created card '{}' with metadataOffset={}{}", name,
-          (*result)->metadataOffset(),
-          cardName.empty() ? "" : " name='" + cardName + "'");
+           (*result)->metadataOffset(),
+           cardName.empty() ? "" : " name='" + cardName + "'");
 
     return result;
   }
