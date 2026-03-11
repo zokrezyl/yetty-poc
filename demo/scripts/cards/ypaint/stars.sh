@@ -139,5 +139,5 @@ EOF
 # Encode as base64
 PAYLOAD=$(echo "$YAML_PAYLOAD" | base64 -w0)
 
-printf '\033]666675;run -c ypaint -x 0 -y 0 -w 50 -h 25 --yaml;%s;\033\\' "$PAYLOAD"
+printf '\033]666666;run -c ypaint -x 0 -y 0 -w 50 -h 25 --yaml;%s;\033\\' "$PAYLOAD"
 echo "Stars card demo sent"
