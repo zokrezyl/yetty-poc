@@ -186,12 +186,20 @@ jobs:
       id: strings
       shell: bash
       run: |
-        echo "build-output-dir=${{ github.workspace }}/build-windows" >> "$GITHUB_OUTPUT"
+        echo "build-output-dir=${{ github.workspace }}/build-windows-dawn-release" >> "$GITHUB_OUTPUT"
+
+    - name: Install Windows build dependencies
+      shell: bash
+      run: |
+        choco install nasm -y
+        choco install make -y
+        pip install meson
 
     - name: Configure CMake
       run: >
         cmake -B ${{ steps.strings.outputs.build-output-dir }}
         -DCMAKE_BUILD_TYPE=Release
+        -DWEBGPU_BACKEND=dawn
         -S ${{ github.workspace }}
 
     - name: Build
@@ -206,9 +214,13 @@ jobs:
       with:
         name: yetty-windows
         path: |
+          ${{ steps.strings.outputs.build-output-dir }}/yetty.exe
           ${{ steps.strings.outputs.build-output-dir }}/Release/yetty.exe
+          ${{ steps.strings.outputs.build-output-dir }}/yettyc.exe
           ${{ steps.strings.outputs.build-output-dir }}/Release/yettyc.exe
+          ${{ steps.strings.outputs.build-output-dir }}/ycat.exe
           ${{ steps.strings.outputs.build-output-dir }}/Release/ycat.exe
+          ${{ steps.strings.outputs.build-output-dir }}/yecho.exe
           ${{ steps.strings.outputs.build-output-dir }}/Release/yecho.exe
           assets/*.ttf
           src/yetty/shaders/

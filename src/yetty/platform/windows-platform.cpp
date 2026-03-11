@@ -55,6 +55,10 @@ public:
             return Err<void>("Failed to create output pipe");
         }
 
+        // Set console code page to UTF-8 so child processes handle Unicode correctly
+        SetConsoleCP(CP_UTF8);
+        SetConsoleOutputCP(CP_UTF8);
+
         // Create pseudo console (ConPTY)
         COORD size = { static_cast<SHORT>(cols), static_cast<SHORT>(rows) };
         HRESULT hr = CreatePseudoConsole(size, _pipeInRead, _pipeOutWrite, 0, &_hPC);
@@ -106,8 +110,11 @@ public:
             return Err<void>("Failed to update attribute list");
         }
 
-        // Convert shell path to wide string
-        std::wstring wShell(shell.begin(), shell.end());
+        // Wrap shell with chcp 65001 for correct 4-byte UTF-8 handling through ConPTY
+        std::string cmdLine = "cmd.exe /c chcp 65001 >nul && " + shell;
+
+        // Convert to wide string
+        std::wstring wShell(cmdLine.begin(), cmdLine.end());
 
         // Create process
         PROCESS_INFORMATION pi = {};

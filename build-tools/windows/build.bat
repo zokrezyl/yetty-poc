@@ -8,6 +8,10 @@ set CONFIG=Release
 set CLEAN=0
 set CONFIGURE_ONLY=0
 
+REM Add GNU Make and NASM to PATH if available
+if exist "C:\Program Files (x86)\GnuWin32\bin" set PATH=C:\Program Files (x86)\GnuWin32\bin;%PATH%
+if exist "C:\Program Files\NASM" set PATH=C:\Program Files\NASM;%PATH%
+
 :parse_args
 if "%1"=="" goto :start
 if /i "%1"=="debug" (
