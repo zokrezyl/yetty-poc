@@ -31,6 +31,7 @@ BUILD_DIR_ANDROID_X86_64_YTRACE_RELEASE := build-android_x86_64-ytrace-release
 # WebAssembly uses browser native WebGPU (Dawn in Chrome)
 BUILD_DIR_WEBASM_YTRACE_DEBUG := build-webasm-ytrace-debug
 BUILD_DIR_WEBASM_YTRACE_RELEASE := build-webasm-ytrace-release
+BUILD_DIR_WEBASM_YINFO_DEBUG := build-webasm-yinfo-debug
 BUILD_DIR_WEBASM_YINFO_RELEASE := build-webasm-yinfo-release
 
 # Windows (MSVC via VS Build Tools)
@@ -250,6 +251,9 @@ build-webasm-ytrace-debug: ## Build WebAssembly ytrace debug
 	@if [ ! -f "$(BUILD_DIR_WEBASM_YTRACE_DEBUG)/build.ninja" ]; then $(MAKE) config-webasm-ytrace-debug; fi
 	nix develop .#web --command bash -c 'cmake --build $(BUILD_DIR_WEBASM_YTRACE_DEBUG) --target yetty $(CMAKE_PARALLEL)'
 	@cp build-tools/web/index.html build-tools/web/serve.py $(BUILD_DIR_WEBASM_YTRACE_DEBUG)/
+	@$(MAKE) build-vm-tools BUILD_DIR=$(BUILD_DIR_WEBASM_YTRACE_DEBUG)
+	@bash build-tools/jslinux/alpine/build-vfsync.sh $(BUILD_DIR_WEBASM_YTRACE_DEBUG)
+	@$(MAKE) verify-webasm BUILD_DIR=$(BUILD_DIR_WEBASM_YTRACE_DEBUG)
 
 .PHONY: build-webasm-ytrace-release
 build-webasm-ytrace-release: ## Build WebAssembly ytrace release (CDB generation handled by CMake)
@@ -257,7 +261,25 @@ build-webasm-ytrace-release: ## Build WebAssembly ytrace release (CDB generation
 	nix develop .#web --command bash -c 'cmake --build $(BUILD_DIR_WEBASM_YTRACE_RELEASE) --target yetty $(CMAKE_PARALLEL)'
 	@cp build-tools/web/index.html build-tools/web/serve.py $(BUILD_DIR_WEBASM_YTRACE_RELEASE)/
 	@$(MAKE) build-vm-tools BUILD_DIR=$(BUILD_DIR_WEBASM_YTRACE_RELEASE)
+	@bash build-tools/jslinux/alpine/build-vfsync.sh $(BUILD_DIR_WEBASM_YTRACE_RELEASE)
 	@$(MAKE) verify-webasm BUILD_DIR=$(BUILD_DIR_WEBASM_YTRACE_RELEASE)
+
+.PHONY: config-webasm-yinfo-debug
+config-webasm-yinfo-debug: ## Configure WebAssembly yinfo debug build (minimal logging)
+	nix develop .#web --command bash -c '\
+		export EMCC_SKIP_SANITY_CHECK=1 && \
+		emcmake cmake -B $(BUILD_DIR_WEBASM_YINFO_DEBUG) $(CMAKE_GENERATOR) \
+			-DCMAKE_BUILD_TYPE=Debug \
+			-DYTRACE_ENABLE_YTRACE=0 -DYTRACE_ENABLE_YDEBUG=0'
+
+.PHONY: build-webasm-yinfo-debug
+build-webasm-yinfo-debug: ## Build WebAssembly yinfo debug (minimal logging)
+	@if [ ! -f "$(BUILD_DIR_WEBASM_YINFO_DEBUG)/build.ninja" ]; then $(MAKE) config-webasm-yinfo-debug; fi
+	nix develop .#web --command bash -c 'cmake --build $(BUILD_DIR_WEBASM_YINFO_DEBUG) --target yetty $(CMAKE_PARALLEL)'
+	@cp build-tools/web/index.html build-tools/web/serve.py $(BUILD_DIR_WEBASM_YINFO_DEBUG)/
+	@$(MAKE) build-vm-tools BUILD_DIR=$(BUILD_DIR_WEBASM_YINFO_DEBUG)
+	@bash build-tools/jslinux/alpine/build-vfsync.sh $(BUILD_DIR_WEBASM_YINFO_DEBUG)
+	@$(MAKE) verify-webasm BUILD_DIR=$(BUILD_DIR_WEBASM_YINFO_DEBUG)
 
 .PHONY: config-webasm-yinfo-release
 config-webasm-yinfo-release: ## Configure WebAssembly yinfo release build (minimal logging)
@@ -273,6 +295,7 @@ build-webasm-yinfo-release: ## Build WebAssembly yinfo release (minimal logging)
 	nix develop .#web --command bash -c 'cmake --build $(BUILD_DIR_WEBASM_YINFO_RELEASE) --target yetty $(CMAKE_PARALLEL)'
 	@cp build-tools/web/index.html build-tools/web/serve.py $(BUILD_DIR_WEBASM_YINFO_RELEASE)/
 	@$(MAKE) build-vm-tools BUILD_DIR=$(BUILD_DIR_WEBASM_YINFO_RELEASE)
+	@bash build-tools/jslinux/alpine/build-vfsync.sh $(BUILD_DIR_WEBASM_YINFO_RELEASE)
 	@$(MAKE) verify-webasm BUILD_DIR=$(BUILD_DIR_WEBASM_YINFO_RELEASE)
 
 .PHONY: verify-webasm
@@ -281,7 +304,8 @@ verify-webasm: ## Post-build verification that all webasm artifacts are present
 	@FAIL=0; \
 	for f in yetty.js yetty.wasm yetty.data index.html serve.py \
 	         jslinux/vm-bridge.html jslinux/term-bridge.js \
-	         vm-tools/yecho vm-tools/ycat vm-tools/ybrowser; do \
+	         vm-tools/yecho vm-tools/ycat vm-tools/ybrowser \
+	         vfsync/u/os/yetty-alpine/head; do \
 		if [ ! -e "$(BUILD_DIR)/$$f" ]; then \
 			echo "MISSING: $$f"; \
 			FAIL=1; \
@@ -304,6 +328,14 @@ run-webasm-ytrace-debug: build-webasm-ytrace-debug ## Serve WebAssembly ytrace d
 .PHONY: run-webasm-ytrace-release
 run-webasm-ytrace-release: build-webasm-ytrace-release ## Serve WebAssembly ytrace release build
 	python3 $(BUILD_DIR_WEBASM_YTRACE_RELEASE)/serve.py 8000 $(BUILD_DIR_WEBASM_YTRACE_RELEASE)
+
+.PHONY: run-webasm-yinfo-debug
+run-webasm-yinfo-debug: build-webasm-yinfo-debug ## Serve WebAssembly yinfo debug build
+	python3 $(BUILD_DIR_WEBASM_YINFO_DEBUG)/serve.py 8000 $(BUILD_DIR_WEBASM_YINFO_DEBUG)
+
+.PHONY: run-webasm-yinfo-release
+run-webasm-yinfo-release: build-webasm-yinfo-release ## Serve WebAssembly yinfo release build
+	python3 $(BUILD_DIR_WEBASM_YINFO_RELEASE)/serve.py 8000 $(BUILD_DIR_WEBASM_YINFO_RELEASE)
 
 
 #=============================================================================
