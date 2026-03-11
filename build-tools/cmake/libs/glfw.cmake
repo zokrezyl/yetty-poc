@@ -27,8 +27,10 @@ if(NOT TARGET glfw3webgpu)
         GITHUB_REPOSITORY eliemichel/glfw3webgpu
         GIT_TAG main
     )
-    # glfw3webgpu needs _GLFW_X11 on Linux for X11 surface creation
+    # glfw3webgpu needs platform define for native surface creation
     if(UNIX AND NOT APPLE)
         target_compile_definitions(glfw3webgpu PRIVATE _GLFW_X11)
+    elseif(WIN32)
+        target_compile_definitions(glfw3webgpu PRIVATE _GLFW_WIN32)
     endif()
 endif()
