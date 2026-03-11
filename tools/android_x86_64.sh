@@ -4,7 +4,7 @@
 # Supports: Ubuntu and macOS
 #
 # Usage:
-#   First build: make build-android_x86_64-dawn-debug (or -release)
+#   First build: make build-android_x86_64-ytrace-debug (or -release)
 #   Then run:
 #     ./tools/android_x86_64.sh              # Normal: emulator window with yetty
 #     ./tools/android_x86_64.sh --vnc        # VNC: emulator window + yetty VNC server
@@ -80,7 +80,7 @@ VNC_PORT=5900
 # Configuration
 AVD_NAME="yetty_x86_64"
 SYSTEM_IMAGE="system-images;android-34;google_apis;x86_64"
-APK_PATH="${APK_PATH:-$PROJECT_ROOT/build-android_x86_64-dawn-debug/app/outputs/apk/debug/app-debug.apk}"
+APK_PATH="${APK_PATH:-$PROJECT_ROOT/build-android_x86_64-ytrace-debug/app/outputs/apk/debug/app-debug.apk}"
 PACKAGE_NAME="com.yetty.terminal"
 ACTIVITY_NAME="android.app.NativeActivity"
 
@@ -656,7 +656,7 @@ main() {
             check_kvm
             if [ ! -f "$APK_PATH" ]; then
                 error "APK not found: $APK_PATH"
-                echo "Build first: make build-android_x86_64-dawn-debug"
+                echo "Build first: make build-android_x86_64-ytrace-debug"
                 exit 1
             fi
             start_emulator
@@ -671,7 +671,7 @@ main() {
             check_kvm
             if [ ! -f "$APK_PATH" ]; then
                 error "APK not found: $APK_PATH"
-                echo "Build first: make build-android_x86_64-dawn-debug"
+                echo "Build first: make build-android_x86_64-ytrace-debug"
                 exit 1
             fi
             start_emulator
@@ -686,7 +686,7 @@ main() {
             check_kvm
             if [ ! -f "$APK_PATH" ]; then
                 error "APK not found: $APK_PATH"
-                echo "Build first: make build-android_x86_64-dawn-debug"
+                echo "Build first: make build-android_x86_64-ytrace-debug"
                 exit 1
             fi
             start_emulator
@@ -701,8 +701,8 @@ main() {
             echo "Usage: $0 [OPTIONS]"
             echo ""
             echo "PREREQUISITE: Build the APK first!"
-            echo "  make build-android_x86_64-dawn-debug"
-            echo "  make build-android_x86_64-dawn-release"
+            echo "  make build-android_x86_64-ytrace-debug"
+            echo "  make build-android_x86_64-ytrace-release"
             echo ""
             echo "MODES:"
             echo ""
@@ -729,7 +729,7 @@ main() {
             echo "EXAMPLES:"
             echo ""
             echo "  # First build the APK (only once, or after code changes):"
-            echo "  make build-android_x86_64-dawn-debug"
+            echo "  make build-android_x86_64-ytrace-debug"
             echo ""
             echo "  # Then run headless (server/remote use):"
             echo "  $0 --vnc-headless"
@@ -750,7 +750,7 @@ main() {
             ;;
     esac
 
-    # Default: setup and run (NO BUILD - use 'make build-android_x86_64-dawn-*' first!)
+    # Default: setup and run (NO BUILD - use 'make build-android_x86_64-ytrace-*' first!)
     if ! find_android_sdk; then
         case "$OS" in
             linux) install_android_sdk_ubuntu ;;
@@ -767,8 +767,8 @@ main() {
         error "APK not found: $APK_PATH"
         echo ""
         echo "Build the APK first with:"
-        echo "  make build-android_x86_64-dawn-debug"
-        echo "  make build-android_x86_64-dawn-release"
+        echo "  make build-android_x86_64-ytrace-debug"
+        echo "  make build-android_x86_64-ytrace-release"
         echo ""
         exit 1
     fi

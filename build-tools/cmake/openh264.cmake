@@ -135,11 +135,17 @@ if(openh264_ADDED)
     )
     add_dependencies(openh264 openh264_ext)
 
-    # On Unix, openh264 needs pthread and stdc++
-    if(UNIX)
+    # On Unix (non-Android), openh264 needs pthread and stdc++
+    # Android uses static C++ runtime via ANDROID_STL=c++_static
+    if(UNIX AND NOT ANDROID)
         find_package(Threads REQUIRED)
         set_target_properties(openh264 PROPERTIES
             INTERFACE_LINK_LIBRARIES "Threads::Threads;stdc++"
+        )
+    elseif(ANDROID)
+        find_package(Threads REQUIRED)
+        set_target_properties(openh264 PROPERTIES
+            INTERFACE_LINK_LIBRARIES "Threads::Threads"
         )
     endif()
 

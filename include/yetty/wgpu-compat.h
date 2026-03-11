@@ -36,15 +36,6 @@
 #define WGPU_MIPMAP_FILTER_LINEAR WGPUMipmapFilterMode_Linear
 #define WGPU_MIPMAP_FILTER_NEAREST WGPUMipmapFilterMode_Nearest
 
-// Queue work done callback - signature differs between Dawn and wgpu-native
-// Dawn: (WGPUQueueWorkDoneStatus, WGPUStringView message, void* u1, void* u2)
-// wgpu-native: (WGPUQueueWorkDoneStatus, void* u1, void* u2)
-#if defined(WEBGPU_BACKEND_WGPU)
-// wgpu-native: no message parameter
-#define WGPU_QUEUE_WORK_DONE_CALLBACK(name, body) \
-    [](WGPUQueueWorkDoneStatus status, void* u1, void* u2) body
-#else
-// Dawn: includes message parameter
+// Queue work done callback (Dawn API)
 #define WGPU_QUEUE_WORK_DONE_CALLBACK(name, body) \
     [](WGPUQueueWorkDoneStatus status, WGPUStringView, void* u1, void* u2) body
-#endif

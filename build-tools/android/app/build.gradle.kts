@@ -22,14 +22,23 @@ android {
 
         externalNativeBuild {
             cmake {
-                val webgpuBackend = System.getenv("WEBGPU_BACKEND") ?: "wgpu"
+                val webgpuBackend = System.getenv("WEBGPU_BACKEND") ?: "dawn"
                 val buildDir = System.getenv("ANDROID_BUILD_DIR") ?: "${rootProject.projectDir.parentFile.parentFile}/build-android"
-                arguments += listOf(
+                val useCcache = System.getenv("USE_CCACHE") == "1"
+                val cmakeArgs = mutableListOf(
                     "-DYETTY_ANDROID=ON",
                     "-DCMAKE_BUILD_TYPE=Release",
                     "-DWEBGPU_BACKEND=${webgpuBackend}",
-                    "-DANDROID_BUILD_DIR=${buildDir}"
+                    "-DANDROID_BUILD_DIR=${buildDir}",
+                    "-DANDROID_STL=c++_static"
                 )
+                if (useCcache) {
+                    cmakeArgs += listOf(
+                        "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
+                        "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
+                    )
+                }
+                arguments += cmakeArgs
             }
         }
     }
@@ -81,8 +90,8 @@ android {
     // Include pre-built libraries and assets from ANDROID_BUILD_DIR and source directories
     val buildDir = System.getenv("ANDROID_BUILD_DIR") ?: "${rootProject.projectDir.parentFile.parentFile}/build-android"
     val projectRoot = rootProject.projectDir.parentFile.parentFile
-    val webgpuBackend = System.getenv("WEBGPU_BACKEND") ?: "wgpu"
-    val libsDir = if (webgpuBackend == "dawn") "dawn-libs" else "wgpu-libs"
+    val webgpuBackend = System.getenv("WEBGPU_BACKEND") ?: "dawn"
+    val libsDir = "dawn-libs"  // Only Dawn is supported
     sourceSets {
         getByName("main") {
             jniLibs.srcDirs(File(buildDir, libsDir), File(buildDir, "jniLibs"))

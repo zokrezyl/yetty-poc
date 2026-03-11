@@ -47,6 +47,12 @@ CMAKE_PARALLEL := $(if $(PARALLEL_JOBS),--parallel $(PARALLEL_JOBS),--parallel)
 #   USE_DISTCC=1: use ccache + distcc (distributed build)
 #   USE_CCACHE=1: use ccache only (local caching)
 #   Neither set:  no caching/distribution
+#
+# Platform support for ccache:
+#   - Desktop (Linux/macOS): ✓ fully supported
+#   - WebAssembly (emcc):    ✓ fully supported
+#   - Android (NDK clang):   ✓ fully supported
+#   - Windows (MSVC):        ✗ not supported (use sccache instead)
 USE_DISTCC ?= 0
 USE_CCACHE ?= 0
 DISTCC_HOSTS ?= localhost 192.168.1.10
@@ -187,12 +193,12 @@ config-android-ytrace-release: ## Configure Android ytrace release build
 .PHONY: build-android-ytrace-debug
 build-android-ytrace-debug: ## Build Android ytrace debug APK
 	@$(MAKE) _android-ytrace-deps-debug
-	ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_YTRACE_DEBUG) nix develop .#android --command bash -c "cd build-tools/android && ./gradlew $(GRADLE_OPTS_YTRACE_DEBUG) assembleDebug"
+	USE_CCACHE=$(USE_CCACHE) ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_YTRACE_DEBUG) nix develop .#android --command bash -c "cd build-tools/android && ./gradlew $(GRADLE_OPTS_YTRACE_DEBUG) assembleDebug"
 
 .PHONY: build-android-ytrace-release
 build-android-ytrace-release: ## Build Android ytrace release APK
 	@$(MAKE) _android-ytrace-deps-release
-	ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_YTRACE_RELEASE) nix develop .#android --command bash -c "cd build-tools/android && ./gradlew $(GRADLE_OPTS_YTRACE_RELEASE) assembleRelease"
+	USE_CCACHE=$(USE_CCACHE) ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_YTRACE_RELEASE) nix develop .#android --command bash -c "cd build-tools/android && ./gradlew $(GRADLE_OPTS_YTRACE_RELEASE) assembleRelease"
 
 .PHONY: test-android-ytrace-debug
 test-android-ytrace-debug: build-android-ytrace-debug ## Install and run Android ytrace debug build
@@ -211,12 +217,12 @@ test-android-ytrace-release: build-android-ytrace-release ## Install and run And
 .PHONY: build-android_x86_64-ytrace-debug
 build-android_x86_64-ytrace-debug: ## Build Android x86_64 ytrace debug APK (emulator)
 	@$(MAKE) _android_x86_64-ytrace-deps-debug
-	ANDROID_ABI=x86_64 ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_X86_64_YTRACE_DEBUG) nix develop .#android --command bash -c "cd build-tools/android && ./gradlew $(GRADLE_OPTS_X86_64_YTRACE_DEBUG) assembleDebug"
+	USE_CCACHE=$(USE_CCACHE) ANDROID_ABI=x86_64 ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_X86_64_YTRACE_DEBUG) nix develop .#android --command bash -c "cd build-tools/android && ./gradlew $(GRADLE_OPTS_X86_64_YTRACE_DEBUG) assembleDebug"
 
 .PHONY: build-android_x86_64-ytrace-release
 build-android_x86_64-ytrace-release: ## Build Android x86_64 ytrace release APK (emulator)
 	@$(MAKE) _android_x86_64-ytrace-deps-release
-	ANDROID_ABI=x86_64 ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_X86_64_YTRACE_RELEASE) nix develop .#android --command bash -c "cd build-tools/android && ./gradlew $(GRADLE_OPTS_X86_64_YTRACE_RELEASE) assembleRelease"
+	USE_CCACHE=$(USE_CCACHE) ANDROID_ABI=x86_64 ANDROID_BUILD_DIR=$(CURDIR)/$(BUILD_DIR_ANDROID_X86_64_YTRACE_RELEASE) nix develop .#android --command bash -c "cd build-tools/android && ./gradlew $(GRADLE_OPTS_X86_64_YTRACE_RELEASE) assembleRelease"
 
 .PHONY: test-android_x86_64-ytrace-debug
 test-android_x86_64-ytrace-debug: build-android_x86_64-ytrace-debug ## Install and run Android x86_64 ytrace debug (emulator)
@@ -237,14 +243,14 @@ config-webasm-ytrace-debug: ## Configure WebAssembly ytrace debug build
 	nix develop .#web --command bash -c '\
 		export EMCC_SKIP_SANITY_CHECK=1 && \
 		emcmake cmake -B $(BUILD_DIR_WEBASM_YTRACE_DEBUG) $(CMAKE_GENERATOR) \
-			-DCMAKE_BUILD_TYPE=Debug'
+			-DCMAKE_BUILD_TYPE=Debug $(CMAKE_COMPILER_LAUNCHER)'
 
 .PHONY: config-webasm-ytrace-release
 config-webasm-ytrace-release: ## Configure WebAssembly ytrace release build
 	nix develop .#web --command bash -c '\
 		export EMCC_SKIP_SANITY_CHECK=1 && \
 		emcmake cmake -B $(BUILD_DIR_WEBASM_YTRACE_RELEASE) $(CMAKE_GENERATOR) \
-			-DCMAKE_BUILD_TYPE=MinSizeRel'
+			-DCMAKE_BUILD_TYPE=MinSizeRel $(CMAKE_COMPILER_LAUNCHER)'
 
 .PHONY: build-webasm-ytrace-debug
 build-webasm-ytrace-debug: ## Build WebAssembly ytrace debug
@@ -270,7 +276,7 @@ config-webasm-yinfo-debug: ## Configure WebAssembly yinfo debug build (minimal l
 		export EMCC_SKIP_SANITY_CHECK=1 && \
 		emcmake cmake -B $(BUILD_DIR_WEBASM_YINFO_DEBUG) $(CMAKE_GENERATOR) \
 			-DCMAKE_BUILD_TYPE=Debug \
-			-DYTRACE_ENABLE_YTRACE=0 -DYTRACE_ENABLE_YDEBUG=0'
+			-DYTRACE_ENABLE_YTRACE=0 -DYTRACE_ENABLE_YDEBUG=0 $(CMAKE_COMPILER_LAUNCHER)'
 
 .PHONY: build-webasm-yinfo-debug
 build-webasm-yinfo-debug: ## Build WebAssembly yinfo debug (minimal logging)
@@ -287,7 +293,7 @@ config-webasm-yinfo-release: ## Configure WebAssembly yinfo release build (minim
 		export EMCC_SKIP_SANITY_CHECK=1 && \
 		emcmake cmake -B $(BUILD_DIR_WEBASM_YINFO_RELEASE) $(CMAKE_GENERATOR) \
 			-DCMAKE_BUILD_TYPE=MinSizeRel \
-			-DYTRACE_ENABLE_YTRACE=0 -DYTRACE_ENABLE_YDEBUG=0'
+			-DYTRACE_ENABLE_YTRACE=0 -DYTRACE_ENABLE_YDEBUG=0 $(CMAKE_COMPILER_LAUNCHER)'
 
 .PHONY: build-webasm-yinfo-release
 build-webasm-yinfo-release: ## Build WebAssembly yinfo release (minimal logging)
@@ -385,9 +391,9 @@ clean: ## Clean all build directories
 	       build-desktop-debug build-desktop-release \
 	       build-android-debug build-android-release \
 	       build-android_x86_64-debug build-android_x86_64-release \
-	       build-desktop-wgpu-* build-desktop-dawn-* \
-	       build-android-wgpu-* build-android-dawn-* \
-	       build-android_x86_64-wgpu-* build-android_x86_64-dawn-* \
+	       build-desktop-dawn-* \
+	       build-android-dawn-* \
+	       build-android_x86_64-dawn-* \
 	       build-webasm-dawn-* build-windows-dawn-*
 
 #=============================================================================
