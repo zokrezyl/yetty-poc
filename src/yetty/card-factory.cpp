@@ -15,6 +15,9 @@
 #include "cards/yplot/yplot-card.h"
 #include "cards/ytext/ytext.h"
 #include "cards/ythorvg/ythorvg.h"
+#ifndef __EMSCRIPTEN__
+#include "cards/yvideo/yvideo.h"
+#endif
 #include <regex>
 #include <unordered_map>
 #include <yetty/card-factory.h>
@@ -170,6 +173,15 @@ public:
                     const std::string &payload) -> Result<CardPtr> {
                    return card::YThorVG::create(ctx, x, y, w, h, args, payload);
                  });
+
+#ifndef __EMSCRIPTEN__
+    registerCard("yvideo",
+                 [](const YettyContext &ctx, int32_t x, int32_t y, uint32_t w,
+                    uint32_t h, const std::string &args,
+                    const std::string &payload) -> Result<CardPtr> {
+                   return card::YVideo::create(ctx, x, y, w, h, args, payload);
+                 });
+#endif
 
     return Ok();
   }

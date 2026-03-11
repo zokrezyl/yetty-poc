@@ -37,5 +37,6 @@ target_link_libraries(yetty_cards INTERFACE
     yetty_card_ypdf
     yetty_card_yhtml
     yetty_card_thorvg
+    yetty_card_yvideo
     yetty_card_ythorvg
 )
