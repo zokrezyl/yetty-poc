@@ -16,7 +16,11 @@ add_subdirectory(ypdf)
 add_subdirectory(yhtml)
 add_subdirectory(thorvg)
 add_subdirectory(ythorvg)
-add_subdirectory(yvideo)
+
+# yvideo requires too many storage buffers for WebAssembly (11 > 10 limit)
+if(NOT EMSCRIPTEN)
+    add_subdirectory(yvideo)
+endif()
 
 # Aggregate library linking all cards
 add_library(yetty_cards INTERFACE)
@@ -37,5 +41,8 @@ target_link_libraries(yetty_cards INTERFACE
     yetty_card_yhtml
     yetty_card_thorvg
     yetty_card_ythorvg
-    yetty_card_yvideo
 )
+
+if(NOT EMSCRIPTEN)
+    target_link_libraries(yetty_cards INTERFACE yetty_card_yvideo)
+endif()

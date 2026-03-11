@@ -721,6 +721,47 @@ std::string ShaderManagerImpl::mergeShaders() const {
         ywarn("ShaderManager: post-effect apply placeholder not found");
     }
 
+#ifdef __EMSCRIPTEN__
+    // Strip overlay bindings and code for WebAssembly (storage buffer limit: 8)
+    // Remove overlay binding declarations (lines with @binding(15-18))
+    auto stripLine = [](std::string& str, const std::string& pattern) {
+        size_t pos = 0;
+        while ((pos = str.find(pattern, pos)) != std::string::npos) {
+            size_t lineStart = str.rfind('\n', pos);
+            lineStart = (lineStart == std::string::npos) ? 0 : lineStart + 1;
+            size_t lineEnd = str.find('\n', pos);
+            if (lineEnd == std::string::npos) lineEnd = str.size();
+            str.replace(lineStart, lineEnd - lineStart, "// [EMSCRIPTEN] " + str.substr(lineStart, lineEnd - lineStart));
+            pos = lineStart + 15; // Skip past the comment we just added
+        }
+    };
+    stripLine(result, "@binding(15)");
+    stripLine(result, "@binding(16)");
+    stripLine(result, "@binding(17)");
+    stripLine(result, "@binding(18)");
+
+    // Make evaluateOverlay return early - replace function body
+    // Find "fn evaluateOverlay" and replace body to just return vec4(0.0)
+    size_t fnPos = result.find("fn evaluateOverlay");
+    if (fnPos != std::string::npos) {
+        size_t bodyStart = result.find('{', fnPos);
+        if (bodyStart != std::string::npos) {
+            // Find matching closing brace
+            int braceCount = 1;
+            size_t bodyEnd = bodyStart + 1;
+            while (bodyEnd < result.size() && braceCount > 0) {
+                if (result[bodyEnd] == '{') braceCount++;
+                else if (result[bodyEnd] == '}') braceCount--;
+                bodyEnd++;
+            }
+            // Replace function body with simple return
+            result.replace(bodyStart + 1, bodyEnd - bodyStart - 2,
+                "\n    // Overlay disabled for WebAssembly\n    return vec4<f32>(0.0, 0.0, 0.0, 0.0);\n");
+        }
+    }
+    ydebug("ShaderManager: stripped overlay code for EMSCRIPTEN");
+#endif
+
     return result;
 }
 
@@ -827,8 +868,15 @@ Result<void> ShaderManagerImpl::createPipelineResources() {
     memcpy(mapped, quadVertices, sizeof(quadVertices));
     wgpuBufferUnmap(_quadVertexBuffer);
 
-    // 2. Create grid bind group layout (19 bindings: 15 grid + 4 overlay)
-    WGPUBindGroupLayoutEntry entries[19] = {};
+    // 2. Create grid bind group layout
+    // WebAssembly/Emscripten: 15 bindings (no overlay - storage buffer limit)
+    // Other platforms: 19 bindings (15 grid + 4 overlay)
+#ifdef __EMSCRIPTEN__
+    constexpr int NUM_BIND_ENTRIES = 15;
+#else
+    constexpr int NUM_BIND_ENTRIES = 19;
+#endif
+    WGPUBindGroupLayoutEntry entries[NUM_BIND_ENTRIES] = {};
 
     // 0: Grid uniforms
     entries[0].binding = 0;
@@ -908,6 +956,7 @@ Result<void> ShaderManagerImpl::createPipelineResources() {
     entries[14].visibility = WGPUShaderStage_Fragment;
     entries[14].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
 
+#ifndef __EMSCRIPTEN__
     // 15: Overlay grid data SSBO
     entries[15].binding = 15;
     entries[15].visibility = WGPUShaderStage_Fragment;
@@ -927,9 +976,10 @@ Result<void> ShaderManagerImpl::createPipelineResources() {
     entries[18].binding = 18;
     entries[18].visibility = WGPUShaderStage_Fragment;
     entries[18].buffer.type = WGPUBufferBindingType_Uniform;
+#endif
 
     WGPUBindGroupLayoutDescriptor layoutDesc = {};
-    layoutDesc.entryCount = 19;
+    layoutDesc.entryCount = NUM_BIND_ENTRIES;
     layoutDesc.entries = entries;
     _gridBindGroupLayout = wgpuDeviceCreateBindGroupLayout(device, &layoutDesc);
     if (!_gridBindGroupLayout) {

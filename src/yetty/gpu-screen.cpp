@@ -5342,7 +5342,11 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
       bmMetadataSize = _msdfFont->atlas()->getBufferGlyphCount() * sizeof(GlyphMetadataGPU);
     }
 
+#ifdef __EMSCRIPTEN__
+    WGPUBindGroupEntry bgEntries[15] = {};  // No overlay for WebAssembly (storage buffer limit)
+#else
     WGPUBindGroupEntry bgEntries[19] = {};  // 15 grid + 4 overlay
+#endif
 
     bgEntries[0].binding = 0;
     bgEntries[0].buffer = _uniformBuffer;
@@ -5432,7 +5436,8 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
         bgEntries[14].size = 8;  // Minimum size
     }
 
-    // Overlay bindings (15-18)
+#ifndef __EMSCRIPTEN__
+    // Overlay bindings (15-18) - not available on WebAssembly due to storage buffer limits
     // Prepare overlay buffers if available, otherwise use fallback
     if (_screenDrawLayer && _screenDrawLayer->hasContent()) {
         _screenDrawLayer->prepareForRender();
@@ -5471,10 +5476,15 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
         bgEntries[18].buffer = _uniformBuffer;  // Uniform buffer for overlay uniforms
         bgEntries[18].size = 48;
     }
+#endif
 
     WGPUBindGroupDescriptor bindGroupDesc = {};
     bindGroupDesc.layout = shaderMgr->getGridBindGroupLayout();
+#ifdef __EMSCRIPTEN__
+    bindGroupDesc.entryCount = 15;
+#else
     bindGroupDesc.entryCount = 19;
+#endif
     bindGroupDesc.entries = bgEntries;
     _bindGroup = wgpuDeviceCreateBindGroup(device, &bindGroupDesc);
     if (!_bindGroup) {
