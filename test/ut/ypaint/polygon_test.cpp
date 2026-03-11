@@ -17,7 +17,7 @@
 
 #include "yetty/ypaint/ypaint-buffer.h"
 #include "yetty/ypaint/ypaint-types.gen.h"
-#include <yetty/ypaint-builder.h>
+#include <yetty/ypaint/painter.h>
 #include <yetty/gpu-allocator.h>
 
 #include <cstring>

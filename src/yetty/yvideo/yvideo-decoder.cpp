@@ -37,7 +37,7 @@ public:
             return Err<void>("dav1d_open failed: " + std::to_string(ret));
         }
 
-        yinfo("AV1Decoder: initialized dav1d with {} threads", settings.n_threads);
+        ydebug("AV1Decoder: initialized dav1d with {} threads", settings.n_threads);
         return Ok();
     }
 
@@ -168,7 +168,7 @@ public:
             return Err<void>("H264 decoder Initialize failed");
         }
 
-        yinfo("H264Decoder: initialized openh264");
+        ydebug("H264Decoder: initialized openh264");
         return Ok();
     }
 
@@ -209,7 +209,7 @@ public:
             return Ok(std::nullopt);
         }
 
-        yinfo("H264Decoder::getFrame: got frame!");
+        ydebug("H264Decoder::getFrame: got frame!");
 
         // Copy YUV data to internal buffer (openh264 may reuse buffers)
         int width = bufInfo.UsrData.sSystemBuffer.iWidth;
@@ -217,12 +217,12 @@ public:
         int yStride = bufInfo.UsrData.sSystemBuffer.iStride[0];
         int uvStride = bufInfo.UsrData.sSystemBuffer.iStride[1];
         
-        yinfo("H264Decoder::getFrame: {}x{} yStride={} uvStride={}", width, height, yStride, uvStride);
+        ydebug("H264Decoder::getFrame: {}x{} yStride={} uvStride={}", width, height, yStride, uvStride);
 
         size_t ySize = static_cast<size_t>(yStride * height);
         size_t uvSize = static_cast<size_t>(uvStride * (height / 2));
         
-        yinfo("H264Decoder::getFrame: ySize={} uvSize={}", ySize, uvSize);
+        ydebug("H264Decoder::getFrame: ySize={} uvSize={}", ySize, uvSize);
 
         _yBuffer.resize(ySize);
         _uBuffer.resize(uvSize);
@@ -328,7 +328,7 @@ public:
                 auto decoderRes = Decoder::createAV1();
                 if (!decoderRes) return Err<void>("Failed to create AV1 decoder", decoderRes);
                 _decoder = *decoderRes;
-                yinfo("VideoSource: detected raw AV1 OBU stream");
+                ydebug("VideoSource: detected raw AV1 OBU stream");
                 return Ok();
             }
         }
@@ -409,7 +409,7 @@ private:
     };
 
     Result<void> openMP4() {
-        yinfo("VideoSource::openMP4: data.size={}", _data.size());
+        ydebug("VideoSource::openMP4: data.size={}", _data.size());
         
         // Debug: print first 32 bytes
         std::string hexDump;
@@ -418,7 +418,7 @@ private:
             snprintf(buf, sizeof(buf), "%02x ", _data[i]);
             hexDump += buf;
         }
-        yinfo("VideoSource::openMP4: first 32 bytes: {}", hexDump);
+        ydebug("VideoSource::openMP4: first 32 bytes: {}", hexDump);
 
         MP4D_demux_t mp4 = {};
 
@@ -433,7 +433,7 @@ private:
             return 0;  // Success
         }, this, static_cast<int64_t>(_data.size()));
 
-        yinfo("VideoSource::openMP4: MP4D_open returned {}", res);
+        ydebug("VideoSource::openMP4: MP4D_open returned {}", res);
 
         if (res == 0) {
             yerror("VideoSource::openMP4: MP4D_open returned 0 (no tracks?)");
@@ -489,7 +489,7 @@ private:
                 _spsPps.push_back(0x01);
                 const uint8_t* spsData = static_cast<const uint8_t*>(sps);
                 _spsPps.insert(_spsPps.end(), spsData, spsData + spsBytes);
-                yinfo("VideoSource: extracted SPS[{}] {} bytes", spsIdx, spsBytes);
+                ydebug("VideoSource: extracted SPS[{}] {} bytes", spsIdx, spsBytes);
                 spsIdx++;
             }
 
@@ -503,11 +503,11 @@ private:
                 _spsPps.push_back(0x01);
                 const uint8_t* ppsData = static_cast<const uint8_t*>(pps);
                 _spsPps.insert(_spsPps.end(), ppsData, ppsData + ppsBytes);
-                yinfo("VideoSource: extracted PPS[{}] {} bytes", ppsIdx, ppsBytes);
+                ydebug("VideoSource: extracted PPS[{}] {} bytes", ppsIdx, ppsBytes);
                 ppsIdx++;
             }
 
-            yinfo("VideoSource: total SPS/PPS data {} bytes", _spsPps.size());
+            ydebug("VideoSource: total SPS/PPS data {} bytes", _spsPps.size());
         }
 
         // Extract sample offsets
@@ -524,7 +524,7 @@ private:
 
         MP4D_close(&mp4);
 
-        yinfo("VideoSource: opened MP4 {}x{} @ {:.1f}fps, {} frames, codec={}",
+        ydebug("VideoSource: opened MP4 {}x{} @ {:.1f}fps, {} frames, codec={}",
               _width, _height, _frameRate, _samples.size(),
               _codec == VideoCodec::H264 ? "H264" : "AV1");
 
@@ -537,7 +537,7 @@ private:
 
         // For H.264, feed SPS/PPS first and decode to configure the decoder
         if (_codec == VideoCodec::H264 && !_spsPps.empty()) {
-            yinfo("VideoSource: feeding SPS/PPS to decoder ({} bytes)", _spsPps.size());
+            ydebug("VideoSource: feeding SPS/PPS to decoder ({} bytes)", _spsPps.size());
             if (auto res = _decoder->feed(std::span<const uint8_t>(_spsPps)); !res) {
                 return Err<void>("Failed to feed SPS/PPS", res);
             }

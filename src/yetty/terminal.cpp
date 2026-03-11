@@ -219,7 +219,7 @@ private:
             });
 
             _running = true;
-            yinfo("Terminal started telnet: {} ({}x{})", telnetAddress, cols, rows);
+            ydebug("Terminal started telnet: {} ({}x{})", telnetAddress, cols, rows);
             return Ok();
         }
 
@@ -260,7 +260,7 @@ private:
         }
 
         _running = true;
-        yinfo("Terminal started WebPTY: {} ({}x{})", vmConfig, cols, rows);
+        ydebug("Terminal started WebPTY: {} ({}x{})", vmConfig, cols, rows);
         return Ok();
 #else
 #ifndef _WIN32
@@ -287,7 +287,7 @@ private:
                 return Err<void>("Failed to initialize TelnetPtyReader", res);
             }
             _ptyReader = reader;
-            yinfo("Terminal started telnet: {} ({}x{})", telnetAddress, cols, rows);
+            ydebug("Terminal started telnet: {} ({}x{})", telnetAddress, cols, rows);
         } else
 #endif
         {
@@ -335,7 +335,7 @@ private:
             }
             ydebug("PtyReader::create SUCCESS");
             _ptyReader = *readerResult;
-            yinfo("Terminal started PTY: {} ({}x{})", shellPath, cols, rows);
+            ydebug("Terminal started PTY: {} ({}x{})", shellPath, cols, rows);
         }
 
         // Set up callbacks

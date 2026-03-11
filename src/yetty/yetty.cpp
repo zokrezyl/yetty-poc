@@ -277,7 +277,7 @@ Result<Yetty::Ptr> Yetty::createImpl(ContextType&, struct android_app* app) noex
 //=============================================================================
 
 Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
-    yinfo("Yetty starting...");
+    ydebug("Yetty starting...");
 
     ydebug("init: parseArgs");
     if (auto res = parseArgs(argc, argv); !res) return res;
@@ -435,7 +435,7 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     if (auto res = _rpcServer->start(); !res) {
         return Err<void>("Failed to start RPC server", res);
     }
-    yinfo("RPC server started on {}", _rpcServer->socketPath());
+    ydebug("RPC server started on {}", _rpcServer->socketPath());
 #endif
 
     if (auto res = initCallbacks(); !res) return res;
@@ -1109,7 +1109,7 @@ Result<void> YettyImpl::initWebGPU() noexcept {
         ydebug("Headless mode: using default surface format BGRA8Unorm, {}x{}", _surfaceWidth, _surfaceHeight);
     }
 
-    yinfo("WebGPU initialized");
+    ydebug("WebGPU initialized");
     return Ok();
 }
 

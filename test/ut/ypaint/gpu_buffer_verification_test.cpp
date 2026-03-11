@@ -13,7 +13,7 @@
 //=============================================================================
 
 #include <boost/ut.hpp>
-#include <yetty/ypaint-builder.h>
+#include <yetty/ypaint/painter.h>
 #include <yetty/card-manager.h>
 #include <yetty/gpu-allocator.h>
 #include "yetty/ypaint/ypaint-buffer.h"

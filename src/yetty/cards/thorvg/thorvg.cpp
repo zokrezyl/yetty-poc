@@ -10,7 +10,6 @@
 #include <ytrace/ytrace.hpp>
 #include <cmath>
 #include <fstream>
-#include <iostream>
 #include <sstream>
 
 namespace {
@@ -77,7 +76,7 @@ public:
 
     Result<void> allocateBuffers() override {
         if (!_builder) return Ok();
-        std::cerr << "ThorVG::allocateBuffers: prims=" << _buffer->primCount() << std::endl;
+        ydebug("ThorVG::allocateBuffers: prims={}", _buffer->primCount());
         return _builder->allocateBuffers();
     }
 

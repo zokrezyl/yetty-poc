@@ -1,6 +1,7 @@
 # ypaint library (scrolling SDF renderer)
 add_library(yetty_ypaint STATIC
-    ypaint-builder.cpp
+    canvas.cpp
+    painter.cpp
     ypaint-buffer.cpp
     animation.cpp
     yaml2ypaint.cpp

@@ -28,7 +28,7 @@ add_executable(ypaint_tests
     polygon_test.cpp
     # YPaint core
     ${CMAKE_SOURCE_DIR}/src/yetty/ypaint/ypaint-buffer.cpp
-    ${CMAKE_SOURCE_DIR}/src/yetty/ypaint/ypaint-builder.cpp
+    ${CMAKE_SOURCE_DIR}/src/yetty/ypaint/painter.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/ypaint/triangulate.cpp
     # Builder transitive deps
     ${CMAKE_SOURCE_DIR}/src/yetty/msdf-atlas.cpp
@@ -80,7 +80,7 @@ add_test(NAME ypaint_tests COMMAND ypaint_tests)
 add_executable(ypaint_debug_grid
     debug_grid.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/ypaint/ypaint-buffer.cpp
-    ${CMAKE_SOURCE_DIR}/src/yetty/ypaint/ypaint-builder.cpp
+    ${CMAKE_SOURCE_DIR}/src/yetty/ypaint/painter.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/ypaint/triangulate.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/msdf-atlas.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/msdf-cdb-provider.cpp

@@ -8,8 +8,8 @@
 #include "yetty/thorvg/thorvg-renderer.h"
 #include "yetty/ydraw/ydraw-buffer.h"
 #include "yetty/ydraw/ydraw-types.gen.h"
+#include <ytrace/ytrace.hpp>
 #include <thorvg.h>
-#include <cstdio>
 #include <cstring>
 
 using namespace boost::ut;
@@ -48,7 +48,7 @@ static bool hasBezierPrimitive(const YDrawBuffer& buffer) {
 [[maybe_unused]] static void dumpPrimTypes(const YDrawBuffer& buffer) {
     buffer.forEachPrim([&](uint32_t id, const float* data, uint32_t /*wordCount*/) {
         uint32_t typeCode = *reinterpret_cast<const uint32_t*>(data);
-        std::fprintf(stderr, "  Prim %u: type=%u\n", id, typeCode);
+        ydebug("  Prim {}: type={}", id, typeCode);
     });
 }
 
