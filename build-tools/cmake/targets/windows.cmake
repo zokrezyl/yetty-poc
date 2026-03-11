@@ -68,10 +68,19 @@ add_dependencies(yetty generate-cdb copy-shaders copy-assets)
 # Copy DirectX runtime DLLs needed by Dawn (shader compiler + DXIL signing)
 if(WIN32)
     # Find Windows SDK Redist directory for DirectX DLLs
-    file(GLOB _dx_redist_dirs "C:/Program Files (x86)/Windows Kits/10/Redist/*/x64")
-    if(_dx_redist_dirs)
-        list(SORT _dx_redist_dirs ORDER DESCENDING)
-        list(GET _dx_redist_dirs 0 _dx_redist_dir)
+    # Check both versioned paths (Redist/<version>/x64) and direct path (Redist/D3D/x64)
+    set(_dx_redist_dir "")
+    if(EXISTS "C:/Program Files (x86)/Windows Kits/10/Redist/D3D/x64/d3dcompiler_47.dll")
+        set(_dx_redist_dir "C:/Program Files (x86)/Windows Kits/10/Redist/D3D/x64")
+    else()
+        file(GLOB _dx_redist_dirs "C:/Program Files (x86)/Windows Kits/10/Redist/*/x64")
+        if(_dx_redist_dirs)
+            list(SORT _dx_redist_dirs ORDER DESCENDING)
+            list(GET _dx_redist_dirs 0 _dx_redist_dir)
+        endif()
+    endif()
+
+    if(_dx_redist_dir)
         message(STATUS "DirectX Redist dir: ${_dx_redist_dir}")
 
         # Copy d3dcompiler_47.dll
