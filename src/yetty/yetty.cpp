@@ -2488,13 +2488,7 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
     // _inRender cleared by wgpuQueueOnSubmittedWorkDone callback when GPU finishes
     WGPUQueueWorkDoneCallbackInfo renderDoneCb = {};
     renderDoneCb.mode = WGPUCallbackMode_AllowSpontaneous;
-#if defined(WEBGPU_BACKEND_WGPU)
-    // wgpu-native: no WGPUStringView message parameter
-    renderDoneCb.callback = [](WGPUQueueWorkDoneStatus, void* ud1, void*) {
-#else
-    // Dawn: includes message parameter
     renderDoneCb.callback = [](WGPUQueueWorkDoneStatus, WGPUStringView, void* ud1, void*) {
-#endif
         auto t = std::chrono::high_resolution_clock::now();
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
         ydebug("[TIME] GPU DONE callback at {}ms", ms);

@@ -1,5 +1,5 @@
 # WebGPU - Graphics API abstraction
-# Supports: Dawn, wgpu-native, Emscripten emdawnwebgpu
+# Supports: Dawn, Emscripten emdawnwebgpu
 if(TARGET webgpu)
     return()
 endif()
@@ -7,7 +7,7 @@ endif()
 message(STATUS "WebGPU backend: ${WEBGPU_BACKEND}")
 
 if(YETTY_ANDROID)
-    # Android: Use pre-built WebGPU library from ANDROID_BUILD_DIR
+    # Android: Use pre-built Dawn WebGPU library from ANDROID_BUILD_DIR
     if(NOT DEFINED ANDROID_BUILD_DIR)
         if(DEFINED ENV{ANDROID_BUILD_DIR})
             set(ANDROID_BUILD_DIR $ENV{ANDROID_BUILD_DIR})
@@ -22,37 +22,21 @@ if(YETTY_ANDROID)
     endif()
     message(STATUS "Android ABI: ${ANDROID_ABI}")
 
-    if(WEBGPU_BACKEND STREQUAL "dawn")
-        set(WEBGPU_LIB "${ANDROID_BUILD_DIR}/dawn-libs/${ANDROID_ABI}/libwebgpu_dawn.a")
-        set(WEBGPU_INCLUDE "${ANDROID_BUILD_DIR}/dawn-include")
-        set(WEBGPU_BACKEND_DEFINE "WEBGPU_BACKEND_DAWN")
-        set(WEBGPU_IS_STATIC TRUE)
-    else()
-        set(WEBGPU_LIB "${ANDROID_BUILD_DIR}/wgpu-libs/${ANDROID_ABI}/libwgpu_native.so")
-        set(WEBGPU_INCLUDE "${ANDROID_BUILD_DIR}/wgpu-include")
-        set(WEBGPU_BACKEND_DEFINE "WEBGPU_BACKEND_WGPU")
-        set(WEBGPU_IS_STATIC FALSE)
-    endif()
+    # Only Dawn is supported on Android
+    set(WEBGPU_LIB "${ANDROID_BUILD_DIR}/dawn-libs/${ANDROID_ABI}/libwebgpu_dawn.a")
+    set(WEBGPU_INCLUDE "${ANDROID_BUILD_DIR}/dawn-include")
 
     if(NOT EXISTS "${WEBGPU_LIB}")
-        message(FATAL_ERROR "WebGPU library not found at ${WEBGPU_LIB}")
+        message(FATAL_ERROR "WebGPU Dawn library not found at ${WEBGPU_LIB}\n"
+            "Run the Android Dawn build first: make _android-dawn-libs")
     endif()
 
-    if(WEBGPU_IS_STATIC)
-        add_library(webgpu STATIC IMPORTED GLOBAL)
-        set_target_properties(webgpu PROPERTIES
-            IMPORTED_LOCATION "${WEBGPU_LIB}"
-            INTERFACE_INCLUDE_DIRECTORIES "${WEBGPU_INCLUDE}"
-        )
-    else()
-        add_library(webgpu SHARED IMPORTED GLOBAL)
-        set_target_properties(webgpu PROPERTIES
-            IMPORTED_LOCATION "${WEBGPU_LIB}"
-            IMPORTED_NO_SONAME TRUE
-            INTERFACE_INCLUDE_DIRECTORIES "${WEBGPU_INCLUDE}"
-        )
-    endif()
-    target_compile_definitions(webgpu INTERFACE ${WEBGPU_BACKEND_DEFINE})
+    add_library(webgpu STATIC IMPORTED GLOBAL)
+    set_target_properties(webgpu PROPERTIES
+        IMPORTED_LOCATION "${WEBGPU_LIB}"
+        INTERFACE_INCLUDE_DIRECTORIES "${WEBGPU_INCLUDE}"
+    )
+    target_compile_definitions(webgpu INTERFACE WEBGPU_BACKEND_DAWN)
 
 elseif(EMSCRIPTEN)
     # Emscripten: WebGPU via emdawnwebgpu port
@@ -61,10 +45,6 @@ elseif(EMSCRIPTEN)
     message(STATUS "WebGPU: Using emdawnwebgpu port for Emscripten")
 
 else()
-    # Desktop: Auto-download from GitHub releases
-    if(WEBGPU_BACKEND STREQUAL "dawn")
-        include(${YETTY_ROOT}/build-tools/cmake/Dawn.cmake)
-    else()
-        include(${YETTY_ROOT}/build-tools/cmake/WgpuNative.cmake)
-    endif()
+    # Desktop: Only Dawn is supported
+    include(${YETTY_ROOT}/build-tools/cmake/Dawn.cmake)
 endif()

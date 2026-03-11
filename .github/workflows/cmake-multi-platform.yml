@@ -357,7 +357,9 @@ jobs:
         cp build-webasm-ytrace-release/yetty.wasm site/
         cp build-webasm-ytrace-release/yetty.data site/
         cp -r build-webasm-ytrace-release/jslinux site/
+        cp -r build-webasm-ytrace-release/vfsync site/
         ls -la site/
+        ls -la site/vfsync/u/os/yetty-alpine/ || echo "vfsync structure check"
 
     - name: Upload WebAssembly artifacts
       uses: actions/upload-artifact@v4
@@ -398,6 +400,8 @@ jobs:
         ls -la site/
         echo "=== jslinux directory ==="
         ls -la site/jslinux/ || echo "jslinux not found"
+        echo "=== vfsync directory ==="
+        ls -la site/vfsync/u/os/yetty-alpine/ || echo "vfsync not found"
 
     - name: Setup Pages
       uses: actions/configure-pages@v4

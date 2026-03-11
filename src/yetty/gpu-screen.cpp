@@ -3228,7 +3228,7 @@ int GPUScreenImpl::onOSC(int command, VTermStringFragment frag, void *user) {
   // (gpu stats), 666671 (fps), 666673 (screen draw)
   if (command != YETTY_OSC_VENDOR_ID && command != 666667 &&
       command != 666668 && command != 666669 && command != 666670 &&
-      command != 666671 && command != 666673 && command != 666675) {
+      command != 666671 && command != 666673) {
     ywarn(">>> onOSC: ignoring non-yetty command {}", command);
     return 0;
   }
