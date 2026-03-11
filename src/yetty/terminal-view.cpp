@@ -21,7 +21,7 @@ public:
             return Err<void>("Failed to create Terminal", terminalResult);
         }
         terminal_ = *terminalResult;
-        ydebug("TerminalView created");
+        yinfo("TerminalView created");
         return Ok();
     }
 

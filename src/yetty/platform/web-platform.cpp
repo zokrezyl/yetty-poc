@@ -45,7 +45,7 @@ public:
         _vmConfig = vmConfig;
         _running = true;
 
-        ydebug("WebPTY[{}]: Starting with config '{}' ({}x{})", _id, vmConfig, cols, rows);
+        yinfo("WebPTY[{}]: Starting with config '{}' ({}x{})", _id, vmConfig, cols, rows);
 
         // Create iframe and start JSLinux emulator via JavaScript
         EM_ASM({
@@ -72,7 +72,7 @@ public:
         if (!_running) return;
         _running = false;
 
-        ydebug("WebPTY[{}]: Stopping", _id);
+        yinfo("WebPTY[{}]: Stopping", _id);
 
         // Remove iframe
         EM_ASM({
@@ -192,7 +192,7 @@ public:
         emscripten_set_wheel_callback("#canvas", this, true, wheelCallback);
         emscripten_set_resize_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, this, true, resizeCallback);
 
-        ydebug("Web platform window created: {}x{}", width, height);
+        yinfo("Web platform window created: {}x{}", width, height);
         return Ok();
     }
 
@@ -519,7 +519,7 @@ private:
 Result<Platform::Ptr> Platform::create(bool headless) {
     (void)headless;
     auto platform = std::make_shared<WebPlatform>();
-    ydebug("Web platform created");
+    yinfo("Web platform created");
     return Ok<Ptr>(std::move(platform));
 }
 

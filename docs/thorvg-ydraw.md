@@ -92,8 +92,7 @@ class YDrawRenderer : public RenderMethod {
     }
     
     bool postRender() override {
-        _builder->clear();
-        _builder->addYdrawBuffer(_buffer);
+        _builder->calculate();
         // trigger GPU upload
     }
 };

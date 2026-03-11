@@ -18,7 +18,7 @@
 #include <cstdlib>
 
 static void sigint_handler(int sig) {
-    ydebug("SIGINT received! (signal {})", sig);
+    yinfo("SIGINT received! (signal {})", sig);
 }
 
 #if YETTY_WEB
@@ -429,7 +429,7 @@ int main(int argc, char* argv[]) {
     spdlog::set_level(spdlog::level::trace);
 
     // VERSION MARKER - change this number to verify fresh wasm loaded
-    ydebug("=== YETTY BUILD VERSION 001 ===");
+    yinfo("=== YETTY BUILD VERSION 001 ===");
     spdlog::cfg::load_env_levels();
 
     // Debug: catch SIGINT to see if process receives it

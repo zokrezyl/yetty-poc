@@ -20,7 +20,7 @@ public:
         _rows = config.rows;
         _running = true;
 
-        ydebug("PtyReaderWeb: Initialized with VM config={}, {}x{}",
+        yinfo("PtyReaderWeb: Initialized with VM config={}, {}x{}",
               _vmConfig, _cols, _rows);
 
         // TODO: Initialize JSLinux VM connection here

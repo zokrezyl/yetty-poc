@@ -279,7 +279,7 @@ Result<void> CardManagerImpl::init() noexcept {
         // Continue without shm - streaming won't work but local cards will
     } else {
         _shmData = *shmRes;
-        ydebug("CardManager: created shared memory '{}' ({} bytes)", shmName, INITIAL_SHM_SIZE);
+        yinfo("CardManager: created shared memory '{}' ({} bytes)", shmName, INITIAL_SHM_SIZE);
     }
 
     // Create buffer manager with shm backing
@@ -303,7 +303,7 @@ Result<void> CardManagerImpl::init() noexcept {
         return Err<void>("Failed to create shared bind group", res);
     }
 
-    ydebug("CardManager: initialized with metadata, buffer, and texture managers");
+    yinfo("CardManager: initialized with metadata, buffer, and texture managers");
     return Ok();
 }
 
@@ -454,7 +454,7 @@ Result<void> CardManagerImpl::createSharedBindGroup() {
     _bindGroupHasRealAtlas = atlasReady;
     _gpuContext->sharedBindGroup = _sharedBindGroup;
 
-    ydebug("CardManager: bind group created (atlas={})", atlasReady ? "real" : "dummy");
+    yinfo("CardManager: bind group created (atlas={})", atlasReady ? "real" : "dummy");
     return Ok();
 }
 

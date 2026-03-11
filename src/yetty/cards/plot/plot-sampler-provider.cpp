@@ -14,7 +14,7 @@ uint32_t PlotSamplerProvider::registerSampler(const Config& config) {
     uint32_t idx = _nextIndex.fetch_add(1);
     _samplers[idx] = config;
     _dirty = true;
-    ydebug("PlotSamplerProvider: registered sampler[{}]", idx);
+    yinfo("PlotSamplerProvider: registered sampler[{}]", idx);
     return idx;
 }
 
@@ -22,7 +22,7 @@ void PlotSamplerProvider::unregisterSampler(uint32_t samplerIndex) {
     std::lock_guard<std::mutex> lock(_mutex);
     if (_samplers.erase(samplerIndex) > 0) {
         _dirty = true;
-        ydebug("PlotSamplerProvider: unregistered sampler[{}]", samplerIndex);
+        yinfo("PlotSamplerProvider: unregistered sampler[{}]", samplerIndex);
     }
 }
 
@@ -31,7 +31,7 @@ void PlotSamplerProvider::registerWith(std::shared_ptr<ShaderManager> shaderMgr)
     _shaderMgr = shaderMgr;
     shaderMgr->addProvider(shared_from_this(), "plotSampleDispatch");
     _registered = true;
-    ydebug("PlotSamplerProvider: registered with ShaderManager");
+    yinfo("PlotSamplerProvider: registered with ShaderManager");
 }
 
 std::string PlotSamplerProvider::getCode() const {

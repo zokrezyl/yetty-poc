@@ -83,7 +83,7 @@ public:
         }
 
         _running = true;
-        ydebug("RpcServer: listening on {}", _socketPath);
+        yinfo("RpcServer: listening on {}", _socketPath);
         return Ok();
     }
 
@@ -105,13 +105,13 @@ public:
         }
 
         unlink(_socketPath.c_str());
-        ydebug("RpcServer: stopped");
+        yinfo("RpcServer: stopped");
         return Ok();
     }
 
     void registerHandler(Channel channel, const std::string& method, RpcHandler handler) override {
         _handlers[{channel, method}] = std::move(handler);
-        ydebug("RpcServer: registered handler for channel={} method={}",
+        yinfo("RpcServer: registered handler for channel={} method={}",
               static_cast<uint32_t>(channel), method);
     }
 
@@ -154,7 +154,7 @@ private:
             onRead
         );
 
-        ydebug("RpcServer: client connected (total={})", self->_clients.size());
+        yinfo("RpcServer: client connected (total={})", self->_clients.size());
     }
 
     // libuv asks us where to read into — hand it the unpacker's
@@ -174,7 +174,7 @@ private:
             if (nread != UV_EOF) {
                 yerror("RpcServer: read error: {}", uv_strerror(static_cast<int>(nread)));
             }
-            ydebug("RpcServer: client disconnected");
+            yinfo("RpcServer: client disconnected");
             uv_close(reinterpret_cast<uv_handle_t*>(stream), onClientClosed);
             return;
         }

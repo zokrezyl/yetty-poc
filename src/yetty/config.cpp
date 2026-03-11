@@ -183,64 +183,64 @@ public:
     ~ConfigImpl() override = default;
 
     Result<void> init() noexcept {
-        ydebug("Config::init starting...");
+        yinfo("Config::init starting...");
         std::string effectivePath = _configPath;
 #if YETTY_WEB
         // On web, skip config file loading - use defaults
-        ydebug("Config::init - web build, using defaults");
+        yinfo("Config::init - web build, using defaults");
 #else
         if (effectivePath.empty()) {
-            ydebug("Config::init - checking XDG path...");
+            yinfo("Config::init - checking XDG path...");
             auto xdgPath = getXDGConfigPath();
-            ydebug("Config::init - XDG path: {}", xdgPath.string());
+            yinfo("Config::init - XDG path: {}", xdgPath.string());
             if (std::filesystem::exists(xdgPath)) {
                 effectivePath = xdgPath.string();
             }
         }
 
         if (!effectivePath.empty()) {
-            ydebug("Config::init - loading file: {}", effectivePath);
+            yinfo("Config::init - loading file: {}", effectivePath);
             if (auto res = loadFile(effectivePath); !res) {
                 ywarn("Failed to load config file {}: {}", effectivePath, error_msg(res));
             } else {
-                ydebug("Loaded config from: {}", effectivePath);
+                yinfo("Loaded config from: {}", effectivePath);
             }
         }
 #endif
 
-        ydebug("Config::init - applying env overrides...");
+        yinfo("Config::init - applying env overrides...");
         applyEnvOverrides(_root, "");
 
         if (_cmdOverrides && !_cmdOverrides.IsNull()) {
-            ydebug("Config::init - applying cmd overrides...");
+            yinfo("Config::init - applying cmd overrides...");
             yamlToConfigNode(_cmdOverrides, _root);
         }
 
-        ydebug("Config::init - checking plugin paths...");
+        yinfo("Config::init - checking plugin paths...");
 #if YETTY_WEB
         // Skip plugin paths on web - not needed
         std::vector<std::string> paths;
-        ydebug("Config::init - web build, skipping plugin paths");
+        yinfo("Config::init - web build, skipping plugin paths");
 #else
         auto paths = pluginPaths();
-        ydebug("Config::init - got {} plugin paths", paths.size());
+        yinfo("Config::init - got {} plugin paths", paths.size());
 #endif
         if (paths.empty()) {
-            ydebug("Config::init - getting default plugin paths...");
+            yinfo("Config::init - getting default plugin paths...");
             auto defaults = getDefaultPluginPaths();
-            ydebug("Config::init - got {} default paths", defaults.size());
+            yinfo("Config::init - got {} default paths", defaults.size());
             std::string pathStr;
             for (size_t i = 0; i < defaults.size(); ++i) {
                 if (i > 0) pathStr += ":";
                 pathStr += defaults[i];
             }
-            ydebug("Config::init - setting plugins path: {}", pathStr);
+            yinfo("Config::init - setting plugins path: {}", pathStr);
             _root.children["plugins"].values["path"] = Value(pathStr);
-            ydebug("Config::init - plugins path set");
+            yinfo("Config::init - plugins path set");
         }
 
         _initialized = true;
-        ydebug("Config::init done");
+        yinfo("Config::init done");
         return Ok();
     }
 

@@ -32,7 +32,7 @@ Result<void> thorvgInit() {
         }
         uint32_t major, minor, micro;
         const char* version = tvg::Initializer::version(&major, &minor, &micro);
-        ydebug("ThorVG engine initialized: {}", version ? version : "unknown");
+        yinfo("ThorVG engine initialized: {}", version ? version : "unknown");
     }
     ++s_thorvgRefCount;
     return Ok();
@@ -42,7 +42,7 @@ void thorvgTerm() {
     std::lock_guard<std::mutex> lock(s_thorvgMutex);
     if (--s_thorvgRefCount == 0) {
         tvg::Initializer::term();
-        ydebug("ThorVG engine terminated");
+        yinfo("ThorVG engine terminated");
     }
 }
 
@@ -192,7 +192,7 @@ public:
         renderWithAccessor(_picture);
 
         std::cerr << "ThorVgRenderer::render: prims=" << _buffer->primCount() << std::endl;
-        ydebug("ThorVgRenderer::render: frame={:.1f} prims before={} after={}", 
+        yinfo("ThorVgRenderer::render: frame={:.1f} prims before={} after={}", 
               _currentFrame, beforeCount, _buffer->primCount());
         return Ok();
     }
@@ -428,7 +428,7 @@ private:
                                 uint32_t strokeColor, float strokeWidth) {
         // Check for simple rectangle pattern: MoveTo + 3*LineTo + Close
         if (cmdCount != 5) {
-            ydebug("tryRenderAsGradientBox: cmdCount={} (expected 5)", cmdCount);
+            yinfo("tryRenderAsGradientBox: cmdCount={} (expected 5)", cmdCount);
             return false;
         }
         if (cmds[0] != tvg::PathCommand::MoveTo) return false;
@@ -474,7 +474,7 @@ private:
             worldGr = gr * std::max(maxX - minX, maxY - minY);
         }
         
-        ydebug("tryRenderAsGradientBox: linear={} box=({},{}) {}x{} grad=({},{})→({},{}) colors=0x{:08x},0x{:08x}",
+        yinfo("tryRenderAsGradientBox: linear={} box=({},{}) {}x{} grad=({},{})→({},{}) colors=0x{:08x},0x{:08x}",
               hasLinearGradient, cx, cy, hw*2, hh*2, worldGx1, worldGy1, worldGx2, worldGy2, gradColor1, gradColor2);
         
         if (hasLinearGradient) {
@@ -662,7 +662,7 @@ private:
         float hw = (maxX - minX) / 2.0f;  // half width
         float hh = (maxY - minY) / 2.0f;  // half height
         
-        ydebug("Box detected: center=({},{}) halfSize=({},{}) round={} fill=0x{:08X}", cx, cy, hw, hh, cornerRadius, fillColor);
+        yinfo("Box detected: center=({},{}) halfSize=({},{}) round={} fill=0x{:08X}", cx, cy, hw, hh, cornerRadius, fillColor);
         
         auto result = _buffer->addBox(
             0,              // layer

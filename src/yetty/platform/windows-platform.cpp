@@ -41,7 +41,7 @@ public:
         _cols = cols;
         _rows = rows;
 
-        ydebug("ConPTY[{}]: Starting shell '{}' ({}x{})", _id, shell, cols, rows);
+        yinfo("ConPTY[{}]: Starting shell '{}' ({}x{})", _id, shell, cols, rows);
 
         // Create pipes for PTY input/output
         SECURITY_ATTRIBUTES sa = { sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE };
@@ -54,10 +54,6 @@ public:
             CloseHandle(_pipeInWrite);
             return Err<void>("Failed to create output pipe");
         }
-
-        // Set console code page to UTF-8 so child processes handle Unicode correctly
-        SetConsoleCP(CP_UTF8);
-        SetConsoleOutputCP(CP_UTF8);
 
         // Create pseudo console (ConPTY)
         COORD size = { static_cast<SHORT>(cols), static_cast<SHORT>(rows) };
@@ -145,7 +141,7 @@ public:
         // Start reader thread
         _readerThread = std::thread([this]() { readerThreadFunc(); });
 
-        ydebug("ConPTY[{}]: Started, PID={}", _id, GetProcessId(_hProcess));
+        yinfo("ConPTY[{}]: Started, PID={}", _id, GetProcessId(_hProcess));
         return Ok();
     }
 
@@ -153,7 +149,7 @@ public:
         if (!_running) return;
         _running = false;
 
-        ydebug("ConPTY[{}]: Stopping", _id);
+        yinfo("ConPTY[{}]: Stopping", _id);
 
         if (_hPC) {
             ClosePseudoConsole(_hPC);
@@ -266,7 +262,7 @@ public:
         _headless = headless;
         if (_headless) {
             // Headless mode: no GLFW, use std::chrono for timing
-            ydebug("Platform: headless mode (no GLFW)");
+            yinfo("Platform: headless mode (no GLFW)");
             return Ok();
         }
 
@@ -303,7 +299,7 @@ public:
         _cursorResizeH = glfwCreateStandardCursor(GLFW_HRESIZE_CURSOR);
         _cursorResizeV = glfwCreateStandardCursor(GLFW_VRESIZE_CURSOR);
 
-        ydebug("GLFW window created: {}x{}", width, height);
+        yinfo("GLFW window created: {}x{}", width, height);
         return Ok();
     }
 
@@ -367,7 +363,7 @@ public:
         glfwSetWindowIcon(_window, 1, &icon);
 
         stbi_image_free(pixels);
-        ydebug("Set window icon from embedded data ({}x{})", width, height);
+        yinfo("Set window icon from embedded data ({}x{})", width, height);
     }
 
     WGPUSurface createWGPUSurface(WGPUInstance instance) override {

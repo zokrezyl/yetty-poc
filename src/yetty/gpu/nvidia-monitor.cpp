@@ -111,7 +111,7 @@ bool NvidiaMonitor::initialize() {
         _deviceName = "NVIDIA GPU";
     }
 
-    ydebug("NVML: initialized, device: {}", _deviceName);
+    yinfo("NVML: initialized, device: {}", _deviceName);
     return true;
 }
 

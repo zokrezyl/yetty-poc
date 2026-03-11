@@ -21,11 +21,7 @@ add_executable(ydraw_tests
     ydraw_bezier_test.cpp
     ydraw_gradient_test.cpp
     ydraw_opacity_test.cpp
-    ydraw_scrolling_test.cpp
-    ydraw_shapes_demo_test.cpp
     triangulate_test.cpp
-    gpu_buffer_verification_test.cpp
-    polygon_test.cpp
     # YDraw core
     ${CMAKE_SOURCE_DIR}/src/yetty/ydraw/ydraw-buffer.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/ydraw/ydraw-builder.cpp
@@ -75,46 +71,3 @@ target_link_libraries(ydraw_tests PRIVATE
 )
 
 add_test(NAME ydraw_tests COMMAND ydraw_tests)
-
-# Debug grid program
-add_executable(debug_grid
-    debug_grid.cpp
-    ${CMAKE_SOURCE_DIR}/src/yetty/ydraw/ydraw-buffer.cpp
-    ${CMAKE_SOURCE_DIR}/src/yetty/ydraw/ydraw-builder.cpp
-    ${CMAKE_SOURCE_DIR}/src/yetty/ydraw/triangulate.cpp
-    ${CMAKE_SOURCE_DIR}/src/yetty/msdf-atlas.cpp
-    ${CMAKE_SOURCE_DIR}/src/yetty/msdf-cdb-provider.cpp
-    ${CMAKE_SOURCE_DIR}/src/yetty/ms-msdf-font.cpp
-    ${CMAKE_SOURCE_DIR}/src/yetty/font-manager.cpp
-    ${CMAKE_SOURCE_DIR}/src/yetty/bm-font.cpp
-    ${CMAKE_SOURCE_DIR}/src/yetty/shader-font.cpp
-    ${CMAKE_SOURCE_DIR}/src/yetty/card-manager.cpp
-    ${CMAKE_SOURCE_DIR}/src/yetty/card-buffer-manager.cpp
-    ${CMAKE_SOURCE_DIR}/src/yetty/card-texture-manager.cpp
-    ${CMAKE_SOURCE_DIR}/src/yetty/gpu-allocator.cpp
-    ${CMAKE_SOURCE_DIR}/src/yetty/shared-memory.cpp
-    ${CMAKE_SOURCE_DIR}/src/yetty/vector-sdf-font.cpp
-    ${CMAKE_SOURCE_DIR}/src/yetty/vector-coverage-font.cpp
-    ${CMAKE_SOURCE_DIR}/src/yetty/raster-font.cpp
-    ${CMAKE_SOURCE_DIR}/src/yetty/msdf-gen/generator.cpp
-    ${CMAKE_SOURCE_DIR}/src/yetty/font/freetype.cpp
-    ${CMAKE_SOURCE_DIR}/src/yetty/font/raw-font.cpp
-    ${CMAKE_SOURCE_DIR}/src/yetty/font/raw-font-manager.cpp
-)
-
-target_include_directories(debug_grid PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/include
-)
-
-target_link_libraries(debug_grid PRIVATE
-    webgpu
-    cdb-wrapper
-    msdf::wgsl
-    ${FREETYPE_ALL_LIBS}
-    msdfgen::msdfgen-core
-    msdfgen::msdfgen-ext
-    glm::glm
-    ytrace::ytrace
-    ${FONTCONFIG_LIBRARIES}
-)

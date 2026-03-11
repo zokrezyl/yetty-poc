@@ -92,7 +92,7 @@ public:
                 _glyphBase0 = font->getGlyphIndex('0');
                 _glyphDot = font->getGlyphIndex('.');
                 _glyphMinus = font->getGlyphIndex('-');
-                ydebug("YPlotCard: glyph indices: '0'={} '.'={} '-'={}",
+                yinfo("YPlotCard: glyph indices: '0'={} '.'={} '-'={}",
                       _glyphBase0, _glyphDot, _glyphMinus);
             }
         }
@@ -114,7 +114,7 @@ public:
         }
         _metaHandle = *metaResult;
 
-        ydebug("YPlotCard::init: allocated metadata at offset {}", _metaHandle.offset);
+        yinfo("YPlotCard::init: allocated metadata at offset {}", _metaHandle.offset);
 
         // Parse args
         if (auto res = parseArgs(_argsStr); !res) {
@@ -221,7 +221,7 @@ public:
             _dataHandle = *bufResult;
             std::memcpy(_dataHandle.data, _data.data(), dataSize);
             _cardMgr->bufferManager()->markBufferDirty(_dataHandle);
-            ydebug("YPlotCard::allocateBuffers: allocated data buffer at offset {}, {} floats",
+            yinfo("YPlotCard::allocateBuffers: allocated data buffer at offset {}, {} floats",
                   _dataHandle.offset, _data.size());
         }
 
@@ -267,7 +267,7 @@ public:
     //=========================================================================
 
     Result<void> update(const std::string& args, const std::string& payload) override {
-        ydebug("YPlotCard::update: args='{}' payload_len={}", args, payload.size());
+        yinfo("YPlotCard::update: args='{}' payload_len={}", args, payload.size());
 
         if (!args.empty()) {
             if (auto res = parseArgs(args); !res) {
@@ -338,7 +338,7 @@ public:
                     _zoom = newZoom;
                     _state->display().zoom = _zoom;
                     _metadataDirty = true;
-                    ydebug("YPlotCard::onEvent: zoom={:.2f}", _zoom);
+                    yinfo("YPlotCard::onEvent: zoom={:.2f}", _zoom);
                 }
                 return Ok(true);
             } else if (event.scroll.mods & GLFW_MOD_SHIFT) {
@@ -380,7 +380,7 @@ private:
             return Err<void>("YPlotCard::registerForEvents: failed to register Scroll", res);
         }
 
-        ydebug("YPlotCard {} registered for events (priority 1000)", id());
+        yinfo("YPlotCard {} registered for events (priority 1000)", id());
         return Ok();
     }
 
@@ -541,7 +541,7 @@ private:
         updateColorTable();
         _metadataDirty = true;
 
-        ydebug("YPlotCard: compiled {} functions, bytecode size={}",
+        yinfo("YPlotCard: compiled {} functions, bytecode size={}",
               _state->functionCount(), _bytecode.size());
 
         return Ok();
@@ -562,7 +562,7 @@ private:
     //=========================================================================
 
     Result<void> parsePayload(const std::string& payload) {
-        ydebug("YPlotCard::parsePayload: payload length={}", payload.size());
+        yinfo("YPlotCard::parsePayload: payload length={}", payload.size());
 
         // Parse comma or space separated float values
         std::vector<float> values;
@@ -584,7 +584,7 @@ private:
             }
         }
 
-        ydebug("YPlotCard::parsePayload: parsed {} values", values.size());
+        yinfo("YPlotCard::parsePayload: parsed {} values", values.size());
 
         if (values.empty()) {
             return Err<void>("No valid data points in payload");
@@ -626,7 +626,7 @@ private:
             _state->range().xMax = static_cast<float>(_data.size() - 1);
         }
 
-        ydebug("YPlotCard::calculateRange: y=[{}, {}] x=[0, {}]",
+        yinfo("YPlotCard::calculateRange: y=[{}, {}] x=[0, {}]",
               minVal, maxVal, _data.size() - 1);
     }
 

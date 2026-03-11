@@ -79,7 +79,7 @@ uint32_t PlotRendererProvider::registerRenderer(const std::string& name, const s
     uint32_t idx = _nextIndex.fetch_add(1);
     _renderers[idx] = {name, wgslCode, false};
     _dirty = true;
-    ydebug("PlotRendererProvider: registered renderer[{}] = '{}'", idx, name);
+    yinfo("PlotRendererProvider: registered renderer[{}] = '{}'", idx, name);
     return idx;
 }
 
@@ -89,7 +89,7 @@ void PlotRendererProvider::unregisterRenderer(uint32_t rendererIndex) {
     if (it != _renderers.end() && !it->second.builtin) {
         _renderers.erase(it);
         _dirty = true;
-        ydebug("PlotRendererProvider: unregistered renderer[{}]", rendererIndex);
+        yinfo("PlotRendererProvider: unregistered renderer[{}]", rendererIndex);
     }
 }
 
@@ -99,7 +99,7 @@ void PlotRendererProvider::registerWith(std::shared_ptr<ShaderManager> shaderMgr
     shaderMgr->addProvider(shared_from_this(), "plotRenderDispatch");
     _registered = true;
     _dirty = true;
-    ydebug("PlotRendererProvider: registered with ShaderManager");
+    yinfo("PlotRendererProvider: registered with ShaderManager");
 }
 
 std::string PlotRendererProvider::getCode() const {

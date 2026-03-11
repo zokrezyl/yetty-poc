@@ -47,18 +47,6 @@ struct GlyphMetadata {
 @group(0) @binding(5) var fontSampler: sampler;
 @group(0) @binding(6) var<storage, read> glyphMetadata: array<GlyphMetadata>;
 
-// === Grid compatibility for sdf-types.gen.wgsl ===
-// sdf-types.gen.wgsl expects a 'grid' uniform with cellSize.x/y
-// We create a compatible structure from our overlay uniform
-struct GridCompat {
-    cellSize: vec2<f32>,
-};
-var<private> grid: GridCompat;
-
-fn initGridCompat() {
-    grid.cellSize = vec2<f32>(overlay.cellSizeX, overlay.cellSizeY);
-}
-
 // === SDF type constants (subset used by ygui widgets) ===
 // INJECT_SDF_TYPES
 
@@ -181,9 +169,6 @@ fn renderColorWheel(p: vec2<f32>, center: vec2<f32>, outerR: f32, innerR: f32,
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    // Initialize grid compatibility struct for sdf-types.gen.wgsl
-    initGridCompat();
-
     let screenPos = vec2<f32>(in.uv.x * overlay.screenWidth, in.uv.y * overlay.screenHeight);
 
     // Map screen position to scene coordinates (1:1 mapping for overlay)

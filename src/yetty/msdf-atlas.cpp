@@ -65,7 +65,7 @@ public:
         _cdbFiles.push_back(std::move(reader));
         _codepointToIndex.emplace_back();  // New empty map for this fontId
 
-        ydebug("MsdfAtlas: Opened CDB [fontId={}]: {}", fontId, path);
+        yinfo("MsdfAtlas: Opened CDB [fontId={}]: {}", fontId, path);
         return fontId;
     }
 
@@ -254,7 +254,7 @@ public:
         }
 
         size_t textureBytes = _atlasWidth * _atlasHeight * 4;
-        ydebug("GPU_ALLOC MsdfAtlas: atlasTexture={}x{} RGBA8 = {} bytes ({:.2f} MB)",
+        yinfo("GPU_ALLOC MsdfAtlas: atlasTexture={}x{} RGBA8 = {} bytes ({:.2f} MB)",
               _atlasWidth, _atlasHeight, textureBytes, textureBytes / (1024.0 * 1024.0));
 
         WGPUTextureDescriptor texDesc = {};
@@ -326,7 +326,7 @@ public:
         _textureWidth = _atlasWidth;
         _textureHeight = _atlasHeight;
         _resourceVersion++;
-        ydebug("Created MsdfAtlas texture {}x{}", _atlasWidth, _atlasHeight);
+        yinfo("Created MsdfAtlas texture {}x{}", _atlasWidth, _atlasHeight);
         return Ok();
     }
 
@@ -339,7 +339,7 @@ public:
         _bufferGlyphCount = static_cast<uint32_t>(_glyphMetadata.size()) + 256;
         size_t bufferSize = _bufferGlyphCount * sizeof(GlyphMetadataGPU);
 
-        ydebug("GPU_ALLOC MsdfAtlas: glyphMetadataBuffer={} glyphs * {} bytes = {} bytes ({:.2f} MB)",
+        yinfo("GPU_ALLOC MsdfAtlas: glyphMetadataBuffer={} glyphs * {} bytes = {} bytes ({:.2f} MB)",
               _bufferGlyphCount, sizeof(GlyphMetadataGPU), bufferSize, bufferSize / (1024.0 * 1024.0));
 
         WGPUBufferDescriptor bufDesc = {};
@@ -363,7 +363,7 @@ public:
         wgpuBufferUnmap(_glyphMetadataBuffer);
 
         _resourceVersion++;
-        ydebug("Created MsdfAtlas metadata buffer ({} glyphs, {} bytes)", _bufferGlyphCount, bufferSize);
+        yinfo("Created MsdfAtlas metadata buffer ({} glyphs, {} bytes)", _bufferGlyphCount, bufferSize);
         return Ok();
     }
 
@@ -372,7 +372,7 @@ public:
 
         // Check if atlas grew and texture needs to be recreated
         if (_atlasWidth > _textureWidth || _atlasHeight > _textureHeight) {
-            ydebug("Atlas grew from {}x{} to {}x{}, recreating GPU texture",
+            yinfo("Atlas grew from {}x{} to {}x{}, recreating GPU texture",
                   _textureWidth, _textureHeight, _atlasWidth, _atlasHeight);
             auto result = createTexture(device, queue);
             if (!result) {
@@ -473,7 +473,7 @@ private:
             _shelfMinX = oldWidth;  // prevent wrapping back into old data
         }
 
-        ydebug("Growing MSDF atlas from {}x{} to {}x{}", oldWidth, oldHeight, newWidth, newHeight);
+        yinfo("Growing MSDF atlas from {}x{} to {}x{}", oldWidth, oldHeight, newWidth, newHeight);
 
         std::vector<uint8_t> newAtlasData(newWidth * newHeight * 4, 0);
 

@@ -310,7 +310,7 @@ std::vector<uint32_t> getFontCharset(const std::string& fontPath) {
     FT_Done_Face(face);
     FT_Done_FreeType(ftLib);
 
-    ydebug("Found {} glyphs in font", charset.size());
+    yinfo("Found {} glyphs in font", charset.size());
     return charset;
 }
 
@@ -408,7 +408,7 @@ GeneratorResult generate(const GeneratorConfig& config, ProgressCallback progres
         threadCount = std::max(1, static_cast<int>(std::thread::hardware_concurrency()));
     }
 
-    ydebug("Using {} threads for MSDF generation", threadCount);
+    yinfo("Using {} threads for MSDF generation", threadCount);
 
     // Get charset based on mode
     std::vector<uint32_t> charset;
@@ -421,7 +421,7 @@ GeneratorResult generate(const GeneratorConfig& config, ProgressCallback progres
     } else {
         charset = getDefaultCharset(config.includeNerdFonts, config.includeCJK);
     }
-    ydebug("Charset size: {} codepoints", charset.size());
+    yinfo("Charset size: {} codepoints", charset.size());
 
     // Set up work queue
     WorkQueue queue;
@@ -474,7 +474,7 @@ GeneratorResult generate(const GeneratorConfig& config, ProgressCallback progres
     for (const auto& r : results) {
         if (r.success) ++successCount;
     }
-    ydebug("Generated {} / {} glyphs successfully", successCount, charset.size());
+    yinfo("Generated {} / {} glyphs successfully", successCount, charset.size());
 
     // Extract font name for output file
     std::filesystem::path fontPath(config.fontPath);
@@ -491,7 +491,7 @@ GeneratorResult generate(const GeneratorConfig& config, ProgressCallback progres
     result.glyphsGenerated = successCount;
     result.outputFiles.push_back(cdbPath);
 
-    ydebug("CDB written to: {}", cdbPath);
+    yinfo("CDB written to: {}", cdbPath);
     return result;
 }
 

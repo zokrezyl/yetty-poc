@@ -66,11 +66,11 @@ GpuMonitor::Ptr GpuMonitor::create() {
     ywarn("GPU monitor: not supported on Windows");
     return std::make_shared<NullMonitor>();
 #else
-    ydebug("GPU monitor: detecting GPU vendor...");
+    yinfo("GPU monitor: detecting GPU vendor...");
 
     // 1. Try NVIDIA first (uses dlopen, independent of DRM)
     if (auto nvidia = NvidiaMonitor::tryCreate()) {
-        ydebug("GPU monitor: NVIDIA GPU detected via NVML");
+        yinfo("GPU monitor: NVIDIA GPU detected via NVML");
         return nvidia;
     }
 
@@ -93,12 +93,12 @@ GpuMonitor::Ptr GpuMonitor::create() {
 
         if (vendor == VENDOR_AMD) {
             if (auto amd = AmdMonitor::tryCreate(cardPath)) {
-                ydebug("GPU monitor: AMD GPU detected at {}", cardPath.string());
+                yinfo("GPU monitor: AMD GPU detected at {}", cardPath.string());
                 return amd;
             }
         } else if (vendor == VENDOR_INTEL) {
             if (auto intel = IntelMonitor::tryCreate(cardPath)) {
-                ydebug("GPU monitor: Intel GPU detected at {}", cardPath.string());
+                yinfo("GPU monitor: Intel GPU detected at {}", cardPath.string());
                 return intel;
             }
         }

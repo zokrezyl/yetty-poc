@@ -27,7 +27,7 @@ public:
     } else {
       _frameRenderer = std::shared_ptr<FrameRenderer>(
           frameResult->release());
-      ydebug("Workspace frame renderer initialized");
+      yinfo("Workspace frame renderer initialized");
     }
 
     registerForEvents();
@@ -91,7 +91,7 @@ public:
   Result<bool> onEvent(const Event &event) override {
     if (event.type == Event::Type::Close) {
       auto targetId = event.closeEv.objectId;
-      ydebug("Workspace received Close event for object {}", targetId);
+      yinfo("Workspace received Close event for object {}", targetId);
       auto r = closeTarget(targetId);
       if (!r) {
         return Err<bool>("closeTarget failed", r);
@@ -102,7 +102,7 @@ public:
       auto targetId = event.splitPane.objectId;
       auto orient = event.splitPane.orientation == 0
           ? Orientation::Horizontal : Orientation::Vertical;
-      ydebug("Workspace received SplitPane event for pane {}, orientation={}",
+      yinfo("Workspace received SplitPane event for pane {}, orientation={}",
             targetId, event.splitPane.orientation);
       auto r = splitPane(targetId, orient);
       if (!r) {
@@ -120,7 +120,7 @@ public:
       if (cp == '%') {
         auto focusedPane = findFocusedPane(_root);
         if (focusedPane) {
-          ydebug("Split pane {} vertically (Ctrl+b %%)", focusedPane->id());
+          yinfo("Split pane {} vertically (Ctrl+b %%)", focusedPane->id());
           auto r = splitPane(focusedPane->id(), Orientation::Vertical);
           if (!r) {
             ywarn("splitPane failed: {}", r.error().message());
@@ -133,7 +133,7 @@ public:
       if (cp == '"') {
         auto focusedPane = findFocusedPane(_root);
         if (focusedPane) {
-          ydebug("Split pane {} horizontally (Ctrl+b \")", focusedPane->id());
+          yinfo("Split pane {} horizontally (Ctrl+b \")", focusedPane->id());
           auto r = splitPane(focusedPane->id(), Orientation::Horizontal);
           if (!r) {
             ywarn("splitPane failed: {}", r.error().message());
@@ -158,14 +158,14 @@ public:
 
     // Close workspace itself
     if (targetId == id()) {
-      ydebug("Closing workspace {}", id());
+      yinfo("Closing workspace {}", id());
       _root = nullptr;
       return Ok();
     }
 
     // Close root tile directly
     if (_root->id() == targetId) {
-      ydebug("Closing root tile {}", targetId);
+      yinfo("Closing root tile {}", targetId);
       _root = nullptr;
       return Ok();
     }
@@ -176,7 +176,7 @@ public:
       pane->closeView(targetId);
       // If pane has no more views, close the pane too
       if (pane->viewCount() == 0) {
-        ydebug("Pane {} has no views left, closing pane", pane->id());
+        yinfo("Pane {} has no views left, closing pane", pane->id());
         return closeTileInTree(pane->id());
       }
       return Ok();

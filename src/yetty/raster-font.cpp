@@ -67,7 +67,7 @@ public:
         // Initialize atlas data (R8 grayscale)
         _atlasData.resize(_atlasSize * _atlasSize, 0);
 
-        ydebug("RasterFont loaded: {} (cell={}x{}, fontSize={}, baseline={}, atlas={}x{})",
+        yinfo("RasterFont loaded: {} (cell={}x{}, fontSize={}, baseline={}, atlas={}x{})",
               _ttfPath, _cellWidth, _cellHeight, _fontSize, _baseline, _atlasSize, _atlasSize);
 
         return Ok();
@@ -269,7 +269,7 @@ public:
         }
 
         _dirty = false;
-        ydebug("RasterFont: uploaded {} glyphs to GPU", _glyphUVs.size());
+        yinfo("RasterFont: uploaded {} glyphs to GPU", _glyphUVs.size());
     }
 
     bool isDirty() const override { return _dirty; }
@@ -303,7 +303,7 @@ private:
         }
 
         _dirty = true;
-        ydebug("RasterFont: re-rasterized {} glyphs at cell size {}x{}",
+        yinfo("RasterFont: re-rasterized {} glyphs at cell size {}x{}",
               _loadedCodepoints.size(), _cellWidth, _cellHeight);
     }
 

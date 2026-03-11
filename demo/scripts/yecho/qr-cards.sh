@@ -1,7 +1,8 @@
 #!/bin/bash
 # YEcho QR Cards: GPU-rendered QR codes via OSC escape sequences
 # NOTE: Run this inside yetty terminal to see the QR codes!
-YECHO="${YECHO:-yecho}"
+DIR="$(cd "$(dirname "$0")" && pwd)"
+YECHO="$DIR/../../../build-desktop-dawn-release/src/yetty/yecho/yecho"
 
 echo "=== YEcho QR Card Demo ==="
 echo "Run inside yetty terminal to see GPU-rendered QR codes"
