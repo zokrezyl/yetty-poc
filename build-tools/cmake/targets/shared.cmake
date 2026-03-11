@@ -47,6 +47,7 @@ set(YETTY_LIBS
     yetty_font
     yetty_yecho
     yetty_ydraw
+    yetty_ypaint
     yetty_diagram
     ygrid
     yetty_cards
