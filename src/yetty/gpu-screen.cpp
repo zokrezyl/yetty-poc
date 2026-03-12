@@ -1,7 +1,6 @@
 #include "gpu-screen.h"
 #include "ygui/ygui-overlay.h"
 #include <yetty/ypaint/painter.h>
-#include <yetty/ypaint/ypaint-overlay.h>
 #include "ypaint/ypaint-buffer.h"
 #include "ypaint/yaml2ypaint.h"
 #include <algorithm>
@@ -523,10 +522,7 @@ private:
   ypaint::Painter::Ptr _scrollingPainter;
   // Layer 2: Overlay painter - fixed position (HUD, tooltips)
   ypaint::Painter::Ptr _overlayPainter;
-  // Overlay renderers for YPaint layers
-  ypaint::YPaintOverlay::Ptr _scrollingOverlay;
-  ypaint::YPaintOverlay::Ptr _overlayOverlay;
-  // Metadata slot indices for the painters
+  // Metadata slot indices for the painters (rendered via shader)
   static constexpr uint32_t SCROLLING_PAINTER_SLOT = 1000;
   static constexpr uint32_t OVERLAY_PAINTER_SLOT = 1001;
 
@@ -575,8 +571,13 @@ private:
     float visualZoomScale = 1.0f;   // 4 bytes: 1.0 = off, >1.0 = zoomed
     float visualZoomOffsetX = 0.0f; // 4 bytes: pan X in pixels
     float visualZoomOffsetY = 0.0f; // 4 bytes: pan Y in pixels
-    float _pad0 = 0.0f;             // 4 bytes: padding for 16-byte alignment
-  }; // Total: 256 bytes (16-byte aligned)
+    // YPaint overlay painters (full-screen layers)
+    uint32_t ypaintScrollingSlot = 0; // 4 bytes: slot index (0 = disabled)
+    uint32_t ypaintOverlaySlot = 0;   // 4 bytes: slot index (0 = disabled)
+    float _pad0 = 0.0f;               // 4 bytes: padding
+    float _pad1 = 0.0f;               // 4 bytes: padding
+    float _pad2 = 0.0f;               // 4 bytes: padding for 16-byte alignment
+  }; // Total: 272 bytes (16-byte aligned)
 
   Uniforms _uniforms;
 
@@ -724,21 +725,6 @@ Result<void> GPUScreenImpl::init() noexcept {
     _overlayPainter = *overlayRes;
 
     ydebug("GPUScreen[{}]: created ypaint painters", _id);
-
-    // Create YPaintOverlay instances for rendering
-    auto scrollOverlayRes = ypaint::YPaintOverlay::create(_ctx, _scrollingPainter);
-    if (!scrollOverlayRes) {
-      return Err<void>("GPUScreen: failed to create scrolling overlay", scrollOverlayRes);
-    }
-    _scrollingOverlay = *scrollOverlayRes;
-
-    auto overlayOverlayRes = ypaint::YPaintOverlay::create(_ctx, _overlayPainter);
-    if (!overlayOverlayRes) {
-      return Err<void>("GPUScreen: failed to create overlay overlay", overlayOverlayRes);
-    }
-    _overlayOverlay = *overlayOverlayRes;
-
-    ydebug("GPUScreen[{}]: created YPaintOverlay renderers", _id);
   }
 
   return Ok();
@@ -949,14 +935,6 @@ void GPUScreenImpl::setViewport(float x, float y, float width, float height) {
     _scrollingPainter->setGridCellSize(cellWidthF, cellHeightF);
     _overlayPainter->setSceneBounds(0, 0, width, height);
     _overlayPainter->setGridCellSize(cellWidthF, cellHeightF);
-
-    // Update YPaintOverlay display sizes
-    if (_scrollingOverlay) {
-      _scrollingOverlay->updateDisplaySize(width, height);
-    }
-    if (_overlayOverlay) {
-      _overlayOverlay->updateDisplaySize(width, height);
-    }
   }
 }
 
@@ -5811,6 +5789,16 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
   _uniforms.visualZoomOffsetX = _visualZoomOffsetX;
   _uniforms.visualZoomOffsetY = _visualZoomOffsetY;
 
+  // YPaint overlay painters - set slot indices if painters have content
+  _uniforms.ypaintScrollingSlot =
+      (_scrollingPainter && _scrollingPainter->primitiveCount() > 0)
+          ? SCROLLING_PAINTER_SLOT
+          : 0;
+  _uniforms.ypaintOverlaySlot =
+      (_overlayPainter && _overlayPainter->primitiveCount() > 0)
+          ? OVERLAY_PAINTER_SLOT
+          : 0;
+
   wgpuQueueWriteBuffer(queue, _uniformBuffer, 0, &_uniforms, sizeof(Uniforms));
 
   // Set viewport and scissor to this terminal's tile bounds
@@ -5859,20 +5847,8 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
       pass, 0, shaderMgr->getQuadVertexBuffer(), 0, WGPU_WHOLE_SIZE);
   wgpuRenderPassEncoderDraw(pass, 6, 1, 0, 0);
 
-  // Render ypaint layers (Layer 1: scrolling, Layer 2: overlay)
-  // Both use the same render pass, different pipelines/bind groups
-  if (_scrollingOverlay && _scrollingOverlay->hasContent()) {
-    ydebug("render: drawing scrolling ypaint overlay");
-    if (auto res = _scrollingOverlay->render(pass); !res) {
-      yerror("render: scrolling overlay failed: {}", error_msg(res));
-    }
-  }
-  if (_overlayOverlay && _overlayOverlay->hasContent()) {
-    ydebug("render: drawing ypaint overlay");
-    if (auto res = _overlayOverlay->render(pass); !res) {
-      yerror("render: overlay overlay failed: {}", error_msg(res));
-    }
-  }
+  // YPaint layers are rendered via shader (uniforms.ypaintScrollingSlot/ypaintOverlaySlot)
+  // Painters write to cardStorage/cardMetadata via GpuMemoryManager
 
   return Ok();
 }

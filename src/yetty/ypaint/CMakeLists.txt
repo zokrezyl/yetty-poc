@@ -6,7 +6,6 @@ add_library(yetty_ypaint STATIC
     animation.cpp
     yaml2ypaint.cpp
     triangulate.cpp
-    ypaint-overlay.cpp
 )
 
 target_include_directories(yetty_ypaint PUBLIC

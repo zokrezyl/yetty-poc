@@ -16,6 +16,8 @@ YPaint is a 2D vector graphics overlay system using Signed Distance Fields (SDF)
 │  - AABB computation for primitives                              │
 │  - GPU buffer lifecycle (declare/allocate/write)                │
 │  - Text measurement and glyph rendering                         │
+│  - Exposes GPU offsets: gpuPrimitiveOffset, gpuGridOffset,      │
+│    gpuGlyphOffset for shader binding                            │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               │ owns
@@ -29,14 +31,23 @@ YPaint is a 2D vector graphics overlay system using Signed Distance Fields (SDF)
 │  - Packed GPU format generation (gridStaging, primStaging)      │
 └─────────────────────────────────────────────────────────────────┘
                               │
-                              │ generates
+                              │ registers with
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    GpuMemoryManager                              │
+│  - Coordinates buffer allocation via GpuBufferManager           │
+│  - Manages texture resources via GpuTextureManager              │
+│  - Same infrastructure used by cards                            │
+│  - Painters are registered like cards for buffer management     │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              │ manages
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                      GPU Buffers                                 │
-│  - Primitive data buffer                                         │
-│  - Grid lookup buffer                                            │
-│  - Glyph buffer                                                  │
-│  - Metadata (64 bytes)                                           │
+│  - cardStorage buffer: shared by cards and painters             │
+│  - Primitive data, Grid lookup, Glyph data                      │
+│  - Same bind group structure as cards                           │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -73,16 +84,11 @@ circles.sh
     │
     ├── YAML content base64-encoded
     │
-    └── OSC command: \033]666666;run -c ypaint ...;--yaml;{base64}\033\\
+    └── OSC command: \033]666674;--yaml;{base64}\033\\  (scrolling layer)
+           │         \033]666675;--yaml;{base64}\033\\  (overlay layer)
            │
            ▼
-    Terminal OSC Parser
-           │
-           ▼
-    ypaint card creation (GpuMemoryManager)
-           │
-           ▼
-    yaml2ypaint → YPaintBuffer
+    Terminal OSC Parser (handleYpaintOSC)
            │
            ▼
     Painter.addYpaintBuffer()
@@ -92,15 +98,23 @@ circles.sh
            └── Canvas positions primitive in grid
            │
            ▼
-    GPU Upload
+    GpuMemoryManager (same as cards)
            │
-           ├── Primitive buffer: [gridOffset][type][layer][geometry...]
-           ├── Grid buffer: cell → [count][prim_offsets...]
-           └── Metadata: 64 bytes
+           ├── Painter.declareBufferNeeds()
+           ├── GpuBufferManager allocates in cardStorage
+           └── Painter.writeBuffers() to allocated regions
+           │
+           ▼
+    GPU Upload to cardStorage buffer
+           │
+           ├── Primitive data at painter->gpuPrimitiveOffset()
+           ├── Grid data at painter->gpuGridOffset()
+           └── Glyph data at painter->gpuGlyphOffset()
            │
            ▼
     Shader: 0x0004-ypaint.wgsl
            │
+           ├── Read from cardStorage using painter offsets
            ├── Lookup cell from pixel position
            ├── Iterate primitives in cell
            ├── Call evaluateSDF(primOffset, p)
@@ -109,13 +123,41 @@ circles.sh
 
 ## GPUScreen Integration
 
+### GpuMemoryManager Architecture
+
+Both painters use GpuMemoryManager for buffer management, exactly like cards do:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        GPUScreen                                 │
+│                                                                  │
+│  ┌──────────────────┐    ┌──────────────────┐                   │
+│  │ Scrolling Painter│    │  Overlay Painter │                   │
+│  │   (OSC 666674)   │    │   (OSC 666675)   │                   │
+│  └────────┬─────────┘    └────────┬─────────┘                   │
+│           │                       │                              │
+│           │ registered with       │ registered with              │
+│           ▼                       ▼                              │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │              GpuMemoryManager (shared)                   │    │
+│  │  - Same instance used by cards                          │    │
+│  │  - GpuBufferManager: cardStorage buffer allocation      │    │
+│  │  - GpuTextureManager: font atlas, etc.                  │    │
+│  └─────────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+Each painter gets its own slot in the GpuMemoryManager, with separate buffer
+regions for primitives, grid, and glyphs. The shader accesses painter data
+using the same cardStorage buffer and bind group as cards.
+
 ### Render Layer Structure
 
 GPUScreen has THREE render layers:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  Layer 2: Overlay Painter (OSC 666668)                          │
+│  Layer 2: Overlay Painter (OSC 666675)                          │
 │  - Fixed position overlays (HUD, tooltips, status)              │
 │  - Does NOT scroll with terminal content                        │
 │  - Rendered LAST (on top of everything)                         │
@@ -123,7 +165,7 @@ GPUScreen has THREE render layers:
 └─────────────────────────────────────────────────────────────────┘
                               ↑
 ┌─────────────────────────────────────────────────────────────────┐
-│  Layer 1: Scrolling Painter (OSC 666667)                        │
+│  Layer 1: Scrolling Painter (OSC 666674)                        │
 │  - Graphics that scroll WITH terminal content                   │
 │  - Cursor-relative positioning (like terminal text)             │
 │  - SYNCHRONIZED with vterm scrolling                            │
@@ -146,8 +188,8 @@ Each layer has its own OSC code:
 | Scrolling | `666674` | Graphics that scroll with terminal content |
 | Overlay | `666675` | Fixed position overlays (HUD, tooltips) |
 
-Note: 666667-669 are already used for shader effects, 666670 for GPU stats,
-666671 for FPS control, 666673 for ScreenDrawLayer (deprecated ydraw overlay).
+Note: 666667-669 are used for shader effects, 666670 for GPU stats,
+666671 for FPS control, 666673 for ScreenDrawLayer (deprecated).
 
 ```bash
 # Draw to scrolling layer (scrolls with terminal)
@@ -163,6 +205,19 @@ printf '\033]666674;--clear\033\\'
 printf '\033]666675;--clear\033\\'
 ```
 
+### Why GpuMemoryManager?
+
+Using the same GpuMemoryManager for both cards and painters provides:
+
+1. **No code duplication**: Buffer allocation, bind group creation, and GPU
+   upload logic is shared with cards
+2. **Single cardStorage buffer**: Painters and cards share the same GPU buffer,
+   reducing memory overhead and simplifying binding
+3. **Consistent architecture**: Painters are just another type of GPU resource,
+   managed the same way as cards
+4. **Simpler rendering**: Same shader infrastructure, same bind groups, just
+   different offsets into cardStorage
+
 ### CRITICAL: Bidirectional Scrolling Synchronization
 
 The scrolling painter and vterm must stay **perfectly synchronized**. This is
@@ -177,7 +232,7 @@ bidirectional - either side can be the source of truth depending on the event:
 │   │  (Painter)  │                           │             │             │
 │   └─────────────┘                           └─────────────┘             │
 │         │                                         │                     │
-│         │ Graphics added (OSC 666667)             │ Escape sequences    │
+│         │ Graphics added (OSC 666674)             │ Escape sequences    │
 │         │ Canvas is SOURCE OF TRUTH               │ VTerm is SOURCE     │
 │         │ VTerm syncs TO canvas                   │ Canvas syncs TO it  │
 │         ▼                                         ▼                     │
@@ -192,7 +247,7 @@ scroll vterm to match:
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│  YPaintBuffer arrives via OSC 666667                             │
+│  YPaintBuffer arrives via OSC 666674                             │
 │                     │                                            │
 │                     ▼                                            │
 │  GPUScreen calls: scrollingPainter->addYpaintBuffer(buffer)      │
@@ -318,34 +373,67 @@ void GPUScreenImpl::handleScrollingPaint(YPaintBuffer::Ptr buffer) {
 
 ### GPUScreenImpl Changes
 
-Replace `ScreenDrawLayer` with two `Painter` instances:
+Two `Painter` instances are registered with the shared `GpuMemoryManager`:
 
 ```cpp
 class GPUScreenImpl : public GPUScreen {
     // ... existing members ...
 
-    // Replace: ScreenDrawLayer::Ptr _screenDrawLayer;
-    // With:
-    Painter::Ptr _scrollingPainter;    // Layer 1: synced with vterm
-    Painter::Ptr _overlayPainter;      // Layer 2: fixed position
+    GpuMemoryManager::Ptr _cardManager;  // Shared GPU resource manager
+    Painter::Ptr _scrollingPainter;      // Layer 1: synced with vterm
+    Painter::Ptr _overlayPainter;        // Layer 2: fixed position
 };
+
+void GPUScreenImpl::initPainters() {
+    // Both painters register with the same GpuMemoryManager
+    // They get their own slots/buffers, just like cards do
+    _scrollingPainter = Painter::create(_cardManager, ...);
+    _overlayPainter = Painter::create(_cardManager, ...);
+}
+```
+
+### Buffer Management
+
+Painters follow the same lifecycle as cards:
+
+```cpp
+// 1. Declare buffer needs (called when content changes)
+painter->declareBufferNeeds();
+
+// 2. GpuBufferManager allocates space in cardStorage
+//    (handled automatically by GpuMemoryManager)
+
+// 3. Write buffer data to allocated regions
+painter->writeBuffers();
+
+// 4. Shader reads from cardStorage using painter's offsets:
+//    - painter->gpuPrimitiveOffset()
+//    - painter->gpuGridOffset()
+//    - painter->gpuGlyphOffset()
 ```
 
 ### Render Order
 
+Painters are rendered using the same shader and bind groups as cards:
+
 ```cpp
 void GPUScreenImpl::render(WGPURenderPassEncoder pass) {
+    // All rendering uses the shared cardStorage buffer
+    // Painters and cards share the same bind group structure
+
     // 1. Render terminal text (layer 0)
     renderGlyphGrid(pass);
 
     // 2. Render scrolling graphics (layer 1)
+    //    Uses cardStorage[scrollingPainter->gpuPrimitiveOffset()...]
     if (_scrollingPainter && _scrollingPainter->hasContent()) {
-        _scrollingPainter->render(pass);
+        renderYpaintLayer(pass, _scrollingPainter);
     }
 
     // 3. Render overlay graphics (layer 2)
+    //    Uses cardStorage[overlayPainter->gpuPrimitiveOffset()...]
     if (_overlayPainter && _overlayPainter->hasContent()) {
-        _overlayPainter->render(pass);
+        renderYpaintLayer(pass, _overlayPainter);
     }
 }
 
@@ -542,11 +630,14 @@ struct YPaintMetadata {
 - [x] Primitive staging generation
 - [x] Scene bounds-based grid dimensions
 - [x] All 155 unit tests passing
+- [x] GpuMemoryManager (renamed from CardManager) for unified GPU resource management
+- [x] OSC 666674/666675 protocol for scrolling/overlay layers
+- [x] Painter GPU offset getters (gpuPrimitiveOffset, gpuGridOffset, gpuGlyphOffset)
 
 ### In Progress
 
-- [ ] Replace ScreenDrawLayer with two Painter instances in GPUScreen
-- [ ] Add layer targeting to OSC protocol
+- [ ] Register painters with GpuMemoryManager (same as cards)
+- [ ] Render painters using shared cardStorage buffer
 
 ### TODO
 

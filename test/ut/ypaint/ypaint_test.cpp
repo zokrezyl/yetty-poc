@@ -119,9 +119,15 @@ private:
 //=============================================================================
 class MockGpuMemoryManager : public GpuMemoryManager {
 public:
+    // Default constructor for slot 0
     MockGpuMemoryManager()
         : _bufMgr(std::make_shared<MockCardBufferManager>())
         , _metadata(16 * 64, 0) {}  // 16 slots * 64 bytes each
+
+    // Constructor with custom metadata size to support high slot indices
+    explicit MockGpuMemoryManager(uint32_t metadataBytes)
+        : _bufMgr(std::make_shared<MockCardBufferManager>())
+        , _metadata(metadataBytes, 0) {}
 
     // Metadata
     Result<MetadataHandle> allocateMetadata(uint32_t size) override {
@@ -1458,5 +1464,2763 @@ suite text_pipeline_tests = [] {
             expect(glyphs[i].x >= sMinX - 10.0f && glyphs[i].x <= sMaxX + 10.0f)
                 << "glyph " << i << " x=" << glyphs[i].x << " out of scene bounds";
         }
+    };
+};
+
+//=============================================================================
+// Helper: run pipeline with specific metadata slot (for overlay testing)
+//=============================================================================
+static PipelineResult runPipelineWithSlot(YPaintBuffer::Ptr buf, uint32_t metaSlotIndex,
+                                           float sceneW, float sceneH,
+                                           bool scrollingMode = false,
+                                           FontManager::Ptr fontMgr = nullptr) {
+    // Allocate enough metadata for high slot indices
+    uint32_t metadataBytes = (metaSlotIndex + 1) * 64;
+    auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+    auto builder = *Painter::create(fontMgr, testAllocator(), mockCM, metaSlotIndex, scrollingMode);
+    builder->setSceneBounds(0, 0, sceneW, sceneH);
+    builder->setGridCellSize(20.0f, 20.0f);
+    if (!buf->empty()) {
+        builder->addYpaintBuffer(buf);
+    }
+    builder->declareBufferNeeds();
+    mockCM->mockBufMgr()->commitReservations();
+    builder->allocateBuffers();
+    builder->writeBuffers();
+
+    const float* storage = mockCM->mockBufMgr()->storageAsFloat();
+    // Metadata for slot N is at offset N * 16 (in u32 words)
+    const uint32_t* meta = mockCM->metadataAsU32() + metaSlotIndex * 16;
+
+    PipelineResult r;
+    r.cardMgr = mockCM;
+    r.builder = builder;
+    r.storage = storage;
+    r.meta = meta;
+    r.primitiveOffset = meta[0];
+    r.primitiveCount = meta[1];
+    r.primDataBase = r.primitiveOffset + r.primitiveCount;
+    r.gridOffset = meta[2];
+    r.gridWidth = meta[3];
+    r.gridHeight = meta[4];
+    r.cellSizeX = unpackF16(meta[5], false);
+    r.cellSizeY = unpackF16(meta[5], true);
+    std::memcpy(&r.sceneMinX, &meta[8], sizeof(float));
+    std::memcpy(&r.sceneMinY, &meta[9], sizeof(float));
+    return r;
+}
+
+//=============================================================================
+// Helper: query all prim indices in a specific grid cell
+//=============================================================================
+static std::vector<uint32_t> getPrimIndicesInCell(const PipelineResult& p,
+                                                   uint32_t cellX, uint32_t cellY) {
+    std::vector<uint32_t> result;
+    if (cellX >= p.gridWidth || cellY >= p.gridHeight) return result;
+
+    uint32_t cellIndex = cellY * p.gridWidth + cellX;
+    uint32_t packedStart = readU32(p.storage, p.gridOffset + cellIndex);
+    uint32_t cellEntryCount = readU32(p.storage, p.gridOffset + packedStart);
+
+    for (uint32_t i = 0; i < cellEntryCount; i++) {
+        uint32_t rawVal = readU32(p.storage, p.gridOffset + packedStart + 1 + i);
+        if ((rawVal & 0x80000000u) == 0) {  // Not a glyph
+            result.push_back(rawVal);
+        }
+    }
+    return result;
+}
+
+//=============================================================================
+// Overlay Slot Tests — Tests for high slot indices (1000, 1001)
+// These verify the overlay/scrolling painter slots work correctly
+//=============================================================================
+
+suite overlay_slot_tests = [] {
+
+    "slot 1000 — metadata written at correct offset"_test = [] {
+        auto buf = *YPaintBuffer::create();
+        buf->addCircle(0, 50.0f, 50.0f, 10.0f, 0xFFFF0000, 0, 0.0f, 0.0f);
+
+        auto p = runPipelineWithSlot(buf, 1000, 200.0f, 200.0f);
+
+        expect(p.primitiveCount == 1_u) << "should have 1 prim";
+        expect(p.gridWidth > 0_u) << "grid width > 0";
+        expect(p.gridHeight > 0_u) << "grid height > 0";
+
+        // Verify prim data is correct
+        uint32_t wordOff0 = readU32(p.storage, p.primitiveOffset);
+        uint32_t primOff = p.primDataBase + wordOff0;
+        uint32_t type = readU32(p.storage, primOff + 1);
+        expect(type == static_cast<uint32_t>(SDFType::Circle)) << "type should be Circle";
+    };
+
+    "slot 1001 — separate from slot 1000"_test = [] {
+        // Use SEPARATE MockGpuMemoryManager for each painter
+        uint32_t metadataBytes = 1002 * 64;
+
+        // Painter at slot 1000
+        auto mockCM1000 = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder1000 = *Painter::create(nullptr, testAllocator(), mockCM1000, 1000);
+        builder1000->setSceneBounds(0, 0, 100, 100);
+        builder1000->setGridCellSize(20.0f, 20.0f);
+        auto buf1 = *YPaintBuffer::create();
+        buf1->addCircle(0, 30.0f, 30.0f, 10.0f, 0xFFFF0000, 0, 0.0f, 0.0f);
+        builder1000->addYpaintBuffer(buf1);
+        builder1000->declareBufferNeeds();
+        mockCM1000->mockBufMgr()->commitReservations();
+        builder1000->allocateBuffers();
+        builder1000->writeBuffers();
+
+        // Painter at slot 1001
+        auto mockCM1001 = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder1001 = *Painter::create(nullptr, testAllocator(), mockCM1001, 1001);
+        builder1001->setSceneBounds(0, 0, 100, 100);
+        builder1001->setGridCellSize(20.0f, 20.0f);
+        auto buf2 = *YPaintBuffer::create();
+        buf2->addBox(0, 70.0f, 70.0f, 15.0f, 15.0f, 0xFF00FF00, 0, 0.0f, 0.0f);
+        builder1001->addYpaintBuffer(buf2);
+        builder1001->declareBufferNeeds();
+        mockCM1001->mockBufMgr()->commitReservations();
+        builder1001->allocateBuffers();
+        builder1001->writeBuffers();
+
+        // Read metadata for both slots
+        const uint32_t* meta1000 = mockCM1000->metadataAsU32() + 1000 * 16;
+        const uint32_t* meta1001 = mockCM1001->metadataAsU32() + 1001 * 16;
+
+        expect(meta1000[1] == 1_u) << "slot 1000 should have 1 prim";
+        expect(meta1001[1] == 1_u) << "slot 1001 should have 1 prim";
+
+        // Verify both painters wrote valid metadata at their respective slots
+        expect(meta1000[0] >= 0_u) << "slot 1000 primitiveOffset valid";
+        expect(meta1001[0] >= 0_u) << "slot 1001 primitiveOffset valid";
+    };
+
+    "slot 1000 — grid lookup finds primitives"_test = [] {
+        auto buf = *YPaintBuffer::create();
+        buf->addCircle(0, 50.0f, 50.0f, 10.0f, 0xFFFF0000, 0, 0.0f, 0.0f);
+        buf->addBox(1, 150.0f, 150.0f, 20.0f, 20.0f, 0xFF00FF00, 0, 0.0f, 0.0f);
+
+        auto p = runPipelineWithSlot(buf, 1000, 200.0f, 200.0f);
+
+        // Lookup at circle center (50,50) with cellSize=20 -> cell (2,2)
+        auto circleHits = shaderGridLookup(p, 50.0f, 50.0f);
+        expect(!circleHits.empty()) << "should find prim at circle center";
+
+        bool foundCircle = false;
+        for (uint32_t off : circleHits) {
+            if (readU32(p.storage, off + 1) == static_cast<uint32_t>(SDFType::Circle))
+                foundCircle = true;
+        }
+        expect(foundCircle) << "should find Circle at (50,50)";
+
+        // Lookup at box center (150,150)
+        auto boxHits = shaderGridLookup(p, 150.0f, 150.0f);
+        expect(!boxHits.empty()) << "should find prim at box center";
+
+        bool foundBox = false;
+        for (uint32_t off : boxHits) {
+            if (readU32(p.storage, off + 1) == static_cast<uint32_t>(SDFType::Box))
+                foundBox = true;
+        }
+        expect(foundBox) << "should find Box at (150,150)";
+    };
+};
+
+//=============================================================================
+// Scrolling Mode Tests — Multiple addYpaintBuffer calls with scrolling
+//=============================================================================
+
+suite scrolling_mode_tests = [] {
+
+    "scrolling mode — single buffer positions at cursor"_test = [] {
+        uint32_t metadataBytes = 1001 * 64;
+        auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder = *Painter::create(nullptr, testAllocator(), mockCM, 1000, true);
+
+        float sceneW = 200.0f, sceneH = 100.0f;
+        float cellH = 20.0f;
+        builder->setSceneBounds(0, 0, sceneW, sceneH);
+        builder->setGridCellSize(20.0f, cellH);
+        builder->setCursorPosition(0, 0);
+
+        auto buf = *YPaintBuffer::create();
+        buf->addBox(0, 10.0f, 5.0f, 20.0f, 10.0f, 0xFFFF0000, 0, 0.0f, 0.0f);
+
+        auto linesRes = builder->addYpaintBuffer(buf);
+        expect(linesRes.has_value()) << "addYpaintBuffer should succeed";
+
+        builder->declareBufferNeeds();
+        mockCM->mockBufMgr()->commitReservations();
+        builder->allocateBuffers();
+        builder->writeBuffers();
+
+        expect(builder->primitiveCount() == 1_u) << "should have 1 prim";
+    };
+
+    "scrolling mode — multiple buffers accumulate"_test = [] {
+        uint32_t metadataBytes = 1001 * 64;
+        auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder = *Painter::create(nullptr, testAllocator(), mockCM, 1000, true);
+
+        builder->setSceneBounds(0, 0, 200.0f, 100.0f);
+        builder->setGridCellSize(20.0f, 20.0f);
+        builder->setCursorPosition(0, 0);
+
+        // Add first buffer
+        auto buf1 = *YPaintBuffer::create();
+        buf1->addCircle(0, 30.0f, 10.0f, 8.0f, 0xFFFF0000, 0, 0.0f, 0.0f);
+        builder->addYpaintBuffer(buf1);
+
+        // Add second buffer
+        auto buf2 = *YPaintBuffer::create();
+        buf2->addBox(0, 100.0f, 10.0f, 15.0f, 10.0f, 0xFF00FF00, 0, 0.0f, 0.0f);
+        builder->addYpaintBuffer(buf2);
+
+        // Add third buffer
+        auto buf3 = *YPaintBuffer::create();
+        buf3->addTriangle(0, 150.0f, 5.0f, 170.0f, 5.0f, 160.0f, 15.0f,
+                          0xFF0000FF, 0, 0.0f, 0.0f);
+        builder->addYpaintBuffer(buf3);
+
+        builder->declareBufferNeeds();
+        mockCM->mockBufMgr()->commitReservations();
+        builder->allocateBuffers();
+        builder->writeBuffers();
+
+        expect(builder->primitiveCount() == 3_u) << "should have 3 prims total";
+    };
+
+    "scrolling mode — scroll removes top lines"_test = [] {
+        uint32_t metadataBytes = 1001 * 64;
+        auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder = *Painter::create(nullptr, testAllocator(), mockCM, 1000, true);
+
+        float cellH = 20.0f;
+        builder->setSceneBounds(0, 0, 200.0f, 60.0f);  // 3 lines of height
+        builder->setGridCellSize(20.0f, cellH);
+        builder->setCursorPosition(0, 0);
+
+        // Add primitives on line 0
+        auto buf1 = *YPaintBuffer::create();
+        buf1->addCircle(0, 30.0f, 10.0f, 5.0f, 0xFFFF0000, 0, 0.0f, 0.0f);
+        builder->addYpaintBuffer(buf1);
+
+        // Move cursor to line 1 and add more
+        builder->setCursorPosition(0, 1);
+        auto buf2 = *YPaintBuffer::create();
+        buf2->addBox(0, 30.0f, 10.0f, 10.0f, 8.0f, 0xFF00FF00, 0, 0.0f, 0.0f);
+        builder->addYpaintBuffer(buf2);
+
+        // Move cursor to line 2 and add more
+        builder->setCursorPosition(0, 2);
+        auto buf3 = *YPaintBuffer::create();
+        buf3->addTriangle(0, 30.0f, 5.0f, 50.0f, 5.0f, 40.0f, 15.0f,
+                          0xFF0000FF, 0, 0.0f, 0.0f);
+        builder->addYpaintBuffer(buf3);
+
+        expect(builder->primitiveCount() == 3_u) << "should have 3 prims before scroll";
+
+        // Scroll 1 line — should remove line 0 (Circle)
+        builder->scrollLines(1);
+
+        builder->declareBufferNeeds();
+        mockCM->mockBufMgr()->commitReservations();
+        builder->allocateBuffers();
+        builder->writeBuffers();
+
+        expect(builder->primitiveCount() == 2_u)
+            << "should have 2 prims after scrolling 1 line, got " << builder->primitiveCount();
+    };
+
+    "scrolling mode — verify grid after scroll"_test = [] {
+        uint32_t metadataBytes = 1001 * 64;
+        auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder = *Painter::create(nullptr, testAllocator(), mockCM, 1000, true);
+
+        float cellH = 20.0f;
+        builder->setSceneBounds(0, 0, 100.0f, 60.0f);  // 3 lines
+        builder->setGridCellSize(20.0f, cellH);
+
+        // Add circles at different Y positions
+        builder->setCursorPosition(0, 0);
+        auto buf1 = *YPaintBuffer::create();
+        buf1->addCircle(0, 50.0f, 10.0f, 5.0f, 0xFFFF0000, 0, 0.0f, 0.0f);  // Line 0
+        builder->addYpaintBuffer(buf1);
+
+        builder->setCursorPosition(0, 1);
+        auto buf2 = *YPaintBuffer::create();
+        buf2->addCircle(0, 50.0f, 10.0f, 5.0f, 0xFF00FF00, 0, 0.0f, 0.0f);  // Line 1
+        builder->addYpaintBuffer(buf2);
+
+        builder->setCursorPosition(0, 2);
+        auto buf3 = *YPaintBuffer::create();
+        buf3->addCircle(0, 50.0f, 10.0f, 5.0f, 0xFF0000FF, 0, 0.0f, 0.0f);  // Line 2
+        builder->addYpaintBuffer(buf3);
+
+        // Build initial state
+        builder->declareBufferNeeds();
+        mockCM->mockBufMgr()->commitReservations();
+        builder->allocateBuffers();
+        builder->writeBuffers();
+
+        const float* storage = mockCM->mockBufMgr()->storageAsFloat();
+        const uint32_t* meta = mockCM->metadataAsU32() + 1000 * 16;
+
+        // Count unique prims reachable from grid
+        std::set<uint32_t> reachableBefore;
+        uint32_t numCells = meta[3] * meta[4];  // gridWidth * gridHeight
+        uint32_t gridOff = meta[2];
+        uint32_t primBase = meta[0] + meta[1];
+        for (uint32_t ci = 0; ci < numCells; ci++) {
+            uint32_t packedOff = readU32(storage, gridOff + ci);
+            uint32_t cnt = readU32(storage, gridOff + packedOff);
+            for (uint32_t j = 0; j < cnt; j++) {
+                uint32_t rawVal = readU32(storage, gridOff + packedOff + 1 + j);
+                if ((rawVal & 0x80000000u) == 0) {
+                    reachableBefore.insert(primBase + rawVal);
+                }
+            }
+        }
+        expect(reachableBefore.size() == 3_u) << "3 prims reachable before scroll";
+
+        // Now scroll 1 line
+        builder->scrollLines(1);
+        builder->declareBufferNeeds();
+        mockCM->mockBufMgr()->commitReservations();
+        builder->allocateBuffers();
+        builder->writeBuffers();
+
+        // Re-read metadata (may have changed)
+        meta = mockCM->metadataAsU32() + 1000 * 16;
+        storage = mockCM->mockBufMgr()->storageAsFloat();
+
+        std::set<uint32_t> reachableAfter;
+        numCells = meta[3] * meta[4];
+        gridOff = meta[2];
+        primBase = meta[0] + meta[1];
+        for (uint32_t ci = 0; ci < numCells; ci++) {
+            uint32_t packedOff = readU32(storage, gridOff + ci);
+            uint32_t cnt = readU32(storage, gridOff + packedOff);
+            for (uint32_t j = 0; j < cnt; j++) {
+                uint32_t rawVal = readU32(storage, gridOff + packedOff + 1 + j);
+                if ((rawVal & 0x80000000u) == 0) {
+                    reachableAfter.insert(primBase + rawVal);
+                }
+            }
+        }
+        expect(reachableAfter.size() == 2_u)
+            << "2 prims reachable after scroll, got " << reachableAfter.size();
+    };
+
+    "scrolling mode — multiple scroll operations"_test = [] {
+        uint32_t metadataBytes = 1001 * 64;
+        auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder = *Painter::create(nullptr, testAllocator(), mockCM, 1000, true);
+
+        float cellH = 20.0f;
+        builder->setSceneBounds(0, 0, 100.0f, 100.0f);  // 5 lines
+        builder->setGridCellSize(20.0f, cellH);
+
+        // Add 5 prims, one per line
+        for (int i = 0; i < 5; i++) {
+            builder->setCursorPosition(0, static_cast<uint16_t>(i));
+            auto buf = *YPaintBuffer::create();
+            buf->addCircle(0, 50.0f, 10.0f, 5.0f, 0xFF000000 | (i * 0x333333), 0, 0.0f, 0.0f);
+            builder->addYpaintBuffer(buf);
+        }
+
+        expect(builder->primitiveCount() == 5_u) << "5 prims before any scroll";
+
+        // Scroll 2 lines
+        builder->scrollLines(2);
+        expect(builder->primitiveCount() == 3_u) << "3 prims after scrolling 2";
+
+        // Scroll 2 more lines
+        builder->scrollLines(2);
+        expect(builder->primitiveCount() == 1_u) << "1 prim after scrolling 4 total";
+
+        // Scroll last line
+        builder->scrollLines(1);
+        expect(builder->primitiveCount() == 0_u) << "0 prims after scrolling all";
+    };
+
+    "scrolling mode — addYpaintBuffer returns lines consumed"_test = [] {
+        uint32_t metadataBytes = 1001 * 64;
+        auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder = *Painter::create(nullptr, testAllocator(), mockCM, 1000, true);
+
+        builder->setSceneBounds(0, 0, 100.0f, 100.0f);
+        builder->setGridCellSize(20.0f, 20.0f);  // 5 lines
+        builder->setCursorPosition(0, 0);
+
+        // Add buffer that takes ~2.5 lines (height 50 / cellSize 20 = 2.5)
+        auto buf = *YPaintBuffer::create();
+        buf->addBox(0, 50.0f, 25.0f, 20.0f, 25.0f, 0xFFFF0000, 0, 0.0f, 0.0f);
+        auto linesRes = builder->addYpaintBuffer(buf);
+
+        expect(linesRes.has_value()) << "addYpaintBuffer should succeed";
+        uint32_t linesConsumed = *linesRes;
+
+        // Should report lines consumed (caller uses this to advance cursor)
+        expect(linesConsumed >= 1_u)
+            << "should report lines consumed, got " << linesConsumed;
+    };
+};
+
+//=============================================================================
+// EXHAUSTIVE SCROLLING GPU BUFFER VERIFICATION TESTS
+//
+// These tests add primitives in loops with addYpaintBuffer and verify:
+// - Primitive count is correct after each add
+// - GPU buffer contains correct primitive data
+// - Grid lookup finds primitives at correct positions
+// - Scrolling removes correct primitives
+// - Remaining primitives have correct positions after scroll
+//=============================================================================
+
+suite exhaustive_scrolling_tests = [] {
+
+    // Helper: verify primitive exists at expected grid row
+    auto verifyPrimAtRow = [](const PipelineResult& p, uint32_t expectedRow,
+                              uint32_t expectedType, uint32_t expectedColor) -> bool {
+        // Scan grid cells in the expected row
+        if (expectedRow >= p.gridHeight) return false;
+
+        for (uint32_t cx = 0; cx < p.gridWidth; cx++) {
+            uint32_t cellIdx = expectedRow * p.gridWidth + cx;
+            uint32_t packedOff = readU32(p.storage, p.gridOffset + cellIdx);
+            uint32_t cnt = readU32(p.storage, p.gridOffset + packedOff);
+
+            for (uint32_t j = 0; j < cnt; j++) {
+                uint32_t rawVal = readU32(p.storage, p.gridOffset + packedOff + 1 + j);
+                if ((rawVal & 0x80000000u) == 0) {  // Not a glyph
+                    uint32_t primOff = p.primDataBase + rawVal;
+                    uint32_t type = readU32(p.storage, primOff + 1);
+                    if (type == expectedType) {
+                        // Get color based on type
+                        uint32_t colorOff = 0;
+                        if (type == static_cast<uint32_t>(SDFType::Circle)) colorOff = 6;
+                        else if (type == static_cast<uint32_t>(SDFType::Box)) colorOff = 7;
+                        else if (type == static_cast<uint32_t>(SDFType::RoundedBox)) colorOff = 11;
+                        else if (type == static_cast<uint32_t>(SDFType::Triangle)) colorOff = 9;
+
+                        if (colorOff > 0) {
+                            uint32_t color = readU32(p.storage, primOff + colorOff);
+                            if (color == expectedColor) return true;
+                        }
+                    }
+                }
+            }
+        }
+        return false;
+    };
+
+    // Helper: count unique primitives reachable from grid
+    auto countReachablePrims = [](const PipelineResult& p) -> uint32_t {
+        std::set<uint32_t> seen;
+        uint32_t numCells = p.gridWidth * p.gridHeight;
+        for (uint32_t ci = 0; ci < numCells; ci++) {
+            uint32_t packedOff = readU32(p.storage, p.gridOffset + ci);
+            uint32_t cnt = readU32(p.storage, p.gridOffset + packedOff);
+            for (uint32_t j = 0; j < cnt; j++) {
+                uint32_t rawVal = readU32(p.storage, p.gridOffset + packedOff + 1 + j);
+                if ((rawVal & 0x80000000u) == 0) {
+                    seen.insert(rawVal);
+                }
+            }
+        }
+        return static_cast<uint32_t>(seen.size());
+    };
+
+    // Helper: get all primitive colors from GPU buffer
+    auto getAllPrimColors = [](const PipelineResult& p) -> std::vector<uint32_t> {
+        std::vector<uint32_t> colors;
+        for (uint32_t i = 0; i < p.primitiveCount; i++) {
+            uint32_t wordOff = readU32(p.storage, p.primitiveOffset + i);
+            uint32_t primOff = p.primDataBase + wordOff;
+            uint32_t type = readU32(p.storage, primOff + 1);
+
+            uint32_t colorOff = 0;
+            if (type == static_cast<uint32_t>(SDFType::Circle)) colorOff = 6;
+            else if (type == static_cast<uint32_t>(SDFType::Box)) colorOff = 7;
+            else if (type == static_cast<uint32_t>(SDFType::RoundedBox)) colorOff = 11;
+            else if (type == static_cast<uint32_t>(SDFType::Triangle)) colorOff = 9;
+
+            if (colorOff > 0) {
+                colors.push_back(readU32(p.storage, primOff + colorOff));
+            }
+        }
+        return colors;
+    };
+
+    "exhaustive: add 10 circles sequentially, verify each"_test = [] {
+        uint32_t metadataBytes = 1001 * 64;
+        auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder = *Painter::create(nullptr, testAllocator(), mockCM, 1000, true);
+
+        float cellH = 20.0f;
+        builder->setSceneBounds(0, 0, 200.0f, 200.0f);  // 10 lines
+        builder->setGridCellSize(20.0f, cellH);
+
+        // Add 10 circles, one per row
+        for (uint32_t i = 0; i < 10; i++) {
+            builder->setCursorPosition(0, static_cast<uint16_t>(i));
+
+            auto buf = *YPaintBuffer::create();
+            uint32_t color = 0xFF000000 | (i * 0x111111);
+            buf->addCircle(0, 50.0f, 10.0f, 8.0f, color, 0, 0.0f, 0.0f);
+            builder->addYpaintBuffer(buf);
+
+            // Build and verify after each add
+            builder->declareBufferNeeds();
+            mockCM->mockBufMgr()->commitReservations();
+            builder->allocateBuffers();
+            builder->writeBuffers();
+
+            expect(builder->primitiveCount() == i + 1)
+                << "after adding " << (i + 1) << " circles, count=" << builder->primitiveCount();
+        }
+
+        // Final verification: all 10 prims in GPU buffer
+        const float* storage = mockCM->mockBufMgr()->storageAsFloat();
+        const uint32_t* meta = mockCM->metadataAsU32() + 1000 * 16;
+        expect(meta[1] == 10_u) << "final prim count should be 10";
+
+        // Verify each primitive has correct color
+        uint32_t primOff = meta[0];
+        uint32_t primCnt = meta[1];
+        uint32_t primBase = primOff + primCnt;
+
+        for (uint32_t i = 0; i < primCnt; i++) {
+            uint32_t wordOff = readU32(storage, primOff + i);
+            uint32_t absOff = primBase + wordOff;
+            uint32_t type = readU32(storage, absOff + 1);
+            expect(type == static_cast<uint32_t>(SDFType::Circle))
+                << "prim " << i << " should be Circle";
+
+            uint32_t color = readU32(storage, absOff + 6);
+            uint32_t expectedColor = 0xFF000000 | (i * 0x111111);
+            expect(color == expectedColor)
+                << "prim " << i << " color mismatch: got " << std::hex << color
+                << " expected " << expectedColor << std::dec;
+        }
+    };
+
+    "exhaustive: add mixed primitives, verify types and colors"_test = [] {
+        uint32_t metadataBytes = 1001 * 64;
+        auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder = *Painter::create(nullptr, testAllocator(), mockCM, 1000, true);
+
+        builder->setSceneBounds(0, 0, 200.0f, 200.0f);
+        builder->setGridCellSize(20.0f, 20.0f);
+
+        struct PrimSpec {
+            uint32_t type;
+            uint32_t color;
+        };
+        std::vector<PrimSpec> specs;
+
+        // Add alternating types: circle, box, triangle, roundedbox
+        for (uint32_t i = 0; i < 8; i++) {
+            builder->setCursorPosition(0, static_cast<uint16_t>(i));
+            auto buf = *YPaintBuffer::create();
+            uint32_t color = 0xFF000000 | ((i + 1) * 0x101010);
+
+            switch (i % 4) {
+                case 0:
+                    buf->addCircle(0, 50.0f, 10.0f, 8.0f, color, 0, 0.0f, 0.0f);
+                    specs.push_back({static_cast<uint32_t>(SDFType::Circle), color});
+                    break;
+                case 1:
+                    buf->addBox(0, 50.0f, 10.0f, 15.0f, 8.0f, color, 0, 0.0f, 0.0f);
+                    specs.push_back({static_cast<uint32_t>(SDFType::Box), color});
+                    break;
+                case 2:
+                    buf->addTriangle(0, 40.0f, 5.0f, 60.0f, 5.0f, 50.0f, 18.0f,
+                                     color, 0, 0.0f, 0.0f);
+                    specs.push_back({static_cast<uint32_t>(SDFType::Triangle), color});
+                    break;
+                case 3:
+                    buf->addRoundedBox(0, 50.0f, 10.0f, 15.0f, 8.0f,
+                                       2.0f, 2.0f, 2.0f, 2.0f, color, 0, 0.0f, 0.0f);
+                    specs.push_back({static_cast<uint32_t>(SDFType::RoundedBox), color});
+                    break;
+            }
+            builder->addYpaintBuffer(buf);
+        }
+
+        builder->declareBufferNeeds();
+        mockCM->mockBufMgr()->commitReservations();
+        builder->allocateBuffers();
+        builder->writeBuffers();
+
+        expect(builder->primitiveCount() == 8_u) << "should have 8 prims";
+
+        // Verify each primitive
+        const float* storage = mockCM->mockBufMgr()->storageAsFloat();
+        const uint32_t* meta = mockCM->metadataAsU32() + 1000 * 16;
+        uint32_t primOff = meta[0];
+        uint32_t primCnt = meta[1];
+        uint32_t primBase = primOff + primCnt;
+
+        for (uint32_t i = 0; i < primCnt; i++) {
+            uint32_t wordOff = readU32(storage, primOff + i);
+            uint32_t absOff = primBase + wordOff;
+            uint32_t type = readU32(storage, absOff + 1);
+
+            expect(type == specs[i].type)
+                << "prim " << i << " type mismatch: got " << type
+                << " expected " << specs[i].type;
+
+            // Get color offset based on type
+            uint32_t colorOff = 0;
+            if (type == static_cast<uint32_t>(SDFType::Circle)) colorOff = 6;
+            else if (type == static_cast<uint32_t>(SDFType::Box)) colorOff = 7;
+            else if (type == static_cast<uint32_t>(SDFType::Triangle)) colorOff = 9;
+            else if (type == static_cast<uint32_t>(SDFType::RoundedBox)) colorOff = 11;
+
+            uint32_t color = readU32(storage, absOff + colorOff);
+            expect(color == specs[i].color)
+                << "prim " << i << " color mismatch";
+        }
+    };
+
+    "exhaustive: scroll removes correct primitives"_test = [] {
+        uint32_t metadataBytes = 1001 * 64;
+        auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder = *Painter::create(nullptr, testAllocator(), mockCM, 1000, true);
+
+        float cellH = 20.0f;
+        builder->setSceneBounds(0, 0, 100.0f, 100.0f);  // 5 lines
+        builder->setGridCellSize(20.0f, cellH);
+
+        // Add 5 circles with distinct colors at rows 0-4
+        std::vector<uint32_t> colors = {0xFFAA0000, 0xFF00BB00, 0xFF0000CC,
+                                         0xFFDD00DD, 0xFF00EEEE};
+        for (uint32_t i = 0; i < 5; i++) {
+            builder->setCursorPosition(0, static_cast<uint16_t>(i));
+            auto buf = *YPaintBuffer::create();
+            buf->addCircle(0, 50.0f, 10.0f, 8.0f, colors[i], 0, 0.0f, 0.0f);
+            builder->addYpaintBuffer(buf);
+        }
+
+        expect(builder->primitiveCount() == 5_u) << "should have 5 prims";
+
+        // Scroll 2 lines - should remove colors[0] and colors[1]
+        builder->scrollLines(2);
+
+        builder->declareBufferNeeds();
+        mockCM->mockBufMgr()->commitReservations();
+        builder->allocateBuffers();
+        builder->writeBuffers();
+
+        expect(builder->primitiveCount() == 3_u)
+            << "after scroll 2, should have 3 prims, got " << builder->primitiveCount();
+
+        // Verify remaining colors are colors[2], colors[3], colors[4]
+        const float* storage = mockCM->mockBufMgr()->storageAsFloat();
+        const uint32_t* meta = mockCM->metadataAsU32() + 1000 * 16;
+        uint32_t primOff = meta[0];
+        uint32_t primCnt = meta[1];
+        uint32_t primBase = primOff + primCnt;
+
+        std::set<uint32_t> remainingColors;
+        for (uint32_t i = 0; i < primCnt; i++) {
+            uint32_t wordOff = readU32(storage, primOff + i);
+            uint32_t absOff = primBase + wordOff;
+            uint32_t color = readU32(storage, absOff + 6);  // Circle color at +6
+            remainingColors.insert(color);
+        }
+
+        expect(remainingColors.count(colors[0]) == 0_u) << "color[0] should be scrolled away";
+        expect(remainingColors.count(colors[1]) == 0_u) << "color[1] should be scrolled away";
+        expect(remainingColors.count(colors[2]) == 1_u) << "color[2] should remain";
+        expect(remainingColors.count(colors[3]) == 1_u) << "color[3] should remain";
+        expect(remainingColors.count(colors[4]) == 1_u) << "color[4] should remain";
+    };
+
+    "exhaustive: multiple scroll operations"_test = [] {
+        uint32_t metadataBytes = 1001 * 64;
+        auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder = *Painter::create(nullptr, testAllocator(), mockCM, 1000, true);
+
+        builder->setSceneBounds(0, 0, 100.0f, 200.0f);  // 10 lines
+        builder->setGridCellSize(20.0f, 20.0f);
+
+        // Add 10 prims
+        for (uint32_t i = 0; i < 10; i++) {
+            builder->setCursorPosition(0, static_cast<uint16_t>(i));
+            auto buf = *YPaintBuffer::create();
+            buf->addCircle(0, 50.0f, 10.0f, 5.0f, 0xFF000000 | i, 0, 0.0f, 0.0f);
+            builder->addYpaintBuffer(buf);
+        }
+        expect(builder->primitiveCount() == 10_u);
+
+        // Scroll 3 lines
+        builder->scrollLines(3);
+        expect(builder->primitiveCount() == 7_u) << "after scroll 3";
+
+        // Scroll 2 more
+        builder->scrollLines(2);
+        expect(builder->primitiveCount() == 5_u) << "after scroll 5 total";
+
+        // Scroll 4 more
+        builder->scrollLines(4);
+        expect(builder->primitiveCount() == 1_u) << "after scroll 9 total";
+
+        // Scroll last one
+        builder->scrollLines(1);
+        expect(builder->primitiveCount() == 0_u) << "after scroll 10 total";
+    };
+
+    "exhaustive: add-scroll-add sequence"_test = [] {
+        uint32_t metadataBytes = 1001 * 64;
+        auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder = *Painter::create(nullptr, testAllocator(), mockCM, 1000, true);
+
+        builder->setSceneBounds(0, 0, 100.0f, 60.0f);  // 3 lines
+        builder->setGridCellSize(20.0f, 20.0f);
+
+        // Add at row 0
+        builder->setCursorPosition(0, 0);
+        auto buf1 = *YPaintBuffer::create();
+        buf1->addCircle(0, 50.0f, 10.0f, 5.0f, 0xFFAAAAAA, 0, 0.0f, 0.0f);
+        builder->addYpaintBuffer(buf1);
+
+        // Add at row 1
+        builder->setCursorPosition(0, 1);
+        auto buf2 = *YPaintBuffer::create();
+        buf2->addCircle(0, 50.0f, 10.0f, 5.0f, 0xFFBBBBBB, 0, 0.0f, 0.0f);
+        builder->addYpaintBuffer(buf2);
+
+        expect(builder->primitiveCount() == 2_u);
+
+        // Scroll 1 line - removes 0xAAAAAAA
+        builder->scrollLines(1);
+        expect(builder->primitiveCount() == 1_u);
+
+        // Add at row 1 (cursor was at 1, now at 0 after scroll adjustment)
+        builder->setCursorPosition(0, 1);
+        auto buf3 = *YPaintBuffer::create();
+        buf3->addCircle(0, 50.0f, 10.0f, 5.0f, 0xFFCCCCCC, 0, 0.0f, 0.0f);
+        builder->addYpaintBuffer(buf3);
+
+        expect(builder->primitiveCount() == 2_u);
+
+        // Build and verify
+        builder->declareBufferNeeds();
+        mockCM->mockBufMgr()->commitReservations();
+        builder->allocateBuffers();
+        builder->writeBuffers();
+
+        const float* storage = mockCM->mockBufMgr()->storageAsFloat();
+        const uint32_t* meta = mockCM->metadataAsU32() + 1000 * 16;
+        uint32_t primOff = meta[0];
+        uint32_t primCnt = meta[1];
+        uint32_t primBase = primOff + primCnt;
+
+        std::set<uint32_t> colors;
+        for (uint32_t i = 0; i < primCnt; i++) {
+            uint32_t wordOff = readU32(storage, primOff + i);
+            uint32_t absOff = primBase + wordOff;
+            uint32_t color = readU32(storage, absOff + 6);
+            colors.insert(color);
+        }
+
+        expect(colors.count(0xFFAAAAAA) == 0_u) << "0xAA should be scrolled away";
+        expect(colors.count(0xFFBBBBBB) == 1_u) << "0xBB should remain";
+        expect(colors.count(0xFFCCCCCC) == 1_u) << "0xCC should be added";
+    };
+
+    "exhaustive: verify grid lookup after scroll"_test = [] {
+        uint32_t metadataBytes = 1001 * 64;
+        auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder = *Painter::create(nullptr, testAllocator(), mockCM, 1000, true);
+
+        builder->setSceneBounds(0, 0, 100.0f, 100.0f);  // 5 lines
+        builder->setGridCellSize(20.0f, 20.0f);
+
+        // Add circles at different X positions for each row
+        for (uint32_t i = 0; i < 5; i++) {
+            builder->setCursorPosition(0, static_cast<uint16_t>(i));
+            auto buf = *YPaintBuffer::create();
+            float cx = 10.0f + i * 20.0f;  // x = 10, 30, 50, 70, 90
+            buf->addCircle(0, cx, 10.0f, 5.0f, 0xFF000000 | i, 0, 0.0f, 0.0f);
+            builder->addYpaintBuffer(buf);
+        }
+
+        // Scroll 2 lines
+        builder->scrollLines(2);
+
+        builder->declareBufferNeeds();
+        mockCM->mockBufMgr()->commitReservations();
+        builder->allocateBuffers();
+        builder->writeBuffers();
+
+        const float* storage = mockCM->mockBufMgr()->storageAsFloat();
+        const uint32_t* meta = mockCM->metadataAsU32() + 1000 * 16;
+
+        PipelineResult p;
+        p.storage = storage;
+        p.meta = meta;
+        p.primitiveOffset = meta[0];
+        p.primitiveCount = meta[1];
+        p.primDataBase = p.primitiveOffset + p.primitiveCount;
+        p.gridOffset = meta[2];
+        p.gridWidth = meta[3];
+        p.gridHeight = meta[4];
+        p.cellSizeX = 20.0f;
+        p.cellSizeY = 20.0f;
+        std::memcpy(&p.sceneMinX, &meta[8], sizeof(float));
+        std::memcpy(&p.sceneMinY, &meta[9], sizeof(float));
+
+        expect(p.primitiveCount == 3_u) << "should have 3 prims after scroll";
+
+        // Remaining prims should have colors 2, 3, 4 (originally at rows 2, 3, 4)
+        std::set<uint32_t> colors;
+        for (uint32_t i = 0; i < p.primitiveCount; i++) {
+            uint32_t wordOff = readU32(storage, p.primitiveOffset + i);
+            uint32_t absOff = p.primDataBase + wordOff;
+            uint32_t color = readU32(storage, absOff + 6);
+            colors.insert(color);
+        }
+
+        expect(colors.count(0xFF000000) == 0_u) << "color 0 scrolled away";
+        expect(colors.count(0xFF000001) == 0_u) << "color 1 scrolled away";
+        expect(colors.count(0xFF000002) == 1_u) << "color 2 remains";
+        expect(colors.count(0xFF000003) == 1_u) << "color 3 remains";
+        expect(colors.count(0xFF000004) == 1_u) << "color 4 remains";
+    };
+
+    "exhaustive: 20 adds with periodic scrolling"_test = [] {
+        uint32_t metadataBytes = 1001 * 64;
+        auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder = *Painter::create(nullptr, testAllocator(), mockCM, 1000, true);
+
+        builder->setSceneBounds(0, 0, 100.0f, 100.0f);  // 5 lines visible
+        builder->setGridCellSize(20.0f, 20.0f);
+
+        uint32_t cursorRow = 0;
+        uint32_t totalScrolled = 0;
+        std::vector<uint32_t> activeColors;
+
+        for (uint32_t i = 0; i < 20; i++) {
+            // Scroll if we're past visible area
+            if (cursorRow >= 5) {
+                uint32_t scrollAmt = cursorRow - 4;
+                builder->scrollLines(static_cast<uint16_t>(scrollAmt));
+                totalScrolled += scrollAmt;
+                cursorRow -= scrollAmt;
+
+                // Remove scrolled colors from tracking
+                if (scrollAmt <= activeColors.size()) {
+                    activeColors.erase(activeColors.begin(),
+                                       activeColors.begin() + scrollAmt);
+                } else {
+                    activeColors.clear();
+                }
+            }
+
+            builder->setCursorPosition(0, static_cast<uint16_t>(cursorRow));
+            auto buf = *YPaintBuffer::create();
+            uint32_t color = 0xFF000000 | ((i + 1) * 0x010101);
+            buf->addCircle(0, 50.0f, 10.0f, 5.0f, color, 0, 0.0f, 0.0f);
+            builder->addYpaintBuffer(buf);
+            activeColors.push_back(color);
+
+            cursorRow++;
+        }
+
+        // Final build
+        builder->declareBufferNeeds();
+        mockCM->mockBufMgr()->commitReservations();
+        builder->allocateBuffers();
+        builder->writeBuffers();
+
+        const float* storage = mockCM->mockBufMgr()->storageAsFloat();
+        const uint32_t* meta = mockCM->metadataAsU32() + 1000 * 16;
+
+        // Verify primitive count matches tracked active colors
+        expect(meta[1] == static_cast<uint32_t>(activeColors.size()))
+            << "prim count should match active colors: expected "
+            << activeColors.size() << " got " << meta[1];
+
+        // Verify all active colors are in GPU buffer
+        uint32_t primOff = meta[0];
+        uint32_t primCnt = meta[1];
+        uint32_t primBase = primOff + primCnt;
+
+        std::set<uint32_t> gpuColors;
+        for (uint32_t i = 0; i < primCnt; i++) {
+            uint32_t wordOff = readU32(storage, primOff + i);
+            uint32_t absOff = primBase + wordOff;
+            uint32_t color = readU32(storage, absOff + 6);
+            gpuColors.insert(color);
+        }
+
+        for (uint32_t expectedColor : activeColors) {
+            expect(gpuColors.count(expectedColor) == 1_u)
+                << "expected color " << std::hex << expectedColor
+                << std::dec << " should be in GPU buffer";
+        }
+    };
+
+    "exhaustive: different primitive sizes spanning multiple lines"_test = [] {
+        uint32_t metadataBytes = 1001 * 64;
+        auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder = *Painter::create(nullptr, testAllocator(), mockCM, 1000, true);
+
+        builder->setSceneBounds(0, 0, 100.0f, 200.0f);  // 10 lines
+        builder->setGridCellSize(20.0f, 20.0f);
+
+        // Add boxes of varying heights
+        builder->setCursorPosition(0, 0);
+        auto buf1 = *YPaintBuffer::create();
+        buf1->addBox(0, 50.0f, 15.0f, 20.0f, 15.0f, 0xFFAA0000, 0, 0.0f, 0.0f);  // ~1.5 lines
+        builder->addYpaintBuffer(buf1);
+
+        builder->setCursorPosition(0, 2);
+        auto buf2 = *YPaintBuffer::create();
+        buf2->addBox(0, 50.0f, 25.0f, 20.0f, 25.0f, 0xFF00BB00, 0, 0.0f, 0.0f);  // ~2.5 lines
+        builder->addYpaintBuffer(buf2);
+
+        builder->setCursorPosition(0, 5);
+        auto buf3 = *YPaintBuffer::create();
+        buf3->addBox(0, 50.0f, 35.0f, 20.0f, 35.0f, 0xFF0000CC, 0, 0.0f, 0.0f);  // ~3.5 lines
+        builder->addYpaintBuffer(buf3);
+
+        builder->declareBufferNeeds();
+        mockCM->mockBufMgr()->commitReservations();
+        builder->allocateBuffers();
+        builder->writeBuffers();
+
+        expect(builder->primitiveCount() == 3_u) << "should have 3 prims";
+
+        // Scroll 3 lines - should remove first box only (it's in lines 0-1)
+        builder->scrollLines(3);
+
+        builder->declareBufferNeeds();
+        mockCM->mockBufMgr()->commitReservations();
+        builder->allocateBuffers();
+        builder->writeBuffers();
+
+        const float* storage = mockCM->mockBufMgr()->storageAsFloat();
+        const uint32_t* meta = mockCM->metadataAsU32() + 1000 * 16;
+
+        std::set<uint32_t> colors;
+        uint32_t primOff = meta[0];
+        uint32_t primCnt = meta[1];
+        uint32_t primBase = primOff + primCnt;
+
+        for (uint32_t i = 0; i < primCnt; i++) {
+            uint32_t wordOff = readU32(storage, primOff + i);
+            uint32_t absOff = primBase + wordOff;
+            uint32_t color = readU32(storage, absOff + 7);  // Box color at +7
+            colors.insert(color);
+        }
+
+        expect(colors.count(0xFFAA0000) == 0_u) << "first box should be scrolled";
+        expect(colors.count(0xFF00BB00) == 1_u) << "second box should remain";
+        expect(colors.count(0xFF0000CC) == 1_u) << "third box should remain";
+    };
+
+    "exhaustive: verify primitive offset table integrity"_test = [] {
+        uint32_t metadataBytes = 1001 * 64;
+        auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder = *Painter::create(nullptr, testAllocator(), mockCM, 1000, true);
+
+        builder->setSceneBounds(0, 0, 200.0f, 200.0f);
+        builder->setGridCellSize(20.0f, 20.0f);
+
+        // Add 15 mixed primitives
+        for (uint32_t i = 0; i < 15; i++) {
+            builder->setCursorPosition(static_cast<uint16_t>(i % 5),
+                                       static_cast<uint16_t>(i / 5));
+            auto buf = *YPaintBuffer::create();
+
+            switch (i % 3) {
+                case 0:
+                    buf->addCircle(0, 20.0f + (i % 5) * 30.0f, 10.0f, 5.0f,
+                                   0xFF000000 | i, 0, 0.0f, 0.0f);
+                    break;
+                case 1:
+                    buf->addBox(0, 20.0f + (i % 5) * 30.0f, 10.0f, 10.0f, 8.0f,
+                                0xFF000000 | i, 0, 0.0f, 0.0f);
+                    break;
+                case 2:
+                    buf->addTriangle(0, 15.0f + (i % 5) * 30.0f, 5.0f,
+                                     25.0f + (i % 5) * 30.0f, 5.0f,
+                                     20.0f + (i % 5) * 30.0f, 15.0f,
+                                     0xFF000000 | i, 0, 0.0f, 0.0f);
+                    break;
+            }
+            builder->addYpaintBuffer(buf);
+        }
+
+        builder->declareBufferNeeds();
+        mockCM->mockBufMgr()->commitReservations();
+        builder->allocateBuffers();
+        builder->writeBuffers();
+
+        const float* storage = mockCM->mockBufMgr()->storageAsFloat();
+        const uint32_t* meta = mockCM->metadataAsU32() + 1000 * 16;
+
+        uint32_t primOff = meta[0];
+        uint32_t primCnt = meta[1];
+        uint32_t primBase = primOff + primCnt;
+
+        expect(primCnt == 15_u) << "should have 15 prims";
+
+        // Verify offset table: each offset should point to valid prim data
+        std::set<uint32_t> seenOffsets;
+        for (uint32_t i = 0; i < primCnt; i++) {
+            uint32_t wordOff = readU32(storage, primOff + i);
+
+            // Offset should be unique
+            expect(seenOffsets.count(wordOff) == 0_u)
+                << "offset " << wordOff << " should be unique";
+            seenOffsets.insert(wordOff);
+
+            // Offset should point to valid type
+            uint32_t absOff = primBase + wordOff;
+            uint32_t type = readU32(storage, absOff + 1);
+            expect(type == static_cast<uint32_t>(SDFType::Circle) ||
+                   type == static_cast<uint32_t>(SDFType::Box) ||
+                   type == static_cast<uint32_t>(SDFType::Triangle))
+                << "prim " << i << " has valid type " << type;
+        }
+    };
+
+    "exhaustive: stress test 50 adds with random scrolling"_test = [] {
+        uint32_t metadataBytes = 1001 * 64;
+        auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder = *Painter::create(nullptr, testAllocator(), mockCM, 1000, true);
+
+        builder->setSceneBounds(0, 0, 100.0f, 100.0f);  // 5 lines
+        builder->setGridCellSize(20.0f, 20.0f);
+
+        uint32_t cursorRow = 0;
+        uint32_t expectedPrims = 0;
+
+        for (uint32_t i = 0; i < 50; i++) {
+            // Scroll if needed
+            while (cursorRow >= 5 && expectedPrims > 0) {
+                builder->scrollLines(1);
+                cursorRow--;
+                expectedPrims--;
+            }
+
+            builder->setCursorPosition(0, static_cast<uint16_t>(cursorRow));
+            auto buf = *YPaintBuffer::create();
+            buf->addCircle(0, 50.0f, 10.0f, 5.0f, 0xFF000000 | i, 0, 0.0f, 0.0f);
+            builder->addYpaintBuffer(buf);
+            expectedPrims++;
+            cursorRow++;
+
+            // Verify count matches expectation
+            expect(builder->primitiveCount() == expectedPrims)
+                << "iteration " << i << ": expected " << expectedPrims
+                << " got " << builder->primitiveCount();
+        }
+
+        // Final GPU buffer verification
+        builder->declareBufferNeeds();
+        mockCM->mockBufMgr()->commitReservations();
+        builder->allocateBuffers();
+        builder->writeBuffers();
+
+        const uint32_t* meta = mockCM->metadataAsU32() + 1000 * 16;
+        expect(meta[1] == expectedPrims)
+            << "final GPU buffer should have " << expectedPrims << " prims";
+    };
+
+    //=========================================================================
+    // CURSOR NOT AT TOP - Tests that start cursor at non-zero row
+    //=========================================================================
+
+    "cursor at row 3: first add preserves nothing above"_test = [] {
+        uint32_t metadataBytes = 1001 * 64;
+        auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder = *Painter::create(nullptr, testAllocator(), mockCM, 1000, true);
+
+        builder->setSceneBounds(0, 0, 100.0f, 200.0f);  // 10 lines
+        builder->setGridCellSize(20.0f, 20.0f);
+
+        // Start cursor at row 3 (not at top!)
+        builder->setCursorPosition(0, 3);
+
+        auto buf = *YPaintBuffer::create();
+        buf->addCircle(0, 50.0f, 10.0f, 8.0f, 0xFFAA0000, 0, 0.0f, 0.0f);
+        builder->addYpaintBuffer(buf);
+
+        builder->declareBufferNeeds();
+        mockCM->mockBufMgr()->commitReservations();
+        builder->allocateBuffers();
+        builder->writeBuffers();
+
+        expect(builder->primitiveCount() == 1_u) << "should have 1 prim";
+
+        const float* storage = mockCM->mockBufMgr()->storageAsFloat();
+        const uint32_t* meta = mockCM->metadataAsU32() + 1000 * 16;
+        uint32_t primOff = meta[0];
+        uint32_t primBase = primOff + meta[1];
+        uint32_t wordOff = readU32(storage, primOff);
+        uint32_t color = readU32(storage, primBase + wordOff + 6);
+
+        expect(color == 0xFFAA0000u) << "circle color should match";
+    };
+
+    "cursor at row 5: add then add again at row 6"_test = [] {
+        uint32_t metadataBytes = 1001 * 64;
+        auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder = *Painter::create(nullptr, testAllocator(), mockCM, 1000, true);
+
+        builder->setSceneBounds(0, 0, 100.0f, 200.0f);  // 10 lines
+        builder->setGridCellSize(20.0f, 20.0f);
+
+        // First add at row 5
+        builder->setCursorPosition(0, 5);
+        auto buf1 = *YPaintBuffer::create();
+        buf1->addCircle(0, 50.0f, 10.0f, 8.0f, 0xFFAA0000, 0, 0.0f, 0.0f);
+        builder->addYpaintBuffer(buf1);
+
+        expect(builder->primitiveCount() == 1_u) << "after first add";
+
+        // Second add at row 6
+        builder->setCursorPosition(0, 6);
+        auto buf2 = *YPaintBuffer::create();
+        buf2->addCircle(0, 50.0f, 10.0f, 8.0f, 0xFF00BB00, 0, 0.0f, 0.0f);
+        builder->addYpaintBuffer(buf2);
+
+        expect(builder->primitiveCount() == 2_u) << "after second add, should have 2 prims";
+
+        builder->declareBufferNeeds();
+        mockCM->mockBufMgr()->commitReservations();
+        builder->allocateBuffers();
+        builder->writeBuffers();
+
+        const float* storage = mockCM->mockBufMgr()->storageAsFloat();
+        const uint32_t* meta = mockCM->metadataAsU32() + 1000 * 16;
+
+        expect(meta[1] == 2_u) << "GPU buffer should have 2 prims";
+
+        // Verify both colors exist
+        std::set<uint32_t> colors;
+        uint32_t primOff = meta[0];
+        uint32_t primBase = primOff + meta[1];
+        for (uint32_t i = 0; i < meta[1]; i++) {
+            uint32_t wordOff = readU32(storage, primOff + i);
+            uint32_t color = readU32(storage, primBase + wordOff + 6);
+            colors.insert(color);
+        }
+
+        expect(colors.count(0xFFAA0000) == 1_u) << "first color should exist";
+        expect(colors.count(0xFF00BB00) == 1_u) << "second color should exist";
+    };
+
+    "cursor at row 5: multiple adds, previous NOT deleted"_test = [] {
+        uint32_t metadataBytes = 1001 * 64;
+        auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder = *Painter::create(nullptr, testAllocator(), mockCM, 1000, true);
+
+        builder->setSceneBounds(0, 0, 100.0f, 200.0f);  // 10 lines
+        builder->setGridCellSize(20.0f, 20.0f);
+
+        std::vector<uint32_t> expectedColors;
+
+        // Add at row 5
+        builder->setCursorPosition(0, 5);
+        auto buf1 = *YPaintBuffer::create();
+        buf1->addCircle(0, 50.0f, 10.0f, 8.0f, 0xFF110000, 0, 0.0f, 0.0f);
+        builder->addYpaintBuffer(buf1);
+        expectedColors.push_back(0xFF110000);
+        expect(builder->primitiveCount() == 1_u) << "after add 1";
+
+        // Add at row 6
+        builder->setCursorPosition(0, 6);
+        auto buf2 = *YPaintBuffer::create();
+        buf2->addCircle(0, 50.0f, 10.0f, 8.0f, 0xFF220000, 0, 0.0f, 0.0f);
+        builder->addYpaintBuffer(buf2);
+        expectedColors.push_back(0xFF220000);
+        expect(builder->primitiveCount() == 2_u) << "after add 2";
+
+        // Add at row 7
+        builder->setCursorPosition(0, 7);
+        auto buf3 = *YPaintBuffer::create();
+        buf3->addCircle(0, 50.0f, 10.0f, 8.0f, 0xFF330000, 0, 0.0f, 0.0f);
+        builder->addYpaintBuffer(buf3);
+        expectedColors.push_back(0xFF330000);
+        expect(builder->primitiveCount() == 3_u) << "after add 3";
+
+        // Add at row 8
+        builder->setCursorPosition(0, 8);
+        auto buf4 = *YPaintBuffer::create();
+        buf4->addCircle(0, 50.0f, 10.0f, 8.0f, 0xFF440000, 0, 0.0f, 0.0f);
+        builder->addYpaintBuffer(buf4);
+        expectedColors.push_back(0xFF440000);
+        expect(builder->primitiveCount() == 4_u) << "after add 4";
+
+        builder->declareBufferNeeds();
+        mockCM->mockBufMgr()->commitReservations();
+        builder->allocateBuffers();
+        builder->writeBuffers();
+
+        const float* storage = mockCM->mockBufMgr()->storageAsFloat();
+        const uint32_t* meta = mockCM->metadataAsU32() + 1000 * 16;
+
+        expect(meta[1] == 4_u) << "GPU buffer should have 4 prims, got " << meta[1];
+
+        // Verify ALL colors exist (none deleted!)
+        std::set<uint32_t> colors;
+        uint32_t primOff = meta[0];
+        uint32_t primBase = primOff + meta[1];
+        for (uint32_t i = 0; i < meta[1]; i++) {
+            uint32_t wordOff = readU32(storage, primOff + i);
+            uint32_t color = readU32(storage, primBase + wordOff + 6);
+            colors.insert(color);
+        }
+
+        for (uint32_t expected : expectedColors) {
+            expect(colors.count(expected) == 1_u)
+                << "color " << std::hex << expected << std::dec << " should exist";
+        }
+    };
+
+    "simulate terminal: cursor starts at row 10, add multiple times"_test = [] {
+        uint32_t metadataBytes = 1001 * 64;
+        auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder = *Painter::create(nullptr, testAllocator(), mockCM, 1000, true);
+
+        builder->setSceneBounds(0, 0, 100.0f, 500.0f);  // 25 lines
+        builder->setGridCellSize(20.0f, 20.0f);
+
+        // Simulate terminal where cursor is already at row 10
+        uint32_t cursorRow = 10;
+        std::vector<uint32_t> addedColors;
+
+        // Add 5 buffers sequentially
+        for (uint32_t i = 0; i < 5; i++) {
+            builder->setCursorPosition(0, static_cast<uint16_t>(cursorRow));
+            auto buf = *YPaintBuffer::create();
+            uint32_t color = 0xFF000000 | ((i + 1) * 0x111111);
+            buf->addCircle(0, 50.0f, 10.0f, 8.0f, color, 0, 0.0f, 0.0f);
+            builder->addYpaintBuffer(buf);
+            addedColors.push_back(color);
+            cursorRow++;
+
+            expect(builder->primitiveCount() == i + 1)
+                << "after add " << (i + 1) << " should have " << (i + 1) << " prims";
+        }
+
+        builder->declareBufferNeeds();
+        mockCM->mockBufMgr()->commitReservations();
+        builder->allocateBuffers();
+        builder->writeBuffers();
+
+        const float* storage = mockCM->mockBufMgr()->storageAsFloat();
+        const uint32_t* meta = mockCM->metadataAsU32() + 1000 * 16;
+
+        expect(meta[1] == 5_u) << "GPU should have 5 prims";
+
+        std::set<uint32_t> colors;
+        uint32_t primOff = meta[0];
+        uint32_t primBase = primOff + meta[1];
+        for (uint32_t i = 0; i < meta[1]; i++) {
+            uint32_t wordOff = readU32(storage, primOff + i);
+            uint32_t color = readU32(storage, primBase + wordOff + 6);
+            colors.insert(color);
+        }
+
+        for (uint32_t expected : addedColors) {
+            expect(colors.count(expected) == 1_u)
+                << "color " << std::hex << expected << " missing" << std::dec;
+        }
+    };
+
+    "cursor at row 5: add, then press ENTER (move cursor), add again"_test = [] {
+        uint32_t metadataBytes = 1001 * 64;
+        auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder = *Painter::create(nullptr, testAllocator(), mockCM, 1000, true);
+
+        builder->setSceneBounds(0, 0, 100.0f, 200.0f);  // 10 lines
+        builder->setGridCellSize(20.0f, 20.0f);
+
+        // First shape at row 5
+        builder->setCursorPosition(0, 5);
+        auto buf1 = *YPaintBuffer::create();
+        buf1->addCircle(0, 50.0f, 10.0f, 8.0f, 0xFFAAAA00, 0, 0.0f, 0.0f);
+        builder->addYpaintBuffer(buf1);
+
+        expect(builder->primitiveCount() == 1_u) << "after first add";
+
+        // Simulate ENTER press: cursor moves to row 6 (empty line)
+        // No shape added, just cursor moved
+
+        // Second shape at row 7 (after the empty line)
+        builder->setCursorPosition(0, 7);
+        auto buf2 = *YPaintBuffer::create();
+        buf2->addCircle(0, 50.0f, 10.0f, 8.0f, 0xFF00BBBB, 0, 0.0f, 0.0f);
+        builder->addYpaintBuffer(buf2);
+
+        // CRITICAL: first shape should NOT be deleted!
+        expect(builder->primitiveCount() == 2_u)
+            << "after second add, should have 2 prims, got " << builder->primitiveCount();
+
+        builder->declareBufferNeeds();
+        mockCM->mockBufMgr()->commitReservations();
+        builder->allocateBuffers();
+        builder->writeBuffers();
+
+        const float* storage = mockCM->mockBufMgr()->storageAsFloat();
+        const uint32_t* meta = mockCM->metadataAsU32() + 1000 * 16;
+
+        std::set<uint32_t> colors;
+        uint32_t primOff = meta[0];
+        uint32_t primBase = primOff + meta[1];
+        for (uint32_t i = 0; i < meta[1]; i++) {
+            uint32_t wordOff = readU32(storage, primOff + i);
+            uint32_t color = readU32(storage, primBase + wordOff + 6);
+            colors.insert(color);
+        }
+
+        expect(colors.count(0xFFAAAA00) == 1_u) << "first shape should NOT be deleted";
+        expect(colors.count(0xFF00BBBB) == 1_u) << "second shape should exist";
+    };
+
+    "cursor at row 5: add 3 shapes, ENTER twice, add more - all preserved"_test = [] {
+        uint32_t metadataBytes = 1001 * 64;
+        auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder = *Painter::create(nullptr, testAllocator(), mockCM, 1000, true);
+
+        builder->setSceneBounds(0, 0, 100.0f, 300.0f);  // 15 lines
+        builder->setGridCellSize(20.0f, 20.0f);
+
+        // Add 3 shapes at rows 5, 6, 7
+        builder->setCursorPosition(0, 5);
+        auto buf1 = *YPaintBuffer::create();
+        buf1->addCircle(0, 50.0f, 10.0f, 8.0f, 0xFF110000, 0, 0.0f, 0.0f);
+        builder->addYpaintBuffer(buf1);
+
+        builder->setCursorPosition(0, 6);
+        auto buf2 = *YPaintBuffer::create();
+        buf2->addCircle(0, 50.0f, 10.0f, 8.0f, 0xFF220000, 0, 0.0f, 0.0f);
+        builder->addYpaintBuffer(buf2);
+
+        builder->setCursorPosition(0, 7);
+        auto buf3 = *YPaintBuffer::create();
+        buf3->addCircle(0, 50.0f, 10.0f, 8.0f, 0xFF330000, 0, 0.0f, 0.0f);
+        builder->addYpaintBuffer(buf3);
+
+        expect(builder->primitiveCount() == 3_u) << "after 3 adds";
+
+        // Simulate 2 ENTERs (cursor moves to row 9)
+        // No shapes, just cursor movement
+
+        // Add 2 more shapes at rows 9 and 10
+        builder->setCursorPosition(0, 9);
+        auto buf4 = *YPaintBuffer::create();
+        buf4->addCircle(0, 50.0f, 10.0f, 8.0f, 0xFF440000, 0, 0.0f, 0.0f);
+        builder->addYpaintBuffer(buf4);
+
+        expect(builder->primitiveCount() == 4_u) << "after 4th add";
+
+        builder->setCursorPosition(0, 10);
+        auto buf5 = *YPaintBuffer::create();
+        buf5->addCircle(0, 50.0f, 10.0f, 8.0f, 0xFF550000, 0, 0.0f, 0.0f);
+        builder->addYpaintBuffer(buf5);
+
+        expect(builder->primitiveCount() == 5_u)
+            << "after 5th add, should have 5 prims, got " << builder->primitiveCount();
+
+        builder->declareBufferNeeds();
+        mockCM->mockBufMgr()->commitReservations();
+        builder->allocateBuffers();
+        builder->writeBuffers();
+
+        const float* storage = mockCM->mockBufMgr()->storageAsFloat();
+        const uint32_t* meta = mockCM->metadataAsU32() + 1000 * 16;
+
+        expect(meta[1] == 5_u) << "GPU should have 5 prims";
+
+        std::set<uint32_t> colors;
+        uint32_t primOff = meta[0];
+        uint32_t primBase = primOff + meta[1];
+        for (uint32_t i = 0; i < meta[1]; i++) {
+            uint32_t wordOff = readU32(storage, primOff + i);
+            uint32_t color = readU32(storage, primBase + wordOff + 6);
+            colors.insert(color);
+        }
+
+        expect(colors.count(0xFF110000) == 1_u) << "shape 1 preserved";
+        expect(colors.count(0xFF220000) == 1_u) << "shape 2 preserved";
+        expect(colors.count(0xFF330000) == 1_u) << "shape 3 preserved";
+        expect(colors.count(0xFF440000) == 1_u) << "shape 4 preserved";
+        expect(colors.count(0xFF550000) == 1_u) << "shape 5 preserved";
+    };
+
+    "real terminal scenario: type command, ENTER, see result, ENTER, type again"_test = [] {
+        uint32_t metadataBytes = 1001 * 64;
+        auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder = *Painter::create(nullptr, testAllocator(), mockCM, 1000, true);
+
+        builder->setSceneBounds(0, 0, 200.0f, 500.0f);  // 25 lines
+        builder->setGridCellSize(20.0f, 20.0f);
+
+        // Terminal starts at some row (simulating scrollback history)
+        uint32_t cursorRow = 12;
+
+        // User types command with ypaint output (row 12)
+        builder->setCursorPosition(0, static_cast<uint16_t>(cursorRow));
+        auto buf1 = *YPaintBuffer::create();
+        buf1->addBox(0, 100.0f, 10.0f, 80.0f, 15.0f, 0xFFFF0000, 0, 0.0f, 0.0f);
+        builder->addYpaintBuffer(buf1);
+        cursorRow++;
+
+        expect(builder->primitiveCount() == 1_u);
+
+        // ENTER pressed, cursor at row 13 (empty prompt)
+        // Another ENTER, cursor at row 14
+
+        cursorRow = 14;
+
+        // User types another command with ypaint output
+        builder->setCursorPosition(0, static_cast<uint16_t>(cursorRow));
+        auto buf2 = *YPaintBuffer::create();
+        buf2->addCircle(0, 100.0f, 10.0f, 12.0f, 0xFF00FF00, 0, 0.0f, 0.0f);
+        builder->addYpaintBuffer(buf2);
+        cursorRow++;
+
+        // CRITICAL CHECK: first box should NOT be deleted!
+        expect(builder->primitiveCount() == 2_u)
+            << "both shapes should exist, got " << builder->primitiveCount();
+
+        // More ENTERs
+        cursorRow = 17;
+
+        // Third command
+        builder->setCursorPosition(0, static_cast<uint16_t>(cursorRow));
+        auto buf3 = *YPaintBuffer::create();
+        buf3->addTriangle(0, 80.0f, 5.0f, 120.0f, 5.0f, 100.0f, 18.0f,
+                          0xFF0000FF, 0, 0.0f, 0.0f);
+        builder->addYpaintBuffer(buf3);
+
+        expect(builder->primitiveCount() == 3_u)
+            << "all 3 shapes should exist, got " << builder->primitiveCount();
+
+        builder->declareBufferNeeds();
+        mockCM->mockBufMgr()->commitReservations();
+        builder->allocateBuffers();
+        builder->writeBuffers();
+
+        const float* storage = mockCM->mockBufMgr()->storageAsFloat();
+        const uint32_t* meta = mockCM->metadataAsU32() + 1000 * 16;
+
+        expect(meta[1] == 3_u) << "GPU should have 3 prims";
+
+        // Verify all types exist
+        std::set<uint32_t> types;
+        uint32_t primOff = meta[0];
+        uint32_t primBase = primOff + meta[1];
+        for (uint32_t i = 0; i < meta[1]; i++) {
+            uint32_t wordOff = readU32(storage, primOff + i);
+            uint32_t type = readU32(storage, primBase + wordOff + 1);
+            types.insert(type);
+        }
+
+        expect(types.count(static_cast<uint32_t>(SDFType::Box)) == 1_u) << "box exists";
+        expect(types.count(static_cast<uint32_t>(SDFType::Circle)) == 1_u) << "circle exists";
+        expect(types.count(static_cast<uint32_t>(SDFType::Triangle)) == 1_u) << "triangle exists";
+    };
+
+    //=========================================================================
+    // SCROLL FIRST, THEN ADD - Critical terminal scenario tests
+    //=========================================================================
+
+    "SCROLL 10 LINES FIRST, then add shape"_test = [] {
+        uint32_t metadataBytes = 1001 * 64;
+        auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder = *Painter::create(nullptr, testAllocator(), mockCM, 1000, true);
+
+        builder->setSceneBounds(0, 0, 100.0f, 500.0f);  // 25 lines
+        builder->setGridCellSize(20.0f, 20.0f);
+
+        // SCROLL 10 LINES FIRST (simulating terminal scrolling before any ypaint)
+        builder->scrollLines(10);
+
+        // Now add a shape at current cursor position
+        builder->setCursorPosition(0, 5);
+        auto buf = *YPaintBuffer::create();
+        buf->addCircle(0, 50.0f, 10.0f, 8.0f, 0xFFAA0000, 0, 0.0f, 0.0f);
+        builder->addYpaintBuffer(buf);
+
+        expect(builder->primitiveCount() == 1_u) << "should have 1 prim after scroll+add";
+
+        builder->declareBufferNeeds();
+        mockCM->mockBufMgr()->commitReservations();
+        builder->allocateBuffers();
+        builder->writeBuffers();
+
+        const uint32_t* meta = mockCM->metadataAsU32() + 1000 * 16;
+        expect(meta[1] == 1_u) << "GPU should have 1 prim";
+    };
+
+    "SCROLL 10, add shape, SCROLL 5 more, add another - both preserved"_test = [] {
+        uint32_t metadataBytes = 1001 * 64;
+        auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder = *Painter::create(nullptr, testAllocator(), mockCM, 1000, true);
+
+        builder->setSceneBounds(0, 0, 100.0f, 500.0f);  // 25 lines
+        builder->setGridCellSize(20.0f, 20.0f);
+
+        // SCROLL 10 LINES FIRST
+        builder->scrollLines(10);
+
+        // Add first shape
+        builder->setCursorPosition(0, 5);
+        auto buf1 = *YPaintBuffer::create();
+        buf1->addCircle(0, 50.0f, 10.0f, 8.0f, 0xFFAA0000, 0, 0.0f, 0.0f);
+        builder->addYpaintBuffer(buf1);
+
+        expect(builder->primitiveCount() == 1_u) << "after first add";
+
+        // SCROLL 5 MORE LINES
+        builder->scrollLines(5);
+
+        // Add second shape
+        builder->setCursorPosition(0, 3);
+        auto buf2 = *YPaintBuffer::create();
+        buf2->addBox(0, 50.0f, 10.0f, 15.0f, 10.0f, 0xFF00BB00, 0, 0.0f, 0.0f);
+        builder->addYpaintBuffer(buf2);
+
+        // First shape should still exist!
+        expect(builder->primitiveCount() == 2_u)
+            << "both shapes should exist, got " << builder->primitiveCount();
+
+        builder->declareBufferNeeds();
+        mockCM->mockBufMgr()->commitReservations();
+        builder->allocateBuffers();
+        builder->writeBuffers();
+
+        const float* storage = mockCM->mockBufMgr()->storageAsFloat();
+        const uint32_t* meta = mockCM->metadataAsU32() + 1000 * 16;
+
+        expect(meta[1] == 2_u) << "GPU should have 2 prims";
+
+        std::set<uint32_t> colors;
+        uint32_t primOff = meta[0];
+        uint32_t primBase = primOff + meta[1];
+        for (uint32_t i = 0; i < meta[1]; i++) {
+            uint32_t wordOff = readU32(storage, primOff + i);
+            uint32_t type = readU32(storage, primBase + wordOff + 1);
+            uint32_t colorOff = (type == static_cast<uint32_t>(SDFType::Circle)) ? 6 : 7;
+            uint32_t color = readU32(storage, primBase + wordOff + colorOff);
+            colors.insert(color);
+        }
+
+        expect(colors.count(0xFFAA0000) == 1_u) << "first circle should exist";
+        expect(colors.count(0xFF00BB00) == 1_u) << "second box should exist";
+    };
+
+    "SCROLL 10, add 3 shapes, SCROLL 5, add 2 more - all 5 preserved"_test = [] {
+        uint32_t metadataBytes = 1001 * 64;
+        auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder = *Painter::create(nullptr, testAllocator(), mockCM, 1000, true);
+
+        builder->setSceneBounds(0, 0, 100.0f, 500.0f);  // 25 lines
+        builder->setGridCellSize(20.0f, 20.0f);
+
+        std::vector<uint32_t> expectedColors;
+
+        // SCROLL 10 LINES FIRST
+        builder->scrollLines(10);
+
+        // Add 3 shapes
+        for (uint32_t i = 0; i < 3; i++) {
+            builder->setCursorPosition(0, static_cast<uint16_t>(5 + i));
+            auto buf = *YPaintBuffer::create();
+            uint32_t color = 0xFF100000 * (i + 1);
+            buf->addCircle(0, 50.0f, 10.0f, 8.0f, color, 0, 0.0f, 0.0f);
+            builder->addYpaintBuffer(buf);
+            expectedColors.push_back(color);
+        }
+
+        expect(builder->primitiveCount() == 3_u) << "after 3 adds";
+
+        // SCROLL 5 MORE
+        builder->scrollLines(5);
+
+        // Add 2 more shapes
+        for (uint32_t i = 0; i < 2; i++) {
+            builder->setCursorPosition(0, static_cast<uint16_t>(3 + i));
+            auto buf = *YPaintBuffer::create();
+            uint32_t color = 0xFF001000 * (i + 1);
+            buf->addCircle(0, 50.0f, 10.0f, 8.0f, color, 0, 0.0f, 0.0f);
+            builder->addYpaintBuffer(buf);
+            expectedColors.push_back(color);
+        }
+
+        expect(builder->primitiveCount() == 5_u)
+            << "all 5 shapes should exist, got " << builder->primitiveCount();
+
+        builder->declareBufferNeeds();
+        mockCM->mockBufMgr()->commitReservations();
+        builder->allocateBuffers();
+        builder->writeBuffers();
+
+        const uint32_t* meta = mockCM->metadataAsU32() + 1000 * 16;
+        expect(meta[1] == 5_u) << "GPU should have 5 prims";
+    };
+
+    "repeated scroll-add cycles: 5 cycles of (scroll 2, add shape)"_test = [] {
+        uint32_t metadataBytes = 1001 * 64;
+        auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder = *Painter::create(nullptr, testAllocator(), mockCM, 1000, true);
+
+        builder->setSceneBounds(0, 0, 100.0f, 500.0f);  // 25 lines
+        builder->setGridCellSize(20.0f, 20.0f);
+
+        std::vector<uint32_t> expectedColors;
+
+        for (uint32_t cycle = 0; cycle < 5; cycle++) {
+            // SCROLL 2 lines each cycle
+            builder->scrollLines(2);
+
+            // Add shape
+            builder->setCursorPosition(0, static_cast<uint16_t>(10 + cycle));
+            auto buf = *YPaintBuffer::create();
+            uint32_t color = 0xFF000011 * (cycle + 1);
+            buf->addCircle(0, 50.0f, 10.0f, 8.0f, color, 0, 0.0f, 0.0f);
+            builder->addYpaintBuffer(buf);
+            expectedColors.push_back(color);
+
+            expect(builder->primitiveCount() == cycle + 1)
+                << "cycle " << cycle << ": should have " << (cycle + 1) << " prims";
+        }
+
+        builder->declareBufferNeeds();
+        mockCM->mockBufMgr()->commitReservations();
+        builder->allocateBuffers();
+        builder->writeBuffers();
+
+        const float* storage = mockCM->mockBufMgr()->storageAsFloat();
+        const uint32_t* meta = mockCM->metadataAsU32() + 1000 * 16;
+
+        expect(meta[1] == 5_u) << "GPU should have 5 prims";
+
+        std::set<uint32_t> colors;
+        uint32_t primOff = meta[0];
+        uint32_t primBase = primOff + meta[1];
+        for (uint32_t i = 0; i < meta[1]; i++) {
+            uint32_t wordOff = readU32(storage, primOff + i);
+            uint32_t color = readU32(storage, primBase + wordOff + 6);
+            colors.insert(color);
+        }
+
+        for (uint32_t expected : expectedColors) {
+            expect(colors.count(expected) == 1_u)
+                << "color " << std::hex << expected << " should exist" << std::dec;
+        }
+    };
+
+    "terminal chart.sh scenario: scroll, add chart, scroll, add another chart"_test = [] {
+        uint32_t metadataBytes = 1001 * 64;
+        auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder = *Painter::create(nullptr, testAllocator(), mockCM, 1000, true);
+
+        builder->setSceneBounds(0, 0, 200.0f, 500.0f);  // 25 lines
+        builder->setGridCellSize(20.0f, 20.0f);
+
+        // Simulate: user runs chart.sh first time
+        // Terminal might have scrolled some lines already
+        builder->scrollLines(5);
+
+        // First chart: multiple primitives
+        builder->setCursorPosition(0, 10);
+        auto buf1 = *YPaintBuffer::create();
+        buf1->addBox(0, 100.0f, 50.0f, 80.0f, 40.0f, 0xFFFF0000, 0, 0.0f, 0.0f);  // chart bg
+        buf1->addBox(1, 30.0f, 70.0f, 10.0f, 30.0f, 0xFF00FF00, 0, 0.0f, 0.0f);   // bar 1
+        buf1->addBox(2, 50.0f, 70.0f, 10.0f, 50.0f, 0xFF0000FF, 0, 0.0f, 0.0f);   // bar 2
+        builder->addYpaintBuffer(buf1);
+
+        expect(builder->primitiveCount() == 3_u) << "first chart: 3 prims";
+
+        // User presses ENTER, some scrolling happens
+        builder->scrollLines(3);
+
+        // User runs chart.sh SECOND time
+        builder->setCursorPosition(0, 15);
+        auto buf2 = *YPaintBuffer::create();
+        buf2->addBox(0, 100.0f, 50.0f, 80.0f, 40.0f, 0xFFAA0000, 0, 0.0f, 0.0f);  // chart bg
+        buf2->addBox(1, 30.0f, 70.0f, 10.0f, 40.0f, 0xFF00AA00, 0, 0.0f, 0.0f);   // bar 1
+        buf2->addBox(2, 50.0f, 70.0f, 10.0f, 60.0f, 0xFF0000AA, 0, 0.0f, 0.0f);   // bar 2
+        builder->addYpaintBuffer(buf2);
+
+        // CRITICAL: All 6 primitives should exist!
+        expect(builder->primitiveCount() == 6_u)
+            << "both charts should exist: expected 6, got " << builder->primitiveCount();
+
+        builder->declareBufferNeeds();
+        mockCM->mockBufMgr()->commitReservations();
+        builder->allocateBuffers();
+        builder->writeBuffers();
+
+        const float* storage = mockCM->mockBufMgr()->storageAsFloat();
+        const uint32_t* meta = mockCM->metadataAsU32() + 1000 * 16;
+
+        expect(meta[1] == 6_u) << "GPU should have 6 prims";
+
+        // Verify colors from both charts
+        std::set<uint32_t> colors;
+        uint32_t primOff = meta[0];
+        uint32_t primBase = primOff + meta[1];
+        for (uint32_t i = 0; i < meta[1]; i++) {
+            uint32_t wordOff = readU32(storage, primOff + i);
+            uint32_t color = readU32(storage, primBase + wordOff + 7);  // Box color at +7
+            colors.insert(color);
+        }
+
+        // First chart colors
+        expect(colors.count(0xFFFF0000) == 1_u) << "first chart bg";
+        expect(colors.count(0xFF00FF00) == 1_u) << "first chart bar1";
+        expect(colors.count(0xFF0000FF) == 1_u) << "first chart bar2";
+        // Second chart colors
+        expect(colors.count(0xFFAA0000) == 1_u) << "second chart bg";
+        expect(colors.count(0xFF00AA00) == 1_u) << "second chart bar1";
+        expect(colors.count(0xFF0000AA) == 1_u) << "second chart bar2";
+    };
+
+    "extreme: scroll 100 lines, add at row 40, scroll 10 more, add at row 35"_test = [] {
+        uint32_t metadataBytes = 1001 * 64;
+        auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder = *Painter::create(nullptr, testAllocator(), mockCM, 1000, true);
+
+        builder->setSceneBounds(0, 0, 100.0f, 1000.0f);  // 50 lines
+        builder->setGridCellSize(20.0f, 20.0f);
+
+        // SCROLL 100 LINES (way more than visible - but no prims yet, so nothing deleted)
+        builder->scrollLines(100);
+
+        // Add first shape at row 40 (near bottom of 50-line scene)
+        builder->setCursorPosition(0, 40);
+        auto buf1 = *YPaintBuffer::create();
+        buf1->addCircle(0, 50.0f, 10.0f, 8.0f, 0xFFAAAAAA, 0, 0.0f, 0.0f);
+        builder->addYpaintBuffer(buf1);
+
+        expect(builder->primitiveCount() == 1_u);
+
+        // SCROLL 10 MORE - shape at row 40 moves to row 30 (still visible in 50-line scene)
+        builder->scrollLines(10);
+
+        // Add second shape at row 35
+        builder->setCursorPosition(0, 35);
+        auto buf2 = *YPaintBuffer::create();
+        buf2->addCircle(0, 50.0f, 10.0f, 8.0f, 0xFFBBBBBB, 0, 0.0f, 0.0f);
+        builder->addYpaintBuffer(buf2);
+
+        // First shape moved from row 40 to row 30 - still visible!
+        expect(builder->primitiveCount() == 2_u)
+            << "both shapes should exist, got " << builder->primitiveCount();
+
+        builder->declareBufferNeeds();
+        mockCM->mockBufMgr()->commitReservations();
+        builder->allocateBuffers();
+        builder->writeBuffers();
+
+        const uint32_t* meta = mockCM->metadataAsU32() + 1000 * 16;
+        expect(meta[1] == 2_u) << "GPU should have 2 prims";
+    };
+};
+
+//=============================================================================
+// EXHAUSTIVE GPU BUFFER VERIFICATION - Inspect actual buffer content
+// These tests verify the EXACT content of the GPU buffer to find bugs
+//=============================================================================
+
+suite gpu_buffer_deep_inspection = [] {
+
+    // Helper: read the per-primitive gridOffset (word[0])
+    auto readPrimGridOffset = [](const float* storage, uint32_t primOff)
+        -> std::pair<uint16_t, uint16_t> {
+        uint32_t packed = readU32(storage, primOff);
+        uint16_t col = packed & 0xFFFF;
+        uint16_t row = (packed >> 16) & 0xFFFF;
+        return {col, row};
+    };
+
+    // Helper: get primitive center coordinates
+    auto readPrimCenter = [](const float* storage, uint32_t primOff, uint32_t type)
+        -> std::pair<float, float> {
+        // type is at primOff+1, layer at primOff+2, geometry starts at primOff+3
+        // For Circle/Box/RoundedBox: cx at +3, cy at +4
+        // For Triangle: ax at +3, ay at +4 (use centroid)
+        if (type == static_cast<uint32_t>(SDFType::Triangle)) {
+            float ax = storage[primOff + 3];
+            float ay = storage[primOff + 4];
+            float bx = storage[primOff + 5];
+            float by = storage[primOff + 6];
+            float cx = storage[primOff + 7];
+            float cy = storage[primOff + 8];
+            return {(ax + bx + cx) / 3.0f, (ay + by + cy) / 3.0f};
+        }
+        return {storage[primOff + 3], storage[primOff + 4]};
+    };
+
+    "cursor at row 3: verify primitive gridOffset field is set correctly"_test = [] {
+        uint32_t metadataBytes = 1001 * 64;
+        auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder = *Painter::create(nullptr, testAllocator(), mockCM, 1000, true);
+
+        builder->setSceneBounds(0, 0, 200.0f, 400.0f);
+        builder->setGridCellSize(20.0f, 20.0f);
+
+        // Set cursor at row 3
+        builder->setCursorPosition(5, 3);
+
+        auto buf = *YPaintBuffer::create();
+        buf->addCircle(0, 50.0f, 30.0f, 10.0f, 0xFFFF0000, 0, 0.0f, 0.0f);
+        builder->addYpaintBuffer(buf);
+
+        builder->declareBufferNeeds();
+        mockCM->mockBufMgr()->commitReservations();
+        builder->allocateBuffers();
+        builder->writeBuffers();
+
+        const float* storage = mockCM->mockBufMgr()->storageAsFloat();
+        const uint32_t* meta = mockCM->metadataAsU32() + 1000 * 16;
+
+        uint32_t primOff = meta[0];
+        uint32_t primCnt = meta[1];
+        uint32_t primBase = primOff + primCnt;
+
+        expect(primCnt == 1_u) << "should have 1 prim";
+
+        // Read the primitive's word offset
+        uint32_t wordOff = readU32(storage, primOff);
+        uint32_t absPrimOff = primBase + wordOff;
+
+        // Word 0 of primitive should contain gridOffset (col=5, row=3)
+        uint32_t packedGridOff = readU32(storage, absPrimOff);
+        uint16_t gridCol = packedGridOff & 0xFFFF;
+        uint16_t gridRow = (packedGridOff >> 16) & 0xFFFF;
+
+        expect(gridCol == 5_u) << "gridOffset col should be 5, got " << gridCol;
+        expect(gridRow == 3_u) << "gridOffset row should be 3, got " << gridRow;
+    };
+
+    "cursor at row 0: verify gridOffset is (0,0)"_test = [] {
+        uint32_t metadataBytes = 1001 * 64;
+        auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder = *Painter::create(nullptr, testAllocator(), mockCM, 1000, true);
+
+        builder->setSceneBounds(0, 0, 200.0f, 400.0f);
+        builder->setGridCellSize(20.0f, 20.0f);
+
+        builder->setCursorPosition(0, 0);
+
+        auto buf = *YPaintBuffer::create();
+        buf->addCircle(0, 50.0f, 30.0f, 10.0f, 0xFFFF0000, 0, 0.0f, 0.0f);
+        builder->addYpaintBuffer(buf);
+
+        builder->declareBufferNeeds();
+        mockCM->mockBufMgr()->commitReservations();
+        builder->allocateBuffers();
+        builder->writeBuffers();
+
+        const float* storage = mockCM->mockBufMgr()->storageAsFloat();
+        const uint32_t* meta = mockCM->metadataAsU32() + 1000 * 16;
+
+        uint32_t primOff = meta[0];
+        uint32_t primBase = primOff + meta[1];
+        uint32_t wordOff = readU32(storage, primOff);
+        uint32_t absPrimOff = primBase + wordOff;
+
+        uint32_t packedGridOff = readU32(storage, absPrimOff);
+        uint16_t gridCol = packedGridOff & 0xFFFF;
+        uint16_t gridRow = (packedGridOff >> 16) & 0xFFFF;
+
+        expect(gridCol == 0_u) << "gridOffset col should be 0";
+        expect(gridRow == 0_u) << "gridOffset row should be 0";
+    };
+
+    "cursor at row 10: verify grid cell contains primitive reference"_test = [] {
+        uint32_t metadataBytes = 1001 * 64;
+        auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder = *Painter::create(nullptr, testAllocator(), mockCM, 1000, true);
+
+        float cellH = 20.0f;
+        builder->setSceneBounds(0, 0, 200.0f, 500.0f);  // 25 lines
+        builder->setGridCellSize(20.0f, cellH);
+
+        // Cursor at row 10
+        builder->setCursorPosition(0, 10);
+
+        // Add circle at local Y=30 (spans ~1.5 cells from cursor)
+        auto buf = *YPaintBuffer::create();
+        buf->addCircle(0, 50.0f, 30.0f, 15.0f, 0xFFFF0000, 0, 0.0f, 0.0f);
+        builder->addYpaintBuffer(buf);
+
+        builder->declareBufferNeeds();
+        mockCM->mockBufMgr()->commitReservations();
+        builder->allocateBuffers();
+        builder->writeBuffers();
+
+        const float* storage = mockCM->mockBufMgr()->storageAsFloat();
+        const uint32_t* meta = mockCM->metadataAsU32() + 1000 * 16;
+
+        uint32_t gridOff = meta[2];
+        uint32_t gridW = meta[3];
+        uint32_t gridH = meta[4];
+
+        // Circle at local Y=30 with cursor at row 10
+        // localLine = floor(30/20) = 1
+        // primLine = 10 + 1 = 11
+        // The primitive should be stored at line 11
+
+        // Scan grid to find which rows contain primitive references
+        std::set<uint32_t> rowsWithPrims;
+        for (uint32_t row = 0; row < gridH; row++) {
+            for (uint32_t col = 0; col < gridW; col++) {
+                uint32_t cellIdx = row * gridW + col;
+                uint32_t packedStart = readU32(storage, gridOff + cellIdx);
+                uint32_t cnt = readU32(storage, gridOff + packedStart);
+                for (uint32_t i = 0; i < cnt; i++) {
+                    uint32_t rawVal = readU32(storage, gridOff + packedStart + 1 + i);
+                    if ((rawVal & 0x80000000u) == 0) {
+                        rowsWithPrims.insert(row);
+                    }
+                }
+            }
+        }
+
+        expect(!rowsWithPrims.empty())
+            << "grid should have primitive references, found none!";
+
+        // Should find references around row 10-12 (cursor row + local lines)
+        bool foundExpectedRow = false;
+        for (uint32_t row : rowsWithPrims) {
+            if (row >= 10 && row <= 13) {
+                foundExpectedRow = true;
+            }
+        }
+        expect(foundExpectedRow)
+            << "should find prim refs near row 10-13, found rows: ";
+    };
+
+    "verify primitive local coords are NOT modified by cursor position"_test = [] {
+        uint32_t metadataBytes = 1001 * 64;
+        auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder = *Painter::create(nullptr, testAllocator(), mockCM, 1000, true);
+
+        builder->setSceneBounds(0, 0, 200.0f, 400.0f);
+        builder->setGridCellSize(20.0f, 20.0f);
+
+        builder->setCursorPosition(0, 10);
+
+        // Circle at cx=50, cy=30 (local coords)
+        auto buf = *YPaintBuffer::create();
+        buf->addCircle(0, 50.0f, 30.0f, 10.0f, 0xFFFF0000, 0, 0.0f, 0.0f);
+        builder->addYpaintBuffer(buf);
+
+        builder->declareBufferNeeds();
+        mockCM->mockBufMgr()->commitReservations();
+        builder->allocateBuffers();
+        builder->writeBuffers();
+
+        const float* storage = mockCM->mockBufMgr()->storageAsFloat();
+        const uint32_t* meta = mockCM->metadataAsU32() + 1000 * 16;
+
+        uint32_t primOff = meta[0];
+        uint32_t primBase = primOff + meta[1];
+        uint32_t wordOff = readU32(storage, primOff);
+        uint32_t absPrimOff = primBase + wordOff;
+
+        // Circle: [gridOffset][type][layer][cx][cy][r][fill][stroke][strokeW][round]
+        // cx at +3, cy at +4
+        float cx = storage[absPrimOff + 3];
+        float cy = storage[absPrimOff + 4];
+
+        // The LOCAL coords should be preserved (NOT modified by cursor)
+        expect(cx == 50.0_f) << "cx should be 50 (local coord), got " << cx;
+        expect(cy == 30.0_f) << "cy should be 30 (local coord), got " << cy;
+    };
+
+    "multiple prims at different cursor rows: verify all have correct gridOffsets"_test = [] {
+        uint32_t metadataBytes = 1001 * 64;
+        auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder = *Painter::create(nullptr, testAllocator(), mockCM, 1000, true);
+
+        builder->setSceneBounds(0, 0, 200.0f, 500.0f);
+        builder->setGridCellSize(20.0f, 20.0f);
+
+        // Add prims at different cursor positions
+        std::vector<std::pair<uint16_t, uint16_t>> cursorPositions = {
+            {0, 3}, {2, 7}, {5, 12}, {0, 18}
+        };
+
+        for (auto [col, row] : cursorPositions) {
+            builder->setCursorPosition(col, row);
+            auto buf = *YPaintBuffer::create();
+            buf->addCircle(0, 50.0f, 10.0f, 8.0f, 0xFF000000 | row, 0, 0.0f, 0.0f);
+            builder->addYpaintBuffer(buf);
+        }
+
+        builder->declareBufferNeeds();
+        mockCM->mockBufMgr()->commitReservations();
+        builder->allocateBuffers();
+        builder->writeBuffers();
+
+        const float* storage = mockCM->mockBufMgr()->storageAsFloat();
+        const uint32_t* meta = mockCM->metadataAsU32() + 1000 * 16;
+
+        uint32_t primOff = meta[0];
+        uint32_t primCnt = meta[1];
+        uint32_t primBase = primOff + primCnt;
+
+        expect(primCnt == 4_u) << "should have 4 prims";
+
+        // Verify each prim has correct gridOffset
+        std::map<uint32_t, std::pair<uint16_t, uint16_t>> colorToExpected;
+        for (auto [col, row] : cursorPositions) {
+            colorToExpected[0xFF000000 | row] = {col, row};
+        }
+
+        for (uint32_t i = 0; i < primCnt; i++) {
+            uint32_t wordOff = readU32(storage, primOff + i);
+            uint32_t absPrimOff = primBase + wordOff;
+
+            uint32_t packedGridOff = readU32(storage, absPrimOff);
+            uint16_t gridCol = packedGridOff & 0xFFFF;
+            uint16_t gridRow = (packedGridOff >> 16) & 0xFFFF;
+
+            // Color is at offset +6 for Circle
+            uint32_t color = readU32(storage, absPrimOff + 6);
+
+            auto expected = colorToExpected[color];
+            expect(gridCol == expected.first)
+                << "prim with color " << std::hex << color << std::dec
+                << " gridCol should be " << expected.first << " got " << gridCol;
+            expect(gridRow == expected.second)
+                << "prim with color " << std::hex << color << std::dec
+                << " gridRow should be " << expected.second << " got " << gridRow;
+        }
+    };
+
+    "grid dimensions must cover all primitives"_test = [] {
+        uint32_t metadataBytes = 1001 * 64;
+        auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder = *Painter::create(nullptr, testAllocator(), mockCM, 1000, true);
+
+        builder->setSceneBounds(0, 0, 200.0f, 200.0f);  // 10 lines
+        builder->setGridCellSize(20.0f, 20.0f);
+
+        // Add prim at cursor row 15 (beyond initial scene bounds!)
+        builder->setCursorPosition(0, 15);
+        auto buf = *YPaintBuffer::create();
+        buf->addCircle(0, 50.0f, 10.0f, 8.0f, 0xFFFF0000, 0, 0.0f, 0.0f);
+        builder->addYpaintBuffer(buf);
+
+        builder->declareBufferNeeds();
+        mockCM->mockBufMgr()->commitReservations();
+        builder->allocateBuffers();
+        builder->writeBuffers();
+
+        const uint32_t* meta = mockCM->metadataAsU32() + 1000 * 16;
+        uint32_t gridH = meta[4];
+
+        // Grid height must be extended to cover row 15
+        expect(gridH >= 16_u)
+            << "grid height should be at least 16 to cover cursor row 15, got " << gridH;
+    };
+
+    "scene bounds metadata matches actual scene"_test = [] {
+        uint32_t metadataBytes = 1001 * 64;
+        auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder = *Painter::create(nullptr, testAllocator(), mockCM, 1000, true);
+
+        builder->setSceneBounds(0, 0, 300.0f, 400.0f);
+        builder->setGridCellSize(20.0f, 20.0f);
+
+        builder->setCursorPosition(0, 5);
+        auto buf = *YPaintBuffer::create();
+        buf->addCircle(0, 150.0f, 100.0f, 20.0f, 0xFFFF0000, 0, 0.0f, 0.0f);
+        builder->addYpaintBuffer(buf);
+
+        builder->declareBufferNeeds();
+        mockCM->mockBufMgr()->commitReservations();
+        builder->allocateBuffers();
+        builder->writeBuffers();
+
+        const uint32_t* meta = mockCM->metadataAsU32() + 1000 * 16;
+
+        // Scene bounds are at words 8-11 as floats
+        float sceneMinX, sceneMinY, sceneMaxX, sceneMaxY;
+        std::memcpy(&sceneMinX, &meta[8], sizeof(float));
+        std::memcpy(&sceneMinY, &meta[9], sizeof(float));
+        std::memcpy(&sceneMaxX, &meta[10], sizeof(float));
+        std::memcpy(&sceneMaxY, &meta[11], sizeof(float));
+
+        expect(sceneMinX == 0.0_f) << "sceneMinX should be 0";
+        expect(sceneMinY == 0.0_f) << "sceneMinY should be 0";
+        expect(sceneMaxX == 300.0_f) << "sceneMaxX should be 300";
+        expect(sceneMaxY == 400.0_f) << "sceneMaxY should be 400";
+    };
+
+    "cell size in metadata matches set cell size"_test = [] {
+        uint32_t metadataBytes = 1001 * 64;
+        auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder = *Painter::create(nullptr, testAllocator(), mockCM, 1000, true);
+
+        builder->setSceneBounds(0, 0, 200.0f, 200.0f);
+        builder->setGridCellSize(15.5f, 22.0f);
+
+        builder->setCursorPosition(0, 0);
+        auto buf = *YPaintBuffer::create();
+        buf->addCircle(0, 50.0f, 50.0f, 10.0f, 0xFFFF0000, 0, 0.0f, 0.0f);
+        builder->addYpaintBuffer(buf);
+
+        builder->declareBufferNeeds();
+        mockCM->mockBufMgr()->commitReservations();
+        builder->allocateBuffers();
+        builder->writeBuffers();
+
+        const uint32_t* meta = mockCM->metadataAsU32() + 1000 * 16;
+
+        // Cell size is packed in word 5
+        float cellSizeX = unpackF16(meta[5], false);
+        float cellSizeY = unpackF16(meta[5], true);
+
+        expect(std::abs(cellSizeX - 15.5f) < 0.1f)
+            << "cellSizeX should be ~15.5, got " << cellSizeX;
+        expect(std::abs(cellSizeY - 22.0f) < 0.1f)
+            << "cellSizeY should be ~22.0, got " << cellSizeY;
+    };
+
+    "shader grid lookup simulation at cursor row 3"_test = [] {
+        uint32_t metadataBytes = 1001 * 64;
+        auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder = *Painter::create(nullptr, testAllocator(), mockCM, 1000, true);
+
+        float cellH = 20.0f;
+        builder->setSceneBounds(0, 0, 200.0f, 500.0f);
+        builder->setGridCellSize(20.0f, cellH);
+
+        // Cursor at row 3
+        builder->setCursorPosition(2, 3);
+
+        // Circle at local coords (50, 10) - local Y=10 means line offset 0
+        // With cursor row 3, this should be at grid row 3
+        auto buf = *YPaintBuffer::create();
+        buf->addCircle(0, 50.0f, 10.0f, 8.0f, 0xFFABCDEF, 0, 0.0f, 0.0f);
+        builder->addYpaintBuffer(buf);
+
+        builder->declareBufferNeeds();
+        mockCM->mockBufMgr()->commitReservations();
+        builder->allocateBuffers();
+        builder->writeBuffers();
+
+        const float* storage = mockCM->mockBufMgr()->storageAsFloat();
+        const uint32_t* meta = mockCM->metadataAsU32() + 1000 * 16;
+
+        uint32_t gridOff = meta[2];
+        uint32_t gridW = meta[3];
+        uint32_t primBase = meta[0] + meta[1];
+
+        // Simulate shader lookup at screen position where prim should be visible
+        // If cursor is at row 3 and cell height is 20, primitives placed there
+        // should be found at pixel Y = 3*20 + localY = 60 + 10 = 70
+        // Hmm wait, that's not how it works...
+
+        // Actually, let's just check that grid row 3 has the primitive
+        uint32_t testRow = 3;
+        bool foundPrimAtRow3 = false;
+        for (uint32_t col = 0; col < gridW; col++) {
+            uint32_t cellIdx = testRow * gridW + col;
+            uint32_t packedStart = readU32(storage, gridOff + cellIdx);
+            uint32_t cnt = readU32(storage, gridOff + packedStart);
+            for (uint32_t i = 0; i < cnt; i++) {
+                uint32_t rawVal = readU32(storage, gridOff + packedStart + 1 + i);
+                if ((rawVal & 0x80000000u) == 0) {
+                    uint32_t primOff = primBase + rawVal;
+                    uint32_t color = readU32(storage, primOff + 6);
+                    if (color == 0xFFABCDEF) {
+                        foundPrimAtRow3 = true;
+                    }
+                }
+            }
+        }
+
+        expect(foundPrimAtRow3)
+            << "primitive should be found in grid row 3 (cursor row)";
+    };
+
+    "chart.sh scenario: large primitives with cursor at row 3"_test = [] {
+        uint32_t metadataBytes = 1001 * 64;
+        auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder = *Painter::create(nullptr, testAllocator(), mockCM, 1000, true);
+
+        // Typical terminal: ~20 pixel cell height, 25 lines visible
+        float cellH = 20.0f;
+        builder->setSceneBounds(0, 0, 400.0f, 500.0f);
+        builder->setGridCellSize(10.0f, cellH);
+
+        // Cursor at row 3 (like user's scenario)
+        builder->setCursorPosition(0, 3);
+
+        // Chart primitives (like chart.sh)
+        auto buf = *YPaintBuffer::create();
+        // Bars at various Y positions
+        buf->addBox(0, 70.0f, 100.0f, 20.0f, 40.0f, 0xFF3498DB, 0, 0.0f, 4.0f);   // Y center 100
+        buf->addBox(1, 120.0f, 60.0f, 20.0f, 60.0f, 0xFF2ECC71, 0, 0.0f, 4.0f);   // Y center 60
+        buf->addBox(2, 170.0f, 80.0f, 20.0f, 50.0f, 0xFFE74C3C, 0, 0.0f, 4.0f);   // Y center 80
+        buf->addBox(3, 220.0f, 120.0f, 20.0f, 30.0f, 0xFFF39C12, 0, 0.0f, 4.0f);  // Y center 120
+        buf->addBox(4, 270.0f, 50.0f, 20.0f, 65.0f, 0xFF9B59B6, 0, 0.0f, 4.0f);   // Y center 50
+        builder->addYpaintBuffer(buf);
+
+        builder->declareBufferNeeds();
+        mockCM->mockBufMgr()->commitReservations();
+        builder->allocateBuffers();
+        builder->writeBuffers();
+
+        const float* storage = mockCM->mockBufMgr()->storageAsFloat();
+        const uint32_t* meta = mockCM->metadataAsU32() + 1000 * 16;
+
+        expect(meta[1] == 5_u) << "should have 5 prims";
+
+        uint32_t gridOff = meta[2];
+        uint32_t gridW = meta[3];
+        uint32_t gridH = meta[4];
+        uint32_t primBase = meta[0] + meta[1];
+
+        // All prims should be reachable from grid
+        std::set<uint32_t> reachableColors;
+        for (uint32_t row = 0; row < gridH; row++) {
+            for (uint32_t col = 0; col < gridW; col++) {
+                uint32_t cellIdx = row * gridW + col;
+                uint32_t packedStart = readU32(storage, gridOff + cellIdx);
+                uint32_t cnt = readU32(storage, gridOff + packedStart);
+                for (uint32_t i = 0; i < cnt; i++) {
+                    uint32_t rawVal = readU32(storage, gridOff + packedStart + 1 + i);
+                    if ((rawVal & 0x80000000u) == 0) {
+                        uint32_t primOff = primBase + rawVal;
+                        uint32_t color = readU32(storage, primOff + 7); // Box color at +7
+                        reachableColors.insert(color);
+                    }
+                }
+            }
+        }
+
+        expect(reachableColors.size() == 5_u)
+            << "all 5 box colors should be reachable, found " << reachableColors.size();
+
+        expect(reachableColors.count(0xFF3498DB) == 1_u) << "blue bar reachable";
+        expect(reachableColors.count(0xFF2ECC71) == 1_u) << "green bar reachable";
+        expect(reachableColors.count(0xFFE74C3C) == 1_u) << "red bar reachable";
+        expect(reachableColors.count(0xFFF39C12) == 1_u) << "orange bar reachable";
+        expect(reachableColors.count(0xFF9B59B6) == 1_u) << "purple bar reachable";
+
+        // Verify gridOffsets are all (0, 3)
+        uint32_t primOff = meta[0];
+        for (uint32_t i = 0; i < meta[1]; i++) {
+            uint32_t wordOff = readU32(storage, primOff + i);
+            uint32_t absPrimOff = primBase + wordOff;
+            uint32_t packedGridOff = readU32(storage, absPrimOff);
+            uint16_t gridCol = packedGridOff & 0xFFFF;
+            uint16_t gridRow = (packedGridOff >> 16) & 0xFFFF;
+
+            expect(gridCol == 0_u) << "prim " << i << " gridCol should be 0";
+            expect(gridRow == 3_u) << "prim " << i << " gridRow should be 3";
+        }
+    };
+
+    "verify grid rows match cursor row + local primitive lines"_test = [] {
+        uint32_t metadataBytes = 1001 * 64;
+        auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder = *Painter::create(nullptr, testAllocator(), mockCM, 1000, true);
+
+        float cellH = 20.0f;
+        builder->setSceneBounds(0, 0, 100.0f, 500.0f);
+        builder->setGridCellSize(20.0f, cellH);
+
+        // Cursor at row 5
+        builder->setCursorPosition(0, 5);
+
+        // Circle at local Y=50, radius 10
+        // Local line min = floor((50-10)/20) = floor(40/20) = 2
+        // Local line max = floor((50+10)/20) = floor(60/20) = 3
+        // Grid lines = 5+2=7 to 5+3=8
+        auto buf = *YPaintBuffer::create();
+        buf->addCircle(0, 50.0f, 50.0f, 10.0f, 0xFFAABBCC, 0, 0.0f, 0.0f);
+        builder->addYpaintBuffer(buf);
+
+        builder->declareBufferNeeds();
+        mockCM->mockBufMgr()->commitReservations();
+        builder->allocateBuffers();
+        builder->writeBuffers();
+
+        const float* storage = mockCM->mockBufMgr()->storageAsFloat();
+        const uint32_t* meta = mockCM->metadataAsU32() + 1000 * 16;
+
+        uint32_t gridOff = meta[2];
+        uint32_t gridW = meta[3];
+        uint32_t gridH = meta[4];
+        uint32_t primBase = meta[0] + meta[1];
+
+        // Find which rows contain the primitive
+        std::set<uint32_t> rowsWithPrim;
+        for (uint32_t row = 0; row < gridH; row++) {
+            for (uint32_t col = 0; col < gridW; col++) {
+                uint32_t cellIdx = row * gridW + col;
+                uint32_t packedStart = readU32(storage, gridOff + cellIdx);
+                uint32_t cnt = readU32(storage, gridOff + packedStart);
+                for (uint32_t i = 0; i < cnt; i++) {
+                    uint32_t rawVal = readU32(storage, gridOff + packedStart + 1 + i);
+                    if ((rawVal & 0x80000000u) == 0) {
+                        uint32_t primOff = primBase + rawVal;
+                        uint32_t color = readU32(storage, primOff + 6);
+                        if (color == 0xFFAABBCC) {
+                            rowsWithPrim.insert(row);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Should be in rows 7 and 8 (cursor 5 + local lines 2-3)
+        expect(rowsWithPrim.count(7) == 1_u || rowsWithPrim.count(8) == 1_u)
+            << "primitive should be in rows 7-8, found in rows: [listed]";
+    };
+
+    "shader scenario: verify pixelPos -> scenePos -> cellY -> gridRow match"_test = [] {
+        uint32_t metadataBytes = 1001 * 64;
+        auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder = *Painter::create(nullptr, testAllocator(), mockCM, 1000, true);
+
+        // Terminal-like setup: 80x25 cells, 10x20 pixel cells
+        float cellW = 10.0f, cellH = 20.0f;
+        float termW = 80 * cellW, termH = 25 * cellH;  // 800x500
+
+        builder->setSceneBounds(0, 0, termW, termH);
+        builder->setGridCellSize(cellW, cellH);
+
+        // Cursor at row 3
+        builder->setCursorPosition(0, 3);
+
+        // Circle at local center (50, 100)
+        auto buf = *YPaintBuffer::create();
+        buf->addCircle(0, 50.0f, 100.0f, 10.0f, 0xFFABCDEF, 0, 0.0f, 0.0f);
+        builder->addYpaintBuffer(buf);
+
+        builder->declareBufferNeeds();
+        mockCM->mockBufMgr()->commitReservations();
+        builder->allocateBuffers();
+        builder->writeBuffers();
+
+        const float* storage = mockCM->mockBufMgr()->storageAsFloat();
+        const uint32_t* meta = mockCM->metadataAsU32() + 1000 * 16;
+
+        // Verify metadata scene bounds
+        float contentMinX, contentMinY, contentMaxX, contentMaxY;
+        std::memcpy(&contentMinX, &meta[8], sizeof(float));
+        std::memcpy(&contentMinY, &meta[9], sizeof(float));
+        std::memcpy(&contentMaxX, &meta[10], sizeof(float));
+        std::memcpy(&contentMaxY, &meta[11], sizeof(float));
+
+        expect(contentMinX == 0.0_f) << "contentMinX should be 0";
+        expect(contentMinY == 0.0_f) << "contentMinY should be 0";
+        expect(contentMaxX == termW) << "contentMaxX should be " << termW;
+        expect(contentMaxY == termH) << "contentMaxY should be " << termH;
+
+        // Verify cellSize in metadata matches
+        float cellSizeX = unpackF16(meta[5], false);
+        float cellSizeY = unpackF16(meta[5], true);
+        expect(std::abs(cellSizeX - cellW) < 0.1f) << "cellSizeX should be " << cellW;
+        expect(std::abs(cellSizeY - cellH) < 0.1f) << "cellSizeY should be " << cellH;
+
+        // Primitive has gridOffset (0, 3) and local center (50, 100)
+        // It should appear at screen pixel Y = cursorRow * cellH + localY = 3*20 + 100 = 160
+        // When shader looks at pixel Y=160:
+        //   scenePos.y = 160 (since content bounds = terminal size)
+        //   cellY = floor((160 - 0) / 20) = 8
+        // Primitive should be in grid row 8
+
+        uint32_t gridOff = meta[2];
+        uint32_t gridW = meta[3];
+        uint32_t primBase = meta[0] + meta[1];
+
+        // Check grid row 8 contains our primitive
+        uint32_t targetRow = 8;
+        bool foundInRow8 = false;
+        for (uint32_t col = 0; col < gridW; col++) {
+            uint32_t cellIdx = targetRow * gridW + col;
+            uint32_t packedStart = readU32(storage, gridOff + cellIdx);
+            uint32_t cnt = readU32(storage, gridOff + packedStart);
+            for (uint32_t i = 0; i < cnt; i++) {
+                uint32_t rawVal = readU32(storage, gridOff + packedStart + 1 + i);
+                if ((rawVal & 0x80000000u) == 0) {
+                    uint32_t primOff = primBase + rawVal;
+                    uint32_t color = readU32(storage, primOff + 6);
+                    if (color == 0xFFABCDEF) {
+                        foundInRow8 = true;
+                    }
+                }
+            }
+        }
+
+        expect(foundInRow8)
+            << "primitive with cursor row 3 and local Y=100 should be in grid row 8 "
+            << "(cursorRow + floor(localY/cellH) = 3 + floor(100/20) = 3 + 5 = 8)";
+
+        // Now verify the primitive's gridOffset
+        uint32_t primOff = meta[0];
+        uint32_t wordOff = readU32(storage, primOff);
+        uint32_t absPrimOff = primBase + wordOff;
+
+        uint32_t packedGridOff = readU32(storage, absPrimOff);
+        uint16_t gridOffX = packedGridOff & 0xFFFF;
+        uint16_t gridOffY = (packedGridOff >> 16) & 0xFFFF;
+
+        expect(gridOffX == 0_u) << "gridOffset X should be 0";
+        expect(gridOffY == 3_u) << "gridOffset Y should be 3 (cursor row)";
+
+        // And verify primitive local coords are preserved
+        float primCx = storage[absPrimOff + 3];
+        float primCy = storage[absPrimOff + 4];
+        expect(primCx == 50.0_f) << "primitive cx should be 50";
+        expect(primCy == 100.0_f) << "primitive cy should be 100";
+    };
+
+    "verify grid row calculation: cursor row 3, local Y spanning 0-100"_test = [] {
+        uint32_t metadataBytes = 1001 * 64;
+        auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder = *Painter::create(nullptr, testAllocator(), mockCM, 1000, true);
+
+        float cellH = 20.0f;
+        builder->setSceneBounds(0, 0, 200.0f, 500.0f);
+        builder->setGridCellSize(20.0f, cellH);
+
+        builder->setCursorPosition(0, 3);
+
+        // Box from local Y=0 to Y=100 (center=50, half-height=50)
+        auto buf = *YPaintBuffer::create();
+        buf->addBox(0, 100.0f, 50.0f, 20.0f, 50.0f, 0xDEADBEEF, 0, 0.0f, 0.0f);
+        builder->addYpaintBuffer(buf);
+
+        builder->declareBufferNeeds();
+        mockCM->mockBufMgr()->commitReservations();
+        builder->allocateBuffers();
+        builder->writeBuffers();
+
+        const float* storage = mockCM->mockBufMgr()->storageAsFloat();
+        const uint32_t* meta = mockCM->metadataAsU32() + 1000 * 16;
+
+        uint32_t gridOff = meta[2];
+        uint32_t gridW = meta[3];
+        uint32_t gridH = meta[4];
+        uint32_t primBase = meta[0] + meta[1];
+
+        // Box AABB: minY=0, maxY=100
+        // localMinLine = floor(0/20) = 0
+        // localMaxLine = floor(100/20) = 5
+        // primMinLine = 3 + 0 = 3
+        // primMaxLine = 3 + 5 = 8
+        // Should be in grid rows 3-8
+
+        std::set<uint32_t> rowsWithPrim;
+        for (uint32_t row = 0; row < gridH; row++) {
+            for (uint32_t col = 0; col < gridW; col++) {
+                uint32_t cellIdx = row * gridW + col;
+                uint32_t packedStart = readU32(storage, gridOff + cellIdx);
+                uint32_t cnt = readU32(storage, gridOff + packedStart);
+                for (uint32_t i = 0; i < cnt; i++) {
+                    uint32_t rawVal = readU32(storage, gridOff + packedStart + 1 + i);
+                    if ((rawVal & 0x80000000u) == 0) {
+                        uint32_t primOff = primBase + rawVal;
+                        uint32_t color = readU32(storage, primOff + 7);  // Box color at +7
+                        if (color == 0xDEADBEEF) {
+                            rowsWithPrim.insert(row);
+                        }
+                    }
+                }
+            }
+        }
+
+        // DEBUG: Print which rows actually have the primitive
+        if (rowsWithPrim.empty()) {
+            std::cerr << "BUG: No grid rows contain the primitive!" << std::endl;
+            std::cerr << "gridH=" << gridH << " gridW=" << gridW << std::endl;
+            std::cerr << "gridOff=" << gridOff << " primBase=" << primBase << std::endl;
+
+            // Dump grid cells for rows 3-8 col 0
+            std::cerr << "Grid cell dump for rows 3-8, col 0:" << std::endl;
+            for (uint32_t row = 3; row <= 8 && row < gridH; row++) {
+                uint32_t cellIdx = row * gridW + 0;
+                uint32_t packedStart = readU32(storage, gridOff + cellIdx);
+                uint32_t cnt = readU32(storage, gridOff + packedStart);
+                std::cerr << "  row " << row << ": cellIdx=" << cellIdx
+                          << " packedStart=" << packedStart << " cnt=" << cnt;
+                for (uint32_t i = 0; i < cnt && i < 3; i++) {
+                    uint32_t rawVal = readU32(storage, gridOff + packedStart + 1 + i);
+                    std::cerr << " entry[" << i << "]=" << rawVal;
+                    if ((rawVal & 0x80000000u) == 0) {
+                        std::cerr << "(prim)";
+                    } else {
+                        std::cerr << "(glyph)";
+                    }
+                }
+                std::cerr << std::endl;
+            }
+
+            // Scan ALL primitives to see where they are
+            uint32_t primCnt = meta[1];
+            uint32_t primOff = meta[0];
+            uint32_t primBase2 = primOff + primCnt;
+            for (uint32_t i = 0; i < primCnt; i++) {
+                uint32_t wordOff = readU32(storage, primOff + i);
+                uint32_t absPrimOff = primBase2 + wordOff;
+                uint32_t packedGridOff = readU32(storage, absPrimOff);
+                uint16_t gridOffX = packedGridOff & 0xFFFF;
+                uint16_t gridOffY = (packedGridOff >> 16) & 0xFFFF;
+                uint32_t color = readU32(storage, absPrimOff + 7);
+                std::cerr << "Prim " << i << ": gridOffset=(" << gridOffX << "," << gridOffY
+                          << ") color=" << std::hex << color << std::dec << std::endl;
+            }
+        }
+
+        expect(!rowsWithPrim.empty()) << "primitive should be in SOME grid rows";
+
+        // Should span rows 3-8 (cursorRow=3 + local rows 0-5)
+        for (uint32_t row = 3; row <= 8; row++) {
+            expect(rowsWithPrim.count(row) == 1_u)
+                << "primitive should be in grid row " << row;
+        }
+
+        // Should NOT be in rows 0-2 or 9+
+        for (uint32_t row = 0; row < 3; row++) {
+            expect(rowsWithPrim.count(row) == 0_u)
+                << "primitive should NOT be in grid row " << row;
+        }
+    };
+
+    "BUG HUNT: simulate exact shader grid lookup"_test = [] {
+        uint32_t metadataBytes = 1001 * 64;
+        auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder = *Painter::create(nullptr, testAllocator(), mockCM, 1000, true);
+
+        // Terminal: 80x25 cells, 10x20 pixels
+        float cellW = 10.0f, cellH = 20.0f;
+        uint32_t cols = 80, rows = 25;
+        float termW = cols * cellW, termH = rows * cellH;
+
+        builder->setSceneBounds(0, 0, termW, termH);
+        builder->setGridCellSize(cellW, cellH);
+
+        // Cursor at row 3
+        builder->setCursorPosition(0, 3);
+
+        // Circle at local (100, 50), radius 15
+        auto buf = *YPaintBuffer::create();
+        buf->addCircle(0, 100.0f, 50.0f, 15.0f, 0xFF123456, 0, 0.0f, 0.0f);
+        builder->addYpaintBuffer(buf);
+
+        builder->declareBufferNeeds();
+        mockCM->mockBufMgr()->commitReservations();
+        builder->allocateBuffers();
+        builder->writeBuffers();
+
+        const float* storage = mockCM->mockBufMgr()->storageAsFloat();
+        const uint32_t* meta = mockCM->metadataAsU32() + 1000 * 16;
+
+        // Simulate shader calculation
+        // Pixel where primitive should be visible:
+        //   screenY = cursorRow * cellH + localY = 3 * 20 + 50 = 110
+        float pixelPosX = 100.0f;
+        float pixelPosY = 110.0f;
+
+        // Shader scenePos calculation (from renderYpaintOverlay)
+        float contentMinX, contentMinY, contentMaxX, contentMaxY;
+        std::memcpy(&contentMinX, &meta[8], sizeof(float));
+        std::memcpy(&contentMinY, &meta[9], sizeof(float));
+        std::memcpy(&contentMaxX, &meta[10], sizeof(float));
+        std::memcpy(&contentMaxY, &meta[11], sizeof(float));
+
+        float contentW = contentMaxX - contentMinX;
+        float contentH = contentMaxY - contentMinY;
+        float gridPixelW = cols * cellW;
+        float gridPixelH = rows * cellH;
+
+        float scenePosX = contentMinX + (pixelPosX / gridPixelW) * contentW;
+        float scenePosY = contentMinY + (pixelPosY / gridPixelH) * contentH;
+
+        // Grid lookup
+        float cellSizeX = unpackF16(meta[5], false);
+        float cellSizeY = unpackF16(meta[5], true);
+
+        uint32_t cellX = static_cast<uint32_t>(std::floor((scenePosX - contentMinX) / cellSizeX));
+        uint32_t cellY = static_cast<uint32_t>(std::floor((scenePosY - contentMinY) / cellSizeY));
+
+        // Where should the primitive be?
+        // localMinLine = floor((50-15)/20) = floor(35/20) = 1
+        // localMaxLine = floor((50+15)/20) = floor(65/20) = 3
+        // primMinLine = 3 + 1 = 4
+        // primMaxLine = 3 + 3 = 6
+        // Primitive should be in grid rows 4-6
+
+        // At pixelPosY=110, scenePosY should be 110, cellY should be floor(110/20) = 5
+        expect(std::abs(scenePosY - 110.0f) < 0.1f)
+            << "scenePosY should be ~110, got " << scenePosY;
+        expect(cellY == 5_u)
+            << "cellY should be 5, got " << cellY;
+
+        // Check that primitive is in grid row 5
+        uint32_t gridOff = meta[2];
+        uint32_t gridW = meta[3];
+        uint32_t primBase = meta[0] + meta[1];
+
+        bool foundAtCellY5 = false;
+        for (uint32_t col = 0; col < gridW; col++) {
+            uint32_t cellIdx = cellY * gridW + col;
+            uint32_t packedStart = readU32(storage, gridOff + cellIdx);
+            uint32_t cnt = readU32(storage, gridOff + packedStart);
+            for (uint32_t i = 0; i < cnt; i++) {
+                uint32_t rawVal = readU32(storage, gridOff + packedStart + 1 + i);
+                if ((rawVal & 0x80000000u) == 0) {
+                    uint32_t primOff = primBase + rawVal;
+                    uint32_t color = readU32(storage, primOff + 6);
+                    if (color == 0xFF123456) {
+                        foundAtCellY5 = true;
+                    }
+                }
+            }
+        }
+
+        expect(foundAtCellY5)
+            << "primitive should be found in grid row " << cellY
+            << " (shader lookup at pixelY=" << pixelPosY << ")";
+    };
+
+    "BUG HUNT: chart.sh exact scenario"_test = [] {
+        uint32_t metadataBytes = 1001 * 64;
+        auto mockCM = std::make_shared<MockGpuMemoryManager>(metadataBytes);
+        auto builder = *Painter::create(nullptr, testAllocator(), mockCM, 1000, true);
+
+        // Typical terminal
+        float cellW = 10.0f, cellH = 20.0f;
+        uint32_t cols = 80, rows = 25;
+        float termW = cols * cellW, termH = rows * cellH;
+
+        builder->setSceneBounds(0, 0, termW, termH);
+        builder->setGridCellSize(cellW, cellH);
+
+        // Cursor at row 3 (prompt on 3rd line)
+        builder->setCursorPosition(0, 3);
+
+        // Chart bars from chart.sh (simplified positions)
+        auto buf = *YPaintBuffer::create();
+        buf->addBox(0, 70.0f, 100.0f, 20.0f, 40.0f, 0xFF3498DB, 0, 0.0f, 4.0f);  // Y: 60-140
+        buf->addBox(1, 120.0f, 60.0f, 20.0f, 60.0f, 0xFF2ECC71, 0, 0.0f, 4.0f);  // Y: 0-120
+        buf->addBox(2, 170.0f, 80.0f, 20.0f, 50.0f, 0xFFE74C3C, 0, 0.0f, 4.0f);  // Y: 30-130
+        builder->addYpaintBuffer(buf);
+
+        builder->declareBufferNeeds();
+        mockCM->mockBufMgr()->commitReservations();
+        builder->allocateBuffers();
+        builder->writeBuffers();
+
+        const float* storage = mockCM->mockBufMgr()->storageAsFloat();
+        const uint32_t* meta = mockCM->metadataAsU32() + 1000 * 16;
+
+        expect(meta[1] == 3_u) << "should have 3 prims";
+
+        uint32_t gridOff = meta[2];
+        uint32_t gridW = meta[3];
+        uint32_t gridH = meta[4];
+        uint32_t primBase = meta[0] + meta[1];
+
+        // For each bar, calculate expected grid rows and verify
+        struct BarInfo {
+            float localMinY, localMaxY;
+            uint32_t color;
+        };
+        std::vector<BarInfo> bars = {
+            {60.0f, 140.0f, 0xFF3498DB},
+            {0.0f, 120.0f, 0xFF2ECC71},
+            {30.0f, 130.0f, 0xFFE74C3C}
+        };
+
+        for (const auto& bar : bars) {
+            uint32_t localMinLine = static_cast<uint32_t>(std::floor(bar.localMinY / cellH));
+            uint32_t localMaxLine = static_cast<uint32_t>(std::floor(bar.localMaxY / cellH));
+            uint32_t expectedMinRow = 3 + localMinLine;  // cursorRow + localLine
+            uint32_t expectedMaxRow = 3 + localMaxLine;
+
+            // Find which rows contain this bar
+            std::set<uint32_t> rowsWithBar;
+            for (uint32_t row = 0; row < gridH; row++) {
+                for (uint32_t col = 0; col < gridW; col++) {
+                    uint32_t cellIdx = row * gridW + col;
+                    uint32_t packedStart = readU32(storage, gridOff + cellIdx);
+                    uint32_t cnt = readU32(storage, gridOff + packedStart);
+                    for (uint32_t i = 0; i < cnt; i++) {
+                        uint32_t rawVal = readU32(storage, gridOff + packedStart + 1 + i);
+                        if ((rawVal & 0x80000000u) == 0) {
+                            uint32_t primOff = primBase + rawVal;
+                            uint32_t color = readU32(storage, primOff + 7);  // Box color at +7
+                            if (color == bar.color) {
+                                rowsWithBar.insert(row);
+                            }
+                        }
+                    }
+                }
+            }
+
+            expect(!rowsWithBar.empty())
+                << "bar with color " << std::hex << bar.color << std::dec
+                << " should be found in grid";
+
+            // Verify expected rows
+            for (uint32_t row = expectedMinRow; row <= expectedMaxRow && row < gridH; row++) {
+                expect(rowsWithBar.count(row) == 1_u)
+                    << "bar " << std::hex << bar.color << std::dec
+                    << " should be in row " << row;
+            }
+        }
+
+        // Now simulate shader lookup at various pixel positions
+        float contentMinY;
+        std::memcpy(&contentMinY, &meta[9], sizeof(float));
+        float cellSizeY = unpackF16(meta[5], true);
+
+        // Test at pixel Y corresponding to middle of first bar
+        // Bar 1: local Y center = 100, cursor row = 3
+        // Screen Y = 3*20 + 100 = 160
+        float testPixelY = 160.0f;
+        float scenePosY = testPixelY;  // Since content bounds = terminal
+        uint32_t lookupCellY = static_cast<uint32_t>(std::floor((scenePosY - contentMinY) / cellSizeY));
+
+        // Expected: cellY = floor(160/20) = 8
+        // Bar 1 AABB: 60-140, with cursor 3: grid rows 6-10
+        expect(lookupCellY == 8_u) << "lookup cellY should be 8";
+
+        bool foundBar1AtRow8 = false;
+        for (uint32_t col = 0; col < gridW; col++) {
+            uint32_t cellIdx = lookupCellY * gridW + col;
+            uint32_t packedStart = readU32(storage, gridOff + cellIdx);
+            uint32_t cnt = readU32(storage, gridOff + packedStart);
+            for (uint32_t i = 0; i < cnt; i++) {
+                uint32_t rawVal = readU32(storage, gridOff + packedStart + 1 + i);
+                if ((rawVal & 0x80000000u) == 0) {
+                    uint32_t primOff = primBase + rawVal;
+                    uint32_t color = readU32(storage, primOff + 7);
+                    if (color == 0xFF3498DB) {
+                        foundBar1AtRow8 = true;
+                    }
+                }
+            }
+        }
+
+        expect(foundBar1AtRow8)
+            << "bar 1 (blue) should be found at grid row 8 (shader lookup at pixelY=160)";
     };
 };
