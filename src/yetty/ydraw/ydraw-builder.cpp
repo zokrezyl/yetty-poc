@@ -16,7 +16,6 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
-#include <iostream>
 #include <limits>
 #include <numeric>
 #include <unordered_map>
@@ -953,9 +952,7 @@ public:
                 if (!primResult) return Err<void>("allocateBuffers: prim alloc failed", primResult);
                 _primHandle = *primResult;
 
-                std::cerr << "allocateBuffers: primHandle.offset=" << _primHandle.offset 
-                          << " size=" << _primHandle.size 
-                          << " words=" << (_primHandle.offset / sizeof(float)) << std::endl;
+                ydebug("allocateBuffers: primHandle.offset={} size={} words={}", _primHandle.offset, _primHandle.size, _primHandle.offset / sizeof(float));
 
                 float* buf = reinterpret_cast<float*>(_primHandle.data);
                 _buffer->writeGPU(buf, _primHandle.size, _primWordOffsets);
@@ -970,9 +967,7 @@ public:
             if (!derivedResult) return Err<void>("allocateBuffers: derived alloc failed", derivedResult);
             _derivedHandle = *derivedResult;
 
-            std::cerr << "allocateBuffers: derivedHandle.offset=" << _derivedHandle.offset 
-                      << " size=" << _derivedHandle.size 
-                      << " words=" << (_derivedHandle.offset / sizeof(float)) << std::endl;
+            ydebug("allocateBuffers: derivedHandle.offset={} size={} words={}", _derivedHandle.offset, _derivedHandle.size, _derivedHandle.offset / sizeof(float));
 
             if (auto res = writeDerived(); !res) return res;
             bufMgr->markBufferDirty(_derivedHandle);
@@ -1079,17 +1074,14 @@ public:
     Result<void> writeBuffers() override {
         if (!_cardMgr) return Err<void>("writeBuffers: no CardManager");
 
-        std::cerr << "writeBuffers: bufferDirty=" << _bufferDirty 
-                  << " metaDirty=" << _metadataDirty 
-                  << " primHandle=" << _primHandle.isValid()
-                  << " derivedHandle=" << _derivedHandle.isValid() << std::endl;
+        ydebug("writeBuffers: bufferDirty={} metaDirty={} primHandle={} derivedHandle={}", _bufferDirty, _metadataDirty, _primHandle.isValid(), _derivedHandle.isValid());
 
         if (_bufferDirty) {
             auto bufMgr = _cardMgr->bufferManager();
 
             // Re-write prims
             if (_primHandle.isValid() && !_buffer->empty()) {
-                std::cerr << "writeBuffers: re-writing prims" << std::endl;
+                ydebug("writeBuffers: re-writing prims");
                 float* buf = reinterpret_cast<float*>(_primHandle.data);
                 _buffer->writeGPU(buf, _primHandle.size, _primWordOffsets);
                 bufMgr->markBufferDirty(_primHandle);
@@ -1097,7 +1089,7 @@ public:
 
             // Re-write derived (grid + glyphs + atlas header)
             if (_derivedHandle.isValid()) {
-                std::cerr << "writeBuffers: re-writing derived" << std::endl;
+                ydebug("writeBuffers: re-writing derived");
                 if (auto res = writeDerived(); !res) return res;
                 bufMgr->markBufferDirty(_derivedHandle);
             }
@@ -1566,9 +1558,7 @@ public:
         _cellSizeX = csX;
         _cellSizeY = csY;
 
-        std::cerr << "YDrawBuilder::calculate: grid=" << gridW << "x" << gridH 
-                  << " scene=[" << _sceneMinX << "," << _sceneMinY << "]-[" 
-                  << _sceneMaxX << "," << _sceneMaxY << "] prims=" << _primBounds.size() << std::endl;
+        ydebug("YDrawBuilder::calculate: grid={}x{} scene=[{},{}]-[{},{}] prims={}", gridW, gridH, _sceneMinX, _sceneMinY, _sceneMaxX, _sceneMaxY, _primBounds.size());
 
         ydebug("YDrawBuilder::calculate: grid={}x{} cellSize=({:.1f},{:.1f}) prims={} glyphs={} scene=[{:.0f},{:.0f}]-[{:.0f},{:.0f}]",
               gridW, gridH, csX, csY, _primBounds.size(), _glyphs.size(),
@@ -1711,12 +1701,7 @@ private:
         meta.flags = (_flags & 0xFFFF) | (zoomBits << 16);
         meta.bgColor = _bgColor;
 
-        std::cerr << "flushMetadata: primOff=" << meta.primitiveOffset 
-                  << " primCnt=" << meta.primitiveCount
-                  << " gridOff=" << meta.gridOffset
-                  << " grid=" << meta.gridWidth << "x" << meta.gridHeight
-                  << " scene=[" << _sceneMinX << "," << _sceneMinY << "]-[" 
-                  << _sceneMaxX << "," << _sceneMaxY << "]" << std::endl;
+        ydebug("flushMetadata: primOff={} primCnt={} gridOff={} grid={}x{} scene=[{},{}]-[{},{}]", meta.primitiveOffset, meta.primitiveCount, meta.gridOffset, meta.gridWidth, meta.gridHeight, _sceneMinX, _sceneMinY, _sceneMaxX, _sceneMaxY);
 
         return _cardMgr->writeMetadata(
             MetadataHandle{_metaSlotIndex * 64, 64}, &meta, sizeof(meta));
@@ -1746,9 +1731,7 @@ private:
         // Copy grid and translate prim indices to word offsets
         uint32_t gridBytes = static_cast<uint32_t>(_gridStaging.size()) * sizeof(uint32_t);
         _gpuGridOffset = (_derivedHandle.offset + offset) / sizeof(float);
-        std::cerr << "writeDerived: gridSize=" << _gridStaging.size() 
-                  << " gridOffset=" << _gpuGridOffset 
-                  << " primWordOffsets.size=" << _primWordOffsets.size() << std::endl;
+        ydebug("writeDerived: gridSize={} gridOffset={} primWordOffsets.size={}", _gridStaging.size(), _gpuGridOffset, _primWordOffsets.size());
         if (!_gridStaging.empty()) {
             std::memcpy(base + offset, _gridStaging.data(), gridBytes);
             // Translate prim indices in grid entries to word offsets
@@ -1760,21 +1743,17 @@ private:
                     uint32_t packedOff = gridPtr[ci];
                     if (packedOff >= gridSize) continue;
                     uint32_t cnt = gridPtr[packedOff];
-                    std::cerr << "  cell[" << ci << "]: packedOff=" << packedOff << " cnt=" << cnt;
                     for (uint32_t j = 0; j < cnt; j++) {
                         uint32_t idx = packedOff + 1 + j;
                         if (idx >= gridSize) break;
                         uint32_t rawVal = gridPtr[idx];
                         if ((rawVal & 0x80000000u) != 0) {
-                            std::cerr << " glyph:" << (rawVal & 0x7FFFFFFFu);
                             continue;
                         }
                         if (rawVal < static_cast<uint32_t>(_primWordOffsets.size())) {
-                            std::cerr << " prim:" << rawVal << "->" << _primWordOffsets[rawVal];
                             gridPtr[idx] = _primWordOffsets[rawVal];
                         }
                     }
-                    std::cerr << std::endl;
                 }
             }
         }

@@ -75,7 +75,7 @@ public:
     }
 
     _initialized = true;
-    yinfo("FontManager initialized");
+    ydebug("FontManager initialized");
     return Ok();
   }
 

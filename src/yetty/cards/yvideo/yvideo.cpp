@@ -57,7 +57,7 @@ public:
         }
         _metaHandle = *metaResult;
 
-        yinfo("YVideo::init: allocated metadata at offset {}", _metaHandle.offset);
+        ydebug("YVideo::init: allocated metadata at offset {}", _metaHandle.offset);
 
         // Parse args
         parseArgs(_argsStr);
@@ -123,7 +123,7 @@ public:
         _yTextureHandle = TextureHandle::invalid();
         _uvTextureHandle = TextureHandle::invalid();
         _needsRealloc = true;
-        yinfo("YVideo::suspend: released texture handles");
+        ydebug("YVideo::suspend: released texture handles");
     }
 
     bool needsTextureRealloc() override {
@@ -161,7 +161,7 @@ public:
         _needsRealloc = false;
         _metadataDirty = true;
 
-        yinfo("YVideo::allocateTextures: Y={}x{} UV={}x{}",
+        ydebug("YVideo::allocateTextures: Y={}x{} UV={}x{}",
               _scaledYWidth, _scaledYHeight, uvWidth, uvHeight);
 
         return Ok();
@@ -343,7 +343,7 @@ private:
             }
             frameOpt = *frameResult;
             if (frameOpt) {
-                yinfo("YVideo::decodePayload: got frame after {} sample(s)", attempt + 1);
+                ydebug("YVideo::decodePayload: got frame after {} sample(s)", attempt + 1);
                 break;
             }
         }
@@ -377,7 +377,7 @@ private:
         _videoSource->releaseFrame();
         _metadataDirty = true;
 
-        yinfo("YVideo::decodePayload: decoded frame {}x{}", _frameWidth, _frameHeight);
+        ydebug("YVideo::decodePayload: decoded frame {}x{}", _frameWidth, _frameHeight);
         
         // Start playback timer
         _frameRate = _videoSource->frameRate();
@@ -525,7 +525,7 @@ private:
         }
         
         _playing = true;
-        yinfo("YVideo::startPlayback: started at {}fps ({}ms interval)", _frameRate, intervalMs);
+        ydebug("YVideo::startPlayback: started at {}fps ({}ms interval)", _frameRate, intervalMs);
         return Ok();
     }
     
@@ -662,7 +662,7 @@ private:
             return Err<void>("YVideo::registerForEvents: failed to register Scroll", res);
         }
 
-        yinfo("YVideo card {} registered for events", id());
+        ydebug("YVideo card {} registered for events", id());
         return Ok();
     }
 

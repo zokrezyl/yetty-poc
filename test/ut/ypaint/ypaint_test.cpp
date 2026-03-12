@@ -1,5 +1,5 @@
 //=============================================================================
-// YPaintBuffer + YPaintBuilder Unit Tests
+// YPaintBuffer + Painter Unit Tests
 //
 // Tests AABB computation, GPU buffer layout, grid construction,
 // the real builder GPU write pipeline using mock CardManager,
@@ -15,7 +15,7 @@
 #include "yetty/ypaint/ypaint-buffer.h"
 #include "yetty/ypaint/ypaint-types.gen.h"
 #include "yetty/ypaint/ypaint-prim-writer.gen.h"
-#include <yetty/ypaint-builder.h>
+#include <yetty/ypaint/painter.h>
 #include <yetty/card-manager.h>
 #include <yetty/card-buffer-manager.h>
 #include <yetty/font-manager.h>
@@ -35,7 +35,7 @@
 using namespace boost::ut;
 using namespace yetty;
 using namespace yetty::ypaint;
-using namespace yetty::ypaint::card;
+using namespace yetty::card;
 
 //=============================================================================
 // Helper: read u32 from float buffer at word index
@@ -270,7 +270,7 @@ static FontManager::Ptr testFontManager() {
 //=============================================================================
 struct PipelineResult {
     std::shared_ptr<MockCardManager> cardMgr;
-    YPaintBuilder::Ptr builder;
+    Painter::Ptr builder;
     const float* storage;       // cardStorage as floats
     const uint32_t* meta;       // metadata as u32
     uint32_t primitiveOffset;
@@ -300,7 +300,7 @@ static PipelineResult runPipeline(YPaintBuffer::Ptr buf,
                                    float sceneW = 200.0f, float sceneH = 200.0f,
                                    FontManager::Ptr fontMgr = nullptr) {
     auto mockCM = std::make_shared<MockCardManager>();
-    auto builder = *YPaintBuilder::create(fontMgr, testAllocator(), mockCM, 0);
+    auto builder = *Painter::create(fontMgr, testAllocator(), mockCM, 0);
     builder->setSceneBounds(0, 0, sceneW, sceneH);
     builder->setGridCellSize(20.0f, 20.0f);  // Default cell size
     if (!buf->empty()) {
@@ -942,7 +942,7 @@ suite gpu_pipeline_tests = [] {
     "clear and rebuild produces valid pipeline"_test = [] {
         auto buf = *YPaintBuffer::create();
         auto mockCM = std::make_shared<MockCardManager>();
-        auto builder = *YPaintBuilder::create(nullptr, nullptr, mockCM, 0);
+        auto builder = *Painter::create(nullptr, nullptr, mockCM, 0);
         builder->setSceneBounds(0, 0, 200.0f, 200.0f);
         builder->setGridCellSize(20.0f, 20.0f);
 
@@ -1029,7 +1029,7 @@ suite gpu_pipeline_tests = [] {
         buf->addCircle(0, 50.0f, 50.0f, 10.0f, 0xFFFF0000, 0, 0.0f, 0.0f);
 
         auto mockCM = std::make_shared<MockCardManager>();
-        auto builder = *YPaintBuilder::create(nullptr, nullptr, mockCM, 0);
+        auto builder = *Painter::create(nullptr, nullptr, mockCM, 0);
         builder->setSceneBounds(0, 0, 100.0f, 100.0f);
         builder->addYpaintBuffer(buf);
         builder->declareBufferNeeds();
@@ -1369,7 +1369,7 @@ suite text_pipeline_tests = [] {
             const YPaintGlyph* glyphs = reinterpret_cast<const YPaintGlyph*>(
                 &p.storage[glyphOffset]);
             uint8_t flags = static_cast<uint8_t>(glyphs[0].glyphLayerFlags >> 24);
-            expect((flags & YPaintBuilder::GLYPH_FLAG_CUSTOM_ATLAS) != 0_u)
+            expect((flags & Painter::GLYPH_FLAG_CUSTOM_ATLAS) != 0_u)
                 << "custom font glyphs should have CUSTOM_ATLAS flag";
         }
     };

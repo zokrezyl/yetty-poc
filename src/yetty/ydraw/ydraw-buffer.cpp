@@ -3,7 +3,6 @@
 
 #include <ytrace/ytrace.hpp>
 #include <cstring>
-#include <iostream>
 
 namespace yetty {
 
@@ -241,8 +240,7 @@ void YDrawBuffer::writeGPU(float* buf, uint32_t bufBytes,
         if (!pd.words.empty()) {
             std::memcpy(&primType, &pd.words[0], sizeof(uint32_t));
         }
-        std::cerr << "writeGPU: prim[" << i << "] id=" << id << " type=" << primType 
-                  << " words=" << pd.words.size() << " dataOff=" << dataOffset << std::endl;
+        ydebug("writeGPU: prim[{}] id={} type={} words={} dataOff={}", i, id, primType, pd.words.size(), dataOffset);
         
         dataOffset += static_cast<uint32_t>(pd.words.size());
         i++;

@@ -13,7 +13,7 @@
 //=============================================================================
 
 #include <boost/ut.hpp>
-#include <yetty/ypaint-builder.h>
+#include <yetty/ypaint/painter.h>
 #include <yetty/card-manager.h>
 #include <yetty/gpu-allocator.h>
 #include "yetty/ypaint/ypaint-buffer.h"
@@ -29,7 +29,7 @@
 using namespace boost::ut;
 using namespace yetty;
 using namespace yetty::ypaint;
-using namespace yetty::ypaint::card;
+using namespace yetty::card;
 
 //=============================================================================
 // Helpers
@@ -117,7 +117,7 @@ suite gpu_buffer_verification = [] {
 
     "L1_single_circle_cursor_0"_test = [] {
         auto gpuAlloc = testAllocator();
-        auto builder = *YPaintBuilder::create(FontManager::Ptr{}, gpuAlloc, true);
+        auto builder = *Painter::create(FontManager::Ptr{}, gpuAlloc, true);
 
         builder->setSceneBounds(0, 0, 100, 200);
         builder->setGridCellSize(10.0f, 20.0f);
@@ -143,7 +143,7 @@ suite gpu_buffer_verification = [] {
 
     "L1_single_box_cursor_0"_test = [] {
         auto gpuAlloc = testAllocator();
-        auto builder = *YPaintBuilder::create(FontManager::Ptr{}, gpuAlloc, true);
+        auto builder = *Painter::create(FontManager::Ptr{}, gpuAlloc, true);
 
         builder->setSceneBounds(0, 0, 100, 200);
         builder->setGridCellSize(10.0f, 20.0f);
@@ -163,7 +163,7 @@ suite gpu_buffer_verification = [] {
 
     "L1_single_triangle_cursor_0"_test = [] {
         auto gpuAlloc = testAllocator();
-        auto builder = *YPaintBuilder::create(FontManager::Ptr{}, gpuAlloc, true);
+        auto builder = *Painter::create(FontManager::Ptr{}, gpuAlloc, true);
 
         builder->setSceneBounds(0, 0, 100, 200);
         builder->setGridCellSize(10.0f, 20.0f);
@@ -187,7 +187,7 @@ suite gpu_buffer_verification = [] {
 
     "L2_single_circle_cursor_5"_test = [] {
         auto gpuAlloc = testAllocator();
-        auto builder = *YPaintBuilder::create(FontManager::Ptr{}, gpuAlloc, true);
+        auto builder = *Painter::create(FontManager::Ptr{}, gpuAlloc, true);
 
         builder->setSceneBounds(0, 0, 100, 400);
         builder->setGridCellSize(10.0f, 20.0f);
@@ -207,7 +207,7 @@ suite gpu_buffer_verification = [] {
 
     "L2_single_box_cursor_10"_test = [] {
         auto gpuAlloc = testAllocator();
-        auto builder = *YPaintBuilder::create(FontManager::Ptr{}, gpuAlloc, true);
+        auto builder = *Painter::create(FontManager::Ptr{}, gpuAlloc, true);
 
         builder->setSceneBounds(0, 0, 100, 400);
         builder->setGridCellSize(10.0f, 20.0f);
@@ -232,7 +232,7 @@ suite gpu_buffer_verification = [] {
 
     "L3_two_prims_same_buffer_cursor_0"_test = [] {
         auto gpuAlloc = testAllocator();
-        auto builder = *YPaintBuilder::create(FontManager::Ptr{}, gpuAlloc, true);
+        auto builder = *Painter::create(FontManager::Ptr{}, gpuAlloc, true);
 
         builder->setSceneBounds(0, 0, 100, 200);
         builder->setGridCellSize(10.0f, 20.0f);
@@ -264,7 +264,7 @@ suite gpu_buffer_verification = [] {
 
     "L3_three_prims_same_buffer_cursor_0"_test = [] {
         auto gpuAlloc = testAllocator();
-        auto builder = *YPaintBuilder::create(FontManager::Ptr{}, gpuAlloc, true);
+        auto builder = *Painter::create(FontManager::Ptr{}, gpuAlloc, true);
 
         builder->setSceneBounds(0, 0, 100, 200);
         builder->setGridCellSize(10.0f, 20.0f);
@@ -300,7 +300,7 @@ suite gpu_buffer_verification = [] {
 
     "L4_three_prims_same_buffer_cursor_7"_test = [] {
         auto gpuAlloc = testAllocator();
-        auto builder = *YPaintBuilder::create(FontManager::Ptr{}, gpuAlloc, true);
+        auto builder = *Painter::create(FontManager::Ptr{}, gpuAlloc, true);
 
         builder->setSceneBounds(0, 0, 100, 400);
         builder->setGridCellSize(10.0f, 20.0f);
@@ -329,7 +329,7 @@ suite gpu_buffer_verification = [] {
 
     "L5_two_buffers_different_cursors"_test = [] {
         auto gpuAlloc = testAllocator();
-        auto builder = *YPaintBuilder::create(FontManager::Ptr{}, gpuAlloc, true);
+        auto builder = *Painter::create(FontManager::Ptr{}, gpuAlloc, true);
 
         builder->setSceneBounds(0, 0, 100, 400);
         builder->setGridCellSize(10.0f, 20.0f);
@@ -362,7 +362,7 @@ suite gpu_buffer_verification = [] {
 
     "L5_three_buffers_different_cursors"_test = [] {
         auto gpuAlloc = testAllocator();
-        auto builder = *YPaintBuilder::create(FontManager::Ptr{}, gpuAlloc, true);
+        auto builder = *Painter::create(FontManager::Ptr{}, gpuAlloc, true);
 
         builder->setSceneBounds(0, 0, 100, 400);
         builder->setGridCellSize(10.0f, 20.0f);
@@ -406,7 +406,7 @@ suite gpu_buffer_verification = [] {
 
     "L6_scroll_1_line_updates_offset"_test = [] {
         auto gpuAlloc = testAllocator();
-        auto builder = *YPaintBuilder::create(FontManager::Ptr{}, gpuAlloc, true);
+        auto builder = *Painter::create(FontManager::Ptr{}, gpuAlloc, true);
 
         builder->setSceneBounds(0, 0, 100, 400);
         builder->setGridCellSize(10.0f, 20.0f);
@@ -435,7 +435,7 @@ suite gpu_buffer_verification = [] {
 
     "L6_scroll_3_lines_updates_offset"_test = [] {
         auto gpuAlloc = testAllocator();
-        auto builder = *YPaintBuilder::create(FontManager::Ptr{}, gpuAlloc, true);
+        auto builder = *Painter::create(FontManager::Ptr{}, gpuAlloc, true);
 
         builder->setSceneBounds(0, 0, 100, 400);
         builder->setGridCellSize(10.0f, 20.0f);
@@ -457,7 +457,7 @@ suite gpu_buffer_verification = [] {
 
     "L6_scroll_removes_prim_when_line_popped"_test = [] {
         auto gpuAlloc = testAllocator();
-        auto builder = *YPaintBuilder::create(FontManager::Ptr{}, gpuAlloc, true);
+        auto builder = *Painter::create(FontManager::Ptr{}, gpuAlloc, true);
 
         builder->setSceneBounds(0, 0, 100, 400);
         builder->setGridCellSize(10.0f, 20.0f);
@@ -482,7 +482,7 @@ suite gpu_buffer_verification = [] {
 
     "L7_two_prims_scroll_removes_first"_test = [] {
         auto gpuAlloc = testAllocator();
-        auto builder = *YPaintBuilder::create(FontManager::Ptr{}, gpuAlloc, true);
+        auto builder = *Painter::create(FontManager::Ptr{}, gpuAlloc, true);
 
         builder->setSceneBounds(0, 0, 100, 400);
         builder->setGridCellSize(10.0f, 20.0f);
@@ -516,7 +516,7 @@ suite gpu_buffer_verification = [] {
 
     "L7_three_prims_scroll_2_removes_two"_test = [] {
         auto gpuAlloc = testAllocator();
-        auto builder = *YPaintBuilder::create(FontManager::Ptr{}, gpuAlloc, true);
+        auto builder = *Painter::create(FontManager::Ptr{}, gpuAlloc, true);
 
         builder->setSceneBounds(0, 0, 100, 400);
         builder->setGridCellSize(10.0f, 20.0f);
@@ -558,7 +558,7 @@ suite gpu_buffer_verification = [] {
 
     "L8_all_basic_2d_types"_test = [] {
         auto gpuAlloc = testAllocator();
-        auto builder = *YPaintBuilder::create(FontManager::Ptr{}, gpuAlloc, true);
+        auto builder = *Painter::create(FontManager::Ptr{}, gpuAlloc, true);
 
         builder->setSceneBounds(0, 0, 200, 800);
         builder->setGridCellSize(10.0f, 20.0f);
@@ -618,7 +618,7 @@ suite gpu_buffer_verification = [] {
 
     "L9_automated_scroll_verification"_test = [] {
         auto gpuAlloc = testAllocator();
-        auto builder = *YPaintBuilder::create(FontManager::Ptr{}, gpuAlloc, true);
+        auto builder = *Painter::create(FontManager::Ptr{}, gpuAlloc, true);
 
         builder->setSceneBounds(0, 0, 100, 1000);
         builder->setGridCellSize(10.0f, 20.0f);
@@ -670,7 +670,7 @@ suite gpu_buffer_verification = [] {
 
     "L10_100_prims_scroll_verification"_test = [] {
         auto gpuAlloc = testAllocator();
-        auto builder = *YPaintBuilder::create(FontManager::Ptr{}, gpuAlloc, true);
+        auto builder = *Painter::create(FontManager::Ptr{}, gpuAlloc, true);
 
         builder->setSceneBounds(0, 0, 100, 2500);
         builder->setGridCellSize(10.0f, 20.0f);

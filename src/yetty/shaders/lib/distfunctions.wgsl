@@ -120,70 +120,47 @@ fn sdEllipse(p: vec2<f32>, center: vec2<f32>, ab: vec2<f32>) -> f32 {
     if (abs(ab.x - ab.y) < 0.001) {
         return length(p - center) - ab.x;
     }
-    let pp = abs(p - center);
-    let pab = pp / ab;
-    let abab = ab * ab;
-    if (pab.x > pab.y) {
-        let l = abab.y - abab.x;
-        let m = ab.x * pp.x / l;
-        let n = ab.y * pp.y / l;
-        let m2 = m * m;
-        let n2 = n * n;
-        let c = (m2 + n2 - 1.0) / 3.0;
-        let c3 = c * c * c;
-        let q = c3 + m2 * n2 * 2.0;
-        let d = c3 + m2 * n2;
-        let g = m + m * n2;
-        var co: f32;
-        if (d < 0.0) {
-            let h = acos(q / c3) / 3.0;
-            let s = cos(h);
-            let t = sin(h) * sqrt(3.0);
-            let rx = sqrt(-c * (s + t + 2.0) + m2);
-            let ry = sqrt(-c * (s - t + 2.0) + m2);
-            co = (ry + sign(l) * rx + abs(g) / (rx * ry) - m) / 2.0;
-        } else {
-            let h = 2.0 * m * n * sqrt(d);
-            let s = sign(q + h) * pow(abs(q + h), 1.0 / 3.0);
-            let u = sign(q - h) * pow(abs(q - h), 1.0 / 3.0);
-            let rx = -s - u - c * 4.0 + 2.0 * m2;
-            let ry = (s - u) * sqrt(3.0);
-            let rm = sqrt(rx * rx + ry * ry);
-            co = (ry / sqrt(rm - rx) + 2.0 * g / rm - m) / 2.0;
-        }
-        let r = ab * vec2<f32>(co, sqrt(1.0 - co * co));
-        return length(r - pp) * sign(pp.y - r.y);
-    } else {
-        let l = abab.x - abab.y;
-        let m = ab.y * pp.y / l;
-        let n = ab.x * pp.x / l;
-        let m2 = m * m;
-        let n2 = n * n;
-        let c = (m2 + n2 - 1.0) / 3.0;
-        let c3 = c * c * c;
-        let q = c3 + m2 * n2 * 2.0;
-        let d = c3 + m2 * n2;
-        let g = m + m * n2;
-        var co: f32;
-        if (d < 0.0) {
-            let h = acos(q / c3) / 3.0;
-            let s = cos(h);
-            let t = sin(h) * sqrt(3.0);
-            let rx = sqrt(-c * (s + t + 2.0) + m2);
-            let ry = sqrt(-c * (s - t + 2.0) + m2);
-            co = (ry + sign(l) * rx + abs(g) / (rx * ry) - m) / 2.0;
-        } else {
-            let h = 2.0 * m * n * sqrt(d);
-            let s = sign(q + h) * pow(abs(q + h), 1.0 / 3.0);
-            let u = sign(q - h) * pow(abs(q - h), 1.0 / 3.0);
-            let rx = -s - u - c * 4.0 + 2.0 * m2;
-            let ry = (s - u) * sqrt(3.0);
-            let rm = sqrt(rx * rx + ry * ry);
-            co = (ry / sqrt(rm - rx) + 2.0 * g / rm - m) / 2.0;
-        }
-        let r = ab * vec2<f32>(sqrt(1.0 - co * co), co);
-        return length(r - pp) * sign(pp.x - r.x);
+
+    var pp = abs(p - center);
+    var aab = ab;
+
+    // Swap both p and ab if p.x > p.y (exactly as original GLSL)
+    if (pp.x > pp.y) {
+        pp = pp.yx;
+        aab = aab.yx;
     }
+
+    let l = aab.y * aab.y - aab.x * aab.x;
+    let m = aab.x * pp.x / l;
+    let m2 = m * m;
+    let n = aab.y * pp.y / l;
+    let n2 = n * n;
+    let c = (m2 + n2 - 1.0) / 3.0;
+    let c3 = c * c * c;
+    let q = c3 + m2 * n2 * 2.0;
+    let d = c3 + m2 * n2;
+    let g = m + m * n2;
+    var co: f32;
+
+    if (d < 0.0) {
+        let h = acos(q / c3) / 3.0;
+        let s = cos(h);
+        let t = sin(h) * sqrt(3.0);
+        let rx = sqrt(-c * (s + t + 2.0) + m2);
+        let ry = sqrt(-c * (s - t + 2.0) + m2);
+        co = (ry + sign(l) * rx + abs(g) / (rx * ry) - m) / 2.0;
+    } else {
+        let h = 2.0 * m * n * sqrt(d);
+        let s = sign(q + h) * pow(abs(q + h), 1.0 / 3.0);
+        let u = sign(q - h) * pow(abs(q - h), 1.0 / 3.0);
+        let rx = -s - u - c * 4.0 + 2.0 * m2;
+        let ry = (s - u) * sqrt(3.0);
+        let rm = sqrt(rx * rx + ry * ry);
+        co = (ry / sqrt(rm - rx) + 2.0 * g / rm - m) / 2.0;
+    }
+
+    let r = aab * vec2<f32>(co, sqrt(1.0 - co * co));
+    return length(r - pp) * sign(pp.y - r.y);
 }
 
 fn sdArc(p: vec2<f32>, center: vec2<f32>, sc: vec2<f32>, ra: f32, rb: f32) -> f32 {
@@ -236,7 +213,9 @@ fn sdStar(p: vec2<f32>, center: vec2<f32>, r: f32, n: f32, m: f32) -> f32 {
     let acs = vec2<f32>(cos(an), sin(an));
     let ecs = vec2<f32>(cos(en), sin(en));
     var pp = p - center;
-    let bn = (atan2(pp.x, pp.y) % (2.0 * an)) - an;
+    // GLSL mod() is always non-negative, WGSL % can be negative
+    let angle = atan2(pp.x, pp.y);
+    let bn = ((angle % (2.0 * an)) + 2.0 * an) % (2.0 * an) - an;
     pp = length(pp) * vec2<f32>(cos(bn), abs(sin(bn)));
     pp -= r * acs;
     pp += ecs * clamp(-dot(pp, ecs), 0.0, r * acs.y / ecs.y);
@@ -613,6 +592,29 @@ fn sdCircleWave(p: vec2<f32>, center: vec2<f32>, tb: f32, ra: f32) -> f32 {
     return min(d1, d2);
 }
 
+// Polygon SDF - Inigo Quilez (iquilezles.org/articles/distfunctions2d)
+// Reads n vertices from cardStorage starting at voff
+fn sdPolygon(p: vec2<f32>, voff: u32, n: u32) -> f32 {
+    let v0 = vec2<f32>(cardStorage[voff], cardStorage[voff + 1u]);
+    var d = dot(p - v0, p - v0);
+    var s = 1.0;
+    var j = n - 1u;
+    for (var i = 0u; i < n; i = i + 1u) {
+        let vi = vec2<f32>(cardStorage[voff + i * 2u], cardStorage[voff + i * 2u + 1u]);
+        let vj = vec2<f32>(cardStorage[voff + j * 2u], cardStorage[voff + j * 2u + 1u]);
+        let e = vj - vi;
+        let w = p - vi;
+        let b = w - e * clamp(dot(w, e) / dot(e, e), 0.0, 1.0);
+        d = min(d, dot(b, b));
+        let c0 = p.y >= vi.y;
+        let c1 = p.y < vj.y;
+        let c2 = e.x * w.y > e.y * w.x;
+        if ((c0 && c1 && c2) || (!c0 && !c1 && !c2)) { s = -s; }
+        j = i;
+    }
+    return s * sqrt(d);
+}
+
 // 3D SDF type constants are now in sdf-types.gen.wgsl (auto-generated)
 
 // =============================================================================
@@ -876,283 +878,6 @@ fn evaluateSDF3D(primOffset: u32, p: vec3<f32>) -> f32 {
                              cardStorage[primOffset + 7u]);
         }
         default: { return 1e10; }
-    }
-}
-
-// =============================================================================
-// 2D Primitive evaluation - reads from cardStorage
-// =============================================================================
-
-fn evaluateSDF(primOffset: u32, p: vec2<f32>) -> f32 {
-    let primType = bitcast<u32>(cardStorage[primOffset + 0u]);
-
-    switch (primType) {
-        case SDF_CIRCLE: {
-            let center = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-            let radius = cardStorage[primOffset + 4u];
-            return sdCircle(p, center, radius);
-        }
-        case SDF_BOX: {
-            let center = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-            let halfSize = vec2<f32>(cardStorage[primOffset + 4u], cardStorage[primOffset + 5u]);
-            let round = cardStorage[primOffset + 17u];
-            return sdBox(p, center, halfSize, round);
-        }
-        case SDF_SEGMENT: {
-            let p0 = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-            let p1 = vec2<f32>(cardStorage[primOffset + 4u], cardStorage[primOffset + 5u]);
-            return sdSegment(p, p0, p1);
-        }
-        case SDF_TRIANGLE: {
-            let v0 = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-            let v1 = vec2<f32>(cardStorage[primOffset + 4u], cardStorage[primOffset + 5u]);
-            let v2 = vec2<f32>(cardStorage[primOffset + 6u], cardStorage[primOffset + 7u]);
-            return sdTriangle(p, v0, v1, v2);
-        }
-        case SDF_BEZIER2: {
-            let v0 = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-            let v1 = vec2<f32>(cardStorage[primOffset + 4u], cardStorage[primOffset + 5u]);
-            let v2 = vec2<f32>(cardStorage[primOffset + 6u], cardStorage[primOffset + 7u]);
-            return sdBezier2(p, v0, v1, v2);
-        }
-        case SDF_ELLIPSE: {
-            let center = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-            let radii = vec2<f32>(cardStorage[primOffset + 4u], cardStorage[primOffset + 5u]);
-            return sdEllipse(p, center, radii);
-        }
-        case SDF_ARC: {
-            let center = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-            let sc = vec2<f32>(cardStorage[primOffset + 4u], cardStorage[primOffset + 5u]);
-            let ra = cardStorage[primOffset + 6u];
-            let rb = cardStorage[primOffset + 7u];
-            return sdArc(p, center, sc, ra, rb);
-        }
-        case SDF_ROUNDED_BOX: {
-            let center = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-            let halfSize = vec2<f32>(cardStorage[primOffset + 4u], cardStorage[primOffset + 5u]);
-            let radii = vec4<f32>(cardStorage[primOffset + 6u], cardStorage[primOffset + 7u],
-                                  cardStorage[primOffset + 8u], cardStorage[primOffset + 9u]);
-            return sdRoundedBox(p, center, halfSize, radii);
-        }
-        case SDF_RHOMBUS: {
-            let center = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-            let b = vec2<f32>(cardStorage[primOffset + 4u], cardStorage[primOffset + 5u]);
-            return sdRhombus(p, center, b);
-        }
-        case SDF_PENTAGON: {
-            let center = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-            let r = cardStorage[primOffset + 4u];
-            return sdPentagon(p, center, r);
-        }
-        case SDF_HEXAGON: {
-            let center = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-            let r = cardStorage[primOffset + 4u];
-            return sdHexagon(p, center, r);
-        }
-        case SDF_STAR: {
-            let center = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-            let r = cardStorage[primOffset + 4u];
-            let n = cardStorage[primOffset + 5u];
-            let m = cardStorage[primOffset + 6u];
-            return sdStar(p, center, r, n, m);
-        }
-        case SDF_PIE: {
-            let center = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-            let c = vec2<f32>(cardStorage[primOffset + 4u], cardStorage[primOffset + 5u]);
-            let r = cardStorage[primOffset + 6u];
-            return sdPie(p, center, c, r);
-        }
-        case SDF_RING: {
-            let center = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-            let n = vec2<f32>(cardStorage[primOffset + 4u], cardStorage[primOffset + 5u]);
-            let r = cardStorage[primOffset + 6u];
-            let th = cardStorage[primOffset + 7u];
-            return sdRing(p, center, n, r, th);
-        }
-        case SDF_HEART: {
-            let center = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-            let scale = cardStorage[primOffset + 4u];
-            return sdHeart(p, center, scale);
-        }
-        case SDF_CROSS: {
-            let center = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-            let b = vec2<f32>(cardStorage[primOffset + 4u], cardStorage[primOffset + 5u]);
-            let r = cardStorage[primOffset + 6u];
-            return sdCross(p, center, b, r);
-        }
-        case SDF_ROUNDED_X: {
-            let center = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-            let w = cardStorage[primOffset + 4u];
-            let r = cardStorage[primOffset + 5u];
-            return sdRoundedX(p, center, w, r);
-        }
-        case SDF_CAPSULE: {
-            let a = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-            let b = vec2<f32>(cardStorage[primOffset + 4u], cardStorage[primOffset + 5u]);
-            let r = cardStorage[primOffset + 6u];
-            return sdCapsule(p, a, b, r);
-        }
-        case SDF_MOON: {
-            let center = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-            let d = cardStorage[primOffset + 4u];
-            let ra = cardStorage[primOffset + 5u];
-            let rb = cardStorage[primOffset + 6u];
-            return sdMoon(p, center, d, ra, rb);
-        }
-        case SDF_EGG: {
-            let center = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-            let ra = cardStorage[primOffset + 4u];
-            let rb = cardStorage[primOffset + 5u];
-            return sdEgg(p, center, ra, rb);
-        }
-        case SDF_CHAMFER_BOX: {
-            let center = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-            let halfSize = vec2<f32>(cardStorage[primOffset + 4u], cardStorage[primOffset + 5u]);
-            let chamfer = cardStorage[primOffset + 6u];
-            return sdChamferBox(p, center, halfSize, chamfer);
-        }
-        case SDF_ORIENTED_BOX: {
-            let a = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-            let b = vec2<f32>(cardStorage[primOffset + 4u], cardStorage[primOffset + 5u]);
-            let th = cardStorage[primOffset + 6u];
-            return sdOrientedBox(p, a, b, th);
-        }
-        case SDF_TRAPEZOID: {
-            let center = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-            let r1 = cardStorage[primOffset + 4u];
-            let r2 = cardStorage[primOffset + 5u];
-            let he = cardStorage[primOffset + 6u];
-            return sdTrapezoid(p, center, r1, r2, he);
-        }
-        case SDF_PARALLELOGRAM: {
-            let center = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-            let wi = cardStorage[primOffset + 4u];
-            let he = cardStorage[primOffset + 5u];
-            let sk = cardStorage[primOffset + 6u];
-            return sdParallelogram(p, center, wi, he, sk);
-        }
-        case SDF_EQUILATERAL_TRIANGLE: {
-            let center = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-            let r = cardStorage[primOffset + 4u];
-            return sdEquilateralTriangle(p, center, r);
-        }
-        case SDF_ISOSCELES_TRIANGLE: {
-            let center = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-            let q = vec2<f32>(cardStorage[primOffset + 4u], cardStorage[primOffset + 5u]);
-            return sdTriangleIsosceles(p, center, q);
-        }
-        case SDF_UNEVEN_CAPSULE: {
-            let center = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-            let r1 = cardStorage[primOffset + 4u];
-            let r2 = cardStorage[primOffset + 5u];
-            let h = cardStorage[primOffset + 6u];
-            return sdUnevenCapsule(p, center, r1, r2, h);
-        }
-        case SDF_OCTOGON: {
-            let center = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-            let r = cardStorage[primOffset + 4u];
-            return sdOctogon(p, center, r);
-        }
-        case SDF_HEXAGRAM: {
-            let center = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-            let r = cardStorage[primOffset + 4u];
-            return sdHexagram(p, center, r);
-        }
-        case SDF_PENTAGRAM: {
-            let center = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-            let r = cardStorage[primOffset + 4u];
-            return sdPentagram(p, center, r);
-        }
-        case SDF_CUT_DISK: {
-            let center = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-            let r = cardStorage[primOffset + 4u];
-            let h = cardStorage[primOffset + 5u];
-            return sdCutDisk(p, center, r, h);
-        }
-        case SDF_HORSESHOE: {
-            let center = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-            let c = vec2<f32>(cardStorage[primOffset + 4u], cardStorage[primOffset + 5u]);
-            let r = cardStorage[primOffset + 6u];
-            let w = vec2<f32>(cardStorage[primOffset + 7u], cardStorage[primOffset + 8u]);
-            return sdHorseshoe(p, center, c, r, w);
-        }
-        case SDF_VESICA: {
-            let center = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-            let w = cardStorage[primOffset + 4u];
-            let h = cardStorage[primOffset + 5u];
-            return sdVesica(p, center, w, h);
-        }
-        case SDF_ORIENTED_VESICA: {
-            let a = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-            let b = vec2<f32>(cardStorage[primOffset + 4u], cardStorage[primOffset + 5u]);
-            let w = cardStorage[primOffset + 6u];
-            return sdOrientedVesica(p, a, b, w);
-        }
-        case SDF_ROUNDED_CROSS: {
-            let center = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-            let h = cardStorage[primOffset + 4u];
-            return sdRoundedCross(p, center, h);
-        }
-        case SDF_PARABOLA: {
-            let center = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-            let k = cardStorage[primOffset + 4u];
-            return sdParabola(p, center, k);
-        }
-        case SDF_BLOBBY_CROSS: {
-            let center = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-            let he = cardStorage[primOffset + 4u];
-            return sdBlobbyCross(p, center, he);
-        }
-        case SDF_TUNNEL: {
-            let center = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-            let wh = vec2<f32>(cardStorage[primOffset + 4u], cardStorage[primOffset + 5u]);
-            return sdTunnel(p, center, wh);
-        }
-        case SDF_STAIRS: {
-            let center = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-            let wh = vec2<f32>(cardStorage[primOffset + 4u], cardStorage[primOffset + 5u]);
-            let n = cardStorage[primOffset + 6u];
-            return sdStairs(p, center, wh, n);
-        }
-        case SDF_QUADRATIC_CIRCLE: {
-            let center = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-            let scale = cardStorage[primOffset + 4u];
-            return sdQuadraticCircle(p, center, scale);
-        }
-        case SDF_HYPERBOLA: {
-            let center = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-            let k = cardStorage[primOffset + 4u];
-            let he = cardStorage[primOffset + 5u];
-            return sdHyperbola(p, center, k, he);
-        }
-        case SDF_COOL_S: {
-            let center = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-            let scale = cardStorage[primOffset + 4u];
-            return sdCoolS(p, center, scale);
-        }
-        case SDF_CIRCLE_WAVE: {
-            let center = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-            let tb = cardStorage[primOffset + 4u];
-            let ra = cardStorage[primOffset + 5u];
-            return sdCircleWave(p, center, tb, ra);
-        }
-        case SDF_COLOR_WHEEL: {
-            // ColorWheel: params[0-1]=center, [2]=outerR, [3]=innerR, [4]=hue
-            let center = vec2<f32>(cardStorage[primOffset + 2u], cardStorage[primOffset + 3u]);
-            let outerR = cardStorage[primOffset + 4u];
-            let innerR = cardStorage[primOffset + 5u];
-            let hue = cardStorage[primOffset + 6u];
-            // Return distance to nearest part (ring or triangle)
-            let d = p - center;
-            let dist = length(d);
-            // Distance to hue ring
-            let ringDist = abs(dist - (innerR + outerR) * 0.5) - (outerR - innerR) * 0.5;
-            // Simplified: just use ring for now (triangle handled in full evaluateColorWheel)
-            return ringDist;
-        }
-        default: {
-            return 1e10;
-        }
     }
 }
 

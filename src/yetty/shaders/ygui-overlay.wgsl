@@ -260,7 +260,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             }
 
             // Regular SDF primitive
-            let d = evalSDF(primOff, scenePos);
+            let d = evaluateYdrawSDF(primOff, scenePos);
 
             let colors = primColors(primOff);
             let fillColorPacked = colors.x;

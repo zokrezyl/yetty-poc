@@ -1,7 +1,7 @@
 //=============================================================================
 // Polygon Unit Tests
 //
-// Tests polygon primitives in YPaintBuffer and YPaintBuilder:
+// Tests polygon primitives in YPaintBuffer and Painter:
 // - Simple polygons (triangle, quad, pentagon, hexagon, star)
 // - Complex polygons (concave, with holes)
 // - Grid placement and AABB computation
@@ -17,7 +17,7 @@
 
 #include "yetty/ypaint/ypaint-buffer.h"
 #include "yetty/ypaint/ypaint-types.gen.h"
-#include <yetty/ypaint-builder.h>
+#include <yetty/ypaint/painter.h>
 #include <yetty/gpu-allocator.h>
 
 #include <cstring>
@@ -27,7 +27,7 @@
 using namespace boost::ut;
 using namespace yetty;
 using namespace yetty::ypaint;
-using namespace yetty::ypaint::card;
+using namespace yetty::card;
 
 //=============================================================================
 // Helpers
@@ -192,14 +192,14 @@ suite polygon_buffer_tests = [] {
 };
 
 //=============================================================================
-// Test Suite: YPaintBuilder polygon grid placement
+// Test Suite: Painter polygon grid placement
 //=============================================================================
 
 suite polygon_builder_tests = [] {
 
     "polygon_grid_placement_simple"_test = [] {
         auto gpuAlloc = testAllocator();
-        auto builder = *YPaintBuilder::create(FontManager::Ptr{}, gpuAlloc, false);  // non-scrolling
+        auto builder = *Painter::create(FontManager::Ptr{}, gpuAlloc, false);  // non-scrolling
 
         builder->setSceneBounds(0, 0, 400, 200);
         builder->setGridCellSize(20.0f, 20.0f);
@@ -223,7 +223,7 @@ suite polygon_builder_tests = [] {
 
     "polygon_grid_placement_scrolling_mode"_test = [] {
         auto gpuAlloc = testAllocator();
-        auto builder = *YPaintBuilder::create(FontManager::Ptr{}, gpuAlloc, true);  // scrolling mode
+        auto builder = *Painter::create(FontManager::Ptr{}, gpuAlloc, true);  // scrolling mode
 
         builder->setSceneBounds(0, 0, 400, 400);
         builder->setGridCellSize(20.0f, 20.0f);
@@ -244,7 +244,7 @@ suite polygon_builder_tests = [] {
 
     "multiple_polygons_different_positions"_test = [] {
         auto gpuAlloc = testAllocator();
-        auto builder = *YPaintBuilder::create(FontManager::Ptr{}, gpuAlloc, false);
+        auto builder = *Painter::create(FontManager::Ptr{}, gpuAlloc, false);
 
         builder->setSceneBounds(0, 0, 400, 400);
         builder->setGridCellSize(20.0f, 20.0f);
@@ -280,7 +280,7 @@ suite polygon_builder_tests = [] {
 
     "polygon_with_scroll"_test = [] {
         auto gpuAlloc = testAllocator();
-        auto builder = *YPaintBuilder::create(FontManager::Ptr{}, gpuAlloc, true);
+        auto builder = *Painter::create(FontManager::Ptr{}, gpuAlloc, true);
 
         builder->setSceneBounds(0, 0, 400, 400);
         builder->setGridCellSize(20.0f, 20.0f);
@@ -314,7 +314,7 @@ suite polygon_builder_tests = [] {
 
     "complex_polygon_star"_test = [] {
         auto gpuAlloc = testAllocator();
-        auto builder = *YPaintBuilder::create(FontManager::Ptr{}, gpuAlloc, false);
+        auto builder = *Painter::create(FontManager::Ptr{}, gpuAlloc, false);
 
         builder->setSceneBounds(0, 0, 200, 200);
         builder->setGridCellSize(20.0f, 20.0f);
@@ -345,7 +345,7 @@ suite polygon_builder_tests = [] {
 
     "polygon_group_with_hole"_test = [] {
         auto gpuAlloc = testAllocator();
-        auto builder = *YPaintBuilder::create(FontManager::Ptr{}, gpuAlloc, false);
+        auto builder = *Painter::create(FontManager::Ptr{}, gpuAlloc, false);
 
         builder->setSceneBounds(0, 0, 200, 200);
         builder->setGridCellSize(20.0f, 20.0f);
@@ -379,7 +379,7 @@ suite all_primitives_grid_tests = [] {
 
     "all_2d_primitives_grid_placement"_test = [] {
         auto gpuAlloc = testAllocator();
-        auto builder = *YPaintBuilder::create(FontManager::Ptr{}, gpuAlloc, false);
+        auto builder = *Painter::create(FontManager::Ptr{}, gpuAlloc, false);
 
         builder->setSceneBounds(0, 0, 500, 800);
         builder->setGridCellSize(20.0f, 20.0f);
@@ -446,7 +446,7 @@ suite all_primitives_grid_tests = [] {
 
     "all_primitives_scrolling_mode"_test = [] {
         auto gpuAlloc = testAllocator();
-        auto builder = *YPaintBuilder::create(FontManager::Ptr{}, gpuAlloc, true);  // scrolling
+        auto builder = *Painter::create(FontManager::Ptr{}, gpuAlloc, true);  // scrolling
 
         builder->setSceneBounds(0, 0, 400, 600);
         builder->setGridCellSize(20.0f, 20.0f);

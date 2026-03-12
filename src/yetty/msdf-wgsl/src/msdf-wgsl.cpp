@@ -4,13 +4,13 @@
 
 #include "msdf-wgsl.h"
 #include <yetty/wgpu-compat.h>
+#include <ytrace/ytrace.hpp>
 
 #include <ft2build.h>
 #include FT_FREETYPE_H
 #include FT_OUTLINE_H
 
 #include <cstring>
-#include <cstdio>
 #include <cmath>
 #include <algorithm>
 #include <fstream>
@@ -226,7 +226,7 @@ static int conicTo(const FT_Vector* ctrl, const FT_Vector* to, void* user) {
 static int cubicTo(const FT_Vector* ctrl1, const FT_Vector* ctrl2, const FT_Vector* to, void* user) {
     // Approximate cubic with quadratics (simple midpoint approximation)
     // For now, we just skip cubics - they need proper subdivision
-    fprintf(stderr, "msdf: Cubic curves not fully supported\n");
+    ywarn("msdf: Cubic curves not fully supported");
     return conicTo(ctrl1, to, user);
 }
 
@@ -557,15 +557,14 @@ bool Context::initCompute() {
     std::string shaderPath = findShaderPath();
     std::ifstream file(shaderPath);
     if (!file.is_open()) {
-        fprintf(stderr, "[MSDF] Failed to open shader: %s\n", shaderPath.c_str());
+        yerror("[MSDF] Failed to open shader: {}", shaderPath);
         return false;
     }
     std::stringstream buffer;
     buffer << file.rdbuf();
     std::string shaderSource = buffer.str();
 
-    fprintf(stderr, "[MSDF] Loaded shader from %s (%zu bytes)\n",
-            shaderPath.c_str(), shaderSource.size());
+    ydebug("[MSDF] Loaded shader from {} ({} bytes)", shaderPath, shaderSource.size());
 
     // Create shader module
     WGPUShaderSourceWGSL wgslDesc = {};
@@ -578,7 +577,7 @@ bool Context::initCompute() {
 
     _computeShader = wgpuDeviceCreateShaderModule(_device, &shaderDesc);
     if (!_computeShader) {
-        fprintf(stderr, "[MSDF] Failed to create shader module\n");
+        yerror("[MSDF] Failed to create shader module");
         return false;
     }
 
@@ -613,7 +612,7 @@ bool Context::initCompute() {
 
     _bindGroupLayout = wgpuDeviceCreateBindGroupLayout(_device, &layoutDesc);
     if (!_bindGroupLayout) {
-        fprintf(stderr, "[MSDF] Failed to create bind group layout\n");
+        yerror("[MSDF] Failed to create bind group layout");
         return false;
     }
 
@@ -635,18 +634,18 @@ bool Context::initCompute() {
     wgpuPipelineLayoutRelease(pipelineLayout);
 
     if (!_computePipeline) {
-        fprintf(stderr, "[MSDF] Failed to create compute pipeline\n");
+        yerror("[MSDF] Failed to create compute pipeline");
         return false;
     }
 
-    fprintf(stderr, "[MSDF] Compute pipeline initialized\n");
+    ydebug("[MSDF] Compute pipeline initialized");
     return true;
 }
 
 std::unique_ptr<Font> Context::loadFont(const std::string& path, const FontConfig& config) {
     FT_Face face;
     if (FT_New_Face(_ftLibrary, path.c_str(), 0, &face)) {
-        fprintf(stderr, "[MSDF] Failed to load font: %s\n", path.c_str());
+        yerror("[MSDF] Failed to load font: {}", path);
         return nullptr;
     }
 
@@ -654,7 +653,7 @@ std::unique_ptr<Font> Context::loadFont(const std::string& path, const FontConfi
 }
 
 int Context::generateGlyphs(Font& font, const std::vector<uint32_t>& codepoints) {
-    fprintf(stderr, "[MSDF] generateGlyphs called with %zu codepoints\n", codepoints.size());
+    ydebug("[MSDF] generateGlyphs called with {} codepoints", codepoints.size());
     if (codepoints.empty()) return 0;
 
     WGPUQueue queue = wgpuDeviceGetQueue(_device);
@@ -689,7 +688,7 @@ int Context::generateGlyphs(Font& font, const std::vector<uint32_t>& codepoints)
 
         int atlasX, atlasY;
         if (!font.getAtlas()->allocate(atlasW, atlasH, atlasX, atlasY)) {
-            fprintf(stderr, "[MSDF] Failed to allocate atlas space for U+%04X\n", cp);
+            ywarn("[MSDF] Failed to allocate atlas space for U+{:04X}", cp);
             continue;
         }
 
@@ -711,7 +710,7 @@ int Context::generateGlyphs(Font& font, const std::vector<uint32_t>& codepoints)
 
     if (generated == 0) return 0;
 
-    fprintf(stderr, "[MSDF] Serialized %d glyphs, creating buffers...\n", generated);
+    ydebug("[MSDF] Serialized {} glyphs, creating buffers...", generated);
 
     // Create combined buffers
     std::vector<uint32_t> combinedMeta;
@@ -746,7 +745,7 @@ int Context::generateGlyphs(Font& font, const std::vector<uint32_t>& codepoints)
     WGPUBuffer pointsBuffer = wgpuDeviceCreateBuffer(_device, &bufDesc);
     wgpuQueueWriteBuffer(queue, pointsBuffer, 0, combinedPoints.data(), bufDesc.size);
 
-    fprintf(stderr, "[MSDF] Buffers created, dispatching compute...\n");
+    ydebug("[MSDF] Buffers created, dispatching compute...");
 
     // Create command encoder
     WGPUCommandEncoderDescriptor encDesc = {};
@@ -844,14 +843,14 @@ int Context::generateGlyphs(Font& font, const std::vector<uint32_t>& codepoints)
         wgpuComputePassEncoderRelease(pass);
     }
 
-    fprintf(stderr, "[MSDF] Submitting GPU work...\n");
+    ydebug("[MSDF] Submitting GPU work...");
 
     // Submit and wait
     WGPUCommandBufferDescriptor cmdDesc = {};
     WGPUCommandBuffer cmdBuf = wgpuCommandEncoderFinish(encoder, &cmdDesc);
     wgpuQueueSubmit(queue, 1, &cmdBuf);
 
-    fprintf(stderr, "[MSDF] GPU work submitted, waiting for completion...\n");
+    ydebug("[MSDF] GPU work submitted, waiting for completion...");
 
     // Wait for compute work to complete
     std::atomic<bool> computeDone{false};
@@ -869,7 +868,7 @@ int Context::generateGlyphs(Font& font, const std::vector<uint32_t>& codepoints)
         }
         std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
-    fprintf(stderr, "[MSDF] Compute work complete\n");
+    ydebug("[MSDF] Compute work complete");
 
     // Cleanup - now safe to destroy resources used by GPU
     wgpuCommandBufferRelease(cmdBuf);
@@ -896,14 +895,14 @@ int Context::generateGlyphs(Font& font, const std::vector<uint32_t>& codepoints)
         }
     }
 
-    fprintf(stderr, "[MSDF] generateGlyphs returning %d\n", generated);
+    ydebug("[MSDF] generateGlyphs returning {}", generated);
     return generated;
 }
 
 std::vector<uint8_t> Context::readAtlasToRGBA8(const Atlas& atlas) {
-    fprintf(stderr, "[MSDF] readAtlasToRGBA8 called, atlas %dx%d\n", atlas.getWidth(), atlas.getHeight());
+    ydebug("[MSDF] readAtlasToRGBA8 called, atlas {}x{}", atlas.getWidth(), atlas.getHeight());
     if (!atlas.getTexture() || atlas.getWidth() == 0 || atlas.getHeight() == 0) {
-        fprintf(stderr, "[MSDF] No atlas texture!\n");
+        yerror("[MSDF] No atlas texture!");
         return {};
     }
 
@@ -953,7 +952,7 @@ std::vector<uint8_t> Context::readAtlasToRGBA8(const Atlas& atlas) {
     });
     callback.userdata1 = &done;
 
-    fprintf(stderr, "[MSDF] Waiting for queue work done...\n");
+    ydebug("[MSDF] Waiting for queue work done...");
     wgpuQueueOnSubmittedWorkDone(queue, callback);
 
     // Process events until callback fires
@@ -963,7 +962,7 @@ std::vector<uint8_t> Context::readAtlasToRGBA8(const Atlas& atlas) {
         }
         std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
-    fprintf(stderr, "[MSDF] Queue work done\n");
+    ydebug("[MSDF] Queue work done");
 
     // Map buffer
     std::atomic<bool> mapDone{false};
@@ -978,7 +977,7 @@ std::vector<uint8_t> Context::readAtlasToRGBA8(const Atlas& atlas) {
     mapCallback.userdata1 = &mapDone;
     mapCallback.userdata2 = &mapStatus;
 
-    fprintf(stderr, "[MSDF] Mapping buffer...\n");
+    ydebug("[MSDF] Mapping buffer...");
     wgpuBufferMapAsync(stagingBuffer, WGPUMapMode_Read, 0, bufferSize, mapCallback);
 
     while (!mapDone) {
@@ -987,7 +986,7 @@ std::vector<uint8_t> Context::readAtlasToRGBA8(const Atlas& atlas) {
         }
         std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
-    fprintf(stderr, "[MSDF] Buffer mapped\n");
+    ydebug("[MSDF] Buffer mapped");
 
     if (mapStatus != WGPUMapAsyncStatus_Success) {
         wgpuBufferRelease(stagingBuffer);
