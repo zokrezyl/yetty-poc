@@ -11,6 +11,7 @@ add_subdirectory(${YETTY_ROOT}/src/yetty ${CMAKE_BINARY_DIR}/src/yetty)
 
 # Desktop-specific subdirectories
 add_subdirectory(${YETTY_ROOT}/src/yetty/gpu ${CMAKE_BINARY_DIR}/src/yetty/gpu)
+add_subdirectory(${YETTY_ROOT}/src/yetty/client ${CMAKE_BINARY_DIR}/src/yetty/client)
 
 # Create executable with core sources + platform
 add_executable(yetty
@@ -67,43 +68,85 @@ add_dependencies(yetty generate-cdb copy-shaders copy-assets)
 
 # Copy DirectX runtime DLLs needed by Dawn (shader compiler + DXIL signing)
 if(WIN32)
-    # Find Windows SDK Redist directory for DirectX DLLs
-    # Check both versioned paths (Redist/<version>/x64) and direct path (Redist/D3D/x64)
-    set(_dx_redist_dir "")
+    # Gather Windows SDK search dirs once, sorted descending (latest first)
+    file(GLOB _sdk_bin_x64_dirs  "C:/Program Files (x86)/Windows Kits/10/bin/*/x64")
+    file(GLOB _redist_x64_dirs   "C:/Program Files (x86)/Windows Kits/10/Redist/*/x64")
+    if(_sdk_bin_x64_dirs)
+        list(SORT _sdk_bin_x64_dirs ORDER DESCENDING)
+    endif()
+    if(_redist_x64_dirs)
+        list(SORT _redist_x64_dirs ORDER DESCENDING)
+    endif()
+
+    # --- Find d3dcompiler_47.dll ---
+    # Typically in Windows Kits Redist/D3D/x64 or versioned Redist/<version>/x64
+    set(_d3dcompiler_dll "")
     if(EXISTS "C:/Program Files (x86)/Windows Kits/10/Redist/D3D/x64/d3dcompiler_47.dll")
-        set(_dx_redist_dir "C:/Program Files (x86)/Windows Kits/10/Redist/D3D/x64")
+        set(_d3dcompiler_dll "C:/Program Files (x86)/Windows Kits/10/Redist/D3D/x64/d3dcompiler_47.dll")
     else()
-        file(GLOB _dx_redist_dirs "C:/Program Files (x86)/Windows Kits/10/Redist/*/x64")
-        if(_dx_redist_dirs)
-            list(SORT _dx_redist_dirs ORDER DESCENDING)
-            list(GET _dx_redist_dirs 0 _dx_redist_dir)
+        foreach(_dir ${_redist_x64_dirs})
+            if(EXISTS "${_dir}/d3dcompiler_47.dll")
+                set(_d3dcompiler_dll "${_dir}/d3dcompiler_47.dll")
+                break()
+            endif()
+        endforeach()
+    endif()
+    # Also search bin/<version>/x64 as fallback
+    if(NOT _d3dcompiler_dll)
+        foreach(_dir ${_sdk_bin_x64_dirs})
+            if(EXISTS "${_dir}/d3dcompiler_47.dll")
+                set(_d3dcompiler_dll "${_dir}/d3dcompiler_47.dll")
+                break()
+            endif()
+        endforeach()
+    endif()
+
+    if(_d3dcompiler_dll)
+        message(STATUS "Found d3dcompiler_47.dll: ${_d3dcompiler_dll}")
+        add_custom_command(TARGET yetty POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_d3dcompiler_dll}"
+                "$<TARGET_FILE_DIR:yetty>/d3dcompiler_47.dll"
+            COMMENT "Copying d3dcompiler_47.dll"
+        )
+    else()
+        message(WARNING "Could not find d3dcompiler_47.dll in Windows SDK")
+    endif()
+
+    # --- Find dxil.dll ---
+    # dxil.dll (DXC signing library) lives in Windows Kits bin/<version>/x64,
+    # NOT in the Redist directory.
+    set(_dxil_dll "")
+    foreach(_dir ${_sdk_bin_x64_dirs})
+        if(EXISTS "${_dir}/dxil.dll")
+            set(_dxil_dll "${_dir}/dxil.dll")
+            break()
+        endif()
+    endforeach()
+    # Fallback: Redist/D3D/x64 or versioned Redist
+    if(NOT _dxil_dll)
+        if(EXISTS "C:/Program Files (x86)/Windows Kits/10/Redist/D3D/x64/dxil.dll")
+            set(_dxil_dll "C:/Program Files (x86)/Windows Kits/10/Redist/D3D/x64/dxil.dll")
+        else()
+            foreach(_dir ${_redist_x64_dirs})
+                if(EXISTS "${_dir}/dxil.dll")
+                    set(_dxil_dll "${_dir}/dxil.dll")
+                    break()
+                endif()
+            endforeach()
         endif()
     endif()
 
-    if(_dx_redist_dir)
-        message(STATUS "DirectX Redist dir: ${_dx_redist_dir}")
-
-        # Copy d3dcompiler_47.dll
-        if(EXISTS "${_dx_redist_dir}/d3dcompiler_47.dll")
-            add_custom_command(TARGET yetty POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    "${_dx_redist_dir}/d3dcompiler_47.dll"
-                    "$<TARGET_FILE_DIR:yetty>/d3dcompiler_47.dll"
-                COMMENT "Copying d3dcompiler_47.dll"
-            )
-        endif()
-
-        # Copy dxil.dll
-        if(EXISTS "${_dx_redist_dir}/dxil.dll")
-            add_custom_command(TARGET yetty POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    "${_dx_redist_dir}/dxil.dll"
-                    "$<TARGET_FILE_DIR:yetty>/dxil.dll"
-                COMMENT "Copying dxil.dll"
-            )
-        endif()
+    if(_dxil_dll)
+        message(STATUS "Found dxil.dll: ${_dxil_dll}")
+        add_custom_command(TARGET yetty POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_dxil_dll}"
+                "$<TARGET_FILE_DIR:yetty>/dxil.dll"
+            COMMENT "Copying dxil.dll"
+        )
     else()
-        message(WARNING "Could not find Windows SDK Redist directory for DirectX DLLs")
+        message(WARNING "Could not find dxil.dll in Windows SDK")
     endif()
 endif()
 

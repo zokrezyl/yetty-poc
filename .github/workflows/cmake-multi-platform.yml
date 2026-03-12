@@ -210,22 +210,71 @@ jobs:
     #   working-directory: ${{ steps.strings.outputs.build-output-dir }}
     #   run: ctest --build-config Release --output-on-failure
 
+    - name: Stage Windows runtime
+      shell: pwsh
+      run: |
+        $BuildDir = "${{ steps.strings.outputs.build-output-dir }}"
+        $StageDir = "${{ github.workspace }}/yetty-windows"
+        New-Item -ItemType Directory -Force -Path $StageDir | Out-Null
+
+        # MSVC generator places executables in Release/, Ninja places them at root
+        $ExeDir = if (Test-Path "$BuildDir/Release/yetty.exe") { "$BuildDir/Release" } else { $BuildDir }
+        Write-Host "Exe directory: $ExeDir"
+
+        # Copy executables
+        Get-ChildItem "$ExeDir/*.exe" -ErrorAction SilentlyContinue |
+            Copy-Item -Destination $StageDir
+
+        # Copy DLLs that cmake POST_BUILD placed next to the executable
+        Get-ChildItem "$ExeDir/*.dll" -ErrorAction SilentlyContinue |
+            Copy-Item -Destination $StageDir
+
+        # If dxil.dll or d3dcompiler_47.dll are missing, find them in Windows SDK
+        foreach ($DllName in @("dxil.dll", "d3dcompiler_47.dll")) {
+            if (-not (Test-Path "$StageDir/$DllName")) {
+                Write-Host "$DllName not found next to exe, searching Windows SDK..."
+                # Search in known locations: bin/<version>/x64 and Redist/<version>/x64
+                $SearchDirs = @(
+                    Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Directory -ErrorAction SilentlyContinue |
+                        Where-Object { $_.Name -match '^\d+\.' } |
+                        ForEach-Object { "$($_.FullName)\x64" }
+                    "C:\Program Files (x86)\Windows Kits\10\Redist\D3D\x64"
+                    Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\Redist" -Directory -ErrorAction SilentlyContinue |
+                        Where-Object { $_.Name -match '^\d+\.' } |
+                        ForEach-Object { "$($_.FullName)\x64" }
+                )
+                $Found = $SearchDirs |
+                    Where-Object { Test-Path "$_/$DllName" } |
+                    Sort-Object -Descending |
+                    Select-Object -First 1
+                if ($Found) {
+                    Write-Host "  Found: $Found/$DllName"
+                    Copy-Item "$Found/$DllName" -Destination "$StageDir/$DllName"
+                } else {
+                    Write-Warning "  Could not find $DllName in Windows SDK"
+                }
+            }
+        }
+
+        # Copy all assets from build output (fonts, fonts-cdb, shaders)
+        if (Test-Path "$BuildDir/assets") {
+            Copy-Item "$BuildDir/assets" -Destination $StageDir -Recurse -Force
+        }
+
+        # Copy demo content
+        if (Test-Path "${{ github.workspace }}/demo") {
+            Copy-Item "${{ github.workspace }}/demo" -Destination $StageDir -Recurse -Force
+        }
+
+        # Report staged contents
+        Write-Host "=== Staged Windows runtime ==="
+        Get-ChildItem -Recurse $StageDir | Select-Object -ExpandProperty FullName
+
     - name: Upload Windows artifacts
       uses: actions/upload-artifact@v4
       with:
         name: yetty-windows
-        path: |
-          ${{ steps.strings.outputs.build-output-dir }}/yetty.exe
-          ${{ steps.strings.outputs.build-output-dir }}/Release/yetty.exe
-          ${{ steps.strings.outputs.build-output-dir }}/yettyc.exe
-          ${{ steps.strings.outputs.build-output-dir }}/Release/yettyc.exe
-          ${{ steps.strings.outputs.build-output-dir }}/ycat.exe
-          ${{ steps.strings.outputs.build-output-dir }}/Release/ycat.exe
-          ${{ steps.strings.outputs.build-output-dir }}/yecho.exe
-          ${{ steps.strings.outputs.build-output-dir }}/Release/yecho.exe
-          assets/*.ttf
-          src/yetty/shaders/
-          demo/
+        path: ${{ github.workspace }}/yetty-windows/
         if-no-files-found: warn
 
   # =============================================================================
