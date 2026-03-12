@@ -132,23 +132,16 @@ public:
     int32_t primMaxLineSigned =
         static_cast<int32_t>(gridOffsetRow) + localMaxLine;
 
-    // Clamp to valid range
+    // Clamp to valid range (only clamp negative values)
     primMinLineSigned = std::max(primMinLineSigned, 0);
     primMaxLineSigned = std::max(primMaxLineSigned, 0);
     uint32_t primMinLine = static_cast<uint32_t>(primMinLineSigned);
     uint32_t primMaxLine = static_cast<uint32_t>(primMaxLineSigned);
 
-    if (!_lines.empty()) {
-      primMinLine =
-          std::min(primMinLine, static_cast<uint32_t>(_lines.size() - 1));
-      primMaxLine =
-          std::min(primMaxLine, static_cast<uint32_t>(_lines.size() - 1));
-    }
-
     // Base line = where primitive is stored (bottom of primitive)
     uint32_t baseLine = primMaxLine;
 
-    // Ensure lines exist
+    // Ensure lines exist BEFORE any clamping to existing lines
     ensureLines(baseLine + 1);
 
     // Prepend grid offset to primitive data
@@ -248,9 +241,15 @@ public:
       totalPrims += static_cast<uint32_t>(line.prims.size());
     }
 
-    // Compute grid dimensions
-    uint32_t gridH = static_cast<uint32_t>(_lines.size());
+    // Compute grid dimensions from scene bounds as baseline
+    uint32_t gridH = heightInLines();
     uint32_t gridW = 0;
+    if (_cellSizeX > 0.0f && _sceneMaxX > _sceneMinX) {
+      gridW = static_cast<uint32_t>(
+          std::ceil((_sceneMaxX - _sceneMinX) / _cellSizeX));
+    }
+    // Extend for actual lines if they go beyond scene bounds
+    gridH = std::max(gridH, static_cast<uint32_t>(_lines.size()));
     for (const auto &line : _lines) {
       gridW = std::max(gridW, static_cast<uint32_t>(line.cells.size()));
     }

@@ -19,6 +19,7 @@
 #include <unordered_map>
 #include <yetty/card-texture-manager.h>
 #include <yetty/msdf-glyph-data.h> // For GlyphMetadataGPU
+#include <yetty/ypaint/canvas.h>
 #include <yetty/ypaint/painter.h>
 #include <ytrace/ytrace.hpp>
 
@@ -42,6 +43,12 @@ public:
       : _fontManager(std::move(fontManager)),
         _gpuAllocator(std::move(allocator)), _cardMgr(std::move(cardMgr)),
         _metaSlotIndex(metaSlotIndex), _scrollingMode(scrollingMode) {
+    // Create canvas for grid management
+    auto canvasResult = Canvas::create(scrollingMode);
+    if (canvasResult) {
+      _canvas = *canvasResult;
+    }
+
     if (_fontManager) {
       _font = _fontManager->getDefaultMsMsdfFont();
       if (_font) {

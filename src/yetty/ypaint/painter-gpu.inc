@@ -2,51 +2,35 @@
 // GPU buffer lifecycle
 //=========================================================================
 
-// Compute GPU buffer size for scrolling mode primitives
+// Compute GPU buffer size for primitives
 uint32_t primGpuSize() const {
-  uint32_t totalWords = 0;
-  for (const auto &line : _scrollLines) {
-    for (const auto &prim : line.prims) {
-      // Each prim: offset table entry (1 word) + prim data
-      totalWords += 1 + static_cast<uint32_t>(prim.size());
-    }
-  }
-  return totalWords * sizeof(float);
+  return _canvas ? _canvas->primGpuSize() : 0;
 }
 
-// Write scrolling mode primitives to GPU buffer
+// Write primitives to GPU buffer using canvas staging
 void writePrimsGPU(float *buf, uint32_t bufBytes) {
-  uint32_t totalPrims = 0;
-  for (const auto &line : _scrollLines) {
-    totalPrims += static_cast<uint32_t>(line.prims.size());
-  }
-
-  if (totalPrims == 0)
+  if (!_canvas)
     return;
 
-  // Layout: [offset0][offset1]...[offsetN-1][prim0 data][prim1 data]...
-  // offsets[i] is the word offset RELATIVE to the data section start (after
-  // offset table)
-  float *dataBase = buf + totalPrims; // Data starts after offset table
-  uint32_t dataOffset = 0;            // Relative offset within data section
+  // Use canvas to build prim staging
+  std::vector<uint32_t> staging;
+  _canvas->buildPrimStaging(staging);
 
+  if (staging.empty())
+    return;
+
+  // Copy staging data to GPU buffer
+  uint32_t wordCount = std::min(static_cast<uint32_t>(staging.size()),
+                                static_cast<uint32_t>(bufBytes / sizeof(uint32_t)));
+  std::memcpy(buf, staging.data(), wordCount * sizeof(uint32_t));
+
+  // Build _primWordOffsets from staging
+  // Staging format: [offset0][offset1]...[offsetN-1][prim0 data]...
+  uint32_t primCount = _canvas->primitiveCount();
   _primWordOffsets.clear();
-  _primWordOffsets.reserve(totalPrims);
-
-  uint32_t primIdx = 0;
-  for (const auto &line : _scrollLines) {
-    for (const auto &prim : line.prims) {
-      // Write offset (relative to data section start)
-      uint32_t *offsets = reinterpret_cast<uint32_t *>(buf);
-      offsets[primIdx] = dataOffset;
-      _primWordOffsets.push_back(dataOffset);
-
-      // Write prim data to data section
-      std::memcpy(dataBase + dataOffset, prim.data(),
-                  prim.size() * sizeof(float));
-      dataOffset += static_cast<uint32_t>(prim.size());
-      primIdx++;
-    }
+  _primWordOffsets.reserve(primCount);
+  for (uint32_t i = 0; i < primCount && i < staging.size(); i++) {
+    _primWordOffsets.push_back(staging[i]);
   }
 }
 
@@ -60,13 +44,7 @@ Result<void> declareBufferNeeds() override {
   _derivedHandle = BufferHandle::invalid();
   _primWordOffsets.clear();
 
-  bool hasContent = false;
-  for (const auto &line : _scrollLines) {
-    if (!line.prims.empty()) {
-      hasContent = true;
-      break;
-    }
-  }
+  bool hasContent = _canvas && !_canvas->empty();
   if (!hasContent && _glyphs.empty()) {
     clearGridStaging();
     return Ok();
@@ -79,7 +57,7 @@ Result<void> declareBufferNeeds() override {
   }
 
   // Build packed grid if dirty
-  if (_gridStagingDirty) {
+  if (_canvas && _canvas->isDirty()) {
     rebuildPackedGrid();
   }
 
@@ -228,7 +206,7 @@ Result<void> writeTextures() override {
     }
 
     // Update Image primitive with real atlas coordinates
-    // TODO: images need to be stored in _scrollLines and updated here
+    // TODO: images need to be stored in canvas and updated here
     auto atlasPos = texMgr->getAtlasPosition(pi.texHandle);
     (void)atlasPos; // Suppress unused warning for now
   }
@@ -254,13 +232,7 @@ Result<void> writeBuffers() override {
     auto bufMgr = _cardMgr->bufferManager();
 
     // Check if we have primitives
-    bool hasPrims = false;
-    for (const auto &line : _scrollLines) {
-      if (!line.prims.empty()) {
-        hasPrims = true;
-        break;
-      }
-    }
+    bool hasPrims = _canvas && !_canvas->empty();
 
     if (_primHandle.isValid() && hasPrims) {
       ydebug("writeBuffers: re-writing prims");
@@ -270,7 +242,7 @@ Result<void> writeBuffers() override {
     }
 
     // Rebuild packed grid if dirty (important after scrolling!)
-    if (_gridStagingDirty) {
+    if (_canvas && _canvas->isDirty()) {
       ydebug("writeBuffers: rebuilding packed grid");
       rebuildPackedGrid();
     }

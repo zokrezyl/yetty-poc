@@ -3,12 +3,7 @@
 //=========================================================================
 
 uint32_t primitiveCount() const override {
-  // Unified: count primitives from _scrollLines (used for both modes)
-  uint32_t count = 0;
-  for (const auto &line : _scrollLines) {
-    count += static_cast<uint32_t>(line.prims.size());
-  }
-  return count;
+  return _canvas ? _canvas->primitiveCount() : 0;
 }
 
 uint32_t glyphCount() const override {
@@ -24,12 +19,18 @@ void setSceneBounds(float minX, float minY, float maxX, float maxY) override {
   _sceneMaxX = maxX;
   _sceneMaxY = maxY;
   _hasExplicitBounds = true;
+  if (_canvas) {
+    _canvas->setSceneBounds(minX, minY, maxX, maxY);
+  }
 }
 bool hasExplicitBounds() const override { return _hasExplicitBounds; }
 
 void setGridCellSize(float sizeX, float sizeY) override {
   _cellSizeX = sizeX;
   _cellSizeY = sizeY;
+  if (_canvas) {
+    _canvas->setCellSize(sizeX, sizeY);
+  }
 }
 float gridCellSizeX() const override { return _cellSizeX; }
 float gridCellSizeY() const override { return _cellSizeY; }
@@ -38,7 +39,12 @@ void setFlags(uint32_t flags) override { _flags = flags; }
 void addFlags(uint32_t flags) override { _flags |= flags; }
 uint32_t flags() const override { return _flags; }
 
-void setMaxPrimsPerCell(uint32_t max) override { _maxPrimsPerCell = max; }
+void setMaxPrimsPerCell(uint32_t max) override {
+  _maxPrimsPerCell = max;
+  if (_canvas) {
+    _canvas->setMaxPrimsPerCell(max);
+  }
+}
 uint32_t maxPrimsPerCell() const override { return _maxPrimsPerCell; }
 
 //=========================================================================
@@ -46,12 +52,16 @@ uint32_t maxPrimsPerCell() const override { return _maxPrimsPerCell; }
 //=========================================================================
 
 const std::vector<uint32_t> &gridStaging() const override {
-  if (_gridStagingDirty) {
+  if (_canvas && _canvas->isDirty()) {
     const_cast<PainterImpl *>(this)->rebuildPackedGrid();
   }
-  return _gridStaging;
+  return _canvas ? _canvas->gridStaging() : _emptyGridStaging;
 }
-void clearGridStaging() override { _gridStaging.clear(); }
+void clearGridStaging() override {
+  if (_canvas) {
+    _canvas->clearStaging();
+  }
+}
 const std::vector<YPaintGlyph> &glyphs() const override { return _glyphs; }
 std::vector<YPaintGlyph> &glyphsMut() override { return _glyphs; }
 
@@ -62,47 +72,18 @@ void buildPrimStaging(std::vector<uint32_t> &out) const override {
     return;
   }
 
-  // Primitives are stored in _scrollLines (line-based storage)
-  // Count total primitives and words
-  uint32_t primCount = 0;
-  uint32_t totalWords = 0;
-  for (const auto &line : _scrollLines) {
-    for (const auto &prim : line.prims) {
-      primCount++;
-      totalWords += static_cast<uint32_t>(prim.size());
-    }
-  }
-
-  if (primCount == 0) {
+  if (_canvas) {
+    _canvas->buildPrimStaging(out);
+    const_cast<PainterImpl *>(this)->_primStagingCache = out;
+  } else {
     out.clear();
     const_cast<PainterImpl *>(this)->_primStagingCache.clear();
-    return;
   }
-
-  out.resize(primCount + totalWords);
-  uint32_t dataOffset = 0;
-  uint32_t primIdx = 0;
-  for (const auto &line : _scrollLines) {
-    for (const auto &prim : line.prims) {
-      out[primIdx] = dataOffset;
-      for (size_t i = 0; i < prim.size(); i++) {
-        uint32_t val;
-        std::memcpy(&val, &prim[i], sizeof(uint32_t));
-        out[primCount + dataOffset + i] = val;
-      }
-      dataOffset += static_cast<uint32_t>(prim.size());
-      primIdx++;
-    }
-  }
-
-  // Cache the result
-  const_cast<PainterImpl *>(this)->_primStagingCache = out;
 }
 
 bool hasContent() const override {
-  for (const auto &line : _scrollLines) {
-    if (!line.prims.empty())
-      return true;
+  if (_canvas && !_canvas->empty()) {
+    return true;
   }
   return !_glyphs.empty();
 }
@@ -116,16 +97,16 @@ bool scrollingMode() const override { return _scrollingMode; }
 void setCursorPosition(uint16_t col, uint16_t row) override {
   _cursorCol = col;
   _cursorRow = row;
+  if (_canvas) {
+    _canvas->setCursorPosition(col, row);
+  }
 }
 
 uint16_t cursorCol() const override { return _cursorCol; }
 uint16_t cursorRow() const override { return _cursorRow; }
 
 uint32_t sceneHeightInLines() const override {
-  if (_cellSizeY <= 0.0f)
-    return 0;
-  float sceneH = _sceneMaxY - _sceneMinY;
-  return static_cast<uint32_t>(std::ceil(sceneH / _cellSizeY));
+  return _canvas ? _canvas->heightInLines() : 0;
 }
 
 //=========================================================================

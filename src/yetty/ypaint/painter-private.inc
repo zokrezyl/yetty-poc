@@ -64,8 +64,9 @@ Result<void> flushMetadata() {
 }
 
 uint32_t computeDerivedSize() const {
+  const auto &gridStaging = _canvas ? _canvas->gridStaging() : _emptyGridStaging;
   uint32_t gridBytes =
-      static_cast<uint32_t>(_gridStaging.size()) * sizeof(uint32_t);
+      static_cast<uint32_t>(gridStaging.size()) * sizeof(uint32_t);
   uint32_t glyphBytes =
       static_cast<uint32_t>(_glyphs.size() * sizeof(YPaintGlyph));
   uint32_t total = gridBytes + glyphBytes;
@@ -83,20 +84,22 @@ Result<void> writeDerived() {
     return Err<void>("writeDerived: derived handle not allocated");
   }
 
+  const auto &gridStaging = _canvas ? _canvas->gridStaging() : _emptyGridStaging;
+
   uint8_t *base = _derivedHandle.data;
   uint32_t offset = 0;
 
   // Copy grid and translate prim indices to word offsets
   uint32_t gridBytes =
-      static_cast<uint32_t>(_gridStaging.size()) * sizeof(uint32_t);
+      static_cast<uint32_t>(gridStaging.size()) * sizeof(uint32_t);
   _gpuGridOffset = (_derivedHandle.offset + offset) / sizeof(float);
   ydebug("writeDerived: gridSize={} gridOffset={} primWordOffsets.size={}",
-         _gridStaging.size(), _gpuGridOffset, _primWordOffsets.size());
-  if (!_gridStaging.empty()) {
-    std::memcpy(base + offset, _gridStaging.data(), gridBytes);
+         gridStaging.size(), _gpuGridOffset, _primWordOffsets.size());
+  if (!gridStaging.empty()) {
+    std::memcpy(base + offset, gridStaging.data(), gridBytes);
     // Translate prim indices in grid entries to word offsets
     uint32_t *gridPtr = reinterpret_cast<uint32_t *>(base + offset);
-    uint32_t gridSize = static_cast<uint32_t>(_gridStaging.size());
+    uint32_t gridSize = static_cast<uint32_t>(gridStaging.size());
     uint32_t numCells = _gridWidth * _gridHeight;
     if (!_primWordOffsets.empty() && numCells <= gridSize) {
       for (uint32_t ci = 0; ci < numCells; ci++) {
@@ -169,9 +172,8 @@ Result<void> writeDerived() {
 // Data (private members)
 //=========================================================================
 
-// Packed GPU format (cache, rebuilt when _gridStagingDirty)
-std::vector<uint32_t> _gridStaging;
-bool _gridStagingDirty = true;
+// Empty grid staging fallback for const reference
+const std::vector<uint32_t> _emptyGridStaging;
 
 // Prim staging cache (rebuilt when _bufferDirty)
 std::vector<uint32_t> _primStagingCache;
@@ -256,28 +258,7 @@ uint16_t _cursorCol = 0;
 uint16_t _cursorRow = 0;
 
 //=========================================================================
-// Scrolling mode line-based storage
+// Canvas - handles grid and primitive storage
 //=========================================================================
 
-// Reference to a primitive: linesAhead = offset to line containing the data,
-// primIndex = index within that line's prims vector
-struct ScrollPrimRef {
-  uint16_t linesAhead; // relative offset to base line (0 = same line)
-  uint16_t primIndex;  // index within base line's prims
-};
-
-// Grid cell in scrolling mode: stores references to primitives
-struct ScrollGridCell {
-  std::vector<ScrollPrimRef> refs;
-};
-
-// A single line in scrolling mode
-struct ScrollLine {
-  // Primitives whose BASE (last line they touch) is this line
-  std::vector<std::vector<float>> prims;
-  // Grid cells for this line's Y range (indexed by X)
-  std::vector<ScrollGridCell> cells;
-};
-
-// Lines in scrolling mode (front = top, pop_front on scroll)
-std::deque<ScrollLine> _scrollLines;
+Canvas::Ptr _canvas;

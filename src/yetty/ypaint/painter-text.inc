@@ -102,8 +102,8 @@ Result<void> addText(float x, float y, const std::string &text,
     cursorX += glyph._advance * scale;
   }
 
-  if (glyphsAdded > 0) {
-    _gridStaging.clear(); // invalidate grid
+  if (glyphsAdded > 0 && _canvas) {
+    _canvas->markDirty(); // invalidate grid
   }
 
   return Ok();
@@ -187,29 +187,24 @@ Result<void> addRotatedText(float x, float y, const std::string &text,
     float gx = x + (cursorAdvance + bx) * cosA - by * sinA;
     float gy = y + (cursorAdvance + bx) * sinA + by * cosA;
 
-    // Build RotatedGlyph primitive (15 words with gridOffset prefix)
-    // Layout: [gridOffset][type=65][layer][x][y][scaleX][scaleY][angle]
+    // Build RotatedGlyph primitive (14 words, canvas adds gridOffset)
+    // Layout: [type=65][layer][x][y][scaleX][scaleY][angle]
     //         [glyphIndex][cosAngle][sinAngle][fillColor][strokeColor][strokeWidth][round]
-    std::vector<float> primData(15);
-    uint16_t gridOffsetCol = _scrollingMode ? _cursorCol : 0;
-    uint16_t gridOffsetRow = _scrollingMode ? _cursorRow : 0;
-    uint32_t packedOffset = static_cast<uint32_t>(gridOffsetCol) |
-                            (static_cast<uint32_t>(gridOffsetRow) << 16);
-    std::memcpy(&primData[0], &packedOffset, sizeof(uint32_t));
-    sdf::detail::write_u32(primData.data(), 1, 65u); // RotatedGlyph type
-    sdf::detail::write_u32(primData.data(), 2, 0u);  // layer 0
-    primData[3] = gx;
-    primData[4] = gy;
-    primData[5] = gw; // width in pixels (shader expects gw, not scale)
-    primData[6] = gh; // height in pixels (shader expects gh, not scale)
-    primData[7] = angleRadians;
-    sdf::detail::write_u32(primData.data(), 8, glyphIndex);
-    primData[9] = cosA;
-    primData[10] = sinA;
-    sdf::detail::write_u32(primData.data(), 11, color); // fillColor
-    sdf::detail::write_u32(primData.data(), 12, 0u);    // strokeColor
-    primData[13] = 0.0f;                                // strokeWidth
-    primData[14] = 0.0f;                                // round
+    std::vector<float> primData(14);
+    sdf::detail::write_u32(primData.data(), 0, 65u); // RotatedGlyph type
+    sdf::detail::write_u32(primData.data(), 1, 0u);  // layer 0
+    primData[2] = gx;
+    primData[3] = gy;
+    primData[4] = gw; // width in pixels (shader expects gw, not scale)
+    primData[5] = gh; // height in pixels (shader expects gh, not scale)
+    primData[6] = angleRadians;
+    sdf::detail::write_u32(primData.data(), 7, glyphIndex);
+    primData[8] = cosA;
+    primData[9] = sinA;
+    sdf::detail::write_u32(primData.data(), 10, color); // fillColor
+    sdf::detail::write_u32(primData.data(), 11, 0u);    // strokeColor
+    primData[12] = 0.0f;                                // strokeWidth
+    primData[13] = 0.0f;                                // round
 
     // Compute AABB for grid placement
     // Rotated glyph bounding box: corners rotated by angle
@@ -227,54 +222,9 @@ Result<void> addRotatedText(float x, float y, const std::string &text,
       maxY = std::max(maxY, ry);
     }
 
-    // Compute which lines this primitive spans
-    // Use sceneMinY as base for grid line calculation
-    // Guard against division by zero if cell size not yet computed
-    float baseY = (_sceneMinY < 1e9f) ? _sceneMinY : 0.0f;
-    float effectiveCellSizeY =
-        (_cellSizeY > 0.0f) ? _cellSizeY : 20.0f; // default fallback
-    int32_t localMinLine =
-        static_cast<int32_t>(std::floor((minY - baseY) / effectiveCellSizeY));
-    int32_t localMaxLine =
-        static_cast<int32_t>(std::floor((maxY - baseY) / effectiveCellSizeY));
-    int32_t primMinLineSigned =
-        static_cast<int32_t>(gridOffsetRow) + localMinLine;
-    int32_t primMaxLineSigned =
-        static_cast<int32_t>(gridOffsetRow) + localMaxLine;
-    primMinLineSigned = std::max(primMinLineSigned, 0);
-    primMaxLineSigned = std::max(primMaxLineSigned, 0);
-    uint32_t primMinLine = static_cast<uint32_t>(primMinLineSigned);
-    uint32_t primMaxLine = static_cast<uint32_t>(primMaxLineSigned);
-
-    // Ensure enough lines exist
-    while (_scrollLines.size() <= primMaxLine) {
-      ScrollLine line;
-      line.cells.resize(_gridWidth > 0 ? _gridWidth : 1);
-      _scrollLines.push_back(std::move(line));
-    }
-    primMinLine =
-        std::min(primMinLine, static_cast<uint32_t>(_scrollLines.size() - 1));
-    primMaxLine =
-        std::min(primMaxLine, static_cast<uint32_t>(_scrollLines.size() - 1));
-
-    // Store primitive in base line
-    uint32_t baseLine = primMaxLine;
-    uint16_t primIndex =
-        static_cast<uint16_t>(_scrollLines[baseLine].prims.size());
-    _scrollLines[baseLine].prims.push_back(std::move(primData));
-
-    // Add grid cell references
-    uint32_t cellMinX = cellX(minX);
-    uint32_t cellMaxX = cellX(maxX);
-    for (uint32_t lineIdx = primMinLine; lineIdx <= primMaxLine; lineIdx++) {
-      while (_scrollLines[lineIdx].cells.size() <= cellMaxX) {
-        _scrollLines[lineIdx].cells.push_back(ScrollGridCell{});
-      }
-      uint16_t linesAhead = static_cast<uint16_t>(baseLine - lineIdx);
-      for (uint32_t cx = cellMinX; cx <= cellMaxX; cx++) {
-        _scrollLines[lineIdx].cells[cx].refs.push_back(
-            {linesAhead, primIndex});
-      }
+    // Add to canvas - it handles grid placement
+    if (_canvas) {
+      _canvas->addPrimitive(std::move(primData), minX, minY, maxX, maxY);
     }
 
     // Update scene bounds
@@ -285,7 +235,6 @@ Result<void> addRotatedText(float x, float y, const std::string &text,
       _sceneMaxY = std::max(_sceneMaxY, maxY);
     }
 
-    _gridStagingDirty = true;
     _bufferDirty = true;
     cursorAdvance += glyph._advance * scale;
   }

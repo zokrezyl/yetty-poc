@@ -27,6 +27,7 @@ add_executable(ypaint_tests
     gpu_buffer_verification_test.cpp
     polygon_test.cpp
     # YPaint core
+    ${CMAKE_SOURCE_DIR}/src/yetty/ypaint/canvas.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/ypaint/ypaint-buffer.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/ypaint/painter.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/ypaint/triangulate.cpp
@@ -79,6 +80,7 @@ add_test(NAME ypaint_tests COMMAND ypaint_tests)
 # Debug grid program
 add_executable(ypaint_debug_grid
     debug_grid.cpp
+    ${CMAKE_SOURCE_DIR}/src/yetty/ypaint/canvas.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/ypaint/ypaint-buffer.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/ypaint/painter.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/ypaint/triangulate.cpp

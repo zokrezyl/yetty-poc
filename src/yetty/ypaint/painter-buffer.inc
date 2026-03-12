@@ -7,6 +7,9 @@ addYpaintBuffer(std::shared_ptr<YPaintBuffer> buffer) override {
   if (!buffer) {
     return Err<uint32_t>("addYpaintBuffer: null buffer");
   }
+  if (!_canvas) {
+    return Err<uint32_t>("addYpaintBuffer: no canvas");
+  }
 
   uint32_t baseGlyphIdx = static_cast<uint32_t>(_glyphs.size());
 
@@ -60,7 +63,7 @@ addYpaintBuffer(std::shared_ptr<YPaintBuffer> buffer) override {
     }
   }
 
-  // 3. Process images (TODO: store in _scrollLines as well)
+  // 3. Process images
   buffer->forEachImage([this](const ImageData &img) {
     PendingImage pi;
     pi.x = img.x;
@@ -114,6 +117,10 @@ addYpaintBuffer(std::shared_ptr<YPaintBuffer> buffer) override {
         std::max(1u, static_cast<uint32_t>(std::ceil(sceneH / _cellSizeY)));
   }
 
+  // Update canvas with scene bounds and cell size
+  _canvas->setSceneBounds(_sceneMinX, _sceneMinY, _sceneMaxX, _sceneMaxY);
+  _canvas->setCellSize(_cellSizeX, _cellSizeY);
+
   // 6. Compute content bounds
   float contentMinY = 1e10f;
   float contentMaxY = -1e10f;
@@ -140,30 +147,12 @@ addYpaintBuffer(std::shared_ptr<YPaintBuffer> buffer) override {
   uint32_t contentLines = std::max(
       1u, static_cast<uint32_t>(std::ceil(contentHeight / _cellSizeY)));
 
-  // 7. Ensure we have enough lines
-  uint32_t totalLines = sceneHeightInLines();
-  if (totalLines == 0)
-    totalLines = 24;
-  while (_scrollLines.size() < totalLines) {
-    ScrollLine line;
-    line.cells.resize(_gridWidth > 0 ? _gridWidth : 1);
-    _scrollLines.push_back(std::move(line));
-  }
+  // Update canvas scene bounds again if they were extended
+  _canvas->setSceneBounds(_sceneMinX, _sceneMinY, _sceneMaxX, _sceneMaxY);
 
-  // 8. Capture grid offset for this batch
-  // Scrolling mode: offset = cursor position
-  // Non-scrolling mode: offset = 0
-  uint16_t gridOffsetCol = _scrollingMode ? _cursorCol : 0;
-  uint16_t gridOffsetRow = _scrollingMode ? _cursorRow : 0;
-
-  // 9. Process each primitive - store in line-based storage
-  // Grid line = gridOffsetRow + floor((Y - sceneMinY) / cellSizeY)
-  // Always use sceneMinY for world-position grid mapping
-  float baseY = _sceneMinY;
-  if (baseY > 1e9f)
-    baseY = 0.0f; // Fallback if not set
-  buffer->forEachPrim([this, gridOffsetCol, gridOffsetRow,
-                       baseY](uint32_t id, const float *data, uint32_t wc) {
+  // 7. Process each primitive - add to canvas
+  uint32_t addedPrims = 0;
+  buffer->forEachPrim([this, &addedPrims](uint32_t id, const float *data, uint32_t wc) {
     uint32_t type = sdf::detail::read_u32(data, 0);
     bool is3D = (type >= 100 && type < 128);
     if (is3D) {
@@ -175,95 +164,41 @@ addYpaintBuffer(std::shared_ptr<YPaintBuffer> buffer) override {
     float minX, minY, maxX, maxY;
     computeAABB(data, wc, minX, minY, maxX, maxY);
 
-    // Compute which grid lines this primitive spans
-    // Grid line = gridOffsetRow + floor((Y - sceneMinY) / cellSizeY)
-    int32_t localMinLine =
-        static_cast<int32_t>(std::floor((minY - baseY) / _cellSizeY));
-    int32_t localMaxLine =
-        static_cast<int32_t>(std::floor((maxY - baseY) / _cellSizeY));
-    int32_t primMinLineSigned =
-        static_cast<int32_t>(gridOffsetRow) + localMinLine;
-    int32_t primMaxLineSigned =
-        static_cast<int32_t>(gridOffsetRow) + localMaxLine;
-
-    // Clamp to valid range
-    primMinLineSigned = std::max(primMinLineSigned, 0);
-    primMaxLineSigned = std::max(primMaxLineSigned, 0);
-    uint32_t primMinLine = static_cast<uint32_t>(primMinLineSigned);
-    uint32_t primMaxLine = static_cast<uint32_t>(primMaxLineSigned);
-    if (!_scrollLines.empty()) {
-      primMinLine = std::min(primMinLine,
-                             static_cast<uint32_t>(_scrollLines.size() - 1));
-      primMaxLine = std::min(primMaxLine,
-                             static_cast<uint32_t>(_scrollLines.size() - 1));
-    }
-
-    // Base line determines where the primitive is stored in _scrollLines
-    // Use max line (bottom of primitive) - removed when bottom scrolls off
-    // screen
-    uint32_t baseLine = primMaxLine;
-
-    // Ensure base line exists
-    while (_scrollLines.size() <= baseLine) {
-      ScrollLine line;
-      line.cells.resize(_gridWidth > 0 ? _gridWidth : 1);
-      _scrollLines.push_back(std::move(line));
-    }
-
-    // Build primitive data: [gridOffset][type][layer][geometry...]
-    std::vector<float> primData(wc + 1);
-    uint32_t packedOffset = static_cast<uint32_t>(gridOffsetCol) |
-                            (static_cast<uint32_t>(gridOffsetRow) << 16);
-    std::memcpy(&primData[0], &packedOffset, sizeof(uint32_t));
+    // Build primitive data vector (without gridOffset - canvas adds it)
+    std::vector<float> primData(wc);
     for (uint32_t i = 0; i < wc; i++) {
-      primData[i + 1] = data[i];
+      primData[i] = data[i];
     }
 
-    // Store primitive in base line
-    uint16_t primIndex =
-        static_cast<uint16_t>(_scrollLines[baseLine].prims.size());
-    _scrollLines[baseLine].prims.push_back(std::move(primData));
-
-    // Add grid cell references
-    uint32_t cellMinX = cellX(minX);
-    uint32_t cellMaxX = cellX(maxX);
-
-    for (uint32_t lineIdx = primMinLine; lineIdx <= primMaxLine; lineIdx++) {
-      while (_scrollLines[lineIdx].cells.size() <= cellMaxX) {
-        _scrollLines[lineIdx].cells.push_back(ScrollGridCell{});
-      }
-      uint16_t linesAhead = static_cast<uint16_t>(baseLine - lineIdx);
-      for (uint32_t cx = cellMinX; cx <= cellMaxX; cx++) {
-        _scrollLines[lineIdx].cells[cx].refs.push_back(
-            {linesAhead, primIndex});
-      }
-    }
+    // Add to canvas - it handles grid placement and offset
+    _canvas->addPrimitive(std::move(primData), minX, minY, maxX, maxY);
+    addedPrims++;
   });
 
-  _gridStagingDirty = true;
   _bufferDirty = true;
 
-  ydebug("addYpaintBuffer: added {} prims, {} glyphs, "
+  ydebug("addYpaintBuffer: added {} prims (forEachPrim counted {}), canvas has {} prims, {} glyphs, "
          "scene=[{:.0f},{:.0f}]-[{:.0f},{:.0f}]",
-         primCount, _glyphs.size() - baseGlyphIdx, _sceneMinX, _sceneMinY,
+         addedPrims, primCount, _canvas ? _canvas->primitiveCount() : 0,
+         _glyphs.size() - baseGlyphIdx, _sceneMinX, _sceneMinY,
          _sceneMaxX, _sceneMaxY);
 
   return Ok(contentLines);
 }
 
 void clear() override {
-  // Clear line-based primitive storage
-  _scrollLines.clear();
+  // Clear canvas
+  if (_canvas) {
+    _canvas->clear();
+  }
 
   // Clear glyph data
   _glyphs.clear();
   _glyphSortedOrder.clear();
 
-  // Clear grid
+  // Clear grid dimensions
   _gridWidth = 0;
   _gridHeight = 0;
-  _gridStaging.clear();
-  _gridStagingDirty = true;
 
   // Reset cursor
   _cursorCol = 0;
