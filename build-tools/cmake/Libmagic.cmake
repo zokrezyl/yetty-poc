@@ -16,6 +16,20 @@ endif()
 
 set(LIBMAGIC_VERSION "5.45")
 
+# Check for pre-fetched source (for Nix builds or offline builds)
+# Can be set via -DFETCHCONTENT_SOURCE_DIR_LIBMAGIC=/path/to/source
+if(DEFINED FETCHCONTENT_SOURCE_DIR_LIBMAGIC)
+    set(LIBMAGIC_SOURCE_ARGS
+        SOURCE_DIR "${FETCHCONTENT_SOURCE_DIR_LIBMAGIC}"
+        DOWNLOAD_COMMAND ""
+    )
+    message(STATUS "libmagic: Using pre-fetched source at ${FETCHCONTENT_SOURCE_DIR_LIBMAGIC}")
+else()
+    set(LIBMAGIC_SOURCE_ARGS
+        URL https://astron.com/pub/file/file-${LIBMAGIC_VERSION}.tar.gz
+    )
+endif()
+
 # Use official distribution tarball — includes pre-generated configure script,
 # no autotools (autoconf/automake/libtool) needed on the build machine.
 #
@@ -26,7 +40,7 @@ set(LIBMAGIC_VERSION "5.45")
 # test because the linker paths affect the test binary execution.
 # Configure detects system zlib, then we override paths during make.
 ExternalProject_Add(libmagic_ext
-    URL             https://astron.com/pub/file/file-${LIBMAGIC_VERSION}.tar.gz
+    ${LIBMAGIC_SOURCE_ARGS}
     PREFIX          ${CMAKE_BINARY_DIR}/_deps/libmagic
 
     # After initial download+build, skip update to avoid rebuilds

@@ -1,0 +1,62 @@
+# Yetty Dependencies
+# Format: name|type|url_or_owner/repo|version_or_rev
+# Types: github, url
+#
+# This file is the single source of truth for dependency versions.
+# Run ./update-deps.sh to regenerate cpm-sources.nix with correct hashes.
+
+# Core libraries
+args|github|Taywee/args|6.4.6
+lz4|github|lz4/lz4|v1.10.0
+libuv|github|libuv/libuv|v1.48.0
+glm|github|g-truc/glm|1.0.1
+stb|github|nothings/stb|f75e8d1cad7d90d72ef7a4661f1b994ef78b4e31
+yaml-cpp|github|jbeder/yaml-cpp|0.8.0
+spdlog|github|gabime/spdlog|v1.16.0
+ytrace|github|zokrezyl/ytrace|da73e1fba172c61d204debd84f30f4703c6f3d19
+msgpack-cxx|github|msgpack/msgpack-c|cpp-7.0.0
+zlib|github|madler/zlib|v1.3.1
+libpng|github|pnggroup/libpng|v1.6.43
+msdfgen|github|Chlumsky/msdfgen|v1.12
+brotli|github|google/brotli|v1.1.0
+bzip2|github|libarchive/bzip2|bzip2-1.0.8
+freetype|github|freetype/freetype|VER-2-13-2
+glfw|github|glfw/glfw|3.4
+glfw3webgpu|github|eliemichel/glfw3webgpu|8f14534e79c590e8a7f7795ea42e01bedea9e137
+incbin|github|graphitemaster/incbin|main
+libjpeg-turbo|github|libjpeg-turbo/libjpeg-turbo|3.1.3
+thorvg|github|thorvg/thorvg|v1.0.1
+imgui|github|ocornut/imgui|v1.92.5
+tinyxml2|github|leethomason/tinyxml2|10.0.0
+cpr|github|libcpr/cpr|1.14.1
+pdfio|github|michaelrsweet/pdfio|v1.4.0
+litehtml|github|litehtml/litehtml|v0.9
+
+# Tree-sitter
+tree-sitter|github|tree-sitter/tree-sitter|v0.26.5
+tree-sitter-c|github|tree-sitter/tree-sitter-c|v0.24.1
+tree-sitter-cpp|github|tree-sitter/tree-sitter-cpp|v0.23.4
+tree-sitter-python|github|tree-sitter/tree-sitter-python|v0.25.0
+tree-sitter-javascript|github|tree-sitter/tree-sitter-javascript|v0.25.0
+tree-sitter-typescript|github|tree-sitter/tree-sitter-typescript|v0.23.2
+tree-sitter-rust|github|tree-sitter/tree-sitter-rust|v0.24.0
+tree-sitter-go|github|tree-sitter/tree-sitter-go|v0.25.0
+tree-sitter-java|github|tree-sitter/tree-sitter-java|v0.23.5
+tree-sitter-bash|github|tree-sitter/tree-sitter-bash|v0.25.1
+tree-sitter-json|github|tree-sitter/tree-sitter-json|v0.24.8
+tree-sitter-yaml|github|tree-sitter-grammars/tree-sitter-yaml|v0.7.2
+tree-sitter-toml|github|tree-sitter-grammars/tree-sitter-toml|v0.7.0
+tree-sitter-html|github|tree-sitter/tree-sitter-html|v0.23.2
+tree-sitter-xml|github|tree-sitter-grammars/tree-sitter-xml|v0.7.0
+
+# CDB - use portable howerj/cdb for Nix builds
+howerj_cdb|github|howerj/cdb|v4.3.2
+
+# Non-GitHub sources (kept for reference)
+cdb|url|https://cdb.cr.yp.to/cdb-20251021.tar.gz|20251021
+libmagic|url|https://astron.com/pub/file/file-5.45.tar.gz|5.45
+
+# Dawn WebGPU (pre-built binaries)
+dawn-linux|url|https://github.com/google/dawn/releases/download/v20260214.164635/Dawn-1a3afc99a7ef7dacaab73b71d44575c4f1bf2dd7-ubuntu-latest-Release.tar.gz|20260214.164635
+dawn-macos-arm64|url|https://github.com/google/dawn/releases/download/v20260214.164635/Dawn-1a3afc99a7ef7dacaab73b71d44575c4f1bf2dd7-macos-latest-Release.tar.gz|20260214.164635
+dawn-macos-x86_64|url|https://github.com/google/dawn/releases/download/v20260214.164635/Dawn-1a3afc99a7ef7dacaab73b71d44575c4f1bf2dd7-macos-15-intel-Release.tar.gz|20260214.164635
