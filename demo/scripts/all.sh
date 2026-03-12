@@ -16,7 +16,7 @@ MAGENTA='\033[0;35m'
 NC='\033[0m' # No Color
 
 # Sleep duration between demos (seconds)
-SLEEP_DURATION=5
+SLEEP_DURATION=2
 
 # Extract description from script (first comment line after shebang)
 get_description() {

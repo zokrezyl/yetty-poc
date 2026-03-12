@@ -1,4 +1,4 @@
-!/usr/bin/env bash
+#!/usr/bin/env bash
 
 
 google-chrome \
@@ -10,5 +10,8 @@ google-chrome \
   --enable-unsafe-webgpu \
   --enable-features=Vulkan,UseSkiaRenderer \
   --use-vulkan \
-  --ozone-platform=wayland \
   https://zokrezyl.github.io/yetty
+
+
+
+  #--ozone-platform=wayland \
