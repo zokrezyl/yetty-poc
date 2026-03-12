@@ -17,6 +17,14 @@
           };
         };
 
+        # Use Clang with libstdc++ (GCC's C++ library) for Dawn ABI compatibility
+        clangStdenv = pkgs.clangStdenv;
+
+        # Yetty package (nix build .#yetty)
+        yetty = pkgs.callPackage ./build-tools/nix/default.nix {
+          inherit clangStdenv;
+        };
+
         # Android SDK/NDK setup
         androidComposition = pkgs.androidenv.composeAndroidPackages {
           platformVersions = [ "34" ];
@@ -193,6 +201,8 @@
 
         # Packages
         packages = {
+          inherit yetty;
+          default = yetty;
           arm-emulator = armEmulatorScript;
         };
       }
