@@ -198,7 +198,7 @@ Where ESC characters in content are doubled (`ESC` → `ESC ESC`). The `yetty-cl
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                           CardManager                                │
+│                           GpuMemoryManager                                │
 │  - Allocates metadata slots (32/64/128/256 byte pools)              │
 │  - Coordinates lifecycle across all cards                            │
 │  - Flushes dirty regions to GPU                                      │
@@ -206,7 +206,7 @@ Where ESC characters in content are doubled (`ESC` → `ESC ESC`). The `yetty-cl
               │                                    │
               ▼                                    ▼
 ┌─────────────────────────────┐      ┌─────────────────────────────┐
-│    CardBufferManager        │      │   CardTextureManager        │
+│    CardBufferManager        │      │   GpuTextureManager        │
 │  - Linear GPU storage buf   │      │  - Dynamic texture atlas    │
 │  - Free-list sub-allocator  │      │  - Strip packing algorithm  │
 │  - Direct CPU write access  │      │  - Right-sized per frame    │
@@ -290,7 +290,7 @@ struct BufferHandle {
 
 **Mid-cycle resizing:** If a card needs to grow its buffer during render (e.g., adding primitives), it can call `allocateBuffer()` with the same `(slotIndex, scope)` key and a larger size. The manager auto-replaces the old allocation internally — no explicit deallocation needed.
 
-### Texture Atlas (CardTextureManager)
+### Texture Atlas (GpuTextureManager)
 
 Used by cards that render pixel data: Image, PDF, ThorVG, YHtml, Ymery.
 
@@ -350,7 +350,7 @@ struct TextureHandle {
 
 ### Key Difference: Buffer vs Texture
 
-| Aspect | CardBufferManager | CardTextureManager |
+| Aspect | CardBufferManager | GpuTextureManager |
 |--------|-------------------|---------------------|
 | GPU resource | Storage buffer (SSBO) | RGBA8 2D texture |
 | Data type | Structured (floats, u32s) | Pixel data (RGBA8) |
@@ -768,9 +768,9 @@ Card resources are bound to the main render shader:
 | File | Purpose |
 |------|---------|
 | `include/yetty/card.h` | Card base class |
-| `include/yetty/card-manager.h` | Metadata allocation |
+| `include/yetty/gpu-memory-manager.h` | Metadata allocation |
 | `include/yetty/card-buffer-manager.h` | Storage buffer management |
-| `include/yetty/card-texture-manager.h` | Texture atlas management |
+| `include/yetty/gpu-texture-manager.h` | Texture atlas management |
 | `src/yetty/gpu-screen.cpp` | Lifecycle integration |
 | `src/yetty/cards/image/` | Image card |
 | `src/yetty/cards/plot/` | Plot card |

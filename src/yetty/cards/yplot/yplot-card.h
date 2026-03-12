@@ -110,14 +110,14 @@ public:
     virtual const yplot::YPlotState& state() const = 0;
 
 protected:
-    YPlotCard(CardManager::Ptr mgr, const GPUContext& gpu,
+    YPlotCard(GpuMemoryManager::Ptr mgr, const GPUContext& gpu,
               int32_t x, int32_t y,
               uint32_t widthCells, uint32_t heightCells)
         : _cardMgr(std::move(mgr)), _gpu(gpu)
         , _x(x), _y(y), _widthCells(widthCells), _heightCells(heightCells)
     {}
 
-    CardManager::Ptr _cardMgr;
+    GpuMemoryManager::Ptr _cardMgr;
     GPUContext _gpu;
     MetadataHandle _metaHandle = MetadataHandle::invalid();
     int32_t _x, _y;

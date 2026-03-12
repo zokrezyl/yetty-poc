@@ -17,8 +17,8 @@
 #include "yetty/ypaint/ypaint-buffer.h"
 #include "yetty/ypaint/ypaint-types.gen.h"
 #include <yetty/ypaint/painter.h>
-#include <yetty/card-manager.h>
-#include <yetty/card-buffer-manager.h>
+#include <yetty/gpu-memory-manager.h>
+#include <yetty/gpu-buffer-manager.h>
 #include <yetty/gpu-allocator.h>
 
 #include <cstring>
@@ -109,11 +109,11 @@ private:
 };
 
 //=============================================================================
-// Mock CardManager — owns mock buffer manager + CPU metadata array
+// Mock GpuMemoryManager — owns mock buffer manager + CPU metadata array
 //=============================================================================
-class MockCardManager : public CardManager {
+class MockGpuMemoryManager : public GpuMemoryManager {
 public:
-    MockCardManager()
+    MockGpuMemoryManager()
         : _bufMgr(std::make_shared<MockCardBufferManager>())
         , _metadata(16 * 64, 0) {}
 
@@ -126,7 +126,7 @@ public:
     Result<void> writeMetadata(MetadataHandle handle,
                                 const void* data, uint32_t size) override {
         if (handle.offset + size > _metadata.size()) {
-            return Err<void>("MockCardManager: metadata overflow");
+            return Err<void>("MockGpuMemoryManager: metadata overflow");
         }
         std::memcpy(_metadata.data() + handle.offset, data, size);
         return Ok();
@@ -141,7 +141,7 @@ public:
 
     // Manager accessors
     CardBufferManager::Ptr bufferManager() const override { return _bufMgr; }
-    CardTextureManager::Ptr textureManager() const override { return nullptr; }
+    GpuTextureManager::Ptr textureManager() const override { return nullptr; }
 
     // GPU stubs
     WGPUBuffer metadataBuffer() const override { return nullptr; }
@@ -191,7 +191,7 @@ static YPaintBuffer::Ptr createShapeSpanningLines(uint32_t numLines, float cellH
 
 suite scrolling_tests = [] {
     "scrolling_mode_construction"_test = [] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
 
         // Create builder WITHOUT scrolling mode
@@ -206,7 +206,7 @@ suite scrolling_tests = [] {
     };
 
     "cursor_position_default"_test = [] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
 
         auto builder = *Painter::create(
@@ -218,7 +218,7 @@ suite scrolling_tests = [] {
     };
 
     "cursor_position_set"_test = [] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
 
         auto builder = *Painter::create(
@@ -234,7 +234,7 @@ suite scrolling_tests = [] {
     };
 
     "scene_height_in_lines"_test = [] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
 
         auto builder = *Painter::create(
@@ -258,7 +258,7 @@ suite scrolling_tests = [] {
     //=========================================================================
 
     "scroll_100_single_line_shapes"_test = [] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
 
         auto builder = *Painter::create(
@@ -308,7 +308,7 @@ suite scrolling_tests = [] {
     };
 
     "scroll_200_shapes_1_to_5_lines"_test = [] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
 
         auto builder = *Painter::create(
@@ -357,7 +357,7 @@ suite scrolling_tests = [] {
     };
 
     "scroll_multiple_pages_sequential"_test = [] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
 
         auto builder = *Painter::create(
@@ -402,7 +402,7 @@ suite scrolling_tests = [] {
     };
 
     "cursor_jump_to_arbitrary_position"_test = [] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
 
         auto builder = *Painter::create(
@@ -448,7 +448,7 @@ suite scrolling_tests = [] {
     };
 
     "cursor_random_positions_500_shapes"_test = [] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
 
         auto builder = *Painter::create(
@@ -493,7 +493,7 @@ suite scrolling_tests = [] {
     };
 
     "scroll_then_add_more"_test = [] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
 
         auto builder = *Painter::create(
@@ -537,7 +537,7 @@ suite scrolling_tests = [] {
     };
 
     "multi_line_shapes_scroll_correctly"_test = [] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
 
         auto builder = *Painter::create(
@@ -589,7 +589,7 @@ suite scrolling_tests = [] {
     };
 
     "stress_1000_shapes_mixed_sizes"_test = [] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
 
         auto builder = *Painter::create(
@@ -637,7 +637,7 @@ suite scrolling_tests = [] {
     };
 
     "verify_refs_cleaned_after_scroll"_test = [] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
 
         auto builder = *Painter::create(
@@ -676,7 +676,7 @@ suite scrolling_tests = [] {
     };
 
     "scroll_entire_screen_multiple_times"_test = [] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
 
         auto builder = *Painter::create(
@@ -711,7 +711,7 @@ suite scrolling_tests = [] {
     };
 
     "cursor_at_each_row_then_scroll"_test = [] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
 
         auto builder = *Painter::create(
@@ -763,7 +763,7 @@ suite scrolling_tests = [] {
     //=========================================================================
 
     "grid_health_after_100_scrolls"_test = [] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
 
         auto builder = *Painter::create(
@@ -807,7 +807,7 @@ suite scrolling_tests = [] {
     };
 
     "grid_health_multiline_shapes_scroll"_test = [] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
 
         auto builder = *Painter::create(
@@ -861,7 +861,7 @@ suite scrolling_tests = [] {
     };
 
     "grid_health_stress_500_shapes_random_positions"_test = [] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
 
         auto builder = *Painter::create(
@@ -909,7 +909,7 @@ suite scrolling_tests = [] {
     };
 
     "grid_health_verify_buffer_contents"_test = [] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
 
         auto builder = *Painter::create(
@@ -965,7 +965,7 @@ suite scrolling_tests = [] {
     };
 
     "grid_health_extreme_scroll_1000_lines"_test = [] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
 
         auto builder = *Painter::create(
@@ -1005,7 +1005,7 @@ suite scrolling_tests = [] {
     };
 
     "grid_health_clear_and_refill"_test = [] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
 
         auto builder = *Painter::create(
@@ -1043,7 +1043,7 @@ suite scrolling_tests = [] {
     };
 
     "grid_refs_validity_after_partial_scroll"_test = [] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
 
         auto builder = *Painter::create(
@@ -1108,7 +1108,7 @@ suite scrolling_tests = [] {
     //=========================================================================
 
     "gpu_layout_grid_staging_format"_test = [] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
 
         auto builder = *Painter::create(
@@ -1157,7 +1157,7 @@ suite scrolling_tests = [] {
     };
 
     "gpu_layout_verify_prim_indices_valid"_test = [] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
 
         auto builder = *Painter::create(
@@ -1201,7 +1201,7 @@ suite scrolling_tests = [] {
     };
 
     "gpu_layout_after_scroll_grid_valid"_test = [] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
 
         auto builder = *Painter::create(
@@ -1260,7 +1260,7 @@ suite scrolling_tests = [] {
     };
 
     "gpu_layout_prim_row_offset_after_scroll"_test = [] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
 
         auto builder = *Painter::create(
@@ -1323,7 +1323,7 @@ suite scrolling_tests = [] {
     };
 
     "gpu_layout_incremental_add_verify_each_step"_test = [] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
 
         auto builder = *Painter::create(
@@ -1365,7 +1365,7 @@ suite scrolling_tests = [] {
     };
 
     "gpu_layout_scroll_step_by_step_verify"_test = [] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
 
         auto builder = *Painter::create(
@@ -1478,7 +1478,7 @@ suite scrolling_tests = [] {
     };
 
     "gpu_layout_multiline_shape_grid_coverage"_test = [&dumpGridState] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
 
         auto builder = *Painter::create(
@@ -1525,7 +1525,7 @@ suite scrolling_tests = [] {
     };
 
     "gpu_layout_cursor_at_10_10"_test = [&dumpGridState] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
 
         auto builder = *Painter::create(
@@ -1569,7 +1569,7 @@ suite scrolling_tests = [] {
     };
 
     "gpu_layout_large_grid_progressive"_test = [&dumpGridState] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
 
         auto builder = *Painter::create(
@@ -1646,7 +1646,7 @@ suite scrolling_tests = [] {
     };
 
     "gpu_layout_large_grid_with_scrolling"_test = [&dumpGridState] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
 
         auto builder = *Painter::create(
@@ -1693,7 +1693,7 @@ suite scrolling_tests = [] {
     };
 
     "gpu_layout_terminal_simulation"_test = [&dumpGridState] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
 
         auto builder = *Painter::create(
@@ -1743,7 +1743,7 @@ suite scrolling_tests = [] {
     };
 
     "gpu_layout_stress_50_shapes_verify_all"_test = [] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
 
         auto builder = *Painter::create(
@@ -1811,7 +1811,7 @@ suite scrolling_tests = [] {
     };
 
     "gpu_layout_uniforms_correct"_test = [] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
 
         auto builder = *Painter::create(
@@ -1848,7 +1848,7 @@ suite scrolling_tests = [] {
     };
 
     "gpu_layout_empty_after_full_scroll"_test = [] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
 
         auto builder = *Painter::create(
@@ -1892,7 +1892,7 @@ suite scrolling_tests = [] {
     };
 
     "gpu_layout_prim_staging_matches_grid_refs"_test = [] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
 
         auto builder = *Painter::create(
@@ -1952,7 +1952,7 @@ suite scrolling_tests = [] {
     };
 
     "gpu_layout_scroll_preserves_relative_positions"_test = [] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
 
         auto builder = *Painter::create(
@@ -2051,7 +2051,7 @@ suite scrolling_tests = [] {
     //=========================================================================
 
     "all_primitive_types_gpu_buffer_verification"_test = [] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
 
         auto builder = *Painter::create(
@@ -2371,7 +2371,7 @@ suite scrolling_tests = [] {
     };
 
     "cursor_offset_applied_to_all_primitive_types"_test = [] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
 
         auto builder = *Painter::create(
@@ -2466,7 +2466,7 @@ suite scrolling_tests = [] {
     };
 
     "verify_gpu_buffer_after_each_add_and_scroll"_test = [] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
 
         auto builder = *Painter::create(

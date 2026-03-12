@@ -56,12 +56,12 @@ public:
     void setScreenOrigin(float sx, float sy) override { _screenOriginX = sx; _screenOriginY = sy; }
 
 protected:
-    Diagram(CardManager::Ptr mgr, const GPUContext& gpu,
+    Diagram(GpuMemoryManager::Ptr mgr, const GPUContext& gpu,
             int32_t x, int32_t y, uint32_t widthCells, uint32_t heightCells)
         : _cardMgr(std::move(mgr)), _gpu(gpu)
         , _x(x), _y(y), _widthCells(widthCells), _heightCells(heightCells) {}
 
-    CardManager::Ptr _cardMgr;
+    GpuMemoryManager::Ptr _cardMgr;
     GPUContext _gpu;
     MetadataHandle _metaHandle = MetadataHandle::invalid();
     uint32_t _shaderGlyph = 0;

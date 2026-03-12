@@ -1,7 +1,7 @@
 #include <yetty/rpc/stream-handler.h>
 #include <yetty/rpc/stream-types.h>
 #include <yetty/gpu-screen-manager.h>
-#include <yetty/card-buffer-manager.h>
+#include <yetty/gpu-buffer-manager.h>
 #include "../gpu-screen.h"
 #include <ytrace/ytrace.hpp>
 
@@ -34,7 +34,7 @@ static GPUScreenManager::GPUScreenPtr findScreen(const std::string& cardName) {
     return nullptr;
 }
 
-// Helper to get first available CardManager
+// Helper to get first available GpuMemoryManager
 static GPUScreenManager::GPUScreenPtr getFirstScreen() {
     auto mgrResult = GPUScreenManager::instance();
     if (!mgrResult) return nullptr;
@@ -45,7 +45,7 @@ static GPUScreenManager::GPUScreenPtr getFirstScreen() {
     return screens.front();
 }
 
-static CardManager::Ptr getFirstCardManager() {
+static GpuMemoryManager::Ptr getFirstGpuMemoryManager() {
     auto screen = getFirstScreen();
     return screen ? screen->cardManager() : nullptr;
 }
@@ -54,9 +54,9 @@ Result<void> registerStreamHandlers(RpcServer& server) {
     // stream_connect: {} -> {data_shm, data_size}
     server.registerHandler(Channel::CardStream, "stream_connect",
         [](const RpcMessage& /*msg*/) -> Result<msgpack::object_handle> {
-            auto cardManager = getFirstCardManager();
+            auto cardManager = getFirstGpuMemoryManager();
             if (!cardManager) {
-                return Err<msgpack::object_handle>("No CardManager available");
+                return Err<msgpack::object_handle>("No GpuMemoryManager available");
             }
             auto bufMgr = cardManager->bufferManager();
             if (!bufMgr) {

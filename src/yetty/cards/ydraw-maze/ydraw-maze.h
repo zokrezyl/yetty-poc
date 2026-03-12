@@ -91,7 +91,7 @@ private:
     base::ObjectId _screenId = 0;
 
     // Common card state
-    CardManager::Ptr _cardMgr;
+    GpuMemoryManager::Ptr _cardMgr;
     GPUContext _gpu;
     MetadataHandle _metaHandle = MetadataHandle::invalid();
     uint32_t _shaderGlyph = 0;

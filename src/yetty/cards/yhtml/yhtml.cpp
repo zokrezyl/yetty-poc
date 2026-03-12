@@ -12,7 +12,7 @@
 using yetty::YDrawBuffer;
 #include <yetty/base/event-loop.h>
 #include <yetty/msdf-glyph-data.h>
-#include <yetty/card-texture-manager.h>
+#include <yetty/gpu-texture-manager.h>
 #include <ytrace/ytrace.hpp>
 #include <litehtml.h>
 #include <sstream>

@@ -67,8 +67,8 @@ public:
     // Get all active cards (for RPC listing)
     virtual std::vector<Card*> getAllCards() const = 0;
 
-    // CardManager access (for RPC streaming)
-    virtual CardManager::Ptr cardManager() const = 0;
+    // GpuMemoryManager access (for RPC streaming)
+    virtual GpuMemoryManager::Ptr cardManager() const = 0;
 
     // Named card registry (for RPC streaming)
     virtual void registerNamedCard(const std::string& name, uint32_t slotIndex) = 0;

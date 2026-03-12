@@ -36,7 +36,7 @@ void writePrimsGPU(float *buf, uint32_t bufBytes) {
 
 Result<void> declareBufferNeeds() override {
   if (!_cardMgr)
-    return Err<void>("declareBufferNeeds: no CardManager");
+    return Err<void>("declareBufferNeeds: no GpuMemoryManager");
   auto bufMgr = _cardMgr->bufferManager();
 
   // Reset handles — they will be re-allocated
@@ -72,7 +72,7 @@ Result<void> declareBufferNeeds() override {
 
 Result<void> allocateBuffers() override {
   if (!_cardMgr)
-    return Err<void>("allocateBuffers: no CardManager");
+    return Err<void>("allocateBuffers: no GpuMemoryManager");
   auto bufMgr = _cardMgr->bufferManager();
 
   // Allocate and write compact prim data
@@ -221,7 +221,7 @@ Result<void> writeTextures() override {
 
 Result<void> writeBuffers() override {
   if (!_cardMgr)
-    return Err<void>("writeBuffers: no CardManager");
+    return Err<void>("writeBuffers: no GpuMemoryManager");
 
   ydebug("writeBuffers: bufferDirty={} metaDirty={} primHandle={} "
          "derivedHandle={} scrollingMode={}",

@@ -17,7 +17,7 @@
 #include <limits>
 #include <numeric>
 #include <unordered_map>
-#include <yetty/card-texture-manager.h>
+#include <yetty/gpu-texture-manager.h>
 #include <yetty/msdf-glyph-data.h> // For GlyphMetadataGPU
 #include <yetty/ypaint/canvas.h>
 #include <yetty/ypaint/painter.h>
@@ -38,7 +38,7 @@ namespace yetty::ypaint {
 class PainterImpl : public Painter {
 public:
   PainterImpl(FontManager::Ptr fontManager, GpuAllocator::Ptr allocator,
-              CardManager::Ptr cardMgr, uint32_t metaSlotIndex,
+              GpuMemoryManager::Ptr cardMgr, uint32_t metaSlotIndex,
               bool scrollingMode = false)
       : _fontManager(std::move(fontManager)),
         _gpuAllocator(std::move(allocator)), _cardMgr(std::move(cardMgr)),
@@ -98,7 +98,7 @@ private:
 
 Result<Painter::Ptr> Painter::createImpl(FontManager::Ptr fontManager,
                                          GpuAllocator::Ptr allocator,
-                                         CardManager::Ptr cardMgr,
+                                         GpuMemoryManager::Ptr cardMgr,
                                          uint32_t metaSlotIndex,
                                          bool scrollingMode) {
   return Ok(
@@ -110,7 +110,7 @@ Result<Painter::Ptr> Painter::createImpl(FontManager::Ptr fontManager,
                                          GpuAllocator::Ptr allocator,
                                          bool scrollingMode) {
   return Ok(Ptr(new PainterImpl(std::move(fontManager), std::move(allocator),
-                                CardManager::Ptr{}, 0, scrollingMode)));
+                                GpuMemoryManager::Ptr{}, 0, scrollingMode)));
 }
 
 } // namespace yetty::ypaint

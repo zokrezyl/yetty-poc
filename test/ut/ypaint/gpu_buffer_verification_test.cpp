@@ -14,7 +14,7 @@
 
 #include <boost/ut.hpp>
 #include <yetty/ypaint/painter.h>
-#include <yetty/card-manager.h>
+#include <yetty/gpu-memory-manager.h>
 #include <yetty/gpu-allocator.h>
 #include "yetty/ypaint/ypaint-buffer.h"
 #include "yetty/ypaint/ypaint-types.gen.h"

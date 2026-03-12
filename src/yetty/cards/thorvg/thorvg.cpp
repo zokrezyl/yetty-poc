@@ -422,7 +422,7 @@ Result<CardPtr> ThorVG::create(
     const std::string& payload)
 {
     if (!ctx.cardManager) {
-        return Err<CardPtr>("ThorVG::create: null CardManager");
+        return Err<CardPtr>("ThorVG::create: null GpuMemoryManager");
     }
     auto card = std::make_shared<ThorVGImpl>(ctx, x, y, widthCells, heightCells, args, payload);
     if (auto res = card->init(); !res) {

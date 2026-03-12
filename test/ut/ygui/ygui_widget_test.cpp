@@ -13,8 +13,8 @@
 #include "yetty/ydraw/ydraw-types.gen.h"
 #include "yetty/ydraw/ydraw-prim-writer.gen.h"
 #include <yetty/ydraw-builder.h>
-#include <yetty/card-manager.h>
-#include <yetty/card-buffer-manager.h>
+#include <yetty/gpu-memory-manager.h>
+#include <yetty/gpu-buffer-manager.h>
 #include <yetty/font-manager.h>
 #include <yetty/ms-msdf-font.h>
 #include <yetty/msdf-atlas.h>
@@ -121,11 +121,11 @@ private:
 };
 
 //-----------------------------------------------------------------------------
-// Mock CardManager
+// Mock GpuMemoryManager
 //-----------------------------------------------------------------------------
-class WMockCardManager : public CardManager {
+class WMockGpuMemoryManager : public GpuMemoryManager {
 public:
-    WMockCardManager() : _bufMgr(std::make_shared<WMockCardBufferManager>()), _metadata(16 * 64, 0) {}
+    WMockGpuMemoryManager() : _bufMgr(std::make_shared<WMockCardBufferManager>()), _metadata(16 * 64, 0) {}
     Result<MetadataHandle> allocateMetadata(uint32_t) override { return Ok(MetadataHandle{0, 64}); }
     Result<void> deallocateMetadata(MetadataHandle) override { return Ok(); }
     Result<void> writeMetadata(MetadataHandle h, const void* data, uint32_t size) override {
@@ -137,7 +137,7 @@ public:
         return writeMetadata(MetadataHandle{h.offset + offset, h.size - offset}, data, size);
     }
     CardBufferManager::Ptr bufferManager() const override { return _bufMgr; }
-    CardTextureManager::Ptr textureManager() const override { return nullptr; }
+    GpuTextureManager::Ptr textureManager() const override { return nullptr; }
     WGPUBuffer metadataBuffer() const override { return nullptr; }
     WGPUBindGroupLayout sharedBindGroupLayout() const override { return nullptr; }
     WGPUBindGroup sharedBindGroup() const override { return nullptr; }
@@ -228,7 +228,7 @@ FontManager::Ptr testFontManager() {
 //=============================================================================
 
 struct GpuResult {
-    std::shared_ptr<WMockCardManager> cardMgr;
+    std::shared_ptr<WMockGpuMemoryManager> cardMgr;
     YDrawBuilder::Ptr builder;
     YDrawBuffer::Ptr buffer;
     const float* storage;
@@ -255,8 +255,8 @@ GpuResult runWidgetPipeline(float sceneW, float sceneH,
     engine.rebuild();
 
     // Builder processes buffer → GPU
-    auto mockCM = std::make_shared<WMockCardManager>();
-    auto builder = *YDrawBuilder::create(fm, testAllocator(), buf, std::static_pointer_cast<CardManager>(mockCM), 0);
+    auto mockCM = std::make_shared<WMockGpuMemoryManager>();
+    auto builder = *YDrawBuilder::create(fm, testAllocator(), buf, std::static_pointer_cast<GpuMemoryManager>(mockCM), 0);
     builder->setSceneBounds(0, 0, sceneW, sceneH);
     builder->setBgColor(0xFF1A1A2E);
     builder->calculate();
@@ -945,8 +945,8 @@ suite widget_gpu_full_demo = [] {
         engine.addWidget(btn);
         engine.rebuild();
 
-        auto mockCM = std::make_shared<WMockCardManager>();
-        auto builder = *YDrawBuilder::create(fm, testAllocator(), buf, std::static_pointer_cast<CardManager>(mockCM), 0);
+        auto mockCM = std::make_shared<WMockGpuMemoryManager>();
+        auto builder = *YDrawBuilder::create(fm, testAllocator(), buf, std::static_pointer_cast<GpuMemoryManager>(mockCM), 0);
         builder->setSceneBounds(0, 0, 300, 200);
         builder->setBgColor(0xFF1A1A2E);
         builder->calculate();
@@ -1182,9 +1182,9 @@ suite widget_direct_to_gpu = [] {
         buf->setSceneBounds(0, 0, 300, 200);
 
         auto fm = testFontManager();
-        auto mockCM = std::make_shared<WMockCardManager>();
+        auto mockCM = std::make_shared<WMockGpuMemoryManager>();
         auto builder = *YDrawBuilder::create(fm, testAllocator(), buf,
-            std::static_pointer_cast<CardManager>(mockCM), 0);
+            std::static_pointer_cast<GpuMemoryManager>(mockCM), 0);
         builder->setSceneBounds(0, 0, 300, 200);
         builder->setBgColor(0xFF1A1A2E);
         builder->calculate();
@@ -1242,9 +1242,9 @@ suite card_exact_flow = [] {
         auto buf = *YDrawBuffer::create();
 
         // Step 2: Create builder BEFORE engine (card init line 368-372)
-        auto mockCM = std::make_shared<WMockCardManager>();
+        auto mockCM = std::make_shared<WMockGpuMemoryManager>();
         auto builder = *YDrawBuilder::create(fm, testAllocator(), buf,
-            std::static_pointer_cast<CardManager>(mockCM), 0);
+            std::static_pointer_cast<GpuMemoryManager>(mockCM), 0);
 
         // Step 3: Set viewport (card init line 373)
         builder->setViewport(40, 15);
@@ -1338,9 +1338,9 @@ suite card_exact_flow = [] {
         if (!fm) return;
 
         auto buf = *YDrawBuffer::create();
-        auto mockCM = std::make_shared<WMockCardManager>();
+        auto mockCM = std::make_shared<WMockGpuMemoryManager>();
         auto builder = *YDrawBuilder::create(fm, testAllocator(), buf,
-            std::static_pointer_cast<CardManager>(mockCM), 0);
+            std::static_pointer_cast<GpuMemoryManager>(mockCM), 0);
         builder->setViewport(30, 10);
 
         YGuiEngine engine(buf.get());

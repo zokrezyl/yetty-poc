@@ -6,9 +6,9 @@ add_executable(card-runner
     main.cpp
     # Core sources needed for card infrastructure
     ${CMAKE_SOURCE_DIR}/src/yetty/card-factory.cpp
-    ${CMAKE_SOURCE_DIR}/src/yetty/card-manager.cpp
-    ${CMAKE_SOURCE_DIR}/src/yetty/card-buffer-manager.cpp
-    ${CMAKE_SOURCE_DIR}/src/yetty/card-texture-manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/yetty/gpu-memory-manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/yetty/gpu-buffer-manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/yetty/gpu-texture-manager.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/card.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/gpu-allocator.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/shader-manager.cpp

@@ -866,7 +866,7 @@ Result<Image::Ptr> Image::createImpl(
     (void)ctx;
 
     if (!yettyCtx.cardManager) {
-        return Err<Ptr>("Image::createImpl: null CardManager");
+        return Err<Ptr>("Image::createImpl: null GpuMemoryManager");
     }
 
     auto card = std::make_shared<ImageImpl>(

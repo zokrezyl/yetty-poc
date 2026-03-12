@@ -2,7 +2,7 @@
 
 #include <yetty/base/object.h>
 #include <yetty/base/factory.h>
-#include <yetty/card-manager.h>
+#include <yetty/gpu-memory-manager.h>
 #include <yetty/ms-msdf-font.h>
 #include <yetty/msdf-atlas.h>
 #include <yetty/msdf-cdb-provider.h>
@@ -152,7 +152,7 @@ public:
     static Result<Ptr> createImpl(FontManager::Ptr fontManager,
                                   GpuAllocator::Ptr allocator,
                                   std::shared_ptr<YDrawBuffer> buffer,
-                                  CardManager::Ptr cardMgr,
+                                  GpuMemoryManager::Ptr cardMgr,
                                   uint32_t metaSlotIndex);
 
     // Lightweight factory — no GPU card manager (for offline/file writers).

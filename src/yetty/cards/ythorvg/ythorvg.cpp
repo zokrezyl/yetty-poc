@@ -540,7 +540,7 @@ Result<CardPtr> YThorVG::create(
     const std::string& payload)
 {
     if (!ctx.cardManager) {
-        return Err<CardPtr>("YThorVG::create: null CardManager");
+        return Err<CardPtr>("YThorVG::create: null GpuMemoryManager");
     }
     auto card = std::make_shared<YThorVGImpl>(ctx, x, y, widthCells, heightCells, args, payload);
     if (auto res = card->init(); !res) {

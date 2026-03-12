@@ -244,7 +244,7 @@ private:
     std::string _payloadStr;
 
     // Common card state (was in Card base class)
-    CardManager::Ptr _cardMgr;
+    GpuMemoryManager::Ptr _cardMgr;
     GPUContext _gpu;
     MetadataHandle _metaHandle = MetadataHandle::invalid();
     uint32_t _shaderGlyph = 0;

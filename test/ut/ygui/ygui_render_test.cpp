@@ -24,8 +24,8 @@
 #include "yetty/ydraw/ydraw-types.gen.h"
 #include "yetty/ydraw/ydraw-prim-writer.gen.h"
 #include <yetty/ydraw-builder.h>
-#include <yetty/card-manager.h>
-#include <yetty/card-buffer-manager.h>
+#include <yetty/gpu-memory-manager.h>
+#include <yetty/gpu-buffer-manager.h>
 #include <yetty/font-manager.h>
 #include <yetty/ms-msdf-font.h>
 #include <yetty/msdf-atlas.h>
@@ -120,11 +120,11 @@ private:
 };
 
 //=============================================================================
-// Mock CardManager
+// Mock GpuMemoryManager
 //=============================================================================
-class MockCardManager : public CardManager {
+class MockGpuMemoryManager : public GpuMemoryManager {
 public:
-    MockCardManager()
+    MockGpuMemoryManager()
         : _bufMgr(std::make_shared<MockCardBufferManager>())
         , _metadata(16 * 64, 0) {}
 
@@ -136,7 +136,7 @@ public:
     Result<void> writeMetadata(MetadataHandle handle,
                                 const void* data, uint32_t size) override {
         if (handle.offset + size > _metadata.size()) {
-            return Err<void>("MockCardManager: metadata overflow");
+            return Err<void>("MockGpuMemoryManager: metadata overflow");
         }
         std::memcpy(_metadata.data() + handle.offset, data, size);
         return Ok();
@@ -150,7 +150,7 @@ public:
     }
 
     CardBufferManager::Ptr bufferManager() const override { return _bufMgr; }
-    CardTextureManager::Ptr textureManager() const override { return nullptr; }
+    GpuTextureManager::Ptr textureManager() const override { return nullptr; }
     WGPUBuffer metadataBuffer() const override { return nullptr; }
     WGPUBindGroupLayout sharedBindGroupLayout() const override { return nullptr; }
     WGPUBindGroup sharedBindGroup() const override { return nullptr; }
@@ -266,7 +266,7 @@ static FontManager::Ptr testFontManager() {
 // Pipeline helper
 //=============================================================================
 struct PipelineResult {
-    std::shared_ptr<MockCardManager> cardMgr;
+    std::shared_ptr<MockGpuMemoryManager> cardMgr;
     YDrawBuilder::Ptr builder;
     const float* storage;
     const uint32_t* meta;
@@ -283,7 +283,7 @@ struct PipelineResult {
 static PipelineResult runPipeline(YDrawBuffer::Ptr buf,
                                    float sceneW, float sceneH,
                                    FontManager::Ptr fontMgr = nullptr) {
-    auto mockCM = std::make_shared<MockCardManager>();
+    auto mockCM = std::make_shared<MockGpuMemoryManager>();
     auto builder = *YDrawBuilder::create(fontMgr, testAllocator(), buf, mockCM, 0);
     builder->setSceneBounds(0, 0, sceneW, sceneH);
     builder->calculate();
@@ -771,7 +771,7 @@ suite ygui_full_scenario_tests = [] {
         if (!fm) return;
 
         auto buf = *YDrawBuffer::create();
-        auto mockCM = std::make_shared<MockCardManager>();
+        auto mockCM = std::make_shared<MockGpuMemoryManager>();
         auto builder = *YDrawBuilder::create(fm, testAllocator(), buf, mockCM, 0);
         builder->setSceneBounds(0, 0, 300.0f, 200.0f);
 
@@ -830,7 +830,7 @@ suite ygui_metadata_tests = [] {
         auto buf = *YDrawBuffer::create();
         yguiAddBox(buf.get(), 10, 10, 100, 30, 0xFF333344, 4);
 
-        auto mockCM = std::make_shared<MockCardManager>();
+        auto mockCM = std::make_shared<MockGpuMemoryManager>();
         auto builder = *YDrawBuilder::create(nullptr, nullptr, buf, mockCM, 0);
         builder->setSceneBounds(0, 0, 200.0f, 100.0f);
         builder->setBgColor(0xFF1A1A2E);  // ygui dark theme bg
@@ -850,7 +850,7 @@ suite ygui_metadata_tests = [] {
         auto buf = *YDrawBuffer::create();
         yguiAddBox(buf.get(), 10, 10, 100, 30, 0xFF333344, 4);
 
-        auto mockCM = std::make_shared<MockCardManager>();
+        auto mockCM = std::make_shared<MockGpuMemoryManager>();
         auto builder = *YDrawBuilder::create(nullptr, nullptr, buf, mockCM, 0);
 
         float pixelW = 800.0f, pixelH = 600.0f;

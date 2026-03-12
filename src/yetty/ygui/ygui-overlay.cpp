@@ -179,7 +179,7 @@ Result<void> YGuiOverlayImpl::init() noexcept {
     if (!_ctx.gpu.device || !_ctx.gpu.queue)
         return Err<void>("YGuiOverlay: GPUContext not initialized");
 
-    // Create YDrawBuffer and builder (no CardManager - standalone)
+    // Create YDrawBuffer and builder (no GpuMemoryManager - standalone)
     _buffer = *YDrawBuffer::create();
     auto builderRes = YDrawBuilder::create(_ctx.fontManager, _ctx.gpuAllocator, _buffer);
     if (!builderRes) return Err<void>("YGuiOverlay: failed to create builder", builderRes);

@@ -31,9 +31,9 @@ add_library(yetty_test_lib STATIC
     ${CMAKE_SOURCE_DIR}/src/yetty/ms-msdf-font.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/bm-font.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/shader-font.cpp
-    ${CMAKE_SOURCE_DIR}/src/yetty/card-manager.cpp
-    ${CMAKE_SOURCE_DIR}/src/yetty/card-buffer-manager.cpp
-    ${CMAKE_SOURCE_DIR}/src/yetty/card-texture-manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/yetty/gpu-memory-manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/yetty/gpu-buffer-manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/yetty/gpu-texture-manager.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/gpu-allocator.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/shared-memory.cpp
     # ${CMAKE_SOURCE_DIR}/src/yetty/widget-factory.cpp  # TODO: refactor later

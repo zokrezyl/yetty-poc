@@ -9,7 +9,7 @@ namespace rpc {
 /**
  * Register RPC handlers for card buffer/texture streaming.
  *
- * Uses GPUScreenManager singleton to access CardManager.
+ * Uses GPUScreenManager singleton to access GpuMemoryManager.
  *
  * Methods on Channel::CardStream:
  *   - stream_connect: {} -> {data_shm, data_size}

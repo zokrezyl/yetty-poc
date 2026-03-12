@@ -23,15 +23,15 @@ extern "C" {
 #include "yetty/ydraw/ydraw-prim-writer.gen.h"
 #include "yetty/ypdf/pdf-renderer.h"
 #include <yetty/ydraw-builder.h>
-#include <yetty/card-manager.h>
-#include <yetty/card-buffer-manager.h>
+#include <yetty/gpu-memory-manager.h>
+#include <yetty/gpu-buffer-manager.h>
 #include <yetty/font-manager.h>
 #include <yetty/ms-msdf-font.h>
 #include <yetty/msdf-atlas.h>
 #include <yetty/msdf-cdb-provider.h>
 #include <yetty/gpu-allocator.h>
 
-#include <yetty/card-texture-manager.h>
+#include <yetty/gpu-texture-manager.h>
 #include <yetty/msdf-glyph-data.h>
 
 #include <cstring>
@@ -131,9 +131,9 @@ private:
 };
 
 //=============================================================================
-// Mock CardTextureManager — stores atlas pixels in CPU memory
+// Mock GpuTextureManager — stores atlas pixels in CPU memory
 //=============================================================================
-class MockCardTextureManager : public CardTextureManager {
+class MockGpuTextureManager : public GpuTextureManager {
 public:
     Result<TextureHandle> allocate(uint32_t width, uint32_t height) override {
         uint32_t id = static_cast<uint32_t>(_entries.size()) + 1;
@@ -149,7 +149,7 @@ public:
                 return Ok();
             }
         }
-        return Err<void>("MockCardTextureManager: handle not found");
+        return Err<void>("MockGpuTextureManager: handle not found");
     }
 
     AtlasPosition getAtlasPosition(TextureHandle handle) const override {
@@ -197,13 +197,13 @@ private:
 };
 
 //=============================================================================
-// Mock CardManager
+// Mock GpuMemoryManager
 //=============================================================================
-class MockCardManager : public CardManager {
+class MockGpuMemoryManager : public GpuMemoryManager {
 public:
-    MockCardManager()
+    MockGpuMemoryManager()
         : _bufMgr(std::make_shared<MockCardBufferManager>())
-        , _texMgr(std::make_shared<MockCardTextureManager>())
+        , _texMgr(std::make_shared<MockGpuTextureManager>())
         , _metadata(16 * 64, 0) {}
 
     Result<MetadataHandle> allocateMetadata(uint32_t size) override {
@@ -214,7 +214,7 @@ public:
     Result<void> writeMetadata(MetadataHandle handle,
                                 const void* data, uint32_t size) override {
         if (handle.offset + size > _metadata.size()) {
-            return Err<void>("MockCardManager: metadata overflow");
+            return Err<void>("MockGpuMemoryManager: metadata overflow");
         }
         std::memcpy(_metadata.data() + handle.offset, data, size);
         return Ok();
@@ -228,7 +228,7 @@ public:
     }
 
     CardBufferManager::Ptr bufferManager() const override { return _bufMgr; }
-    CardTextureManager::Ptr textureManager() const override { return _texMgr; }
+    GpuTextureManager::Ptr textureManager() const override { return _texMgr; }
     WGPUBuffer metadataBuffer() const override { return nullptr; }
     WGPUBindGroupLayout sharedBindGroupLayout() const override { return nullptr; }
     WGPUBindGroup sharedBindGroup() const override { return nullptr; }
@@ -237,7 +237,7 @@ public:
     Result<void> flush(WGPUQueue) override { return Ok(); }
 
     std::shared_ptr<MockCardBufferManager> mockBufMgr() const { return _bufMgr; }
-    std::shared_ptr<MockCardTextureManager> mockTexMgr() const { return _texMgr; }
+    std::shared_ptr<MockGpuTextureManager> mockTexMgr() const { return _texMgr; }
 
     const uint32_t* metadataAsU32() const {
         return reinterpret_cast<const uint32_t*>(_metadata.data());
@@ -251,7 +251,7 @@ public:
 
 private:
     std::shared_ptr<MockCardBufferManager> _bufMgr;
-    std::shared_ptr<MockCardTextureManager> _texMgr;
+    std::shared_ptr<MockGpuTextureManager> _texMgr;
     std::vector<uint8_t> _metadata;
 };
 
@@ -348,7 +348,7 @@ static FontManager::Ptr testFontManager() {
 //      → allocateTextures → writeTextures → finalize(writeBuffers)
 //=============================================================================
 struct PipelineResult {
-    std::shared_ptr<MockCardManager> cardMgr;
+    std::shared_ptr<MockGpuMemoryManager> cardMgr;
     YDrawBuilder::Ptr builder;
     YDrawBuffer::Ptr buffer;
 
@@ -369,7 +369,7 @@ static PipelineResult runFullPipeline(const std::string& pdfPath) {
     pdfioFileClose(pdf);
 
     auto fm = testFontManager();
-    r.cardMgr = std::make_shared<MockCardManager>();
+    r.cardMgr = std::make_shared<MockGpuMemoryManager>();
     r.builder = *YDrawBuilder::create(fm, testAllocator(), r.buffer,
                                        r.cardMgr, 0);
 

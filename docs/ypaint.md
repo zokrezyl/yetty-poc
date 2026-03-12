@@ -79,7 +79,7 @@ circles.sh
     Terminal OSC Parser
            │
            ▼
-    ypaint card creation (CardManager)
+    ypaint card creation (GpuMemoryManager)
            │
            ▼
     yaml2ypaint → YPaintBuffer

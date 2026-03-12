@@ -121,3 +121,10 @@ float cellSizeX() const override { return _cellSizeX; }
 float cellSizeY() const override { return _cellSizeY; }
 uint32_t gridWidth() const override { return _gridWidth; }
 uint32_t gridHeight() const override { return _gridHeight; }
+
+// GPU buffer offsets (in float words)
+uint32_t gpuPrimitiveOffset() const override {
+  return _primHandle.isValid() ? _primHandle.offset / sizeof(float) : 0;
+}
+uint32_t gpuGridOffset() const override { return _gpuGridOffset; }
+uint32_t gpuGlyphOffset() const override { return _gpuGlyphOffset; }

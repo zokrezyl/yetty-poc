@@ -12,7 +12,7 @@
 #include <yetty/wgpu-compat.h>
 #include <yetty/yetty-context.h>
 #include <yetty/card-factory.h>
-#include <yetty/card-manager.h>
+#include <yetty/gpu-memory-manager.h>
 #include <yetty/shader-manager.h>
 #include <yetty/font-manager.h>
 #include <yetty/gpu-allocator.h>
@@ -223,7 +223,7 @@ private:
 
         _ctx.gpuAllocator = std::make_shared<GpuAllocator>(_device);
 
-        // Create shared bind group layout (required by CardManager)
+        // Create shared bind group layout (required by GpuMemoryManager)
         if (auto res = createSharedBindGroupLayout(); !res) {
             return Err<void>("Failed to create shared bind group layout", res);
         }
@@ -245,10 +245,10 @@ private:
             _ctx.config = *configResult;
         }
 
-        auto cardMgrResult = CardManager::create(&_ctx.gpu, _ctx.gpuAllocator,
+        auto cardMgrResult = GpuMemoryManager::create(&_ctx.gpu, _ctx.gpuAllocator,
                                                   _uniformBuffer, sizeof(SharedUniforms));
         if (!cardMgrResult) {
-            return Err<void>("Failed to create CardManager", cardMgrResult);
+            return Err<void>("Failed to create GpuMemoryManager", cardMgrResult);
         }
         _ctx.cardManager = *cardMgrResult;
 
@@ -263,7 +263,7 @@ private:
 
     Result<void> createSharedBindGroupLayout() {
         // 5 entries: uniform, metadata storage, data storage, texture, sampler
-        // This matches the CardManager's shared bind group layout
+        // This matches the GpuMemoryManager's shared bind group layout
         std::array<WGPUBindGroupLayoutEntry, 5> layoutEntries = {};
 
         layoutEntries[0].binding = 0;
@@ -407,10 +407,10 @@ private:
             yinfo("Card Runner: shader saved to /tmp/card-runner-shader.wgsl");
         }
 
-        // Use CardManager's shared bind group layout (like gpu-screen.cpp does)
+        // Use GpuMemoryManager's shared bind group layout (like gpu-screen.cpp does)
         WGPUBindGroupLayout sharedLayout = _ctx.cardManager->sharedBindGroupLayout();
         if (!sharedLayout) {
-            return Err<void>("No shared bind group layout from CardManager");
+            return Err<void>("No shared bind group layout from GpuMemoryManager");
         }
 
         // Create pipeline using the shared layout
@@ -473,7 +473,7 @@ private:
             wgpuSurfaceConfigure(_surface, &_surfaceConfig);
         }
 
-        // Update card - CardManager's flush() handles bind group updates
+        // Update card - GpuMemoryManager's flush() handles bind group updates
         _card->renderToStaging(time);
         if (_card->needsBuffer() && _card->needsBufferRealloc()) {
             _card->declareBufferNeeds();
@@ -522,7 +522,7 @@ private:
 
         WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
         wgpuRenderPassEncoderSetPipeline(pass, _pipeline);
-        // Use CardManager's shared bind group (like gpu-screen.cpp does)
+        // Use GpuMemoryManager's shared bind group (like gpu-screen.cpp does)
         WGPUBindGroup bindGroup = _ctx.cardManager->sharedBindGroup();
         wgpuRenderPassEncoderSetBindGroup(pass, 0, bindGroup, 0, nullptr);
         wgpuRenderPassEncoderDraw(pass, 6, 1, 0, 0);
@@ -654,7 +654,7 @@ struct EmojiGlyphMetadata {
     _pad: vec2<f32>,
 }
 
-// Shared bindings (group 0) - matches CardManager's layout
+// Shared bindings (group 0) - matches GpuMemoryManager's layout
 @group(0) @binding(0) var<uniform> globals: SharedUniforms;
 @group(0) @binding(1) var<storage, read> cardMetadata: array<u32>;
 @group(0) @binding(2) var<storage, read> cardStorage: array<f32>;

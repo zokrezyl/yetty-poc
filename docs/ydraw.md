@@ -18,7 +18,7 @@ YDrawBuffer              ← pure data container (prims, text, fonts, scene meta
   ▼
 YDrawBuilder             ← computes AABBs, grid, glyphs; manages GPU lifecycle
   │
-  │  writes to via CardManager
+  │  writes to via GpuMemoryManager
   ▼
 cardStorage[]            ← GPU storage buffer (binding 2) — prims + grid + glyphs
 cardMetadata[]           ← GPU storage buffer (binding 1) — 64-byte metadata per card
@@ -37,7 +37,7 @@ The shader reads from **two** storage buffers:
 | 1 | `cardMetadata[]` | Array of `u32`. Each card gets a 64-byte (16 u32) slot. |
 | 2 | `cardStorage[]` | Array of `f32`. Contains prim data, grid data, glyphs. Shared by all cards. |
 
-Both are backed by CPU-side arrays in `CardManager` (metadata) and
+Both are backed by CPU-side arrays in `GpuMemoryManager` (metadata) and
 `CardBufferManager` (storage). Cards write to CPU pointers; the managers flush
 dirty ranges to GPU each frame.
 
@@ -467,7 +467,7 @@ Takes a `YDrawBuffer` at creation time (shared pointer).
 ### Factory
 
 ```cpp
-// Full — with CardManager for GPU lifecycle
+// Full — with GpuMemoryManager for GPU lifecycle
 YDrawBuilder::create(fontManager, gpuAllocator, buffer, cardMgr, metaSlotIndex);
 
 // Lightweight — no GPU (for tests, offline tools)
@@ -711,10 +711,10 @@ Then the card lifecycle:
 6. `flush()` → upload dirty ranges to GPU
 7. Shader renders using O(1) grid lookup per pixel
 
-## Testing: Mock CardManager
+## Testing: Mock GpuMemoryManager
 
 To test the real builder write pipeline without GPU, create mock implementations
-of `CardBufferManager` and `CardManager` that use plain CPU byte arrays:
+of `CardBufferManager` and `GpuMemoryManager` that use plain CPU byte arrays:
 
 ```cpp
 class MockCardBufferManager : public CardBufferManager {
@@ -748,11 +748,11 @@ public:
     }
 };
 
-class MockCardManager : public CardManager {
+class MockGpuMemoryManager : public GpuMemoryManager {
     std::shared_ptr<MockCardBufferManager> _bufMgr;
     std::vector<uint8_t> _metadata;
 public:
-    MockCardManager() : _bufMgr(std::make_shared<MockCardBufferManager>()),
+    MockGpuMemoryManager() : _bufMgr(std::make_shared<MockCardBufferManager>()),
                         _metadata(16 * 64, 0) {}
     CardBufferManager::Ptr bufferManager() const override { return _bufMgr; }
     Result<void> writeMetadata(MetadataHandle h, const void* data, uint32_t size) override {
@@ -770,7 +770,7 @@ Test pattern:
 auto buf = *YDrawBuffer::create();
 buf->addRoundedBox(0, 100, 100, 40, 30, 5,5,5,5, 0xFFAABBCC, 0, 0, 0);
 
-auto mockCM = std::make_shared<MockCardManager>();
+auto mockCM = std::make_shared<MockGpuMemoryManager>();
 auto builder = *YDrawBuilder::create(nullptr, nullptr, buf, mockCM, /*slot=*/0);
 builder->setSceneBounds(0, 0, 200, 200);
 builder->calculate();

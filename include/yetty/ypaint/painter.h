@@ -7,7 +7,7 @@
 #include <vector>
 #include <yetty/base/factory.h>
 #include <yetty/base/object.h>
-#include <yetty/card-manager.h>
+#include <yetty/gpu-memory-manager.h>
 #include <yetty/font-manager.h>
 #include <yetty/ms-msdf-font.h>
 #include <yetty/msdf-atlas.h>
@@ -177,7 +177,7 @@ public:
   // Full factory — with GPU card manager for buffer lifecycle.
   static Result<Ptr> createImpl(FontManager::Ptr fontManager,
                                 GpuAllocator::Ptr allocator,
-                                CardManager::Ptr cardMgr,
+                                GpuMemoryManager::Ptr cardMgr,
                                 uint32_t metaSlotIndex,
                                 bool scrollingMode = false);
 
@@ -325,6 +325,11 @@ public:
   virtual float cellSizeY() const = 0;
   virtual uint32_t gridWidth() const = 0;
   virtual uint32_t gridHeight() const = 0;
+
+  // GPU buffer offsets (in float words, valid after allocateBuffers)
+  virtual uint32_t gpuPrimitiveOffset() const = 0;
+  virtual uint32_t gpuGridOffset() const = 0;
+  virtual uint32_t gpuGlyphOffset() const = 0;
 
   //=========================================================================
   // GPU buffer lifecycle

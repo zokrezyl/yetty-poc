@@ -2,8 +2,8 @@
 #include "yetty/ypaint/ypaint-buffer.h"
 #include "yetty/ypaint/ypaint-types.gen.h"
 #include <yetty/ypaint/painter.h>
-#include <yetty/card-manager.h>
-#include <yetty/card-buffer-manager.h>
+#include <yetty/gpu-memory-manager.h>
+#include <yetty/gpu-buffer-manager.h>
 #include <yetty/gpu-allocator.h>
 
 #include <cstring>
@@ -54,9 +54,9 @@ private:
     std::map<std::pair<uint32_t, std::string>, BufferHandle> _allocs;
 };
 
-class MockCardManager : public CardManager {
+class MockGpuMemoryManager : public GpuMemoryManager {
 public:
-    MockCardManager() : _bufMgr(std::make_shared<MockCardBufferManager>()), _meta(16*64, 0) {}
+    MockGpuMemoryManager() : _bufMgr(std::make_shared<MockCardBufferManager>()), _meta(16*64, 0) {}
     Result<MetadataHandle> allocateMetadata(uint32_t) override { return Ok(MetadataHandle{0,64}); }
     Result<void> deallocateMetadata(MetadataHandle) override { return Ok(); }
     Result<void> writeMetadata(MetadataHandle h, const void* d, uint32_t s) override {
@@ -68,7 +68,7 @@ public:
         return writeMetadata(MetadataHandle{h.offset+off, h.size-off}, d, s);
     }
     CardBufferManager::Ptr bufferManager() const override { return _bufMgr; }
-    CardTextureManager::Ptr textureManager() const override { return nullptr; }
+    GpuTextureManager::Ptr textureManager() const override { return nullptr; }
     WGPUBuffer metadataBuffer() const override { return nullptr; }
     WGPUBindGroupLayout sharedBindGroupLayout() const override { return nullptr; }
     WGPUBindGroup sharedBindGroup() const override { return nullptr; }
@@ -91,7 +91,7 @@ static YPaintBuffer::Ptr createShapesDemoBuffer() {
 }
 
 int main() {
-    auto cardMgr = std::make_shared<MockCardManager>();
+    auto cardMgr = std::make_shared<MockGpuMemoryManager>();
     auto gpuAlloc = std::make_shared<GpuAllocator>(nullptr);
 
     const float CELL_W = 10, CELL_H = 20;

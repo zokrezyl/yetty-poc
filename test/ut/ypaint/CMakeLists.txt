@@ -38,9 +38,9 @@ add_executable(ypaint_tests
     ${CMAKE_SOURCE_DIR}/src/yetty/font-manager.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/bm-font.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/shader-font.cpp
-    ${CMAKE_SOURCE_DIR}/src/yetty/card-manager.cpp
-    ${CMAKE_SOURCE_DIR}/src/yetty/card-buffer-manager.cpp
-    ${CMAKE_SOURCE_DIR}/src/yetty/card-texture-manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/yetty/gpu-memory-manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/yetty/gpu-buffer-manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/yetty/gpu-texture-manager.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/gpu-allocator.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/shared-memory.cpp
     # Font system (font-manager transitive deps)
@@ -90,9 +90,9 @@ add_executable(ypaint_debug_grid
     ${CMAKE_SOURCE_DIR}/src/yetty/font-manager.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/bm-font.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/shader-font.cpp
-    ${CMAKE_SOURCE_DIR}/src/yetty/card-manager.cpp
-    ${CMAKE_SOURCE_DIR}/src/yetty/card-buffer-manager.cpp
-    ${CMAKE_SOURCE_DIR}/src/yetty/card-texture-manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/yetty/gpu-memory-manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/yetty/gpu-buffer-manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/yetty/gpu-texture-manager.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/gpu-allocator.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/shared-memory.cpp
     ${CMAKE_SOURCE_DIR}/src/yetty/vector-sdf-font.cpp

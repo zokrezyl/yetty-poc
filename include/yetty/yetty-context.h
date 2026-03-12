@@ -6,7 +6,7 @@
 #include <yetty/gpu-monitor.h>
 #include <yetty/shader-manager.h>
 #include <yetty/font-manager.h>
-#include <yetty/card-manager.h>
+#include <yetty/gpu-memory-manager.h>
 #include <yetty/card-factory.h>
 #include <yetty/config.h>
 #include <yetty/platform.h>
@@ -36,7 +36,7 @@ struct YettyContext {
     std::shared_ptr<YGuiOverlay> yguiOverlay;
 
     // Per-screen card manager (set by GPUScreen, not globally)
-    CardManager::Ptr cardManager;
+    GpuMemoryManager::Ptr cardManager;
 
     // ID of owning GPUScreen (set by GPUScreen, used for targeted events)
     base::ObjectId screenId = 0;

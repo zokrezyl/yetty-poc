@@ -9,8 +9,8 @@ namespace yetty {
 /**
  * SharedMemoryRegion provides cross-process shared memory access.
  *
- * Used by CardManager to share buffer/texture backing memory with clients.
- * The shm region IS the backing memory for CardBufferManager/CardTextureManager,
+ * Used by GpuMemoryManager to share buffer/texture backing memory with clients.
+ * The shm region IS the backing memory for CardBufferManager/GpuTextureManager,
  * enabling zero-copy streaming from client to GPU.
  *
  * Usage:

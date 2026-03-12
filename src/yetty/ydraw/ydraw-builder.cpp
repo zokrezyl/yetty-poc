@@ -4,7 +4,7 @@
 #endif
 
 #include <yetty/ydraw-builder.h>
-#include <yetty/card-texture-manager.h>
+#include <yetty/gpu-texture-manager.h>
 #include "ydraw-types.gen.h"
 #include "ydraw-buffer.h"
 #include "triangulate.h"
@@ -463,7 +463,7 @@ static void computeAABB(const float* data, uint32_t wc,
 class YDrawBuilderImpl : public YDrawBuilder {
 public:
     YDrawBuilderImpl(FontManager::Ptr fontManager, GpuAllocator::Ptr allocator,
-                     YDrawBuffer::Ptr buffer, CardManager::Ptr cardMgr,
+                     YDrawBuffer::Ptr buffer, GpuMemoryManager::Ptr cardMgr,
                      uint32_t metaSlotIndex)
         : _fontManager(std::move(fontManager))
         , _gpuAllocator(std::move(allocator))
@@ -906,7 +906,7 @@ public:
     //=========================================================================
 
     Result<void> declareBufferNeeds() override {
-        if (!_cardMgr) return Err<void>("declareBufferNeeds: no CardManager");
+        if (!_cardMgr) return Err<void>("declareBufferNeeds: no GpuMemoryManager");
         auto bufMgr = _cardMgr->bufferManager();
 
         // Reset handles — they will be re-allocated
@@ -940,7 +940,7 @@ public:
     }
 
     Result<void> allocateBuffers() override {
-        if (!_cardMgr) return Err<void>("allocateBuffers: no CardManager");
+        if (!_cardMgr) return Err<void>("allocateBuffers: no GpuMemoryManager");
         auto bufMgr = _cardMgr->bufferManager();
 
         // Allocate and write compact prim data (skip if no prims — text-only buffers
@@ -1072,7 +1072,7 @@ public:
     }
 
     Result<void> writeBuffers() override {
-        if (!_cardMgr) return Err<void>("writeBuffers: no CardManager");
+        if (!_cardMgr) return Err<void>("writeBuffers: no GpuMemoryManager");
 
         ydebug("writeBuffers: bufferDirty={} metaDirty={} primHandle={} derivedHandle={}", _bufferDirty, _metadataDirty, _primHandle.isValid(), _derivedHandle.isValid());
 
@@ -1859,7 +1859,7 @@ private:
     std::unordered_map<int, int> _bufferFontIdMap;
 
     // GPU state (managed by lifecycle methods)
-    CardManager::Ptr _cardMgr;
+    GpuMemoryManager::Ptr _cardMgr;
     uint32_t _metaSlotIndex = 0;
     BufferHandle _primHandle = BufferHandle::invalid();
     BufferHandle _derivedHandle = BufferHandle::invalid();
@@ -1900,7 +1900,7 @@ private:
 Result<YDrawBuilder::Ptr> YDrawBuilder::createImpl(
     FontManager::Ptr fontManager, GpuAllocator::Ptr allocator,
     std::shared_ptr<YDrawBuffer> buffer,
-    CardManager::Ptr cardMgr, uint32_t metaSlotIndex)
+    GpuMemoryManager::Ptr cardMgr, uint32_t metaSlotIndex)
 {
     // cardMgr may be null for transitional cards that still manage their own GPU state.
     // Lifecycle methods (declareBufferNeeds, allocateBuffers, etc.) validate it at call time.
@@ -1917,7 +1917,7 @@ Result<YDrawBuilder::Ptr> YDrawBuilder::createImpl(
     return Ok(Ptr(new YDrawBuilderImpl(std::move(fontManager),
                                         std::move(allocator),
                                         std::move(buffer),
-                                        CardManager::Ptr{}, 0)));
+                                        GpuMemoryManager::Ptr{}, 0)));
 }
 
 } // namespace yetty

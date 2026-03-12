@@ -668,7 +668,7 @@ Result<CardPtr> YPaint::create(const YettyContext &ctx, int32_t x, int32_t y,
                                const std::string &args,
                                const std::string &payload) {
   if (!ctx.cardManager) {
-    return Err<CardPtr>("YPaint::create: null CardManager");
+    return Err<CardPtr>("YPaint::create: null GpuMemoryManager");
   }
   auto card = std::make_shared<YPaintImpl>(ctx, x, y, widthCells, heightCells,
                                            args, payload);

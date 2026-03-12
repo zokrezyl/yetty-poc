@@ -8,8 +8,8 @@
 #include "yetty/ypaint/ypaint-buffer.h"
 #include "yetty/ypaint/ypaint-types.gen.h"
 #include <yetty/ypaint/painter.h>
-#include <yetty/card-manager.h>
-#include <yetty/card-buffer-manager.h>
+#include <yetty/gpu-memory-manager.h>
+#include <yetty/gpu-buffer-manager.h>
 #include <yetty/gpu-allocator.h>
 
 #include <cstring>
@@ -82,11 +82,11 @@ private:
 };
 
 //=============================================================================
-// Mock CardManager — copied from ydraw_scrolling_test.cpp
+// Mock GpuMemoryManager — copied from ydraw_scrolling_test.cpp
 //=============================================================================
-class MockCardManager : public CardManager {
+class MockGpuMemoryManager : public GpuMemoryManager {
 public:
-    MockCardManager()
+    MockGpuMemoryManager()
         : _bufMgr(std::make_shared<MockCardBufferManager>())
         , _metadata(16 * 64, 0) {}
 
@@ -98,7 +98,7 @@ public:
     Result<void> writeMetadata(MetadataHandle handle,
                                 const void* data, uint32_t size) override {
         if (handle.offset + size > _metadata.size()) {
-            return Err<void>("MockCardManager: metadata overflow");
+            return Err<void>("MockGpuMemoryManager: metadata overflow");
         }
         std::memcpy(_metadata.data() + handle.offset, data, size);
         return Ok();
@@ -112,7 +112,7 @@ public:
     }
 
     CardBufferManager::Ptr bufferManager() const override { return _bufMgr; }
-    CardTextureManager::Ptr textureManager() const override { return nullptr; }
+    GpuTextureManager::Ptr textureManager() const override { return nullptr; }
 
     WGPUBuffer metadataBuffer() const override { return nullptr; }
     WGPUBindGroupLayout sharedBindGroupLayout() const override { return nullptr; }
@@ -219,7 +219,7 @@ static void dumpGrid(Painter* builder, const char* label) {
 suite shapes_demo_tests = [] {
 
     "shapes_demo_cursor_0_0"_test = [] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
         auto builder = *Painter::create(FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
@@ -256,7 +256,7 @@ suite shapes_demo_tests = [] {
     };
 
     "shapes_demo_cursor_0_3"_test = [] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
         auto builder = *Painter::create(FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
@@ -294,7 +294,7 @@ suite shapes_demo_tests = [] {
     };
 
     "shapes_demo_cursor_0_10"_test = [] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
         auto builder = *Painter::create(FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
@@ -330,7 +330,7 @@ suite shapes_demo_tests = [] {
     };
 
     "shapes_demo_multiple_adds_with_scroll"_test = [] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
         auto builder = *Painter::create(FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
@@ -363,7 +363,7 @@ suite shapes_demo_tests = [] {
     };
 
     "shapes_demo_verify_grid_vs_shader_lookup"_test = [] {
-        auto cardMgr = std::make_shared<MockCardManager>();
+        auto cardMgr = std::make_shared<MockGpuMemoryManager>();
         auto gpuAlloc = testAllocator();
         auto builder = *Painter::create(FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 

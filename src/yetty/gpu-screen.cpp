@@ -1,6 +1,7 @@
 #include "gpu-screen.h"
 #include "ygui/ygui-overlay.h"
 #include <yetty/ypaint/painter.h>
+#include <yetty/ypaint/ypaint-overlay.h>
 #include "ypaint/ypaint-buffer.h"
 #include "ypaint/yaml2ypaint.h"
 #include <algorithm>
@@ -15,7 +16,7 @@
 #include <string>
 #include <unordered_set>
 #include <yetty/card-factory.h>
-#include <yetty/card-manager.h>
+#include <yetty/gpu-memory-manager.h>
 #include <yetty/card.h>
 #include <yetty/font-manager.h>
 #include <yetty/gpu-allocator.h>
@@ -373,7 +374,7 @@ private:
   Card *getCardBySlotIndex(uint32_t slotIndex) const override;
   Card *getCardByName(const std::string &name) const override;
   std::vector<Card *> getAllCards() const override;
-  CardManager::Ptr cardManager() const override { return _cardManager; }
+  GpuMemoryManager::Ptr cardManager() const override { return _cardManager; }
 
   // Named card registry
   void registerNamedCard(const std::string &name, uint32_t slotIndex) override;
@@ -460,7 +461,7 @@ private:
   // Cards — active (visible, buffers allocated) and inactive (suspended)
   std::unordered_map<uint32_t, CardPtr> _cards;
   std::unordered_map<uint32_t, CardPtr> _inactiveCards;
-  CardManager::Ptr _cardManager;
+  GpuMemoryManager::Ptr _cardManager;
 
   // Named card registry (for RPC streaming)
   std::unordered_map<std::string, uint32_t> _namedCards; // name -> slotIndex
@@ -522,6 +523,9 @@ private:
   ypaint::Painter::Ptr _scrollingPainter;
   // Layer 2: Overlay painter - fixed position (HUD, tooltips)
   ypaint::Painter::Ptr _overlayPainter;
+  // Overlay renderers for YPaint layers
+  ypaint::YPaintOverlay::Ptr _scrollingOverlay;
+  ypaint::YPaintOverlay::Ptr _overlayOverlay;
   // Metadata slot indices for the painters
   static constexpr uint32_t SCROLLING_PAINTER_SLOT = 1000;
   static constexpr uint32_t OVERLAY_PAINTER_SLOT = 1001;
@@ -685,24 +689,24 @@ Result<void> GPUScreenImpl::init() noexcept {
     _allocator = std::make_shared<GpuAllocator>(_ctx.gpu.device);
   }
 
-  // Create per-screen CardManager (owns CardBufferManager, CardTextureManager,
+  // Create per-screen GpuMemoryManager (owns CardBufferManager, GpuTextureManager,
   // and bind group). Starts with tiny placeholder buffers (~20KB for metadata
   // pool + 4 bytes each for buffer/atlas). Real buffers and atlas are allocated
   // lazily on first card creation, avoiding ~81MB GPU allocation when no cards
   // are used.
   if (_ctx.gpu.device && _ctx.gpu.sharedUniformBuffer && _allocator) {
     auto cmResult =
-        CardManager::create(&_ctx.gpu, _allocator, _ctx.gpu.sharedUniformBuffer,
+        GpuMemoryManager::create(&_ctx.gpu, _allocator, _ctx.gpu.sharedUniformBuffer,
                             _ctx.gpu.sharedUniformSize);
     if (!cmResult) {
-      return Err<void>("GPUScreen: failed to create CardManager", cmResult);
+      return Err<void>("GPUScreen: failed to create GpuMemoryManager", cmResult);
     }
     _cardManager = *cmResult;
     _ctx.cardManager = _cardManager;
     _ctx.screenId = _id;
-    ydebug("GPUScreen[{}]: created CardManager", _id);
+    ydebug("GPUScreen[{}]: created GpuMemoryManager", _id);
 
-    // Create ypaint painters - they share the CardManager
+    // Create ypaint painters - they share the GpuMemoryManager
     auto scrollRes = ypaint::Painter::create(
         _ctx.fontManager, _allocator, _cardManager,
         SCROLLING_PAINTER_SLOT, true /* scrollingMode */);
@@ -720,6 +724,21 @@ Result<void> GPUScreenImpl::init() noexcept {
     _overlayPainter = *overlayRes;
 
     ydebug("GPUScreen[{}]: created ypaint painters", _id);
+
+    // Create YPaintOverlay instances for rendering
+    auto scrollOverlayRes = ypaint::YPaintOverlay::create(_ctx, _scrollingPainter);
+    if (!scrollOverlayRes) {
+      return Err<void>("GPUScreen: failed to create scrolling overlay", scrollOverlayRes);
+    }
+    _scrollingOverlay = *scrollOverlayRes;
+
+    auto overlayOverlayRes = ypaint::YPaintOverlay::create(_ctx, _overlayPainter);
+    if (!overlayOverlayRes) {
+      return Err<void>("GPUScreen: failed to create overlay overlay", overlayOverlayRes);
+    }
+    _overlayOverlay = *overlayOverlayRes;
+
+    ydebug("GPUScreen[{}]: created YPaintOverlay renderers", _id);
   }
 
   return Ok();
@@ -760,7 +779,7 @@ Result<void> GPUScreenImpl::onShutdown() {
   }
   _inactiveCards.clear();
 
-  // Release CardManager while shared_ptr is still alive
+  // Release GpuMemoryManager while shared_ptr is still alive
   _cardManager.reset();
 
   ydebug("GPUScreen[{}]: onShutdown complete", _id);
@@ -930,6 +949,14 @@ void GPUScreenImpl::setViewport(float x, float y, float width, float height) {
     _scrollingPainter->setGridCellSize(cellWidthF, cellHeightF);
     _overlayPainter->setSceneBounds(0, 0, width, height);
     _overlayPainter->setGridCellSize(cellWidthF, cellHeightF);
+
+    // Update YPaintOverlay display sizes
+    if (_scrollingOverlay) {
+      _scrollingOverlay->updateDisplaySize(width, height);
+    }
+    if (_overlayOverlay) {
+      _overlayOverlay->updateDisplaySize(width, height);
+    }
   }
 }
 
@@ -3968,7 +3995,7 @@ std::string GPUScreenImpl::buildGpuStatsText() {
     ss << _cardManager->bufferManager()->dumpSubAllocationsToString();
   }
 
-  // CardTextureManager stats
+  // GpuTextureManager stats
   if (_cardManager && _cardManager->textureManager()) {
     auto stats = _cardManager->textureManager()->getStats();
     ss << "\r\n[Card Texture Atlas]\r\n";
@@ -4188,7 +4215,7 @@ bool GPUScreenImpl::handleCardOSCSequence(const std::string &sequence,
            card->typeName(), x, y, card->widthCells(), card->heightCells(),
            card->metadataSlotIndex(), card->shaderGlyph());
 
-    // Register named card with CardManager for RPC lookup
+    // Register named card with GpuMemoryManager for RPC lookup
     if (!card->name().empty()) {
       ydebug("GPUScreen: Registering named card '{}' with slotIndex={}",
              card->name(), card->metadataSlotIndex());
@@ -5448,13 +5475,13 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
     }
   }
 
-  // Flush CardManager (packs atlas, updates bind group if needed, uploads
+  // Flush GpuMemoryManager (packs atlas, updates bind group if needed, uploads
   // buffers)
   if (_cardManager) {
     ydebug("GPUScreen::render: calling flush");
     if (auto res = _cardManager->flush(_ctx.gpu.queue); !res) {
-      yerror("GPUScreen: CardManager flush FAILED: {}", error_msg(res));
-      return Err<void>("GPUScreen: CardManager flush failed", res);
+      yerror("GPUScreen: GpuMemoryManager flush FAILED: {}", error_msg(res));
+      return Err<void>("GPUScreen: GpuMemoryManager flush failed", res);
     }
   }
 
@@ -5815,7 +5842,7 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
 
   // Draw using shared pipeline and quad vertex buffer from ShaderManager
   wgpuRenderPassEncoderSetPipeline(pass, shaderMgr->getGridPipeline());
-  // Use per-screen CardManager bind group (uniforms + card buffers),
+  // Use per-screen GpuMemoryManager bind group (uniforms + card buffers),
   // falling back to the minimal shared bind group (uniforms only)
   WGPUBindGroup bindGroup0 =
       _cardManager ? _cardManager->sharedBindGroup() : nullptr;
@@ -5832,7 +5859,20 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
       pass, 0, shaderMgr->getQuadVertexBuffer(), 0, WGPU_WHOLE_SIZE);
   wgpuRenderPassEncoderDraw(pass, 6, 1, 0, 0);
 
-  // TODO: Render ypaint layers via CardManager (Layer 1: scrolling, Layer 2: overlay)
+  // Render ypaint layers (Layer 1: scrolling, Layer 2: overlay)
+  // Both use the same render pass, different pipelines/bind groups
+  if (_scrollingOverlay && _scrollingOverlay->hasContent()) {
+    ydebug("render: drawing scrolling ypaint overlay");
+    if (auto res = _scrollingOverlay->render(pass); !res) {
+      yerror("render: scrolling overlay failed: {}", error_msg(res));
+    }
+  }
+  if (_overlayOverlay && _overlayOverlay->hasContent()) {
+    ydebug("render: drawing ypaint overlay");
+    if (auto res = _overlayOverlay->render(pass); !res) {
+      yerror("render: overlay overlay failed: {}", error_msg(res));
+    }
+  }
 
   return Ok();
 }

@@ -352,7 +352,7 @@ Result<CardPtr> Diagram::create(
     const std::string& payload)
 {
     if (!ctx.cardManager) {
-        return Err<CardPtr>("Diagram::create: null CardManager");
+        return Err<CardPtr>("Diagram::create: null GpuMemoryManager");
     }
     auto card = std::make_shared<DiagramImpl>(ctx, x, y, widthCells, heightCells, args, payload);
     if (auto res = card->init(); !res) {

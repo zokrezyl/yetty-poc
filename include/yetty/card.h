@@ -12,13 +12,13 @@ namespace yetty {
  * Card - Base class for card-based widgets rendered via shader glyphs
  *
  * Cards are lightweight widgets that:
- * - Allocate metadata in CardManager
+ * - Allocate metadata in GpuMemoryManager
  * - Are rendered entirely by GPU shaders
  * - Receive mouse/keyboard input via EventListener interface
  *
  * Cards declare their resource needs via needsBuffer() / needsTexture().
  * Buffer cards use CardBufferManager for linear GPU storage.
- * Texture cards use CardTextureManager for atlas textures.
+ * Texture cards use GpuTextureManager for atlas textures.
  * A card may need both.
  *
  * Per-frame lifecycle (orchestrated by gpu-screen):
@@ -47,7 +47,7 @@ public:
     /// Examples: ydraw (SDF primitives), plot (float data), qrcode (packed bits).
     virtual bool needsBuffer() const { return false; }
 
-    /// Returns true if this card uses texture storage (CardTextureManager).
+    /// Returns true if this card uses texture storage (GpuTextureManager).
     /// Texture cards participate in the atlas allocation and packing loops.
     /// Examples: image (pixel data), pdf (rendered pages), thorvg (SVG renders).
     virtual bool needsTexture() const { return false; }
@@ -60,7 +60,7 @@ public:
     /// This is the card's "think" phase — advance animations, recompute layouts,
     /// rebuild spatial structures, process external input, etc. All work happens
     /// in card-private memory; this method must NOT touch GPU handles or call
-    /// any CardBufferManager/CardTextureManager write methods.
+    /// any CardBufferManager/GpuTextureManager write methods.
     ///
     /// After this call, the card knows:
     ///   - What its staging data looks like for this frame
@@ -119,7 +119,7 @@ public:
     ///
     /// IMPORTANT: This method does NOT write to GPU. It finalizes/packs data
     /// into CPU staging buffers. The actual GPU write happens later when
-    /// gpu-screen calls CardManager::flush() after ALL cards have finalized.
+    /// gpu-screen calls GpuMemoryManager::flush() after ALL cards have finalized.
     ///
     /// Typical work done here:
     ///   - Pack metadata (buffer offsets, scene bounds, grid dimensions, etc.)

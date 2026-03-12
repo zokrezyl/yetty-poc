@@ -21,9 +21,9 @@ set(YETTY_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/gpu-screen.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/osc-command.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/gpu-allocator.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/card-manager.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/card-buffer-manager.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/card-texture-manager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/gpu-memory-manager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/gpu-buffer-manager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/gpu-texture-manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/gpu-screen-manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/card-factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/card.cpp

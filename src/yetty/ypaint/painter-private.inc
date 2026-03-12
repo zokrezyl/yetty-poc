@@ -219,7 +219,7 @@ std::unordered_map<int, int> _userFontIdMap;
 std::unordered_map<int, int> _bufferFontIdMap;
 
 // GPU state (managed by lifecycle methods)
-CardManager::Ptr _cardMgr;
+GpuMemoryManager::Ptr _cardMgr;
 uint32_t _metaSlotIndex = 0;
 BufferHandle _primHandle = BufferHandle::invalid();
 BufferHandle _derivedHandle = BufferHandle::invalid();

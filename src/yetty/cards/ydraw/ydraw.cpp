@@ -605,7 +605,7 @@ Result<CardPtr> YDraw::create(
     const std::string& payload)
 {
     if (!ctx.cardManager) {
-        return Err<CardPtr>("YDraw::create: null CardManager");
+        return Err<CardPtr>("YDraw::create: null GpuMemoryManager");
     }
     auto card = std::make_shared<YDrawImpl>(ctx, x, y, widthCells, heightCells, args, payload);
     if (auto res = card->init(); !res) {

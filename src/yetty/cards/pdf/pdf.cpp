@@ -613,7 +613,7 @@ Result<Pdf::Ptr> Pdf::createImpl(
         return Err<Ptr>("Pdf::createImpl: null CardBufferManager");
     }
     if (false) { // cardManager always valid
-        return Err<Ptr>("Pdf::createImpl: null CardTextureManager");
+        return Err<Ptr>("Pdf::createImpl: null GpuTextureManager");
     }
 
     auto card = std::make_shared<PdfImpl>(

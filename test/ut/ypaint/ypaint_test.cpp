@@ -2,7 +2,7 @@
 // YPaintBuffer + Painter Unit Tests
 //
 // Tests AABB computation, GPU buffer layout, grid construction,
-// the real builder GPU write pipeline using mock CardManager,
+// the real builder GPU write pipeline using mock GpuMemoryManager,
 // and the text/glyph pipeline including font atlas correctness.
 //=============================================================================
 
@@ -16,8 +16,8 @@
 #include "yetty/ypaint/ypaint-types.gen.h"
 #include "yetty/ypaint/ypaint-prim-writer.gen.h"
 #include <yetty/ypaint/painter.h>
-#include <yetty/card-manager.h>
-#include <yetty/card-buffer-manager.h>
+#include <yetty/gpu-memory-manager.h>
+#include <yetty/gpu-buffer-manager.h>
 #include <yetty/font-manager.h>
 #include <yetty/ms-msdf-font.h>
 #include <yetty/msdf-atlas.h>
@@ -115,11 +115,11 @@ private:
 };
 
 //=============================================================================
-// Mock CardManager — owns mock buffer manager + CPU metadata array
+// Mock GpuMemoryManager — owns mock buffer manager + CPU metadata array
 //=============================================================================
-class MockCardManager : public CardManager {
+class MockGpuMemoryManager : public GpuMemoryManager {
 public:
-    MockCardManager()
+    MockGpuMemoryManager()
         : _bufMgr(std::make_shared<MockCardBufferManager>())
         , _metadata(16 * 64, 0) {}  // 16 slots * 64 bytes each
 
@@ -132,7 +132,7 @@ public:
     Result<void> writeMetadata(MetadataHandle handle,
                                 const void* data, uint32_t size) override {
         if (handle.offset + size > _metadata.size()) {
-            return Err<void>("MockCardManager: metadata overflow");
+            return Err<void>("MockGpuMemoryManager: metadata overflow");
         }
         std::memcpy(_metadata.data() + handle.offset, data, size);
         return Ok();
@@ -147,7 +147,7 @@ public:
 
     // Manager accessors
     CardBufferManager::Ptr bufferManager() const override { return _bufMgr; }
-    CardTextureManager::Ptr textureManager() const override { return nullptr; }
+    GpuTextureManager::Ptr textureManager() const override { return nullptr; }
 
     // GPU stubs
     WGPUBuffer metadataBuffer() const override { return nullptr; }
@@ -269,7 +269,7 @@ static FontManager::Ptr testFontManager() {
 // Helper: run the full builder lifecycle with mock card manager
 //=============================================================================
 struct PipelineResult {
-    std::shared_ptr<MockCardManager> cardMgr;
+    std::shared_ptr<MockGpuMemoryManager> cardMgr;
     Painter::Ptr builder;
     const float* storage;       // cardStorage as floats
     const uint32_t* meta;       // metadata as u32
@@ -299,7 +299,7 @@ static float unpackF16(uint32_t packed, bool high) {
 static PipelineResult runPipeline(YPaintBuffer::Ptr buf,
                                    float sceneW = 200.0f, float sceneH = 200.0f,
                                    FontManager::Ptr fontMgr = nullptr) {
-    auto mockCM = std::make_shared<MockCardManager>();
+    auto mockCM = std::make_shared<MockGpuMemoryManager>();
     auto builder = *Painter::create(fontMgr, testAllocator(), mockCM, 0);
     builder->setSceneBounds(0, 0, sceneW, sceneH);
     builder->setGridCellSize(20.0f, 20.0f);  // Default cell size
@@ -749,7 +749,7 @@ suite aabb_tests = [] {
 };
 
 //=============================================================================
-// Full GPU write pipeline tests — using MockCardManager
+// Full GPU write pipeline tests — using MockGpuMemoryManager
 //
 // These run the REAL builder lifecycle (calculate → declareBufferNeeds →
 // commitReservations → allocateBuffers → writeBuffers) and then inspect
@@ -941,7 +941,7 @@ suite gpu_pipeline_tests = [] {
 
     "clear and rebuild produces valid pipeline"_test = [] {
         auto buf = *YPaintBuffer::create();
-        auto mockCM = std::make_shared<MockCardManager>();
+        auto mockCM = std::make_shared<MockGpuMemoryManager>();
         auto builder = *Painter::create(nullptr, nullptr, mockCM, 0);
         builder->setSceneBounds(0, 0, 200.0f, 200.0f);
         builder->setGridCellSize(20.0f, 20.0f);
@@ -1028,7 +1028,7 @@ suite gpu_pipeline_tests = [] {
         auto buf = *YPaintBuffer::create();
         buf->addCircle(0, 50.0f, 50.0f, 10.0f, 0xFFFF0000, 0, 0.0f, 0.0f);
 
-        auto mockCM = std::make_shared<MockCardManager>();
+        auto mockCM = std::make_shared<MockGpuMemoryManager>();
         auto builder = *Painter::create(nullptr, nullptr, mockCM, 0);
         builder->setSceneBounds(0, 0, 100.0f, 100.0f);
         builder->addYpaintBuffer(buf);

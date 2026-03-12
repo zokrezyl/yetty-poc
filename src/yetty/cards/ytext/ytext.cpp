@@ -28,7 +28,7 @@ Result<YText::Ptr> YText::createImpl(
     (void)ctx;  // ObjectFactory context marker
 
     if (!yettyCtx.cardManager) {
-        return Err<Ptr>("YText::createImpl: null CardManager");
+        return Err<Ptr>("YText::createImpl: null GpuMemoryManager");
     }
 
     auto card = std::make_shared<YText>(yettyCtx, x, y, widthCells, heightCells, args, payload);
