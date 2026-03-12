@@ -32,6 +32,7 @@ static uint16_t readPciVendor(const fs::path& cardPath) {
     try {
         return static_cast<uint16_t>(std::stoul(vendorStr, nullptr, 16));
     } catch (...) {
+        ywarn("GPU monitor: failed to parse vendor id '{}'", vendorStr);
         return 0;
     }
 }

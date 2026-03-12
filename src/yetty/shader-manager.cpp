@@ -429,14 +429,18 @@ Result<void> ShaderManagerImpl::init(const GPUContext& gpu, GpuAllocator::Ptr al
             uint32_t idx = 0;
             auto idxPos = code.find("// Index: ");
             if (idxPos != std::string::npos) {
-                try { idx = std::stoul(code.substr(idxPos + 10, 10)); } catch (...) {}
+                try { idx = std::stoul(code.substr(idxPos + 10, 10)); } catch (...) {
+                    ywarn("ShaderManager: failed to parse index from file header in {}", entry.path().string());
+                }
             }
             if (idx == 0) {
                 // Try to parse from filename: "N-name.wgsl"
                 std::string stem = entry.path().stem().string();
                 auto dash = stem.find('-');
                 if (dash != std::string::npos) {
-                    try { idx = std::stoul(stem.substr(0, dash)); } catch (...) {}
+                    try { idx = std::stoul(stem.substr(0, dash)); } catch (...) {
+                        ywarn("ShaderManager: failed to parse index from filename {}", entry.path().string());
+                    }
                 }
             }
             if (idx == 0) {

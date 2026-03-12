@@ -324,6 +324,7 @@ uint32_t YText::parseColor(const std::string& str) {
         // Convert RGB to RGBA (full alpha)
         return (rgb << 8) | 0xFF;
     } catch (...) {
+        ywarn("YText: failed to parse color hex value '{}'", hex);
         return 0;  // Use default on parse error
     }
 }

@@ -1,5 +1,6 @@
 #include "maze-renderer.h"
 #include "../ydraw/ydraw-buffer.h"
+#include <ytrace/ytrace.hpp>
 #include <cmath>
 #include <chrono>
 #include <sstream>
@@ -43,7 +44,9 @@ MazeConfig parseArgs(const std::string& args) {
                     else if (token == "--start-color") cfg.startColor = c;
                     else if (token == "--end-color") cfg.endColor = c;
                     else if (token == "--bg-color") cfg.bgColor = c;
-                } catch (...) {}
+                } catch (...) {
+                    ywarn("MazeRenderer: invalid color value '{}' for {}", s, token);
+                }
             }
         }
     }

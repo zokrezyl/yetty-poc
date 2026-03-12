@@ -1,5 +1,6 @@
 #include "zoo-renderer.h"
 #include "../ydraw/ydraw-buffer.h"
+#include <ytrace/ytrace.hpp>
 #include <cmath>
 #include <chrono>
 #include <sstream>
@@ -54,7 +55,9 @@ ZooConfig parseArgs(const std::string& args) {
                     s = s.substr(2);
                 try {
                     cfg.bgColor = static_cast<uint32_t>(std::stoul(s, nullptr, 16));
-                } catch (...) {}
+                } catch (...) {
+                    ywarn("ZooRenderer: invalid bg-color value '{}'", s);
+                }
             }
         }
     }

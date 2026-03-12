@@ -236,10 +236,14 @@ private:
             } else if (token.substr(0, 11) == "--bg-color=") {
                 std::string hex = token.substr(11);
                 if (hex[0] == '#') hex = hex.substr(1);
-                uint32_t rgb = std::stoul(hex, nullptr, 16);
-                if (hex.size() <= 6) {
-                    _builder->setBgColor(0xFF000000 | ((rgb & 0xFF) << 16) |
-                                         (rgb & 0xFF00) | ((rgb >> 16) & 0xFF));
+                try {
+                    uint32_t rgb = std::stoul(hex, nullptr, 16);
+                    if (hex.size() <= 6) {
+                        _builder->setBgColor(0xFF000000 | ((rgb & 0xFF) << 16) |
+                                             (rgb & 0xFF00) | ((rgb >> 16) & 0xFF));
+                    }
+                } catch (...) {
+                    ywarn("Markdown: failed to parse --bg-color value '{}'", hex);
                 }
             } else if (token.substr(0, 15) == "--line-spacing=") {
                 _lineSpacing = std::stof(token.substr(15));
