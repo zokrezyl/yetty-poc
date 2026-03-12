@@ -1,6 +1,8 @@
 #include "gpu-screen.h"
-#include "screen-draw-layer.h"
 #include "ygui/ygui-overlay.h"
+#include <yetty/ypaint/painter.h>
+#include "ypaint/ypaint-buffer.h"
+#include "ypaint/yaml2ypaint.h"
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
@@ -323,6 +325,7 @@ private:
   bool handleCardOSCSequence(const std::string &sequence, std::string *response,
                              uint32_t *linesToAdvance);
   void handleEffectOSC(int command, const std::string &payload);
+  void handleYpaintOSC(const std::string &payload, bool scrolling);
   std::string buildGpuStatsText();
 
   // Text selection
@@ -514,8 +517,14 @@ private:
   std::string _oscBuffer;
   int _oscCommand = -1;
 
-  // Screen draw layer (pixel-coordinate ydraw overlay)
-  ScreenDrawLayer::Ptr _screenDrawLayer;
+  // YPaint layers
+  // Layer 1: Scrolling painter - syncs with vterm scrolling
+  ypaint::Painter::Ptr _scrollingPainter;
+  // Layer 2: Overlay painter - fixed position (HUD, tooltips)
+  ypaint::Painter::Ptr _overlayPainter;
+  // Metadata slot indices for the painters
+  static constexpr uint32_t SCROLLING_PAINTER_SLOT = 1000;
+  static constexpr uint32_t OVERLAY_PAINTER_SLOT = 1001;
 
   // Rendering - GPU resources (shared resources come from ShaderManager)
   YettyContext _ctx;
@@ -686,13 +695,31 @@ Result<void> GPUScreenImpl::init() noexcept {
         CardManager::create(&_ctx.gpu, _allocator, _ctx.gpu.sharedUniformBuffer,
                             _ctx.gpu.sharedUniformSize);
     if (!cmResult) {
-      ywarn("GPUScreen: failed to create CardManager: {}", error_msg(cmResult));
-    } else {
-      _cardManager = *cmResult;
-      _ctx.cardManager = _cardManager;
-      _ctx.screenId = _id;
-      ydebug("GPUScreen[{}]: created per-screen CardManager (lazy)", _id);
+      return Err<void>("GPUScreen: failed to create CardManager", cmResult);
     }
+    _cardManager = *cmResult;
+    _ctx.cardManager = _cardManager;
+    _ctx.screenId = _id;
+    ydebug("GPUScreen[{}]: created CardManager", _id);
+
+    // Create ypaint painters - they share the CardManager
+    auto scrollRes = ypaint::Painter::create(
+        _ctx.fontManager, _allocator, _cardManager,
+        SCROLLING_PAINTER_SLOT, true /* scrollingMode */);
+    if (!scrollRes) {
+      return Err<void>("GPUScreen: failed to create scrolling painter", scrollRes);
+    }
+    _scrollingPainter = *scrollRes;
+
+    auto overlayRes = ypaint::Painter::create(
+        _ctx.fontManager, _allocator, _cardManager,
+        OVERLAY_PAINTER_SLOT, false /* scrollingMode */);
+    if (!overlayRes) {
+      return Err<void>("GPUScreen: failed to create overlay painter", overlayRes);
+    }
+    _overlayPainter = *overlayRes;
+
+    ydebug("GPUScreen[{}]: created ypaint painters", _id);
   }
 
   return Ok();
@@ -897,11 +924,12 @@ void GPUScreenImpl::setViewport(float x, float y, float width, float height) {
     card->setScreenOrigin(x, y);
   }
 
-  // Update screen draw layer display size and cell size
-  if (_screenDrawLayer) {
-    _screenDrawLayer->updateDisplaySize(static_cast<uint32_t>(width),
-                                        static_cast<uint32_t>(height));
-    _screenDrawLayer->setCellSize(cellWidthF, cellHeightF);
+  // Update ypaint painters with new viewport size (painters exist if cardManager exists)
+  if (_cardManager) {
+    _scrollingPainter->setSceneBounds(0, 0, width, height);
+    _scrollingPainter->setGridCellSize(cellWidthF, cellHeightF);
+    _overlayPainter->setSceneBounds(0, 0, width, height);
+    _overlayPainter->setGridCellSize(cellWidthF, cellHeightF);
   }
 }
 
@@ -2864,6 +2892,12 @@ int GPUScreenImpl::onScrollRect(VTermRect rect, int downward, int rightward,
     for (int i = 0; i < downward && i < rect.end_row; i++) {
       self->pushLineToScrollback(i);
     }
+
+    // Sync scrolling painter - vterm is source of truth here
+    if (self->_scrollingPainter) {
+      self->_scrollingPainter->scrollLines(static_cast<uint16_t>(downward));
+      ydebug("onScrollRect: scrolled painter {} lines (vterm-driven)", downward);
+    }
   } else if (downward < 0) {
     // Scroll up: top lines will be overwritten
     int upAmount = -downward;
@@ -2872,6 +2906,13 @@ int GPUScreenImpl::onScrollRect(VTermRect rect, int downward, int rightward,
       // Full-screen scroll from top - push to scrollback
       for (int i = 0; i < upAmount && i < rect.end_row; i++) {
         self->pushLineToScrollback(i);
+      }
+
+      // Sync scrolling painter for upward scroll too
+      if (self->_scrollingPainter) {
+        self->_scrollingPainter->scrollLines(static_cast<uint16_t>(upAmount));
+        ydebug("onScrollRect: scrolled painter {} lines (vterm-driven, up)",
+               upAmount);
       }
     }
   }
@@ -3225,10 +3266,10 @@ int GPUScreenImpl::onOSC(int command, VTermStringFragment frag, void *user) {
   }
 
   // Accept yetty vendor commands: 666666 (cards), 666667-669 (effects), 666670
-  // (gpu stats), 666671 (fps), 666673 (screen draw)
+  // (gpu stats), 666671 (fps), 666674-675 (ypaint layers)
   if (command != YETTY_OSC_VENDOR_ID && command != 666667 &&
       command != 666668 && command != 666669 && command != 666670 &&
-      command != 666671 && command != 666673) {
+      command != 666671 && command != 666674 && command != 666675) {
     ywarn(">>> onOSC: ignoring non-yetty command {}", command);
     return 0;
   }
@@ -3279,69 +3320,17 @@ int GPUScreenImpl::onOSC(int command, VTermStringFragment frag, void *user) {
       return 1;
     }
 
-    // Handle screen draw OSC command (666673)
-    // Format: args;base64payload  or  args (no payload)
-    if (command == 666673) {
-      if (!self->_screenDrawLayer) {
-        // Lazy init screen draw layer
-        auto res = ScreenDrawLayer::create(self->_ctx);
-        if (res) {
-          self->_screenDrawLayer = *res;
-          self->_screenDrawLayer->updateDisplaySize(
-              static_cast<uint32_t>(self->_viewportWidth),
-              static_cast<uint32_t>(self->_viewportHeight));
-          self->_screenDrawLayer->setCellSize(self->getCellWidthF(),
-                                              self->getCellHeightF());
-        } else {
-          yerror("Failed to create ScreenDrawLayer: {}", error_msg(res));
-        }
-      }
+    // Handle ypaint scrolling layer OSC command (666674)
+    if (command == 666674) {
+      self->handleYpaintOSC(self->_oscBuffer, true /* scrolling */);
+      self->_oscBuffer.clear();
+      self->_oscCommand = -1;
+      return 1;
+    }
 
-      if (self->_screenDrawLayer) {
-        std::string args;
-        std::string payload;
-        size_t sepPos = self->_oscBuffer.find(';');
-        if (sepPos != std::string::npos) {
-          args = self->_oscBuffer.substr(0, sepPos);
-          // Decode base64 payload
-          std::string b64 = self->_oscBuffer.substr(sepPos + 1);
-          // Simple base64 decoding (use existing decoder or inline)
-          static auto b64Decode = [](const std::string &in) -> std::string {
-            static const std::string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefg"
-                                             "hijklmnopqrstuvwxyz0123456789+/";
-            std::string out;
-            std::vector<int> T(256, -1);
-            for (int i = 0; i < 64; i++)
-              T[chars[i]] = i;
-            int val = 0, valb = -8;
-            for (unsigned char c : in) {
-              if (T[c] == -1)
-                break;
-              val = (val << 6) + T[c];
-              valb += 6;
-              if (valb >= 0) {
-                out.push_back(char((val >> valb) & 0xFF));
-                valb -= 8;
-              }
-            }
-            return out;
-          };
-          payload = b64Decode(b64);
-        } else {
-          args = self->_oscBuffer;
-        }
-
-        // Handle clear command
-        if (args.find("--clear") != std::string::npos) {
-          self->_screenDrawLayer->clear();
-        } else if (!payload.empty()) {
-          auto res = self->_screenDrawLayer->update(args, payload);
-          if (!res) {
-            yerror("ScreenDrawLayer update failed: {}", error_msg(res));
-          }
-        }
-        self->_hasDamage = true;
-      }
+    // Handle ypaint overlay layer OSC command (666675)
+    if (command == 666675) {
+      self->handleYpaintOSC(self->_oscBuffer, false /* overlay */);
       self->_oscBuffer.clear();
       self->_oscCommand = -1;
       return 1;
@@ -3656,8 +3645,9 @@ bool GPUScreenImpl::handleOSCSequence(const std::string &sequence,
     return false;
   }
 
-  // Handle vendor-specific commands (666667-666673) directly
-  if (vendorId >= 666667 && vendorId <= 666673) {
+  // Handle vendor-specific commands (666667-672, 666674-675) directly
+  if ((vendorId >= 666667 && vendorId <= 666672) ||
+      vendorId == 666674 || vendorId == 666675) {
     std::string payload = sequence.substr(semicolon + 1);
 
     // Effect commands (666667 = pre-effect, 666668 = post-effect, 666669 =
@@ -3716,68 +3706,19 @@ bool GPUScreenImpl::handleOSCSequence(const std::string &sequence,
       return true;
     }
 
-    // Screen draw layer command (666673)
-    // Format: args;base64payload  or  args (no payload)
-    if (vendorId == 666673) {
-      if (!_screenDrawLayer) {
-        // Lazy init screen draw layer
-        auto res = ScreenDrawLayer::create(_ctx);
-        if (res) {
-          _screenDrawLayer = *res;
-          _screenDrawLayer->updateDisplaySize(
-              static_cast<uint32_t>(_viewportWidth),
-              static_cast<uint32_t>(_viewportHeight));
-          _screenDrawLayer->setCellSize(getCellWidthF(), getCellHeightF());
-        } else {
-          yerror("Failed to create ScreenDrawLayer: {}", error_msg(res));
-          return true;
-        }
-      }
+    // YPaint scrolling layer command (666674)
+    if (vendorId == 666674) {
+      ydebug("handleOSCSequence: OSC 666674 ypaint scrolling, payload len={}",
+             payload.size());
+      handleYpaintOSC(payload, true /* scrolling */);
+      return true;
+    }
 
-      if (_screenDrawLayer) {
-        std::string args;
-        std::string payloadDecoded;
-        size_t sepPos = payload.find(';');
-        if (sepPos != std::string::npos) {
-          args = payload.substr(0, sepPos);
-          // Decode base64 payload
-          std::string b64 = payload.substr(sepPos + 1);
-          static auto b64Decode = [](const std::string &in) -> std::string {
-            static const std::string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefg"
-                                             "hijklmnopqrstuvwxyz0123456789+/";
-            std::string out;
-            std::vector<int> T(256, -1);
-            for (int i = 0; i < 64; i++)
-              T[chars[i]] = i;
-            int val = 0, valb = -8;
-            for (unsigned char c : in) {
-              if (T[c] == -1)
-                break;
-              val = (val << 6) + T[c];
-              valb += 6;
-              if (valb >= 0) {
-                out.push_back(char((val >> valb) & 0xFF));
-                valb -= 8;
-              }
-            }
-            return out;
-          };
-          payloadDecoded = b64Decode(b64);
-        } else {
-          args = payload;
-        }
-
-        // Handle clear command
-        if (args.find("--clear") != std::string::npos) {
-          _screenDrawLayer->clear();
-        } else if (!payloadDecoded.empty()) {
-          auto res = _screenDrawLayer->update(args, payloadDecoded);
-          if (!res) {
-            yerror("ScreenDrawLayer update failed: {}", error_msg(res));
-          }
-        }
-        _hasDamage = true;
-      }
+    // YPaint overlay layer command (666675)
+    if (vendorId == 666675) {
+      ydebug("handleOSCSequence: OSC 666675 ypaint overlay, payload len={}",
+             payload.size());
+      handleYpaintOSC(payload, false /* overlay */);
       return true;
     }
   }
@@ -3864,6 +3805,138 @@ void GPUScreenImpl::handleEffectOSC(int command, const std::string &payload) {
            _uniforms.effectParams[2], _uniforms.effectParams[3],
            _uniforms.effectParams[4], _uniforms.effectParams[5]);
   }
+}
+
+//=============================================================================
+// YPaint OSC Handling (666674 = scrolling, 666675 = overlay)
+// Payload format: args;base64payload  or  --clear
+//=============================================================================
+
+void GPUScreenImpl::handleYpaintOSC(const std::string &payload, bool scrolling) {
+  // Painters are created in init() - if no GPU, they won't exist
+  if (!_cardManager) {
+    yerror("handleYpaintOSC: no GPU context");
+    return;
+  }
+
+  auto &painter = scrolling ? _scrollingPainter : _overlayPainter;
+
+  // Parse args and payload
+  std::string args;
+  std::string decodedPayload;
+  size_t sepPos = payload.find(';');
+  if (sepPos != std::string::npos) {
+    args = payload.substr(0, sepPos);
+    // Decode base64 payload
+    std::string b64 = payload.substr(sepPos + 1);
+    static auto b64Decode = [](const std::string &in) -> std::string {
+      static const std::string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefg"
+                                       "hijklmnopqrstuvwxyz0123456789+/";
+      std::string out;
+      std::vector<int> T(256, -1);
+      for (int i = 0; i < 64; i++)
+        T[chars[i]] = i;
+      int val = 0, valb = -8;
+      for (unsigned char c : in) {
+        if (T[c] == -1)
+          break;
+        val = (val << 6) + T[c];
+        valb += 6;
+        if (valb >= 0) {
+          out.push_back(char((val >> valb) & 0xFF));
+          valb -= 8;
+        }
+      }
+      return out;
+    };
+    decodedPayload = b64Decode(b64);
+  } else {
+    args = payload;
+  }
+
+  // Handle clear command
+  if (args.find("--clear") != std::string::npos) {
+    painter->clear();
+    _hasDamage = true;
+    return;
+  }
+
+  // Handle append mode
+  bool append = args.find("--append") != std::string::npos;
+  if (!append) {
+    painter->clear();
+  }
+
+  // Parse YAML payload
+  if (!decodedPayload.empty()) {
+    auto bufferRes = ypaint::YPaintBuffer::create();
+    if (!bufferRes) {
+      yerror("handleYpaintOSC: failed to create buffer");
+      return;
+    }
+    auto buffer = *bufferRes;
+
+    // Check if YAML mode
+    if (args.find("--yaml") != std::string::npos) {
+      auto parseRes = ypaint::parseYPaintYAML(buffer, decodedPayload);
+      if (!parseRes) {
+        yerror("handleYpaintOSC: YAML parse failed: {}", error_msg(parseRes));
+        return;
+      }
+    } else {
+      // Binary mode
+      auto parseRes = buffer->deserialize(
+          reinterpret_cast<const uint8_t *>(decodedPayload.data()),
+          decodedPayload.size());
+      if (!parseRes) {
+        yerror("handleYpaintOSC: binary parse failed: {}", error_msg(parseRes));
+        return;
+      }
+    }
+
+    // Set cursor position for scrolling painter (use vterm cursor)
+    if (scrolling && _vterm) {
+      VTermPos cursor;
+      VTermState *state = vterm_obtain_state(_vterm);
+      vterm_state_get_cursorpos(state, &cursor);
+      painter->setCursorPosition(static_cast<uint16_t>(cursor.col),
+                                 static_cast<uint16_t>(cursor.row));
+    }
+
+    // Add buffer to painter - returns lines consumed
+    auto addRes = painter->addYpaintBuffer(buffer);
+    if (!addRes) {
+      yerror("handleYpaintOSC: addYpaintBuffer failed: {}", error_msg(addRes));
+      return;
+    }
+
+    uint32_t linesConsumed = *addRes;
+    ydebug("handleYpaintOSC: {} layer consumed {} lines, prims={} glyphs={}",
+           scrolling ? "scrolling" : "overlay", linesConsumed,
+           painter->primitiveCount(), painter->glyphCount());
+
+    // Update GPU buffers - call lifecycle methods
+    if (auto res = painter->declareBufferNeeds(); !res) {
+      yerror("handleYpaintOSC: declareBufferNeeds failed: {}", error_msg(res));
+    } else if (auto res2 = painter->allocateBuffers(); !res2) {
+      yerror("handleYpaintOSC: allocateBuffers failed: {}", error_msg(res2));
+    } else if (auto res3 = painter->writeBuffers(); !res3) {
+      yerror("handleYpaintOSC: writeBuffers failed: {}", error_msg(res3));
+    } else {
+      ydebug("handleYpaintOSC: GPU buffers updated successfully");
+    }
+
+    // For scrolling painter: sync vterm to match canvas state
+    // Canvas is source of truth - vterm must catch up
+    if (scrolling && linesConsumed > 0 && _vterm) {
+      // Inject newlines to advance vterm cursor past the graphic
+      std::string newlines(linesConsumed, '\n');
+      vterm_input_write(_vterm, newlines.c_str(), newlines.size());
+      ydebug("handleYpaintOSC: injected {} newlines to vterm", linesConsumed);
+    }
+  }
+
+  _hasDamage = true;
 }
 
 //=============================================================================
@@ -5759,13 +5832,7 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
       pass, 0, shaderMgr->getQuadVertexBuffer(), 0, WGPU_WHOLE_SIZE);
   wgpuRenderPassEncoderDraw(pass, 6, 1, 0, 0);
 
-  // Render screen draw layer (pixel-coordinate ydraw overlay) on top of
-  // terminal
-  if (_screenDrawLayer && _screenDrawLayer->hasContent()) {
-    if (auto res = _screenDrawLayer->render(pass); !res) {
-      ywarn("ScreenDrawLayer render failed: {}", error_msg(res));
-    }
-  }
+  // TODO: Render ypaint layers via CardManager (Layer 1: scrolling, Layer 2: overlay)
 
   return Ok();
 }
