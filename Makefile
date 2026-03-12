@@ -179,6 +179,26 @@ test-desktop-yinfo-release: ## Run desktop yinfo release tests
 	./$(BUILD_DIR_DESKTOP_YINFO_RELEASE)/test/ut/yetty_tests
 
 #=============================================================================
+# Desktop - Nix-based builds (pure, reproducible)
+#=============================================================================
+
+.PHONY: build_nix-desktop-ytrace-release
+build_nix-desktop-ytrace-release: ## Build desktop ytrace release via Nix
+	nix build .#yetty-ytrace-release -o result-ytrace-release
+
+.PHONY: build_nix-desktop-ytrace-debug
+build_nix-desktop-ytrace-debug: ## Build desktop ytrace debug via Nix
+	nix build .#yetty-ytrace-debug -o result-ytrace-debug
+
+.PHONY: build_nix-desktop-ytrace-asan
+build_nix-desktop-ytrace-asan: ## Build desktop ytrace ASAN via Nix
+	nix build .#yetty-ytrace-asan -o result-ytrace-asan
+
+.PHONY: build_nix-desktop-yinfo-release
+build_nix-desktop-yinfo-release: ## Build desktop yinfo release via Nix
+	nix build .#yetty-yinfo-release -o result-yinfo-release
+
+#=============================================================================
 # Android - ytrace (full logging)
 #=============================================================================
 

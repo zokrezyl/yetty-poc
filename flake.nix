@@ -20,10 +20,36 @@
         # Use Clang with libstdc++ (GCC's C++ library) for Dawn ABI compatibility
         clangStdenv = pkgs.clangStdenv;
 
-        # Yetty package (nix build .#yetty)
+        # Yetty package variants
+        # Default: yinfo (minimal logging) + release
         yetty = pkgs.callPackage ./build-tools/nix/default.nix {
           inherit clangStdenv;
+          logLevel = "yinfo";
         };
+
+        # ytrace (full logging) + release
+        yetty-ytrace-release = pkgs.callPackage ./build-tools/nix/default.nix {
+          inherit clangStdenv;
+          logLevel = "ytrace";
+        };
+
+        # ytrace (full logging) + debug
+        yetty-ytrace-debug = pkgs.callPackage ./build-tools/nix/default.nix {
+          inherit clangStdenv;
+          logLevel = "ytrace";
+          buildType = "Debug";
+        };
+
+        # ytrace (full logging) + asan
+        yetty-ytrace-asan = pkgs.callPackage ./build-tools/nix/default.nix {
+          inherit clangStdenv;
+          logLevel = "ytrace";
+          buildType = "Debug";
+          enableAsan = true;
+        };
+
+        # yinfo (minimal logging) + release (same as default)
+        yetty-yinfo-release = yetty;
 
         # Android SDK/NDK setup
         androidComposition = pkgs.androidenv.composeAndroidPackages {
@@ -201,7 +227,7 @@
 
         # Packages
         packages = {
-          inherit yetty;
+          inherit yetty yetty-ytrace-release yetty-ytrace-debug yetty-ytrace-asan yetty-yinfo-release;
           default = yetty;
           arm-emulator = armEmulatorScript;
         };

@@ -47,6 +47,8 @@
   # Build options
 , enableTests ? false
 , logLevel ? "yinfo"  # "ytrace" for full logging, "yinfo" for minimal
+, buildType ? "Release"  # "Release" or "Debug"
+, enableAsan ? false  # Enable AddressSanitizer
 }:
 
 let
@@ -214,7 +216,7 @@ EOF
   dontPatchELF = true;
 
   cmakeFlags = [
-    "-DCMAKE_BUILD_TYPE=Release"
+    "-DCMAKE_BUILD_TYPE=${buildType}"
     "-DWEBGPU_BACKEND=dawn"
     "-G Ninja"
     # Include the cache init file with Dawn path (relative to source, cmake runs from build/)
@@ -233,6 +235,11 @@ EOF
     ++ lib.optionals (logLevel == "yinfo") [
     "-DYTRACE_ENABLE_YTRACE=0"
     "-DYTRACE_ENABLE_YDEBUG=0"
+  ]
+    ++ lib.optionals enableAsan [
+    "-DCMAKE_CXX_FLAGS=-fsanitize=address -fno-omit-frame-pointer -g"
+    "-DCMAKE_C_FLAGS=-fsanitize=address -fno-omit-frame-pointer -g"
+    "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address"
   ];
 
   enableParallelBuilding = true;
