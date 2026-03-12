@@ -875,7 +875,10 @@ void YGuiOverlayImpl::handleWidgetEvent(const ygui::WidgetEvent& event) {
     // Context menu item clicked
     if (event.eventType == "click" && event.widgetId.substr(0, 10) == "menu-item-") {
         size_t idx = 0;
-        try { idx = std::stoul(event.widgetId.substr(10)); } catch (...) { return; }
+        try { idx = std::stoul(event.widgetId.substr(10)); } catch (...) {
+            ywarn("YGuiOverlay: failed to parse menu item index from widget id '{}'", event.widgetId);
+            return;
+        }
         if (idx < _menuItems.size()) {
             auto item = _menuItems[idx];  // copy before clearing
             clearContextMenu();

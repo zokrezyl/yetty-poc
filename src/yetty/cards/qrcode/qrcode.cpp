@@ -210,8 +210,13 @@ private:
         
         if (hex.size() != 6) return 0x000000FF;
         
-        uint32_t rgb = std::stoul(hex, nullptr, 16);
-        return (rgb << 8) | 0xFF;  // RGBA with full alpha
+        try {
+            uint32_t rgb = std::stoul(hex, nullptr, 16);
+            return (rgb << 8) | 0xFF;  // RGBA with full alpha
+        } catch (...) {
+            ywarn("QRCode: failed to parse color hex value '{}'", hex);
+            return 0x000000FF;
+        }
     }
 
     Result<void> encodeQR(const std::string& data) {

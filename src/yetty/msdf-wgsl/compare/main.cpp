@@ -71,8 +71,13 @@ int main(int argc, char* argv[]) {
     std::vector<uint32_t> codepoints = {32, 65, 97, 48, 124};
     if (argc > 3) {
         codepoints.clear();
-        for (int i = 3; i < argc; i++)
-            codepoints.push_back(std::stoul(argv[i]));
+        for (int i = 3; i < argc; i++) {
+            try {
+                codepoints.push_back(std::stoul(argv[i]));
+            } catch (...) {
+                fprintf(stderr, "Warning: failed to parse codepoint '%s', skipping\n", argv[i]);
+            }
+        }
     }
 
     for (uint32_t cp : codepoints) {

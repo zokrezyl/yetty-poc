@@ -106,14 +106,25 @@ static std::vector<float> yamlFloatList(const YAML::Node& node, const std::strin
 }
 
 static uint32_t parseColor(const std::string& colorStr) {
-    if (colorStr.size() > 2 && colorStr[0] == '0' && (colorStr[1] == 'x' || colorStr[1] == 'X'))
-        return static_cast<uint32_t>(std::stoul(colorStr, nullptr, 16));
+    if (colorStr.size() > 2 && colorStr[0] == '0' && (colorStr[1] == 'x' || colorStr[1] == 'X')) {
+        try {
+            return static_cast<uint32_t>(std::stoul(colorStr, nullptr, 16));
+        } catch (...) {
+            ywarn("YGui: failed to parse color value '{}'", colorStr);
+            return 0xFFFFFFFF;
+        }
+    }
     if (!colorStr.empty() && colorStr[0] == '#') {
-        uint32_t rgb = static_cast<uint32_t>(std::stoul(colorStr.substr(1), nullptr, 16));
-        uint8_t r = (rgb >> 16) & 0xFF;
-        uint8_t g = (rgb >> 8) & 0xFF;
-        uint8_t b = rgb & 0xFF;
-        return 0xFF000000 | (b << 16) | (g << 8) | r;
+        try {
+            uint32_t rgb = static_cast<uint32_t>(std::stoul(colorStr.substr(1), nullptr, 16));
+            uint8_t r = (rgb >> 16) & 0xFF;
+            uint8_t g = (rgb >> 8) & 0xFF;
+            uint8_t b = rgb & 0xFF;
+            return 0xFF000000 | (b << 16) | (g << 8) | r;
+        } catch (...) {
+            ywarn("YGui: failed to parse color value '{}'", colorStr);
+            return 0xFFFFFFFF;
+        }
     }
     return 0xFFFFFFFF;
 }

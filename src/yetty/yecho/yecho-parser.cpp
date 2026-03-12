@@ -1,4 +1,5 @@
 #include "yecho-parser.h"
+#include <ytrace/ytrace.hpp>
 #include <algorithm>
 #include <cctype>
 #include <sstream>
@@ -47,6 +48,7 @@ std::optional<uint32_t> YEchoAttribute::asColor() const {
     try {
         return static_cast<uint32_t>(std::stoul(hex, nullptr, 16));
     } catch (...) {
+        ywarn("YEchoParser: failed to parse color hex value '{}'", hex);
         return std::nullopt;
     }
 }
@@ -129,7 +131,7 @@ bool GlyphRegistry::loadFromDirectory(const std::string& shaderDir) {
                 glyphs_[name] = codepoint;
                 loaded++;
             } catch (...) {
-                // Skip malformed filenames
+                ywarn("YEchoParser: failed to parse glyph offset from filename '{}'", filename);
             }
         }
     }
