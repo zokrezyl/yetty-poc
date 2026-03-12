@@ -58,9 +58,11 @@ target_link_options(yetty PRIVATE
     --use-port=emdawnwebgpu
     -sASYNCIFY
     -sASYNCIFY_STACK_SIZE=65536
-    -sALLOW_MEMORY_GROWTH
     -sWASM_BIGINT
     -sFILESYSTEM=1
+    -sALLOW_MEMORY_GROWTH=1
+    -sINITIAL_MEMORY=2048MB
+    -sASSERTIONS=2
     -lwebsocket.js
     "--preload-file=${CMAKE_BINARY_DIR}/assets@/assets"
     "--preload-file=${CMAKE_BINARY_DIR}/demo@/demo"
