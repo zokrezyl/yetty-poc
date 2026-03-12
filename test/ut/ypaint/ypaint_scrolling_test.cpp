@@ -1,5 +1,5 @@
 //=============================================================================
-// YPaintBuilder Scrolling Mode Unit Tests
+// Painter Scrolling Mode Unit Tests
 //
 // Tests terminal-style scrolling behavior:
 // - Cursor positioning
@@ -32,7 +32,7 @@
 using namespace boost::ut;
 using namespace yetty;
 using namespace yetty::ypaint;
-using namespace yetty::ypaint::card;
+using namespace yetty::card;
 
 //=============================================================================
 // Helper: read u32 from float buffer at word index
@@ -195,12 +195,12 @@ suite scrolling_tests = [] {
         auto gpuAlloc = testAllocator();
 
         // Create builder WITHOUT scrolling mode
-        auto builderNoScroll = *YPaintBuilder::create(
+        auto builderNoScroll = *Painter::create(
             FontManager::Ptr{}, gpuAlloc, cardMgr, 0, false);
         expect(builderNoScroll->scrollingMode() == false);
 
         // Create builder WITH scrolling mode
-        auto builderScroll = *YPaintBuilder::create(
+        auto builderScroll = *Painter::create(
             FontManager::Ptr{}, gpuAlloc, cardMgr, 1, true);
         expect(builderScroll->scrollingMode() == true);
     };
@@ -209,7 +209,7 @@ suite scrolling_tests = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
 
-        auto builder = *YPaintBuilder::create(
+        auto builder = *Painter::create(
             FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         // Default cursor position should be (0, 0)
@@ -221,7 +221,7 @@ suite scrolling_tests = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
 
-        auto builder = *YPaintBuilder::create(
+        auto builder = *Painter::create(
             FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         builder->setCursorPosition(5, 10);
@@ -237,7 +237,7 @@ suite scrolling_tests = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
 
-        auto builder = *YPaintBuilder::create(
+        auto builder = *Painter::create(
             FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         // Set scene bounds: 0,0 to 100,200 with cell size 10x20
@@ -261,7 +261,7 @@ suite scrolling_tests = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
 
-        auto builder = *YPaintBuilder::create(
+        auto builder = *Painter::create(
             FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         // Terminal: 24 lines visible
@@ -311,7 +311,7 @@ suite scrolling_tests = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
 
-        auto builder = *YPaintBuilder::create(
+        auto builder = *Painter::create(
             FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         // Terminal: 30 lines visible
@@ -360,7 +360,7 @@ suite scrolling_tests = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
 
-        auto builder = *YPaintBuilder::create(
+        auto builder = *Painter::create(
             FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         // Terminal: 20 lines
@@ -405,7 +405,7 @@ suite scrolling_tests = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
 
-        auto builder = *YPaintBuilder::create(
+        auto builder = *Painter::create(
             FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         // Terminal: 24 lines
@@ -451,7 +451,7 @@ suite scrolling_tests = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
 
-        auto builder = *YPaintBuilder::create(
+        auto builder = *Painter::create(
             FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         // Terminal: 40 lines
@@ -496,7 +496,7 @@ suite scrolling_tests = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
 
-        auto builder = *YPaintBuilder::create(
+        auto builder = *Painter::create(
             FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         // Terminal: 10 lines
@@ -540,7 +540,7 @@ suite scrolling_tests = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
 
-        auto builder = *YPaintBuilder::create(
+        auto builder = *Painter::create(
             FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         // Terminal: 10 lines
@@ -592,7 +592,7 @@ suite scrolling_tests = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
 
-        auto builder = *YPaintBuilder::create(
+        auto builder = *Painter::create(
             FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         // Terminal: 50 lines
@@ -640,7 +640,7 @@ suite scrolling_tests = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
 
-        auto builder = *YPaintBuilder::create(
+        auto builder = *Painter::create(
             FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         // Terminal: 5 lines
@@ -679,7 +679,7 @@ suite scrolling_tests = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
 
-        auto builder = *YPaintBuilder::create(
+        auto builder = *Painter::create(
             FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         // Terminal: 10 lines
@@ -714,7 +714,7 @@ suite scrolling_tests = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
 
-        auto builder = *YPaintBuilder::create(
+        auto builder = *Painter::create(
             FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         // Terminal: 20 lines
@@ -750,10 +750,10 @@ suite scrolling_tests = [] {
         auto gpuAlloc = testAllocator();
 
         // Test lightweight factory with scrolling mode
-        auto builder = *YPaintBuilder::create(FontManager::Ptr{}, gpuAlloc, true);
+        auto builder = *Painter::create(FontManager::Ptr{}, gpuAlloc, true);
         expect(builder->scrollingMode() == true);
 
-        auto builder2 = *YPaintBuilder::create(FontManager::Ptr{}, gpuAlloc, false);
+        auto builder2 = *Painter::create(FontManager::Ptr{}, gpuAlloc, false);
         expect(builder2->scrollingMode() == false);
     };
 
@@ -766,7 +766,7 @@ suite scrolling_tests = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
 
-        auto builder = *YPaintBuilder::create(
+        auto builder = *Painter::create(
             FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         const uint32_t VISIBLE_LINES = 20;
@@ -810,7 +810,7 @@ suite scrolling_tests = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
 
-        auto builder = *YPaintBuilder::create(
+        auto builder = *Painter::create(
             FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         const uint32_t VISIBLE_LINES = 15;
@@ -864,7 +864,7 @@ suite scrolling_tests = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
 
-        auto builder = *YPaintBuilder::create(
+        auto builder = *Painter::create(
             FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         const uint32_t VISIBLE_LINES = 30;
@@ -912,7 +912,7 @@ suite scrolling_tests = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
 
-        auto builder = *YPaintBuilder::create(
+        auto builder = *Painter::create(
             FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         const uint32_t VISIBLE_LINES = 10;
@@ -968,7 +968,7 @@ suite scrolling_tests = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
 
-        auto builder = *YPaintBuilder::create(
+        auto builder = *Painter::create(
             FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         const uint32_t VISIBLE_LINES = 25;
@@ -1008,7 +1008,7 @@ suite scrolling_tests = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
 
-        auto builder = *YPaintBuilder::create(
+        auto builder = *Painter::create(
             FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         const uint32_t VISIBLE_LINES = 20;
@@ -1046,7 +1046,7 @@ suite scrolling_tests = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
 
-        auto builder = *YPaintBuilder::create(
+        auto builder = *Painter::create(
             FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         const uint32_t VISIBLE_LINES = 10;
@@ -1111,7 +1111,7 @@ suite scrolling_tests = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
 
-        auto builder = *YPaintBuilder::create(
+        auto builder = *Painter::create(
             FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         const uint32_t VISIBLE_LINES = 5;
@@ -1160,7 +1160,7 @@ suite scrolling_tests = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
 
-        auto builder = *YPaintBuilder::create(
+        auto builder = *Painter::create(
             FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         const uint32_t VISIBLE_LINES = 10;
@@ -1204,7 +1204,7 @@ suite scrolling_tests = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
 
-        auto builder = *YPaintBuilder::create(
+        auto builder = *Painter::create(
             FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         const uint32_t VISIBLE_LINES = 10;
@@ -1263,7 +1263,7 @@ suite scrolling_tests = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
 
-        auto builder = *YPaintBuilder::create(
+        auto builder = *Painter::create(
             FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         const uint32_t VISIBLE_LINES = 10;
@@ -1326,7 +1326,7 @@ suite scrolling_tests = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
 
-        auto builder = *YPaintBuilder::create(
+        auto builder = *Painter::create(
             FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         const uint32_t VISIBLE_LINES = 10;
@@ -1368,7 +1368,7 @@ suite scrolling_tests = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
 
-        auto builder = *YPaintBuilder::create(
+        auto builder = *Painter::create(
             FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         const uint32_t VISIBLE_LINES = 5;
@@ -1428,7 +1428,7 @@ suite scrolling_tests = [] {
     };
 
     // Visual grid dump - only uses cout for visual verification
-    auto dumpGridState = [](YPaintBuilder* builder, const char* label) {
+    auto dumpGridState = [](Painter* builder, const char* label) {
         const auto& grid = builder->gridStaging();
         uint32_t gridW = builder->gridWidth();
         uint32_t gridH = builder->gridHeight();
@@ -1481,7 +1481,7 @@ suite scrolling_tests = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
 
-        auto builder = *YPaintBuilder::create(
+        auto builder = *Painter::create(
             FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         const uint32_t VISIBLE_LINES = 10;
@@ -1528,7 +1528,7 @@ suite scrolling_tests = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
 
-        auto builder = *YPaintBuilder::create(
+        auto builder = *Painter::create(
             FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         const uint32_t VISIBLE_LINES = 20;
@@ -1572,7 +1572,7 @@ suite scrolling_tests = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
 
-        auto builder = *YPaintBuilder::create(
+        auto builder = *Painter::create(
             FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         // Large grid: 80 columns x 60 rows
@@ -1649,7 +1649,7 @@ suite scrolling_tests = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
 
-        auto builder = *YPaintBuilder::create(
+        auto builder = *Painter::create(
             FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         // Large grid: 80 columns x 40 rows
@@ -1696,7 +1696,7 @@ suite scrolling_tests = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
 
-        auto builder = *YPaintBuilder::create(
+        auto builder = *Painter::create(
             FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         // Terminal-like: 120 columns x 50 rows
@@ -1746,7 +1746,7 @@ suite scrolling_tests = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
 
-        auto builder = *YPaintBuilder::create(
+        auto builder = *Painter::create(
             FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         const uint32_t VISIBLE_LINES = 20;
@@ -1814,7 +1814,7 @@ suite scrolling_tests = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
 
-        auto builder = *YPaintBuilder::create(
+        auto builder = *Painter::create(
             FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         const float SCENE_W = 800.0f;
@@ -1851,7 +1851,7 @@ suite scrolling_tests = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
 
-        auto builder = *YPaintBuilder::create(
+        auto builder = *Painter::create(
             FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         const uint32_t VISIBLE_LINES = 5;
@@ -1895,7 +1895,7 @@ suite scrolling_tests = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
 
-        auto builder = *YPaintBuilder::create(
+        auto builder = *Painter::create(
             FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         const uint32_t VISIBLE_LINES = 10;
@@ -1955,7 +1955,7 @@ suite scrolling_tests = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
 
-        auto builder = *YPaintBuilder::create(
+        auto builder = *Painter::create(
             FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         const uint32_t VISIBLE_LINES = 10;
@@ -2054,7 +2054,7 @@ suite scrolling_tests = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
 
-        auto builder = *YPaintBuilder::create(
+        auto builder = *Painter::create(
             FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         const uint32_t VISIBLE_LINES = 20;
@@ -2374,7 +2374,7 @@ suite scrolling_tests = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
 
-        auto builder = *YPaintBuilder::create(
+        auto builder = *Painter::create(
             FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         const uint32_t VISIBLE_LINES = 30;
@@ -2469,7 +2469,7 @@ suite scrolling_tests = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
 
-        auto builder = *YPaintBuilder::create(
+        auto builder = *Painter::create(
             FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         const uint32_t VISIBLE_LINES = 10;

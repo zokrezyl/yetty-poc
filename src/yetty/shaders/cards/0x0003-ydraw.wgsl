@@ -288,7 +288,7 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
                 let pOff = primDataBase + bitcast<u32>(cardStorage[primitiveOffset + pi]);
                 let pType = bitcast<u32>(cardStorage[pOff]);
                 if (pType >= 100u) {
-                    let d = evalSDF3D(pOff, hitPos);
+                    let d = evaluateYdrawSDF3D(pOff, hitPos);
                     minD = min(minD, d);
                 }
             }
@@ -309,14 +309,14 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
                 let pOff = primDataBase + bitcast<u32>(cardStorage[primitiveOffset + pi]);
                 let pType = bitcast<u32>(cardStorage[pOff]);
                 if (pType >= 100u) {
-                    sdfPX = min(sdfPX, evalSDF3D(pOff, hitPos + vec3<f32>(e.x, e.y, e.y)));
-                    sdfNX = min(sdfNX, evalSDF3D(pOff, hitPos - vec3<f32>(e.x, e.y, e.y)));
-                    sdfPY = min(sdfPY, evalSDF3D(pOff, hitPos + vec3<f32>(e.y, e.x, e.y)));
-                    sdfNY = min(sdfNY, evalSDF3D(pOff, hitPos - vec3<f32>(e.y, e.x, e.y)));
-                    sdfPZ = min(sdfPZ, evalSDF3D(pOff, hitPos + vec3<f32>(e.y, e.y, e.x)));
-                    sdfNZ = min(sdfNZ, evalSDF3D(pOff, hitPos - vec3<f32>(e.y, e.y, e.x)));
+                    sdfPX = min(sdfPX, evaluateYdrawSDF3D(pOff, hitPos + vec3<f32>(e.x, e.y, e.y)));
+                    sdfNX = min(sdfNX, evaluateYdrawSDF3D(pOff, hitPos - vec3<f32>(e.x, e.y, e.y)));
+                    sdfPY = min(sdfPY, evaluateYdrawSDF3D(pOff, hitPos + vec3<f32>(e.y, e.x, e.y)));
+                    sdfNY = min(sdfNY, evaluateYdrawSDF3D(pOff, hitPos - vec3<f32>(e.y, e.x, e.y)));
+                    sdfPZ = min(sdfPZ, evaluateYdrawSDF3D(pOff, hitPos + vec3<f32>(e.y, e.y, e.x)));
+                    sdfNZ = min(sdfNZ, evaluateYdrawSDF3D(pOff, hitPos - vec3<f32>(e.y, e.y, e.x)));
                     // Find closest primitive for material color
-                    let d = evalSDF3D(pOff, hitPos);
+                    let d = evaluateYdrawSDF3D(pOff, hitPos);
                     if (d < hitMinD) {
                         hitMinD = d;
                         let colors = primColors(pOff);
@@ -551,7 +551,7 @@ fn shaderGlyph_1048579(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
                 }
             } else {
                 // ---- REGULAR SDF PRIMITIVE (compact layout) ----
-                let d = evalSDF(primOff, scenePos);
+                let d = evaluateYdrawSDF(primOff, scenePos);
 
                 let colors = primColors(primOff);
                 let fillColorPacked = colors.x;

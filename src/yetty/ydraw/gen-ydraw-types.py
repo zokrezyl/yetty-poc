@@ -154,10 +154,10 @@ def generate_wgsl(primitives: list[dict], out: Path) -> None:
         L.append(f"const {prim['_const_name']}: u32 = {prim['id']}u;")
     L.append("")
 
-    # --- evalSDF (2D) — compact layout dispatch ---
+    # --- evaluateYdrawSDF (2D) — compact layout dispatch ---
     sdf2d = [p for p in primitives if p["category"] == "sdf2d"]
     if sdf2d:
-        L.append("fn evalSDF(primOffset: u32, p: vec2<f32>) -> f32 {")
+        L.append("fn evaluateYdrawSDF(primOffset: u32, p: vec2<f32>) -> f32 {")
         L.append("    let primType = bitcast<u32>(cardStorage[primOffset + 0u]);")
         L.append("")
         L.append("    switch (primType) {")
@@ -176,10 +176,10 @@ def generate_wgsl(primitives: list[dict], out: Path) -> None:
         L.append("    }")
         L.append("}\n")
 
-    # --- evalSDF3D ---
+    # --- evaluateYdrawSDF3D ---
     sdf3d = [p for p in primitives if p["category"] == "sdf3d"]
     if sdf3d:
-        L.append("fn evalSDF3D(primOffset: u32, p: vec3<f32>) -> f32 {")
+        L.append("fn evaluateYdrawSDF3D(primOffset: u32, p: vec3<f32>) -> f32 {")
         L.append("    let primType = bitcast<u32>(cardStorage[primOffset + 0u]);")
         L.append("")
         L.append("    switch (primType) {")

@@ -13,7 +13,7 @@
 
 using namespace yetty;
 using namespace yetty::ypaint;
-using namespace yetty::ypaint::card;
+using namespace yetty::card;
 
 // Minimal mocks - same as test file
 class MockCardBufferManager : public CardBufferManager {
@@ -99,7 +99,7 @@ int main() {
     std::cout << "Testing shapes.sh scenario with different cursor positions\n\n";
 
     for (int cursorRow : {0, 3, 5, 10}) {
-        auto builder = *YPaintBuilder::create(FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
+        auto builder = *Painter::create(FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
         builder->setSceneBounds(0, 0, 800, 600);
         builder->setGridCellSize(CELL_W, CELL_H);
 

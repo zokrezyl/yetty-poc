@@ -75,7 +75,7 @@ const SDF_LINEAR_GRADIENT_BOX: u32 = 132u;
 const SDF_LINEAR_GRADIENT_CIRCLE: u32 = 133u;
 const SDF_RADIAL_GRADIENT_CIRCLE: u32 = 134u;
 
-fn evalSDF(primOffset: u32, p: vec2<f32>) -> f32 {
+fn evaluateYdrawSDF(primOffset: u32, p: vec2<f32>) -> f32 {
     let primType = bitcast<u32>(cardStorage[primOffset + 0u]);
 
     switch (primType) {
@@ -314,7 +314,7 @@ fn evalSDF(primOffset: u32, p: vec2<f32>) -> f32 {
     }
 }
 
-fn evalSDF3D(primOffset: u32, p: vec3<f32>) -> f32 {
+fn evaluateYdrawSDF3D(primOffset: u32, p: vec3<f32>) -> f32 {
     let primType = bitcast<u32>(cardStorage[primOffset + 0u]);
 
     switch (primType) {

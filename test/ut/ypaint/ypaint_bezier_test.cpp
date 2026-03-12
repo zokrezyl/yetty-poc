@@ -17,7 +17,7 @@
 using namespace boost::ut;
 using namespace yetty;
 using namespace yetty::ypaint;
-using namespace yetty::ypaint::card;
+using namespace yetty::card;
 
 //=============================================================================
 // Helper: read u32 from float buffer at word index

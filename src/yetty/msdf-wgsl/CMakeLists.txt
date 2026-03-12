@@ -37,6 +37,10 @@ if(TARGET cdb)
     target_link_libraries(msdf-wgsl PUBLIC cdb)
 endif()
 
+if(TARGET ytrace)
+    target_link_libraries(msdf-wgsl PUBLIC ytrace)
+endif()
+
 # FreeType headers only — actual static lib linked by final executables
 target_include_directories(msdf-wgsl PUBLIC ${FREETYPE_INCLUDE_DIR})
 

@@ -287,7 +287,7 @@ fn shaderGlyph_1048580(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
                 let pOff = primDataBase + bitcast<u32>(cardStorage[primitiveOffset + pi]);
                 let pType = bitcast<u32>(cardStorage[pOff]);
                 if (pType >= 100u) {
-                    let d = evalSDF3D(pOff, hitPos);
+                    let d = evaluateYpaintSDF3D(pOff, hitPos);
                     minD = min(minD, d);
                 }
             }
@@ -308,21 +308,21 @@ fn shaderGlyph_1048580(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
                 let pOff = primDataBase + bitcast<u32>(cardStorage[primitiveOffset + pi]);
                 let pType = bitcast<u32>(cardStorage[pOff]);
                 if (pType >= 100u) {
-                    sdfPX = min(sdfPX, evalSDF3D(pOff, hitPos + vec3<f32>(e.x, e.y, e.y)));
-                    sdfNX = min(sdfNX, evalSDF3D(pOff, hitPos - vec3<f32>(e.x, e.y, e.y)));
-                    sdfPY = min(sdfPY, evalSDF3D(pOff, hitPos + vec3<f32>(e.y, e.x, e.y)));
-                    sdfNY = min(sdfNY, evalSDF3D(pOff, hitPos - vec3<f32>(e.y, e.x, e.y)));
-                    sdfPZ = min(sdfPZ, evalSDF3D(pOff, hitPos + vec3<f32>(e.y, e.y, e.x)));
-                    sdfNZ = min(sdfNZ, evalSDF3D(pOff, hitPos - vec3<f32>(e.y, e.y, e.x)));
+                    sdfPX = min(sdfPX, evaluateYpaintSDF3D(pOff, hitPos + vec3<f32>(e.x, e.y, e.y)));
+                    sdfNX = min(sdfNX, evaluateYpaintSDF3D(pOff, hitPos - vec3<f32>(e.x, e.y, e.y)));
+                    sdfPY = min(sdfPY, evaluateYpaintSDF3D(pOff, hitPos + vec3<f32>(e.y, e.x, e.y)));
+                    sdfNY = min(sdfNY, evaluateYpaintSDF3D(pOff, hitPos - vec3<f32>(e.y, e.x, e.y)));
+                    sdfPZ = min(sdfPZ, evaluateYpaintSDF3D(pOff, hitPos + vec3<f32>(e.y, e.y, e.x)));
+                    sdfNZ = min(sdfNZ, evaluateYpaintSDF3D(pOff, hitPos - vec3<f32>(e.y, e.y, e.x)));
                     // Find closest primitive for material color
-                    let d = evalSDF3D(pOff, hitPos);
+                    let d = evaluateYpaintSDF3D(pOff, hitPos);
                     if (d < hitMinD) {
                         hitMinD = d;
-                        let colors = primColors(pOff);
+                        let colors = ypaintPrimColors(pOff);
                         if (colors.x != 0u) {
                             let primType = bitcast<u32>(cardStorage[pOff + 0u]);
-                            if (isGradientPrim(primType)) {
-                                hitColor = evalGradientFillColor(pOff, hitPos.xy).rgb;
+                            if (ypaintIsGradientPrim(primType)) {
+                                hitColor = ypaintEvalGradientFillColor(pOff, hitPos.xy).rgb;
                             } else {
                                 hitColor = unpackColor(colors.x).rgb;
                             }
@@ -551,15 +551,15 @@ fn shaderGlyph_1048580(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
                 }
             } else {
                 // ---- REGULAR SDF PRIMITIVE (compact layout) ----
-                let d = evalSDF(primOff, scenePos);
+                let d = evaluateYpaintSDF(primOff, scenePos);
 
-                let colors = primColors(primOff);
+                let colors = ypaintPrimColors(primOff);
                 let fillColorPacked = colors.x;
                 if (d < 0.0 && fillColorPacked != 0u) {
                     let primType = bitcast<u32>(cardStorage[primOff + 1u]);
                     var fillColorAlpha: vec4<f32>;
-                    if (isGradientPrim(primType)) {
-                        fillColorAlpha = evalGradientFillColor(primOff, scenePos);
+                    if (ypaintIsGradientPrim(primType)) {
+                        fillColorAlpha = ypaintEvalGradientFillColor(primOff, scenePos);
                     } else {
                         fillColorAlpha = unpackColorAlpha(fillColorPacked);
                     }
@@ -569,7 +569,7 @@ fn shaderGlyph_1048580(localUV: vec2<f32>, time: f32, fg: u32, bg: u32, pixelPos
                 }
 
                 let strokeColorPacked = colors.y;
-                let strokeWidth = primStrokeWidth(primOff);
+                let strokeWidth = ypaintPrimStrokeWidth(primOff);
                 if (strokeWidth > 0.0 && strokeColorPacked != 0u) {
                     let strokeDist = abs(d) - strokeWidth * 0.5;
                     if (strokeDist < 0.0) {

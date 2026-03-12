@@ -20,7 +20,7 @@
 using namespace boost::ut;
 using namespace yetty;
 using namespace yetty::ypaint;
-using namespace yetty::ypaint::card;
+using namespace yetty::card;
 
 //=============================================================================
 // Mock CardBufferManager — copied from ydraw_scrolling_test.cpp
@@ -168,7 +168,7 @@ static YPaintBuffer::Ptr createShapesDemoBuffer() {
 //=============================================================================
 // Visual grid dump
 //=============================================================================
-static void dumpGrid(YPaintBuilder* builder, const char* label) {
+static void dumpGrid(Painter* builder, const char* label) {
     const auto& grid = builder->gridStaging();
     uint32_t gridW = builder->gridWidth();
     uint32_t gridH = builder->gridHeight();
@@ -221,7 +221,7 @@ suite shapes_demo_tests = [] {
     "shapes_demo_cursor_0_0"_test = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
-        auto builder = *YPaintBuilder::create(FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
+        auto builder = *Painter::create(FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         // Terminal-like scene: 800x600 pixels, cell 10x20
         builder->setSceneBounds(0, 0, 800, 600);
@@ -258,7 +258,7 @@ suite shapes_demo_tests = [] {
     "shapes_demo_cursor_0_3"_test = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
-        auto builder = *YPaintBuilder::create(FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
+        auto builder = *Painter::create(FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         builder->setSceneBounds(0, 0, 800, 600);
         builder->setGridCellSize(10, 20);
@@ -296,7 +296,7 @@ suite shapes_demo_tests = [] {
     "shapes_demo_cursor_0_10"_test = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
-        auto builder = *YPaintBuilder::create(FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
+        auto builder = *Painter::create(FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         builder->setSceneBounds(0, 0, 800, 800);
         builder->setGridCellSize(10, 20);
@@ -332,7 +332,7 @@ suite shapes_demo_tests = [] {
     "shapes_demo_multiple_adds_with_scroll"_test = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
-        auto builder = *YPaintBuilder::create(FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
+        auto builder = *Painter::create(FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         builder->setSceneBounds(0, 0, 800, 600);
         builder->setGridCellSize(10, 20);
@@ -365,7 +365,7 @@ suite shapes_demo_tests = [] {
     "shapes_demo_verify_grid_vs_shader_lookup"_test = [] {
         auto cardMgr = std::make_shared<MockCardManager>();
         auto gpuAlloc = testAllocator();
-        auto builder = *YPaintBuilder::create(FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
+        auto builder = *Painter::create(FontManager::Ptr{}, gpuAlloc, cardMgr, 0, true);
 
         const float CELL_H = 20.0f;
         const float CELL_W = 10.0f;
