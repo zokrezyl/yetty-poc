@@ -83,6 +83,7 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y \
           automake autoconf libtool \
+          meson ninja-build nasm \
           libfontconfig1-dev \
           libxrandr-dev \
           libxinerama-dev \
@@ -140,8 +141,8 @@ jobs:
       run: |
         echo "build-output-dir=${{ github.workspace }}/build-macos" >> "$GITHUB_OUTPUT"
 
-    - name: Install autotools
-      run: brew install automake autoconf libtool
+    - name: Install macOS dependencies
+      run: brew install automake autoconf libtool meson ninja nasm
 
     - name: Configure CMake
       run: >
@@ -256,6 +257,9 @@ jobs:
         sdkmanager --install "ndk;26.1.10909125"
         echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.1.10909125" >> $GITHUB_ENV
         echo "NDK_HOME=$ANDROID_HOME/ndk/26.1.10909125" >> $GITHUB_ENV
+
+    - name: Install meson for dav1d
+      run: pip install meson ninja
 
     - name: Download Dawn for Android
       run: bash build-tools/android/build-dawn.sh
