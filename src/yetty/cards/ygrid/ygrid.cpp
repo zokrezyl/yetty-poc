@@ -290,9 +290,17 @@ private:
             } else if (key == "fg") {
                 _fgColor = parseColor(val);
             } else if (key == "cols") {
-                _gridCols = static_cast<uint8_t>(std::stoul(val));
+                try {
+                    _gridCols = static_cast<uint8_t>(std::stoul(val));
+                } catch (...) {
+                    ywarn("YGrid: failed to parse cols value '{}'", val);
+                }
             } else if (key == "rows") {
-                _gridRows = static_cast<uint8_t>(std::stoul(val));
+                try {
+                    _gridRows = static_cast<uint8_t>(std::stoul(val));
+                } catch (...) {
+                    ywarn("YGrid: failed to parse rows value '{}'", val);
+                }
             }
         }
     }
@@ -305,8 +313,13 @@ private:
             hex = std::string{hex[0], hex[0], hex[1], hex[1], hex[2], hex[2]};
         }
         if (hex.size() != 6) return 0x000000FF;
-        uint32_t rgb = std::stoul(hex, nullptr, 16);
-        return (rgb << 8) | 0xFF;
+        try {
+            uint32_t rgb = std::stoul(hex, nullptr, 16);
+            return (rgb << 8) | 0xFF;
+        } catch (...) {
+            ywarn("YGrid: failed to parse color hex value '{}'", hex);
+            return 0x000000FF;
+        }
     }
 
     Result<void> parsePayload(const std::string& payload) {

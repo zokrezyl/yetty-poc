@@ -296,7 +296,11 @@ private:
                 if (iss >> colorStr) {
                     if (colorStr.substr(0, 2) == "0x" || colorStr.substr(0, 2) == "0X")
                         colorStr = colorStr.substr(2);
-                    _builder->setBgColor(static_cast<uint32_t>(std::stoul(colorStr, nullptr, 16)));
+                    try {
+                        _builder->setBgColor(static_cast<uint32_t>(std::stoul(colorStr, nullptr, 16)));
+                    } catch (...) {
+                        ywarn("Diagram: failed to parse --bg-color value '{}'", colorStr);
+                    }
                 }
             } else if (token == "--show-bounds") {
                 _builder->addFlags(YDrawBuilder::FLAG_SHOW_BOUNDS);

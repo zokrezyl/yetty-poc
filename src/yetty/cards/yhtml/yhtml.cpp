@@ -629,8 +629,12 @@ private:
                          colorStr.substr(0, 2) == "0X")) {
                         colorStr = colorStr.substr(2);
                     }
-                    _buffer->setBgColor(static_cast<uint32_t>(
-                        std::stoul(colorStr, nullptr, 16)));
+                    try {
+                        _buffer->setBgColor(static_cast<uint32_t>(
+                            std::stoul(colorStr, nullptr, 16)));
+                    } catch (...) {
+                        ywarn("YHtml: failed to parse --bg-color value '{}'", colorStr);
+                    }
                 }
             }
         }

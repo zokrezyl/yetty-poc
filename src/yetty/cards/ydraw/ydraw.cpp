@@ -432,7 +432,11 @@ private:
                 if (iss >> colorStr) {
                     if (colorStr.substr(0, 2) == "0x" || colorStr.substr(0, 2) == "0X")
                         colorStr = colorStr.substr(2);
-                    _buffer->setBgColor(static_cast<uint32_t>(std::stoul(colorStr, nullptr, 16)));
+                    try {
+                        _buffer->setBgColor(static_cast<uint32_t>(std::stoul(colorStr, nullptr, 16)));
+                    } catch (...) {
+                        ywarn("YDraw: failed to parse --bg-color value '{}'", colorStr);
+                    }
                 }
             } else if (token == "--cell-size") {
                 std::string sx, sy;
@@ -443,7 +447,14 @@ private:
                     _builder->setGridCellSize(csX, csY);
                 }
             } else if (token == "--max-prims-per-cell") {
-                std::string s; if (iss >> s) _builder->setMaxPrimsPerCell(static_cast<uint32_t>(std::stoul(s)));
+                std::string s;
+                if (iss >> s) {
+                    try {
+                        _builder->setMaxPrimsPerCell(static_cast<uint32_t>(std::stoul(s)));
+                    } catch (...) {
+                        ywarn("YDraw: failed to parse --max-prims-per-cell value '{}'", s);
+                    }
+                }
             } else if (token == "--show-bounds") {
                 _buffer->addFlags(YDrawBuffer::FLAG_SHOW_BOUNDS);
             } else if (token == "--show-grid") {

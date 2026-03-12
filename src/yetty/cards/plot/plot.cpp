@@ -266,7 +266,11 @@ public:
         std::string token;
         while (iss >> token) {
             if (token.rfind("advance=", 0) == 0) {
-                advanceCount = static_cast<uint32_t>(std::stoul(token.substr(8)));
+                try {
+                    advanceCount = static_cast<uint32_t>(std::stoul(token.substr(8)));
+                } catch (...) {
+                    ywarn("Plot: failed to parse advance= value '{}'", token.substr(8));
+                }
             } else if (token.rfind("buffer=", 0) == 0) {
                 targetBuffer = token.substr(7);
             }
@@ -662,8 +666,12 @@ private:
 
                     // Parse hex color if provided: #RRGGBB -> 0xFFRRGGBB
                     if (!p.color.empty() && p.color[0] == '#' && p.color.size() >= 7) {
-                        uint32_t rgb = static_cast<uint32_t>(std::stoul(p.color.substr(1), nullptr, 16));
-                        color = 0xFF000000 | rgb;
+                        try {
+                            uint32_t rgb = static_cast<uint32_t>(std::stoul(p.color.substr(1), nullptr, 16));
+                            color = 0xFF000000 | rgb;
+                        } catch (...) {
+                            ywarn("Plot: failed to parse color value '{}'", p.color);
+                        }
                     }
                     _functionColors.push_back(color);
                 }
@@ -758,7 +766,11 @@ private:
                     if (colorStr.substr(0, 2) == "0x" || colorStr.substr(0, 2) == "0X") {
                         colorStr = colorStr.substr(2);
                     }
-                    _bgColor = static_cast<uint32_t>(std::stoul(colorStr, nullptr, 16));
+                    try {
+                        _bgColor = static_cast<uint32_t>(std::stoul(colorStr, nullptr, 16));
+                    } catch (...) {
+                        ywarn("Plot: failed to parse --bg-color value '{}'", colorStr);
+                    }
                 }
             } else if (token == "--buffer" || token == "-b") {
                 // Buffer declaration: --buffer name=size or --buffer name=size,name2=size2
@@ -839,8 +851,12 @@ private:
                 
                 // Parse hex color if provided: #RRGGBB -> 0xFFRRGGBB
                 if (!p.color.empty() && p.color[0] == '#' && p.color.size() >= 7) {
-                    uint32_t rgb = static_cast<uint32_t>(std::stoul(p.color.substr(1), nullptr, 16));
-                    color = 0xFF000000 | rgb;
+                    try {
+                        uint32_t rgb = static_cast<uint32_t>(std::stoul(p.color.substr(1), nullptr, 16));
+                        color = 0xFF000000 | rgb;
+                    } catch (...) {
+                        ywarn("Plot: failed to parse color value '{}'", p.color);
+                    }
                 }
                 _functionColors.push_back(color);
             }
@@ -1120,6 +1136,7 @@ private:
         try {
             return static_cast<uint32_t>(std::stoul(numPart)) * multiplier;
         } catch (...) {
+            ywarn("Plot: failed to parse buffer size '{}'", str);
             return 0;
         }
     }

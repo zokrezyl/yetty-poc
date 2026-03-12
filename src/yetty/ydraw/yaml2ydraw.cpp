@@ -1,5 +1,6 @@
 #include "yaml2ydraw.h"
 #include "ydraw-buffer.h"
+#include <ytrace/ytrace.hpp>
 #include <yaml-cpp/yaml.h>
 #include <cmath>
 #include <fstream>
@@ -19,11 +20,16 @@ static uint32_t parseColor(const YAML::Node& node) {
         str = str.substr(1);
         if (str.size() == 3) str = std::string{str[0], str[0], str[1], str[1], str[2], str[2]};
         if (str.size() == 6) str += "FF";
-        uint32_t r = std::stoul(str.substr(0, 2), nullptr, 16);
-        uint32_t g = std::stoul(str.substr(2, 2), nullptr, 16);
-        uint32_t b = std::stoul(str.substr(4, 2), nullptr, 16);
-        uint32_t a = std::stoul(str.substr(6, 2), nullptr, 16);
-        return (a << 24) | (b << 16) | (g << 8) | r;
+        try {
+            uint32_t r = std::stoul(str.substr(0, 2), nullptr, 16);
+            uint32_t g = std::stoul(str.substr(2, 2), nullptr, 16);
+            uint32_t b = std::stoul(str.substr(4, 2), nullptr, 16);
+            uint32_t a = std::stoul(str.substr(6, 2), nullptr, 16);
+            return (a << 24) | (b << 16) | (g << 8) | r;
+        } catch (...) {
+            ywarn("yaml2ydraw: failed to parse color value '{}'", str);
+            return 0xFFFFFFFF;
+        }
     }
     return 0xFFFFFFFF;
 }

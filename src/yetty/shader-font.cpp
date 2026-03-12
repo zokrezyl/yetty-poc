@@ -120,6 +120,7 @@ bool ShaderFontImpl::parseShaderFilename(const std::string& filename, uint32_t& 
             name = hexMatch[2].str();
             return true;
         } catch (...) {
+            ywarn("ShaderFont: failed to parse hex offset from filename '{}'", filename);
             return false;
         }
     }
@@ -142,6 +143,7 @@ bool ShaderFontImpl::parseShaderFilename(const std::string& filename, uint32_t& 
             }
             return false;
         } catch (...) {
+            ywarn("ShaderFont: failed to parse decimal codepoint from filename '{}'", filename);
             return false;
         }
     }

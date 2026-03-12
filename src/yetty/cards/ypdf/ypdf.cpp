@@ -236,8 +236,12 @@ void YPdf::parseArgs(const std::string& args) {
                     (colorStr.substr(0, 2) == "0x" || colorStr.substr(0, 2) == "0X")) {
                     colorStr = colorStr.substr(2);
                 }
-                _textColor = static_cast<uint32_t>(
-                    std::stoul(colorStr, nullptr, 16));
+                try {
+                    _textColor = static_cast<uint32_t>(
+                        std::stoul(colorStr, nullptr, 16));
+                } catch (...) {
+                    ywarn("YPdf: failed to parse --color value '{}'", colorStr);
+                }
             }
         } else if (token == "--bg-color") {
             std::string colorStr;
@@ -246,8 +250,12 @@ void YPdf::parseArgs(const std::string& args) {
                     (colorStr.substr(0, 2) == "0x" || colorStr.substr(0, 2) == "0X")) {
                     colorStr = colorStr.substr(2);
                 }
-                _buffer->setBgColor(static_cast<uint32_t>(
-                    std::stoul(colorStr, nullptr, 16)));
+                try {
+                    _buffer->setBgColor(static_cast<uint32_t>(
+                        std::stoul(colorStr, nullptr, 16)));
+                } catch (...) {
+                    ywarn("YPdf: failed to parse --bg-color value '{}'", colorStr);
+                }
             }
         }
     }
