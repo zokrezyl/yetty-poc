@@ -35,6 +35,8 @@ target_include_directories(yetty_yecho PUBLIC
     ${CMAKE_CURRENT_BINARY_DIR}
 )
 
+target_link_libraries(yetty_yecho PUBLIC ytrace::ytrace)
+
 # Standalone yecho executable (all platforms)
 add_executable(yecho
     yecho.cpp

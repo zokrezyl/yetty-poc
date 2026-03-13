@@ -163,7 +163,7 @@ target_include_directories(yecho-static PRIVATE
     ${YETTY_ROOT}/src/yetty/yecho
     ${CMAKE_CURRENT_BINARY_DIR}
 )
-target_link_libraries(yecho-static PRIVATE args)
+target_link_libraries(yecho-static PRIVATE args ytrace::ytrace)
 
 # Try to find musl-gcc for true static linking, otherwise build dynamic
 find_program(MUSL_GCC musl-gcc)
