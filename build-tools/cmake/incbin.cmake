@@ -274,8 +274,78 @@ const unsigned char* const g${SYMBOL_NAME}End = g${SYMBOL_NAME}Data;
 const unsigned int g${SYMBOL_NAME}Size = 0;
 ")
         endforeach()
+    elseif(MSVC)
+        # MSVC: Use incbin tool to generate data file
+        set(INCBIN_INPUT "${CMAKE_CURRENT_BINARY_DIR}/${TARGET}_${PREFIX_SAFE}_incbin_input.c")
+        set(INCBIN_OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${TARGET}_${PREFIX_SAFE}_data.c")
+
+        file(WRITE ${INCBIN_INPUT} "#include \"incbin.h\"\n")
+
+        foreach(FILE ${FILES})
+            file(RELATIVE_PATH REL_PATH "${DIR}" "${FILE}")
+            string(REPLACE "/" "_" SAFE_NAME "${REL_PATH}")
+            string(REPLACE "." "_" SAFE_NAME "${SAFE_NAME}")
+            string(REPLACE "-" "_" SAFE_NAME "${SAFE_NAME}")
+            set(SYMBOL_NAME "${PREFIX_SAFE}_${SAFE_NAME}")
+            set(ASSET_NAME "${PREFIX}/${REL_PATH}")
+
+            if(COMPRESS)
+                get_filename_component(FILE_NAME "${FILE}" NAME)
+                set(COMPRESSED_FILE "${COMPRESSED_DIR}/${FILE_NAME}.br")
+                execute_process(
+                    COMMAND ${BROTLI_EXECUTABLE} -q 11 -f -o "${COMPRESSED_FILE}" "${FILE}"
+                    RESULT_VARIABLE BROTLI_RESULT
+                )
+                if(BROTLI_RESULT EQUAL 0)
+                    file(APPEND ${INCBIN_INPUT} "INCBIN(${SYMBOL_NAME}, \"${COMPRESSED_FILE}\");\n")
+                    list(APPEND MANIFEST_ENTRIES "${SYMBOL_NAME}|${ASSET_NAME}|1")
+                else()
+                    file(APPEND ${INCBIN_INPUT} "INCBIN(${SYMBOL_NAME}, \"${FILE}\");\n")
+                    list(APPEND MANIFEST_ENTRIES "${SYMBOL_NAME}|${ASSET_NAME}|0")
+                endif()
+            else()
+                file(APPEND ${INCBIN_INPUT} "INCBIN(${SYMBOL_NAME}, \"${FILE}\");\n")
+                list(APPEND MANIFEST_ENTRIES "${SYMBOL_NAME}|${ASSET_NAME}|0")
+            endif()
+        endforeach()
+
+        # Run incbin tool at build time
+        add_custom_command(
+            OUTPUT ${INCBIN_OUTPUT}
+            COMMAND incbin_tool -o ${INCBIN_OUTPUT} ${INCBIN_INPUT}
+            DEPENDS incbin_tool ${INCBIN_INPUT} ${FILES}
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            COMMENT "Generating embedded resources for ${TARGET}/${PREFIX}"
+        )
+
+        # Create wrapper with extern declarations
+        file(WRITE ${RESOURCE_SOURCE}
+"// Generated resource declarations for ${TARGET}/${PREFIX} (MSVC)
+#include <cstddef>
+
+extern \"C\" {
+")
+        foreach(FILE ${FILES})
+            file(RELATIVE_PATH REL_PATH "${DIR}" "${FILE}")
+            string(REPLACE "/" "_" SAFE_NAME "${REL_PATH}")
+            string(REPLACE "." "_" SAFE_NAME "${SAFE_NAME}")
+            string(REPLACE "-" "_" SAFE_NAME "${SAFE_NAME}")
+            set(SYMBOL_NAME "${PREFIX_SAFE}_${SAFE_NAME}")
+            file(APPEND ${RESOURCE_SOURCE}
+"extern const unsigned char g${SYMBOL_NAME}Data[];
+extern const unsigned char* const g${SYMBOL_NAME}End;
+extern const unsigned int g${SYMBOL_NAME}Size;
+")
+        endforeach()
+        file(APPEND ${RESOURCE_SOURCE} "}\n")
+
+        target_sources(${TARGET} PRIVATE ${RESOURCE_SOURCE} ${INCBIN_OUTPUT})
+        target_include_directories(${TARGET} PRIVATE ${INCBIN_INCLUDE_DIR})
+
+        # Skip the common target_sources below for MSVC
+        set(MSVC_HANDLED TRUE)
     else()
-        # GCC/Clang/MSVC: Use incbin
+        # GCC/Clang: Use incbin with inline assembly
         file(WRITE ${RESOURCE_SOURCE}
 "// Generated embedded resources for ${TARGET}/${PREFIX}
 #include \"incbin.h\"
@@ -313,8 +383,11 @@ const unsigned int g${SYMBOL_NAME}Size = 0;
         endforeach()
     endif()
 
-    target_sources(${TARGET} PRIVATE ${RESOURCE_SOURCE})
-    target_include_directories(${TARGET} PRIVATE ${INCBIN_INCLUDE_DIR})
+    # Add sources (skip for MSVC as it's handled above with the incbin tool output)
+    if(NOT MSVC_HANDLED)
+        target_sources(${TARGET} PRIVATE ${RESOURCE_SOURCE})
+        target_include_directories(${TARGET} PRIVATE ${INCBIN_INCLUDE_DIR})
+    endif()
 
     # Generate manifest header for asset registration
     set(MANIFEST_HEADER "${CMAKE_CURRENT_BINARY_DIR}/${TARGET}_${PREFIX}_manifest.h")
