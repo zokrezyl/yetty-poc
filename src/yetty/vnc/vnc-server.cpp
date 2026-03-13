@@ -625,13 +625,15 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
     if (_clientCount == 0) return Ok();  // No clients, skip
 
     // If dimensions changed, reset state machine to re-create resources
-    // IMPORTANT: Check this BEFORE awaitingAck - resize must interrupt flow control
+    // BUT: Do NOT clear _awaitingAck! We must wait for the client to finish
+    // processing the old frame, otherwise our new frame header gets mixed into
+    // the old frame's data stream causing protocol desync.
     if (width != _lastWidth || height != _lastHeight) {
-        ydebug("VNC sendFrame: size changed {}x{} -> {}x{}, resetting state",
-               _lastWidth, _lastHeight, width, height);
+        ydebug("VNC sendFrame: size changed {}x{} -> {}x{}, resetting state (awaitingAck={})",
+               _lastWidth, _lastHeight, width, height, _awaitingAck.load());
         _captureState = CaptureState::IDLE;
         _gpuWorkDone = true;
-        _awaitingAck = false;  // Clear flow control - old frame is obsolete
+        // Do NOT clear _awaitingAck - let client finish old frame first
     }
 
     // Flow control: wait for client ack before sending next frame
