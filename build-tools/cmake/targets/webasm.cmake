@@ -61,7 +61,7 @@ target_link_options(yetty PRIVATE
     -sWASM_BIGINT
     -sFILESYSTEM=1
     -sALLOW_MEMORY_GROWTH=1
-    -sINITIAL_MEMORY=4096MB
+    -sINITIAL_MEMORY=2048MB
     -sASSERTIONS=2
     -lwebsocket.js
     "--preload-file=${CMAKE_BINARY_DIR}/assets@/assets"
@@ -71,7 +71,8 @@ target_link_options(yetty PRIVATE
     "-sEXPORTED_FUNCTIONS=['_main','_malloc','_free','_yetty_write','_yetty_key','_yetty_special_key','_yetty_read_input','_yetty_sync','_yetty_set_scale','_yetty_resize','_yetty_get_cols','_yetty_get_rows','_webpty_on_data']"
 )
 
-target_compile_options(yetty PRIVATE --use-port=emdawnwebgpu)
+target_compile_options(yetty PRIVATE --use-port=emdawnwebgpu -fexceptions)
+target_link_options(yetty PRIVATE -fexceptions)
 set_target_properties(yetty PROPERTIES SUFFIX ".js")
 
 target_link_libraries(yetty PRIVATE
@@ -99,6 +100,8 @@ add_custom_command(TARGET yetty PRE_LINK
 add_custom_command(TARGET yetty POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${YETTY_ROOT}/build-tools/web/index.html ${CMAKE_BINARY_DIR}/index.html
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${YETTY_ROOT}/build-tools/web/serve.py ${CMAKE_BINARY_DIR}/serve.py
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${YETTY_ROOT}/docs/favicon.ico ${CMAKE_BINARY_DIR}/favicon.ico
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${YETTY_ROOT}/docs/apple-touch-icon.jpg ${CMAKE_BINARY_DIR}/apple-touch-icon.jpg
 )
 
 # Copy JSLinux files to build output

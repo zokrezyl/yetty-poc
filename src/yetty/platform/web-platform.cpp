@@ -644,13 +644,23 @@ static struct WebPTYInit {
             window.addEventListener('message', function(e) {
                 if (e.data && e.data.type === 'term-output' && e.data.ptyId) {
                     var data = e.data.data;
+                    if (!data || data.length === 0) {
+                        return;
+                    }
                     var ptyId = parseInt(e.data.ptyId, 10);
                     if (isNaN(ptyId)) {
                         return;
                     }
                     var encoder = new TextEncoder();
                     var bytes = encoder.encode(data);
+                    if (bytes.length === 0) {
+                        return;
+                    }
                     var ptr = Module._malloc(bytes.length);
+                    if (ptr === 0) {
+                        console.error('[yetty] malloc failed for term-output');
+                        return;
+                    }
                     Module.HEAPU8.set(bytes, ptr);
                     Module._webpty_on_data(ptyId, ptr, bytes.length);
                     Module._free(ptr);
