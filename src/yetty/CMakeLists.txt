@@ -11,6 +11,7 @@ add_subdirectory(rpc)
 set(YETTY_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/yetty.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/incbin-assets.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/osc-scanner.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/pty-reader-desktop.cpp
