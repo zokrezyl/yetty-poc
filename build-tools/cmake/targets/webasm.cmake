@@ -61,7 +61,7 @@ target_link_options(yetty PRIVATE
     -sWASM_BIGINT
     -sFILESYSTEM=1
     -sALLOW_MEMORY_GROWTH=1
-    -sINITIAL_MEMORY=2048MB
+    -sINITIAL_MEMORY=4096MB
     -sASSERTIONS=2
     -lwebsocket.js
     "--preload-file=${CMAKE_BINARY_DIR}/assets@/assets"
