@@ -93,28 +93,38 @@ private:
   }
 
   void addRandomShape(std::shared_ptr<YDrawBuffer> buffer) {
-    uint32_t shapeType = randomUint(0, 4);
+    uint32_t shapeType = randomUint(0, 24);
     uint32_t layer = randomUint(0, 10);
     uint32_t fillColor = randomColor();
     uint32_t strokeColor = randomColor();
     float strokeWidth = randomFloat(0.0f, 3.0f);
 
     switch (shapeType) {
-    case 0:
-      addCircle(buffer, layer, fillColor, strokeColor, strokeWidth);
-      break;
-    case 1:
-      addBox(buffer, layer, fillColor, strokeColor, strokeWidth);
-      break;
-    case 2:
-      addEllipse(buffer, layer, fillColor, strokeColor, strokeWidth);
-      break;
-    case 3:
-      addTriangle(buffer, layer, fillColor, strokeColor, strokeWidth);
-      break;
-    case 4:
-      addSegment(buffer, layer, fillColor, strokeColor, strokeWidth);
-      break;
+    case 0:  addCircle(buffer, layer, fillColor, strokeColor, strokeWidth); break;
+    case 1:  addBox(buffer, layer, fillColor, strokeColor, strokeWidth); break;
+    case 2:  addEllipse(buffer, layer, fillColor, strokeColor, strokeWidth); break;
+    case 3:  addTriangle(buffer, layer, fillColor, strokeColor, strokeWidth); break;
+    case 4:  addSegment(buffer, layer, fillColor, strokeColor, strokeWidth); break;
+    case 5:  addRoundedBox(buffer, layer, fillColor, strokeColor, strokeWidth); break;
+    case 6:  addRhombus(buffer, layer, fillColor, strokeColor, strokeWidth); break;
+    case 7:  addPentagon(buffer, layer, fillColor, strokeColor, strokeWidth); break;
+    case 8:  addHexagon(buffer, layer, fillColor, strokeColor, strokeWidth); break;
+    case 9:  addStar(buffer, layer, fillColor, strokeColor, strokeWidth); break;
+    case 10: addHeart(buffer, layer, fillColor, strokeColor, strokeWidth); break;
+    case 11: addCross(buffer, layer, fillColor, strokeColor, strokeWidth); break;
+    case 12: addCapsule(buffer, layer, fillColor, strokeColor, strokeWidth); break;
+    case 13: addMoon(buffer, layer, fillColor, strokeColor, strokeWidth); break;
+    case 14: addEgg(buffer, layer, fillColor, strokeColor, strokeWidth); break;
+    case 15: addTrapezoid(buffer, layer, fillColor, strokeColor, strokeWidth); break;
+    case 16: addParallelogram(buffer, layer, fillColor, strokeColor, strokeWidth); break;
+    case 17: addOctogon(buffer, layer, fillColor, strokeColor, strokeWidth); break;
+    case 18: addHexagram(buffer, layer, fillColor, strokeColor, strokeWidth); break;
+    case 19: addPentagram(buffer, layer, fillColor, strokeColor, strokeWidth); break;
+    case 20: addPie(buffer, layer, fillColor, strokeColor, strokeWidth); break;
+    case 21: addRing(buffer, layer, fillColor, strokeColor, strokeWidth); break;
+    case 22: addVesica(buffer, layer, fillColor, strokeColor, strokeWidth); break;
+    case 23: addBezier2(buffer, layer, fillColor, strokeColor, strokeWidth); break;
+    case 24: addArc(buffer, layer, fillColor, strokeColor, strokeWidth); break;
     }
   }
 
@@ -199,6 +209,251 @@ private:
     // Segments typically use stroke, not fill
     buffer->addSegment(layer, x0, y0, x1, y1, 0, strokeColor,
                        strokeWidth + 0.5f, 0.0f);
+  }
+
+  void addRoundedBox(std::shared_ptr<YDrawBuffer> buffer, uint32_t layer,
+                     uint32_t fillColor, uint32_t strokeColor, float strokeWidth) {
+    float minH = std::min(sceneWidth(), sceneHeight()) * _config.minSizePct / 100.0f;
+    float maxH = std::min(sceneWidth(), sceneHeight()) * _config.maxSizePct / 100.0f;
+    float hw = randomSize(minH, maxH);
+    float hh = randomSize(minH, maxH);
+    float cx = randomFloat(_config.minX + hw, _config.maxX - hw);
+    float cy = randomFloat(_config.minY + hh, _config.maxY - hh);
+    float r0 = randomFloat(0.0f, std::min(hw, hh) * 0.8f);
+    float r1 = randomFloat(0.0f, std::min(hw, hh) * 0.8f);
+    float r2 = randomFloat(0.0f, std::min(hw, hh) * 0.8f);
+    float r3 = randomFloat(0.0f, std::min(hw, hh) * 0.8f);
+    buffer->addRoundedBox(layer, cx, cy, hw, hh, r0, r1, r2, r3, fillColor, strokeColor, strokeWidth, 0.0f);
+  }
+
+  void addRhombus(std::shared_ptr<YDrawBuffer> buffer, uint32_t layer,
+                  uint32_t fillColor, uint32_t strokeColor, float strokeWidth) {
+    float minR = std::min(sceneWidth(), sceneHeight()) * _config.minSizePct / 100.0f;
+    float maxR = std::min(sceneWidth(), sceneHeight()) * _config.maxSizePct / 100.0f;
+    float bx = randomSize(minR, maxR);
+    float by = randomSize(minR, maxR);
+    float cx = randomFloat(_config.minX + bx, _config.maxX - bx);
+    float cy = randomFloat(_config.minY + by, _config.maxY - by);
+    buffer->addRhombus(layer, cx, cy, bx, by, fillColor, strokeColor, strokeWidth, 0.0f);
+  }
+
+  void addPentagon(std::shared_ptr<YDrawBuffer> buffer, uint32_t layer,
+                   uint32_t fillColor, uint32_t strokeColor, float strokeWidth) {
+    float minR = std::min(sceneWidth(), sceneHeight()) * _config.minSizePct / 100.0f;
+    float maxR = std::min(sceneWidth(), sceneHeight()) * _config.maxSizePct / 100.0f;
+    float r = randomSize(minR, maxR);
+    float cx = randomFloat(_config.minX + r, _config.maxX - r);
+    float cy = randomFloat(_config.minY + r, _config.maxY - r);
+    buffer->addPentagon(layer, cx, cy, r, fillColor, strokeColor, strokeWidth, 0.0f);
+  }
+
+  void addHexagon(std::shared_ptr<YDrawBuffer> buffer, uint32_t layer,
+                  uint32_t fillColor, uint32_t strokeColor, float strokeWidth) {
+    float minR = std::min(sceneWidth(), sceneHeight()) * _config.minSizePct / 100.0f;
+    float maxR = std::min(sceneWidth(), sceneHeight()) * _config.maxSizePct / 100.0f;
+    float r = randomSize(minR, maxR);
+    float cx = randomFloat(_config.minX + r, _config.maxX - r);
+    float cy = randomFloat(_config.minY + r, _config.maxY - r);
+    buffer->addHexagon(layer, cx, cy, r, fillColor, strokeColor, strokeWidth, 0.0f);
+  }
+
+  void addStar(std::shared_ptr<YDrawBuffer> buffer, uint32_t layer,
+               uint32_t fillColor, uint32_t strokeColor, float strokeWidth) {
+    float minR = std::min(sceneWidth(), sceneHeight()) * _config.minSizePct / 100.0f;
+    float maxR = std::min(sceneWidth(), sceneHeight()) * _config.maxSizePct / 100.0f;
+    float r = randomSize(minR, maxR);
+    float cx = randomFloat(_config.minX + r, _config.maxX - r);
+    float cy = randomFloat(_config.minY + r, _config.maxY - r);
+    float n = static_cast<float>(randomUint(5, 8));  // 5-8 points
+    float m = randomFloat(2.0f, n - 1.0f);           // inner ratio
+    buffer->addStar(layer, cx, cy, r, n, m, fillColor, strokeColor, strokeWidth, 0.0f);
+  }
+
+  void addHeart(std::shared_ptr<YDrawBuffer> buffer, uint32_t layer,
+                uint32_t fillColor, uint32_t strokeColor, float strokeWidth) {
+    float minS = std::min(sceneWidth(), sceneHeight()) * _config.minSizePct / 100.0f;
+    float maxS = std::min(sceneWidth(), sceneHeight()) * _config.maxSizePct / 100.0f;
+    float scale = randomSize(minS, maxS);
+    float cx = randomFloat(_config.minX + scale, _config.maxX - scale);
+    float cy = randomFloat(_config.minY + scale, _config.maxY - scale);
+    buffer->addHeart(layer, cx, cy, scale, fillColor, strokeColor, strokeWidth, 0.0f);
+  }
+
+  void addCross(std::shared_ptr<YDrawBuffer> buffer, uint32_t layer,
+                uint32_t fillColor, uint32_t strokeColor, float strokeWidth) {
+    float minR = std::min(sceneWidth(), sceneHeight()) * _config.minSizePct / 100.0f;
+    float maxR = std::min(sceneWidth(), sceneHeight()) * _config.maxSizePct / 100.0f;
+    float size = randomSize(minR, maxR);
+    float cx = randomFloat(_config.minX + size, _config.maxX - size);
+    float cy = randomFloat(_config.minY + size, _config.maxY - size);
+    float bx = size * randomFloat(0.6f, 1.0f);
+    float by = size * randomFloat(0.2f, 0.4f);
+    float r = size * randomFloat(0.05f, 0.2f);
+    buffer->addCross(layer, cx, cy, bx, by, r, fillColor, strokeColor, strokeWidth, 0.0f);
+  }
+
+  void addCapsule(std::shared_ptr<YDrawBuffer> buffer, uint32_t layer,
+                  uint32_t fillColor, uint32_t strokeColor, float strokeWidth) {
+    float minR = std::min(sceneWidth(), sceneHeight()) * _config.minSizePct / 100.0f;
+    float maxR = std::min(sceneWidth(), sceneHeight()) * _config.maxSizePct / 100.0f;
+    float len = randomSize(minR, maxR);
+    float r = len * randomFloat(0.1f, 0.4f);
+    float cx = randomFloat(_config.minX + len, _config.maxX - len);
+    float cy = randomFloat(_config.minY + len, _config.maxY - len);
+    float angle = randomFloat(0.0f, 6.28318f);
+    float ax = cx - std::cos(angle) * len * 0.5f;
+    float ay = cy - std::sin(angle) * len * 0.5f;
+    float bx = cx + std::cos(angle) * len * 0.5f;
+    float by = cy + std::sin(angle) * len * 0.5f;
+    buffer->addCapsule(layer, ax, ay, bx, by, r, fillColor, strokeColor, strokeWidth, 0.0f);
+  }
+
+  void addMoon(std::shared_ptr<YDrawBuffer> buffer, uint32_t layer,
+               uint32_t fillColor, uint32_t strokeColor, float strokeWidth) {
+    float minR = std::min(sceneWidth(), sceneHeight()) * _config.minSizePct / 100.0f;
+    float maxR = std::min(sceneWidth(), sceneHeight()) * _config.maxSizePct / 100.0f;
+    float ra = randomSize(minR, maxR);
+    float rb = ra * randomFloat(0.5f, 0.9f);
+    float d = ra * randomFloat(0.2f, 0.8f);
+    float cx = randomFloat(_config.minX + ra, _config.maxX - ra);
+    float cy = randomFloat(_config.minY + ra, _config.maxY - ra);
+    buffer->addMoon(layer, cx, cy, d, ra, rb, fillColor, strokeColor, strokeWidth, 0.0f);
+  }
+
+  void addEgg(std::shared_ptr<YDrawBuffer> buffer, uint32_t layer,
+              uint32_t fillColor, uint32_t strokeColor, float strokeWidth) {
+    float minR = std::min(sceneWidth(), sceneHeight()) * _config.minSizePct / 100.0f;
+    float maxR = std::min(sceneWidth(), sceneHeight()) * _config.maxSizePct / 100.0f;
+    float ra = randomSize(minR, maxR);
+    float rb = ra * randomFloat(0.4f, 0.8f);
+    float cx = randomFloat(_config.minX + ra, _config.maxX - ra);
+    float cy = randomFloat(_config.minY + ra, _config.maxY - ra);
+    buffer->addEgg(layer, cx, cy, ra, rb, fillColor, strokeColor, strokeWidth, 0.0f);
+  }
+
+  void addTrapezoid(std::shared_ptr<YDrawBuffer> buffer, uint32_t layer,
+                    uint32_t fillColor, uint32_t strokeColor, float strokeWidth) {
+    float minR = std::min(sceneWidth(), sceneHeight()) * _config.minSizePct / 100.0f;
+    float maxR = std::min(sceneWidth(), sceneHeight()) * _config.maxSizePct / 100.0f;
+    float size = randomSize(minR, maxR);
+    float r1 = size * randomFloat(0.3f, 0.8f);
+    float r2 = size * randomFloat(0.5f, 1.0f);
+    float he = size * randomFloat(0.5f, 1.0f);
+    float cx = randomFloat(_config.minX + size, _config.maxX - size);
+    float cy = randomFloat(_config.minY + size, _config.maxY - size);
+    buffer->addTrapezoid(layer, cx, cy, r1, r2, he, fillColor, strokeColor, strokeWidth, 0.0f);
+  }
+
+  void addParallelogram(std::shared_ptr<YDrawBuffer> buffer, uint32_t layer,
+                        uint32_t fillColor, uint32_t strokeColor, float strokeWidth) {
+    float minR = std::min(sceneWidth(), sceneHeight()) * _config.minSizePct / 100.0f;
+    float maxR = std::min(sceneWidth(), sceneHeight()) * _config.maxSizePct / 100.0f;
+    float size = randomSize(minR, maxR);
+    float wi = size * randomFloat(0.5f, 1.0f);
+    float he = size * randomFloat(0.3f, 0.8f);
+    float sk = size * randomFloat(0.1f, 0.5f);
+    float cx = randomFloat(_config.minX + size, _config.maxX - size);
+    float cy = randomFloat(_config.minY + size, _config.maxY - size);
+    buffer->addParallelogram(layer, cx, cy, wi, he, sk, fillColor, strokeColor, strokeWidth, 0.0f);
+  }
+
+  void addOctogon(std::shared_ptr<YDrawBuffer> buffer, uint32_t layer,
+                  uint32_t fillColor, uint32_t strokeColor, float strokeWidth) {
+    float minR = std::min(sceneWidth(), sceneHeight()) * _config.minSizePct / 100.0f;
+    float maxR = std::min(sceneWidth(), sceneHeight()) * _config.maxSizePct / 100.0f;
+    float r = randomSize(minR, maxR);
+    float cx = randomFloat(_config.minX + r, _config.maxX - r);
+    float cy = randomFloat(_config.minY + r, _config.maxY - r);
+    buffer->addOctogon(layer, cx, cy, r, fillColor, strokeColor, strokeWidth, 0.0f);
+  }
+
+  void addHexagram(std::shared_ptr<YDrawBuffer> buffer, uint32_t layer,
+                   uint32_t fillColor, uint32_t strokeColor, float strokeWidth) {
+    float minR = std::min(sceneWidth(), sceneHeight()) * _config.minSizePct / 100.0f;
+    float maxR = std::min(sceneWidth(), sceneHeight()) * _config.maxSizePct / 100.0f;
+    float r = randomSize(minR, maxR);
+    float cx = randomFloat(_config.minX + r, _config.maxX - r);
+    float cy = randomFloat(_config.minY + r, _config.maxY - r);
+    buffer->addHexagram(layer, cx, cy, r, fillColor, strokeColor, strokeWidth, 0.0f);
+  }
+
+  void addPentagram(std::shared_ptr<YDrawBuffer> buffer, uint32_t layer,
+                    uint32_t fillColor, uint32_t strokeColor, float strokeWidth) {
+    float minR = std::min(sceneWidth(), sceneHeight()) * _config.minSizePct / 100.0f;
+    float maxR = std::min(sceneWidth(), sceneHeight()) * _config.maxSizePct / 100.0f;
+    float r = randomSize(minR, maxR);
+    float cx = randomFloat(_config.minX + r, _config.maxX - r);
+    float cy = randomFloat(_config.minY + r, _config.maxY - r);
+    buffer->addPentagram(layer, cx, cy, r, fillColor, strokeColor, strokeWidth, 0.0f);
+  }
+
+  void addPie(std::shared_ptr<YDrawBuffer> buffer, uint32_t layer,
+              uint32_t fillColor, uint32_t strokeColor, float strokeWidth) {
+    float minR = std::min(sceneWidth(), sceneHeight()) * _config.minSizePct / 100.0f;
+    float maxR = std::min(sceneWidth(), sceneHeight()) * _config.maxSizePct / 100.0f;
+    float r = randomSize(minR, maxR);
+    float cx = randomFloat(_config.minX + r, _config.maxX - r);
+    float cy = randomFloat(_config.minY + r, _config.maxY - r);
+    float angle = randomFloat(0.3f, 2.5f);
+    float sc_x = std::sin(angle);
+    float sc_y = std::cos(angle);
+    buffer->addPie(layer, cx, cy, sc_x, sc_y, r, fillColor, strokeColor, strokeWidth, 0.0f);
+  }
+
+  void addRing(std::shared_ptr<YDrawBuffer> buffer, uint32_t layer,
+               uint32_t fillColor, uint32_t strokeColor, float strokeWidth) {
+    float minR = std::min(sceneWidth(), sceneHeight()) * _config.minSizePct / 100.0f;
+    float maxR = std::min(sceneWidth(), sceneHeight()) * _config.maxSizePct / 100.0f;
+    float r = randomSize(minR, maxR);
+    float th = r * randomFloat(0.1f, 0.4f);
+    float cx = randomFloat(_config.minX + r, _config.maxX - r);
+    float cy = randomFloat(_config.minY + r, _config.maxY - r);
+    float angle = randomFloat(0.0f, 6.28318f);
+    float nx = std::cos(angle);
+    float ny = std::sin(angle);
+    buffer->addRing(layer, cx, cy, nx, ny, r, th, fillColor, strokeColor, strokeWidth, 0.0f);
+  }
+
+  void addVesica(std::shared_ptr<YDrawBuffer> buffer, uint32_t layer,
+                 uint32_t fillColor, uint32_t strokeColor, float strokeWidth) {
+    float minR = std::min(sceneWidth(), sceneHeight()) * _config.minSizePct / 100.0f;
+    float maxR = std::min(sceneWidth(), sceneHeight()) * _config.maxSizePct / 100.0f;
+    float size = randomSize(minR, maxR);
+    float w = size * randomFloat(0.3f, 0.8f);
+    float h = size;
+    float cx = randomFloat(_config.minX + size, _config.maxX - size);
+    float cy = randomFloat(_config.minY + size, _config.maxY - size);
+    buffer->addVesica(layer, cx, cy, w, h, fillColor, strokeColor, strokeWidth, 0.0f);
+  }
+
+  void addBezier2(std::shared_ptr<YDrawBuffer> buffer, uint32_t layer,
+                  uint32_t fillColor, uint32_t strokeColor, float strokeWidth) {
+    float minR = std::min(sceneWidth(), sceneHeight()) * _config.minSizePct / 100.0f;
+    float maxR = std::min(sceneWidth(), sceneHeight()) * _config.maxSizePct / 100.0f;
+    float size = randomSize(minR, maxR);
+    float cx = randomFloat(_config.minX + size, _config.maxX - size);
+    float cy = randomFloat(_config.minY + size, _config.maxY - size);
+    float ax = cx + randomFloat(-size, size);
+    float ay = cy + randomFloat(-size, size);
+    float bx = cx + randomFloat(-size, size);
+    float by = cy + randomFloat(-size, size);
+    float ccx = cx + randomFloat(-size, size);
+    float ccy = cy + randomFloat(-size, size);
+    buffer->addBezier2(layer, ax, ay, bx, by, ccx, ccy, 0, strokeColor, strokeWidth + 1.0f, 0.0f);
+  }
+
+  void addArc(std::shared_ptr<YDrawBuffer> buffer, uint32_t layer,
+              uint32_t fillColor, uint32_t strokeColor, float strokeWidth) {
+    float minR = std::min(sceneWidth(), sceneHeight()) * _config.minSizePct / 100.0f;
+    float maxR = std::min(sceneWidth(), sceneHeight()) * _config.maxSizePct / 100.0f;
+    float ra = randomSize(minR, maxR);
+    float rb = ra * randomFloat(0.1f, 0.3f);
+    float cx = randomFloat(_config.minX + ra, _config.maxX - ra);
+    float cy = randomFloat(_config.minY + ra, _config.maxY - ra);
+    float angle = randomFloat(0.3f, 2.5f);
+    float sc_x = std::sin(angle);
+    float sc_y = std::cos(angle);
+    buffer->addArc(layer, cx, cy, sc_x, sc_y, ra, rb, fillColor, strokeColor, strokeWidth, 0.0f);
   }
 };
 
