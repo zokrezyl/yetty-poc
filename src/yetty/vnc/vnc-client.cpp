@@ -925,7 +925,7 @@ Result<bool> VncClient::updateTexture() {
     return Ok(tilesProcessed > 0);
 }
 
-Result<void> VncClient::render(WGPURenderPassEncoder pass) {
+Result<void> VncClient::render(WGPURenderPassEncoder pass, uint32_t renderTargetW, uint32_t renderTargetH) {
     ydebug("VNC render: pipeline={} bindGroup={}", (void*)_pipeline, (void*)_bindGroup);
     if (!_pipeline || !_bindGroup) {
         ydebug("VNC render: skipping - no pipeline or bindGroup");
@@ -934,10 +934,17 @@ Result<void> VncClient::render(WGPURenderPassEncoder pass) {
 
     // Set viewport to VNC content area (top portion of window, excluding client's statusbar)
     // The VNC texture size (_width x _height) matches this area exactly - no stretching
+    // Clamp to render target dimensions if specified (handles race condition during resize)
     if (_width > 0 && _height > 0) {
+        uint32_t viewW = _width;
+        uint32_t viewH = _height;
+        if (renderTargetW > 0 && renderTargetH > 0) {
+            viewW = std::min(viewW, renderTargetW);
+            viewH = std::min(viewH, renderTargetH);
+        }
         wgpuRenderPassEncoderSetViewport(pass, 0, 0,
-            static_cast<float>(_width), static_cast<float>(_height), 0.0f, 1.0f);
-        wgpuRenderPassEncoderSetScissorRect(pass, 0, 0, _width, _height);
+            static_cast<float>(viewW), static_cast<float>(viewH), 0.0f, 1.0f);
+        wgpuRenderPassEncoderSetScissorRect(pass, 0, 0, viewW, viewH);
     }
 
     wgpuRenderPassEncoderSetPipeline(pass, _pipeline);

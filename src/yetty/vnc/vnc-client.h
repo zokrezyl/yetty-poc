@@ -33,7 +33,8 @@ public:
     Result<bool> updateTexture();
 
     // Render the frame (fullscreen quad)
-    Result<void> render(WGPURenderPassEncoder pass);
+    // renderTargetW/H are the actual render target dimensions - scissor is clamped to these
+    Result<void> render(WGPURenderPassEncoder pass, uint32_t renderTargetW = 0, uint32_t renderTargetH = 0);
 
     // Get the texture view for external rendering
     WGPUTextureView getTextureView() const { return _textureView; }
