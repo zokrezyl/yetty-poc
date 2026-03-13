@@ -195,8 +195,9 @@ jobs:
       run: |
         choco install nasm -y
         choco install make -y
-        choco install brotli -y
         pip install meson
+        # Note: brotli not available in chocolatey; build will use uncompressed assets
+        # (incbin.cmake gracefully falls back to uncompressed when brotli not found)
 
     - name: Configure CMake
       run: >
