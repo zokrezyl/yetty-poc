@@ -10,6 +10,7 @@
 #include <args.hxx>
 
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
@@ -28,6 +29,8 @@ struct GeneratorConfig {
   float minY = 0.0f;
   float maxX = 800.0f;
   float maxY = 600.0f;
+  float minSizePct = 0.5f;   // Min shape size as % of scene
+  float maxSizePct = 40.0f;  // Max shape size as % of scene
   uint32_t seed = 0;
 };
 
@@ -80,6 +83,15 @@ private:
   float sceneWidth() const { return _config.maxX - _config.minX; }
   float sceneHeight() const { return _config.maxY - _config.minY; }
 
+  // Generate size with exponential-like distribution for variety
+  // Returns sizes from minSize to maxSize with bias toward smaller values
+  float randomSize(float minSize, float maxSize) {
+    // Use exponential distribution: more small shapes, fewer large ones
+    float t = randomFloat(0.0f, 1.0f);
+    t = t * t * t;  // Cubic bias toward small
+    return minSize + t * (maxSize - minSize);
+  }
+
   void addRandomShape(std::shared_ptr<YDrawBuffer> buffer) {
     uint32_t shapeType = randomUint(0, 4);
     uint32_t layer = randomUint(0, 10);
@@ -108,8 +120,9 @@ private:
 
   void addCircle(std::shared_ptr<YDrawBuffer> buffer, uint32_t layer,
                  uint32_t fillColor, uint32_t strokeColor, float strokeWidth) {
-    float maxRadius = std::min(sceneWidth(), sceneHeight()) * 0.15f;
-    float radius = randomFloat(5.0f, maxRadius);
+    float minR = std::min(sceneWidth(), sceneHeight()) * _config.minSizePct / 100.0f;
+    float maxR = std::min(sceneWidth(), sceneHeight()) * _config.maxSizePct / 100.0f;
+    float radius = randomSize(minR, maxR);
     float cx = randomFloat(_config.minX + radius, _config.maxX - radius);
     float cy = randomFloat(_config.minY + radius, _config.maxY - radius);
 
@@ -119,9 +132,10 @@ private:
 
   void addBox(std::shared_ptr<YDrawBuffer> buffer, uint32_t layer,
               uint32_t fillColor, uint32_t strokeColor, float strokeWidth) {
-    float maxHalf = std::min(sceneWidth(), sceneHeight()) * 0.15f;
-    float hw = randomFloat(5.0f, maxHalf);
-    float hh = randomFloat(5.0f, maxHalf);
+    float minH = std::min(sceneWidth(), sceneHeight()) * _config.minSizePct / 100.0f;
+    float maxH = std::min(sceneWidth(), sceneHeight()) * _config.maxSizePct / 100.0f;
+    float hw = randomSize(minH, maxH);
+    float hh = randomSize(minH, maxH);
     float cx = randomFloat(_config.minX + hw, _config.maxX - hw);
     float cy = randomFloat(_config.minY + hh, _config.maxY - hh);
     float round = randomFloat(0.0f, std::min(hw, hh) * 0.5f);
@@ -132,9 +146,10 @@ private:
 
   void addEllipse(std::shared_ptr<YDrawBuffer> buffer, uint32_t layer,
                   uint32_t fillColor, uint32_t strokeColor, float strokeWidth) {
-    float maxRadius = std::min(sceneWidth(), sceneHeight()) * 0.15f;
-    float rx = randomFloat(5.0f, maxRadius);
-    float ry = randomFloat(5.0f, maxRadius);
+    float minR = std::min(sceneWidth(), sceneHeight()) * _config.minSizePct / 100.0f;
+    float maxR = std::min(sceneWidth(), sceneHeight()) * _config.maxSizePct / 100.0f;
+    float rx = randomSize(minR, maxR);
+    float ry = randomSize(minR, maxR);
     float cx = randomFloat(_config.minX + rx, _config.maxX - rx);
     float cy = randomFloat(_config.minY + ry, _config.maxY - ry);
 
@@ -145,13 +160,21 @@ private:
   void addTriangle(std::shared_ptr<YDrawBuffer> buffer, uint32_t layer,
                    uint32_t fillColor, uint32_t strokeColor,
                    float strokeWidth) {
-    float margin = std::min(sceneWidth(), sceneHeight()) * 0.05f;
-    float ax = randomFloat(_config.minX + margin, _config.maxX - margin);
-    float ay = randomFloat(_config.minY + margin, _config.maxY - margin);
-    float bx = randomFloat(_config.minX + margin, _config.maxX - margin);
-    float by = randomFloat(_config.minY + margin, _config.maxY - margin);
-    float vx = randomFloat(_config.minX + margin, _config.maxX - margin);
-    float vy = randomFloat(_config.minY + margin, _config.maxY - margin);
+    // Generate triangle of varying size around a center point
+    float minSize = std::min(sceneWidth(), sceneHeight()) * _config.minSizePct / 100.0f;
+    float maxSize = std::min(sceneWidth(), sceneHeight()) * _config.maxSizePct / 100.0f;
+    float size = randomSize(minSize, maxSize);
+    
+    float cx = randomFloat(_config.minX + size, _config.maxX - size);
+    float cy = randomFloat(_config.minY + size, _config.maxY - size);
+    
+    // Random triangle vertices around center
+    float ax = cx + randomFloat(-size, size);
+    float ay = cy + randomFloat(-size, size);
+    float bx = cx + randomFloat(-size, size);
+    float by = cy + randomFloat(-size, size);
+    float vx = cx + randomFloat(-size, size);
+    float vy = cy + randomFloat(-size, size);
 
     buffer->addTriangle(layer, ax, ay, bx, by, vx, vy, fillColor, strokeColor,
                         strokeWidth, 0.0f);
@@ -159,15 +182,23 @@ private:
 
   void addSegment(std::shared_ptr<YDrawBuffer> buffer, uint32_t layer,
                   uint32_t fillColor, uint32_t strokeColor, float strokeWidth) {
-    float margin = std::min(sceneWidth(), sceneHeight()) * 0.05f;
-    float x0 = randomFloat(_config.minX + margin, _config.maxX - margin);
-    float y0 = randomFloat(_config.minY + margin, _config.maxY - margin);
-    float x1 = randomFloat(_config.minX + margin, _config.maxX - margin);
-    float y1 = randomFloat(_config.minY + margin, _config.maxY - margin);
+    // Segment length varies from tiny to large
+    float minLen = std::min(sceneWidth(), sceneHeight()) * _config.minSizePct / 100.0f;
+    float maxLen = std::min(sceneWidth(), sceneHeight()) * _config.maxSizePct / 100.0f;
+    float len = randomSize(minLen, maxLen);
+    
+    float cx = randomFloat(_config.minX + len, _config.maxX - len);
+    float cy = randomFloat(_config.minY + len, _config.maxY - len);
+    float angle = randomFloat(0.0f, 6.28318f);
+    
+    float x0 = cx - std::cos(angle) * len * 0.5f;
+    float y0 = cy - std::sin(angle) * len * 0.5f;
+    float x1 = cx + std::cos(angle) * len * 0.5f;
+    float y1 = cy + std::sin(angle) * len * 0.5f;
 
     // Segments typically use stroke, not fill
     buffer->addSegment(layer, x0, y0, x1, y1, 0, strokeColor,
-                       strokeWidth + 1.0f, 0.0f);
+                       strokeWidth + 0.5f, 0.0f);
   }
 };
 
@@ -222,6 +253,10 @@ int main(int argc, char **argv) {
   args::ValueFlag<std::string> boundsFlag(parser, "BOUNDS",
                                           "Bounds as minX,minY,maxX,maxY",
                                           {'b', "bounds"}, "0,0,800,600");
+  args::ValueFlag<float> minSizeFlag(
+      parser, "PCT", "Min shape size as % of scene (default 0.5)", {"min"}, 0.5f);
+  args::ValueFlag<float> maxSizeFlag(
+      parser, "PCT", "Max shape size as % of scene (default 40)", {"max"}, 40.0f);
   args::ValueFlag<uint32_t> seedFlag(
       parser, "SEED", "Random seed (0 = use time)", {'s', "seed"}, 0);
 
@@ -239,10 +274,19 @@ int main(int argc, char **argv) {
   config.count = args::get(countFlag);
   config.mode = args::get(modeFlag);
   config.seed = args::get(seedFlag);
+  config.minSizePct = args::get(minSizeFlag);
+  config.maxSizePct = args::get(maxSizeFlag);
 
   // Validate mode
   if (config.mode != "ydraw" && config.mode != "ypaint") {
     std::cerr << "Error: mode must be 'ydraw' or 'ypaint'\n";
+    return 1;
+  }
+
+  // Validate size range
+  if (config.minSizePct <= 0 || config.maxSizePct <= 0 || 
+      config.minSizePct > config.maxSizePct) {
+    std::cerr << "Error: --min must be > 0 and <= --max\n";
     return 1;
   }
 
