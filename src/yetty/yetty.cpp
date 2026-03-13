@@ -8,6 +8,7 @@
 #include <yetty/msdf-cdb-provider.h>
 #include <yetty/shader-manager.h>
 #include <yetty/card-factory.h>
+#include <yetty/incbin-assets.h>
 #include "ygui/ygui-overlay.h"
 #include <yetty/wgpu-compat.h>
 #include <yetty/platform.h>
@@ -22,6 +23,8 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -61,6 +64,7 @@ protected:
 
 private:
     Result<void> parseArgs(int argc, char* argv[]) noexcept;
+    Result<void> initEmbeddedAssets() noexcept;
     Result<void> initWindow() noexcept;
     Result<void> initWebGPU() noexcept;
     Result<void> initSharedResources() noexcept;
@@ -291,6 +295,12 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     }
     _yettyContext.config = *configResult;
     ydebug("init: Config created");
+
+    // Extract embedded assets if needed (first run or version upgrade)
+    ydebug("init: initEmbeddedAssets");
+    if (auto res = initEmbeddedAssets(); !res) {
+        ywarn("init: initEmbeddedAssets failed (continuing with fallback): {}", res.error().message());
+    }
 
     // Set shell/command from -c/-e flag if specified
     if (!_executeCommand.empty()) {
@@ -865,6 +875,68 @@ Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
             _executeCommand = "bash -c 'while true; do cat /dev/urandom | tr -dc A-Za-z0-9 | head -c 1000; echo; done'";
         }
     }
+
+    return Ok();
+}
+
+Result<void> YettyImpl::initEmbeddedAssets() noexcept {
+    // Get IncbinAssets singleton
+    auto assetsResult = IncbinAssets::instance();
+    if (!assetsResult) {
+        // No embedded assets - this is fine for development builds
+        ydebug("No embedded assets available (development build)");
+        return Ok();
+    }
+    auto assets = *assetsResult;
+
+    // Check if we have any shader assets
+    auto assetList = assets->list();
+    bool hasShaders = false;
+    for (const auto& name : assetList) {
+        if (name.find("shaders/") == 0) {
+            hasShaders = true;
+            break;
+        }
+    }
+
+    if (!hasShaders) {
+        ydebug("No shader assets embedded");
+        return Ok();
+    }
+
+    // Determine cache directory
+    std::filesystem::path cacheDir;
+    const char* xdgCache = std::getenv("XDG_CACHE_HOME");
+    if (xdgCache && xdgCache[0]) {
+        cacheDir = std::filesystem::path(xdgCache) / "yetty";
+    } else {
+        const char* home = std::getenv("HOME");
+        if (home && home[0]) {
+            cacheDir = std::filesystem::path(home) / ".cache" / "yetty";
+        } else {
+            cacheDir = std::filesystem::path("/tmp") / "yetty-cache";
+        }
+    }
+
+    // Check if extraction is needed
+    if (!IncbinAssets::needsExtraction(cacheDir)) {
+        yinfo("Embedded assets already extracted to {}", cacheDir.string());
+        // Set environment variable for shader loading
+        auto shadersDir = cacheDir / "shaders";
+        setenv("YETTY_SHADERS_DIR", shadersDir.c_str(), 0);  // Don't overwrite if already set
+        return Ok();
+    }
+
+    // Extract assets
+    yinfo("Extracting embedded assets to {}", cacheDir.string());
+    if (auto res = assets->extractTo(cacheDir); !res) {
+        return Err<void>("Failed to extract embedded assets", res);
+    }
+
+    // Set environment variable for shader loading
+    auto shadersDir = cacheDir / "shaders";
+    setenv("YETTY_SHADERS_DIR", shadersDir.c_str(), 1);
+    yinfo("YETTY_SHADERS_DIR set to {}", shadersDir.c_str());
 
     return Ok();
 }

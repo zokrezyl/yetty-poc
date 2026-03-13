@@ -43,6 +43,12 @@ incbin_add_resources(yetty
     Logo "${YETTY_ROOT}/docs/logo.jpeg"
 )
 
+# Embed shaders (Android also uses APK assets, but incbin provides fallback)
+incbin_add_directory(yetty "shaders" "${YETTY_ROOT}/src/yetty/shaders" "*.wgsl")
+
+# Make manifest available to incbin-assets.cpp
+target_include_directories(yetty PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+
 target_compile_definitions(yetty PRIVATE
     ${YETTY_DEFINITIONS}
     YETTY_WEB=0

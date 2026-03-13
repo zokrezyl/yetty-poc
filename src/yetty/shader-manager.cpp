@@ -13,6 +13,7 @@
 #include <map>
 #include <filesystem>
 #include <atomic>
+#include <cstdlib>
 
 #include <yetty/shader-path.h>
 
