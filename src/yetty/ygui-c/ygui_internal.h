@@ -1,0 +1,285 @@
+/*
+ * ygui_internal.h - Internal structures for YGui-C
+ */
+
+#ifndef YGUI_INTERNAL_H
+#define YGUI_INTERNAL_H
+
+#include "ygui.h"
+#include <stdlib.h>
+#include <string.h>
+
+/*=============================================================================
+ * Forward Declarations
+ *===========================================================================*/
+
+typedef struct ygui_render_ctx ygui_render_ctx_t;
+typedef struct ygui_input_event ygui_input_event_t;
+
+/*=============================================================================
+ * Render Context (for drawing to YDraw buffer)
+ *===========================================================================*/
+
+struct ygui_render_ctx {
+    ydraw_buffer_t* buffer;
+    const ygui_theme_t* theme;
+    float offset_x, offset_y;
+    float clip_x, clip_y, clip_w, clip_h;
+    int has_clip;
+};
+
+/*=============================================================================
+ * Theme Structure
+ *===========================================================================*/
+
+struct ygui_theme {
+    /* Spacing */
+    float pad_small;
+    float pad_medium;
+    float pad_large;
+
+    /* Corner radius */
+    float radius_small;
+    float radius_medium;
+    float radius_large;
+
+    /* Sizing */
+    float row_height;
+    float scrollbar_size;
+    float scroll_speed;
+    float font_size;
+    float separator_size;
+
+    /* Colors (ABGR format) */
+    uint32_t bg_primary;
+    uint32_t bg_secondary;
+    uint32_t bg_surface;
+    uint32_t bg_hover;
+    uint32_t bg_header;
+    uint32_t border;
+    uint32_t border_light;
+    uint32_t text_primary;
+    uint32_t text_muted;
+    uint32_t accent;
+    uint32_t thumb_normal;
+    uint32_t thumb_hover;
+};
+
+/*=============================================================================
+ * Widget Function Pointers
+ *===========================================================================*/
+
+typedef void (*ygui_widget_render_fn)(ygui_widget_t* self, ygui_render_ctx_t* ctx);
+typedef void (*ygui_widget_render_all_fn)(ygui_widget_t* self, ygui_render_ctx_t* ctx);
+typedef int (*ygui_widget_on_press_fn)(ygui_widget_t* self, float lx, float ly, ygui_event_t* out);
+typedef int (*ygui_widget_on_release_fn)(ygui_widget_t* self, float lx, float ly, ygui_event_t* out);
+typedef int (*ygui_widget_on_drag_fn)(ygui_widget_t* self, float lx, float ly, ygui_event_t* out);
+typedef int (*ygui_widget_on_scroll_fn)(ygui_widget_t* self, float dx, float dy, ygui_event_t* out);
+typedef int (*ygui_widget_on_key_fn)(ygui_widget_t* self, uint32_t key, int mods, ygui_event_t* out);
+typedef void (*ygui_widget_destroy_fn)(ygui_widget_t* self);
+
+/*=============================================================================
+ * Widget Structure
+ *===========================================================================*/
+
+struct ygui_widget {
+    /* Identity */
+    char* id;
+    ygui_widget_type_t type;
+
+    /* Geometry */
+    float x, y, w, h;
+    float effective_x, effective_y;
+    int was_rendered;
+
+    /* State */
+    uint32_t flags;
+
+    /* Styling */
+    uint32_t bg_color;
+    uint32_t fg_color;
+    uint32_t accent_color;
+
+    /* Hierarchy (linked list) */
+    ygui_engine_t* engine;
+    ygui_widget_t* parent;
+    ygui_widget_t* first_child;
+    ygui_widget_t* last_child;
+    ygui_widget_t* next_sibling;
+    ygui_widget_t* prev_sibling;
+
+    /* Virtual functions */
+    ygui_widget_render_fn render;
+    ygui_widget_render_all_fn render_all;
+    ygui_widget_on_press_fn on_press;
+    ygui_widget_on_release_fn on_release;
+    ygui_widget_on_drag_fn on_drag;
+    ygui_widget_on_scroll_fn on_scroll;
+    ygui_widget_on_key_fn on_key;
+    ygui_widget_destroy_fn destroy;
+
+    /* Widget-specific data */
+    union {
+        struct {
+            char* label;
+        } button;
+
+        struct {
+            char* text;
+            float font_size;
+        } label;
+
+        struct {
+            float value;
+            float min_val;
+            float max_val;
+        } slider;
+
+        struct {
+            char* label;
+            int checked;
+        } checkbox;
+
+        struct {
+            char* text;
+            char* placeholder;
+            int cursor_pos;
+            int selection_start;
+            int selection_end;
+        } textinput;
+
+        struct {
+            float scroll_x, scroll_y;
+            float content_w, content_h;
+            float header_h;
+            float corner_radius;
+            int dragging_scrollbar;
+            int dragging_window;
+            float drag_start_y;
+            float drag_start_scroll_y;
+        } panel;
+
+        struct {
+            char** options;
+            int option_count;
+            int selected;
+            int open;
+        } dropdown;
+
+        struct {
+            float value;
+        } progress;
+
+        struct {
+            float hue, sat, val, alpha;
+        } colorpicker;
+    } data;
+};
+
+/*=============================================================================
+ * Spatial Grid
+ *===========================================================================*/
+
+typedef struct {
+    ygui_widget_t** widgets;
+    int count;
+    int capacity;
+} ygui_grid_cell_t;
+
+typedef struct {
+    ygui_grid_cell_t* cells;
+    int cols, rows;
+    float cell_size;
+    float width, height;
+} ygui_spatial_grid_t;
+
+/*=============================================================================
+ * Engine Structure
+ *===========================================================================*/
+
+struct ygui_engine {
+    ydraw_buffer_t* buffer;
+    ygui_spatial_grid_t grid;
+    ygui_theme_t* theme;
+    int owns_theme;
+
+    /* Widget storage */
+    ygui_widget_t* first_widget;
+    ygui_widget_t* last_widget;
+    int widget_count;
+
+    /* Interaction state */
+    ygui_widget_t* hovered;
+    ygui_widget_t* pressed;
+    ygui_widget_t* focused;
+
+    /* Event callback */
+    ygui_event_callback_t event_callback;
+    void* event_userdata;
+
+    /* Size */
+    float width, height;
+    float cell_width, cell_height;
+
+    /* State */
+    int dirty;
+};
+
+/*=============================================================================
+ * Internal Functions
+ *===========================================================================*/
+
+/* Memory helpers */
+static inline char* ygui_strdup(const char* s) {
+    if (!s) return NULL;
+    size_t len = strlen(s);
+    char* copy = (char*)malloc(len + 1);
+    if (copy) memcpy(copy, s, len + 1);
+    return copy;
+}
+
+/* Spatial grid */
+void ygui_grid_init(ygui_spatial_grid_t* grid, float width, float height, float cell_size);
+void ygui_grid_destroy(ygui_spatial_grid_t* grid);
+void ygui_grid_clear(ygui_spatial_grid_t* grid);
+void ygui_grid_insert(ygui_spatial_grid_t* grid, ygui_widget_t* widget);
+void ygui_grid_remove(ygui_spatial_grid_t* grid, ygui_widget_t* widget);
+ygui_widget_t* ygui_grid_query(const ygui_spatial_grid_t* grid, float x, float y);
+
+/* Widget helpers */
+ygui_widget_t* ygui_widget_alloc(ygui_engine_t* engine, ygui_widget_type_t type, const char* id);
+void ygui_widget_free(ygui_widget_t* widget);
+void ygui_widget_init_base(ygui_widget_t* widget, float x, float y, float w, float h);
+
+/* Render context */
+void ygui_render_ctx_init(ygui_render_ctx_t* ctx, ydraw_buffer_t* buffer, const ygui_theme_t* theme);
+void ygui_render_box(ygui_render_ctx_t* ctx, float x, float y, float w, float h,
+                     uint32_t color, float radius);
+void ygui_render_box_outline(ygui_render_ctx_t* ctx, float x, float y, float w, float h,
+                             uint32_t color, float radius, float stroke_width);
+void ygui_render_text(ygui_render_ctx_t* ctx, const char* text, float x, float y,
+                      uint32_t color, float font_size);
+void ygui_render_circle(ygui_render_ctx_t* ctx, float cx, float cy, float r, uint32_t color);
+void ygui_render_triangle(ygui_render_ctx_t* ctx, float x0, float y0,
+                          float x1, float y1, float x2, float y2, uint32_t color);
+
+/* Default widget functions */
+void ygui_widget_render_all_default(ygui_widget_t* self, ygui_render_ctx_t* ctx);
+
+/* Error */
+void ygui_set_error(const char* msg);
+
+/* Math helpers */
+static inline float ygui_clamp(float v, float lo, float hi) {
+    return v < lo ? lo : (v > hi ? hi : v);
+}
+
+static inline float ygui_max(float a, float b) {
+    return a > b ? a : b;
+}
+
+static inline float ygui_min(float a, float b) {
+    return a < b ? a : b;
+}
+
+#endif /* YGUI_INTERNAL_H */
