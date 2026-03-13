@@ -49,7 +49,7 @@ target_include_directories(yecho PRIVATE
     ${CMAKE_CURRENT_BINARY_DIR}
 )
 
-target_link_libraries(yecho PRIVATE args)
+target_link_libraries(yecho PRIVATE args ytrace::ytrace)
 target_compile_features(yecho PRIVATE cxx_std_23)
 
 # Install yecho to Android jniLibs as libyecho.so
