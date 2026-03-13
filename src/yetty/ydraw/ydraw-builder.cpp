@@ -881,6 +881,13 @@ public:
     float gridCellSizeX() const override { return _cellSizeX; }
     float gridCellSizeY() const override { return _cellSizeY; }
 
+    void setPadding(float padX, float padY) override {
+        _paddingX = padX;
+        _paddingY = padY;
+    }
+    float paddingX() const override { return _paddingX; }
+    float paddingY() const override { return _paddingY; }
+
     void setFlags(uint32_t flags) override { _flags = flags; }
     void addFlags(uint32_t flags) override { _flags |= flags; }
     uint32_t flags() const override { return _flags; }
@@ -1474,8 +1481,10 @@ public:
                 _sceneMaxX = std::max(_sceneMaxX, g.x + g.width());
                 _sceneMaxY = std::max(_sceneMaxY, g.y + g.height());
             }
-            float padX = (_sceneMaxX - _sceneMinX) * 0.05f;
-            float padY = (_sceneMaxY - _sceneMinY) * 0.05f;
+            float padX = (_sceneMaxX - _sceneMinX) * _paddingX;
+            float padY = (_sceneMaxY - _sceneMinY) * _paddingY;
+            ydebug(">>> calculate: before padding scene=[{},{}]-[{},{}] paddingX={} paddingY={} padX={} padY={}",
+                   _sceneMinX, _sceneMinY, _sceneMaxX, _sceneMaxY, _paddingX, _paddingY, padX, padY);
             _sceneMinX -= padX; _sceneMinY -= padY;
             _sceneMaxX += padX; _sceneMaxY += padY;
             if (_sceneMinX >= _sceneMaxX) { _sceneMinX = 0; _sceneMaxX = 100; }
@@ -1701,7 +1710,7 @@ private:
         meta.flags = (_flags & 0xFFFF) | (zoomBits << 16);
         meta.bgColor = _bgColor;
 
-        ydebug("flushMetadata: primOff={} primCnt={} gridOff={} grid={}x{} scene=[{},{}]-[{},{}]", meta.primitiveOffset, meta.primitiveCount, meta.gridOffset, meta.gridWidth, meta.gridHeight, _sceneMinX, _sceneMinY, _sceneMaxX, _sceneMaxY);
+        ydebug("flushMetadata: primOff={} primCnt={} gridOff={} grid={}x{} scene=[{},{}]-[{},{}] flags={}", meta.primitiveOffset, meta.primitiveCount, meta.gridOffset, meta.gridWidth, meta.gridHeight, _sceneMinX, _sceneMinY, _sceneMaxX, _sceneMaxY, _flags);
 
         return _cardMgr->writeMetadata(
             MetadataHandle{_metaSlotIndex * 64, 64}, &meta, sizeof(meta));
@@ -1834,6 +1843,8 @@ private:
     float _cellSizeX = DEFAULT_CELL_SIZE;
     float _cellSizeY = DEFAULT_CELL_SIZE;
     uint32_t _maxPrimsPerCell = DEFAULT_MAX_PRIMS_PER_CELL;
+    float _paddingX = 0.05f;  // Scene padding as fraction of extent (default 5%)
+    float _paddingY = 0.05f;
 
     // Appearance
     uint32_t _bgColor = 0xFF2E1A1A;

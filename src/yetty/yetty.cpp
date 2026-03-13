@@ -2228,11 +2228,14 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
     bool vncClientReady = _vncRequestedWidth > 0 && _vncRequestedHeight > 0;
     // Flow control: don't capture if VNC server isn't ready (state machine busy or waiting for ack)
     bool vncServerReady = !_vncServer || _vncServer->isReadyForFrame();
+    // Check if dimensions changed - if so, we MUST capture with new dimensions immediately
+    bool vncDimensionsChanged = _vncServerMode && vncClientReady &&
+        (_captureWidth != _vncRequestedWidth || _captureHeight != _vncRequestedHeight);
     // Always capture when there are clients - state machine handles diff detection
-    // NOT requiring vncServerReady because we need to capture new content even while processing
+    // When dimensions changed, override vncServerReady - old state machine will be reset in sendFrame()
     bool doCapture = (_captureBenchmark && (++_captureSkipCounter % CAPTURE_EVERY_N_FRAMES == 0)) ||
-                     (_vncHeadless && _vncServerMode && _vncServer && vncClientReady && vncServerReady) ||
-                     (_vncServerMode && _vncServer && _vncServer->hasClients() && vncClientReady && vncThrottleOk && vncServerReady);
+                     (_vncHeadless && _vncServerMode && _vncServer && vncClientReady && (vncServerReady || vncDimensionsChanged)) ||
+                     (_vncServerMode && _vncServer && _vncServer->hasClients() && vncClientReady && vncThrottleOk && (vncServerReady || vncDimensionsChanged));
 
     // Debug: track capture vs skip ratio
     static uint32_t captureCount = 0, skipCount = 0;
@@ -2386,7 +2389,10 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
     } else if (_vncServerMode && _vncServer && vncClientReady && _captureTexture && _captureWidth > 0 && _captureHeight > 0) {
         // No capture this frame - only advance state machine if NOT idle
         // If idle, don't call sendFrame or we'll compare stale content!
-        if (!_vncServer->isReadyForFrame()) {
+        // IMPORTANT: Also skip if dimensions changed - let old state machine die,
+        // next doCapture=true will start fresh with new dimensions
+        bool dimensionsChanged = _captureWidth != _vncRequestedWidth || _captureHeight != _vncRequestedHeight;
+        if (!_vncServer->isReadyForFrame() && !dimensionsChanged) {
             if (auto res = _vncServer->sendFrame(_captureTexture, _captureWidth, _captureHeight); !res) {
                 ywarn("VNC send failed: {}", res.error().message());
             }
@@ -2427,7 +2433,8 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
                     ywarn("VNC texture update failed: {}", res.error().message());
                 }
                 // Render fullscreen quad with frame texture
-                if (auto res = _vncClient->render(pass); !res) {
+                // Pass render target dimensions to clamp scissor during resize race condition
+                if (auto res = _vncClient->render(pass, _surfaceWidth, _surfaceHeight); !res) {
                     wgpuRenderPassEncoderEnd(pass);
                     wgpuRenderPassEncoderRelease(pass);
                     wgpuCommandEncoderRelease(encoder);

@@ -337,11 +337,22 @@ Result<void> VncServer::ensureResources(uint32_t width, uint32_t height) {
     }
 
     // Release old resources
+    // IMPORTANT: Unmap buffers before releasing - they may have pending async map operations
+    // from a state machine that was interrupted by resize. Unmap is safe even if not mapped.
     if (_prevTexture) { wgpuTextureRelease(_prevTexture); _prevTexture = nullptr; }
     if (_dirtyFlagsBuffer) { wgpuBufferRelease(_dirtyFlagsBuffer); _dirtyFlagsBuffer = nullptr; }
-    if (_dirtyFlagsReadback) { wgpuBufferRelease(_dirtyFlagsReadback); _dirtyFlagsReadback = nullptr; }
+    if (_dirtyFlagsReadback) {
+        wgpuBufferUnmap(_dirtyFlagsReadback);  // Safe even if not mapped
+        wgpuBufferRelease(_dirtyFlagsReadback);
+        _dirtyFlagsReadback = nullptr;
+    }
     if (_diffBindGroup) { wgpuBindGroupRelease(_diffBindGroup); _diffBindGroup = nullptr; }
-    if (_tileReadbackBuffer) { wgpuBufferRelease(_tileReadbackBuffer); _tileReadbackBuffer = nullptr; _tileReadbackBufferSize = 0; }
+    if (_tileReadbackBuffer) {
+        wgpuBufferUnmap(_tileReadbackBuffer);  // Safe even if not mapped
+        wgpuBufferRelease(_tileReadbackBuffer);
+        _tileReadbackBuffer = nullptr;
+        _tileReadbackBufferSize = 0;
+    }
 
     _lastWidth = width;
     _lastHeight = height;
@@ -613,6 +624,18 @@ std::vector<VncServer::Rect> VncServer::mergeRectangles() {
 Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels, uint32_t width, uint32_t height) {
     if (_clientCount == 0) return Ok();  // No clients, skip
 
+    // If dimensions changed, reset state machine to re-create resources
+    // BUT: Do NOT clear _awaitingAck! We must wait for the client to finish
+    // processing the old frame, otherwise our new frame header gets mixed into
+    // the old frame's data stream causing protocol desync.
+    if (width != _lastWidth || height != _lastHeight) {
+        ydebug("VNC sendFrame: size changed {}x{} -> {}x{}, resetting state (awaitingAck={})",
+               _lastWidth, _lastHeight, width, height, _awaitingAck.load());
+        _captureState = CaptureState::IDLE;
+        _gpuWorkDone = true;
+        // Do NOT clear _awaitingAck - let client finish old frame first
+    }
+
     // Flow control: wait for client ack before sending next frame
     if (_awaitingAck) {
         return Ok();  // Skip this frame, client hasn't acked previous
@@ -628,14 +651,6 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
 
     // GPU callbacks use AllowSpontaneous mode - they fire asynchronously
     // No manual tick needed
-
-    // If dimensions changed, reset state machine to re-create resources
-    if (width != _lastWidth || height != _lastHeight) {
-        ydebug("VNC sendFrame: size changed {}x{} -> {}x{}, resetting state",
-               _lastWidth, _lastHeight, width, height);
-        _captureState = CaptureState::IDLE;
-        _gpuWorkDone = true;
-    }
 
     ydebug("VNC sendFrame: state={} gpuWorkDone={}",
            static_cast<int>(_captureState), _gpuWorkDone.load());

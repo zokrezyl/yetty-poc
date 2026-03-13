@@ -35,6 +35,13 @@ void setGridCellSize(float sizeX, float sizeY) override {
 float gridCellSizeX() const override { return _cellSizeX; }
 float gridCellSizeY() const override { return _cellSizeY; }
 
+void setPadding(float padX, float padY) override {
+  _paddingX = padX;
+  _paddingY = padY;
+}
+float paddingX() const override { return _paddingX; }
+float paddingY() const override { return _paddingY; }
+
 void setFlags(uint32_t flags) override { _flags = flags; }
 void addFlags(uint32_t flags) override { _flags |= flags; }
 uint32_t flags() const override { return _flags; }

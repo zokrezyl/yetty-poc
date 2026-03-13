@@ -127,25 +127,27 @@ public:
       }
     }
 
-    // First-time zoom: fit content width to card width (like ypdf)
+    // First-time zoom: fit content width to card width (only with UNIFORM_SCALE)
     if (_dirty && _needsInitialZoom && _cellWidth > 0 && _cellHeight > 0) {
-      float contentW = _builder->sceneMaxX() - _builder->sceneMinX();
-      float contentH = _builder->sceneMaxY() - _builder->sceneMinY();
-      if (contentW > 0 && contentH > 0) {
-        float cardAspect =
-            static_cast<float>(_widthCells * _cellWidth) /
-            std::max(static_cast<float>(_heightCells * _cellHeight), 1.0f);
-        // With UNIFORM_SCALE: zoom to fit content width to card width
-        _viewZoom = contentH * cardAspect / contentW;
+      if (_builder->flags() & Painter::FLAG_UNIFORM_SCALE) {
+        float contentW = _builder->sceneMaxX() - _builder->sceneMinX();
+        float contentH = _builder->sceneMaxY() - _builder->sceneMinY();
+        if (contentW > 0 && contentH > 0) {
+          float cardAspect =
+              static_cast<float>(_widthCells * _cellWidth) /
+              std::max(static_cast<float>(_heightCells * _cellHeight), 1.0f);
+          // With UNIFORM_SCALE: zoom to fit content width to card width
+          _viewZoom = contentH * cardAspect / contentW;
 
-        // Pan to show top of document
-        float centerY = (_builder->sceneMinY() + _builder->sceneMaxY()) * 0.5f;
-        float viewHalfH = contentH * 0.5f / _viewZoom;
-        _viewPanY = _builder->sceneMinY() - centerY + viewHalfH;
+          // Pan to show top of document
+          float centerY = (_builder->sceneMinY() + _builder->sceneMaxY()) * 0.5f;
+          float viewHalfH = contentH * 0.5f / _viewZoom;
+          _viewPanY = _builder->sceneMinY() - centerY + viewHalfH;
 
-        _builder->setView(_viewZoom, _viewPanX, _viewPanY);
-        _needsInitialZoom = false;
+          _builder->setView(_viewZoom, _viewPanX, _viewPanY);
+        }
       }
+      _needsInitialZoom = false;
       _dirty = false;
     }
   }
@@ -519,6 +521,28 @@ private:
           _viewPanY = std::stof(s);
       } else if (token == "--yaml") {
         _yamlMode = true;
+      } else if (token == "--stretch") {
+        ydebug(">>> YPaint: --stretch flag, clearing FLAG_UNIFORM_SCALE (was {})",
+               _builder->flags());
+        _builder->setFlags(_builder->flags() & ~Painter::FLAG_UNIFORM_SCALE);
+        ydebug(">>> YPaint: flags now {}", _builder->flags());
+      } else if (token == "--padding-x") {
+        std::string s;
+        if (iss >> s) {
+          _builder->setPadding(std::stof(s), _builder->paddingY());
+        }
+      } else if (token == "--padding-y") {
+        std::string s;
+        if (iss >> s) {
+          _builder->setPadding(_builder->paddingX(), std::stof(s));
+        }
+      } else if (token == "--padding") {
+        std::string s;
+        if (iss >> s) {
+          float p = std::stof(s);
+          ydebug(">>> YPaint: --padding {} -> setPadding({}, {})", s, p, p);
+          _builder->setPadding(p, p);
+        }
       }
     }
   }

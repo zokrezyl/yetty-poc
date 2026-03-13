@@ -147,6 +147,16 @@ addYpaintBuffer(std::shared_ptr<YPaintBuffer> buffer) override {
   uint32_t contentLines = std::max(
       1u, static_cast<uint32_t>(std::ceil(contentHeight / _cellSizeY)));
 
+  // Apply padding to scene bounds (if not explicit bounds)
+  if (!_hasExplicitBounds) {
+    float padX = (_sceneMaxX - _sceneMinX) * _paddingX;
+    float padY = (_sceneMaxY - _sceneMinY) * _paddingY;
+    _sceneMinX -= padX;
+    _sceneMinY -= padY;
+    _sceneMaxX += padX;
+    _sceneMaxY += padY;
+  }
+
   // Update canvas scene bounds again if they were extended
   _canvas->setSceneBounds(_sceneMinX, _sceneMinY, _sceneMaxX, _sceneMaxY);
 
