@@ -279,6 +279,8 @@ public:
   static int onBell(void *user);
   static int onResize(int rows, int cols, VTermStateFields *fields, void *user);
   static int onOSC(int command, VTermStringFragment frag, void *user);
+  static int onCSI(const char *leader, const long args[], int argcount,
+                   const char *intermed, char command, void *user);
   static int onSetLineInfo(int row, const VTermLineInfo *newinfo,
                            const VTermLineInfo *oldinfo, void *user);
 
@@ -623,10 +625,10 @@ static VTermStateCallbacks stateCallbacks = {
     .sb_clear = nullptr,
 };
 
-// State fallbacks for unrecognized sequences (OSC, etc.)
+// State fallbacks for unrecognized sequences (OSC, CSI t, etc.)
 static VTermStateFallbacks stateFallbacks = {
     .control = nullptr,
-    .csi = nullptr,
+    .csi = GPUScreenImpl::onCSI,
     .osc = GPUScreenImpl::onOSC,
     .dcs = nullptr,
     .apc = nullptr,
@@ -3223,6 +3225,58 @@ int GPUScreenImpl::onSetLineInfo(int, const VTermLineInfo *,
                                  const VTermLineInfo *, void *) {
   // Line info (double-width, double-height) - not commonly used
   return 1;
+}
+
+int GPUScreenImpl::onCSI(const char *leader, const long args[], int argcount,
+                         const char *intermed, char command, void *user) {
+  auto *self = static_cast<GPUScreenImpl *>(user);
+
+  // Handle CSI t (XTWINOPS - window operations)
+  if (command == 't' && argcount >= 1) {
+    int op = static_cast<int>(args[0]);
+    ydebug(">>> onCSI: XTWINOPS op={}", op);
+
+    uint32_t cellWidth = static_cast<uint32_t>(self->getCellWidthF());
+    uint32_t cellHeight = static_cast<uint32_t>(self->getCellHeightF());
+
+    // CSI 14 t - Report window size in pixels
+    if (op == 14) {
+      uint32_t pixelWidth = self->_cols * cellWidth;
+      uint32_t pixelHeight = self->_rows * cellHeight;
+      char response[64];
+      snprintf(response, sizeof(response), "\033[4;%u;%ut", pixelHeight, pixelWidth);
+      ydebug(">>> onCSI: reporting pixel size {}x{}", pixelWidth, pixelHeight);
+      if (self->_outputCallback) {
+        self->_outputCallback(response, strlen(response));
+      }
+      return 1;
+    }
+
+    // CSI 18 t - Report text area size in characters
+    if (op == 18) {
+      char response[64];
+      snprintf(response, sizeof(response), "\033[8;%u;%ut", self->_rows, self->_cols);
+      ydebug(">>> onCSI: reporting text size {}x{} cells", self->_cols, self->_rows);
+      if (self->_outputCallback) {
+        self->_outputCallback(response, strlen(response));
+      }
+      return 1;
+    }
+
+    // CSI 16 t - Report cell size in pixels
+    if (op == 16) {
+      char response[64];
+      snprintf(response, sizeof(response), "\033[6;%u;%ut", cellHeight, cellWidth);
+      ydebug(">>> onCSI: reporting cell size {}x{} pixels", cellWidth, cellHeight);
+      if (self->_outputCallback) {
+        self->_outputCallback(response, strlen(response));
+      }
+      return 1;
+    }
+  }
+
+  // Unhandled CSI sequence
+  return 0;
 }
 
 int GPUScreenImpl::onOSC(int command, VTermStringFragment frag, void *user) {

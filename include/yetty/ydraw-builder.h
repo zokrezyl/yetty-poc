@@ -189,6 +189,10 @@ public:
     virtual float gridCellSizeX() const = 0;
     virtual float gridCellSizeY() const = 0;
 
+    virtual void setPadding(float padX, float padY) = 0;
+    virtual float paddingX() const = 0;
+    virtual float paddingY() const = 0;
+
     virtual void setFlags(uint32_t flags) = 0;
     virtual void addFlags(uint32_t flags) = 0;
     virtual uint32_t flags() const = 0;

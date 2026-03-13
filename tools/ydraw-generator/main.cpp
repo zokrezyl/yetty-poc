@@ -32,6 +32,18 @@ struct GeneratorConfig {
   float minSizePct = 0.5f;   // Min shape size as % of scene
   float maxSizePct = 40.0f;  // Max shape size as % of scene
   uint32_t seed = 0;
+  bool opaque = false;       // Use fully opaque colors (alpha=0xFF)
+  bool noStroke = false;     // Disable stroke on shapes
+  bool boundsSpecified = false;  // Whether -b was explicitly provided
+  bool stretch = false;      // Stretch to fill card (no aspect ratio preservation)
+  float padding = -1.0f;     // Scene padding as fraction (-1 = use default 0.05)
+  float paddingX = -1.0f;    // Scene padding X (-1 = use --padding or default)
+  float paddingY = -1.0f;    // Scene padding Y (-1 = use --padding or default)
+  // Card placement (in terminal cells)
+  int cardX = -1;            // -1 = not specified
+  int cardY = -1;
+  int cardW = -1;
+  int cardH = -1;
 };
 
 //=============================================================================
@@ -55,8 +67,10 @@ public:
       addRandomShape(buffer);
     }
 
-    buffer->setSceneBounds(_config.minX, _config.minY, _config.maxX,
-                           _config.maxY);
+    if (_config.boundsSpecified) {
+      buffer->setSceneBounds(_config.minX, _config.minY, _config.maxX,
+                             _config.maxY);
+    }
     buffer->setBgColor(randomColor(0xFF));
   }
 
@@ -76,7 +90,7 @@ private:
     uint8_t r = static_cast<uint8_t>(randomUint(0, 255));
     uint8_t g = static_cast<uint8_t>(randomUint(0, 255));
     uint8_t b = static_cast<uint8_t>(randomUint(0, 255));
-    uint8_t a = static_cast<uint8_t>(randomUint(minAlpha, 255));
+    uint8_t a = _config.opaque ? 0xFF : static_cast<uint8_t>(randomUint(minAlpha, 255));
     return (a << 24) | (b << 16) | (g << 8) | r; // ABGR format
   }
 
@@ -96,8 +110,8 @@ private:
     uint32_t shapeType = randomUint(0, 24);
     uint32_t layer = randomUint(0, 10);
     uint32_t fillColor = randomColor();
-    uint32_t strokeColor = randomColor();
-    float strokeWidth = randomFloat(0.0f, 3.0f);
+    uint32_t strokeColor = _config.noStroke ? 0 : randomColor();
+    float strokeWidth = _config.noStroke ? 0.0f : randomFloat(0.0f, 3.0f);
 
     switch (shapeType) {
     case 0:  addCircle(buffer, layer, fillColor, strokeColor, strokeWidth); break;
@@ -499,7 +513,7 @@ int main(int argc, char **argv) {
   args::ArgumentParser parser(
       "ydraw-generator - Generate random shapes as OSC sequence",
       "Outputs an OSC sequence for ydraw/ypaint cards.");
-  args::HelpFlag help(parser, "help", "Show help", {'h', "help"});
+  args::HelpFlag help(parser, "help", "Show help", {"help"});
 
   args::ValueFlag<uint32_t> countFlag(
       parser, "N", "Number of shapes to generate", {'n', "count"}, 10);
@@ -514,6 +528,26 @@ int main(int argc, char **argv) {
       parser, "PCT", "Max shape size as % of scene (default 40)", {"max"}, 40.0f);
   args::ValueFlag<uint32_t> seedFlag(
       parser, "SEED", "Random seed (0 = use time)", {'s', "seed"}, 0);
+  args::Flag opaqueFlag(
+      parser, "opaque", "Use fully opaque colors (alpha=0xFF)", {"opaque"});
+  args::Flag noStrokeFlag(
+      parser, "no-stroke", "Disable stroke on shapes", {"no-stroke"});
+  args::Flag stretchFlag(
+      parser, "stretch", "Stretch to fill card (no aspect ratio preservation)", {"stretch"});
+  args::ValueFlag<int> cardXFlag(
+      parser, "X", "Card X position in cells", {'x'});
+  args::ValueFlag<int> cardYFlag(
+      parser, "Y", "Card Y position in cells", {'y'});
+  args::ValueFlag<int> cardWFlag(
+      parser, "W", "Card width in cells", {'w'});
+  args::ValueFlag<int> cardHFlag(
+      parser, "H", "Card height in cells", {'h'});
+  args::ValueFlag<float> paddingFlag(
+      parser, "P", "Scene padding as fraction (default 0.05)", {"padding"});
+  args::ValueFlag<float> paddingXFlag(
+      parser, "PX", "Scene padding X as fraction", {"padding-x"});
+  args::ValueFlag<float> paddingYFlag(
+      parser, "PY", "Scene padding Y as fraction", {"padding-y"});
 
   try {
     parser.ParseCLI(argc, argv);
@@ -531,6 +565,16 @@ int main(int argc, char **argv) {
   config.seed = args::get(seedFlag);
   config.minSizePct = args::get(minSizeFlag);
   config.maxSizePct = args::get(maxSizeFlag);
+  config.opaque = opaqueFlag;
+  config.noStroke = noStrokeFlag;
+  config.stretch = stretchFlag;
+  if (cardXFlag) config.cardX = args::get(cardXFlag);
+  if (cardYFlag) config.cardY = args::get(cardYFlag);
+  if (cardWFlag) config.cardW = args::get(cardWFlag);
+  if (cardHFlag) config.cardH = args::get(cardHFlag);
+  if (paddingFlag) config.padding = args::get(paddingFlag);
+  if (paddingXFlag) config.paddingX = args::get(paddingXFlag);
+  if (paddingYFlag) config.paddingY = args::get(paddingYFlag);
 
   // Validate mode
   if (config.mode != "ydraw" && config.mode != "ypaint") {
@@ -545,12 +589,15 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  // Parse bounds
-  std::string boundsStr = args::get(boundsFlag);
-  if (!parseBounds(boundsStr, config.minX, config.minY, config.maxX,
-                   config.maxY)) {
-    std::cerr << "Error: invalid bounds format. Use: minX,minY,maxX,maxY\n";
-    return 1;
+  // Parse bounds (only if explicitly specified)
+  if (boundsFlag) {
+    std::string boundsStr = args::get(boundsFlag);
+    if (!parseBounds(boundsStr, config.minX, config.minY, config.maxX,
+                     config.maxY)) {
+      std::cerr << "Error: invalid bounds format. Use: minX,minY,maxX,maxY\n";
+      return 1;
+    }
+    config.boundsSpecified = true;
   }
 
   // Create buffer and generate shapes
@@ -571,11 +618,24 @@ int main(int argc, char **argv) {
   auto b64 = ycat::base64Encode(binary);
 
   // Build OSC sequence
-  // Format: ESC ] 666666 ; run -c <card> ;; <base64> ESC
+  // Format: ESC ] 666666 ; run -c <card> [-x X] [-y Y] [-w W] [-h H] ; <card-args> ; <base64> ESC
   std::string osc;
   osc += "\033]666666;run -c ";
   osc += config.mode;
-  osc += ";;";
+  if (config.cardX >= 0) osc += " -x " + std::to_string(config.cardX);
+  if (config.cardY >= 0) osc += " -y " + std::to_string(config.cardY);
+  if (config.cardW >= 0) osc += " -w " + std::to_string(config.cardW);
+  if (config.cardH >= 0) osc += " -h " + std::to_string(config.cardH);
+  osc += ";";  // End generic-args, start card-args
+  std::string cardArgs;
+  if (config.stretch) cardArgs += "--stretch ";
+  if (config.padding >= 0) cardArgs += "--padding " + std::to_string(config.padding) + " ";
+  if (config.paddingX >= 0) cardArgs += "--padding-x " + std::to_string(config.paddingX) + " ";
+  if (config.paddingY >= 0) cardArgs += "--padding-y " + std::to_string(config.paddingY) + " ";
+  // Trim trailing space
+  if (!cardArgs.empty() && cardArgs.back() == ' ') cardArgs.pop_back();
+  osc += cardArgs;
+  osc += ";";  // End card-args, start payload
   osc += b64;
   osc += "\033\\";
 

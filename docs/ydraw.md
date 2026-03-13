@@ -452,6 +452,26 @@ glyphOffset     = (_derivedHandle.offset + gridBytes) / 4
 | 16 | UNIFORM_SCALE | Preserve aspect ratio (circles stay circular) |
 | 32 | CUSTOM_ATLAS | Custom MSDF atlas data present after glyph data |
 
+### Card Arguments
+
+The ydraw card supports these command-line arguments (passed via OSC card-args field):
+
+| Argument | Description |
+|----------|-------------|
+| `--stretch` | Disable uniform scaling (stretch to fill card, ignoring aspect ratio) |
+| `--padding P` | Set scene padding as fraction (e.g., `--padding 0` for no padding, `--padding 0.1` for 10%) |
+| `--padding-x PX` | Set scene padding X only |
+| `--padding-y PY` | Set scene padding Y only |
+| `--bg-color COLOR` | Background color (hex, e.g., `0xFF1A1A2E`) |
+| `--cell-size SX [SY]` | Grid cell size in scene units |
+| `--max-prims-per-cell N` | Maximum primitives per grid cell |
+| `--zoom Z` | Initial zoom level |
+| `--pan-y Y` | Initial Y pan offset |
+| `--show-bounds` | Debug: draw bounding boxes |
+| `--show-grid` | Debug: draw grid lines |
+| `--show-eval-count` | Debug: heatmap of SDF evals per pixel |
+| `--yaml` | Parse payload as YAML instead of binary |
+
 ### Pan/Zoom encoding
 
 Pan fixedpoint: `panScene = i16value / 16384.0 * sceneExtent`
@@ -486,7 +506,7 @@ Called after all primitives/text have been added to the buffer. Does:
 4. **Compute AABBs**: iterate `forEachPrim()`, compute bounding box per prim,
    store in `_primBounds`
 5. **Compute scene bounds** (if no explicit bounds): min/max of all AABBs + glyphs
-   with 5% padding
+   with configurable padding (default 5%, set via `setPadding()`)
 6. **Compute grid dimensions**: auto cell size based on average prim area, capped
    at 4M total cells
 7. **Build grid**: two-pass — count entries per cell, prefix-sum for offsets, fill
@@ -790,3 +810,69 @@ uint32_t primCnt = meta[1];  // primitiveCount
 uint32_t gridOff = meta[2];  // gridOffset
 // ... verify types, colors, grid entries
 ```
+
+## ydraw-generator
+
+Command-line tool for generating random SDF shapes and outputting an OSC sequence
+for ydraw/ypaint cards. Useful for stress testing and demos.
+
+### Usage
+
+```bash
+ydraw-generator [options]
+```
+
+### Options
+
+| Option | Description |
+|--------|-------------|
+| `-n, --count N` | Number of shapes to generate (default: 10) |
+| `-m, --mode MODE` | Output mode: `ydraw` or `ypaint` (default: `ypaint`) |
+| `-b, --bounds X0,Y0,X1,Y1` | Scene bounds (default: auto-calculated from shapes) |
+| `--min PCT` | Min shape size as % of scene (default: 0.5) |
+| `--max PCT` | Max shape size as % of scene (default: 40) |
+| `-s, --seed SEED` | Random seed (0 = use time) |
+| `--opaque` | Use fully opaque colors (alpha=0xFF) |
+| `--no-stroke` | Disable stroke on shapes |
+| `--stretch` | Stretch to fill card (disable aspect ratio preservation) |
+| `--padding P` | Scene padding as fraction (default: 0.05) |
+| `--padding-x PX` | Scene padding X as fraction |
+| `--padding-y PY` | Scene padding Y as fraction |
+| `-x X` | Card X position in cells |
+| `-y Y` | Card Y position in cells |
+| `-w W` | Card width in cells |
+| `-h H` | Card height in cells |
+
+### Examples
+
+Generate 1000 opaque shapes without stroke, filling an 80x40 cell card:
+```bash
+ydraw-generator -n 1000 -m ydraw -x 0 -y 0 -w 80 -h 40 --opaque --no-stroke --stretch --padding 0
+```
+
+Generate shapes similar to giant.yaml (for stress testing):
+```bash
+ydraw-generator -n 17500 -m ydraw --min 0.5 --max 3 --opaque --no-stroke
+```
+
+### Output
+
+The tool outputs an OSC escape sequence that can be piped directly to yetty:
+```bash
+ydraw-generator -n 100 -m ydraw | yetty
+```
+
+Or used in a shell script:
+```bash
+#!/bin/bash
+ydraw-generator -n 5000 -m ydraw -x 0 -y 0 -w 80 -h 25 --opaque --no-stroke
+```
+
+### Shape Types
+
+The generator randomly produces these SDF primitive types:
+- Circle, Box, Ellipse, Triangle, Segment
+- RoundedBox, Rhombus, Pentagon, Hexagon, Octogon
+- Star, Heart, Cross, Capsule, Moon, Egg
+- Trapezoid, Parallelogram, Hexagram, Pentagram
+- Pie, Ring, Arc, Vesica, Bezier2
