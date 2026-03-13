@@ -10,28 +10,7 @@
 #include <filesystem>
 #include <unordered_map>
 
-#ifndef CMAKE_SOURCE_DIR
-#define CMAKE_SOURCE_DIR "."
-#endif
-
-#ifndef YETTY_SHADERS_DIR
-#define YETTY_SHADERS_DIR CMAKE_SOURCE_DIR "/src/yetty/shaders"
-#endif
-
-// Helper to get assets directory at runtime (for Android asset extraction)
-static std::string getAssetsDir() {
-#if defined(__ANDROID__)
-    const char* envDir = getenv("YETTY_ASSETS_DIR");
-    if (envDir && envDir[0]) {
-        return std::string(envDir);
-    }
-#endif
-#ifdef YETTY_ASSETS_DIR
-    return std::string(YETTY_ASSETS_DIR);
-#else
-    return std::string(CMAKE_SOURCE_DIR) + "/assets";
-#endif
-}
+#include <yetty/shader-path.h>
 
 namespace yetty {
 
@@ -327,7 +306,7 @@ private:
   Result<void> initMsMsdfFonts() noexcept {
 #if defined(__ANDROID__) || defined(YETTY_ASSETS_DIR)
     // Use prebuilt CDB files from assets directory
-    _cacheDir = getAssetsDir() + "/fonts-cdb";
+    _cacheDir = yetty::getAssetsDir() + "/fonts-cdb";
     ydebug("MSDF font cache dir (prebuilt): {}", _cacheDir);
 #else
     const char *home = std::getenv("HOME");
@@ -370,9 +349,7 @@ private:
 
   Result<void> initShaderFonts() noexcept {
     // Check env var first (set at runtime on Android), fallback to compile-time path
-    const char* envShaderDir = std::getenv("YETTY_SHADERS_DIR");
-    std::string shaderDir = envShaderDir ? std::string(envShaderDir) + "/"
-                                         : std::string(YETTY_SHADERS_DIR) + "/";
+    std::string shaderDir = yetty::getShadersDir() + "/";
 
     auto shaderGlyphResult =
         ShaderFont::create(_shaderMgr, ShaderFont::Category::Glyph, shaderDir);
@@ -401,7 +378,7 @@ private:
 
   Result<void> initVectorSdfFont() noexcept {
     // Use the default monospace font TTF
-    std::string ttfPath = getAssetsDir() + "/DejaVuSansMNerdFontMono-Regular.ttf";
+    std::string ttfPath = yetty::getAssetsDir() + "/DejaVuSansMNerdFontMono-Regular.ttf";
 
     if (!std::filesystem::exists(ttfPath)) {
       return Err<void>("Default TTF not found: " + ttfPath);
@@ -429,7 +406,7 @@ private:
 
   Result<void> initRasterFont() noexcept {
     // Use the default monospace font TTF
-    std::string ttfPath = getAssetsDir() + "/DejaVuSansMNerdFontMono-Regular.ttf";
+    std::string ttfPath = yetty::getAssetsDir() + "/DejaVuSansMNerdFontMono-Regular.ttf";
 
     if (!std::filesystem::exists(ttfPath)) {
       return Err<void>("Default TTF not found: " + ttfPath);

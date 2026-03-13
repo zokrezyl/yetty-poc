@@ -15,12 +15,7 @@
 #include <fstream>
 #include <sstream>
 
-#ifndef CMAKE_SOURCE_DIR
-#define CMAKE_SOURCE_DIR "."
-#endif
-#ifndef YETTY_SHADERS_DIR
-#define YETTY_SHADERS_DIR CMAKE_SOURCE_DIR "/src/yetty/shaders"
-#endif
+#include <yetty/shader-path.h>
 
 namespace yetty {
 
@@ -136,7 +131,7 @@ Result<void> ScreenDrawLayerImpl::init() noexcept {
 }
 
 Result<void> ScreenDrawLayerImpl::buildShaderSource(std::string& source) {
-    std::string shaderDir = std::string(YETTY_SHADERS_DIR);
+    std::string shaderDir = yetty::getShadersDir();
 
     // Read overlay shader (reuse ygui-overlay shader)
     std::string overlayPath = shaderDir + "/ygui-overlay.wgsl";
