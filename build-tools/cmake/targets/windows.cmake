@@ -30,6 +30,16 @@ incbin_add_resources(yetty
 # Embed shaders
 incbin_add_directory(yetty "shaders" "${YETTY_ROOT}/src/yetty/shaders" "*.wgsl")
 
+# Embed fonts
+incbin_add_directory(yetty "fonts" "${YETTY_ROOT}/assets" "*.ttf")
+
+# Embed MSDF CDB font databases (must run 'make prepare-assets' first)
+if(EXISTS "${YETTY_ROOT}/assets/fonts-cdb")
+    incbin_add_directory(yetty "fonts-cdb" "${YETTY_ROOT}/assets/fonts-cdb" "*.cdb")
+else()
+    message(WARNING "No prebuilt CDB fonts found. Run 'make prepare-assets' first for embedded fonts.")
+endif()
+
 # Make manifest available to incbin-assets.cpp
 target_include_directories(yetty PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 

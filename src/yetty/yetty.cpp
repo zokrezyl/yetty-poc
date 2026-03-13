@@ -904,8 +904,47 @@ Result<void> YettyImpl::initEmbeddedAssets() noexcept {
         return Ok();
     }
 
-    // Determine cache directory
+    // Determine cache directory (platform-specific)
+    // See docs/incbin.md for full documentation
     std::filesystem::path cacheDir;
+
+#if defined(__ANDROID__)
+    // Android: Use app's internal cache directory
+    // Set by Android platform code via YETTY_CACHE_DIR env var
+    const char* androidCache = std::getenv("YETTY_CACHE_DIR");
+    if (androidCache && androidCache[0]) {
+        cacheDir = std::filesystem::path(androidCache);
+    } else {
+        // Fallback - shouldn't happen if platform code is correct
+        cacheDir = std::filesystem::path("/data/local/tmp/yetty-cache");
+    }
+
+#elif defined(_WIN32)
+    // Windows: %LOCALAPPDATA%\yetty\cache or %APPDATA%\yetty\cache
+    const char* localAppData = std::getenv("LOCALAPPDATA");
+    if (localAppData && localAppData[0]) {
+        cacheDir = std::filesystem::path(localAppData) / "yetty" / "cache";
+    } else {
+        const char* appData = std::getenv("APPDATA");
+        if (appData && appData[0]) {
+            cacheDir = std::filesystem::path(appData) / "yetty" / "cache";
+        } else {
+            const char* temp = std::getenv("TEMP");
+            cacheDir = std::filesystem::path(temp ? temp : "C:\\Temp") / "yetty-cache";
+        }
+    }
+
+#elif defined(__APPLE__)
+    // macOS: ~/Library/Caches/yetty
+    const char* home = std::getenv("HOME");
+    if (home && home[0]) {
+        cacheDir = std::filesystem::path(home) / "Library" / "Caches" / "yetty";
+    } else {
+        cacheDir = std::filesystem::path("/tmp") / "yetty-cache";
+    }
+
+#else
+    // Linux and other POSIX: XDG_CACHE_HOME or ~/.cache/yetty
     const char* xdgCache = std::getenv("XDG_CACHE_HOME");
     if (xdgCache && xdgCache[0]) {
         cacheDir = std::filesystem::path(xdgCache) / "yetty";
@@ -917,13 +956,25 @@ Result<void> YettyImpl::initEmbeddedAssets() noexcept {
             cacheDir = std::filesystem::path("/tmp") / "yetty-cache";
         }
     }
+#endif
+
+    // Helper for cross-platform setenv
+    auto setEnvVar = [](const char* name, const std::string& value, bool overwrite) {
+#ifdef _WIN32
+        if (!overwrite && std::getenv(name) != nullptr) return;
+        std::string envStr = std::string(name) + "=" + value;
+        _putenv(envStr.c_str());
+#else
+        setenv(name, value.c_str(), overwrite ? 1 : 0);
+#endif
+    };
 
     // Check if extraction is needed
     if (!IncbinAssets::needsExtraction(cacheDir)) {
         yinfo("Embedded assets already extracted to {}", cacheDir.string());
         // Set environment variable for shader loading
         auto shadersDir = cacheDir / "shaders";
-        setenv("YETTY_SHADERS_DIR", shadersDir.c_str(), 0);  // Don't overwrite if already set
+        setEnvVar("YETTY_SHADERS_DIR", shadersDir.string(), false);
         return Ok();
     }
 
@@ -935,8 +986,8 @@ Result<void> YettyImpl::initEmbeddedAssets() noexcept {
 
     // Set environment variable for shader loading
     auto shadersDir = cacheDir / "shaders";
-    setenv("YETTY_SHADERS_DIR", shadersDir.c_str(), 1);
-    yinfo("YETTY_SHADERS_DIR set to {}", shadersDir.c_str());
+    setEnvVar("YETTY_SHADERS_DIR", shadersDir.string(), true);
+    yinfo("YETTY_SHADERS_DIR set to {}", shadersDir.string());
 
     return Ok();
 }

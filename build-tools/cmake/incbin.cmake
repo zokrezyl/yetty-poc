@@ -215,6 +215,9 @@ function(incbin_add_directory TARGET PREFIX DIR)
         set(PATTERN ${ARGV3})
     endif()
 
+    # Sanitize PREFIX for C++ identifiers (replace - with _)
+    string(REPLACE "-" "_" PREFIX_SAFE "${PREFIX}")
+
     # Find all matching files recursively
     file(GLOB_RECURSE FILES "${DIR}/${PATTERN}")
 
@@ -226,29 +229,54 @@ function(incbin_add_directory TARGET PREFIX DIR)
     list(LENGTH FILES FILE_COUNT)
     message(STATUS "incbin: Packing ${FILE_COUNT} files from ${DIR} with prefix '${PREFIX}'")
 
-    # Build resource list for incbin_add_resources
-    set(RESOURCES "")
+    # Build resource list
     set(MANIFEST_ENTRIES "")
 
-    foreach(FILE ${FILES})
-        # Get relative path from DIR
-        file(RELATIVE_PATH REL_PATH "${DIR}" "${FILE}")
+    # Generate source file for this directory (separate from main resources)
+    set(RESOURCE_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/${TARGET}_${PREFIX}_resources.cpp")
 
-        # Create safe symbol name (replace / . - with _)
-        string(REPLACE "/" "_" SAFE_NAME "${REL_PATH}")
-        string(REPLACE "." "_" SAFE_NAME "${SAFE_NAME}")
-        string(REPLACE "-" "_" SAFE_NAME "${SAFE_NAME}")
-        set(SYMBOL_NAME "${PREFIX}_${SAFE_NAME}")
+    if(EMSCRIPTEN)
+        # Emscripten: provide stubs
+        file(WRITE ${RESOURCE_SOURCE}
+"/* Generated stub resources for ${TARGET}/${PREFIX} (Emscripten) */
+")
+        foreach(FILE ${FILES})
+            file(RELATIVE_PATH REL_PATH "${DIR}" "${FILE}")
+            string(REPLACE "/" "_" SAFE_NAME "${REL_PATH}")
+            string(REPLACE "." "_" SAFE_NAME "${SAFE_NAME}")
+            string(REPLACE "-" "_" SAFE_NAME "${SAFE_NAME}")
+            set(SYMBOL_NAME "${PREFIX_SAFE}_${SAFE_NAME}")
+            set(ASSET_NAME "${PREFIX}/${REL_PATH}")
+            list(APPEND MANIFEST_ENTRIES "${SYMBOL_NAME}|${ASSET_NAME}")
 
-        # Asset name for lookup (prefix/relative/path)
-        set(ASSET_NAME "${PREFIX}/${REL_PATH}")
+            file(APPEND ${RESOURCE_SOURCE}
+"const unsigned char g${SYMBOL_NAME}Data[] = {0};
+const unsigned char* const g${SYMBOL_NAME}End = g${SYMBOL_NAME}Data;
+const unsigned int g${SYMBOL_NAME}Size = 0;
+")
+        endforeach()
+    else()
+        # GCC/Clang/MSVC: Use incbin
+        file(WRITE ${RESOURCE_SOURCE}
+"// Generated embedded resources for ${TARGET}/${PREFIX}
+#include \"incbin.h\"
 
-        list(APPEND RESOURCES "${SYMBOL_NAME}" "${FILE}")
-        list(APPEND MANIFEST_ENTRIES "${SYMBOL_NAME}|${ASSET_NAME}")
-    endforeach()
+")
+        foreach(FILE ${FILES})
+            file(RELATIVE_PATH REL_PATH "${DIR}" "${FILE}")
+            string(REPLACE "/" "_" SAFE_NAME "${REL_PATH}")
+            string(REPLACE "." "_" SAFE_NAME "${SAFE_NAME}")
+            string(REPLACE "-" "_" SAFE_NAME "${SAFE_NAME}")
+            set(SYMBOL_NAME "${PREFIX_SAFE}_${SAFE_NAME}")
+            set(ASSET_NAME "${PREFIX}/${REL_PATH}")
+            list(APPEND MANIFEST_ENTRIES "${SYMBOL_NAME}|${ASSET_NAME}")
 
-    # Call incbin_add_resources with the collected resources
-    incbin_add_resources(${TARGET} ${RESOURCES})
+            file(APPEND ${RESOURCE_SOURCE} "INCBIN(${SYMBOL_NAME}, \"${FILE}\");\n")
+        endforeach()
+    endif()
+
+    target_sources(${TARGET} PRIVATE ${RESOURCE_SOURCE})
+    target_include_directories(${TARGET} PRIVATE ${INCBIN_INCLUDE_DIR})
 
     # Generate manifest header for asset registration
     set(MANIFEST_HEADER "${CMAKE_CURRENT_BINARY_DIR}/${TARGET}_${PREFIX}_manifest.h")
@@ -276,12 +304,12 @@ function(incbin_add_directory TARGET PREFIX DIR)
     endforeach()
     file(APPEND ${MANIFEST_HEADER} "}\n\n")
 
-    # Add registration function
+    # Add registration function (use PREFIX_SAFE for valid C++ identifier)
     file(APPEND ${MANIFEST_HEADER}
 "// Register all ${PREFIX} assets with a callback
 // Callback signature: void(const char* name, const uint8_t* data, size_t size)
 template<typename Callback>
-inline void register_${PREFIX}_assets(Callback&& cb) {
+inline void register_${PREFIX_SAFE}_assets(Callback&& cb) {
 ")
 
     foreach(ENTRY ${MANIFEST_ENTRIES})
@@ -297,6 +325,10 @@ inline void register_${PREFIX}_assets(Callback&& cb) {
 
     # Export manifest path for the target
     set(INCBIN_${PREFIX}_MANIFEST ${MANIFEST_HEADER} PARENT_SCOPE)
+
+    # Add compile definition so the code knows this manifest exists
+    string(TOUPPER "${PREFIX_SAFE}" PREFIX_UPPER)
+    target_compile_definitions(${TARGET} PRIVATE HAS_${PREFIX_UPPER}_MANIFEST=1)
 
     message(STATUS "incbin: Generated manifest ${MANIFEST_HEADER}")
 endfunction()

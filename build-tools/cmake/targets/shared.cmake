@@ -1,6 +1,9 @@
 # Shared configuration for all platforms
 # Include this before platform-specific target files
 
+# Auto-generate MSDF CDB fonts if not present (must run before incbin)
+include(${YETTY_ROOT}/build-tools/cmake/prepare-assets.cmake)
+
 # Common libraries needed by all platforms
 include(${YETTY_ROOT}/build-tools/cmake/incbin.cmake)
 include(${YETTY_ROOT}/build-tools/cmake/libs/args.cmake)
