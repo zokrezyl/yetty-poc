@@ -211,12 +211,25 @@ endfunction()
 #-----------------------------------------------------------------------------
 function(incbin_add_directory TARGET PREFIX DIR)
     set(PATTERN "*")
+    set(COMPRESS FALSE)
     if(ARGC GREATER 3)
         set(PATTERN ${ARGV3})
+    endif()
+    if(ARGC GREATER 4)
+        set(COMPRESS ${ARGV4})
     endif()
 
     # Sanitize PREFIX for C++ identifiers (replace - with _)
     string(REPLACE "-" "_" PREFIX_SAFE "${PREFIX}")
+
+    # Find brotli for compression
+    if(COMPRESS)
+        find_program(BROTLI_EXECUTABLE brotli)
+        if(NOT BROTLI_EXECUTABLE)
+            message(WARNING "incbin: brotli not found, embedding uncompressed files")
+            set(COMPRESS FALSE)
+        endif()
+    endif()
 
     # Find all matching files recursively
     file(GLOB_RECURSE FILES "${DIR}/${PATTERN}")
@@ -235,6 +248,12 @@ function(incbin_add_directory TARGET PREFIX DIR)
     # Generate source file for this directory (separate from main resources)
     set(RESOURCE_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/${TARGET}_${PREFIX}_resources.cpp")
 
+    # Compression output directory
+    set(COMPRESSED_DIR "${CMAKE_CURRENT_BINARY_DIR}/${TARGET}_${PREFIX_SAFE}_compressed")
+    if(COMPRESS)
+        file(MAKE_DIRECTORY "${COMPRESSED_DIR}")
+    endif()
+
     if(EMSCRIPTEN)
         # Emscripten: provide stubs
         file(WRITE ${RESOURCE_SOURCE}
@@ -247,7 +266,7 @@ function(incbin_add_directory TARGET PREFIX DIR)
             string(REPLACE "-" "_" SAFE_NAME "${SAFE_NAME}")
             set(SYMBOL_NAME "${PREFIX_SAFE}_${SAFE_NAME}")
             set(ASSET_NAME "${PREFIX}/${REL_PATH}")
-            list(APPEND MANIFEST_ENTRIES "${SYMBOL_NAME}|${ASSET_NAME}")
+            list(APPEND MANIFEST_ENTRIES "${SYMBOL_NAME}|${ASSET_NAME}|0")
 
             file(APPEND ${RESOURCE_SOURCE}
 "const unsigned char g${SYMBOL_NAME}Data[] = {0};
@@ -269,9 +288,28 @@ const unsigned int g${SYMBOL_NAME}Size = 0;
             string(REPLACE "-" "_" SAFE_NAME "${SAFE_NAME}")
             set(SYMBOL_NAME "${PREFIX_SAFE}_${SAFE_NAME}")
             set(ASSET_NAME "${PREFIX}/${REL_PATH}")
-            list(APPEND MANIFEST_ENTRIES "${SYMBOL_NAME}|${ASSET_NAME}")
 
-            file(APPEND ${RESOURCE_SOURCE} "INCBIN(${SYMBOL_NAME}, \"${FILE}\");\n")
+            # Compress file if requested
+            if(COMPRESS)
+                get_filename_component(FILE_NAME "${FILE}" NAME)
+                set(COMPRESSED_FILE "${COMPRESSED_DIR}/${FILE_NAME}.br")
+                execute_process(
+                    COMMAND ${BROTLI_EXECUTABLE} -q 11 -f -o "${COMPRESSED_FILE}" "${FILE}"
+                    RESULT_VARIABLE BROTLI_RESULT
+                )
+                if(BROTLI_RESULT EQUAL 0)
+                    file(APPEND ${RESOURCE_SOURCE} "INCBIN(${SYMBOL_NAME}, \"${COMPRESSED_FILE}\");\n")
+                    list(APPEND MANIFEST_ENTRIES "${SYMBOL_NAME}|${ASSET_NAME}|1")
+                    message(STATUS "incbin: Compressed ${FILE_NAME}")
+                else()
+                    message(WARNING "incbin: Failed to compress ${FILE_NAME}, using uncompressed")
+                    file(APPEND ${RESOURCE_SOURCE} "INCBIN(${SYMBOL_NAME}, \"${FILE}\");\n")
+                    list(APPEND MANIFEST_ENTRIES "${SYMBOL_NAME}|${ASSET_NAME}|0")
+                endif()
+            else()
+                file(APPEND ${RESOURCE_SOURCE} "INCBIN(${SYMBOL_NAME}, \"${FILE}\");\n")
+                list(APPEND MANIFEST_ENTRIES "${SYMBOL_NAME}|${ASSET_NAME}|0")
+            endif()
         endforeach()
     endif()
 
@@ -305,9 +343,10 @@ const unsigned int g${SYMBOL_NAME}Size = 0;
     file(APPEND ${MANIFEST_HEADER} "}\n\n")
 
     # Add registration function (use PREFIX_SAFE for valid C++ identifier)
+    # Callback signature: void(const char* name, const uint8_t* data, size_t size, bool compressed)
     file(APPEND ${MANIFEST_HEADER}
 "// Register all ${PREFIX} assets with a callback
-// Callback signature: void(const char* name, const uint8_t* data, size_t size)
+// Callback signature: void(const char* name, const uint8_t* data, size_t size, bool compressed)
 template<typename Callback>
 inline void register_${PREFIX_SAFE}_assets(Callback&& cb) {
 ")
@@ -316,8 +355,14 @@ inline void register_${PREFIX_SAFE}_assets(Callback&& cb) {
         string(REPLACE "|" ";" PARTS "${ENTRY}")
         list(GET PARTS 0 SYMBOL_NAME)
         list(GET PARTS 1 ASSET_NAME)
+        list(GET PARTS 2 IS_COMPRESSED)
+        if(IS_COMPRESSED)
+            set(COMPRESSED_BOOL "true")
+        else()
+            set(COMPRESSED_BOOL "false")
+        endif()
         file(APPEND ${MANIFEST_HEADER}
-"    cb(\"${ASSET_NAME}\", g${SYMBOL_NAME}Data, static_cast<size_t>(g${SYMBOL_NAME}Size));
+"    cb(\"${ASSET_NAME}\", g${SYMBOL_NAME}Data, static_cast<size_t>(g${SYMBOL_NAME}Size), ${COMPRESSED_BOOL});
 ")
     endforeach()
 

@@ -22,7 +22,7 @@ add_executable(yetty
     ${YETTY_ROOT}/src/yetty/platform/glfw-platform.cpp
 )
 
-target_include_directories(yetty PRIVATE ${YETTY_INCLUDES} ${YETTY_RENDERER_INCLUDES} ${JPEG_INCLUDE_DIRS})
+target_include_directories(yetty PRIVATE ${YETTY_INCLUDES} ${YETTY_RENDERER_INCLUDES} ${JPEG_INCLUDE_DIRS} ${BROTLI_INCLUDE_DIR})
 
 # Embed resources (logo)
 incbin_add_resources(yetty
@@ -32,12 +32,12 @@ incbin_add_resources(yetty
 # Embed shaders
 incbin_add_directory(yetty "shaders" "${YETTY_ROOT}/src/yetty/shaders" "*.wgsl")
 
-# Embed fonts
-incbin_add_directory(yetty "fonts" "${YETTY_ROOT}/assets" "*.ttf")
+# Embed fonts (brotli compressed)
+incbin_add_directory(yetty "fonts" "${YETTY_ROOT}/assets" "*.ttf" TRUE)
 
-# Embed MSDF CDB font databases (must run 'make prepare-assets' first)
+# Embed MSDF CDB font databases (brotli compressed)
 if(EXISTS "${YETTY_ROOT}/assets/fonts-cdb")
-    incbin_add_directory(yetty "fonts-cdb" "${YETTY_ROOT}/assets/fonts-cdb" "*.cdb")
+    incbin_add_directory(yetty "fonts-cdb" "${YETTY_ROOT}/assets/fonts-cdb" "*.cdb" TRUE)
 else()
     message(WARNING "No prebuilt CDB fonts found. Run 'make prepare-assets' first for embedded fonts.")
 endif()
@@ -75,6 +75,7 @@ target_link_libraries(yetty PRIVATE
     ${CORETEXT_LIBRARY}
     ${COREFOUNDATION_LIBRARY}
     ${FREETYPE_ALL_LIBS}
+    ${BROTLIDEC_LIBRARIES}
 )
 
 # CDB font generation
