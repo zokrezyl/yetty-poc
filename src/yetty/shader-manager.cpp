@@ -14,25 +14,7 @@
 #include <filesystem>
 #include <atomic>
 
-#ifndef CMAKE_SOURCE_DIR
-#define CMAKE_SOURCE_DIR "."
-#endif
-
-// Shader directory path - can be overridden per platform
-#ifndef YETTY_SHADERS_DIR
-#define YETTY_SHADERS_DIR CMAKE_SOURCE_DIR "/src/yetty/shaders"
-#endif
-
-// Helper to get shader directory at runtime (for Android asset extraction)
-static std::string getShadersDir() {
-#if defined(__ANDROID__)
-    const char* envDir = getenv("YETTY_SHADERS_DIR");
-    if (envDir && envDir[0]) {
-        return std::string(envDir);
-    }
-#endif
-    return std::string(YETTY_SHADERS_DIR);
-}
+#include <yetty/shader-path.h>
 
 namespace yetty {
 
@@ -506,9 +488,10 @@ Result<void> ShaderManagerImpl::init(const GPUContext& gpu, GpuAllocator::Ptr al
         });
     };
 
-    std::string preEffectsDir = std::string(YETTY_SHADERS_DIR) + "/pre-effects";
-    std::string effectsDir = std::string(YETTY_SHADERS_DIR) + "/effects";
-    std::string postEffectsDir = std::string(YETTY_SHADERS_DIR) + "/post-effects";
+    std::string sd = getShadersDir();
+    std::string preEffectsDir = sd + "/pre-effects";
+    std::string effectsDir = sd + "/effects";
+    std::string postEffectsDir = sd + "/post-effects";
     loadEffects(preEffectsDir, _preEffects, "pre");
     loadEffects(effectsDir, _effects, "");  // no prefix for coord effects
     loadEffects(postEffectsDir, _postEffects, "post");

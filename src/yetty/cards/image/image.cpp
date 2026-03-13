@@ -16,13 +16,7 @@
 #include <cstring>
 #include <yetty/wgpu-compat.h>
 
-#ifndef CMAKE_SOURCE_DIR
-#define CMAKE_SOURCE_DIR "."
-#endif
-
-#ifndef YETTY_SHADERS_DIR
-#define YETTY_SHADERS_DIR CMAKE_SOURCE_DIR "/src/yetty/shaders"
-#endif
+#include <yetty/shader-path.h>
 
 // GLFW modifier constants
 constexpr int GLFW_MOD_SHIFT   = 0x0001;
@@ -355,7 +349,7 @@ private:
     //=========================================================================
 
     Result<void> createScalePipeline() {
-        std::string shaderPath = std::string(YETTY_SHADERS_DIR) + "/scale-image.wgsl";
+        std::string shaderPath = yetty::getShadersDir() + "/scale-image.wgsl";
         ydebug("Image: Loading scale shader from: {}", shaderPath.c_str());
 
         std::ifstream file(shaderPath.c_str());
