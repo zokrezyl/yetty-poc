@@ -1,11 +1,11 @@
 /*
  * ygui_render.c - Render context implementation
  *
- * This bridges YGui widgets to YDraw buffer.
- * Currently stubbed - needs YDraw C API integration.
+ * Bridges YGui widgets to YDraw buffer via the YDraw C API.
  */
 
 #include "ygui_internal.h"
+#include "ydraw-capi.gen.h"
 
 /*=============================================================================
  * Render Context
@@ -26,27 +26,30 @@ void ygui_render_ctx_init(ygui_render_ctx_t* ctx, ydraw_buffer_t* buffer,
 
 /*=============================================================================
  * Drawing Functions
- *
- * These call into YDraw buffer. Currently stubbed until YDraw C API exists.
- * When YDraw C API is ready, these will call:
- *   ydraw_buffer_add_rounded_box(...)
- *   ydraw_buffer_add_text(...)
- *   etc.
  *===========================================================================*/
 
 void ygui_render_box(ygui_render_ctx_t* ctx, float x, float y, float w, float h,
                      uint32_t color, float radius) {
     if (!ctx->buffer) return;
 
+    /* Apply offset */
     float ax = x + ctx->offset_x;
     float ay = y + ctx->offset_y;
 
-    /* TODO: Call YDraw C API
-     * ydraw_add_rounded_box(ctx->buffer, 0, cx, cy, hw, hh,
-     *                       radius, radius, radius, radius,
-     *                       color, 0, 0, 0, AUTO_ID);
-     */
-    (void)ax; (void)ay; (void)w; (void)h; (void)color; (void)radius;
+    /* Convert corner+size to center+half-size */
+    float cx = ax + w * 0.5f;
+    float cy = ay + h * 0.5f;
+    float hw = w * 0.5f;
+    float hh = h * 0.5f;
+
+    if (radius > 0) {
+        ydraw_add_rounded_box(ctx->buffer, 0, cx, cy, hw, hh,
+                              radius, radius, radius, radius,
+                              color, 0, 0.0f, 0.0f);
+    } else {
+        ydraw_add_box(ctx->buffer, 0, cx, cy, hw, hh,
+                      color, 0, 0.0f, 0.0f);
+    }
 }
 
 void ygui_render_box_outline(ygui_render_ctx_t* ctx, float x, float y, float w, float h,
@@ -55,13 +58,19 @@ void ygui_render_box_outline(ygui_render_ctx_t* ctx, float x, float y, float w, 
 
     float ax = x + ctx->offset_x;
     float ay = y + ctx->offset_y;
+    float cx = ax + w * 0.5f;
+    float cy = ay + h * 0.5f;
+    float hw = w * 0.5f;
+    float hh = h * 0.5f;
 
-    /* TODO: Call YDraw C API
-     * ydraw_add_rounded_box(ctx->buffer, 0, cx, cy, hw, hh,
-     *                       radius, radius, radius, radius,
-     *                       0, color, stroke_width, 0, AUTO_ID);
-     */
-    (void)ax; (void)ay; (void)w; (void)h; (void)color; (void)radius; (void)stroke_width;
+    if (radius > 0) {
+        ydraw_add_rounded_box(ctx->buffer, 0, cx, cy, hw, hh,
+                              radius, radius, radius, radius,
+                              0, color, stroke_width, 0.0f);
+    } else {
+        ydraw_add_box(ctx->buffer, 0, cx, cy, hw, hh,
+                      0, color, stroke_width, 0.0f);
+    }
 }
 
 void ygui_render_text(ygui_render_ctx_t* ctx, const char* text, float x, float y,
@@ -71,10 +80,9 @@ void ygui_render_text(ygui_render_ctx_t* ctx, const char* text, float x, float y
     float ax = x + ctx->offset_x;
     float ay = y + ctx->offset_y;
 
-    /* TODO: Call YDraw C API
-     * ydraw_add_text(ctx->buffer, ax, ay, text, font_size, color, 0, -1);
-     */
-    (void)ax; (void)ay; (void)color; (void)font_size;
+    /* Store as text span - builder converts to glyphs during GPU upload */
+    ydraw_add_text(ctx->buffer, ax, ay + font_size * 0.8f, text,
+                   font_size, color, 0, -1);
 }
 
 void ygui_render_circle(ygui_render_ctx_t* ctx, float cx, float cy, float r,
@@ -84,10 +92,7 @@ void ygui_render_circle(ygui_render_ctx_t* ctx, float cx, float cy, float r,
     float ax = cx + ctx->offset_x;
     float ay = cy + ctx->offset_y;
 
-    /* TODO: Call YDraw C API
-     * ydraw_add_circle(ctx->buffer, 0, ax, ay, r, color, 0, 0, 0, AUTO_ID);
-     */
-    (void)ax; (void)ay; (void)r; (void)color;
+    ydraw_add_circle(ctx->buffer, 0, ax, ay, r, color, 0, 0.0f, 0.0f);
 }
 
 void ygui_render_triangle(ygui_render_ctx_t* ctx, float x0, float y0,
@@ -97,10 +102,9 @@ void ygui_render_triangle(ygui_render_ctx_t* ctx, float x0, float y0,
     float ox = ctx->offset_x;
     float oy = ctx->offset_y;
 
-    /* TODO: Call YDraw C API
-     * ydraw_add_triangle(ctx->buffer, 0, x0+ox, y0+oy, x1+ox, y1+oy, x2+ox, y2+oy,
-     *                    color, 0, 0, 0, AUTO_ID);
-     */
-    (void)x0; (void)y0; (void)x1; (void)y1; (void)x2; (void)y2;
-    (void)ox; (void)oy; (void)color;
+    ydraw_add_triangle(ctx->buffer, 0,
+                       x0 + ox, y0 + oy,
+                       x1 + ox, y1 + oy,
+                       x2 + ox, y2 + oy,
+                       color, 0, 0.0f, 0.0f);
 }

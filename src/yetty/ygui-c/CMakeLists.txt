@@ -1,15 +1,20 @@
 # YGui-C - Pure C widget library
 
+# YDraw C API (generated)
+set(YDRAW_CAPI_SRC ${CMAKE_CURRENT_SOURCE_DIR}/../ydraw/ydraw-capi.gen.c)
+
 add_library(ygui-c STATIC
     ygui_engine.c
     ygui_grid.c
     ygui_widgets.c
     ygui_render.c
     ygui_theme.c
+    ${YDRAW_CAPI_SRC}
 )
 
 target_include_directories(ygui-c PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../ydraw
 )
 
 # C11 standard for _Thread_local
@@ -17,9 +22,6 @@ set_target_properties(ygui-c PROPERTIES
     C_STANDARD 11
     C_STANDARD_REQUIRED ON
 )
-
-# TODO: Link to ydraw-c when available
-# target_link_libraries(ygui-c PRIVATE ydraw-c)
 
 # Install header
 install(FILES ygui.h DESTINATION include)
@@ -31,10 +33,12 @@ add_library(ygui-c-shared SHARED
     ygui_widgets.c
     ygui_render.c
     ygui_theme.c
+    ${YDRAW_CAPI_SRC}
 )
 
 target_include_directories(ygui-c-shared PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../ydraw
 )
 
 set_target_properties(ygui-c-shared PROPERTIES
