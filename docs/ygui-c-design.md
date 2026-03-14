@@ -2,340 +2,370 @@
 
 ## Overview
 
-YGui-C is a pure C implementation of the YGui widget system, designed for direct FFI bindings to multiple programming languages without wrapper layers.
+YGui-C is a self-contained C widget library for yetty terminal. It handles everything internally:
+- Widget management and rendering
+- Event loop (via libuv)
+- Terminal input parsing (stdin)
+- OSC output to yetty
 
-## Why Pure C
+**Any language that can call C gets the full functionality.** No reimplementation of OSC, event loops, or input parsing in each language.
 
-1. **No wrapper boilerplate** - Every language can call C directly (Python ctypes, Rust bindgen, Go cgo, Lua FFI)
-2. **Stable ABI** - C ABI is universal and stable across compilers
-3. **Simpler mental model** - No vtables, no templates, no name mangling
-4. **Smaller binary** - No C++ runtime
+## Why Pure C API
+
+1. **Universal FFI** - Every language calls C directly (Python ctypes, Rust bindgen, Go cgo, Lua FFI, Java JNI, etc.)
+2. **Self-contained** - OSC output, event loop, input parsing all in C
+3. **Zero boilerplate** - Language wrappers are thin and idiomatic
+4. **Stable ABI** - C ABI is universal across compilers
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  Language Bindings (thin, idiomatic)                        │
-│  Python / Rust / Go / Lua / ...                             │
+│  User Application (any language)                            │
+│  - Creates engine                                           │
+│  - Adds widgets                                             │
+│  - Registers callbacks                                      │
+│  - Optionally adds timers/sockets to libuv loop             │
 ├─────────────────────────────────────────────────────────────┤
-│  ygui.h - Public C API                                      │
+│  ygui-c (C library)                                         │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │ Event Loop (libuv)                                  │    │
+│  │  - stdin watcher (OSC + keyboard input)             │    │
+│  │  - User can add: timers, sockets, file watchers     │    │
+│  └─────────────────────────────────────────────────────┘    │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │ Input Parser                                        │    │
+│  │  - OSC 777777 → mouse click → widget callback       │    │
+│  │  - OSC 777778 → mouse move  → widget callback       │    │
+│  │  - Keypresses → keyboard    → user callback         │    │
+│  └─────────────────────────────────────────────────────┘    │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │ Widget Engine                                       │    │
+│  │  - Hit testing, state management                    │    │
+│  │  - Renders to YDraw buffer                          │    │
+│  │  - Auto-renders when dirty                          │    │
+│  └─────────────────────────────────────────────────────┘    │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │ OSC Output (to stdout)                              │    │
+│  │  - First frame: run command with position           │    │
+│  │  - Updates: serialized buffer data                  │    │
+│  │  - Cleanup: kill command                            │    │
+│  └─────────────────────────────────────────────────────┘    │
 ├─────────────────────────────────────────────────────────────┤
-│  ygui-c implementation                                      │
-│    ├── ygui_engine.c      Engine + spatial grid             │
-│    ├── ygui_widgets.c     Widget implementations            │
-│    ├── ygui_render.c      Render context                    │
-│    └── ygui_events.c      Event dispatch                    │
+│  YDraw C API (wraps C++ YDrawBuffer)                        │
 ├─────────────────────────────────────────────────────────────┤
-│  ydraw-c (or existing YDrawBuffer via C shim)               │
-├─────────────────────────────────────────────────────────────┤
-│  GPU (WebGPU)                                               │
+│  Yetty Terminal                                             │
+│  - Receives OSC, renders card                               │
+│  - Sends mouse events back via OSC 777777/777778            │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## Core Types
+## YDraw Buffer: C API Wrapping C++ Backend
 
-### Opaque Handles
+The YDraw C API is a **thin wrapper** around the C++ `YDrawBuffer` class, not a reimplementation:
 
-All internal structures are opaque to users:
+```cpp
+// ydraw-capi-wrapper.gen.cpp
+struct ydraw_buffer {
+    YDrawBuffer::Ptr impl;           // C++ implementation
+    std::vector<uint8_t> serialized; // Cache for serialize()
+};
 
-```c
-typedef struct ygui_engine ygui_engine_t;
-typedef struct ygui_widget ygui_widget_t;
-typedef struct ygui_theme ygui_theme_t;
+extern "C" int32_t ydraw_add_box(ydraw_buffer_t* buf, ...) {
+    return buf->impl->addBox(...);   // Delegates to C++
+}
 ```
 
-### Widget Types
+This gives us:
+- Full C++ YDrawBuffer functionality
+- C ABI for FFI from any language
+- No code duplication
 
+## Event Loop: libuv Integration
+
+The event loop is powered by **libuv**, allowing users to integrate their own async events.
+
+### Why libuv?
+
+- Cross-platform async I/O
+- File descriptor watchers (stdin)
+- Timers, TCP/UDP, file watchers
+- Used by Node.js - battle-tested
+- User can add their own handlers to the same loop
+
+### Usage Patterns
+
+**Simple (ygui owns loop):**
 ```c
-typedef enum {
-    YGUI_WIDGET_BUTTON,
-    YGUI_WIDGET_LABEL,
-    YGUI_WIDGET_SLIDER,
-    YGUI_WIDGET_CHECKBOX,
-    YGUI_WIDGET_PANEL,
-    YGUI_WIDGET_HBOX,
-    YGUI_WIDGET_VBOX,
-    YGUI_WIDGET_TEXTINPUT,
-    YGUI_WIDGET_DROPDOWN,
-    YGUI_WIDGET_LISTBOX,
-    YGUI_WIDGET_TABLE,
-    YGUI_WIDGET_TABBAR,
-    YGUI_WIDGET_COLORPICKER,
-    YGUI_WIDGET_SCROLLAREA,
-    YGUI_WIDGET_PROGRESS,
-    YGUI_WIDGET_SEPARATOR,
-    YGUI_WIDGET_CUSTOM,
-} ygui_widget_type_t;
+ygui_engine_t* e = ygui_engine_create("myapp", 400, 300);
+ygui_button(e, "btn", 10, 10, 100, 40, "Click");
+ygui_engine_show(e, 2, 2, 50, 18);
+ygui_engine_run(e);  // Creates libuv loop internally
 ```
 
-### Events
-
+**Advanced (user owns loop):**
 ```c
-typedef enum {
-    YGUI_EVENT_CLICK,
-    YGUI_EVENT_CHANGE,
-    YGUI_EVENT_SCROLL,
-    YGUI_EVENT_FOCUS,
-    YGUI_EVENT_BLUR,
-    YGUI_EVENT_KEY,
-} ygui_event_type_t;
+uv_loop_t* loop = uv_default_loop();
 
-typedef struct {
-    const char* widget_id;
-    ygui_event_type_t type;
-    union {
-        float float_value;
-        int int_value;
-        int bool_value;
-        const char* string_value;
-        struct { float r, g, b, a; } color_value;
-    } data;
-} ygui_event_t;
+ygui_engine_t* e = ygui_engine_create("myapp", 400, 300);
+ygui_button(e, "btn", 10, 10, 100, 40, "Click");
+ygui_engine_show(e, 2, 2, 50, 18);
+ygui_engine_attach(e, loop);  // Adds stdin watcher to user's loop
+
+// User adds their own handlers
+uv_timer_t timer;
+uv_timer_init(loop, &timer);
+uv_timer_start(&timer, my_timer_cb, 1000, 1000);
+
+uv_tcp_t socket;
+uv_tcp_init(loop, &socket);
+// ... networking code
+
+uv_run(loop, UV_RUN_DEFAULT);  // User runs the loop
 ```
 
-### Callbacks
+## stdin: ALL Terminal Input
 
-```c
-typedef void (*ygui_event_callback_t)(const ygui_event_t* event, void* userdata);
+When terminal is in raw mode, **stdin receives everything**:
+- OSC sequences from yetty (`\033]777777;card;buttons;press;x;y\033\\`)
+- User keypresses (`a`, `b`, `Enter`, etc.)
+- Escape sequences (arrows, function keys)
+
+The library parses all of this:
+
 ```
+stdin bytes → parser → ┬→ OSC 777777 → mouse click → hit test → widget callback
+                       ├→ OSC 777778 → mouse move  → hit test → widget callback
+                       ├→ 'q'        → key event   → user key callback
+                       ├→ ESC [ A    → arrow up    → user key callback
+                       └→ etc.
+```
+
+## Widget Callbacks: High-Level API
+
+**Users write elegant, high-level code.** The library handles all low-level details.
+
+### C
+```c
+void on_click(ygui_widget_t* btn, void* data) {
+    printf("Button clicked!\n");
+}
+
+void on_volume_change(ygui_widget_t* slider, float value, void* data) {
+    printf("Volume: %.0f%%\n", value);
+}
+
+int main() {
+    ygui_init();
+
+    ygui_engine_t* e = ygui_engine_create("myapp", 400, 300);
+
+    ygui_widget_t* btn = ygui_button(e, "btn", 10, 10, 100, 40, "Click Me");
+    ygui_button_on_click(btn, on_click, NULL);
+
+    ygui_widget_t* slider = ygui_slider(e, "vol", 10, 60, 200, 30, 0, 100, 50);
+    ygui_slider_on_change(slider, on_volume_change, NULL);
+
+    ygui_engine_show(e, 2, 2, 50, 18);
+    ygui_engine_run(e);
+
+    ygui_engine_destroy(e);
+    return 0;
+}
+```
+
+### Python
+```python
+import ygui
+
+ygui.init()
+engine = ygui.Engine("myapp", 400, 300)
+
+btn = engine.button("btn", 10, 10, 100, 40, "Click Me")
+btn.on_click(lambda: print("Button clicked!"))
+
+slider = engine.slider("vol", 10, 60, 200, 30, 0, 100, 50)
+slider.on_change(lambda v: print(f"Volume: {v:.0f}%"))
+
+engine.show(2, 2, 50, 18)
+engine.run()
+```
+
+### Go
+```go
+package main
+
+import "ygui"
+
+func main() {
+    ygui.Init()
+    engine := ygui.NewEngine("myapp", 400, 300)
+
+    btn := engine.Button("btn", 10, 10, 100, 40, "Click Me")
+    btn.OnClick(func() {
+        fmt.Println("Button clicked!")
+    })
+
+    slider := engine.Slider("vol", 10, 60, 200, 30, 0, 100, 50)
+    slider.OnChange(func(v float32) {
+        fmt.Printf("Volume: %.0f%%\n", v)
+    })
+
+    engine.Show(2, 2, 50, 18)
+    engine.Run()
+}
+```
+
+### Rust
+```rust
+use ygui::{Engine, init};
+
+fn main() {
+    init();
+    let engine = Engine::new("myapp", 400, 300);
+
+    let btn = engine.button("btn", 10.0, 10.0, 100.0, 40.0, "Click Me");
+    btn.on_click(|| println!("Button clicked!"));
+
+    let slider = engine.slider("vol", 10.0, 60.0, 200.0, 30.0, 0.0, 100.0, 50.0);
+    slider.on_change(|v| println!("Volume: {:.0}%", v));
+
+    engine.show(2, 2, 50, 18);
+    engine.run();
+}
+```
+
+**Same pattern in every language.** User never touches:
+- Raw coordinates
+- Hit testing
+- OSC parsing
+- Buffer management
+- Frame rendering
 
 ## Public API
 
-### Engine Lifecycle
-
+### Initialization
 ```c
-// Create engine with a YDraw buffer
-ygui_engine_t* ygui_engine_create(ydraw_buffer_t* buffer);
-void ygui_engine_destroy(ygui_engine_t* engine);
-
-// Configuration
-void ygui_engine_set_size(ygui_engine_t* engine, float width, float height);
-void ygui_engine_set_theme(ygui_engine_t* engine, const ygui_theme_t* theme);
-void ygui_engine_set_event_callback(ygui_engine_t* engine,
-                                     ygui_event_callback_t callback,
-                                     void* userdata);
-
-// Render
-void ygui_engine_rebuild(ygui_engine_t* engine);
-int ygui_engine_is_dirty(const ygui_engine_t* engine);
-void ygui_engine_mark_dirty(ygui_engine_t* engine);
+int ygui_init(void);      // Set up raw terminal mode, signal handlers
+void ygui_shutdown(void); // Restore terminal
 ```
 
-### Input Handling
-
+### Engine Lifecycle
 ```c
-void ygui_engine_mouse_move(ygui_engine_t* engine, float x, float y);
-void ygui_engine_mouse_down(ygui_engine_t* engine, float x, float y, int button);
-void ygui_engine_mouse_up(ygui_engine_t* engine, float x, float y, int button);
-void ygui_engine_mouse_scroll(ygui_engine_t* engine, float x, float y, float dx, float dy);
-void ygui_engine_key_down(ygui_engine_t* engine, uint32_t key, int mods);
-void ygui_engine_key_up(ygui_engine_t* engine, uint32_t key, int mods);
-void ygui_engine_text_input(ygui_engine_t* engine, const char* text);
+// Create engine with card name and pixel dimensions
+ygui_engine_t* ygui_engine_create(const char* name, float width, float height);
+void ygui_engine_destroy(ygui_engine_t* engine);
+
+// Display card at terminal cell position
+void ygui_engine_show(ygui_engine_t* engine, int x, int y, int w, int h);
+
+// Event loop
+void ygui_engine_attach(ygui_engine_t* engine, uv_loop_t* loop); // User's loop
+void ygui_engine_run(ygui_engine_t* engine);  // Simple: creates loop internally
+void ygui_engine_stop(ygui_engine_t* engine);
 ```
 
 ### Widget Creation
-
 ```c
-// All widgets return an opaque handle
-ygui_widget_t* ygui_button(ygui_engine_t* engine, const char* id,
+ygui_widget_t* ygui_button(ygui_engine_t* e, const char* id,
                            float x, float y, float w, float h,
                            const char* label);
 
-ygui_widget_t* ygui_label(ygui_engine_t* engine, const char* id,
+ygui_widget_t* ygui_label(ygui_engine_t* e, const char* id,
                           float x, float y, const char* text);
 
-ygui_widget_t* ygui_slider(ygui_engine_t* engine, const char* id,
+ygui_widget_t* ygui_slider(ygui_engine_t* e, const char* id,
                            float x, float y, float w, float h,
                            float min, float max, float value);
 
-ygui_widget_t* ygui_checkbox(ygui_engine_t* engine, const char* id,
+ygui_widget_t* ygui_checkbox(ygui_engine_t* e, const char* id,
                              float x, float y, float w, float h,
                              const char* label, int checked);
 
-ygui_widget_t* ygui_textinput(ygui_engine_t* engine, const char* id,
+ygui_widget_t* ygui_textinput(ygui_engine_t* e, const char* id,
                               float x, float y, float w, float h,
                               const char* placeholder);
 
-ygui_widget_t* ygui_panel(ygui_engine_t* engine, const char* id,
-                          float x, float y, float w, float h);
-
-ygui_widget_t* ygui_hbox(ygui_engine_t* engine, const char* id,
-                         float x, float y, float w, float h);
-
-ygui_widget_t* ygui_vbox(ygui_engine_t* engine, const char* id,
-                         float x, float y, float w, float h);
-
-ygui_widget_t* ygui_dropdown(ygui_engine_t* engine, const char* id,
-                             float x, float y, float w, float h,
-                             const char** options, int option_count);
-
-ygui_widget_t* ygui_colorpicker(ygui_engine_t* engine, const char* id,
-                                float x, float y, float w, float h);
-
-ygui_widget_t* ygui_progress(ygui_engine_t* engine, const char* id,
+ygui_widget_t* ygui_progress(ygui_engine_t* e, const char* id,
                              float x, float y, float w, float h,
                              float value);
+
+ygui_widget_t* ygui_panel(ygui_engine_t* e, const char* id,
+                          float x, float y, float w, float h);
 ```
 
-### Widget Manipulation
-
+### Widget Callbacks
 ```c
-// Hierarchy
-void ygui_widget_add_child(ygui_widget_t* parent, ygui_widget_t* child);
-void ygui_widget_remove_child(ygui_widget_t* parent, ygui_widget_t* child);
-void ygui_widget_remove(ygui_widget_t* widget);
+// Callback types
+typedef void (*ygui_click_callback_t)(ygui_widget_t* widget, void* userdata);
+typedef void (*ygui_change_callback_t)(ygui_widget_t* widget, float value, void* userdata);
+typedef void (*ygui_text_callback_t)(ygui_widget_t* widget, const char* text, void* userdata);
 
-// Properties
-void ygui_widget_set_position(ygui_widget_t* w, float x, float y);
-void ygui_widget_set_size(ygui_widget_t* w, float width, float height);
+// Register callbacks
+void ygui_button_on_click(ygui_widget_t* btn, ygui_click_callback_t cb, void* userdata);
+void ygui_slider_on_change(ygui_widget_t* slider, ygui_change_callback_t cb, void* userdata);
+void ygui_checkbox_on_change(ygui_widget_t* checkbox, ygui_change_callback_t cb, void* userdata);
+void ygui_textinput_on_change(ygui_widget_t* input, ygui_text_callback_t cb, void* userdata);
+```
+
+### Global Keyboard Callback
+```c
+typedef void (*ygui_key_callback_t)(ygui_engine_t* engine, int key, int mods, void* userdata);
+void ygui_engine_on_key(ygui_engine_t* engine, ygui_key_callback_t cb, void* userdata);
+```
+
+### Widget Properties
+```c
 void ygui_widget_set_visible(ygui_widget_t* w, int visible);
 void ygui_widget_set_enabled(ygui_widget_t* w, int enabled);
 
-// Styling
-void ygui_widget_set_bg_color(ygui_widget_t* w, uint32_t color);
-void ygui_widget_set_fg_color(ygui_widget_t* w, uint32_t color);
-void ygui_widget_set_accent_color(ygui_widget_t* w, uint32_t color);
-
-// Widget-specific setters
 void ygui_button_set_label(ygui_widget_t* w, const char* label);
-void ygui_slider_set_value(ygui_widget_t* w, float value);
-void ygui_slider_set_range(ygui_widget_t* w, float min, float max);
-void ygui_checkbox_set_checked(ygui_widget_t* w, int checked);
-void ygui_textinput_set_text(ygui_widget_t* w, const char* text);
-void ygui_progress_set_value(ygui_widget_t* w, float value);
 void ygui_label_set_text(ygui_widget_t* w, const char* text);
-void ygui_panel_set_scroll(ygui_widget_t* w, float x, float y);
-void ygui_panel_set_content_size(ygui_widget_t* w, float w, float h);
-
-// Widget-specific getters
+void ygui_slider_set_value(ygui_widget_t* w, float value);
 float ygui_slider_get_value(const ygui_widget_t* w);
+void ygui_checkbox_set_checked(ygui_widget_t* w, int checked);
 int ygui_checkbox_get_checked(const ygui_widget_t* w);
-const char* ygui_textinput_get_text(const ygui_widget_t* w);
+void ygui_progress_set_value(ygui_widget_t* w, float value);
 ```
 
-### Lookup
+## Internal Flow
 
-```c
-ygui_widget_t* ygui_engine_find(ygui_engine_t* engine, const char* id);
-ygui_widget_t* ygui_engine_widget_at(ygui_engine_t* engine, float x, float y);
-```
+### Frame Rendering (automatic)
 
-### Theme
+When widget state changes:
+1. Widget marks engine dirty
+2. On next event loop iteration:
+   - Clear YDraw buffer
+   - Rebuild all widgets to buffer
+   - Serialize buffer
+   - Write OSC update to stdout
 
-```c
-ygui_theme_t* ygui_theme_create(void);
-ygui_theme_t* ygui_theme_create_default(void);
-void ygui_theme_destroy(ygui_theme_t* theme);
+User never calls render manually. It's automatic.
 
-void ygui_theme_set_padding(ygui_theme_t* t, float small, float medium, float large);
-void ygui_theme_set_radius(ygui_theme_t* t, float small, float medium, float large);
-void ygui_theme_set_colors(ygui_theme_t* t,
-                           uint32_t bg_primary,
-                           uint32_t bg_surface,
-                           uint32_t text_primary,
-                           uint32_t accent);
-```
+### Mouse Event Flow
 
-## Internal Implementation
+1. User clicks on card in yetty
+2. Yetty sends: `\033]777777;cardname;1;1;150;80\033\\`
+3. libuv stdin watcher fires
+4. ygui parses OSC 777777: buttons=1, press=1, x=150, y=80
+5. ygui hit tests: which widget at (150, 80)?
+6. Found button "btn"
+7. Update button state (pressed)
+8. Call user's on_click callback
+9. Mark dirty
+10. Auto-render new frame
 
-### Widget Structure
+### Keyboard Event Flow
 
-```c
-struct ygui_widget {
-    char* id;
-    ygui_widget_type_t type;
-    float x, y, w, h;
-    float effective_x, effective_y;
-    uint32_t flags;  // HOVER, PRESSED, FOCUSED, DISABLED, etc.
-    uint32_t bg_color, fg_color, accent_color;
+1. User presses 'q' in terminal
+2. libuv stdin watcher fires
+3. ygui sees regular character 'q' (not OSC)
+4. Call user's on_key callback with key='q'
 
-    ygui_widget_t* parent;
-    ygui_widget_t* first_child;
-    ygui_widget_t* next_sibling;
+## Dependencies
 
-    // Function pointers for polymorphism
-    void (*render)(ygui_widget_t* self, ygui_render_ctx_t* ctx);
-    void (*on_event)(ygui_widget_t* self, ygui_input_event_t* event, ygui_event_t* out);
-    void (*destroy)(ygui_widget_t* self);
-
-    // Widget-specific data (union or flexible array member)
-    union {
-        struct { char* label; } button;
-        struct { char* text; } label;
-        struct { float value, min, max; } slider;
-        struct { char* label; int checked; } checkbox;
-        struct { char* text; char* placeholder; int cursor; } textinput;
-        struct { float scroll_x, scroll_y, content_w, content_h, header_h; } panel;
-        struct { char** options; int count; int selected; int open; } dropdown;
-        struct { float value; } progress;
-        struct { float hue, sat, val; } colorpicker;
-    } data;
-};
-```
-
-### Spatial Grid
-
-```c
-struct ygui_grid_cell {
-    ygui_widget_t** widgets;
-    int count;
-    int capacity;
-};
-
-struct ygui_spatial_grid {
-    ygui_grid_cell_t* cells;
-    int cols, rows;
-    float cell_size;
-    float width, height;
-};
-```
-
-### Engine Structure
-
-```c
-struct ygui_engine {
-    ydraw_buffer_t* buffer;
-    ygui_spatial_grid_t grid;
-    ygui_theme_t* theme;
-
-    ygui_widget_t* root_widgets;  // Linked list of top-level widgets
-    int widget_count;
-
-    ygui_widget_t* hovered;
-    ygui_widget_t* pressed;
-    ygui_widget_t* focused;
-
-    ygui_event_callback_t event_callback;
-    void* event_userdata;
-
-    float width, height;
-    float cell_width, cell_height;
-    int dirty;
-};
-```
-
-## Memory Management
-
-1. **Engine owns widgets** - Widgets are destroyed when engine is destroyed
-2. **Explicit removal** - `ygui_widget_remove()` removes and frees a widget
-3. **No reference counting** - Simple ownership model
-4. **String copies** - API copies strings, caller can free after call
-
-## Error Handling
-
-```c
-// Functions that can fail return NULL or error code
-ygui_engine_t* ygui_engine_create(ydraw_buffer_t* buffer);  // NULL on failure
-
-// Error info
-const char* ygui_get_error(void);  // Thread-local error message
-```
-
-## Thread Safety
-
-- Engine is NOT thread-safe
-- All calls to a single engine must be from one thread
-- Different engines can be used from different threads
+- **libuv** - Event loop, stdin watcher
+- **YDraw C++ backend** - Drawing primitives (via C wrapper)
 
 ## File Structure
 
@@ -343,122 +373,61 @@ const char* ygui_get_error(void);  // Thread-local error message
 src/yetty/ygui-c/
 ├── ygui.h                 # Public API header
 ├── ygui_internal.h        # Internal structures
-├── ygui_engine.c          # Engine implementation
+├── ygui_engine.c          # Engine, event loop, OSC output
 ├── ygui_widgets.c         # Widget implementations
-├── ygui_render.c          # Render context (calls YDraw)
-├── ygui_grid.c            # Spatial grid
-├── ygui_theme.c           # Theme handling
+├── ygui_render.c          # Render to YDraw buffer
+├── ygui_input.c           # stdin parsing (OSC + keyboard)
+├── ygui_grid.c            # Spatial grid for hit testing
+├── ygui_theme.c           # Theming
 └── CMakeLists.txt
 
+src/yetty/ydraw/
+├── ydraw-capi.gen.h       # C API header (generated)
+├── ydraw-capi-wrapper.gen.cpp  # C++ wrapper (generated)
+└── ...
+
 src/ygui-bindings/
-├── python/
-│   ├── ygui.py            # ctypes wrapper
-│   └── setup.py
-├── rust/
-│   ├── src/lib.rs         # Rust bindings
-│   ├── build.rs           # bindgen setup
-│   └── Cargo.toml
-├── go/
-│   ├── ygui.go            # cgo bindings
-│   └── go.mod
-└── lua/
-    └── ygui.lua           # LuaJIT FFI bindings
+├── python/ygui.py         # Thin Python wrapper
+├── go/ygui.go             # Thin Go wrapper
+├── rust/src/lib.rs        # Thin Rust wrapper
+└── lua/ygui.lua           # Thin Lua wrapper
 ```
 
-## Usage Examples
+## OSC Protocol
 
-### C
-
-```c
-#include "ygui.h"
-
-void on_event(const ygui_event_t* e, void* userdata) {
-    if (e->type == YGUI_EVENT_CLICK) {
-        printf("Clicked: %s\n", e->widget_id);
-    }
-    if (e->type == YGUI_EVENT_CHANGE) {
-        printf("Changed: %s = %f\n", e->widget_id, e->data.float_value);
-    }
-}
-
-int main() {
-    ydraw_buffer_t* buffer = ydraw_buffer_create();
-    ygui_engine_t* engine = ygui_engine_create(buffer);
-    ygui_engine_set_size(engine, 800, 600);
-    ygui_engine_set_event_callback(engine, on_event, NULL);
-
-    ygui_widget_t* panel = ygui_panel(engine, "main", 50, 50, 300, 400);
-    ygui_widget_t* btn = ygui_button(engine, "ok", 10, 10, 80, 30, "OK");
-    ygui_widget_t* slider = ygui_slider(engine, "vol", 10, 50, 200, 24, 0, 100, 50);
-
-    ygui_widget_add_child(panel, btn);
-    ygui_widget_add_child(panel, slider);
-
-    // Main loop
-    while (running) {
-        ygui_engine_mouse_move(engine, mouse_x, mouse_y);
-        // ... handle other input
-
-        if (ygui_engine_is_dirty(engine)) {
-            ygui_engine_rebuild(engine);
-            // render buffer to screen
-        }
-    }
-
-    ygui_engine_destroy(engine);
-    ydraw_buffer_destroy(buffer);
-}
+### Terminal Modes (app → yetty)
+```
+\033[?1500h   - Subscribe to card click events
+\033[?1500l   - Unsubscribe from card click events
+\033[?1501h   - Subscribe to card move events
+\033[?1501l   - Unsubscribe from card move events
 ```
 
-### Python
-
-```python
-from ygui import Engine, Button, Slider, Panel
-
-def on_event(event):
-    if event.type == "click":
-        print(f"Clicked: {event.widget_id}")
-    elif event.type == "change":
-        print(f"Changed: {event.widget_id} = {event.value}")
-
-engine = Engine(width=800, height=600)
-engine.on_event(on_event)
-
-panel = Panel("main", x=50, y=50, w=300, h=400)
-panel.add(Button("ok", x=10, y=10, w=80, h=30, label="OK"))
-panel.add(Slider("vol", x=10, y=50, w=200, h=24, min=0, max=100, value=50))
-
-engine.add(panel)
+### Card Commands (app → yetty via stdout)
+```
+\033]666666;run -c ydraw -x X -y Y -w W -h H --name NAME;;BASE64\033\\
+\033]666666;update --name NAME;;BASE64\033\\
+\033]666666;kill --name NAME\033\\
 ```
 
-### Rust
-
-```rust
-use ygui::{Engine, Button, Slider, Panel, Event};
-
-fn main() {
-    let engine = Engine::new(800, 600);
-
-    engine.on_event(|event| {
-        match event {
-            Event::Click { widget_id } => println!("Clicked: {}", widget_id),
-            Event::Change { widget_id, value } => println!("Changed: {} = {}", widget_id, value),
-            _ => {}
-        }
-    });
-
-    let panel = Panel::new("main", 50.0, 50.0, 300.0, 400.0);
-    panel.add(Button::new("ok", 10.0, 10.0, 80.0, 30.0, "OK"));
-    panel.add(Slider::new("vol", 10.0, 50.0, 200.0, 24.0, 0.0, 100.0, 50.0));
-
-    engine.add(panel);
-}
+### Mouse Events (yetty → app via stdin)
+```
+\033]777777;card-name;buttons;press;x;y\033\\   (click: press=0 release, press=1 press)
+\033]777778;card-name;buttons;x;y\033\\         (move)
 ```
 
-## Migration Path
+Button bitmask: bit0=left(1), bit1=right(2), bit2=middle(4), bit3=scroll-up(8), bit4=scroll-down(16)
 
-1. Implement ygui-c core with minimal widget set (button, label, slider, panel)
-2. Create Python bindings and validate API usability
-3. Add remaining widgets incrementally
-4. Add Rust, Go, Lua bindings
-5. Deprecate C++ YGui once ygui-c is feature-complete
+## Summary
+
+The key design principle: **Everything in C, wrappers are thin.**
+
+- libuv event loop in C
+- stdin parsing in C
+- OSC output in C
+- Widget callbacks in C
+- Auto-rendering in C
+
+Language wrappers just expose the C API idiomatically. No logic duplication.
+
+User writes clean, high-level code. Library handles everything else.

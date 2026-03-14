@@ -30,6 +30,7 @@ WRITER_OUT = SCRIPT_DIR / "ydraw-prim-writer.gen.h"
 BUFFER_OUT = SCRIPT_DIR / "ydraw-buffer.gen.inc"
 CAPI_H_OUT = SCRIPT_DIR / "ydraw-capi.gen.h"
 CAPI_C_OUT = SCRIPT_DIR / "ydraw-capi.gen.c"
+CAPI_WRAPPER_OUT = SCRIPT_DIR / "ydraw-capi-wrapper.gen.cpp"
 
 HEADER = "// Auto-generated from ydraw-primitives.yaml — DO NOT EDIT\n"
 
@@ -667,6 +668,11 @@ uint32_t ydraw_buffer_byte_size(const ydraw_buffer_t* buf);
 /* Get raw data pointer for GPU upload (read-only) */
 const float* ydraw_buffer_data(const ydraw_buffer_t* buf);
 
+/* Serialize buffer to binary format for OSC transport.
+ * Returns size in bytes, sets *out_data to point to internal buffer.
+ * Data valid until next serialize() or destroy(). */
+uint32_t ydraw_buffer_serialize(ydraw_buffer_t* buf, const uint8_t** out_data);
+
 /*=============================================================================
  * Text spans - high-level text storage (converted to glyphs by builder)
  *===========================================================================*/
@@ -775,6 +781,11 @@ struct ydraw_buffer {
     ydraw_text_span_internal_t* text_spans;
     uint32_t text_capacity;
     uint32_t text_count;
+
+    /* Serialization buffer */
+    uint8_t* serial_data;
+    uint32_t serial_capacity;
+    uint32_t serial_size;
 };
 
 /* Write uint32 to float buffer (bitcast) */
@@ -873,6 +884,91 @@ uint32_t ydraw_buffer_byte_size(const ydraw_buffer_t* buf) {
 
 const float* ydraw_buffer_data(const ydraw_buffer_t* buf) {
     return buf ? buf->data : NULL;
+}
+
+/*=============================================================================
+ * Serialization - compatible with C++ YDrawBuffer::serialize()
+ *===========================================================================*/
+
+#define YDRAW_SERIALIZE_MAGIC   0x59445246  /* "YDRF" */
+#define YDRAW_SERIALIZE_VERSION 1
+
+uint32_t ydraw_buffer_serialize(ydraw_buffer_t* buf, const uint8_t** out_data) {
+    if (!buf || !out_data) {
+        if (out_data) *out_data = NULL;
+        return 0;
+    }
+
+    /* Calculate required size */
+    size_t size = 8;  /* magic + version */
+    size += 8;  /* primCount + totalWords */
+    size += buf->used * sizeof(float);  /* prim data */
+    size += 4;  /* fontCount (always 0 for now) */
+    size += 4;  /* spanCount */
+    for (uint32_t i = 0; i < buf->text_count; i++) {
+        size += 4 * 7;  /* x, y, fontSize, color, layer, fontId, rotation */
+        size += 4;  /* textLen */
+        size += strlen(buf->text_spans[i].span.text);
+    }
+    size += 4 + 4 + 1 + 16;  /* scene metadata */
+
+    /* Allocate/reallocate serialization buffer */
+    if (buf->serial_capacity < size) {
+        uint8_t* new_buf = (uint8_t*)realloc(buf->serial_data, size);
+        if (!new_buf) {
+            *out_data = NULL;
+            return 0;
+        }
+        buf->serial_data = new_buf;
+        buf->serial_capacity = (uint32_t)size;
+    }
+
+    uint8_t* p = buf->serial_data;
+
+    /* Magic & version */
+    memcpy(p, &(uint32_t){YDRAW_SERIALIZE_MAGIC}, 4); p += 4;
+    memcpy(p, &(uint32_t){YDRAW_SERIALIZE_VERSION}, 4); p += 4;
+
+    /* Primitives */
+    memcpy(p, &buf->prim_count, 4); p += 4;
+    memcpy(p, &buf->used, 4); p += 4;
+    if (buf->used > 0) {
+        memcpy(p, buf->data, buf->used * sizeof(float));
+        p += buf->used * sizeof(float);
+    }
+
+    /* Fonts (none for now) */
+    memcpy(p, &(uint32_t){0}, 4); p += 4;
+
+    /* Text spans */
+    memcpy(p, &buf->text_count, 4); p += 4;
+    for (uint32_t i = 0; i < buf->text_count; i++) {
+        ydraw_text_span_t* ts = &buf->text_spans[i].span;
+        memcpy(p, &ts->x, 4); p += 4;
+        memcpy(p, &ts->y, 4); p += 4;
+        memcpy(p, &ts->fontSize, 4); p += 4;
+        memcpy(p, &ts->color, 4); p += 4;
+        memcpy(p, &ts->layer, 4); p += 4;
+        int32_t fontId = ts->fontId;
+        memcpy(p, &fontId, 4); p += 4;
+        memcpy(p, &ts->rotation, 4); p += 4;
+        uint32_t textLen = (uint32_t)strlen(ts->text);
+        memcpy(p, &textLen, 4); p += 4;
+        memcpy(p, ts->text, textLen); p += textLen;
+    }
+
+    /* Scene metadata (defaults) */
+    memcpy(p, &(uint32_t){0}, 4); p += 4;  /* bgColor */
+    memcpy(p, &(uint32_t){0}, 4); p += 4;  /* flags */
+    *p++ = 0;  /* hasSceneBounds */
+    memcpy(p, &(float){0}, 4); p += 4;  /* minX */
+    memcpy(p, &(float){0}, 4); p += 4;  /* minY */
+    memcpy(p, &(float){0}, 4); p += 4;  /* maxX */
+    memcpy(p, &(float){0}, 4); p += 4;  /* maxY */
+
+    buf->serial_size = (uint32_t)(p - buf->serial_data);
+    *out_data = buf->serial_data;
+    return buf->serial_size;
 }
 
 /*=============================================================================
@@ -1000,6 +1096,151 @@ const ydraw_text_span_t* ydraw_buffer_get_text_span(const ydraw_buffer_t* buf, u
 
 
 # =============================================================================
+# C++ Wrapper generation — wraps YDrawBuffer for FFI use
+# =============================================================================
+
+def generate_c_api_wrapper(primitives: list[dict], out: Path) -> None:
+    """Generate C++ wrapper that delegates to YDrawBuffer.
+
+    This wraps the C++ YDrawBuffer class with C linkage functions,
+    avoiding maintaining two separate implementations.
+    """
+
+    prims_with_fields = [p for p in primitives if p.get("fields")]
+
+    W = []
+    W.append(HEADER)
+    W.append("""
+#include "ydraw-capi.gen.h"
+#include "ydraw-buffer.h"
+
+#include <cstring>
+#include <cstdlib>
+
+using namespace yetty;
+
+//=============================================================================
+// The opaque ydraw_buffer_t wraps YDrawBuffer::Ptr
+//=============================================================================
+
+struct ydraw_buffer {
+    YDrawBuffer::Ptr impl;
+    std::vector<uint8_t> serialized;  // Cached for C API access
+};
+
+//=============================================================================
+// Buffer lifecycle
+//=============================================================================
+
+extern "C" ydraw_buffer_t* ydraw_buffer_create(void) {
+    auto result = YDrawBuffer::create();
+    if (!result) return nullptr;
+    auto* buf = new ydraw_buffer();
+    buf->impl = *result;
+    return buf;
+}
+
+extern "C" void ydraw_buffer_destroy(ydraw_buffer_t* buf) {
+    delete buf;
+}
+
+extern "C" void ydraw_buffer_clear(ydraw_buffer_t* buf) {
+    if (buf && buf->impl) {
+        buf->impl->clear();
+        buf->serialized.clear();
+    }
+}
+
+extern "C" uint32_t ydraw_buffer_prim_count(const ydraw_buffer_t* buf) {
+    return (buf && buf->impl) ? buf->impl->primCount() : 0;
+}
+
+extern "C" uint32_t ydraw_buffer_word_count(const ydraw_buffer_t* buf) {
+    return 0;  // Not directly available
+}
+
+extern "C" uint32_t ydraw_buffer_byte_size(const ydraw_buffer_t* buf) {
+    return buf ? static_cast<uint32_t>(buf->serialized.size()) : 0;
+}
+
+extern "C" const float* ydraw_buffer_data(const ydraw_buffer_t* buf) {
+    return nullptr;  // Not directly exposed
+}
+
+extern "C" uint32_t ydraw_buffer_serialize(ydraw_buffer_t* buf, const uint8_t** out_data) {
+    if (!buf || !buf->impl || !out_data) {
+        if (out_data) *out_data = nullptr;
+        return 0;
+    }
+    buf->serialized = buf->impl->serialize();
+    *out_data = buf->serialized.data();
+    return static_cast<uint32_t>(buf->serialized.size());
+}
+
+//=============================================================================
+// Text spans
+//=============================================================================
+
+extern "C" int32_t ydraw_add_text(ydraw_buffer_t* buf, float x, float y, const char* text,
+                                   float fontSize, uint32_t color, uint32_t layer, int fontId) {
+    if (!buf || !buf->impl || !text) return -1;
+    buf->impl->addTextSpan(x, y, text, fontSize, color, layer, fontId);
+    return 0;
+}
+
+extern "C" int32_t ydraw_add_rotated_text(ydraw_buffer_t* buf, float x, float y, const char* text,
+                                           float fontSize, uint32_t color, float rotation, int fontId) {
+    if (!buf || !buf->impl || !text) return -1;
+    buf->impl->addRotatedTextSpan(x, y, text, fontSize, color, rotation, fontId);
+    return 0;
+}
+
+extern "C" uint32_t ydraw_buffer_text_span_count(const ydraw_buffer_t* buf) {
+    return (buf && buf->impl) ? static_cast<uint32_t>(buf->impl->textSpans().size()) : 0;
+}
+
+extern "C" const ydraw_text_span_t* ydraw_buffer_get_text_span(const ydraw_buffer_t* buf, uint32_t index) {
+    return nullptr;  // Would need caching
+}
+
+//=============================================================================
+// Primitive add functions - delegate to YDrawBuffer
+//=============================================================================
+""")
+
+    # Generate wrapper for each primitive
+    for prim in prims_with_fields:
+        fields = prim.get("fields", [])
+        fn_name = f"ydraw_add_{camel_to_snake(prim['name'])}"
+        cpp_method = f"add{prim['name']}"
+
+        # Build C parameter list
+        params = ["ydraw_buffer_t* buf"]
+        args = []  # Arguments to pass to C++ method
+
+        for field in fields:
+            if field["name"] == "type":
+                continue
+            pname = field["name"] + "_" if field["name"] in ("round",) else field["name"]
+            ctype = "uint32_t" if field["type"] == "u32" else "float"
+            params.append(f"{ctype} {pname}")
+            args.append(pname)
+
+        param_str = ", ".join(params)
+        args_str = ", ".join(args)
+
+        W.append(f"extern \"C\" int32_t {fn_name}({param_str}) {{")
+        W.append(f"    if (!buf || !buf->impl) return -1;")
+        W.append(f"    auto result = buf->impl->{cpp_method}({args_str});")
+        W.append(f"    return result ? static_cast<int32_t>(*result) : -1;")
+        W.append(f"}}")
+        W.append("")
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text("\n".join(W))
+
+
+# =============================================================================
 # Main
 # =============================================================================
 
@@ -1015,6 +1256,7 @@ def main() -> None:
     generate_writer(primitives, WRITER_OUT)
     generate_buffer(primitives, BUFFER_OUT)
     generate_c_api(primitives, CAPI_H_OUT, CAPI_C_OUT)
+    generate_c_api_wrapper(primitives, CAPI_WRAPPER_OUT)
 
     # Summary
     cats = {}
@@ -1029,6 +1271,7 @@ def main() -> None:
     print(f"Generated {BUFFER_OUT.relative_to(PROJECT_ROOT)}")
     print(f"Generated {CAPI_H_OUT.relative_to(PROJECT_ROOT)}")
     print(f"Generated {CAPI_C_OUT.relative_to(PROJECT_ROOT)}")
+    print(f"Generated {CAPI_WRAPPER_OUT.relative_to(PROJECT_ROOT)}")
 
 
 if __name__ == "__main__":

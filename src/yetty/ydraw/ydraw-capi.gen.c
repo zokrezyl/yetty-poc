@@ -28,6 +28,11 @@ struct ydraw_buffer {
     ydraw_text_span_internal_t* text_spans;
     uint32_t text_capacity;
     uint32_t text_count;
+
+    /* Serialization buffer */
+    uint8_t* serial_data;
+    uint32_t serial_capacity;
+    uint32_t serial_size;
 };
 
 /* Write uint32 to float buffer (bitcast) */
@@ -126,6 +131,91 @@ uint32_t ydraw_buffer_byte_size(const ydraw_buffer_t* buf) {
 
 const float* ydraw_buffer_data(const ydraw_buffer_t* buf) {
     return buf ? buf->data : NULL;
+}
+
+/*=============================================================================
+ * Serialization - compatible with C++ YDrawBuffer::serialize()
+ *===========================================================================*/
+
+#define YDRAW_SERIALIZE_MAGIC   0x59445246  /* "YDRF" */
+#define YDRAW_SERIALIZE_VERSION 1
+
+uint32_t ydraw_buffer_serialize(ydraw_buffer_t* buf, const uint8_t** out_data) {
+    if (!buf || !out_data) {
+        if (out_data) *out_data = NULL;
+        return 0;
+    }
+
+    /* Calculate required size */
+    size_t size = 8;  /* magic + version */
+    size += 8;  /* primCount + totalWords */
+    size += buf->used * sizeof(float);  /* prim data */
+    size += 4;  /* fontCount (always 0 for now) */
+    size += 4;  /* spanCount */
+    for (uint32_t i = 0; i < buf->text_count; i++) {
+        size += 4 * 7;  /* x, y, fontSize, color, layer, fontId, rotation */
+        size += 4;  /* textLen */
+        size += strlen(buf->text_spans[i].span.text);
+    }
+    size += 4 + 4 + 1 + 16;  /* scene metadata */
+
+    /* Allocate/reallocate serialization buffer */
+    if (buf->serial_capacity < size) {
+        uint8_t* new_buf = (uint8_t*)realloc(buf->serial_data, size);
+        if (!new_buf) {
+            *out_data = NULL;
+            return 0;
+        }
+        buf->serial_data = new_buf;
+        buf->serial_capacity = (uint32_t)size;
+    }
+
+    uint8_t* p = buf->serial_data;
+
+    /* Magic & version */
+    memcpy(p, &(uint32_t){YDRAW_SERIALIZE_MAGIC}, 4); p += 4;
+    memcpy(p, &(uint32_t){YDRAW_SERIALIZE_VERSION}, 4); p += 4;
+
+    /* Primitives */
+    memcpy(p, &buf->prim_count, 4); p += 4;
+    memcpy(p, &buf->used, 4); p += 4;
+    if (buf->used > 0) {
+        memcpy(p, buf->data, buf->used * sizeof(float));
+        p += buf->used * sizeof(float);
+    }
+
+    /* Fonts (none for now) */
+    memcpy(p, &(uint32_t){0}, 4); p += 4;
+
+    /* Text spans */
+    memcpy(p, &buf->text_count, 4); p += 4;
+    for (uint32_t i = 0; i < buf->text_count; i++) {
+        ydraw_text_span_t* ts = &buf->text_spans[i].span;
+        memcpy(p, &ts->x, 4); p += 4;
+        memcpy(p, &ts->y, 4); p += 4;
+        memcpy(p, &ts->fontSize, 4); p += 4;
+        memcpy(p, &ts->color, 4); p += 4;
+        memcpy(p, &ts->layer, 4); p += 4;
+        int32_t fontId = ts->fontId;
+        memcpy(p, &fontId, 4); p += 4;
+        memcpy(p, &ts->rotation, 4); p += 4;
+        uint32_t textLen = (uint32_t)strlen(ts->text);
+        memcpy(p, &textLen, 4); p += 4;
+        memcpy(p, ts->text, textLen); p += textLen;
+    }
+
+    /* Scene metadata (defaults) */
+    memcpy(p, &(uint32_t){0}, 4); p += 4;  /* bgColor */
+    memcpy(p, &(uint32_t){0}, 4); p += 4;  /* flags */
+    *p++ = 0;  /* hasSceneBounds */
+    memcpy(p, &(float){0}, 4); p += 4;  /* minX */
+    memcpy(p, &(float){0}, 4); p += 4;  /* minY */
+    memcpy(p, &(float){0}, 4); p += 4;  /* maxX */
+    memcpy(p, &(float){0}, 4); p += 4;  /* maxY */
+
+    buf->serial_size = (uint32_t)(p - buf->serial_data);
+    *out_data = buf->serial_data;
+    return buf->serial_size;
 }
 
 /*=============================================================================

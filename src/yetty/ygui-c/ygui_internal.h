@@ -217,12 +217,19 @@ struct ygui_engine {
     ygui_event_callback_t event_callback;
     void* event_userdata;
 
-    /* Size */
+    /* Size in pixels (widget coordinate system) */
     float width, height;
     float cell_width, cell_height;
 
     /* State */
     int dirty;
+
+    /* Event loop state */
+    int running;
+    int clicks_subscribed;
+    int moves_subscribed;
+    char input_buffer[1024];
+    int input_len;
 };
 
 /*=============================================================================

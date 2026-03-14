@@ -16,6 +16,19 @@ extern "C" {
 #endif
 
 /*=============================================================================
+ * Library Initialization
+ *===========================================================================*/
+
+/* Initialize the library (sets up raw terminal mode, signal handlers)
+ * Must be called before any other ygui function.
+ * Returns 0 on success, -1 on error. */
+int ygui_init(void);
+
+/* Shutdown the library (restores terminal settings)
+ * Should be called before exit. */
+void ygui_shutdown(void);
+
+/*=============================================================================
  * Opaque Types
  *===========================================================================*/
 
@@ -131,6 +144,23 @@ void ygui_engine_text_input(ygui_engine_t* engine, const char* text);
 /* Widget lookup */
 ygui_widget_t* ygui_engine_find(ygui_engine_t* engine, const char* id);
 ygui_widget_t* ygui_engine_widget_at(ygui_engine_t* engine, float x, float y);
+
+/*=============================================================================
+ * Event Loop API (for card mouse events from yetty)
+ *===========================================================================*/
+
+/* Subscribe to card mouse events (sends DEC modes 1500/1501 to stdout) */
+void ygui_engine_subscribe_clicks(ygui_engine_t* engine, int enable);
+void ygui_engine_subscribe_moves(ygui_engine_t* engine, int enable);
+
+/* Poll for events from stdin
+ * timeout_ms: -1 = block forever, 0 = non-blocking, >0 = milliseconds
+ * Returns: 1 if event processed, 0 if timeout, -1 on error */
+int ygui_engine_poll(ygui_engine_t* engine, int timeout_ms);
+
+/* Run event loop until ygui_engine_stop() called */
+void ygui_engine_run(ygui_engine_t* engine);
+void ygui_engine_stop(ygui_engine_t* engine);
 
 /*=============================================================================
  * Widget Creation

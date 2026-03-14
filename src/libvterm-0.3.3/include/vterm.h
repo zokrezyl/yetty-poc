@@ -260,6 +260,8 @@ typedef enum {
   VTERM_PROP_CURSORSHAPE,       // number
   VTERM_PROP_MOUSE,             // number
   VTERM_PROP_FOCUSREPORT,       // bool
+  VTERM_PROP_CARDCLICK,         // bool - DEC mode 1500
+  VTERM_PROP_CARDMOVE,          // bool - DEC mode 1501
 
   VTERM_N_PROPS
 } VTermProp;

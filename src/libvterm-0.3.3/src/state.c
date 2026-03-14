@@ -834,6 +834,16 @@ static void set_dec_mode(VTermState *state, int num, int val)
     state->mode.bracketpaste = val;
     break;
 
+  case 1500:
+    settermprop_bool(state, VTERM_PROP_CARDCLICK, val);
+    state->mode.card_click = val;
+    break;
+
+  case 1501:
+    settermprop_bool(state, VTERM_PROP_CARDMOVE, val);
+    state->mode.card_move = val;
+    break;
+
   default:
     DEBUG_LOG("libvterm: Unknown DEC mode %d\n", num);
     return;
@@ -907,6 +917,14 @@ static void request_dec_mode(VTermState *state, int num)
 
     case 2004:
       reply = state->mode.bracketpaste;
+      break;
+
+    case 1500:
+      reply = state->mode.card_click;
+      break;
+
+    case 1501:
+      reply = state->mode.card_move;
       break;
 
     default:

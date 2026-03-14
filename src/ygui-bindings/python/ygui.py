@@ -2,18 +2,52 @@
 YGui Python Bindings
 
 Pure Python bindings for YGui-C using ctypes.
+Includes OSC output for yetty terminal.
 """
 
 import ctypes
 from ctypes import (
-    c_void_p, c_char_p, c_float, c_int, c_uint32, c_int32,
+    c_void_p, c_char_p, c_float, c_int, c_uint32, c_int32, c_uint8,
     POINTER, Structure, Union, CFUNCTYPE, byref
 )
 from typing import Callable, Optional, List, Tuple
 from enum import IntEnum
 import os
+import sys
+import base64
 
-# Load the shared library
+#=============================================================================
+# OSC output helpers for yetty terminal
+#=============================================================================
+
+VENDOR_ID = 666666
+
+def _write_osc(seq: bytes):
+    """Write OSC sequence to stdout."""
+    sys.stdout.buffer.write(seq)
+    sys.stdout.buffer.flush()
+
+def osc_create_ydraw(name: str, x: int, y: int, w: int, h: int, data: bytes):
+    """Send OSC command to create a ydraw card."""
+    b64 = base64.b64encode(data).decode('ascii')
+    seq = f"\033]{VENDOR_ID};run -c ydraw -x {x} -y {y} -w {w} -h {h} -r --name {name};;{b64}\033\\".encode()
+    _write_osc(seq)
+
+def osc_update_ydraw(name: str, data: bytes):
+    """Send OSC command to update a ydraw card."""
+    b64 = base64.b64encode(data).decode('ascii')
+    seq = f"\033]{VENDOR_ID};update --name {name};;{b64}\033\\".encode()
+    _write_osc(seq)
+
+def osc_kill(name: str):
+    """Send OSC command to kill a card."""
+    seq = f"\033]{VENDOR_ID};kill --name {name}\033\\".encode()
+    _write_osc(seq)
+
+#=============================================================================
+# Library loading
+#=============================================================================
+
 def _load_library():
     """Load libygui.so from common locations."""
     search_paths = [
@@ -38,7 +72,10 @@ def _get_lib():
     return _lib
 
 
+#=============================================================================
 # Enums
+#=============================================================================
+
 class WidgetType(IntEnum):
     BUTTON = 0
     LABEL = 1
@@ -83,7 +120,10 @@ class Flags(IntEnum):
     VISIBLE = 1 << 6
 
 
-# Event data union
+#=============================================================================
+# Ctypes structures
+#=============================================================================
+
 class _ColorData(Structure):
     _fields_ = [("r", c_float), ("g", c_float), ("b", c_float), ("a", c_float)]
 
@@ -112,12 +152,31 @@ class _YGuiEvent(Structure):
     ]
 
 
-# Callback type
 _EventCallbackType = CFUNCTYPE(None, POINTER(_YGuiEvent), c_void_p)
 
 
 def _setup_functions(lib):
     """Set up ctypes function signatures."""
+
+    # Library init/shutdown
+    lib.ygui_init.argtypes = []
+    lib.ygui_init.restype = c_int
+
+    lib.ygui_shutdown.argtypes = []
+    lib.ygui_shutdown.restype = None
+
+    # YDraw buffer
+    lib.ydraw_buffer_create.argtypes = []
+    lib.ydraw_buffer_create.restype = c_void_p
+
+    lib.ydraw_buffer_destroy.argtypes = [c_void_p]
+    lib.ydraw_buffer_destroy.restype = None
+
+    lib.ydraw_buffer_clear.argtypes = [c_void_p]
+    lib.ydraw_buffer_clear.restype = None
+
+    lib.ydraw_buffer_serialize.argtypes = [c_void_p, POINTER(POINTER(c_uint8))]
+    lib.ydraw_buffer_serialize.restype = c_uint32
 
     # Engine
     lib.ygui_engine_create.argtypes = [c_void_p]
@@ -158,6 +217,22 @@ def _setup_functions(lib):
 
     lib.ygui_engine_find.argtypes = [c_void_p, c_char_p]
     lib.ygui_engine_find.restype = c_void_p
+
+    # Event loop
+    lib.ygui_engine_subscribe_clicks.argtypes = [c_void_p, c_int]
+    lib.ygui_engine_subscribe_clicks.restype = None
+
+    lib.ygui_engine_subscribe_moves.argtypes = [c_void_p, c_int]
+    lib.ygui_engine_subscribe_moves.restype = None
+
+    lib.ygui_engine_poll.argtypes = [c_void_p, c_int]
+    lib.ygui_engine_poll.restype = c_int
+
+    lib.ygui_engine_run.argtypes = [c_void_p]
+    lib.ygui_engine_run.restype = None
+
+    lib.ygui_engine_stop.argtypes = [c_void_p]
+    lib.ygui_engine_stop.restype = None
 
     # Widgets
     lib.ygui_button.argtypes = [c_void_p, c_char_p, c_float, c_float, c_float, c_float, c_char_p]
@@ -237,7 +312,43 @@ def _setup_functions(lib):
     lib.ygui_version.restype = c_char_p
 
 
+#=============================================================================
+# YDraw Buffer wrapper
+#=============================================================================
+
+class YDrawBuffer:
+    """YDraw buffer for primitives."""
+
+    def __init__(self):
+        self._lib = _get_lib()
+        self._handle = self._lib.ydraw_buffer_create()
+        if not self._handle:
+            raise RuntimeError("Failed to create YDraw buffer")
+
+    def __del__(self):
+        if hasattr(self, "_handle") and self._handle:
+            self._lib.ydraw_buffer_destroy(self._handle)
+
+    @property
+    def handle(self):
+        return self._handle
+
+    def clear(self):
+        self._lib.ydraw_buffer_clear(self._handle)
+
+    def serialize(self) -> bytes:
+        """Serialize buffer to binary format for OSC transport."""
+        data_ptr = POINTER(c_uint8)()
+        size = self._lib.ydraw_buffer_serialize(self._handle, byref(data_ptr))
+        if size == 0 or not data_ptr:
+            return b""
+        return bytes(data_ptr[:size])
+
+
+#=============================================================================
 # Event wrapper
+#=============================================================================
+
 class Event:
     """Widget event."""
 
@@ -263,7 +374,10 @@ class Event:
         return f"Event({self.widget_id!r}, {self.type.name}, {self.data!r})"
 
 
-# Widget wrapper
+#=============================================================================
+# Widget wrappers
+#=============================================================================
+
 class Widget:
     """Base widget wrapper."""
 
@@ -308,8 +422,10 @@ class Button(Widget):
 class Label(Widget):
     """Label widget."""
 
-    def set_text(self, text: str):
-        self._lib.ygui_label_set_text(self._handle, text.encode("utf-8"))
+    def set_text(self, text):
+        if isinstance(text, str):
+            text = text.encode("utf-8")
+        self._lib.ygui_label_set_text(self._handle, text)
 
 
 class Slider(Widget):
@@ -350,13 +466,39 @@ class Progress(Widget):
         self._lib.ygui_progress_set_value(self._handle, value)
 
 
+#=============================================================================
 # Engine wrapper
-class Engine:
-    """YGui engine."""
+#=============================================================================
 
-    def __init__(self, buffer=None, width: float = 800, height: float = 600):
+class Engine:
+    """YGui engine with OSC output support."""
+
+    def __init__(self, buffer: Optional[YDrawBuffer] = None,
+                 width: float = 800, height: float = 600,
+                 name: str = "ygui-app",
+                 x: int = 0, y: int = 0, w: int = 80, h: int = 24):
+        """
+        Create YGui engine.
+
+        Args:
+            buffer: Optional YDrawBuffer (created automatically if not provided)
+            width: Canvas width in pixels
+            height: Canvas height in pixels
+            name: Card name for OSC commands
+            x, y: Card position in terminal cells
+            w, h: Card size in terminal cells
+        """
         self._lib = _get_lib()
-        self._handle = self._lib.ygui_engine_create(buffer)
+
+        # Create or use provided buffer
+        if buffer is None:
+            self._buffer = YDrawBuffer()
+            self._owns_buffer = True
+        else:
+            self._buffer = buffer
+            self._owns_buffer = False
+
+        self._handle = self._lib.ygui_engine_create(self._buffer.handle)
         if not self._handle:
             raise RuntimeError("Failed to create YGui engine")
 
@@ -365,6 +507,14 @@ class Engine:
         self._callback = None
         self._callback_fn = None
         self._widgets = {}
+
+        # OSC settings
+        self._name = name
+        self._x = x
+        self._y = y
+        self._w = w
+        self._h = h
+        self._created = False
 
     def __del__(self):
         if hasattr(self, "_handle") and self._handle:
@@ -390,8 +540,33 @@ class Engine:
     def mark_dirty(self):
         self._lib.ygui_engine_mark_dirty(self._handle)
 
-    def rebuild(self):
+    def render(self):
+        """Render a frame: clear buffer → rebuild UI → send to terminal."""
+        self._buffer.clear()
         self._lib.ygui_engine_rebuild(self._handle)
+        self._send_osc()
+
+    def rebuild(self):
+        """Alias for render() for backwards compatibility."""
+        self.render()
+
+    def _send_osc(self):
+        """Send current buffer to terminal via OSC."""
+        data = self._buffer.serialize()
+        if not data:
+            return
+
+        if not self._created:
+            osc_create_ydraw(self._name, self._x, self._y, self._w, self._h, data)
+            self._created = True
+        else:
+            osc_update_ydraw(self._name, data)
+
+    def kill(self):
+        """Kill the card in the terminal."""
+        if self._created:
+            osc_kill(self._name)
+            self._created = False
 
     def clear(self):
         self._lib.ygui_engine_clear(self._handle)
@@ -408,6 +583,26 @@ class Engine:
 
     def mouse_scroll(self, x: float, y: float, dx: float, dy: float):
         self._lib.ygui_engine_mouse_scroll(self._handle, x, y, dx, dy)
+
+    def subscribe_clicks(self, enable: bool = True):
+        """Subscribe to card click events (sends DEC mode 1500)."""
+        self._lib.ygui_engine_subscribe_clicks(self._handle, 1 if enable else 0)
+
+    def subscribe_moves(self, enable: bool = True):
+        """Subscribe to card move events (sends DEC mode 1501)."""
+        self._lib.ygui_engine_subscribe_moves(self._handle, 1 if enable else 0)
+
+    def poll(self, timeout_ms: int = 50) -> int:
+        """Poll for events. Returns 1 if event processed, 0 if timeout, -1 on error."""
+        return self._lib.ygui_engine_poll(self._handle, timeout_ms)
+
+    def run(self):
+        """Run event loop until stop() called or 'q' pressed."""
+        self._lib.ygui_engine_run(self._handle)
+
+    def stop(self):
+        """Stop the event loop."""
+        self._lib.ygui_engine_stop(self._handle)
 
     def find(self, widget_id: str) -> Optional[Widget]:
         handle = self._lib.ygui_engine_find(self._handle, widget_id.encode("utf-8"))
@@ -463,6 +658,18 @@ class Engine:
         return prg
 
 
+def init() -> bool:
+    """Initialize the library (sets up raw terminal mode).
+    Must be called before using event loop functions.
+    Returns True on success, False on error."""
+    return _get_lib().ygui_init() == 0
+
+
+def shutdown():
+    """Shutdown the library (restores terminal settings)."""
+    _get_lib().ygui_shutdown()
+
+
 def version() -> str:
     """Get YGui version string."""
     return _get_lib().ygui_version().decode("utf-8")
@@ -472,7 +679,7 @@ def version() -> str:
 if __name__ == "__main__":
     print(f"YGui version: {version()}")
 
-    engine = Engine(width=800, height=600)
+    engine = Engine(width=800, height=600, name="test-app", w=40, h=20)
 
     def handle_event(event):
         print(f"Event: {event}")
@@ -484,10 +691,7 @@ if __name__ == "__main__":
     slider = engine.slider("volume", 10, 50, 200, 24, 0, 100, 50)
     checkbox = engine.checkbox("mute", 10, 90, 150, 24, "Mute", False)
 
-    # Simulate interaction
+    # Build and send to terminal
     engine.rebuild()
-    engine.mouse_move(50, 25)
-    engine.mouse_down(50, 25, 0)
-    engine.mouse_up(50, 25, 0)
 
     print("Done!")

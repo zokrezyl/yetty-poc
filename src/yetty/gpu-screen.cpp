@@ -303,6 +303,8 @@ private:
   void clampVisualZoomOffset(); // Clamp visual zoom pan offset to valid range
   void
   requestScreenUpdate(); // Dispatch ScreenUpdate event for immediate re-render
+  void sendCardMouseOSC(int oscCode, const std::string& cardName,
+                        int buttons, int press, float x, float y);
 
   void setCell(int row, int col, uint32_t glyph, uint8_t fgR, uint8_t fgG,
                uint8_t fgB, uint8_t bgR, uint8_t bgG, uint8_t bgB,
@@ -374,6 +376,7 @@ private:
   void unregisterCard(uint32_t metadataOffset);
   Card *getCardBySlotIndex(uint32_t slotIndex) const override;
   Card *getCardByName(const std::string &name) const override;
+  Card *getCardById(base::ObjectId id) const;
   std::vector<Card *> getAllCards() const override;
   GpuMemoryManager::Ptr cardManager() const override { return _cardManager; }
 
@@ -469,6 +472,11 @@ private:
   std::unordered_map<uint32_t, std::string> _slotToName; // slotIndex -> name
 
   int _mouseTrackingMode = 0; // VTERM_PROP_MOUSE_NONE/CLICK/DRAG/MOVE
+
+  // Card mouse event modes (DEC 1500/1501)
+  bool _cardClickEventsEnabled = false;
+  bool _cardMoveEventsEnabled = false;
+  int _heldButtonMask = 0; // Bitmask of currently held buttons
 
   base::ObjectId _cardMouseTarget = 0; // card that received last CardMouseDown
   base::ObjectId _focusedCardId =
@@ -772,6 +780,41 @@ Result<void> GPUScreenImpl::onShutdown() {
 
   ydebug("GPUScreen[{}]: onShutdown complete", _id);
   return result;
+}
+
+// Convert button index to bitmask for card mouse events
+// button: 0=left, 1=middle, 2=right
+// Returns: bit0=left(1), bit1=right(2), bit2=middle(4)
+static int buttonToBitmask(int button) {
+  switch (button) {
+    case 0: return 1;  // left
+    case 1: return 4;  // middle
+    case 2: return 2;  // right
+    default: return 0;
+  }
+}
+
+// Send card mouse event as OSC sequence to PTY
+// oscCode: 777777 for clicks, 777778 for moves
+// For clicks: press is 0=release, 1=press
+// For moves: press is ignored (pass -1)
+void GPUScreenImpl::sendCardMouseOSC(int oscCode, const std::string& cardName,
+                                      int buttons, int press, float x, float y) {
+  if (!_outputCallback) return;
+
+  char buf[256];
+  if (oscCode == 777777) {
+    // Click event: OSC 777777;card-name;button;press;pixel-x;pixel-y ST
+    snprintf(buf, sizeof(buf), "\033]%d;%s;%d;%d;%d;%d\033\\",
+             oscCode, cardName.c_str(), buttons, press,
+             static_cast<int>(x), static_cast<int>(y));
+  } else {
+    // Move event: OSC 777778;card-name;buttons-held;pixel-x;pixel-y ST
+    snprintf(buf, sizeof(buf), "\033]%d;%s;%d;%d;%d\033\\",
+             oscCode, cardName.c_str(), buttons,
+             static_cast<int>(x), static_cast<int>(y));
+  }
+  _outputCallback(buf, strlen(buf));
 }
 
 void GPUScreenImpl::attach(VTerm *vt) {
@@ -3193,6 +3236,12 @@ int GPUScreenImpl::onSetTermProp(VTermProp prop, VTermValue *val, void *user) {
   } else if (prop == VTERM_PROP_ALTSCREEN) {
     // Switch between primary and alternate screen
     self->switchToScreen(val->boolean != 0);
+  } else if (prop == VTERM_PROP_CARDCLICK) {
+    self->_cardClickEventsEnabled = val->boolean != 0;
+    ydebug("GPUScreen {}: card click events = {}", self->_id, val->boolean);
+  } else if (prop == VTERM_PROP_CARDMOVE) {
+    self->_cardMoveEventsEnabled = val->boolean != 0;
+    ydebug("GPUScreen {}: card move events = {}", self->_id, val->boolean);
   }
 
   if (self->termPropCallback_) {
@@ -4426,6 +4475,16 @@ Card *GPUScreenImpl::getCardByName(const std::string &name) const {
   return nullptr;
 }
 
+Card *GPUScreenImpl::getCardById(base::ObjectId id) const {
+  if (id == 0)
+    return nullptr;
+  for (const auto &[slotIndex, card] : _cards) {
+    if (card->id() == id)
+      return card.get();
+  }
+  return nullptr;
+}
+
 std::vector<Card *> GPUScreenImpl::getAllCards() const {
   std::vector<Card *> result;
   result.reserve(_cards.size() + _inactiveCards.size());
@@ -4836,6 +4895,12 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
                  _id, localX, localY, col, row, cardX, cardY,
                  _focusedCardOriginX, _focusedCardOriginY);
           _cardMouseTarget = card->id();
+          // Update held button mask
+          _heldButtonMask |= buttonToBitmask(button);
+          // Send OSC if card click events enabled
+          if (_cardClickEventsEnabled && !card->name().empty()) {
+            sendCardMouseOSC(777777, card->name(), buttonToBitmask(button), 1, cardX, cardY);
+          }
           loop->dispatch(
               base::Event::cardMouseDown(card->id(), cardX, cardY, button));
         } else if (button == 0) {
@@ -4928,6 +4993,13 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
         if (_focusedCardId != 0) {
           float cardX = localX - _focusedCardOriginX;
           float cardY = localY - _focusedCardOriginY;
+          // Send OSC if card move events enabled
+          if (_cardMoveEventsEnabled) {
+            Card *card = getCardById(_focusedCardId);
+            if (card && !card->name().empty()) {
+              sendCardMouseOSC(777778, card->name(), _heldButtonMask, -1, cardX, cardY);
+            }
+          }
           auto loop = *base::EventLoop::instance();
           loop->dispatch(
               base::Event::cardMouseMove(_focusedCardId, cardX, cardY));
@@ -4990,6 +5062,15 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
       // Use stored origin to compute card-local coords
       float cardX = localX - _focusedCardOriginX;
       float cardY = localY - _focusedCardOriginY;
+      // Update held button mask
+      _heldButtonMask &= ~buttonToBitmask(event.mouse.button);
+      // Send OSC if card click events enabled
+      if (_cardClickEventsEnabled) {
+        Card *card = getCardById(_cardMouseTarget);
+        if (card && !card->name().empty()) {
+          sendCardMouseOSC(777777, card->name(), buttonToBitmask(event.mouse.button), 0, cardX, cardY);
+        }
+      }
       auto loop = *base::EventLoop::instance();
       loop->dispatch(base::Event::cardMouseUp(_cardMouseTarget, cardX, cardY,
                                               event.mouse.button));
@@ -5047,6 +5128,15 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
           float localY = my - _viewportY;
           float cardX = localX - _focusedCardOriginX;
           float cardY = localY - _focusedCardOriginY;
+          // Send OSC if card click events enabled (scroll is treated as click)
+          if (_cardClickEventsEnabled) {
+            Card *card = getCardById(_focusedCardId);
+            if (card && !card->name().empty()) {
+              // Scroll: bit3=up(8), bit4=down(16)
+              int scrollMask = (event.scroll.dy > 0) ? 8 : 16;
+              sendCardMouseOSC(777777, card->name(), scrollMask, 1, cardX, cardY);
+            }
+          }
           auto loop = *base::EventLoop::instance();
           loop->dispatch(base::Event::cardScrollEvent(
               _focusedCardId, cardX, cardY, event.scroll.dx, event.scroll.dy,

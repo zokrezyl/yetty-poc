@@ -4,6 +4,73 @@
 
 #include "ygui_internal.h"
 #include <stdio.h>
+#include <unistd.h>
+#include <poll.h>
+#include <termios.h>
+#include <signal.h>
+
+/*=============================================================================
+ * Terminal State
+ *===========================================================================*/
+
+static struct termios ygui_orig_termios;
+static int ygui_raw_mode = 0;
+static int ygui_initialized = 0;
+
+static void ygui_restore_terminal(void) {
+    if (ygui_raw_mode) {
+        tcsetattr(STDIN_FILENO, TCSANOW, &ygui_orig_termios);
+        ygui_raw_mode = 0;
+    }
+}
+
+static void ygui_signal_handler(int sig) {
+    ygui_restore_terminal();
+    /* Re-raise signal with default handler */
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
+int ygui_init(void) {
+    if (ygui_initialized) return 0;
+
+    /* Save original terminal settings */
+    if (tcgetattr(STDIN_FILENO, &ygui_orig_termios) < 0) {
+        ygui_set_error("Failed to get terminal attributes");
+        return -1;
+    }
+
+    /* Set up raw mode */
+    struct termios raw = ygui_orig_termios;
+    raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
+    raw.c_oflag |= OPOST;  /* Keep output processing */
+    raw.c_cflag |= CS8;
+    raw.c_lflag &= ~(ECHO | ICANON | IEXTEN | ISIG);
+    raw.c_cc[VMIN] = 0;
+    raw.c_cc[VTIME] = 0;
+
+    if (tcsetattr(STDIN_FILENO, TCSANOW, &raw) < 0) {
+        ygui_set_error("Failed to set raw terminal mode");
+        return -1;
+    }
+    ygui_raw_mode = 1;
+
+    /* Set up signal handlers for clean exit */
+    signal(SIGINT, ygui_signal_handler);
+    signal(SIGTERM, ygui_signal_handler);
+    signal(SIGQUIT, ygui_signal_handler);
+
+    /* Register atexit handler */
+    atexit(ygui_restore_terminal);
+
+    ygui_initialized = 1;
+    return 0;
+}
+
+void ygui_shutdown(void) {
+    ygui_restore_terminal();
+    ygui_initialized = 0;
+}
 
 /*=============================================================================
  * Thread-local error message
@@ -382,4 +449,202 @@ ygui_widget_t* ygui_engine_widget_at(ygui_engine_t* engine, float x, float y) {
     float wx = to_widget_x(engine, x);
     float wy = to_widget_y(engine, y);
     return ygui_grid_query(&engine->grid, wx, wy);
+}
+
+/*=============================================================================
+ * Event Loop
+ *===========================================================================*/
+
+void ygui_engine_subscribe_clicks(ygui_engine_t* engine, int enable) {
+    if (!engine) return;
+    if (enable && !engine->clicks_subscribed) {
+        write(STDOUT_FILENO, "\033[?1500h", 8);
+        engine->clicks_subscribed = 1;
+    } else if (!enable && engine->clicks_subscribed) {
+        write(STDOUT_FILENO, "\033[?1500l", 8);
+        engine->clicks_subscribed = 0;
+    }
+}
+
+void ygui_engine_subscribe_moves(ygui_engine_t* engine, int enable) {
+    if (!engine) return;
+    if (enable && !engine->moves_subscribed) {
+        write(STDOUT_FILENO, "\033[?1501h", 8);
+        engine->moves_subscribed = 1;
+    } else if (!enable && engine->moves_subscribed) {
+        write(STDOUT_FILENO, "\033[?1501l", 8);
+        engine->moves_subscribed = 0;
+    }
+}
+
+/* Parse OSC 777777 (click) or 777778 (move) sequence
+ * Format: ESC ] CODE ; card-name ; buttons ; [press ;] x ; y ESC \
+ * Returns 1 on success, 0 if not a matching sequence
+ */
+static int parse_card_mouse_osc(const char* buf, int len,
+                                 int* osc_code, char* card_name, int name_max,
+                                 int* buttons, int* press,
+                                 float* x, float* y, int* consumed) {
+    if (len < 10) return 0;
+    if (buf[0] != '\033' || buf[1] != ']') return 0;
+
+    int i = 2;
+    int code = 0;
+    while (i < len && buf[i] >= '0' && buf[i] <= '9') {
+        code = code * 10 + (buf[i] - '0');
+        i++;
+    }
+    if (code != 777777 && code != 777778) return 0;
+    if (i >= len || buf[i] != ';') return 0;
+    i++;
+
+    /* Parse card name */
+    int name_start = i;
+    while (i < len && buf[i] != ';') i++;
+    if (i >= len) return 0;
+    int name_len = i - name_start;
+    if (name_len >= name_max) name_len = name_max - 1;
+    memcpy(card_name, buf + name_start, name_len);
+    card_name[name_len] = '\0';
+    i++;
+
+    /* Parse buttons */
+    int btn = 0;
+    while (i < len && buf[i] >= '0' && buf[i] <= '9') {
+        btn = btn * 10 + (buf[i] - '0');
+        i++;
+    }
+    *buttons = btn;
+    if (i >= len || buf[i] != ';') return 0;
+    i++;
+
+    /* For OSC 777777, parse press */
+    if (code == 777777) {
+        int p = 0;
+        while (i < len && buf[i] >= '0' && buf[i] <= '9') {
+            p = p * 10 + (buf[i] - '0');
+            i++;
+        }
+        *press = p;
+        if (i >= len || buf[i] != ';') return 0;
+        i++;
+    } else {
+        *press = -1;  /* N/A for move */
+    }
+
+    /* Parse x */
+    int ix = 0;
+    int neg = 0;
+    if (i < len && buf[i] == '-') { neg = 1; i++; }
+    while (i < len && buf[i] >= '0' && buf[i] <= '9') {
+        ix = ix * 10 + (buf[i] - '0');
+        i++;
+    }
+    *x = neg ? -(float)ix : (float)ix;
+    if (i >= len || buf[i] != ';') return 0;
+    i++;
+
+    /* Parse y */
+    int iy = 0;
+    neg = 0;
+    if (i < len && buf[i] == '-') { neg = 1; i++; }
+    while (i < len && buf[i] >= '0' && buf[i] <= '9') {
+        iy = iy * 10 + (buf[i] - '0');
+        i++;
+    }
+    *y = neg ? -(float)iy : (float)iy;
+
+    /* Expect ST: ESC \ */
+    if (i + 1 >= len || buf[i] != '\033' || buf[i+1] != '\\') return 0;
+
+    *osc_code = code;
+    *consumed = i + 2;
+    return 1;
+}
+
+int ygui_engine_poll(ygui_engine_t* engine, int timeout_ms) {
+    if (!engine) return -1;
+
+    struct pollfd pfd;
+    pfd.fd = STDIN_FILENO;
+    pfd.events = POLLIN;
+
+    int ret = poll(&pfd, 1, timeout_ms);
+    if (ret < 0) return -1;
+    if (ret == 0) return 0;
+
+    if (!(pfd.revents & POLLIN)) return 0;
+
+    char buf[256];
+    ssize_t n = read(STDIN_FILENO, buf, sizeof(buf));
+    if (n <= 0) return -1;
+
+    /* Append to input buffer */
+    if (engine->input_len + (int)n > (int)sizeof(engine->input_buffer) - 1) {
+        engine->input_len = 0;  /* Reset on overflow */
+    }
+    memcpy(engine->input_buffer + engine->input_len, buf, n);
+    engine->input_len += (int)n;
+
+    /* Try to parse OSC sequences */
+    int processed = 0;
+    int i = 0;
+    while (i < engine->input_len) {
+        int osc_code;
+        char card_name[128];
+        int buttons, press;
+        float x, y;
+        int consumed;
+
+        if (parse_card_mouse_osc(engine->input_buffer + i,
+                                  engine->input_len - i,
+                                  &osc_code, card_name, sizeof(card_name),
+                                  &buttons, &press, &x, &y, &consumed)) {
+            /* Dispatch to widget engine */
+            if (osc_code == 777777) {
+                /* Click event */
+                if (press == 1) {
+                    ygui_engine_mouse_down(engine, x, y, buttons & 0x7);
+                } else {
+                    ygui_engine_mouse_up(engine, x, y, buttons & 0x7);
+                }
+            } else {
+                /* Move event */
+                ygui_engine_mouse_move(engine, x, y);
+            }
+
+            i += consumed;
+            processed = 1;
+        } else if (engine->input_buffer[i] == 'q' || engine->input_buffer[i] == 'Q') {
+            /* Quit on 'q' key */
+            engine->running = 0;
+            i++;
+            processed = 1;
+        } else {
+            i++;
+        }
+    }
+
+    /* Compact buffer */
+    if (i > 0 && i < engine->input_len) {
+        memmove(engine->input_buffer, engine->input_buffer + i,
+                engine->input_len - i);
+        engine->input_len -= i;
+    } else if (i >= engine->input_len) {
+        engine->input_len = 0;
+    }
+
+    return processed ? 1 : 0;
+}
+
+void ygui_engine_run(ygui_engine_t* engine) {
+    if (!engine) return;
+    engine->running = 1;
+    while (engine->running) {
+        ygui_engine_poll(engine, 50);  /* 50ms timeout */
+    }
+}
+
+void ygui_engine_stop(ygui_engine_t* engine) {
+    if (engine) engine->running = 0;
 }

@@ -46,6 +46,11 @@ uint32_t ydraw_buffer_byte_size(const ydraw_buffer_t* buf);
 /* Get raw data pointer for GPU upload (read-only) */
 const float* ydraw_buffer_data(const ydraw_buffer_t* buf);
 
+/* Serialize buffer to binary format for OSC transport.
+ * Returns size in bytes, sets *out_data to point to internal buffer.
+ * Data valid until next serialize() or destroy(). */
+uint32_t ydraw_buffer_serialize(ydraw_buffer_t* buf, const uint8_t** out_data);
+
 /*=============================================================================
  * Text spans - high-level text storage (converted to glyphs by builder)
  *===========================================================================*/
