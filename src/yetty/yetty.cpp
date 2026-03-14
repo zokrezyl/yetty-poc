@@ -1052,6 +1052,12 @@ Result<void> YettyImpl::initWebGPU() noexcept {
     adapterOpts.compatibleSurface = _surface;  // nullptr if headless or surface failed
     adapterOpts.powerPreference = WGPUPowerPreference_HighPerformance;
 
+#ifdef __ANDROID__
+    // On Android, explicitly request Vulkan backend (required for SwiftShader in emulator)
+    adapterOpts.backendType = WGPUBackendType_Vulkan;
+    ydebug("initWebGPU: Requesting Vulkan backend on Android");
+#endif
+
     WGPURequestAdapterCallbackInfo adapterCallbackInfo = {};
     adapterCallbackInfo.mode = WGPUCallbackMode_AllowSpontaneous;
     adapterCallbackInfo.callback = [](WGPURequestAdapterStatus status, WGPUAdapter adapter,
@@ -1106,7 +1112,7 @@ Result<void> YettyImpl::initWebGPU() noexcept {
     }
     ydebug("initWebGPU: Adapter obtained");
 
-    // Log adapter info
+    // Log adapter info and check for Null backend
     {
         WGPUAdapterInfo info = {};
         if (wgpuAdapterGetInfo(_adapter, &info) == WGPUStatus_Success) {
@@ -1118,6 +1124,17 @@ Result<void> YettyImpl::initWebGPU() noexcept {
                   static_cast<int>(info.backendType), sv(info.architecture), sv(info.description));
             ydebug("GPU vendor ID: 0x{:x} | device ID: 0x{:x} | type: {}",
                   info.vendorID, info.deviceID, static_cast<int>(info.adapterType));
+
+#ifdef __ANDROID__
+            // On Android, reject Null backend - we need real Vulkan
+            if (info.backendType == WGPUBackendType_Null) {
+                wgpuAdapterInfoFreeMembers(info);
+                wgpuAdapterRelease(_adapter);
+                _adapter = nullptr;
+                return Err<void>("Vulkan not available - got Null backend. "
+                    "Ensure Vulkan driver (e.g., SwiftShader) is properly installed.");
+            }
+#endif
             wgpuAdapterInfoFreeMembers(info);
         } else {
             ywarn("Failed to query adapter info");

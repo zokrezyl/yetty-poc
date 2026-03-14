@@ -15,9 +15,15 @@ on:
 env:
   BUILD_LINUX: false
   BUILD_MACOS: false
-  BUILD_WINDOWS: true
+  BUILD_WINDOWS: false
   BUILD_ANDROID: false
+  BUILD_ANDROID_X86_64: true
   BUILD_WEB: false
+
+  RUN_CODEQL: false
+  RUN_CODACY: false
+
+  TEST_ANDROID: true
 
 jobs:
   # =============================================================================
@@ -30,7 +36,11 @@ jobs:
       macos: ${{ steps.set.outputs.macos }}
       windows: ${{ steps.set.outputs.windows }}
       android: ${{ steps.set.outputs.android }}
+      android_x86_64: ${{ steps.set.outputs.android_x86_64 }}
       web: ${{ steps.set.outputs.web }}
+      codeql: ${{ steps.set.outputs.codeql }}
+      codacy: ${{ steps.set.outputs.codacy }}
+      test_android: ${{ steps.set.outputs.test_android }}
     steps:
       - id: set
         run: |
@@ -39,13 +49,21 @@ jobs:
             echo "macos=true" >> $GITHUB_OUTPUT
             echo "windows=true" >> $GITHUB_OUTPUT
             echo "android=true" >> $GITHUB_OUTPUT
+            echo "android_x86_64=true" >> $GITHUB_OUTPUT
             echo "web=true" >> $GITHUB_OUTPUT
+            echo "codeql=true" >> $GITHUB_OUTPUT
+            echo "codacy=true" >> $GITHUB_OUTPUT
+            echo "test_android=true" >> $GITHUB_OUTPUT
           else
             echo "linux=${{ env.BUILD_LINUX }}" >> $GITHUB_OUTPUT
             echo "macos=${{ env.BUILD_MACOS }}" >> $GITHUB_OUTPUT
             echo "windows=${{ env.BUILD_WINDOWS }}" >> $GITHUB_OUTPUT
             echo "android=${{ env.BUILD_ANDROID }}" >> $GITHUB_OUTPUT
+            echo "android_x86_64=${{ env.BUILD_ANDROID_X86_64 }}" >> $GITHUB_OUTPUT
             echo "web=${{ env.BUILD_WEB }}" >> $GITHUB_OUTPUT
+            echo "codeql=${{ env.RUN_CODEQL }}" >> $GITHUB_OUTPUT
+            echo "codacy=${{ env.RUN_CODACY }}" >> $GITHUB_OUTPUT
+            echo "test_android=${{ env.TEST_ANDROID }}" >> $GITHUB_OUTPUT
           fi
 
 
@@ -289,42 +307,18 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      ANDROID_BUILD_DIR: ${{ github.workspace }}/build-android-dawn-release
-      WEBGPU_BACKEND: dawn
+      ANDROID_BUILD_DIR: ${{ github.workspace }}/build-android-ytrace-release
 
     steps:
     - uses: actions/checkout@v4
 
-    - name: Set up JDK 17
-      uses: actions/setup-java@v4
+    - name: Install Nix
+      uses: cachix/install-nix-action@v27
       with:
-        java-version: '17'
-        distribution: 'temurin'
-
-    - name: Setup Android SDK
-      uses: android-actions/setup-android@v3
-
-    - name: Install Android NDK
-      run: |
-        sdkmanager --install "ndk;26.1.10909125"
-        echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.1.10909125" >> $GITHUB_ENV
-        echo "NDK_HOME=$ANDROID_HOME/ndk/26.1.10909125" >> $GITHUB_ENV
-
-    - name: Install meson for dav1d
-      run: pip install meson ninja
-
-    - name: Download Dawn for Android
-      run: bash build-tools/android/build-dawn.sh
-
-    - name: Download Toybox for Android
-      run: bash build-tools/android/build-toybox.sh
-
-    - name: Setup Gradle
-      uses: gradle/actions/setup-gradle@v3
+        nix_path: nixpkgs=channel:nixos-unstable
 
     - name: Build Android APK
-      working-directory: build-tools/android
-      run: ./gradlew assembleRelease
+      run: nix develop .#android --command make build-android-ytrace-release
 
     - name: Upload Android APK
       uses: actions/upload-artifact@v4
@@ -334,21 +328,51 @@ jobs:
         if-no-files-found: warn
 
   # =============================================================================
-  # Android Instrumented Tests (on Emulator) - temporarily disabled
+  # Android x86_64 Build (for Emulator Testing)
   # =============================================================================
-  test-android:
-    if: false  # temporarily disabled
+  build-android-x86_64:
+    needs: read-flags
+    if: needs.read-flags.outputs.android_x86_64 == 'true'
     runs-on: ubuntu-latest
-    needs: build-android
+
+    env:
+      ANDROID_BUILD_DIR: ${{ github.workspace }}/build-android_x86_64-ytrace-release
 
     steps:
     - uses: actions/checkout@v4
 
-    - name: Download Android APK
+    - name: Install Nix
+      uses: cachix/install-nix-action@v27
+      with:
+        nix_path: nixpkgs=channel:nixos-unstable
+
+    - name: Build Android x86_64 APK
+      run: nix develop .#android --command make build-android_x86_64-ytrace-release
+
+    - name: Upload Android x86_64 APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: yetty-android-x86_64-apk
+        path: ${{ env.ANDROID_BUILD_DIR }}/app/outputs/apk/release/*.apk
+        if-no-files-found: warn
+
+  # =============================================================================
+  # Android Instrumented Tests (on Emulator)
+  # =============================================================================
+  test-android:
+    needs: [read-flags, build-android-x86_64]
+    if: needs.read-flags.outputs.test_android == 'true' && needs.build-android-x86_64.result == 'success'
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Download Android x86_64 APK
       uses: actions/download-artifact@v4
       with:
-        name: yetty-android-apk
+        name: yetty-android-x86_64-apk
         path: apk
+
+    - name: List APK files
+      run: ls -la apk/
 
     - name: Set up JDK 17
       uses: actions/setup-java@v4
@@ -375,15 +399,18 @@ jobs:
         emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
         disable-animations: true
         script: |
-          # Install the APK
-          adb install apk/app-debug.apk
+          # Install the release APK (signed with debug key)
+          adb install apk/app-release.apk
           # Basic smoke test - launch and check if it starts
           adb shell am start -n com.yetty.terminal/android.app.NativeActivity
-          sleep 5
+          sleep 10
           # Check if the app is running
           adb shell pidof com.yetty.terminal || echo "App may have crashed"
-          # Capture logcat for debugging
-          adb logcat -d | grep -i yetty | tail -50
+          # Capture logcat for debugging (500 lines should capture init + runtime)
+          echo "=== YETTY LOGS ==="
+          adb logcat -d | grep -i yetty | tail -500
+          echo "=== WEBGPU/VULKAN LOGS ==="
+          adb logcat -d | grep -iE "vulkan|webgpu|dawn|wgpu|adapter|backend" | tail -100
 
   # =============================================================================
   # WebAssembly Build (using nix for deterministic builds)
@@ -556,3 +583,76 @@ jobs:
     - uses: softprops/action-gh-release@v2
       with:
         files: apk/*.apk
+
+  # =============================================================================
+  # CodeQL Security Analysis
+  # =============================================================================
+  codeql:
+    needs: read-flags
+    if: needs.read-flags.outputs.codeql == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      packages: read
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - language: actions
+          build-mode: none
+        - language: c-cpp
+          build-mode: autobuild
+    steps:
+    - uses: actions/checkout@v4
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v4
+      with:
+        languages: ${{ matrix.language }}
+        build-mode: ${{ matrix.build-mode }}
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v4
+      with:
+        category: "/language:${{ matrix.language }}"
+
+  # =============================================================================
+  # Codacy Security Scan
+  # =============================================================================
+  codacy:
+    needs: read-flags
+    if: needs.read-flags.outputs.codacy == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    steps:
+    - uses: actions/checkout@v4
+    - name: Run Codacy Analysis CLI
+      uses: codacy/codacy-analysis-cli-action@d840f886c4bd4edc059706d09c6a1586111c540b
+      with:
+        project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
+        verbose: true
+        output: results.sarif
+        format: sarif
+        gh-code-scanning-compat: true
+        max-allowed-issues: 2147483647
+    - name: Check SARIF file
+      id: sarif-check
+      run: |
+        if [ -f results.sarif ]; then
+          runs=$(jq '.runs | length' results.sarif 2>/dev/null || echo "0")
+          if [ "$runs" -gt 0 ]; then
+            echo "has_results=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_results=false" >> $GITHUB_OUTPUT
+          fi
+        else
+          echo "has_results=false" >> $GITHUB_OUTPUT
+        fi
+    - name: Upload SARIF results
+      if: steps.sarif-check.outputs.has_results == 'true'
+      uses: github/codeql-action/upload-sarif@v4
+      with:
+        sarif_file: results.sarif
