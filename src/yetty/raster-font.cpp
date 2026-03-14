@@ -555,8 +555,10 @@ Result<RasterFont::Ptr> RasterFont::createImpl(ContextType&,
                                                uint32_t cellHeight) {
     auto font = Ptr(new RasterFontImpl(gpu, std::move(allocator), ttfPath, cellWidth, cellHeight));
     if (auto res = static_cast<RasterFontImpl*>(font.get())->init(); !res) {
+        yerror("RasterFont creation failed: {}", error_msg(res));
         return Err<Ptr>("Failed to initialize RasterFont", res);
     }
+    yinfo("RasterFont created successfully");
     return Ok(std::move(font));
 }
 

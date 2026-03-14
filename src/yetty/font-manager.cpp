@@ -487,8 +487,10 @@ FontManager::createImpl(ContextType &, const GPUContext &gpu,
   if (auto res = static_cast<FontManagerImpl *>(impl.get())
                      ->init(gpu, std::move(allocator), shaderMgr, cdbProvider);
       !res) {
+    yerror("FontManager creation failed: {}", error_msg(res));
     return Err<Ptr>("FontManager init failed", res);
   }
+  yinfo("FontManager created successfully");
   return Ok(std::move(impl));
 }
 

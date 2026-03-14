@@ -716,13 +716,16 @@ private:
 // ─── Factory implementations ─────────────────────────────────────────────────
 
 Result<RpcClient::Ptr> RpcClient::createImpl(const std::string& socketPath) noexcept {
+    yinfo("RpcClient (sync) created successfully");
     return Ok(Ptr(new RpcClientSync(socketPath)));
 }
 
 Result<RpcClient::Ptr> RpcClient::createImpl(const std::string& socketPath, uv_loop_t* loop) noexcept {
     if (!loop) {
+        yerror("RpcClient creation failed: null uv_loop_t*");
         return Err<Ptr>("RpcClient: null uv_loop_t*");
     }
+    yinfo("RpcClient (async) created successfully");
     return Ok(Ptr(new RpcClientAsync(socketPath, loop)));
 }
 

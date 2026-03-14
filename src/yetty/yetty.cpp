@@ -236,8 +236,10 @@ YettyImpl* YettyImpl::s_instance = nullptr;
 Result<Yetty::Ptr> Yetty::createImpl(ContextType&, int argc, char* argv[]) noexcept {
     auto impl = Ptr(new YettyImpl());
     if (auto res = static_cast<YettyImpl*>(impl.get())->init(argc, argv); !res) {
+        yerror("Yetty creation failed: {}", error_msg(res));
         return Err<Ptr>("Failed to init Yetty", res);
     }
+    yinfo("Yetty created successfully");
     return Ok(std::move(impl));
 }
 
@@ -270,8 +272,10 @@ Result<Yetty::Ptr> Yetty::createImpl(ContextType&, struct android_app* app) noex
     }
 
     if (auto res = static_cast<YettyImpl*>(impl.get())->init(argc, argv_ptrs.data()); !res) {
+        yerror("Yetty creation failed: {}", error_msg(res));
         return Err<Ptr>("Failed to init Yetty", res);
     }
+    yinfo("Yetty created successfully");
     return Ok(std::move(impl));
 }
 #endif
@@ -771,6 +775,11 @@ Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
     args::ValueFlag<uint8_t> vncQualityFlag(parser, "QUALITY", "JPEG compression quality 1-100 (default 80) - client-side", {"vnc-compression-quality"}, 0);
     args::ValueFlag<std::string> vncTestFlag(parser, "PATTERN", "VNC test mode: text, color, scroll, stress", {"vnc-test"});
 
+    // ytrace options
+    args::Flag ytraceDefaultOnFlag(parser, "ytrace-default-on", "Enable all ytrace points by default", {"ytrace-default-on"});
+    args::ValueFlag<std::string> ytraceOutFlag(parser, "FILE", "ytrace output file (- for stderr)", {"ytrace-out"});
+    args::ValueFlag<std::string> ytraceCtrlSocketFlag(parser, "PATH", "ytrace control socket path", {"ytrace-ctrl-socket"});
+
     try {
         parser.ParseCLI(argc, argv);
     } catch (const args::Help&) {
@@ -874,6 +883,13 @@ Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
             // Stress test - maximum output
             _executeCommand = "bash -c 'while true; do cat /dev/urandom | tr -dc A-Za-z0-9 | head -c 1000; echo; done'";
         }
+    }
+
+    // Handle ytrace control socket
+    if (ytraceCtrlSocketFlag) {
+        std::string ctrlSocket = args::get(ytraceCtrlSocketFlag);
+        ytrace::TraceManager::instance().open_ctrl_socket(ctrlSocket.c_str());
+        ydebug("ytrace control socket: {}", ctrlSocket);
     }
 
     return Ok();

@@ -579,8 +579,10 @@ Result<Config::Ptr>
 Config::createImpl(ContextType&, const std::string& configPath, const YAML::Node& cmdOverrides) noexcept {
     auto impl = Ptr(new ConfigImpl(configPath, cmdOverrides));
     if (auto res = static_cast<ConfigImpl*>(impl.get())->init(); !res) {
+        yerror("Config creation failed: {}", error_msg(res));
         return Err<Ptr>("Failed to initialize Config", res);
     }
+    yinfo("Config created successfully");
     return Ok(std::move(impl));
 }
 

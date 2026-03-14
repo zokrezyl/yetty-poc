@@ -200,8 +200,10 @@ Result<MsMsdfFont::Ptr> MsMsdfFont::createImpl(ContextType&,
     auto font = Ptr(new MsMsdfFontImpl(cdbBasePath, std::move(allocator)));
     ydebug("MsMsdfFont::createImpl: font created");
     if (auto res = static_cast<MsMsdfFontImpl*>(font.get())->init(); !res) {
+        yerror("MsMsdfFont creation failed: {}", error_msg(res));
         return Err<Ptr>("Failed to initialize MsMsdfFont", res);
     }
+    yinfo("MsMsdfFont created successfully");
     return Ok(std::move(font));
 }
 

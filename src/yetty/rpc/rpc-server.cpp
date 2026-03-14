@@ -360,8 +360,10 @@ Result<RpcServer::Ptr> RpcServer::createImpl(const std::string& socketPath) noex
     auto impl = Ptr(new RpcServerImpl(socketPath));
     auto* implPtr = static_cast<RpcServerImpl*>(impl.get());
     if (auto res = implPtr->init(); !res) {
+        yerror("RpcServer creation failed: {}", error_msg(res));
         return Err<Ptr>("RpcServer init failed", res);
     }
+    yinfo("RpcServer created successfully");
     return Ok(std::move(impl));
 }
 
