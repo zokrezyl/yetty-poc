@@ -8,6 +8,7 @@
 #include "ygui.h"
 #include <stdlib.h>
 #include <string.h>
+#include <uv.h>
 
 /*=============================================================================
  * Forward Declarations
@@ -66,7 +67,16 @@ struct ygui_theme {
 };
 
 /*=============================================================================
- * Widget Function Pointers
+ * Widget Callbacks (per-widget)
+ *===========================================================================*/
+
+typedef void (*ygui_widget_click_fn)(ygui_widget_t* widget, void* userdata);
+typedef void (*ygui_widget_change_fn)(ygui_widget_t* widget, float value, void* userdata);
+typedef void (*ygui_widget_text_fn)(ygui_widget_t* widget, const char* text, void* userdata);
+typedef void (*ygui_widget_check_fn)(ygui_widget_t* widget, int checked, void* userdata);
+
+/*=============================================================================
+ * Widget Function Pointers (internal rendering/events)
  *===========================================================================*/
 
 typedef void (*ygui_widget_render_fn)(ygui_widget_t* self, ygui_render_ctx_t* ctx);
@@ -108,7 +118,7 @@ struct ygui_widget {
     ygui_widget_t* next_sibling;
     ygui_widget_t* prev_sibling;
 
-    /* Virtual functions */
+    /* Internal virtual functions */
     ygui_widget_render_fn render;
     ygui_widget_render_all_fn render_all;
     ygui_widget_on_press_fn on_press;
@@ -117,6 +127,16 @@ struct ygui_widget {
     ygui_widget_on_scroll_fn on_scroll;
     ygui_widget_on_key_fn on_key;
     ygui_widget_destroy_fn destroy;
+
+    /* User callbacks */
+    ygui_widget_click_fn click_callback;
+    void* click_userdata;
+    ygui_widget_change_fn change_callback;
+    void* change_userdata;
+    ygui_widget_text_fn text_callback;
+    void* text_userdata;
+    ygui_widget_check_fn check_callback;
+    void* check_userdata;
 
     /* Widget-specific data */
     union {
@@ -198,8 +218,13 @@ typedef struct {
  *===========================================================================*/
 
 struct ygui_engine {
+    /* YDraw buffer (created and owned by engine) */
     ydraw_buffer_t* buffer;
+
+    /* Spatial grid for hit testing */
     ygui_spatial_grid_t grid;
+
+    /* Theme */
     ygui_theme_t* theme;
     int owns_theme;
 
@@ -213,23 +238,40 @@ struct ygui_engine {
     ygui_widget_t* pressed;
     ygui_widget_t* focused;
 
-    /* Event callback */
+    /* Legacy event callback (for backwards compat) */
     ygui_event_callback_t event_callback;
     void* event_userdata;
+
+    /* Keyboard callback */
+    ygui_key_callback_t key_callback;
+    void* key_userdata;
 
     /* Size in pixels (widget coordinate system) */
     float width, height;
     float cell_width, cell_height;
 
+    /* Card info for OSC output */
+    char* card_name;
+    int card_x, card_y, card_w, card_h;
+    int card_shown;      /* 0 = not shown yet, 1 = shown (use update) */
+
     /* State */
     int dirty;
-
-    /* Event loop state */
     int running;
+
+    /* libuv event loop */
+    uv_loop_t* loop;
+    int owns_loop;       /* 1 if we created the loop */
+    uv_poll_t stdin_poll;
+    uv_prepare_t prepare_handle;  /* For auto-render before polling */
+
+    /* Input buffer for parsing */
+    char input_buffer[4096];
+    int input_len;
+
+    /* Event subscriptions */
     int clicks_subscribed;
     int moves_subscribed;
-    char input_buffer[1024];
-    int input_len;
 };
 
 /*=============================================================================
@@ -272,6 +314,14 @@ void ygui_render_triangle(ygui_render_ctx_t* ctx, float x0, float y0,
 
 /* Default widget functions */
 void ygui_widget_render_all_default(ygui_widget_t* self, ygui_render_ctx_t* ctx);
+
+/* OSC output (ygui_osc.c) */
+void ygui_osc_create_card(const char* name, int x, int y, int w, int h,
+                          const uint8_t* data, uint32_t size);
+void ygui_osc_update_card(const char* name, const uint8_t* data, uint32_t size);
+void ygui_osc_kill_card(const char* name);
+void ygui_osc_subscribe_clicks(int enable);
+void ygui_osc_subscribe_moves(int enable);
 
 /* Error */
 void ygui_set_error(const char* msg);

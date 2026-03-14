@@ -1,8 +1,9 @@
 /*
  * ygui.h - YGui C API
  *
- * Pure C widget library for interactive terminal UIs.
- * Renders via YDraw SDF primitives.
+ * Self-contained widget library for yetty terminal.
+ * Handles: widgets, events (libuv), input parsing, OSC output.
+ * Works from any language via FFI.
  */
 
 #ifndef YGUI_H
@@ -10,6 +11,9 @@
 
 #include <stdint.h>
 #include <stddef.h>
+
+/* Forward declare libuv types */
+typedef struct uv_loop_s uv_loop_t;
 
 #ifdef __cplusplus
 extern "C" {
@@ -86,7 +90,7 @@ typedef enum {
 } ygui_flags_t;
 
 /*=============================================================================
- * Event Structure
+ * Event Structure (for legacy callback)
  *===========================================================================*/
 
 typedef struct {
@@ -104,23 +108,57 @@ typedef struct {
 } ygui_event_t;
 
 /*=============================================================================
- * Callbacks
+ * Callback Types
  *===========================================================================*/
 
+/* Legacy event callback (all events) */
 typedef void (*ygui_event_callback_t)(const ygui_event_t* event, void* userdata);
+
+/* Keyboard callback */
+typedef void (*ygui_key_callback_t)(ygui_engine_t* engine, uint32_t key, int mods, void* userdata);
+
+/* Widget-specific callbacks */
+typedef void (*ygui_click_callback_t)(ygui_widget_t* widget, void* userdata);
+typedef void (*ygui_change_callback_t)(ygui_widget_t* widget, float value, void* userdata);
+typedef void (*ygui_text_callback_t)(ygui_widget_t* widget, const char* text, void* userdata);
+typedef void (*ygui_check_callback_t)(ygui_widget_t* widget, int checked, void* userdata);
 
 /*=============================================================================
  * Engine API
  *===========================================================================*/
 
-/* Create/destroy */
-ygui_engine_t* ygui_engine_create(ydraw_buffer_t* buffer);
+/* Create engine with card name and pixel dimensions.
+ * The engine creates and owns its YDraw buffer internally. */
+ygui_engine_t* ygui_engine_create(const char* card_name, float width, float height);
+
+/* Destroy engine (kills card, frees all resources) */
 void ygui_engine_destroy(ygui_engine_t* engine);
+
+/* Show card at terminal cell position (sends first frame) */
+void ygui_engine_show(ygui_engine_t* engine, int x, int y, int w, int h);
+
+/* Render a frame (clear buffer → rebuild → serialize → send OSC)
+ * Usually not needed - engine auto-renders when dirty. */
+void ygui_engine_render(ygui_engine_t* engine);
+
+/* Attach engine to user's libuv loop (for advanced usage) */
+void ygui_engine_attach(ygui_engine_t* engine, uv_loop_t* loop);
+
+/* Run event loop (creates libuv loop internally for simple usage)
+ * Blocks until ygui_engine_stop() called or 'q' pressed. */
+void ygui_engine_run(ygui_engine_t* engine);
+
+/* Stop the event loop */
+void ygui_engine_stop(ygui_engine_t* engine);
 
 /* Configuration */
 void ygui_engine_set_size(ygui_engine_t* engine, float width, float height);
-void ygui_engine_set_cell_size(ygui_engine_t* engine, float cell_w, float cell_h);
 void ygui_engine_set_theme(ygui_engine_t* engine, ygui_theme_t* theme);
+
+/* Keyboard callback */
+void ygui_engine_on_key(ygui_engine_t* engine, ygui_key_callback_t callback, void* userdata);
+
+/* Legacy event callback (all events go through one callback) */
 void ygui_engine_set_event_callback(ygui_engine_t* engine,
                                      ygui_event_callback_t callback,
                                      void* userdata);
@@ -128,39 +166,6 @@ void ygui_engine_set_event_callback(ygui_engine_t* engine,
 /* State */
 int ygui_engine_is_dirty(const ygui_engine_t* engine);
 void ygui_engine_mark_dirty(ygui_engine_t* engine);
-void ygui_engine_rebuild(ygui_engine_t* engine);
-void ygui_engine_clear(ygui_engine_t* engine);
-
-/* Input handling */
-void ygui_engine_mouse_move(ygui_engine_t* engine, float x, float y);
-void ygui_engine_mouse_down(ygui_engine_t* engine, float x, float y, int button);
-void ygui_engine_mouse_up(ygui_engine_t* engine, float x, float y, int button);
-void ygui_engine_mouse_scroll(ygui_engine_t* engine, float x, float y,
-                               float dx, float dy);
-void ygui_engine_key_down(ygui_engine_t* engine, uint32_t key, int mods);
-void ygui_engine_key_up(ygui_engine_t* engine, uint32_t key, int mods);
-void ygui_engine_text_input(ygui_engine_t* engine, const char* text);
-
-/* Widget lookup */
-ygui_widget_t* ygui_engine_find(ygui_engine_t* engine, const char* id);
-ygui_widget_t* ygui_engine_widget_at(ygui_engine_t* engine, float x, float y);
-
-/*=============================================================================
- * Event Loop API (for card mouse events from yetty)
- *===========================================================================*/
-
-/* Subscribe to card mouse events (sends DEC modes 1500/1501 to stdout) */
-void ygui_engine_subscribe_clicks(ygui_engine_t* engine, int enable);
-void ygui_engine_subscribe_moves(ygui_engine_t* engine, int enable);
-
-/* Poll for events from stdin
- * timeout_ms: -1 = block forever, 0 = non-blocking, >0 = milliseconds
- * Returns: 1 if event processed, 0 if timeout, -1 on error */
-int ygui_engine_poll(ygui_engine_t* engine, int timeout_ms);
-
-/* Run event loop until ygui_engine_stop() called */
-void ygui_engine_run(ygui_engine_t* engine);
-void ygui_engine_stop(ygui_engine_t* engine);
 
 /*=============================================================================
  * Widget Creation
@@ -207,6 +212,22 @@ ygui_widget_t* ygui_separator(ygui_engine_t* engine, const char* id,
 
 ygui_widget_t* ygui_colorpicker(ygui_engine_t* engine, const char* id,
                                 float x, float y, float w, float h);
+
+/*=============================================================================
+ * Widget Callbacks
+ *===========================================================================*/
+
+/* Button */
+void ygui_button_on_click(ygui_widget_t* button, ygui_click_callback_t callback, void* userdata);
+
+/* Slider */
+void ygui_slider_on_change(ygui_widget_t* slider, ygui_change_callback_t callback, void* userdata);
+
+/* Checkbox */
+void ygui_checkbox_on_change(ygui_widget_t* checkbox, ygui_check_callback_t callback, void* userdata);
+
+/* TextInput */
+void ygui_textinput_on_change(ygui_widget_t* input, ygui_text_callback_t callback, void* userdata);
 
 /*=============================================================================
  * Widget Hierarchy
@@ -296,6 +317,13 @@ void ygui_colorpicker_get_color(const ygui_widget_t* widget,
                                 float* r, float* g, float* b, float* a);
 
 /*=============================================================================
+ * Widget Lookup
+ *===========================================================================*/
+
+ygui_widget_t* ygui_engine_find(ygui_engine_t* engine, const char* id);
+ygui_widget_t* ygui_engine_widget_at(ygui_engine_t* engine, float x, float y);
+
+/*=============================================================================
  * Theme API
  *===========================================================================*/
 
@@ -330,7 +358,7 @@ const char* ygui_get_error(void);
  *===========================================================================*/
 
 #define YGUI_VERSION_MAJOR 0
-#define YGUI_VERSION_MINOR 1
+#define YGUI_VERSION_MINOR 2
 #define YGUI_VERSION_PATCH 0
 
 const char* ygui_version(void);

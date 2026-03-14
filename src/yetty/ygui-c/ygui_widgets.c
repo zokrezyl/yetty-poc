@@ -429,6 +429,12 @@ static void slider_update_value(ygui_widget_t* self, float local_x) {
 static int slider_on_press(ygui_widget_t* self, float lx, float ly, ygui_event_t* out) {
     (void)ly;
     slider_update_value(self, lx);
+
+    /* Call user callback */
+    if (self->change_callback) {
+        self->change_callback(self, self->data.slider.value, self->change_userdata);
+    }
+
     out->widget_id = self->id;
     out->type = YGUI_EVENT_CHANGE;
     out->data.float_value = self->data.slider.value;
@@ -438,6 +444,12 @@ static int slider_on_press(ygui_widget_t* self, float lx, float ly, ygui_event_t
 static int slider_on_drag(ygui_widget_t* self, float lx, float ly, ygui_event_t* out) {
     (void)ly;
     slider_update_value(self, lx);
+
+    /* Call user callback */
+    if (self->change_callback) {
+        self->change_callback(self, self->data.slider.value, self->change_userdata);
+    }
+
     out->widget_id = self->id;
     out->type = YGUI_EVENT_CHANGE;
     out->data.float_value = self->data.slider.value;
@@ -534,6 +546,12 @@ static void checkbox_render(ygui_widget_t* self, ygui_render_ctx_t* ctx) {
 static int checkbox_on_release(ygui_widget_t* self, float lx, float ly, ygui_event_t* out) {
     if (lx >= 0 && lx < self->w && ly >= 0 && ly < self->h) {
         self->data.checkbox.checked = !self->data.checkbox.checked;
+
+        /* Call user callback */
+        if (self->check_callback) {
+            self->check_callback(self, self->data.checkbox.checked, self->check_userdata);
+        }
+
         out->widget_id = self->id;
         out->type = YGUI_EVENT_CHANGE;
         out->data.bool_value = self->data.checkbox.checked;
