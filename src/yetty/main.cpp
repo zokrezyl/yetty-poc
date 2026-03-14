@@ -430,7 +430,11 @@ int main(int argc, char* argv[]) {
     // Pre-parse --ytrace-default-on (must be set before any ytrace usage)
     for (int i = 1; i < argc; ++i) {
         if (std::string(argv[i]) == "--ytrace-default-on") {
+#ifdef _WIN32
+            _putenv_s("YTRACE_DEFAULT_ON", "yes");
+#else
             setenv("YTRACE_DEFAULT_ON", "yes", 1);
+#endif
             break;
         }
     }

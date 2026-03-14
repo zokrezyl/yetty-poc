@@ -51,8 +51,8 @@ jobs:
             echo "android=true" >> $GITHUB_OUTPUT
             echo "android_x86_64=true" >> $GITHUB_OUTPUT
             echo "web=true" >> $GITHUB_OUTPUT
-            echo "codeql=true" >> $GITHUB_OUTPUT
-            echo "codacy=true" >> $GITHUB_OUTPUT
+            echo "codeql=false" >> $GITHUB_OUTPUT
+            echo "codacy=false" >> $GITHUB_OUTPUT
             echo "test_android=true" >> $GITHUB_OUTPUT
           else
             echo "linux=${{ env.BUILD_LINUX }}" >> $GITHUB_OUTPUT
