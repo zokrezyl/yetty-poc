@@ -1,4 +1,5 @@
 #include <yetty/rpc/rpc-client.h>
+#include <ytrace/ytrace.hpp>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN

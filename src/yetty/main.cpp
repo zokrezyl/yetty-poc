@@ -13,7 +13,7 @@
 #include <spdlog/spdlog.h>
 #include <spdlog/cfg/env.h>
 #include <spdlog/sinks/basic_file_sink.h>
-#include <spdlog/sinks/stderr_color_sink.h>
+#include <spdlog/sinks/stdout_color_sinks.h>
 #include <fmt/format.h>
 #include <iostream>
 #include <cstring>

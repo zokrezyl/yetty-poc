@@ -1,5 +1,6 @@
 #include <yetty/font/raw-font.h>
 #include <yetty/font/freetype.h>
+#include <ytrace/ytrace.hpp>
 
 #include <ft2build.h>
 #include FT_FREETYPE_H

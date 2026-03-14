@@ -15,6 +15,7 @@ add_library(yetty-rpc STATIC
 target_link_libraries(yetty-rpc PUBLIC
     msgpack-cxx
     uv_a
+    ytrace::ytrace
 )
 
 target_include_directories(yetty-rpc PUBLIC
