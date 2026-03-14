@@ -37,7 +37,7 @@ endif()
 CPMAddPackage(
     NAME ytrace
     GITHUB_REPOSITORY zokrezyl/ytrace
-    GIT_TAG v0.0.9
+    GIT_TAG v0.0.10
     OPTIONS
         ${YTRACE_BUILD_TOOLS_OPT}
         "YTRACE_BUILD_EXAMPLES OFF"
@@ -49,15 +49,7 @@ CPMAddPackage(
         "YTRACE_ENABLE_YFUNC ${YTRACE_ENABLE_YFUNC}"
 )
 
-# Disable control socket on Android (can't create ~/.cache/ytrace)
-if(YETTY_ANDROID)
-    target_compile_definitions(ytrace INTERFACE YTRACE_NO_CONTROL_SOCKET)
-# Disable control socket on Windows - avoids MSVC bind() vs std::bind() conflict
-elseif(WIN32)
-    target_compile_definitions(ytrace INTERFACE YTRACE_NO_CONTROL_SOCKET=1)
-endif()
-
-# Disable control socket on macOS and Windows (bind() conflicts with std::bind)
-if(APPLE OR WIN32)
+# Disable control socket on Emscripten (no filesystem/sockets)
+if(EMSCRIPTEN)
     target_compile_definitions(ytrace INTERFACE YTRACE_NO_CONTROL_SOCKET)
 endif()

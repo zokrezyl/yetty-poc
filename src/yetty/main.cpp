@@ -14,7 +14,6 @@
 #include <spdlog/cfg/env.h>
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
-#include <fmt/format.h>
 #include <iostream>
 #include <cstring>
 #include <signal.h>
@@ -475,7 +474,7 @@ int main(int argc, char* argv[]) {
             return 0;
         }
         yerror("Failed to initialize yetty: {}", yetty::error_msg(result));
-        fmt::print(stderr, "ERROR: Failed to initialize yetty: {}\n", yetty::error_msg(result));
+        std::cerr << "ERROR: Failed to initialize yetty: " << yetty::error_msg(result) << std::endl;
         return 1;
     }
     auto yetty = *result;
@@ -483,12 +482,12 @@ int main(int argc, char* argv[]) {
     auto shutdownResult = yetty->shutdown();
     if (!runResult) {
         yerror("Yetty run failed: {}", yetty::error_msg(runResult));
-        fmt::print(stderr, "ERROR: Yetty run failed: {}\n", yetty::error_msg(runResult));
+        std::cerr << "ERROR: Yetty run failed: " << yetty::error_msg(runResult) << std::endl;
         return 1;
     }
     if (!shutdownResult) {
         yerror("Yetty shutdown failed: {}", yetty::error_msg(shutdownResult));
-        fmt::print(stderr, "ERROR: Yetty shutdown failed: {}\n", yetty::error_msg(shutdownResult));
+        std::cerr << "ERROR: Yetty shutdown failed: " << yetty::error_msg(shutdownResult) << std::endl;
         return 1;
     }
     return 0;

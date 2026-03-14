@@ -885,12 +885,14 @@ Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
         }
     }
 
-    // Handle ytrace control socket
+    // Handle ytrace control socket (not available on Emscripten)
+#ifndef YTRACE_NO_CONTROL_SOCKET
     if (ytraceCtrlSocketFlag) {
         std::string ctrlSocket = args::get(ytraceCtrlSocketFlag);
         ytrace::TraceManager::instance().open_ctrl_socket(ctrlSocket.c_str());
         ydebug("ytrace control socket: {}", ctrlSocket);
     }
+#endif
 
     return Ok();
 }
