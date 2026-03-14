@@ -15,9 +15,11 @@ on:
 env:
   BUILD_LINUX: false
   BUILD_MACOS: false
-  BUILD_WINDOWS: true
+  BUILD_WINDOWS: false
   BUILD_ANDROID: false
   BUILD_WEB: false
+  RUN_CODEQL: false
+  RUN_CODACY: false
 
 jobs:
   # =============================================================================
@@ -31,6 +33,8 @@ jobs:
       windows: ${{ steps.set.outputs.windows }}
       android: ${{ steps.set.outputs.android }}
       web: ${{ steps.set.outputs.web }}
+      codeql: ${{ steps.set.outputs.codeql }}
+      codacy: ${{ steps.set.outputs.codacy }}
     steps:
       - id: set
         run: |
@@ -40,12 +44,16 @@ jobs:
             echo "windows=true" >> $GITHUB_OUTPUT
             echo "android=true" >> $GITHUB_OUTPUT
             echo "web=true" >> $GITHUB_OUTPUT
+            echo "codeql=true" >> $GITHUB_OUTPUT
+            echo "codacy=true" >> $GITHUB_OUTPUT
           else
             echo "linux=${{ env.BUILD_LINUX }}" >> $GITHUB_OUTPUT
             echo "macos=${{ env.BUILD_MACOS }}" >> $GITHUB_OUTPUT
             echo "windows=${{ env.BUILD_WINDOWS }}" >> $GITHUB_OUTPUT
             echo "android=${{ env.BUILD_ANDROID }}" >> $GITHUB_OUTPUT
             echo "web=${{ env.BUILD_WEB }}" >> $GITHUB_OUTPUT
+            echo "codeql=${{ env.RUN_CODEQL }}" >> $GITHUB_OUTPUT
+            echo "codacy=${{ env.RUN_CODACY }}" >> $GITHUB_OUTPUT
           fi
 
 
@@ -556,3 +564,76 @@ jobs:
     - uses: softprops/action-gh-release@v2
       with:
         files: apk/*.apk
+
+  # =============================================================================
+  # CodeQL Security Analysis
+  # =============================================================================
+  codeql:
+    needs: read-flags
+    if: needs.read-flags.outputs.codeql == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      packages: read
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - language: actions
+          build-mode: none
+        - language: c-cpp
+          build-mode: autobuild
+    steps:
+    - uses: actions/checkout@v4
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v4
+      with:
+        languages: ${{ matrix.language }}
+        build-mode: ${{ matrix.build-mode }}
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v4
+      with:
+        category: "/language:${{ matrix.language }}"
+
+  # =============================================================================
+  # Codacy Security Scan
+  # =============================================================================
+  codacy:
+    needs: read-flags
+    if: needs.read-flags.outputs.codacy == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    steps:
+    - uses: actions/checkout@v4
+    - name: Run Codacy Analysis CLI
+      uses: codacy/codacy-analysis-cli-action@d840f886c4bd4edc059706d09c6a1586111c540b
+      with:
+        project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
+        verbose: true
+        output: results.sarif
+        format: sarif
+        gh-code-scanning-compat: true
+        max-allowed-issues: 2147483647
+    - name: Check SARIF file
+      id: sarif-check
+      run: |
+        if [ -f results.sarif ]; then
+          runs=$(jq '.runs | length' results.sarif 2>/dev/null || echo "0")
+          if [ "$runs" -gt 0 ]; then
+            echo "has_results=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_results=false" >> $GITHUB_OUTPUT
+          fi
+        else
+          echo "has_results=false" >> $GITHUB_OUTPUT
+        fi
+    - name: Upload SARIF results
+      if: steps.sarif-check.outputs.has_results == 'true'
+      uses: github/codeql-action/upload-sarif@v4
+      with:
+        sarif_file: results.sarif
