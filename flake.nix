@@ -146,7 +146,7 @@
 
           # Android build shell
           android = pkgs.mkShell {
-            buildInputs = commonDeps ++ androidDeps ++ [ pkgs.zlib pkgs.openssl pkgs.meson pkgs.brotli armEmulatorScript ];
+            buildInputs = commonDeps ++ androidDeps ++ [ pkgs.zlib pkgs.openssl pkgs.meson pkgs.brotli pkgs.nasm armEmulatorScript ];
 
             ANDROID_HOME = "${androidSdk}/libexec/android-sdk";
             ANDROID_SDK_ROOT = "${androidSdk}/libexec/android-sdk";
