@@ -43,9 +43,16 @@ android {
         }
     }
 
+    signingConfigs {
+        getByName("debug") {
+            // Uses default debug keystore - allows installing release APK for testing
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
