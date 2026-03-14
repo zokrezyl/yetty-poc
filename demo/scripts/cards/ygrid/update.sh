@@ -35,7 +35,7 @@ PAYLOAD=$({
 printf '\033]666666;run -c ygrid -x 0 -y 0 -w 10 -h 3 -r --name ygrid-test;;%s\033\\' "$PAYLOAD"
 echo
 
-sleep 1
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep 1 || true
 
 # Step 2: Partial update - change row 1
 PAYLOAD=$({

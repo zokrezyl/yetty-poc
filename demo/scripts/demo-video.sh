@@ -31,12 +31,12 @@ clear_all() {
     $YC kill --all 2>/dev/null || true
     printf '\e]666667;0\a'
     printf '\e]666668;0\a'
-    sleep 0.3
+    [[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep 0.3 || true
 }
 
 kill_ytext() {
     $YC kill --plugin ytext 2>/dev/null || true
-    sleep 0.2
+    [[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep 0.2 || true
 }
 
 # Show description card (horizontal scroll at top)
@@ -53,31 +53,31 @@ show_desc() {
 apply_effects() {
     echo "    >> CRT"
     printf '\e]666668;2:0.4:0.15:0.3\a'
-    sleep $EFFECT_PAUSE
+    [[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $EFFECT_PAUSE || true
 
     echo "    >> Scanlines"
     printf '\e]666668;1:0.3:2.0\a'
-    sleep $EFFECT_PAUSE
+    [[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $EFFECT_PAUSE || true
 
     echo "    >> Chromatic Aberration"
     printf '\e]666668;3:0.5\a'
-    sleep $EFFECT_PAUSE
+    [[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $EFFECT_PAUSE || true
 
     echo "    >> Wave"
     printf '\e]666668;8:0.3:0.05:2.0\a'
-    sleep $EFFECT_PAUSE
+    [[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $EFFECT_PAUSE || true
 
     echo "    >> Matrix"
     printf '\e]666668;5:0.7:1.5\a'
-    sleep $EFFECT_PAUSE
+    [[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $EFFECT_PAUSE || true
 
     echo "    >> Night Vision"
     printf '\e]666668;10:0.8:0.15:0.5\a'
-    sleep $EFFECT_PAUSE
+    [[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $EFFECT_PAUSE || true
 
     echo "    >> Glitch"
     printf '\e]666668;13:0.4:15.0:4.0\a'
-    sleep $EFFECT_PAUSE
+    [[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $EFFECT_PAUSE || true
 
     printf '\e]666668;0\a'
 }
@@ -86,15 +86,15 @@ apply_effects() {
 apply_few_effects() {
     echo "    >> CRT"
     printf '\e]666668;2:0.4:0.15:0.3\a'
-    sleep $EFFECT_PAUSE
+    [[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $EFFECT_PAUSE || true
 
     echo "    >> Matrix"
     printf '\e]666668;5:0.7:1.5\a'
-    sleep $EFFECT_PAUSE
+    [[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $EFFECT_PAUSE || true
 
     echo "    >> Glitch"
     printf '\e]666668;13:0.4:15.0:4.0\a'
-    sleep $EFFECT_PAUSE
+    [[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $EFFECT_PAUSE || true
 
     printf '\e]666668;0\a'
 }
@@ -225,9 +225,9 @@ $YC create ytext \
     -w "$SW_WIDTH" -H "$SW_HEIGHT" \
     -x 1 -y 1 2>/dev/null || true
 
-sleep $STARWARS_TIME
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $STARWARS_TIME || true
 kill_ytext
-sleep $BETWEEN_PAUSE
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $BETWEEN_PAUSE || true
 
 #=============================================================================
 # IMAGE CARD
@@ -236,10 +236,10 @@ sleep $BETWEEN_PAUSE
 clear
 clear_all
 show_desc ">>> IMAGE CARD - Display inline images with GPU texture rendering - Images scroll with terminal content <<<"
-sleep $DESC_TIME
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DESC_TIME || true
 
 bash "$DIR/cards/logo.sh" 2>/dev/null || true
-sleep $DEMO_DURATION
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DEMO_DURATION || true
 apply_few_effects
 kill_ytext
 clear_all
@@ -251,10 +251,10 @@ clear_all
 clear
 clear_all
 show_desc ">>> PDF CARD - View PDF documents directly in your terminal - Multi-page support with GPU rendering <<<"
-sleep $DESC_TIME
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DESC_TIME || true
 
 bash "$DIR/cards/pdf.sh" 2>/dev/null || true
-sleep $DEMO_DURATION
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DEMO_DURATION || true
 apply_few_effects
 kill_ytext
 clear_all
@@ -266,10 +266,10 @@ clear_all
 clear
 clear_all
 show_desc ">>> PLOT CARD - GPU-accelerated data visualization - Real-time plotting with shader glyphs <<<"
-sleep $DESC_TIME
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DESC_TIME || true
 
 bash "$DIR/cards/plot.sh" 2>/dev/null || true
-sleep $DEMO_DURATION
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DEMO_DURATION || true
 apply_few_effects
 kill_ytext
 clear_all
@@ -281,10 +281,10 @@ clear_all
 clear
 clear_all
 show_desc ">>> YDRAW - 2D Vector Graphics with SDF primitives - O(1) spatial hash lookup for hundreds of shapes <<<"
-sleep $DESC_TIME
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DESC_TIME || true
 
 bash "$DIR/cards/ydraw-big.sh" 2>/dev/null || true
-sleep $DEMO_DURATION
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DEMO_DURATION || true
 apply_effects
 kill_ytext
 clear_all
@@ -296,10 +296,10 @@ clear_all
 clear
 clear_all
 show_desc ">>> YDRAW ZOO - Infinite zoom animation with procedural shapes - GPU-accelerated SDF rendering <<<"
-sleep $DESC_TIME
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DESC_TIME || true
 
 bash "$DIR/cards/ydraw-zoo.sh" 2>/dev/null || true
-sleep $DEMO_DURATION
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DEMO_DURATION || true
 apply_few_effects
 kill_ytext
 clear_all
@@ -311,10 +311,10 @@ clear_all
 clear
 clear_all
 show_desc ">>> YDRAW 3D - Raymarched 3D SDF primitives - Spheres, boxes, toruses rendered via raymarching <<<"
-sleep $DESC_TIME
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DESC_TIME || true
 
 bash "$DIR/cards/ydraw-3d.sh" 2>/dev/null || true
-sleep $DEMO_DURATION
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DEMO_DURATION || true
 apply_effects
 kill_ytext
 clear_all
@@ -326,10 +326,10 @@ clear_all
 clear
 clear_all
 show_desc ">>> THORVG LOTTIE - Vector animations via ThorVG engine - Smooth Lottie JSON animations <<<"
-sleep $DESC_TIME
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DESC_TIME || true
 
 bash "$DIR/cards/thorvg-lottie.sh" 2>/dev/null || true
-sleep $DEMO_DURATION
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DEMO_DURATION || true
 apply_few_effects
 kill_ytext
 clear_all
@@ -341,10 +341,10 @@ clear_all
 clear
 clear_all
 show_desc ">>> THORVG SVG - Scalable Vector Graphics rendering - SVG files displayed inline <<<"
-sleep $DESC_TIME
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DESC_TIME || true
 
 bash "$DIR/cards/thorvg-svg.sh" 2>/dev/null || true
-sleep $DEMO_DURATION
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DEMO_DURATION || true
 apply_few_effects
 kill_ytext
 clear_all
@@ -356,10 +356,10 @@ clear_all
 clear
 clear_all
 show_desc ">>> SHADER GLYPHS - Each character is a tiny GPU shader program - Procedural patterns per glyph <<<"
-sleep $DESC_TIME
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DESC_TIME || true
 
 cat "$DEMO_ROOT/demo/files/shader-glyphs.txt" 2>/dev/null || true
-sleep $DEMO_DURATION
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DEMO_DURATION || true
 apply_effects
 kill_ytext
 clear_all
@@ -371,10 +371,10 @@ clear_all
 clear
 clear_all
 show_desc ">>> BIOMINE - Organic procedural pattern shader glyph - Living cellular animation <<<"
-sleep $DESC_TIME
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DESC_TIME || true
 
 cat "$DEMO_ROOT/demo/files/shader-glyphs/biomine.txt" 2>/dev/null || true
-sleep $DEMO_DURATION
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DEMO_DURATION || true
 apply_few_effects
 kill_ytext
 clear_all
@@ -386,10 +386,10 @@ clear_all
 clear
 clear_all
 show_desc ">>> MANDELBROT DECO - Fractal shader glyph - Mandelbrot set with decorative styling <<<"
-sleep $DESC_TIME
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DESC_TIME || true
 
 cat "$DEMO_ROOT/demo/files/shader-glyphs/mandelbrot-deco.txt" 2>/dev/null || true
-sleep $DEMO_DURATION
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DEMO_DURATION || true
 apply_few_effects
 kill_ytext
 clear_all
@@ -401,10 +401,10 @@ clear_all
 clear
 clear_all
 show_desc ">>> VORONOI - Voronoi tessellation shader glyph - Animated cellular pattern <<<"
-sleep $DESC_TIME
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DESC_TIME || true
 
 cat "$DEMO_ROOT/demo/files/shader-glyphs/voronoi.txt" 2>/dev/null || true
-sleep $DEMO_DURATION
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DEMO_DURATION || true
 apply_few_effects
 kill_ytext
 clear_all
@@ -416,10 +416,10 @@ clear_all
 clear
 clear_all
 show_desc ">>> TEXT STYLES - MSDF font rendering - Bold, italic, underline, colors - Crisp at any zoom <<<"
-sleep $DESC_TIME
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DESC_TIME || true
 
 bash "$DIR/text-style.sh" 2>/dev/null || true
-sleep $DEMO_DURATION
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DEMO_DURATION || true
 apply_few_effects
 kill_ytext
 clear_all
@@ -431,10 +431,10 @@ clear_all
 clear
 clear_all
 show_desc ">>> EMOJI RENDERING - Full Unicode emoji support - Color emojis rendered inline <<<"
-sleep $DESC_TIME
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DESC_TIME || true
 
 cat "$DEMO_ROOT/demo/files/emojis.txt" 2>/dev/null || true
-sleep $DEMO_DURATION
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DEMO_DURATION || true
 apply_few_effects
 kill_ytext
 clear_all
@@ -446,7 +446,7 @@ clear_all
 clear
 clear_all
 show_desc ">>> POST-PROCESSING EFFECTS - 17 real-time GPU effects - CRT, Matrix, Glitch, Thermal, and more <<<"
-sleep $DESC_TIME
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DESC_TIME || true
 
 echo ""
 echo "    The quick brown fox jumps over the lazy dog."
@@ -455,71 +455,71 @@ echo ""
 
 echo "    [1] Scanlines"
 printf '\e]666668;1:0.3:2.0\a'
-sleep 2
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep 2 || true
 
 echo "    [2] CRT Monitor"
 printf '\e]666668;2:0.4:0.15:0.3\a'
-sleep 2
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep 2 || true
 
 echo "    [3] Chromatic Aberration"
 printf '\e]666668;3:0.5\a'
-sleep 2
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep 2 || true
 
 echo "    [4] Broken TV"
 printf '\e]666668;4:0.5:0.3:1.0\a'
-sleep 2
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep 2 || true
 
 echo "    [5] Matrix"
 printf '\e]666668;5:0.8:2.0\a'
-sleep 2
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep 2 || true
 
 echo "    [6] Sepia"
 printf '\e]666668;6:0.8:0.1\a'
-sleep 2
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep 2 || true
 
 echo "    [7] Pixelate"
 printf '\e]666668;7:4.0:8.0\a'
-sleep 2
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep 2 || true
 
 echo "    [8] Wave"
 printf '\e]666668;8:0.3:0.05:2.0\a'
-sleep 2
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep 2 || true
 
 echo "    [9] Invert"
 printf '\e]666668;9:1.0\a'
-sleep 2
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep 2 || true
 
 echo "    [10] Night Vision"
 printf '\e]666668;10:0.9:0.15:0.6\a'
-sleep 2
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep 2 || true
 
 echo "    [11] Vaporwave"
 printf '\e]666668;11:0.4:0.5\a'
-sleep 2
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep 2 || true
 
 echo "    [12] Thermal"
 printf '\e]666668;12:1.0\a'
-sleep 2
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep 2 || true
 
 echo "    [13] Glitch"
 printf '\e]666668;13:0.5:20.0:5.0\a'
-sleep 2
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep 2 || true
 
 echo "    [14] Emboss"
 printf '\e]666668;14:1.0:0.785\a'
-sleep 2
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep 2 || true
 
 echo "    [15] Rain"
 printf '\e]666668;15:0.3:3.0:0.15\a'
-sleep 2
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep 2 || true
 
 echo "    [16] Matrix Rain"
 printf '\e]666668;16:0.5:1.5:15.0:0.9:0.5\a'
-sleep 2
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep 2 || true
 
 echo "    [17] Drip"
 printf '\e]666668;17:0.8:10.0:0.8:0.0\a'
-sleep 2
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep 2 || true
 
 kill_ytext
 clear_all
@@ -531,7 +531,7 @@ clear_all
 clear
 clear_all
 show_desc ">>> PRE-PROCESSING EFFECTS - Text transformations before rendering - Scramble, Wave, Matrix falling <<<"
-sleep $DESC_TIME
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DESC_TIME || true
 
 echo ""
 echo "    Pre-processing effects demo"
@@ -539,19 +539,19 @@ echo ""
 
 echo "    [1] Scramble"
 printf '\e]666667;1:0.3:1.0\a'
-sleep 3
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep 3 || true
 
 echo "    [2] Rain Characters"
 printf '\e]666667;2:0.15:2.0\a'
-sleep 3
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep 3 || true
 
 echo "    [3] Wave Text"
 printf '\e]666667;3:0.3:0.3:2.0\a'
-sleep 3
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep 3 || true
 
 echo "    [4] Matrix Falling"
 printf '\e]666667;4:0.4:1.5:12.0\a'
-sleep 3
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep 3 || true
 
 kill_ytext
 clear_all
@@ -563,14 +563,14 @@ clear_all
 clear
 clear_all
 show_desc ">>> YTEXT PROJECTIONS - GPU-animated text with 3D projection effects - Cylinder, Sphere, Ripple <<<"
-sleep $DESC_TIME
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DESC_TIME || true
 
 # Cylinder
 $YC create ytext \
     -I "\n\n\nCylinder Projection\nText on a rolling drum\nCurves at top and bottom\nWith realistic lighting\nGPU-powered animation\n\n\n" \
     --scroll-y 30 --loop --cylinder --effect-strength 0.7 \
     -w 45 -H 12 -x 5 -y 5 2>/dev/null || true
-sleep $DEMO_DURATION
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DEMO_DURATION || true
 apply_few_effects
 kill_ytext
 clear_all
@@ -578,13 +578,13 @@ clear_all
 # Sphere
 clear
 show_desc ">>> SPHERE PROJECTION - Text mapped onto a spherical surface - Curves away at all edges <<<"
-sleep $DESC_TIME
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DESC_TIME || true
 
 $YC create ytext \
     -I "\n\n\nSphere Projection\nText on a globe\nBoth X and Y curve\nAt the edges\n\n\n" \
     --scroll-y 25 --loop --sphere --effect-strength 0.7 \
     -w 40 -H 14 -x 5 -y 5 2>/dev/null || true
-sleep $DEMO_DURATION
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DEMO_DURATION || true
 apply_few_effects
 kill_ytext
 clear_all
@@ -592,13 +592,13 @@ clear_all
 # Ripple
 clear
 show_desc ">>> WATER RIPPLE - Concentric waves from center - Text on water surface effect <<<"
-sleep $DESC_TIME
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DESC_TIME || true
 
 $YC create ytext \
     -I "\n\n\nWater Ripple Effect\nConcentric waves\nRadial foreshortening\nLike a water drop\n\n\n" \
     --scroll-y 20 --loop --ripple --effect-strength 0.5 --frequency 4.0 \
     -w 40 -H 12 -x 5 -y 5 2>/dev/null || true
-sleep $DEMO_DURATION
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DEMO_DURATION || true
 apply_few_effects
 kill_ytext
 clear_all
@@ -612,10 +612,10 @@ if [ -d "$DIR/fastplotlib" ]; then
     clear
     clear_all
     show_desc ">>> FASTPLOTLIB - Python scientific visualization - GPU-accelerated plots in terminal <<<"
-    sleep $DESC_TIME
+    [[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DESC_TIME || true
 
     bash "$DIR/fastplotlib/lorenz.sh" 2>/dev/null || true
-    sleep $DEMO_DURATION
+    [[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DEMO_DURATION || true
     apply_few_effects
     kill_ytext
     clear_all
@@ -623,10 +623,10 @@ if [ -d "$DIR/fastplotlib" ]; then
     clear
     clear_all
     show_desc ">>> FASTPLOTLIB WAVE3D - 3D wave surface animation - Real-time GPU rendering <<<"
-    sleep $DESC_TIME
+    [[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DESC_TIME || true
 
     bash "$DIR/fastplotlib/wave3d.sh" 2>/dev/null || true
-    sleep $DEMO_DURATION
+    [[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DEMO_DURATION || true
     apply_few_effects
     kill_ytext
     clear_all
@@ -634,10 +634,10 @@ if [ -d "$DIR/fastplotlib" ]; then
     clear
     clear_all
     show_desc ">>> FASTPLOTLIB MANDELBROT - Mandelbrot fractal visualization - Interactive zooming <<<"
-    sleep $DESC_TIME
+    [[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DESC_TIME || true
 
     bash "$DIR/fastplotlib/mandelbrot.sh" 2>/dev/null || true
-    sleep $DEMO_DURATION
+    [[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DEMO_DURATION || true
     apply_few_effects
     kill_ytext
     clear_all
@@ -884,7 +884,7 @@ $YC create ytext \
     -w "$SW_WIDTH" -H "$SW_HEIGHT" \
     -x 1 -y 1 2>/dev/null || true
 
-sleep 15
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep 15 || true
 
 clear_all
 clear

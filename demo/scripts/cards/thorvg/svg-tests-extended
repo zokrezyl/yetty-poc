@@ -3,6 +3,12 @@
 #
 # Generates random IDs and fetches SVGs directly
 
+# Skip when running in batch mode (runs indefinitely otherwise)
+if [[ -n "$YETTY_DEMO_NO_INTERACTIVE" ]]; then
+    echo "Skipping svg-tests-extended (infinite loop demo, YETTY_DEMO_NO_INTERACTIVE is set)"
+    exit 0
+fi
+
 WIDTH="${WIDTH:-60}"
 HEIGHT="${HEIGHT:-30}"
 DELAY="${DELAY:-0}"
@@ -41,7 +47,7 @@ while true; do
     if [[ "$svg" == *"<svg"* ]]; then
         echo "Showing: $name"
         show_svg "$svg" "$name"
-        sleep "$DELAY"
+        [[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep "$DELAY" || true
         ((i++))
     fi
 

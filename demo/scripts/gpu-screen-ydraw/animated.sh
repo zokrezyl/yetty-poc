@@ -35,7 +35,7 @@ EOF
     PAYLOAD=$(echo "$YAML_PAYLOAD" | base64 -w0)
     printf '\033]666673;--yaml;%s\033\\' "$PAYLOAD"
 
-    sleep 0.05
+    [[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep 0.05 || true
 done
 
 echo "Animation complete"

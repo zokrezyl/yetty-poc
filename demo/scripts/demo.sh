@@ -34,7 +34,7 @@ echo -e "${GREEN}║${NC}   ${YELLOW}WebGPU-powered terminal with inline graphic
 echo -e "${GREEN}║${NC}                                                                  ${GREEN}║${NC}"
 echo -e "${GREEN}╚══════════════════════════════════════════════════════════════════╝${NC}"
 echo ""
-sleep $INTRO_PAUSE
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $INTRO_PAUSE || true
 
 # Function to show demo intro
 show_intro() {
@@ -47,21 +47,21 @@ show_intro() {
     echo -e "${YELLOW}$description${NC}"
     echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
-    sleep $INTRO_PAUSE
+    [[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $INTRO_PAUSE || true
 }
 
 # Function to run demo
 run_demo() {
     local script="$1"
     bash "$script" 2>/dev/null || true
-    sleep $DEMO_DURATION
+    [[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DEMO_DURATION || true
 }
 
 # Function to clear cards
 clear_cards() {
     # Try to clear any visible cards
     "$DEMO_ROOT/demo/yetty-client/yetty-client" clear 2>/dev/null || true
-    sleep $BETWEEN_PAUSE
+    [[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $BETWEEN_PAUSE || true
 }
 
 #=============================================================================
@@ -116,7 +116,7 @@ clear_cards
 # 12. Text Styles
 show_intro "✨ Rich Text" "MSDF font rendering - crisp at any zoom"
 run_demo "$DIR/text-style.sh"
-sleep $DEMO_DURATION
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DEMO_DURATION || true
 
 #=============================================================================
 # SHADER GLYPH FILES (cat demos)
@@ -125,42 +125,42 @@ sleep $DEMO_DURATION
 # 13. Shader Glyphs Overview
 show_intro "🔤 Shader Glyphs" "GPU-rendered glyphs — each character is a tiny shader program"
 cat "$DEMO_ROOT/demo/files/shader-glyphs.txt"
-sleep $DEMO_DURATION
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DEMO_DURATION || true
 
 # 14. Shader Glyph: Biomine
 show_intro "🧬 Shader Glyph: Biomine" "Organic procedural pattern rendered per-glyph"
 cat "$DEMO_ROOT/demo/files/shader-glyphs/biomine.txt"
-sleep $DEMO_DURATION
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DEMO_DURATION || true
 
 # 15. Shader Glyph: Butterfly Flock
 show_intro "🦋 Shader Glyph: Butterfly Flock" "Animated butterfly swarm via shader glyphs"
 cat "$DEMO_ROOT/demo/files/shader-glyphs/butterfly-flock.txt"
-sleep $DEMO_DURATION
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DEMO_DURATION || true
 
 # 16. Shader Glyph: HG-SDF
 show_intro "💎 Shader Glyph: HG-SDF" "Mercury's HG-SDF library rendered as glyphs"
 cat "$DEMO_ROOT/demo/files/shader-glyphs/hg-sdf.txt"
-sleep $DEMO_DURATION
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DEMO_DURATION || true
 
 # 17. Shader Glyph: Looping Spline
 show_intro "🔀 Shader Glyph: Looping Spline" "Smooth animated spline curves"
 cat "$DEMO_ROOT/demo/files/shader-glyphs/looping-spline.txt"
-sleep $DEMO_DURATION
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DEMO_DURATION || true
 
 # 18. Shader Glyph: Mandelbrot Deco
 show_intro "🌀 Shader Glyph: Mandelbrot Deco" "Mandelbrot fractal with decorative styling"
 cat "$DEMO_ROOT/demo/files/shader-glyphs/mandelbrot-deco.txt"
-sleep $DEMO_DURATION
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DEMO_DURATION || true
 
 # 19. Shader Glyph: Minkowski Tube
 show_intro "🔮 Shader Glyph: Minkowski Tube" "Minkowski space tube visualization"
 cat "$DEMO_ROOT/demo/files/shader-glyphs/minkowski-tube.txt"
-sleep $DEMO_DURATION
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DEMO_DURATION || true
 
 # 20. Shader Glyph: Voronoi
 show_intro "🔷 Shader Glyph: Voronoi" "Voronoi tessellation pattern"
 cat "$DEMO_ROOT/demo/files/shader-glyphs/voronoi.txt"
-sleep $DEMO_DURATION
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DEMO_DURATION || true
 
 #=============================================================================
 # OTHER TEXT FILES (cat demos)
@@ -169,22 +169,22 @@ sleep $DEMO_DURATION
 # 21. Fractal Matrix
 show_intro "🧮 Fractal Matrix" "Shader glyph tiled fractal matrix effect"
 cat "$DEMO_ROOT/demo/files/fractal-matrix.txt"
-sleep $DEMO_DURATION
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DEMO_DURATION || true
 
 # 22. Tiled Effects
 show_intro "🎭 Tiled Effects" "Wave, Sparkle, and Plasma — shader glyphs side by side"
 cat "$DEMO_ROOT/demo/files/tiled-effects.txt"
-sleep $DEMO_DURATION
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DEMO_DURATION || true
 
 # 23. Emojis
 show_intro "😀 Emoji Rendering" "Unicode emoji support in the terminal"
 cat "$DEMO_ROOT/demo/files/emojis.txt"
-sleep $DEMO_DURATION
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DEMO_DURATION || true
 
 # 24. Text Style
 show_intro "📝 Text Styling" "Bold, italic, underline, strikethrough and colors"
 cat "$DEMO_ROOT/demo/files/text-style.txt"
-sleep $DEMO_DURATION
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DEMO_DURATION || true
 
 #=============================================================================
 # FASTPLOTLIB DEMOS (Python scientific visualization)
@@ -320,4 +320,4 @@ echo -e "${GREEN}║${NC}   ${YELLOW}MIT License - Contributions welcome!${NC}  
 echo -e "${GREEN}║${NC}                                                                  ${GREEN}║${NC}"
 echo -e "${GREEN}╚══════════════════════════════════════════════════════════════════╝${NC}"
 echo ""
-sleep $INTRO_PAUSE
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $INTRO_PAUSE || true

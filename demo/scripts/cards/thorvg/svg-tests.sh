@@ -210,17 +210,17 @@ test_markers() {
 }
 
 run_all() {
-    test_basic_shapes; sleep "$DELAY"
-    test_strokes; sleep "$DELAY"
-    test_dashes; sleep "$DELAY"
-    test_paths; sleep "$DELAY"
-    test_transforms; sleep "$DELAY"
-    test_opacity; sleep "$DELAY"
-    test_text; sleep "$DELAY"
-    test_gradients; sleep "$DELAY"
-    test_clippath; sleep "$DELAY"
-    test_groups; sleep "$DELAY"
-    test_use; sleep "$DELAY"
+    test_basic_shapes; [[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep "$DELAY" || true
+    test_strokes; [[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep "$DELAY" || true
+    test_dashes; [[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep "$DELAY" || true
+    test_paths; [[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep "$DELAY" || true
+    test_transforms; [[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep "$DELAY" || true
+    test_opacity; [[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep "$DELAY" || true
+    test_text; [[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep "$DELAY" || true
+    test_gradients; [[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep "$DELAY" || true
+    test_clippath; [[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep "$DELAY" || true
+    test_groups; [[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep "$DELAY" || true
+    test_use; [[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep "$DELAY" || true
     test_markers
     echo "=== All tests complete ==="
 }
