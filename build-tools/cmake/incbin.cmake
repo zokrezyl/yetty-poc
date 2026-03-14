@@ -16,6 +16,15 @@
 
 include_guard(GLOBAL)
 
+# Brotli compression quality (0-11, higher = slower but smaller)
+# Default to 6 for good speed/size tradeoff
+if(DEFINED ENV{BROTLI_QUALITY})
+    set(BROTLI_QUALITY $ENV{BROTLI_QUALITY})
+else()
+    set(BROTLI_QUALITY 6)
+endif()
+message(STATUS "incbin: Brotli quality level: ${BROTLI_QUALITY}")
+
 # Download incbin from GitHub
 CPMAddPackage(
     NAME incbin
@@ -293,7 +302,7 @@ const unsigned int g${SYMBOL_NAME}Size = 0;
                 get_filename_component(FILE_NAME "${FILE}" NAME)
                 set(COMPRESSED_FILE "${COMPRESSED_DIR}/${FILE_NAME}.br")
                 execute_process(
-                    COMMAND ${BROTLI_EXECUTABLE} -q 11 -f -o "${COMPRESSED_FILE}" "${FILE}"
+                    COMMAND ${BROTLI_EXECUTABLE} -q ${BROTLI_QUALITY} -f -o "${COMPRESSED_FILE}" "${FILE}"
                     RESULT_VARIABLE BROTLI_RESULT
                 )
                 if(BROTLI_RESULT EQUAL 0)
@@ -364,7 +373,7 @@ extern const unsigned int g${SYMBOL_NAME}Size;
                 get_filename_component(FILE_NAME "${FILE}" NAME)
                 set(COMPRESSED_FILE "${COMPRESSED_DIR}/${FILE_NAME}.br")
                 execute_process(
-                    COMMAND ${BROTLI_EXECUTABLE} -q 11 -f -o "${COMPRESSED_FILE}" "${FILE}"
+                    COMMAND ${BROTLI_EXECUTABLE} -q ${BROTLI_QUALITY} -f -o "${COMPRESSED_FILE}" "${FILE}"
                     RESULT_VARIABLE BROTLI_RESULT
                 )
                 if(BROTLI_RESULT EQUAL 0)
