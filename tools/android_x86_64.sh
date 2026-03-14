@@ -9,6 +9,7 @@
 #     ./tools/android_x86_64.sh              # Normal: emulator window with yetty
 #     ./tools/android_x86_64.sh --vnc        # VNC: emulator window + yetty VNC server
 #     ./tools/android_x86_64.sh --vnc-headless  # Headless: no window, yetty VNC only
+#     ./tools/android_x86_64.sh --soft-gpu   # Use software GPU (SwiftShader)
 #     ./tools/android_x86_64.sh --kill       # Kill running emulator
 #     ./tools/android_x86_64.sh --help       # Show full help
 #
@@ -76,6 +77,7 @@ DEBUG_MODE=false
 VNC_MODE=false
 VNC_HEADLESS=false
 VNC_PORT=5900
+SOFT_GPU=false
 
 # Configuration
 AVD_NAME="yetty_x86_64"
@@ -397,19 +399,25 @@ start_emulator() {
         exit 1
     fi
 
+    # Determine GPU mode
+    local gpu_mode="host"
+    if [ "$SOFT_GPU" = true ]; then
+        gpu_mode="swiftshader_indirect"
+        info "Using software GPU (SwiftShader)"
+    fi
+
     # Start emulator in background
     if [ "$VNC_HEADLESS" = true ]; then
         # VNC headless: no emulator window, use yetty's built-in VNC server
         # The emulator runs without display, yetty provides VNC access
-        # -gpu host: use host GPU via virtio-gpu passthrough (NOT software rendering!)
         info "Launching emulator in HEADLESS mode (no window)..."
         info "  - No emulator window"
-        info "  - Host GPU acceleration"
+        info "  - GPU mode: $gpu_mode"
         info "  - Yetty's VNC server on port $VNC_PORT"
         "$emulator_bin" -avd "$AVD_NAME" \
             -no-window \
             -no-audio \
-            -gpu host \
+            -gpu "$gpu_mode" \
             -no-snapshot-load \
             -skin 1920x1080 \
             -netdelay none \
@@ -418,9 +426,10 @@ start_emulator() {
         # VNC mode with window: emulator window + yetty's VNC server
         info "Launching emulator for VNC mode..."
         info "  - Emulator window opens (can ignore it)"
+        info "  - GPU mode: $gpu_mode"
         info "  - Yetty's VNC server on port $VNC_PORT"
         "$emulator_bin" -avd "$AVD_NAME" \
-            -gpu host \
+            -gpu "$gpu_mode" \
             -no-snapshot-load \
             -skin 1920x1080 \
             -netdelay none \
@@ -428,14 +437,14 @@ start_emulator() {
             -qemu -k en-us &
     else
         # Normal mode with Qt GUI
-        # -gpu host: use host GPU (NOT software rendering!)
         # -skin 1920x1080: landscape fullscreen
         # -screen touch: single-touch mode (still has Ctrl pinch-zoom issue)
         # -netdelay none -netspeed full: ensure network is enabled with no throttling
         # -qemu -k en-us: keyboard layout
         info "Launching emulator (this may take a minute)..."
+        info "  - GPU mode: $gpu_mode"
         "$emulator_bin" -avd "$AVD_NAME" \
-            -gpu host \
+            -gpu "$gpu_mode" \
             -no-snapshot-load \
             -skin 1920x1080 \
             -screen touch \
@@ -616,6 +625,9 @@ main() {
             --debug|-d)
                 DEBUG_MODE=true
                 ;;
+            --soft-gpu)
+                SOFT_GPU=true
+                ;;
             --vnc-port)
                 if [ -n "$next_arg" ] && [[ "$next_arg" =~ ^[0-9]+$ ]]; then
                     VNC_PORT="$next_arg"
@@ -720,6 +732,7 @@ main() {
             echo ""
             echo "OTHER OPTIONS:"
             echo "  --run           Same as no options (run emulator)"
+            echo "  --soft-gpu      Use software GPU (SwiftShader) instead of host GPU"
             echo "  --vnc-port N    Set VNC port (default: 5900)"
             echo "  --kill          Kill running emulator"
             echo "  --yes, -y       Auto-confirm all prompts"
