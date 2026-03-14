@@ -179,3 +179,11 @@ The marker file `.yetty-assets/version` contains the build version. On startup:
 - **Emscripten**: incbin inline assembly not supported; provides empty stubs
 - **MSVC**: Uses incbin tool to generate data.c (no inline assembly)
 - **GCC/Clang**: Uses incbin.h with inline assembly for direct embedding
+
+## Compression: Brotli vs XZ
+
+Yetty uses **brotli** for asset compression. While **xz** offers faster compression (10 sec vs 1 min 10 sec for CDB files) with slightly better ratios, brotli was chosen for:
+
+- **Faster decompression** at runtime (matters more for first-run extraction)
+- **MIT license** (Google-maintained)
+- **No supply chain concerns** - xz had a backdoor incident in early 2024 where malicious code was injected into the build system. While caught and fixed before widespread deployment, it raised concerns about the project's maintenance. Brotli's Google backing provides more confidence in supply chain security.
