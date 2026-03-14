@@ -566,8 +566,10 @@ Result<VectorSdfFont::Ptr> VectorSdfFont::createImpl(ContextType&,
                                                 const std::string& ttfPath) {
     auto font = Ptr(new VectorSdfFontImpl(gpu, std::move(allocator), ttfPath));
     if (auto res = static_cast<VectorSdfFontImpl*>(font.get())->init(); !res) {
+        yerror("VectorSdfFont creation failed: {}", error_msg(res));
         return Err<Ptr>("Failed to initialize VectorSdfFont", res);
     }
+    yinfo("VectorSdfFont created successfully");
     return Ok(std::move(font));
 }
 

@@ -566,8 +566,10 @@ Result<VectorCoverageFont::Ptr> VectorCoverageFont::createImpl(ContextType&,
                                                 const std::string& ttfPath) {
     auto font = Ptr(new VectorCoverageFontImpl(gpu, std::move(allocator), ttfPath));
     if (auto res = static_cast<VectorCoverageFontImpl*>(font.get())->init(); !res) {
+        yerror("VectorCoverageFont creation failed: {}", error_msg(res));
         return Err<Ptr>("Failed to initialize VectorCoverageFont", res);
     }
+    yinfo("VectorCoverageFont created successfully");
     return Ok(std::move(font));
 }
 

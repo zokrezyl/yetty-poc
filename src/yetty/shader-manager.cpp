@@ -322,8 +322,10 @@ private:
 Result<ShaderManager::Ptr> ShaderManager::createImpl(ContextType&, const GPUContext& gpu, GpuAllocator::Ptr allocator) noexcept {
     auto impl = Ptr(new ShaderManagerImpl());
     if (auto res = static_cast<ShaderManagerImpl*>(impl.get())->init(gpu, std::move(allocator)); !res) {
+        yerror("ShaderManager creation failed: {}", error_msg(res));
         return Err<Ptr>("ShaderManager init failed", res);
     }
+    yinfo("ShaderManager created successfully");
     return Ok(std::move(impl));
 }
 

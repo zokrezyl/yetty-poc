@@ -12,6 +12,9 @@
 #include <ytrace/ytrace.hpp>
 #include <spdlog/spdlog.h>
 #include <spdlog/cfg/env.h>
+#include <spdlog/sinks/basic_file_sink.h>
+#include <spdlog/sinks/stdout_color_sinks.h>
+#include <fmt/format.h>
 #include <iostream>
 #include <cstring>
 #include <signal.h>
@@ -425,6 +428,36 @@ extern "C" void android_main(struct android_app* app) {
 //-----------------------------------------------------------------------------
 int main(int argc, char* argv[]) {
 
+    // Pre-parse --ytrace-default-on (must be set before any ytrace usage)
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--ytrace-default-on") {
+            setenv("YTRACE_DEFAULT_ON", "yes", 1);
+            break;
+        }
+    }
+
+    // Pre-parse --ytrace-out for spdlog sink configuration
+    std::string ytraceOutFile;
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--ytrace-out" && i + 1 < argc) {
+            ytraceOutFile = argv[i + 1];
+            break;
+        }
+    }
+
+    // Configure spdlog output sink
+    if (!ytraceOutFile.empty()) {
+        std::shared_ptr<spdlog::sinks::sink> sink;
+        if (ytraceOutFile == "-") {
+            sink = std::make_shared<spdlog::sinks::stderr_color_sink_mt>();
+        } else {
+            sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(ytraceOutFile, true);
+        }
+        auto logger = std::make_shared<spdlog::logger>("yetty", sink);
+        logger->set_level(spdlog::level::trace);
+        spdlog::set_default_logger(logger);
+    }
+
     // Set default log level to trace for maximum debug output
     spdlog::set_level(spdlog::level::trace);
 
@@ -442,6 +475,7 @@ int main(int argc, char* argv[]) {
             return 0;
         }
         yerror("Failed to initialize yetty: {}", yetty::error_msg(result));
+        fmt::print(stderr, "ERROR: Failed to initialize yetty: {}\n", yetty::error_msg(result));
         return 1;
     }
     auto yetty = *result;
@@ -449,10 +483,12 @@ int main(int argc, char* argv[]) {
     auto shutdownResult = yetty->shutdown();
     if (!runResult) {
         yerror("Yetty run failed: {}", yetty::error_msg(runResult));
+        fmt::print(stderr, "ERROR: Yetty run failed: {}\n", yetty::error_msg(runResult));
         return 1;
     }
     if (!shutdownResult) {
         yerror("Yetty shutdown failed: {}", yetty::error_msg(shutdownResult));
+        fmt::print(stderr, "ERROR: Yetty shutdown failed: {}\n", yetty::error_msg(shutdownResult));
         return 1;
     }
     return 0;

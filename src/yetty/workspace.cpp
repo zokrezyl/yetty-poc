@@ -473,8 +473,10 @@ Result<std::string> Workspace::asTree(const DataPath& path, int depth) {
 Result<Workspace::Ptr> Workspace::createImpl(ContextType&, const YettyContext &ctx) {
   auto impl = Ptr(new WorkspaceImpl(ctx));
   if (auto res = static_cast<WorkspaceImpl*>(impl.get())->init(); !res) {
+    yerror("Workspace creation failed: {}", error_msg(res));
     return Err<Ptr>("Failed to initialize Workspace", res);
   }
+  yinfo("Workspace created successfully");
   return Ok(std::move(impl));
 }
 

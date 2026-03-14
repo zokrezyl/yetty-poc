@@ -1,5 +1,6 @@
 #include <yetty/font/raw-font.h>
 #include <yetty/font/freetype.h>
+#include <ytrace/ytrace.hpp>
 
 #include <ft2build.h>
 #include FT_FREETYPE_H
@@ -110,7 +111,11 @@ Result<RawFont::Ptr> RawFont::createImpl(const uint8_t* data, size_t size,
     std::vector<uint8_t> fontData(data, data + size);
     auto impl = Ptr(new RawFontImpl(std::move(fontData), name));
     auto res = static_cast<RawFontImpl*>(impl.get())->init();
-    if (!res) return Err<Ptr>("RawFont creation failed", res);
+    if (!res) {
+        yerror("RawFont creation failed: {}", error_msg(res));
+        return Err<Ptr>("RawFont creation failed", res);
+    }
+    yinfo("RawFont created successfully");
     return Ok(std::move(impl));
 }
 

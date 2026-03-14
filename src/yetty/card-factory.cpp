@@ -278,8 +278,10 @@ CardFactory::createImpl(ContextType &ctx, const GPUContext &gpu) noexcept {
 
   auto impl = std::make_shared<CardFactoryImpl>(gpu);
   if (auto res = impl->init(); !res) {
+    yerror("CardFactory creation failed: {}", error_msg(res));
     return Err<Ptr>("Failed to initialize CardFactory", res);
   }
+  yinfo("CardFactory created successfully");
   return Ok<Ptr>(impl);
 }
 

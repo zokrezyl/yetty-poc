@@ -563,6 +563,7 @@ private:
 //=============================================================================
 
 Result<MsdfAtlas::Ptr> MsdfAtlas::createImpl(ContextType&, GpuAllocator::Ptr allocator) {
+    yinfo("MsdfAtlas created successfully");
     return Ok(Ptr(new MsdfAtlasImpl(std::move(allocator))));
 }
 
