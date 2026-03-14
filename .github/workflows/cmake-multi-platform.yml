@@ -16,11 +16,13 @@ env:
   BUILD_LINUX: false
   BUILD_MACOS: false
   BUILD_WINDOWS: false
-  BUILD_ANDROID: false
+  BUILD_ANDROID: true
   BUILD_ANDROID_X86_64: true
   BUILD_WEB: false
+
   RUN_CODEQL: false
   RUN_CODACY: false
+
   TEST_ANDROID: true
 
 jobs:
