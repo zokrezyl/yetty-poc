@@ -37,7 +37,7 @@ endif()
 CPMAddPackage(
     NAME ytrace
     GITHUB_REPOSITORY zokrezyl/ytrace
-    GIT_TAG v0.0.10
+    GIT_TAG v0.0.11
     OPTIONS
         ${YTRACE_BUILD_TOOLS_OPT}
         "YTRACE_BUILD_EXAMPLES OFF"
