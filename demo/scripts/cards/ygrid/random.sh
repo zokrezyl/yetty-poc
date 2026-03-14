@@ -54,5 +54,5 @@ for ((frame=0; frame<200; frame++)); do
     } | base64 -w0)
 
     printf '\033]666666;update --name %s;;%s\033\\' "$NAME" "$PAYLOAD"
-    sleep 0.05
+    [[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep 0.05 || true
 done

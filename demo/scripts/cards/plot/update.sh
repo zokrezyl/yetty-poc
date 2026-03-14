@@ -17,7 +17,7 @@ PAYLOAD=$(echo -n "$INITIAL" | base64 -w0)
 printf '\033]666666;run -c plot -x 0 -y 0 -w 60 -h 10 -r --name %s;--grid --axes --min 0 --max 100;%s\033\\' "$NAME" "$PAYLOAD"
 echo
 
-sleep 1
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep 1 || true
 
 # Send 20 updates with advance=1
 for i in $(seq 1 20); do
@@ -27,7 +27,7 @@ for i in $(seq 1 20); do
 
     printf '\033]666666;update --name %s;advance=1;%s\033\\' "$NAME" "$PAYLOAD"
 
-    sleep 0.2
+    [[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep 0.2 || true
 done
 
 echo "Done"

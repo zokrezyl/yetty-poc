@@ -18,35 +18,35 @@ echo "--- Demo 1: Basic HTML (headings, lists, text styles) ---"
 PAYLOAD=$(base64 -w0 < demo/assets/yhtml/basic.html)
 printf '\033]666666;run -c yhtml -x 0 -y 0 -w 50 -h 25 -r;-i -;%s\033\\' "$PAYLOAD"
 echo
-sleep $DELAY
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DELAY || true
 
 echo ""
 echo "--- Demo 2: CSS Styled Dashboard ---"
 PAYLOAD=$(base64 -w0 < demo/assets/yhtml/styled.html)
 printf '\033]666666;run -c yhtml -x 0 -y 0 -w 50 -h 30 -r;-i - --bg-color 0x11111b;%s\033\\' "$PAYLOAD"
 echo
-sleep $DELAY
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DELAY || true
 
 echo ""
 echo "--- Demo 3: Table Layout ---"
 PAYLOAD=$(base64 -w0 < demo/assets/yhtml/table.html)
 printf '\033]666666;run -c yhtml -x 0 -y 0 -w 60 -h 30 -r;-i - --bg-color 0x11111b;%s\033\\' "$PAYLOAD"
 echo
-sleep $DELAY
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DELAY || true
 
 echo ""
 echo "--- Demo 4: Form Layout ---"
 PAYLOAD=$(base64 -w0 < demo/assets/yhtml/form.html)
 printf '\033]666666;run -c yhtml -x 0 -y 0 -w 50 -h 30 -r;-i - --bg-color 0x1e1e2e;%s\033\\' "$PAYLOAD"
 echo
-sleep $DELAY
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DELAY || true
 
 echo ""
 echo "--- Demo 5: Landing Page ---"
 PAYLOAD=$(base64 -w0 < demo/assets/yhtml/landing.html)
 printf '\033]666666;run -c yhtml -x 0 -y 0 -w 80 -h 45 -r;-i -;%s\033\\' "$PAYLOAD"
 echo
-sleep $DELAY
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DELAY || true
 
 echo ""
 echo "--- Demo 6: Inline HTML ---"
@@ -54,7 +54,7 @@ HTML_CONTENT='<h1 style="color:#89b4fa">Inline</h1><p>Quick HTML without a file<
 PAYLOAD=$(echo -n "$HTML_CONTENT" | base64 -w0)
 printf '\033]666666;run -c yhtml -x 0 -y 0 -w 40 -h 10 -r;-i -;%s\033\\' "$PAYLOAD"
 echo
-sleep $DELAY
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep $DELAY || true
 
 echo ""
 echo "=== All demos loaded ==="

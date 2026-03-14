@@ -16,7 +16,10 @@ MAGENTA='\033[0;35m'
 NC='\033[0m' # No Color
 
 # Sleep duration between demos (seconds)
-SLEEP_DURATION=2
+SLEEP_DURATION=0
+
+# Set flag to skip interactive/infinite demos when running batch
+export YETTY_DEMO_NO_INTERACTIVE=1
 
 # Extract description from script (first comment line after shebang)
 get_description() {
@@ -39,11 +42,14 @@ run_demo() {
     echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
 
+
+    >&2 echo -e $script
+
     bash "$script" || echo -e "${YELLOW}Warning: $relative_path exited with non-zero status${NC}"
 
     echo ""
     echo -e "${CYAN}Waiting ${SLEEP_DURATION}s before next demo...${NC}"
-    sleep "$SLEEP_DURATION"
+    [[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep "$SLEEP_DURATION" || true
 }
 
 echo ""
@@ -57,7 +63,7 @@ echo "Press Ctrl+C to stop at any time."
 echo ""
 echo -e "${YELLOW}Sleep between demos: ${SLEEP_DURATION} seconds${NC}"
 echo ""
-sleep 2
+[[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep 2 || true
 
 # Find all demo scripts (excluding this file)
 SCRIPT_NAME=$(basename "$0")

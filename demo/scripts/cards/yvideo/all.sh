@@ -8,7 +8,7 @@ cd "$DIR/../../../.."
 for i in 0 1 2; do
     echo "Playing yetty-unchained-$i.mp4..."
     "$DIR/play.sh" "docs/yetty-unchained-$i.mp4" 60 30
-    sleep 2
+    [[ -z "$YETTY_DEMO_NO_SLEEP" ]] && sleep 2 || true
 done
 
 echo "All videos played!"
