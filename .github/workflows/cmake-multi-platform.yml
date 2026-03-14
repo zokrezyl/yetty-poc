@@ -403,11 +403,14 @@ jobs:
           adb install apk/app-release.apk
           # Basic smoke test - launch and check if it starts
           adb shell am start -n com.yetty.terminal/android.app.NativeActivity
-          sleep 5
+          sleep 10
           # Check if the app is running
           adb shell pidof com.yetty.terminal || echo "App may have crashed"
-          # Capture logcat for debugging
-          adb logcat -d | grep -i yetty | tail -50
+          # Capture logcat for debugging (500 lines should capture init + runtime)
+          echo "=== YETTY LOGS ==="
+          adb logcat -d | grep -i yetty | tail -500
+          echo "=== WEBGPU/VULKAN LOGS ==="
+          adb logcat -d | grep -iE "vulkan|webgpu|dawn|wgpu|adapter|backend" | tail -100
 
   # =============================================================================
   # WebAssembly Build (using nix for deterministic builds)
