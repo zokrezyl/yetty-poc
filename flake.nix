@@ -74,6 +74,7 @@
           glfw
           zlib
           openssl
+          brotli  # For asset compression in incbin
         ];
 
         # Android build dependencies
@@ -174,6 +175,7 @@
               pkgs.python3
               pkgs.nodejs
               pkgs.gcc  # For building host tools (yecho-static for VM)
+              pkgs.brotli  # For asset compression in incbin
             ];
 
             # Emscripten environment

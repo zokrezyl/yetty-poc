@@ -35,7 +35,47 @@ else()
 
     # Build directory for host tools
     set(HOST_TOOLS_BUILD_DIR "${CMAKE_BINARY_DIR}/_host-tools-bootstrap")
-    set(HOST_MSDF_GEN "${HOST_TOOLS_BUILD_DIR}/yetty-msdf-gen")
+    if(WIN32)
+        set(HOST_MSDF_GEN "${HOST_TOOLS_BUILD_DIR}/Release/yetty-msdf-gen.exe")
+    else()
+        set(HOST_MSDF_GEN "${HOST_TOOLS_BUILD_DIR}/yetty-msdf-gen")
+    endif()
+
+    # Determine generator and compiler args for host tools
+    # When cross-compiling (e.g., Emscripten, Android NDK), we must use native compilers
+    set(HOST_CMAKE_ARGS "")
+
+    if(CMAKE_CROSSCOMPILING OR DEFINED ENV{EMSCRIPTEN} OR DEFINED EMSCRIPTEN)
+        # Cross-compiling: find and use native compilers
+        find_program(HOST_CC NAMES gcc clang cc)
+        find_program(HOST_CXX NAMES g++ clang++ c++)
+
+        if(HOST_CC)
+            list(APPEND HOST_CMAKE_ARGS "-DCMAKE_C_COMPILER=${HOST_CC}")
+        endif()
+        if(HOST_CXX)
+            list(APPEND HOST_CMAKE_ARGS "-DCMAKE_CXX_COMPILER=${HOST_CXX}")
+        endif()
+
+        # Clear cross-compilation settings
+        list(APPEND HOST_CMAKE_ARGS "-DCMAKE_TOOLCHAIN_FILE=")
+        list(APPEND HOST_CMAKE_ARGS "-DCMAKE_CROSSCOMPILING=OFF")
+        list(APPEND HOST_CMAKE_ARGS "-G" "Ninja")
+        list(APPEND HOST_CMAKE_ARGS "-DCMAKE_BUILD_TYPE=Release")
+
+        message(STATUS "  Cross-compilation detected, using native compilers:")
+        message(STATUS "    CC=${HOST_CC} CXX=${HOST_CXX}")
+    elseif(WIN32)
+        # Windows: use Visual Studio generator (Ninja may not be configured properly)
+        list(APPEND HOST_CMAKE_ARGS "-G" "Visual Studio 17 2022")
+        list(APPEND HOST_CMAKE_ARGS "-A" "x64")
+        message(STATUS "  Windows detected, using Visual Studio generator")
+    else()
+        # Native build on Linux/macOS: use Ninja with current compilers
+        list(APPEND HOST_CMAKE_ARGS "-G" "Ninja")
+        list(APPEND HOST_CMAKE_ARGS "-DCMAKE_BUILD_TYPE=Release")
+        message(STATUS "  Native build, using Ninja generator")
+    endif()
 
     # Configure host tools
     message(STATUS "  Configuring host tools...")
@@ -43,26 +83,31 @@ else()
         COMMAND ${CMAKE_COMMAND}
             -S "${YETTY_ROOT}/build-tools/cmake/host-tools"
             -B "${HOST_TOOLS_BUILD_DIR}"
-            -G Ninja
-            -DCMAKE_BUILD_TYPE=Release
+            ${HOST_CMAKE_ARGS}
         RESULT_VARIABLE CONFIG_RESULT
         OUTPUT_VARIABLE CONFIG_OUTPUT
         ERROR_VARIABLE CONFIG_ERROR
     )
     if(NOT CONFIG_RESULT EQUAL 0)
-        message(FATAL_ERROR "Failed to configure host tools:\n${CONFIG_ERROR}")
+        message(FATAL_ERROR "Failed to configure host tools:\nSTDOUT:\n${CONFIG_OUTPUT}\nSTDERR:\n${CONFIG_ERROR}")
     endif()
 
     # Build yetty-msdf-gen
     message(STATUS "  Building yetty-msdf-gen...")
+    set(HOST_BUILD_ARGS --build "${HOST_TOOLS_BUILD_DIR}" --target yetty-msdf-gen --parallel)
+    if(WIN32)
+        # Multi-config generator needs --config
+        list(APPEND HOST_BUILD_ARGS --config Release)
+    endif()
+
     execute_process(
-        COMMAND ${CMAKE_COMMAND} --build "${HOST_TOOLS_BUILD_DIR}" --target yetty-msdf-gen --parallel
+        COMMAND ${CMAKE_COMMAND} ${HOST_BUILD_ARGS}
         RESULT_VARIABLE BUILD_RESULT
         OUTPUT_VARIABLE BUILD_OUTPUT
         ERROR_VARIABLE BUILD_ERROR
     )
     if(NOT BUILD_RESULT EQUAL 0)
-        message(FATAL_ERROR "Failed to build yetty-msdf-gen:\n${BUILD_ERROR}")
+        message(FATAL_ERROR "Failed to build yetty-msdf-gen:\nSTDOUT:\n${BUILD_OUTPUT}\nSTDERR:\n${BUILD_ERROR}")
     endif()
 
     # Generate CDB files
@@ -78,7 +123,7 @@ else()
             ERROR_VARIABLE GEN_ERROR
         )
         if(NOT GEN_RESULT EQUAL 0)
-            message(FATAL_ERROR "Failed to generate CDB for ${TTF_NAME}:\n${GEN_ERROR}")
+            message(FATAL_ERROR "Failed to generate CDB for ${TTF_NAME}:\nSTDOUT:\n${GEN_OUTPUT}\nSTDERR:\n${GEN_ERROR}")
         endif()
     endforeach()
 

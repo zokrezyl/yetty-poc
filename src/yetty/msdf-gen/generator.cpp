@@ -405,7 +405,7 @@ GeneratorResult generate(const GeneratorConfig& config, ProgressCallback progres
     // Determine thread count
     int threadCount = config.threadCount;
     if (threadCount <= 0) {
-        threadCount = std::max(1, static_cast<int>(std::thread::hardware_concurrency()));
+        threadCount = (std::max)(1, static_cast<int>(std::thread::hardware_concurrency()));
     }
 
     ydebug("Using {} threads for MSDF generation", threadCount);

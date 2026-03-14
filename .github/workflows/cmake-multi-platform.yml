@@ -15,7 +15,7 @@ on:
 env:
   BUILD_LINUX: false
   BUILD_MACOS: false
-  BUILD_WINDOWS: false
+  BUILD_WINDOWS: true
   BUILD_ANDROID: false
   BUILD_WEB: false
 
@@ -84,6 +84,7 @@ jobs:
         sudo apt-get install -y \
           automake autoconf libtool \
           meson ninja-build nasm \
+          brotli \
           libfontconfig1-dev \
           libxrandr-dev \
           libxinerama-dev \
@@ -142,7 +143,7 @@ jobs:
         echo "build-output-dir=${{ github.workspace }}/build-macos" >> "$GITHUB_OUTPUT"
 
     - name: Install macOS dependencies
-      run: brew install automake autoconf libtool meson ninja nasm
+      run: brew install automake autoconf libtool meson ninja nasm brotli
 
     - name: Configure CMake
       run: >
@@ -195,6 +196,8 @@ jobs:
         choco install nasm -y
         choco install make -y
         pip install meson
+        # Note: brotli not available in chocolatey; build will use uncompressed assets
+        # (incbin.cmake gracefully falls back to uncompressed when brotli not found)
 
     - name: Configure CMake
       run: >
