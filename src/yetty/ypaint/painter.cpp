@@ -101,7 +101,7 @@ Result<Painter::Ptr> Painter::createImpl(FontManager::Ptr fontManager,
                                          GpuMemoryManager::Ptr cardMgr,
                                          uint32_t metaSlotIndex,
                                          bool scrollingMode) {
-  yinfo("Painter created successfully");
+  ytest("painter-created-with-cardmgr", "Painter created successfully");
   return Ok(
       Ptr(new PainterImpl(std::move(fontManager), std::move(allocator),
                           std::move(cardMgr), metaSlotIndex, scrollingMode)));
@@ -110,7 +110,7 @@ Result<Painter::Ptr> Painter::createImpl(FontManager::Ptr fontManager,
 Result<Painter::Ptr> Painter::createImpl(FontManager::Ptr fontManager,
                                          GpuAllocator::Ptr allocator,
                                          bool scrollingMode) {
-  yinfo("Painter created successfully");
+  ytest("painter-created-standalone", "Painter created successfully");
   return Ok(Ptr(new PainterImpl(std::move(fontManager), std::move(allocator),
                                 GpuMemoryManager::Ptr{}, 0, scrollingMode)));
 }

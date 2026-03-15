@@ -33,11 +33,14 @@ endif()
 if(NOT DEFINED YTRACE_ENABLE_YFUNC)
     set(YTRACE_ENABLE_YFUNC ON)
 endif()
+if(NOT DEFINED YTRACE_ENABLE_YTEST)
+    set(YTRACE_ENABLE_YTEST ON)
+endif()
 
 CPMAddPackage(
     NAME ytrace
     GITHUB_REPOSITORY zokrezyl/ytrace
-    GIT_TAG v0.0.11
+    GIT_TAG v0.0.13
     OPTIONS
         ${YTRACE_BUILD_TOOLS_OPT}
         "YTRACE_BUILD_EXAMPLES OFF"
@@ -47,6 +50,7 @@ CPMAddPackage(
         "YTRACE_ENABLE_YINFO ${YTRACE_ENABLE_YINFO}"
         "YTRACE_ENABLE_YWARN ${YTRACE_ENABLE_YWARN}"
         "YTRACE_ENABLE_YFUNC ${YTRACE_ENABLE_YFUNC}"
+        "YTRACE_ENABLE_YTEST ${YTRACE_ENABLE_YTEST}"
 )
 
 # Disable control socket on Emscripten (no filesystem/sockets)

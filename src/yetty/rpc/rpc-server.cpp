@@ -363,7 +363,7 @@ Result<RpcServer::Ptr> RpcServer::createImpl(const std::string& socketPath) noex
         yerror("RpcServer creation failed: {}", error_msg(res));
         return Err<Ptr>("RpcServer init failed", res);
     }
-    yinfo("RpcServer created successfully");
+    ytest("rpc-server-created", "RpcServer created successfully");
     return Ok(std::move(impl));
 }
 

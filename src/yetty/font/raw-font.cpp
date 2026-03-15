@@ -115,7 +115,7 @@ Result<RawFont::Ptr> RawFont::createImpl(const uint8_t* data, size_t size,
         yerror("RawFont creation failed: {}", error_msg(res));
         return Err<Ptr>("RawFont creation failed", res);
     }
-    yinfo("RawFont created successfully");
+    ytest("raw-font-created", "RawFont created successfully");
     return Ok(std::move(impl));
 }
 

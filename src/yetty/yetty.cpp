@@ -239,7 +239,7 @@ Result<Yetty::Ptr> Yetty::createImpl(ContextType&, int argc, char* argv[]) noexc
         yerror("Yetty creation failed: {}", error_msg(res));
         return Err<Ptr>("Failed to init Yetty", res);
     }
-    yinfo("Yetty created successfully");
+    ytest("yetty-created", "Yetty created successfully");
     return Ok(std::move(impl));
 }
 
@@ -275,7 +275,7 @@ Result<Yetty::Ptr> Yetty::createImpl(ContextType&, struct android_app* app) noex
         yerror("Yetty creation failed: {}", error_msg(res));
         return Err<Ptr>("Failed to init Yetty", res);
     }
-    yinfo("Yetty created successfully");
+    ytest("yetty-created", "Yetty created successfully");
     return Ok(std::move(impl));
 }
 #endif
@@ -942,7 +942,7 @@ Result<void> YettyImpl::initEmbeddedAssets() noexcept {
             bool exists = std::filesystem::exists(filePath);
             ydebug("initEmbeddedAssets:   {} -> exists={}", filePath.string(), exists);
             if (!exists) {
-                yinfo("Missing asset file: {} - will re-extract", name);
+                ytest("assets-file-missing", "Missing asset file: %s - will re-extract", name.c_str());
                 needsExtraction = true;
                 break;
             }
@@ -951,12 +951,12 @@ Result<void> YettyImpl::initEmbeddedAssets() noexcept {
 
     ydebug("initEmbeddedAssets: final needsExtraction = {}", needsExtraction);
     if (!needsExtraction) {
-        yinfo("Embedded assets already extracted to {}", cacheDir.string());
+        ytest("assets-already-extracted", "Embedded assets already extracted to %s", cacheDir.string().c_str());
         return Ok();
     }
 
     // Extract assets
-    yinfo("Extracting embedded assets to {}", cacheDir.string());
+    ytest("assets-extracting", "Extracting embedded assets to %s", cacheDir.string().c_str());
     if (auto res = assets->extractTo(cacheDir); !res) {
         return Err<void>("Failed to extract embedded assets", res);
     }

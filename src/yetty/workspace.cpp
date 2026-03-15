@@ -476,7 +476,7 @@ Result<Workspace::Ptr> Workspace::createImpl(ContextType&, const YettyContext &c
     yerror("Workspace creation failed: {}", error_msg(res));
     return Err<Ptr>("Failed to initialize Workspace", res);
   }
-  yinfo("Workspace created successfully");
+  ytest("workspace-created", "Workspace created successfully");
   return Ok(std::move(impl));
 }
 

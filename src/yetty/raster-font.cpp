@@ -558,7 +558,7 @@ Result<RasterFont::Ptr> RasterFont::createImpl(ContextType&,
         yerror("RasterFont creation failed: {}", error_msg(res));
         return Err<Ptr>("Failed to initialize RasterFont", res);
     }
-    yinfo("RasterFont created successfully");
+    ytest("raster-font-created", "RasterFont created successfully");
     return Ok(std::move(font));
 }
 

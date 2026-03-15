@@ -582,7 +582,7 @@ Config::createImpl(ContextType&, const std::string& configPath, const YAML::Node
         yerror("Config creation failed: {}", error_msg(res));
         return Err<Ptr>("Failed to initialize Config", res);
     }
-    yinfo("Config created successfully");
+    ytest("config-created", "Config created successfully");
     return Ok(std::move(impl));
 }
 

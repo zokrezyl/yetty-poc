@@ -203,7 +203,7 @@ Result<MsMsdfFont::Ptr> MsMsdfFont::createImpl(ContextType&,
         yerror("MsMsdfFont creation failed: {}", error_msg(res));
         return Err<Ptr>("Failed to initialize MsMsdfFont", res);
     }
-    yinfo("MsMsdfFont created successfully");
+    ytest("ms-msdf-font-created", "MsMsdfFont created successfully");
     return Ok(std::move(font));
 }
 
