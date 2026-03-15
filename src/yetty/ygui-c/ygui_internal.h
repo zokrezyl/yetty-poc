@@ -272,6 +272,22 @@ struct ygui_engine {
     /* Event subscriptions */
     int clicks_subscribed;
     int moves_subscribed;
+    int view_subscribed;
+
+    /* View state (from OSC 777779) */
+    float view_zoom;      /* Current zoom level (1.0 = 100%) */
+    float view_scroll_x;  /* Current scroll offset in canvas pixels */
+    float view_scroll_y;
+
+    /* Resize handling */
+    ygui_canvas_mode_t canvas_mode;
+    ygui_scale_mode_t scale_mode;
+    float reference_w;    /* Initial display size for scaling */
+    float reference_h;
+
+    /* Resize callback */
+    ygui_resize_callback_t resize_callback;
+    void* resize_userdata;
 };
 
 /*=============================================================================
@@ -322,7 +338,11 @@ void ygui_osc_update_card(const char* name, const uint8_t* data, uint32_t size);
 void ygui_osc_kill_card(const char* name);
 void ygui_osc_subscribe_clicks(int enable);
 void ygui_osc_subscribe_moves(int enable);
+void ygui_osc_subscribe_view_changes(int enable);
 void ygui_osc_query_cell_size(void);
+void ygui_osc_zoom_card(const char* name, float level);
+void ygui_osc_scroll_card(const char* name, float x, float y, int absolute);
+void ygui_osc_scroll_card_delta(const char* name, float dx, float dy);
 
 /* Error */
 void ygui_set_error(const char* msg);

@@ -89,6 +89,18 @@ typedef enum {
     YGUI_FLAG_VISIBLE  = 1 << 6,
 } ygui_flags_t;
 
+/* Canvas mode: how canvas size relates to display size */
+typedef enum {
+    YGUI_CANVAS_FIXED,  /* Canvas size stays constant */
+    YGUI_CANVAS_FIT     /* Canvas size = card pixel size (card_cells * cell_pixels) */
+} ygui_canvas_mode_t;
+
+/* Widget scale mode: how widgets respond to canvas size changes */
+typedef enum {
+    YGUI_SCALE_OFF,     /* Widgets keep positions/sizes (may clip) */
+    YGUI_SCALE_ON       /* Widgets scale proportionally with canvas */
+} ygui_scale_mode_t;
+
 /*=============================================================================
  * Event Structure (for legacy callback)
  *===========================================================================*/
@@ -122,6 +134,9 @@ typedef void (*ygui_click_callback_t)(ygui_widget_t* widget, void* userdata);
 typedef void (*ygui_change_callback_t)(ygui_widget_t* widget, float value, void* userdata);
 typedef void (*ygui_text_callback_t)(ygui_widget_t* widget, const char* text, void* userdata);
 typedef void (*ygui_check_callback_t)(ygui_widget_t* widget, int checked, void* userdata);
+
+/* Resize callback - called when terminal resizes and new cell size is received */
+typedef void (*ygui_resize_callback_t)(ygui_engine_t* engine, void* userdata);
 
 /*=============================================================================
  * Engine API
@@ -166,6 +181,24 @@ void ygui_engine_set_event_callback(ygui_engine_t* engine,
 /* State */
 int ygui_engine_is_dirty(const ygui_engine_t* engine);
 void ygui_engine_mark_dirty(ygui_engine_t* engine);
+
+/* Resize handling */
+void ygui_engine_set_canvas_mode(ygui_engine_t* engine, ygui_canvas_mode_t mode);
+void ygui_engine_set_scale_mode(ygui_engine_t* engine, ygui_scale_mode_t mode);
+void ygui_engine_on_resize(ygui_engine_t* engine, ygui_resize_callback_t callback, void* userdata);
+
+/* View state (read-only, updated from OSC 777779 events) */
+float ygui_engine_get_zoom(const ygui_engine_t* engine);
+float ygui_engine_get_scroll_x(const ygui_engine_t* engine);
+float ygui_engine_get_scroll_y(const ygui_engine_t* engine);
+
+/* Subscribe to view change events (zoom/scroll by user) */
+void ygui_engine_subscribe_view_changes(ygui_engine_t* engine, int enable);
+
+/* Control card view (app → yetty) */
+void ygui_engine_set_zoom(ygui_engine_t* engine, float level);
+void ygui_engine_scroll_to(ygui_engine_t* engine, float x, float y);
+void ygui_engine_scroll_by(ygui_engine_t* engine, float dx, float dy);
 
 /*=============================================================================
  * Widget Creation

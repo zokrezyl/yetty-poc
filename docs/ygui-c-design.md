@@ -88,20 +88,59 @@ This is required:
 1. **Before creating the card** - to calculate display dimensions
 2. **After terminal resize (SIGWINCH)** - cell pixel size may change
 
-### Resize Handling
+### Resize Handling (SIGWINCH)
 
-When the terminal resizes, the card keeps its cell dimensions but the pixel size changes. Two modes:
+**One engine per app**: A terminal app reads stdin exclusively, so only one ygui-c engine runs at a time. A single static SIGWINCH flag is sufficient.
 
-1. **Fixed pixel mode**: Widgets keep their canvas positions/sizes. Content may clip or have empty space.
-2. **Scaled mode**: Widgets scale proportionally relative to the initial (reference) size.
+When the terminal resizes (SIGWINCH), ygui-c re-queries cell size (CSI 16 t) and adjusts based on **two orthogonal flags**:
+
+#### Canvas Mode
+- **`YGUI_CANVAS_FIXED`**: Canvas size stays constant. Zoom/scroll changes viewport only (ydraw card handles it).
+- **`YGUI_CANVAS_FIT`**: Canvas size always matches card pixel size (card_cells × cell_pixels).
+
+#### Widget Mode
+- **`YGUI_SCALE_OFF`**: Widgets keep their canvas positions/sizes. May clip if canvas shrinks.
+- **`YGUI_SCALE_ON`**: Widgets scale/re-layout proportionally when canvas changes.
+
+#### Combinations
+
+| Canvas | Widgets | Behavior |
+|--------|---------|----------|
+| FIXED | OFF | Canvas constant, viewport changes on zoom. Widgets unchanged. |
+| FIXED | ON | N/A (canvas doesn't change, nothing to scale) |
+| FIT | OFF | Canvas = card pixels. Widgets keep sizes, may clip. |
+| FIT | ON | Canvas = card pixels. Widgets re-layout to fit. |
 
 ```c
-// On resize, query new cell size
-// reference_w, reference_h = initial display size
+typedef enum {
+    YGUI_CANVAS_FIXED,  // Canvas size stays constant
+    YGUI_CANVAS_FIT     // Canvas size = card pixel size
+} ygui_canvas_mode_t;
+
+typedef enum {
+    YGUI_SCALE_OFF,     // Widgets keep positions/sizes
+    YGUI_SCALE_ON       // Widgets scale with canvas
+} ygui_scale_mode_t;
+
+void ygui_engine_set_canvas_mode(ygui_engine_t* e, ygui_canvas_mode_t mode);
+void ygui_engine_set_scale_mode(ygui_engine_t* e, ygui_scale_mode_t mode);
+```
+
+On resize with `YGUI_CANVAS_FIT` + `YGUI_SCALE_ON`:
+```c
+// reference_w, reference_h = initial display size (stored at startup)
+float new_display_w = card_w_cells * cell_width;
+float new_display_h = card_h_cells * cell_height;
 float scale_x = new_display_w / reference_w;
 float scale_y = new_display_h / reference_h;
 
-// In scaled mode, widget positions/sizes multiply by scale
+// Scale all widget positions/sizes
+for (widget = first_widget; widget; widget = widget->next) {
+    widget->x *= scale_x;
+    widget->y *= scale_y;
+    widget->w *= scale_x;
+    widget->h *= scale_y;
+}
 ```
 
 ## Why Pure C API
@@ -133,7 +172,7 @@ float scale_y = new_display_h / reference_h;
 │  │  - CSI 6;H;Wt  → cell size response                 │    │
 │  │  - OSC 777777  → mouse click (display coords)       │    │
 │  │  - OSC 777778  → mouse move  (display coords)       │    │
-│  │  - OSC 777779  → view change (zoom/scroll) [TODO]   │    │
+│  │  - OSC 777779  → view change (zoom/scroll)           │    │
 │  │  - Keypresses  → keyboard → user callback           │    │
 │  └─────────────────────────────────────────────────────┘    │
 │  ┌─────────────────────────────────────────────────────┐    │
@@ -164,7 +203,7 @@ float scale_y = new_display_h / reference_h;
 │  - Renders visible portion (viewport) of canvas             │
 │  - GPU-side zoom/scroll (no buffer regeneration)            │
 │  - Sends mouse events with display coordinates              │
-│  - Sends view change events on zoom/scroll [TODO]           │
+│  - Sends view change events on user zoom/scroll             │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -270,7 +309,7 @@ The library parses all of this:
 stdin bytes → parser → ┬→ CSI 6;H;Wt → cell size   → store for coord transform
                        ├→ OSC 777777 → mouse click → transform → hit test → callback
                        ├→ OSC 777778 → mouse move  → transform → hit test → callback
-                       ├→ OSC 777779 → view change → update zoom/scroll state [TODO]
+                       ├→ OSC 777779 → view change → update zoom/scroll state
                        ├→ 'q'        → key event   → user key callback
                        ├→ ESC [ A    → arrow up    → user key callback
                        └→ etc.
@@ -563,6 +602,17 @@ src/ygui-bindings/
 \033]666666;run -c ydraw -x X -y Y -w W -h H --name NAME;;BASE64\033\\
 \033]666666;update --name NAME;;BASE64\033\\
 \033]666666;kill --name NAME\033\\
+
+# Zoom command
+\033]666666;zoom --name NAME --level 1.5\033\\
+  --level  Zoom factor (1.0 = 100%, 2.0 = 200%)
+
+# Scroll command
+\033]666666;scroll --name NAME -x 100 -y 200\033\\       (absolute)
+\033]666666;scroll --name NAME --dx 50 --dy -30\033\\    (relative)
+\033]666666;scroll --name NAME -x 100 --dy -30\033\\     (combined)
+  -x/-y    Absolute position in canvas pixels
+  --dx/--dy  Relative delta from current position
 ```
 
 ### Mouse Events (yetty → app via stdin)
@@ -575,12 +625,16 @@ Button bitmask: bit0=left(1), bit1=right(2), bit2=middle(4), bit3=scroll-up(8), 
 
 Coordinates x,y are in display pixels (card surface). Transform to canvas coords using current zoom/scroll.
 
-### View Change Events (yetty → app via stdin) [TODO]
+### View Change Events (yetty → app via stdin)
 ```
 \033]777779;card-name;zoom;scroll-x;scroll-y\033\\   (view changed)
 ```
 
-When user zooms (Ctrl+scroll) or scrolls within a card, yetty notifies the app so it can:
+Sent when the **user** interacts with the card (Ctrl+scroll to zoom, scroll to pan). Not sent as acknowledgment for app-initiated zoom/scroll commands.
+
+Requires subscription: `\033[?1502h` (DEC mode 1502)
+
+The app uses this to:
 - Update coordinate transformation for hit testing
 - Adjust widget behavior based on visible area
 - Implement lazy loading for large canvases

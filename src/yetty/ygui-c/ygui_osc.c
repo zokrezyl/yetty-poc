@@ -116,3 +116,38 @@ void ygui_osc_query_cell_size(void) {
     /* CSI 16 t - request cell size in pixels */
     write_osc("\033[16t", 5);
 }
+
+void ygui_osc_subscribe_view_changes(int enable) {
+    /* DEC mode 1502 - subscribe to card view change events */
+    if (enable) {
+        write_osc("\033[?1502h", 8);
+    } else {
+        write_osc("\033[?1502l", 8);
+    }
+}
+
+void ygui_osc_zoom_card(const char* name, float level) {
+    char buf[256];
+    int len = snprintf(buf, sizeof(buf),
+        "\033]" VENDOR_ID ";zoom --name %s --level %.2f\033\\", name, level);
+    write_osc(buf, len);
+}
+
+void ygui_osc_scroll_card(const char* name, float x, float y, int absolute) {
+    char buf[256];
+    int len;
+    if (absolute) {
+        /* Absolute scroll position: -x/-y */
+        len = snprintf(buf, sizeof(buf),
+            "\033]" VENDOR_ID ";scroll --name %s -x %.0f -y %.0f\033\\", name, x, y);
+    } else {
+        /* Relative scroll delta: --dx/--dy */
+        len = snprintf(buf, sizeof(buf),
+            "\033]" VENDOR_ID ";scroll --name %s --dx %.0f --dy %.0f\033\\", name, x, y);
+    }
+    write_osc(buf, len);
+}
+
+void ygui_osc_scroll_card_delta(const char* name, float dx, float dy) {
+    ygui_osc_scroll_card(name, dx, dy, 0);
+}
