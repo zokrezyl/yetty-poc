@@ -58,8 +58,8 @@
   ytrace = fetchFromGitHub {
     owner = "zokrezyl";
     repo = "ytrace";
-    rev = "da73e1fba172c61d204debd84f30f4703c6f3d19";
-    hash = "sha256-ObO0vr4MLCyUvRJdvhZ7a8xCxdrA5JpjhrnQfF2VIiI=";
+    rev = "v0.0.13";
+    hash = "sha256-dwxBSBhfyuvDI+u7DJos/XkAjY3DOD+PlU++Lv7guqA=";
   };
 
   msgpack-cxx = fetchFromGitHub {

@@ -13,7 +13,7 @@ glm|github|g-truc/glm|1.0.1
 stb|github|nothings/stb|f75e8d1cad7d90d72ef7a4661f1b994ef78b4e31
 yaml-cpp|github|jbeder/yaml-cpp|0.8.0
 spdlog|github|gabime/spdlog|v1.16.0
-ytrace|github|zokrezyl/ytrace|da73e1fba172c61d204debd84f30f4703c6f3d19
+ytrace|github|zokrezyl/ytrace|v0.0.13
 msgpack-cxx|github|msgpack/msgpack-c|cpp-7.0.0
 zlib|github|madler/zlib|v1.3.1
 libpng|github|pnggroup/libpng|v1.6.43

@@ -30,10 +30,11 @@ CPMAddPackage(
 CPMAddPackage(
     NAME ytrace
     GITHUB_REPOSITORY zokrezyl/ytrace
-    GIT_TAG da73e1fba172c61d204debd84f30f4703c6f3d19
+    GIT_TAG v0.0.13
     OPTIONS
         "YTRACE_BUILD_TOOLS OFF"
         "YTRACE_BUILD_EXAMPLES OFF"
+        "YTRACE_ENABLE_YTEST ON"
 )
 
 # args for command line parsing
