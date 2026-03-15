@@ -92,7 +92,7 @@ add_custom_command(TARGET yetty PRE_LINK
 
 # Remove stamp file that can cause issues with Emscripten file packaging
 add_custom_command(TARGET yetty PRE_LINK
-    COMMAND ${CMAKE_COMMAND} -E rm -f ${CMAKE_BINARY_DIR}/assets/fonts-cdb/.cdb_generated
+    COMMAND ${CMAKE_COMMAND} -E rm -f ${CMAKE_BINARY_DIR}/assets/msdf-fonts/.cdb_generated
     COMMENT "Removing CDB stamp file before linking"
 )
 

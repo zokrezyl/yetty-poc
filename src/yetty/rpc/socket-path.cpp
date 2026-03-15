@@ -16,29 +16,17 @@
 namespace yetty {
 namespace rpc {
 
-Result<std::string> createSocketPath() {
+Result<std::string> createSocketPath(const std::string& runtimeDir) {
 #ifdef _WIN32
     // Windows: use named pipes (\\.\pipe\name format required by libuv)
+    // The runtimeDir parameter is ignored on Windows
+    (void)runtimeDir;
     std::string path = "\\\\.\\pipe\\yetty-" + std::to_string(_getpid());
     return Ok(path);
 #else
-    // Determine base directory: $XDG_RUNTIME_DIR or fallback
-    std::string baseDir;
-    if (auto* xdg = std::getenv("XDG_RUNTIME_DIR")) {
-        baseDir = xdg;
-    } else if (auto* tmpdir = std::getenv("TMPDIR")) {
-        // macOS: TMPDIR is per-user, set by launchd (e.g. /var/folders/.../T/)
-        baseDir = tmpdir;
-        if (!baseDir.empty() && baseDir.back() == '/') {
-            baseDir.pop_back();
-        }
-    } else {
-        // Fallback: /tmp/yetty-<uid>
-        baseDir = "/tmp/yetty-" + std::to_string(getuid());
-    }
-
-    // Create yetty subdirectory: <baseDir>/yetty/
-    std::string dir = baseDir + "/yetty";
+    // Use the runtime directory provided by Platform
+    // Create yetty subdirectory: <runtimeDir>/yetty/
+    std::string dir = runtimeDir + "/yetty";
     mkdir(dir.c_str(), 0700); // ok if already exists
 
     // Socket file: yetty-<pid>.sock

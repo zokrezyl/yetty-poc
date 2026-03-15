@@ -34,6 +34,10 @@ CPMAddPackage(
         "CURL_ZLIB OFF"
 )
 
+# Restore ZLIB settings for other packages (e.g., libpng)
+unset(CMAKE_DISABLE_FIND_PACKAGE_ZLIB CACHE)
+unset(ZLIB_FOUND CACHE)
+
 set(TS_GRAMMAR_NAMES
     c cpp python javascript typescript rust go java bash json yaml toml html xml
 )

@@ -35,7 +35,8 @@ public:
 // Creates its own dedicated device with high buffer size limits
 class GpuMsdfCdbProvider : public MsdfCdbProvider {
 public:
-    explicit GpuMsdfCdbProvider(WGPUInstance instance);
+    // shadersDir: Path to WGSL shader files (from Platform::getShadersDir())
+    GpuMsdfCdbProvider(WGPUInstance instance, const std::string& shadersDir);
 
     std::string name() const override { return "gpu"; }
     Result<void> generate(const MsdfCdbConfig& config) override;
@@ -45,6 +46,7 @@ private:
     void releaseDevice();
 
     WGPUInstance _instance;
+    std::string _shadersDir;
     WGPUAdapter _adapter = nullptr;
     WGPUDevice _device = nullptr;
 };

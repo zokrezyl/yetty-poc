@@ -30,10 +30,16 @@ public:
     virtual ~FontManager() = default;
 
     // Factory - creates FontManagerImpl
+    // msdfFontsDir: Directory for MSDF font CDB files (from Platform::getMsdfFontsDir())
+    // fontsDir: Directory for TTF font files (from Platform::getFontsDir())
+    // shadersDir: Directory for WGSL shader files (from Platform::getShadersDir())
     static Result<Ptr> createImpl(ContextType& ctx,
                                   const GPUContext& gpu,
                                   GpuAllocator::Ptr allocator,
                                   ShaderManager::Ptr shaderMgr,
+                                  const std::string& msdfFontsDir,
+                                  const std::string& fontsDir,
+                                  const std::string& shadersDir,
                                   MsdfCdbProvider::Ptr cdbProvider = nullptr) noexcept;
 
     virtual Result<MsMsdfFont::Ptr> getMsMsdfFont(const std::string& fontName) noexcept = 0;

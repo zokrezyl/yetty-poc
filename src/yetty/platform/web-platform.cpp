@@ -324,6 +324,27 @@ public:
         return Ok(std::static_pointer_cast<PTYProvider>(std::make_shared<WebPTY>()));
     }
 
+    std::string getShadersDir() const override {
+        // Web: Preloaded via --preload-file to /assets/shaders
+        return "/assets/shaders";
+    }
+
+    std::string getMsdfFontsDir() const override {
+        // Web: Preloaded via --preload-file to /assets/msdf-fonts
+        return "/assets/msdf-fonts";
+    }
+
+    std::string getFontsDir() const override {
+        // Web: TTF fonts preloaded to /assets
+        return "/assets";
+    }
+
+    std::string getRuntimeDir() const override {
+        // Web: Not applicable - no Unix sockets in browser
+        // Return empty string; RPC is disabled for web builds
+        return "";
+    }
+
 private:
     static void mainLoopTrampoline(void* userData) {
         auto* self = static_cast<WebPlatform*>(userData);

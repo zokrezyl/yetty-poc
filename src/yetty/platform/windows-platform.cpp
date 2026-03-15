@@ -257,7 +257,22 @@ private:
 
 class GlfwPlatform : public Platform {
 public:
-    GlfwPlatform() : _startTime(std::chrono::steady_clock::now()) {}
+    GlfwPlatform() : _startTime(std::chrono::steady_clock::now()) {
+        // Initialize cache base directory once at construction
+        // Windows: %LOCALAPPDATA%\yetty\cache or %APPDATA%\yetty\cache
+        const char* localAppData = std::getenv("LOCALAPPDATA");
+        if (localAppData && localAppData[0]) {
+            _cacheBase = std::string(localAppData) + "\\yetty\\cache";
+        } else {
+            const char* appData = std::getenv("APPDATA");
+            if (appData && appData[0]) {
+                _cacheBase = std::string(appData) + "\\yetty\\cache";
+            } else {
+                const char* temp = std::getenv("TEMP");
+                _cacheBase = std::string(temp ? temp : "C:\\Temp") + "\\yetty-cache";
+            }
+        }
+    }
     ~GlfwPlatform() override {
         destroyWindow();
         if (_initialized) {
@@ -465,7 +480,26 @@ public:
         return Ok(std::static_pointer_cast<PTYProvider>(std::make_shared<ConPTY>()));
     }
 
+    std::string getShadersDir() const override {
+        return _cacheBase + "\\shaders";
+    }
+
+    std::string getMsdfFontsDir() const override {
+        return _cacheBase + "\\msdf-fonts";
+    }
+
+    std::string getFontsDir() const override {
+        return _cacheBase + "\\fonts";
+    }
+
+    std::string getRuntimeDir() const override {
+        // Windows uses named pipes, not Unix sockets
+        // Return pipe namespace prefix for consistency
+        return "\\\\.\\pipe";
+    }
+
 private:
+    std::string _cacheBase;  // Initialized once in constructor
     // Static callback trampolines
     static void keyCallbackStatic(GLFWwindow* window, int key, int scancode, int action, int mods) {
         auto* self = static_cast<GlfwPlatform*>(glfwGetWindowUserPointer(window));

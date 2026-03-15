@@ -32,8 +32,8 @@ extern "C" {
 #include "yetty_fonts_manifest.h"
 #endif
 
-#ifdef HAS_FONTS_CDB_MANIFEST
-#include "yetty_fonts-cdb_manifest.h"  // Note: file has hyphen, but function uses underscore
+#ifdef HAS_MSDF_FONTS_MANIFEST
+#include "yetty_msdf-fonts_manifest.h"
 #endif
 
 namespace yetty {
@@ -68,8 +68,8 @@ public:
 #endif
 
         // Register MSDF CDB font databases from generated manifest
-#ifdef HAS_FONTS_CDB_MANIFEST
-        register_fonts_cdb_assets([this](const char* name, const uint8_t* data, size_t size, bool compressed) {
+#ifdef HAS_MSDF_FONTS_MANIFEST
+        register_msdf_fonts_assets([this](const char* name, const uint8_t* data, size_t size, bool compressed) {
             registerAsset(name, data, size, compressed);
         });
         yinfo("Registered MSDF CDB font assets from manifest");
@@ -110,10 +110,12 @@ public:
     Result<void> extractTo(const std::filesystem::path& dir) const override {
         namespace fs = std::filesystem;
 
+        ydebug("extractTo: starting extraction to {}", dir.string());
         yinfo("Extracting {} embedded assets to {}", _assets.size(), dir.string());
 
         for (const auto& [name, entry] : _assets) {
             auto path = dir / name;
+            ydebug("extractTo: extracting '{}' -> '{}'", name, path.string());
 
             // Create parent directories
             auto parentDir = path.parent_path();
@@ -230,7 +232,12 @@ std::filesystem::path IncbinAssets::getExtractionMarker(const std::filesystem::p
 
 bool IncbinAssets::needsExtraction(const std::filesystem::path& cacheDir) {
     auto marker = getExtractionMarker(cacheDir);
-    if (!std::filesystem::exists(marker)) {
+    ydebug("needsExtraction: marker path = {}", marker.string());
+
+    bool markerExists = std::filesystem::exists(marker);
+    ydebug("needsExtraction: marker exists = {}", markerExists);
+    if (!markerExists) {
+        ydebug("needsExtraction: returning true (marker not found)");
         return true;
     }
 
@@ -238,7 +245,11 @@ bool IncbinAssets::needsExtraction(const std::filesystem::path& cacheDir) {
     std::ifstream file(marker);
     std::string version;
     std::getline(file, version);
-    return version != YETTY_BUILD_VERSION;
+    ydebug("needsExtraction: marker version = '{}', build version = '{}'", version, YETTY_BUILD_VERSION);
+
+    bool versionMismatch = (version != YETTY_BUILD_VERSION);
+    ydebug("needsExtraction: returning {} (version mismatch={})", versionMismatch, versionMismatch);
+    return versionMismatch;
 }
 
 // Singleton factory

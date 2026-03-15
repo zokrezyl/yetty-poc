@@ -15,8 +15,6 @@
 #include <atomic>
 #include <cstdlib>
 
-#include <yetty/shader-path.h>
-
 namespace yetty {
 
 // Stub shader preamble for validating individual effect files
@@ -266,7 +264,8 @@ public:
     ShaderManagerImpl() = default;
     ~ShaderManagerImpl() override;
 
-    Result<void> init(const GPUContext& gpu, GpuAllocator::Ptr allocator) noexcept;
+    Result<void> init(const GPUContext& gpu, GpuAllocator::Ptr allocator,
+                      const std::string& shadersDir) noexcept;
 
     void addProvider(std::shared_ptr<ShaderProvider> provider, const std::string& dispatchName) override;
     void addLibrary(const std::string& name, const std::string& code) override;
@@ -288,6 +287,7 @@ private:
 
     GPUContext _gpu = {};
     GpuAllocator::Ptr _allocator;
+    std::string _shadersDir;  // Path to WGSL shader files
     std::string _baseShader;
     struct ProviderEntry {
         std::shared_ptr<ShaderProvider> provider;
@@ -319,9 +319,10 @@ private:
 };
 
 // Factory implementation
-Result<ShaderManager::Ptr> ShaderManager::createImpl(ContextType&, const GPUContext& gpu, GpuAllocator::Ptr allocator) noexcept {
+Result<ShaderManager::Ptr> ShaderManager::createImpl(ContextType&, const GPUContext& gpu, GpuAllocator::Ptr allocator,
+                                                      const std::string& shadersDir) noexcept {
     auto impl = Ptr(new ShaderManagerImpl());
-    if (auto res = static_cast<ShaderManagerImpl*>(impl.get())->init(gpu, std::move(allocator)); !res) {
+    if (auto res = static_cast<ShaderManagerImpl*>(impl.get())->init(gpu, std::move(allocator), shadersDir); !res) {
         yerror("ShaderManager creation failed: {}", error_msg(res));
         return Err<Ptr>("ShaderManager init failed", res);
     }
@@ -352,7 +353,8 @@ ShaderManagerImpl::~ShaderManagerImpl() {
     }
 }
 
-Result<void> ShaderManagerImpl::init(const GPUContext& gpu, GpuAllocator::Ptr allocator) noexcept {
+Result<void> ShaderManagerImpl::init(const GPUContext& gpu, GpuAllocator::Ptr allocator,
+                                      const std::string& shadersDir) noexcept {
     if (_initialized) {
         return Ok();
     }
@@ -363,17 +365,17 @@ Result<void> ShaderManagerImpl::init(const GPUContext& gpu, GpuAllocator::Ptr al
 
     _gpu = gpu;
     _allocator = std::move(allocator);
+    _shadersDir = shadersDir;
 
     // Load base shader
-    std::string shadersDir = getShadersDir();
-    std::string shaderPath = shadersDir + "/gpu-screen.wgsl";
-    ydebug("ShaderManager: loading shaders from {}", shadersDir);
+    std::string shaderPath = _shadersDir + "/gpu-screen.wgsl";
+    ydebug("ShaderManager: loading shaders from {}", _shadersDir);
     if (auto res = loadBaseShader(shaderPath); !res) {
         return res;
     }
 
     // Load all shader libraries from lib directory
-    std::string libDir = shadersDir + "/lib";
+    std::string libDir = _shadersDir + "/lib";
     if (std::filesystem::exists(libDir) && std::filesystem::is_directory(libDir)) {
         for (const auto& entry : std::filesystem::directory_iterator(libDir)) {
             if (entry.is_regular_file() && entry.path().extension() == ".wgsl") {
@@ -491,10 +493,9 @@ Result<void> ShaderManagerImpl::init(const GPUContext& gpu, GpuAllocator::Ptr al
         });
     };
 
-    std::string sd = getShadersDir();
-    std::string preEffectsDir = sd + "/pre-effects";
-    std::string effectsDir = sd + "/effects";
-    std::string postEffectsDir = sd + "/post-effects";
+    std::string preEffectsDir = _shadersDir + "/pre-effects";
+    std::string effectsDir = _shadersDir + "/effects";
+    std::string postEffectsDir = _shadersDir + "/post-effects";
     loadEffects(preEffectsDir, _preEffects, "pre");
     loadEffects(effectsDir, _effects, "");  // no prefix for coord effects
     loadEffects(postEffectsDir, _postEffects, "post");

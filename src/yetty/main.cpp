@@ -226,6 +226,13 @@ static int32_t handleInputEvent(android_app* app, AInputEvent* event) {
 }
 
 extern "C" void android_main(struct android_app* app) {
+    // Get app data directory early - needed for HOME env var
+    const char* dataDir = app->activity->internalDataPath;
+
+    // Set HOME to app's data directory (ytrace uses HOME for config/socket paths)
+    // Must be set BEFORE any ytrace macro is called
+    setenv("HOME", dataDir, 1);
+
     // Enable ytrace logging by default on Android
     setenv("YTRACE_DEFAULT_ON", "yes", 1);
 
@@ -238,11 +245,10 @@ extern "C" void android_main(struct android_app* app) {
 
     __android_log_print(ANDROID_LOG_INFO, "yetty", "Yetty Android starting...");
 
-    // Get app data directory
-    const char* dataDir = app->activity->internalDataPath;
+    // dataDir was already set at the top of android_main for HOME env var
     AAssetManager* assetMgr = app->activity->assetManager;
 
-    // Extract toybox
+    // Extract toybox binary (from APK assets - not embedded via incbin)
     std::string toyboxPath = std::string(dataDir) + "/toybox";
     if (access(toyboxPath.c_str(), X_OK) != 0) {
         if (assetMgr) {
@@ -250,37 +256,12 @@ extern "C" void android_main(struct android_app* app) {
         }
     }
 
-    // Extract shaders directory and all subdirectories
-    std::string shadersDir = std::string(dataDir) + "/shaders";
-    if (assetMgr) {
-        extractAssetDir(assetMgr, "shaders", shadersDir.c_str());
-        // Extract all shader subdirectories
-        extractAssetDir(assetMgr, "shaders/lib", (shadersDir + "/lib").c_str());
-        extractAssetDir(assetMgr, "shaders/cards", (shadersDir + "/cards").c_str());
-        extractAssetDir(assetMgr, "shaders/glyphs", (shadersDir + "/glyphs").c_str());
-        extractAssetDir(assetMgr, "shaders/effects", (shadersDir + "/effects").c_str());
-        extractAssetDir(assetMgr, "shaders/pre-effects", (shadersDir + "/pre-effects").c_str());
-        extractAssetDir(assetMgr, "shaders/post-effects", (shadersDir + "/post-effects").c_str());
-    }
-
-    // Extract fonts-cdb directory
-    std::string fontsCdbDir = std::string(dataDir) + "/fonts-cdb";
-    if (assetMgr) {
-        extractAssetDir(assetMgr, "fonts-cdb", fontsCdbDir.c_str());
-    }
-
-    // Extract font TTF file
-    std::string fontPath = std::string(dataDir) + "/DejaVuSansMNerdFontMono-Regular.ttf";
-    if (access(fontPath.c_str(), R_OK) != 0 && assetMgr) {
-        extractAsset(assetMgr, "DejaVuSansMNerdFontMono-Regular.ttf", fontPath.c_str());
-    }
-
-    // Extract demo content (scripts, files, etc.)
+    // Shaders, fonts, CDB files are embedded via incbin and extracted by initEmbeddedAssets()
+    // Only demo content needs APK extraction (not embedded in binary)
     if (assetMgr) {
         // Scripts directory (demo.sh, etc.)
         std::string scriptsDir = std::string(dataDir) + "/scripts";
         extractAssetDir(assetMgr, "scripts", scriptsDir.c_str());
-        // Subdirectories
         extractAssetDir(assetMgr, "scripts/cards", (scriptsDir + "/cards").c_str());
         extractAssetDir(assetMgr, "scripts/gpu-screen-ydraw", (scriptsDir + "/gpu-screen-ydraw").c_str());
 
@@ -299,7 +280,6 @@ extern "C" void android_main(struct android_app* app) {
         extractAssetDir(assetMgr, "presentation/video-1", (presentDir + "/video-1").c_str());
 
         // Demo outputs (pre-generated .out files from demo scripts)
-        // All known subdirectories from demo/scripts/
         std::vector<std::string> demoSubdirs = {
             "cards", "cards/mermaid", "cards/plot", "cards/thorvg", "cards/ydraw",
             "cards/ygrid", "cards/ygui", "cards/yhtml", "cards/yplot",
@@ -311,11 +291,8 @@ extern "C" void android_main(struct android_app* app) {
         __android_log_print(ANDROID_LOG_INFO, "yetty", "Demo content extracted to: %s", dataDir);
     }
 
-    // Set environment variables for yetty to find assets
-    setenv("YETTY_SHADERS_DIR", shadersDir.c_str(), 1);
-    setenv("YETTY_ASSETS_DIR", dataDir, 1);
-    __android_log_print(ANDROID_LOG_INFO, "yetty", "YETTY_SHADERS_DIR=%s", shadersDir.c_str());
-    __android_log_print(ANDROID_LOG_INFO, "yetty", "YETTY_ASSETS_DIR=%s", dataDir);
+    // No env vars needed - Platform provides all directory paths directly
+    __android_log_print(ANDROID_LOG_INFO, "yetty", "Data dir: %s", dataDir);
 
     // Check for VNC mode via system property (set with: adb shell setprop debug.yetty.vnc.headless 1)
     // Use debug.* namespace which shell has permission to write (SELinux allows it)

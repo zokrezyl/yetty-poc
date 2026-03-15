@@ -15,8 +15,6 @@
 #include <fstream>
 #include <sstream>
 
-#include <yetty/shader-path.h>
-
 namespace yetty {
 
 // GPU uniform buffer layout — must match OverlayUniforms in shader
@@ -131,7 +129,7 @@ Result<void> ScreenDrawLayerImpl::init() noexcept {
 }
 
 Result<void> ScreenDrawLayerImpl::buildShaderSource(std::string& source) {
-    std::string shaderDir = yetty::getShadersDir();
+    std::string shaderDir = _ctx.platform->getShadersDir();
 
     // Read overlay shader (reuse ygui-overlay shader)
     std::string overlayPath = shaderDir + "/ygui-overlay.wgsl";
