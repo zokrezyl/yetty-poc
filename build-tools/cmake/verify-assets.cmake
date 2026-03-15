@@ -45,11 +45,11 @@ check_file("assets/DejaVuSansMNerdFontMono-Oblique.ttf" "Oblique font")
 check_file("assets/DejaVuSansMNerdFontMono-BoldOblique.ttf" "Bold Oblique font")
 
 # Font CDB files
-check_dir("assets/fonts-cdb" "Font CDB directory")
-check_file("assets/fonts-cdb/DejaVuSansMNerdFontMono-Regular.cdb" "Regular font CDB")
-check_file("assets/fonts-cdb/DejaVuSansMNerdFontMono-Bold.cdb" "Bold font CDB")
-check_file("assets/fonts-cdb/DejaVuSansMNerdFontMono-Oblique.cdb" "Oblique font CDB")
-check_file("assets/fonts-cdb/DejaVuSansMNerdFontMono-BoldOblique.cdb" "Bold Oblique font CDB")
+check_dir("assets/msdf-fonts" "Font CDB directory")
+check_file("assets/msdf-fonts/DejaVuSansMNerdFontMono-Regular.cdb" "Regular font CDB")
+check_file("assets/msdf-fonts/DejaVuSansMNerdFontMono-Bold.cdb" "Bold font CDB")
+check_file("assets/msdf-fonts/DejaVuSansMNerdFontMono-Oblique.cdb" "Oblique font CDB")
+check_file("assets/msdf-fonts/DejaVuSansMNerdFontMono-BoldOblique.cdb" "Bold Oblique font CDB")
 
 # Shader directory structure
 check_dir("assets/shaders" "Shaders directory")
@@ -152,9 +152,9 @@ if(TARGET_TYPE STREQUAL "android")
         endforeach()
 
         # Check for font CDB in APK
-        string(FIND "${APK_CONTENTS}" "assets/fonts-cdb/DejaVuSansMNerdFontMono-Regular.cdb" FOUND_POS)
+        string(FIND "${APK_CONTENTS}" "assets/msdf-fonts/DejaVuSansMNerdFontMono-Regular.cdb" FOUND_POS)
         if(FOUND_POS EQUAL -1)
-            list(APPEND APK_MISSING "assets/fonts-cdb/DejaVuSansMNerdFontMono-Regular.cdb")
+            list(APPEND APK_MISSING "assets/msdf-fonts/DejaVuSansMNerdFontMono-Regular.cdb")
         endif()
 
         list(LENGTH APK_MISSING APK_MISSING_COUNT)

@@ -38,26 +38,12 @@ add_library(yetty SHARED
 
 target_include_directories(yetty PRIVATE ${YETTY_INCLUDES} ${YETTY_RENDERER_INCLUDES} ${JPEG_INCLUDE_DIRS} ${BROTLI_INCLUDE_DIR})
 
-# Embed resources (logo)
-incbin_add_resources(yetty
-    Logo "${YETTY_ROOT}/docs/logo.jpeg"
-)
+# Embed all assets (logo, shaders, fonts, CDB files)
+yetty_embed_assets(yetty)
 
-# Embed shaders (Android also uses APK assets, but incbin provides fallback)
-incbin_add_directory(yetty "shaders" "${YETTY_ROOT}/src/yetty/shaders" "*.wgsl")
-
-# Embed fonts (brotli compressed, Android also uses APK assets but incbin provides fallback)
-incbin_add_directory(yetty "fonts" "${YETTY_ROOT}/assets" "*.ttf" TRUE)
-
-# Embed MSDF CDB font databases (brotli compressed)
-if(EXISTS "${YETTY_ROOT}/assets/fonts-cdb")
-    incbin_add_directory(yetty "fonts-cdb" "${YETTY_ROOT}/assets/fonts-cdb" "*.cdb" TRUE)
-else()
-    message(WARNING "No prebuilt CDB fonts found. Run 'make prepare-assets' first for embedded fonts.")
-endif()
-
-# Make manifest available to incbin-assets.cpp
-target_include_directories(yetty PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+# Dummy targets for dependency tracking (legacy)
+add_custom_target(copy-shaders-for-incbin)
+add_custom_target(copy-fonts-for-incbin)
 
 target_compile_definitions(yetty PRIVATE
     ${YETTY_DEFINITIONS}
@@ -105,12 +91,12 @@ file(GLOB ASSET_FILES "${YETTY_ROOT}/assets/*")
 file(COPY ${ASSET_FILES} DESTINATION ${ANDROID_ASSETS_DIR})
 
 # Ensure CDB, shaders, and assets are built before yetty
-add_dependencies(yetty generate-cdb copy-shaders)
+add_dependencies(yetty generate-cdb copy-shaders copy-shaders-for-incbin copy-fonts-for-incbin)
 
 # Copy generated CDB fonts to Android assets dir after build
 # (shaders are already copied at configure time in shaders/CMakeLists.txt)
 add_custom_command(TARGET yetty POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_BINARY_DIR}/assets/fonts-cdb ${ANDROID_ASSETS_DIR}/fonts-cdb
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_BINARY_DIR}/assets/msdf-fonts ${ANDROID_ASSETS_DIR}/msdf-fonts
     COMMENT "Copying CDB fonts to Android assets"
 )
 

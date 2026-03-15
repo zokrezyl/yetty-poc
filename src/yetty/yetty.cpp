@@ -300,12 +300,6 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     _yettyContext.config = *configResult;
     ydebug("init: Config created");
 
-    // Extract embedded assets if needed (first run or version upgrade)
-    ydebug("init: initEmbeddedAssets");
-    if (auto res = initEmbeddedAssets(); !res) {
-        ywarn("init: initEmbeddedAssets failed (continuing with fallback): {}", res.error().message());
-    }
-
     // Set shell/command from -c/-e flag if specified
     if (!_executeCommand.empty()) {
         _yettyContext.config->setString("shell/command", _executeCommand);
@@ -327,14 +321,21 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
 
     ydebug("init: initWindow");
     if (auto res = initWindow(); !res) { ydebug("init: initWindow FAILED"); return res; }
+
+    // Extract embedded assets if needed (first run or version upgrade)
+    ydebug("init: initEmbeddedAssets");
+    if (auto res = initEmbeddedAssets(); !res) {
+        ywarn("init: initEmbeddedAssets failed (continuing with fallback): {}", res.error().message());
+    }
+
     ydebug("init: initWebGPU");
     if (auto res = initWebGPU(); !res) { ydebug("init: initWebGPU FAILED"); return res; }
     ydebug("init: initSharedResources");
     if (auto res = initSharedResources(); !res) { ydebug("init: initSharedResources FAILED"); return res; }
 
-    // Create ShaderManager with GPUContext and allocator
+    // Create ShaderManager with GPUContext, allocator, and shaders directory from Platform
     ydebug("init: ShaderManager::create");
-    auto shaderMgrResult = ShaderManager::create(_gpuContext, _gpuAllocator);
+    auto shaderMgrResult = ShaderManager::create(_gpuContext, _gpuAllocator, _platform->getShadersDir());
     if (!shaderMgrResult) {
         ydebug("init: ShaderManager::create FAILED");
         return Err<void>("Failed to create ShaderManager", shaderMgrResult);
@@ -350,14 +351,17 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
         cdbProvider = std::make_shared<CpuMsdfCdbProvider>();
         ydebug("init: Using CPU MSDF CDB provider");
     } else {
-        cdbProvider = std::make_shared<GpuMsdfCdbProvider>(_instance);
+        cdbProvider = std::make_shared<GpuMsdfCdbProvider>(_instance, _platform->getShadersDir());
         ydebug("init: Using GPU MSDF CDB provider");
     }
 #endif
 
-    // Create FontManager with GPUContext, ShaderManager, and CDB provider
+    // Create FontManager with GPUContext, ShaderManager, and directories from Platform
     ydebug("init: FontManager::create");
-    auto fontMgrResult = FontManager::create(_gpuContext, _gpuAllocator, shaderMgr, cdbProvider);
+    auto msdfFontsDir = _platform->getMsdfFontsDir();
+    auto fontsDir = _platform->getFontsDir();
+    auto shadersDir = _platform->getShadersDir();
+    auto fontMgrResult = FontManager::create(_gpuContext, _gpuAllocator, shaderMgr, msdfFontsDir, fontsDir, shadersDir, cdbProvider);
     if (!fontMgrResult) {
         ydebug("init: FontManager::create FAILED");
         return Err<void>("Failed to create FontManager", fontMgrResult);
@@ -412,7 +416,7 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     // Create RPC server and write socket path to config BEFORE workspace/terminal
     // (Terminal reads shell/env from config when forking the shell)
     {
-        auto socketResult = rpc::createSocketPath();
+        auto socketResult = rpc::createSocketPath(_platform->getRuntimeDir());
         if (!socketResult) {
             return Err<void>("Failed to create RPC socket path", socketResult);
         }
@@ -898,6 +902,8 @@ Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
 }
 
 Result<void> YettyImpl::initEmbeddedAssets() noexcept {
+    ydebug("initEmbeddedAssets: starting");
+
     // Get IncbinAssets singleton
     auto assetsResult = IncbinAssets::instance();
     if (!assetsResult) {
@@ -907,92 +913,45 @@ Result<void> YettyImpl::initEmbeddedAssets() noexcept {
     }
     auto assets = *assetsResult;
 
-    // Check if we have any shader assets
+    // List embedded assets
     auto assetList = assets->list();
-    bool hasShaders = false;
+    ydebug("initEmbeddedAssets: {} assets registered", assetList.size());
     for (const auto& name : assetList) {
-        if (name.find("shaders/") == 0) {
-            hasShaders = true;
-            break;
-        }
+        ydebug("initEmbeddedAssets:   - '{}'", name);
     }
-
-    if (!hasShaders) {
-        ydebug("No shader assets embedded");
+    if (assetList.empty()) {
+        ydebug("No embedded assets");
         return Ok();
     }
 
-    // Determine cache directory (platform-specific)
-    // See docs/incbin.md for full documentation
-    std::filesystem::path cacheDir;
+    // Derive cache base directory from Platform::getShadersDir()
+    // Platform returns full paths like "~/.cache/yetty/shaders" - we need the parent
+    std::filesystem::path shadersPath = _platform->getShadersDir();
+    std::filesystem::path cacheDir = shadersPath.parent_path();
+    ydebug("initEmbeddedAssets: cacheDir={}", cacheDir.string());
 
-#if defined(__ANDROID__)
-    // Android: Use app's internal cache directory
-    // Set by Android platform code via YETTY_CACHE_DIR env var
-    const char* androidCache = std::getenv("YETTY_CACHE_DIR");
-    if (androidCache && androidCache[0]) {
-        cacheDir = std::filesystem::path(androidCache);
-    } else {
-        // Fallback - shouldn't happen if platform code is correct
-        cacheDir = std::filesystem::path("/data/local/tmp/yetty-cache");
-    }
+    // Check if extraction is needed: version changed OR any file is missing
+    bool needsExtraction = IncbinAssets::needsExtraction(cacheDir);
+    ydebug("initEmbeddedAssets: needsExtraction (marker check) = {}", needsExtraction);
 
-#elif defined(_WIN32)
-    // Windows: %LOCALAPPDATA%\yetty\cache or %APPDATA%\yetty\cache
-    const char* localAppData = std::getenv("LOCALAPPDATA");
-    if (localAppData && localAppData[0]) {
-        cacheDir = std::filesystem::path(localAppData) / "yetty" / "cache";
-    } else {
-        const char* appData = std::getenv("APPDATA");
-        if (appData && appData[0]) {
-            cacheDir = std::filesystem::path(appData) / "yetty" / "cache";
-        } else {
-            const char* temp = std::getenv("TEMP");
-            cacheDir = std::filesystem::path(temp ? temp : "C:\\Temp") / "yetty-cache";
+    if (!needsExtraction) {
+        // Version marker exists and matches - but check if any files are missing
+        ydebug("initEmbeddedAssets: marker OK, checking if files exist...");
+        for (const auto& name : assetList) {
+            auto filePath = cacheDir / name;
+            bool exists = std::filesystem::exists(filePath);
+            ydebug("initEmbeddedAssets:   {} -> exists={}", filePath.string(), exists);
+            if (!exists) {
+                yinfo("Missing asset file: {} - will re-extract", name);
+                needsExtraction = true;
+                break;
+            }
         }
     }
 
-#elif defined(__APPLE__)
-    // macOS: ~/Library/Caches/yetty
-    const char* home = std::getenv("HOME");
-    if (home && home[0]) {
-        cacheDir = std::filesystem::path(home) / "Library" / "Caches" / "yetty";
-    } else {
-        cacheDir = std::filesystem::path("/tmp") / "yetty-cache";
-    }
-
-#else
-    // Linux and other POSIX: XDG_CACHE_HOME or ~/.cache/yetty
-    const char* xdgCache = std::getenv("XDG_CACHE_HOME");
-    if (xdgCache && xdgCache[0]) {
-        cacheDir = std::filesystem::path(xdgCache) / "yetty";
-    } else {
-        const char* home = std::getenv("HOME");
-        if (home && home[0]) {
-            cacheDir = std::filesystem::path(home) / ".cache" / "yetty";
-        } else {
-            cacheDir = std::filesystem::path("/tmp") / "yetty-cache";
-        }
-    }
-#endif
-
-    // Helper for cross-platform setenv
-    auto setEnvVar = [](const char* name, const std::string& value, bool overwrite) {
-#ifdef _WIN32
-        if (!overwrite && std::getenv(name) != nullptr) return;
-        std::string envStr = std::string(name) + "=" + value;
-        _putenv(envStr.c_str());
-#else
-        setenv(name, value.c_str(), overwrite ? 1 : 0);
-#endif
-    };
-
-    // Check if extraction is needed
-    if (!IncbinAssets::needsExtraction(cacheDir)) {
+    ydebug("initEmbeddedAssets: final needsExtraction = {}", needsExtraction);
+    if (!needsExtraction) {
         yinfo("Embedded assets already extracted to {}", cacheDir.string());
-        // Set environment variable for shader loading
-        auto shadersDir = cacheDir / "shaders";
-        setEnvVar("YETTY_SHADERS_DIR", shadersDir.string(), false);
         return Ok();
     }
 
@@ -1002,11 +961,7 @@ Result<void> YettyImpl::initEmbeddedAssets() noexcept {
         return Err<void>("Failed to extract embedded assets", res);
     }
 
-    // Set environment variable for shader loading
-    auto shadersDir = cacheDir / "shaders";
-    setEnvVar("YETTY_SHADERS_DIR", shadersDir.string(), true);
-    yinfo("YETTY_SHADERS_DIR set to {}", shadersDir.string());
-
+    ydebug("initEmbeddedAssets: extraction complete");
     return Ok();
 }
 

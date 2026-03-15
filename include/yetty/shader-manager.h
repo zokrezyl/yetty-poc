@@ -31,7 +31,9 @@ public:
     virtual ~ShaderManager() = default;
 
     // Factory - creates ShaderManagerImpl
-    static Result<Ptr> createImpl(ContextType& ctx, const GPUContext& gpu, GpuAllocator::Ptr allocator) noexcept;
+    // shadersDir: Path to WGSL shader files (from Platform::getShadersDir())
+    static Result<Ptr> createImpl(ContextType& ctx, const GPUContext& gpu, GpuAllocator::Ptr allocator,
+                                   const std::string& shadersDir) noexcept;
 
     /**
      * Register a shader provider.

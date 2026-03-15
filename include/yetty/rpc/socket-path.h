@@ -6,11 +6,13 @@
 namespace yetty {
 namespace rpc {
 
-// Compute the default socket path for this yetty instance:
-//   $XDG_RUNTIME_DIR/yetty/yetty-<pid>.sock
+// Compute the socket path for this yetty instance.
+// Uses the provided runtime directory from Platform::getRuntimeDir().
 // Creates the directory if it doesn't exist.
 // Returns the full path.
-Result<std::string> createSocketPath();
+//   Unix: <runtimeDir>/yetty/yetty-<pid>.sock
+//   Windows: \\.\pipe\yetty-<pid>
+Result<std::string> createSocketPath(const std::string& runtimeDir);
 
 // Export the socket path as $YETTY_SOCKET so child processes (shells,
 // commands spawned inside the terminal) can discover it.

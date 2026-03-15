@@ -644,7 +644,12 @@ std::filesystem::path Config::getXDGConfigPath() {
         if (home) {
             configDir = std::filesystem::path(home) / ".config";
         } else {
+#if defined(__ANDROID__)
+            // Android: skip config file (no HOME, can't use /tmp)
+            return "";
+#else
             configDir = "/tmp";
+#endif
         }
     }
 #endif

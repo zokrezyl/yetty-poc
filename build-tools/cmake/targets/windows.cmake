@@ -22,26 +22,12 @@ add_executable(yetty
 
 target_include_directories(yetty PRIVATE ${YETTY_INCLUDES} ${YETTY_RENDERER_INCLUDES} ${JPEG_INCLUDE_DIRS} ${BROTLI_INCLUDE_DIR})
 
-# Embed resources (logo)
-incbin_add_resources(yetty
-    Logo "${YETTY_ROOT}/docs/logo.jpeg"
-)
+# Embed all assets (logo, shaders, fonts, CDB files)
+yetty_embed_assets(yetty)
 
-# Embed shaders
-incbin_add_directory(yetty "shaders" "${YETTY_ROOT}/src/yetty/shaders" "*.wgsl")
-
-# Embed fonts (brotli compressed)
-incbin_add_directory(yetty "fonts" "${YETTY_ROOT}/assets" "*.ttf" TRUE)
-
-# Embed MSDF CDB font databases (brotli compressed)
-if(EXISTS "${YETTY_ROOT}/assets/fonts-cdb")
-    incbin_add_directory(yetty "fonts-cdb" "${YETTY_ROOT}/assets/fonts-cdb" "*.cdb" TRUE)
-else()
-    message(WARNING "No prebuilt CDB fonts found. Run 'make prepare-assets' first for embedded fonts.")
-endif()
-
-# Make manifest available to incbin-assets.cpp
-target_include_directories(yetty PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+# Dummy targets for dependency tracking (legacy)
+add_custom_target(copy-shaders-for-incbin)
+add_custom_target(copy-fonts-for-incbin)
 
 target_compile_definitions(yetty PRIVATE
     ${YETTY_DEFINITIONS}
@@ -81,7 +67,7 @@ include(${YETTY_ROOT}/build-tools/cmake/cdb-gen.cmake)
 add_subdirectory(${YETTY_ROOT}/assets ${CMAKE_BINARY_DIR}/assets-build)
 
 # Ensure all runtime assets are in build output before yetty
-add_dependencies(yetty generate-cdb copy-shaders copy-assets)
+add_dependencies(yetty generate-cdb copy-shaders copy-assets copy-shaders-for-incbin copy-fonts-for-incbin)
 
 # Copy DirectX runtime DLLs needed by Dawn (shader compiler + DXIL signing)
 if(WIN32)

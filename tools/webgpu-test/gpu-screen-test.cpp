@@ -3,6 +3,7 @@
 #include <emscripten/html5.h>
 #include <webgpu/webgpu.h>
 #include <cstdio>
+#include <string>
 
 #include "yetty/gpu-screen.h"
 #include "yetty/font-manager.h"
@@ -125,14 +126,19 @@ void onDeviceReady(WGPURequestDeviceStatus status, WGPUDevice device, WGPUString
         g_ctx.globalAllocator = *allocResult;
     }
     
+    // WebAssembly paths (virtual filesystem)
+    std::string shadersDir = "/assets/shaders";
+    std::string msdfFontsDir = "/assets/msdf-fonts";
+    std::string fontsDir = "/assets";
+
     // Create shader manager
-    auto shaderResult = ShaderManager::create(g_device);
+    auto shaderResult = ShaderManager::create(g_device, g_ctx.globalAllocator, shadersDir);
     if (shaderResult) {
         g_ctx.shaderManager = *shaderResult;
     }
-    
+
     // Create font manager
-    auto fontResult = FontManager::create(g_ctx.gpu, g_ctx.globalAllocator, g_ctx.shaderManager, nullptr);
+    auto fontResult = FontManager::create(g_ctx.gpu, g_ctx.globalAllocator, g_ctx.shaderManager, msdfFontsDir, fontsDir, shadersDir, nullptr);
     if (fontResult) {
         g_ctx.fontManager = *fontResult;
         printf("FontManager created\n");

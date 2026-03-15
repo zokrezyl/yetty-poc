@@ -232,6 +232,26 @@ public:
         return Err<std::shared_ptr<PTYProvider>>("Android PTY not yet implemented");
     }
 
+    std::string getShadersDir() const override {
+        // Android: shaders extracted via incbin to dataDir/shaders
+        return _paths.dataDir + "/shaders";
+    }
+
+    std::string getMsdfFontsDir() const override {
+        // Android: CDB fonts extracted via incbin to dataDir/msdf-fonts
+        return _paths.dataDir + "/msdf-fonts";
+    }
+
+    std::string getFontsDir() const override {
+        // Android: TTF fonts extracted via incbin to dataDir/fonts
+        return _paths.dataDir + "/fonts";
+    }
+
+    std::string getRuntimeDir() const override {
+        // Android: Use app's data directory for runtime files (sockets, etc.)
+        return _paths.dataDir;
+    }
+
     // Called from android_main to dispatch touch events
     void dispatchTouchEvent(int action, float x, float y) {
         // Map touch to mouse events

@@ -28,6 +28,7 @@
 #include <iostream>
 #include <chrono>
 #include <cstring>
+#include <cstdlib>
 #include <fstream>
 #include <sstream>
 #include <filesystem>
@@ -228,13 +229,30 @@ private:
             return Err<void>("Failed to create shared bind group layout", res);
         }
 
-        auto shaderMgrResult = ShaderManager::create(_ctx.gpu, _ctx.gpuAllocator);
+        // Determine cache directory (same logic as glfw-platform.cpp)
+        std::string cacheBase;
+        const char* xdgCache = std::getenv("XDG_CACHE_HOME");
+        if (xdgCache && xdgCache[0]) {
+            cacheBase = std::string(xdgCache) + "/yetty";
+        } else {
+            const char* home = std::getenv("HOME");
+            if (home && home[0]) {
+                cacheBase = std::string(home) + "/.cache/yetty";
+            } else {
+                cacheBase = "/tmp/yetty-cache";
+            }
+        }
+        std::string shadersDir = cacheBase + "/shaders";
+        std::string msdfFontsDir = cacheBase + "/msdf-fonts";
+        std::string fontsDir = cacheBase + "/fonts";
+
+        auto shaderMgrResult = ShaderManager::create(_ctx.gpu, _ctx.gpuAllocator, shadersDir);
         if (!shaderMgrResult) {
             return Err<void>("Failed to create ShaderManager", shaderMgrResult);
         }
         _ctx.shaderManager = *shaderMgrResult;
 
-        auto fontMgrResult = FontManager::create(_ctx.gpu, _ctx.gpuAllocator, _ctx.shaderManager, nullptr);
+        auto fontMgrResult = FontManager::create(_ctx.gpu, _ctx.gpuAllocator, _ctx.shaderManager, msdfFontsDir, fontsDir, shadersDir, nullptr);
         if (!fontMgrResult) {
             return Err<void>("Failed to create FontManager", fontMgrResult);
         }

@@ -82,7 +82,7 @@ SOFT_GPU=false
 # Configuration
 AVD_NAME="yetty_x86_64"
 SYSTEM_IMAGE="system-images;android-34;google_apis;x86_64"
-APK_PATH="${APK_PATH:-$PROJECT_ROOT/build-android_x86_64-ytrace-debug/app/outputs/apk/debug/app-debug.apk}"
+APK_PATH="${APK_PATH:-$PROJECT_ROOT/build-android_x86_64-ytrace-release/app/outputs/apk/release/app-release.apk}"
 PACKAGE_NAME="com.yetty.terminal"
 ACTIVITY_NAME="android.app.NativeActivity"
 

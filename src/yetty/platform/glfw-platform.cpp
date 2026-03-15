@@ -211,7 +211,47 @@ private:
 
 class GlfwPlatform : public Platform {
 public:
-    GlfwPlatform() : _startTime(std::chrono::steady_clock::now()) {}
+    GlfwPlatform() : _startTime(std::chrono::steady_clock::now()) {
+        // Initialize cache and runtime base directories once at construction
+#ifdef __APPLE__
+        const char* home = std::getenv("HOME");
+        if (home && home[0]) {
+            _cacheBase = std::string(home) + "/Library/Caches/yetty";
+        } else {
+            _cacheBase = "/tmp/yetty-cache";
+        }
+        // macOS: TMPDIR is per-user, set by launchd (e.g. /var/folders/.../T/)
+        const char* tmpdir = std::getenv("TMPDIR");
+        if (tmpdir && tmpdir[0]) {
+            _runtimeBase = tmpdir;
+            if (!_runtimeBase.empty() && _runtimeBase.back() == '/') {
+                _runtimeBase.pop_back();
+            }
+        } else {
+            _runtimeBase = "/tmp/yetty-" + std::to_string(getuid());
+        }
+#else
+        const char* xdgCache = std::getenv("XDG_CACHE_HOME");
+        if (xdgCache && xdgCache[0]) {
+            _cacheBase = std::string(xdgCache) + "/yetty";
+        } else {
+            const char* home = std::getenv("HOME");
+            if (home && home[0]) {
+                _cacheBase = std::string(home) + "/.cache/yetty";
+            } else {
+                _cacheBase = "/tmp/yetty-cache";
+            }
+        }
+        // Linux: XDG_RUNTIME_DIR is the preferred location for sockets/pipes
+        const char* xdgRuntime = std::getenv("XDG_RUNTIME_DIR");
+        if (xdgRuntime && xdgRuntime[0]) {
+            _runtimeBase = xdgRuntime;
+        } else {
+            _runtimeBase = "/tmp/yetty-" + std::to_string(getuid());
+        }
+#endif
+    }
+
     ~GlfwPlatform() override {
         destroyWindow();
         if (_initialized) {
@@ -428,7 +468,25 @@ public:
         return Ok(std::static_pointer_cast<PTYProvider>(std::make_shared<ForkPTY>()));
     }
 
+    std::string getShadersDir() const override {
+        return _cacheBase + "/shaders";
+    }
+
+    std::string getMsdfFontsDir() const override {
+        return _cacheBase + "/msdf-fonts";
+    }
+
+    std::string getFontsDir() const override {
+        return _cacheBase + "/fonts";
+    }
+
+    std::string getRuntimeDir() const override {
+        return _runtimeBase + "/yetty";
+    }
+
 private:
+    std::string _cacheBase;
+    std::string _runtimeBase;
     // Static callback trampolines
     static void keyCallbackStatic(GLFWwindow* window, int key, int scancode, int action, int mods) {
         auto* self = static_cast<GlfwPlatform*>(glfwGetWindowUserPointer(window));

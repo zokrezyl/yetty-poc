@@ -7,8 +7,6 @@
 #include <cmath>
 #include <cstring>
 
-#include <yetty/shader-path.h>
-
 // CPU provider — msdfgen library (internal, not CDB-dependent)
 #include "msdf-gen/generator.h"
 
@@ -63,8 +61,8 @@ Result<void> CpuMsdfCdbProvider::generate(const MsdfCdbConfig& config) {
 // GpuMsdfCdbProvider - uses msdf-wgsl compute shaders + CdbWriter
 // ---------------------------------------------------------------------------
 
-GpuMsdfCdbProvider::GpuMsdfCdbProvider(WGPUInstance instance)
-    : _instance(instance) {}
+GpuMsdfCdbProvider::GpuMsdfCdbProvider(WGPUInstance instance, const std::string& shadersDir)
+    : _instance(instance), _shadersDir(shadersDir) {}
 
 Result<void> GpuMsdfCdbProvider::initDevice() {
     if (_device) return Ok();
@@ -173,7 +171,7 @@ Result<void> GpuMsdfCdbProvider::generate(const MsdfCdbConfig& config) {
     }
 
     // Set shader path
-    std::string shaderPath = yetty::getShadersDir() + "/msdf_gen.wgsl";
+    std::string shaderPath = _shadersDir + "/msdf_gen.wgsl";
     msdf::setShaderPath(shaderPath);
 
     msdf::Context ctx(_device, _instance);

@@ -124,6 +124,21 @@ public:
     // - Android: toybox or other shell
     virtual Result<std::shared_ptr<PTYProvider>> createPTY() = 0;
 
+    // Asset directories - each platform decides where these are located
+    // incbin extracts directly to these directories
+
+    // Shaders directory (WGSL files)
+    virtual std::string getShadersDir() const = 0;
+
+    // MSDF font cache directory (CDB files)
+    virtual std::string getMsdfFontsDir() const = 0;
+
+    // TTF fonts directory
+    virtual std::string getFontsDir() const = 0;
+
+    // Runtime directory for sockets/pipes (RPC communication)
+    virtual std::string getRuntimeDir() const = 0;
+
     // Android-specific path configuration
     // Returns empty paths on non-Android platforms
     virtual const AndroidPaths& getAndroidPaths() const {
