@@ -262,6 +262,8 @@ struct ygui_engine {
     /* libuv event loop */
     uv_loop_t* loop;
     int owns_loop;       /* 1 if we created the loop */
+    int input_fd;        /* Input file descriptor (default: STDIN_FILENO) */
+    int output_fd;       /* Output file descriptor (default: STDOUT_FILENO) */
     uv_poll_t stdin_poll;
     uv_prepare_t prepare_handle;  /* For auto-render before polling */
 

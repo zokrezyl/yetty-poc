@@ -175,6 +175,10 @@ ygui_engine_t* ygui_engine_create(const char* card_name, float width, float heig
     engine->reference_w = 0.0f;  /* Set in ygui_engine_show */
     engine->reference_h = 0.0f;
 
+    /* Default I/O file descriptors */
+    engine->input_fd = STDIN_FILENO;
+    engine->output_fd = STDOUT_FILENO;
+
     ygui_grid_init(&engine->grid, width, height, 32.0f);
 
     return engine;
@@ -997,7 +1001,7 @@ static void stdin_poll_cb(uv_poll_t* handle, int status, int events) {
 
     if (events & UV_READABLE) {
         char buf[1024];
-        ssize_t n = read(STDIN_FILENO, buf, sizeof(buf));
+        ssize_t n = read(engine->input_fd, buf, sizeof(buf));
         if (n > 0) {
             process_input(engine, buf, (int)n);
         } else if (n == 0) {
@@ -1036,7 +1040,7 @@ void ygui_engine_attach(ygui_engine_t* engine, uv_loop_t* loop) {
     engine->owns_loop = 0;
 
     /* Set up stdin poll */
-    uv_poll_init(loop, &engine->stdin_poll, STDIN_FILENO);
+    uv_poll_init(loop, &engine->stdin_poll, engine->input_fd);
     engine->stdin_poll.data = engine;
     uv_poll_start(&engine->stdin_poll, UV_READABLE, stdin_poll_cb);
 
@@ -1072,6 +1076,34 @@ void ygui_engine_run(ygui_engine_t* engine) {
 
 void ygui_engine_stop(ygui_engine_t* engine) {
     if (engine) engine->running = 0;
+}
+
+/*=============================================================================
+ * Testing API
+ *===========================================================================*/
+
+void ygui_engine_set_input_fd(ygui_engine_t* engine, int fd) {
+    if (engine) engine->input_fd = fd;
+}
+
+void ygui_engine_set_output_fd(ygui_engine_t* engine, int fd) {
+    if (engine) engine->output_fd = fd;
+}
+
+void ygui_engine_set_card_size(ygui_engine_t* engine, int card_w, int card_h) {
+    if (engine) {
+        engine->card_w = card_w;
+        engine->card_h = card_h;
+    }
+}
+
+uv_loop_t* ygui_engine_get_loop(ygui_engine_t* engine) {
+    return engine ? engine->loop : NULL;
+}
+
+int ygui_engine_poll(ygui_engine_t* engine) {
+    if (!engine || !engine->loop) return 0;
+    return uv_run(engine->loop, UV_RUN_NOWAIT);
 }
 
 /*=============================================================================

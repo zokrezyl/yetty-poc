@@ -3119,8 +3119,8 @@ int GPUScreenImpl::onErase(VTermRect rect, int, void *user) {
   if (startCol == 0 && endCol == cols) {
     for (int row = startRow; row < endRow; row++) {
       size_t rowOffset = static_cast<size_t>(row * cols);
-      std::fill(&(*self->_visibleBuffer)[rowOffset],
-                &(*self->_visibleBuffer)[rowOffset + cols], defaultCell);
+      std::fill(self->_visibleBuffer->begin() + static_cast<ptrdiff_t>(rowOffset),
+                self->_visibleBuffer->begin() + static_cast<ptrdiff_t>(rowOffset + cols), defaultCell);
     }
   } else {
     // Partial width

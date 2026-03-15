@@ -450,6 +450,9 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     // Register stream handlers (uses GPUScreenManager singleton)
     rpc::registerStreamHandlers(*_rpcServer);
 
+    // Register integration test handlers (get_cell_size, get_card_info, etc.)
+    rpc::registerTestHandlers(*_rpcServer);
+
     if (auto res = _rpcServer->start(); !res) {
         return Err<void>("Failed to start RPC server", res);
     }

@@ -381,6 +381,26 @@ void ygui_theme_set_accent(ygui_theme_t* theme, uint32_t color);
 void ygui_theme_set_border(ygui_theme_t* theme, uint32_t color);
 
 /*=============================================================================
+ * Testing API
+ *===========================================================================*/
+
+/* Set custom input/output file descriptors (must be called before attach/run)
+ * Useful for PTY-based testing. Default is STDIN_FILENO/STDOUT_FILENO. */
+void ygui_engine_set_input_fd(ygui_engine_t* engine, int fd);
+void ygui_engine_set_output_fd(ygui_engine_t* engine, int fd);
+
+/* Set card dimensions for testing coordinate scaling
+ * These are normally set by ygui_engine_show() but can be set directly for tests */
+void ygui_engine_set_card_size(ygui_engine_t* engine, int card_w, int card_h);
+
+/* Get access to engine's libuv loop (after attach/run) */
+uv_loop_t* ygui_engine_get_loop(ygui_engine_t* engine);
+
+/* Process pending events without blocking (run one loop iteration)
+ * Returns 0 if no more events, 1 if there are still pending events */
+int ygui_engine_poll(ygui_engine_t* engine);
+
+/*=============================================================================
  * Error Handling
  *===========================================================================*/
 
