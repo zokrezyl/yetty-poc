@@ -569,7 +569,7 @@ Result<VectorSdfFont::Ptr> VectorSdfFont::createImpl(ContextType&,
         yerror("VectorSdfFont creation failed: {}", error_msg(res));
         return Err<Ptr>("Failed to initialize VectorSdfFont", res);
     }
-    yinfo("VectorSdfFont created successfully");
+    ytest("vector-sdf-font-created", "VectorSdfFont created successfully");
     return Ok(std::move(font));
 }
 

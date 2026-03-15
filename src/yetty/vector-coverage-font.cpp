@@ -569,7 +569,7 @@ Result<VectorCoverageFont::Ptr> VectorCoverageFont::createImpl(ContextType&,
         yerror("VectorCoverageFont creation failed: {}", error_msg(res));
         return Err<Ptr>("Failed to initialize VectorCoverageFont", res);
     }
-    yinfo("VectorCoverageFont created successfully");
+    ytest("vector-coverage-font-created", "VectorCoverageFont created successfully");
     return Ok(std::move(font));
 }
 

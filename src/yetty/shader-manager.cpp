@@ -326,7 +326,7 @@ Result<ShaderManager::Ptr> ShaderManager::createImpl(ContextType&, const GPUCont
         yerror("ShaderManager creation failed: {}", error_msg(res));
         return Err<Ptr>("ShaderManager init failed", res);
     }
-    yinfo("ShaderManager created successfully");
+    ytest("shader-manager-created", "ShaderManager created successfully");
     return Ok(std::move(impl));
 }
 

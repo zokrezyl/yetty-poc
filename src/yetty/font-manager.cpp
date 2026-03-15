@@ -112,8 +112,8 @@ public:
 
       ydebug("getMsMsdfFont: anyMissing={}", anyMissing);
       if (anyMissing && !ttfPaths.empty() && !ttfPaths[0].empty()) {
-        yinfo("CDB missing for {}, generating via {} provider...", fontName,
-              _cdbProvider->name());
+        ytest("cdb-generation-started", "CDB missing for %s, generating via %s provider...", fontName.c_str(),
+              _cdbProvider->name().c_str());
 
         for (size_t i = 0; i < styleSuffixes.size(); ++i) {
           if (i >= ttfPaths.size() || ttfPaths[i].empty()) continue;
@@ -488,7 +488,7 @@ FontManager::createImpl(ContextType &, const GPUContext &gpu,
     yerror("FontManager creation failed: {}", error_msg(res));
     return Err<Ptr>("FontManager init failed", res);
   }
-  yinfo("FontManager created successfully");
+  ytest("font-manager-created", "FontManager created successfully");
   return Ok(std::move(impl));
 }
 

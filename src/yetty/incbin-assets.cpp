@@ -56,7 +56,7 @@ public:
         register_shaders_assets([this](const char* name, const uint8_t* data, size_t size, bool compressed) {
             registerAsset(name, data, size, compressed);
         });
-        yinfo("Registered shader assets from manifest");
+        ytest("assets-shaders-registered", "Registered shader assets from manifest");
 #endif
 
         // Register fonts from generated manifest
@@ -64,7 +64,7 @@ public:
         register_fonts_assets([this](const char* name, const uint8_t* data, size_t size, bool compressed) {
             registerAsset(name, data, size, compressed);
         });
-        yinfo("Registered font assets from manifest");
+        ytest("assets-fonts-registered", "Registered font assets from manifest");
 #endif
 
         // Register MSDF CDB font databases from generated manifest
@@ -72,10 +72,10 @@ public:
         register_msdf_fonts_assets([this](const char* name, const uint8_t* data, size_t size, bool compressed) {
             registerAsset(name, data, size, compressed);
         });
-        yinfo("Registered MSDF CDB font assets from manifest");
+        ytest("assets-msdf-cdb-registered", "Registered MSDF CDB font assets from manifest");
 #endif
 
-        yinfo("IncbinAssets: {} embedded assets available", _assets.size());
+        ytest("incbin-assets-ready", "IncbinAssets: %zu embedded assets available", _assets.size());
     }
 
     std::span<const uint8_t> get(std::string_view name) const override {
@@ -111,7 +111,7 @@ public:
         namespace fs = std::filesystem;
 
         ydebug("extractTo: starting extraction to {}", dir.string());
-        yinfo("Extracting {} embedded assets to {}", _assets.size(), dir.string());
+        ytest("assets-extraction-started", "Extracting %zu embedded assets to %s", _assets.size(), dir.string().c_str());
 
         for (const auto& [name, entry] : _assets) {
             auto path = dir / name;
@@ -166,7 +166,7 @@ public:
             markerFile << YETTY_BUILD_VERSION;
         }
 
-        yinfo("Asset extraction complete");
+        ytest("assets-extraction-complete", "Asset extraction complete");
         return Ok();
     }
 

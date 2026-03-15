@@ -281,7 +281,7 @@ CardFactory::createImpl(ContextType &ctx, const GPUContext &gpu) noexcept {
     yerror("CardFactory creation failed: {}", error_msg(res));
     return Err<Ptr>("Failed to initialize CardFactory", res);
   }
-  yinfo("CardFactory created successfully");
+  ytest("card-factory-created", "CardFactory created successfully");
   return Ok<Ptr>(impl);
 }
 
