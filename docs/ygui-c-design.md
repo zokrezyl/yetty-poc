@@ -477,6 +477,34 @@ ygui_widget_t* ygui_progress(ygui_engine_t* e, const char* id,
 
 ygui_widget_t* ygui_panel(ygui_engine_t* e, const char* id,
                           float x, float y, float w, float h);
+
+// Layout containers - automatically arrange children
+ygui_widget_t* ygui_hbox(ygui_engine_t* e, const char* id,
+                         float x, float y, float w, float h);  // Horizontal: left-to-right
+
+ygui_widget_t* ygui_vbox(ygui_engine_t* e, const char* id,
+                         float x, float y, float w, float h);  // Vertical: top-to-bottom
+```
+
+### Layout Container Behavior
+
+**HBox** and **VBox** are layout containers that automatically position their children:
+
+- **HBox**: Children arranged left-to-right with spacing
+- **VBox**: Children arranged top-to-bottom with spacing
+
+Children's `x, y` positions are ignored when inside a layout container - the container manages positioning.
+
+```c
+// Example: Vertical stack of buttons
+ygui_widget_t* vbox = ygui_vbox(e, "menu", 10, 10, 200, 300);
+ygui_widget_t* btn1 = ygui_button(e, "b1", 0, 0, 180, 40, "Option 1");
+ygui_widget_t* btn2 = ygui_button(e, "b2", 0, 0, 180, 40, "Option 2");
+ygui_widget_t* btn3 = ygui_button(e, "b3", 0, 0, 180, 40, "Option 3");
+ygui_widget_add_child(vbox, btn1);
+ygui_widget_add_child(vbox, btn2);
+ygui_widget_add_child(vbox, btn3);
+// Children automatically stacked vertically with spacing
 ```
 
 ### Widget Callbacks

@@ -819,6 +819,96 @@ ygui_widget_t* ygui_separator(ygui_engine_t* engine, const char* id,
  * TODO: Implement fully
  *===========================================================================*/
 
+/*=============================================================================
+ * TextInput Widget
+ *===========================================================================*/
+
+static void textinput_render(ygui_widget_t* self, ygui_render_ctx_t* ctx) {
+    const ygui_theme_t* t = ctx->theme;
+
+    /* Background */
+    ygui_render_box(ctx, self->x, self->y, self->w, self->h,
+                    self->bg_color, t->radius_small);
+
+    /* Border - accent if focused, normal otherwise */
+    uint32_t border_color = (self->flags & YGUI_FLAG_FOCUSED) ? self->accent_color : t->border;
+    ygui_render_box_outline(ctx, self->x, self->y, self->w, self->h,
+                            border_color, t->radius_small, 1.5f);
+
+    /* Text or placeholder */
+    const char* display_text = self->data.textinput.text;
+    uint32_t text_color = self->fg_color;
+
+    if (!display_text || display_text[0] == '\0') {
+        display_text = self->data.textinput.placeholder;
+        text_color = t->text_muted;
+    }
+
+    if (display_text) {
+        ygui_render_text(ctx, display_text,
+                         self->x + t->pad_large, self->y + t->pad_medium,
+                         text_color, t->font_size);
+    }
+
+    /* Cursor if focused */
+    if (self->flags & YGUI_FLAG_FOCUSED) {
+        float cursor_x = self->x + t->pad_large;
+        if (self->data.textinput.text) {
+            /* Approximate cursor position based on character count */
+            cursor_x += self->data.textinput.cursor_pos * (t->font_size * 0.6f);
+        }
+        float cursor_y = self->y + t->pad_small;
+        float cursor_h = self->h - t->pad_small * 2;
+        ygui_render_box(ctx, cursor_x, cursor_y, 2.0f, cursor_h,
+                        self->accent_color, 0);
+    }
+}
+
+static int textinput_on_key(ygui_widget_t* self, uint32_t key, int mods, ygui_event_t* out) {
+    (void)mods;
+    char* text = self->data.textinput.text;
+    int len = text ? (int)strlen(text) : 0;
+    int cursor = self->data.textinput.cursor_pos;
+
+    if (key == 127 || key == 8) {  /* Backspace */
+        if (cursor > 0 && len > 0) {
+            memmove(text + cursor - 1, text + cursor, len - cursor + 1);
+            self->data.textinput.cursor_pos--;
+            out->widget_id = self->id;
+            out->type = YGUI_EVENT_CHANGE;
+            out->data.string_value = text;
+            return 1;
+        }
+    } else if (key >= 32 && key < 127) {  /* Printable character */
+        char* new_text = (char*)malloc(len + 2);
+        if (new_text) {
+            if (cursor > 0) memcpy(new_text, text, cursor);
+            new_text[cursor] = (char)key;
+            if (cursor < len) memcpy(new_text + cursor + 1, text + cursor, len - cursor);
+            new_text[len + 1] = '\0';
+            free(text);
+            self->data.textinput.text = new_text;
+            self->data.textinput.cursor_pos++;
+
+            /* Call text callback */
+            if (self->text_callback) {
+                self->text_callback(self, new_text, self->text_userdata);
+            }
+
+            out->widget_id = self->id;
+            out->type = YGUI_EVENT_CHANGE;
+            out->data.string_value = new_text;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void textinput_destroy(ygui_widget_t* self) {
+    free(self->data.textinput.text);
+    free(self->data.textinput.placeholder);
+}
+
 ygui_widget_t* ygui_textinput(ygui_engine_t* engine, const char* id,
                               float x, float y, float w, float h,
                               const char* placeholder) {
@@ -829,6 +919,9 @@ ygui_widget_t* ygui_textinput(ygui_engine_t* engine, const char* id,
     txt->data.textinput.text = ygui_strdup("");
     txt->data.textinput.placeholder = ygui_strdup(placeholder);
     txt->data.textinput.cursor_pos = 0;
+    txt->render = textinput_render;
+    txt->on_key = textinput_on_key;
+    txt->destroy = textinput_destroy;
 
     add_to_engine(engine, txt);
     return txt;
@@ -853,13 +946,96 @@ void ygui_textinput_set_placeholder(ygui_widget_t* widget, const char* text) {
     if (widget->engine) widget->engine->dirty = 1;
 }
 
+/*=============================================================================
+ * HBox Widget - Horizontal layout container
+ *===========================================================================*/
+
+static void hbox_render_all(ygui_widget_t* self, ygui_render_ctx_t* ctx) {
+    self->effective_x = self->x + ctx->offset_x;
+    self->effective_y = self->y + ctx->offset_y;
+    self->was_rendered = 1;
+
+    const ygui_theme_t* t = ctx->theme;
+    float spacing = t->pad_medium;
+    float padding = t->pad_medium;
+
+    /* Position children left-to-right */
+    float cursor_x = padding;
+    for (ygui_widget_t* child = self->first_child; child; child = child->next_sibling) {
+        if (!(child->flags & YGUI_FLAG_VISIBLE)) continue;
+
+        /* Override child position */
+        child->x = cursor_x;
+        child->y = padding;
+
+        /* Render child with offset */
+        float old_offset_x = ctx->offset_x;
+        float old_offset_y = ctx->offset_y;
+        ctx->offset_x = self->effective_x;
+        ctx->offset_y = self->effective_y;
+
+        if (child->render_all) {
+            child->render_all(child, ctx);
+        } else {
+            ygui_widget_render_all_default(child, ctx);
+        }
+
+        ctx->offset_x = old_offset_x;
+        ctx->offset_y = old_offset_y;
+
+        cursor_x += child->w + spacing;
+    }
+}
+
 ygui_widget_t* ygui_hbox(ygui_engine_t* engine, const char* id,
                          float x, float y, float w, float h) {
     ygui_widget_t* hbox = ygui_widget_alloc(engine, YGUI_WIDGET_HBOX, id);
     if (!hbox) return NULL;
     ygui_widget_init_base(hbox, x, y, w, h);
+    hbox->render_all = hbox_render_all;
     add_to_engine(engine, hbox);
     return hbox;
+}
+
+/*=============================================================================
+ * VBox Widget - Vertical layout container
+ *===========================================================================*/
+
+static void vbox_render_all(ygui_widget_t* self, ygui_render_ctx_t* ctx) {
+    self->effective_x = self->x + ctx->offset_x;
+    self->effective_y = self->y + ctx->offset_y;
+    self->was_rendered = 1;
+
+    const ygui_theme_t* t = ctx->theme;
+    float spacing = t->pad_medium;
+    float padding = t->pad_medium;
+
+    /* Position children top-to-bottom */
+    float cursor_y = padding;
+    for (ygui_widget_t* child = self->first_child; child; child = child->next_sibling) {
+        if (!(child->flags & YGUI_FLAG_VISIBLE)) continue;
+
+        /* Override child position */
+        child->x = padding;
+        child->y = cursor_y;
+
+        /* Render child with offset */
+        float old_offset_x = ctx->offset_x;
+        float old_offset_y = ctx->offset_y;
+        ctx->offset_x = self->effective_x;
+        ctx->offset_y = self->effective_y;
+
+        if (child->render_all) {
+            child->render_all(child, ctx);
+        } else {
+            ygui_widget_render_all_default(child, ctx);
+        }
+
+        ctx->offset_x = old_offset_x;
+        ctx->offset_y = old_offset_y;
+
+        cursor_y += child->h + spacing;
+    }
 }
 
 ygui_widget_t* ygui_vbox(ygui_engine_t* engine, const char* id,
@@ -867,8 +1043,139 @@ ygui_widget_t* ygui_vbox(ygui_engine_t* engine, const char* id,
     ygui_widget_t* vbox = ygui_widget_alloc(engine, YGUI_WIDGET_VBOX, id);
     if (!vbox) return NULL;
     ygui_widget_init_base(vbox, x, y, w, h);
+    vbox->render_all = vbox_render_all;
     add_to_engine(engine, vbox);
     return vbox;
+}
+
+/*=============================================================================
+ * Dropdown Widget
+ *===========================================================================*/
+
+static void dropdown_render(ygui_widget_t* self, ygui_render_ctx_t* ctx) {
+    const ygui_theme_t* t = ctx->theme;
+    int is_open = self->data.dropdown.open;
+
+    /* Main button area */
+    uint32_t bg = (self->flags & YGUI_FLAG_HOVER) ? t->bg_hover : self->bg_color;
+    ygui_render_box(ctx, self->x, self->y, self->w, self->h, bg, t->radius_medium);
+    ygui_render_box_outline(ctx, self->x, self->y, self->w, self->h,
+                            t->border, t->radius_medium, 1.0f);
+
+    /* Selected text */
+    const char* selected_text = NULL;
+    if (self->data.dropdown.options && self->data.dropdown.selected >= 0 &&
+        self->data.dropdown.selected < self->data.dropdown.option_count) {
+        selected_text = self->data.dropdown.options[self->data.dropdown.selected];
+    }
+    if (selected_text) {
+        ygui_render_text(ctx, selected_text,
+                         self->x + t->pad_large, self->y + t->pad_medium,
+                         self->fg_color, t->font_size);
+    }
+
+    /* Arrow indicator */
+    float arrow_x = self->x + self->w - t->pad_large - 8;
+    float arrow_y = self->y + self->h / 2;
+    if (is_open) {
+        /* Up arrow */
+        ygui_render_triangle(ctx,
+                             arrow_x, arrow_y + 3,
+                             arrow_x + 8, arrow_y + 3,
+                             arrow_x + 4, arrow_y - 3,
+                             self->fg_color);
+    } else {
+        /* Down arrow */
+        ygui_render_triangle(ctx,
+                             arrow_x, arrow_y - 3,
+                             arrow_x + 8, arrow_y - 3,
+                             arrow_x + 4, arrow_y + 3,
+                             self->fg_color);
+    }
+
+    /* Dropdown list when open */
+    if (is_open && self->data.dropdown.options) {
+        float list_y = self->y + self->h + 2;
+        float item_h = t->row_height;
+        float list_h = self->data.dropdown.option_count * item_h;
+
+        /* List background */
+        ygui_render_box(ctx, self->x, list_y, self->w, list_h,
+                        t->bg_surface, t->radius_medium);
+        ygui_render_box_outline(ctx, self->x, list_y, self->w, list_h,
+                                t->border, t->radius_medium, 1.0f);
+
+        /* Options */
+        for (int i = 0; i < self->data.dropdown.option_count; i++) {
+            float opt_y = list_y + i * item_h;
+            if (i == self->data.dropdown.selected) {
+                ygui_render_box(ctx, self->x + 2, opt_y + 2,
+                                self->w - 4, item_h - 4,
+                                self->accent_color, t->radius_small);
+            }
+            ygui_render_text(ctx, self->data.dropdown.options[i],
+                             self->x + t->pad_large, opt_y + t->pad_small,
+                             self->fg_color, t->font_size);
+        }
+    }
+}
+
+static int dropdown_on_release(ygui_widget_t* self, float lx, float ly, ygui_event_t* out) {
+    const ygui_theme_t* t = self->engine->theme;
+
+    if (self->data.dropdown.open) {
+        /* Check if clicked on an option */
+        float list_y_start = self->h + 2;
+        float item_h = t->row_height;
+
+        if (ly >= list_y_start) {
+            int idx = (int)((ly - list_y_start) / item_h);
+            if (idx >= 0 && idx < self->data.dropdown.option_count) {
+                self->data.dropdown.selected = idx;
+                out->widget_id = self->id;
+                out->type = YGUI_EVENT_CHANGE;
+                out->data.int_value = idx;
+            }
+        }
+        self->data.dropdown.open = 0;
+    } else {
+        /* Toggle open */
+        if (lx >= 0 && lx < self->w && ly >= 0 && ly < self->h) {
+            self->data.dropdown.open = 1;
+        }
+    }
+    return 1;
+}
+
+static void dropdown_free_options(ygui_widget_t* self) {
+    if (self->data.dropdown.options) {
+        for (int i = 0; i < self->data.dropdown.option_count; i++) {
+            free(self->data.dropdown.options[i]);
+        }
+        free(self->data.dropdown.options);
+        self->data.dropdown.options = NULL;
+    }
+}
+
+static void dropdown_copy_options(ygui_widget_t* self, const char** options, int count) {
+    dropdown_free_options(self);
+    if (!options || count <= 0) {
+        self->data.dropdown.option_count = 0;
+        return;
+    }
+    self->data.dropdown.options = (char**)malloc(count * sizeof(char*));
+    if (!self->data.dropdown.options) {
+        self->data.dropdown.option_count = 0;
+        return;
+    }
+    for (int i = 0; i < count; i++) {
+        self->data.dropdown.options[i] = ygui_strdup(options[i]);
+    }
+    self->data.dropdown.option_count = count;
+}
+
+static void dropdown_destroy(ygui_widget_t* self) {
+    dropdown_free_options(self);
 }
 
 ygui_widget_t* ygui_dropdown(ygui_engine_t* engine, const char* id,
@@ -877,18 +1184,26 @@ ygui_widget_t* ygui_dropdown(ygui_engine_t* engine, const char* id,
     ygui_widget_t* dd = ygui_widget_alloc(engine, YGUI_WIDGET_DROPDOWN, id);
     if (!dd) return NULL;
     ygui_widget_init_base(dd, x, y, w, h);
-    /* TODO: copy options */
-    (void)options;
-    dd->data.dropdown.option_count = option_count;
+    dd->data.dropdown.options = NULL;
+    dd->data.dropdown.option_count = 0;
     dd->data.dropdown.selected = 0;
+    dd->data.dropdown.open = 0;
+    dropdown_copy_options(dd, options, option_count);
+    dd->render = dropdown_render;
+    dd->on_release = dropdown_on_release;
+    dd->destroy = dropdown_destroy;
     add_to_engine(engine, dd);
     return dd;
 }
 
 void ygui_dropdown_set_options(ygui_widget_t* widget,
                                const char** options, int count) {
-    (void)widget; (void)options; (void)count;
-    /* TODO */
+    if (!widget || widget->type != YGUI_WIDGET_DROPDOWN) return;
+    dropdown_copy_options(widget, options, count);
+    if (widget->data.dropdown.selected >= count) {
+        widget->data.dropdown.selected = count > 0 ? 0 : -1;
+    }
+    if (widget->engine) widget->engine->dirty = 1;
 }
 
 void ygui_dropdown_set_selected(ygui_widget_t* widget, int index) {
@@ -902,6 +1217,132 @@ int ygui_dropdown_get_selected(const ygui_widget_t* widget) {
     return widget->data.dropdown.selected;
 }
 
+/*=============================================================================
+ * ColorPicker Widget
+ *===========================================================================*/
+
+/* HSV to RGB conversion */
+static void hsv_to_rgb(float h, float s, float v, float* r, float* g, float* b) {
+    if (s == 0) {
+        *r = *g = *b = v;
+        return;
+    }
+    h = h - (int)h;  /* Wrap to 0-1 */
+    if (h < 0) h += 1;
+    h *= 6.0f;
+    int i = (int)h;
+    float f = h - i;
+    float p = v * (1 - s);
+    float q = v * (1 - s * f);
+    float t = v * (1 - s * (1 - f));
+    switch (i % 6) {
+        case 0: *r = v; *g = t; *b = p; break;
+        case 1: *r = q; *g = v; *b = p; break;
+        case 2: *r = p; *g = v; *b = t; break;
+        case 3: *r = p; *g = q; *b = v; break;
+        case 4: *r = t; *g = p; *b = v; break;
+        case 5: *r = v; *g = p; *b = q; break;
+    }
+}
+
+/* RGB to HSV conversion */
+static void rgb_to_hsv(float r, float g, float b, float* h, float* s, float* v) {
+    float max = r > g ? (r > b ? r : b) : (g > b ? g : b);
+    float min = r < g ? (r < b ? r : b) : (g < b ? g : b);
+    float d = max - min;
+    *v = max;
+    *s = (max == 0) ? 0 : d / max;
+    if (d == 0) {
+        *h = 0;
+    } else if (max == r) {
+        *h = (g - b) / d / 6.0f;
+        if (*h < 0) *h += 1;
+    } else if (max == g) {
+        *h = ((b - r) / d + 2) / 6.0f;
+    } else {
+        *h = ((r - g) / d + 4) / 6.0f;
+    }
+}
+
+static uint32_t make_color_abgr(float r, float g, float b, float a) {
+    uint8_t ri = (uint8_t)(r * 255);
+    uint8_t gi = (uint8_t)(g * 255);
+    uint8_t bi = (uint8_t)(b * 255);
+    uint8_t ai = (uint8_t)(a * 255);
+    return ((uint32_t)ai << 24) | ((uint32_t)bi << 16) | ((uint32_t)gi << 8) | ri;
+}
+
+static void colorpicker_render(ygui_widget_t* self, ygui_render_ctx_t* ctx) {
+    const ygui_theme_t* t = ctx->theme;
+    float hue = self->data.colorpicker.hue;
+    float sat = self->data.colorpicker.sat;
+    float val = self->data.colorpicker.val;
+
+    /* Layout: SV gradient on top, hue slider below, preview box on right */
+    float hue_bar_h = 20.0f;
+    float preview_w = 40.0f;
+    float sv_w = self->w - preview_w - t->pad_medium;
+    float sv_h = self->h - hue_bar_h - t->pad_medium;
+
+    /* SV gradient area - use color wheel primitive */
+    float r, g, b;
+    hsv_to_rgb(hue, 1.0f, 1.0f, &r, &g, &b);
+    uint32_t hue_color = make_color_abgr(r, g, b, 1.0f);
+
+    /* Background with current hue */
+    ygui_render_box(ctx, self->x, self->y, sv_w, sv_h, hue_color, t->radius_small);
+
+    /* SV indicator */
+    float ind_x = self->x + sat * sv_w;
+    float ind_y = self->y + (1 - val) * sv_h;
+    ygui_render_circle(ctx, ind_x, ind_y, 6.0f, 0xFFFFFFFF);
+    ygui_render_circle(ctx, ind_x, ind_y, 4.0f, 0xFF000000);
+
+    /* Hue slider bar */
+    float hue_y = self->y + sv_h + t->pad_medium;
+    ygui_render_box(ctx, self->x, hue_y, sv_w, hue_bar_h,
+                    t->bg_surface, t->radius_small);
+
+    /* Hue indicator */
+    float hue_ind_x = self->x + hue * sv_w;
+    ygui_render_box(ctx, hue_ind_x - 3, hue_y, 6, hue_bar_h,
+                    0xFFFFFFFF, t->radius_small);
+
+    /* Color preview */
+    float preview_x = self->x + sv_w + t->pad_medium;
+    hsv_to_rgb(hue, sat, val, &r, &g, &b);
+    uint32_t preview_color = make_color_abgr(r, g, b, self->data.colorpicker.alpha);
+    ygui_render_box(ctx, preview_x, self->y, preview_w, self->h,
+                    preview_color, t->radius_medium);
+    ygui_render_box_outline(ctx, preview_x, self->y, preview_w, self->h,
+                            t->border, t->radius_medium, 1.5f);
+}
+
+static int colorpicker_on_press(ygui_widget_t* self, float lx, float ly, ygui_event_t* out) {
+    const ygui_theme_t* t = self->engine->theme;
+    float hue_bar_h = 20.0f;
+    float preview_w = 40.0f;
+    float sv_w = self->w - preview_w - t->pad_medium;
+    float sv_h = self->h - hue_bar_h - t->pad_medium;
+
+    if (ly < sv_h && lx < sv_w) {
+        /* Clicked in SV area */
+        self->data.colorpicker.sat = ygui_clamp(lx / sv_w, 0, 1);
+        self->data.colorpicker.val = ygui_clamp(1 - ly / sv_h, 0, 1);
+    } else if (ly >= sv_h + t->pad_medium && lx < sv_w) {
+        /* Clicked in hue bar */
+        self->data.colorpicker.hue = ygui_clamp(lx / sv_w, 0, 1);
+    }
+
+    out->widget_id = self->id;
+    out->type = YGUI_EVENT_CHANGE;
+    return 1;
+}
+
+static int colorpicker_on_drag(ygui_widget_t* self, float lx, float ly, ygui_event_t* out) {
+    return colorpicker_on_press(self, lx, ly, out);
+}
+
 ygui_widget_t* ygui_colorpicker(ygui_engine_t* engine, const char* id,
                                 float x, float y, float w, float h) {
     ygui_widget_t* cp = ygui_widget_alloc(engine, YGUI_WIDGET_COLORPICKER, id);
@@ -911,22 +1352,40 @@ ygui_widget_t* ygui_colorpicker(ygui_engine_t* engine, const char* id,
     cp->data.colorpicker.sat = 1;
     cp->data.colorpicker.val = 1;
     cp->data.colorpicker.alpha = 1;
+    cp->render = colorpicker_render;
+    cp->on_press = colorpicker_on_press;
+    cp->on_drag = colorpicker_on_drag;
     add_to_engine(engine, cp);
     return cp;
 }
 
 void ygui_colorpicker_set_color(ygui_widget_t* widget,
                                 float r, float g, float b, float a) {
-    (void)widget; (void)r; (void)g; (void)b; (void)a;
-    /* TODO: RGB to HSV conversion */
+    if (!widget || widget->type != YGUI_WIDGET_COLORPICKER) return;
+    rgb_to_hsv(r, g, b,
+               &widget->data.colorpicker.hue,
+               &widget->data.colorpicker.sat,
+               &widget->data.colorpicker.val);
+    widget->data.colorpicker.alpha = a;
+    if (widget->engine) widget->engine->dirty = 1;
 }
 
 void ygui_colorpicker_get_color(const ygui_widget_t* widget,
                                 float* r, float* g, float* b, float* a) {
-    (void)widget;
-    /* TODO: HSV to RGB conversion */
-    if (r) *r = 1;
-    if (g) *g = 1;
-    if (b) *b = 1;
-    if (a) *a = 1;
+    if (!widget || widget->type != YGUI_WIDGET_COLORPICKER) {
+        if (r) *r = 1;
+        if (g) *g = 1;
+        if (b) *b = 1;
+        if (a) *a = 1;
+        return;
+    }
+    float ri, gi, bi;
+    hsv_to_rgb(widget->data.colorpicker.hue,
+               widget->data.colorpicker.sat,
+               widget->data.colorpicker.val,
+               &ri, &gi, &bi);
+    if (r) *r = ri;
+    if (g) *g = gi;
+    if (b) *b = bi;
+    if (a) *a = widget->data.colorpicker.alpha;
 }

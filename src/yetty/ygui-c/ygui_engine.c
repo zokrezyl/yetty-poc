@@ -373,26 +373,6 @@ static void emit_event(ygui_engine_t* engine, const ygui_event_t* event) {
     }
 }
 
-static float to_canvas_x(ygui_engine_t* engine, float px) {
-    /* Scale from display pixels to internal canvas pixels */
-    float cell_w = engine->cell_width > 0 ? engine->cell_width : 8.0f;
-    float display_w = engine->card_w * cell_w;
-    if (display_w > 0) {
-        return px * (engine->width / display_w);
-    }
-    return px;
-}
-
-static float to_canvas_y(ygui_engine_t* engine, float py) {
-    /* Scale from display pixels to internal canvas pixels */
-    float cell_h = engine->cell_height > 0 ? engine->cell_height : 16.0f;
-    float display_h = engine->card_h * cell_h;
-    if (display_h > 0) {
-        return py * (engine->height / display_h);
-    }
-    return py;
-}
-
 void ygui_engine_mouse_move(ygui_engine_t* engine, float x, float y) {
     if (!engine) return;
 
