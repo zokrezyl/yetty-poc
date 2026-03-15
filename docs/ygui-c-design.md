@@ -10,6 +10,100 @@ YGui-C is a self-contained C widget library for yetty terminal. It handles every
 
 **Any language that can call C gets the full functionality.** No reimplementation of OSC, event loops, or input parsing in each language.
 
+## Canvas vs Card (Viewport)
+
+A key architectural concept is the separation between **canvas** and **card**:
+
+- **Canvas**: The full UI surface where widgets are positioned. Can be arbitrarily large (e.g., 100000×100000 pixels for a 200-page scrollable document).
+- **Card**: The visible viewport displayed in the terminal. Shows a portion of the canvas based on current scroll position and zoom level.
+
+```
+┌─────────────────────────────────────────────┐
+│  Canvas (e.g., 500×2000 - scrollable doc)   │
+│  ┌───────────────────────────────────────┐  │
+│  │  Widget at (10, 10)                   │  │
+│  │  Widget at (10, 100)                  │  │
+│  ├───────────────────────────────────────┤◄─┼── Visible viewport (card)
+│  │  Widget at (10, 300)  ← visible       │  │   e.g., 500×300 pixels
+│  │  Widget at (10, 400)  ← visible       │  │
+│  ├───────────────────────────────────────┤  │
+│  │  Widget at (10, 600)                  │  │
+│  │  ...more content below...             │  │
+│  └───────────────────────────────────────┘  │
+└─────────────────────────────────────────────┘
+```
+
+The entire canvas is serialized to the YDraw buffer and sent to yetty. The ydraw card handles:
+- Displaying only the visible portion
+- GPU-side zoom (no buffer regeneration needed)
+- Scroll position management
+
+This enables:
+- Large scrollable UIs (e.g., document viewers, long forms)
+- Zoom in/out without regenerating the buffer
+- Efficient rendering (GPU handles viewport clipping)
+
+## Coordinate Systems and Transformation
+
+### Display vs Canvas Coordinates
+
+Mouse events from yetty arrive in **display coordinates** (pixels within the card's visible area). These must be transformed to **canvas coordinates** for widget hit testing.
+
+```
+Display coords (0,0) to (display_w, display_h)
+    │
+    │  Transform considering:
+    │  - Scroll offset (pan_x, pan_y)
+    │  - Zoom level
+    │  - Display size = card_cells × cell_pixels
+    ▼
+Canvas coords (visible region of canvas)
+```
+
+The transformation:
+```c
+// Display size = card dimensions in pixels
+float display_w = card_w_cells * cell_width;
+float display_h = card_h_cells * cell_height;
+
+// Visible canvas region (depends on zoom/scroll)
+float visible_w = canvas_w / zoom;
+float visible_h = canvas_h / zoom;
+
+// Transform display coords to canvas coords
+canvas_x = scroll_x + (display_x / display_w) * visible_w;
+canvas_y = scroll_y + (display_y / display_h) * visible_h;
+```
+
+### Cell Size Query (CSI 16 t)
+
+Before creating the card, ygui-c must query the terminal's cell size in pixels:
+
+```
+App → Terminal:  \033[16t        (query cell size)
+Terminal → App:  \033[6;H;Wt     (response: height H, width W in pixels)
+```
+
+This is required:
+1. **Before creating the card** - to calculate display dimensions
+2. **After terminal resize (SIGWINCH)** - cell pixel size may change
+
+### Resize Handling
+
+When the terminal resizes, the card keeps its cell dimensions but the pixel size changes. Two modes:
+
+1. **Fixed pixel mode**: Widgets keep their canvas positions/sizes. Content may clip or have empty space.
+2. **Scaled mode**: Widgets scale proportionally relative to the initial (reference) size.
+
+```c
+// On resize, query new cell size
+// reference_w, reference_h = initial display size
+float scale_x = new_display_w / reference_w;
+float scale_y = new_display_h / reference_h;
+
+// In scaled mode, widget positions/sizes multiply by scale
+```
+
 ## Why Pure C API
 
 1. **Universal FFI** - Every language calls C directly (Python ctypes, Rust bindgen, Go cgo, Lua FFI, Java JNI, etc.)
@@ -22,8 +116,8 @@ YGui-C is a self-contained C widget library for yetty terminal. It handles every
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │  User Application (any language)                            │
-│  - Creates engine                                           │
-│  - Adds widgets                                             │
+│  - Creates engine with canvas size                          │
+│  - Adds widgets (positioned in canvas coordinates)          │
 │  - Registers callbacks                                      │
 │  - Optionally adds timers/sockets to libuv loop             │
 ├─────────────────────────────────────────────────────────────┤
@@ -31,32 +125,46 @@ YGui-C is a self-contained C widget library for yetty terminal. It handles every
 │  ┌─────────────────────────────────────────────────────┐    │
 │  │ Event Loop (libuv)                                  │    │
 │  │  - stdin watcher (OSC + keyboard input)             │    │
+│  │  - SIGWINCH handler (terminal resize)               │    │
 │  │  - User can add: timers, sockets, file watchers     │    │
 │  └─────────────────────────────────────────────────────┘    │
 │  ┌─────────────────────────────────────────────────────┐    │
 │  │ Input Parser                                        │    │
-│  │  - OSC 777777 → mouse click → widget callback       │    │
-│  │  - OSC 777778 → mouse move  → widget callback       │    │
-│  │  - Keypresses → keyboard    → user callback         │    │
+│  │  - CSI 6;H;Wt  → cell size response                 │    │
+│  │  - OSC 777777  → mouse click (display coords)       │    │
+│  │  - OSC 777778  → mouse move  (display coords)       │    │
+│  │  - OSC 777779  → view change (zoom/scroll) [TODO]   │    │
+│  │  - Keypresses  → keyboard → user callback           │    │
+│  └─────────────────────────────────────────────────────┘    │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │ Coordinate Transform                                │    │
+│  │  - Display coords → Canvas coords                   │    │
+│  │  - Uses: cell size, card cells, zoom, scroll        │    │
 │  └─────────────────────────────────────────────────────┘    │
 │  ┌─────────────────────────────────────────────────────┐    │
 │  │ Widget Engine                                       │    │
-│  │  - Hit testing, state management                    │    │
-│  │  - Renders to YDraw buffer                          │    │
+│  │  - Hit testing in canvas coordinates                │    │
+│  │  - State management                                 │    │
+│  │  - Renders full canvas to YDraw buffer              │    │
 │  │  - Auto-renders when dirty                          │    │
 │  └─────────────────────────────────────────────────────┘    │
 │  ┌─────────────────────────────────────────────────────┐    │
 │  │ OSC Output (to stdout)                              │    │
-│  │  - First frame: run command with position           │    │
-│  │  - Updates: serialized buffer data                  │    │
+│  │  - Query: CSI 16 t (cell size)                      │    │
+│  │  - First frame: run command with card position      │    │
+│  │  - Updates: serialized buffer (full canvas)         │    │
 │  │  - Cleanup: kill command                            │    │
 │  └─────────────────────────────────────────────────────┘    │
 ├─────────────────────────────────────────────────────────────┤
 │  YDraw C API (wraps C++ YDrawBuffer)                        │
+│  - Serializes full canvas with scene bounds                 │
 ├─────────────────────────────────────────────────────────────┤
-│  Yetty Terminal                                             │
-│  - Receives OSC, renders card                               │
-│  - Sends mouse events back via OSC 777777/777778            │
+│  Yetty Terminal (ydraw card)                                │
+│  - Receives serialized buffer                               │
+│  - Renders visible portion (viewport) of canvas             │
+│  - GPU-side zoom/scroll (no buffer regeneration)            │
+│  - Sends mouse events with display coordinates              │
+│  - Sends view change events on zoom/scroll [TODO]           │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -97,15 +205,39 @@ The event loop is powered by **libuv**, allowing users to integrate their own as
 
 **Simple (ygui owns loop):**
 ```c
+ygui_init();  // Sets up terminal, queries cell size
+
+// Canvas size 400x300 - widgets positioned in this coordinate space
 ygui_engine_t* e = ygui_engine_create("myapp", 400, 300);
 ygui_button(e, "btn", 10, 10, 100, 40, "Click");
+
+// Card at cell (2,2), size 50x18 cells
+// Display size = 50*cell_w x 18*cell_h pixels (viewport into canvas)
 ygui_engine_show(e, 2, 2, 50, 18);
 ygui_engine_run(e);  // Creates libuv loop internally
+```
+
+**Scrollable content:**
+```c
+ygui_init();
+
+// Large canvas for scrollable content (e.g., 400 wide x 2000 tall)
+ygui_engine_t* e = ygui_engine_create("myapp", 400, 2000);
+
+// Add many widgets down the canvas
+ygui_button(e, "btn1", 10, 10, 100, 40, "Top");
+ygui_button(e, "btn2", 10, 500, 100, 40, "Middle");
+ygui_button(e, "btn3", 10, 1900, 100, 40, "Bottom");
+
+// Card shows viewport - user can scroll within yetty
+ygui_engine_show(e, 2, 2, 50, 18);
+ygui_engine_run(e);
 ```
 
 **Advanced (user owns loop):**
 ```c
 uv_loop_t* loop = uv_default_loop();
+ygui_init();
 
 ygui_engine_t* e = ygui_engine_create("myapp", 400, 300);
 ygui_button(e, "btn", 10, 10, 100, 40, "Click");
@@ -127,6 +259,7 @@ uv_run(loop, UV_RUN_DEFAULT);  // User runs the loop
 ## stdin: ALL Terminal Input
 
 When terminal is in raw mode, **stdin receives everything**:
+- CSI responses from yetty (`\033[6;H;Wt` cell size)
 - OSC sequences from yetty (`\033]777777;card;buttons;press;x;y\033\\`)
 - User keypresses (`a`, `b`, `Enter`, etc.)
 - Escape sequences (arrows, function keys)
@@ -134,8 +267,10 @@ When terminal is in raw mode, **stdin receives everything**:
 The library parses all of this:
 
 ```
-stdin bytes → parser → ┬→ OSC 777777 → mouse click → hit test → widget callback
-                       ├→ OSC 777778 → mouse move  → hit test → widget callback
+stdin bytes → parser → ┬→ CSI 6;H;Wt → cell size   → store for coord transform
+                       ├→ OSC 777777 → mouse click → transform → hit test → callback
+                       ├→ OSC 777778 → mouse move  → transform → hit test → callback
+                       ├→ OSC 777779 → view change → update zoom/scroll state [TODO]
                        ├→ 'q'        → key event   → user key callback
                        ├→ ESC [ A    → arrow up    → user key callback
                        └→ etc.
@@ -252,17 +387,28 @@ void ygui_shutdown(void); // Restore terminal
 
 ### Engine Lifecycle
 ```c
-// Create engine with card name and pixel dimensions
-ygui_engine_t* ygui_engine_create(const char* name, float width, float height);
+// Create engine with card name and canvas dimensions
+// Canvas can be larger than visible area for scrollable content
+ygui_engine_t* ygui_engine_create(const char* name, float canvas_w, float canvas_h);
 void ygui_engine_destroy(ygui_engine_t* engine);
 
 // Display card at terminal cell position
+// Queries cell size (CSI 16 t) before creating the card
+// w, h are in terminal cells (not pixels)
 void ygui_engine_show(ygui_engine_t* engine, int x, int y, int w, int h);
 
 // Event loop
 void ygui_engine_attach(ygui_engine_t* engine, uv_loop_t* loop); // User's loop
 void ygui_engine_run(ygui_engine_t* engine);  // Simple: creates loop internally
 void ygui_engine_stop(ygui_engine_t* engine);
+
+// Resize handling
+typedef enum {
+    YGUI_RESIZE_FIXED,   // Keep widget pixel sizes, may clip
+    YGUI_RESIZE_SCALED   // Scale widgets proportionally
+} ygui_resize_mode_t;
+
+void ygui_engine_set_resize_mode(ygui_engine_t* engine, ygui_resize_mode_t mode);
 ```
 
 ### Widget Creation
@@ -347,13 +493,14 @@ User never calls render manually. It's automatic.
 1. User clicks on card in yetty
 2. Yetty sends: `\033]777777;cardname;1;1;150;80\033\\`
 3. libuv stdin watcher fires
-4. ygui parses OSC 777777: buttons=1, press=1, x=150, y=80
-5. ygui hit tests: which widget at (150, 80)?
-6. Found button "btn"
-7. Update button state (pressed)
-8. Call user's on_click callback
-9. Mark dirty
-10. Auto-render new frame
+4. ygui parses OSC 777777: buttons=1, press=1, x=150, y=80 (display coords)
+5. ygui transforms to canvas coords considering zoom/scroll
+6. ygui hit tests: which widget at canvas position?
+7. Found button "btn"
+8. Update button state (pressed)
+9. Call user's on_click callback
+10. Mark dirty
+11. Auto-render new frame
 
 ### Keyboard Event Flow
 
@@ -401,6 +548,14 @@ src/ygui-bindings/
 \033[?1500l   - Unsubscribe from card click events
 \033[?1501h   - Subscribe to card move events
 \033[?1501l   - Unsubscribe from card move events
+\033[?1502h   - Subscribe to card view change events (zoom/scroll)
+\033[?1502l   - Unsubscribe from card view change events
+```
+
+### Terminal Queries (app → yetty)
+```
+\033[16t     - Query cell size in pixels
+             Response: \033[6;HEIGHT;WIDTHt
 ```
 
 ### Card Commands (app → yetty via stdout)
@@ -418,15 +573,43 @@ src/ygui-bindings/
 
 Button bitmask: bit0=left(1), bit1=right(2), bit2=middle(4), bit3=scroll-up(8), bit4=scroll-down(16)
 
+Coordinates x,y are in display pixels (card surface). Transform to canvas coords using current zoom/scroll.
+
+### View Change Events (yetty → app via stdin) [TODO]
+```
+\033]777779;card-name;zoom;scroll-x;scroll-y\033\\   (view changed)
+```
+
+When user zooms (Ctrl+scroll) or scrolls within a card, yetty notifies the app so it can:
+- Update coordinate transformation for hit testing
+- Adjust widget behavior based on visible area
+- Implement lazy loading for large canvases
+
 ## Summary
 
-The key design principle: **Everything in C, wrappers are thin.**
+The key design principles:
 
-- libuv event loop in C
-- stdin parsing in C
-- OSC output in C
-- Widget callbacks in C
-- Auto-rendering in C
+1. **Everything in C, wrappers are thin**
+   - libuv event loop in C
+   - stdin parsing in C
+   - OSC output in C
+   - Widget callbacks in C
+   - Auto-rendering in C
+
+2. **Canvas/viewport separation**
+   - Canvas: full UI, can be arbitrarily large
+   - Card: visible viewport with zoom/scroll
+   - GPU handles viewport clipping efficiently
+
+3. **Coordinate transformation**
+   - Mouse events arrive in display coords
+   - Transform to canvas coords using zoom/scroll state
+   - Query cell size before creating card (CSI 16 t)
+   - Re-query on terminal resize (SIGWINCH)
+
+4. **Resize modes**
+   - Fixed: widgets keep pixel sizes
+   - Scaled: widgets scale with viewport
 
 Language wrappers just expose the C API idiomatically. No logic duplication.
 

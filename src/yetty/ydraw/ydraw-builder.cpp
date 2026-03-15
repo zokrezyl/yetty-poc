@@ -1843,8 +1843,8 @@ private:
     float _cellSizeX = DEFAULT_CELL_SIZE;
     float _cellSizeY = DEFAULT_CELL_SIZE;
     uint32_t _maxPrimsPerCell = DEFAULT_MAX_PRIMS_PER_CELL;
-    float _paddingX = 0.05f;  // Scene padding as fraction of extent (default 5%)
-    float _paddingY = 0.05f;
+    float _paddingX = 0.0f;  // Scene padding as fraction of extent (default 0%)
+    float _paddingY = 0.0f;
 
     // Appearance
     uint32_t _bgColor = 0xFF2E1A1A;

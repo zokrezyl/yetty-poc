@@ -67,6 +67,12 @@ extern "C" uint32_t ydraw_buffer_serialize(ydraw_buffer_t* buf, const uint8_t** 
     return static_cast<uint32_t>(buf->serialized.size());
 }
 
+extern "C" void ydraw_buffer_set_scene_bounds(ydraw_buffer_t* buf, float minX, float minY, float maxX, float maxY) {
+    if (buf && buf->impl) {
+        buf->impl->setSceneBounds(minX, minY, maxX, maxY);
+    }
+}
+
 //=============================================================================
 // Text spans
 //=============================================================================

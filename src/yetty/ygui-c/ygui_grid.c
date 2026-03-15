@@ -3,6 +3,19 @@
  */
 
 #include "ygui_internal.h"
+#include <stdio.h>
+
+static FILE* _grid_log(void) {
+    static FILE* f = NULL;
+    static int checked = 0;
+    if (!checked) {
+        checked = 1;
+        const char* p = getenv("YGUI_C_LOG");
+        if (p) f = fopen(p, "a");
+    }
+    return f;
+}
+#define GRID_LOG(...) do { FILE* _f = _grid_log(); if (_f) { fprintf(_f, "[GRID] " __VA_ARGS__); fprintf(_f, "\n"); fflush(_f); } } while(0)
 
 /*=============================================================================
  * Grid Cell Helpers
@@ -99,6 +112,9 @@ void ygui_grid_insert(ygui_spatial_grid_t* grid, ygui_widget_t* widget) {
     float x1 = x0 + widget->w;
     float y1 = y0 + widget->h;
 
+    GRID_LOG("insert widget=%s pos=(%.1f,%.1f) size=(%.1f,%.1f) eff=(%.1f,%.1f)",
+             widget->id ? widget->id : "?", widget->x, widget->y, widget->w, widget->h, x0, y0);
+
     int col0 = (int)(x0 / grid->cell_size);
     int row0 = (int)(y0 / grid->cell_size);
     int col1 = (int)(x1 / grid->cell_size);
@@ -161,25 +177,36 @@ ygui_widget_t* ygui_grid_query(const ygui_spatial_grid_t* grid, float x, float y
     int col = (int)(x / grid->cell_size);
     int row = (int)(y / grid->cell_size);
 
+    GRID_LOG("query at (%.1f,%.1f) -> cell(%d,%d)", x, y, col, row);
+
     if (col < 0 || col >= grid->cols || row < 0 || row >= grid->rows) {
+        GRID_LOG("  out of bounds");
         return NULL;
     }
 
     int idx = row * grid->cols + col;
     ygui_grid_cell_t* cell = &grid->cells[idx];
 
+    GRID_LOG("  cell has %d widgets", cell->count);
+
     /* Return topmost widget (last in list) that contains the point */
     for (int i = cell->count - 1; i >= 0; i--) {
         ygui_widget_t* w = cell->widgets[i];
-        if (x >= w->effective_x && x < w->effective_x + w->w &&
-            y >= w->effective_y && y < w->effective_y + w->h) {
+        int in_x = (x >= w->effective_x && x < w->effective_x + w->w);
+        int in_y = (y >= w->effective_y && y < w->effective_y + w->h);
+        GRID_LOG("  check %s: eff=(%.1f,%.1f) size=(%.1f,%.1f) in_x=%d in_y=%d flags=0x%x",
+                 w->id ? w->id : "?", w->effective_x, w->effective_y, w->w, w->h, in_x, in_y, w->flags);
+        if (in_x && in_y) {
             /* Check visibility */
             if (!(w->flags & YGUI_FLAG_VISIBLE) || (w->flags & YGUI_FLAG_DISABLED)) {
+                GRID_LOG("  -> skipped (not visible or disabled)");
                 continue;
             }
+            GRID_LOG("  -> HIT: %s", w->id);
             return w;
         }
     }
 
+    GRID_LOG("  -> no hit");
     return NULL;
 }

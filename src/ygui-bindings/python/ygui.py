@@ -3,6 +3,10 @@ YGui Python Bindings
 
 Pure Python bindings for YGui-C using ctypes.
 The library handles OSC output internally - no manual OSC code needed.
+
+Set YGUI_LOG environment variable to enable logging:
+  YGUI_LOG=stderr     - log to stderr
+  YGUI_LOG=/path/file - log to file
 """
 
 import ctypes
@@ -13,35 +17,78 @@ from ctypes import (
 from typing import Callable, Optional
 from enum import IntEnum
 import os
+import sys
+import logging
+
+#=============================================================================
+# Logging setup
+#=============================================================================
+
+_logger = logging.getLogger("ygui")
+_logger.setLevel(logging.DEBUG)
+
+def _setup_logging():
+    log_dest = os.environ.get("YGUI_LOG")
+    if not log_dest:
+        _logger.addHandler(logging.NullHandler())
+        return
+
+    formatter = logging.Formatter(
+        '%(asctime)s.%(msecs)03d [%(levelname)s] %(message)s',
+        datefmt='%H:%M:%S'
+    )
+
+    if log_dest == "stderr":
+        handler = logging.StreamHandler(sys.stderr)
+    else:
+        handler = logging.FileHandler(log_dest, mode='w')
+
+    handler.setFormatter(formatter)
+    handler.setLevel(logging.DEBUG)
+    _logger.addHandler(handler)
+    _logger.info("YGui logging initialized to: %s", log_dest)
+
+_setup_logging()
 
 #=============================================================================
 # Library loading
 #=============================================================================
 
 def _load_library():
-    """Load libygui-c.a or find the built library."""
-    # Look for the static library linked into a shared wrapper, or system lib
+    """Load libygui.so shared library (self-contained, no external deps)."""
     search_paths = [
-        # Build directory (most common during development)
-        os.path.join(os.path.dirname(__file__), "..", "..", "..", "build-desktop-ytrace-release", "src", "yetty", "ygui-c", "libygui-c.a"),
-        os.path.join(os.path.dirname(__file__), "..", "..", "build", "libygui-c.a"),
+        # Build directory
+        os.path.join(os.path.dirname(__file__), "..", "..", "..", "build-desktop-ytrace-release", "src", "yetty", "ygui-c", "libygui.so"),
+        # Installed location
+        "/usr/local/lib/libygui.so",
+        "/usr/lib/libygui.so",
+        # Current directory
         os.path.join(os.path.dirname(__file__), "libygui.so"),
         "libygui.so",
     ]
+    _logger.debug("Searching for libygui.so in: %s", search_paths)
     for path in search_paths:
+        _logger.debug("Trying: %s", path)
         try:
-            return ctypes.CDLL(path)
-        except OSError:
+            lib = ctypes.CDLL(path)
+            _logger.info("Loaded library from: %s", path)
+            return lib
+        except OSError as e:
+            _logger.debug("Failed to load %s: %s", path, e)
             continue
-    raise ImportError("Could not load ygui library")
+    _logger.error("Could not load libygui.so from any path")
+    raise ImportError("Could not load libygui.so")
 
 _lib = None
 
 def _get_lib():
     global _lib
     if _lib is None:
+        _logger.debug("First call to _get_lib(), loading library...")
         _lib = _load_library()
+        _logger.debug("Setting up function signatures...")
         _setup_functions(_lib)
+        _logger.info("Library ready")
     return _lib
 
 
@@ -313,21 +360,30 @@ class Button(Widget):
     """Button widget."""
 
     def set_label(self, label: str):
+        _logger.debug("Button.set_label(%r)", label)
         self._lib.ygui_button_set_label(self._handle, label.encode("utf-8"))
 
     def on_click(self, callback: Callable[[], None]):
         """Set click callback."""
+        _logger.debug("Button.on_click() setting callback")
         def c_callback(widget, userdata):
-            callback()
+            _logger.info("CALLBACK: Button clicked! widget=%s", widget)
+            try:
+                callback()
+                _logger.debug("CALLBACK: Button callback completed")
+            except Exception as e:
+                _logger.exception("CALLBACK: Button callback raised exception: %s", e)
         cb = _ClickCallbackType(c_callback)
         self._callbacks.append(cb)
         self._lib.ygui_button_on_click(self._handle, cb, None)
+        _logger.debug("Button.on_click() callback registered")
 
 
 class Label(Widget):
     """Label widget."""
 
     def set_text(self, text):
+        _logger.debug("Label.set_text(%r)", text)
         if isinstance(text, str):
             text = text.encode("utf-8")
         self._lib.ygui_label_set_text(self._handle, text)
@@ -337,40 +393,60 @@ class Slider(Widget):
     """Slider widget."""
 
     def set_value(self, value: float):
+        _logger.debug("Slider.set_value(%s)", value)
         self._lib.ygui_slider_set_value(self._handle, value)
 
     def get_value(self) -> float:
-        return self._lib.ygui_slider_get_value(self._handle)
+        val = self._lib.ygui_slider_get_value(self._handle)
+        _logger.debug("Slider.get_value() -> %s", val)
+        return val
 
     value = property(get_value, set_value)
 
     def on_change(self, callback: Callable[[float], None]):
         """Set change callback."""
+        _logger.debug("Slider.on_change() setting callback")
         def c_callback(widget, value, userdata):
-            callback(value)
+            _logger.info("CALLBACK: Slider changed! widget=%s value=%s", widget, value)
+            try:
+                callback(value)
+                _logger.debug("CALLBACK: Slider callback completed")
+            except Exception as e:
+                _logger.exception("CALLBACK: Slider callback raised exception: %s", e)
         cb = _ChangeCallbackType(c_callback)
         self._callbacks.append(cb)
         self._lib.ygui_slider_on_change(self._handle, cb, None)
+        _logger.debug("Slider.on_change() callback registered")
 
 
 class Checkbox(Widget):
     """Checkbox widget."""
 
     def set_checked(self, checked: bool):
+        _logger.debug("Checkbox.set_checked(%s)", checked)
         self._lib.ygui_checkbox_set_checked(self._handle, 1 if checked else 0)
 
     def get_checked(self) -> bool:
-        return bool(self._lib.ygui_checkbox_get_checked(self._handle))
+        val = bool(self._lib.ygui_checkbox_get_checked(self._handle))
+        _logger.debug("Checkbox.get_checked() -> %s", val)
+        return val
 
     checked = property(get_checked, set_checked)
 
     def on_change(self, callback: Callable[[bool], None]):
         """Set change callback."""
+        _logger.debug("Checkbox.on_change() setting callback")
         def c_callback(widget, checked, userdata):
-            callback(bool(checked))
+            _logger.info("CALLBACK: Checkbox changed! widget=%s checked=%s", widget, checked)
+            try:
+                callback(bool(checked))
+                _logger.debug("CALLBACK: Checkbox callback completed")
+            except Exception as e:
+                _logger.exception("CALLBACK: Checkbox callback raised exception: %s", e)
         cb = _CheckCallbackType(c_callback)
         self._callbacks.append(cb)
         self._lib.ygui_checkbox_on_change(self._handle, cb, None)
+        _logger.debug("Checkbox.on_change() callback registered")
 
 
 class Panel(Widget):
@@ -407,34 +483,47 @@ class Engine:
             width: Canvas width in pixels
             height: Canvas height in pixels
         """
+        _logger.info("Engine.__init__(name=%r, width=%s, height=%s)", name, width, height)
+        self._name = name
         self._lib = _get_lib()
+        _logger.debug("Calling ygui_engine_create...")
         self._handle = self._lib.ygui_engine_create(name.encode("utf-8"), width, height)
+        _logger.debug("ygui_engine_create returned handle=%s", self._handle)
         if not self._handle:
+            _logger.error("ygui_engine_create returned NULL!")
             raise RuntimeError("Failed to create YGui engine")
 
         self._widgets = {}
         self._callbacks = []  # prevent GC
         self._shown = False
+        _logger.info("Engine created successfully")
 
     def __del__(self):
         if hasattr(self, "_handle") and self._handle:
+            _logger.debug("Engine.__del__() destroying handle=%s", self._handle)
             self._lib.ygui_engine_destroy(self._handle)
 
     def show(self, x: int = 0, y: int = 0, w: int = 80, h: int = 24):
         """Show the card at terminal cell position."""
+        _logger.info("Engine.show(x=%d, y=%d, w=%d, h=%d)", x, y, w, h)
         self._lib.ygui_engine_show(self._handle, x, y, w, h)
         self._shown = True
+        _logger.debug("Card shown")
 
     def render(self):
         """Force render (usually auto-rendered when dirty)."""
+        _logger.debug("Engine.render()")
         self._lib.ygui_engine_render(self._handle)
 
     def run(self):
         """Run event loop (blocks until stop() or 'q')."""
+        _logger.info("Engine.run() - entering event loop")
         self._lib.ygui_engine_run(self._handle)
+        _logger.info("Engine.run() - event loop exited")
 
     def stop(self):
         """Stop the event loop."""
+        _logger.info("Engine.stop()")
         self._lib.ygui_engine_stop(self._handle)
 
     def set_size(self, width: float, height: float):
@@ -448,11 +537,18 @@ class Engine:
 
     def on_key(self, callback: Callable[[int, int], None]):
         """Set keyboard callback. Args: (key_code, modifiers)."""
+        _logger.debug("Engine.on_key() setting callback")
         def c_callback(engine, key, mods, userdata):
-            callback(key, mods)
+            _logger.info("CALLBACK: Key pressed! key=%d (chr=%r) mods=%d", key, chr(key) if 32 <= key < 127 else '?', mods)
+            try:
+                callback(key, mods)
+                _logger.debug("CALLBACK: Key callback completed")
+            except Exception as e:
+                _logger.exception("CALLBACK: Key callback raised exception: %s", e)
         cb = _KeyCallbackType(c_callback)
         self._callbacks.append(cb)
         self._lib.ygui_engine_on_key(self._handle, cb, None)
+        _logger.debug("Engine.on_key() callback registered")
 
     def find(self, widget_id: str) -> Optional[Widget]:
         handle = self._lib.ygui_engine_find(self._handle, widget_id.encode("utf-8"))
@@ -462,47 +558,62 @@ class Engine:
 
     # Widget creation methods
     def button(self, id: str, x: float, y: float, w: float, h: float, label: str) -> Button:
+        _logger.debug("Creating button id=%r at (%s,%s) size=(%s,%s) label=%r", id, x, y, w, h, label)
         handle = self._lib.ygui_button(
             self._handle, id.encode("utf-8"), x, y, w, h, label.encode("utf-8"))
+        _logger.debug("ygui_button returned handle=%s", handle)
         btn = Button(handle, self)
         self._widgets[id] = btn
         return btn
 
     def label(self, id: str, x: float, y: float, text: str) -> Label:
+        _logger.debug("Creating label id=%r at (%s,%s) text=%r", id, x, y, text)
         handle = self._lib.ygui_label(
             self._handle, id.encode("utf-8"), x, y, text.encode("utf-8"))
+        _logger.debug("ygui_label returned handle=%s", handle)
         lbl = Label(handle, self)
         self._widgets[id] = lbl
         return lbl
 
     def slider(self, id: str, x: float, y: float, w: float, h: float,
                min_val: float = 0, max_val: float = 100, value: float = 50) -> Slider:
+        _logger.debug("Creating slider id=%r at (%s,%s) size=(%s,%s) range=[%s,%s] value=%s",
+                      id, x, y, w, h, min_val, max_val, value)
         handle = self._lib.ygui_slider(
             self._handle, id.encode("utf-8"), x, y, w, h, min_val, max_val, value)
+        _logger.debug("ygui_slider returned handle=%s", handle)
         sld = Slider(handle, self)
         self._widgets[id] = sld
         return sld
 
     def checkbox(self, id: str, x: float, y: float, w: float, h: float,
                  label: str, checked: bool = False) -> Checkbox:
+        _logger.debug("Creating checkbox id=%r at (%s,%s) size=(%s,%s) label=%r checked=%s",
+                      id, x, y, w, h, label, checked)
         handle = self._lib.ygui_checkbox(
             self._handle, id.encode("utf-8"), x, y, w, h,
             label.encode("utf-8"), 1 if checked else 0)
+        _logger.debug("ygui_checkbox returned handle=%s", handle)
         chk = Checkbox(handle, self)
         self._widgets[id] = chk
         return chk
 
     def panel(self, id: str, x: float, y: float, w: float, h: float) -> Panel:
+        _logger.debug("Creating panel id=%r at (%s,%s) size=(%s,%s)", id, x, y, w, h)
         handle = self._lib.ygui_panel(
             self._handle, id.encode("utf-8"), x, y, w, h)
+        _logger.debug("ygui_panel returned handle=%s", handle)
         pnl = Panel(handle, self)
         self._widgets[id] = pnl
         return pnl
 
     def progress(self, id: str, x: float, y: float, w: float, h: float,
                  value: float = 0) -> Progress:
+        _logger.debug("Creating progress id=%r at (%s,%s) size=(%s,%s) value=%s",
+                      id, x, y, w, h, value)
         handle = self._lib.ygui_progress(
             self._handle, id.encode("utf-8"), x, y, w, h, value)
+        _logger.debug("ygui_progress returned handle=%s", handle)
         prg = Progress(handle, self)
         self._widgets[id] = prg
         return prg
@@ -512,14 +623,21 @@ def init() -> bool:
     """Initialize the library (sets up raw terminal mode).
     Must be called before using event loop functions.
     Returns True on success."""
-    return _get_lib().ygui_init() == 0
+    _logger.info("ygui.init() called")
+    result = _get_lib().ygui_init()
+    _logger.info("ygui_init() returned %d (success=%s)", result, result == 0)
+    return result == 0
 
 
 def shutdown():
     """Shutdown the library (restores terminal settings)."""
+    _logger.info("ygui.shutdown() called")
     _get_lib().ygui_shutdown()
+    _logger.info("ygui_shutdown() completed")
 
 
 def version() -> str:
     """Get YGui version string."""
-    return _get_lib().ygui_version().decode("utf-8")
+    ver = _get_lib().ygui_version().decode("utf-8")
+    _logger.debug("ygui.version() -> %r", ver)
+    return ver

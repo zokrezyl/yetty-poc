@@ -33,6 +33,11 @@ struct ydraw_buffer {
     uint8_t* serial_data;
     uint32_t serial_capacity;
     uint32_t serial_size;
+
+    /* Scene bounds */
+    float scene_min_x, scene_min_y;
+    float scene_max_x, scene_max_y;
+    int has_scene_bounds;
 };
 
 /* Write uint32 to float buffer (bitcast) */
@@ -114,7 +119,17 @@ void ydraw_buffer_clear(ydraw_buffer_t* buf) {
         free(buf->text_spans[i].str_copy);
     }
     buf->text_count = 0;
+    buf->has_scene_bounds = 0;
     /* Keep allocated memory for reuse */
+}
+
+void ydraw_buffer_set_scene_bounds(ydraw_buffer_t* buf, float minX, float minY, float maxX, float maxY) {
+    if (!buf) return;
+    buf->scene_min_x = minX;
+    buf->scene_min_y = minY;
+    buf->scene_max_x = maxX;
+    buf->scene_max_y = maxY;
+    buf->has_scene_bounds = 1;
 }
 
 uint32_t ydraw_buffer_prim_count(const ydraw_buffer_t* buf) {
@@ -204,14 +219,14 @@ uint32_t ydraw_buffer_serialize(ydraw_buffer_t* buf, const uint8_t** out_data) {
         memcpy(p, ts->text, textLen); p += textLen;
     }
 
-    /* Scene metadata (defaults) */
+    /* Scene metadata */
     memcpy(p, &(uint32_t){0}, 4); p += 4;  /* bgColor */
     memcpy(p, &(uint32_t){0}, 4); p += 4;  /* flags */
-    *p++ = 0;  /* hasSceneBounds */
-    memcpy(p, &(float){0}, 4); p += 4;  /* minX */
-    memcpy(p, &(float){0}, 4); p += 4;  /* minY */
-    memcpy(p, &(float){0}, 4); p += 4;  /* maxX */
-    memcpy(p, &(float){0}, 4); p += 4;  /* maxY */
+    *p++ = buf->has_scene_bounds ? 1 : 0;  /* hasSceneBounds */
+    memcpy(p, &buf->scene_min_x, 4); p += 4;  /* minX */
+    memcpy(p, &buf->scene_min_y, 4); p += 4;  /* minY */
+    memcpy(p, &buf->scene_max_x, 4); p += 4;  /* maxX */
+    memcpy(p, &buf->scene_max_y, 4); p += 4;  /* maxY */
 
     buf->serial_size = (uint32_t)(p - buf->serial_data);
     *out_data = buf->serial_data;

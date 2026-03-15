@@ -26,5 +26,7 @@ run_demo() {
         echo "Error: Demo not found: $DEMO_ASSETS/$demo"
         return 1
     fi
-    python3 "$DEMO_ASSETS/$demo"
+    # Pass through YGUI_LOG for debugging
+    # Usage: YGUI_LOG=/tmp/ygui.log ./demo.sh
+    YGUI_LOG="${YGUI_LOG:-}" python3 "$DEMO_ASSETS/$demo"
 }

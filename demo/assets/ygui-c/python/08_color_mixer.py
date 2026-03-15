@@ -5,60 +5,46 @@ Demo 08: Color Mixer
 RGB color mixer with sliders and preview.
 """
 
-import sys
-sys.path.insert(0, '../../../src/ygui-bindings/python')
-
-from ygui import Engine, EventType
+import ygui
 
 def rgb_to_abgr(r, g, b, a=255):
     """Convert RGBA to ABGR uint32."""
     return (a << 24) | (b << 16) | (g << 8) | r
 
 def main():
-    engine = Engine(width=500, height=400)
+    ygui.init()
+
+    engine = ygui.Engine("color-mixer", width=480, height=380)
 
     # Title
-    engine.label("title", x=30, y=20, text="RGB Color Mixer")
+    engine.label("title", 30, 15, "RGB Color Mixer")
 
     # Color preview panel
-    preview = engine.panel("preview", x=300, y=60, w=150, h=150)
+    preview = engine.panel("preview", 280, 55, 160, 140)
     preview.set_bg_color(rgb_to_abgr(128, 128, 128))
 
-    # RGB labels
-    engine.label("hex_label", x=300, y=230, text="#808080")
+    # Hex value label
+    hex_label = engine.label("hex_label", 280, 210, "#808080")
 
     # Red slider
-    engine.label("r_label", x=30, y=60, text="Red")
-    r_value = engine.label("r_value", x=220, y=60, text="128")
-    r_slider = engine.slider("red", x=30, y=85, w=200, h=20,
-                              min_val=0, max_val=255, value=128)
+    engine.label("r_label", 30, 55, "Red")
+    r_value = engine.label("r_value", 200, 55, "128")
+    r_slider = engine.slider("red", 30, 80, 180, 25, 0, 255, 128)
 
     # Green slider
-    engine.label("g_label", x=30, y=120, text="Green")
-    g_value = engine.label("g_value", x=220, y=120, text="128")
-    g_slider = engine.slider("green", x=30, y=145, w=200, h=20,
-                              min_val=0, max_val=255, value=128)
+    engine.label("g_label", 30, 115, "Green")
+    g_value = engine.label("g_value", 200, 115, "128")
+    g_slider = engine.slider("green", 30, 140, 180, 25, 0, 255, 128)
 
     # Blue slider
-    engine.label("b_label", x=30, y=180, text="Blue")
-    b_value = engine.label("b_value", x=220, y=180, text="128")
-    b_slider = engine.slider("blue", x=30, y=205, w=200, h=20,
-                              min_val=0, max_val=255, value=128)
+    engine.label("b_label", 30, 175, "Blue")
+    b_value = engine.label("b_value", 200, 175, "128")
+    b_slider = engine.slider("blue", 30, 200, 180, 25, 0, 255, 128)
 
     # Alpha slider
-    engine.label("a_label", x=30, y=240, text="Alpha")
-    a_value = engine.label("a_value", x=220, y=240, text="255")
-    a_slider = engine.slider("alpha", x=30, y=265, w=200, h=20,
-                              min_val=0, max_val=255, value=255)
-
-    # Preset buttons
-    engine.label("presets", x=30, y=310, text="Presets:")
-    engine.button("preset_red", x=100, y=300, w=60, h=30, label="Red")
-    engine.button("preset_green", x=170, y=300, w=60, h=30, label="Green")
-    engine.button("preset_blue", x=240, y=300, w=60, h=30, label="Blue")
-    engine.button("preset_white", x=310, y=300, w=60, h=30, label="White")
-
-    hex_label = engine.find("hex_label")
+    engine.label("a_label", 30, 235, "Alpha")
+    a_value = engine.label("a_value", 200, 235, "255")
+    a_slider = engine.slider("alpha", 30, 260, 180, 25, 0, 255, 255)
 
     def update_color():
         r = int(r_slider.value)
@@ -66,19 +52,12 @@ def main():
         b = int(b_slider.value)
         a = int(a_slider.value)
 
-        color = rgb_to_abgr(r, g, b, a)
-        preview.set_bg_color(color)
-
-        r_value.set_text(str(r).encode('utf-8'))
-        g_value.set_text(str(g).encode('utf-8'))
-        b_value.set_text(str(b).encode('utf-8'))
-        a_value.set_text(str(a).encode('utf-8'))
-
-        hex_str = f"#{r:02X}{g:02X}{b:02X}"
-        if hex_label:
-            hex_label.set_text(hex_str.encode('utf-8'))
-
-        print(f"Color: RGB({r}, {g}, {b}) A={a} = {hex_str}")
+        preview.set_bg_color(rgb_to_abgr(r, g, b, a))
+        r_value.set_text(str(r))
+        g_value.set_text(str(g))
+        b_value.set_text(str(b))
+        a_value.set_text(str(a))
+        hex_label.set_text(f"#{r:02X}{g:02X}{b:02X}")
 
     def set_preset(r, g, b):
         r_slider.set_value(r)
@@ -86,26 +65,36 @@ def main():
         b_slider.set_value(b)
         update_color()
 
-    def on_event(event):
-        if event.type == EventType.CHANGE:
-            update_color()
-        elif event.type == EventType.CLICK:
-            if event.widget_id == "preset_red":
-                set_preset(255, 0, 0)
-            elif event.widget_id == "preset_green":
-                set_preset(0, 255, 0)
-            elif event.widget_id == "preset_blue":
-                set_preset(0, 0, 255)
-            elif event.widget_id == "preset_white":
-                set_preset(255, 255, 255)
+    r_slider.on_change(lambda v: update_color())
+    g_slider.on_change(lambda v: update_color())
+    b_slider.on_change(lambda v: update_color())
+    a_slider.on_change(lambda v: update_color())
 
-    engine.on_event(on_event)
-    engine.rebuild()
+    # Preset buttons
+    engine.label("presets", 30, 305, "Presets:")
 
-    # Simulate changing red slider
-    print("Setting red to maximum...")
-    r_slider.set_value(255)
-    update_color()
+    btn_red = engine.button("preset_red", 100, 300, 60, 30, "Red")
+    btn_red.on_click(lambda: set_preset(255, 0, 0))
+
+    btn_green = engine.button("preset_green", 170, 300, 60, 30, "Green")
+    btn_green.on_click(lambda: set_preset(0, 255, 0))
+
+    btn_blue = engine.button("preset_blue", 240, 300, 60, 30, "Blue")
+    btn_blue.on_click(lambda: set_preset(0, 0, 255))
+
+    btn_white = engine.button("preset_white", 310, 300, 60, 30, "White")
+    btn_white.on_click(lambda: set_preset(255, 255, 255))
+
+    def on_key(key, mods):
+        if key == ord('q'):
+            engine.stop()
+
+    engine.on_key(on_key)
+
+    engine.show(x=2, y=2, w=60, h=22)
+    engine.run()
+
+    ygui.shutdown()
 
 if __name__ == "__main__":
     main()

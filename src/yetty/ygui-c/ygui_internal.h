@@ -322,6 +322,7 @@ void ygui_osc_update_card(const char* name, const uint8_t* data, uint32_t size);
 void ygui_osc_kill_card(const char* name);
 void ygui_osc_subscribe_clicks(int enable);
 void ygui_osc_subscribe_moves(int enable);
+void ygui_osc_query_cell_size(void);
 
 /* Error */
 void ygui_set_error(const char* msg);

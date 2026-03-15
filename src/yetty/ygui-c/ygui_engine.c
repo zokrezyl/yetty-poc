@@ -10,6 +10,28 @@
 #include <signal.h>
 #include <string.h>
 
+/* Debug logging - set YGUI_C_LOG env var to enable */
+static FILE* _ygui_log_file = NULL;
+static int _ygui_log_checked = 0;
+
+static void _ygui_log_init(void) {
+    if (_ygui_log_checked) return;
+    _ygui_log_checked = 1;
+    const char* log_path = getenv("YGUI_C_LOG");
+    if (log_path) {
+        _ygui_log_file = fopen(log_path, "w");
+        if (_ygui_log_file) {
+            setvbuf(_ygui_log_file, NULL, _IONBF, 0);
+            fprintf(_ygui_log_file, "[YGUI-C] Logging initialized\n");
+        }
+    }
+}
+
+#define YGUI_LOG(...) do { \
+    _ygui_log_init(); \
+    if (_ygui_log_file) { fprintf(_ygui_log_file, "[YGUI-C] " __VA_ARGS__); fprintf(_ygui_log_file, "\n"); } \
+} while(0)
+
 /*=============================================================================
  * Terminal State
  *===========================================================================*/
@@ -129,8 +151,8 @@ ygui_engine_t* ygui_engine_create(const char* card_name, float width, float heig
     engine->dirty = 1;
     engine->width = width;
     engine->height = height;
-    engine->cell_width = 10.0f;
-    engine->cell_height = 20.0f;
+    engine->cell_width = 0.0f;   /* Will be set by CSI 16 t query */
+    engine->cell_height = 0.0f;
 
     ygui_grid_init(&engine->grid, width, height, 32.0f);
 
@@ -278,15 +300,18 @@ void ygui_engine_render(ygui_engine_t* engine) {
     /* 1. Clear buffer */
     ydraw_buffer_clear(engine->buffer);
 
-    /* 2. Rebuild UI */
+    /* 2. Set explicit scene bounds to match full canvas */
+    ydraw_buffer_set_scene_bounds(engine->buffer, 0, 0, engine->width, engine->height);
+
+    /* 3. Rebuild UI */
     engine_rebuild(engine);
 
-    /* 3. Serialize */
+    /* 4. Serialize */
     const uint8_t* data = NULL;
     uint32_t size = ydraw_buffer_serialize(engine->buffer, &data);
     if (size == 0 || !data) return;
 
-    /* 4. Send OSC */
+    /* 5. Send OSC */
     if (!engine->card_shown) {
         ygui_osc_create_card(engine->card_name,
                              engine->card_x, engine->card_y,
@@ -306,6 +331,9 @@ void ygui_engine_show(ygui_engine_t* engine, int x, int y, int w, int h) {
     engine->card_w = w;
     engine->card_h = h;
 
+    /* Query cell size for coordinate scaling */
+    ygui_osc_query_cell_size();
+
     /* Subscribe to click events */
     ygui_osc_subscribe_clicks(1);
     engine->clicks_subscribed = 1;
@@ -324,13 +352,23 @@ static void emit_event(ygui_engine_t* engine, const ygui_event_t* event) {
     }
 }
 
-static float to_pixel_x(ygui_engine_t* engine, float px) {
-    /* px is already in pixels from OSC */
+static float to_canvas_x(ygui_engine_t* engine, float px) {
+    /* Scale from display pixels to internal canvas pixels */
+    float cell_w = engine->cell_width > 0 ? engine->cell_width : 8.0f;
+    float display_w = engine->card_w * cell_w;
+    if (display_w > 0) {
+        return px * (engine->width / display_w);
+    }
     return px;
 }
 
-static float to_pixel_y(ygui_engine_t* engine, float py) {
-    /* py is already in pixels from OSC */
+static float to_canvas_y(ygui_engine_t* engine, float py) {
+    /* Scale from display pixels to internal canvas pixels */
+    float cell_h = engine->cell_height > 0 ? engine->cell_height : 16.0f;
+    float display_h = engine->card_h * cell_h;
+    if (display_h > 0) {
+        return py * (engine->height / display_h);
+    }
     return py;
 }
 
@@ -368,7 +406,9 @@ void ygui_engine_mouse_down(ygui_engine_t* engine, float x, float y, int button)
     if (!engine) return;
     (void)button;
 
+    YGUI_LOG("mouse_down at (%.1f, %.1f)", x, y);
     ygui_widget_t* hit = ygui_grid_query(&engine->grid, x, y);
+    YGUI_LOG("  grid_query returned: %s (ptr=%p)", hit ? hit->id : "NULL", (void*)hit);
 
     if (hit) {
         hit->flags |= YGUI_FLAG_PRESSED;
@@ -399,6 +439,8 @@ void ygui_engine_mouse_up(ygui_engine_t* engine, float x, float y, int button) {
     if (!engine) return;
     (void)button;
 
+    YGUI_LOG("mouse_up at (%.1f, %.1f) pressed=%s", x, y, engine->pressed ? engine->pressed->id : "NULL");
+
     if (engine->pressed) {
         ygui_widget_t* widget = engine->pressed;
         widget->flags &= ~YGUI_FLAG_PRESSED;
@@ -406,6 +448,7 @@ void ygui_engine_mouse_up(ygui_engine_t* engine, float x, float y, int button) {
 
         /* Check if release is on same widget (click) */
         ygui_widget_t* hit = ygui_grid_query(&engine->grid, x, y);
+        YGUI_LOG("  release hit=%s, pressed=%s, match=%d", hit ? hit->id : "NULL", widget->id, hit == widget);
         if (hit == widget) {
             /* Call widget's click callback */
             if (widget->click_callback) {
@@ -627,6 +670,61 @@ static int parse_card_mouse_osc(const char* buf, int len,
     return 1;
 }
 
+/* Parse CSI 6 ; h ; w t (cell size report)
+ * Format: ESC [ 6 ; height ; width t
+ * Returns 1 on success, 0 if not a matching sequence
+ */
+static int parse_cell_size_csi(const char* buf, int len,
+                                int* cell_height, int* cell_width, int* consumed) {
+    if (len < 8) return 0;  /* Minimum: ESC [ 6 ; h ; w t */
+    if (buf[0] != '\033' || buf[1] != '[') return 0;
+
+    int i = 2;
+    /* Parse first number (should be 6) */
+    int n1 = 0;
+    while (i < len && buf[i] >= '0' && buf[i] <= '9') {
+        n1 = n1 * 10 + (buf[i] - '0');
+        i++;
+    }
+    if (n1 != 6) return 0;  /* Not a cell size report */
+    if (i >= len || buf[i] != ';') return 0;
+    i++;
+
+    /* Parse height */
+    int h = 0;
+    while (i < len && buf[i] >= '0' && buf[i] <= '9') {
+        h = h * 10 + (buf[i] - '0');
+        i++;
+    }
+    if (i >= len || buf[i] != ';') return 0;
+    i++;
+
+    /* Parse width */
+    int w = 0;
+    while (i < len && buf[i] >= '0' && buf[i] <= '9') {
+        w = w * 10 + (buf[i] - '0');
+        i++;
+    }
+    if (i >= len || buf[i] != 't') return 0;
+    i++;
+
+    *cell_height = h;
+    *cell_width = w;
+    *consumed = i;
+    return 1;
+}
+
+/* Scale coordinates from display space to internal canvas space */
+static void scale_coords(ygui_engine_t* engine, float* x, float* y) {
+    if (engine->cell_width > 0 && engine->cell_height > 0 &&
+        engine->card_w > 0 && engine->card_h > 0) {
+        float display_w = engine->card_w * engine->cell_width;
+        float display_h = engine->card_h * engine->cell_height;
+        *x = *x * (engine->width / display_w);
+        *y = *y * (engine->height / display_h);
+    }
+}
+
 static void process_input(ygui_engine_t* engine, const char* data, int len) {
     /* Append to input buffer */
     if (engine->input_len + len > (int)sizeof(engine->input_buffer) - 1) {
@@ -643,11 +741,23 @@ static void process_input(ygui_engine_t* engine, const char* data, int len) {
         int buttons, press;
         float x, y;
         int consumed;
+        int cell_h, cell_w;
 
-        if (parse_card_mouse_osc(engine->input_buffer + i,
+        /* Try to parse CSI cell size response first */
+        if (parse_cell_size_csi(engine->input_buffer + i,
+                                 engine->input_len - i,
+                                 &cell_h, &cell_w, &consumed)) {
+            YGUI_LOG("Got cell size: %dx%d", cell_w, cell_h);
+            engine->cell_width = (float)cell_w;
+            engine->cell_height = (float)cell_h;
+            i += consumed;
+        } else if (parse_card_mouse_osc(engine->input_buffer + i,
                                   engine->input_len - i,
                                   &osc_code, card_name, sizeof(card_name),
                                   &buttons, &press, &x, &y, &consumed)) {
+            /* Scale coordinates from display to internal space */
+            scale_coords(engine, &x, &y);
+
             /* Dispatch mouse event */
             if (osc_code == 777777) {
                 /* Click event */

@@ -5,39 +5,36 @@ Demo 03: Slider
 Interactive slider with live value display.
 """
 
-import sys
-sys.path.insert(0, '../../../src/ygui-bindings/python')
-
-from ygui import Engine, EventType
+import ygui
 
 def main():
-    engine = Engine(width=800, height=600)
+    ygui.init()
+
+    engine = ygui.Engine("slider-demo", width=400, height=200)
 
     # Labels
-    engine.label("title", x=100, y=50, text="Volume Control")
-    value_label = engine.label("value", x=100, y=90, text="Volume: 50%")
+    engine.label("title", 50, 30, "Volume Control")
+    value_label = engine.label("value", 50, 70, "Volume: 50%")
 
     # Slider: 0-100, starting at 50
-    slider = engine.slider("volume", x=100, y=130, w=300, h=24,
-                           min_val=0, max_val=100, value=50)
+    slider = engine.slider("volume", 50, 110, 300, 30, 0, 100, 50)
 
-    def on_event(event):
-        if event.type == EventType.CHANGE and event.widget_id == "volume":
-            value = int(event.data) if event.data else int(slider.value)
-            value_label.set_text(f"Volume: {value}%".encode('utf-8'))
-            print(f"Volume changed to: {value}%")
+    def on_change(value):
+        value_label.set_text(f"Volume: {int(value)}%")
 
-    engine.on_event(on_event)
-    engine.rebuild()
+    slider.on_change(on_change)
 
-    # Simulate dragging the slider
-    print("Simulating slider drag...")
-    engine.mouse_down(150, 142, 0)  # Click on slider
-    for x in range(150, 350, 20):   # Drag to the right
-        engine.mouse_move(x, 142)
-    engine.mouse_up(350, 142, 0)
+    def on_key(key, mods):
+        if key == ord('q'):
+            engine.stop()
 
-    print(f"Final value: {slider.value}")
+    engine.on_key(on_key)
+
+    # Show and run
+    engine.show(x=2, y=2, w=50, h=12)
+    engine.run()
+
+    ygui.shutdown()
 
 if __name__ == "__main__":
     main()

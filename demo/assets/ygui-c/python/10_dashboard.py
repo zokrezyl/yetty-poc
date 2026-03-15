@@ -2,221 +2,166 @@
 """
 Demo 10: Dashboard Application
 
-A complete dashboard with multiple panels, real-time updates,
-and various widget types working together.
+A complete dashboard with multiple panels and various widget types.
 """
 
-import sys
-import random
-import time
-sys.path.insert(0, '../../../src/ygui-bindings/python')
-
-from ygui import Engine, EventType
+import ygui
 
 def rgb_to_abgr(r, g, b, a=255):
     return (a << 24) | (b << 16) | (g << 8) | r
 
 class Dashboard:
     def __init__(self):
-        self.engine = Engine(width=900, height=700)
+        ygui.init()
+        self.engine = ygui.Engine("dashboard", width=800, height=550)
 
-        # Colors
-        self.bg_dark = rgb_to_abgr(30, 30, 35)
         self.bg_panel = rgb_to_abgr(45, 45, 50)
-        self.accent = rgb_to_abgr(0, 150, 255)
-        self.success = rgb_to_abgr(50, 200, 100)
-        self.warning = rgb_to_abgr(255, 180, 50)
-        self.danger = rgb_to_abgr(255, 80, 80)
 
         # State
         self.cpu_usage = 45.0
         self.memory_usage = 62.0
         self.disk_usage = 78.0
-        self.network_in = 0.0
-        self.network_out = 0.0
-        self.notifications_enabled = True
-        self.dark_mode = True
-        self.refresh_rate = 1.0
 
         self.setup_ui()
-        self.engine.on_event(self.on_event)
 
     def setup_ui(self):
         # Header
-        self.engine.label("header", x=30, y=20, text="System Dashboard")
-
-        # Status indicator
-        self.status_label = self.engine.label("status", x=750, y=20, text="● Online")
+        self.engine.label("header", 30, 15, "System Dashboard")
+        self.status_label = self.engine.label("status", 650, 15, "Online")
 
         # ===== System Stats Panel =====
-        stats_panel = self.engine.panel("stats_panel", x=20, y=60, w=420, h=200)
+        stats_panel = self.engine.panel("stats_panel", 20, 50, 370, 180)
         stats_panel.set_bg_color(self.bg_panel)
 
-        self.engine.label("stats_title", x=35, y=75, text="System Resources")
+        self.engine.label("stats_title", 35, 65, "System Resources")
 
         # CPU
-        self.engine.label("cpu_label", x=35, y=110, text="CPU")
-        self.cpu_bar = self.engine.progress("cpu_bar", x=100, y=108, w=280, h=18, value=0.45)
-        self.cpu_value = self.engine.label("cpu_value", x=390, y=110, text="45%")
+        self.engine.label("cpu_label", 35, 100, "CPU")
+        self.cpu_bar = self.engine.progress("cpu_bar", 90, 98, 220, 18, 0.45)
+        self.cpu_value = self.engine.label("cpu_value", 320, 100, "45%")
 
         # Memory
-        self.engine.label("mem_label", x=35, y=145, text="Memory")
-        self.mem_bar = self.engine.progress("mem_bar", x=100, y=143, w=280, h=18, value=0.62)
-        self.mem_value = self.engine.label("mem_value", x=390, y=145, text="62%")
+        self.engine.label("mem_label", 35, 130, "Memory")
+        self.mem_bar = self.engine.progress("mem_bar", 90, 128, 220, 18, 0.62)
+        self.mem_value = self.engine.label("mem_value", 320, 130, "62%")
 
         # Disk
-        self.engine.label("disk_label", x=35, y=180, text="Disk")
-        self.disk_bar = self.engine.progress("disk_bar", x=100, y=178, w=280, h=18, value=0.78)
-        self.disk_value = self.engine.label("disk_value", x=390, y=180, text="78%")
+        self.engine.label("disk_label", 35, 160, "Disk")
+        self.disk_bar = self.engine.progress("disk_bar", 90, 158, 220, 18, 0.78)
+        self.disk_value = self.engine.label("disk_value", 320, 160, "78%")
 
         # Network
-        self.engine.label("net_label", x=35, y=215, text="Network")
-        self.net_in = self.engine.label("net_in", x=100, y=215, text="↓ 0 KB/s")
-        self.net_out = self.engine.label("net_out", x=220, y=215, text="↑ 0 KB/s")
+        self.engine.label("net_label", 35, 195, "Network")
+        self.net_in = self.engine.label("net_in", 90, 195, "In: 0 KB/s")
+        self.net_out = self.engine.label("net_out", 200, 195, "Out: 0 KB/s")
 
         # ===== Quick Actions Panel =====
-        actions_panel = self.engine.panel("actions_panel", x=460, y=60, w=420, h=200)
+        actions_panel = self.engine.panel("actions_panel", 410, 50, 370, 180)
         actions_panel.set_bg_color(self.bg_panel)
 
-        self.engine.label("actions_title", x=475, y=75, text="Quick Actions")
+        self.engine.label("actions_title", 425, 65, "Quick Actions")
 
-        self.engine.button("refresh", x=475, y=110, w=120, h=36, label="Refresh")
-        self.engine.button("clear_cache", x=610, y=110, w=120, h=36, label="Clear Cache")
-        self.engine.button("restart", x=745, y=110, w=120, h=36, label="Restart")
+        refresh_btn = self.engine.button("refresh", 425, 95, 100, 35, "Refresh")
+        refresh_btn.on_click(self.on_refresh)
 
-        self.engine.button("backup", x=475, y=160, w=120, h=36, label="Backup")
-        self.engine.button("logs", x=610, y=160, w=120, h=36, label="View Logs")
-        self.engine.button("settings", x=745, y=160, w=120, h=36, label="Settings")
+        cache_btn = self.engine.button("clear_cache", 540, 95, 100, 35, "Clear Cache")
+        cache_btn.on_click(lambda: self.set_status("Cache cleared"))
+
+        restart_btn = self.engine.button("restart", 655, 95, 100, 35, "Restart")
+        restart_btn.on_click(lambda: self.set_status("Restarting..."))
+
+        backup_btn = self.engine.button("backup", 425, 145, 100, 35, "Backup")
+        backup_btn.on_click(lambda: self.set_status("Backup started"))
+
+        logs_btn = self.engine.button("logs", 540, 145, 100, 35, "View Logs")
+        logs_btn.on_click(lambda: self.set_status("Opening logs"))
+
+        settings_btn = self.engine.button("settings", 655, 145, 100, 35, "Settings")
+        settings_btn.on_click(lambda: self.set_status("Settings open"))
 
         # Alert checkbox
-        self.alert_cb = self.engine.checkbox(
-            "alerts", x=475, y=210, w=200, h=24,
-            label="Enable Alerts", checked=True
-        )
+        self.alert_cb = self.engine.checkbox("alerts", 425, 195, 180, 25, "Enable Alerts", True)
 
         # ===== Settings Panel =====
-        settings_panel = self.engine.panel("settings_panel", x=20, y=280, w=420, h=200)
+        settings_panel = self.engine.panel("settings_panel", 20, 250, 370, 180)
         settings_panel.set_bg_color(self.bg_panel)
 
-        self.engine.label("settings_title", x=35, y=295, text="Settings")
+        self.engine.label("settings_title", 35, 265, "Settings")
 
         # Theme toggle
-        self.dark_mode_cb = self.engine.checkbox(
-            "dark_mode", x=35, y=330, w=180, h=24,
-            label="Dark Mode", checked=True
-        )
+        self.dark_mode_cb = self.engine.checkbox("dark_mode", 35, 300, 160, 25, "Dark Mode", True)
 
         # Notifications toggle
-        self.notif_cb = self.engine.checkbox(
-            "notifications", x=35, y=365, w=180, h=24,
-            label="Notifications", checked=True
-        )
+        self.notif_cb = self.engine.checkbox("notifications", 35, 335, 160, 25, "Notifications", True)
 
         # Refresh rate slider
-        self.engine.label("refresh_label", x=35, y=410, text="Refresh Rate")
-        self.refresh_slider = self.engine.slider(
-            "refresh_rate", x=150, y=408, w=200, h=20,
-            min_val=0.5, max_val=5.0, value=1.0
-        )
-        self.refresh_value = self.engine.label("refresh_val", x=360, y=410, text="1.0s")
+        self.engine.label("refresh_label", 35, 380, "Refresh:")
+        self.refresh_slider = self.engine.slider("refresh_rate", 110, 378, 180, 22, 0.5, 5.0, 1.0)
+        self.refresh_value = self.engine.label("refresh_val", 300, 380, "1.0s")
 
-        # ===== Processes Panel =====
-        proc_panel = self.engine.panel("proc_panel", x=460, y=280, w=420, h=200)
-        proc_panel.set_bg_color(self.bg_panel)
+        self.refresh_slider.on_change(self.on_refresh_rate)
 
-        self.engine.label("proc_title", x=475, y=295, text="Top Processes")
+        # ===== Info Panel =====
+        info_panel = self.engine.panel("info_panel", 410, 250, 370, 180)
+        info_panel.set_bg_color(self.bg_panel)
 
-        # Process list (simplified)
-        processes = [
-            ("chrome", "12.5%", "1.2 GB"),
-            ("code", "8.3%", "890 MB"),
-            ("python", "5.1%", "256 MB"),
-            ("docker", "3.2%", "512 MB"),
-        ]
+        self.engine.label("info_title", 425, 265, "System Info")
 
-        for i, (name, cpu, mem) in enumerate(processes):
-            y = 330 + i * 30
-            self.engine.label(f"proc_{i}_name", x=475, y=y, text=name)
-            self.engine.label(f"proc_{i}_cpu", x=600, y=y, text=cpu)
-            self.engine.label(f"proc_{i}_mem", x=700, y=y, text=mem)
+        self.engine.label("host_label", 425, 300, "Host: workstation")
+        self.engine.label("os_label", 425, 330, "OS: Linux 6.8")
+        self.engine.label("uptime_label", 425, 360, "Uptime: 3d 12h 45m")
 
-        # ===== Footer =====
-        self.engine.label("footer", x=30, y=660, text="Dashboard v1.0 | Last update: just now")
+        # Apply/Quit buttons
+        apply_btn = self.engine.button("apply", 550, 395, 100, 35, "Apply")
+        apply_btn.on_click(self.on_apply)
 
-        # Apply/Cancel buttons
-        self.engine.button("apply", x=650, y=500, w=100, h=36, label="Apply")
-        self.engine.button("cancel", x=770, y=500, w=100, h=36, label="Cancel")
+        quit_btn = self.engine.button("quit", 665, 395, 100, 35, "Quit")
+        quit_btn.on_click(lambda: self.engine.stop())
 
-    def update_stats(self):
-        """Simulate real-time updates."""
-        # Random fluctuations
-        self.cpu_usage = max(5, min(95, self.cpu_usage + random.uniform(-5, 5)))
-        self.memory_usage = max(20, min(90, self.memory_usage + random.uniform(-2, 2)))
-        self.network_in = random.uniform(0, 1000)
-        self.network_out = random.uniform(0, 500)
+        # Footer
+        self.engine.label("footer", 30, 510, "Dashboard v1.0")
 
-        # Update UI
+    def set_status(self, text):
+        self.status_label.set_text(text)
+
+    def on_refresh(self):
+        import random
+        self.cpu_usage = random.uniform(20, 80)
+        self.memory_usage = random.uniform(40, 85)
+
         self.cpu_bar.set_value(self.cpu_usage / 100)
-        self.cpu_value.set_text(f"{self.cpu_usage:.0f}%".encode('utf-8'))
+        self.cpu_value.set_text(f"{int(self.cpu_usage)}%")
 
         self.mem_bar.set_value(self.memory_usage / 100)
-        self.mem_value.set_text(f"{self.memory_usage:.0f}%".encode('utf-8'))
+        self.mem_value.set_text(f"{int(self.memory_usage)}%")
 
-        self.net_in.set_text(f"↓ {self.network_in:.0f} KB/s".encode('utf-8'))
-        self.net_out.set_text(f"↑ {self.network_out:.0f} KB/s".encode('utf-8'))
+        net_in = random.uniform(0, 500)
+        net_out = random.uniform(0, 200)
+        self.net_in.set_text(f"In: {int(net_in)} KB/s")
+        self.net_out.set_text(f"Out: {int(net_out)} KB/s")
 
-    def on_event(self, event):
-        if event.type == EventType.CLICK:
-            action = event.widget_id
-            if action == "refresh":
-                print("Refreshing data...")
-                self.update_stats()
-            elif action == "clear_cache":
-                print("Cache cleared!")
-            elif action == "restart":
-                print("Restarting services...")
-            elif action == "backup":
-                print("Starting backup...")
-            elif action == "logs":
-                print("Opening logs...")
-            elif action == "settings":
-                print("Opening settings...")
-            elif action == "apply":
-                print("Settings applied!")
-                print(f"  Dark mode: {self.dark_mode_cb.checked}")
-                print(f"  Notifications: {self.notif_cb.checked}")
-                print(f"  Refresh rate: {self.refresh_slider.value:.1f}s")
-            elif action == "cancel":
-                print("Changes cancelled")
+        self.set_status("Refreshed")
 
-        elif event.type == EventType.CHANGE:
-            if event.widget_id == "refresh_rate":
-                val = self.refresh_slider.value
-                self.refresh_value.set_text(f"{val:.1f}s".encode('utf-8'))
-            elif event.widget_id == "dark_mode":
-                mode = "dark" if self.dark_mode_cb.checked else "light"
-                print(f"Theme: {mode} mode")
-            elif event.widget_id == "notifications":
-                status = "enabled" if self.notif_cb.checked else "disabled"
-                print(f"Notifications {status}")
-            elif event.widget_id == "alerts":
-                status = "enabled" if self.alert_cb.checked else "disabled"
-                print(f"Alerts {status}")
+    def on_refresh_rate(self, value):
+        self.refresh_value.set_text(f"{value:.1f}s")
+
+    def on_apply(self):
+        dark = self.dark_mode_cb.checked
+        notif = self.notif_cb.checked
+        rate = self.refresh_slider.value
+        self.set_status(f"Applied: dark={dark}, notif={notif}, rate={rate:.1f}s")
 
     def run(self):
-        self.engine.rebuild()
+        def on_key(key, mods):
+            if key == ord('q'):
+                self.engine.stop()
 
-        print("Dashboard running...")
-        print("=" * 50)
+        self.engine.on_key(on_key)
 
-        # Simulate a few update cycles
-        for i in range(3):
-            self.update_stats()
-            print(f"Update {i+1}: CPU={self.cpu_usage:.1f}%, Mem={self.memory_usage:.1f}%")
-            self.engine.rebuild()
+        self.engine.show(x=1, y=1, w=100, h=32)
+        self.engine.run()
 
-        print("=" * 50)
-        print("Dashboard demo complete!")
+        ygui.shutdown()
 
 
 def main():

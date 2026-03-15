@@ -5,54 +5,65 @@ Demo 05: Panel Layout
 Panel container with nested widgets.
 """
 
-import sys
-sys.path.insert(0, '../../../src/ygui-bindings/python')
-
-from ygui import Engine, EventType
+import ygui
 
 def main():
-    engine = Engine(width=800, height=600)
+    ygui.init()
 
-    # Create a panel
-    panel = engine.panel("settings_panel", x=50, y=50, w=400, h=300)
-    panel.set_bg_color(0xFF2D2D2D)  # Dark background
+    engine = ygui.Engine("settings", width=420, height=360)
 
-    # Title inside panel (relative positioning would need parent support)
-    engine.label("panel_title", x=70, y=70, text="Settings Panel")
+    # Panel background
+    panel = engine.panel("settings_panel", 20, 20, 380, 320)
+    panel.set_bg_color(0xFF2D2D2D)
 
-    # Controls inside the panel area
-    engine.label("brightness_label", x=70, y=110, text="Brightness")
-    brightness = engine.slider("brightness", x=70, y=140, w=200, h=20,
-                               min_val=0, max_val=100, value=75)
+    # Title
+    engine.label("panel_title", 40, 40, "Settings Panel")
 
-    engine.label("contrast_label", x=70, y=180, text="Contrast")
-    contrast = engine.slider("contrast", x=70, y=210, w=200, h=20,
-                             min_val=0, max_val=100, value=50)
+    # Brightness
+    engine.label("brightness_label", 40, 80, "Brightness")
+    brightness = engine.slider("brightness", 40, 110, 200, 25, 0, 100, 75)
 
-    auto_save = engine.checkbox("auto_save", x=70, y=250, w=180, h=24,
-                                label="Auto-save", checked=True)
+    # Contrast
+    engine.label("contrast_label", 40, 150, "Contrast")
+    contrast = engine.slider("contrast", 40, 180, 200, 25, 0, 100, 50)
 
-    apply_btn = engine.button("apply", x=70, y=290, w=90, h=32, label="Apply")
-    cancel_btn = engine.button("cancel", x=170, y=290, w=90, h=32, label="Cancel")
+    # Auto-save checkbox
+    auto_save = engine.checkbox("auto_save", 40, 220, 180, 30, "Auto-save", True)
 
-    def on_event(event):
-        if event.type == EventType.CLICK:
-            if event.widget_id == "apply":
-                print(f"Applied settings:")
-                print(f"  Brightness: {brightness.value}")
-                print(f"  Contrast: {contrast.value}")
-                print(f"  Auto-save: {auto_save.checked}")
-            elif event.widget_id == "cancel":
-                print("Settings cancelled")
-        elif event.type == EventType.CHANGE:
-            print(f"{event.widget_id} changed to {event.data}")
+    # Status
+    status = engine.label("status", 40, 290, "Ready")
 
-    engine.on_event(on_event)
-    engine.rebuild()
+    def on_brightness(value):
+        status.set_text(f"Brightness: {int(value)}")
 
-    # Simulate interactions
-    engine.mouse_down(115, 300, 0)  # Click Apply
-    engine.mouse_up(115, 300, 0)
+    def on_contrast(value):
+        status.set_text(f"Contrast: {int(value)}")
+
+    def on_apply():
+        status.set_text(f"Applied: B={int(brightness.value)}, C={int(contrast.value)}")
+
+    def on_cancel():
+        status.set_text("Cancelled")
+
+    brightness.on_change(on_brightness)
+    contrast.on_change(on_contrast)
+
+    apply_btn = engine.button("apply", 40, 260, 90, 35, "Apply")
+    apply_btn.on_click(on_apply)
+
+    cancel_btn = engine.button("cancel", 150, 260, 90, 35, "Cancel")
+    cancel_btn.on_click(on_cancel)
+
+    def on_key(key, mods):
+        if key == ord('q'):
+            engine.stop()
+
+    engine.on_key(on_key)
+
+    engine.show(x=2, y=2, w=52, h=20)
+    engine.run()
+
+    ygui.shutdown()
 
 if __name__ == "__main__":
     main()

@@ -111,3 +111,8 @@ void ygui_osc_subscribe_moves(int enable) {
         write_osc("\033[?1501l", 8);
     }
 }
+
+void ygui_osc_query_cell_size(void) {
+    /* CSI 16 t - request cell size in pixels */
+    write_osc("\033[16t", 5);
+}

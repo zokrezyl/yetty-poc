@@ -51,6 +51,10 @@ const float* ydraw_buffer_data(const ydraw_buffer_t* buf);
  * Data valid until next serialize() or destroy(). */
 uint32_t ydraw_buffer_serialize(ydraw_buffer_t* buf, const uint8_t** out_data);
 
+/* Set explicit scene bounds (prevents auto-calculation from content).
+ * minX,minY = lower-left corner, maxX,maxY = upper-right corner. */
+void ydraw_buffer_set_scene_bounds(ydraw_buffer_t* buf, float minX, float minY, float maxX, float maxY);
+
 /*=============================================================================
  * Text spans - high-level text storage (converted to glyphs by builder)
  *===========================================================================*/
