@@ -18,6 +18,10 @@ class PTYProvider;
 //
 class PtyManager : public base::ThreadSingleton<PtyManager> {
 public:
+  using Ptr = std::shared_ptr<PtyManager>;
+
+  static Result<Ptr> createImpl();
+
   virtual ~PtyManager() = default;
 
   virtual Result<std::shared_ptr<PTYProvider>> createPTY() = 0;

@@ -21,6 +21,7 @@ set(YETTY_PLATFORM_SOURCES
     ${YETTY_ROOT}/src/yetty/platform/shared/glfw-window-singleton.cpp
     ${YETTY_ROOT}/src/yetty/platform/input-manager/glfw.cpp
     ${YETTY_ROOT}/src/yetty/platform/surface-manager/glfw.cpp
+    ${YETTY_ROOT}/src/yetty/platform/pty-manager/unix.cpp
 )
 
 # Create executable with core sources + platform

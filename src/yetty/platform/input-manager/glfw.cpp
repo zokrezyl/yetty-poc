@@ -19,10 +19,11 @@ namespace yetty {
 //
 // RAW -> INTERNAL TRANSFORMATIONS:
 //
-// 1. Ctrl+letter -> control character
+// 1. Ctrl/Alt + character -> charInputWithMods
 //    GLFW does NOT fire charCallback for Ctrl+A, Ctrl+C, etc.
-//    We detect keyDown with GLFW_MOD_CONTROL + letter and generate charInput:
-//      Ctrl+A = 0x01, Ctrl+B = 0x02, ..., Ctrl+Z = 0x1A
+//    We detect keyDown with GLFW_MOD_CONTROL/ALT and use glfwGetKeyName()
+//    to get the actual character (keyboard layout aware), then dispatch
+//    charInputWithMods(ch, mods).
 //
 //=============================================================================
 
@@ -56,7 +57,10 @@ public:
     /// @brief Handle raw input events and generate internal events
     ///
     /// Transforms:
-    /// - KeyDown + Ctrl + letter -> charInput with control character
+    /// - KeyDown + Ctrl/Alt + character -> charInputWithMods
+    ///
+    /// Uses glfwGetKeyName() to get the actual character (keyboard layout aware).
+    /// This matches how the old Platform handled Ctrl+key combinations.
     ///
     /// @param event Raw event from EventQueue
     /// @return Ok(false) - don't consume, let other listeners process
@@ -64,13 +68,32 @@ public:
         if (event.type == base::Event::Type::KeyDown) {
             int mods = event.key.mods;
             int key = event.key.key;
+            int scancode = event.key.scancode;
+            ydebug("InputManager: KeyDown key={} mods={} scancode={}", key, mods, scancode);
 
-            // Ctrl+letter -> control character (0x01 - 0x1A)
-            if ((mods & GLFW_MOD_CONTROL) && key >= GLFW_KEY_A && key <= GLFW_KEY_Z) {
-                unsigned int controlChar = key - GLFW_KEY_A + 1;
-                auto queueResult = base::EventQueue::instance();
-                if (queueResult) {
-                    (*queueResult)->push(base::Event::charInput(controlChar));
+            // Handle Ctrl/Alt + character combinations
+            // GLFW_MOD_CONTROL = 0x0002, GLFW_MOD_ALT = 0x0004
+            if (mods & (GLFW_MOD_CONTROL | GLFW_MOD_ALT)) {
+                ydebug("InputManager: Ctrl/Alt detected, key={} mods={}", key, mods);
+
+                // Special case for space (GLFW_KEY_SPACE = 32)
+                if (key == GLFW_KEY_SPACE) {
+                    // Space with modifier - let keyDown pass through
+                    return Ok(false);
+                }
+
+                // Get the actual character from keyboard layout
+                const char* keyName = glfwGetKeyName(key, scancode);
+                ydebug("InputManager: glfwGetKeyName returned '{}'", keyName ? keyName : "(null)");
+                if (keyName && keyName[0] != '\0' && keyName[1] == '\0') {
+                    // Single character key - dispatch as charInputWithMods
+                    uint32_t ch = static_cast<uint32_t>(static_cast<uint8_t>(keyName[0]));
+                    ydebug("InputManager: Ctrl/Alt+{} -> charInputWithMods ch={} mods={}",
+                           keyName[0], ch, mods);
+                    auto queueResult = base::EventQueue::instance();
+                    if (queueResult) {
+                        (*queueResult)->push(base::Event::charInputWithMods(ch, mods));
+                    }
                 }
             }
         }
