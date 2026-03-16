@@ -268,6 +268,7 @@ public:
         // Render initial frame
         if (auto res = _renderer->render(); res) {
             _builder->calculate();
+            _dirty = false;  // Already rendered in init, don't re-render in renderToStaging
         }
 
         // Start animation if animated

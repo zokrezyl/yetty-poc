@@ -20,6 +20,7 @@ add_executable(thorvg_tests
     thorvg_dash_test.cpp
     thorvg_opacity_test.cpp
     thorvg_gradient_test.cpp
+    thorvg_filled_bezier_test.cpp
 )
 
 target_include_directories(thorvg_tests PRIVATE

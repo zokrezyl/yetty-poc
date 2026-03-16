@@ -102,93 +102,85 @@ bool triangulatePolygon(const float* vertices, uint32_t vertexCount,
         outIndices = {0, 1, 2};
         return true;
     }
-    
-    // Build index list
-    std::vector<uint32_t> indices(vertexCount);
+
+    // Use doubly-linked list for O(1) removal
+    std::vector<uint32_t> prev(vertexCount), next(vertexCount);
     for (uint32_t i = 0; i < vertexCount; ++i) {
-        indices[i] = i;
+        prev[i] = (i + vertexCount - 1) % vertexCount;
+        next[i] = (i + 1) % vertexCount;
     }
-    
+
     // Determine winding order
-    bool ccw = isCounterClockwise(vertices, indices);
-    
-    // Ear clipping
-    size_t remaining = indices.size();
-    size_t attempts = 0;
-    size_t maxAttempts = remaining * remaining; // Safety limit
-    
-    while (remaining > 3 && attempts < maxAttempts) {
-        bool earFound = false;
-        
-        for (size_t i = 0; i < indices.size(); ++i) {
-            if (indices[i] == UINT32_MAX) continue; // Skip removed vertices
-            
-            // Find actual prev/next in remaining list
-            size_t prev = i;
-            do {
-                prev = (prev + indices.size() - 1) % indices.size();
-            } while (indices[prev] == UINT32_MAX && prev != i);
-            
-            size_t next = i;
-            do {
-                next = (next + 1) % indices.size();
-            } while (indices[next] == UINT32_MAX && next != i);
-            
-            if (prev == i || next == i) continue;
-            
-            // Build compact index list for ear test
-            std::vector<uint32_t> compact;
-            for (size_t j = 0; j < indices.size(); ++j) {
-                if (indices[j] != UINT32_MAX) {
-                    compact.push_back(indices[j]);
-                }
-            }
-            
-            // Find position of current vertex in compact list
-            size_t compactI = 0;
-            for (size_t j = 0; j < compact.size(); ++j) {
-                if (compact[j] == indices[i]) {
-                    compactI = j;
-                    break;
-                }
-            }
-            
-            if (isEar(vertices, compact, compactI, ccw)) {
-                size_t compactPrev = (compactI + compact.size() - 1) % compact.size();
-                size_t compactNext = (compactI + 1) % compact.size();
-                
-                outIndices.push_back(compact[compactPrev]);
-                outIndices.push_back(compact[compactI]);
-                outIndices.push_back(compact[compactNext]);
-                
-                indices[i] = UINT32_MAX;
-                remaining--;
-                earFound = true;
-                break;
-            }
-        }
-        
-        if (!earFound) {
-            attempts++;
-        }
+    float area = 0.0f;
+    for (uint32_t i = 0; i < vertexCount; ++i) {
+        uint32_t j = next[i];
+        area += vertices[i * 2] * vertices[j * 2 + 1];
+        area -= vertices[j * 2] * vertices[i * 2 + 1];
     }
-    
+    bool ccw = area > 0.0f;
+
+    // Ear clipping with linked list
+    uint32_t remaining = vertexCount;
+    uint32_t current = 0;
+    uint32_t attempts = 0;
+    uint32_t maxAttempts = vertexCount * 2;
+
+    while (remaining > 3 && attempts < maxAttempts) {
+        uint32_t p = prev[current];
+        uint32_t n = next[current];
+
+        // Check if current vertex is an ear
+        float ax = vertices[p * 2], ay = vertices[p * 2 + 1];
+        float bx = vertices[current * 2], by = vertices[current * 2 + 1];
+        float cx = vertices[n * 2], cy = vertices[n * 2 + 1];
+
+        float cross = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+        bool isConvex = ccw ? (cross > 0.0f) : (cross < 0.0f);
+
+        if (isConvex) {
+            // Check no other vertex inside triangle
+            bool isEar = true;
+            uint32_t test = next[n];
+            while (test != p && isEar) {
+                float px = vertices[test * 2], py = vertices[test * 2 + 1];
+                // Skip near-coincident points
+                const float eps = 1e-6f;
+                if (!((std::abs(px - ax) < eps && std::abs(py - ay) < eps) ||
+                      (std::abs(px - bx) < eps && std::abs(py - by) < eps) ||
+                      (std::abs(px - cx) < eps && std::abs(py - cy) < eps))) {
+                    if (pointInTriangle(px, py, ax, ay, bx, by, cx, cy)) {
+                        isEar = false;
+                    }
+                }
+                test = next[test];
+            }
+
+            if (isEar) {
+                outIndices.push_back(p);
+                outIndices.push_back(current);
+                outIndices.push_back(n);
+
+                // Remove current from linked list
+                next[p] = n;
+                prev[n] = p;
+                remaining--;
+                attempts = 0;
+                current = n;
+                continue;
+            }
+        }
+
+        attempts++;
+        current = next[current];
+    }
+
     // Add last triangle
     if (remaining == 3) {
-        std::vector<uint32_t> last;
-        for (uint32_t idx : indices) {
-            if (idx != UINT32_MAX) {
-                last.push_back(idx);
-            }
-        }
-        if (last.size() == 3) {
-            outIndices.push_back(last[0]);
-            outIndices.push_back(last[1]);
-            outIndices.push_back(last[2]);
-            return true;
-        }
+        outIndices.push_back(prev[current]);
+        outIndices.push_back(current);
+        outIndices.push_back(next[current]);
     }
-    
+
     return !outIndices.empty();
 }
 

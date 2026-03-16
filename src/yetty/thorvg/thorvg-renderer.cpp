@@ -58,6 +58,85 @@ static uint32_t rgbaToPackedABGR(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
 }
 
 //=============================================================================
+// Bezier curve flattening (adaptive subdivision)
+//=============================================================================
+
+// Compute squared distance from point to line segment
+static float pointToSegmentDistSq(float px, float py,
+                                   float x0, float y0, float x1, float y1) {
+    float dx = x1 - x0;
+    float dy = y1 - y0;
+    float lenSq = dx * dx + dy * dy;
+
+    if (lenSq < 1e-10f) {
+        // Degenerate segment
+        float ddx = px - x0;
+        float ddy = py - y0;
+        return ddx * ddx + ddy * ddy;
+    }
+
+    // Project point onto line
+    float t = ((px - x0) * dx + (py - y0) * dy) / lenSq;
+    t = std::clamp(t, 0.0f, 1.0f);
+
+    float projX = x0 + t * dx;
+    float projY = y0 + t * dy;
+    float ddx = px - projX;
+    float ddy = py - projY;
+    return ddx * ddx + ddy * ddy;
+}
+
+// Flatten a cubic bezier curve into line segments using adaptive subdivision
+// p0 = start, p1 = control1, p2 = control2, p3 = end
+// tolerance: maximum allowed deviation from true curve (in pixels)
+// Output: vertices are appended to 'out' as (x,y) pairs
+// Note: start point p0 is NOT added (caller should add it before first curve)
+static void flattenCubicBezier(float p0x, float p0y,
+                                float p1x, float p1y,
+                                float p2x, float p2y,
+                                float p3x, float p3y,
+                                float toleranceSq,
+                                std::vector<float>& out,
+                                int depth = 0) {
+    // Maximum recursion depth to prevent stack overflow
+    constexpr int MAX_DEPTH = 12;
+
+    if (depth >= MAX_DEPTH) {
+        // Just add endpoint
+        out.push_back(p3x);
+        out.push_back(p3y);
+        return;
+    }
+
+    // Check if curve is flat enough: measure distance of control points to chord
+    float d1Sq = pointToSegmentDistSq(p1x, p1y, p0x, p0y, p3x, p3y);
+    float d2Sq = pointToSegmentDistSq(p2x, p2y, p0x, p0y, p3x, p3y);
+
+    if (d1Sq <= toleranceSq && d2Sq <= toleranceSq) {
+        // Curve is flat enough, just add endpoint
+        out.push_back(p3x);
+        out.push_back(p3y);
+        return;
+    }
+
+    // Subdivide using De Casteljau's algorithm at t=0.5
+    float p01x = (p0x + p1x) * 0.5f, p01y = (p0y + p1y) * 0.5f;
+    float p12x = (p1x + p2x) * 0.5f, p12y = (p1y + p2y) * 0.5f;
+    float p23x = (p2x + p3x) * 0.5f, p23y = (p2y + p3y) * 0.5f;
+
+    float p012x = (p01x + p12x) * 0.5f, p012y = (p01y + p12y) * 0.5f;
+    float p123x = (p12x + p23x) * 0.5f, p123y = (p12y + p23y) * 0.5f;
+
+    float midx = (p012x + p123x) * 0.5f, midy = (p012y + p123y) * 0.5f;
+
+    // Recursively flatten both halves
+    flattenCubicBezier(p0x, p0y, p01x, p01y, p012x, p012y, midx, midy,
+                       toleranceSq, out, depth + 1);
+    flattenCubicBezier(midx, midy, p123x, p123y, p23x, p23y, p3x, p3y,
+                       toleranceSq, out, depth + 1);
+}
+
+//=============================================================================
 // ThorVgRendererImpl
 //=============================================================================
 
@@ -763,6 +842,174 @@ private:
         return true;
     }
 
+    // Try to render a closed path with fill by flattening bezier curves to polygon
+    // This handles complex filled paths like SVG logos
+    // Supports multiple subpaths (outer contour + holes)
+    // Returns true if rendered, false otherwise
+    bool tryRenderAsFilledPath(const tvg::PathCommand* cmds, uint32_t cmdCount,
+                               const tvg::Point* pts, uint32_t ptCount,
+                               const tvg::Matrix& m,
+                               uint32_t fillColor, uint32_t strokeColor, float strokeWidth) {
+        // Only use for filled shapes
+        if ((fillColor & 0xFF000000) == 0) {
+            return false;
+        }
+
+        // Check if path has any closed subpaths
+        bool hasClose = false;
+        bool hasContent = false;
+        int moveCount = 0;
+
+        for (uint32_t i = 0; i < cmdCount; ++i) {
+            switch (cmds[i]) {
+                case tvg::PathCommand::MoveTo:
+                    moveCount++;
+                    break;
+                case tvg::PathCommand::LineTo:
+                case tvg::PathCommand::CubicTo:
+                    hasContent = true;
+                    break;
+                case tvg::PathCommand::Close:
+                    hasClose = true;
+                    break;
+            }
+        }
+
+        // Skip if no closed subpaths or no content
+        if (!hasClose || !hasContent) {
+            return false;
+        }
+
+        // Flatten tolerance (squared) - smaller = more segments, higher quality
+        // Value of 16.0 means max ~4 pixel deviation - faster triangulation
+        constexpr float FLATTEN_TOLERANCE_SQ = 16.0f;
+
+        // Collect flattened vertices for each subpath (contour)
+        std::vector<float> allVertices;
+        std::vector<uint32_t> contourStarts;
+        uint32_t ptIdx = 0;
+        tvg::Point current = {0, 0};
+        tvg::Point subpathStart = {0, 0};
+        uint32_t subpathVertexStart = 0;
+        bool inSubpath = false;
+
+        for (uint32_t i = 0; i < cmdCount && ptIdx < ptCount; ++i) {
+            switch (cmds[i]) {
+                case tvg::PathCommand::MoveTo:
+                    if (ptIdx < ptCount) {
+                        // Start a new subpath
+                        subpathVertexStart = static_cast<uint32_t>(allVertices.size() / 2);
+                        contourStarts.push_back(subpathVertexStart);
+
+                        current = transformPoint(pts[ptIdx++], m);
+                        subpathStart = current;
+                        allVertices.push_back(current.x);
+                        allVertices.push_back(current.y);
+                        inSubpath = true;
+                    }
+                    break;
+
+                case tvg::PathCommand::LineTo:
+                    if (ptIdx < ptCount && inSubpath) {
+                        current = transformPoint(pts[ptIdx++], m);
+                        allVertices.push_back(current.x);
+                        allVertices.push_back(current.y);
+                    }
+                    break;
+
+                case tvg::PathCommand::CubicTo:
+                    if (ptIdx + 2 < ptCount && inSubpath) {
+                        tvg::Point cp1 = transformPoint(pts[ptIdx++], m);
+                        tvg::Point cp2 = transformPoint(pts[ptIdx++], m);
+                        tvg::Point end = transformPoint(pts[ptIdx++], m);
+
+                        // Flatten the bezier curve (start point already in vertices)
+                        flattenCubicBezier(current.x, current.y,
+                                          cp1.x, cp1.y,
+                                          cp2.x, cp2.y,
+                                          end.x, end.y,
+                                          FLATTEN_TOLERANCE_SQ,
+                                          allVertices);
+                        current = end;
+                    }
+                    break;
+
+                case tvg::PathCommand::Close:
+                    if (inSubpath) {
+                        // Remove duplicate end vertex if it matches subpath start
+                        uint32_t subpathVertexEnd = static_cast<uint32_t>(allVertices.size() / 2);
+                        if (subpathVertexEnd > subpathVertexStart) {
+                            float lastX = allVertices[allVertices.size() - 2];
+                            float lastY = allVertices[allVertices.size() - 1];
+                            float firstX = allVertices[subpathVertexStart * 2];
+                            float firstY = allVertices[subpathVertexStart * 2 + 1];
+                            constexpr float EPS = 0.01f;
+                            if (std::abs(lastX - firstX) < EPS && std::abs(lastY - firstY) < EPS) {
+                                allVertices.pop_back();
+                                allVertices.pop_back();
+                            }
+                        }
+                        current = subpathStart;
+                        inSubpath = false;
+                    }
+                    break;
+            }
+        }
+
+        // Validate we have at least one valid contour
+        uint32_t totalVertexCount = static_cast<uint32_t>(allVertices.size() / 2);
+        if (totalVertexCount < 3 || contourStarts.empty()) {
+            return false;
+        }
+
+        // Remove contours with less than 3 vertices
+        std::vector<uint32_t> validContourStarts;
+        for (size_t i = 0; i < contourStarts.size(); ++i) {
+            uint32_t start = contourStarts[i];
+            uint32_t end = (i + 1 < contourStarts.size()) ? contourStarts[i + 1] : totalVertexCount;
+            uint32_t count = end - start;
+            if (count >= 3) {
+                validContourStarts.push_back(start);
+            }
+        }
+
+        if (validContourStarts.empty()) {
+            return false;
+        }
+
+        ydebug("tryRenderAsFilledPath: flattened {} vertices, {} contours from {} cmds, fill=0x{:08X}",
+               totalVertexCount, validContourStarts.size(), cmdCount, fillColor);
+
+        Result<uint32_t> result;
+        if (validContourStarts.size() == 1) {
+            // Single contour - use simple polygon
+            result = _buffer->addPolygonWithVertices(
+                0,              // layer
+                totalVertexCount,
+                allVertices.data(),
+                fillColor,
+                strokeColor,
+                strokeWidth,
+                0.0f            // round
+            );
+        } else {
+            // Multiple contours (outer + holes) - use polygon group
+            result = _buffer->addPolygonGroupWithVertices(
+                0,              // layer
+                totalVertexCount,
+                static_cast<uint32_t>(validContourStarts.size()),
+                validContourStarts.data(),
+                allVertices.data(),
+                fillColor,
+                strokeColor,
+                strokeWidth,
+                0.0f            // round
+            );
+        }
+        if (result) _nextPrimId++;
+        return true;
+    }
+
     // Render a dashed line segment by breaking it into visible dash segments
     void renderDashedSegment(float x0, float y0, float x1, float y1,
                              uint32_t strokeColor, float strokeWidth,
@@ -818,22 +1065,28 @@ private:
                     const tvg::Matrix& m,
                     uint32_t fillColor, uint32_t strokeColor, float strokeWidth,
                     const float* dashPattern = nullptr, uint32_t dashCount = 0, float dashOffset = 0.0f) {
-        
+
         // Check if we have a dash pattern - if so, skip shape shortcuts that don't support dashing
         bool hasDash = dashPattern != nullptr && dashCount >= 2;
-        
+
         // Try to render as ellipse first (for Lottie circles) - skip if dashed stroke
         if (!hasDash && tryRenderAsEllipse(cmds, cmdCount, pts, ptCount, m, fillColor, strokeColor, strokeWidth)) {
             return;
         }
-        
+
         // Try to render as box (for Lottie rectangles) - skip if dashed stroke
         if (!hasDash && tryRenderAsBox(cmds, cmdCount, pts, ptCount, m, fillColor, strokeColor, strokeWidth)) {
             return;
         }
-        
+
         // Try to render as filled polygon (only for paths with fill and no bezier curves)
         if (tryRenderAsPolygon(cmds, cmdCount, pts, ptCount, m, fillColor, strokeColor, strokeWidth)) {
+            return;
+        }
+
+        // Try to render as filled path by flattening bezier curves to polygon
+        // This handles complex filled SVG paths like logos
+        if (!hasDash && tryRenderAsFilledPath(cmds, cmdCount, pts, ptCount, m, fillColor, strokeColor, strokeWidth)) {
             return;
         }
         
