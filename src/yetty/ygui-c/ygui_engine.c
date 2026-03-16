@@ -41,6 +41,9 @@ static float calc_grid_bucket_size(float width, float height) {
     return (bucket < 32.0f) ? 32.0f : bucket;
 }
 
+/* Forward declarations */
+static void handle_resize(ygui_engine_t* engine);
+
 /*=============================================================================
  * Terminal State
  *===========================================================================*/
@@ -334,6 +337,12 @@ static void engine_rebuild(ygui_engine_t* engine) {
 void ygui_engine_render(ygui_engine_t* engine) {
     if (!engine || !engine->buffer) return;
 
+    /* 0. Handle pending resize BEFORE rendering - keeps visual and hit-test in sync */
+    if (engine->needs_resize) {
+        handle_resize(engine);
+        engine->needs_resize = 0;
+    }
+
     /* 1. Clear buffer */
     ydraw_buffer_clear(engine->buffer);
 
@@ -368,15 +377,35 @@ void ygui_engine_show(ygui_engine_t* engine, int x, int y, int w, int h) {
     engine->card_w = w;
     engine->card_h = h;
 
-    /* Query cell size for coordinate scaling */
+    /* Query cell size (kept for future use, not used for coord transform) */
     ygui_osc_query_cell_size();
 
     /* Subscribe to click events */
     ygui_osc_subscribe_clicks(1);
     engine->clicks_subscribed = 1;
 
-    /* Render first frame */
-    ygui_engine_render(engine);
+    /* In CANVAS_FIT mode, create card with minimal data first to trigger OSC 777780.
+     * The real render happens after we receive the actual pixel size.
+     * This prevents the visual "zoom jump" when canvas resizes to match display. */
+    if (engine->canvas_mode == YGUI_CANVAS_FIT && !engine->have_pixel_size) {
+        /* Create empty YDraw buffer to establish card */
+        ydraw_buffer_clear(engine->buffer);
+        ydraw_buffer_set_scene_bounds(engine->buffer, 0, 0, 1, 1);  /* Minimal scene */
+        const uint8_t* data = NULL;
+        uint32_t size = ydraw_buffer_serialize(engine->buffer, &data);
+        if (size > 0 && data) {
+            ygui_osc_create_card(engine->card_name,
+                                 engine->card_x, engine->card_y,
+                                 engine->card_w, engine->card_h,
+                                 data, size);
+            engine->card_shown = 1;
+        }
+        engine->dirty = 1;  /* Real render after OSC 777780 */
+        YGUI_LOG("CANVAS_FIT: created placeholder card, waiting for OSC 777780");
+    } else {
+        /* CANVAS_FIXED or already have pixel size: render immediately */
+        ygui_engine_render(engine);
+    }
 }
 
 /*=============================================================================
@@ -889,7 +918,19 @@ static void handle_resize(ygui_engine_t* engine) {
         engine->width = new_display_w;
         engine->height = new_display_h;
 
-        if (engine->scale_mode == YGUI_SCALE_ON && old_canvas_w > 0 && old_canvas_h > 0) {
+        /* First resize: just set canvas size, DON'T scale widgets.
+         * Widgets were created at absolute positions for the initial canvas.
+         * Subsequent resizes: scale widgets proportionally. */
+        if (!engine->had_first_resize) {
+            engine->had_first_resize = 1;
+            YGUI_LOG("First resize: canvas %.0fx%.0f -> %.0fx%.0f (no widget scaling)",
+                     old_canvas_w, old_canvas_h, new_display_w, new_display_h);
+            /* Update effective positions without scaling */
+            for (ygui_widget_t* w = engine->first_widget; w; w = w->next_sibling) {
+                w->effective_x = w->x;
+                w->effective_y = w->y;
+            }
+        } else if (engine->scale_mode == YGUI_SCALE_ON && old_canvas_w > 0 && old_canvas_h > 0) {
             /* Scale all widgets proportionally using FLOAT precision */
             float scale_x = new_display_w / old_canvas_w;
             float scale_y = new_display_h / old_canvas_h;
@@ -1068,8 +1109,9 @@ static void process_input(ygui_engine_t* engine, const char* data, int len) {
                     YGUI_LOG("Reference size set from pixel: %.0fx%.0f", engine->reference_w, engine->reference_h);
                 }
 
-                /* Trigger resize with exact pixel dimensions */
-                handle_resize(engine);
+                /* Defer resize to render time - keeps visual and hit-test in sync */
+                engine->needs_resize = 1;
+                engine->dirty = 1;
             }
             i += consumed;
         }
@@ -1091,6 +1133,13 @@ static void process_input(ygui_engine_t* engine, const char* data, int len) {
                                   engine->input_len - i,
                                   &osc_code, card_name, sizeof(card_name),
                                   &buttons, &press, &x, &y, &consumed)) {
+            /* If resize is pending, apply it NOW before processing mouse events.
+             * This ensures canvas size and widget positions are correct for hit testing. */
+            if (engine->needs_resize) {
+                handle_resize(engine);
+                engine->needs_resize = 0;
+            }
+
             /* Scale coordinates from display to internal space */
             YGUI_LOG("OSC mouse: display=(%.1f,%.1f) cell=(%.1f,%.1f) card=(%d,%d) canvas=(%.0f,%.0f) zoom=%.2f scroll=(%.1f,%.1f)",
                      x, y, engine->cell_width, engine->cell_height,

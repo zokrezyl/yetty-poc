@@ -316,6 +316,15 @@ static void terminal_send_cell_size(terminal_ctx_t* ctx, int cell_height, int ce
     write(ctx->pty_master, buf, len);
 }
 
+/* Send OSC 777780 card pixel size response via PTY
+ * Format: ESC ] 777780 ; cardname ; width ; height ST
+ * This is the PRIMARY source for coordinate transformation */
+static void terminal_send_pixel_size(terminal_ctx_t* ctx, const char* card_name, float width, float height) {
+    char buf[128];
+    int len = snprintf(buf, sizeof(buf), "\033]777780;%s;%.6f;%.6f\033\\", card_name, width, height);
+    write(ctx->pty_master, buf, len);
+}
+
 /* Send control command and wait for response synchronously
  * NOTE: This blocks until response is received - call from timer/idle callback */
 static void terminal_send_ctrl(terminal_ctx_t* ctx, const char* cmd) {

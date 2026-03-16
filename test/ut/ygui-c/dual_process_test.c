@@ -989,7 +989,7 @@ static void scaled_left_hit_timer_cb(uv_timer_t* timer) {
     switch (g_test_sm.state) {
     case STATE_INIT:
         /* Send cell size first to enable scaling */
-        terminal_send_cell_size(ctx, 15, 8);  /* height=15, width=8 */
+        terminal_send_pixel_size(ctx, "test", 400.0f, 300.0f);
         g_test_sm.state = STATE_WAIT_RENDER;
         break;
 
@@ -1059,7 +1059,7 @@ static void scaled_left_miss_timer_cb(uv_timer_t* timer) {
 
     switch (g_test_sm.state) {
     case STATE_INIT:
-        terminal_send_cell_size(ctx, 15, 8);
+        terminal_send_pixel_size(ctx, "test", 400.0f, 300.0f);
         g_test_sm.state = STATE_WAIT_RENDER;
         break;
 
@@ -1130,7 +1130,7 @@ static void scaled_right_hit_timer_cb(uv_timer_t* timer) {
 
     switch (g_test_sm.state) {
     case STATE_INIT:
-        terminal_send_cell_size(ctx, 15, 8);
+        terminal_send_pixel_size(ctx, "test", 400.0f, 300.0f);
         g_test_sm.state = STATE_WAIT_RENDER;
         break;
 
@@ -1200,7 +1200,7 @@ static void scaled_right_miss_timer_cb(uv_timer_t* timer) {
 
     switch (g_test_sm.state) {
     case STATE_INIT:
-        terminal_send_cell_size(ctx, 15, 8);
+        terminal_send_pixel_size(ctx, "test", 400.0f, 300.0f);
         g_test_sm.state = STATE_WAIT_RENDER;
         break;
 
@@ -1310,7 +1310,7 @@ static void demo_right_hit_timer_cb(uv_timer_t* timer) {
     switch (g_test_sm.state) {
     case STATE_INIT:
         /* Send cell size: 8 wide, 16 high - matches typical terminal */
-        terminal_send_cell_size(ctx, 16, 8);
+        terminal_send_pixel_size(ctx, "test", 400.0f, 300.0f);
         g_test_sm.state = STATE_WAIT_RENDER;
         break;
 
@@ -1384,7 +1384,7 @@ static void demo_right_miss_timer_cb(uv_timer_t* timer) {
 
     switch (g_test_sm.state) {
     case STATE_INIT:
-        terminal_send_cell_size(ctx, 16, 8);
+        terminal_send_pixel_size(ctx, "test", 400.0f, 300.0f);
         g_test_sm.state = STATE_WAIT_RENDER;
         break;
 
@@ -1457,7 +1457,7 @@ static void demo_left_hit_timer_cb(uv_timer_t* timer) {
 
     switch (g_test_sm.state) {
     case STATE_INIT:
-        terminal_send_cell_size(ctx, 16, 8);
+        terminal_send_pixel_size(ctx, "test", 400.0f, 300.0f);
         g_test_sm.state = STATE_WAIT_RENDER;
         break;
 
@@ -1529,7 +1529,7 @@ static void demo_left_miss_timer_cb(uv_timer_t* timer) {
 
     switch (g_test_sm.state) {
     case STATE_INIT:
-        terminal_send_cell_size(ctx, 16, 8);
+        terminal_send_pixel_size(ctx, "test", 400.0f, 300.0f);
         g_test_sm.state = STATE_WAIT_RENDER;
         break;
 

@@ -289,6 +289,8 @@ struct ygui_engine {
     float display_pixel_w;  /* Direct pixel dimensions from OSC 777780 */
     float display_pixel_h;
     int have_pixel_size;    /* 1 if we received OSC 777780 */
+    int needs_resize;       /* 1 if resize should happen before next render */
+    int had_first_resize;   /* 1 after first resize in CANVAS_FIT mode */
 
     /* Resize callback */
     ygui_resize_callback_t resize_callback;
