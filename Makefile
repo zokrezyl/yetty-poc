@@ -207,7 +207,7 @@ test-android-ytrace-debug: build-android-ytrace-debug ## Install and run Android
 
 .PHONY: test-android-ytrace-release
 test-android-ytrace-release: build-android-ytrace-release ## Install and run Android ytrace release build
-	adb install -r $(BUILD_DIR_ANDROID_YTRACE_RELEASE)/app/outputs/apk/release/app-release-unsigned.apk
+	adb install -r $(BUILD_DIR_ANDROID_YTRACE_RELEASE)/app/outputs/apk/release/app-release.apk
 	adb shell am start -n com.yetty.terminal/android.app.NativeActivity
 
 #=============================================================================
@@ -231,7 +231,7 @@ test-android_x86_64-ytrace-debug: build-android_x86_64-ytrace-debug ## Install a
 
 .PHONY: test-android_x86_64-ytrace-release
 test-android_x86_64-ytrace-release: build-android_x86_64-ytrace-release ## Install and run Android x86_64 ytrace release (emulator)
-	adb install -r $(BUILD_DIR_ANDROID_X86_64_YTRACE_RELEASE)/app/outputs/apk/release/app-release-unsigned.apk
+	adb install -r $(BUILD_DIR_ANDROID_X86_64_YTRACE_RELEASE)/app/outputs/apk/release/app-release.apk
 	adb shell am start -n com.yetty.terminal/android.app.NativeActivity
 
 #=============================================================================

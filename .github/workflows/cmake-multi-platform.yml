@@ -16,8 +16,8 @@ env:
   BUILD_LINUX: false
   BUILD_MACOS: false
   BUILD_WINDOWS: false
-  BUILD_ANDROID: false
-  BUILD_ANDROID_X86_64: true
+  BUILD_ANDROID: true
+  BUILD_ANDROID_X86_64: false
   BUILD_WEB: false
 
   RUN_CODEQL: false
@@ -317,6 +317,14 @@ jobs:
       with:
         nix_path: nixpkgs=channel:nixos-unstable
 
+    - name: Create debug keystore
+      run: |
+        mkdir -p ~/.android
+        keytool -genkeypair -v -keystore ~/.android/debug.keystore \
+          -storepass android -alias androiddebugkey -keypass android \
+          -keyalg RSA -keysize 2048 -validity 10000 \
+          -dname "CN=Android Debug,O=Android,C=US"
+
     - name: Build Android APK
       run: nix develop .#android --command make build-android-ytrace-release
 
@@ -345,6 +353,14 @@ jobs:
       uses: cachix/install-nix-action@v27
       with:
         nix_path: nixpkgs=channel:nixos-unstable
+
+    - name: Create debug keystore
+      run: |
+        mkdir -p ~/.android
+        keytool -genkeypair -v -keystore ~/.android/debug.keystore \
+          -storepass android -alias androiddebugkey -keypass android \
+          -keyalg RSA -keysize 2048 -validity 10000 \
+          -dname "CN=Android Debug,O=Android,C=US"
 
     - name: Build Android x86_64 APK
       run: nix develop .#android --command make build-android_x86_64-ytrace-release
