@@ -15,6 +15,7 @@
 #include "cards/yplot/yplot-card.h"
 #include "cards/ytext/ytext.h"
 #include "cards/ythorvg/ythorvg.h"
+#include "cards/ywasm/ywasm.h"
 #ifndef __EMSCRIPTEN__
 #include "cards/yvideo/yvideo.h"
 #endif
@@ -172,6 +173,13 @@ public:
                     uint32_t h, const std::string &args,
                     const std::string &payload) -> Result<CardPtr> {
                    return card::YThorVG::create(ctx, x, y, w, h, args, payload);
+                 });
+
+    registerCard("ywasm",
+                 [](const YettyContext &ctx, int32_t x, int32_t y, uint32_t w,
+                    uint32_t h, const std::string &args,
+                    const std::string &payload) -> Result<CardPtr> {
+                   return card::YWasm::create(ctx, x, y, w, h, args, payload);
                  });
 
 #ifndef __EMSCRIPTEN__
