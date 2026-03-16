@@ -76,18 +76,24 @@ GLFW implementation gets window from `GlfwWindowSingleton`.
 
 ### InputManager
 
-**ThreadSingleton** (render thread). Empty interface - just needs to exist.
+**ThreadSingleton** (render thread). Transforms raw input events into internal events.
 
-Input handling is done by `GlfwWindowSingleton` callbacks which push events to `EventQueue`. `InputManager` exists for API consistency across platforms.
+`GlfwWindowSingleton` callbacks push RAW events to `EventQueue`. `InputManager` subscribes to these events and generates internal events:
+
+| Raw Event | Transformation | Internal Event |
+|-----------|----------------|----------------|
+| KeyDown + Ctrl + letter | Ctrl+A=0x01, Ctrl+B=0x02, ..., Ctrl+Z=0x1A | charInput |
+
+**Why here?** GLFW does NOT fire `charCallback` for control characters (Ctrl+A, Ctrl+C, etc). The transformation happens in InputManager so it can be platform-specific.
 
 ### All Managers Summary
 
 | Manager | Thread | Purpose |
 |---------|--------|---------|
 | InitManager | main | Platform init, spawn render thread, event loop |
-| GlfwWindowSingleton | render | Create window, setup callbacks |
+| GlfwWindowSingleton | render | Create window, setup callbacks (push RAW events) |
 | SurfaceManager | render | Window properties, WebGPU surface |
-| InputManager | render | Empty (callbacks in GlfwWindowSingleton) |
+| InputManager | render | Transform raw events (Ctrl+letter -> control char) |
 | FsPathManager | render | Asset paths |
 | ClipboardManager | render | Clipboard access |
 | PtyManager | render | PTY/shell creation |

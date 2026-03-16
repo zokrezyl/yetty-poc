@@ -9,6 +9,36 @@
 
 namespace yetty {
 
+//=============================================================================
+// GlfwWindowSingletonImpl
+//
+// THREADING MODEL:
+//
+// This singleton is created on the RENDER THREAD, but the callbacks it sets
+// up are CALLED on the MAIN THREAD during glfwWaitEvents().
+//
+// - glfwInit()         -> main thread (in InitManager)
+// - glfwCreateWindow() -> render thread (here)
+// - glfwSetKeyCallback() etc. -> render thread (here), but callbacks FIRE
+//                                on main thread during glfwWaitEvents()
+// - glfwWaitEvents()   -> main thread (in InitManager), blocks waiting for
+//                         events, then dispatches to callbacks
+//
+// CALLBACK EXECUTION:
+//
+// All GLFW callbacks (keyCallback, charCallback, mouseCallback, etc.) execute
+// on the MAIN THREAD. They push events to EventQueue (thread-safe), which
+// wakes the render thread via libuv async.
+//
+// CTRL+KEY HANDLING:
+//
+// GLFW does NOT fire charCallback for control characters (Ctrl+A, Ctrl+C, etc).
+// The keyCallback must detect Ctrl+letter combinations and generate charInput
+// events for control characters (Ctrl+A = 0x01, Ctrl+B = 0x02, ..., Ctrl+Z = 0x1A).
+// This happens HERE in the callback (main thread) before pushing to EventQueue.
+//
+//=============================================================================
+
 class GlfwWindowSingletonImpl : public GlfwWindowSingleton {
 public:
     ~GlfwWindowSingletonImpl() override {
@@ -85,6 +115,17 @@ private:
         glfwSetFramebufferSizeCallback(_window, framebufferSizeCallback);
     }
 
+    /// @brief GLFW key callback - executes on MAIN THREAD during glfwWaitEvents()
+    ///
+    /// Pushes RAW key events to EventQueue. No transformation here.
+    /// InputManager (on render thread) subscribes to these and generates
+    /// internal events (e.g., Ctrl+letter -> control character).
+    ///
+    /// @param window   GLFW window handle (unused)
+    /// @param key      GLFW key code (GLFW_KEY_A, GLFW_KEY_ESCAPE, etc.)
+    /// @param scancode Platform-specific scancode
+    /// @param action   GLFW_PRESS, GLFW_RELEASE, or GLFW_REPEAT
+    /// @param mods     Modifier flags (GLFW_MOD_SHIFT, GLFW_MOD_CONTROL, etc.)
     static void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {
         (void)window;
         auto queueResult = base::EventQueue::instance();
@@ -97,6 +138,14 @@ private:
         }
     }
 
+    /// @brief GLFW character callback - executes on MAIN THREAD during glfwWaitEvents()
+    ///
+    /// Pushes RAW character input to EventQueue.
+    /// NOTE: GLFW does NOT fire this for control characters (Ctrl+A, etc.).
+    /// InputManager handles Ctrl+letter -> control character conversion.
+    ///
+    /// @param window    GLFW window handle (unused)
+    /// @param codepoint Unicode codepoint of the character
     static void charCallback(GLFWwindow* window, unsigned int codepoint) {
         (void)window;
         auto queueResult = base::EventQueue::instance();
@@ -104,6 +153,12 @@ private:
         (*queueResult)->push(base::Event::charInput(codepoint));
     }
 
+    /// @brief GLFW mouse button callback - executes on MAIN THREAD
+    ///
+    /// @param window GLFW window handle (used to get cursor position)
+    /// @param button GLFW_MOUSE_BUTTON_LEFT, _RIGHT, _MIDDLE, etc.
+    /// @param action GLFW_PRESS or GLFW_RELEASE
+    /// @param mods   Modifier flags
     static void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
         auto queueResult = base::EventQueue::instance();
         if (!queueResult) return;
@@ -120,6 +175,11 @@ private:
         }
     }
 
+    /// @brief GLFW cursor position callback - executes on MAIN THREAD
+    ///
+    /// @param window GLFW window handle (unused)
+    /// @param x      Cursor X position in window coordinates
+    /// @param y      Cursor Y position in window coordinates
     static void cursorPosCallback(GLFWwindow* window, double x, double y) {
         (void)window;
         auto queueResult = base::EventQueue::instance();
@@ -128,6 +188,11 @@ private:
             static_cast<float>(x), static_cast<float>(y)));
     }
 
+    /// @brief GLFW scroll callback - executes on MAIN THREAD
+    ///
+    /// @param window  GLFW window handle (used to get cursor pos and modifier state)
+    /// @param xoffset Horizontal scroll offset
+    /// @param yoffset Vertical scroll offset
     static void scrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
         auto queueResult = base::EventQueue::instance();
         if (!queueResult) return;
@@ -154,6 +219,11 @@ private:
             static_cast<float>(xoffset), static_cast<float>(yoffset), mods));
     }
 
+    /// @brief GLFW framebuffer size callback - executes on MAIN THREAD
+    ///
+    /// @param window GLFW window handle (unused)
+    /// @param width  New framebuffer width in pixels
+    /// @param height New framebuffer height in pixels
     static void framebufferSizeCallback(GLFWwindow* window, int width, int height) {
         (void)window;
         auto queueResult = base::EventQueue::instance();
