@@ -829,7 +829,7 @@ private:
             return false;
         }
 
-        auto result = _buffer->addPolygonWithVertices(
+        auto result = _buffer->addMeshPolygonWithVertices(
             0,              // layer
             vertexCount,
             vertices.data(),
@@ -983,7 +983,7 @@ private:
         Result<uint32_t> result;
         if (validContourStarts.size() == 1) {
             // Single contour - use simple polygon
-            result = _buffer->addPolygonWithVertices(
+            result = _buffer->addMeshPolygonWithVertices(
                 0,              // layer
                 totalVertexCount,
                 allVertices.data(),
@@ -994,7 +994,7 @@ private:
             );
         } else {
             // Multiple contours (outer + holes) - use polygon group
-            result = _buffer->addPolygonGroupWithVertices(
+            result = _buffer->addMeshPolygonGroupWithVertices(
                 0,              // layer
                 totalVertexCount,
                 static_cast<uint32_t>(validContourStarts.size()),

@@ -226,7 +226,7 @@ static Result<void> parseYAMLPrimitive(YDrawBuffer* buffer,
             }
         }
         if (vertices.size() >= 6) { // At least 3 points
-            buffer->addPolygonWithVertices(layer, static_cast<uint32_t>(vertices.size() / 2),
+            buffer->addMeshPolygonWithVertices(layer, static_cast<uint32_t>(vertices.size() / 2),
                 vertices.data(), fill, stroke, strokeWidth, round);
         }
         return Ok();
@@ -257,7 +257,7 @@ static Result<void> parseYAMLPrimitive(YDrawBuffer* buffer,
             }
         }
         if (vertices.size() >= 6 && !contourStarts.empty()) {
-            buffer->addPolygonGroupWithVertices(layer,
+            buffer->addMeshPolygonGroupWithVertices(layer,
                 static_cast<uint32_t>(vertices.size() / 2),
                 static_cast<uint32_t>(contourStarts.size()),
                 contourStarts.data(), vertices.data(),

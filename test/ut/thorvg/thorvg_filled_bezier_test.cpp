@@ -37,8 +37,8 @@ static bool hasTriangulatedPrimitives(const YDrawBuffer& buffer) {
     buffer.forEachPrim([&](uint32_t, const float* data, uint32_t) {
         uint32_t typeCode = *reinterpret_cast<const uint32_t*>(data);
         if (typeCode == static_cast<uint32_t>(card::SDFType::Triangle) ||
-            typeCode == static_cast<uint32_t>(card::SDFType::Polygon) ||
-            typeCode == static_cast<uint32_t>(card::SDFType::PolygonGroup)) {
+            typeCode == static_cast<uint32_t>(card::SDFType::MeshPolygon) ||
+            typeCode == static_cast<uint32_t>(card::SDFType::MeshPolygonGroup)) {
             found = true;
         }
     });
@@ -362,12 +362,12 @@ suite thorvg_filled_bezier_tests = [] {
         expect(primCount >= 1_u) << "No primitives generated";
         expect(primCount <= 10000_u) << "Too many primitives: " << primCount << " (explosion?)";
 
-        // Count polygon groups (triangulation happens on GPU side)
-        uint32_t polygonGroupCount = countPrimsByType(*buffer, card::SDFType::PolygonGroup);
-        expect(polygonGroupCount > 0_u) << "No PolygonGroup primitives generated";
+        // Count mesh polygon groups (will be triangulated by YDrawBuilder)
+        uint32_t meshPolygonGroupCount = countPrimsByType(*buffer, card::SDFType::MeshPolygonGroup);
+        expect(meshPolygonGroupCount > 0_u) << "No MeshPolygonGroup primitives generated";
 
         // Print actual counts
-        std::cerr << "logo.svg: prims=" << primCount << " polygonGroups=" << polygonGroupCount << std::endl;
+        std::cerr << "logo.svg: prims=" << primCount << " meshPolygonGroups=" << meshPolygonGroupCount << std::endl;
     };
 
     "logo_svg_content_size"_test = [] {
