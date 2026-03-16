@@ -1,8 +1,8 @@
 #pragma once
 
+#include <memory>
 #include <yetty/base/factory.h>
 #include <yetty/result.hpp>
-#include <memory>
 
 namespace yetty {
 
@@ -18,12 +18,12 @@ class PTYProvider;
 //
 class PtyManager : public base::ThreadSingleton<PtyManager> {
 public:
-    virtual ~PtyManager() = default;
+  virtual ~PtyManager() = default;
 
-    virtual Result<std::shared_ptr<PTYProvider>> createPTY() = 0;
+  virtual Result<std::shared_ptr<PTYProvider>> createPTY() = 0;
 
 protected:
-    PtyManager() = default;
+  PtyManager() = default;
 };
 
 } // namespace yetty

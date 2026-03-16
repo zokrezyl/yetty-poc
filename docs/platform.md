@@ -5,59 +5,92 @@ Yetty runs on desktop (Linux/macOS/Windows), Android, and WebAssembly. Each plat
 ## Threading Model
 
 **Desktop (GLFW):**
-- **Main thread**: Creates window, runs blocking input loop (`glfwWaitEvents`)
-- **Render thread**: Runs libuv event loop, processes EventQueue, renders with WebGPU
+- **Main thread**: Runs `InitManager` - initializes GLFW, spawns render thread, blocks on `glfwWaitEvents()`
+- **Render thread**: Creates window via `GlfwWindowSingleton`, runs libuv event loop, renders with WebGPU
+
+**Key insight**: `glfwWaitEvents()` is GLOBAL - it processes events for all windows, doesn't need a window handle. So:
+1. Main thread can block on event loop before window exists
+2. Render thread creates window
+3. Window callbacks (set on render thread) push events to EventQueue
+4. Main thread's `glfwWaitEvents()` returns, callbacks fire, events are queued
+5. EventQueue wakes render thread via libuv async
 
 **Android:**
 - **Main thread**: `android_main` handles both input (ALooper) and rendering
 
 **WebASM:**
-- **Single thread**: Browser event loop handles everything
-
-This separation on desktop allows:
-- Zero input latency (blocking wait, no polling)
-- Render thread runs libuv independently
-- No busy-polling or timers needed
-
-## Design Principles
-
-1. **Event-driven**: Platform managers inject `base::Event` into EventQueue. No callbacks propagating through layers.
-2. **Small interfaces**: Each manager has a single responsibility. Empty interfaces where possible.
-3. **ThreadSingleton pattern**: Each manager is a thread singleton. Build system links the correct implementation per platform.
-4. **Internal glue via shared singletons**: Platform-specific state (window handles, etc.) shared via internal singletons.
+- **Single thread**: Browser doesn't support multiple threads. Everything runs on main thread via `requestAnimationFrame`. No separate render thread, no `InitManager` - just direct initialization and RAF loop.
 
 ## Managers
 
-### InputManager
+### InitManager
 
-Translates platform input into `base::Event` and injects into EventLoop.
+**ThreadSingleton** (main thread). Entry point for platform initialization. All platforms except WebASM.
 
-| Platform | Input Sources |
-|----------|---------------|
-| GLFW | Keyboard, mouse, scroll wheel |
-| Android | Touch, gestures (pinch/pan), soft keyboard, hardware keys |
-| WebASM | Keyboard, mouse (via Emscripten) |
-| Windows | Keyboard, mouse, touch |
+| Platform | Responsibilities |
+|----------|------------------|
+| GLFW | `glfwInit()`, spawn render thread, block on `glfwWaitEvents()` |
+| Android | Setup ALooper, spawn render thread |
 
-Events produced: `KeyDown`, `KeyUp`, `Char`, `MouseMove`, `MouseDown`, `MouseUp`, `Scroll`
+```cpp
+// main.cpp (desktop/Android)
+auto init = InitManager::instance();
+init->run([&]() {
+    // === RENDER THREAD ===
+    auto yetty = Yetty::create(argc, argv);
+    yetty->run();
+    yetty->shutdown();
+});
+```
 
-Gesture translation (Android):
-- Pinch → `Scroll` with `mods=2` (Ctrl) → triggers visual zoom
-- Two-finger pan → `Scroll` with `mods=0` → pans in zoom mode
+### GlfwWindowSingleton
+
+**ThreadSingleton** (render thread). Creates and owns the GLFW window.
+
+- Created on render thread (first `instance()` call)
+- Calls `glfwCreateWindow()`
+- Sets up GLFW callbacks that push to `EventQueue`
+- Provides window handle for SurfaceManager
+
+```cpp
+// On render thread
+auto window = GlfwWindowSingleton::instance();
+GLFWwindow* w = window->getWindow();
+```
 
 ### SurfaceManager
 
-Window lifecycle and WebGPU surface creation.
+**ThreadSingleton** (render thread). Window properties and WebGPU surface creation.
 
 | Method | Purpose |
 |--------|---------|
-| `createWindow()` | Create native window (GLFW) or bind to system window (Android) |
-| `createWGPUSurface()` | Create platform-specific WebGPU surface |
 | `getWindowSize()` | Current window dimensions |
+| `getFramebufferSize()` | Framebuffer dimensions (may differ on HiDPI) |
 | `getContentScale()` | HiDPI scale factor |
-| `runMainLoop()` | Platform main loop (blocking on desktop, RAF on web) |
-| `pollEvents()` | Process pending window events |
-| `getTime()` | High-resolution timestamp |
+| `shouldClose()` | Window close requested |
+| `setTitle()` | Set window title |
+| `setIcon()` | Set window icon |
+| `createWGPUSurface()` | Create platform-specific WebGPU surface |
+
+GLFW implementation gets window from `GlfwWindowSingleton`.
+
+### InputManager
+
+**ThreadSingleton** (render thread). Empty interface - just needs to exist.
+
+Input handling is done by `GlfwWindowSingleton` callbacks which push events to `EventQueue`. `InputManager` exists for API consistency across platforms.
+
+### All Managers Summary
+
+| Manager | Thread | Purpose |
+|---------|--------|---------|
+| InitManager | main | Platform init, spawn render thread, event loop |
+| GlfwWindowSingleton | render | Create window, setup callbacks |
+| SurfaceManager | render | Window properties, WebGPU surface |
+| InputManager | render | Empty (callbacks in GlfwWindowSingleton) |
+| FsPathManager | render | Asset paths |
+| ClipboardManager | render | Clipboard access |
+| PtyManager | render | PTY/shell creation |
 
 ### FsPathManager
 
@@ -65,23 +98,20 @@ Returns platform-appropriate paths for assets and runtime files.
 
 | Path | Desktop | Android | WebASM |
 |------|---------|---------|--------|
-| Shaders | `./shaders/` or system path | `{dataDir}/shaders/` | embedded |
+| Shaders | `./shaders/` | `{dataDir}/shaders/` | embedded |
 | MSDF fonts | `./msdf-fonts/` | `{dataDir}/msdf-fonts/` | embedded |
 | TTF fonts | `./fonts/` | `{dataDir}/fonts/` | embedded |
 | Runtime | `$XDG_RUNTIME_DIR` | `{dataDir}/` | N/A |
 
-Android extracts embedded assets (via incbin) to dataDir on first run.
-
 ### ClipboardManager
 
-Clipboard read/write operations. Listens for clipboard-related events.
+Clipboard read/write operations.
 
 | Platform | Implementation |
 |----------|----------------|
 | GLFW | `glfwGetClipboardString()` / `glfwSetClipboardString()` |
 | Android | JNI to `ClipboardManager` |
 | WebASM | `navigator.clipboard` API |
-| Windows | Win32 clipboard API |
 
 ### PtyManager
 
@@ -94,33 +124,77 @@ Creates platform-appropriate PTY/shell provider.
 | WebASM | JSLinux iframe emulator |
 | Windows | ConPTY |
 
+## Event Flow (Desktop)
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ MAIN THREAD                                                      │
+│                                                                  │
+│  InitManager::run()                                              │
+│       │                                                          │
+│       ├──► spawn render thread                                   │
+│       │                                                          │
+│       ▼                                                          │
+│  glfwWaitEvents() ◄─── blocks until event arrives               │
+│       │                                                          │
+│       ▼                                                          │
+│  GLFW callback fires (key, mouse, etc.)                         │
+│       │                                                          │
+│       ▼                                                          │
+│  EventQueue::push(event) ────────────────────┐                  │
+│       │                                       │                  │
+│       └──► loop continues                     │                  │
+└───────────────────────────────────────────────│──────────────────┘
+                                                │
+                                                ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ RENDER THREAD                                                    │
+│                                                                  │
+│  GlfwWindowSingleton::instance()  ◄── creates window            │
+│       │                                                          │
+│       ▼                                                          │
+│  Yetty::create() / Yetty::run()                                 │
+│       │                                                          │
+│       ▼                                                          │
+│  libuv event loop                                                │
+│       │                                                          │
+│       ▼                                                          │
+│  uv_async wakes loop  ◄─────────── EventQueue signals           │
+│       │                                                          │
+│       ▼                                                          │
+│  EventLoop::dispatch(event)                                      │
+│       │                                                          │
+│       ▼                                                          │
+│  Listeners process event (gpu-screen, etc.)                     │
+│       │                                                          │
+│       ▼                                                          │
+│  Render frame                                                    │
+└─────────────────────────────────────────────────────────────────┘
+```
+
 ## File Structure
 
 ```
 include/yetty/platform/
-    input-manager.h
-    surface-manager.h
+    init-manager.h          # Singleton - platform init, thread management
+    input-manager.h         # ThreadSingleton - empty interface
+    surface-manager.h       # ThreadSingleton - window properties, surface
     fs-path-manager.h
     clipboard-manager.h
     pty-manager.h
 
 src/yetty/platform/
-    android/
-        input-manager.cpp
-        surface-manager.cpp
-        fs-path-manager.cpp
-        clipboard-manager.cpp
-        pty-manager.cpp
-    glfw/
-        input-manager.cpp
-        surface-manager.cpp
-        fs-path-manager.cpp
-        clipboard-manager.cpp
-        pty-manager.cpp
-    webasm/
-        ...
-    windows/
-        ...
+    shared/
+        glfw-init-manager.cpp       # InitManager for GLFW
+        glfw-window-singleton.cpp   # Window creation, callbacks
+        glfw-window-singleton.h     # Internal header
+    input-manager/
+        glfw.cpp            # Empty - just instantiates
+        android.cpp
+    surface-manager/
+        glfw.cpp            # Gets window from GlfwWindowSingleton
+        android.cpp
+    ...
 ```
 
 ## Build Integration
@@ -130,33 +204,16 @@ CMake adds platform-specific sources:
 ```cmake
 if(ANDROID)
     target_sources(yetty PRIVATE
-        platform/android/input-manager.cpp
-        platform/android/surface-manager.cpp
-        ...)
+        platform/android/...)
 elseif(EMSCRIPTEN)
     target_sources(yetty PRIVATE
-        platform/webasm/input-manager.cpp
-        ...)
+        platform/webasm/...)
 else()
     target_sources(yetty PRIVATE
-        platform/glfw/input-manager.cpp
+        platform/shared/glfw-init-manager.cpp
+        platform/shared/glfw-window-singleton.cpp
+        platform/input-manager/glfw.cpp
+        platform/surface-manager/glfw.cpp
         ...)
 endif()
-```
-
-## Usage in yetty.cpp
-
-```cpp
-auto input = InputManager::create();
-auto surface = SurfaceManager::create();
-auto paths = FsPathManager::create();
-auto clipboard = ClipboardManager::create();
-auto pty = PtyManager::create();
-
-// InputManager injects events directly - no callbacks needed
-surface->runMainLoop([&]() {
-    surface->pollEvents();
-    // Events already in EventLoop, processed by gpu-screen
-    return !surface->shouldClose();
-});
 ```

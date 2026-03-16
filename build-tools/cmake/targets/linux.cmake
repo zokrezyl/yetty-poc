@@ -17,6 +17,7 @@ add_subdirectory(${YETTY_ROOT}/src/yetty/ytop ${CMAKE_BINARY_DIR}/src/yetty/ytop
 
 # Platform manager sources (new architecture)
 set(YETTY_PLATFORM_SOURCES
+    ${YETTY_ROOT}/src/yetty/platform/shared/glfw-init-manager.cpp
     ${YETTY_ROOT}/src/yetty/platform/shared/glfw-window-singleton.cpp
     ${YETTY_ROOT}/src/yetty/platform/input-manager/glfw.cpp
     ${YETTY_ROOT}/src/yetty/platform/surface-manager/glfw.cpp

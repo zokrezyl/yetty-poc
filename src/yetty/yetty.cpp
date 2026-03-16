@@ -12,6 +12,8 @@
 #include "ygui/ygui-overlay.h"
 #include <yetty/wgpu-compat.h>
 #include <yetty/platform.h>
+#include <yetty/platform/input-manager.h>
+#include <yetty/platform/surface-manager.h>
 #include <yetty/base/base.h>
 #include <yetty/rpc/rpc-server.h>
 #include <yetty/rpc/event-loop-handler.h>
@@ -90,6 +92,10 @@ private:
 
     // Platform abstraction (window, input, etc.)
     Platform::Ptr _platform;
+#if !YETTY_WEB && !defined(__ANDROID__)
+    // New platform managers (for desktop with new threading model)
+    SurfaceManager::Ptr _surfaceManager;
+#endif
     uint32_t _initialWidth = 1024;
     uint32_t _initialHeight = 768;
 
@@ -490,7 +496,11 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     if (_vncClientMode) {
         // Get initial VNC content area size (window minus our statusbar)
         int windowW, windowH;
+#if !YETTY_WEB && !defined(__ANDROID__)
+        _surfaceManager->getWindowSize(windowW, windowH);
+#else
         _platform->getWindowSize(windowW, windowH);
+#endif
         float statusbarH = _yettyContext.yguiOverlay ? _yettyContext.yguiOverlay->getStatusbarHeight() : 0.0f;
         int vncH = windowH - static_cast<int>(statusbarH);
         uint16_t vncWidth = static_cast<uint16_t>(windowW > 0 ? windowW : 800);
@@ -1050,7 +1060,40 @@ Result<void> YettyImpl::initEmbeddedAssets() noexcept {
 }
 
 Result<void> YettyImpl::initWindow() noexcept {
-    // Create platform (headless mode skips GLFW, uses std::chrono for timing)
+#if !YETTY_WEB && !defined(__ANDROID__)
+    // Desktop: Window already created by GlfwWindowSingleton (from main.cpp)
+    // Use SurfaceManager for window properties
+
+    // Get SurfaceManager (initializes from GlfwWindowSingleton)
+    auto surfaceResult = SurfaceManager::instance();
+    if (!surfaceResult) {
+        return Err<void>("Failed to get SurfaceManager", surfaceResult);
+    }
+    _surfaceManager = *surfaceResult;
+
+    // Set window icon from embedded resource
+    _surfaceManager->setIcon(gLogoData, gLogoSize);
+
+    // Get actual window size
+    int actualW, actualH;
+    _surfaceManager->getWindowSize(actualW, actualH);
+    if (actualW > 0 && actualH > 0) {
+        _initialWidth = static_cast<uint32_t>(actualW);
+        _initialHeight = static_cast<uint32_t>(actualH);
+    }
+
+    // Still create Platform for paths/clipboard/etc. (but skip window creation)
+    auto platformResult = Platform::create(_vncHeadless);
+    if (!platformResult) {
+        return Err<void>("Failed to create platform", platformResult);
+    }
+    _platform = *platformResult;
+
+    ydebug("Desktop: SurfaceManager initialized, window size {}x{}", actualW, actualH);
+    return Ok();
+
+#else
+    // Web/Android: Use Platform for everything
     auto platformResult = Platform::create(_vncHeadless);
     if (!platformResult) {
         return Err<void>("Failed to create platform", platformResult);
@@ -1079,6 +1122,7 @@ Result<void> YettyImpl::initWindow() noexcept {
     }
 
     return Ok();
+#endif
 }
 
 Result<void> YettyImpl::initWebGPU() noexcept {
@@ -1092,9 +1136,15 @@ Result<void> YettyImpl::initWebGPU() noexcept {
     }
     ydebug("initWebGPU: Instance created");
 
-    // Create surface via platform (skip in headless mode)
+    // Create surface (skip in headless mode)
     if (!_vncHeadless) {
+#if !YETTY_WEB && !defined(__ANDROID__)
+        // Desktop: Use SurfaceManager
+        _surface = _surfaceManager->createWGPUSurface(_instance);
+#else
+        // Web/Android: Use Platform
         _surface = _platform->createWGPUSurface(_instance);
+#endif
         if (_surface) {
             ydebug("initWebGPU: Surface created");
         } else {
@@ -2026,8 +2076,13 @@ Result<void> YettyImpl::initCallbacks() noexcept {
 
     // Initialize content scale at startup
     int fbWidth, fbHeight, winWidth, winHeight;
+#if !YETTY_WEB && !defined(__ANDROID__)
+    _surfaceManager->getFramebufferSize(fbWidth, fbHeight);
+    _surfaceManager->getWindowSize(winWidth, winHeight);
+#else
     _platform->getFramebufferSize(fbWidth, fbHeight);
     _platform->getWindowSize(winWidth, winHeight);
+#endif
     if (winWidth > 0 && winHeight > 0) {
         _contentScaleX = static_cast<float>(fbWidth) / static_cast<float>(winWidth);
         _contentScaleY = static_cast<float>(fbHeight) / static_cast<float>(winHeight);
@@ -2119,21 +2174,9 @@ Result<void> YettyImpl::onShutdown() {
 void YettyImpl::initEventLoop() noexcept {
     auto loop = *base::EventLoop::instance();
 
-    // Input poll timer - always fast (8ms = 120Hz) for responsive UI
-    auto inputTimerResult = loop->createTimer();
-    if (!inputTimerResult) {
-        yerror("Failed to create input timer: {}", error_msg(inputTimerResult));
-        return;
-    }
-    _inputTimerId = *inputTimerResult;
-    if (auto res = loop->configTimer(_inputTimerId, 8); !res) {
-        yerror("Failed to configure input timer: {}", error_msg(res));
-        return;
-    }
-    if (auto res = loop->registerTimerListener(_inputTimerId, sharedAs<base::EventListener>()); !res) {
-        yerror("Failed to register input timer listener: {}", error_msg(res));
-        return;
-    }
+    // NEW THREADING MODEL: No input polling timer needed
+    // Input events come via EventQueue from GlfwWindowSingleton callbacks
+    // We just need a frame timer and to register input event listeners
 
     // Frame render timer - configurable FPS (default 60)
     auto frameTimerResult = loop->createTimer();
@@ -2142,7 +2185,7 @@ void YettyImpl::initEventLoop() noexcept {
         return;
     }
     _frameTimerId = *frameTimerResult;
-    if (auto res = loop->configTimer(_frameTimerId, 1000); !res) {  // 1 FPS baseline, events trigger immediate render
+    if (auto res = loop->configTimer(_frameTimerId, 16); !res) {  // 60 FPS
         yerror("Failed to configure frame timer: {}", error_msg(res));
         return;
     }
@@ -2150,6 +2193,16 @@ void YettyImpl::initEventLoop() noexcept {
         yerror("Failed to register frame timer listener: {}", error_msg(res));
         return;
     }
+
+    // Register for input events from EventQueue (pushed by GlfwWindowSingleton callbacks)
+    loop->registerListener(base::Event::Type::KeyDown, sharedAs<base::EventListener>());
+    loop->registerListener(base::Event::Type::KeyUp, sharedAs<base::EventListener>());
+    loop->registerListener(base::Event::Type::Char, sharedAs<base::EventListener>());
+    loop->registerListener(base::Event::Type::MouseDown, sharedAs<base::EventListener>());
+    loop->registerListener(base::Event::Type::MouseUp, sharedAs<base::EventListener>());
+    loop->registerListener(base::Event::Type::MouseMove, sharedAs<base::EventListener>());
+    loop->registerListener(base::Event::Type::Scroll, sharedAs<base::EventListener>());
+    loop->registerListener(base::Event::Type::Resize, sharedAs<base::EventListener>());
 
     // Register for Copy events to write to system clipboard
     loop->registerListener(base::Event::Type::Copy, sharedAs<base::EventListener>());
@@ -2159,14 +2212,13 @@ void YettyImpl::initEventLoop() noexcept {
     loop->registerListener(base::Event::Type::SetFrameRate, sharedAs<base::EventListener>());
     // Register for ScreenUpdate events (PTY activity)
     loop->registerListener(base::Event::Type::ScreenUpdate, sharedAs<base::EventListener>());
+
+    ydebug("Event loop initialized with new threading model");
 }
 
 void YettyImpl::shutdownEventLoop() noexcept {
     auto loop = *base::EventLoop::instance();
-    if (_inputTimerId >= 0) {
-        loop->destroyTimer(_inputTimerId);
-        _inputTimerId = -1;
-    }
+    // Note: _inputTimerId no longer used in new threading model
     if (_frameTimerId >= 0) {
         loop->destroyTimer(_frameTimerId);
         _frameTimerId = -1;
@@ -2182,18 +2234,35 @@ Result<bool> YettyImpl::onEvent(const base::Event& event) {
         ydebug("[TIME] onEvent() called for ScreenUpdate at {}ms", ms);
     }
 
-    // Input timer: poll GLFW events (fast, always responsive)
-    // Note: VNC input is now fully async via EventLoop poll, no longer needs polling here
-    if (event.type == base::Event::Type::Timer && event.timer.timerId == _inputTimerId) {
-        // In headless mode, no window to poll events from
-        if (!_vncHeadless) {
-            _platform->pollEvents();
-            if (_platform->shouldClose()) {
-                (*base::EventLoop::instance())->stop();
-            }
-        }
-        // Process GPU events so async callbacks (like render done) can fire
-        wgpuInstanceProcessEvents(_instance);
+    // NEW THREADING MODEL: Input events come from EventQueue (pushed by GlfwWindowSingleton)
+    // Track modifier key state for scroll events
+    // GLFW_KEY_LEFT_CONTROL=341, GLFW_KEY_RIGHT_CONTROL=345
+    // GLFW_KEY_LEFT_SHIFT=340, GLFW_KEY_RIGHT_SHIFT=344
+    if (event.type == base::Event::Type::KeyDown) {
+        int key = event.key.key;
+        if (key == 341 || key == 345) _ctrlPressed = true;
+        if (key == 340 || key == 344) _shiftPressed = true;
+        // Let workspace handle the event (don't consume)
+        return Ok(false);
+    }
+    if (event.type == base::Event::Type::KeyUp) {
+        int key = event.key.key;
+        if (key == 341 || key == 345) _ctrlPressed = false;
+        if (key == 340 || key == 344) _shiftPressed = false;
+        return Ok(false);
+    }
+
+    // Mouse move: track position for scroll/button events
+    if (event.type == base::Event::Type::MouseMove) {
+        _lastMouseX = event.mouse.x;
+        _lastMouseY = event.mouse.y;
+        return Ok(false);  // Let workspace handle
+    }
+
+    // Resize event from GlfwWindowSingleton
+    if (event.type == base::Event::Type::Resize) {
+        handleResize(static_cast<int>(event.resize.width),
+                    static_cast<int>(event.resize.height));
         return Ok(true);
     }
 
@@ -2201,6 +2270,15 @@ Result<bool> YettyImpl::onEvent(const base::Event& event) {
     // _inRender guard is inside mainLoopIteration (async: cleared by GPU callback)
     if ((event.type == base::Event::Type::Timer && event.timer.timerId == _frameTimerId) ||
         event.type == base::Event::Type::ScreenUpdate) {
+        // Check if window should close
+        if (_surfaceManager && _surfaceManager->shouldClose()) {
+            ydebug("Window close requested, stopping event loop");
+            (*base::EventLoop::instance())->stop();
+            return Ok(true);
+        }
+        // Process GPU events so async callbacks (like render done) can fire
+        wgpuInstanceProcessEvents(_instance);
+
         if (auto res = mainLoopIteration(); !res) {
             yerror("Fatal render error: {}", error_msg(res));
             (*base::EventLoop::instance())->stop();
@@ -2278,7 +2356,7 @@ Result<void> YettyImpl::run() noexcept {
     return Ok();
 #elif !defined(__ANDROID__)
     auto loop = *base::EventLoop::instance();
-    loop->startTimer(_inputTimerId);
+    // NEW THREADING MODEL: No input timer - events come via EventQueue
     loop->startTimer(_frameTimerId);
     loop->start();
 
@@ -2392,7 +2470,11 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
         windowWidth = _vncRequestedWidth > 0 ? static_cast<int>(_vncRequestedWidth) : static_cast<int>(_initialWidth);
         windowHeight = _vncRequestedHeight > 0 ? static_cast<int>(_vncRequestedHeight) : static_cast<int>(_initialHeight);
     } else {
+#if !YETTY_WEB && !defined(__ANDROID__)
+        _surfaceManager->getWindowSize(windowWidth, windowHeight);
+#else
         _platform->getWindowSize(windowWidth, windowHeight);
+#endif
     }
 
     _sharedUniforms.time = static_cast<float>(now);
@@ -2743,7 +2825,11 @@ void YettyImpl::handleResize(int newWidth, int newHeight) noexcept {
 
     // Update content scale (framebuffer / window)
     int windowWidth, windowHeight;
+#if !YETTY_WEB && !defined(__ANDROID__)
+    _surfaceManager->getWindowSize(windowWidth, windowHeight);
+#else
     _platform->getWindowSize(windowWidth, windowHeight);
+#endif
     if (windowWidth > 0 && windowHeight > 0) {
         _contentScaleX = static_cast<float>(newWidth) / static_cast<float>(windowWidth);
         _contentScaleY = static_cast<float>(newHeight) / static_cast<float>(windowHeight);

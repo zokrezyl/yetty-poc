@@ -6,7 +6,6 @@
 #include <yetty/base/event.h>
 #include <ytrace/ytrace.hpp>
 #include <GLFW/glfw3.h>
-#include <atomic>
 
 namespace yetty {
 
@@ -17,33 +16,19 @@ public:
             glfwDestroyWindow(_window);
             _window = nullptr;
         }
-        glfwTerminate();
     }
 
     Result<void> init() {
-        if (!glfwInit()) {
-            return Err<void>("Failed to initialize GLFW");
-        }
-
-        // Force X11 on Linux (Wayland doesn't support glfwSetWindowIcon)
-#ifdef __linux__
-        if (const char* platform = getenv("XDG_SESSION_TYPE");
-            platform && std::string(platform) == "wayland") {
-            glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_X11);
-        }
-#endif
-
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
         _window = glfwCreateWindow(1280, 720, "yetty", nullptr, nullptr);
         if (!_window) {
-            glfwTerminate();
             return Err<void>("Failed to create GLFW window");
         }
 
         glfwSetWindowUserPointer(_window, this);
         setupCallbacks();
 
-        ydebug("GLFW window created");
+        ydebug("GlfwWindowSingleton: window created");
         return Ok();
     }
 
@@ -90,29 +75,6 @@ public:
         (void)data; (void)size;
     }
 
-    void startInputLoop() override {
-        _running = true;
-        ydebug("Starting GLFW input loop (blocking)");
-
-        while (_running && !glfwWindowShouldClose(_window)) {
-            // Block until input event arrives
-            glfwWaitEvents();
-            // Callbacks have already pushed events to EventQueue
-        }
-
-        ydebug("GLFW input loop ended");
-    }
-
-    void stopInputLoop() override {
-        _running = false;
-        // Wake the blocking glfwWaitEvents so it can check _running
-        glfwPostEmptyEvent();
-    }
-
-    void postEmptyEvent() override {
-        glfwPostEmptyEvent();
-    }
-
 private:
     void setupCallbacks() {
         glfwSetKeyCallback(_window, keyCallback);
@@ -121,11 +83,6 @@ private:
         glfwSetCursorPosCallback(_window, cursorPosCallback);
         glfwSetScrollCallback(_window, scrollCallback);
         glfwSetFramebufferSizeCallback(_window, framebufferSizeCallback);
-        glfwSetWindowFocusCallback(_window, windowFocusCallback);
-    }
-
-    static GlfwWindowSingletonImpl* getSelf(GLFWwindow* window) {
-        return static_cast<GlfwWindowSingletonImpl*>(glfwGetWindowUserPointer(window));
     }
 
     static void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {
@@ -164,6 +121,7 @@ private:
     }
 
     static void cursorPosCallback(GLFWwindow* window, double x, double y) {
+        (void)window;
         auto queueResult = base::EventQueue::instance();
         if (!queueResult) return;
         (*queueResult)->push(base::Event::mouseMove(
@@ -171,14 +129,12 @@ private:
     }
 
     static void scrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
-        auto* self = getSelf(window);
         auto queueResult = base::EventQueue::instance();
         if (!queueResult) return;
 
         double x, y;
         glfwGetCursorPos(window, &x, &y);
 
-        // Get current modifier state
         int mods = 0;
         if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
             glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS) {
@@ -206,16 +162,7 @@ private:
             static_cast<float>(width), static_cast<float>(height)));
     }
 
-    static void windowFocusCallback(GLFWwindow* window, int focused) {
-        (void)window;
-        (void)focused;
-        // Note: focusEvent takes ObjectId, not bool
-        // For now, we skip this - the old Platform handled focus differently
-        // TODO: Add a proper window focus event type
-    }
-
     GLFWwindow* _window = nullptr;
-    std::atomic<bool> _running{false};
 };
 
 Result<GlfwWindowSingleton::Ptr> GlfwWindowSingleton::createImpl() {
