@@ -364,7 +364,7 @@ static void computeAABB(const float* data, uint32_t wc,
             aabbMinX = 0; aabbMinY = 0; aabbMaxX = 0; aabbMaxY = 0;
             break;
         }
-        case SDFType::Polygon: {
+        case SDFType::MeshPolygon: {
             // Polygon: header(7) + vertices(vertexCount*2)
             uint32_t vertexCount = sdf::detail::read_u32(data, 2);
             strokeWidth = data[5];
@@ -388,7 +388,7 @@ static void computeAABB(const float* data, uint32_t wc,
             }
             break;
         }
-        case SDFType::PolygonGroup: {
+        case SDFType::MeshPolygonGroup: {
             // PolygonGroup: header(8) + contourStarts(contourCount) + vertices(vertexCount*2)
             uint32_t vertexCount = sdf::detail::read_u32(data, 2);
             uint32_t contourCount = sdf::detail::read_u32(data, 3);
@@ -1377,7 +1377,7 @@ public:
             _pendingImages.push_back(std::move(pi));
         });
 
-        // Triangulation pass: convert Polygon/PolygonGroup to Triangle primitives
+        // Triangulation pass: convert MeshPolygon/MeshPolygonGroup to Triangle primitives
         {
             struct PendingTri {
                 float x0, y0, x1, y1, x2, y2;
@@ -1390,7 +1390,7 @@ public:
             _buffer->forEachPrim([&](uint32_t id, const float* data, uint32_t /*wc*/) {
                 uint32_t type = sdf::detail::read_u32(data, 0);
 
-                if (type == static_cast<uint32_t>(SDFType::Polygon)) {
+                if (type == static_cast<uint32_t>(SDFType::MeshPolygon)) {
                     uint32_t layer = sdf::detail::read_u32(data, 1);
                     uint32_t vertexCount = sdf::detail::read_u32(data, 2);
                     uint32_t fillColor = sdf::detail::read_u32(data, 3);
@@ -1411,7 +1411,7 @@ public:
                         toRemove.push_back(id);
                     }
                 }
-                else if (type == static_cast<uint32_t>(SDFType::PolygonGroup)) {
+                else if (type == static_cast<uint32_t>(SDFType::MeshPolygonGroup)) {
                     uint32_t layer = sdf::detail::read_u32(data, 1);
                     uint32_t vertexCount = sdf::detail::read_u32(data, 2);
                     uint32_t contourCount = sdf::detail::read_u32(data, 3);

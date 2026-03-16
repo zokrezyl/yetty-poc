@@ -152,10 +152,10 @@ void YDrawBuffer::clear() {
 }
 
 //=============================================================================
-// Polygon with variable vertex data
+// MeshPolygon with variable vertex data (CPU triangulated)
 //=============================================================================
 
-Result<uint32_t> YDrawBuffer::addPolygonWithVertices(uint32_t layer, uint32_t vertexCount,
+Result<uint32_t> YDrawBuffer::addMeshPolygonWithVertices(uint32_t layer, uint32_t vertexCount,
     const float* vertices, uint32_t fillColor, uint32_t strokeColor,
     float strokeWidth, float round_, uint32_t id) {
 
@@ -163,8 +163,8 @@ Result<uint32_t> YDrawBuffer::addPolygonWithVertices(uint32_t layer, uint32_t ve
     uint32_t totalWords = 7 + vertexCount * 2;
     std::vector<float> data(totalWords);
 
-    // Write header
-    sdf::writePolygon(data.data(), layer, vertexCount, fillColor, strokeColor, strokeWidth, round_);
+    // Write header (MeshPolygon type)
+    sdf::writeMeshPolygon(data.data(), layer, vertexCount, fillColor, strokeColor, strokeWidth, round_);
 
     // Append vertex data
     std::memcpy(data.data() + 7, vertices, vertexCount * 2 * sizeof(float));
@@ -172,7 +172,7 @@ Result<uint32_t> YDrawBuffer::addPolygonWithVertices(uint32_t layer, uint32_t ve
     return addPrim(id, data.data(), totalWords);
 }
 
-Result<uint32_t> YDrawBuffer::addPolygonGroupWithVertices(uint32_t layer,
+Result<uint32_t> YDrawBuffer::addMeshPolygonGroupWithVertices(uint32_t layer,
     uint32_t vertexCount, uint32_t contourCount,
     const uint32_t* contourStarts, const float* vertices,
     uint32_t fillColor, uint32_t strokeColor,
@@ -182,8 +182,8 @@ Result<uint32_t> YDrawBuffer::addPolygonGroupWithVertices(uint32_t layer,
     uint32_t totalWords = 8 + contourCount + vertexCount * 2;
     std::vector<float> data(totalWords);
 
-    // Write header
-    sdf::writePolygonGroup(data.data(), layer, vertexCount, contourCount, fillColor, strokeColor, strokeWidth, round_);
+    // Write header (MeshPolygonGroup type)
+    sdf::writeMeshPolygonGroup(data.data(), layer, vertexCount, contourCount, fillColor, strokeColor, strokeWidth, round_);
 
     // Append contour starts (as floats with bits preserved)
     float* dst = data.data() + 8;

@@ -130,13 +130,20 @@ For complex paths that don't map to YDraw primitives, tessellate to triangles.
 | appendCircle(cx,cy,rx,ry) where rx==ry | Circle | Direct mapping ✓ |
 | appendCircle(cx,cy,rx,ry) where rx!=ry | Ellipse | Direct mapping ✓ |
 | LineTo segment | Segment | Direct mapping ✓ |
-| CubicTo | Bezier3 | Direct mapping ✓ |
-| Closed polygon (N points) | Polygon → N-2 Triangles | Ear-clipping triangulation ✓ |
-| Polygon with holes | PolygonGroup → Triangles | Bridge merging + triangulation ✓ |
+| CubicTo (stroke) | Bezier3 | Stroke only - renders curve outline ✓ |
+| CubicTo (fill) | Polygon (flattened) | Bezier flattened to polyline, then triangulated ✓ |
+| Closed polygon (N points, no curves) | Polygon → N-2 Triangles | Ear-clipping triangulation ✓ |
+| Polygon with holes (no curves) | PolygonGroup → Triangles | Bridge merging + triangulation ✓ |
+| Closed bezier path (fill) | PolygonGroup (flattened) | Adaptive subdivision + triangulation ✓ |
 | Arc | Arc | Needs parameter conversion |
-| Complex path | Multiple primitives | Path decomposition |
 
 ## Challenges
+
+### 0. Filled Bezier Paths (SOLVED)
+- ThorVG: Arbitrary bezier-bounded filled regions
+- YDraw: `Bezier3` is a stroke primitive only, not a fill primitive
+- **Status:** ✅ IMPLEMENTED via `tryRenderAsFilledPath()`
+- **Solution:** Adaptive bezier subdivision → polyline → ear-clipping triangulation
 
 ### 1. Fill Rules
 - ThorVG: EvenOdd, NonZero
@@ -175,10 +182,12 @@ For complex paths that don't map to YDraw primitives, tessellate to triangles.
 2. Handle closed paths by connecting segments
 3. Stroke rendering via strokeWidth parameter
 
-### Phase 3: Complex Paths
-1. Implement path tessellation for unsupported shapes
-2. Triangulate fills when needed
-3. Stroke-to-path conversion for styled strokes
+### Phase 3: Complex Paths (IMPLEMENTED)
+1. **Curve flattening**: ✅ `flattenCubicBezier()` - adaptive subdivision with tolerance control
+2. **Bezier fill tessellation**: ✅ `tryRenderAsFilledPath()` - multi-contour polygon triangulation
+3. Stroke-to-path conversion for styled strokes - ❌ not yet
+
+**Enabled:** `docs/logo.svg` and complex filled bezier paths now render
 
 ### Phase 4: Advanced Features (Optional)
 1. Add gradient support to YDraw primitives
@@ -199,18 +208,20 @@ tmp/thorvg/src/renderer/ydraw_engine/
 
 ## Effort Estimate
 
-| Phase | Complexity | Description |
-|-------|------------|-------------|
-| Phase 1 | Medium | Basic renderer + simple shapes |
-| Phase 2 | Medium | Bezier paths + strokes |
-| Phase 3 | High | Tessellation + complex paths |
-| Phase 4 | High | Gradients + composition |
+| Phase | Complexity | Status | Description |
+|-------|------------|--------|-------------|
+| Phase 1 | Medium | ✅ Done | Basic renderer + simple shapes |
+| Phase 2 | Medium | ✅ Done | Bezier strokes + straight-line polygon fills |
+| Phase 3 | High | ✅ Done | Bezier curve flattening + filled bezier tessellation |
+| Phase 4 | High | ❌ TODO | Advanced gradients + composition |
 
 ## Conclusion
 
-Patching ThorVG to render to YDraw is **feasible** and would enable GPU-accelerated SVG/Lottie rendering through YDraw's SDF system. The main work is building a path-to-primitive translator. Simple shapes (rect, circle, beziers) map directly; complex paths require tessellation to triangles.
+ThorVG to YDraw rendering is **working** for most SVG content including complex filled bezier paths.
 
-**Recommended starting point:** Implement `YDrawRenderer` with basic shape support, then iterate.
+**Current status:** Phase 1-3 complete. Complex SVGs like `docs/logo.svg` now render correctly.
+
+**Remaining work:** Phase 4 (advanced gradients, composition, text) for full feature parity.
 
 ## Progress
 
@@ -220,9 +231,10 @@ Patching ThorVG to render to YDraw is **feasible** and would enable GPU-accelera
 |---------|----------------|-------|
 | **Circle/Ellipse** | `tryRenderAsEllipse()` | Detects MoveTo+4×CubicTo+Close pattern → `addEllipse()` |
 | **Rectangle/Box** | `tryRenderAsBox()` | Detects MoveTo+LineTo/CubicTo+Close pattern → `addBox()` |
-| **Cubic Bezier** | `addBezier3()` | Direct mapping for stroke curves |
+| **Cubic Bezier (strokes)** | `addBezier3()` | Stroke rendering - bezier curves with strokeWidth>0 |
+| **Cubic Bezier (fills)** | `tryRenderAsFilledPath()` | Adaptive flattening + triangulation ✓ |
 | **Line Segment** | `addSegment()` | Direct mapping for LineTo commands |
-| **Basic fill colors** | RGBA→ABGR conversion | Solid fills working |
+| **Basic fill colors** | RGBA→ABGR conversion | Solid fills for simple shapes (ellipse, box, polygon) |
 | **Transform accumulation** | `computeWorldTransform()` | Walks parent chain for correct world transforms |
 | **Lottie animation** | `setFrame()` + re-render | Frame updates working |
 | **SVG static rendering** | Scene graph traversal | Via ThorVG's Accessor API |
@@ -240,10 +252,24 @@ Patching ThorVG to render to YDraw is **feasible** and would enable GPU-accelera
 | **Images/Pictures** | ❌ | Medium | YDraw has Image type, needs atlas coords |
 | **Multi-stop gradients** | ❌ | Medium | Currently only 2-stop gradients supported |
 
+### Filled Bezier Paths (IMPLEMENTED)
+
+**Problem (solved):** SVGs with complex filled bezier paths (like `docs/logo.svg`) previously did not render.
+
+**Solution implemented in `tryRenderAsFilledPath()`:**
+1. Walk path commands, flattening bezier curves via adaptive subdivision
+2. Collect vertices for each subpath (outer contour + holes)
+3. Use `addPolygonGroupWithVertices()` for multi-contour triangulation
+4. Emit Triangle primitives for the filled region
+
+**Test Case:** `demo/scripts/cards/thorvg/logo.sh` - now working
+
 ### Recently Implemented
 
 | Feature | Implementation | Notes |
 |---------|----------------|-------|
+| **Filled bezier paths** | `tryRenderAsFilledPath()` | Bezier curves flattened to polylines, then triangulated ✓ |
+| **Multi-contour paths** | `addPolygonGroupWithVertices()` | Paths with holes (multiple subpaths) supported ✓ |
 | **Arbitrary polygons** | `tryRenderAsPolygon()` → `addPolygonWithVertices()` | Closed paths without curves become Polygon primitives |
 | **Polygons with holes** | `PolygonGroup` + triangulation | Ear-clipping with bridge merging for holes |
 | **Multiple holes** | Hole sorting + sequential merge | Holes sorted by rightmost x-coordinate |
@@ -289,6 +315,7 @@ demo/scripts/cards/thorvg/
 ├── polygon-shapes.sh      # Polygon shapes demo
 ├── lottie-bounce.sh       # Bouncing ball animation
 ├── lottie-spinner.sh      # Spinning loader animation
+├── logo.sh                # Logo SVG demo (BROKEN - complex filled beziers)
 └── all.sh                 # Run all demos
 
 demo/scripts/cards/ydraw/
@@ -324,6 +351,12 @@ demo/scripts/cards/ydraw/
 | Demo | Script | Issue | Investigation Status |
 |------|--------|-------|---------------------|
 | ThorVG opacity | `demo/scripts/cards/thorvg/opacity.sh` | **Ellipses/circles not rendering** | See debugging notes below |
+
+### Fixed Demos ✅
+
+| Demo | Script | Fix |
+|------|--------|-----|
+| ThorVG logo | `demo/scripts/cards/thorvg/logo.sh` | Bezier flattening + multi-contour triangulation |
 
 ### Debugging Notes: ThorVG Ellipse Rendering Issue
 

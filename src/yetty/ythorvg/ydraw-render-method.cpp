@@ -562,7 +562,7 @@ bool YDrawRenderMethod::tryRenderAsPolygon(YDrawRenderData* rd) {
     uint32_t fillColor = rgbaToPackedABGR(rd->fillR, rd->fillG, rd->fillB, fillA);
     uint32_t strokeColor = (strokeA > 0) ? rgbaToPackedABGR(rd->strokeR, rd->strokeG, rd->strokeB, strokeA) : 0;
 
-    auto result = _buffer->addPolygonWithVertices(0, vertexCount, vertices.data(),
+    auto result = _buffer->addMeshPolygonWithVertices(0, vertexCount, vertices.data(),
                                                    fillColor, strokeColor, rd->strokeWidth, 0.0f);
     if (result) _nextPrimId++;
     return true;

@@ -1134,15 +1134,24 @@ primitives:
       - { name: texH,        type: u32 }
 
   # =========================================================================
-  # Polygon primitives — for triangulation
+  # MeshPolygon primitives — CPU triangulation to Triangle primitives
   # =========================================================================
+  # These polygon types are triangulated on the CPU by YDrawBuilder.
+  # The original MeshPolygon/MeshPolygonGroup primitives are removed and
+  # replaced with Triangle primitives. Use these when you need exact
+  # triangulation control or when polygon complexity makes GPU SDF too slow.
+  #
+  # For GPU-based rendering without CPU triangulation, use Polygon/PolygonGroup
+  # (id 136/137) which compute SDF directly on the GPU using sdPolygon().
 
-  - name: Polygon
+  - name: MeshPolygon
     id: 130
     category: composite
     description: |
-      Simple polygon (no holes). Vertices are x,y pairs forming a closed contour.
-      YDrawBuilder will triangulate this into Triangle primitives.
+      Polygon rendered as triangle mesh (CPU triangulation).
+      Vertices are x,y pairs forming a closed contour. YDrawBuilder converts
+      this to Triangle primitives using ear-clipping algorithm.
+      Use Polygon (id 136) for GPU-based SDF rendering without triangulation.
     fields:
       - { name: type,        type: u32 }
       - { name: layer,       type: u32 }
@@ -1157,14 +1166,16 @@ primitives:
       count_field: vertexCount
       multiplier: 2  # x,y pairs
 
-  - name: PolygonGroup
+  - name: MeshPolygonGroup
     id: 131
     category: composite
     description: |
-      Polygon with holes. Contains multiple contours: first is outer boundary,
-      rest are holes. contourStarts array indicates where each contour begins
-      in the vertices array (as vertex index, not float index).
-      YDrawBuilder will triangulate respecting holes.
+      Polygon with holes rendered as triangle mesh (CPU triangulation).
+      Contains multiple contours: first is outer boundary, rest are holes.
+      contourStarts array indicates where each contour begins in the vertices
+      array (as vertex index, not float index).
+      YDrawBuilder triangulates respecting holes using ear-clipping algorithm.
+      Use PolygonGroup (id 137) for GPU-based SDF rendering without triangulation.
     fields:
       - { name: type,         type: u32 }
       - { name: layer,        type: u32 }
@@ -1264,3 +1275,84 @@ primitives:
       let center = vec2<f32>({cx}, {cy});
       let radius = {r};
       return sdCircle(p, center, radius);
+
+  # =========================================================================
+  # Polygon primitives — GPU SDF rendering (no CPU triangulation)
+  # =========================================================================
+  # These polygon types are rendered directly on the GPU using sdPolygon().
+  # No CPU triangulation needed. Suitable for simple to moderate complexity
+  # polygons. For very complex polygons, MeshPolygon may be faster.
+
+  - name: PolygonWithHoles
+    id: 135
+    category: sdf2d
+    description: |
+      Polygon with holes using GPU CSG subtraction: max(outer, -hole).
+      First contour is outer boundary, rest are holes. Each contour is
+      evaluated with sdPolygon() and combined using CSG subtraction.
+      No CPU triangulation needed - SDF computed directly on GPU.
+    fields:
+      - { name: type,         type: u32 }
+      - { name: layer,        type: u32 }
+      - { name: vertexCount,  type: u32 }
+      - { name: contourCount, type: u32 }
+      - { name: fillColor,    type: u32 }
+      - { name: strokeColor,  type: u32 }
+      - { name: strokeWidth,  type: f32 }
+      - { name: round,        type: f32 }
+    variable_data:
+      - name: contourStarts
+        type: u32
+        count_field: contourCount
+      - name: vertices
+        type: f32
+        count_field: vertexCount
+        multiplier: 2  # x,y pairs
+
+  - name: Polygon
+    id: 136
+    category: sdf2d
+    description: |
+      Simple polygon rendered directly on GPU using sdPolygon().
+      Vertices are x,y pairs forming a closed contour.
+      No CPU triangulation - SDF computed per-pixel on GPU.
+      For CPU triangulation, use MeshPolygon (id 130).
+    fields:
+      - { name: type,        type: u32 }
+      - { name: layer,       type: u32 }
+      - { name: vertexCount, type: u32 }
+      - { name: fillColor,   type: u32 }
+      - { name: strokeColor, type: u32 }
+      - { name: strokeWidth, type: f32 }
+      - { name: round,       type: f32 }
+    variable_data:
+      name: vertices
+      type: f32
+      count_field: vertexCount
+      multiplier: 2  # x,y pairs
+
+  - name: PolygonGroup
+    id: 137
+    category: sdf2d
+    description: |
+      Group of separate polygons rendered on GPU using sdPolygon().
+      Each polygon is independent - use for multiple separate shapes.
+      Combined using SDF union (min of all polygon SDFs).
+      For polygon with holes (CSG subtraction), use PolygonWithHoles (id 135).
+    fields:
+      - { name: type,         type: u32 }
+      - { name: layer,        type: u32 }
+      - { name: vertexCount,  type: u32 }
+      - { name: contourCount, type: u32 }
+      - { name: fillColor,    type: u32 }
+      - { name: strokeColor,  type: u32 }
+      - { name: strokeWidth,  type: f32 }
+      - { name: round,        type: f32 }
+    variable_data:
+      - name: contourStarts
+        type: u32
+        count_field: contourCount
+      - name: vertices
+        type: f32
+        count_field: vertexCount
+        multiplier: 2  # x,y pairs

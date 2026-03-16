@@ -928,8 +928,8 @@ inline uint32_t writeImage(float* buf, uint32_t layer, float x, float y, float w
     return 10;
 }
 
-/// Write Polygon (7 words). Returns word count.
-inline uint32_t writePolygon(float* buf, uint32_t layer, uint32_t vertexCount, uint32_t fillColor, uint32_t strokeColor, float strokeWidth, float round_) {
+/// Write MeshPolygon (7 words). Returns word count.
+inline uint32_t writeMeshPolygon(float* buf, uint32_t layer, uint32_t vertexCount, uint32_t fillColor, uint32_t strokeColor, float strokeWidth, float round_) {
     detail::write_u32(buf, 0, 130u);
     detail::write_u32(buf, 1, layer);
     detail::write_u32(buf, 2, vertexCount);
@@ -940,8 +940,8 @@ inline uint32_t writePolygon(float* buf, uint32_t layer, uint32_t vertexCount, u
     return 7;
 }
 
-/// Write PolygonGroup (8 words). Returns word count.
-inline uint32_t writePolygonGroup(float* buf, uint32_t layer, uint32_t vertexCount, uint32_t contourCount, uint32_t fillColor, uint32_t strokeColor, float strokeWidth, float round_) {
+/// Write MeshPolygonGroup (8 words). Returns word count.
+inline uint32_t writeMeshPolygonGroup(float* buf, uint32_t layer, uint32_t vertexCount, uint32_t contourCount, uint32_t fillColor, uint32_t strokeColor, float strokeWidth, float round_) {
     detail::write_u32(buf, 0, 131u);
     detail::write_u32(buf, 1, layer);
     detail::write_u32(buf, 2, vertexCount);
@@ -1010,6 +1010,44 @@ inline uint32_t writeRadialGradientCircle(float* buf, uint32_t layer, float cx, 
     return 13;
 }
 
+/// Write PolygonWithHoles (8 words). Returns word count.
+inline uint32_t writePolygonWithHoles(float* buf, uint32_t layer, uint32_t vertexCount, uint32_t contourCount, uint32_t fillColor, uint32_t strokeColor, float strokeWidth, float round_) {
+    detail::write_u32(buf, 0, 135u);
+    detail::write_u32(buf, 1, layer);
+    detail::write_u32(buf, 2, vertexCount);
+    detail::write_u32(buf, 3, contourCount);
+    detail::write_u32(buf, 4, fillColor);
+    detail::write_u32(buf, 5, strokeColor);
+    buf[6] = strokeWidth;
+    buf[7] = round_;
+    return 8;
+}
+
+/// Write Polygon (7 words). Returns word count.
+inline uint32_t writePolygon(float* buf, uint32_t layer, uint32_t vertexCount, uint32_t fillColor, uint32_t strokeColor, float strokeWidth, float round_) {
+    detail::write_u32(buf, 0, 136u);
+    detail::write_u32(buf, 1, layer);
+    detail::write_u32(buf, 2, vertexCount);
+    detail::write_u32(buf, 3, fillColor);
+    detail::write_u32(buf, 4, strokeColor);
+    buf[5] = strokeWidth;
+    buf[6] = round_;
+    return 7;
+}
+
+/// Write PolygonGroup (8 words). Returns word count.
+inline uint32_t writePolygonGroup(float* buf, uint32_t layer, uint32_t vertexCount, uint32_t contourCount, uint32_t fillColor, uint32_t strokeColor, float strokeWidth, float round_) {
+    detail::write_u32(buf, 0, 137u);
+    detail::write_u32(buf, 1, layer);
+    detail::write_u32(buf, 2, vertexCount);
+    detail::write_u32(buf, 3, contourCount);
+    detail::write_u32(buf, 4, fillColor);
+    detail::write_u32(buf, 5, strokeColor);
+    buf[6] = strokeWidth;
+    buf[7] = round_;
+    return 8;
+}
+
 /// Return word count for a given SDF type ID. 0 = unknown.
 inline uint32_t wordCountForType(uint32_t type) {
     switch (type) {
@@ -1071,11 +1109,14 @@ inline uint32_t wordCountForType(uint32_t type) {
     case 117u: return 12; // Ellipsoid3D
     case 128u: return 12; // Plot
     case 129u: return 10; // Image
-    case 130u: return 7; // Polygon
-    case 131u: return 8; // PolygonGroup
+    case 130u: return 7; // MeshPolygon
+    case 131u: return 8; // MeshPolygonGroup
     case 132u: return 15; // LinearGradientBox
     case 133u: return 14; // LinearGradientCircle
     case 134u: return 13; // RadialGradientCircle
+    case 135u: return 8; // PolygonWithHoles
+    case 136u: return 7; // Polygon
+    case 137u: return 8; // PolygonGroup
     default: return 0;
     }
 }
@@ -1905,7 +1946,7 @@ inline uint32_t readPrimitive(const float* buf, card::SDFPrimitive& prim) {
         std::memcpy(&prim.params[7], &buf[9], sizeof(float));
         return 10;
     }
-    case card::SDFType::Polygon: {
+    case card::SDFType::MeshPolygon: {
         prim.type = detail::read_u32(buf, 0);
         prim.layer = detail::read_u32(buf, 1);
         std::memcpy(&prim.params[0], &buf[2], sizeof(float));
@@ -1915,7 +1956,7 @@ inline uint32_t readPrimitive(const float* buf, card::SDFPrimitive& prim) {
         prim.round = buf[6];
         return 7;
     }
-    case card::SDFType::PolygonGroup: {
+    case card::SDFType::MeshPolygonGroup: {
         prim.type = detail::read_u32(buf, 0);
         prim.layer = detail::read_u32(buf, 1);
         std::memcpy(&prim.params[0], &buf[2], sizeof(float));
@@ -1976,6 +2017,38 @@ inline uint32_t readPrimitive(const float* buf, card::SDFPrimitive& prim) {
         prim.strokeWidth = buf[11];
         prim.round = buf[12];
         return 13;
+    }
+    case card::SDFType::PolygonWithHoles: {
+        prim.type = detail::read_u32(buf, 0);
+        prim.layer = detail::read_u32(buf, 1);
+        std::memcpy(&prim.params[0], &buf[2], sizeof(float));
+        std::memcpy(&prim.params[1], &buf[3], sizeof(float));
+        prim.fillColor = detail::read_u32(buf, 4);
+        prim.strokeColor = detail::read_u32(buf, 5);
+        prim.strokeWidth = buf[6];
+        prim.round = buf[7];
+        return 8;
+    }
+    case card::SDFType::Polygon: {
+        prim.type = detail::read_u32(buf, 0);
+        prim.layer = detail::read_u32(buf, 1);
+        std::memcpy(&prim.params[0], &buf[2], sizeof(float));
+        prim.fillColor = detail::read_u32(buf, 3);
+        prim.strokeColor = detail::read_u32(buf, 4);
+        prim.strokeWidth = buf[5];
+        prim.round = buf[6];
+        return 7;
+    }
+    case card::SDFType::PolygonGroup: {
+        prim.type = detail::read_u32(buf, 0);
+        prim.layer = detail::read_u32(buf, 1);
+        std::memcpy(&prim.params[0], &buf[2], sizeof(float));
+        std::memcpy(&prim.params[1], &buf[3], sizeof(float));
+        prim.fillColor = detail::read_u32(buf, 4);
+        prim.strokeColor = detail::read_u32(buf, 5);
+        prim.strokeWidth = buf[6];
+        prim.round = buf[7];
+        return 8;
     }
     default:
         return 0;
@@ -2777,7 +2850,7 @@ inline uint32_t writePrimitive(float* buf, const card::SDFPrimitive& prim) {
         std::memcpy(&buf[9], &prim.params[7], sizeof(float));
         return 10;
     }
-    case card::SDFType::Polygon: {
+    case card::SDFType::MeshPolygon: {
         detail::write_u32(buf, 0, prim.type);
         detail::write_u32(buf, 1, prim.layer);
         std::memcpy(&buf[2], &prim.params[0], sizeof(float));
@@ -2787,7 +2860,7 @@ inline uint32_t writePrimitive(float* buf, const card::SDFPrimitive& prim) {
         buf[6] = prim.round;
         return 7;
     }
-    case card::SDFType::PolygonGroup: {
+    case card::SDFType::MeshPolygonGroup: {
         detail::write_u32(buf, 0, prim.type);
         detail::write_u32(buf, 1, prim.layer);
         std::memcpy(&buf[2], &prim.params[0], sizeof(float));
@@ -2848,6 +2921,38 @@ inline uint32_t writePrimitive(float* buf, const card::SDFPrimitive& prim) {
         buf[11] = prim.strokeWidth;
         buf[12] = prim.round;
         return 13;
+    }
+    case card::SDFType::PolygonWithHoles: {
+        detail::write_u32(buf, 0, prim.type);
+        detail::write_u32(buf, 1, prim.layer);
+        std::memcpy(&buf[2], &prim.params[0], sizeof(float));
+        std::memcpy(&buf[3], &prim.params[1], sizeof(float));
+        detail::write_u32(buf, 4, prim.fillColor);
+        detail::write_u32(buf, 5, prim.strokeColor);
+        buf[6] = prim.strokeWidth;
+        buf[7] = prim.round;
+        return 8;
+    }
+    case card::SDFType::Polygon: {
+        detail::write_u32(buf, 0, prim.type);
+        detail::write_u32(buf, 1, prim.layer);
+        std::memcpy(&buf[2], &prim.params[0], sizeof(float));
+        detail::write_u32(buf, 3, prim.fillColor);
+        detail::write_u32(buf, 4, prim.strokeColor);
+        buf[5] = prim.strokeWidth;
+        buf[6] = prim.round;
+        return 7;
+    }
+    case card::SDFType::PolygonGroup: {
+        detail::write_u32(buf, 0, prim.type);
+        detail::write_u32(buf, 1, prim.layer);
+        std::memcpy(&buf[2], &prim.params[0], sizeof(float));
+        std::memcpy(&buf[3], &prim.params[1], sizeof(float));
+        detail::write_u32(buf, 4, prim.fillColor);
+        detail::write_u32(buf, 5, prim.strokeColor);
+        buf[6] = prim.strokeWidth;
+        buf[7] = prim.round;
+        return 8;
     }
     default:
         return 0;

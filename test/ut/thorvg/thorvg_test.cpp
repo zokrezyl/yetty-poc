@@ -16,15 +16,15 @@ using namespace boost::ut;
 using namespace yetty;
 using namespace yetty::thorvg;
 
-// Helper to check if any primitive is a Polygon type
+// Helper to check if any primitive is a MeshPolygon type (CPU triangulated)
 static bool hasPolygonPrimitive(const YDrawBuffer& buffer) {
     bool found = false;
     buffer.forEachPrim([&](uint32_t /*id*/, const float* data, uint32_t /*wordCount*/) {
         uint32_t typeCode = *reinterpret_cast<const uint32_t*>(data);
-        if (typeCode == static_cast<uint32_t>(card::SDFType::Polygon) ||
-            typeCode == static_cast<uint32_t>(card::SDFType::PolygonGroup) ||
+        if (typeCode == static_cast<uint32_t>(card::SDFType::MeshPolygon) ||
+            typeCode == static_cast<uint32_t>(card::SDFType::MeshPolygonGroup) ||
             typeCode == static_cast<uint32_t>(card::SDFType::Triangle)) {
-            // Polygon may have been triangulated to Triangles
+            // MeshPolygon may have been triangulated to Triangles
             found = true;
         }
     });
