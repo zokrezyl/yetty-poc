@@ -107,7 +107,7 @@ android {
             jniLibs.srcDirs(File(buildDir, libsDir), File(buildDir, "jniLibs"))
             assets.srcDirs(
                 File(buildDir, "assets"),
-                File(projectRoot, "demo")  // Include demo directory
+                File(projectRoot, "demo/assets")  // Include demo assets only
             )
         }
     }

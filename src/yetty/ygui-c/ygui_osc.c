@@ -4,7 +4,9 @@
 
 #include "ygui_internal.h"
 #include <stdio.h>
+#ifndef _WIN32
 #include <unistd.h>
+#endif
 
 /* Base64 encoding table */
 static const char b64_table[] =

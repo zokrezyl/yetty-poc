@@ -64,19 +64,19 @@ void ygui_theme_destroy(ygui_theme_t* theme) {
  *===========================================================================*/
 
 void ygui_theme_set_padding(ygui_theme_t* theme,
-                            float small, float medium, float large) {
+                            float sm, float med, float lg) {
     if (!theme) return;
-    theme->pad_small = small;
-    theme->pad_medium = medium;
-    theme->pad_large = large;
+    theme->pad_small = sm;
+    theme->pad_medium = med;
+    theme->pad_large = lg;
 }
 
 void ygui_theme_set_radius(ygui_theme_t* theme,
-                           float small, float medium, float large) {
+                           float sm, float med, float lg) {
     if (!theme) return;
-    theme->radius_small = small;
-    theme->radius_medium = medium;
-    theme->radius_large = large;
+    theme->radius_small = sm;
+    theme->radius_medium = med;
+    theme->radius_large = lg;
 }
 
 void ygui_theme_set_row_height(ygui_theme_t* theme, float height) {

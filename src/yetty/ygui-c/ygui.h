@@ -376,9 +376,9 @@ ygui_theme_t* ygui_theme_create_default(void);
 void ygui_theme_destroy(ygui_theme_t* theme);
 
 void ygui_theme_set_padding(ygui_theme_t* theme,
-                            float small, float medium, float large);
+                            float sm, float med, float lg);
 void ygui_theme_set_radius(ygui_theme_t* theme,
-                           float small, float medium, float large);
+                           float sm, float med, float lg);
 void ygui_theme_set_row_height(ygui_theme_t* theme, float height);
 void ygui_theme_set_font_size(ygui_theme_t* theme, float size);
 void ygui_theme_set_scrollbar_size(ygui_theme_t* theme, float size);

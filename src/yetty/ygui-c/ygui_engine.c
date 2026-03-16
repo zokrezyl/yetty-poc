@@ -5,9 +5,11 @@
 #include "ygui_internal.h"
 #include "ydraw-capi.gen.h"
 #include <stdio.h>
+#ifndef _WIN32
 #include <unistd.h>
 #include <termios.h>
 #include <signal.h>
+#endif
 #include <string.h>
 #include <math.h>
 
