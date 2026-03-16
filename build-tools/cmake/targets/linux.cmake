@@ -15,11 +15,20 @@ add_subdirectory(${YETTY_ROOT}/src/yetty/gpu ${CMAKE_BINARY_DIR}/src/yetty/gpu)
 add_subdirectory(${YETTY_ROOT}/src/yetty/client ${CMAKE_BINARY_DIR}/src/yetty/client)
 add_subdirectory(${YETTY_ROOT}/src/yetty/ytop ${CMAKE_BINARY_DIR}/src/yetty/ytop)
 
+# Platform manager sources (new architecture)
+set(YETTY_PLATFORM_SOURCES
+    ${YETTY_ROOT}/src/yetty/platform/shared/glfw-window-singleton.cpp
+    ${YETTY_ROOT}/src/yetty/platform/input-manager/glfw.cpp
+    ${YETTY_ROOT}/src/yetty/platform/surface-manager/glfw.cpp
+)
+
 # Create executable with core sources + platform
 add_executable(yetty
     ${YETTY_CORE_SOURCES}
     ${YETTY_DESKTOP_SOURCES}
-    ${YETTY_ROOT}/src/yetty/platform/glfw-platform.cpp
+    ${YETTY_PLATFORM_SOURCES}
+    # Keep old platform for now (compatibility during migration)
+    ${YETTY_ROOT}/src/yetty/platform/obsolete/glfw/glfw-platform.cpp
 )
 
 target_include_directories(yetty PRIVATE ${YETTY_INCLUDES} ${YETTY_RENDERER_INCLUDES} ${JPEG_INCLUDE_DIRS} ${BROTLI_INCLUDE_DIR})

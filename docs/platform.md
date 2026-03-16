@@ -2,11 +2,29 @@
 
 Yetty runs on desktop (Linux/macOS/Windows), Android, and WebAssembly. Each platform has different APIs for input, windowing, filesystem, clipboard, and shell access. The platform layer abstracts these differences so the core terminal engine (gpu-screen, terminal, cards) remains platform-agnostic.
 
+## Threading Model
+
+**Desktop (GLFW):**
+- **Main thread**: Creates window, runs blocking input loop (`glfwWaitEvents`)
+- **Render thread**: Runs libuv event loop, processes EventQueue, renders with WebGPU
+
+**Android:**
+- **Main thread**: `android_main` handles both input (ALooper) and rendering
+
+**WebASM:**
+- **Single thread**: Browser event loop handles everything
+
+This separation on desktop allows:
+- Zero input latency (blocking wait, no polling)
+- Render thread runs libuv independently
+- No busy-polling or timers needed
+
 ## Design Principles
 
-1. **Event-driven**: Platform managers inject `base::Event` into the EventLoop. No callbacks propagating through layers.
-2. **Small interfaces**: Each manager has a single responsibility. Easy to implement for new platforms.
-3. **ObjectFactory pattern**: Each manager uses `ObjectFactory<T>`. Build system links the correct implementation per platform.
+1. **Event-driven**: Platform managers inject `base::Event` into EventQueue. No callbacks propagating through layers.
+2. **Small interfaces**: Each manager has a single responsibility. Empty interfaces where possible.
+3. **ThreadSingleton pattern**: Each manager is a thread singleton. Build system links the correct implementation per platform.
+4. **Internal glue via shared singletons**: Platform-specific state (window handles, etc.) shared via internal singletons.
 
 ## Managers
 
