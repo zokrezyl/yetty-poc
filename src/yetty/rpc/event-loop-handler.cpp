@@ -1,6 +1,8 @@
 #include <yetty/rpc/event-loop-handler.h>
 #include <yetty/base/event-loop.h>
 #include <yetty/workspace.h>
+#include <yetty/gpu-screen-manager.h>
+#include "../gpu-screen.h"
 #include <ytrace/ytrace.hpp>
 
 namespace yetty {
@@ -322,6 +324,204 @@ Result<void> registerWorkspaceHandlers(RpcServer& server, std::shared_ptr<Worksp
         });
 
     ydebug("Registered workspace handlers on Channel 0");
+    return Ok();
+}
+
+// Helper to find screen containing a named card
+static GPUScreenManager::GPUScreenPtr findScreenByCardName(const std::string& cardName) {
+    auto mgrResult = GPUScreenManager::instance();
+    if (!mgrResult) return nullptr;
+
+    for (const auto& screen : (*mgrResult)->screens()) {
+        if (screen->getCardByName(cardName)) {
+            return screen;
+        }
+    }
+    return nullptr;
+}
+
+// Helper to get first available screen
+static GPUScreenManager::GPUScreenPtr getFirstScreen() {
+    auto mgrResult = GPUScreenManager::instance();
+    if (!mgrResult) return nullptr;
+
+    auto screens = (*mgrResult)->screens();
+    return screens.empty() ? nullptr : screens.front();
+}
+
+Result<void> registerTestHandlers(RpcServer& server) {
+    // get_cell_size: {} -> {width: float, height: float}
+    // Returns the current cell dimensions in pixels
+    server.registerHandler(Channel::EventLoop, "get_cell_size",
+        [](const RpcMessage& /*msg*/) -> Result<msgpack::object_handle> {
+            auto screen = getFirstScreen();
+            if (!screen) {
+                return Err<msgpack::object_handle>("No GPUScreen available");
+            }
+
+            float cellW = screen->getCellWidth();
+            float cellH = screen->getCellHeight();
+
+            msgpack::sbuffer sbuf;
+            msgpack::packer<msgpack::sbuffer> pk(&sbuf);
+            pk.pack_map(2);
+            pk.pack("width");
+            pk.pack(cellW);
+            pk.pack("height");
+            pk.pack(cellH);
+
+            ydebug("get_cell_size: {}x{}", cellW, cellH);
+            return Ok(msgpack::unpack(sbuf.data(), sbuf.size()));
+        });
+
+    // get_card_info: {name: string} -> {id, name, x, y, width_cells, height_cells,
+    //                                   display_w, display_h, cell_w, cell_h}
+    // Returns detailed information about a card
+    server.registerHandler(Channel::EventLoop, "get_card_info",
+        [](const RpcMessage& msg) -> Result<msgpack::object_handle> {
+            auto& params = msg.params.get();
+            if (params.type != msgpack::type::MAP) {
+                return Err<msgpack::object_handle>("get_card_info: expected map params");
+            }
+
+            std::string cardName;
+            for (uint32_t i = 0; i < params.via.map.size; ++i) {
+                auto& key = params.via.map.ptr[i].key;
+                auto& val = params.via.map.ptr[i].val;
+                if (key.type == msgpack::type::STR) {
+                    std::string keyStr(key.via.str.ptr, key.via.str.size);
+                    if (keyStr == "name" && val.type == msgpack::type::STR) {
+                        cardName = std::string(val.via.str.ptr, val.via.str.size);
+                    }
+                }
+            }
+
+            if (cardName.empty()) {
+                return Err<msgpack::object_handle>("get_card_info: 'name' is required");
+            }
+
+            auto screen = findScreenByCardName(cardName);
+            if (!screen) {
+                return Err<msgpack::object_handle>("get_card_info: card '" + cardName + "' not found");
+            }
+
+            Card* card = screen->getCardByName(cardName);
+            if (!card) {
+                return Err<msgpack::object_handle>("get_card_info: card '" + cardName + "' not found");
+            }
+
+            float cellW = screen->getCellWidth();
+            float cellH = screen->getCellHeight();
+            float displayW = static_cast<float>(card->widthCells()) * cellW;
+            float displayH = static_cast<float>(card->heightCells()) * cellH;
+
+            msgpack::sbuffer sbuf;
+            msgpack::packer<msgpack::sbuffer> pk(&sbuf);
+            pk.pack_map(10);
+            pk.pack("id");
+            pk.pack(card->metadataSlotIndex());
+            pk.pack("name");
+            pk.pack(card->name());
+            pk.pack("x");
+            pk.pack(card->x());
+            pk.pack("y");
+            pk.pack(card->y());
+            pk.pack("width_cells");
+            pk.pack(card->widthCells());
+            pk.pack("height_cells");
+            pk.pack(card->heightCells());
+            pk.pack("display_w");
+            pk.pack(displayW);
+            pk.pack("display_h");
+            pk.pack(displayH);
+            pk.pack("cell_w");
+            pk.pack(cellW);
+            pk.pack("cell_h");
+            pk.pack(cellH);
+
+            ydebug("get_card_info: name='{}' pos=({},{}) cells={}x{} display={:.1f}x{:.1f}",
+                   cardName, card->x(), card->y(), card->widthCells(), card->heightCells(),
+                   displayW, displayH);
+
+            return Ok(msgpack::unpack(sbuf.data(), sbuf.size()));
+        });
+
+    // compute_click_coords: {name: string, display_x: float, display_y: float}
+    //                    -> {osc_x: int, osc_y: int, display_x: float, display_y: float}
+    // Computes what coordinates yetty would send via OSC 777777 for a click
+    // at the given display position relative to the card.
+    server.registerHandler(Channel::EventLoop, "compute_click_coords",
+        [](const RpcMessage& msg) -> Result<msgpack::object_handle> {
+            auto& params = msg.params.get();
+            if (params.type != msgpack::type::MAP) {
+                return Err<msgpack::object_handle>("compute_click_coords: expected map params");
+            }
+
+            std::string cardName;
+            float displayX = 0.0f;
+            float displayY = 0.0f;
+
+            for (uint32_t i = 0; i < params.via.map.size; ++i) {
+                auto& key = params.via.map.ptr[i].key;
+                auto& val = params.via.map.ptr[i].val;
+                if (key.type == msgpack::type::STR) {
+                    std::string keyStr(key.via.str.ptr, key.via.str.size);
+                    if (keyStr == "name" && val.type == msgpack::type::STR) {
+                        cardName = std::string(val.via.str.ptr, val.via.str.size);
+                    } else if (keyStr == "display_x") {
+                        displayX = val.as<float>();
+                    } else if (keyStr == "display_y") {
+                        displayY = val.as<float>();
+                    }
+                }
+            }
+
+            if (cardName.empty()) {
+                return Err<msgpack::object_handle>("compute_click_coords: 'name' is required");
+            }
+
+            auto screen = findScreenByCardName(cardName);
+            if (!screen) {
+                return Err<msgpack::object_handle>("compute_click_coords: card '" + cardName + "' not found");
+            }
+
+            Card* card = screen->getCardByName(cardName);
+            if (!card) {
+                return Err<msgpack::object_handle>("compute_click_coords: card '" + cardName + "' not found");
+            }
+
+            // Clamp to card's pixel dimensions (same as gpu-screen.cpp does)
+            float cellW = screen->getCellWidth();
+            float cellH = screen->getCellHeight();
+            float cardPixelW = static_cast<float>(card->widthCells()) * cellW;
+            float cardPixelH = static_cast<float>(card->heightCells()) * cellH;
+
+            float clampedX = std::max(0.0f, std::min(displayX, cardPixelW - 1.0f));
+            float clampedY = std::max(0.0f, std::min(displayY, cardPixelH - 1.0f));
+
+            // OSC sends integer coordinates
+            int oscX = static_cast<int>(clampedX);
+            int oscY = static_cast<int>(clampedY);
+
+            msgpack::sbuffer sbuf;
+            msgpack::packer<msgpack::sbuffer> pk(&sbuf);
+            pk.pack_map(4);
+            pk.pack("osc_x");
+            pk.pack(oscX);
+            pk.pack("osc_y");
+            pk.pack(oscY);
+            pk.pack("clamped_x");
+            pk.pack(clampedX);
+            pk.pack("clamped_y");
+            pk.pack(clampedY);
+
+            ydebug("compute_click_coords: card='{}' input=({:.1f},{:.1f}) osc=({},{})",
+                   cardName, displayX, displayY, oscX, oscY);
+
+            return Ok(msgpack::unpack(sbuf.data(), sbuf.size()));
+        });
+
+    ydebug("Registered 3 test handlers on Channel 0");
     return Ok();
 }
 

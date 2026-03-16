@@ -93,3 +93,6 @@ add_subdirectory(${YETTY_ROOT}/test/ut ${CMAKE_BINARY_DIR}/test/ut)
 # Tools (ydraw-maze, ydraw-zoo, etc.)
 # Note: ycat is already added via src/yetty/CMakeLists.txt
 add_subdirectory(${YETTY_ROOT}/tools ${CMAKE_BINARY_DIR}/tools)
+
+# Demos
+add_subdirectory(${YETTY_ROOT}/demo ${CMAKE_BINARY_DIR}/demo)

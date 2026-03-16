@@ -1,0 +1,32 @@
+# YGui-C Python environment setup
+# Source this file to set up paths for running Python demos
+
+# Find project root (relative to this script)
+_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_PROJECT_ROOT="$(cd "$_SCRIPT_DIR/../../../.." && pwd)"
+
+# Python bindings path
+export PYTHONPATH="$_PROJECT_ROOT/src/ygui-bindings/python${PYTHONPATH:+:$PYTHONPATH}"
+
+# Find libygui.so in various build directories
+_LIB_PATHS=""
+if ls -d "$_PROJECT_ROOT"/build*/ >/dev/null 2>&1; then
+    for builddir in "$_PROJECT_ROOT"/build*/ ; do
+        [ -d "$builddir" ] && _LIB_PATHS="${builddir}src/yetty/ygui-c:${_LIB_PATHS}"
+    done
+fi
+export LD_LIBRARY_PATH="${_LIB_PATHS}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+# Demo assets directory
+DEMO_ASSETS="$_PROJECT_ROOT/demo/assets/ygui-c/python"
+
+run_demo() {
+    local demo="$1"
+    if [ ! -f "$DEMO_ASSETS/$demo" ]; then
+        echo "Error: Demo not found: $DEMO_ASSETS/$demo"
+        return 1
+    fi
+    # Pass through YGUI_LOG for debugging
+    # Usage: YGUI_LOG=/tmp/ygui.log ./demo.sh
+    YGUI_LOG="${YGUI_LOG:-}" python3 "$DEMO_ASSETS/$demo"
+}

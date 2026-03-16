@@ -1,5 +1,8 @@
 # yetty sources and subdirectories
 
+# YGui-C library (pure C, for FFI bindings)
+add_subdirectory(ygui-c)
+
 # Sources for yetty executable (collected from subdirectories)
 add_subdirectory(ydraw-zoo)
 add_subdirectory(ydraw-maze)
