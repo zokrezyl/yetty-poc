@@ -918,17 +918,30 @@ static void handle_resize(ygui_engine_t* engine) {
         engine->width = new_display_w;
         engine->height = new_display_h;
 
-        /* First resize: just set canvas size, DON'T scale widgets.
-         * Widgets were created at absolute positions for the initial canvas.
-         * Subsequent resizes: scale widgets proportionally. */
+        /* First resize AND subsequent resizes: scale widgets if SCALE_ON.
+         * Widgets were created at initial canvas coords, need to scale to match display. */
         if (!engine->had_first_resize) {
             engine->had_first_resize = 1;
-            YGUI_LOG("First resize: canvas %.0fx%.0f -> %.0fx%.0f (no widget scaling)",
-                     old_canvas_w, old_canvas_h, new_display_w, new_display_h);
-            /* Update effective positions without scaling */
-            for (ygui_widget_t* w = engine->first_widget; w; w = w->next_sibling) {
-                w->effective_x = w->x;
-                w->effective_y = w->y;
+            if (engine->scale_mode == YGUI_SCALE_ON && old_canvas_w > 0 && old_canvas_h > 0) {
+                float scale_x = new_display_w / old_canvas_w;
+                float scale_y = new_display_h / old_canvas_h;
+                YGUI_LOG("First resize: canvas %.0fx%.0f -> %.0fx%.0f scale=(%.4f,%.4f)",
+                         old_canvas_w, old_canvas_h, new_display_w, new_display_h, scale_x, scale_y);
+                for (ygui_widget_t* w = engine->first_widget; w; w = w->next_sibling) {
+                    w->x *= scale_x;
+                    w->y *= scale_y;
+                    w->w *= scale_x;
+                    w->h *= scale_y;
+                    w->effective_x = w->x;
+                    w->effective_y = w->y;
+                }
+            } else {
+                YGUI_LOG("First resize: canvas %.0fx%.0f -> %.0fx%.0f (no scaling)",
+                         old_canvas_w, old_canvas_h, new_display_w, new_display_h);
+                for (ygui_widget_t* w = engine->first_widget; w; w = w->next_sibling) {
+                    w->effective_x = w->x;
+                    w->effective_y = w->y;
+                }
             }
         } else if (engine->scale_mode == YGUI_SCALE_ON && old_canvas_w > 0 && old_canvas_h > 0) {
             /* Scale all widgets proportionally using FLOAT precision */

@@ -21,6 +21,7 @@
 typedef enum {
     STATE_INIT = 0,
     STATE_WAIT_RENDER,      /* Waiting for initial render */
+    STATE_SEND_PIXEL_SIZE,  /* Send OSC 777780 pixel size */
     STATE_SEND_EVENT,       /* Send mouse/key event */
     STATE_WAIT_RESPONSE,    /* Wait for render after event */
     STATE_QUERY,            /* Query state */
@@ -103,20 +104,26 @@ static void button_test_timer_cb(uv_timer_t* timer) {
 
     case STATE_WAIT_RENDER:
         if (g_test_sm.render_count >= 1) {
-            g_test_sm.state = STATE_SEND_EVENT;
-            g_test_sm.step = 0;
+            g_test_sm.state = STATE_SEND_PIXEL_SIZE;
         }
+        break;
+
+    case STATE_SEND_PIXEL_SIZE:
+        /* Send pixel size matching canvas (400x300) for 1:1 coordinate mapping */
+        terminal_send_pixel_size(ctx, "test", 400.0f, 300.0f);
+        g_test_sm.state = STATE_SEND_EVENT;
+        g_test_sm.step = 0;
         break;
 
     case STATE_SEND_EVENT:
         if (g_test_sm.step == 0) {
             /* Mouse down */
-            terminal_send_click(ctx, "test", 1, 1, 100, 70);
+            terminal_send_click(ctx, "test", 1, 1, 100.0f, 70.0f);
             g_test_sm.step = 1;
             g_test_sm.render_count = 0;
         } else if (g_test_sm.step == 1 && g_test_sm.render_count >= 1) {
             /* Mouse up */
-            terminal_send_click(ctx, "test", 1, 0, 100, 70);
+            terminal_send_click(ctx, "test", 1, 0, 100.0f, 70.0f);
             g_test_sm.step = 2;
             g_test_sm.render_count = 0;
         } else if (g_test_sm.step == 2 && g_test_sm.render_count >= 1) {
@@ -187,25 +194,30 @@ static void slider_test_timer_cb(uv_timer_t* timer) {
 
     case STATE_WAIT_RENDER:
         if (g_test_sm.render_count >= 1) {
-            g_test_sm.state = STATE_SEND_EVENT;
-            g_test_sm.step = 0;
+            g_test_sm.state = STATE_SEND_PIXEL_SIZE;
         }
+        break;
+
+    case STATE_SEND_PIXEL_SIZE:
+        terminal_send_pixel_size(ctx, "test", 400.0f, 300.0f);
+        g_test_sm.state = STATE_SEND_EVENT;
+        g_test_sm.step = 0;
         break;
 
     case STATE_SEND_EVENT:
         if (g_test_sm.step == 0) {
             /* Press at center (50%) */
-            terminal_send_click(ctx, "test", 1, 1, 150, 65);
+            terminal_send_click(ctx, "test", 1, 1, 150.0f, 65.0f);
             g_test_sm.step = 1;
             g_test_sm.render_count = 0;
         } else if (g_test_sm.step == 1 && g_test_sm.render_count >= 1) {
             /* Drag to 75% */
-            terminal_send_move(ctx, "test", 1, 200, 65);
+            terminal_send_move(ctx, "test", 1, 200.0f, 65.0f);
             g_test_sm.step = 2;
             g_test_sm.render_count = 0;
         } else if (g_test_sm.step == 2 && g_test_sm.render_count >= 1) {
             /* Release */
-            terminal_send_click(ctx, "test", 1, 0, 200, 65);
+            terminal_send_click(ctx, "test", 1, 0, 200.0f, 65.0f);
             g_test_sm.step = 3;
             g_test_sm.render_count = 0;
         } else if (g_test_sm.step == 3 && g_test_sm.render_count >= 1) {
@@ -282,39 +294,44 @@ static void multi_click_test_timer_cb(uv_timer_t* timer) {
 
     case STATE_WAIT_RENDER:
         if (g_test_sm.render_count >= 1) {
-            g_test_sm.state = STATE_SEND_EVENT;
-            g_test_sm.step = 0;
+            g_test_sm.state = STATE_SEND_PIXEL_SIZE;
         }
+        break;
+
+    case STATE_SEND_PIXEL_SIZE:
+        terminal_send_pixel_size(ctx, "test", 400.0f, 300.0f);
+        g_test_sm.state = STATE_SEND_EVENT;
+        g_test_sm.step = 0;
         break;
 
     case STATE_SEND_EVENT:
         /* Click btn1 */
         if (g_test_sm.step == 0) {
-            terminal_send_click(ctx, "test", 1, 1, 50, 25);
+            terminal_send_click(ctx, "test", 1, 1, 50.0f, 25.0f);
             g_test_sm.step = 1;
             g_test_sm.render_count = 0;
         } else if (g_test_sm.step == 1 && g_test_sm.render_count >= 1) {
-            terminal_send_click(ctx, "test", 1, 0, 50, 25);
+            terminal_send_click(ctx, "test", 1, 0, 50.0f, 25.0f);
             g_test_sm.step = 2;
             g_test_sm.render_count = 0;
         }
         /* Click btn2 */
         else if (g_test_sm.step == 2 && g_test_sm.render_count >= 1) {
-            terminal_send_click(ctx, "test", 1, 1, 140, 25);
+            terminal_send_click(ctx, "test", 1, 1, 140.0f, 25.0f);
             g_test_sm.step = 3;
             g_test_sm.render_count = 0;
         } else if (g_test_sm.step == 3 && g_test_sm.render_count >= 1) {
-            terminal_send_click(ctx, "test", 1, 0, 140, 25);
+            terminal_send_click(ctx, "test", 1, 0, 140.0f, 25.0f);
             g_test_sm.step = 4;
             g_test_sm.render_count = 0;
         }
         /* Click btn1 again */
         else if (g_test_sm.step == 4 && g_test_sm.render_count >= 1) {
-            terminal_send_click(ctx, "test", 1, 1, 50, 25);
+            terminal_send_click(ctx, "test", 1, 1, 50.0f, 25.0f);
             g_test_sm.step = 5;
             g_test_sm.render_count = 0;
         } else if (g_test_sm.step == 5 && g_test_sm.render_count >= 1) {
-            terminal_send_click(ctx, "test", 1, 0, 50, 25);
+            terminal_send_click(ctx, "test", 1, 0, 50.0f, 25.0f);
             g_test_sm.step = 6;
             g_test_sm.render_count = 0;
         } else if (g_test_sm.step == 6 && g_test_sm.render_count >= 1) {
@@ -373,18 +390,23 @@ static void miss_click_test_timer_cb(uv_timer_t* timer) {
 
     case STATE_WAIT_RENDER:
         if (g_test_sm.render_count >= 1) {
-            g_test_sm.state = STATE_SEND_EVENT;
-            g_test_sm.step = 0;
+            g_test_sm.state = STATE_SEND_PIXEL_SIZE;
         }
+        break;
+
+    case STATE_SEND_PIXEL_SIZE:
+        terminal_send_pixel_size(ctx, "test", 400.0f, 300.0f);
+        g_test_sm.state = STATE_SEND_EVENT;
+        g_test_sm.step = 0;
         break;
 
     case STATE_SEND_EVENT:
         if (g_test_sm.step == 0) {
             /* Click outside button */
-            terminal_send_click(ctx, "test", 1, 1, 10, 10);
+            terminal_send_click(ctx, "test", 1, 1, 10.0f, 10.0f);
             g_test_sm.step = 1;
         } else if (g_test_sm.step == 1) {
-            terminal_send_click(ctx, "test", 1, 0, 10, 10);
+            terminal_send_click(ctx, "test", 1, 0, 10.0f, 10.0f);
             g_test_sm.step = 2;
             /* No render expected for miss, use a small delay */
         } else if (g_test_sm.step >= 2) {
@@ -465,19 +487,24 @@ static void left_edge_hit_timer_cb(uv_timer_t* timer) {
 
     case STATE_WAIT_RENDER:
         if (g_test_sm.render_count >= 1) {
-            g_test_sm.state = STATE_SEND_EVENT;
-            g_test_sm.step = 0;
+            g_test_sm.state = STATE_SEND_PIXEL_SIZE;
         }
+        break;
+
+    case STATE_SEND_PIXEL_SIZE:
+        terminal_send_pixel_size(ctx, "test", 400.0f, 300.0f);
+        g_test_sm.state = STATE_SEND_EVENT;
+        g_test_sm.step = 0;
         break;
 
     case STATE_SEND_EVENT:
         if (g_test_sm.step == 0) {
             /* Click at x=50 (exact left edge), y=70 (middle) */
-            terminal_send_click(ctx, "test", 1, 1, 50, 70);
+            terminal_send_click(ctx, "test", 1, 1, 50.0f, 70.0f);
             g_test_sm.step = 1;
             g_test_sm.render_count = 0;
         } else if (g_test_sm.step == 1 && g_test_sm.render_count >= 1) {
-            terminal_send_click(ctx, "test", 1, 0, 50, 70);
+            terminal_send_click(ctx, "test", 1, 0, 50.0f, 70.0f);
             g_test_sm.step = 2;
             g_test_sm.render_count = 0;
         } else if (g_test_sm.step == 2 && g_test_sm.render_count >= 1) {
@@ -534,18 +561,23 @@ static void left_edge_miss_timer_cb(uv_timer_t* timer) {
 
     case STATE_WAIT_RENDER:
         if (g_test_sm.render_count >= 1) {
-            g_test_sm.state = STATE_SEND_EVENT;
-            g_test_sm.step = 0;
+            g_test_sm.state = STATE_SEND_PIXEL_SIZE;
         }
+        break;
+
+    case STATE_SEND_PIXEL_SIZE:
+        terminal_send_pixel_size(ctx, "test", 400.0f, 300.0f);
+        g_test_sm.state = STATE_SEND_EVENT;
+        g_test_sm.step = 0;
         break;
 
     case STATE_SEND_EVENT:
         if (g_test_sm.step == 0) {
             /* Click at x=49 (just outside left edge), y=70 (middle) */
-            terminal_send_click(ctx, "test", 1, 1, 49, 70);
+            terminal_send_click(ctx, "test", 1, 1, 49.0f, 70.0f);
             g_test_sm.step = 1;
         } else if (g_test_sm.step == 1) {
-            terminal_send_click(ctx, "test", 1, 0, 49, 70);
+            terminal_send_click(ctx, "test", 1, 0, 49.0f, 70.0f);
             g_test_sm.step = 2;
         } else if (g_test_sm.step >= 2) {
             /* No render expected for miss - wait a few ticks */
@@ -605,20 +637,25 @@ static void right_edge_hit_timer_cb(uv_timer_t* timer) {
 
     case STATE_WAIT_RENDER:
         if (g_test_sm.render_count >= 1) {
-            g_test_sm.state = STATE_SEND_EVENT;
-            g_test_sm.step = 0;
+            g_test_sm.state = STATE_SEND_PIXEL_SIZE;
         }
+        break;
+
+    case STATE_SEND_PIXEL_SIZE:
+        terminal_send_pixel_size(ctx, "test", 400.0f, 300.0f);
+        g_test_sm.state = STATE_SEND_EVENT;
+        g_test_sm.step = 0;
         break;
 
     case STATE_SEND_EVENT:
         if (g_test_sm.step == 0) {
             /* Click at x=149 (last valid pixel), y=70 (middle)
              * Button bounds: x in [50, 150), so x=149 is the last valid */
-            terminal_send_click(ctx, "test", 1, 1, 149, 70);
+            terminal_send_click(ctx, "test", 1, 1, 149.0f, 70.0f);
             g_test_sm.step = 1;
             g_test_sm.render_count = 0;
         } else if (g_test_sm.step == 1 && g_test_sm.render_count >= 1) {
-            terminal_send_click(ctx, "test", 1, 0, 149, 70);
+            terminal_send_click(ctx, "test", 1, 0, 149.0f, 70.0f);
             g_test_sm.step = 2;
             g_test_sm.render_count = 0;
         } else if (g_test_sm.step == 2 && g_test_sm.render_count >= 1) {
@@ -675,19 +712,24 @@ static void right_edge_miss_timer_cb(uv_timer_t* timer) {
 
     case STATE_WAIT_RENDER:
         if (g_test_sm.render_count >= 1) {
-            g_test_sm.state = STATE_SEND_EVENT;
-            g_test_sm.step = 0;
+            g_test_sm.state = STATE_SEND_PIXEL_SIZE;
         }
+        break;
+
+    case STATE_SEND_PIXEL_SIZE:
+        terminal_send_pixel_size(ctx, "test", 400.0f, 300.0f);
+        g_test_sm.state = STATE_SEND_EVENT;
+        g_test_sm.step = 0;
         break;
 
     case STATE_SEND_EVENT:
         if (g_test_sm.step == 0) {
             /* Click at x=150 (just outside right edge), y=70 (middle)
              * Button bounds: x in [50, 150), so x=150 is outside */
-            terminal_send_click(ctx, "test", 1, 1, 150, 70);
+            terminal_send_click(ctx, "test", 1, 1, 150.0f, 70.0f);
             g_test_sm.step = 1;
         } else if (g_test_sm.step == 1) {
-            terminal_send_click(ctx, "test", 1, 0, 150, 70);
+            terminal_send_click(ctx, "test", 1, 0, 150.0f, 70.0f);
             g_test_sm.step = 2;
         } else if (g_test_sm.step >= 2) {
             /* No render expected for miss - wait a few ticks */
@@ -747,19 +789,24 @@ static void top_edge_hit_timer_cb(uv_timer_t* timer) {
 
     case STATE_WAIT_RENDER:
         if (g_test_sm.render_count >= 1) {
-            g_test_sm.state = STATE_SEND_EVENT;
-            g_test_sm.step = 0;
+            g_test_sm.state = STATE_SEND_PIXEL_SIZE;
         }
+        break;
+
+    case STATE_SEND_PIXEL_SIZE:
+        terminal_send_pixel_size(ctx, "test", 400.0f, 300.0f);
+        g_test_sm.state = STATE_SEND_EVENT;
+        g_test_sm.step = 0;
         break;
 
     case STATE_SEND_EVENT:
         if (g_test_sm.step == 0) {
             /* Click at x=100 (middle), y=50 (exact top edge) */
-            terminal_send_click(ctx, "test", 1, 1, 100, 50);
+            terminal_send_click(ctx, "test", 1, 1, 100.0f, 50.0f);
             g_test_sm.step = 1;
             g_test_sm.render_count = 0;
         } else if (g_test_sm.step == 1 && g_test_sm.render_count >= 1) {
-            terminal_send_click(ctx, "test", 1, 0, 100, 50);
+            terminal_send_click(ctx, "test", 1, 0, 100.0f, 50.0f);
             g_test_sm.step = 2;
             g_test_sm.render_count = 0;
         } else if (g_test_sm.step == 2 && g_test_sm.render_count >= 1) {
@@ -816,20 +863,25 @@ static void bottom_edge_hit_timer_cb(uv_timer_t* timer) {
 
     case STATE_WAIT_RENDER:
         if (g_test_sm.render_count >= 1) {
-            g_test_sm.state = STATE_SEND_EVENT;
-            g_test_sm.step = 0;
+            g_test_sm.state = STATE_SEND_PIXEL_SIZE;
         }
+        break;
+
+    case STATE_SEND_PIXEL_SIZE:
+        terminal_send_pixel_size(ctx, "test", 400.0f, 300.0f);
+        g_test_sm.state = STATE_SEND_EVENT;
+        g_test_sm.step = 0;
         break;
 
     case STATE_SEND_EVENT:
         if (g_test_sm.step == 0) {
             /* Click at x=100 (middle), y=89 (last valid pixel)
              * Button bounds: y in [50, 90), so y=89 is the last valid */
-            terminal_send_click(ctx, "test", 1, 1, 100, 89);
+            terminal_send_click(ctx, "test", 1, 1, 100.0f, 89.0f);
             g_test_sm.step = 1;
             g_test_sm.render_count = 0;
         } else if (g_test_sm.step == 1 && g_test_sm.render_count >= 1) {
-            terminal_send_click(ctx, "test", 1, 0, 100, 89);
+            terminal_send_click(ctx, "test", 1, 0, 100.0f, 89.0f);
             g_test_sm.step = 2;
             g_test_sm.render_count = 0;
         } else if (g_test_sm.step == 2 && g_test_sm.render_count >= 1) {
@@ -886,19 +938,24 @@ static void bottom_edge_miss_timer_cb(uv_timer_t* timer) {
 
     case STATE_WAIT_RENDER:
         if (g_test_sm.render_count >= 1) {
-            g_test_sm.state = STATE_SEND_EVENT;
-            g_test_sm.step = 0;
+            g_test_sm.state = STATE_SEND_PIXEL_SIZE;
         }
+        break;
+
+    case STATE_SEND_PIXEL_SIZE:
+        terminal_send_pixel_size(ctx, "test", 400.0f, 300.0f);
+        g_test_sm.state = STATE_SEND_EVENT;
+        g_test_sm.step = 0;
         break;
 
     case STATE_SEND_EVENT:
         if (g_test_sm.step == 0) {
             /* Click at x=100 (middle), y=90 (just outside bottom edge)
              * Button bounds: y in [50, 90), so y=90 is outside */
-            terminal_send_click(ctx, "test", 1, 1, 100, 90);
+            terminal_send_click(ctx, "test", 1, 1, 100.0f, 90.0f);
             g_test_sm.step = 1;
         } else if (g_test_sm.step == 1) {
-            terminal_send_click(ctx, "test", 1, 0, 100, 90);
+            terminal_send_click(ctx, "test", 1, 0, 100.0f, 90.0f);
             g_test_sm.step = 2;
         } else if (g_test_sm.step >= 2) {
             /* No render expected for miss - wait a few ticks */
@@ -988,27 +1045,31 @@ static void scaled_left_hit_timer_cb(uv_timer_t* timer) {
 
     switch (g_test_sm.state) {
     case STATE_INIT:
-        /* Send cell size first to enable scaling */
-        terminal_send_pixel_size(ctx, "test", 400.0f, 300.0f);
         g_test_sm.state = STATE_WAIT_RENDER;
         break;
 
     case STATE_WAIT_RENDER:
         if (g_test_sm.render_count >= 1) {
-            g_test_sm.state = STATE_SEND_EVENT;
-            g_test_sm.step = 0;
+            g_test_sm.state = STATE_SEND_PIXEL_SIZE;
         }
+        break;
+
+    case STATE_SEND_PIXEL_SIZE:
+        /* Display is 320x300 (40*8 x 20*15), canvas is 400x300 */
+        terminal_send_pixel_size(ctx, "test", 320.0f, 300.0f);
+        g_test_sm.state = STATE_SEND_EVENT;
+        g_test_sm.step = 0;
         break;
 
     case STATE_SEND_EVENT:
         if (g_test_sm.step == 0) {
             /* Click at display x=40, which maps to canvas x=50 (left edge)
              * canvas_x = (40/320)*400 = 50 */
-            terminal_send_click(ctx, "test", 1, 1, 40, 70);
+            terminal_send_click(ctx, "test", 1, 1, 40.0f, 70.0f);
             g_test_sm.step = 1;
             g_test_sm.render_count = 0;
         } else if (g_test_sm.step == 1 && g_test_sm.render_count >= 1) {
-            terminal_send_click(ctx, "test", 1, 0, 40, 70);
+            terminal_send_click(ctx, "test", 1, 0, 40.0f, 70.0f);
             g_test_sm.step = 2;
             g_test_sm.render_count = 0;
         } else if (g_test_sm.step == 2 && g_test_sm.render_count >= 1) {
@@ -1059,25 +1120,29 @@ static void scaled_left_miss_timer_cb(uv_timer_t* timer) {
 
     switch (g_test_sm.state) {
     case STATE_INIT:
-        terminal_send_pixel_size(ctx, "test", 400.0f, 300.0f);
         g_test_sm.state = STATE_WAIT_RENDER;
         break;
 
     case STATE_WAIT_RENDER:
         if (g_test_sm.render_count >= 1) {
-            g_test_sm.state = STATE_SEND_EVENT;
-            g_test_sm.step = 0;
+            g_test_sm.state = STATE_SEND_PIXEL_SIZE;
         }
+        break;
+
+    case STATE_SEND_PIXEL_SIZE:
+        terminal_send_pixel_size(ctx, "test", 320.0f, 300.0f);
+        g_test_sm.state = STATE_SEND_EVENT;
+        g_test_sm.step = 0;
         break;
 
     case STATE_SEND_EVENT:
         if (g_test_sm.step == 0) {
             /* Click at display x=39, which maps to canvas x=48.75 (outside)
              * canvas_x = (39/320)*400 = 48.75 < 50 */
-            terminal_send_click(ctx, "test", 1, 1, 39, 70);
+            terminal_send_click(ctx, "test", 1, 1, 39.0f, 70.0f);
             g_test_sm.step = 1;
         } else if (g_test_sm.step == 1) {
-            terminal_send_click(ctx, "test", 1, 0, 39, 70);
+            terminal_send_click(ctx, "test", 1, 0, 39.0f, 70.0f);
             g_test_sm.step = 2;
         } else if (g_test_sm.step >= 2) {
             g_test_sm.step++;
@@ -1130,26 +1195,30 @@ static void scaled_right_hit_timer_cb(uv_timer_t* timer) {
 
     switch (g_test_sm.state) {
     case STATE_INIT:
-        terminal_send_pixel_size(ctx, "test", 400.0f, 300.0f);
         g_test_sm.state = STATE_WAIT_RENDER;
         break;
 
     case STATE_WAIT_RENDER:
         if (g_test_sm.render_count >= 1) {
-            g_test_sm.state = STATE_SEND_EVENT;
-            g_test_sm.step = 0;
+            g_test_sm.state = STATE_SEND_PIXEL_SIZE;
         }
+        break;
+
+    case STATE_SEND_PIXEL_SIZE:
+        terminal_send_pixel_size(ctx, "test", 320.0f, 300.0f);
+        g_test_sm.state = STATE_SEND_EVENT;
+        g_test_sm.step = 0;
         break;
 
     case STATE_SEND_EVENT:
         if (g_test_sm.step == 0) {
             /* Click at display x=119, which maps to canvas x=148.75 (inside)
              * canvas_x = (119/320)*400 = 148.75 < 150 */
-            terminal_send_click(ctx, "test", 1, 1, 119, 70);
+            terminal_send_click(ctx, "test", 1, 1, 119.0f, 70.0f);
             g_test_sm.step = 1;
             g_test_sm.render_count = 0;
         } else if (g_test_sm.step == 1 && g_test_sm.render_count >= 1) {
-            terminal_send_click(ctx, "test", 1, 0, 119, 70);
+            terminal_send_click(ctx, "test", 1, 0, 119.0f, 70.0f);
             g_test_sm.step = 2;
             g_test_sm.render_count = 0;
         } else if (g_test_sm.step == 2 && g_test_sm.render_count >= 1) {
@@ -1200,25 +1269,29 @@ static void scaled_right_miss_timer_cb(uv_timer_t* timer) {
 
     switch (g_test_sm.state) {
     case STATE_INIT:
-        terminal_send_pixel_size(ctx, "test", 400.0f, 300.0f);
         g_test_sm.state = STATE_WAIT_RENDER;
         break;
 
     case STATE_WAIT_RENDER:
         if (g_test_sm.render_count >= 1) {
-            g_test_sm.state = STATE_SEND_EVENT;
-            g_test_sm.step = 0;
+            g_test_sm.state = STATE_SEND_PIXEL_SIZE;
         }
+        break;
+
+    case STATE_SEND_PIXEL_SIZE:
+        terminal_send_pixel_size(ctx, "test", 320.0f, 300.0f);
+        g_test_sm.state = STATE_SEND_EVENT;
+        g_test_sm.step = 0;
         break;
 
     case STATE_SEND_EVENT:
         if (g_test_sm.step == 0) {
             /* Click at display x=120, which maps to canvas x=150 (outside)
              * canvas_x = (120/320)*400 = 150 >= 150 */
-            terminal_send_click(ctx, "test", 1, 1, 120, 70);
+            terminal_send_click(ctx, "test", 1, 1, 120.0f, 70.0f);
             g_test_sm.step = 1;
         } else if (g_test_sm.step == 1) {
-            terminal_send_click(ctx, "test", 1, 0, 120, 70);
+            terminal_send_click(ctx, "test", 1, 0, 120.0f, 70.0f);
             g_test_sm.step = 2;
         } else if (g_test_sm.step >= 2) {
             g_test_sm.step++;
@@ -1309,16 +1382,20 @@ static void demo_right_hit_timer_cb(uv_timer_t* timer) {
 
     switch (g_test_sm.state) {
     case STATE_INIT:
-        /* Send cell size: 8 wide, 16 high - matches typical terminal */
-        terminal_send_pixel_size(ctx, "test", 400.0f, 300.0f);
         g_test_sm.state = STATE_WAIT_RENDER;
         break;
 
     case STATE_WAIT_RENDER:
         if (g_test_sm.render_count >= 1) {
-            g_test_sm.state = STATE_SEND_EVENT;
-            g_test_sm.step = 0;
+            g_test_sm.state = STATE_SEND_PIXEL_SIZE;
         }
+        break;
+
+    case STATE_SEND_PIXEL_SIZE:
+        /* 62*8=496, 18*16=288 - matches demo scenario */
+        terminal_send_pixel_size(ctx, "test", 496.0f, 288.0f);
+        g_test_sm.state = STATE_SEND_EVENT;
+        g_test_sm.step = 0;
         break;
 
     case STATE_SEND_EVENT:
@@ -1326,11 +1403,11 @@ static void demo_right_hit_timer_cb(uv_timer_t* timer) {
             /* Click at display x=217, y=72 (last pixel inside button)
              * Button after scaling with floorf(): x=[19, 218), y=[48, 96)
              * Display 217 is inside [19, 218), so should HIT */
-            terminal_send_click(ctx, "test", 1, 1, 217, 72);
+            terminal_send_click(ctx, "test", 1, 1, 217.0f, 72.0f);
             g_test_sm.step = 1;
             g_test_sm.render_count = 0;
         } else if (g_test_sm.step == 1 && g_test_sm.render_count >= 1) {
-            terminal_send_click(ctx, "test", 1, 0, 217, 72);
+            terminal_send_click(ctx, "test", 1, 0, 217.0f, 72.0f);
             g_test_sm.step = 2;
             g_test_sm.render_count = 0;
         } else if (g_test_sm.step == 2 && g_test_sm.render_count >= 1) {
@@ -1373,10 +1450,10 @@ static void demo_right_hit_terminal_test(terminal_ctx_t* ctx) {
     uv_timer_start(timer, demo_right_hit_timer_cb, 10, 10);
 }
 
-/* Test: Click at first pixel outside right edge (display x=218) - SHOULD MISS
- * After scaling with floorf(): button bounds = [19, 218)
- * Display x=218 -> canvas x=218 (CANVAS_FIT is 1:1)
- * 218 is NOT inside [19, 218), so MISS */
+/* Test: Click outside right edge (display x=219) - SHOULD MISS
+ * After scaling: button at (19.84, 48) with size (198.4, 48), right edge = 218.24
+ * Display x=219 -> canvas x=219 (CANVAS_FIT is 1:1)
+ * 219 >= 218.24, so MISS */
 static void demo_right_miss_timer_cb(uv_timer_t* timer) {
     terminal_ctx_t* ctx = (terminal_ctx_t*)timer->data;
 
@@ -1384,24 +1461,28 @@ static void demo_right_miss_timer_cb(uv_timer_t* timer) {
 
     switch (g_test_sm.state) {
     case STATE_INIT:
-        terminal_send_pixel_size(ctx, "test", 400.0f, 300.0f);
         g_test_sm.state = STATE_WAIT_RENDER;
         break;
 
     case STATE_WAIT_RENDER:
         if (g_test_sm.render_count >= 1) {
-            g_test_sm.state = STATE_SEND_EVENT;
-            g_test_sm.step = 0;
+            g_test_sm.state = STATE_SEND_PIXEL_SIZE;
         }
+        break;
+
+    case STATE_SEND_PIXEL_SIZE:
+        terminal_send_pixel_size(ctx, "test", 496.0f, 288.0f);
+        g_test_sm.state = STATE_SEND_EVENT;
+        g_test_sm.step = 0;
         break;
 
     case STATE_SEND_EVENT:
         if (g_test_sm.step == 0) {
-            /* Click at display x=218 - first pixel outside button right edge */
-            terminal_send_click(ctx, "test", 1, 1, 218, 72);
+            /* Click at display x=219 - outside button right edge (218.24) */
+            terminal_send_click(ctx, "test", 1, 1, 219.0f, 72.0f);
             g_test_sm.step = 1;
         } else if (g_test_sm.step == 1) {
-            terminal_send_click(ctx, "test", 1, 0, 218, 72);
+            terminal_send_click(ctx, "test", 1, 0, 219.0f, 72.0f);
             g_test_sm.step = 2;
         } else if (g_test_sm.step >= 2) {
             g_test_sm.step++;
@@ -1446,10 +1527,10 @@ static void demo_right_miss_terminal_test(terminal_ctx_t* ctx) {
     uv_timer_start(timer, demo_right_miss_timer_cb, 10, 10);
 }
 
-/* Test: Click at first pixel inside left edge (display x=19) - SHOULD HIT
- * After scaling with floorf(): button bounds = [19, 218)
- * Display x=19 -> canvas x=19 (CANVAS_FIT is 1:1)
- * 19 is inside [19, 218), so HIT */
+/* Test: Click inside left edge (display x=20) - SHOULD HIT
+ * After scaling: button at (19.84, 48), left edge = 19.84
+ * Display x=20 -> canvas x=20 (CANVAS_FIT is 1:1)
+ * 20 >= 19.84, so HIT */
 static void demo_left_hit_timer_cb(uv_timer_t* timer) {
     terminal_ctx_t* ctx = (terminal_ctx_t*)timer->data;
 
@@ -1457,25 +1538,29 @@ static void demo_left_hit_timer_cb(uv_timer_t* timer) {
 
     switch (g_test_sm.state) {
     case STATE_INIT:
-        terminal_send_pixel_size(ctx, "test", 400.0f, 300.0f);
         g_test_sm.state = STATE_WAIT_RENDER;
         break;
 
     case STATE_WAIT_RENDER:
         if (g_test_sm.render_count >= 1) {
-            g_test_sm.state = STATE_SEND_EVENT;
-            g_test_sm.step = 0;
+            g_test_sm.state = STATE_SEND_PIXEL_SIZE;
         }
+        break;
+
+    case STATE_SEND_PIXEL_SIZE:
+        terminal_send_pixel_size(ctx, "test", 496.0f, 288.0f);
+        g_test_sm.state = STATE_SEND_EVENT;
+        g_test_sm.step = 0;
         break;
 
     case STATE_SEND_EVENT:
         if (g_test_sm.step == 0) {
-            /* Click at display x=19 (first pixel inside left edge) */
-            terminal_send_click(ctx, "test", 1, 1, 19, 72);
+            /* Click at display x=20 (inside left edge 19.84) */
+            terminal_send_click(ctx, "test", 1, 1, 20.0f, 72.0f);
             g_test_sm.step = 1;
             g_test_sm.render_count = 0;
         } else if (g_test_sm.step == 1 && g_test_sm.render_count >= 1) {
-            terminal_send_click(ctx, "test", 1, 0, 19, 72);
+            terminal_send_click(ctx, "test", 1, 0, 20.0f, 72.0f);
             g_test_sm.step = 2;
             g_test_sm.render_count = 0;
         } else if (g_test_sm.step == 2 && g_test_sm.render_count >= 1) {
@@ -1518,10 +1603,10 @@ static void demo_left_hit_terminal_test(terminal_ctx_t* ctx) {
     uv_timer_start(timer, demo_left_hit_timer_cb, 10, 10);
 }
 
-/* Test: Click at first pixel outside left edge (display x=18) - SHOULD MISS
- * After scaling with floorf(): button bounds = [19, 218)
- * Display x=18 -> canvas x=18 (CANVAS_FIT is 1:1)
- * 18 is NOT inside [19, 218), so MISS */
+/* Test: Click outside left edge (display x=19) - SHOULD MISS
+ * After scaling: button at (19.84, 48), left edge = 19.84
+ * Display x=19 -> canvas x=19 (CANVAS_FIT is 1:1)
+ * 19 < 19.84, so MISS */
 static void demo_left_miss_timer_cb(uv_timer_t* timer) {
     terminal_ctx_t* ctx = (terminal_ctx_t*)timer->data;
 
@@ -1529,24 +1614,28 @@ static void demo_left_miss_timer_cb(uv_timer_t* timer) {
 
     switch (g_test_sm.state) {
     case STATE_INIT:
-        terminal_send_pixel_size(ctx, "test", 400.0f, 300.0f);
         g_test_sm.state = STATE_WAIT_RENDER;
         break;
 
     case STATE_WAIT_RENDER:
         if (g_test_sm.render_count >= 1) {
-            g_test_sm.state = STATE_SEND_EVENT;
-            g_test_sm.step = 0;
+            g_test_sm.state = STATE_SEND_PIXEL_SIZE;
         }
+        break;
+
+    case STATE_SEND_PIXEL_SIZE:
+        terminal_send_pixel_size(ctx, "test", 496.0f, 288.0f);
+        g_test_sm.state = STATE_SEND_EVENT;
+        g_test_sm.step = 0;
         break;
 
     case STATE_SEND_EVENT:
         if (g_test_sm.step == 0) {
-            /* Click at display x=18 (first pixel outside left edge) */
-            terminal_send_click(ctx, "test", 1, 1, 18, 72);
+            /* Click at display x=19 (outside left edge 19.84) */
+            terminal_send_click(ctx, "test", 1, 1, 19.0f, 72.0f);
             g_test_sm.step = 1;
         } else if (g_test_sm.step == 1) {
-            terminal_send_click(ctx, "test", 1, 0, 18, 72);
+            terminal_send_click(ctx, "test", 1, 0, 19.0f, 72.0f);
             g_test_sm.step = 2;
         } else if (g_test_sm.step >= 2) {
             g_test_sm.step++;

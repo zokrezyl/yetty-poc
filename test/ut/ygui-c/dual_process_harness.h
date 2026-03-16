@@ -289,20 +289,20 @@ typedef struct {
  * Helper Functions for Terminal Side
  *===========================================================================*/
 
-/* Send OSC click event via PTY */
+/* Send OSC click event via PTY - uses FLOAT coords like real yetty */
 static void terminal_send_click(terminal_ctx_t* ctx, const char* card_name,
-                                 int buttons, int press, int x, int y) {
+                                 int buttons, int press, float x, float y) {
     char buf[256];
-    int len = snprintf(buf, sizeof(buf), "\033]777777;%s;%d;%d;%d;%d\033\\",
+    int len = snprintf(buf, sizeof(buf), "\033]777777;%s;%d;%d;%.6f;%.6f\033\\",
                        card_name, buttons, press, x, y);
     write(ctx->pty_master, buf, len);
 }
 
-/* Send OSC move event via PTY */
+/* Send OSC move event via PTY - uses FLOAT coords like real yetty */
 static void terminal_send_move(terminal_ctx_t* ctx, const char* card_name,
-                                int buttons, int x, int y) {
+                                int buttons, float x, float y) {
     char buf[256];
-    int len = snprintf(buf, sizeof(buf), "\033]777778;%s;%d;%d;%d\033\\",
+    int len = snprintf(buf, sizeof(buf), "\033]777778;%s;%d;%.6f;%.6f\033\\",
                        card_name, buttons, x, y);
     write(ctx->pty_master, buf, len);
 }
