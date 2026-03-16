@@ -11,12 +11,8 @@ import ygui
 def main():
     ygui.init()
 
-    engine = ygui.Engine("debug-card", width=500, height=300)
-
-    # Use CANVAS_FIT + SCALE_ON for 1:1 coordinate mapping
-    # This fixes boundary click issues by making canvas = display size
-    engine.set_canvas_mode(ygui.CanvasMode.FIT)
-    engine.set_scale_mode(ygui.ScaleMode.ON)
+    engine = ygui.Engine("debug-card", x=2, y=2, width=500, height=300)
+    # CANVAS_FIT + SCALE_ON is now the default for pixel hint mode
 
     # Create widgets
     engine.label("title", 20, 15, "Event Monitor")
@@ -50,7 +46,7 @@ def main():
 
     engine.on_key(on_key)
 
-    engine.show(x=2, y=2, w=62, h=18)
+    engine.show()
     engine.run()
 
     ygui.shutdown()

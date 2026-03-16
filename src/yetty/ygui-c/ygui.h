@@ -142,15 +142,26 @@ typedef void (*ygui_resize_callback_t)(ygui_engine_t* engine, void* userdata);
  * Engine API
  *===========================================================================*/
 
-/* Create engine with card name and pixel dimensions.
- * The engine creates and owns its YDraw buffer internally. */
-ygui_engine_t* ygui_engine_create(const char* card_name, float width, float height);
+/* Create engine with card name, position, and size in terminal cells.
+ * x, y: card position in terminal cells
+ * cols, rows: card size in terminal cells
+ * After show(), queries card pixel size (OSC 777780).
+ * Canvas = actual card pixels (cols * cell_width, rows * cell_height).
+ * Widgets are positioned in actual pixel coordinates. */
+ygui_engine_t* ygui_engine_create(const char* card_name, int x, int y, int cols, int rows);
+
+/* Create engine with pixel size hints.
+ * x, y: card position in terminal cells
+ * width_hint, height_hint: desired pixel size (calculates closest cols/rows)
+ * Then same as ygui_engine_create: canvas = actual card pixels. */
+ygui_engine_t* ygui_engine_create_with_pixel_hint(const char* card_name, int x, int y, float width_hint, float height_hint);
 
 /* Destroy engine (kills card, frees all resources) */
 void ygui_engine_destroy(ygui_engine_t* engine);
 
-/* Show card at terminal cell position (sends first frame) */
-void ygui_engine_show(ygui_engine_t* engine, int x, int y, int w, int h);
+/* Show card (creates it via OSC, queries pixel size).
+ * Position and size were set in ygui_engine_create. */
+void ygui_engine_show(ygui_engine_t* engine);
 
 /* Render a frame (clear buffer → rebuild → serialize → send OSC)
  * Usually not needed - engine auto-renders when dirty. */
@@ -390,8 +401,13 @@ void ygui_engine_set_input_fd(ygui_engine_t* engine, int fd);
 void ygui_engine_set_output_fd(ygui_engine_t* engine, int fd);
 
 /* Set card dimensions for testing coordinate scaling
- * These are normally set by ygui_engine_show() but can be set directly for tests */
+ * These are normally set by ygui_engine_create() but can be overridden for tests */
 void ygui_engine_set_card_size(ygui_engine_t* engine, int card_w, int card_h);
+
+/* Set display pixel size directly for testing.
+ * Normally this comes from OSC 777780 after show().
+ * For tests, call this to set canvas size before creating widgets. */
+void ygui_engine_set_display_pixel_size(ygui_engine_t* engine, float width, float height);
 
 /* Get access to engine's libuv loop (after attach/run) */
 uv_loop_t* ygui_engine_get_loop(ygui_engine_t* engine);

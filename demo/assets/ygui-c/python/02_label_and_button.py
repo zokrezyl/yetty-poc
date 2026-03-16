@@ -10,7 +10,7 @@ import ygui
 def main():
     ygui.init()
 
-    engine = ygui.Engine("counter", width=400, height=250)
+    engine = ygui.Engine("counter", x=2, y=2, width=400, height=250)
 
     # Title and counter
     engine.label("title", 50, 30, "Click Counter")
@@ -40,7 +40,7 @@ def main():
 
     engine.on_key(on_key)
 
-    engine.show(x=2, y=2, w=50, h=14)
+    engine.show()
     engine.run()
 
     ygui.shutdown()

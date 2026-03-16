@@ -10,7 +10,7 @@ import ygui
 def main():
     ygui.init()
 
-    engine = ygui.Engine("calculator", width=380, height=480)
+    engine = ygui.Engine("calculator", x=2, y=2, width=380, height=480)
 
     # Display
     display = engine.label("display", 20, 20, "0")
@@ -131,7 +131,7 @@ def main():
     engine.on_key(on_key)
 
     # Show and run
-    engine.show(x=2, y=2, w=48, h=26)
+    engine.show()
     engine.run()
 
     ygui.shutdown()

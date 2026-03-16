@@ -62,13 +62,17 @@ static inline int pty_test_init(pty_test_ctx_t* ctx, const char* name,
     fcntl(ctx->master_fd, F_SETFL, flags | O_NONBLOCK);
 
     /* Create engine (without terminal init - we have our own PTY) */
-    ctx->engine = ygui_engine_create(name, width, height);
+    int cols = (int)(width / 10);   /* Approximate cell size 10x16 */
+    int rows = (int)(height / 16);
+    ctx->engine = ygui_engine_create(name, 0, 0, cols > 0 ? cols : 1, rows > 0 ? rows : 1);
     if (!ctx->engine) {
         close(ctx->master_fd);
         close(ctx->slave_fd);
         printf("  FAIL: ygui_engine_create failed\n");
         return -1;
     }
+    /* Set display pixel size directly for testing */
+    ygui_engine_set_display_pixel_size(ctx->engine, width, height);
 
     /* Set engine to use our PTY slave for input */
     ygui_engine_set_input_fd(ctx->engine, ctx->slave_fd);

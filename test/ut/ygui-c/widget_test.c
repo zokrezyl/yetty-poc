@@ -14,7 +14,7 @@
  *===========================================================================*/
 
 static int test_button_create(void) {
-    ygui_engine_t* e = ygui_engine_create("test", 400, 300);
+    ygui_engine_t* e = ({ ygui_engine_t* _e = ygui_engine_create("test", 0, 0, 40, 19); ygui_engine_set_display_pixel_size(_e, 400, 300); _e; });
     TEST_ASSERT_NOT_NULL(e, "engine create");
 
     ygui_widget_t* btn = ygui_button(e, "btn1", 10, 20, 100, 40, "Click Me");
@@ -32,7 +32,7 @@ static int test_button_create(void) {
 }
 
 static int test_button_set_label(void) {
-    ygui_engine_t* e = ygui_engine_create("test", 400, 300);
+    ygui_engine_t* e = ({ ygui_engine_t* _e = ygui_engine_create("test", 0, 0, 40, 19); ygui_engine_set_display_pixel_size(_e, 400, 300); _e; });
     ygui_widget_t* btn = ygui_button(e, "btn", 0, 0, 100, 40, "Original");
 
     ygui_button_set_label(btn, "Updated");
@@ -47,7 +47,7 @@ static int test_button_set_label(void) {
  *===========================================================================*/
 
 static int test_label_create(void) {
-    ygui_engine_t* e = ygui_engine_create("test", 400, 300);
+    ygui_engine_t* e = ({ ygui_engine_t* _e = ygui_engine_create("test", 0, 0, 40, 19); ygui_engine_set_display_pixel_size(_e, 400, 300); _e; });
 
     ygui_widget_t* lbl = ygui_label(e, "lbl1", 50, 100, "Hello World");
     TEST_ASSERT_NOT_NULL(lbl, "label create");
@@ -59,7 +59,7 @@ static int test_label_create(void) {
 }
 
 static int test_label_set_text(void) {
-    ygui_engine_t* e = ygui_engine_create("test", 400, 300);
+    ygui_engine_t* e = ({ ygui_engine_t* _e = ygui_engine_create("test", 0, 0, 40, 19); ygui_engine_set_display_pixel_size(_e, 400, 300); _e; });
     ygui_widget_t* lbl = ygui_label(e, "lbl", 0, 0, "Original");
 
     ygui_label_set_text(lbl, "New Text");
@@ -74,7 +74,7 @@ static int test_label_set_text(void) {
  *===========================================================================*/
 
 static int test_slider_create(void) {
-    ygui_engine_t* e = ygui_engine_create("test", 400, 300);
+    ygui_engine_t* e = ({ ygui_engine_t* _e = ygui_engine_create("test", 0, 0, 40, 19); ygui_engine_set_display_pixel_size(_e, 400, 300); _e; });
 
     ygui_widget_t* sld = ygui_slider(e, "slider1", 10, 50, 200, 30, 0, 100, 50);
     TEST_ASSERT_NOT_NULL(sld, "slider create");
@@ -88,7 +88,7 @@ static int test_slider_create(void) {
 }
 
 static int test_slider_set_value(void) {
-    ygui_engine_t* e = ygui_engine_create("test", 400, 300);
+    ygui_engine_t* e = ({ ygui_engine_t* _e = ygui_engine_create("test", 0, 0, 40, 19); ygui_engine_set_display_pixel_size(_e, 400, 300); _e; });
     ygui_widget_t* sld = ygui_slider(e, "sld", 0, 0, 200, 30, 0, 100, 50);
 
     ygui_slider_set_value(sld, 75);
@@ -106,7 +106,7 @@ static int test_slider_set_value(void) {
 }
 
 static int test_slider_set_range(void) {
-    ygui_engine_t* e = ygui_engine_create("test", 400, 300);
+    ygui_engine_t* e = ({ ygui_engine_t* _e = ygui_engine_create("test", 0, 0, 40, 19); ygui_engine_set_display_pixel_size(_e, 400, 300); _e; });
     ygui_widget_t* sld = ygui_slider(e, "sld", 0, 0, 200, 30, 0, 100, 50);
 
     ygui_slider_set_range(sld, 10, 20);
@@ -124,7 +124,7 @@ static int test_slider_set_range(void) {
  *===========================================================================*/
 
 static int test_checkbox_create(void) {
-    ygui_engine_t* e = ygui_engine_create("test", 400, 300);
+    ygui_engine_t* e = ({ ygui_engine_t* _e = ygui_engine_create("test", 0, 0, 40, 19); ygui_engine_set_display_pixel_size(_e, 400, 300); _e; });
 
     ygui_widget_t* chk = ygui_checkbox(e, "chk1", 10, 50, 200, 30, "Enable", 0);
     TEST_ASSERT_NOT_NULL(chk, "checkbox create");
@@ -140,7 +140,7 @@ static int test_checkbox_create(void) {
 }
 
 static int test_checkbox_set_checked(void) {
-    ygui_engine_t* e = ygui_engine_create("test", 400, 300);
+    ygui_engine_t* e = ({ ygui_engine_t* _e = ygui_engine_create("test", 0, 0, 40, 19); ygui_engine_set_display_pixel_size(_e, 400, 300); _e; });
     ygui_widget_t* chk = ygui_checkbox(e, "chk", 0, 0, 200, 30, "Test", 0);
 
     ygui_checkbox_set_checked(chk, 1);
@@ -158,7 +158,7 @@ static int test_checkbox_set_checked(void) {
  *===========================================================================*/
 
 static int test_progress_create(void) {
-    ygui_engine_t* e = ygui_engine_create("test", 400, 300);
+    ygui_engine_t* e = ({ ygui_engine_t* _e = ygui_engine_create("test", 0, 0, 40, 19); ygui_engine_set_display_pixel_size(_e, 400, 300); _e; });
 
     ygui_widget_t* prg = ygui_progress(e, "prog1", 10, 50, 300, 20, 0.5);
     TEST_ASSERT_NOT_NULL(prg, "progress create");
@@ -170,7 +170,7 @@ static int test_progress_create(void) {
 }
 
 static int test_progress_set_value(void) {
-    ygui_engine_t* e = ygui_engine_create("test", 400, 300);
+    ygui_engine_t* e = ({ ygui_engine_t* _e = ygui_engine_create("test", 0, 0, 40, 19); ygui_engine_set_display_pixel_size(_e, 400, 300); _e; });
     ygui_widget_t* prg = ygui_progress(e, "prog", 0, 0, 300, 20, 0);
 
     ygui_progress_set_value(prg, 0.75);
@@ -192,7 +192,7 @@ static int test_progress_set_value(void) {
  *===========================================================================*/
 
 static int test_panel_create(void) {
-    ygui_engine_t* e = ygui_engine_create("test", 400, 300);
+    ygui_engine_t* e = ({ ygui_engine_t* _e = ygui_engine_create("test", 0, 0, 40, 19); ygui_engine_set_display_pixel_size(_e, 400, 300); _e; });
 
     ygui_widget_t* pnl = ygui_panel(e, "panel1", 10, 10, 200, 150);
     TEST_ASSERT_NOT_NULL(pnl, "panel create");
@@ -203,7 +203,7 @@ static int test_panel_create(void) {
 }
 
 static int test_panel_content_size(void) {
-    ygui_engine_t* e = ygui_engine_create("test", 400, 300);
+    ygui_engine_t* e = ({ ygui_engine_t* _e = ygui_engine_create("test", 0, 0, 40, 19); ygui_engine_set_display_pixel_size(_e, 400, 300); _e; });
     ygui_widget_t* pnl = ygui_panel(e, "panel", 0, 0, 200, 150);
 
     ygui_panel_set_content_size(pnl, 200, 500);
@@ -219,7 +219,7 @@ static int test_panel_content_size(void) {
  *===========================================================================*/
 
 static int test_dropdown_create(void) {
-    ygui_engine_t* e = ygui_engine_create("test", 400, 300);
+    ygui_engine_t* e = ({ ygui_engine_t* _e = ygui_engine_create("test", 0, 0, 40, 19); ygui_engine_set_display_pixel_size(_e, 400, 300); _e; });
 
     const char* options[] = {"Option 1", "Option 2", "Option 3"};
     ygui_widget_t* dd = ygui_dropdown(e, "dropdown1", 10, 50, 150, 30, options, 3);
@@ -236,7 +236,7 @@ static int test_dropdown_create(void) {
 }
 
 static int test_dropdown_set_selected(void) {
-    ygui_engine_t* e = ygui_engine_create("test", 400, 300);
+    ygui_engine_t* e = ({ ygui_engine_t* _e = ygui_engine_create("test", 0, 0, 40, 19); ygui_engine_set_display_pixel_size(_e, 400, 300); _e; });
     const char* options[] = {"A", "B", "C"};
     ygui_widget_t* dd = ygui_dropdown(e, "dd", 0, 0, 150, 30, options, 3);
 
@@ -252,7 +252,7 @@ static int test_dropdown_set_selected(void) {
  *===========================================================================*/
 
 static int test_textinput_create(void) {
-    ygui_engine_t* e = ygui_engine_create("test", 400, 300);
+    ygui_engine_t* e = ({ ygui_engine_t* _e = ygui_engine_create("test", 0, 0, 40, 19); ygui_engine_set_display_pixel_size(_e, 400, 300); _e; });
 
     ygui_widget_t* txt = ygui_textinput(e, "input1", 10, 50, 200, 30, "Enter text...");
     TEST_ASSERT_NOT_NULL(txt, "textinput create");
@@ -265,7 +265,7 @@ static int test_textinput_create(void) {
 }
 
 static int test_textinput_set_text(void) {
-    ygui_engine_t* e = ygui_engine_create("test", 400, 300);
+    ygui_engine_t* e = ({ ygui_engine_t* _e = ygui_engine_create("test", 0, 0, 40, 19); ygui_engine_set_display_pixel_size(_e, 400, 300); _e; });
     ygui_widget_t* txt = ygui_textinput(e, "input", 0, 0, 200, 30, "");
 
     ygui_textinput_set_text(txt, "Hello World");
@@ -280,7 +280,7 @@ static int test_textinput_set_text(void) {
  *===========================================================================*/
 
 static int test_colorpicker_create(void) {
-    ygui_engine_t* e = ygui_engine_create("test", 400, 300);
+    ygui_engine_t* e = ({ ygui_engine_t* _e = ygui_engine_create("test", 0, 0, 40, 19); ygui_engine_set_display_pixel_size(_e, 400, 300); _e; });
 
     ygui_widget_t* cp = ygui_colorpicker(e, "color1", 10, 50, 200, 150);
     TEST_ASSERT_NOT_NULL(cp, "colorpicker create");
@@ -291,7 +291,7 @@ static int test_colorpicker_create(void) {
 }
 
 static int test_colorpicker_set_get_color(void) {
-    ygui_engine_t* e = ygui_engine_create("test", 400, 300);
+    ygui_engine_t* e = ({ ygui_engine_t* _e = ygui_engine_create("test", 0, 0, 40, 19); ygui_engine_set_display_pixel_size(_e, 400, 300); _e; });
     ygui_widget_t* cp = ygui_colorpicker(e, "color", 0, 0, 200, 150);
 
     ygui_colorpicker_set_color(cp, 1.0, 0.0, 0.0, 1.0);  /* Red */
@@ -311,7 +311,7 @@ static int test_colorpicker_set_get_color(void) {
  *===========================================================================*/
 
 static int test_hbox_create(void) {
-    ygui_engine_t* e = ygui_engine_create("test", 400, 300);
+    ygui_engine_t* e = ({ ygui_engine_t* _e = ygui_engine_create("test", 0, 0, 40, 19); ygui_engine_set_display_pixel_size(_e, 400, 300); _e; });
 
     ygui_widget_t* hbox = ygui_hbox(e, "hbox1", 10, 10, 300, 50);
     TEST_ASSERT_NOT_NULL(hbox, "hbox create");
@@ -322,7 +322,7 @@ static int test_hbox_create(void) {
 }
 
 static int test_vbox_create(void) {
-    ygui_engine_t* e = ygui_engine_create("test", 400, 300);
+    ygui_engine_t* e = ({ ygui_engine_t* _e = ygui_engine_create("test", 0, 0, 40, 19); ygui_engine_set_display_pixel_size(_e, 400, 300); _e; });
 
     ygui_widget_t* vbox = ygui_vbox(e, "vbox1", 10, 10, 200, 300);
     TEST_ASSERT_NOT_NULL(vbox, "vbox create");
@@ -337,7 +337,7 @@ static int test_vbox_create(void) {
  *===========================================================================*/
 
 static int test_widget_visibility(void) {
-    ygui_engine_t* e = ygui_engine_create("test", 400, 300);
+    ygui_engine_t* e = ({ ygui_engine_t* _e = ygui_engine_create("test", 0, 0, 40, 19); ygui_engine_set_display_pixel_size(_e, 400, 300); _e; });
     ygui_widget_t* btn = ygui_button(e, "btn", 0, 0, 100, 40, "Test");
 
     TEST_ASSERT(ygui_widget_is_visible(btn), "initially visible");
@@ -353,7 +353,7 @@ static int test_widget_visibility(void) {
 }
 
 static int test_widget_enabled(void) {
-    ygui_engine_t* e = ygui_engine_create("test", 400, 300);
+    ygui_engine_t* e = ({ ygui_engine_t* _e = ygui_engine_create("test", 0, 0, 40, 19); ygui_engine_set_display_pixel_size(_e, 400, 300); _e; });
     ygui_widget_t* btn = ygui_button(e, "btn", 0, 0, 100, 40, "Test");
 
     TEST_ASSERT(ygui_widget_is_enabled(btn), "initially enabled");
@@ -373,7 +373,7 @@ static int test_widget_enabled(void) {
  *===========================================================================*/
 
 static int test_widget_add_child(void) {
-    ygui_engine_t* e = ygui_engine_create("test", 400, 300);
+    ygui_engine_t* e = ({ ygui_engine_t* _e = ygui_engine_create("test", 0, 0, 40, 19); ygui_engine_set_display_pixel_size(_e, 400, 300); _e; });
     ygui_widget_t* panel = ygui_panel(e, "panel", 0, 0, 200, 200);
     ygui_widget_t* btn = ygui_button(e, "btn", 10, 10, 80, 30, "Child");
 
@@ -387,7 +387,7 @@ static int test_widget_add_child(void) {
 }
 
 static int test_widget_multiple_children(void) {
-    ygui_engine_t* e = ygui_engine_create("test", 400, 300);
+    ygui_engine_t* e = ({ ygui_engine_t* _e = ygui_engine_create("test", 0, 0, 40, 19); ygui_engine_set_display_pixel_size(_e, 400, 300); _e; });
     ygui_widget_t* panel = ygui_panel(e, "panel", 0, 0, 200, 200);
     ygui_widget_t* btn1 = ygui_button(e, "btn1", 10, 10, 80, 30, "First");
     ygui_widget_t* btn2 = ygui_button(e, "btn2", 10, 50, 80, 30, "Second");
@@ -411,7 +411,7 @@ static int test_widget_multiple_children(void) {
  *===========================================================================*/
 
 static int test_engine_find(void) {
-    ygui_engine_t* e = ygui_engine_create("test", 400, 300);
+    ygui_engine_t* e = ({ ygui_engine_t* _e = ygui_engine_create("test", 0, 0, 40, 19); ygui_engine_set_display_pixel_size(_e, 400, 300); _e; });
     ygui_button(e, "btn1", 10, 10, 100, 40, "One");
     ygui_button(e, "btn2", 10, 60, 100, 40, "Two");
     ygui_label(e, "lbl1", 10, 110, "Label");
@@ -426,7 +426,7 @@ static int test_engine_find(void) {
 }
 
 static int test_engine_dirty_flag(void) {
-    ygui_engine_t* e = ygui_engine_create("test", 400, 300);
+    ygui_engine_t* e = ({ ygui_engine_t* _e = ygui_engine_create("test", 0, 0, 40, 19); ygui_engine_set_display_pixel_size(_e, 400, 300); _e; });
 
     /* New engine should be dirty */
     TEST_ASSERT(ygui_engine_is_dirty(e), "initially dirty");

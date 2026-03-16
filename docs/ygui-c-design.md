@@ -171,8 +171,9 @@ for (widget = first_widget; widget; widget = widget->next) {
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │  User Application (any language)                            │
-│  - Creates engine with canvas size                          │
-│  - Adds widgets (positioned in canvas coordinates)          │
+│  - Creates engine with card size (cols, rows)               │
+│  - Shows card, receives actual pixel size                   │
+│  - Adds widgets (positioned in actual pixel coordinates)    │
 │  - Registers callbacks                                      │
 │  - Optionally adds timers/sockets to libuv loop             │
 ├─────────────────────────────────────────────────────────────┤
@@ -260,32 +261,35 @@ The event loop is powered by **libuv**, allowing users to integrate their own as
 
 **Simple (ygui owns loop):**
 ```c
-ygui_init();  // Sets up terminal, queries cell size
+ygui_init();  // Sets up terminal
 
-// Canvas size 400x300 - widgets positioned in this coordinate space
-ygui_engine_t* e = ygui_engine_create("myapp", 400, 300);
+// Create engine with card size in terminal cells (50 cols x 18 rows)
+ygui_engine_t* e = ygui_engine_create("myapp", 50, 18);
+
+// Show card at cell position (2, 2). This queries pixel size.
+// After show(), canvas = actual card pixels (e.g., 500x288 if cell is 10x16)
+ygui_engine_show(e, 2, 2);
+
+// Now add widgets in actual pixel coordinates
 ygui_button(e, "btn", 10, 10, 100, 40, "Click");
 
-// Card at cell (2,2), size 50x18 cells
-// Display size = 50*cell_w x 18*cell_h pixels (viewport into canvas)
-ygui_engine_show(e, 2, 2, 50, 18);
 ygui_engine_run(e);  // Creates libuv loop internally
 ```
 
-**Scrollable content:**
+**Using pixel hints:**
 ```c
 ygui_init();
 
-// Large canvas for scrollable content (e.g., 400 wide x 2000 tall)
-ygui_engine_t* e = ygui_engine_create("myapp", 400, 2000);
+// Want approximately 400x300 pixels. Engine queries cell size,
+// calculates closest cols/rows (e.g., 40x19 if cell is 10x16).
+ygui_engine_t* e = ygui_engine_create_with_pixel_hint("myapp", 400.0f, 300.0f);
 
-// Add many widgets down the canvas
-ygui_button(e, "btn1", 10, 10, 100, 40, "Top");
-ygui_button(e, "btn2", 10, 500, 100, 40, "Middle");
-ygui_button(e, "btn3", 10, 1900, 100, 40, "Bottom");
+// Show at position (2, 2). Card created with calculated cell dimensions.
+ygui_engine_show(e, 2, 2);
 
-// Card shows viewport - user can scroll within yetty
-ygui_engine_show(e, 2, 2, 50, 18);
+// Widgets in actual pixel coordinates (actual size may differ from hints)
+ygui_button(e, "btn", 10, 10, 100, 40, "Click");
+
 ygui_engine_run(e);
 ```
 
@@ -294,9 +298,9 @@ ygui_engine_run(e);
 uv_loop_t* loop = uv_default_loop();
 ygui_init();
 
-ygui_engine_t* e = ygui_engine_create("myapp", 400, 300);
+ygui_engine_t* e = ygui_engine_create("myapp", 50, 18);
+ygui_engine_show(e, 2, 2);
 ygui_button(e, "btn", 10, 10, 100, 40, "Click");
-ygui_engine_show(e, 2, 2, 50, 18);
 ygui_engine_attach(e, loop);  // Adds stdin watcher to user's loop
 
 // User adds their own handlers
@@ -348,15 +352,19 @@ void on_volume_change(ygui_widget_t* slider, float value, void* data) {
 int main() {
     ygui_init();
 
-    ygui_engine_t* e = ygui_engine_create("myapp", 400, 300);
+    // Create engine with card size 50x18 cells
+    ygui_engine_t* e = ygui_engine_create("myapp", 50, 18);
 
+    // Show card at position (2,2). After this, canvas = actual pixels.
+    ygui_engine_show(e, 2, 2);
+
+    // Add widgets in actual pixel coordinates
     ygui_widget_t* btn = ygui_button(e, "btn", 10, 10, 100, 40, "Click Me");
     ygui_button_on_click(btn, on_click, NULL);
 
     ygui_widget_t* slider = ygui_slider(e, "vol", 10, 60, 200, 30, 0, 100, 50);
     ygui_slider_on_change(slider, on_volume_change, NULL);
 
-    ygui_engine_show(e, 2, 2, 50, 18);
     ygui_engine_run(e);
 
     ygui_engine_destroy(e);
@@ -369,15 +377,18 @@ int main() {
 import ygui
 
 ygui.init()
-engine = ygui.Engine("myapp", 400, 300)
 
+# Create engine with card size 50x18 cells
+engine = ygui.Engine("myapp", cols=50, rows=18)
+engine.show(x=2, y=2)  # Show card, get pixel size
+
+# Add widgets in actual pixel coordinates
 btn = engine.button("btn", 10, 10, 100, 40, "Click Me")
 btn.on_click(lambda: print("Button clicked!"))
 
 slider = engine.slider("vol", 10, 60, 200, 30, 0, 100, 50)
 slider.on_change(lambda v: print(f"Volume: {v:.0f}%"))
 
-engine.show(2, 2, 50, 18)
 engine.run()
 ```
 
@@ -389,8 +400,12 @@ import "ygui"
 
 func main() {
     ygui.Init()
-    engine := ygui.NewEngine("myapp", 400, 300)
 
+    // Create engine with card size 50x18 cells
+    engine := ygui.NewEngine("myapp", 50, 18)
+    engine.Show(2, 2)  // Show card, get pixel size
+
+    // Add widgets in actual pixel coordinates
     btn := engine.Button("btn", 10, 10, 100, 40, "Click Me")
     btn.OnClick(func() {
         fmt.Println("Button clicked!")
@@ -401,7 +416,6 @@ func main() {
         fmt.Printf("Volume: %.0f%%\n", v)
     })
 
-    engine.Show(2, 2, 50, 18)
     engine.Run()
 }
 ```
@@ -412,15 +426,18 @@ use ygui::{Engine, init};
 
 fn main() {
     init();
-    let engine = Engine::new("myapp", 400, 300);
 
+    // Create engine with card size 50x18 cells
+    let engine = Engine::new("myapp", 50, 18);
+    engine.show(2, 2);  // Show card, get pixel size
+
+    // Add widgets in actual pixel coordinates
     let btn = engine.button("btn", 10.0, 10.0, 100.0, 40.0, "Click Me");
     btn.on_click(|| println!("Button clicked!"));
 
     let slider = engine.slider("vol", 10.0, 60.0, 200.0, 30.0, 0.0, 100.0, 50.0);
     slider.on_change(|v| println!("Volume: {:.0}%", v));
 
-    engine.show(2, 2, 50, 18);
     engine.run();
 }
 ```
@@ -442,15 +459,22 @@ void ygui_shutdown(void); // Restore terminal
 
 ### Engine Lifecycle
 ```c
-// Create engine with card name and canvas dimensions
-// Canvas can be larger than visible area for scrollable content
-ygui_engine_t* ygui_engine_create(const char* name, float canvas_w, float canvas_h);
+// Create engine with card name and terminal cell dimensions.
+// After show(), queries card pixel size. Canvas = actual card pixels.
+// Widgets are positioned in actual pixel coordinates.
+ygui_engine_t* ygui_engine_create(const char* name, int cols, int rows);
+
+// Create engine with pixel size hints.
+// Queries cell size first, calculates closest cols/rows from hints.
+// Then same as above: canvas = actual card pixels.
+ygui_engine_t* ygui_engine_create_with_pixel_hint(const char* name, float width_hint, float height_hint);
+
 void ygui_engine_destroy(ygui_engine_t* engine);
 
-// Display card at terminal cell position
-// Queries cell size (CSI 16 t) before creating the card
-// w, h are in terminal cells (not pixels)
-void ygui_engine_show(ygui_engine_t* engine, int x, int y, int w, int h);
+// Display card at terminal cell position (x, y in cells).
+// Creates the card, queries its pixel size (OSC 777780).
+// Canvas size = actual card pixel size (cols * cell_width, rows * cell_height).
+void ygui_engine_show(ygui_engine_t* engine, int x, int y);
 
 // Event loop
 void ygui_engine_attach(ygui_engine_t* engine, uv_loop_t* loop); // User's loop

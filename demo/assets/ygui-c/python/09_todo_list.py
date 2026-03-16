@@ -10,7 +10,7 @@ import ygui
 class TodoApp:
     def __init__(self):
         ygui.init()
-        self.engine = ygui.Engine("todo-app", width=500, height=500)
+        self.engine = ygui.Engine("todo-app", x=2, y=2, width=500, height=500)
         self.todos = []
         self.next_id = 0
         self.start_y = 100
@@ -114,7 +114,7 @@ class TodoApp:
         self.add_todo("Write documentation")
         self.add_todo("Review pull request")
 
-        self.engine.show(x=2, y=2, w=62, h=28)
+        self.engine.show()
         self.engine.run()
 
         ygui.shutdown()

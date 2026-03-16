@@ -11,7 +11,7 @@ import ygui
 def main():
     ygui.init()
 
-    engine = ygui.Engine("progress-demo", width=500, height=200)
+    engine = ygui.Engine("progress-demo", x=2, y=2, width=500, height=200)
 
     # Title
     engine.label("title", 40, 20, "Download Progress")
@@ -54,7 +54,7 @@ def main():
 
     engine.on_key(on_key)
 
-    engine.show(x=2, y=2, w=62, h=12)
+    engine.show()
     engine.run()
 
     ygui.shutdown()

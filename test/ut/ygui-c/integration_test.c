@@ -30,15 +30,14 @@ extern void ygui_engine_key_down(ygui_engine_t* engine, uint32_t key, int mods);
  * (We don't call ygui_init() to avoid messing with terminal)
  */
 static ygui_engine_t* create_test_engine(const char* name, float w, float h) {
-    ygui_engine_t* e = ygui_engine_create(name, w, h);
+    int cols = (int)(w / 8);
+    int rows = (int)(h / 16);
+    ygui_engine_t* e = ygui_engine_create(name, 0, 0, cols, rows);
     if (e) {
-        /* Set cell size manually (normally comes from CSI 16 t response) */
+        /* Set display pixel size directly (normally comes from OSC 777780) */
+        ygui_engine_set_display_pixel_size(e, w, h);
         e->cell_width = 8.0f;
         e->cell_height = 16.0f;
-        e->card_x = 0;
-        e->card_y = 0;
-        e->card_w = (int)(w / 8);
-        e->card_h = (int)(h / 16);
     }
     return e;
 }

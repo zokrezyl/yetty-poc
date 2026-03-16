@@ -202,14 +202,23 @@ def _setup_functions(lib):
     lib.ygui_shutdown.restype = None
 
     # Engine - NEW API
-    lib.ygui_engine_create.argtypes = [c_char_p, c_float, c_float]
+    # ygui_engine_create(card_name, x, y, cols, rows)
+    lib.ygui_engine_create.argtypes = [c_char_p, c_int, c_int, c_int, c_int]
     lib.ygui_engine_create.restype = c_void_p
+
+    # ygui_engine_create_with_pixel_hint(card_name, x, y, width_hint, height_hint)
+    lib.ygui_engine_create_with_pixel_hint.argtypes = [c_char_p, c_int, c_int, c_float, c_float]
+    lib.ygui_engine_create_with_pixel_hint.restype = c_void_p
 
     lib.ygui_engine_destroy.argtypes = [c_void_p]
     lib.ygui_engine_destroy.restype = None
 
-    lib.ygui_engine_show.argtypes = [c_void_p, c_int, c_int, c_int, c_int]
+    # ygui_engine_show(engine) - no params, position/size set in create
+    lib.ygui_engine_show.argtypes = [c_void_p]
     lib.ygui_engine_show.restype = None
+
+    lib.ygui_engine_set_display_pixel_size.argtypes = [c_void_p, c_float, c_float]
+    lib.ygui_engine_set_display_pixel_size.restype = None
 
     lib.ygui_engine_render.argtypes = [c_void_p]
     lib.ygui_engine_render.restype = None
@@ -490,20 +499,42 @@ class Engine:
     dispatches to widget callbacks, and auto-renders when dirty.
     """
 
-    def __init__(self, name: str, width: float = 800, height: float = 600):
+    def __init__(self, name: str, *, x: int = 0, y: int = 0,
+                 cols: int = None, rows: int = None,
+                 width: float = None, height: float = None):
         """
         Create YGui engine.
 
+        Two modes:
+        1. Cell dimensions (recommended): Engine("app", x=2, y=2, cols=50, rows=18)
+           Canvas = actual card pixels after show().
+        2. Pixel hints (legacy): Engine("app", x=2, y=2, width=400, height=300)
+           Calculates closest cell dimensions from hints.
+
         Args:
             name: Card name (used for OSC commands)
-            width: Canvas width in pixels
-            height: Canvas height in pixels
+            x: Card position X in terminal cells
+            y: Card position Y in terminal cells
+            cols: Card width in terminal cells
+            rows: Card height in terminal cells
+            width: Pixel width hint (legacy, calculates cols)
+            height: Pixel height hint (legacy, calculates rows)
         """
-        _logger.info("Engine.__init__(name=%r, width=%s, height=%s)", name, width, height)
         self._name = name
         self._lib = _get_lib()
-        _logger.debug("Calling ygui_engine_create...")
-        self._handle = self._lib.ygui_engine_create(name.encode("utf-8"), width, height)
+
+        if cols is not None and rows is not None:
+            # New API: cell dimensions
+            _logger.info("Engine.__init__(name=%r, x=%d, y=%d, cols=%d, rows=%d)", name, x, y, cols, rows)
+            self._handle = self._lib.ygui_engine_create(name.encode("utf-8"), x, y, cols, rows)
+        elif width is not None and height is not None:
+            # Legacy API: pixel hints
+            _logger.info("Engine.__init__(name=%r, x=%d, y=%d, width=%s, height=%s)", name, x, y, width, height)
+            self._handle = self._lib.ygui_engine_create_with_pixel_hint(
+                name.encode("utf-8"), x, y, width, height)
+        else:
+            raise ValueError("Must provide either (cols, rows) or (width, height)")
+
         _logger.debug("ygui_engine_create returned handle=%s", self._handle)
         if not self._handle:
             _logger.error("ygui_engine_create returned NULL!")
@@ -519,12 +550,16 @@ class Engine:
             _logger.debug("Engine.__del__() destroying handle=%s", self._handle)
             self._lib.ygui_engine_destroy(self._handle)
 
-    def show(self, x: int = 0, y: int = 0, w: int = 80, h: int = 24):
-        """Show the card at terminal cell position."""
-        _logger.info("Engine.show(x=%d, y=%d, w=%d, h=%d)", x, y, w, h)
-        self._lib.ygui_engine_show(self._handle, x, y, w, h)
+    def show(self):
+        """Show the card (position/size were set in constructor)."""
+        _logger.info("Engine.show()")
+        self._lib.ygui_engine_show(self._handle)
         self._shown = True
         _logger.debug("Card shown")
+
+    def set_display_pixel_size(self, width: float, height: float):
+        """Set display pixel size directly (for testing)."""
+        self._lib.ygui_engine_set_display_pixel_size(self._handle, width, height)
 
     def render(self):
         """Force render (usually auto-rendered when dirty)."""

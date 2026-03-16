@@ -14,7 +14,7 @@ def rgb_to_abgr(r, g, b, a=255):
 def main():
     ygui.init()
 
-    engine = ygui.Engine("color-mixer", width=480, height=380)
+    engine = ygui.Engine("color-mixer", x=2, y=2, width=480, height=380)
 
     # Title
     engine.label("title", 30, 15, "RGB Color Mixer")
@@ -91,7 +91,7 @@ def main():
 
     engine.on_key(on_key)
 
-    engine.show(x=2, y=2, w=60, h=22)
+    engine.show()
     engine.run()
 
     ygui.shutdown()

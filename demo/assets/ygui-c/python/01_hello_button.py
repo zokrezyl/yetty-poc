@@ -12,8 +12,8 @@ def main():
     # Initialize library (sets up raw terminal mode)
     ygui.init()
 
-    # Create engine with card name and pixel size
-    engine = ygui.Engine("dashboard", width=500, height=350)
+    # Create engine with card name, position, and pixel size hints
+    engine = ygui.Engine("dashboard", x=2, y=2, width=500, height=350)
 
     # App state
     click_count = 0
@@ -79,7 +79,7 @@ def main():
     engine.on_key(on_key)
 
     # Show card and run event loop
-    engine.show(x=2, y=2, w=62, h=20)
+    engine.show()
     engine.run()
 
     # Cleanup

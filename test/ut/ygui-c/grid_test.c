@@ -24,7 +24,7 @@ static int test_grid_init(void) {
 }
 
 static int test_grid_insert_query(void) {
-    ygui_engine_t* e = ygui_engine_create("test", 400, 300);
+    ygui_engine_t* e = ({ ygui_engine_t* _e = ygui_engine_create("test", 0, 0, 40, 19); ygui_engine_set_display_pixel_size(_e, 400, 300); _e; });
 
     /* Create a button and manually set effective position */
     ygui_widget_t* btn = ygui_button(e, "btn", 50, 50, 100, 40, "Test");
@@ -48,7 +48,7 @@ static int test_grid_insert_query(void) {
 }
 
 static int test_grid_query_boundaries(void) {
-    ygui_engine_t* e = ygui_engine_create("test", 400, 300);
+    ygui_engine_t* e = ({ ygui_engine_t* _e = ygui_engine_create("test", 0, 0, 40, 19); ygui_engine_set_display_pixel_size(_e, 400, 300); _e; });
 
     ygui_widget_t* btn = ygui_button(e, "btn", 100, 100, 50, 30, "Test");
     btn->effective_x = 100;
@@ -91,7 +91,7 @@ static int test_grid_query_boundaries(void) {
 }
 
 static int test_grid_multiple_widgets(void) {
-    ygui_engine_t* e = ygui_engine_create("test", 400, 300);
+    ygui_engine_t* e = ({ ygui_engine_t* _e = ygui_engine_create("test", 0, 0, 40, 19); ygui_engine_set_display_pixel_size(_e, 400, 300); _e; });
 
     ygui_widget_t* btn1 = ygui_button(e, "btn1", 10, 10, 80, 30, "One");
     btn1->effective_x = 10; btn1->effective_y = 10;
@@ -123,7 +123,7 @@ static int test_grid_multiple_widgets(void) {
 }
 
 static int test_grid_overlapping_widgets(void) {
-    ygui_engine_t* e = ygui_engine_create("test", 400, 300);
+    ygui_engine_t* e = ({ ygui_engine_t* _e = ygui_engine_create("test", 0, 0, 40, 19); ygui_engine_set_display_pixel_size(_e, 400, 300); _e; });
 
     /* Create two overlapping widgets - later one should be on top */
     ygui_widget_t* btn1 = ygui_button(e, "btn1", 50, 50, 100, 100, "Bottom");
@@ -150,7 +150,7 @@ static int test_grid_overlapping_widgets(void) {
 }
 
 static int test_grid_clear(void) {
-    ygui_engine_t* e = ygui_engine_create("test", 400, 300);
+    ygui_engine_t* e = ({ ygui_engine_t* _e = ygui_engine_create("test", 0, 0, 40, 19); ygui_engine_set_display_pixel_size(_e, 400, 300); _e; });
 
     ygui_widget_t* btn = ygui_button(e, "btn", 50, 50, 100, 40, "Test");
     btn->effective_x = 50; btn->effective_y = 50;
@@ -168,7 +168,7 @@ static int test_grid_clear(void) {
 }
 
 static int test_grid_invisible_widget(void) {
-    ygui_engine_t* e = ygui_engine_create("test", 400, 300);
+    ygui_engine_t* e = ({ ygui_engine_t* _e = ygui_engine_create("test", 0, 0, 40, 19); ygui_engine_set_display_pixel_size(_e, 400, 300); _e; });
 
     ygui_widget_t* btn = ygui_button(e, "btn", 50, 50, 100, 40, "Test");
     btn->effective_x = 50; btn->effective_y = 50;
@@ -191,7 +191,7 @@ static int test_grid_invisible_widget(void) {
 }
 
 static int test_grid_disabled_widget(void) {
-    ygui_engine_t* e = ygui_engine_create("test", 400, 300);
+    ygui_engine_t* e = ({ ygui_engine_t* _e = ygui_engine_create("test", 0, 0, 40, 19); ygui_engine_set_display_pixel_size(_e, 400, 300); _e; });
 
     ygui_widget_t* btn = ygui_button(e, "btn", 50, 50, 100, 40, "Test");
     btn->effective_x = 50; btn->effective_y = 50;
@@ -210,7 +210,7 @@ static int test_grid_disabled_widget(void) {
 }
 
 static int test_grid_large_widget(void) {
-    ygui_engine_t* e = ygui_engine_create("test", 400, 300);
+    ygui_engine_t* e = ({ ygui_engine_t* _e = ygui_engine_create("test", 0, 0, 40, 19); ygui_engine_set_display_pixel_size(_e, 400, 300); _e; });
 
     /* Widget spanning multiple grid cells */
     ygui_widget_t* btn = ygui_button(e, "btn", 10, 10, 200, 100, "Large");
@@ -228,7 +228,7 @@ static int test_grid_large_widget(void) {
 }
 
 static int test_grid_out_of_bounds_query(void) {
-    ygui_engine_t* e = ygui_engine_create("test", 400, 300);
+    ygui_engine_t* e = ({ ygui_engine_t* _e = ygui_engine_create("test", 0, 0, 40, 19); ygui_engine_set_display_pixel_size(_e, 400, 300); _e; });
 
     /* Query outside grid bounds should return NULL, not crash */
     TEST_ASSERT_NULL(ygui_grid_query(&e->grid, -10, 50), "negative x");

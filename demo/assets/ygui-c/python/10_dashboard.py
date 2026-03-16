@@ -13,7 +13,7 @@ def rgb_to_abgr(r, g, b, a=255):
 class Dashboard:
     def __init__(self):
         ygui.init()
-        self.engine = ygui.Engine("dashboard", width=800, height=550)
+        self.engine = ygui.Engine("dashboard", x=1, y=1, width=800, height=550)
 
         self.bg_panel = rgb_to_abgr(45, 45, 50)
 
@@ -158,7 +158,7 @@ class Dashboard:
 
         self.engine.on_key(on_key)
 
-        self.engine.show(x=1, y=1, w=100, h=32)
+        self.engine.show()
         self.engine.run()
 
         ygui.shutdown()

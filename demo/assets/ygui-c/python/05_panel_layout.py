@@ -10,7 +10,7 @@ import ygui
 def main():
     ygui.init()
 
-    engine = ygui.Engine("settings", width=420, height=360)
+    engine = ygui.Engine("settings", x=2, y=2, width=420, height=360)
 
     # Panel background
     panel = engine.panel("settings_panel", 20, 20, 380, 320)
@@ -60,7 +60,7 @@ def main():
 
     engine.on_key(on_key)
 
-    engine.show(x=2, y=2, w=52, h=20)
+    engine.show()
     engine.run()
 
     ygui.shutdown()

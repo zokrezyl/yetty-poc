@@ -10,7 +10,7 @@ import ygui
 def main():
     ygui.init()
 
-    engine = ygui.Engine("settings", width=350, height=300)
+    engine = ygui.Engine("settings", x=2, y=2, width=350, height=300)
 
     # Title
     engine.label("title", 30, 20, "Notification Settings")
@@ -51,7 +51,7 @@ def main():
 
     engine.on_key(on_key)
 
-    engine.show(x=2, y=2, w=44, h=17)
+    engine.show()
     engine.run()
 
     ygui.shutdown()

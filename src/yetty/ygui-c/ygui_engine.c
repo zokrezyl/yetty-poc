@@ -147,7 +147,8 @@ const char* ygui_version(void) {
  * Engine Lifecycle
  *===========================================================================*/
 
-ygui_engine_t* ygui_engine_create(const char* card_name, float width, float height) {
+/* Internal helper to allocate and initialize common engine state */
+static ygui_engine_t* engine_alloc_init(const char* card_name, int x, int y, int cols, int rows) {
     ygui_engine_t* engine = (ygui_engine_t*)calloc(1, sizeof(ygui_engine_t));
     if (!engine) {
         ygui_set_error("Failed to allocate engine");
@@ -162,18 +163,22 @@ ygui_engine_t* ygui_engine_create(const char* card_name, float width, float heig
         return NULL;
     }
 
-    /* Store card name */
+    /* Store card name, position, and cell dimensions */
     engine->card_name = ygui_strdup(card_name);
+    engine->card_x = x;
+    engine->card_y = y;
+    engine->card_w = cols;
+    engine->card_h = rows;
 
     /* Default theme */
     engine->theme = ygui_theme_create_default();
     engine->owns_theme = 1;
 
-    /* Initial state */
+    /* Initial state - canvas size set after OSC 777780 */
     engine->dirty = 1;
-    engine->width = width;
-    engine->height = height;
-    engine->cell_width = 0.0f;   /* Will be set by CSI 16 t query */
+    engine->width = 1.0f;   /* Placeholder until pixel size known */
+    engine->height = 1.0f;
+    engine->cell_width = 0.0f;
     engine->cell_height = 0.0f;
 
     /* View state defaults */
@@ -181,10 +186,10 @@ ygui_engine_t* ygui_engine_create(const char* card_name, float width, float heig
     engine->view_scroll_x = 0.0f;
     engine->view_scroll_y = 0.0f;
 
-    /* Resize handling defaults */
-    engine->canvas_mode = YGUI_CANVAS_FIXED;
+    /* Canvas = actual card pixels, no scaling needed */
+    engine->canvas_mode = YGUI_CANVAS_FIT;
     engine->scale_mode = YGUI_SCALE_OFF;
-    engine->reference_w = 0.0f;  /* Set in ygui_engine_show */
+    engine->reference_w = 0.0f;
     engine->reference_h = 0.0f;
     engine->display_pixel_w = 0.0f;
     engine->display_pixel_h = 0.0f;
@@ -194,8 +199,38 @@ ygui_engine_t* ygui_engine_create(const char* card_name, float width, float heig
     engine->input_fd = STDIN_FILENO;
     engine->output_fd = STDOUT_FILENO;
 
-    ygui_grid_init(&engine->grid, width, height, calc_grid_bucket_size(width, height));
+    /* Grid initialized after pixel size known */
+    ygui_grid_init(&engine->grid, 1.0f, 1.0f, 1.0f);
 
+    return engine;
+}
+
+ygui_engine_t* ygui_engine_create(const char* card_name, int x, int y, int cols, int rows) {
+    return engine_alloc_init(card_name, x, y, cols, rows);
+}
+
+ygui_engine_t* ygui_engine_create_with_pixel_hint(const char* card_name, int x, int y, float width_hint, float height_hint) {
+    /* TODO: Query cell size first to calculate cols/rows
+     * For now, use reasonable defaults (10x16 cell size) */
+    int cols = (int)(width_hint / 10.0f + 0.5f);
+    int rows = (int)(height_hint / 16.0f + 0.5f);
+    if (cols < 1) cols = 1;
+    if (rows < 1) rows = 1;
+
+    ygui_engine_t* engine = engine_alloc_init(card_name, x, y, cols, rows);
+    if (engine) {
+        /* Store pixel hints as reference size for widget scaling */
+        engine->reference_w = width_hint;
+        engine->reference_h = height_hint;
+        engine->width = width_hint;
+        engine->height = height_hint;
+        engine->scale_mode = YGUI_SCALE_ON;  /* Scale widgets from hint to actual */
+
+        /* Initialize grid with hint size */
+        ygui_grid_destroy(&engine->grid);
+        ygui_grid_init(&engine->grid, width_hint, height_hint,
+                       calc_grid_bucket_size(width_hint, height_hint));
+    }
     return engine;
 }
 
@@ -369,15 +404,12 @@ void ygui_engine_render(ygui_engine_t* engine) {
     }
 }
 
-void ygui_engine_show(ygui_engine_t* engine, int x, int y, int w, int h) {
+void ygui_engine_show(ygui_engine_t* engine) {
     if (!engine) return;
 
-    engine->card_x = x;
-    engine->card_y = y;
-    engine->card_w = w;
-    engine->card_h = h;
+    /* card_x, card_y, card_w, card_h already set in ygui_engine_create */
 
-    /* Query cell size (kept for future use, not used for coord transform) */
+    /* Query cell size (kept for future use) */
     ygui_osc_query_cell_size();
 
     /* Subscribe to click events */
@@ -1318,6 +1350,22 @@ void ygui_engine_set_card_size(ygui_engine_t* engine, int card_w, int card_h) {
         engine->card_w = card_w;
         engine->card_h = card_h;
     }
+}
+
+void ygui_engine_set_display_pixel_size(ygui_engine_t* engine, float width, float height) {
+    if (!engine) return;
+
+    engine->display_pixel_w = width;
+    engine->display_pixel_h = height;
+    engine->have_pixel_size = 1;
+
+    /* Set canvas size to match display pixels */
+    engine->width = width;
+    engine->height = height;
+
+    /* Reinitialize grid with actual size */
+    ygui_grid_destroy(&engine->grid);
+    ygui_grid_init(&engine->grid, width, height, calc_grid_bucket_size(width, height));
 }
 
 uv_loop_t* ygui_engine_get_loop(ygui_engine_t* engine) {

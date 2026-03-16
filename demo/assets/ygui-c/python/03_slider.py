@@ -10,7 +10,7 @@ import ygui
 def main():
     ygui.init()
 
-    engine = ygui.Engine("slider-demo", width=400, height=200)
+    engine = ygui.Engine("slider-demo", x=2, y=2, width=400, height=200)
 
     # Labels
     engine.label("title", 50, 30, "Volume Control")
@@ -31,7 +31,7 @@ def main():
     engine.on_key(on_key)
 
     # Show and run
-    engine.show(x=2, y=2, w=50, h=12)
+    engine.show()
     engine.run()
 
     ygui.shutdown()

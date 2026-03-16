@@ -460,7 +460,8 @@ static int run_test_scenario(test_scenario_t* scenario) {
         ctx.running = 1;
 
         /* Create engine - will use stdin/stdout (now PTY) */
-        ctx.engine = ygui_engine_create("test", 400, 300);
+        ctx.engine = ygui_engine_create("test", 0, 0, 50, 19);
+        ygui_engine_set_display_pixel_size(ctx.engine, 400, 300);
         /* input_fd/output_fd default to STDIN/STDOUT which are now the PTY */
 
         /* Run client setup (creates widgets, sets callbacks) */
