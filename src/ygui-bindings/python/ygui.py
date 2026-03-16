@@ -140,6 +140,16 @@ class Flags(IntEnum):
     VISIBLE = 1 << 6
 
 
+class CanvasMode(IntEnum):
+    FIXED = 0   # Canvas size stays constant, coordinates are scaled
+    FIT = 1     # Canvas size = display size (card_cells * cell_pixels), 1:1 coords
+
+
+class ScaleMode(IntEnum):
+    OFF = 0     # Widgets keep their original positions/sizes
+    ON = 1      # Widgets scale proportionally when canvas resizes
+
+
 #=============================================================================
 # Ctypes structures
 #=============================================================================
@@ -227,6 +237,12 @@ def _setup_functions(lib):
 
     lib.ygui_engine_find.argtypes = [c_void_p, c_char_p]
     lib.ygui_engine_find.restype = c_void_p
+
+    lib.ygui_engine_set_canvas_mode.argtypes = [c_void_p, c_int]
+    lib.ygui_engine_set_canvas_mode.restype = None
+
+    lib.ygui_engine_set_scale_mode.argtypes = [c_void_p, c_int]
+    lib.ygui_engine_set_scale_mode.restype = None
 
     # Widgets
     lib.ygui_button.argtypes = [c_void_p, c_char_p, c_float, c_float, c_float, c_float, c_char_p]
@@ -534,6 +550,16 @@ class Engine:
 
     def mark_dirty(self):
         self._lib.ygui_engine_mark_dirty(self._handle)
+
+    def set_canvas_mode(self, mode: CanvasMode):
+        """Set canvas mode. FIXED keeps canvas size constant (default).
+        FIT resizes canvas to match display (card_cells * cell_pixels) for 1:1 coordinates."""
+        self._lib.ygui_engine_set_canvas_mode(self._handle, int(mode))
+
+    def set_scale_mode(self, mode: ScaleMode):
+        """Set widget scale mode. OFF keeps widget positions fixed (default).
+        ON scales widgets proportionally when canvas resizes."""
+        self._lib.ygui_engine_set_scale_mode(self._handle, int(mode))
 
     def on_key(self, callback: Callable[[int, int], None]):
         """Set keyboard callback. Args: (key_code, modifiers)."""

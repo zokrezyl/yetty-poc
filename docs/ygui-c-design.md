@@ -62,9 +62,9 @@ Canvas coords (visible region of canvas)
 
 The transformation:
 ```c
-// Display size = card dimensions in pixels
-float display_w = card_w_cells * cell_width;
-float display_h = card_h_cells * cell_height;
+// Display size from OSC 777780 (NOT calculated from cell size!)
+float display_w = engine->display_pixel_w;  // From OSC 777780
+float display_h = engine->display_pixel_h;  // From OSC 777780
 
 // Visible canvas region (depends on zoom/scroll)
 float visible_w = canvas_w / zoom;
@@ -75,18 +75,33 @@ canvas_x = scroll_x + (display_x / display_w) * visible_w;
 canvas_y = scroll_y + (display_y / display_h) * visible_h;
 ```
 
+**Important:** All values are **FLOAT** for precision. Mouse coordinates from yetty are float, display dimensions are float, and all transformations use float arithmetic.
+
+### Card Pixel Size (OSC 777780)
+
+When a card is created, yetty sends back the card's exact pixel dimensions:
+
+```
+App → Yetty:   \033]666666;run -c ydraw ... --name mycard;;\033\\  (create card)
+Yetty → App:   \033]777780;mycard;595.200000;172.800000\033\\      (pixel size response)
+```
+
+**This is the authoritative source for display dimensions.** All coordinate transformations use this value.
+
+- Sent as **FLOAT** for precision (zooming, sub-pixel accuracy)
+- Used directly in coordinate transformation (no cell size calculation needed)
+- Sent immediately after card creation, before any mouse events
+
 ### Cell Size Query (CSI 16 t)
 
-Before creating the card, ygui-c must query the terminal's cell size in pixels:
+The terminal cell size query is available for other purposes:
 
 ```
 App → Terminal:  \033[16t        (query cell size)
-Terminal → App:  \033[6;H;Wt     (response: height H, width W in pixels)
+Terminal → App:  \033[6;H;Wt     (response: height H, width W in pixels as float)
 ```
 
-This is required:
-1. **Before creating the card** - to calculate display dimensions
-2. **After terminal resize (SIGWINCH)** - cell pixel size may change
+**Note:** ygui-c does NOT use cell size for coordinate transformation. Card pixel size from OSC 777780 is used instead. Cell size query is kept for potential future use (e.g., calculating optimal card dimensions).
 
 ### Resize Handling (SIGWINCH)
 
@@ -128,13 +143,12 @@ void ygui_engine_set_scale_mode(ygui_engine_t* e, ygui_scale_mode_t mode);
 
 On resize with `YGUI_CANVAS_FIT` + `YGUI_SCALE_ON`:
 ```c
-// reference_w, reference_h = initial display size (stored at startup)
-float new_display_w = card_w_cells * cell_width;
-float new_display_h = card_h_cells * cell_height;
+// reference_w, reference_h = initial display size (stored from first OSC 777780)
+// new_display_w, new_display_h = from new OSC 777780 after resize
 float scale_x = new_display_w / reference_w;
 float scale_y = new_display_h / reference_h;
 
-// Scale all widget positions/sizes
+// Scale all widget positions/sizes (all float)
 for (widget = first_widget; widget; widget = widget->next) {
     widget->x *= scale_x;
     widget->y *= scale_y;
@@ -142,6 +156,8 @@ for (widget = first_widget; widget; widget = widget->next) {
     widget->h *= scale_y;
 }
 ```
+
+**Note:** Display dimensions come from OSC 777780, NOT from `card_cells * cell_size` calculation.
 
 ## Why Pure C API
 
@@ -581,6 +597,37 @@ User never calls render manually. It's automatic.
 - **libuv** - Event loop, stdin watcher
 - **YDraw C++ backend** - Drawing primitives (via C wrapper)
 
+## Spatial Grid for Hit Testing
+
+Widget hit testing uses a **spatial hash grid** for O(1) lookup:
+
+```
+┌────┬────┬────┬────┬────┐
+│    │    │ W1 │ W1 │    │  Grid cells (buckets)
+├────┼────┼────┼────┼────┤
+│    │ W2 │ W2 │ W1 │    │  W1, W2, W3 = widgets
+├────┼────┼────┼────┼────┤
+│    │ W2 │ W2 │    │ W3 │  Widgets register in cells they overlap
+├────┼────┼────┼────┼────┤
+│    │    │    │ W3 │ W3 │
+└────┴────┴────┴────┴────┘
+```
+
+### Design Decisions
+
+- **All coordinates are FLOAT** - mouse position, widget bounds, grid queries
+- **Bucket size based on card dimensions** - e.g., divide card into ~16x16 grid
+- **NOT based on terminal cell size** - grid is purely for spatial partitioning
+
+### Hit Test Flow
+
+1. Mouse click arrives with float coordinates (x, y)
+2. Transform display coords to canvas coords (float)
+3. Query spatial grid at (x, y)
+4. Grid returns widgets in that bucket
+5. Check each widget: `x >= widget.x && x < widget.x + widget.w`
+6. All comparisons use float - no truncation
+
 ## File Structure
 
 ```
@@ -643,6 +690,14 @@ src/ygui-bindings/
   --dx/--dy  Relative delta from current position
 ```
 
+### Card Pixel Size (yetty → app via stdin)
+```
+\033]777780;card-name;pixel-width;pixel-height\033\\   (card dimensions in pixels)
+```
+
+Sent by yetty immediately after card creation. Values are **FLOAT** (e.g., `595.200000;172.800000`).
+This is the authoritative source for display dimensions used in coordinate transformation.
+
 ### Mouse Events (yetty → app via stdin)
 ```
 \033]777777;card-name;buttons;press;x;y\033\\   (click: press=0 release, press=1 press)
@@ -651,7 +706,7 @@ src/ygui-bindings/
 
 Button bitmask: bit0=left(1), bit1=right(2), bit2=middle(4), bit3=scroll-up(8), bit4=scroll-down(16)
 
-Coordinates x,y are in display pixels (card surface). Transform to canvas coords using current zoom/scroll.
+Coordinates x,y are **FLOAT** display pixels (card surface). Transform to canvas coords using card pixel size from OSC 777780 and current zoom/scroll.
 
 ### View Change Events (yetty → app via stdin)
 ```
@@ -684,10 +739,10 @@ The key design principles:
    - GPU handles viewport clipping efficiently
 
 3. **Coordinate transformation**
-   - Mouse events arrive in display coords
+   - Mouse events arrive in display coords (FLOAT)
    - Transform to canvas coords using zoom/scroll state
-   - Query cell size before creating card (CSI 16 t)
-   - Re-query on terminal resize (SIGWINCH)
+   - Display dimensions from OSC 777780 (NOT cell size calculation)
+   - All arithmetic uses FLOAT for precision
 
 4. **Resize modes**
    - Fixed: widgets keep pixel sizes

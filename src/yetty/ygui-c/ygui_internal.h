@@ -286,6 +286,9 @@ struct ygui_engine {
     ygui_scale_mode_t scale_mode;
     float reference_w;    /* Initial display size for scaling */
     float reference_h;
+    float display_pixel_w;  /* Direct pixel dimensions from OSC 777780 */
+    float display_pixel_h;
+    int have_pixel_size;    /* 1 if we received OSC 777780 */
 
     /* Resize callback */
     ygui_resize_callback_t resize_callback;

@@ -9,6 +9,7 @@
 #include <termios.h>
 #include <signal.h>
 #include <string.h>
+#include <math.h>
 
 /* Debug logging - set YGUI_C_LOG env var to enable */
 static FILE* _ygui_log_file = NULL;
@@ -31,6 +32,14 @@ static void _ygui_log_init(void) {
     _ygui_log_init(); \
     if (_ygui_log_file) { fprintf(_ygui_log_file, "[YGUI-C] " __VA_ARGS__); fprintf(_ygui_log_file, "\n"); } \
 } while(0)
+
+/* Calculate grid bucket size based on canvas dimensions.
+ * Aims for ~16 buckets on the larger dimension, minimum 32.0f */
+static float calc_grid_bucket_size(float width, float height) {
+    float larger = (width > height) ? width : height;
+    float bucket = larger / 16.0f;
+    return (bucket < 32.0f) ? 32.0f : bucket;
+}
 
 /*=============================================================================
  * Terminal State
@@ -174,12 +183,15 @@ ygui_engine_t* ygui_engine_create(const char* card_name, float width, float heig
     engine->scale_mode = YGUI_SCALE_OFF;
     engine->reference_w = 0.0f;  /* Set in ygui_engine_show */
     engine->reference_h = 0.0f;
+    engine->display_pixel_w = 0.0f;
+    engine->display_pixel_h = 0.0f;
+    engine->have_pixel_size = 0;
 
     /* Default I/O file descriptors */
     engine->input_fd = STDIN_FILENO;
     engine->output_fd = STDOUT_FILENO;
 
-    ygui_grid_init(&engine->grid, width, height, 32.0f);
+    ygui_grid_init(&engine->grid, width, height, calc_grid_bucket_size(width, height));
 
     return engine;
 }
@@ -245,7 +257,7 @@ void ygui_engine_set_size(ygui_engine_t* engine, float width, float height) {
     engine->width = width;
     engine->height = height;
     ygui_grid_destroy(&engine->grid);
-    ygui_grid_init(&engine->grid, width, height, 32.0f);
+    ygui_grid_init(&engine->grid, width, height, calc_grid_bucket_size(width, height));
     engine->dirty = 1;
 }
 
@@ -645,27 +657,45 @@ static int parse_card_mouse_osc(const char* buf, int len,
         *press = -1;  /* N/A for move */
     }
 
-    /* Parse x */
-    int ix = 0;
+    /* Parse x (float, e.g., "123.45" or "123") */
+    float fx = 0.0f;
     int neg = 0;
     if (i < len && buf[i] == '-') { neg = 1; i++; }
     while (i < len && buf[i] >= '0' && buf[i] <= '9') {
-        ix = ix * 10 + (buf[i] - '0');
+        fx = fx * 10.0f + (float)(buf[i] - '0');
         i++;
     }
-    *x = neg ? -(float)ix : (float)ix;
+    if (i < len && buf[i] == '.') {
+        i++;
+        float frac = 0.1f;
+        while (i < len && buf[i] >= '0' && buf[i] <= '9') {
+            fx += (float)(buf[i] - '0') * frac;
+            frac *= 0.1f;
+            i++;
+        }
+    }
+    *x = neg ? -fx : fx;
     if (i >= len || buf[i] != ';') return 0;
     i++;
 
-    /* Parse y */
-    int iy = 0;
+    /* Parse y (float, e.g., "123.45" or "123") */
+    float fy = 0.0f;
     neg = 0;
     if (i < len && buf[i] == '-') { neg = 1; i++; }
     while (i < len && buf[i] >= '0' && buf[i] <= '9') {
-        iy = iy * 10 + (buf[i] - '0');
+        fy = fy * 10.0f + (float)(buf[i] - '0');
         i++;
     }
-    *y = neg ? -(float)iy : (float)iy;
+    if (i < len && buf[i] == '.') {
+        i++;
+        float frac = 0.1f;
+        while (i < len && buf[i] >= '0' && buf[i] <= '9') {
+            fy += (float)(buf[i] - '0') * frac;
+            frac *= 0.1f;
+            i++;
+        }
+    }
+    *y = neg ? -fy : fy;
 
     /* Expect ST: ESC \ */
     if (i + 1 >= len || buf[i] != '\033' || buf[i+1] != '\\') return 0;
@@ -675,12 +705,87 @@ static int parse_card_mouse_osc(const char* buf, int len,
     return 1;
 }
 
+/* Parse OSC 777780 (card pixel size report)
+ * Format: ESC ] 777780 ; card-name ; pixel-width ; pixel-height ESC \
+ * Returns 1 on success, 0 if not a matching sequence
+ */
+static int parse_card_pixel_size_osc(const char* buf, int len,
+                                      char* card_name, int name_max,
+                                      float* pixel_w, float* pixel_h,
+                                      int* consumed) {
+    if (len < 15) return 0;
+    if (buf[0] != '\033' || buf[1] != ']') return 0;
+
+    int i = 2;
+    /* Parse OSC code */
+    int code = 0;
+    while (i < len && buf[i] >= '0' && buf[i] <= '9') {
+        code = code * 10 + (buf[i] - '0');
+        i++;
+    }
+    if (code != 777780) return 0;
+    if (i >= len || buf[i] != ';') return 0;
+    i++;
+
+    /* Parse card name */
+    int name_len = 0;
+    while (i < len && buf[i] != ';' && name_len < name_max - 1) {
+        card_name[name_len++] = buf[i++];
+    }
+    card_name[name_len] = '\0';
+    if (i >= len || buf[i] != ';') return 0;
+    i++;
+
+    /* Parse pixel width (float) */
+    float w = 0.0f;
+    while (i < len && buf[i] >= '0' && buf[i] <= '9') {
+        w = w * 10.0f + (float)(buf[i] - '0');
+        i++;
+    }
+    if (i < len && buf[i] == '.') {
+        i++;
+        float frac = 0.1f;
+        while (i < len && buf[i] >= '0' && buf[i] <= '9') {
+            w += (float)(buf[i] - '0') * frac;
+            frac *= 0.1f;
+            i++;
+        }
+    }
+    if (i >= len || buf[i] != ';') return 0;
+    i++;
+
+    /* Parse pixel height (float) */
+    float h = 0.0f;
+    while (i < len && buf[i] >= '0' && buf[i] <= '9') {
+        h = h * 10.0f + (float)(buf[i] - '0');
+        i++;
+    }
+    if (i < len && buf[i] == '.') {
+        i++;
+        float frac = 0.1f;
+        while (i < len && buf[i] >= '0' && buf[i] <= '9') {
+            h += (float)(buf[i] - '0') * frac;
+            frac *= 0.1f;
+            i++;
+        }
+    }
+
+    /* Expect ST: ESC \ */
+    if (i + 1 >= len || buf[i] != '\033' || buf[i+1] != '\\') return 0;
+
+    *pixel_w = w;
+    *pixel_h = h;
+    *consumed = i + 2;
+    return 1;
+}
+
 /* Parse CSI 6 ; h ; w t (cell size report)
  * Format: ESC [ 6 ; height ; width t
+ * Height and width can be floats (e.g., "9.60") for sub-pixel precision
  * Returns 1 on success, 0 if not a matching sequence
  */
 static int parse_cell_size_csi(const char* buf, int len,
-                                int* cell_height, int* cell_width, int* consumed) {
+                                float* cell_height, float* cell_width, int* consumed) {
     if (len < 8) return 0;  /* Minimum: ESC [ 6 ; h ; w t */
     if (buf[0] != '\033' || buf[1] != '[') return 0;
 
@@ -695,20 +800,38 @@ static int parse_cell_size_csi(const char* buf, int len,
     if (i >= len || buf[i] != ';') return 0;
     i++;
 
-    /* Parse height */
-    int h = 0;
+    /* Parse height (may be float like "16.00") */
+    float h = 0.0f;
     while (i < len && buf[i] >= '0' && buf[i] <= '9') {
-        h = h * 10 + (buf[i] - '0');
+        h = h * 10.0f + (float)(buf[i] - '0');
         i++;
+    }
+    if (i < len && buf[i] == '.') {
+        i++;
+        float frac = 0.1f;
+        while (i < len && buf[i] >= '0' && buf[i] <= '9') {
+            h += (float)(buf[i] - '0') * frac;
+            frac *= 0.1f;
+            i++;
+        }
     }
     if (i >= len || buf[i] != ';') return 0;
     i++;
 
-    /* Parse width */
-    int w = 0;
+    /* Parse width (may be float like "9.60") */
+    float w = 0.0f;
     while (i < len && buf[i] >= '0' && buf[i] <= '9') {
-        w = w * 10 + (buf[i] - '0');
+        w = w * 10.0f + (float)(buf[i] - '0');
         i++;
+    }
+    if (i < len && buf[i] == '.') {
+        i++;
+        float frac = 0.1f;
+        while (i < len && buf[i] >= '0' && buf[i] <= '9') {
+            w += (float)(buf[i] - '0') * frac;
+            frac *= 0.1f;
+            i++;
+        }
     }
     if (i >= len || buf[i] != 't') return 0;
     i++;
@@ -721,28 +844,43 @@ static int parse_cell_size_csi(const char* buf, int len,
 
 /* Scale coordinates from display space to internal canvas space */
 static void scale_coords(ygui_engine_t* engine, float* x, float* y) {
-    if (engine->cell_width > 0 && engine->cell_height > 0 &&
-        engine->card_w > 0 && engine->card_h > 0) {
-        float display_w = engine->card_w * engine->cell_width;
-        float display_h = engine->card_h * engine->cell_height;
+    float orig_x = *x, orig_y = *y;
 
-        /* When zoomed, display shows only a portion of the canvas */
-        float visible_w = engine->width / engine->view_zoom;
-        float visible_h = engine->height / engine->view_zoom;
-
-        /* Transform: display → visible canvas portion → canvas coords */
-        *x = engine->view_scroll_x + (*x / display_w) * visible_w;
-        *y = engine->view_scroll_y + (*y / display_h) * visible_h;
+    /* MUST have pixel size from OSC 777780 - no fallback */
+    if (!engine->have_pixel_size) {
+        YGUI_LOG("scale_coords: SKIPPED - waiting for OSC 777780");
+        return;
     }
+
+    float display_w = engine->display_pixel_w;
+    float display_h = engine->display_pixel_h;
+
+    /* When zoomed, display shows only a portion of the canvas */
+    float visible_w = engine->width / engine->view_zoom;
+    float visible_h = engine->height / engine->view_zoom;
+
+    /* Transform: display → visible canvas portion → canvas coords */
+    *x = engine->view_scroll_x + (*x / display_w) * visible_w;
+    *y = engine->view_scroll_y + (*y / display_h) * visible_h;
+
+    YGUI_LOG("scale_coords: in=(%.1f,%.1f) out=(%.1f,%.1f) disp=%.2fx%.2f canvas=%.0fx%.0f",
+             orig_x, orig_y, *x, *y, display_w, display_h, engine->width, engine->height);
 }
 
 /* Handle terminal resize based on canvas_mode and scale_mode */
 static void handle_resize(ygui_engine_t* engine) {
     if (!engine || engine->reference_w == 0.0f) return;
 
-    float new_display_w = engine->card_w * engine->cell_width;
-    float new_display_h = engine->card_h * engine->cell_height;
-    YGUI_LOG("Resize: new display %.0fx%.0f", new_display_w, new_display_h);
+    /* MUST have pixel size from OSC 777780 - no fallback */
+    if (!engine->have_pixel_size) {
+        YGUI_LOG("handle_resize: SKIPPED - waiting for OSC 777780");
+        return;
+    }
+
+    float new_display_w = engine->display_pixel_w;
+    float new_display_h = engine->display_pixel_h;
+
+    YGUI_LOG("Resize: new display %.2fx%.2f", new_display_w, new_display_h);
 
     if (engine->canvas_mode == YGUI_CANVAS_FIT) {
         /* Canvas size matches display size */
@@ -752,24 +890,31 @@ static void handle_resize(ygui_engine_t* engine) {
         engine->height = new_display_h;
 
         if (engine->scale_mode == YGUI_SCALE_ON && old_canvas_w > 0 && old_canvas_h > 0) {
-            /* Scale all widgets proportionally */
+            /* Scale all widgets proportionally using FLOAT precision */
             float scale_x = new_display_w / old_canvas_w;
             float scale_y = new_display_h / old_canvas_h;
-            YGUI_LOG("Scaling widgets by %.2fx%.2f", scale_x, scale_y);
+
+            YGUI_LOG("Scaling widgets by %.4fx%.4f", scale_x, scale_y);
 
             for (ygui_widget_t* w = engine->first_widget; w; w = w->next_sibling) {
+                /* Scale positions and sizes (all FLOAT) */
                 w->x *= scale_x;
                 w->y *= scale_y;
                 w->w *= scale_x;
                 w->h *= scale_y;
+
+                /* Update effective positions for hit testing */
+                w->effective_x = w->x;
+                w->effective_y = w->y;
             }
         }
 
         /* Rebuild spatial grid with new canvas size */
         ygui_grid_destroy(&engine->grid);
-        ygui_grid_init(&engine->grid, engine->width, engine->height, 32.0f);
+        ygui_grid_init(&engine->grid, engine->width, engine->height,
+                       calc_grid_bucket_size(engine->width, engine->height));
 
-        /* Re-insert all widgets */
+        /* Re-insert all widgets - they now have correct effective positions */
         for (ygui_widget_t* w = engine->first_widget; w; w = w->next_sibling) {
             if (w->was_rendered) {
                 ygui_grid_insert(&engine->grid, w);
@@ -901,30 +1046,46 @@ static void process_input(ygui_engine_t* engine, const char* data, int len) {
         int buttons, press;
         float x, y;
         int consumed;
-        int cell_h, cell_w;
+        float cell_h, cell_w;
 
-        /* Try to parse CSI cell size response first */
-        if (parse_cell_size_csi(engine->input_buffer + i,
-                                 engine->input_len - i,
-                                 &cell_h, &cell_w, &consumed)) {
-            YGUI_LOG("Got cell size: %dx%d", cell_w, cell_h);
-            float old_w = engine->cell_width;
-            float old_h = engine->cell_height;
-            engine->cell_width = (float)cell_w;
-            engine->cell_height = (float)cell_h;
+        /* Try to parse OSC 777780 (card pixel size) first - this is the most accurate */
+        float pixel_w, pixel_h;
+        if (parse_card_pixel_size_osc(engine->input_buffer + i,
+                                       engine->input_len - i,
+                                       card_name, sizeof(card_name),
+                                       &pixel_w, &pixel_h, &consumed)) {
+            /* Only use if this is our card */
+            if (engine->card_name && strcmp(card_name, engine->card_name) == 0) {
+                YGUI_LOG("Got card pixel size for '%s': %.2fx%.2f", card_name, pixel_w, pixel_h);
+                engine->display_pixel_w = pixel_w;
+                engine->display_pixel_h = pixel_h;
+                engine->have_pixel_size = 1;
 
-            /* Store reference size on first cell size query */
-            if (engine->reference_w == 0.0f && engine->card_w > 0) {
-                engine->reference_w = engine->card_w * engine->cell_width;
-                engine->reference_h = engine->card_h * engine->cell_height;
-                YGUI_LOG("Reference size set: %.0fx%.0f", engine->reference_w, engine->reference_h);
-            }
+                /* Store reference size on first pixel size */
+                if (engine->reference_w == 0.0f) {
+                    engine->reference_w = pixel_w;
+                    engine->reference_h = pixel_h;
+                    YGUI_LOG("Reference size set from pixel: %.0fx%.0f", engine->reference_w, engine->reference_h);
+                }
 
-            /* Handle resize if cell size changed */
-            if (old_w > 0 && old_h > 0 &&
-                (old_w != engine->cell_width || old_h != engine->cell_height)) {
+                /* Trigger resize with exact pixel dimensions */
                 handle_resize(engine);
             }
+            i += consumed;
+        }
+        /* Try to parse CSI cell size response */
+        else if (parse_cell_size_csi(engine->input_buffer + i,
+                                 engine->input_len - i,
+                                 &cell_h, &cell_w, &consumed)) {
+            YGUI_LOG("Got cell size: %.2fx%.2f", cell_w, cell_h);
+            float old_w = engine->cell_width;
+            float old_h = engine->cell_height;
+            engine->cell_width = cell_w;
+            engine->cell_height = cell_h;
+
+            /* Store reference size on first cell size query (fallback if no pixel size) */
+            /* Cell size is stored but not used for coordinate mapping
+             * (OSC 777780 provides direct pixel size) */
             i += consumed;
         } else if (parse_card_mouse_osc(engine->input_buffer + i,
                                   engine->input_len - i,

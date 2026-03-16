@@ -194,6 +194,9 @@ ygui_widget_t* ygui_grid_query(const ygui_spatial_grid_t* grid, float x, float y
         ygui_widget_t* w = cell->widgets[i];
         int in_x = (x >= w->effective_x && x < w->effective_x + w->w);
         int in_y = (y >= w->effective_y && y < w->effective_y + w->h);
+        fprintf(stderr, "[GRID] query(%.1f,%.1f) vs %s: eff=(%.1f,%.1f) size=(%.1f,%.1f) right=%.1f in_x=%d in_y=%d\n",
+                x, y, w->id ? w->id : "?", w->effective_x, w->effective_y, w->w, w->h,
+                w->effective_x + w->w, in_x, in_y);
         GRID_LOG("  check %s: eff=(%.1f,%.1f) size=(%.1f,%.1f) in_x=%d in_y=%d flags=0x%x",
                  w->id ? w->id : "?", w->effective_x, w->effective_y, w->w, w->h, in_x, in_y, w->flags);
         if (in_x && in_y) {

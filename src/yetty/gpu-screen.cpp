@@ -408,6 +408,10 @@ private:
     int cardTopRow = row - relRow;
     cardX = viewLocalX - static_cast<float>(cardTopCol) * cellW;
     cardY = viewLocalY - static_cast<float>(cardTopRow) * cellH;
+    ytrace("cardLocalCoords: viewLocal=({:.1f},{:.1f}) cell=({},{}) rel=({},{}) "
+           "cardTop=({},{}) cellSize=({:.1f},{:.1f}) -> cardXY=({:.2f},{:.2f})",
+           viewLocalX, viewLocalY, col, row, relCol, relRow,
+           cardTopCol, cardTopRow, cellW, cellH, cardX, cardY);
   }
 
   // VTerm
@@ -802,17 +806,18 @@ void GPUScreenImpl::sendCardMouseOSC(int oscCode, const std::string& cardName,
                                       int buttons, int press, float x, float y) {
   if (!_outputCallback) return;
 
+  ytrace("GPUScreen sendCardMouseOSC: coords=({:.2f},{:.2f})", x, y);
+
   char buf[256];
   if (oscCode == 777777) {
     // Click event: OSC 777777;card-name;button;press;pixel-x;pixel-y ST
-    snprintf(buf, sizeof(buf), "\033]%d;%s;%d;%d;%d;%d\033\\",
-             oscCode, cardName.c_str(), buttons, press,
-             static_cast<int>(x), static_cast<int>(y));
+    // Send FLOAT coordinates to avoid truncation boundary issues
+    snprintf(buf, sizeof(buf), "\033]%d;%s;%d;%d;%.6f;%.6f\033\\",
+             oscCode, cardName.c_str(), buttons, press, x, y);
   } else {
     // Move event: OSC 777778;card-name;buttons-held;pixel-x;pixel-y ST
-    snprintf(buf, sizeof(buf), "\033]%d;%s;%d;%d;%d\033\\",
-             oscCode, cardName.c_str(), buttons,
-             static_cast<int>(x), static_cast<int>(y));
+    snprintf(buf, sizeof(buf), "\033]%d;%s;%d;%.6f;%.6f\033\\",
+             oscCode, cardName.c_str(), buttons, x, y);
   }
   _outputCallback(buf, strlen(buf));
 }
@@ -3312,11 +3317,14 @@ int GPUScreenImpl::onCSI(const char *leader, const long args[], int argcount,
       return 1;
     }
 
-    // CSI 16 t - Report cell size in pixels
+    // CSI 16 t - Report cell size in pixels (with float precision)
     if (op == 16) {
       char response[64];
-      snprintf(response, sizeof(response), "\033[6;%u;%ut", cellHeight, cellWidth);
-      ydebug(">>> onCSI: reporting cell size {}x{} pixels", cellWidth, cellHeight);
+      float cellWidthF = self->getCellWidthF();
+      float cellHeightF = self->getCellHeightF();
+      // Send float values for precise coordinate mapping
+      snprintf(response, sizeof(response), "\033[6;%.6f;%.6ft", cellHeightF, cellWidthF);
+      ydebug(">>> onCSI: reporting cell size {:.2f}x{:.2f} pixels", cellWidthF, cellHeightF);
       if (self->_outputCallback) {
         self->_outputCallback(response, strlen(response));
       }
@@ -4307,6 +4315,19 @@ bool GPUScreenImpl::handleCardOSCSequence(const std::string &sequence,
 
     // Store and register the card (transfer ownership)
     registerCard(std::move(cardPtr));
+
+    // Send OSC 777780 with card's actual pixel dimensions (FLOAT for precision)
+    // Format: OSC 777780 ; card-name ; pixel-width ; pixel-height ST
+    if (_outputCallback && !card->name().empty()) {
+      float pixelW = static_cast<float>(card->widthCells()) * getCellWidthF();
+      float pixelH = static_cast<float>(card->heightCells()) * getCellHeightF();
+      char oscBuf[256];
+      snprintf(oscBuf, sizeof(oscBuf), "\033]777780;%s;%.6f;%.6f\033\\",
+               card->name().c_str(), pixelW, pixelH);
+      _outputCallback(oscBuf, strlen(oscBuf));
+      ydebug("GPUScreen: Sent card pixel size OSC for '{}': {:.2f}x{:.2f}",
+             card->name(), pixelW, pixelH);
+    }
 
     // Don't set linesToAdvance - vterm handles cursor movement via the newlines
     // we output The ANSI sequences include newlines which advance the cursor

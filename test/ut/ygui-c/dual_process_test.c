@@ -1264,6 +1264,334 @@ static void scaled_right_miss_terminal_test(terminal_ctx_t* ctx) {
 }
 
 /*=============================================================================
+ * Real Demo Scenario Test (CANVAS_FIT + SCALE_ON)
+ *
+ * Simulates the exact scenario from 00-debug-events.py:
+ * - Canvas: 500 x 300
+ * - Card: 62 x 18 cells
+ * - Cell size: 8 x 16 pixels
+ * - Display: 62*8=496 x 18*16=288 pixels
+ *
+ * With CANVAS_FIT + SCALE_ON:
+ * - Canvas resizes to 496 x 288
+ * - Widgets scale by (496/500, 288/300) = (0.992, 0.96)
+ * - Button at (20, 50) scales to (19.84, 48) with size (198.4, 48)
+ * - Button right edge: 19.84 + 198.4 = 218.24
+ *
+ * This test catches the bug where handle_resize() wasn't called on
+ * first cell size response, causing coordinate mismatch.
+ *===========================================================================*/
+
+static void demo_client_setup(client_ctx_t* ctx) {
+    /* Set canvas to 500x300 to match the real demo (00-debug-events.py) */
+    ygui_engine_set_size(ctx->engine, 500, 300);
+
+    /* Match the real demo: card 62x18 cells */
+    ygui_engine_set_card_size(ctx->engine, 62, 18);
+
+    /* Enable CANVAS_FIT + SCALE_ON for 1:1 coordinate mapping */
+    ygui_engine_set_canvas_mode(ctx->engine, YGUI_CANVAS_FIT);
+    ygui_engine_set_scale_mode(ctx->engine, YGUI_SCALE_ON);
+
+    /* Button at same position as 00-debug-events.py */
+    ygui_widget_t* btn = ygui_button(ctx->engine, "demo_btn", 20, 50, 200, 50, "Click Me!");
+    ygui_button_on_click(btn, boundary_track_click, ctx);
+}
+
+/* Test: Click at last pixel inside right edge (display x=217) - SHOULD HIT
+ * After scaling with floorf(): button bounds = [19, 218)
+ * Display x=217 -> canvas x=217 (CANVAS_FIT is 1:1)
+ * 217 is inside [19, 218), so HIT */
+static void demo_right_hit_timer_cb(uv_timer_t* timer) {
+    terminal_ctx_t* ctx = (terminal_ctx_t*)timer->data;
+
+    if (g_assertion_pending) return;
+
+    switch (g_test_sm.state) {
+    case STATE_INIT:
+        /* Send cell size: 8 wide, 16 high - matches typical terminal */
+        terminal_send_cell_size(ctx, 16, 8);
+        g_test_sm.state = STATE_WAIT_RENDER;
+        break;
+
+    case STATE_WAIT_RENDER:
+        if (g_test_sm.render_count >= 1) {
+            g_test_sm.state = STATE_SEND_EVENT;
+            g_test_sm.step = 0;
+        }
+        break;
+
+    case STATE_SEND_EVENT:
+        if (g_test_sm.step == 0) {
+            /* Click at display x=217, y=72 (last pixel inside button)
+             * Button after scaling with floorf(): x=[19, 218), y=[48, 96)
+             * Display 217 is inside [19, 218), so should HIT */
+            terminal_send_click(ctx, "test", 1, 1, 217, 72);
+            g_test_sm.step = 1;
+            g_test_sm.render_count = 0;
+        } else if (g_test_sm.step == 1 && g_test_sm.render_count >= 1) {
+            terminal_send_click(ctx, "test", 1, 0, 217, 72);
+            g_test_sm.step = 2;
+            g_test_sm.render_count = 0;
+        } else if (g_test_sm.step == 2 && g_test_sm.render_count >= 1) {
+            g_test_sm.state = STATE_ASSERT;
+        }
+        break;
+
+    case STATE_ASSERT:
+        terminal_assert(ctx, "click_count", "1");
+        g_assertion_pending = 1;
+        g_test_sm.state = STATE_CLEANUP;
+        break;
+
+    case STATE_CLEANUP:
+        terminal_shutdown(ctx);
+        g_assertion_pending = 1;
+        g_test_sm.state = STATE_DONE;
+        break;
+
+    case STATE_DONE:
+        uv_timer_stop(timer);
+        ctx->test_done = 1;
+        break;
+
+    default:
+        break;
+    }
+}
+
+static void demo_right_hit_terminal_test(terminal_ctx_t* ctx) {
+    ctx->on_pty_data = generic_on_pty;
+    ctx->on_ctrl_response = generic_on_ctrl;
+
+    reset_test_state();
+    g_test_ctx = ctx;
+
+    uv_timer_t* timer = (uv_timer_t*)malloc(sizeof(uv_timer_t));
+    uv_timer_init(ctx->loop, timer);
+    timer->data = ctx;
+    uv_timer_start(timer, demo_right_hit_timer_cb, 10, 10);
+}
+
+/* Test: Click at first pixel outside right edge (display x=218) - SHOULD MISS
+ * After scaling with floorf(): button bounds = [19, 218)
+ * Display x=218 -> canvas x=218 (CANVAS_FIT is 1:1)
+ * 218 is NOT inside [19, 218), so MISS */
+static void demo_right_miss_timer_cb(uv_timer_t* timer) {
+    terminal_ctx_t* ctx = (terminal_ctx_t*)timer->data;
+
+    if (g_assertion_pending) return;
+
+    switch (g_test_sm.state) {
+    case STATE_INIT:
+        terminal_send_cell_size(ctx, 16, 8);
+        g_test_sm.state = STATE_WAIT_RENDER;
+        break;
+
+    case STATE_WAIT_RENDER:
+        if (g_test_sm.render_count >= 1) {
+            g_test_sm.state = STATE_SEND_EVENT;
+            g_test_sm.step = 0;
+        }
+        break;
+
+    case STATE_SEND_EVENT:
+        if (g_test_sm.step == 0) {
+            /* Click at display x=218 - first pixel outside button right edge */
+            terminal_send_click(ctx, "test", 1, 1, 218, 72);
+            g_test_sm.step = 1;
+        } else if (g_test_sm.step == 1) {
+            terminal_send_click(ctx, "test", 1, 0, 218, 72);
+            g_test_sm.step = 2;
+        } else if (g_test_sm.step >= 2) {
+            g_test_sm.step++;
+            if (g_test_sm.step > 5) {
+                g_test_sm.state = STATE_ASSERT;
+            }
+        }
+        break;
+
+    case STATE_ASSERT:
+        terminal_assert(ctx, "click_count", "0");
+        g_assertion_pending = 1;
+        g_test_sm.state = STATE_CLEANUP;
+        break;
+
+    case STATE_CLEANUP:
+        terminal_shutdown(ctx);
+        g_assertion_pending = 1;
+        g_test_sm.state = STATE_DONE;
+        break;
+
+    case STATE_DONE:
+        uv_timer_stop(timer);
+        ctx->test_done = 1;
+        break;
+
+    default:
+        break;
+    }
+}
+
+static void demo_right_miss_terminal_test(terminal_ctx_t* ctx) {
+    ctx->on_pty_data = generic_on_pty;
+    ctx->on_ctrl_response = generic_on_ctrl;
+
+    reset_test_state();
+    g_test_ctx = ctx;
+
+    uv_timer_t* timer = (uv_timer_t*)malloc(sizeof(uv_timer_t));
+    uv_timer_init(ctx->loop, timer);
+    timer->data = ctx;
+    uv_timer_start(timer, demo_right_miss_timer_cb, 10, 10);
+}
+
+/* Test: Click at first pixel inside left edge (display x=19) - SHOULD HIT
+ * After scaling with floorf(): button bounds = [19, 218)
+ * Display x=19 -> canvas x=19 (CANVAS_FIT is 1:1)
+ * 19 is inside [19, 218), so HIT */
+static void demo_left_hit_timer_cb(uv_timer_t* timer) {
+    terminal_ctx_t* ctx = (terminal_ctx_t*)timer->data;
+
+    if (g_assertion_pending) return;
+
+    switch (g_test_sm.state) {
+    case STATE_INIT:
+        terminal_send_cell_size(ctx, 16, 8);
+        g_test_sm.state = STATE_WAIT_RENDER;
+        break;
+
+    case STATE_WAIT_RENDER:
+        if (g_test_sm.render_count >= 1) {
+            g_test_sm.state = STATE_SEND_EVENT;
+            g_test_sm.step = 0;
+        }
+        break;
+
+    case STATE_SEND_EVENT:
+        if (g_test_sm.step == 0) {
+            /* Click at display x=19 (first pixel inside left edge) */
+            terminal_send_click(ctx, "test", 1, 1, 19, 72);
+            g_test_sm.step = 1;
+            g_test_sm.render_count = 0;
+        } else if (g_test_sm.step == 1 && g_test_sm.render_count >= 1) {
+            terminal_send_click(ctx, "test", 1, 0, 19, 72);
+            g_test_sm.step = 2;
+            g_test_sm.render_count = 0;
+        } else if (g_test_sm.step == 2 && g_test_sm.render_count >= 1) {
+            g_test_sm.state = STATE_ASSERT;
+        }
+        break;
+
+    case STATE_ASSERT:
+        terminal_assert(ctx, "click_count", "1");
+        g_assertion_pending = 1;
+        g_test_sm.state = STATE_CLEANUP;
+        break;
+
+    case STATE_CLEANUP:
+        terminal_shutdown(ctx);
+        g_assertion_pending = 1;
+        g_test_sm.state = STATE_DONE;
+        break;
+
+    case STATE_DONE:
+        uv_timer_stop(timer);
+        ctx->test_done = 1;
+        break;
+
+    default:
+        break;
+    }
+}
+
+static void demo_left_hit_terminal_test(terminal_ctx_t* ctx) {
+    ctx->on_pty_data = generic_on_pty;
+    ctx->on_ctrl_response = generic_on_ctrl;
+
+    reset_test_state();
+    g_test_ctx = ctx;
+
+    uv_timer_t* timer = (uv_timer_t*)malloc(sizeof(uv_timer_t));
+    uv_timer_init(ctx->loop, timer);
+    timer->data = ctx;
+    uv_timer_start(timer, demo_left_hit_timer_cb, 10, 10);
+}
+
+/* Test: Click at first pixel outside left edge (display x=18) - SHOULD MISS
+ * After scaling with floorf(): button bounds = [19, 218)
+ * Display x=18 -> canvas x=18 (CANVAS_FIT is 1:1)
+ * 18 is NOT inside [19, 218), so MISS */
+static void demo_left_miss_timer_cb(uv_timer_t* timer) {
+    terminal_ctx_t* ctx = (terminal_ctx_t*)timer->data;
+
+    if (g_assertion_pending) return;
+
+    switch (g_test_sm.state) {
+    case STATE_INIT:
+        terminal_send_cell_size(ctx, 16, 8);
+        g_test_sm.state = STATE_WAIT_RENDER;
+        break;
+
+    case STATE_WAIT_RENDER:
+        if (g_test_sm.render_count >= 1) {
+            g_test_sm.state = STATE_SEND_EVENT;
+            g_test_sm.step = 0;
+        }
+        break;
+
+    case STATE_SEND_EVENT:
+        if (g_test_sm.step == 0) {
+            /* Click at display x=18 (first pixel outside left edge) */
+            terminal_send_click(ctx, "test", 1, 1, 18, 72);
+            g_test_sm.step = 1;
+        } else if (g_test_sm.step == 1) {
+            terminal_send_click(ctx, "test", 1, 0, 18, 72);
+            g_test_sm.step = 2;
+        } else if (g_test_sm.step >= 2) {
+            g_test_sm.step++;
+            if (g_test_sm.step > 5) {
+                g_test_sm.state = STATE_ASSERT;
+            }
+        }
+        break;
+
+    case STATE_ASSERT:
+        terminal_assert(ctx, "click_count", "0");
+        g_assertion_pending = 1;
+        g_test_sm.state = STATE_CLEANUP;
+        break;
+
+    case STATE_CLEANUP:
+        terminal_shutdown(ctx);
+        g_assertion_pending = 1;
+        g_test_sm.state = STATE_DONE;
+        break;
+
+    case STATE_DONE:
+        uv_timer_stop(timer);
+        ctx->test_done = 1;
+        break;
+
+    default:
+        break;
+    }
+}
+
+static void demo_left_miss_terminal_test(terminal_ctx_t* ctx) {
+    ctx->on_pty_data = generic_on_pty;
+    ctx->on_ctrl_response = generic_on_ctrl;
+
+    reset_test_state();
+    g_test_ctx = ctx;
+
+    uv_timer_t* timer = (uv_timer_t*)malloc(sizeof(uv_timer_t));
+    uv_timer_init(ctx->loop, timer);
+    timer->data = ctx;
+    uv_timer_start(timer, demo_left_miss_timer_cb, 10, 10);
+}
+
+/*=============================================================================
  * Main
  *===========================================================================*/
 
@@ -1286,6 +1614,11 @@ int main(void) {
         {"scaled_left_miss", scaled_client_setup, scaled_left_miss_terminal_test},
         {"scaled_right_hit", scaled_client_setup, scaled_right_hit_terminal_test},
         {"scaled_right_miss", scaled_client_setup, scaled_right_miss_terminal_test},
+        /* Demo scenario tests (CANVAS_FIT + SCALE_ON, 1:1 coordinates) */
+        {"demo_right_hit", demo_client_setup, demo_right_hit_terminal_test},
+        {"demo_right_miss", demo_client_setup, demo_right_miss_terminal_test},
+        {"demo_left_hit", demo_client_setup, demo_left_hit_terminal_test},
+        {"demo_left_miss", demo_client_setup, demo_left_miss_terminal_test},
     };
 
     int count = sizeof(scenarios) / sizeof(scenarios[0]);
