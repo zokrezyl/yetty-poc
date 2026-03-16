@@ -412,9 +412,11 @@ void ygui_engine_show(ygui_engine_t* engine) {
     /* Query cell size (kept for future use) */
     ygui_osc_query_cell_size();
 
-    /* Subscribe to click events */
+    /* Subscribe to click AND move events (move needed for slider drag) */
     ygui_osc_subscribe_clicks(1);
     engine->clicks_subscribed = 1;
+    ygui_osc_subscribe_moves(1);
+    engine->moves_subscribed = 1;
 
     /* In CANVAS_FIT mode, create card with minimal data first to trigger OSC 777780.
      * The real render happens after we receive the actual pixel size.
@@ -484,8 +486,16 @@ void ygui_engine_mouse_down(ygui_engine_t* engine, float x, float y, int button)
     if (!engine) return;
     (void)button;
 
+    fprintf(stderr, "[MOUSE_DOWN] click at (%.1f, %.1f) canvas=%.0fx%.0f\n",
+            x, y, engine->width, engine->height);
     YGUI_LOG("mouse_down at (%.1f, %.1f)", x, y);
     ygui_widget_t* hit = ygui_grid_query(&engine->grid, x, y);
+    if (hit) {
+        fprintf(stderr, "[MOUSE_DOWN] HIT widget '%s' eff=(%.1f,%.1f) size=(%.1f,%.1f) right=%.1f\n",
+                hit->id, hit->effective_x, hit->effective_y, hit->w, hit->h, hit->effective_x + hit->w);
+    } else {
+        fprintf(stderr, "[MOUSE_DOWN] MISS - no widget at this position\n");
+    }
     YGUI_LOG("  grid_query returned: %s (ptr=%p)", hit ? hit->id : "NULL", (void*)hit);
 
     if (hit) {
