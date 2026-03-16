@@ -5,13 +5,18 @@
 #include "ygui_internal.h"
 #include "ydraw-capi.gen.h"
 #include <stdio.h>
-#ifndef _WIN32
+#include <string.h>
+#include <math.h>
+
+#ifdef _WIN32
+#include <io.h>
+#define STDIN_FILENO 0
+#define STDOUT_FILENO 1
+#else
 #include <unistd.h>
 #include <termios.h>
 #include <signal.h>
 #endif
-#include <string.h>
-#include <math.h>
 
 /* Debug logging - set YGUI_C_LOG env var to enable */
 static FILE* _ygui_log_file = NULL;
@@ -47,14 +52,16 @@ static float calc_grid_bucket_size(float width, float height) {
 static void handle_resize(ygui_engine_t* engine);
 
 /*=============================================================================
- * Terminal State
+ * Terminal State (Unix only - Windows uses ConPTY via yetty)
  *===========================================================================*/
 
-static struct termios ygui_orig_termios;
-static int ygui_raw_mode = 0;
 static int ygui_initialized = 0;
 static volatile int ygui_resize_pending = 0;
-static ygui_engine_t* ygui_active_engine = NULL;  /* For SIGWINCH handler */
+static ygui_engine_t* ygui_active_engine = NULL;  /* For resize handler */
+
+#ifndef _WIN32
+static struct termios ygui_orig_termios;
+static int ygui_raw_mode = 0;
 
 static void ygui_restore_terminal(void) {
     if (ygui_raw_mode) {
@@ -74,10 +81,12 @@ static void ygui_sigwinch_handler(int sig) {
     (void)sig;
     ygui_resize_pending = 1;
 }
+#endif /* !_WIN32 */
 
 int ygui_init(void) {
     if (ygui_initialized) return 0;
 
+#ifndef _WIN32
     /* Save original terminal settings */
     if (tcgetattr(STDIN_FILENO, &ygui_orig_termios) < 0) {
         ygui_set_error("Failed to get terminal attributes");
@@ -109,13 +118,16 @@ int ygui_init(void) {
 
     /* Register atexit handler */
     atexit(ygui_restore_terminal);
+#endif /* !_WIN32 */
 
     ygui_initialized = 1;
     return 0;
 }
 
 void ygui_shutdown(void) {
+#ifndef _WIN32
     ygui_restore_terminal();
+#endif
     ygui_initialized = 0;
 }
 

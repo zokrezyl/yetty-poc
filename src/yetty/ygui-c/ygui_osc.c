@@ -4,7 +4,12 @@
 
 #include "ygui_internal.h"
 #include <stdio.h>
-#ifndef _WIN32
+
+#ifdef _WIN32
+#include <io.h>
+#define write _write
+#define STDOUT_FILENO 1
+#else
 #include <unistd.h>
 #endif
 
