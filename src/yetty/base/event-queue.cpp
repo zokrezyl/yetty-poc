@@ -1,5 +1,6 @@
 #include <yetty/base/event-queue.h>
 #include <yetty/base/event-loop.h>
+#include <ytrace/ytrace.hpp>
 #include <queue>
 #include <mutex>
 
@@ -75,6 +76,7 @@ public:
             return Err<void>("uv_async_init failed: " + std::string(uv_strerror(r)));
         }
 
+        ydebug("EventQueue: initialized with uv_async handle");
         return Ok();
     }
 
@@ -86,20 +88,25 @@ public:
 
         // Wake up main thread - uv_async_send is thread-safe
         if (_asyncHandle) {
+            ydebug("EventQueue::push: sending uv_async_send");
             uv_async_send(_asyncHandle);
+        } else {
+            yerror("EventQueue::push: no async handle!");
         }
     }
 
 private:
     static void onAsync(uv_async_t* handle) {
+        ydebug("EventQueue::onAsync called!");
         auto* self = static_cast<EventQueueImpl*>(handle->data);
         self->drain();
     }
 
     void drain() {
-        // Get EventLoop on main thread - correct because drain() runs on main thread
+        // Get EventLoop on render thread (drain runs on render thread via uv async callback)
         auto loopResult = EventLoop::instance();
         if (!loopResult) {
+            yerror("EventQueue::drain: EventLoop not available!");
             return;
         }
         auto loop = *loopResult;
@@ -113,7 +120,11 @@ private:
 
         // Dispatch all events
         while (!events.empty()) {
-            (void)loop->dispatch(events.front());
+            auto& e = events.front();
+            if (e.type == Event::Type::Char) {
+                ydebug("EventQueue::drain: dispatching Char event cp={}", e.chr.codepoint);
+            }
+            (void)loop->dispatch(e);
             events.pop();
         }
     }

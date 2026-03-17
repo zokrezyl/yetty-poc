@@ -148,9 +148,14 @@ private:
     /// @param codepoint Unicode codepoint of the character
     static void charCallback(GLFWwindow* window, unsigned int codepoint) {
         (void)window;
+        ydebug("GlfwWindowSingleton::charCallback: codepoint={}", codepoint);
         auto queueResult = base::EventQueue::instance();
-        if (!queueResult) return;
+        if (!queueResult) {
+            yerror("GlfwWindowSingleton::charCallback: EventQueue not available!");
+            return;
+        }
         (*queueResult)->push(base::Event::charInput(codepoint));
+        ydebug("GlfwWindowSingleton::charCallback: pushed to EventQueue");
     }
 
     /// @brief GLFW mouse button callback - executes on MAIN THREAD
