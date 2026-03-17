@@ -138,10 +138,9 @@ jobs:
           ${{ steps.strings.outputs.build-output-dir }}/yettyc
           ${{ steps.strings.outputs.build-output-dir }}/ycat
           ${{ steps.strings.outputs.build-output-dir }}/yecho
-          assets/*.ttf
-          src/yetty/shaders/
           demo/
         if-no-files-found: warn
+        # Note: fonts and shaders are embedded via incbin, no need to include separately
 
   # =============================================================================
   # Desktop Build (macOS Intel)
@@ -186,10 +185,9 @@ jobs:
           ${{ steps.strings.outputs.build-output-dir }}/yettyc
           ${{ steps.strings.outputs.build-output-dir }}/ycat
           ${{ steps.strings.outputs.build-output-dir }}/yecho
-          assets/*.ttf
-          src/yetty/shaders/
           demo/
         if-no-files-found: warn
+        # Note: fonts and shaders are embedded via incbin, no need to include separately
 
   # =============================================================================
   # Desktop Build (Windows)
@@ -277,10 +275,7 @@ jobs:
             }
         }
 
-        # Copy all assets from build output (fonts, fonts-cdb, shaders)
-        if (Test-Path "$BuildDir/assets") {
-            Copy-Item "$BuildDir/assets" -Destination $StageDir -Recurse -Force
-        }
+        # Note: fonts and shaders are embedded via incbin, no need to copy assets/
 
         # Copy demo content
         if (Test-Path "${{ github.workspace }}/demo") {
