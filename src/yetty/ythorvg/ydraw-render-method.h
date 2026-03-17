@@ -127,6 +127,7 @@ private:
     bool tryRenderAsBox(YDrawRenderData* rd);
     bool tryRenderAsGradientBox(YDrawRenderData* rd);
     bool tryRenderAsPolygon(YDrawRenderData* rd);
+    bool tryRenderAsFilledPath(YDrawRenderData* rd);
     void renderPath(YDrawRenderData* rd);
     void renderDashedSegment(float x0, float y0, float x1, float y1,
                              uint32_t strokeColor, float strokeWidth,
