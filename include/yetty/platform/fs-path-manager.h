@@ -1,6 +1,7 @@
 #pragma once
 
 #include <yetty/base/factory.h>
+#include <yetty/result.hpp>
 #include <string>
 
 namespace yetty {
@@ -12,6 +13,9 @@ namespace yetty {
 //
 class FsPathManager : public base::ThreadSingleton<FsPathManager> {
 public:
+    using Ptr = std::shared_ptr<FsPathManager>;
+    static Result<Ptr> createImpl();
+
     virtual ~FsPathManager() = default;
 
     // Asset directories (shaders, fonts extracted via incbin)

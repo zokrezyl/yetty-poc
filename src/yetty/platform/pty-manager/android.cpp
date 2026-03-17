@@ -20,12 +20,12 @@ public:
 
 // Factory
 Result<PtyManager::Ptr> PtyManager::createImpl() {
-    auto impl = Ptr(new AndroidPtyManager());
-    auto initResult = static_cast<AndroidPtyManager*>(impl.get())->init();
-    if (!initResult) {
-        return Err<Ptr>("AndroidPtyManager init failed", initResult);
+    auto mgr = new AndroidPtyManager();
+    if (auto res = mgr->init(); !res) {
+        delete mgr;
+        return Err<Ptr>("AndroidPtyManager init failed", res);
     }
-    return Ok(std::move(impl));
+    return Ok(Ptr(mgr));
 }
 
 } // namespace yetty

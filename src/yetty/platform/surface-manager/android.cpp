@@ -75,12 +75,12 @@ private:
 
 // Factory
 Result<SurfaceManager::Ptr> SurfaceManager::createImpl() {
-    auto impl = Ptr(new AndroidSurfaceManager());
-    auto initResult = static_cast<AndroidSurfaceManager*>(impl.get())->init();
-    if (!initResult) {
-        return Err<Ptr>("AndroidSurfaceManager init failed", initResult);
+    auto mgr = new AndroidSurfaceManager();
+    if (auto res = mgr->init(); !res) {
+        delete mgr;
+        return Err<Ptr>("AndroidSurfaceManager init failed", res);
     }
-    return Ok(std::move(impl));
+    return Ok(Ptr(mgr));
 }
 
 } // namespace yetty

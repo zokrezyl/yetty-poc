@@ -35,12 +35,12 @@ private:
 
 // Factory
 Result<ClipboardManager::Ptr> ClipboardManager::createImpl() {
-    auto impl = Ptr(new AndroidClipboardManager());
-    auto initResult = static_cast<AndroidClipboardManager*>(impl.get())->init();
-    if (!initResult) {
-        return Err<Ptr>("AndroidClipboardManager init failed", initResult);
+    auto mgr = new AndroidClipboardManager();
+    if (auto res = mgr->init(); !res) {
+        delete mgr;
+        return Err<Ptr>("AndroidClipboardManager init failed", res);
     }
-    return Ok(std::move(impl));
+    return Ok(Ptr(mgr));
 }
 
 } // namespace yetty

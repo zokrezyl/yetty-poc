@@ -229,12 +229,12 @@ AndroidInputManager* AndroidInputManager::g_instance = nullptr;
 
 // Factory
 Result<InputManager::Ptr> InputManager::createImpl() {
-    auto impl = Ptr(new AndroidInputManager());
-    auto initResult = static_cast<AndroidInputManager*>(impl.get())->init();
-    if (!initResult) {
-        return Err<Ptr>("AndroidInputManager init failed", initResult);
+    auto mgr = new AndroidInputManager();
+    if (auto res = mgr->init(); !res) {
+        delete mgr;
+        return Err<Ptr>("AndroidInputManager init failed", res);
     }
-    return Ok(std::move(impl));
+    return Ok(Ptr(mgr));
 }
 
 // C function for android_main to call

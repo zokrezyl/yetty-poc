@@ -241,12 +241,12 @@ private:
 };
 
 Result<GlfwWindowSingleton::Ptr> GlfwWindowSingleton::createImpl() {
-    auto impl = Ptr(new GlfwWindowSingletonImpl());
-    auto initResult = static_cast<GlfwWindowSingletonImpl*>(impl.get())->init();
-    if (!initResult) {
-        return Err<Ptr>("GlfwWindowSingleton init failed", initResult);
+    auto singleton = new GlfwWindowSingletonImpl();
+    if (auto res = singleton->init(); !res) {
+        delete singleton;
+        return Err<Ptr>("GlfwWindowSingleton init failed", res);
     }
-    return Ok(std::move(impl));
+    return Ok(Ptr(singleton));
 }
 
 } // namespace yetty

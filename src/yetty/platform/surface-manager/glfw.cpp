@@ -57,12 +57,12 @@ private:
 
 // Factory
 Result<SurfaceManager::Ptr> SurfaceManager::createImpl() {
-    auto impl = Ptr(new GlfwSurfaceManager());
-    auto initResult = static_cast<GlfwSurfaceManager*>(impl.get())->init();
-    if (!initResult) {
-        return Err<Ptr>("GlfwSurfaceManager init failed", initResult);
+    auto mgr = new GlfwSurfaceManager();
+    if (auto res = mgr->init(); !res) {
+        delete mgr;
+        return Err<Ptr>("GlfwSurfaceManager init failed", res);
     }
-    return Ok(std::move(impl));
+    return Ok(Ptr(mgr));
 }
 
 } // namespace yetty

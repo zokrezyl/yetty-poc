@@ -203,23 +203,100 @@ src/yetty/platform/
     ...
 ```
 
+## Implementation Status
+
+| Manager | Linux | macOS | Windows | Android | WebASM |
+|---------|-------|-------|---------|---------|--------|
+| InitManager | DONE | shared | shared | N/A | N/A |
+| GlfwWindowSingleton | DONE | shared | shared | N/A | N/A |
+| SurfaceManager | DONE | shared | shared | DONE | DONE |
+| InputManager | DONE | shared | shared | DONE | DONE |
+| FsPathManager | DONE | shared | DONE | DONE | DONE |
+| ClipboardManager | DONE | shared | shared | stub | DONE |
+| PtyManager | DONE | shared | DONE | stub | DONE |
+
+**Legend:**
+- **DONE**: Fully implemented with new factory pattern
+- **shared**: Uses same code as Linux (GLFW platforms share code)
+- **stub**: Factory exists but implementation incomplete (e.g., JNI needed)
+- **N/A**: Not applicable (WebASM is single-threaded, no InitManager needed)
+
+### Notes
+
+**Linux/macOS/Windows (GLFW platforms):**
+- Share `glfw-init-manager.cpp` and `glfw-window-singleton.cpp`
+- macOS uses CoreText for fonts, Windows uses DirectWrite
+- PTY: Linux/macOS use `forkpty()`, Windows uses ConPTY
+
+**Android:**
+- No InitManager (android_main handles lifecycle)
+- AndroidAppSingleton provides access to `android_app*`
+- Input via `yetty_android_dispatch_input()` C function
+- PTY via toybox telnet or Termux connection
+
+**WebASM:**
+- Single-threaded, no InitManager or EventQueue needed
+- Input via Emscripten HTML5 callbacks
+- PTY via JSLinux iframe with postMessage
+
+## File Structure
+
+```
+include/yetty/platform/
+    init-manager.h          # ThreadSingleton - platform init, thread management
+    input-manager.h         # ThreadSingleton - raw->internal event transform
+    surface-manager.h       # ThreadSingleton - window properties, surface
+    fs-path-manager.h       # ThreadSingleton - asset paths
+    clipboard-manager.h     # ThreadSingleton - clipboard access
+    pty-manager.h           # ThreadSingleton - PTY creation
+
+src/yetty/platform/
+    shared/
+        glfw-init-manager.cpp       # InitManager for GLFW (Linux/macOS/Windows)
+        glfw-window-singleton.cpp   # Window creation, callbacks
+        glfw-window-singleton.h     # Internal header
+        android-app-singleton.cpp   # AndroidAppSingleton
+        android-app-singleton.h     # Internal header
+    input-manager/
+        glfw.cpp            # GLFW: Ctrl+letter -> control char, scroll -> zoom
+        android.cpp         # Android: touch -> mouse, pinch -> zoom
+        webasm.cpp          # Emscripten HTML5 callbacks
+    surface-manager/
+        glfw.cpp            # Gets window from GlfwWindowSingleton
+        android.cpp         # Gets window from AndroidAppSingleton
+        webasm.cpp          # Canvas element sizing
+    fs-path-manager/
+        unix.cpp            # Linux/macOS: XDG paths
+        windows.cpp         # Windows: %LOCALAPPDATA%
+        android.cpp         # Android data directory
+        webasm.cpp          # /assets preload paths
+    clipboard-manager/
+        glfw.cpp            # GLFW clipboard (Linux/macOS/Windows)
+        android.cpp         # stub (JNI needed)
+        webasm.cpp          # navigator.clipboard API
+    pty-manager/
+        unix.cpp            # Linux/macOS: forkpty()
+        windows.cpp         # Windows: ConPTY
+        android.cpp         # stub (toybox/termux)
+        webasm.cpp          # JSLinux iframe
+    obsolete/               # Old monolithic Platform implementations
+        glfw/
+        android/
+        windows/
+        webasm/
+```
+
 ## Build Integration
 
-CMake adds platform-specific sources:
+CMake adds platform-specific sources. See `build-tools/cmake/targets/*.cmake`:
 
 ```cmake
-if(ANDROID)
-    target_sources(yetty PRIVATE
-        platform/android/...)
-elseif(EMSCRIPTEN)
-    target_sources(yetty PRIVATE
-        platform/webasm/...)
-else()
-    target_sources(yetty PRIVATE
-        platform/shared/glfw-init-manager.cpp
-        platform/shared/glfw-window-singleton.cpp
-        platform/input-manager/glfw.cpp
-        platform/surface-manager/glfw.cpp
-        ...)
-endif()
+# linux.cmake
+set(YETTY_PLATFORM_SOURCES
+    platform/shared/glfw-init-manager.cpp
+    platform/shared/glfw-window-singleton.cpp
+    platform/input-manager/glfw.cpp
+    platform/surface-manager/glfw.cpp
+    platform/pty-manager/unix.cpp
+)
 ```

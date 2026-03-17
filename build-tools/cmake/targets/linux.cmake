@@ -22,6 +22,8 @@ set(YETTY_PLATFORM_SOURCES
     ${YETTY_ROOT}/src/yetty/platform/input-manager/glfw.cpp
     ${YETTY_ROOT}/src/yetty/platform/surface-manager/glfw.cpp
     ${YETTY_ROOT}/src/yetty/platform/pty-manager/unix.cpp
+    ${YETTY_ROOT}/src/yetty/platform/fs-path-manager/unix.cpp
+    ${YETTY_ROOT}/src/yetty/platform/clipboard-manager/glfw.cpp
 )
 
 # Create executable with core sources + platform

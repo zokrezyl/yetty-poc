@@ -74,12 +74,12 @@ private:
 
 // Factory
 Result<FsPathManager::Ptr> FsPathManager::createImpl() {
-    auto impl = Ptr(new AndroidFsPathManager());
-    auto initResult = static_cast<AndroidFsPathManager*>(impl.get())->init();
-    if (!initResult) {
-        return Err<Ptr>("AndroidFsPathManager init failed", initResult);
+    auto mgr = new AndroidFsPathManager();
+    if (auto res = mgr->init(); !res) {
+        delete mgr;
+        return Err<Ptr>("AndroidFsPathManager init failed", res);
     }
-    return Ok(std::move(impl));
+    return Ok(Ptr(mgr));
 }
 
 } // namespace yetty

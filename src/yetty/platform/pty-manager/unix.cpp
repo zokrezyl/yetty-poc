@@ -210,12 +210,12 @@ public:
 
 // Factory
 Result<PtyManager::Ptr> PtyManager::createImpl() {
-    auto impl = Ptr(new UnixPtyManager());
-    auto initResult = static_cast<UnixPtyManager*>(impl.get())->init();
-    if (!initResult) {
-        return Err<Ptr>("UnixPtyManager init failed", initResult);
+    auto mgr = new UnixPtyManager();
+    if (auto res = mgr->init(); !res) {
+        delete mgr;
+        return Err<Ptr>("UnixPtyManager init failed", res);
     }
-    return Ok(std::move(impl));
+    return Ok(Ptr(mgr));
 }
 
 } // namespace yetty
