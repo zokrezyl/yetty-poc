@@ -122,7 +122,6 @@ public:
             ythorvgTerm();
         }
 
-        ydebug("YThorVG::dispose: done");
         return Ok();
     }
 

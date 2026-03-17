@@ -500,16 +500,8 @@ void ygui_engine_mouse_down(ygui_engine_t* engine, float x, float y, int button)
     if (!engine) return;
     (void)button;
 
-    fprintf(stderr, "[MOUSE_DOWN] click at (%.1f, %.1f) canvas=%.0fx%.0f\n",
-            x, y, engine->width, engine->height);
     YGUI_LOG("mouse_down at (%.1f, %.1f)", x, y);
     ygui_widget_t* hit = ygui_grid_query(&engine->grid, x, y);
-    if (hit) {
-        fprintf(stderr, "[MOUSE_DOWN] HIT widget '%s' eff=(%.1f,%.1f) size=(%.1f,%.1f) right=%.1f\n",
-                hit->id, hit->effective_x, hit->effective_y, hit->w, hit->h, hit->effective_x + hit->w);
-    } else {
-        fprintf(stderr, "[MOUSE_DOWN] MISS - no widget at this position\n");
-    }
     YGUI_LOG("  grid_query returned: %s (ptr=%p)", hit ? hit->id : "NULL", (void*)hit);
 
     if (hit) {
