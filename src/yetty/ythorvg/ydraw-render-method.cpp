@@ -789,9 +789,6 @@ bool YDrawRenderMethod::tryRenderAsFilledPath(YDrawRenderData* rd) {
     uint8_t strokeA = static_cast<uint8_t>((rd->strokeA * rd->opacity) / 255);
     uint32_t strokeColor = (strokeA > 0) ? rgbaToPackedABGR(rd->strokeR, rd->strokeG, rd->strokeB, strokeA) : 0;
 
-    ydebug("tryRenderAsFilledPath: flattened {} vertices, {} contours, fill=0x{:08X}",
-           totalVertexCount, validContourStarts.size(), fillColor);
-
     Result<uint32_t> result;
     if (validContourStarts.size() == 1) {
         // Single contour - use simple polygon
