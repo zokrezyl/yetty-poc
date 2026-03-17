@@ -28,11 +28,25 @@ add_subdirectory(${YETTY_ROOT}/src/yetty ${CMAKE_BINARY_DIR}/src/yetty)
 # VNC server/client support
 add_subdirectory(${YETTY_ROOT}/src/yetty/vnc ${CMAKE_BINARY_DIR}/src/yetty/vnc)
 
+# Platform manager sources (new architecture)
+set(YETTY_PLATFORM_SOURCES
+    ${YETTY_ROOT}/src/yetty/platform/init-manager/android.cpp
+    ${YETTY_ROOT}/src/yetty/platform/shared/android-app-singleton.cpp
+    ${YETTY_ROOT}/src/yetty/platform/input-manager/android.cpp
+    ${YETTY_ROOT}/src/yetty/platform/surface-manager/android.cpp
+    ${YETTY_ROOT}/src/yetty/platform/pty-manager/android.cpp
+    ${YETTY_ROOT}/src/yetty/platform/fs-path-manager/android.cpp
+    ${YETTY_ROOT}/src/yetty/platform/clipboard-manager/android.cpp
+    ${YETTY_ROOT}/src/yetty/platform/webgpu-manager/android.cpp
+)
+
 # Create shared library with core sources + android platform
 add_library(yetty SHARED
     ${YETTY_CORE_SOURCES}
     ${YETTY_ANDROID_SOURCES}
-    ${YETTY_ROOT}/src/yetty/platform/android-platform.cpp
+    ${YETTY_PLATFORM_SOURCES}
+    # Keep old platform for now (compatibility during migration)
+    ${YETTY_ROOT}/src/yetty/platform/obsolete/android/android-platform.cpp
     ${YETTY_ROOT}/src/yetty/msdf-gen/generator.cpp
 )
 

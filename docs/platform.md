@@ -16,21 +16,24 @@ Yetty runs on desktop (Linux/macOS/Windows), Android, and WebAssembly. Each plat
 5. EventQueue wakes render thread via libuv async
 
 **Android:**
-- **Main thread**: `android_main` handles both input (ALooper) and rendering
+- **Single thread**: `android_main` handles both input (ALooper) and rendering
+- InitManager wraps app lifecycle, processes events via ALooper
 
 **WebASM:**
-- **Single thread**: Browser doesn't support multiple threads. Everything runs on main thread via `requestAnimationFrame`. No separate render thread, no `InitManager` - just direct initialization and RAF loop.
+- **Single thread**: Browser event loop drives everything via `requestAnimationFrame`
+- InitManager sets up the RAF loop, returns immediately (browser takes over)
 
 ## Managers
 
 ### InitManager
 
-**ThreadSingleton** (main thread). Entry point for platform initialization. All platforms except WebASM.
+**ObjectFactory** (created once in main). Entry point for platform initialization.
 
 | Platform | Responsibilities |
 |----------|------------------|
 | GLFW | `glfwInit()`, spawn render thread, block on `glfwWaitEvents()` |
-| Android | Setup ALooper, spawn render thread |
+| Android | App lifecycle, ALooper event processing (single-threaded) |
+| WebASM | Setup RAF loop, returns immediately (browser takes over) |
 
 ```cpp
 // main.cpp (desktop/Android)
@@ -207,19 +210,20 @@ src/yetty/platform/
 
 | Manager | Linux | macOS | Windows | Android | WebASM |
 |---------|-------|-------|---------|---------|--------|
-| InitManager | DONE | shared | shared | N/A | N/A |
+| InitManager | DONE | DONE | DONE | DONE | DONE |
 | GlfwWindowSingleton | DONE | shared | shared | N/A | N/A |
 | SurfaceManager | DONE | shared | shared | DONE | DONE |
 | InputManager | DONE | shared | shared | DONE | DONE |
 | FsPathManager | DONE | shared | DONE | DONE | DONE |
 | ClipboardManager | DONE | shared | shared | stub | DONE |
 | PtyManager | DONE | shared | DONE | stub | DONE |
+| WebGpuManager | DONE | DONE | DONE | DONE | DONE |
 
 **Legend:**
 - **DONE**: Fully implemented with new factory pattern
-- **shared**: Uses same code as Linux (GLFW platforms share code)
+- **shared**: Uses same GLFW code as Linux
 - **stub**: Factory exists but implementation incomplete (e.g., JNI needed)
-- **N/A**: Not applicable (WebASM is single-threaded, no InitManager needed)
+- **N/A**: Not applicable (Android/WebASM don't use GLFW)
 
 ### Notes
 
@@ -249,14 +253,20 @@ include/yetty/platform/
     fs-path-manager.h       # ThreadSingleton - asset paths
     clipboard-manager.h     # ThreadSingleton - clipboard access
     pty-manager.h           # ThreadSingleton - PTY creation
+    webgpu-manager.h        # ThreadSingleton - WebGPU init, device, surface
 
 src/yetty/platform/
     shared/
-        glfw-init-manager.cpp       # InitManager for GLFW (Linux/macOS/Windows)
-        glfw-window-singleton.cpp   # Window creation, callbacks
+        glfw-window-singleton.cpp   # Window creation, GLFW callbacks
         glfw-window-singleton.h     # Internal header
         android-app-singleton.cpp   # AndroidAppSingleton
         android-app-singleton.h     # Internal header
+    init-manager/
+        linux.cpp           # Linux: GLFW + X11/Wayland
+        macos.cpp           # macOS: GLFW + Cocoa
+        windows.cpp         # Windows: GLFW + Win32
+        android.cpp         # Android: app lifecycle, ALooper
+        webasm.cpp          # WebASM: Emscripten RAF loop
     input-manager/
         glfw.cpp            # GLFW: Ctrl+letter -> control char, scroll -> zoom
         android.cpp         # Android: touch -> mouse, pinch -> zoom
@@ -279,6 +289,12 @@ src/yetty/platform/
         windows.cpp         # Windows: ConPTY
         android.cpp         # stub (toybox/termux)
         webasm.cpp          # JSLinux iframe
+    webgpu-manager/
+        linux.cpp           # Dawn/Vulkan
+        macos.cpp           # Dawn/Metal
+        windows.cpp         # Dawn/D3D12 with D3D11 fallback
+        android.cpp         # Vulkan required, reject Null backend
+        webasm.cpp          # Async with emscripten_sleep
     obsolete/               # Old monolithic Platform implementations
         glfw/
         android/

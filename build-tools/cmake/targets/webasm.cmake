@@ -20,10 +20,23 @@ set(YETTY_SHADERS_DIR "/assets/shaders" CACHE STRING "Shader directory path")
 # Add src/yetty (builds libraries)
 add_subdirectory(${YETTY_ROOT}/src/yetty ${CMAKE_BINARY_DIR}/src/yetty)
 
+# Platform manager sources (new architecture)
+set(YETTY_PLATFORM_SOURCES
+    ${YETTY_ROOT}/src/yetty/platform/init-manager/webasm.cpp
+    ${YETTY_ROOT}/src/yetty/platform/input-manager/webasm.cpp
+    ${YETTY_ROOT}/src/yetty/platform/surface-manager/webasm.cpp
+    ${YETTY_ROOT}/src/yetty/platform/pty-manager/webasm.cpp
+    ${YETTY_ROOT}/src/yetty/platform/fs-path-manager/webasm.cpp
+    ${YETTY_ROOT}/src/yetty/platform/clipboard-manager/webasm.cpp
+    ${YETTY_ROOT}/src/yetty/platform/webgpu-manager/webasm.cpp
+)
+
 # Create executable with core sources + web platform
 add_executable(yetty
     ${YETTY_CORE_SOURCES}
-    ${YETTY_ROOT}/src/yetty/platform/web-platform.cpp
+    ${YETTY_PLATFORM_SOURCES}
+    # Keep old platform for now (compatibility during migration)
+    ${YETTY_ROOT}/src/yetty/platform/obsolete/web/web-platform.cpp
 )
 
 # JSLinux integration (downloads and copies files)

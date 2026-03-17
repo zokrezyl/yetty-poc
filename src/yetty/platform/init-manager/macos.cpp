@@ -1,6 +1,6 @@
 #include <yetty/platform/init-manager.h>
 
-#if !defined(__ANDROID__) && !defined(__EMSCRIPTEN__)
+#if defined(__APPLE__)
 
 #include <yetty/result.hpp>
 #include <ytrace/ytrace.hpp>
@@ -10,27 +10,27 @@
 
 namespace yetty {
 
-class GlfwInitManager : public InitManager {
+class MacosInitManager : public InitManager {
 public:
-    ~GlfwInitManager() override {
+    ~MacosInitManager() override {
         if (_glfwInitialized) {
             glfwTerminate();
         }
     }
 
     Result<void> init() {
+        // macOS-specific: Cocoa initialization handled by GLFW
         if (!glfwInit()) {
             return Err<void>("Failed to initialize GLFW");
         }
         _glfwInitialized = true;
-        ydebug("GlfwInitManager: GLFW initialized");
+        ydebug("MacosInitManager: GLFW initialized");
         return Ok();
     }
 
     void run(RenderThreadFunc renderThreadFunc) override {
-        ydebug("GlfwInitManager: spawning render thread");
+        ydebug("MacosInitManager: spawning render thread");
 
-        // Spawn render thread - window creation happens there via GlfwWindowSingleton
         std::thread renderThread([this, renderThreadFunc]() {
             ydebug("Render thread started");
             renderThreadFunc();
@@ -38,18 +38,15 @@ public:
             stop();
         });
 
-        // Block on event loop (main thread)
-        // glfwWaitEvents is GLOBAL - processes events for all windows
-        ydebug("GlfwInitManager: starting event loop");
+        ydebug("MacosInitManager: starting event loop");
         _running = true;
         while (_running) {
             glfwWaitEvents();
         }
-        ydebug("GlfwInitManager: event loop ended");
+        ydebug("MacosInitManager: event loop ended");
 
-        // Wait for render thread
         renderThread.join();
-        ydebug("GlfwInitManager: render thread joined");
+        ydebug("MacosInitManager: render thread joined");
     }
 
     void stop() override {
@@ -63,14 +60,14 @@ private:
 };
 
 Result<InitManager::Ptr> InitManager::createImpl() {
-    auto impl = std::make_shared<GlfwInitManager>();
-    auto initResult = impl->init();
-    if (!initResult) {
-        return Err<InitManager::Ptr>("GlfwInitManager init failed", initResult);
+    auto mgr = new MacosInitManager();
+    if (auto res = mgr->init(); !res) {
+        delete mgr;
+        return Err<Ptr>("MacosInitManager init failed", res);
     }
-    return Ok(impl);
+    return Ok(Ptr(mgr));
 }
 
 } // namespace yetty
 
-#endif // !__ANDROID__ && !__EMSCRIPTEN__
+#endif // __APPLE__
