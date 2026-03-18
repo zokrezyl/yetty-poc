@@ -56,7 +56,8 @@ check_dir() {
 }
 
 # ---------------------------------------------------------------------------
-# Checks for desktop platforms: executables, fonts, shaders, demo
+# Checks for desktop platforms: executables and demo
+# Note: fonts and shaders are embedded via incbin, not included separately
 # ---------------------------------------------------------------------------
 check_desktop() {
     local dir="$1" platform="$2" exe_dir="$3" exe_ext="${4:-}"
@@ -66,19 +67,8 @@ check_desktop() {
     check_file "$dir" "${exe_dir}/ycat${exe_ext}"   "ycat executable"
     check_file "$dir" "${exe_dir}/yecho${exe_ext}"  "yecho executable"
 
-    info "[$platform] TTF Fonts"
-    check_file "$dir" "assets/DejaVuSansMNerdFontMono-Regular.ttf"     "Regular font"
-    check_file "$dir" "assets/DejaVuSansMNerdFontMono-Bold.ttf"        "Bold font"
-    check_file "$dir" "assets/DejaVuSansMNerdFontMono-Oblique.ttf"     "Oblique font"
-    check_file "$dir" "assets/DejaVuSansMNerdFontMono-BoldOblique.ttf" "BoldOblique font"
-
-    info "[$platform] Shaders"
-    check_dir  "$dir" "src/yetty/shaders"                         "Shaders directory"
-    check_file "$dir" "src/yetty/shaders/gpu-screen.wgsl"         "GPU screen shader"
-    check_file "$dir" "src/yetty/shaders/cursor.wgsl"             "Cursor shader"
-    check_file "$dir" "src/yetty/shaders/msdf_gen.wgsl"           "MSDF gen shader"
-    check_dir  "$dir" "src/yetty/shaders/cards"                   "Card shaders"
-    check_file "$dir" "src/yetty/shaders/cards/0x0003-ydraw.wgsl" "Ydraw card shader"
+    # Note: TTF fonts and shaders are embedded via incbin into the executable
+    # They are NOT included as separate files in desktop releases (see issue #171)
 
     info "[$platform] Demo files"
     check_dir  "$dir" "demo"                                "Demo directory"

@@ -178,23 +178,10 @@ cp "$TOYBOX_BIN" "$JNILIBS_DIR/libtoybox.so"
 chmod +x "$JNILIBS_DIR/libtoybox.so"
 echo "Copied toybox to jniLibs: $JNILIBS_DIR/libtoybox.so"
 
-# Create symlinks for ALL toybox applets in jniLibs
-cd "$JNILIBS_DIR"
-
-# Get list of all enabled commands from the generated header
-TOYBOX_COMMANDS=$(grep 'USE_.*NEWTOY' "$TOYBOX_SRC/generated/newtoys.h" 2>/dev/null | sed 's/.*NEWTOY(\([^,]*\),.*/\1/' | sort -u)
-
-# If that fails, get from the built binary's help output pattern
-if [ -z "$TOYBOX_COMMANDS" ]; then
-    # Extract command names from Config.in
-    TOYBOX_COMMANDS=$(grep -E "^config [A-Z]" "$TOYBOX_SRC/generated/Config.in" 2>/dev/null | awk '{print tolower($2)}' | sort -u)
-fi
-
-# Create symlinks for each command (skip "toybox" itself)
-for cmd in $TOYBOX_COMMANDS; do
-    [ -n "$cmd" ] && [ "$cmd" != "toybox" ] && ln -sf libtoybox.so "lib${cmd}.so" 2>/dev/null || true
-done
-echo "Created symlinks for $(echo $TOYBOX_COMMANDS | wc -w) toybox commands -> libtoybox.so"
+# Note: Do NOT create symlinks here!
+# Symlinks in jniLibs get resolved by gradle, resulting in 312 copies of the binary (~405MB wasted).
+# Instead, the app creates symlinks at runtime in setupBinDirectory() (android-platform.cpp).
+# This reduces APK size from ~405MB to ~1.3MB for toybox. See issue #171.
 
 # Build shell wrapper (liblogin.so) that handles -h flag from telnetd
 # telnetd calls: login_program -h hostname
