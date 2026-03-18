@@ -1968,6 +1968,13 @@ void YettyImpl::initEventLoop() noexcept {
     // Register for ScreenUpdate events (PTY activity)
     loop->registerListener(base::Event::Type::ScreenUpdate, sharedAs<base::EventListener>());
 
+    // Start the frame timer - each platform's EventLoop handles this appropriately
+    // Desktop: libuv timer, Android: timerfd+ALooper, WebASM: emscripten timer
+    if (auto res = loop->startTimer(_frameTimerId); !res) {
+        yerror("Failed to start frame timer: {}", error_msg(res));
+        return;
+    }
+
     ydebug("Event loop initialized");
 }
 
@@ -2083,8 +2090,9 @@ Result<void> YettyImpl::run() noexcept {
     std::signal(SIGINT, signalHandler);
     std::signal(SIGTERM, signalHandler);
 
+    // Timer is already started in initEventLoop()
+    // Just start the event loop - blocks on desktop, no-op on Android
     auto loop = *base::EventLoop::instance();
-    loop->startTimer(_frameTimerId);
     loop->start();
 
     ydebug("Run finished.");

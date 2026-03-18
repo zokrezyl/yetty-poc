@@ -4,16 +4,16 @@
 #include <queue>
 #include <mutex>
 
-#if !defined(YETTY_WEB) && !defined(YETTY_ANDROID) && !defined(__ANDROID__)
+#if !defined(YETTY_WEB)
 #include <uv.h>
 #endif
 
 namespace yetty {
 namespace base {
 
-#if defined(YETTY_WEB) || defined(YETTY_ANDROID) || defined(__ANDROID__)
+#if defined(YETTY_WEB)
 
-// Web/WASM/Android implementation - single-threaded, no libuv needed
+// Web/WASM implementation - single-threaded, no cross-thread communication needed
 // Events are queued and dispatched on next frame
 class EventQueueImpl : public EventQueue {
 public:
@@ -134,7 +134,7 @@ private:
     uv_async_t* _asyncHandle = nullptr;
 };
 
-#endif // YETTY_WEB || YETTY_ANDROID
+#endif // YETTY_WEB
 
 Result<EventQueue::Ptr> EventQueue::createImpl() noexcept {
     auto impl = std::make_shared<EventQueueImpl>();

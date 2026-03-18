@@ -12,9 +12,6 @@
 // Forward declaration of extern "C" function defined in input-manager/android.cpp
 extern "C" void yetty_android_dispatch_input(AInputEvent* event);
 
-// Forward declaration of event loop tick function
-extern "C" void yetty_android_event_loop_tick();
-
 namespace yetty {
 
 class AndroidInitManager : public InitManager {
@@ -65,11 +62,8 @@ public:
                     _renderFunc();
                     __android_log_print(ANDROID_LOG_INFO, "yetty", "AndroidInitManager: renderFunc returned");
                 }
-
-                // After setup: tick the event loop to process timers and render frames
-                if (_renderStarted) {
-                    yetty_android_event_loop_tick();
-                }
+                // EventLoop timers/polls are registered with ALooper callbacks
+                // They fire automatically during ALooper_pollAll above
             }
         }
 
