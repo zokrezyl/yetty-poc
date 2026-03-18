@@ -4318,7 +4318,9 @@ bool GPUScreenImpl::handleCardOSCSequence(const std::string &sequence,
 
     // Send OSC 777780 with card's actual pixel dimensions (FLOAT for precision)
     // Format: OSC 777780 ; card-name ; pixel-width ; pixel-height ST
-    if (_outputCallback && !card->name().empty()) {
+    // Only send when client has subscribed to card events (DEC 1500/1501)
+    if (_outputCallback && !card->name().empty() &&
+        (_cardClickEventsEnabled || _cardMoveEventsEnabled)) {
       float pixelW = static_cast<float>(card->widthCells()) * getCellWidthF();
       float pixelH = static_cast<float>(card->heightCells()) * getCellHeightF();
       char oscBuf[256];
