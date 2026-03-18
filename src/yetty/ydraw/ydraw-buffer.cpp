@@ -487,8 +487,32 @@ Result<void> YDrawBuffer::deserialize(const uint8_t* data, size_t size) {
     _sceneMaxX = readF32();
     _sceneMaxY = readF32();
 
-    ydebug("deserialize: done - {} prims, {} fonts, {} spans, bounds=[{},{},{},{}]",
-           _prims.size(), _fonts.size(), _textSpans.size(),
+    // Images (if present - check remaining data)
+    if (pos + 4 <= size) {
+        uint32_t imageCount = readU32();
+        ydebug("deserialize: imageCount={}", imageCount);
+        for (uint32_t i = 0; i < imageCount && pos < size; i++) {
+            ImageData img;
+            img.x = readF32();
+            img.y = readF32();
+            img.w = readF32();
+            img.h = readF32();
+            img.pixelWidth = readU32();
+            img.pixelHeight = readU32();
+            img.layer = readU32();
+            uint32_t pixelDataLen = readU32();
+            if (pos + pixelDataLen > size) {
+                ywarn("deserialize: image {} pixel data truncated", i);
+                break;
+            }
+            img.pixels.assign(data + pos, data + pos + pixelDataLen);
+            pos += pixelDataLen;
+            _images.push_back(std::move(img));
+        }
+    }
+
+    ydebug("deserialize: done - {} prims, {} fonts, {} spans, {} images, bounds=[{},{},{},{}]",
+           _prims.size(), _fonts.size(), _textSpans.size(), _images.size(),
            _sceneMinX, _sceneMinY, _sceneMaxX, _sceneMaxY);
 
     return Ok();
