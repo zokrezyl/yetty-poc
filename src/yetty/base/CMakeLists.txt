@@ -1,7 +1,14 @@
 # yetty base utilities
+# Event loop implementation is platform-specific
+if(EMSCRIPTEN)
+    set(EVENT_LOOP_SRC ${YETTY_ROOT}/src/yetty/platform/event-loop/webasm.cpp)
+else()
+    set(EVENT_LOOP_SRC ${YETTY_ROOT}/src/yetty/platform/event-loop/libuv.cpp)
+endif()
+
 add_library(yetty_base STATIC
-    event-loop.cpp
     event-queue.cpp
+    ${EVENT_LOOP_SRC}
 )
 
 target_include_directories(yetty_base PUBLIC

@@ -1,6 +1,6 @@
 #include <yetty/platform.h>
 #include <yetty/pty-provider.h>
-#include <yetty/base/event-loop.h>
+#include <yetty/platform/event-loop.h>
 #include <yetty/base/event.h>
 #include <ytrace/ytrace.hpp>
 #include <cmath>

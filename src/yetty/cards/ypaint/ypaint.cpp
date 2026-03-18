@@ -12,7 +12,7 @@
 #include <fstream>
 #include <lz4frame.h>
 #include <sstream>
-#include <yetty/base/event-loop.h>
+#include <yetty/platform/event-loop.h>
 #include <yetty/ypaint/painter.h>
 #include <ytrace/ytrace.hpp>
 

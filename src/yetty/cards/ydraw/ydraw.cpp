@@ -7,7 +7,7 @@
 #include <yetty/ydraw-builder.h>
 #include "../../ydraw/animation.h"
 #include "../../ydraw/yaml2ydraw.h"
-#include <yetty/base/event-loop.h>
+#include <yetty/platform/event-loop.h>
 #include <ytrace/ytrace.hpp>
 #include <lz4frame.h>
 #include <sstream>

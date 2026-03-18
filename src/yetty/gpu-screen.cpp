@@ -1451,8 +1451,8 @@ void GPUScreenImpl::clampVisualZoomOffset() {
 }
 
 void GPUScreenImpl::requestScreenUpdate() {
-  if (_ctx.platform) {
-    _ctx.platform->requestRender();
+  if (_ctx.surfaceManager) {
+    _ctx.surfaceManager->requestRender();
   }
 }
 

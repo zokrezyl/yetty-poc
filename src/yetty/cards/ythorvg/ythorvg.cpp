@@ -6,7 +6,7 @@
 #include "../../ythorvg/ydraw-render-method.h"
 #include "../../ydraw/ydraw-buffer.h"
 #include <yetty/ydraw-builder.h>
-#include <yetty/base/event-loop.h>
+#include <yetty/platform/event-loop.h>
 #include <ytrace/ytrace.hpp>
 
 // ThorVG internal headers

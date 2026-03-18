@@ -16,12 +16,14 @@ add_subdirectory(${YETTY_ROOT}/src/yetty/client ${CMAKE_BINARY_DIR}/src/yetty/cl
 add_subdirectory(${YETTY_ROOT}/src/yetty/ytop ${CMAKE_BINARY_DIR}/src/yetty/ytop)
 
 # Platform manager sources (new architecture)
+# Note: event-loop is included via yetty_base
 set(YETTY_PLATFORM_SOURCES
     ${YETTY_ROOT}/src/yetty/platform/init-manager/macos.cpp
     ${YETTY_ROOT}/src/yetty/platform/shared/glfw-window-singleton.cpp
     ${YETTY_ROOT}/src/yetty/platform/input-manager/glfw.cpp
     ${YETTY_ROOT}/src/yetty/platform/surface-manager/glfw.cpp
     ${YETTY_ROOT}/src/yetty/platform/pty-manager/unix.cpp
+    ${YETTY_ROOT}/src/yetty/platform/pty-reader/unix.cpp
     ${YETTY_ROOT}/src/yetty/platform/fs-path-manager/unix.cpp
     ${YETTY_ROOT}/src/yetty/platform/clipboard-manager/glfw.cpp
     ${YETTY_ROOT}/src/yetty/platform/webgpu-manager/macos.cpp
@@ -32,8 +34,6 @@ add_executable(yetty
     ${YETTY_CORE_SOURCES}
     ${YETTY_DESKTOP_SOURCES}
     ${YETTY_PLATFORM_SOURCES}
-    # Keep old platform for now (compatibility during migration)
-    ${YETTY_ROOT}/src/yetty/platform/obsolete/glfw/glfw-platform.cpp
 )
 
 target_include_directories(yetty PRIVATE ${YETTY_INCLUDES} ${YETTY_RENDERER_INCLUDES} ${JPEG_INCLUDE_DIRS} ${BROTLI_INCLUDE_DIR})

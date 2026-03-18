@@ -3,10 +3,9 @@
 #include <memory>
 #include <yetty/base/factory.h>
 #include <yetty/result.hpp>
+#include <yetty/platform/pty-reader.h>
 
 namespace yetty {
-
-class PTYProvider;
 
 // PtyManager - creates platform-appropriate PTY/shell
 //
@@ -24,7 +23,7 @@ public:
 
   virtual ~PtyManager() = default;
 
-  virtual Result<std::shared_ptr<PTYProvider>> createPTY() = 0;
+  virtual Result<PtyReader::Ptr> createPtyReader(const PtyConfig& config) = 0;
 
 protected:
   PtyManager() = default;

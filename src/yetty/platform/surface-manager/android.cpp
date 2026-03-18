@@ -2,10 +2,11 @@
 
 #if defined(__ANDROID__)
 #include "../shared/android-app-singleton.h"
-#include <yetty/base/event-loop.h>
+#include <yetty/platform/event-loop.h>
 #include <yetty/base/event.h>
 #include <webgpu/webgpu.h>
 #include <android/native_window.h>
+#include <chrono>
 
 namespace yetty {
 
@@ -17,6 +18,7 @@ public:
             return Err<void>("AndroidAppSingleton not available", appResult);
         }
         _appSingleton = *appResult;
+        _startTime = std::chrono::steady_clock::now();
         return Ok();
     }
 
@@ -31,12 +33,10 @@ public:
     }
 
     void getFramebufferSize(int& width, int& height) const override {
-        // On Android, framebuffer size equals window size
         getWindowSize(width, height);
     }
 
     void getContentScale(float& xscale, float& yscale) const override {
-        // TODO: Get actual density from Android
         xscale = yscale = 1.0f;
     }
 
@@ -45,11 +45,24 @@ public:
     }
 
     void setTitle(const std::string& title) override {
-        (void)title; // No-op on Android
+        (void)title;
     }
 
     void setIcon(const unsigned char* data, size_t size) override {
-        (void)data; (void)size; // App icon set via manifest
+        (void)data; (void)size;
+    }
+
+    void setCursor(CursorType type) override {
+        (void)type; // No cursor on Android
+    }
+
+    double getTime() const override {
+        auto now = std::chrono::steady_clock::now();
+        return std::chrono::duration<double>(now - _startTime).count();
+    }
+
+    void requestRender() override {
+        // Android renders continuously via ALooper
     }
 
     WGPUSurface createWGPUSurface(WGPUInstance instance) override {
@@ -71,6 +84,7 @@ public:
 private:
     AndroidAppSingleton::Ptr _appSingleton;
     bool _shouldClose = false;
+    std::chrono::steady_clock::time_point _startTime;
 };
 
 // Factory

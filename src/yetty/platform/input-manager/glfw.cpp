@@ -3,7 +3,7 @@
 #if !defined(__ANDROID__) && !defined(__EMSCRIPTEN__)
 
 #include "../shared/glfw-window-singleton.h"
-#include <yetty/base/event-loop.h>
+#include <yetty/platform/event-loop.h>
 #include <yetty/base/event-queue.h>
 #include <yetty/result.hpp>
 #include <ytrace/ytrace.hpp>
@@ -38,6 +38,11 @@ namespace yetty {
 
 class GlfwInputManager : public InputManager, public base::EventListener {
 public:
+    std::string getKeyName(int key, int scancode) const override {
+        const char* name = glfwGetKeyName(key, scancode);
+        return name ? name : "";
+    }
+
     Result<void> init() {
         // Ensure window singleton exists
         auto singletonResult = GlfwWindowSingleton::instance();

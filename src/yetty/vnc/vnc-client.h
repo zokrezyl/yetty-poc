@@ -1,7 +1,7 @@
 #pragma once
 
 #include <yetty/result.hpp>
-#include <yetty/base/event-loop.h>
+#include <yetty/platform/event-loop.h>
 #include <yetty/base/event-listener.h>
 #include <yetty/yvideo/yvideo-decoder.h>
 #include "protocol.h"

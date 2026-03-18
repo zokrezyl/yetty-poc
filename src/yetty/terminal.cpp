@@ -1,19 +1,18 @@
 #include "terminal.h"
 #include "gpu-screen.h"
-#include <yetty/base/event-loop.h>
+#include <yetty/platform/event-loop.h>
 #include <yetty/result.hpp>
 #include <ytrace/ytrace.hpp>
 #include <cstring>
 
 
+#include <yetty/platform/pty-manager.h>
+#include <yetty/platform/pty-reader.h>
 #if YETTY_WEB
-#include <yetty/platform.h>
 #include <yetty/pty-provider.h>
-#include <yetty/pty-reader.h>
 #include "telnet/telnet-pty-reader.h"
 #else
 #include <yetty/osc-scanner.h>
-#include <yetty/pty-reader.h>
 #ifndef _WIN32
 #include "telnet/telnet-pty-reader.h"
 #endif
@@ -328,12 +327,17 @@ private:
             config.rows = rows;
 
             ydebug("Creating PtyReader: shell={} {}x{}", shellPath, cols, rows);
-            auto readerResult = PtyReader::create(config, _ctx.platform);
+            auto ptyMgrResult = PtyManager::instance();
+            if (!ptyMgrResult) {
+                yerror("PtyManager::instance FAILED");
+                return Err<void>("Failed to get PtyManager", ptyMgrResult);
+            }
+            auto readerResult = (*ptyMgrResult)->createPtyReader(config);
             if (!readerResult) {
-                yerror("PtyReader::create FAILED: {}", readerResult.error().message());
+                yerror("createPtyReader FAILED: {}", readerResult.error().message());
                 return Err<void>("Failed to create PtyReader", readerResult);
             }
-            ydebug("PtyReader::create SUCCESS");
+            ydebug("createPtyReader SUCCESS");
             _ptyReader = *readerResult;
             ydebug("Terminal started PTY: {} ({}x{})", shellPath, cols, rows);
         }

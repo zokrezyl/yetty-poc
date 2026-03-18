@@ -7,7 +7,7 @@
 #include "../../ypdf/pdf-renderer.h"
 #include "../../ydraw/ydraw-buffer.h"
 #include <yetty/ydraw-builder.h>
-#include <yetty/base/event-loop.h>
+#include <yetty/platform/event-loop.h>
 #include <ytrace/ytrace.hpp>
 #include <sstream>
 #include <cmath>

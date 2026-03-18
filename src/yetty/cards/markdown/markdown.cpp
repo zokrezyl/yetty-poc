@@ -8,7 +8,7 @@
 #include "../../ydraw/ydraw-buffer.h"
 #include "../../ydraw/ydraw-types.gen.h"
 #include <yetty/msdf-glyph-data.h>
-#include <yetty/base/event-loop.h>
+#include <yetty/platform/event-loop.h>
 #include <ytrace/ytrace.hpp>
 #include <sstream>
 #include <algorithm>

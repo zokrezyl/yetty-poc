@@ -6,7 +6,7 @@
 #include "../../diagram/sugiyama-layout.h"
 #include "../../diagram/diagram-renderer.h"
 #include "../../ydraw/ydraw-types.gen.h"
-#include <yetty/base/event-loop.h>
+#include <yetty/platform/event-loop.h>
 #include <ytrace/ytrace.hpp>
 #include <sstream>
 #include <fstream>

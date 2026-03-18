@@ -1,6 +1,6 @@
 #include <yetty/vnc/vnc-view.h>
 #include "vnc-client.h"
-#include <yetty/base/event-loop.h>
+#include <yetty/platform/event-loop.h>
 #include <ytrace/ytrace.hpp>
 
 namespace yetty::vnc {

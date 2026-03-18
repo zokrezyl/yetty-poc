@@ -2,7 +2,7 @@
 
 #if defined(__EMSCRIPTEN__)
 
-#include <yetty/base/event-loop.h>
+#include <yetty/platform/event-loop.h>
 #include <yetty/base/event.h>
 #include <yetty/result.hpp>
 #include <emscripten/html5.h>
@@ -11,6 +11,13 @@ namespace yetty {
 
 class WebInputManager : public InputManager {
 public:
+    std::string getKeyName(int key, int scancode) const override {
+        (void)scancode;
+        if (key >= 'A' && key <= 'Z') return std::string(1, static_cast<char>(key));
+        if (key >= '0' && key <= '9') return std::string(1, static_cast<char>(key));
+        return "";
+    }
+
     Result<void> init() {
         // Register Emscripten callbacks
         emscripten_set_keydown_callback("#canvas", this, true, keyCallback);

@@ -6,6 +6,16 @@
 
 namespace yetty {
 
+// Cursor types
+enum class CursorType {
+    Arrow,
+    IBeam,
+    Hand,
+    ResizeH,
+    ResizeV,
+    Hidden
+};
+
 // SurfaceManager - window lifecycle and WebGPU surface
 //
 // Platform implementations:
@@ -30,6 +40,15 @@ public:
     // Window decoration
     virtual void setTitle(const std::string& title) = 0;
     virtual void setIcon(const unsigned char* data, size_t size) = 0;
+
+    // Cursor
+    virtual void setCursor(CursorType type) = 0;
+
+    // Timing
+    virtual double getTime() const = 0;
+
+    // Request render on next frame
+    virtual void requestRender() = 0;
 
     // WebGPU surface
     virtual WGPUSurface createWGPUSurface(WGPUInstance instance) = 0;

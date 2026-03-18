@@ -47,6 +47,27 @@ public:
         (void)data; (void)size;  // Favicon set via HTML
     }
 
+    void setCursor(CursorType type) override {
+        const char* cursor = "default";
+        switch (type) {
+            case CursorType::Arrow: cursor = "default"; break;
+            case CursorType::IBeam: cursor = "text"; break;
+            case CursorType::Hand: cursor = "pointer"; break;
+            case CursorType::ResizeH: cursor = "ew-resize"; break;
+            case CursorType::ResizeV: cursor = "ns-resize"; break;
+            case CursorType::Hidden: cursor = "none"; break;
+        }
+        EM_ASM({ document.body.style.cursor = UTF8ToString($0); }, cursor);
+    }
+
+    double getTime() const override {
+        return emscripten_get_now() / 1000.0;
+    }
+
+    void requestRender() override {
+        // Browser handles this via requestAnimationFrame
+    }
+
     WGPUSurface createWGPUSurface(WGPUInstance instance) override {
         WGPUSurfaceSourceCanvasHTMLSelector_Emscripten canvasSource = {};
         canvasSource.chain.sType = WGPUSType_SurfaceSourceCanvasHTMLSelector_Emscripten;

@@ -1,8 +1,8 @@
 #pragma once
 
-#include "factory.h"
-#include "event.h"
-#include "event-listener.h"
+#include <yetty/base/factory.h>
+#include <yetty/base/event.h>
+#include <yetty/base/event-listener.h>
 
 namespace yetty {
 namespace base {
@@ -42,8 +42,8 @@ public:
     };
     virtual Result<PollId> createPoll() = 0;
     virtual Result<void> configPoll(PollId id, int fd) = 0;
-    virtual Result<void> startPoll(PollId id, int events = POLL_READABLE) = 0;  // events = POLL_READABLE | POLL_WRITABLE
-    virtual Result<void> setPollEvents(PollId id, int events) = 0;  // Change events on running poll
+    virtual Result<void> startPoll(PollId id, int events = POLL_READABLE) = 0;
+    virtual Result<void> setPollEvents(PollId id, int events) = 0;
     virtual Result<void> stopPoll(PollId id) = 0;
     virtual Result<void> destroyPoll(PollId id) = 0;
     virtual Result<void> registerPollListener(PollId id, EventListener::Ptr listener) = 0;

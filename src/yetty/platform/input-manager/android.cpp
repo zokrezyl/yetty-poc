@@ -2,7 +2,7 @@
 
 #if defined(__ANDROID__)
 #include "../shared/android-app-singleton.h"
-#include <yetty/base/event-loop.h>
+#include <yetty/platform/event-loop.h>
 #include <yetty/base/event.h>
 #include <android/input.h>
 #include <android/keycodes.h>
@@ -13,6 +13,13 @@ namespace yetty {
 
 class AndroidInputManager : public InputManager {
 public:
+    std::string getKeyName(int key, int scancode) const override {
+        (void)scancode;
+        if (key >= 'A' && key <= 'Z') return std::string(1, static_cast<char>(key));
+        if (key >= '0' && key <= '9') return std::string(1, static_cast<char>(key));
+        return "";
+    }
+
     Result<void> init() {
         // Register ourselves to receive input events from android_main
         // This is done via a global function pointer that android_main calls

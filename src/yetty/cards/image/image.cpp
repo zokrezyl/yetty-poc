@@ -5,7 +5,7 @@
 
 #include "image.h"
 #include <yetty/yetty-context.h>
-#include <yetty/base/event-loop.h>
+#include <yetty/platform/event-loop.h>
 #include <ytrace/ytrace.hpp>
 #include <stb_image.h>
 
@@ -347,7 +347,7 @@ private:
     //=========================================================================
 
     Result<void> createScalePipeline() {
-        std::string shaderPath = _ctx.platform->getShadersDir() + "/scale-image.wgsl";
+        std::string shaderPath = _ctx.fsPathManager->getShadersDir() + "/scale-image.wgsl";
         ydebug("Image: Loading scale shader from: {}", shaderPath.c_str());
 
         std::ifstream file(shaderPath.c_str());

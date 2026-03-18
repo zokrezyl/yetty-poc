@@ -9,7 +9,9 @@
 #include <yetty/gpu-memory-manager.h>
 #include <yetty/card-factory.h>
 #include <yetty/config.h>
-#include <yetty/platform.h>
+#include <yetty/platform/surface-manager.h>
+#include <yetty/platform/fs-path-manager.h>
+#include <yetty/platform/pty-manager.h>
 
 #include <memory>
 
@@ -44,8 +46,10 @@ struct YettyContext {
     // Application config (tree-like, runtime writable)
     Config::Ptr config;
 
-    // Platform abstraction (for PTY creation, etc.)
-    Platform::Ptr platform;
+    // Platform managers
+    SurfaceManager::Ptr surfaceManager;
+    FsPathManager::Ptr fsPathManager;
+    PtyManager::Ptr ptyManager;
 };
 
 } // namespace yetty

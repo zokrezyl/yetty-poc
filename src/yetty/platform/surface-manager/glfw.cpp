@@ -17,8 +17,23 @@ public:
             return Err<void>("GlfwWindowSingleton not available", singletonResult);
         }
         _windowSingleton = *singletonResult;
+
+        // Create cursors
+        _cursors[static_cast<int>(CursorType::Arrow)] = glfwCreateStandardCursor(GLFW_ARROW_CURSOR);
+        _cursors[static_cast<int>(CursorType::IBeam)] = glfwCreateStandardCursor(GLFW_IBEAM_CURSOR);
+        _cursors[static_cast<int>(CursorType::Hand)] = glfwCreateStandardCursor(GLFW_HAND_CURSOR);
+        _cursors[static_cast<int>(CursorType::ResizeH)] = glfwCreateStandardCursor(GLFW_HRESIZE_CURSOR);
+        _cursors[static_cast<int>(CursorType::ResizeV)] = glfwCreateStandardCursor(GLFW_VRESIZE_CURSOR);
+        _cursors[static_cast<int>(CursorType::Hidden)] = nullptr;
+
         ydebug("GlfwSurfaceManager initialized");
         return Ok();
+    }
+
+    ~GlfwSurfaceManager() {
+        for (int i = 0; i < 6; i++) {
+            if (_cursors[i]) glfwDestroyCursor(_cursors[i]);
+        }
     }
 
     void getWindowSize(int& width, int& height) const override {
@@ -45,6 +60,27 @@ public:
         _windowSingleton->setIcon(data, size);
     }
 
+    void setCursor(CursorType type) override {
+        GLFWwindow* window = _windowSingleton->getWindow();
+        if (!window) return;
+
+        if (type == CursorType::Hidden) {
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_HIDDEN);
+        } else {
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+            GLFWcursor* cursor = _cursors[static_cast<int>(type)];
+            if (cursor) glfwSetCursor(window, cursor);
+        }
+    }
+
+    double getTime() const override {
+        return glfwGetTime();
+    }
+
+    void requestRender() override {
+        glfwPostEmptyEvent();
+    }
+
     WGPUSurface createWGPUSurface(WGPUInstance instance) override {
         GLFWwindow* window = _windowSingleton->getWindow();
         if (!window) return nullptr;
@@ -53,6 +89,7 @@ public:
 
 private:
     GlfwWindowSingleton::Ptr _windowSingleton;
+    GLFWcursor* _cursors[6] = {};
 };
 
 // Factory

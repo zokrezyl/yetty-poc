@@ -29,6 +29,7 @@ add_subdirectory(${YETTY_ROOT}/src/yetty ${CMAKE_BINARY_DIR}/src/yetty)
 add_subdirectory(${YETTY_ROOT}/src/yetty/vnc ${CMAKE_BINARY_DIR}/src/yetty/vnc)
 
 # Platform manager sources (new architecture)
+# Note: event-loop is included via yetty_base
 set(YETTY_PLATFORM_SOURCES
     ${YETTY_ROOT}/src/yetty/platform/init-manager/android.cpp
     ${YETTY_ROOT}/src/yetty/platform/shared/android-app-singleton.cpp
@@ -45,8 +46,6 @@ add_library(yetty SHARED
     ${YETTY_CORE_SOURCES}
     ${YETTY_ANDROID_SOURCES}
     ${YETTY_PLATFORM_SOURCES}
-    # Keep old platform for now (compatibility during migration)
-    ${YETTY_ROOT}/src/yetty/platform/obsolete/android/android-platform.cpp
     ${YETTY_ROOT}/src/yetty/msdf-gen/generator.cpp
 )
 
