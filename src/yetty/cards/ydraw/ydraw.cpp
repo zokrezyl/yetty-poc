@@ -52,7 +52,7 @@ public:
     //=========================================================================
 
     bool needsTexture() const override {
-        return _builder && _builder->hasCustomAtlas();
+        return _builder && (_builder->hasCustomAtlas() || _buffer->imageCount() > 0);
     }
 
     uint32_t metadataSlotIndex() const override {
