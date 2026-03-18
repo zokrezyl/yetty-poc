@@ -5,6 +5,10 @@
 #include <yetty/result.hpp>
 #include <functional>
 
+#if defined(__ANDROID__)
+struct android_app;
+#endif
+
 namespace yetty {
 
 // InitManager - platform initialization and main thread event loop
@@ -39,5 +43,10 @@ public:
 protected:
     InitManager() = default;
 };
+
+#if defined(__ANDROID__)
+// Android-specific factory (takes android_app* from NativeActivity)
+Result<InitManager::Ptr> createForAndroid(android_app* app);
+#endif
 
 } // namespace yetty

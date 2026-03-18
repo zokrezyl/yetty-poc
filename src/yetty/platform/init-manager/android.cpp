@@ -6,10 +6,14 @@
 #include <yetty/result.hpp>
 #include <ytrace/ytrace.hpp>
 #include <android/looper.h>
+#include <android/log.h>
 #include <android_native_app_glue.h>
 
 // Forward declaration of extern "C" function defined in input-manager/android.cpp
 extern "C" void yetty_android_dispatch_input(AInputEvent* event);
+
+// Forward declaration of event loop tick function
+extern "C" void yetty_android_event_loop_tick();
 
 namespace yetty {
 
@@ -30,7 +34,7 @@ public:
     }
 
     void run(RenderThreadFunc renderThreadFunc) override {
-        ydebug("AndroidInitManager: starting main loop");
+        __android_log_print(ANDROID_LOG_INFO, "yetty", "AndroidInitManager: starting main loop");
 
         _renderFunc = std::move(renderThreadFunc);
         _running = true;
@@ -40,7 +44,7 @@ public:
             int events;
             android_poll_source* source;
 
-            // Process all pending events
+            // Process all pending events (non-blocking when animating)
             while (ALooper_pollAll(_animating ? 0 : -1, nullptr, &events, (void**)&source) >= 0) {
                 if (source) {
                     source->process(_app, source);
@@ -52,17 +56,24 @@ public:
                 }
             }
 
-            // Handle app commands via callback
+            // When window is ready and animating
             if (_app->window && _animating && _running) {
-                // Call render function (runs inline, not on separate thread)
+                // First time: call setup function
                 if (_renderFunc && !_renderStarted) {
+                    __android_log_print(ANDROID_LOG_INFO, "yetty", "AndroidInitManager: calling renderFunc");
                     _renderStarted = true;
                     _renderFunc();
+                    __android_log_print(ANDROID_LOG_INFO, "yetty", "AndroidInitManager: renderFunc returned");
+                }
+
+                // After setup: tick the event loop to process timers and render frames
+                if (_renderStarted) {
+                    yetty_android_event_loop_tick();
                 }
             }
         }
 
-        ydebug("AndroidInitManager: main loop ended");
+        __android_log_print(ANDROID_LOG_INFO, "yetty", "AndroidInitManager: main loop ended");
     }
 
     void stop() override {
