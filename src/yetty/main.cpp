@@ -281,7 +281,7 @@ extern "C" void android_main(struct android_app* app) {
 
         // Demo outputs (pre-generated .out files from demo scripts)
         std::vector<std::string> demoSubdirs = {
-            "cards", "cards/mermaid", "cards/plot", "cards/thorvg", "cards/ydraw",
+            "cards", "cards/mermaid", "cards/plot", "cards/ythorvg", "cards/ydraw",
             "cards/ygrid", "cards/ygui", "cards/yhtml", "cards/yplot",
             "effects", "gpu-screen-ydraw", "yecho"
         };

@@ -90,7 +90,7 @@ struct CardMapping {
 static const CardMapping* mimeToCard(std::string_view mime) {
     // SVG must be checked before generic image/*
     if (mime == "image/svg+xml") {
-        static const CardMapping m{"thorvg"};
+        static const CardMapping m{"ythorvg"};
         return &m;
     }
     if (mime.starts_with("image/")) {
@@ -129,7 +129,7 @@ static const CardMapping* extensionToCard(const fs::path& path) {
         return &m;
     }
     if (ext == ".svg") {
-        static const CardMapping m{"thorvg"};
+        static const CardMapping m{"ythorvg"};
         return &m;
     }
     if (ext == ".html" || ext == ".htm") {
@@ -137,7 +137,7 @@ static const CardMapping* extensionToCard(const fs::path& path) {
         return &m;
     }
     if (ext == ".lottie") {
-        static const CardMapping m{"thorvg"};
+        static const CardMapping m{"ythorvg"};
         return &m;
     }
     return nullptr;
@@ -380,7 +380,7 @@ static bool processFile(
             static const CardMapping m{"ymery"};
             mapping = &m;
         } else if (looksLikeLottie(data.data(), data.size())) {
-            static const CardMapping m{"thorvg"};
+            static const CardMapping m{"ythorvg"};
             mapping = &m;
         } else if (looksLikeYdraw(data.data(), data.size())) {
             static const CardMapping m{"ydraw"};
@@ -444,7 +444,7 @@ static bool processFile(
                 static const CardMapping m{"ymery"};
                 mapping = &m;
             } else if (looksLikeLottie(fetched->data.data(), fetched->data.size())) {
-                static const CardMapping m{"thorvg"};
+                static const CardMapping m{"ythorvg"};
                 mapping = &m;
             } else if (looksLikeYdraw(fetched->data.data(), fetched->data.size())) {
                 static const CardMapping m{"ydraw"};
@@ -536,7 +536,7 @@ static bool processFile(
         auto content = readFileAsString(path);
         if (!content.empty()) {
             if (looksLikeLottie(content.data(), content.size())) {
-                static const CardMapping m{"thorvg"};
+                static const CardMapping m{"ythorvg"};
                 mapping = &m;
             } else if (looksLikeYdraw(content.data(), content.size())) {
                 static const CardMapping m{"ydraw"};
@@ -592,7 +592,7 @@ int main(int argc, const char** argv) {
     args::Flag showFlag(parser, "show",
         "Show source with syntax highlighting (skip card rendering)", {'s', "show"});
     args::ValueFlag<std::string> cardFlag(parser, "type",
-        "Force card type (e.g., image, pdf, ypdf, ydraw, thorvg, ymery)", {'c', "card"});
+        "Force card type (e.g., image, pdf, ypdf, ydraw, ythorvg, ymery)", {'c', "card"});
 
     args::PositionalList<std::string> files(parser, "files",
         "Files to display (use - for stdin)");

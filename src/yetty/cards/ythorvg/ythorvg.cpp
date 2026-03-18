@@ -93,6 +93,9 @@ public:
     }
 
     Result<void> dispose() override {
+        if (_disposed) return Ok();
+        _disposed = true;
+
         deregisterFromEvents();
         if (_metaHandle.isValid() && _cardMgr) {
             if (auto res = _cardMgr->deallocateMetadata(_metaHandle); !res) {
@@ -101,10 +104,23 @@ public:
             _metaHandle = MetadataHandle::invalid();
         }
 
-        // Clean up ThorVG resources
+        // Clean up ThorVG resources (order matters!)
+        // Animation must be destroyed first - it uses renderMethod to dispose render data
         _animation.reset();
         _picture = nullptr;
-        ythorvgTerm();
+
+        // Release our reference to the render method
+        // ThorVG manages lifetime via ref/unref - do NOT delete directly
+        if (_renderMethod) {
+            _renderMethod->unref();
+            _renderMethod = nullptr;
+        }
+
+        // Only call ythorvgTerm if we successfully initialized
+        if (_thorvgInitialized) {
+            _thorvgInitialized = false;
+            ythorvgTerm();
+        }
 
         return Ok();
     }
@@ -269,6 +285,7 @@ public:
         if (auto res = ythorvgInit(); !res) {
             return Err<void>("YThorVG::init: failed to initialize ThorVG", res);
         }
+        _thorvgInitialized = true;
 
         // Allocate metadata
         auto metaResult = _cardMgr->allocateMetadata(64);
@@ -289,7 +306,9 @@ public:
         _builder->setView(_viewZoom, _viewPanX, _viewPanY);
 
         // Create our custom RenderMethod
-        _renderMethod = std::make_unique<ythorvg::YDrawRenderMethod>(_buffer);
+        // ThorVG manages RenderMethod lifetime via ref/unref - we must ref() to keep it alive
+        _renderMethod = new ythorvg::YDrawRenderMethod(_buffer);
+        _renderMethod->ref();  // Keep alive until we unref() in dispose()
         _renderMethod->setTarget(_widthCells * 10, _heightCells * 20);  // approx pixel size
 
         // Parse args and load content
@@ -340,10 +359,10 @@ private:
         // Update paint tree with our renderer
         tvg::Array<tvg::RenderData> clips;
         auto identity = tvg::Matrix{1, 0, 0, 0, 1, 0, 0, 0, 1};
-        paintImpl->update(_renderMethod.get(), identity, clips, 255, tvg::RenderUpdateFlag::All);
+        paintImpl->update(_renderMethod, identity, clips, 255, tvg::RenderUpdateFlag::All);
 
         // Render paint tree
-        paintImpl->render(_renderMethod.get());
+        paintImpl->render(_renderMethod);
 
         // postRender (we don't do much here, builder->calculate() is separate)
         _renderMethod->postRender();
@@ -488,7 +507,7 @@ private:
     // Members
     //=========================================================================
 
-    std::unique_ptr<ythorvg::YDrawRenderMethod> _renderMethod;
+    ythorvg::YDrawRenderMethod* _renderMethod = nullptr;  // ThorVG manages lifetime via ref/unref
     std::unique_ptr<tvg::Animation> _animation;
     tvg::Picture* _picture = nullptr;
     YDrawBuilder::Ptr _builder;
@@ -526,6 +545,10 @@ private:
     float _lastRenderTime = -1.0f;
 
     bool _dirty = true;
+
+    // Lifecycle guards
+    bool _disposed = false;
+    bool _thorvgInitialized = false;
 };
 
 //=============================================================================
