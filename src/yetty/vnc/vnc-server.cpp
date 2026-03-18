@@ -1036,11 +1036,15 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
             return Err<void>("No pixels for H.264 encoding");
         }
 
+        // H.264 requires even dimensions - round down
+        uint32_t encWidth = width & ~1u;
+        uint32_t encHeight = height & ~1u;
+
         // Initialize encoder on first frame or resolution change
-        if (!_h264Encoder || _h264Encoder->config().width != width || _h264Encoder->config().height != height) {
+        if (!_h264Encoder || _h264Encoder->config().width != encWidth || _h264Encoder->config().height != encHeight) {
             yvideo::EncoderConfig cfg;
-            cfg.width = width;
-            cfg.height = height;
+            cfg.width = encWidth;
+            cfg.height = encHeight;
             cfg.bitrate = 4000000;  // 4 Mbps for good quality screen content
             cfg.frameRate = 30.0f;
             cfg.idrInterval = 60;   // IDR every 2 seconds
@@ -1055,25 +1059,25 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
             }
             _h264Encoder = *encoderRes;
 
-            // Allocate YUV buffer
-            _yuvYStride = (width + 15) & ~15;  // Align to 16 bytes
+            // Allocate YUV buffer (using even dimensions)
+            _yuvYStride = (encWidth + 15) & ~15;  // Align to 16 bytes
             _yuvUVStride = (_yuvYStride / 2 + 15) & ~15;
-            uint32_t yPlaneSize = _yuvYStride * height;
-            uint32_t uvPlaneSize = _yuvUVStride * (height / 2);
+            uint32_t yPlaneSize = _yuvYStride * encHeight;
+            uint32_t uvPlaneSize = _yuvUVStride * (encHeight / 2);
             _yuvBuffer.resize(yPlaneSize + uvPlaneSize * 2);
 
-            yinfo("VNC: H.264 encoder created {}x{}, YUV buffer {}KB",
-                  width, height, _yuvBuffer.size() / 1024);
+            yinfo("VNC: H.264 encoder created {}x{} (source {}x{}), YUV buffer {}KB",
+                  encWidth, encHeight, width, height, _yuvBuffer.size() / 1024);
         }
 
-        // Convert BGRA to YUV420
-        uint32_t yPlaneSize = _yuvYStride * height;
-        uint32_t uvPlaneSize = _yuvUVStride * (height / 2);
+        // Convert BGRA to YUV420 (use encWidth/encHeight for even dimensions)
+        uint32_t yPlaneSize = _yuvYStride * encHeight;
+        uint32_t uvPlaneSize = _yuvUVStride * (encHeight / 2);
         uint8_t* yPlane = _yuvBuffer.data();
         uint8_t* uPlane = _yuvBuffer.data() + yPlaneSize;
         uint8_t* vPlane = _yuvBuffer.data() + yPlaneSize + uvPlaneSize;
 
-        convertBgraToYuv420Cpu(pixels, width, height, width * 4,
+        convertBgraToYuv420Cpu(pixels, encWidth, encHeight, width * 4,
                                yPlane, uPlane, vPlane,
                                _yuvYStride, _yuvUVStride);
 
@@ -1092,11 +1096,11 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
             return Ok();
         }
 
-        // Build H.264 frame packet
+        // Build H.264 frame packet (use encoded dimensions, may be 1px less)
         FrameHeader fh;
         fh.magic = FRAME_MAGIC;
-        fh.width = width;
-        fh.height = height;
+        fh.width = encWidth;
+        fh.height = encHeight;
         fh.tile_size = TILE_SIZE;  // Non-zero to use tile path (not rectangle mode)
         fh.num_tiles = 1;
 

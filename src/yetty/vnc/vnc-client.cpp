@@ -665,19 +665,20 @@ void VncClient::onSocketReadable() {
                             std::vector<uint8_t> bgra(yuv.width * yuv.height * 4);
                             convertYuv420ToBgraCpu(yuv, bgra.data());
 
-                            // Upload to texture
-                            if (_texture && yuv.width == _width && yuv.height == _height) {
+                            // Upload to texture (H.264 may round to even dimensions, so accept ±1)
+                            if (_texture && yuv.width <= _width && yuv.height <= _height &&
+                                yuv.width + 1 >= _width && yuv.height + 1 >= _height) {
                                 WGPUTexelCopyTextureInfo dst = {};
                                 dst.texture = _texture;
                                 dst.origin = {0, 0, 0};
 
                                 WGPUTexelCopyBufferLayout layout = {};
-                                layout.bytesPerRow = _width * 4;
-                                layout.rowsPerImage = _height;
+                                layout.bytesPerRow = yuv.width * 4;
+                                layout.rowsPerImage = yuv.height;
 
-                                WGPUExtent3D size = {_width, _height, 1};
+                                WGPUExtent3D size = {yuv.width, yuv.height, 1};
                                 wgpuQueueWriteTexture(_queue, &dst, bgra.data(), bgra.size(), &layout, &size);
-                                ydebug("VNC H264: decoded frame {}x{}", yuv.width, yuv.height);
+                                ydebug("VNC H264: decoded frame {}x{} (expected {}x{})", yuv.width, yuv.height, _width, _height);
                             }
 
                             _h264Decoder->releaseFrame();
@@ -701,8 +702,9 @@ void VncClient::onSocketReadable() {
                         break;
                 }
 
-                // Upload tile IMMEDIATELY to GPU (skip for FULL_FRAME - already handled)
-                if (static_cast<Encoding>(_currentTile.encoding) == Encoding::FULL_FRAME) {
+                // Upload tile IMMEDIATELY to GPU (skip for FULL_FRAME/H264 - already handled)
+                if (static_cast<Encoding>(_currentTile.encoding) == Encoding::FULL_FRAME ||
+                    static_cast<Encoding>(_currentTile.encoding) == Encoding::H264) {
                     break;  // Already uploaded full frame above
                 }
                 if (_texture && _width > 0 && _height > 0) {
