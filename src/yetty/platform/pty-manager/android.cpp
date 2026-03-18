@@ -19,8 +19,14 @@ public:
     Result<PtyReader::Ptr> createPtyReader(const PtyConfig& config) override {
         ydebug("AndroidPtyManager::createPtyReader called");
 
-        auto& paths = AndroidAppSingleton::instance().paths();
-        if (paths.dataDir.empty() || paths.nativeLibDir.empty()) {
+        auto appResult = AndroidAppSingleton::instance();
+        if (!appResult) {
+            return Err<PtyReader::Ptr>("AndroidAppSingleton not available");
+        }
+        auto& appSingleton = *appResult;
+        std::string dataDir = appSingleton->getDataDir();
+        std::string nativeLibDir = appSingleton->getNativeLibDir();
+        if (dataDir.empty() || nativeLibDir.empty()) {
             return Err<PtyReader::Ptr>("Android paths not initialized");
         }
 
@@ -48,24 +54,25 @@ public:
         // Termux not available, try toybox fallback
         ydebug("Termux not available, trying toybox fallback...");
 
-        std::string toyboxExe = paths.nativeLibDir + "/libtoybox.so";
+        std::string toyboxExe = nativeLibDir + "/libtoybox.so";
         if (access(toyboxExe.c_str(), X_OK) != 0) {
             return Err<PtyReader::Ptr>("toybox not available or not executable");
         }
 
         ydebug("Starting toybox telnetd...");
 
-        std::string shPath = paths.nativeLibDir + "/liblogin.so";
+        std::string shPath = nativeLibDir + "/liblogin.so";
+        std::string binDir = dataDir + "/bin";
 
-        setenv("HOME", paths.dataDir.c_str(), 1);
-        setenv("PATH", (paths.binDir + ":" + paths.nativeLibDir + ":" + paths.dataDir + ":/system/bin").c_str(), 1);
-        setenv("SHELL", (paths.binDir + "/sh").c_str(), 1);
+        setenv("HOME", dataDir.c_str(), 1);
+        setenv("PATH", (binDir + ":" + nativeLibDir + ":" + dataDir + ":/system/bin").c_str(), 1);
+        setenv("SHELL", (binDir + "/sh").c_str(), 1);
         setenv("TERM", "xterm-256color", 1);
         setenv("USER", "shell", 1);
 
         pid_t pid = fork();
         if (pid == 0) {
-            chdir(paths.dataDir.c_str());
+            chdir(dataDir.c_str());
             execl(toyboxExe.c_str(), "telnetd",
                   "-l", shPath.c_str(),
                   "-p", "8024",

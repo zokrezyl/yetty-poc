@@ -69,4 +69,70 @@ EMSCRIPTEN_KEEPALIVE void yetty_pty_push_data(uint32_t ptyId, const char* data, 
     }
 }
 
+// Called from JavaScript when data arrives from JSLinux iframe
+EMSCRIPTEN_KEEPALIVE void webpty_on_data(uint32_t ptyId, const char* data, int len) {
+    yetty_pty_push_data(ptyId, data, len);
 }
+
+// Legacy JS interop functions - stubs for compatibility
+EMSCRIPTEN_KEEPALIVE void yetty_write(const char* data, int len) {
+    (void)data; (void)len;
+}
+
+EMSCRIPTEN_KEEPALIVE void yetty_key(int key, int mods) {
+    (void)key; (void)mods;
+}
+
+EMSCRIPTEN_KEEPALIVE void yetty_special_key(int key, int mods) {
+    (void)key; (void)mods;
+}
+
+EMSCRIPTEN_KEEPALIVE int yetty_read_input(char* buffer, int maxLen) {
+    (void)buffer; (void)maxLen;
+    return 0;
+}
+
+EMSCRIPTEN_KEEPALIVE void yetty_sync() {
+}
+
+EMSCRIPTEN_KEEPALIVE void yetty_set_scale(float scaleX, float scaleY) {
+    (void)scaleX; (void)scaleY;
+}
+
+EMSCRIPTEN_KEEPALIVE void yetty_resize(int cols, int rows) {
+    (void)cols; (void)rows;
+}
+
+EMSCRIPTEN_KEEPALIVE int yetty_get_cols() {
+    return 80;
+}
+
+EMSCRIPTEN_KEEPALIVE int yetty_get_rows() {
+    return 24;
+}
+
+} // extern "C"
+
+// Initialize message listener at startup
+static struct WebPTYInit {
+    WebPTYInit() {
+        EM_ASM({
+            window.addEventListener('message', function(e) {
+                if (e.data && e.data.type === 'term-output' && e.data.ptyId) {
+                    var data = e.data.data;
+                    if (!data || data.length === 0) return;
+                    var ptyId = parseInt(e.data.ptyId, 10);
+                    if (isNaN(ptyId)) return;
+                    var encoder = new TextEncoder();
+                    var bytes = encoder.encode(data);
+                    if (bytes.length === 0) return;
+                    var ptr = Module._malloc(bytes.length);
+                    if (ptr === 0) return;
+                    Module.HEAPU8.set(bytes, ptr);
+                    Module._webpty_on_data(ptyId, ptr, bytes.length);
+                    Module._free(ptr);
+                }
+            });
+        });
+    }
+} g_webPtyInit;

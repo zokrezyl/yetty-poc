@@ -8,6 +8,9 @@
 #include <android/looper.h>
 #include <android_native_app_glue.h>
 
+// Forward declaration of extern "C" function defined in input-manager/android.cpp
+extern "C" void yetty_android_dispatch_input(AInputEvent* event);
+
 namespace yetty {
 
 class AndroidInitManager : public InitManager {
@@ -112,9 +115,8 @@ static void handleAppCmd(android_app* app, int32_t cmd) {
 // Input callback
 static int32_t handleInputEvent(android_app* app, AInputEvent* event) {
     (void)app;
-    // Forward to InputManager
-    extern void yetty_android_dispatch_input(AInputEvent* event);
-    yetty_android_dispatch_input(event);
+    // Forward to InputManager (declared at top of file)
+    ::yetty_android_dispatch_input(event);
     return 1;
 }
 

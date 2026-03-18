@@ -146,7 +146,7 @@ private:
         if (pressed) {
             char c = translateToChar(keyCode, metaState);
             if (c) {
-                loop->dispatch(base::Event::charEvent(c));
+                loop->dispatch(base::Event::charInput(static_cast<uint32_t>(c)));
             }
         }
     }
@@ -244,11 +244,11 @@ Result<InputManager::Ptr> InputManager::createImpl() {
     return Ok(Ptr(mgr));
 }
 
+} // namespace yetty
+
 // C function for android_main to call
 extern "C" void yetty_android_dispatch_input(AInputEvent* event) {
-    AndroidInputManager::dispatchInputEvent(event);
+    yetty::AndroidInputManager::dispatchInputEvent(event);
 }
-
-} // namespace yetty
 
 #endif // __ANDROID__

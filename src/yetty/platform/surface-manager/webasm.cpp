@@ -69,9 +69,9 @@ public:
     }
 
     WGPUSurface createWGPUSurface(WGPUInstance instance) override {
-        WGPUSurfaceSourceCanvasHTMLSelector_Emscripten canvasSource = {};
-        canvasSource.chain.sType = WGPUSType_SurfaceSourceCanvasHTMLSelector_Emscripten;
-        canvasSource.selector = "#canvas";
+        WGPUEmscriptenSurfaceSourceCanvasHTMLSelector canvasSource = {};
+        canvasSource.chain.sType = WGPUSType_EmscriptenSurfaceSourceCanvasHTMLSelector;
+        canvasSource.selector = { .data = "#canvas", .length = 7 };
 
         WGPUSurfaceDescriptor surfaceDesc = {};
         surfaceDesc.nextInChain = &canvasSource.chain;
