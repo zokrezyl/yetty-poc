@@ -1215,8 +1215,9 @@ void VncClient::sendFrameAck() {
     sendInput(&hdr, sizeof(hdr));
 }
 
-void VncClient::sendCompressionConfig(bool forceRaw, uint8_t quality) {
-    ydebug("VNC client sendCompressionConfig: forceRaw={} quality={}", forceRaw, quality);
+void VncClient::sendCompressionConfig(bool forceRaw, uint8_t quality, bool alwaysFull) {
+    ydebug("VNC client sendCompressionConfig: forceRaw={} quality={} alwaysFull={}",
+           forceRaw, quality, alwaysFull);
     InputHeader hdr = {};
     hdr.type = static_cast<uint8_t>(InputType::COMPRESSION_CONFIG);
     hdr.data_size = sizeof(CompressionConfigEvent);
@@ -1224,6 +1225,7 @@ void VncClient::sendCompressionConfig(bool forceRaw, uint8_t quality) {
     CompressionConfigEvent evt = {};
     evt.forceRaw = forceRaw ? 1 : 0;
     evt.quality = quality;
+    evt.alwaysFull = alwaysFull ? 1 : 0;
 
     uint8_t buf[sizeof(hdr) + sizeof(evt)];
     std::memcpy(buf, &hdr, sizeof(hdr));

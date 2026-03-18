@@ -36,6 +36,8 @@ public:
     bool getForceRaw() const { return _forceRaw; }
     void setJpegQuality(uint8_t quality) { _jpegQuality = quality; }
     uint8_t getJpegQuality() const { return _jpegQuality; }
+    void setAlwaysFullFrame(bool enable) { _alwaysFullFrame = enable; }
+    bool getAlwaysFullFrame() const { return _alwaysFullFrame; }
 
     // Check if server is ready to accept more frames (previous GPU work done)
     // Call this BEFORE creating GPU command buffers to avoid FD exhaustion
@@ -167,6 +169,7 @@ private:
     // Compression settings (configurable by client)
     bool _forceRaw = false;      // Force raw encoding (no JPEG)
     uint8_t _jpegQuality = 80;   // JPEG quality (1-100), default 80
+    bool _alwaysFullFrame = false;  // Always send full frame (no delta encoding)
 
     // Flow control: wait for client ack before sending next frame
     std::atomic<bool> _awaitingAck{false};

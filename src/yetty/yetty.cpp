@@ -193,6 +193,7 @@ private:
     bool _vncHeadless = false;  // No local rendering, only serve to VNC clients
     bool _vncMergeRects = false;  // Merge dirty tiles into larger rectangles
     bool _vncForceRaw = false;    // Force raw encoding (no JPEG) - client-side setting
+    bool _vncAlwaysFull = false;  // Always request full frame (no delta encoding) - client-side
     uint8_t _vncCompressionQuality = 0;  // JPEG quality (0 = use server default)
     uint32_t _vncRequestedWidth = 0;   // Client-requested capture size
     uint32_t _vncRequestedHeight = 0;
@@ -493,8 +494,8 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
             _vncClient->sendResize(vncWidth, vncHeight);
             _vncClient->sendCellSize(20);  // Default cell height
             // Send compression config if custom settings are specified
-            if (_vncForceRaw || _vncCompressionQuality > 0) {
-                _vncClient->sendCompressionConfig(_vncForceRaw, _vncCompressionQuality);
+            if (_vncForceRaw || _vncCompressionQuality > 0 || _vncAlwaysFull) {
+                _vncClient->sendCompressionConfig(_vncForceRaw, _vncCompressionQuality, _vncAlwaysFull);
             }
         };
 
@@ -780,6 +781,7 @@ Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
     args::Flag vncMergeRectsFlag(parser, "vnc-merge-rects", "Merge dirty tiles into larger rectangles (better compression)", {"vnc-merge-rects"});
     args::Flag vncRawFlag(parser, "vnc-raw", "Force raw encoding (no JPEG compression) - client-side", {"vnc-raw"});
     args::ValueFlag<uint8_t> vncQualityFlag(parser, "QUALITY", "JPEG compression quality 1-100 (default 80) - client-side", {"vnc-compression-quality"}, 0);
+    args::Flag vncAlwaysFullFlag(parser, "vnc-always-full", "Always request full frame (no delta encoding) - client-side", {"vnc-always-full"});
     args::ValueFlag<std::string> vncTestFlag(parser, "PATTERN", "VNC test mode: text, color, scroll, stress", {"vnc-test"});
 
     // ytrace options
@@ -868,6 +870,11 @@ Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
         _vncCompressionQuality = args::get(vncQualityFlag);
         if (_vncCompressionQuality > 100) _vncCompressionQuality = 100;
         ydebug("VNC compression quality set to {}", _vncCompressionQuality);
+    }
+
+    if (vncAlwaysFullFlag) {
+        _vncAlwaysFull = true;
+        ydebug("VNC always full frame mode enabled (no delta encoding)");
     }
 
     if (vncTestFlag) {

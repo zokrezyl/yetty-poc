@@ -126,7 +126,8 @@ struct CellSizeEvent {
 struct CompressionConfigEvent {
     uint8_t forceRaw;    // 1 = force raw encoding (no JPEG), 0 = allow JPEG
     uint8_t quality;     // JPEG quality (1-100), 0 = use server default
-    uint8_t reserved[2]; // Padding for alignment
+    uint8_t alwaysFull;  // 1 = always send full frame (no delta), 0 = use delta encoding
+    uint8_t reserved;    // Padding for alignment
 };
 
 #pragma pack(pop)

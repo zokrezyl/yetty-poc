@@ -192,6 +192,7 @@ int main(int argc, char* argv[]) {
     args::ValueFlag<uint16_t> portFlag(parser, "port", "Server port (default 5900)", {'p', "port"}, 5900);
     args::Flag noInputFlag(parser, "no-input", "Disable input generation", {"no-input"});
     args::Flag testRenderFlag(parser, "test-render", "Test rendering with random bitmap (no server needed)", {"test-render"});
+    args::Flag alwaysFullFlag(parser, "vnc-always-full", "Always request full frame (no delta encoding)", {"vnc-always-full"});
     args::ValueFlag<int> widthFlag(parser, "width", "Window width (default 1280)", {'W', "width"}, 1280);
     args::ValueFlag<int> heightFlag(parser, "height", "Window height (default 720)", {'H', "height"}, 720);
 
@@ -209,6 +210,7 @@ int main(int argc, char* argv[]) {
     uint16_t port = args::get(portFlag);
     bool generateInput = !args::get(noInputFlag);
     bool testRender = args::get(testRenderFlag);
+    bool alwaysFull = args::get(alwaysFullFlag);
     int windowWidth = args::get(widthFlag);
     int windowHeight = args::get(heightFlag);
 
@@ -220,6 +222,7 @@ int main(int argc, char* argv[]) {
     }
     ydebug("Window: {}x{}", windowWidth, windowHeight);
     ydebug("Input generation: {}", generateInput ? "enabled" : "disabled");
+    ydebug("Always full frame: {}", alwaysFull ? "enabled" : "disabled");
 
     // Signal handling
     std::signal(SIGINT, signalHandler);
@@ -573,6 +576,11 @@ struct VertexOutput {
         // Send initial resize and cell size FIRST - server adjusts before sending frames
         vncClient->sendResize(static_cast<uint16_t>(windowWidth), static_cast<uint16_t>(windowHeight));
         vncClient->sendCellSize(g_clientState.cellHeight);
+
+        // Send compression config if always-full mode is requested
+        if (alwaysFull) {
+            vncClient->sendCompressionConfig(false, 0, true);  // alwaysFull=true
+        }
 
         // Setup input generator
         if (generateInput) {

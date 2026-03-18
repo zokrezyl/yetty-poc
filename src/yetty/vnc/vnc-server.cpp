@@ -669,6 +669,11 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
                 _framesSinceFullRefresh = 0;
             }
 
+            // Always full mode: skip delta encoding entirely
+            if (_alwaysFullFrame) {
+                _forceFullFrame = true;
+            }
+
             WGPUExtent3D extent = {width, height, 1};
 
             if (_forceFullFrame) {
@@ -1327,7 +1332,9 @@ void VncServer::dispatchInput(const InputHeader& hdr, const uint8_t* data) {
                 if (c->quality > 0 && c->quality <= 100) {
                     _jpegQuality = c->quality;
                 }
-                ydebug("VNC COMPRESSION_CONFIG: forceRaw={} quality={}", _forceRaw, _jpegQuality);
+                _alwaysFullFrame = (c->alwaysFull != 0);
+                ydebug("VNC COMPRESSION_CONFIG: forceRaw={} quality={} alwaysFull={}",
+                       _forceRaw, _jpegQuality, _alwaysFullFrame);
             }
             break;
     }
