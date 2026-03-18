@@ -1,6 +1,7 @@
 #include "yvideo-encoder.h"
 #include <wels/codec_api.h>
 #include <ytrace/ytrace.hpp>
+#include <chrono>
 #include <cstring>
 
 namespace yetty::yvideo {
@@ -115,6 +116,8 @@ public:
         int prependSpsPps = 1;
         _encoder->SetOption(ENCODER_OPTION_SPS_PPS_ID_STRATEGY, &prependSpsPps);
 
+        _startTime = std::chrono::steady_clock::now();
+
         yinfo("H264Encoder: initialized {}x{} @ {:.1f}fps, {}kbps, IDR every {} frames, screen={}",
               config.width, config.height, config.frameRate,
               config.bitrate / 1000, config.idrInterval, config.screenContent);
@@ -141,7 +144,9 @@ public:
         srcPic.pData[0] = const_cast<uint8_t*>(yPlane);
         srcPic.pData[1] = const_cast<uint8_t*>(uPlane);
         srcPic.pData[2] = const_cast<uint8_t*>(vPlane);
-        srcPic.uiTimeStamp = _frameIndex * (1000000 / static_cast<uint64_t>(_config.frameRate));
+        // Use wall-clock time for accurate timestamps (important for recording)
+        auto now = std::chrono::steady_clock::now();
+        srcPic.uiTimeStamp = std::chrono::duration_cast<std::chrono::microseconds>(now - _startTime).count();
 
         // Force IDR if requested
         if (_forceIDR) {
@@ -217,6 +222,7 @@ private:
     EncoderConfig _config;
     uint32_t _frameIndex = 0;
     bool _forceIDR = false;
+    std::chrono::steady_clock::time_point _startTime;
 };
 
 Result<Encoder::Ptr> Encoder::createH264(const EncoderConfig& config) {
