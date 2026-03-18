@@ -671,6 +671,27 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
         // VNC client resize - changes the terminal grid size (not cell size)
         _vncServer->onResize = [this](uint16_t widthPx, uint16_t heightPx) {
             if (widthPx == 0 || heightPx == 0) return;
+
+            // Special value 0xFFFF x 0xFFFF means "use current window size"
+            // Used by recording clients that don't want to change the terminal size
+            if (widthPx == 0xFFFF && heightPx == 0xFFFF) {
+                if (_vncRequestedWidth > 0 && _vncRequestedHeight > 0) {
+                    ydebug("VNC onResize: client requested current size, already {}x{}",
+                           _vncRequestedWidth, _vncRequestedHeight);
+                    return;
+                }
+                // Use current window dimensions
+                int w, h;
+                _platform->getFramebufferSize(w, h);
+                widthPx = static_cast<uint16_t>(w);
+                heightPx = static_cast<uint16_t>(h);
+                ydebug("VNC onResize: client requested current size -> {}x{}", widthPx, heightPx);
+                _vncRequestedWidth = widthPx;
+                _vncRequestedHeight = heightPx;
+                _vncServer->forceFullFrame();
+                return;
+            }
+
             ydebug("VNC onResize: {}x{} px", widthPx, heightPx);
 
             // Store requested capture size (full VNC area including server's statusbar)

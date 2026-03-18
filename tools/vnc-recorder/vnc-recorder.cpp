@@ -190,9 +190,11 @@ int main(int argc, char* argv[]) {
 
     yinfo("Connected to {}:{}", host, port);
 
-    // Only send resize if dimensions were explicitly specified
+    // Send resize: explicit dimensions or 0xFFFF = "use current server size"
     if (recWidth > 0 && recHeight > 0) {
         sendResize(fd, recWidth, recHeight);
+    } else {
+        sendResize(fd, 0xFFFF, 0xFFFF);
     }
     sendCompressionConfig(fd, CODEC_H264);
 
