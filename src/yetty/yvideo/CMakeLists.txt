@@ -1,6 +1,7 @@
-# yvideo - video decoder library using dav1d (AV1) and openh264 (H.264)
+# yvideo - video codec library using dav1d (AV1) and openh264 (H.264)
 add_library(yetty_yvideo STATIC
     yvideo-decoder.cpp
+    yvideo-encoder.cpp
 )
 
 target_include_directories(yetty_yvideo PUBLIC

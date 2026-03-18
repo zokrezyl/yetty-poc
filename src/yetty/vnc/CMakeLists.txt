@@ -17,6 +17,7 @@ target_link_libraries(yetty_vnc PUBLIC
     turbojpeg-static
     ytrace::ytrace
     yetty_base
+    yetty_yvideo
 )
 
 if(WIN32)

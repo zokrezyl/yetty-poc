@@ -194,6 +194,7 @@ private:
     bool _vncMergeRects = false;  // Merge dirty tiles into larger rectangles
     bool _vncForceRaw = false;    // Force raw encoding (no JPEG) - client-side setting
     bool _vncAlwaysFull = false;  // Always request full frame (no delta encoding) - client-side
+    bool _vncUseH264 = false;     // Use H.264 encoding instead of JPEG - client-side
     uint8_t _vncCompressionQuality = 0;  // JPEG quality (0 = use server default)
     uint32_t _vncRequestedWidth = 0;   // Client-requested capture size
     uint32_t _vncRequestedHeight = 0;
@@ -494,8 +495,9 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
             _vncClient->sendResize(vncWidth, vncHeight);
             _vncClient->sendCellSize(20);  // Default cell height
             // Send compression config if custom settings are specified
-            if (_vncForceRaw || _vncCompressionQuality > 0 || _vncAlwaysFull) {
-                _vncClient->sendCompressionConfig(_vncForceRaw, _vncCompressionQuality, _vncAlwaysFull);
+            if (_vncForceRaw || _vncCompressionQuality > 0 || _vncAlwaysFull || _vncUseH264) {
+                uint8_t codec = _vncUseH264 ? vnc::CODEC_H264 : vnc::CODEC_JPEG;
+                _vncClient->sendCompressionConfig(_vncForceRaw, _vncCompressionQuality, _vncAlwaysFull, codec);
             }
         };
 
@@ -782,6 +784,7 @@ Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
     args::Flag vncRawFlag(parser, "vnc-raw", "Force raw encoding (no JPEG compression) - client-side", {"vnc-raw"});
     args::ValueFlag<uint8_t> vncQualityFlag(parser, "QUALITY", "JPEG compression quality 1-100 (default 80) - client-side", {"vnc-compression-quality"}, 0);
     args::Flag vncAlwaysFullFlag(parser, "vnc-always-full", "Always request full frame (no delta encoding) - client-side", {"vnc-always-full"});
+    args::Flag vncUseH264Flag(parser, "vnc-use-h264", "Use H.264 encoding instead of JPEG (implies --vnc-always-full) - client-side", {"vnc-use-h264"});
     args::ValueFlag<std::string> vncTestFlag(parser, "PATTERN", "VNC test mode: text, color, scroll, stress", {"vnc-test"});
 
     // ytrace options
@@ -875,6 +878,12 @@ Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
     if (vncAlwaysFullFlag) {
         _vncAlwaysFull = true;
         ydebug("VNC always full frame mode enabled (no delta encoding)");
+    }
+
+    if (vncUseH264Flag) {
+        _vncUseH264 = true;
+        _vncAlwaysFull = true;  // H.264 requires full frame mode
+        yinfo("VNC H.264 encoding enabled (implies always-full)");
     }
 
     if (vncTestFlag) {

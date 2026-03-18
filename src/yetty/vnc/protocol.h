@@ -14,6 +14,16 @@ enum class Encoding : uint8_t {
     FULL_FRAME = 3,  // Entire frame as one JPEG (tile_x=0, tile_y=0, covers whole frame)
     RECT_RAW = 4,    // Arbitrary rectangle (uses RectHeader, raw pixels)
     RECT_JPEG = 5,   // Arbitrary rectangle (uses RectHeader, JPEG compressed)
+    H264 = 6,        // H.264 encoded frame (full frame, uses VideoFrameHeader)
+};
+
+// Video frame header for H.264 encoded frames
+// Follows FrameHeader when encoding == H264
+struct VideoFrameHeader {
+    uint8_t frameType;   // 0 = IDR (keyframe), 1 = P-frame
+    uint8_t reserved[3];
+    uint32_t timestamp;  // Frame timestamp in ms (for playback sync)
+    uint32_t dataSize;   // Size of H.264 NAL data following this header
 };
 
 #pragma pack(push, 1)
@@ -124,11 +134,15 @@ struct CellSizeEvent {
 
 // Compression configuration (client -> server)
 struct CompressionConfigEvent {
-    uint8_t forceRaw;    // 1 = force raw encoding (no JPEG), 0 = allow JPEG
+    uint8_t forceRaw;    // 1 = force raw encoding (no JPEG/H264), 0 = allow compression
     uint8_t quality;     // JPEG quality (1-100), 0 = use server default
     uint8_t alwaysFull;  // 1 = always send full frame (no delta), 0 = use delta encoding
-    uint8_t reserved;    // Padding for alignment
+    uint8_t codec;       // 0 = JPEG (default), 1 = H.264
 };
+
+// Codec types for CompressionConfigEvent.codec
+constexpr uint8_t CODEC_JPEG = 0;
+constexpr uint8_t CODEC_H264 = 1;
 
 #pragma pack(pop)
 
