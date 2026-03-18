@@ -193,6 +193,8 @@ private:
     bool _vncHeadless = false;  // No local rendering, only serve to VNC clients
     bool _vncMergeRects = false;  // Merge dirty tiles into larger rectangles
     bool _vncForceRaw = false;    // Force raw encoding (no JPEG) - client-side setting
+    bool _vncAlwaysFull = false;  // Always request full frame (no delta encoding) - client-side
+    bool _vncUseH264 = false;     // Use H.264 encoding instead of JPEG - client-side
     uint8_t _vncCompressionQuality = 0;  // JPEG quality (0 = use server default)
     uint32_t _vncRequestedWidth = 0;   // Client-requested capture size
     uint32_t _vncRequestedHeight = 0;
@@ -493,8 +495,9 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
             _vncClient->sendResize(vncWidth, vncHeight);
             _vncClient->sendCellSize(20);  // Default cell height
             // Send compression config if custom settings are specified
-            if (_vncForceRaw || _vncCompressionQuality > 0) {
-                _vncClient->sendCompressionConfig(_vncForceRaw, _vncCompressionQuality);
+            if (_vncForceRaw || _vncCompressionQuality > 0 || _vncAlwaysFull || _vncUseH264) {
+                uint8_t codec = _vncUseH264 ? vnc::CODEC_H264 : vnc::CODEC_JPEG;
+                _vncClient->sendCompressionConfig(_vncForceRaw, _vncCompressionQuality, _vncAlwaysFull, codec);
             }
         };
 
@@ -668,6 +671,27 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
         // VNC client resize - changes the terminal grid size (not cell size)
         _vncServer->onResize = [this](uint16_t widthPx, uint16_t heightPx) {
             if (widthPx == 0 || heightPx == 0) return;
+
+            // Special value 0xFFFF x 0xFFFF means "use current window size"
+            // Used by recording clients that don't want to change the terminal size
+            if (widthPx == 0xFFFF && heightPx == 0xFFFF) {
+                if (_vncRequestedWidth > 0 && _vncRequestedHeight > 0) {
+                    ydebug("VNC onResize: client requested current size, already {}x{}",
+                           _vncRequestedWidth, _vncRequestedHeight);
+                    return;
+                }
+                // Use current window dimensions
+                int w, h;
+                _platform->getFramebufferSize(w, h);
+                widthPx = static_cast<uint16_t>(w);
+                heightPx = static_cast<uint16_t>(h);
+                ydebug("VNC onResize: client requested current size -> {}x{}", widthPx, heightPx);
+                _vncRequestedWidth = widthPx;
+                _vncRequestedHeight = heightPx;
+                _vncServer->forceFullFrame();
+                return;
+            }
+
             ydebug("VNC onResize: {}x{} px", widthPx, heightPx);
 
             // Store requested capture size (full VNC area including server's statusbar)
@@ -780,6 +804,8 @@ Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
     args::Flag vncMergeRectsFlag(parser, "vnc-merge-rects", "Merge dirty tiles into larger rectangles (better compression)", {"vnc-merge-rects"});
     args::Flag vncRawFlag(parser, "vnc-raw", "Force raw encoding (no JPEG compression) - client-side", {"vnc-raw"});
     args::ValueFlag<uint8_t> vncQualityFlag(parser, "QUALITY", "JPEG compression quality 1-100 (default 80) - client-side", {"vnc-compression-quality"}, 0);
+    args::Flag vncAlwaysFullFlag(parser, "vnc-always-full", "Always request full frame (no delta encoding) - client-side", {"vnc-always-full"});
+    args::Flag vncUseH264Flag(parser, "vnc-use-h264", "Use H.264 encoding instead of JPEG (implies --vnc-always-full) - client-side", {"vnc-use-h264"});
     args::ValueFlag<std::string> vncTestFlag(parser, "PATTERN", "VNC test mode: text, color, scroll, stress", {"vnc-test"});
 
     // ytrace options
@@ -868,6 +894,17 @@ Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
         _vncCompressionQuality = args::get(vncQualityFlag);
         if (_vncCompressionQuality > 100) _vncCompressionQuality = 100;
         ydebug("VNC compression quality set to {}", _vncCompressionQuality);
+    }
+
+    if (vncAlwaysFullFlag) {
+        _vncAlwaysFull = true;
+        ydebug("VNC always full frame mode enabled (no delta encoding)");
+    }
+
+    if (vncUseH264Flag) {
+        _vncUseH264 = true;
+        _vncAlwaysFull = true;  // H.264 requires full frame mode
+        yinfo("VNC H.264 encoding enabled (implies always-full)");
     }
 
     if (vncTestFlag) {

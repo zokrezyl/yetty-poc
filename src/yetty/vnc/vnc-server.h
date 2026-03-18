@@ -4,6 +4,7 @@
 #include <yetty/result.hpp>
 #include <yetty/base/event-listener.h>
 #include <yetty/base/event-queue.h>
+#include <yetty/yvideo/yvideo-encoder.h>
 #include <webgpu/webgpu.h>
 #include <string>
 #include <vector>
@@ -36,6 +37,13 @@ public:
     bool getForceRaw() const { return _forceRaw; }
     void setJpegQuality(uint8_t quality) { _jpegQuality = quality; }
     uint8_t getJpegQuality() const { return _jpegQuality; }
+    void setAlwaysFullFrame(bool enable) { _alwaysFullFrame = enable; }
+    bool getAlwaysFullFrame() const { return _alwaysFullFrame; }
+
+    // H.264 encoding (alternative to JPEG)
+    void setUseH264(bool enable);
+    bool getUseH264() const { return _useH264; }
+    void forceH264IDR() { if (_h264Encoder) _h264Encoder->forceIDR(); }
 
     // Check if server is ready to accept more frames (previous GPU work done)
     // Call this BEFORE creating GPU command buffers to avoid FD exhaustion
@@ -167,6 +175,23 @@ private:
     // Compression settings (configurable by client)
     bool _forceRaw = false;      // Force raw encoding (no JPEG)
     uint8_t _jpegQuality = 80;   // JPEG quality (1-100), default 80
+    bool _alwaysFullFrame = false;  // Always send full frame (no delta encoding)
+
+    // H.264 encoding
+    bool _useH264 = false;       // Use H.264 instead of JPEG
+    yvideo::Encoder::Ptr _h264Encoder;
+    std::vector<uint8_t> _yuvBuffer;  // YUV420 buffer for H.264 encoding
+    uint32_t _yuvYStride = 0;
+    uint32_t _yuvUVStride = 0;
+
+    // BGRA->YUV420 GPU conversion resources
+    WGPUComputePipeline _bgraToYuvPipeline = nullptr;
+    WGPUBindGroup _bgraToYuvBindGroup = nullptr;
+    WGPUBindGroupLayout _bgraToYuvBindGroupLayout = nullptr;
+    WGPUBuffer _yuvOutputBuffer = nullptr;
+    WGPUBuffer _yuvParamsBuffer = nullptr;
+    Result<void> createBgraToYuvPipeline();
+    Result<void> convertBgraToYuv(WGPUTexture texture, uint32_t width, uint32_t height);
 
     // Flow control: wait for client ack before sending next frame
     std::atomic<bool> _awaitingAck{false};

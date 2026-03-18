@@ -4,6 +4,7 @@
 #include <turbojpeg.h>
 
 #include <cstring>
+#include <algorithm>
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten/websocket.h>
@@ -15,6 +16,41 @@ namespace yetty::vnc {
 using yetty::Result;
 using yetty::Ok;
 using yetty::Err;
+
+// YUV420 to BGRA conversion (BT.709, video range)
+static void convertYuv420ToBgraCpu(const yvideo::YUVFrame& yuv, uint8_t* bgra) {
+    // BT.709 inverse coefficients (video range 16-235 Y, 16-240 UV)
+    // R = 1.164 * (Y - 16) + 1.793 * (Cr - 128)
+    // G = 1.164 * (Y - 16) - 0.213 * (Cb - 128) - 0.533 * (Cr - 128)
+    // B = 1.164 * (Y - 16) + 2.112 * (Cb - 128)
+
+    for (uint32_t y = 0; y < yuv.height; y++) {
+        const uint8_t* yRow = yuv.yPlane + y * yuv.yStride;
+        const uint8_t* uRow = yuv.uPlane + (y / 2) * yuv.uStride;
+        const uint8_t* vRow = yuv.vPlane + (y / 2) * yuv.vStride;
+        uint8_t* bgraRow = bgra + y * yuv.width * 4;
+
+        for (uint32_t x = 0; x < yuv.width; x++) {
+            int yVal = yRow[x];
+            int uVal = uRow[x / 2];
+            int vVal = vRow[x / 2];
+
+            // BT.709 conversion (scaled by 256)
+            int c = 298 * (yVal - 16);
+            int d = uVal - 128;
+            int e = vVal - 128;
+
+            int r = (c + 409 * e + 128) >> 8;
+            int g = (c - 100 * d - 208 * e + 128) >> 8;
+            int b = (c + 516 * d + 128) >> 8;
+
+            bgraRow[x * 4 + 0] = static_cast<uint8_t>(std::clamp(b, 0, 255));
+            bgraRow[x * 4 + 1] = static_cast<uint8_t>(std::clamp(g, 0, 255));
+            bgraRow[x * 4 + 2] = static_cast<uint8_t>(std::clamp(r, 0, 255));
+            bgraRow[x * 4 + 3] = 255;
+        }
+    }
+}
 
 // Fullscreen quad shader
 static const char* SHADER_SOURCE = R"(
@@ -586,10 +622,89 @@ void VncClient::onSocketReadable() {
                         }
                         break;
                     }
+
+                    case Encoding::H264: {
+                        // H.264 encoded frame - first read VideoFrameHeader, then NAL data
+                        if (_currentTile.data_size < sizeof(VideoFrameHeader)) {
+                            ywarn("VNC H264: data too small for header");
+                            break;
+                        }
+
+                        // Parse video frame header
+                        const VideoFrameHeader* vh = reinterpret_cast<const VideoFrameHeader*>(_recvBuffer.data());
+                        const uint8_t* nalData = _recvBuffer.data() + sizeof(VideoFrameHeader);
+                        uint32_t nalSize = vh->dataSize;
+
+                        ydebug("VNC H264: frameType={} timestamp={} nalSize={}",
+                               vh->frameType, vh->timestamp, nalSize);
+
+                        // Initialize decoder on first frame
+                        if (!_h264Decoder) {
+                            auto decoderRes = yvideo::Decoder::createH264();
+                            if (!decoderRes) {
+                                ywarn("VNC H264: failed to create decoder");
+                                break;
+                            }
+                            _h264Decoder = *decoderRes;
+                            yinfo("VNC: H.264 decoder initialized");
+                        }
+
+                        // Feed NAL data to decoder
+                        auto feedRes = _h264Decoder->feed(std::span<const uint8_t>(nalData, nalSize));
+                        if (!feedRes) {
+                            ywarn("VNC H264: feed failed: {}", feedRes.error().message());
+                            break;
+                        }
+
+                        // Try to get decoded frame
+                        auto frameRes = _h264Decoder->getFrame();
+                        if (frameRes && *frameRes) {
+                            const auto& yuv = **frameRes;
+
+                            // Convert YUV to BGRA
+                            std::vector<uint8_t> bgra(yuv.width * yuv.height * 4);
+                            convertYuv420ToBgraCpu(yuv, bgra.data());
+
+                            // Upload to texture (H.264 may round to even dimensions, so accept ±1)
+                            if (_texture && yuv.width <= _width && yuv.height <= _height &&
+                                yuv.width + 1 >= _width && yuv.height + 1 >= _height) {
+                                WGPUTexelCopyTextureInfo dst = {};
+                                dst.texture = _texture;
+                                dst.origin = {0, 0, 0};
+
+                                WGPUTexelCopyBufferLayout layout = {};
+                                layout.bytesPerRow = yuv.width * 4;
+                                layout.rowsPerImage = yuv.height;
+
+                                WGPUExtent3D size = {yuv.width, yuv.height, 1};
+                                wgpuQueueWriteTexture(_queue, &dst, bgra.data(), bgra.size(), &layout, &size);
+                                ydebug("VNC H264: decoded frame {}x{} (expected {}x{})", yuv.width, yuv.height, _width, _height);
+                            }
+
+                            _h264Decoder->releaseFrame();
+                        }
+
+                        tilesReceived = true;
+                        _tilesReceived++;
+                        if (_tilesReceived >= _currentFrame.num_tiles) {
+                            _recvState = RecvState::FRAME_HEADER;
+                            _recvNeeded = sizeof(FrameHeader);
+                            _recvOffset = 0;
+                            _recvBuffer.resize(_recvNeeded);
+                            sendFrameAck();
+                        }
+                        break;
+                    }
+
+                    case Encoding::RECT_RAW:
+                    case Encoding::RECT_JPEG:
+                        // These shouldn't appear in tile mode
+                        break;
                 }
 
-                // Upload tile IMMEDIATELY to GPU (skip for FULL_FRAME - already handled)
-                if (static_cast<Encoding>(_currentTile.encoding) == Encoding::FULL_FRAME) {
+                // Upload tile IMMEDIATELY to GPU (skip for FULL_FRAME/H264 - already handled)
+                if (static_cast<Encoding>(_currentTile.encoding) == Encoding::FULL_FRAME ||
+                    static_cast<Encoding>(_currentTile.encoding) == Encoding::H264) {
                     break;  // Already uploaded full frame above
                 }
                 if (_texture && _width > 0 && _height > 0) {
@@ -1215,8 +1330,9 @@ void VncClient::sendFrameAck() {
     sendInput(&hdr, sizeof(hdr));
 }
 
-void VncClient::sendCompressionConfig(bool forceRaw, uint8_t quality) {
-    ydebug("VNC client sendCompressionConfig: forceRaw={} quality={}", forceRaw, quality);
+void VncClient::sendCompressionConfig(bool forceRaw, uint8_t quality, bool alwaysFull, uint8_t codec) {
+    ydebug("VNC client sendCompressionConfig: forceRaw={} quality={} alwaysFull={} codec={}",
+           forceRaw, quality, alwaysFull, codec);
     InputHeader hdr = {};
     hdr.type = static_cast<uint8_t>(InputType::COMPRESSION_CONFIG);
     hdr.data_size = sizeof(CompressionConfigEvent);
@@ -1224,6 +1340,8 @@ void VncClient::sendCompressionConfig(bool forceRaw, uint8_t quality) {
     CompressionConfigEvent evt = {};
     evt.forceRaw = forceRaw ? 1 : 0;
     evt.quality = quality;
+    evt.alwaysFull = alwaysFull ? 1 : 0;
+    evt.codec = codec;
 
     uint8_t buf[sizeof(hdr) + sizeof(evt)];
     std::memcpy(buf, &hdr, sizeof(hdr));

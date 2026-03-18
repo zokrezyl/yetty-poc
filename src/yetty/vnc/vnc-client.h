@@ -3,6 +3,7 @@
 #include <yetty/result.hpp>
 #include <yetty/base/event-loop.h>
 #include <yetty/base/event-listener.h>
+#include <yetty/yvideo/yvideo-decoder.h>
 #include "protocol.h"
 #include <webgpu/webgpu.h>
 #include <string>
@@ -50,7 +51,7 @@ public:
     void sendResize(uint16_t width, uint16_t height);
     void sendCellSize(uint8_t cellHeight);
     void sendFrameAck();  // Flow control: notify server we're done with frame
-    void sendCompressionConfig(bool forceRaw, uint8_t quality);  // Configure compression settings
+    void sendCompressionConfig(bool forceRaw, uint8_t quality, bool alwaysFull = false, uint8_t codec = CODEC_JPEG);  // Configure compression settings
 
     // EventListener interface
     Result<bool> onEvent(const base::Event& event) override;
@@ -119,11 +120,13 @@ private:
 
     // Async receive state machine
     enum class RecvState {
-        FRAME_HEADER,   // Waiting for frame header
-        TILE_HEADER,    // Waiting for tile header
-        TILE_DATA,      // Waiting for tile data
-        RECT_HEADER,    // Waiting for rectangle header (merged tiles mode)
-        RECT_DATA       // Waiting for rectangle data
+        FRAME_HEADER,       // Waiting for frame header
+        TILE_HEADER,        // Waiting for tile header
+        TILE_DATA,          // Waiting for tile data
+        RECT_HEADER,        // Waiting for rectangle header (merged tiles mode)
+        RECT_DATA,          // Waiting for rectangle data
+        VIDEO_FRAME_HEADER, // Waiting for H.264 video frame header
+        VIDEO_FRAME_DATA    // Waiting for H.264 NAL data
     };
     RecvState _recvState = RecvState::FRAME_HEADER;
     std::vector<uint8_t> _recvBuffer;
@@ -140,8 +143,14 @@ private:
     // Current rectangle being received (for merged tiles mode)
     RectHeader _currentRect;
 
+    // Current video frame header (for H.264 mode)
+    VideoFrameHeader _currentVideoHeader;
+
     // JPEG decompressor (initialized once)
     void* _jpegDecompressor = nullptr;
+
+    // H.264 decoder
+    yvideo::Decoder::Ptr _h264Decoder;
 
     // Frame state
     uint16_t _width = 0;

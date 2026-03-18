@@ -142,6 +142,20 @@ private:
 // H.264 Decoder (openh264)
 //=============================================================================
 
+// Redirect openh264 log output to ytrace instead of stderr
+static void openh264TraceCallback(void* /*ctx*/, int level, const char* msg) {
+    std::string_view sv(msg);
+    while (!sv.empty() && (sv.back() == '\n' || sv.back() == '\r'))
+        sv.remove_suffix(1);
+
+    if (level <= WELS_LOG_ERROR)
+        yerror("[openh264] {}", sv);
+    else if (level <= WELS_LOG_WARNING)
+        ywarn("[openh264] {}", sv);
+    else
+        ydebug("[openh264] {}", sv);
+}
+
 class H264Decoder : public Decoder {
 public:
     H264Decoder() = default;
@@ -157,6 +171,12 @@ public:
         if (WelsCreateDecoder(&_decoder) != 0 || !_decoder) {
             return Err<void>("WelsCreateDecoder failed");
         }
+
+        // Redirect openh264 logs to ytrace
+        WelsTraceCallback cb = openh264TraceCallback;
+        _decoder->SetOption(DECODER_OPTION_TRACE_CALLBACK, &cb);
+        int traceLevel = WELS_LOG_WARNING;
+        _decoder->SetOption(DECODER_OPTION_TRACE_LEVEL, &traceLevel);
 
         SDecodingParam param = {};
         param.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_AVC;

@@ -6,6 +6,7 @@
 #include "socket-compat.h"
 #include <cstring>
 #include <chrono>
+#include <algorithm>
 
 namespace yetty::vnc {
 
@@ -61,6 +62,63 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
     }
 }
 )";
+
+// CPU-based BGRA to YUV420 conversion (BT.709, video range)
+static void convertBgraToYuv420Cpu(
+    const uint8_t* bgra, uint32_t width, uint32_t height, uint32_t bgraStride,
+    uint8_t* yPlane, uint8_t* uPlane, uint8_t* vPlane,
+    uint32_t yStride, uint32_t uvStride)
+{
+    // BT.709 coefficients for video range (16-235 Y, 16-240 UV)
+    for (uint32_t y = 0; y < height; y++) {
+        const uint8_t* row = bgra + y * bgraStride;
+        uint8_t* yRow = yPlane + y * yStride;
+
+        for (uint32_t x = 0; x < width; x++) {
+            uint8_t b = row[x * 4 + 0];
+            uint8_t g = row[x * 4 + 1];
+            uint8_t r = row[x * 4 + 2];
+
+            // Y = 16 + (66*R + 129*G + 25*B + 128) >> 8
+            int yVal = 16 + ((66 * r + 129 * g + 25 * b + 128) >> 8);
+            yRow[x] = static_cast<uint8_t>(std::clamp(yVal, 16, 235));
+        }
+    }
+
+    // UV planes at half resolution
+    uint32_t uvHeight = height / 2;
+    uint32_t uvWidth = width / 2;
+
+    for (uint32_t uvY = 0; uvY < uvHeight; uvY++) {
+        uint8_t* uRow = uPlane + uvY * uvStride;
+        uint8_t* vRow = vPlane + uvY * uvStride;
+
+        for (uint32_t uvX = 0; uvX < uvWidth; uvX++) {
+            uint32_t srcX = uvX * 2;
+            uint32_t srcY = uvY * 2;
+
+            int sumR = 0, sumG = 0, sumB = 0;
+            for (int dy = 0; dy < 2 && srcY + dy < height; dy++) {
+                const uint8_t* row = bgra + (srcY + dy) * bgraStride;
+                for (int dx = 0; dx < 2 && srcX + dx < width; dx++) {
+                    sumB += row[(srcX + dx) * 4 + 0];
+                    sumG += row[(srcX + dx) * 4 + 1];
+                    sumR += row[(srcX + dx) * 4 + 2];
+                }
+            }
+
+            int avgR = sumR / 4;
+            int avgG = sumG / 4;
+            int avgB = sumB / 4;
+
+            int cb = 128 + ((-38 * avgR - 74 * avgG + 112 * avgB + 128) >> 8);
+            int cr = 128 + ((112 * avgR - 94 * avgG - 18 * avgB + 128) >> 8);
+
+            uRow[uvX] = static_cast<uint8_t>(std::clamp(cb, 16, 240));
+            vRow[uvX] = static_cast<uint8_t>(std::clamp(cr, 16, 240));
+        }
+    }
+}
 
 VncServer::~VncServer() {
     stop();
@@ -669,6 +727,11 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
                 _framesSinceFullRefresh = 0;
             }
 
+            // Always full mode: skip delta encoding entirely
+            if (_alwaysFullFrame) {
+                _forceFullFrame = true;
+            }
+
             WGPUExtent3D extent = {width, height, 1};
 
             if (_forceFullFrame) {
@@ -961,10 +1024,116 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
     frameData.reserve(64 * 1024);
 
     uint16_t totalTiles = _tilesX * _tilesY;
-    // Use full-frame JPEG when > 50% tiles dirty, but not if raw encoding is forced
+    // Use full-frame encoding when > 50% tiles dirty, but not if raw encoding is forced
     bool useFullFrame = !_forceRaw && (numDirty > totalTiles / 2);
 
-    if (useFullFrame) {
+    // H.264 encoding path
+    if (_useH264 && useFullFrame) {
+        _stats.fullUpdates++;
+
+        const uint8_t* pixels = _cpuPixels ? _cpuPixels : _gpuReadbackPixels.data();
+        if (!pixels) {
+            return Err<void>("No pixels for H.264 encoding");
+        }
+
+        // H.264 requires even dimensions - round down
+        uint32_t encWidth = width & ~1u;
+        uint32_t encHeight = height & ~1u;
+
+        // Initialize encoder on first frame or resolution change
+        if (!_h264Encoder || _h264Encoder->config().width != encWidth || _h264Encoder->config().height != encHeight) {
+            yvideo::EncoderConfig cfg;
+            cfg.width = encWidth;
+            cfg.height = encHeight;
+            cfg.bitrate = 4000000;  // 4 Mbps for good quality screen content
+            cfg.frameRate = 30.0f;
+            cfg.idrInterval = 60;   // IDR every 2 seconds
+            cfg.screenContent = true;
+
+            auto encoderRes = yvideo::Encoder::createH264(cfg);
+            if (!encoderRes) {
+                ywarn("VNC: Failed to create H.264 encoder, falling back to JPEG");
+                _useH264 = false;
+                // Fall through to JPEG path below
+                goto jpeg_fallback;
+            }
+            _h264Encoder = *encoderRes;
+
+            // Allocate YUV buffer (using even dimensions)
+            _yuvYStride = (encWidth + 15) & ~15;  // Align to 16 bytes
+            _yuvUVStride = (_yuvYStride / 2 + 15) & ~15;
+            uint32_t yPlaneSize = _yuvYStride * encHeight;
+            uint32_t uvPlaneSize = _yuvUVStride * (encHeight / 2);
+            _yuvBuffer.resize(yPlaneSize + uvPlaneSize * 2);
+
+            yinfo("VNC: H.264 encoder created {}x{} (source {}x{}), YUV buffer {}KB",
+                  encWidth, encHeight, width, height, _yuvBuffer.size() / 1024);
+        }
+
+        // Convert BGRA to YUV420 (use encWidth/encHeight for even dimensions)
+        uint32_t yPlaneSize = _yuvYStride * encHeight;
+        uint32_t uvPlaneSize = _yuvUVStride * (encHeight / 2);
+        uint8_t* yPlane = _yuvBuffer.data();
+        uint8_t* uPlane = _yuvBuffer.data() + yPlaneSize;
+        uint8_t* vPlane = _yuvBuffer.data() + yPlaneSize + uvPlaneSize;
+
+        convertBgraToYuv420Cpu(pixels, encWidth, encHeight, width * 4,
+                               yPlane, uPlane, vPlane,
+                               _yuvYStride, _yuvUVStride);
+
+        // Encode to H.264
+        auto encodeRes = _h264Encoder->encode(yPlane, uPlane, vPlane, _yuvYStride, _yuvUVStride);
+        if (!encodeRes) {
+            ywarn("VNC: H.264 encode failed: {}", encodeRes.error().message());
+            _useH264 = false;
+            goto jpeg_fallback;
+        }
+
+        const auto& encoded = *encodeRes;
+        if (encoded.data.empty()) {
+            // Frame was skipped by rate control
+            _awaitingAck = false;
+            return Ok();
+        }
+
+        // Build H.264 frame packet (use encoded dimensions, may be 1px less)
+        FrameHeader fh;
+        fh.magic = FRAME_MAGIC;
+        fh.width = encWidth;
+        fh.height = encHeight;
+        fh.tile_size = TILE_SIZE;  // Non-zero to use tile path (not rectangle mode)
+        fh.num_tiles = 1;
+
+        frameData.insert(frameData.end(),
+                         reinterpret_cast<uint8_t*>(&fh),
+                         reinterpret_cast<uint8_t*>(&fh) + sizeof(fh));
+
+        TileHeader th;
+        th.tile_x = 0;
+        th.tile_y = 0;
+        th.encoding = static_cast<uint8_t>(Encoding::H264);
+        th.data_size = sizeof(VideoFrameHeader) + encoded.data.size();
+
+        frameData.insert(frameData.end(),
+                        reinterpret_cast<uint8_t*>(&th),
+                        reinterpret_cast<uint8_t*>(&th) + sizeof(th));
+
+        VideoFrameHeader vh;
+        vh.frameType = encoded.isIDR ? 0 : 1;
+        vh.reserved[0] = vh.reserved[1] = vh.reserved[2] = 0;
+        vh.timestamp = static_cast<uint32_t>(encoded.timestamp / 1000);  // us to ms
+        vh.dataSize = encoded.data.size();
+
+        frameData.insert(frameData.end(),
+                        reinterpret_cast<uint8_t*>(&vh),
+                        reinterpret_cast<uint8_t*>(&vh) + sizeof(vh));
+        frameData.insert(frameData.end(), encoded.data.begin(), encoded.data.end());
+
+        _stats.bytesJpeg += encoded.data.size();  // Reuse stats for now
+
+        ydebug("VNC sendFrame: H264 {} bytes, IDR={}", encoded.data.size(), encoded.isIDR);
+    } else if (useFullFrame) {
+jpeg_fallback:
         // FULL FRAME: encode entire frame as one JPEG
         _stats.fullUpdates++;
 
@@ -1327,7 +1496,15 @@ void VncServer::dispatchInput(const InputHeader& hdr, const uint8_t* data) {
                 if (c->quality > 0 && c->quality <= 100) {
                     _jpegQuality = c->quality;
                 }
-                ydebug("VNC COMPRESSION_CONFIG: forceRaw={} quality={}", _forceRaw, _jpegQuality);
+                _alwaysFullFrame = (c->alwaysFull != 0);
+                // Handle codec selection
+                if (c->codec == CODEC_H264) {
+                    setUseH264(true);
+                } else {
+                    setUseH264(false);
+                }
+                ydebug("VNC COMPRESSION_CONFIG: forceRaw={} quality={} alwaysFull={} codec={}",
+                       _forceRaw, _jpegQuality, _alwaysFullFrame, c->codec);
             }
             break;
     }
@@ -1456,6 +1633,23 @@ Result<bool> VncServer::onEvent(const base::Event& event) {
     }
 
     return Ok(false);
+}
+
+void VncServer::setUseH264(bool enable) {
+    if (enable == _useH264) return;
+
+    _useH264 = enable;
+
+    if (enable && !_h264Encoder) {
+        // Create H.264 encoder on first use
+        // Will be initialized with actual dimensions when first frame arrives
+        yinfo("VNC: H.264 encoding enabled (encoder will be created on first frame)");
+    } else if (!enable) {
+        // Release encoder when switching back to JPEG
+        _h264Encoder.reset();
+        _yuvBuffer.clear();
+        yinfo("VNC: H.264 encoding disabled, using JPEG");
+    }
 }
 
 } // namespace yetty::vnc
