@@ -5,6 +5,21 @@
 
 namespace yetty::yvideo {
 
+// Redirect openh264 log output to ytrace instead of stderr
+static void openh264TraceCallback(void* /*ctx*/, int level, const char* msg) {
+    // Strip trailing newline if present
+    std::string_view sv(msg);
+    while (!sv.empty() && (sv.back() == '\n' || sv.back() == '\r'))
+        sv.remove_suffix(1);
+
+    if (level <= WELS_LOG_ERROR)
+        yerror("[openh264] {}", sv);
+    else if (level <= WELS_LOG_WARNING)
+        ywarn("[openh264] {}", sv);
+    else
+        ydebug("[openh264] {}", sv);
+}
+
 class H264Encoder : public Encoder {
 public:
     H264Encoder() = default;
@@ -22,6 +37,12 @@ public:
         if (WelsCreateSVCEncoder(&_encoder) != 0 || !_encoder) {
             return Err<void>("WelsCreateSVCEncoder failed");
         }
+
+        // Redirect openh264 logs to ytrace
+        WelsTraceCallback cb = openh264TraceCallback;
+        _encoder->SetOption(ENCODER_OPTION_TRACE_CALLBACK, &cb);
+        int traceLevel = WELS_LOG_WARNING;
+        _encoder->SetOption(ENCODER_OPTION_TRACE_LEVEL, &traceLevel);
 
         // Use SEncParamExt for more control
         SEncParamExt param;
