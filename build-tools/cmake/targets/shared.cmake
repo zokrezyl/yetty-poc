@@ -26,9 +26,13 @@ include(${YETTY_ROOT}/build-tools/cmake/TreeSitter.cmake)
 include(${YETTY_ROOT}/build-tools/cmake/Dav1d.cmake)
 include(${YETTY_ROOT}/build-tools/cmake/openh264.cmake)
 include(${YETTY_ROOT}/build-tools/cmake/minimp4.cmake)
-include(${YETTY_ROOT}/build-tools/cmake/miniaudio.cmake)
-include(${YETTY_ROOT}/build-tools/cmake/fdk-aac.cmake)
 include(${YETTY_ROOT}/build-tools/cmake/libs/wasm3.cmake)
+
+# Audio libraries for vnc-recorder (desktop Linux/macOS only for now)
+if(NOT ANDROID AND NOT EMSCRIPTEN AND NOT WIN32)
+    include(${YETTY_ROOT}/build-tools/cmake/miniaudio.cmake)
+    include(${YETTY_ROOT}/build-tools/cmake/fdk-aac.cmake)
+endif()
 
 # Common include directories
 set(YETTY_INCLUDES
