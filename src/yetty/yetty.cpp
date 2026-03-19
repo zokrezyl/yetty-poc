@@ -803,7 +803,7 @@ Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
     args::Flag vncHeadlessFlag(parser, "vnc-headless", "Start VNC server without window (headless)", {"vnc-headless"});
     args::Flag vncMergeRectsFlag(parser, "vnc-merge-rects", "Merge dirty tiles into larger rectangles (better compression)", {"vnc-merge-rects"});
     args::Flag vncRawFlag(parser, "vnc-raw", "Force raw encoding (no JPEG compression) - client-side", {"vnc-raw"});
-    args::ValueFlag<uint8_t> vncQualityFlag(parser, "QUALITY", "JPEG compression quality 1-100 (default 80) - client-side", {"vnc-compression-quality"}, 0);
+    args::ValueFlag<int> vncQualityFlag(parser, "QUALITY", "JPEG compression quality 1-100 (default 80) - client-side", {"vnc-compression-quality"}, 0);
     args::Flag vncAlwaysFullFlag(parser, "vnc-always-full", "Always request full frame (no delta encoding) - client-side", {"vnc-always-full"});
     args::Flag vncUseH264Flag(parser, "vnc-use-h264", "Use H.264 encoding instead of JPEG (implies --vnc-always-full) - client-side", {"vnc-use-h264"});
     args::ValueFlag<std::string> vncTestFlag(parser, "PATTERN", "VNC test mode: text, color, scroll, stress", {"vnc-test"});
@@ -891,8 +891,8 @@ Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
     }
 
     if (vncQualityFlag && args::get(vncQualityFlag) > 0) {
-        _vncCompressionQuality = args::get(vncQualityFlag);
-        if (_vncCompressionQuality > 100) _vncCompressionQuality = 100;
+        int quality = args::get(vncQualityFlag);
+        _vncCompressionQuality = static_cast<uint8_t>(std::min(quality, 100));
         ydebug("VNC compression quality set to {}", _vncCompressionQuality);
     }
 
