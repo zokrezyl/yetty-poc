@@ -31,9 +31,11 @@ add_subdirectory(${YETTY_ROOT}/build-tools/jslinux ${CMAKE_BINARY_DIR}/jslinux-b
 
 target_include_directories(yetty PRIVATE ${YETTY_INCLUDES} ${YETTY_RENDERER_INCLUDES} ${JPEG_INCLUDE_DIRS})
 
-# Embed resources (logo) - no-op on web but needed for symbol resolution
+# Embed resources (stubs on web, but needed for symbol resolution)
+# Note: webasm uses preload files, not incbin, so we only need stubs for symbols
 incbin_add_resources(yetty
     Logo "${YETTY_ROOT}/docs/logo.jpeg"
+    DefaultConfig "${YETTY_ROOT}/assets/default-config.yaml"
 )
 
 add_dependencies(yetty generate-cdb copy-shaders copy-assets)

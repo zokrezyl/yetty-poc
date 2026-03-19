@@ -176,6 +176,8 @@
               pkgs.nodejs
               pkgs.gcc  # For building host tools (yecho-static for VM)
               pkgs.brotli  # For asset compression in incbin
+              pkgs.meson  # For dav1d build
+              pkgs.nasm   # For dav1d build
             ];
 
             # Emscripten environment
