@@ -4,7 +4,6 @@
 
 #include <ytrace/ytrace.hpp>
 #include <android/looper.h>
-#include <android/log.h>
 #include <sys/timerfd.h>
 #include <unistd.h>
 #include <uv.h>
@@ -38,12 +37,16 @@ struct PollData {
 
 class AndroidEventLoop : public EventLoop {
 public:
-    AndroidEventLoop() {
+    AndroidEventLoop() = default;
+
+    Result<void> init() {
         _looper = ALooper_forThread();
         if (!_looper) {
-            _looper = ALooper_prepare(ALOOPER_PREPARE_ALLOW_NON_CALLBACKS);
+            return Err<void>("ALooper_forThread returned NULL - looper not prepared");
         }
         ALooper_acquire(_looper);
+        ydebug("AndroidEventLoop: acquired looper {:p}", static_cast<void*>(_looper));
+        return Ok();
     }
 
     ~AndroidEventLoop() override {
@@ -66,13 +69,13 @@ public:
     // On Android, start() doesn't run a loop - InitManager runs ALooper_pollAll
     // Our timers/polls are registered with ALooper callbacks
     int start() override {
-        __android_log_print(ANDROID_LOG_INFO, "yetty", "AndroidEventLoop::start (no-op, InitManager drives loop)");
+        ydebug("AndroidEventLoop::start (no-op, InitManager drives loop)");
         _running = true;
         return 0;
     }
 
     Result<void> stop() override {
-        __android_log_print(ANDROID_LOG_INFO, "yetty", "AndroidEventLoop::stop");
+        ydebug("AndroidEventLoop::stop");
         _running = false;
         ALooper_wake(_looper);
         return Ok();
@@ -251,7 +254,7 @@ public:
         td.id = id;
         _timers[id] = td;
 
-        __android_log_print(ANDROID_LOG_DEBUG, "yetty", "createTimer id=%d fd=%d", id, fd);
+        ydebug("createTimer id={} fd={}", id, fd);
         return Ok(id);
     }
 
@@ -266,7 +269,7 @@ public:
             setTimerfd(it->second.fd, timeoutMs);
         }
 
-        __android_log_print(ANDROID_LOG_DEBUG, "yetty", "configTimer id=%d timeout=%d", id, timeoutMs);
+        ydebug("configTimer id={} timeout={}", id, timeoutMs);
         return Ok();
     }
 
@@ -286,7 +289,7 @@ public:
         }
 
         td.running = true;
-        __android_log_print(ANDROID_LOG_DEBUG, "yetty", "startTimer id=%d timeout=%d", id, td.timeout);
+        ydebug("startTimer id={} timeout={}", id, td.timeout);
         return Ok();
     }
 
@@ -343,18 +346,27 @@ private:
     static int onTimerCallback(int fd, int events, void* data) {
         (void)events;
         auto* td = static_cast<TimerData*>(data);
+        ydebug("onTimerCallback: fd={} id={} listeners={}", fd, td->id, td->listeners.size());
 
         // Read to clear the timerfd
         uint64_t expirations;
         read(fd, &expirations, sizeof(expirations));
 
-        // Dispatch timer event to listeners
+        // Dispatch timer event to listeners, remove expired ones
         Event event = Event::timerEvent(td->id);
-        for (const auto& wp : td->listeners) {
-            if (auto sp = wp.lock()) {
-                sp->onEvent(event);
-            }
-        }
+        td->listeners.erase(
+            std::remove_if(td->listeners.begin(), td->listeners.end(),
+                [&event](const std::weak_ptr<EventListener>& wp) {
+                    auto sp = wp.lock();
+                    if (!sp) return true;  // Remove expired
+
+                    auto result = sp->onEvent(event);
+                    if (!result) {
+                        yerror("Timer callback failed: {}", result.error().message());
+                    }
+                    return false;
+                }),
+            td->listeners.end());
 
         // Process EventQueue (cross-thread events)
         uv_run(uv_default_loop(), UV_RUN_NOWAIT);
@@ -366,26 +378,32 @@ private:
     static int onPollCallback(int fd, int events, void* data) {
         auto* pd = static_cast<PollData*>(data);
 
-        if (events & ALOOPER_EVENT_INPUT) {
+        // Helper to dispatch and cleanup expired listeners
+        auto dispatchAndCleanup = [pd](Event::Type type, int fd) {
             Event event;
-            event.type = Event::Type::PollReadable;
+            event.type = type;
             event.poll.fd = fd;
-            for (const auto& wp : pd->listeners) {
-                if (auto sp = wp.lock()) {
-                    sp->onEvent(event);
-                }
-            }
+            pd->listeners.erase(
+                std::remove_if(pd->listeners.begin(), pd->listeners.end(),
+                    [&event](const std::weak_ptr<EventListener>& wp) {
+                        auto sp = wp.lock();
+                        if (!sp) return true;  // Remove expired
+
+                        auto result = sp->onEvent(event);
+                        if (!result) {
+                            yerror("Poll callback failed: {}", result.error().message());
+                        }
+                        return false;
+                    }),
+                pd->listeners.end());
+        };
+
+        if (events & ALOOPER_EVENT_INPUT) {
+            dispatchAndCleanup(Event::Type::PollReadable, fd);
         }
 
         if (events & ALOOPER_EVENT_OUTPUT) {
-            Event event;
-            event.type = Event::Type::PollWritable;
-            event.poll.fd = fd;
-            for (const auto& wp : pd->listeners) {
-                if (auto sp = wp.lock()) {
-                    sp->onEvent(event);
-                }
-            }
+            dispatchAndCleanup(Event::Type::PollWritable, fd);
         }
 
         // Process EventQueue (cross-thread events)
@@ -411,7 +429,12 @@ private:
 
 // Factory
 Result<EventLoop::Ptr> EventLoop::createImpl() noexcept {
-    return Ok(Ptr(new AndroidEventLoop()));
+    auto impl = new AndroidEventLoop();
+    if (auto res = impl->init(); !res) {
+        delete impl;
+        return Err<Ptr>("AndroidEventLoop init failed", res);
+    }
+    return Ok(Ptr(impl));
 }
 
 } // namespace base

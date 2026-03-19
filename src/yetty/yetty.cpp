@@ -1944,7 +1944,9 @@ void YettyImpl::initEventLoop() noexcept {
         yerror("Failed to configure frame timer: {}", error_msg(res));
         return;
     }
-    if (auto res = loop->registerTimerListener(_frameTimerId, sharedAs<base::EventListener>()); !res) {
+    auto listener = sharedAs<base::EventListener>();
+    ydebug("initEventLoop: listener={}", static_cast<void*>(listener.get()));
+    if (auto res = loop->registerTimerListener(_frameTimerId, listener); !res) {
         yerror("Failed to register frame timer listener: {}", error_msg(res));
         return;
     }
@@ -1987,6 +1989,7 @@ void YettyImpl::shutdownEventLoop() noexcept {
 }
 
 Result<bool> YettyImpl::onEvent(const base::Event& event) {
+    ydebug("onEvent: type={} timerId={} frameTimerId={}", static_cast<int>(event.type), event.timer.timerId, _frameTimerId);
     // Track modifier key state for scroll events
     // GLFW-compatible key codes: GLFW_KEY_LEFT_CONTROL=341, RIGHT=345, LEFT_SHIFT=340, RIGHT=344
     if (event.type == base::Event::Type::KeyDown) {
@@ -2019,6 +2022,7 @@ Result<bool> YettyImpl::onEvent(const base::Event& event) {
     // Frame timer or ScreenUpdate: render
     if ((event.type == base::Event::Type::Timer && event.timer.timerId == _frameTimerId) ||
         event.type == base::Event::Type::ScreenUpdate) {
+        ydebug("onEvent: frame timer fired, calling mainLoopIteration");
         // Check if window should close
         if (_surfaceManager && _surfaceManager->shouldClose()) {
             ydebug("Window close requested, stopping event loop");

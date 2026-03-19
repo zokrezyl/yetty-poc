@@ -94,16 +94,23 @@ static AndroidInitManager* g_initManager = nullptr;
 
 // App command callback
 static void handleAppCmd(android_app* app, int32_t cmd) {
-    (void)app;
     if (!g_initManager) return;
 
     switch (cmd) {
         case APP_CMD_INIT_WINDOW:
-            ydebug("APP_CMD_INIT_WINDOW");
+            ydebug("APP_CMD_INIT_WINDOW: window={}", static_cast<void*>(app->window));
+            // Set window in singleton so SurfaceManager can create WebGPU surface
+            if (auto singleton = AndroidAppSingleton::instance(); singleton) {
+                (*singleton)->setWindow(app->window);
+            }
             g_initManager->setAnimating(true);
             break;
         case APP_CMD_TERM_WINDOW:
             ydebug("APP_CMD_TERM_WINDOW");
+            // Clear window in singleton
+            if (auto singleton = AndroidAppSingleton::instance(); singleton) {
+                (*singleton)->setWindow(nullptr);
+            }
             g_initManager->setAnimating(false);
             break;
         case APP_CMD_GAINED_FOCUS:
