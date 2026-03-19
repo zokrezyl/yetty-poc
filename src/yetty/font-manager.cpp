@@ -22,7 +22,9 @@ public:
                     const std::string& msdfFontsDir,
                     const std::string& fontsDir,
                     const std::string& shadersDir,
-                    MsdfCdbProvider::Ptr cdbProvider) noexcept {
+                    MsdfCdbProvider::Ptr cdbProvider,
+                    const std::vector<std::string>& preloadCardShaders,
+                    const std::vector<std::string>& preloadGlyphShaders) noexcept {
     if (_initialized)
       return Ok();
 
@@ -30,6 +32,8 @@ public:
     _allocator = std::move(allocator);
     _shaderMgr = shaderMgr;
     _cdbProvider = cdbProvider;
+    _preloadCardShaders = preloadCardShaders;
+    _preloadGlyphShaders = preloadGlyphShaders;
     _fontsDir = fontsDir;
     _shadersDir = shadersDir;
 
@@ -368,6 +372,17 @@ private:
             _cardFont->getFunctionCount());
     }
 
+    // Preload shaders to avoid first-use stutter
+    if (_shaderGlyphFont && !_preloadGlyphShaders.empty()) {
+      auto count = _shaderGlyphFont->preloadShaders(_preloadGlyphShaders);
+      ydebug("Preloaded {}/{} glyph shaders", count, _preloadGlyphShaders.size());
+    }
+
+    if (_cardFont && !_preloadCardShaders.empty()) {
+      auto count = _cardFont->preloadShaders(_preloadCardShaders);
+      ydebug("Preloaded {}/{} card shaders", count, _preloadCardShaders.size());
+    }
+
     return Ok();
   }
 
@@ -455,6 +470,8 @@ private:
   GpuAllocator::Ptr _allocator;
   ShaderManager::Ptr _shaderMgr;
   MsdfCdbProvider::Ptr _cdbProvider;
+  std::vector<std::string> _preloadCardShaders;
+  std::vector<std::string> _preloadGlyphShaders;
   std::string _cacheDir;    // MSDF fonts directory
   std::string _fontsDir;    // TTF fonts directory
   std::string _shadersDir;  // WGSL shaders directory
@@ -480,10 +497,12 @@ FontManager::createImpl(ContextType &, const GPUContext &gpu,
                         const std::string& msdfFontsDir,
                         const std::string& fontsDir,
                         const std::string& shadersDir,
-                        MsdfCdbProvider::Ptr cdbProvider) noexcept {
+                        MsdfCdbProvider::Ptr cdbProvider,
+                        const std::vector<std::string>& preloadCardShaders,
+                        const std::vector<std::string>& preloadGlyphShaders) noexcept {
   auto impl = Ptr(new FontManagerImpl());
   if (auto res = static_cast<FontManagerImpl *>(impl.get())
-                     ->init(gpu, std::move(allocator), shaderMgr, msdfFontsDir, fontsDir, shadersDir, cdbProvider);
+                     ->init(gpu, std::move(allocator), shaderMgr, msdfFontsDir, fontsDir, shadersDir, cdbProvider, preloadCardShaders, preloadGlyphShaders);
       !res) {
     yerror("FontManager creation failed: {}", error_msg(res));
     return Err<Ptr>("FontManager init failed", res);

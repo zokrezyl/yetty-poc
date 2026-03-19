@@ -105,6 +105,17 @@ public:
      */
     virtual std::vector<std::string> getShaderNames() const = 0;
 
+    /**
+     * Preload shaders by name to avoid first-use stutter.
+     * Each name should match "0xNNNN-name" format (without .wgsl extension).
+     * This triggers the same code path as first-use, adding them to
+     * _enabledCodepoints so they're compiled in the initial batch.
+     *
+     * @param names List of shader names to preload
+     * @return Number of shaders successfully preloaded
+     */
+    virtual uint32_t preloadShaders(const std::vector<std::string>& names) = 0;
+
 protected:
     ShaderFont() = default;
 };

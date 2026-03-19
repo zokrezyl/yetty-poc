@@ -19,6 +19,10 @@ extern "C" {
     // Logo (always embedded)
     extern const unsigned char gLogoData[];
     extern const unsigned int gLogoSize;
+
+    // Default config (always embedded)
+    extern const unsigned char gDefaultConfigData[];
+    extern const unsigned int gDefaultConfigSize;
 }
 
 // Include generated asset manifests
@@ -50,6 +54,7 @@ public:
         // Register all embedded assets
         // Name format matches the extraction path
         registerAsset("logo.jpeg", gLogoData, gLogoSize, false);
+        registerAsset("default-config.yaml", gDefaultConfigData, gDefaultConfigSize, false);
 
         // Register shaders from generated manifest
 #ifdef HAS_SHADERS_MANIFEST

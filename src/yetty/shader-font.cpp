@@ -52,6 +52,7 @@ public:
     uint32_t getBaseCodepoint() const override { return _baseCodepoint; }
     Result<void> reload() override;
     std::vector<std::string> getShaderNames() const override;
+    uint32_t preloadShaders(const std::vector<std::string>& names) override;
 
 private:
     Result<void> loadShaders();
@@ -401,6 +402,40 @@ std::vector<std::string> ShaderFontImpl::getShaderNames() const {
         names.push_back(entry.name);
     }
     return names;
+}
+
+uint32_t ShaderFontImpl::preloadShaders(const std::vector<std::string>& names) {
+    uint32_t preloaded = 0;
+
+    for (const auto& name : names) {
+        // Parse "0xNNNN-name" format to extract offset
+        uint32_t offset = 0;
+        std::string shaderName;
+        if (!parseShaderFilename(name + ".wgsl", offset, shaderName)) {
+            ywarn("ShaderFont::preloadShaders: invalid name format '{}'", name);
+            continue;
+        }
+
+        // Find entry by offset
+        uint32_t codepoint = _baseCodepoint + offset;
+        auto it = _codepointToIndex.find(codepoint);
+        if (it == _codepointToIndex.end()) {
+            ywarn("ShaderFont::preloadShaders: shader '{}' (codepoint 0x{:06X}) not found",
+                  name, codepoint);
+            continue;
+        }
+
+        // Use getGlyphIndex to enable the shader - same code path as first-use
+        getGlyphIndex(codepoint);
+        ydebug("ShaderFont::preloadShaders: preloaded '{}' (codepoint 0x{:06X})",
+              name, codepoint);
+        preloaded++;
+    }
+
+    ydebug("ShaderFont::preloadShaders: preloaded {}/{} {} shaders",
+          preloaded, names.size(),
+          (_category == Category::Card) ? "card" : "glyph");
+    return preloaded;
 }
 
 } // namespace yetty

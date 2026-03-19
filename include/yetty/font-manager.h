@@ -33,6 +33,8 @@ public:
     // msdfFontsDir: Directory for MSDF font CDB files (from Platform::getMsdfFontsDir())
     // fontsDir: Directory for TTF font files (from Platform::getFontsDir())
     // shadersDir: Directory for WGSL shader files (from Platform::getShadersDir())
+    // preloadCardShaders: Shader names to preload for cards (format: "0xNNNN-name")
+    // preloadGlyphShaders: Shader names to preload for glyphs (format: "0xNNNN-name")
     static Result<Ptr> createImpl(ContextType& ctx,
                                   const GPUContext& gpu,
                                   GpuAllocator::Ptr allocator,
@@ -40,7 +42,9 @@ public:
                                   const std::string& msdfFontsDir,
                                   const std::string& fontsDir,
                                   const std::string& shadersDir,
-                                  MsdfCdbProvider::Ptr cdbProvider = nullptr) noexcept;
+                                  MsdfCdbProvider::Ptr cdbProvider = nullptr,
+                                  const std::vector<std::string>& preloadCardShaders = {},
+                                  const std::vector<std::string>& preloadGlyphShaders = {}) noexcept;
 
     virtual Result<MsMsdfFont::Ptr> getMsMsdfFont(const std::string& fontName) noexcept = 0;
     virtual MsMsdfFont::Ptr getDefaultMsMsdfFont() noexcept = 0;
