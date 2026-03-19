@@ -1,6 +1,12 @@
 # dav1d - AV1 video decoder
 # BSD 2-Clause license, VideoLAN project
 # Uses Meson build system, requires meson and ninja
+# Skip for Emscripten - meson not available in web build environment
+
+if(EMSCRIPTEN)
+    message(STATUS "dav1d: Skipped for Emscripten (meson not available)")
+    return()
+endif()
 
 include(ExternalProject)
 include(ProcessorCount)
