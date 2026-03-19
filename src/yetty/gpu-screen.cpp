@@ -304,7 +304,8 @@ private:
   void
   requestScreenUpdate(); // Dispatch ScreenUpdate event for immediate re-render
   void sendCardMouseOSC(int oscCode, const std::string& cardName,
-                        int buttons, int press, float x, float y);
+                        int buttons, int press, float x, float y,
+                        float scrollDelta = 0.0f);
 
   void setCell(int row, int col, uint32_t glyph, uint8_t fgR, uint8_t fgG,
                uint8_t fgB, uint8_t bgR, uint8_t bgG, uint8_t bgB,
@@ -478,7 +479,8 @@ private:
   int _mouseTrackingMode = 0; // VTERM_PROP_MOUSE_NONE/CLICK/DRAG/MOVE
 
   // Card mouse event modes (DEC 1500/1501)
-  bool _cardClickEventsEnabled = false;
+  // Bitmask: bit0=left, bit1=middle, bit2=right, bit3=scrollUp, bit4=scrollDown
+  uint8_t _cardClickEventsMask = 0;  // 0 = no events to client, 0xFF = all
   bool _cardMoveEventsEnabled = false;
   int _heldButtonMask = 0; // Bitmask of currently held buttons
 
@@ -803,17 +805,19 @@ static int buttonToBitmask(int button) {
 // For clicks: press is 0=release, 1=press
 // For moves: press is ignored (pass -1)
 void GPUScreenImpl::sendCardMouseOSC(int oscCode, const std::string& cardName,
-                                      int buttons, int press, float x, float y) {
+                                      int buttons, int press, float x, float y,
+                                      float scrollDelta) {
   if (!_outputCallback) return;
 
-  ytrace("GPUScreen sendCardMouseOSC: coords=({:.2f},{:.2f})", x, y);
+  ytrace("GPUScreen sendCardMouseOSC: coords=({:.2f},{:.2f}) scrollDelta={:.2f}", x, y, scrollDelta);
 
   char buf[256];
   if (oscCode == 777777) {
-    // Click event: OSC 777777;card-name;button;press;pixel-x;pixel-y ST
+    // Click/scroll event: OSC 777777;card-name;button;press;pixel-x;pixel-y;scroll-delta ST
     // Send FLOAT coordinates to avoid truncation boundary issues
-    snprintf(buf, sizeof(buf), "\033]%d;%s;%d;%d;%.6f;%.6f\033\\",
-             oscCode, cardName.c_str(), buttons, press, x, y);
+    // scroll-delta is 0 for click events, non-zero for scroll events
+    snprintf(buf, sizeof(buf), "\033]%d;%s;%d;%d;%.6f;%.6f;%.6f\033\\",
+             oscCode, cardName.c_str(), buttons, press, x, y, scrollDelta);
   } else {
     // Move event: OSC 777778;card-name;buttons-held;pixel-x;pixel-y ST
     snprintf(buf, sizeof(buf), "\033]%d;%s;%d;%.6f;%.6f\033\\",
@@ -3242,8 +3246,9 @@ int GPUScreenImpl::onSetTermProp(VTermProp prop, VTermValue *val, void *user) {
     // Switch between primary and alternate screen
     self->switchToScreen(val->boolean != 0);
   } else if (prop == VTERM_PROP_CARDCLICK) {
-    self->_cardClickEventsEnabled = val->boolean != 0;
-    ydebug("GPUScreen {}: card click events = {}", self->_id, val->boolean);
+    // DEC 1500: h = all events (0xFF), l = no events (0x00)
+    self->_cardClickEventsMask = val->boolean ? 0xFF : 0x00;
+    ydebug("GPUScreen {}: card click events mask = 0x{:02X}", self->_id, self->_cardClickEventsMask);
   } else if (prop == VTERM_PROP_CARDMOVE) {
     self->_cardMoveEventsEnabled = val->boolean != 0;
     ydebug("GPUScreen {}: card move events = {}", self->_id, val->boolean);
@@ -3382,10 +3387,10 @@ int GPUScreenImpl::onOSC(int command, VTermStringFragment frag, void *user) {
   }
 
   // Accept yetty vendor commands: 666666 (cards), 666667-669 (effects), 666670
-  // (gpu stats), 666671 (fps), 666674-675 (ypaint layers)
+  // (gpu stats), 666671 (fps), 666672 (cardmouse mask), 666674-675 (ypaint layers)
   if (command != YETTY_OSC_VENDOR_ID && command != 666667 &&
       command != 666668 && command != 666669 && command != 666670 &&
-      command != 666671 && command != 666674 && command != 666675) {
+      command != 666671 && command != 666672 && command != 666674 && command != 666675) {
     ywarn(">>> onOSC: ignoring non-yetty command {}", command);
     return 0;
   }
@@ -3431,6 +3436,24 @@ int GPUScreenImpl::onOSC(int command, VTermStringFragment frag, void *user) {
       ydebug("OSC 666671: Setting frame rate to {} FPS", fps);
       (*base::EventLoop::instance())
           ->dispatch(base::Event::setFrameRateEvent(fps));
+      self->_oscBuffer.clear();
+      self->_oscCommand = -1;
+      return 1;
+    }
+
+    // Handle card mouse event subscription mask (666672)
+    // Format: OSC 666672 ; <mask> ST
+    // mask is uint8_t: bit0=left, bit1=middle, bit2=right, bit3=scrollUp, bit4=scrollDown
+    // Example: 0x07 = clicks only, 0x18 = scroll only, 0xFF = all
+    if (command == 666672) {
+      uint8_t mask = 0;
+      if (self->_oscBuffer.starts_with("0x") || self->_oscBuffer.starts_with("0X")) {
+        mask = static_cast<uint8_t>(std::stoul(self->_oscBuffer, nullptr, 16));
+      } else {
+        mask = static_cast<uint8_t>(std::stoul(self->_oscBuffer, nullptr, 10));
+      }
+      self->_cardClickEventsMask = mask;
+      ydebug("OSC 666672: Card mouse event mask = 0x{:02X}", mask);
       self->_oscBuffer.clear();
       self->_oscCommand = -1;
       return 1;
@@ -4320,7 +4343,7 @@ bool GPUScreenImpl::handleCardOSCSequence(const std::string &sequence,
     // Format: OSC 777780 ; card-name ; pixel-width ; pixel-height ST
     // Only send when client has subscribed to card events (DEC 1500/1501)
     if (_outputCallback && !card->name().empty() &&
-        (_cardClickEventsEnabled || _cardMoveEventsEnabled)) {
+        (_cardClickEventsMask != 0 || _cardMoveEventsEnabled)) {
       float pixelW = static_cast<float>(card->widthCells()) * getCellWidthF();
       float pixelH = static_cast<float>(card->heightCells()) * getCellHeightF();
       char oscBuf[256];
@@ -4919,10 +4942,11 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
                  _focusedCardOriginX, _focusedCardOriginY);
           _cardMouseTarget = card->id();
           // Update held button mask
-          _heldButtonMask |= buttonToBitmask(button);
-          // Send OSC if card click events enabled
-          if (_cardClickEventsEnabled && !card->name().empty()) {
-            sendCardMouseOSC(777777, card->name(), buttonToBitmask(button), 1, cardX, cardY);
+          int btnMask = buttonToBitmask(button);
+          _heldButtonMask |= btnMask;
+          // Send OSC only if this button is in the subscription mask
+          if ((_cardClickEventsMask & btnMask) && !card->name().empty()) {
+            sendCardMouseOSC(777777, card->name(), btnMask, 1, cardX, cardY);
           }
           loop->dispatch(
               base::Event::cardMouseDown(card->id(), cardX, cardY, button));
@@ -5086,12 +5110,13 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
       float cardX = localX - _focusedCardOriginX;
       float cardY = localY - _focusedCardOriginY;
       // Update held button mask
-      _heldButtonMask &= ~buttonToBitmask(event.mouse.button);
-      // Send OSC if card click events enabled
-      if (_cardClickEventsEnabled) {
+      int btnMask = buttonToBitmask(event.mouse.button);
+      _heldButtonMask &= ~btnMask;
+      // Send OSC only if this button is in the subscription mask
+      if (_cardClickEventsMask & btnMask) {
         Card *card = getCardById(_cardMouseTarget);
         if (card && !card->name().empty()) {
-          sendCardMouseOSC(777777, card->name(), buttonToBitmask(event.mouse.button), 0, cardX, cardY);
+          sendCardMouseOSC(777777, card->name(), btnMask, 0, cardX, cardY);
         }
       }
       auto loop = *base::EventLoop::instance();
@@ -5151,19 +5176,22 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
           float localY = my - _viewportY;
           float cardX = localX - _focusedCardOriginX;
           float cardY = localY - _focusedCardOriginY;
-          // Send OSC if card click events enabled (scroll is treated as click)
-          if (_cardClickEventsEnabled) {
+          // Scroll: bit3=up(8), bit4=down(16)
+          int scrollMask = (event.scroll.dy > 0) ? 8 : 16;
+
+          if (_cardClickEventsMask & scrollMask) {
+            // Client subscribed to scroll - send OSC, don't handle locally
             Card *card = getCardById(_focusedCardId);
             if (card && !card->name().empty()) {
-              // Scroll: bit3=up(8), bit4=down(16)
-              int scrollMask = (event.scroll.dy > 0) ? 8 : 16;
-              sendCardMouseOSC(777777, card->name(), scrollMask, 1, cardX, cardY);
+              sendCardMouseOSC(777777, card->name(), scrollMask, 1, cardX, cardY, event.scroll.dy);
             }
+          } else {
+            // Client did NOT subscribe to scroll - handle locally (fast viewport pan)
+            auto loop = *base::EventLoop::instance();
+            loop->dispatch(base::Event::cardScrollEvent(
+                _focusedCardId, cardX, cardY, event.scroll.dx, event.scroll.dy,
+                event.scroll.mods));
           }
-          auto loop = *base::EventLoop::instance();
-          loop->dispatch(base::Event::cardScrollEvent(
-              _focusedCardId, cardX, cardY, event.scroll.dx, event.scroll.dy,
-              event.scroll.mods));
           return Ok(true);
         }
 

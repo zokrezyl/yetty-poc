@@ -147,6 +147,7 @@ void YDrawBuffer::clear() {
     _deltaMode = false;
     _nextAutoId = AUTO_ID_BASE;
     _textSpans.clear();
+    _images.clear();
     // Keep fonts — they're reusable across clears
     // Keep scene metadata
 }

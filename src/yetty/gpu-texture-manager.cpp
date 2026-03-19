@@ -251,6 +251,10 @@ Result<void> GpuTextureManagerImpl::createAtlas() {
 
     if (neededSize > _maxAtlasSize) {
         yerror("GpuTextureManager: atlas overflow, cannot fit textures in {}x{}", _maxAtlasSize, _maxAtlasSize);
+        // Mark all handles as not packed to prevent writes to invalid coords
+        for (auto& [id, data] : _textureHandles) {
+            data.packed = false;
+        }
         return Err<void>("Atlas overflow - too many/large textures");
     }
 
@@ -279,6 +283,16 @@ Result<void> GpuTextureManagerImpl::uploadAtlas(WGPUQueue queue) {
 
     for (auto& [id, data] : _textureHandles) {
         if (!data.dirty || !data.packed || !data.pixels) {
+            continue;
+        }
+
+        // Bounds check - skip if texture doesn't fit in atlas
+        if (data.atlasX + data.width > _currentAtlasSize ||
+            data.atlasY + data.height > _currentAtlasSize) {
+            ywarn("uploadAtlas: skipping texture id={} at ({},{}) size {}x{} - exceeds atlas {}x{}",
+                  id, data.atlasX, data.atlasY, data.width, data.height,
+                  _currentAtlasSize, _currentAtlasSize);
+            data.packed = false;
             continue;
         }
 
