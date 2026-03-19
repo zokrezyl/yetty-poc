@@ -45,7 +45,11 @@ public:
     // H.264 encoding (alternative to JPEG)
     void setUseH264(bool enable);
     bool getUseH264() const { return _useH264; }
+#if YETTY_HAS_YVIDEO
     void forceH264IDR() { if (_h264Encoder) _h264Encoder->forceIDR(); }
+#else
+    void forceH264IDR() {}
+#endif
 
     // Check if server is ready to accept more frames (previous GPU work done)
     // Call this BEFORE creating GPU command buffers to avoid FD exhaustion

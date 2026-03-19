@@ -1639,20 +1639,22 @@ Result<bool> VncServer::onEvent(const base::Event& event) {
 }
 
 void VncServer::setUseH264(bool enable) {
+#if YETTY_HAS_YVIDEO
     if (enable == _useH264) return;
 
     _useH264 = enable;
 
     if (enable && !_h264Encoder) {
-        // Create H.264 encoder on first use
-        // Will be initialized with actual dimensions when first frame arrives
         yinfo("VNC: H.264 encoding enabled (encoder will be created on first frame)");
     } else if (!enable) {
-        // Release encoder when switching back to JPEG
         _h264Encoder.reset();
         _yuvBuffer.clear();
         yinfo("VNC: H.264 encoding disabled, using JPEG");
     }
+#else
+    (void)enable;
+    ywarn("VNC: H.264 not available (yvideo not built)");
+#endif
 }
 
 } // namespace yetty::vnc
