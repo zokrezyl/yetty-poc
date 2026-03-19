@@ -98,7 +98,7 @@ Result<bool> VncView::onEvent(const base::Event& event) {
             // Convert to view-local coordinates
             int16_t x = static_cast<int16_t>(event.mouse.x - _bounds.x);
             int16_t y = static_cast<int16_t>(event.mouse.y - _bounds.y);
-            _client->sendMouseMove(x, y);
+            _client->sendMouseMove(x, y, static_cast<uint8_t>(event.mouse.mods));
             return Ok(true);
         }
 
@@ -106,7 +106,7 @@ Result<bool> VncView::onEvent(const base::Event& event) {
             int16_t x = static_cast<int16_t>(event.mouse.x - _bounds.x);
             int16_t y = static_cast<int16_t>(event.mouse.y - _bounds.y);
             MouseButton btn = static_cast<MouseButton>(event.mouse.button);
-            _client->sendMouseButton(x, y, btn, true);
+            _client->sendMouseButton(x, y, btn, true, static_cast<uint8_t>(event.mouse.mods));
             return Ok(true);
         }
 
@@ -114,7 +114,7 @@ Result<bool> VncView::onEvent(const base::Event& event) {
             int16_t x = static_cast<int16_t>(event.mouse.x - _bounds.x);
             int16_t y = static_cast<int16_t>(event.mouse.y - _bounds.y);
             MouseButton btn = static_cast<MouseButton>(event.mouse.button);
-            _client->sendMouseButton(x, y, btn, false);
+            _client->sendMouseButton(x, y, btn, false, static_cast<uint8_t>(event.mouse.mods));
             return Ok(true);
         }
 
@@ -123,7 +123,8 @@ Result<bool> VncView::onEvent(const base::Event& event) {
             int16_t y = static_cast<int16_t>(event.scroll.y - _bounds.y);
             _client->sendMouseScroll(x, y,
                 static_cast<int16_t>(event.scroll.dx),
-                static_cast<int16_t>(event.scroll.dy));
+                static_cast<int16_t>(event.scroll.dy),
+                static_cast<uint8_t>(event.scroll.mods));
             return Ok(true);
         }
 

@@ -42,9 +42,9 @@ public:
     WGPUTextureView getTextureView() const { return _textureView; }
 
     // Input forwarding (call from main thread when events occur)
-    void sendMouseMove(int16_t x, int16_t y);
-    void sendMouseButton(int16_t x, int16_t y, MouseButton button, bool pressed);
-    void sendMouseScroll(int16_t x, int16_t y, int16_t deltaX, int16_t deltaY);
+    void sendMouseMove(int16_t x, int16_t y, uint8_t mods = 0);
+    void sendMouseButton(int16_t x, int16_t y, MouseButton button, bool pressed, uint8_t mods = 0);
+    void sendMouseScroll(int16_t x, int16_t y, int16_t deltaX, int16_t deltaY, uint8_t mods = 0);
     void sendKeyDown(uint32_t keycode, uint32_t scancode, uint8_t mods);
     void sendKeyUp(uint32_t keycode, uint32_t scancode, uint8_t mods);
     void sendCharWithMods(uint32_t codepoint, uint8_t mods);

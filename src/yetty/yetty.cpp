@@ -569,8 +569,8 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
         ydebug("VNC server started on port {}", _vncServerPort);
 
         // Set up input callbacks from VNC clients
-        _vncServer->onMouseMove = [](int16_t x, int16_t y) {
-            ydebug("VNC onMouseMove callback: x={} y={}", x, y);
+        _vncServer->onMouseMove = [](int16_t x, int16_t y, uint8_t mods) {
+            ydebug("VNC onMouseMove callback: x={} y={} mods={}", x, y, mods);
             auto loopResult = base::EventLoop::instance();
             if (!loopResult) {
                 ywarn("VNC onMouseMove: EventLoop::instance() failed!");
@@ -580,8 +580,8 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
             (*loopResult)->dispatch(base::Event::mouseMove(static_cast<float>(x), static_cast<float>(y)));
         };
 
-        _vncServer->onMouseButton = [](int16_t x, int16_t y, vnc::MouseButton button, bool pressed) {
-            ydebug("VNC onMouseButton callback: x={} y={} btn={} pressed={}", x, y, static_cast<int>(button), pressed);
+        _vncServer->onMouseButton = [](int16_t x, int16_t y, vnc::MouseButton button, bool pressed, uint8_t mods) {
+            ydebug("VNC onMouseButton callback: x={} y={} btn={} pressed={} mods={}", x, y, static_cast<int>(button), pressed, mods);
             auto loopResult = base::EventLoop::instance();
             if (!loopResult) {
                 ywarn("VNC onMouseButton: EventLoop::instance() failed!");
@@ -591,15 +591,15 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
             int btn = static_cast<int>(button);
             if (pressed) {
                 ydebug("VNC onMouseButton: dispatching mouseDown");
-                loop->dispatch(base::Event::mouseDown(static_cast<float>(x), static_cast<float>(y), btn, 0));
+                loop->dispatch(base::Event::mouseDown(static_cast<float>(x), static_cast<float>(y), btn, mods));
             } else {
                 ydebug("VNC onMouseButton: dispatching mouseUp");
-                loop->dispatch(base::Event::mouseUp(static_cast<float>(x), static_cast<float>(y), btn, 0));
+                loop->dispatch(base::Event::mouseUp(static_cast<float>(x), static_cast<float>(y), btn, mods));
             }
         };
 
-        _vncServer->onMouseScroll = [](int16_t x, int16_t y, int16_t dx, int16_t dy) {
-            ydebug("VNC onMouseScroll callback: x={} y={} dx={} dy={}", x, y, dx, dy);
+        _vncServer->onMouseScroll = [](int16_t x, int16_t y, int16_t dx, int16_t dy, uint8_t mods) {
+            ydebug("VNC onMouseScroll callback: x={} y={} dx={} dy={} mods={}", x, y, dx, dy, mods);
             auto loopResult = base::EventLoop::instance();
             if (!loopResult) {
                 ywarn("VNC onMouseScroll: EventLoop::instance() failed!");
@@ -608,7 +608,7 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
             ydebug("VNC onMouseScroll: dispatching to EventLoop");
             (*loopResult)->dispatch(base::Event::scrollEvent(
                 static_cast<float>(x), static_cast<float>(y),
-                static_cast<float>(dx), static_cast<float>(dy), 0));
+                static_cast<float>(dx), static_cast<float>(dy), mods));
         };
 
         _vncServer->onKeyDown = [](uint32_t keycode, uint32_t scancode, uint8_t mods) {

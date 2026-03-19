@@ -1198,7 +1198,7 @@ void VncClient::updatePollEvents() {
 }
 #endif
 
-void VncClient::sendMouseMove(int16_t x, int16_t y) {
+void VncClient::sendMouseMove(int16_t x, int16_t y, uint8_t mods) {
     InputHeader hdr = {};
     hdr.type = static_cast<uint8_t>(InputType::MOUSE_MOVE);
     hdr.data_size = sizeof(MouseMoveEvent);
@@ -1206,6 +1206,7 @@ void VncClient::sendMouseMove(int16_t x, int16_t y) {
     MouseMoveEvent evt = {};
     evt.x = x;
     evt.y = y;
+    evt.mods = mods;
 
     uint8_t buf[sizeof(hdr) + sizeof(evt)];
     std::memcpy(buf, &hdr, sizeof(hdr));
@@ -1213,7 +1214,7 @@ void VncClient::sendMouseMove(int16_t x, int16_t y) {
     sendInput(buf, sizeof(buf));
 }
 
-void VncClient::sendMouseButton(int16_t x, int16_t y, MouseButton button, bool pressed) {
+void VncClient::sendMouseButton(int16_t x, int16_t y, MouseButton button, bool pressed, uint8_t mods) {
     InputHeader hdr = {};
     hdr.type = static_cast<uint8_t>(InputType::MOUSE_BUTTON);
     hdr.data_size = sizeof(MouseButtonEvent);
@@ -1223,6 +1224,7 @@ void VncClient::sendMouseButton(int16_t x, int16_t y, MouseButton button, bool p
     evt.y = y;
     evt.button = static_cast<uint8_t>(button);
     evt.pressed = pressed ? 1 : 0;
+    evt.mods = mods;
 
     uint8_t buf[sizeof(hdr) + sizeof(evt)];
     std::memcpy(buf, &hdr, sizeof(hdr));
@@ -1230,7 +1232,7 @@ void VncClient::sendMouseButton(int16_t x, int16_t y, MouseButton button, bool p
     sendInput(buf, sizeof(buf));
 }
 
-void VncClient::sendMouseScroll(int16_t x, int16_t y, int16_t deltaX, int16_t deltaY) {
+void VncClient::sendMouseScroll(int16_t x, int16_t y, int16_t deltaX, int16_t deltaY, uint8_t mods) {
     InputHeader hdr = {};
     hdr.type = static_cast<uint8_t>(InputType::MOUSE_SCROLL);
     hdr.data_size = sizeof(MouseScrollEvent);
@@ -1240,6 +1242,7 @@ void VncClient::sendMouseScroll(int16_t x, int16_t y, int16_t deltaX, int16_t de
     evt.y = y;
     evt.delta_x = deltaX;
     evt.delta_y = deltaY;
+    evt.mods = mods;
 
     uint8_t buf[sizeof(hdr) + sizeof(evt)];
     std::memcpy(buf, &hdr, sizeof(hdr));
