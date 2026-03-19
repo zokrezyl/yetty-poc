@@ -549,6 +549,9 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
         if (_vncMergeRects) {
             _vncServer->setMergeRectangles(true);
         }
+        if (_vncCompressionQuality > 0) {
+            _vncServer->setJpegQuality(_vncCompressionQuality);
+        }
         if (auto res = _vncServer->start(_vncServerPort); !res) {
             return Err<void>("Failed to start VNC server", res);
         }
@@ -803,7 +806,7 @@ Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
     args::Flag vncHeadlessFlag(parser, "vnc-headless", "Start VNC server without window (headless)", {"vnc-headless"});
     args::Flag vncMergeRectsFlag(parser, "vnc-merge-rects", "Merge dirty tiles into larger rectangles (better compression)", {"vnc-merge-rects"});
     args::Flag vncRawFlag(parser, "vnc-raw", "Force raw encoding (no JPEG compression) - client-side", {"vnc-raw"});
-    args::ValueFlag<int> vncQualityFlag(parser, "QUALITY", "JPEG compression quality 1-100 (default 80) - client-side", {"vnc-compression-quality"}, 0);
+    args::ValueFlag<int> vncQualityFlag(parser, "QUALITY", "JPEG compression quality 1-100 (default 80); on server sets default, on client overrides server", {"vnc-compression-quality"}, 0);
     args::Flag vncAlwaysFullFlag(parser, "vnc-always-full", "Always request full frame (no delta encoding) - client-side", {"vnc-always-full"});
     args::Flag vncUseH264Flag(parser, "vnc-use-h264", "Use H.264 encoding instead of JPEG (implies --vnc-always-full) - client-side", {"vnc-use-h264"});
     args::ValueFlag<std::string> vncTestFlag(parser, "PATTERN", "VNC test mode: text, color, scroll, stress", {"vnc-test"});
