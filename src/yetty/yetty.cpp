@@ -1005,6 +1005,33 @@ Result<void> YettyImpl::initEmbeddedAssets() noexcept {
     }
 
     ydebug("initEmbeddedAssets: extraction complete");
+
+    // Install default config to XDG config path if it doesn't exist
+    // This only happens on first run when no user config is present
+    auto xdgConfigPath = Config::getXDGConfigPath();
+    if (!xdgConfigPath.empty() && !std::filesystem::exists(xdgConfigPath)) {
+        auto defaultConfigSrc = cacheDir / "default-config.yaml";
+        if (std::filesystem::exists(defaultConfigSrc)) {
+            // Create config directory if needed
+            auto configDir = xdgConfigPath.parent_path();
+            if (!configDir.empty()) {
+                std::error_code ec;
+                std::filesystem::create_directories(configDir, ec);
+                if (ec) {
+                    ywarn("Failed to create config directory {}: {}", configDir.string(), ec.message());
+                } else {
+                    // Copy default config to user config location
+                    std::filesystem::copy_file(defaultConfigSrc, xdgConfigPath, ec);
+                    if (ec) {
+                        ywarn("Failed to install default config: {}", ec.message());
+                    } else {
+                        yinfo("Installed default config to {}", xdgConfigPath.string());
+                    }
+                }
+            }
+        }
+    }
+
     return Ok();
 }
 
