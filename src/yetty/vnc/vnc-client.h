@@ -10,6 +10,7 @@
 #include <vector>
 #include <queue>
 #include <functional>
+#include <chrono>
 
 namespace yetty::vnc {
 
@@ -71,6 +72,17 @@ public:
     Result<void> reconnect();
     bool wantsReconnect() const { return _wantsReconnect; }
     void clearReconnect() { _wantsReconnect = false; }
+
+    // Connection stats
+    struct Stats {
+        double fps = 0.0;           // Full frames per second
+        double tps = 0.0;           // Tiles per second
+        double mbps = 0.0;          // Megabits per second
+        uint8_t quality = 0;        // Current compression quality (0 = server default)
+    };
+    const Stats& stats() const { return _stats; }
+    const std::string& serverHost() const { return _reconnectHost; }
+    uint16_t serverPort() const { return _reconnectPort; }
 
 #ifdef __EMSCRIPTEN__
     // WebSocket data handler (called from callback)
@@ -174,6 +186,13 @@ private:
     WGPUBindGroupLayout _bindGroupLayout = nullptr;
     WGPURenderPipeline _pipeline = nullptr;
     WGPUBuffer _vertexBuffer = nullptr;
+
+    // Stats tracking
+    Stats _stats;
+    uint64_t _statsBytesWindow = 0;
+    uint32_t _statsFramesWindow = 0;
+    uint32_t _statsTilesWindow = 0;
+    std::chrono::steady_clock::time_point _statsWindowStart;
 };
 
 } // namespace yetty::vnc

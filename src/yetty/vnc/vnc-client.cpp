@@ -144,6 +144,7 @@ static EM_BOOL onWsMessage(int eventType, const EmscriptenWebSocketMessageEvent*
 VncClient::VncClient(WGPUDevice device, WGPUQueue queue, WGPUTextureFormat surfaceFormat, uint16_t width, uint16_t height)
     : _device(device), _queue(queue), _surfaceFormat(surfaceFormat), _width(width), _height(height) {
     _jpegDecompressor = tjInitDecompress();
+    _statsWindowStart = std::chrono::steady_clock::now();
     // Create texture immediately with view bounds
     ensureResources(width, height);
 }
@@ -460,6 +461,7 @@ void VncClient::onSocketReadable() {
         }
 
         _recvOffset += n;
+        _statsBytesWindow += static_cast<uint64_t>(n);
         ydebug("VNC onSocketReadable: recv {} bytes, offset now {}/{}", n, _recvOffset, _recvNeeded);
 
         // Check if we have enough data
@@ -613,7 +615,9 @@ void VncClient::onSocketReadable() {
                         }
                         tilesReceived = true;
                         _tilesReceived++;
+                        _statsTilesWindow++;
                         if (_tilesReceived >= _currentFrame.num_tiles) {
+                            _statsFramesWindow++;
                             _recvState = RecvState::FRAME_HEADER;
                             _recvNeeded = sizeof(FrameHeader);
                             _recvOffset = 0;
@@ -686,7 +690,9 @@ void VncClient::onSocketReadable() {
 
                         tilesReceived = true;
                         _tilesReceived++;
+                        _statsTilesWindow++;
                         if (_tilesReceived >= _currentFrame.num_tiles) {
+                            _statsFramesWindow++;
                             _recvState = RecvState::FRAME_HEADER;
                             _recvNeeded = sizeof(FrameHeader);
                             _recvOffset = 0;
@@ -736,8 +742,10 @@ void VncClient::onSocketReadable() {
 
                 tilesReceived = true;
                 _tilesReceived++;
+                _statsTilesWindow++;
 
                 if (_tilesReceived >= _currentFrame.num_tiles) {
+                    _statsFramesWindow++;
                     // All tiles received, wait for next frame
                     _recvState = RecvState::FRAME_HEADER;
                     _recvNeeded = sizeof(FrameHeader);
@@ -833,8 +841,10 @@ void VncClient::onSocketReadable() {
 
                 tilesReceived = true;
                 _tilesReceived++;
+                _statsTilesWindow++;
 
                 if (_tilesReceived >= _currentFrame.num_tiles) {
+                    _statsFramesWindow++;
                     // All rectangles received, wait for next frame
                     _recvState = RecvState::FRAME_HEADER;
                     _recvNeeded = sizeof(FrameHeader);
@@ -987,6 +997,20 @@ Result<void> VncClient::createPipeline() {
 
 Result<bool> VncClient::updateTexture() {
     ydebug("VNC updateTexture: width={} height={}", _width, _height);
+
+    // Update stats every second
+    auto now = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration<double>(now - _statsWindowStart).count();
+    if (elapsed >= 1.0) {
+        _stats.fps = _statsFramesWindow / elapsed;
+        _stats.tps = _statsTilesWindow / elapsed;
+        _stats.mbps = (_statsBytesWindow * 8.0) / (elapsed * 1000000.0);
+        _statsFramesWindow = 0;
+        _statsTilesWindow = 0;
+        _statsBytesWindow = 0;
+        _statsWindowStart = now;
+    }
+
     if (_width == 0 || _height == 0) return Ok(false);
 
     // Ensure GPU resources
@@ -1333,6 +1357,7 @@ void VncClient::sendFrameAck() {
 void VncClient::sendCompressionConfig(bool forceRaw, uint8_t quality, bool alwaysFull, uint8_t codec) {
     ydebug("VNC client sendCompressionConfig: forceRaw={} quality={} alwaysFull={} codec={}",
            forceRaw, quality, alwaysFull, codec);
+    _stats.quality = quality;
     InputHeader hdr = {};
     hdr.type = static_cast<uint8_t>(InputType::COMPRESSION_CONFIG);
     hdr.data_size = sizeof(CompressionConfigEvent);
@@ -1352,6 +1377,7 @@ void VncClient::sendCompressionConfig(bool forceRaw, uint8_t quality, bool alway
 #ifdef __EMSCRIPTEN__
 void VncClient::onWebSocketData(const uint8_t* data, size_t size) {
     ydebug("VNC WebSocket received {} bytes", size);
+    _statsBytesWindow += size;
 
     // Append incoming data to receive buffer
     size_t dataOffset = 0;
@@ -1508,7 +1534,9 @@ void VncClient::onWebSocketData(const uint8_t* data, size_t size) {
                 }
 
                 _tilesReceived++;
+                _statsTilesWindow++;
                 if (_tilesReceived >= _currentFrame.num_tiles) {
+                    _statsFramesWindow++;
                     _recvState = RecvState::FRAME_HEADER;
                     _recvNeeded = sizeof(FrameHeader);
                     _recvOffset = 0;
@@ -1586,7 +1614,9 @@ void VncClient::onWebSocketData(const uint8_t* data, size_t size) {
                 }
 
                 _tilesReceived++;
+                _statsTilesWindow++;
                 if (_tilesReceived >= _currentFrame.num_tiles) {
+                    _statsFramesWindow++;
                     _recvState = RecvState::FRAME_HEADER;
                     _recvNeeded = sizeof(FrameHeader);
                     _recvOffset = 0;
