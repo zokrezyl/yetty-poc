@@ -363,7 +363,18 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     auto msdfFontsDir = _platform->getMsdfFontsDir();
     auto fontsDir = _platform->getFontsDir();
     auto shadersDir = _platform->getShadersDir();
-    auto fontMgrResult = FontManager::create(_gpuContext, _gpuAllocator, shaderMgr, msdfFontsDir, fontsDir, shadersDir, cdbProvider);
+
+    // Extract shader preload lists from config
+    std::vector<std::string> preloadCardShaders;
+    std::vector<std::string> preloadGlyphShaders;
+    if (_yettyContext.config) {
+        preloadCardShaders = _yettyContext.config->getPathList("shaders/preload/cards");
+        preloadGlyphShaders = _yettyContext.config->getPathList("shaders/preload/glyphs");
+        ydebug("init: shader preload - {} cards, {} glyphs",
+              preloadCardShaders.size(), preloadGlyphShaders.size());
+    }
+
+    auto fontMgrResult = FontManager::create(_gpuContext, _gpuAllocator, shaderMgr, msdfFontsDir, fontsDir, shadersDir, cdbProvider, preloadCardShaders, preloadGlyphShaders);
     if (!fontMgrResult) {
         ydebug("init: FontManager::create FAILED");
         return Err<void>("Failed to create FontManager", fontMgrResult);
