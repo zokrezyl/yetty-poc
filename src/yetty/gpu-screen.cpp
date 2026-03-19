@@ -4801,6 +4801,16 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
       if (mx >= _viewportX && mx < _viewportX + _viewportWidth &&
           my >= _viewportY && my < _viewportY + _viewportHeight) {
 
+        // Left-click in visual zoom mode: start drag-to-pan (takes priority)
+        if (button == 0 && _visualZoomActive) {
+          _visualZoomDragging = true;
+          _visualZoomDragLastX = mx;
+          _visualZoomDragLastY = my;
+          auto loop = *base::EventLoop::instance();
+          loop->dispatch(base::Event::setCursorEvent(CURSOR_MOVE));
+          return Ok(true);
+        }
+
         // Forward mouse to vterm if app has enabled mouse tracking
         if (_mouseTrackingMode != 0 && _vterm) {
           float localX = mx - _viewportX;
@@ -4859,16 +4869,6 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
           ydebug(
               "GPUScreen {} right-click at cell ({}, {}), opening context menu",
               _id, row, col);
-          return Ok(true);
-        }
-
-        // Left-click in visual zoom mode: start drag-to-pan
-        if (button == 0 && _visualZoomActive) {
-          _visualZoomDragging = true;
-          _visualZoomDragLastX = mx;
-          _visualZoomDragLastY = my;
-          auto loop = *base::EventLoop::instance();
-          loop->dispatch(base::Event::setCursorEvent(CURSOR_MOVE));
           return Ok(true);
         }
 
@@ -5228,6 +5228,7 @@ Result<bool> GPUScreenImpl::onEvent(const base::Event &event) {
               ydebug("GPUScreen {} visual zoom: {:.1f}x", _id,
                      _visualZoomScale);
             }
+            requestScreenUpdate();
           }
         } else if (_visualZoomActive) {
           // In visual zoom mode: scroll pans the view

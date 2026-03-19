@@ -1405,8 +1405,8 @@ void VncServer::dispatchInput(const InputHeader& hdr, const uint8_t* data) {
             ydebug("VNC dispatchInput: MOUSE_MOVE callback={}", (bool)onMouseMove);
             if (data && hdr.data_size >= sizeof(MouseMoveEvent) && onMouseMove) {
                 const MouseMoveEvent* m = reinterpret_cast<const MouseMoveEvent*>(data);
-                ydebug("VNC dispatchInput: calling onMouseMove x={} y={}", m->x, m->y);
-                onMouseMove(m->x, m->y);
+                ydebug("VNC dispatchInput: calling onMouseMove x={} y={} mods={}", m->x, m->y, m->mods);
+                onMouseMove(m->x, m->y, m->mods);
             }
             break;
 
@@ -1414,8 +1414,8 @@ void VncServer::dispatchInput(const InputHeader& hdr, const uint8_t* data) {
             ydebug("VNC dispatchInput: MOUSE_BUTTON callback={}", (bool)onMouseButton);
             if (data && hdr.data_size >= sizeof(MouseButtonEvent) && onMouseButton) {
                 const MouseButtonEvent* m = reinterpret_cast<const MouseButtonEvent*>(data);
-                ydebug("VNC dispatchInput: calling onMouseButton x={} y={} btn={} pressed={}", m->x, m->y, m->button, m->pressed);
-                onMouseButton(m->x, m->y, static_cast<MouseButton>(m->button), m->pressed != 0);
+                ydebug("VNC dispatchInput: calling onMouseButton x={} y={} btn={} pressed={} mods={}", m->x, m->y, m->button, m->pressed, m->mods);
+                onMouseButton(m->x, m->y, static_cast<MouseButton>(m->button), m->pressed != 0, m->mods);
             }
             break;
 
@@ -1423,8 +1423,8 @@ void VncServer::dispatchInput(const InputHeader& hdr, const uint8_t* data) {
             ydebug("VNC dispatchInput: MOUSE_SCROLL callback={}", (bool)onMouseScroll);
             if (data && hdr.data_size >= sizeof(MouseScrollEvent) && onMouseScroll) {
                 const MouseScrollEvent* m = reinterpret_cast<const MouseScrollEvent*>(data);
-                ydebug("VNC dispatchInput: calling onMouseScroll x={} y={} dx={} dy={}", m->x, m->y, m->delta_x, m->delta_y);
-                onMouseScroll(m->x, m->y, m->delta_x, m->delta_y);
+                ydebug("VNC dispatchInput: calling onMouseScroll x={} y={} dx={} dy={} mods={}", m->x, m->y, m->delta_x, m->delta_y, m->mods);
+                onMouseScroll(m->x, m->y, m->delta_x, m->delta_y, m->mods);
             }
             break;
 

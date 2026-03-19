@@ -76,9 +76,9 @@ public:
     bool hasPendingInput() const;
 
     // Input event callbacks (set these to receive input from clients)
-    std::function<void(int16_t x, int16_t y)> onMouseMove;
-    std::function<void(int16_t x, int16_t y, MouseButton button, bool pressed)> onMouseButton;
-    std::function<void(int16_t x, int16_t y, int16_t dx, int16_t dy)> onMouseScroll;
+    std::function<void(int16_t x, int16_t y, uint8_t mods)> onMouseMove;
+    std::function<void(int16_t x, int16_t y, MouseButton button, bool pressed, uint8_t mods)> onMouseButton;
+    std::function<void(int16_t x, int16_t y, int16_t dx, int16_t dy, uint8_t mods)> onMouseScroll;
     std::function<void(uint32_t keycode, uint32_t scancode, uint8_t mods)> onKeyDown;
     std::function<void(uint32_t keycode, uint32_t scancode, uint8_t mods)> onKeyUp;
     std::function<void(const std::string& text)> onTextInput;

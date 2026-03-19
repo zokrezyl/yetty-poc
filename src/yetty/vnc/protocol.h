@@ -86,6 +86,8 @@ struct InputHeader {
 struct MouseMoveEvent {
     int16_t x;
     int16_t y;
+    uint8_t mods;       // Modifier flags (VNC_MOD_*)
+    uint8_t reserved;
 };
 
 struct MouseButtonEvent {
@@ -93,6 +95,8 @@ struct MouseButtonEvent {
     int16_t y;
     uint8_t button;     // MouseButton
     uint8_t pressed;    // 1 = pressed, 0 = released
+    uint8_t mods;       // Modifier flags (VNC_MOD_*)
+    uint8_t reserved;
 };
 
 struct MouseScrollEvent {
@@ -100,6 +104,8 @@ struct MouseScrollEvent {
     int16_t y;
     int16_t delta_x;
     int16_t delta_y;
+    uint8_t mods;       // Modifier flags (VNC_MOD_*)
+    uint8_t reserved;
 };
 
 struct KeyEvent {
