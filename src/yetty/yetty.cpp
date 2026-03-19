@@ -2588,6 +2588,15 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
                 if (auto res = _vncClient->updateTexture(); !res) {
                     ywarn("VNC texture update failed: {}", res.error().message());
                 }
+                // Update statusbar with connection stats
+                if (_yettyContext.yguiOverlay) {
+                    const auto& stats = _vncClient->stats();
+                    char buf[128];
+                    snprintf(buf, sizeof(buf), "%s:%u q=%u fps=%.1f tps=%.0f %.2fMb/s",
+                             _vncClient->serverHost().c_str(), _vncClient->serverPort(),
+                             stats.quality, stats.fps, stats.tps, stats.mbps);
+                    _yettyContext.yguiOverlay->setStatusText(buf);
+                }
                 // Render fullscreen quad with frame texture
                 // Pass render target dimensions to clamp scissor during resize race condition
                 if (auto res = _vncClient->render(pass, _surfaceWidth, _surfaceHeight); !res) {
