@@ -605,10 +605,13 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
                 ywarn("VNC onMouseScroll: EventLoop::instance() failed!");
                 return;
             }
-            ydebug("VNC onMouseScroll: dispatching to EventLoop");
+            // VNC protocol uses 120 units per scroll notch, normalize to 1.0
+            float normDx = static_cast<float>(dx) / 120.0f;
+            float normDy = static_cast<float>(dy) / 120.0f;
+            ydebug("VNC onMouseScroll: dispatching to EventLoop (normalized dx={} dy={})", normDx, normDy);
             (*loopResult)->dispatch(base::Event::scrollEvent(
                 static_cast<float>(x), static_cast<float>(y),
-                static_cast<float>(dx), static_cast<float>(dy), mods));
+                normDx, normDy, mods));
         };
 
         _vncServer->onKeyDown = [](uint32_t keycode, uint32_t scancode, uint8_t mods) {
@@ -1813,6 +1816,16 @@ Result<void> YettyImpl::initCallbacks() noexcept {
     _platform->setKeyCallback([this](int key, int scancode, KeyAction action, int mods) {
         ydebug("KeyCallback: key={} scancode={} action={} mods={}", key, scancode, static_cast<int>(action), mods);
 
+        // Track modifier key state for scroll events (must be done before VNC forward)
+        // GLFW_KEY_LEFT_CONTROL=341, GLFW_KEY_RIGHT_CONTROL=345
+        // GLFW_KEY_LEFT_SHIFT=340, GLFW_KEY_RIGHT_SHIFT=344
+        if (key == 341 || key == 345) {
+            _ctrlPressed = (action == KeyAction::Press || action == KeyAction::Repeat);
+        }
+        if (key == 340 || key == 344) {
+            _shiftPressed = (action == KeyAction::Press || action == KeyAction::Repeat);
+        }
+
         // Forward to VNC server when in client mode
         if (_vncClientMode && _vncClient) {
             ydebug("VNC client mode: forwarding key={} scancode={} action={}", key, scancode, static_cast<int>(action));
@@ -1840,16 +1853,6 @@ Result<void> YettyImpl::initCallbacks() noexcept {
                 _vncClient->sendKeyUp(static_cast<uint32_t>(key), static_cast<uint32_t>(scancode), vncMods);
             }
             return;  // Don't process locally in client mode
-        }
-
-        // Track modifier key state for scroll events
-        // GLFW_KEY_LEFT_CONTROL=341, GLFW_KEY_RIGHT_CONTROL=345
-        // GLFW_KEY_LEFT_SHIFT=340, GLFW_KEY_RIGHT_SHIFT=344
-        if (key == 341 || key == 345) {
-            _ctrlPressed = (action == KeyAction::Press || action == KeyAction::Repeat);
-        }
-        if (key == 340 || key == 344) {
-            _shiftPressed = (action == KeyAction::Press || action == KeyAction::Repeat);
         }
 
         if (action != KeyAction::Press && action != KeyAction::Repeat) return;
@@ -1931,8 +1934,6 @@ Result<void> YettyImpl::initCallbacks() noexcept {
 
     // Mouse button callback
     _platform->setMouseButtonCallback([this](MouseButton button, bool pressed, int mods) {
-        (void)mods;  // Unused when forwarding
-
         // Forward to VNC server when in client mode
         if (_vncClientMode && _vncClient) {
             vnc::MouseButton vncBtn;
@@ -1945,7 +1946,7 @@ Result<void> YettyImpl::initCallbacks() noexcept {
             _vncClient->sendMouseButton(
                 static_cast<int16_t>(_lastMouseX),
                 static_cast<int16_t>(_lastMouseY),
-                vncBtn, pressed);
+                vncBtn, pressed, static_cast<uint8_t>(mods));
             return;  // Don't process locally in client mode
         }
 
@@ -1987,7 +1988,11 @@ Result<void> YettyImpl::initCallbacks() noexcept {
 
         // Forward to VNC server when in client mode
         if (_vncClientMode && _vncClient) {
-            _vncClient->sendMouseMove(static_cast<int16_t>(mx), static_cast<int16_t>(my));
+            // Build mods from tracked key state
+            uint8_t mods = 0;
+            if (_shiftPressed) mods |= 0x0001;
+            if (_ctrlPressed) mods |= 0x0002;
+            _vncClient->sendMouseMove(static_cast<int16_t>(mx), static_cast<int16_t>(my), mods);
             return;  // Don't process locally in client mode
         }
 
@@ -1997,21 +2002,22 @@ Result<void> YettyImpl::initCallbacks() noexcept {
 
     // Scroll callback
     _platform->setScrollCallback([this](double xoffset, double yoffset) {
+        // Build modifier state from tracked key presses
+        // GLFW_MOD_SHIFT = 0x0001, GLFW_MOD_CONTROL = 0x0002
+        uint8_t mods = 0;
+        if (_shiftPressed) mods |= 0x0001;
+        if (_ctrlPressed) mods |= 0x0002;
+
         // Forward to VNC server when in client mode
         if (_vncClientMode && _vncClient) {
             _vncClient->sendMouseScroll(
                 static_cast<int16_t>(_lastMouseX),
                 static_cast<int16_t>(_lastMouseY),
                 static_cast<int16_t>(xoffset * 120),  // Standard scroll delta
-                static_cast<int16_t>(yoffset * 120));
+                static_cast<int16_t>(yoffset * 120),
+                mods);
             return;  // Don't process locally in client mode
         }
-
-        // Build modifier state from tracked key presses
-        // GLFW_MOD_SHIFT = 0x0001, GLFW_MOD_CONTROL = 0x0002
-        int mods = 0;
-        if (_shiftPressed) mods |= 0x0001;
-        if (_ctrlPressed) mods |= 0x0002;
         auto loop = *base::EventLoop::instance();
         loop->dispatch(base::Event::scrollEvent(
             _lastMouseX, _lastMouseY,
