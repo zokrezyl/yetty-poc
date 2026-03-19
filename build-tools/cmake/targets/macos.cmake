@@ -20,7 +20,6 @@ add_subdirectory(${YETTY_ROOT}/src/yetty/ytop ${CMAKE_BINARY_DIR}/src/yetty/ytop
 set(YETTY_PLATFORM_SOURCES
     ${YETTY_ROOT}/src/yetty/platform/init-manager/macos.cpp
     ${YETTY_ROOT}/src/yetty/platform/shared/glfw-window-singleton.cpp
-    ${YETTY_ROOT}/src/yetty/platform/input-manager/glfw.cpp
     ${YETTY_ROOT}/src/yetty/platform/surface-manager/glfw.cpp
     ${YETTY_ROOT}/src/yetty/platform/pty-manager/unix.cpp
     ${YETTY_ROOT}/src/yetty/platform/pty-reader/unix.cpp

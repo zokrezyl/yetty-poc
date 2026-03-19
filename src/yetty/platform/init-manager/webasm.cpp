@@ -33,11 +33,6 @@ public:
         ydebug("WebInitManager: run() returning (browser takes over)");
     }
 
-    void stop() override {
-        _running = false;
-        // Cancel any pending animation frames if needed
-    }
-
 private:
     RenderThreadFunc _renderFunc;
     bool _running = false;

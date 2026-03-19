@@ -1,6 +1,7 @@
 #pragma once
 
 #include <yetty/base/factory.h>
+#include <atomic>
 
 #if defined(__ANDROID__)
 #include <android/native_window.h>
@@ -13,16 +14,20 @@ namespace yetty {
 // Internal glue for Android platform. All Android managers access
 // platform state through this singleton.
 //
-class AndroidAppSingleton : public base::ThreadSingleton<AndroidAppSingleton> {
+// Thread-safe: uses atomics for cross-thread access (main thread sets,
+// render thread reads).
+//
+class AndroidAppSingleton : public base::Singleton<AndroidAppSingleton> {
 public:
     virtual ~AndroidAppSingleton() = default;
 
-    // Called from android_main before anything else
-    void setApp(android_app* app) { _app = app; }
-    void setWindow(ANativeWindow* window) { _window = window; }
+    // Called from main thread
+    void setApp(android_app* app) { _app.store(app, std::memory_order_release); }
+    void setWindow(ANativeWindow* window) { _window.store(window, std::memory_order_release); }
 
-    android_app* getApp() const { return _app; }
-    ANativeWindow* getWindow() const { return _window; }
+    // Called from any thread
+    android_app* getApp() const { return _app.load(std::memory_order_acquire); }
+    ANativeWindow* getWindow() const { return _window.load(std::memory_order_acquire); }
 
     // Paths derived from app
     std::string getDataDir() const;
@@ -34,8 +39,8 @@ protected:
     AndroidAppSingleton() = default;
 
 private:
-    android_app* _app = nullptr;
-    ANativeWindow* _window = nullptr;
+    std::atomic<android_app*> _app{nullptr};
+    std::atomic<ANativeWindow*> _window{nullptr};
 };
 
 } // namespace yetty

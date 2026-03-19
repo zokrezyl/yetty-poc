@@ -33,7 +33,6 @@ add_subdirectory(${YETTY_ROOT}/src/yetty/vnc ${CMAKE_BINARY_DIR}/src/yetty/vnc)
 set(YETTY_PLATFORM_SOURCES
     ${YETTY_ROOT}/src/yetty/platform/init-manager/android.cpp
     ${YETTY_ROOT}/src/yetty/platform/shared/android-app-singleton.cpp
-    ${YETTY_ROOT}/src/yetty/platform/input-manager/android.cpp
     ${YETTY_ROOT}/src/yetty/platform/surface-manager/android.cpp
     ${YETTY_ROOT}/src/yetty/platform/pty-manager/android.cpp
     ${YETTY_ROOT}/src/yetty/platform/fs-path-manager/android.cpp

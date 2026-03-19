@@ -49,12 +49,12 @@ public:
         ydebug("LinuxInitManager: render thread joined");
     }
 
-    void stop() override {
+private:
+    void stop() {
         _running = false;
         glfwPostEmptyEvent();
     }
 
-private:
     bool _glfwInitialized = false;
     std::atomic<bool> _running{false};
 };

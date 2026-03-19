@@ -117,32 +117,33 @@ private:
 
     /// @brief GLFW key callback - executes on MAIN THREAD during glfwWaitEvents()
     ///
-    /// Pushes RAW key events to EventQueue. No transformation here.
-    /// InputManager (on render thread) subscribes to these and generates
-    /// internal events (e.g., Ctrl+letter -> control character).
-    ///
-    /// @param window   GLFW window handle (unused)
-    /// @param key      GLFW key code (GLFW_KEY_A, GLFW_KEY_ESCAPE, etc.)
-    /// @param scancode Platform-specific scancode
-    /// @param action   GLFW_PRESS, GLFW_RELEASE, or GLFW_REPEAT
-    /// @param mods     Modifier flags (GLFW_MOD_SHIFT, GLFW_MOD_CONTROL, etc.)
+    /// Translates key events and pushes to EventQueue.
+    /// GLFW does NOT fire charCallback for Ctrl+letter, so we generate
+    /// control characters here (Ctrl+A = 0x01, ..., Ctrl+Z = 0x1A).
     static void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {
         (void)window;
         auto queueResult = base::EventQueue::instance();
         if (!queueResult) return;
+        auto queue = *queueResult;
 
         if (action == GLFW_PRESS || action == GLFW_REPEAT) {
-            (*queueResult)->push(base::Event::keyDown(key, mods, scancode));
+            queue->push(base::Event::keyDown(key, mods, scancode));
+
+            // Generate control characters for Ctrl+letter (GLFW doesn't fire charCallback for these)
+            if ((mods & GLFW_MOD_CONTROL) && key >= GLFW_KEY_A && key <= GLFW_KEY_Z) {
+                uint32_t controlChar = 1 + (key - GLFW_KEY_A);  // Ctrl+A=0x01, Ctrl+Z=0x1A
+                queue->push(base::Event::charInputWithMods(controlChar, mods));
+            }
         } else if (action == GLFW_RELEASE) {
-            (*queueResult)->push(base::Event::keyUp(key, mods, scancode));
+            queue->push(base::Event::keyUp(key, mods, scancode));
         }
     }
 
     /// @brief GLFW character callback - executes on MAIN THREAD during glfwWaitEvents()
     ///
-    /// Pushes RAW character input to EventQueue.
+    /// Pushes character input to EventQueue.
     /// NOTE: GLFW does NOT fire this for control characters (Ctrl+A, etc.).
-    /// InputManager handles Ctrl+letter -> control character conversion.
+    /// Control characters are generated in keyCallback instead.
     ///
     /// @param window    GLFW window handle (unused)
     /// @param codepoint Unicode codepoint of the character

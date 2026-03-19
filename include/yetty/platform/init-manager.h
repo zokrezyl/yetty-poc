@@ -37,9 +37,6 @@ public:
     // Returns when render thread signals shutdown
     virtual void run(RenderThreadFunc renderThreadFunc) = 0;
 
-    // Called from render thread to stop the main thread event loop
-    virtual void stop() = 0;
-
 protected:
     InitManager() = default;
 };

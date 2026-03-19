@@ -1,12 +1,9 @@
 # yetty base utilities
-# Event loop implementation is platform-specific
-# - Desktop: libuv with uv_run(UV_RUN_DEFAULT)
-# - Android: ALooper + timerfd (libuv only for EventQueue cross-thread wakeup)
-# - WebASM: browser requestAnimationFrame
+# Event loop runs on render thread:
+# - Desktop + Android: libuv (uv_run)
+# - WebASM: browser requestAnimationFrame (single-threaded)
 if(EMSCRIPTEN)
     set(EVENT_LOOP_SRC ${YETTY_ROOT}/src/yetty/platform/event-loop/webasm.cpp)
-elseif(YETTY_ANDROID)
-    set(EVENT_LOOP_SRC ${YETTY_ROOT}/src/yetty/platform/event-loop/android.cpp)
 else()
     set(EVENT_LOOP_SRC ${YETTY_ROOT}/src/yetty/platform/event-loop/libuv.cpp)
 endif()

@@ -24,7 +24,6 @@ add_subdirectory(${YETTY_ROOT}/src/yetty ${CMAKE_BINARY_DIR}/src/yetty)
 # Note: event-loop is included via yetty_base
 set(YETTY_PLATFORM_SOURCES
     ${YETTY_ROOT}/src/yetty/platform/init-manager/webasm.cpp
-    ${YETTY_ROOT}/src/yetty/platform/input-manager/webasm.cpp
     ${YETTY_ROOT}/src/yetty/platform/surface-manager/webasm.cpp
     ${YETTY_ROOT}/src/yetty/platform/pty-manager/webasm.cpp
     ${YETTY_ROOT}/src/yetty/platform/pty-reader/webasm.cpp

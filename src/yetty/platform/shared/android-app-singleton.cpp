@@ -7,8 +7,9 @@
 namespace yetty {
 
 std::string AndroidAppSingleton::getDataDir() const {
-    if (_app && _app->activity) {
-        return _app->activity->internalDataPath;
+    auto app = getApp();
+    if (app && app->activity) {
+        return app->activity->internalDataPath;
     }
     return "";
 }

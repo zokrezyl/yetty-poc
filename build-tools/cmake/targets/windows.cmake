@@ -18,7 +18,6 @@ add_subdirectory(${YETTY_ROOT}/src/yetty/client ${CMAKE_BINARY_DIR}/src/yetty/cl
 set(YETTY_PLATFORM_SOURCES
     ${YETTY_ROOT}/src/yetty/platform/init-manager/windows.cpp
     ${YETTY_ROOT}/src/yetty/platform/shared/glfw-window-singleton.cpp
-    ${YETTY_ROOT}/src/yetty/platform/input-manager/glfw.cpp
     ${YETTY_ROOT}/src/yetty/platform/surface-manager/glfw.cpp
     ${YETTY_ROOT}/src/yetty/platform/pty-manager/windows.cpp
     ${YETTY_ROOT}/src/yetty/platform/pty-reader/windows.cpp

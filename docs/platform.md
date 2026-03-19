@@ -4,24 +4,37 @@ Yetty runs on desktop (Linux/macOS/Windows), Android, and WebAssembly. Each plat
 
 ## Threading Model
 
-**Desktop (GLFW):**
-- **Main thread**: Runs `InitManager` - initializes GLFW, spawns render thread, blocks on `glfwWaitEvents()`
-- **Render thread**: Creates window via `GlfwWindowSingleton`, runs libuv event loop, renders with WebGPU
+**Desktop (GLFW) and Android share the same pattern:**
+- **Main thread**: Runs `InitManager` - platform init, spawns render thread, blocks on platform event loop
+- **Render thread**: Creates surface, initializes rendering, runs libuv EventLoop
 
-**Key insight**: `glfwWaitEvents()` is GLOBAL - it processes events for all windows, doesn't need a window handle. So:
-1. Main thread can block on event loop before window exists
-2. Render thread creates window
-3. Window callbacks (set on render thread) push events to EventQueue
-4. Main thread's `glfwWaitEvents()` returns, callbacks fire, events are queued
-5. EventQueue wakes render thread via libuv async
+**Desktop (GLFW):**
+- Main thread: `glfwInit()`, spawn render thread, block on `glfwWaitEvents()`
+- Render thread: create window via `GlfwWindowSingleton`, create WebGPU surface, run libuv EventLoop
+- GLFW callbacks push events to `EventQueue`, libuv wakes via `uv_async`
 
 **Android:**
-- **Single thread**: `android_main` handles both input (ALooper) and rendering
-- InitManager wraps app lifecycle, processes events via ALooper
+- Main thread: wait for window (system creates it), spawn render thread, block on `ALooper_pollAll()`
+- Render thread: create WebGPU surface (window already exists), run libuv EventLoop
+- ALooper callbacks push events to `EventQueue`, libuv wakes via `uv_async`
+
+**Key difference:** On desktop, window is created on render thread. On Android, window is created by the system - we wait for `APP_CMD_INIT_WINDOW` before spawning render thread.
 
 **WebASM:**
 - **Single thread**: Browser event loop drives everything via `requestAnimationFrame`
-- InitManager sets up the RAF loop, returns immediately (browser takes over)
+- No render thread, no libuv - uses custom webasm EventLoop
+
+## EventLoop
+
+EventLoop runs on the **render thread** and uses **libuv** on all platforms except WebASM.
+
+| Platform | EventLoop Implementation |
+|----------|--------------------------|
+| Desktop (Linux/macOS/Windows) | libuv (`uv_run`) |
+| Android | libuv (`uv_run`) |
+| WebASM | Custom (`requestAnimationFrame`) |
+
+The main thread's platform event loop (GLFW/ALooper) pumps raw input events into `EventQueue`. EventQueue uses `uv_async_send()` to wake the render thread's libuv loop.
 
 ## Managers
 
@@ -31,8 +44,8 @@ Yetty runs on desktop (Linux/macOS/Windows), Android, and WebAssembly. Each plat
 
 | Platform | Responsibilities |
 |----------|------------------|
-| GLFW | `glfwInit()`, spawn render thread, block on `glfwWaitEvents()` |
-| Android | App lifecycle, ALooper event processing (single-threaded) |
+| Desktop (GLFW) | `glfwInit()`, spawn render thread, block on `glfwWaitEvents()` |
+| Android | Wait for window, spawn render thread, block on `ALooper_pollAll()` |
 | WebASM | Setup RAF loop, returns immediately (browser takes over) |
 
 ```cpp
@@ -48,7 +61,7 @@ init->run([&]() {
 
 ### GlfwWindowSingleton
 
-**ThreadSingleton** (render thread). Creates and owns the GLFW window.
+**ThreadSingleton** (render thread). Creates and owns the GLFW window. Desktop only.
 
 - Created on render thread (first `instance()` call)
 - Calls `glfwCreateWindow()`
@@ -56,10 +69,18 @@ init->run([&]() {
 - Provides window handle for SurfaceManager
 
 ```cpp
-// On render thread
+// On render thread (desktop only)
 auto window = GlfwWindowSingleton::instance();
 GLFWwindow* w = window->getWindow();
 ```
+
+### AndroidAppSingleton
+
+**ThreadSingleton**. Holds `android_app*` pointer. Android only.
+
+- Initialized in `InitManager::init()` with the `android_app*` from `android_main`
+- Provides access to `ANativeWindow*` for surface creation
+- Input callbacks registered in InitManager
 
 ### SurfaceManager
 
@@ -76,12 +97,13 @@ GLFWwindow* w = window->getWindow();
 | `createWGPUSurface()` | Create platform-specific WebGPU surface |
 
 GLFW implementation gets window from `GlfwWindowSingleton`.
+Android implementation gets window from `AndroidAppSingleton`.
 
 ### InputManager
 
 **ThreadSingleton** (render thread). Transforms raw input events into internal events.
 
-`GlfwWindowSingleton` callbacks push RAW events to `EventQueue`. `InputManager` subscribes to these events and generates internal events:
+Main thread callbacks push RAW events to `EventQueue`. `InputManager` subscribes to these events and generates internal events:
 
 | Raw Event | Transformation | Internal Event |
 |-----------|----------------|----------------|
@@ -93,8 +115,9 @@ GLFW implementation gets window from `GlfwWindowSingleton`.
 
 | Manager | Thread | Purpose |
 |---------|--------|---------|
-| InitManager | main | Platform init, spawn render thread, event loop |
-| GlfwWindowSingleton | render | Create window, setup callbacks (push RAW events) |
+| InitManager | main | Platform init, spawn render thread, platform event loop |
+| GlfwWindowSingleton | render | Create window, setup callbacks (desktop only) |
+| AndroidAppSingleton | any | Hold android_app* pointer (Android only) |
 | SurfaceManager | render | Window properties, WebGPU surface |
 | InputManager | render | Transform raw events (Ctrl+letter -> control char) |
 | FsPathManager | render | Asset paths |
@@ -165,7 +188,57 @@ Creates platform-appropriate PTY/shell provider.
 │  Yetty::create() / Yetty::run()                                 │
 │       │                                                          │
 │       ▼                                                          │
-│  libuv event loop                                                │
+│  libuv EventLoop                                                 │
+│       │                                                          │
+│       ▼                                                          │
+│  uv_async wakes loop  ◄─────────── EventQueue signals           │
+│       │                                                          │
+│       ▼                                                          │
+│  EventLoop::dispatch(event)                                      │
+│       │                                                          │
+│       ▼                                                          │
+│  Listeners process event (gpu-screen, etc.)                     │
+│       │                                                          │
+│       ▼                                                          │
+│  Render frame                                                    │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+## Event Flow (Android)
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ MAIN THREAD                                                      │
+│                                                                  │
+│  InitManager::run()                                              │
+│       │                                                          │
+│       ├──► wait for window (ALooper_pollAll until window ready) │
+│       │                                                          │
+│       ├──► spawn render thread                                   │
+│       │                                                          │
+│       ▼                                                          │
+│  ALooper_pollAll(-1) ◄─── blocks until event arrives            │
+│       │                                                          │
+│       ▼                                                          │
+│  source->process() ──► handleAppCmd / handleInputEvent          │
+│       │                                                          │
+│       ▼                                                          │
+│  EventQueue::push(event) ────────────────────┐                  │
+│       │                                       │                  │
+│       └──► loop continues                     │                  │
+└───────────────────────────────────────────────│──────────────────┘
+                                                │
+                                                ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ RENDER THREAD                                                    │
+│                                                                  │
+│  SurfaceManager::createWGPUSurface()  ◄── window from system    │
+│       │                                                          │
+│       ▼                                                          │
+│  Yetty::create() / Yetty::run()                                 │
+│       │                                                          │
+│       ▼                                                          │
+│  libuv EventLoop                                                 │
 │       │                                                          │
 │       ▼                                                          │
 │  uv_async wakes loop  ◄─────────── EventQueue signals           │
@@ -185,75 +258,14 @@ Creates platform-appropriate PTY/shell provider.
 
 ```
 include/yetty/platform/
-    init-manager.h          # Singleton - platform init, thread management
-    input-manager.h         # ThreadSingleton - empty interface
-    surface-manager.h       # ThreadSingleton - window properties, surface
-    fs-path-manager.h
-    clipboard-manager.h
-    pty-manager.h
-
-src/yetty/platform/
-    shared/
-        glfw-init-manager.cpp       # InitManager for GLFW
-        glfw-window-singleton.cpp   # Window creation, callbacks
-        glfw-window-singleton.h     # Internal header
-    input-manager/
-        glfw.cpp            # Empty - just instantiates
-        android.cpp
-    surface-manager/
-        glfw.cpp            # Gets window from GlfwWindowSingleton
-        android.cpp
-    ...
-```
-
-## Implementation Status
-
-| Manager | Linux | macOS | Windows | Android | WebASM |
-|---------|-------|-------|---------|---------|--------|
-| InitManager | DONE | DONE | DONE | DONE | DONE |
-| GlfwWindowSingleton | DONE | shared | shared | N/A | N/A |
-| SurfaceManager | DONE | shared | shared | DONE | DONE |
-| InputManager | DONE | shared | shared | DONE | DONE |
-| FsPathManager | DONE | shared | DONE | DONE | DONE |
-| ClipboardManager | DONE | shared | shared | stub | DONE |
-| PtyManager | DONE | shared | DONE | stub | DONE |
-| WebGpuManager | DONE | DONE | DONE | DONE | DONE |
-
-**Legend:**
-- **DONE**: Fully implemented with new factory pattern
-- **shared**: Uses same GLFW code as Linux
-- **stub**: Factory exists but implementation incomplete (e.g., JNI needed)
-- **N/A**: Not applicable (Android/WebASM don't use GLFW)
-
-### Notes
-
-**Linux/macOS/Windows (GLFW platforms):**
-- Share `glfw-init-manager.cpp` and `glfw-window-singleton.cpp`
-- macOS uses CoreText for fonts, Windows uses DirectWrite
-- PTY: Linux/macOS use `forkpty()`, Windows uses ConPTY
-
-**Android:**
-- No InitManager (android_main handles lifecycle)
-- AndroidAppSingleton provides access to `android_app*`
-- Input via `yetty_android_dispatch_input()` C function
-- PTY via toybox telnet or Termux connection
-
-**WebASM:**
-- Single-threaded, no InitManager or EventQueue needed
-- Input via Emscripten HTML5 callbacks
-- PTY via JSLinux iframe with postMessage
-
-## File Structure
-
-```
-include/yetty/platform/
-    init-manager.h          # ThreadSingleton - platform init, thread management
+    init-manager.h          # ObjectFactory - platform init, thread management
     input-manager.h         # ThreadSingleton - raw->internal event transform
     surface-manager.h       # ThreadSingleton - window properties, surface
     fs-path-manager.h       # ThreadSingleton - asset paths
     clipboard-manager.h     # ThreadSingleton - clipboard access
     pty-manager.h           # ThreadSingleton - PTY creation
     webgpu-manager.h        # ThreadSingleton - WebGPU init, device, surface
+    event-loop.h            # ThreadSingleton - libuv event loop (render thread)
 
 src/yetty/platform/
     shared/
@@ -265,8 +277,11 @@ src/yetty/platform/
         linux.cpp           # Linux: GLFW + X11/Wayland
         macos.cpp           # macOS: GLFW + Cocoa
         windows.cpp         # Windows: GLFW + Win32
-        android.cpp         # Android: app lifecycle, ALooper
+        android.cpp         # Android: ALooper event loop
         webasm.cpp          # WebASM: Emscripten RAF loop
+    event-loop/
+        libuv.cpp           # Desktop + Android: libuv on render thread
+        webasm.cpp          # WebASM: requestAnimationFrame
     input-manager/
         glfw.cpp            # GLFW: Ctrl+letter -> control char, scroll -> zoom
         android.cpp         # Android: touch -> mouse, pinch -> zoom
@@ -295,24 +310,38 @@ src/yetty/platform/
         windows.cpp         # Dawn/D3D12 with D3D11 fallback
         android.cpp         # Vulkan required, reject Null backend
         webasm.cpp          # Async with emscripten_sleep
-    obsolete/               # Old monolithic Platform implementations
-        glfw/
-        android/
-        windows/
-        webasm/
 ```
+
+## Implementation Status
+
+| Manager | Linux | macOS | Windows | Android | WebASM |
+|---------|-------|-------|---------|---------|--------|
+| InitManager | DONE | DONE | DONE | DONE | DONE |
+| GlfwWindowSingleton | DONE | shared | shared | N/A | N/A |
+| AndroidAppSingleton | N/A | N/A | N/A | DONE | N/A |
+| SurfaceManager | DONE | shared | shared | DONE | DONE |
+| InputManager | DONE | shared | shared | DONE | DONE |
+| FsPathManager | DONE | shared | DONE | DONE | DONE |
+| ClipboardManager | DONE | shared | shared | stub | DONE |
+| PtyManager | DONE | shared | DONE | stub | DONE |
+| WebGpuManager | DONE | DONE | DONE | DONE | DONE |
+| EventLoop | DONE (libuv) | shared | shared | shared (libuv) | DONE (RAF) |
+
+**Legend:**
+- **DONE**: Fully implemented
+- **shared**: Uses same code as Linux (libuv for EventLoop, GLFW for desktop)
+- **stub**: Factory exists but implementation incomplete (e.g., JNI needed)
+- **N/A**: Not applicable
 
 ## Build Integration
 
-CMake adds platform-specific sources. See `build-tools/cmake/targets/*.cmake`:
+CMake adds platform-specific sources. EventLoop uses libuv.cpp for all platforms except WebASM.
 
 ```cmake
-# linux.cmake
-set(YETTY_PLATFORM_SOURCES
-    platform/shared/glfw-init-manager.cpp
-    platform/shared/glfw-window-singleton.cpp
-    platform/input-manager/glfw.cpp
-    platform/surface-manager/glfw.cpp
-    platform/pty-manager/unix.cpp
-)
+# src/yetty/base/CMakeLists.txt
+if(EMSCRIPTEN)
+    set(EVENT_LOOP_SRC platform/event-loop/webasm.cpp)
+else()
+    set(EVENT_LOOP_SRC platform/event-loop/libuv.cpp)
+endif()
 ```
