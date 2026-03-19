@@ -189,6 +189,11 @@ public:
         return Ok();
     }
 
+    void requestScreenUpdate() override {
+        // No-op for WebASM - already running at ~60fps via requestAnimationFrame
+        // Screen updates happen every frame anyway
+    }
+
 private:
     static void mainLoopCallback(void* arg) {
         auto* self = static_cast<EventLoopImpl*>(arg);

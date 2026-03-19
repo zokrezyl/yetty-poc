@@ -56,6 +56,10 @@ public:
     virtual Result<void> destroyTimer(TimerId id) = 0;
     virtual Result<void> registerTimerListener(TimerId id, EventListener::Ptr listener) = 0;
 
+    // Async screen update - dispatch ScreenUpdate event asynchronously
+    // This allows immediate re-render without waiting for the frame timer
+    virtual void requestScreenUpdate() = 0;
+
 protected:
     EventLoop() = default;
 };
