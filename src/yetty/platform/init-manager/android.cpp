@@ -225,17 +225,23 @@ private:
         if (metaState & AMETA_ALT_ON) mods |= 4;
 
         if (pressed) {
+            // For Ctrl/Alt + printable char, send charInputWithMods ONLY (not keyDown)
+            if (mods & (2 | 4)) {  // Ctrl or Alt
+                uint32_t codepoint = translateToCodepoint(keyCode, metaState);
+                if (codepoint) {
+                    queue->push(base::Event::charInputWithMods(codepoint, mods));
+                    return;
+                }
+            }
+            // For special keys or no Ctrl/Alt, send keyDown
             queue->push(base::Event::keyDown(platformKey, mods, 0));
-        } else {
-            queue->push(base::Event::keyUp(platformKey, mods, 0));
-        }
-
-        // Character input on key down
-        if (pressed) {
+            // Normal character input (no Ctrl/Alt)
             uint32_t codepoint = translateToCodepoint(keyCode, metaState);
             if (codepoint) {
                 queue->push(base::Event::charInputWithMods(codepoint, mods));
             }
+        } else {
+            queue->push(base::Event::keyUp(platformKey, mods, 0));
         }
     }
 
@@ -268,16 +274,13 @@ private:
     }
 
     // Translate Android keycode + meta state to Unicode codepoint
+    // Returns the actual character (not control character) - mods are passed separately
     static uint32_t translateToCodepoint(int keyCode, int metaState) {
         bool shift = (metaState & AMETA_SHIFT_ON);
-        bool ctrl = (metaState & AMETA_CTRL_ON);
 
-        // Letters
+        // Letters - return actual letter, not control character
+        // Ctrl modifier is passed separately via mods parameter
         if (keyCode >= AKEYCODE_A && keyCode <= AKEYCODE_Z) {
-            if (ctrl) {
-                // Ctrl+A = 0x01, Ctrl+B = 0x02, ..., Ctrl+Z = 0x1A
-                return 1 + (keyCode - AKEYCODE_A);
-            }
             return shift ? ('A' + (keyCode - AKEYCODE_A)) : ('a' + (keyCode - AKEYCODE_A));
         }
 

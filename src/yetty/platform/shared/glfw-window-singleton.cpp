@@ -118,8 +118,8 @@ private:
     /// @brief GLFW key callback - executes on MAIN THREAD during glfwWaitEvents()
     ///
     /// Translates key events and pushes to EventQueue.
-    /// GLFW does NOT fire charCallback for Ctrl+letter, so we generate
-    /// control characters here (Ctrl+A = 0x01, ..., Ctrl+Z = 0x1A).
+    /// GLFW does NOT fire charCallback for Ctrl/Alt+letter, so we generate
+    /// charInputWithMods here using glfwGetKeyName for layout-aware characters.
     static void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {
         (void)window;
         auto queueResult = base::EventQueue::instance();
@@ -127,13 +127,24 @@ private:
         auto queue = *queueResult;
 
         if (action == GLFW_PRESS || action == GLFW_REPEAT) {
-            queue->push(base::Event::keyDown(key, mods, scancode));
-
-            // Generate control characters for Ctrl+letter (GLFW doesn't fire charCallback for these)
-            if ((mods & GLFW_MOD_CONTROL) && key >= GLFW_KEY_A && key <= GLFW_KEY_Z) {
-                uint32_t controlChar = 1 + (key - GLFW_KEY_A);  // Ctrl+A=0x01, Ctrl+Z=0x1A
-                queue->push(base::Event::charInputWithMods(controlChar, mods));
+            // For Ctrl/Alt + character keys, send charInputWithMods ONLY (not keyDown)
+            // GLFW doesn't fire charCallback for these combinations
+            if (mods & (GLFW_MOD_CONTROL | GLFW_MOD_ALT)) {
+                // Special case for space
+                if (key == GLFW_KEY_SPACE) {
+                    queue->push(base::Event::charInputWithMods(' ', mods));
+                    return;
+                }
+                // Use glfwGetKeyName for layout-aware character mapping
+                const char* keyName = glfwGetKeyName(key, scancode);
+                if (keyName && keyName[0] && !keyName[1]) {
+                    uint32_t ch = static_cast<uint32_t>(static_cast<uint8_t>(keyName[0]));
+                    queue->push(base::Event::charInputWithMods(ch, mods));
+                    return;
+                }
             }
+            // For special keys (Enter, arrows, etc.) or unknown keys, send keyDown
+            queue->push(base::Event::keyDown(key, mods, scancode));
         } else if (action == GLFW_RELEASE) {
             queue->push(base::Event::keyUp(key, mods, scancode));
         }
