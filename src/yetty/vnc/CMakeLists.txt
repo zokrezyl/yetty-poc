@@ -17,8 +17,13 @@ target_link_libraries(yetty_vnc PUBLIC
     turbojpeg-static
     ytrace::ytrace
     yetty_base
-    yetty_yvideo
 )
+
+# yvideo provides H.264/AV1 codec support (not available on EMSCRIPTEN)
+if(NOT EMSCRIPTEN)
+    target_link_libraries(yetty_vnc PUBLIC yetty_yvideo)
+    target_compile_definitions(yetty_vnc PRIVATE YETTY_HAS_YVIDEO=1)
+endif()
 
 if(WIN32)
     target_compile_definitions(yetty_vnc PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)

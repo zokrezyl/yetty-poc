@@ -4,7 +4,9 @@
 #include <yetty/result.hpp>
 #include <yetty/base/event-listener.h>
 #include <yetty/base/event-queue.h>
+#if YETTY_HAS_YVIDEO
 #include <yetty/yvideo/yvideo-encoder.h>
+#endif
 #include <webgpu/webgpu.h>
 #include <string>
 #include <vector>
@@ -179,10 +181,12 @@ private:
 
     // H.264 encoding
     bool _useH264 = false;       // Use H.264 instead of JPEG
+#if YETTY_HAS_YVIDEO
     yvideo::Encoder::Ptr _h264Encoder;
     std::vector<uint8_t> _yuvBuffer;  // YUV420 buffer for H.264 encoding
     uint32_t _yuvYStride = 0;
     uint32_t _yuvUVStride = 0;
+#endif
 
     // BGRA->YUV420 GPU conversion resources
     WGPUComputePipeline _bgraToYuvPipeline = nullptr;

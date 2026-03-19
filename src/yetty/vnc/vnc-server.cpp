@@ -1028,6 +1028,7 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
     bool useFullFrame = !_forceRaw && (numDirty > totalTiles / 2);
 
     // H.264 encoding path
+#if YETTY_HAS_YVIDEO
     if (_useH264 && useFullFrame) {
         _stats.fullUpdates++;
 
@@ -1132,7 +1133,9 @@ Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels,
         _stats.bytesJpeg += encoded.data.size();  // Reuse stats for now
 
         ydebug("VNC sendFrame: H264 {} bytes, IDR={}", encoded.data.size(), encoded.isIDR);
-    } else if (useFullFrame) {
+    } else
+#endif
+    if (useFullFrame) {
 jpeg_fallback:
         // FULL FRAME: encode entire frame as one JPEG
         _stats.fullUpdates++;
