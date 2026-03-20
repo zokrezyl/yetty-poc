@@ -65,6 +65,7 @@ rpc:
   # Unix socket path for RPC communication (set at runtime)
   # Typically placed in $XDG_RUNTIME_DIR/yetty-<pid>.sock
   socket-path: ""
+  enabled: false
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Shader Preloading Configuration

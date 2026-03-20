@@ -291,7 +291,17 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     ydebug("init: parseArgs");
     if (auto res = parseArgs(argc, argv); !res) return res;
 
-    // Create Config early (before anything that reads it)
+    ydebug("init: initWindow");
+    if (auto res = initWindow(); !res) { ydebug("init: initWindow FAILED"); return res; }
+
+    // Extract embedded assets if needed (first run or version upgrade)
+    // This MUST happen before Config::create so default config is available
+    ydebug("init: initEmbeddedAssets");
+    if (auto res = initEmbeddedAssets(); !res) {
+        ywarn("init: initEmbeddedAssets failed (continuing with fallback): {}", res.error().message());
+    }
+
+    // Create Config after embedded assets are extracted (default config available)
     ydebug("init: Config::create");
     auto configResult = Config::create();
     if (!configResult) {
@@ -319,15 +329,6 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
         return Err<void>("EventQueue not available", queueResult);
     }
     _eventQueue = *queueResult;
-
-    ydebug("init: initWindow");
-    if (auto res = initWindow(); !res) { ydebug("init: initWindow FAILED"); return res; }
-
-    // Extract embedded assets if needed (first run or version upgrade)
-    ydebug("init: initEmbeddedAssets");
-    if (auto res = initEmbeddedAssets(); !res) {
-        ywarn("init: initEmbeddedAssets failed (continuing with fallback): {}", res.error().message());
-    }
 
     ydebug("init: initWebGPU");
     if (auto res = initWebGPU(); !res) { ydebug("init: initWebGPU FAILED"); return res; }
@@ -429,7 +430,7 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
 #if !YETTY_WEB && !defined(__ANDROID__)
     // Create RPC server and write socket path to config BEFORE workspace/terminal
     // (Terminal reads shell/env from config when forking the shell)
-    {
+    if (_yettyContext.config->get<bool>("rpc/enabled", true)) {
         auto socketResult = rpc::createSocketPath(_fsPathManager->getRuntimeDir());
         if (!socketResult) {
             return Err<void>("Failed to create RPC socket path", socketResult);
@@ -457,20 +458,22 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
 
 #if !YETTY_WEB && !defined(__ANDROID__)
     // Register workspace handlers now that workspace exists
-    if (_activeWorkspace) {
-        rpc::registerWorkspaceHandlers(*_rpcServer, _activeWorkspace);
+    if (_rpcServer) {
+        if (_activeWorkspace) {
+            rpc::registerWorkspaceHandlers(*_rpcServer, _activeWorkspace);
+        }
+
+        // Register stream handlers (uses GPUScreenManager singleton)
+        rpc::registerStreamHandlers(*_rpcServer);
+
+        // Register integration test handlers (get_cell_size, get_card_info, etc.)
+        rpc::registerTestHandlers(*_rpcServer);
+
+        if (auto res = _rpcServer->start(); !res) {
+            return Err<void>("Failed to start RPC server", res);
+        }
+        ydebug("RPC server started on {}", _rpcServer->socketPath());
     }
-
-    // Register stream handlers (uses GPUScreenManager singleton)
-    rpc::registerStreamHandlers(*_rpcServer);
-
-    // Register integration test handlers (get_cell_size, get_card_info, etc.)
-    rpc::registerTestHandlers(*_rpcServer);
-
-    if (auto res = _rpcServer->start(); !res) {
-        return Err<void>("Failed to start RPC server", res);
-    }
-    ydebug("RPC server started on {}", _rpcServer->socketPath());
 #endif
 
     s_instance = this;
