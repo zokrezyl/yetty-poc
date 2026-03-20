@@ -449,7 +449,7 @@ jobs:
         echo "build-output-dir=${{ github.workspace }}/build-ios-ytrace-release" >> "$GITHUB_OUTPUT"
 
     - name: Install macOS dependencies
-      run: brew install automake autoconf libtool ninja brotli
+      run: brew install automake autoconf libtool ninja brotli meson
 
     - name: Configure CMake for iOS
       run: >
@@ -490,7 +490,7 @@ jobs:
         echo "build-output-dir=${{ github.workspace }}/build-ios_x86_64-ytrace-release" >> "$GITHUB_OUTPUT"
 
     - name: Install macOS dependencies
-      run: brew install automake autoconf libtool ninja brotli
+      run: brew install automake autoconf libtool ninja brotli meson
 
     - name: Configure CMake for iOS Simulator
       run: >
