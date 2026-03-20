@@ -2959,6 +2959,10 @@ int GPUScreenImpl::onScrollRect(VTermRect rect, int downward, int rightward,
     // Sync scrolling painter - vterm is source of truth here
     if (self->_scrollingPainter) {
       self->_scrollingPainter->scrollLines(static_cast<uint16_t>(downward));
+      // Sync dirty grid to GPU immediately
+      if (auto res = self->_scrollingPainter->writeBuffers(); !res) {
+        yerror("onScrollRect: writeBuffers failed: {}", error_msg(res));
+      }
       ydebug("onScrollRect: scrolled painter {} lines (vterm-driven)", downward);
     }
   } else if (downward < 0) {
@@ -2974,6 +2978,10 @@ int GPUScreenImpl::onScrollRect(VTermRect rect, int downward, int rightward,
       // Sync scrolling painter for upward scroll too
       if (self->_scrollingPainter) {
         self->_scrollingPainter->scrollLines(static_cast<uint16_t>(upAmount));
+        // Sync dirty grid to GPU immediately
+        if (auto res = self->_scrollingPainter->writeBuffers(); !res) {
+          yerror("onScrollRect: writeBuffers failed: {}", error_msg(res));
+        }
         ydebug("onScrollRect: scrolled painter {} lines (vterm-driven, up)",
                upAmount);
       }

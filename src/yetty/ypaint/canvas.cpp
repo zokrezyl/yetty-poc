@@ -114,39 +114,25 @@ public:
 
   void addPrimitive(std::vector<float> primData, float aabbMinX, float aabbMinY,
                     float aabbMaxX, float aabbMaxY) override {
-    // Determine grid offset based on mode (stored in primitive for shader)
+    float baseY = (_sceneMinY > 1e9f) ? 0.0f : _sceneMinY;
+
+    // Local row range within primitive's AABB (not offset by cursor)
+    uint16_t localMinRow = static_cast<uint16_t>(
+        std::max(0, static_cast<int32_t>(std::floor((aabbMinY - baseY) / _cellSizeY))));
+    uint16_t localMaxRow = static_cast<uint16_t>(
+        std::max(0, static_cast<int32_t>(std::floor((aabbMaxY - baseY) / _cellSizeY))));
+
+    // In scrolling mode, grid rows are offset by cursor position
+    uint16_t primMinRow = _scrollingMode ? (_cursorRow + localMinRow) : localMinRow;
+    uint16_t primMaxRow = _scrollingMode ? (_cursorRow + localMaxRow) : localMaxRow;
+
+    ensureLines(primMaxRow + 1);
+
+    // Pack gridOffset: (cursorCol, cursorRow) - shader coordinate offset
+    // This is where drawing STARTS, not where primitive is STORED
+    std::vector<float> fullPrimData(primData.size() + 1);
     uint16_t gridOffsetCol = _scrollingMode ? _cursorCol : 0;
     uint16_t gridOffsetRow = _scrollingMode ? _cursorRow : 0;
-
-    // Compute which grid lines this primitive spans (scene-based, NOT cursor-offset)
-    float baseY = _sceneMinY;
-    if (baseY > 1e9f)
-      baseY = 0.0f;
-
-    int32_t localMinLine =
-        static_cast<int32_t>(std::floor((aabbMinY - baseY) / _cellSizeY));
-    int32_t localMaxLine =
-        static_cast<int32_t>(std::floor((aabbMaxY - baseY) / _cellSizeY));
-
-    // Grid placement is purely scene-based - gridOffset is only for shader positioning
-    int32_t primMinLineSigned = localMinLine;
-    int32_t primMaxLineSigned = localMaxLine;
-
-    // Clamp to valid range (only clamp negative values)
-    primMinLineSigned = std::max(primMinLineSigned, 0);
-    primMaxLineSigned = std::max(primMaxLineSigned, 0);
-    uint32_t primMinLine = static_cast<uint32_t>(primMinLineSigned);
-    uint32_t primMaxLine = static_cast<uint32_t>(primMaxLineSigned);
-
-    // Base line = where primitive is stored (bottom of primitive)
-    uint32_t baseLine = primMaxLine;
-
-    // Ensure lines exist BEFORE any clamping to existing lines
-    ensureLines(baseLine + 1);
-
-    // Prepend grid offset to primitive data
-    // Format: [gridOffset][original prim data...]
-    std::vector<float> fullPrimData(primData.size() + 1);
     uint32_t packedOffset = static_cast<uint32_t>(gridOffsetCol) |
                             (static_cast<uint32_t>(gridOffsetRow) << 16);
     std::memcpy(&fullPrimData[0], &packedOffset, sizeof(uint32_t));
@@ -154,21 +140,21 @@ public:
       fullPrimData[i + 1] = primData[i];
     }
 
-    // Store primitive in base line
-    uint16_t primIndex = static_cast<uint16_t>(_lines[baseLine].prims.size());
-    _lines[baseLine].prims.push_back(std::move(fullPrimData));
+    // Store primitive at primMaxRow (bottom of AABB - for scroll deletion)
+    uint16_t primIndex = static_cast<uint16_t>(_lines[primMaxRow].prims.size());
+    _lines[primMaxRow].prims.push_back(std::move(fullPrimData));
 
     // Add grid cell references
-    uint32_t cellMinX = cellXFromWorld(aabbMinX);
-    uint32_t cellMaxX = cellXFromWorld(aabbMaxX);
+    uint16_t cellMinX = static_cast<uint16_t>(cellXFromWorld(aabbMinX));
+    uint16_t cellMaxX = static_cast<uint16_t>(cellXFromWorld(aabbMaxX));
 
-    for (uint32_t lineIdx = primMinLine; lineIdx <= primMaxLine; lineIdx++) {
-      while (_lines[lineIdx].cells.size() <= cellMaxX) {
-        _lines[lineIdx].cells.push_back(GridCell{});
+    for (uint16_t row = primMinRow; row <= primMaxRow; row++) {
+      while (_lines[row].cells.size() <= cellMaxX) {
+        _lines[row].cells.push_back(GridCell{});
       }
-      uint16_t linesAhead = static_cast<uint16_t>(baseLine - lineIdx);
-      for (uint32_t cx = cellMinX; cx <= cellMaxX; cx++) {
-        _lines[lineIdx].cells[cx].refs.push_back({linesAhead, primIndex});
+      uint16_t linesAhead = primMaxRow - row;
+      for (uint16_t cx = cellMinX; cx <= cellMaxX; cx++) {
+        _lines[row].cells[cx].refs.push_back({linesAhead, primIndex});
       }
     }
 
@@ -183,38 +169,21 @@ public:
     if (numLines == 0 || _lines.empty())
       return;
 
-    ydebug("scrollLines: {} lines, cursor was ({},{})", numLines, _cursorCol,
-           _cursorRow);
+    // Pop lines from front - primitives in those lines are deleted
+    for (uint16_t i = 0; i < numLines && !_lines.empty(); i++) {
+      _lines.pop_front();
+    }
 
-    // Decrement gridOffsetRow in ALL primitives (moves them up on screen)
-    // Mark primitives as deleted when they scroll off top (don't erase - refs would break)
-    // Format: [0] = packed(gridOffsetCol | gridOffsetRow << 16)
-    // Use special marker: type=0xFFFFFFFF means deleted
+    // Update gridOffset row in remaining primitives (decrement by numLines)
     for (auto &line : _lines) {
       for (auto &prim : line.prims) {
-        if (prim.size() >= 2) {
-          // Check if already deleted
-          uint32_t primType;
-          std::memcpy(&primType, &prim[1], sizeof(uint32_t));
-          if (primType == 0xFFFFFFFFu)
-            continue;
-
+        if (prim.size() >= 1) {
           uint32_t packed;
           std::memcpy(&packed, &prim[0], sizeof(uint32_t));
           uint16_t col = packed & 0xFFFF;
-          int16_t row = static_cast<int16_t>((packed >> 16) & 0xFFFF);
-          row -= static_cast<int16_t>(numLines);
-
-          // Mark deleted if scrolled off top
-          int16_t threshold = -static_cast<int16_t>(heightInLines() + 10);
-          if (row < threshold) {
-            uint32_t deletedMarker = 0xFFFFFFFFu;
-            std::memcpy(&prim[1], &deletedMarker, sizeof(uint32_t));
-            continue;
-          }
-
-          packed = static_cast<uint32_t>(col) |
-                   (static_cast<uint32_t>(static_cast<uint16_t>(row)) << 16);
+          uint16_t row = (packed >> 16) & 0xFFFF;
+          row -= numLines;
+          packed = static_cast<uint32_t>(col) | (static_cast<uint32_t>(row) << 16);
           std::memcpy(&prim[0], &packed, sizeof(uint32_t));
         }
       }
@@ -228,7 +197,6 @@ public:
     }
 
     _dirty = true;
-    ydebug("scrollLines: done, cursor now ({},{})", _cursorCol, _cursorRow);
   }
 
   //===========================================================================
@@ -401,17 +369,10 @@ public:
   //===========================================================================
 
   void buildPrimStaging(std::vector<uint32_t> &out) const override {
-    // First pass: count non-deleted primitives
     uint32_t primCount = 0;
     uint32_t totalWords = 0;
     for (const auto &line : _lines) {
       for (const auto &prim : line.prims) {
-        if (prim.size() >= 2) {
-          uint32_t primType;
-          std::memcpy(&primType, &prim[1], sizeof(uint32_t));
-          if (primType == 0xFFFFFFFFu)
-            continue; // Skip deleted
-        }
         primCount++;
         totalWords += static_cast<uint32_t>(prim.size());
       }
@@ -427,13 +388,6 @@ public:
     uint32_t primIdx = 0;
     for (const auto &line : _lines) {
       for (const auto &prim : line.prims) {
-        // Skip deleted primitives
-        if (prim.size() >= 2) {
-          uint32_t primType;
-          std::memcpy(&primType, &prim[1], sizeof(uint32_t));
-          if (primType == 0xFFFFFFFFu)
-            continue;
-        }
         out[primIdx] = dataOffset;
         for (size_t i = 0; i < prim.size(); i++) {
           uint32_t val;

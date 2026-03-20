@@ -507,15 +507,35 @@ For O(1) jumping to the next primitive during iteration:
 
 ### Concept
 
-In scrolling mode, primitives are positioned relative to a cursor (like terminal text):
-- Cursor position: (col, row) in grid cells
-- gridOffset stored in word 0 of each primitive
-- When content overflows, top lines scroll off
+In scrolling mode, primitives are positioned relative to a cursor (like terminal text).
+Each primitive has TWO important row values:
+
+1. **gridOffset** (word 0): The cursor row where drawing STARTS - used by shader for
+   coordinate transformation
+2. **Storage row** (primMaxRow): The bottom row of the primitive's AABB - where the
+   primitive is stored in the deque (determines when it gets deleted on scroll)
+
+### Example: Adding a 5-Line Shape at Cursor (5, 10)
+
+```
+Primitive local AABB: rows 0-4 (5 lines tall), cols 0-3 (4 cells wide)
+Cursor position: (col=5, row=10)
+
+Grid refs placed at: rows 10-14, cols based on AABB X
+Primitive STORED at: row 14 (primMaxRow = cursorRow + localMaxRow)
+gridOffset value: (5, 10) - cursor position where drawing STARTS
+```
+
+When shader queries at (scenePos.x=100, scenePos.y=200), cellSize=(20,20):
+- pAdj = (100, 200) - (5*20, 10*20) = (0, 0) (local origin)
+
+When shader queries at (scenePos.x=160, scenePos.y=280):
+- pAdj = (160, 280) - (100, 200) = (60, 80) (local bottom-right area)
 
 ### Grid Offset Usage in Shader
 
 ```wgsl
-// Read grid offset from primitive
+// Read grid offset from primitive (word 0)
 let gridOffsetPacked = bitcast<u32>(storage[primOffset + 0u]);
 let gridOffsetX = f32(gridOffsetPacked & 0xFFFFu);
 let gridOffsetY = f32(gridOffsetPacked >> 16u);
@@ -523,19 +543,42 @@ let gridOffsetY = f32(gridOffsetPacked >> 16u);
 // Convert grid offset to pixel offset
 let pixelOffset = vec2<f32>(gridOffsetX * cellSizeX, gridOffsetY * cellSizeY);
 
-// Adjust p for primitive's position
+// Adjust p for primitive's position (transform to local coords)
 let pAdj = p - pixelOffset;
 
-// Now evaluate SDF with adjusted p
+// Now evaluate SDF with adjusted p (in primitive's local space)
 return sdCircle(pAdj, center, radius);
 ```
 
 ### Scrolling Operation
 
 When scrolling N lines:
-1. Remove top N lines from Canvas (deque pop_front)
-2. Decrement gridOffset.y by N for remaining primitives
-3. Mark grid as dirty for rebuild
+1. Pop N lines from front of deque (primitives stored there are deleted)
+2. Decrement gridOffset.y by N for all remaining primitives
+3. Grid refs automatically adjust (deque indices shift)
+4. gridOffset should NEVER go negative (primitives would be deleted before that)
+
+```cpp
+void scrollLines(uint16_t numLines) {
+    // Pop lines - primitives stored there are auto-deleted
+    for (uint16_t i = 0; i < numLines && !_lines.empty(); i++) {
+        _lines.pop_front();
+    }
+
+    // Update gridOffset in remaining primitives
+    for (auto &line : _lines) {
+        for (auto &prim : line.prims) {
+            uint32_t packed;
+            std::memcpy(&packed, &prim[0], sizeof(uint32_t));
+            uint16_t col = packed & 0xFFFF;
+            uint16_t row = (packed >> 16) & 0xFFFF;
+            row -= numLines;  // Decrement by scroll amount
+            packed = col | (static_cast<uint32_t>(row) << 16);
+            std::memcpy(&prim[0], &packed, sizeof(uint32_t));
+        }
+    }
+}
+```
 
 ## Grid Structure
 
@@ -585,14 +628,20 @@ fn sdCircle(p: vec2<f32>, center: vec2<f32>, radius: f32) -> f32 {
 
 ### Position Adjustment for Scrolling
 
-The gridOffset allows primitives to be positioned relative to where they were added:
+The gridOffset transforms scene coordinates to the primitive's local coordinate system.
+gridOffset = cursorRow when primitive was added (where drawing STARTS).
 
 ```wgsl
-// Without scrolling: p is raw pixel position
-let d = sdCircle(p, center, radius);
+// pixelOffset = gridOffset * cellSize
+// pAdj = scenePos - pixelOffset
+//
+// Example: primitive added at cursor row 10, cellSize.y = 20
+// - At scenePos.y = 200 (row 10): pAdj.y = 200 - 200 = 0 (local top)
+// - At scenePos.y = 280 (row 14): pAdj.y = 280 - 200 = 80 (local bottom)
+//
+// The primitive's AABB in local coords (0 to 80) maps correctly to screen rows 10-14
 
-// With scrolling: p is adjusted by gridOffset
-let pAdj = p - pixelOffset;  // pixelOffset = gridOffset * cellSize
+let pAdj = p - pixelOffset;
 let d = sdCircle(pAdj, center, radius);
 ```
 

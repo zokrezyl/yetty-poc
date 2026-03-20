@@ -76,9 +76,8 @@ fn renderYpaintOverlay(slotIndex: u32, pixelPos: vec2<f32>) -> vec4<f32> {
             continue;
         }
 
-        // SDF primitive - rawIdx is primitive INDEX, look up word offset from offset table
-        let wordOffset = bitcast<u32>(cardStorage[primitiveOffset + rawIdx]);
-        let primOff = primDataBase + wordOffset;
+        // SDF primitive - rawIdx is word offset (translated by C++ in writeDerived)
+        let primOff = primDataBase + rawIdx;
         let d = evaluateYpaintSDF(primOff, scenePos);
 
         let colors = ypaintPrimColors(primOff);

@@ -466,10 +466,10 @@ suite all_primitives_grid_tests = [] {
         builder->buildPrimStaging(staging);
         auto prims = extractAllPrims(staging, builder->primitiveCount());
 
-        // All primitives should have gridOffsetRow = 3
-        for (size_t i = 0; i < prims.size(); i++) {
-            expect(prims[i].gridOffsetRow == 3_i)
-                << "Prim " << i << " should have gridOffsetRow=3, got " << prims[i].gridOffsetRow;
-        }
+        // gridOffsetRow = cursorRow (where drawing STARTS, for shader coord transform)
+        // All primitives added at cursor row 3, so all have gridOffsetRow = 3
+        expect(prims[0].gridOffsetRow == 3_i) << "Circle gridOffsetRow";
+        expect(prims[1].gridOffsetRow == 3_i) << "Box gridOffsetRow";
+        expect(prims[2].gridOffsetRow == 3_i) << "Triangle gridOffsetRow";
     };
 };
