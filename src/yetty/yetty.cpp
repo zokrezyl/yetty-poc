@@ -11,7 +11,10 @@
 #include <yetty/incbin-assets.h>
 #include "ygui/ygui-overlay.h"
 #include <yetty/wgpu-compat.h>
-#include <yetty/platform.h>
+#include <yetty/platform/surface-manager.h>
+#include <yetty/platform/fs-path-manager.h>
+#include <yetty/platform/clipboard-manager.h>
+#include <yetty/platform/pty-manager.h>
 #include <yetty/base/base.h>
 #include <yetty/rpc/rpc-server.h>
 #include <yetty/rpc/event-loop-handler.h>
@@ -69,8 +72,6 @@ private:
     Result<void> initWebGPU() noexcept;
     Result<void> initSharedResources() noexcept;
     Result<void> initWorkspace() noexcept;
-    Result<void> initCallbacks() noexcept;
-
     Result<void> mainLoopIteration() noexcept;
     void handleResize(int width, int height) noexcept;
     void configureSurface(uint32_t width, uint32_t height) noexcept;
@@ -81,15 +82,15 @@ private:
     Result<void> ensureCaptureResources(uint32_t width, uint32_t height) noexcept;
     Result<void> performFrameCapture(WGPUCommandEncoder encoder) noexcept;
 
-#if !YETTY_WEB && !defined(__ANDROID__)
     void initEventLoop() noexcept;
     void shutdownEventLoop() noexcept;
-#endif
 
     Result<Workspace::Ptr> createWorkspace() noexcept;
 
-    // Platform abstraction (window, input, etc.)
-    Platform::Ptr _platform;
+    // Platform managers
+    SurfaceManager::Ptr _surfaceManager;
+    FsPathManager::Ptr _fsPathManager;
+    ClipboardManager::Ptr _clipboardManager;
     uint32_t _initialWidth = 1024;
     uint32_t _initialHeight = 768;
 
@@ -149,10 +150,8 @@ private:
 
     // Grid dimensions
 
-#if !YETTY_WEB && !defined(__ANDROID__)
+    // Timers - EventLoop handles platform differences (libuv vs webasm timers)
     base::TimerId _frameTimerId = -1;   // Render timer (configurable FPS)
-    base::TimerId _inputTimerId = -1;   // Input poll timer (always fast)
-#endif
 
     // Fatal GPU error tracking
     bool _fatalGpuError = false;
@@ -337,7 +336,7 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
 
     // Create ShaderManager with GPUContext, allocator, and shaders directory from Platform
     ydebug("init: ShaderManager::create");
-    auto shaderMgrResult = ShaderManager::create(_gpuContext, _gpuAllocator, _platform->getShadersDir());
+    auto shaderMgrResult = ShaderManager::create(_gpuContext, _gpuAllocator, _fsPathManager->getShadersDir());
     if (!shaderMgrResult) {
         ydebug("init: ShaderManager::create FAILED");
         return Err<void>("Failed to create ShaderManager", shaderMgrResult);
@@ -353,16 +352,16 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
         cdbProvider = std::make_shared<CpuMsdfCdbProvider>();
         ydebug("init: Using CPU MSDF CDB provider");
     } else {
-        cdbProvider = std::make_shared<GpuMsdfCdbProvider>(_instance, _platform->getShadersDir());
+        cdbProvider = std::make_shared<GpuMsdfCdbProvider>(_instance, _fsPathManager->getShadersDir());
         ydebug("init: Using GPU MSDF CDB provider");
     }
 #endif
 
     // Create FontManager with GPUContext, ShaderManager, and directories from Platform
     ydebug("init: FontManager::create");
-    auto msdfFontsDir = _platform->getMsdfFontsDir();
-    auto fontsDir = _platform->getFontsDir();
-    auto shadersDir = _platform->getShadersDir();
+    auto msdfFontsDir = _fsPathManager->getMsdfFontsDir();
+    auto fontsDir = _fsPathManager->getFontsDir();
+    auto shadersDir = _fsPathManager->getShadersDir();
 
     // Extract shader preload lists from config
     std::vector<std::string> preloadCardShaders;
@@ -385,7 +384,9 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     // Build YettyContext
     _yettyContext.gpu = _gpuContext;
     _yettyContext.gpuAllocator = _gpuAllocator;
-    _yettyContext.platform = _platform;
+    _yettyContext.surfaceManager = _surfaceManager;
+    _yettyContext.fsPathManager = _fsPathManager;
+    // PtyManager will be obtained via ::instance() when needed
 #if !YETTY_WEB && !defined(__ANDROID__)
     _yettyContext.gpuMonitor = gpu::GpuMonitor::create();
 #endif
@@ -423,13 +424,13 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     }
     ydebug("init: shaders compiled");
 
-#if !YETTY_WEB && !defined(__ANDROID__)
     initEventLoop();
 
+#if !YETTY_WEB && !defined(__ANDROID__)
     // Create RPC server and write socket path to config BEFORE workspace/terminal
     // (Terminal reads shell/env from config when forking the shell)
     {
-        auto socketResult = rpc::createSocketPath(_platform->getRuntimeDir());
+        auto socketResult = rpc::createSocketPath(_fsPathManager->getRuntimeDir());
         if (!socketResult) {
             return Err<void>("Failed to create RPC socket path", socketResult);
         }
@@ -472,10 +473,8 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     ydebug("RPC server started on {}", _rpcServer->socketPath());
 #endif
 
-    if (auto res = initCallbacks(); !res) return res;
-
     s_instance = this;
-    _lastFpsTime = _platform->getTime();
+    _lastFpsTime = _surfaceManager->getTime();
 
     // Initialize capture benchmark mode if enabled
     if (_captureBenchmark) {
@@ -490,7 +489,7 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     if (_vncClientMode) {
         // Get initial VNC content area size (window minus our statusbar)
         int windowW, windowH;
-        _platform->getWindowSize(windowW, windowH);
+        _surfaceManager->getWindowSize(windowW, windowH);
         float statusbarH = _yettyContext.yguiOverlay ? _yettyContext.yguiOverlay->getStatusbarHeight() : 0.0f;
         int vncH = windowH - static_cast<int>(statusbarH);
         uint16_t vncWidth = static_cast<uint16_t>(windowW > 0 ? windowW : 800);
@@ -516,8 +515,8 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
         _vncClient->onFrameReceived = [this]() {
 #if YETTY_WEB
             // Web builds: request animation frame directly
-            if (_platform) {
-                _platform->requestRender();
+            if (_surfaceManager) {
+                _surfaceManager->requestRender();
             }
 #else
             auto t = std::chrono::high_resolution_clock::now();
@@ -699,7 +698,7 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
                 }
                 // Use current window dimensions
                 int w, h;
-                _platform->getFramebufferSize(w, h);
+                _surfaceManager->getFramebufferSize(w, h);
                 widthPx = static_cast<uint16_t>(w);
                 heightPx = static_cast<uint16_t>(h);
                 ydebug("VNC onResize: client requested current size -> {}x{}", widthPx, heightPx);
@@ -983,7 +982,7 @@ Result<void> YettyImpl::initEmbeddedAssets() noexcept {
 
     // Derive cache base directory from Platform::getShadersDir()
     // Platform returns full paths like "~/.cache/yetty/shaders" - we need the parent
-    std::filesystem::path shadersPath = _platform->getShadersDir();
+    std::filesystem::path shadersPath = _fsPathManager->getShadersDir();
     std::filesystem::path cacheDir = shadersPath.parent_path();
     ydebug("initEmbeddedAssets: cacheDir={}", cacheDir.string());
 
@@ -1050,34 +1049,43 @@ Result<void> YettyImpl::initEmbeddedAssets() noexcept {
 }
 
 Result<void> YettyImpl::initWindow() noexcept {
-    // Create platform (headless mode skips GLFW, uses std::chrono for timing)
-    auto platformResult = Platform::create(_vncHeadless);
-    if (!platformResult) {
-        return Err<void>("Failed to create platform", platformResult);
+    // Initialize platform managers
+    auto surfaceResult = SurfaceManager::instance();
+    if (!surfaceResult) {
+        return Err<void>("Failed to get SurfaceManager", surfaceResult);
     }
-    _platform = *platformResult;
+    _surfaceManager = *surfaceResult;
 
-    // In headless mode, skip window creation
+    auto fsPathResult = FsPathManager::instance();
+    if (!fsPathResult) {
+        return Err<void>("Failed to get FsPathManager", fsPathResult);
+    }
+    _fsPathManager = *fsPathResult;
+
+    auto clipboardResult = ClipboardManager::instance();
+    if (!clipboardResult) {
+        return Err<void>("Failed to get ClipboardManager", clipboardResult);
+    }
+    _clipboardManager = *clipboardResult;
+
+    // In headless mode, skip window setup
     if (_vncHeadless) {
-        ydebug("VNC headless mode: platform created, skipping window");
+        ydebug("VNC headless mode: managers initialized, skipping window setup");
         return Ok();
     }
 
-    if (auto res = _platform->createWindow(_initialWidth, _initialHeight, "yetty"); !res) {
-        return Err<void>("Failed to create window", res);
-    }
-
     // Set window icon from embedded resource
-    _platform->setIcon(gLogoData, gLogoSize);
+    _surfaceManager->setIcon(gLogoData, gLogoSize);
 
-    // Update initial dimensions with actual window size (may differ from defaults on web)
+    // Get actual window size
     int actualW, actualH;
-    _platform->getWindowSize(actualW, actualH);
+    _surfaceManager->getWindowSize(actualW, actualH);
     if (actualW > 0 && actualH > 0) {
         _initialWidth = static_cast<uint32_t>(actualW);
         _initialHeight = static_cast<uint32_t>(actualH);
     }
 
+    ydebug("Platform managers initialized, window size {}x{}", actualW, actualH);
     return Ok();
 }
 
@@ -1092,13 +1100,23 @@ Result<void> YettyImpl::initWebGPU() noexcept {
     }
     ydebug("initWebGPU: Instance created");
 
-    // Create surface via platform (skip in headless mode)
+    // Create surface (skip in headless mode)
     if (!_vncHeadless) {
-        _surface = _platform->createWGPUSurface(_instance);
+        _surface = _surfaceManager->createWGPUSurface(_instance);
         if (_surface) {
             ydebug("initWebGPU: Surface created");
         } else {
             ywarn("initWebGPU: Surface creation failed - will try without surface");
+        }
+
+        // Initialize content scale
+        int fbWidth, fbHeight, winWidth, winHeight;
+        _surfaceManager->getFramebufferSize(fbWidth, fbHeight);
+        _surfaceManager->getWindowSize(winWidth, winHeight);
+        if (winWidth > 0 && winHeight > 0) {
+            _contentScaleX = static_cast<float>(fbWidth) / static_cast<float>(winWidth);
+            _contentScaleY = static_cast<float>(fbHeight) / static_cast<float>(winHeight);
+            ydebug("Content scale: {}x{}", _contentScaleX, _contentScaleY);
         }
     } else {
         ydebug("initWebGPU: Headless mode - skipping surface creation");
@@ -1800,244 +1818,6 @@ Result<Workspace::Ptr> YettyImpl::createWorkspace() noexcept {
     return Ok(workspace);
 }
 
-Result<void> YettyImpl::initCallbacks() noexcept {
-    // Skip platform callbacks in headless mode (no window)
-    if (_vncHeadless) {
-        ydebug("Headless mode: skipping platform callbacks");
-        return Ok();
-    }
-
-    // Focus callback
-    _platform->setFocusCallback([](bool focused) {
-        ydebug("FocusCallback: focused={}", focused);
-    });
-
-    // Key callback
-    _platform->setKeyCallback([this](int key, int scancode, KeyAction action, int mods) {
-        ydebug("KeyCallback: key={} scancode={} action={} mods={}", key, scancode, static_cast<int>(action), mods);
-
-        // Track modifier key state for scroll events (must be done before VNC forward)
-        // GLFW_KEY_LEFT_CONTROL=341, GLFW_KEY_RIGHT_CONTROL=345
-        // GLFW_KEY_LEFT_SHIFT=340, GLFW_KEY_RIGHT_SHIFT=344
-        if (key == 341 || key == 345) {
-            _ctrlPressed = (action == KeyAction::Press || action == KeyAction::Repeat);
-        }
-        if (key == 340 || key == 344) {
-            _shiftPressed = (action == KeyAction::Press || action == KeyAction::Repeat);
-        }
-
-        // Forward to VNC server when in client mode
-        if (_vncClientMode && _vncClient) {
-            ydebug("VNC client mode: forwarding key={} scancode={} action={}", key, scancode, static_cast<int>(action));
-            uint8_t vncMods = 0;
-            if (mods & 0x0001) vncMods |= vnc::VNC_MOD_SHIFT;
-            if (mods & 0x0002) vncMods |= vnc::VNC_MOD_CTRL;
-            if (mods & 0x0004) vncMods |= vnc::VNC_MOD_ALT;
-            if (mods & 0x0008) vncMods |= vnc::VNC_MOD_SUPER;
-
-            if (action == KeyAction::Press || action == KeyAction::Repeat) {
-                // For Ctrl/Alt + character keys, use layout-mapped character
-                if (mods & (0x0002 | 0x0004)) {  // Ctrl or Alt
-                    std::string keyName = _platform->getKeyName(key, scancode);
-                    if (!keyName.empty() && keyName.size() == 1) {
-                        uint32_t ch = static_cast<uint32_t>(static_cast<uint8_t>(keyName[0]));
-                        ydebug("VNC client: sending CHAR_WITH_MODS ch='{}' ({}) mods={}", keyName[0], ch, vncMods);
-                        _vncClient->sendCharWithMods(ch, vncMods);
-                        return;
-                    }
-                }
-                ydebug("VNC client: sending KEY_DOWN keycode={} scancode={} mods={}", key, scancode, vncMods);
-                _vncClient->sendKeyDown(static_cast<uint32_t>(key), static_cast<uint32_t>(scancode), vncMods);
-            } else if (action == KeyAction::Release) {
-                ydebug("VNC client: sending KEY_UP keycode={} scancode={}", key, scancode);
-                _vncClient->sendKeyUp(static_cast<uint32_t>(key), static_cast<uint32_t>(scancode), vncMods);
-            }
-            return;  // Don't process locally in client mode
-        }
-
-        if (action != KeyAction::Press && action != KeyAction::Repeat) return;
-
-        auto loop = *base::EventLoop::instance();
-
-        // Handle Ctrl/Alt + character combinations using platform key name lookup
-        // GLFW_MOD_CONTROL = 0x0002, GLFW_MOD_ALT = 0x0004
-        if (mods & (0x0002 | 0x0004)) {
-            // Special case for space key (GLFW_KEY_SPACE = 32)
-            if (key == 32) {
-                ydebug("Sending Ctrl/Alt+Space");
-                loop->dispatch(base::Event::keyDown(key, mods, scancode));
-                return;
-            }
-
-            std::string keyName = _platform->getKeyName(key, scancode);
-            if (!keyName.empty() && keyName.size() == 1) {
-                // Single character key - dispatch as char with mods
-                uint32_t ch = static_cast<uint32_t>(keyName[0]);
-                ydebug("Ctrl/Alt+char: keyName='{}' -> dispatching charInput with mods", keyName);
-                loop->dispatch(base::Event::charInputWithMods(ch, mods));
-                return;
-            }
-        }
-
-        // For special keys (Enter, Backspace, arrows, etc.), dispatch keyDown
-        ydebug("KeyCallback: dispatching keyDown key={} mods={}", key, mods);
-        loop->dispatch(base::Event::keyDown(key, mods, scancode));
-    });
-
-    // Char callback
-    _platform->setCharCallback([this](unsigned int codepoint) {
-        auto t = std::chrono::high_resolution_clock::now();
-        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
-        ydebug("[TIME] CLIENT CharCallback at {}ms: codepoint={}", ms, codepoint);
-
-        // Forward to VNC server when in client mode
-        if (_vncClientMode && _vncClient) {
-            // Encode codepoint as UTF-8 and send
-            char utf8[5] = {0};
-            if (codepoint < 0x80) {
-                utf8[0] = static_cast<char>(codepoint);
-                _vncClient->sendTextInput(utf8, 1);
-            } else if (codepoint < 0x800) {
-                utf8[0] = static_cast<char>(0xC0 | (codepoint >> 6));
-                utf8[1] = static_cast<char>(0x80 | (codepoint & 0x3F));
-                _vncClient->sendTextInput(utf8, 2);
-            } else if (codepoint < 0x10000) {
-                utf8[0] = static_cast<char>(0xE0 | (codepoint >> 12));
-                utf8[1] = static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F));
-                utf8[2] = static_cast<char>(0x80 | (codepoint & 0x3F));
-                _vncClient->sendTextInput(utf8, 3);
-            } else {
-                utf8[0] = static_cast<char>(0xF0 | (codepoint >> 18));
-                utf8[1] = static_cast<char>(0x80 | ((codepoint >> 12) & 0x3F));
-                utf8[2] = static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F));
-                utf8[3] = static_cast<char>(0x80 | (codepoint & 0x3F));
-                _vncClient->sendTextInput(utf8, 4);
-            }
-            return;  // Don't process locally in client mode
-        }
-
-        uint32_t glyphIdx = codepoint;
-        if (auto font = _yettyContext.fontManager->getDefaultMsMsdfFont()) {
-            glyphIdx = font->getGlyphIndex(codepoint);
-        }
-        _sharedUniforms.lastChar = glyphIdx;
-        _sharedUniforms.lastCharTime = static_cast<float>(_platform->getTime());
-
-        auto loop = *base::EventLoop::instance();
-        loop->dispatch(base::Event::charInput(codepoint));
-    });
-
-    // Resize callback
-    _platform->setResizeCallback([this](int newWidth, int newHeight) {
-        handleResize(newWidth, newHeight);
-    });
-
-    // Mouse button callback
-    _platform->setMouseButtonCallback([this](MouseButton button, bool pressed, int mods) {
-        // Forward to VNC server when in client mode
-        if (_vncClientMode && _vncClient) {
-            vnc::MouseButton vncBtn;
-            switch (button) {
-                case MouseButton::Left: vncBtn = vnc::MouseButton::LEFT; break;
-                case MouseButton::Middle: vncBtn = vnc::MouseButton::MIDDLE; break;
-                case MouseButton::Right: vncBtn = vnc::MouseButton::RIGHT; break;
-                default: vncBtn = vnc::MouseButton::LEFT; break;
-            }
-            _vncClient->sendMouseButton(
-                static_cast<int16_t>(_lastMouseX),
-                static_cast<int16_t>(_lastMouseY),
-                vncBtn, pressed, static_cast<uint8_t>(mods));
-            return;  // Don't process locally in client mode
-        }
-
-        // Get current mouse position for event dispatch
-        // Note: we track mouse position via move callback, but for now get from window size
-        // The actual position is tracked in mouse move events
-        auto loop = *base::EventLoop::instance();
-
-        // Middle-click paste: read clipboard and dispatch Paste event
-        if (button == MouseButton::Middle && pressed) {
-            std::string clipboard = _platform->getClipboardText();
-            if (!clipboard.empty()) {
-                auto text = std::make_shared<std::string>(std::move(clipboard));
-                loop->dispatch(base::Event::pasteEvent(std::move(text)));
-                ydebug("MouseButtonCallback: middle-click paste");
-            }
-            return;
-        }
-
-        int buttonInt = static_cast<int>(button);
-        if (pressed) {
-            ydebug("MouseButtonCallback: button={} PRESS at ({}, {})",
-                   buttonInt, _lastMouseX, _lastMouseY);
-            loop->dispatch(base::Event::mouseDown(_lastMouseX, _lastMouseY, buttonInt, mods));
-        } else {
-            ydebug("MouseButtonCallback: button={} RELEASE at ({}, {})",
-                   buttonInt, _lastMouseX, _lastMouseY);
-            loop->dispatch(base::Event::mouseUp(_lastMouseX, _lastMouseY, buttonInt, mods));
-        }
-    });
-
-    // Mouse move callback
-    _platform->setMouseMoveCallback([this](double xpos, double ypos) {
-        // Scale mouse coordinates from window to framebuffer space
-        float mx = static_cast<float>(xpos) * _contentScaleX;
-        float my = static_cast<float>(ypos) * _contentScaleY;
-        _lastMouseX = mx;
-        _lastMouseY = my;
-
-        // Forward to VNC server when in client mode
-        if (_vncClientMode && _vncClient) {
-            // Build mods from tracked key state
-            uint8_t mods = 0;
-            if (_shiftPressed) mods |= 0x0001;
-            if (_ctrlPressed) mods |= 0x0002;
-            _vncClient->sendMouseMove(static_cast<int16_t>(mx), static_cast<int16_t>(my), mods);
-            return;  // Don't process locally in client mode
-        }
-
-        auto loop = *base::EventLoop::instance();
-        loop->dispatch(base::Event::mouseMove(mx, my));
-    });
-
-    // Scroll callback
-    _platform->setScrollCallback([this](double xoffset, double yoffset) {
-        // Build modifier state from tracked key presses
-        // GLFW_MOD_SHIFT = 0x0001, GLFW_MOD_CONTROL = 0x0002
-        uint8_t mods = 0;
-        if (_shiftPressed) mods |= 0x0001;
-        if (_ctrlPressed) mods |= 0x0002;
-
-        // Forward to VNC server when in client mode
-        if (_vncClientMode && _vncClient) {
-            _vncClient->sendMouseScroll(
-                static_cast<int16_t>(_lastMouseX),
-                static_cast<int16_t>(_lastMouseY),
-                static_cast<int16_t>(xoffset * 120),  // Standard scroll delta
-                static_cast<int16_t>(yoffset * 120),
-                mods);
-            return;  // Don't process locally in client mode
-        }
-        auto loop = *base::EventLoop::instance();
-        loop->dispatch(base::Event::scrollEvent(
-            _lastMouseX, _lastMouseY,
-            static_cast<float>(xoffset), static_cast<float>(yoffset), mods));
-    });
-
-    // Initialize content scale at startup
-    int fbWidth, fbHeight, winWidth, winHeight;
-    _platform->getFramebufferSize(fbWidth, fbHeight);
-    _platform->getWindowSize(winWidth, winHeight);
-    if (winWidth > 0 && winHeight > 0) {
-        _contentScaleX = static_cast<float>(fbWidth) / static_cast<float>(winWidth);
-        _contentScaleY = static_cast<float>(fbHeight) / static_cast<float>(winHeight);
-        ydebug("Initial content scale: {}x{} (fb {}x{} / win {}x{})",
-              _contentScaleX, _contentScaleY, fbWidth, fbHeight, winWidth, winHeight);
-    }
-
-    return Ok();
-}
-
 Result<void> YettyImpl::onShutdown() {
     Result<void> result = Ok();
 
@@ -2083,8 +1863,8 @@ Result<void> YettyImpl::onShutdown() {
         _rpcServer->stop();
         _rpcServer.reset();
     }
-    shutdownEventLoop();
 #endif
+    shutdownEventLoop();
 
     // Shutdown workspaces while shared_ptrs are still alive
     for (auto& ws : _workspaces) {
@@ -2104,8 +1884,10 @@ Result<void> YettyImpl::onShutdown() {
     if (_adapter) wgpuAdapterRelease(_adapter);
     if (_instance) wgpuInstanceRelease(_instance);
 
-    // Platform handles window destruction
-    _platform.reset();
+    // Release platform managers
+    _surfaceManager.reset();
+    _clipboardManager.reset();
+    _fsPathManager.reset();
 
     s_instance = nullptr;
     return result;
@@ -2115,41 +1897,37 @@ Result<void> YettyImpl::onShutdown() {
 // Event Loop
 //=============================================================================
 
-#if !YETTY_WEB && !defined(__ANDROID__)
 void YettyImpl::initEventLoop() noexcept {
     auto loop = *base::EventLoop::instance();
 
-    // Input poll timer - always fast (8ms = 120Hz) for responsive UI
-    auto inputTimerResult = loop->createTimer();
-    if (!inputTimerResult) {
-        yerror("Failed to create input timer: {}", error_msg(inputTimerResult));
-        return;
-    }
-    _inputTimerId = *inputTimerResult;
-    if (auto res = loop->configTimer(_inputTimerId, 8); !res) {
-        yerror("Failed to configure input timer: {}", error_msg(res));
-        return;
-    }
-    if (auto res = loop->registerTimerListener(_inputTimerId, sharedAs<base::EventListener>()); !res) {
-        yerror("Failed to register input timer listener: {}", error_msg(res));
-        return;
-    }
-
     // Frame render timer - configurable FPS (default 60)
+    // On desktop: libuv timer, on webasm: emscripten timer via tick()
     auto frameTimerResult = loop->createTimer();
     if (!frameTimerResult) {
         yerror("Failed to create frame timer: {}", error_msg(frameTimerResult));
         return;
     }
     _frameTimerId = *frameTimerResult;
-    if (auto res = loop->configTimer(_frameTimerId, 1000); !res) {  // 1 FPS baseline, events trigger immediate render
+    if (auto res = loop->configTimer(_frameTimerId, 16); !res) {  // 60 FPS
         yerror("Failed to configure frame timer: {}", error_msg(res));
         return;
     }
-    if (auto res = loop->registerTimerListener(_frameTimerId, sharedAs<base::EventListener>()); !res) {
+    auto listener = sharedAs<base::EventListener>();
+    ydebug("initEventLoop: listener={}", static_cast<void*>(listener.get()));
+    if (auto res = loop->registerTimerListener(_frameTimerId, listener); !res) {
         yerror("Failed to register frame timer listener: {}", error_msg(res));
         return;
     }
+
+    // Register for input events (platform-specific sources: GLFW, Emscripten, Android)
+    loop->registerListener(base::Event::Type::KeyDown, sharedAs<base::EventListener>());
+    loop->registerListener(base::Event::Type::KeyUp, sharedAs<base::EventListener>());
+    loop->registerListener(base::Event::Type::Char, sharedAs<base::EventListener>());
+    loop->registerListener(base::Event::Type::MouseDown, sharedAs<base::EventListener>());
+    loop->registerListener(base::Event::Type::MouseUp, sharedAs<base::EventListener>());
+    loop->registerListener(base::Event::Type::MouseMove, sharedAs<base::EventListener>());
+    loop->registerListener(base::Event::Type::Scroll, sharedAs<base::EventListener>());
+    loop->registerListener(base::Event::Type::Resize, sharedAs<base::EventListener>());
 
     // Register for Copy events to write to system clipboard
     loop->registerListener(base::Event::Type::Copy, sharedAs<base::EventListener>());
@@ -2159,48 +1937,69 @@ void YettyImpl::initEventLoop() noexcept {
     loop->registerListener(base::Event::Type::SetFrameRate, sharedAs<base::EventListener>());
     // Register for ScreenUpdate events (PTY activity)
     loop->registerListener(base::Event::Type::ScreenUpdate, sharedAs<base::EventListener>());
+
+    // Start the frame timer - each platform's EventLoop handles this appropriately
+    // Desktop: libuv timer, Android: timerfd+ALooper, WebASM: emscripten timer
+    if (auto res = loop->startTimer(_frameTimerId); !res) {
+        yerror("Failed to start frame timer: {}", error_msg(res));
+        return;
+    }
+
+    ydebug("Event loop initialized");
 }
 
 void YettyImpl::shutdownEventLoop() noexcept {
     auto loop = *base::EventLoop::instance();
-    if (_inputTimerId >= 0) {
-        loop->destroyTimer(_inputTimerId);
-        _inputTimerId = -1;
-    }
     if (_frameTimerId >= 0) {
         loop->destroyTimer(_frameTimerId);
         _frameTimerId = -1;
     }
 }
-#endif
 
 Result<bool> YettyImpl::onEvent(const base::Event& event) {
-#if !YETTY_WEB && !defined(__ANDROID__)
-    if (event.type == base::Event::Type::ScreenUpdate) {
-        auto t = std::chrono::high_resolution_clock::now();
-        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
-        ydebug("[TIME] onEvent() called for ScreenUpdate at {}ms", ms);
+    ydebug("onEvent: type={} timerId={} frameTimerId={}", static_cast<int>(event.type), event.timer.timerId, _frameTimerId);
+    // Track modifier key state for scroll events
+    // GLFW-compatible key codes: GLFW_KEY_LEFT_CONTROL=341, RIGHT=345, LEFT_SHIFT=340, RIGHT=344
+    if (event.type == base::Event::Type::KeyDown) {
+        int key = event.key.key;
+        if (key == 341 || key == 345) _ctrlPressed = true;
+        if (key == 340 || key == 344) _shiftPressed = true;
+        return Ok(false);  // Let workspace handle
+    }
+    if (event.type == base::Event::Type::KeyUp) {
+        int key = event.key.key;
+        if (key == 341 || key == 345) _ctrlPressed = false;
+        if (key == 340 || key == 344) _shiftPressed = false;
+        return Ok(false);
     }
 
-    // Input timer: poll GLFW events (fast, always responsive)
-    // Note: VNC input is now fully async via EventLoop poll, no longer needs polling here
-    if (event.type == base::Event::Type::Timer && event.timer.timerId == _inputTimerId) {
-        // In headless mode, no window to poll events from
-        if (!_vncHeadless) {
-            _platform->pollEvents();
-            if (_platform->shouldClose()) {
-                (*base::EventLoop::instance())->stop();
-            }
-        }
-        // Process GPU events so async callbacks (like render done) can fire
-        wgpuInstanceProcessEvents(_instance);
+    // Mouse move: track position for scroll/button events
+    if (event.type == base::Event::Type::MouseMove) {
+        _lastMouseX = event.mouse.x;
+        _lastMouseY = event.mouse.y;
+        return Ok(false);  // Let workspace handle
+    }
+
+    // Resize event from platform InputManager
+    if (event.type == base::Event::Type::Resize) {
+        handleResize(static_cast<int>(event.resize.width),
+                    static_cast<int>(event.resize.height));
         return Ok(true);
     }
 
     // Frame timer or ScreenUpdate: render
-    // _inRender guard is inside mainLoopIteration (async: cleared by GPU callback)
     if ((event.type == base::Event::Type::Timer && event.timer.timerId == _frameTimerId) ||
         event.type == base::Event::Type::ScreenUpdate) {
+        ydebug("onEvent: frame timer fired, calling mainLoopIteration");
+        // Check if window should close
+        if (_surfaceManager && _surfaceManager->shouldClose()) {
+            ydebug("Window close requested, stopping event loop");
+            (*base::EventLoop::instance())->stop();
+            return Ok(true);
+        }
+        // Process GPU events so async callbacks (like render done) can fire
+        wgpuInstanceProcessEvents(_instance);
+
         if (auto res = mainLoopIteration(); !res) {
             yerror("Fatal render error: {}", error_msg(res));
             (*base::EventLoop::instance())->stop();
@@ -2209,27 +2008,27 @@ Result<bool> YettyImpl::onEvent(const base::Event& event) {
     }
 
     // SetCursor event: change mouse cursor shape
-    if (event.type == base::Event::Type::SetCursor && _platform) {
+    if (event.type == base::Event::Type::SetCursor && _surfaceManager) {
         int shape = event.setCursor.shape;
-        // Map GLFW cursor constants to CursorType
+        // Map cursor constants to CursorType
         CursorType cursorType = CursorType::Arrow;
         switch (shape) {
-            case 0: cursorType = CursorType::Arrow; break;       // Default
-            case 0x00036002: cursorType = CursorType::IBeam; break;  // GLFW_IBEAM_CURSOR
-            case 0x00036004: cursorType = CursorType::Hand; break;   // GLFW_POINTING_HAND_CURSOR
-            case 0x00036005: cursorType = CursorType::ResizeH; break; // GLFW_RESIZE_EW_CURSOR
-            case 0x00036006: cursorType = CursorType::ResizeV; break; // GLFW_RESIZE_NS_CURSOR
+            case 0: cursorType = CursorType::Arrow; break;
+            case 0x00036002: cursorType = CursorType::IBeam; break;
+            case 0x00036004: cursorType = CursorType::Hand; break;
+            case 0x00036005: cursorType = CursorType::ResizeH; break;
+            case 0x00036006: cursorType = CursorType::ResizeV; break;
             default: cursorType = CursorType::Arrow; break;
         }
-        _platform->setCursor(cursorType);
+        _surfaceManager->setCursor(cursorType);
         return Ok(true);
     }
 
     // Copy event: write selected text to system clipboard
-    if (event.type == base::Event::Type::Copy && event.payload && _platform) {
+    if (event.type == base::Event::Type::Copy && event.payload && _clipboardManager) {
         auto text = std::static_pointer_cast<std::string>(event.payload);
         if (text && !text->empty()) {
-            _platform->setClipboardText(*text);
+            _clipboardManager->setText(*text);
             ydebug("Clipboard: copied {} bytes", text->size());
         }
         return Ok(true);
@@ -2248,7 +2047,7 @@ Result<bool> YettyImpl::onEvent(const base::Event& event) {
         }
         return Ok(true);
     }
-#endif
+
     return Ok(false);
 }
 
@@ -2260,26 +2059,12 @@ static void signalHandler(int sig) {
 Result<void> YettyImpl::run() noexcept {
     ydebug("Starting render loop...");
 
-    // Handle Ctrl+C from launching terminal
     std::signal(SIGINT, signalHandler);
     std::signal(SIGTERM, signalHandler);
 
-#if YETTY_WEB
-    // For web builds, use platform's main loop (emscripten_set_main_loop_arg)
-    _platform->runMainLoop([this]() -> bool {
-        auto result = mainLoopIteration();
-        if (!result) {
-            yerror("Main loop iteration failed: {}", result.error().message());
-            return false;
-        }
-        return !_fatalGpuError;
-    });
-    // Note: runMainLoop doesn't return on web (emscripten takes over)
-    return Ok();
-#elif !defined(__ANDROID__)
+    // Timer is already started in initEventLoop()
+    // Just start the event loop - blocks on desktop, no-op on Android
     auto loop = *base::EventLoop::instance();
-    loop->startTimer(_inputTimerId);
-    loop->startTimer(_frameTimerId);
     loop->start();
 
     ydebug("Run finished.");
@@ -2288,10 +2073,6 @@ Result<void> YettyImpl::run() noexcept {
         return Err<void>("Fatal GPU error: " + _fatalGpuErrorMsg);
     }
     return Ok();
-#else
-    // Android: main loop is handled externally via iterate()
-    return Ok();
-#endif
 }
 
 Result<void> YettyImpl::iterate() noexcept {
@@ -2381,8 +2162,8 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
     }
 
     // Update shared uniforms
-    static double lastTime = _platform->getTime();
-    double now = _platform->getTime();
+    static double lastTime = _surfaceManager->getTime();
+    double now = _surfaceManager->getTime();
     float deltaTime = static_cast<float>(now - lastTime);
     lastTime = now;
 
@@ -2392,7 +2173,7 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
         windowWidth = _vncRequestedWidth > 0 ? static_cast<int>(_vncRequestedWidth) : static_cast<int>(_initialWidth);
         windowHeight = _vncRequestedHeight > 0 ? static_cast<int>(_vncRequestedHeight) : static_cast<int>(_initialHeight);
     } else {
-        _platform->getWindowSize(windowWidth, windowHeight);
+        _surfaceManager->getWindowSize(windowWidth, windowHeight);
     }
 
     _sharedUniforms.time = static_cast<float>(now);
@@ -2442,7 +2223,7 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
     static double lastDbgTime = 0;
     if (_vncHeadless) {
         if (doCapture) captureCount++; else skipCount++;
-        double now = _platform->getTime();
+        double now = _surfaceManager->getTime();
         if (now - lastDbgTime >= 1.0) {
             ydebug("VNC STATS: captures={} skips={} ackReady={}", captureCount, skipCount, vncServerReady);
             captureCount = skipCount = 0;
@@ -2691,7 +2472,7 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
     if (!_vncHeadless || doCapture) {
         _frameCount++;
     }
-    double fpsNow = _platform->getTime();
+    double fpsNow = _surfaceManager->getTime();
     if (fpsNow - _lastFpsTime >= 1.0) {
         ydebug("FPS: {}", _frameCount);
         if (_yettyContext.yguiOverlay) {
@@ -2727,8 +2508,12 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
         // If ScreenUpdate was needed while rendering, dispatch it now
         if (self->_nextScreenUpdateNeeded.exchange(false)) {
             ydebug("[TIME] GPU DONE: _nextScreenUpdateNeeded was true, dispatching ScreenUpdate");
+#if !YETTY_WEB
             // Wake up main thread via EventQueue (thread-safe for GPU callbacks)
+            // On WebASM, don't push - the main loop already runs at 60fps via requestAnimationFrame
+            // and pushing here causes infinite recursion since callbacks fire synchronously
             self->_eventQueue->push(base::Event::screenUpdateEvent());
+#endif
         }
     };
     renderDoneCb.userdata1 = this;
@@ -2743,7 +2528,7 @@ void YettyImpl::handleResize(int newWidth, int newHeight) noexcept {
 
     // Update content scale (framebuffer / window)
     int windowWidth, windowHeight;
-    _platform->getWindowSize(windowWidth, windowHeight);
+    _surfaceManager->getWindowSize(windowWidth, windowHeight);
     if (windowWidth > 0 && windowHeight > 0) {
         _contentScaleX = static_cast<float>(newWidth) / static_cast<float>(windowWidth);
         _contentScaleY = static_cast<float>(newHeight) / static_cast<float>(windowHeight);

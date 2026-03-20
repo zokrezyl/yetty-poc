@@ -7,7 +7,7 @@
 #include "plot-sampler-provider.h"
 #include "plot-transformer-provider.h"
 #include "plot-renderer-provider.h"
-#include <yetty/base/event-loop.h>
+#include <yetty/platform/event-loop.h>
 #include <yetty/yetty-context.h>
 #include <yetty/ms-msdf-font.h>
 #include <yetty/shader-manager.h>

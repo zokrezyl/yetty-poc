@@ -1,7 +1,7 @@
 #include "yvideo.h"
 #include <yetty/yvideo/yvideo-decoder.h>
 #include <yetty/yetty-context.h>
-#include <yetty/base/event-loop.h>
+#include <yetty/platform/event-loop.h>
 #include <ytrace/ytrace.hpp>
 
 #include <algorithm>

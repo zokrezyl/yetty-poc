@@ -38,7 +38,7 @@ add_library(yetty_test_lib STATIC
     ${CMAKE_SOURCE_DIR}/src/yetty/shared-memory.cpp
     # ${CMAKE_SOURCE_DIR}/src/yetty/widget-factory.cpp  # TODO: refactor later
     ${CMAKE_SOURCE_DIR}/src/yetty/card-factory.cpp
-    ${CMAKE_SOURCE_DIR}/src/yetty/base/event-loop.cpp
+    ${CMAKE_SOURCE_DIR}/src/yetty/platform/event-loop/libuv.cpp
 )
 
 target_include_directories(yetty_test_lib PUBLIC

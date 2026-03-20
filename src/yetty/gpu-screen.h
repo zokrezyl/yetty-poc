@@ -4,7 +4,7 @@
 #include <yetty/yetty-context.h>
 #include <yetty/card.h>
 #include <yetty/grid-cell.h>
-#include <yetty/base/event-loop.h>
+#include <yetty/platform/event-loop.h>
 #include <memory>
 #include <functional>
 #include <cstdint>

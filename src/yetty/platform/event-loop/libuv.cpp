@@ -1,12 +1,10 @@
-#include <yetty/base/event-loop.h>
+#include <yetty/platform/event-loop.h>
 #include <ytrace/ytrace.hpp>
+#include <uv.h>
 #include <vector>
 #include <unordered_map>
 #include <algorithm>
-
-#if !YETTY_WEB
-#include <uv.h>
-#endif
+#include <atomic>
 
 namespace yetty {
 namespace base {
@@ -17,11 +15,10 @@ struct EventTypeHash {
     }
 };
 
-#if !YETTY_WEB
 struct PollHandle {
     uv_poll_t poll;
     int fd = -1;
-    int events = UV_READABLE;  // Current poll events
+    int events = UV_READABLE;
     std::vector<std::weak_ptr<EventListener>> listeners;
 };
 
@@ -31,42 +28,38 @@ struct TimerHandle {
     Timeout timeout = 0;
     std::vector<std::weak_ptr<EventListener>> listeners;
 };
-#endif
 
 class EventLoopImpl : public EventLoop {
 public:
     EventLoopImpl() {
-#if !YETTY_WEB
         _loop = uv_default_loop();
-#endif
+
+        // Initialize screen update async handle
+        _screenUpdateAsync.data = this;
+        uv_async_init(_loop, &_screenUpdateAsync, onScreenUpdateAsync);
     }
 
-    ~EventLoopImpl() override = default;
+    ~EventLoopImpl() override {
+        uv_close(reinterpret_cast<uv_handle_t*>(&_screenUpdateAsync), nullptr);
+    }
 
     int start() override {
-#if !YETTY_WEB
         ydebug("EventLoop::start: running uv_default_loop");
         return uv_run(_loop, UV_RUN_DEFAULT);
-#else
-        return 0;
-#endif
     }
 
     Result<void> stop() override {
-#if !YETTY_WEB
         ydebug("EventLoop::stop");
         uv_stop(_loop);
-#endif
         return Ok();
     }
 
     Result<void> registerListener(Event::Type type, EventListener::Ptr listener, int priority = 0) override {
         auto& vec = _listeners[type];
-        // Insert sorted by priority (descending - higher priority first)
         PrioritizedListener entry{listener, priority};
         auto insertPos = std::lower_bound(vec.begin(), vec.end(), entry,
             [](const PrioritizedListener& a, const PrioritizedListener& b) {
-                return a.priority > b.priority;  // descending
+                return a.priority > b.priority;
             });
         vec.insert(insertPos, entry);
         return Ok();
@@ -101,38 +94,20 @@ public:
     }
 
     Result<bool> dispatch(const Event& event) override {
-        if (event.type == Event::Type::ScreenUpdate) {
-            auto t = std::chrono::high_resolution_clock::now();
-            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
-            ydebug("[TIME] dispatch() called for ScreenUpdate at {}ms", ms);
-        }
-
         auto it = _listeners.find(event.type);
         if (it == _listeners.end()) {
-            if (event.type == Event::Type::ScreenUpdate) {
-                ydebug("[TIME] dispatch() NO LISTENERS FOUND for ScreenUpdate");
-            }
             return Ok(false);
-        }
-
-        if (event.type == Event::Type::ScreenUpdate) {
-            ydebug("[TIME] dispatch() found {} listeners for ScreenUpdate", it->second.size());
         }
 
         auto listeners = it->second;  // copy for safe iteration
         for (const auto& pl : listeners) {
             if (auto sp = pl.listener.lock()) {
-                if (event.type == Event::Type::ScreenUpdate) {
-                    auto t = std::chrono::high_resolution_clock::now();
-                    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
-                    ydebug("[TIME] dispatch() calling onEvent for ScreenUpdate at {}ms", ms);
-                }
                 auto result = sp->onEvent(event);
                 if (!result) {
                     return Err<bool>("Event handler failed", result);
                 }
                 if (*result) {
-                    return Ok(true);  // consumed by higher priority listener
+                    return Ok(true);  // consumed
                 }
             }
         }
@@ -155,18 +130,13 @@ public:
     }
 
     Result<PollId> createPoll() override {
-#if !YETTY_WEB
         PollId id = _nextPollId++;
         _polls[id] = std::make_unique<PollHandle>();
         ydebug("EventLoop::createPoll: id={}", id);
         return Ok(id);
-#else
-        return Err<PollId>("Poll not supported on this platform");
-#endif
     }
 
     Result<void> configPoll(PollId id, int fd) override {
-#if !YETTY_WEB
         auto it = _polls.find(id);
         if (it == _polls.end()) {
             return Err<void>("Poll not found");
@@ -175,7 +145,6 @@ public:
         auto& ph = it->second;
         ph->fd = fd;
 #ifdef _WIN32
-        // On Windows, sockets require uv_poll_init_socket (not uv_poll_init)
         int r = uv_poll_init_socket(_loop, &ph->poll, fd);
 #else
         int r = uv_poll_init(_loop, &ph->poll, fd);
@@ -187,21 +156,14 @@ public:
         ph->poll.data = ph.get();
         ydebug("EventLoop::configPoll: id={} fd={} success", id, fd);
         return Ok();
-#else
-        (void)id;
-        (void)fd;
-        return Err<void>("Poll not supported on this platform");
-#endif
     }
 
     Result<void> startPoll(PollId id, int events = POLL_READABLE) override {
-#if !YETTY_WEB
         auto it = _polls.find(id);
         if (it == _polls.end()) {
             return Err<void>("Poll not found");
         }
 
-        // Convert our flags to libuv flags
         int uvEvents = 0;
         if (events & POLL_READABLE) uvEvents |= UV_READABLE;
         if (events & POLL_WRITABLE) uvEvents |= UV_WRITABLE;
@@ -214,48 +176,34 @@ public:
             return Err<void>(std::string("uv_poll_start failed: ") + uv_strerror(r));
         }
         return Ok();
-#else
-        (void)id;
-        (void)events;
-        return Err<void>("Poll not supported on this platform");
-#endif
     }
 
     Result<void> setPollEvents(PollId id, int events) override {
-#if !YETTY_WEB
         auto it = _polls.find(id);
         if (it == _polls.end()) {
             return Err<void>("Poll not found");
         }
 
-        // Convert our flags to libuv flags
         int uvEvents = 0;
         if (events & POLL_READABLE) uvEvents |= UV_READABLE;
         if (events & POLL_WRITABLE) uvEvents |= UV_WRITABLE;
 
         if (it->second->events == uvEvents) {
-            return Ok();  // No change needed
+            return Ok();
         }
 
         it->second->events = uvEvents;
         ydebug("EventLoop::setPollEvents: id={} fd={} events={}", id, it->second->fd, uvEvents);
 
-        // Restart poll with new events
         int r = uv_poll_start(&it->second->poll, uvEvents, onPollCallback);
         if (r != 0) {
             yerror("EventLoop::setPollEvents: uv_poll_start failed for fd={}: {}", it->second->fd, uv_strerror(r));
             return Err<void>(std::string("uv_poll_start failed: ") + uv_strerror(r));
         }
         return Ok();
-#else
-        (void)id;
-        (void)events;
-        return Err<void>("Poll not supported on this platform");
-#endif
     }
 
     Result<void> stopPoll(PollId id) override {
-#if !YETTY_WEB
         auto it = _polls.find(id);
         if (it == _polls.end()) {
             return Err<void>("Poll not found");
@@ -263,14 +211,9 @@ public:
 
         uv_poll_stop(&it->second->poll);
         return Ok();
-#else
-        (void)id;
-        return Err<void>("Poll not supported on this platform");
-#endif
     }
 
     Result<void> destroyPoll(PollId id) override {
-#if !YETTY_WEB
         auto it = _polls.find(id);
         if (it == _polls.end()) {
             return Err<void>("Poll not found");
@@ -280,31 +223,20 @@ public:
         uv_close(reinterpret_cast<uv_handle_t*>(&it->second->poll), nullptr);
         _polls.erase(it);
         return Ok();
-#else
-        (void)id;
-        return Err<void>("Poll not supported on this platform");
-#endif
     }
 
     Result<void> registerPollListener(PollId id, EventListener::Ptr listener) override {
-#if !YETTY_WEB
         auto it = _polls.find(id);
         if (it == _polls.end()) {
             return Err<void>("Poll not found");
         }
 
-        ydebug("EventLoop::registerPollListener: id={} fd={} listener={}", id, it->second->fd, (void*)listener.get());
+        ydebug("EventLoop::registerPollListener: id={} fd={}", id, it->second->fd);
         it->second->listeners.push_back(listener);
         return Ok();
-#else
-        (void)id;
-        (void)listener;
-        return Err<void>("Poll not supported on this platform");
-#endif
     }
 
     Result<TimerId> createTimer() override {
-#if !YETTY_WEB
         TimerId id = _nextTimerId++;
         auto th = std::make_unique<TimerHandle>();
         th->id = id;
@@ -313,13 +245,9 @@ public:
         _timers[id] = std::move(th);
         ydebug("EventLoop::createTimer: id={}", id);
         return Ok(id);
-#else
-        return Err<TimerId>("Timer not supported on this platform");
-#endif
     }
 
     Result<void> configTimer(TimerId id, Timeout timeoutMs) override {
-#if !YETTY_WEB
         auto it = _timers.find(id);
         if (it == _timers.end()) {
             return Err<void>("Timer not found");
@@ -327,21 +255,14 @@ public:
 
         auto& th = it->second;
         th->timeout = timeoutMs;
-        // Restart timer if it's already running
         if (uv_is_active(reinterpret_cast<uv_handle_t*>(&th->timer))) {
             uv_timer_start(&th->timer, onTimerCallback, timeoutMs, timeoutMs);
         }
         ydebug("EventLoop::configTimer: id={} timeout={}", id, timeoutMs);
         return Ok();
-#else
-        (void)id;
-        (void)timeoutMs;
-        return Err<void>("Timer not supported on this platform");
-#endif
     }
 
     Result<void> startTimer(TimerId id) override {
-#if !YETTY_WEB
         auto it = _timers.find(id);
         if (it == _timers.end()) {
             return Err<void>("Timer not found");
@@ -351,14 +272,9 @@ public:
         ydebug("EventLoop::startTimer: id={} timeout={}", id, th->timeout);
         uv_timer_start(&th->timer, onTimerCallback, th->timeout, th->timeout);
         return Ok();
-#else
-        (void)id;
-        return Err<void>("Timer not supported on this platform");
-#endif
     }
 
     Result<void> stopTimer(TimerId id) override {
-#if !YETTY_WEB
         auto it = _timers.find(id);
         if (it == _timers.end()) {
             return Err<void>("Timer not found");
@@ -366,14 +282,9 @@ public:
 
         uv_timer_stop(&it->second->timer);
         return Ok();
-#else
-        (void)id;
-        return Err<void>("Timer not supported on this platform");
-#endif
     }
 
     Result<void> destroyTimer(TimerId id) override {
-#if !YETTY_WEB
         auto it = _timers.find(id);
         if (it == _timers.end()) {
             return Err<void>("Timer not found");
@@ -383,43 +294,42 @@ public:
         uv_close(reinterpret_cast<uv_handle_t*>(&it->second->timer), nullptr);
         _timers.erase(it);
         return Ok();
-#else
-        (void)id;
-        return Err<void>("Timer not supported on this platform");
-#endif
     }
 
     Result<void> registerTimerListener(TimerId id, EventListener::Ptr listener) override {
-#if !YETTY_WEB
         auto it = _timers.find(id);
         if (it == _timers.end()) {
             return Err<void>("Timer not found");
         }
 
-        ydebug("EventLoop::registerTimerListener: id={} listener={}", id, (void*)listener.get());
+        ydebug("EventLoop::registerTimerListener: id={}", id);
         it->second->listeners.push_back(listener);
         return Ok();
-#else
-        (void)id;
-        (void)listener;
-        return Err<void>("Timer not supported on this platform");
-#endif
+    }
+
+    // Request immediate screen update - async dispatch of ScreenUpdate event
+    void requestScreenUpdate() override {
+        _screenUpdatePending = true;
+        uv_async_send(&_screenUpdateAsync);
     }
 
 private:
-#if !YETTY_WEB
+    static void onScreenUpdateAsync(uv_async_t* handle) {
+        auto* self = static_cast<EventLoopImpl*>(handle->data);
+        if (self->_screenUpdatePending.exchange(false)) {
+            self->dispatch(Event::screenUpdateEvent());
+        }
+    }
+
     static void onPollCallback(uv_poll_t* handle, int status, int events) {
         auto* ph = static_cast<PollHandle*>(handle->data);
-        ydebug("EventLoop::onPollCallback: fd={} status={} events={} listeners={}", ph->fd, status, events, ph->listeners.size());
 
         if (status < 0) {
             ywarn("EventLoop::onPollCallback: error status={} for fd={}", status, ph->fd);
             return;
         }
 
-        // Dispatch readable event
         if (events & UV_READABLE) {
-            ydebug("EventLoop::onPollCallback: READABLE fd={}", ph->fd);
             Event event;
             event.type = Event::Type::PollReadable;
             event.poll.fd = ph->fd;
@@ -431,9 +341,7 @@ private:
             }
         }
 
-        // Dispatch writable event
         if (events & UV_WRITABLE) {
-            ydebug("EventLoop::onPollCallback: WRITABLE fd={}", ph->fd);
             Event event;
             event.type = Event::Type::PollWritable;
             event.poll.fd = ph->fd;
@@ -458,7 +366,6 @@ private:
             }
         }
     }
-#endif
 
     struct PrioritizedListener {
         std::weak_ptr<EventListener> listener;
@@ -467,13 +374,15 @@ private:
 
     std::unordered_map<Event::Type, std::vector<PrioritizedListener>, EventTypeHash> _listeners;
 
-#if !YETTY_WEB
     uv_loop_t* _loop = nullptr;
     std::unordered_map<PollId, std::unique_ptr<PollHandle>> _polls;
     std::unordered_map<TimerId, std::unique_ptr<TimerHandle>> _timers;
     PollId _nextPollId = 1;
     TimerId _nextTimerId = 1;
-#endif
+
+    // Screen update async - for immediate re-render without waiting for timer
+    uv_async_t _screenUpdateAsync;
+    std::atomic<bool> _screenUpdatePending{false};
 };
 
 // Factory implementation

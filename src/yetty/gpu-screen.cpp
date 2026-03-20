@@ -28,6 +28,7 @@
 #include <yetty/vector-coverage-font.h>
 #include <yetty/vector-sdf-font.h>
 #include <yetty/wgpu-compat.h>
+#include <yetty/platform/event-loop.h>
 #include <ytrace/ytrace.hpp>
 
 #ifndef CMAKE_SOURCE_DIR
@@ -1451,8 +1452,11 @@ void GPUScreenImpl::clampVisualZoomOffset() {
 }
 
 void GPUScreenImpl::requestScreenUpdate() {
-  if (_ctx.platform) {
-    _ctx.platform->requestRender();
+  // Trigger async ScreenUpdate via EventLoop's dedicated uv_async_t
+  // This wakes the render thread for immediate re-render without waiting for frame timer
+  auto loopResult = base::EventLoop::instance();
+  if (loopResult) {
+    (*loopResult)->requestScreenUpdate();
   }
 }
 

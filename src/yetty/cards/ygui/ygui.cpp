@@ -31,7 +31,7 @@
 #include <cmath>
 #include <sstream>
 #include <yaml-cpp/yaml.h>
-#include <yetty/base/event-loop.h>
+#include <yetty/platform/event-loop.h>
 #include <yetty/osc-command.h>
 #include <yetty/ydraw-builder.h>
 #include <ytrace/ytrace.hpp>

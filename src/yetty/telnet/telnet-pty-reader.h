@@ -1,6 +1,6 @@
 #pragma once
 
-#include <yetty/pty-reader.h>
+#include <yetty/platform/pty-reader.h>
 #include "telnet-client.h"
 #include <mutex>
 #include <deque>

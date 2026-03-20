@@ -10,7 +10,7 @@
 #include "../../ydraw/ydraw-buffer.h"
 #include "../../ydraw/ydraw-types.gen.h"
 using yetty::YDrawBuffer;
-#include <yetty/base/event-loop.h>
+#include <yetty/platform/event-loop.h>
 #include <yetty/msdf-glyph-data.h>
 #include <yetty/gpu-texture-manager.h>
 #include <ytrace/ytrace.hpp>

@@ -13,11 +13,24 @@ add_subdirectory(${YETTY_ROOT}/src/yetty ${CMAKE_BINARY_DIR}/src/yetty)
 add_subdirectory(${YETTY_ROOT}/src/yetty/gpu ${CMAKE_BINARY_DIR}/src/yetty/gpu)
 add_subdirectory(${YETTY_ROOT}/src/yetty/client ${CMAKE_BINARY_DIR}/src/yetty/client)
 
+# Platform manager sources (new architecture)
+# Note: event-loop is included via yetty_base
+set(YETTY_PLATFORM_SOURCES
+    ${YETTY_ROOT}/src/yetty/platform/init-manager/glfw.cpp
+    ${YETTY_ROOT}/src/yetty/platform/shared/glfw-window-singleton.cpp
+    ${YETTY_ROOT}/src/yetty/platform/surface-manager/glfw.cpp
+    ${YETTY_ROOT}/src/yetty/platform/pty-manager/windows.cpp
+    ${YETTY_ROOT}/src/yetty/platform/pty-reader/windows.cpp
+    ${YETTY_ROOT}/src/yetty/platform/fs-path-manager/windows.cpp
+    ${YETTY_ROOT}/src/yetty/platform/clipboard-manager/glfw.cpp
+    ${YETTY_ROOT}/src/yetty/platform/webgpu-manager/windows.cpp
+)
+
 # Create executable with core sources + platform
 add_executable(yetty
     ${YETTY_CORE_SOURCES}
     ${YETTY_DESKTOP_SOURCES}
-    ${YETTY_ROOT}/src/yetty/platform/windows-platform.cpp
+    ${YETTY_PLATFORM_SOURCES}
 )
 
 target_include_directories(yetty PRIVATE ${YETTY_INCLUDES} ${YETTY_RENDERER_INCLUDES} ${JPEG_INCLUDE_DIRS} ${BROTLI_INCLUDE_DIR})

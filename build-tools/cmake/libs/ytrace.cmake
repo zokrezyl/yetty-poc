@@ -53,7 +53,7 @@ CPMAddPackage(
         "YTRACE_ENABLE_YTEST ${YTRACE_ENABLE_YTEST}"
 )
 
-# Disable control socket on Emscripten (no filesystem/sockets)
-if(EMSCRIPTEN)
+# Disable control socket on Emscripten (no filesystem) or Android (sandboxed fs)
+if(EMSCRIPTEN OR YETTY_ANDROID)
     target_compile_definitions(ytrace INTERFACE YTRACE_NO_CONTROL_SOCKET)
 endif()

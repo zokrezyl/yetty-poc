@@ -1,5 +1,5 @@
 #include <yetty/rpc/event-loop-handler.h>
-#include <yetty/base/event-loop.h>
+#include <yetty/platform/event-loop.h>
 #include <yetty/workspace.h>
 #include <yetty/gpu-screen-manager.h>
 #include "../gpu-screen.h"

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "../ygui-widgets.h"
-#include <yetty/base/event-loop.h>
+#include <yetty/platform/event-loop.h>
 #include <algorithm>
 
 namespace yetty::ygui {

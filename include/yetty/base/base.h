@@ -7,5 +7,5 @@
 #include "factory.h"
 #include "event.h"
 #include "event-listener.h"
-#include "event-loop.h"
+#include <yetty/platform/event-loop.h>
 #include "event-queue.h"

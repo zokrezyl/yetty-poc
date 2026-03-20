@@ -5,7 +5,7 @@
 #include <yetty/font-manager.h>
 #include <yetty/ms-msdf-font.h>
 #include <yetty/bm-font.h>
-#include <yetty/base/event-loop.h>
+#include <yetty/platform/event-loop.h>
 #include <ytrace/ytrace.hpp>
 #include <yetty/wgpu-compat.h>
 #include <cstring>

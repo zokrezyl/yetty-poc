@@ -4,7 +4,7 @@
 
 #include "../vnc-client.h"
 #include "../protocol.h"
-#include <yetty/base/event-loop.h>
+#include <yetty/platform/event-loop.h>
 #include <yetty/wgpu-compat.h>
 #include <ytrace/ytrace.hpp>
 #include <spdlog/spdlog.h>

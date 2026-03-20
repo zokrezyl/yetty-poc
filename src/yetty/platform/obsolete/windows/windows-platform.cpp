@@ -1,26 +1,20 @@
 #include <yetty/platform.h>
 #include <yetty/pty-provider.h>
-#include <yetty/base/event-loop.h>
+#include <yetty/platform/event-loop.h>
 #include <yetty/base/event-queue.h>
 #include <ytrace/ytrace.hpp>
 
-#include <fcntl.h>
-#include <signal.h>
-#include <sys/ioctl.h>
-#include <sys/wait.h>
-#include <termios.h>
-#include <unistd.h>
 #include <atomic>
 #include <chrono>
 #include <vector>
+#include <thread>
+#include <mutex>
 
-#ifdef __APPLE__
-#include <util.h>
-#else
-#include <pty.h>
-#endif
+#if defined(_WIN32)
 
-#if !defined(__ANDROID__) && !defined(__EMSCRIPTEN__)
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
 
 #include <GLFW/glfw3.h>
 #include <glfw3webgpu.h>
@@ -29,16 +23,16 @@
 namespace yetty {
 
 // =============================================================================
-// ForkPTY - PTY Provider using forkpty() for Unix systems
+// ConPTY - PTY Provider using Windows ConPTY
 // =============================================================================
 
 static std::atomic<uint32_t> g_nextPtyId{1};
 
-class ForkPTY : public PTYProvider, public base::EventListener {
+class ConPTY : public PTYProvider {
 public:
-    ForkPTY() : _id(g_nextPtyId++) {}
+    ConPTY() : _id(g_nextPtyId++) {}
 
-    ~ForkPTY() override {
+    ~ConPTY() override {
         stop();
     }
 
@@ -47,60 +41,114 @@ public:
         _cols = cols;
         _rows = rows;
 
-        ydebug("ForkPTY[{}]: Starting shell '{}' ({}x{})", _id, shell, cols, rows);
+        ydebug("ConPTY[{}]: Starting shell '{}' ({}x{})", _id, shell, cols, rows);
 
-        struct winsize ws = {
-            static_cast<unsigned short>(rows),
-            static_cast<unsigned short>(cols),
-            0, 0
-        };
+        // Create pipes for PTY input/output
+        SECURITY_ATTRIBUTES sa = { sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE };
 
-        _childPid = forkpty(&_ptyMaster, nullptr, nullptr, &ws);
-
-        if (_childPid < 0) {
-            return Err<void>(std::string("forkpty failed: ") + strerror(errno));
+        if (!CreatePipe(&_pipeInRead, &_pipeInWrite, &sa, 0)) {
+            return Err<void>("Failed to create input pipe");
+        }
+        if (!CreatePipe(&_pipeOutRead, &_pipeOutWrite, &sa, 0)) {
+            CloseHandle(_pipeInRead);
+            CloseHandle(_pipeInWrite);
+            return Err<void>("Failed to create output pipe");
         }
 
-        if (_childPid == 0) {
-            // Child process
-            for (int fd = 3; fd < 1024; fd++)
-                close(fd);
+        // Set console code page to UTF-8 so child processes handle Unicode correctly
+        SetConsoleCP(CP_UTF8);
+        SetConsoleOutputCP(CP_UTF8);
 
-            execl(shell.c_str(), shell.c_str(), nullptr);
-            _exit(1);
+        // Create pseudo console (ConPTY)
+        COORD size = { static_cast<SHORT>(cols), static_cast<SHORT>(rows) };
+        HRESULT hr = CreatePseudoConsole(size, _pipeInRead, _pipeOutWrite, 0, &_hPC);
+        if (FAILED(hr)) {
+            CloseHandle(_pipeInRead);
+            CloseHandle(_pipeInWrite);
+            CloseHandle(_pipeOutRead);
+            CloseHandle(_pipeOutWrite);
+            return Err<void>("Failed to create pseudo console");
         }
 
-        // Parent process
-        int flags = fcntl(_ptyMaster, F_GETFL, 0);
-        fcntl(_ptyMaster, F_SETFL, flags | O_NONBLOCK);
+        // Set up startup info with pseudo console
+        STARTUPINFOEXW siEx = {};
+        siEx.StartupInfo.cb = sizeof(STARTUPINFOEXW);
 
-        // Set up event loop polling
-        auto loopResult = base::EventLoop::instance();
-        if (!loopResult) {
-            return Err<void>("No event loop available");
-        }
-        auto loop = *loopResult;
+        SIZE_T attrListSize = 0;
+        InitializeProcThreadAttributeList(nullptr, 1, 0, &attrListSize);
+        siEx.lpAttributeList = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(
+            HeapAlloc(GetProcessHeap(), 0, attrListSize));
 
-        auto pollResult = loop->createPoll();
-        if (!pollResult) {
-            return Err<void>("Failed to create poll", pollResult);
-        }
-        _pollId = *pollResult;
-
-        if (auto res = loop->configPoll(_pollId, _ptyMaster); !res) {
-            return Err<void>("Failed to configure poll", res);
+        if (!siEx.lpAttributeList) {
+            ClosePseudoConsole(_hPC);
+            CloseHandle(_pipeInRead);
+            CloseHandle(_pipeInWrite);
+            CloseHandle(_pipeOutRead);
+            CloseHandle(_pipeOutWrite);
+            return Err<void>("Failed to allocate attribute list");
         }
 
-        if (auto res = loop->registerPollListener(_pollId, sharedAs<base::EventListener>()); !res) {
-            return Err<void>("Failed to register poll listener", res);
+        if (!InitializeProcThreadAttributeList(siEx.lpAttributeList, 1, 0, &attrListSize)) {
+            HeapFree(GetProcessHeap(), 0, siEx.lpAttributeList);
+            ClosePseudoConsole(_hPC);
+            CloseHandle(_pipeInRead);
+            CloseHandle(_pipeInWrite);
+            CloseHandle(_pipeOutRead);
+            CloseHandle(_pipeOutWrite);
+            return Err<void>("Failed to init attribute list");
         }
 
-        if (auto res = loop->startPoll(_pollId); !res) {
-            return Err<void>("Failed to start poll", res);
+        if (!UpdateProcThreadAttribute(siEx.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
+                                        _hPC, sizeof(_hPC), nullptr, nullptr)) {
+            DeleteProcThreadAttributeList(siEx.lpAttributeList);
+            HeapFree(GetProcessHeap(), 0, siEx.lpAttributeList);
+            ClosePseudoConsole(_hPC);
+            CloseHandle(_pipeInRead);
+            CloseHandle(_pipeInWrite);
+            CloseHandle(_pipeOutRead);
+            CloseHandle(_pipeOutWrite);
+            return Err<void>("Failed to update attribute list");
         }
+
+        // Wrap shell with chcp 65001 for correct 4-byte UTF-8 handling through ConPTY
+        std::string cmdLine = "cmd.exe /c chcp 65001 >nul && " + shell;
+
+        // Convert to wide string
+        std::wstring wShell(cmdLine.begin(), cmdLine.end());
+
+        // Create process
+        PROCESS_INFORMATION pi = {};
+        if (!CreateProcessW(nullptr, wShell.data(), nullptr, nullptr, FALSE,
+                           EXTENDED_STARTUPINFO_PRESENT, nullptr, nullptr,
+                           &siEx.StartupInfo, &pi)) {
+            DeleteProcThreadAttributeList(siEx.lpAttributeList);
+            HeapFree(GetProcessHeap(), 0, siEx.lpAttributeList);
+            ClosePseudoConsole(_hPC);
+            CloseHandle(_pipeInRead);
+            CloseHandle(_pipeInWrite);
+            CloseHandle(_pipeOutRead);
+            CloseHandle(_pipeOutWrite);
+            return Err<void>("Failed to create process");
+        }
+
+        _hProcess = pi.hProcess;
+        CloseHandle(pi.hThread);
+
+        DeleteProcThreadAttributeList(siEx.lpAttributeList);
+        HeapFree(GetProcessHeap(), 0, siEx.lpAttributeList);
+
+        // Close pipe ends we don't need
+        CloseHandle(_pipeInRead);
+        _pipeInRead = INVALID_HANDLE_VALUE;
+        CloseHandle(_pipeOutWrite);
+        _pipeOutWrite = INVALID_HANDLE_VALUE;
 
         _running = true;
-        ydebug("ForkPTY[{}]: Started PTY fd={}, PID={}", _id, _ptyMaster, _childPid);
+
+        // Start reader thread
+        _readerThread = std::thread([this]() { readerThreadFunc(); });
+
+        ydebug("ConPTY[{}]: Started, PID={}", _id, GetProcessId(_hProcess));
         return Ok();
     }
 
@@ -108,52 +156,50 @@ public:
         if (!_running) return;
         _running = false;
 
-        ydebug("ForkPTY[{}]: Stopping", _id);
+        ydebug("ConPTY[{}]: Stopping", _id);
 
-        if (_pollId >= 0) {
-            auto loopResult = base::EventLoop::instance();
-            if (loopResult) {
-                auto loop = *loopResult;
-                loop->deregisterListener(sharedAs<base::EventListener>());
-                loop->destroyPoll(_pollId);
-            }
-            _pollId = -1;
+        if (_hPC) {
+            ClosePseudoConsole(_hPC);
+            _hPC = nullptr;
         }
 
-        if (_ptyMaster >= 0) {
-            close(_ptyMaster);
-            _ptyMaster = -1;
+        if (_pipeInWrite != INVALID_HANDLE_VALUE) {
+            CloseHandle(_pipeInWrite);
+            _pipeInWrite = INVALID_HANDLE_VALUE;
+        }
+        if (_pipeOutRead != INVALID_HANDLE_VALUE) {
+            CloseHandle(_pipeOutRead);
+            _pipeOutRead = INVALID_HANDLE_VALUE;
         }
 
-        if (_childPid > 0) {
-            kill(_childPid, SIGTERM);
-            int status;
-            waitpid(_childPid, &status, 0);
+        if (_readerThread.joinable()) {
+            _readerThread.join();
+        }
+
+        if (_hProcess != INVALID_HANDLE_VALUE) {
+            DWORD exitCode = 0;
+            GetExitCodeProcess(_hProcess, &exitCode);
+            CloseHandle(_hProcess);
+            _hProcess = INVALID_HANDLE_VALUE;
             if (_exitCallback) {
-                _exitCallback(WEXITSTATUS(status));
+                _exitCallback(static_cast<int>(exitCode));
             }
-            _childPid = -1;
         }
     }
 
     void write(const char* data, size_t len) override {
-        if (_ptyMaster >= 0 && len > 0) {
-            ssize_t written = ::write(_ptyMaster, data, len);
-            (void)written;
+        if (_pipeInWrite != INVALID_HANDLE_VALUE && len > 0) {
+            DWORD written;
+            WriteFile(_pipeInWrite, data, static_cast<DWORD>(len), &written, nullptr);
         }
     }
 
     void resize(uint32_t cols, uint32_t rows) override {
         _cols = cols;
         _rows = rows;
-
-        if (_ptyMaster >= 0) {
-            struct winsize ws = {
-                static_cast<unsigned short>(rows),
-                static_cast<unsigned short>(cols),
-                0, 0
-            };
-            ioctl(_ptyMaster, TIOCSWINSZ, &ws);
+        if (_hPC) {
+            COORD size = { static_cast<SHORT>(cols), static_cast<SHORT>(rows) };
+            ResizePseudoConsole(_hPC, size);
         }
     }
 
@@ -163,95 +209,70 @@ public:
     void setExitCallback(ExitCallback cb) override { _exitCallback = std::move(cb); }
     uint32_t getId() const override { return _id; }
 
-    // EventListener interface
-    Result<bool> onEvent(const base::Event& event) override {
-        if (event.type == base::Event::Type::PollReadable && event.poll.fd == _ptyMaster) {
-            readPty();
-            return Ok(true);
-        }
-        return Ok(false);
-    }
-
 private:
-    void readPty() {
-        // Check if child exited
-        int status;
-        if (waitpid(_childPid, &status, WNOHANG) > 0) {
-            _running = false;
-            if (_exitCallback) {
-                _exitCallback(WEXITSTATUS(status));
+    void readerThreadFunc() {
+        char buf[65536];
+        while (_running) {
+            DWORD bytesRead = 0;
+            if (ReadFile(_pipeOutRead, buf, sizeof(buf), &bytesRead, nullptr) && bytesRead > 0) {
+                if (_dataCallback) {
+                    _dataCallback(buf, static_cast<size_t>(bytesRead));
+                }
+            } else {
+                // Check if process exited
+                DWORD exitCode;
+                if (GetExitCodeProcess(_hProcess, &exitCode) && exitCode != STILL_ACTIVE) {
+                    _running = false;
+                    if (_exitCallback) {
+                        _exitCallback(static_cast<int>(exitCode));
+                    }
+                    break;
+                }
+                Sleep(10);
             }
-            return;
-        }
-
-        static constexpr size_t READ_CHUNK = 65536;
-        std::vector<char> buffer(READ_CHUNK);
-
-        ssize_t n = read(_ptyMaster, buffer.data(), READ_CHUNK);
-        if (n > 0 && _dataCallback) {
-            _dataCallback(buffer.data(), static_cast<size_t>(n));
         }
     }
 
     uint32_t _id;
-    int _ptyMaster = -1;
-    pid_t _childPid = -1;
-    base::PollId _pollId = -1;
+    HPCON _hPC = nullptr;
+    HANDLE _hProcess = INVALID_HANDLE_VALUE;
+    HANDLE _pipeInRead = INVALID_HANDLE_VALUE;
+    HANDLE _pipeInWrite = INVALID_HANDLE_VALUE;
+    HANDLE _pipeOutRead = INVALID_HANDLE_VALUE;
+    HANDLE _pipeOutWrite = INVALID_HANDLE_VALUE;
+
     uint32_t _cols = 80;
     uint32_t _rows = 25;
     std::string _shell;
-    bool _running = false;
+    std::atomic<bool> _running{false};
+
+    std::thread _readerThread;
     DataCallback _dataCallback;
     ExitCallback _exitCallback;
 };
 
 // =============================================================================
-// GlfwPlatform
+// GlfwPlatform (Windows version)
 // =============================================================================
 
 class GlfwPlatform : public Platform {
 public:
     GlfwPlatform() : _startTime(std::chrono::steady_clock::now()) {
-        // Initialize cache and runtime base directories once at construction
-#ifdef __APPLE__
-        const char* home = std::getenv("HOME");
-        if (home && home[0]) {
-            _cacheBase = std::string(home) + "/Library/Caches/yetty";
+        // Initialize cache base directory once at construction
+        // Windows: %LOCALAPPDATA%\yetty\cache or %APPDATA%\yetty\cache
+        const char* localAppData = std::getenv("LOCALAPPDATA");
+        if (localAppData && localAppData[0]) {
+            _cacheBase = std::string(localAppData) + "\\yetty\\cache";
         } else {
-            _cacheBase = "/tmp/yetty-cache";
-        }
-        // macOS: TMPDIR is per-user, set by launchd (e.g. /var/folders/.../T/)
-        const char* tmpdir = std::getenv("TMPDIR");
-        if (tmpdir && tmpdir[0]) {
-            _runtimeBase = tmpdir;
-            if (!_runtimeBase.empty() && _runtimeBase.back() == '/') {
-                _runtimeBase.pop_back();
-            }
-        } else {
-            _runtimeBase = "/tmp/yetty-" + std::to_string(getuid());
-        }
-#else
-        const char* xdgCache = std::getenv("XDG_CACHE_HOME");
-        if (xdgCache && xdgCache[0]) {
-            _cacheBase = std::string(xdgCache) + "/yetty";
-        } else {
-            const char* home = std::getenv("HOME");
-            if (home && home[0]) {
-                _cacheBase = std::string(home) + "/.cache/yetty";
+            const char* appData = std::getenv("APPDATA");
+            if (appData && appData[0]) {
+                _cacheBase = std::string(appData) + "\\yetty\\cache";
             } else {
-                _cacheBase = "/tmp/yetty-cache";
+                const char* temp = std::getenv("TEMP");
+                _cacheBase = std::string(temp ? temp : "C:\\Temp") + "\\yetty-cache";
             }
         }
-        // Linux: XDG_RUNTIME_DIR is the preferred location for sockets/pipes
-        const char* xdgRuntime = std::getenv("XDG_RUNTIME_DIR");
-        if (xdgRuntime && xdgRuntime[0]) {
-            _runtimeBase = xdgRuntime;
-        } else {
-            _runtimeBase = "/tmp/yetty-" + std::to_string(getuid());
-        }
-#endif
     }
-
     ~GlfwPlatform() override {
         destroyWindow();
         if (_initialized) {
@@ -266,14 +287,6 @@ public:
             ydebug("Platform: headless mode (no GLFW)");
             return Ok();
         }
-
-#if defined(__linux__) && defined(GLFW_PLATFORM)
-        // Force X11 on Linux to ensure window icons work (Wayland doesn't support glfwSetWindowIcon)
-        // User can override with YETTY_WAYLAND=1 environment variable
-        if (!getenv("YETTY_WAYLAND")) {
-            glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_X11);
-        }
-#endif
 
         if (!glfwInit()) {
             return Err<void>("Failed to initialize GLFW");
@@ -451,7 +464,6 @@ public:
 
     void runMainLoop(MainLoopCallback callback) override {
         // Desktop: Not used - yetty uses EventLoop for desktop builds
-        // This is here for interface completeness
         (void)callback;
     }
 
@@ -465,28 +477,29 @@ public:
     }
 
     Result<std::shared_ptr<PTYProvider>> createPTY() override {
-        return Ok(std::static_pointer_cast<PTYProvider>(std::make_shared<ForkPTY>()));
+        return Ok(std::static_pointer_cast<PTYProvider>(std::make_shared<ConPTY>()));
     }
 
     std::string getShadersDir() const override {
-        return _cacheBase + "/shaders";
+        return _cacheBase + "\\shaders";
     }
 
     std::string getMsdfFontsDir() const override {
-        return _cacheBase + "/msdf-fonts";
+        return _cacheBase + "\\msdf-fonts";
     }
 
     std::string getFontsDir() const override {
-        return _cacheBase + "/fonts";
+        return _cacheBase + "\\fonts";
     }
 
     std::string getRuntimeDir() const override {
-        return _runtimeBase + "/yetty";
+        // Windows uses named pipes, not Unix sockets
+        // Return pipe namespace prefix for consistency
+        return "\\\\.\\pipe";
     }
 
 private:
-    std::string _cacheBase;
-    std::string _runtimeBase;
+    std::string _cacheBase;  // Initialized once in constructor
     // Static callback trampolines
     static void keyCallbackStatic(GLFWwindow* window, int key, int scancode, int action, int mods) {
         auto* self = static_cast<GlfwPlatform*>(glfwGetWindowUserPointer(window));
@@ -565,7 +578,7 @@ private:
     FocusCallback _focusCallback;
 };
 
-// Factory implementation for GLFW
+// Factory implementation for Windows
 Result<Platform::Ptr> Platform::create(bool headless) {
     auto platform = std::make_shared<GlfwPlatform>();
     if (auto res = platform->init(headless); !res) {
@@ -576,4 +589,4 @@ Result<Platform::Ptr> Platform::create(bool headless) {
 
 } // namespace yetty
 
-#endif // !__ANDROID__ && !__EMSCRIPTEN__
+#endif // _WIN32

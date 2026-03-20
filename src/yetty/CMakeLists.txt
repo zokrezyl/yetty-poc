@@ -17,9 +17,6 @@ set(YETTY_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/incbin-assets.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/osc-scanner.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/pty-reader-desktop.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/pty-reader-web.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/pty-reader-windows.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/terminal.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/terminal-view.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/gpu-screen.cpp
@@ -66,7 +63,6 @@ set(YETTY_DESKTOP_SOURCES
 # Android-specific sources
 set(YETTY_ANDROID_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/msdf-cdb-provider.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/pty-reader-android.cpp
     PARENT_SCOPE
 )
 

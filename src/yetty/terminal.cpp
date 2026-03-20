@@ -1,19 +1,18 @@
 #include "terminal.h"
 #include "gpu-screen.h"
-#include <yetty/base/event-loop.h>
+#include <yetty/platform/event-loop.h>
 #include <yetty/result.hpp>
 #include <ytrace/ytrace.hpp>
 #include <cstring>
 
 
+#include <yetty/platform/pty-manager.h>
+#include <yetty/platform/pty-reader.h>
 #if YETTY_WEB
-#include <yetty/platform.h>
 #include <yetty/pty-provider.h>
-#include <yetty/pty-reader.h>
 #include "telnet/telnet-pty-reader.h"
 #else
 #include <yetty/osc-scanner.h>
-#include <yetty/pty-reader.h>
 #ifndef _WIN32
 #include "telnet/telnet-pty-reader.h"
 #endif
@@ -223,41 +222,41 @@ private:
             return Ok();
         }
 
-        // Webasm: Use Platform::createPTY() which creates WebPTY with JSLinux iframe
+        // Webasm non-telnet: Use PtyManager to create WebPTY with JSLinux iframe
         const char* vmConfigEnv = getenv("YETTY_VM_CONFIG");
         std::string vmConfig = vmConfigEnv ? vmConfigEnv : "alpine-x86_64.cfg";
         ydebug("Terminal: using VM config: {}", vmConfig);
 
-        // Get platform to create PTY
-        auto platformResult = Platform::create();
-        if (!platformResult) {
-            return Err<void>("Failed to get platform", platformResult);
+        // Get PtyManager to create PTY reader
+        auto ptyMgrResult = PtyManager::instance();
+        if (!ptyMgrResult) {
+            return Err<void>("Failed to get PtyManager", ptyMgrResult);
         }
-        auto platform = *platformResult;
 
-        auto ptyResult = platform->createPTY();
+        PtyConfig config;
+        config.shell = vmConfig;
+        config.cols = cols;
+        config.rows = rows;
+
+        auto ptyResult = (*ptyMgrResult)->createPtyReader(config);
         if (!ptyResult) {
-            return Err<void>("Failed to create PTY", ptyResult);
+            return Err<void>("Failed to create PTY reader", ptyResult);
         }
-        _pty = *ptyResult;
+        _ptyReader = *ptyResult;
 
-        // Data callback - write directly to GPUScreen
-        // OSC handling is done by GPUScreen::write() which calls handleOSCSequence
-        _pty->setDataCallback([this](const char* data, size_t len) {
-            if (_gpuScreen) {
-                processPtyData(data, len);
+        // Data callback - read from PTY and write to GPUScreen
+        _ptyReader->setDataAvailableCallback([this]() {
+            char buf[4096];
+            size_t n = _ptyReader->read(buf, sizeof(buf));
+            if (n > 0 && _gpuScreen) {
+                processPtyData(buf, n);
             }
         });
 
-        _pty->setExitCallback([this](int exitCode) {
+        _ptyReader->setExitCallback([this](int exitCode) {
             ydebug("PTY exited with code {}", exitCode);
             _running = false;
         });
-
-        // Start the VM
-        if (auto res = _pty->start(vmConfig, cols, rows); !res) {
-            return Err<void>("Failed to start PTY", res);
-        }
 
         _running = true;
         ydebug("Terminal started WebPTY: {} ({}x{})", vmConfig, cols, rows);
@@ -328,12 +327,17 @@ private:
             config.rows = rows;
 
             ydebug("Creating PtyReader: shell={} {}x{}", shellPath, cols, rows);
-            auto readerResult = PtyReader::create(config, _ctx.platform);
+            auto ptyMgrResult = PtyManager::instance();
+            if (!ptyMgrResult) {
+                yerror("PtyManager::instance FAILED");
+                return Err<void>("Failed to get PtyManager", ptyMgrResult);
+            }
+            auto readerResult = (*ptyMgrResult)->createPtyReader(config);
             if (!readerResult) {
-                yerror("PtyReader::create FAILED: {}", readerResult.error().message());
+                yerror("createPtyReader FAILED: {}", readerResult.error().message());
                 return Err<void>("Failed to create PtyReader", readerResult);
             }
-            ydebug("PtyReader::create SUCCESS");
+            ydebug("createPtyReader SUCCESS");
             _ptyReader = *readerResult;
             ydebug("Terminal started PTY: {} ({}x{})", shellPath, cols, rows);
         }

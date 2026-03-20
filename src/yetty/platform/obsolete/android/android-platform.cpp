@@ -1,7 +1,9 @@
 #include <yetty/platform.h>
 #include <yetty/pty-provider.h>
-#include <yetty/base/event-loop.h>
+#include <yetty/platform/event-loop.h>
+#include <yetty/base/event.h>
 #include <ytrace/ytrace.hpp>
+#include <cmath>
 
 #if defined(__ANDROID__)
 #include <android/log.h>
@@ -22,6 +24,15 @@ class AndroidPlatform : public Platform {
 public:
     AndroidPlatform() = default;
     ~AndroidPlatform() override = default;
+
+    // Pinch gesture state
+    struct PinchState {
+        bool active = false;
+        float lastDistance = 0.0f;
+        float lastCenterX = 0.0f;
+        float lastCenterY = 0.0f;
+    };
+    PinchState _pinch;
 
     void setNativeWindow(ANativeWindow* window) {
         _window = window;
@@ -252,30 +263,201 @@ public:
         return _paths.dataDir;
     }
 
-    // Called from android_main to dispatch touch events
-    void dispatchTouchEvent(int action, float x, float y) {
-        // Map touch to mouse events
-        switch (action) {
-            case AMOTION_EVENT_ACTION_DOWN:
-                if (_mouseButtonCallback) {
-                    _mouseButtonCallback(MouseButton::Left, true, 0);
+    // Handle raw motion event - includes pinch-to-zoom detection
+    int32_t handleMotionEvent(AInputEvent* event) {
+        int32_t action = AMotionEvent_getAction(event);
+        int32_t actionMasked = action & AMOTION_EVENT_ACTION_MASK;
+        size_t pointerCount = AMotionEvent_getPointerCount(event);
+
+        // Two-finger pinch gesture
+        if (pointerCount == 2) {
+            float x0 = AMotionEvent_getX(event, 0);
+            float y0 = AMotionEvent_getY(event, 0);
+            float x1 = AMotionEvent_getX(event, 1);
+            float y1 = AMotionEvent_getY(event, 1);
+
+            float dx = x1 - x0;
+            float dy = y1 - y0;
+            float distance = std::sqrt(dx * dx + dy * dy);
+            float centerX = (x0 + x1) * 0.5f;
+            float centerY = (y0 + y1) * 0.5f;
+
+            if (!_pinch.active) {
+                // Start pinch
+                _pinch.active = true;
+                _pinch.lastDistance = distance;
+                _pinch.lastCenterX = centerX;
+                _pinch.lastCenterY = centerY;
+            } else if (actionMasked == AMOTION_EVENT_ACTION_MOVE) {
+                // Pinch zoom: distance change -> scroll with Ctrl+Shift
+                float distanceDelta = distance - _pinch.lastDistance;
+                if (std::abs(distanceDelta) > 2.0f && _scrollCallback) {
+                    // Convert pinch to scroll: positive delta = zoom in
+                    float scrollDelta = distanceDelta * 0.02f;
+                    // Ctrl+Shift modifier (3) triggers visual zoom in gpu-screen
+                    _scrollCallback(0.0, scrollDelta, 3);
+                    _pinch.lastDistance = distance;
                 }
-                if (_mouseMoveCallback) {
-                    _mouseMoveCallback(x, y);
+
+                // Pan while pinched (2-finger drag)
+                float panDx = centerX - _pinch.lastCenterX;
+                float panDy = centerY - _pinch.lastCenterY;
+                if ((std::abs(panDx) > 2.0f || std::abs(panDy) > 2.0f) && _scrollCallback) {
+                    // Use scroll callback for pan (no modifiers = normal scroll)
+                    _scrollCallback(-panDx * 0.1f, -panDy * 0.1f, 0);
+                    _pinch.lastCenterX = centerX;
+                    _pinch.lastCenterY = centerY;
                 }
-                break;
-            case AMOTION_EVENT_ACTION_UP:
-                if (_mouseButtonCallback) {
-                    _mouseButtonCallback(MouseButton::Left, false, 0);
+            }
+            return 1;
+        }
+
+        // End pinch when pointer lifted
+        if (_pinch.active && (actionMasked == AMOTION_EVENT_ACTION_UP ||
+                              actionMasked == AMOTION_EVENT_ACTION_POINTER_UP ||
+                              actionMasked == AMOTION_EVENT_ACTION_CANCEL)) {
+            _pinch.active = false;
+        }
+
+        // Single touch -> mouse events
+        if (pointerCount == 1 && !_pinch.active) {
+            float x = AMotionEvent_getX(event, 0);
+            float y = AMotionEvent_getY(event, 0);
+
+            switch (actionMasked) {
+                case AMOTION_EVENT_ACTION_DOWN:
+                    if (_mouseButtonCallback) {
+                        _mouseButtonCallback(MouseButton::Left, true, 0);
+                    }
+                    if (_mouseMoveCallback) {
+                        _mouseMoveCallback(x, y);
+                    }
+                    break;
+                case AMOTION_EVENT_ACTION_UP:
+                    if (_mouseButtonCallback) {
+                        _mouseButtonCallback(MouseButton::Left, false, 0);
+                    }
+                    break;
+                case AMOTION_EVENT_ACTION_MOVE:
+                    if (_mouseMoveCallback) {
+                        _mouseMoveCallback(x, y);
+                    }
+                    break;
+            }
+        }
+
+        return 1;
+    }
+
+    // Handle raw key event
+    int32_t handleKeyEvent(AInputEvent* event) {
+        int32_t action = AKeyEvent_getAction(event);
+        int32_t keyCode = AKeyEvent_getKeyCode(event);
+        int32_t metaState = AKeyEvent_getMetaState(event);
+
+        int platformKey = androidKeyToPlatformKey(keyCode);
+        bool pressed = (action == AKEY_EVENT_ACTION_DOWN);
+
+        // Build modifier flags
+        int mods = 0;
+        if (metaState & AMETA_SHIFT_ON) mods |= 1;  // GLFW_MOD_SHIFT
+        if (metaState & AMETA_CTRL_ON) mods |= 2;   // GLFW_MOD_CONTROL
+        if (metaState & AMETA_ALT_ON) mods |= 4;    // GLFW_MOD_ALT
+
+        // Dispatch key event
+        KeyAction keyAction = pressed ? KeyAction::Press : KeyAction::Release;
+        if (_keyCallback) {
+            _keyCallback(platformKey, 0, keyAction, mods);
+        }
+
+        // For printable characters, also dispatch char event on key down
+        if (!pressed) return 1;
+
+        bool shift = (metaState & AMETA_SHIFT_ON);
+        bool ctrl = (metaState & AMETA_CTRL_ON);
+        char c = 0;
+
+        if (keyCode >= AKEYCODE_A && keyCode <= AKEYCODE_Z) {
+            if (ctrl) {
+                c = 1 + (keyCode - AKEYCODE_A);
+            } else {
+                c = shift ? ('A' + (keyCode - AKEYCODE_A)) : ('a' + (keyCode - AKEYCODE_A));
+            }
+        } else if (keyCode >= AKEYCODE_0 && keyCode <= AKEYCODE_9) {
+            if (shift) {
+                const char* symbols = ")!@#$%^&*(";
+                c = symbols[keyCode - AKEYCODE_0];
+            } else {
+                c = '0' + (keyCode - AKEYCODE_0);
+            }
+        } else {
+            switch (keyCode) {
+                case AKEYCODE_SPACE: c = ' '; break;
+                case AKEYCODE_ENTER: c = '\r'; break;
+                case AKEYCODE_TAB: c = '\t'; break;
+                case AKEYCODE_MINUS: c = shift ? '_' : '-'; break;
+                case AKEYCODE_EQUALS: c = shift ? '+' : '='; break;
+                case AKEYCODE_LEFT_BRACKET: c = shift ? '{' : '['; break;
+                case AKEYCODE_RIGHT_BRACKET: c = shift ? '}' : ']'; break;
+                case AKEYCODE_BACKSLASH: c = shift ? '|' : '\\'; break;
+                case AKEYCODE_SEMICOLON: c = shift ? ':' : ';'; break;
+                case AKEYCODE_APOSTROPHE: c = shift ? '"' : '\''; break;
+                case AKEYCODE_GRAVE: c = shift ? '~' : '`'; break;
+                case AKEYCODE_COMMA: c = shift ? '<' : ','; break;
+                case AKEYCODE_PERIOD: c = shift ? '>' : '.'; break;
+                case AKEYCODE_SLASH: c = shift ? '?' : '/'; break;
+            }
+        }
+
+        if (c && _charCallback) {
+            _charCallback(c);
+        }
+
+        return 1;
+    }
+
+    // Unified input handler - called from android_main
+    int32_t handleInputEvent(AInputEvent* event) {
+        int32_t eventType = AInputEvent_getType(event);
+
+        if (eventType == AINPUT_EVENT_TYPE_MOTION) {
+            return handleMotionEvent(event);
+        } else if (eventType == AINPUT_EVENT_TYPE_KEY) {
+            return handleKeyEvent(event);
+        }
+
+        return 0;
+    }
+
+private:
+    static int androidKeyToPlatformKey(int keyCode) {
+        switch (keyCode) {
+            case AKEYCODE_ENTER: return 257;
+            case AKEYCODE_TAB: return 258;
+            case AKEYCODE_DEL: return 259;
+            case AKEYCODE_FORWARD_DEL: return 261;
+            case AKEYCODE_DPAD_RIGHT: return 262;
+            case AKEYCODE_DPAD_LEFT: return 263;
+            case AKEYCODE_DPAD_DOWN: return 264;
+            case AKEYCODE_DPAD_UP: return 265;
+            case AKEYCODE_PAGE_UP: return 266;
+            case AKEYCODE_PAGE_DOWN: return 267;
+            case AKEYCODE_MOVE_HOME: return 268;
+            case AKEYCODE_MOVE_END: return 269;
+            case AKEYCODE_ESCAPE: return 256;
+            case AKEYCODE_SPACE: return 32;
+            default:
+                if (keyCode >= AKEYCODE_A && keyCode <= AKEYCODE_Z) {
+                    return 'A' + (keyCode - AKEYCODE_A);
                 }
-                break;
-            case AMOTION_EVENT_ACTION_MOVE:
-                if (_mouseMoveCallback) {
-                    _mouseMoveCallback(x, y);
+                if (keyCode >= AKEYCODE_0 && keyCode <= AKEYCODE_9) {
+                    return '0' + (keyCode - AKEYCODE_0);
                 }
-                break;
+                return keyCode;
         }
     }
+
+public:
 
     // Called when window size changes
     void dispatchResize(int width, int height) {
