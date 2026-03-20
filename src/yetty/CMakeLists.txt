@@ -10,16 +10,13 @@ add_subdirectory(cards/ygrid)
 add_subdirectory(msdf-gen)
 add_subdirectory(rpc)
 
-# Core sources - ALL sources needed for yetty executable
+# Core sources - ALL sources needed for yetty executable (platform-agnostic)
 set(YETTY_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/yetty.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/incbin-assets.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/osc-scanner.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/pty-reader-desktop.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/pty-reader-web.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/pty-reader-windows.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/terminal.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/terminal-view.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/gpu-screen.cpp
@@ -55,11 +52,27 @@ set(YETTY_CORE_SOURCES
     PARENT_SCOPE
 )
 
-# Desktop-only sources (Linux, macOS, Windows)
+# Desktop-only sources (Linux, macOS - NOT Windows)
 set(YETTY_DESKTOP_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/msdf-cdb-provider.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/pty-reader-desktop.cpp
     ${YETTY_MSDF_GEN_SOURCES}
     ${YETTY_RPC_SOURCES}
+    PARENT_SCOPE
+)
+
+# Windows-specific sources
+set(YETTY_WINDOWS_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/msdf-cdb-provider.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/pty-reader-windows.cpp
+    ${YETTY_MSDF_GEN_SOURCES}
+    ${YETTY_RPC_SOURCES}
+    PARENT_SCOPE
+)
+
+# WebAssembly-specific sources
+set(YETTY_WEB_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/pty-reader-web.cpp
     PARENT_SCOPE
 )
 
