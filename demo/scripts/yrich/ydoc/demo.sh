@@ -1,5 +1,5 @@
 #!/bin/bash
-# YDoc Demo - displays a sample document in view mode
+# YDoc Demo - displays a sample document (dump mode)
 # Usage: ./demo.sh
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -19,4 +19,4 @@ if [[ ! -f "$ASSET" ]]; then
     exit 1
 fi
 
-exec "$YDOC" -f "$ASSET" --view -h 25
+exec "$YDOC" -f "$ASSET" --dump -h 25

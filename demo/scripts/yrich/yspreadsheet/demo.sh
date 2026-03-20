@@ -1,5 +1,5 @@
 #!/bin/bash
-# YSpreadsheet Demo - displays a sample spreadsheet in view mode
+# YSpreadsheet Demo - displays a sample spreadsheet (dump mode)
 # Usage: ./demo.sh
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -19,4 +19,4 @@ if [[ ! -f "$ASSET" ]]; then
     exit 1
 fi
 
-exec "$YSPREADSHEET" -f "$ASSET" --view -h 20
+exec "$YSPREADSHEET" -f "$ASSET" --dump -h 20

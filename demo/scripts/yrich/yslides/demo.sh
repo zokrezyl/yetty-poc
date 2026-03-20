@@ -1,5 +1,5 @@
 #!/bin/bash
-# YSlides Demo - displays a sample presentation in view mode
+# YSlides Demo - displays a sample presentation (dump mode)
 # Usage: ./demo.sh
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -19,4 +19,4 @@ if [[ ! -f "$ASSET" ]]; then
     exit 1
 fi
 
-exec "$YSLIDES" -f "$ASSET" --view -h 25
+exec "$YSLIDES" -f "$ASSET" --dump -h 25

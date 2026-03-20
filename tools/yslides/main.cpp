@@ -106,12 +106,12 @@ public:
         cleanup();
     }
 
-    bool init(int x, int y, int w, int h, const std::string& filePath = "", bool viewMode = false) {
+    bool init(int x, int y, int w, int h, const std::string& filePath = "", bool dumpMode = false) {
         _cardX = x;
         _cardY = y;
         _cardW = w;
         _cardH = h;
-        _viewMode = viewMode;
+        _dumpMode = dumpMode;
 
         // Create YDraw buffer
         auto bufferResult = YDrawBuffer::create();
@@ -184,6 +184,12 @@ public:
     }
 
     void run() {
+        // Dump mode: send card and exit immediately
+        if (_dumpMode) {
+            sendCreateCard();
+            return;
+        }
+
         enableRawMode();
 
         // Create card
@@ -360,7 +366,7 @@ private:
         }
 
         // In view mode, allow navigation but no editing
-        if (_viewMode) {
+        if (_dumpMode) {
             if (c == '[') {
                 _slides->prevSlide();
             } else if (c == ']' || c == ' ') {
@@ -562,7 +568,7 @@ private:
     uv_timer_t _renderTimer;
     bool _running = false;
     bool _needsRender = true;
-    bool _viewMode = false;
+    bool _dumpMode = false;
 
     // Card
     std::string _cardName = "yslides0";
@@ -603,7 +609,7 @@ int main(int argc, char** argv) {
     args::ValueFlag<int> wFlag(parser, "w", "Card width (cells, 0=stretch)", {'w'});
     args::ValueFlag<int> hFlag(parser, "h", "Card height (cells)", {'h'});
     args::ValueFlag<std::string> fileFlag(parser, "file", "Load presentation from file", {'f', "file"});
-    args::Flag viewFlag(parser, "view", "View mode (display and exit on 'q')", {"view"});
+    args::Flag dumpFlag(parser, "dump", "Dump mode (display and exit immediately)", {"dump"});
 
     try {
         parser.ParseCLI(argc, argv);
@@ -621,10 +627,10 @@ int main(int argc, char** argv) {
     int w = wFlag ? args::get(wFlag) : 0;
     int h = hFlag ? args::get(hFlag) : 20;
     std::string filePath = fileFlag ? args::get(fileFlag) : "";
-    bool viewMode = viewFlag;
+    bool dumpMode = dumpFlag;
 
     YSlidesEditor editor;
-    if (!editor.init(x, y, w, h, filePath, viewMode)) {
+    if (!editor.init(x, y, w, h, filePath, dumpMode)) {
         return 1;
     }
 

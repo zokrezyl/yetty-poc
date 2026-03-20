@@ -13,8 +13,8 @@ namespace yetty::yrich {
 //=============================================================================
 
 static std::string colorToHex(uint32_t color) {
-    char buf[10];
-    snprintf(buf, sizeof(buf), "#%08X", color);
+    char buf[14];
+    snprintf(buf, sizeof(buf), "\"#%08X\"", color);
     return buf;
 }
 
@@ -1244,6 +1244,559 @@ Result<YSlides::Ptr> DocumentPersist::loadYSlides(const std::string& path) {
         return fromYamlSlides(std::string_view(buffer.data(), buffer.size()));
     } else {
         return fromBinarySlides(reinterpret_cast<const uint8_t*>(buffer.data()), buffer.size());
+    }
+}
+
+//=============================================================================
+// Data-only serialization (for testing)
+//=============================================================================
+
+std::string DocumentPersist::dataToYaml(const YDocData& data) {
+    std::ostringstream os;
+
+    os << "# YDoc Document\n";
+    os << "version: " << data.version << "\n";
+    os << "type: " << data.type << "\n";
+    os << "\n";
+
+    os << "metadata:\n";
+    os << "  modified: " << data.modified << "\n";
+    if (!data.author.empty()) {
+        os << "  author: " << escapeYaml(data.author) << "\n";
+    }
+    os << "\n";
+
+    os << "document:\n";
+    os << "  pageWidth: " << data.pageWidth << "\n";
+    os << "  margin: " << data.margin << "\n";
+    os << "\n";
+
+    // Paragraphs
+    if (!data.paragraphs.empty()) {
+        os << "  paragraphs:\n";
+        for (const auto& para : data.paragraphs) {
+            os << "    - text: " << escapeYaml(para.text) << "\n";
+            if (para.fontSize != 14.0f) {
+                os << "      fontSize: " << para.fontSize << "\n";
+            }
+            if (para.color != 0xFF000000) {
+                os << "      color: " << colorToHex(para.color) << "\n";
+            }
+            if (!para.runs.empty()) {
+                os << "      runs:\n";
+                for (const auto& run : para.runs) {
+                    os << "        - start: " << run.start << "\n";
+                    os << "          end: " << run.end << "\n";
+                    if (run.format != 0) {
+                        os << "          format: " << run.format << "\n";
+                    }
+                    if (run.fontSize != para.fontSize) {
+                        os << "          fontSize: " << run.fontSize << "\n";
+                    }
+                    if (run.color != para.color) {
+                        os << "          color: " << colorToHex(run.color) << "\n";
+                    }
+                }
+            }
+        }
+        os << "\n";
+    }
+
+    return os.str();
+}
+
+Result<YDocData> DocumentPersist::parseYDocYaml(std::string_view yaml) {
+    try {
+        YAML::Node root = YAML::Load(std::string(yaml));
+
+        if (root["type"].as<std::string>("") != "ydoc") {
+            return Err<YDocData>("Not a YDoc document");
+        }
+
+        YDocData data;
+        data.version = root["version"].as<int>(1);
+        data.pageWidth = root["document"]["pageWidth"].as<float>(600.0f);
+        data.margin = root["document"]["margin"].as<float>(20.0f);
+
+        if (root["metadata"]) {
+            data.author = root["metadata"]["author"].as<std::string>("");
+            data.modified = root["metadata"]["modified"].as<uint64_t>(0);
+        }
+
+        // Paragraphs
+        if (root["document"]["paragraphs"]) {
+            for (const auto& pnode : root["document"]["paragraphs"]) {
+                ParagraphData pd;
+                pd.text = pnode["text"].as<std::string>("");
+                pd.fontSize = pnode["fontSize"].as<float>(14.0f);
+                pd.color = hexToColor(pnode["color"].as<std::string>("#FF000000"));
+
+                if (pnode["runs"]) {
+                    for (const auto& rnode : pnode["runs"]) {
+                        TextRunData rd;
+                        rd.start = rnode["start"].as<int>(0);
+                        rd.end = rnode["end"].as<int>(0);
+                        rd.format = rnode["format"].as<uint32_t>(0);
+                        rd.fontSize = rnode["fontSize"].as<float>(pd.fontSize);
+                        rd.color = hexToColor(rnode["color"].as<std::string>(colorToHex(pd.color)));
+                        pd.runs.push_back(rd);
+                    }
+                }
+                data.paragraphs.push_back(pd);
+            }
+        }
+
+        return Ok(data);
+
+    } catch (const std::exception& e) {
+        return Err<YDocData>(std::string("YAML parse error: ") + e.what());
+    }
+}
+
+std::vector<uint8_t> DocumentPersist::dataToBinary(const YDocData& data) {
+    std::stringstream ss;
+    msgpack::packer<std::stringstream> pk(ss);
+
+    pk.pack_map(6);
+
+    pk.pack("version");
+    pk.pack(data.version);
+
+    pk.pack("type");
+    pk.pack(data.type);
+
+    pk.pack("pageWidth");
+    pk.pack(data.pageWidth);
+
+    pk.pack("margin");
+    pk.pack(data.margin);
+
+    pk.pack("modified");
+    pk.pack(data.modified);
+
+    // Paragraphs
+    pk.pack("paragraphs");
+    pk.pack_array(data.paragraphs.size());
+    for (const auto& para : data.paragraphs) {
+        pk.pack_map(4);
+        pk.pack("text");
+        pk.pack(para.text);
+        pk.pack("fontSize");
+        pk.pack(para.fontSize);
+        pk.pack("color");
+        pk.pack(para.color);
+        pk.pack("runs");
+        pk.pack_array(para.runs.size());
+        for (const auto& run : para.runs) {
+            pk.pack_array(5);
+            pk.pack(run.start);
+            pk.pack(run.end);
+            pk.pack(run.format);
+            pk.pack(run.fontSize);
+            pk.pack(run.color);
+        }
+    }
+
+    std::string str = ss.str();
+    return std::vector<uint8_t>(str.begin(), str.end());
+}
+
+Result<YDocData> DocumentPersist::parseYDocBinary(const uint8_t* data, size_t len) {
+    try {
+        msgpack::object_handle oh = msgpack::unpack(reinterpret_cast<const char*>(data), len);
+        msgpack::object obj = oh.get();
+
+        if (obj.type != msgpack::type::MAP) {
+            return Err<YDocData>("Invalid binary format");
+        }
+
+        YDocData docData;
+        docData.version = 1;
+
+        auto map = obj.as<std::map<std::string, msgpack::object>>();
+
+        if (map.count("pageWidth")) docData.pageWidth = map["pageWidth"].as<float>();
+        if (map.count("margin")) docData.margin = map["margin"].as<float>();
+
+        if (map.count("paragraphs")) {
+            auto& arr = map["paragraphs"];
+            if (arr.type == msgpack::type::ARRAY) {
+                for (size_t i = 0; i < arr.via.array.size; ++i) {
+                    auto& pobj = arr.via.array.ptr[i];
+                    ParagraphData pd;
+
+                    auto pmap = pobj.as<std::map<std::string, msgpack::object>>();
+                    if (pmap.count("text")) pd.text = pmap["text"].as<std::string>();
+                    if (pmap.count("fontSize")) pd.fontSize = pmap["fontSize"].as<float>();
+                    if (pmap.count("color")) pd.color = pmap["color"].as<uint32_t>();
+
+                    if (pmap.count("runs")) {
+                        auto& runs = pmap["runs"];
+                        if (runs.type == msgpack::type::ARRAY) {
+                            for (size_t j = 0; j < runs.via.array.size; ++j) {
+                                auto& robj = runs.via.array.ptr[j];
+                                if (robj.type == msgpack::type::ARRAY && robj.via.array.size >= 5) {
+                                    TextRunData rd;
+                                    rd.start = robj.via.array.ptr[0].as<int>();
+                                    rd.end = robj.via.array.ptr[1].as<int>();
+                                    rd.format = robj.via.array.ptr[2].as<uint32_t>();
+                                    rd.fontSize = robj.via.array.ptr[3].as<float>();
+                                    rd.color = robj.via.array.ptr[4].as<uint32_t>();
+                                    pd.runs.push_back(rd);
+                                }
+                            }
+                        }
+                    }
+                    docData.paragraphs.push_back(pd);
+                }
+            }
+        }
+
+        return Ok(docData);
+
+    } catch (const std::exception& e) {
+        return Err<YDocData>(std::string("Binary parse error: ") + e.what());
+    }
+}
+
+// YSpreadsheet data-only serialization
+
+std::string DocumentPersist::dataToYaml(const YSpreadsheetData& data) {
+    std::ostringstream os;
+
+    os << "# YSpreadsheet Document\n";
+    os << "version: " << data.version << "\n";
+    os << "type: " << data.type << "\n";
+    os << "\n";
+
+    os << "metadata:\n";
+    os << "  modified: " << data.modified << "\n";
+    os << "\n";
+
+    os << "spreadsheet:\n";
+    os << "  rows: " << data.rows << "\n";
+    os << "  cols: " << data.cols << "\n";
+    os << "\n";
+
+    if (!data.columnWidths.empty()) {
+        os << "  columnWidths: [";
+        for (size_t i = 0; i < data.columnWidths.size(); ++i) {
+            if (i > 0) os << ", ";
+            os << data.columnWidths[i];
+        }
+        os << "]\n\n";
+    }
+
+    if (!data.cells.empty()) {
+        os << "  cells:\n";
+        for (const auto& cell : data.cells) {
+            char colLetter = 'A' + cell.col;
+            os << "    " << colLetter << (cell.row + 1) << ": " << escapeYaml(cell.value) << "\n";
+        }
+    }
+
+    return os.str();
+}
+
+Result<YSpreadsheetData> DocumentPersist::parseYSpreadsheetYaml(std::string_view yaml) {
+    try {
+        YAML::Node root = YAML::Load(std::string(yaml));
+
+        if (root["type"].as<std::string>("") != "yspreadsheet") {
+            return Err<YSpreadsheetData>("Not a YSpreadsheet document");
+        }
+
+        YSpreadsheetData data;
+
+        if (root["spreadsheet"]["rows"]) {
+            data.rows = root["spreadsheet"]["rows"].as<int>(100);
+        }
+        if (root["spreadsheet"]["cols"]) {
+            data.cols = root["spreadsheet"]["cols"].as<int>(26);
+        }
+
+        if (root["spreadsheet"]["columnWidths"]) {
+            for (const auto& w : root["spreadsheet"]["columnWidths"]) {
+                data.columnWidths.push_back(w.as<float>(80.0f));
+            }
+        }
+
+        if (root["spreadsheet"]["cells"]) {
+            for (const auto& it : root["spreadsheet"]["cells"]) {
+                std::string key = it.first.as<std::string>();
+                std::string val = it.second.as<std::string>();
+
+                // Parse cell address like "A1", "B10"
+                if (!key.empty() && key[0] >= 'A' && key[0] <= 'Z') {
+                    SpreadsheetCellData cd;
+                    cd.col = key[0] - 'A';
+                    cd.row = std::stoi(key.substr(1)) - 1;
+                    cd.value = val;
+                    data.cells.push_back(cd);
+                }
+            }
+        }
+
+        return Ok(data);
+
+    } catch (const std::exception& e) {
+        return Err<YSpreadsheetData>(std::string("YAML parse error: ") + e.what());
+    }
+}
+
+std::vector<uint8_t> DocumentPersist::dataToBinary(const YSpreadsheetData& data) {
+    std::stringstream ss;
+    msgpack::packer<std::stringstream> pk(ss);
+
+    pk.pack_map(4);
+    pk.pack("type");
+    pk.pack(data.type);
+    pk.pack("rows");
+    pk.pack(data.rows);
+    pk.pack("cols");
+    pk.pack(data.cols);
+
+    pk.pack("cells");
+    pk.pack_array(data.cells.size());
+    for (const auto& cell : data.cells) {
+        pk.pack_array(3);
+        pk.pack(cell.row);
+        pk.pack(cell.col);
+        pk.pack(cell.value);
+    }
+
+    std::string str = ss.str();
+    return std::vector<uint8_t>(str.begin(), str.end());
+}
+
+Result<YSpreadsheetData> DocumentPersist::parseYSpreadsheetBinary(const uint8_t* data, size_t len) {
+    try {
+        msgpack::object_handle oh = msgpack::unpack(reinterpret_cast<const char*>(data), len);
+        msgpack::object obj = oh.get();
+
+        YSpreadsheetData docData;
+        auto map = obj.as<std::map<std::string, msgpack::object>>();
+
+        if (map.count("rows")) docData.rows = map["rows"].as<int>();
+        if (map.count("cols")) docData.cols = map["cols"].as<int>();
+
+        if (map.count("cells")) {
+            auto& arr = map["cells"];
+            if (arr.type == msgpack::type::ARRAY) {
+                for (size_t i = 0; i < arr.via.array.size; ++i) {
+                    auto& cobj = arr.via.array.ptr[i];
+                    if (cobj.type == msgpack::type::ARRAY && cobj.via.array.size >= 3) {
+                        SpreadsheetCellData cd;
+                        cd.row = cobj.via.array.ptr[0].as<int>();
+                        cd.col = cobj.via.array.ptr[1].as<int>();
+                        cd.value = cobj.via.array.ptr[2].as<std::string>();
+                        docData.cells.push_back(cd);
+                    }
+                }
+            }
+        }
+
+        return Ok(docData);
+
+    } catch (const std::exception& e) {
+        return Err<YSpreadsheetData>(std::string("Binary parse error: ") + e.what());
+    }
+}
+
+// YSlides data-only serialization
+
+std::string DocumentPersist::dataToYaml(const YSlidesData& data) {
+    std::ostringstream os;
+
+    os << "# YSlides Presentation\n";
+    os << "version: " << data.version << "\n";
+    os << "type: " << data.type << "\n";
+    os << "\n";
+
+    os << "metadata:\n";
+    os << "  modified: " << data.modified << "\n";
+    os << "\n";
+
+    os << "presentation:\n";
+    os << "  slideWidth: " << data.slideWidth << "\n";
+    os << "  slideHeight: " << data.slideHeight << "\n";
+    os << "\n";
+
+    os << "  slides:\n";
+    for (const auto& slide : data.slides) {
+        os << "    - index: " << slide.index << "\n";
+        os << "      bgColor: " << colorToHex(slide.bgColor) << "\n";
+        os << "      shapes:\n";
+
+        for (const auto& shape : slide.shapes) {
+            os << "        - type: " << shape.shapeType << "\n";
+            os << "          x: " << shape.x << "\n";
+            os << "          y: " << shape.y << "\n";
+            os << "          width: " << shape.width << "\n";
+            os << "          height: " << shape.height << "\n";
+            os << "          fillColor: " << colorToHex(shape.fillColor) << "\n";
+            os << "          strokeColor: " << colorToHex(shape.strokeColor) << "\n";
+
+            if (!shape.text.empty()) {
+                os << "          text: " << escapeYaml(shape.text) << "\n";
+                os << "          fontSize: " << shape.fontSize << "\n";
+            }
+
+            if (!shape.imageSource.empty()) {
+                os << "          imageSource: " << escapeYaml(shape.imageSource) << "\n";
+            }
+        }
+    }
+
+    return os.str();
+}
+
+Result<YSlidesData> DocumentPersist::parseYSlidesYaml(std::string_view yaml) {
+    try {
+        YAML::Node root = YAML::Load(std::string(yaml));
+
+        if (root["type"].as<std::string>("") != "yslides") {
+            return Err<YSlidesData>("Not a YSlides document");
+        }
+
+        YSlidesData data;
+        data.slideWidth = root["presentation"]["slideWidth"].as<float>(960.0f);
+        data.slideHeight = root["presentation"]["slideHeight"].as<float>(540.0f);
+
+        if (root["presentation"]["slides"]) {
+            for (const auto& snode : root["presentation"]["slides"]) {
+                SlideData sd;
+                sd.index = snode["index"].as<int>(0);
+                sd.bgColor = hexToColor(snode["bgColor"].as<std::string>("#FFFFFFFF"));
+
+                if (snode["shapes"]) {
+                    for (const auto& shnode : snode["shapes"]) {
+                        ShapeData shd;
+                        shd.shapeType = shnode["type"].as<int>(0);
+                        shd.x = shnode["x"].as<float>(0);
+                        shd.y = shnode["y"].as<float>(0);
+                        shd.width = shnode["width"].as<float>(100);
+                        shd.height = shnode["height"].as<float>(100);
+                        shd.fillColor = hexToColor(shnode["fillColor"].as<std::string>("#FFFFFFFF"));
+                        shd.strokeColor = hexToColor(shnode["strokeColor"].as<std::string>("#FF000000"));
+                        shd.strokeWidth = shnode["strokeWidth"].as<float>(1.0f);
+                        shd.text = shnode["text"].as<std::string>("");
+                        shd.fontSize = shnode["fontSize"].as<float>(24.0f);
+                        shd.imageSource = shnode["imageSource"].as<std::string>("");
+
+                        sd.shapes.push_back(shd);
+                    }
+                }
+                data.slides.push_back(sd);
+            }
+        }
+
+        return Ok(data);
+
+    } catch (const std::exception& e) {
+        return Err<YSlidesData>(std::string("YAML parse error: ") + e.what());
+    }
+}
+
+std::vector<uint8_t> DocumentPersist::dataToBinary(const YSlidesData& data) {
+    std::stringstream ss;
+    msgpack::packer<std::stringstream> pk(ss);
+
+    pk.pack_map(4);
+    pk.pack("type");
+    pk.pack(data.type);
+    pk.pack("slideWidth");
+    pk.pack(data.slideWidth);
+    pk.pack("slideHeight");
+    pk.pack(data.slideHeight);
+
+    pk.pack("slides");
+    pk.pack_array(data.slides.size());
+    for (const auto& slide : data.slides) {
+        pk.pack_map(3);
+        pk.pack("index");
+        pk.pack(slide.index);
+        pk.pack("bgColor");
+        pk.pack(slide.bgColor);
+
+        pk.pack("shapes");
+        pk.pack_array(slide.shapes.size());
+        for (const auto& shape : slide.shapes) {
+            pk.pack_array(12);
+            pk.pack(shape.shapeType);
+            pk.pack(shape.x);
+            pk.pack(shape.y);
+            pk.pack(shape.width);
+            pk.pack(shape.height);
+            pk.pack(shape.fillColor);
+            pk.pack(shape.strokeColor);
+            pk.pack(shape.strokeWidth);
+            pk.pack(shape.text);
+            pk.pack(shape.fontSize);
+            pk.pack(shape.textColor);
+            pk.pack(shape.imageSource);
+        }
+    }
+
+    std::string str = ss.str();
+    return std::vector<uint8_t>(str.begin(), str.end());
+}
+
+Result<YSlidesData> DocumentPersist::parseYSlidesBinary(const uint8_t* data, size_t len) {
+    try {
+        msgpack::object_handle oh = msgpack::unpack(reinterpret_cast<const char*>(data), len);
+        msgpack::object obj = oh.get();
+
+        YSlidesData docData;
+        auto map = obj.as<std::map<std::string, msgpack::object>>();
+
+        if (map.count("slideWidth")) docData.slideWidth = map["slideWidth"].as<float>();
+        if (map.count("slideHeight")) docData.slideHeight = map["slideHeight"].as<float>();
+
+        if (map.count("slides")) {
+            auto& arr = map["slides"];
+            if (arr.type == msgpack::type::ARRAY) {
+                for (size_t i = 0; i < arr.via.array.size; ++i) {
+                    auto& sobj = arr.via.array.ptr[i];
+                    SlideData sd;
+                    auto smap = sobj.as<std::map<std::string, msgpack::object>>();
+
+                    if (smap.count("index")) sd.index = smap["index"].as<int>();
+                    if (smap.count("bgColor")) sd.bgColor = smap["bgColor"].as<uint32_t>();
+
+                    if (smap.count("shapes")) {
+                        auto& shapes = smap["shapes"];
+                        if (shapes.type == msgpack::type::ARRAY) {
+                            for (size_t j = 0; j < shapes.via.array.size; ++j) {
+                                auto& shobj = shapes.via.array.ptr[j];
+                                if (shobj.type == msgpack::type::ARRAY && shobj.via.array.size >= 12) {
+                                    ShapeData shd;
+                                    shd.shapeType = shobj.via.array.ptr[0].as<int>();
+                                    shd.x = shobj.via.array.ptr[1].as<float>();
+                                    shd.y = shobj.via.array.ptr[2].as<float>();
+                                    shd.width = shobj.via.array.ptr[3].as<float>();
+                                    shd.height = shobj.via.array.ptr[4].as<float>();
+                                    shd.fillColor = shobj.via.array.ptr[5].as<uint32_t>();
+                                    shd.strokeColor = shobj.via.array.ptr[6].as<uint32_t>();
+                                    shd.strokeWidth = shobj.via.array.ptr[7].as<float>();
+                                    shd.text = shobj.via.array.ptr[8].as<std::string>();
+                                    shd.fontSize = shobj.via.array.ptr[9].as<float>();
+                                    shd.textColor = shobj.via.array.ptr[10].as<uint32_t>();
+                                    shd.imageSource = shobj.via.array.ptr[11].as<std::string>();
+                                    sd.shapes.push_back(shd);
+                                }
+                            }
+                        }
+                    }
+                    docData.slides.push_back(sd);
+                }
+            }
+        }
+
+        return Ok(docData);
+
+    } catch (const std::exception& e) {
+        return Err<YSlidesData>(std::string("Binary parse error: ") + e.what());
     }
 }
 

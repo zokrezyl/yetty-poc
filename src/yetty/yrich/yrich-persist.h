@@ -263,6 +263,28 @@ public:
     static DocType detectType(const std::string& path);
     static Format detectFormat(const std::string& path);
 
+    //=========================================================================
+    // Data-only serialization (for testing without document creation)
+    //=========================================================================
+
+    // YDoc data
+    static std::string dataToYaml(const YDocData& data);
+    static Result<YDocData> parseYDocYaml(std::string_view yaml);
+    static std::vector<uint8_t> dataToBinary(const YDocData& data);
+    static Result<YDocData> parseYDocBinary(const uint8_t* data, size_t len);
+
+    // YSpreadsheet data
+    static std::string dataToYaml(const YSpreadsheetData& data);
+    static Result<YSpreadsheetData> parseYSpreadsheetYaml(std::string_view yaml);
+    static std::vector<uint8_t> dataToBinary(const YSpreadsheetData& data);
+    static Result<YSpreadsheetData> parseYSpreadsheetBinary(const uint8_t* data, size_t len);
+
+    // YSlides data
+    static std::string dataToYaml(const YSlidesData& data);
+    static Result<YSlidesData> parseYSlidesYaml(std::string_view yaml);
+    static std::vector<uint8_t> dataToBinary(const YSlidesData& data);
+    static Result<YSlidesData> parseYSlidesBinary(const uint8_t* data, size_t len);
+
 };
 
 } // namespace yetty::yrich
