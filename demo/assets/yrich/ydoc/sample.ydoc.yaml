@@ -1,0 +1,100 @@
+version: 1
+type: ydoc
+created: 1710892800
+modified: 1710892800
+author: demo
+
+settings:
+  pageWidth: 600
+  margin: 20
+
+paragraphs:
+  - text: "Welcome to YDoc"
+    runs:
+      - start: 0
+        end: 15
+        fontSize: 24
+        color: 0xFF2563EB
+        format: 1  # Bold
+    fontSize: 24
+    color: 0xFF2563EB
+
+  - text: ""
+    runs: []
+    fontSize: 14
+    color: 0xFF000000
+
+  - text: "YDoc is a rich text document editor for the terminal. It supports:"
+    runs: []
+    fontSize: 14
+    color: 0xFF000000
+
+  - text: ""
+    runs: []
+    fontSize: 14
+    color: 0xFF000000
+
+  - text: "Rich Text Formatting"
+    runs:
+      - start: 0
+        end: 20
+        fontSize: 16
+        color: 0xFF000000
+        format: 1  # Bold
+    fontSize: 16
+    color: 0xFF000000
+
+  - text: "Bold, italic, underline, and strikethrough styles"
+    runs:
+      - start: 0
+        end: 4
+        fontSize: 14
+        color: 0xFF000000
+        format: 1  # Bold
+      - start: 6
+        end: 12
+        fontSize: 14
+        color: 0xFF000000
+        format: 2  # Italic
+      - start: 14
+        end: 23
+        fontSize: 14
+        color: 0xFF000000
+        format: 4  # Underline
+      - start: 29
+        end: 42
+        fontSize: 14
+        color: 0xFF000000
+        format: 8  # Strike
+    fontSize: 14
+    color: 0xFF000000
+
+  - text: ""
+    runs: []
+    fontSize: 14
+    color: 0xFF000000
+
+  - text: "Real-time Collaboration"
+    runs:
+      - start: 0
+        end: 23
+        fontSize: 16
+        color: 0xFF000000
+        format: 1  # Bold
+    fontSize: 16
+    color: 0xFF000000
+
+  - text: "Multiple users can edit the same document simultaneously with operation-based synchronization."
+    runs: []
+    fontSize: 14
+    color: 0xFF000000
+
+  - text: ""
+    runs: []
+    fontSize: 14
+    color: 0xFF000000
+
+  - text: "Press 'q' to exit."
+    runs: []
+    fontSize: 14
+    color: 0xFF888888

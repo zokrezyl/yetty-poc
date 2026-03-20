@@ -1,14 +1,13 @@
-// yspreadsheet: Interactive spreadsheet editor using YRich
+// yslides: Interactive presentation editor using YRich
 //
 // Usage:
-//   yspreadsheet -h 20                     # Interactive mode with sample data
-//   yspreadsheet -f data.ysheet.yaml -h 20 # Load and edit file
-//   yspreadsheet -f data.ysheet.yaml --view # View mode (display and exit on 'q')
+//   yslides -h 25                           # Interactive mode with sample slides
+//   yslides -f presentation.yslides.yaml -h 25 # Load and edit file
+//   yslides -f presentation.yslides.yaml --view # View mode (display and exit on 'q')
 
-#include "../../src/yetty/yrich/yspreadsheet.h"
+#include "../../src/yetty/yrich/yslides.h"
 #include "../../src/yetty/yrich/yrich-persist.h"
 #include "../../src/yetty/ydraw/ydraw-buffer.h"
-#include "../../src/yetty/ycat/osc.h"
 
 #include <args.hxx>
 #include <uv.h>
@@ -96,14 +95,14 @@ static std::string base64Encode(const uint8_t* data, size_t size) {
 }
 
 //=============================================================================
-// YDoc Editor - connects YRich to terminal
+// YSlides Editor
 //=============================================================================
 
-class YDocEditor {
+class YSlidesEditor {
 public:
-    YDocEditor() : _loop(uv_default_loop()) {}
+    YSlidesEditor() : _loop(uv_default_loop()) {}
 
-    ~YDocEditor() {
+    ~YSlidesEditor() {
         cleanup();
     }
 
@@ -122,43 +121,66 @@ public:
         }
         _buffer = *bufferResult;
 
-        // Load or create spreadsheet
+        // Load or create presentation
         if (!filePath.empty()) {
-            auto sheetResult = DocumentPersist::loadYSpreadsheet(filePath);
-            if (!sheetResult) {
-                std::cerr << "Failed to load spreadsheet: " << filePath << "\n";
+            auto slidesResult = DocumentPersist::loadYSlides(filePath);
+            if (!slidesResult) {
+                std::cerr << "Failed to load slides: " << filePath << "\n";
                 return false;
             }
-            _spreadsheet = *sheetResult;
+            _slides = *slidesResult;
         } else {
-            auto sheetResult = YSpreadsheet::create();
-            if (!sheetResult) {
-                std::cerr << "Failed to create YSpreadsheet\n";
+            auto slidesResult = YSlides::create();
+            if (!slidesResult) {
+                std::cerr << "Failed to create YSlides\n";
                 return false;
             }
-            _spreadsheet = *sheetResult;
+            _slides = *slidesResult;
 
-            // Initialize with sample data
-            _spreadsheet->setGridSize(50, 20);
-            _spreadsheet->setCellValue({0, 0}, "YRich Spreadsheet");
-            _spreadsheet->setCellValue({1, 0}, "A");
-            _spreadsheet->setCellValue({1, 1}, "B");
-            _spreadsheet->setCellValue({1, 2}, "C");
-            _spreadsheet->setCellValue({2, 0}, "100");
-            _spreadsheet->setCellValue({2, 1}, "200");
-            _spreadsheet->setCellValue({2, 2}, "300");
+            // Add sample content
+            createSamplePresentation();
         }
 
-        _spreadsheet->setBuffer(_buffer.get());
+        _slides->setBuffer(_buffer.get());
 
-        // Set up dirty callback to trigger re-render
-        _spreadsheet->setDirtyCallback([this]() {
+        // Set up dirty callback
+        _slides->setDirtyCallback([this]() {
             _needsRender = true;
         });
 
-        _spreadsheet->selectCell({0, 0});
-
         return true;
+    }
+
+    void createSamplePresentation() {
+        // Slide 1: Title
+        _slides->addTextBox(200, 150, 560, 80, "Welcome to YSlides");
+        auto subtitle = _slides->addTextBox(200, 250, 560, 40, "Presentations in your terminal!");
+        if (subtitle) {
+            auto style = subtitle->textStyle();
+            style.fontSize = 18.0f;
+            subtitle->setTextStyle(style);
+        }
+
+        // Slide 2: Shapes
+        _slides->addSlide();
+        _slides->setCurrentSlide(1);
+        _slides->addTextBox(200, 50, 560, 50, "Shape Examples");
+        _slides->addRectangle(100, 150, 200, 150);
+        _slides->addEllipse(400, 150, 200, 150);
+        _slides->addLine(150, 400, 550, 400);
+
+        // Slide 3: Features
+        _slides->addSlide();
+        _slides->setCurrentSlide(2);
+        _slides->addTextBox(200, 50, 560, 50, "Features");
+        _slides->addTextBox(100, 150, 400, 40, "- Multiple shapes");
+        _slides->addTextBox(100, 200, 400, 40, "- Text editing");
+        _slides->addTextBox(100, 250, 400, 40, "- Drag and drop");
+        _slides->addTextBox(100, 300, 400, 40, "- Keyboard shortcuts");
+        _slides->addTextBox(100, 350, 400, 40, "- Presentation mode");
+
+        // Go back to first slide
+        _slides->setCurrentSlide(0);
     }
 
     void run() {
@@ -177,7 +199,7 @@ public:
         _stdinPoll.data = this;
         uv_poll_start(&_stdinPoll, UV_READABLE, onStdinReadable);
 
-        // Set up render timer (60fps max)
+        // Set up render timer
         uv_timer_init(_loop, &_renderTimer);
         _renderTimer.data = this;
         uv_timer_start(&_renderTimer, onRenderTimer, 16, 16);
@@ -205,7 +227,7 @@ private:
     }
 
     void sendCreateCard() {
-        _spreadsheet->render();
+        _slides->render();
         auto bytes = _buffer->serialize();
 
         std::string seq = "\033]666666;run -c ydraw -x " + std::to_string(_cardX) +
@@ -220,7 +242,7 @@ private:
     }
 
     void sendUpdateCard() {
-        _spreadsheet->render();
+        _slides->render();
         auto bytes = _buffer->serialize();
 
         std::string seq = "\033]666666;update --name " + _cardName + ";;";
@@ -235,7 +257,6 @@ private:
         writeOsc(seq.c_str(), seq.size());
     }
 
-    // Process incoming data from stdin
     void processInput() {
         char buf[4096];
         ssize_t n = read(STDIN_FILENO, buf, sizeof(buf));
@@ -247,14 +268,12 @@ private:
     }
 
     void processChar(char c) {
-        // Accumulate into buffer for OSC parsing
         if (_escState == EscState::None) {
             if (c == '\033') {
                 _escState = EscState::Esc;
                 _escBuffer.clear();
                 _escBuffer += c;
             } else {
-                // Regular character - keyboard input
                 handleKeyChar(c);
             }
         } else {
@@ -266,11 +285,9 @@ private:
                 } else if (c == '[') {
                     _escState = EscState::Csi;
                 } else {
-                    // Unknown escape, reset
                     _escState = EscState::None;
                 }
             } else if (_escState == EscState::Osc) {
-                // OSC ends with ST (\033\\) or BEL (\007)
                 if (c == '\\' && _escBuffer.size() >= 2 &&
                     _escBuffer[_escBuffer.size() - 2] == '\033') {
                     handleOsc(_escBuffer);
@@ -280,7 +297,6 @@ private:
                     _escState = EscState::None;
                 }
             } else if (_escState == EscState::Csi) {
-                // CSI ends with a letter
                 if (c >= 0x40 && c <= 0x7E) {
                     handleCsi(_escBuffer);
                     _escState = EscState::None;
@@ -290,23 +306,15 @@ private:
     }
 
     void handleOsc(const std::string& seq) {
-        // Parse OSC sequences from yetty
-        // OSC 777777 - mouse click: \033]777777;card;buttons;press;x;y\033\\
-        // OSC 777778 - mouse move: \033]777778;card;buttons;x;y\033\\
-        // OSC 777779 - view change: \033]777779;card;zoom;scrollx;scrolly\033\\
-        // OSC 777780 - pixel size: \033]777780;card;width;height\033\\
-
         if (seq.size() < 10) return;
 
-        // Extract OSC code
-        size_t start = 2;  // Skip \033]
+        size_t start = 2;
         size_t semicolon = seq.find(';', start);
         if (semicolon == std::string::npos) return;
 
         std::string code = seq.substr(start, semicolon - start);
         std::string rest = seq.substr(semicolon + 1);
 
-        // Remove terminator
         if (rest.size() >= 2 && rest[rest.size() - 2] == '\033') {
             rest = rest.substr(0, rest.size() - 2);
         } else if (!rest.empty() && rest.back() == '\007') {
@@ -325,22 +333,23 @@ private:
     }
 
     void handleCsi(const std::string& seq) {
-        // Handle CSI sequences (arrow keys, etc.)
         if (seq.size() < 3) return;
 
         char cmd = seq.back();
+        InputModifiers mods = {};
+
         if (cmd == 'A') {
-            // Up arrow
-            _spreadsheet->onKeyDown(Key::Up, getModifiers());
+            _slides->onKeyDown(Key::Up, mods);
         } else if (cmd == 'B') {
-            // Down arrow
-            _spreadsheet->onKeyDown(Key::Down, getModifiers());
+            _slides->onKeyDown(Key::Down, mods);
         } else if (cmd == 'C') {
-            // Right arrow
-            _spreadsheet->onKeyDown(Key::Right, getModifiers());
+            _slides->onKeyDown(Key::Right, mods);
         } else if (cmd == 'D') {
-            // Left arrow
-            _spreadsheet->onKeyDown(Key::Left, getModifiers());
+            _slides->onKeyDown(Key::Left, mods);
+        } else if (cmd == '~') {
+            if (seq.find("3") != std::string::npos) {
+                _slides->onKeyDown(Key::Delete, mods);
+            }
         }
     }
 
@@ -350,31 +359,83 @@ private:
             return;
         }
 
-        // In view mode, only 'q' works
+        // In view mode, allow navigation but no editing
         if (_viewMode) {
+            if (c == '[') {
+                _slides->prevSlide();
+            } else if (c == ']' || c == ' ') {
+                _slides->nextSlide();
+            }
             return;
         }
 
-        if (c == '\r' || c == '\n') {
-            _spreadsheet->onKeyDown(Key::Enter, getModifiers());
-        } else if (c == '\t') {
-            _spreadsheet->onKeyDown(Key::Tab, getModifiers());
+        InputModifiers mods = {};
+
+        // Ctrl+key handling
+        if (c >= 1 && c <= 26) {
+            mods.ctrl = true;
+            char letter = 'a' + c - 1;
+
+            if (letter == 'r') {
+                // Ctrl+R - add rectangle
+                _slides->addRectangle(100, 100, 150, 100);
+                return;
+            } else if (letter == 'e') {
+                // Ctrl+E - add ellipse
+                _slides->addEllipse(100, 100, 150, 100);
+                return;
+            } else if (letter == 't') {
+                // Ctrl+T - add text box
+                _slides->addTextBox(100, 100, 200, 50, "New Text");
+                return;
+            } else if (letter == 'n') {
+                // Ctrl+N - new slide
+                _slides->addSlide();
+                _slides->setCurrentSlide(_slides->slideCount() - 1);
+                return;
+            } else if (letter == 'p') {
+                // Ctrl+P - presentation mode
+                _slides->startPresentation();
+                return;
+            } else if (letter == 'a') {
+                // Ctrl+A - select all
+                _slides->selectAll();
+                return;
+            }
+        }
+
+        if (c == '\033') {
+            // Escape - stop presentation or clear selection
+            if (_slides->isPresentationMode()) {
+                _slides->stopPresentation();
+            } else {
+                _slides->clearSelection();
+                _slides->stopEditingText();
+            }
+        } else if (c == ' ') {
+            // Space - next slide in presentation mode
+            if (_slides->isPresentationMode()) {
+                _slides->nextSlide();
+            }
         } else if (c == 127 || c == '\b') {
-            _spreadsheet->onKeyDown(Key::Backspace, getModifiers());
+            _slides->onKeyDown(Key::Backspace, mods);
+        } else if (c == '[') {
+            // Previous slide
+            _slides->prevSlide();
+        } else if (c == ']') {
+            // Next slide
+            _slides->nextSlide();
         } else if (c >= 32 && c < 127) {
-            // Printable character
             char str[2] = {c, 0};
-            _spreadsheet->onTextInput(str);
+            _slides->onTextInput(str);
         }
     }
 
     void handleMouseClick(const std::string& data) {
-        // Format: card;buttons;press;x;y
         std::vector<std::string> parts;
         splitString(data, ';', parts);
         if (parts.size() < 5) return;
 
-        // Check card name matches
         if (parts[0] != _cardName) return;
 
         int buttons = std::stoi(parts[1]);
@@ -382,25 +443,22 @@ private:
         float x = std::stof(parts[3]);
         float y = std::stof(parts[4]);
 
-        // Transform display coords to scene coords
         float sceneX = transformX(x);
         float sceneY = transformY(y);
 
-        InputModifiers mods = getModifiers();
+        InputModifiers mods = {};
         MouseButton button = MouseButton::Left;
         if (buttons & 2) button = MouseButton::Right;
-        if (buttons & 4) button = MouseButton::Middle;
 
         if (press) {
             if (_lastClickTime > 0 &&
                 (uv_now(_loop) - _lastClickTime) < 300 &&
                 std::abs(_lastClickX - sceneX) < 5 &&
                 std::abs(_lastClickY - sceneY) < 5) {
-                // Double click
-                _spreadsheet->onMouseDoubleClick(sceneX, sceneY, button, mods);
+                _slides->onMouseDoubleClick(sceneX, sceneY, button, mods);
                 _lastClickTime = 0;
             } else {
-                _spreadsheet->onMouseDown(sceneX, sceneY, button, mods);
+                _slides->onMouseDown(sceneX, sceneY, button, mods);
                 _lastClickTime = uv_now(_loop);
                 _lastClickX = sceneX;
                 _lastClickY = sceneY;
@@ -408,13 +466,12 @@ private:
             _mouseDown = true;
             _mouseButton = button;
         } else {
-            _spreadsheet->onMouseUp(sceneX, sceneY, button, mods);
+            _slides->onMouseUp(sceneX, sceneY, button, mods);
             _mouseDown = false;
         }
     }
 
     void handleMouseMove(const std::string& data) {
-        // Format: card;buttons;x;y
         std::vector<std::string> parts;
         splitString(data, ';', parts);
         if (parts.size() < 4) return;
@@ -427,17 +484,14 @@ private:
         float sceneX = transformX(x);
         float sceneY = transformY(y);
 
-        InputModifiers mods = getModifiers();
+        InputModifiers mods = {};
 
         if (_mouseDown) {
-            _spreadsheet->onMouseDrag(sceneX, sceneY, _mouseButton, mods);
-        } else {
-            _spreadsheet->onMouseMove(sceneX, sceneY, mods);
+            _slides->onMouseDrag(sceneX, sceneY, _mouseButton, mods);
         }
     }
 
     void handleViewChange(const std::string& data) {
-        // Format: card;zoom;scrollx;scrolly
         std::vector<std::string> parts;
         splitString(data, ';', parts);
         if (parts.size() < 4) return;
@@ -450,7 +504,6 @@ private:
     }
 
     void handlePixelSize(const std::string& data) {
-        // Format: card;width;height
         std::vector<std::string> parts;
         splitString(data, ';', parts);
         if (parts.size() < 3) return;
@@ -465,7 +518,7 @@ private:
     float transformX(float displayX) const {
         if (!_havePixelSize || _displayWidth <= 0) return displayX;
 
-        float contentW = _spreadsheet->contentWidth();
+        float contentW = _slides->contentWidth();
         float visibleW = contentW / _zoom;
         return _scrollX + (displayX / _displayWidth) * visibleW;
     }
@@ -473,14 +526,9 @@ private:
     float transformY(float displayY) const {
         if (!_havePixelSize || _displayHeight <= 0) return displayY;
 
-        float contentH = _spreadsheet->contentHeight();
+        float contentH = _slides->contentHeight();
         float visibleH = contentH / _zoom;
         return _scrollY + (displayY / _displayHeight) * visibleH;
-    }
-
-    InputModifiers getModifiers() const {
-        // TODO: Track modifier state from keyboard events
-        return {};
     }
 
     static void splitString(const std::string& str, char delim,
@@ -494,15 +542,14 @@ private:
         out.push_back(str.substr(start));
     }
 
-    // Callbacks
     static void onStdinReadable(uv_poll_t* handle, int status, int events) {
         if (status < 0 || !(events & UV_READABLE)) return;
-        auto* self = static_cast<YDocEditor*>(handle->data);
+        auto* self = static_cast<YSlidesEditor*>(handle->data);
         self->processInput();
     }
 
     static void onRenderTimer(uv_timer_t* handle) {
-        auto* self = static_cast<YDocEditor*>(handle->data);
+        auto* self = static_cast<YSlidesEditor*>(handle->data);
         if (self->_needsRender) {
             self->sendUpdateCard();
             self->_needsRender = false;
@@ -518,7 +565,7 @@ private:
     bool _viewMode = false;
 
     // Card
-    std::string _cardName = "ydoc0";
+    std::string _cardName = "yslides0";
     int _cardX = 0, _cardY = 0, _cardW = 0, _cardH = 0;
 
     // Display
@@ -539,9 +586,9 @@ private:
     EscState _escState = EscState::None;
     std::string _escBuffer;
 
-    // Document
+    // Presentation
     YDrawBuffer::Ptr _buffer;
-    YSpreadsheet::Ptr _spreadsheet;
+    YSlides::Ptr _slides;
 };
 
 //=============================================================================
@@ -549,13 +596,13 @@ private:
 //=============================================================================
 
 int main(int argc, char** argv) {
-    args::ArgumentParser parser("yspreadsheet - Interactive spreadsheet editor");
+    args::ArgumentParser parser("yslides - Interactive presentation editor");
     args::HelpFlag help(parser, "help", "Show help", {"help"});
     args::ValueFlag<int> xFlag(parser, "x", "Card X position (cells)", {'x'});
     args::ValueFlag<int> yFlag(parser, "y", "Card Y position (cells)", {'y'});
     args::ValueFlag<int> wFlag(parser, "w", "Card width (cells, 0=stretch)", {'w'});
     args::ValueFlag<int> hFlag(parser, "h", "Card height (cells)", {'h'});
-    args::ValueFlag<std::string> fileFlag(parser, "file", "Load spreadsheet from file", {'f', "file"});
+    args::ValueFlag<std::string> fileFlag(parser, "file", "Load presentation from file", {'f', "file"});
     args::Flag viewFlag(parser, "view", "View mode (display and exit on 'q')", {"view"});
 
     try {
@@ -576,7 +623,7 @@ int main(int argc, char** argv) {
     std::string filePath = fileFlag ? args::get(fileFlag) : "";
     bool viewMode = viewFlag;
 
-    YDocEditor editor;
+    YSlidesEditor editor;
     if (!editor.init(x, y, w, h, filePath, viewMode)) {
         return 1;
     }

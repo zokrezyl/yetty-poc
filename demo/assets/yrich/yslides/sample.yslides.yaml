@@ -1,0 +1,174 @@
+version: 1
+type: yslides
+created: 1710892800
+modified: 1710892800
+author: demo
+
+dimensions:
+  slideWidth: 960
+  slideHeight: 540
+
+slides:
+  - index: 0
+    bgColor: 0xFFFFFFFF
+    shapes:
+      - id: 1
+        shapeType: 3  # TextBox
+        x: 200
+        y: 180
+        width: 560
+        height: 80
+        fillColor: 0x00000000
+        strokeColor: 0x00000000
+        strokeWidth: 0
+        text: "Welcome to YSlides"
+        fontSize: 48
+        textColor: 0xFF2563EB
+        textAlign: 1
+        textVAlign: 1
+
+      - id: 2
+        shapeType: 3  # TextBox
+        x: 200
+        y: 280
+        width: 560
+        height: 50
+        fillColor: 0x00000000
+        strokeColor: 0x00000000
+        strokeWidth: 0
+        text: "Presentations in your terminal"
+        fontSize: 24
+        textColor: 0xFF666666
+        textAlign: 1
+        textVAlign: 1
+
+  - index: 1
+    bgColor: 0xFFF8FAFC
+    shapes:
+      - id: 3
+        shapeType: 3  # TextBox
+        x: 80
+        y: 40
+        width: 400
+        height: 50
+        text: "Shape Examples"
+        fontSize: 36
+        textColor: 0xFF1E293B
+        textAlign: 0
+
+      - id: 4
+        shapeType: 0  # Rectangle
+        x: 100
+        y: 140
+        width: 200
+        height: 150
+        fillColor: 0xFF3B82F6
+        strokeColor: 0xFF1D4ED8
+        strokeWidth: 2
+
+      - id: 5
+        shapeType: 1  # Ellipse
+        x: 400
+        y: 140
+        width: 200
+        height: 150
+        fillColor: 0xFF10B981
+        strokeColor: 0xFF059669
+        strokeWidth: 2
+
+      - id: 6
+        shapeType: 2  # Line
+        x: 100
+        y: 380
+        width: 500
+        height: 0
+        strokeColor: 0xFF6B7280
+        strokeWidth: 3
+
+      - id: 7
+        shapeType: 3  # TextBox
+        x: 650
+        y: 140
+        width: 250
+        height: 150
+        fillColor: 0xFFFEF3C7
+        strokeColor: 0xFFF59E0B
+        strokeWidth: 2
+        text: "Text Box"
+        fontSize: 24
+        textColor: 0xFF92400E
+        textAlign: 1
+        textVAlign: 1
+
+  - index: 2
+    bgColor: 0xFFFFFFFF
+    shapes:
+      - id: 8
+        shapeType: 3  # TextBox
+        x: 80
+        y: 40
+        width: 400
+        height: 50
+        text: "Features"
+        fontSize: 36
+        textColor: 0xFF1E293B
+
+      - id: 9
+        shapeType: 3
+        x: 100
+        y: 120
+        width: 600
+        height: 40
+        text: "Multiple slide support"
+        fontSize: 20
+        textColor: 0xFF374151
+
+      - id: 10
+        shapeType: 3
+        x: 100
+        y: 170
+        width: 600
+        height: 40
+        text: "Shapes: rectangles, ellipses, lines, text boxes"
+        fontSize: 20
+        textColor: 0xFF374151
+
+      - id: 11
+        shapeType: 3
+        x: 100
+        y: 220
+        width: 600
+        height: 40
+        text: "Drag and drop shape manipulation"
+        fontSize: 20
+        textColor: 0xFF374151
+
+      - id: 12
+        shapeType: 3
+        x: 100
+        y: 270
+        width: 600
+        height: 40
+        text: "Keyboard shortcuts for efficiency"
+        fontSize: 20
+        textColor: 0xFF374151
+
+      - id: 13
+        shapeType: 3
+        x: 100
+        y: 320
+        width: 600
+        height: 40
+        text: "Presentation mode with [ and ] navigation"
+        fontSize: 20
+        textColor: 0xFF374151
+
+      - id: 14
+        shapeType: 3
+        x: 100
+        y: 420
+        width: 600
+        height: 30
+        text: "Press [ or ] to navigate, 'q' to exit"
+        fontSize: 14
+        textColor: 0xFF9CA3AF

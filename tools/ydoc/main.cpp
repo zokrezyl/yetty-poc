@@ -2,10 +2,15 @@
 //
 // Creates a ydraw card and handles mouse/keyboard events for
 // editing rich text documents inside a terminal.
+//
+// Usage:
+//   ydoc -h 25                    # Interactive mode with sample content
+//   ydoc -f doc.ydoc.yaml -h 25   # Load and edit file
+//   ydoc -f doc.ydoc.yaml --view  # View mode (display and exit on 'q')
 
 #include "../../src/yetty/yrich/ydoc.h"
+#include "../../src/yetty/yrich/yrich-persist.h"
 #include "../../src/yetty/ydraw/ydraw-buffer.h"
-#include "../../src/yetty/ycat/osc.h"
 
 #include <args.hxx>
 #include <uv.h>
@@ -104,11 +109,12 @@ public:
         cleanup();
     }
 
-    bool init(int x, int y, int w, int h) {
+    bool init(int x, int y, int w, int h, const std::string& filePath = "", bool viewMode = false) {
         _cardX = x;
         _cardY = y;
         _cardW = w;
         _cardH = h;
+        _viewMode = viewMode;
 
         // Create YDraw buffer
         auto bufferResult = YDrawBuffer::create();
@@ -118,35 +124,45 @@ public:
         }
         _buffer = *bufferResult;
 
-        // Create document
-        auto docResult = YDoc::create();
-        if (!docResult) {
-            std::cerr << "Failed to create YDoc\n";
-            return false;
+        // Load or create document
+        if (!filePath.empty()) {
+            auto docResult = DocumentPersist::loadYDoc(filePath);
+            if (!docResult) {
+                std::cerr << "Failed to load document: " << filePath << "\n";
+                return false;
+            }
+            _doc = *docResult;
+        } else {
+            auto docResult = YDoc::create();
+            if (!docResult) {
+                std::cerr << "Failed to create YDoc\n";
+                return false;
+            }
+            _doc = *docResult;
+
+            // Initialize with sample text
+            _doc->setPageWidth(600);
+            _doc->addParagraph("Welcome to YDoc - a rich text editor in your terminal!");
+            _doc->addParagraph("");
+            _doc->addParagraph("This is a demonstration of the YRich document editing framework. "
+                               "You can type text, navigate with arrow keys, select with shift, "
+                               "and use standard editing shortcuts.");
+            _doc->addParagraph("");
+            _doc->addParagraph("Features:");
+            _doc->addParagraph("- Real-time collaborative editing support");
+            _doc->addParagraph("- Undo/redo via operation-based commands");
+            _doc->addParagraph("- Mouse selection and cursor positioning");
+            _doc->addParagraph("- Word wrap and multi-paragraph documents");
+            _doc->addParagraph("");
+            _doc->addParagraph("Press 'q' to quit.");
         }
-        _doc = *docResult;
+
         _doc->setBuffer(_buffer.get());
 
         // Set up dirty callback to trigger re-render
         _doc->setDirtyCallback([this]() {
             _needsRender = true;
         });
-
-        // Initialize with some sample text
-        _doc->setPageWidth(600);
-        _doc->addParagraph("Welcome to YDoc - a rich text editor in your terminal!");
-        _doc->addParagraph("");
-        _doc->addParagraph("This is a demonstration of the YRich document editing framework. "
-                           "You can type text, navigate with arrow keys, select with shift, "
-                           "and use standard editing shortcuts.");
-        _doc->addParagraph("");
-        _doc->addParagraph("Features:");
-        _doc->addParagraph("- Real-time collaborative editing support");
-        _doc->addParagraph("- Undo/redo via operation-based commands");
-        _doc->addParagraph("- Mouse selection and cursor positioning");
-        _doc->addParagraph("- Word wrap and multi-paragraph documents");
-        _doc->addParagraph("");
-        _doc->addParagraph("Press 'q' to quit.");
 
         _doc->setCursor(0, 0);
 
@@ -345,6 +361,11 @@ private:
     void handleKeyChar(char c) {
         if (c == 'q' || c == 'Q') {
             _running = false;
+            return;
+        }
+
+        // In view mode, only 'q' works
+        if (_viewMode) {
             return;
         }
 
@@ -547,6 +568,7 @@ private:
     uv_timer_t _renderTimer;
     bool _running = false;
     bool _needsRender = true;
+    bool _viewMode = false;
 
     // Card
     std::string _cardName = "ydoc0";
@@ -584,11 +606,13 @@ private:
 
 int main(int argc, char** argv) {
     args::ArgumentParser parser("ydoc - Interactive document editor");
-    args::HelpFlag help(parser, "help", "Show help", {'h', "help"});
+    args::HelpFlag help(parser, "help", "Show help", {"help"});
     args::ValueFlag<int> xFlag(parser, "x", "Card X position (cells)", {'x'});
     args::ValueFlag<int> yFlag(parser, "y", "Card Y position (cells)", {'y'});
     args::ValueFlag<int> wFlag(parser, "w", "Card width (cells, 0=stretch)", {'w'});
-    args::ValueFlag<int> hFlag(parser, "h", "Card height (cells, 0=stretch)", {'h'});
+    args::ValueFlag<int> hFlag(parser, "h", "Card height (cells)", {'h'});
+    args::ValueFlag<std::string> fileFlag(parser, "file", "Load document from file", {'f', "file"});
+    args::Flag viewFlag(parser, "view", "View mode (display and exit on 'q')", {"view"});
 
     try {
         parser.ParseCLI(argc, argv);
@@ -605,9 +629,11 @@ int main(int argc, char** argv) {
     int y = yFlag ? args::get(yFlag) : 0;
     int w = wFlag ? args::get(wFlag) : 0;
     int h = hFlag ? args::get(hFlag) : 25;
+    std::string filePath = fileFlag ? args::get(fileFlag) : "";
+    bool viewMode = viewFlag;
 
     YDocEditor editor;
-    if (!editor.init(x, y, w, h)) {
+    if (!editor.init(x, y, w, h, filePath, viewMode)) {
         return 1;
     }
 
