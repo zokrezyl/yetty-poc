@@ -104,6 +104,37 @@ if(openh264_ADDED)
             BUILD_BYPRODUCTS
                 ${OPENH264_INSTALL_DIR}/lib/${OPENH264_LIB_NAME}
         )
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+        # iOS cross-compilation
+        if(CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
+            set(OPENH264_ARCH "arm64")
+        elseif(CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
+            set(OPENH264_ARCH "x86_64")
+        endif()
+
+        # Determine if simulator or device
+        if(CMAKE_OSX_SYSROOT MATCHES "Simulator")
+            set(IOS_SDK_TYPE "iphonesimulator")
+        else()
+            set(IOS_SDK_TYPE "iphoneos")
+        endif()
+
+        ExternalProject_Add(openh264_ext
+            SOURCE_DIR ${openh264_SOURCE_DIR}
+            BUILD_IN_SOURCE TRUE
+            INSTALL_DIR ${OPENH264_INSTALL_DIR}
+
+            UPDATE_DISCONNECTED TRUE
+
+            CONFIGURE_COMMAND ""
+
+            BUILD_COMMAND sh -c "make MAKEFLAGS= -j${NPROC} libraries BUILDTYPE=Release ENABLE_SHARED=No OS=ios ARCH=${OPENH264_ARCH} SDK_MIN=${CMAKE_OSX_DEPLOYMENT_TARGET} 'CC=xcrun -sdk ${IOS_SDK_TYPE} clang' 'CXX=xcrun -sdk ${IOS_SDK_TYPE} clang++' 'AR=xcrun -sdk ${IOS_SDK_TYPE} ar' PREFIX=${OPENH264_INSTALL_DIR}"
+
+            INSTALL_COMMAND sh -c "make MAKEFLAGS= install-static BUILDTYPE=Release ENABLE_SHARED=No OS=ios ARCH=${OPENH264_ARCH} SDK_MIN=${CMAKE_OSX_DEPLOYMENT_TARGET} PREFIX=${OPENH264_INSTALL_DIR}"
+
+            BUILD_BYPRODUCTS
+                ${OPENH264_INSTALL_DIR}/lib/${OPENH264_LIB_NAME}
+        )
     else()
         # Unix/Linux/macOS: Use make
         ExternalProject_Add(openh264_ext

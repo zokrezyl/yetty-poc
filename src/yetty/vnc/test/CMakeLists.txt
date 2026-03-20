@@ -22,24 +22,26 @@ target_include_directories(vnc-test-server PRIVATE
     ${FREETYPE_INCLUDE_DIR}
 )
 
-# VNC Test Client - Independent test client with input generation
-add_executable(vnc-test-client vnc-test-client.cpp)
+# VNC Test Client - Independent test client with input generation (requires GLFW)
+if(NOT YETTY_IOS)
+    add_executable(vnc-test-client vnc-test-client.cpp)
 
-target_link_libraries(vnc-test-client PRIVATE
-    yetty_vnc
-    yetty_base
-    ytrace::ytrace
-    args
-    webgpu
-    glfw
-    glfw3webgpu
-    uv_a
-)
+    target_link_libraries(vnc-test-client PRIVATE
+        yetty_vnc
+        yetty_base
+        ytrace::ytrace
+        args
+        webgpu
+        glfw
+        glfw3webgpu
+        uv_a
+    )
 
-target_include_directories(vnc-test-client PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/src
-)
+    target_include_directories(vnc-test-client PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_SOURCE_DIR}/src
+    )
+endif()
 
 # Compute shader unit test
 add_executable(test-compute-shader test-compute-shader.cpp)

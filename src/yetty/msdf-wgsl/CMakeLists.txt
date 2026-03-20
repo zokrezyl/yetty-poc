@@ -50,8 +50,8 @@ set(MSDF_WGSL_SHADER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shaders PARENT_SCOPE)
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/shaders/msdf_gen.wgsl
                ${CMAKE_CURRENT_BINARY_DIR}/shaders/msdf_gen.wgsl COPYONLY)
 
-# Desktop-only tools (not needed on Android which uses pre-built atlases)
-if(NOT YETTY_ANDROID)
+# Desktop-only tools (not needed on Android/iOS which use pre-built atlases)
+if(NOT YETTY_ANDROID AND NOT YETTY_IOS)
     # CDB generator
     add_subdirectory(gen-cdb)
 
