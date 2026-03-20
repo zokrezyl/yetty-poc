@@ -2,7 +2,8 @@
 
 #if defined(__EMSCRIPTEN__)
 
-#include <yetty/base/event-queue.h>
+#include <yetty/yetty.h>
+#include <yetty/platform/event-loop.h>
 #include <yetty/base/event.h>
 #include <yetty/result.hpp>
 #include <ytrace/ytrace.hpp>
@@ -54,13 +55,21 @@ public:
         return Ok();
     }
 
-    void run(RenderThreadFunc renderThreadFunc) override {
+    void run(int argc, char** argv) override {
         ydebug("WebInitManager: starting");
-
-        _renderFunc = std::move(renderThreadFunc);
         _running = true;
 
-        // Register input callbacks - push events to EventQueue
+        // Create Yetty (single-threaded on webasm) - this creates EventLoop
+        auto result = Yetty::create(argc, argv);
+        if (!result) {
+            yerror("Failed to create Yetty: {}", error_msg(result));
+            return;
+        }
+        _yettyInstance = *result;
+        ydebug("Yetty created");
+
+        // Register input callbacks BEFORE run() - yettyInstance->run() never returns on webasm
+        // WebASM is single-threaded, dispatch directly to EventLoop (no EventQueue needed)
         emscripten_set_keydown_callback("#canvas", nullptr, true, keyCallback);
         emscripten_set_keyup_callback("#canvas", nullptr, true, keyCallback);
         emscripten_set_mousedown_callback("#canvas", nullptr, true, mouseCallback);
@@ -70,26 +79,23 @@ public:
         emscripten_set_resize_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, true, resizeCallback);
         ydebug("WebInitManager: input callbacks registered");
 
-        // WebASM is single-threaded - call render func directly
-        // It will set up requestAnimationFrame internally
-        if (_renderFunc) {
-            _renderFunc();
+        // Run yetty - sets up RAF render loop (NEVER RETURNS on webasm)
+        ydebug("WebInitManager: starting yetty->run() (will not return)");
+        auto runResult = _yettyInstance->run();
+        if (!runResult) {
+            yerror("Yetty run failed: {}", error_msg(runResult));
         }
-
-        // Note: On web, run() returns immediately
-        // The browser's event loop drives everything via RAF
-        ydebug("WebInitManager: run() returning (browser takes over)");
     }
 
 private:
     static EM_BOOL keyCallback(int eventType, const EmscriptenKeyboardEvent* e, void*) {
         ydebug("WebInitManager::keyCallback: eventType={} keyCode={} key={}", eventType, e->keyCode, e->key);
-        auto queueResult = base::EventQueue::instance();
-        if (!queueResult) {
-            ydebug("WebInitManager::keyCallback: EventQueue not available");
+        auto loopResult = base::EventLoop::instance();
+        if (!loopResult) {
+            ydebug("WebInitManager::keyCallback: EventLoop not available");
             return EM_TRUE;
         }
-        auto queue = *queueResult;
+        auto loop = *loopResult;
 
         int mods = 0;
         if (e->ctrlKey) mods |= 2;   // GLFW_MOD_CONTROL
@@ -100,65 +106,74 @@ private:
         bool pressed = (eventType == EMSCRIPTEN_EVENT_KEYDOWN);
 
         if (pressed) {
-            // For Ctrl/Alt + printable char, send charInputWithMods ONLY
-            if ((mods & (2 | 4)) && e->key[0] && !e->key[1]) {
-                queue->push(base::Event::charInputWithMods(static_cast<uint32_t>(e->key[0]), mods));
-                return EM_TRUE;
-            }
-            queue->push(base::Event::keyDown(glfwKey, mods, 0));
-            // Normal character input (no Ctrl/Alt)
-            if (e->key[0] && !e->key[1] && !(mods & (2 | 4))) {
-                queue->push(base::Event::charInputWithMods(static_cast<uint32_t>(e->key[0]), mods));
+            // Ctrl/Alt + character: handle specially in keyDown handler (matches desktop)
+            ydebug("WebInitManager: dispatching keyDown glfwKey={} mods={}", glfwKey, mods);
+            auto keyResult = loop->dispatch(base::Event::keyDown(glfwKey, mods, 0));
+            ydebug("WebInitManager: keyDown dispatch result={}", keyResult.has_value() ? (*keyResult ? "handled" : "not handled") : "error");
+
+            // Char input for printable keys (single character, no Ctrl/Alt)
+            // Matches main branch: Platform callback fires charCallback separately
+            if (e->key[0] && !e->key[1] && !(e->ctrlKey) && !(e->altKey)) {
+                uint32_t ch = static_cast<uint32_t>(e->key[0]);
+                ydebug("WebInitManager: dispatching charInput ch={} ('{}')", ch, static_cast<char>(ch));
+                auto charResult = loop->dispatch(base::Event::charInput(ch));
+                ydebug("WebInitManager: charInput dispatch result={}", charResult.has_value() ? (*charResult ? "handled" : "not handled") : "error");
             }
         } else {
-            queue->push(base::Event::keyUp(glfwKey, mods, 0));
+            loop->dispatch(base::Event::keyUp(glfwKey, mods, 0));
         }
         return EM_TRUE;
     }
 
     static EM_BOOL mouseCallback(int eventType, const EmscriptenMouseEvent* e, void*) {
-        auto queueResult = base::EventQueue::instance();
-        if (!queueResult) return EM_TRUE;
-        auto queue = *queueResult;
+        auto loopResult = base::EventLoop::instance();
+        if (!loopResult) return EM_TRUE;
+        auto loop = *loopResult;
 
         int button = e->button;  // 0=left, 1=middle, 2=right
         float x = static_cast<float>(e->targetX);
         float y = static_cast<float>(e->targetY);
 
         if (eventType == EMSCRIPTEN_EVENT_MOUSEDOWN) {
-            queue->push(base::Event::mouseDown(x, y, button, 0));
+            loop->dispatch(base::Event::mouseDown(x, y, button, 0));
         } else {
-            queue->push(base::Event::mouseUp(x, y, button, 0));
+            loop->dispatch(base::Event::mouseUp(x, y, button, 0));
         }
         return EM_TRUE;
     }
 
     static EM_BOOL mouseMoveCallback(int, const EmscriptenMouseEvent* e, void*) {
-        auto queueResult = base::EventQueue::instance();
-        if (!queueResult) return EM_TRUE;
-        auto queue = *queueResult;
+        auto loopResult = base::EventLoop::instance();
+        if (!loopResult) return EM_TRUE;
+        auto loop = *loopResult;
 
         float x = static_cast<float>(e->targetX);
         float y = static_cast<float>(e->targetY);
-        queue->push(base::Event::mouseMove(x, y, 0));
+        loop->dispatch(base::Event::mouseMove(x, y, 0));
         return EM_TRUE;
     }
 
     static EM_BOOL wheelCallback(int, const EmscriptenWheelEvent* e, void*) {
-        auto queueResult = base::EventQueue::instance();
-        if (!queueResult) return EM_TRUE;
-        auto queue = *queueResult;
+        auto loopResult = base::EventLoop::instance();
+        if (!loopResult) return EM_TRUE;
+        auto loop = *loopResult;
 
         float x = static_cast<float>(e->mouse.targetX);
         float y = static_cast<float>(e->mouse.targetY);
-        float dx = static_cast<float>(-e->deltaX * 0.01);
-        float dy = static_cast<float>(-e->deltaY * 0.01);
+        // Normalize wheel delta to match GLFW's ~1.0 per scroll notch
+        // Browser deltaMode: 0=pixel (~100/notch), 1=line (~3/notch), 2=page
+        float dx = static_cast<float>(-e->deltaX);
+        float dy = static_cast<float>(-e->deltaY);
+        switch (e->deltaMode) {
+            case 0: dx /= 100.0f; dy /= 100.0f; break;  // Pixel
+            case 1: dx /= 3.0f; dy /= 3.0f; break;      // Line
+        }
 
         int mods = 0;
         if (e->mouse.ctrlKey) mods |= 2;
         if (e->mouse.shiftKey) mods |= 1;
 
-        queue->push(base::Event::scrollEvent(x, y, dx, dy, mods));
+        loop->dispatch(base::Event::scrollEvent(x, y, dx, dy, mods));
         return EM_TRUE;
     }
 
@@ -166,11 +181,11 @@ private:
         // Get actual canvas container size (not window inner size)
         int width = EM_ASM_INT({
             var container = document.getElementById('canvas-container');
-            return container ? Math.floor(container.getBoundingClientRect().width) : 0;
+            return container ? Math.floor(container.getBoundingClientRect().width) : window.innerWidth;
         });
         int height = EM_ASM_INT({
             var container = document.getElementById('canvas-container');
-            return container ? Math.floor(container.getBoundingClientRect().height) : 0;
+            return container ? Math.floor(container.getBoundingClientRect().height) : window.innerHeight;
         });
 
         if (width <= 0 || height <= 0) return EM_TRUE;
@@ -178,15 +193,15 @@ private:
         // Update canvas element size
         emscripten_set_canvas_element_size("#canvas", width, height);
 
-        // Push resize event
-        auto queueResult = base::EventQueue::instance();
-        if (queueResult) {
-            (*queueResult)->push(base::Event::resizeEvent(width, height));
+        // Dispatch resize event directly to EventLoop
+        auto loopResult = base::EventLoop::instance();
+        if (loopResult) {
+            (*loopResult)->dispatch(base::Event::resizeEvent(width, height));
         }
         return EM_TRUE;
     }
 
-    RenderThreadFunc _renderFunc;
+    Yetty::Ptr _yettyInstance;
     bool _running = false;
 };
 

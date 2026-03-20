@@ -13,10 +13,6 @@ public:
     Result<void> init() {
         // Get initial canvas size
         emscripten_get_canvas_element_size("#canvas", &_width, &_height);
-
-        // Register resize callback
-        emscripten_set_resize_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, this, true, resizeCallback);
-
         return Ok();
     }
 
@@ -79,32 +75,15 @@ public:
         return wgpuInstanceCreateSurface(instance, &surfaceDesc);
     }
 
+    // Called by InitManager resize callback to update dimensions
+    void updateSize(int width, int height) {
+        _width = width;
+        _height = height;
+    }
+
 private:
     int _width = 800;
     int _height = 600;
-
-    static EM_BOOL resizeCallback(int eventType, const EmscriptenUiEvent* e, void* userData) {
-        (void)eventType; (void)e;
-        auto* self = static_cast<WebSurfaceManager*>(userData);
-
-        // Update canvas size to match container
-        int containerW = EM_ASM_INT({
-            var c = document.getElementById('canvas-container');
-            return c ? Math.floor(c.getBoundingClientRect().width) : window.innerWidth;
-        });
-        int containerH = EM_ASM_INT({
-            var c = document.getElementById('canvas-container');
-            return c ? Math.floor(c.getBoundingClientRect().height) : window.innerHeight;
-        });
-
-        if (containerW > 0 && containerH > 0) {
-            self->_width = containerW;
-            self->_height = containerH;
-            emscripten_set_canvas_element_size("#canvas", containerW, containerH);
-        }
-
-        return EM_TRUE;
-    }
 };
 
 // Factory

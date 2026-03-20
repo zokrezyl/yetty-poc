@@ -2,6 +2,8 @@
 
 #if defined(__ANDROID__)
 
+#include <yetty/yetty.h>
+#include <yetty/platform/event-loop.h>
 #include "../shared/android-app-singleton.h"
 #include <yetty/base/event-queue.h>
 #include <yetty/base/event.h>
@@ -37,7 +39,8 @@ public:
         return Ok();
     }
 
-    void run(RenderThreadFunc renderThreadFunc) override {
+    void run(int argc, char** argv) override {
+        (void)argc; (void)argv;  // Android ignores argc/argv
         ydebug("AndroidInitManager::run - waiting for window");
 
         // Wait for window to be ready (blocking poll)
@@ -62,12 +65,39 @@ public:
         }
         ydebug("AndroidInitManager::run - window ready");
 
+        // Keep Yetty alive outside the thread
+        Yetty::Ptr yettyInstance;
+
         // Spawn render thread
         ydebug("AndroidInitManager::run - spawning render thread");
-        std::thread renderThread([this, renderThreadFunc]() {
+        std::thread renderThread([this, &yettyInstance]() {
             ydebug("Render thread started");
-            renderThreadFunc();
-            ydebug("Render thread finished, stopping main loop");
+
+            // Create Yetty (no argc/argv on Android)
+            int fakeArgc = 1;
+            const char* fakeArgv[] = {"yetty", nullptr};
+            auto result = Yetty::create(fakeArgc, const_cast<char**>(fakeArgv));
+            if (!result) {
+                yerror("Failed to create Yetty: {}", error_msg(result));
+                _running = false;
+                ALooper_wake(ALooper_forThread());
+                return;
+            }
+            yettyInstance = *result;
+            ydebug("Yetty created");
+
+            // Start event loop
+            auto loop = *base::EventLoop::instance();
+            loop->start();
+            ydebug("EventLoop returned");
+
+            // Shutdown
+            auto shutdownResult = yettyInstance->shutdown();
+            if (!shutdownResult) {
+                yerror("Yetty shutdown failed: {}", error_msg(shutdownResult));
+            }
+
+            ydebug("Render thread finished");
             _running = false;
             ALooper_wake(ALooper_forThread());
         });

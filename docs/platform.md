@@ -23,6 +23,7 @@ Yetty runs on desktop (Linux/macOS/Windows), Android, and WebAssembly. Each plat
 **WebASM:**
 - **Single thread**: Browser event loop drives everything via `requestAnimationFrame`
 - No render thread, no libuv - uses custom webasm EventLoop
+- Uses InitManager for input callbacks (same pattern as other platforms)
 
 ## EventLoop
 
@@ -49,12 +50,12 @@ The main thread's platform event loop (GLFW/ALooper) pumps raw input events into
 | WebASM | Setup RAF loop, returns immediately (browser takes over) |
 
 ```cpp
-// main.cpp (desktop/Android)
-auto init = InitManager::instance();
+// main.cpp (all platforms)
+auto init = InitManager::create();
 init->run([&]() {
-    // === RENDER THREAD ===
+    // === RENDER THREAD (or inline on WebASM) ===
     auto yetty = Yetty::create(argc, argv);
-    yetty->run();
+    EventLoop::instance()->start();
     yetty->shutdown();
 });
 ```
@@ -345,3 +346,42 @@ else()
     set(EVENT_LOOP_SRC platform/event-loop/libuv.cpp)
 endif()
 ```
+
+## Current State (2026-03-19)
+
+### Architecture
+
+**main.cpp is clean** - platform dispatch only. All Yetty lifecycle (create, run, shutdown) is handled inside `InitManager::run()`.
+
+```cpp
+// main.cpp pattern for ALL platforms:
+auto initResult = InitManager::create();  // or createForAndroid(app)
+if (!initResult) { /* error */ }
+auto initManager = *initResult;
+initManager->run(argc, argv);  // Everything happens inside
+```
+
+### InitManager Implementations
+
+| Platform | File | Threading | Yetty Lifecycle |
+|----------|------|-----------|-----------------|
+| Desktop (Linux/macOS/Windows) | `init-manager/glfw.cpp` | Render thread spawned | Create window, create Yetty, run, shutdown |
+| Android | `init-manager/android.cpp` | Render thread spawned | Wait for window, create Yetty, EventLoop::start, shutdown |
+| WebASM | `init-manager/webasm.cpp` | Single-threaded | Create Yetty, register input callbacks, run (never returns) |
+
+### WebASM Input Handling
+
+WebASM is single-threaded - no EventQueue needed. Input callbacks registered in `InitManager::run()` BEFORE `yettyInstance->run()` (which never returns due to RAF loop).
+
+```
+InitManager::run():
+1. Create Yetty (creates EventLoop singleton)
+2. Register emscripten input callbacks -> dispatch to EventLoop::instance()
+3. Call yettyInstance->run() (sets up RAF, never returns)
+```
+
+### File Changes from Main Branch
+
+- **Deleted**: `init-manager/linux.cpp`, `init-manager/macos.cpp`, `init-manager/windows.cpp`
+- **Added**: `init-manager/glfw.cpp` (shared by all GLFW desktop platforms)
+- **Modified**: All InitManager implementations now create/run/shutdown Yetty internally

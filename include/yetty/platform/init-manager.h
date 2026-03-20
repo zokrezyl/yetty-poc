@@ -26,16 +26,14 @@ namespace yetty {
 class InitManager : public base::Object, public base::ObjectFactory<InitManager> {
 public:
     using Ptr = std::shared_ptr<InitManager>;
-    using RenderThreadFunc = std::function<void()>;
 
     static Result<Ptr> createImpl();
 
     virtual ~InitManager() = default;
 
-    // Spawns render thread, blocks on main thread event loop
-    // renderThreadFunc is called on the render thread
-    // Returns when render thread signals shutdown
-    virtual void run(RenderThreadFunc renderThreadFunc) = 0;
+    // Runs the application - creates Yetty, starts event loop, shuts down
+    // argc/argv passed to Yetty::create() (ignored on Android)
+    virtual void run(int argc = 0, char** argv = nullptr) = 0;
 
 protected:
     InitManager() = default;

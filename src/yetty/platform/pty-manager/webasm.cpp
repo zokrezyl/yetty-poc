@@ -6,10 +6,6 @@
 
 namespace yetty {
 
-// Global registry for JS callbacks
-static std::unordered_map<uint32_t, std::weak_ptr<PtyReaderWebasm>> g_ptyInstances;
-static uint32_t g_nextPtyId = 1;
-
 class WebasmPtyManager : public PtyManager {
 public:
     Result<void> init() {
@@ -22,8 +18,9 @@ public:
             return Err<PtyReader::Ptr>("Failed to create PtyReaderWebasm", res);
         }
 
-        uint32_t ptyId = g_nextPtyId++;
-        g_ptyInstances[ptyId] = reader;
+        uint32_t ptyId = _nextPtyId++;
+        reader->setPtyId(ptyId);
+        _ptyInstances[ptyId] = reader;
 
         // Create iframe for JSLinux
         EM_ASM({
@@ -44,6 +41,18 @@ public:
 
         return Ok<PtyReader::Ptr>(reader);
     }
+
+    std::shared_ptr<PtyReaderWebasm> getPtyReader(uint32_t ptyId) {
+        auto it = _ptyInstances.find(ptyId);
+        if (it != _ptyInstances.end()) {
+            return it->second.lock();
+        }
+        return nullptr;
+    }
+
+private:
+    std::unordered_map<uint32_t, std::weak_ptr<PtyReaderWebasm>> _ptyInstances;
+    uint32_t _nextPtyId = 1;
 };
 
 Result<PtyManager::Ptr> PtyManager::createImpl() {
@@ -61,11 +70,13 @@ Result<PtyManager::Ptr> PtyManager::createImpl() {
 extern "C" {
 
 EMSCRIPTEN_KEEPALIVE void yetty_pty_push_data(uint32_t ptyId, const char* data, int len) {
-    auto it = yetty::g_ptyInstances.find(ptyId);
-    if (it != yetty::g_ptyInstances.end()) {
-        if (auto reader = it->second.lock()) {
-            reader->pushData(data, static_cast<size_t>(len));
-        }
+    auto mgrResult = yetty::PtyManager::instance();
+    if (!mgrResult) return;
+    auto mgr = std::dynamic_pointer_cast<yetty::WebasmPtyManager>(*mgrResult);
+    if (!mgr) return;
+    auto reader = mgr->getPtyReader(ptyId);
+    if (reader) {
+        reader->pushData(data, static_cast<size_t>(len));
     }
 }
 

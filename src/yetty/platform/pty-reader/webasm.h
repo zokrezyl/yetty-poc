@@ -14,6 +14,10 @@ public:
 
     Result<void> init(const PtyConfig& config);
 
+    // Set the ptyId for JS interop (called by PtyManager after creation)
+    void setPtyId(uint32_t ptyId) { _ptyId = ptyId; }
+    uint32_t getPtyId() const { return _ptyId; }
+
     // Called from JavaScript when VM produces output
     void pushData(const char* data, size_t len);
 
@@ -28,6 +32,7 @@ public:
 
 private:
     std::string _vmConfig;
+    uint32_t _ptyId = 0;
     uint32_t _cols = 80;
     uint32_t _rows = 24;
     bool _running = false;

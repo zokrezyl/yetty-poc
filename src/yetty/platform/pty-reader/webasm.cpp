@@ -1,6 +1,7 @@
 #include "webasm.h"
 
 #include <ytrace/ytrace.hpp>
+#include <emscripten/emscripten.h>
 #include <cstring>
 
 namespace yetty {
@@ -41,16 +42,47 @@ size_t PtyReaderWebasm::read(char* buf, size_t maxLen) {
 }
 
 void PtyReaderWebasm::write(const char* data, size_t len) {
-    if (!_running || len == 0) return;
-    // TODO: Send data to JSLinux VM via JavaScript
-    (void)data;
-    (void)len;
+    if (!_running || len == 0 || _ptyId == 0) return;
+
+    ydebug("PtyReaderWebasm::write: ptyId={} len={}", _ptyId, len);
+
+    // Send input to JSLinux iframe via postMessage
+    EM_ASM({
+        var ptyId = $0;
+        var data = UTF8ToString($1, $2);
+        var iframe = document.getElementById('jslinux-pty-' + ptyId);
+        if (iframe && iframe.contentWindow) {
+            iframe.contentWindow.postMessage({
+                type: 'term-input',
+                ptyId: ptyId,
+                data: data
+            }, '*');
+        }
+    }, _ptyId, data, len);
 }
 
 void PtyReaderWebasm::resize(uint32_t cols, uint32_t rows) {
     _cols = cols;
     _rows = rows;
-    // TODO: Notify VM of resize
+    if (_ptyId == 0) return;
+
+    ydebug("PtyReaderWebasm::resize: ptyId={} {}x{}", _ptyId, cols, rows);
+
+    // Send resize to JSLinux iframe via postMessage
+    EM_ASM({
+        var ptyId = $0;
+        var cols = $1;
+        var rows = $2;
+        var iframe = document.getElementById('jslinux-pty-' + ptyId);
+        if (iframe && iframe.contentWindow) {
+            iframe.contentWindow.postMessage({
+                type: 'term-resize',
+                ptyId: ptyId,
+                cols: cols,
+                rows: rows
+            }, '*');
+        }
+    }, _ptyId, cols, rows);
 }
 
 bool PtyReaderWebasm::isRunning() const {
@@ -58,8 +90,25 @@ bool PtyReaderWebasm::isRunning() const {
 }
 
 void PtyReaderWebasm::stop() {
+    if (!_running) return;
     _running = false;
-    // TODO: Stop VM
+
+    ydebug("PtyReaderWebasm::stop: ptyId={}", _ptyId);
+
+    if (_ptyId != 0) {
+        // Remove JSLinux iframe
+        EM_ASM({
+            var ptyId = $0;
+            var iframe = document.getElementById('jslinux-pty-' + ptyId);
+            if (iframe) {
+                iframe.remove();
+            }
+        }, _ptyId);
+    }
+
+    if (_exitCallback) {
+        _exitCallback(0);
+    }
 }
 
 void PtyReaderWebasm::setDataAvailableCallback(DataAvailableCallback cb) {
