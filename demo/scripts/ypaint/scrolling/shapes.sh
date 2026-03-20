@@ -84,6 +84,10 @@ body:
 EOF
 )
 
+echo "This is a simple demo that checks the displays"
+echo "few simple shapes"
+echo "into the ypaint grid"
+
 PAYLOAD=$(echo "$YAML_PAYLOAD" | base64 -w0)
 printf '\033]666674;--yaml;%s\033\\' "$PAYLOAD"
 echo "YPaint scrolling layer: shapes demo"

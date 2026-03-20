@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstring>
 #include <deque>
+#include <ytrace/ytrace.hpp>
 
 namespace yetty::ypaint {
 
@@ -113,11 +114,11 @@ public:
 
   void addPrimitive(std::vector<float> primData, float aabbMinX, float aabbMinY,
                     float aabbMaxX, float aabbMaxY) override {
-    // Determine grid offset based on mode
+    // Determine grid offset based on mode (stored in primitive for shader)
     uint16_t gridOffsetCol = _scrollingMode ? _cursorCol : 0;
     uint16_t gridOffsetRow = _scrollingMode ? _cursorRow : 0;
 
-    // Compute which grid lines this primitive spans
+    // Compute which grid lines this primitive spans (scene-based, NOT cursor-offset)
     float baseY = _sceneMinY;
     if (baseY > 1e9f)
       baseY = 0.0f;
@@ -127,10 +128,9 @@ public:
     int32_t localMaxLine =
         static_cast<int32_t>(std::floor((aabbMaxY - baseY) / _cellSizeY));
 
-    int32_t primMinLineSigned =
-        static_cast<int32_t>(gridOffsetRow) + localMinLine;
-    int32_t primMaxLineSigned =
-        static_cast<int32_t>(gridOffsetRow) + localMaxLine;
+    // Grid placement is purely scene-based - gridOffset is only for shader positioning
+    int32_t primMinLineSigned = localMinLine;
+    int32_t primMaxLineSigned = localMaxLine;
 
     // Clamp to valid range (only clamp negative values)
     primMinLineSigned = std::max(primMinLineSigned, 0);
@@ -452,6 +452,63 @@ public:
       count += static_cast<uint32_t>(line.prims.size());
     }
     return count;
+  }
+
+  //===========================================================================
+  // Debug
+  //===========================================================================
+
+  void dumpGrid() const override {
+    ydebug("=== Canvas Grid Dump ===");
+    ydebug("  scrollingMode={}, cursor=({}, {})", _scrollingMode, _cursorCol,
+           _cursorRow);
+    ydebug("  sceneBounds=({}, {}) -> ({}, {})", _sceneMinX, _sceneMinY,
+           _sceneMaxX, _sceneMaxY);
+    ydebug("  cellSize=({}, {}), gridDim={}x{}", _cellSizeX, _cellSizeY,
+           _gridWidth, _gridHeight);
+    ydebug("  lineCount={}, dirty={}", _lines.size(), _dirty);
+
+    // Outer loop: rows
+    for (size_t rowIdx = 0; rowIdx < _lines.size(); rowIdx++) {
+      const auto &line = _lines[rowIdx];
+
+      // Show primitives stored in this row
+      ydebug("  Row {}: {} prims stored, {} cells", rowIdx, line.prims.size(),
+             line.cells.size());
+
+      for (size_t primIdx = 0; primIdx < line.prims.size(); primIdx++) {
+        const auto &prim = line.prims[primIdx];
+        if (prim.size() >= 2) {
+          uint32_t gridOffset;
+          std::memcpy(&gridOffset, &prim[0], sizeof(uint32_t));
+          uint16_t col = gridOffset & 0xFFFF;
+          int16_t row = static_cast<int16_t>((gridOffset >> 16) & 0xFFFF);
+          uint32_t primType;
+          std::memcpy(&primType, &prim[1], sizeof(uint32_t));
+          ydebug("    prim[{}]: gridOffset=({}, {}), type={}, words={}",
+                 primIdx, col, row, primType, prim.size());
+        }
+      }
+
+      // Inner loop: cells with references
+      for (size_t cellIdx = 0; cellIdx < line.cells.size(); cellIdx++) {
+        const auto &cell = line.cells[cellIdx];
+        if (cell.refs.empty())
+          continue;
+
+        ydebug("    cell[{}]: {} refs", cellIdx, cell.refs.size());
+
+        // Third loop: references
+        for (size_t refIdx = 0; refIdx < cell.refs.size(); refIdx++) {
+          const auto &ref = cell.refs[refIdx];
+          uint32_t baseLine = static_cast<uint32_t>(rowIdx) + ref.linesAhead;
+          ydebug("      ref[{}]: linesAhead={}, primIndex={} -> baseLine={}",
+                 refIdx, ref.linesAhead, ref.primIndex, baseLine);
+        }
+      }
+    }
+
+    ydebug("=== End Canvas Grid Dump ===");
   }
 
 private:

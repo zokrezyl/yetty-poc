@@ -180,6 +180,13 @@ public:
   /// Get total primitive count across all lines
   virtual uint32_t primitiveCount() const = 0;
 
+  //===========================================================================
+  // Debug
+  //===========================================================================
+
+  /// Dump grid structure for debugging
+  virtual void dumpGrid() const = 0;
+
 protected:
   Canvas() = default;
 };

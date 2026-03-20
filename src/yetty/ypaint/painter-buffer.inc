@@ -193,6 +193,11 @@ addYpaintBuffer(std::shared_ptr<YPaintBuffer> buffer) override {
          _glyphs.size() - baseGlyphIdx, _sceneMinX, _sceneMinY,
          _sceneMaxX, _sceneMaxY);
 
+  // Debug: dump grid structure
+  if (_canvas) {
+    _canvas->dumpGrid();
+  }
+
   return Ok(contentLines);
 }
 
