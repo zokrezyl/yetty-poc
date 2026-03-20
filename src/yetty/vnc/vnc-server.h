@@ -4,7 +4,9 @@
 #include <yetty/result.hpp>
 #include <yetty/base/event-listener.h>
 #include <yetty/base/event-queue.h>
+#if YETTY_HAS_YVIDEO
 #include <yetty/yvideo/yvideo-encoder.h>
+#endif
 #include <webgpu/webgpu.h>
 #include <string>
 #include <vector>
@@ -43,7 +45,11 @@ public:
     // H.264 encoding (alternative to JPEG)
     void setUseH264(bool enable);
     bool getUseH264() const { return _useH264; }
+#if YETTY_HAS_YVIDEO
     void forceH264IDR() { if (_h264Encoder) _h264Encoder->forceIDR(); }
+#else
+    void forceH264IDR() {}
+#endif
 
     // Check if server is ready to accept more frames (previous GPU work done)
     // Call this BEFORE creating GPU command buffers to avoid FD exhaustion
@@ -179,10 +185,12 @@ private:
 
     // H.264 encoding
     bool _useH264 = false;       // Use H.264 instead of JPEG
+#if YETTY_HAS_YVIDEO
     yvideo::Encoder::Ptr _h264Encoder;
     std::vector<uint8_t> _yuvBuffer;  // YUV420 buffer for H.264 encoding
     uint32_t _yuvYStride = 0;
     uint32_t _yuvUVStride = 0;
+#endif
 
     // BGRA->YUV420 GPU conversion resources
     WGPUComputePipeline _bgraToYuvPipeline = nullptr;

@@ -8,6 +8,8 @@ target_link_libraries(vnc-recorder PRIVATE
     ytrace::ytrace
     args
     minimp4
+    miniaudio
+    fdk-aac
 )
 
 target_include_directories(vnc-recorder PRIVATE
