@@ -1,12 +1,12 @@
 # Verify build assets are present
-# Usage: cmake -P verify-assets.cmake -DBUILD_DIR=<path> -DTARGET_TYPE=<webasm|desktop|android>
+# Usage: cmake -P verify-assets.cmake -DBUILD_DIR=<path> -DTARGET_TYPE=<webasm|desktop|android|ios>
 
 if(NOT BUILD_DIR)
     message(FATAL_ERROR "BUILD_DIR not set")
 endif()
 
 if(NOT TARGET_TYPE)
-    message(FATAL_ERROR "TARGET_TYPE not set (webasm, desktop, or android)")
+    message(FATAL_ERROR "TARGET_TYPE not set (webasm, desktop, android, or ios)")
 endif()
 
 set(MISSING_FILES "")
@@ -35,42 +35,49 @@ message(STATUS "Build directory: ${BUILD_DIR}")
 
 #-----------------------------------------------------------------------------
 # Common assets (all platforms)
+# iOS uses ios-assets/ prefix, others use assets/
 #-----------------------------------------------------------------------------
 message(STATUS "Checking common assets...")
 
+if(TARGET_TYPE STREQUAL "ios")
+    set(ASSETS_PREFIX "ios-assets")
+else()
+    set(ASSETS_PREFIX "assets")
+endif()
+
 # Font files
-check_file("assets/DejaVuSansMNerdFontMono-Regular.ttf" "Regular font")
-check_file("assets/DejaVuSansMNerdFontMono-Bold.ttf" "Bold font")
-check_file("assets/DejaVuSansMNerdFontMono-Oblique.ttf" "Oblique font")
-check_file("assets/DejaVuSansMNerdFontMono-BoldOblique.ttf" "Bold Oblique font")
+check_file("${ASSETS_PREFIX}/DejaVuSansMNerdFontMono-Regular.ttf" "Regular font")
+check_file("${ASSETS_PREFIX}/DejaVuSansMNerdFontMono-Bold.ttf" "Bold font")
+check_file("${ASSETS_PREFIX}/DejaVuSansMNerdFontMono-Oblique.ttf" "Oblique font")
+check_file("${ASSETS_PREFIX}/DejaVuSansMNerdFontMono-BoldOblique.ttf" "Bold Oblique font")
 
 # Font CDB files
-check_dir("assets/msdf-fonts" "Font CDB directory")
-check_file("assets/msdf-fonts/DejaVuSansMNerdFontMono-Regular.cdb" "Regular font CDB")
-check_file("assets/msdf-fonts/DejaVuSansMNerdFontMono-Bold.cdb" "Bold font CDB")
-check_file("assets/msdf-fonts/DejaVuSansMNerdFontMono-Oblique.cdb" "Oblique font CDB")
-check_file("assets/msdf-fonts/DejaVuSansMNerdFontMono-BoldOblique.cdb" "Bold Oblique font CDB")
+check_dir("${ASSETS_PREFIX}/msdf-fonts" "Font CDB directory")
+check_file("${ASSETS_PREFIX}/msdf-fonts/DejaVuSansMNerdFontMono-Regular.cdb" "Regular font CDB")
+check_file("${ASSETS_PREFIX}/msdf-fonts/DejaVuSansMNerdFontMono-Bold.cdb" "Bold font CDB")
+check_file("${ASSETS_PREFIX}/msdf-fonts/DejaVuSansMNerdFontMono-Oblique.cdb" "Oblique font CDB")
+check_file("${ASSETS_PREFIX}/msdf-fonts/DejaVuSansMNerdFontMono-BoldOblique.cdb" "Bold Oblique font CDB")
 
 # Shader directory structure
-check_dir("assets/shaders" "Shaders directory")
-check_dir("assets/shaders/lib" "Shader lib directory")
-check_dir("assets/shaders/cards" "Shader cards directory")
-check_dir("assets/shaders/effects" "Shader effects directory")
-check_dir("assets/shaders/pre-effects" "Shader pre-effects directory")
-check_dir("assets/shaders/post-effects" "Shader post-effects directory")
+check_dir("${ASSETS_PREFIX}/shaders" "Shaders directory")
+check_dir("${ASSETS_PREFIX}/shaders/lib" "Shader lib directory")
+check_dir("${ASSETS_PREFIX}/shaders/cards" "Shader cards directory")
+check_dir("${ASSETS_PREFIX}/shaders/effects" "Shader effects directory")
+check_dir("${ASSETS_PREFIX}/shaders/pre-effects" "Shader pre-effects directory")
+check_dir("${ASSETS_PREFIX}/shaders/post-effects" "Shader post-effects directory")
 
 # Core shaders
-check_file("assets/shaders/gpu-screen.wgsl" "Main GPU screen shader")
-check_file("assets/shaders/cursor.wgsl" "Cursor shader")
-check_file("assets/shaders/msdf_gen.wgsl" "MSDF generation shader")
-check_file("assets/shaders/scale-image.wgsl" "Image scaling shader")
+check_file("${ASSETS_PREFIX}/shaders/gpu-screen.wgsl" "Main GPU screen shader")
+check_file("${ASSETS_PREFIX}/shaders/cursor.wgsl" "Cursor shader")
+check_file("${ASSETS_PREFIX}/shaders/msdf_gen.wgsl" "MSDF generation shader")
+check_file("${ASSETS_PREFIX}/shaders/scale-image.wgsl" "Image scaling shader")
 
 # Card shaders
-check_file("assets/shaders/cards/0x0000-texture.wgsl" "Texture card shader")
-check_file("assets/shaders/cards/0x0001-plot.wgsl" "Plot card shader")
-check_file("assets/shaders/cards/0x0003-ydraw.wgsl" "Ydraw card shader")
-check_file("assets/shaders/cards/0x0004-ypaint.wgsl" "Kdraw card shader")
-check_file("assets/shaders/cards/0x0006-ytext.wgsl" "Ytext card shader")
+check_file("${ASSETS_PREFIX}/shaders/cards/0x0000-texture.wgsl" "Texture card shader")
+check_file("${ASSETS_PREFIX}/shaders/cards/0x0001-plot.wgsl" "Plot card shader")
+check_file("${ASSETS_PREFIX}/shaders/cards/0x0003-ydraw.wgsl" "Ydraw card shader")
+check_file("${ASSETS_PREFIX}/shaders/cards/0x0004-ypaint.wgsl" "Kdraw card shader")
+check_file("${ASSETS_PREFIX}/shaders/cards/0x0006-ytext.wgsl" "Ytext card shader")
 
 #-----------------------------------------------------------------------------
 # WebAssembly specific
@@ -166,6 +173,21 @@ if(TARGET_TYPE STREQUAL "android")
     else()
         message(WARNING "No APK found in ${BUILD_DIR}/app/outputs/apk/")
     endif()
+endif()
+
+#-----------------------------------------------------------------------------
+# iOS specific
+#-----------------------------------------------------------------------------
+if(TARGET_TYPE STREQUAL "ios")
+    message(STATUS "Checking iOS assets...")
+
+    # App bundle
+    check_dir("yetty.app" "Yetty app bundle")
+
+    # iOS assets directory
+    check_dir("ios-assets" "iOS assets directory")
+    check_dir("ios-assets/shaders" "iOS shaders directory")
+    check_dir("ios-assets/msdf-fonts" "iOS font CDB directory")
 endif()
 
 #-----------------------------------------------------------------------------

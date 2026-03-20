@@ -1,6 +1,6 @@
 #include <yetty/platform/fs-path-manager.h>
 
-#if !defined(__ANDROID__) && !defined(__EMSCRIPTEN__) && !defined(_WIN32)
+#if !defined(__ANDROID__) && !defined(__EMSCRIPTEN__) && !defined(_WIN32) && !YETTY_IOS
 
 #include <yetty/result.hpp>
 #include <cstdlib>

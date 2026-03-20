@@ -39,6 +39,14 @@ BUILD_DIR_WINDOWS_YTRACE_DEBUG := build-windows-ytrace-debug
 BUILD_DIR_WINDOWS_YTRACE_RELEASE := build-windows-ytrace-release
 BUILD_DIR_WINDOWS_YINFO_RELEASE := build-windows-yinfo-release
 
+# iOS (arm64 for device)
+BUILD_DIR_IOS_YTRACE_DEBUG := build-ios-ytrace-debug
+BUILD_DIR_IOS_YTRACE_RELEASE := build-ios-ytrace-release
+
+# iOS x86_64 (for simulator)
+BUILD_DIR_IOS_X86_64_YTRACE_DEBUG := build-ios_x86_64-ytrace-debug
+BUILD_DIR_IOS_X86_64_YTRACE_RELEASE := build-ios_x86_64-ytrace-release
+
 # Parallel jobs (override with: make build-... PARALLEL_JOBS=30)
 PARALLEL_JOBS ?=
 CMAKE_PARALLEL := $(if $(PARALLEL_JOBS),--parallel $(PARALLEL_JOBS),--parallel)
@@ -373,6 +381,54 @@ run-windows-ytrace-release: build-windows-ytrace-release ## Run Windows ytrace r
 	./$(BUILD_DIR_WINDOWS_YTRACE_RELEASE)/yetty.exe
 
 #=============================================================================
+# iOS (arm64 device)
+#=============================================================================
+
+# iOS CMake toolchain (requires Xcode)
+CMAKE_IOS_TOOLCHAIN := -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0
+CMAKE_IOS_SIMULATOR_TOOLCHAIN := -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=x86_64 -DCMAKE_OSX_SYSROOT=iphonesimulator -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0
+
+.PHONY: config-ios-ytrace-debug
+config-ios-ytrace-debug: ## Configure iOS ytrace debug build (device)
+	$(CMAKE) -B $(BUILD_DIR_IOS_YTRACE_DEBUG) $(CMAKE_GENERATOR) $(CMAKE_DEBUG) $(CMAKE_LOGLEVEL_YTRACE) $(CMAKE_IOS_TOOLCHAIN) -DYETTY_IOS=ON
+
+.PHONY: config-ios-ytrace-release
+config-ios-ytrace-release: ## Configure iOS ytrace release build (device)
+	$(CMAKE) -B $(BUILD_DIR_IOS_YTRACE_RELEASE) $(CMAKE_GENERATOR) $(CMAKE_RELEASE) $(CMAKE_LOGLEVEL_YTRACE) $(CMAKE_IOS_TOOLCHAIN) -DYETTY_IOS=ON
+
+.PHONY: build-ios-ytrace-debug
+build-ios-ytrace-debug: ## Build iOS ytrace debug (device)
+	@if [ ! -f "$(BUILD_DIR_IOS_YTRACE_DEBUG)/build.ninja" ]; then $(MAKE) config-ios-ytrace-debug; fi
+	$(CMAKE) --build $(BUILD_DIR_IOS_YTRACE_DEBUG) $(CMAKE_PARALLEL)
+
+.PHONY: build-ios-ytrace-release
+build-ios-ytrace-release: ## Build iOS ytrace release (device)
+	@if [ ! -f "$(BUILD_DIR_IOS_YTRACE_RELEASE)/build.ninja" ]; then $(MAKE) config-ios-ytrace-release; fi
+	$(CMAKE) --build $(BUILD_DIR_IOS_YTRACE_RELEASE) $(CMAKE_PARALLEL)
+
+#=============================================================================
+# iOS x86_64 (simulator)
+#=============================================================================
+
+.PHONY: config-ios_x86_64-ytrace-debug
+config-ios_x86_64-ytrace-debug: ## Configure iOS x86_64 ytrace debug build (simulator)
+	$(CMAKE) -B $(BUILD_DIR_IOS_X86_64_YTRACE_DEBUG) $(CMAKE_GENERATOR) $(CMAKE_DEBUG) $(CMAKE_LOGLEVEL_YTRACE) $(CMAKE_IOS_SIMULATOR_TOOLCHAIN) -DYETTY_IOS=ON
+
+.PHONY: config-ios_x86_64-ytrace-release
+config-ios_x86_64-ytrace-release: ## Configure iOS x86_64 ytrace release build (simulator)
+	$(CMAKE) -B $(BUILD_DIR_IOS_X86_64_YTRACE_RELEASE) $(CMAKE_GENERATOR) $(CMAKE_RELEASE) $(CMAKE_LOGLEVEL_YTRACE) $(CMAKE_IOS_SIMULATOR_TOOLCHAIN) -DYETTY_IOS=ON
+
+.PHONY: build-ios_x86_64-ytrace-debug
+build-ios_x86_64-ytrace-debug: ## Build iOS x86_64 ytrace debug (simulator)
+	@if [ ! -f "$(BUILD_DIR_IOS_X86_64_YTRACE_DEBUG)/build.ninja" ]; then $(MAKE) config-ios_x86_64-ytrace-debug; fi
+	$(CMAKE) --build $(BUILD_DIR_IOS_X86_64_YTRACE_DEBUG) $(CMAKE_PARALLEL)
+
+.PHONY: build-ios_x86_64-ytrace-release
+build-ios_x86_64-ytrace-release: ## Build iOS x86_64 ytrace release (simulator)
+	@if [ ! -f "$(BUILD_DIR_IOS_X86_64_YTRACE_RELEASE)/build.ninja" ]; then $(MAKE) config-ios_x86_64-ytrace-release; fi
+	$(CMAKE) --build $(BUILD_DIR_IOS_X86_64_YTRACE_RELEASE) $(CMAKE_PARALLEL)
+
+#=============================================================================
 # Clean
 #=============================================================================
 
@@ -385,15 +441,20 @@ clean: ## Clean all build directories
 	       $(BUILD_DIR_ANDROID_YTRACE_DEBUG) $(BUILD_DIR_ANDROID_YTRACE_RELEASE) \
 	       $(BUILD_DIR_ANDROID_YINFO_RELEASE) \
 	       $(BUILD_DIR_ANDROID_X86_64_YTRACE_DEBUG) $(BUILD_DIR_ANDROID_X86_64_YTRACE_RELEASE) \
+	       $(BUILD_DIR_IOS_YTRACE_DEBUG) $(BUILD_DIR_IOS_YTRACE_RELEASE) \
+	       $(BUILD_DIR_IOS_X86_64_YTRACE_DEBUG) $(BUILD_DIR_IOS_X86_64_YTRACE_RELEASE) \
 	       $(BUILD_DIR_WEBASM_YTRACE_DEBUG) $(BUILD_DIR_WEBASM_YTRACE_RELEASE) \
 	       $(BUILD_DIR_WEBASM_YINFO_RELEASE) \
-	       build-desktop build-android build-webasm build-windows \
+	       build-desktop build-android build-webasm build-windows build-ios \
 	       build-desktop-debug build-desktop-release \
 	       build-android-debug build-android-release \
 	       build-android_x86_64-debug build-android_x86_64-release \
+	       build-ios-debug build-ios-release \
+	       build-ios_x86_64-debug build-ios_x86_64-release \
 	       build-desktop-dawn-* \
 	       build-android-dawn-* \
 	       build-android_x86_64-dawn-* \
+	       build-ios-dawn-* build-ios_x86_64-dawn-* \
 	       build-webasm-dawn-* build-windows-dawn-*
 
 #=============================================================================
@@ -439,4 +500,6 @@ help:
 	@echo "  build-desktop-{ytrace,yinfo}-{debug,release}/yetty"
 	@echo "  build-android-{ytrace,yinfo}-{debug,release}/app/outputs/apk/"
 	@echo "  build-android_x86_64-ytrace-{debug,release}/app/outputs/apk/  (emulator)"
+	@echo "  build-ios-ytrace-{debug,release}/yetty.app  (device)"
+	@echo "  build-ios_x86_64-ytrace-{debug,release}/yetty.app  (simulator)"
 	@echo "  build-webasm-{ytrace,yinfo}-{debug,release}/yetty.html"

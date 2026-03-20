@@ -1,4 +1,8 @@
 #include <yetty/platform/pty-manager.h>
+
+// Unix PTY: Linux, macOS desktop (not iOS - iOS uses telnet/SSH)
+#if !defined(__ANDROID__) && !defined(__EMSCRIPTEN__) && !defined(_WIN32) && !YETTY_IOS
+
 #include "../pty-reader/unix.h"
 
 namespace yetty {
@@ -28,3 +32,5 @@ Result<PtyManager::Ptr> PtyManager::createImpl() {
 }
 
 } // namespace yetty
+
+#endif // Unix PTY

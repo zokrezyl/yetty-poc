@@ -18,6 +18,7 @@ set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build shared libraries" FORCE)
 
 # Build options
 option(YETTY_ANDROID "Build for Android" OFF)
+option(YETTY_IOS "Build for iOS" OFF)
 set(WEBGPU_BACKEND "dawn" CACHE STRING "WebGPU backend (wgpu or dawn)")
 set(TOYBOX_PATH "" CACHE PATH "Path to Toybox binary")
 
@@ -27,6 +28,8 @@ include(${YETTY_ROOT}/build-tools/cmake/CPM.cmake)
 # Detect platform and include appropriate target
 if(YETTY_ANDROID)
     include(${YETTY_ROOT}/build-tools/cmake/targets/android.cmake)
+elseif(YETTY_IOS OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    include(${YETTY_ROOT}/build-tools/cmake/targets/ios.cmake)
 elseif(EMSCRIPTEN)
     include(${YETTY_ROOT}/build-tools/cmake/targets/webasm.cmake)
 elseif(WIN32)
