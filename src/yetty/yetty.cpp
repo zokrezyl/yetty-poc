@@ -11,7 +11,6 @@
 #include <yetty/incbin-assets.h>
 #include "ygui/ygui-overlay.h"
 #include <yetty/wgpu-compat.h>
-#include <yetty/platform/input-manager.h>
 #include <yetty/platform/surface-manager.h>
 #include <yetty/platform/fs-path-manager.h>
 #include <yetty/platform/clipboard-manager.h>
@@ -73,8 +72,6 @@ private:
     Result<void> initWebGPU() noexcept;
     Result<void> initSharedResources() noexcept;
     Result<void> initWorkspace() noexcept;
-    Result<void> initCallbacks() noexcept;
-
     Result<void> mainLoopIteration() noexcept;
     void handleResize(int width, int height) noexcept;
     void configureSurface(uint32_t width, uint32_t height) noexcept;
@@ -94,7 +91,6 @@ private:
     SurfaceManager::Ptr _surfaceManager;
     FsPathManager::Ptr _fsPathManager;
     ClipboardManager::Ptr _clipboardManager;
-    InputManager::Ptr _inputManager;
     uint32_t _initialWidth = 1024;
     uint32_t _initialHeight = 768;
 
@@ -477,8 +473,6 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     ydebug("RPC server started on {}", _rpcServer->socketPath());
 #endif
 
-    if (auto res = initCallbacks(); !res) return res;
-
     s_instance = this;
     _lastFpsTime = _surfaceManager->getTime();
 
@@ -704,7 +698,7 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
                 }
                 // Use current window dimensions
                 int w, h;
-                _platform->getFramebufferSize(w, h);
+                _surfaceManager->getFramebufferSize(w, h);
                 widthPx = static_cast<uint16_t>(w);
                 heightPx = static_cast<uint16_t>(h);
                 ydebug("VNC onResize: client requested current size -> {}x{}", widthPx, heightPx);
@@ -1074,12 +1068,6 @@ Result<void> YettyImpl::initWindow() noexcept {
     }
     _clipboardManager = *clipboardResult;
 
-    auto inputResult = InputManager::instance();
-    if (!inputResult) {
-        return Err<void>("Failed to get InputManager", inputResult);
-    }
-    _inputManager = *inputResult;
-
     // In headless mode, skip window setup
     if (_vncHeadless) {
         ydebug("VNC headless mode: managers initialized, skipping window setup");
@@ -1119,6 +1107,16 @@ Result<void> YettyImpl::initWebGPU() noexcept {
             ydebug("initWebGPU: Surface created");
         } else {
             ywarn("initWebGPU: Surface creation failed - will try without surface");
+        }
+
+        // Initialize content scale
+        int fbWidth, fbHeight, winWidth, winHeight;
+        _surfaceManager->getFramebufferSize(fbWidth, fbHeight);
+        _surfaceManager->getWindowSize(winWidth, winHeight);
+        if (winWidth > 0 && winHeight > 0) {
+            _contentScaleX = static_cast<float>(fbWidth) / static_cast<float>(winWidth);
+            _contentScaleY = static_cast<float>(fbHeight) / static_cast<float>(winHeight);
+            ydebug("Content scale: {}x{}", _contentScaleX, _contentScaleY);
         }
     } else {
         ydebug("initWebGPU: Headless mode - skipping surface creation");
@@ -1820,35 +1818,6 @@ Result<Workspace::Ptr> YettyImpl::createWorkspace() noexcept {
     return Ok(workspace);
 }
 
-Result<void> YettyImpl::initCallbacks() noexcept {
-    // Input callbacks are now handled by InputManager for all platforms.
-    // InputManager registers GLFW/Android/WebASM callbacks and dispatches
-    // events via EventLoop. YettyImpl::onEvent() handles them.
-    //
-    // This function is kept for any additional non-input callbacks that
-    // may be needed in the future.
-
-    if (_vncHeadless) {
-        ydebug("Headless mode: no callbacks needed");
-        return Ok();
-    }
-
-    ydebug("Callbacks initialized (input handled via EventQueue/EventLoop)");
-
-    // Initialize content scale at startup
-    int fbWidth, fbHeight, winWidth, winHeight;
-    _surfaceManager->getFramebufferSize(fbWidth, fbHeight);
-    _surfaceManager->getWindowSize(winWidth, winHeight);
-    if (winWidth > 0 && winHeight > 0) {
-        _contentScaleX = static_cast<float>(fbWidth) / static_cast<float>(winWidth);
-        _contentScaleY = static_cast<float>(fbHeight) / static_cast<float>(winHeight);
-        ydebug("Initial content scale: {}x{} (fb {}x{} / win {}x{})",
-              _contentScaleX, _contentScaleY, fbWidth, fbHeight, winWidth, winHeight);
-    }
-
-    return Ok();
-}
-
 Result<void> YettyImpl::onShutdown() {
     Result<void> result = Ok();
 
@@ -1917,7 +1886,6 @@ Result<void> YettyImpl::onShutdown() {
 
     // Release platform managers
     _surfaceManager.reset();
-    _inputManager.reset();
     _clipboardManager.reset();
     _fsPathManager.reset();
 
