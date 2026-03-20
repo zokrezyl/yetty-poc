@@ -55,7 +55,6 @@ set(YETTY_CORE_SOURCES
 # Desktop-only sources (Linux, macOS - NOT Windows)
 set(YETTY_DESKTOP_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/msdf-cdb-provider.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/pty-reader-desktop.cpp
     ${YETTY_MSDF_GEN_SOURCES}
     ${YETTY_RPC_SOURCES}
     PARENT_SCOPE
@@ -64,7 +63,6 @@ set(YETTY_DESKTOP_SOURCES
 # Windows-specific sources
 set(YETTY_WINDOWS_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/msdf-cdb-provider.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/pty-reader-windows.cpp
     ${YETTY_MSDF_GEN_SOURCES}
     ${YETTY_RPC_SOURCES}
     PARENT_SCOPE
@@ -72,21 +70,18 @@ set(YETTY_WINDOWS_SOURCES
 
 # WebAssembly-specific sources
 set(YETTY_WEB_SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/pty-reader-web.cpp
     PARENT_SCOPE
 )
 
 # Android-specific sources
 set(YETTY_ANDROID_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/msdf-cdb-provider.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/pty-reader-android.cpp
     PARENT_SCOPE
 )
 
 # iPhone/iOS-specific sources
 set(YETTY_IOS_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/msdf-cdb-provider.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/pty-reader-iphone.cpp
     PARENT_SCOPE
 )
 
