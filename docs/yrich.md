@@ -100,6 +100,7 @@ Selection::State = variant<
 | `yrich-command.h` | Command, CommandHistory, LambdaCommand, CompositeCommand |
 | `yrich-serialize.h` | Msgpack serialization for all operation types |
 | `yrich-sync.h/cpp` | SyncClient, SyncServer, DocumentSync for real-time collaboration |
+| `yrich-persist.h/cpp` | DocumentPersist for YAML and msgpack serialization |
 | `yrich-document.h/cpp` | Document base class with operation handling, rendering, input |
 | `yspreadsheet.h/cpp` | Spreadsheet document (grid, cells, formulas placeholder) |
 | `ydoc.h/cpp` | Rich text document (Paragraph, Table, InlineImage, Comment, Version) |
@@ -231,6 +232,36 @@ doc->render();
 auto bytes = buffer->serialize();
 ```
 
+### Persistence
+
+```cpp
+#include "yrich/yrich-persist.h"
+
+// Save document to YAML (human-readable)
+DocumentPersist::saveYDoc(*doc, "document.ydoc.yaml");
+
+// Save document to binary (compact)
+DocumentPersist::saveYDoc(*doc, "document.ydoc");
+
+// Load document (auto-detects format)
+auto docResult = DocumentPersist::loadYDoc("document.ydoc.yaml");
+if (docResult) {
+    auto doc = *docResult;
+    // use document...
+}
+
+// Same API for spreadsheets and slides
+DocumentPersist::saveYSpreadsheet(*sheet, "data.ysheet.yaml");
+DocumentPersist::saveYSlides(*slides, "presentation.yslides.yaml");
+```
+
+**File extensions:**
+| Type | YAML | Binary |
+|------|------|--------|
+| Document | `.ydoc.yaml` | `.ydoc` |
+| Spreadsheet | `.ysheet.yaml` | `.ysheet` |
+| Slides | `.yslides.yaml` | `.yslides` |
+
 ## Implementation Roadmap
 
 ### Phase 1: Core Framework (DONE)
@@ -282,6 +313,12 @@ auto bytes = buffer->serialize();
 - [ ] Charts in spreadsheets (future)
 - [ ] Full image rendering (requires texture integration)
 
+### Phase 7: Persistence (DONE)
+- [x] YAML format (.ydoc.yaml, .ysheet.yaml, .yslides.yaml)
+- [x] Binary format (.ydoc, .ysheet, .yslides) via msgpack
+- [x] DocumentPersist class with save/load for all document types
+- [x] Auto-detect format from file extension
+
 ## File Structure
 
 ```
@@ -304,6 +341,8 @@ src/yetty/yrich/
 ├── ydoc.cpp
 ├── yslides.h            # Presentation document (Slide, Shape, TextBox)
 ├── yslides.cpp
+├── yrich-persist.h      # Document persistence (YAML + msgpack)
+├── yrich-persist.cpp
 └── CMakeLists.txt
 
 tools/
