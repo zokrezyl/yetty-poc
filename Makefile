@@ -381,50 +381,67 @@ run-windows-ytrace-release: build-windows-ytrace-release ## Run Windows ytrace r
 	./$(BUILD_DIR_WINDOWS_YTRACE_RELEASE)/yetty.exe
 
 #=============================================================================
-# iOS (arm64 device)
+# iOS (arm64 device) - requires macOS with Xcode
 #=============================================================================
+
+# Check for macOS (iOS builds only work on macOS)
+UNAME_S := $(shell uname -s)
+define CHECK_MACOS
+	@if [ "$(UNAME_S)" != "Darwin" ]; then \
+		echo "ERROR: iOS builds require macOS with Xcode. Current OS: $(UNAME_S)"; \
+		exit 1; \
+	fi
+endef
 
 # iOS CMake toolchain (requires Xcode)
 CMAKE_IOS_TOOLCHAIN := -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0
 CMAKE_IOS_SIMULATOR_TOOLCHAIN := -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=x86_64 -DCMAKE_OSX_SYSROOT=iphonesimulator -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0
 
 .PHONY: config-ios-ytrace-debug
-config-ios-ytrace-debug: ## Configure iOS ytrace debug build (device)
+config-ios-ytrace-debug: ## Configure iOS ytrace debug build (device, macOS only)
+	$(CHECK_MACOS)
 	$(CMAKE) -B $(BUILD_DIR_IOS_YTRACE_DEBUG) $(CMAKE_GENERATOR) $(CMAKE_DEBUG) $(CMAKE_LOGLEVEL_YTRACE) $(CMAKE_IOS_TOOLCHAIN) -DYETTY_IOS=ON
 
 .PHONY: config-ios-ytrace-release
-config-ios-ytrace-release: ## Configure iOS ytrace release build (device)
+config-ios-ytrace-release: ## Configure iOS ytrace release build (device, macOS only)
+	$(CHECK_MACOS)
 	$(CMAKE) -B $(BUILD_DIR_IOS_YTRACE_RELEASE) $(CMAKE_GENERATOR) $(CMAKE_RELEASE) $(CMAKE_LOGLEVEL_YTRACE) $(CMAKE_IOS_TOOLCHAIN) -DYETTY_IOS=ON
 
 .PHONY: build-ios-ytrace-debug
-build-ios-ytrace-debug: ## Build iOS ytrace debug (device)
+build-ios-ytrace-debug: ## Build iOS ytrace debug (device, macOS only)
+	$(CHECK_MACOS)
 	@if [ ! -f "$(BUILD_DIR_IOS_YTRACE_DEBUG)/build.ninja" ]; then $(MAKE) config-ios-ytrace-debug; fi
 	$(CMAKE) --build $(BUILD_DIR_IOS_YTRACE_DEBUG) $(CMAKE_PARALLEL)
 
 .PHONY: build-ios-ytrace-release
-build-ios-ytrace-release: ## Build iOS ytrace release (device)
+build-ios-ytrace-release: ## Build iOS ytrace release (device, macOS only)
+	$(CHECK_MACOS)
 	@if [ ! -f "$(BUILD_DIR_IOS_YTRACE_RELEASE)/build.ninja" ]; then $(MAKE) config-ios-ytrace-release; fi
 	$(CMAKE) --build $(BUILD_DIR_IOS_YTRACE_RELEASE) $(CMAKE_PARALLEL)
 
 #=============================================================================
-# iOS x86_64 (simulator)
+# iOS x86_64 (simulator) - requires macOS with Xcode
 #=============================================================================
 
 .PHONY: config-ios_x86_64-ytrace-debug
-config-ios_x86_64-ytrace-debug: ## Configure iOS x86_64 ytrace debug build (simulator)
+config-ios_x86_64-ytrace-debug: ## Configure iOS x86_64 ytrace debug build (simulator, macOS only)
+	$(CHECK_MACOS)
 	$(CMAKE) -B $(BUILD_DIR_IOS_X86_64_YTRACE_DEBUG) $(CMAKE_GENERATOR) $(CMAKE_DEBUG) $(CMAKE_LOGLEVEL_YTRACE) $(CMAKE_IOS_SIMULATOR_TOOLCHAIN) -DYETTY_IOS=ON
 
 .PHONY: config-ios_x86_64-ytrace-release
-config-ios_x86_64-ytrace-release: ## Configure iOS x86_64 ytrace release build (simulator)
+config-ios_x86_64-ytrace-release: ## Configure iOS x86_64 ytrace release build (simulator, macOS only)
+	$(CHECK_MACOS)
 	$(CMAKE) -B $(BUILD_DIR_IOS_X86_64_YTRACE_RELEASE) $(CMAKE_GENERATOR) $(CMAKE_RELEASE) $(CMAKE_LOGLEVEL_YTRACE) $(CMAKE_IOS_SIMULATOR_TOOLCHAIN) -DYETTY_IOS=ON
 
 .PHONY: build-ios_x86_64-ytrace-debug
-build-ios_x86_64-ytrace-debug: ## Build iOS x86_64 ytrace debug (simulator)
+build-ios_x86_64-ytrace-debug: ## Build iOS x86_64 ytrace debug (simulator, macOS only)
+	$(CHECK_MACOS)
 	@if [ ! -f "$(BUILD_DIR_IOS_X86_64_YTRACE_DEBUG)/build.ninja" ]; then $(MAKE) config-ios_x86_64-ytrace-debug; fi
 	$(CMAKE) --build $(BUILD_DIR_IOS_X86_64_YTRACE_DEBUG) $(CMAKE_PARALLEL)
 
 .PHONY: build-ios_x86_64-ytrace-release
-build-ios_x86_64-ytrace-release: ## Build iOS x86_64 ytrace release (simulator)
+build-ios_x86_64-ytrace-release: ## Build iOS x86_64 ytrace release (simulator, macOS only)
+	$(CHECK_MACOS)
 	@if [ ! -f "$(BUILD_DIR_IOS_X86_64_YTRACE_RELEASE)/build.ninja" ]; then $(MAKE) config-ios_x86_64-ytrace-release; fi
 	$(CMAKE) --build $(BUILD_DIR_IOS_X86_64_YTRACE_RELEASE) $(CMAKE_PARALLEL)
 
