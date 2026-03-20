@@ -183,21 +183,36 @@ public:
     if (numLines == 0 || _lines.empty())
       return;
 
-    // Pop lines from front
-    for (uint16_t i = 0; i < numLines && !_lines.empty(); i++) {
-      _lines.pop_front();
-    }
+    ydebug("scrollLines: {} lines, cursor was ({},{})", numLines, _cursorCol,
+           _cursorRow);
 
-    // Update gridOffsetRow in remaining primitives
+    // Decrement gridOffsetRow in ALL primitives (moves them up on screen)
+    // Mark primitives as deleted when they scroll off top (don't erase - refs would break)
     // Format: [0] = packed(gridOffsetCol | gridOffsetRow << 16)
+    // Use special marker: type=0xFFFFFFFF means deleted
     for (auto &line : _lines) {
       for (auto &prim : line.prims) {
-        if (prim.size() >= 1) {
+        if (prim.size() >= 2) {
+          // Check if already deleted
+          uint32_t primType;
+          std::memcpy(&primType, &prim[1], sizeof(uint32_t));
+          if (primType == 0xFFFFFFFFu)
+            continue;
+
           uint32_t packed;
           std::memcpy(&packed, &prim[0], sizeof(uint32_t));
           uint16_t col = packed & 0xFFFF;
           int16_t row = static_cast<int16_t>((packed >> 16) & 0xFFFF);
           row -= static_cast<int16_t>(numLines);
+
+          // Mark deleted if scrolled off top
+          int16_t threshold = -static_cast<int16_t>(heightInLines() + 10);
+          if (row < threshold) {
+            uint32_t deletedMarker = 0xFFFFFFFFu;
+            std::memcpy(&prim[1], &deletedMarker, sizeof(uint32_t));
+            continue;
+          }
+
           packed = static_cast<uint32_t>(col) |
                    (static_cast<uint32_t>(static_cast<uint16_t>(row)) << 16);
           std::memcpy(&prim[0], &packed, sizeof(uint32_t));
@@ -213,6 +228,7 @@ public:
     }
 
     _dirty = true;
+    ydebug("scrollLines: done, cursor now ({},{})", _cursorCol, _cursorRow);
   }
 
   //===========================================================================
@@ -385,10 +401,17 @@ public:
   //===========================================================================
 
   void buildPrimStaging(std::vector<uint32_t> &out) const override {
+    // First pass: count non-deleted primitives
     uint32_t primCount = 0;
     uint32_t totalWords = 0;
     for (const auto &line : _lines) {
       for (const auto &prim : line.prims) {
+        if (prim.size() >= 2) {
+          uint32_t primType;
+          std::memcpy(&primType, &prim[1], sizeof(uint32_t));
+          if (primType == 0xFFFFFFFFu)
+            continue; // Skip deleted
+        }
         primCount++;
         totalWords += static_cast<uint32_t>(prim.size());
       }
@@ -404,6 +427,13 @@ public:
     uint32_t primIdx = 0;
     for (const auto &line : _lines) {
       for (const auto &prim : line.prims) {
+        // Skip deleted primitives
+        if (prim.size() >= 2) {
+          uint32_t primType;
+          std::memcpy(&primType, &prim[1], sizeof(uint32_t));
+          if (primType == 0xFFFFFFFFu)
+            continue;
+        }
         out[primIdx] = dataOffset;
         for (size_t i = 0; i < prim.size(); i++) {
           uint32_t val;

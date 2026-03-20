@@ -4,12 +4,24 @@
 
 // SDF_* constants are defined in sdf-types.gen.wgsl
 
+// Helper to unpack signed i16 from packed u32 (low 16 bits)
+fn ypaintUnpackSignedI16Low(packed: u32) -> f32 {
+    let raw = packed & 0xFFFFu;
+    return select(f32(raw), f32(i32(raw) - 65536), raw > 32767u);
+}
+
+// Helper to unpack signed i16 from packed u32 (high 16 bits)
+fn ypaintUnpackSignedI16High(packed: u32) -> f32 {
+    let raw = (packed >> 16u) & 0xFFFFu;
+    return select(f32(raw), f32(i32(raw) - 65536), raw > 32767u);
+}
+
 fn evaluateYpaintSDF(primOffset: u32, p: vec2<f32>) -> f32 {
     // Layout: [0]=gridOffset, [1]=type, [2]=layer, [3+]=geometry
     // Read grid offset FIRST (u16,u16 packed in u32) and convert to pixel offset
     let gridOffsetPacked = bitcast<u32>(cardStorage[primOffset + 0u]);
-    let gridOffsetX = f32(gridOffsetPacked & 0xFFFFu);
-    let gridOffsetY = f32(gridOffsetPacked >> 16u);
+    let gridOffsetX = ypaintUnpackSignedI16Low(gridOffsetPacked);
+    let gridOffsetY = ypaintUnpackSignedI16High(gridOffsetPacked);
     let pixelOffset = vec2<f32>(gridOffsetX * grid.cellSize.x, gridOffsetY * grid.cellSize.y);
     let pAdj = p - pixelOffset;
 
@@ -252,70 +264,13 @@ fn evaluateYpaintSDF(primOffset: u32, p: vec2<f32>) -> f32 {
             return sdPolygon(pAdj, vertexOffset, vertexCount);
         }
         case SDF_POLYGON_GROUP: {
-            // PolygonGroup: group of SEPARATE polygons, combined via SDF union (min)
-            // Layout: [0]=gridOffset, [1]=type, [2]=layer, [3]=vertexCount, [4]=contourCount
-            // [5]=fillColor, [6]=strokeColor, [7]=strokeWidth, [8]=round
-            // [9..9+contourCount-1]=contourStarts (vertex indices, not float indices)
-            // [9+contourCount..]=vertices (x,y pairs)
-            let totalVertexCount = bitcast<u32>(cardStorage[primOffset + 3u]);
+            // PolygonGroup: [0]=gridOffset, [1]=type, [2]=layer, [3]=vertexCount, [4]=contourCount
+            // [5-8]=colors, [9...9+contourCount-1]=contourStarts, [9+contourCount...]=vertices
+            // For now, just treat it like a simple polygon (first contour)
+            let vertexCount = bitcast<u32>(cardStorage[primOffset + 3u]);
             let contourCount = bitcast<u32>(cardStorage[primOffset + 4u]);
-            let contourStartsOffset = primOffset + 9u;
-            let vertexDataOffset = primOffset + 9u + contourCount;
-
-            // SDF union: min of all polygon SDFs
-            var minDist = 1e10f;
-            for (var i = 0u; i < contourCount; i = i + 1u) {
-                let contourStart = bitcast<u32>(cardStorage[contourStartsOffset + i]);
-                var contourEnd: u32;
-                if (i + 1u < contourCount) {
-                    contourEnd = bitcast<u32>(cardStorage[contourStartsOffset + i + 1u]);
-                } else {
-                    contourEnd = totalVertexCount;
-                }
-                let contourVertexCount = contourEnd - contourStart;
-                let contourVertexOffset = vertexDataOffset + contourStart * 2u;  // *2 for x,y pairs
-                let d = sdPolygon(pAdj, contourVertexOffset, contourVertexCount);
-                minDist = min(minDist, d);
-            }
-            return minDist;
-        }
-        case SDF_POLYGON_WITH_HOLES: {
-            // PolygonWithHoles: ONE polygon with holes cut out via CSG subtraction
-            // First contour = outer boundary, remaining contours = holes
-            // CSG: max(outer, -hole1, -hole2, ...)
-            // Layout: same as PolygonGroup
-            let totalVertexCount = bitcast<u32>(cardStorage[primOffset + 3u]);
-            let contourCount = bitcast<u32>(cardStorage[primOffset + 4u]);
-            let contourStartsOffset = primOffset + 9u;
-            let vertexDataOffset = primOffset + 9u + contourCount;
-
-            // First contour is the outer boundary
-            let outerStart = bitcast<u32>(cardStorage[contourStartsOffset]);
-            var outerEnd: u32;
-            if (contourCount > 1u) {
-                outerEnd = bitcast<u32>(cardStorage[contourStartsOffset + 1u]);
-            } else {
-                outerEnd = totalVertexCount;
-            }
-            let outerVertexCount = outerEnd - outerStart;
-            let outerVertexOffset = vertexDataOffset + outerStart * 2u;
-            var d = sdPolygon(pAdj, outerVertexOffset, outerVertexCount);
-
-            // Subtract holes: max(outer, -hole1, -hole2, ...)
-            for (var i = 1u; i < contourCount; i = i + 1u) {
-                let holeStart = bitcast<u32>(cardStorage[contourStartsOffset + i]);
-                var holeEnd: u32;
-                if (i + 1u < contourCount) {
-                    holeEnd = bitcast<u32>(cardStorage[contourStartsOffset + i + 1u]);
-                } else {
-                    holeEnd = totalVertexCount;
-                }
-                let holeVertexCount = holeEnd - holeStart;
-                let holeVertexOffset = vertexDataOffset + holeStart * 2u;
-                let holeDist = sdPolygon(pAdj, holeVertexOffset, holeVertexCount);
-                d = max(d, -holeDist);  // CSG subtraction
-            }
-            return d;
+            let vertexOffset = primOffset + 9u + contourCount;
+            return sdPolygon(pAdj, vertexOffset, vertexCount);
         }
         default: {
             return 1e10;
@@ -749,14 +704,6 @@ fn ypaintPrimColors(primOffset: u32) -> vec4<u32> {
                 bitcast<u32>(cardStorage[primOffset + 2u]),
                 0u);
         }
-        case SDF_POLYGON_WITH_HOLES: {
-            // Same layout as PolygonGroup: fillColor at +5, strokeColor at +6
-            return vec4<u32>(
-                bitcast<u32>(cardStorage[primOffset + 5u]),
-                bitcast<u32>(cardStorage[primOffset + 6u]),
-                bitcast<u32>(cardStorage[primOffset + 2u]),
-                0u);
-        }
         case SDF_LINEAR_GRADIENT_BOX: {
             return vec4<u32>(
                 bitcast<u32>(cardStorage[primOffset + 11u]),
@@ -795,8 +742,8 @@ fn ypaintEvalGradientFillColor(primOffset: u32, p: vec2<f32>) -> vec4<f32> {
     // Layout: [0]=gridOffset, [1]=type, [2]=layer, [3+]=geometry
     // Read grid offset FIRST (u16,u16 packed) and convert to pixel offset
     let gridOffsetPacked = bitcast<u32>(cardStorage[primOffset + 0u]);
-    let gridOffsetX = f32(gridOffsetPacked & 0xFFFFu);
-    let gridOffsetY = f32(gridOffsetPacked >> 16u);
+    let gridOffsetX = ypaintUnpackSignedI16Low(gridOffsetPacked);
+    let gridOffsetY = ypaintUnpackSignedI16High(gridOffsetPacked);
     let pixelOffset = vec2<f32>(gridOffsetX * grid.cellSize.x, gridOffsetY * grid.cellSize.y);
     let pAdj = p - pixelOffset;
 
@@ -896,7 +843,6 @@ fn ypaintPrimStrokeWidth(primOffset: u32) -> f32 {
         case SDF_ELLIPSOID_3D: { return cardStorage[primOffset + 10u]; }
         case SDF_POLYGON: { return cardStorage[primOffset + 6u]; }
         case SDF_POLYGON_GROUP: { return cardStorage[primOffset + 7u]; }
-        case SDF_POLYGON_WITH_HOLES: { return cardStorage[primOffset + 7u]; }  // Same layout as PolygonGroup
         case SDF_LINEAR_GRADIENT_BOX: { return cardStorage[primOffset + 14u]; }
         case SDF_LINEAR_GRADIENT_CIRCLE: { return cardStorage[primOffset + 13u]; }
         case SDF_RADIAL_GRADIENT_CIRCLE: { return cardStorage[primOffset + 12u]; }
