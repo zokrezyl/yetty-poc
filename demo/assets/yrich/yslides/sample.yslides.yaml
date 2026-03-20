@@ -1,0 +1,383 @@
+version: 1
+type: yslides
+
+metadata:
+  modified: 1710892800
+
+presentation:
+  slideWidth: 960
+  slideHeight: 540
+
+  slides:
+    # Slide 1: Title
+    - index: 0
+      bgColor: "#FF1E293B"
+      shapes:
+        - type: 2
+          x: 80
+          y: 180
+          width: 800
+          height: 100
+          fillColor: "#00000000"
+          strokeColor: "#00000000"
+          text: "Yetty"
+          fontSize: 72
+          textColor: "#FFFFFFFF"
+
+        - type: 2
+          x: 80
+          y: 290
+          width: 800
+          height: 50
+          fillColor: "#00000000"
+          strokeColor: "#00000000"
+          text: "WebGPU Terminal Emulator"
+          fontSize: 32
+          textColor: "#FF94A3B8"
+
+        - type: 2
+          x: 80
+          y: 480
+          width: 800
+          height: 30
+          fillColor: "#00000000"
+          strokeColor: "#00000000"
+          text: "Press Left/Right arrows to navigate"
+          fontSize: 14
+          textColor: "#FF64748B"
+
+    # Slide 2: Architecture
+    - index: 1
+      bgColor: "#FFFFFFFF"
+      shapes:
+        # Background rectangles FIRST (lower layers)
+        - type: 0
+          x: 80
+          y: 130
+          width: 380
+          height: 120
+          fillColor: "#FF3B82F6"
+          strokeColor: "#FF1D4ED8"
+          strokeWidth: 2
+
+        - type: 0
+          x: 500
+          y: 130
+          width: 380
+          height: 120
+          fillColor: "#FF10B981"
+          strokeColor: "#FF059669"
+          strokeWidth: 2
+
+        - type: 0
+          x: 80
+          y: 280
+          width: 800
+          height: 100
+          fillColor: "#FFF59E0B"
+          strokeColor: "#FFD97706"
+          strokeWidth: 2
+
+        # Text on top (higher layers)
+        - type: 2
+          x: 80
+          y: 40
+          width: 800
+          height: 60
+          fillColor: "#00000000"
+          strokeColor: "#00000000"
+          text: "Architecture"
+          fontSize: 42
+          textColor: "#FF1E293B"
+
+        - type: 2
+          x: 90
+          y: 155
+          width: 360
+          height: 40
+          fillColor: "#00000000"
+          strokeColor: "#00000000"
+          text: "WebGPU + Dawn"
+          fontSize: 24
+          textColor: "#FFFFFFFF"
+
+        - type: 2
+          x: 90
+          y: 200
+          width: 360
+          height: 30
+          fillColor: "#00000000"
+          strokeColor: "#00000000"
+          text: "GPU-accelerated rendering"
+          fontSize: 16
+          textColor: "#FFE0E7FF"
+
+        - type: 2
+          x: 510
+          y: 155
+          width: 360
+          height: 40
+          fillColor: "#00000000"
+          strokeColor: "#00000000"
+          text: "VT100/xterm"
+          fontSize: 24
+          textColor: "#FFFFFFFF"
+
+        - type: 2
+          x: 510
+          y: 200
+          width: 360
+          height: 30
+          fillColor: "#00000000"
+          strokeColor: "#00000000"
+          text: "Full terminal compatibility"
+          fontSize: 16
+          textColor: "#FFD1FAE5"
+
+        - type: 2
+          x: 90
+          y: 305
+          width: 780
+          height: 40
+          fillColor: "#00000000"
+          strokeColor: "#00000000"
+          text: "Rich Cards: Images, Plots, PDFs, Vector Graphics"
+          fontSize: 22
+          textColor: "#FF1E293B"
+
+        - type: 2
+          x: 90
+          y: 345
+          width: 780
+          height: 30
+          fillColor: "#00000000"
+          strokeColor: "#00000000"
+          text: "GPU-rendered widgets that scroll with terminal content"
+          fontSize: 16
+          textColor: "#FF78350F"
+
+    # Slide 3: Platforms
+    - index: 2
+      bgColor: "#FFF8FAFC"
+      shapes:
+        # Background rectangles FIRST
+        - type: 0
+          x: 80
+          y: 140
+          width: 180
+          height: 120
+          fillColor: "#FF6366F1"
+          strokeColor: "#FF4F46E5"
+          strokeWidth: 2
+
+        - type: 0
+          x: 290
+          y: 140
+          width: 180
+          height: 120
+          fillColor: "#FF22C55E"
+          strokeColor: "#FF16A34A"
+          strokeWidth: 2
+
+        - type: 0
+          x: 500
+          y: 140
+          width: 180
+          height: 120
+          fillColor: "#FFEC4899"
+          strokeColor: "#FFDB2777"
+          strokeWidth: 2
+
+        - type: 0
+          x: 710
+          y: 140
+          width: 180
+          height: 120
+          fillColor: "#FF0EA5E9"
+          strokeColor: "#FF0284C7"
+          strokeWidth: 2
+
+        # Text on top
+        - type: 2
+          x: 80
+          y: 40
+          width: 800
+          height: 60
+          fillColor: "#00000000"
+          strokeColor: "#00000000"
+          text: "Cross-Platform"
+          fontSize: 42
+          textColor: "#FF1E293B"
+
+        - type: 2
+          x: 90
+          y: 185
+          width: 160
+          height: 40
+          fillColor: "#00000000"
+          strokeColor: "#00000000"
+          text: "Desktop"
+          fontSize: 22
+          textColor: "#FFFFFFFF"
+
+        - type: 2
+          x: 300
+          y: 185
+          width: 160
+          height: 40
+          fillColor: "#00000000"
+          strokeColor: "#00000000"
+          text: "Android"
+          fontSize: 22
+          textColor: "#FFFFFFFF"
+
+        - type: 2
+          x: 510
+          y: 185
+          width: 160
+          height: 40
+          fillColor: "#00000000"
+          strokeColor: "#00000000"
+          text: "WebASM"
+          fontSize: 22
+          textColor: "#FFFFFFFF"
+
+        - type: 2
+          x: 720
+          y: 185
+          width: 160
+          height: 40
+          fillColor: "#00000000"
+          strokeColor: "#00000000"
+          text: "Windows"
+          fontSize: 22
+          textColor: "#FFFFFFFF"
+
+        - type: 2
+          x: 80
+          y: 330
+          width: 800
+          height: 80
+          fillColor: "#00000000"
+          strokeColor: "#00000000"
+          text: "Same codebase, native performance everywhere"
+          fontSize: 24
+          textColor: "#FF475569"
+
+    # Slide 4: Card Types
+    - index: 3
+      bgColor: "#FFFFFFFF"
+      shapes:
+        - type: 2
+          x: 80
+          y: 40
+          width: 800
+          height: 60
+          fillColor: "#00000000"
+          strokeColor: "#00000000"
+          text: "Rich Card Types"
+          fontSize: 42
+          textColor: "#FF1E293B"
+
+        - type: 2
+          x: 100
+          y: 130
+          width: 400
+          height: 40
+          fillColor: "#00000000"
+          strokeColor: "#00000000"
+          text: "image - PNG, JPEG, WebP"
+          fontSize: 20
+          textColor: "#FF334155"
+
+        - type: 2
+          x: 100
+          y: 180
+          width: 400
+          height: 40
+          fillColor: "#00000000"
+          strokeColor: "#00000000"
+          text: "plot - Line, bar, scatter charts"
+          fontSize: 20
+          textColor: "#FF334155"
+
+        - type: 2
+          x: 100
+          y: 230
+          width: 400
+          height: 40
+          fillColor: "#00000000"
+          strokeColor: "#00000000"
+          text: "ydraw - 2D vector graphics"
+          fontSize: 20
+          textColor: "#FF334155"
+
+        - type: 2
+          x: 100
+          y: 280
+          width: 400
+          height: 40
+          fillColor: "#00000000"
+          strokeColor: "#00000000"
+          text: "pdf - PDF document pages"
+          fontSize: 20
+          textColor: "#FF334155"
+
+        - type: 2
+          x: 100
+          y: 330
+          width: 400
+          height: 40
+          fillColor: "#00000000"
+          strokeColor: "#00000000"
+          text: "ymery - ImGui widgets"
+          fontSize: 20
+          textColor: "#FF334155"
+
+        - type: 2
+          x: 100
+          y: 380
+          width: 400
+          height: 40
+          fillColor: "#00000000"
+          strokeColor: "#00000000"
+          text: "thorvg - SVG and Lottie"
+          fontSize: 20
+          textColor: "#FF334155"
+
+    # Slide 5: Thank you
+    - index: 4
+      bgColor: "#FF1E293B"
+      shapes:
+        - type: 2
+          x: 80
+          y: 200
+          width: 800
+          height: 80
+          fillColor: "#00000000"
+          strokeColor: "#00000000"
+          text: "yetty"
+          fontSize: 64
+          textColor: "#FFFFFFFF"
+
+        - type: 2
+          x: 80
+          y: 300
+          width: 800
+          height: 50
+          fillColor: "#00000000"
+          strokeColor: "#00000000"
+          text: "The terminal, reimagined"
+          fontSize: 28
+          textColor: "#FF94A3B8"
+
+        - type: 2
+          x: 80
+          y: 480
+          width: 800
+          height: 30
+          fillColor: "#00000000"
+          strokeColor: "#00000000"
+          text: "Press 'q' to exit"
+          fontSize: 14
+          textColor: "#FF64748B"

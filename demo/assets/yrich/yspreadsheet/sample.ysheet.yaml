@@ -1,0 +1,35 @@
+version: 1
+type: yspreadsheet
+
+metadata:
+  modified: 1710892800
+
+spreadsheet:
+  rows: 100
+  cols: 26
+
+  columnWidths: [120, 100, 100, 100, 100]
+
+  cells:
+    A1: "YRich Spreadsheet Demo"
+    A3: "Product"
+    B3: "Q1 Sales"
+    C3: "Q2 Sales"
+    D3: "Q3 Sales"
+    E3: "Total"
+    A4: "Widget A"
+    B4: "1250"
+    C4: "1420"
+    D4: "1380"
+    E4: "4050"
+    A5: "Widget B"
+    B5: "890"
+    C5: "1050"
+    D5: "1120"
+    E5: "3060"
+    A6: "Widget C"
+    B6: "2100"
+    C6: "1980"
+    D6: "2250"
+    E6: "6330"
+    A8: "Press 'q' to exit"
