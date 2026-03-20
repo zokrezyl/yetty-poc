@@ -13,6 +13,13 @@ namespace yetty::yrich {
 //=============================================================================
 
 static std::string colorToHex(uint32_t color) {
+    char buf[10];
+    snprintf(buf, sizeof(buf), "#%08X", color);
+    return buf;
+}
+
+// Quoted version for YAML output (# starts a comment in YAML)
+static std::string colorToYaml(uint32_t color) {
     char buf[14];
     snprintf(buf, sizeof(buf), "\"#%08X\"", color);
     return buf;
@@ -291,7 +298,7 @@ std::string DocumentPersist::toYaml(const YDoc& doc) {
                 os << "      fontSize: " << para.fontSize << "\n";
             }
             if (para.color != 0xFF000000) {
-                os << "      color: " << colorToHex(para.color) << "\n";
+                os << "      color: " << colorToYaml(para.color) << "\n";
             }
             if (!para.runs.empty()) {
                 os << "      runs:\n";
@@ -305,7 +312,7 @@ std::string DocumentPersist::toYaml(const YDoc& doc) {
                         os << "          fontSize: " << run.fontSize << "\n";
                     }
                     if (run.color != para.color) {
-                        os << "          color: " << colorToHex(run.color) << "\n";
+                        os << "          color: " << colorToYaml(run.color) << "\n";
                     }
                 }
             }
@@ -1027,7 +1034,7 @@ std::string DocumentPersist::toYaml(const YSlides& doc) {
     os << "  slides:\n";
     for (const auto& slide : data.slides) {
         os << "    - index: " << slide.index << "\n";
-        os << "      bgColor: " << colorToHex(slide.bgColor) << "\n";
+        os << "      bgColor: " << colorToYaml(slide.bgColor) << "\n";
         os << "      shapes:\n";
 
         for (const auto& shape : slide.shapes) {
@@ -1036,8 +1043,8 @@ std::string DocumentPersist::toYaml(const YSlides& doc) {
             os << "          y: " << shape.y << "\n";
             os << "          width: " << shape.width << "\n";
             os << "          height: " << shape.height << "\n";
-            os << "          fillColor: " << colorToHex(shape.fillColor) << "\n";
-            os << "          strokeColor: " << colorToHex(shape.strokeColor) << "\n";
+            os << "          fillColor: " << colorToYaml(shape.fillColor) << "\n";
+            os << "          strokeColor: " << colorToYaml(shape.strokeColor) << "\n";
 
             if (!shape.text.empty()) {
                 os << "          text: " << escapeYaml(shape.text) << "\n";
@@ -1280,7 +1287,7 @@ std::string DocumentPersist::dataToYaml(const YDocData& data) {
                 os << "      fontSize: " << para.fontSize << "\n";
             }
             if (para.color != 0xFF000000) {
-                os << "      color: " << colorToHex(para.color) << "\n";
+                os << "      color: " << colorToYaml(para.color) << "\n";
             }
             if (!para.runs.empty()) {
                 os << "      runs:\n";
@@ -1294,7 +1301,7 @@ std::string DocumentPersist::dataToYaml(const YDocData& data) {
                         os << "          fontSize: " << run.fontSize << "\n";
                     }
                     if (run.color != para.color) {
-                        os << "          color: " << colorToHex(run.color) << "\n";
+                        os << "          color: " << colorToYaml(run.color) << "\n";
                     }
                 }
             }
@@ -1625,7 +1632,7 @@ std::string DocumentPersist::dataToYaml(const YSlidesData& data) {
     os << "  slides:\n";
     for (const auto& slide : data.slides) {
         os << "    - index: " << slide.index << "\n";
-        os << "      bgColor: " << colorToHex(slide.bgColor) << "\n";
+        os << "      bgColor: " << colorToYaml(slide.bgColor) << "\n";
         os << "      shapes:\n";
 
         for (const auto& shape : slide.shapes) {
@@ -1634,8 +1641,8 @@ std::string DocumentPersist::dataToYaml(const YSlidesData& data) {
             os << "          y: " << shape.y << "\n";
             os << "          width: " << shape.width << "\n";
             os << "          height: " << shape.height << "\n";
-            os << "          fillColor: " << colorToHex(shape.fillColor) << "\n";
-            os << "          strokeColor: " << colorToHex(shape.strokeColor) << "\n";
+            os << "          fillColor: " << colorToYaml(shape.fillColor) << "\n";
+            os << "          strokeColor: " << colorToYaml(shape.strokeColor) << "\n";
 
             if (!shape.text.empty()) {
                 os << "          text: " << escapeYaml(shape.text) << "\n";
