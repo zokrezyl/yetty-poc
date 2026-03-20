@@ -18,19 +18,16 @@ CPMAddPackage(
 )
 
 if(libssh2_ADDED)
-    # Patch the CMakeLists.txt to disable exports
-    file(READ "${libssh2_SOURCE_DIR}/src/CMakeLists.txt" _libssh2_cmake)
-    string(REPLACE "install(EXPORT Libssh2Config" "# install(EXPORT Libssh2Config" _libssh2_cmake "${_libssh2_cmake}")
-    string(REPLACE "export(TARGETS" "# export(TARGETS" _libssh2_cmake "${_libssh2_cmake}")
-    file(WRITE "${libssh2_SOURCE_DIR}/src/CMakeLists.txt" "${_libssh2_cmake}")
-
-    # Now add subdirectory
     set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
     set(BUILD_STATIC_LIBS ON CACHE BOOL "" FORCE)
     set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
     set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
     set(CRYPTO_BACKEND "OpenSSL" CACHE STRING "" FORCE)
-    add_subdirectory(${libssh2_SOURCE_DIR} ${libssh2_BINARY_DIR})
+    # Prevent libssh2 from finding our zlib (causes export set issues)
+    set(CMAKE_DISABLE_FIND_PACKAGE_ZLIB TRUE)
+    set(ZLIB_FOUND FALSE CACHE BOOL "" FORCE)
+    add_subdirectory(${libssh2_SOURCE_DIR} ${libssh2_BINARY_DIR} EXCLUDE_FROM_ALL)
+    unset(CMAKE_DISABLE_FIND_PACKAGE_ZLIB)
 
     message(STATUS "libssh2: Built from source v1.11.1")
 

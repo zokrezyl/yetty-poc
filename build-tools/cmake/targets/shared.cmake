@@ -77,9 +77,10 @@ set(YETTY_LIBS
 # WebAssembly: provides empty stubs (uses --preload-file instead)
 #-----------------------------------------------------------------------------
 function(yetty_embed_assets TARGET)
-    # Embed logo
+    # Embed logo and default config
     incbin_add_resources(${TARGET}
         Logo "${YETTY_ROOT}/docs/logo.jpeg"
+        DefaultConfig "${YETTY_ROOT}/assets/default-config.yaml"
     )
 
     # Embed shaders from source

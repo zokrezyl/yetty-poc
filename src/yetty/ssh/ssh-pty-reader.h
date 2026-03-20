@@ -1,7 +1,8 @@
 #pragma once
 
-#include <yetty/pty-reader.h>
+#include <yetty/platform/pty-reader.h>
 #include "ssh-client.h"
+#include <atomic>
 #include <deque>
 #include <mutex>
 #include <string>
