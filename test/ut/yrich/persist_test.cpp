@@ -13,6 +13,7 @@
 #include <boost/ut.hpp>
 
 #include "yetty/yrich/yrich-persist.h"
+// yrich-persist.h already includes ydoc.h, yspreadsheet.h, yslides.h
 
 using namespace boost::ut;
 using namespace yetty::yrich;
@@ -668,6 +669,50 @@ suite load_demo_files = [] {
         auto& data = *result;
         expect(data.type == std::string("yslides"));
         expect(data.slides.size() > 0u) << "Should have slides";
+    };
+
+    "create_yslides"_test = [] {
+        auto result = YSlides::create();
+        expect(result.has_value()) << "Should create YSlides";
+        if (!result.has_value()) return;
+
+        auto slides = *result;
+        expect(slides != nullptr) << "Should return valid ptr";
+        expect(slides->slideCount() == 1_i) << "Should have 1 default slide";
+    };
+
+    "fromYamlSlides_sample"_test = [] {
+        std::ifstream file("demo/assets/yrich/yslides/sample.yslides.yaml");
+        expect(file.good()) << "File should exist";
+        if (!file.good()) return;
+
+        std::stringstream buffer;
+        buffer << file.rdbuf();
+        std::string yaml = buffer.str();
+
+        auto result = DocumentPersist::fromYamlSlides(yaml);
+        expect(result.has_value()) << "Should load slides";
+        if (!result.has_value()) {
+            std::cerr << "ERROR: " << result.error().to_string() << std::endl;
+            return;
+        }
+
+        auto slides = *result;
+        expect(slides != nullptr) << "Should return valid ptr";
+        expect(slides->slideCount() == 5_i) << "Should have 5 slides";
+    };
+
+    "loadYSlides_sample"_test = [] {
+        auto result = DocumentPersist::loadYSlides("demo/assets/yrich/yslides/sample.yslides.yaml");
+        expect(result.has_value()) << "Should load from file";
+        if (!result.has_value()) {
+            std::cerr << "ERROR: " << result.error().to_string() << std::endl;
+            return;
+        }
+
+        auto slides = *result;
+        expect(slides != nullptr) << "Should return valid ptr";
+        expect(slides->slideCount() == 5_i) << "Should have 5 slides";
     };
 };
 

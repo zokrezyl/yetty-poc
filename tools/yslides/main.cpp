@@ -349,9 +349,11 @@ private:
         } else if (cmd == 'B') {
             _slides->onKeyDown(Key::Down, mods);
         } else if (cmd == 'C') {
-            _slides->onKeyDown(Key::Right, mods);
+            // Right arrow - next slide
+            _slides->nextSlide();
         } else if (cmd == 'D') {
-            _slides->onKeyDown(Key::Left, mods);
+            // Left arrow - previous slide
+            _slides->prevSlide();
         } else if (cmd == '~') {
             if (seq.find("3") != std::string::npos) {
                 _slides->onKeyDown(Key::Delete, mods);

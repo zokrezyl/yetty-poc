@@ -948,10 +948,10 @@ YSlidesData DocumentPersist::extract(const YSlides& doc) {
 void DocumentPersist::populate(YSlides& doc, const YSlidesData& data) {
     doc.setSlideSize(data.slideWidth, data.slideHeight);
 
-    // Remove default slide
-    while (doc.slideCount() > 0) {
-        doc.removeSlide(0);
-    }
+    // YSlides::create() adds one default slide, and removeSlide() won't remove
+    // the last slide. So we need to handle this by:
+    // 1. Adding all new slides first (so we have more than 1)
+    // 2. Then removing the original default slide
 
     // Add slides
     for (const auto& sd : data.slides) {
@@ -1008,6 +1008,12 @@ void DocumentPersist::populate(YSlides& doc, const YSlidesData& data) {
         }
     }
 
+    // Now remove the default slide that was created by YSlides::create()
+    // It's at index 0, and we've added our slides after it
+    if (!data.slides.empty() && doc.slideCount() > static_cast<int>(data.slides.size())) {
+        doc.removeSlide(0);  // Remove the original default slide
+    }
+
     if (doc.slideCount() > 0) {
         doc.setCurrentSlide(0);
     }
@@ -1049,6 +1055,7 @@ std::string DocumentPersist::toYaml(const YSlides& doc) {
             if (!shape.text.empty()) {
                 os << "          text: " << escapeYaml(shape.text) << "\n";
                 os << "          fontSize: " << shape.fontSize << "\n";
+                os << "          textColor: " << colorToYaml(shape.textColor) << "\n";
             }
 
             if (!shape.imageSource.empty()) {
@@ -1091,6 +1098,7 @@ Result<YSlides::Ptr> DocumentPersist::fromYamlSlides(std::string_view yaml) {
                         shd.strokeWidth = shnode["strokeWidth"].as<float>(1.0f);
                         shd.text = shnode["text"].as<std::string>("");
                         shd.fontSize = shnode["fontSize"].as<float>(24.0f);
+                        shd.textColor = hexToColor(shnode["textColor"].as<std::string>("#FF000000"));
                         shd.imageSource = shnode["imageSource"].as<std::string>("");
 
                         sd.shapes.push_back(shd);
@@ -1647,6 +1655,7 @@ std::string DocumentPersist::dataToYaml(const YSlidesData& data) {
             if (!shape.text.empty()) {
                 os << "          text: " << escapeYaml(shape.text) << "\n";
                 os << "          fontSize: " << shape.fontSize << "\n";
+                os << "          textColor: " << colorToYaml(shape.textColor) << "\n";
             }
 
             if (!shape.imageSource.empty()) {
@@ -1689,6 +1698,7 @@ Result<YSlidesData> DocumentPersist::parseYSlidesYaml(std::string_view yaml) {
                         shd.strokeWidth = shnode["strokeWidth"].as<float>(1.0f);
                         shd.text = shnode["text"].as<std::string>("");
                         shd.fontSize = shnode["fontSize"].as<float>(24.0f);
+                        shd.textColor = hexToColor(shnode["textColor"].as<std::string>("#FF000000"));
                         shd.imageSource = shnode["imageSource"].as<std::string>("");
 
                         sd.shapes.push_back(shd);

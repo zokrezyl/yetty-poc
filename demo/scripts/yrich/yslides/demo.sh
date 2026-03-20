@@ -1,6 +1,8 @@
 #!/bin/bash
-# YSlides Demo - displays a sample presentation (dump mode)
-# Usage: ./demo.sh
+# YSlides Demo - displays a sample presentation
+# Usage: ./demo.sh [--view]
+#   --view: interactive view mode (press 'q' to quit)
+#   default: dump mode (display and exit immediately)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
@@ -19,4 +21,8 @@ if [[ ! -f "$ASSET" ]]; then
     exit 1
 fi
 
-exec "$YSLIDES" -f "$ASSET" --dump -h 25
+if [[ "$1" == "--view" ]]; then
+    exec "$YSLIDES" -f "$ASSET" -h 50
+else
+    exec "$YSLIDES" -f "$ASSET" --dump -h 50
+fi
