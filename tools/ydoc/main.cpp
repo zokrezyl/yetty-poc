@@ -350,6 +350,53 @@ private:
 
         InputModifiers mods = getModifiers();
 
+        // Ctrl+key handling (Ctrl+A = 1, Ctrl+B = 2, etc.)
+        if (c >= 1 && c <= 26) {
+            mods.ctrl = true;
+            char letter = 'a' + c - 1;
+
+            if (letter == 'b') {
+                // Ctrl+B - toggle bold
+                _doc->toggleBold();
+                return;
+            } else if (letter == 'i') {
+                // Ctrl+I - toggle italic
+                _doc->toggleItalic();
+                return;
+            } else if (letter == 'u') {
+                // Ctrl+U - toggle underline
+                _doc->toggleUnderline();
+                return;
+            } else if (letter == 'c') {
+                // Ctrl+C - copy
+                _clipboard = _doc->copySelection();
+                return;
+            } else if (letter == 'v') {
+                // Ctrl+V - paste
+                if (!_clipboard.empty()) {
+                    _doc->paste(_clipboard);
+                }
+                return;
+            } else if (letter == 'x') {
+                // Ctrl+X - cut
+                _clipboard = _doc->copySelection();
+                _doc->deleteSelection();
+                return;
+            } else if (letter == 'z') {
+                // Ctrl+Z - undo
+                _doc->undo();
+                return;
+            } else if (letter == 'y') {
+                // Ctrl+Y - redo
+                _doc->redo();
+                return;
+            } else if (letter == 'a') {
+                // Ctrl+A - select all (handled by document)
+                // TODO: implement select all
+                return;
+            }
+        }
+
         if (c == '\r' || c == '\n') {
             _doc->onKeyDown(Key::Enter, mods);
         } else if (c == '\t') {
@@ -526,6 +573,9 @@ private:
     // Document
     YDrawBuffer::Ptr _buffer;
     YDoc::Ptr _doc;
+
+    // Clipboard
+    std::string _clipboard;
 };
 
 //=============================================================================

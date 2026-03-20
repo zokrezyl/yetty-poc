@@ -60,10 +60,12 @@ enum class OperationType {
     // Text operations (for text elements)
     TextInsert,     // Insert text at position
     TextDelete,     // Delete text range
+    TextFormat,     // Apply formatting to text range
 
     // Cell operations (for spreadsheet)
     CellSet,        // Set cell value
     CellClear,      // Clear cell
+    CellFormat,     // Format cell (color, borders, etc.)
 
     // Style operations
     StyleSet,       // Set style property
@@ -120,6 +122,15 @@ struct TextDeleteOp {
     std::string deletedText;  // for undo
 };
 
+struct TextFormatOp {
+    ElementId id;
+    int startPos;
+    int endPos;
+    uint32_t addFormat;     // TextFormat flags to add
+    uint32_t removeFormat;  // TextFormat flags to remove
+    uint32_t oldFormat;     // Previous format (for undo)
+};
+
 struct CellSetOp {
     CellAddress addr;
     std::string oldValue;
@@ -128,6 +139,13 @@ struct CellSetOp {
 
 struct CellClearOp {
     CellRange range;
+    std::vector<std::pair<CellAddress, std::string>> oldValues;
+};
+
+struct CellFormatOp {
+    CellRange range;
+    std::string property;   // "bgColor", "textColor", "bold", "fontSize", etc.
+    std::string newValue;
     std::vector<std::pair<CellAddress, std::string>> oldValues;
 };
 
@@ -152,8 +170,8 @@ struct SelectionSetOp {
 
 using OperationData = std::variant<
     InsertOp, DeleteOp, UpdateOp,
-    TextInsertOp, TextDeleteOp,
-    CellSetOp, CellClearOp,
+    TextInsertOp, TextDeleteOp, TextFormatOp,
+    CellSetOp, CellClearOp, CellFormatOp,
     StyleSetOp,
     CursorMoveOp, SelectionSetOp
 >;

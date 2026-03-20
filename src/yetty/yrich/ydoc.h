@@ -6,7 +6,18 @@
 namespace yetty::yrich {
 
 //=============================================================================
-// Paragraph — a block of text with formatting
+// TextRun — a contiguous run of text with uniform formatting
+//=============================================================================
+struct TextRun {
+    int start = 0;          // Start index in paragraph text
+    int end = 0;            // End index (exclusive)
+    TextStyle style;        // Formatting for this run
+
+    int length() const { return end - start; }
+};
+
+//=============================================================================
+// Paragraph — a block of text with rich formatting
 //=============================================================================
 class Paragraph : public TextElement {
 public:
@@ -42,14 +53,36 @@ public:
     void setSelection(int start, int end) override;
     std::string selectedText() const override;
 
+    //=========================================================================
+    // Rich text formatting
+    //=========================================================================
+
+    // Get formatting at position
+    TextStyle styleAt(int pos) const;
+
+    // Apply formatting to range
+    void applyFormat(int start, int end, TextFormat format);
+    void removeFormat(int start, int end, TextFormat format);
+    void toggleFormat(int start, int end, TextFormat format);
+
+    // Set style property for range
+    void setFontSize(int start, int end, float size);
+    void setColor(int start, int end, Color color);
+
+    // Get runs (for rendering)
+    const std::vector<TextRun>& runs() const { return _runs; }
+
 private:
     void recalculateLayout();
+    void normalizeRuns();
+    void splitRunAt(int pos);
     int positionToIndex(float x, float y) const;
     std::pair<float, float> indexToPosition(int index) const;
 
     Rect _bounds;
     std::string _text;
-    TextStyle _style;
+    TextStyle _style;           // Default style
+    std::vector<TextRun> _runs; // Formatted runs
     float _lineHeight = 20.0f;
 
     // Word-wrapped lines
@@ -117,6 +150,21 @@ public:
     void moveCursor(int delta, bool extend = false);
     void moveCursorLine(int delta, bool extend = false);
     void moveCursorWord(int delta, bool extend = false);
+
+    //=========================================================================
+    // Formatting (Ctrl+B, Ctrl+I, Ctrl+U)
+    //=========================================================================
+
+    void toggleBold();
+    void toggleItalic();
+    void toggleUnderline();
+    void setFontSize(float size);
+    void setTextColor(Color color);
+
+    // Check if selection has format
+    bool selectionHasBold() const;
+    bool selectionHasItalic() const;
+    bool selectionHasUnderline() const;
 
     //=========================================================================
     // Document interface

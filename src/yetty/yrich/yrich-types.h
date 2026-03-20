@@ -68,15 +68,58 @@ struct Color {
 };
 
 //=============================================================================
+// TextFormat — formatting flags (can be combined)
+//=============================================================================
+enum class TextFormat : uint32_t {
+    None       = 0,
+    Bold       = 1 << 0,
+    Italic     = 1 << 1,
+    Underline  = 1 << 2,
+    Strike     = 1 << 3,
+    Subscript  = 1 << 4,
+    Superscript= 1 << 5,
+};
+
+inline TextFormat operator|(TextFormat a, TextFormat b) {
+    return static_cast<TextFormat>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
+}
+inline TextFormat operator&(TextFormat a, TextFormat b) {
+    return static_cast<TextFormat>(static_cast<uint32_t>(a) & static_cast<uint32_t>(b));
+}
+inline TextFormat operator~(TextFormat a) {
+    return static_cast<TextFormat>(~static_cast<uint32_t>(a));
+}
+inline bool hasFormat(TextFormat flags, TextFormat flag) {
+    return (static_cast<uint32_t>(flags) & static_cast<uint32_t>(flag)) != 0;
+}
+
+//=============================================================================
 // TextStyle — text formatting attributes
 //=============================================================================
 struct TextStyle {
     float fontSize = 14.0f;
     Color color = Color::black();
-    bool bold = false;
-    bool italic = false;
-    bool underline = false;
+    Color bgColor = Color::transparent();
+    TextFormat format = TextFormat::None;
     int fontId = 0;
+
+    bool bold() const { return hasFormat(format, TextFormat::Bold); }
+    bool italic() const { return hasFormat(format, TextFormat::Italic); }
+    bool underline() const { return hasFormat(format, TextFormat::Underline); }
+    bool strike() const { return hasFormat(format, TextFormat::Strike); }
+
+    void setBold(bool v) {
+        if (v) format = format | TextFormat::Bold;
+        else format = format & ~TextFormat::Bold;
+    }
+    void setItalic(bool v) {
+        if (v) format = format | TextFormat::Italic;
+        else format = format & ~TextFormat::Italic;
+    }
+    void setUnderline(bool v) {
+        if (v) format = format | TextFormat::Underline;
+        else format = format & ~TextFormat::Underline;
+    }
 };
 
 //=============================================================================

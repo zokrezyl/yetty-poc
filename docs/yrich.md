@@ -93,14 +93,16 @@ Selection::State = variant<
 
 | File | Description |
 |------|-------------|
-| `yrich-types.h` | Core types: Rect, Color, CellAddress, Key, MouseButton, InputModifiers |
+| `yrich-types.h` | Core types: Rect, Color, CellAddress, Key, MouseButton, TextFormat, TextStyle |
 | `yrich-element.h` | Element base class (selectable, editable content) |
 | `yrich-selection.h` | Selection variants and state management |
 | `yrich-operation.h` | Operation, Timestamp, Session, SessionManager, OperationLog |
 | `yrich-command.h` | Command, CommandHistory, LambdaCommand, CompositeCommand |
+| `yrich-serialize.h` | Msgpack serialization for all operation types |
+| `yrich-sync.h/cpp` | SyncClient, SyncServer, DocumentSync for real-time collaboration |
 | `yrich-document.h/cpp` | Document base class with operation handling, rendering, input |
 | `yspreadsheet.h/cpp` | Spreadsheet document (grid, cells, formulas placeholder) |
-| `ydoc.h/cpp` | Rich text document (paragraphs, word wrap, text editing) |
+| `ydoc.h/cpp` | Rich text document (paragraphs, TextRun formatting, word wrap) |
 
 ### Tools (`tools/`)
 
@@ -166,6 +168,11 @@ Client A                    Network                    Client B
 - Arrow keys: navigate
 - Shift+arrows: select
 - Ctrl+arrows: word navigation
+- Ctrl+B: toggle bold
+- Ctrl+I: toggle italic
+- Ctrl+U: toggle underline
+- Ctrl+C/V/X: copy/paste/cut
+- Ctrl+Z/Y: undo/redo
 - Enter: new paragraph
 - Backspace/Delete: delete
 - Home/End: line start/end
@@ -223,16 +230,22 @@ auto bytes = buffer->serialize();
 - [x] tools/yspreadsheet: interactive spreadsheet
 - [x] tools/ydoc: interactive document editor
 
-### Phase 3: Enhanced Editing (TODO)
-- [ ] Text formatting (bold, italic, underline)
-- [ ] Font selection and sizing
+### Phase 3: Enhanced Editing (DONE)
+- [x] Text formatting (bold, italic, underline, strikethrough)
+- [x] TextRun model for mixed formatting within paragraphs
+- [x] Font selection and sizing
+- [x] Keyboard shortcuts (Ctrl+B/I/U)
+- [x] Local clipboard (Ctrl+C/V/X)
 - [ ] Cell formatting (colors, borders, alignment)
 - [ ] Formula support for spreadsheet
-- [ ] Clipboard integration (system clipboard)
+- [ ] System clipboard integration
 
-### Phase 4: Collaboration (TODO)
-- [ ] Operation serialization (msgpack)
-- [ ] Network transport (WebSocket or msgpack-RPC)
+### Phase 4: Collaboration (DONE)
+- [x] Operation serialization (msgpack)
+- [x] SyncClient: TCP client for operation sync
+- [x] SyncServer: TCP server for broadcasting
+- [x] DocumentSync: connects Document to SyncClient
+- [x] TextFormatOp/CellFormatOp serialization
 - [ ] Conflict resolution testing
 - [ ] Presence indicators (colored cursors)
 - [ ] User list UI
@@ -255,17 +268,20 @@ auto bytes = buffer->serialize();
 ```
 src/yetty/yrich/
 ├── yrich.h              # Main include
-├── yrich-types.h        # Core types
+├── yrich-types.h        # Core types (TextFormat, TextStyle, etc.)
 ├── yrich-element.h      # Element base class
 ├── yrich-selection.h    # Selection model
-├── yrich-operation.h    # Collaboration primitives
+├── yrich-operation.h    # Collaboration primitives (Operation, Timestamp, Session)
 ├── yrich-operation.cpp
-├── yrich-command.h      # Undo/redo
-├── yrich-document.h     # Document base
+├── yrich-command.h      # Undo/redo (Command, CommandHistory)
+├── yrich-serialize.h    # Msgpack serialization for operations
+├── yrich-sync.h         # Network sync (SyncClient, SyncServer, DocumentSync)
+├── yrich-sync.cpp
+├── yrich-document.h     # Document base class
 ├── yrich-document.cpp
-├── yspreadsheet.h       # Spreadsheet
+├── yspreadsheet.h       # Spreadsheet document
 ├── yspreadsheet.cpp
-├── ydoc.h               # Rich text document
+├── ydoc.h               # Rich text document (Paragraph, TextRun)
 ├── ydoc.cpp
 └── CMakeLists.txt
 

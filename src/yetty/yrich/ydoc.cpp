@@ -78,7 +78,7 @@ void Paragraph::recalculateLayout() {
 }
 
 void Paragraph::render(YDrawBuffer* buffer, uint32_t layer, bool selected) {
-    float charWidth = _style.fontSize * 0.6f;
+    float defaultCharWidth = _style.fontSize * 0.6f;
 
     // Background highlight if selected
     if (selected && !_editing) {
@@ -89,16 +89,65 @@ void Paragraph::render(YDrawBuffer* buffer, uint32_t layer, bool selected) {
             0, 0, 0);
     }
 
-    // Render text lines
+    // Render text lines with formatting
     for (const auto& line : _lines) {
         if (line.startIndex >= static_cast<int>(_text.size())) continue;
 
-        std::string lineText = _text.substr(line.startIndex, line.endIndex - line.startIndex);
         float textX = _bounds.x + 4;
         float textY = _bounds.y + line.y + _lineHeight * 0.75f;
 
-        buffer->addText(textX, textY, lineText, _style.fontSize,
-                        _style.color.toPacked(), layer + 1, _style.fontId);
+        // If no runs, render with default style
+        if (_runs.empty()) {
+            std::string lineText = _text.substr(line.startIndex, line.endIndex - line.startIndex);
+            buffer->addText(textX, textY, lineText, _style.fontSize,
+                            _style.color.toPacked(), layer + 1, _style.fontId);
+        } else {
+            // Render each run that intersects this line
+            for (const auto& run : _runs) {
+                if (run.end <= line.startIndex || run.start >= line.endIndex) continue;
+
+                int runLineStart = std::max(run.start, line.startIndex);
+                int runLineEnd = std::min(run.end, line.endIndex);
+                if (runLineStart >= runLineEnd) continue;
+
+                std::string runText = _text.substr(runLineStart, runLineEnd - runLineStart);
+
+                float charWidth = run.style.fontSize * 0.6f;
+                float runX = textX + (runLineStart - line.startIndex) * charWidth;
+                float runY = textY;
+
+                // Adjust font ID for bold/italic (assuming fontId 1 = bold, 2 = italic, 3 = bold+italic)
+                int fontId = run.style.fontId;
+                if (run.style.bold() && run.style.italic()) {
+                    fontId = 3;
+                } else if (run.style.bold()) {
+                    fontId = 1;
+                } else if (run.style.italic()) {
+                    fontId = 2;
+                }
+
+                buffer->addText(runX, runY, runText, run.style.fontSize,
+                                run.style.color.toPacked(), layer + 1, fontId);
+
+                // Draw underline if needed
+                if (run.style.underline()) {
+                    float ulY = textY + 3;  // Below baseline
+                    float ulX1 = runX;
+                    float ulX2 = runX + runText.size() * charWidth;
+                    buffer->addSegment(layer + 1, ulX1, ulY, ulX2, ulY,
+                                       0, run.style.color.toPacked(), 1.0f, 0);
+                }
+
+                // Draw strikethrough if needed
+                if (run.style.strike()) {
+                    float stY = textY - run.style.fontSize * 0.3f;
+                    float stX1 = runX;
+                    float stX2 = runX + runText.size() * charWidth;
+                    buffer->addSegment(layer + 1, stX1, stY, stX2, stY,
+                                       0, run.style.color.toPacked(), 1.0f, 0);
+                }
+            }
+        }
     }
 
     // Selection highlight
@@ -112,8 +161,8 @@ void Paragraph::render(YDrawBuffer* buffer, uint32_t layer, bool selected) {
             int lineSelStart = std::max(start, line.startIndex) - line.startIndex;
             int lineSelEnd = std::min(end, line.endIndex) - line.startIndex;
 
-            float x1 = _bounds.x + 4 + lineSelStart * charWidth;
-            float x2 = _bounds.x + 4 + lineSelEnd * charWidth;
+            float x1 = _bounds.x + 4 + lineSelStart * defaultCharWidth;
+            float x2 = _bounds.x + 4 + lineSelEnd * defaultCharWidth;
             float y = _bounds.y + line.y;
 
             buffer->addBox(layer,
@@ -232,6 +281,168 @@ int Paragraph::positionToIndex(float x, float y) const {
     charIdx = std::clamp(charIdx, 0, line.endIndex - line.startIndex);
 
     return line.startIndex + charIdx;
+}
+
+//=============================================================================
+// Paragraph formatting
+//=============================================================================
+
+TextStyle Paragraph::styleAt(int pos) const {
+    pos = std::clamp(pos, 0, static_cast<int>(_text.size()));
+
+    for (const auto& run : _runs) {
+        if (pos >= run.start && pos < run.end) {
+            return run.style;
+        }
+    }
+    return _style;
+}
+
+void Paragraph::normalizeRuns() {
+    if (_runs.empty()) {
+        // Create single run covering all text
+        if (!_text.empty()) {
+            _runs.push_back({0, static_cast<int>(_text.size()), _style});
+        }
+        return;
+    }
+
+    // Merge adjacent runs with same style
+    std::vector<TextRun> merged;
+    for (const auto& run : _runs) {
+        if (run.start >= run.end) continue;
+
+        if (!merged.empty() &&
+            merged.back().end == run.start &&
+            merged.back().style.format == run.style.format &&
+            merged.back().style.fontSize == run.style.fontSize &&
+            merged.back().style.color.toPacked() == run.style.color.toPacked()) {
+            merged.back().end = run.end;
+        } else {
+            merged.push_back(run);
+        }
+    }
+    _runs = std::move(merged);
+}
+
+void Paragraph::splitRunAt(int pos) {
+    if (pos <= 0 || pos >= static_cast<int>(_text.size())) return;
+
+    for (size_t i = 0; i < _runs.size(); ++i) {
+        auto& run = _runs[i];
+        if (pos > run.start && pos < run.end) {
+            TextRun newRun = run;
+            newRun.start = pos;
+            run.end = pos;
+            _runs.insert(_runs.begin() + i + 1, newRun);
+            return;
+        }
+    }
+}
+
+void Paragraph::applyFormat(int start, int end, TextFormat format) {
+    if (start >= end) return;
+    start = std::max(0, start);
+    end = std::min(static_cast<int>(_text.size()), end);
+
+    // Initialize runs if empty
+    if (_runs.empty() && !_text.empty()) {
+        _runs.push_back({0, static_cast<int>(_text.size()), _style});
+    }
+
+    // Split runs at boundaries
+    splitRunAt(start);
+    splitRunAt(end);
+
+    // Apply format to runs in range
+    for (auto& run : _runs) {
+        if (run.start >= start && run.end <= end) {
+            run.style.format = run.style.format | format;
+        }
+    }
+
+    normalizeRuns();
+}
+
+void Paragraph::removeFormat(int start, int end, TextFormat format) {
+    if (start >= end) return;
+    start = std::max(0, start);
+    end = std::min(static_cast<int>(_text.size()), end);
+
+    if (_runs.empty()) return;
+
+    splitRunAt(start);
+    splitRunAt(end);
+
+    for (auto& run : _runs) {
+        if (run.start >= start && run.end <= end) {
+            run.style.format = run.style.format & ~format;
+        }
+    }
+
+    normalizeRuns();
+}
+
+void Paragraph::toggleFormat(int start, int end, TextFormat format) {
+    if (start >= end) return;
+
+    // Check if all text in range has the format
+    bool allHaveFormat = true;
+    for (int i = start; i < end; ++i) {
+        if (!hasFormat(styleAt(i).format, format)) {
+            allHaveFormat = false;
+            break;
+        }
+    }
+
+    if (allHaveFormat) {
+        removeFormat(start, end, format);
+    } else {
+        applyFormat(start, end, format);
+    }
+}
+
+void Paragraph::setFontSize(int start, int end, float size) {
+    if (start >= end) return;
+    start = std::max(0, start);
+    end = std::min(static_cast<int>(_text.size()), end);
+
+    if (_runs.empty() && !_text.empty()) {
+        _runs.push_back({0, static_cast<int>(_text.size()), _style});
+    }
+
+    splitRunAt(start);
+    splitRunAt(end);
+
+    for (auto& run : _runs) {
+        if (run.start >= start && run.end <= end) {
+            run.style.fontSize = size;
+        }
+    }
+
+    normalizeRuns();
+    recalculateLayout();
+}
+
+void Paragraph::setColor(int start, int end, Color color) {
+    if (start >= end) return;
+    start = std::max(0, start);
+    end = std::min(static_cast<int>(_text.size()), end);
+
+    if (_runs.empty() && !_text.empty()) {
+        _runs.push_back({0, static_cast<int>(_text.size()), _style});
+    }
+
+    splitRunAt(start);
+    splitRunAt(end);
+
+    for (auto& run : _runs) {
+        if (run.start >= start && run.end <= end) {
+            run.style.color = color;
+        }
+    }
+
+    normalizeRuns();
 }
 
 //=============================================================================
@@ -781,6 +992,170 @@ void YDoc::deleteSelection() {
     _selectionAnchor = _cursor;
     relayout();
     markDirty();
+}
+
+//=============================================================================
+// YDoc formatting
+//=============================================================================
+
+void YDoc::toggleBold() {
+    if (!_hasSelection) return;
+
+    CursorPos start = _selectionAnchor;
+    CursorPos end = _cursor;
+    if (start.paragraphIndex > end.paragraphIndex ||
+        (start.paragraphIndex == end.paragraphIndex && start.charIndex > end.charIndex)) {
+        std::swap(start, end);
+    }
+
+    // Only support same-paragraph selection for now
+    if (start.paragraphIndex == end.paragraphIndex) {
+        auto para = paragraphAt(start.paragraphIndex);
+        if (para) {
+            para->toggleFormat(start.charIndex, end.charIndex, TextFormat::Bold);
+            markDirty();
+        }
+    }
+}
+
+void YDoc::toggleItalic() {
+    if (!_hasSelection) return;
+
+    CursorPos start = _selectionAnchor;
+    CursorPos end = _cursor;
+    if (start.paragraphIndex > end.paragraphIndex ||
+        (start.paragraphIndex == end.paragraphIndex && start.charIndex > end.charIndex)) {
+        std::swap(start, end);
+    }
+
+    if (start.paragraphIndex == end.paragraphIndex) {
+        auto para = paragraphAt(start.paragraphIndex);
+        if (para) {
+            para->toggleFormat(start.charIndex, end.charIndex, TextFormat::Italic);
+            markDirty();
+        }
+    }
+}
+
+void YDoc::toggleUnderline() {
+    if (!_hasSelection) return;
+
+    CursorPos start = _selectionAnchor;
+    CursorPos end = _cursor;
+    if (start.paragraphIndex > end.paragraphIndex ||
+        (start.paragraphIndex == end.paragraphIndex && start.charIndex > end.charIndex)) {
+        std::swap(start, end);
+    }
+
+    if (start.paragraphIndex == end.paragraphIndex) {
+        auto para = paragraphAt(start.paragraphIndex);
+        if (para) {
+            para->toggleFormat(start.charIndex, end.charIndex, TextFormat::Underline);
+            markDirty();
+        }
+    }
+}
+
+void YDoc::setFontSize(float size) {
+    if (!_hasSelection) return;
+
+    CursorPos start = _selectionAnchor;
+    CursorPos end = _cursor;
+    if (start.paragraphIndex > end.paragraphIndex ||
+        (start.paragraphIndex == end.paragraphIndex && start.charIndex > end.charIndex)) {
+        std::swap(start, end);
+    }
+
+    if (start.paragraphIndex == end.paragraphIndex) {
+        auto para = paragraphAt(start.paragraphIndex);
+        if (para) {
+            para->setFontSize(start.charIndex, end.charIndex, size);
+            relayout();
+            markDirty();
+        }
+    }
+}
+
+void YDoc::setTextColor(Color color) {
+    if (!_hasSelection) return;
+
+    CursorPos start = _selectionAnchor;
+    CursorPos end = _cursor;
+    if (start.paragraphIndex > end.paragraphIndex ||
+        (start.paragraphIndex == end.paragraphIndex && start.charIndex > end.charIndex)) {
+        std::swap(start, end);
+    }
+
+    if (start.paragraphIndex == end.paragraphIndex) {
+        auto para = paragraphAt(start.paragraphIndex);
+        if (para) {
+            para->setColor(start.charIndex, end.charIndex, color);
+            markDirty();
+        }
+    }
+}
+
+bool YDoc::selectionHasBold() const {
+    if (!_hasSelection) return false;
+
+    CursorPos start = _selectionAnchor;
+    CursorPos end = _cursor;
+    if (start.paragraphIndex > end.paragraphIndex ||
+        (start.paragraphIndex == end.paragraphIndex && start.charIndex > end.charIndex)) {
+        std::swap(start, end);
+    }
+
+    if (start.paragraphIndex != end.paragraphIndex) return false;
+
+    auto para = paragraphAt(start.paragraphIndex);
+    if (!para) return false;
+
+    for (int i = start.charIndex; i < end.charIndex; ++i) {
+        if (!para->styleAt(i).bold()) return false;
+    }
+    return true;
+}
+
+bool YDoc::selectionHasItalic() const {
+    if (!_hasSelection) return false;
+
+    CursorPos start = _selectionAnchor;
+    CursorPos end = _cursor;
+    if (start.paragraphIndex > end.paragraphIndex ||
+        (start.paragraphIndex == end.paragraphIndex && start.charIndex > end.charIndex)) {
+        std::swap(start, end);
+    }
+
+    if (start.paragraphIndex != end.paragraphIndex) return false;
+
+    auto para = paragraphAt(start.paragraphIndex);
+    if (!para) return false;
+
+    for (int i = start.charIndex; i < end.charIndex; ++i) {
+        if (!para->styleAt(i).italic()) return false;
+    }
+    return true;
+}
+
+bool YDoc::selectionHasUnderline() const {
+    if (!_hasSelection) return false;
+
+    CursorPos start = _selectionAnchor;
+    CursorPos end = _cursor;
+    if (start.paragraphIndex > end.paragraphIndex ||
+        (start.paragraphIndex == end.paragraphIndex && start.charIndex > end.charIndex)) {
+        std::swap(start, end);
+    }
+
+    if (start.paragraphIndex != end.paragraphIndex) return false;
+
+    auto para = paragraphAt(start.paragraphIndex);
+    if (!para) return false;
+
+    for (int i = start.charIndex; i < end.charIndex; ++i) {
+        if (!para->styleAt(i).underline()) return false;
+    }
+    return true;
 }
 
 } // namespace yetty::yrich
