@@ -23,16 +23,14 @@ include(${YETTY_ROOT}/build-tools/cmake/libs/msdfgen.cmake)
 include(${YETTY_ROOT}/build-tools/cmake/libs/cdb.cmake)
 include(${YETTY_ROOT}/build-tools/cmake/thorvg.cmake)
 include(${YETTY_ROOT}/build-tools/cmake/TreeSitter.cmake)
-include(${YETTY_ROOT}/build-tools/cmake/Dav1d.cmake)
-include(${YETTY_ROOT}/build-tools/cmake/openh264.cmake)
-include(${YETTY_ROOT}/build-tools/cmake/minimp4.cmake)
-include(${YETTY_ROOT}/build-tools/cmake/libs/wasm3.cmake)
-
-# Audio libraries for vnc-recorder (desktop Linux/macOS only for now)
-if(NOT ANDROID AND NOT EMSCRIPTEN AND NOT WIN32)
-    include(${YETTY_ROOT}/build-tools/cmake/miniaudio.cmake)
-    include(${YETTY_ROOT}/build-tools/cmake/fdk-aac.cmake)
+# yvideo dependencies (dav1d, openh264, minimp4) - not available on iOS/Emscripten
+if(NOT EMSCRIPTEN AND NOT YETTY_IOS)
+    include(${YETTY_ROOT}/build-tools/cmake/Dav1d.cmake)
+    include(${YETTY_ROOT}/build-tools/cmake/openh264.cmake)
+    include(${YETTY_ROOT}/build-tools/cmake/minimp4.cmake)
 endif()
+include(${YETTY_ROOT}/build-tools/cmake/libs/wasm3.cmake)
+include(${YETTY_ROOT}/build-tools/cmake/libs/libssh2.cmake)
 
 # Common include directories
 set(YETTY_INCLUDES
@@ -66,6 +64,7 @@ set(YETTY_LIBS
     yetty_cards
     yetty_yast
     yetty_telnet
+    yetty_ssh
     msdf-wgsl
     args
 )

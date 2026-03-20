@@ -10,7 +10,7 @@ add_subdirectory(cards/ygrid)
 add_subdirectory(msdf-gen)
 add_subdirectory(rpc)
 
-# Core sources - ALL sources needed for yetty executable
+# Core sources - ALL sources needed for yetty executable (platform-agnostic)
 set(YETTY_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/yetty.cpp
@@ -52,7 +52,7 @@ set(YETTY_CORE_SOURCES
     PARENT_SCOPE
 )
 
-# Desktop-only sources (Linux, macOS, Windows)
+# Desktop-only sources (Linux, macOS - NOT Windows)
 set(YETTY_DESKTOP_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/msdf-cdb-provider.cpp
     ${YETTY_MSDF_GEN_SOURCES}
@@ -60,8 +60,27 @@ set(YETTY_DESKTOP_SOURCES
     PARENT_SCOPE
 )
 
+# Windows-specific sources
+set(YETTY_WINDOWS_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/msdf-cdb-provider.cpp
+    ${YETTY_MSDF_GEN_SOURCES}
+    ${YETTY_RPC_SOURCES}
+    PARENT_SCOPE
+)
+
+# WebAssembly-specific sources
+set(YETTY_WEB_SOURCES
+    PARENT_SCOPE
+)
+
 # Android-specific sources
 set(YETTY_ANDROID_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/msdf-cdb-provider.cpp
+    PARENT_SCOPE
+)
+
+# iPhone/iOS-specific sources
+set(YETTY_IOS_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/msdf-cdb-provider.cpp
     PARENT_SCOPE
 )
@@ -77,8 +96,8 @@ set(YETTY_RENDERER_INCLUDES
 add_subdirectory(base)
 add_subdirectory(font)
 add_subdirectory(yecho)
-# ycat requires OpenSSL via cpr, skip for WebAssembly
-if(NOT EMSCRIPTEN)
+# ycat requires OpenSSL via cpr and libmagic, skip for WebAssembly/iOS
+if(NOT EMSCRIPTEN AND NOT YETTY_IOS)
     add_subdirectory(ycat)
 endif()
 add_subdirectory(ydraw)
@@ -86,8 +105,8 @@ add_subdirectory(ypaint)
 add_subdirectory(diagram)
 add_subdirectory(ygrid)
 add_subdirectory(ythorvg)
-# yvideo requires dav1d which needs meson (not available in webasm build)
-if(NOT EMSCRIPTEN)
+# yvideo requires dav1d/openh264 not available on iOS/WebAssembly
+if(NOT EMSCRIPTEN AND NOT YETTY_IOS)
     add_subdirectory(yvideo)
 endif()
 add_subdirectory(cards)
@@ -99,6 +118,7 @@ add_subdirectory(shaders)
 
 # VNC is available on all platforms except Android
 # - Desktop (Linux, macOS, Windows): uses POSIX/Winsock sockets
+# - iPhone/iOS: uses POSIX sockets
 # - WebAssembly: uses Emscripten WebSocket API
 if(NOT YETTY_ANDROID)
     add_subdirectory(vnc)
@@ -107,3 +127,6 @@ endif()
 # Telnet is available on Unix platforms (primarily for Android local connections)
 # Windows: telnet/CMakeLists.txt creates an INTERFACE stub (uses ConPTY instead)
 add_subdirectory(telnet)
+
+# SSH is available on all platforms
+add_subdirectory(ssh)

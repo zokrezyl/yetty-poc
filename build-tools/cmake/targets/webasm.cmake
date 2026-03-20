@@ -35,6 +35,7 @@ set(YETTY_PLATFORM_SOURCES
 # Create executable with core sources + web platform
 add_executable(yetty
     ${YETTY_CORE_SOURCES}
+    ${YETTY_WEB_SOURCES}
     ${YETTY_PLATFORM_SOURCES}
 )
 

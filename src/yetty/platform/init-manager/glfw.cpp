@@ -1,7 +1,7 @@
 #include <yetty/platform/init-manager.h>
 
 // Desktop platforms: Linux, macOS, Windows - all use GLFW
-#if !defined(__ANDROID__) && !defined(__EMSCRIPTEN__)
+#if !defined(__ANDROID__) && !defined(__EMSCRIPTEN__) && !YETTY_IOS
 
 #include <yetty/yetty.h>
 #include <yetty/result.hpp>

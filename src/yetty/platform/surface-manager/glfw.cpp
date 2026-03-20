@@ -1,6 +1,6 @@
 #include <yetty/platform/surface-manager.h>
 
-#if !defined(__ANDROID__) && !defined(__EMSCRIPTEN__)
+#if !defined(__ANDROID__) && !defined(__EMSCRIPTEN__) && !YETTY_IOS
 
 #include "../shared/glfw-window-singleton.h"
 #include <ytrace/ytrace.hpp>

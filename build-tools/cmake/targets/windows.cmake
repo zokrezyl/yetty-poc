@@ -29,7 +29,7 @@ set(YETTY_PLATFORM_SOURCES
 # Create executable with core sources + platform
 add_executable(yetty
     ${YETTY_CORE_SOURCES}
-    ${YETTY_DESKTOP_SOURCES}
+    ${YETTY_WINDOWS_SOURCES}
     ${YETTY_PLATFORM_SOURCES}
 )
 

@@ -1,6 +1,6 @@
 #include <yetty/platform/clipboard-manager.h>
 
-#if !defined(__ANDROID__) && !defined(__EMSCRIPTEN__)
+#if !defined(__ANDROID__) && !defined(__EMSCRIPTEN__) && !YETTY_IOS
 
 #include "../shared/glfw-window-singleton.h"
 #include <yetty/result.hpp>

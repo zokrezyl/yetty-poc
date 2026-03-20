@@ -2,6 +2,10 @@ if(WIN32)
     add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN)
 endif()
 
+# Dependencies
+include(${YETTY_ROOT}/build-tools/cmake/miniaudio.cmake)
+include(${YETTY_ROOT}/build-tools/cmake/fdk-aac.cmake)
+
 add_executable(vnc-recorder vnc-recorder.cpp)
 
 target_link_libraries(vnc-recorder PRIVATE
