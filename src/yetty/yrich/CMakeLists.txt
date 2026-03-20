@@ -6,6 +6,7 @@ add_library(yetty_yrich STATIC
     yrich-sync.cpp
     yspreadsheet.cpp
     ydoc.cpp
+    yslides.cpp
 )
 
 target_include_directories(yetty_yrich PUBLIC

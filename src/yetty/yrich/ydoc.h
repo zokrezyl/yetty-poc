@@ -102,6 +102,123 @@ private:
 using ParagraphPtr = std::shared_ptr<Paragraph>;
 
 //=============================================================================
+// Table — embedded table in document
+//=============================================================================
+class Table : public Element {
+public:
+    Table(ElementId id, float x, float y, int rows, int cols);
+
+    // Element interface
+    Rect bounds() const override { return _bounds; }
+    void render(YDrawBuffer* buffer, uint32_t layer, bool selected) override;
+
+    // Table structure
+    int rows() const { return _rows; }
+    int cols() const { return _cols; }
+    void resize(int rows, int cols);
+
+    // Cell access
+    const std::string& cell(int row, int col) const;
+    void setCell(int row, int col, std::string_view text);
+
+    // Column widths
+    float columnWidth(int col) const;
+    void setColumnWidth(int col, float width);
+
+    // Row heights
+    float rowHeight(int row) const;
+    void setRowHeight(int row, float height);
+
+    // Selection
+    struct CellPos { int row, col; };
+    CellPos selectedCell() const { return _selectedCell; }
+    void selectCell(int row, int col);
+
+    // Editing
+    bool isEditing() const { return _editing; }
+    void beginEdit();
+    void endEdit();
+
+    void setPosition(float x, float y);
+    float height() const { return _bounds.h; }
+
+private:
+    void recalculateBounds();
+
+    Rect _bounds;
+    int _rows, _cols;
+    std::vector<std::string> _cells;
+    std::vector<float> _colWidths;
+    std::vector<float> _rowHeights;
+
+    CellPos _selectedCell{0, 0};
+    bool _editing = false;
+    int _cursorPos = 0;
+};
+
+using TablePtr = std::shared_ptr<Table>;
+
+//=============================================================================
+// InlineImage — embedded image in document
+//=============================================================================
+class InlineImage : public Element {
+public:
+    InlineImage(ElementId id, float x, float y, float width, float height);
+
+    // Element interface
+    Rect bounds() const override { return _bounds; }
+    void render(YDrawBuffer* buffer, uint32_t layer, bool selected) override;
+
+    // Image source (base64 data or path)
+    void setSource(std::string_view src) { _source = src; }
+    const std::string& source() const { return _source; }
+
+    // Alt text
+    void setAltText(std::string_view alt) { _altText = alt; }
+    const std::string& altText() const { return _altText; }
+
+    // Caption
+    void setCaption(std::string_view caption) { _caption = caption; }
+    const std::string& caption() const { return _caption; }
+
+    // Sizing
+    void setSize(float w, float h);
+    void setPosition(float x, float y);
+    float height() const { return _bounds.h + (_caption.empty() ? 0 : 20); }
+
+    // Alignment
+    enum class Align { Left, Center, Right };
+    Align align() const { return _align; }
+    void setAlign(Align a) { _align = a; }
+
+private:
+    Rect _bounds;
+    std::string _source;
+    std::string _altText;
+    std::string _caption;
+    Align _align = Align::Center;
+};
+
+using InlineImagePtr = std::shared_ptr<InlineImage>;
+
+//=============================================================================
+// Comment — annotation attached to text range
+//=============================================================================
+struct Comment {
+    ElementId id;
+    int paragraphIndex;
+    int startPos;
+    int endPos;
+    std::string text;
+    std::string author;
+    uint64_t timestamp;
+    bool resolved = false;
+    std::vector<Comment> replies;
+};
+
+using CommentPtr = std::shared_ptr<Comment>;
+
+//=============================================================================
 // YDoc — rich text document
 //=============================================================================
 class YDoc : public Document,
@@ -132,6 +249,52 @@ public:
 
     ParagraphPtr paragraphAt(int index) const;
     int paragraphCount() const { return static_cast<int>(_paragraphs.size()); }
+
+    //=========================================================================
+    // Table management
+    //=========================================================================
+
+    TablePtr insertTable(int paragraphIndex, int rows, int cols);
+    void removeTable(ElementId id);
+    TablePtr tableAt(int index) const;
+    int tableCount() const { return static_cast<int>(_tables.size()); }
+
+    //=========================================================================
+    // Image management
+    //=========================================================================
+
+    InlineImagePtr insertImage(int paragraphIndex, float width, float height);
+    void removeImage(ElementId id);
+    InlineImagePtr imageAt(int index) const;
+    int imageCount() const { return static_cast<int>(_images.size()); }
+
+    //=========================================================================
+    // Comments
+    //=========================================================================
+
+    CommentPtr addComment(int paragraphIndex, int startPos, int endPos,
+                          std::string_view text, std::string_view author);
+    void resolveComment(ElementId id);
+    void deleteComment(ElementId id);
+    void replyToComment(ElementId id, std::string_view text, std::string_view author);
+    std::vector<CommentPtr> commentsInRange(int paragraphIndex, int startPos, int endPos) const;
+    const std::vector<CommentPtr>& allComments() const { return _comments; }
+
+    //=========================================================================
+    // Version history
+    //=========================================================================
+
+    struct Version {
+        uint64_t timestamp;
+        std::string author;
+        std::string description;
+        uint64_t operationIndex;  // Index in operation log
+    };
+
+    void saveVersion(std::string_view description);
+    void restoreVersion(int versionIndex);
+    const std::vector<Version>& versions() const { return _versions; }
+    int versionCount() const { return static_cast<int>(_versions.size()); }
 
     // Find paragraph containing y position
     int paragraphIndexAt(float y) const;
@@ -201,6 +364,11 @@ private:
     float _margin = 20.0f;
 
     std::vector<ParagraphPtr> _paragraphs;
+    std::vector<TablePtr> _tables;
+    std::vector<InlineImagePtr> _images;
+    std::vector<CommentPtr> _comments;
+    std::vector<Version> _versions;
+
     CursorPos _cursor{0, 0};
     CursorPos _selectionAnchor{0, 0};
     bool _hasSelection = false;

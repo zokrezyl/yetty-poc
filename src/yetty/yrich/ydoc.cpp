@@ -2,6 +2,7 @@
 #include "../ydraw/ydraw-buffer.h"
 #include <algorithm>
 #include <cctype>
+#include <ctime>
 
 namespace yetty::yrich {
 
@@ -1156,6 +1157,373 @@ bool YDoc::selectionHasUnderline() const {
         if (!para->styleAt(i).underline()) return false;
     }
     return true;
+}
+
+//=============================================================================
+// Table implementation
+//=============================================================================
+
+Table::Table(ElementId id, float x, float y, int rows, int cols)
+    : Element(id)
+    , _bounds{x, y, 0, 0}
+    , _rows(rows)
+    , _cols(cols)
+{
+    _cells.resize(rows * cols);
+    _colWidths.resize(cols, 100.0f);  // Default 100px width
+    _rowHeights.resize(rows, 30.0f);  // Default 30px height
+    recalculateBounds();
+}
+
+void Table::recalculateBounds() {
+    float totalWidth = 0;
+    for (float w : _colWidths) totalWidth += w;
+
+    float totalHeight = 0;
+    for (float h : _rowHeights) totalHeight += h;
+
+    _bounds.w = totalWidth;
+    _bounds.h = totalHeight;
+}
+
+void Table::resize(int rows, int cols) {
+    std::vector<std::string> newCells(rows * cols);
+
+    // Copy existing cells
+    for (int r = 0; r < std::min(rows, _rows); ++r) {
+        for (int c = 0; c < std::min(cols, _cols); ++c) {
+            newCells[r * cols + c] = _cells[r * _cols + c];
+        }
+    }
+
+    _cells = std::move(newCells);
+    _rows = rows;
+    _cols = cols;
+
+    _colWidths.resize(cols, 100.0f);
+    _rowHeights.resize(rows, 30.0f);
+    recalculateBounds();
+}
+
+const std::string& Table::cell(int row, int col) const {
+    static std::string empty;
+    if (row < 0 || row >= _rows || col < 0 || col >= _cols) return empty;
+    return _cells[row * _cols + col];
+}
+
+void Table::setCell(int row, int col, std::string_view text) {
+    if (row < 0 || row >= _rows || col < 0 || col >= _cols) return;
+    _cells[row * _cols + col] = text;
+}
+
+float Table::columnWidth(int col) const {
+    if (col < 0 || col >= _cols) return 0;
+    return _colWidths[col];
+}
+
+void Table::setColumnWidth(int col, float width) {
+    if (col < 0 || col >= _cols) return;
+    _colWidths[col] = std::max(20.0f, width);
+    recalculateBounds();
+}
+
+float Table::rowHeight(int row) const {
+    if (row < 0 || row >= _rows) return 0;
+    return _rowHeights[row];
+}
+
+void Table::setRowHeight(int row, float height) {
+    if (row < 0 || row >= _rows) return;
+    _rowHeights[row] = std::max(20.0f, height);
+    recalculateBounds();
+}
+
+void Table::selectCell(int row, int col) {
+    _selectedCell.row = std::clamp(row, 0, _rows - 1);
+    _selectedCell.col = std::clamp(col, 0, _cols - 1);
+}
+
+void Table::beginEdit() {
+    _editing = true;
+    _cursorPos = static_cast<int>(cell(_selectedCell.row, _selectedCell.col).size());
+}
+
+void Table::endEdit() {
+    _editing = false;
+}
+
+void Table::setPosition(float x, float y) {
+    _bounds.x = x;
+    _bounds.y = y;
+}
+
+void Table::render(YDrawBuffer* buffer, uint32_t layer, bool selected) {
+    float y = _bounds.y;
+
+    for (int row = 0; row < _rows; ++row) {
+        float x = _bounds.x;
+        float rowH = _rowHeights[row];
+
+        for (int col = 0; col < _cols; ++col) {
+            float colW = _colWidths[col];
+            float cx = x + colW / 2;
+            float cy = y + rowH / 2;
+
+            // Cell background
+            bool isSelected = (row == _selectedCell.row && col == _selectedCell.col);
+            Color bgColor = isSelected ? Color{230, 240, 255, 255} : Color::white();
+
+            buffer->addBox(layer, cx, cy, colW / 2, rowH / 2,
+                           bgColor.toPacked(),
+                           Color{180, 180, 180, 255}.toPacked(),
+                           1.0f, 0);
+
+            // Cell text
+            const std::string& text = cell(row, col);
+            if (!text.empty()) {
+                buffer->addText(x + 4, y + rowH * 0.7f, text, 12.0f,
+                                Color::black().toPacked(), layer + 1, 0);
+            }
+
+            x += colW;
+        }
+        y += rowH;
+    }
+
+    // Selection outline
+    if (selected) {
+        float cx = _bounds.x + _bounds.w / 2;
+        float cy = _bounds.y + _bounds.h / 2;
+        buffer->addBox(layer + 2, cx, cy, _bounds.w / 2 + 2, _bounds.h / 2 + 2,
+                       0,
+                       Color{0, 120, 215, 255}.toPacked(),
+                       2.0f, 0);
+    }
+}
+
+//=============================================================================
+// InlineImage implementation
+//=============================================================================
+
+InlineImage::InlineImage(ElementId id, float x, float y, float width, float height)
+    : Element(id)
+    , _bounds{x, y, width, height}
+{}
+
+void InlineImage::setSize(float w, float h) {
+    _bounds.w = w;
+    _bounds.h = h;
+}
+
+void InlineImage::setPosition(float x, float y) {
+    _bounds.x = x;
+    _bounds.y = y;
+}
+
+void InlineImage::render(YDrawBuffer* buffer, uint32_t layer, bool selected) {
+    float cx = _bounds.x + _bounds.w / 2;
+    float cy = _bounds.y + _bounds.h / 2;
+
+    // Image placeholder
+    buffer->addBox(layer, cx, cy, _bounds.w / 2, _bounds.h / 2,
+                   Color{240, 240, 240, 255}.toPacked(),
+                   Color{180, 180, 180, 255}.toPacked(),
+                   1.0f, 0);
+
+    // Placeholder icon (X pattern)
+    buffer->addSegment(layer + 1,
+                       _bounds.x + 10, _bounds.y + 10,
+                       _bounds.x + _bounds.w - 10, _bounds.y + _bounds.h - 10,
+                       0, Color{150, 150, 150, 255}.toPacked(), 1.0f, 0);
+    buffer->addSegment(layer + 1,
+                       _bounds.x + _bounds.w - 10, _bounds.y + 10,
+                       _bounds.x + 10, _bounds.y + _bounds.h - 10,
+                       0, Color{150, 150, 150, 255}.toPacked(), 1.0f, 0);
+
+    // Alt text
+    if (!_altText.empty()) {
+        buffer->addText(_bounds.x + 10, _bounds.y + _bounds.h / 2, _altText,
+                        10.0f, Color{100, 100, 100, 255}.toPacked(), layer + 1, 0);
+    }
+
+    // Caption
+    if (!_caption.empty()) {
+        float captionY = _bounds.y + _bounds.h + 15;
+        float captionX = _bounds.x;
+
+        if (_align == Align::Center) {
+            captionX = _bounds.x + _bounds.w / 2 - _caption.size() * 3;
+        } else if (_align == Align::Right) {
+            captionX = _bounds.x + _bounds.w - _caption.size() * 6;
+        }
+
+        buffer->addText(captionX, captionY, _caption,
+                        11.0f, Color{80, 80, 80, 255}.toPacked(), layer + 1, 0);
+    }
+
+    // Selection outline
+    if (selected) {
+        buffer->addBox(layer + 2, cx, cy, _bounds.w / 2 + 2, _bounds.h / 2 + 2,
+                       0,
+                       Color{0, 120, 215, 255}.toPacked(),
+                       2.0f, 0);
+    }
+}
+
+//=============================================================================
+// YDoc: Tables
+//=============================================================================
+
+TablePtr YDoc::insertTable(int paragraphIndex, int rows, int cols) {
+    float y = _margin;
+    if (paragraphIndex > 0 && paragraphIndex < static_cast<int>(_paragraphs.size())) {
+        auto prevPara = _paragraphs[paragraphIndex - 1];
+        y = prevPara->bounds().y + prevPara->height() + 8;
+    }
+
+    auto table = std::make_shared<Table>(nextElementId(), _margin, y, rows, cols);
+    _tables.push_back(table);
+    addElement(table);
+    relayout();
+    return table;
+}
+
+void YDoc::removeTable(ElementId id) {
+    auto it = std::find_if(_tables.begin(), _tables.end(),
+                           [id](const TablePtr& t) { return t->id() == id; });
+    if (it != _tables.end()) {
+        removeElement(id);
+        _tables.erase(it);
+        relayout();
+    }
+}
+
+TablePtr YDoc::tableAt(int index) const {
+    if (index < 0 || index >= static_cast<int>(_tables.size())) return nullptr;
+    return _tables[index];
+}
+
+//=============================================================================
+// YDoc: Images
+//=============================================================================
+
+InlineImagePtr YDoc::insertImage(int paragraphIndex, float width, float height) {
+    float y = _margin;
+    if (paragraphIndex > 0 && paragraphIndex < static_cast<int>(_paragraphs.size())) {
+        auto prevPara = _paragraphs[paragraphIndex - 1];
+        y = prevPara->bounds().y + prevPara->height() + 8;
+    }
+
+    auto image = std::make_shared<InlineImage>(nextElementId(), _margin, y, width, height);
+    _images.push_back(image);
+    addElement(image);
+    relayout();
+    return image;
+}
+
+void YDoc::removeImage(ElementId id) {
+    auto it = std::find_if(_images.begin(), _images.end(),
+                           [id](const InlineImagePtr& img) { return img->id() == id; });
+    if (it != _images.end()) {
+        removeElement(id);
+        _images.erase(it);
+        relayout();
+    }
+}
+
+InlineImagePtr YDoc::imageAt(int index) const {
+    if (index < 0 || index >= static_cast<int>(_images.size())) return nullptr;
+    return _images[index];
+}
+
+//=============================================================================
+// YDoc: Comments
+//=============================================================================
+
+CommentPtr YDoc::addComment(int paragraphIndex, int startPos, int endPos,
+                            std::string_view text, std::string_view author) {
+    auto comment = std::make_shared<Comment>();
+    comment->id = nextElementId();
+    comment->paragraphIndex = paragraphIndex;
+    comment->startPos = startPos;
+    comment->endPos = endPos;
+    comment->text = text;
+    comment->author = author;
+    comment->timestamp = static_cast<uint64_t>(time(nullptr));
+    comment->resolved = false;
+
+    _comments.push_back(comment);
+    markDirty();
+    return comment;
+}
+
+void YDoc::resolveComment(ElementId id) {
+    for (auto& comment : _comments) {
+        if (comment->id == id) {
+            comment->resolved = true;
+            markDirty();
+            return;
+        }
+    }
+}
+
+void YDoc::deleteComment(ElementId id) {
+    auto it = std::find_if(_comments.begin(), _comments.end(),
+                           [id](const CommentPtr& c) { return c->id == id; });
+    if (it != _comments.end()) {
+        _comments.erase(it);
+        markDirty();
+    }
+}
+
+void YDoc::replyToComment(ElementId id, std::string_view text, std::string_view author) {
+    for (auto& comment : _comments) {
+        if (comment->id == id) {
+            Comment reply;
+            reply.id = nextElementId();
+            reply.text = text;
+            reply.author = author;
+            reply.timestamp = static_cast<uint64_t>(time(nullptr));
+            comment->replies.push_back(reply);
+            markDirty();
+            return;
+        }
+    }
+}
+
+std::vector<CommentPtr> YDoc::commentsInRange(int paragraphIndex, int startPos, int endPos) const {
+    std::vector<CommentPtr> result;
+    for (const auto& comment : _comments) {
+        if (comment->paragraphIndex == paragraphIndex &&
+            comment->startPos < endPos && comment->endPos > startPos) {
+            result.push_back(comment);
+        }
+    }
+    return result;
+}
+
+//=============================================================================
+// YDoc: Version history
+//=============================================================================
+
+void YDoc::saveVersion(std::string_view description) {
+    Version v;
+    v.timestamp = static_cast<uint64_t>(time(nullptr));
+    v.author = localSession() ? localSession()->userName() : "Unknown";
+    v.description = description;
+    v.operationIndex = _opLog.size();
+
+    _versions.push_back(v);
+}
+
+void YDoc::restoreVersion(int versionIndex) {
+    if (versionIndex < 0 || versionIndex >= static_cast<int>(_versions.size())) return;
+
+    // TODO: Implement full version restoration
+    // This would require storing snapshots or replaying operations from the start
+    // For now, this is a placeholder
+
+    markDirty();
 }
 
 } // namespace yetty::yrich

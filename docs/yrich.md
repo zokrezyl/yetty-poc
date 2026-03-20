@@ -102,7 +102,8 @@ Selection::State = variant<
 | `yrich-sync.h/cpp` | SyncClient, SyncServer, DocumentSync for real-time collaboration |
 | `yrich-document.h/cpp` | Document base class with operation handling, rendering, input |
 | `yspreadsheet.h/cpp` | Spreadsheet document (grid, cells, formulas placeholder) |
-| `ydoc.h/cpp` | Rich text document (paragraphs, TextRun formatting, word wrap) |
+| `ydoc.h/cpp` | Rich text document (Paragraph, Table, InlineImage, Comment, Version) |
+| `yslides.h/cpp` | Presentation document (Slide, Shape, TextBox, ImageShape) |
 
 ### Tools (`tools/`)
 
@@ -110,6 +111,7 @@ Selection::State = variant<
 |------|-------------|
 | `yspreadsheet` | Interactive spreadsheet editor |
 | `ydoc` | Interactive document editor |
+| `yslides` | Interactive presentation editor |
 
 ## Event Flow
 
@@ -188,6 +190,20 @@ Client A                    Network                    Client B
 - Delete: clear cells
 - q: quit
 
+**Slides (yslides):**
+- [ / ]: previous/next slide
+- Arrow keys: move selected shape
+- Delete/Backspace: delete shape
+- Escape: clear selection / stop presentation
+- Double-click: edit text box
+- Ctrl+R: add rectangle
+- Ctrl+E: add ellipse
+- Ctrl+T: add text box
+- Ctrl+N: new slide
+- Ctrl+P: start presentation
+- Ctrl+A: select all
+- q: quit
+
 ### Programmatic usage
 
 ```cpp
@@ -250,18 +266,21 @@ auto bytes = buffer->serialize();
 - [ ] Presence indicators (colored cursors)
 - [ ] User list UI
 
-### Phase 5: YSlides (TODO)
-- [ ] Slide document model
-- [ ] Shape elements (rectangles, circles, text boxes)
-- [ ] Slide navigation
-- [ ] Presentation mode
+### Phase 5: YSlides (DONE)
+- [x] Slide document model (YSlides class)
+- [x] Shape elements (rectangles, ellipses, text boxes, lines, images)
+- [x] Slide navigation (next/prev, go to slide)
+- [x] Presentation mode (fullscreen, keyboard navigation)
+- [x] Shape manipulation (drag, resize, z-order)
+- [x] tools/yslides interactive editor
 
-### Phase 6: Advanced Features (TODO)
-- [ ] Images in documents
-- [ ] Tables in documents
-- [ ] Charts in spreadsheets
-- [ ] Comments/annotations
-- [ ] Version history
+### Phase 6: Advanced Features (DONE)
+- [x] Tables in documents (Table class with cell editing)
+- [x] Images in documents (InlineImage with placeholders)
+- [x] Comments/annotations (Comment with replies, resolution)
+- [x] Version history (saveVersion, restoreVersion)
+- [ ] Charts in spreadsheets (future)
+- [ ] Full image rendering (requires texture integration)
 
 ## File Structure
 
@@ -281,15 +300,20 @@ src/yetty/yrich/
 ├── yrich-document.cpp
 ├── yspreadsheet.h       # Spreadsheet document
 ├── yspreadsheet.cpp
-├── ydoc.h               # Rich text document (Paragraph, TextRun)
+├── ydoc.h               # Rich text document (Paragraph, Table, InlineImage, Comment)
 ├── ydoc.cpp
+├── yslides.h            # Presentation document (Slide, Shape, TextBox)
+├── yslides.cpp
 └── CMakeLists.txt
 
 tools/
 ├── yspreadsheet/
 │   ├── main.cpp
 │   └── CMakeLists.txt
-└── ydoc/
+├── ydoc/
+│   ├── main.cpp
+│   └── CMakeLists.txt
+└── yslides/
     ├── main.cpp
     └── CMakeLists.txt
 ```
